@@ -1,0 +1,5 @@
+.claude/
+.metascript-cache/
+.DS_Store
+
+out/
