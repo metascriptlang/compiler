@@ -63,6 +63,23 @@ export function printNode(node: Node, level: number): void {
 			printNode(data.array, level + 1);
 			printNode(data.index, level + 1);
 		},
+		NodeKind.ObjectLiteral => {
+			const data = node.data as { properties: Node[], keys: string[] };
+			console.log(`${pad}ObjectLiteral: (${data.keys.length.toString()} props)`);
+			let propIdx = 0;
+			for (const prop of data.properties) {
+				console.log(`${indent(level + 1)}${data.keys[propIdx]}:`);
+				printNode(prop, level + 2);
+				propIdx += 1;
+			}
+		},
+		NodeKind.ArrayLiteral => {
+			const data = node.data as { elements: Node[] };
+			console.log(`${pad}ArrayLiteral: (${data.elements.length.toString()} elems)`);
+			for (const elem of data.elements) {
+				printNode(elem, level + 1);
+			}
+		},
 		NodeKind.VariableDecl => {
 			const data = node.data as { declName: string, initializer: Node, isConst: boolean };
 			const keyword = match (data.isConst) { true => "const", _ => "let" };

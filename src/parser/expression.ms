@@ -3,11 +3,13 @@
 
 import { Token, TokenKind } from "../lexer/token";
 import { Node, NodeKind, NodeData, Expression, createNode } from "../ast/node";
-import { ParserState, createState, current, advance, isAtEnd } from "./context";
+import { ParserState, createState, current, advance, isAtEnd, peek } from "./context";
 import { lex } from "../lexer/lexer";
 import { test, check, testGroup } from "std/testing";
 
 type ExprResult = Result<Expression, string>;
+type Nodes = Node[];
+type NodesResult = Result<Nodes, string>;
 
 // ===== Operator Precedence (match expression -> C switch) =====
 
@@ -162,19 +164,47 @@ function parsePrimary(state: ParserState): ExprResult {
 		return Result.ok(createNode(NodeKind.UnaryExpr, { unaryOp: token.value, operand: operand }, token));
 	}
 
+	// Array literal: [expr, expr, ...]
+	if (token.kind === TokenKind.LBracket) {
+		advance(state);
+		const elems = try parseExprList(state, TokenKind.RBracket);
+		return Result.ok(createNode(NodeKind.ArrayLiteral, { elements: elems }, token));
+	}
+
+	// Object literal: { key: value, ... } or { key, ... } (shorthand)
+	if (token.kind === TokenKind.LBrace) {
+		return parseObjectLiteral(state);
+	}
+
 	return Result.err(`Unexpected token: ${token.value} at line ${token.line.toString()}`);
 }
 
-// ===== Call Expression =====
+// ===== Object Literal =====
 
-function parseCallExpr(state: ParserState, callee: Expression): ExprResult {
-	const lparen = current(state);
+function parseObjectLiteral(state: ParserState): ExprResult {
+	const lbrace = current(state);
+	const keys: string[] = [];
+	const values: Expression[] = [];
+
 	advance(state);
+	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
+		const keyToken = current(state);
+		if (keyToken.kind !== TokenKind.Ident) {
+			return Result.err(`Expected property name at line ${keyToken.line.toString()}`);
+		}
+		advance(state);
 
-	const args: Expression[] = [];
-	while (!isAtEnd(state) && current(state).kind !== TokenKind.RParen) {
-		const arg = try parseExprWithPrec(state, 0);
-		args.push(arg);
+		if (current(state).kind === TokenKind.Colon) {
+			// Full property: { key: value }
+			advance(state);
+			keys.push(keyToken.value);
+			const val = try parseExprWithPrec(state, 0);
+			values.push(val);
+		} else {
+			// Shorthand property: { key } means { key: key }
+			keys.push(keyToken.value);
+			values.push(createNode(NodeKind.Identifier, { name: keyToken.value }, keyToken));
+		}
 
 		if (current(state).kind === TokenKind.Comma) {
 			advance(state);
@@ -183,15 +213,39 @@ function parseCallExpr(state: ParserState, callee: Expression): ExprResult {
 		}
 	}
 
-	if (current(state).kind === TokenKind.RParen) {
-		advance(state);
-	}
+	if (current(state).kind === TokenKind.RBrace) { advance(state); }
 
-	const data: NodeData = {
-		callee: callee,
-		arguments: args
-	};
-	return Result.ok(createNode(NodeKind.CallExpr, data, lparen));
+	return Result.ok(createNode(NodeKind.ObjectLiteral, {
+		properties: values,
+		keys,
+	}, lbrace));
+}
+
+// ===== Comma-Separated Expression List =====
+// Shared by call args and array literals
+
+function parseExprList(state: ParserState, endKind: TokenKind): NodesResult {
+	const items: Node[] = [];
+	while (!isAtEnd(state) && current(state).kind !== endKind) {
+		const item = try parseExprWithPrec(state, 0);
+		items.push(item);
+		if (current(state).kind === TokenKind.Comma) {
+			advance(state);
+		} else {
+			break;
+		}
+	}
+	if (current(state).kind === endKind) { advance(state); }
+	return Result.ok(items);
+}
+
+// ===== Call Expression =====
+
+function parseCallExpr(state: ParserState, callee: Expression): ExprResult {
+	const lparen = current(state);
+	advance(state);
+	const args = try parseExprList(state, TokenKind.RParen);
+	return Result.ok(createNode(NodeKind.CallExpr, { callee, arguments: args }, lparen));
 }
 
 // ===== Test Helpers =====
@@ -302,4 +356,34 @@ testGroup("Expr Complex", () => {
 	test("member access in binary", () => { check(parseOk("a.b + c.d")); });
 	test("not of call", () => { check(parseOk("!f(x)")); });
 	test("complex mixed", () => { check(parseOk("f(a).b + g(c).d")); });
+});
+
+testGroup("Expr Object Literals", () => {
+	test("empty object", () => { check(parseOk("f({})")); });
+	test("single property", () => { check(parseOk("f({ x: 1 })")); });
+	test("two properties", () => { check(parseOk("f({ x: 1, y: 2 })")); });
+	test("shorthand property", () => { check(parseOk("f({ x })")); });
+	test("mixed shorthand and full", () => { check(parseOk("f({ x, y: 2 })")); });
+	test("nested object", () => { check(parseOk("f({ a: { b: 1 } })")); });
+	test("expr value", () => { check(parseOk("f({ x: a + b })")); });
+	test("call value", () => { check(parseOk("f({ x: g(y) })")); });
+	test("trailing comma", () => { check(parseOk("f({ x: 1, y: 2, })")); });
+	test("createNode pattern", () => { check(parseOk("f({ kind, value, line: 1 })")); });
+	test("array value in object", () => { check(parseOk("f({ items: [1, 2] })")); });
+	test("member access value", () => { check(parseOk("f({ x: a.b.c })")); });
+	test("non-ident key fails", () => { check(!parseOk("f({ 42: x })")); });
+});
+
+testGroup("Expr Array Literals", () => {
+	test("empty array", () => { check(parseOk("f([])")); });
+	test("single element", () => { check(parseOk("f([1])")); });
+	test("two elements", () => { check(parseOk("f([1, 2])")); });
+	test("three elements", () => { check(parseOk("f([1, 2, 3])")); });
+	test("string elements", () => { check(parseOk("f([\"a\", \"b\"])")); });
+	test("expression elements", () => { check(parseOk("f([a + b, c * d])")); });
+	test("nested arrays", () => { check(parseOk("f([[1], [2]])")); });
+	test("mixed types", () => { check(parseOk("f([1, \"two\", x])")); });
+	test("trailing comma", () => { check(parseOk("f([1, 2, ])")); });
+	test("array then index", () => { check(parseOk("[1, 2][0]")); });
+	test("object in array", () => { check(parseOk("f([{ x: 1 }, { x: 2 }])")); });
 });

@@ -490,6 +490,20 @@ testGroup("Stmt Multiple & Semicolons", () => {
 	test("semicolons between decls", () => { check(programOk("const x = 1; ; const y = 2;")); });
 });
 
+testGroup("Stmt Object/Array Literals", () => {
+	test("object in var init", () => { check(programOk("const x = { a: 1, b: 2 };")); });
+	test("shorthand in var", () => { check(programOk("const obj = { name };")); });
+	test("array in var init", () => { check(programOk("const arr = [1, 2, 3];")); });
+	test("empty array init", () => { check(programOk("const arr = [];")); });
+	test("object in call arg", () => { check(programOk("f({ x: 1 });")); });
+	test("array in call arg", () => { check(programOk("f([a, b]);")); });
+	test("return object", () => { check(programOk("function f() { return { x: 1 }; }")); });
+	test("return array", () => { check(programOk("function f() { return [1, 2]; }")); });
+	test("createNode pattern", () => {
+		check(programOk("const n = createNode(NodeKind.X, { operator: op, left: a, right: b }, tok);"));
+	});
+});
+
 testGroup("Stmt Error Cases", () => {
 	test("missing name in decl", () => { check(!programOk("const ;")); });
 	test("missing = in decl", () => { check(!programOk("const x ;")); });
