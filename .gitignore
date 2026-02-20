@@ -3,3 +3,5 @@
 .DS_Store
 
 out/
+
+src/**/*.c
