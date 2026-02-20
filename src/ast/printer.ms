@@ -161,6 +161,17 @@ export function printNode(node: Node, level: number): void {
 			console.log(`${pad}FunctionDecl: ${data.fnName} (${data.params.length.toString()} params)`);
 			printNode(data.fnBody, level + 1);
 		},
+		NodeKind.ArrowFunction => {
+			const data = node.data as { arrowParams: string[], arrowBody: Node };
+			console.log(`${pad}ArrowFunction: (${data.arrowParams.length.toString()} params)`);
+			console.log(`${pad}  Body:`);
+			printNode(data.arrowBody, level + 2);
+		},
+		NodeKind.TypeAssertion => {
+			const data = node.data as { asExpr: Node };
+			console.log(`${pad}TypeAssertion:`);
+			printNode(data.asExpr, level + 1);
+		},
 		_ => {},
 	}
 }

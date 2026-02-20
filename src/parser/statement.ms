@@ -4,7 +4,7 @@
 import { Token, TokenKind } from "../lexer/token";
 import { Node, NodeKind, NodeData, createNode } from "../ast/node";
 import { ParserState, createState, current, advance, isAtEnd } from "./context";
-import { parseExpressionFromState } from "./expression";
+import { parseExpressionFromState, registerBlockParser } from "./expression";
 import { skipTypeAnnotation } from "./typeAnnotation";
 import { lex } from "../lexer/lexer";
 import { test, check, testGroup } from "std/testing";
@@ -13,6 +13,9 @@ import { test, check, testGroup } from "std/testing";
 type Nodes = Node[];
 type NodeResult = Result<Node, string>;
 type NodesResult = Result<Nodes, string>;
+
+// Register block parser for arrow function block bodies (breaks circular dep)
+registerBlockParser((state: ParserState): NodeResult => { return parseBlockStmt(state); });
 
 // ===== Statement Dispatch (match on TokenKind) =====
 
@@ -510,4 +513,23 @@ testGroup("Stmt Error Cases", () => {
 	test("missing parens in if", () => { check(!programOk("if x { }")); });
 	test("missing parens in while", () => { check(!programOk("while x { }")); });
 	test("missing function name", () => { check(!programOk("function () {}")); });
+});
+
+testGroup("Stmt Arrow Functions", () => {
+	test("empty block body", () => { check(programOk("const f = () => {};")); });
+	test("block with stmt", () => { check(programOk("const f = () => { x; };")); });
+	test("block with return", () => { check(programOk("const f = (x) => { return x + 1; };")); });
+	test("block multi stmts", () => { check(programOk("const f = (a, b) => { const sum = a + b; return sum; };")); });
+	test("block with if", () => { check(programOk("const f = (x) => { if (x) { return 1; } return 0; };")); });
+	test("test callback", () => { check(programOk("test(\"name\", () => { check(true); });")); });
+	test("testGroup pattern", () => { check(programOk("testGroup(\"group\", () => { test(\"t\", () => { check(1); }); });")); });
+	test("expr body in stmt", () => { check(programOk("const f = (x) => x + 1;")); });
+	test("arrow in var then use", () => { check(programOk("const f = (x) => x; f(42);")); });
+	test("two params block", () => { check(programOk("const f = (a, b) => { return a + b; };")); });
+});
+
+testGroup("Stmt Type Assertions", () => {
+	test("as in var init", () => { check(programOk("const data = node.data as { value: number };")); });
+	test("as then member", () => { check(programOk("const v = (node.data as { value: number }).value;")); });
+	test("printer pattern", () => { check(programOk("const data = node.data as { name: string }; console.log(data.name);")); });
 });

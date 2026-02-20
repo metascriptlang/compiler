@@ -4,10 +4,26 @@
 import { Token, TokenKind } from "../lexer/token";
 import { Node, NodeKind, NodeData, Expression, createNode } from "../ast/node";
 import { ParserState, createState, current, advance, isAtEnd, peek } from "./context";
+import { skipTypeAnnotation } from "./typeAnnotation";
 import { lex } from "../lexer/lexer";
 import { test, check, testGroup } from "std/testing";
 
 type ExprResult = Result<Expression, string>;
+
+// ===== Block Parser Callback =====
+// Arrow functions with block bodies need parseBlockStmt from statement.ms,
+// but importing from statement.ms would create a circular dependency.
+// statement.ms registers its block parser at module load time.
+
+type BlockParserFn = (state: ParserState) => ExprResult;
+
+let blockParser: BlockParserFn = (state: ParserState): ExprResult => {
+	return Result.err("Block parser not registered");
+};
+
+export function registerBlockParser(parser: BlockParserFn): void {
+	blockParser = parser;
+}
 type Nodes = Node[];
 type NodesResult = Result<Nodes, string>;
 
@@ -100,6 +116,14 @@ function parseExprWithPrec(state: ParserState, minPrec: number): ExprResult {
 			continue;
 		}
 
+		// Type assertion: expr as Type
+		if (token.kind === TokenKind.As) {
+			advance(state);
+			skipTypeAnnotation(state);
+			left = createNode(NodeKind.TypeAssertion, { asExpr: left }, token);
+			continue;
+		}
+
 		break;
 	}
 
@@ -126,6 +150,93 @@ function parseExprWithPrec(state: ParserState, minPrec: number): ExprResult {
 	return Result.ok(left);
 }
 
+// ===== Arrow Function Lookahead =====
+
+function isArrowFunction(state: ParserState): boolean {
+	// Must start with (
+	if (current(state).kind !== TokenKind.LParen) { return false; }
+
+	const p1 = peek(state, 1);
+	// () =>  (zero params)
+	if (p1.kind === TokenKind.RParen && peek(state, 2).kind === TokenKind.Arrow) {
+		return true;
+	}
+
+	// Must have identifier as first param
+	if (p1.kind !== TokenKind.Ident) { return false; }
+
+	const p2 = peek(state, 2);
+	// (ident) =>  (single untyped param)
+	if (p2.kind === TokenKind.RParen && peek(state, 3).kind === TokenKind.Arrow) {
+		return true;
+	}
+
+	// (ident,  (multiple params — comma is never valid start of paren subexpr)
+	if (p2.kind === TokenKind.Comma) { return true; }
+
+	// (ident:  (typed param — colon never valid after bare ident in expression)
+	if (p2.kind === TokenKind.Colon) { return true; }
+
+	return false;
+}
+
+// ===== Arrow Function Parser =====
+
+function parseArrowFunction(state: ParserState): ExprResult {
+	const arrowToken = current(state);
+	advance(state); // consume (
+
+	const params: string[] = [];
+	while (!isAtEnd(state) && current(state).kind !== TokenKind.RParen) {
+		const param = current(state);
+		if (param.kind !== TokenKind.Ident) {
+			return Result.err(`Expected parameter name at line ${param.line.toString()}`);
+		}
+		params.push(param.value);
+		advance(state);
+
+		// Optional type annotation: (a: string)
+		if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
+			advance(state);
+			skipTypeAnnotation(state);
+		}
+
+		if (current(state).kind === TokenKind.Comma) {
+			advance(state);
+		} else {
+			break;
+		}
+	}
+
+	if (current(state).kind === TokenKind.RParen) { advance(state); }
+
+	// Optional return type annotation: (): string => ...
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
+		advance(state);
+		skipTypeAnnotation(state);
+	}
+
+	if (isAtEnd(state) || current(state).kind !== TokenKind.Arrow) {
+		return Result.err(`Expected '=>' in arrow function at line ${current(state).line.toString()}`);
+	}
+	advance(state); // consume =>
+
+	// Body: block { ... } or expression
+	if (!isAtEnd(state) && current(state).kind === TokenKind.LBrace) {
+		const body = try blockParser(state);
+		return Result.ok(createNode(NodeKind.ArrowFunction, {
+			arrowParams: params,
+			arrowBody: body,
+		}, arrowToken));
+	}
+
+	const body = try parseExprWithPrec(state, 0);
+	return Result.ok(createNode(NodeKind.ArrowFunction, {
+		arrowParams: params,
+		arrowBody: body,
+	}, arrowToken));
+}
+
 // ===== Primary Expressions =====
 
 function parsePrimary(state: ParserState): ExprResult {
@@ -149,8 +260,11 @@ function parsePrimary(state: ParserState): ExprResult {
 		return Result.ok(createNode(NodeKind.Identifier, { name: token.value }, token));
 	}
 
-	// Parenthesized expression
+	// Arrow function or parenthesized expression
 	if (token.kind === TokenKind.LParen) {
+		if (isArrowFunction(state)) {
+			return parseArrowFunction(state);
+		}
 		advance(state);
 		const expr = try parseExprWithPrec(state, 0);
 		if (current(state).kind === TokenKind.RParen) { advance(state); }
@@ -386,4 +500,26 @@ testGroup("Expr Array Literals", () => {
 	test("trailing comma", () => { check(parseOk("f([1, 2, ])")); });
 	test("array then index", () => { check(parseOk("[1, 2][0]")); });
 	test("object in array", () => { check(parseOk("f([{ x: 1 }, { x: 2 }])")); });
+});
+
+testGroup("Expr Arrow Functions", () => {
+	test("zero params", () => { check(parseOk("() => 42")); });
+	test("single param", () => { check(parseOk("(x) => x")); });
+	test("two params", () => { check(parseOk("(a, b) => a + b")); });
+	test("three params", () => { check(parseOk("(a, b, c) => a")); });
+	test("nested call in body", () => { check(parseOk("(x) => f(x)")); });
+	test("binary in body", () => { check(parseOk("(x) => x + 1")); });
+	test("member in body", () => { check(parseOk("(x) => x.y")); });
+	test("arrow as call arg", () => { check(parseOk("f((x) => x)")); });
+	test("arrow in array", () => { check(parseOk("[(x) => x]")); });
+	test("paren expr still works", () => { check(parseOk("(a + b)")); });
+	test("paren expr complex", () => { check(parseOk("(a + b) * c")); });
+});
+
+testGroup("Expr Type Assertions", () => {
+	test("as simple type", () => { check(parseOk("x as number")); });
+	test("as object type", () => { check(parseOk("x as { value: number }")); });
+	test("member then as", () => { check(parseOk("node.data as { name: string }")); });
+	test("call then as", () => { check(parseOk("f(x) as { result: boolean }")); });
+	test("as in call arg", () => { check(parseOk("f(x as { v: number })")); });
 });
