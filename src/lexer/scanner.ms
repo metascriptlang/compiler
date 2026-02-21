@@ -160,6 +160,8 @@ export function scanTemplateString(s: LexerState): void {
 		if (peek(s) === "$".code && s.pos + 1 < s.source.length && peekAt(s, 1) === "{".code) {
 			addToken(s, TokenKind.TemplateHead, str, startLine, startCol);
 			skip(s, 2); // ${
+			s.templateDepth += 1;
+			s.braceStack.push(0);
 			return;
 		}
 		if (peek(s) === "\\".code) {
@@ -183,6 +185,43 @@ export function scanTemplateString(s: LexerState): void {
 
 	if (s.pos < s.source.length) advanceChar(s); // skip closing backtick
 	addToken(s, TokenKind.TemplateNoSub, str, startLine, startCol);
+}
+
+export function scanTemplateContinuation(s: LexerState): void {
+	const startLine = s.line;
+	const startCol = s.column;
+	let str = "";
+
+	while (s.pos < s.source.length && peek(s) !== "`".code) {
+		if (peek(s) === "$".code && s.pos + 1 < s.source.length && peekAt(s, 1) === "{".code) {
+			addToken(s, TokenKind.TemplateMiddle, str, startLine, startCol);
+			skip(s, 2); // ${
+			return;
+		}
+		if (peek(s) === "\\".code) {
+			if (s.pos + 1 < s.source.length && peekAt(s, 1) === "`".code) {
+				advanceChar(s);
+				str += "`";
+				advanceChar(s);
+			} else if (s.pos + 1 < s.source.length && peekAt(s, 1) === "$".code) {
+				advanceChar(s);
+				str += "$";
+				advanceChar(s);
+			} else {
+				str += processEscape(s);
+			}
+		} else {
+			str += s.source.charAt(s.pos);
+			advanceChar(s);
+		}
+	}
+
+	if (s.pos < s.source.length) advanceChar(s); // skip closing backtick
+	s.templateDepth -= 1;
+	if (s.braceStack.length > 0) {
+		s.braceStack.pop();
+	}
+	addToken(s, TokenKind.TemplateTail, str, startLine, startCol);
 }
 
 // ===== Identifier Scanning =====
@@ -317,8 +356,27 @@ export function scanPunctuation(s: LexerState): boolean {
 	return match (ch) {
 		"(".code => { advanceChar(s); addToken(s, TokenKind.LParen, "(", startLine, startCol); true },
 		")".code => { advanceChar(s); addToken(s, TokenKind.RParen, ")", startLine, startCol); true },
-		"{".code => { advanceChar(s); addToken(s, TokenKind.LBrace, "{", startLine, startCol); true },
-		"}".code => { advanceChar(s); addToken(s, TokenKind.RBrace, "}", startLine, startCol); true },
+		"{".code => {
+			if (s.templateDepth > 0 && s.braceStack.length > 0) {
+				s.braceStack[s.braceStack.length - 1] += 1;
+			}
+			advanceChar(s);
+			addToken(s, TokenKind.LBrace, "{", startLine, startCol);
+			true
+		},
+		"}".code => {
+			if (s.templateDepth > 0 && s.braceStack.length > 0 && s.braceStack[s.braceStack.length - 1] === 0) {
+				advanceChar(s);
+				scanTemplateContinuation(s);
+			} else {
+				if (s.templateDepth > 0 && s.braceStack.length > 0) {
+					s.braceStack[s.braceStack.length - 1] -= 1;
+				}
+				advanceChar(s);
+				addToken(s, TokenKind.RBrace, "}", startLine, startCol);
+			}
+			true
+		},
 		"[".code => { advanceChar(s); addToken(s, TokenKind.LBracket, "[", startLine, startCol); true },
 		"]".code => { advanceChar(s); addToken(s, TokenKind.RBracket, "]", startLine, startCol); true },
 		";".code => { advanceChar(s); addToken(s, TokenKind.Semicolon, ";", startLine, startCol); true },

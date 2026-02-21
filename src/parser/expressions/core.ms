@@ -10,6 +10,7 @@ import { parseMatchExpr } from "./match";
 import { isArrowFunction, parseArrowFunction } from "./arrow";
 import { parseObjectLiteral } from "./object";
 import { parseExprList, parseCallExpr } from "./call";
+import { parseTemplateLiteral } from "./template";
 import { registerParseExpr, parseOk } from "./util";
 import { test, check, testGroup } from "std/testing";
 
@@ -136,6 +137,17 @@ function parsePrimary(state: ParserState): ExprResult {
 	if (token.kind === TokenKind.String) {
 		advance(state);
 		return Result.ok(createNode(NodeKind.StringLiteral, { value: token.value }, token));
+	}
+
+	// Template literal (no substitutions) - desugar to string literal
+	if (token.kind === TokenKind.TemplateNoSub) {
+		advance(state);
+		return Result.ok(createNode(NodeKind.StringLiteral, { value: token.value }, token));
+	}
+
+	// Template literal (with substitutions) - desugar to string concatenation
+	if (token.kind === TokenKind.TemplateHead) {
+		return parseTemplateLiteral(state, parseExprWithPrec);
 	}
 
 	if (token.kind === TokenKind.Ident ||
@@ -327,3 +339,4 @@ testGroup("Expr Try", () => {
 	test("nested try", () => { check(parseOk("try f(try g())")); });
 	test("try identifier", () => { check(parseOk("try x")); });
 });
+

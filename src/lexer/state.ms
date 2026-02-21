@@ -13,10 +13,12 @@ export interface LexerState {
 	line: number;
 	column: number;
 	tokens: Token[];
+	templateDepth: number;
+	braceStack: number[];
 }
 
 export function createLexerState(source: string): LexerState {
-	return { source, pos: 0, line: 1, column: 1, tokens: [] };
+	return { source, pos: 0, line: 1, column: 1, tokens: [], templateDepth: 0, braceStack: [] };
 }
 
 export function peek(s: LexerState): number {

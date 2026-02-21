@@ -202,6 +202,61 @@ export function printNode(node: Node, level: number): void {
 			console.log(`${indent(level + 1)}Body:`);
 			printNode(data.caseBody, level + 2);
 		},
+		NodeKind.ImportDecl => {
+			const data = node.data as { importNames: string[], importAliases: string[], importSource: string };
+			console.log(`${pad}ImportDecl: "${data.importSource}" (${data.importNames.length.toString()} specifiers)`);
+			let specIdx = 0;
+			for (const name of data.importNames) {
+				if (name !== data.importAliases[specIdx]) {
+					console.log(`${indent(level + 1)}${name} as ${data.importAliases[specIdx]}`);
+				} else {
+					console.log(`${indent(level + 1)}${name}`);
+				}
+				specIdx += 1;
+			}
+		},
+		NodeKind.ExportDecl => {
+			const data = node.data as { exportedDecl: Node };
+			console.log(`${pad}ExportDecl:`);
+			printNode(data.exportedDecl, level + 1);
+		},
+		NodeKind.TypeAliasDecl => {
+			const data = node.data as { aliasName: string };
+			console.log(`${pad}TypeAliasDecl: ${data.aliasName}`);
+		},
+		NodeKind.EnumDecl => {
+			const data = node.data as { enumName: string, enumMembers: string[] };
+			console.log(`${pad}EnumDecl: ${data.enumName} (${data.enumMembers.length.toString()} members)`);
+			for (const member of data.enumMembers) {
+				console.log(`${indent(level + 1)}${member}`);
+			}
+		},
+		NodeKind.InterfaceDecl => {
+			const data = node.data as { interfaceName: string, interfaceFields: string[] };
+			console.log(`${pad}InterfaceDecl: ${data.interfaceName} (${data.interfaceFields.length.toString()} fields)`);
+			for (const field of data.interfaceFields) {
+				console.log(`${indent(level + 1)}${field}`);
+			}
+		},
+		NodeKind.ThrowStmt => {
+			const data = node.data as { throwArg: Node };
+			console.log(`${pad}ThrowStmt:`);
+			printNode(data.throwArg, level + 1);
+		},
+		NodeKind.TryCatchStmt => {
+			const data = node.data as { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node };
+			console.log(`${pad}TryCatchStmt:`);
+			console.log(`${indent(level + 1)}Try:`);
+			printNode(data.tryBody, level + 2);
+			if (data.catchName.length > 0) {
+				console.log(`${indent(level + 1)}Catch (${data.catchName}):`);
+			} else {
+				console.log(`${indent(level + 1)}Catch:`);
+			}
+			printNode(data.catchBody, level + 2);
+			console.log(`${indent(level + 1)}Finally:`);
+			printNode(data.finallyBody, level + 2);
+		},
 		_ => {},
 	}
 }

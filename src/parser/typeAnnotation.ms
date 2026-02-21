@@ -12,6 +12,10 @@ import { test, check, testGroup } from "std/testing";
 // ===== Type Annotation Skipping =====
 
 export function skipTypeAnnotation(state: ParserState): void {
+	// Leading pipe for discriminated union types: | { ... } | { ... }
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Pipe) {
+		advance(state);
+	}
 	skipTypeAtom(state);
 
 	// Union types: T | U | V

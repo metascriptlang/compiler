@@ -3,4 +3,4 @@
 
 export { ParserState, createState, current, advance, isAtEnd, expect, peek } from "./context";
 export { parseExpression, parseExpressionFromState } from "./expressions/core";
-export { parseProgram } from "./statement";
+export { parseProgram } from "./statements/core";

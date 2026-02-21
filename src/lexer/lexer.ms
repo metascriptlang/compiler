@@ -174,6 +174,25 @@ testGroup("Lexer Token Types", () => {
 		check(lexFirstVal("`\\$100`") === "$100");
 	});
 
+	test("template interpolation tokens", () => {
+		// `hello ${name}` → TemplateHead("hello "), Ident("name"), TemplateTail("")
+		check(lexKindAt("`hello ${name}`", 0) === TokenKind.TemplateHead);
+		check(lexValAt("`hello ${name}`", 0) === "hello ");
+		check(lexKindAt("`hello ${name}`", 1) === TokenKind.Ident);
+		check(lexKindAt("`hello ${name}`", 2) === TokenKind.TemplateTail);
+		// `${a} and ${b}` → TemplateHead(""), Ident, TemplateMiddle(" and "), Ident, TemplateTail("")
+		check(lexKindAt("`${a} and ${b}`", 0) === TokenKind.TemplateHead);
+		check(lexKindAt("`${a} and ${b}`", 1) === TokenKind.Ident);
+		check(lexKindAt("`${a} and ${b}`", 2) === TokenKind.TemplateMiddle);
+		check(lexValAt("`${a} and ${b}`", 2) === " and ");
+		check(lexKindAt("`${a} and ${b}`", 3) === TokenKind.Ident);
+		check(lexKindAt("`${a} and ${b}`", 4) === TokenKind.TemplateTail);
+		// `${x}` → TemplateHead(""), Ident, TemplateTail("")
+		check(lexKindAt("`${x}`", 0) === TokenKind.TemplateHead);
+		check(lexKindAt("`${x}`", 1) === TokenKind.Ident);
+		check(lexKindAt("`${x}`", 2) === TokenKind.TemplateTail);
+	});
+
 	test("keywords", () => {
 		check(lexFirst("const") === TokenKind.Const);
 		check(lexFirst("let") === TokenKind.Let);

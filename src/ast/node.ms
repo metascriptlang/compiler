@@ -14,6 +14,10 @@ export enum NodeKind {
 	// Statements
 	VariableDecl, IfStmt, WhileStmt, ForStmt, ForOfStmt, BlockStmt,
 	ExprStmt, ReturnStmt, BreakStmt, ContinueStmt, FunctionDecl,
+	// Declarations
+	ImportDecl, ExportDecl, TypeAliasDecl, EnumDecl, InterfaceDecl,
+	// Error handling
+	ThrowStmt, TryCatchStmt,
 }
 
 // ===== Source Location =====
@@ -55,6 +59,15 @@ export type NodeData =
 	| { breakLabel: string }                                       // BreakStmt
 	| { continueLabel: string }                                    // ContinueStmt
 	| { fnName: string, params: string[], fnBody: Node }           // FunctionDecl
+	// Declaration variants
+	| { importNames: string[], importAliases: string[], importSource: string }  // ImportDecl
+	| { exportedDecl: Node }                                       // ExportDecl
+	| { aliasName: string }                                        // TypeAliasDecl
+	| { enumName: string, enumMembers: string[] }                  // EnumDecl
+	| { interfaceName: string, interfaceFields: string[] }         // InterfaceDecl
+	// Error handling variants
+	| { throwArg: Node }                                           // ThrowStmt
+	| { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node } // TryCatchStmt
 
 // ===== Node Interface =====
 
