@@ -172,6 +172,36 @@ export function printNode(node: Node, level: number): void {
 			console.log(`${pad}TypeAssertion:`);
 			printNode(data.asExpr, level + 1);
 		},
+		NodeKind.TryExpr => {
+			const data = node.data as { tryArg: Node, hasCatch: boolean, catchVal: Node };
+			if (data.hasCatch) {
+				console.log(`${pad}TryExpr (with catch):`);
+				printNode(data.tryArg, level + 1);
+				console.log(`${indent(level + 1)}Catch:`);
+				printNode(data.catchVal, level + 2);
+			} else {
+				console.log(`${pad}TryExpr:`);
+				printNode(data.tryArg, level + 1);
+			}
+		},
+		NodeKind.MatchExpr => {
+			const data = node.data as { matchDisc: Node, matchCases: Node[] };
+			console.log(`${pad}MatchExpr: (${data.matchCases.length.toString()} cases)`);
+			console.log(`${indent(level + 1)}Discriminant:`);
+			printNode(data.matchDisc, level + 2);
+			for (const c of data.matchCases) {
+				printNode(c, level + 1);
+			}
+		},
+		NodeKind.MatchCase => {
+			const data = node.data as { casePatterns: Node[], caseBody: Node };
+			console.log(`${pad}Case: (${data.casePatterns.length.toString()} patterns)`);
+			for (const p of data.casePatterns) {
+				printNode(p, level + 1);
+			}
+			console.log(`${indent(level + 1)}Body:`);
+			printNode(data.caseBody, level + 2);
+		},
 		_ => {},
 	}
 }

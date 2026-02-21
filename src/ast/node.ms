@@ -10,6 +10,7 @@ export enum NodeKind {
 	NumberLiteral, StringLiteral, Identifier,
 	BinaryExpr, UnaryExpr, CallExpr, MemberExpr, ArrayAccess,
 	ObjectLiteral, ArrayLiteral, ArrowFunction, TypeAssertion,
+	TryExpr, MatchExpr, MatchCase,
 	// Statements
 	VariableDecl, IfStmt, WhileStmt, ForStmt, ForOfStmt, BlockStmt,
 	ExprStmt, ReturnStmt, BreakStmt, ContinueStmt, FunctionDecl,
@@ -39,6 +40,9 @@ export type NodeData =
 	| { elements: Node[] }                                         // ArrayLiteral
 	| { arrowParams: string[], arrowBody: Node }                   // ArrowFunction
 	| { asExpr: Node }                                             // TypeAssertion
+	| { tryArg: Node, hasCatch: boolean, catchVal: Node }          // TryExpr
+	| { matchDisc: Node, matchCases: Node[] }                      // MatchExpr
+	| { casePatterns: Node[], caseBody: Node }                     // MatchCase
 	// Statement variants
 	| { declName: string, initializer: Node, isConst: boolean }    // VariableDecl
 	| { condition: Node, consequent: Node, alternate: Node }       // IfStmt

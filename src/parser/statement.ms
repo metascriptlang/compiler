@@ -4,7 +4,7 @@
 import { Token, TokenKind } from "../lexer/token";
 import { Node, NodeKind, NodeData, createNode } from "../ast/node";
 import { ParserState, createState, current, advance, isAtEnd } from "./context";
-import { parseExpressionFromState, registerBlockParser } from "./expression";
+import { parseExpressionFromState, registerBlockParser } from "./expressions/core";
 import { skipTypeAnnotation } from "./typeAnnotation";
 import { lex } from "../lexer/lexer";
 import { test, check, testGroup } from "std/testing";

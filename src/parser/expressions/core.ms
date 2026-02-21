@@ -1,11 +1,16 @@
-// Expression Parser - Pratt parsing with operator precedence
+// Core Expression Parser - Pratt parsing with operator precedence
 // Pattern: ~/projects/metascript/src/parser/parser.zig parseExpression()
 
-import { Token, TokenKind } from "../lexer/token";
-import { Node, NodeKind, NodeData, Expression, createNode } from "../ast/node";
-import { ParserState, createState, current, advance, isAtEnd, peek } from "./context";
-import { skipTypeAnnotation } from "./typeAnnotation";
-import { lex } from "../lexer/lexer";
+import { Token, TokenKind } from "../../lexer/token";
+import { Node, NodeKind, NodeData, Expression, createNode } from "../../ast/node";
+import { ParserState, createState, current, advance, isAtEnd } from "../context";
+import { skipTypeAnnotation } from "../typeAnnotation";
+import { getPrecedence, isBinaryOperator } from "./precedence";
+import { parseMatchExpr } from "./match";
+import { isArrowFunction, parseArrowFunction } from "./arrow";
+import { parseObjectLiteral } from "./object";
+import { parseExprList, parseCallExpr } from "./call";
+import { registerParseExpr, parseOk } from "./util";
 import { test, check, testGroup } from "std/testing";
 
 type ExprResult = Result<Expression, string>;
@@ -24,39 +29,6 @@ let blockParser: BlockParserFn = (state: ParserState): ExprResult => {
 export function registerBlockParser(parser: BlockParserFn): void {
 	blockParser = parser;
 }
-type Nodes = Node[];
-type NodesResult = Result<Nodes, string>;
-
-// ===== Operator Precedence (match expression -> C switch) =====
-
-function getPrecedence(kind: TokenKind): number {
-	return match (kind) {
-		TokenKind.Star | TokenKind.Slash | TokenKind.Percent => 60,
-		TokenKind.Plus | TokenKind.Minus => 50,
-		TokenKind.LtLt | TokenKind.GtGt | TokenKind.GtGtGt => 45,
-		TokenKind.Lt | TokenKind.Gt | TokenKind.LtEq | TokenKind.GtEq => 40,
-		TokenKind.EqEq | TokenKind.BangEq | TokenKind.EqEqEq | TokenKind.BangEqEq => 30,
-		TokenKind.AmpAmp => 20,
-		TokenKind.PipePipe => 10,
-		TokenKind.Assign | TokenKind.PlusEq | TokenKind.MinusEq |
-		TokenKind.StarEq | TokenKind.SlashEq | TokenKind.PercentEq => 5,
-		_ => 0,
-	};
-}
-
-function isBinaryOperator(token: Token): boolean {
-	return match (token.kind) {
-		TokenKind.Plus | TokenKind.Minus | TokenKind.Star |
-		TokenKind.Slash | TokenKind.Percent |
-		TokenKind.Lt | TokenKind.Gt | TokenKind.LtEq | TokenKind.GtEq |
-		TokenKind.EqEq | TokenKind.BangEq | TokenKind.EqEqEq | TokenKind.BangEqEq |
-		TokenKind.LtLt | TokenKind.GtGt | TokenKind.GtGtGt |
-		TokenKind.AmpAmp | TokenKind.PipePipe |
-		TokenKind.Assign | TokenKind.PlusEq | TokenKind.MinusEq |
-		TokenKind.StarEq | TokenKind.SlashEq | TokenKind.PercentEq => true,
-		_ => false,
-	};
-}
 
 // ===== Main Parse Functions =====
 
@@ -69,15 +41,18 @@ export function parseExpressionFromState(state: ParserState): ExprResult {
 	return parseExprWithPrec(state, 0);
 }
 
+// Register parseExpression into util.ms for sub-module integration tests.
+// Wrap in lambda to ensure proper closure calling convention.
+registerParseExpr((tokens: Token[]): ExprResult => { return parseExpression(tokens); });
+
 function parseExprWithPrec(state: ParserState, minPrec: number): ExprResult {
 	let left = try parsePrimary(state);
 
 	// Postfix operators: call, member access, array indexing, update
 	while (!isAtEnd(state)) {
 		const token = current(state);
-
 		if (token.kind === TokenKind.LParen) {
-			left = try parseCallExpr(state, left);
+			left = try parseCallExpr(state, left, parseExprWithPrec);
 			continue;
 		}
 
@@ -131,14 +106,12 @@ function parseExprWithPrec(state: ParserState, minPrec: number): ExprResult {
 	while (!isAtEnd(state) && isBinaryOperator(current(state))) {
 		const op = current(state);
 		const prec = getPrecedence(op.kind);
-
 		if (prec < minPrec) {
 			break;
 		}
 
 		advance(state);
 		const right = try parseExprWithPrec(state, prec + 1);
-
 		const data: NodeData = {
 			operator: op.value,
 			left: left,
@@ -148,93 +121,6 @@ function parseExprWithPrec(state: ParserState, minPrec: number): ExprResult {
 	}
 
 	return Result.ok(left);
-}
-
-// ===== Arrow Function Lookahead =====
-
-function isArrowFunction(state: ParserState): boolean {
-	// Must start with (
-	if (current(state).kind !== TokenKind.LParen) { return false; }
-
-	const p1 = peek(state, 1);
-	// () =>  (zero params)
-	if (p1.kind === TokenKind.RParen && peek(state, 2).kind === TokenKind.Arrow) {
-		return true;
-	}
-
-	// Must have identifier as first param
-	if (p1.kind !== TokenKind.Ident) { return false; }
-
-	const p2 = peek(state, 2);
-	// (ident) =>  (single untyped param)
-	if (p2.kind === TokenKind.RParen && peek(state, 3).kind === TokenKind.Arrow) {
-		return true;
-	}
-
-	// (ident,  (multiple params — comma is never valid start of paren subexpr)
-	if (p2.kind === TokenKind.Comma) { return true; }
-
-	// (ident:  (typed param — colon never valid after bare ident in expression)
-	if (p2.kind === TokenKind.Colon) { return true; }
-
-	return false;
-}
-
-// ===== Arrow Function Parser =====
-
-function parseArrowFunction(state: ParserState): ExprResult {
-	const arrowToken = current(state);
-	advance(state); // consume (
-
-	const params: string[] = [];
-	while (!isAtEnd(state) && current(state).kind !== TokenKind.RParen) {
-		const param = current(state);
-		if (param.kind !== TokenKind.Ident) {
-			return Result.err(`Expected parameter name at line ${param.line.toString()}`);
-		}
-		params.push(param.value);
-		advance(state);
-
-		// Optional type annotation: (a: string)
-		if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
-			advance(state);
-			skipTypeAnnotation(state);
-		}
-
-		if (current(state).kind === TokenKind.Comma) {
-			advance(state);
-		} else {
-			break;
-		}
-	}
-
-	if (current(state).kind === TokenKind.RParen) { advance(state); }
-
-	// Optional return type annotation: (): string => ...
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
-		advance(state);
-		skipTypeAnnotation(state);
-	}
-
-	if (isAtEnd(state) || current(state).kind !== TokenKind.Arrow) {
-		return Result.err(`Expected '=>' in arrow function at line ${current(state).line.toString()}`);
-	}
-	advance(state); // consume =>
-
-	// Body: block { ... } or expression
-	if (!isAtEnd(state) && current(state).kind === TokenKind.LBrace) {
-		const body = try blockParser(state);
-		return Result.ok(createNode(NodeKind.ArrowFunction, {
-			arrowParams: params,
-			arrowBody: body,
-		}, arrowToken));
-	}
-
-	const body = try parseExprWithPrec(state, 0);
-	return Result.ok(createNode(NodeKind.ArrowFunction, {
-		arrowParams: params,
-		arrowBody: body,
-	}, arrowToken));
 }
 
 // ===== Primary Expressions =====
@@ -263,12 +149,34 @@ function parsePrimary(state: ParserState): ExprResult {
 	// Arrow function or parenthesized expression
 	if (token.kind === TokenKind.LParen) {
 		if (isArrowFunction(state)) {
-			return parseArrowFunction(state);
+			return parseArrowFunction(state, parseExprWithPrec, blockParser);
 		}
 		advance(state);
 		const expr = try parseExprWithPrec(state, 0);
 		if (current(state).kind === TokenKind.RParen) { advance(state); }
 		return Result.ok(expr);
+	}
+
+	// Try expression: try expr [catch defaultValue]
+	if (token.kind === TokenKind.Try) {
+		advance(state);
+		const arg = try parsePrimary(state);
+		if (!isAtEnd(state) && current(state).kind === TokenKind.Catch) {
+			advance(state);
+			const catchExpr = try parseExprWithPrec(state, 0);
+			return Result.ok(createNode(NodeKind.TryExpr, {
+				tryArg: arg, hasCatch: true, catchVal: catchExpr,
+			}, token));
+		}
+		const dummy = createNode(NodeKind.Identifier, { name: "" }, token);
+		return Result.ok(createNode(NodeKind.TryExpr, {
+			tryArg: arg, hasCatch: false, catchVal: dummy,
+		}, token));
+	}
+
+	// Match expression: match (expr) { pattern => body, ... }
+	if (token.kind === TokenKind.Match) {
+		return parseMatchExpr(state, parseExprWithPrec, blockParser);
 	}
 
 	// Unary prefix operators
@@ -281,97 +189,23 @@ function parsePrimary(state: ParserState): ExprResult {
 	// Array literal: [expr, expr, ...]
 	if (token.kind === TokenKind.LBracket) {
 		advance(state);
-		const elems = try parseExprList(state, TokenKind.RBracket);
+		const elems = try parseExprList(state, TokenKind.RBracket, parseExprWithPrec);
 		return Result.ok(createNode(NodeKind.ArrayLiteral, { elements: elems }, token));
 	}
 
 	// Object literal: { key: value, ... } or { key, ... } (shorthand)
 	if (token.kind === TokenKind.LBrace) {
-		return parseObjectLiteral(state);
+		return parseObjectLiteral(state, parseExprWithPrec);
 	}
 
 	return Result.err(`Unexpected token: ${token.value} at line ${token.line.toString()}`);
 }
 
-// ===== Object Literal =====
-
-function parseObjectLiteral(state: ParserState): ExprResult {
-	const lbrace = current(state);
-	const keys: string[] = [];
-	const values: Expression[] = [];
-
-	advance(state);
-	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
-		const keyToken = current(state);
-		if (keyToken.kind !== TokenKind.Ident) {
-			return Result.err(`Expected property name at line ${keyToken.line.toString()}`);
-		}
-		advance(state);
-
-		if (current(state).kind === TokenKind.Colon) {
-			// Full property: { key: value }
-			advance(state);
-			keys.push(keyToken.value);
-			const val = try parseExprWithPrec(state, 0);
-			values.push(val);
-		} else {
-			// Shorthand property: { key } means { key: key }
-			keys.push(keyToken.value);
-			values.push(createNode(NodeKind.Identifier, { name: keyToken.value }, keyToken));
-		}
-
-		if (current(state).kind === TokenKind.Comma) {
-			advance(state);
-		} else {
-			break;
-		}
-	}
-
-	if (current(state).kind === TokenKind.RBrace) { advance(state); }
-
-	return Result.ok(createNode(NodeKind.ObjectLiteral, {
-		properties: values,
-		keys,
-	}, lbrace));
-}
-
-// ===== Comma-Separated Expression List =====
-// Shared by call args and array literals
-
-function parseExprList(state: ParserState, endKind: TokenKind): NodesResult {
-	const items: Node[] = [];
-	while (!isAtEnd(state) && current(state).kind !== endKind) {
-		const item = try parseExprWithPrec(state, 0);
-		items.push(item);
-		if (current(state).kind === TokenKind.Comma) {
-			advance(state);
-		} else {
-			break;
-		}
-	}
-	if (current(state).kind === endKind) { advance(state); }
-	return Result.ok(items);
-}
-
-// ===== Call Expression =====
-
-function parseCallExpr(state: ParserState, callee: Expression): ExprResult {
-	const lparen = current(state);
-	advance(state);
-	const args = try parseExprList(state, TokenKind.RParen);
-	return Result.ok(createNode(NodeKind.CallExpr, { callee, arguments: args }, lparen));
-}
-
-// ===== Test Helpers =====
-
-function parseOk(input: string): boolean {
-	const lr = lex(input);
-	if (!lr.ok) return false;
-	const pr = parseExpression(lr.value);
-	return pr.ok;
-}
-
-// ===== Expression Parser Tests =====
+// ===== Core Expression Tests =====
+// Tests for logic that lives in core.ms: literals, binary ops, precedence,
+// associativity, parentheses, unary, member access, array access, postfix,
+// type assertions, try, array literals.
+// Call/Object/Arrow/Match integration tests live in their respective sub-modules.
 
 testGroup("Expr Literals", () => {
 	test("number literal", () => { check(parseOk("42")); });
@@ -432,16 +266,6 @@ testGroup("Expr Unary Operators", () => {
 	test("double negate with parens", () => { check(parseOk("-(-x)")); });
 });
 
-testGroup("Expr Call", () => {
-	test("empty call", () => { check(parseOk("f()")); });
-	test("single arg call", () => { check(parseOk("f(a)")); });
-	test("multi arg call", () => { check(parseOk("f(a, b)")); });
-	test("three arg call", () => { check(parseOk("f(a, b, c)")); });
-	test("expression arg", () => { check(parseOk("f(1 + 2)")); });
-	test("nested call", () => { check(parseOk("f(g(x))")); });
-	test("mixed args with nested call", () => { check(parseOk("f(a, g(b), c)")); });
-});
-
 testGroup("Expr Member Access", () => {
 	test("simple member", () => { check(parseOk("a.b")); });
 	test("chained member", () => { check(parseOk("a.b.c")); });
@@ -472,22 +296,6 @@ testGroup("Expr Complex", () => {
 	test("complex mixed", () => { check(parseOk("f(a).b + g(c).d")); });
 });
 
-testGroup("Expr Object Literals", () => {
-	test("empty object", () => { check(parseOk("f({})")); });
-	test("single property", () => { check(parseOk("f({ x: 1 })")); });
-	test("two properties", () => { check(parseOk("f({ x: 1, y: 2 })")); });
-	test("shorthand property", () => { check(parseOk("f({ x })")); });
-	test("mixed shorthand and full", () => { check(parseOk("f({ x, y: 2 })")); });
-	test("nested object", () => { check(parseOk("f({ a: { b: 1 } })")); });
-	test("expr value", () => { check(parseOk("f({ x: a + b })")); });
-	test("call value", () => { check(parseOk("f({ x: g(y) })")); });
-	test("trailing comma", () => { check(parseOk("f({ x: 1, y: 2, })")); });
-	test("createNode pattern", () => { check(parseOk("f({ kind, value, line: 1 })")); });
-	test("array value in object", () => { check(parseOk("f({ items: [1, 2] })")); });
-	test("member access value", () => { check(parseOk("f({ x: a.b.c })")); });
-	test("non-ident key fails", () => { check(!parseOk("f({ 42: x })")); });
-});
-
 testGroup("Expr Array Literals", () => {
 	test("empty array", () => { check(parseOk("f([])")); });
 	test("single element", () => { check(parseOk("f([1])")); });
@@ -502,24 +310,20 @@ testGroup("Expr Array Literals", () => {
 	test("object in array", () => { check(parseOk("f([{ x: 1 }, { x: 2 }])")); });
 });
 
-testGroup("Expr Arrow Functions", () => {
-	test("zero params", () => { check(parseOk("() => 42")); });
-	test("single param", () => { check(parseOk("(x) => x")); });
-	test("two params", () => { check(parseOk("(a, b) => a + b")); });
-	test("three params", () => { check(parseOk("(a, b, c) => a")); });
-	test("nested call in body", () => { check(parseOk("(x) => f(x)")); });
-	test("binary in body", () => { check(parseOk("(x) => x + 1")); });
-	test("member in body", () => { check(parseOk("(x) => x.y")); });
-	test("arrow as call arg", () => { check(parseOk("f((x) => x)")); });
-	test("arrow in array", () => { check(parseOk("[(x) => x]")); });
-	test("paren expr still works", () => { check(parseOk("(a + b)")); });
-	test("paren expr complex", () => { check(parseOk("(a + b) * c")); });
-});
-
 testGroup("Expr Type Assertions", () => {
 	test("as simple type", () => { check(parseOk("x as number")); });
 	test("as object type", () => { check(parseOk("x as { value: number }")); });
 	test("member then as", () => { check(parseOk("node.data as { name: string }")); });
 	test("call then as", () => { check(parseOk("f(x) as { result: boolean }")); });
 	test("as in call arg", () => { check(parseOk("f(x as { v: number })")); });
+});
+
+testGroup("Expr Try", () => {
+	test("basic try", () => { check(parseOk("try foo()")); });
+	test("try with catch", () => { check(parseOk("try foo() catch 0")); });
+	test("try catch string", () => { check(parseOk("try f() catch \"default\"")); });
+	test("try call with args", () => { check(parseOk("try bar(a, b)")); });
+	test("try member call", () => { check(parseOk("try x.method()")); });
+	test("nested try", () => { check(parseOk("try f(try g())")); });
+	test("try identifier", () => { check(parseOk("try x")); });
 });
