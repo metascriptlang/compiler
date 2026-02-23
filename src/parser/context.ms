@@ -48,3 +48,44 @@ export function expect(state: ParserState, kind: TokenKind, msg: string): Result
 	advance(state);
 	return Result.ok(token);
 }
+
+// ===== Common Helpers =====
+
+// Consume optional trailing semicolon
+export function consumeSemicolon(state: ParserState): void {
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Semicolon) {
+		advance(state);
+	}
+}
+
+// Skip balanced <...> generic type parameters (e.g., class Foo<T> or extends Bar<T>)
+export function skipGenericParams(state: ParserState): void {
+	if (isAtEnd(state) || current(state).kind !== TokenKind.Lt) { return; }
+	advance(state);
+	let depth = 1;
+	while (!isAtEnd(state) && depth > 0) {
+		if (current(state).kind === TokenKind.Lt) { depth += 1; }
+		if (current(state).kind === TokenKind.Gt) { depth -= 1; }
+		advance(state);
+	}
+}
+
+// ===== Pattern Helpers =====
+
+// Skip a destructuring pattern: { ... } or [ ... ] including nesting.
+// Used when we need to consume but not store the pattern (param lists, for-of bindings).
+export function skipDestructurePattern(state: ParserState): void {
+	let depth = 0;
+	while (!isAtEnd(state)) {
+		if (current(state).kind === TokenKind.LBrace || current(state).kind === TokenKind.LBracket) {
+			depth += 1;
+		}
+		if (current(state).kind === TokenKind.RBrace || current(state).kind === TokenKind.RBracket) {
+			depth -= 1;
+			advance(state);
+			if (depth === 0) { return; }
+			continue;
+		}
+		advance(state);
+	}
+}

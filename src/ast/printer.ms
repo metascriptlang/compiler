@@ -157,13 +157,21 @@ export function printNode(node: Node, level: number): void {
 			console.log(`${pad}ContinueStmt`);
 		},
 		NodeKind.FunctionDecl => {
-			const data = node.data as { fnName: string, params: string[], fnBody: Node };
-			console.log(`${pad}FunctionDecl: ${data.fnName} (${data.params.length.toString()} params)`);
+			const data = node.data as { fnName: string, params: string[], fnBody: Node, fnFlags: string };
+			if (data.fnFlags.length > 0) {
+				console.log(`${pad}FunctionDecl: ${data.fnFlags} ${data.fnName} (${data.params.length.toString()} params)`);
+			} else {
+				console.log(`${pad}FunctionDecl: ${data.fnName} (${data.params.length.toString()} params)`);
+			}
 			printNode(data.fnBody, level + 1);
 		},
 		NodeKind.ArrowFunction => {
-			const data = node.data as { arrowParams: string[], arrowBody: Node };
-			console.log(`${pad}ArrowFunction: (${data.arrowParams.length.toString()} params)`);
+			const data = node.data as { arrowParams: string[], arrowBody: Node, arrowFlags: string };
+			if (data.arrowFlags.length > 0) {
+				console.log(`${pad}ArrowFunction: ${data.arrowFlags} (${data.arrowParams.length.toString()} params)`);
+			} else {
+				console.log(`${pad}ArrowFunction: (${data.arrowParams.length.toString()} params)`);
+			}
 			console.log(`${pad}  Body:`);
 			printNode(data.arrowBody, level + 2);
 		},
@@ -332,18 +340,155 @@ export function printNode(node: Node, level: number): void {
 			}
 		},
 		NodeKind.MethodDecl => {
-			const data = node.data as { methodName: string, methodParams: string[], methodBody: Node, methodIsStatic: boolean };
-			if (data.methodIsStatic) {
-				console.log(`${pad}MethodDecl: static ${data.methodName} (${data.methodParams.length.toString()} params)`);
-			} else {
-				console.log(`${pad}MethodDecl: ${data.methodName} (${data.methodParams.length.toString()} params)`);
-			}
+			const data = node.data as { methodName: string, methodParams: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string };
+			let methodPrefix = "";
+			if (data.methodIsStatic) { methodPrefix = "static "; }
+			if (data.methodFlags.length > 0) { methodPrefix = methodPrefix + data.methodFlags + " "; }
+			console.log(`${pad}MethodDecl: ${methodPrefix}${data.methodName} (${data.methodParams.length.toString()} params)`);
 			printNode(data.methodBody, level + 1);
 		},
 		NodeKind.DeferStmt => {
 			const data = node.data as { deferExpr: Node };
 			console.log(`${pad}DeferStmt:`);
 			printNode(data.deferExpr, level + 1);
+		},
+		NodeKind.BooleanLiteral => {
+			const data = node.data as { boolValue: boolean };
+			if (data.boolValue) { console.log(`${pad}BooleanLiteral: true`); }
+			else { console.log(`${pad}BooleanLiteral: false`); }
+		},
+		NodeKind.NullLiteral => {
+			console.log(`${pad}NullLiteral`);
+		},
+		NodeKind.RegexLiteral => {
+			const data = node.data as { regexPattern: string };
+			console.log(`${pad}RegexLiteral: ${data.regexPattern}`);
+		},
+		NodeKind.BigIntLiteral => {
+			const data = node.data as { bigintValue: string };
+			console.log(`${pad}BigIntLiteral: ${data.bigintValue}`);
+		},
+		NodeKind.UpdateExpr => {
+			const data = node.data as { updateOp: string, updateArg: Node, isPrefix: boolean };
+			if (data.isPrefix) { console.log(`${pad}UpdateExpr: prefix ${data.updateOp}`); }
+			else { console.log(`${pad}UpdateExpr: postfix ${data.updateOp}`); }
+			printNode(data.updateArg, level + 1);
+		},
+		NodeKind.AwaitExpr => {
+			const data = node.data as { awaitArg: Node };
+			console.log(`${pad}AwaitExpr:`);
+			printNode(data.awaitArg, level + 1);
+		},
+		NodeKind.YieldExpr => {
+			const data = node.data as { yieldArg: Node, isDelegate: boolean };
+			if (data.isDelegate) { console.log(`${pad}YieldExpr: delegate`); }
+			else { console.log(`${pad}YieldExpr:`); }
+			printNode(data.yieldArg, level + 1);
+		},
+		NodeKind.MoveExpr => {
+			const data = node.data as { moveArg: Node };
+			console.log(`${pad}MoveExpr:`);
+			printNode(data.moveArg, level + 1);
+		},
+		NodeKind.OutExpr => {
+			const data = node.data as { outArg: Node };
+			console.log(`${pad}OutExpr:`);
+			printNode(data.outArg, level + 1);
+		},
+		NodeKind.FunctionExpr => {
+			const data = node.data as { funcExprParams: string[], funcExprBody: Node, funcExprFlags: string };
+			if (data.funcExprFlags.length > 0) {
+				console.log(`${pad}FunctionExpr: ${data.funcExprFlags} (${data.funcExprParams.length.toString()} params)`);
+			} else {
+				console.log(`${pad}FunctionExpr: (${data.funcExprParams.length.toString()} params)`);
+			}
+			printNode(data.funcExprBody, level + 1);
+		},
+		NodeKind.ConstructorDecl => {
+			const data = node.data as { ctorParams: string[], ctorBody: Node };
+			console.log(`${pad}ConstructorDecl: (${data.ctorParams.length.toString()} params)`);
+			printNode(data.ctorBody, level + 1);
+		},
+		NodeKind.UnreachableStmt => {
+			const data = node.data as { unreachableMsg: string };
+			if (data.unreachableMsg.length > 0) {
+				console.log(`${pad}UnreachableStmt: "${data.unreachableMsg}"`);
+			} else {
+				console.log(`${pad}UnreachableStmt`);
+			}
+		},
+		NodeKind.TypeAnnotation => {
+			const data = node.data as { annotationType: string };
+			console.log(`${pad}TypeAnnotation: ${data.annotationType}`);
+		},
+		NodeKind.MatchStmt => {
+			const data = node.data as { matchStmtDisc: Node, matchStmtCases: Node[] };
+			console.log(`${pad}MatchStmt: (${data.matchStmtCases.length.toString()} cases)`);
+			console.log(`${indent(level + 1)}Discriminant:`);
+			printNode(data.matchStmtDisc, level + 2);
+			for (const c of data.matchStmtCases) {
+				printNode(c, level + 1);
+			}
+		},
+		NodeKind.Program => {
+			const data = node.data as { programStmts: Node[] };
+			console.log(`${pad}Program: (${data.programStmts.length.toString()} stmts)`);
+			for (const stmt of data.programStmts) {
+				printNode(stmt, level + 1);
+			}
+		},
+		NodeKind.ForInStmt => {
+			const data = node.data as { forInBinding: string, forInIsConst: boolean, forInObject: Node, forInBody: Node };
+			const keyword = match (data.forInIsConst) { true => "const", _ => "let" };
+			console.log(`${pad}ForInStmt: ${keyword} ${data.forInBinding}`);
+			console.log(`${pad}  Object:`);
+			printNode(data.forInObject, level + 2);
+			console.log(`${pad}  Body:`);
+			printNode(data.forInBody, level + 2);
+		},
+		NodeKind.MacroInvocation => {
+			const data = node.data as { macroName: string, macroArgs: Node[] };
+			console.log(`${pad}MacroInvocation: @${data.macroName} (${data.macroArgs.length.toString()} args)`);
+			for (const arg of data.macroArgs) {
+				printNode(arg, level + 1);
+			}
+		},
+		NodeKind.DecoratedDecl => {
+			const data = node.data as { decorators: Node[], decoratedNode: Node };
+			console.log(`${pad}DecoratedDecl: (${data.decorators.length.toString()} decorators)`);
+			for (const dec of data.decorators) {
+				printNode(dec, level + 1);
+			}
+			console.log(`${indent(level + 1)}Declaration:`);
+			printNode(data.decoratedNode, level + 2);
+		},
+		NodeKind.ArrayPattern => {
+			const data = node.data as { patternElements: Node[], hasRestElement: boolean };
+			console.log(`${pad}ArrayPattern: (${data.patternElements.length.toString()} elements)`);
+			for (const elem of data.patternElements) {
+				printNode(elem, level + 1);
+			}
+		},
+		NodeKind.ObjectPattern => {
+			const data = node.data as { patternProps: Node[], hasRestProp: boolean };
+			console.log(`${pad}ObjectPattern: (${data.patternProps.length.toString()} props)`);
+			for (const prop of data.patternProps) {
+				printNode(prop, level + 1);
+			}
+		},
+		NodeKind.ObjectPatternProp => {
+			const data = node.data as { propKey: string, propAlias: Node };
+			console.log(`${pad}ObjectPatternProp: ${data.propKey}`);
+			printNode(data.propAlias, level + 1);
+		},
+		NodeKind.DestructuringDecl => {
+			const data = node.data as { destrPattern: Node, destrInit: Node, destrIsConst: boolean };
+			const keyword = match (data.destrIsConst) { true => "const", _ => "let" };
+			console.log(`${pad}DestructuringDecl: ${keyword}`);
+			console.log(`${indent(level + 1)}Pattern:`);
+			printNode(data.destrPattern, level + 2);
+			console.log(`${indent(level + 1)}Init:`);
+			printNode(data.destrInit, level + 2);
 		},
 		_ => {},
 	}

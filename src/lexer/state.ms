@@ -13,10 +13,11 @@ export interface LexerState {
 	tokens: Token[];
 	templateDepth: number;
 	braceStack: number[];
+	lastToken: TokenKind;
 }
 
 export function createLexerState(source: string): LexerState {
-	return { source, pos: 0, line: 1, column: 1, tokens: [], templateDepth: 0, braceStack: [] };
+	return { source, pos: 0, line: 1, column: 1, tokens: [], templateDepth: 0, braceStack: [], lastToken: TokenKind.Eof };
 }
 
 export function peek(s: LexerState): number {
@@ -50,6 +51,7 @@ export function skip(s: LexerState, n: number): void {
 
 export function addToken(s: LexerState, kind: TokenKind, value: string, line: number, column: number): void {
 	s.tokens.push({ kind, value, line, column });
+	s.lastToken = kind;
 }
 
 // ===== Tests =====

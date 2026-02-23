@@ -1,15 +1,16 @@
 // Metascript Compiler - Self-hosting compiler written in Metascript
 // Module structure:
-//   ast/       — AST types, printer (hub: ast.ms)
-//   lexer/     — Tokenization (chars, token, lexer)
-//   parser/    — Parsing (hub: parser.ms, context, expression, statement, type_annotation)
+//   ast/       — AST types, printer (hub: index.ms)
+//   lexer/     — Tokenization (hub: index.ms)
+//   parser/    — Parsing (hub: index.ms)
 //   diagnostics/ — Error formatting helpers
 
 import { formatToken } from "./lexer/token";
-import { lex } from "./lexer/lexer";
-import { parseExpression } from "./parser/parser";
-import { parseProgram } from "./parser/parser";
-import { printNode } from "./ast/ast";
+import { lex } from "./lexer/index";
+import { parseExpression } from "./parser/index";
+import { parseProgram } from "./parser/index";
+import { Node } from "./ast/node";
+import { printNode } from "./ast/index";
 import { formatError, unexpectedToken } from "./diagnostics/diagnostics";
 
 // ===== Test Helpers =====
@@ -55,8 +56,9 @@ function testParseProgram(input: string): void {
 		console.log(`  Parse error: ${parseResult.error}`);
 		return;
 	}
-	const stmts = parseResult.value;
-	for (const stmt of stmts) {
+	const program = parseResult.value;
+	const programData = program.data as { programStmts: Node[] };
+	for (const stmt of programData.programStmts) {
 		printNode(stmt, 1);
 	}
 }

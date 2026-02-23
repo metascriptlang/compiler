@@ -5,6 +5,7 @@ import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, NodeData, Expression, createNode } from "../../ast/node";
 import { ParserState, createState, current, advance, isAtEnd, peek } from "../context";
 import { skipTypeAnnotation } from "../typeAnnotation";
+import { parseParamList } from "../util";
 import { lex } from "../../lexer/lexer";
 import { parseOk } from "./util";
 import { test, check, testGroup } from "std/testing";
@@ -27,6 +28,9 @@ export function isArrowFunction(state: ParserState): boolean {
 
 	// Rest params: (...args) =>
 	if (p1.kind === TokenKind.DotDotDot) { return true; }
+
+	// Destructured params: ({ ... }) => or ([ ... ]) =>
+	if (p1.kind === TokenKind.LBrace || p1.kind === TokenKind.LBracket) { return true; }
 
 	// Must have identifier as first param
 	if (p1.kind !== TokenKind.Ident) { return false; }
@@ -51,41 +55,11 @@ export function isArrowFunction(state: ParserState): boolean {
 export function parseArrowFunction(
 	state: ParserState,
 	exprParser: ExprParser,
-	blockParser: BlockParser
+	blockParser: BlockParser,
+	flags: string
 ): ExprResult {
 	const arrowToken = current(state);
-	advance(state); // consume (
-
-	const params: string[] = [];
-	while (!isAtEnd(state) && current(state).kind !== TokenKind.RParen) {
-		// Rest parameter: ...args
-		let paramPrefix = "";
-		if (current(state).kind === TokenKind.DotDotDot) {
-			paramPrefix = "...";
-			advance(state);
-		}
-
-		const param = current(state);
-		if (param.kind !== TokenKind.Ident) {
-			return Result.err(`Expected parameter name at line ${param.line.toString()}`);
-		}
-		params.push(paramPrefix + param.value);
-		advance(state);
-
-		// Optional type annotation: (a: string)
-		if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
-			advance(state);
-			skipTypeAnnotation(state);
-		}
-
-		if (current(state).kind === TokenKind.Comma) {
-			advance(state);
-		} else {
-			break;
-		}
-	}
-
-	if (current(state).kind === TokenKind.RParen) { advance(state); }
+	const params = parseParamList(state);
 
 	// Optional return type annotation: (): string => ...
 	if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
@@ -104,6 +78,7 @@ export function parseArrowFunction(
 		return Result.ok(createNode(NodeKind.ArrowFunction, {
 			arrowParams: params,
 			arrowBody: body,
+			arrowFlags: flags,
 		}, arrowToken));
 	}
 
@@ -111,6 +86,7 @@ export function parseArrowFunction(
 	return Result.ok(createNode(NodeKind.ArrowFunction, {
 		arrowParams: params,
 		arrowBody: body,
+		arrowFlags: flags,
 	}, arrowToken));
 }
 
@@ -144,7 +120,7 @@ function arrowOk(input: string): boolean {
 	const lr = lex(input);
 	if (!lr.ok) return false;
 	const state = createState(lr.value);
-	const result = parseArrowFunction(state, mockExpr, mockBlock);
+	const result = parseArrowFunction(state, mockExpr, mockBlock, "");
 	return result.ok;
 }
 
@@ -152,9 +128,9 @@ function arrowParamCount(input: string): number {
 	const lr = lex(input);
 	if (!lr.ok) return -1;
 	const state = createState(lr.value);
-	const result = parseArrowFunction(state, mockExpr, mockBlock);
+	const result = parseArrowFunction(state, mockExpr, mockBlock, "");
 	if (!result.ok) return -1;
-	const data = result.value.data as { arrowParams: string[], arrowBody: Node };
+	const data = result.value.data as { arrowParams: string[], arrowBody: Node, arrowFlags: string };
 	return data.arrowParams.length;
 }
 

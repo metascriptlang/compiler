@@ -47,6 +47,10 @@ export function exprOp(input: string): string {
 		const d = pr.value.data as { unaryOp: string, operand: Node };
 		return d.unaryOp;
 	}
+	if (pr.value.kind === NodeKind.UpdateExpr) {
+		const d = pr.value.data as { updateOp: string, updateArg: Node, isPrefix: boolean };
+		return d.updateOp;
+	}
 	return "";
 }
 

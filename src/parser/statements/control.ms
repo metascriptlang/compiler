@@ -3,9 +3,9 @@
 
 import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, NodeData, createNode } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd } from "../context";
+import { ParserState, current, advance, isAtEnd, skipDestructurePattern, consumeSemicolon } from "../context";
 import { skipTypeAnnotation } from "../typeAnnotation";
-import { callBlockParser, callExprParser, callStmtParser, programOk } from "./util";
+import { callBlockParser, callExprParser, callStmtParser, programOk, stmtKind } from "./util";
 import { test, check, testGroup } from "std/testing";
 
 type NodeResult = Result<Node, string>;
@@ -88,15 +88,50 @@ export function parseForStmt(state: ParserState): NodeResult {
 	}
 
 	advance(state);
-	// Check for for-of: for (const/let x of expr)
+	// Check for for-of: for (const/let x of expr) or for (const/let { } of expr)
 	const bindingToken = current(state);
 	if (bindingToken.kind === TokenKind.Const || bindingToken.kind === TokenKind.Let) {
 		const forIsConst = bindingToken.kind === TokenKind.Const;
 		advance(state);
 
+		// Destructured for-of: for (const { a, b } of items) or for (const [a, b] of items)
+		if (current(state).kind === TokenKind.LBrace || current(state).kind === TokenKind.LBracket) {
+			skipDestructurePattern(state);
+			// Now expect 'of' or 'in'
+			if (!isAtEnd(state) && current(state).kind === TokenKind.Of) {
+				advance(state); // consume 'of'
+				const iterable = try callExprParser(state);
+				if (current(state).kind !== TokenKind.RParen) {
+					return Result.err(`Expected ')' after for-of iterable at line ${current(state).line.toString()}`);
+				}
+				advance(state);
+				return Result.ok(createNode(NodeKind.ForOfStmt, {
+					forOfBinding: "_destructure",
+					forOfIsConst: forIsConst,
+					forOfIterable: iterable,
+					forOfBody: try callBlockParser(state),
+				}, forToken));
+			}
+			if (!isAtEnd(state) && current(state).kind === TokenKind.In) {
+				advance(state); // consume 'in'
+				const obj = try callExprParser(state);
+				if (current(state).kind !== TokenKind.RParen) {
+					return Result.err(`Expected ')' after for-in object at line ${current(state).line.toString()}`);
+				}
+				advance(state);
+				return Result.ok(createNode(NodeKind.ForInStmt, {
+					forInBinding: "_destructure",
+					forInIsConst: forIsConst,
+					forInObject: obj,
+					forInBody: try callBlockParser(state),
+				}, forToken));
+			}
+			return Result.err(`Expected 'of' or 'in' after destructuring pattern at line ${current(state).line.toString()}`);
+		}
+
 		const nameToken = current(state);
 		if (nameToken.kind === TokenKind.Ident) {
-			// Peek ahead: is this "name of" (for-of) or "name =" (C-style for)?
+			// Peek ahead: is this "name of" (for-of), "name in" (for-in), or "name =" (C-style for)?
 			const afterName = state.position + 1;
 			if (afterName < state.tokens.length && state.tokens[afterName].kind === TokenKind.Of) {
 				// for-of loop
@@ -113,6 +148,23 @@ export function parseForStmt(state: ParserState): NodeResult {
 					forOfIsConst: forIsConst,
 					forOfIterable: iterable,
 					forOfBody: try callBlockParser(state),
+				}, forToken));
+			}
+			if (afterName < state.tokens.length && state.tokens[afterName].kind === TokenKind.In) {
+				// for-in loop
+				advance(state); // consume name
+				advance(state); // consume 'in'
+				const obj = try callExprParser(state);
+				if (current(state).kind !== TokenKind.RParen) {
+					return Result.err(`Expected ')' after for-in object at line ${current(state).line.toString()}`);
+				}
+
+				advance(state);
+				return Result.ok(createNode(NodeKind.ForInStmt, {
+					forInBinding: nameToken.value,
+					forInIsConst: forIsConst,
+					forInObject: obj,
+					forInBody: try callBlockParser(state),
 				}, forToken));
 			}
 		}
@@ -198,18 +250,14 @@ export function parseForStmt(state: ParserState): NodeResult {
 export function parseBreakStmt(state: ParserState): NodeResult {
 	const token = current(state);
 	advance(state);
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Semicolon) {
-		advance(state);
-	}
+	consumeSemicolon(state);
 	return Result.ok(createNode(NodeKind.BreakStmt, { breakLabel: "" }, token));
 }
 
 export function parseContinueStmt(state: ParserState): NodeResult {
 	const token = current(state);
 	advance(state);
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Semicolon) {
-		advance(state);
-	}
+	consumeSemicolon(state);
 	return Result.ok(createNode(NodeKind.ContinueStmt, { continueLabel: "" }, token));
 }
 
@@ -220,9 +268,7 @@ export function parseReturnStmt(state: ParserState): NodeResult {
 	const retToken = current(state);
 	advance(state);
 	const value = try callExprParser(state);
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Semicolon) {
-		advance(state);
-	}
+	consumeSemicolon(state);
 	return Result.ok(createNode(NodeKind.ReturnStmt, { argument: value }, retToken));
 }
 
@@ -250,9 +296,7 @@ export function parseDoWhileStmt(state: ParserState): NodeResult {
 	}
 
 	advance(state);
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Semicolon) {
-		advance(state);
-	}
+	consumeSemicolon(state);
 
 	return Result.ok(createNode(NodeKind.DoWhileStmt, {
 		doBody: body,
@@ -366,10 +410,29 @@ export function parseDeferStmt(state: ParserState): NodeResult {
 		return Result.ok(createNode(NodeKind.DeferStmt, { deferExpr: body }, deferToken));
 	}
 	const deferVal = try callExprParser(state);
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Semicolon) {
-		advance(state);
-	}
+	consumeSemicolon(state);
 	return Result.ok(createNode(NodeKind.DeferStmt, { deferExpr: deferVal }, deferToken));
+}
+
+// ===== Unreachable Statement =====
+// unreachable; or unreachable("message");
+
+export function parseUnreachableStmt(state: ParserState): NodeResult {
+	const unreachableToken = current(state);
+	advance(state);
+	let msg = "";
+	if (!isAtEnd(state) && current(state).kind === TokenKind.LParen) {
+		advance(state);
+		if (!isAtEnd(state) && current(state).kind === TokenKind.String) {
+			msg = current(state).value;
+			advance(state);
+		}
+		if (!isAtEnd(state) && current(state).kind === TokenKind.RParen) {
+			advance(state);
+		}
+	}
+	consumeSemicolon(state);
+	return Result.ok(createNode(NodeKind.UnreachableStmt, { unreachableMsg: msg }, unreachableToken));
 }
 
 // ===== Tests =====
@@ -390,7 +453,17 @@ testGroup("Stmt Control Flow", () => {
 	test("switch case+default", () => { check(programOk("switch (x) { case 1: a; break; default: b; }")); });
 	test("switch multi case", () => { check(programOk("switch (x) { case 1: a; break; case 2: b; break; }")); });
 	test("switch return", () => { check(programOk("function f(x) { switch (x) { case 1: return \"one\"; default: return \"other\"; } }")); });
+	// For-in
+	test("for-in const", () => { check(stmtKind("for (const key in obj) {}") === NodeKind.ForInStmt); });
+	test("for-in let", () => { check(programOk("for (let k in obj) { console.log(k); }")); });
+	test("for-in body", () => { check(programOk("for (const key in obj) { obj[key]; }")); });
+	// For-of with destructuring
+	test("for-of destr obj", () => { check(programOk("for (const {key, value} of entries) { key; }")); });
+	test("for-of destr arr", () => { check(programOk("for (const [k, v] of entries) { k; }")); });
 	// Defer — expression vs block body
 	test("defer call", () => { check(programOk("function f() { defer cleanup(); }")); });
 	test("defer block", () => { check(programOk("function f() { defer { close(fd); } }")); });
+	// Unreachable
+	test("unreachable bare", () => { check(programOk("unreachable;")); });
+	test("unreachable msg", () => { check(programOk("unreachable(\"should not reach\");")); });
 });

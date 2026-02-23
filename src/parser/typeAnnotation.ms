@@ -4,10 +4,13 @@
 // Currently in "skip" mode: consumes type syntax without building AST.
 // Handles: simple names, T[], Result<T, E>, A | B, { x: T }, (a: T) => R, T?
 
-import { TokenKind } from "../lexer/token";
+import { Token, TokenKind } from "../lexer/token";
+import { Node, NodeKind, createNode } from "../ast/node";
 import { ParserState, createState, current, advance, isAtEnd } from "./context";
 import { lex } from "../lexer/lexer";
 import { test, check, testGroup } from "std/testing";
+
+type NodeResult = Result<Node, string>;
 
 // ===== Type Annotation Skipping =====
 
@@ -23,6 +26,24 @@ export function skipTypeAnnotation(state: ParserState): void {
 		advance(state);
 		skipTypeAtom(state);
 	}
+}
+
+// ===== Type Annotation Parsing =====
+// Captures the type text and returns a TypeAnnotation node.
+
+export function parseTypeAnnotation(state: ParserState): NodeResult {
+	const startToken = current(state);
+	const startPos = state.position;
+	skipTypeAnnotation(state);
+	const endPos = state.position;
+	let typeText = "";
+	for (let i = startPos; i < endPos; i++) {
+		if (i > startPos) {
+			typeText += " ";
+		}
+		typeText += state.tokens[i].value;
+	}
+	return Result.ok(createNode(NodeKind.TypeAnnotation, { annotationType: typeText }, startToken));
 }
 
 function skipTypeAtom(state: ParserState): void {
@@ -150,4 +171,32 @@ testGroup("TypeAnnotation Complex Combinations", () => {
 	test("generic with array suffix", () => { check(skipsType("Result<Node, string>[]")); });
 	test("union of generics", () => { check(skipsType("Result<A, B> | Error")); });
 	test("optional generic array", () => { check(skipsType("Map<string, number>[]?")); });
+});
+
+// ===== TypeAnnotation Node Tests =====
+
+function annotationKind(typeStr: string): NodeKind {
+	const lr = lex(typeStr + " = x");
+	if (!lr.ok) return NodeKind.ExprStmt;
+	const state = createState(lr.value);
+	const result = parseTypeAnnotation(state);
+	if (!result.ok) return NodeKind.ExprStmt;
+	return result.value.kind;
+}
+
+function annotationText(typeStr: string): string {
+	const lr = lex(typeStr + " = x");
+	if (!lr.ok) return "";
+	const state = createState(lr.value);
+	const result = parseTypeAnnotation(state);
+	if (!result.ok) return "";
+	const data = result.value.data as { annotationType: string };
+	return data.annotationType;
+}
+
+testGroup("TypeAnnotation Node", () => {
+	test("kind is TypeAnnotation", () => { check(annotationKind("number") === NodeKind.TypeAnnotation); });
+	test("simple type text", () => { check(annotationText("number") === "number"); });
+	test("generic type text", () => { check(annotationText("Result<Node, string>") !== ""); });
+	test("union type text", () => { check(annotationText("string | number") !== ""); });
 });

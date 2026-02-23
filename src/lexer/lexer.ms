@@ -232,11 +232,30 @@ testGroup("Lexer Token Types", () => {
 		check(lexFirst("enumerate") === TokenKind.Ident);
 	});
 
+	test("regex literals", () => {
+		check(lexFirst("/abc/") === TokenKind.Regex);
+		check(lexFirstVal("/abc/") === "/abc/");
+		check(lexFirstVal("/abc/gi") === "/abc/gi");
+		check(lexFirstVal("/[a-z]+/") === "/[a-z]+/");
+		check(lexFirstVal("/\\.js$/") === "/\\.js$/");
+	});
+
+	test("regex vs division", () => {
+		// After value → division
+		check(lexKindAt("a / b", 1) === TokenKind.Slash);
+		check(lexKindAt("1 / 2", 1) === TokenKind.Slash);
+		check(lexKindAt(") / x", 1) === TokenKind.Slash);
+		// After operator/keyword → regex
+		check(lexKindAt("= /abc/", 1) === TokenKind.Regex);
+		check(lexKindAt("( /abc/", 1) === TokenKind.Regex);
+		check(lexKindAt("return /abc/", 1) === TokenKind.Regex);
+	});
+
 	test("operators", () => {
 		check(lexFirst("+") === TokenKind.Plus);
 		check(lexFirst("-") === TokenKind.Minus);
 		check(lexFirst("*") === TokenKind.Star);
-		check(lexFirst("/") === TokenKind.Slash);
+		check(lexKindAt("a / b", 1) === TokenKind.Slash); // / after value = division
 		check(lexFirst("===") === TokenKind.EqEqEq);
 		check(lexFirst("!==") === TokenKind.BangEqEq);
 		check(lexFirst("&&") === TokenKind.AmpAmp);

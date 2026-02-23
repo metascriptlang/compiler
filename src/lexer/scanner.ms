@@ -258,6 +258,88 @@ export function skipBlockComment(s: LexerState): void {
 	}
 }
 
+// ===== Regex Literal Scanning =====
+// Disambiguation: `/` is regex when in expression-start position (after operators,
+// keywords, BOF), and division when after values (identifiers, numbers, closing parens).
+// Pattern: ~/projects/metascript/src/lexer/lexer.zig allowsRegexAfter()
+
+export function allowsRegexAfter(s: LexerState): boolean {
+	const last = s.lastToken;
+	// After operators, punctuation that starts expressions, keywords — regex allowed
+	if (last === TokenKind.Assign || last === TokenKind.LParen || last === TokenKind.LBracket ||
+		last === TokenKind.LBrace || last === TokenKind.Comma || last === TokenKind.Semicolon ||
+		last === TokenKind.Colon || last === TokenKind.Question || last === TokenKind.Bang ||
+		last === TokenKind.Tilde || last === TokenKind.Plus || last === TokenKind.Minus ||
+		last === TokenKind.Star || last === TokenKind.Percent || last === TokenKind.Amp ||
+		last === TokenKind.Pipe || last === TokenKind.Caret || last === TokenKind.EqEq ||
+		last === TokenKind.EqEqEq || last === TokenKind.BangEq || last === TokenKind.BangEqEq ||
+		last === TokenKind.LtEq || last === TokenKind.Gt || last === TokenKind.GtEq ||
+		last === TokenKind.AmpAmp || last === TokenKind.PipePipe || last === TokenKind.PlusEq ||
+		last === TokenKind.MinusEq || last === TokenKind.StarEq || last === TokenKind.SlashEq ||
+		last === TokenKind.Arrow || last === TokenKind.Eof || last === TokenKind.Return ||
+		last === TokenKind.Case || last === TokenKind.Delete || last === TokenKind.In ||
+		last === TokenKind.Instanceof || last === TokenKind.New || last === TokenKind.Typeof ||
+		last === TokenKind.Void || last === TokenKind.If || last === TokenKind.While ||
+		last === TokenKind.For || last === TokenKind.Await || last === TokenKind.Yield) {
+		return true;
+	}
+	// After values, identifiers, closing brackets — expect division, not regex
+	return false;
+}
+
+export function scanRegex(s: LexerState): void {
+	const startLine = s.line;
+	const startCol = s.column;
+	advanceChar(s); // consume opening /
+	let pattern = "/";
+	let inCharClass = false;
+
+	while (s.pos < s.source.length) {
+		const ch = peek(s);
+		if (ch === "\n".code || ch === "\r".code) {
+			break; // unterminated regex
+		}
+		if (ch === "[".code && !inCharClass) {
+			inCharClass = true;
+			pattern += s.source.charAt(s.pos);
+			advanceChar(s);
+			continue;
+		}
+		if (ch === "]".code && inCharClass) {
+			inCharClass = false;
+			pattern += s.source.charAt(s.pos);
+			advanceChar(s);
+			continue;
+		}
+		if (ch === "\\".code) {
+			// Escaped character — consume both backslash and next char
+			pattern += s.source.charAt(s.pos);
+			advanceChar(s);
+			if (s.pos < s.source.length) {
+				pattern += s.source.charAt(s.pos);
+				advanceChar(s);
+			}
+			continue;
+		}
+		if (ch === "/".code && !inCharClass) {
+			// End of regex pattern
+			pattern += "/";
+			advanceChar(s);
+			break;
+		}
+		pattern += s.source.charAt(s.pos);
+		advanceChar(s);
+	}
+
+	// Scan flags (g, i, m, s, u, y, d)
+	while (s.pos < s.source.length && isLetter(peek(s))) {
+		pattern += s.source.charAt(s.pos);
+		advanceChar(s);
+	}
+
+	addToken(s, TokenKind.Regex, pattern, startLine, startCol);
+}
+
 // ===== Operator & Punctuation Scanning =====
 
 export function scanOperator(s: LexerState): boolean {
@@ -271,6 +353,7 @@ export function scanOperator(s: LexerState): boolean {
 			if (next === "/".code) { skip(s, 2); skipLineComment(s); }
 			else if (next === "*".code) { skip(s, 2); skipBlockComment(s); }
 			else if (next === "=".code) { skip(s, 2); addToken(s, TokenKind.SlashEq, "/=", startLine, startCol); }
+			else if (allowsRegexAfter(s)) { scanRegex(s); }
 			else { advanceChar(s); addToken(s, TokenKind.Slash, "/", startLine, startCol); }
 			true
 		},

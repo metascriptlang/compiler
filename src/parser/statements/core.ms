@@ -3,22 +3,46 @@
 
 import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, NodeData, createNode } from "../../ast/node";
-import { ParserState, createState, current, advance, isAtEnd } from "../context";
+import { ParserState, createState, current, advance, isAtEnd, consumeSemicolon } from "../context";
 import { parseExpressionFromState, registerBlockParser } from "../expressions/core";
-import { parseIfStmt, parseWhileStmt, parseForStmt, parseBreakStmt, parseContinueStmt, parseReturnStmt, parseDoWhileStmt, parseSwitchStmt, parseDeferStmt } from "./control";
-import { parseVariableDecl, parseFunctionDecl, parseImportDecl, parseExportDecl, parseTypeAliasDecl, parseEnumDecl, parseInterfaceDecl, parseClassDecl } from "./declaration";
+import { parseMatchExpr } from "../expressions/match";
+import { parseIfStmt, parseWhileStmt, parseForStmt, parseBreakStmt, parseContinueStmt, parseReturnStmt, parseDoWhileStmt, parseSwitchStmt, parseDeferStmt, parseUnreachableStmt } from "./control";
+import { parseVariableDecl, parseFunctionDecl, parseImportDecl, parseExportDecl, parseTypeAliasDecl, parseEnumDecl, parseInterfaceDecl, parseClassDecl, parseMacroInvocation } from "./declaration";
 import { parseThrowStmt, parseTryCatchStmt } from "./errorHandling";
 import { registerStmtBlockParser, registerStmtExprParser, registerStmtParser, registerStmtProgramParser, programOk, stmtKind, stmtCount } from "./util";
 import { test, check, testGroup } from "std/testing";
 
 // Type aliases
 type NodeResult = Result<Node, string>;
-type NodesResult = Result<Node[], string>;
 
 // ===== Statement Dispatch (match on TokenKind) =====
 
 function parseStatement(state: ParserState): NodeResult {
 	const token = current(state);
+
+	// Async function declaration — before match to avoid try-in-match-arm limitation
+	if (token.kind === TokenKind.Async) {
+		if (state.position + 1 < state.tokens.length &&
+			state.tokens[state.position + 1].kind === TokenKind.Function) {
+			return parseFunctionDecl(state);
+		}
+		return parseExprStmt(state);
+	}
+
+	// Decorator handling — before match to avoid try-in-match-arm limitation
+	if (token.kind === TokenKind.At) {
+		const decorators: Node[] = [];
+		while (!isAtEnd(state) && current(state).kind === TokenKind.At) {
+			const dec = try parseMacroInvocation(state);
+			decorators.push(dec);
+		}
+		const decl = try parseStatement(state);
+		return Result.ok(createNode(NodeKind.DecoratedDecl, {
+			decorators,
+			decoratedNode: decl,
+		}, token));
+	}
+
 	match (token.kind) {
 		TokenKind.Const | TokenKind.Let => {
 			return parseVariableDecl(state);
@@ -83,6 +107,12 @@ function parseStatement(state: ParserState): NodeResult {
 		TokenKind.Defer => {
 			return parseDeferStmt(state);
 		},
+		TokenKind.Unreachable => {
+			return parseUnreachableStmt(state);
+		},
+		TokenKind.Match => {
+			return parseMatchStmt(state);
+		},
 		_ => {
 			return parseExprStmt(state);
 		},
@@ -123,17 +153,37 @@ function parseBlockStmt(state: ParserState): NodeResult {
 function parseExprStmt(state: ParserState): NodeResult {
 	const token = current(state);
 	const expression = try parseExpressionFromState(state);
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Semicolon) {
-		advance(state);
-	}
+	consumeSemicolon(state);
 
 	return Result.ok(createNode(NodeKind.ExprStmt, { expr: expression }, token));
 }
 
+// ===== Match Statement =====
+// match (expr) { cases } at statement level
+
+function matchStmtExprParser(s: ParserState, _minPrec: number): NodeResult {
+	return parseExpressionFromState(s);
+}
+
+function matchStmtBlockParser(s: ParserState): NodeResult {
+	return parseBlockStmt(s);
+}
+
+function parseMatchStmt(state: ParserState): NodeResult {
+	const matchToken = current(state);
+	const matchNode = try parseMatchExpr(state, matchStmtExprParser, matchStmtBlockParser);
+	const data = matchNode.data as { matchDisc: Node, matchCases: Node[] };
+	return Result.ok(createNode(NodeKind.MatchStmt, {
+		matchStmtDisc: data.matchDisc,
+		matchStmtCases: data.matchCases,
+	}, matchToken));
+}
+
 // ===== Top-Level Program Parser =====
 
-export function parseProgram(tokens: Token[]): NodesResult {
+export function parseProgram(tokens: Token[]): NodeResult {
 	const state = createState(tokens);
+	const startToken = current(state);
 	const stmts: Node[] = [];
 	while (!isAtEnd(state)) {
 		if (current(state).kind === TokenKind.Semicolon) {
@@ -144,7 +194,7 @@ export function parseProgram(tokens: Token[]): NodesResult {
 		stmts.push(stmt);
 	}
 
-	return Result.ok(stmts);
+	return Result.ok(createNode(NodeKind.Program, { programStmts: stmts }, startToken));
 }
 
 // ===== Register callbacks for sub-modules =====
@@ -153,7 +203,7 @@ export function parseProgram(tokens: Token[]): NodesResult {
 registerStmtBlockParser((state: ParserState): NodeResult => { return parseBlockStmt(state); });
 registerStmtExprParser((state: ParserState): NodeResult => { return parseExpressionFromState(state); });
 registerStmtParser((state: ParserState): NodeResult => { return parseStatement(state); });
-registerStmtProgramParser((tokens: Token[]): NodesResult => { return parseProgram(tokens); });
+registerStmtProgramParser((tokens: Token[]): NodeResult => { return parseProgram(tokens); });
 
 // Also register with expressions for arrow function block bodies
 registerBlockParser((state: ParserState): NodeResult => { return parseBlockStmt(state); });
@@ -162,12 +212,23 @@ registerBlockParser((state: ParserState): NodeResult => { return parseBlockStmt(
 
 // --- Structural: verify dispatch produces correct node kinds ---
 
+testGroup("Decorator/Async Stmt", () => {
+	test("async fn is FunctionDecl", () => { check(stmtKind("async function f() {}") === NodeKind.FunctionDecl); });
+	test("decorator is DecoratedDecl", () => { check(stmtKind("@foo function f() {}") === NodeKind.DecoratedDecl); });
+	test("decorator class", () => { check(programOk("@derive(Eq) class Point { x: number; }")); });
+	test("multi decorator", () => { check(programOk("@derive(Eq) @derive(Hash) class Foo {}")); });
+	test("decorator export", () => { check(programOk("@export(\"name\") function f() {}")); });
+	test("decorator inline", () => { check(programOk("@inline function f() {}")); });
+	test("async arrow stmt", () => { check(programOk("const f = async () => 42;")); });
+});
+
 testGroup("Stmt Structure", () => {
 	test("const is VariableDecl", () => { check(stmtKind("const x = 1;") === NodeKind.VariableDecl); });
 	test("if is IfStmt", () => { check(stmtKind("if (x) {}") === NodeKind.IfStmt); });
 	test("while is WhileStmt", () => { check(stmtKind("while (x) {}") === NodeKind.WhileStmt); });
 	test("for is ForStmt", () => { check(stmtKind("for (let i = 0; i < n; i++) {}") === NodeKind.ForStmt); });
 	test("for-of is ForOfStmt", () => { check(stmtKind("for (const x of items) {}") === NodeKind.ForOfStmt); });
+	test("for-in is ForInStmt", () => { check(stmtKind("for (const k in obj) {}") === NodeKind.ForInStmt); });
 	test("function is FunctionDecl", () => { check(stmtKind("function f() {}") === NodeKind.FunctionDecl); });
 	test("import is ImportDecl", () => { check(stmtKind("import { x } from \"y\";") === NodeKind.ImportDecl); });
 	test("export is ExportDecl", () => { check(stmtKind("export const x = 1;") === NodeKind.ExportDecl); });
@@ -177,6 +238,8 @@ testGroup("Stmt Structure", () => {
 	test("defer is DeferStmt", () => { check(stmtKind("defer f();") === NodeKind.DeferStmt); });
 	test("throw is ThrowStmt", () => { check(stmtKind("throw \"err\";") === NodeKind.ThrowStmt); });
 	test("block is BlockStmt", () => { check(stmtKind("{ x; }") === NodeKind.BlockStmt); });
+	test("unreachable is UnreachableStmt", () => { check(stmtKind("unreachable;") === NodeKind.UnreachableStmt); });
+	test("match is MatchStmt", () => { check(stmtKind("match (x) { 1 => a, _ => b }") === NodeKind.MatchStmt); });
 	// Counts
 	test("two stmts", () => { check(stmtCount("x; y;") === 2); });
 	test("bare semis = 0", () => { check(stmtCount(";;;") === 0); });
@@ -209,6 +272,8 @@ testGroup("Stmt Smoke", () => {
 	test("template interp", () => { check(programOk("const s = `line ${token.line.toString()}`;")); });
 	// Type assertion in stmt
 	test("as in var", () => { check(programOk("const data = node.data as { value: number };")); });
+	// Regex literal in stmt
+	test("regex in var", () => { check(programOk("const re = /[a-z]+/gi;")); });
 	// Nested control flow
 	test("nested control", () => { check(programOk("function f() { if (x) { while (y) { z; } } }")); });
 });

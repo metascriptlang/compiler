@@ -5,6 +5,7 @@ import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, NodeData, Expression, createNode } from "../../ast/node";
 import { ParserState, createState, current, advance, isAtEnd } from "../context";
 import { skipTypeAnnotation } from "../typeAnnotation";
+import { parseParamList } from "../util";
 import { getPrecedence, isBinaryOperator, isRightAssociative } from "./precedence";
 import { parseMatchExpr } from "./match";
 import { isArrowFunction, parseArrowFunction } from "./arrow";
@@ -99,7 +100,7 @@ function parseExprWithPrec(state: ParserState, minPrec: number): ExprResult {
 		// Postfix increment/decrement
 		if (token.kind === TokenKind.PlusPlus || token.kind === TokenKind.MinusMinus) {
 			advance(state);
-			left = createNode(NodeKind.UnaryExpr, { unaryOp: token.value, operand: left }, token);
+			left = createNode(NodeKind.UpdateExpr, { updateOp: token.value, updateArg: left, isPrefix: false }, token);
 			continue;
 		}
 
@@ -159,6 +160,25 @@ function parseExprWithPrec(state: ParserState, minPrec: number): ExprResult {
 	return Result.ok(left);
 }
 
+// ===== Function Expression Helper =====
+// Shared by async function expr and regular function expr paths
+
+function parseFuncExprBody(state: ParserState, token: Token, feFlags: string): ExprResult {
+	// Optional name
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Ident) {
+		advance(state);
+	}
+	// Parse params
+	const feParams = parseParamList(state);
+	// Skip optional return type
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
+		advance(state);
+		skipTypeAnnotation(state);
+	}
+	const feBody = try blockParser(state);
+	return Result.ok(createNode(NodeKind.FunctionExpr, { funcExprParams: feParams, funcExprBody: feBody, funcExprFlags: feFlags }, token));
+}
+
 // ===== Primary Expressions =====
 
 function parsePrimary(state: ParserState): ExprResult {
@@ -185,9 +205,32 @@ function parsePrimary(state: ParserState): ExprResult {
 		return parseTemplateLiteral(state, parseExprWithPrec);
 	}
 
+	// Boolean literal: true / false
+	if (token.kind === TokenKind.True || token.kind === TokenKind.False) {
+		advance(state);
+		return Result.ok(createNode(NodeKind.BooleanLiteral, { boolValue: token.kind === TokenKind.True }, token));
+	}
+
+	// Null literal
+	if (token.kind === TokenKind.Null) {
+		advance(state);
+		return Result.ok(createNode(NodeKind.NullLiteral, { nullPlaceholder: true }, token));
+	}
+
+	// BigInt literal: 123n
+	if (token.kind === TokenKind.BigInt) {
+		advance(state);
+		return Result.ok(createNode(NodeKind.BigIntLiteral, { bigintValue: token.value }, token));
+	}
+
+	// Regex literal: /pattern/flags
+	if (token.kind === TokenKind.Regex) {
+		advance(state);
+		return Result.ok(createNode(NodeKind.RegexLiteral, { regexPattern: token.value }, token));
+	}
+
 	if (token.kind === TokenKind.Ident ||
-		token.kind === TokenKind.True || token.kind === TokenKind.False ||
-		token.kind === TokenKind.Null || token.kind === TokenKind.This ||
+		token.kind === TokenKind.This ||
 		token.kind === TokenKind.Super) {
 		advance(state);
 		return Result.ok(createNode(NodeKind.Identifier, { name: token.value }, token));
@@ -196,7 +239,7 @@ function parsePrimary(state: ParserState): ExprResult {
 	// Arrow function or parenthesized expression
 	if (token.kind === TokenKind.LParen) {
 		if (isArrowFunction(state)) {
-			return parseArrowFunction(state, parseExprWithPrec, blockParser);
+			return parseArrowFunction(state, parseExprWithPrec, blockParser, "");
 		}
 		advance(state);
 		const expr = try parseExprWithPrec(state, 0);
@@ -257,19 +300,80 @@ function parsePrimary(state: ParserState): ExprResult {
 		return Result.ok(createNode(NodeKind.NewExpr, { newCallee: callee, newArguments: args }, token));
 	}
 
-	// Await: await expr
+	// Await expression: await expr
 	if (token.kind === TokenKind.Await) {
 		advance(state);
-		const awaitArg = try parseExprWithPrec(state, 0);
-		return Result.ok(createNode(NodeKind.UnaryExpr, { unaryOp: "await", operand: awaitArg }, token));
+		const awaitOperand = try parseExprWithPrec(state, 0);
+		return Result.ok(createNode(NodeKind.AwaitExpr, { awaitArg: awaitOperand }, token));
+	}
+
+	// Yield expression: yield expr, yield* expr
+	if (token.kind === TokenKind.Yield) {
+		advance(state);
+		let delegate = false;
+		if (!isAtEnd(state) && current(state).kind === TokenKind.Star) {
+			delegate = true;
+			advance(state);
+		}
+		const yieldOperand = try parseExprWithPrec(state, 0);
+		return Result.ok(createNode(NodeKind.YieldExpr, { yieldArg: yieldOperand, isDelegate: delegate }, token));
+	}
+
+	// Move expression: move x
+	if (token.kind === TokenKind.Move) {
+		advance(state);
+		const moveOperand = try parsePrimary(state);
+		return Result.ok(createNode(NodeKind.MoveExpr, { moveArg: moveOperand }, token));
+	}
+
+	// Out expression: out x
+	if (token.kind === TokenKind.Out) {
+		advance(state);
+		const outOperand = try parsePrimary(state);
+		return Result.ok(createNode(NodeKind.OutExpr, { outArg: outOperand }, token));
 	}
 
 	// Prefix increment/decrement: ++x, --x
 	if (token.kind === TokenKind.PlusPlus || token.kind === TokenKind.MinusMinus) {
 		advance(state);
 		const updateTarget = try parsePrimary(state);
-		const prefixOp = "pre" + token.value;
-		return Result.ok(createNode(NodeKind.UnaryExpr, { unaryOp: prefixOp, operand: updateTarget }, token));
+		return Result.ok(createNode(NodeKind.UpdateExpr, { updateOp: token.value, updateArg: updateTarget, isPrefix: true }, token));
+	}
+
+	// Async: async function expr or async arrow
+	if (token.kind === TokenKind.Async) {
+		// async function expression: async function() {} or async function*() {}
+		if (state.position + 1 < state.tokens.length &&
+			state.tokens[state.position + 1].kind === TokenKind.Function) {
+			advance(state); // consume 'async'
+			advance(state); // consume 'function'
+			let feFlags = "async";
+			if (!isAtEnd(state) && current(state).kind === TokenKind.Star) {
+				feFlags = "async_generator";
+				advance(state);
+			}
+			return parseFuncExprBody(state, token, feFlags);
+		}
+		// async arrow: async () => ... or async (x) => ...
+		if (state.position + 1 < state.tokens.length &&
+			state.tokens[state.position + 1].kind === TokenKind.LParen) {
+			advance(state); // consume 'async'
+			return parseArrowFunction(state, parseExprWithPrec, blockParser, "async");
+		}
+		// Otherwise treat 'async' as identifier
+		advance(state);
+		return Result.ok(createNode(NodeKind.Identifier, { name: token.value }, token));
+	}
+
+	// Function expression: function() {} or function name() {} or function*() {}
+	if (token.kind === TokenKind.Function) {
+		advance(state);
+		let feFlags = "";
+		if (!isAtEnd(state) && current(state).kind === TokenKind.Star) {
+			feFlags = "generator";
+			advance(state);
+		}
+		return parseFuncExprBody(state, token, feFlags);
 	}
 
 	// Spread: ...expr
@@ -321,6 +425,20 @@ testGroup("Expr Structure", () => {
 	test("spread kind", () => { check(exprKind("...x") === NodeKind.SpreadExpr); });
 	test("try kind", () => { check(exprKind("try x") === NodeKind.TryExpr); });
 	test("as kind", () => { check(exprKind("x as number") === NodeKind.TypeAssertion); });
+	test("true kind", () => { check(exprKind("true") === NodeKind.BooleanLiteral); });
+	test("false kind", () => { check(exprKind("false") === NodeKind.BooleanLiteral); });
+	test("null kind", () => { check(exprKind("null") === NodeKind.NullLiteral); });
+	test("bigint kind", () => { check(exprKind("123n") === NodeKind.BigIntLiteral); });
+	test("regex kind", () => { check(exprKind("/abc/g") === NodeKind.RegexLiteral); });
+	test("update kind", () => { check(exprKind("x++") === NodeKind.UpdateExpr); });
+	test("await kind", () => { check(exprKind("await p") === NodeKind.AwaitExpr); });
+	test("move kind", () => { check(exprKind("move x") === NodeKind.MoveExpr); });
+	test("yield kind", () => { check(exprKind("yield x") === NodeKind.YieldExpr); });
+	test("out kind", () => { check(exprKind("out x") === NodeKind.OutExpr); });
+	test("func expr kind", () => { check(exprKind("function() {}") === NodeKind.FunctionExpr); });
+	test("generator func expr", () => { check(exprKind("function*() {}") === NodeKind.FunctionExpr); });
+	test("async func expr", () => { check(exprKind("async function() {}") === NodeKind.FunctionExpr); });
+	test("async arrow kind", () => { check(exprKind("async () => 42") === NodeKind.ArrowFunction); });
 	// Operator extraction
 	test("+ op", () => { check(exprOp("a + b") === "+"); });
 	test("=== op", () => { check(exprOp("a === b") === "==="); });
@@ -328,7 +446,7 @@ testGroup("Expr Structure", () => {
 	test("?? op", () => { check(exprOp("a ?? b") === "??"); });
 	test("unary - op", () => { check(exprOp("-x") === "-"); });
 	test("unary ! op", () => { check(exprOp("!x") === "!"); });
-	test("pre++ op", () => { check(exprOp("++x") === "pre++"); });
+	test("pre++ op", () => { check(exprOp("++x") === "++"); });
 	test("typeof op", () => { check(exprOp("typeof x") === "typeof"); });
 	// Precedence tree shape
 	test("* tighter than +", () => { check(binLeftKind("a + b * c") === NodeKind.Identifier); });
@@ -369,6 +487,14 @@ testGroup("Expr Smoke", () => {
 	// Delete/void
 	test("delete", () => { check(parseOk("delete obj.x")); });
 	test("void", () => { check(parseOk("void 0")); });
+	// Move/out/yield
+	test("move ident", () => { check(parseOk("move data")); });
+	test("out ident", () => { check(parseOk("out result")); });
+	test("yield value", () => { check(parseOk("yield 42")); });
+	test("yield star", () => { check(parseOk("yield* gen()")); });
+	// Function expressions
+	test("named func expr", () => { check(parseOk("function foo(x) { return x; }")); });
+	test("func expr params", () => { check(parseOk("function(a, b) { return a + b; }")); });
 });
 
 testGroup("Expr Rejects", () => {

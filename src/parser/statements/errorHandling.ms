@@ -3,7 +3,7 @@
 
 import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, NodeData, createNode } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd } from "../context";
+import { ParserState, current, advance, isAtEnd, consumeSemicolon } from "../context";
 import { skipTypeAnnotation } from "../typeAnnotation";
 import { callBlockParser, callExprParser, programOk } from "./util";
 import { test, check, testGroup } from "std/testing";
@@ -17,9 +17,7 @@ export function parseThrowStmt(state: ParserState): NodeResult {
 	const throwToken = current(state);
 	advance(state);
 	const expr = try callExprParser(state);
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Semicolon) {
-		advance(state);
-	}
+	consumeSemicolon(state);
 	return Result.ok(createNode(NodeKind.ThrowStmt, { throwArg: expr }, throwToken));
 }
 

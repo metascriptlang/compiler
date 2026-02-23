@@ -8,10 +8,9 @@ import { ParserState } from "../context";
 import { lex } from "../../lexer/lexer";
 
 type NodeResult = Result<Node, string>;
-type NodesResult = Result<Node[], string>;
 type BlockParserFn = (state: ParserState) => NodeResult;
 type ExprParserFn = (state: ParserState) => NodeResult;
-type ProgramParserFn = (tokens: Token[]) => NodesResult;
+type ProgramParserFn = (tokens: Token[]) => NodeResult;
 
 let blockParserFn: BlockParserFn = (state: ParserState): NodeResult => {
 	return Result.err("Block parser not registered");
@@ -27,7 +26,7 @@ let stmtParserFn: StmtParserFn = (state: ParserState): NodeResult => {
 	return Result.err("Stmt parser not registered");
 };
 
-let programParserFn: ProgramParserFn = (tokens: Token[]): NodesResult => {
+let programParserFn: ProgramParserFn = (tokens: Token[]): NodeResult => {
 	return Result.err("Program parser not registered");
 };
 
@@ -71,8 +70,9 @@ export function stmtKind(input: string): NodeKind {
 	if (!lr.ok) return NodeKind.ExprStmt;
 	const pr = programParserFn(lr.value);
 	if (!pr.ok) return NodeKind.ExprStmt;
-	if (pr.value.length === 0) return NodeKind.ExprStmt;
-	return pr.value[0].kind;
+	const stmts = pr.value.data as { programStmts: Node[] };
+	if (stmts.programStmts.length === 0) return NodeKind.ExprStmt;
+	return stmts.programStmts[0].kind;
 }
 
 export function stmtCount(input: string): number {
@@ -80,5 +80,6 @@ export function stmtCount(input: string): number {
 	if (!lr.ok) return -1;
 	const pr = programParserFn(lr.value);
 	if (!pr.ok) return -1;
-	return pr.value.length;
+	const stmts = pr.value.data as { programStmts: Node[] };
+	return stmts.programStmts.length;
 }

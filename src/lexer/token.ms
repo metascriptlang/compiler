@@ -4,7 +4,7 @@ import { test, check, testGroup } from "std/testing";
 
 export enum TokenKind {
 	// Literals
-	Number, BigInt, String, TemplateHead, TemplateMiddle, TemplateTail, TemplateNoSub,
+	Number, BigInt, String, Regex, TemplateHead, TemplateMiddle, TemplateTail, TemplateNoSub,
 	// Identifier
 	Ident,
 	// Operators
@@ -150,6 +150,7 @@ export function tokenKindToString(kind: TokenKind): string {
 		TokenKind.Number => "NUMBER",
 		TokenKind.BigInt => "BIGINT",
 		TokenKind.String => "STRING",
+		TokenKind.Regex => "REGEX",
 		TokenKind.TemplateHead => "TEMPLATE_HEAD",
 		TokenKind.TemplateMiddle => "TEMPLATE_MIDDLE",
 		TokenKind.TemplateTail => "TEMPLATE_TAIL",
