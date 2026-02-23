@@ -7,9 +7,8 @@ import { Node, NodeKind, Expression } from "../../ast/node";
 import { ParserState } from "../context";
 import { lex } from "../../lexer/lexer";
 
-type Nodes = Node[];
 type NodeResult = Result<Node, string>;
-type NodesResult = Result<Nodes, string>;
+type NodesResult = Result<Node[], string>;
 type BlockParserFn = (state: ParserState) => NodeResult;
 type ExprParserFn = (state: ParserState) => NodeResult;
 type ProgramParserFn = (tokens: Token[]) => NodesResult;
@@ -20,6 +19,12 @@ let blockParserFn: BlockParserFn = (state: ParserState): NodeResult => {
 
 let exprParserFn: ExprParserFn = (state: ParserState): NodeResult => {
 	return Result.err("Expr parser not registered");
+};
+
+type StmtParserFn = (state: ParserState) => NodeResult;
+
+let stmtParserFn: StmtParserFn = (state: ParserState): NodeResult => {
+	return Result.err("Stmt parser not registered");
 };
 
 let programParserFn: ProgramParserFn = (tokens: Token[]): NodesResult => {
@@ -34,6 +39,10 @@ export function registerStmtExprParser(fn: ExprParserFn): void {
 	exprParserFn = fn;
 }
 
+export function registerStmtParser(fn: StmtParserFn): void {
+	stmtParserFn = fn;
+}
+
 export function registerStmtProgramParser(fn: ProgramParserFn): void {
 	programParserFn = fn;
 }
@@ -46,9 +55,30 @@ export function callExprParser(state: ParserState): NodeResult {
 	return exprParserFn(state);
 }
 
+export function callStmtParser(state: ParserState): NodeResult {
+	return stmtParserFn(state);
+}
+
 export function programOk(input: string): boolean {
 	const lr = lex(input);
 	if (!lr.ok) return false;
 	const pr = programParserFn(lr.value);
 	return pr.ok;
+}
+
+export function stmtKind(input: string): NodeKind {
+	const lr = lex(input);
+	if (!lr.ok) return NodeKind.ExprStmt;
+	const pr = programParserFn(lr.value);
+	if (!pr.ok) return NodeKind.ExprStmt;
+	if (pr.value.length === 0) return NodeKind.ExprStmt;
+	return pr.value[0].kind;
+}
+
+export function stmtCount(input: string): number {
+	const lr = lex(input);
+	if (!lr.ok) return -1;
+	const pr = programParserFn(lr.value);
+	if (!pr.ok) return -1;
+	return pr.value.length;
 }

@@ -243,6 +243,30 @@ export function printNode(node: Node, level: number): void {
 			console.log(`${pad}ThrowStmt:`);
 			printNode(data.throwArg, level + 1);
 		},
+		NodeKind.ConditionalExpr => {
+			const data = node.data as { ternaryCondition: Node, ternaryConsequent: Node, ternaryAlternate: Node };
+			console.log(`${pad}ConditionalExpr:`);
+			console.log(`${indent(level + 1)}Condition:`);
+			printNode(data.ternaryCondition, level + 2);
+			console.log(`${indent(level + 1)}Then:`);
+			printNode(data.ternaryConsequent, level + 2);
+			console.log(`${indent(level + 1)}Else:`);
+			printNode(data.ternaryAlternate, level + 2);
+		},
+		NodeKind.SpreadExpr => {
+			const data = node.data as { spreadArg: Node };
+			console.log(`${pad}SpreadExpr:`);
+			printNode(data.spreadArg, level + 1);
+		},
+		NodeKind.NewExpr => {
+			const data = node.data as { newCallee: Node, newArguments: Node[] };
+			console.log(`${pad}NewExpr: (${data.newArguments.length.toString()} args)`);
+			console.log(`${indent(level + 1)}Callee:`);
+			printNode(data.newCallee, level + 2);
+			for (const arg of data.newArguments) {
+				printNode(arg, level + 1);
+			}
+		},
 		NodeKind.TryCatchStmt => {
 			const data = node.data as { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node };
 			console.log(`${pad}TryCatchStmt:`);
@@ -256,6 +280,70 @@ export function printNode(node: Node, level: number): void {
 			printNode(data.catchBody, level + 2);
 			console.log(`${indent(level + 1)}Finally:`);
 			printNode(data.finallyBody, level + 2);
+		},
+		NodeKind.DoWhileStmt => {
+			const data = node.data as { doBody: Node, doCondition: Node };
+			console.log(`${pad}DoWhileStmt:`);
+			console.log(`${indent(level + 1)}Body:`);
+			printNode(data.doBody, level + 2);
+			console.log(`${indent(level + 1)}Condition:`);
+			printNode(data.doCondition, level + 2);
+		},
+		NodeKind.SwitchStmt => {
+			const data = node.data as { switchDisc: Node, switchCases: Node[] };
+			console.log(`${pad}SwitchStmt: (${data.switchCases.length.toString()} cases)`);
+			console.log(`${indent(level + 1)}Discriminant:`);
+			printNode(data.switchDisc, level + 2);
+			for (const c of data.switchCases) {
+				printNode(c, level + 1);
+			}
+		},
+		NodeKind.SwitchCase => {
+			const data = node.data as { caseTests: Node[], caseStmts: Node[], isDefault: boolean };
+			if (data.isDefault) {
+				console.log(`${pad}DefaultCase:`);
+			} else {
+				console.log(`${pad}Case: (${data.caseTests.length.toString()} tests)`);
+				for (const t of data.caseTests) {
+					printNode(t, level + 1);
+				}
+			}
+			for (const s of data.caseStmts) {
+				printNode(s, level + 1);
+			}
+		},
+		NodeKind.ClassDecl => {
+			const data = node.data as { className: string, classExtends: string, classBody: Node[] };
+			if (data.classExtends.length > 0) {
+				console.log(`${pad}ClassDecl: ${data.className} extends ${data.classExtends} (${data.classBody.length.toString()} members)`);
+			} else {
+				console.log(`${pad}ClassDecl: ${data.className} (${data.classBody.length.toString()} members)`);
+			}
+			for (const member of data.classBody) {
+				printNode(member, level + 1);
+			}
+		},
+		NodeKind.PropertyDecl => {
+			const data = node.data as { propName: string, propIsStatic: boolean };
+			if (data.propIsStatic) {
+				console.log(`${pad}PropertyDecl: static ${data.propName}`);
+			} else {
+				console.log(`${pad}PropertyDecl: ${data.propName}`);
+			}
+		},
+		NodeKind.MethodDecl => {
+			const data = node.data as { methodName: string, methodParams: string[], methodBody: Node, methodIsStatic: boolean };
+			if (data.methodIsStatic) {
+				console.log(`${pad}MethodDecl: static ${data.methodName} (${data.methodParams.length.toString()} params)`);
+			} else {
+				console.log(`${pad}MethodDecl: ${data.methodName} (${data.methodParams.length.toString()} params)`);
+			}
+			printNode(data.methodBody, level + 1);
+		},
+		NodeKind.DeferStmt => {
+			const data = node.data as { deferExpr: Node };
+			console.log(`${pad}DeferStmt:`);
+			printNode(data.deferExpr, level + 1);
 		},
 		_ => {},
 	}

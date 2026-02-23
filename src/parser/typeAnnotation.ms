@@ -112,6 +112,8 @@ testGroup("TypeAnnotation Generic Types", () => {
 	test("single generic", () => { check(skipsType("Array<number>")); });
 	test("two generics", () => { check(skipsType("Map<string, number>")); });
 	test("nested generics", () => { check(skipsType("Result<Array<number>, string>")); });
+	test("array in generic arg", () => { check(skipsType("Result<Node[], string>")); });
+	test("array in both generic args", () => { check(skipsType("Map<string[], number[]>")); });
 });
 
 testGroup("TypeAnnotation Array Types", () => {

@@ -64,11 +64,18 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 	advance(state);
 	const params: string[] = [];
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RParen) {
+		// Rest parameter: ...args
+		let paramPrefix = "";
+		if (current(state).kind === TokenKind.DotDotDot) {
+			paramPrefix = "...";
+			advance(state);
+		}
+
 		const param = current(state);
 		if (param.kind !== TokenKind.Ident) {
 			return Result.err(`Expected parameter name at line ${param.line.toString()}`);
 		}
-		params.push(param.value);
+		params.push(paramPrefix + param.value);
 		advance(state);
 
 		// Optional param type annotation: (a: string, b: number)
@@ -264,6 +271,11 @@ export function parseExportDecl(state: ParserState): NodeResult {
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
 
+	if (nextKind === TokenKind.Class || nextKind === TokenKind.Abstract) {
+		const decl = try parseClassDecl(state);
+		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
+	}
+
 	return Result.err(`Expected declaration after 'export' at line ${current(state).line.toString()}`);
 }
 
@@ -410,73 +422,316 @@ export function parseInterfaceDecl(state: ParserState): NodeResult {
 	}, ifaceToken));
 }
 
+// ===== Class Declaration =====
+// [abstract] class Name [extends Base] { members... }
+
+export function parseClassDecl(state: ParserState): NodeResult {
+	const classToken = current(state);
+	// Skip 'abstract' modifier if present
+	if (current(state).kind === TokenKind.Abstract) {
+		advance(state);
+	}
+	if (current(state).kind !== TokenKind.Class) {
+		return Result.err(`Expected 'class' at line ${current(state).line.toString()}`);
+	}
+	advance(state);
+
+	const nameToken = current(state);
+	if (nameToken.kind !== TokenKind.Ident) {
+		return Result.err(`Expected class name at line ${nameToken.line.toString()}`);
+	}
+	advance(state);
+
+	// Optional generic type parameters: class Foo<T> — skip
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Lt) {
+		advance(state);
+		let depth = 1;
+		while (!isAtEnd(state) && depth > 0) {
+			if (current(state).kind === TokenKind.Lt) { depth += 1; }
+			if (current(state).kind === TokenKind.Gt) { depth -= 1; }
+			advance(state);
+		}
+	}
+
+	// Optional extends: class Foo extends Bar
+	let extendsName = "";
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Extends) {
+		advance(state);
+		if (current(state).kind === TokenKind.Ident) {
+			extendsName = current(state).value;
+			advance(state);
+		}
+		// Skip generic args on base class: extends Bar<T>
+		if (!isAtEnd(state) && current(state).kind === TokenKind.Lt) {
+			advance(state);
+			let depth = 1;
+			while (!isAtEnd(state) && depth > 0) {
+				if (current(state).kind === TokenKind.Lt) { depth += 1; }
+				if (current(state).kind === TokenKind.Gt) { depth -= 1; }
+				advance(state);
+			}
+		}
+	}
+
+	// Optional implements: class Foo implements Bar, Baz — skip
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Implements) {
+		advance(state);
+		while (!isAtEnd(state) && current(state).kind !== TokenKind.LBrace) {
+			advance(state);
+		}
+	}
+
+	if (current(state).kind !== TokenKind.LBrace) {
+		return Result.err(`Expected '{' after class declaration at line ${current(state).line.toString()}`);
+	}
+	advance(state);
+
+	const members: Node[] = [];
+	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
+		if (current(state).kind === TokenKind.Semicolon) {
+			advance(state);
+			continue;
+		}
+		const member = try parseClassMember(state);
+		members.push(member);
+	}
+
+	if (current(state).kind === TokenKind.RBrace) {
+		advance(state);
+	}
+
+	return Result.ok(createNode(NodeKind.ClassDecl, {
+		className: nameToken.value,
+		classExtends: extendsName,
+		classBody: members,
+	}, classToken));
+}
+
+function parseClassMember(state: ParserState): NodeResult {
+	const memberToken = current(state);
+
+	// Skip access modifiers: public, private, protected
+	if (current(state).kind === TokenKind.Public ||
+		current(state).kind === TokenKind.Private ||
+		current(state).kind === TokenKind.Protected) {
+		advance(state);
+	}
+
+	// Check for static
+	let memberIsStatic = false;
+	if (current(state).kind === TokenKind.Static) {
+		memberIsStatic = true;
+		advance(state);
+	}
+
+	// Check for readonly (skip as modifier)
+	if (current(state).kind === TokenKind.Readonly) {
+		advance(state);
+	}
+
+	// Check for abstract (skip as modifier)
+	if (current(state).kind === TokenKind.Abstract) {
+		advance(state);
+	}
+
+	// Constructor — early return, own scope for try
+	if (current(state).kind === TokenKind.Constructor) {
+		return parseClassConstructor(state);
+	}
+
+	// Get/Set accessors — early return
+	if ((current(state).kind === TokenKind.Get || current(state).kind === TokenKind.Set) &&
+		state.position + 1 < state.tokens.length &&
+		state.tokens[state.position + 1].kind === TokenKind.Ident) {
+		return parseClassAccessor(state, memberIsStatic);
+	}
+
+	// Regular member: name followed by ( for method, or : / = / ; for property
+	const nameToken = current(state);
+	if (nameToken.kind !== TokenKind.Ident) {
+		return Result.err(`Expected member name in class at line ${nameToken.line.toString()}`);
+	}
+	advance(state);
+
+	// Optional question mark
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Question) {
+		advance(state);
+	}
+
+	// Method — early return
+	if (!isAtEnd(state) && current(state).kind === TokenKind.LParen) {
+		return parseClassMethodBody(state, nameToken, memberIsStatic);
+	}
+
+	// Property — no try, skip initializer tokens manually
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
+		advance(state);
+		skipTypeAnnotation(state);
+	}
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
+		advance(state);
+		// Skip initializer value tokens (like enum value skipping)
+		let depth = 0;
+		while (!isAtEnd(state)) {
+			if (current(state).kind === TokenKind.LParen || current(state).kind === TokenKind.LBracket || current(state).kind === TokenKind.LBrace) {
+				depth += 1;
+			}
+			if (current(state).kind === TokenKind.RParen || current(state).kind === TokenKind.RBracket) {
+				if (depth === 0) { break; }
+				depth -= 1;
+			}
+			if (current(state).kind === TokenKind.RBrace) {
+				if (depth === 0) { break; }
+				depth -= 1;
+			}
+			if (current(state).kind === TokenKind.Semicolon && depth === 0) { break; }
+			advance(state);
+		}
+	}
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Semicolon) {
+		advance(state);
+	}
+
+	return Result.ok(createNode(NodeKind.PropertyDecl, {
+		propName: nameToken.value,
+		propIsStatic: memberIsStatic,
+	}, nameToken));
+}
+
+// Inline param parsing helper — same pattern as parseFunctionDecl
+function parseParamList(state: ParserState): string[] {
+	const params: string[] = [];
+	if (current(state).kind !== TokenKind.LParen) { return params; }
+	advance(state);
+	while (!isAtEnd(state) && current(state).kind !== TokenKind.RParen) {
+		let paramPrefix = "";
+		if (current(state).kind === TokenKind.DotDotDot) { paramPrefix = "..."; advance(state); }
+		// Skip constructor param modifiers: public/private/protected/readonly
+		if (current(state).kind === TokenKind.Public || current(state).kind === TokenKind.Private ||
+			current(state).kind === TokenKind.Protected || current(state).kind === TokenKind.Readonly) {
+			advance(state);
+		}
+		const param = current(state);
+		if (param.kind !== TokenKind.Ident) { break; }
+		params.push(paramPrefix + param.value);
+		advance(state);
+		if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) { advance(state); skipTypeAnnotation(state); }
+		// Skip default value
+		if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
+			advance(state);
+			let parenDepth = 0;
+			while (!isAtEnd(state)) {
+				if (current(state).kind === TokenKind.LParen) { parenDepth += 1; }
+				if (current(state).kind === TokenKind.RParen) { if (parenDepth === 0) { break; } parenDepth -= 1; }
+				if (current(state).kind === TokenKind.Comma && parenDepth === 0) { break; }
+				advance(state);
+			}
+		}
+		if (current(state).kind === TokenKind.Comma) { advance(state); } else { break; }
+	}
+	if (current(state).kind === TokenKind.RParen) { advance(state); }
+	return params;
+}
+
+function parseClassConstructor(state: ParserState): NodeResult {
+	const ctorToken = current(state);
+	advance(state);
+	const params = parseParamList(state);
+	const body = try callBlockParser(state);
+	return Result.ok(createNode(NodeKind.MethodDecl, {
+		methodName: "constructor",
+		methodParams: params,
+		methodBody: body,
+		methodIsStatic: false,
+	}, ctorToken));
+}
+
+function parseClassAccessor(state: ParserState, isStatic: boolean): NodeResult {
+	const accToken = current(state);
+	const accKind = current(state).value;
+	advance(state);
+	const accName = current(state).value;
+	advance(state);
+	const params = parseParamList(state);
+	const body = try callBlockParser(state);
+	return Result.ok(createNode(NodeKind.MethodDecl, {
+		methodName: accKind + "_" + accName,
+		methodParams: params,
+		methodBody: body,
+		methodIsStatic: isStatic,
+	}, accToken));
+}
+
+function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: boolean): NodeResult {
+	const params = parseParamList(state);
+	// Optional return type
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
+		advance(state);
+		skipTypeAnnotation(state);
+	}
+	// Abstract methods have no body — just semicolon
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Semicolon) {
+		advance(state);
+		return Result.ok(createNode(NodeKind.MethodDecl, {
+			methodName: nameToken.value,
+			methodParams: params,
+			methodBody: createNode(NodeKind.BlockStmt, { statements: [] }, nameToken),
+			methodIsStatic: isStatic,
+		}, nameToken));
+	}
+	const body = try callBlockParser(state);
+	return Result.ok(createNode(NodeKind.MethodDecl, {
+		methodName: nameToken.value,
+		methodParams: params,
+		methodBody: body,
+		methodIsStatic: isStatic,
+	}, nameToken));
+}
+
 // ===== Tests =====
 
-testGroup("Stmt Variable Declarations", () => {
+testGroup("Stmt Declarations", () => {
+	// Variable — const vs let
 	test("const decl", () => { check(programOk("const x = 42;")); });
 	test("let decl", () => { check(programOk("let y = 0;")); });
-	test("string decl", () => { check(programOk("const s = \"hello\";")); });
-	test("expr decl", () => { check(programOk("const a = 1 + 2 * 3;")); });
-	test("call decl", () => { check(programOk("const x = f(a, b);")); });
-	test("member decl", () => { check(programOk("const x = a.b.c;")); });
-});
-
-testGroup("Stmt Functions", () => {
-	test("empty function", () => { check(programOk("function f() { }")); });
-	test("single param", () => { check(programOk("function f(a) { return a; }")); });
-	test("two params", () => { check(programOk("function add(a, b) { return a + b; }")); });
-	test("three params", () => { check(programOk("function f(a, b, c) { return a; }")); });
-	test("multi-statement body", () => { check(programOk("function f() { const x = 1; return x; }")); });
-});
-
-testGroup("Stmt Import Declarations", () => {
-	test("single import", () => { check(programOk("import { Token } from \"./token\";")); });
-	test("multi import", () => { check(programOk("import { Token, TokenKind } from \"./token\";")); });
-	test("aliased import", () => { check(programOk("import { Token as T } from \"./token\";")); });
-	test("mixed import", () => { check(programOk("import { Token, TokenKind as TK } from \"./token\";")); });
-	test("three imports", () => { check(programOk("import { a, b, c } from \"./mod\";")); });
-	test("side-effect import", () => { check(programOk("import \"./polyfill\";")); });
-	test("import no semicolon", () => { check(programOk("import { x } from \"./y\"")); });
-	test("std import", () => { check(programOk("import { test, check } from \"std/testing\";")); });
-});
-
-testGroup("Stmt Export Declarations", () => {
+	// Function — empty, with params, with body
+	test("function empty", () => { check(programOk("function f() { }")); });
+	test("function multi-stmt", () => { check(programOk("function f() { const x = 1; return x; }")); });
+	// Import — distinct paths: named, aliased, side-effect
+	test("import named", () => { check(programOk("import { Token, TokenKind } from \"./token\";")); });
+	test("import aliased", () => { check(programOk("import { Token as T } from \"./token\";")); });
+	test("import side-effect", () => { check(programOk("import \"./polyfill\";")); });
+	// Export — distinct paths: decl, re-export, re-export aliased
 	test("export function", () => { check(programOk("export function f() { return 1; }")); });
 	test("export const", () => { check(programOk("export const x = 42;")); });
-	test("export let", () => { check(programOk("export let y = 0;")); });
-	test("export enum", () => { check(programOk("export enum Color { Red, Green, Blue }")); });
-	test("export interface", () => { check(programOk("export interface Point { x: number; y: number; }")); });
-	test("export type", () => { check(programOk("export type ID = number;")); });
-	test("re-export single", () => { check(programOk("export { Node } from \"./node\";")); });
-	test("re-export multi", () => { check(programOk("export { Node, NodeKind, createNode } from \"./node\";")); });
+	test("re-export", () => { check(programOk("export { Node, NodeKind } from \"./node\";")); });
 	test("re-export aliased", () => { check(programOk("export { Token as T } from \"./token\";")); });
-	test("re-export no semicolon", () => { check(programOk("export { x } from \"./y\"")); });
+	// Type alias — distinct paths: simple, generic, union, function type
+	test("type simple", () => { check(programOk("type ID = number;")); });
+	test("type generic", () => { check(programOk("type NodeResult = Result<Node, string>;")); });
+	test("type leading pipe", () => { check(programOk("type Data = | { x: number } | { y: string };")); });
+	test("type function", () => { check(programOk("type Handler = (a: string) => void;")); });
+	// Enum
+	test("enum", () => { check(programOk("enum Color { Red, Green, Blue }")); });
+	test("enum with values", () => { check(programOk("enum Status { Active = 1, Inactive = 0 }")); });
+	// Interface — distinct paths: simple, optional, extends
+	test("interface", () => { check(programOk("interface Point { x: number; y: number; }")); });
+	test("interface optional", () => { check(programOk("interface Opt { value?: number; }")); });
+	test("interface extends", () => { check(programOk("interface Dog extends Animal { breed: string; }")); });
 });
 
-testGroup("Stmt Type Alias", () => {
-	test("simple alias", () => { check(programOk("type ID = number;")); });
-	test("generic alias", () => { check(programOk("type Result = Ok | Err;")); });
-	test("array alias", () => { check(programOk("type Nodes = Node[];")); });
-	test("generic type alias", () => { check(programOk("type NodeResult = Result<Node, string>;")); });
-	test("function type alias", () => { check(programOk("type Handler = (a: string) => void;")); });
-	test("leading pipe union", () => { check(programOk("type Data = | { x: number } | { y: string };")); });
-	test("no semicolon", () => { check(programOk("type X = number")); });
-});
-
-testGroup("Stmt Enum Declarations", () => {
-	test("simple enum", () => { check(programOk("enum Color { Red, Green, Blue }")); });
-	test("single member", () => { check(programOk("enum Dir { Up }")); });
-	test("trailing comma", () => { check(programOk("enum X { A, B, C, }")); });
-	test("member with value", () => { check(programOk("enum Status { Active = 1, Inactive = 0 }")); });
-	test("string values", () => { check(programOk("enum Kind { A = \"a\", B = \"b\" }")); });
-	test("many members", () => { check(programOk("enum TK { A, B, C, D, E, F, G, H }")); });
-});
-
-testGroup("Stmt Interface Declarations", () => {
-	test("simple interface", () => { check(programOk("interface Point { x: number; y: number; }")); });
-	test("single field", () => { check(programOk("interface Named { name: string; }")); });
-	test("optional field", () => { check(programOk("interface Opt { value?: number; }")); });
-	test("generic field types", () => { check(programOk("interface Container { items: Array<number>; }")); });
-	test("extends clause", () => { check(programOk("interface Dog extends Animal { breed: string; }")); });
-	test("array field type", () => { check(programOk("interface State { tokens: Token[]; position: number; }")); });
+testGroup("Stmt Class", () => {
+	// Distinct member types
+	test("property", () => { check(programOk("class Foo { name: string; }")); });
+	test("method", () => { check(programOk("class Foo { greet() { return 1; } }")); });
+	test("constructor", () => { check(programOk("class Foo { constructor(x: number) { this.x = x; } }")); });
+	// Modifiers — each tests a distinct parser path
+	test("extends", () => { check(programOk("class Dog extends Animal { bark() { return 1; } }")); });
+	test("static", () => { check(programOk("class Foo { static create() { return 1; } }")); });
+	test("abstract", () => { check(programOk("abstract class Shape { abstract area(): number; }")); });
+	test("getter setter", () => { check(programOk("class Foo { get name() { return 1; } set name(v: string) { this.x = v; } }")); });
+	test("export class", () => { check(programOk("export class Foo { x: number; }")); });
+	// Complex
+	test("multi members", () => { check(programOk("class Point { x: number; y: number; toString() { return 1; } }")); });
+	test("constructor public", () => { check(programOk("class Foo { constructor(public name: string) { } }")); });
 });

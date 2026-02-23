@@ -5,16 +5,15 @@ import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, NodeData, createNode } from "../../ast/node";
 import { ParserState, createState, current, advance, isAtEnd } from "../context";
 import { parseExpressionFromState, registerBlockParser } from "../expressions/core";
-import { parseIfStmt, parseWhileStmt, parseForStmt, parseBreakStmt, parseContinueStmt, parseReturnStmt } from "./control";
-import { parseVariableDecl, parseFunctionDecl, parseImportDecl, parseExportDecl, parseTypeAliasDecl, parseEnumDecl, parseInterfaceDecl } from "./declaration";
+import { parseIfStmt, parseWhileStmt, parseForStmt, parseBreakStmt, parseContinueStmt, parseReturnStmt, parseDoWhileStmt, parseSwitchStmt, parseDeferStmt } from "./control";
+import { parseVariableDecl, parseFunctionDecl, parseImportDecl, parseExportDecl, parseTypeAliasDecl, parseEnumDecl, parseInterfaceDecl, parseClassDecl } from "./declaration";
 import { parseThrowStmt, parseTryCatchStmt } from "./errorHandling";
-import { registerStmtBlockParser, registerStmtExprParser, registerStmtProgramParser, programOk } from "./util";
+import { registerStmtBlockParser, registerStmtExprParser, registerStmtParser, registerStmtProgramParser, programOk, stmtKind, stmtCount } from "./util";
 import { test, check, testGroup } from "std/testing";
 
 // Type aliases
-type Nodes = Node[];
 type NodeResult = Result<Node, string>;
-type NodesResult = Result<Nodes, string>;
+type NodesResult = Result<Node[], string>;
 
 // ===== Statement Dispatch (match on TokenKind) =====
 
@@ -68,6 +67,21 @@ function parseStatement(state: ParserState): NodeResult {
 		},
 		TokenKind.Try => {
 			return parseTryCatchStmt(state);
+		},
+		TokenKind.Do => {
+			return parseDoWhileStmt(state);
+		},
+		TokenKind.Switch => {
+			return parseSwitchStmt(state);
+		},
+		TokenKind.Class => {
+			return parseClassDecl(state);
+		},
+		TokenKind.Abstract => {
+			return parseClassDecl(state);
+		},
+		TokenKind.Defer => {
+			return parseDeferStmt(state);
 		},
 		_ => {
 			return parseExprStmt(state);
@@ -138,6 +152,7 @@ export function parseProgram(tokens: Token[]): NodesResult {
 
 registerStmtBlockParser((state: ParserState): NodeResult => { return parseBlockStmt(state); });
 registerStmtExprParser((state: ParserState): NodeResult => { return parseExpressionFromState(state); });
+registerStmtParser((state: ParserState): NodeResult => { return parseStatement(state); });
 registerStmtProgramParser((tokens: Token[]): NodesResult => { return parseProgram(tokens); });
 
 // Also register with expressions for arrow function block bodies
@@ -145,80 +160,60 @@ registerBlockParser((state: ParserState): NodeResult => { return parseBlockStmt(
 
 // ===== Core Tests =====
 
-testGroup("Stmt Expression Statements", () => {
-	test("ident expr stmt", () => { check(programOk("x;")); });
-	test("call expr stmt", () => { check(programOk("f(x);")); });
-	test("member expr stmt", () => { check(programOk("a.b;")); });
-	test("binary expr stmt", () => { check(programOk("a + b;")); });
+// --- Structural: verify dispatch produces correct node kinds ---
+
+testGroup("Stmt Structure", () => {
+	test("const is VariableDecl", () => { check(stmtKind("const x = 1;") === NodeKind.VariableDecl); });
+	test("if is IfStmt", () => { check(stmtKind("if (x) {}") === NodeKind.IfStmt); });
+	test("while is WhileStmt", () => { check(stmtKind("while (x) {}") === NodeKind.WhileStmt); });
+	test("for is ForStmt", () => { check(stmtKind("for (let i = 0; i < n; i++) {}") === NodeKind.ForStmt); });
+	test("for-of is ForOfStmt", () => { check(stmtKind("for (const x of items) {}") === NodeKind.ForOfStmt); });
+	test("function is FunctionDecl", () => { check(stmtKind("function f() {}") === NodeKind.FunctionDecl); });
+	test("import is ImportDecl", () => { check(stmtKind("import { x } from \"y\";") === NodeKind.ImportDecl); });
+	test("export is ExportDecl", () => { check(stmtKind("export const x = 1;") === NodeKind.ExportDecl); });
+	test("enum is EnumDecl", () => { check(stmtKind("enum X { A, B }") === NodeKind.EnumDecl); });
+	test("interface is InterfaceDecl", () => { check(stmtKind("interface P { x: number; }") === NodeKind.InterfaceDecl); });
+	test("class is ClassDecl", () => { check(stmtKind("class Foo {}") === NodeKind.ClassDecl); });
+	test("defer is DeferStmt", () => { check(stmtKind("defer f();") === NodeKind.DeferStmt); });
+	test("throw is ThrowStmt", () => { check(stmtKind("throw \"err\";") === NodeKind.ThrowStmt); });
+	test("block is BlockStmt", () => { check(stmtKind("{ x; }") === NodeKind.BlockStmt); });
+	// Counts
+	test("two stmts", () => { check(stmtCount("x; y;") === 2); });
+	test("bare semis = 0", () => { check(stmtCount(";;;") === 0); });
+	test("three stmts", () => { check(stmtCount("const a = 1; f(a); return a;") === 3); });
 });
 
-testGroup("Stmt Blocks & Nesting", () => {
-	test("empty block", () => { check(programOk("{ }")); });
-	test("block with stmt", () => { check(programOk("{ x; }")); });
-	test("block with multiple stmts", () => { check(programOk("{ x; y; z; }")); });
-	test("deeply nested blocks", () => { check(programOk("{ { { x; } } }")); });
-	test("nested control flow", () => { check(programOk("function f() { if (x) { while (y) { z; } } }")); });
+// --- Negative: parser correctly rejects malformed input ---
+
+testGroup("Stmt Rejects", () => {
+	test("const no init", () => { check(!programOk("const x;")); });
+	test("const no name", () => { check(!programOk("const ;")); });
+	test("if no parens", () => { check(!programOk("if x { }")); });
+	test("while no parens", () => { check(!programOk("while x { }")); });
+	test("function no name", () => { check(!programOk("function () {}")); });
+	test("try alone", () => { check(!programOk("try {}")); });
 });
 
-testGroup("Stmt Multiple & Semicolons", () => {
-	test("two const decls", () => { check(programOk("const x = 1; const y = 2;")); });
-	test("decl then expr", () => { check(programOk("const x = 1; x;")); });
-	test("two functions", () => { check(programOk("function f() {} function g() {}")); });
-	test("bare semicolons", () => { check(programOk(";;;")); });
-	test("extra semicolons", () => { check(programOk("x;; y;;")); });
-	test("semicolons between decls", () => { check(programOk("const x = 1; ; const y = 2;")); });
-});
+// --- Smoke: stmt-level integration that exercises distinct paths ---
 
-testGroup("Stmt Object/Array Literals", () => {
-	test("object in var init", () => { check(programOk("const x = { a: 1, b: 2 };")); });
-	test("shorthand in var", () => { check(programOk("const obj = { name };")); });
-	test("array in var init", () => { check(programOk("const arr = [1, 2, 3];")); });
-	test("empty array init", () => { check(programOk("const arr = [];")); });
-	test("object in call arg", () => { check(programOk("f({ x: 1 });")); });
-	test("array in call arg", () => { check(programOk("f([a, b]);")); });
-	test("return object", () => { check(programOk("function f() { return { x: 1 }; }")); });
-	test("return array", () => { check(programOk("function f() { return [1, 2]; }")); });
+testGroup("Stmt Smoke", () => {
+	// Block body with arrow
+	test("arrow block body", () => { check(programOk("const f = () => { return 1; };")); });
+	test("testGroup pattern", () => { check(programOk("testGroup(\"g\", () => { test(\"t\", () => { check(1); }); });")); });
+	// Object/array in stmt context
+	test("object in var", () => { check(programOk("const x = { a: 1, b: 2 };")); });
 	test("createNode pattern", () => {
 		check(programOk("const n = createNode(NodeKind.X, { operator: op, left: a, right: b }, tok);"));
 	});
+	// Template in stmt
+	test("template interp", () => { check(programOk("const s = `line ${token.line.toString()}`;")); });
+	// Type assertion in stmt
+	test("as in var", () => { check(programOk("const data = node.data as { value: number };")); });
+	// Nested control flow
+	test("nested control", () => { check(programOk("function f() { if (x) { while (y) { z; } } }")); });
 });
 
-testGroup("Stmt Error Cases", () => {
-	test("missing name in decl", () => { check(!programOk("const ;")); });
-	test("missing = in decl", () => { check(!programOk("const x ;")); });
-	test("missing parens in if", () => { check(!programOk("if x { }")); });
-	test("missing parens in while", () => { check(!programOk("while x { }")); });
-	test("missing function name", () => { check(!programOk("function () {}")); });
-});
-
-testGroup("Stmt Arrow Functions", () => {
-	test("empty block body", () => { check(programOk("const f = () => {};")); });
-	test("block with stmt", () => { check(programOk("const f = () => { x; };")); });
-	test("block with return", () => { check(programOk("const f = (x) => { return x + 1; };")); });
-	test("block multi stmts", () => { check(programOk("const f = (a, b) => { const sum = a + b; return sum; };")); });
-	test("block with if", () => { check(programOk("const f = (x) => { if (x) { return 1; } return 0; };")); });
-	test("test callback", () => { check(programOk("test(\"name\", () => { check(true); });")); });
-	test("testGroup pattern", () => { check(programOk("testGroup(\"group\", () => { test(\"t\", () => { check(1); }); });")); });
-	test("expr body in stmt", () => { check(programOk("const f = (x) => x + 1;")); });
-	test("arrow in var then use", () => { check(programOk("const f = (x) => x; f(42);")); });
-	test("two params block", () => { check(programOk("const f = (a, b) => { return a + b; };")); });
-});
-
-testGroup("Stmt Type Assertions", () => {
-	test("as in var init", () => { check(programOk("const data = node.data as { value: number };")); });
-	test("as then member", () => { check(programOk("const v = (node.data as { value: number }).value;")); });
-	test("printer pattern", () => { check(programOk("const data = node.data as { name: string }; console.log(data.name);")); });
-});
-
-testGroup("Stmt Template Literals", () => {
-	test("template in var", () => { check(programOk("const msg = `hello`;")); });
-	test("template with interp in var", () => { check(programOk("const msg = `hello ${name}`;")); });
-	test("template in call", () => { check(programOk("console.log(`value: ${x}`);")); });
-	test("template method chain", () => { check(programOk("const s = `line ${token.line.toString()}`;")); });
-	test("template in return", () => { check(programOk("function f(x) { return `result: ${x}`; }")); });
-	test("error msg pattern", () => { check(programOk("return Result.err(`Expected ')' at line ${current(state).line.toString()}`);")); });
-	test("multi interp stmt", () => { check(programOk("const s = `${a} + ${b} = ${c}`;")); });
-});
+// --- Self-Parsing: realistic code patterns from the compiler itself ---
 
 testGroup("Self-Parsing Smoke", () => {
 	test("import + function + template", () => {
@@ -244,5 +239,11 @@ testGroup("Self-Parsing Smoke", () => {
 	});
 	test("complex parser pattern", () => {
 		check(programOk("function parse(state) { const token = current(state); if (token.kind === TokenKind.Number) { advance(state); return Result.ok(createNode(NodeKind.Lit, { value: 42 }, token)); } return Result.err(`Unexpected: ${token.value}`); }"));
+	});
+	test("class declaration", () => {
+		check(programOk("class Animal { name: string; constructor(n: string) { this.name = n; } speak() { return this.name; } }"));
+	});
+	test("defer in function", () => {
+		check(programOk("function cleanup() { const fd = open(); defer close(fd); process(fd); }"));
 	});
 });

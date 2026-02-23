@@ -4,8 +4,6 @@
 import { Token, TokenKind } from "./token";
 import { test, check, testGroup } from "std/testing";
 
-// Type alias avoids Token[] inside Result<> angle brackets (parser ambiguity)
-export type Tokens = Token[];
 
 export interface LexerState {
 	source: string;

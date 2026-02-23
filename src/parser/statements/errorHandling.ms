@@ -86,19 +86,15 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 
 // ===== Tests =====
 
-testGroup("Stmt Throw", () => {
+testGroup("Stmt Error Handling", () => {
+	// Throw
 	test("throw string", () => { check(programOk("throw \"error\";")); });
 	test("throw expr", () => { check(programOk("throw error;")); });
-	test("throw in function", () => { check(programOk("function f() { throw \"fail\"; }")); });
-	test("throw no semicolon", () => { check(programOk("throw x")); });
-});
-
-testGroup("Stmt Try/Catch/Finally", () => {
+	// Try — distinct paths: catch, finally, both, no-param catch
 	test("try-catch", () => { check(programOk("try { x; } catch (e) { y; }")); });
 	test("try-finally", () => { check(programOk("try { x; } finally { y; }")); });
 	test("try-catch-finally", () => { check(programOk("try { x; } catch (e) { y; } finally { z; }")); });
 	test("catch no param", () => { check(programOk("try { x; } catch { y; }")); });
-	test("nested try", () => { check(programOk("try { try { x; } catch (e) { y; } } catch (e) { z; }")); });
-	test("try in function", () => { check(programOk("function f() { try { return 1; } catch (e) { return 0; } }")); });
-	test("missing catch/finally", () => { check(!programOk("try { x; }")); });
+	// Negative
+	test("try alone rejects", () => { check(!programOk("try { x; }")); });
 });

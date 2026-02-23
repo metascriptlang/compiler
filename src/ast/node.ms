@@ -14,10 +14,15 @@ export enum NodeKind {
 	// Statements
 	VariableDecl, IfStmt, WhileStmt, ForStmt, ForOfStmt, BlockStmt,
 	ExprStmt, ReturnStmt, BreakStmt, ContinueStmt, FunctionDecl,
+	ConditionalExpr, SpreadExpr, NewExpr,
+	DoWhileStmt, SwitchStmt, SwitchCase,
 	// Declarations
 	ImportDecl, ExportDecl, TypeAliasDecl, EnumDecl, InterfaceDecl,
+	ClassDecl, PropertyDecl, MethodDecl,
 	// Error handling
 	ThrowStmt, TryCatchStmt,
+	// Other
+	DeferStmt,
 }
 
 // ===== Source Location =====
@@ -47,6 +52,9 @@ export type NodeData =
 	| { tryArg: Node, hasCatch: boolean, catchVal: Node }          // TryExpr
 	| { matchDisc: Node, matchCases: Node[] }                      // MatchExpr
 	| { casePatterns: Node[], caseBody: Node }                     // MatchCase
+	| { ternaryCondition: Node, ternaryConsequent: Node, ternaryAlternate: Node } // ConditionalExpr
+	| { spreadArg: Node }                                          // SpreadExpr
+	| { newCallee: Node, newArguments: Node[] }                    // NewExpr
 	// Statement variants
 	| { declName: string, initializer: Node, isConst: boolean }    // VariableDecl
 	| { condition: Node, consequent: Node, alternate: Node }       // IfStmt
@@ -59,15 +67,22 @@ export type NodeData =
 	| { breakLabel: string }                                       // BreakStmt
 	| { continueLabel: string }                                    // ContinueStmt
 	| { fnName: string, params: string[], fnBody: Node }           // FunctionDecl
+	| { doBody: Node, doCondition: Node }                          // DoWhileStmt
+	| { switchDisc: Node, switchCases: Node[] }                    // SwitchStmt
+	| { caseTests: Node[], caseStmts: Node[], isDefault: boolean } // SwitchCase
 	// Declaration variants
 	| { importNames: string[], importAliases: string[], importSource: string }  // ImportDecl
 	| { exportedDecl: Node }                                       // ExportDecl
 	| { aliasName: string }                                        // TypeAliasDecl
 	| { enumName: string, enumMembers: string[] }                  // EnumDecl
 	| { interfaceName: string, interfaceFields: string[] }         // InterfaceDecl
+	| { className: string, classExtends: string, classBody: Node[] } // ClassDecl
+	| { propName: string, propIsStatic: boolean }                 // PropertyDecl
+	| { methodName: string, methodParams: string[], methodBody: Node, methodIsStatic: boolean } // MethodDecl
 	// Error handling variants
 	| { throwArg: Node }                                           // ThrowStmt
 	| { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node } // TryCatchStmt
+	| { deferExpr: Node }                                          // DeferStmt
 
 // ===== Node Interface =====
 

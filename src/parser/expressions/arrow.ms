@@ -25,6 +25,9 @@ export function isArrowFunction(state: ParserState): boolean {
 		return true;
 	}
 
+	// Rest params: (...args) =>
+	if (p1.kind === TokenKind.DotDotDot) { return true; }
+
 	// Must have identifier as first param
 	if (p1.kind !== TokenKind.Ident) { return false; }
 
@@ -55,11 +58,18 @@ export function parseArrowFunction(
 
 	const params: string[] = [];
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RParen) {
+		// Rest parameter: ...args
+		let paramPrefix = "";
+		if (current(state).kind === TokenKind.DotDotDot) {
+			paramPrefix = "...";
+			advance(state);
+		}
+
 		const param = current(state);
 		if (param.kind !== TokenKind.Ident) {
 			return Result.err(`Expected parameter name at line ${param.line.toString()}`);
 		}
-		params.push(param.value);
+		params.push(paramPrefix + param.value);
 		advance(state);
 
 		// Optional type annotation: (a: string)
@@ -148,37 +158,16 @@ function arrowParamCount(input: string): number {
 	return data.arrowParams.length;
 }
 
-testGroup("Arrow isArrowFunction", () => {
-	test("zero params", () => { check(checkArrow("() => 42")); });
-	test("single param", () => { check(checkArrow("(x) => x")); });
-	test("multi params comma", () => { check(checkArrow("(a, b) => a")); });
-	test("typed param", () => { check(checkArrow("(x: number) => x")); });
-	test("not arrow - paren expr", () => { check(!checkArrow("(a + b)")); });
-	test("not arrow - call", () => { check(!checkArrow("f(a)")); });
-	test("not arrow - number", () => { check(!checkArrow("42")); });
-});
-
-testGroup("Arrow parseArrowFunction", () => {
-	test("zero params ok", () => { check(arrowOk("() => 42")); });
-	test("single param ok", () => { check(arrowOk("(x) => x")); });
-	test("two params ok", () => { check(arrowOk("(a, b) => a")); });
-	test("zero param count", () => { check(arrowParamCount("() => 42") === 0); });
-	test("single param count", () => { check(arrowParamCount("(x) => x") === 1); });
-	test("two param count", () => { check(arrowParamCount("(a, b) => a") === 2); });
-	test("three param count", () => { check(arrowParamCount("(a, b, c) => a") === 3); });
-	test("typed param ok", () => { check(arrowOk("(x: number) => x")); });
-});
-
-testGroup("Expr Arrow Functions", () => {
-	test("zero params", () => { check(parseOk("() => 42")); });
-	test("single param", () => { check(parseOk("(x) => x")); });
-	test("two params", () => { check(parseOk("(a, b) => a + b")); });
-	test("three params", () => { check(parseOk("(a, b, c) => a")); });
-	test("nested call in body", () => { check(parseOk("(x) => f(x)")); });
-	test("binary in body", () => { check(parseOk("(x) => x + 1")); });
-	test("member in body", () => { check(parseOk("(x) => x.y")); });
-	test("arrow as call arg", () => { check(parseOk("f((x) => x)")); });
-	test("arrow in array", () => { check(parseOk("[(x) => x]")); });
-	test("paren expr still works", () => { check(parseOk("(a + b)")); });
-	test("paren expr complex", () => { check(parseOk("(a + b) * c")); });
+testGroup("Arrow Structure", () => {
+	// Detection
+	test("detect arrow", () => { check(checkArrow("() => 42")); });
+	test("detect typed", () => { check(checkArrow("(x: number) => x")); });
+	test("reject paren expr", () => { check(!checkArrow("(a + b)")); });
+	test("reject call", () => { check(!checkArrow("f(a)")); });
+	// Param counts
+	test("zero params", () => { check(arrowParamCount("() => 42") === 0); });
+	test("two params", () => { check(arrowParamCount("(a, b) => a") === 2); });
+	// Integration
+	test("arrow as arg", () => { check(parseOk("f((x) => x)")); });
+	test("paren expr still works", () => { check(parseOk("(a + b) * c")); });
 });

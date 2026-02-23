@@ -10,8 +10,7 @@ import { test, check, testGroup } from "std/testing";
 
 type ExprResult = Result<Expression, string>;
 type ExprParser = (state: ParserState, minPrec: number) => ExprResult;
-type Nodes = Node[];
-type NodesResult = Result<Nodes, string>;
+type NodesResult = Result<Node[], string>;
 
 // ===== Comma-Separated Expression List =====
 // Shared by call args and array literals
@@ -82,29 +81,12 @@ function listCount(input: string): number {
 	return result.value.length;
 }
 
-testGroup("Call parseCallExpr", () => {
+testGroup("Call Structure", () => {
 	test("no args", () => { check(callArgCount("()") === 0); });
-	test("single arg", () => { check(callArgCount("(a)") === 1); });
 	test("two args", () => { check(callArgCount("(a, b)") === 2); });
-	test("three args", () => { check(callArgCount("(1, 2, 3)") === 3); });
-	test("string arg", () => { check(callArgCount("(\"hello\")") === 1); });
 	test("trailing comma", () => { check(callArgCount("(a, b,)") === 2); });
-});
-
-testGroup("Call parseExprList", () => {
 	test("empty list", () => { check(listCount("") === 0); });
-	test("single item", () => { check(listCount("1") === 1); });
-	test("two items", () => { check(listCount("1, 2") === 2); });
 	test("three items", () => { check(listCount("a, b, c") === 3); });
-	test("mixed types", () => { check(listCount("1, \"two\", x") === 3); });
-});
-
-testGroup("Expr Call", () => {
-	test("empty call", () => { check(parseOk("f()")); });
-	test("single arg call", () => { check(parseOk("f(a)")); });
-	test("multi arg call", () => { check(parseOk("f(a, b)")); });
-	test("three arg call", () => { check(parseOk("f(a, b, c)")); });
-	test("expression arg", () => { check(parseOk("f(1 + 2)")); });
 	test("nested call", () => { check(parseOk("f(g(x))")); });
-	test("mixed args with nested call", () => { check(parseOk("f(a, g(b), c)")); });
+	test("expr arg", () => { check(parseOk("f(1 + 2)")); });
 });

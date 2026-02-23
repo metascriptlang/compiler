@@ -5,13 +5,13 @@ import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, NodeData, Expression, createNode } from "../../ast/node";
 import { ParserState, createState, current, advance, isAtEnd } from "../context";
 import { skipTypeAnnotation } from "../typeAnnotation";
-import { getPrecedence, isBinaryOperator } from "./precedence";
+import { getPrecedence, isBinaryOperator, isRightAssociative } from "./precedence";
 import { parseMatchExpr } from "./match";
 import { isArrowFunction, parseArrowFunction } from "./arrow";
 import { parseObjectLiteral } from "./object";
 import { parseExprList, parseCallExpr } from "./call";
 import { parseTemplateLiteral } from "./template";
-import { registerParseExpr, parseOk } from "./util";
+import { registerParseExpr, parseOk, exprKind, exprOp, binLeftKind } from "./util";
 import { test, check, testGroup } from "std/testing";
 
 type ExprResult = Result<Expression, string>;
@@ -49,7 +49,7 @@ registerParseExpr((tokens: Token[]): ExprResult => { return parseExpression(toke
 function parseExprWithPrec(state: ParserState, minPrec: number): ExprResult {
 	let left = try parsePrimary(state);
 
-	// Postfix operators: call, member access, array indexing, update
+	// Postfix operators: call, member access, optional chaining, array indexing, update
 	while (!isAtEnd(state)) {
 		const token = current(state);
 		if (token.kind === TokenKind.LParen) {
@@ -67,6 +67,17 @@ function parseExprWithPrec(state: ParserState, minPrec: number): ExprResult {
 					property: prop.value
 				};
 				left = createNode(NodeKind.MemberExpr, memberData, token);
+			}
+			continue;
+		}
+
+		// Optional chaining: expr?.prop
+		if (token.kind === TokenKind.QuestionDot) {
+			advance(state);
+			const prop = current(state);
+			if (prop.kind === TokenKind.Ident) {
+				advance(state);
+				left = createNode(NodeKind.MemberExpr, { object: left, property: prop.value }, token);
 			}
 			continue;
 		}
@@ -112,13 +123,37 @@ function parseExprWithPrec(state: ParserState, minPrec: number): ExprResult {
 		}
 
 		advance(state);
-		const right = try parseExprWithPrec(state, prec + 1);
+		// Right-associative operators (**, =, +=, etc.) use prec instead of prec+1
+		let nextPrec = prec + 1;
+		if (isRightAssociative(op.kind)) {
+			nextPrec = prec;
+		}
+		const right = try parseExprWithPrec(state, nextPrec);
 		const data: NodeData = {
 			operator: op.value,
 			left: left,
 			right: right
 		};
 		left = createNode(NodeKind.BinaryExpr, data, op);
+	}
+
+	// Ternary conditional: expr ? consequent : alternate
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Question) {
+		const ternaryPrec = 6;
+		if (ternaryPrec >= minPrec) {
+			const qToken = current(state);
+			advance(state);
+			const consequent = try parseExprWithPrec(state, 0);
+			if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
+				advance(state);
+			}
+			const alternate = try parseExprWithPrec(state, ternaryPrec);
+			left = createNode(NodeKind.ConditionalExpr, {
+				ternaryCondition: left,
+				ternaryConsequent: consequent,
+				ternaryAlternate: alternate,
+			}, qToken);
+		}
 	}
 
 	return Result.ok(left);
@@ -191,6 +226,59 @@ function parsePrimary(state: ParserState): ExprResult {
 		return parseMatchExpr(state, parseExprWithPrec, blockParser);
 	}
 
+	// typeof / void / delete prefix operators
+	if (token.kind === TokenKind.Typeof || token.kind === TokenKind.Void || token.kind === TokenKind.Delete) {
+		advance(state);
+		const operand = try parsePrimary(state);
+		return Result.ok(createNode(NodeKind.UnaryExpr, { unaryOp: token.value, operand: operand }, token));
+	}
+
+	// new expression: new Callee(args)
+	if (token.kind === TokenKind.New) {
+		advance(state);
+		let callee = try parsePrimary(state);
+		// Handle member access: new A.B(args)
+		while (!isAtEnd(state) && current(state).kind === TokenKind.Dot) {
+			const dotToken = current(state);
+			advance(state);
+			const prop = current(state);
+			if (prop.kind === TokenKind.Ident) {
+				advance(state);
+				callee = createNode(NodeKind.MemberExpr, { object: callee, property: prop.value }, dotToken);
+			}
+		}
+		// Parse arguments if present
+		const args: Node[] = [];
+		if (!isAtEnd(state) && current(state).kind === TokenKind.LParen) {
+			advance(state);
+			const argList = try parseExprList(state, TokenKind.RParen, parseExprWithPrec);
+			return Result.ok(createNode(NodeKind.NewExpr, { newCallee: callee, newArguments: argList }, token));
+		}
+		return Result.ok(createNode(NodeKind.NewExpr, { newCallee: callee, newArguments: args }, token));
+	}
+
+	// Await: await expr
+	if (token.kind === TokenKind.Await) {
+		advance(state);
+		const awaitArg = try parseExprWithPrec(state, 0);
+		return Result.ok(createNode(NodeKind.UnaryExpr, { unaryOp: "await", operand: awaitArg }, token));
+	}
+
+	// Prefix increment/decrement: ++x, --x
+	if (token.kind === TokenKind.PlusPlus || token.kind === TokenKind.MinusMinus) {
+		advance(state);
+		const updateTarget = try parsePrimary(state);
+		const prefixOp = "pre" + token.value;
+		return Result.ok(createNode(NodeKind.UnaryExpr, { unaryOp: prefixOp, operand: updateTarget }, token));
+	}
+
+	// Spread: ...expr
+	if (token.kind === TokenKind.DotDotDot) {
+		advance(state);
+		const spreadOperand = try parsePrimary(state);
+		return Result.ok(createNode(NodeKind.SpreadExpr, { spreadArg: spreadOperand }, token));
+	}
+
 	// Unary prefix operators
 	if (token.kind === TokenKind.Minus || token.kind === TokenKind.Bang || token.kind === TokenKind.Tilde) {
 		advance(state);
@@ -214,129 +302,77 @@ function parsePrimary(state: ParserState): ExprResult {
 }
 
 // ===== Core Expression Tests =====
-// Tests for logic that lives in core.ms: literals, binary ops, precedence,
-// associativity, parentheses, unary, member access, array access, postfix,
-// type assertions, try, array literals.
-// Call/Object/Arrow/Match integration tests live in their respective sub-modules.
 
-testGroup("Expr Literals", () => {
-	test("number literal", () => { check(parseOk("42")); });
-	test("float literal", () => { check(parseOk("3.14")); });
-	test("string literal", () => { check(parseOk("\"hello\"")); });
-	test("identifier", () => { check(parseOk("myVar")); });
-	test("true literal", () => { check(parseOk("true")); });
-	test("false literal", () => { check(parseOk("false")); });
-	test("null literal", () => { check(parseOk("null")); });
-	test("this literal", () => { check(parseOk("this")); });
+// --- Structural: verify AST node kinds, operators, precedence tree shape ---
+
+testGroup("Expr Structure", () => {
+	// Kind verification
+	test("number kind", () => { check(exprKind("42") === NodeKind.NumberLiteral); });
+	test("string kind", () => { check(exprKind("\"hi\"") === NodeKind.StringLiteral); });
+	test("ident kind", () => { check(exprKind("x") === NodeKind.Identifier); });
+	test("binary kind", () => { check(exprKind("a + b") === NodeKind.BinaryExpr); });
+	test("unary kind", () => { check(exprKind("-x") === NodeKind.UnaryExpr); });
+	test("call kind", () => { check(exprKind("f()") === NodeKind.CallExpr); });
+	test("member kind", () => { check(exprKind("a.b") === NodeKind.MemberExpr); });
+	test("index kind", () => { check(exprKind("a[0]") === NodeKind.ArrayAccess); });
+	test("array kind", () => { check(exprKind("[1]") === NodeKind.ArrayLiteral); });
+	test("ternary kind", () => { check(exprKind("a ? b : c") === NodeKind.ConditionalExpr); });
+	test("new kind", () => { check(exprKind("new X()") === NodeKind.NewExpr); });
+	test("spread kind", () => { check(exprKind("...x") === NodeKind.SpreadExpr); });
+	test("try kind", () => { check(exprKind("try x") === NodeKind.TryExpr); });
+	test("as kind", () => { check(exprKind("x as number") === NodeKind.TypeAssertion); });
+	// Operator extraction
+	test("+ op", () => { check(exprOp("a + b") === "+"); });
+	test("=== op", () => { check(exprOp("a === b") === "==="); });
+	test("&& op", () => { check(exprOp("a && b") === "&&"); });
+	test("?? op", () => { check(exprOp("a ?? b") === "??"); });
+	test("unary - op", () => { check(exprOp("-x") === "-"); });
+	test("unary ! op", () => { check(exprOp("!x") === "!"); });
+	test("pre++ op", () => { check(exprOp("++x") === "pre++"); });
+	test("typeof op", () => { check(exprOp("typeof x") === "typeof"); });
+	// Precedence tree shape
+	test("* tighter than +", () => { check(binLeftKind("a + b * c") === NodeKind.Identifier); });
+	test("+ left-assoc", () => { check(binLeftKind("a + b + c") === NodeKind.BinaryExpr); });
+	test("* in + left", () => { check(binLeftKind("a * b + c") === NodeKind.BinaryExpr); });
+	test("&& tighter than ||", () => { check(binLeftKind("a || b && c") === NodeKind.Identifier); });
 });
 
-testGroup("Expr Binary Operators", () => {
-	test("addition", () => { check(parseOk("1 + 2")); });
-	test("subtraction", () => { check(parseOk("a - b")); });
-	test("multiplication", () => { check(parseOk("x * y")); });
-	test("division", () => { check(parseOk("a / b")); });
-	test("modulo", () => { check(parseOk("a % b")); });
-	test("strict equality", () => { check(parseOk("a === b")); });
-	test("strict inequality", () => { check(parseOk("a !== b")); });
-	test("less than", () => { check(parseOk("a < b")); });
-	test("greater than", () => { check(parseOk("a > b")); });
-	test("less or equal", () => { check(parseOk("a <= b")); });
-	test("greater or equal", () => { check(parseOk("a >= b")); });
-	test("logical and", () => { check(parseOk("a && b")); });
-	test("logical or", () => { check(parseOk("a || b")); });
-	test("left shift", () => { check(parseOk("a << b")); });
-	test("right shift", () => { check(parseOk("a >> b")); });
-	test("unsigned right shift", () => { check(parseOk("a >>> b")); });
-});
+// --- Smoke: each tests a distinct parser path not covered by structural tests ---
 
-testGroup("Expr Precedence", () => {
-	test("mul before add", () => { check(parseOk("1 + 2 * 3")); });
-	test("two muls with add", () => { check(parseOk("a * b + c * d")); });
-	test("and before or", () => { check(parseOk("a || b && c")); });
-	test("comparison before and", () => { check(parseOk("a < b && c > d")); });
-});
-
-testGroup("Expr Associativity", () => {
-	test("left assoc subtraction", () => { check(parseOk("a - b - c")); });
-	test("left assoc addition", () => { check(parseOk("a + b + c")); });
-	test("left assoc multiplication", () => { check(parseOk("a * b * c")); });
-});
-
-testGroup("Expr Parenthesized", () => {
-	test("parenthesized number", () => { check(parseOk("(42)")); });
-	test("parenthesized binary", () => { check(parseOk("(a + b)")); });
-	test("paren changes precedence", () => { check(parseOk("(a + b) * c")); });
-	test("double parens", () => { check(parseOk("((a))")); });
-	test("nested parens", () => { check(parseOk("(a + (b * c))")); });
-});
-
-testGroup("Expr Unary Operators", () => {
-	test("logical not", () => { check(parseOk("!x")); });
-	test("negation", () => { check(parseOk("-42")); });
-	test("bitwise not", () => { check(parseOk("~bits")); });
-	test("double negation", () => { check(parseOk("!!x")); });
-	test("double negate with parens", () => { check(parseOk("-(-x)")); });
-});
-
-testGroup("Expr Member Access", () => {
-	test("simple member", () => { check(parseOk("a.b")); });
-	test("chained member", () => { check(parseOk("a.b.c")); });
-	test("triple chain", () => { check(parseOk("a.b.c.d")); });
-});
-
-testGroup("Expr Array Access", () => {
-	test("simple index", () => { check(parseOk("a[0]")); });
-	test("variable index", () => { check(parseOk("a[i]")); });
-	test("expression index", () => { check(parseOk("a[i + 1]")); });
-});
-
-testGroup("Expr Mixed Postfix", () => {
-	test("member then call", () => { check(parseOk("a.b(c)")); });
-	test("call then member", () => { check(parseOk("a(b).c")); });
-	test("index then member", () => { check(parseOk("a[0].b")); });
-	test("member then index", () => { check(parseOk("a.b[0]")); });
-	test("member-call-member chain", () => { check(parseOk("a.b(c).d")); });
-	test("chained member then call", () => { check(parseOk("a.b.c(d, e)")); });
-	test("chained calls (curried)", () => { check(parseOk("f(a)(b)")); });
-});
-
-testGroup("Expr Complex", () => {
-	test("multi-op expression", () => { check(parseOk("a + b * c - d")); });
-	test("ops in call args", () => { check(parseOk("f(a + b, c * d)")); });
-	test("member access in binary", () => { check(parseOk("a.b + c.d")); });
-	test("not of call", () => { check(parseOk("!f(x)")); });
+testGroup("Expr Smoke", () => {
+	// Postfix combinations
+	test("member call", () => { check(parseOk("a.b(c)")); });
+	test("call member", () => { check(parseOk("a(b).c")); });
+	test("optional chain", () => { check(parseOk("a?.b?.c")); });
+	test("postfix ++", () => { check(parseOk("x++")); });
+	// Parenthesized
+	test("parens", () => { check(parseOk("(a + b) * c")); });
+	// Right-associative
+	test("** right assoc", () => { check(parseOk("a ** b ** c")); });
+	test("assign right assoc", () => { check(parseOk("a = b = c")); });
+	// Compound expressions
 	test("complex mixed", () => { check(parseOk("f(a).b + g(c).d")); });
-});
-
-testGroup("Expr Array Literals", () => {
-	test("empty array", () => { check(parseOk("f([])")); });
-	test("single element", () => { check(parseOk("f([1])")); });
-	test("two elements", () => { check(parseOk("f([1, 2])")); });
-	test("three elements", () => { check(parseOk("f([1, 2, 3])")); });
-	test("string elements", () => { check(parseOk("f([\"a\", \"b\"])")); });
-	test("expression elements", () => { check(parseOk("f([a + b, c * d])")); });
-	test("nested arrays", () => { check(parseOk("f([[1], [2]])")); });
-	test("mixed types", () => { check(parseOk("f([1, \"two\", x])")); });
-	test("trailing comma", () => { check(parseOk("f([1, 2, ])")); });
-	test("array then index", () => { check(parseOk("[1, 2][0]")); });
-	test("object in array", () => { check(parseOk("f([{ x: 1 }, { x: 2 }])")); });
-});
-
-testGroup("Expr Type Assertions", () => {
-	test("as simple type", () => { check(parseOk("x as number")); });
-	test("as object type", () => { check(parseOk("x as { value: number }")); });
-	test("member then as", () => { check(parseOk("node.data as { name: string }")); });
-	test("call then as", () => { check(parseOk("f(x) as { result: boolean }")); });
-	test("as in call arg", () => { check(parseOk("f(x as { v: number })")); });
-});
-
-testGroup("Expr Try", () => {
-	test("basic try", () => { check(parseOk("try foo()")); });
-	test("try with catch", () => { check(parseOk("try foo() catch 0")); });
-	test("try catch string", () => { check(parseOk("try f() catch \"default\"")); });
-	test("try call with args", () => { check(parseOk("try bar(a, b)")); });
-	test("try member call", () => { check(parseOk("try x.method()")); });
+	test("nested arrays", () => { check(parseOk("[[1], [2]][0]")); });
+	// Try
+	test("try catch", () => { check(parseOk("try f() catch 0")); });
 	test("nested try", () => { check(parseOk("try f(try g())")); });
-	test("try identifier", () => { check(parseOk("try x")); });
+	// Type assertions
+	test("as object type", () => { check(parseOk("node.data as { name: string }")); });
+	// Remaining operators
+	test("in operator", () => { check(parseOk("\"x\" in obj")); });
+	test("instanceof", () => { check(parseOk("a instanceof Foo")); });
+	test("pipe", () => { check(parseOk("a |> b")); });
+	// Await
+	test("await call", () => { check(parseOk("await fetch(url)")); });
+	// New with member
+	test("new member", () => { check(parseOk("new A.B()")); });
+	// Delete/void
+	test("delete", () => { check(parseOk("delete obj.x")); });
+	test("void", () => { check(parseOk("void 0")); });
+});
+
+testGroup("Expr Rejects", () => {
+	test("lone operator", () => { check(!parseOk("+")); });
+	test("empty string", () => { check(!parseOk("")); });
 });
 

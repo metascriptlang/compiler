@@ -3,14 +3,14 @@
 // Pattern: ~/projects/metascript/src/lexer/lexer.zig
 
 import { Token, TokenKind } from "./token";
-import { LexerState, Tokens, createLexerState, peek, advanceChar, addToken } from "./state";
+import { LexerState, createLexerState, peek, advanceChar, addToken } from "./state";
 import { isWhitespace, isNewline, isDigit, isLetter } from "./chars";
 import { scanNumber, scanString, scanTemplateString, scanIdentifier, scanOperator, scanPunctuation } from "./scanner";
 import { test, check, testGroup } from "std/testing";
 
 // ===== Main Lex Function =====
 
-export function lex(source: string): Result<Tokens, string> {
+export function lex(source: string): Result<Token[], string> {
 	const s = createLexerState(source);
 
 	while (s.pos < s.source.length) {

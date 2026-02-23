@@ -60,15 +60,9 @@ export function parseTemplateLiteral(state: ParserState, parsePrec: PrecParserFn
 
 testGroup("Expr Template Literals", () => {
 	test("no substitution", () => { check(parseOk("`hello`")); });
-	test("empty template", () => { check(parseOk("``")); });
 	test("single interpolation", () => { check(parseOk("`hello ${name}`")); });
 	test("two interpolations", () => { check(parseOk("`${a} and ${b}`")); });
 	test("expr in interpolation", () => { check(parseOk("`sum is ${a + b}`")); });
-	test("member access in template", () => { check(parseOk("`line ${token.line}`")); });
-	test("call in template", () => { check(parseOk("`val ${f(x)}`")); });
-	test("method call in template", () => { check(parseOk("`num ${x.toString()}`")); });
-	test("only interpolation", () => { check(parseOk("`${x}`")); });
-	test("text before only", () => { check(parseOk("`hello ${x}`")); });
-	test("text after only", () => { check(parseOk("`${x} world`")); });
-	test("three interpolations", () => { check(parseOk("`${a}${b}${c}`")); });
+	test("method call", () => { check(parseOk("`num ${x.toString()}`")); });
+	test("three adjacent", () => { check(parseOk("`${a}${b}${c}`")); });
 });

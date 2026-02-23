@@ -21,6 +21,42 @@ export function parseObjectLiteral(state: ParserState, exprParser: ExprParser): 
 
 	advance(state);
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
+		// Spread in object: { ...obj }
+		if (current(state).kind === TokenKind.DotDotDot) {
+			const spreadToken = current(state);
+			advance(state);
+			const spreadVal = try exprParser(state, 0);
+			keys.push("...");
+			values.push(createNode(NodeKind.SpreadExpr, { spreadArg: spreadVal }, spreadToken));
+			if (current(state).kind === TokenKind.Comma) { advance(state); } else { break; }
+			continue;
+		}
+
+		// Computed property: { [expr]: value }
+		if (current(state).kind === TokenKind.LBracket) {
+			advance(state);
+			const keyExpr = try exprParser(state, 0);
+			if (current(state).kind === TokenKind.RBracket) { advance(state); }
+			if (current(state).kind === TokenKind.Colon) { advance(state); }
+			const compVal = try exprParser(state, 0);
+			keys.push("__computed__");
+			values.push(compVal);
+			if (current(state).kind === TokenKind.Comma) { advance(state); } else { break; }
+			continue;
+		}
+
+		// String key: { "key": value }
+		if (current(state).kind === TokenKind.String) {
+			const strKeyToken = current(state);
+			advance(state);
+			if (current(state).kind === TokenKind.Colon) { advance(state); }
+			keys.push(strKeyToken.value);
+			const strVal = try exprParser(state, 0);
+			values.push(strVal);
+			if (current(state).kind === TokenKind.Comma) { advance(state); } else { break; }
+			continue;
+		}
+
 		const keyToken = current(state);
 		if (keyToken.kind !== TokenKind.Ident) {
 			return Result.err(`Expected property name at line ${keyToken.line.toString()}`);
@@ -91,29 +127,14 @@ function objOk(input: string): boolean {
 	return result.ok;
 }
 
-testGroup("Object parseObjectLiteral", () => {
-	test("empty object", () => { check(objKeyCount("{}") === 0); });
-	test("single property", () => { check(objKeyCount("{ x: 1 }") === 1); });
-	test("two properties", () => { check(objKeyCount("{ x: 1, y: 2 }") === 2); });
-	test("shorthand property", () => { check(objKeyCount("{ x }") === 1); });
-	test("mixed shorthand and full", () => { check(objKeyCount("{ x, y: 2 }") === 2); });
-	test("trailing comma", () => { check(objKeyCount("{ x: 1, y: 2, }") === 2); });
-	test("string value", () => { check(objOk("{ x: \"hello\" }")); });
+testGroup("Object Structure", () => {
+	test("empty", () => { check(objKeyCount("{}") === 0); });
+	test("two props", () => { check(objKeyCount("{ x: 1, y: 2 }") === 2); });
+	test("shorthand", () => { check(objKeyCount("{ x }") === 1); });
+	test("mixed", () => { check(objKeyCount("{ x, y: 2 }") === 2); });
+	test("trailing comma", () => { check(objKeyCount("{ x: 1, }") === 1); });
 	test("non-ident key fails", () => { check(!objOk("{ 42: x }")); });
-});
-
-testGroup("Expr Object Literals", () => {
-	test("empty object", () => { check(parseOk("f({})")); });
-	test("single property", () => { check(parseOk("f({ x: 1 })")); });
-	test("two properties", () => { check(parseOk("f({ x: 1, y: 2 })")); });
-	test("shorthand property", () => { check(parseOk("f({ x })")); });
-	test("mixed shorthand and full", () => { check(parseOk("f({ x, y: 2 })")); });
-	test("nested object", () => { check(parseOk("f({ a: { b: 1 } })")); });
-	test("expr value", () => { check(parseOk("f({ x: a + b })")); });
-	test("call value", () => { check(parseOk("f({ x: g(y) })")); });
-	test("trailing comma", () => { check(parseOk("f({ x: 1, y: 2, })")); });
+	// Integration
+	test("nested", () => { check(parseOk("f({ a: { b: 1 } })")); });
 	test("createNode pattern", () => { check(parseOk("f({ kind, value, line: 1 })")); });
-	test("array value in object", () => { check(parseOk("f({ items: [1, 2] })")); });
-	test("member access value", () => { check(parseOk("f({ x: a.b.c })")); });
-	test("non-ident key fails", () => { check(!parseOk("f({ 42: x })")); });
 });

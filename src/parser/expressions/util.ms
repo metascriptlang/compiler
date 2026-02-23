@@ -25,3 +25,36 @@ export function parseOk(input: string): boolean {
 	const pr = parseFn(lr.value);
 	return pr.ok;
 }
+
+export function exprKind(input: string): NodeKind {
+	const lr = lex(input);
+	if (!lr.ok) return NodeKind.NumberLiteral;
+	const pr = parseFn(lr.value);
+	if (!pr.ok) return NodeKind.NumberLiteral;
+	return pr.value.kind;
+}
+
+export function exprOp(input: string): string {
+	const lr = lex(input);
+	if (!lr.ok) return "";
+	const pr = parseFn(lr.value);
+	if (!pr.ok) return "";
+	if (pr.value.kind === NodeKind.BinaryExpr) {
+		const d = pr.value.data as { operator: string, left: Node, right: Node };
+		return d.operator;
+	}
+	if (pr.value.kind === NodeKind.UnaryExpr) {
+		const d = pr.value.data as { unaryOp: string, operand: Node };
+		return d.unaryOp;
+	}
+	return "";
+}
+
+export function binLeftKind(input: string): NodeKind {
+	const lr = lex(input);
+	if (!lr.ok) return NodeKind.NumberLiteral;
+	const pr = parseFn(lr.value);
+	if (!pr.ok) return NodeKind.NumberLiteral;
+	const d = pr.value.data as { operator: string, left: Node, right: Node };
+	return d.left.kind;
+}
