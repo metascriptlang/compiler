@@ -6,7 +6,7 @@
 
 import { Token, TokenKind } from "../lexer/token";
 import { Node, NodeKind, createNode } from "../ast/node";
-import { ParserState, createState, current, advance, isAtEnd } from "./context";
+import { ParserState, createState, current, advance, isAtEnd, skipBalanced, skipGenericParams } from "./context";
 import { lex } from "../lexer/lexer";
 import { test, check, testGroup } from "std/testing";
 
@@ -51,14 +51,7 @@ function skipTypeAtom(state: ParserState): void {
 
 	// Parenthesized type or function type: (a: T) => R
 	if (token.kind === TokenKind.LParen) {
-		advance(state);
-		let depth = 1;
-		while (!isAtEnd(state) && depth > 0) {
-			if (current(state).kind === TokenKind.LParen) { depth += 1; }
-			if (current(state).kind === TokenKind.RParen) { depth -= 1; }
-			if (depth > 0) { advance(state); }
-		}
-		if (current(state).kind === TokenKind.RParen) { advance(state); }
+		skipBalanced(state, TokenKind.LParen, TokenKind.RParen);
 		// Arrow function type: (...) => R
 		if (!isAtEnd(state) && current(state).kind === TokenKind.Arrow) {
 			advance(state);
@@ -69,30 +62,14 @@ function skipTypeAtom(state: ParserState): void {
 
 	// Object type: { x: T; y: U }
 	if (token.kind === TokenKind.LBrace) {
-		advance(state);
-		let depth = 1;
-		while (!isAtEnd(state) && depth > 0) {
-			if (current(state).kind === TokenKind.LBrace) { depth += 1; }
-			if (current(state).kind === TokenKind.RBrace) { depth -= 1; }
-			if (depth > 0) { advance(state); }
-		}
-		if (current(state).kind === TokenKind.RBrace) { advance(state); }
+		skipBalanced(state, TokenKind.LBrace, TokenKind.RBrace);
 		return;
 	}
 
 	// Named type (identifier or keyword type)
 	advance(state);
-	// Generic type arguments: Type<A, B>
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Lt) {
-		advance(state);
-		let depth = 1;
-		while (!isAtEnd(state) && depth > 0) {
-			if (current(state).kind === TokenKind.Lt) { depth += 1; }
-			if (current(state).kind === TokenKind.Gt) { depth -= 1; }
-			if (depth > 0) { advance(state); }
-		}
-		if (current(state).kind === TokenKind.Gt) { advance(state); }
-	}
+	// Generic type arguments: Type<A, B> — handles >> and >>> for nested generics
+	skipGenericParams(state);
 
 	// Array type suffix: T[] or T[][]
 	while (!isAtEnd(state) && current(state).kind === TokenKind.LBracket) {
@@ -133,6 +110,8 @@ testGroup("TypeAnnotation Generic Types", () => {
 	test("single generic", () => { check(skipsType("Array<number>")); });
 	test("two generics", () => { check(skipsType("Map<string, number>")); });
 	test("nested generics", () => { check(skipsType("Result<Array<number>, string>")); });
+	test("nested generics no space", () => { check(skipsType("Result<Array<number>>")); });
+	test("triple nested generics", () => { check(skipsType("Map<string, Result<Array<number>>>")); });
 	test("array in generic arg", () => { check(skipsType("Result<Node[], string>")); });
 	test("array in both generic args", () => { check(skipsType("Map<string[], number[]>")); });
 });

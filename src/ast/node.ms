@@ -33,6 +33,8 @@ export enum NodeKind {
 	MacroInvocation, DecoratedDecl,
 	// Other
 	DeferStmt,
+	// Extern / Macro / Quote
+	ExternDecl, MacroDecl, QuoteExpr,
 	// Program root
 	Program,
 }
@@ -106,7 +108,7 @@ export type NodeData =
 	// Declaration variants
 	| { importNames: string[], importAliases: string[], importSource: string }  // ImportDecl
 	| { exportedDecl: Node }                                       // ExportDecl
-	| { aliasName: string }                                        // TypeAliasDecl
+	| { aliasName: string, aliasIsDistinct: boolean }               // TypeAliasDecl
 	| { enumName: string, enumMembers: string[] }                  // EnumDecl
 	| { interfaceName: string, interfaceFields: string[] }         // InterfaceDecl
 	| { className: string, classExtends: string, classBody: Node[] } // ClassDecl
@@ -120,6 +122,10 @@ export type NodeData =
 	| { macroName: string, macroArgs: Node[] }                     // MacroInvocation
 	| { decorators: Node[], decoratedNode: Node }                  // DecoratedDecl
 	| { deferExpr: Node }                                          // DeferStmt
+	// Extern / Macro / Quote variants
+	| { externKind: string, externName: string }                    // ExternDecl
+	| { macroDeclName: string, macroDeclParams: string[], macroDeclBody: Node } // MacroDecl
+	| { quoteBody: Node }                                          // QuoteExpr
 	// Program root
 	| { programStmts: Node[] }                                     // Program
 

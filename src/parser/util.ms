@@ -5,6 +5,16 @@ import { Token, TokenKind } from "../lexer/token";
 import { ParserState, current, advance, isAtEnd, skipDestructurePattern } from "./context";
 import { skipTypeAnnotation } from "./typeAnnotation";
 
+// ===== Skip Optional Type Annotation =====
+// Checks for ':' and skips the following type. Used after identifiers/params.
+
+export function skipOptionalType(state: ParserState): void {
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
+		advance(state);
+		skipTypeAnnotation(state);
+	}
+}
+
 // ===== Initializer/Default Value Skip =====
 // Skips an expression value (consumed but not stored, Phase 1)
 // Tracks balanced parens, brackets, braces; stops at comma, semicolon, or unbalanced closer
@@ -47,7 +57,7 @@ export function parseParamList(state: ParserState): string[] {
 		if (current(state).kind === TokenKind.LBrace || current(state).kind === TokenKind.LBracket) {
 			skipDestructurePattern(state);
 			params.push(paramPrefix + "_destructure");
-			if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) { advance(state); skipTypeAnnotation(state); }
+			skipOptionalType(state);
 			if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
 				advance(state);
 				skipDefaultValue(state);
@@ -59,7 +69,7 @@ export function parseParamList(state: ParserState): string[] {
 		if (param.kind !== TokenKind.Ident) { break; }
 		params.push(paramPrefix + param.value);
 		advance(state);
-		if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) { advance(state); skipTypeAnnotation(state); }
+		skipOptionalType(state);
 		// Skip default value
 		if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
 			advance(state);

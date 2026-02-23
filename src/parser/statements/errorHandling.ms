@@ -4,14 +4,14 @@
 import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, NodeData, createNode } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, consumeSemicolon } from "../context";
-import { skipTypeAnnotation } from "../typeAnnotation";
+import { skipOptionalType } from "../util";
 import { callBlockParser, callExprParser, programOk } from "./util";
 import { test, check, testGroup } from "std/testing";
 
 type NodeResult = Result<Node, string>;
 
 // ===== Throw Statement =====
-// throw expr;
+// syntax: 'throw' expr ';'
 
 export function parseThrowStmt(state: ParserState): NodeResult {
 	const throwToken = current(state);
@@ -22,7 +22,7 @@ export function parseThrowStmt(state: ParserState): NodeResult {
 }
 
 // ===== Try/Catch/Finally Statement =====
-// try { ... } catch (e) { ... } finally { ... }
+// syntax: 'try' block ('catch' ('(' ID (':' type)? ')')? block)? ('finally' block)?
 
 export function parseTryCatchStmt(state: ParserState): NodeResult {
 	const tryToken = current(state);
@@ -39,10 +39,7 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 			if (current(state).kind === TokenKind.Ident) {
 				catchParam = current(state).value;
 				advance(state);
-				if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
-					advance(state);
-					skipTypeAnnotation(state);
-				}
+				skipOptionalType(state);
 			}
 			if (current(state).kind !== TokenKind.RParen) {
 				return Result.err(`Expected ')' after catch parameter at line ${current(state).line.toString()}`);

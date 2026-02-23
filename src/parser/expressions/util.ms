@@ -34,6 +34,14 @@ export function exprKind(input: string): NodeKind {
 	return pr.value.kind;
 }
 
+export function exprNode(input: string): Node {
+	const lr = lex(input);
+	if (!lr.ok) return { kind: NodeKind.NullLiteral, location: { line: 0, column: 0 }, data: { nullPlaceholder: true } };
+	const pr = parseFn(lr.value);
+	if (!pr.ok) return { kind: NodeKind.NullLiteral, location: { line: 0, column: 0 }, data: { nullPlaceholder: true } };
+	return pr.value;
+}
+
 export function exprOp(input: string): string {
 	const lr = lex(input);
 	if (!lr.ok) return "";

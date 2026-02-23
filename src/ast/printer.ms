@@ -229,8 +229,12 @@ export function printNode(node: Node, level: number): void {
 			printNode(data.exportedDecl, level + 1);
 		},
 		NodeKind.TypeAliasDecl => {
-			const data = node.data as { aliasName: string };
-			console.log(`${pad}TypeAliasDecl: ${data.aliasName}`);
+			const data = node.data as { aliasName: string, aliasIsDistinct: boolean };
+			if (data.aliasIsDistinct) {
+				console.log(`${pad}TypeAliasDecl: distinct ${data.aliasName}`);
+			} else {
+				console.log(`${pad}TypeAliasDecl: ${data.aliasName}`);
+			}
 		},
 		NodeKind.EnumDecl => {
 			const data = node.data as { enumName: string, enumMembers: string[] };
@@ -489,6 +493,20 @@ export function printNode(node: Node, level: number): void {
 			printNode(data.destrPattern, level + 2);
 			console.log(`${indent(level + 1)}Init:`);
 			printNode(data.destrInit, level + 2);
+		},
+		NodeKind.ExternDecl => {
+			const data = node.data as { externKind: string, externName: string };
+			console.log(`${pad}ExternDecl: extern ${data.externKind} ${data.externName}`);
+		},
+		NodeKind.MacroDecl => {
+			const data = node.data as { macroDeclName: string, macroDeclParams: string[], macroDeclBody: Node };
+			console.log(`${pad}MacroDecl: ${data.macroDeclName} (${data.macroDeclParams.length.toString()} params)`);
+			printNode(data.macroDeclBody, level + 1);
+		},
+		NodeKind.QuoteExpr => {
+			const data = node.data as { quoteBody: Node };
+			console.log(`${pad}QuoteExpr:`);
+			printNode(data.quoteBody, level + 1);
 		},
 		_ => {},
 	}

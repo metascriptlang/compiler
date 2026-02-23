@@ -3,19 +3,23 @@
 
 import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, NodeData, createNode } from "../../ast/node";
-import { ParserState, createState, current, advance, isAtEnd, consumeSemicolon } from "../context";
+import { ParserState, createState, current, advance, isAtEnd, consumeSemicolon, addError, synchronize } from "../context";
 import { parseExpressionFromState, registerBlockParser } from "../expressions/core";
 import { parseMatchExpr } from "../expressions/match";
 import { parseIfStmt, parseWhileStmt, parseForStmt, parseBreakStmt, parseContinueStmt, parseReturnStmt, parseDoWhileStmt, parseSwitchStmt, parseDeferStmt, parseUnreachableStmt } from "./control";
-import { parseVariableDecl, parseFunctionDecl, parseImportDecl, parseExportDecl, parseTypeAliasDecl, parseEnumDecl, parseInterfaceDecl, parseClassDecl, parseMacroInvocation } from "./declaration";
+import { parseVariableDecl, parseFunctionDecl, parseImportDecl, parseExportDecl, parseTypeAliasDecl, parseEnumDecl, parseInterfaceDecl, parseClassDecl, parseMacroInvocation, parseExternDecl, parseDistinctTypeDecl, parseMacroDecl } from "./declaration";
 import { parseThrowStmt, parseTryCatchStmt } from "./errorHandling";
-import { registerStmtBlockParser, registerStmtExprParser, registerStmtParser, registerStmtProgramParser, programOk, stmtKind, stmtCount } from "./util";
+import { registerStmtBlockParser, registerStmtExprParser, registerStmtParser, registerStmtProgramParser, registerStateProgramParser, programOk, stmtKind, stmtCount, parseErrorCount } from "./util";
 import { test, check, testGroup } from "std/testing";
 
 // Type aliases
 type NodeResult = Result<Node, string>;
 
 // ===== Statement Dispatch (match on TokenKind) =====
+// syntax: stmt = varDecl | ifStmt | whileStmt | forStmt | returnStmt | breakStmt
+//              | continueStmt | funcDecl | block | importDecl | exportDecl | typeAlias
+//              | enumDecl | interfaceDecl | classDecl | throwStmt | tryCatch
+//              | doWhile | switchStmt | deferStmt | unreachableStmt | matchStmt | exprStmt
 
 function parseStatement(state: ParserState): NodeResult {
 	const token = current(state);
@@ -44,7 +48,7 @@ function parseStatement(state: ParserState): NodeResult {
 	}
 
 	match (token.kind) {
-		TokenKind.Const | TokenKind.Let => {
+		TokenKind.Const | TokenKind.Let | TokenKind.Var => {
 			return parseVariableDecl(state);
 		},
 		TokenKind.If => {
@@ -110,6 +114,15 @@ function parseStatement(state: ParserState): NodeResult {
 		TokenKind.Unreachable => {
 			return parseUnreachableStmt(state);
 		},
+		TokenKind.Extern => {
+			return parseExternDecl(state);
+		},
+		TokenKind.Distinct => {
+			return parseDistinctTypeDecl(state);
+		},
+		TokenKind.Macro => {
+			return parseMacroDecl(state);
+		},
 		TokenKind.Match => {
 			return parseMatchStmt(state);
 		},
@@ -121,7 +134,7 @@ function parseStatement(state: ParserState): NodeResult {
 }
 
 // ===== Block Statement =====
-// { stmt1; stmt2; ... }
+// syntax: '{' stmt* '}'
 
 function parseBlockStmt(state: ParserState): NodeResult {
 	const lbrace = current(state);
@@ -136,8 +149,13 @@ function parseBlockStmt(state: ParserState): NodeResult {
 			advance(state);
 			continue;
 		}
-		const stmt = try parseStatement(state);
-		stmts.push(stmt);
+		const result = parseStatement(state);
+		if (result.ok) {
+			stmts.push(result.value);
+		} else {
+			addError(state, result.error);
+			synchronize(state);
+		}
 	}
 
 	if (current(state).kind === TokenKind.RBrace) {
@@ -148,7 +166,7 @@ function parseBlockStmt(state: ParserState): NodeResult {
 }
 
 // ===== Expression Statement =====
-// expr;
+// syntax: expr ';'
 
 function parseExprStmt(state: ParserState): NodeResult {
 	const token = current(state);
@@ -181,8 +199,7 @@ function parseMatchStmt(state: ParserState): NodeResult {
 
 // ===== Top-Level Program Parser =====
 
-export function parseProgram(tokens: Token[]): NodeResult {
-	const state = createState(tokens);
+export function parseProgramFromState(state: ParserState): NodeResult {
 	const startToken = current(state);
 	const stmts: Node[] = [];
 	while (!isAtEnd(state)) {
@@ -190,11 +207,25 @@ export function parseProgram(tokens: Token[]): NodeResult {
 			advance(state);
 			continue;
 		}
-		const stmt = try parseStatement(state);
-		stmts.push(stmt);
+		const result = parseStatement(state);
+		if (result.ok) {
+			stmts.push(result.value);
+		} else {
+			addError(state, result.error);
+			synchronize(state);
+		}
 	}
 
+	// If errors were collected, return the first one
+	if (state.errors.length > 0) {
+		return Result.err(state.errors[0]);
+	}
 	return Result.ok(createNode(NodeKind.Program, { programStmts: stmts }, startToken));
+}
+
+export function parseProgram(tokens: Token[]): NodeResult {
+	const state = createState(tokens);
+	return parseProgramFromState(state);
 }
 
 // ===== Register callbacks for sub-modules =====
@@ -204,6 +235,7 @@ registerStmtBlockParser((state: ParserState): NodeResult => { return parseBlockS
 registerStmtExprParser((state: ParserState): NodeResult => { return parseExpressionFromState(state); });
 registerStmtParser((state: ParserState): NodeResult => { return parseStatement(state); });
 registerStmtProgramParser((tokens: Token[]): NodeResult => { return parseProgram(tokens); });
+registerStateProgramParser((state: ParserState): NodeResult => { return parseProgramFromState(state); });
 
 // Also register with expressions for arrow function block bodies
 registerBlockParser((state: ParserState): NodeResult => { return parseBlockStmt(state); });
@@ -276,6 +308,9 @@ testGroup("Stmt Smoke", () => {
 	test("regex in var", () => { check(programOk("const re = /[a-z]+/gi;")); });
 	// Nested control flow
 	test("nested control", () => { check(programOk("function f() { if (x) { while (y) { z; } } }")); });
+	// Nested generic type annotations (>> and >>> splitting)
+	test("nested generic type", () => { check(programOk("const x: Result<Array<number>> = f();")); });
+	test("triple nested generic", () => { check(programOk("function f(x: Map<string, Result<Array<T>>>): void {}")); });
 });
 
 // --- Self-Parsing: realistic code patterns from the compiler itself ---
@@ -311,4 +346,23 @@ testGroup("Self-Parsing Smoke", () => {
 	test("defer in function", () => {
 		check(programOk("function cleanup() { const fd = open(); defer close(fd); process(fd); }"));
 	});
+});
+
+// --- Error Recovery: parser continues past errors and collects multiple ---
+
+testGroup("Error Recovery", () => {
+	// Single error still detected
+	test("single error detected", () => { check(parseErrorCount("const = 1;") === 1); });
+	// Two independent errors both collected
+	test("two errors collected", () => { check(parseErrorCount("const = 1; const = 2;") === 2); });
+	// Valid code has zero errors
+	test("valid has no errors", () => { check(parseErrorCount("const x = 1; const y = 2;") === 0); });
+	// Error between valid stmts: errors collected, not just first
+	test("error between valid", () => { check(parseErrorCount("const x = 1; const = bad; const y = 2;") >= 1); });
+	// Block-level recovery: error inside block doesn't prevent function parse
+	test("block recovery", () => { check(parseErrorCount("function f() { const = 1; const y = 2; }") === 1); });
+	// Panic mode: cascading errors from same malformed stmt count as 1
+	test("panic suppression", () => { check(parseErrorCount("const ;") === 1); });
+	// Sync at keyword boundary: error then valid if-stmt
+	test("sync at keyword", () => { check(parseErrorCount("const = 1 if (x) {}") === 1); });
 });

@@ -8,10 +8,12 @@ import { Token, TokenKind } from "../lexer/token";
 export interface ParserState {
 	tokens: Token[];
 	position: number;
+	errors: string[];
+	panicMode: boolean;
 }
 
 export function createState(tokens: Token[]): ParserState {
-	return { tokens, position: 0 };
+	return { tokens, position: 0, errors: [], panicMode: false };
 }
 
 export function current(state: ParserState): Token {
@@ -49,6 +51,48 @@ export function expect(state: ParserState, kind: TokenKind, msg: string): Result
 	return Result.ok(token);
 }
 
+// ===== Error Recovery =====
+// Pattern: ~/projects/metascript/src/parser/parser.zig reportError + synchronize
+
+// Record a parse error. In panic mode, suppress cascading errors.
+export function addError(state: ParserState, msg: string): void {
+	if (!state.panicMode) {
+		state.errors.push(msg);
+		state.panicMode = true;
+	}
+}
+
+// Skip tokens until a statement boundary to resume parsing after an error.
+// Pattern: Zig parser.zig:7504-7546
+export function synchronize(state: ParserState): void {
+	state.panicMode = false;
+	while (!isAtEnd(state)) {
+		const kind = current(state).kind;
+		// Statement-starting keywords — resume here
+		if (kind === TokenKind.Const || kind === TokenKind.Let ||
+			kind === TokenKind.If || kind === TokenKind.While ||
+			kind === TokenKind.For || kind === TokenKind.Function ||
+			kind === TokenKind.Return || kind === TokenKind.Import ||
+			kind === TokenKind.Export || kind === TokenKind.Class ||
+			kind === TokenKind.Enum || kind === TokenKind.Interface ||
+			kind === TokenKind.Type || kind === TokenKind.Throw ||
+			kind === TokenKind.Try || kind === TokenKind.Match ||
+			kind === TokenKind.Switch || kind === TokenKind.Defer ||
+			kind === TokenKind.At || kind === TokenKind.Break ||
+			kind === TokenKind.Continue || kind === TokenKind.Async) {
+			return;
+		}
+		// Closing brace — consume it and resume
+		if (kind === TokenKind.RBrace) {
+			advance(state);
+			return;
+		}
+		advance(state);
+		// Past semicolon — resume on next token
+		if (kind === TokenKind.Semicolon) { return; }
+	}
+}
+
 // ===== Common Helpers =====
 
 // Consume optional trailing semicolon
@@ -58,7 +102,23 @@ export function consumeSemicolon(state: ParserState): void {
 	}
 }
 
+// Skip balanced delimiter pairs: parens, braces, brackets.
+// Consumes the opening token and everything through the matching close.
+// Caller must ensure current token is `open` before calling.
+export function skipBalanced(state: ParserState, open: TokenKind, close: TokenKind): void {
+	if (isAtEnd(state) || current(state).kind !== open) { return; }
+	advance(state);
+	let depth = 1;
+	while (!isAtEnd(state) && depth > 0) {
+		if (current(state).kind === open) { depth += 1; }
+		if (current(state).kind === close) { depth -= 1; }
+		if (depth > 0) { advance(state); }
+	}
+	if (!isAtEnd(state) && current(state).kind === close) { advance(state); }
+}
+
 // Skip balanced <...> generic type parameters (e.g., class Foo<T> or extends Bar<T>)
+// Handles >> and >>> for nested generics like Result<Array<number>>
 export function skipGenericParams(state: ParserState): void {
 	if (isAtEnd(state) || current(state).kind !== TokenKind.Lt) { return; }
 	advance(state);
@@ -66,9 +126,12 @@ export function skipGenericParams(state: ParserState): void {
 	while (!isAtEnd(state) && depth > 0) {
 		if (current(state).kind === TokenKind.Lt) { depth += 1; }
 		if (current(state).kind === TokenKind.Gt) { depth -= 1; }
+		if (current(state).kind === TokenKind.GtGt) { depth -= 2; }
+		if (current(state).kind === TokenKind.GtGtGt) { depth -= 3; }
 		advance(state);
 	}
 }
+
 
 // ===== Pattern Helpers =====
 

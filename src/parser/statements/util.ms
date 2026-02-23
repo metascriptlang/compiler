@@ -4,7 +4,7 @@
 
 import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, Expression } from "../../ast/node";
-import { ParserState } from "../context";
+import { ParserState, createState } from "../context";
 import { lex } from "../../lexer/lexer";
 
 type NodeResult = Result<Node, string>;
@@ -30,6 +30,12 @@ let programParserFn: ProgramParserFn = (tokens: Token[]): NodeResult => {
 	return Result.err("Program parser not registered");
 };
 
+type StateProgramParserFn = (state: ParserState) => NodeResult;
+
+let stateProgramParserFn: StateProgramParserFn = (state: ParserState): NodeResult => {
+	return Result.err("State program parser not registered");
+};
+
 export function registerStmtBlockParser(fn: BlockParserFn): void {
 	blockParserFn = fn;
 }
@@ -44,6 +50,10 @@ export function registerStmtParser(fn: StmtParserFn): void {
 
 export function registerStmtProgramParser(fn: ProgramParserFn): void {
 	programParserFn = fn;
+}
+
+export function registerStateProgramParser(fn: StateProgramParserFn): void {
+	stateProgramParserFn = fn;
 }
 
 export function callBlockParser(state: ParserState): NodeResult {
@@ -75,6 +85,15 @@ export function stmtKind(input: string): NodeKind {
 	return stmts.programStmts[0].kind;
 }
 
+export function stmtAt(input: string, index: number): Node {
+	const lr = lex(input);
+	if (!lr.ok) return { kind: NodeKind.ExprStmt, location: { line: 0, column: 0 }, data: { expr: { kind: NodeKind.NullLiteral, location: { line: 0, column: 0 }, data: { nullPlaceholder: true } } } };
+	const pr = programParserFn(lr.value);
+	if (!pr.ok) return { kind: NodeKind.ExprStmt, location: { line: 0, column: 0 }, data: { expr: { kind: NodeKind.NullLiteral, location: { line: 0, column: 0 }, data: { nullPlaceholder: true } } } };
+	const stmts = pr.value.data as { programStmts: Node[] };
+	return stmts.programStmts[index];
+}
+
 export function stmtCount(input: string): number {
 	const lr = lex(input);
 	if (!lr.ok) return -1;
@@ -82,4 +101,13 @@ export function stmtCount(input: string): number {
 	if (!pr.ok) return -1;
 	const stmts = pr.value.data as { programStmts: Node[] };
 	return stmts.programStmts.length;
+}
+
+// Returns the number of parse errors collected during error recovery.
+export function parseErrorCount(input: string): number {
+	const lr = lex(input);
+	if (!lr.ok) return -1;
+	const state = createState(lr.value);
+	stateProgramParserFn(state);
+	return state.errors.length;
 }

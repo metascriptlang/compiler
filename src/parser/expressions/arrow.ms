@@ -4,8 +4,7 @@
 import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, NodeData, Expression, createNode } from "../../ast/node";
 import { ParserState, createState, current, advance, isAtEnd, peek } from "../context";
-import { skipTypeAnnotation } from "../typeAnnotation";
-import { parseParamList } from "../util";
+import { parseParamList, skipOptionalType } from "../util";
 import { lex } from "../../lexer/lexer";
 import { parseOk } from "./util";
 import { test, check, testGroup } from "std/testing";
@@ -13,6 +12,8 @@ import { test, check, testGroup } from "std/testing";
 type ExprResult = Result<Expression, string>;
 type ExprParser = (state: ParserState, minPrec: number) => ExprResult;
 type BlockParser = (state: ParserState) => ExprResult;
+
+// syntax: arrow = ('async')? ('(' params ')' | ID) (':' type)? '=>' (expr | block)
 
 // ===== Arrow Function Lookahead =====
 
@@ -62,10 +63,7 @@ export function parseArrowFunction(
 	const params = parseParamList(state);
 
 	// Optional return type annotation: (): string => ...
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
-		advance(state);
-		skipTypeAnnotation(state);
-	}
+	skipOptionalType(state);
 
 	if (isAtEnd(state) || current(state).kind !== TokenKind.Arrow) {
 		return Result.err(`Expected '=>' in arrow function at line ${current(state).line.toString()}`);

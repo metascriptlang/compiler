@@ -4,14 +4,14 @@
 import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, NodeData, createNode } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, skipDestructurePattern, consumeSemicolon } from "../context";
-import { skipTypeAnnotation } from "../typeAnnotation";
+import { skipOptionalType } from "../util";
 import { callBlockParser, callExprParser, callStmtParser, programOk, stmtKind } from "./util";
 import { test, check, testGroup } from "std/testing";
 
 type NodeResult = Result<Node, string>;
 
 // ===== If Statement =====
-// if (condition) { ... } [else [if (...)] { ... }]
+// syntax: 'if' '(' expr ')' block ('else' (ifStmt | block))?
 
 export function parseIfStmt(state: ParserState): NodeResult {
 	const ifToken = current(state);
@@ -54,7 +54,7 @@ export function parseIfStmt(state: ParserState): NodeResult {
 }
 
 // ===== While Statement =====
-// while (condition) { ... }
+// syntax: 'while' '(' expr ')' block
 
 export function parseWhileStmt(state: ParserState): NodeResult {
 	const whileToken = current(state);
@@ -77,8 +77,9 @@ export function parseWhileStmt(state: ParserState): NodeResult {
 }
 
 // ===== For Statement =====
-// for (let i = 0; i < n; i++) { ... }
-// for (const item of items) { ... }
+// syntax: for '(' (let|const) ID '=' expr ';' expr ';' expr ')' block
+//       | for '(' (let|const) ID 'of' expr ')' block
+//       | for '(' (let|const) ID 'in' expr ')' block
 
 export function parseForStmt(state: ParserState): NodeResult {
 	const forToken = current(state);
@@ -177,10 +178,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 
 		advance(state);
 		// Optional type annotation
-		if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
-			advance(state);
-			skipTypeAnnotation(state);
-		}
+		skipOptionalType(state);
 
 		if (current(state).kind !== TokenKind.Assign) {
 			return Result.err(`Expected '=' in for init at line ${current(state).line.toString()}`);
@@ -246,6 +244,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 }
 
 // ===== Break / Continue =====
+// syntax: 'break' ';' | 'continue' ';'
 
 export function parseBreakStmt(state: ParserState): NodeResult {
 	const token = current(state);
@@ -262,7 +261,7 @@ export function parseContinueStmt(state: ParserState): NodeResult {
 }
 
 // ===== Return Statement =====
-// return expr;
+// syntax: 'return' expr? ';'
 
 export function parseReturnStmt(state: ParserState): NodeResult {
 	const retToken = current(state);

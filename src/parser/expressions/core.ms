@@ -5,14 +5,14 @@ import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, NodeData, Expression, createNode } from "../../ast/node";
 import { ParserState, createState, current, advance, isAtEnd } from "../context";
 import { skipTypeAnnotation } from "../typeAnnotation";
-import { parseParamList } from "../util";
+import { parseParamList, skipOptionalType } from "../util";
 import { getPrecedence, isBinaryOperator, isRightAssociative } from "./precedence";
 import { parseMatchExpr } from "./match";
 import { isArrowFunction, parseArrowFunction } from "./arrow";
 import { parseObjectLiteral } from "./object";
 import { parseExprList, parseCallExpr } from "./call";
 import { parseTemplateLiteral } from "./template";
-import { registerParseExpr, parseOk, exprKind, exprOp, binLeftKind } from "./util";
+import { registerParseExpr, parseOk, exprKind, exprNode, exprOp, binLeftKind } from "./util";
 import { test, check, testGroup } from "std/testing";
 
 type ExprResult = Result<Expression, string>;
@@ -47,6 +47,8 @@ export function parseExpressionFromState(state: ParserState): ExprResult {
 // Wrap in lambda to ensure proper closure calling convention.
 registerParseExpr((tokens: Token[]): ExprResult => { return parseExpression(tokens); });
 
+// syntax: expr = primary (postfix)* (binop primary (postfix)*)* ('?' expr ':' expr)?
+// syntax: postfix = '(' args ')' | '.' ID | '?.' ID | '[' expr ']' | '++' | '--' | 'as' type
 function parseExprWithPrec(state: ParserState, minPrec: number): ExprResult {
 	let left = try parsePrimary(state);
 
@@ -161,6 +163,7 @@ function parseExprWithPrec(state: ParserState, minPrec: number): ExprResult {
 }
 
 // ===== Function Expression Helper =====
+// syntax: funcExpr = 'function' ID? '(' params ')' (':' type)? block
 // Shared by async function expr and regular function expr paths
 
 function parseFuncExprBody(state: ParserState, token: Token, feFlags: string): ExprResult {
@@ -171,15 +174,18 @@ function parseFuncExprBody(state: ParserState, token: Token, feFlags: string): E
 	// Parse params
 	const feParams = parseParamList(state);
 	// Skip optional return type
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
-		advance(state);
-		skipTypeAnnotation(state);
-	}
+	skipOptionalType(state);
 	const feBody = try blockParser(state);
 	return Result.ok(createNode(NodeKind.FunctionExpr, { funcExprParams: feParams, funcExprBody: feBody, funcExprFlags: feFlags }, token));
 }
 
 // ===== Primary Expressions =====
+// syntax: primary = NUMBER | STRING | BOOL | NULL | BIGINT | REGEX | IDENT | 'this' | 'super'
+//                 | '(' expr ')' | '[' exprList ']' | '{' objectBody '}'
+//                 | 'function' ... | 'try' expr | 'match' (...) | 'new' expr
+//                 | 'await' expr | 'yield' expr? | 'move' expr | 'out' expr
+//                 | ('typeof' | 'void' | 'delete') expr | ('++' | '--') expr
+//                 | ('-' | '!' | '~') expr | 'async' (funcExpr | arrow) | '...' expr
 
 function parsePrimary(state: ParserState): ExprResult {
 	const token = current(state);
@@ -376,6 +382,13 @@ function parsePrimary(state: ParserState): ExprResult {
 		return parseFuncExprBody(state, token, feFlags);
 	}
 
+	// Quote expression: quote { ... }
+	if (token.kind === TokenKind.Quote) {
+		advance(state);
+		const quoteBlock = try blockParser(state);
+		return Result.ok(createNode(NodeKind.QuoteExpr, { quoteBody: quoteBlock }, token));
+	}
+
 	// Spread: ...expr
 	if (token.kind === TokenKind.DotDotDot) {
 		advance(state);
@@ -435,6 +448,17 @@ testGroup("Expr Structure", () => {
 	test("move kind", () => { check(exprKind("move x") === NodeKind.MoveExpr); });
 	test("yield kind", () => { check(exprKind("yield x") === NodeKind.YieldExpr); });
 	test("out kind", () => { check(exprKind("out x") === NodeKind.OutExpr); });
+	test("quote kind", () => { check(exprKind("quote { const x = 1; }") === NodeKind.QuoteExpr); });
+	test("quote body is block", () => {
+		const d = exprNode("quote { const x = 1; }").data as { quoteBody: Node };
+		check(d.quoteBody.kind === NodeKind.BlockStmt);
+	});
+	test("quote multi ok", () => { check(parseOk("quote { const x = 1; const y = 2; }")); });
+	test("quote multi stmt", () => {
+		const d = exprNode("quote { const x = 1; const y = 2; }").data as { quoteBody: Node };
+		const block = d.quoteBody.data as { statements: Node[] };
+		check(block.statements.length === 2);
+	});
 	test("func expr kind", () => { check(exprKind("function() {}") === NodeKind.FunctionExpr); });
 	test("generator func expr", () => { check(exprKind("function*() {}") === NodeKind.FunctionExpr); });
 	test("async func expr", () => { check(exprKind("async function() {}") === NodeKind.FunctionExpr); });
