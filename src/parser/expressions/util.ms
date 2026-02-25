@@ -5,7 +5,7 @@
 // parseFn is always set by the time tests actually run.
 
 import { Token, TokenKind } from "../../lexer/token";
-import { Node, NodeKind, Expression, createNode } from "../../ast/node";
+import { Node, NodeKind, Expression, createNode, BinaryExprData, UnaryExprData, UpdateExprData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd } from "../context";
 import { lex } from "../../lexer/lexer";
 
@@ -49,15 +49,15 @@ export function exprOp(input: string): string {
 	const pr = parseFn(lr.value);
 	if (!pr.ok) return "";
 	if (pr.value.kind === NodeKind.BinaryExpr) {
-		const d = pr.value.data as { operator: string, left: Node, right: Node };
+		const d = pr.value.data as BinaryExprData;
 		return d.operator;
 	}
 	if (pr.value.kind === NodeKind.UnaryExpr) {
-		const d = pr.value.data as { unaryOp: string, operand: Node };
+		const d = pr.value.data as UnaryExprData;
 		return d.unaryOp;
 	}
 	if (pr.value.kind === NodeKind.UpdateExpr) {
-		const d = pr.value.data as { updateOp: string, updateArg: Node, isPrefix: boolean };
+		const d = pr.value.data as UpdateExprData;
 		return d.updateOp;
 	}
 	return "";
@@ -108,6 +108,6 @@ export function binLeftKind(input: string): NodeKind {
 	if (!lr.ok) return NodeKind.NumberLiteral;
 	const pr = parseFn(lr.value);
 	if (!pr.ok) return NodeKind.NumberLiteral;
-	const d = pr.value.data as { operator: string, left: Node, right: Node };
+	const d = pr.value.data as BinaryExprData;
 	return d.left.kind;
 }

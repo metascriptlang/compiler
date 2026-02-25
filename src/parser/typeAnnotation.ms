@@ -5,7 +5,7 @@
 // Handles: simple names, T[], Result<T, E>, A | B, { x: T }, (a: T) => R, T?
 
 import { Token, TokenKind } from "../lexer/token";
-import { Node, NodeKind, createNode } from "../ast/node";
+import { Node, NodeKind, createNode, TypeAnnotationData } from "../ast/node";
 import { ParserState, createState, current, advance, isAtEnd, skipBalanced, skipGenericParams } from "./context";
 import { lex } from "../lexer/lexer";
 import { test, check, testGroup } from "std/testing";
@@ -169,7 +169,7 @@ function annotationText(typeStr: string): string {
 	const state = createState(lr.value);
 	const result = parseTypeAnnotation(state);
 	if (!result.ok) return "";
-	const data = result.value.data as { annotationType: string };
+	const data = result.value.data as TypeAnnotationData;
 	return data.annotationType;
 }
 

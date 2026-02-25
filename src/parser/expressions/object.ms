@@ -2,7 +2,7 @@
 // Extracted from expression.ms with callback injection
 
 import { Token, TokenKind } from "../../lexer/token";
-import { Node, NodeKind, NodeData, Expression, createNode } from "../../ast/node";
+import { Node, NodeKind, NodeData, Expression, createNode, ObjectLiteralData } from "../../ast/node";
 import { ParserState, createState, current, advance, isAtEnd } from "../context";
 import { lex } from "../../lexer/lexer";
 import { parseOk, mockExpr } from "./util";
@@ -98,7 +98,7 @@ function objKeyCount(input: string): number {
 	const state = createState(lr.value);
 	const result = parseObjectLiteral(state, mockExpr);
 	if (!result.ok) return -1;
-	const data = result.value.data as { properties: Node[], keys: string[] };
+	const data = result.value.data as ObjectLiteralData;
 	return data.keys.length;
 }
 

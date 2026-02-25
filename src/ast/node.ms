@@ -65,8 +65,8 @@ export type NodeData =
 	| { array: Node, index: Node }                                 // ArrayAccess
 	| { properties: Node[], keys: string[] }                       // ObjectLiteral
 	| { elements: Node[] }                                         // ArrayLiteral
-	| { arrowParams: string[], arrowBody: Node, arrowFlags: string } // ArrowFunction
-	| { funcExprParams: string[], funcExprBody: Node, funcExprFlags: string } // FunctionExpr
+	| { arrowParams: string[], arrowParamTypes: string[], arrowBody: Node, arrowFlags: string, arrowReturnType: string } // ArrowFunction
+	| { funcExprParams: string[], funcExprParamTypes: string[], funcExprBody: Node, funcExprFlags: string, funcExprReturnType: string } // FunctionExpr
 	| { asExpr: Node }                                             // TypeAssertion
 	| { ternaryCondition: Node, ternaryConsequent: Node, ternaryAlternate: Node } // ConditionalExpr
 	| { spreadArg: Node }                                          // SpreadExpr
@@ -96,7 +96,7 @@ export type NodeData =
 	| { argument: Node }                                           // ReturnStmt
 	| { breakLabel: string }                                       // BreakStmt
 	| { continueLabel: string }                                    // ContinueStmt
-	| { fnName: string, params: string[], fnBody: Node, fnFlags: string } // FunctionDecl
+	| { fnName: string, params: string[], fnParamTypes: string[], fnBody: Node, fnFlags: string, fnReturnType: string } // FunctionDecl
 	| { doBody: Node, doCondition: Node }                          // DoWhileStmt
 	| { switchDisc: Node, switchCases: Node[] }                    // SwitchStmt
 	| { caseTests: Node[], caseStmts: Node[], isDefault: boolean } // SwitchCase
@@ -107,11 +107,11 @@ export type NodeData =
 	| { exportedDecl: Node }                                       // ExportDecl
 	| { aliasName: string, aliasIsDistinct: boolean }               // TypeAliasDecl
 	| { enumName: string, enumMembers: string[] }                  // EnumDecl
-	| { interfaceName: string, interfaceFields: string[] }         // InterfaceDecl
+	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[] } // InterfaceDecl
 	| { className: string, classExtends: string, classBody: Node[] } // ClassDecl
 	| { propName: string, propIsStatic: boolean }                 // PropertyDecl
-	| { methodName: string, methodParams: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string } // MethodDecl
-	| { ctorParams: string[], ctorBody: Node }                     // ConstructorDecl
+	| { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodReturnType: string } // MethodDecl
+	| { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node } // ConstructorDecl
 	// Error handling variants
 	| { throwArg: Node }                                           // ThrowStmt
 	| { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node } // TryCatchStmt
@@ -136,6 +136,86 @@ export interface Node {
 }
 
 export type Expression = Node;
+
+// ===== Node Data Shape Types =====
+// Named aliases for as-casts. Single source of truth for each NodeKind's data shape.
+
+// Literals
+export type NumberLiteralData = { value: number };
+export type StringLiteralData = { value: string };
+export type BooleanLiteralData = { boolValue: boolean };
+export type RegexLiteralData = { regexPattern: string };
+export type BigIntLiteralData = { bigintValue: string };
+
+// Expressions
+export type IdentifierData = { name: string };
+export type BinaryExprData = { operator: string, left: Node, right: Node };
+export type UnaryExprData = { unaryOp: string, operand: Node };
+export type UpdateExprData = { updateOp: string, updateArg: Node, isPrefix: boolean };
+export type CallExprData = { callee: Node, arguments: Node[] };
+export type MemberExprData = { object: Node, property: string };
+export type ArrayAccessData = { array: Node, index: Node };
+export type ObjectLiteralData = { properties: Node[], keys: string[] };
+export type ArrayLiteralData = { elements: Node[] };
+export type ArrowFunctionData = { arrowParams: string[], arrowParamTypes: string[], arrowBody: Node, arrowFlags: string, arrowReturnType: string };
+export type FunctionExprData = { funcExprParams: string[], funcExprParamTypes: string[], funcExprBody: Node, funcExprFlags: string, funcExprReturnType: string };
+export type TypeAssertionData = { asExpr: Node };
+export type ConditionalExprData = { ternaryCondition: Node, ternaryConsequent: Node, ternaryAlternate: Node };
+export type SpreadExprData = { spreadArg: Node };
+export type NewExprData = { newCallee: Node, newArguments: Node[] };
+export type TryExprData = { tryArg: Node, hasCatch: boolean, catchVal: Node };
+export type MatchExprData = { matchDisc: Node, matchCases: Node[] };
+export type MatchCaseData = { casePatterns: Node[], caseBody: Node };
+export type AwaitExprData = { awaitArg: Node };
+export type YieldExprData = { yieldArg: Node, isDelegate: boolean };
+export type MoveExprData = { moveArg: Node };
+export type OutExprData = { outArg: Node };
+export type QuoteExprData = { quoteBody: Node };
+
+// Patterns
+export type ArrayPatternData = { patternElements: Node[], hasRestElement: boolean };
+export type ObjectPatternData = { patternProps: Node[], hasRestProp: boolean };
+export type ObjectPatternPropData = { propKey: string, propAlias: Node };
+export type DestructuringDeclData = { destrPattern: Node, destrInit: Node, destrIsConst: boolean };
+
+// Statements
+export type ExprStmtData = { expr: Node };
+export type ReturnStmtData = { argument: Node };
+export type ThrowStmtData = { throwArg: Node };
+export type DeferStmtData = { deferExpr: Node };
+export type VariableDeclData = { declName: string, initializer: Node, isConst: boolean };
+export type IfStmtData = { condition: Node, consequent: Node, alternate: Node };
+export type WhileStmtData = { whileCondition: Node, whileBody: Node };
+export type ForStmtData = { forInit: Node, forCondition: Node, forUpdate: Node, forBody: Node };
+export type ForOfStmtData = { forOfBinding: string, forOfIsConst: boolean, forOfIterable: Node, forOfBody: Node };
+export type ForInStmtData = { forInBinding: string, forInIsConst: boolean, forInObject: Node, forInBody: Node };
+export type DoWhileStmtData = { doBody: Node, doCondition: Node };
+export type BlockStmtData = { statements: Node[] };
+export type FunctionDeclData = { fnName: string, params: string[], fnParamTypes: string[], fnBody: Node, fnFlags: string, fnReturnType: string };
+export type SwitchStmtData = { switchDisc: Node, switchCases: Node[] };
+export type SwitchCaseData = { caseTests: Node[], caseStmts: Node[], isDefault: boolean };
+export type MatchStmtData = { matchStmtDisc: Node, matchStmtCases: Node[] };
+export type TryCatchStmtData = { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node };
+export type UnreachableStmtData = { unreachableMsg: string };
+
+// Other
+export type TypeAnnotationData = { annotationType: string };
+export type MacroInvocationData = { macroName: string, macroArgs: Node[] };
+
+// Declarations
+export type ImportDeclData = { importNames: string[], importAliases: string[], importSource: string };
+export type ExportDeclData = { exportedDecl: Node };
+export type TypeAliasDeclData = { aliasName: string, aliasIsDistinct: boolean };
+export type EnumDeclData = { enumName: string, enumMembers: string[] };
+export type InterfaceDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[] };
+export type ClassDeclData = { className: string, classExtends: string, classBody: Node[] };
+export type PropertyDeclData = { propName: string, propIsStatic: boolean };
+export type MethodDeclData = { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodReturnType: string };
+export type ConstructorDeclData = { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node };
+export type ExternDeclData = { externKind: string, externName: string };
+export type MacroDeclData = { macroDeclName: string, macroDeclParams: string[], macroDeclBody: Node };
+export type DecoratedDeclData = { decorators: Node[], decoratedNode: Node };
+export type ProgramData = { programStmts: Node[] };
 
 // ===== Node Constructor =====
 

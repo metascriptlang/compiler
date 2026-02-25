@@ -2,9 +2,9 @@
 // Extracted from expression.ms with callback injection
 
 import { Token, TokenKind } from "../../lexer/token";
-import { Node, NodeKind, NodeData, Expression, createNode } from "../../ast/node";
+import { Node, NodeKind, NodeData, Expression, createNode, ArrowFunctionData } from "../../ast/node";
 import { ParserState, createState, current, advance, isAtEnd, peek } from "../context";
-import { parseParamList, skipOptionalType } from "../util";
+import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, skipOptionalType } from "../util";
 import { lex } from "../../lexer/lexer";
 import { parseOk, mockExpr } from "./util";
 import { test, check, testGroup } from "std/testing";
@@ -60,10 +60,12 @@ export function parseArrowFunction(
 	flags: string
 ): ExprResult {
 	const arrowToken = current(state);
-	const params = parseParamList(state);
+	const raw = parseParamList(state);
+	const arrowParams = extractParamNames(raw);
+	const arrowParamTypes = extractParamTypes(raw);
 
 	// Optional return type annotation: (): string => ...
-	skipOptionalType(state);
+	const arrowReturnType = captureOptionalType(state);
 
 	if (isAtEnd(state) || current(state).kind !== TokenKind.Arrow) {
 		return Result.err(`Expected '=>' in arrow function at line ${current(state).line.toString()}`);
@@ -74,17 +76,21 @@ export function parseArrowFunction(
 	if (!isAtEnd(state) && current(state).kind === TokenKind.LBrace) {
 		const body = try blockParser(state);
 		return Result.ok(createNode(NodeKind.ArrowFunction, {
-			arrowParams: params,
+			arrowParams,
+			arrowParamTypes,
 			arrowBody: body,
 			arrowFlags: flags,
+			arrowReturnType,
 		}, arrowToken));
 	}
 
 	const body = try exprParser(state, 0);
 	return Result.ok(createNode(NodeKind.ArrowFunction, {
-		arrowParams: params,
+		arrowParams,
+		arrowParamTypes,
 		arrowBody: body,
 		arrowFlags: flags,
+		arrowReturnType,
 	}, arrowToken));
 }
 
@@ -115,7 +121,7 @@ function arrowParamCount(input: string): number {
 	const state = createState(lr.value);
 	const result = parseArrowFunction(state, mockExpr, mockBlock, "");
 	if (!result.ok) return -1;
-	const data = result.value.data as { arrowParams: string[], arrowBody: Node, arrowFlags: string };
+	const data = result.value.data as ArrowFunctionData;
 	return data.arrowParams.length;
 }
 

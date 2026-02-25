@@ -1,4 +1,4 @@
-import { Node, NodeKind } from "../ast/node";
+import { Node, NodeKind, ProgramData, FunctionDeclData, ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, MacroDeclData, ImportDeclData, ExportDeclData } from "../ast/node";
 import { Type, TypeKind, unknownType, createObject, createEnum } from "./types";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, defineSymbol, makeSymbol } from "./symbol";
 import { CheckerContext, addError } from "./context";
@@ -7,7 +7,7 @@ import { test, check, testGroup } from "std/testing";
 // ===== Top-Level Collector =====
 
 export function collectTopLevel(ctx: CheckerContext, program: Node): void {
-	const stmts = program.data as { programStmts: Node[] };
+	const stmts = program.data as ProgramData;
 	for (const stmt of stmts.programStmts) {
 		collectDecl(ctx, stmt);
 	}
@@ -41,32 +41,32 @@ export function defineOrError(ctx: CheckerContext, sym: Symbol, node: Node): voi
 // ===== Individual Collectors =====
 
 function collectFunction(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { fnName: string, params: string[], fnBody: Node, fnFlags: string };
+	const d = node.data as FunctionDeclData;
 	defineOrError(ctx, makeSymbol(d.fnName, SymbolKind.Function, unknownType(), false), node);
 }
 
 function collectClass(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { className: string, classExtends: string, classBody: Node[] };
+	const d = node.data as ClassDeclData;
 	defineOrError(ctx, makeSymbol(d.className, SymbolKind.Class, createObject(d.className, [], [], false), false), node);
 }
 
 function collectInterface(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { interfaceName: string, interfaceFields: string[] };
+	const d = node.data as InterfaceDeclData;
 	defineOrError(ctx, makeSymbol(d.interfaceName, SymbolKind.Interface, createObject(d.interfaceName, [], [], true), false), node);
 }
 
 function collectEnumDecl(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { enumName: string, enumMembers: string[] };
+	const d = node.data as EnumDeclData;
 	defineOrError(ctx, makeSymbol(d.enumName, SymbolKind.Enum, createEnum(d.enumName, d.enumMembers), false), node);
 }
 
 function collectTypeAlias(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { aliasName: string, aliasIsDistinct: boolean };
+	const d = node.data as TypeAliasDeclData;
 	defineOrError(ctx, makeSymbol(d.aliasName, SymbolKind.TypeAlias, unknownType(), false), node);
 }
 
 function collectExtern(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { externKind: string, externName: string };
+	const d = node.data as ExternDeclData;
 	const kind = match (d.externKind) {
 		"function" => SymbolKind.Function,
 		"class" => SymbolKind.Class,
@@ -79,25 +79,25 @@ function collectExtern(ctx: CheckerContext, node: Node): void {
 }
 
 function collectMacro(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { macroDeclName: string, macroDeclParams: string[], macroDeclBody: Node };
+	const d = node.data as MacroDeclData;
 	defineOrError(ctx, makeSymbol(d.macroDeclName, SymbolKind.Function, unknownType(), false), node);
 }
 
 function collectImport(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { importNames: string[], importAliases: string[], importSource: string };
+	const d = node.data as ImportDeclData;
 	for (const name of d.importNames) {
 		defineOrError(ctx, makeSymbol(name, SymbolKind.Variable, unknownType(), false), node);
 	}
 }
 
 function collectExport(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { exportedDecl: Node };
+	const d = node.data as ExportDeclData;
 	collectDecl(ctx, d.exportedDecl);
 }
 
 // ===== Tests =====
 
-import { parseSource } from "../parser/statements/util";
+import { parseSource } from "../parser/statements/validation";
 import { lookupSymbol } from "./symbol";
 import { createContext } from "./context";
 

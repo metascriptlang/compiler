@@ -27,6 +27,24 @@ Lex source into tokens, parse tokens into AST, recursively load all imported mod
 
 Expand macros first (Hermes VM), then run 3-pass type checking.
 
+                           ast/node.ms
+                          (Node, NodeKind)
+                               │
+                ┌──────────────┼──────────────┐
+                ▼              ▼              ▼
+           types.ms       symbol.ms      context.ms
+                │              │              │
+                └──────┬───────┴──────┬───────┘
+                       ▼              ▼
+                collectPass.ms  resolvePass.ms
+                       │              │
+                       └──────┬───────┘
+                              ▼
+                        checkPass.ms ◄── compat.ms
+                              │
+                              ▼
+                          index.ms (hub + integration tests)
+
 ### 2a: Macro Expansion
 
 Hermes VM evaluates `@derive`, `@comptime`, custom `macro!()` invocations. Replaces `macro_invocation` nodes with generated AST subtrees.

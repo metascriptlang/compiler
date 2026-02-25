@@ -2,7 +2,7 @@
 // Extracted from expression.ms with callback injection
 
 import { Token, TokenKind } from "../../lexer/token";
-import { Node, NodeKind, NodeData, Expression, createNode } from "../../ast/node";
+import { Node, NodeKind, NodeData, Expression, createNode, CallExprData } from "../../ast/node";
 import { ParserState, createState, current, advance, isAtEnd } from "../context";
 import { lex } from "../../lexer/lexer";
 import { parseOk, mockExpr } from "./util";
@@ -50,7 +50,7 @@ function callArgCount(input: string): number {
 	advance(state);
 	const result = parseCallExpr(state, callee, mockExpr);
 	if (!result.ok) return -1;
-	const data = result.value.data as { callee: Node, arguments: Node[] };
+	const data = result.value.data as CallExprData;
 	return data.arguments.length;
 }
 

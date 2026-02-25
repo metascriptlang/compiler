@@ -6,7 +6,11 @@
 //   A. Parsing type annotation strings into Type objects
 //   B. Building proper Function/Object types for collected declarations
 
-import { Node, NodeKind } from "../ast/node";
+import {
+	Node, NodeKind,
+	ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData,
+	ClassDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData,
+} from "../ast/node";
 import {
 	Type, TypeKind,
 	unknownType, numberType, stringType, booleanType, voidType, nullType, neverType,
@@ -90,10 +94,27 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 	};
 }
 
+// ===== Resolve Helpers =====
+
+// Resolve an array of type annotation strings into Type[], matching names 1:1
+function resolveTypeStrings(typeStrs: string[], count: number, ctx: CheckerContext): Type[] {
+	const types: Type[] = [];
+	let i = 0;
+	while (i < count) {
+		if (i < typeStrs.length && typeStrs[i] !== "") {
+			types.push(resolveAnnotation(typeStrs[i], ctx));
+		} else {
+			types.push(unknownType());
+		}
+		i += 1;
+	}
+	return types;
+}
+
 // ===== B. Resolve Declarations (Pass 2) =====
 
 export function resolveDeclarations(ctx: CheckerContext, program: Node): void {
-	const stmts = program.data as { programStmts: Node[] };
+	const stmts = program.data as ProgramData;
 	for (const stmt of stmts.programStmts) {
 		resolveDecl(ctx, stmt);
 	}
@@ -105,7 +126,7 @@ function resolveDecl(ctx: CheckerContext, node: Node): void {
 		NodeKind.InterfaceDecl => resolveInterface(ctx, node),
 		NodeKind.ClassDecl => resolveClass(ctx, node),
 		NodeKind.ExportDecl => {
-			const d = node.data as { exportedDecl: Node };
+			const d = node.data as ExportDeclData;
 			resolveDecl(ctx, d.exportedDecl);
 		},
 		_ => {},
@@ -113,68 +134,60 @@ function resolveDecl(ctx: CheckerContext, node: Node): void {
 }
 
 function resolveFunction(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { fnName: string, params: string[], fnBody: Node, fnFlags: string };
+	const d = node.data as FunctionDeclData;
 	const sym = lookupSymbol(ctx.table, d.fnName);
 	if (sym === null) return;
 
-	// Build proper Function type with param names and unknown types
-	const paramTypes: Type[] = [];
-	for (const param of d.params) {
-		paramTypes.push(unknownType());
-	}
-	sym.symbolType = createFunction(paramTypes, d.params, unknownType());
+	const paramTypes = resolveTypeStrings(d.fnParamTypes, d.params.length, ctx);
+	const returnType = (d.fnReturnType !== "") ? resolveAnnotation(d.fnReturnType, ctx) : unknownType();
+	sym.symbolType = createFunction(paramTypes, d.params, returnType);
 }
 
 function resolveInterface(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { interfaceName: string, interfaceFields: string[] };
+	const d = node.data as InterfaceDeclData;
 	const sym = lookupSymbol(ctx.table, d.interfaceName);
 	if (sym === null) return;
 
-	// Build Object type with field names and unknown types
-	const fieldTypes: Type[] = [];
-	for (const field of d.interfaceFields) {
-		fieldTypes.push(unknownType());
-	}
+	const fieldTypes = resolveTypeStrings(d.interfaceFieldTypes, d.interfaceFields.length, ctx);
 	sym.symbolType = createObject(d.interfaceName, d.interfaceFields, fieldTypes, true);
 }
 
 function resolveClass(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { className: string, classExtends: string, classBody: Node[] };
+	const d = node.data as ClassDeclData;
 	const sym = lookupSymbol(ctx.table, d.className);
 	if (sym === null) return;
 
-	// Collect method and property names + types from class body
+	// Build Object type — collect member names and types into local arrays
 	const memberNames: string[] = [];
 	const memberTypes: Type[] = [];
 	for (const member of d.classBody) {
-		match (member.kind) {
-			NodeKind.MethodDecl => {
-				const md = member.data as { methodName: string, methodParams: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string };
-				memberNames.push(md.methodName);
-				const mParamTypes: Type[] = [];
-				for (const p of md.methodParams) {
-					mParamTypes.push(unknownType());
-				}
-				memberTypes.push(createFunction(mParamTypes, md.methodParams, unknownType()));
-			},
-			NodeKind.PropertyDecl => {
-				const pd = member.data as { propName: string, propIsStatic: boolean };
-				memberNames.push(pd.propName);
-				memberTypes.push(unknownType());
-			},
-			NodeKind.ConstructorDecl => {
-				memberNames.push("constructor");
-				const cd = member.data as { ctorParams: string[], ctorBody: Node };
-				const cParamTypes: Type[] = [];
-				for (const p of cd.ctorParams) {
-					cParamTypes.push(unknownType());
-				}
-				memberTypes.push(createFunction(cParamTypes, cd.ctorParams, voidType()));
-			},
-			_ => {},
-		};
+		resolveClassMember(ctx, memberNames, memberTypes, member);
 	}
 	sym.symbolType = createObject(d.className, memberNames, memberTypes, false);
+}
+
+function resolveClassMember(ctx: CheckerContext, memberNames: string[], memberTypes: Type[], member: Node): void {
+	match (member.kind) {
+		NodeKind.MethodDecl => {
+			const md = member.data as MethodDeclData;
+			memberNames.push(md.methodName);
+			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx);
+			const returnType = (md.methodReturnType !== "") ? resolveAnnotation(md.methodReturnType, ctx) : unknownType();
+			memberTypes.push(createFunction(paramTypes, md.methodParams, returnType));
+		},
+		NodeKind.PropertyDecl => {
+			const pd = member.data as PropertyDeclData;
+			memberNames.push(pd.propName);
+			memberTypes.push(unknownType());
+		},
+		NodeKind.ConstructorDecl => {
+			memberNames.push("constructor");
+			const cd = member.data as ConstructorDeclData;
+			const paramTypes = resolveTypeStrings(cd.ctorParamTypes, cd.ctorParams.length, ctx);
+			memberTypes.push(createFunction(paramTypes, cd.ctorParams, voidType()));
+		},
+		_ => {},
+	};
 }
 
 // ===== Tests =====
@@ -258,7 +271,7 @@ testGroup("Resolve Declarations", () => {
 			data: { programStmts: [{
 				kind: NodeKind.FunctionDecl,
 				location: { line: 0, column: 0 },
-				data: { fnName: "foo", params: ["a", "b"], fnBody: { kind: NodeKind.BlockStmt, location: { line: 0, column: 0 }, data: { statements: [] } }, fnFlags: "" },
+				data: { fnName: "foo", params: ["a", "b"], fnParamTypes: ["", ""], fnBody: { kind: NodeKind.BlockStmt, location: { line: 0, column: 0 }, data: { statements: [] } }, fnFlags: "", fnReturnType: "" },
 			}] },
 		};
 		resolveDeclarations(ctx, node);
@@ -268,5 +281,25 @@ testGroup("Resolve Declarations", () => {
 		check(sym.symbolType.typeChildren.length === 2);
 		check(sym.symbolType.typeNames[0] === "a");
 		check(sym.symbolType.typeNames[1] === "b");
+	});
+	test("function with typed params", () => {
+		const ctx = createContext();
+		defineSymbol(ctx.table, makeSymbol("add", SymbolKind.Function, unknownType(), false));
+		const node: Node = {
+			kind: NodeKind.Program,
+			location: { line: 0, column: 0 },
+			data: { programStmts: [{
+				kind: NodeKind.FunctionDecl,
+				location: { line: 0, column: 0 },
+				data: { fnName: "add", params: ["a", "b"], fnParamTypes: ["number", "number"], fnBody: { kind: NodeKind.BlockStmt, location: { line: 0, column: 0 }, data: { statements: [] } }, fnFlags: "", fnReturnType: "number" },
+			}] },
+		};
+		resolveDeclarations(ctx, node);
+		const sym = lookupSymbol(ctx.table, "add");
+		check(sym !== null);
+		check(sym.symbolType.kind === TypeKind.Function);
+		check(sym.symbolType.typeChildren[0].kind === TypeKind.Number);
+		check(sym.symbolType.typeChildren[1].kind === TypeKind.Number);
+		check(sym.symbolType.typeReturn.kind === TypeKind.Number);
 	});
 });

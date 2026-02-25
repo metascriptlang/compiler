@@ -2,14 +2,15 @@
 // Pattern: ~/projects/metascript/src/parser/parser.zig parseStatement()
 
 import { Token, TokenKind } from "../../lexer/token";
-import { Node, NodeKind, NodeData, createNode } from "../../ast/node";
+import { Node, NodeKind, NodeData, createNode, MatchExprData } from "../../ast/node";
 import { ParserState, createState, current, advance, isAtEnd, consumeSemicolon, addError, synchronize } from "../context";
 import { parseExpressionFromState, registerBlockParser } from "../expressions/core";
 import { parseMatchExpr } from "../expressions/match";
 import { parseIfStmt, parseWhileStmt, parseForStmt, parseBreakStmt, parseContinueStmt, parseReturnStmt, parseDoWhileStmt, parseSwitchStmt, parseDeferStmt, parseUnreachableStmt } from "./control";
 import { parseVariableDecl, parseFunctionDecl, parseImportDecl, parseExportDecl, parseTypeAliasDecl, parseEnumDecl, parseInterfaceDecl, parseClassDecl, parseMacroInvocation, parseExternDecl, parseDistinctTypeDecl, parseMacroDecl } from "./declaration";
 import { parseThrowStmt, parseTryCatchStmt } from "./errorHandling";
-import { registerStmtBlockParser, registerStmtExprParser, registerStmtParser, registerStmtProgramParser, registerStateProgramParser, programOk, stmtKind, stmtCount, parseErrorCount } from "./util";
+import { registerStmtBlockParser, registerStmtExprParser, registerStmtParser, registerStmtProgramParser, registerStateProgramParser } from "./callbacks";
+import { programOk, stmtKind, stmtCount, parseErrorCount } from "./validation";
 import { test, check, testGroup } from "std/testing";
 
 // Type aliases
@@ -134,7 +135,7 @@ function matchStmtBlockParser(s: ParserState): NodeResult {
 function parseMatchStmt(state: ParserState): NodeResult {
 	const matchToken = current(state);
 	const matchNode = try parseMatchExpr(state, matchStmtExprParser, matchStmtBlockParser);
-	const data = matchNode.data as { matchDisc: Node, matchCases: Node[] };
+	const data = matchNode.data as MatchExprData;
 	return Result.ok(createNode(NodeKind.MatchStmt, {
 		matchStmtDisc: data.matchDisc,
 		matchStmtCases: data.matchCases,

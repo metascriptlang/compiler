@@ -5,7 +5,8 @@ import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, NodeData, createNode } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, skipDestructurePattern, consumeSemicolon } from "../context";
 import { skipOptionalType } from "../util";
-import { callBlockParser, callExprParser, callStmtParser, programOk, stmtKind } from "./util";
+import { callBlockParser, callExprParser, callStmtParser } from "./callbacks";
+import { programOk, stmtKind } from "./validation";
 import { test, check, testGroup } from "std/testing";
 
 type NodeResult = Result<Node, string>;

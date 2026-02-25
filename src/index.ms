@@ -9,8 +9,8 @@
 import { formatToken } from "./lexer/token";
 import { lex } from "./lexer/index";
 import { parseExpression } from "./parser/index";
-import { parseSource } from "./parser/statements/util";
-import { Node } from "./ast/node";
+import { parseSource } from "./parser/statements/validation";
+import { Node, ProgramData } from "./ast/node";
 import { printNode } from "./ast/index";
 import { formatError, unexpectedToken } from "./diagnostics/diagnostics";
 import { checkProgram } from "./checker/index";
@@ -54,7 +54,7 @@ function testParseProgram(input: string): void {
 		return;
 	}
 	const program = parseResult.value;
-	const programData = program.data as { programStmts: Node[] };
+	const programData = program.data as ProgramData;
 	for (const stmt of programData.programStmts) {
 		printNode(stmt, 1);
 	}

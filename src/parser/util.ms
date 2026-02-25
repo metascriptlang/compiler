@@ -15,6 +15,25 @@ export function skipOptionalType(state: ParserState): void {
 	}
 }
 
+// ===== Capture Optional Type Annotation =====
+// Like skipOptionalType but returns the type text string ("" if no annotation).
+
+export function captureOptionalType(state: ParserState): string {
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
+		advance(state);
+		const typeStart = state.position;
+		skipTypeAnnotation(state);
+		const typeEnd = state.position;
+		let typeText = "";
+		for (let i = typeStart; i < typeEnd; i++) {
+			if (i > typeStart) { typeText += " "; }
+			typeText += state.tokens[i].value;
+		}
+		return typeText;
+	}
+	return "";
+}
+
 // ===== Initializer/Default Value Skip =====
 // Skips an expression value (consumed but not stored, Phase 1)
 // Tracks balanced parens, brackets, braces; stops at comma, semicolon, or unbalanced closer
@@ -37,7 +56,10 @@ export function skipDefaultValue(state: ParserState): void {
 
 // ===== Parameter List Parser =====
 // Parses (param1, param2: Type, ...rest) including destructured params
-// Consumes opening '(' through closing ')'. Returns param name strings.
+// Consumes opening '(' through closing ')'.
+// Returns INTERLEAVED array: ["name", "typeAnnotation", "name", "typeAnnotation", ...]
+// typeAnnotation is "" if no annotation present.
+// Use extractParamNames/extractParamTypes to split the result.
 // Handles: rest params, destructured params, type annotations, default values,
 // constructor modifiers (public/private/protected/readonly)
 
@@ -57,7 +79,7 @@ export function parseParamList(state: ParserState): string[] {
 		if (current(state).kind === TokenKind.LBrace || current(state).kind === TokenKind.LBracket) {
 			skipDestructurePattern(state);
 			params.push(paramPrefix + "_destructure");
-			skipOptionalType(state);
+			params.push(captureOptionalType(state));
 			if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
 				advance(state);
 				skipDefaultValue(state);
@@ -69,7 +91,7 @@ export function parseParamList(state: ParserState): string[] {
 		if (param.kind !== TokenKind.Ident) { break; }
 		params.push(paramPrefix + param.value);
 		advance(state);
-		skipOptionalType(state);
+		params.push(captureOptionalType(state));
 		// Skip default value
 		if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
 			advance(state);
@@ -79,4 +101,20 @@ export function parseParamList(state: ParserState): string[] {
 	}
 	if (current(state).kind === TokenKind.RParen) { advance(state); }
 	return params;
+}
+
+// ===== Param List Extraction Helpers =====
+
+export function extractParamNames(raw: string[]): string[] {
+	const names: string[] = [];
+	let i = 0;
+	while (i < raw.length) { names.push(raw[i]); i += 2; }
+	return names;
+}
+
+export function extractParamTypes(raw: string[]): string[] {
+	const types: string[] = [];
+	let i = 1;
+	while (i < raw.length) { types.push(raw[i]); i += 2; }
+	return types;
 }

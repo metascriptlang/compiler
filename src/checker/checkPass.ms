@@ -1,8 +1,23 @@
-import { Node, NodeKind } from "../ast/node";
+import {
+	Node, NodeKind,
+	ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData,
+	IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData,
+	CallExprData, MemberExprData, ArrayAccessData,
+	ObjectLiteralData, ArrayLiteralData, ConditionalExprData,
+	TypeAssertionData, SpreadExprData, NewExprData, TryExprData,
+	AwaitExprData, YieldExprData, MoveExprData, OutExprData,
+	VariableDeclData, FunctionDeclData, ClassDeclData,
+	MethodDeclData, ConstructorDeclData, ExportDeclData,
+	IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData,
+	DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData,
+	SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, MatchExprData,
+	ArrowFunctionData, FunctionExprData, DestructuringDeclData, ProgramData,
+} from "../ast/node";
 import {
 	Type, TypeKind,
 	unknownType, numberType, stringType, booleanType,
 	voidType, nullType, errorType,
+	createArray, createFunction,
 	isNumeric, isStringType, isCallable, getReturnType, getElementType, getProperty,
 } from "./types";
 import {
@@ -35,22 +50,22 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 		NodeKind.BreakStmt => { if (!ctx.inLoop) { addError(ctx, "break outside of loop"); } },
 		NodeKind.ContinueStmt => { if (!ctx.inLoop) { addError(ctx, "continue outside of loop"); } },
 		NodeKind.ExprStmt => {
-			const d = node.data as { expr: Node };
+			const d = node.data as ExprStmtData;
 			checkExpr(ctx, d.expr);
 		},
 		NodeKind.ThrowStmt => {
-			const d = node.data as { throwArg: Node };
+			const d = node.data as ThrowStmtData;
 			checkExpr(ctx, d.throwArg);
 		},
 		NodeKind.TryCatchStmt => checkTryCatch(ctx, node),
 		NodeKind.SwitchStmt => checkSwitchStmt(ctx, node),
 		NodeKind.MatchStmt => checkMatchStmt(ctx, node),
 		NodeKind.DeferStmt => {
-			const d = node.data as { deferExpr: Node };
+			const d = node.data as DeferStmtData;
 			checkExpr(ctx, d.deferExpr);
 		},
 		NodeKind.DecoratedDecl => {
-			const d = node.data as { decorators: Node[], decoratedNode: Node };
+			const d = node.data as DecoratedDeclData;
 			checkStmt(ctx, d.decoratedNode);
 		},
 		NodeKind.DestructuringDecl => checkDestructuringDecl(ctx, node),
@@ -68,7 +83,7 @@ export function checkExpr(ctx: CheckerContext, node: Node): Type {
 		NodeKind.NullLiteral => nullType(),
 		NodeKind.RegexLiteral | NodeKind.QuoteExpr => unknownType(),
 		NodeKind.Identifier => {
-			const d = node.data as { name: string };
+			const d = node.data as IdentifierData;
 			const sym = lookupSymbol(ctx.table, d.name);
 			if (sym === null) {
 				addError(ctx, `Undefined variable '${d.name}'`);
@@ -77,23 +92,23 @@ export function checkExpr(ctx: CheckerContext, node: Node): Type {
 			sym.symbolType;
 		},
 		NodeKind.BinaryExpr => {
-			const d = node.data as { operator: string, left: Node, right: Node };
+			const d = node.data as BinaryExprData;
 			const leftType = checkExpr(ctx, d.left);
 			const rightType = checkExpr(ctx, d.right);
 			inferBinaryOp(d.operator, leftType, rightType);
 		},
 		NodeKind.UnaryExpr => {
-			const d = node.data as { unaryOp: string, operand: Node };
+			const d = node.data as UnaryExprData;
 			checkExpr(ctx, d.operand);
 			inferUnaryOp(d.unaryOp);
 		},
 		NodeKind.UpdateExpr => {
-			const d = node.data as { updateOp: string, updateArg: Node, isPrefix: boolean };
+			const d = node.data as UpdateExprData;
 			checkExpr(ctx, d.updateArg);
-			unknownType();
+			numberType();
 		},
 		NodeKind.CallExpr => {
-			const d = node.data as { callee: Node, arguments: Node[] };
+			const d = node.data as CallExprData;
 			const calleeType = checkExpr(ctx, d.callee);
 			for (const arg of d.arguments) {
 				checkExpr(ctx, arg);
@@ -101,80 +116,88 @@ export function checkExpr(ctx: CheckerContext, node: Node): Type {
 			getReturnType(calleeType);
 		},
 		NodeKind.MemberExpr => {
-			const d = node.data as { object: Node, property: string };
+			const d = node.data as MemberExprData;
 			const objType = checkExpr(ctx, d.object);
 			getProperty(objType, d.property);
 		},
 		NodeKind.ArrayAccess => {
-			const d = node.data as { array: Node, index: Node };
+			const d = node.data as ArrayAccessData;
 			const arrType = checkExpr(ctx, d.array);
 			checkExpr(ctx, d.index);
 			getElementType(arrType);
 		},
 		NodeKind.ObjectLiteral => {
-			const d = node.data as { properties: Node[], keys: string[] };
+			const d = node.data as ObjectLiteralData;
 			for (const prop of d.properties) {
 				checkExpr(ctx, prop);
 			}
 			unknownType();
 		},
 		NodeKind.ArrayLiteral => {
-			const d = node.data as { elements: Node[] };
-			for (const el of d.elements) {
-				checkExpr(ctx, el);
+			const d = node.data as ArrayLiteralData;
+			if (d.elements.length === 0) {
+				createArray(unknownType());
+			} else {
+				const elemType = checkExpr(ctx, d.elements[0]);
+				let i = 1;
+				while (i < d.elements.length) { checkExpr(ctx, d.elements[i]); i += 1; }
+				createArray(elemType);
 			}
-			unknownType();
 		},
-		NodeKind.ArrowFunction => { checkArrowFunction(ctx, node); unknownType(); },
-		NodeKind.FunctionExpr => { checkFunctionExpr(ctx, node); unknownType(); },
+		NodeKind.ArrowFunction => checkArrowExpr(ctx, node),
+		NodeKind.FunctionExpr => checkFuncExpr(ctx, node),
 		NodeKind.ConditionalExpr => {
-			const d = node.data as { ternaryCondition: Node, ternaryConsequent: Node, ternaryAlternate: Node };
+			const d = node.data as ConditionalExprData;
 			checkExpr(ctx, d.ternaryCondition);
-			checkExpr(ctx, d.ternaryConsequent);
+			const consequentType = checkExpr(ctx, d.ternaryConsequent);
 			checkExpr(ctx, d.ternaryAlternate);
-			unknownType();
+			consequentType;
 		},
 		NodeKind.TypeAssertion => {
-			const d = node.data as { asExpr: Node };
+			const d = node.data as TypeAssertionData;
 			checkExpr(ctx, d.asExpr);
 			unknownType();
 		},
 		NodeKind.SpreadExpr => {
-			const d = node.data as { spreadArg: Node };
+			const d = node.data as SpreadExprData;
 			checkExpr(ctx, d.spreadArg);
 			unknownType();
 		},
 		NodeKind.NewExpr => {
-			const d = node.data as { newCallee: Node, newArguments: Node[] };
-			checkExpr(ctx, d.newCallee);
+			const d = node.data as NewExprData;
+			const calleeType = checkExpr(ctx, d.newCallee);
 			for (const arg of d.newArguments) {
 				checkExpr(ctx, arg);
 			}
-			unknownType();
+			if (calleeType.kind === TypeKind.Object) {
+				calleeType;
+			} else {
+				unknownType();
+			}
 		},
 		NodeKind.TryExpr => {
-			const d = node.data as { tryArg: Node, hasCatch: boolean, catchVal: Node };
+			const d = node.data as TryExprData;
 			checkExpr(ctx, d.tryArg);
 			unknownType();
 		},
 		NodeKind.MatchExpr => { checkMatchExpr(ctx, node); unknownType(); },
 		NodeKind.AwaitExpr => {
-			const d = node.data as { awaitArg: Node };
+			const d = node.data as AwaitExprData;
 			checkExpr(ctx, d.awaitArg);
 			unknownType();
 		},
 		NodeKind.YieldExpr => {
-			const d = node.data as { yieldArg: Node, isDelegate: boolean };
+			const d = node.data as YieldExprData;
 			checkExpr(ctx, d.yieldArg);
 			unknownType();
 		},
 		NodeKind.MoveExpr => {
-			const d = node.data as { moveArg: Node };
+			const d = node.data as MoveExprData;
 			checkExpr(ctx, d.moveArg);
 			unknownType();
 		},
 		NodeKind.OutExpr => {
-			const d = node.data as { outArg: Node };
+			const d = node.data as OutExprData;
 			checkExpr(ctx, d.outArg);
 			unknownType();
 		},
@@ -218,26 +241,19 @@ function inferUnaryOp(op: string): Type {
 // ===== Statement Helpers =====
 
 function checkVariableDecl(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { declName: string, initializer: Node, isConst: boolean };
+	const d = node.data as VariableDeclData;
 	const initType = checkExpr(ctx, d.initializer);
 	defineOrError(ctx, makeSymbol(d.declName, SymbolKind.Variable, initType, !d.isConst), node);
 }
 
 function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { fnName: string, params: string[], fnBody: Node, fnFlags: string };
-	const savedFunction = ctx.currentFunction;
-	ctx.currentFunction = lookupSymbol(ctx.table, d.fnName);
-	openScope(ctx.table, ScopeKind.Function);
-	for (const param of d.params) {
-		defineSymbol(ctx.table, makeSymbol(param, SymbolKind.Parameter, unknownType(), false));
-	}
-	checkStmt(ctx, d.fnBody);
-	closeScope(ctx.table);
-	ctx.currentFunction = savedFunction;
+	const d = node.data as FunctionDeclData;
+	const sym = lookupSymbol(ctx.table, d.fnName);
+	checkFunctionBody(ctx, sym, d.params, d.fnBody);
 }
 
 function checkClassDecl(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { className: string, classExtends: string, classBody: Node[] };
+	const d = node.data as ClassDeclData;
 	openScope(ctx.table, ScopeKind.Class);
 	for (const member of d.classBody) {
 		checkClassMember(ctx, member);
@@ -249,35 +265,19 @@ function checkClassMember(ctx: CheckerContext, node: Node): void {
 	match (node.kind) {
 		NodeKind.PropertyDecl => {},
 		NodeKind.MethodDecl => {
-			const d = node.data as { methodName: string, methodParams: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string };
-			const savedFunction = ctx.currentFunction;
-			ctx.currentFunction = makeSymbol(d.methodName, SymbolKind.Method, unknownType(), false);
-			openScope(ctx.table, ScopeKind.Function);
-			for (const param of d.methodParams) {
-				defineSymbol(ctx.table, makeSymbol(param, SymbolKind.Parameter, unknownType(), false));
-			}
-			checkStmt(ctx, d.methodBody);
-			closeScope(ctx.table);
-			ctx.currentFunction = savedFunction;
+			const d = node.data as MethodDeclData;
+			checkFunctionBody(ctx, makeSymbol(d.methodName, SymbolKind.Method, unknownType(), false), d.methodParams, d.methodBody);
 		},
 		NodeKind.ConstructorDecl => {
-			const d = node.data as { ctorParams: string[], ctorBody: Node };
-			const savedFunction = ctx.currentFunction;
-			ctx.currentFunction = makeSymbol("constructor", SymbolKind.Method, unknownType(), false);
-			openScope(ctx.table, ScopeKind.Function);
-			for (const param of d.ctorParams) {
-				defineSymbol(ctx.table, makeSymbol(param, SymbolKind.Parameter, unknownType(), false));
-			}
-			checkStmt(ctx, d.ctorBody);
-			closeScope(ctx.table);
-			ctx.currentFunction = savedFunction;
+			const d = node.data as ConstructorDeclData;
+			checkFunctionBody(ctx, makeSymbol("constructor", SymbolKind.Method, unknownType(), false), d.ctorParams, d.ctorBody);
 		},
 		_ => {},
 	};
 }
 
 function checkExportDecl(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { exportedDecl: Node };
+	const d = node.data as ExportDeclData;
 	if (d.exportedDecl.kind === NodeKind.VariableDecl) {
 		checkVariableDecl(ctx, d.exportedDecl);
 		return;
@@ -286,7 +286,7 @@ function checkExportDecl(ctx: CheckerContext, node: Node): void {
 }
 
 function checkIfStmt(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { condition: Node, consequent: Node, alternate: Node };
+	const d = node.data as IfStmtData;
 	checkExpr(ctx, d.condition);
 	checkStmt(ctx, d.consequent);
 	if (d.alternate !== null && d.alternate.kind !== NodeKind.NullLiteral) {
@@ -295,66 +295,51 @@ function checkIfStmt(ctx: CheckerContext, node: Node): void {
 }
 
 function checkWhileStmt(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { whileCondition: Node, whileBody: Node };
+	const d = node.data as WhileStmtData;
 	checkExpr(ctx, d.whileCondition);
-	const savedLoop = ctx.inLoop;
-	ctx.inLoop = true;
-	openScope(ctx.table, ScopeKind.Loop);
+	const saved = enterLoopScope(ctx);
 	checkStmt(ctx, d.whileBody);
-	closeScope(ctx.table);
-	ctx.inLoop = savedLoop;
+	exitLoopScope(ctx, saved);
 }
 
 function checkForStmt(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { forInit: Node, forCondition: Node, forUpdate: Node, forBody: Node };
-	const savedLoop = ctx.inLoop;
-	ctx.inLoop = true;
-	openScope(ctx.table, ScopeKind.Loop);
+	const d = node.data as ForStmtData;
+	const saved = enterLoopScope(ctx);
 	checkStmt(ctx, d.forInit);
 	checkExpr(ctx, d.forCondition);
 	checkExpr(ctx, d.forUpdate);
 	checkStmt(ctx, d.forBody);
-	closeScope(ctx.table);
-	ctx.inLoop = savedLoop;
+	exitLoopScope(ctx, saved);
 }
 
 function checkForOfStmt(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { forOfBinding: string, forOfIsConst: boolean, forOfIterable: Node, forOfBody: Node };
+	const d = node.data as ForOfStmtData;
 	checkExpr(ctx, d.forOfIterable);
-	const savedLoop = ctx.inLoop;
-	ctx.inLoop = true;
-	openScope(ctx.table, ScopeKind.Loop);
+	const saved = enterLoopScope(ctx);
 	defineSymbol(ctx.table, makeSymbol(d.forOfBinding, SymbolKind.Variable, unknownType(), !d.forOfIsConst));
 	checkStmt(ctx, d.forOfBody);
-	closeScope(ctx.table);
-	ctx.inLoop = savedLoop;
+	exitLoopScope(ctx, saved);
 }
 
 function checkForInStmt(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { forInBinding: string, forInIsConst: boolean, forInObject: Node, forInBody: Node };
+	const d = node.data as ForInStmtData;
 	checkExpr(ctx, d.forInObject);
-	const savedLoop = ctx.inLoop;
-	ctx.inLoop = true;
-	openScope(ctx.table, ScopeKind.Loop);
+	const saved = enterLoopScope(ctx);
 	defineSymbol(ctx.table, makeSymbol(d.forInBinding, SymbolKind.Variable, unknownType(), !d.forInIsConst));
 	checkStmt(ctx, d.forInBody);
-	closeScope(ctx.table);
-	ctx.inLoop = savedLoop;
+	exitLoopScope(ctx, saved);
 }
 
 function checkDoWhileStmt(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { doBody: Node, doCondition: Node };
-	const savedLoop = ctx.inLoop;
-	ctx.inLoop = true;
-	openScope(ctx.table, ScopeKind.Loop);
+	const d = node.data as DoWhileStmtData;
+	const saved = enterLoopScope(ctx);
 	checkStmt(ctx, d.doBody);
-	closeScope(ctx.table);
-	ctx.inLoop = savedLoop;
+	exitLoopScope(ctx, saved);
 	checkExpr(ctx, d.doCondition);
 }
 
 function checkBlock(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { statements: Node[] };
+	const d = node.data as BlockStmtData;
 	openScope(ctx.table, ScopeKind.Block);
 	for (const stmt of d.statements) {
 		checkStmt(ctx, stmt);
@@ -363,7 +348,7 @@ function checkBlock(ctx: CheckerContext, node: Node): void {
 }
 
 function checkReturnStmt(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { argument: Node };
+	const d = node.data as ReturnStmtData;
 	if (ctx.currentFunction === null) {
 		addError(ctx, "return outside of function");
 	}
@@ -373,7 +358,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 }
 
 function checkTryCatch(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node };
+	const d = node.data as TryCatchStmtData;
 	checkStmt(ctx, d.tryBody);
 	if (d.catchBody !== null) {
 		openScope(ctx.table, ScopeKind.Block);
@@ -389,72 +374,96 @@ function checkTryCatch(ctx: CheckerContext, node: Node): void {
 }
 
 function checkSwitchStmt(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { switchDisc: Node, switchCases: Node[] };
+	const d = node.data as SwitchStmtData;
 	checkExpr(ctx, d.switchDisc);
 	for (const c of d.switchCases) {
-		const cd = c.data as { caseTests: Node[], caseStmts: Node[], isDefault: boolean };
+		const cd = c.data as SwitchCaseData;
 		for (const t of cd.caseTests) { checkExpr(ctx, t); }
 		for (const s of cd.caseStmts) { checkStmt(ctx, s); }
 	}
 }
 
 function checkMatchStmt(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { matchStmtDisc: Node, matchStmtCases: Node[] };
+	const d = node.data as MatchStmtData;
 	checkExpr(ctx, d.matchStmtDisc);
 	for (const c of d.matchStmtCases) {
-		const cd = c.data as { casePatterns: Node[], caseBody: Node };
+		const cd = c.data as MatchCaseData;
 		checkStmt(ctx, cd.caseBody);
 	}
 }
 
 function checkMatchExpr(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { matchDisc: Node, matchCases: Node[] };
+	const d = node.data as MatchExprData;
 	checkExpr(ctx, d.matchDisc);
 	for (const c of d.matchCases) {
-		const cd = c.data as { casePatterns: Node[], caseBody: Node };
+		const cd = c.data as MatchCaseData;
 		checkExpr(ctx, cd.caseBody);
 	}
 }
 
-function checkArrowFunction(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { arrowParams: string[], arrowBody: Node, arrowFlags: string };
+// Unified function body checker — works for FunctionDecl (resolved param types),
+// MethodDecl, ConstructorDecl, ArrowFunction, and FunctionExpr.
+function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], body: Node): void {
 	const savedFunction = ctx.currentFunction;
-	ctx.currentFunction = makeSymbol("(arrow)", SymbolKind.Function, unknownType(), false);
+	ctx.currentFunction = sym;
 	openScope(ctx.table, ScopeKind.Function);
-	for (const param of d.arrowParams) {
-		defineSymbol(ctx.table, makeSymbol(param, SymbolKind.Parameter, unknownType(), false));
+	let i = 0;
+	for (const param of params) {
+		let paramType = unknownType();
+		if (sym !== null && sym.symbolType.kind === TypeKind.Function && i < sym.symbolType.typeChildren.length) {
+			paramType = sym.symbolType.typeChildren[i];
+		}
+		defineSymbol(ctx.table, makeSymbol(param, SymbolKind.Parameter, paramType, false));
+		i += 1;
 	}
-	if (d.arrowBody.kind === NodeKind.BlockStmt) {
-		checkStmt(ctx, d.arrowBody);
+	if (body.kind === NodeKind.BlockStmt) {
+		checkStmt(ctx, body);
 	} else {
-		checkExpr(ctx, d.arrowBody);
+		checkExpr(ctx, body);
 	}
 	closeScope(ctx.table);
 	ctx.currentFunction = savedFunction;
 }
 
-function checkFunctionExpr(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { funcExprParams: string[], funcExprBody: Node, funcExprFlags: string };
-	const savedFunction = ctx.currentFunction;
-	ctx.currentFunction = makeSymbol("(anon)", SymbolKind.Function, unknownType(), false);
-	openScope(ctx.table, ScopeKind.Function);
-	for (const param of d.funcExprParams) {
-		defineSymbol(ctx.table, makeSymbol(param, SymbolKind.Parameter, unknownType(), false));
-	}
-	checkStmt(ctx, d.funcExprBody);
+function enterLoopScope(ctx: CheckerContext): boolean {
+	const saved = ctx.inLoop;
+	ctx.inLoop = true;
+	openScope(ctx.table, ScopeKind.Loop);
+	return saved;
+}
+
+function exitLoopScope(ctx: CheckerContext, saved: boolean): void {
 	closeScope(ctx.table);
-	ctx.currentFunction = savedFunction;
+	ctx.inLoop = saved;
+}
+
+function checkArrowExpr(ctx: CheckerContext, node: Node): Type {
+	const d = node.data as ArrowFunctionData;
+	checkFunctionBody(ctx, makeSymbol("(arrow)", SymbolKind.Function, unknownType(), false), d.arrowParams, d.arrowBody);
+	return createUnknownFunction(d.arrowParams);
+}
+
+function checkFuncExpr(ctx: CheckerContext, node: Node): Type {
+	const d = node.data as FunctionExprData;
+	checkFunctionBody(ctx, makeSymbol("(anon)", SymbolKind.Function, unknownType(), false), d.funcExprParams, d.funcExprBody);
+	return createUnknownFunction(d.funcExprParams);
+}
+
+function createUnknownFunction(params: string[]): Type {
+	const types: Type[] = [];
+	for (const p of params) { types.push(unknownType()); }
+	return createFunction(types, params, unknownType());
 }
 
 function checkDestructuringDecl(ctx: CheckerContext, node: Node): void {
-	const d = node.data as { destrPattern: Node, destrInit: Node, destrIsConst: boolean };
+	const d = node.data as DestructuringDeclData;
 	checkExpr(ctx, d.destrInit);
 }
 
 // ===== Check Program Body =====
 
 export function checkProgramBody(ctx: CheckerContext, program: Node): void {
-	const stmts = program.data as { programStmts: Node[] };
+	const stmts = program.data as ProgramData;
 	for (const stmt of stmts.programStmts) {
 		checkStmt(ctx, stmt);
 	}
@@ -472,7 +481,7 @@ export function checkProgram(program: Node): CheckerContext {
 
 // ===== Tests =====
 
-import { parseSource } from "../parser/statements/util";
+import { parseSource } from "../parser/statements/validation";
 
 export function checkSource(input: string): CheckerContext {
 	const pr = parseSource(input);
@@ -638,5 +647,33 @@ testGroup("Checker 3-Pass", () => {
 	test("forward reference to function is callable", () => {
 		const ctx = checkSource("const x = foo(1); function foo(a) { return 1; }");
 		check(!hasErrors(ctx));
+	});
+	test("typed function params resolved", () => {
+		const ctx = checkSource("function add(a: number, b: number): number { return a; }");
+		const sym = lookupSymbol(ctx.table, "add");
+		check(sym !== null);
+		check(sym.symbolType.kind === TypeKind.Function);
+		check(sym.symbolType.typeChildren[0].kind === TypeKind.Number);
+		check(sym.symbolType.typeChildren[1].kind === TypeKind.Number);
+		check(sym.symbolType.typeReturn.kind === TypeKind.Number);
+	});
+	test("typed function call returns annotated type", () => {
+		const ctx = checkSource("function greet(name: string): string { return name; } const x = greet(\"hi\");");
+		const sym = lookupSymbol(ctx.table, "x");
+		check(sym !== null);
+		check(sym.symbolType.kind === TypeKind.String);
+	});
+	test("array literal infers element type", () => {
+		const ctx = checkSource("const arr = [1, 2, 3];");
+		const sym = lookupSymbol(ctx.table, "arr");
+		check(sym !== null);
+		check(sym.symbolType.kind === TypeKind.Array);
+		check(sym.symbolType.typeReturn.kind === TypeKind.Number);
+	});
+	test("arrow function has Function type", () => {
+		const ctx = checkSource("const f = (x) => x;");
+		const sym = lookupSymbol(ctx.table, "f");
+		check(sym !== null);
+		check(sym.symbolType.kind === TypeKind.Function);
 	});
 });

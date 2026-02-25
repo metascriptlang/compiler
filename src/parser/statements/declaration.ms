@@ -2,11 +2,12 @@
 // Uses callback injection via util.ms to avoid circular imports
 
 import { Token, TokenKind } from "../../lexer/token";
-import { Node, NodeKind, NodeData, createNode } from "../../ast/node";
+import { Node, NodeKind, NodeData, createNode, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, skipDestructurePattern, consumeSemicolon, skipGenericParams, skipBalanced } from "../context";
 import { skipTypeAnnotation } from "../typeAnnotation";
-import { parseParamList, skipDefaultValue, skipOptionalType } from "../util";
-import { callBlockParser, callExprParser, programOk, stmtKind, stmtAt } from "./util";
+import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, skipDefaultValue, skipOptionalType } from "../util";
+import { callBlockParser, callExprParser } from "./callbacks";
+import { programOk, stmtKind, stmtAt } from "./validation";
 import { test, check, testGroup } from "std/testing";
 
 type NodeResult = Result<Node, string>;
@@ -107,15 +108,19 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 		return Result.err(`Expected '(' after function name at line ${current(state).line.toString()}`);
 	}
 
-	const params = parseParamList(state);
+	const raw = parseParamList(state);
+	const params = extractParamNames(raw);
+	const fnParamTypes = extractParamTypes(raw);
 	// Optional return type annotation: function f(): string { ... }
-	skipOptionalType(state);
+	const fnReturnType = captureOptionalType(state);
 
 	return Result.ok(createNode(NodeKind.FunctionDecl, {
 		fnName: nameToken.value,
 		params,
+		fnParamTypes,
 		fnBody: try callBlockParser(state),
 		fnFlags: flags,
+		fnReturnType,
 	}, fnToken));
 }
 
@@ -383,6 +388,7 @@ export function parseInterfaceDecl(state: ParserState): NodeResult {
 
 	advance(state);
 	const fields: string[] = [];
+	const fieldTypes: string[] = [];
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
 		const field = current(state);
 		if (field.kind !== TokenKind.Ident) {
@@ -396,8 +402,8 @@ export function parseInterfaceDecl(state: ParserState): NodeResult {
 			advance(state);
 		}
 
-		// Colon + type annotation
-		skipOptionalType(state);
+		// Colon + type annotation — capture it
+		fieldTypes.push(captureOptionalType(state));
 
 		// Skip semicolons and commas between members
 		if (!isAtEnd(state) && (current(state).kind === TokenKind.Semicolon || current(state).kind === TokenKind.Comma)) {
@@ -413,6 +419,7 @@ export function parseInterfaceDecl(state: ParserState): NodeResult {
 	return Result.ok(createNode(NodeKind.InterfaceDecl, {
 		interfaceName: nameToken.value,
 		interfaceFields: fields,
+		interfaceFieldTypes: fieldTypes,
 	}, ifaceToken));
 }
 
@@ -575,10 +582,13 @@ function parseClassMember(state: ParserState): NodeResult {
 function parseClassConstructor(state: ParserState): NodeResult {
 	const ctorToken = current(state);
 	advance(state);
-	const params = parseParamList(state);
+	const raw = parseParamList(state);
+	const ctorParams = extractParamNames(raw);
+	const ctorParamTypes = extractParamTypes(raw);
 	const body = try callBlockParser(state);
 	return Result.ok(createNode(NodeKind.ConstructorDecl, {
-		ctorParams: params,
+		ctorParams,
+		ctorParamTypes,
 		ctorBody: body,
 	}, ctorToken));
 }
@@ -589,39 +599,50 @@ function parseClassAccessor(state: ParserState, isStatic: boolean, flags: string
 	advance(state);
 	const accName = current(state).value;
 	advance(state);
-	const params = parseParamList(state);
+	const raw = parseParamList(state);
+	const methodParams = extractParamNames(raw);
+	const methodParamTypes = extractParamTypes(raw);
+	const methodReturnType = captureOptionalType(state);
 	const body = try callBlockParser(state);
 	return Result.ok(createNode(NodeKind.MethodDecl, {
 		methodName: accKind + "_" + accName,
-		methodParams: params,
+		methodParams,
+		methodParamTypes,
 		methodBody: body,
 		methodIsStatic: isStatic,
 		methodFlags: flags,
+		methodReturnType,
 	}, accToken));
 }
 
 function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: boolean, flags: string): NodeResult {
-	const params = parseParamList(state);
+	const raw = parseParamList(state);
+	const methodParams = extractParamNames(raw);
+	const methodParamTypes = extractParamTypes(raw);
 	// Optional return type
-	skipOptionalType(state);
+	const methodReturnType = captureOptionalType(state);
 	// Abstract methods have no body — just semicolon
 	if (current(state).kind === TokenKind.Semicolon) {
 		consumeSemicolon(state);
 		return Result.ok(createNode(NodeKind.MethodDecl, {
 			methodName: nameToken.value,
-			methodParams: params,
+			methodParams,
+			methodParamTypes,
 			methodBody: createNode(NodeKind.BlockStmt, { statements: [] }, nameToken),
 			methodIsStatic: isStatic,
 			methodFlags: flags,
+			methodReturnType,
 		}, nameToken));
 	}
 	const body = try callBlockParser(state);
 	return Result.ok(createNode(NodeKind.MethodDecl, {
 		methodName: nameToken.value,
-		methodParams: params,
+		methodParams,
+		methodParamTypes,
 		methodBody: body,
 		methodIsStatic: isStatic,
 		methodFlags: flags,
+		methodReturnType,
 	}, nameToken));
 }
 
@@ -907,7 +928,8 @@ export function parseMacroDecl(state: ParserState): NodeResult {
 	}
 	advance(state);
 
-	const params = parseParamList(state);
+	const raw = parseParamList(state);
+	const macroDeclParams = extractParamNames(raw);
 
 	// Optional return type
 	skipOptionalType(state);
@@ -916,7 +938,7 @@ export function parseMacroDecl(state: ParserState): NodeResult {
 
 	return Result.ok(createNode(NodeKind.MacroDecl, {
 		macroDeclName: nameToken.value,
-		macroDeclParams: params,
+		macroDeclParams,
 		macroDeclBody: body,
 	}, macroToken));
 }
@@ -962,11 +984,11 @@ testGroup("Stmt Declarations", () => {
 	test("var decl", () => { check(programOk("var x = 1;")); });
 	test("var is VariableDecl", () => { check(stmtKind("var x = 1;") === NodeKind.VariableDecl); });
 	test("var isConst false", () => {
-		const d = stmtAt("var x = 1;", 0).data as { declName: string, initializer: Node, isConst: boolean };
+		const d = stmtAt("var x = 1;", 0).data as VariableDeclData;
 		check(!d.isConst);
 	});
 	test("var declName", () => {
-		const d = stmtAt("var x = 1;", 0).data as { declName: string, initializer: Node, isConst: boolean };
+		const d = stmtAt("var x = 1;", 0).data as VariableDeclData;
 		check(d.declName === "x");
 	});
 	test("var typed", () => { check(programOk("var x: number = 1;")); });
@@ -982,15 +1004,15 @@ testGroup("Stmt Declarations", () => {
 	test("extern macro", () => { check(programOk("extern macro @inject;")); });
 	test("extern is ExternDecl", () => { check(stmtKind("extern function f(): void;") === NodeKind.ExternDecl); });
 	test("extern kind field", () => {
-		const d = stmtAt("extern function printf(fmt: string): void;", 0).data as { externKind: string, externName: string };
+		const d = stmtAt("extern function printf(fmt: string): void;", 0).data as ExternDeclData;
 		check(d.externKind === "function");
 	});
 	test("extern name field", () => {
-		const d = stmtAt("extern const STDIN: FILE;", 0).data as { externKind: string, externName: string };
+		const d = stmtAt("extern const STDIN: FILE;", 0).data as ExternDeclData;
 		check(d.externName === "STDIN");
 	});
 	test("extern class kind", () => {
-		const d = stmtAt("extern class FILE {}", 0).data as { externKind: string, externName: string };
+		const d = stmtAt("extern class FILE {}", 0).data as ExternDeclData;
 		check(d.externKind === "class");
 	});
 	test("extern generics", () => { check(programOk("extern function sort<T>(arr: T[]): void;")); });
@@ -1001,31 +1023,31 @@ testGroup("Stmt Declarations", () => {
 	test("distinct type string", () => { check(programOk("distinct type Email = string;")); });
 	test("distinct is TypeAliasDecl", () => { check(stmtKind("distinct type X = number;") === NodeKind.TypeAliasDecl); });
 	test("distinct flag true", () => {
-		const d = stmtAt("distinct type UserId = number;", 0).data as { aliasName: string, aliasIsDistinct: boolean };
+		const d = stmtAt("distinct type UserId = number;", 0).data as TypeAliasDeclData;
 		check(d.aliasIsDistinct);
 	});
 	test("distinct name field", () => {
-		const d = stmtAt("distinct type Email = string;", 0).data as { aliasName: string, aliasIsDistinct: boolean };
+		const d = stmtAt("distinct type Email = string;", 0).data as TypeAliasDeclData;
 		check(d.aliasName === "Email");
 	});
 	test("type alias not distinct", () => {
-		const d = stmtAt("type ID = number;", 0).data as { aliasName: string, aliasIsDistinct: boolean };
+		const d = stmtAt("type ID = number;", 0).data as TypeAliasDeclData;
 		check(!d.aliasIsDistinct);
 	});
 	// Macro declaration
 	test("macro decl", () => { check(programOk("macro deriveEq(target) { return target; }")); });
 	test("macro is MacroDecl", () => { check(stmtKind("macro foo(x) { return x; }") === NodeKind.MacroDecl); });
 	test("macro name field", () => {
-		const d = stmtAt("macro deriveEq(target) { return target; }", 0).data as { macroDeclName: string, macroDeclParams: string[], macroDeclBody: Node };
+		const d = stmtAt("macro deriveEq(target) { return target; }", 0).data as MacroDeclData;
 		check(d.macroDeclName === "deriveEq");
 	});
 	test("macro multi param", () => { check(programOk("macro foo(a, b, c) { return a; }")); });
 	test("macro params field", () => {
-		const d = stmtAt("macro foo(a, b, c) { return a; }", 0).data as { macroDeclName: string, macroDeclParams: string[], macroDeclBody: Node };
+		const d = stmtAt("macro foo(a, b, c) { return a; }", 0).data as MacroDeclData;
 		check(d.macroDeclParams.length === 3);
 	});
 	test("macro body is block", () => {
-		const d = stmtAt("macro foo(x) { return x; }", 0).data as { macroDeclName: string, macroDeclParams: string[], macroDeclBody: Node };
+		const d = stmtAt("macro foo(x) { return x; }", 0).data as MacroDeclData;
 		check(d.macroDeclBody.kind === NodeKind.BlockStmt);
 	});
 	test("macro return type", () => { check(programOk("macro foo(): Node { return x; }")); });
