@@ -42,31 +42,27 @@ export function lowerResult(program: Node, ctx: TransformContext): Node {
 
 // Expand a single statement. Returns [stmt] for passthrough, or multiple stmts for try expansion.
 function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
-	// Case 1: const x = try f(); or const x = try f() catch val;
-	if (stmt.kind === NodeKind.VariableDecl) {
-		const d = stmt.data as VariableDeclData;
-		if (d.initializer.kind === NodeKind.TryExpr) {
-			return expandVarDeclTry(stmt, ctx);
-		}
-	}
-
-	// Case 3: return try f();
-	if (stmt.kind === NodeKind.ReturnStmt) {
-		const d = stmt.data as ReturnStmtData;
-		if (d.argument.kind === NodeKind.TryExpr) {
-			return expandReturnTry(stmt, ctx);
-		}
-	}
-
-	// Case 4: try f(); (standalone)
-	if (stmt.kind === NodeKind.ExprStmt) {
-		const d = stmt.data as ExprStmtData;
-		if (d.expr.kind === NodeKind.TryExpr) {
-			return expandExprStmtTry(stmt, ctx);
-		}
-	}
-
-	// Passthrough
+	match (stmt.kind) {
+		NodeKind.VariableDecl => {
+			const d = stmt.data as VariableDeclData;
+			if (d.initializer.kind === NodeKind.TryExpr) {
+				return expandVarDeclTry(stmt, ctx);
+			}
+		},
+		NodeKind.ReturnStmt => {
+			const d = stmt.data as ReturnStmtData;
+			if (d.argument.kind === NodeKind.TryExpr) {
+				return expandReturnTry(stmt, ctx);
+			}
+		},
+		NodeKind.ExprStmt => {
+			const d = stmt.data as ExprStmtData;
+			if (d.expr.kind === NodeKind.TryExpr) {
+				return expandExprStmtTry(stmt, ctx);
+			}
+		},
+		_ => {},
+	};
 	return [stmt];
 }
 

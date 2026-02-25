@@ -38,35 +38,32 @@ export function lowerMatch(program: Node, ctx: TransformContext): Node {
 
 // Expand a single statement that may contain a match
 function expandMatchStmt(stmt: Node, ctx: TransformContext): Node[] {
-	// MatchStmt (standalone match statement)
-	if (stmt.kind === NodeKind.MatchStmt) {
-		return lowerMatchStmt(stmt, ctx);
-	}
-
-	// MatchExpr in VariableDecl: const x = match (...) { ... }
-	if (stmt.kind === NodeKind.VariableDecl) {
-		const d = stmt.data as VariableDeclData;
-		if (d.initializer.kind === NodeKind.MatchExpr) {
-			return lowerMatchExprInVar(stmt, ctx);
-		}
-	}
-
-	// MatchExpr in ReturnStmt: return match (...) { ... }
-	if (stmt.kind === NodeKind.ReturnStmt) {
-		const d = stmt.data as ReturnStmtData;
-		if (d.argument.kind === NodeKind.MatchExpr) {
-			return lowerMatchExprInReturn(stmt, ctx);
-		}
-	}
-
-	// MatchExpr as standalone ExprStmt: match (...) { ... };
-	if (stmt.kind === NodeKind.ExprStmt) {
-		const d = stmt.data as ExprStmtData;
-		if (d.expr.kind === NodeKind.MatchStmt) {
-			return lowerMatchStmt(d.expr, ctx);
-		}
-	}
-
+	// TODO: this match syntax not fully elegant, 
+	// in self-host Compiler, should be able to `return match ...`
+	match (stmt.kind) {
+		NodeKind.MatchStmt => {
+			return lowerMatchStmt(stmt, ctx);
+		},
+		NodeKind.VariableDecl => {
+			const d = stmt.data as VariableDeclData;
+			if (d.initializer.kind === NodeKind.MatchExpr) {
+				return lowerMatchExprInVar(stmt, ctx);
+			}
+		},
+		NodeKind.ReturnStmt => {
+			const d = stmt.data as ReturnStmtData;
+			if (d.argument.kind === NodeKind.MatchExpr) {
+				return lowerMatchExprInReturn(stmt, ctx);
+			}
+		},
+		NodeKind.ExprStmt => {
+			const d = stmt.data as ExprStmtData;
+			if (d.expr.kind === NodeKind.MatchStmt) {
+				return lowerMatchStmt(d.expr, ctx);
+			}
+		},
+		_ => {},
+	};
 	return [stmt];
 }
 

@@ -2,7 +2,7 @@
 // Each helper wraps createNode with the correct NodeKind and data shape.
 
 import { Token, TokenKind, createToken } from "../lexer/token";
-import { Node, NodeKind, SourceLocation, createNode } from "../ast/node";
+import { Node, NodeKind, SourceLocation, createNode, BlockStmtData } from "../ast/node";
 
 // Create a synthetic token from a source location (for transform-generated nodes)
 export function syntheticToken(loc: SourceLocation): Token {
@@ -97,4 +97,20 @@ export function makeSwitch(disc: Node, cases: Node[], loc: SourceLocation): Node
 
 export function makeSwitchCase(tests: Node[], stmts: Node[], isDefault: boolean, loc: SourceLocation): Node {
 	return createNode(NodeKind.SwitchCase, { caseTests: tests, caseStmts: stmts, isDefault }, syntheticToken(loc));
+}
+
+// ===== Helpers =====
+
+// Extract statements from a body node (block → its stmts, single stmt → [stmt])
+export function extractBodyStmts(body: Node): Node[] {
+	const result: Node[] = [];
+	if (body.kind === NodeKind.BlockStmt) {
+		const bd = body.data as BlockStmtData;
+		for (const stmt of bd.statements) {
+			result.push(stmt);
+		}
+	} else {
+		result.push(body);
+	}
+	return result;
 }

@@ -14,13 +14,14 @@
 // }
 
 import {
-	Node, NodeKind, ForOfStmtData, BlockStmtData,
+	Node, NodeKind, ForOfStmtData,
 } from "../../ast/node";
 import { TransformContext, freshTemp } from "../context";
 import { walkNode } from "../walker";
 import {
 	makeIdent, makeNumber, makeBlock, makeVarDecl, makeWhile,
 	makeBinary, makeAssign, makeExprStmt, makeMember, makeArrayAccess,
+	extractBodyStmts,
 } from "../util";
 import { test, check, testGroup } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
@@ -69,16 +70,12 @@ function forOfVisitor(ctx: TransformContext): (node: Node) => Node {
 		const whileStmts: Node[] = [];
 		whileStmts.push(itemDecl);
 
-		// Extract stmts from body if it's a block
-		if (d.forOfBody.kind === NodeKind.BlockStmt) {
-			const bodyData = d.forOfBody.data as BlockStmtData;
-			let i = 0;
-			while (i < bodyData.statements.length) {
-				whileStmts.push(bodyData.statements[i]);
-				i += 1;
-			}
-		} else {
-			whileStmts.push(d.forOfBody);
+		// Extract stmts from body (while loop — for-of inside closure triggers DRC bug)
+		const bodyStmts = extractBodyStmts(d.forOfBody);
+		let bi = 0;
+		while (bi < bodyStmts.length) {
+			whileStmts.push(bodyStmts[bi]);
+			bi += 1;
 		}
 		whileStmts.push(incStmt);
 
