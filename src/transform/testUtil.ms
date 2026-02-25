@@ -13,7 +13,7 @@ export function parseInput(input: string): Result<Node, string> {
 }
 
 export function makeCtx(): TransformContext {
-	const ctx: TransformContext = { tempCounter: 0, errors: [] };
+	const ctx: TransformContext = { tempCounter: 0, errors: [], fnDeclNames: [] };
 	return ctx;
 }
 

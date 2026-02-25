@@ -3,6 +3,7 @@
 
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { Node, NodeKind, SourceLocation, createNode, BlockStmtData } from "../ast/node";
+import { TransformContext, freshTemp } from "./context";
 
 // Create a synthetic token from a source location (for transform-generated nodes)
 export function syntheticToken(loc: SourceLocation): Token {
@@ -61,6 +62,10 @@ export function makeTryCatch(tryBody: Node, catchName: string, catchBody: Node, 
 	return createNode(NodeKind.TryCatchStmt, { tryBody, catchName, catchBody, finallyBody }, syntheticToken(loc));
 }
 
+export function makeContinue(loc: SourceLocation): Node {
+	return createNode(NodeKind.ContinueStmt, { continueLabel: "" }, syntheticToken(loc));
+}
+
 // ===== Expression Builders =====
 
 export function makeBinary(leftNode: Node, op: string, rightNode: Node, loc: SourceLocation): Node {
@@ -99,7 +104,37 @@ export function makeSwitchCase(tests: Node[], stmts: Node[], isDefault: boolean,
 	return createNode(NodeKind.SwitchCase, { caseTests: tests, caseStmts: stmts, isDefault }, syntheticToken(loc));
 }
 
+// ===== Declaration Builders =====
+
+export function makeFnDecl(name: string, fnParams: string[], paramTypes: string[], body: Node, flags: string, returnType: string, loc: SourceLocation): Node {
+	return createNode(NodeKind.FunctionDecl, {
+		fnName: name, params: fnParams, fnParamTypes: paramTypes,
+		fnBody: body, fnFlags: flags, fnReturnType: returnType,
+	}, syntheticToken(loc));
+}
+
+export function makeInterfaceDecl(name: string, fields: string[], fieldTypes: string[], loc: SourceLocation): Node {
+	return createNode(NodeKind.InterfaceDecl, {
+		interfaceName: name, interfaceFields: fields, interfaceFieldTypes: fieldTypes,
+	}, syntheticToken(loc));
+}
+
+export function makeObjectLiteral(keys: string[], values: Node[], loc: SourceLocation): Node {
+	return createNode(NodeKind.ObjectLiteral, { properties: values, keys }, syntheticToken(loc));
+}
+
 // ===== Helpers =====
+
+// Capture an expression into a temp variable to prevent double-evaluation.
+// Returns { decl: const $tmp_N = expr, ref: $tmp_N identifier }.
+// Follows Nim's lowerings.nim:evalOnce pattern.
+export function evalOnce(expr: Node, ctx: TransformContext, loc: SourceLocation): { decl: Node, ref: Node } {
+	const name = freshTemp(ctx, "tmp");
+	return {
+		decl: makeVarDecl(name, expr, true, loc),
+		ref: makeIdent(name, loc),
+	};
+}
 
 // Extract statements from a body node (block → its stmts, single stmt → [stmt])
 export function extractBodyStmts(body: Node): Node[] {

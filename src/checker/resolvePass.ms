@@ -19,7 +19,7 @@ import {
 } from "./types";
 import { Symbol, SymbolKind, lookupSymbol } from "./symbol";
 import { CheckerContext } from "./context";
-import { trim, charAt, sliceStr, endsWith, findChar, splitTopLevel } from "../utils/string";
+import { trim, charAt, sliceStr, findChar, splitTopLevel } from "../utils/string";
 import { test, check, testGroup } from "std/testing";
 
 // ===== A. Resolve Annotation Strings =====
@@ -41,14 +41,14 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 	}
 
 	// Check for array suffix []
-	if (endsWith(trimmed, "[]")) {
+	if (trimmed.endsWith("[]")) {
 		const inner = sliceStr(trimmed, 0, trimmed.length - 2);
 		return createArray(resolveAnnotation(inner, ctx));
 	}
 
 	// Check for generic types: Name<A, B>
 	const angleBracket = findChar(trimmed, "<");
-	if (angleBracket > 0 && endsWith(trimmed, ">")) {
+	if (angleBracket > 0 && trimmed.endsWith(">")) {
 		const baseName = sliceStr(trimmed, 0, angleBracket);
 		const argsText = sliceStr(trimmed, angleBracket + 1, trimmed.length - 1);
 		const args = splitTopLevel(argsText, ",");

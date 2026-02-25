@@ -185,10 +185,8 @@ function lowerDeferInBlock(stmts: Node[], loc: SourceLocation): Node[] {
 
 	// Build "after" stmts into a BlockStmt (sink semantics move the array)
 	const afterStmts: Node[] = [];
-	let a = deferIdx + 1;
-	while (a < stmts.length) {
+	for (let a = deferIdx + 1; a < stmts.length; a += 1) {
 		afterStmts.push(stmts[a]);
-		a += 1;
 	}
 	const tryBody = makeBlock(afterStmts, deferLoc);
 
@@ -202,10 +200,8 @@ function lowerDeferInBlock(stmts: Node[], loc: SourceLocation): Node[] {
 
 	// Result: before + [tryCatch]
 	const result: Node[] = [];
-	let b = 0;
-	while (b < deferIdx) {
+	for (let b = 0; b < deferIdx; b += 1) {
 		result.push(stmts[b]);
-		b += 1;
 	}
 	result.push(tryCatch);
 	return result;

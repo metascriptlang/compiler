@@ -43,16 +43,7 @@ function checkResultField(node: Node): Node {
 }
 
 function isResultTemp(name: string): boolean {
-	// Match $result_N pattern from freshTemp(ctx, "result")
-	if (name.length < 8) return false;
-	const prefix = "$result";
-	let i = 0;
-	while (i < prefix.length) {
-		if (i >= name.length) return false;
-		if (name.charAt(i) !== prefix.charAt(i)) return false;
-		i += 1;
-	}
-	return true;
+	return name.startsWith("$result");
 }
 
 function wrapWithCheck(accessNode: Node, resultObj: Node, checkFnName: string): Node {

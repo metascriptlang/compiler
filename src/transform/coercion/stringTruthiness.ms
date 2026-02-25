@@ -57,8 +57,6 @@ function truthifyNode(node: Node): Node {
 // Only wraps if the condition is NOT already a boolean expression
 function wrapTruthiness(cond: Node): Node {
 	if (isAlreadyBoolean(cond)) return cond;
-
-	// Bare identifier or member access — wrap with .length > 0
 	if (cond.kind === NodeKind.Identifier || cond.kind === NodeKind.MemberExpr) {
 		const loc = cond.location;
 		const lengthAccess = makeMember(cond, "length", loc);

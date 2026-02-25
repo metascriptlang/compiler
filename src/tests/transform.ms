@@ -3,12 +3,24 @@
 
 import { NodeKind } from "../ast/node";
 import { lowerDefer } from "../transform/lowering/deferLower";
-import { lowerOptionalChain } from "../transform/lowering/optionalChain";
-import { lowerNullishCoalesce } from "../transform/lowering/nullishCoalesce";
-import { lowerTypeCoercion } from "../transform/lowering/typeCoercion";
+import { lowerConstFold } from "../transform/coercion/constantFolding";
+import { lowerStringConcatFlatten } from "../transform/coercion/stringConcatFlatten";
+import { lowerOptionalChain } from "../transform/coercion/optionalChain";
+import { lowerNullishCoalesce } from "../transform/coercion/nullishCoalesce";
+import { lowerTypeCoercion } from "../transform/coercion/typeCoercion";
+import { lowerStringTruthiness } from "../transform/coercion/stringTruthiness";
+import { lowerDestructuring } from "../transform/desugar/destructuringLower";
+import { lowerSpread } from "../transform/desugar/spreadExpand";
+import { lowerForLoop } from "../transform/lowering/forLoopLower";
 import { lowerForOf } from "../transform/lowering/forOfLower";
-import { lowerResult } from "../transform/lowering/resultDesugar";
+import { lowerResult } from "../transform/desugar/resultDesugar";
+import { lowerResultFieldCheck } from "../transform/desugar/resultFieldCheck";
 import { lowerMatch } from "../transform/lowering/matchLower";
+import { lowerTailCall } from "../transform/lowering/tailCallLower";
+import { markClosureCalls } from "../transform/c/closureCallMarker";
+import { markPointerParams } from "../transform/c/pointerParam";
+import { injectRangeChecks } from "../transform/c/rangeCheckInject";
+import { coerceOptionals } from "../transform/c/optionalCoercion";
 import { test, check, testGroup } from "std/testing";
 import {
 	stmtCountAfter, firstStmtKindAfter, firstExprKindAfter,
@@ -33,6 +45,46 @@ testGroup("Defer Lowering", () => {
 	test("multiple defers nest", () => {
 		check(stmtCountAfter("defer a(); defer b(); work();", lowerDefer) === 1);
 		check(firstStmtKindAfter("defer a(); defer b(); work();", lowerDefer) === NodeKind.TryCatchStmt);
+	});
+});
+
+// ===== Constant Folding =====
+
+testGroup("Constant Folding", () => {
+	test("number addition", () => {
+		check(firstExprKindAfter("2 + 3;", lowerConstFold) === NodeKind.NumberLiteral);
+	});
+	test("string concat", () => {
+		check(firstExprKindAfter("\"a\" + \"b\";", lowerConstFold) === NodeKind.StringLiteral);
+	});
+	test("boolean negation", () => {
+		check(firstExprKindAfter("!true;", lowerConstFold) === NodeKind.BooleanLiteral);
+	});
+	test("comparison", () => {
+		check(firstExprKindAfter("5 > 3;", lowerConstFold) === NodeKind.BooleanLiteral);
+	});
+	test("non-constant unchanged", () => {
+		check(firstExprKindAfter("x + y;", lowerConstFold) === NodeKind.BinaryExpr);
+	});
+	test("nested constant folds bottom-up", () => {
+		check(firstExprKindAfter("(2 + 3) * 4;", lowerConstFold) === NodeKind.NumberLiteral);
+	});
+});
+
+// ===== String Concat Flatten =====
+
+testGroup("String Concat Flatten", () => {
+	test("variable addition unchanged", () => {
+		check(firstExprKindAfter("x + y;", lowerStringConcatFlatten) === NodeKind.BinaryExpr);
+	});
+	test("non-binary unchanged", () => {
+		check(firstExprKindAfter("f();", lowerStringConcatFlatten) === NodeKind.CallExpr);
+	});
+	test("non-string binary unchanged", () => {
+		check(firstExprKindAfter("x * y;", lowerStringConcatFlatten) === NodeKind.BinaryExpr);
+	});
+	test("passthrough", () => {
+		check(stmtCountAfter("const x = 1;", lowerStringConcatFlatten) === 1);
 	});
 });
 
@@ -81,6 +133,86 @@ testGroup("Type Coercion Lowering", () => {
 	});
 });
 
+// ===== String Truthiness =====
+
+testGroup("String Truthiness", () => {
+	test("comparison condition unchanged", () => {
+		check(firstStmtKindAfter("if (x > 0) {}", lowerStringTruthiness) === NodeKind.IfStmt);
+	});
+	test("bool literal condition unchanged", () => {
+		check(firstStmtKindAfter("while (true) {}", lowerStringTruthiness) === NodeKind.WhileStmt);
+	});
+	test("call condition unchanged", () => {
+		check(firstStmtKindAfter("if (f()) {}", lowerStringTruthiness) === NodeKind.IfStmt);
+	});
+	test("equality condition unchanged", () => {
+		check(firstStmtKindAfter("if (x === y) {}", lowerStringTruthiness) === NodeKind.IfStmt);
+	});
+	test("non-condition passthrough", () => {
+		check(stmtCountAfter("const x = 1;", lowerStringTruthiness) === 1);
+	});
+});
+
+// ===== Destructuring Lowering =====
+
+testGroup("Destructuring Lowering", () => {
+	test("array 2 elements", () => {
+		check(stmtCountAfter("const [a, b] = f();", lowerDestructuring) === 3);
+	});
+	test("first stmt is temp VarDecl", () => {
+		check(firstStmtKindAfter("const [a, b] = f();", lowerDestructuring) === NodeKind.VariableDecl);
+	});
+	test("object destructuring", () => {
+		check(stmtCountAfter("const { x, y } = f();", lowerDestructuring) === 3);
+	});
+	test("simple RHS skips temp", () => {
+		check(stmtCountAfter("const [a, b] = myVar;", lowerDestructuring) === 2);
+	});
+	test("non-destructuring passthrough", () => {
+		check(stmtCountAfter("const x = 1;", lowerDestructuring) === 1);
+	});
+});
+
+// ===== Spread Expansion =====
+
+testGroup("Spread Expansion", () => {
+	test("no spread passthrough", () => {
+		check(firstExprKindAfter("f(a, b);", lowerSpread) === NodeKind.CallExpr);
+	});
+	test("spread array literal inlined", () => {
+		check(firstExprKindAfter("f(...[1, 2]);", lowerSpread) === NodeKind.CallExpr);
+	});
+	test("non-call unchanged", () => {
+		check(firstExprKindAfter("x + y;", lowerSpread) === NodeKind.BinaryExpr);
+	});
+	test("nested call unchanged", () => {
+		check(firstExprKindAfter("f(g());", lowerSpread) === NodeKind.CallExpr);
+	});
+	test("non-expr passthrough", () => {
+		check(stmtCountAfter("const x = 1;", lowerSpread) === 1);
+	});
+});
+
+// ===== For Loop Lowering =====
+
+testGroup("For Loop Lowering", () => {
+	test("basic for becomes block", () => {
+		check(firstStmtKindAfter("for (let i = 0; i < 10; i++) {}", lowerForLoop) === NodeKind.BlockStmt);
+	});
+	test("while unchanged", () => {
+		check(firstStmtKindAfter("while (true) {}", lowerForLoop) === NodeKind.WhileStmt);
+	});
+	test("for-of unchanged", () => {
+		check(firstStmtKindAfter("for (const x of arr) { x; }", lowerForLoop) === NodeKind.ForOfStmt);
+	});
+	test("non-loop passthrough", () => {
+		check(stmtCountAfter("const x = 1;", lowerForLoop) === 1);
+	});
+	test("preserves surrounding stmts", () => {
+		check(stmtCountAfter("let a = 1; for (let i = 0; i < 2; i++) {} let b = 2;", lowerForLoop) === 3);
+	});
+});
+
 // ===== ForOf Lowering =====
 
 testGroup("ForOf Lowering", () => {
@@ -118,6 +250,26 @@ testGroup("Result Desugar", () => {
 	});
 });
 
+// ===== Result Field Check =====
+
+testGroup("Result Field Check", () => {
+	test("non-member unchanged", () => {
+		check(firstExprKindAfter("x + y;", lowerResultFieldCheck) === NodeKind.BinaryExpr);
+	});
+	test("regular member unchanged", () => {
+		check(firstExprKindAfter("obj.name;", lowerResultFieldCheck) === NodeKind.MemberExpr);
+	});
+	test("non-result .value unchanged", () => {
+		check(firstExprKindAfter("obj.value;", lowerResultFieldCheck) === NodeKind.MemberExpr);
+	});
+	test("call expr unchanged", () => {
+		check(firstExprKindAfter("f();", lowerResultFieldCheck) === NodeKind.CallExpr);
+	});
+	test("passthrough for non-expr", () => {
+		check(stmtCountAfter("const x = 1;", lowerResultFieldCheck) === 1);
+	});
+});
+
 // ===== Match Lowering =====
 
 testGroup("Match Lowering", () => {
@@ -132,5 +284,90 @@ testGroup("Match Lowering", () => {
 	});
 	test("match preserves surrounding stmts", () => {
 		check(stmtCountAfter("let a = 1; match (x) { _ => b() } let c = 2;", lowerMatch) === 4);
+	});
+});
+
+// ===== Tail Call Lowering =====
+
+testGroup("Tail Call Lowering", () => {
+	test("non-recursive unchanged", () => {
+		check(firstStmtKindAfter("function foo(x: number): number { return x + 1; }", lowerTailCall) === NodeKind.FunctionDecl);
+	});
+	test("simple passthrough", () => {
+		check(stmtCountAfter("const x = 1;", lowerTailCall) === 1);
+	});
+	test("while unchanged", () => {
+		check(firstStmtKindAfter("while (true) {}", lowerTailCall) === NodeKind.WhileStmt);
+	});
+	test("non-function passthrough", () => {
+		check(stmtCountAfter("let a = 1; let b = 2;", lowerTailCall) === 2);
+	});
+});
+
+// ===== C-Backend: Closure Call Marker =====
+
+testGroup("Closure Call Marker", () => {
+	test("stmt passthrough", () => {
+		check(stmtCountAfter("const x = 1;", markClosureCalls) === 1);
+	});
+	test("function stays FunctionDecl", () => {
+		check(firstStmtKindAfter("function foo() {}", markClosureCalls) === NodeKind.FunctionDecl);
+	});
+	test("while unchanged", () => {
+		check(firstStmtKindAfter("while (true) {}", markClosureCalls) === NodeKind.WhileStmt);
+	});
+	test("preserves stmts", () => {
+		check(stmtCountAfter("let a = 1; let b = 2;", markClosureCalls) === 2);
+	});
+});
+
+// ===== C-Backend: Pointer Param Marker =====
+
+testGroup("Pointer Param Marker", () => {
+	test("non-function passthrough", () => {
+		check(stmtCountAfter("const x = 1;", markPointerParams) === 1);
+	});
+	test("function stays FunctionDecl", () => {
+		check(firstStmtKindAfter("function foo() {}", markPointerParams) === NodeKind.FunctionDecl);
+	});
+	test("while unchanged", () => {
+		check(firstStmtKindAfter("while (true) {}", markPointerParams) === NodeKind.WhileStmt);
+	});
+	test("stmt count preserved", () => {
+		check(stmtCountAfter("let a = 1; let b = 2;", markPointerParams) === 2);
+	});
+});
+
+// ===== C-Backend: Range Check Inject =====
+
+testGroup("Range Check Inject", () => {
+	test("non-cast unchanged", () => {
+		check(firstExprKindAfter("x + y;", injectRangeChecks) === NodeKind.BinaryExpr);
+	});
+	test("call unchanged", () => {
+		check(firstExprKindAfter("f();", injectRangeChecks) === NodeKind.CallExpr);
+	});
+	test("passthrough", () => {
+		check(stmtCountAfter("const x = 1;", injectRangeChecks) === 1);
+	});
+	test("identifier unchanged", () => {
+		check(firstExprKindAfter("x;", injectRangeChecks) === NodeKind.Identifier);
+	});
+});
+
+// ===== C-Backend: Optional Coercion =====
+
+testGroup("Optional Coercion", () => {
+	test("non-return unchanged", () => {
+		check(stmtCountAfter("const x = 1;", coerceOptionals) === 1);
+	});
+	test("while unchanged", () => {
+		check(firstStmtKindAfter("while (true) {}", coerceOptionals) === NodeKind.WhileStmt);
+	});
+	test("if unchanged", () => {
+		check(firstStmtKindAfter("if (x) {}", coerceOptionals) === NodeKind.IfStmt);
+	});
+	test("non-optional function unchanged", () => {
+		check(firstStmtKindAfter("function foo(): number { return 1; }", coerceOptionals) === NodeKind.FunctionDecl);
 	});
 });

@@ -16,11 +16,6 @@ export function sliceStr(s: string, start: number, end: number): string {
 	return s.slice(start, end);
 }
 
-export function endsWith(s: string, suffix: string): boolean {
-	if (s.length < suffix.length) return false;
-	return sliceStr(s, s.length - suffix.length, s.length) === suffix;
-}
-
 export function findChar(s: string, ch: string): number {
 	let i = 0;
 	let depth = 0;

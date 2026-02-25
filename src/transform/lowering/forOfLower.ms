@@ -70,12 +70,9 @@ function forOfVisitor(ctx: TransformContext): (node: Node) => Node {
 		const whileStmts: Node[] = [];
 		whileStmts.push(itemDecl);
 
-		// Extract stmts from body (while loop — for-of inside closure triggers DRC bug)
 		const bodyStmts = extractBodyStmts(d.forOfBody);
-		let bi = 0;
-		while (bi < bodyStmts.length) {
+		for (let bi = 0; bi < bodyStmts.length; bi += 1) {
 			whileStmts.push(bodyStmts[bi]);
-			bi += 1;
 		}
 		whileStmts.push(incStmt);
 
