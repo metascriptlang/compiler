@@ -61,7 +61,7 @@ export type NodeData =
 	| { unaryOp: string, operand: Node }                           // UnaryExpr
 	| { updateOp: string, updateArg: Node, isPrefix: boolean }     // UpdateExpr (i++, ++i)
 	| { callee: Node, arguments: Node[] }                          // CallExpr
-	| { object: Node, property: string }                           // MemberExpr
+	| { object: Node, property: string, isOptional: boolean }      // MemberExpr
 	| { array: Node, index: Node }                                 // ArrayAccess
 	| { properties: Node[], keys: string[] }                       // ObjectLiteral
 	| { elements: Node[] }                                         // ArrayLiteral
@@ -153,7 +153,7 @@ export type BinaryExprData = { operator: string, left: Node, right: Node };
 export type UnaryExprData = { unaryOp: string, operand: Node };
 export type UpdateExprData = { updateOp: string, updateArg: Node, isPrefix: boolean };
 export type CallExprData = { callee: Node, arguments: Node[] };
-export type MemberExprData = { object: Node, property: string };
+export type MemberExprData = { object: Node, property: string, isOptional: boolean };
 export type ArrayAccessData = { array: Node, index: Node };
 export type ObjectLiteralData = { properties: Node[], keys: string[] };
 export type ArrayLiteralData = { elements: Node[] };

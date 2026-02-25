@@ -67,7 +67,8 @@ function parseExprWithPrec(state: ParserState, minPrec: number): ExprResult {
 				advance(state);
 				const memberData: NodeData = {
 					object: left,
-					property: prop.value
+					property: prop.value,
+					isOptional: false
 				};
 				left = createNode(NodeKind.MemberExpr, memberData, token);
 			}
@@ -80,7 +81,7 @@ function parseExprWithPrec(state: ParserState, minPrec: number): ExprResult {
 			const prop = current(state);
 			if (prop.kind === TokenKind.Ident) {
 				advance(state);
-				left = createNode(NodeKind.MemberExpr, { object: left, property: prop.value }, token);
+				left = createNode(NodeKind.MemberExpr, { object: left, property: prop.value, isOptional: true }, token);
 			}
 			continue;
 		}
@@ -134,8 +135,8 @@ function parseExprWithPrec(state: ParserState, minPrec: number): ExprResult {
 		const right = try parseExprWithPrec(state, nextPrec);
 		const data: NodeData = {
 			operator: op.value,
-			left: left,
-			right: right
+			left,
+			right
 		};
 		left = createNode(NodeKind.BinaryExpr, data, op);
 	}
@@ -281,7 +282,7 @@ function parsePrimary(state: ParserState): ExprResult {
 	if (token.kind === TokenKind.Typeof || token.kind === TokenKind.Void || token.kind === TokenKind.Delete) {
 		advance(state);
 		const operand = try parsePrimary(state);
-		return Result.ok(createNode(NodeKind.UnaryExpr, { unaryOp: token.value, operand: operand }, token));
+		return Result.ok(createNode(NodeKind.UnaryExpr, { unaryOp: token.value, operand }, token));
 	}
 
 	// new expression: new Callee(args)
@@ -295,7 +296,7 @@ function parsePrimary(state: ParserState): ExprResult {
 			const prop = current(state);
 			if (prop.kind === TokenKind.Ident) {
 				advance(state);
-				callee = createNode(NodeKind.MemberExpr, { object: callee, property: prop.value }, dotToken);
+				callee = createNode(NodeKind.MemberExpr, { object: callee, property: prop.value, isOptional: false }, dotToken);
 			}
 		}
 		// Parse arguments if present
@@ -402,7 +403,7 @@ function parsePrimary(state: ParserState): ExprResult {
 	if (token.kind === TokenKind.Minus || token.kind === TokenKind.Bang || token.kind === TokenKind.Tilde) {
 		advance(state);
 		const operand = try parsePrimary(state);
-		return Result.ok(createNode(NodeKind.UnaryExpr, { unaryOp: token.value, operand: operand }, token));
+		return Result.ok(createNode(NodeKind.UnaryExpr, { unaryOp: token.value, operand }, token));
 	}
 
 	// Array literal: [expr, expr, ...]

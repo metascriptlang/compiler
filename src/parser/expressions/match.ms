@@ -153,7 +153,7 @@ function parseSinglePattern(state: ParserState): ExprResult {
 			const prop = current(state);
 			if (prop.kind === TokenKind.Ident) {
 				advance(state);
-				node = createNode(NodeKind.MemberExpr, { object: node, property: prop.value }, token);
+				node = createNode(NodeKind.MemberExpr, { object: node, property: prop.value, isOptional: false }, token);
 			} else {
 				break;
 			}

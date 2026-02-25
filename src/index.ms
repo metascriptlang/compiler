@@ -14,6 +14,8 @@ import { Node, ProgramData } from "./ast/node";
 import { printNode } from "./ast/index";
 import { formatError, unexpectedToken } from "./diagnostics/diagnostics";
 import { checkProgram } from "./checker/index";
+// TODO: blocked by diamond-import segfault in reference compiler
+// import { transformProgram } from "./transform/index";
 
 // ===== Test Helpers =====
 

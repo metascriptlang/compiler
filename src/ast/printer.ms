@@ -68,7 +68,11 @@ export function printNode(node: Node, level: number): void {
 		},
 		NodeKind.MemberExpr => {
 			const data = node.data as MemberExprData;
-			console.log(`${pad}MemberExpr: .${data.property}`);
+			if (data.isOptional) {
+				console.log(`${pad}MemberExpr: ?.${data.property}`);
+			} else {
+				console.log(`${pad}MemberExpr: .${data.property}`);
+			}
 			printNode(data.object, level + 1);
 		},
 		NodeKind.ArrayAccess => {

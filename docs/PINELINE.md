@@ -3,7 +3,7 @@
 6 phases from `compile.zig:295`. Phases 1-2 = frontend (shared with LSP). Phases 3-5 = backend (compilation only).
 
 ```
-Source.ms --> [1 Parse] --> [2 TypeCheck] --> [3 Transform] --> [4 DRC] --> [5 Codegen] --> output
+Source.ms --> [1 Parse] --> [2 TypeCheck] --> [3 Transform] --> [4 Analyzer DRC] --> [5 Codegen] --> output
 ```
 
 ---
@@ -56,7 +56,7 @@ Proven pattern used by TypeScript, Go, C#/Roslyn, Java/javac, JS++, and Swift.
 | Pass | Purpose | Reference (`compile.zig`) | Self-Hosted (`checker/`) |
 |------|---------|--------------------------|--------------------------|
 | **1. Collect** | Register all declarations from all modules (names + signatures) | `collectDeclarations()` | `collectTopLevel()` |
-| **2. Resolve** | Resolve type references, propagate import/export types cross-module | `propagateExports` + `TypeResolver.resolve()` | TODO (`resolve.ms`) |
+| **2. Resolve** | Resolve type references, propagate import/export types cross-module | `propagateExports` + `TypeResolver.resolve()` | `resolveDeclarations()` (single-module done, cross-module TODO) |
 | **3. Check** | Infer expression types + validate compatibility | `TypeInference.infer()` + `checkTypes()` | `checkProgramBody()` |
 
 **Why 3-pass over single-pass like legacy impl (research-backed):**
@@ -80,9 +80,8 @@ Concrete advantages over single-pass:
 - **Better error messages** -- full context available before reporting.
 - **Incremental implementation** -- each pass is independently buildable/testable.
 
-The self-hosted compiler currently has Pass 1 (`collectTopLevel`) and Pass 3
-(`checkProgramBody`). Pass 2 (`resolve.ms`) will be added when multi-module
-compilation and type annotation resolution are implemented.
+Self-hosted status: All 3 passes implemented for single-module. Pass 2 cross-module
+type propagation (import/export type flow) deferred until multi-module pipeline lands.
 
 Trans-Am (Salsa-inspired incremental engine) is fully compatible with 3-pass.
 The LSP uses single `checkFile()` queries -- Trans-Am's red-green algorithm,

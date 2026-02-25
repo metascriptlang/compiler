@@ -42,7 +42,7 @@ export interface Token {
 }
 
 export function createToken(kind: TokenKind, tokenValue: string, lineNum: number): Token {
-	return { kind: kind, value: tokenValue, line: lineNum, column: 0 };
+	return { kind, value: tokenValue, line: lineNum, column: 0 };
 }
 
 export function formatToken(token: Token): string {

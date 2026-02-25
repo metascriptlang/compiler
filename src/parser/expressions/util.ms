@@ -95,7 +95,7 @@ export function parseMemberChain(state: ParserState, base: Node): Node {
 		const prop = current(state);
 		if (prop.kind === TokenKind.Ident) {
 			advance(state);
-			node = createNode(NodeKind.MemberExpr, { object: node, property: prop.value }, dotToken);
+			node = createNode(NodeKind.MemberExpr, { object: node, property: prop.value, isOptional: false }, dotToken);
 		} else {
 			break;
 		}
