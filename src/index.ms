@@ -4,6 +4,7 @@
 //   lexer/     — Tokenization (hub: index.ms)
 //   parser/    — Parsing (hub: index.ms)
 //   checker/   — Type checking (hub: index.ms)
+//   transform/ — AST lowering transforms (hub: index.ms)
 //   diagnostics/ — Error formatting helpers
 
 import { formatToken } from "./lexer/token";
@@ -14,8 +15,21 @@ import { Node, ProgramData } from "./ast/node";
 import { printNode } from "./ast/index";
 import { formatError, unexpectedToken } from "./diagnostics/diagnostics";
 import { checkProgram } from "./checker/index";
-// TODO: blocked by diamond-import segfault in reference compiler
-// import { transformProgram } from "./transform/index";
+import { transformProgram } from "./transform/index";
+
+// ===== Compiler Pipeline =====
+// parse → check → transform → (codegen: future)
+
+type NodeResult = Result<Node, string>;
+
+export function compileSource(input: string): NodeResult {
+	const parseResult = parseSource(input);
+	if (!parseResult.ok) return Result.err(parseResult.error);
+	const program = parseResult.value;
+	checkProgram(program);
+	const transformed = transformProgram(program);
+	return Result.ok(transformed);
+}
 
 // ===== Test Helpers =====
 

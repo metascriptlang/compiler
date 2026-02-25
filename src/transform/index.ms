@@ -12,11 +12,11 @@
 import { Node } from "../ast/node";
 import { TransformContext, createTransformContext } from "./context";
 import { lowerDefer } from "./lowering/deferLower";
-import { lowerOptionalChain } from "./lowering/optionalChain";
-import { lowerNullishCoalesce } from "./lowering/nullishCoalesce";
-import { lowerTypeCoercion } from "./lowering/typeCoercion";
+import { lowerOptionalChain } from "./coercion/optionalChain";
+import { lowerNullishCoalesce } from "./coercion/nullishCoalesce";
+import { lowerTypeCoercion } from "./coercion/typeCoercion";
 import { lowerForOf } from "./lowering/forOfLower";
-import { lowerResult } from "./lowering/resultDesugar";
+import { lowerResult } from "./desugar/resultDesugar";
 import { lowerMatch } from "./lowering/matchLower";
 
 export function transformProgram(program: Node): Node {
