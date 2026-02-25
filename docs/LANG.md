@@ -619,7 +619,7 @@ Type Checker (3-pass)
     |- Pass 3: Resolve, infer, check (all modules)
     |
     v
-Transforms (DRC, lambda lifting, lowering)
+Transforms (analyzer, lambda lifting, lowering)
     |
     v
 Code Generation (C / JS / Erlang)

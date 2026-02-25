@@ -7,7 +7,7 @@ Organized by the 6 real compilation phases from `compile.zig:295`:
 
 ```
 Phase 1         Phase 2              Phase 3          Phase 4       Phase 5      Phase 6
-Load+Parse  →  Macros+TypeCheck  →  Transforms  →  DRC (C only)  →  Codegen  →  (stats)
+Load+Parse  →  Macros+TypeCheck  →  Transforms  →  Analyzer (C only)  →  Codegen  →  (stats)
 ```
 
 ---
@@ -195,10 +195,10 @@ result_desugar, spread_expand, for_of_lower, liftdestructors, etc.
 
 ---
 
-## Phase 4: DRC Analysis + Injection (C backend only, ~0 new kinds) -- TODO
+## Phase 4: Analyzer — Lifetime Analysis + Injection (C backend only, ~0 new kinds) -- TODO
 
-Sub-steps: string concat flattening → DRC analysis → range check injection →
-DRC cleanup injection (`ms_decref`, `ms_incref`, `was_moved`) →
+Sub-steps: string concat flattening → lifetime analysis → range check injection →
+destructor injection (`ms_decref`, `ms_incref`, `was_moved`) →
 pointer param transform → loc flag resolution.
 
 No new NodeKinds. Transforms existing AST by wrapping scopes with
@@ -232,7 +232,7 @@ Only if JSX frontend support is added. These are parser-level nodes.
 Phase 1: Load + Parse .......... 58/58  DONE
 Phase 2: Macros + TypeCheck ..... 0/16   TODO  (2a: ~12 macro, 2b: ~4 type)
 Phase 3: Transforms ............. 0/8    TODO  (3a: pipeline, 3b: normalize, 3c: lower)
-Phase 4: DRC .................... --     TODO  (no new node kinds)
+Phase 4: Analyzer ............... --     TODO  (no new node kinds)
 Phase 5: Codegen ................ --     (read-only)
 Phase ?: JSX .................... 0/4    TODO  (if needed)
                                   ------

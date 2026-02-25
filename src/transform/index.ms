@@ -15,11 +15,16 @@
 // 12. resultDesugar         — 1:N expansion of try expressions
 // 13. resultFieldCheck      — safety checks on $result_N.value/.error access
 // 14. matchLower            — sees simplest AST
-// 15. tailCallLower         — tail recursion → while (last, sees fully normalized AST)
-// 16. lambdaLifting         — closures with captures → lifted functions + env structs
+// 15. tailCallLower         — tail recursion → while (sees fully normalized AST)
+// 16. asyncDesugar          — await → yield, async → generator (before generatorLower)
+// 17. generatorLower        — function* → state machine returning iterator object
+// 18. lambdaLifting         — closures with captures → lifted functions + env structs
+// 19. dce                   — dead code elimination (stub: all alive)
+// 20. destructorLifting     — generate per-type _destroy/_copy function bodies
 
 import { Node } from "../ast/node";
-import { TransformContext, createTransformContext } from "./context";
+import { CheckerContext } from "../checker/context";
+import { TransformContext, createTransformContextWithChecker } from "./context";
 import { lowerDefer } from "./lowering/deferLower";
 import { lowerConstFold } from "./coercion/constantFolding";
 import { lowerStringConcatFlatten } from "./coercion/stringConcatFlatten";
@@ -35,10 +40,14 @@ import { lowerResult } from "./desugar/resultDesugar";
 import { lowerResultFieldCheck } from "./desugar/resultFieldCheck";
 import { lowerMatch } from "./lowering/matchLower";
 import { lowerTailCall } from "./lowering/tailCallLower";
+import { lowerAsync } from "./lowering/asyncDesugar";
+import { lowerGenerator } from "./lowering/generatorLower";
 import { lowerLambda } from "./lowering/lambdaLifting";
+import { lowerDCE } from "./analysis/dce";
+import { liftDestructors } from "./lowering/destructorLifting";
 
-export function transformProgram(program: Node): Node {
-	const ctx = createTransformContext();
+export function transformProgram(program: Node, checkerCtx: CheckerContext): Node {
+	const ctx = createTransformContextWithChecker(checkerCtx);
 	let result = lowerDefer(program, ctx);
 	result = lowerConstFold(result, ctx);
 	result = lowerStringConcatFlatten(result, ctx);
@@ -54,6 +63,10 @@ export function transformProgram(program: Node): Node {
 	result = lowerResultFieldCheck(result, ctx);
 	result = lowerMatch(result, ctx);
 	result = lowerTailCall(result, ctx);
+	result = lowerAsync(result, ctx);
+	result = lowerGenerator(result, ctx);
 	result = lowerLambda(result, ctx);
+	result = lowerDCE(result, ctx);
+	result = liftDestructors(result, ctx);
 	return result;
 }

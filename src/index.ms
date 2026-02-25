@@ -5,8 +5,10 @@
 //   parser/    — Parsing (hub: index.ms)
 //   checker/   — Type checking (hub: index.ms)
 //   transform/ — AST lowering transforms (hub: index.ms)
+//   module/      — Multi-module loading (hub: index.ms)
 //   diagnostics/ — Error formatting helpers
 
+import { ModuleGraph } from "./module/index";
 import { formatToken } from "./lexer/token";
 import { lex } from "./lexer/index";
 import { parseExpression } from "./parser/index";
@@ -26,8 +28,8 @@ export function compileSource(input: string): NodeResult {
 	const parseResult = parseSource(input);
 	if (!parseResult.ok) return Result.err(parseResult.error);
 	const program = parseResult.value;
-	checkProgram(program);
-	const transformed = transformProgram(program);
+	const checkerCtx = checkProgram(program);
+	const transformed = transformProgram(program, checkerCtx);
 	return Result.ok(transformed);
 }
 

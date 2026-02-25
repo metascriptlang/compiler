@@ -40,17 +40,21 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 		return createUnion([resolveAnnotation(unionParts[0], ctx), resolveAnnotation(unionParts[1], ctx), resolveAnnotation(unionParts[2], ctx)]);
 	}
 
-	// Check for array suffix []
+	// Check for array suffix [] or [ ] (token-joined form from captureOptionalType)
+	if (trimmed.endsWith("[ ]")) {
+		const inner = trim(sliceStr(trimmed, 0, trimmed.length - 3));
+		return createArray(resolveAnnotation(inner, ctx));
+	}
 	if (trimmed.endsWith("[]")) {
 		const inner = sliceStr(trimmed, 0, trimmed.length - 2);
 		return createArray(resolveAnnotation(inner, ctx));
 	}
 
-	// Check for generic types: Name<A, B>
+	// Check for generic types: Name<A, B> or Name < A , B > (token-joined form)
 	const angleBracket = findChar(trimmed, "<");
 	if (angleBracket > 0 && trimmed.endsWith(">")) {
-		const baseName = sliceStr(trimmed, 0, angleBracket);
-		const argsText = sliceStr(trimmed, angleBracket + 1, trimmed.length - 1);
+		const baseName = trim(sliceStr(trimmed, 0, angleBracket));
+		const argsText = trim(sliceStr(trimmed, angleBracket + 1, trimmed.length - 1));
 		const args = splitTopLevel(argsText, ",");
 
 		if (baseName === "Result" && args.length === 2) {

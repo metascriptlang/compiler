@@ -1,13 +1,41 @@
 // Transform Context — shared state across all transforms
 
+import { CheckerContext } from "../checker/context";
+
 export interface TransformContext {
 	tempCounter: number;
 	errors: string[];
 	fnDeclNames: string[];  // collected function declaration names (for closureCallMarker)
+	checkerCtx: CheckerContext;  // type info from Phase 2 (null in test mode)
 }
 
 export function createTransformContext(): TransformContext {
-	return { tempCounter: 0, errors: [], fnDeclNames: [] };
+	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext };
+}
+
+export function createTransformContextWithChecker(cc: CheckerContext): TransformContext {
+	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: cc };
+}
+
+// ===== NameSet =====
+// Reusable string-name collector with contains/addUnique ops.
+// Wraps string[] in interface to avoid DRC value-type gotcha (#4).
+
+export interface NameSet {
+	names: string[];
+}
+
+export function nameSetContains(ns: NameSet, name: string): boolean {
+	for (const n of ns.names) {
+		if (n === name) return true;
+	}
+	return false;
+}
+
+export function nameSetAdd(ns: NameSet, name: string): void {
+	if (!nameSetContains(ns, name)) {
+		ns.names.push(name);
+	}
 }
 
 // Generate unique temp variable name: "$result_0", "$match_1", "$iter_2"

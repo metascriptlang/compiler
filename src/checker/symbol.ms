@@ -12,7 +12,7 @@ export enum SymbolKind {
 // ===== Scope Kind =====
 
 export enum ScopeKind {
-	Global, Function, Block, Class, Loop,
+	Global, Module, Function, Block, Class, Loop,
 }
 
 // ===== Symbol =====
@@ -22,6 +22,7 @@ export interface Symbol {
 	symbolKind: SymbolKind;
 	symbolType: Type;
 	isMutable: boolean;
+	isExported: boolean;
 	location: SourceLocation;
 }
 
@@ -100,13 +101,28 @@ export function lookupLocal(table: SymbolTable, name: string): Symbol {
 // ===== Helper: Create Symbol Shorthand =====
 
 export function makeSymbol(name: string, kind: SymbolKind, symType: Type, mutable: boolean): Symbol {
-	return { 
+	return {
 		name,
 		symbolKind: kind,
 		symbolType: symType,
 		isMutable: mutable,
+		isExported: false,
 		location: { line: 0, column: 0 },
 	};
+}
+
+// Look up an exported symbol in the table (searches Module and Global scopes)
+export function lookupExport(table: SymbolTable, name: string): Symbol {
+	let scope = table.current;
+	while (scope !== null) {
+		if (scope.scopeKind === ScopeKind.Module || scope.scopeKind === ScopeKind.Global) {
+			for (const sym of scope.symbols) {
+				if (sym.name === name && sym.isExported) return sym;
+			}
+		}
+		scope = scope.parent;
+	}
+	return null as unknown as Symbol;
 }
 
 // ===== Tests =====
@@ -209,5 +225,26 @@ testGroup("SymbolTable", () => {
 		check(table.current.scopeKind === ScopeKind.Loop);
 		closeScope(table);
 		closeScope(table);
+	});
+	test("isExported default false", () => {
+		const sym = makeSymbol("x", SymbolKind.Variable, unknownType(), false);
+		check(!sym.isExported);
+	});
+	test("lookupExport finds exported", () => {
+		const table = createSymbolTable();
+		openScope(table, ScopeKind.Module);
+		const sym = makeSymbol("foo", SymbolKind.Function, unknownType(), false);
+		sym.isExported = true;
+		defineSymbol(table, sym);
+		const found = lookupExport(table, "foo");
+		check(found !== null);
+		check(found.name === "foo");
+	});
+	test("lookupExport skips non-exported", () => {
+		const table = createSymbolTable();
+		openScope(table, ScopeKind.Module);
+		defineSymbol(table, makeSymbol("bar", SymbolKind.Variable, unknownType(), false));
+		const found = lookupExport(table, "bar");
+		check(found === null);
 	});
 });

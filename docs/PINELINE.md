@@ -3,7 +3,7 @@
 6 phases from `compile.zig:295`. Phases 1-2 = frontend (shared with LSP). Phases 3-5 = backend (compilation only).
 
 ```
-Source.ms --> [1 Parse] --> [2 TypeCheck] --> [3 Transform] --> [4 Analyzer DRC] --> [5 Codegen] --> output
+Source.ms --> [1 Parse] --> [2 TypeCheck] --> [3 Transform] --> [4 Analyzer] --> [5 Codegen] --> output
 ```
 
 ---
@@ -117,28 +117,78 @@ Pre-compute all struct/array/tuple/Result type definitions into a `TypeRegistry`
 
 Multiple sub-transforms that rewrite the typed AST before codegen.
 
-| Step | What it does |
-|------|-------------|
-| 3a Transform pipeline | Run builtin + config transforms (type coercion, optional chain, nullish coalesce, result desugar, spread expand, for-of lowering) |
-| 3b Normalization | Extension methods via UFCS (`arr.map(f)` to `Array_map(arr, f)`), object spread, closure inlining, lambda lifting (closures to env struct + function pointer) |
-| 3c Lowering | Constant folding, defer to try/finally, match expression to switch/if chains |
-| 3d DCE | Dead code elimination -- walk AST, mark alive symbols, codegen skips dead code |
+### 3a: Self-Hosted Transform Pipeline (20 general-purpose transforms)
+
+Fixed execution order — each transform may depend on results of earlier ones.
+
+| # | Transform | File | Strategy | What it does |
+|---|-----------|------|----------|-------------|
+| 1 | deferLower | `lowering/deferLower.ms` | 1:N expand | `defer cleanup()` → try/finally wrapping |
+| 2 | constantFolding | `coercion/constantFolding.ms` | 1:1 visitor | `2+3` → `5`, `"a"+"b"` → `"ab"`, `!true` → `false` |
+| 3 | stringConcatFlatten | `coercion/stringConcatFlatten.ms` | 1:1 visitor | `"a" + x + "b"` → `ms_string_concat("a", x, "b")` |
+| 4 | optionalChain | `coercion/optionalChain.ms` | 1:1 visitor | `a?.b` → `a != null ? a.b : null` |
+| 5 | nullishCoalesce | `coercion/nullishCoalesce.ms` | 1:1 visitor | `x ?? 42` → `x != null ? x : 42` |
+| 6 | typeCoercion | `coercion/typeCoercion.ms` | 1:1 visitor | `String(x)` → `x.toString()` |
+| 7 | stringTruthiness | `coercion/stringTruthiness.ms` | 1:1 visitor | `if (str)` → `if (str.length > 0)` |
+| 8 | destructuringLower | `desugar/destructuringLower.ms` | 1:N expand | `const [a,b] = f()` → temp + indexed access |
+| 9 | spreadExpand | `desugar/spreadExpand.ms` | 1:1 visitor | `fn(...[a,b])` → `fn(a,b)` (array literal inline) |
+| 10 | forLoopLower | `lowering/forLoopLower.ms` | 1:1 visitor | `for(init;cond;update)` → `{ init; while(cond) { body; update; } }` |
+| 11 | forOfLower | `lowering/forOfLower.ms` | 1:N expand | `for (x of arr)` → while loop with iterator |
+| 12 | resultDesugar | `desugar/resultDesugar.ms` | 1:N expand | `const x = try f` → result check + value extract |
+| 13 | resultFieldCheck | `desugar/resultFieldCheck.ms` | 1:1 visitor | `$result_N.value` → `{ check(r); r.value; }` |
+| 14 | matchLower | `lowering/matchLower.ms` | 1:N expand | `match (x) { ... }` → if/else chain |
+| 15 | tailCallLower | `lowering/tailCallLower.ms` | 1:1 visitor | Tail-recursive calls → while loop with param reassignment |
+| 16 | asyncDesugar | `lowering/asyncDesugar.ms` | custom walk | `await` → `yield`, flip async → generator flag |
+| 17 | generatorLower | `lowering/generatorLower.ms` | custom walk | `function*` → state machine returning iterator object |
+| 18 | lambdaLifting | `lowering/lambdaLifting.ms` | custom walk | Closures with captures → lifted functions + env structs |
+| 19 | dce | `analysis/dce.ms` | stub | Dead code elimination (stub: all symbols alive) |
+| 20 | destructorLifting | `lowering/destructorLifting.ms` | custom walk | Generate per-type `_destroy`/`_copy` from field types |
+
+Nim `transf.nim` coverage: `transformCase` (matchLower), `liftDeferAux` (deferLower), `transformFor` (forOfLower), `transformAsgn` (destructuringLower), `commonOptimizations` (constantFolding), `forceBool` (stringTruthiness), `lambdalifting.nim` (lambdaLifting), `closureiters.nim` (generatorLower).
+
+### 3b: C-Backend Transform Pipeline (4 transforms)
+
+Run after general transforms, only when targeting C backend. Located in `transform/c/`.
+
+| # | Transform | File | What it does |
+|---|-----------|------|-------------|
+| 1 | closureCallMarker | `c/closureCallMarker.ms` | Collect function names for closure vs direct call distinction |
+| 2 | pointerParam | `c/pointerParam.ms` | Identify pointer-type parameters (interfaces/classes → T* in C) |
+| 3 | rangeCheckInject | `c/rangeCheckInject.ms` | Tag narrowing casts for runtime range check insertion |
+| 4 | optionalCoercion | `c/optionalCoercion.ms` | Wrap T returns for T\|null functions (`ms_optional_wrap`) |
+
+### 3c: Deferred Transforms (Future Phases)
+
+| Transform | Why Deferred |
+|-----------|-------------|
+| analyzerInject | Lifetime analysis + destructor injection (Phase 4) |
+| locResolve | Needs analyzer output |
+
+### 3d: Skipped (Overkill per Nim Comparison)
+
+| Transform | Reason |
+|-----------|--------|
+| recordToMap | No `Record<K,V>` type |
+| dateLower | Too specialized |
+| subscriptLower | Needs custom `[]` infrastructure |
+| methodCallLower | UFCS, Nim handles in semantic phase |
+| arrayMethodInline | Needs type info for correctness |
 
 **Input:** Typed AST + symbol table
 **Output:** Transformed AST + alive symbol set
 
 ---
 
-## Phase 4: DRC Analysis + Injection (C backend only)
+## Phase 4: Analyzer — Lifetime Analysis + Injection (C backend only)
 
-Deterministic Reference Counting -- Lobster-style memory management. Most complex phase.
+Lobster-style deterministic memory management (Nim's `injectdestructors`). Most complex phase.
 
 | Step | What it does |
 |------|-------------|
-| 4.1 String concat flatten | `a + b + c` chains to `string_assign_expr` / `string_append_expr` (DRC needs these forms) |
-| 4.2 DRC analysis | Collect interface names (value types, no RC). Run `DrcAnalyzer` on all modules: compute variable lifetimes (`borrow`/`keep`/`any`), decide RC operations, detect move opportunities via CFG last-use analysis |
+| 4.1 String concat flatten | `a + b + c` chains to `string_assign_expr` / `string_append_expr` (analyzer needs these forms) |
+| 4.2 Lifetime analysis | Collect interface names (value types, no RC). Run analyzer on all modules: compute variable lifetimes (`borrow`/`keep`/`any`), decide RC operations, detect move opportunities via CFG last-use analysis |
 | 4.3 Range check injection | Insert `ms_chck_range()` for narrowing type assertions (e.g. `x as int8`) |
-| 4.4 DRC injection | Physically insert `ms_decref()` / `ms_incref()` / `ms_was_moved()` into AST at scope exits, assignments, returns (`injectdestructors`) |
+| 4.4 Destructor injection | Physically insert `ms_decref()` / `ms_incref()` / `ms_was_moved()` into AST at scope exits, assignments, returns (Nim: `injectdestructors`) |
 | 4.4b Pointer param transform | Set `loc_flags.indirect` on pointer parameters for C calling convention |
 | 4.5 Loc flag resolution | Pre-resolve all location flags for codegen (no runtime HashMap lookups) |
 
@@ -158,7 +208,7 @@ Read-only AST traversal. Emit target language code. No new AST nodes created.
 
 | Backend | Output | Notes |
 |---------|--------|-------|
-| **C** | `_common.h` + per-module `.c` files + `_sources.txt` | Uses DRC results, type registry, lifecycle hooks. Multi-module or single-file mode. Feature flags for conditional linking (`needs_tls`, `needs_crypto`, etc.) |
+| **C** | `_common.h` + per-module `.c` files + `_sources.txt` | Uses analyzer results, type registry, lifecycle hooks. Multi-module or single-file mode. Feature flags for conditional linking (`needs_tls`, `needs_crypto`, etc.) |
 | **JavaScript** | Single `.js` file | Respects DCE alive symbols for tree-shaking |
 | **Erlang** | Single `.erl` file | Respects DCE alive symbols |
 | **Raiser** | Bytecode `.msb` file | Serialized module for VM execution |
@@ -172,7 +222,7 @@ Write-if-changed pattern (`equalsFile`): preserves mtime when output unchanged f
 
 ## Phase 6: Stats (optional)
 
-Print compilation statistics: timing per phase, DRC metrics (variables analyzed, RC ops generated, elision rate), module counts.
+Print compilation statistics: timing per phase, analyzer metrics (variables analyzed, RC ops generated, elision rate), module counts.
 
 ---
 

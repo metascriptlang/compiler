@@ -3,6 +3,7 @@
 
 import { Node, NodeKind, ProgramData, ExprStmtData } from "../ast/node";
 import { TransformContext } from "./context";
+import { CheckerContext } from "../checker/context";
 import { lex } from "../lexer/lexer";
 import { parseProgram } from "../parser/statements/core";
 
@@ -13,7 +14,7 @@ export function parseInput(input: string): Result<Node, string> {
 }
 
 export function makeCtx(): TransformContext {
-	const ctx: TransformContext = { tempCounter: 0, errors: [], fnDeclNames: [] };
+	const ctx: TransformContext = { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext };
 	return ctx;
 }
 

@@ -37,15 +37,17 @@ export function walkNode(node: Node, visitor: Visitor): Node {
 	return visitor(node);
 }
 
-// Recurse into all child nodes of a given node (mutates in place)
-export function walkChildren(node: Node, visitor: Visitor): void {
+// Apply f to all child nodes of a given node (mutates in place).
+// Core dispatch used by walkChildren, and directly by bounded walkers
+// that stop at function boundaries.
+export function mapChildren(node: Node, f: Visitor): void {
 	match (node.kind) {
 		// Program root
 		NodeKind.Program => {
 			const d = node.data as ProgramData;
 			let i = 0;
 			while (i < d.programStmts.length) {
-				d.programStmts[i] = walkNode(d.programStmts[i], visitor);
+				d.programStmts[i] = f(d.programStmts[i]);
 				i += 1;
 			}
 		},
@@ -54,50 +56,50 @@ export function walkChildren(node: Node, visitor: Visitor): void {
 			const d = node.data as BlockStmtData;
 			let i = 0;
 			while (i < d.statements.length) {
-				d.statements[i] = walkNode(d.statements[i], visitor);
+				d.statements[i] = f(d.statements[i]);
 				i += 1;
 			}
 		},
 		// Statements with child nodes
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
-			d.condition = walkNode(d.condition, visitor);
-			d.consequent = walkNode(d.consequent, visitor);
-			d.alternate = walkNode(d.alternate, visitor);
+			d.condition = f(d.condition);
+			d.consequent = f(d.consequent);
+			d.alternate = f(d.alternate);
 		},
 		NodeKind.WhileStmt => {
 			const d = node.data as WhileStmtData;
-			d.whileCondition = walkNode(d.whileCondition, visitor);
-			d.whileBody = walkNode(d.whileBody, visitor);
+			d.whileCondition = f(d.whileCondition);
+			d.whileBody = f(d.whileBody);
 		},
 		NodeKind.ForStmt => {
 			const d = node.data as ForStmtData;
-			d.forInit = walkNode(d.forInit, visitor);
-			d.forCondition = walkNode(d.forCondition, visitor);
-			d.forUpdate = walkNode(d.forUpdate, visitor);
-			d.forBody = walkNode(d.forBody, visitor);
+			d.forInit = f(d.forInit);
+			d.forCondition = f(d.forCondition);
+			d.forUpdate = f(d.forUpdate);
+			d.forBody = f(d.forBody);
 		},
 		NodeKind.ForOfStmt => {
 			const d = node.data as ForOfStmtData;
-			d.forOfIterable = walkNode(d.forOfIterable, visitor);
-			d.forOfBody = walkNode(d.forOfBody, visitor);
+			d.forOfIterable = f(d.forOfIterable);
+			d.forOfBody = f(d.forOfBody);
 		},
 		NodeKind.ForInStmt => {
 			const d = node.data as ForInStmtData;
-			d.forInObject = walkNode(d.forInObject, visitor);
-			d.forInBody = walkNode(d.forInBody, visitor);
+			d.forInObject = f(d.forInObject);
+			d.forInBody = f(d.forInBody);
 		},
 		NodeKind.DoWhileStmt => {
 			const d = node.data as DoWhileStmtData;
-			d.doBody = walkNode(d.doBody, visitor);
-			d.doCondition = walkNode(d.doCondition, visitor);
+			d.doBody = f(d.doBody);
+			d.doCondition = f(d.doCondition);
 		},
 		NodeKind.SwitchStmt => {
 			const d = node.data as SwitchStmtData;
-			d.switchDisc = walkNode(d.switchDisc, visitor);
+			d.switchDisc = f(d.switchDisc);
 			let i = 0;
 			while (i < d.switchCases.length) {
-				d.switchCases[i] = walkNode(d.switchCases[i], visitor);
+				d.switchCases[i] = f(d.switchCases[i]);
 				i += 1;
 			}
 		},
@@ -105,30 +107,30 @@ export function walkChildren(node: Node, visitor: Visitor): void {
 			const d = node.data as SwitchCaseData;
 			let i = 0;
 			while (i < d.caseTests.length) {
-				d.caseTests[i] = walkNode(d.caseTests[i], visitor);
+				d.caseTests[i] = f(d.caseTests[i]);
 				i += 1;
 			}
 			let j = 0;
 			while (j < d.caseStmts.length) {
-				d.caseStmts[j] = walkNode(d.caseStmts[j], visitor);
+				d.caseStmts[j] = f(d.caseStmts[j]);
 				j += 1;
 			}
 		},
 		NodeKind.MatchStmt => {
 			const d = node.data as MatchStmtData;
-			d.matchStmtDisc = walkNode(d.matchStmtDisc, visitor);
+			d.matchStmtDisc = f(d.matchStmtDisc);
 			let i = 0;
 			while (i < d.matchStmtCases.length) {
-				d.matchStmtCases[i] = walkNode(d.matchStmtCases[i], visitor);
+				d.matchStmtCases[i] = f(d.matchStmtCases[i]);
 				i += 1;
 			}
 		},
 		NodeKind.MatchExpr => {
 			const d = node.data as MatchExprData;
-			d.matchDisc = walkNode(d.matchDisc, visitor);
+			d.matchDisc = f(d.matchDisc);
 			let i = 0;
 			while (i < d.matchCases.length) {
-				d.matchCases[i] = walkNode(d.matchCases[i], visitor);
+				d.matchCases[i] = f(d.matchCases[i]);
 				i += 1;
 			}
 		},
@@ -136,116 +138,116 @@ export function walkChildren(node: Node, visitor: Visitor): void {
 			const d = node.data as MatchCaseData;
 			let i = 0;
 			while (i < d.casePatterns.length) {
-				d.casePatterns[i] = walkNode(d.casePatterns[i], visitor);
+				d.casePatterns[i] = f(d.casePatterns[i]);
 				i += 1;
 			}
-			d.caseBody = walkNode(d.caseBody, visitor);
+			d.caseBody = f(d.caseBody);
 		},
 		// Declarations with bodies
 		NodeKind.FunctionDecl => {
 			const d = node.data as FunctionDeclData;
-			d.fnBody = walkNode(d.fnBody, visitor);
+			d.fnBody = f(d.fnBody);
 		},
 		NodeKind.ArrowFunction => {
 			const d = node.data as ArrowFunctionData;
-			d.arrowBody = walkNode(d.arrowBody, visitor);
+			d.arrowBody = f(d.arrowBody);
 		},
 		NodeKind.FunctionExpr => {
 			const d = node.data as FunctionExprData;
-			d.funcExprBody = walkNode(d.funcExprBody, visitor);
+			d.funcExprBody = f(d.funcExprBody);
 		},
 		NodeKind.ClassDecl => {
 			const d = node.data as ClassDeclData;
 			let i = 0;
 			while (i < d.classBody.length) {
-				d.classBody[i] = walkNode(d.classBody[i], visitor);
+				d.classBody[i] = f(d.classBody[i]);
 				i += 1;
 			}
 		},
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
-			d.methodBody = walkNode(d.methodBody, visitor);
+			d.methodBody = f(d.methodBody);
 		},
 		NodeKind.ConstructorDecl => {
 			const d = node.data as ConstructorDeclData;
-			d.ctorBody = walkNode(d.ctorBody, visitor);
+			d.ctorBody = f(d.ctorBody);
 		},
 		NodeKind.ExportDecl => {
 			const d = node.data as ExportDeclData;
-			d.exportedDecl = walkNode(d.exportedDecl, visitor);
+			d.exportedDecl = f(d.exportedDecl);
 		},
 		NodeKind.DecoratedDecl => {
 			const d = node.data as DecoratedDeclData;
-			d.decoratedNode = walkNode(d.decoratedNode, visitor);
+			d.decoratedNode = f(d.decoratedNode);
 		},
 		NodeKind.MacroDecl => {
 			const d = node.data as MacroDeclData;
-			d.macroDeclBody = walkNode(d.macroDeclBody, visitor);
+			d.macroDeclBody = f(d.macroDeclBody);
 		},
 		// Simple statements with one child
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
-			d.initializer = walkNode(d.initializer, visitor);
+			d.initializer = f(d.initializer);
 		},
 		NodeKind.ReturnStmt => {
 			const d = node.data as ReturnStmtData;
-			d.argument = walkNode(d.argument, visitor);
+			d.argument = f(d.argument);
 		},
 		NodeKind.ThrowStmt => {
 			const d = node.data as ThrowStmtData;
-			d.throwArg = walkNode(d.throwArg, visitor);
+			d.throwArg = f(d.throwArg);
 		},
 		NodeKind.ExprStmt => {
 			const d = node.data as ExprStmtData;
-			d.expr = walkNode(d.expr, visitor);
+			d.expr = f(d.expr);
 		},
 		NodeKind.DeferStmt => {
 			const d = node.data as DeferStmtData;
-			d.deferExpr = walkNode(d.deferExpr, visitor);
+			d.deferExpr = f(d.deferExpr);
 		},
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
-			d.tryBody = walkNode(d.tryBody, visitor);
-			d.catchBody = walkNode(d.catchBody, visitor);
-			d.finallyBody = walkNode(d.finallyBody, visitor);
+			d.tryBody = f(d.tryBody);
+			d.catchBody = f(d.catchBody);
+			d.finallyBody = f(d.finallyBody);
 		},
 		// Expressions
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
-			d.left = walkNode(d.left, visitor);
-			d.right = walkNode(d.right, visitor);
+			d.left = f(d.left);
+			d.right = f(d.right);
 		},
 		NodeKind.UnaryExpr => {
 			const d = node.data as UnaryExprData;
-			d.operand = walkNode(d.operand, visitor);
+			d.operand = f(d.operand);
 		},
 		NodeKind.UpdateExpr => {
 			const d = node.data as UpdateExprData;
-			d.updateArg = walkNode(d.updateArg, visitor);
+			d.updateArg = f(d.updateArg);
 		},
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
-			d.callee = walkNode(d.callee, visitor);
+			d.callee = f(d.callee);
 			let i = 0;
 			while (i < d.arguments.length) {
-				d.arguments[i] = walkNode(d.arguments[i], visitor);
+				d.arguments[i] = f(d.arguments[i]);
 				i += 1;
 			}
 		},
 		NodeKind.MemberExpr => {
 			const d = node.data as MemberExprData;
-			d.object = walkNode(d.object, visitor);
+			d.object = f(d.object);
 		},
 		NodeKind.ArrayAccess => {
 			const d = node.data as ArrayAccessData;
-			d.array = walkNode(d.array, visitor);
-			d.index = walkNode(d.index, visitor);
+			d.array = f(d.array);
+			d.index = f(d.index);
 		},
 		NodeKind.ObjectLiteral => {
 			const d = node.data as ObjectLiteralData;
 			let i = 0;
 			while (i < d.properties.length) {
-				d.properties[i] = walkNode(d.properties[i], visitor);
+				d.properties[i] = f(d.properties[i]);
 				i += 1;
 			}
 		},
@@ -253,74 +255,86 @@ export function walkChildren(node: Node, visitor: Visitor): void {
 			const d = node.data as ArrayLiteralData;
 			let i = 0;
 			while (i < d.elements.length) {
-				d.elements[i] = walkNode(d.elements[i], visitor);
+				d.elements[i] = f(d.elements[i]);
 				i += 1;
 			}
 		},
 		NodeKind.ConditionalExpr => {
 			const d = node.data as ConditionalExprData;
-			d.ternaryCondition = walkNode(d.ternaryCondition, visitor);
-			d.ternaryConsequent = walkNode(d.ternaryConsequent, visitor);
-			d.ternaryAlternate = walkNode(d.ternaryAlternate, visitor);
+			d.ternaryCondition = f(d.ternaryCondition);
+			d.ternaryConsequent = f(d.ternaryConsequent);
+			d.ternaryAlternate = f(d.ternaryAlternate);
 		},
 		NodeKind.SpreadExpr => {
 			const d = node.data as SpreadExprData;
-			d.spreadArg = walkNode(d.spreadArg, visitor);
+			d.spreadArg = f(d.spreadArg);
 		},
 		NodeKind.NewExpr => {
 			const d = node.data as NewExprData;
-			d.newCallee = walkNode(d.newCallee, visitor);
+			d.newCallee = f(d.newCallee);
 			let i = 0;
 			while (i < d.newArguments.length) {
-				d.newArguments[i] = walkNode(d.newArguments[i], visitor);
+				d.newArguments[i] = f(d.newArguments[i]);
 				i += 1;
 			}
 		},
 		NodeKind.TryExpr => {
 			const d = node.data as TryExprData;
-			d.tryArg = walkNode(d.tryArg, visitor);
-			d.catchVal = walkNode(d.catchVal, visitor);
+			d.tryArg = f(d.tryArg);
+			d.catchVal = f(d.catchVal);
 		},
 		NodeKind.AwaitExpr => {
 			const d = node.data as AwaitExprData;
-			d.awaitArg = walkNode(d.awaitArg, visitor);
+			d.awaitArg = f(d.awaitArg);
 		},
 		NodeKind.YieldExpr => {
 			const d = node.data as YieldExprData;
-			d.yieldArg = walkNode(d.yieldArg, visitor);
+			d.yieldArg = f(d.yieldArg);
 		},
 		NodeKind.MoveExpr => {
 			const d = node.data as MoveExprData;
-			d.moveArg = walkNode(d.moveArg, visitor);
+			d.moveArg = f(d.moveArg);
 		},
 		NodeKind.OutExpr => {
 			const d = node.data as OutExprData;
-			d.outArg = walkNode(d.outArg, visitor);
+			d.outArg = f(d.outArg);
 		},
 		NodeKind.TypeAssertion => {
 			const d = node.data as TypeAssertionData;
-			d.asExpr = walkNode(d.asExpr, visitor);
+			d.asExpr = f(d.asExpr);
 		},
 		NodeKind.DestructuringDecl => {
 			const d = node.data as DestructuringDeclData;
-			d.destrPattern = walkNode(d.destrPattern, visitor);
-			d.destrInit = walkNode(d.destrInit, visitor);
+			d.destrPattern = f(d.destrPattern);
+			d.destrInit = f(d.destrInit);
 		},
 		NodeKind.QuoteExpr => {
 			const d = node.data as QuoteExprData;
-			d.quoteBody = walkNode(d.quoteBody, visitor);
+			d.quoteBody = f(d.quoteBody);
 		},
 		NodeKind.MacroInvocation => {
 			const d = node.data as MacroInvocationData;
 			let i = 0;
 			while (i < d.macroArgs.length) {
-				d.macroArgs[i] = walkNode(d.macroArgs[i], visitor);
+				d.macroArgs[i] = f(d.macroArgs[i]);
 				i += 1;
 			}
 		},
 		// Leaf nodes (no children to walk)
 		_ => {},
 	};
+}
+
+// Recurse into all child nodes using bottom-up walkNode traversal
+export function walkChildren(node: Node, visitor: Visitor): void {
+	mapChildren(node, (child: Node): Node => walkNode(child, visitor));
+}
+
+// Check if a node is a function boundary (FunctionDecl, ArrowFunction, FunctionExpr)
+export function isFuncBoundary(node: Node): boolean {
+	return node.kind === NodeKind.FunctionDecl ||
+		node.kind === NodeKind.ArrowFunction ||
+		node.kind === NodeKind.FunctionExpr;
 }
 
 // ===== 1:N Block Expansion =====

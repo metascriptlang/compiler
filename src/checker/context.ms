@@ -1,5 +1,6 @@
 import { Type, TypeKind, unknownType } from "./types";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, createSymbolTable, makeSymbol } from "./symbol";
+import { Module, ModuleGraph } from "../module/graph";
 import { test, check, testGroup } from "std/testing";
 
 // ===== Checker Context =====
@@ -9,6 +10,8 @@ export interface CheckerContext {
 	errors: string[];
 	currentFunction: Symbol;   // innermost function (for return type validation)
 	inLoop: boolean;           // break/continue validation
+	moduleGraph: ModuleGraph;  // null for single-module mode
+	currentModule: Module;     // null for single-module mode
 }
 
 // ===== Constructors =====
@@ -20,6 +23,19 @@ export function createContext(): CheckerContext {
 		errors: [],
 		currentFunction: null as unknown as Symbol,
 		inLoop: false,
+		moduleGraph: null as unknown as ModuleGraph,
+		currentModule: null as unknown as Module,
+	};
+}
+
+export function createModuleContext(graph: ModuleGraph, mod: Module): CheckerContext {
+	return {
+		table: mod.table,
+		errors: [],
+		currentFunction: null as unknown as Symbol,
+		inLoop: false,
+		moduleGraph: graph,
+		currentModule: mod,
 	};
 }
 
