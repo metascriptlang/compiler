@@ -47,90 +47,34 @@ function parseStatement(state: ParserState): NodeResult {
 		}, token));
 	}
 
-	match (token.kind) {
-		TokenKind.Const | TokenKind.Let | TokenKind.Var => {
-			return parseVariableDecl(state);
-		},
-		TokenKind.If => {
-			return parseIfStmt(state);
-		},
-		TokenKind.While => {
-			return parseWhileStmt(state);
-		},
-		TokenKind.For => {
-			return parseForStmt(state);
-		},
-		TokenKind.Return => {
-			return parseReturnStmt(state);
-		},
-		TokenKind.Break => {
-			return parseBreakStmt(state);
-		},
-		TokenKind.Continue => {
-			return parseContinueStmt(state);
-		},
-		TokenKind.Function => {
-			return parseFunctionDecl(state);
-		},
-		TokenKind.LBrace => {
-			return parseBlockStmt(state);
-		},
-		TokenKind.Import => {
-			return parseImportDecl(state);
-		},
-		TokenKind.Export => {
-			return parseExportDecl(state);
-		},
-		TokenKind.Type => {
-			return parseTypeAliasDecl(state);
-		},
-		TokenKind.Enum => {
-			return parseEnumDecl(state);
-		},
-		TokenKind.Interface => {
-			return parseInterfaceDecl(state);
-		},
-		TokenKind.Throw => {
-			return parseThrowStmt(state);
-		},
-		TokenKind.Try => {
-			return parseTryCatchStmt(state);
-		},
-		TokenKind.Do => {
-			return parseDoWhileStmt(state);
-		},
-		TokenKind.Switch => {
-			return parseSwitchStmt(state);
-		},
-		TokenKind.Class => {
-			return parseClassDecl(state);
-		},
-		TokenKind.Abstract => {
-			return parseClassDecl(state);
-		},
-		TokenKind.Defer => {
-			return parseDeferStmt(state);
-		},
-		TokenKind.Unreachable => {
-			return parseUnreachableStmt(state);
-		},
-		TokenKind.Extern => {
-			return parseExternDecl(state);
-		},
-		TokenKind.Distinct => {
-			return parseDistinctTypeDecl(state);
-		},
-		TokenKind.Macro => {
-			return parseMacroDecl(state);
-		},
-		TokenKind.Match => {
-			return parseMatchStmt(state);
-		},
-		_ => {
-			return parseExprStmt(state);
-		},
+	return match (token.kind) {
+		TokenKind.Const | TokenKind.Let | TokenKind.Var => parseVariableDecl(state),
+		TokenKind.If => parseIfStmt(state),
+		TokenKind.While => parseWhileStmt(state),
+		TokenKind.For => parseForStmt(state),
+		TokenKind.Return => parseReturnStmt(state),
+		TokenKind.Break => parseBreakStmt(state),
+		TokenKind.Continue => parseContinueStmt(state),
+		TokenKind.Function => parseFunctionDecl(state),
+		TokenKind.LBrace => parseBlockStmt(state),
+		TokenKind.Import => parseImportDecl(state),
+		TokenKind.Export => parseExportDecl(state),
+		TokenKind.Type => parseTypeAliasDecl(state),
+		TokenKind.Enum => parseEnumDecl(state),
+		TokenKind.Interface => parseInterfaceDecl(state),
+		TokenKind.Throw => parseThrowStmt(state),
+		TokenKind.Try => parseTryCatchStmt(state),
+		TokenKind.Do => parseDoWhileStmt(state),
+		TokenKind.Switch => parseSwitchStmt(state),
+		TokenKind.Class | TokenKind.Abstract => parseClassDecl(state),
+		TokenKind.Defer => parseDeferStmt(state),
+		TokenKind.Unreachable => parseUnreachableStmt(state),
+		TokenKind.Extern => parseExternDecl(state),
+		TokenKind.Distinct => parseDistinctTypeDecl(state),
+		TokenKind.Macro => parseMacroDecl(state),
+		TokenKind.Match => parseMatchStmt(state),
+		_ => parseExprStmt(state),
 	};
-	return Result.err("unreachable");
 }
 
 // ===== Block Statement =====

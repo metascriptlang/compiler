@@ -142,7 +142,7 @@ Hermes VM expands `@derive`, `@comptime`, custom macros. Replaces
 
 ### 2b: Type Checking (~4 kinds)
 
-3-pass architecture (Nim-aligned):
+3-pass architecture:
 - Pass 0: Type canonicalization (assign MsAnon* names)
 - Pass 1: Collect declarations (populate symbol table)
 - Pass 2: Propagate exports (cross-module type flow)

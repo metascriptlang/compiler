@@ -76,29 +76,8 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 }
 
 // ===== Specifier List Helper =====
-// Parses { name, name as alias, ... } — shared by import and re-export
-
-function parseSpecifierList(state: ParserState, names: string[], aliases: string[]): void {
-	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
-		const specifier = current(state);
-		if (specifier.kind !== TokenKind.Ident) { break; }
-		const specName = specifier.value;
-		advance(state);
-		if (!isAtEnd(state) && current(state).kind === TokenKind.As) {
-			advance(state);
-			aliases.push(current(state).value);
-			advance(state);
-		} else {
-			aliases.push(specName);
-		}
-		names.push(specName);
-		if (current(state).kind === TokenKind.Comma) {
-			advance(state);
-		} else {
-			break;
-		}
-	}
-}
+// Note: string[] is a value type in C (struct copy), so we can't pass arrays
+// as out-parameters. Instead, we inline the parsing loop at each call site.
 
 // ===== Function Declaration =====
 // syntax: ('async')? 'function' ('*')? ID '(' params ')' (':' type)? block
@@ -166,7 +145,25 @@ export function parseImportDecl(state: ParserState): NodeResult {
 	advance(state);
 	const names: string[] = [];
 	const aliases: string[] = [];
-	parseSpecifierList(state, names, aliases);
+	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
+		const specifier = current(state);
+		if (specifier.kind !== TokenKind.Ident) { break; }
+		const specName = specifier.value;
+		advance(state);
+		if (!isAtEnd(state) && current(state).kind === TokenKind.As) {
+			advance(state);
+			aliases.push(current(state).value);
+			advance(state);
+		} else {
+			aliases.push(specName);
+		}
+		names.push(specName);
+		if (current(state).kind === TokenKind.Comma) {
+			advance(state);
+		} else {
+			break;
+		}
+	}
 
 	if (current(state).kind !== TokenKind.RBrace) {
 		return Result.err(`Expected '}' after import specifiers at line ${current(state).line.toString()}`);
@@ -207,7 +204,25 @@ export function parseExportDecl(state: ParserState): NodeResult {
 		advance(state); // skip '{'
 		const names: string[] = [];
 		const aliases: string[] = [];
-		parseSpecifierList(state, names, aliases);
+		while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
+			const specifier = current(state);
+			if (specifier.kind !== TokenKind.Ident) { break; }
+			const specName = specifier.value;
+			advance(state);
+			if (!isAtEnd(state) && current(state).kind === TokenKind.As) {
+				advance(state);
+				aliases.push(current(state).value);
+				advance(state);
+			} else {
+				aliases.push(specName);
+			}
+			names.push(specName);
+			if (current(state).kind === TokenKind.Comma) {
+				advance(state);
+			} else {
+				break;
+			}
+		}
 		if (current(state).kind === TokenKind.RBrace) { advance(state); }
 		if (current(state).kind !== TokenKind.From) {
 			return Result.err(`Expected 'from' after export specifiers at line ${current(state).line.toString()}`);

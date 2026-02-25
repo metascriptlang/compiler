@@ -68,17 +68,21 @@ export function callStmtParser(state: ParserState): NodeResult {
 	return stmtParserFn(state);
 }
 
-export function programOk(input: string): boolean {
+// ===== Convenience: lex + parse in one step =====
+
+export function parseSource(input: string): NodeResult {
 	const lr = lex(input);
-	if (!lr.ok) return false;
-	const pr = programParserFn(lr.value);
+	if (!lr.ok) return Result.err(lr.error);
+	return programParserFn(lr.value);
+}
+
+export function programOk(input: string): boolean {
+	const pr = parseSource(input);
 	return pr.ok;
 }
 
 export function stmtKind(input: string): NodeKind {
-	const lr = lex(input);
-	if (!lr.ok) return NodeKind.ExprStmt;
-	const pr = programParserFn(lr.value);
+	const pr = parseSource(input);
 	if (!pr.ok) return NodeKind.ExprStmt;
 	const stmts = pr.value.data as { programStmts: Node[] };
 	if (stmts.programStmts.length === 0) return NodeKind.ExprStmt;
@@ -86,18 +90,14 @@ export function stmtKind(input: string): NodeKind {
 }
 
 export function stmtAt(input: string, index: number): Node {
-	const lr = lex(input);
-	if (!lr.ok) return { kind: NodeKind.ExprStmt, location: { line: 0, column: 0 }, data: { expr: { kind: NodeKind.NullLiteral, location: { line: 0, column: 0 }, data: { nullPlaceholder: true } } } };
-	const pr = programParserFn(lr.value);
+	const pr = parseSource(input);
 	if (!pr.ok) return { kind: NodeKind.ExprStmt, location: { line: 0, column: 0 }, data: { expr: { kind: NodeKind.NullLiteral, location: { line: 0, column: 0 }, data: { nullPlaceholder: true } } } };
 	const stmts = pr.value.data as { programStmts: Node[] };
 	return stmts.programStmts[index];
 }
 
 export function stmtCount(input: string): number {
-	const lr = lex(input);
-	if (!lr.ok) return -1;
-	const pr = programParserFn(lr.value);
+	const pr = parseSource(input);
 	if (!pr.ok) return -1;
 	const stmts = pr.value.data as { programStmts: Node[] };
 	return stmts.programStmts.length;

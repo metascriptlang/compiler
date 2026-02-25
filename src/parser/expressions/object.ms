@@ -5,7 +5,7 @@ import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, NodeData, Expression, createNode } from "../../ast/node";
 import { ParserState, createState, current, advance, isAtEnd } from "../context";
 import { lex } from "../../lexer/lexer";
-import { parseOk } from "./util";
+import { parseOk, mockExpr } from "./util";
 import { test, check, testGroup } from "std/testing";
 
 type ExprResult = Result<Expression, string>;
@@ -91,23 +91,6 @@ export function parseObjectLiteral(state: ParserState, exprParser: ExprParser): 
 }
 
 // ===== Tests =====
-
-function mockExpr(state: ParserState, minPrec: number): ExprResult {
-	const tok = current(state);
-	if (tok.kind === TokenKind.Number) {
-		advance(state);
-		return Result.ok(createNode(NodeKind.NumberLiteral, { value: parseFloat(tok.value) }, tok));
-	}
-	if (tok.kind === TokenKind.Ident) {
-		advance(state);
-		return Result.ok(createNode(NodeKind.Identifier, { name: tok.value }, tok));
-	}
-	if (tok.kind === TokenKind.String) {
-		advance(state);
-		return Result.ok(createNode(NodeKind.StringLiteral, { value: tok.value }, tok));
-	}
-	return Result.err("mock: unexpected token");
-}
 
 function objKeyCount(input: string): number {
 	const lr = lex(input);

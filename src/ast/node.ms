@@ -1,6 +1,3 @@
-// AST Node Types - Nim-aligned discriminated union design
-// Pattern: ~/projects/metascript/src/ast/node.zig
-
 import { Token } from "../lexer/token";
 
 // ===== Node Kind Enum =====

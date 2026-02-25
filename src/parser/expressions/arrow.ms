@@ -6,7 +6,7 @@ import { Node, NodeKind, NodeData, Expression, createNode } from "../../ast/node
 import { ParserState, createState, current, advance, isAtEnd, peek } from "../context";
 import { parseParamList, skipOptionalType } from "../util";
 import { lex } from "../../lexer/lexer";
-import { parseOk } from "./util";
+import { parseOk, mockExpr } from "./util";
 import { test, check, testGroup } from "std/testing";
 
 type ExprResult = Result<Expression, string>;
@@ -89,19 +89,6 @@ export function parseArrowFunction(
 }
 
 // ===== Tests =====
-
-function mockExpr(state: ParserState, minPrec: number): ExprResult {
-	const tok = current(state);
-	if (tok.kind === TokenKind.Number) {
-		advance(state);
-		return Result.ok(createNode(NodeKind.NumberLiteral, { value: parseFloat(tok.value) }, tok));
-	}
-	if (tok.kind === TokenKind.Ident) {
-		advance(state);
-		return Result.ok(createNode(NodeKind.Identifier, { name: tok.value }, tok));
-	}
-	return Result.err("mock: unexpected token");
-}
 
 function mockBlock(state: ParserState): ExprResult {
 	return Result.err("mock: block not supported");

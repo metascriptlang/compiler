@@ -8,7 +8,7 @@ Source.ms --> [1 Parse] --> [2 TypeCheck] --> [3 Transform] --> [4 DRC] --> [5 C
 
 ---
 
-## Phase 1: Parse + Module Loading
+## Phase 1: Parse + Module Loading (src/parser,lexer,ast)
 
 Lex source into tokens, parse tokens into AST, recursively load all imported modules.
 
@@ -23,27 +23,73 @@ Lex source into tokens, parse tokens into AST, recursively load all imported mod
 
 ---
 
-## Phase 2: Macro Expansion + Type Checking
+## Phase 2: Macro Expansion + Type Checking (src/checker)
 
-Expand macros first (Hermes VM), then run 3-pass type checking (Nim-aligned).
+Expand macros first (Hermes VM), then run 3-pass type checking.
 
 ### 2a: Macro Expansion
 
 Hermes VM evaluates `@derive`, `@comptime`, custom `macro!()` invocations. Replaces `macro_invocation` nodes with generated AST subtrees.
 
-### 2b: Type Checking (3-pass + discriminant)
+### 2b: Type Checking -- 3-Pass (Industry Standard)
 
-| Pass | Purpose |
-|------|---------|
-| Pass 0 | **Canonicalize** -- assign stable `MsAnon*` names to anonymous types |
-| Pass 1 | **Collect declarations** -- populate symbol table (functions, classes, types, imports) across all modules |
-| Pass 2 | **Propagate exports** -- cross-module type flow: export types backfill into import symbols |
-| Pass 2.5 | **Discriminant analysis** -- detect property-based and type-based discriminants for unions (needed for lifecycle hooks) |
-| Pass 3 | **Infer + check** -- full type resolution/inference, fill `.type` on every AST node, report errors |
+Proven pattern used by TypeScript, Go, C#/Roslyn, Java/javac, JS++, and Swift.
+
+| Pass | Purpose | Reference (`compile.zig`) | Self-Hosted (`checker/`) |
+|------|---------|--------------------------|--------------------------|
+| **1. Collect** | Register all declarations from all modules (names + signatures) | `collectDeclarations()` | `collectTopLevel()` |
+| **2. Resolve** | Resolve type references, propagate import/export types cross-module | `propagateExports` + `TypeResolver.resolve()` | TODO (`resolve.ms`) |
+| **3. Check** | Infer expression types + validate compatibility | `TypeInference.infer()` + `checkTypes()` | `checkProgramBody()` |
+
+**Why 3-pass over single-pass like legacy impl (research-backed):**
+
+Industry evidence (Feb 2026 survey of 8 production compilers):
+- Every compiler supporting forward references without forward declarations uses
+  a dedicated declaration collection pass before type resolution.
+  requires forward declarations and has limited circular import support (RFC #6
+  open since 2016, "functionally inadequate").
+- The 3-pass pattern (collect -> resolve -> check) is independently adopted by
+  Go (`collectObjects -> packageObjects -> processDelayed`),
+  C#/Roslyn (`Declaration -> Bind -> Emit`),
+  JS++ (`parse+collect -> resolve -> check`),
+  Java/javac (`Enter Phase 1 -> Enter Phase 2 -> Attr`).
+
+Concrete advantages over single-pass:
+- **Forward references without workarounds** -- no `tyForward` placeholders,
+  no `sfForward` flags, no deferred body hacks.
+- **Circular import support** -- Pass 1 collects from ALL modules before any
+  resolution begins. JS++ chose 4 passes specifically for this.
+- **Better error messages** -- full context available before reporting.
+- **Incremental implementation** -- each pass is independently buildable/testable.
+
+The self-hosted compiler currently has Pass 1 (`collectTopLevel`) and Pass 3
+(`checkProgramBody`). Pass 2 (`resolve.ms`) will be added when multi-module
+compilation and type annotation resolution are implemented.
+
+Trans-Am (Salsa-inspired incremental engine) is fully compatible with 3-pass.
+The LSP uses single `checkFile()` queries -- Trans-Am's red-green algorithm,
+macro firewall, and demand-driven queries work regardless of how many internal
+passes the checker uses.
+
+Codegen-related concerns (type canonicalization, lifecycle hook synthesis,
+discriminant analysis) are handled as pre-processing when those phases are
+implemented -- separate from the type checker's pass count.
+
+### 2b-note: Reference Compiler Bloat Analysis
+
+Reference checker is ~51,876 lines, quite bloated. Root causes to avoid in self-hosted implementation:
+
+| Bloat Source | Lines Wasted | Fix |
+|-------------|-------------|-----|
+| Imperative builtin registration | ~5,000 | Table-driven: declare data arrays, register in loop |
+| Duplicated AST traversal (collectDecl + checkTypes share 21 node handlers) | ~1,200 | Shared visitor or store enough in Pass 1 to avoid re-discovery |
+| 18 redundant type switch statements in inference | ~2,000 | Shared helpers: `isNumeric(t)`, `isCallable(t)`, `getReturnType(t)` |
+| resolver.zig as separate full AST walk | ~3,277 | Resolve type references lazily at point of use in Pass 3 |
+| LSP tracking scattered (48 calls) in checker hot path | ~500 | Separate post-pass or event/hook system |
 
 ### 2c: Type Registration
 
-Pre-compute all struct/array/tuple/Result type definitions into a `TypeRegistry` for fast codegen lookup. Eliminates runtime HashMap queries (Nim's `finishTypeDescriptions` pattern).
+Pre-compute all struct/array/tuple/Result type definitions into a `TypeRegistry` for fast codegen lookup. Eliminates runtime HashMap queries.
 
 **Input:** Parsed AST from Phase 1
 **Output:** Fully typed AST, symbol table, type registry, lifecycle hooks
@@ -68,14 +114,14 @@ Multiple sub-transforms that rewrite the typed AST before codegen.
 
 ## Phase 4: DRC Analysis + Injection (C backend only)
 
-Deterministic Reference Counting -- Nim/Lobster-style memory management. Most complex phase.
+Deterministic Reference Counting -- Lobster-style memory management. Most complex phase.
 
 | Step | What it does |
 |------|-------------|
 | 4.1 String concat flatten | `a + b + c` chains to `string_assign_expr` / `string_append_expr` (DRC needs these forms) |
 | 4.2 DRC analysis | Collect interface names (value types, no RC). Run `DrcAnalyzer` on all modules: compute variable lifetimes (`borrow`/`keep`/`any`), decide RC operations, detect move opportunities via CFG last-use analysis |
 | 4.3 Range check injection | Insert `ms_chck_range()` for narrowing type assertions (e.g. `x as int8`) |
-| 4.4 DRC injection | Physically insert `ms_decref()` / `ms_incref()` / `ms_was_moved()` into AST at scope exits, assignments, returns (Nim's `injectdestructors.nim` pattern) |
+| 4.4 DRC injection | Physically insert `ms_decref()` / `ms_incref()` / `ms_was_moved()` into AST at scope exits, assignments, returns (`injectdestructors`) |
 | 4.4b Pointer param transform | Set `loc_flags.indirect` on pointer parameters for C calling convention |
 | 4.5 Loc flag resolution | Pre-resolve all location flags for codegen (no runtime HashMap lookups) |
 
@@ -100,7 +146,7 @@ Read-only AST traversal. Emit target language code. No new AST nodes created.
 | **Erlang** | Single `.erl` file | Respects DCE alive symbols |
 | **Raiser** | Bytecode `.msb` file | Serialized module for VM execution |
 
-Write-if-changed pattern (Nim's `equalsFile`): preserves mtime when output unchanged for incremental builds.
+Write-if-changed pattern (`equalsFile`): preserves mtime when output unchanged for incremental builds.
 
 **Input:** Final AST + all analysis results from previous phases
 **Output:** Target language source files or bytecode

@@ -1,0 +1,213 @@
+import { Node, NodeKind, SourceLocation } from "../ast/node";
+import { Type, TypeKind, unknownType } from "./types";
+import { test, check, testGroup } from "std/testing";
+
+// ===== Symbol Kind =====
+
+export enum SymbolKind {
+	Variable, Function, Class, Interface,
+	TypeAlias, Enum, Parameter, Property, Method,
+}
+
+// ===== Scope Kind =====
+
+export enum ScopeKind {
+	Global, Function, Block, Class, Loop,
+}
+
+// ===== Symbol =====
+
+export interface Symbol {
+	name: string;
+	symbolKind: SymbolKind;
+	symbolType: Type;
+	isMutable: boolean;
+	location: SourceLocation;
+}
+
+// ===== Scope =====
+
+export interface Scope {
+	symbols: Symbol[];
+	scopeKind: ScopeKind;
+	parent: Scope;   // null for global scope
+}
+
+// ===== Symbol Table =====
+
+export interface SymbolTable {
+	current: Scope;
+}
+
+// ===== Constructors =====
+
+export function createSymbolTable(): SymbolTable {
+	const global: Scope = { symbols: [], scopeKind: ScopeKind.Global, parent: null as unknown as Scope };
+	return { current: global };
+}
+
+// ===== Scope Operations =====
+
+export function openScope(table: SymbolTable, kind: ScopeKind): void {
+	const scope: Scope = { symbols: [], scopeKind: kind, parent: table.current };
+	table.current = scope;
+}
+
+export function closeScope(table: SymbolTable): void {
+	if (table.current.parent !== null) {
+		table.current = table.current.parent;
+	}
+}
+
+// ===== Symbol Registration =====
+
+export function defineSymbol(table: SymbolTable, sym: Symbol): Result<boolean, string> {
+	for (const existing of table.current.symbols) {
+		if (existing.name === sym.name) {
+			return Result.err(`Duplicate symbol '${sym.name}'`);
+		}
+	}
+	table.current.symbols.push(sym);
+	return Result.ok(true);
+}
+
+// ===== Symbol Lookup =====
+
+// Walk scope chain, return Symbol or null
+export function lookupSymbol(table: SymbolTable, name: string): Symbol {
+	let scope = table.current;
+	while (scope !== null) {
+		for (const sym of scope.symbols) {
+			if (sym.name === name) {
+				return sym;
+			}
+		}
+		scope = scope.parent;
+	}
+	return null as unknown as Symbol;
+}
+
+// Check current scope only, return Symbol or null
+export function lookupLocal(table: SymbolTable, name: string): Symbol {
+	for (const sym of table.current.symbols) {
+		if (sym.name === name) {
+			return sym;
+		}
+	}
+	return null as unknown as Symbol;
+}
+
+// ===== Helper: Create Symbol Shorthand =====
+
+export function makeSymbol(name: string, kind: SymbolKind, symType: Type, mutable: boolean): Symbol {
+	return { 
+		name,
+		symbolKind: kind,
+		symbolType: symType,
+		isMutable: mutable,
+		location: { line: 0, column: 0 },
+	};
+}
+
+// ===== Tests =====
+
+testGroup("SymbolTable", () => {
+	test("create table", () => {
+		const table = createSymbolTable();
+		check(table.current.scopeKind === ScopeKind.Global);
+		check(table.current.symbols.length === 0);
+	});
+	test("define and lookup", () => {
+		const table = createSymbolTable();
+		const sym = makeSymbol("x", SymbolKind.Variable, unknownType(), false);
+		const result = defineSymbol(table, sym);
+		check(result.ok);
+		check(lookupSymbol(table, "x") !== null);
+	});
+	test("duplicate error", () => {
+		const table = createSymbolTable();
+		const sym1 = makeSymbol("x", SymbolKind.Variable, unknownType(), false);
+		const sym2 = makeSymbol("x", SymbolKind.Variable, unknownType(), true);
+		defineSymbol(table, sym1);
+		const result = defineSymbol(table, sym2);
+		check(!result.ok);
+	});
+	test("scope nesting", () => {
+		const table = createSymbolTable();
+		defineSymbol(table, makeSymbol("a", SymbolKind.Variable, unknownType(), false));
+		openScope(table, ScopeKind.Block);
+		defineSymbol(table, makeSymbol("b", SymbolKind.Variable, unknownType(), false));
+		// Inner scope sees both
+		check(lookupSymbol(table, "a") !== null);
+		check(lookupSymbol(table, "b") !== null);
+		closeScope(table);
+		// Outer scope sees only a
+		check(lookupSymbol(table, "a") !== null);
+		check(lookupSymbol(table, "b") === null);
+	});
+	test("shadowing", () => {
+		const table = createSymbolTable();
+		defineSymbol(table, makeSymbol("x", SymbolKind.Variable, unknownType(), false));
+		openScope(table, ScopeKind.Block);
+		defineSymbol(table, makeSymbol("x", SymbolKind.Variable, unknownType(), true));
+		// Inner lookup finds inner (mutable) shadow
+		const inner = lookupSymbol(table, "x");
+		check(inner !== null);
+		check(inner.isMutable === true);
+		closeScope(table);
+		// Outer lookup finds outer (immutable) original
+		const outer = lookupSymbol(table, "x");
+		check(outer !== null);
+		check(outer.isMutable === false);
+	});
+	test("lookupLocal", () => {
+		const table = createSymbolTable();
+		defineSymbol(table, makeSymbol("x", SymbolKind.Variable, unknownType(), false));
+		openScope(table, ScopeKind.Block);
+		// lookupLocal does NOT find parent scope
+		check(lookupLocal(table, "x") === null);
+		// lookupSymbol DOES find parent scope
+		check(lookupSymbol(table, "x") !== null);
+		closeScope(table);
+	});
+	test("function scope params", () => {
+		const table = createSymbolTable();
+		defineSymbol(table, makeSymbol("add", SymbolKind.Function, unknownType(), false));
+		openScope(table, ScopeKind.Function);
+		defineSymbol(table, makeSymbol("a", SymbolKind.Parameter, unknownType(), false));
+		defineSymbol(table, makeSymbol("b", SymbolKind.Parameter, unknownType(), false));
+		check(lookupSymbol(table, "a") !== null);
+		check(lookupSymbol(table, "b") !== null);
+		check(lookupSymbol(table, "add") !== null);
+		closeScope(table);
+		check(lookupSymbol(table, "a") === null);
+	});
+	test("deeply nested", () => {
+		const table = createSymbolTable();
+		defineSymbol(table, makeSymbol("global", SymbolKind.Variable, unknownType(), false));
+		openScope(table, ScopeKind.Function);
+		defineSymbol(table, makeSymbol("func", SymbolKind.Variable, unknownType(), false));
+		openScope(table, ScopeKind.Block);
+		defineSymbol(table, makeSymbol("block", SymbolKind.Variable, unknownType(), false));
+		openScope(table, ScopeKind.Loop);
+		defineSymbol(table, makeSymbol("loop", SymbolKind.Variable, unknownType(), false));
+		check(lookupSymbol(table, "global") !== null);
+		check(lookupSymbol(table, "func") !== null);
+		check(lookupSymbol(table, "block") !== null);
+		check(lookupSymbol(table, "loop") !== null);
+		closeScope(table);
+		closeScope(table);
+		closeScope(table);
+		check(lookupSymbol(table, "loop") === null);
+	});
+	test("scope kind", () => {
+		const table = createSymbolTable();
+		check(table.current.scopeKind === ScopeKind.Global);
+		openScope(table, ScopeKind.Function);
+		check(table.current.scopeKind === ScopeKind.Function);
+		openScope(table, ScopeKind.Loop);
+		check(table.current.scopeKind === ScopeKind.Loop);
+		closeScope(table);
+		closeScope(table);
+	});
+});

@@ -149,7 +149,7 @@ function parseSinglePattern(state: ParserState): ExprResult {
 
 		// Handle member access: Enum.Member (e.g., TokenKind.Plus)
 		while (!isAtEnd(state) && current(state).kind === TokenKind.Dot) {
-			advance(state); // consume .
+			advance(state);
 			const prop = current(state);
 			if (prop.kind === TokenKind.Ident) {
 				advance(state);

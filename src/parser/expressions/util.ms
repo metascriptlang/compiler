@@ -5,7 +5,8 @@
 // parseFn is always set by the time tests actually run.
 
 import { Token, TokenKind } from "../../lexer/token";
-import { Node, NodeKind, Expression } from "../../ast/node";
+import { Node, NodeKind, Expression, createNode } from "../../ast/node";
+import { ParserState, current, advance, isAtEnd } from "../context";
 import { lex } from "../../lexer/lexer";
 
 type ExprResult = Result<Expression, string>;
@@ -60,6 +61,46 @@ export function exprOp(input: string): string {
 		return d.updateOp;
 	}
 	return "";
+}
+
+// ===== Mock Expression Parser for Unit Tests =====
+// Shared by call.ms, object.ms, arrow.ms tests
+
+export function mockExpr(state: ParserState, minPrec: number): ExprResult {
+	const tok = current(state);
+	if (tok.kind === TokenKind.Number) {
+		advance(state);
+		return Result.ok(createNode(NodeKind.NumberLiteral, { value: parseFloat(tok.value) }, tok));
+	}
+	if (tok.kind === TokenKind.Ident) {
+		advance(state);
+		return Result.ok(createNode(NodeKind.Identifier, { name: tok.value }, tok));
+	}
+	if (tok.kind === TokenKind.String) {
+		advance(state);
+		return Result.ok(createNode(NodeKind.StringLiteral, { value: tok.value }, tok));
+	}
+	return Result.err("mock: unexpected token");
+}
+
+// ===== Member Access Chain Parser =====
+// Shared by new-expression (core.ms) and match-pattern (match.ms)
+// Parses: base.prop1.prop2.prop3...
+
+export function parseMemberChain(state: ParserState, base: Node): Node {
+	let node = base;
+	while (!isAtEnd(state) && current(state).kind === TokenKind.Dot) {
+		const dotToken = current(state);
+		advance(state);
+		const prop = current(state);
+		if (prop.kind === TokenKind.Ident) {
+			advance(state);
+			node = createNode(NodeKind.MemberExpr, { object: node, property: prop.value }, dotToken);
+		} else {
+			break;
+		}
+	}
+	return node;
 }
 
 export function binLeftKind(input: string): NodeKind {

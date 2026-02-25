@@ -33,41 +33,19 @@ export function emitNumber(s: LexerState, numStr: string, startLine: number, sta
 	}
 }
 
-export function scanHexDigits(s: LexerState): string {
+function scanDigitsWhere(s: LexerState, isValidDigit: (ch: number) => boolean): string {
 	let result = "";
-	while (s.pos < s.source.length && (isHexDigit(peek(s)) || peek(s) === "_".code)) {
+	while (s.pos < s.source.length && (isValidDigit(peek(s)) || peek(s) === "_".code)) {
 		if (peek(s) !== "_".code) result += s.source.charAt(s.pos);
 		advanceChar(s);
 	}
 	return result;
 }
 
-export function scanDecDigits(s: LexerState): string {
-	let result = "";
-	while (s.pos < s.source.length && (isDigit(peek(s)) || peek(s) === "_".code)) {
-		if (peek(s) !== "_".code) result += s.source.charAt(s.pos);
-		advanceChar(s);
-	}
-	return result;
-}
-
-export function scanBinDigits(s: LexerState): string {
-	let result = "";
-	while (s.pos < s.source.length && (isBinaryDigit(peek(s)) || peek(s) === "_".code)) {
-		if (peek(s) !== "_".code) result += s.source.charAt(s.pos);
-		advanceChar(s);
-	}
-	return result;
-}
-
-export function scanOctDigits(s: LexerState): string {
-	let result = "";
-	while (s.pos < s.source.length && (isOctalDigit(peek(s)) || peek(s) === "_".code)) {
-		if (peek(s) !== "_".code) result += s.source.charAt(s.pos);
-		advanceChar(s);
-	}
-	return result;
-}
+export function scanHexDigits(s: LexerState): string { return scanDigitsWhere(s, isHexDigit); }
+export function scanDecDigits(s: LexerState): string { return scanDigitsWhere(s, isDigit); }
+export function scanBinDigits(s: LexerState): string { return scanDigitsWhere(s, isBinaryDigit); }
+export function scanOctDigits(s: LexerState): string { return scanDigitsWhere(s, isOctalDigit); }
 
 export function scanNumber(s: LexerState): void {
 	const startLine = s.line;
@@ -150,6 +128,21 @@ export function scanString(s: LexerState, quoteChar: number): void {
 	addToken(s, TokenKind.String, str, startLine, startCol);
 }
 
+// Template-specific escape: backtick, dollar, or standard escape
+function processTemplateEscape(s: LexerState): string {
+	if (s.pos + 1 < s.source.length && peekAt(s, 1) === "`".code) {
+		advanceChar(s);
+		advanceChar(s);
+		return "`";
+	}
+	if (s.pos + 1 < s.source.length && peekAt(s, 1) === "$".code) {
+		advanceChar(s);
+		advanceChar(s);
+		return "$";
+	}
+	return processEscape(s);
+}
+
 export function scanTemplateString(s: LexerState): void {
 	const startLine = s.line;
 	const startCol = s.column;
@@ -165,18 +158,7 @@ export function scanTemplateString(s: LexerState): void {
 			return;
 		}
 		if (peek(s) === "\\".code) {
-			// Template-specific escapes: backtick and dollar
-			if (s.pos + 1 < s.source.length && peekAt(s, 1) === "`".code) {
-				advanceChar(s);
-				str += "`";
-				advanceChar(s);
-			} else if (s.pos + 1 < s.source.length && peekAt(s, 1) === "$".code) {
-				advanceChar(s);
-				str += "$";
-				advanceChar(s);
-			} else {
-				str += processEscape(s);
-			}
+			str += processTemplateEscape(s);
 		} else {
 			str += s.source.charAt(s.pos);
 			advanceChar(s);
@@ -199,17 +181,7 @@ export function scanTemplateContinuation(s: LexerState): void {
 			return;
 		}
 		if (peek(s) === "\\".code) {
-			if (s.pos + 1 < s.source.length && peekAt(s, 1) === "`".code) {
-				advanceChar(s);
-				str += "`";
-				advanceChar(s);
-			} else if (s.pos + 1 < s.source.length && peekAt(s, 1) === "$".code) {
-				advanceChar(s);
-				str += "$";
-				advanceChar(s);
-			} else {
-				str += processEscape(s);
-			}
+			str += processTemplateEscape(s);
 		} else {
 			str += s.source.charAt(s.pos);
 			advanceChar(s);

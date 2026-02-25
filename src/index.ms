@@ -3,15 +3,17 @@
 //   ast/       — AST types, printer (hub: index.ms)
 //   lexer/     — Tokenization (hub: index.ms)
 //   parser/    — Parsing (hub: index.ms)
+//   checker/   — Type checking (hub: index.ms)
 //   diagnostics/ — Error formatting helpers
 
 import { formatToken } from "./lexer/token";
 import { lex } from "./lexer/index";
 import { parseExpression } from "./parser/index";
-import { parseProgram } from "./parser/index";
+import { parseSource } from "./parser/statements/util";
 import { Node } from "./ast/node";
 import { printNode } from "./ast/index";
 import { formatError, unexpectedToken } from "./diagnostics/diagnostics";
+import { checkProgram } from "./checker/index";
 
 // ===== Test Helpers =====
 
@@ -46,12 +48,7 @@ function testParse(input: string): void {
 
 function testParseProgram(input: string): void {
 	console.log(`Input: ${input}`);
-	const lexResult = lex(input);
-	if (!lexResult.ok) {
-		console.log(`  Lex error: ${lexResult.error}`);
-		return;
-	}
-	const parseResult = parseProgram(lexResult.value);
+	const parseResult = parseSource(input);
 	if (!parseResult.ok) {
 		console.log(`  Parse error: ${parseResult.error}`);
 		return;
