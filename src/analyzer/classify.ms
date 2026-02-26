@@ -5,13 +5,11 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { Type, TypeKind, isPrimitiveKind } from "../checker/types";
+import { Type, TypeKind, isPrimitiveKind, createPrimitive, createObject, createArray, createFunction, numberType, stringType, booleanType, voidType, nullType, unknownType } from "../checker/types";
 import { lookupSymbol, SymbolKind, isPointerType as isPointerTypeBase } from "../checker/symbol";
-import { TransformContext } from "../transform/context";
+import { TransformContext, createTransformContext } from "../transform/context";
 import { NodeKind } from "../ast/node";
 import { test, check, testGroup } from "std/testing";
-import { createPrimitive, createObject, createArray, createFunction, numberType, stringType, booleanType, voidType, nullType, unknownType } from "../checker/types";
-import { createTransformContext } from "../transform/context";
 
 // ===== RC Classification Kind =====
 
@@ -122,18 +120,15 @@ export function classifyType(t: Type, ctx: TransformContext): RcInfo {
 // Fresh expressions produce owned values — no copy needed on init.
 
 export function isFreshExpr(kind: NodeKind): boolean {
-	return kind === NodeKind.CallExpr
-		|| kind === NodeKind.NewExpr
-		|| kind === NodeKind.ObjectLiteral
-		|| kind === NodeKind.ArrayLiteral
-		|| kind === NodeKind.StringLiteral
-		|| kind === NodeKind.NumberLiteral
-		|| kind === NodeKind.BooleanLiteral
-		|| kind === NodeKind.NullLiteral
-		|| kind === NodeKind.ArrowFunction
-		|| kind === NodeKind.FunctionExpr
-		|| kind === NodeKind.MoveExpr
-		|| kind === NodeKind.ConditionalExpr;
+	return match (kind) {
+		NodeKind.CallExpr | NodeKind.NewExpr
+		| NodeKind.ObjectLiteral | NodeKind.ArrayLiteral
+		| NodeKind.StringLiteral | NodeKind.NumberLiteral
+		| NodeKind.BooleanLiteral | NodeKind.NullLiteral
+		| NodeKind.ArrowFunction | NodeKind.FunctionExpr
+		| NodeKind.MoveExpr | NodeKind.ConditionalExpr => true,
+		_ => false,
+	};
 }
 
 // ===== Tests =====

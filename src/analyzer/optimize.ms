@@ -15,10 +15,11 @@ import {
 	ForOfStmtData, DoWhileStmtData, ReturnStmtData,
 } from "../ast/node";
 import { test, check, testGroup } from "std/testing";
-import { TransformContext } from "../transform/context";
+import { TransformContext, NameSet, nameSetContains, nameSetAdd, nameSetIntersect } from "../transform/context";
 import {
 	makeIdent, makeBlock, makeExprStmt, makeCall,
 } from "../transform/util";
+import { testLoc } from "./inject";
 
 // ===== Known wasMoved / destroy function names =====
 
@@ -30,7 +31,7 @@ function isWasMovedFn(name: string): boolean {
 		|| name === "ms_closure_was_moved"
 		|| name === "ms_map_was_moved"
 		|| name === "ms_ptr_was_moved"
-		|| endsWith(name, "_wasMoved");
+		|| name.endsWith("_wasMoved");
 }
 
 function isDestroyFn(name: string): boolean {
@@ -42,14 +43,54 @@ function isDestroyFn(name: string): boolean {
 		|| name === "ms_closure_destroy"
 		|| name === "ms_map_free"
 		|| name === "ms_set_free"
-		|| endsWith(name, "_destroy");
+		|| name.endsWith("_destroy");
 }
 
-// Simple endsWith check (no string.includes in MetaScript)
-function endsWith(s: string, suffix: string): boolean {
-	if (s.length < suffix.length) return false;
-	const start = s.length - suffix.length;
-	return s.slice(start, s.length) === suffix;
+
+// ===== Moved-var tracking for branch-aware optimization =====
+// Uses NameSet from transform/context (DRY: same interface as NameSet was).
+
+// Scan a block's top-level statements for wasMoved calls
+function collectBlockMoved(block: Node): NameSet {
+	const result: NameSet = { names: [] };
+	if (block === null) return result;
+	if (block.kind !== NodeKind.BlockStmt) return result;
+	const bd = block.data as BlockStmtData;
+	let i = 0;
+	while (i < bd.statements.length) {
+		const wm = getWasMovedVar(bd.statements[i]);
+		if (wm !== "") {
+			nameSetAdd(result, wm);
+		}
+		// Also collect from nested if/else branches
+		if (bd.statements[i].kind === NodeKind.IfStmt) {
+			const nested = collectIfMoved(bd.statements[i]);
+			for (const v of nested.names) {
+				nameSetAdd(result, v);
+			}
+		}
+		i += 1;
+	}
+	return result;
+}
+
+// Collect moved vars from if/else — intersection of all branches
+function collectIfMoved(ifNode: Node): NameSet {
+	const d = ifNode.data as IfStmtData;
+	const consMoved = collectBlockMoved(d.consequent);
+
+	// No else — can't guarantee moved on all paths
+	if (d.alternate === null) return { names: [] };
+
+	// else-if chain: recurse
+	if (d.alternate.kind === NodeKind.IfStmt) {
+		const altMoved = collectIfMoved(d.alternate);
+		return nameSetIntersect(consMoved, altMoved);
+	}
+
+	// else block
+	const altMoved = collectBlockMoved(d.alternate);
+	return nameSetIntersect(consMoved, altMoved);
 }
 
 // ===== Extract var name from wasMoved/destroy call =====
@@ -91,25 +132,42 @@ function getDestroyVar(stmt: Node): string {
 }
 
 // ===== Block Optimization =====
+// Tracks wasMoved vars across the block (not just adjacent pairs).
+// Also collects definitely-moved vars from exhaustive if/else branches.
 
 function optimizeBlock(stmts: Node[]): Node[] {
 	const result: Node[] = [];
+	const moved: NameSet = { names: [] };
+
 	let i = 0;
 	while (i < stmts.length) {
-		// Check for wasMoved(x); destroy(x) pattern
-		if (i + 1 < stmts.length) {
-			const wmVar = getWasMovedVar(stmts[i]);
-			if (wmVar !== "") {
-				const destroyVar = getDestroyVar(stmts[i + 1]);
-				if (wmVar === destroyVar) {
-					// Eliminate the destroy — wasMoved already zeroed the var
-					result.push(stmts[i]);  // keep wasMoved
-					i += 2;  // skip destroy
-					continue;
-				}
+		const stmt = stmts[i];
+
+		// Track wasMoved calls — add var to moved set
+		const wmVar = getWasMovedVar(stmt);
+		if (wmVar !== "") {
+			nameSetAdd(moved, wmVar);
+			result.push(stmt);
+			i += 1;
+			continue;
+		}
+
+		// Eliminate destroy for definitely-moved vars
+		const dVar = getDestroyVar(stmt);
+		if (dVar !== "" && nameSetContains(moved, dVar)) {
+			i += 1;  // skip destroy — var was already zeroed by wasMoved
+			continue;
+		}
+
+		// Collect moved vars from exhaustive if/else branches
+		if (stmt.kind === NodeKind.IfStmt) {
+			const ifMoved = collectIfMoved(stmt);
+			for (const v of ifMoved.names) {
+				nameSetAdd(moved, v);
 			}
 		}
-		result.push(stmts[i]);
+
+		result.push(stmt);
 		i += 1;
 	}
 	return result;
@@ -199,25 +257,20 @@ export function optimizeDrc(program: Node): Node {
 
 // ===== Tests =====
 
-function makeLoc(): SourceLocation {
-	const loc: SourceLocation = { line: 0, column: 0 };
-	return loc;
-}
-
 function makeWmCall(varName: string): Node {
-	const loc = makeLoc();
+	const loc = testLoc();
 	return makeExprStmt(
 		makeCall(makeIdent("ms_string_was_moved", loc), [makeIdent(varName, loc)], loc), loc);
 }
 
 function makeDestroyCallForTest(varName: string): Node {
-	const loc = makeLoc();
+	const loc = testLoc();
 	return makeExprStmt(
 		makeCall(makeIdent("ms_string_decref", loc), [makeIdent(varName, loc)], loc), loc);
 }
 
 function makeOtherStmt(): Node {
-	const loc = makeLoc();
+	const loc = testLoc();
 	return makeExprStmt(makeIdent("something", loc), loc);
 }
 
@@ -230,14 +283,14 @@ testGroup("DRC Optimize wasMoved+destroy", () => {
 		// destroy eliminated, only wasMoved remains
 		check(result.length === 1);
 	});
-	test("preserves non-adjacent pair", () => {
+	test("eliminates non-adjacent wasMoved+destroy", () => {
 		const wm = makeWmCall("x");
 		const other = makeOtherStmt();
 		const destroy = makeDestroyCallForTest("x");
 		const stmts: Node[] = [wm, other, destroy];
 		const result = optimizeBlock(stmts);
-		// Not adjacent — both preserved
-		check(result.length === 3);
+		// Non-adjacent destroy eliminated — wasMoved + other remain
+		check(result.length === 2);
 	});
 	test("preserves different vars", () => {
 		const wm = makeWmCall("x");
@@ -286,13 +339,51 @@ testGroup("DRC Optimize getWasMovedVar", () => {
 	});
 });
 
-testGroup("DRC Optimize endsWith", () => {
-	test("matches suffix", () => {
-		check(endsWith("Token_destroy", "_destroy"));
-		check(endsWith("Token_wasMoved", "_wasMoved"));
+testGroup("DRC Optimize Branch-Aware", () => {
+	test("if/else both move same var → eliminate destroy", () => {
+		const loc = testLoc();
+		// Build: if (cond) { wasMoved(x); } else { wasMoved(x); } destroy(x);
+		const wmCons = makeWmCall("x");
+		const consBlock = makeBlock([wmCons], loc);
+		const wmAlt = makeWmCall("x");
+		const altBlock = makeBlock([wmAlt], loc);
+		const ifNode: Node = {
+			kind: NodeKind.IfStmt, location: loc,
+			data: { condition: makeIdent("cond", loc), consequent: consBlock, alternate: altBlock },
+		};
+		const destroy = makeDestroyCallForTest("x");
+		const stmts: Node[] = [ifNode, destroy];
+		const result = optimizeBlock(stmts);
+		// destroy(x) eliminated — x was moved on all paths
+		check(result.length === 1);
 	});
-	test("no match", () => {
-		check(!endsWith("Token_copy", "_destroy"));
-		check(!endsWith("short", "_destroy"));
+	test("if without else → preserve destroy", () => {
+		const loc = testLoc();
+		const wmCons = makeWmCall("x");
+		const consBlock = makeBlock([wmCons], loc);
+		const ifNode: Node = {
+			kind: NodeKind.IfStmt, location: loc,
+			data: { condition: makeIdent("cond", loc), consequent: consBlock, alternate: null as unknown as Node },
+		};
+		const destroy = makeDestroyCallForTest("x");
+		const stmts: Node[] = [ifNode, destroy];
+		const result = optimizeBlock(stmts);
+		// No else — can't guarantee moved, destroy preserved
+		check(result.length === 2);
+	});
+	test("if/else move different vars → preserve both destroys", () => {
+		const loc = testLoc();
+		const consBlock = makeBlock([makeWmCall("x")], loc);
+		const altBlock = makeBlock([makeWmCall("y")], loc);
+		const ifNode: Node = {
+			kind: NodeKind.IfStmt, location: loc,
+			data: { condition: makeIdent("cond", loc), consequent: consBlock, alternate: altBlock },
+		};
+		const destroyX = makeDestroyCallForTest("x");
+		const destroyY = makeDestroyCallForTest("y");
+		const stmts: Node[] = [ifNode, destroyX, destroyY];
+		const result = optimizeBlock(stmts);
+		// Neither is moved on ALL paths — both preserved
+		check(result.length === 3);
 	});
 });

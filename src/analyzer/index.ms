@@ -7,7 +7,7 @@
 
 import { Node, NodeKind, ProgramData } from "../ast/node";
 import { CheckerContext } from "../checker/context";
-import { TransformContext, createTransformContext } from "../transform/context";
+import { TransformContext, createTransformContextWithChecker } from "../transform/context";
 import { createDrcContext, pushScope, popScope, scopeDepth } from "./scope";
 import { injectProgram } from "./inject";
 import { optimizeDrc } from "./optimize";
@@ -23,12 +23,7 @@ import { transformProgram } from "../transform/index";
 export function analyzeProgram(program: Node, checkerCtx: CheckerContext): Node {
 	if (checkerCtx === null) return program;  // test mode — skip analysis
 
-	const ctx: TransformContext = {
-		tempCounter: 0,
-		errors: [],
-		fnDeclNames: [],
-		checkerCtx,
-	};
+	const ctx = createTransformContextWithChecker(checkerCtx);
 	const dctx = createDrcContext(ctx);
 	const injected = injectProgram(program, dctx);
 	return optimizeDrc(injected);

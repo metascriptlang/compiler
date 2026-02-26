@@ -21,11 +21,19 @@ import {
 	ThrowStmtData, DoWhileStmtData, FunctionDeclData,
 	ExportDeclData, MoveExprData,
 } from "../ast/node";
+import { OuterStack } from "./scope";
 import { test, check, testGroup } from "std/testing";
 import { parseInput } from "../transform/testUtil";
 
 // ===== nodeReferencesVar — recursive check =====
 // Returns true if `node` (or any sub-expression) references `varName`.
+
+function anyChildReferences(nodes: Node[], varName: string): boolean {
+	for (const n of nodes) {
+		if (nodeReferencesVar(n, varName)) return true;
+	}
+	return false;
+}
 
 export function nodeReferencesVar(node: Node, varName: string): boolean {
 	if (node === null) return false;
@@ -41,29 +49,15 @@ export function nodeReferencesVar(node: Node, varName: string): boolean {
 		NodeKind.UpdateExpr => nodeReferencesVar((node.data as UpdateExprData).updateArg, varName),
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
-			if (nodeReferencesVar(d.callee, varName)) return true;
-			for (const arg of d.arguments) {
-				if (nodeReferencesVar(arg, varName)) return true;
-			}
-			false
+			nodeReferencesVar(d.callee, varName) || anyChildReferences(d.arguments, varName)
 		},
 		NodeKind.MemberExpr => nodeReferencesVar((node.data as MemberExprData).object, varName),
 		NodeKind.ArrayAccess => {
 			const d = node.data as ArrayAccessData;
 			nodeReferencesVar(d.array, varName) || nodeReferencesVar(d.index, varName)
 		},
-		NodeKind.ObjectLiteral => {
-			for (const prop of (node.data as ObjectLiteralData).properties) {
-				if (nodeReferencesVar(prop, varName)) return true;
-			}
-			false
-		},
-		NodeKind.ArrayLiteral => {
-			for (const elem of (node.data as ArrayLiteralData).elements) {
-				if (nodeReferencesVar(elem, varName)) return true;
-			}
-			false
-		},
+		NodeKind.ObjectLiteral => anyChildReferences((node.data as ObjectLiteralData).properties, varName),
+		NodeKind.ArrayLiteral => anyChildReferences((node.data as ArrayLiteralData).elements, varName),
 		NodeKind.ConditionalExpr => {
 			const d = node.data as ConditionalExprData;
 			nodeReferencesVar(d.ternaryCondition, varName)
@@ -73,11 +67,7 @@ export function nodeReferencesVar(node: Node, varName: string): boolean {
 		NodeKind.SpreadExpr => nodeReferencesVar((node.data as SpreadExprData).spreadArg, varName),
 		NodeKind.NewExpr => {
 			const d = node.data as NewExprData;
-			if (nodeReferencesVar(d.newCallee, varName)) return true;
-			for (const arg of d.newArguments) {
-				if (nodeReferencesVar(arg, varName)) return true;
-			}
-			false
+			nodeReferencesVar(d.newCallee, varName) || anyChildReferences(d.newArguments, varName)
 		},
 		NodeKind.TypeAssertion => nodeReferencesVar((node.data as TypeAssertionData).asExpr, varName),
 		NodeKind.MoveExpr => nodeReferencesVar((node.data as MoveExprData).moveArg, varName),
@@ -110,12 +100,7 @@ export function nodeReferencesVar(node: Node, varName: string): boolean {
 			const d = node.data as DoWhileStmtData;
 			nodeReferencesVar(d.doBody, varName) || nodeReferencesVar(d.doCondition, varName)
 		},
-		NodeKind.BlockStmt => {
-			for (const stmt of (node.data as BlockStmtData).statements) {
-				if (nodeReferencesVar(stmt, varName)) return true;
-			}
-			false
-		},
+		NodeKind.BlockStmt => anyChildReferences((node.data as BlockStmtData).statements, varName),
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
 			nodeReferencesVar(d.tryBody, varName)
@@ -124,21 +109,11 @@ export function nodeReferencesVar(node: Node, varName: string): boolean {
 		},
 		NodeKind.SwitchStmt => {
 			const d = node.data as SwitchStmtData;
-			if (nodeReferencesVar(d.switchDisc, varName)) return true;
-			for (const c of d.switchCases) {
-				if (nodeReferencesVar(c, varName)) return true;
-			}
-			false
+			nodeReferencesVar(d.switchDisc, varName) || anyChildReferences(d.switchCases, varName)
 		},
 		NodeKind.SwitchCase => {
 			const d = node.data as SwitchCaseData;
-			for (const t of d.caseTests) {
-				if (nodeReferencesVar(t, varName)) return true;
-			}
-			for (const s of d.caseStmts) {
-				if (nodeReferencesVar(s, varName)) return true;
-			}
-			false
+			anyChildReferences(d.caseTests, varName) || anyChildReferences(d.caseStmts, varName)
 		},
 		NodeKind.ExportDecl => nodeReferencesVar((node.data as ExportDeclData).exportedDecl, varName),
 
@@ -156,6 +131,32 @@ export function isLastReadInBlock(varName: string, stmtIndex: number, stmts: Nod
 	while (i < stmts.length) {
 		if (nodeReferencesVar(stmts[i], varName)) return false;
 		i += 1;
+	}
+	return true;
+}
+
+// ===== isLastReadInContext — cross-scope forward scan =====
+// Like isLastReadInBlock, but also checks remaining statements in outer scopes.
+// Stops at function boundaries (variables don't escape function scope).
+
+export function isLastReadInContext(varName: string, stmtIndex: number, stmts: Node[], outerCtx: OuterStack): boolean {
+	// Check remaining stmts in current block
+	let i = stmtIndex + 1;
+	while (i < stmts.length) {
+		if (nodeReferencesVar(stmts[i], varName)) return false;
+		i += 1;
+	}
+	// Check outer scopes (innermost first)
+	let oi = outerCtx.items.length;
+	while (oi > 0) {
+		oi -= 1;
+		const entry = outerCtx.items[oi];
+		if (entry.isFunctionBoundary) break;  // don't look past function boundaries
+		let j = entry.fromIndex;
+		while (j < entry.outerStmts.length) {
+			if (nodeReferencesVar(entry.outerStmts[j], varName)) return false;
+			j += 1;
+		}
 	}
 	return true;
 }
@@ -235,6 +236,35 @@ testGroup("isLastReadInBlock", () => {
 	test("different var is last read", () => {
 		const stmts = getStmts("const a = 1; const b = a; const c = b;");
 		check(isLastReadInBlock("a", 1, stmts));
+	});
+});
+
+testGroup("isLastReadInContext", () => {
+	test("no outer context = same as isLastReadInBlock", () => {
+		const stmts = getStmts("const a = 1; const b = a;");
+		const emptyOuter: OuterStack = { items: [] };
+		check(isLastReadInContext("a", 1, stmts, emptyOuter));
+	});
+	test("not last when used in outer scope", () => {
+		// Inner block: [const b = a]  Outer remaining: [const c = a]
+		const outerStmts = getStmts("const a = 1; const c = a;");
+		const innerStmts = getStmts("const b = a;");
+		const outer: OuterStack = { items: [
+			{ outerStmts, fromIndex: 1, isFunctionBoundary: false },
+		] };
+		// "a" at index 0 in innerStmts — not referenced in innerStmts[1..] (none)
+		// But referenced in outerStmts[1] — so NOT last read
+		check(!isLastReadInContext("a", 0, innerStmts, outer));
+	});
+	test("function boundary stops outer search", () => {
+		const outerStmts = getStmts("const a = 1; const c = a;");
+		const innerStmts = getStmts("const b = a;");
+		const outer: OuterStack = { items: [
+			{ outerStmts, fromIndex: 1, isFunctionBoundary: false },
+			{ outerStmts: [], fromIndex: 0, isFunctionBoundary: true },
+		] };
+		// Function boundary blocks outer search — IS last read
+		check(isLastReadInContext("a", 0, innerStmts, outer));
 	});
 });
 

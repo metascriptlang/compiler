@@ -7,11 +7,11 @@
 //
 // DRC-safe: all array-holding fields wrapped in interfaces (gotcha #4).
 
-import { Node } from "../ast/node";
+import { Node, SourceLocation } from "../ast/node";
 import { RcInfo, RcKind, noRcInfo } from "./classify";
-import { TransformContext, freshTemp } from "../transform/context";
+import { TransformContext, freshTemp, createTransformContext } from "../transform/context";
+import { makeExprStmt, makeNull } from "../transform/util";
 import { test, check, testGroup } from "std/testing";
-import { createTransformContext } from "../transform/context";
 
 // ===== Variable Info =====
 
@@ -55,10 +55,23 @@ export interface DrcScopeStack {
 	items: DrcScope[];
 }
 
+// ===== Outer Statement Context (for cross-scope last-read analysis) =====
+
+export interface OuterEntry {
+	outerStmts: Node[];
+	fromIndex: number;
+	isFunctionBoundary: boolean;  // function boundary — stop cross-scope search
+}
+
+export interface OuterStack {
+	items: OuterEntry[];
+}
+
 export interface DrcContext {
 	ctx: TransformContext;
 	scopes: DrcScopeStack;          // scope stack
 	pendingStmts: StmtBuf;       // stmts to flush after current statement
+	outerCtx: OuterStack;        // cross-scope remaining stmts for last-read
 }
 
 // ===== Constructors =====
@@ -68,6 +81,7 @@ export function createDrcContext(ctx: TransformContext): DrcContext {
 		ctx,
 		scopes: { items: [] },
 		pendingStmts: { stmts: [] },
+		outerCtx: { items: [] },
 	};
 }
 
@@ -123,6 +137,22 @@ export function wasMovedInScope(scope: DrcScope, varName: string): boolean {
 		if (mv.varName === varName) return true;
 	}
 	return false;
+}
+
+// Record move in the scope that actually tracks the variable (for return cleanup)
+export function recordMoveInContext(dctx: DrcContext, varName: string): void {
+	let i = dctx.scopes.items.length;
+	while (i > 0) {
+		i -= 1;
+		const vi = findVarInfo(dctx.scopes.items[i], varName);
+		if (vi !== null) {
+			const mv: MovedVar = { varName };
+			dctx.scopes.items[i].wasMoved.items.push(mv);
+			return;
+		}
+	}
+	// Fallback: record on current scope
+	recordMove(dctx, varName);
 }
 
 // ===== needsTry Propagation =====
@@ -184,6 +214,17 @@ export function hasPending(dctx: DrcContext): boolean {
 	return dctx.pendingStmts.stmts.length > 0;
 }
 
+// ===== Outer Statement Context Operations =====
+
+export function pushOuterStmts(dctx: DrcContext, stmts: Node[], fromIndex: number, isFunctionBoundary: boolean): void {
+	const entry: OuterEntry = { outerStmts: stmts, fromIndex, isFunctionBoundary };
+	dctx.outerCtx.items.push(entry);
+}
+
+export function popOuterStmts(dctx: DrcContext): void {
+	dctx.outerCtx.items.pop();
+}
+
 // ===== Test Helpers =====
 
 function testDrcCtx(): DrcContext {
@@ -191,7 +232,7 @@ function testDrcCtx(): DrcContext {
 	return createDrcContext(ctx);
 }
 
-function testStringRc(): RcInfo {
+export function testStringRc(): RcInfo {
 	return {
 		rcKind: RcKind.String, typeName: "", needsCleanup: true,
 		destroyFn: "ms_string_decref", copyFn: "ms_string_incref",
@@ -339,9 +380,19 @@ testGroup("DrcScope FindVar", () => {
 });
 
 testGroup("DrcScope Pending", () => {
-	test("add and flush pending", () => {
+	test("initially empty", () => {
 		const dctx = testDrcCtx();
 		check(!hasPending(dctx));
 		check(dctx.pendingStmts.stmts.length === 0);
+	});
+	test("add and flush cycle", () => {
+		const dctx = testDrcCtx();
+		const loc: SourceLocation = { line: 0, column: 0 };
+		addPending(dctx, makeExprStmt(makeNull(loc), loc));
+		check(hasPending(dctx));
+		const target: StmtBuf = { stmts: [] };
+		flushPending(dctx, target);
+		check(!hasPending(dctx));
+		check(target.stmts.length === 1);
 	});
 });
