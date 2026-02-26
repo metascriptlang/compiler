@@ -27,8 +27,8 @@ import {
 } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd } from "../context";
 import { makeIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeNull, makeString, makeBool, makeObjectLiteral } from "../util";
-import { Type, TypeKind } from "../../checker/types";
-import { lookupSymbol, SymbolKind } from "../../checker/symbol";
+import { Type, TypeKind, isPrimitiveKind } from "../../checker/types";
+import { lookupSymbol, SymbolKind, isPointerType as isPointerTypeBase } from "../../checker/symbol";
 import { checkProgram } from "../../checker/checkPass";
 import { sliceStr } from "../../utils/string";
 import { test, check, testGroup } from "std/testing";
@@ -55,30 +55,10 @@ interface LiftCtx {
 	nonCyclicCache: NameSet;  // types confirmed non-cyclic
 }
 
-// ===== Primitive Classification =====
-
-function isPrimitiveKind(kind: TypeKind): boolean {
-	return kind === TypeKind.Number
-		|| kind === TypeKind.Boolean
-		|| kind === TypeKind.Void
-		|| kind === TypeKind.Null
-		|| kind === TypeKind.Int32
-		|| kind === TypeKind.Int64
-		|| kind === TypeKind.Uint32
-		|| kind === TypeKind.Float32
-		|| kind === TypeKind.Float64
-		|| kind === TypeKind.Enum
-		|| kind === TypeKind.Never
-		|| kind === TypeKind.Unknown
-		|| kind === TypeKind.Error;
-}
+// ===== Pointer Type Wrapper (adapts SymbolTable-based helper to TransformContext) =====
 
 function isPointerType(fieldType: Type, ctx: TransformContext): boolean {
-	if (fieldType.kind === TypeKind.Ref || fieldType.kind === TypeKind.Ptr) return true;
-	if (fieldType.kind !== TypeKind.Object || fieldType.typeName === "") return false;
-	const sym = lookupSymbol(ctx.checkerCtx.table, fieldType.typeName);
-	if (sym === null) return false;
-	return sym.symbolKind === SymbolKind.Interface || sym.symbolKind === SymbolKind.Class;
+	return isPointerTypeBase(fieldType, ctx.checkerCtx.table);
 }
 
 function namedTypeHasHooks(typeName: string, lctx: LiftCtx): boolean {

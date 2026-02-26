@@ -19,8 +19,10 @@
 // 16. asyncDesugar          — await → yield, async → generator (before generatorLower)
 // 17. generatorLower        — function* → state machine returning iterator object
 // 18. lambdaLifting         — closures with captures → lifted functions + env structs
-// 19. dce                   — dead code elimination (stub: all alive)
-// 20. destructorLifting     — generate per-type _destroy/_copy function bodies
+// 19. extensionMethodLower  — obj.method(args) → method(obj, args) for UFCS extensions
+// 20. subscriptLower        — obj[idx] → `[]`(obj, idx) for custom subscript operators
+// 21. dce                   — dead code elimination (2-tier: statement + symbol level)
+// 22. destructorLifting     — generate per-type _destroy/_copy function bodies
 
 import { Node } from "../ast/node";
 import { CheckerContext } from "../checker/context";
@@ -43,6 +45,8 @@ import { lowerTailCall } from "./lowering/tailCallLower";
 import { lowerAsync } from "./lowering/asyncDesugar";
 import { lowerGenerator } from "./lowering/generatorLower";
 import { lowerLambda } from "./lowering/lambdaLifting";
+import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
+import { lowerSubscript } from "./lowering/subscriptLower";
 import { lowerDCE } from "./analysis/dce";
 import { liftDestructors } from "./lowering/destructorLifting";
 
@@ -66,6 +70,8 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext): Nod
 	result = lowerAsync(result, ctx);
 	result = lowerGenerator(result, ctx);
 	result = lowerLambda(result, ctx);
+	result = lowerExtensionMethod(result, ctx);
+	result = lowerSubscript(result, ctx);
 	result = lowerDCE(result, ctx);
 	result = liftDestructors(result, ctx);
 	return result;

@@ -39,7 +39,7 @@ export function makeBlock(stmts: Node[], loc: SourceLocation): Node {
 }
 
 export function makeVarDecl(varName: string, init: Node, isConst: boolean, loc: SourceLocation): Node {
-	return createNode(NodeKind.VariableDecl, { declName: varName, initializer: init, isConst }, syntheticToken(loc));
+	return createNode(NodeKind.VariableDecl, { declName: varName, declType: "", initializer: init, isConst }, syntheticToken(loc));
 }
 
 export function makeExprStmt(exprNode: Node, loc: SourceLocation): Node {

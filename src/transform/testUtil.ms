@@ -1,7 +1,7 @@
 // Transform Test Utilities — shared helpers for inline transform tests
 // DRY: parseInput, firstStmtKindAfter, stmtCountAfter, firstExprKindAfter
 
-import { Node, NodeKind, ProgramData, ExprStmtData } from "../ast/node";
+import { Node, NodeKind, ProgramData, ExprStmtData, CallExprData } from "../ast/node";
 import { TransformContext, createTransformContext } from "./context";
 import { lex } from "../lexer/lexer";
 import { parseProgram } from "../parser/statements/core";
@@ -48,4 +48,55 @@ export function firstExprKindAfter(input: string, transform: (prog: Node, ctx: T
 		return sd.expr.kind;
 	}
 	return stmt.kind;
+}
+
+// Get the kind of the first ExprStmt's inner expression from a transformed program.
+export function firstExprKind(prog: Node): NodeKind {
+	if (prog === null) return NodeKind.ExprStmt;
+	const stmts = getStmts(prog);
+	let i = 0;
+	while (i < stmts.length) {
+		if (stmts[i].kind === NodeKind.ExprStmt) {
+			const d = stmts[i].data as ExprStmtData;
+			return d.expr.kind;
+		}
+		i += 1;
+	}
+	return NodeKind.ExprStmt;
+}
+
+// Get the callee kind of the first CallExpr in an ExprStmt.
+export function firstCalleeKind(prog: Node): NodeKind {
+	if (prog === null) return NodeKind.ExprStmt;
+	const stmts = getStmts(prog);
+	let i = 0;
+	while (i < stmts.length) {
+		if (stmts[i].kind === NodeKind.ExprStmt) {
+			const d = stmts[i].data as ExprStmtData;
+			if (d.expr.kind === NodeKind.CallExpr) {
+				const cd = d.expr.data as CallExprData;
+				return cd.callee.kind;
+			}
+		}
+		i += 1;
+	}
+	return NodeKind.ExprStmt;
+}
+
+// Get the argument count of the first CallExpr in an ExprStmt.
+export function firstCallArgCount(prog: Node): number {
+	if (prog === null) return -1;
+	const stmts = getStmts(prog);
+	let i = 0;
+	while (i < stmts.length) {
+		if (stmts[i].kind === NodeKind.ExprStmt) {
+			const d = stmts[i].data as ExprStmtData;
+			if (d.expr.kind === NodeKind.CallExpr) {
+				const cd = d.expr.data as CallExprData;
+				return cd.arguments.length;
+			}
+		}
+		i += 1;
+	}
+	return -1;
 }
