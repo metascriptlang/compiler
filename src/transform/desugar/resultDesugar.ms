@@ -20,7 +20,7 @@
 //     if (!$result_0.ok) { return Result.err($result_0.error); }
 
 import {
-	Node, NodeKind,
+	Node, NodeKind, DeclKind,
 	VariableDeclData, ReturnStmtData, ExprStmtData, TryExprData,
 } from "../../ast/node";
 import { TransformContext, freshTemp } from "../context";
@@ -75,20 +75,20 @@ function expandVarDeclTry(stmt: Node, ctx: TransformContext): Node[] {
 	const result: Node[] = [];
 
 	// const $result_N = f();
-	result.push(makeVarDecl(tempName, tryData.tryArg, true, loc));
+	result.push(makeVarDecl(tempName, tryData.tryArg, DeclKind.Const, loc));
 
 	if (tryData.hasCatch) {
 		// Case 2: const x = $result.ok ? $result.value : catchVal;
 		const okCheck = makeMember(makeIdent(tempName, loc), "ok", loc);
 		const valueAccess = makeMember(makeIdent(tempName, loc), "value", loc);
 		const condExpr = makeConditional(okCheck, valueAccess, tryData.catchVal, loc);
-		result.push(makeVarDecl(d.declName, condExpr, d.isConst, loc));
+		result.push(makeVarDecl(d.declName, condExpr, d.declKind, loc));
 	} else {
 		// if (!$result.ok) { return Result.err($result.error); }
 		result.push(makeErrorCheck(tempName, loc));
 		// const x = $result.value;
 		const valueAccess = makeMember(makeIdent(tempName, loc), "value", loc);
-		result.push(makeVarDecl(d.declName, valueAccess, d.isConst, loc));
+		result.push(makeVarDecl(d.declName, valueAccess, d.declKind, loc));
 	}
 
 	return result;
@@ -103,7 +103,7 @@ function expandReturnTry(stmt: Node, ctx: TransformContext): Node[] {
 	const result: Node[] = [];
 
 	// const $result_N = f();
-	result.push(makeVarDecl(tempName, tryData.tryArg, true, loc));
+	result.push(makeVarDecl(tempName, tryData.tryArg, DeclKind.Const, loc));
 	// if (!$result.ok) { return Result.err($result.error); }
 	result.push(makeErrorCheck(tempName, loc));
 	// return $result.value;
@@ -122,7 +122,7 @@ function expandExprStmtTry(stmt: Node, ctx: TransformContext): Node[] {
 	const result: Node[] = [];
 
 	// const $result_N = f();
-	result.push(makeVarDecl(tempName, tryData.tryArg, true, loc));
+	result.push(makeVarDecl(tempName, tryData.tryArg, DeclKind.Const, loc));
 	// if (!$result.ok) { return Result.err($result.error); }
 	result.push(makeErrorCheck(tempName, loc));
 

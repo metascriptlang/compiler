@@ -2,7 +2,7 @@
 // Uses callback injection via util.ms to avoid circular imports
 
 import { Token, TokenKind } from "../../lexer/token";
-import { Node, NodeKind, NodeData, createNode } from "../../ast/node";
+import { Node, NodeKind, DeclKind, NodeData, createNode } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, skipDestructurePattern, consumeSemicolon } from "../context";
 import { skipOptionalType } from "../util";
 import { callBlockParser, callExprParser, callStmtParser } from "./callbacks";
@@ -92,7 +92,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 	advance(state);
 	// Check for for-of: for (const/let x of expr) or for (const/let { } of expr)
 	const bindingToken = current(state);
-	if (bindingToken.kind === TokenKind.Const || bindingToken.kind === TokenKind.Let) {
+	if (bindingToken.kind === TokenKind.Const || bindingToken.kind === TokenKind.Let || bindingToken.kind === TokenKind.Var) {
 		const forIsConst = bindingToken.kind === TokenKind.Const;
 		advance(state);
 
@@ -190,7 +190,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 			declName: varName.value,
 			declType: "",
 			initializer: try callExprParser(state),
-			isConst: forIsConst
+			declKind: match (bindingToken.kind) { TokenKind.Const => DeclKind.Const, TokenKind.Var => DeclKind.Var, _ => DeclKind.Let },
 		}, bindingToken);
 		if (current(state).kind !== TokenKind.Semicolon) {
 			return Result.err(`Expected ';' after for init at line ${current(state).line.toString()}`);

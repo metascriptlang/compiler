@@ -2,7 +2,7 @@
 // Each helper wraps createNode with the correct NodeKind and data shape.
 
 import { Token, TokenKind, createToken } from "../lexer/token";
-import { Node, NodeKind, SourceLocation, createNode, BlockStmtData } from "../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, createNode, BlockStmtData } from "../ast/node";
 import { TransformContext, freshTemp } from "./context";
 
 // Create a synthetic token from a source location (for transform-generated nodes)
@@ -38,8 +38,8 @@ export function makeBlock(stmts: Node[], loc: SourceLocation): Node {
 	return createNode(NodeKind.BlockStmt, { statements: stmts }, syntheticToken(loc));
 }
 
-export function makeVarDecl(varName: string, init: Node, isConst: boolean, loc: SourceLocation): Node {
-	return createNode(NodeKind.VariableDecl, { declName: varName, declType: "", initializer: init, isConst }, syntheticToken(loc));
+export function makeVarDecl(varName: string, init: Node, declKind: DeclKind, loc: SourceLocation): Node {
+	return createNode(NodeKind.VariableDecl, { declName: varName, declType: "", initializer: init, declKind }, syntheticToken(loc));
 }
 
 export function makeExprStmt(exprNode: Node, loc: SourceLocation): Node {
@@ -131,7 +131,7 @@ export function makeObjectLiteral(keys: string[], values: Node[], loc: SourceLoc
 export function evalOnce(expr: Node, ctx: TransformContext, loc: SourceLocation): { decl: Node, ref: Node } {
 	const name = freshTemp(ctx, "tmp");
 	return {
-		decl: makeVarDecl(name, expr, true, loc),
+		decl: makeVarDecl(name, expr, DeclKind.Const, loc),
 		ref: makeIdent(name, loc),
 	};
 }

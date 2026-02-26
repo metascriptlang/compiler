@@ -1,7 +1,7 @@
 // Destructuring Lowering — transforms DestructuringDecl → temp var + field access
 
 import {
-	Node, NodeKind,
+	Node, NodeKind, DeclKind,
 	DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
 	IdentifierData,
 } from "../../ast/node";
@@ -22,7 +22,7 @@ export function lowerDestructuring(program: Node, ctx: TransformContext): Node {
 
 // Expand array pattern [a, b, ...rest] → indexed access
 function expandArrayRet(
-	pattern: Node, base: Node, isConst: boolean,
+	pattern: Node, base: Node, declKind: DeclKind,
 	loc: Node["location"], ctx: TransformContext
 ): Node[] {
 	const apd = pattern.data as ArrayPatternData;
@@ -38,7 +38,7 @@ function expandArrayRet(
 				const sliceCallee = makeMember(base, "slice", loc);
 				const sliceArg = makeNumber(i, loc);
 				const sliceCall = makeCall(sliceCallee, [sliceArg], loc);
-				out.push(makeVarDecl(id.name, sliceCall, isConst, loc));
+				out.push(makeVarDecl(id.name, sliceCall, declKind, loc));
 			}
 			i += 1;
 			continue;
@@ -49,7 +49,7 @@ function expandArrayRet(
 			const id = elem.data as IdentifierData;
 			if (id.name !== "_") {
 				const access = makeArrayAccess(base, makeNumber(i, loc), loc);
-				out.push(makeVarDecl(id.name, access, isConst, loc));
+				out.push(makeVarDecl(id.name, access, declKind, loc));
 			}
 		}
 
@@ -60,7 +60,7 @@ function expandArrayRet(
 
 // Expand object pattern {x, y: z} → member access
 function expandObjectRet(
-	pattern: Node, base: Node, isConst: boolean,
+	pattern: Node, base: Node, declKind: DeclKind,
 	loc: Node["location"], ctx: TransformContext
 ): Node[] {
 	const opd = pattern.data as ObjectPatternData;
@@ -71,7 +71,7 @@ function expandObjectRet(
 		if (p.propAlias.kind === NodeKind.Identifier) {
 			const id = p.propAlias.data as IdentifierData;
 			const memberAccess = makeMember(base, p.propKey, loc);
-			out.push(makeVarDecl(id.name, memberAccess, isConst, loc));
+			out.push(makeVarDecl(id.name, memberAccess, declKind, loc));
 		}
 	}
 	return out;
@@ -90,18 +90,19 @@ function expandDestructuring(stmt: Node, ctx: TransformContext): Node[] {
 		baseExpr = d.destrInit;
 	} else {
 		const tempName = freshTemp(ctx, "destr");
-		result.push(makeVarDecl(tempName, d.destrInit, true, loc));
+		result.push(makeVarDecl(tempName, d.destrInit, DeclKind.Const, loc));
 		baseExpr = makeIdent(tempName, loc);
 	}
 
+	const dk = match (d.destrIsConst) { true => DeclKind.Const, _ => DeclKind.Let };
 	if (d.destrPattern.kind === NodeKind.ArrayPattern) {
-		const expanded = expandArrayRet(d.destrPattern, baseExpr, d.destrIsConst, loc, ctx);
+		const expanded = expandArrayRet(d.destrPattern, baseExpr, dk, loc, ctx);
 		for (const node of expanded) {
 			result.push(node);
 		}
 	}
 	if (d.destrPattern.kind === NodeKind.ObjectPattern) {
-		const expanded = expandObjectRet(d.destrPattern, baseExpr, d.destrIsConst, loc, ctx);
+		const expanded = expandObjectRet(d.destrPattern, baseExpr, dk, loc, ctx);
 		for (const node of expanded) {
 			result.push(node);
 		}

@@ -1,7 +1,7 @@
 // AST Printer - Debug output for all node kinds
 // Uses match statement for exhaustive dispatch
 
-import { Node, NodeKind,
+import { Node, NodeKind, DeclKind,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData, RegexLiteralData, BigIntLiteralData,
 	IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData,
 	ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ArrowFunctionData, FunctionExprData,
@@ -100,7 +100,7 @@ export function printNode(node: Node, level: number): void {
 		},
 		NodeKind.VariableDecl => {
 			const data = node.data as VariableDeclData;
-			const keyword = match (data.isConst) { true => "const", _ => "let" };
+			const keyword = match (data.declKind) { DeclKind.Const => "const", DeclKind.Var => "var", _ => "let" };
 			console.log(`${pad}VariableDecl: ${keyword} ${data.declName}`);
 			printNode(data.initializer, level + 1);
 		},
@@ -195,7 +195,7 @@ export function printNode(node: Node, level: number): void {
 		},
 		NodeKind.TypeAssertion => {
 			const data = node.data as TypeAssertionData;
-			console.log(`${pad}TypeAssertion:`);
+			console.log(`${pad}TypeAssertion as ${data.asType}:`);
 			printNode(data.asExpr, level + 1);
 		},
 		NodeKind.TryExpr => {

@@ -2,7 +2,7 @@
 // Uses callback injection via util.ms to avoid circular imports
 
 import { Token, TokenKind } from "../../lexer/token";
-import { Node, NodeKind, NodeData, createNode, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData } from "../../ast/node";
+import { Node, NodeKind, DeclKind, NodeData, createNode, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, skipDestructurePattern, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced } from "../context";
 import { skipTypeAnnotation } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, skipDefaultValue, skipOptionalType } from "../util";
@@ -74,7 +74,7 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 		declName: nameToken.value,
 		declType,
 		initializer: init,
-		isConst: keyword.kind === TokenKind.Const,
+		declKind: match (keyword.kind) { TokenKind.Const => DeclKind.Const, TokenKind.Var => DeclKind.Var, _ => DeclKind.Let },
 	}, keyword));
 }
 
@@ -1029,9 +1029,9 @@ testGroup("Stmt Declarations", () => {
 	// Var declarations
 	test("var decl", () => { check(programOk("var x = 1;")); });
 	test("var is VariableDecl", () => { check(stmtKind("var x = 1;") === NodeKind.VariableDecl); });
-	test("var isConst false", () => {
+	test("var declKind is Var", () => {
 		const d = stmtAt("var x = 1;", 0).data as VariableDeclData;
-		check(!d.isConst);
+		check(d.declKind === DeclKind.Var);
 	});
 	test("var declName", () => {
 		const d = stmtAt("var x = 1;", 0).data as VariableDeclData;

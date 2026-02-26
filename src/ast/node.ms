@@ -36,6 +36,14 @@ export enum NodeKind {
 	Program,
 }
 
+// ===== Declaration Kind Enum =====
+
+export enum DeclKind {
+	Const,
+	Let,
+	Var,
+}
+
 // ===== Source Location =====
 
 export interface SourceLocation {
@@ -85,7 +93,7 @@ export type NodeData =
 	| { propKey: string, propAlias: Node }                         // ObjectPatternProp
 	| { destrPattern: Node, destrInit: Node, destrIsConst: boolean } // DestructuringDecl
 	// Statement variants
-	| { declName: string, declType: string, initializer: Node, isConst: boolean }    // VariableDecl
+	| { declName: string, declType: string, initializer: Node, declKind: DeclKind }  // VariableDecl
 	| { condition: Node, consequent: Node, alternate: Node }       // IfStmt
 	| { whileCondition: Node, whileBody: Node }                    // WhileStmt
 	| { forInit: Node, forCondition: Node, forUpdate: Node, forBody: Node } // ForStmt
@@ -183,7 +191,7 @@ export type ExprStmtData = { expr: Node };
 export type ReturnStmtData = { argument: Node };
 export type ThrowStmtData = { throwArg: Node };
 export type DeferStmtData = { deferExpr: Node };
-export type VariableDeclData = { declName: string, declType: string, initializer: Node, isConst: boolean };
+export type VariableDeclData = { declName: string, declType: string, initializer: Node, declKind: DeclKind };
 export type IfStmtData = { condition: Node, consequent: Node, alternate: Node };
 export type WhileStmtData = { whileCondition: Node, whileBody: Node };
 export type ForStmtData = { forInit: Node, forCondition: Node, forUpdate: Node, forBody: Node };

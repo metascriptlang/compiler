@@ -2,7 +2,7 @@
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
 import {
-	Node, NodeKind,
+	Node, NodeKind, DeclKind,
 	ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData,
 	IdentifierData, BinaryExprData, MemberExprData,
 	VariableDeclData, FunctionDeclData, ClassDeclData,
@@ -84,7 +84,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	if (d.declType !== "") {
 		varType = resolveAnnotation(d.declType, ctx);
 	}
-	defineOrError(ctx, makeSymbol(d.declName, SymbolKind.Variable, varType, !d.isConst), node);
+	defineOrError(ctx, makeSymbol(d.declName, SymbolKind.Variable, varType, d.declKind !== DeclKind.Const), node);
 }
 
 function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
