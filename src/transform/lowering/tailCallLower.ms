@@ -17,7 +17,7 @@
 // }
 
 import {
-	Node, NodeKind,
+	Node, NodeKind, DeclKind,
 	FunctionDeclData, ReturnStmtData, CallExprData,
 	IdentifierData, BlockStmtData, IfStmtData,
 } from "../../ast/node";
@@ -147,7 +147,7 @@ function buildTailCallReplacement(callExpr: Node, params: string[], loc: Node["l
 	for (let i = 0; i < cd.arguments.length && i < params.length; i += 1) {
 		const tempName = freshTemp(ctx, "tc");
 		tempNames.push(tempName);
-		stmts.push(makeVarDecl(tempName, cd.arguments[i], true, loc));
+		stmts.push(makeVarDecl(tempName, cd.arguments[i], DeclKind.Const, loc));
 	}
 
 	// 2. Reassign params from temps

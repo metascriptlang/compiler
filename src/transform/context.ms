@@ -40,6 +40,16 @@ export function nameSetAdd(ns: NameSet, name: string): void {
 	}
 }
 
+export function nameSetIntersect(a: NameSet, b: NameSet): NameSet {
+	const result: NameSet = { names: [] };
+	for (const n of a.names) {
+		if (nameSetContains(b, n)) {
+			result.names.push(n);
+		}
+	}
+	return result;
+}
+
 // Generate unique temp variable name: "$result_0", "$match_1", "$iter_2"
 export function freshTemp(ctx: TransformContext, prefix: string): string {
 	const n = ctx.tempCounter;

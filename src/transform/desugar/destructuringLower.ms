@@ -9,6 +9,7 @@ import { TransformContext, freshTemp } from "../context";
 import { walkExpandBlocks } from "../walker";
 import {
 	makeIdent, makeVarDecl, makeNumber, makeArrayAccess, makeMember, makeCall,
+	boolToDeclKind,
 } from "../util";
 import { test, check, testGroup } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
@@ -94,7 +95,7 @@ function expandDestructuring(stmt: Node, ctx: TransformContext): Node[] {
 		baseExpr = makeIdent(tempName, loc);
 	}
 
-	const dk = match (d.destrIsConst) { true => DeclKind.Const, _ => DeclKind.Let };
+	const dk = boolToDeclKind(d.destrIsConst);
 	if (d.destrPattern.kind === NodeKind.ArrayPattern) {
 		const expanded = expandArrayRet(d.destrPattern, baseExpr, dk, loc, ctx);
 		for (const node of expanded) {

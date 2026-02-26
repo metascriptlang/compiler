@@ -19,7 +19,7 @@
 // V2 deferred: yield*, yield in expressions, yield in try/catch.
 
 import {
-	Node, NodeKind, SourceLocation, createNode,
+	Node, NodeKind, DeclKind, SourceLocation, createNode,
 	ProgramData, BlockStmtData, FunctionDeclData, FunctionExprData,
 	VariableDeclData, IfStmtData, WhileStmtData,
 	ExprStmtData, ReturnStmtData,
@@ -33,6 +33,7 @@ import {
 	makeBlock, makeVarDecl, makeExprStmt, makeReturn,
 	makeIf, makeWhile, makeBinary, makeAssign,
 	makeObjectLiteral, syntheticToken, extractBodyStmts,
+	collectDeclNames,
 } from "../util";
 import { test, check, testGroup } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
@@ -130,45 +131,6 @@ function containsYield(node: Node): boolean {
 			containsYield(d.ternaryCondition) || containsYield(d.ternaryConsequent) || containsYield(d.ternaryAlternate)
 		},
 		_ => false,
-	};
-}
-
-// ===== Local Collection =====
-// Collect all VariableDecl names in a function body (stops at nested functions).
-
-function collectLocals(node: Node, nc: NameSet): void {
-	match (node.kind) {
-		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {},
-		NodeKind.VariableDecl => {
-			const d = node.data as VariableDeclData;
-			nc.names.push(d.declName);
-			collectLocals(d.initializer, nc);
-		},
-		NodeKind.BlockStmt => {
-			const d = node.data as BlockStmtData;
-			// TODO: for/for..of inside match arms crashes reference compiler — use while
-			let i = 0;
-			while (i < d.statements.length) {
-				collectLocals(d.statements[i], nc);
-				i += 1;
-			}
-		},
-		NodeKind.IfStmt => {
-			const d = node.data as IfStmtData;
-			collectLocals(d.consequent, nc);
-			collectLocals(d.alternate, nc);
-		},
-		NodeKind.WhileStmt => {
-			const d = node.data as WhileStmtData;
-			collectLocals(d.whileBody, nc);
-		},
-		NodeKind.TryCatchStmt => {
-			const d = node.data as TryCatchStmtData;
-			collectLocals(d.tryBody, nc);
-			collectLocals(d.catchBody, nc);
-			collectLocals(d.finallyBody, nc);
-		},
-		_ => {},
 	};
 }
 
@@ -397,7 +359,7 @@ function buildStateDispatch(sc: StateCollector, loc: SourceLocation): Node {
 function transformGeneratorFn(params: string[], paramTypes: string[], body: Node, flags: string, returnType: string, loc: SourceLocation): Node {
 	// 1. Collect all local variable names
 	const nc: NameSet = { names: [] };
-	collectLocals(body, nc);
+	collectDeclNames(body, nc, false);
 
 	// 2. Extract body statements
 	const bodyStmts = extractBodyStmts(body);
@@ -443,9 +405,9 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	//   let local1; let local2; ...
 	//   return { next: function() { while(true) { if-else dispatch } } };
 	const newBodyStmts: Node[] = [];
-	newBodyStmts.push(makeVarDecl("$state", makeNumber(0, loc), false, loc));
+	newBodyStmts.push(makeVarDecl("$state", makeNumber(0, loc), DeclKind.Let, loc));
 	for (const localName of nc.names) {
-		newBodyStmts.push(makeVarDecl(localName, makeNull(loc), false, loc));
+		newBodyStmts.push(makeVarDecl(localName, makeNull(loc), DeclKind.Let, loc));
 	}
 	newBodyStmts.push(makeReturn(iterObj, loc));
 
@@ -455,56 +417,48 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 // ===== Main Walk =====
 
 function walkGenerators(node: Node): void {
-	if (node.kind === NodeKind.Program) {
-		const d = node.data as ProgramData;
-		for (const s of d.programStmts) { walkGenerators(s); }
-		return;
-	}
-	if (node.kind === NodeKind.BlockStmt) {
-		const d = node.data as BlockStmtData;
-		for (const s of d.statements) { walkGenerators(s); }
-		return;
-	}
-	if (node.kind === NodeKind.FunctionDecl) {
-		const d = node.data as FunctionDeclData;
-		// First recurse into body (handle nested generators)
-		walkGenerators(d.fnBody);
-		// Then check if this function is a generator
-		if (isGeneratorFlag(d.fnFlags)) {
-			d.fnBody = transformGeneratorFn(
-				d.params, d.fnParamTypes, d.fnBody,
-				d.fnFlags, d.fnReturnType, node.location,
-			);
-			d.fnFlags = "";  // no longer a generator
-		}
-		return;
-	}
-	if (node.kind === NodeKind.ExportDecl) {
-		const d = node.data as ExportDeclData;
-		walkGenerators(d.exportedDecl);
-		return;
-	}
-	if (node.kind === NodeKind.ClassDecl) {
-		const d = node.data as ClassDeclData;
-		for (const member of d.classBody) { walkGenerators(member); }
-		return;
-	}
-	if (node.kind === NodeKind.MethodDecl) {
-		const d = node.data as MethodDeclData;
-		walkGenerators(d.methodBody);
-		return;
-	}
-	if (node.kind === NodeKind.DecoratedDecl) {
-		const d = node.data as DecoratedDeclData;
-		walkGenerators(d.decoratedNode);
-		return;
-	}
-	if (node.kind === NodeKind.VariableDecl) {
-		const d = node.data as VariableDeclData;
-		walkCheckFuncExpr(d.initializer);
-		return;
-	}
-	// Skip other node types — generators only appear as declarations
+	match (node.kind) {
+		NodeKind.Program => {
+			const d = node.data as ProgramData;
+			for (const s of d.programStmts) { walkGenerators(s); }
+		},
+		NodeKind.BlockStmt => {
+			const d = node.data as BlockStmtData;
+			for (const s of d.statements) { walkGenerators(s); }
+		},
+		NodeKind.FunctionDecl => {
+			const d = node.data as FunctionDeclData;
+			walkGenerators(d.fnBody);
+			if (isGeneratorFlag(d.fnFlags)) {
+				d.fnBody = transformGeneratorFn(
+					d.params, d.fnParamTypes, d.fnBody,
+					d.fnFlags, d.fnReturnType, node.location,
+				);
+				d.fnFlags = "";
+			}
+		},
+		NodeKind.ExportDecl => {
+			const d = node.data as ExportDeclData;
+			walkGenerators(d.exportedDecl);
+		},
+		NodeKind.ClassDecl => {
+			const d = node.data as ClassDeclData;
+			for (const member of d.classBody) { walkGenerators(member); }
+		},
+		NodeKind.MethodDecl => {
+			const d = node.data as MethodDeclData;
+			walkGenerators(d.methodBody);
+		},
+		NodeKind.DecoratedDecl => {
+			const d = node.data as DecoratedDeclData;
+			walkGenerators(d.decoratedNode);
+		},
+		NodeKind.VariableDecl => {
+			const d = node.data as VariableDeclData;
+			walkCheckFuncExpr(d.initializer);
+		},
+		_ => {},
+	};
 }
 
 // Check FunctionExpr for generator flag

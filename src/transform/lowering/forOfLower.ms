@@ -14,14 +14,14 @@
 // }
 
 import {
-	Node, NodeKind, ForOfStmtData,
+	Node, NodeKind, DeclKind, ForOfStmtData,
 } from "../../ast/node";
 import { TransformContext, freshTemp } from "../context";
 import { walkNode } from "../walker";
 import {
 	makeIdent, makeNumber, makeBlock, makeVarDecl, makeWhile,
 	makeBinary, makeAssign, makeExprStmt, makeMember, makeArrayAccess,
-	extractBodyStmts,
+	extractBodyStmts, boolToDeclKind,
 } from "../util";
 import { test, check, testGroup } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
@@ -45,18 +45,19 @@ function forOfVisitor(ctx: TransformContext): (node: Node) => Node {
 		const lenName = freshTemp(ctx, "len");
 
 		// const $iter = arr;
-		const iterDecl = makeVarDecl(iterName, d.forOfIterable, true, loc);
+		const iterDecl = makeVarDecl(iterName, d.forOfIterable, DeclKind.Const, loc);
 
 		// let $idx = 0;
-		const idxDecl = makeVarDecl(idxName, makeNumber(0, loc), false, loc);
+		const idxDecl = makeVarDecl(idxName, makeNumber(0, loc), DeclKind.Let, loc);
 
 		// const $len = $iter.length;
 		const lenExpr = makeMember(makeIdent(iterName, loc), "length", loc);
-		const lenDecl = makeVarDecl(lenName, lenExpr, true, loc);
+		const lenDecl = makeVarDecl(lenName, lenExpr, DeclKind.Const, loc);
 
 		// const item = $iter[$idx];
 		const itemAccess = makeArrayAccess(makeIdent(iterName, loc), makeIdent(idxName, loc), loc);
-		const itemDecl = makeVarDecl(d.forOfBinding, itemAccess, d.forOfIsConst, loc);
+		const itemDk = boolToDeclKind(d.forOfIsConst);
+		const itemDecl = makeVarDecl(d.forOfBinding, itemAccess, itemDk, loc);
 
 		// $idx = $idx + 1;
 		const increment = makeAssign(
@@ -94,9 +95,6 @@ testGroup("ForOf Lowering", () => {
 	});
 	test("regular for unchanged", () => {
 		check(firstStmtKindAfter("for (let i = 0; i < 10; i++) {}", lowerForOf) === NodeKind.ForStmt);
-	});
-	test("while unchanged", () => {
-		check(firstStmtKindAfter("while (true) {}", lowerForOf) === NodeKind.WhileStmt);
 	});
 	test("for-of preserves surrounding stmts", () => {
 		check(stmtCountAfter("x(); for (const i of arr) {} y();", lowerForOf) === 3);

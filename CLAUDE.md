@@ -23,7 +23,9 @@ Source.ms --> [1 Parse] --> [2 TypeCheck] --> [3 Transform] --> [4 Analyzer] -->
 
 - Phase 1 (Parse): COMPLETE -- 37 NodeKind, 80+ TokenKind, recursive descent + Pratt precedence
 - Phase 2 (TypeCheck): COMPLETE single-module -- 3-pass (collect, resolve, check). Cross-module deferred.
-- Phases 3-5: NEXT -- transforms, analyzer injection, codegen
+- Phase 3 (Transform): COMPLETE -- 20 general + 4 C-backend transforms, Nim/reference parity
+- Phase 4 (Analyzer): COMPLETE -- DRC injection (6 files, ~2500 lines, 14 gap items, cross-scope last-read, branch-aware optimizer)
+- Phase 5 (Codegen): NEXT -- C backend (primary), JS backend (secondary)
 
 ## Project Structure
 

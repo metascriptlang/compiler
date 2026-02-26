@@ -10,19 +10,24 @@
 //  7. stringTruthiness      — normalize bare conditions after coercions
 //  8. destructuringLower    — unpack array/object patterns before forOf/result
 //  9. spreadExpand          — inline array literal spreads after destructuring
-// 10. forLoopLower          — normalize for→while before forOf
-// 11. forOfLower            — desugars for-of to while
-// 12. resultDesugar         — 1:N expansion of try expressions
-// 13. resultFieldCheck      — safety checks on $result_N.value/.error access
-// 14. matchLower            — sees simplest AST
-// 15. tailCallLower         — tail recursion → while (sees fully normalized AST)
-// 16. asyncDesugar          — await → yield, async → generator (before generatorLower)
-// 17. generatorLower        — function* → state machine returning iterator object
-// 18. lambdaLifting         — closures with captures → lifted functions + env structs
-// 19. extensionMethodLower  — obj.method(args) → method(obj, args) for UFCS extensions
-// 20. subscriptLower        — obj[idx] → `[]`(obj, idx) for custom subscript operators
-// 21. dce                   — dead code elimination (2-tier: statement + symbol level)
-// 22. destructorLifting     — generate per-type _destroy/_copy function bodies
+// 10. arrayMethodInline     — arr.map/filter/reduce → inline while loops (before forLoop/extensionMethod)
+// 11. forLoopLower          — normalize for→while before forOf
+// 12. forOfLower            — desugars for-of to while
+// 13. resultDesugar         — 1:N expansion of try expressions
+// 14. resultFieldCheck      — safety checks on $result_N.value/.error access
+// 15. matchLower            — sees simplest AST
+// 16. tailCallLower         — tail recursion → while (sees fully normalized AST)
+// 17. asyncDesugar          — await → yield, async → generator (before generatorLower)
+// 18. generatorLower        — function* → state machine returning iterator object
+// 19. varHoist              — hoist var declarations to function scope top (JS semantics)
+// 20. lambdaLifting         — closures with captures → lifted functions + env structs
+// 21. rvalueLower           — f().method() → { const tmp = f(); tmp.method() } (evalOnce pattern)
+// 22. extensionMethodLower  — obj.method(args) → method(obj, args) for UFCS extensions
+// 23. subscriptLower        — obj[idx] → `[]`(obj, idx) for custom subscript operators
+// 24. conditionalExprLower  — ternary→if in statement position
+// 25. updateExprLower       — x++/-- → assignment in statement position
+// 26. dce                   — dead code elimination (2-tier: statement + symbol level)
+// 27. destructorLifting     — generate per-type _destroy/_copy function bodies
 
 import { Node } from "../ast/node";
 import { CheckerContext } from "../checker/context";
@@ -36,6 +41,7 @@ import { lowerTypeCoercion } from "./coercion/typeCoercion";
 import { lowerStringTruthiness } from "./coercion/stringTruthiness";
 import { lowerDestructuring } from "./desugar/destructuringLower";
 import { lowerSpread } from "./desugar/spreadExpand";
+import { lowerArrayMethodInline } from "./desugar/arrayMethodInline";
 import { lowerForLoop } from "./lowering/forLoopLower";
 import { lowerForOf } from "./lowering/forOfLower";
 import { lowerResult } from "./desugar/resultDesugar";
@@ -44,9 +50,13 @@ import { lowerMatch } from "./lowering/matchLower";
 import { lowerTailCall } from "./lowering/tailCallLower";
 import { lowerAsync } from "./lowering/asyncDesugar";
 import { lowerGenerator } from "./lowering/generatorLower";
+import { lowerVarHoist } from "./lowering/varHoist";
 import { lowerLambda } from "./lowering/lambdaLifting";
+import { lowerRvalue } from "./lowering/rvalueLower";
 import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
 import { lowerSubscript } from "./lowering/subscriptLower";
+import { lowerConditionalExpr } from "./lowering/conditionalExprLower";
+import { lowerUpdateExpr } from "./lowering/updateExprLower";
 import { lowerDCE } from "./analysis/dce";
 import { liftDestructors } from "./lowering/destructorLifting";
 
@@ -61,6 +71,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext): Nod
 	result = lowerStringTruthiness(result, ctx);
 	result = lowerDestructuring(result, ctx);
 	result = lowerSpread(result, ctx);
+	result = lowerArrayMethodInline(result, ctx);
 	result = lowerForLoop(result, ctx);
 	result = lowerForOf(result, ctx);
 	result = lowerResult(result, ctx);
@@ -69,9 +80,13 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext): Nod
 	result = lowerTailCall(result, ctx);
 	result = lowerAsync(result, ctx);
 	result = lowerGenerator(result, ctx);
+	result = lowerVarHoist(result, ctx);
 	result = lowerLambda(result, ctx);
+	result = lowerRvalue(result, ctx);
 	result = lowerExtensionMethod(result, ctx);
 	result = lowerSubscript(result, ctx);
+	result = lowerConditionalExpr(result, ctx);
+	result = lowerUpdateExpr(result, ctx);
 	result = lowerDCE(result, ctx);
 	result = liftDestructors(result, ctx);
 	return result;

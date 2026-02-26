@@ -13,24 +13,13 @@ import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall } from "../util";
 import { lookupSymbol, SymbolKind, defineSymbol, makeSymbol } from "../../checker/symbol";
-import { TypeKind, unknownType, createObject, createFunction, createArray } from "../../checker/types";
-import { ExtensionRegistry, ExtensionMethod, createContext, registerExtension } from "../../checker/context";
+import { TypeKind, unknownType, createObject, createFunction, createArray, typeNameOf } from "../../checker/types";
+import { ExtensionRegistry, ExtensionMethod, createContext, registerExtension, findExtension } from "../../checker/context";
 import { createTransformContext, createTransformContextWithChecker } from "../context";
 import { test, check, testGroup } from "std/testing";
 import { parseInput, getStmts, firstExprKind, firstCallArgCount } from "../testUtil";
 
 // ===== Helpers =====
-
-// Check if an extension "[]" or "[]=" exists for this receiver type name.
-function hasSubscriptOp(registry: ExtensionRegistry, typeName: string, opName: string): boolean {
-	let i = 0;
-	while (i < registry.methods.length) {
-		const m = registry.methods[i];
-		if (m.receiverTypeName === typeName && m.methodName === opName) return true;
-		i += 1;
-	}
-	return false;
-}
 
 // Get the type name of a node via symbol table lookup.
 function getTypeName(ctx: TransformContext, node: Node): string {
@@ -39,14 +28,7 @@ function getTypeName(ctx: TransformContext, node: Node): string {
 	const d = node.data as IdentifierData;
 	const sym = lookupSymbol(ctx.checkerCtx.table, d.name);
 	if (sym === null) return "";
-	const t = sym.symbolType;
-	return match (t.kind) {
-		TypeKind.Object | TypeKind.Enum => t.typeName,
-		TypeKind.Array => "Array",
-		TypeKind.String => "string",
-		TypeKind.Map => "Map",
-		_ => "",
-	};
+	return typeNameOf(sym.symbolType);
 }
 
 // Builtin types that use native [] — never rewrite these.
@@ -70,7 +52,7 @@ function lowerSubscriptNode(node: Node, ctx: TransformContext): Node {
 		const typeName = getTypeName(ctx, d.array);
 		if (typeName === "") return node;
 		if (isBuiltinIndexable(typeName)) return node;
-		if (!hasSubscriptOp(registry, typeName, "[]")) return node;
+		if (findExtension(registry, typeName, "[]") === null) return node;
 		const loc = node.location;
 		const args: Node[] = [];
 		args.push(d.array);
@@ -87,7 +69,7 @@ function lowerSubscriptNode(node: Node, ctx: TransformContext): Node {
 		const typeName = getTypeName(ctx, ad.array);
 		if (typeName === "") return node;
 		if (isBuiltinIndexable(typeName)) return node;
-		if (!hasSubscriptOp(registry, typeName, "[]=")) return node;
+		if (findExtension(registry, typeName, "[]=") === null) return node;
 		const loc = node.location;
 		const args: Node[] = [];
 		args.push(ad.array);

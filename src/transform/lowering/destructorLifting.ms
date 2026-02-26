@@ -22,15 +22,15 @@
 //   TypeInfo   TypeName_typeInfo                  — msTypeInfo for ORC runtime
 
 import {
-	Node, NodeKind, ProgramData, FunctionDeclData, SourceLocation,
+	Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation,
 	InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData,
 } from "../../ast/node";
-import { TransformContext, NameSet, nameSetContains, nameSetAdd } from "../context";
+import { TransformContext, NameSet, nameSetContains, nameSetAdd, createTransformContextWithChecker } from "../context";
 import { makeIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeNull, makeString, makeBool, makeObjectLiteral } from "../util";
 import { Type, TypeKind, isPrimitiveKind } from "../../checker/types";
 import { lookupSymbol, SymbolKind, isPointerType as isPointerTypeBase } from "../../checker/symbol";
 import { checkProgram } from "../../checker/checkPass";
-import { sliceStr } from "../../utils/string";
+import { StmtBuf } from "../../analyzer/scope";
 import { test, check, testGroup } from "std/testing";
 import { parseInput } from "../testUtil";
 
@@ -38,10 +38,6 @@ import { parseInput } from "../testUtil";
 
 interface DeclCollector {
 	decls: Node[];
-}
-
-interface StmtBuf {
-	stmts: Node[];
 }
 
 // ===== Lift Context (Nim's TLiftCtx) =====
@@ -457,7 +453,7 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 
 	// =dup: init + copy, return (Nim pattern)
 	const dupStmts: Node[] = [];
-	dupStmts.push(makeVarDecl("$result", makeIdent("src", loc), false, loc));
+	dupStmts.push(makeVarDecl("$result", makeIdent("src", loc), DeclKind.Let, loc));
 	dupStmts.push(makeExprStmt(makeCall(makeIdent(typeName + "_copy", loc), [makeIdent("$result", loc), makeIdent("src", loc)], loc), loc));
 	dupStmts.push(makeReturn(makeIdent("$result", loc), loc));
 	lctx.collector.decls.push(makeFnDecl(typeName + "_dup", ["src"], [typeName], makeBlock(dupStmts, loc), "", typeName, loc));
@@ -469,7 +465,7 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 		[makeString(typeName, loc), makeBool(hasCycles, loc), traceFn, makeIdent(typeName + "_destroy", loc)],
 		loc,
 	);
-	lctx.collector.decls.push(makeVarDecl(typeName + "_typeInfo", typeInfoObj, true, loc));
+	lctx.collector.decls.push(makeVarDecl(typeName + "_typeInfo", typeInfoObj, DeclKind.Const, loc));
 
 	nameSetAdd(lctx.generated, typeName);
 }
@@ -526,15 +522,10 @@ function liftWithChecker(input: string): Node {
 	const pr = parseInput(input);
 	if (!pr.ok) return pr.value;
 	const checkerCtx = checkProgram(pr.value);
-	const ctx: TransformContext = { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx };
+	const ctx = createTransformContextWithChecker(checkerCtx);
 	return liftDestructors(pr.value, ctx);
 }
 
-function nameEndsWith(name: string, suffix: string): boolean {
-	if (name.length < suffix.length) return false;
-	const tail = sliceStr(name, name.length - suffix.length, name.length);
-	return tail === suffix;
-}
 
 // Count generated lifecycle hook functions (5 base + optional trace)
 function generatedFnCount(input: string): number {
@@ -544,12 +535,12 @@ function generatedFnCount(input: string): number {
 	for (const stmt of pd.programStmts) {
 		if (stmt.kind === NodeKind.FunctionDecl) {
 			const d = stmt.data as FunctionDeclData;
-			if (nameEndsWith(d.fnName, "_destroy")
-				|| nameEndsWith(d.fnName, "_copy")
-				|| nameEndsWith(d.fnName, "_sink")
-				|| nameEndsWith(d.fnName, "_wasMoved")
-				|| nameEndsWith(d.fnName, "_dup")
-				|| nameEndsWith(d.fnName, "_trace")) {
+			if (d.fnName.endsWith("_destroy")
+				|| d.fnName.endsWith("_copy")
+				|| d.fnName.endsWith("_sink")
+				|| d.fnName.endsWith("_wasMoved")
+				|| d.fnName.endsWith("_dup")
+				|| d.fnName.endsWith("_trace")) {
 				count += 1;
 			}
 		}
@@ -564,7 +555,7 @@ function hasGeneratedFn(input: string, fnSuffix: string): boolean {
 	for (const stmt of pd.programStmts) {
 		if (stmt.kind === NodeKind.FunctionDecl) {
 			const d = stmt.data as FunctionDeclData;
-			if (nameEndsWith(d.fnName, fnSuffix)) return true;
+			if (d.fnName.endsWith( fnSuffix)) return true;
 		}
 	}
 	return false;

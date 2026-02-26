@@ -1,7 +1,7 @@
 // Transform Test Utilities — shared helpers for inline transform tests
 // DRY: parseInput, firstStmtKindAfter, stmtCountAfter, firstExprKindAfter
 
-import { Node, NodeKind, ProgramData, ExprStmtData, CallExprData } from "../ast/node";
+import { Node, NodeKind, ProgramData, ExprStmtData, CallExprData, FunctionDeclData, BlockStmtData } from "../ast/node";
 import { TransformContext, createTransformContext } from "./context";
 import { lex } from "../lexer/lexer";
 import { parseProgram } from "../parser/statements/core";
@@ -81,6 +81,23 @@ export function firstCalleeKind(prog: Node): NodeKind {
 		i += 1;
 	}
 	return NodeKind.ExprStmt;
+}
+
+// Count statements inside the body of the first FunctionDecl after transform.
+export function fnBodyStmtCount(input: string, transform: (prog: Node, ctx: TransformContext) => Node): number {
+	const stmts = transformStmts(input, transform);
+	let i = 0;
+	while (i < stmts.length) {
+		if (stmts[i].kind === NodeKind.FunctionDecl) {
+			const fd = stmts[i].data as FunctionDeclData;
+			if (fd.fnBody !== null && fd.fnBody.kind === NodeKind.BlockStmt) {
+				const bd = fd.fnBody.data as BlockStmtData;
+				return bd.statements.length;
+			}
+		}
+		i += 1;
+	}
+	return -1;
 }
 
 // Get the argument count of the first CallExpr in an ExprStmt.

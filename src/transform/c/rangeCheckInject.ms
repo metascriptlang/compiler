@@ -6,29 +6,56 @@
 //
 // TypeAssertion nodes (`expr as Type`) where the target type is a narrow integer
 // get wrapped with a runtime range check call.
-//
-// Current limitation: TypeAssertionData only stores the expression being cast,
-// not the target type name. Full implementation requires the type annotation to be
-// accessible. For now, this pass is a structural placeholder that C codegen can
-// extend once type annotations are threaded through TypeAssertion nodes.
 
 import {
-	Node, NodeKind,
+	Node, NodeKind, TypeAssertionData,
 } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent, makeNumber } from "../util";
 import { test, check, testGroup } from "std/testing";
-import { firstExprKindAfter, stmtCountAfter } from "../testUtil";
+import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";
+import { ExprStmtData } from "../../ast/node";
+import { createTransformContext } from "../context";
 
-// ===== Integer Type Ranges =====
-// When we can access the target type, these are the ranges to check:
-// i8:  -128 to 127
-// u8:  0 to 255
-// i16: -32768 to 32767
-// u16: 0 to 65535
-// i32: -2147483648 to 2147483647
-// u32: 0 to 4294967295
+// ===== Helpers =====
+
+// Get the range check function name for a narrow integer type
+function getRangeCheckFn(typeName: string): string {
+	return match (typeName) {
+		"int8" => "ms_chck_range_i8",
+		"uint8" => "ms_chck_range_u8",
+		"int16" => "ms_chck_range_i16",
+		"uint16" => "ms_chck_range_u16",
+		"int32" => "ms_chck_range_i32",
+		"uint32" => "ms_chck_range_u32",
+		_ => "",
+	};
+}
+
+// Get the minimum value for a narrow integer type
+function getRangeMin(typeName: string): number {
+	return match (typeName) {
+		"int8" => -128,
+		"int16" => -32768,
+		"int32" => -2147483648,
+		"uint8" | "uint16" | "uint32" => 0,
+		_ => 0,
+	};
+}
+
+// Get the maximum value for a narrow integer type
+function getRangeMax(typeName: string): number {
+	return match (typeName) {
+		"int8" => 127,
+		"uint8" => 255,
+		"int16" => 32767,
+		"uint16" => 65535,
+		"int32" => 2147483647,
+		"uint32" => 4294967295,
+		_ => 0,
+	};
+}
 
 // ===== Main Entry Point =====
 
@@ -39,24 +66,45 @@ export function injectRangeChecks(program: Node, ctx: TransformContext): Node {
 
 function rangeCheckVisitor(node: Node): Node {
 	if (node.kind !== NodeKind.TypeAssertion) return node;
-
-	// TODO: When TypeAssertionData includes the target type name,
-	// match against narrow integer types and replace:
-	//   expr as i8  →  ms_chck_range_i8(expr, -128, 127)
-	//   expr as u8  →  ms_chck_range_u8(expr, 0, 255)
-	//   etc.
-	// For now, C codegen handles range checks based on type info from the checker.
-
-	return node;
+	const d = node.data as TypeAssertionData;
+	const fnName = getRangeCheckFn(d.asType);
+	if (fnName === "") return node;
+	return makeRangeCheck(d.asExpr, fnName, getRangeMin(d.asType), getRangeMax(d.asType), node.location);
 }
 
 // Helper: build a range check call (exported for C codegen use)
 export function makeRangeCheck(expr: Node, fnName: string, minVal: number, maxVal: number, loc: Node["location"]): Node {
-	return makeCall(
-		makeIdent(fnName, loc),
-		[expr, makeNumber(minVal, loc), makeNumber(maxVal, loc)],
-		loc,
-	);
+	const args: Node[] = [];
+	args.push(expr);
+	args.push(makeNumber(minVal, loc));
+	args.push(makeNumber(maxVal, loc));
+	return makeCall(makeIdent(fnName, loc), args, loc);
+}
+
+// ===== Test Helpers =====
+
+function castExprKind(input: string): NodeKind {
+	const result = parseInput(input);
+	if (!result.ok) return NodeKind.Program;
+	const ctx = createTransformContext();
+	injectRangeChecks(result.value, ctx);
+	const stmts = getStmts(result.value);
+	if (stmts.length === 0) return NodeKind.Program;
+	if (stmts[0].kind !== NodeKind.ExprStmt) return NodeKind.Program;
+	const sd = stmts[0].data as ExprStmtData;
+	return sd.expr.kind;
+}
+
+function parsedAsType(input: string): string {
+	const result = parseInput(input);
+	if (!result.ok) return "";
+	const stmts = getStmts(result.value);
+	if (stmts.length === 0) return "";
+	if (stmts[0].kind !== NodeKind.ExprStmt) return "";
+	const sd = stmts[0].data as ExprStmtData;
+	if (sd.expr.kind !== NodeKind.TypeAssertion) return "";
+	const td = sd.expr.data as TypeAssertionData;
+	return td.asType;
 }
 
 // ===== Tests =====
@@ -76,5 +124,29 @@ testGroup("Range Check Inject", () => {
 	});
 	test("identifier unchanged", () => {
 		check(firstExprKindAfter("x;", injectRangeChecks) === NodeKind.Identifier);
+	});
+	test("parser stores asType", () => {
+		check(parsedAsType("x as int8;") === "int8");
+	});
+	test("parser stores asType number", () => {
+		check(parsedAsType("x as number;") === "number");
+	});
+	test("parser stores asType union", () => {
+		check(parsedAsType("x as string | null;") === "string | null");
+	});
+	test("cast to int8 becomes range check", () => {
+		check(castExprKind("x as int8;") === NodeKind.CallExpr);
+	});
+	test("cast to uint16 becomes range check", () => {
+		check(castExprKind("x as uint16;") === NodeKind.CallExpr);
+	});
+	test("cast to int32 becomes range check", () => {
+		check(castExprKind("x as int32;") === NodeKind.CallExpr);
+	});
+	test("cast to number unchanged", () => {
+		check(castExprKind("x as number;") === NodeKind.TypeAssertion);
+	});
+	test("cast to string unchanged", () => {
+		check(castExprKind("x as string;") === NodeKind.TypeAssertion);
 	});
 });

@@ -6,21 +6,22 @@
 // the value must be wrapped: return ms_optional_wrap(value);
 // When returning null: return ms_optional_null();
 //
-// Without type info: this transform is conservative. It only transforms
-// explicit `return null` in functions with T|null return annotation.
-// Full implementation requires checker to know function return types.
-// TODO: With checker integration, wrap all non-null returns in T|null functions.
+// Detection: function has T|null return type annotation (contains "|").
+// All return statements in the body are transformed:
+//   return null   → return ms_optional_null()
+//   return expr   → return ms_optional_wrap(expr)
 
 import {
 	Node, NodeKind,
-	FunctionDeclData, ReturnStmtData, BlockStmtData,
+	FunctionDeclData, ReturnStmtData, BlockStmtData, IfStmtData,
 } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent } from "../util";
 import { findChar } from "../../utils/string";
 import { test, check, testGroup } from "std/testing";
-import { firstStmtKindAfter, stmtCountAfter } from "../testUtil";
+import { firstStmtKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";
+import { createTransformContext } from "../context";
 
 // ===== Main Entry Point =====
 
@@ -48,14 +49,20 @@ function isOptionalReturnType(retType: string): boolean {
 	return findChar(retType, "|") >= 0;
 }
 
-// Walk body and transform `return null` → `return ms_optional_null()`
+// Walk body and transform returns in T|null functions
 function transformReturnsInBody(body: Node, retType: string): void {
 	match (body.kind) {
 		NodeKind.ReturnStmt => {
 			const rd = body.data as ReturnStmtData;
+			const loc = body.location;
 			if (rd.argument.kind === NodeKind.NullLiteral) {
-				const loc = body.location;
+				// return null → return ms_optional_null()
 				rd.argument = makeCall(makeIdent("ms_optional_null", loc), [], loc);
+			} else {
+				// return expr → return ms_optional_wrap(expr)
+				const args: Node[] = [];
+				args.push(rd.argument);
+				rd.argument = makeCall(makeIdent("ms_optional_wrap", loc), args, loc);
 			}
 		},
 		NodeKind.BlockStmt => {
@@ -66,8 +73,34 @@ function transformReturnsInBody(body: Node, retType: string): void {
 				i += 1;
 			}
 		},
+		NodeKind.IfStmt => {
+			const id = body.data as IfStmtData;
+			transformReturnsInBody(id.consequent, retType);
+			if (id.alternate !== null) {
+				transformReturnsInBody(id.alternate, retType);
+			}
+		},
 		_ => {},
 	};
+}
+
+// ===== Helpers for Tests =====
+
+function getReturnArgKind(input: string): NodeKind {
+	const result = parseInput(input);
+	if (!result.ok) return NodeKind.Program;
+	const ctx = createTransformContext();
+	coerceOptionals(result.value, ctx);
+	const stmts = getStmts(result.value);
+	if (stmts.length === 0) return NodeKind.Program;
+	if (stmts[0].kind !== NodeKind.FunctionDecl) return NodeKind.Program;
+	const fd = stmts[0].data as FunctionDeclData;
+	const bd = fd.fnBody.data as BlockStmtData;
+	if (bd.statements.length === 0) return NodeKind.Program;
+	const ret = bd.statements[0];
+	if (ret.kind !== NodeKind.ReturnStmt) return NodeKind.Program;
+	const rd = ret.data as ReturnStmtData;
+	return rd.argument.kind;
 }
 
 // ===== Tests =====
@@ -87,5 +120,17 @@ testGroup("Optional Coercion", () => {
 	});
 	test("non-optional function unchanged", () => {
 		check(firstStmtKindAfter("function foo(): number { return 1; }", coerceOptionals) === NodeKind.FunctionDecl);
+	});
+	test("return null in optional fn becomes call", () => {
+		const k = getReturnArgKind("function foo(): number | null { return null; }");
+		check(k === NodeKind.CallExpr);
+	});
+	test("return expr in optional fn becomes call", () => {
+		const k = getReturnArgKind("function foo(): number | null { return 42; }");
+		check(k === NodeKind.CallExpr);
+	});
+	test("return expr in plain fn unchanged", () => {
+		const k = getReturnArgKind("function foo(): number { return 42; }");
+		check(k === NodeKind.NumberLiteral);
 	});
 });

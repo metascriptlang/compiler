@@ -2,8 +2,12 @@
 // Each helper wraps createNode with the correct NodeKind and data shape.
 
 import { Token, TokenKind, createToken } from "../lexer/token";
-import { Node, NodeKind, DeclKind, SourceLocation, createNode, BlockStmtData } from "../ast/node";
-import { TransformContext, freshTemp } from "./context";
+import {
+	Node, NodeKind, DeclKind, SourceLocation, createNode,
+	BlockStmtData, VariableDeclData, IfStmtData, WhileStmtData,
+	TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData,
+} from "../ast/node";
+import { TransformContext, freshTemp, NameSet, nameSetAdd } from "./context";
 
 // Create a synthetic token from a source location (for transform-generated nodes)
 export function syntheticToken(loc: SourceLocation): Token {
@@ -121,6 +125,75 @@ export function makeInterfaceDecl(name: string, fields: string[], fieldTypes: st
 
 export function makeObjectLiteral(keys: string[], values: Node[], loc: SourceLocation): Node {
 	return createNode(NodeKind.ObjectLiteral, { properties: values, keys }, syntheticToken(loc));
+}
+
+// ===== Declaration Collection =====
+// Collect variable declaration names in a function body. Stops at nested functions.
+// varOnly=true: only DeclKind.Var (for varHoist). varOnly=false: all decls (for generatorLower).
+// Handles: BlockStmt, IfStmt, WhileStmt, TryCatchStmt, DoWhileStmt, SwitchStmt/SwitchCase.
+
+export function collectDeclNames(node: Node, ns: NameSet, varOnly: boolean): void {
+	match (node.kind) {
+		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {},
+		NodeKind.VariableDecl => {
+			const d = node.data as VariableDeclData;
+			if (!varOnly || d.declKind === DeclKind.Var) {
+				nameSetAdd(ns, d.declName);
+			}
+			collectDeclNames(d.initializer, ns, varOnly);
+		},
+		NodeKind.BlockStmt => {
+			const d = node.data as BlockStmtData;
+			let i = 0;
+			while (i < d.statements.length) {
+				collectDeclNames(d.statements[i], ns, varOnly);
+				i += 1;
+			}
+		},
+		NodeKind.IfStmt => {
+			const d = node.data as IfStmtData;
+			collectDeclNames(d.consequent, ns, varOnly);
+			collectDeclNames(d.alternate, ns, varOnly);
+		},
+		NodeKind.WhileStmt => {
+			const d = node.data as WhileStmtData;
+			collectDeclNames(d.whileBody, ns, varOnly);
+		},
+		NodeKind.TryCatchStmt => {
+			const d = node.data as TryCatchStmtData;
+			collectDeclNames(d.tryBody, ns, varOnly);
+			collectDeclNames(d.catchBody, ns, varOnly);
+			collectDeclNames(d.finallyBody, ns, varOnly);
+		},
+		NodeKind.DoWhileStmt => {
+			const d = node.data as DoWhileStmtData;
+			collectDeclNames(d.doBody, ns, varOnly);
+		},
+		NodeKind.SwitchStmt => {
+			const d = node.data as SwitchStmtData;
+			let si = 0;
+			while (si < d.switchCases.length) {
+				collectDeclNames(d.switchCases[si], ns, varOnly);
+				si += 1;
+			}
+		},
+		NodeKind.SwitchCase => {
+			const d = node.data as SwitchCaseData;
+			let ci = 0;
+			while (ci < d.caseStmts.length) {
+				collectDeclNames(d.caseStmts[ci], ns, varOnly);
+				ci += 1;
+			}
+		},
+		_ => {},
+	};
+}
+
+// ===== DeclKind Helpers =====
+
+// Convert boolean isConst flag → DeclKind enum (for AST nodes that still use boolean flags)
+export function boolToDeclKind(isConst: boolean): DeclKind {
+	return match (isConst) { true => DeclKind.Const, _ => DeclKind.Let };
 }
 
 // ===== Helpers =====

@@ -14,7 +14,7 @@
 // Binding patterns (identifier) → const name = $m; prepended to body
 
 import {
-	Node, NodeKind,
+	Node, NodeKind, DeclKind,
 	BlockStmtData,
 	MatchStmtData, MatchExprData, MatchCaseData,
 	VariableDeclData, ReturnStmtData, ExprStmtData,
@@ -38,8 +38,6 @@ export function lowerMatch(program: Node, ctx: TransformContext): Node {
 
 // Expand a single statement that may contain a match
 function expandMatchStmt(stmt: Node, ctx: TransformContext): Node[] {
-	// TODO: this match syntax not fully elegant, 
-	// in self-host Compiler, should be able to `return match ...`
 	match (stmt.kind) {
 		NodeKind.MatchStmt => {
 			return lowerMatchStmt(stmt, ctx);
@@ -76,10 +74,10 @@ function lowerMatchStmt(matchNode: Node, ctx: TransformContext): Node[] {
 	const result: Node[] = [];
 
 	// const $match_N = discriminant;
-	result.push(makeVarDecl(tempName, d.matchStmtDisc, true, loc));
+	result.push(makeVarDecl(tempName, d.matchStmtDisc, DeclKind.Const, loc));
 
 	// Build if-else chain from cases
-	const ifChain = buildIfChain(d.matchStmtCases, tempName, loc, false, "");
+	const ifChain = buildIfChain(d.matchStmtCases, tempName, loc, "stmt", "");
 	result.push(ifChain);
 
 	return result;
@@ -95,12 +93,12 @@ function lowerMatchExprInVar(stmt: Node, ctx: TransformContext): Node[] {
 	const result: Node[] = [];
 
 	// const $match_N = discriminant;
-	result.push(makeVarDecl(tempName, matchData.matchDisc, true, loc));
+	result.push(makeVarDecl(tempName, matchData.matchDisc, DeclKind.Const, loc));
 	// let x; (uninitialized, to be assigned in each branch)
 	const placeholder = makeIdent("undefined", loc);
-	result.push(makeVarDecl(varData.declName, placeholder, false, loc));
+	result.push(makeVarDecl(varData.declName, placeholder, DeclKind.Let, loc));
 	// if-chain with assignment: x = armValue
-	const ifChain = buildIfChain(matchData.matchCases, tempName, loc, true, varData.declName);
+	const ifChain = buildIfChain(matchData.matchCases, tempName, loc, "assign", varData.declName);
 	result.push(ifChain);
 
 	return result;
@@ -116,20 +114,19 @@ function lowerMatchExprInReturn(stmt: Node, ctx: TransformContext): Node[] {
 	const result: Node[] = [];
 
 	// const $match_N = discriminant;
-	result.push(makeVarDecl(tempName, matchData.matchDisc, true, loc));
+	result.push(makeVarDecl(tempName, matchData.matchDisc, DeclKind.Const, loc));
 	// if-chain with return: return armValue
-	const ifChain = buildIfChainReturn(matchData.matchCases, tempName, loc);
+	const ifChain = buildIfChain(matchData.matchCases, tempName, loc, "return", "");
 	result.push(ifChain);
 
 	return result;
 }
 
 // ===== Build if-else chain =====
+// Unified builder for all match contexts.
+// mode: "stmt" = body as-is, "assign" = varName = body, "return" = return body
 
-// Build if-else chain for statement-context match.
-// When isAssign is true, wraps each arm body with `varName = armBody;`
-function buildIfChain(cases: Node[], tempName: string, loc: Node["location"], isAssign: boolean, varName: string): Node {
-	// Process cases in reverse to build bottom-up if-else chain
+function buildIfChain(cases: Node[], tempName: string, loc: Node["location"], mode: string, varName: string): Node {
 	let elseNode = makeBlock([], loc);
 
 	let i = cases.length;
@@ -138,79 +135,47 @@ function buildIfChain(cases: Node[], tempName: string, loc: Node["location"], is
 		const caseNode = cases[i];
 		const caseData = caseNode.data as MatchCaseData;
 
-		// Build body
-		let body: Node = caseData.caseBody;
-		if (isAssign) {
-			// Wrap as: { varName = caseBody; }
-			const assignExpr = makeAssign(makeIdent(varName, loc), caseData.caseBody, loc);
-			body = makeBlock([makeExprStmt(assignExpr, loc)], loc);
-		}
+		// Wrap body based on mode
+		const body = wrapArmBody(caseData.caseBody, mode, varName, loc);
 
-		// Check if wildcard
 		if (isWildcard(caseData.casePatterns)) {
 			elseNode = body;
 			continue;
 		}
 
-		// Check if binding pattern (single identifier that's not a literal/member)
 		if (isBindingPattern(caseData.casePatterns)) {
 			const bindingName = getBindingName(caseData.casePatterns);
-			const bindDecl = makeVarDecl(bindingName, makeIdent(tempName, loc), true, loc);
-			// Prepend binding to body
-			if (body.kind === NodeKind.BlockStmt) {
-				const bodyData = body.data as BlockStmtData;
-				const newStmts: Node[] = [];
-				newStmts.push(bindDecl);
-				for (const s of bodyData.statements) {
-					newStmts.push(s);
-				}
-				body = makeBlock(newStmts, loc);
-			} else {
-				body = makeBlock([bindDecl, body], loc);
-			}
-			// Binding always matches (it's like default)
-			elseNode = body;
+			const bindDecl = makeVarDecl(bindingName, makeIdent(tempName, loc), DeclKind.Const, loc);
+			elseNode = prependToBody(bindDecl, body, loc);
 			continue;
 		}
 
-		// Build condition from patterns (may be or-patterns)
 		const cond = buildPatternCondition(caseData.casePatterns, tempName, loc);
 		elseNode = makeIf(cond, body, elseNode, loc);
 	}
 
 	return elseNode;
+}
+
+function wrapArmBody(armBody: Node, mode: string, varName: string, loc: Node["location"]): Node {
+	return match (mode) {
+		"assign" => makeBlock([makeExprStmt(makeAssign(makeIdent(varName, loc), armBody, loc), loc)], loc),
+		"return" => makeBlock([makeReturn(armBody, loc)], loc),
+		_ => armBody,
+	};
 }
 
-// Build if-else chain for return-context match.
-function buildIfChainReturn(cases: Node[], tempName: string, loc: Node["location"]): Node {
-	let elseNode = makeBlock([], loc);
-
-	let i = cases.length;
-	while (i > 0) {
-		i -= 1;
-		const caseNode = cases[i];
-		const caseData = caseNode.data as MatchCaseData;
-
-		// Wrap body: return caseBody;
-		const body = makeBlock([makeReturn(caseData.caseBody, loc)], loc);
-
-		if (isWildcard(caseData.casePatterns)) {
-			elseNode = body;
-			continue;
+function prependToBody(decl: Node, body: Node, loc: Node["location"]): Node {
+	if (body.kind === NodeKind.BlockStmt) {
+		const bodyData = body.data as BlockStmtData;
+		const newStmts: Node[] = [];
+		newStmts.push(decl);
+		for (const s of bodyData.statements) {
+			newStmts.push(s);
 		}
-
-		if (isBindingPattern(caseData.casePatterns)) {
-			const bindingName = getBindingName(caseData.casePatterns);
-			const bindDecl = makeVarDecl(bindingName, makeIdent(tempName, loc), true, loc);
-			elseNode = makeBlock([bindDecl, makeReturn(caseData.caseBody, loc)], loc);
-			continue;
-		}
-
-		const cond = buildPatternCondition(caseData.casePatterns, tempName, loc);
-		elseNode = makeIf(cond, body, elseNode, loc);
+		return makeBlock(newStmts, loc);
 	}
-
-	return elseNode;
+	return makeBlock([decl, body], loc);
 }
 
 // ===== Pattern Helpers =====

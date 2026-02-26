@@ -14,7 +14,7 @@ import { walkNode } from "../walker";
 import { makeIdent, makeCall } from "../util";
 import { lookupSymbol } from "../../checker/symbol";
 import { TypeKind, getProperty } from "../../checker/types";
-import { ExtensionRegistry } from "../../checker/context";
+import { ExtensionRegistry, hasExtensionByName } from "../../checker/context";
 import { test, check, testGroup } from "std/testing";
 import { parseInput, getStmts, firstCalleeKind, firstCallArgCount } from "../testUtil";
 import { createTransformContext, createTransformContextWithChecker } from "../context";
@@ -23,16 +23,6 @@ import { defineSymbol, makeSymbol, SymbolKind } from "../../checker/symbol";
 import { unknownType, createObject, createFunction } from "../../checker/types";
 
 // ===== Helpers =====
-
-// Check if ANY extension in the registry has this method name.
-function isExtensionName(registry: ExtensionRegistry, name: string): boolean {
-	let mi = 0;
-	while (mi < registry.methods.length) {
-		if (registry.methods[mi].methodName === name) return true;
-		mi += 1;
-	}
-	return false;
-}
 
 // Check if receiver's resolved type has a property with this name.
 // If so, it's a regular member call (class/interface method), not an extension.
@@ -61,7 +51,7 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 	if (ctx.checkerCtx.extensionRegistry === null) return node;
 
 	const methodName = member.property;
-	if (!isExtensionName(ctx.checkerCtx.extensionRegistry, methodName)) return node;
+	if (!hasExtensionByName(ctx.checkerCtx.extensionRegistry, methodName)) return node;
 
 	// If receiver has a property with this name, it's a regular member call
 	if (receiverHasProperty(ctx, member.object, methodName)) return node;
