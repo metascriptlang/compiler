@@ -3,7 +3,7 @@
 
 import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, NodeData, createNode, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd, skipDestructurePattern, consumeSemicolon, skipGenericParams, skipBalanced } from "../context";
+import { ParserState, current, advance, isAtEnd, skipDestructurePattern, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced } from "../context";
 import { skipTypeAnnotation } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, skipDefaultValue, skipOptionalType } from "../util";
 import { callBlockParser, callExprParser } from "./callbacks";
@@ -60,7 +60,7 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 
 	advance(state);
 	// Optional type annotation: const x: number = ...
-	skipOptionalType(state);
+	const declType = captureOptionalType(state);
 
 	if (current(state).kind !== TokenKind.Assign) {
 		return Result.err(`Expected '=' in variable declaration at line ${current(state).line.toString()}`);
@@ -72,6 +72,7 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 
 	return Result.ok(createNode(NodeKind.VariableDecl, {
 		declName: nameToken.value,
+		declType,
 		initializer: init,
 		isConst: keyword.kind === TokenKind.Const,
 	}, keyword));
@@ -100,11 +101,14 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 		advance(state); // consume '*'
 	}
 	const nameToken = current(state);
-	if (nameToken.kind !== TokenKind.Ident) {
+	// Accept Ident or TemplateNoSub (backtick-stropped operator name, e.g. `[]`)
+	if (nameToken.kind !== TokenKind.Ident && nameToken.kind !== TokenKind.TemplateNoSub) {
 		return Result.err(`Expected function name at line ${nameToken.line.toString()}`);
 	}
 
 	advance(state);
+	// Capture optional generic params: function id<T>(x: T): T
+	const genericNames = captureGenericParams(state);
 	if (current(state).kind !== TokenKind.LParen) {
 		return Result.err(`Expected '(' after function name at line ${current(state).line.toString()}`);
 	}
@@ -126,6 +130,11 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 			}
 			params[0] = receiverName;
 		}
+	}
+	// Encode generic param names in flags: "gen:T,U"
+	if (genericNames !== "") {
+		if (flags === "") { flags = "gen:" + genericNames; }
+		else { flags = flags + "|gen:" + genericNames; }
 	}
 	// Optional return type annotation: function f(): string { ... }
 	const fnReturnType = captureOptionalType(state);
@@ -318,11 +327,21 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 	}
 
 	advance(state);
+	const typeStart = state.position;
 	skipTypeAnnotation(state);
+	const typeEnd = state.position;
+	let aliasType = "";
+	let ti = typeStart;
+	while (ti < typeEnd) {
+		if (ti > typeStart) { aliasType = aliasType + " "; }
+		aliasType = aliasType + state.tokens[ti].value;
+		ti += 1;
+	}
 	consumeSemicolon(state);
 
 	return Result.ok(createNode(NodeKind.TypeAliasDecl, {
 		aliasName: nameToken.value,
+		aliasType,
 		aliasIsDistinct: false,
 	}, typeToken));
 }
@@ -578,8 +597,8 @@ function parseClassMember(state: ParserState): NodeResult {
 		return parseClassMethodBody(state, nameToken, memberIsStatic, memberFlags);
 	}
 
-	// Property — no try, skip initializer tokens manually
-	skipOptionalType(state);
+	// Property — capture type, skip initializer tokens manually
+	const propType = captureOptionalType(state);
 	if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
 		advance(state);
 		skipDefaultValue(state);
@@ -588,6 +607,7 @@ function parseClassMember(state: ParserState): NodeResult {
 
 	return Result.ok(createNode(NodeKind.PropertyDecl, {
 		propName: nameToken.value,
+		propType,
 		propIsStatic: memberIsStatic,
 	}, nameToken));
 }
@@ -922,11 +942,21 @@ export function parseDistinctTypeDecl(state: ParserState): NodeResult {
 		return Result.err(`Expected '=' in distinct type declaration at line ${current(state).line.toString()}`);
 	}
 	advance(state);
+	const dTypeStart = state.position;
 	skipTypeAnnotation(state);
+	const dTypeEnd = state.position;
+	let distinctAliasType = "";
+	let di = dTypeStart;
+	while (di < dTypeEnd) {
+		if (di > dTypeStart) { distinctAliasType = distinctAliasType + " "; }
+		distinctAliasType = distinctAliasType + state.tokens[di].value;
+		di += 1;
+	}
 	consumeSemicolon(state);
 
 	return Result.ok(createNode(NodeKind.TypeAliasDecl, {
 		aliasName: nameToken.value,
+		aliasType: distinctAliasType,
 		aliasIsDistinct: true,
 	}, distinctToken));
 }

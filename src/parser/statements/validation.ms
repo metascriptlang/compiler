@@ -14,7 +14,12 @@ type NodeResult = Result<Node, string>;
 export function parseSource(input: string): NodeResult {
 	const lr = lex(input);
 	if (!lr.ok) return Result.err(lr.error);
-	return callProgramParser(lr.value);
+	// parseProgramFromState always returns ok (partial AST on errors)
+	// Check errors via parseErrorCount() or low-level state API
+	const state = createState(lr.value);
+	const pr = callStateProgramParser(state);
+	if (state.errors.length > 0) return Result.err(state.errors[0]);
+	return Result.ok(pr.value);
 }
 
 export function programOk(input: string): boolean {

@@ -161,10 +161,7 @@ export function parseProgramFromState(state: ParserState): NodeResult {
 		}
 	}
 
-	// If errors were collected, return the first one
-	if (state.errors.length > 0) {
-		return Result.err(state.errors[0]);
-	}
+	// Always return partial AST — errors accessible via state.errors
 	return Result.ok(createNode(NodeKind.Program, { programStmts: stmts }, startToken));
 }
 

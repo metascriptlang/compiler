@@ -1,7 +1,7 @@
 import { Node, NodeKind, ProgramData, FunctionDeclData, ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData } from "../ast/node";
 import { Type, TypeKind, unknownType, createObject, createEnum, createTypeRef } from "./types";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, defineSymbol, makeSymbol, lookupSymbol } from "./symbol";
-import { CheckerContext, addError, findExportedSymbol, ExtensionMethod, registerExtension } from "./context";
+import { CheckerContext, addError, findExportedSymbol, ExtensionMethod, registerExtension, isExtensionFlag, getExtReceiverType } from "./context";
 import { sliceStr, findChar } from "../utils/string";
 import { test, check, testGroup } from "std/testing";
 
@@ -44,13 +44,9 @@ export function defineOrError(ctx: CheckerContext, sym: Symbol, node: Node): voi
 function collectFunction(ctx: CheckerContext, node: Node): void {
 	const d = node.data as FunctionDeclData;
 	// Check for extension method: fnFlags contains "ext:receiverName:receiverType"
-	if (d.fnFlags.length > 4 && sliceStr(d.fnFlags, 0, 4) === "ext:") {
-		// Parse "ext:name:type" — find second colon
-		const rest = sliceStr(d.fnFlags, 4, d.fnFlags.length);
-		const colonPos = findChar(rest, ":");
-		if (colonPos > 0 && ctx.extensionRegistry !== null) {
-			const receiverName = sliceStr(rest, 0, colonPos);
-			const receiverType = sliceStr(rest, colonPos + 1, rest.length);
+	if (isExtensionFlag(d.fnFlags) && ctx.extensionRegistry !== null) {
+		const receiverType = getExtReceiverType(d.fnFlags);
+		if (receiverType !== "") {
 			const extMethod: ExtensionMethod = {
 				methodName: d.fnName,
 				receiverTypeName: receiverType,

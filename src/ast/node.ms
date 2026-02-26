@@ -85,7 +85,7 @@ export type NodeData =
 	| { propKey: string, propAlias: Node }                         // ObjectPatternProp
 	| { destrPattern: Node, destrInit: Node, destrIsConst: boolean } // DestructuringDecl
 	// Statement variants
-	| { declName: string, initializer: Node, isConst: boolean }    // VariableDecl
+	| { declName: string, declType: string, initializer: Node, isConst: boolean }    // VariableDecl
 	| { condition: Node, consequent: Node, alternate: Node }       // IfStmt
 	| { whileCondition: Node, whileBody: Node }                    // WhileStmt
 	| { forInit: Node, forCondition: Node, forUpdate: Node, forBody: Node } // ForStmt
@@ -105,11 +105,11 @@ export type NodeData =
 	// Declaration variants
 	| { importNames: string[], importAliases: string[], importSource: string }  // ImportDecl
 	| { exportedDecl: Node }                                       // ExportDecl
-	| { aliasName: string, aliasIsDistinct: boolean }               // TypeAliasDecl
+	| { aliasName: string, aliasType: string, aliasIsDistinct: boolean }               // TypeAliasDecl
 	| { enumName: string, enumMembers: string[] }                  // EnumDecl
 	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[] } // InterfaceDecl
 	| { className: string, classExtends: string, classBody: Node[] } // ClassDecl
-	| { propName: string, propIsStatic: boolean }                 // PropertyDecl
+	| { propName: string, propType: string, propIsStatic: boolean }                 // PropertyDecl
 	| { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodReturnType: string } // MethodDecl
 	| { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node } // ConstructorDecl
 	// Error handling variants
@@ -183,7 +183,7 @@ export type ExprStmtData = { expr: Node };
 export type ReturnStmtData = { argument: Node };
 export type ThrowStmtData = { throwArg: Node };
 export type DeferStmtData = { deferExpr: Node };
-export type VariableDeclData = { declName: string, initializer: Node, isConst: boolean };
+export type VariableDeclData = { declName: string, declType: string, initializer: Node, isConst: boolean };
 export type IfStmtData = { condition: Node, consequent: Node, alternate: Node };
 export type WhileStmtData = { whileCondition: Node, whileBody: Node };
 export type ForStmtData = { forInit: Node, forCondition: Node, forUpdate: Node, forBody: Node };
@@ -205,11 +205,11 @@ export type MacroInvocationData = { macroName: string, macroArgs: Node[] };
 // Declarations
 export type ImportDeclData = { importNames: string[], importAliases: string[], importSource: string };
 export type ExportDeclData = { exportedDecl: Node };
-export type TypeAliasDeclData = { aliasName: string, aliasIsDistinct: boolean };
+export type TypeAliasDeclData = { aliasName: string, aliasType: string, aliasIsDistinct: boolean };
 export type EnumDeclData = { enumName: string, enumMembers: string[] };
 export type InterfaceDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[] };
 export type ClassDeclData = { className: string, classExtends: string, classBody: Node[] };
-export type PropertyDeclData = { propName: string, propIsStatic: boolean };
+export type PropertyDeclData = { propName: string, propType: string, propIsStatic: boolean };
 export type MethodDeclData = { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodReturnType: string };
 export type ConstructorDeclData = { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node };
 export type ExternDeclData = { externKind: string, externName: string };

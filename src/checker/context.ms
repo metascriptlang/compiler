@@ -1,6 +1,7 @@
 import { Type, TypeKind, unknownType } from "./types";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, createSymbolTable } from "./symbol";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
+import { sliceStr, findChar } from "../utils/string";
 import { test, check, testGroup } from "std/testing";
 
 // ===== Export Registry (cross-module type propagation) =====
@@ -76,6 +77,30 @@ export function findExtension(registry: ExtensionRegistry, receiverTypeName: str
 	return null as unknown as ExtensionMethod;
 }
 
+// ===== Extension Flag Helpers =====
+// Parse "ext:receiverName:receiverType" from fnFlags (shared by collectPass + resolvePass)
+
+export function isExtensionFlag(flags: string): boolean {
+	if (flags.length <= 4) return false;
+	return sliceStr(flags, 0, 4) === "ext:";
+}
+
+export function getExtReceiverName(flags: string): string {
+	if (!isExtensionFlag(flags)) return "";
+	const rest = sliceStr(flags, 4, flags.length);
+	const colonPos = findChar(rest, ":");
+	if (colonPos <= 0) return "";
+	return sliceStr(rest, 0, colonPos);
+}
+
+export function getExtReceiverType(flags: string): string {
+	if (!isExtensionFlag(flags)) return "";
+	const rest = sliceStr(flags, 4, flags.length);
+	const colonPos = findChar(rest, ":");
+	if (colonPos <= 0) return "";
+	return sliceStr(rest, colonPos + 1, rest.length);
+}
+
 // ===== Attached Operations (lifecycle hooks per type) =====
 // Detects onDestroy/onCopy/onMove extension methods for destructor lifting.
 
@@ -118,6 +143,7 @@ export interface CheckerContext {
 	currentModule: Module;     // null for single-module mode
 	exportRegistry: ExportRegistry;  // null for single-module mode
 	extensionRegistry: ExtensionRegistry;  // null for single-module mode
+	inferredReturn: Type;  // tracks inferred return type during function body checking
 }
 
 // ===== Constructors =====
@@ -133,6 +159,7 @@ export function createContext(): CheckerContext {
 		currentModule: null as unknown as Module,
 		exportRegistry: null as unknown as ExportRegistry,
 		extensionRegistry: createExtensionRegistry(),
+		inferredReturn: unknownType(),
 	};
 }
 

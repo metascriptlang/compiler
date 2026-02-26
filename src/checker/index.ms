@@ -16,11 +16,12 @@ export {
 	isNumeric, isStringType, isBoolType, isCallable,
 	getReturnType, getElementType, getProperty,
 	substituteType, instantiateGeneric, createGenericParam,
+	isPrimitiveKind,
 } from "./types";
 
 // Re-exports: symbol.ms
 export { SymbolKind, ScopeKind, Symbol, Scope, SymbolTable } from "./symbol";
-export { createSymbolTable, openScope, closeScope, defineSymbol, lookupSymbol, lookupLocal, lookupExport, makeSymbol, hasOverloads } from "./symbol";
+export { createSymbolTable, openScope, closeScope, defineSymbol, lookupSymbol, lookupLocal, lookupExport, makeSymbol, hasOverloads, isPointerType } from "./symbol";
 
 // Re-exports: context.ms
 export {
@@ -29,6 +30,7 @@ export {
 	createExportRegistry, findModuleExports, findExportedSymbol, registerModuleExports,
 	ExtensionMethod, ExtensionRegistry, createExtensionRegistry, registerExtension, findExtension,
 	AttachedOps, findAttachedOps, hasAttachedOps,
+	isExtensionFlag, getExtReceiverName, getExtReceiverType,
 } from "./context";
 
 // Re-exports: collectPass.ms (Pass 1)
@@ -40,8 +42,14 @@ export { resolveAnnotation, resolveDeclarations } from "./resolvePass";
 // Re-exports: compat.ms
 export { isAssignable, TypeRelation, typeRelation, scoreCandidate } from "./compat";
 
-// Re-exports: checkPass.ms (Pass 3 + multi-module orchestrator)
-export { checkStmt, checkExpr, checkProgramBody, checkProgram, checkSource, checkModuleGraph } from "./checkPass";
+// Re-exports: checkPass.ms (Pass 3 — statements)
+export { checkStmt, checkProgramBody, checkProgram, checkSource, runThreePasses } from "./checkPass";
+
+// Re-exports: checkExprPass.ms (Pass 3 — expressions)
+export { checkExpr } from "./checkExprPass";
+
+// Re-exports: orchestrator.ms (multi-module orchestration)
+export { checkModuleGraph } from "./orchestrator";
 
 // ===== Integration Tests =====
 

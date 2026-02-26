@@ -18,21 +18,23 @@ import { printNode } from "./ast/index";
 import { formatError, unexpectedToken } from "./diagnostics/diagnostics";
 import { checkProgram, checkModuleGraph } from "./checker/index";
 import { transformProgram } from "./transform/index";
+import { analyzeProgram } from "./analyzer/index";
 
 // ===== Compiler Pipeline =====
-// Single-module: parse → check → transform → (codegen: future)
-// Multi-module:  load → check graph → transform → (codegen: future)
+// Single-module: parse → check → transform → analyze → (codegen: future)
+// Multi-module:  load → check graph → transform → analyze → (codegen: future)
 
 type NodeResult = Result<Node, string>;
 
-// Shared: parse → check → transform pipeline
+// Shared: parse → check → transform → analyze pipeline
 function compileProgram(input: string): NodeResult {
 	const parseResult = parseSource(input);
 	if (!parseResult.ok) return Result.err(parseResult.error);
 	const program = parseResult.value;
 	const checkerCtx = checkProgram(program);
 	const transformed = transformProgram(program, checkerCtx);
-	return Result.ok(transformed);
+	const analyzed = analyzeProgram(transformed, checkerCtx);
+	return Result.ok(analyzed);
 }
 
 export function compileSource(input: string): NodeResult {

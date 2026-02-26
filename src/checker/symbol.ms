@@ -138,6 +138,15 @@ export function lookupExport(table: SymbolTable, name: string): Symbol {
 	return null as unknown as Symbol;
 }
 
+// isPointerType — used by destructorLifting and analyzer/classify for RC classification
+export function isPointerType(t: Type, table: SymbolTable): boolean {
+	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) return true;
+	if (t.kind !== TypeKind.Object || t.typeName === "") return false;
+	const sym = lookupSymbol(table, t.typeName);
+	if (sym === null) return false;
+	return sym.symbolKind === SymbolKind.Interface || sym.symbolKind === SymbolKind.Class;
+}
+
 // ===== Tests =====
 
 testGroup("SymbolTable", () => {

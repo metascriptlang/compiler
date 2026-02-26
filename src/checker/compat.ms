@@ -2,8 +2,9 @@
 
 import {
 	Type, TypeKind, isNumeric,
-	numberType, stringType, booleanType, voidType, nullType, unknownType,
+	numberType, stringType, booleanType, voidType, nullType, unknownType, errorType,
 	createPrimitive, createArray, createFunction, createObject, createUnion,
+	createEnum, createResult, createRef, createPtr, createDistinct, createGenericParam,
 } from "./types";
 import { test, check, testGroup } from "std/testing";
 
@@ -13,9 +14,15 @@ export function isAssignable(source: Type, target: Type): boolean {
 	// Same kind is always compatible
 	if (source.kind === target.kind) {
 		return match (source.kind) {
-			TypeKind.Array => isAssignable(source.typeReturn, target.typeReturn),
+			TypeKind.Array | TypeKind.Ref | TypeKind.Ptr => isAssignable(source.typeReturn, target.typeReturn),
 			TypeKind.Function => isFunctionAssignable(source, target),
 			TypeKind.Object => isObjectAssignable(source, target),
+			TypeKind.Enum | TypeKind.Distinct => source.typeName === target.typeName,
+			TypeKind.Result => {
+				const okCompat = isAssignable(source.typeReturn, target.typeReturn);
+				const errCompat = isAssignable(source.typeExtra, target.typeExtra);
+				okCompat && errCompat
+			},
 			_ => true,
 		};
 	}
@@ -115,26 +122,51 @@ export enum TypeRelation {
 }
 
 export function typeRelation(formal: Type, actual: Type): TypeRelation {
-	// Exact match
+	// Same kind: dispatch on type-specific rules
 	if (formal.kind === actual.kind) {
-		if (formal.kind === TypeKind.Object) {
-			if (formal.typeName === actual.typeName) return TypeRelation.Exact;
-			if (isObjectAssignable(actual, formal)) return TypeRelation.Subtype;
-			return TypeRelation.None;
-		}
-		return TypeRelation.Exact;
+		return match (formal.kind) {
+			TypeKind.Object => {
+				if (formal.typeName === actual.typeName) return TypeRelation.Exact;
+				if (isObjectAssignable(actual, formal)) return TypeRelation.Subtype;
+				TypeRelation.None
+			},
+			TypeKind.Enum | TypeKind.Distinct => {
+				if (formal.typeName === actual.typeName) return TypeRelation.Exact;
+				TypeRelation.None
+			},
+			TypeKind.Result => {
+				if (formal.typeReturn !== null && actual.typeReturn !== null) {
+					const okRel = typeRelation(formal.typeReturn, actual.typeReturn);
+					if (okRel === TypeRelation.None) return TypeRelation.None;
+				}
+				if (formal.typeExtra !== null && actual.typeExtra !== null) {
+					const errRel = typeRelation(formal.typeExtra, actual.typeExtra);
+					if (errRel === TypeRelation.None) return TypeRelation.None;
+				}
+				TypeRelation.Exact
+			},
+			_ => TypeRelation.Exact,
+		};
 	}
 	// Unknown = inference pending
 	if (formal.kind === TypeKind.Unknown || actual.kind === TypeKind.Unknown) {
+		return TypeRelation.Generic;
+	}
+	// GenericParam = inference pending
+	if (formal.kind === TypeKind.GenericParam || actual.kind === TypeKind.GenericParam) {
 		return TypeRelation.Generic;
 	}
 	// Error type = suppress cascading
 	if (formal.kind === TypeKind.Error || actual.kind === TypeKind.Error) {
 		return TypeRelation.Exact;
 	}
-	// Numeric widening
+	// Numeric widening: sized → Number
 	if (isNumeric(actual) && formal.kind === TypeKind.Number) {
 		return TypeRelation.IntConv;
+	}
+	// FromLiteral: Number literal → sized numeric formal
+	if (isNumeric(formal) && actual.kind === TypeKind.Number) {
+		return TypeRelation.FromLiteral;
 	}
 	// Null to nullable
 	if (actual.kind === TypeKind.Null) {
@@ -148,7 +180,7 @@ export function typeRelation(formal: Type, actual: Type): TypeRelation {
 		let best = TypeRelation.None;
 		for (const member of formal.typeChildren) {
 			const rel = typeRelation(member, actual);
-			if (rel > best) { best = rel; }
+			if ((rel as number) > (best as number)) { best = rel; }
 		}
 		return best;
 	}
@@ -164,7 +196,7 @@ export function scoreCandidate(paramTypes: Type[], argTypes: Type[]): number {
 	while (i < paramTypes.length) {
 		const rel = typeRelation(paramTypes[i], argTypes[i]);
 		if (rel === TypeRelation.None) return -1;
-		score = score + rel;
+		score = score + (rel as number);
 		i += 1;
 	}
 	return score;
@@ -292,5 +324,114 @@ testGroup("Compat Unions", () => {
 		check(isAssignable(numberType(), u));
 		check(isAssignable(stringType(), u));
 		check(!isAssignable(booleanType(), u));
+	});
+});
+
+testGroup("Compat Result", () => {
+	test("same result types", () => {
+		const r1 = createResult(numberType(), stringType());
+		const r2 = createResult(numberType(), stringType());
+		check(isAssignable(r1, r2));
+	});
+	test("different ok type", () => {
+		const r1 = createResult(numberType(), stringType());
+		const r2 = createResult(stringType(), stringType());
+		check(!isAssignable(r1, r2));
+	});
+	test("different err type", () => {
+		const r1 = createResult(numberType(), stringType());
+		const r2 = createResult(numberType(), numberType());
+		check(!isAssignable(r1, r2));
+	});
+	test("unknown ok compatible", () => {
+		const r1 = createResult(unknownType(), stringType());
+		const r2 = createResult(numberType(), stringType());
+		check(isAssignable(r1, r2));
+	});
+});
+
+testGroup("Compat Enums", () => {
+	test("same enum name", () => {
+		const e1 = createEnum("Color", ["Red", "Green"]);
+		const e2 = createEnum("Color", ["Red", "Green"]);
+		check(isAssignable(e1, e2));
+	});
+	test("different enum name", () => {
+		const e1 = createEnum("Color", ["Red"]);
+		const e2 = createEnum("Shape", ["Circle"]);
+		check(!isAssignable(e1, e2));
+	});
+});
+
+testGroup("Compat Ref/Ptr", () => {
+	test("same ref inner", () => {
+		const r1 = createRef(numberType());
+		const r2 = createRef(numberType());
+		check(isAssignable(r1, r2));
+	});
+	test("different ref inner", () => {
+		const r1 = createRef(numberType());
+		const r2 = createRef(stringType());
+		check(!isAssignable(r1, r2));
+	});
+	test("same ptr inner", () => {
+		const p1 = createPtr(numberType());
+		const p2 = createPtr(numberType());
+		check(isAssignable(p1, p2));
+	});
+	test("null to ref", () => {
+		check(isAssignable(nullType(), createRef(numberType())));
+	});
+	test("null to ptr", () => {
+		check(isAssignable(nullType(), createPtr(numberType())));
+	});
+});
+
+testGroup("Compat Distinct", () => {
+	test("same distinct name", () => {
+		const d1 = createDistinct(numberType());
+		d1.typeName = "UserId";
+		const d2 = createDistinct(numberType());
+		d2.typeName = "UserId";
+		check(isAssignable(d1, d2));
+	});
+	test("different distinct name", () => {
+		const d1 = createDistinct(numberType());
+		d1.typeName = "UserId";
+		const d2 = createDistinct(numberType());
+		d2.typeName = "GroupId";
+		check(!isAssignable(d1, d2));
+	});
+});
+
+testGroup("TypeRelation Extended", () => {
+	test("enum exact", () => {
+		const e1 = createEnum("Color", ["Red"]);
+		const e2 = createEnum("Color", ["Red"]);
+		check(typeRelation(e1, e2) === TypeRelation.Exact);
+	});
+	test("enum mismatch", () => {
+		const e1 = createEnum("Color", ["Red"]);
+		const e2 = createEnum("Shape", ["Circle"]);
+		check(typeRelation(e1, e2) === TypeRelation.None);
+	});
+	test("result exact", () => {
+		const r1 = createResult(numberType(), stringType());
+		const r2 = createResult(numberType(), stringType());
+		check(typeRelation(r1, r2) === TypeRelation.Exact);
+	});
+	test("result mismatch", () => {
+		const r1 = createResult(numberType(), stringType());
+		const r2 = createResult(stringType(), stringType());
+		check(typeRelation(r1, r2) === TypeRelation.None);
+	});
+	test("from literal", () => {
+		check(typeRelation(createPrimitive(TypeKind.Int32), numberType()) === TypeRelation.FromLiteral);
+		check(typeRelation(createPrimitive(TypeKind.Float64), numberType()) === TypeRelation.FromLiteral);
+	});
+	test("generic param", () => {
+		const gp = createGenericParam("T");
+		check(typeRelation(gp, numberType()) === TypeRelation.Generic);
+		check(typeRelation(numberType(), gp) === TypeRelation.Generic);
 	});
 });

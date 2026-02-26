@@ -243,7 +243,30 @@ export function getProperty(t: Type, name: string): Type {
 			i += 1;
 		}
 	}
+	// Enum member access: Color.Red → returns the Enum type
+	if (t.kind === TypeKind.Enum) {
+		for (const member of t.typeNames) {
+			if (member === name) return t;
+		}
+	}
 	return unknownType();
+}
+
+// isPrimitiveKind — used by destructorLifting, analyzer/classify, and other DRC code
+export function isPrimitiveKind(kind: TypeKind): boolean {
+	return kind === TypeKind.Number
+		|| kind === TypeKind.Boolean
+		|| kind === TypeKind.Void
+		|| kind === TypeKind.Null
+		|| kind === TypeKind.Int32
+		|| kind === TypeKind.Int64
+		|| kind === TypeKind.Uint32
+		|| kind === TypeKind.Float32
+		|| kind === TypeKind.Float64
+		|| kind === TypeKind.Enum
+		|| kind === TypeKind.Never
+		|| kind === TypeKind.Unknown
+		|| kind === TypeKind.Error;
 }
 
 // ===== Tests =====

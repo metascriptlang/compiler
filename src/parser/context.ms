@@ -133,6 +133,27 @@ export function skipGenericParams(state: ParserState): void {
 }
 
 
+// Capture generic param names: <T, U> → "T,U", no generics → ""
+// Same depth-tracking as skipGenericParams but returns names instead of discarding.
+export function captureGenericParams(state: ParserState): string {
+	if (isAtEnd(state) || current(state).kind !== TokenKind.Lt) return "";
+	advance(state); // consume <
+	let names = "";
+	let depth = 1;
+	while (!isAtEnd(state) && depth > 0) {
+		if (current(state).kind === TokenKind.Ident && depth === 1) {
+			if (names !== "") { names = names + ","; }
+			names = names + current(state).value;
+		}
+		if (current(state).kind === TokenKind.Lt) { depth += 1; }
+		if (current(state).kind === TokenKind.Gt) { depth -= 1; }
+		if (current(state).kind === TokenKind.GtGt) { depth -= 2; }
+		if (current(state).kind === TokenKind.GtGtGt) { depth -= 3; }
+		advance(state);
+	}
+	return names;
+}
+
 // ===== Pattern Helpers =====
 
 // Skip a destructuring pattern: { ... } or [ ... ] including nesting.

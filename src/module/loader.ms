@@ -16,7 +16,9 @@ import {
 	isInImportStack, pushImportStack, popImportStack,
 } from "./graph";
 import { resolveImport, isStdImport } from "./resolver";
-import { parseSource } from "../parser/statements/validation";
+import { lex } from "../lexer/lexer";
+import { createState } from "../parser/context";
+import { callStateProgramParser } from "../parser/statements/callbacks";
 import { Node, NodeKind, ProgramData, ImportDeclData } from "../ast/node";
 import { test, check, testGroup } from "std/testing";
 
@@ -75,16 +77,21 @@ export function loadModule(graph: ModuleGraph, path: string, provider: SourcePro
 	}
 	mod.source = sourceResult.value;
 
-	// Parse temporarily to extract imports
-	const parseResult = parseSource(mod.source);
-	if (!parseResult.ok) {
-		mod.errors.push("Parse error: " + parseResult.error);
+	// Parse with recovery — always get partial AST, errors in state.errors
+	const lr = lex(mod.source);
+	if (!lr.ok) {
+		mod.errors.push("Lex: " + lr.error);
 		finalizeModule(graph, mod, path);
 		return Result.ok(false);
 	}
+	const parseState = createState(lr.value);
+	const parseResult = callStateProgramParser(parseState);
+	for (const parseErr of parseState.errors) {
+		mod.errors.push("Parse: " + parseErr);
+	}
 	mod.state = ModuleState.Parsed;
 
-	// Walk AST for import declarations
+	// Walk AST for import declarations (works on partial ASTs)
 	const program = parseResult.value;
 	const pd = program.data as ProgramData;
 	for (const stmt of pd.programStmts) {

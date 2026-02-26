@@ -1,34 +1,33 @@
+// Statement Checker — Pass 3 statement validation and control flow
+// Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
+
 import {
 	Node, NodeKind,
 	ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData,
-	IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData,
-	CallExprData, MemberExprData, ArrayAccessData,
-	ObjectLiteralData, ArrayLiteralData, ConditionalExprData,
-	TypeAssertionData, SpreadExprData, NewExprData, TryExprData,
-	AwaitExprData, YieldExprData, MoveExprData, OutExprData,
+	IdentifierData, BinaryExprData, MemberExprData,
 	VariableDeclData, FunctionDeclData, ClassDeclData,
 	MethodDeclData, ConstructorDeclData, ExportDeclData,
 	IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData,
 	DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData,
-	SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, MatchExprData,
-	ArrowFunctionData, FunctionExprData, DestructuringDeclData, ProgramData,
+	SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData,
+	DestructuringDeclData, ProgramData,
 } from "../ast/node";
 import {
 	Type, TypeKind,
-	unknownType, numberType, stringType, booleanType,
-	voidType, nullType, errorType,
-	createArray, createFunction, substituteType,
-	isNumeric, isStringType, isCallable, getReturnType, getElementType, getProperty,
+	unknownType, nullType, stringType,
+	createUnion,
 } from "./types";
 import {
 	Symbol, SymbolKind, ScopeKind,
-	defineSymbol, lookupSymbol, makeSymbol, openScope, closeScope, hasOverloads,
+	defineSymbol, lookupSymbol, makeSymbol, openScope, closeScope,
 } from "./symbol";
-import { CheckerContext, createContext, createModuleContext, addError, hasErrors, errorCount, ExportedSymInfo, createExportRegistry, registerModuleExports, findExtension } from "./context";
+import { CheckerContext, createContext, addError, hasErrors, errorCount } from "./context";
 import { collectTopLevel, defineOrError } from "./collectPass";
-import { scoreCandidate } from "./compat";
-import { resolveDeclarations } from "./resolvePass";
-import { Module, ModuleGraph, findModule } from "../module/graph";
+import { isAssignable } from "./compat";
+import { resolveDeclarations, resolveAnnotation } from "./resolvePass";
+import { sliceStr } from "../utils/string";
+import { checkExpr, checkEnumExhaustiveness } from "./checkExprPass";
+import { registerCheckStmt } from "./checkerCallbacks";
 import { test, check, testGroup } from "std/testing";
 
 // ===== Statement Checker =====
@@ -75,275 +74,38 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 	};
 }
 
-// ===== Expression Checker =====
-
-export function checkExpr(ctx: CheckerContext, node: Node): Type {
-	return match (node.kind) {
-		NodeKind.NumberLiteral | NodeKind.BigIntLiteral => numberType(),
-		NodeKind.StringLiteral => stringType(),
-		NodeKind.BooleanLiteral => booleanType(),
-		NodeKind.NullLiteral => nullType(),
-		NodeKind.RegexLiteral | NodeKind.QuoteExpr => unknownType(),
-		NodeKind.Identifier => {
-			const d = node.data as IdentifierData;
-			const sym = lookupSymbol(ctx.table, d.name);
-			if (sym === null) {
-				addError(ctx, `Undefined variable '${d.name}'`);
-				return errorType();
-			}
-			sym.symbolType;
-		},
-		NodeKind.BinaryExpr => {
-			const d = node.data as BinaryExprData;
-			const leftType = checkExpr(ctx, d.left);
-			const rightType = checkExpr(ctx, d.right);
-			inferBinaryOp(d.operator, leftType, rightType);
-		},
-		NodeKind.UnaryExpr => {
-			const d = node.data as UnaryExprData;
-			checkExpr(ctx, d.operand);
-			inferUnaryOp(d.unaryOp);
-		},
-		NodeKind.UpdateExpr => {
-			const d = node.data as UpdateExprData;
-			checkExpr(ctx, d.updateArg);
-			numberType();
-		},
-		NodeKind.CallExpr => checkCallExpr(ctx, node),
-		NodeKind.MemberExpr => checkMemberExpr(ctx, node),
-		NodeKind.ArrayAccess => {
-			const d = node.data as ArrayAccessData;
-			const arrType = checkExpr(ctx, d.array);
-			checkExpr(ctx, d.index);
-			getElementType(arrType);
-		},
-		NodeKind.ObjectLiteral => {
-			const d = node.data as ObjectLiteralData;
-			for (const prop of d.properties) {
-				checkExpr(ctx, prop);
-			}
-			unknownType();
-		},
-		NodeKind.ArrayLiteral => {
-			const d = node.data as ArrayLiteralData;
-			if (d.elements.length === 0) {
-				createArray(unknownType());
-			} else {
-				const elemType = checkExpr(ctx, d.elements[0]);
-				let i = 1;
-				while (i < d.elements.length) { checkExpr(ctx, d.elements[i]); i += 1; }
-				createArray(elemType);
-			}
-		},
-		NodeKind.ArrowFunction => checkArrowExpr(ctx, node),
-		NodeKind.FunctionExpr => checkFuncExpr(ctx, node),
-		NodeKind.ConditionalExpr => {
-			const d = node.data as ConditionalExprData;
-			checkExpr(ctx, d.ternaryCondition);
-			const consequentType = checkExpr(ctx, d.ternaryConsequent);
-			checkExpr(ctx, d.ternaryAlternate);
-			consequentType;
-		},
-		NodeKind.TypeAssertion => {
-			const d = node.data as TypeAssertionData;
-			checkExpr(ctx, d.asExpr);
-			unknownType();
-		},
-		NodeKind.SpreadExpr => {
-			const d = node.data as SpreadExprData;
-			checkExpr(ctx, d.spreadArg);
-			unknownType();
-		},
-		NodeKind.NewExpr => {
-			const d = node.data as NewExprData;
-			const calleeType = checkExpr(ctx, d.newCallee);
-			for (const arg of d.newArguments) {
-				checkExpr(ctx, arg);
-			}
-			if (calleeType.kind === TypeKind.Object) {
-				calleeType;
-			} else {
-				unknownType();
-			}
-		},
-		NodeKind.TryExpr => {
-			const d = node.data as TryExprData;
-			checkExpr(ctx, d.tryArg);
-			unknownType();
-		},
-		NodeKind.MatchExpr => { checkMatchExpr(ctx, node); unknownType(); },
-		NodeKind.AwaitExpr => {
-			const d = node.data as AwaitExprData;
-			checkExpr(ctx, d.awaitArg);
-			unknownType();
-		},
-		NodeKind.YieldExpr => {
-			const d = node.data as YieldExprData;
-			checkExpr(ctx, d.yieldArg);
-			unknownType();
-		},
-		NodeKind.MoveExpr => {
-			const d = node.data as MoveExprData;
-			checkExpr(ctx, d.moveArg);
-			unknownType();
-		},
-		NodeKind.OutExpr => {
-			const d = node.data as OutExprData;
-			checkExpr(ctx, d.outArg);
-			unknownType();
-		},
-		_ => unknownType(),
-	};
-}
-
-// ===== Operator Inference =====
-
-function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
-	return match (op) {
-		// Comparison operators always return boolean
-		"===" | "!==" | "==" | "!=" | "<" | ">" | "<=" | ">=" => booleanType(),
-		// Logical operators return left operand type (short-circuit)
-		"&&" | "||" => leftType,
-		// String concatenation: + with either string → string
-		"+" => {
-			if (isStringType(leftType) || isStringType(rightType)) return stringType();
-			if (isNumeric(leftType) && isNumeric(rightType)) return numberType();
-			unknownType();
-		},
-		// Arithmetic operators → number
-		"-" | "*" | "/" | "%" | "**" => numberType(),
-		// Bitwise operators → number
-		"&" | "|" | "^" | "<<" | ">>" | ">>>" => numberType(),
-		// Nullish coalescing returns left type
-		"??" => leftType,
-		_ => unknownType(),
-	};
-}
-
-function inferUnaryOp(op: string): Type {
-	return match (op) {
-		"!" => booleanType(),
-		"-" | "+" | "~" => numberType(),
-		"typeof" => stringType(),
-		_ => unknownType(),
-	};
-}
-
-// ===== Call Expression + Overload Resolution =====
-
-function checkCallExpr(ctx: CheckerContext, node: Node): Type {
-	const d = node.data as CallExprData;
-	// Check all argument types first
-	const argTypes: Type[] = [];
-	for (const arg of d.arguments) {
-		const argType = checkExpr(ctx, arg);
-		argTypes.push(argType);
-	}
-	// Check callee
-	const calleeType = checkExpr(ctx, d.callee);
-	// If callee is an identifier, check for overloads
-	if (d.callee.kind === NodeKind.Identifier) {
-		const calleeName = (d.callee.data as IdentifierData).name;
-		const sym = lookupSymbol(ctx.table, calleeName);
-		if (sym !== null && hasOverloads(sym)) {
-			return resolveOverloadCall(sym, argTypes);
-		}
-	}
-	// Infer generic return type from argument types
-	if (calleeType.kind === TypeKind.Function) {
-		return inferGenericReturn(calleeType, argTypes);
-	}
-	return getReturnType(calleeType);
-}
-
-// Infer the return type of a generic function by substituting GenericParam
-// in the return type based on matching formal params to actual arg types.
-function inferGenericReturn(fnType: Type, argTypes: Type[]): Type {
-	let returnType = fnType.typeReturn;
-	if (returnType === null) return unknownType();
-	// Match each formal param against actual arg to find substitutions
-	let i = 0;
-	while (i < fnType.typeChildren.length && i < argTypes.length) {
-		const formal = fnType.typeChildren[i];
-		if (formal.kind === TypeKind.GenericParam && argTypes[i].kind !== TypeKind.Unknown) {
-			returnType = substituteType(returnType, formal.typeName, argTypes[i]);
-		}
-		i += 1;
-	}
-	return returnType;
-}
-
-function resolveOverloadCall(sym: Symbol, argTypes: Type[]): Type {
-	// Score the primary symbol
-	let bestScore = -1;
-	let bestType = sym.symbolType;
-	if (sym.symbolType.kind === TypeKind.Function) {
-		const score = scoreCandidate(sym.symbolType.typeChildren, argTypes);
-		if (score > bestScore) {
-			bestScore = score;
-			bestType = sym.symbolType;
-		}
-	}
-	// Score each overload
-	for (const overload of sym.overloads) {
-		if (overload.symbolType.kind === TypeKind.Function) {
-			const score = scoreCandidate(overload.symbolType.typeChildren, argTypes);
-			if (score > bestScore) {
-				bestScore = score;
-				bestType = overload.symbolType;
-			}
-		}
-	}
-	return getReturnType(bestType);
-}
-
-// ===== Member Expression + Extension Method Resolution =====
-
-function typeNameOf(t: Type): string {
-	if (t.kind === TypeKind.Object) return t.typeName;
-	return match (t.kind) {
-		TypeKind.String => "string",
-		TypeKind.Number => "number",
-		TypeKind.Boolean => "boolean",
-		TypeKind.Int32 => "int32",
-		TypeKind.Int64 => "int64",
-		TypeKind.Uint32 => "uint32",
-		TypeKind.Float32 => "float32",
-		TypeKind.Float64 => "float64",
-		TypeKind.Array => "Array",
-		_ => "",
-	};
-}
-
-function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
-	const d = node.data as MemberExprData;
-	const objType = checkExpr(ctx, d.object);
-	const propType = getProperty(objType, d.property);
-	// If property found on object type, return it
-	if (propType.kind !== TypeKind.Unknown) return propType;
-	// Fall back to extension registry
-	if (ctx.extensionRegistry !== null) {
-		const typeName = typeNameOf(objType);
-		if (typeName !== "") {
-			const ext = findExtension(ctx.extensionRegistry, typeName, d.property);
-			if (ext !== null) return ext.fnType;
-		}
-	}
-	return propType;
-}
-
 // ===== Statement Helpers =====
 
 function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as VariableDeclData;
 	const initType = checkExpr(ctx, d.initializer);
-	defineOrError(ctx, makeSymbol(d.declName, SymbolKind.Variable, initType, !d.isConst), node);
+	// Prefer explicit type annotation over inferred type
+	let varType = initType;
+	if (d.declType !== "") {
+		varType = resolveAnnotation(d.declType, ctx);
+	}
+	defineOrError(ctx, makeSymbol(d.declName, SymbolKind.Variable, varType, !d.isConst), node);
 }
 
 function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as FunctionDeclData;
 	const sym = lookupSymbol(ctx.table, d.fnName);
+
+	// Save/restore inferredReturn for nested functions
+	const savedReturn = ctx.inferredReturn;
+	ctx.inferredReturn = unknownType();
+
 	checkFunctionBody(ctx, sym, d.params, d.fnBody);
+
+	// If return type was unknown (no annotation), use inferred type
+	if (sym !== null && sym.symbolType.kind === TypeKind.Function
+		&& sym.symbolType.typeReturn !== null
+		&& sym.symbolType.typeReturn.kind === TypeKind.Unknown
+		&& ctx.inferredReturn.kind !== TypeKind.Unknown) {
+		sym.symbolType.typeReturn = ctx.inferredReturn;
+	}
+
+	ctx.inferredReturn = savedReturn;
 }
 
 function checkClassDecl(ctx: CheckerContext, node: Node): void {
@@ -379,14 +141,84 @@ function checkExportDecl(ctx: CheckerContext, node: Node): void {
 	checkStmt(ctx, d.exportedDecl);
 }
 
+// ===== Null Narrowing =====
+
+// Analyze condition for null check: returns "+varName" for !== null, "-varName" for === null, "" for no match
+function analyzeNullCheck(condition: Node): string {
+	if (condition.kind !== NodeKind.BinaryExpr) return "";
+	const d = condition.data as BinaryExprData;
+	// x !== null or x === null
+	if (d.left.kind === NodeKind.Identifier && d.right.kind === NodeKind.NullLiteral) {
+		const id = d.left.data as IdentifierData;
+		if (d.operator === "!==") return "+" + id.name;
+		if (d.operator === "===") return "-" + id.name;
+	}
+	// null !== x or null === x
+	if (d.right.kind === NodeKind.Identifier && d.left.kind === NodeKind.NullLiteral) {
+		const id = d.right.data as IdentifierData;
+		if (d.operator === "!==") return "+" + id.name;
+		if (d.operator === "===") return "-" + id.name;
+	}
+	return "";
+}
+
+// Remove Null from a type (for narrowing after null checks)
+function removeNullFromType(t: Type): Type {
+	if (t.kind === TypeKind.Union) {
+		const nonNull: Type[] = [];
+		for (const member of t.typeChildren) {
+			if (member.kind !== TypeKind.Null) nonNull.push(member);
+		}
+		if (nonNull.length === 1) return nonNull[0];
+		if (nonNull.length > 0) return createUnion(nonNull);
+		return t;
+	}
+	if (t.kind === TypeKind.Null) return unknownType();
+	return t;
+}
+
 function checkIfStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as IfStmtData;
 	checkExpr(ctx, d.condition);
+
+	// Analyze condition for null narrowing
+	const narrowResult = analyzeNullCheck(d.condition);
+	if (narrowResult !== "") {
+		const isNotNull = sliceStr(narrowResult, 0, 1) === "+";
+		const varName = sliceStr(narrowResult, 1, narrowResult.length);
+		const sym = lookupSymbol(ctx.table, varName);
+		if (sym !== null && sym.symbolType.kind !== TypeKind.Unknown) {
+			const saved = sym.symbolType;
+			// Consequent: narrow appropriately
+			if (isNotNull) {
+				sym.symbolType = removeNullFromType(saved);
+			} else {
+				sym.symbolType = nullType();
+			}
+			checkStmt(ctx, d.consequent);
+			sym.symbolType = saved;
+			// Alternate: opposite narrowing
+			if (d.alternate !== null && d.alternate.kind !== NodeKind.NullLiteral) {
+				if (isNotNull) {
+					sym.symbolType = nullType();
+				} else {
+					sym.symbolType = removeNullFromType(saved);
+				}
+				checkStmt(ctx, d.alternate);
+				sym.symbolType = saved;
+			}
+			return;
+		}
+	}
+
+	// Fallback: no narrowing
 	checkStmt(ctx, d.consequent);
 	if (d.alternate !== null && d.alternate.kind !== NodeKind.NullLiteral) {
 		checkStmt(ctx, d.alternate);
 	}
 }
+
+// ===== Loop Statements =====
 
 function checkWhileStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as WhileStmtData;
@@ -447,7 +279,22 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 		addError(ctx, "return outside of function");
 	}
 	if (d.argument !== null && d.argument.kind !== NodeKind.NullLiteral) {
-		checkExpr(ctx, d.argument);
+		const retType = checkExpr(ctx, d.argument);
+		// Track inferred return type (first return wins)
+		if (ctx.inferredReturn.kind === TypeKind.Unknown) {
+			ctx.inferredReturn = retType;
+		}
+		// Check against declared return type
+		if (ctx.currentFunction !== null
+			&& ctx.currentFunction.symbolType.kind === TypeKind.Function
+			&& ctx.currentFunction.symbolType.typeReturn !== null
+			&& ctx.currentFunction.symbolType.typeReturn.kind !== TypeKind.Unknown
+			&& retType.kind !== TypeKind.Unknown
+			&& retType.kind !== TypeKind.Error) {
+			if (!isAssignable(retType, ctx.currentFunction.symbolType.typeReturn)) {
+				addError(ctx, "Return type mismatch: cannot assign to declared return type");
+			}
+		}
 	}
 }
 
@@ -479,24 +326,29 @@ function checkSwitchStmt(ctx: CheckerContext, node: Node): void {
 
 function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as MatchStmtData;
-	checkExpr(ctx, d.matchStmtDisc);
+	const discType = checkExpr(ctx, d.matchStmtDisc);
+	let hasWildcard = false;
+	const coveredMembers: string[] = [];
 	for (const c of d.matchStmtCases) {
 		const cd = c.data as MatchCaseData;
+		for (const p of cd.casePatterns) {
+			if (p.kind === NodeKind.Identifier) { hasWildcard = true; }
+			if (p.kind === NodeKind.MemberExpr) {
+				const pmd = p.data as MemberExprData;
+				coveredMembers.push(pmd.property);
+			}
+		}
 		checkStmt(ctx, cd.caseBody);
 	}
-}
-
-function checkMatchExpr(ctx: CheckerContext, node: Node): void {
-	const d = node.data as MatchExprData;
-	checkExpr(ctx, d.matchDisc);
-	for (const c of d.matchCases) {
-		const cd = c.data as MatchCaseData;
-		checkExpr(ctx, cd.caseBody);
+	if (discType.kind === TypeKind.Enum && !hasWildcard) {
+		checkEnumExhaustiveness(ctx, discType, coveredMembers);
 	}
 }
 
+// ===== Function Body Checker =====
+
 // Unified function body checker — works for FunctionDecl (resolved param types),
-// MethodDecl, ConstructorDecl, ArrowFunction, and FunctionExpr.
+// MethodDecl, ConstructorDecl.
 function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], body: Node): void {
 	const savedFunction = ctx.currentFunction;
 	ctx.currentFunction = sym;
@@ -513,7 +365,11 @@ function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], b
 	if (body.kind === NodeKind.BlockStmt) {
 		checkStmt(ctx, body);
 	} else {
-		checkExpr(ctx, body);
+		// Expression body (arrow functions) — infer return type
+		const exprType = checkExpr(ctx, body);
+		if (ctx.inferredReturn.kind === TypeKind.Unknown) {
+			ctx.inferredReturn = exprType;
+		}
 	}
 	closeScope(ctx.table);
 	ctx.currentFunction = savedFunction;
@@ -529,23 +385,6 @@ function enterLoopScope(ctx: CheckerContext): boolean {
 function exitLoopScope(ctx: CheckerContext, saved: boolean): void {
 	closeScope(ctx.table);
 	ctx.inLoop = saved;
-}
-
-function checkAnonymousFunction(ctx: CheckerContext, name: string, params: string[], body: Node): Type {
-	checkFunctionBody(ctx, makeSymbol(name, SymbolKind.Function, unknownType(), false), params, body);
-	const types: Type[] = [];
-	for (const p of params) { types.push(unknownType()); }
-	return createFunction(types, params, unknownType());
-}
-
-function checkArrowExpr(ctx: CheckerContext, node: Node): Type {
-	const d = node.data as ArrowFunctionData;
-	return checkAnonymousFunction(ctx, "(arrow)", d.arrowParams, d.arrowBody);
-}
-
-function checkFuncExpr(ctx: CheckerContext, node: Node): Type {
-	const d = node.data as FunctionExprData;
-	return checkAnonymousFunction(ctx, "(anon)", d.funcExprParams, d.funcExprBody);
 }
 
 function checkDestructuringDecl(ctx: CheckerContext, node: Node): void {
@@ -565,7 +404,7 @@ export function checkProgramBody(ctx: CheckerContext, program: Node): void {
 // ===== Main Entry Point =====
 
 // Run all 3 passes on a program node with an existing context
-function runThreePasses(ctx: CheckerContext, program: Node): void {
+export function runThreePasses(ctx: CheckerContext, program: Node): void {
 	collectTopLevel(ctx, program);        // Pass 1: register names
 	resolveDeclarations(ctx, program);    // Pass 2: resolve types
 	checkProgramBody(ctx, program);       // Pass 3: infer + check
@@ -577,48 +416,8 @@ export function checkProgram(program: Node): CheckerContext {
 	return ctx;
 }
 
-// ===== Multi-Module Entry Point =====
-// Nim-aligned: check modules one at a time in topological (loadOrder) sequence.
-// Each module gets all 3 passes before moving to the next.
-// Since modules are in dependency order, exports from dependencies are
-// available when checking their dependents.
-
-export function checkModuleGraph(graph: ModuleGraph): void {
-	const registry = createExportRegistry();
-
-	for (const path of graph.loadOrder) {
-		const mod = findModule(graph, path);
-		if (mod === null) continue;
-		if (mod.source === "") continue;
-
-		const pr = parseSource(mod.source);
-		if (!pr.ok) {
-			mod.errors.push("Parse error: " + pr.error);
-			continue;
-		}
-
-		const ctx = createModuleContext(graph, mod);
-		ctx.exportRegistry = registry;
-
-		runThreePasses(ctx, pr.value);
-
-		// Copy errors to module
-		for (const err of ctx.errors) {
-			mod.errors.push(err);
-		}
-
-		// Extract exports into registry for downstream modules
-		const exports: ExportedSymInfo[] = [];
-		for (const sym of ctx.table.current.symbols) {
-			if (sym.isExported) {
-				mod.exportNames.push(sym.name);
-				const info: ExportedSymInfo = { name: sym.name, kind: sym.symbolKind, symType: sym.symbolType };
-				exports.push(info);
-			}
-		}
-		registerModuleExports(registry, path, exports);
-	}
-}
+// Register callback at module load time
+registerCheckStmt((ctx: CheckerContext, node: Node): void => { checkStmt(ctx, node); });
 
 // ===== Tests =====
 
@@ -782,8 +581,8 @@ testGroup("Checker 3-Pass", () => {
 		const ctx = checkSource("function foo(a, b) { return 1; } const x = foo(1, 2);");
 		const sym = lookupSymbol(ctx.table, "x");
 		check(sym !== null);
-		// foo's return type is unknown (no annotation), so call returns unknown
-		check(sym.symbolType.kind === TypeKind.Unknown);
+		// foo's return type inferred as number from body
+		check(sym.symbolType.kind === TypeKind.Number);
 	});
 	test("forward reference to function is callable", () => {
 		const ctx = checkSource("const x = foo(1); function foo(a) { return 1; }");
@@ -816,6 +615,66 @@ testGroup("Checker 3-Pass", () => {
 		const sym = lookupSymbol(ctx.table, "f");
 		check(sym !== null);
 		check(sym.symbolType.kind === TypeKind.Function);
+	});
+});
+
+testGroup("Checker Return Inference", () => {
+	test("inferred return type from body", () => {
+		const ctx = checkSource("function foo() { return 42; }");
+		const sym = lookupSymbol(ctx.table, "foo");
+		check(sym !== null);
+		check(sym.symbolType.typeReturn.kind === TypeKind.Number);
+	});
+	test("annotated return type preserved", () => {
+		const ctx = checkSource("function bar(): string { return \"hi\"; }");
+		const sym = lookupSymbol(ctx.table, "bar");
+		check(sym !== null);
+		check(sym.symbolType.typeReturn.kind === TypeKind.String);
+	});
+	test("arrow infers return type", () => {
+		const ctx = checkSource("const f = (x) => 42;");
+		const sym = lookupSymbol(ctx.table, "f");
+		check(sym !== null);
+		check(sym.symbolType.typeReturn.kind === TypeKind.Number);
+	});
+	test("string return inferred", () => {
+		const ctx = checkSource("function greet() { return \"hello\"; }");
+		const sym = lookupSymbol(ctx.table, "greet");
+		check(sym !== null);
+		check(sym.symbolType.typeReturn.kind === TypeKind.String);
+	});
+	test("boolean return inferred", () => {
+		const ctx = checkSource("function isOk() { return true; }");
+		const sym = lookupSymbol(ctx.table, "isOk");
+		check(sym !== null);
+		check(sym.symbolType.typeReturn.kind === TypeKind.Boolean);
+	});
+	test("no return stays unknown", () => {
+		const ctx = checkSource("function noop() { const x = 1; }");
+		const sym = lookupSymbol(ctx.table, "noop");
+		check(sym !== null);
+		check(sym.symbolType.typeReturn.kind === TypeKind.Unknown);
+	});
+});
+
+testGroup("Checker Type Enforcement", () => {
+	test("return type mismatch detected", () => {
+		check(!checkOk("function foo(): number { return \"hello\"; }"));
+	});
+	test("return type match ok", () => {
+		check(checkOk("function foo(): number { return 42; }"));
+	});
+	test("return string match ok", () => {
+		check(checkOk("function bar(): string { return \"hi\"; }"));
+	});
+	test("arg type mismatch detected", () => {
+		check(!checkOk("function add(a: number, b: number): number { return a; } const x = add(\"hi\", 2);"));
+	});
+	test("arg type match ok", () => {
+		check(checkOk("function add(a: number, b: number): number { return a; } const x = add(1, 2);"));
+	});
+	test("numeric widening ok", () => {
+		check(checkOk("function f(n: number): number { return n; } const x = f(42);"));
 	});
 });
 
@@ -859,134 +718,117 @@ testGroup("Checker Extensions", () => {
 	});
 });
 
-// ===== Multi-Module Tests =====
+testGroup("Checker Generics", () => {
+	test("generic function parses ok", () => {
+		check(checkOk("function wrap<T>(x: T): T { return x; }"));
+	});
+	test("generic param resolved as GenericParam", () => {
+		const ctx = checkSource("function id<T>(x: T): T { return x; }");
+		check(!hasErrors(ctx));
+		const sym = lookupSymbol(ctx.table, "id");
+		check(sym !== null);
+		check(sym.symbolType.kind === TypeKind.Function);
+		check(sym.symbolType.typeChildren[0].kind === TypeKind.GenericParam);
+		check(sym.symbolType.typeReturn.kind === TypeKind.GenericParam);
+	});
+	test("generic call infers return type", () => {
+		const ctx = checkSource("function id<T>(x: T): T { return x; } const n = id(42);");
+		check(!hasErrors(ctx));
+		const sym = lookupSymbol(ctx.table, "n");
+		check(sym !== null);
+		check(sym.symbolType.kind === TypeKind.Number);
+	});
+	test("two generic params", () => {
+		const ctx = checkSource("function first<T, U>(a: T, b: U): T { return a; } const x = first(1, \"hi\");");
+		check(!hasErrors(ctx));
+		const sym = lookupSymbol(ctx.table, "x");
+		check(sym !== null);
+		check(sym.symbolType.kind === TypeKind.Number);
+	});
+	test("generic with annotated return", () => {
+		check(checkOk("function identity<T>(x: T): T { return x; }"));
+	});
+});
 
-import {
-	createModuleGraph, createModule, hasExportName,
-} from "../module/graph";
-import {
-	MapEntry, SourceProvider, createMapProvider, loadModuleGraph,
-} from "../module/loader";
+testGroup("Match Exhaustiveness", () => {
+	test("wildcard always exhaustive", () => {
+		check(checkOk("enum Color { Red, Green, Blue } function f(): number { const c = Color.Red; return match (c) { _ => 0 }; }"));
+	});
+	test("all members covered", () => {
+		check(checkOk("enum Color { Red, Green, Blue } function f(): number { const c = Color.Red; return match (c) { Color.Red => 1, Color.Green => 2, Color.Blue => 3 }; }"));
+	});
+	test("missing member errors", () => {
+		check(!checkOk("enum Color { Red, Green, Blue } function f(): number { const c = Color.Red; return match (c) { Color.Red => 1, Color.Green => 2 }; }"));
+	});
+	test("binding acts as wildcard", () => {
+		check(checkOk("enum Color { Red, Green } function f(): number { const c = Color.Red; return match (c) { Color.Red => 1, other => 0 }; }"));
+	});
+	test("non-enum no exhaustiveness check", () => {
+		check(checkOk("const x = match (42) { 1 => \"one\", _ => \"other\" };"));
+	});
+	test("match expr returns arm type", () => {
+		const ctx = checkSource("const x = match (1) { 1 => 42, _ => 0 };");
+		check(!hasErrors(ctx));
+		const sym = lookupSymbol(ctx.table, "x");
+		check(sym !== null);
+		check(sym.symbolType.kind === TypeKind.Number);
+	});
+});
 
-testGroup("Checker Multi-Module", () => {
-	test("single module checked", () => {
-		const entries: MapEntry[] = [];
-		entries.push({ entryPath: "/src/a.ms", entrySource: "const x = 1;" });
-		const provider = createMapProvider(entries);
-		const graph = loadModuleGraph("/src/a.ms", provider);
-		checkModuleGraph(graph);
-		check(graph.errors.length === 0);
-		const mod = findModule(graph, "/src/a.ms");
-		check(mod !== null);
-		check(mod.errors.length === 0);
+testGroup("Null Narrowing", () => {
+	test("basic not-null check", () => {
+		check(checkOk("const x = 1; if (x !== null) { const y = x; }"));
 	});
-	test("errors collected per module", () => {
-		const entries: MapEntry[] = [];
-		entries.push({ entryPath: "/src/a.ms", entrySource: "const x = y;" });
-		const provider = createMapProvider(entries);
-		const graph = loadModuleGraph("/src/a.ms", provider);
-		checkModuleGraph(graph);
-		const mod = findModule(graph, "/src/a.ms");
-		check(mod !== null);
-		check(mod.errors.length > 0);
+	test("reversed null check", () => {
+		check(checkOk("const x = 1; if (null !== x) { const y = x; }"));
 	});
-	test("export names recorded", () => {
-		const entries: MapEntry[] = [];
-		entries.push({ entryPath: "/src/a.ms", entrySource: "export function foo() { return 1; } function bar() { return 2; }" });
-		const provider = createMapProvider(entries);
-		const graph = loadModuleGraph("/src/a.ms", provider);
-		checkModuleGraph(graph);
-		const mod = findModule(graph, "/src/a.ms");
-		check(mod !== null);
-		check(hasExportName(mod, "foo"));
-		check(!hasExportName(mod, "bar"));
+	test("equals null narrows", () => {
+		check(checkOk("const x = 1; if (x === null) { const y = x; }"));
 	});
-	test("two module chain checked", () => {
-		const entries: MapEntry[] = [];
-		entries.push({ entryPath: "/src/a.ms", entrySource: "import { foo } from \"./b\"; const x = foo;" });
-		entries.push({ entryPath: "/src/b.ms", entrySource: "export function foo() { return 1; }" });
-		const provider = createMapProvider(entries);
-		const graph = loadModuleGraph("/src/a.ms", provider);
-		checkModuleGraph(graph);
-		// Both modules should check without errors
-		const modA = findModule(graph, "/src/a.ms");
-		const modB = findModule(graph, "/src/b.ms");
-		check(modA !== null);
-		check(modB !== null);
-		check(modB.errors.length === 0);
+	test("no narrowing without null check", () => {
+		check(checkOk("const x = 1; if (x === x) { const y = x; }"));
 	});
-	test("imported function has Function type", () => {
-		const entries: MapEntry[] = [];
-		entries.push({ entryPath: "/src/b.ms", entrySource: "export function foo(n: number): string { return \"hi\"; }" });
-		entries.push({ entryPath: "/src/a.ms", entrySource: "import { foo } from \"./b\"; const x = foo(1);" });
-		const provider = createMapProvider(entries);
-		const graph = loadModuleGraph("/src/a.ms", provider);
-		checkModuleGraph(graph);
-		const modA = findModule(graph, "/src/a.ms");
-		const modB = findModule(graph, "/src/b.ms");
-		check(modA !== null);
-		check(modB !== null);
-		check(modA.errors.length === 0);
-		check(modB.errors.length === 0);
+	test("removeNullFromType unit", () => {
+		const unionType = createUnion([stringType(), nullType()]);
+		const narrowed = removeNullFromType(unionType);
+		check(narrowed.kind === TypeKind.String);
 	});
-	test("imported enum available", () => {
-		const entries: MapEntry[] = [];
-		entries.push({ entryPath: "/src/b.ms", entrySource: "export enum Color { Red, Green, Blue }" });
-		entries.push({ entryPath: "/src/a.ms", entrySource: "import { Color } from \"./b\"; const c = Color;" });
-		const provider = createMapProvider(entries);
-		const graph = loadModuleGraph("/src/a.ms", provider);
-		checkModuleGraph(graph);
-		const modA = findModule(graph, "/src/a.ms");
-		check(modA !== null);
-		check(modA.errors.length === 0);
+});
+
+testGroup("Resolve Coverage", () => {
+	test("type alias resolves to type", () => {
+		const ctx = checkSource("type ID = number;");
+		check(!hasErrors(ctx));
+		const sym = lookupSymbol(ctx.table, "ID");
+		check(sym !== null);
+		check(sym.symbolType.kind === TypeKind.Number);
 	});
-	test("imported interface as type annotation", () => {
-		const entries: MapEntry[] = [];
-		entries.push({ entryPath: "/src/b.ms", entrySource: "export interface Point { x: number; y: number; }" });
-		entries.push({ entryPath: "/src/a.ms", entrySource: "import { Point } from \"./b\"; function getX(p: Point): number { return 1; }" });
-		const provider = createMapProvider(entries);
-		const graph = loadModuleGraph("/src/a.ms", provider);
-		checkModuleGraph(graph);
-		const modA = findModule(graph, "/src/a.ms");
-		check(modA !== null);
-		check(modA.errors.length === 0);
+	test("type alias Result resolved", () => {
+		const ctx = checkSource("type MyResult = Result<number, string>;");
+		check(!hasErrors(ctx));
+		const sym = lookupSymbol(ctx.table, "MyResult");
+		check(sym !== null);
+		check(sym.symbolType.kind === TypeKind.Result);
 	});
-	test("non-exported name produces error", () => {
-		const entries: MapEntry[] = [];
-		entries.push({ entryPath: "/src/b.ms", entrySource: "function secret() { return 1; }" });
-		entries.push({ entryPath: "/src/a.ms", entrySource: "import { secret } from \"./b\";" });
-		const provider = createMapProvider(entries);
-		const graph = loadModuleGraph("/src/a.ms", provider);
-		checkModuleGraph(graph);
-		const modA = findModule(graph, "/src/a.ms");
-		check(modA !== null);
-		check(modA.errors.length > 0);
+	test("distinct type creates Distinct wrapper", () => {
+		const ctx = checkSource("distinct type UserId = number;");
+		check(!hasErrors(ctx));
+		const sym = lookupSymbol(ctx.table, "UserId");
+		check(sym !== null);
+		check(sym.symbolType.kind === TypeKind.Distinct);
 	});
-	test("3-module chain propagates types", () => {
-		const entries: MapEntry[] = [];
-		entries.push({ entryPath: "/src/c.ms", entrySource: "export function makeStr(): string { return \"hello\"; }" });
-		entries.push({ entryPath: "/src/b.ms", entrySource: "import { makeStr } from \"./c\"; export function greet(name: string): string { return makeStr(); }" });
-		entries.push({ entryPath: "/src/a.ms", entrySource: "import { greet } from \"./b\"; const msg = greet(\"world\");" });
-		const provider = createMapProvider(entries);
-		const graph = loadModuleGraph("/src/a.ms", provider);
-		checkModuleGraph(graph);
-		const modA = findModule(graph, "/src/a.ms");
-		check(modA !== null);
-		check(modA.errors.length === 0);
+	test("variable annotation overrides inference", () => {
+		const ctx = checkSource("const x: string = \"hello\";");
+		check(!hasErrors(ctx));
+		const sym = lookupSymbol(ctx.table, "x");
+		check(sym !== null);
+		check(sym.symbolType.kind === TypeKind.String);
 	});
-	test("re-export forwards types", () => {
-		const entries: MapEntry[] = [];
-		entries.push({ entryPath: "/src/c.ms", entrySource: "export function helper(): number { return 42; }" });
-		entries.push({ entryPath: "/src/b.ms", entrySource: "export { helper } from \"./c\";" });
-		entries.push({ entryPath: "/src/a.ms", entrySource: "import { helper } from \"./b\"; const x = helper();" });
-		const provider = createMapProvider(entries);
-		const graph = loadModuleGraph("/src/a.ms", provider);
-		checkModuleGraph(graph);
-		const modB = findModule(graph, "/src/b.ms");
-		check(modB !== null);
-		check(hasExportName(modB, "helper"));
-		const modA = findModule(graph, "/src/a.ms");
-		check(modA !== null);
-		check(modA.errors.length === 0);
+	test("class property type resolved", () => {
+		const ctx = checkSource("class Point { x: number; y: string; getX() { return 1; } }");
+		check(!hasErrors(ctx));
+		const sym = lookupSymbol(ctx.table, "Point");
+		check(sym !== null);
+		check(sym.symbolType.kind === TypeKind.Object);
 	});
 });

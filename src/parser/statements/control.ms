@@ -188,6 +188,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 		advance(state);
 		const initNode = createNode(NodeKind.VariableDecl, {
 			declName: varName.value,
+			declType: "",
 			initializer: try callExprParser(state),
 			isConst: forIsConst
 		}, bindingToken);

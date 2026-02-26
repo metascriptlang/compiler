@@ -10,15 +10,16 @@ import {
 	Node, NodeKind,
 	ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData,
 	ClassDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData,
+	TypeAliasDeclData, VariableDeclData,
 } from "../ast/node";
 import {
 	Type, TypeKind,
 	unknownType, numberType, stringType, booleanType, voidType, nullType, neverType,
 	createPrimitive, createArray, createFunction, createObject,
-	createResult, createTypeRef, createUnion,
+	createResult, createTypeRef, createUnion, createGenericParam, createDistinct,
 } from "./types";
-import { Symbol, SymbolKind, lookupSymbol } from "./symbol";
-import { CheckerContext, findExtension } from "./context";
+import { Symbol, SymbolKind, ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope } from "./symbol";
+import { CheckerContext, findExtension, isExtensionFlag, getExtReceiverType } from "./context";
 import { trim, sliceStr, findChar, splitTopLevel } from "../utils/string";
 import { test, check, testGroup } from "std/testing";
 
@@ -61,6 +62,13 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 			return createArray(resolveAnnotation(args[0], ctx));
 		}
 		if (baseName === "Map" && args.length === 2) {
+			const t = createPrimitive(TypeKind.Map);
+			t.typeReturn = resolveAnnotation(args[0], ctx);
+			t.typeExtra = resolveAnnotation(args[1], ctx);
+			return t;
+		}
+		if (baseName === "Record" && args.length === 2) {
+			// Record<K,V> is TypeScript utility type — desugar to Map<K,V>
 			const t = createPrimitive(TypeKind.Map);
 			t.typeReturn = resolveAnnotation(args[0], ctx);
 			t.typeExtra = resolveAnnotation(args[1], ctx);
@@ -112,6 +120,30 @@ function resolveTypeStrings(typeStrs: string[], count: number, ctx: CheckerConte
 	return types;
 }
 
+// ===== Generic Parameter Extraction =====
+
+// Extract generic param names from fnFlags: "gen:T,U" or "async|gen:T,U" → ["T", "U"]
+function extractGenericNames(flags: string): string[] {
+	const result: string[] = [];
+	if (flags === "") return result;
+	const parts = splitTopLevel(flags, "|");
+	for (const part of parts) {
+		const trimPart = trim(part);
+		if (trimPart.length > 4) {
+			const prefix = sliceStr(trimPart, 0, 4);
+			if (prefix === "gen:") {
+				const nameStr = sliceStr(trimPart, 4, trimPart.length);
+				const names = splitTopLevel(nameStr, ",");
+				for (const n of names) {
+					const trimName = trim(n);
+					if (trimName !== "") result.push(trimName);
+				}
+			}
+		}
+	}
+	return result;
+}
+
 // ===== B. Resolve Declarations (Pass 2) =====
 
 export function resolveDeclarations(ctx: CheckerContext, program: Node): void {
@@ -126,6 +158,8 @@ function resolveDecl(ctx: CheckerContext, node: Node): void {
 		NodeKind.FunctionDecl => resolveFunction(ctx, node),
 		NodeKind.InterfaceDecl => resolveInterface(ctx, node),
 		NodeKind.ClassDecl => resolveClass(ctx, node),
+		NodeKind.TypeAliasDecl => resolveTypeAlias(ctx, node),
+		NodeKind.VariableDecl => resolveVariable(ctx, node),
 		NodeKind.ExportDecl => {
 			const d = node.data as ExportDeclData;
 			resolveDecl(ctx, d.exportedDecl);
@@ -139,9 +173,22 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 	const sym = lookupSymbol(ctx.table, d.fnName);
 	if (sym === null) return;
 
+	// Open temp scope with GenericParam types so resolveAnnotation finds "T" → GenericParam("T")
+	const genericNames = extractGenericNames(d.fnFlags);
+	if (genericNames.length > 0) {
+		openScope(ctx.table, ScopeKind.Block);
+		for (const gp of genericNames) {
+			defineSymbol(ctx.table, makeSymbol(gp, SymbolKind.TypeAlias, createGenericParam(gp), false));
+		}
+	}
+
 	const paramTypes = resolveTypeStrings(d.fnParamTypes, d.params.length, ctx);
 	const returnType = (d.fnReturnType !== "") ? resolveAnnotation(d.fnReturnType, ctx) : unknownType();
 	const fnType = createFunction(paramTypes, d.params, returnType);
+
+	if (genericNames.length > 0) {
+		closeScope(ctx.table);
+	}
 
 	// Overload handling: resolve in declaration order
 	if (sym.overloads.length > 0 && sym.symbolType.kind !== TypeKind.Unknown) {
@@ -156,17 +203,12 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 
 	sym.symbolType = fnType;
 	// Update extension method type in registry if this is an extension
-	if (d.fnFlags.length > 4 && ctx.extensionRegistry !== null) {
-		const flagPrefix = sliceStr(d.fnFlags, 0, 4);
-		if (flagPrefix === "ext:") {
-			const rest = sliceStr(d.fnFlags, 4, d.fnFlags.length);
-			const colonPos = findChar(rest, ":");
-			if (colonPos > 0) {
-				const receiverType = sliceStr(rest, colonPos + 1, rest.length);
-				const ext = findExtension(ctx.extensionRegistry, receiverType, d.fnName);
-				if (ext !== null) {
-					ext.fnType = fnType;
-				}
+	if (isExtensionFlag(d.fnFlags) && ctx.extensionRegistry !== null) {
+		const receiverType = getExtReceiverType(d.fnFlags);
+		if (receiverType !== "") {
+			const ext = findExtension(ctx.extensionRegistry, receiverType, d.fnName);
+			if (ext !== null) {
+				ext.fnType = fnType;
 			}
 		}
 	}
@@ -179,6 +221,27 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 
 	const fieldTypes = resolveTypeStrings(d.interfaceFieldTypes, d.interfaceFields.length, ctx);
 	sym.symbolType = createObject(d.interfaceName, d.interfaceFields, fieldTypes, true);
+}
+
+function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
+	const d = node.data as TypeAliasDeclData;
+	const sym = lookupSymbol(ctx.table, d.aliasName);
+	if (sym === null) return;
+	if (d.aliasType === "") return;
+	const resolved = resolveAnnotation(d.aliasType, ctx);
+	if (d.aliasIsDistinct) {
+		sym.symbolType = createDistinct(resolved);
+	} else {
+		sym.symbolType = resolved;
+	}
+}
+
+function resolveVariable(ctx: CheckerContext, node: Node): void {
+	const d = node.data as VariableDeclData;
+	if (d.declType === "") return;
+	// Variable annotations are used as hints in Pass 3 (checkVariableDecl)
+	// We don't resolve them here because the symbol isn't defined yet in Pass 2
+	// (variables are defined during Pass 3). Instead, we store the info for later use.
 }
 
 function resolveClass(ctx: CheckerContext, node: Node): void {
@@ -207,7 +270,11 @@ function resolveClassMember(ctx: CheckerContext, memberNames: string[], memberTy
 		NodeKind.PropertyDecl => {
 			const pd = member.data as PropertyDeclData;
 			memberNames.push(pd.propName);
-			memberTypes.push(unknownType());
+			if (pd.propType !== "") {
+				memberTypes.push(resolveAnnotation(pd.propType, ctx));
+			} else {
+				memberTypes.push(unknownType());
+			}
 		},
 		NodeKind.ConstructorDecl => {
 			memberNames.push("constructor");
@@ -266,6 +333,23 @@ testGroup("Resolve Generics", () => {
 		const t = resolveWith("Array<boolean>");
 		check(t.kind === TypeKind.Array);
 		check(t.typeReturn.kind === TypeKind.Boolean);
+	});
+	test("Map<string, number>", () => {
+		const t = resolveWith("Map<string, number>");
+		check(t.kind === TypeKind.Map);
+		check(t.typeReturn.kind === TypeKind.String);
+		check(t.typeExtra.kind === TypeKind.Number);
+	});
+	test("Record<string, number> desugars to Map", () => {
+		const t = resolveWith("Record<string, number>");
+		check(t.kind === TypeKind.Map);
+		check(t.typeReturn.kind === TypeKind.String);
+		check(t.typeExtra.kind === TypeKind.Number);
+	});
+	test("Record<string, boolean> value type", () => {
+		const t = resolveWith("Record<string, boolean>");
+		check(t.kind === TypeKind.Map);
+		check(t.typeExtra.kind === TypeKind.Boolean);
 	});
 });
 
