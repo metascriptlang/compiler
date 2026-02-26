@@ -51,14 +51,29 @@ Expand macros first (Hermes VM), then run 3-pass type checking.
                 ┌──────────────┼──────────────┐
                 ▼              ▼              ▼
            types.ms       symbol.ms      context.ms
-                │              │              │
+          (TypeKind,     (SymbolTable,   (CheckerContext,
+           Type)          Scope chain)   ExportRegistry,
+                │              │         ExtensionRegistry)
                 └──────┬───────┴──────┬───────┘
                        ▼              ▼
                 collectPass.ms  resolvePass.ms
+                 (Pass 1)        (Pass 2)
                        │              │
                        └──────┬───────┘
                               ▼
                         checkPass.ms ◄── compat.ms
+                       (Pass 3: stmts)   (isAssignable,
+                              ▲           scoreCandidate)
+                              │
+                    checkerCallbacks.ms
+                     (circular break)
+                              │
+                              ▼
+                      checkExprPass.ms
+                       (Pass 3: exprs)
+                              │
+                              ▼
+                      orchestrator.ms (multi-module)
                               │
                               ▼
                           index.ms (hub + integration tests)
@@ -74,7 +89,7 @@ Proven pattern used by TypeScript, Go, C#/Roslyn, Java/javac, JS++, and Swift.
 | Pass | Purpose | Reference (`compile.zig`) | Self-Hosted (`checker/`) |
 |------|---------|--------------------------|--------------------------|
 | **1. Collect** | Register all declarations from all modules (names + signatures) | `collectDeclarations()` | `collectTopLevel()` |
-| **2. Resolve** | Resolve type references, propagate import/export types cross-module | `propagateExports` + `TypeResolver.resolve()` | `resolveDeclarations()` (single-module done, cross-module TODO) |
+| **2. Resolve** | Resolve type references, propagate import/export types cross-module | `propagateExports` + `TypeResolver.resolve()` | `resolveDeclarations()` + `ExportRegistry` cross-module propagation |
 | **3. Check** | Infer expression types + validate compatibility | `TypeInference.infer()` + `checkTypes()` | `checkProgramBody()` |
 
 **Why 3-pass over single-pass like legacy impl (research-backed):**
@@ -98,10 +113,12 @@ Concrete advantages over single-pass:
 - **Better error messages** -- full context available before reporting.
 - **Incremental implementation** -- each pass is independently buildable/testable.
 
-Self-hosted status: All 3 passes implemented. Multi-module infrastructure complete:
+Self-hosted status: All 3 passes implemented. Multi-module type propagation complete:
 - `checkModuleGraph()` checks modules in topological order, each getting all 3 passes (Nim-aligned: per-module 3-pass, not 3 passes across all modules)
 - Export marking via `isExported` flag on Symbol (simpler than Nim's dual public/hidden tables)
-- Cross-module type propagation (import→export type flow) is next TODO
+- Cross-module type propagation via `ExportRegistry` — exports registered after each module's 3-pass, imported types resolved from registry in downstream modules' collect pass
+- Extension method registry (`ExtensionRegistry`) tracks `function f(this self: Type)` declarations for UFCS-style member resolution
+- Function overload resolution via `scoreCandidate()` in `compat.ms` (TypeRelation scoring: Exact > FromLiteral > Generic > Subtype > IntConv > Convertible > None)
 
 Trans-Am (Salsa-inspired incremental engine) is fully compatible with 3-pass.
 The LSP uses single `checkFile()` queries -- Trans-Am's red-green algorithm,
@@ -133,11 +150,11 @@ Pre-compute all struct/array/tuple/Result type definitions into a `TypeRegistry`
 
 ---
 
-## Phase 3: Transforms + Normalization
+## Phase 3: Transforms + Normalization — COMPLETE
 
-Multiple sub-transforms that rewrite the typed AST before codegen.
+Multiple sub-transforms that rewrite the typed AST before codegen. All 22 general-purpose transforms fully implemented with Nim/reference compiler parity. 4 C-backend transforms structurally in place (2 need Phase 4 integration for full functionality).
 
-### 3a: Self-Hosted Transform Pipeline (20 general-purpose transforms)
+### 3a: Self-Hosted Transform Pipeline (22 general-purpose transforms)
 
 Fixed execution order — each transform may depend on results of earlier ones.
 
@@ -161,64 +178,135 @@ Fixed execution order — each transform may depend on results of earlier ones.
 | 16 | asyncDesugar | `lowering/asyncDesugar.ms` | custom walk | `await` → `yield`, flip async → generator flag |
 | 17 | generatorLower | `lowering/generatorLower.ms` | custom walk | `function*` → state machine returning iterator object |
 | 18 | lambdaLifting | `lowering/lambdaLifting.ms` | custom walk | Closures with captures → lifted functions + env structs |
-| 19 | dce | `analysis/dce.ms` | stub | Dead code elimination (stub: all symbols alive) |
-| 20 | destructorLifting | `lowering/destructorLifting.ms` | custom walk | Generate per-type `_destroy`/`_copy` from field types |
+| 19 | extensionMethodLower | `lowering/extensionMethodLower.ms` | 1:1 visitor | `obj.method(args)` → `method(obj, args)` for UFCS extension methods |
+| 20 | subscriptLower | `lowering/subscriptLower.ms` | 1:1 visitor | `obj[idx]` → `` `[]`(obj, idx) ``, `obj[idx]=v` → `` `[]=`(obj, idx, v) `` for custom subscript operators |
+| 21 | dce | `analysis/dce.ms` | 2-tier | Dead code elimination: Level 1 statement-level (endsInNoReturn, dead branch/while) + Level 2 symbol-level mark-sweep reachability |
+| 22 | destructorLifting | `lowering/destructorLifting.ms` | custom walk | Full Nim parity: 6 lifecycle hooks + TypeInfo per type (see below) |
 
-Nim `transf.nim` coverage: `transformCase` (matchLower), `liftDeferAux` (deferLower), `transformFor` (forOfLower), `transformAsgn` (destructuringLower), `commonOptimizations` (constantFolding), `forceBool` (stringTruthiness), `lambdalifting.nim` (lambdaLifting), `closureiters.nim` (generatorLower).
+Nim `transf.nim` coverage: `transformCase` (matchLower), `liftDeferAux` (deferLower), `transformFor` (forOfLower), `transformAsgn` (destructuringLower), `commonOptimizations` (constantFolding), `forceBool` (stringTruthiness), `lambdalifting.nim` (lambdaLifting), `closureiters.nim` (generatorLower), `liftdestructors.nim` (destructorLifting), `semstmts.nim:endsInNoReturn` + `ic/dce.nim:AliveSyms` (dce). Reference `normalize.zig` Pass 7 coverage: UFCS extension method rewriting (extensionMethodLower). Reference `subscript_lower.zig` coverage: custom `[]`/`[]=` operator lowering (subscriptLower).
+
+**Status: All 22 general transforms COMPLETE.** Full parity with Nim `transf.nim` and reference compiler `transform/pipeline.zig` for all transforms that apply to MetaScript's feature set. See §3d for intentionally skipped transforms.
+
+#### Destructor Lifting — Nim `liftdestructors.nim` Parity
+
+Generates up to 6 lifecycle hooks per type + `msTypeInfo` for ORC runtime:
+
+| Hook | Signature | Purpose |
+|------|-----------|---------|
+| `=destroy` | `TypeName_destroy(self)` | Cleanup RC fields (reverse field order, then base class) |
+| `=copy` | `TypeName_copy(dest, src)` | Deep copy (assign + incref), self-assignment guard |
+| `=sink` | `TypeName_sink(dest, src)` | Move (transfer ownership), self-assignment guard |
+| `=wasMoved` | `TypeName_wasMoved(self)` | Zero RC handles after move |
+| `=dup` | `TypeName_dup(src): TypeName` | Clone (init + copy, return) |
+| `=trace` | `TypeName_trace(self, callback)` | ORC cycle tracing (cyclic types only) |
+| TypeInfo | `TypeName_typeInfo` | `msTypeInfo` struct (name, is_cyclic, trace_fn, destroy_fn) |
+
+Key features matching Nim:
+- **`fillBody` routing table** — dispatches TypeKind to 7 type family helpers (string, array, ref, closure, map, set, namedObj)
+- **`cyclicType` detection** — memoized analysis determines if a type can form reference cycles (Ref/Ptr/Function/recursive Object)
+- **Inheritance** — base class hook ordering (destroy: fields-first LIFO then base; copy/sink/trace: base-first then fields)
+- **Distinct type delegation** — resolves to base type, shares hooks
+- **Tuple field iteration** — per-field hook generation
+- **`considerUserDefinedOp`** — user-defined `_onDestroy`/`_onCopy`/etc. override synthetic body
+- **Self-assignment check** — `if (dest === src) return;` for copy/sink hooks
 
 ### 3b: C-Backend Transform Pipeline (4 transforms)
 
 Run after general transforms, only when targeting C backend. Located in `transform/c/`.
 
-| # | Transform | File | What it does |
-|---|-----------|------|-------------|
-| 1 | closureCallMarker | `c/closureCallMarker.ms` | Collect function names for closure vs direct call distinction |
-| 2 | pointerParam | `c/pointerParam.ms` | Identify pointer-type parameters (interfaces/classes → T* in C) |
-| 3 | rangeCheckInject | `c/rangeCheckInject.ms` | Tag narrowing casts for runtime range check insertion |
-| 4 | optionalCoercion | `c/optionalCoercion.ms` | Wrap T returns for T\|null functions (`ms_optional_wrap`) |
+| # | Transform | File | What it does | Status |
+|---|-----------|------|-------------|--------|
+| 1 | closureCallMarker | `c/closureCallMarker.ms` | Collect function names for closure vs direct call distinction | Complete |
+| 2 | pointerParam | `c/pointerParam.ms` | Identify pointer-type parameters (interfaces/classes → T* in C) | Complete (heuristic; full type lookup needs checker integration) |
+| 3 | rangeCheckInject | `c/rangeCheckInject.ms` | Tag narrowing casts for runtime range check insertion | Structural stub (needs TypeAssertionData enhancement) |
+| 4 | optionalCoercion | `c/optionalCoercion.ms` | Wrap T returns for T\|null functions (`ms_optional_wrap`) | Partial (explicit null only; full wrapping needs checker) |
 
 ### 3c: Deferred Transforms (Future Phases)
 
 | Transform | Why Deferred |
 |-----------|-------------|
-| analyzerInject | Lifetime analysis + destructor injection (Phase 4) |
-| locResolve | Needs analyzer output |
+| locResolve | Needs codegen implementation |
 
-### 3d: Skipped (Overkill per Nim Comparison)
+### 3d: TODO — Needed Transforms Not Yet Implemented
 
-| Transform | Reason |
-|-----------|--------|
-| recordToMap | No `Record<K,V>` type |
-| dateLower | Too specialized |
-| subscriptLower | Needs custom `[]` infrastructure |
-| methodCallLower | UFCS, Nim handles in semantic phase |
-| arrayMethodInline | Needs type info for correctness |
+| Transform | What | Why needed | Priority |
+|-----------|------|-----------|----------|
+| ~~recordToMap~~ | ~~`Record<K,V>` → `Map<K,V>`~~ | DONE — implemented in `resolvePass.ms` (Phase 2 type resolution, not a transform) | ~~High~~ |
+| ~~extensionMethodLower~~ | ~~`obj.method(args)` → `method(obj, args)`~~ | DONE — added as step 19 in §3a | ~~High~~ |
+| ~~subscriptLower~~ | ~~Custom `[]` operator → function call~~ | DONE — added as step 20 in §3a. Also added backtick-stropped function names in parser. | ~~Medium~~ |
+
+### 3e: Correctly Skipped
+
+| Transform | Reference has it | Reason |
+|-----------|:---:|--------|
+| dateLower | yes | Runtime-specific (Date → ms_date_now). Add when Date runtime exists |
+| arrayMethodInline | yes | Performance optimization (arr.map → inline loop), not correctness |
+| varHoist | yes | JS-only (var hoisting compatibility) |
+| spreadLower | yes | Dynamic `f(...args)` — JS-only (f.apply pattern) |
+| functionInlining | yes | Optimization, not correctness |
+| constantPropagation | yes | Deprecated in reference compiler |
+| logicalShortCircuit | yes | C handles `&&`/`\|\|` natively |
+
+### 3f: Maybe-Needed (Depends on Codegen Strategy)
+
+| Transform | What | When needed |
+|-----------|------|-------------|
+| conditionalExprLower | ternary → if-stmt | If C codegen can't emit statement-expressions in ternary position |
+| updateExprLower | `x++`/`x--` → assignment + temp | If AST has UpdateExpr nodes and codegen doesn't handle them directly |
 
 **Input:** Typed AST + symbol table
 **Output:** Transformed AST + alive symbol set
 
 ---
 
-## Phase 4: Analyzer — Lifetime Analysis + Injection (C backend only)
+## Phase 4: Analyzer — DRC Injection (C backend only)
 
-Lobster-style deterministic memory management (Nim's `injectdestructors`). Most complex phase.
+Deterministic reference counting injection (Nim `injectdestructors` pattern). Direct AST rewrite — walks each function body with scope stack, inserting RC calls inline.
 
-| Step | What it does |
+### 4a: Self-Hosted DRC Analyzer (`src/analyzer/`)
+
+6 modular files, ~900 lines total:
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `classify.ms` | ~195 | Type → RC classification: maps TypeKind to RcInfo (destroy/copy/wasMoved/sink function names) |
+| `scope.ms` | ~185 | DrcScope/DrcContext: push/pop scope, track vars needing cleanup, move tracking, needsTry propagation |
+| `lastRead.ms` | ~300 | isLastReadInBlock (forward scan) + nodeReferencesVar (recursive) + deepAliases (self-assignment safety) |
+| `inject.ms` | ~370 | Main AST walker: per-statement dispatch, VarDecl/Assignment/Return/DiscardedCall processing |
+| `optimize.ms` | ~210 | Post-optimizer: eliminate redundant `wasMoved(x); destroy(x)` pairs |
+| `index.ms` | ~100 | Hub: `analyzeProgram` entry point, re-exports, integration tests |
+
+**Architecture decisions:**
+- **Direct AST rewrite** — no intermediate RcOp. Insert RC call nodes directly.
+- **Scope-based cleanup** — push on block/function entry, track RC vars, emit `=destroy` LIFO on exit.
+- **Conservative isLastRead** — forward scan within statement list. CFG upgrade deferred.
+- **Post-optimizer** — eliminate `wasMoved(x); =destroy(x)` pairs.
+
+**RC insertion points:**
+
+| Context | RC Action |
+|---------|-----------|
+| `const x = fresh()` | SINK — ownership transfers |
+| `const x = y` (last read) | MOVE — assign + `wasMoved(y)` |
+| `const x = y` (not last) | COPY — assign + `incref(x)` |
+| `x = fresh()` | Destroy old, assign |
+| `return expr` | Cleanup scopes (exclude returned vars), return |
+| Scope exit | `=destroy` all tracked vars LIFO |
+| `break`/`continue` | Set `needsTry` to loop boundary |
+| Discarded `f()` | Capture in temp for cleanup |
+
+**Status: Phase 4 COMPLETE.** 67 tests across 16 test groups. 870 total tests pass.
+
+### 4b: Deferred Steps
+
+| Step | When needed |
 |------|-------------|
-| 4.1 String concat flatten | `a + b + c` chains to `string_assign_expr` / `string_append_expr` (analyzer needs these forms) |
-| 4.2 Lifetime analysis | Collect interface names (value types, no RC). Run analyzer on all modules: compute variable lifetimes (`borrow`/`keep`/`any`), decide RC operations, detect move opportunities via CFG last-use analysis |
-| 4.3 Range check injection | Insert `ms_chck_range()` for narrowing type assertions (e.g. `x as int8`) |
-| 4.4 Destructor injection | Physically insert `ms_decref()` / `ms_incref()` / `ms_was_moved()` into AST at scope exits, assignments, returns (Nim: `injectdestructors`) |
-| 4.4b Pointer param transform | Set `loc_flags.indirect` on pointer parameters for C calling convention |
-| 4.5 Loc flag resolution | Pre-resolve all location flags for codegen (no runtime HashMap lookups) |
-
-**Key concepts:**
-- **Lifetime** (Lobster-style): `borrow` (don't hold ref), `keep` (you own it), `any` (non-ref type)
-- **Move optimization**: Elide RC ops on last use (`isLastUseCfg` with control flow graph)
-- **Cycle detection**: Bacon-Rajan algorithm for deferred collection of cycle candidates
+| Range check injection | TypeAssertionData enhanced |
+| Loc flag resolution | Codegen implementation |
+| CFG-based isLastRead | Phase 2 upgrade for cross-block moves |
 
 **Input:** Transformed AST + symbol table + type registry
-**Output:** AST with injected cleanup calls, RC operation array, location flags
+**Output:** AST with injected cleanup calls (ms_decref, ms_incref, ms_was_moved, T_destroy, T_copy)
 
 ---
 
@@ -256,3 +344,91 @@ Phase 4:  transformed --> AST with ms_decref/ms_incref injected  (C only)
 Phase 5:  final AST ----> .c / .js / .erl / .msb files
 Phase 6:  (stats)
 ```
+
+---
+
+## Module Dependency Architecture
+
+Strict 6-layer DAG — each layer only depends downward, never upward.
+
+```
+Layer 0: FOUNDATION (zero cross-directory deps)
+  lexer/  (token, scanner, lexer, state, chars)
+  utils/  (string)
+         │
+         ▼
+Layer 1: AST + DIAGNOSTICS (depend on lexer only)
+  ast/         (node, printer)        ← imports lexer/token
+  diagnostics/ (diagnostics)          ← imports lexer/token
+         │
+         ▼
+Layer 2: PARSER (depends on ast, lexer, utils)
+  parser/  (26 files)                 ← imports ast/node, lexer/*, utils/string
+           callbacks.ms breaks expression ↔ statement circular dep
+         │
+         ▼
+Layer 3: MODULE SYSTEM (depends on ast, parser, utils)
+  module/  (graph, resolver, loader)  ← imports parser/validation, ast/node
+           Loader parses source → extracts imports → builds graph
+           ASTs discarded (DRC bug). Checker re-parses from source.
+         │
+         ▼
+Layer 4: CHECKER (depends on ast, module, parser, utils)
+  checker/ (11 files)                 ← imports ast/node, module/graph, utils/string
+           3-pass per module: collect → resolve → check
+           ExportRegistry propagates types between modules
+
+           File ↔ Pass mapping:
+           ┌─────────────────────┬──────────────────────────────────────┐
+           │ File                │ Role                                 │
+           ├─────────────────────┼──────────────────────────────────────┤
+           │ types.ms            │ Foundation: TypeKind, Type, ctors    │
+           │ symbol.ms           │ Foundation: SymbolTable, Scope chain │
+           │ context.ms          │ Foundation: CheckerContext, registries│
+           │ compat.ms           │ Foundation: isAssignable, overloads  │
+           │ collectPass.ms      │ Pass 1: collect declarations        │
+           │ resolvePass.ms      │ Pass 2: resolve type annotations    │
+           │ checkPass.ms        │ Pass 3: statement validation        │
+           │ checkExprPass.ms    │ Pass 3: expression type inference   │
+           │ checkerCallbacks.ms │ Infra: circular dep break (3↔3)     │
+           │ orchestrator.ms     │ Infra: multi-module coordination    │
+           │ index.ms            │ Hub: re-exports public API          │
+           └─────────────────────┴──────────────────────────────────────┘
+         │
+         ▼
+Layer 5: TRANSFORMS (depends on ast, checker, utils)
+  transform/ (26 files, 22+4 passes) ← imports ast/node, checker/{context,types,symbol}
+           Each pass: (Node, TransformContext) → Node
+           destructorLifting has deep checker access for RC type analysis
+         │
+         ▼
+Layer 5b: ANALYZER (depends on ast, checker, transform)
+  analyzer/ (6 files, ~900 lines)    ← imports ast/node, checker/{context,types,symbol}, transform/{context,util}
+           DRC injection: classify → scope → inject → optimize
+         │
+         ▼
+Layer 6: ENTRY POINT (orchestrates all phases)
+  src/index.ms                        ← imports from ALL layers
+           Pipeline: parse → check → transform → analyze → (codegen: future)
+```
+
+### Critical Hub Files (most depended-upon)
+
+| File | Importers | Role |
+|------|-----------|------|
+| `ast/node.ms` | 27 | Universal data type (Node, NodeKind, 37 node kinds) |
+| `transform/context.ms` | 23 | TransformContext shared by all 20+ passes |
+| `transform/util.ms` | 20 | AST builder helpers (makeIdent, makeCall, etc.) |
+| `lexer/token.ms` | 18 | Token + TokenKind (80+ kinds) |
+| `parser/context.ms` | 18 | ParserState (peek, advance, expect) |
+| `checker/types.ms` | 9 | Type + TypeKind (27 kinds) |
+| `checker/symbol.ms` | 7 | SymbolTable, Scope chain |
+
+### Design Patterns
+
+1. **Strict layering** — no upward dependencies (transform never imports index.ms, checker never imports transform)
+2. **Hub re-exports** — each directory has `index.ms` re-exporting public API
+3. **Callback injection** — `parser/callbacks.ms` breaks expression ↔ statement cycle with function pointer registration
+4. **Data-only crossing** — lower layers export pure data types; upper layers import types but don't call lower functions in production (only in tests)
+5. **DRC firewall** — Module interface is primitive-only (strings, not Node), preventing DRC lifecycle mangling across module boundaries
+6. **Deep import exception** — `destructorLifting.ms` reaches directly into `checker/{types,symbol}` for RC type introspection (Nim-aligned pattern)
