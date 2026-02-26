@@ -8,7 +8,7 @@
 //   module/      — Multi-module loading (hub: index.ms)
 //   diagnostics/ — Error formatting helpers
 
-import { ModuleGraph } from "./module/index";
+import { ModuleGraph, findModule, loadModuleGraph, createMapProvider, MapEntry } from "./module/index";
 import { formatToken } from "./lexer/token";
 import { lex } from "./lexer/index";
 import { parseExpression } from "./parser/index";
@@ -16,21 +16,55 @@ import { parseSource } from "./parser/statements/validation";
 import { Node, ProgramData } from "./ast/node";
 import { printNode } from "./ast/index";
 import { formatError, unexpectedToken } from "./diagnostics/diagnostics";
-import { checkProgram } from "./checker/index";
+import { checkProgram, checkModuleGraph } from "./checker/index";
 import { transformProgram } from "./transform/index";
 
 // ===== Compiler Pipeline =====
-// parse → check → transform → (codegen: future)
+// Single-module: parse → check → transform → (codegen: future)
+// Multi-module:  load → check graph → transform → (codegen: future)
 
 type NodeResult = Result<Node, string>;
 
-export function compileSource(input: string): NodeResult {
+// Shared: parse → check → transform pipeline
+function compileProgram(input: string): NodeResult {
 	const parseResult = parseSource(input);
 	if (!parseResult.ok) return Result.err(parseResult.error);
 	const program = parseResult.value;
 	const checkerCtx = checkProgram(program);
 	const transformed = transformProgram(program, checkerCtx);
 	return Result.ok(transformed);
+}
+
+export function compileSource(input: string): NodeResult {
+	return compileProgram(input);
+}
+
+// Multi-module compilation: loads all modules from entry point,
+// checks them in dependency order, transforms entry module.
+export function compileProject(entryPath: string): NodeResult {
+	// Build module graph from entry point (uses real file I/O via provider)
+	// For now, this is a placeholder — real file provider TBD
+	const entries: MapEntry[] = [];
+	const provider = createMapProvider(entries);
+	const graph = loadModuleGraph(entryPath, provider);
+
+	// Check all modules in dependency order
+	checkModuleGraph(graph);
+
+	// Collect errors
+	if (graph.errors.length > 0) {
+		return Result.err(graph.errors[0]);
+	}
+	for (const mod of graph.modules) {
+		if (mod.errors.length > 0) {
+			return Result.err(mod.errors[0]);
+		}
+	}
+
+	// Transform entry module
+	const entryMod = findModule(graph, entryPath);
+	if (entryMod === null) return Result.err("Entry module not found");
+	return compileProgram(entryMod.source);
 }
 
 // ===== Test Helpers =====

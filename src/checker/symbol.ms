@@ -1,4 +1,4 @@
-import { Node, NodeKind, SourceLocation } from "../ast/node";
+import { SourceLocation } from "../ast/node";
 import { Type, TypeKind, unknownType } from "./types";
 import { test, check, testGroup } from "std/testing";
 
@@ -24,6 +24,7 @@ export interface Symbol {
 	isMutable: boolean;
 	isExported: boolean;
 	location: SourceLocation;
+	overloads: Symbol[];    // non-empty when function has overloads
 }
 
 // ===== Scope =====
@@ -65,6 +66,11 @@ export function closeScope(table: SymbolTable): void {
 export function defineSymbol(table: SymbolTable, sym: Symbol): Result<boolean, string> {
 	for (const existing of table.current.symbols) {
 		if (existing.name === sym.name) {
+			// Allow function overloads: same name, both functions
+			if (existing.symbolKind === SymbolKind.Function && sym.symbolKind === SymbolKind.Function) {
+				existing.overloads.push(sym);
+				return Result.ok(true);
+			}
 			return Result.err(`Duplicate symbol '${sym.name}'`);
 		}
 	}
@@ -98,6 +104,12 @@ export function lookupLocal(table: SymbolTable, name: string): Symbol {
 	return null as unknown as Symbol;
 }
 
+// ===== Overload Helpers =====
+
+export function hasOverloads(sym: Symbol): boolean {
+	return sym.overloads.length > 0;
+}
+
 // ===== Helper: Create Symbol Shorthand =====
 
 export function makeSymbol(name: string, kind: SymbolKind, symType: Type, mutable: boolean): Symbol {
@@ -108,6 +120,7 @@ export function makeSymbol(name: string, kind: SymbolKind, symType: Type, mutabl
 		isMutable: mutable,
 		isExported: false,
 		location: { line: 0, column: 0 },
+		overloads: [],
 	};
 }
 
@@ -225,6 +238,24 @@ testGroup("SymbolTable", () => {
 		check(table.current.scopeKind === ScopeKind.Loop);
 		closeScope(table);
 		closeScope(table);
+	});
+	test("function overloads allowed", () => {
+		const table = createSymbolTable();
+		const sym1 = makeSymbol("add", SymbolKind.Function, unknownType(), false);
+		const sym2 = makeSymbol("add", SymbolKind.Function, unknownType(), false);
+		const r1 = defineSymbol(table, sym1);
+		check(r1.ok);
+		const r2 = defineSymbol(table, sym2);
+		check(r2.ok);  // no error for function overload
+		const found = lookupSymbol(table, "add");
+		check(found !== null);
+		check(found.overloads.length === 1);
+	});
+	test("non-function duplicate still errors", () => {
+		const table = createSymbolTable();
+		defineSymbol(table, makeSymbol("x", SymbolKind.Variable, unknownType(), false));
+		const r = defineSymbol(table, makeSymbol("x", SymbolKind.Variable, unknownType(), false));
+		check(!r.ok);
 	});
 	test("isExported default false", () => {
 		const sym = makeSymbol("x", SymbolKind.Variable, unknownType(), false);

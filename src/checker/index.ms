@@ -15,26 +15,33 @@ export {
 export {
 	isNumeric, isStringType, isBoolType, isCallable,
 	getReturnType, getElementType, getProperty,
+	substituteType, instantiateGeneric, createGenericParam,
 } from "./types";
 
 // Re-exports: symbol.ms
 export { SymbolKind, ScopeKind, Symbol, Scope, SymbolTable } from "./symbol";
-export { createSymbolTable, openScope, closeScope, defineSymbol, lookupSymbol, lookupLocal, makeSymbol } from "./symbol";
+export { createSymbolTable, openScope, closeScope, defineSymbol, lookupSymbol, lookupLocal, lookupExport, makeSymbol, hasOverloads } from "./symbol";
 
 // Re-exports: context.ms
-export { CheckerContext, createContext, addError, hasErrors, errorCount } from "./context";
+export {
+	CheckerContext, createContext, createModuleContext, addError, hasErrors, errorCount,
+	ExportedSymInfo, ModuleExports, ExportRegistry,
+	createExportRegistry, findModuleExports, findExportedSymbol, registerModuleExports,
+	ExtensionMethod, ExtensionRegistry, createExtensionRegistry, registerExtension, findExtension,
+	AttachedOps, findAttachedOps, hasAttachedOps,
+} from "./context";
 
-// Re-exports: collect.ms (Pass 1)
-export { collectTopLevel } from "./collectPass";
+// Re-exports: collectPass.ms (Pass 1)
+export { collectTopLevel, getDeclName } from "./collectPass";
 
-// Re-exports: resolve.ms (Pass 2)
+// Re-exports: resolvePass.ms (Pass 2)
 export { resolveAnnotation, resolveDeclarations } from "./resolvePass";
 
 // Re-exports: compat.ms
-export { isAssignable } from "./compat";
+export { isAssignable, TypeRelation, typeRelation, scoreCandidate } from "./compat";
 
-// Re-exports: check.ms (Pass 3)
-export { checkStmt, checkExpr, checkProgramBody, checkProgram, checkSource } from "./checkPass";
+// Re-exports: checkPass.ms (Pass 3 + multi-module orchestrator)
+export { checkStmt, checkExpr, checkProgramBody, checkProgram, checkSource, checkModuleGraph } from "./checkPass";
 
 // ===== Integration Tests =====
 

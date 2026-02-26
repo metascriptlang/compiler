@@ -1,28 +1,23 @@
 // Type Compatibility - table-driven assignability checking
 
-import { Type, TypeKind, isNumeric } from "./types";
-import { test, check, testGroup } from "std/testing";
 import {
+	Type, TypeKind, isNumeric,
 	numberType, stringType, booleanType, voidType, nullType, unknownType,
 	createPrimitive, createArray, createFunction, createObject, createUnion,
 } from "./types";
+import { test, check, testGroup } from "std/testing";
 
 // ===== Assignability =====
 
 export function isAssignable(source: Type, target: Type): boolean {
 	// Same kind is always compatible
 	if (source.kind === target.kind) {
-		// For compound types, check structural compatibility
-		if (source.kind === TypeKind.Array) {
-			return isAssignable(source.typeReturn, target.typeReturn);
-		}
-		if (source.kind === TypeKind.Function) {
-			return isFunctionAssignable(source, target);
-		}
-		if (source.kind === TypeKind.Object) {
-			return isObjectAssignable(source, target);
-		}
-		return true;
+		return match (source.kind) {
+			TypeKind.Array => isAssignable(source.typeReturn, target.typeReturn),
+			TypeKind.Function => isFunctionAssignable(source, target),
+			TypeKind.Object => isObjectAssignable(source, target),
+			_ => true,
+		};
 	}
 
 	// Unknown on either side: inference pending, allow
@@ -37,9 +32,10 @@ export function isAssignable(source: Type, target: Type): boolean {
 
 	// null assignable to nullable targets (Object, Array, Function, Ref, Ptr)
 	if (source.kind === TypeKind.Null) {
-		return target.kind === TypeKind.Object || target.kind === TypeKind.Array ||
-			target.kind === TypeKind.Function || target.kind === TypeKind.Ref ||
-			target.kind === TypeKind.Ptr;
+		return match (target.kind) {
+			TypeKind.Object | TypeKind.Array | TypeKind.Function | TypeKind.Ref | TypeKind.Ptr => true,
+			_ => false,
+		};
 	}
 
 	// Numeric widening: any numeric type assignable to Number
@@ -72,9 +68,7 @@ function isFunctionAssignable(source: Type, target: Type): boolean {
 	// Check params (contravariant: target params assignable to source params)
 	let i = 0;
 	for (const sourceParam of source.typeChildren) {
-		if (i < target.typeChildren.length) {
-			if (!isAssignable(target.typeChildren[i], sourceParam)) return false;
-		}
+		if (!isAssignable(target.typeChildren[i], sourceParam)) return false;
 		i += 1;
 	}
 	// Check return (covariant)
@@ -86,22 +80,14 @@ function isFunctionAssignable(source: Type, target: Type): boolean {
 
 // Object assignability: structural (source has all target properties)
 function isObjectAssignable(source: Type, target: Type): boolean {
+	let targetIdx = 0;
 	for (const targetProp of target.typeNames) {
-		let found = false;
-		let ti = 0;
-		// Find index of targetProp in target.typeNames
-		let targetIdx = 0;
-		let idx = 0;
-		for (const tn of target.typeNames) {
-			if (tn === targetProp) { targetIdx = idx; }
-			idx += 1;
-		}
 		// Look for matching prop in source
+		let found = false;
 		let si = 0;
 		for (const sourceProp of source.typeNames) {
 			if (sourceProp === targetProp) {
 				found = true;
-				// Check type compatibility
 				if (si < source.typeChildren.length && targetIdx < target.typeChildren.length) {
 					if (!isAssignable(source.typeChildren[si], target.typeChildren[targetIdx])) {
 						return false;
@@ -111,8 +97,77 @@ function isObjectAssignable(source: Type, target: Type): boolean {
 			si += 1;
 		}
 		if (!found) return false;
+		targetIdx += 1;
 	}
 	return true;
+}
+
+// ===== Overload Resolution =====
+
+export enum TypeRelation {
+	None,           // 0 - no match
+	Convertible,    // 1 - requires conversion
+	IntConv,        // 2 - int/float conversion
+	Subtype,        // 3 - inheritance/structural
+	Generic,        // 4 - generic param match / inference pending
+	FromLiteral,    // 5 - from literal (proven safe)
+	Exact,          // 6 - exact match
+}
+
+export function typeRelation(formal: Type, actual: Type): TypeRelation {
+	// Exact match
+	if (formal.kind === actual.kind) {
+		if (formal.kind === TypeKind.Object) {
+			if (formal.typeName === actual.typeName) return TypeRelation.Exact;
+			if (isObjectAssignable(actual, formal)) return TypeRelation.Subtype;
+			return TypeRelation.None;
+		}
+		return TypeRelation.Exact;
+	}
+	// Unknown = inference pending
+	if (formal.kind === TypeKind.Unknown || actual.kind === TypeKind.Unknown) {
+		return TypeRelation.Generic;
+	}
+	// Error type = suppress cascading
+	if (formal.kind === TypeKind.Error || actual.kind === TypeKind.Error) {
+		return TypeRelation.Exact;
+	}
+	// Numeric widening
+	if (isNumeric(actual) && formal.kind === TypeKind.Number) {
+		return TypeRelation.IntConv;
+	}
+	// Null to nullable
+	if (actual.kind === TypeKind.Null) {
+		if (formal.kind === TypeKind.Object || formal.kind === TypeKind.Array ||
+			formal.kind === TypeKind.Function || formal.kind === TypeKind.Ref || formal.kind === TypeKind.Ptr) {
+			return TypeRelation.Subtype;
+		}
+	}
+	// Union target: best match
+	if (formal.kind === TypeKind.Union) {
+		let best = TypeRelation.None;
+		for (const member of formal.typeChildren) {
+			const rel = typeRelation(member, actual);
+			if (rel > best) { best = rel; }
+		}
+		return best;
+	}
+	return TypeRelation.None;
+}
+
+// Score a candidate function against actual arguments.
+// Returns sum of TypeRelation values, or -1 if any param doesn't match.
+export function scoreCandidate(paramTypes: Type[], argTypes: Type[]): number {
+	if (paramTypes.length !== argTypes.length) return -1;
+	let score = 0;
+	let i = 0;
+	while (i < paramTypes.length) {
+		const rel = typeRelation(paramTypes[i], argTypes[i]);
+		if (rel === TypeRelation.None) return -1;
+		score = score + rel;
+		i += 1;
+	}
+	return score;
 }
 
 // ===== Tests =====
@@ -187,6 +242,43 @@ testGroup("Compat Objects", () => {
 		const o1 = createObject("A", ["x"], [numberType()], false);
 		const o2 = createObject("B", ["x", "y"], [numberType(), stringType()], false);
 		check(!isAssignable(o1, o2));
+	});
+});
+
+testGroup("TypeRelation", () => {
+	test("exact match", () => {
+		check(typeRelation(numberType(), numberType()) === TypeRelation.Exact);
+		check(typeRelation(stringType(), stringType()) === TypeRelation.Exact);
+	});
+	test("no match", () => {
+		check(typeRelation(numberType(), stringType()) === TypeRelation.None);
+	});
+	test("unknown = generic", () => {
+		check(typeRelation(numberType(), unknownType()) === TypeRelation.Generic);
+		check(typeRelation(unknownType(), numberType()) === TypeRelation.Generic);
+	});
+	test("int conversion", () => {
+		check(typeRelation(numberType(), createPrimitive(TypeKind.Int32)) === TypeRelation.IntConv);
+	});
+	test("null to object", () => {
+		check(typeRelation(createObject("Foo", [], [], false), nullType()) === TypeRelation.Subtype);
+	});
+});
+
+testGroup("ScoreCandidate", () => {
+	test("exact args", () => {
+		const score = scoreCandidate([numberType(), stringType()], [numberType(), stringType()]);
+		check(score === 12); // 6 + 6
+	});
+	test("arity mismatch", () => {
+		check(scoreCandidate([numberType()], []) === -1);
+	});
+	test("type mismatch", () => {
+		check(scoreCandidate([numberType()], [stringType()]) === -1);
+	});
+	test("mixed scoring", () => {
+		const score = scoreCandidate([numberType(), numberType()], [numberType(), createPrimitive(TypeKind.Int32)]);
+		check(score === 8); // 6 (exact) + 2 (intconv)
 	});
 });
 

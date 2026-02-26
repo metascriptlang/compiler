@@ -2,11 +2,12 @@
 // Uses callback injection via util.ms to avoid circular imports
 
 import { Token, TokenKind } from "../../lexer/token";
-import { Node, NodeKind, NodeData, createNode, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData } from "../../ast/node";
+import { Node, NodeKind, NodeData, createNode, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, skipDestructurePattern, consumeSemicolon, skipGenericParams, skipBalanced } from "../context";
 import { skipTypeAnnotation } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, skipDefaultValue, skipOptionalType } from "../util";
 import { callBlockParser, callExprParser } from "./callbacks";
+import { sliceStr } from "../../utils/string";
 import { programOk, stmtKind, stmtAt } from "./validation";
 import { test, check, testGroup } from "std/testing";
 
@@ -111,6 +112,21 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 	const raw = parseParamList(state);
 	const params = extractParamNames(raw);
 	const fnParamTypes = extractParamTypes(raw);
+	// Check for extension method: first param has "this:" prefix from parseParamList
+	if (params.length > 0 && params[0].length > 5) {
+		const prefix = sliceStr(params[0], 0, 5);
+		if (prefix === "this:") {
+			const receiverName = sliceStr(params[0], 5, params[0].length);
+			const receiverType = fnParamTypes[0];
+			// Build flag BEFORE mutating params (sliceStr may return a view)
+			if (flags === "") {
+				flags = "ext:" + receiverName + ":" + receiverType;
+			} else {
+				flags = flags + "|ext:" + receiverName + ":" + receiverType;
+			}
+			params[0] = receiverName;
+		}
+	}
 	// Optional return type annotation: function f(): string { ... }
 	const fnReturnType = captureOptionalType(state);
 
@@ -1059,6 +1075,35 @@ testGroup("Async/Generator Decl", () => {
 	test("generator function", () => { check(programOk("function* gen() { yield 1; }")); });
 	test("async generator", () => { check(programOk("async function* both() { yield 1; }")); });
 	test("export async", () => { check(programOk("export async function f() {}")); });
+});
+
+testGroup("Extension Methods", () => {
+	test("extension parses", () => {
+		check(programOk("function f(this s: string) { return 1; }"));
+	});
+	test("extension flags", () => {
+		const n = stmtAt("function f(this s: string) { return 1; }", 0);
+		const d = n.data as FunctionDeclData;
+		check(d.fnFlags === "ext:s:string");
+	});
+	test("extension keeps receiver in params", () => {
+		const n = stmtAt("function f(this s: string) { return 1; }", 0);
+		const d = n.data as FunctionDeclData;
+		check(d.params.length === 1);
+		check(d.params[0] === "s");
+	});
+	test("extension with extra params", () => {
+		const n = stmtAt("function f(this s: string, n: number) { return 1; }", 0);
+		const d = n.data as FunctionDeclData;
+		check(d.params.length === 2);
+		check(d.params[0] === "s");
+		check(d.params[1] === "n");
+	});
+	test("no receiver flags empty", () => {
+		const n = stmtAt("function f(x: number) { return 1; }", 0);
+		const d = n.data as FunctionDeclData;
+		check(d.fnFlags === "");
+	});
 });
 
 testGroup("Destructuring Decl", () => {

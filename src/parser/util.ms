@@ -75,6 +75,17 @@ export function parseParamList(state: ParserState): string[] {
 			current(state).kind === TokenKind.Protected || current(state).kind === TokenKind.Readonly) {
 			advance(state);
 		}
+		// Extension method receiver: this name: Type (must be first param)
+		if (params.length === 0 && current(state).kind === TokenKind.This) {
+			advance(state);
+			const receiverName = current(state);
+			if (receiverName.kind !== TokenKind.Ident) { break; }
+			params.push("this:" + receiverName.value);
+			advance(state);
+			params.push(captureOptionalType(state));
+			if (current(state).kind === TokenKind.Comma) { advance(state); } else { break; }
+			continue;
+		}
 		// Destructured param: { a, b } or [ a, b ]
 		if (current(state).kind === TokenKind.LBrace || current(state).kind === TokenKind.LBracket) {
 			skipDestructurePattern(state);

@@ -2,8 +2,7 @@
 // DRY: parseInput, firstStmtKindAfter, stmtCountAfter, firstExprKindAfter
 
 import { Node, NodeKind, ProgramData, ExprStmtData } from "../ast/node";
-import { TransformContext } from "./context";
-import { CheckerContext } from "../checker/context";
+import { TransformContext, createTransformContext } from "./context";
 import { lex } from "../lexer/lexer";
 import { parseProgram } from "../parser/statements/core";
 
@@ -14,8 +13,7 @@ export function parseInput(input: string): Result<Node, string> {
 }
 
 export function makeCtx(): TransformContext {
-	const ctx: TransformContext = { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext };
-	return ctx;
+	return createTransformContext();
 }
 
 export function getStmts(prog: Node): Node[] {
@@ -23,31 +21,26 @@ export function getStmts(prog: Node): Node[] {
 	return d.programStmts;
 }
 
-export function stmtCountAfter(input: string, transform: (prog: Node, ctx: TransformContext) => Node): number {
+// Shared: parse input, apply transform, return stmts (or empty on error)
+function transformStmts(input: string, transform: (prog: Node, ctx: TransformContext) => Node): Node[] {
 	const result = parseInput(input);
-	if (!result.ok) return -1;
-	const prog = result.value;
-	const lowered = transform(prog, makeCtx());
-	const stmts = getStmts(lowered);
-	return stmts.length;
+	if (!result.ok) return [];
+	const lowered = transform(result.value, makeCtx());
+	return getStmts(lowered);
+}
+
+export function stmtCountAfter(input: string, transform: (prog: Node, ctx: TransformContext) => Node): number {
+	return transformStmts(input, transform).length;
 }
 
 export function firstStmtKindAfter(input: string, transform: (prog: Node, ctx: TransformContext) => Node): NodeKind {
-	const result = parseInput(input);
-	if (!result.ok) return NodeKind.Program;
-	const prog = result.value;
-	const lowered = transform(prog, makeCtx());
-	const stmts = getStmts(lowered);
+	const stmts = transformStmts(input, transform);
 	if (stmts.length === 0) return NodeKind.Program;
 	return stmts[0].kind;
 }
 
 export function firstExprKindAfter(input: string, transform: (prog: Node, ctx: TransformContext) => Node): NodeKind {
-	const result = parseInput(input);
-	if (!result.ok) return NodeKind.Program;
-	const prog = result.value;
-	const lowered = transform(prog, makeCtx());
-	const stmts = getStmts(lowered);
+	const stmts = transformStmts(input, transform);
 	if (stmts.length === 0) return NodeKind.Program;
 	const stmt = stmts[0];
 	if (stmt.kind === NodeKind.ExprStmt) {

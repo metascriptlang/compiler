@@ -14,12 +14,12 @@ import {
 import {
 	Type, TypeKind,
 	unknownType, numberType, stringType, booleanType, voidType, nullType, neverType,
-	createPrimitive, createArray, createFunction, createObject, createEnum,
-	createResult, createTypeRef, createUnion, createRef, createPtr,
+	createPrimitive, createArray, createFunction, createObject,
+	createResult, createTypeRef, createUnion,
 } from "./types";
 import { Symbol, SymbolKind, lookupSymbol } from "./symbol";
-import { CheckerContext } from "./context";
-import { trim, charAt, sliceStr, findChar, splitTopLevel } from "../utils/string";
+import { CheckerContext, findExtension } from "./context";
+import { trim, sliceStr, findChar, splitTopLevel } from "../utils/string";
 import { test, check, testGroup } from "std/testing";
 
 // ===== A. Resolve Annotation Strings =====
@@ -33,10 +33,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 	if (unionParts.length === 2) {
 		return createUnion([resolveAnnotation(unionParts[0], ctx), resolveAnnotation(unionParts[1], ctx)]);
 	}
-	if (unionParts.length === 3) {
-		return createUnion([resolveAnnotation(unionParts[0], ctx), resolveAnnotation(unionParts[1], ctx), resolveAnnotation(unionParts[2], ctx)]);
-	}
-	if (unionParts.length > 3) {
+	if (unionParts.length >= 3) {
 		return createUnion([resolveAnnotation(unionParts[0], ctx), resolveAnnotation(unionParts[1], ctx), resolveAnnotation(unionParts[2], ctx)]);
 	}
 
@@ -144,7 +141,35 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 
 	const paramTypes = resolveTypeStrings(d.fnParamTypes, d.params.length, ctx);
 	const returnType = (d.fnReturnType !== "") ? resolveAnnotation(d.fnReturnType, ctx) : unknownType();
-	sym.symbolType = createFunction(paramTypes, d.params, returnType);
+	const fnType = createFunction(paramTypes, d.params, returnType);
+
+	// Overload handling: resolve in declaration order
+	if (sym.overloads.length > 0 && sym.symbolType.kind !== TypeKind.Unknown) {
+		// Primary already resolved — assign to first unresolved overload
+		for (const overload of sym.overloads) {
+			if (overload.symbolType.kind === TypeKind.Unknown) {
+				overload.symbolType = fnType;
+				return;
+			}
+		}
+	}
+
+	sym.symbolType = fnType;
+	// Update extension method type in registry if this is an extension
+	if (d.fnFlags.length > 4 && ctx.extensionRegistry !== null) {
+		const flagPrefix = sliceStr(d.fnFlags, 0, 4);
+		if (flagPrefix === "ext:") {
+			const rest = sliceStr(d.fnFlags, 4, d.fnFlags.length);
+			const colonPos = findChar(rest, ":");
+			if (colonPos > 0) {
+				const receiverType = sliceStr(rest, colonPos + 1, rest.length);
+				const ext = findExtension(ctx.extensionRegistry, receiverType, d.fnName);
+				if (ext !== null) {
+					ext.fnType = fnType;
+				}
+			}
+		}
+	}
 }
 
 function resolveInterface(ctx: CheckerContext, node: Node): void {
@@ -197,7 +222,7 @@ function resolveClassMember(ctx: CheckerContext, memberNames: string[], memberTy
 // ===== Tests =====
 
 import { createContext } from "./context";
-import { createSymbolTable, defineSymbol, makeSymbol } from "./symbol";
+import { defineSymbol, makeSymbol } from "./symbol";
 
 function resolveWith(text: string): Type {
 	const ctx = createContext();

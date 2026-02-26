@@ -1,7 +1,8 @@
-import { Node, NodeKind, ProgramData, FunctionDeclData, ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, MacroDeclData, ImportDeclData, ExportDeclData } from "../ast/node";
-import { Type, TypeKind, unknownType, createObject, createEnum } from "./types";
-import { Symbol, SymbolKind, SymbolTable, ScopeKind, defineSymbol, makeSymbol } from "./symbol";
-import { CheckerContext, addError } from "./context";
+import { Node, NodeKind, ProgramData, FunctionDeclData, ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData } from "../ast/node";
+import { Type, TypeKind, unknownType, createObject, createEnum, createTypeRef } from "./types";
+import { Symbol, SymbolKind, SymbolTable, ScopeKind, defineSymbol, makeSymbol, lookupSymbol } from "./symbol";
+import { CheckerContext, addError, findExportedSymbol, ExtensionMethod, registerExtension } from "./context";
+import { sliceStr, findChar } from "../utils/string";
 import { test, check, testGroup } from "std/testing";
 
 // ===== Top-Level Collector =====
@@ -42,12 +43,36 @@ export function defineOrError(ctx: CheckerContext, sym: Symbol, node: Node): voi
 
 function collectFunction(ctx: CheckerContext, node: Node): void {
 	const d = node.data as FunctionDeclData;
+	// Check for extension method: fnFlags contains "ext:receiverName:receiverType"
+	if (d.fnFlags.length > 4 && sliceStr(d.fnFlags, 0, 4) === "ext:") {
+		// Parse "ext:name:type" — find second colon
+		const rest = sliceStr(d.fnFlags, 4, d.fnFlags.length);
+		const colonPos = findChar(rest, ":");
+		if (colonPos > 0 && ctx.extensionRegistry !== null) {
+			const receiverName = sliceStr(rest, 0, colonPos);
+			const receiverType = sliceStr(rest, colonPos + 1, rest.length);
+			const extMethod: ExtensionMethod = {
+				methodName: d.fnName,
+				receiverTypeName: receiverType,
+				sourcePath: "",
+				fnType: unknownType(),
+			};
+			registerExtension(ctx.extensionRegistry, extMethod);
+		}
+	}
+	// Always define as top-level symbol too (for direct calls)
 	defineOrError(ctx, makeSymbol(d.fnName, SymbolKind.Function, unknownType(), false), node);
 }
 
 function collectClass(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ClassDeclData;
-	defineOrError(ctx, makeSymbol(d.className, SymbolKind.Class, createObject(d.className, [], [], false), false), node);
+	const classType = createObject(d.className, [], [], false);
+	// Store base class info for inheritance (used by destructor lifting)
+	if (d.classExtends !== "") {
+		classType.typeExtra = createTypeRef(d.classExtends);
+	}
+	const sym = makeSymbol(d.className, SymbolKind.Class, classType, false);
+	defineOrError(ctx, sym, node);
 }
 
 function collectInterface(ctx: CheckerContext, node: Node): void {
@@ -83,23 +108,98 @@ function collectMacro(ctx: CheckerContext, node: Node): void {
 	defineOrError(ctx, makeSymbol(d.macroDeclName, SymbolKind.Function, unknownType(), false), node);
 }
 
+// Look up resolved source path for an import specifier from the module's import entries
+function resolveImportSourcePath(ctx: CheckerContext, specifier: string): string {
+	if (ctx.currentModule === null) return "";
+	for (const imp of ctx.currentModule.imports) {
+		if (imp.sourceSpecifier === specifier) return imp.sourcePath;
+	}
+	return "";
+}
+
 function collectImport(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ImportDeclData;
-	for (const name of d.importNames) {
-		defineOrError(ctx, makeSymbol(name, SymbolKind.Variable, unknownType(), false), node);
+
+	// Multi-module mode: resolve types from ExportRegistry
+	if (ctx.exportRegistry !== null) {
+		const sourcePath = resolveImportSourcePath(ctx, d.importSource);
+
+		let i = 0;
+		while (i < d.importNames.length) {
+			const importName = d.importNames[i];
+			const localAlias = d.importAliases[i];
+
+			if (sourcePath !== "") {
+				const exportInfo = findExportedSymbol(ctx.exportRegistry, sourcePath, importName);
+				if (exportInfo !== null) {
+					// Use actual type and kind from source module
+					defineOrError(ctx, makeSymbol(localAlias, exportInfo.kind, exportInfo.symType, false), node);
+				} else {
+					// Name not found in source module's exports
+					addError(ctx, "'" + importName + "' is not exported from '" + d.importSource + "'");
+					defineOrError(ctx, makeSymbol(localAlias, SymbolKind.Variable, unknownType(), false), node);
+				}
+			} else {
+				// std import or unresolvable — fallback to unknownType
+				defineOrError(ctx, makeSymbol(localAlias, SymbolKind.Variable, unknownType(), false), node);
+			}
+			i += 1;
+		}
+		return;
+	}
+
+	// Single-module fallback: all imports get unknownType (use aliases for local names)
+	for (const alias of d.importAliases) {
+		defineOrError(ctx, makeSymbol(alias, SymbolKind.Variable, unknownType(), false), node);
 	}
 }
 
 function collectExport(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ExportDeclData;
 	collectDecl(ctx, d.exportedDecl);
+
+	// Re-export case: export { X, Y } from "./mod" — exportedDecl is an ImportDecl
+	if (d.exportedDecl.kind === NodeKind.ImportDecl) {
+		const imp = d.exportedDecl.data as ImportDeclData;
+		for (const alias of imp.importAliases) {
+			const sym = lookupSymbol(ctx.table, alias);
+			if (sym !== null) {
+				sym.isExported = true;
+			}
+		}
+		return;
+	}
+
+	// Regular export: single declaration
+	const name = getDeclName(d.exportedDecl);
+	if (name !== "") {
+		const sym = lookupSymbol(ctx.table, name);
+		if (sym !== null) {
+			sym.isExported = true;
+		}
+	}
+}
+
+// Extract the name from any declaration node
+export function getDeclName(node: Node): string {
+	return match (node.kind) {
+		NodeKind.FunctionDecl => { const d = node.data as FunctionDeclData; d.fnName; },
+		NodeKind.ClassDecl => { const d = node.data as ClassDeclData; d.className; },
+		NodeKind.InterfaceDecl => { const d = node.data as InterfaceDeclData; d.interfaceName; },
+		NodeKind.EnumDecl => { const d = node.data as EnumDeclData; d.enumName; },
+		NodeKind.TypeAliasDecl => { const d = node.data as TypeAliasDeclData; d.aliasName; },
+		NodeKind.ExternDecl => { const d = node.data as ExternDeclData; d.externName; },
+		NodeKind.MacroDecl => { const d = node.data as MacroDeclData; d.macroDeclName; },
+		NodeKind.VariableDecl => { const d = node.data as VariableDeclData; d.declName; },
+		_ => "",
+	};
 }
 
 // ===== Tests =====
 
 import { parseSource } from "../parser/statements/validation";
 import { lookupSymbol } from "./symbol";
-import { createContext } from "./context";
+import { createContext, findExtension } from "./context";
 
 function collectFromSource(input: string): CheckerContext {
 	const ctx = createContext();
@@ -155,6 +255,21 @@ testGroup("Collector", () => {
 		check(hasSymbol("export function baz() { return 1; }", "baz"));
 		check(symbolKindOf("export function baz() { return 1; }", "baz") === SymbolKind.Function);
 	});
+	test("export marks isExported", () => {
+		const ctx = collectFromSource("export function foo() { return 1; }");
+		const sym = lookupSymbol(ctx.table, "foo");
+		check(sym !== null);
+		check(sym.isExported);
+	});
+	test("non-export not marked", () => {
+		const ctx = collectFromSource("function bar() { return 1; }");
+		const sym = lookupSymbol(ctx.table, "bar");
+		check(sym !== null);
+		check(!sym.isExported);
+	});
+	test("getDeclName function", () => {
+		check(getDeclName({ kind: NodeKind.FunctionDecl, location: { line: 0, column: 0 }, data: { fnName: "test", params: [], fnParamTypes: [], fnBody: { kind: NodeKind.BlockStmt, location: { line: 0, column: 0 }, data: { statements: [] } }, fnFlags: "", fnReturnType: "" } }) === "test");
+	});
 	test("skip variables", () => {
 		check(!hasSymbol("const x = 1;", "x"));
 		check(!hasSymbol("let y = 2;", "y"));
@@ -164,5 +279,45 @@ testGroup("Collector", () => {
 		check(lookupSymbol(ctx.table, "a") !== null);
 		check(lookupSymbol(ctx.table, "B") !== null);
 		check(lookupSymbol(ctx.table, "C") !== null);
+	});
+	test("re-export marks isExported", () => {
+		const ctx = collectFromSource("export { foo, bar } from \"./other\";");
+		const fooSym = lookupSymbol(ctx.table, "foo");
+		if (fooSym !== null) {
+			check(fooSym.isExported);
+		} else {
+			check(false); // foo should exist
+		}
+		const barSym = lookupSymbol(ctx.table, "bar");
+		if (barSym !== null) {
+			check(barSym.isExported);
+		} else {
+			check(false); // bar should exist
+		}
+	});
+	test("collect extension method", () => {
+		const ctx = collectFromSource("function trim(this s: string) { return s; }");
+		// Should be registered as both a symbol and an extension
+		check(lookupSymbol(ctx.table, "trim") !== null);
+		const ext = findExtension(ctx.extensionRegistry, "string", "trim");
+		check(ext !== null);
+		if (ext !== null) {
+			check(ext.methodName === "trim");
+			check(ext.receiverTypeName === "string");
+		}
+	});
+	test("non-extension not registered", () => {
+		const ctx = collectFromSource("function foo() { return 1; }");
+		const ext = findExtension(ctx.extensionRegistry, "", "foo");
+		check(ext === null);
+	});
+	test("re-export with alias marks alias exported", () => {
+		const ctx = collectFromSource("export { foo as bar } from \"./other\";");
+		const sym = lookupSymbol(ctx.table, "bar");
+		if (sym !== null) {
+			check(sym.isExported);
+		} else {
+			check(false); // bar should exist
+		}
 	});
 });

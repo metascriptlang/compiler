@@ -17,16 +17,18 @@ import {
 	Type, TypeKind,
 	unknownType, numberType, stringType, booleanType,
 	voidType, nullType, errorType,
-	createArray, createFunction,
+	createArray, createFunction, substituteType,
 	isNumeric, isStringType, isCallable, getReturnType, getElementType, getProperty,
 } from "./types";
 import {
-	Symbol, SymbolKind, SymbolTable, ScopeKind,
-	defineSymbol, lookupSymbol, makeSymbol, openScope, closeScope,
+	Symbol, SymbolKind, ScopeKind,
+	defineSymbol, lookupSymbol, makeSymbol, openScope, closeScope, hasOverloads,
 } from "./symbol";
-import { CheckerContext, createContext, addError, hasErrors, errorCount } from "./context";
+import { CheckerContext, createContext, createModuleContext, addError, hasErrors, errorCount, ExportedSymInfo, createExportRegistry, registerModuleExports, findExtension } from "./context";
 import { collectTopLevel, defineOrError } from "./collectPass";
+import { scoreCandidate } from "./compat";
 import { resolveDeclarations } from "./resolvePass";
+import { Module, ModuleGraph, findModule } from "../module/graph";
 import { test, check, testGroup } from "std/testing";
 
 // ===== Statement Checker =====
@@ -107,19 +109,8 @@ export function checkExpr(ctx: CheckerContext, node: Node): Type {
 			checkExpr(ctx, d.updateArg);
 			numberType();
 		},
-		NodeKind.CallExpr => {
-			const d = node.data as CallExprData;
-			const calleeType = checkExpr(ctx, d.callee);
-			for (const arg of d.arguments) {
-				checkExpr(ctx, arg);
-			}
-			getReturnType(calleeType);
-		},
-		NodeKind.MemberExpr => {
-			const d = node.data as MemberExprData;
-			const objType = checkExpr(ctx, d.object);
-			getProperty(objType, d.property);
-		},
+		NodeKind.CallExpr => checkCallExpr(ctx, node),
+		NodeKind.MemberExpr => checkMemberExpr(ctx, node),
 		NodeKind.ArrayAccess => {
 			const d = node.data as ArrayAccessData;
 			const arrType = checkExpr(ctx, d.array);
@@ -236,6 +227,109 @@ function inferUnaryOp(op: string): Type {
 		"typeof" => stringType(),
 		_ => unknownType(),
 	};
+}
+
+// ===== Call Expression + Overload Resolution =====
+
+function checkCallExpr(ctx: CheckerContext, node: Node): Type {
+	const d = node.data as CallExprData;
+	// Check all argument types first
+	const argTypes: Type[] = [];
+	for (const arg of d.arguments) {
+		const argType = checkExpr(ctx, arg);
+		argTypes.push(argType);
+	}
+	// Check callee
+	const calleeType = checkExpr(ctx, d.callee);
+	// If callee is an identifier, check for overloads
+	if (d.callee.kind === NodeKind.Identifier) {
+		const calleeName = (d.callee.data as IdentifierData).name;
+		const sym = lookupSymbol(ctx.table, calleeName);
+		if (sym !== null && hasOverloads(sym)) {
+			return resolveOverloadCall(sym, argTypes);
+		}
+	}
+	// Infer generic return type from argument types
+	if (calleeType.kind === TypeKind.Function) {
+		return inferGenericReturn(calleeType, argTypes);
+	}
+	return getReturnType(calleeType);
+}
+
+// Infer the return type of a generic function by substituting GenericParam
+// in the return type based on matching formal params to actual arg types.
+function inferGenericReturn(fnType: Type, argTypes: Type[]): Type {
+	let returnType = fnType.typeReturn;
+	if (returnType === null) return unknownType();
+	// Match each formal param against actual arg to find substitutions
+	let i = 0;
+	while (i < fnType.typeChildren.length && i < argTypes.length) {
+		const formal = fnType.typeChildren[i];
+		if (formal.kind === TypeKind.GenericParam && argTypes[i].kind !== TypeKind.Unknown) {
+			returnType = substituteType(returnType, formal.typeName, argTypes[i]);
+		}
+		i += 1;
+	}
+	return returnType;
+}
+
+function resolveOverloadCall(sym: Symbol, argTypes: Type[]): Type {
+	// Score the primary symbol
+	let bestScore = -1;
+	let bestType = sym.symbolType;
+	if (sym.symbolType.kind === TypeKind.Function) {
+		const score = scoreCandidate(sym.symbolType.typeChildren, argTypes);
+		if (score > bestScore) {
+			bestScore = score;
+			bestType = sym.symbolType;
+		}
+	}
+	// Score each overload
+	for (const overload of sym.overloads) {
+		if (overload.symbolType.kind === TypeKind.Function) {
+			const score = scoreCandidate(overload.symbolType.typeChildren, argTypes);
+			if (score > bestScore) {
+				bestScore = score;
+				bestType = overload.symbolType;
+			}
+		}
+	}
+	return getReturnType(bestType);
+}
+
+// ===== Member Expression + Extension Method Resolution =====
+
+function typeNameOf(t: Type): string {
+	if (t.kind === TypeKind.Object) return t.typeName;
+	return match (t.kind) {
+		TypeKind.String => "string",
+		TypeKind.Number => "number",
+		TypeKind.Boolean => "boolean",
+		TypeKind.Int32 => "int32",
+		TypeKind.Int64 => "int64",
+		TypeKind.Uint32 => "uint32",
+		TypeKind.Float32 => "float32",
+		TypeKind.Float64 => "float64",
+		TypeKind.Array => "Array",
+		_ => "",
+	};
+}
+
+function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
+	const d = node.data as MemberExprData;
+	const objType = checkExpr(ctx, d.object);
+	const propType = getProperty(objType, d.property);
+	// If property found on object type, return it
+	if (propType.kind !== TypeKind.Unknown) return propType;
+	// Fall back to extension registry
+	if (ctx.extensionRegistry !== null) {
+		const typeName = typeNameOf(objType);
+		if (typeName !== "") {
+			const ext = findExtension(ctx.extensionRegistry, typeName, d.property);
+			if (ext !== null) return ext.fnType;
+		}
+	}
+	return propType;
 }
 
 // ===== Statement Helpers =====
@@ -437,22 +531,21 @@ function exitLoopScope(ctx: CheckerContext, saved: boolean): void {
 	ctx.inLoop = saved;
 }
 
+function checkAnonymousFunction(ctx: CheckerContext, name: string, params: string[], body: Node): Type {
+	checkFunctionBody(ctx, makeSymbol(name, SymbolKind.Function, unknownType(), false), params, body);
+	const types: Type[] = [];
+	for (const p of params) { types.push(unknownType()); }
+	return createFunction(types, params, unknownType());
+}
+
 function checkArrowExpr(ctx: CheckerContext, node: Node): Type {
 	const d = node.data as ArrowFunctionData;
-	checkFunctionBody(ctx, makeSymbol("(arrow)", SymbolKind.Function, unknownType(), false), d.arrowParams, d.arrowBody);
-	return createUnknownFunction(d.arrowParams);
+	return checkAnonymousFunction(ctx, "(arrow)", d.arrowParams, d.arrowBody);
 }
 
 function checkFuncExpr(ctx: CheckerContext, node: Node): Type {
 	const d = node.data as FunctionExprData;
-	checkFunctionBody(ctx, makeSymbol("(anon)", SymbolKind.Function, unknownType(), false), d.funcExprParams, d.funcExprBody);
-	return createUnknownFunction(d.funcExprParams);
-}
-
-function createUnknownFunction(params: string[]): Type {
-	const types: Type[] = [];
-	for (const p of params) { types.push(unknownType()); }
-	return createFunction(types, params, unknownType());
+	return checkAnonymousFunction(ctx, "(anon)", d.funcExprParams, d.funcExprBody);
 }
 
 function checkDestructuringDecl(ctx: CheckerContext, node: Node): void {
@@ -471,12 +564,60 @@ export function checkProgramBody(ctx: CheckerContext, program: Node): void {
 
 // ===== Main Entry Point =====
 
-export function checkProgram(program: Node): CheckerContext {
-	const ctx = createContext();
+// Run all 3 passes on a program node with an existing context
+function runThreePasses(ctx: CheckerContext, program: Node): void {
 	collectTopLevel(ctx, program);        // Pass 1: register names
 	resolveDeclarations(ctx, program);    // Pass 2: resolve types
 	checkProgramBody(ctx, program);       // Pass 3: infer + check
+}
+
+export function checkProgram(program: Node): CheckerContext {
+	const ctx = createContext();
+	runThreePasses(ctx, program);
 	return ctx;
+}
+
+// ===== Multi-Module Entry Point =====
+// Nim-aligned: check modules one at a time in topological (loadOrder) sequence.
+// Each module gets all 3 passes before moving to the next.
+// Since modules are in dependency order, exports from dependencies are
+// available when checking their dependents.
+
+export function checkModuleGraph(graph: ModuleGraph): void {
+	const registry = createExportRegistry();
+
+	for (const path of graph.loadOrder) {
+		const mod = findModule(graph, path);
+		if (mod === null) continue;
+		if (mod.source === "") continue;
+
+		const pr = parseSource(mod.source);
+		if (!pr.ok) {
+			mod.errors.push("Parse error: " + pr.error);
+			continue;
+		}
+
+		const ctx = createModuleContext(graph, mod);
+		ctx.exportRegistry = registry;
+
+		runThreePasses(ctx, pr.value);
+
+		// Copy errors to module
+		for (const err of ctx.errors) {
+			mod.errors.push(err);
+		}
+
+		// Extract exports into registry for downstream modules
+		const exports: ExportedSymInfo[] = [];
+		for (const sym of ctx.table.current.symbols) {
+			if (sym.isExported) {
+				mod.exportNames.push(sym.name);
+				const info: ExportedSymInfo = { name: sym.name, kind: sym.symbolKind, symType: sym.symbolType };
+				exports.push(info);
+			}
+		}
+		registerModuleExports(registry, path, exports);
+	}
 }
 
 // ===== Tests =====
@@ -675,5 +816,177 @@ testGroup("Checker 3-Pass", () => {
 		const sym = lookupSymbol(ctx.table, "f");
 		check(sym !== null);
 		check(sym.symbolType.kind === TypeKind.Function);
+	});
+});
+
+testGroup("Checker Overloads", () => {
+	test("two overloads no error", () => {
+		check(checkOk("function add(a: number, b: number): number { return a; } function add(a: string, b: string): string { return a; }"));
+	});
+	test("overload different arity no error", () => {
+		check(checkOk("function f(a: number): number { return a; } function f(a: number, b: number): number { return a; }"));
+	});
+	test("overload call resolves", () => {
+		const ctx = checkSource("function f(a: number): number { return a; } function f(a: string): string { return a; } const x = f(1);");
+		check(!hasErrors(ctx));
+		const sym = lookupSymbol(ctx.table, "x");
+		check(sym !== null);
+		check(sym.symbolType.kind === TypeKind.Number);
+	});
+	test("overload call picks string version", () => {
+		const ctx = checkSource("function f(a: number): number { return a; } function f(a: string): string { return a; } const y = f(\"hi\");");
+		check(!hasErrors(ctx));
+		const sym = lookupSymbol(ctx.table, "y");
+		check(sym !== null);
+		check(sym.symbolType.kind === TypeKind.String);
+	});
+});
+
+testGroup("Checker Extensions", () => {
+	test("extension method registered", () => {
+		const ctx = checkSource("function trim(this s: string): string { return s; }");
+		check(!hasErrors(ctx));
+		const sym = lookupSymbol(ctx.table, "trim");
+		check(sym !== null);
+		check(sym.symbolType.kind === TypeKind.Function);
+	});
+	test("extension method callable as function", () => {
+		const ctx = checkSource("function double(this n: number): number { return n; } const x = double(1);");
+		check(!hasErrors(ctx));
+	});
+	test("extension on builtin type no error", () => {
+		check(checkOk("function len(this s: string): number { return 0; }"));
+	});
+});
+
+// ===== Multi-Module Tests =====
+
+import {
+	createModuleGraph, createModule, hasExportName,
+} from "../module/graph";
+import {
+	MapEntry, SourceProvider, createMapProvider, loadModuleGraph,
+} from "../module/loader";
+
+testGroup("Checker Multi-Module", () => {
+	test("single module checked", () => {
+		const entries: MapEntry[] = [];
+		entries.push({ entryPath: "/src/a.ms", entrySource: "const x = 1;" });
+		const provider = createMapProvider(entries);
+		const graph = loadModuleGraph("/src/a.ms", provider);
+		checkModuleGraph(graph);
+		check(graph.errors.length === 0);
+		const mod = findModule(graph, "/src/a.ms");
+		check(mod !== null);
+		check(mod.errors.length === 0);
+	});
+	test("errors collected per module", () => {
+		const entries: MapEntry[] = [];
+		entries.push({ entryPath: "/src/a.ms", entrySource: "const x = y;" });
+		const provider = createMapProvider(entries);
+		const graph = loadModuleGraph("/src/a.ms", provider);
+		checkModuleGraph(graph);
+		const mod = findModule(graph, "/src/a.ms");
+		check(mod !== null);
+		check(mod.errors.length > 0);
+	});
+	test("export names recorded", () => {
+		const entries: MapEntry[] = [];
+		entries.push({ entryPath: "/src/a.ms", entrySource: "export function foo() { return 1; } function bar() { return 2; }" });
+		const provider = createMapProvider(entries);
+		const graph = loadModuleGraph("/src/a.ms", provider);
+		checkModuleGraph(graph);
+		const mod = findModule(graph, "/src/a.ms");
+		check(mod !== null);
+		check(hasExportName(mod, "foo"));
+		check(!hasExportName(mod, "bar"));
+	});
+	test("two module chain checked", () => {
+		const entries: MapEntry[] = [];
+		entries.push({ entryPath: "/src/a.ms", entrySource: "import { foo } from \"./b\"; const x = foo;" });
+		entries.push({ entryPath: "/src/b.ms", entrySource: "export function foo() { return 1; }" });
+		const provider = createMapProvider(entries);
+		const graph = loadModuleGraph("/src/a.ms", provider);
+		checkModuleGraph(graph);
+		// Both modules should check without errors
+		const modA = findModule(graph, "/src/a.ms");
+		const modB = findModule(graph, "/src/b.ms");
+		check(modA !== null);
+		check(modB !== null);
+		check(modB.errors.length === 0);
+	});
+	test("imported function has Function type", () => {
+		const entries: MapEntry[] = [];
+		entries.push({ entryPath: "/src/b.ms", entrySource: "export function foo(n: number): string { return \"hi\"; }" });
+		entries.push({ entryPath: "/src/a.ms", entrySource: "import { foo } from \"./b\"; const x = foo(1);" });
+		const provider = createMapProvider(entries);
+		const graph = loadModuleGraph("/src/a.ms", provider);
+		checkModuleGraph(graph);
+		const modA = findModule(graph, "/src/a.ms");
+		const modB = findModule(graph, "/src/b.ms");
+		check(modA !== null);
+		check(modB !== null);
+		check(modA.errors.length === 0);
+		check(modB.errors.length === 0);
+	});
+	test("imported enum available", () => {
+		const entries: MapEntry[] = [];
+		entries.push({ entryPath: "/src/b.ms", entrySource: "export enum Color { Red, Green, Blue }" });
+		entries.push({ entryPath: "/src/a.ms", entrySource: "import { Color } from \"./b\"; const c = Color;" });
+		const provider = createMapProvider(entries);
+		const graph = loadModuleGraph("/src/a.ms", provider);
+		checkModuleGraph(graph);
+		const modA = findModule(graph, "/src/a.ms");
+		check(modA !== null);
+		check(modA.errors.length === 0);
+	});
+	test("imported interface as type annotation", () => {
+		const entries: MapEntry[] = [];
+		entries.push({ entryPath: "/src/b.ms", entrySource: "export interface Point { x: number; y: number; }" });
+		entries.push({ entryPath: "/src/a.ms", entrySource: "import { Point } from \"./b\"; function getX(p: Point): number { return 1; }" });
+		const provider = createMapProvider(entries);
+		const graph = loadModuleGraph("/src/a.ms", provider);
+		checkModuleGraph(graph);
+		const modA = findModule(graph, "/src/a.ms");
+		check(modA !== null);
+		check(modA.errors.length === 0);
+	});
+	test("non-exported name produces error", () => {
+		const entries: MapEntry[] = [];
+		entries.push({ entryPath: "/src/b.ms", entrySource: "function secret() { return 1; }" });
+		entries.push({ entryPath: "/src/a.ms", entrySource: "import { secret } from \"./b\";" });
+		const provider = createMapProvider(entries);
+		const graph = loadModuleGraph("/src/a.ms", provider);
+		checkModuleGraph(graph);
+		const modA = findModule(graph, "/src/a.ms");
+		check(modA !== null);
+		check(modA.errors.length > 0);
+	});
+	test("3-module chain propagates types", () => {
+		const entries: MapEntry[] = [];
+		entries.push({ entryPath: "/src/c.ms", entrySource: "export function makeStr(): string { return \"hello\"; }" });
+		entries.push({ entryPath: "/src/b.ms", entrySource: "import { makeStr } from \"./c\"; export function greet(name: string): string { return makeStr(); }" });
+		entries.push({ entryPath: "/src/a.ms", entrySource: "import { greet } from \"./b\"; const msg = greet(\"world\");" });
+		const provider = createMapProvider(entries);
+		const graph = loadModuleGraph("/src/a.ms", provider);
+		checkModuleGraph(graph);
+		const modA = findModule(graph, "/src/a.ms");
+		check(modA !== null);
+		check(modA.errors.length === 0);
+	});
+	test("re-export forwards types", () => {
+		const entries: MapEntry[] = [];
+		entries.push({ entryPath: "/src/c.ms", entrySource: "export function helper(): number { return 42; }" });
+		entries.push({ entryPath: "/src/b.ms", entrySource: "export { helper } from \"./c\";" });
+		entries.push({ entryPath: "/src/a.ms", entrySource: "import { helper } from \"./b\"; const x = helper();" });
+		const provider = createMapProvider(entries);
+		const graph = loadModuleGraph("/src/a.ms", provider);
+		checkModuleGraph(graph);
+		const modB = findModule(graph, "/src/b.ms");
+		check(modB !== null);
+		check(hasExportName(modB, "helper"));
+		const modA = findModule(graph, "/src/a.ms");
+		check(modA !== null);
+		check(modA.errors.length === 0);
 	});
 });

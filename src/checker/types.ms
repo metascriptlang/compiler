@@ -156,6 +156,52 @@ export function unknownType(): Type { return createPrimitive(TypeKind.Unknown); 
 export function neverType(): Type { return createPrimitive(TypeKind.Never); }
 export function errorType(): Type { return createPrimitive(TypeKind.Error); }
 
+// ===== Generic Instantiation =====
+
+// Substitute a generic parameter name with a concrete type throughout a type tree.
+// Returns a new Type (does not mutate original).
+export function substituteType(t: Type, paramName: string, concrete: Type): Type {
+	if (t === null) return t;
+	// Guard before match: GenericParam with matching name
+	if (t.kind === TypeKind.GenericParam && t.typeName === paramName) return concrete;
+	return match (t.kind) {
+		TypeKind.Number | TypeKind.String | TypeKind.Boolean |
+		TypeKind.Void | TypeKind.Null | TypeKind.Unknown |
+		TypeKind.Never | TypeKind.Error | TypeKind.GenericParam => t,
+		TypeKind.Array => createArray(substituteType(t.typeReturn, paramName, concrete)),
+		TypeKind.Function => {
+			const newParams: Type[] = [];
+			for (const param of t.typeChildren) {
+				newParams.push(substituteType(param, paramName, concrete));
+			}
+			createFunction(newParams, t.typeNames, substituteType(t.typeReturn, paramName, concrete))
+		},
+		TypeKind.Result => createResult(substituteType(t.typeReturn, paramName, concrete), substituteType(t.typeExtra, paramName, concrete)),
+		TypeKind.Union => {
+			const newMembers: Type[] = [];
+			for (const member of t.typeChildren) {
+				newMembers.push(substituteType(member, paramName, concrete));
+			}
+			createUnion(newMembers)
+		},
+		TypeKind.Ref => createRef(substituteType(t.typeReturn, paramName, concrete)),
+		TypeKind.Ptr => createPtr(substituteType(t.typeReturn, paramName, concrete)),
+		_ => t,
+	};
+}
+
+// Instantiate a generic type with concrete type arguments.
+// genericParamNames: ["T", "E"], typeArgs: [numberType(), stringType()]
+export function instantiateGeneric(t: Type, genericParamNames: string[], typeArgs: Type[]): Type {
+	let result = t;
+	let i = 0;
+	while (i < genericParamNames.length && i < typeArgs.length) {
+		result = substituteType(result, genericParamNames[i], typeArgs[i]);
+		i += 1;
+	}
+	return result;
+}
+
 // ===== Type Query Helpers =====
 
 export function isNumeric(t: Type): boolean {
@@ -297,5 +343,50 @@ testGroup("Type Helpers", () => {
 		check(getProperty(obj, "y").kind === TypeKind.String);
 		check(getProperty(obj, "z").kind === TypeKind.Unknown);
 		check(getProperty(numberType(), "x").kind === TypeKind.Unknown);
+	});
+});
+
+testGroup("Generic Instantiation", () => {
+	test("substitute generic param", () => {
+		const gp = createGenericParam("T");
+		const result = substituteType(gp, "T", numberType());
+		check(result.kind === TypeKind.Number);
+	});
+	test("substitute non-matching", () => {
+		const gp = createGenericParam("T");
+		const result = substituteType(gp, "U", numberType());
+		check(result.kind === TypeKind.GenericParam);
+	});
+	test("substitute in array", () => {
+		const arr = createArray(createGenericParam("T"));
+		const result = substituteType(arr, "T", stringType());
+		check(result.kind === TypeKind.Array);
+		check(result.typeReturn.kind === TypeKind.String);
+	});
+	test("substitute in function", () => {
+		const fn = createFunction([createGenericParam("T")], ["a"], createGenericParam("T"));
+		const result = substituteType(fn, "T", numberType());
+		check(result.kind === TypeKind.Function);
+		check(result.typeChildren[0].kind === TypeKind.Number);
+		check(result.typeReturn.kind === TypeKind.Number);
+	});
+	test("substitute in Result", () => {
+		const r = createResult(createGenericParam("T"), createGenericParam("E"));
+		const step1 = substituteType(r, "T", numberType());
+		const step2 = substituteType(step1, "E", stringType());
+		check(step2.kind === TypeKind.Result);
+		check(step2.typeReturn.kind === TypeKind.Number);
+		check(step2.typeExtra.kind === TypeKind.String);
+	});
+	test("instantiateGeneric multi-param", () => {
+		const r = createResult(createGenericParam("T"), createGenericParam("E"));
+		const result = instantiateGeneric(r, ["T", "E"], [numberType(), stringType()]);
+		check(result.kind === TypeKind.Result);
+		check(result.typeReturn.kind === TypeKind.Number);
+		check(result.typeExtra.kind === TypeKind.String);
+	});
+	test("primitive unchanged", () => {
+		const result = substituteType(numberType(), "T", stringType());
+		check(result.kind === TypeKind.Number);
 	});
 });

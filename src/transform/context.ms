@@ -14,7 +14,9 @@ export function createTransformContext(): TransformContext {
 }
 
 export function createTransformContextWithChecker(cc: CheckerContext): TransformContext {
-	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: cc };
+	const ctx = createTransformContext();
+	ctx.checkerCtx = cc;
+	return ctx;
 }
 
 // ===== NameSet =====

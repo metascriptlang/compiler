@@ -8,7 +8,7 @@ Source.ms --> [1 Parse] --> [2 TypeCheck] --> [3 Transform] --> [4 Analyzer] -->
 
 ---
 
-## Phase 1: Parse + Module Loading (src/parser,lexer,ast)
+## Phase 1: Parse + Module Loading (src/parser,lexer,ast,module)
 
 Lex source into tokens, parse tokens into AST, recursively load all imported modules.
 
@@ -16,10 +16,28 @@ Lex source into tokens, parse tokens into AST, recursively load all imported mod
 |------|-------------|
 | Tokenize | Source text to token stream |
 | Parse | Token stream to AST (recursive descent + Pratt) |
-| Module load | Resolve imports, load dependencies, load std macros |
+| Module resolve | `resolver.ms`: translate import specifiers to candidate absolute paths |
+| Module load | `loader.ms`: depth-first recursive loading with cycle detection, topological ordering |
+| Module graph | `graph.ms`: lightweight Module/ModuleGraph data structures (primitives only, no Node/Symbol fields) |
+
+### Self-Hosted Module Loading (`src/module/`)
+
+```
+entryPath
+  → resolver.resolveImport(specifier, fromFile) → ResolveCandidates { paths[] }
+  → loader.loadModule(graph, path, provider)    → Module (source + state + imports)
+  → ModuleGraph { modules[], loadOrder[] }       — topological order for checking
+```
+
+**Key design decisions:**
+- **Module is lightweight** — only primitive fields (string, string[], enum). NO Node, Symbol, or SymbolTable fields. This avoids the DRC lifecycle mangling bug where lifecycle hooks for transitively reachable types get wrong module path mangling.
+- **ASTs not stored on Module** — re-parsed from `Module.source` each pass. Inefficient (3x parse per module) but avoids DRC codegen crash.
+- **SourceProvider abstraction** — `MapProvider` for tests (string→string map), real file I/O provider TBD.
+- **Cycle detection** — module state machine (`Unloaded→Loading→Parsed→Ready`). Re-encountering a `Loading` module = circular import.
+- **Topological order** — depth-first loading naturally produces correct `loadOrder` (dependencies before dependents).
 
 **Input:** `.ms` source file path
-**Output:** Typed AST per module, module dependency graph
+**Output:** ModuleGraph with sources, import entries, topological load order
 
 ---
 
@@ -80,8 +98,10 @@ Concrete advantages over single-pass:
 - **Better error messages** -- full context available before reporting.
 - **Incremental implementation** -- each pass is independently buildable/testable.
 
-Self-hosted status: All 3 passes implemented for single-module. Pass 2 cross-module
-type propagation (import/export type flow) deferred until multi-module pipeline lands.
+Self-hosted status: All 3 passes implemented. Multi-module infrastructure complete:
+- `checkModuleGraph()` checks modules in topological order, each getting all 3 passes (Nim-aligned: per-module 3-pass, not 3 passes across all modules)
+- Export marking via `isExported` flag on Symbol (simpler than Nim's dual public/hidden tables)
+- Cross-module type propagation (import→export type flow) is next TODO
 
 Trans-Am (Salsa-inspired incremental engine) is fully compatible with 3-pass.
 The LSP uses single `checkFile()` queries -- Trans-Am's red-green algorithm,
