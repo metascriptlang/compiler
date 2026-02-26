@@ -16,7 +16,7 @@ export {
 	isNumeric, isStringType, isBoolType, isCallable,
 	getReturnType, getElementType, getProperty,
 	substituteType, instantiateGeneric, createGenericParam,
-	isPrimitiveKind,
+	isPrimitiveKind, typeNameOf,
 } from "./types";
 
 // Re-exports: symbol.ms
@@ -28,7 +28,7 @@ export {
 	CheckerContext, createContext, createModuleContext, addError, hasErrors, errorCount,
 	ExportedSymInfo, ModuleExports, ExportRegistry,
 	createExportRegistry, findModuleExports, findExportedSymbol, registerModuleExports,
-	ExtensionMethod, ExtensionRegistry, createExtensionRegistry, registerExtension, findExtension,
+	ExtensionMethod, ExtensionRegistry, createExtensionRegistry, registerExtension, findExtension, hasExtensionByName,
 	AttachedOps, findAttachedOps, hasAttachedOps,
 	isExtensionFlag, getExtReceiverName, getExtReceiverType,
 } from "./context";

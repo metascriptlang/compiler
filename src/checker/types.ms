@@ -269,6 +269,25 @@ export function isPrimitiveKind(kind: TypeKind): boolean {
 		|| kind === TypeKind.Error;
 }
 
+// typeNameOf — maps Type to its canonical string name (used by checker + transforms)
+export function typeNameOf(t: Type): string {
+	if (t.kind === TypeKind.Object) return t.typeName;
+	return match (t.kind) {
+		TypeKind.String => "string",
+		TypeKind.Number => "number",
+		TypeKind.Boolean => "boolean",
+		TypeKind.Int32 => "int32",
+		TypeKind.Int64 => "int64",
+		TypeKind.Uint32 => "uint32",
+		TypeKind.Float32 => "float32",
+		TypeKind.Float64 => "float64",
+		TypeKind.Array => "Array",
+		TypeKind.Map => "Map",
+		TypeKind.Enum => t.typeName,
+		_ => "",
+	};
+}
+
 // ===== Tests =====
 
 testGroup("TypeKind", () => {

@@ -77,6 +77,14 @@ export function findExtension(registry: ExtensionRegistry, receiverTypeName: str
 	return null as unknown as ExtensionMethod;
 }
 
+// hasExtensionByName — check if ANY extension has this method name (any receiver)
+export function hasExtensionByName(registry: ExtensionRegistry, methodName: string): boolean {
+	for (const m of registry.methods) {
+		if (m.methodName === methodName) return true;
+	}
+	return false;
+}
+
 // ===== Extension Flag Helpers =====
 // Parse "ext:receiverName:receiverType" from fnFlags (shared by collectPass + resolvePass)
 

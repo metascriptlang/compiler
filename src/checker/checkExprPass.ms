@@ -16,6 +16,7 @@ import {
 	voidType, nullType, errorType,
 	createArray, createFunction, substituteType,
 	isNumeric, isStringType, isCallable, getReturnType, getElementType, getProperty,
+	typeNameOf,
 } from "./types";
 import {
 	Symbol, SymbolKind, ScopeKind,
@@ -246,23 +247,6 @@ function resolveOverloadCall(sym: Symbol, argTypes: Type[]): Type {
 }
 
 // ===== Member Expression + Extension Method Resolution =====
-
-export function typeNameOf(t: Type): string {
-	if (t.kind === TypeKind.Object) return t.typeName;
-	return match (t.kind) {
-		TypeKind.String => "string",
-		TypeKind.Number => "number",
-		TypeKind.Boolean => "boolean",
-		TypeKind.Int32 => "int32",
-		TypeKind.Int64 => "int64",
-		TypeKind.Uint32 => "uint32",
-		TypeKind.Float32 => "float32",
-		TypeKind.Float64 => "float64",
-		TypeKind.Array => "Array",
-		TypeKind.Enum => t.typeName,
-		_ => "",
-	};
-}
 
 function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 	const d = node.data as MemberExprData;

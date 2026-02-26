@@ -75,7 +75,7 @@ export type NodeData =
 	| { elements: Node[] }                                         // ArrayLiteral
 	| { arrowParams: string[], arrowParamTypes: string[], arrowBody: Node, arrowFlags: string, arrowReturnType: string } // ArrowFunction
 	| { funcExprParams: string[], funcExprParamTypes: string[], funcExprBody: Node, funcExprFlags: string, funcExprReturnType: string } // FunctionExpr
-	| { asExpr: Node }                                             // TypeAssertion
+	| { asExpr: Node, asType: string }                              // TypeAssertion
 	| { ternaryCondition: Node, ternaryConsequent: Node, ternaryAlternate: Node } // ConditionalExpr
 	| { spreadArg: Node }                                          // SpreadExpr
 	| { newCallee: Node, newArguments: Node[] }                    // NewExpr
@@ -167,7 +167,7 @@ export type ObjectLiteralData = { properties: Node[], keys: string[] };
 export type ArrayLiteralData = { elements: Node[] };
 export type ArrowFunctionData = { arrowParams: string[], arrowParamTypes: string[], arrowBody: Node, arrowFlags: string, arrowReturnType: string };
 export type FunctionExprData = { funcExprParams: string[], funcExprParamTypes: string[], funcExprBody: Node, funcExprFlags: string, funcExprReturnType: string };
-export type TypeAssertionData = { asExpr: Node };
+export type TypeAssertionData = { asExpr: Node, asType: string };
 export type ConditionalExprData = { ternaryCondition: Node, ternaryConsequent: Node, ternaryAlternate: Node };
 export type SpreadExprData = { spreadArg: Node };
 export type NewExprData = { newCallee: Node, newArguments: Node[] };
@@ -204,6 +204,8 @@ export type SwitchStmtData = { switchDisc: Node, switchCases: Node[] };
 export type SwitchCaseData = { caseTests: Node[], caseStmts: Node[], isDefault: boolean };
 export type MatchStmtData = { matchStmtDisc: Node, matchStmtCases: Node[] };
 export type TryCatchStmtData = { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node };
+export type BreakStmtData = { breakLabel: string };
+export type ContinueStmtData = { continueLabel: string };
 export type UnreachableStmtData = { unreachableMsg: string };
 
 // Other
