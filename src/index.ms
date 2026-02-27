@@ -19,26 +19,46 @@ import { formatError, unexpectedToken } from "./diagnostics/diagnostics";
 import { checkProgram, checkModuleGraph } from "./checker/index";
 import { transformProgram } from "./transform/index";
 import { analyzeProgram } from "./analyzer/index";
+import { generateJS } from "./codegen/index";
+import {
+	TransAmDb, createTransAmDb,
+	dbCompileSource, dbCompileToJS as dbCompileToJSNode, dbSetFileText
+} from "./compiler/transam/index";
 
 // ===== Compiler Pipeline =====
-// Single-module: parse → check → transform → analyze → (codegen: future)
-// Multi-module:  load → check graph → transform → analyze → (codegen: future)
+// Single-module: parse → check → transform → analyze → codegen
+// Multi-module:  load → check graph → transform → analyze → codegen
+// Trans-Am: incremental caching — unchanged input skips all phases
 
 type NodeResult = Result<Node, string>;
 
-// Shared: parse → check → transform → analyze pipeline
-function compileProgram(input: string): NodeResult {
-	const parseResult = parseSource(input);
-	if (!parseResult.ok) return Result.err(parseResult.error);
-	const program = parseResult.value;
-	const checkerCtx = checkProgram(program);
-	const transformed = transformProgram(program, checkerCtx);
-	const analyzed = analyzeProgram(transformed, checkerCtx);
-	return Result.ok(analyzed);
+// Module-level db (lazy init)
+let _db: TransAmDb = null as unknown as TransAmDb;
+
+function getDb(): TransAmDb {
+	if (_db === null) {
+		_db = createTransAmDb(256);
+	}
+	return _db;
 }
 
+// Shared: parse → check → transform → analyze pipeline (incremental via Trans-Am)
 export function compileSource(input: string): NodeResult {
-	return compileProgram(input);
+	const db = getDb();
+	const result = dbCompileSource(db, input);
+	if (result === null) return Result.err("Compilation failed");
+	return Result.ok(result);
+}
+
+// JS codegen: parse → check → transform → generateJS (skip analyzer)
+type StringResult = Result<string, string>;
+
+export function compileToJS(input: string): StringResult {
+	const db = getDb();
+	const transformed = dbCompileToJSNode(db, input);
+	if (transformed === null) return Result.err("Compilation failed");
+	const jsCode = generateJS(transformed);
+	return Result.ok(jsCode);
 }
 
 // Multi-module compilation: loads all modules from entry point,
@@ -66,7 +86,7 @@ export function compileProject(entryPath: string): NodeResult {
 	// Transform entry module
 	const entryMod = findModule(graph, entryPath);
 	if (entryMod === null) return Result.err("Entry module not found");
-	return compileProgram(entryMod.source);
+	return compileSource(entryMod.source);
 }
 
 // ===== Test Helpers =====
@@ -180,4 +200,5 @@ function main(): void {
 	testParseProgram("function greet(name: string): void { name; }");
 
 	console.log("\nStatement parser tests passed!");
+
 }

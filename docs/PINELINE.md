@@ -3,6 +3,9 @@
 6 phases from `compile.zig:295`. Phases 1-2 = frontend (shared with LSP). Phases 3-5 = backend (compilation only).
 
 ```
+                                              [Monomorphize]  (for C and Raiser)
+                                                    |
+                                                    v
 Source.ms --> [1 Parse] --> [2 TypeCheck] --> [3 Transform] --> [4 Analyzer] --> [5 Codegen] --> output
                  \_______________\________________\________________\_______________/
                                     Trans-Am (incremental query cache)

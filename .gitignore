@@ -5,3 +5,4 @@
 out/
 
 src/**/*.c
+!src/raiser/dispatch.c

@@ -278,30 +278,30 @@ Codegen's `rc.ms` only: (1) recognizes DRC-injected call names, (2) determines `
 
 ## Implementation Order
 
-### Phase 5a: Foundation (~800 lines)
-1. `c/context.ms` — CGen, CProc, CBlock, CLoc, sections, getTemp
-2. `c/names.ms` — name mangling, identifier sanitization
-3. `c/literals.ms` — string pool, number formatting
-4. `c/types.ms` — basic type mapping (primitives, enums, interfaces, classes)
+### Phase 5a: Foundation (~800 lines) — DONE
+1. ~~`c/context.ms` — CGen, CProc, CBlock, CLoc, sections, getTemp~~ DONE
+2. ~~`c/names.ms` — name mangling, identifier sanitization~~ DONE
+3. ~~`c/literals.ms` — string pool, number formatting~~ DONE
+4. ~~`c/types.ms` — basic type mapping (primitives, enums, interfaces, classes)~~ DONE
 
-### Phase 5b: Builtin Lowering (~400 lines)
-5. `transform/c/builtinLower.ms` — rewrite builtin MemberExpr/CallExpr to C-compatible AST
+### Phase 5b: Builtin Lowering (~400 lines) — DONE
+5. ~~`transform/c/builtinLower.ms` — rewrite builtin MemberExpr/CallExpr to C-compatible AST~~ DONE
 6. ~~Symbol field additions — `runtimeName`, `builtinKind` on Symbol interface~~ DONE
 7. ~~collectPass decorator reading — extract `@runtime`/`@builtin` args~~ DONE
 
-### Phase 5c: Expressions + Statements (~1200 lines)
-8. `c/expressions.ms` — all expression kinds with CLoc
-9. `c/statements.ms` — if, while, do-while, block, break, continue, return
-10. `c/calls.ms` — function calls, argument passing
+### Phase 5c: Expressions + Statements (~1200 lines) — DONE
+8. ~~`c/expressions.ms` — all expression kinds (returns string snippets, not CLoc — value-type adaptation)~~ DONE
+9. ~~`c/statements.ms` — if, while, do-while, block, break, continue, return, throw, try/catch~~ DONE
+10. ~~`c/calls.ms` — call emission integrated into expressions.ms (genCallExpr)~~ DONE
 
-### Phase 5d: Declarations (~800 lines)
-11. `c/declarations.ms` — functions, classes, interfaces, enums
-12. `c/index.ms` — `generateC()` entry point, section assembly
+### Phase 5d: Declarations (~800 lines) — DONE
+11. ~~`c/declarations.ms` — functions, classes, interfaces, enums, exports, globals~~ DONE
+12. ~~`c/index.ms` — `generateC()` entry point, section assembly~~ DONE
 
 ### Phase 5e: Advanced (~400 lines)
-13. try/catch (setjmp/longjmp)
-14. Closure emission (env struct + lifted functions)
-15. Generic monomorphization
+13. ~~try/catch (setjmp/longjmp) — implemented in statements.ms~~ DONE
+14. ~~Closure emission (env struct + lifted functions) — closure pair detection, ms_closure literal, closure vs direct call protocol, arrow function lifting, fnDeclNames pre-pass~~ DONE
+15. Generic monomorphization — BLOCKED: needs checker-level instantiation registry (substituteType/instantiateGeneric exist but no AST duplication infrastructure yet)
 
 Test at each phase with `msc test`. Each file gets inline tests.
 

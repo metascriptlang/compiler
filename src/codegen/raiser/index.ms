@@ -1,0 +1,3 @@
+// Raiser codegen — Hub
+// AST → Raiser bytecode. Parser/AST knowledge lives here, NOT in src/raiser/.
+export { generateRaiser } from "./rgen";
