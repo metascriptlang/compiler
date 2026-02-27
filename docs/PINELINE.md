@@ -4,6 +4,8 @@
 
 ```
 Source.ms --> [1 Parse] --> [2 TypeCheck] --> [3 Transform] --> [4 Analyzer] --> [5 Codegen] --> output
+                 \_______________\________________\________________\_______________/
+                                    Trans-Am (incremental query cache)
 ```
 
 ---
@@ -120,10 +122,8 @@ Self-hosted status: All 3 passes implemented. Multi-module type propagation comp
 - Extension method registry (`ExtensionRegistry`) tracks `function f(this self: Type)` declarations for UFCS-style member resolution
 - Function overload resolution via `scoreCandidate()` in `compat.ms` (TypeRelation scoring: Exact > FromLiteral > Generic > Subtype > IntConv > Convertible > None)
 
-Trans-Am (Salsa-inspired incremental engine) is fully compatible with 3-pass.
-The LSP uses single `checkFile()` queries -- Trans-Am's red-green algorithm,
-macro firewall, and demand-driven queries work regardless of how many internal
-passes the checker uses.
+Trans-Am incremental engine (see §Trans-Am below) is fully compatible with 3-pass.
+Queries work regardless of how many internal passes the checker uses.
 
 Codegen-related concerns (type canonicalization, lifecycle hook synthesis,
 discriminant analysis) are handled as pre-processing when those phases are
@@ -152,9 +152,9 @@ Pre-compute all struct/array/tuple/Result type definitions into a `TypeRegistry`
 
 ## Phase 3: Transforms + Normalization — COMPLETE
 
-Multiple sub-transforms that rewrite the typed AST before codegen. All 22 general-purpose transforms fully implemented with Nim/reference compiler parity. 4 C-backend transforms structurally in place (2 need Phase 4 integration for full functionality).
+Multiple sub-transforms that rewrite the typed AST before codegen. All 27 general-purpose transforms fully implemented with Nim/reference compiler parity. 4 C-backend transforms fully implemented.
 
-### 3a: Self-Hosted Transform Pipeline (22 general-purpose transforms)
+### 3a: Self-Hosted Transform Pipeline (27 general-purpose transforms)
 
 Fixed execution order — each transform may depend on results of earlier ones.
 
@@ -169,23 +169,28 @@ Fixed execution order — each transform may depend on results of earlier ones.
 | 7 | stringTruthiness | `coercion/stringTruthiness.ms` | 1:1 visitor | `if (str)` → `if (str.length > 0)` |
 | 8 | destructuringLower | `desugar/destructuringLower.ms` | 1:N expand | `const [a,b] = f()` → temp + indexed access |
 | 9 | spreadExpand | `desugar/spreadExpand.ms` | 1:1 visitor | `fn(...[a,b])` → `fn(a,b)` (array literal inline) |
-| 10 | forLoopLower | `lowering/forLoopLower.ms` | 1:1 visitor | `for(init;cond;update)` → `{ init; while(cond) { body; update; } }` |
-| 11 | forOfLower | `lowering/forOfLower.ms` | 1:N expand | `for (x of arr)` → while loop with iterator |
-| 12 | resultDesugar | `desugar/resultDesugar.ms` | 1:N expand | `const x = try f` → result check + value extract |
-| 13 | resultFieldCheck | `desugar/resultFieldCheck.ms` | 1:1 visitor | `$result_N.value` → `{ check(r); r.value; }` |
-| 14 | matchLower | `lowering/matchLower.ms` | 1:N expand | `match (x) { ... }` → if/else chain |
-| 15 | tailCallLower | `lowering/tailCallLower.ms` | 1:1 visitor | Tail-recursive calls → while loop with param reassignment |
-| 16 | asyncDesugar | `lowering/asyncDesugar.ms` | custom walk | `await` → `yield`, flip async → generator flag |
-| 17 | generatorLower | `lowering/generatorLower.ms` | custom walk | `function*` → state machine returning iterator object |
-| 18 | lambdaLifting | `lowering/lambdaLifting.ms` | custom walk | Closures with captures → lifted functions + env structs |
-| 19 | extensionMethodLower | `lowering/extensionMethodLower.ms` | 1:1 visitor | `obj.method(args)` → `method(obj, args)` for UFCS extension methods |
-| 20 | subscriptLower | `lowering/subscriptLower.ms` | 1:1 visitor | `obj[idx]` → `` `[]`(obj, idx) ``, `obj[idx]=v` → `` `[]=`(obj, idx, v) `` for custom subscript operators |
-| 21 | dce | `analysis/dce.ms` | 2-tier | Dead code elimination: Level 1 statement-level (endsInNoReturn, dead branch/while) + Level 2 symbol-level mark-sweep reachability |
-| 22 | destructorLifting | `lowering/destructorLifting.ms` | custom walk | Full Nim parity: 6 lifecycle hooks + TypeInfo per type (see below) |
+| 10 | arrayMethodInline | `desugar/arrayMethodInline.ms` | 1:N expand | `arr.map/filter/reduce(fn)` → inline while loops (zero call overhead) |
+| 11 | forLoopLower | `lowering/forLoopLower.ms` | 1:1 visitor | `for(init;cond;update)` → `{ init; while(cond) { body; update; } }` |
+| 12 | forOfLower | `lowering/forOfLower.ms` | 1:N expand | `for (x of arr)` → while loop with iterator |
+| 13 | resultDesugar | `desugar/resultDesugar.ms` | 1:N expand | `const x = try f` → result check + value extract |
+| 14 | resultFieldCheck | `desugar/resultFieldCheck.ms` | 1:1 visitor | `$result_N.value` → `{ check(r); r.value; }` |
+| 15 | matchLower | `lowering/matchLower.ms` | 1:N expand | `match (x) { ... }` → if/else chain |
+| 16 | tailCallLower | `lowering/tailCallLower.ms` | 1:1 visitor | Tail-recursive calls → while loop with param reassignment |
+| 17 | asyncDesugar | `lowering/asyncDesugar.ms` | custom walk | `await` → `yield`, flip async → generator flag |
+| 18 | generatorLower | `lowering/generatorLower.ms` | custom walk | `function*` → state machine returning iterator object |
+| 19 | varHoist | `lowering/varHoist.ms` | custom walk | `var` declarations → hoisted to function scope top (JS semantics) |
+| 20 | lambdaLifting | `lowering/lambdaLifting.ms` | custom walk | Closures with captures → lifted functions + env structs |
+| 21 | rvalueLower | `lowering/rvalueLower.ms` | 1:N expand | `f().method(args)` → `{ const $rval = f(); $rval.method(args); }` — materialize rvalue receivers (evalOnce pattern) |
+| 22 | extensionMethodLower | `lowering/extensionMethodLower.ms` | 1:1 visitor | `obj.method(args)` → `method(obj, args)` for UFCS extension methods |
+| 23 | subscriptLower | `lowering/subscriptLower.ms` | 1:1 visitor | `obj[idx]` → `` `[]`(obj, idx) ``, `obj[idx]=v` → `` `[]=`(obj, idx, v) `` for custom subscript operators |
+| 24 | conditionalExprLower | `lowering/conditionalExprLower.ms` | 1:1 visitor | `a ? b : c;` → `if (a) { b; } else { c; }` in statement position |
+| 25 | updateExprLower | `lowering/updateExprLower.ms` | 1:1 visitor | `x++;` → `x = x + 1;` in statement position |
+| 26 | dce | `analysis/dce.ms` | 2-tier | Dead code elimination: Level 1 statement-level (endsInNoReturn, dead branch/while) + Level 2 symbol-level mark-sweep reachability |
+| 27 | destructorLifting | `lowering/destructorLifting.ms` | custom walk | Full Nim parity: 6 lifecycle hooks + TypeInfo per type (see below) |
 
-Nim `transf.nim` coverage: `transformCase` (matchLower), `liftDeferAux` (deferLower), `transformFor` (forOfLower), `transformAsgn` (destructuringLower), `commonOptimizations` (constantFolding), `forceBool` (stringTruthiness), `lambdalifting.nim` (lambdaLifting), `closureiters.nim` (generatorLower), `liftdestructors.nim` (destructorLifting), `semstmts.nim:endsInNoReturn` + `ic/dce.nim:AliveSyms` (dce). Reference `normalize.zig` Pass 7 coverage: UFCS extension method rewriting (extensionMethodLower). Reference `subscript_lower.zig` coverage: custom `[]`/`[]=` operator lowering (subscriptLower).
+Nim `transf.nim` coverage: `transformCase` (matchLower), `liftDeferAux` (deferLower), `transformFor` (forOfLower), `transformAsgn` (destructuringLower), `commonOptimizations` (constantFolding), `forceBool` (stringTruthiness), `lambdalifting.nim` (lambdaLifting), `closureiters.nim` (generatorLower), `liftdestructors.nim` (destructorLifting), `semstmts.nim:endsInNoReturn` + `ic/dce.nim:AliveSyms` (dce). Reference `normalize.zig` Pass 7 coverage: UFCS extension method rewriting (extensionMethodLower). Reference `subscript_lower.zig` coverage: custom `[]`/`[]=` operator lowering (subscriptLower). Reference `normalize.zig` conditionalExprLower + updateExprLower coverage: ternary→if and ++/-- → assignment in statement position. Reference `rvalue_lower.zig` coverage: rvalue receiver materialization (rvalueLower). Reference `array_map_lower.zig` + `array_method_inline.zig` coverage: map/filter/reduce inline expansion (arrayMethodInline). Reference `var_hoist.zig` coverage: JS-style var declaration hoisting to function scope (varHoist).
 
-**Status: All 22 general transforms COMPLETE.** Full parity with Nim `transf.nim` and reference compiler `transform/pipeline.zig` for all transforms that apply to MetaScript's feature set. See §3d for intentionally skipped transforms.
+**Status: All 27 general transforms COMPLETE.** Full parity with Nim `transf.nim` and reference compiler `transform/pipeline.zig` for all transforms that apply to MetaScript's feature set. See §3d for intentionally skipped transforms.
 
 #### Destructor Lifting — Nim `liftdestructors.nim` Parity
 
@@ -217,9 +222,9 @@ Run after general transforms, only when targeting C backend. Located in `transfo
 | # | Transform | File | What it does | Status |
 |---|-----------|------|-------------|--------|
 | 1 | closureCallMarker | `c/closureCallMarker.ms` | Collect function names for closure vs direct call distinction | Complete |
-| 2 | pointerParam | `c/pointerParam.ms` | Identify pointer-type parameters (interfaces/classes → T* in C) | Complete (heuristic; full type lookup needs checker integration) |
-| 3 | rangeCheckInject | `c/rangeCheckInject.ms` | Tag narrowing casts for runtime range check insertion | Structural stub (needs TypeAssertionData enhancement) |
-| 4 | optionalCoercion | `c/optionalCoercion.ms` | Wrap T returns for T\|null functions (`ms_optional_wrap`) | Partial (explicit null only; full wrapping needs checker) |
+| 2 | pointerParam | `c/pointerParam.ms` | Identify pointer-type parameters (interfaces/classes → T* in C), exports `isPrimitiveTypeName()` | Complete (heuristic + checker integration) |
+| 3 | rangeCheckInject | `c/rangeCheckInject.ms` | `expr as int8` → `ms_chck_range_i8(expr, -128, 127)` for narrowing integer casts | Complete (parser now stores `asType` in TypeAssertionData) |
+| 4 | optionalCoercion | `c/optionalCoercion.ms` | `return null` → `ms_optional_null()`, `return expr` → `ms_optional_wrap(expr)` in T\|null functions | Complete (wraps all returns, recurses into if/else branches) |
 
 ### 3c: Deferred Transforms (Future Phases)
 
@@ -240,19 +245,17 @@ Run after general transforms, only when targeting C backend. Located in `transfo
 | Transform | Reference has it | Reason |
 |-----------|:---:|--------|
 | dateLower | yes | Runtime-specific (Date → ms_date_now). Add when Date runtime exists |
-| arrayMethodInline | yes | Performance optimization (arr.map → inline loop), not correctness |
-| varHoist | yes | JS-only (var hoisting compatibility) |
 | spreadLower | yes | Dynamic `f(...args)` — JS-only (f.apply pattern) |
 | functionInlining | yes | Optimization, not correctness |
 | constantPropagation | yes | Deprecated in reference compiler |
 | logicalShortCircuit | yes | C handles `&&`/`\|\|` natively |
 
-### 3f: Maybe-Needed (Depends on Codegen Strategy)
+### 3f: ~~Maybe-Needed~~ — DONE
 
-| Transform | What | When needed |
-|-----------|------|-------------|
-| conditionalExprLower | ternary → if-stmt | If C codegen can't emit statement-expressions in ternary position |
-| updateExprLower | `x++`/`x--` → assignment + temp | If AST has UpdateExpr nodes and codegen doesn't handle them directly |
+| Transform | What | Status |
+|-----------|------|--------|
+| ~~conditionalExprLower~~ | ~~ternary → if-stmt~~ | DONE — added as step 21 in §3a (statement position only) |
+| ~~updateExprLower~~ | ~~`x++`/`x--` → assignment~~ | DONE — added as step 22 in §3a (statement position only) |
 
 **Input:** Typed AST + symbol table
 **Output:** Transformed AST + alive symbol set
@@ -301,7 +304,7 @@ Deterministic reference counting injection (Nim `injectdestructors` pattern). Di
 
 | Step | When needed |
 |------|-------------|
-| Range check injection | TypeAssertionData enhanced |
+| ~~Range check injection~~ | ~~TypeAssertionData enhanced~~ — DONE (asType field added, rangeCheckInject complete) |
 | Loc flag resolution | Codegen implementation |
 | CFG-based isLastRead | Phase 2 upgrade for cross-block moves |
 
@@ -331,6 +334,40 @@ Write-if-changed pattern (`equalsFile`): preserves mtime when output unchanged f
 ## Phase 6: Stats (optional)
 
 Print compilation statistics: timing per phase, analyzer metrics (variables analyzed, RC ops generated, elision rate), module counts.
+
+---
+
+## Trans-Am: Incremental Computation Engine
+
+Cross-cutting query cache that sits **outside** the pipeline, not between phases. Any phase's result can be a cached query. Salsa-inspired (rust-analyzer pattern).
+
+```
+                          Trans-Am Query Cache
+                    +-------------------------------+
+                    |  file_text ──> parse ──> ...  |
+  setFileText() ──>|  Red-Green verification layer  |──> executeQuery()
+                    |  LRU (user) + Permanent (std) |
+                    +-------------------------------+
+
+  Without Trans-Am:  edit file_A.ms → re-check ALL files
+  With Trans-Am:     edit file_A.ms → re-check ONLY affected queries
+```
+
+**Core idea**: Cache query results with content hashes. On input change, mark queries RED. On access, verify lazily via `tryMarkGreen()` — if a dependency was recomputed but produced identical output (e.g. comment-only edit), dependents stay GREEN without recomputation.
+
+| Concept | What it does |
+|---------|-------------|
+| **Red-Green algorithm** | 3-state verification (GREEN=valid, RED=stale, YELLOW=cycle detection) |
+| **Output hash comparison** | Dependency recomputed but output unchanged → dependents stay GREEN |
+| **Durability** | LOW (user src), MEDIUM (config), HIGH (std/ — skip verification) |
+| **Dependency stack** | Auto-tracks which queries call which via push/pop frames |
+| **Per-query LRU** | parse:128, symbols:512, type_check:2048 (right-sized, not one global cache) |
+
+**Queries**: `file_text` (input) → `parse` → `symbols` → `type_check` → `transform` → `analyze` → `codegen`
+
+**When it matters**: LSP (incremental re-check on keystroke), watch mode, large multi-module projects. Batch `msc build` benefits from skipping unchanged modules. Invisible to single-file `msc run`.
+
+**Self-hosted design**: `src/transam/` — 11 files, ~940 lines Phase 1. Module-per-concern (not god struct). Array-indexed LRU (DRC-safe). Full design doc: `src/transam/CLAUDE.md`.
 
 ---
 
@@ -397,7 +434,7 @@ Layer 4: CHECKER (depends on ast, module, parser, utils)
          │
          ▼
 Layer 5: TRANSFORMS (depends on ast, checker, utils)
-  transform/ (26 files, 22+4 passes) ← imports ast/node, checker/{context,types,symbol}
+  transform/ (28 files, 27+4 passes) ← imports ast/node, checker/{context,types,symbol}
            Each pass: (Node, TransformContext) → Node
            destructorLifting has deep checker access for RC type analysis
          │
@@ -405,6 +442,12 @@ Layer 5: TRANSFORMS (depends on ast, checker, utils)
 Layer 5b: ANALYZER (depends on ast, checker, transform)
   analyzer/ (6 files, ~900 lines)    ← imports ast/node, checker/{context,types,symbol}, transform/{context,util}
            DRC injection: classify → scope → inject → optimize
+         │
+         ▼
+Layer 5c: TRANS-AM (cross-cutting, depends on ast, checker, module)
+  transam/ (11 files, ~940 lines)    ← imports ast/node, checker/{context,types}, module/graph
+           Incremental query cache: red-green verification, LRU, dependency tracking
+           Wraps phases 1-5 as cached queries. Design doc: src/transam/CLAUDE.md
          │
          ▼
 Layer 6: ENTRY POINT (orchestrates all phases)
