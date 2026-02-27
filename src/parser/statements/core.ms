@@ -34,12 +34,17 @@ function parseStatement(state: ParserState): NodeResult {
 		return parseExprStmt(state);
 	}
 
-	// Decorator handling — before match to avoid try-in-match-arm limitation
+	// Decorator / directive handling — before match to avoid try-in-match-arm limitation
 	if (token.kind === TokenKind.At) {
 		const decorators: Node[] = [];
 		while (!isAtEnd(state) && current(state).kind === TokenKind.At) {
 			const dec = try parseMacroInvocation(state);
 			decorators.push(dec);
+		}
+		// Standalone directive: @name(args); — semicolon means no inner declaration
+		if (decorators.length === 1 && !isAtEnd(state) && current(state).kind === TokenKind.Semicolon) {
+			consumeSemicolon(state);
+			return Result.ok(createNode(NodeKind.ExprStmt, { expr: decorators[0] }, token));
 		}
 		const decl = try parseStatement(state);
 		return Result.ok(createNode(NodeKind.DecoratedDecl, {
@@ -194,6 +199,9 @@ testGroup("Decorator/Async Stmt", () => {
 	test("decorator export", () => { check(programOk("@export(\"name\") function f() {}")); });
 	test("decorator inline", () => { check(programOk("@inline function f() {}")); });
 	test("async arrow stmt", () => { check(programOk("const f = async () => 42;")); });
+	test("standalone directive", () => { check(programOk("@emit(\"#include <stdio.h>\");")); });
+	test("directive is ExprStmt", () => { check(stmtKind("@emit(\"code\");") === NodeKind.ExprStmt); });
+	test("directive with multiple args", () => { check(programOk("@target(\"c\", \"wasm\");")); });
 });
 
 testGroup("Stmt Structure", () => {

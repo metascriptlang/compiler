@@ -25,6 +25,8 @@ export interface Symbol {
 	isExported: boolean;
 	location: SourceLocation;
 	overloads: Symbol[];    // non-empty when function has overloads
+	runtimeName: string;    // @runtime("c_name") → "c_name", else ""
+	builtinKind: string;    // @builtin("Name") → "Name", else ""
 }
 
 // ===== Scope =====
@@ -121,6 +123,8 @@ export function makeSymbol(name: string, kind: SymbolKind, symType: Type, mutabl
 		isExported: false,
 		location: { line: 0, column: 0 },
 		overloads: [],
+		runtimeName: "",
+		builtinKind: "",
 	};
 }
 

@@ -19,6 +19,7 @@ export function parseSource(input: string): NodeResult {
 	const state = createState(lr.value);
 	const pr = callStateProgramParser(state);
 	if (state.errors.length > 0) return Result.err(state.errors[0]);
+	if (!pr.ok) return Result.err(pr.error);
 	return Result.ok(pr.value);
 }
 
