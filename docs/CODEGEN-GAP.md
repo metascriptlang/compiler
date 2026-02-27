@@ -128,19 +128,19 @@ Add concat chain detection in builtinLower: walk nested `BinaryExpr(+)` trees wi
 
 ---
 
-### 9. Missing Expression Kinds
+### 9. Missing Expression Kinds — PARTIAL (3/5 correct, 2 need rework)
 
-**Gap**: UpdateExpr (`i++`), NewExpr (`new Foo()`), MoveExpr (`move x`), SpreadExpr (`...arr`) hit `/* unsupported expr */0` fallback (expressions.ms:83).
+Phase 3 native-backend transforms (`transform/native/`) + C codegen handlers implemented. Deep analysis against production compiler architecture revealed correctness issues in MoveExpr and FunctionExpr.
 
-**Why production compilers have it**: These are common language features. `i++` appears in every loop. `new` is how classes are constructed. `move` is the ownership transfer primitive.
+**UpdateExpr — CORRECT.** Phase 3 lowers statement-position `i++` → `i = i + 1`. Expression-position `i++`/`++i` survives to codegen, maps 1:1 to C. Production compilers don't have `++`/`--` (they use `inc(x)`/`dec(x)` as void magic ops emitting `x += 1`). Different syntax, same semantics. Overflow checking on increment is Gap #7, not a concern here.
 
-**Why we don't**: Most should be lowered by Phase 3 transforms before reaching codegen. `i++` → `i = i + 1`, `new Foo(x)` → `Foo_new(x)`, `move x` → assignment + null source. They're gaps in Phase 3, not codegen.
+**NewExpr — ACCEPTABLE, architectural debt.** `newExprLower.ms` lowers `new Foo(args)` → `Foo_new(args)`. Production compilers keep `new` in codegen because: (1) GC-specific dispatch — 4 different allocation paths depending on memory model, (2) type info generated lazily during codegen, intertwined with module state, (3) `sizeof(T)` is a C-level op that transforms can't compute. Our approach works because we have no polymorphic interfaces (no `m_type`), deterministic RC only (no GC mode selection), and constructor functions bake in size. **Loses**: inline sizeof, type info at call site, write-barrier selection. Revisit if we add class inheritance or cycle-aware GC.
 
-**How to close**:
-- `UpdateExpr`: add to expressions.ms — `i++` → `i++`, `++i` → `++i`. Direct C mapping. ~15 lines.
-- `NewExpr`: Phase 3 transform to `ClassName_new(args)` call. ~40 lines in transforms.
-- `MoveExpr`: Phase 3 transform to `dest = src; ms_was_moved(&src)`. ~30 lines.
-- `SpreadExpr`: Phase 3 transform to loop expansion. ~60 lines.
+**MoveExpr — NEEDS REWORK (Gap 15).** `moveExprLower.ms` strips `move x` → `x` before DRC. This is wrong. Production compilers process `move(x)` INSIDE the DRC equivalent (`injectdestructors`), where the marker: (1) forces sink semantics even when `isLastRead` is false, (2) produces errors/warnings when the move is impossible, (3) generates `=sink(dest, x) + wasMoved(x)` — not a simple strip. Our Phase 3 stripping loses the "force sink" signal before DRC ever sees it. See Gap 15.
+
+**FunctionExpr — NEEDS REWORK (Gap 16).** Codegen lifts to module-level with placeholder body (`/* func expr body */`). Production compilers handle ALL function expressions in the lambda lifting transform — by the time codegen runs, inner procs are already top-level. The `nkClosure` expression is just `{funcPtr, envPtr}`, never a function definition. Our placeholder is a workaround for lambda lifting not handling non-capturing FunctionExpr. See Gap 16.
+
+**SpreadExpr — CORRECT for literal spread, but openArray is a separate feature.** Phase 3 `spreadExpand` inlines literal spreads (tuple field expansion, fixed array subscripts). Dynamic array spread emits inner expression. Production compilers don't have JS-style `[...a, ...b]` — they have `openArray` (ptr, len) calling convention, which is fundamentally different and far more impactful. See Gap 17.
 
 ---
 
@@ -219,6 +219,66 @@ Not needed unless we add a tracing GC. Our DRC model is complete without barrier
 
 ---
 
+### 15. Move Marker Must Survive to DRC
+
+**Gap**: `moveExprLower.ms` strips `move x` → `x` in Phase 3, before the DRC analyzer (Phase 4) ever sees it. The move marker's semantic intent is lost.
+
+**Why production compilers keep it**: `move(x)` is not just syntax sugar — it's a **directive to the DRC**. Production compilers process `move()` inside `injectdestructors` where it: (1) strips the `mEnsureMove` wrapper, (2) sets `isEnsureMove` flag, (3) if `isLastRead(x)`: emits `=sink(dest, x) + wasMoved(x)`, (4) if NOT last read: emits `=copy` **with an error** because the programmer explicitly requested a move that can't happen. The marker forces sink semantics and enables diagnostics.
+
+**Why we don't**: We designed `moveExprLower` as a simple Phase 3 strip pass, treating `move` as syntactic. DRC independently decides sink vs copy via `isLastRead`, unaware the programmer intended a move.
+
+**Status: DONE.** Implemented in `inject.ms` — 5 tiers of production-compiler parity:
+
+1. **Core identifier move** (Tier 1): `emitMoveSourceWasMoved()` central helper. 7 code paths patched: `processVarDecl`, `processAssignment`, `processCallArgs`, `emitSaveAssignDestroy`, `markReturnedVarsMoved`, `emitLiteralFieldCopies`, `emitArrayElementCopies`.
+2. **Field/array source** (Tier 2): `classifyMemberFieldRc()`, `classifyArrayElementRc()` — emit `wasMoved` on `move obj.field` and `move arr[i]`.
+3. **Aliased move protection** (Tier 3): `x = move x.field` → capture pattern (tmp = field, zero field, destroy old, assign tmp). Prevents use-after-free.
+4. **errFailedMove diagnostic** (Tier 4): When `move x` used but x is not last-read, emits compile error.
+5. **Literal construction moves** (Tier 6): `{ f: move x }` and `[move x]` emit `wasMoved` + `recordMove` instead of incref.
+
+Tier 5 (first-write sink optimization) deferred — requires DrcContext struct change blocked by DRC gotcha #18.
+
+`moveExprLower.ms` retained in native pipeline as safety net for any MoveExpr that survives past the analyzer.
+
+---
+
+### 16. Lambda Lifting Must Handle All FunctionExpr
+
+**Gap**: Non-capturing `FunctionExpr` nodes survive to codegen, where they're lifted to module-level with a placeholder body (`/* func expr body */`). This is a workaround for circular imports between expressions.ms and statements.ms — codegen can't call `genStmts` from `genExpr`.
+
+**Why production compilers solve this in transforms**: Lambda lifting runs BEFORE codegen as an AST-to-AST transform. It recursively processes ALL inner procs (capturing and non-capturing), stores their transformed bodies on the symbol, and replaces function expressions with either: (a) closure struct `{funcPtr, envPtr}` if captures exist, or (b) plain function pointer reference if no captures. By the time codegen runs, there are no inline function definitions — only references to already-processed top-level functions.
+
+**Why we don't**: Our `lambdaLifting.ms` (Phase 3) focuses on closures with captures. Non-capturing function expressions pass through unchanged, leaving codegen to handle them with the placeholder workaround.
+
+**How to close**:
+1. In `lambdaLifting.ms`, detect ALL `FunctionExpr` nodes (not just capturing ones)
+2. For non-capturing: lift to a module-level `FunctionDecl`, replace the expression with an `Identifier` referencing the lifted function
+3. For capturing: already handled — create env struct + lifted function + closure pair
+4. Remove `genFunctionExpr` from codegen (should never see `FunctionExpr` after transforms)
+~80 lines in lambdaLifting.ms. Codegen safety net: if FunctionExpr somehow survives, emit `/* unlifted func expr */` warning.
+
+---
+
+### 17. openArray Calling Convention (ptr, len)
+
+**Gap**: No zero-copy array/slice passing. Every function receiving variable-length data gets a heap-allocated array with refcount overhead. No way to borrow existing array data without copying.
+
+**Why production compilers have it**: The `openArray(ptr, len)` convention is perhaps the single most impactful C-backend optimization. It enables: (1) zero-copy array passing — `f(stackArr, 5)` with no allocation, (2) zero-copy slicing — `f(arr + 2, 4)` borrows a window, (3) efficient varargs — `f("a", "b", "c")` collects into stack array, passes `(ptr, 3)`, (4) no lifecycle overhead — views don't trigger refcount ops. Production compilers use two representations: **parameter mode** (two C params: `T* data, int dataLen_0`) and **value mode** (struct: `{ T* Field0; int Field1; }`). At call sites, `openArrayLoc` extracts (ptr, len) from arrays, sequences, strings, slices — all zero-copy.
+
+**Why we don't**: MetaScript has JS-style `...spread` (AST-level expansion) but no borrowing/view abstraction. Every array parameter is an owned `T[]` with full lifecycle management. No concept of "borrow this data without owning it."
+
+**How to close**:
+1. **Type system**: Add `openArray<T>` or `Slice<T>` parameter type in checker — marks "borrows (ptr, len), does not own"
+2. **Calling convention**: For `openArray<T>` params, emit two C params: `T* data, int dataLen_0`
+3. **Call site rewriting**: In codegen or a transform, extract (ptr, len) from the argument:
+   - `T[N]` (fixed array) → `(arr, N)` — compile-time constant length
+   - `T[]` (dynamic array) → `(arr.data, arr.len)` — extract fields
+   - `string` → `(str.data, str.len)` — zero-copy char access
+   - `arr[start..end]` (slice) → `(arr.data + start, end - start + 1)` — zero-copy window
+4. **Varargs**: Semantic phase collects `f(a, b, c)` into stack array literal, passes as (ptr, len)
+~200 lines across checker + codegen. Requires runtime array struct to have accessible `data`/`len` fields.
+
+---
+
 ## Summary Table
 
 | # | Gap | Severity | Effort | Blocked? |
@@ -231,13 +291,18 @@ Not needed unless we add a tracing GC. Our DRC model is complete without barrier
 | 6 | Bounds checking | Functional | ~20-100 lines | No |
 | 7 | Overflow checking | Functional | ~80 lines | No |
 | 8 | String concat optimization | Functional | ~80 lines | No |
-| 9 | Missing expression kinds | Functional | ~145 lines | Partial (Phase 3) |
+| 9 | Missing expression kinds | Partial | ~130 lines | Rework: 15, 16 |
 | 10 | Inline arithmetic magic | Optimization | ~30 lines | No |
 | 11 | Sequence construction | Optimization | ~90 lines | No |
 | 12 | NRVO | Optimization | ~100 lines | No |
 | 13 | Multi-module C output | Deferred | ~200 lines | Needs multi-module checker |
 | 14 | Write barriers | N/A | 0 lines | Intentionally omitted (DRC) |
+| 15 | Move marker → DRC (not Phase 3) | Functional | ~50 lines | No |
+| 16 | Lambda lifting all FunctionExpr | Functional | ~80 lines | No |
+| 17 | openArray (ptr, len) convention | Functional | ~200 lines | Needs runtime array struct |
 
-**Total to close all gaps**: ~1500-1800 lines (excluding generic monomorphization checker work)
+**Gap #9 status**: UpdateExpr correct, NewExpr acceptable (debt), SpreadExpr correct. MoveExpr → Gap 15, FunctionExpr → Gap 16, openArray → Gap 17.
+
+**Total to close all gaps**: ~1800-2100 lines (excluding generic monomorphization checker work)
 **Current codegen**: ~2800 lines across 8 files
-**Target**: ~4500 lines for production parity
+**Target**: ~5000 lines for production parity

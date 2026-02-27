@@ -20,7 +20,7 @@ import {
 	ArrayAccessData, ObjectLiteralData, ArrayLiteralData,
 	ConditionalExprData,
 	ExportDeclData, ClassDeclData,
-	DoWhileStmtData,
+	DoWhileStmtData, MoveExprData,
 } from "../ast/node";
 import { Type, TypeKind } from "../checker/types";
 import { lookupSymbol, SymbolKind } from "../checker/symbol";
@@ -61,6 +61,86 @@ function makeWasMovedCall(varName: string, rcInfo: RcInfo, loc: SourceLocation):
 
 function makeCopyAfterInit(destName: string, rcInfo: RcInfo, loc: SourceLocation): Node {
 	return makeRcCallStmt(rcInfo.copyFn, destName, loc);
+}
+
+// RC call on arbitrary expression (for field/element wasMoved)
+function makeRcCallOnExpr(fnName: string, argExpr: Node, loc: SourceLocation): Node {
+	if (fnName === "") return makeExprStmt(makeNull(loc), loc);
+	return makeExprStmt(
+		makeCall(makeIdent(fnName, loc), [argExpr], loc), loc);
+}
+
+function makeWasMovedOnExpr(argExpr: Node, rcInfo: RcInfo, loc: SourceLocation): Node {
+	return makeRcCallOnExpr(rcInfo.wasMovedFn, argExpr, loc);
+}
+
+// ===== MoveExpr Source Classification =====
+
+// Classify RC type of a member expression's field
+function classifyMemberFieldRc(memberExpr: Node, dctx: DrcContext): RcInfo {
+	if (dctx.ctx.checkerCtx === null) return noRcInfo();
+	const md = memberExpr.data as MemberExprData;
+	if (md.object.kind !== NodeKind.Identifier) return noRcInfo();
+	const objName = (md.object.data as IdentifierData).name;
+	const objSym = lookupSymbol(dctx.ctx.checkerCtx.table, objName);
+	if (objSym === null || objSym.symbolType === null) return noRcInfo();
+	const objType = objSym.symbolType;
+	let fi = 0;
+	while (fi < objType.typeNames.length && fi < objType.typeChildren.length) {
+		if (objType.typeNames[fi] === md.property) {
+			return classifyType(objType.typeChildren[fi], dctx.ctx);
+		}
+		fi += 1;
+	}
+	return noRcInfo();
+}
+
+// Classify RC type of an array element
+function classifyArrayElementRc(arrayExpr: Node, dctx: DrcContext): RcInfo {
+	if (dctx.ctx.checkerCtx === null) return noRcInfo();
+	const ad = arrayExpr.data as ArrayAccessData;
+	if (ad.array.kind !== NodeKind.Identifier) return noRcInfo();
+	const arrName = (ad.array.data as IdentifierData).name;
+	const arrSym = lookupSymbol(dctx.ctx.checkerCtx.table, arrName);
+	if (arrSym === null || arrSym.symbolType === null) return noRcInfo();
+	if (arrSym.symbolType.typeReturn === null) return noRcInfo();
+	return classifyType(arrSym.symbolType.typeReturn, dctx.ctx);
+}
+
+// Emit wasMoved on MoveExpr source. Handles identifier, field, array element.
+// checkLastRead: true when idx/stmts context is valid (for errFailedMove diagnostic)
+// Returns true if wasMoved was emitted.
+function emitMoveSourceWasMoved(moveArg: Node, rcInfo: RcInfo, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation, checkLastRead: boolean): boolean {
+	if (moveArg.kind === NodeKind.Identifier) {
+		const srcName = (moveArg.data as IdentifierData).name;
+		// errFailedMove diagnostic: error when move can't actually move
+		if (checkLastRead && !isLastReadSafe(srcName, idx, stmts, dctx)) {
+			if (dctx.ctx.checkerCtx !== null) {
+				dctx.ctx.checkerCtx.errors.push("cannot move '" + srcName + "': variable is still used after this point");
+			}
+		}
+		if (rcInfo.wasMovedFn !== "") {
+			addPending(dctx, makeWasMovedCall(srcName, rcInfo, loc));
+		}
+		recordMoveInContext(dctx, srcName);
+		return true;
+	}
+	if (moveArg.kind === NodeKind.MemberExpr) {
+		const fieldRc = classifyMemberFieldRc(moveArg, dctx);
+		if (fieldRc.needsCleanup && fieldRc.wasMovedFn !== "") {
+			addPending(dctx, makeWasMovedOnExpr(moveArg, fieldRc, loc));
+		}
+		return true;
+	}
+	if (moveArg.kind === NodeKind.ArrayAccess) {
+		const elemRc = classifyArrayElementRc(moveArg, dctx);
+		if (elemRc.needsCleanup && elemRc.wasMovedFn !== "") {
+			addPending(dctx, makeWasMovedOnExpr(moveArg, elemRc, loc));
+		}
+		return true;
+	}
+	// CallExpr / other: source is fresh, no variable to zero
+	return false;
 }
 
 // ===== Scope Cleanup Generation =====
@@ -332,6 +412,14 @@ function processCallArgs(callExpr: Node, idx: number, stmts: Node[], dctx: DrcCo
 				}
 			}
 		}
+		// MoveExpr arg: force move — wasMoved on source, no incref
+		if (arg !== null && arg.kind === NodeKind.MoveExpr) {
+			const md = arg.data as MoveExprData;
+			const paramRc = classifyType(fnType.typeChildren[ai], dctx.ctx);
+			if (paramRc.needsCleanup) {
+				emitMoveSourceWasMoved(md.moveArg, paramRc, idx, stmts, dctx, loc, true);
+			}
+		}
 		// Nested call arg: extract to temp to prevent RC leak
 		if (arg !== null && arg.kind === NodeKind.CallExpr) {
 			const nestedRc = classifyNestedCallReturn(arg, dctx);
@@ -391,6 +479,20 @@ function emitLiteralFieldCopies(literal: Node, outerType: Type, idx: number, stm
 				}
 			}
 		}
+		// MoveExpr field: force move — wasMoved on source, no incref
+		if (prop !== null && prop.kind === NodeKind.MoveExpr) {
+			const md = prop.data as MoveExprData;
+			if (md.moveArg.kind === NodeKind.Identifier) {
+				const srcName = (md.moveArg.data as IdentifierData).name;
+				const fieldRc = classifyType(fieldTypes[fi], dctx.ctx);
+				if (fieldRc.needsCleanup) {
+					if (fieldRc.wasMovedFn !== "") {
+						addPending(dctx, makeWasMovedCall(srcName, fieldRc, loc));
+					}
+					recordMove(dctx, srcName);
+				}
+			}
+		}
 		fi += 1;
 	}
 }
@@ -414,6 +516,19 @@ function emitArrayElementCopies(literal: Node, outerType: Type, idx: number, stm
 				recordMove(dctx, elemName);
 			} else {
 				addPending(dctx, makeRcCallStmt(elemRc.copyFn, elemName, loc));
+			}
+		}
+		// MoveExpr element: force move — wasMoved on source, no incref
+		if (elem !== null && elem.kind === NodeKind.MoveExpr) {
+			const md = elem.data as MoveExprData;
+			if (md.moveArg.kind === NodeKind.Identifier) {
+				const srcName = (md.moveArg.data as IdentifierData).name;
+				if (elemRc.needsCleanup) {
+					if (elemRc.wasMovedFn !== "") {
+						addPending(dctx, makeWasMovedCall(srcName, elemRc, loc));
+					}
+					recordMove(dctx, srcName);
+				}
 			}
 		}
 		ei += 1;
@@ -537,6 +652,13 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	// Conditional expression: needs per-branch RC handling
 	if (init.kind === NodeKind.ConditionalExpr) {
 		return processConditionalInit(stmt, init, d.declName, rcInfo, dctx, loc);
+	}
+
+	// MoveExpr: SINK for dest + wasMoved on source
+	if (init.kind === NodeKind.MoveExpr) {
+		const md = init.data as MoveExprData;
+		emitMoveSourceWasMoved(md.moveArg, rcInfo, idx, stmts, dctx, loc, true);
+		return stmt;
 	}
 
 	// Fresh expression: SINK — ownership transfers directly
@@ -690,10 +812,56 @@ function processAssignment(stmt: Node, assignExpr: Node, idx: number, stmts: Nod
 		return makeBlock(result, loc);
 	}
 
+	// MoveExpr RHS
+	if (rhs.kind === NodeKind.MoveExpr) {
+		const md = rhs.data as MoveExprData;
+
+		// Self-move: x = move x → no-op
+		if (md.moveArg.kind === NodeKind.Identifier) {
+			const srcName = (md.moveArg.data as IdentifierData).name;
+			if (srcName === leftD.name) return stmt;
+		}
+
+		// Aliased move: x = move x.field → destructiveMoveVar pattern
+		if (deepAliases(leftD.name, md.moveArg)) {
+			const tmpName = freshTemp(dctx.ctx, "moveTmp");
+			const captureDecl = makeVarDecl(tmpName, md.moveArg, DeclKind.Const, loc);
+			const moveResult: Node[] = [captureDecl];
+
+			// Zero source BEFORE destroying old dest
+			if (md.moveArg.kind === NodeKind.MemberExpr) {
+				const fieldRc = classifyMemberFieldRc(md.moveArg, dctx);
+				if (fieldRc.needsCleanup && fieldRc.wasMovedFn !== "") {
+					moveResult.push(makeWasMovedOnExpr(md.moveArg, fieldRc, loc));
+				}
+			} else if (md.moveArg.kind === NodeKind.ArrayAccess) {
+				const elemRc = classifyArrayElementRc(md.moveArg, dctx);
+				if (elemRc.needsCleanup && elemRc.wasMovedFn !== "") {
+					moveResult.push(makeWasMovedOnExpr(md.moveArg, elemRc, loc));
+				}
+			} else if (md.moveArg.kind === NodeKind.Identifier) {
+				const srcName = (md.moveArg.data as IdentifierData).name;
+				if (rcInfo.wasMovedFn !== "") {
+					moveResult.push(makeWasMovedCall(srcName, rcInfo, loc));
+				}
+				recordMoveInContext(dctx, srcName);
+			}
+
+			moveResult.push(makeDestroyCall(leftD.name, rcInfo, loc));
+			moveResult.push(makeExprStmt(
+				makeAssign(makeIdent(leftD.name, loc), makeIdent(tmpName, loc), loc), loc));
+			return makeBlock(moveResult, loc);
+		}
+
+		// Non-aliased move
+		emitMoveSourceWasMoved(md.moveArg, rcInfo, idx, stmts, dctx, loc, true);
+		const moveDestroyOld = makeDestroyCall(leftD.name, rcInfo, loc);
+		return makeBlock([moveDestroyOld, stmt], loc);
+	}
+
 	// Fresh RHS: destroy old, then assign
 	if (isFreshExpr(rhs.kind)) {
 		if (deepAliases(leftD.name, rhs)) {
-			// Aliased: save old, assign, destroy saved
 			const tmpName = freshTemp(dctx.ctx, "old");
 			const saveTmp = makeVarDecl(tmpName, makeIdent(leftD.name, loc), DeclKind.Const, loc);
 			const destroyTmp = makeDestroyCall(tmpName, rcInfo, loc);
@@ -708,12 +876,10 @@ function processAssignment(stmt: Node, assignExpr: Node, idx: number, stmts: Nod
 		const rightD = rhs.data as IdentifierData;
 		const destroyOld = makeDestroyCall(leftD.name, rcInfo, loc);
 		if (isLastReadSafe(rightD.name, idx, stmts, dctx)) {
-			// SINK: destroy old, assign, wasMoved source
 			const wmCall = makeWasMovedCall(rightD.name, rcInfo, loc);
 			recordMove(dctx, rightD.name);
 			return makeBlock([destroyOld, stmt, wmCall], loc);
 		}
-		// COPY: destroy old, assign + incref
 		const copyNode = makeCopyAfterInit(leftD.name, rcInfo, loc);
 		return makeBlock([destroyOld, stmt, copyNode], loc);
 	}
@@ -729,6 +895,13 @@ function emitSaveAssignDestroy(stmt: Node, lhsExpr: Node, rhs: Node, rcInfo: RcI
 	const tmpName = freshTemp(dctx.ctx, "old" + prefix);
 	const saveTmp = makeVarDecl(tmpName, lhsExpr, DeclKind.Const, loc);
 	registerVar(dctx, tmpName, rcInfo, false);
+
+	// MoveExpr: SINK for dest + wasMoved on source
+	if (rhs.kind === NodeKind.MoveExpr) {
+		const md = rhs.data as MoveExprData;
+		emitMoveSourceWasMoved(md.moveArg, rcInfo, 0, [] as Node[], dctx, loc, false);
+		return makeBlock([saveTmp, stmt, makeDestroyCall(tmpName, rcInfo, loc)], loc);
+	}
 
 	if (isFreshExpr(rhs.kind)) {
 		return makeBlock([saveTmp, stmt, makeDestroyCall(tmpName, rcInfo, loc)], loc);
@@ -929,6 +1102,11 @@ function markReturnedVarsMoved(node: Node, dctx: DrcContext): void {
 		if (vi !== null && vi.rcInfo.needsCleanup) {
 			recordMoveInContext(dctx, name);
 		}
+		return;
+	}
+	// MoveExpr: unwrap and recurse on inner expression
+	if (node.kind === NodeKind.MoveExpr) {
+		markReturnedVarsMoved((node.data as MoveExprData).moveArg, dctx);
 		return;
 	}
 	// For complex return expressions like `return a + b`, mark all identifiers
@@ -1386,5 +1564,51 @@ testGroup("DRC Inject Loop-Aware Last-Read", () => {
 		popScope(dctx);
 		popScope(dctx);
 		popScope(dctx);
+	});
+});
+
+testGroup("DRC Inject MoveExpr", () => {
+	test("emitMoveSourceWasMoved on identifier emits pending wasMoved", () => {
+		const dctx = testDrcContext("const x: string = \"\";");
+		const rcStr = testStringRc();
+		const loc = testLoc();
+		pushScope(dctx, false, true);
+		registerVar(dctx, "x", rcStr, false);
+		const stmts: Node[] = [makeExprStmt(makeNull(loc), loc)];
+		const handled = emitMoveSourceWasMoved(makeIdent("x", loc), rcStr, 0, stmts, dctx, loc, false);
+		check(handled);
+		check(hasPending(dctx));
+		popScope(dctx);
+	});
+	test("emitMoveSourceWasMoved on call expr returns false (fresh)", () => {
+		const dctx = testDrcContext("function f(): string { return \"\"; }");
+		const rcStr = testStringRc();
+		const loc = testLoc();
+		pushScope(dctx, false, true);
+		const call = makeCall(makeIdent("f", loc), [], loc);
+		const handled = emitMoveSourceWasMoved(call, rcStr, 0, [], dctx, loc, false);
+		check(!handled);
+		check(!hasPending(dctx));
+		popScope(dctx);
+	});
+	test("isFreshExpr includes MoveExpr", () => {
+		check(isFreshExpr(NodeKind.MoveExpr));
+	});
+	test("classifyMemberFieldRc returns RC info for string field", () => {
+		const dctx = testDrcContext("interface Obj { name: string; } const o: Obj = { name: \"\" };");
+		const loc = testLoc();
+		const memberExpr = makeMember(makeIdent("o", loc), "name", loc);
+		const rc = classifyMemberFieldRc(memberExpr, dctx);
+		check(rc.needsCleanup);
+		check(rc.rcKind === RcKind.String);
+	});
+	test("classifyArrayElementRc returns RC info for string array", () => {
+		const dctx = testDrcContext("const arr: string[] = [];");
+		const sym = lookupSymbol(dctx.ctx.checkerCtx.table, "arr");
+		if (sym !== null && sym.symbolType !== null && sym.symbolType.typeReturn !== null) {
+			const rc = classifyType(sym.symbolType.typeReturn, dctx.ctx);
+			check(rc.needsCleanup);
+			check(rc.rcKind === RcKind.String);
+		}
 	});
 });
