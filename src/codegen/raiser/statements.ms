@@ -6,7 +6,7 @@ import {
 	ReturnStmtData, BlockStmtData, ExprStmtData,
 	VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData,
 	ForStmtData, ForOfStmtData,
-	ExportDeclData, DecoratedDeclData
+	ExportDeclData, DecoratedDeclData, ImportDeclData
 } from "../../ast/node";
 import { RaiserOpcode, raiserABC, raiserAx } from "../../raiser/bytecode";
 import { raiserNil, raiserInt } from "../../raiser/value";
@@ -14,7 +14,8 @@ import {
 	RaiserCompState, emitInst, allocReg, emitLoadConst, emitRet,
 	declareLocal, declareLocalStr,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen,
-	pushLoop, popLoop, currentLoop, hasLoop
+	pushLoop, popLoop, currentLoop, hasLoop,
+	resolveBuiltin, registerFunc
 } from "./context";
 import { compileExpr, exprIsString } from "./expressions";
 
@@ -98,8 +99,20 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 		return;
 	}
 
+	if (k === NodeKind.ImportDecl) {
+		compileImportDecl(s, node);
+		return;
+	}
+
 	if (k === NodeKind.ExportDecl) {
 		const d = node.data as ExportDeclData;
+		// export default expr → compile as expression and halt with result
+		if (d.exportedDecl.kind === NodeKind.ExprStmt) {
+			const ed = d.exportedDecl.data as ExprStmtData;
+			const reg = compileExpr(s, ed.expr);
+			emitInst(s, raiserABC(RaiserOpcode.Halt, reg, 0, 0));
+			return;
+		}
 		compileStmt(s, d.exportedDecl);
 		return;
 	}
@@ -298,5 +311,24 @@ function compileForOfStmt(s: RaiserCompState, node: Node): void {
 	const loop = popLoop(s);
 	for (let i = 0; i < loop.breakPatches.items.length; i = i + 1) {
 		patchJumpTo(s, loop.breakPatches.items[i], codeLen(s));
+	}
+}
+
+// --- Import Declaration ---
+// Binds imported names from builtin modules as local variables.
+// Each imported name is resolved from the builtin registry and bound
+// as a local holding the function index (for later Call resolution).
+
+function compileImportDecl(s: RaiserCompState, node: Node): void {
+	const d = node.data as ImportDeclData;
+	// Bind each imported name — check if it's a registered builtin
+	for (let i = 0; i < d.importNames.length; i = i + 1) {
+		const name = d.importNames[i];
+		const funcIdx = resolveBuiltin(s, name);
+		if (funcIdx >= 0) {
+			// Builtin found — register as a named function for direct calls
+			registerFunc(s, name, funcIdx);
+		}
+		// Unknown imports are silently skipped
 	}
 }

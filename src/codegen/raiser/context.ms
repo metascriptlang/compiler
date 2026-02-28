@@ -45,6 +45,18 @@ export interface RaiserFuncMap {
 	items: RaiserFuncEntry[];
 }
 
+// --- Builtin registry ---
+// Maps builtin function names to their function indices in the module.
+
+export interface RaiserBuiltinEntry {
+	name: string;
+	funcIdx: number;
+}
+
+export interface RaiserBuiltinMap {
+	items: RaiserBuiltinEntry[];
+}
+
 // --- Compiler state ---
 // Enum tracking reuses RaiserFuncMap: entries encoded as "EnumName.MemberName" → index.
 
@@ -56,6 +68,7 @@ export interface RaiserCompState {
 	loopStack: RaiserLoopStack;
 	funcMap: RaiserFuncMap;
 	enumMap: RaiserFuncMap;
+	builtins: RaiserBuiltinMap;
 }
 
 export function createCompState(): RaiserCompState {
@@ -69,7 +82,9 @@ export function createCompState(): RaiserCompState {
 	const funcMap: RaiserFuncMap = { items: funcEntries };
 	const enumItems: RaiserFuncEntry[] = [];
 	const enumMap: RaiserFuncMap = { items: enumItems };
-	return { code, constants, nextReg: 0, locals, loopStack, funcMap, enumMap };
+	const builtinItems: RaiserBuiltinEntry[] = [];
+	const builtins: RaiserBuiltinMap = { items: builtinItems };
+	return { code, constants, nextReg: 0, locals, loopStack, funcMap, enumMap, builtins };
 }
 
 export function emitInst(s: RaiserCompState, inst: RaiserInstruction): void {
@@ -233,4 +248,20 @@ export function isEnumName(s: RaiserCompState, name: string): boolean {
 		}
 	}
 	return false;
+}
+
+// --- Builtin helpers ---
+
+export function registerBuiltin(s: RaiserCompState, name: string, funcIdx: number): void {
+	const entry: RaiserBuiltinEntry = { name, funcIdx };
+	s.builtins.items.push(entry);
+}
+
+export function resolveBuiltin(s: RaiserCompState, name: string): number {
+	for (let i = 0; i < s.builtins.items.length; i = i + 1) {
+		if (s.builtins.items[i].name === name) {
+			return s.builtins.items[i].funcIdx;
+		}
+	}
+	return -1;
 }

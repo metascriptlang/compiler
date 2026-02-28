@@ -20,6 +20,21 @@ export interface CliOptions {
 	errorMax: number;
 }
 
+// -- Helpers --
+
+function parseIntStr(s: string): number {
+	let result = 0;
+	let i = 0;
+	while (i < s.length) {
+		const code = s.charCodeAt(i);
+		if (code >= "0".code && code <= "9".code) {
+			result = result * 10 + (code - "0".code);
+		}
+		i += 1;
+	}
+	return result;
+}
+
 // -- Argument parsing --
 
 export function parseArgs(): CliOptions {
@@ -49,23 +64,16 @@ export function parseArgs(): CliOptions {
 
 	if (argv.length <= argStart) return opts;
 
-	const command = argv[argStart];
-
-	// Check for flags first
-	if (command === "--help" || command === "-h") {
-		opts.command = "help";
-		return opts;
-	}
-	if (command === "--version" || command === "-v") {
-		opts.command = "version";
-		return opts;
-	}
-	opts.command = command;
-
-	// Parse remaining args
-	for (let i = argStart + 1; i < argv.length; i += 1) {
+	// Parse all args — positional args become command then inputFile
+	let positionalIdx = 0;
+	let i = argStart;
+	while (i < argv.length) {
 		const arg = argv[i];
-		if (arg.startsWith("--target=")) {
+		if (arg === "--help" || arg === "-h") {
+			opts.command = "help";
+		} else if (arg === "--version" || arg === "-v") {
+			opts.command = "version";
+		} else if (arg.startsWith("--target=")) {
 			const targetStr = arg.slice(9, arg.length);
 			if (targetStr === "js" || targetStr === "javascript") {
 				opts.target = Target.JS;
@@ -84,17 +92,23 @@ export function parseArgs(): CliOptions {
 		} else if (arg === "--verbose") {
 			opts.verbose = true;
 		} else if (arg.startsWith("--error-max=")) {
-			opts.errorMax = parseInt(arg.slice(12, arg.length));
+			opts.errorMax = parseIntStr(arg.slice(12, arg.length));
 		} else if (arg === "--colors=on") {
 			setColorEnabled(true);
 		} else if (arg === "--colors=off" || arg === "--no-color") {
 			setColorEnabled(false);
 		} else if (!arg.startsWith("-")) {
-			opts.inputFile = arg;
+			if (positionalIdx === 0) {
+				opts.command = arg;
+			} else {
+				opts.inputFile = arg;
+			}
+			positionalIdx += 1;
 		} else {
 			console.log(error("error") + ": unknown option '" + bold(arg) + "'");
 			exit(1);
 		}
+		i += 1;
 	}
 
 	return opts;

@@ -28,6 +28,11 @@ export function printUsage(): void {
 	console.log("  " + cyan("-v") + ", " + cyan("--version") + "         Show version");
 	console.log("  " + cyan("--target") + "=<c|js>       Target backend " + dim("(default: c)"));
 	console.log("  " + cyan("--output") + "=<file>       Output file path");
+	console.log("  " + cyan("-t") + ", " + cyan("--time") + "            Show compilation timing");
+	console.log("  " + cyan("--verbose") + "             Verbose phase output");
+	console.log("  " + cyan("--error-max") + "=<N>       Stop after N errors " + dim("(0 = all)"));
+	console.log("  " + cyan("--colors") + "=<on|off>     Force color output on/off");
+	console.log("  " + cyan("--no-color") + "            Disable color output");
 	console.log("");
 	console.log(yellow("EXAMPLES:"));
 	console.log("  msc compile hello.ms                    " + dim("# Compile to C (default)"));

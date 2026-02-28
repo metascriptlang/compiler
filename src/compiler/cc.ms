@@ -61,12 +61,41 @@ export function compileC(cFile: string, outBinary: string, extraFlags: string): 
 	return exec(cmd);
 }
 
-// Derive default output path from input .ms file path.
-// replaceExt("foo.ms", ".c") → "foo.c"
-// replaceExt("foo.ms", "") → "foo"
-export function replaceExt(inputFile: string, newExt: string): string {
-	if (inputFile.endsWith(".ms")) {
-		return inputFile.slice(0, inputFile.length - 3) + newExt;
+// Compile a .c file to an object file only (-c flag, no linking).
+// Returns 0 on success, non-zero on failure.
+export function compileCFile(cFile: string, oFile: string, extraFlags: string): number {
+	let cmd = getCcachePrefix() + "clang";
+	cmd = cmd + " -std=c11 -O2 -w";
+
+	const rtDir = resolveRuntime();
+	if (rtDir !== "") {
+		cmd = cmd + " -I" + rtDir;
 	}
-	return inputFile + newExt;
+
+	cmd = cmd + " -c " + cFile + " -o " + oFile;
+	if (extraFlags !== "") cmd = cmd + " " + extraFlags;
+	return exec(cmd);
+}
+
+// Link object files + runtime into a binary.
+// oFileList: space-separated list of .o file paths
+// Returns 0 on success, non-zero on failure.
+export function linkObjects(oFileList: string, outBinary: string, extraFlags: string): number {
+	let cmd = getCcachePrefix() + "clang";
+
+	const rtDir = resolveRuntime();
+	if (rtDir !== "") {
+		cmd = cmd + " " + join(rtDir, "io.c");
+	}
+
+	cmd = cmd + " " + oFileList;
+	cmd = cmd + " -o " + outBinary;
+	cmd = cmd + " -lm";
+	if (extraFlags !== "") cmd = cmd + " " + extraFlags;
+	return exec(cmd);
+}
+
+// Get the runtime directory path (for -I include path).
+export function getRuntimeDir(): string {
+	return resolveRuntime();
 }

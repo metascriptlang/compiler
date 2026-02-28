@@ -354,6 +354,25 @@ export function heapObjectSetField(heap: RaiserObjectHeap, handle: number, name:
 	obj.fields.push(field);
 }
 
+// --- Object field convenience accessors ---
+// These let the host read typed config fields from a VM result object.
+
+export function heapObjectGetString(heap: RaiserObjectHeap, handle: number, field: string): string {
+	const val = heapObjectGetField(heap, handle, field);
+	return val.strVal;
+}
+
+export function heapObjectGetInt(heap: RaiserObjectHeap, handle: number, field: string): number {
+	const val = heapObjectGetField(heap, handle, field);
+	return val.intVal;
+}
+
+export function heapObjectGetObjectHandle(heap: RaiserObjectHeap, handle: number, field: string): number {
+	const val = heapObjectGetField(heap, handle, field);
+	if (val.kind === RaiserValueKind.Object) return val.intVal;
+	return -1;
+}
+
 // --- Object Heap Tests ---
 
 testGroup("RaiserObjectHeap", () => {

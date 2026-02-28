@@ -1,6 +1,6 @@
 // MetaScript Compiler CLI — Individual commands (check, dump-*, pipeline, run, test, fmt)
 
-import { exit, exec } from "std/process";
+import { exit, exec, clockMs } from "std/process";
 import { lex } from "../lexer/index";
 import { formatToken } from "../lexer/token";
 import { parseSource } from "../parser/statements/validation";
@@ -15,8 +15,8 @@ import { generateJS } from "../codegen/js/index";
 import { generateC } from "../codegen/c/index";
 import { transformForNative } from "../transform/native/index";
 import { createTransformContextWithChecker } from "../transform/context";
-import { Target } from "./options";
-import { readSource, writeOutput, printErrorsAndExit } from "./io";
+import { CliOptions, Target } from "./options";
+import { readSource, writeOutput, printErrorsAndExit, printTiming, verboseLog } from "./io";
 import { compileC } from "./cc";
 import { error, success, bold, cyan, dim, green, red, yellow, path } from "../utils/color";
 
@@ -30,8 +30,10 @@ export function cmdDumpTokens(filePath: string): void {
 		exit(1);
 	}
 	const tokens = result.value;
-	for (let i = 0; i < tokens.length; i += 1) {
+	let i = 0;
+	while (i < tokens.length) {
 		console.log(formatToken(tokens[i]));
+		i += 1;
 	}
 }
 
@@ -46,14 +48,17 @@ export function cmdDumpAst(filePath: string): void {
 	}
 	const program = result.value;
 	const pd = program.data as ProgramData;
-	for (let i = 0; i < pd.programStmts.length; i += 1) {
+	let i = 0;
+	while (i < pd.programStmts.length) {
 		printNode(pd.programStmts[i], 0);
+		i += 1;
 	}
 }
 
 // -- check --
 
-export function cmdCheck(filePath: string): void {
+export function cmdCheck(filePath: string, opts: CliOptions): void {
+	const t0 = clockMs();
 	const source = readSource(filePath);
 	const parseResult = parseSource(source);
 	if (!parseResult.ok) {
@@ -67,8 +72,9 @@ export function cmdCheck(filePath: string): void {
 	} else {
 		const count = errorCount(ctx);
 		console.log(error("Found " + count + " type error(s)") + ":");
-		printErrorsAndExit(ctx, "  ");
+		printErrorsAndExit(ctx, "  ", opts.errorMax);
 	}
+	if (opts.showTime) printTiming("checked", t0);
 }
 
 // -- pipeline --
@@ -94,8 +100,10 @@ export function cmdPipeline(filePath: string): void {
 	if (hasErrors(checkerCtx)) {
 		const count = errorCount(checkerCtx);
 		console.log("  " + red(count + " error(s)") + ":");
-		for (let i = 0; i < checkerCtx.errors.length; i += 1) {
+		let i = 0;
+		while (i < checkerCtx.errors.length) {
 			console.log("    " + checkerCtx.errors[i]);
+			i += 1;
 		}
 	} else {
 		console.log("  " + green("OK") + " " + dim("no errors"));
@@ -121,9 +129,11 @@ export function cmdPipeline(filePath: string): void {
 
 // -- run --
 
-export function cmdRun(filePath: string, target: Target): void {
+export function cmdRun(filePath: string, opts: CliOptions): void {
+	const t0 = clockMs();
 	const source = readSource(filePath);
 
+	if (opts.verbose) verboseLog("parse " + filePath);
 	const parseResult = parseSource(source);
 	if (!parseResult.ok) {
 		console.log(error("parse error") + ": " + parseResult.error);
@@ -131,38 +141,44 @@ export function cmdRun(filePath: string, target: Target): void {
 	}
 	const program = parseResult.value;
 
+	if (opts.verbose) verboseLog("check");
 	const checkerCtx = checkProgram(program);
 	if (hasErrors(checkerCtx)) {
-		printErrorsAndExit(checkerCtx, "type error: ");
+		printErrorsAndExit(checkerCtx, "type error: ", opts.errorMax);
 	}
 
-	const transformed = transformProgram(program, checkerCtx, target === Target.JS);
+	if (opts.verbose) verboseLog("transform");
+	const transformed = transformProgram(program, checkerCtx, opts.target === Target.JS);
 
-	if (target === Target.JS) {
+	if (opts.target === Target.JS) {
+		if (opts.verbose) verboseLog("codegen js");
 		const jsCode = generateJS(transformed);
 		const tmpFile = "/tmp/_msc_run.js";
 		writeOutput(tmpFile, jsCode);
+		if (opts.showTime) printTiming("compiled", t0);
 		const code = exec("node " + tmpFile);
-
 		exit(code);
 	} else {
+		if (opts.verbose) verboseLog("transform (native)");
 		const nativeCtx = createTransformContextWithChecker(checkerCtx);
 		const nativeTransformed = transformForNative(transformed, nativeCtx);
+		if (opts.verbose) verboseLog("analyze (DRC)");
 		const analyzed = analyzeProgram(nativeTransformed, checkerCtx);
+		if (opts.verbose) verboseLog("codegen c");
 		const cCode = generateC(analyzed, checkerCtx, filePath);
 		const tmpC = "/tmp/_msc_run.c";
 		const tmpBin = "/tmp/_msc_run";
 		writeOutput(tmpC, cCode);
 
+		if (opts.verbose) verboseLog("clang");
 		const buildCode = compileC(tmpC, tmpBin, checkerCtx.compilerFlags);
 		if (buildCode !== 0) {
 			console.log(error("error") + ": clang compilation failed " + dim("(exit " + buildCode + ")"));
-	
 			exit(1);
 		}
 
+		if (opts.showTime) printTiming("compiled", t0);
 		const runCode = exec(tmpBin);
-
 		exit(runCode);
 	}
 }

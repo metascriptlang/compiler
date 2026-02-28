@@ -11,7 +11,11 @@
 //   execute(ctx);                // macro sees build.ms results
 
 import { test, check, testGroup } from "std/testing";
-import { RaiserValue, RaiserValueKind, raiserNil, raiserInt, raiserToString, raiserIsNil } from "./value";
+import {
+	RaiserValue, RaiserValueKind, raiserNil, raiserInt, raiserToString, raiserIsNil,
+	RaiserArrayHeap, createArrayHeap,
+	RaiserObjectHeap, createObjectHeap
+} from "./value";
 import { RaiserModule, makeTestModule } from "./module";
 import { RaiserOpcode, RaiserInstruction, raiserABC, raiserABx } from "./bytecode";
 import { RaiserVM, execModule } from "./vm";
@@ -23,7 +27,8 @@ export interface RaiserContext {
 	hasModule: boolean;
 	lastResult: RaiserValue;
 	lastOutput: string;
-	// TODO: persistent register state / global table for cross-execution state
+	arrayHeap: RaiserArrayHeap;
+	objectHeap: RaiserObjectHeap;
 }
 
 export function createContext(): RaiserContext {
@@ -31,7 +36,9 @@ export function createContext(): RaiserContext {
 	const haltConsts: RaiserValue[] = [raiserNil()];
 	const emptyMod = makeTestModule(haltCode, haltConsts);
 	const nilResult = raiserNil();
-	return { mod: emptyMod, hasModule: false, lastResult: nilResult, lastOutput: "" };
+	const arrayHeap = createArrayHeap();
+	const objectHeap = createObjectHeap();
+	return { mod: emptyMod, hasModule: false, lastResult: nilResult, lastOutput: "", arrayHeap, objectHeap };
 }
 
 export function load(ctx: RaiserContext, mod: RaiserModule): void {
@@ -44,6 +51,8 @@ export function execute(ctx: RaiserContext): boolean {
 	const vm = execModule(ctx.mod);
 	ctx.lastResult = vm.exitValue;
 	ctx.lastOutput = vm.output;
+	ctx.arrayHeap = vm.arrayHeap;
+	ctx.objectHeap = vm.objectHeap;
 	return true;
 }
 

@@ -302,12 +302,78 @@ Tier 5 (first-write sink optimization) deferred — requires DrcContext struct c
 | 15 | ~~Move marker → DRC~~ | ~~DONE~~ | ~~200 lines~~ | ~~Completed~~ |
 | 16 | ~~Lambda lifting all FunctionExpr~~ | ~~DONE~~ | ~~482 lines~~ | ~~Completed~~ |
 | 17 | openArray (ptr, len) convention | Functional | ~200 lines | Needs runtime array struct |
+| 18 | JS string encoding (UTF-8 vs UTF-16) | JS Backend | ~200 lines | No |
+| 19 | JS performance & bundle optimization | JS Backend | ~350 lines | No |
 
 **Gap #9 status**: ~~All 5 expression kinds done.~~ UpdateExpr correct, NewExpr acceptable (debt), SpreadExpr correct, ~~MoveExpr → Gap 15 (DONE)~~, ~~FunctionExpr → Gap 16 (DONE)~~. openArray → Gap 17 (separate feature).
 
 **Total to close remaining gaps**: ~1000-1200 lines (gaps 3, 5, 6, 7, 8, 10, 11, 12, 13, 17)
 **Current codegen**: ~3200 lines across 9 files (+ ~860 lines pre-codegen transforms)
 **Target**: ~4500 lines for production parity
+
+---
+
+## JS Backend
+
+### 18. Mutable String Design (Cross-Backend)
+
+**Gap**: Strings are immutable. No `s[i] = ch` or `.add()`. Limits systems programming use cases that need in-place string building, character replacement, or buffer accumulation.
+
+**Why Nim does it**: Nim has 1 mutable string type — `var s = "hello"; s[0] = 'H'; s.add(" world")` all work. This is why Nim's JS backend must use char code arrays instead of native JS strings (JS strings are immutable, can't support `s[0] = 'x'`). The char array approach is correct but produces ugly, slow JS output.
+
+**Our design**: Mutable strings as a **TypeScript superset**. All TS string code works unchanged — TypeScript never mutates strings, so allowing mutation breaks nothing. It's purely additive.
+
+```
+// TypeScript-compatible (unchanged behavior)
+const s = "hello";            // const → no mutation, no reassignment (same as TS)
+let t = s.slice(1);           // returns new string (same as TS)
+let u = s + " world";        // concat returns new string (same as TS)
+
+// MetaScript extension (new capability)
+let buf = "hello";
+buf[0] = "H";                // char assignment — TS rejects this, MS allows it
+buf.add(" world");           // in-place append
+// buf is now "Hello world"
+```
+
+**Key rules**:
+- `const` strings: immutable — `const s = "x"; s[0] = "y"` is a compile error (same as TS)
+- `let` strings: reassignable (same as TS) AND mutable (MS extension)
+- `.slice()`, `.replace()`, `+` concat: return new strings (same as TS)
+- `s[i] = ch`, `.add()`: new mutation ops, no existing TS code uses them
+- `s += "more"`: already works as reassignment in TS; C backend can optimize to in-place append
+
+**Per-backend implementation**:
+- **C**: `msString {data, len, cap, rc}` — growable COW buffer (like Nim ARC). `s[i] = ch` mutates in-place. When `rc > 1` (shared), COW copies before mutating. Assignment `b = a` increfs the shared buffer.
+- **JS**: Native `String` preserved — no char arrays, no Nim-style ugliness. Mutation compiles to reassignment: `s[i] = ch` → `s = s.slice(0,i) + ch + s.slice(i+1)`. `s.add(x)` → `s += x`. Same observable behavior, O(n) instead of O(1).
+
+**Encoding**: UTF-8 in C, UTF-16 in JS. Identical behavior for ASCII range (0-127). Non-ASCII diverges — `"😀".length` is 4 bytes in C, 2 code units in JS. Accept this pragmatically: most systems strings are ASCII (paths, identifiers, protocols). Future `Rune` iterator type for explicit codepoint-level Unicode work.
+
+**How to close** (~280 lines):
+1. **Checker** (~30 lines): Allow index-assignment on string type for `let` bindings. Reject for `const`.
+2. **JS transform** (~50 lines): `stringMutationLower` rewrites `s[i] = ch` and `s.add(x)` to slice+concat reassignment.
+3. **C runtime** (~150 lines): `ms_string_set_char()`, `ms_string_add()`, `ms_string_cow()`. COW copy when refcount > 1.
+4. **Tests** (~50 lines): const mutation error, let mutation works, COW isolation, cross-backend ASCII parity.
+
+---
+
+### 19. JS Performance & Bundle Optimization
+
+**Gap**: JS output is functional but not optimized for production deployment. No minification awareness, no tree-shaking validation, no bundle size tracking.
+
+**Why this matters**: Nim's env-object closures were benchmarked against native closures on older engines. Our native-everything approach is correct for modern engines but hasn't been validated. Production JS transpilers (TypeScript, Babel, SWC) all consider output size and runtime performance.
+
+**Specific items**:
+- **Enum IIFE overhead**: Bidirectional mapping (`Color[Color["Red"] = 0] = "Red"`) doubles enum size vs plain integers. Useful for debugging but costly in production.
+- **Result object allocation**: Every `Result.ok(x)` creates `{ ok: true, value: x }` — hot paths may benefit from V8 hidden class optimization or inlining.
+- **Dead export elimination**: ES6 `export` enables tree-shaking by bundlers, but our codegen may emit unused helpers.
+- **Source maps**: No source map generation — debugging JS output requires manual correlation to .ms source.
+- **Bundle size baseline**: No measurement of output size vs input size ratio.
+
+**How to close**:
+Phase 1: Add `--release` flag for JS that emits plain integer enums, skips debug helpers. ~50 lines.
+Phase 2: Source map generation (line mapping from .ms to .js). ~200 lines.
+Phase 3: Benchmark suite comparing MetaScript JS output perf vs hand-written JS. ~100 lines.
 
 ---
 

@@ -3,7 +3,7 @@
 import { exit } from "std/process";
 import { CliOptions, Target, parseArgs } from "./compiler/options";
 import { VERSION, printUsage } from "./compiler/usage";
-import { cmdCompile, cmdBuildJS } from "./compiler/compile";
+import { cmdCompile, cmdBuildJS, cmdBuildC } from "./compiler/compile";
 import { cmdCheck, cmdDumpTokens, cmdDumpAst, cmdPipeline, cmdRun, cmdTest, cmdFmt } from "./compiler/commands";
 import { lspRunServer } from "./compiler/lsp/server";
 import { error, bold, green, cyan } from "./utils/color";
@@ -26,16 +26,16 @@ function main(): number {
 		console.log(bold("Metascript") + " " + green("v" + VERSION));
 	} else if (cmd === "compile") {
 		requireFile(opts);
-		cmdCompile(opts.inputFile, opts.target, opts.outputPath);
+		cmdCompile(opts.inputFile, opts, opts.outputPath);
 	} else if (cmd === "run") {
 		requireFile(opts);
-		cmdRun(opts.inputFile, opts.target);
+		cmdRun(opts.inputFile, opts);
 	} else if (cmd === "test") {
 		requireFile(opts);
 		cmdTest(opts.inputFile);
 	} else if (cmd === "check") {
 		requireFile(opts);
-		cmdCheck(opts.inputFile);
+		cmdCheck(opts.inputFile, opts);
 	} else if (cmd === "dump-tokens") {
 		requireFile(opts);
 		cmdDumpTokens(opts.inputFile);
@@ -55,8 +55,7 @@ function main(): number {
 		if (opts.target === Target.JS) {
 			cmdBuildJS(opts.inputFile, opts.outputPath);
 		} else {
-			console.log(error("error") + ": " + cyan("build") + " for C target not yet implemented");
-			exit(1);
+			cmdBuildC(opts.inputFile, opts);
 		}
 	} else {
 		console.log(error("error") + ": unknown command '" + bold(cmd) + "'");

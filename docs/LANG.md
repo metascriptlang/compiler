@@ -220,6 +220,24 @@ async function fetch(url: string): Promise<string> { ... }
 function* range(n: number): Generator<number> { ... }
 ```
 
+### Extension Methods
+
+```typescript
+// Instance extension — adds method to existing type via `this` receiver
+function trim(this s: string): string { ... }
+"hello ".trim();  // → trim("hello ")
+
+// Generic instance extension
+function push<T>(this arr: T[], elem: T): void { ... }
+names.push("alice");  // T inferred as string from receiver
+
+// Static extension — namespace method via `this typeof`
+function floor(this typeof Math, x: number): number { ... }
+Math.floor(3.7);  // → floor(3.7), receiver not passed
+```
+
+Instance: receiver prepended as first arg at call site. Static: receiver stripped, just a namespaced call.
+
 ### Classes
 ```typescript
 class Point {
