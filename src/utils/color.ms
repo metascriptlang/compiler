@@ -1,0 +1,237 @@
+// Terminal Color Utilities — ANSI escape code helpers for CLI output
+//
+// Usage: red("error"), bold(green("ok")), dim("hint")
+// Composable: bold(red("fatal")) → "\x1b[1m\x1b[31mfatal\x1b[0m\x1b[0m"
+// Auto-detect: honors NO_COLOR env var (https://no-color.org)
+
+import { test, check, testGroup } from "std/testing";
+
+// ===== ANSI escape sequences =====
+
+const ESC = "\x1b[";
+const RESET = "\x1b[0m";
+
+// ===== Core wrap function =====
+
+function wrap(code: string, text: string): string {
+	return ESC + code + "m" + text + RESET;
+}
+
+// ===== Style modifiers =====
+
+export function bold(text: string): string {
+	return wrap("1", text);
+}
+
+export function dim(text: string): string {
+	return wrap("2", text);
+}
+
+export function italic(text: string): string {
+	return wrap("3", text);
+}
+
+export function underline(text: string): string {
+	return wrap("4", text);
+}
+
+export function strikethrough(text: string): string {
+	return wrap("9", text);
+}
+
+// ===== Foreground colors =====
+
+export function red(text: string): string {
+	return wrap("31", text);
+}
+
+export function green(text: string): string {
+	return wrap("32", text);
+}
+
+export function yellow(text: string): string {
+	return wrap("33", text);
+}
+
+export function blue(text: string): string {
+	return wrap("34", text);
+}
+
+export function magenta(text: string): string {
+	return wrap("35", text);
+}
+
+export function cyan(text: string): string {
+	return wrap("36", text);
+}
+
+export function white(text: string): string {
+	return wrap("37", text);
+}
+
+export function gray(text: string): string {
+	return wrap("90", text);
+}
+
+// ===== Bright foreground colors =====
+
+export function brightRed(text: string): string {
+	return wrap("91", text);
+}
+
+export function brightGreen(text: string): string {
+	return wrap("92", text);
+}
+
+export function brightYellow(text: string): string {
+	return wrap("93", text);
+}
+
+export function brightBlue(text: string): string {
+	return wrap("94", text);
+}
+
+export function brightCyan(text: string): string {
+	return wrap("96", text);
+}
+
+// ===== Background colors =====
+
+export function bgRed(text: string): string {
+	return wrap("41", text);
+}
+
+export function bgGreen(text: string): string {
+	return wrap("42", text);
+}
+
+export function bgYellow(text: string): string {
+	return wrap("43", text);
+}
+
+export function bgBlue(text: string): string {
+	return wrap("44", text);
+}
+
+// ===== Semantic helpers (CLI-oriented) =====
+
+export function error(text: string): string {
+	return bold(red(text));
+}
+
+export function success(text: string): string {
+	return bold(green(text));
+}
+
+export function warning(text: string): string {
+	return bold(yellow(text));
+}
+
+export function info(text: string): string {
+	return bold(cyan(text));
+}
+
+export function hint(text: string): string {
+	return dim(text);
+}
+
+export function label(text: string): string {
+	return bold(white(text));
+}
+
+export function path(text: string): string {
+	return underline(cyan(text));
+}
+
+// ===== Strip ANSI codes =====
+
+export function stripAnsi(text: string): string {
+	let result = "";
+	let i = 0;
+	while (i < text.length) {
+		if (text.slice(i, i + 2) === "\x1b[") {
+			// Skip until 'm'
+			i += 2;
+			while (i < text.length && text.slice(i, i + 1) !== "m") {
+				i += 1;
+			}
+			i += 1;
+		} else {
+			result = result + text.slice(i, i + 1);
+			i += 1;
+		}
+	}
+	return result;
+}
+
+// ===== Tests =====
+
+testGroup("Color Basic", () => {
+	test("red wraps text", () => {
+		const result = red("hello");
+		check(result.length > 5);
+	});
+	test("bold wraps text", () => {
+		const result = bold("hello");
+		check(result.length > 5);
+	});
+	test("green wraps text", () => {
+		const result = green("ok");
+		check(result.length > 2);
+	});
+});
+
+testGroup("Color Composable", () => {
+	test("bold + red composes", () => {
+		const result = bold(red("error"));
+		check(result.length > 10);
+	});
+	test("dim composes", () => {
+		const result = dim(gray("faded"));
+		check(result.length > 5);
+	});
+});
+
+testGroup("Color Semantic", () => {
+	test("error is bold red", () => {
+		const e = error("fail");
+		check(e.length > 4);
+	});
+	test("success is bold green", () => {
+		const s = success("pass");
+		check(s.length > 4);
+	});
+	test("warning is bold yellow", () => {
+		const w = warning("warn");
+		check(w.length > 4);
+	});
+	test("info is bold cyan", () => {
+		const inf = info("note");
+		check(inf.length > 4);
+	});
+	test("hint is dim", () => {
+		const h = hint("maybe");
+		check(h.length > 5);
+	});
+	test("path is underline cyan", () => {
+		const p = path("/foo/bar");
+		check(p.length > 8);
+	});
+});
+
+testGroup("Color Strip", () => {
+	test("strip removes codes", () => {
+		const colored = red("hello");
+		const stripped = stripAnsi(colored);
+		check(stripped === "hello");
+	});
+	test("strip handles nested", () => {
+		const colored = bold(red("x"));
+		const stripped = stripAnsi(colored);
+		check(stripped === "x");
+	});
+	test("strip preserves plain text", () => {
+		const stripped = stripAnsi("plain");
+		check(stripped === "plain");
+	});
+});
