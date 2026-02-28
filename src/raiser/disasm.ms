@@ -20,27 +20,43 @@ import {
 // --- Opcode names ---
 
 export function opName(op: RaiserOpcode): string {
-	if (op === RaiserOpcode.LoadConst) return "LoadConst";
-	if (op === RaiserOpcode.Move) return "Move";
-	if (op === RaiserOpcode.LoadNil) return "LoadNil";
-	if (op === RaiserOpcode.AddI64) return "AddI64";
-	if (op === RaiserOpcode.SubI64) return "SubI64";
-	if (op === RaiserOpcode.MulI64) return "MulI64";
-	if (op === RaiserOpcode.DivI64) return "DivI64";
-	if (op === RaiserOpcode.ModI64) return "ModI64";
-	if (op === RaiserOpcode.NegI64) return "NegI64";
-	if (op === RaiserOpcode.BeqI64) return "BeqI64";
-	if (op === RaiserOpcode.BneI64) return "BneI64";
-	if (op === RaiserOpcode.BltI64) return "BltI64";
-	if (op === RaiserOpcode.BleI64) return "BleI64";
-	if (op === RaiserOpcode.BgtI64) return "BgtI64";
-	if (op === RaiserOpcode.BgeI64) return "BgeI64";
-	if (op === RaiserOpcode.Jump) return "Jump";
-	if (op === RaiserOpcode.Call) return "Call";
-	if (op === RaiserOpcode.Ret) return "Ret";
-	if (op === RaiserOpcode.Halt) return "Halt";
-	if (op === RaiserOpcode.Print) return "Print";
-	return "Op(" + op + ")";
+	return match (op) {
+		RaiserOpcode.LoadConst => "LoadConst",
+		RaiserOpcode.Move => "Move",
+		RaiserOpcode.LoadNil => "LoadNil",
+		RaiserOpcode.AddI64 => "AddI64",
+		RaiserOpcode.SubI64 => "SubI64",
+		RaiserOpcode.MulI64 => "MulI64",
+		RaiserOpcode.DivI64 => "DivI64",
+		RaiserOpcode.ModI64 => "ModI64",
+		RaiserOpcode.NegI64 => "NegI64",
+		RaiserOpcode.BeqI64 => "BeqI64",
+		RaiserOpcode.BneI64 => "BneI64",
+		RaiserOpcode.BltI64 => "BltI64",
+		RaiserOpcode.BleI64 => "BleI64",
+		RaiserOpcode.BgtI64 => "BgtI64",
+		RaiserOpcode.BgeI64 => "BgeI64",
+		RaiserOpcode.Jump => "Jump",
+		RaiserOpcode.Call => "Call",
+		RaiserOpcode.Ret => "Ret",
+		RaiserOpcode.Halt => "Halt",
+		RaiserOpcode.Print => "Print",
+		RaiserOpcode.NewArray => "NewArray",
+		RaiserOpcode.LoadIndex => "LoadIndex",
+		RaiserOpcode.StoreIndex => "StoreIndex",
+		RaiserOpcode.ArrayLen => "ArrayLen",
+		RaiserOpcode.ArrayPush => "ArrayPush",
+		RaiserOpcode.NewObject => "NewObject",
+		RaiserOpcode.LoadField => "LoadField",
+		RaiserOpcode.StoreField => "StoreField",
+		RaiserOpcode.ConcatStr => "ConcatStr",
+		RaiserOpcode.EqStr => "EqStr",
+		RaiserOpcode.NeStr => "NeStr",
+		RaiserOpcode.StrLen => "StrLen",
+		RaiserOpcode.StrCharAt => "StrCharAt",
+		RaiserOpcode.StrSlice => "StrSlice",
+		RaiserOpcode.CallIndirect => "CallIndirect",
+	};
 }
 
 // --- Format helpers ---

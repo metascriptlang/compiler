@@ -283,11 +283,14 @@ These are NOT design choices -- they are reference compiler codegen bugs you MUS
 9. **`type` is reserved** -- use `tokenType`, `nodeType`, etc.
 10. **Circular imports silently drop** -- keep mutually recursive functions in the same file.
 11. **C-style `for` in match arms** -- `for (let i = 0; ...)` hits codegen unreachable inside match block arms (not normalized). Use `while` loop or `for..of` instead.
+12. **Statement-form match with block arms** -- `match (x) { "a" => { sideEffect(); }, _ => {} };` silently doesn't execute arms. `return match` with expression/value arms works fine. Use if-else for side-effect dispatch.
 
 ## Match Expression Rules
 
 - String/number/enum literals as patterns: WORKS
-- Block arms with side effects: WORKS (`return match (x) { p => { sideEffect(); value } }`)
+- `return match` with expression arms: WORKS (`return match (x) { "a" => "alpha", _ => "other" }`)
+- Block arms returning a value: WORKS (`return match (x) { p => { compute(); value } }`)
+- **Statement-form match with side-effect-only block arms: FAILS** — arms silently don't execute. Use if-else instead.
 - `"a".code` in patterns: WORKS
 - `try` in match arms: FAILS
 - Bare identifiers in patterns are always BINDINGS (not value comparison)

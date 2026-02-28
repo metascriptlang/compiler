@@ -15,7 +15,7 @@ import {
 	ObjectLiteralData, ArrayLiteralData, ConditionalExprData,
 	SpreadExprData, NewExprData, TryExprData,
 	MatchExprData, MatchStmtData, MatchCaseData,
-	AwaitExprData, YieldExprData, MoveExprData, OutExprData,
+	AwaitExprData, YieldExprData, MoveExprData, OutExprData, HiddenDerefData,
 	TypeAssertionData, DestructuringDeclData, QuoteExprData,
 	MacroInvocationData,
 } from "../ast/node";
@@ -298,6 +298,10 @@ export function mapChildren(node: Node, f: Visitor): void {
 		NodeKind.OutExpr => {
 			const d = node.data as OutExprData;
 			d.outArg = f(d.outArg);
+		},
+		NodeKind.HiddenDeref => {
+			const d = node.data as HiddenDerefData;
+			d.expr = f(d.expr);
 		},
 		NodeKind.TypeAssertion => {
 			const d = node.data as TypeAssertionData;

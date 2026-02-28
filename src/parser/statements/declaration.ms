@@ -2,8 +2,8 @@
 // Uses callback injection via util.ms to avoid circular imports
 
 import { Token, TokenKind } from "../../lexer/token";
-import { Node, NodeKind, DeclKind, NodeData, createNode, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd, skipDestructurePattern, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced } from "../context";
+import { Node, NodeKind, DeclKind, NodeData, createNode, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData } from "../../ast/node";
+import { ParserState, current, advance, isAtEnd, skipDestructurePattern, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, addGenericDecl, updateGenericDeclFields } from "../context";
 import { skipTypeAnnotation } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, skipDefaultValue, skipOptionalType } from "../util";
 import { callBlockParser, callExprParser } from "./callbacks";
@@ -408,6 +408,16 @@ export function parseInterfaceDecl(state: ParserState): NodeResult {
 	}
 
 	advance(state);
+	// Optional generic type parameters: interface Box<T, U>
+	let ifaceIsGeneric = false;
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Lt) {
+		const genericNames = captureGenericParams(state);
+		if (genericNames !== "") {
+			addGenericDecl(nameToken.value, genericNames);
+			ifaceIsGeneric = true;
+		}
+	}
+
 	// Optional extends: interface X extends Y, Z { ... }
 	if (!isAtEnd(state) && current(state).kind === TokenKind.Extends) {
 		advance(state);
@@ -451,6 +461,21 @@ export function parseInterfaceDecl(state: ParserState): NodeResult {
 	}
 
 	advance(state);
+
+	// Store field info in generic decl side-channel for checker to use
+	if (ifaceIsGeneric) {
+		let fnJoined = "";
+		let ftJoined = "";
+		let fi = 0;
+		while (fi < fields.length) {
+			if (fi > 0) { fnJoined = fnJoined + "|"; ftJoined = ftJoined + "|"; }
+			fnJoined = fnJoined + fields[fi];
+			if (fi < fieldTypes.length) { ftJoined = ftJoined + fieldTypes[fi]; }
+			fi += 1;
+		}
+		updateGenericDeclFields(nameToken.value, fnJoined, ftJoined);
+	}
+
 	return Result.ok(createNode(NodeKind.InterfaceDecl, {
 		interfaceName: nameToken.value,
 		interfaceFields: fields,
@@ -478,8 +503,15 @@ export function parseClassDecl(state: ParserState): NodeResult {
 	}
 	advance(state);
 
-	// Optional generic type parameters: class Foo<T> — skip
-	skipGenericParams(state);
+	// Optional generic type parameters: class Foo<T>
+	let classIsGeneric = false;
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Lt) {
+		const genericNames = captureGenericParams(state);
+		if (genericNames !== "") {
+			addGenericDecl(nameToken.value, genericNames);
+			classIsGeneric = true;
+		}
+	}
 
 	// Optional extends: class Foo extends Bar
 	let extendsName = "";
@@ -518,6 +550,24 @@ export function parseClassDecl(state: ParserState): NodeResult {
 
 	if (current(state).kind === TokenKind.RBrace) {
 		advance(state);
+	}
+
+	// Store property info in generic decl side-channel for checker/codegen
+	if (classIsGeneric) {
+		let fnJoined = "";
+		let ftJoined = "";
+		let mi = 0;
+		while (mi < members.length) {
+			const mk = members[mi].kind;
+			if (mk === NodeKind.PropertyDecl) {
+				const pd = members[mi].data as PropertyDeclData;
+				if (fnJoined !== "") { fnJoined = fnJoined + "|"; ftJoined = ftJoined + "|"; }
+				fnJoined = fnJoined + pd.propName;
+				ftJoined = ftJoined + pd.propType;
+			}
+			mi += 1;
+		}
+		updateGenericDeclFields(nameToken.value, fnJoined, ftJoined);
 	}
 
 	return Result.ok(createNode(NodeKind.ClassDecl, {

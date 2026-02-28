@@ -444,9 +444,13 @@ const len = (x as string).length;
 
 ### Move Semantics
 ```typescript
-// Ownership transfer (optimization, skips RC increment)
-return move user;
-const transferred = move data;
+// Transfer ownership — source is zeroed, no copy
+const y = move x;        // y owns the data, x is zeroed (wasMoved)
+return move data;         // caller takes ownership, local zeroed
+consume(move buffer);     // callee takes ownership
+
+// Without move: analyzer decides sink vs copy via last-read analysis
+// With move: forces sink path, source always zeroed
 ```
 
 ### Defer
@@ -522,6 +526,22 @@ macro deriveEq(target) {
     // ... generate equality method at compile-time
     return target;
 }
+
+#### Decorator & Directive Plumbing
+
+Both use `@` syntax. Semicolon disambiguates:
+- **Decorator** = `@name(...) decl` → attaches to next declaration, stored on Symbol
+- **Directive** = `@name(...);` → standalone with `;`, module-level, stored on Program node
+
+Nim uses same `{. .}` syntax with positional disambiguation (parser context). Haxe has no standalone directives — must attach to a declaration. Our semicolon approach is explicit and simple.
+
+**Symbol fields** (DONE):
+- `runtimeName: string` — set by collectPass when `@runtime("c_name")` found
+- `builtinKind: string` — set by collectPass when `@builtin("Name")` found
+
+**Parser** (DONE): `@name(args) decl` → `DecoratedDecl { decorators: [MacroInvocation], decoratedNode }`. `@name(args);` → `ExprStmt { MacroInvocation }` (standalone directive).
+
+**Collector** (DONE): `collectDecorated` in collectPass.ms reads decorators, calls `extractDecoratorInfo` (from `decoratorHelpers.ms`, returns primitives only — DRC #22 safe), sets `sym.runtimeName`/`sym.builtinKind`. Note: nested `@dec export function` crashes DRC at collect time (DRC #23) — parse-level works.
 ```
 
 ### Extern Declarations (FFI)

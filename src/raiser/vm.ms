@@ -1,8 +1,8 @@
 // Raiser VM — Bytecode executor
 // Computed goto dispatch via dispatch.c, if/else fallback for Print.
 
-@include("dispatch.h")
-import { raiser_dispatch_impl } from "./dispatch.h";
+@include("vm_dispatch.h")
+import { raiser_dispatch_impl } from "./vm_dispatch.h";
 
 import { test, check, testGroup } from "std/testing";
 import {
@@ -12,7 +12,10 @@ import {
 } from "./bytecode";
 import {
 	RaiserValue, RaiserValueKind,
-	raiserNil, raiserInt, raiserToInt, raiserToBool, raiserToString, raiserIsNil
+	raiserNil, raiserInt, raiserString, raiserArray, raiserToInt, raiserToBool, raiserToString, raiserIsNil,
+	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapArrayGet, heapArraySet, heapArrayPush, heapArrayLen,
+	RaiserObjectHeap, createObjectHeap, heapAllocObject, heapObjectGetField, heapObjectSetField,
+	raiserObject
 } from "./value";
 import {
 	RaiserModule, RaiserFunction,
@@ -26,6 +29,18 @@ export interface RaiserRegFile {
 	slots: RaiserValue[];
 }
 
+export interface RaiserCallFrame {
+	funcIdx: number;
+	returnIp: number;
+	returnReg: number;
+	baseReg: number;
+}
+
+export interface RaiserCallFrames {
+	items: RaiserCallFrame[];
+}
+
+// Field order matters — dispatch.c mirrors this struct layout exactly.
 export interface RaiserVM {
 	mod: RaiserModule;
 	regs: RaiserRegFile;
@@ -33,6 +48,11 @@ export interface RaiserVM {
 	halted: boolean;
 	exitValue: RaiserValue;
 	output: string;
+	funcIdx: number;
+	baseReg: number;
+	callStack: RaiserCallFrames;
+	arrayHeap: RaiserArrayHeap;
+	objectHeap: RaiserObjectHeap;
 }
 
 export function createVM(mod: RaiserModule): RaiserVM {
@@ -45,7 +65,11 @@ export function createVM(mod: RaiserModule): RaiserVM {
 	}
 	const regs: RaiserRegFile = { slots };
 	const nilVal = raiserNil();
-	return { mod, regs, ip: 0, halted: false, exitValue: nilVal, output: "" };
+	const callFrames: RaiserCallFrame[] = [];
+	const callStack: RaiserCallFrames = { items: callFrames };
+	const arrayHeap = createArrayHeap();
+	const objectHeap = createObjectHeap();
+	return { mod, regs, ip: 0, halted: false, exitValue: nilVal, output: "", funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap };
 }
 
 // --- Register access via helper functions (DRC-safe) ---
@@ -62,26 +86,295 @@ function setReg(vm: RaiserVM, idx: number, val: RaiserValue): void {
 
 export function execModule(mod: RaiserModule): RaiserVM {
 	const vm = createVM(mod);
-	const entry = getModuleEntry(mod);
 
 	while (!vm.halted) {
 		const status = raiser_dispatch_impl(vm);
 		if (status === 0) break;
 
-		// C dispatch returned 1.0 — handle Print in MetaScript
-		const inst = getFuncInst(entry, vm.ip);
+		// C dispatch returned 1.0 — handle Print/Call/Ret in MetaScript
+		const func = getModuleFunc(mod, vm.funcIdx);
+		const inst = getFuncInst(func, vm.ip);
 		vm.ip = vm.ip + 1;
 
 		if (inst.op === RaiserOpcode.Print) {
-			const val = getReg(vm, inst.a);
+			const val = getReg(vm, vm.baseReg + inst.a);
 			const s = raiserToString(val);
 			vm.output = vm.output + s + "\n";
+		} else if (inst.op === RaiserOpcode.Call) {
+			vmHandleCall(vm, inst);
+		} else if (inst.op === RaiserOpcode.CallIndirect) {
+			vmHandleCallIndirect(vm, inst);
+		} else if (inst.op === RaiserOpcode.Ret) {
+			vmHandleRet(vm, inst);
+		} else if (inst.op === RaiserOpcode.NewArray) {
+			vmHandleNewArray(vm, inst);
+		} else if (inst.op === RaiserOpcode.LoadIndex) {
+			vmHandleLoadIndex(vm, inst);
+		} else if (inst.op === RaiserOpcode.StoreIndex) {
+			vmHandleStoreIndex(vm, inst);
+		} else if (inst.op === RaiserOpcode.ArrayLen) {
+			vmHandleArrayLen(vm, inst);
+		} else if (inst.op === RaiserOpcode.ArrayPush) {
+			vmHandleArrayPush(vm, inst);
+		} else if (inst.op === RaiserOpcode.NewObject) {
+			vmHandleNewObject(vm, inst);
+		} else if (inst.op === RaiserOpcode.LoadField) {
+			vmHandleLoadField(vm, mod, inst);
+		} else if (inst.op === RaiserOpcode.StoreField) {
+			vmHandleStoreField(vm, mod, inst);
+		} else if (inst.op === RaiserOpcode.ConcatStr) {
+			vmHandleConcatStr(vm, inst);
+		} else if (inst.op === RaiserOpcode.EqStr) {
+			vmHandleEqStr(vm, inst);
+		} else if (inst.op === RaiserOpcode.NeStr) {
+			vmHandleNeStr(vm, inst);
+		} else if (inst.op === RaiserOpcode.StrLen) {
+			vmHandleStrLen(vm, inst);
+		} else if (inst.op === RaiserOpcode.StrCharAt) {
+			vmHandleStrCharAt(vm, inst);
+		} else if (inst.op === RaiserOpcode.StrSlice) {
+			vmHandleStrSlice(vm, inst);
 		} else {
 			vm.halted = true;
 		}
 	}
 
 	return vm;
+}
+
+// --- Call/Ret handlers ---
+
+function vmHandleCall(vm: RaiserVM, inst: RaiserInstruction): void {
+	const destReg = inst.a;
+	const calleeFuncIdx = inst.b;
+	const argCount = inst.c;
+
+	// Push caller's frame
+	const frame: RaiserCallFrame = {
+		funcIdx: vm.funcIdx,
+		returnIp: vm.ip,
+		returnReg: vm.baseReg + destReg,
+		baseReg: vm.baseReg,
+	};
+	vm.callStack.items.push(frame);
+
+	// Callee's base = right at args (R[dest+1..dest+N] become callee's R[0..N-1])
+	vm.baseReg = vm.baseReg + destReg + 1;
+	vm.funcIdx = calleeFuncIdx;
+	vm.ip = 0;
+}
+
+function vmHandleRet(vm: RaiserVM, inst: RaiserInstruction): void {
+	if (vm.callStack.items.length === 0) {
+		// Top-level return — halt
+		const retVal = getReg(vm, vm.baseReg + inst.a);
+		vm.exitValue.kind = retVal.kind;
+		vm.exitValue.intVal = retVal.intVal;
+		vm.exitValue.floatVal = retVal.floatVal;
+		vm.exitValue.strVal = retVal.strVal;
+		vm.halted = true;
+		return;
+	}
+
+	// Pop frame
+	const len = vm.callStack.items.length;
+	const frame = vm.callStack.items[len - 1];
+	vm.callStack.items.length = len - 1;
+
+	// Deep-copy return value to caller's dest register
+	// (pointer alias via setReg would let subsequent calls corrupt the value)
+	const srcVal = getReg(vm, vm.baseReg + inst.a);
+	const dstVal = getReg(vm, frame.returnReg);
+	dstVal.kind = srcVal.kind;
+	dstVal.intVal = srcVal.intVal;
+	dstVal.floatVal = srcVal.floatVal;
+	dstVal.strVal = srcVal.strVal;
+
+	// Restore caller state
+	vm.funcIdx = frame.funcIdx;
+	vm.baseReg = frame.baseReg;
+	vm.ip = frame.returnIp;
+}
+
+function vmHandleCallIndirect(vm: RaiserVM, inst: RaiserInstruction): void {
+	const destReg = inst.a;
+	const funcIdxReg = getReg(vm, vm.baseReg + inst.b);
+	const calleeFuncIdx = funcIdxReg.intVal;
+	const argCount = inst.c;
+
+	// Push caller's frame
+	const frame: RaiserCallFrame = {
+		funcIdx: vm.funcIdx,
+		returnIp: vm.ip,
+		returnReg: vm.baseReg + destReg,
+		baseReg: vm.baseReg,
+	};
+	vm.callStack.items.push(frame);
+
+	// Callee's base = right at args (R[dest+1..dest+N] become callee's R[0..N-1])
+	vm.baseReg = vm.baseReg + destReg + 1;
+	vm.funcIdx = calleeFuncIdx;
+	vm.ip = 0;
+}
+
+// --- Array opcode handlers ---
+
+function vmHandleNewArray(vm: RaiserVM, inst: RaiserInstruction): void {
+	const handle = heapAllocArray(vm.arrayHeap);
+	const elemCount = inst.b;
+	let i = 0;
+	while (i < elemCount) {
+		const elem = getReg(vm, vm.baseReg + inst.a + 1 + i);
+		heapArrayPush(vm.arrayHeap, handle, elem);
+		i = i + 1;
+	}
+	const arrVal = raiserArray(handle);
+	setReg(vm, vm.baseReg + inst.a, arrVal);
+}
+
+function vmHandleLoadIndex(vm: RaiserVM, inst: RaiserInstruction): void {
+	const arrVal = getReg(vm, vm.baseReg + inst.b);
+	const idxVal = getReg(vm, vm.baseReg + inst.c);
+	const handle = arrVal.intVal;
+	const idx = idxVal.intVal;
+	const elem = heapArrayGet(vm.arrayHeap, handle, idx);
+	// Deep copy to avoid aliasing (same pattern as vmHandleRet)
+	const dst = getReg(vm, vm.baseReg + inst.a);
+	dst.kind = elem.kind;
+	dst.intVal = elem.intVal;
+	dst.floatVal = elem.floatVal;
+	dst.strVal = elem.strVal;
+}
+
+function vmHandleStoreIndex(vm: RaiserVM, inst: RaiserInstruction): void {
+	const arrVal = getReg(vm, vm.baseReg + inst.a);
+	const idxVal = getReg(vm, vm.baseReg + inst.b);
+	const val = getReg(vm, vm.baseReg + inst.c);
+	heapArraySet(vm.arrayHeap, arrVal.intVal, idxVal.intVal, val);
+}
+
+function vmHandleArrayLen(vm: RaiserVM, inst: RaiserInstruction): void {
+	const arrVal = getReg(vm, vm.baseReg + inst.b);
+	const len = heapArrayLen(vm.arrayHeap, arrVal.intVal);
+	const result = raiserInt(len);
+	setReg(vm, vm.baseReg + inst.a, result);
+}
+
+function vmHandleArrayPush(vm: RaiserVM, inst: RaiserInstruction): void {
+	const arrVal = getReg(vm, vm.baseReg + inst.a);
+	const val = getReg(vm, vm.baseReg + inst.b);
+	heapArrayPush(vm.arrayHeap, arrVal.intVal, val);
+}
+
+// --- Object opcode handlers ---
+
+function vmHandleNewObject(vm: RaiserVM, inst: RaiserInstruction): void {
+	const handle = heapAllocObject(vm.objectHeap);
+	const objVal = raiserObject(handle);
+	setReg(vm, vm.baseReg + inst.a, objVal);
+}
+
+function vmHandleLoadField(vm: RaiserVM, mod: RaiserModule, inst: RaiserInstruction): void {
+	const objVal = getReg(vm, vm.baseReg + inst.b);
+	const func = getModuleFunc(mod, vm.funcIdx);
+	const nameVal = getFuncConst(func, inst.c);
+	const fieldName = nameVal.strVal;
+	const elem = heapObjectGetField(vm.objectHeap, objVal.intVal, fieldName);
+	// Deep copy to avoid aliasing
+	const dst = getReg(vm, vm.baseReg + inst.a);
+	dst.kind = elem.kind;
+	dst.intVal = elem.intVal;
+	dst.floatVal = elem.floatVal;
+	dst.strVal = elem.strVal;
+}
+
+function vmHandleStoreField(vm: RaiserVM, mod: RaiserModule, inst: RaiserInstruction): void {
+	const objVal = getReg(vm, vm.baseReg + inst.a);
+	const func = getModuleFunc(mod, vm.funcIdx);
+	const nameVal = getFuncConst(func, inst.b);
+	const fieldName = nameVal.strVal;
+	const val = getReg(vm, vm.baseReg + inst.c);
+	heapObjectSetField(vm.objectHeap, objVal.intVal, fieldName, val);
+}
+
+// --- String opcode handlers ---
+
+function vmHandleConcatStr(vm: RaiserVM, inst: RaiserInstruction): void {
+	const lhs = getReg(vm, vm.baseReg + inst.b);
+	const rhs = getReg(vm, vm.baseReg + inst.c);
+	const result = raiserToString(lhs) + raiserToString(rhs);
+	const dst = getReg(vm, vm.baseReg + inst.a);
+	dst.kind = RaiserValueKind.String;
+	dst.intVal = 0;
+	dst.floatVal = 0.0;
+	dst.strVal = result;
+}
+
+function vmHandleEqStr(vm: RaiserVM, inst: RaiserInstruction): void {
+	const lhs = getReg(vm, vm.baseReg + inst.a);
+	const rhs = getReg(vm, vm.baseReg + inst.b);
+	if (lhs.strVal === rhs.strVal) {
+		vm.ip = vm.ip + inst.c;
+	}
+}
+
+function vmHandleNeStr(vm: RaiserVM, inst: RaiserInstruction): void {
+	const lhs = getReg(vm, vm.baseReg + inst.a);
+	const rhs = getReg(vm, vm.baseReg + inst.b);
+	if (lhs.strVal !== rhs.strVal) {
+		vm.ip = vm.ip + inst.c;
+	}
+}
+
+// --- String method handlers ---
+
+function vmHandleStrLen(vm: RaiserVM, inst: RaiserInstruction): void {
+	const src = getReg(vm, vm.baseReg + inst.b);
+	const dst = getReg(vm, vm.baseReg + inst.a);
+	dst.kind = RaiserValueKind.Int;
+	dst.intVal = src.strVal.length;
+	dst.floatVal = 0.0;
+	dst.strVal = "";
+}
+
+function vmHandleStrCharAt(vm: RaiserVM, inst: RaiserInstruction): void {
+	const src = getReg(vm, vm.baseReg + inst.b);
+	const idx = getReg(vm, vm.baseReg + inst.c);
+	const i = idx.intVal;
+	const dst = getReg(vm, vm.baseReg + inst.a);
+	dst.kind = RaiserValueKind.String;
+	dst.intVal = 0;
+	dst.floatVal = 0.0;
+	if (i >= 0 && i < src.strVal.length) {
+		dst.strVal = src.strVal.slice(i, i + 1);
+	} else {
+		dst.strVal = "";
+	}
+}
+
+function vmHandleStrSlice(vm: RaiserVM, inst: RaiserInstruction): void {
+	const src = getReg(vm, vm.baseReg + inst.b);
+	const startReg = getReg(vm, vm.baseReg + inst.c);
+	const endReg = getReg(vm, vm.baseReg + inst.c + 1);
+	const dst = getReg(vm, vm.baseReg + inst.a);
+	dst.kind = RaiserValueKind.String;
+	dst.intVal = 0;
+	dst.floatVal = 0.0;
+	dst.strVal = src.strVal.slice(startReg.intVal, endReg.intVal);
+}
+
+// --- Test helpers ---
+
+function execBinOp(op: RaiserOpcode, a: number, b: number): RaiserVM {
+	return execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 1, 1),
+			raiserABC(op, 2, 0, 1),
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserInt(a), raiserInt(b)]
+	));
 }
 
 // --- Tests ---
@@ -99,68 +392,23 @@ testGroup("VM execute", () => {
 	});
 
 	test("add: 10 + 20 = 30", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABx(RaiserOpcode.LoadConst, 0, 0),
-				raiserABx(RaiserOpcode.LoadConst, 1, 1),
-				raiserABC(RaiserOpcode.AddI64, 2, 0, 1),
-				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
-			],
-			[raiserInt(10), raiserInt(20)]
-		));
-		check(vm.exitValue.intVal === 30);
+		check(execBinOp(RaiserOpcode.AddI64, 10, 20).exitValue.intVal === 30);
 	});
 
 	test("sub: 100 - 42 = 58", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABx(RaiserOpcode.LoadConst, 0, 0),
-				raiserABx(RaiserOpcode.LoadConst, 1, 1),
-				raiserABC(RaiserOpcode.SubI64, 2, 0, 1),
-				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
-			],
-			[raiserInt(100), raiserInt(42)]
-		));
-		check(vm.exitValue.intVal === 58);
+		check(execBinOp(RaiserOpcode.SubI64, 100, 42).exitValue.intVal === 58);
 	});
 
 	test("mul: 6 * 7 = 42", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABx(RaiserOpcode.LoadConst, 0, 0),
-				raiserABx(RaiserOpcode.LoadConst, 1, 1),
-				raiserABC(RaiserOpcode.MulI64, 2, 0, 1),
-				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
-			],
-			[raiserInt(6), raiserInt(7)]
-		));
-		check(vm.exitValue.intVal === 42);
+		check(execBinOp(RaiserOpcode.MulI64, 6, 7).exitValue.intVal === 42);
 	});
 
 	test("div: 84 / 2 = 42", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABx(RaiserOpcode.LoadConst, 0, 0),
-				raiserABx(RaiserOpcode.LoadConst, 1, 1),
-				raiserABC(RaiserOpcode.DivI64, 2, 0, 1),
-				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
-			],
-			[raiserInt(84), raiserInt(2)]
-		));
-		check(vm.exitValue.intVal === 42);
+		check(execBinOp(RaiserOpcode.DivI64, 84, 2).exitValue.intVal === 42);
 	});
 
 	test("mod: 17 % 5 = 2", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABx(RaiserOpcode.LoadConst, 0, 0),
-				raiserABx(RaiserOpcode.LoadConst, 1, 1),
-				raiserABC(RaiserOpcode.ModI64, 2, 0, 1),
-				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
-			],
-			[raiserInt(17), raiserInt(5)]
-		));
-		check(vm.exitValue.intVal === 2);
+		check(execBinOp(RaiserOpcode.ModI64, 17, 5).exitValue.intVal === 2);
 	});
 
 	test("neg: -(7) = -7", () => {
@@ -269,5 +517,328 @@ testGroup("VM branches", () => {
 			[raiserInt(7), raiserInt(1)]
 		));
 		check(vm.exitValue.intVal === 1);
+	});
+});
+
+testGroup("VM arrays", () => {
+	test("NewArray empty", () => {
+		const vm = execModule(makeTestModule(
+			[
+				raiserABC(RaiserOpcode.NewArray, 0, 0, 0),   // R0 = []
+				raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+			],
+			[]
+		));
+		check(vm.exitValue.kind === RaiserValueKind.Array);
+	});
+
+	test("NewArray with elements + LoadIndex", () => {
+		const vm = execModule(makeTestModule(
+			[
+				raiserABx(RaiserOpcode.LoadConst, 1, 0),     // R1 = 10
+				raiserABx(RaiserOpcode.LoadConst, 2, 1),     // R2 = 20
+				raiserABC(RaiserOpcode.NewArray, 0, 2, 0),   // R0 = [R1, R2] = [10, 20]
+				raiserABx(RaiserOpcode.LoadConst, 3, 2),     // R3 = 1 (index)
+				raiserABC(RaiserOpcode.LoadIndex, 4, 0, 3),  // R4 = R0[1] = 20
+				raiserABC(RaiserOpcode.Halt, 4, 0, 0),
+			],
+			[raiserInt(10), raiserInt(20), raiserInt(1)]
+		));
+		check(vm.exitValue.intVal === 20);
+	});
+
+	test("ArrayLen", () => {
+		const vm = execModule(makeTestModule(
+			[
+				raiserABx(RaiserOpcode.LoadConst, 1, 0),
+				raiserABx(RaiserOpcode.LoadConst, 2, 1),
+				raiserABx(RaiserOpcode.LoadConst, 3, 2),
+				raiserABC(RaiserOpcode.NewArray, 0, 3, 0),   // R0 = [1, 2, 3]
+				raiserABC(RaiserOpcode.ArrayLen, 4, 0, 0),   // R4 = len(R0) = 3
+				raiserABC(RaiserOpcode.Halt, 4, 0, 0),
+			],
+			[raiserInt(1), raiserInt(2), raiserInt(3)]
+		));
+		check(vm.exitValue.intVal === 3);
+	});
+
+	test("ArrayPush + ArrayLen", () => {
+		const vm = execModule(makeTestModule(
+			[
+				raiserABC(RaiserOpcode.NewArray, 0, 0, 0),   // R0 = []
+				raiserABx(RaiserOpcode.LoadConst, 1, 0),     // R1 = 42
+				raiserABC(RaiserOpcode.ArrayPush, 0, 1, 0),  // R0.push(42)
+				raiserABC(RaiserOpcode.ArrayLen, 2, 0, 0),   // R2 = len(R0) = 1
+				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+			],
+			[raiserInt(42)]
+		));
+		check(vm.exitValue.intVal === 1);
+	});
+
+	test("StoreIndex", () => {
+		const vm = execModule(makeTestModule(
+			[
+				raiserABx(RaiserOpcode.LoadConst, 1, 0),     // R1 = 0
+				raiserABC(RaiserOpcode.NewArray, 0, 1, 0),   // R0 = [0]
+				raiserABx(RaiserOpcode.LoadConst, 2, 1),     // R2 = 0 (index)
+				raiserABx(RaiserOpcode.LoadConst, 3, 2),     // R3 = 99 (value)
+				raiserABC(RaiserOpcode.StoreIndex, 0, 2, 3), // R0[0] = 99
+				raiserABC(RaiserOpcode.LoadIndex, 4, 0, 2),  // R4 = R0[0] = 99
+				raiserABC(RaiserOpcode.Halt, 4, 0, 0),
+			],
+			[raiserInt(0), raiserInt(0), raiserInt(99)]
+		));
+		check(vm.exitValue.intVal === 99);
+	});
+});
+
+testGroup("VM objects", () => {
+	test("NewObject + StoreField + LoadField", () => {
+		const vm = execModule(makeTestModule(
+			[
+				raiserABC(RaiserOpcode.NewObject, 0, 0, 0),   // R0 = {}
+				raiserABx(RaiserOpcode.LoadConst, 1, 0),      // R1 = 42
+				raiserABC(RaiserOpcode.StoreField, 0, 1, 1),  // R0.field(K1="x") = R1(42)
+				raiserABC(RaiserOpcode.LoadField, 2, 0, 1),   // R2 = R0.field(K1="x")
+				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+			],
+			[raiserInt(42), raiserString("x")]
+		));
+		check(vm.exitValue.intVal === 42);
+	});
+
+	test("multiple fields", () => {
+		const vm = execModule(makeTestModule(
+			[
+				raiserABC(RaiserOpcode.NewObject, 0, 0, 0),   // R0 = {}
+				raiserABx(RaiserOpcode.LoadConst, 1, 0),      // R1 = 10
+				raiserABC(RaiserOpcode.StoreField, 0, 2, 1),  // R0["x"] = 10
+				raiserABx(RaiserOpcode.LoadConst, 1, 1),      // R1 = 20
+				raiserABC(RaiserOpcode.StoreField, 0, 3, 1),  // R0["y"] = 20
+				raiserABC(RaiserOpcode.LoadField, 2, 0, 3),   // R2 = R0["y"]
+				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+			],
+			[raiserInt(10), raiserInt(20), raiserString("x"), raiserString("y")]
+		));
+		check(vm.exitValue.intVal === 20);
+	});
+
+	test("field update", () => {
+		const vm = execModule(makeTestModule(
+			[
+				raiserABC(RaiserOpcode.NewObject, 0, 0, 0),   // R0 = {}
+				raiserABx(RaiserOpcode.LoadConst, 1, 0),      // R1 = 1
+				raiserABC(RaiserOpcode.StoreField, 0, 2, 1),  // R0["x"] = 1
+				raiserABx(RaiserOpcode.LoadConst, 1, 1),      // R1 = 99
+				raiserABC(RaiserOpcode.StoreField, 0, 2, 1),  // R0["x"] = 99
+				raiserABC(RaiserOpcode.LoadField, 2, 0, 2),   // R2 = R0["x"]
+				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+			],
+			[raiserInt(1), raiserInt(99), raiserString("x")]
+		));
+		check(vm.exitValue.intVal === 99);
+	});
+});
+
+testGroup("VM strings", () => {
+	test("ConcatStr: two strings", () => {
+		const vm = execModule(makeTestModule(
+			[
+				raiserABx(RaiserOpcode.LoadConst, 0, 0),       // R0 = "hello"
+				raiserABx(RaiserOpcode.LoadConst, 1, 1),       // R1 = " world"
+				raiserABC(RaiserOpcode.ConcatStr, 2, 0, 1),    // R2 = "hello world"
+				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+			],
+			[raiserString("hello"), raiserString(" world")]
+		));
+		check(vm.exitValue.strVal === "hello world");
+	});
+
+	test("ConcatStr: int + string coercion", () => {
+		const vm = execModule(makeTestModule(
+			[
+				raiserABx(RaiserOpcode.LoadConst, 0, 0),       // R0 = "val: "
+				raiserABx(RaiserOpcode.LoadConst, 1, 1),       // R1 = 42
+				raiserABC(RaiserOpcode.ConcatStr, 2, 0, 1),    // R2 = "val: 42"
+				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+			],
+			[raiserString("val: "), raiserInt(42)]
+		));
+		check(vm.exitValue.strVal === "val: 42");
+	});
+
+	test("EqStr: equal strings skip", () => {
+		const vm = execModule(makeTestModule(
+			[
+				raiserABx(RaiserOpcode.LoadConst, 0, 0),       // R0 = "abc"
+				raiserABx(RaiserOpcode.LoadConst, 1, 0),       // R1 = "abc"
+				raiserABx(RaiserOpcode.LoadConst, 2, 1),       // R2 = 1 (true)
+				raiserABC(RaiserOpcode.EqStr, 0, 1, 1),        // if R0.str == R1.str skip 1
+				raiserABx(RaiserOpcode.LoadConst, 2, 2),       // R2 = 0 (false)
+				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+			],
+			[raiserString("abc"), raiserInt(1), raiserInt(0)]
+		));
+		check(vm.exitValue.intVal === 1);
+	});
+
+	test("EqStr: unequal strings no skip", () => {
+		const vm = execModule(makeTestModule(
+			[
+				raiserABx(RaiserOpcode.LoadConst, 0, 0),       // R0 = "abc"
+				raiserABx(RaiserOpcode.LoadConst, 1, 1),       // R1 = "def"
+				raiserABx(RaiserOpcode.LoadConst, 2, 2),       // R2 = 1 (true)
+				raiserABC(RaiserOpcode.EqStr, 0, 1, 1),        // if R0.str == R1.str skip 1
+				raiserABx(RaiserOpcode.LoadConst, 2, 3),       // R2 = 0 (false)
+				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+			],
+			[raiserString("abc"), raiserString("def"), raiserInt(1), raiserInt(0)]
+		));
+		check(vm.exitValue.intVal === 0);
+	});
+
+	test("NeStr: unequal strings skip", () => {
+		const vm = execModule(makeTestModule(
+			[
+				raiserABx(RaiserOpcode.LoadConst, 0, 0),       // R0 = "abc"
+				raiserABx(RaiserOpcode.LoadConst, 1, 1),       // R1 = "def"
+				raiserABx(RaiserOpcode.LoadConst, 2, 2),       // R2 = 1 (true)
+				raiserABC(RaiserOpcode.NeStr, 0, 1, 1),        // if R0.str != R1.str skip 1
+				raiserABx(RaiserOpcode.LoadConst, 2, 3),       // R2 = 0 (false)
+				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+			],
+			[raiserString("abc"), raiserString("def"), raiserInt(1), raiserInt(0)]
+		));
+		check(vm.exitValue.intVal === 1);
+	});
+
+	test("StrLen: string length", () => {
+		const vm = execModule(makeTestModule(
+			[
+				raiserABx(RaiserOpcode.LoadConst, 0, 0),       // R0 = "hello"
+				raiserABC(RaiserOpcode.StrLen, 1, 0, 0),       // R1 = len("hello") = 5
+				raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+			],
+			[raiserString("hello")]
+		));
+		check(vm.exitValue.intVal === 5);
+	});
+
+	test("StrCharAt: get character", () => {
+		const vm = execModule(makeTestModule(
+			[
+				raiserABx(RaiserOpcode.LoadConst, 0, 0),       // R0 = "hello"
+				raiserABx(RaiserOpcode.LoadConst, 1, 1),       // R1 = 1
+				raiserABC(RaiserOpcode.StrCharAt, 2, 0, 1),    // R2 = "e"
+				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+			],
+			[raiserString("hello"), raiserInt(1)]
+		));
+		check(vm.exitValue.strVal === "e");
+	});
+
+	test("StrSlice: substring", () => {
+		const vm = execModule(makeTestModule(
+			[
+				raiserABx(RaiserOpcode.LoadConst, 0, 0),       // R0 = "hello world"
+				raiserABx(RaiserOpcode.LoadConst, 1, 1),       // R1 = 0 (start)
+				raiserABx(RaiserOpcode.LoadConst, 2, 2),       // R2 = 5 (end, at C+1)
+				raiserABC(RaiserOpcode.StrSlice, 3, 0, 1),     // R3 = slice(R0, R1, R2)
+				raiserABC(RaiserOpcode.Halt, 3, 0, 0),
+			],
+			[raiserString("hello world"), raiserInt(0), raiserInt(5)]
+		));
+		check(vm.exitValue.strVal === "hello");
+	});
+
+	test("StrLen: empty string", () => {
+		const vm = execModule(makeTestModule(
+			[
+				raiserABx(RaiserOpcode.LoadConst, 0, 0),
+				raiserABC(RaiserOpcode.StrLen, 1, 0, 0),
+				raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+			],
+			[raiserString("")]
+		));
+		check(vm.exitValue.intVal === 0);
+	});
+});
+
+testGroup("VM call indirect", () => {
+	test("CallIndirect basic", () => {
+		// func0: return 42
+		// entry: R0 = funcIdx(0), CallIndirect R1 R0 0 → R1 = func0() = 42
+		const func0Code: RaiserInstruction[] = [
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),  // R0 = 42
+			raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+		];
+		const func0Consts: RaiserValue[] = [raiserInt(42)];
+		const f0 = createRaiserFunction("func0", func0Code, func0Consts, 0, 0, 2);
+
+		const entryCode: RaiserInstruction[] = [
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),  // R0 = 0 (funcIdx of func0)
+			raiserABC(RaiserOpcode.CallIndirect, 1, 0, 0),  // R1 = call func[R0]()
+			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+		];
+		const entryConsts: RaiserValue[] = [raiserInt(0)];
+		const entry = createRaiserFunction("main", entryCode, entryConsts, 0, 0, 4);
+
+		const funcs: RaiserFunction[] = [f0, entry];
+		const mod = createRaiserModule("test", funcs, 1);
+		const vm = execModule(mod);
+		check(vm.exitValue.intVal === 42);
+	});
+
+	test("CallIndirect with args", () => {
+		// func0(a, b): return a + b
+		// entry: R0 = funcIdx(0), R2 = 10, R3 = 20, CallIndirect R1 R0 2 → R1 = func0(10,20) = 30
+		const func0Code: RaiserInstruction[] = [
+			raiserABC(RaiserOpcode.AddI64, 2, 0, 1),  // R2 = R0 + R1
+			raiserABC(RaiserOpcode.Ret, 2, 0, 0),
+		];
+		const func0Consts: RaiserValue[] = [];
+		const f0 = createRaiserFunction("add", func0Code, func0Consts, 2, 0, 4);
+
+		const entryCode: RaiserInstruction[] = [
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),  // R0 = 0 (funcIdx)
+			raiserABx(RaiserOpcode.LoadConst, 2, 1),  // R2 = 10 (arg1 at dest+1)
+			raiserABx(RaiserOpcode.LoadConst, 3, 2),  // R3 = 20 (arg2 at dest+2)
+			raiserABC(RaiserOpcode.CallIndirect, 1, 0, 2),  // R1 = call func[R0](R2, R3)
+			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+		];
+		const entryConsts: RaiserValue[] = [raiserInt(0), raiserInt(10), raiserInt(20)];
+		const entry = createRaiserFunction("main", entryCode, entryConsts, 0, 0, 6);
+
+		const funcs: RaiserFunction[] = [f0, entry];
+		const mod = createRaiserModule("test", funcs, 1);
+		const vm = execModule(mod);
+		check(vm.exitValue.intVal === 30);
+	});
+
+	test("CallIndirect return value", () => {
+		// func0(): return 7
+		// entry: call func0 via indirect, multiply result by 6
+		const func0Code: RaiserInstruction[] = [
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+		];
+		const func0Consts: RaiserValue[] = [raiserInt(7)];
+		const f0 = createRaiserFunction("seven", func0Code, func0Consts, 0, 0, 2);
+
+		const entryCode: RaiserInstruction[] = [
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),  // R0 = 0 (funcIdx)
+			raiserABC(RaiserOpcode.CallIndirect, 1, 0, 0),  // R1 = call func[R0]() = 7
+			raiserABx(RaiserOpcode.LoadConst, 2, 1),  // R2 = 6
+			raiserABC(RaiserOpcode.MulI64, 3, 1, 2),  // R3 = R1 * R2 = 42
+			raiserABC(RaiserOpcode.Halt, 3, 0, 0),
+		];
+		const entryConsts: RaiserValue[] = [raiserInt(0), raiserInt(6)];
+		const entry = createRaiserFunction("main", entryCode, entryConsts, 0, 0, 6);
+
+		const funcs: RaiserFunction[] = [f0, entry];
+		const mod = createRaiserModule("test", funcs, 1);
+		const vm = execModule(mod);
+		check(vm.exitValue.intVal === 42);
 	});
 });

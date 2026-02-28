@@ -2,18 +2,6 @@
 
 import { argv, exit } from "std/process";
 
-// -- String helpers (no indexOf/includes in MetaScript) --
-
-export function startsWith(s: string, prefix: string): boolean {
-	if (s.length < prefix.length) return false;
-	return s.slice(0, prefix.length) === prefix;
-}
-
-export function endsWith(s: string, suffix: string): boolean {
-	if (s.length < suffix.length) return false;
-	return s.slice(s.length - suffix.length, s.length) === suffix;
-}
-
 // -- Types --
 
 export enum Target {
@@ -48,7 +36,7 @@ export function parseArgs(): CliOptions {
 
 	// Determine argument offset: if argv[1] ends with .ms, it's the script path
 	let argStart = 1;
-	if (argv.length > 1 && endsWith(argv[1], ".ms")) {
+	if (argv.length > 1 && argv[1].endsWith(".ms")) {
 		argStart = 2;
 	}
 
@@ -65,14 +53,13 @@ export function parseArgs(): CliOptions {
 		opts.command = "version";
 		return opts;
 	}
-
 	opts.command = command;
 
 	// Parse remaining args
 	let i = argStart + 1;
 	while (i < argv.length) {
 		const arg = argv[i];
-		if (startsWith(arg, "--target=")) {
+		if (arg.startsWith("--target=")) {
 			const targetStr = arg.slice(9, arg.length);
 			if (targetStr === "js" || targetStr === "javascript") {
 				opts.target = Target.JS;
@@ -82,11 +69,11 @@ export function parseArgs(): CliOptions {
 				console.log("Error: unknown target '" + targetStr + "'. Valid: c, js");
 				exit(1);
 			}
-		} else if (startsWith(arg, "--output=")) {
+		} else if (arg.startsWith("--output=")) {
 			opts.outputPath = arg.slice(9, arg.length);
-		} else if (startsWith(arg, "-o=")) {
+		} else if (arg.startsWith("-o=")) {
 			opts.outputPath = arg.slice(3, arg.length);
-		} else if (!startsWith(arg, "-")) {
+		} else if (!arg.startsWith("-")) {
 			opts.inputFile = arg;
 		} else {
 			console.log("Error: unknown option '" + arg + "'");

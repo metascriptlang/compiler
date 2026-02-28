@@ -14,12 +14,23 @@ import {
 	lspResponse, lspNotification, lspErrorResponse
 } from "./protocol";
 import {
+	lspFmtPosition, lspFmtRange, lspFmtLineRange,
+	lspFmtLocation, lspFmtTextEdit,
+	lspFmtCompletionItem, lspFmtHoverResult,
+	lspFmtDiagnostic, lspFmtPublishDiagnostics,
+	lspFmtDocumentSymbol, lspFmtInlayHint,
+	lspFmtSignatureParam, lspFmtSignature, lspFmtSignatureHelp
+} from "./format";
+import {
 	sgTypeToString, sgFindNodeAtPosition, sgGetSymbolAtCursor,
 	sgFormatHover, sgCollectDiagnostics,
 	sgDetectCompletionContext, sgGetPrefix, sgGetCompletionCandidates,
 	sgCollectSymbolsInFile, sgFormatSignature, sgCountActiveParam, sgGetCalleeAtCursor,
 	sgCollectInlayHints,
+	sgCollectReferences, sgFindUsagesByName,
+	sgFormatHoverDoc,
 	SgSuggest, SgSuggestList, SgCompletionKind,
+	SgSymbolRef, SgSymbolRefList,
 	SgDocumentSymbol, SgDocumentSymbolList,
 	SgSignatureInfo, SgSignatureList,
 	SgInlayHint, SgInlayHintList, SgInlayHintKind,
@@ -69,21 +80,15 @@ export function buildDiagnosticsJson(uri: string, source: string): string {
 	while (i < diags.items.length) {
 		if (i > 0) diagArray = diagArray + ",";
 		const d = diags.items[i];
-		// LSP is 0-indexed, compiler is 1-indexed
 		const line = d.line - 1;
-		const col = d.column;
-		diagArray = diagArray + "{\"range\":{\"start\":{\"line\":" + lspJsonNumber(line)
-			+ ",\"character\":" + lspJsonNumber(col)
-			+ "},\"end\":{\"line\":" + lspJsonNumber(line)
-			+ ",\"character\":" + lspJsonNumber(col + 1)
-			+ "}},\"severity\":" + lspJsonNumber(d.severity)
-			+ ",\"source\":\"metascript\""
-			+ ",\"message\":" + lspJsonString(d.message) + "}";
+		diagArray = diagArray + lspFmtDiagnostic(
+			line, d.column, d.column + 1, d.severity, d.message, "metascript", 0
+		);
 		i = i + 1;
 	}
 	diagArray = diagArray + "]";
 
-	return "{\"uri\":" + lspJsonString(uri) + ",\"diagnostics\":" + diagArray + "}";
+	return lspFmtPublishDiagnostics(uri, diagArray);
 }
 
 // ===== Initialize =====
@@ -97,6 +102,8 @@ export function handleInitialize(id: string): string {
 		+ ",\"documentSymbolProvider\":true"
 		+ ",\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]}"
 		+ ",\"inlayHintProvider\":true"
+		+ ",\"referencesProvider\":true"
+		+ ",\"renameProvider\":true"
 		+ "}}";
 	return lspResponse(id, caps);
 }
@@ -160,8 +167,8 @@ export function handleHover(id: string, params: string, store: LspDocumentStore)
 	if (suggest === null) return lspResponse(id, "null");
 
 	const hoverText = sgFormatHover(suggest);
-	const hoverResult = "{\"contents\":{\"kind\":\"markdown\",\"value\":" + lspJsonString(hoverText) + "}}";
-	return lspResponse(id, hoverResult);
+	const hoverDoc = sgFormatHoverDoc(suggest);
+	return lspResponse(id, lspFmtHoverResult(hoverText, hoverDoc));
 }
 
 // ===== Completion =====
@@ -217,6 +224,24 @@ export function handleCompletion(id: string, params: string, store: LspDocumentS
 	return lspFormatCompletionList(id, candidates);
 }
 
+// TypeScript-style sortText: lower number = higher priority
+function lspCompletionSortText(item: SgSuggest): string {
+	if (item.contextFit) return "10";
+	if (item.scopeDepth === 0) return "11";
+	if (item.scopeDepth <= 2) return "12";
+	return "15";
+}
+
+// Commit characters by symbol kind (TypeScript pattern)
+function lspCommitCharsForKind(kind: SymbolKind): string {
+	return match (kind) {
+		SymbolKind.Function | SymbolKind.Method => "(.",
+		SymbolKind.Property => ".,",
+		SymbolKind.Variable | SymbolKind.Parameter => ".,;",
+		_ => "",
+	};
+}
+
 function lspFormatCompletionList(id: string, candidates: SgSuggestList): string {
 	let items = "[";
 	let i = 0;
@@ -225,9 +250,11 @@ function lspFormatCompletionList(id: string, candidates: SgSuggestList): string 
 		const item = candidates.items[i];
 		const typeStr = sgTypeToString(item.symType);
 		const kindNum = lspCompletionItemKind(item.kind);
-		items = items + "{\"label\":" + lspJsonString(item.name)
-			+ ",\"kind\":" + lspJsonNumber(kindNum)
-			+ ",\"detail\":" + lspJsonString(typeStr) + "}";
+		const sortText = lspCompletionSortText(item);
+		const commitChars = lspCommitCharsForKind(item.kind);
+		items = items + lspFmtCompletionItem(
+			item.name, kindNum, typeStr, sortText, false, commitChars
+		);
 		i = i + 1;
 	}
 	items = items + "]";
@@ -250,12 +277,7 @@ export function handleDefinition(id: string, params: string, store: LspDocumentS
 
 	const defLine = suggest.location.line - 1;
 	const defCol = suggest.location.column;
-	const location = "{\"uri\":" + lspJsonString(pos.uri)
-		+ ",\"range\":{\"start\":{\"line\":" + lspJsonNumber(defLine)
-		+ ",\"character\":" + lspJsonNumber(defCol)
-		+ "},\"end\":{\"line\":" + lspJsonNumber(defLine)
-		+ ",\"character\":" + lspJsonNumber(defCol + suggest.name.length)
-		+ "}}}";
+	const location = lspFmtLocation(pos.uri, defLine, defCol, defLine, defCol + suggest.name.length);
 	return lspResponse(id, location);
 }
 
@@ -297,17 +319,7 @@ export function handleDocumentSymbol(id: string, params: string, store: LspDocum
 		const symLine = sym.location.line - 1;
 		const symCol = sym.location.column;
 		const endCol = symCol + sym.name.length;
-		items = items + "{\"name\":" + lspJsonString(sym.name)
-			+ ",\"kind\":" + lspJsonNumber(kindNum)
-			+ ",\"range\":{\"start\":{\"line\":" + lspJsonNumber(symLine)
-			+ ",\"character\":" + lspJsonNumber(symCol)
-			+ "},\"end\":{\"line\":" + lspJsonNumber(symLine)
-			+ ",\"character\":" + lspJsonNumber(endCol)
-			+ "}},\"selectionRange\":{\"start\":{\"line\":" + lspJsonNumber(symLine)
-			+ ",\"character\":" + lspJsonNumber(symCol)
-			+ "},\"end\":{\"line\":" + lspJsonNumber(symLine)
-			+ ",\"character\":" + lspJsonNumber(endCol)
-			+ "}}}";
+		items = items + lspFmtDocumentSymbol(sym.name, kindNum, sym.detail, symLine, symCol, endCol);
 		i = i + 1;
 	}
 	items = items + "]";
@@ -345,20 +357,16 @@ export function handleSignatureHelp(id: string, params: string, store: LspDocume
 		let j = 0;
 		while (j < sig.paramLabels.length) {
 			if (j > 0) paramArray = paramArray + ",";
-			paramArray = paramArray + "{\"label\":" + lspJsonString(sig.paramLabels[j]) + "}";
+			paramArray = paramArray + lspFmtSignatureParam(sig.paramLabels[j]);
 			j = j + 1;
 		}
 		paramArray = paramArray + "]";
-		sigArray = sigArray + "{\"label\":" + lspJsonString(sig.label)
-			+ ",\"parameters\":" + paramArray + "}";
+		sigArray = sigArray + lspFmtSignature(sig.label, paramArray);
 		i = i + 1;
 	}
 	sigArray = sigArray + "]";
 
-	const result = "{\"signatures\":" + sigArray
-		+ ",\"activeSignature\":0"
-		+ ",\"activeParameter\":" + lspJsonNumber(activeParam) + "}";
-	return lspResponse(id, result);
+	return lspResponse(id, lspFmtSignatureHelp(sigArray, 0, activeParam));
 }
 
 // ===== Inlay Hints =====
@@ -390,18 +398,82 @@ export function handleInlayHint(id: string, params: string, store: LspDocumentSt
 		const h = hintsList.items[i];
 		// LSP InlayHintKind: 1 = Type, 2 = Parameter
 		const lspKind = h.hintKind === SgInlayHintKind.Type ? 1 : 2;
-		// LSP position is 0-indexed
-		arr = arr + "{\"position\":{\"line\":" + lspJsonNumber(h.line - 1)
-			+ ",\"character\":" + lspJsonNumber(h.col)
-			+ "},\"label\":" + lspJsonString(h.label)
-			+ ",\"kind\":" + lspJsonNumber(lspKind)
-			+ ",\"paddingLeft\":" + (h.hintKind === SgInlayHintKind.Parameter ? "false" : "false")
-			+ ",\"paddingRight\":" + (h.hintKind === SgInlayHintKind.Parameter ? "true" : "false")
-			+ "}";
+		// Type hints: paddingLeft (space before ": number")
+		// Parameter hints: paddingRight (space after "name:")
+		const padLeft = h.hintKind === SgInlayHintKind.Type;
+		const padRight = h.hintKind === SgInlayHintKind.Parameter;
+		arr = arr + lspFmtInlayHint(h.line - 1, h.col, h.label, lspKind, padLeft, padRight);
 		i = i + 1;
 	}
 	arr = arr + "]";
 	return lspResponse(id, arr);
+}
+
+// ===== References =====
+
+export function handleReferences(id: string, params: string, store: LspDocumentStore): string {
+	const pos = lspExtractPosition(params);
+	const doc = getDocument(store, pos.uri);
+	if (doc === null) return lspResponse(id, "[]");
+
+	const pr = parseSource(doc.source);
+	if (!pr.ok) return lspResponse(id, "[]");
+
+	const ctx = checkProgram(pr.value);
+	const suggest = sgGetSymbolAtCursor(ctx, pr.value, pos.line, pos.col);
+	if (suggest === null) return lspResponse(id, "[]");
+
+	const allRefs = sgCollectReferences(pr.value);
+	const refs = sgFindUsagesByName(allRefs, suggest.name);
+
+	let arr = "[";
+	let i = 0;
+	while (i < refs.items.length) {
+		if (i > 0) arr = arr + ",";
+		const ref = refs.items[i];
+		const refLine = ref.line - 1;
+		arr = arr + lspFmtLocation(pos.uri, refLine, ref.col, refLine, ref.col + ref.nameLen);
+		i = i + 1;
+	}
+	arr = arr + "]";
+	return lspResponse(id, arr);
+}
+
+// ===== Rename =====
+
+export function handleRename(id: string, params: string, store: LspDocumentStore): string {
+	const pos = lspExtractPosition(params);
+	const doc = getDocument(store, pos.uri);
+	if (doc === null) return lspResponse(id, "null");
+
+	const newName = lspGetField(params, "newName");
+	if (newName === "") return lspResponse(id, "null");
+
+	const pr = parseSource(doc.source);
+	if (!pr.ok) return lspResponse(id, "null");
+
+	const ctx = checkProgram(pr.value);
+	const suggest = sgGetSymbolAtCursor(ctx, pr.value, pos.line, pos.col);
+	if (suggest === null) return lspResponse(id, "null");
+
+	const allRefs = sgCollectReferences(pr.value);
+	const refs = sgFindUsagesByName(allRefs, suggest.name);
+
+	if (refs.items.length === 0) return lspResponse(id, "null");
+
+	let edits = "[";
+	let i = 0;
+	while (i < refs.items.length) {
+		if (i > 0) edits = edits + ",";
+		const ref = refs.items[i];
+		const refLine = ref.line - 1;
+		edits = edits + lspFmtTextEdit(refLine, ref.col, ref.col + ref.nameLen, newName);
+		i = i + 1;
+	}
+	edits = edits + "]";
+
+	const result = "{\"changes\":{" + lspJsonString(pos.uri) + ":" + edits + "}}";
+	return lspResponse(id, result);
 }
 
 // ===== Dispatch =====
@@ -419,6 +491,8 @@ export function lspDispatch(method: string, id: string, params: string, store: L
 		"textDocument/documentSymbol" => handleDocumentSymbol(id, params, store),
 		"textDocument/signatureHelp" => handleSignatureHelp(id, params, store),
 		"textDocument/inlayHint" => handleInlayHint(id, params, store),
+		"textDocument/references" => handleReferences(id, params, store),
+		"textDocument/rename" => handleRename(id, params, store),
 		_ => id.length > 0 ? lspErrorResponse(id, -32601, "Method not found") : "",
 	};
 }
@@ -606,5 +680,63 @@ testGroup("LspInlayHint", () => {
 		const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":10,\"character\":0}}}";
 		const r = lspDispatch("textDocument/inlayHint", "42", params, store);
 		check(lspGetNumberField(r, "id") === 42);
+	});
+});
+
+testGroup("LspReferences", () => {
+	test("finds all references to a variable", () => {
+		const store = createDocumentStore();
+		storeDocument(store, "file:///test.ms", "const abc = 1;\nconst def = abc + 2;", 1);
+		// Cursor on "abc" declaration at line 0, col 6
+		const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
+		const r = handleReferences("50", params, store);
+		check(lspGetNumberField(r, "id") === 50);
+		// Should find at least 2 references (decl + usage)
+		check(r.length > 60);
+	});
+	test("unknown doc returns empty", () => {
+		const store = createDocumentStore();
+		const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0}}";
+		const r = handleReferences("51", params, store);
+		check(lspGetNumberField(r, "id") === 51);
+	});
+	test("dispatch routes correctly", () => {
+		const store = createDocumentStore();
+		storeDocument(store, "file:///test.ms", "const x = 1;", 1);
+		const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
+		const r = lspDispatch("textDocument/references", "52", params, store);
+		check(lspGetNumberField(r, "id") === 52);
+	});
+});
+
+testGroup("LspRename", () => {
+	test("renames variable occurrences", () => {
+		const store = createDocumentStore();
+		storeDocument(store, "file:///test.ms", "const abc = 1;\nconst def = abc + 2;", 1);
+		const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6},\"newName\":\"xyz\"}";
+		const r = handleRename("60", params, store);
+		check(lspGetNumberField(r, "id") === 60);
+		// Should contain workspace edit with changes
+		check(r.length > 60);
+	});
+	test("unknown doc returns null", () => {
+		const store = createDocumentStore();
+		const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0},\"newName\":\"xyz\"}";
+		const r = handleRename("61", params, store);
+		check(lspGetNumberField(r, "id") === 61);
+	});
+	test("empty newName returns null", () => {
+		const store = createDocumentStore();
+		storeDocument(store, "file:///test.ms", "const x = 1;", 1);
+		const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
+		const r = handleRename("62", params, store);
+		check(lspGetNumberField(r, "id") === 62);
+	});
+	test("dispatch routes correctly", () => {
+		const store = createDocumentStore();
+		storeDocument(store, "file:///test.ms", "const x = 1;", 1);
+		const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6},\"newName\":\"y\"}";
+		const r = lspDispatch("textDocument/rename", "63", params, store);
+		check(lspGetNumberField(r, "id") === 63);
 	});
 });

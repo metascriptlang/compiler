@@ -63,6 +63,12 @@ function makeCopyAfterInit(destName: string, rcInfo: RcInfo, loc: SourceLocation
 	return makeRcCallStmt(rcInfo.copyFn, destName, loc);
 }
 
+// Sink call: sinkFn(dest, src) — atomic destroy-old + assign-new
+function makeSinkCall(destName: string, srcExpr: Node, rcInfo: RcInfo, loc: SourceLocation): Node {
+	return makeExprStmt(
+		makeCall(makeIdent(rcInfo.sinkFn, loc), [makeIdent(destName, loc), srcExpr], loc), loc);
+}
+
 // RC call on arbitrary expression (for field/element wasMoved)
 function makeRcCallOnExpr(fnName: string, argExpr: Node, loc: SourceLocation): Node {
 	if (fnName === "") return makeExprStmt(makeNull(loc), loc);
@@ -745,22 +751,22 @@ function processExprStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContex
 
 		// Assignment: x = expr (identifier LHS)
 		if (bd.operator === "=" && bd.left.kind === NodeKind.Identifier) {
-			return processAssignment(stmt, expr, idx, stmts, dctx, loc);
+			return processAssignment(stmt, bd, idx, stmts, dctx, loc);
 		}
 
 		// Member assignment: obj.field = expr
 		if (bd.operator === "=" && bd.left.kind === NodeKind.MemberExpr) {
-			return processMemberAssignment(stmt, expr, dctx, loc);
+			return processMemberAssignment(stmt, bd, dctx, loc);
 		}
 
 		// Array index assignment: arr[i] = expr
 		if (bd.operator === "=" && bd.left.kind === NodeKind.ArrayAccess) {
-			return processArrayAssignment(stmt, expr, dctx, loc);
+			return processArrayAssignment(stmt, bd, dctx, loc);
 		}
 
 		// Compound assignment: x += y, s += "text", etc.
 		if (isCompoundAssignOp(bd.operator) && bd.left.kind === NodeKind.Identifier) {
-			return processCompoundAssignment(stmt, expr, idx, stmts, dctx, loc);
+			return processCompoundAssignment(stmt, bd, idx, stmts, dctx, loc);
 		}
 	}
 
@@ -776,9 +782,7 @@ function processExprStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContex
 
 // ===== Assignment Processing =====
 
-function processAssignment(stmt: Node, assignExpr: Node, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation): Node {
-	// Re-extract BinaryExprData from assignExpr (not passed as param — DRC gotcha #2)
-	const bd = assignExpr.data as BinaryExprData;
+function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation): Node {
 	const leftD = bd.left.data as IdentifierData;
 
 	if (dctx.ctx.checkerCtx === null) return stmt;
@@ -855,6 +859,10 @@ function processAssignment(stmt: Node, assignExpr: Node, idx: number, stmts: Nod
 
 		// Non-aliased move
 		emitMoveSourceWasMoved(md.moveArg, rcInfo, idx, stmts, dctx, loc, true);
+		// Sink optimization: single call replaces destroy+assign
+		if (rcInfo.sinkFn !== "") {
+			return makeSinkCall(leftD.name, md.moveArg, rcInfo, loc);
+		}
 		const moveDestroyOld = makeDestroyCall(leftD.name, rcInfo, loc);
 		return makeBlock([moveDestroyOld, stmt], loc);
 	}
@@ -867,6 +875,10 @@ function processAssignment(stmt: Node, assignExpr: Node, idx: number, stmts: Nod
 			const destroyTmp = makeDestroyCall(tmpName, rcInfo, loc);
 			return makeBlock([saveTmp, stmt, destroyTmp], loc);
 		}
+		// Sink optimization for fresh RHS (no alias)
+		if (rcInfo.sinkFn !== "") {
+			return makeSinkCall(leftD.name, rhs, rcInfo, loc);
+		}
 		const destroyOld = makeDestroyCall(leftD.name, rcInfo, loc);
 		return makeBlock([destroyOld, stmt], loc);
 	}
@@ -878,6 +890,10 @@ function processAssignment(stmt: Node, assignExpr: Node, idx: number, stmts: Nod
 		if (isLastReadSafe(rightD.name, idx, stmts, dctx)) {
 			const wmCall = makeWasMovedCall(rightD.name, rcInfo, loc);
 			recordMove(dctx, rightD.name);
+			// Sink optimization for last-read moves
+			if (rcInfo.sinkFn !== "") {
+				return makeBlock([makeSinkCall(leftD.name, rhs, rcInfo, loc), wmCall], loc);
+			}
 			return makeBlock([destroyOld, stmt, wmCall], loc);
 		}
 		const copyNode = makeCopyAfterInit(leftD.name, rcInfo, loc);
@@ -921,9 +937,8 @@ function emitSaveAssignDestroy(stmt: Node, lhsExpr: Node, rhs: Node, rcInfo: RcI
 
 // ===== Member Assignment: obj.field = expr =====
 
-function processMemberAssignment(stmt: Node, assignExpr: Node, dctx: DrcContext, loc: SourceLocation): Node {
+function processMemberAssignment(stmt: Node, bd: BinaryExprData, dctx: DrcContext, loc: SourceLocation): Node {
 	if (dctx.ctx.checkerCtx === null) return stmt;
-	const bd = assignExpr.data as BinaryExprData;
 	const leftMd = bd.left.data as MemberExprData;
 
 	const fieldName = leftMd.property;
@@ -938,9 +953,8 @@ function processMemberAssignment(stmt: Node, assignExpr: Node, dctx: DrcContext,
 
 // ===== Array Index Assignment: arr[i] = expr =====
 
-function processArrayAssignment(stmt: Node, assignExpr: Node, dctx: DrcContext, loc: SourceLocation): Node {
+function processArrayAssignment(stmt: Node, bd: BinaryExprData, dctx: DrcContext, loc: SourceLocation): Node {
 	if (dctx.ctx.checkerCtx === null) return stmt;
-	const bd = assignExpr.data as BinaryExprData;
 	const leftAd = bd.left.data as ArrayAccessData;
 
 	if (leftAd.array.kind !== NodeKind.Identifier) return stmt;
@@ -959,9 +973,8 @@ function processArrayAssignment(stmt: Node, assignExpr: Node, dctx: DrcContext, 
 
 // ===== Compound Assignment: x += y =====
 
-function processCompoundAssignment(stmt: Node, assignExpr: Node, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation): Node {
+function processCompoundAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation): Node {
 	if (dctx.ctx.checkerCtx === null) return stmt;
-	const bd = assignExpr.data as BinaryExprData;
 	const leftD = bd.left.data as IdentifierData;
 
 	const sym = lookupSymbol(dctx.ctx.checkerCtx.table, leftD.name);
@@ -1609,6 +1622,27 @@ testGroup("DRC Inject MoveExpr", () => {
 			const rc = classifyType(sym.symbolType.typeReturn, dctx.ctx);
 			check(rc.needsCleanup);
 			check(rc.rcKind === RcKind.String);
+		}
+	});
+	test("makeSinkCall emits sinkFn call node", () => {
+		const dctx = testDrcContext("const x: string = \"\";");
+		const rcStr = testStringRc();
+		const loc = testLoc();
+		const sink = makeSinkCall("x", makeIdent("y", loc), rcStr, loc);
+		// Should produce an ExprStmt containing a CallExpr with 2 args
+		check(sink.kind === NodeKind.ExprStmt);
+		const sd = sink.data as ExprStmtData;
+		check(sd.expr.kind === NodeKind.CallExpr);
+		const cd = sd.expr.data as CallExprData;
+		check(cd.callee.kind === NodeKind.Identifier);
+		check(cd.arguments.length === 2);
+	});
+	test("sinkFn field populated for string type", () => {
+		const dctx = testDrcContext("const x: string = \"\";");
+		const sym = lookupSymbol(dctx.ctx.checkerCtx.table, "x");
+		if (sym !== null && sym.symbolType !== null) {
+			const rc = classifyType(sym.symbolType, dctx.ctx);
+			check(rc.sinkFn !== "");
 		}
 	});
 });

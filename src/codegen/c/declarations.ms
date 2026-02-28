@@ -22,6 +22,8 @@ import {
 import { genExpr } from "./expressions";
 import { genStmt, genStmts } from "./statements";
 import { mangle, mangleTypeName, mangleFieldName, safeName } from "./names";
+// NOTE: parser/context imports are in index.ms (not here) to avoid DRC union member count issues.
+// genGenericTypeInsts lives in index.ms for the same reason.
 import { test, check, testGroup } from "std/testing";
 
 // ===== genDecl — main declaration dispatcher =====
@@ -115,6 +117,7 @@ function genEnumDecl(g: CGen, node: Node): void {
 
 function genInterfaceDecl(g: CGen, node: Node): void {
 	const d = node.data as InterfaceDeclData;
+
 	const name = mangleTypeName(d.interfaceName);
 
 	if (nameSetHas(g.declaredThings, name)) return;
@@ -137,10 +140,17 @@ function genInterfaceDecl(g: CGen, node: Node): void {
 	addNewline(types);
 }
 
+// ===== Monomorphized Generic Interface Structs =====
+// Nim-aligned: checker records instantiations, codegen emits concrete structs.
+// Reads from parser/context GenericTypeInstStore (DRC-safe side-channel).
+
+// genGenericTypeInsts is in index.ms (avoids parser/context import here — DRC union sensitivity)
+
 // ===== Class Declaration =====
 
 function genClassDecl(g: CGen, node: Node): void {
 	const d = node.data as ClassDeclData;
+
 	const name = mangleTypeName(d.className);
 
 	if (nameSetHas(g.declaredThings, name)) return;
@@ -287,18 +297,24 @@ function genGlobalVar(g: CGen, node: Node): void {
 	const varName = safeName(d.declName);
 	const cType = mapTypeAnnotation(d.declType);
 
+	// Always emit uninitialized declaration to GlobalVars
+	addLine(sec(g, CSection.GlobalVars), cType + " " + varName + ";");
+
+	// Non-trivial initializers go to ModuleInit (not valid as C global initializers)
 	if (d.initializer !== null) {
 		const p = createProc("__init", null as unknown as Type);
 		const initSnippet = genExpr(g, p, d.initializer);
-		addLine(sec(g, CSection.GlobalVars), cType + " " + varName + " = " + initSnippet + ";");
-	} else {
-		addLine(sec(g, CSection.GlobalVars), cType + " " + varName + ";");
+		const locals = readProcLocals(p);
+		if (locals.length > 0) {
+			add(sec(g, CSection.ModuleInit), locals);
+		}
+		addLine(sec(g, CSection.ModuleInit), "  " + varName + " = " + initSnippet + ";");
 	}
 }
 
 // ===== Type annotation mapping =====
 
-function mapTypeAnnotation(annotation: string): string {
+export function mapTypeAnnotation(annotation: string): string {
 	if (annotation === "") return "double";
 	if (annotation === "number") return "double";
 	if (annotation === "float64") return "double";
@@ -329,7 +345,7 @@ function declOutput(input: string): string {
 	if (!pr.ok) return "PARSE_ERROR: " + pr.error;
 	const prog = pr.value;
 	const pd = prog.data as ProgramData;
-	const g = createCGen(null as unknown as CheckerContext);
+	const g = createCGen(null as unknown as CheckerContext, "test");
 	let i = 0;
 	while (i < pd.programStmts.length) {
 		genDecl(g, pd.programStmts[i]);
@@ -377,3 +393,4 @@ testGroup("C Decl GlobalVar", () => {
 		check(result.length > 0);
 	});
 });
+

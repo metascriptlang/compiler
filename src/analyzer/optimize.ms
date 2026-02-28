@@ -216,36 +216,20 @@ function walkOptimize(node: Node): void {
 		NodeKind.SwitchStmt => {
 			for (const c of (node.data as SwitchStmtData).switchCases) { walkOptimize(c); }
 		},
-		NodeKind.SwitchCase => { walkOptimizeSwitchCase(node); },
+		NodeKind.SwitchCase => {
+			const d = node.data as SwitchCaseData;
+			d.caseStmts = optimizeBlock(d.caseStmts);
+			let i = 0;
+			while (i < d.caseStmts.length) { walkOptimize(d.caseStmts[i]); i += 1; }
+		},
 		NodeKind.ExportDecl => { walkOptimize((node.data as ExportDeclData).exportedDecl); },
 		NodeKind.ClassDecl => {
 			for (const member of (node.data as ClassDeclData).classBody) { walkOptimize(member); }
 		},
-		NodeKind.MethodDecl => { walkOptimizeMethod(node); },
-		NodeKind.ConstructorDecl => { walkOptimizeCtor(node); },
+		NodeKind.MethodDecl => { walkOptimize((node.data as MethodDeclData).methodBody); },
+		NodeKind.ConstructorDecl => { walkOptimize((node.data as ConstructorDeclData).ctorBody); },
 		_ => {},
 	};
-}
-
-// Extracted to functions for correct codegen (loop-var vs param — DRC gotcha)
-function walkOptimizeSwitchCase(caseNode: Node): void {
-	const d = caseNode.data as SwitchCaseData;
-	d.caseStmts = optimizeBlock(d.caseStmts);
-	let i = 0;
-	while (i < d.caseStmts.length) {
-		walkOptimize(d.caseStmts[i]);
-		i += 1;
-	}
-}
-
-function walkOptimizeMethod(member: Node): void {
-	const md = member.data as MethodDeclData;
-	walkOptimize(md.methodBody);
-}
-
-function walkOptimizeCtor(member: Node): void {
-	const cd = member.data as ConstructorDeclData;
-	walkOptimize(cd.ctorBody);
 }
 
 // ===== Public Entry Point =====

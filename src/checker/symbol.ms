@@ -5,8 +5,15 @@ import { test, check, testGroup } from "std/testing";
 // ===== Symbol Kind =====
 
 export enum SymbolKind {
-	Variable, Function, Class, Interface,
-	TypeAlias, Enum, Parameter, Property, Method,
+	Variable,
+	Function,
+	Class,
+	Interface,
+	TypeAlias,
+	Enum,
+	Parameter,
+	Property,
+	Method,
 }
 
 // ===== Scope Kind =====

@@ -7,64 +7,36 @@ import { CheckerContext, hasErrors, errorCount } from "../checker/context";
 import { checkProgram } from "../checker/checkPass";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
+import { monomorphizeProgram } from "../monomorphize/collect";
 import { generateJS } from "../codegen/js/index";
+import { generateC } from "../codegen/c/index";
 import { Target } from "./options";
-import { readSource, writeOutput } from "./io";
+import { readSource, printErrorsAndExit, emitOutput } from "./io";
 
 export function cmdCompile(filePath: string, target: Target, outputPath: string): void {
 	const source = readSource(filePath);
 
-	if (target === Target.JS) {
-		// JS path: parse -> check -> transform -> generateJS (no analyzer)
-		const parseResult = parseSource(source);
-		if (!parseResult.ok) {
-			console.log("Parse error: " + parseResult.error);
-			exit(1);
-		}
-		const program = parseResult.value;
-		const checkerCtx = checkProgram(program);
-		if (hasErrors(checkerCtx)) {
-			let i = 0;
-			while (i < checkerCtx.errors.length) {
-				console.log("Type error: " + checkerCtx.errors[i]);
-				i += 1;
-			}
-			exit(1);
-		}
-		const transformed = transformProgram(program, checkerCtx);
-		const jsCode = generateJS(transformed);
-
-		if (outputPath !== "") {
-			writeOutput(outputPath, jsCode);
-			console.log("Wrote " + outputPath);
-		} else {
-			// Default output: replace .ms with .js
-			const outFile = filePath.slice(0, filePath.length - 3) + ".js";
-			writeOutput(outFile, jsCode);
-			console.log("Wrote " + outFile);
-		}
-	} else {
-		// C path: parse -> check -> transform -> analyze -> generateC
-		const parseResult = parseSource(source);
-		if (!parseResult.ok) {
-			console.log("Parse error: " + parseResult.error);
-			exit(1);
-		}
-		const program = parseResult.value;
-		const checkerCtx = checkProgram(program);
-		if (hasErrors(checkerCtx)) {
-			let i = 0;
-			while (i < checkerCtx.errors.length) {
-				console.log("Type error: " + checkerCtx.errors[i]);
-				i += 1;
-			}
-			exit(1);
-		}
-		const transformed = transformProgram(program, checkerCtx);
-		const analyzed = analyzeProgram(transformed, checkerCtx);
-		// C codegen not yet implemented
-		console.log("Error: C backend codegen not yet implemented");
-		console.log("Use --target=js for JavaScript output");
+	const parseResult = parseSource(source);
+	if (!parseResult.ok) {
+		console.log("Parse error: " + parseResult.error);
 		exit(1);
+	}
+	const program = parseResult.value;
+
+	const checkerCtx = checkProgram(program);
+	if (hasErrors(checkerCtx)) {
+		printErrorsAndExit(checkerCtx, "Type error: ");
+	}
+
+	const monoed = monomorphizeProgram(program, checkerCtx);
+	const transformed = transformProgram(monoed, checkerCtx);
+
+	if (target === Target.JS) {
+		const jsCode = generateJS(transformed);
+		emitOutput(jsCode, filePath, outputPath, ".js");
+	} else {
+		const analyzed = analyzeProgram(transformed, checkerCtx);
+		const cCode = generateC(analyzed, checkerCtx, filePath);
+		emitOutput(cCode, filePath, outputPath, ".c");
 	}
 }

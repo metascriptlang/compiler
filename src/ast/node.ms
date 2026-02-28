@@ -1,4 +1,5 @@
 import { Token } from "../lexer/token";
+import { Type } from "../checker/types";
 
 // ===== Node Kind Enum =====
 
@@ -13,6 +14,7 @@ export enum NodeKind {
 	ConditionalExpr, SpreadExpr, NewExpr,
 	TryExpr, MatchExpr, MatchCase,
 	AwaitExpr, YieldExpr, MoveExpr, OutExpr,
+	HiddenDeref,
 	TypeAnnotation,
 	// Patterns
 	ArrayPattern, ObjectPattern, ObjectPatternProp, DestructuringDecl,
@@ -140,7 +142,7 @@ export interface Node {
 	kind: NodeKind;
 	location: SourceLocation;
 	data: NodeData;
-	nodeType?: unknown;
+	nodeType: Type;
 }
 
 export type Expression = Node;
@@ -178,6 +180,8 @@ export type AwaitExprData = { awaitArg: Node };
 export type YieldExprData = { yieldArg: Node, isDelegate: boolean };
 export type MoveExprData = { moveArg: Node };
 export type OutExprData = { outArg: Node };
+// HiddenDeref reuses { expr: Node } shape (same as ExprStmt) — no new union variant needed
+export type HiddenDerefData = { expr: Node };
 export type QuoteExprData = { quoteBody: Node };
 
 // Patterns
@@ -234,6 +238,16 @@ export function createNode(kind: NodeKind, data: NodeData, token: Token): Node {
 		kind,
 		data,
 		location: { line: token.line, column: token.column },
+		nodeType: null as unknown as Type,
+	};
+}
+
+export function createNodeAt(kind: NodeKind, data: NodeData, loc: SourceLocation): Node {
+	return {
+		kind,
+		data,
+		location: loc,
+		nodeType: null as unknown as Type,
 	};
 }
 

@@ -144,6 +144,17 @@ export function captureGenericParams(state: ParserState): string {
 		if (current(state).kind === TokenKind.Ident && depth === 1) {
 			if (names !== "") { names = names + ","; }
 			names = names + current(state).value;
+			advance(state);
+			// Check for constraint: T extends Type
+			if (!isAtEnd(state) && current(state).kind === TokenKind.Extends && depth === 1) {
+				advance(state); // skip 'extends'
+				// Capture constraint type name
+				if (!isAtEnd(state) && current(state).kind === TokenKind.Ident) {
+					names = names + ":" + current(state).value;
+					advance(state);
+				}
+			}
+			continue;
 		}
 		if (current(state).kind === TokenKind.Lt) { depth += 1; }
 		if (current(state).kind === TokenKind.Gt) { depth -= 1; }
@@ -152,6 +163,98 @@ export function captureGenericParams(state: ParserState): string {
 		advance(state);
 	}
 	return names;
+}
+
+// Lookahead: is this '<' the start of generic type args followed by '('?
+// Reference: parser.zig:4183 isGenericCallAhead()
+// Scans ahead for balanced <...> then checks for '(' immediately after.
+// Does NOT consume tokens — only peeks.
+export function isGenericCallAhead(state: ParserState): boolean {
+	// Current token should be '<'
+	if (isAtEnd(state) || current(state).kind !== TokenKind.Lt) return false;
+	let pos = 1; // peek offset from current position
+	let angleDepth = 1;
+	let braceDepth = 0;
+	let bracketDepth = 0;
+	let parenDepth = 0;
+	while (pos < 100) {
+		const tok = peek(state, pos);
+		if (tok.kind === TokenKind.Eof) return false;
+		// Track nested delimiters
+		if (tok.kind === TokenKind.LBrace) { braceDepth += 1; }
+		if (tok.kind === TokenKind.RBrace) { braceDepth -= 1; if (braceDepth < 0) return false; }
+		if (tok.kind === TokenKind.LBracket) { bracketDepth += 1; }
+		if (tok.kind === TokenKind.RBracket) { bracketDepth -= 1; if (bracketDepth < 0) return false; }
+		if (tok.kind === TokenKind.LParen) { parenDepth += 1; }
+		if (tok.kind === TokenKind.RParen) { parenDepth -= 1; if (parenDepth < 0) return false; }
+		// Only count angle brackets at top level (not inside {} [] ())
+		if (braceDepth === 0 && bracketDepth === 0 && parenDepth === 0) {
+			if (tok.kind === TokenKind.Lt) { angleDepth += 1; }
+			if (tok.kind === TokenKind.Gt) { angleDepth -= 1; }
+			if (tok.kind === TokenKind.GtGt) { angleDepth -= 2; }
+			if (tok.kind === TokenKind.GtGtGt) { angleDepth -= 3; }
+			if (angleDepth <= 0) {
+				// Found matching '>' — check if next token is '('
+				const next = peek(state, pos + 1);
+				return next.kind === TokenKind.LParen;
+			}
+		}
+		// Bail on tokens that can't appear in type args
+		if (tok.kind === TokenKind.Semicolon) return false;
+		if (tok.kind === TokenKind.Assign) return false;
+		pos += 1;
+	}
+	return false;
+}
+
+// Capture generic type args at call site: <number, string> → "number,string"
+// Unlike captureGenericParams (which captures parameter NAMES like T, U),
+// this captures full type expressions (identifiers, keywords, nested generics).
+export function captureGenericTypeArgs(state: ParserState): string {
+	if (isAtEnd(state) || current(state).kind !== TokenKind.Lt) return "";
+	advance(state); // consume <
+	// Two-pass: first collect token values with separators, then split.
+	// Avoid `let str = ""; str = "";` — DRC generates ms_decref on struct msString.
+	const tokens: string[] = [];
+	const depths: number[] = [];
+	let depth = 1;
+	while (!isAtEnd(state) && depth > 0) {
+		const tok = current(state);
+		if (tok.kind === TokenKind.Lt) { depth += 1; }
+		else if (tok.kind === TokenKind.Gt) { depth -= 1; }
+		else if (tok.kind === TokenKind.GtGt) { depth -= 2; }
+		else if (tok.kind === TokenKind.GtGtGt) { depth -= 3; }
+		if (depth > 0) {
+			tokens.push(tok.value);
+			depths.push(depth);
+		}
+		advance(state);
+	}
+	// Build comma-separated type args in single pass.
+	// Depth-1 commas are arg separators → emit our ",".
+	// NEVER reset a string variable to "" — DRC generates ms_decref(msString) → void* mismatch.
+	let result = "";
+	let afterSep = false;
+	let argHasTokens = false;
+	let i = 0;
+	while (i < tokens.length) {
+		if (tokens[i] === "," && depths[i] === 1) {
+			afterSep = true;
+			argHasTokens = false;
+		} else {
+			if (afterSep) {
+				result = result + ",";
+				afterSep = false;
+			}
+			if (argHasTokens && tokens[i] !== ",") {
+				result = result + " ";
+			}
+			result = result + tokens[i];
+			argHasTokens = true;
+		}
+		i += 1;
+	}
+	return result;
 }
 
 // ===== Pattern Helpers =====
@@ -172,4 +275,247 @@ export function skipDestructurePattern(state: ParserState): void {
 		}
 		advance(state);
 	}
+}
+
+// ===== Explicit Type Args Side-Channel =====
+// Parser stores explicit type args (e.g., foo<number>(x)) keyed by call site location.
+// Monomorphize reads this. Checker is not involved — callee name stays clean.
+// Uses interface + factory function (same pattern as NodeCache / CtxCache).
+
+interface TypeArgEntry {
+	key: string;
+	val: string;
+}
+
+interface TypeArgStore {
+	items: TypeArgEntry[];
+}
+
+function createTypeArgStore(): TypeArgStore {
+	const items: TypeArgEntry[] = [];
+	return { items };
+}
+
+let _typeArgStore: TypeArgStore = createTypeArgStore();
+
+export function resetExplicitTypeArgs(): void {
+	_typeArgStore = createTypeArgStore();
+}
+
+export function addExplicitTypeArg(line: number, col: number, typeArgStr: string): void {
+	const key = line.toString() + ":" + col.toString();
+	const entry: TypeArgEntry = { key, val: typeArgStr };
+	_typeArgStore.items.push(entry);
+}
+
+export function getExplicitTypeArg(line: number, col: number): string {
+	const key = line.toString() + ":" + col.toString();
+	let i = 0;
+	while (i < _typeArgStore.items.length) {
+		if (_typeArgStore.items[i].key === key) return _typeArgStore.items[i].val;
+		i += 1;
+	}
+	return "";
+}
+
+// ===== Generic Declaration Side-Channel =====
+// Parser stores generic params for interface/class declarations (e.g., interface Box<T>).
+// Checker reads this to create GenericParam types for field resolution.
+// Same pattern as TypeArgStore above.
+
+interface GenericDeclEntry {
+	key: string;        // interface/class name
+	val: string;        // comma-joined generic param names ("T,U")
+	fieldNames: string; // "|"-joined field names ("value|count"), empty for functions
+	fieldTypes: string; // "|"-joined field type annotations ("T|number"), empty for functions
+}
+
+interface GenericDeclStore {
+	items: GenericDeclEntry[];
+}
+
+function createGenericDeclStore(): GenericDeclStore {
+	const items: GenericDeclEntry[] = [];
+	return { items };
+}
+
+let _genericDeclStore: GenericDeclStore = createGenericDeclStore();
+
+export function resetGenericDeclStore(): void {
+	_genericDeclStore = createGenericDeclStore();
+}
+
+export function addGenericDecl(name: string, genericParams: string): void {
+	const entry: GenericDeclEntry = { key: name, val: genericParams, fieldNames: "", fieldTypes: "" };
+	_genericDeclStore.items.push(entry);
+}
+
+// Update an existing GenericDeclEntry with field info (called after parsing interface body)
+export function updateGenericDeclFields(name: string, fieldNames: string, fieldTypes: string): void {
+	let i = 0;
+	while (i < _genericDeclStore.items.length) {
+		if (_genericDeclStore.items[i].key === name) {
+			_genericDeclStore.items[i].fieldNames = fieldNames;
+			_genericDeclStore.items[i].fieldTypes = fieldTypes;
+			return;
+		}
+		i += 1;
+	}
+}
+
+export function getGenericDecl(name: string): string {
+	let i = 0;
+	while (i < _genericDeclStore.items.length) {
+		if (_genericDeclStore.items[i].key === name) return _genericDeclStore.items[i].val;
+		i += 1;
+	}
+	return "";
+}
+
+// Get "|"-joined field names for a generic interface/class
+export function getGenericDeclFieldNames(name: string): string {
+	let i = 0;
+	while (i < _genericDeclStore.items.length) {
+		if (_genericDeclStore.items[i].key === name) return _genericDeclStore.items[i].fieldNames;
+		i += 1;
+	}
+	return "";
+}
+
+// Get "|"-joined field type annotations for a generic interface/class
+export function getGenericDeclFieldTypes(name: string): string {
+	let i = 0;
+	while (i < _genericDeclStore.items.length) {
+		if (_genericDeclStore.items[i].key === name) return _genericDeclStore.items[i].fieldTypes;
+		i += 1;
+	}
+	return "";
+}
+
+// ===== Generic Type Instantiation Registry =====
+// Checker records instantiations (e.g., Box<number>) here.
+// Codegen reads this to emit concrete struct definitions.
+// DRC-safe: string fields only, module-level side-channel.
+// Lives in parser/context to avoid heavy checker imports in codegen (DRC #22/#26).
+// Uses GenericDeclEntry[] as backing store (reuses existing interface to avoid new union members).
+
+// Store instantiation: baseName + typeArgKey + mangledName + fieldNamesJoined + fieldTypesJoined
+// Encoded in GenericDeclEntry as: key=mangledName, val=baseName+"|"+typeArgKey, fieldNames=..., fieldTypes=...
+
+interface GenericTypeInstStore {
+	keys: string[];       // mangledName entries
+	baseNames: string[];
+	typeArgKeys: string[];
+	fieldNames: string[];  // "|"-joined field names per entry
+	fieldTypes: string[];  // "|"-joined field types per entry
+}
+
+function createGenericTypeInstStore(): GenericTypeInstStore {
+	return { keys: [], baseNames: [], typeArgKeys: [], fieldNames: [], fieldTypes: [] };
+}
+
+let _genericTypeInstStore: GenericTypeInstStore = createGenericTypeInstStore();
+
+export function resetGenericTypeInsts(): void {
+	_genericTypeInstStore = createGenericTypeInstStore();
+}
+
+export function addGenericTypeInst(baseName: string, typeArgKey: string, mangledName: string, fieldNamesJoined: string, fieldTypesJoined: string): void {
+	// Dedup: skip if same baseName + typeArgKey already exists
+	let i = 0;
+	while (i < _genericTypeInstStore.keys.length) {
+		if (_genericTypeInstStore.baseNames[i] === baseName && _genericTypeInstStore.typeArgKeys[i] === typeArgKey) return;
+		i += 1;
+	}
+	_genericTypeInstStore.keys.push(mangledName);
+	_genericTypeInstStore.baseNames.push(baseName);
+	_genericTypeInstStore.typeArgKeys.push(typeArgKey);
+	_genericTypeInstStore.fieldNames.push(fieldNamesJoined);
+	_genericTypeInstStore.fieldTypes.push(fieldTypesJoined);
+}
+
+export function getGenericTypeInstCount(): number {
+	return _genericTypeInstStore.keys.length;
+}
+
+export function getGenericTypeInstMangledName(idx: number): string {
+	return _genericTypeInstStore.keys[idx];
+}
+
+export function getGenericTypeInstBaseName(idx: number): string {
+	return _genericTypeInstStore.baseNames[idx];
+}
+
+export function getGenericTypeInstTypeArgKey(idx: number): string {
+	return _genericTypeInstStore.typeArgKeys[idx];
+}
+
+export function getGenericTypeInstFieldNames(idx: number): string {
+	return _genericTypeInstStore.fieldNames[idx];
+}
+
+export function getGenericTypeInstFieldTypes(idx: number): string {
+	return _genericTypeInstStore.fieldTypes[idx];
+}
+
+export function findGenericTypeInstIdx(baseName: string, typeArgKey: string): number {
+	let i = 0;
+	while (i < _genericTypeInstStore.keys.length) {
+		if (_genericTypeInstStore.baseNames[i] === baseName && _genericTypeInstStore.typeArgKeys[i] === typeArgKey) return i;
+		i += 1;
+	}
+	return -1;
+}
+
+// Count pipe-separated segments in a string
+function pipeCount(s: string): number {
+	if (s === "") return 0;
+	let count = 1;
+	let i = 0;
+	while (i < s.length) {
+		const ch = s[i];
+		if (ch === "|") count += 1;
+		i += 1;
+	}
+	return count;
+}
+
+// Get the nth pipe-separated segment (0-based)
+function pipeAt(s: string, idx: number): string {
+	let count = 0;
+	let start = 0;
+	let i = 0;
+	while (i < s.length) {
+		const ch = s[i];
+		if (ch === "|") {
+			if (count === idx) {
+				let result = "";
+				let j = start;
+				while (j < i) { result = result + s[j]; j += 1; }
+				return result;
+			}
+			count += 1;
+			start = i + 1;
+		}
+		i += 1;
+	}
+	if (count === idx) {
+		let result = "";
+		let j = start;
+		while (j < s.length) { result = result + s[j]; j += 1; }
+		return result;
+	}
+	return "";
+}
+
+export function getGenericTypeInstFieldCount(instIdx: number): number {
+	return pipeCount(_genericTypeInstStore.fieldNames[instIdx]);
+}
+
+export function getGenericTypeInstFieldNameAt(instIdx: number, fieldIdx: number): string {
+	return pipeAt(_genericTypeInstStore.fieldNames[instIdx], fieldIdx);
+}
+
+export function getGenericTypeInstFieldTypeAt(instIdx: number, fieldIdx: number): string {
+	return pipeAt(_genericTypeInstStore.fieldTypes[instIdx], fieldIdx);
 }

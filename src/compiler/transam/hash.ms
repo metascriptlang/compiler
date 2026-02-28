@@ -3,7 +3,7 @@
 // Phase 1: simple hash for query key identification and file change detection.
 // Phase 2: will add AST content-addressed hashing (hashNode).
 
-import { TaQueryKey } from "./revision";
+import { TaQueryKey, TaQueryKind } from "./revision";
 import { test, check, testGroup } from "std/testing";
 
 // ===== String Hash (djb2) =====
@@ -33,7 +33,7 @@ function enumToNum(kind: TaQueryKind): number {
 		TaQueryKind.Transform => 4,
 		TaQueryKind.Analyze => 5,
 		TaQueryKind.ModuleDeps => 6,
-		_ => 7,
+		_ => 0,
 	};
 }
 

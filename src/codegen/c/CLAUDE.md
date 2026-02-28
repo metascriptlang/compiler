@@ -32,11 +32,31 @@ src/codegen/c/
 ```ms
 enum CSection {
   Headers, ForwardDecls, Types, SeqTypes,
-  ProcHeaders, StringPool, GlobalVars, Procs, ModuleInit,
+  ProcHeaders, StringPool, GlobalVars, Procs,
+  DatInit,      // data/type initialization (runs first)
+  ModuleInit,   // user top-level code (runs second)
 }
 ```
 
 Each section is a `StringBuf`. Final assembly concatenates in enum order.
+
+### Module Initialization (Nim-aligned two-phase)
+
+```
+main(argc, argv)
+  └─ NimMain()
+       ├─ PreMainInner()          // data init phase
+       │    └─ <module>__DatInit000()   // type info, static data
+       └─ NimMainInner()          // code init phase
+            └─ <module>__Init000()      // user top-level code
+            └─ main_()                  // user's main() if defined
+```
+
+- Init function names are module-qualified: `mangleModuleName(path) + "__Init000"`
+- POSIX main forwards `argc`/`argv` into `cmdCount`/`cmdLine` globals
+- User-defined `main()` is mangled to `main_()` (C keyword avoidance) and called from NimMainInner
+- DatInit runs before Init to ensure data is ready for user code
+- Multi-module: each module registers its DatInit/Init into the appropriate dispatcher
 
 ### CLoc (expression result carrier — Nim's TLoc)
 
@@ -285,7 +305,7 @@ Codegen's `rc.ms` only: (1) recognizes DRC-injected call names, (2) determines `
 4. ~~`c/types.ms` — basic type mapping (primitives, enums, interfaces, classes)~~ DONE
 
 ### Phase 5b: Builtin Lowering (~400 lines) — DONE
-5. ~~`transform/c/builtinLower.ms` — rewrite builtin MemberExpr/CallExpr to C-compatible AST~~ DONE
+5. ~~`transform/native/builtinLower.ms` — rewrite builtin MemberExpr/CallExpr to C-compatible AST~~ DONE
 6. ~~Symbol field additions — `runtimeName`, `builtinKind` on Symbol interface~~ DONE
 7. ~~collectPass decorator reading — extract `@runtime`/`@builtin` args~~ DONE
 

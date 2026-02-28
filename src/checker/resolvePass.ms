@@ -7,7 +7,7 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import {
-	Node, NodeKind,
+	Node, NodeKind, SourceLocation, createNodeAt,
 	ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData,
 	ClassDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData,
 	TypeAliasDeclData, VariableDeclData,
@@ -19,8 +19,9 @@ import {
 	createResult, createTypeRef, createUnion, createGenericParam, createDistinct,
 } from "./types";
 import { Symbol, SymbolKind, ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope } from "./symbol";
-import { CheckerContext, findExtension, isExtensionFlag, getExtReceiverType } from "./context";
+import { CheckerContext, findExtension, isExtensionFlag, getExtReceiverType, extractGenericNames } from "./context";
 import { trim, sliceStr, findChar, splitTopLevel } from "../utils/string";
+import { getGenericDecl, getGenericDeclFieldNames, getGenericDeclFieldTypes, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
 import { test, check, testGroup } from "std/testing";
 
 // ===== A. Resolve Annotation Strings =====
@@ -74,7 +75,17 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 			t.typeExtra = resolveAnnotation(args[1], ctx);
 			return t;
 		}
-		// Generic instance: look up base type
+		// Generic instance: check if this is a generic interface/class
+		const genericParams = getGenericDecl(baseName);
+		if (genericParams !== "") {
+			// Record instantiation for codegen
+			recordGenericTypeInstantiation(baseName, genericParams, args, ctx);
+			// Return a type reference with mangled name
+			const typeArgKey = buildTypeArgKey(args, ctx);
+			const mangledName = baseName + "__" + typeArgKey;
+			return createTypeRef(mangledName);
+		}
+		// Non-generic: look up base type
 		const baseSym = lookupSymbol(ctx.table, baseName);
 		if (baseSym !== null) {
 			return baseSym.symbolType;
@@ -103,6 +114,68 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 	};
 }
 
+// ===== Generic Type Instantiation Helpers =====
+
+// Build a type arg key from resolved type arg strings (e.g., "number,string")
+function buildTypeArgKey(args: string[], ctx: CheckerContext): string {
+	let key = "";
+	let i = 0;
+	while (i < args.length) {
+		if (i > 0) key = key + ",";
+		key = key + trim(args[i]);
+		i += 1;
+	}
+	return key;
+}
+
+// Record a generic type instantiation (e.g., Box<number>) for codegen
+// Looks up field names/types from parser side-channel, substitutes generic params → concrete types
+function recordGenericTypeInstantiation(baseName: string, genericParams: string, args: string[], ctx: CheckerContext): void {
+	const typeArgKey = buildTypeArgKey(args, ctx);
+	const mangledName = baseName + "__" + typeArgKey;
+
+	// Get field info from parser side-channel
+	const fieldNamesStr = getGenericDeclFieldNames(baseName);
+	const fieldTypesStr = getGenericDeclFieldTypes(baseName);
+
+	// Split generic param names: "T,U" → ["T", "U"]
+	const paramNames = splitTopLevel(genericParams, ",");
+
+	// Build "|"-joined substituted field types
+	let resultFieldNames = "";
+	let resultFieldTypes = "";
+
+	if (fieldNamesStr !== "") {
+		const fnParts = splitTopLevel(fieldNamesStr, "|");
+		const ftParts = splitTopLevel(fieldTypesStr, "|");
+
+		let fi = 0;
+		while (fi < fnParts.length) {
+			if (fi > 0) { resultFieldNames = resultFieldNames + "|"; resultFieldTypes = resultFieldTypes + "|"; }
+			resultFieldNames = resultFieldNames + trim(fnParts[fi]);
+			// Substitute generic params in field type annotations
+			let fieldType = "";
+			if (fi < ftParts.length) { fieldType = trim(ftParts[fi]); }
+			// Replace each generic param with its concrete type arg
+			let pi = 0;
+			while (pi < paramNames.length) {
+				const paramName = trim(paramNames[pi]);
+				if (pi < args.length) {
+					const argStr = trim(args[pi]);
+					if (fieldType === paramName) {
+						fieldType = argStr;
+					}
+				}
+				pi += 1;
+			}
+			resultFieldTypes = resultFieldTypes + fieldType;
+			fi += 1;
+		}
+	}
+
+	addGenericTypeInst(baseName, typeArgKey, mangledName, resultFieldNames, resultFieldTypes);
+}
+
 // ===== Resolve Helpers =====
 
 // Resolve an array of type annotation strings into Type[], matching names 1:1
@@ -123,25 +196,21 @@ function resolveTypeStrings(typeStrs: string[], count: number, ctx: CheckerConte
 // ===== Generic Parameter Extraction =====
 
 // Extract generic param names from fnFlags: "gen:T,U" or "async|gen:T,U" → ["T", "U"]
-function extractGenericNames(flags: string): string[] {
-	const result: string[] = [];
-	if (flags === "") return result;
-	const parts = splitTopLevel(flags, "|");
-	for (const part of parts) {
-		const trimPart = trim(part);
-		if (trimPart.length > 4) {
-			const prefix = sliceStr(trimPart, 0, 4);
-			if (prefix === "gen:") {
-				const nameStr = sliceStr(trimPart, 4, trimPart.length);
-				const names = splitTopLevel(nameStr, ",");
-				for (const n of names) {
-					const trimName = trim(n);
-					if (trimName !== "") result.push(trimName);
-				}
-			}
-		}
+// Define a generic param symbol, handling optional constraint: "T" or "T:Comparable"
+function defineGenericParam(ctx: CheckerContext, paramStr: string): void {
+	const colonPos = findChar(paramStr, ":");
+	if (colonPos > 0) {
+		// Has constraint: "T:Comparable" → name="T", constraint="Comparable"
+		const paramName = sliceStr(paramStr, 0, colonPos);
+		const constraintStr = sliceStr(paramStr, colonPos + 1, paramStr.length);
+		const gp = createGenericParam(paramName);
+		// Store constraint type in typeExtra
+		gp.typeExtra = resolveAnnotation(constraintStr, ctx);
+		defineSymbol(ctx.table, makeSymbol(paramName, SymbolKind.TypeAlias, gp, false));
+	} else {
+		// No constraint: "T"
+		defineSymbol(ctx.table, makeSymbol(paramStr, SymbolKind.TypeAlias, createGenericParam(paramStr), false));
 	}
-	return result;
 }
 
 // ===== B. Resolve Declarations (Pass 2) =====
@@ -178,7 +247,7 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 	if (genericNames.length > 0) {
 		openScope(ctx.table, ScopeKind.Block);
 		for (const gp of genericNames) {
-			defineSymbol(ctx.table, makeSymbol(gp, SymbolKind.TypeAlias, createGenericParam(gp), false));
+			defineGenericParam(ctx, gp);
 		}
 	}
 
@@ -219,7 +288,26 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 	const sym = lookupSymbol(ctx.table, d.interfaceName);
 	if (sym === null) return;
 
+	// Check for generic params (e.g., interface Box<T> — parser stores in side-channel)
+	const genericStr = getGenericDecl(d.interfaceName);
+	const hasGenerics = genericStr !== "";
+	if (hasGenerics) {
+		openScope(ctx.table, ScopeKind.Block);
+		const genericNames = splitTopLevel(genericStr, ",");
+		for (const gp of genericNames) {
+			const trimGp = trim(gp);
+			if (trimGp !== "") {
+				defineGenericParam(ctx, trimGp);
+			}
+		}
+	}
+
 	const fieldTypes = resolveTypeStrings(d.interfaceFieldTypes, d.interfaceFields.length, ctx);
+
+	if (hasGenerics) {
+		closeScope(ctx.table);
+	}
+
 	sym.symbolType = createObject(d.interfaceName, d.interfaceFields, fieldTypes, true);
 }
 
@@ -249,12 +337,31 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 	const sym = lookupSymbol(ctx.table, d.className);
 	if (sym === null) return;
 
+	// Check for generic params (e.g., class Container<T> — parser stores in side-channel)
+	const genericStr = getGenericDecl(d.className);
+	const hasGenerics = genericStr !== "";
+	if (hasGenerics) {
+		openScope(ctx.table, ScopeKind.Block);
+		const genericNames = splitTopLevel(genericStr, ",");
+		for (const gp of genericNames) {
+			const trimGp = trim(gp);
+			if (trimGp !== "") {
+				defineGenericParam(ctx, trimGp);
+			}
+		}
+	}
+
 	// Build Object type — collect member names and types into local arrays
 	const memberNames: string[] = [];
 	const memberTypes: Type[] = [];
 	for (const member of d.classBody) {
 		resolveClassMember(ctx, memberNames, memberTypes, member);
 	}
+
+	if (hasGenerics) {
+		closeScope(ctx.table);
+	}
+
 	sym.symbolType = createObject(d.className, memberNames, memberTypes, false);
 }
 
@@ -290,6 +397,13 @@ function resolveClassMember(ctx: CheckerContext, memberNames: string[], memberTy
 
 import { createContext } from "./context";
 import { defineSymbol, makeSymbol } from "./symbol";
+import {
+	addGenericDecl, updateGenericDeclFields, resetGenericDeclStore,
+	resetGenericTypeInsts, getGenericTypeInstCount, getGenericTypeInstBaseName,
+	getGenericTypeInstTypeArgKey, getGenericTypeInstMangledName,
+	getGenericTypeInstFieldNames, getGenericTypeInstFieldTypes,
+	findGenericTypeInstIdx,
+} from "../parser/context";
 
 function resolveWith(text: string): Type {
 	const ctx = createContext();
@@ -378,15 +492,10 @@ testGroup("Resolve Declarations", () => {
 		const ctx = createContext();
 		defineSymbol(ctx.table, makeSymbol("foo", SymbolKind.Function, unknownType(), false));
 		// Simulate a FunctionDecl node
-		const node: Node = {
-			kind: NodeKind.Program,
-			location: { line: 0, column: 0 },
-			data: { programStmts: [{
-				kind: NodeKind.FunctionDecl,
-				location: { line: 0, column: 0 },
-				data: { fnName: "foo", params: ["a", "b"], fnParamTypes: ["", ""], fnBody: { kind: NodeKind.BlockStmt, location: { line: 0, column: 0 }, data: { statements: [] } }, fnFlags: "", fnReturnType: "" },
-			}] },
-		};
+		const zl: SourceLocation = { line: 0, column: 0 };
+		const node = createNodeAt(NodeKind.Program, { programStmts: [
+			createNodeAt(NodeKind.FunctionDecl, { fnName: "foo", params: ["a", "b"], fnParamTypes: ["", ""], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "" }, zl),
+		] }, zl);
 		resolveDeclarations(ctx, node);
 		const sym = lookupSymbol(ctx.table, "foo");
 		check(sym !== null);
@@ -398,15 +507,10 @@ testGroup("Resolve Declarations", () => {
 	test("function with typed params", () => {
 		const ctx = createContext();
 		defineSymbol(ctx.table, makeSymbol("add", SymbolKind.Function, unknownType(), false));
-		const node: Node = {
-			kind: NodeKind.Program,
-			location: { line: 0, column: 0 },
-			data: { programStmts: [{
-				kind: NodeKind.FunctionDecl,
-				location: { line: 0, column: 0 },
-				data: { fnName: "add", params: ["a", "b"], fnParamTypes: ["number", "number"], fnBody: { kind: NodeKind.BlockStmt, location: { line: 0, column: 0 }, data: { statements: [] } }, fnFlags: "", fnReturnType: "number" },
-			}] },
-		};
+		const zl: SourceLocation = { line: 0, column: 0 };
+		const node = createNodeAt(NodeKind.Program, { programStmts: [
+			createNodeAt(NodeKind.FunctionDecl, { fnName: "add", params: ["a", "b"], fnParamTypes: ["number", "number"], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "number" }, zl),
+		] }, zl);
 		resolveDeclarations(ctx, node);
 		const sym = lookupSymbol(ctx.table, "add");
 		check(sym !== null);
@@ -414,5 +518,113 @@ testGroup("Resolve Declarations", () => {
 		check(sym.symbolType.typeChildren[0].kind === TypeKind.Number);
 		check(sym.symbolType.typeChildren[1].kind === TypeKind.Number);
 		check(sym.symbolType.typeReturn.kind === TypeKind.Number);
+	});
+});
+
+testGroup("Generic Interface Instantiation", () => {
+	test("Box<number> records instantiation", () => {
+		resetGenericDeclStore();
+		resetGenericTypeInsts();
+		// Simulate parser registering interface Box<T> { value: T; }
+		addGenericDecl("Box", "T");
+		updateGenericDeclFields("Box", "value", "T");
+		// Resolve Box<number> — should record instantiation
+		const ctx = createContext();
+		const t = resolveAnnotation("Box<number>", ctx);
+		check(t.kind === TypeKind.TypeReference);
+		check(t.typeName === "Box__number");
+		// Check instantiation was recorded
+		check(getGenericTypeInstCount() === 1);
+		check(getGenericTypeInstBaseName(0) === "Box");
+		check(getGenericTypeInstTypeArgKey(0) === "number");
+		check(getGenericTypeInstMangledName(0) === "Box__number");
+		check(getGenericTypeInstFieldNames(0) === "value");
+		check(getGenericTypeInstFieldTypes(0) === "number");
+	});
+	test("Pair<string, number> records instantiation", () => {
+		resetGenericDeclStore();
+		resetGenericTypeInsts();
+		addGenericDecl("Pair", "A,B");
+		updateGenericDeclFields("Pair", "first|second", "A|B");
+		const ctx = createContext();
+		const t = resolveAnnotation("Pair<string, number>", ctx);
+		check(t.kind === TypeKind.TypeReference);
+		check(t.typeName === "Pair__string,number");
+		const idx = findGenericTypeInstIdx("Pair", "string,number");
+		check(idx >= 0);
+		check(getGenericTypeInstFieldNames(idx) === "first|second");
+		check(getGenericTypeInstFieldTypes(idx) === "string|number");
+	});
+	test("dedup instantiation", () => {
+		resetGenericDeclStore();
+		resetGenericTypeInsts();
+		addGenericDecl("Box", "T");
+		updateGenericDeclFields("Box", "value", "T");
+		const ctx = createContext();
+		resolveAnnotation("Box<number>", ctx);
+		resolveAnnotation("Box<number>", ctx);
+		check(getGenericTypeInstCount() === 1);
+	});
+	test("non-generic base falls through", () => {
+		resetGenericDeclStore();
+		resetGenericTypeInsts();
+		// No addGenericDecl for "Foo" — should fall through to symbol lookup
+		const ctx = createContext();
+		defineSymbol(ctx.table, makeSymbol("Foo", SymbolKind.Interface, createObject("Foo", [], [], true), false));
+		const t = resolveAnnotation("Foo<number>", ctx);
+		// Non-generic: returns base type (Foo)
+		check(t.kind === TypeKind.Object);
+		check(t.typeName === "Foo");
+	});
+	test("generic class Container<T> records instantiation", () => {
+		resetGenericDeclStore();
+		resetGenericTypeInsts();
+		// Simulate parser registering class Container<T> { item: T; count: number; }
+		addGenericDecl("Container", "T");
+		updateGenericDeclFields("Container", "item|count", "T|number");
+		const ctx = createContext();
+		const t = resolveAnnotation("Container<string>", ctx);
+		check(t.kind === TypeKind.TypeReference);
+		check(t.typeName === "Container__string");
+		check(getGenericTypeInstCount() === 1);
+		check(getGenericTypeInstFieldNames(0) === "item|count");
+		check(getGenericTypeInstFieldTypes(0) === "string|number");
+	});
+});
+
+testGroup("Generic Constraints", () => {
+	test("constraint stored on GenericParam typeExtra", () => {
+		// Simulate "T:number" — defineGenericParam parses colon, sets typeExtra
+		const ctx = createContext();
+		openScope(ctx.table, ScopeKind.Block);
+		defineGenericParam(ctx, "T:number");
+		const sym = lookupSymbol(ctx.table, "T");
+		check(sym !== null);
+		check(sym.symbolType.kind === TypeKind.GenericParam);
+		check(sym.symbolType.typeName === "T");
+		check(sym.symbolType.typeExtra !== null);
+		check(sym.symbolType.typeExtra.kind === TypeKind.Number);
+		closeScope(ctx.table);
+	});
+	test("no constraint leaves typeExtra null", () => {
+		const ctx = createContext();
+		openScope(ctx.table, ScopeKind.Block);
+		defineGenericParam(ctx, "U");
+		const sym = lookupSymbol(ctx.table, "U");
+		check(sym !== null);
+		check(sym.symbolType.kind === TypeKind.GenericParam);
+		check(sym.symbolType.typeName === "U");
+		closeScope(ctx.table);
+	});
+	test("constrained interface Box<T extends number>", () => {
+		resetGenericDeclStore();
+		resetGenericTypeInsts();
+		// Parser captures "T:number" for generic params
+		addGenericDecl("Box", "T:number");
+		updateGenericDeclFields("Box", "value", "T");
+		const ctx = createContext();
+		const t = resolveAnnotation("Box<number>", ctx);
+		check(t.kind === TypeKind.TypeReference);
+		check(t.typeName === "Box__number");
 	});
 });

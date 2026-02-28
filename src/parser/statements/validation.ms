@@ -2,7 +2,7 @@
 // Uses registered callbacks via callProgramParser/callStateProgramParser.
 
 import { Token, TokenKind } from "../../lexer/token";
-import { Node, NodeKind, ProgramData } from "../../ast/node";
+import { Node, NodeKind, ProgramData, createNodeAt } from "../../ast/node";
 import { ParserState, createState } from "../context";
 import { lex } from "../../lexer/lexer";
 import { callProgramParser, callStateProgramParser } from "./callbacks";
@@ -38,7 +38,7 @@ export function stmtKind(input: string): NodeKind {
 
 export function stmtAt(input: string, index: number): Node {
 	const pr = parseSource(input);
-	if (!pr.ok) return { kind: NodeKind.ExprStmt, location: { line: 0, column: 0 }, data: { expr: { kind: NodeKind.NullLiteral, location: { line: 0, column: 0 }, data: { nullPlaceholder: true } } } };
+	if (!pr.ok) return createNodeAt(NodeKind.ExprStmt, { expr: createNodeAt(NodeKind.NullLiteral, { nullPlaceholder: true }, { line: 0, column: 0 }) }, { line: 0, column: 0 });
 	const stmts = pr.value.data as ProgramData;
 	return stmts.programStmts[index];
 }

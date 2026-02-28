@@ -24,16 +24,17 @@ Each item: what's missing, why production compilers have it, why we don't yet, h
 
 ---
 
-### 2. Pointer Accessor (-> vs .)
+### 2. ~~Pointer Accessor (-> vs .)~~
 
-**Gap**: `genMemberExpr` always emits `.` (expressions.ms:129). Classes are `ClassName*` (heap-allocated pointers) — need `->`.
+**Status: DONE.** Full Nim-parity `nkHiddenDeref` architecture implemented:
 
-**Why production compilers have it**: Type-directed emission is fundamental. The accessor depends on whether the object is a value type (`.`) or pointer type (`->`). Production compilers check `typ.kind` at every member access site. Wrong accessor = C compilation failure.
+1. **nodeType annotation**: `checkExpr()` stores resolved `Type` on every expression node via `node.nodeType` (checkExprPass.ms:155). Field is `nodeType: Type` on Node interface — proper typed pointer (upgraded from `unknown`/`void*`).
+2. **HiddenDeref NodeKind**: Dedicated AST node (like Nim's `nkHiddenDeref`). Reuses `{ expr: Node }` shape — no new union variant needed.
+3. **Checker insertion**: `checkMemberExpr()` calls `isPointerInC(objType, ctx)` — checks class/ref/ptr types. Wraps `d.object` in HiddenDeref node (checkExprPass.ms:278-282).
+4. **Codegen**: `genHiddenDeref()` emits `(*expr)` (expressions.ms:143-148). `genMemberExpr` keeps `.` — correct for `(*ptr).field`.
+5. **Full pipeline**: walker, printer, monomorphize clone all handle HiddenDeref.
 
-**Why we don't**: Codegen doesn't read `node.nodeType` yet. The type info IS on the AST (checker annotates it), we just skip it.
-
-**How to close**:
-Check `node.nodeType` in `genMemberExpr`. If object type is class/ref/ptr → emit `->`, else `.`. Already have `isPointerType()` in types.ms:86. ~10 lines.
+Result: `obj.field` where obj is a class → `(*obj).field` in C (equivalent to `obj->field`).
 
 ---
 
@@ -219,7 +220,7 @@ Not needed unless we add a tracing GC. Our DRC model is complete without barrier
 
 ---
 
-### 15. Move Marker Must Survive to DRC
+### 15. ~~Move Marker Must Survive to DRC~~
 
 **Gap**: `moveExprLower.ms` strips `move x` → `x` in Phase 3, before the DRC analyzer (Phase 4) ever sees it. The move marker's semantic intent is lost.
 
@@ -237,7 +238,13 @@ Not needed unless we add a tracing GC. Our DRC model is complete without barrier
 
 Tier 5 (first-write sink optimization) deferred — requires DrcContext struct change blocked by DRC gotcha #18.
 
-`moveExprLower.ms` retained in native pipeline as safety net for any MoveExpr that survives past the analyzer.
+**Additional parity (post-Gap-15)**:
+- ~~**Type fix**: `checkExprPass.ms` MoveExpr now returns inner expression type (was `unknownType()`).~~
+- ~~**Operand validation**: Rejects non-identifier/member/array/call operands at type-check time.~~
+- ~~**sinkFn optimization**: `makeSinkCall()` wired in 3 `processAssignment` paths — `sink(dest,src)` replaces `destroy(old)+assign` when `sinkFn !== ""`.~~
+- ~~**Inline sink in hook bodies**: `destructorLifting.ms` `=sink` bodies emit inline `destroy(field) + assign` instead of runtime `_sink()` calls. All type families updated (string, array, closure, map, set, named). `refOp` already optimal.~~
+- ~~`moveExprLower.ms` removed from Phase 3 native pipeline — MoveExpr survives to Phase 4 and Phase 5.~~
+- **100% parity** with reference architecture on move semantics across all pipeline phases.
 
 ---
 
@@ -284,7 +291,7 @@ Tier 5 (first-write sink optimization) deferred — requires DrcContext struct c
 | # | Gap | Severity | Effort | Blocked? |
 |---|-----|----------|--------|----------|
 | 1 | Generic monomorphization | Blocking | ~400 lines | Yes (checker) |
-| 2 | Pointer accessor (-> vs .) | Blocking | ~10 lines | No |
+| 2 | ~~Pointer accessor (-> vs .)~~ | ~~DONE~~ | ~~86 lines~~ | ~~Completed~~ |
 | 3 | @builtin expansion | Blocking | ~200 lines | No |
 | 4 | std/core.ms auto-import | Blocking | ~230 lines | No |
 | 5 | RTTI / type info | Functional | ~200 lines | No |
@@ -297,12 +304,18 @@ Tier 5 (first-write sink optimization) deferred — requires DrcContext struct c
 | 12 | NRVO | Optimization | ~100 lines | No |
 | 13 | Multi-module C output | Deferred | ~200 lines | Needs multi-module checker |
 | 14 | Write barriers | N/A | 0 lines | Intentionally omitted (DRC) |
-| 15 | Move marker → DRC (not Phase 3) | Functional | ~50 lines | No |
+| 15 | ~~Move marker → DRC~~ | ~~DONE~~ | ~~200 lines~~ | ~~Completed~~ |
 | 16 | Lambda lifting all FunctionExpr | Functional | ~80 lines | No |
 | 17 | openArray (ptr, len) convention | Functional | ~200 lines | Needs runtime array struct |
 
-**Gap #9 status**: UpdateExpr correct, NewExpr acceptable (debt), SpreadExpr correct. MoveExpr → Gap 15, FunctionExpr → Gap 16, openArray → Gap 17.
+**Gap #9 status**: UpdateExpr correct, NewExpr acceptable (debt), SpreadExpr correct. ~~MoveExpr → Gap 15 (DONE)~~, FunctionExpr → Gap 16, openArray → Gap 17.
 
 **Total to close all gaps**: ~1800-2100 lines (excluding generic monomorphization checker work)
 **Current codegen**: ~2800 lines across 8 files
 **Target**: ~5000 lines for production parity
+
+---
+
+## Design Note: `nodeType` Field
+
+Gap #2 required every expression node to carry its resolved type (like Nim's `n.typ: PType`). The field is `nodeType: Type` on the Node interface, set by `checkExpr()` during Phase 2. Types are owned by CheckerContext and outlive Nodes — safe borrowed reference. Initialized to `null as unknown as Type` in `createNode()`.

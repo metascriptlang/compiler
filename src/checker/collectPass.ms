@@ -1,4 +1,4 @@
-import { Node, NodeKind, ProgramData, FunctionDeclData, ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData } from "../ast/node";
+import { Node, NodeKind, SourceLocation, createNodeAt, ProgramData, FunctionDeclData, ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData } from "../ast/node";
 import { extractDecoratorInfo } from "./decoratorHelpers";
 import { Type, TypeKind, unknownType, createObject, createEnum, createTypeRef } from "./types";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, defineSymbol, makeSymbol, lookupSymbol } from "./symbol";
@@ -289,7 +289,8 @@ testGroup("Collector", () => {
 		check(!sym.isExported);
 	});
 	test("getDeclName function", () => {
-		check(getDeclName({ kind: NodeKind.FunctionDecl, location: { line: 0, column: 0 }, data: { fnName: "test", params: [], fnParamTypes: [], fnBody: { kind: NodeKind.BlockStmt, location: { line: 0, column: 0 }, data: { statements: [] } }, fnFlags: "", fnReturnType: "" } }) === "test");
+		const zl: SourceLocation = { line: 0, column: 0 };
+		check(getDeclName(createNodeAt(NodeKind.FunctionDecl, { fnName: "test", params: [], fnParamTypes: [], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "" }, zl)) === "test");
 	});
 	test("skip variables", () => {
 		check(!hasSymbol("const x = 1;", "x"));

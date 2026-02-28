@@ -2,7 +2,7 @@
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
 import {
-	Node, NodeKind,
+	Node, NodeKind, createNode,
 	IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData,
 	CallExprData, MemberExprData, ArrayAccessData,
 	ObjectLiteralData, ArrayLiteralData, ConditionalExprData,
@@ -10,6 +10,7 @@ import {
 	AwaitExprData, YieldExprData, MoveExprData, OutExprData,
 	ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData,
 } from "../ast/node";
+import { TokenKind, createToken } from "../lexer/token";
 import {
 	Type, TypeKind,
 	unknownType, numberType, stringType, booleanType,
@@ -29,7 +30,7 @@ import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
 // ===== Expression Checker =====
 
 export function checkExpr(ctx: CheckerContext, node: Node): Type {
-	return match (node.kind) {
+	const result = match (node.kind) {
 		NodeKind.NumberLiteral | NodeKind.BigIntLiteral => numberType(),
 		NodeKind.StringLiteral => stringType(),
 		NodeKind.BooleanLiteral => booleanType(),
@@ -135,8 +136,14 @@ export function checkExpr(ctx: CheckerContext, node: Node): Type {
 		},
 		NodeKind.MoveExpr => {
 			const d = node.data as MoveExprData;
+			// Validate operand: only identifiers, member access, array access, and calls allowed
+			if (d.moveArg.kind !== NodeKind.Identifier
+				&& d.moveArg.kind !== NodeKind.MemberExpr
+				&& d.moveArg.kind !== NodeKind.ArrayAccess
+				&& d.moveArg.kind !== NodeKind.CallExpr) {
+				addError(ctx, "invalid 'move' operand: expected identifier, field access, array access, or call expression");
+			}
 			checkExpr(ctx, d.moveArg);
-			unknownType();
 		},
 		NodeKind.OutExpr => {
 			const d = node.data as OutExprData;
@@ -145,6 +152,8 @@ export function checkExpr(ctx: CheckerContext, node: Node): Type {
 		},
 		_ => unknownType(),
 	};
+	node.nodeType = result ;
+	return result;
 }
 
 // ===== Operator Inference =====
@@ -248,9 +257,30 @@ function resolveOverloadCall(sym: Symbol, argTypes: Type[]): Type {
 
 // ===== Member Expression + Extension Method Resolution =====
 
+// Check if a type maps to a pointer in C (class, ref, ptr — NOT interface)
+function isPointerInC(t: Type, ctx: CheckerContext): boolean {
+	if (t === null) return false;
+	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) return true;
+	if (t.kind !== TypeKind.Object) return false;
+	// Interface = value type in C, Class = pointer type
+	const isInterface = (t.typeFlags & 1) !== 0;
+	if (isInterface) return false;
+	if (t.typeName === "") return false;
+	const sym = lookupSymbol(ctx.table, t.typeName);
+	if (sym === null) return false;
+	return sym.symbolKind === SymbolKind.Class;
+}
+
 function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 	const d = node.data as MemberExprData;
 	const objType = checkExpr(ctx, d.object);
+	// Insert HiddenDeref for pointer types (class, ref, ptr) — generates (*obj).field in C
+	if (isPointerInC(objType, ctx)) {
+		const tok = createToken(TokenKind.Ident, "", node.location.line);
+		const derefNode = createNode(NodeKind.HiddenDeref, { expr: d.object }, tok);
+		derefNode.nodeType = objType ;
+		d.object = derefNode;
+	}
 	const propType = getProperty(objType, d.property);
 	if (propType.kind !== TypeKind.Unknown) return propType;
 	// Fall back to extension registry

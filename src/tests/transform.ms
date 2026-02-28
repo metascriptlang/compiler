@@ -17,10 +17,10 @@ import { lowerResult } from "../transform/desugar/resultDesugar";
 import { lowerResultFieldCheck } from "../transform/desugar/resultFieldCheck";
 import { lowerMatch } from "../transform/lowering/matchLower";
 import { lowerTailCall } from "../transform/lowering/tailCallLower";
-import { markClosureCalls } from "../transform/c/closureCallMarker";
-import { markPointerParams } from "../transform/c/pointerParam";
-import { injectRangeChecks } from "../transform/c/rangeCheckInject";
-import { coerceOptionals } from "../transform/c/optionalCoercion";
+import { markClosureCalls } from "../transform/native/closureCallMarker";
+import { markPointerParams } from "../transform/native/pointerParam";
+import { injectRangeChecks } from "../transform/native/rangeCheckInject";
+import { coerceOptionals } from "../transform/native/optionalCoercion";
 import { test, check, testGroup } from "std/testing";
 import {
 	stmtCountAfter, firstStmtKindAfter, firstExprKindAfter,

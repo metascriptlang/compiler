@@ -114,17 +114,49 @@ export function mangle(name: string): string {
 	return result;
 }
 
-// ===== Module Name Mangling =====
+// ===== Character Ordinal (Nim parity) =====
+// Nim mangles uppercase, underscore, and special chars to decimal ASCII ordinals.
+// This prevents clashes with Z (path sep) and O (dot) special meanings.
+
+function charOrd(ch: string): string {
+	return match (ch) {
+		"A" => "65", "B" => "66", "C" => "67", "D" => "68", "E" => "69",
+		"F" => "70", "G" => "71", "H" => "72", "I" => "73", "J" => "74",
+		"K" => "75", "L" => "76", "M" => "77", "N" => "78", "O" => "79",
+		"P" => "80", "Q" => "81", "R" => "82", "S" => "83", "T" => "84",
+		"U" => "85", "V" => "86", "W" => "87", "X" => "88", "Y" => "89",
+		"Z" => "90", "_" => "95", "-" => "45", " " => "32",
+		_ => "63",
+	};
+}
+
+function isLowerOrDigit(ch: string): boolean {
+	return match (ch) {
+		"a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" => true,
+		"k" | "l" | "m" | "n" | "o" | "p" | "q" | "r" | "s" | "t" => true,
+		"u" | "v" | "w" | "x" | "y" | "z" => true,
+		"0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" => true,
+		_ => false,
+	};
+}
+
+// ===== Module Name Mangling (Nim-aligned) =====
+// Nim's uniqueModuleName: a-z, 0-9 pass through; / → Z; . → O;
+// everything else (A-Z, _, special) → ord(c) as decimal string.
 
 export function mangleModuleName(modulePath: string): string {
 	let result = "";
 	let i = 0;
 	while (i < modulePath.length) {
 		const ch = charAt(modulePath, i);
-		if (isAlnumChar(ch) || ch === "_") {
+		if (isLowerOrDigit(ch)) {
 			result = result + ch;
+		} else if (ch === "/" || ch === "\\") {
+			result = result + "Z";
+		} else if (ch === ".") {
+			result = result + "O";
 		} else {
-			result = result + "_";
+			result = result + charOrd(ch);
 		}
 		i += 1;
 	}
@@ -254,10 +286,26 @@ testGroup("C Name Safe", () => {
 });
 
 testGroup("C Module Name", () => {
-	test("simple path", () => {
+	test("simple lowercase path", () => {
 		check(mangleModuleName("mymod") === "mymod");
 	});
-	test("path with separators", () => {
-		check(mangleModuleName("src/codegen/c") === "src_codegen_c");
+	test("path separators become Z", () => {
+		check(mangleModuleName("src/codegen/c") === "srcZcodegenZc");
+	});
+	test("dots become O", () => {
+		check(mangleModuleName("foo.bar") === "fooObar");
+	});
+	test("uppercase becomes ordinal (Nim parity)", () => {
+		// A=65, B=66, M=77, y=y, C=67, l=l, a=a, s=s
+		check(mangleModuleName("MyClass") === "77y67lass");
+		check(mangleModuleName("AB") === "6566");
+	});
+	test("underscore becomes ordinal", () => {
+		// _ = 95
+		check(mangleModuleName("my_mod") === "my95mod");
+	});
+	test("full path with mixed case", () => {
+		// src/codegen/MyGen → srcZcodegenZ77y71en
+		check(mangleModuleName("src/codegen/MyGen") === "srcZcodegenZ77y71en");
 	});
 });

@@ -150,6 +150,12 @@ function genCopyRef(increfFn: string, x: Node, y: Node, fieldName: string, buf: 
 	buf.stmts.push(makeExprStmt(makeCall(makeIdent(increfFn, loc), [fresh], loc), loc));
 }
 
+// Inline sink: destroy old value + raw assign (eliminates per-field function call)
+function genInlineSink(destroyFn: string, xf: Node, yf: Node, buf: StmtBuf, loc: SourceLocation): void {
+	genCall(destroyFn, "destroy", xf, yf, buf, loc);
+	buf.stmts.push(makeExprStmt(makeAssign(xf, yf, loc), loc));
+}
+
 // ===== Type Family Helpers (Nim's modular pattern) =====
 // Each helper owns all runtime names for its type family.
 
@@ -158,7 +164,7 @@ function stringOp(hook: string, xf: Node, yf: Node, fieldName: string, buf: Stmt
 	match (hook) {
 		"destroy" => { genCall("ms_string_decref", hook, xf, yf, buf, loc); },
 		"copy" => { genCopyRef("ms_string_incref", xf, yf, fieldName, buf, loc); },
-		"sink" => { genCall("ms_string_sink", hook, xf, yf, buf, loc); },
+		"sink" => { genInlineSink("ms_string_decref", xf, yf, buf, loc); },
 		"wasMoved" => { genCall("ms_string_was_moved", hook, xf, yf, buf, loc); },
 		_ => {},
 	};
@@ -170,7 +176,7 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, buf: StmtBuf, loc
 		match (hook) {
 			"destroy" => { genCall("ms_array_destroy", hook, xf, yf, buf, loc); },
 			"copy" => { genCall("ms_array_copy", hook, xf, yf, buf, loc); },
-			"sink" => { genCall("ms_array_number_sink", hook, xf, yf, buf, loc); },
+			"sink" => { genInlineSink("ms_array_destroy", xf, yf, buf, loc); },
 			"wasMoved" => { genCall("ms_array_number_was_moved", hook, xf, yf, buf, loc); },
 			_ => {},
 		};
@@ -178,14 +184,15 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, buf: StmtBuf, loc
 		match (hook) {
 			"destroy" => { genCall("ms_array_string_destroy", hook, xf, yf, buf, loc); },
 			"copy" => { genCall("ms_array_string_copy", hook, xf, yf, buf, loc); },
-			"sink" => { genCall("ms_array_string_sink", hook, xf, yf, buf, loc); },
+			"sink" => { genInlineSink("ms_array_string_destroy", xf, yf, buf, loc); },
 			"wasMoved" => { genCall("ms_array_string_was_moved", hook, xf, yf, buf, loc); },
 			_ => {},
 		};
 	} else {
 		match (hook) {
 			"destroy" => { genCall("MS_ARRAY_REF_DESTROY", hook, xf, yf, buf, loc); },
-			"copy" | "sink" => { genCall("MS_ARRAY_REF_COPY", hook, xf, yf, buf, loc); },
+			"copy" => { genCall("MS_ARRAY_REF_COPY", hook, xf, yf, buf, loc); },
+			"sink" => { genInlineSink("MS_ARRAY_REF_DESTROY", xf, yf, buf, loc); },
 			"wasMoved" => { genCall("MS_ARRAY_REF_WAS_MOVED", hook, xf, yf, buf, loc); },
 			"trace" => { genCall("ms_array_ref_trace", hook, xf, yf, buf, loc); },
 			_ => {},
@@ -210,6 +217,10 @@ function refOp(hook: string, xf: Node, yf: Node, fieldName: string, buf: StmtBuf
 
 // --- Nim's fillBodyObjT for named value-type objects ---
 function namedObjOp(hook: string, typeName: string, xf: Node, yf: Node, buf: StmtBuf, loc: SourceLocation): void {
+	if (hook === "sink") {
+		genInlineSink(typeName + "_destroy", xf, yf, buf, loc);
+		return;
+	}
 	const name = hook === "wasMoved" ? "object_was_moved" : typeName + hookSuffix(hook);
 	genCall(name, hook, xf, yf, buf, loc);
 }
@@ -219,7 +230,7 @@ function runtimeOp(prefix: string, destroyName: string, hasTrace: boolean, hook:
 	match (hook) {
 		"destroy" => { genCall(destroyName, hook, xf, yf, buf, loc); },
 		"copy" => { genCall(prefix + "_copy", hook, xf, yf, buf, loc); },
-		"sink" => { genCall(prefix + "_sink", hook, xf, yf, buf, loc); },
+		"sink" => { genInlineSink(destroyName, xf, yf, buf, loc); },
 		"wasMoved" => { genCall(prefix + "_was_moved", hook, xf, yf, buf, loc); },
 		"trace" => { if (hasTrace) genCall(prefix + "_trace", hook, xf, yf, buf, loc); },
 		_ => {},
@@ -231,6 +242,7 @@ function setOp(hook: string, xf: Node, yf: Node, buf: StmtBuf, loc: SourceLocati
 	match (hook) {
 		"destroy" => { genCall("ms_set_free", hook, xf, yf, buf, loc); },
 		"copy" => { genCall("ms_set_copy", hook, xf, yf, buf, loc); },
+		"sink" => { genInlineSink("ms_set_free", xf, yf, buf, loc); },
 		_ => { defaultOp(hook, xf, yf, buf, loc); },
 	};
 }

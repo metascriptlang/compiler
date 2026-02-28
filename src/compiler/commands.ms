@@ -1,6 +1,6 @@
 // MetaScript Compiler CLI — Individual commands (check, dump-*, pipeline, run, test, fmt)
 
-import { exit, exec, fileExists } from "std/process";
+import { exit, exec } from "std/process";
 import { lex } from "../lexer/index";
 import { formatToken } from "../lexer/token";
 import { parseSource } from "../parser/statements/validation";
@@ -10,10 +10,12 @@ import { CheckerContext, hasErrors, errorCount } from "../checker/context";
 import { checkProgram } from "../checker/checkPass";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
+// import { monomorphizeProgram } from "../monomorphize/collect";
 import { generateJS } from "../codegen/js/index";
+import { generateC } from "../codegen/c/index";
 import { Target } from "./options";
-import { startsWith, endsWith } from "./options";
-import { readSource, writeOutput } from "./io";
+import { readSource, writeOutput, printErrorsAndExit } from "./io";
+import { compileC, cleanupTempFiles } from "./cc";
 
 // -- dump-tokens --
 
@@ -66,12 +68,7 @@ export function cmdCheck(filePath: string): void {
 	} else {
 		const count = errorCount(ctx);
 		console.log("Found " + count + " type error(s):");
-		let i = 0;
-		while (i < ctx.errors.length) {
-			console.log("  " + ctx.errors[i]);
-			i += 1;
-		}
-		exit(1);
+		printErrorsAndExit(ctx, "  ");
 	}
 }
 
@@ -108,7 +105,7 @@ export function cmdPipeline(filePath: string): void {
 	}
 
 	// Phase 3: Transform
-	console.log("\n[3/5] Transform (27 passes)...");
+	console.log("\n[3/5] Transform...");
 	const transformed = transformProgram(program, checkerCtx);
 	console.log("  OK");
 
@@ -119,7 +116,7 @@ export function cmdPipeline(filePath: string): void {
 
 	// Phase 5: Codegen
 	console.log("\n[5/5] Codegen...");
-	console.log("  C backend: not yet implemented");
+	console.log("  C backend: available (--target=c)");
 	console.log("  JS backend: available (--target=js)");
 
 	console.log("\nPipeline complete.");
@@ -130,7 +127,6 @@ export function cmdPipeline(filePath: string): void {
 export function cmdRun(filePath: string, target: Target): void {
 	const source = readSource(filePath);
 
-	// Parse
 	const parseResult = parseSource(source);
 	if (!parseResult.ok) {
 		console.log("Parse error: " + parseResult.error);
@@ -138,36 +134,37 @@ export function cmdRun(filePath: string, target: Target): void {
 	}
 	const program = parseResult.value;
 
-	// Type check
 	const checkerCtx = checkProgram(program);
 	if (hasErrors(checkerCtx)) {
-		let i = 0;
-		while (i < checkerCtx.errors.length) {
-			console.log("Type error: " + checkerCtx.errors[i]);
-			i += 1;
-		}
-		exit(1);
+		printErrorsAndExit(checkerCtx, "Type error: ");
 	}
 
-	// Transform
 	const transformed = transformProgram(program, checkerCtx);
 
 	if (target === Target.JS) {
-		// JS: compile to temp .js, run with node
 		const jsCode = generateJS(transformed);
 		const tmpFile = "/tmp/_msc_run.js";
 		writeOutput(tmpFile, jsCode);
 		const code = exec("node " + tmpFile);
+		cleanupTempFiles();
 		exit(code);
 	} else {
-		// C: compile to temp .c, build with clang, run binary
 		const analyzed = analyzeProgram(transformed, checkerCtx);
-		// TODO: generateC(analyzed) once C codegen lands
-		// For now: fall back to JS if possible
-		console.log("Error: C backend run not yet available (C codegen in progress)");
-		console.log("Use --target=js to run via JavaScript:");
-		console.log("  msc run --target=js " + filePath);
-		exit(1);
+		const cCode = generateC(analyzed, checkerCtx, filePath);
+		const tmpC = "/tmp/_msc_run.c";
+		const tmpBin = "/tmp/_msc_run";
+		writeOutput(tmpC, cCode);
+
+		const buildCode = compileC(tmpC, tmpBin);
+		if (buildCode !== 0) {
+			console.log("Error: clang compilation failed (exit " + buildCode + ")");
+			cleanupTempFiles();
+			exit(1);
+		}
+
+		const runCode = exec(tmpBin);
+		cleanupTempFiles();
+		exit(runCode);
 	}
 }
 

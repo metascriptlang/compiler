@@ -35,6 +35,29 @@ export enum RaiserOpcode {
 	Ret,              // ABC: return R[A]
 	Halt,             // ABC: stop, exit value = R[A]
 	Print,            // ABC: debug print R[A]
+
+	// Array operations (5)
+	NewArray,         // ABC: R[A] = new array from R[A+1..A+B]
+	LoadIndex,        // ABC: R[A] = R[B][R[C]]
+	StoreIndex,       // ABC: R[A][R[B]] = R[C]
+	ArrayLen,         // ABC: R[A] = len(R[B])
+	ArrayPush,        // ABC: R[A].push(R[B])
+
+	// Object operations (3)
+	NewObject,        // ABC: R[A] = new empty object
+	LoadField,        // ABC: R[A] = R[B].field(constants[C].strVal)
+	StoreField,       // ABC: R[A].field(constants[B].strVal) = R[C]
+
+	// String operations (6)
+	ConcatStr,        // ABC: R[A] = toString(R[B]) + toString(R[C])
+	EqStr,            // ABC: if R[A].strVal == R[B].strVal skip C
+	NeStr,            // ABC: if R[A].strVal != R[B].strVal skip C
+	StrLen,           // ABC: R[A] = R[B].strVal.length
+	StrCharAt,        // ABC: R[A] = R[B].strVal[R[C].intVal] (single char)
+	StrSlice,         // ABC: R[A] = R[B].strVal.slice(R[C].intVal, R[C+1].intVal)
+
+	// Indirect call (1)
+	CallIndirect,     // ABC: R[A] = call func[R[B].intVal](R[A+1]..R[A+C])
 }
 
 // --- Instruction ---

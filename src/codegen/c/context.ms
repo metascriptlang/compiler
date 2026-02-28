@@ -21,7 +21,8 @@ export enum CSection {
 	StringPool,     // string literal data
 	GlobalVars,     // global variable declarations
 	Procs,          // function bodies
-	ModuleInit,     // module initialization code
+	DatInit,        // data initialization (type info, static data — runs first)
+	ModuleInit,     // module code initialization (user top-level code — runs second)
 }
 
 // ===== CProcSection — per-proc sections (Nim's TCProcSection) =====
@@ -407,7 +408,7 @@ export function nameSetAdd(ns: NameSet, name: string): void {
 // ===== CGen — module-level state (Nim's BModule/TCGen) =====
 
 export interface CGen {
-	sections: Builder[];       // CSection enum-indexed (9 sections)
+	sections: Builder[];       // CSection enum-indexed (10 sections)
 	currentProc: CProc;        // active proc being generated
 	typeCache: TypeCache;      // fully-emitted types
 	forwTypeCache: TypeCache;  // forward-declared types
@@ -416,14 +417,15 @@ export interface CGen {
 	declaredThings: NameSet;   // prevents duplicate declarations
 	fnDeclNames: NameSet;      // known function names (for closure call detection)
 	checkerCtx: CheckerContext;
+	modulePath: string;        // source file path (for module-qualified init names)
 	labels: number;            // module-scope unique counter
 }
 
-export function createCGen(ctx: CheckerContext): CGen {
-	// Initialize all 9 sections
+export function createCGen(ctx: CheckerContext, modulePath: string): CGen {
+	// Initialize all 10 sections
 	const sections: Builder[] = [];
 	let i = 0;
-	while (i < 9) {
+	while (i < 10) {
 		const b = createBuilder();
 		sections.push(b);
 		i += 1;
@@ -438,6 +440,7 @@ export function createCGen(ctx: CheckerContext): CGen {
 		declaredThings: createNameSet(),
 		fnDeclNames: createNameSet(),
 		checkerCtx: ctx,
+		modulePath,
 		labels: 0,
 	};
 }
@@ -622,26 +625,26 @@ testGroup("C NameSet", () => {
 });
 
 testGroup("C CGen", () => {
-	test("create with 9 sections", () => {
-		const g = createCGen(null as unknown as CheckerContext);
-		check(g.sections.length === 9);
+	test("create with 10 sections", () => {
+		const g = createCGen(null as unknown as CheckerContext, "test");
+		check(g.sections.length === 10);
 	});
 	test("section accessor", () => {
-		const g = createCGen(null as unknown as CheckerContext);
+		const g = createCGen(null as unknown as CheckerContext, "test");
 		add(sec(g, CSection.Headers), "#include <stdint.h>\n");
 		add(sec(g, CSection.Procs), "void foo() {}\n");
 		check(extract(sec(g, CSection.Headers)) === "#include <stdint.h>\n");
 		check(extract(sec(g, CSection.Procs)) === "void foo() {}\n");
 	});
 	test("assembleOutput", () => {
-		const g = createCGen(null as unknown as CheckerContext);
+		const g = createCGen(null as unknown as CheckerContext, "test");
 		add(sec(g, CSection.Headers), "#include <stdint.h>\n");
 		add(sec(g, CSection.Procs), "void foo() {}\n");
 		const output = assembleOutput(g);
 		check(output === "#include <stdint.h>\n\nvoid foo() {}\n");
 	});
 	test("moduleTemp", () => {
-		const g = createCGen(null as unknown as CheckerContext);
+		const g = createCGen(null as unknown as CheckerContext, "test");
 		const t1 = moduleTemp(g);
 		const t2 = moduleTemp(g);
 		check(t1 === "TM1_");

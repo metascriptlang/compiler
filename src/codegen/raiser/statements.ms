@@ -3,14 +3,20 @@
 
 import {
 	Node, NodeKind,
-	ReturnStmtData, BlockStmtData, ExprStmtData
+	ReturnStmtData, BlockStmtData, ExprStmtData,
+	VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData,
+	ForStmtData, ForOfStmtData,
+	ExportDeclData, DecoratedDeclData
 } from "../../ast/node";
-import { RaiserOpcode, raiserABC, raiserABx } from "../../raiser/bytecode";
-import { raiserNil } from "../../raiser/value";
+import { RaiserOpcode, raiserABC, raiserAx } from "../../raiser/bytecode";
+import { raiserNil, raiserInt } from "../../raiser/value";
 import {
-	RaiserCompState, emitInst, allocReg, emitLoadConst, emitRet
+	RaiserCompState, emitInst, allocReg, emitLoadConst, emitRet,
+	declareLocal, declareLocalStr,
+	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen,
+	pushLoop, popLoop, currentLoop, hasLoop
 } from "./context";
-import { compileExpr } from "./expressions";
+import { compileExpr, exprIsString } from "./expressions";
 
 // --- Statement compilation ---
 
@@ -37,14 +43,270 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 	}
 
 	if (k === NodeKind.BlockStmt) {
-		const d = node.data as BlockStmtData;
-		let i = 0;
-		while (i < d.statements.length) {
-			compileStmt(s, d.statements[i]);
-			i = i + 1;
-		}
+		compileBlock(s, node);
+		return;
+	}
+
+	if (k === NodeKind.VariableDecl) {
+		compileVariableDecl(s, node);
+		return;
+	}
+
+	if (k === NodeKind.IfStmt) {
+		compileIfStmt(s, node);
+		return;
+	}
+
+	if (k === NodeKind.WhileStmt) {
+		compileWhileStmt(s, node);
+		return;
+	}
+
+	if (k === NodeKind.BreakStmt) {
+		if (!hasLoop(s)) return;
+		const loop = currentLoop(s);
+		const jumpIdx = emitJumpPlaceholder(s);
+		loop.breakPatches.items.push(jumpIdx);
+		return;
+	}
+
+	if (k === NodeKind.ContinueStmt) {
+		if (!hasLoop(s)) return;
+		const loop = currentLoop(s);
+		const offset = loop.startIp - codeLen(s) - 1;
+		emitInst(s, raiserAx(RaiserOpcode.Jump, offset));
+		return;
+	}
+
+	if (k === NodeKind.FunctionDecl) {
+		// Handled at top-level by rgen.ms two-phase compilation
+		return;
+	}
+
+	if (k === NodeKind.DoWhileStmt) {
+		compileDoWhileStmt(s, node);
+		return;
+	}
+
+	if (k === NodeKind.ForStmt) {
+		compileForStmt(s, node);
+		return;
+	}
+
+	if (k === NodeKind.ForOfStmt) {
+		compileForOfStmt(s, node);
+		return;
+	}
+
+	if (k === NodeKind.ExportDecl) {
+		const d = node.data as ExportDeclData;
+		compileStmt(s, d.exportedDecl);
+		return;
+	}
+
+	if (k === NodeKind.DecoratedDecl) {
+		const d = node.data as DecoratedDeclData;
+		compileStmt(s, d.decoratedNode);
+		return;
+	}
+
+	if (k === NodeKind.EnumDecl || k === NodeKind.InterfaceDecl || k === NodeKind.TypeAliasDecl) {
+		// Enums are collected in Phase 1 by rgen.ms; interfaces/types are compile-time only
 		return;
 	}
 
 	// Unsupported statement — skip
+}
+
+// --- Block ---
+
+function compileBlock(s: RaiserCompState, node: Node): void {
+	const d = node.data as BlockStmtData;
+	let i = 0;
+	while (i < d.statements.length) {
+		compileStmt(s, d.statements[i]);
+		i = i + 1;
+	}
+}
+
+// --- Variable Declaration ---
+
+function compileVariableDecl(s: RaiserCompState, node: Node): void {
+	const d = node.data as VariableDeclData;
+	if (d.initializer !== null) {
+		const isStr = exprIsString(s, d.initializer);
+		const reg = compileExpr(s, d.initializer);
+		declareLocalStr(s, d.declName, reg, isStr);
+	} else {
+		const reg = allocReg(s);
+		emitLoadConst(s, reg, raiserNil());
+		declareLocal(s, d.declName, reg);
+	}
+}
+
+// --- If Statement ---
+
+function compileIfStmt(s: RaiserCompState, node: Node): void {
+	const d = node.data as IfStmtData;
+	const condReg = compileExpr(s, d.condition);
+	const jumpToElse = emitBranchIfFalsy(s, condReg);
+
+	compileStmt(s, d.consequent);
+
+	if (d.alternate !== null) {
+		const jumpPastElse = emitJumpPlaceholder(s);
+		patchJumpTo(s, jumpToElse, codeLen(s));
+		compileStmt(s, d.alternate);
+		patchJumpTo(s, jumpPastElse, codeLen(s));
+	} else {
+		patchJumpTo(s, jumpToElse, codeLen(s));
+	}
+}
+
+// --- Do-While Statement ---
+
+function compileDoWhileStmt(s: RaiserCompState, node: Node): void {
+	const d = node.data as DoWhileStmtData;
+	const loopStart = codeLen(s);
+	pushLoop(s, loopStart);
+
+	compileStmt(s, d.doBody);
+
+	// Condition at the end — loop back if truthy
+	const condReg = compileExpr(s, d.doCondition);
+	const exitJump = emitBranchIfFalsy(s, condReg);
+	const backOffset = loopStart - codeLen(s) - 1;
+	emitInst(s, raiserAx(RaiserOpcode.Jump, backOffset));
+
+	patchJumpTo(s, exitJump, codeLen(s));
+	const loop = popLoop(s);
+	let i = 0;
+	while (i < loop.breakPatches.items.length) {
+		patchJumpTo(s, loop.breakPatches.items[i], codeLen(s));
+		i = i + 1;
+	}
+}
+
+// --- While Statement ---
+
+function compileWhileStmt(s: RaiserCompState, node: Node): void {
+	const d = node.data as WhileStmtData;
+	const loopStart = codeLen(s);
+	pushLoop(s, loopStart);
+
+	const condReg = compileExpr(s, d.whileCondition);
+	const exitJump = emitBranchIfFalsy(s, condReg);
+
+	compileStmt(s, d.whileBody);
+
+	// Jump back to loop start
+	const backOffset = loopStart - codeLen(s) - 1;
+	emitInst(s, raiserAx(RaiserOpcode.Jump, backOffset));
+
+	// Patch exit + break jumps
+	patchJumpTo(s, exitJump, codeLen(s));
+	const loop = popLoop(s);
+	let i = 0;
+	while (i < loop.breakPatches.items.length) {
+		patchJumpTo(s, loop.breakPatches.items[i], codeLen(s));
+		i = i + 1;
+	}
+}
+
+// --- For Statement ---
+// for (init; cond; update) body → init; while (cond) { body; update; }
+
+function compileForStmt(s: RaiserCompState, node: Node): void {
+	const d = node.data as ForStmtData;
+
+	// Compile init
+	if (d.forInit !== null) {
+		compileStmt(s, d.forInit);
+	}
+
+	const loopStart = codeLen(s);
+	pushLoop(s, loopStart);
+
+	// Condition
+	let exitJump = -1;
+	if (d.forCondition !== null) {
+		const condReg = compileExpr(s, d.forCondition);
+		exitJump = emitBranchIfFalsy(s, condReg);
+	}
+
+	// Body
+	compileStmt(s, d.forBody);
+
+	// Update
+	if (d.forUpdate !== null) {
+		compileExpr(s, d.forUpdate);
+	}
+
+	// Jump back to condition
+	const backOffset = loopStart - codeLen(s) - 1;
+	emitInst(s, raiserAx(RaiserOpcode.Jump, backOffset));
+
+	// Patch exit + break jumps
+	if (exitJump >= 0) {
+		patchJumpTo(s, exitJump, codeLen(s));
+	}
+	const loop = popLoop(s);
+	let i = 0;
+	while (i < loop.breakPatches.items.length) {
+		patchJumpTo(s, loop.breakPatches.items[i], codeLen(s));
+		i = i + 1;
+	}
+}
+
+// --- For-Of Statement ---
+// for (const x of arr) body → let __i = 0; while (__i < arr.length) { x = arr[__i]; body; __i++; }
+
+function compileForOfStmt(s: RaiserCompState, node: Node): void {
+	const d = node.data as ForOfStmtData;
+
+	// Compile iterable (array)
+	const arrReg = compileExpr(s, d.forOfIterable);
+
+	// Hidden index: __i = 0
+	const idxReg = allocReg(s);
+	emitLoadConst(s, idxReg, raiserInt(0));
+
+	// Length register (recomputed each iteration)
+	const lenReg = allocReg(s);
+
+	// Element register — declared as a local for the binding name
+	const elemReg = allocReg(s);
+	declareLocal(s, d.forOfBinding, elemReg);
+
+	const loopStart = codeLen(s);
+	pushLoop(s, loopStart);
+
+	// Condition: if idx < len, skip past the exit jump (continue loop)
+	emitInst(s, raiserABC(RaiserOpcode.ArrayLen, lenReg, arrReg, 0));
+	emitInst(s, raiserABC(RaiserOpcode.BltI64, idxReg, lenReg, 1));
+	const exitJump = emitJumpPlaceholder(s);
+
+	// Load element: elem = arr[idx]
+	emitInst(s, raiserABC(RaiserOpcode.LoadIndex, elemReg, arrReg, idxReg));
+
+	// Body
+	compileStmt(s, d.forOfBody);
+
+	// Increment index: __i++
+	const oneReg = allocReg(s);
+	emitLoadConst(s, oneReg, raiserInt(1));
+	emitInst(s, raiserABC(RaiserOpcode.AddI64, idxReg, idxReg, oneReg));
+
+	// Jump back
+	const backOffset = loopStart - codeLen(s) - 1;
+	emitInst(s, raiserAx(RaiserOpcode.Jump, backOffset));
+
+	// Patch exit + break
+	patchJumpTo(s, exitJump, codeLen(s));
+	const loop = popLoop(s);
+	let i = 0;
+	while (i < loop.breakPatches.items.length) {
+		patchJumpTo(s, loop.breakPatches.items[i], codeLen(s));
+		i = i + 1;
+	}
 }

@@ -16,9 +16,19 @@ export {
 	handleInitialize, handleShutdown, handleHover,
 	handleCompletion, handleDefinition,
 	handleDocumentSymbol, handleSignatureHelp, handleInlayHint,
+	handleReferences, handleRename,
 	handleDidOpen, handleDidChange, handleDidClose,
 	buildDiagnosticsJson, lspDispatch
 } from "./handlers";
+
+export {
+	lspFmtPosition, lspFmtRange, lspFmtLineRange,
+	lspFmtLocation, lspFmtTextEdit,
+	lspFmtCompletionItem, lspFmtHoverResult,
+	lspFmtDiagnostic, lspFmtPublishDiagnostics,
+	lspFmtDocumentSymbol, lspFmtInlayHint,
+	lspFmtSignatureParam, lspFmtSignature, lspFmtSignatureHelp
+} from "./format";
 
 export {
 	LspServerState, createServerState,

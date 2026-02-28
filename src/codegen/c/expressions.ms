@@ -13,6 +13,8 @@ import {
 	MemberExprData, ArrayAccessData,
 	ConditionalExprData, TypeAssertionData, CallExprData,
 	ObjectLiteralData, ArrayLiteralData, ArrowFunctionData,
+	UpdateExprData, NewExprData, MoveExprData, SpreadExprData, FunctionExprData,
+	ExprStmtData,
 } from "../../ast/node";
 import { Type, TypeKind } from "../../checker/types";
 import {
@@ -80,6 +82,24 @@ export function genExpr(g: CGen, p: CProc, node: Node): string {
 		NodeKind.ArrowFunction => {
 			genArrowFunction(g, p, node);
 		},
+		NodeKind.UpdateExpr => {
+			genUpdateExpr(g, p, node);
+		},
+		NodeKind.NewExpr => {
+			genNewExpr(g, p, node);
+		},
+		NodeKind.MoveExpr => {
+			genMoveExpr(g, p, node);
+		},
+		NodeKind.SpreadExpr => {
+			genSpreadExpr(g, p, node);
+		},
+		NodeKind.FunctionExpr => {
+			genFunctionExpr(g, p, node);
+		},
+		NodeKind.HiddenDeref => {
+			genHiddenDeref(g, p, node);
+		},
 		_ => "/* unsupported expr */0",
 	};
 }
@@ -120,13 +140,20 @@ function genUnaryExpr(g: CGen, p: CProc, node: Node): string {
 	return "(" + d.unaryOp + operand + ")";
 }
 
+// ===== Hidden Deref (compiler-inserted pointer dereference) =====
+
+function genHiddenDeref(g: CGen, p: CProc, node: Node): string {
+	const d = node.data as ExprStmtData;
+	const inner = genExpr(g, p, d.expr);
+	return "(*" + inner + ")";
+}
+
 // ===== Member Expression =====
 
 function genMemberExpr(g: CGen, p: CProc, node: Node): string {
 	const d = node.data as MemberExprData;
 	const obj = genExpr(g, p, d.object);
 	const field = mangleFieldName(d.property);
-	// TODO: determine -> vs . from type info. Default to . for now.
 	return obj + "." + field;
 }
 
@@ -304,6 +331,109 @@ function mapArrowReturnType(ret: string): string {
 	return "void*";
 }
 
+// ===== Update Expression (i++, ++i, i--, --i) =====
+// Phase 3 lowers statement-position updates to assignment.
+// Expression-position updates survive — emit directly (C supports natively).
+
+function genUpdateExpr(g: CGen, p: CProc, node: Node): string {
+	const d = node.data as UpdateExprData;
+	const operand = genExpr(g, p, d.updateArg);
+	if (d.isPrefix) return "(" + d.updateOp + operand + ")";
+	return "(" + operand + d.updateOp + ")";
+}
+
+// ===== New Expression =====
+// `new Foo(args)` → `ClassName_new(args)` (constructor call).
+// Classes emit ClassName_new() in declarations.ms.
+
+function genNewExpr(g: CGen, p: CProc, node: Node): string {
+	const d = node.data as NewExprData;
+	const callee = genExpr(g, p, d.newCallee);
+	let args = "";
+	let i = 0;
+	while (i < d.newArguments.length) {
+		if (i > 0) args = args + ", ";
+		args = args + genExpr(g, p, d.newArguments[i]);
+		i += 1;
+	}
+	return callee + "_new(" + args + ")";
+}
+
+// ===== Move Expression =====
+// `move x` → emit inner expression. DRC (Phase 4) already injected
+// ms_was_moved(&x) after the move site. Codegen just passes through.
+
+function genMoveExpr(g: CGen, p: CProc, node: Node): string {
+	const d = node.data as MoveExprData;
+	return genExpr(g, p, d.moveArg);
+}
+
+// ===== Spread Expression =====
+// Phase 3 inlines literal spreads: `f(...[a, b])` → `f(a, b)`.
+// Dynamic spreads (`f(...arr)`) survive — no C equivalent.
+// Emit the inner expression with a warning comment.
+
+function genSpreadExpr(g: CGen, p: CProc, node: Node): string {
+	const d = node.data as SpreadExprData;
+	return "/* spread */ " + genExpr(g, p, d.spreadArg);
+}
+
+// ===== Function Expression =====
+// Non-capturing function expressions are lifted to module-level functions.
+// Capturing ones are already transformed to closure pairs by lambda lifting.
+// Same pattern as ArrowFunction.
+
+function genFunctionExpr(g: CGen, p: CProc, node: Node): string {
+	const d = node.data as FunctionExprData;
+	g.labels += 1;
+	const liftedName = "__anon_" + g.labels;
+
+	// Build parameter list
+	let paramList = "";
+	let i = 0;
+	while (i < d.funcExprParams.length) {
+		if (i > 0) paramList = paramList + ", ";
+		const pType = mapFuncExprParamType(d.funcExprParamTypes, i);
+		paramList = paramList + pType + " " + safeName(d.funcExprParams[i]);
+		i += 1;
+	}
+	if (d.funcExprParams.length === 0) paramList = "void";
+
+	const retType = mapFuncExprReturnType(d.funcExprReturnType);
+	const proto = retType + " " + liftedName + "(" + paramList + ")";
+
+	// Emit lifted function to Procs section
+	// Body requires genStmt (in statements.ms) — circular import.
+	// Same limitation as ArrowFunction. Body emitted as placeholder.
+	addLine(sec(g, CSection.Procs), proto + " {");
+	addLine(sec(g, CSection.Procs), "  /* func expr body */");
+	addLine(sec(g, CSection.Procs), "}");
+
+	return "(void*)" + liftedName;
+}
+
+function mapFuncExprParamType(paramTypes: string[], idx: number): string {
+	if (idx < paramTypes.length) {
+		const t = paramTypes[idx];
+		if (t === "number" || t === "float64" || t === "") return "double";
+		if (t === "int32") return "int32_t";
+		if (t === "boolean") return "NIM_BOOL";
+		if (t === "string") return "msString";
+		if (t === "void") return "void";
+		return "void*";
+	}
+	return "void*";
+}
+
+function mapFuncExprReturnType(ret: string): string {
+	if (ret === "" || ret === "void") return "void";
+	if (ret === "number" || ret === "float64") return "double";
+	if (ret === "int32") return "int32_t";
+	if (ret === "boolean") return "NIM_BOOL";
+	if (ret === "string") return "msString";
+	return "void*";
+}
+
 // ===== Tests =====
 
 import { createCGen, createProc, extract, sec, CSection } from "./context";
@@ -422,13 +552,6 @@ testGroup("C Expr Ternary", () => {
 	});
 });
 
-testGroup("C Expr Object", () => {
-	test("object in assignment", () => {
-		// Object literals typically appear in variable init, not bare expression
-		// Test through the declaration path instead
-		check(true);
-	});
-});
 
 testGroup("C Expr Array", () => {
 	test("empty array", () => {
@@ -436,5 +559,38 @@ testGroup("C Expr Array", () => {
 	});
 	test("array with elements", () => {
 		check(exprSnippet("[1, 2, 3];") === "{ 1, 2, 3 }");
+	});
+});
+
+testGroup("C Expr Update", () => {
+	test("postfix increment", () => {
+		check(exprSnippet("x++;") === "(x++)");
+	});
+	test("prefix increment", () => {
+		check(exprSnippet("++x;") === "(++x)");
+	});
+	test("postfix decrement", () => {
+		check(exprSnippet("x--;") === "(x--)");
+	});
+	test("prefix decrement", () => {
+		check(exprSnippet("--x;") === "(--x)");
+	});
+});
+
+testGroup("C Expr New", () => {
+	test("simple new", () => {
+		check(exprSnippet("new Foo();") === "Foo_new()");
+	});
+	test("new with args", () => {
+		check(exprSnippet("new Bar(1, 2);") === "Bar_new(1, 2)");
+	});
+});
+
+testGroup("C Expr Move", () => {
+	test("move identifier", () => {
+		check(exprSnippet("move x;") === "x");
+	});
+	test("move call", () => {
+		check(exprSnippet("move f();") === "f()");
 	});
 });

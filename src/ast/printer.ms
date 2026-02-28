@@ -417,6 +417,11 @@ export function printNode(node: Node, level: number): void {
 			console.log(`${pad}OutExpr:`);
 			printNode(data.outArg, level + 1);
 		},
+		NodeKind.HiddenDeref => {
+			const data = node.data as ExprStmtData;
+			console.log(`${pad}HiddenDeref:`);
+			printNode(data.expr, level + 1);
+		},
 		NodeKind.FunctionExpr => {
 			const data = node.data as FunctionExprData;
 			if (data.funcExprFlags.length > 0) {

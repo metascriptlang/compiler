@@ -1,7 +1,7 @@
 import { Type, TypeKind, unknownType } from "./types";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, createSymbolTable } from "./symbol";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
-import { sliceStr, findChar } from "../utils/string";
+import { sliceStr, findChar, trim, splitTopLevel } from "../utils/string";
 import { test, check, testGroup } from "std/testing";
 
 // ===== Export Registry (cross-module type propagation) =====
@@ -107,6 +107,59 @@ export function getExtReceiverType(flags: string): string {
 	const colonPos = findChar(rest, ":");
 	if (colonPos <= 0) return "";
 	return sliceStr(rest, colonPos + 1, rest.length);
+}
+
+// ===== Generic Flag Helpers =====
+// Parse "gen:T,U" from pipe-delimited fnFlags strings (shared by resolvePass + monomorphize)
+
+export function extractGenericNames(flags: string): string[] {
+	const result: string[] = [];
+	if (flags === "") return result;
+	const parts = splitTopLevel(flags, "|");
+	let pi = 0;
+	while (pi < parts.length) {
+		const trimPart = trim(parts[pi]);
+		if (trimPart.length > 4) {
+			const prefix = sliceStr(trimPart, 0, 4);
+			if (prefix === "gen:") {
+				const nameStr = sliceStr(trimPart, 4, trimPart.length);
+				const names = splitTopLevel(nameStr, ",");
+				let ni = 0;
+				while (ni < names.length) {
+					const trimName = trim(names[ni]);
+					if (trimName !== "") result.push(trimName);
+					ni += 1;
+				}
+			}
+		}
+		pi += 1;
+	}
+	return result;
+}
+
+export function stripGenFlag(flags: string): string {
+	if (flags === "") return "";
+	const parts = splitTopLevel(flags, "|");
+	const kept: string[] = [];
+	let i = 0;
+	while (i < parts.length) {
+		const trimPart = trim(parts[i]);
+		if (trimPart.length > 4) {
+			const prefix = sliceStr(trimPart, 0, 4);
+			if (prefix !== "gen:") kept.push(trimPart);
+		} else {
+			if (trimPart !== "") kept.push(trimPart);
+		}
+		i += 1;
+	}
+	if (kept.length === 0) return "";
+	let result = kept[0];
+	let j = 1;
+	while (j < kept.length) {
+		result = result + "|" + kept[j];
+		j += 1;
+	}
+	return result;
 }
 
 // ===== Attached Operations (lifecycle hooks per type) =====
@@ -352,5 +405,42 @@ testGroup("ExportRegistry", () => {
 		registerModuleExports(r, "/src/b.ms", syms);
 		const found = findExportedSymbol(r, "/src/b.ms", "bar");
 		check(found === null);
+	});
+});
+
+testGroup("GenericFlagHelpers", () => {
+	test("extractGenericNames single", () => {
+		const names = extractGenericNames("gen:T");
+		check(names.length === 1);
+		check(names[0] === "T");
+	});
+	test("extractGenericNames multiple", () => {
+		const names = extractGenericNames("gen:T,U,V");
+		check(names.length === 3);
+		check(names[0] === "T");
+		check(names[1] === "U");
+		check(names[2] === "V");
+	});
+	test("extractGenericNames with async", () => {
+		const names = extractGenericNames("async|gen:T");
+		check(names.length === 1);
+		check(names[0] === "T");
+	});
+	test("extractGenericNames empty", () => {
+		const names = extractGenericNames("");
+		check(names.length === 0);
+	});
+	test("extractGenericNames no gen", () => {
+		const names = extractGenericNames("async");
+		check(names.length === 0);
+	});
+	test("stripGenFlag simple", () => {
+		check(stripGenFlag("gen:T") === "");
+	});
+	test("stripGenFlag with async", () => {
+		check(stripGenFlag("async|gen:T") === "async");
+	});
+	test("stripGenFlag no gen", () => {
+		check(stripGenFlag("async") === "async");
 	});
 });

@@ -120,24 +120,6 @@ function buildReduce(arrExpr: Node, callbackExpr: Node, initExpr: Node, arrName:
 	return stmts;
 }
 
-// ===== Helpers: extract fields from call data without passing CallExprData across functions =====
-
-function getCallArg0(callNode: Node): Node {
-	const cd = callNode.data as CallExprData;
-	return cd.arguments[0];
-}
-
-function getCallArg1(callNode: Node): Node {
-	const cd = callNode.data as CallExprData;
-	return cd.arguments[1];
-}
-
-function getCalleeObject(callNode: Node): Node {
-	const cd = callNode.data as CallExprData;
-	const md = cd.callee.data as MemberExprData;
-	return md.object;
-}
-
 // ===== Expander =====
 
 function expandArrayMethodStmt(stmt: Node, ctx: TransformContext): Node[] {
@@ -146,8 +128,9 @@ function expandArrayMethodStmt(stmt: Node, ctx: TransformContext): Node[] {
 		const d = stmt.data as ReturnStmtData;
 		const method = getArrayMethodName(d.argument);
 		if (method !== "") {
-			const arrExpr = getCalleeObject(d.argument);
-			const callback = getCallArg0(d.argument);
+			const cd = d.argument.data as CallExprData;
+			const arrExpr = (cd.callee.data as MemberExprData).object;
+			const callback = cd.arguments[0];
 			const loc = stmt.location;
 			if (method === "map") {
 				const arrName = freshTemp(ctx, "mArr");
@@ -166,7 +149,7 @@ function expandArrayMethodStmt(stmt: Node, ctx: TransformContext): Node[] {
 				return loopStmts;
 			}
 			// reduce
-			const initExpr = getCallArg1(d.argument);
+			const initExpr = cd.arguments[1];
 			const arrName = freshTemp(ctx, "rArr");
 			const accName = freshTemp(ctx, "rAcc");
 			const iName = freshTemp(ctx, "rI");
@@ -180,8 +163,9 @@ function expandArrayMethodStmt(stmt: Node, ctx: TransformContext): Node[] {
 		const d = stmt.data as VariableDeclData;
 		const method = getArrayMethodName(d.initializer);
 		if (method !== "") {
-			const arrExpr = getCalleeObject(d.initializer);
-			const callback = getCallArg0(d.initializer);
+			const cd = d.initializer.data as CallExprData;
+			const arrExpr = (cd.callee.data as MemberExprData).object;
+			const callback = cd.arguments[0];
 			const loc = stmt.location;
 			if (method === "map") {
 				const arrName = freshTemp(ctx, "mArr");
@@ -200,7 +184,7 @@ function expandArrayMethodStmt(stmt: Node, ctx: TransformContext): Node[] {
 				return loopStmts;
 			}
 			// reduce
-			const initExpr = getCallArg1(d.initializer);
+			const initExpr = cd.arguments[1];
 			const arrName = freshTemp(ctx, "rArr");
 			const accName = freshTemp(ctx, "rAcc");
 			const iName = freshTemp(ctx, "rI");

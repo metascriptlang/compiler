@@ -3,16 +3,108 @@
 
 import {
 	Node, NodeKind,
-	NumberLiteralData, BooleanLiteralData, BinaryExprData, UnaryExprData,
-	CallExprData, IdentifierData, MemberExprData
+	NumberLiteralData, StringLiteralData, BooleanLiteralData,
+	BinaryExprData, UnaryExprData,
+	CallExprData, IdentifierData, MemberExprData,
+	ConditionalExprData, TypeAssertionData, UpdateExprData,
+	ArrayLiteralData, ArrayAccessData, ObjectLiteralData
 } from "../../ast/node";
 import {
 	RaiserOpcode, raiserABC, raiserABx
 } from "../../raiser/bytecode";
-import { raiserInt, raiserNil, raiserBool } from "../../raiser/value";
+import { raiserInt, raiserNil, raiserBool, raiserString } from "../../raiser/value";
 import {
-	RaiserCompState, emitInst, addConst, allocReg, emitLoadConst
+	RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, resolveLocal,
+	resolveFunc, isLocalString, isEnumName, resolveEnumMember,
+	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen
 } from "./context";
+
+// --- Operator → Opcode mapping ---
+
+function arithmeticOpcode(op: string): RaiserOpcode {
+	return match (op) {
+		"+" => RaiserOpcode.AddI64,
+		"-" => RaiserOpcode.SubI64,
+		"*" => RaiserOpcode.MulI64,
+		"/" => RaiserOpcode.DivI64,
+		"%" => RaiserOpcode.ModI64,
+		_ => RaiserOpcode.AddI64,
+	};
+}
+
+function comparisonOpcode(op: string): RaiserOpcode {
+	return match (op) {
+		"==" | "===" => RaiserOpcode.BeqI64,
+		"!=" | "!==" => RaiserOpcode.BneI64,
+		"<" => RaiserOpcode.BltI64,
+		"<=" => RaiserOpcode.BleI64,
+		">" => RaiserOpcode.BgtI64,
+		">=" => RaiserOpcode.BgeI64,
+		_ => RaiserOpcode.BeqI64,
+	};
+}
+
+function isComparisonOp(op: string): boolean {
+	return match (op) {
+		"==" | "===" | "!=" | "!==" | "<" | "<=" | ">" | ">=" => true,
+		_ => false,
+	};
+}
+
+function isArithmeticOp(op: string): boolean {
+	return match (op) {
+		"+" | "-" | "*" | "/" | "%" => true,
+		_ => false,
+	};
+}
+
+function isLogicalOp(op: string): boolean {
+	return match (op) {
+		"&&" | "||" => true,
+		_ => false,
+	};
+}
+
+function isCompoundAssignOp(op: string): boolean {
+	return match (op) {
+		"+=" | "-=" | "*=" | "/=" | "%=" => true,
+		_ => false,
+	};
+}
+
+function compoundBaseOpcode(op: string): RaiserOpcode {
+	return match (op) {
+		"+=" => RaiserOpcode.AddI64,
+		"-=" => RaiserOpcode.SubI64,
+		"*=" => RaiserOpcode.MulI64,
+		"/=" => RaiserOpcode.DivI64,
+		"%=" => RaiserOpcode.ModI64,
+		_ => RaiserOpcode.AddI64,
+	};
+}
+
+// --- String type inference (AST-based, no checker needed) ---
+
+export function exprIsString(s: RaiserCompState, node: Node): boolean {
+	const k = node.kind;
+	if (k === NodeKind.StringLiteral) return true;
+	if (k === NodeKind.Identifier) {
+		const d = node.data as IdentifierData;
+		return isLocalString(s, d.name);
+	}
+	if (k === NodeKind.BinaryExpr) {
+		const d = node.data as BinaryExprData;
+		if (d.operator === "+") {
+			return exprIsString(s, d.left) || exprIsString(s, d.right);
+		}
+		return false;
+	}
+	if (k === NodeKind.ConditionalExpr) {
+		const d = node.data as ConditionalExprData;
+		return exprIsString(s, d.ternaryConsequent) || exprIsString(s, d.ternaryAlternate);
+	}
+	return false;
+}
 
 // --- Expression compilation ---
 // Returns the register holding the result.
@@ -24,6 +116,13 @@ export function compileExpr(s: RaiserCompState, node: Node): number {
 		const d = node.data as NumberLiteralData;
 		const reg = allocReg(s);
 		emitLoadConst(s, reg, raiserInt(d.value));
+		return reg;
+	}
+
+	if (k === NodeKind.StringLiteral) {
+		const d = node.data as StringLiteralData;
+		const reg = allocReg(s);
+		emitLoadConst(s, reg, raiserString(d.value));
 		return reg;
 	}
 
@@ -40,6 +139,22 @@ export function compileExpr(s: RaiserCompState, node: Node): number {
 		return reg;
 	}
 
+	if (k === NodeKind.Identifier) {
+		const d = node.data as IdentifierData;
+		const reg = resolveLocal(s, d.name);
+		if (reg >= 0) return reg;
+		// Function reference as value (e.g., { fn: myFunc, env: {} })
+		const funcIdx = resolveFunc(s, d.name);
+		if (funcIdx >= 0) {
+			const r = allocReg(s);
+			emitLoadConst(s, r, raiserInt(funcIdx));
+			return r;
+		}
+		const fallback = allocReg(s);
+		emitLoadConst(s, fallback, raiserNil());
+		return fallback;
+	}
+
 	if (k === NodeKind.BinaryExpr) {
 		return compileBinaryExpr(s, node);
 	}
@@ -52,6 +167,35 @@ export function compileExpr(s: RaiserCompState, node: Node): number {
 		return compileCallExpr(s, node);
 	}
 
+	if (k === NodeKind.ConditionalExpr) {
+		return compileConditionalExpr(s, node);
+	}
+
+	if (k === NodeKind.TypeAssertion) {
+		const d = node.data as TypeAssertionData;
+		return compileExpr(s, d.asExpr);
+	}
+
+	if (k === NodeKind.UpdateExpr) {
+		return compileUpdateExpr(s, node);
+	}
+
+	if (k === NodeKind.ArrayLiteral) {
+		return compileArrayLiteral(s, node);
+	}
+
+	if (k === NodeKind.ArrayAccess) {
+		return compileArrayAccess(s, node);
+	}
+
+	if (k === NodeKind.MemberExpr) {
+		return compileMemberExpr(s, node);
+	}
+
+	if (k === NodeKind.ObjectLiteral) {
+		return compileObjectLiteral(s, node);
+	}
+
 	// Fallback: load nil
 	const reg = allocReg(s);
 	emitLoadConst(s, reg, raiserNil());
@@ -62,19 +206,95 @@ export function compileExpr(s: RaiserCompState, node: Node): number {
 
 function compileBinaryExpr(s: RaiserCompState, node: Node): number {
 	const d = node.data as BinaryExprData;
+	const op = d.operator;
+
+	// Assignment: x = expr  or  arr[i] = expr
+	if (op === "=") {
+		const srcReg = compileExpr(s, d.right);
+		if (d.left.kind === NodeKind.Identifier) {
+			const id = d.left.data as IdentifierData;
+			const targetReg = resolveLocal(s, id.name);
+			if (targetReg >= 0) {
+				emitInst(s, raiserABC(RaiserOpcode.Move, targetReg, srcReg, 0));
+				return targetReg;
+			}
+		}
+		if (d.left.kind === NodeKind.ArrayAccess) {
+			const ad = d.left.data as ArrayAccessData;
+			const arrReg = compileExpr(s, ad.array);
+			const idxReg = compileExpr(s, ad.index);
+			emitInst(s, raiserABC(RaiserOpcode.StoreIndex, arrReg, idxReg, srcReg));
+			return srcReg;
+		}
+		if (d.left.kind === NodeKind.MemberExpr) {
+			const md = d.left.data as MemberExprData;
+			const objReg = compileExpr(s, md.object);
+			const nameIdx = addConst(s, raiserString(md.property));
+			emitInst(s, raiserABC(RaiserOpcode.StoreField, objReg, nameIdx, srcReg));
+			return srcReg;
+		}
+		return srcReg;
+	}
+
+	// Compound assignment: x += expr → x = x + expr
+	if (isCompoundAssignOp(op)) {
+		return compileCompoundAssign(s, node);
+	}
+
+	// Logical operators: short-circuit evaluation
+	if (isLogicalOp(op)) {
+		return compileLogicalExpr(s, node);
+	}
+
+	// String concat: "+" where either operand is a string
+	if (op === "+" && (exprIsString(s, d.left) || exprIsString(s, d.right))) {
+		const lReg = compileExpr(s, d.left);
+		const rReg = compileExpr(s, d.right);
+		const dest = allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.ConcatStr, dest, lReg, rReg));
+		return dest;
+	}
+
+	// String comparison: == / != / === / !== where either operand is a string
+	const isStrCmp = isComparisonOp(op) && (exprIsString(s, d.left) || exprIsString(s, d.right));
+	if (isStrCmp && (op === "==" || op === "===")) {
+		const lReg = compileExpr(s, d.left);
+		const rReg = compileExpr(s, d.right);
+		const dest = allocReg(s);
+		emitLoadConst(s, dest, raiserInt(1));
+		emitInst(s, raiserABC(RaiserOpcode.EqStr, lReg, rReg, 1));
+		emitLoadConst(s, dest, raiserInt(0));
+		return dest;
+	}
+	if (isStrCmp && (op === "!=" || op === "!==")) {
+		const lReg = compileExpr(s, d.left);
+		const rReg = compileExpr(s, d.right);
+		const dest = allocReg(s);
+		emitLoadConst(s, dest, raiserInt(1));
+		emitInst(s, raiserABC(RaiserOpcode.NeStr, lReg, rReg, 1));
+		emitLoadConst(s, dest, raiserInt(0));
+		return dest;
+	}
+
 	const lReg = compileExpr(s, d.left);
 	const rReg = compileExpr(s, d.right);
 	const dest = allocReg(s);
-	const op = d.operator;
 
-	if (op === "+") { emitInst(s, raiserABC(RaiserOpcode.AddI64, dest, lReg, rReg)); }
-	else if (op === "-") { emitInst(s, raiserABC(RaiserOpcode.SubI64, dest, lReg, rReg)); }
-	else if (op === "*") { emitInst(s, raiserABC(RaiserOpcode.MulI64, dest, lReg, rReg)); }
-	else if (op === "/") { emitInst(s, raiserABC(RaiserOpcode.DivI64, dest, lReg, rReg)); }
-	else if (op === "%") { emitInst(s, raiserABC(RaiserOpcode.ModI64, dest, lReg, rReg)); }
-	else {
+	// Comparison: R_result = 1; BxxI64 L R 1; R_result = 0
+	if (isComparisonOp(op)) {
+		emitLoadConst(s, dest, raiserInt(1));
+		emitInst(s, raiserABC(comparisonOpcode(op), lReg, rReg, 1));
 		emitLoadConst(s, dest, raiserInt(0));
+		return dest;
 	}
+
+	// Arithmetic
+	if (isArithmeticOp(op)) {
+		emitInst(s, raiserABC(arithmeticOpcode(op), dest, lReg, rReg));
+		return dest;
+	}
+
+	emitLoadConst(s, dest, raiserInt(0));
 	return dest;
 }
 
@@ -84,34 +304,398 @@ function compileUnaryExpr(s: RaiserCompState, node: Node): number {
 	const d = node.data as UnaryExprData;
 	const srcReg = compileExpr(s, d.operand);
 	const dest = allocReg(s);
+
 	if (d.unaryOp === "-") {
 		emitInst(s, raiserABC(RaiserOpcode.NegI64, dest, srcReg, 0));
+	} else if (d.unaryOp === "!") {
+		// Logical NOT: result = (src == 0) ? 1 : 0
+		const zeroReg = allocReg(s);
+		emitLoadConst(s, zeroReg, raiserInt(0));
+		emitLoadConst(s, dest, raiserInt(1));
+		emitInst(s, raiserABC(RaiserOpcode.BeqI64, srcReg, zeroReg, 1));
+		emitLoadConst(s, dest, raiserInt(0));
 	} else {
 		emitInst(s, raiserABC(RaiserOpcode.Move, dest, srcReg, 0));
 	}
 	return dest;
 }
 
+// --- Logical (short-circuit) ---
+
+function compileLogicalExpr(s: RaiserCompState, node: Node): number {
+	const d = node.data as BinaryExprData;
+	const dest = allocReg(s);
+
+	// Compile left operand
+	const lReg = compileExpr(s, d.left);
+	emitInst(s, raiserABC(RaiserOpcode.Move, dest, lReg, 0));
+
+	if (d.operator === "&&") {
+		// a && b: if a is falsy, skip b (result = a)
+		const jumpPastB = emitBranchIfFalsy(s, dest);
+		const rReg = compileExpr(s, d.right);
+		emitInst(s, raiserABC(RaiserOpcode.Move, dest, rReg, 0));
+		patchJumpTo(s, jumpPastB, codeLen(s));
+	} else {
+		// a || b: if a is falsy, evaluate b. If truthy, skip b.
+		const jumpToB = emitBranchIfFalsy(s, dest);
+		const jumpPastB = emitJumpPlaceholder(s);
+		patchJumpTo(s, jumpToB, codeLen(s));
+		const rReg = compileExpr(s, d.right);
+		emitInst(s, raiserABC(RaiserOpcode.Move, dest, rReg, 0));
+		patchJumpTo(s, jumpPastB, codeLen(s));
+	}
+
+	return dest;
+}
+
+// --- Compound assignment (+=, -=, *=, /=, %=) ---
+
+function compileCompoundAssign(s: RaiserCompState, node: Node): number {
+	const d = node.data as BinaryExprData;
+	const op = d.operator;
+
+	if (d.left.kind === NodeKind.Identifier) {
+		const id = d.left.data as IdentifierData;
+		const targetReg = resolveLocal(s, id.name);
+		if (targetReg >= 0) {
+			const rhsReg = compileExpr(s, d.right);
+			// String concat: += on string variable
+			if (op === "+=" && (exprIsString(s, d.left) || exprIsString(s, d.right))) {
+				emitInst(s, raiserABC(RaiserOpcode.ConcatStr, targetReg, targetReg, rhsReg));
+			} else {
+				emitInst(s, raiserABC(compoundBaseOpcode(op), targetReg, targetReg, rhsReg));
+			}
+			return targetReg;
+		}
+	}
+
+	// Fallback: unsupported compound assign target
+	const reg = allocReg(s);
+	emitLoadConst(s, reg, raiserNil());
+	return reg;
+}
+
 // --- Call ---
 
 function compileCallExpr(s: RaiserCompState, node: Node): number {
 	const d = node.data as CallExprData;
+
+	// arr.push(val)
+	if (isArrayPush(d.callee)) {
+		return compileArrayPushCall(s, node);
+	}
+
+	// str.charAt(i)
+	if (isStringMethod(s, d.callee, "charAt") && d.arguments.length === 1) {
+		return compileStrCharAt(s, node);
+	}
+
+	// str.slice(start, end)
+	if (isStringMethod(s, d.callee, "slice") && d.arguments.length === 2) {
+		return compileStrSlice(s, node);
+	}
+
 	if (isConsoleLog(d.callee)) {
-		const args = d.arguments;
 		let lastReg = 0;
 		let i = 0;
-		while (i < args.length) {
-			lastReg = compileExpr(s, args[i]);
+		while (i < d.arguments.length) {
+			lastReg = compileExpr(s, d.arguments[i]);
 			emitInst(s, raiserABC(RaiserOpcode.Print, lastReg, 0, 0));
 			i = i + 1;
 		}
 		return lastReg;
 	}
-	// Unsupported calls return 0
+
+	// User function call: callee must be Identifier
+	if (d.callee.kind === NodeKind.Identifier) {
+		const calleeId = d.callee.data as IdentifierData;
+		const funcIdx = resolveFunc(s, calleeId.name);
+		if (funcIdx >= 0) {
+			const argCount = d.arguments.length;
+			// Allocate dest + arg slots (dest+1..dest+argCount)
+			const dest = allocReg(s);
+			let i = 0;
+			while (i < argCount) { allocReg(s); i = i + 1; }
+			// Compile each arg, Move result into its expected slot
+			i = 0;
+			while (i < argCount) {
+				const argReg = compileExpr(s, d.arguments[i]);
+				const targetReg = dest + 1 + i;
+				if (argReg !== targetReg) {
+					emitInst(s, raiserABC(RaiserOpcode.Move, targetReg, argReg, 0));
+				}
+				i = i + 1;
+			}
+			emitInst(s, raiserABC(RaiserOpcode.Call, dest, funcIdx, argCount));
+			return dest;
+		}
+	}
+
+	// Closure / indirect call: callee is a variable holding {fn, env} pair
+	return compileClosureCall(s, node);
+}
+
+function compileClosureCall(s: RaiserCompState, node: Node): number {
+	const d = node.data as CallExprData;
+	const argCount = d.arguments.length;
+
+	// Compile callee expression → register holding the closure pair object
+	const closureReg = compileExpr(s, d.callee);
+
+	// Extract fn field (integer = function index) and env field
+	const fnIdxReg = allocReg(s);
+	const fnConstIdx = addConst(s, raiserString("fn"));
+	emitInst(s, raiserABC(RaiserOpcode.LoadField, fnIdxReg, closureReg, fnConstIdx));
+
+	const envReg = allocReg(s);
+	const envConstIdx = addConst(s, raiserString("env"));
+	emitInst(s, raiserABC(RaiserOpcode.LoadField, envReg, closureReg, envConstIdx));
+
+	// Allocate dest + (argCount+1) slots: env as first arg, then real args
+	const totalArgs = argCount + 1;
+	const dest = allocReg(s);
+	let i = 0;
+	while (i < totalArgs) { allocReg(s); i = i + 1; }
+
+	// Move env into first arg slot (dest+1)
+	emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1, envReg, 0));
+
+	// Compile each real arg into dest+2..dest+1+argCount
+	i = 0;
+	while (i < argCount) {
+		const argReg = compileExpr(s, d.arguments[i]);
+		const targetReg = dest + 2 + i;
+		if (argReg !== targetReg) {
+			emitInst(s, raiserABC(RaiserOpcode.Move, targetReg, argReg, 0));
+		}
+		i = i + 1;
+	}
+
+	// Emit CallIndirect: R[dest] = call func[R[fnIdxReg]](R[dest+1..dest+totalArgs])
+	emitInst(s, raiserABC(RaiserOpcode.CallIndirect, dest, fnIdxReg, totalArgs));
+	return dest;
+}
+
+// --- Conditional (ternary) ---
+
+function compileConditionalExpr(s: RaiserCompState, node: Node): number {
+	const d = node.data as ConditionalExprData;
+	const dest = allocReg(s);
+
+	const condReg = compileExpr(s, d.ternaryCondition);
+	const jumpToAlt = emitBranchIfFalsy(s, condReg);
+
+	// Consequent
+	const consReg = compileExpr(s, d.ternaryConsequent);
+	emitInst(s, raiserABC(RaiserOpcode.Move, dest, consReg, 0));
+	const jumpPastAlt = emitJumpPlaceholder(s);
+
+	// Alternate
+	patchJumpTo(s, jumpToAlt, codeLen(s));
+	const altReg = compileExpr(s, d.ternaryAlternate);
+	emitInst(s, raiserABC(RaiserOpcode.Move, dest, altReg, 0));
+
+	patchJumpTo(s, jumpPastAlt, codeLen(s));
+	return dest;
+}
+
+// --- Update (i++, ++i, i--, --i) ---
+
+function compileUpdateExpr(s: RaiserCompState, node: Node): number {
+	const d = node.data as UpdateExprData;
+
+	if (d.updateArg.kind === NodeKind.Identifier) {
+		const id = d.updateArg.data as IdentifierData;
+		const varReg = resolveLocal(s, id.name);
+		if (varReg >= 0) {
+			const oneReg = allocReg(s);
+			emitLoadConst(s, oneReg, raiserInt(1));
+
+			if (d.isPrefix) {
+				// ++i / --i: modify first, return modified
+				if (d.updateOp === "++") {
+					emitInst(s, raiserABC(RaiserOpcode.AddI64, varReg, varReg, oneReg));
+				} else {
+					emitInst(s, raiserABC(RaiserOpcode.SubI64, varReg, varReg, oneReg));
+				}
+				return varReg;
+			} else {
+				// i++ / i--: save old value, then modify
+				const oldReg = allocReg(s);
+				emitInst(s, raiserABC(RaiserOpcode.Move, oldReg, varReg, 0));
+				if (d.updateOp === "++") {
+					emitInst(s, raiserABC(RaiserOpcode.AddI64, varReg, varReg, oneReg));
+				} else {
+					emitInst(s, raiserABC(RaiserOpcode.SubI64, varReg, varReg, oneReg));
+				}
+				return oldReg;
+			}
+		}
+	}
+
+	// Fallback: unsupported update target
 	const reg = allocReg(s);
-	emitLoadConst(s, reg, raiserInt(0));
+	emitLoadConst(s, reg, raiserNil());
 	return reg;
 }
+
+// --- Object ---
+
+function compileObjectLiteral(s: RaiserCompState, node: Node): number {
+	const d = node.data as ObjectLiteralData;
+	const dest = allocReg(s);
+
+	// Create empty object
+	emitInst(s, raiserABC(RaiserOpcode.NewObject, dest, 0, 0));
+
+	// Set each field
+	let i = 0;
+	while (i < d.keys.length) {
+		const valReg = compileExpr(s, d.properties[i]);
+		const nameIdx = addConst(s, raiserString(d.keys[i]));
+		emitInst(s, raiserABC(RaiserOpcode.StoreField, dest, nameIdx, valReg));
+		i = i + 1;
+	}
+
+	return dest;
+}
+
+// --- Array ---
+
+function compileArrayLiteral(s: RaiserCompState, node: Node): number {
+	const d = node.data as ArrayLiteralData;
+	const elemCount = d.elements.length;
+
+	// Reserve dest + N element slots upfront
+	const dest = allocReg(s);
+	let slotIdx = 0;
+	while (slotIdx < elemCount) {
+		allocReg(s);
+		slotIdx = slotIdx + 1;
+	}
+
+	// Compile each element, move result to its slot
+	let i = 0;
+	while (i < elemCount) {
+		const elemReg = compileExpr(s, d.elements[i]);
+		const targetReg = dest + 1 + i;
+		if (elemReg !== targetReg) {
+			emitInst(s, raiserABC(RaiserOpcode.Move, targetReg, elemReg, 0));
+		}
+		i = i + 1;
+	}
+
+	emitInst(s, raiserABC(RaiserOpcode.NewArray, dest, elemCount, 0));
+	return dest;
+}
+
+function compileArrayAccess(s: RaiserCompState, node: Node): number {
+	const d = node.data as ArrayAccessData;
+	const arrReg = compileExpr(s, d.array);
+	const idxReg = compileExpr(s, d.index);
+	const dest = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.LoadIndex, dest, arrReg, idxReg));
+	return dest;
+}
+
+function compileMemberExpr(s: RaiserCompState, node: Node): number {
+	const d = node.data as MemberExprData;
+
+	// Enum member access: Color.Red → integer constant
+	if (d.object.kind === NodeKind.Identifier) {
+		const objId = d.object.data as IdentifierData;
+		if (isEnumName(s, objId.name)) {
+			const val = resolveEnumMember(s, objId.name, d.property);
+			const reg = allocReg(s);
+			emitLoadConst(s, reg, raiserInt(val >= 0 ? val : 0));
+			return reg;
+		}
+	}
+
+	// .length — string vs array
+	if (d.property === "length") {
+		const objReg = compileExpr(s, d.object);
+		const dest = allocReg(s);
+		if (exprIsString(s, d.object)) {
+			emitInst(s, raiserABC(RaiserOpcode.StrLen, dest, objReg, 0));
+		} else {
+			emitInst(s, raiserABC(RaiserOpcode.ArrayLen, dest, objReg, 0));
+		}
+		return dest;
+	}
+
+	// General field access on objects
+	const objReg = compileExpr(s, d.object);
+	const nameIdx = addConst(s, raiserString(d.property));
+	const dest = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.LoadField, dest, objReg, nameIdx));
+	return dest;
+}
+
+function isArrayPush(node: Node): boolean {
+	if (node.kind !== NodeKind.MemberExpr) return false;
+	const d = node.data as MemberExprData;
+	return d.property === "push";
+}
+
+function compileArrayPushCall(s: RaiserCompState, node: Node): number {
+	const d = node.data as CallExprData;
+	const md = d.callee.data as MemberExprData;
+	const arrReg = compileExpr(s, md.object);
+	// Push each argument
+	let i = 0;
+	while (i < d.arguments.length) {
+		const valReg = compileExpr(s, d.arguments[i]);
+		emitInst(s, raiserABC(RaiserOpcode.ArrayPush, arrReg, valReg, 0));
+		i = i + 1;
+	}
+	return arrReg;
+}
+
+// --- Console.log detection ---
+
+// --- String method detection + compilation ---
+
+function isStringMethod(s: RaiserCompState, node: Node, method: string): boolean {
+	if (node.kind !== NodeKind.MemberExpr) return false;
+	const d = node.data as MemberExprData;
+	if (d.property !== method) return false;
+	return exprIsString(s, d.object);
+}
+
+function compileStrCharAt(s: RaiserCompState, node: Node): number {
+	const d = node.data as CallExprData;
+	const md = d.callee.data as MemberExprData;
+	const strReg = compileExpr(s, md.object);
+	const idxReg = compileExpr(s, d.arguments[0]);
+	const dest = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.StrCharAt, dest, strReg, idxReg));
+	return dest;
+}
+
+function compileStrSlice(s: RaiserCompState, node: Node): number {
+	const d = node.data as CallExprData;
+	const md = d.callee.data as MemberExprData;
+	const strReg = compileExpr(s, md.object);
+	// Start and end must be contiguous: C and C+1
+	const startReg = compileExpr(s, d.arguments[0]);
+	const endReg = compileExpr(s, d.arguments[1]);
+	// Ensure contiguous layout: move to adjacent registers if needed
+	const slotStart = allocReg(s);
+	const slotEnd = allocReg(s);
+	if (startReg !== slotStart) {
+		emitInst(s, raiserABC(RaiserOpcode.Move, slotStart, startReg, 0));
+	}
+	if (endReg !== slotEnd) {
+		emitInst(s, raiserABC(RaiserOpcode.Move, slotEnd, endReg, 0));
+	}
+	const dest = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.StrSlice, dest, strReg, slotStart));
+	return dest;
+}
+
+// --- Console.log detection ---
 
 function isConsoleLog(node: Node): boolean {
 	if (node.kind !== NodeKind.MemberExpr) return false;

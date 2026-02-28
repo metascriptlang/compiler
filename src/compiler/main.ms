@@ -15,83 +15,48 @@ function requireFile(opts: CliOptions): void {
 	}
 }
 
-function main(): void {
+function main(): number {
 	const opts = parseArgs();
+	const cmd = opts.command;
 
-	if (opts.command === "") {
+	if (cmd === "" || cmd === "help") {
 		printUsage();
-		return;
-	}
-
-	if (opts.command === "help") {
-		printUsage();
-		return;
-	}
-
-	if (opts.command === "version") {
+	} else if (cmd === "version") {
 		console.log("Metascript v" + VERSION);
-		return;
-	}
-
-	if (opts.command === "compile") {
+	} else if (cmd === "compile") {
 		requireFile(opts);
 		cmdCompile(opts.inputFile, opts.target, opts.outputPath);
-		return;
-	}
-
-	if (opts.command === "run") {
+	} else if (cmd === "run") {
 		requireFile(opts);
 		cmdRun(opts.inputFile, opts.target);
-		return;
-	}
-
-	if (opts.command === "test") {
+	} else if (cmd === "test") {
 		requireFile(opts);
 		cmdTest(opts.inputFile);
-		return;
-	}
-
-	if (opts.command === "check") {
+	} else if (cmd === "check") {
 		requireFile(opts);
 		cmdCheck(opts.inputFile);
-		return;
-	}
-
-	if (opts.command === "dump-tokens") {
+	} else if (cmd === "dump-tokens") {
 		requireFile(opts);
 		cmdDumpTokens(opts.inputFile);
-		return;
-	}
-
-	if (opts.command === "dump-ast") {
+	} else if (cmd === "dump-ast") {
 		requireFile(opts);
 		cmdDumpAst(opts.inputFile);
-		return;
-	}
-
-	if (opts.command === "pipeline") {
+	} else if (cmd === "pipeline") {
 		requireFile(opts);
 		cmdPipeline(opts.inputFile);
-		return;
-	}
-
-	if (opts.command === "fmt") {
+	} else if (cmd === "fmt") {
 		requireFile(opts);
 		cmdFmt(opts.inputFile);
-		return;
-	}
-
-	if (opts.command === "lsp") {
+	} else if (cmd === "lsp") {
 		lspRunServer();
-		return;
-	}
-
-	if (opts.command === "build") {
+	} else if (cmd === "build") {
 		console.log("Error: 'build' command not yet implemented");
+		exit(1);
+	} else {
+		console.log("Error: unknown command '" + cmd + "'");
+		printUsage();
 		exit(1);
 	}
 
-	console.log("Error: unknown command '" + opts.command + "'");
-	printUsage();
-	exit(1);
+	return 0;
 }

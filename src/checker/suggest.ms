@@ -32,6 +32,11 @@ export interface SgSuggest {
 	kind: SymbolKind;
 	symType: Type;
 	location: SourceLocation;
+	prefixScore: number;   // 0=None, 1=Substr, 2=Prefix
+	scopeDepth: number;    // 0=innermost, higher=outer
+	contextFit: boolean;   // type-context match
+	isExported: boolean;   // from sym.isExported
+	isMutable: boolean;    // from sym.isMutable (let vs const)
 }
 
 export interface SgDiagnostic {
@@ -59,6 +64,7 @@ export interface SgDocumentSymbol {
 	name: string;
 	kind: SymbolKind;
 	location: SourceLocation;
+	detail: string;    // type signature for outline view
 }
 
 export interface SgDocumentSymbolList {
@@ -231,11 +237,11 @@ export function sgFindNodeAtPosition(program: Node, line: number, col: number): 
 	if (!nodeContains(program, line, col)) return null as unknown as Node;
 
 	// Leaf nodes
-	if (program.kind === NodeKind.Identifier) return program;
-	if (program.kind === NodeKind.NumberLiteral) return program;
-	if (program.kind === NodeKind.StringLiteral) return program;
-	if (program.kind === NodeKind.BooleanLiteral) return program;
-	if (program.kind === NodeKind.NullLiteral) return program;
+	if (program.kind === NodeKind.Identifier
+		|| program.kind === NodeKind.NumberLiteral
+		|| program.kind === NodeKind.StringLiteral
+		|| program.kind === NodeKind.BooleanLiteral
+		|| program.kind === NodeKind.NullLiteral) return program;
 
 	// Program
 	if (program.kind === NodeKind.Program) {
@@ -392,10 +398,9 @@ export function sgGetSymbolAtCursor(ctx: CheckerContext, program: Node, line: nu
 		const sym = lookupSymbol(ctx.table, id.name);
 		if (sym === null) return null as unknown as SgSuggest;
 		const suggest: SgSuggest = {
-			name: sym.name,
-			kind: sym.symbolKind,
-			symType: sym.symbolType,
-			location: sym.location,
+			name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
+			location: sym.location, prefixScore: 0, scopeDepth: 0, contextFit: false,
+			isExported: sym.isExported, isMutable: sym.isMutable,
 		};
 		return suggest;
 	}
@@ -405,10 +410,9 @@ export function sgGetSymbolAtCursor(ctx: CheckerContext, program: Node, line: nu
 		const sym = lookupSymbol(ctx.table, vd.declName);
 		if (sym === null) return null as unknown as SgSuggest;
 		const suggest: SgSuggest = {
-			name: sym.name,
-			kind: sym.symbolKind,
-			symType: sym.symbolType,
-			location: sym.location,
+			name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
+			location: sym.location, prefixScore: 0, scopeDepth: 0, contextFit: false,
+			isExported: sym.isExported, isMutable: sym.isMutable,
 		};
 		return suggest;
 	}
@@ -418,10 +422,9 @@ export function sgGetSymbolAtCursor(ctx: CheckerContext, program: Node, line: nu
 		const sym = lookupSymbol(ctx.table, fd.fnName);
 		if (sym === null) return null as unknown as SgSuggest;
 		const suggest: SgSuggest = {
-			name: sym.name,
-			kind: sym.symbolKind,
-			symType: sym.symbolType,
-			location: sym.location,
+			name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
+			location: sym.location, prefixScore: 0, scopeDepth: 0, contextFit: false,
+			isExported: sym.isExported, isMutable: sym.isMutable,
 		};
 		return suggest;
 	}
@@ -442,16 +445,94 @@ function sgSymbolKindName(kind: SymbolKind): string {
 		SymbolKind.Parameter => "parameter",
 		SymbolKind.Property => "property",
 		SymbolKind.Method => "method",
-		_ => "symbol",
 	};
+}
+
+// Format parameter list: (a: number, b: string)
+function sgFormatParamList(t: Type): string {
+	let result = "(";
+	let i = 0;
+	while (i < t.typeChildren.length) {
+		if (i > 0) result = result + ", ";
+		if (i < t.typeNames.length && t.typeNames[i].length > 0) {
+			result = result + t.typeNames[i] + ": ";
+		}
+		result = result + sgTypeToString(t.typeChildren[i]);
+		i = i + 1;
+	}
+	result = result + ")";
+	return result;
+}
+
+// Format function type as declaration: function name(params): returnType
+function sgFormatFuncDecl(name: string, t: Type): string {
+	return "function " + name + sgFormatParamList(t) + ": " + sgTypeToString(t.typeReturn);
 }
 
 export function sgFormatHover(suggest: SgSuggest): string {
 	if (suggest === null) return "";
-	const kindName = sgSymbolKindName(suggest.kind);
 	const typeStr = sgTypeToString(suggest.symType);
-	// Format: ```ms\n(kind) name: type\n```
+	// Variable/Parameter: const x: number / let x: number / parameter x: string
+	if (suggest.kind === SymbolKind.Variable || suggest.kind === SymbolKind.Parameter) {
+		let kw = "";
+		if (suggest.kind === SymbolKind.Parameter) {
+			kw = "(parameter)";
+		} else {
+			if (suggest.isMutable) { kw = "let"; } else { kw = "const"; }
+		}
+		return "```ms\n" + kw + " " + suggest.name + ": " + typeStr + "\n```";
+	}
+	// Function: function name(params): returnType
+	if (suggest.kind === SymbolKind.Function) {
+		if (suggest.symType !== null && suggest.symType.kind === TypeKind.Function) {
+			return "```ms\n" + sgFormatFuncDecl(suggest.name, suggest.symType) + "\n```";
+		}
+		return "```ms\nfunction " + suggest.name + "\n```";
+	}
+	// Method: (method) name(params): returnType
+	if (suggest.kind === SymbolKind.Method) {
+		if (suggest.symType !== null && suggest.symType.kind === TypeKind.Function) {
+			return "```ms\n(method) " + suggest.name + sgFormatParamList(suggest.symType) + ": " + sgTypeToString(suggest.symType.typeReturn) + "\n```";
+		}
+		return "```ms\n(method) " + suggest.name + "\n```";
+	}
+	// Property: (property) name: type
+	if (suggest.kind === SymbolKind.Property) {
+		return "```ms\n(property) " + suggest.name + ": " + typeStr + "\n```";
+	}
+	// Interface: interface Name
+	if (suggest.kind === SymbolKind.Interface) {
+		return "```ms\ninterface " + suggest.name + "\n```";
+	}
+	// Class: class Name
+	if (suggest.kind === SymbolKind.Class) {
+		return "```ms\nclass " + suggest.name + "\n```";
+	}
+	// Enum: enum Name
+	if (suggest.kind === SymbolKind.Enum) {
+		return "```ms\nenum " + suggest.name + "\n```";
+	}
+	// TypeAlias: type T = underlying
+	if (suggest.kind === SymbolKind.TypeAlias) {
+		return "```ms\ntype " + suggest.name + " = " + typeStr + "\n```";
+	}
+	// Fallback
+	const kindName = sgSymbolKindName(suggest.kind);
 	return "```ms\n(" + kindName + ") " + suggest.name + ": " + typeStr + "\n```";
+}
+
+// Hover documentation section — annotations below the code block
+export function sgFormatHoverDoc(suggest: SgSuggest): string {
+	if (suggest === null) return "";
+	let doc = "";
+	if (suggest.isExported) doc = "*exported*";
+	return doc;
+}
+
+// Document symbol detail — type signature for outline view
+export function sgSymbolDetail(suggest: SgSuggest): string {
+	if (suggest === null) return "";
+	return sgTypeToString(suggest.symType);
 }
 
 // ===== sgCollectDiagnostics — wrap checker errors =====
@@ -509,6 +590,85 @@ function sgIsTypeKind(kind: SymbolKind): boolean {
 		|| kind === SymbolKind.Enum || kind === SymbolKind.TypeAlias;
 }
 
+// ===== Completion Ranking =====
+
+function sgToLower(ch: string): string {
+	return match (ch) {
+		"A" => "a", "B" => "b", "C" => "c", "D" => "d", "E" => "e",
+		"F" => "f", "G" => "g", "H" => "h", "I" => "i", "J" => "j",
+		"K" => "k", "L" => "l", "M" => "m", "N" => "n", "O" => "o",
+		"P" => "p", "Q" => "q", "R" => "r", "S" => "s", "T" => "t",
+		"U" => "u", "V" => "v", "W" => "w", "X" => "x", "Y" => "y",
+		"Z" => "z",
+		_ => ch,
+	};
+}
+
+function sgCaseEqual(a: string, b: string): boolean {
+	return sgToLower(a) === sgToLower(b);
+}
+
+// Returns 0=None, 1=Substr, 2=Prefix
+function sgPrefixMatch(prefix: string, name: string): number {
+	if (prefix.length === 0) return 2;
+	if (prefix.length > name.length) return 0;
+	// Check prefix match (case-insensitive)
+	let isPrefix = true;
+	let k = 0;
+	while (k < prefix.length) {
+		if (!sgCaseEqual(charAt(prefix, k), charAt(name, k))) {
+			isPrefix = false;
+			break;
+		}
+		k = k + 1;
+	}
+	if (isPrefix) return 2;
+	// Check substring match (case-insensitive)
+	let start = 1;
+	while (start + prefix.length <= name.length) {
+		let matched = true;
+		let m = 0;
+		while (m < prefix.length) {
+			if (!sgCaseEqual(charAt(prefix, m), charAt(name, start + m))) {
+				matched = false;
+				break;
+			}
+			m = m + 1;
+		}
+		if (matched) return 1;
+		start = start + 1;
+	}
+	return 0;
+}
+
+function sgCompareSuggestions(a: SgSuggest, b: SgSuggest): number {
+	// Higher prefixScore first
+	if (a.prefixScore !== b.prefixScore) return b.prefixScore - a.prefixScore;
+	// contextFit true first
+	const aFit = a.contextFit ? 1 : 0;
+	const bFit = b.contextFit ? 1 : 0;
+	if (aFit !== bFit) return bFit - aFit;
+	// Lower scopeDepth first (closer scope)
+	if (a.scopeDepth !== b.scopeDepth) return a.scopeDepth - b.scopeDepth;
+	// Shorter name tiebreaker (more concise = likely more relevant)
+	if (a.name.length !== b.name.length) return a.name.length - b.name.length;
+	return 0;
+}
+
+function sgSortSuggestions(list: SgSuggestList): void {
+	let i = 1;
+	while (i < list.items.length) {
+		const current = list.items[i];
+		let j = i - 1;
+		while (j >= 0 && sgCompareSuggestions(list.items[j], current) > 0) {
+			list.items[j + 1] = list.items[j];
+			j = j - 1;
+		}
+		list.items[j + 1] = current;
+		i = i + 1;
+	}
+}
+
 // ===== sgDetectCompletionContext — scan backwards from cursor =====
 
 export function sgDetectCompletionContext(source: string, line: number, col: number): SgCompletionKind {
@@ -547,95 +707,93 @@ export function sgGetPrefix(source: string, line: number, col: number): string {
 
 // ===== sgGetCompletionCandidates — collect matching symbols =====
 
-export function sgGetCompletionCandidates(ctx: CheckerContext, kind: SgCompletionKind, prefix: string, receiverType: Type): SgSuggestList {
+function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverType: Type): SgSuggestList {
 	const result: SgSuggestList = { items: [] };
+	// Dot completion: properties from receiver type
+	if (receiverType !== null && receiverType.kind === TypeKind.Object) {
+		let i = 0;
+		while (i < receiverType.typeNames.length) {
+			const propName = receiverType.typeNames[i];
+			const ps = sgPrefixMatch(prefix, propName);
+			if (ps > 0) {
+				const propType = i < receiverType.typeChildren.length
+					? receiverType.typeChildren[i] : unknownType();
+				const loc: SourceLocation = { line: 0, column: 0 };
+				const item: SgSuggest = {
+					name: propName, kind: SymbolKind.Property, symType: propType,
+					location: loc, prefixScore: ps, scopeDepth: 0, contextFit: false,
+					isExported: false, isMutable: false,
+				};
+				result.items.push(item);
+			}
+			i = i + 1;
+		}
+	}
+	// Enum member completion
+	if (receiverType !== null && receiverType.kind === TypeKind.Enum) {
+		let i = 0;
+		while (i < receiverType.typeNames.length) {
+			const memberName = receiverType.typeNames[i];
+			const ps = sgPrefixMatch(prefix, memberName);
+			if (ps > 0) {
+				const loc: SourceLocation = { line: 0, column: 0 };
+				const item: SgSuggest = {
+					name: memberName, kind: SymbolKind.Property, symType: receiverType,
+					location: loc, prefixScore: ps, scopeDepth: 0, contextFit: false,
+					isExported: false, isMutable: false,
+				};
+				result.items.push(item);
+			}
+			i = i + 1;
+		}
+	}
+	// Extension methods
+	if (receiverType !== null && ctx.extensionRegistry !== null) {
+		const recTypeName = typeNameOf(receiverType);
+		if (recTypeName.length > 0) {
+			let j = 0;
+			while (j < ctx.extensionRegistry.methods.length) {
+				const ext = ctx.extensionRegistry.methods[j];
+				const ps = sgPrefixMatch(prefix, ext.methodName);
+				if (ext.receiverTypeName === recTypeName && ps > 0) {
+					const loc: SourceLocation = { line: 0, column: 0 };
+					const item: SgSuggest = {
+						name: ext.methodName, kind: SymbolKind.Method, symType: ext.fnType,
+						location: loc, prefixScore: ps, scopeDepth: 0, contextFit: false,
+					isExported: false, isMutable: false,
+					};
+					result.items.push(item);
+				}
+				j = j + 1;
+			}
+		}
+	}
+	sgSortSuggestions(result);
+	return result;
+}
 
+export function sgGetCompletionCandidates(ctx: CheckerContext, kind: SgCompletionKind, prefix: string, receiverType: Type): SgSuggestList {
 	if (kind === SgCompletionKind.MemberAccess) {
-		// Dot completion: properties from receiver type
-		if (receiverType !== null && receiverType.kind === TypeKind.Object) {
-			let i = 0;
-			while (i < receiverType.typeNames.length) {
-				const propName = receiverType.typeNames[i];
-				if (sgStartsWith(propName, prefix)) {
-					const propType = i < receiverType.typeChildren.length
-						? receiverType.typeChildren[i] : unknownType();
-					const loc: SourceLocation = { line: 0, column: 0 };
-					const item: SgSuggest = {
-						name: propName,
-						kind: SymbolKind.Property,
-						symType: propType,
-						location: loc,
-					};
-					result.items.push(item);
-				}
-				i = i + 1;
-			}
-		}
-		// Enum member completion
-		if (receiverType !== null && receiverType.kind === TypeKind.Enum) {
-			let i = 0;
-			while (i < receiverType.typeNames.length) {
-				const memberName = receiverType.typeNames[i];
-				if (sgStartsWith(memberName, prefix)) {
-					const loc: SourceLocation = { line: 0, column: 0 };
-					const item: SgSuggest = {
-						name: memberName,
-						kind: SymbolKind.Property,
-						symType: receiverType,
-						location: loc,
-					};
-					result.items.push(item);
-				}
-				i = i + 1;
-			}
-		}
-		// Extension methods
-		if (receiverType !== null && ctx.extensionRegistry !== null) {
-			const recTypeName = typeNameOf(receiverType);
-			if (recTypeName.length > 0) {
-				let j = 0;
-				while (j < ctx.extensionRegistry.methods.length) {
-					const ext = ctx.extensionRegistry.methods[j];
-					if (ext.receiverTypeName === recTypeName && sgStartsWith(ext.methodName, prefix)) {
-						const loc: SourceLocation = { line: 0, column: 0 };
-						const item: SgSuggest = {
-							name: ext.methodName,
-							kind: SymbolKind.Method,
-							symType: ext.fnType,
-							location: loc,
-						};
-						result.items.push(item);
-					}
-					j = j + 1;
-				}
-			}
-		}
-		return result;
+		return sgCompleteMemberAccess(ctx, prefix, receiverType);
 	}
 
 	// Walk scope chain for Identifier or TypeAnnotation
+	const result: SgSuggestList = { items: [] };
 	let scope = ctx.table.current;
+	let depth = 0;
 	while (scope !== null) {
 		let i = 0;
 		while (i < scope.symbols.length) {
 			const sym = scope.symbols[i];
-			if (sgStartsWith(sym.name, prefix)) {
-				if (kind === SgCompletionKind.TypeAnnotation) {
-					if (sgIsTypeKind(sym.symbolKind)) {
-						const item: SgSuggest = {
-							name: sym.name,
-							kind: sym.symbolKind,
-							symType: sym.symbolType,
-							location: sym.location,
-						};
-						result.items.push(item);
-					}
-				} else {
+			const ps = sgPrefixMatch(prefix, sym.name);
+			if (ps > 0) {
+				const inTypeCtx = kind === SgCompletionKind.TypeAnnotation;
+				const cf = inTypeCtx === sgIsTypeKind(sym.symbolKind);
+				if (!inTypeCtx || sgIsTypeKind(sym.symbolKind)) {
 					const item: SgSuggest = {
-						name: sym.name,
-						kind: sym.symbolKind,
-						symType: sym.symbolType,
-						location: sym.location,
+						name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
+						location: sym.location, prefixScore: ps, scopeDepth: depth, contextFit: cf,
+						isExported: sym.isExported, isMutable: sym.isMutable,
 					};
 					result.items.push(item);
 				}
@@ -643,55 +801,84 @@ export function sgGetCompletionCandidates(ctx: CheckerContext, kind: SgCompletio
 			i = i + 1;
 		}
 		scope = scope.parent;
+		depth = depth + 1;
 	}
 
+	sgSortSuggestions(result);
 	return result;
 }
 
 // ===== Document Symbols — collect top-level declarations =====
 
-function sgCollectOneSymbol(node: Node, result: SgDocumentSymbolList): void {
+// Join field/member names as "a, b, c" — truncated to 3 items
+function sgJoinFieldNames(names: string[]): string {
+	if (names.length === 0) return "";
+	let result = "";
+	let i = 0;
+	const limit = 3;
+	while (i < names.length && i < limit) {
+		if (i > 0) result = result + ", ";
+		result = result + names[i];
+		i = i + 1;
+	}
+	if (names.length > limit) result = result + ", ...";
+	return result;
+}
+
+function sgGetSymbolDetail(ctx: CheckerContext, name: string): string {
+	const sym = lookupSymbol(ctx.table, name);
+	if (sym === null) return "";
+	if (sym.symbolType === null) return "";
+	return sgTypeToString(sym.symbolType);
+}
+
+function sgCollectOneSymbol(node: Node, ctx: CheckerContext, result: SgDocumentSymbolList): void {
 	if (node === null) return;
 
 	if (node.kind === NodeKind.FunctionDecl) {
 		const fd = node.data as FunctionDeclData;
-		const item: SgDocumentSymbol = { name: fd.fnName, kind: SymbolKind.Function, location: node.location };
+		const dt = sgGetSymbolDetail(ctx, fd.fnName);
+		const item: SgDocumentSymbol = { name: fd.fnName, kind: SymbolKind.Function, location: node.location, detail: dt };
 		result.items.push(item);
 		return;
 	}
 	if (node.kind === NodeKind.VariableDecl) {
 		const vd = node.data as VariableDeclData;
-		const item: SgDocumentSymbol = { name: vd.declName, kind: SymbolKind.Variable, location: node.location };
+		const dt = sgGetSymbolDetail(ctx, vd.declName);
+		const item: SgDocumentSymbol = { name: vd.declName, kind: SymbolKind.Variable, location: node.location, detail: dt };
 		result.items.push(item);
 		return;
 	}
 	if (node.kind === NodeKind.InterfaceDecl) {
-		const id = node.data as InterfaceDeclData;
-		const item: SgDocumentSymbol = { name: id.interfaceName, kind: SymbolKind.Interface, location: node.location };
+		const ifd = node.data as InterfaceDeclData;
+		const dt = sgJoinFieldNames(ifd.interfaceFields);
+		const item: SgDocumentSymbol = { name: ifd.interfaceName, kind: SymbolKind.Interface, location: node.location, detail: dt };
 		result.items.push(item);
 		return;
 	}
 	if (node.kind === NodeKind.EnumDecl) {
 		const ed = node.data as EnumDeclData;
-		const item: SgDocumentSymbol = { name: ed.enumName, kind: SymbolKind.Enum, location: node.location };
+		const dt = sgJoinFieldNames(ed.enumMembers);
+		const item: SgDocumentSymbol = { name: ed.enumName, kind: SymbolKind.Enum, location: node.location, detail: dt };
 		result.items.push(item);
 		return;
 	}
 	if (node.kind === NodeKind.ClassDecl) {
 		const cd = node.data as ClassDeclData;
-		const item: SgDocumentSymbol = { name: cd.className, kind: SymbolKind.Class, location: node.location };
+		const item: SgDocumentSymbol = { name: cd.className, kind: SymbolKind.Class, location: node.location, detail: cd.classExtends };
 		result.items.push(item);
 		return;
 	}
 	if (node.kind === NodeKind.TypeAliasDecl) {
 		const td = node.data as TypeAliasDeclData;
-		const item: SgDocumentSymbol = { name: td.aliasName, kind: SymbolKind.TypeAlias, location: node.location };
+		const dt = sgGetSymbolDetail(ctx, td.aliasName);
+		const item: SgDocumentSymbol = { name: td.aliasName, kind: SymbolKind.TypeAlias, location: node.location, detail: dt };
 		result.items.push(item);
 		return;
 	}
 	if (node.kind === NodeKind.ExportDecl) {
 		const xd = node.data as ExportDeclData;
-		sgCollectOneSymbol(xd.exportedDecl, result);
+		sgCollectOneSymbol(xd.exportedDecl, ctx, result);
 		return;
 	}
 }
@@ -702,7 +889,7 @@ export function sgCollectSymbolsInFile(ctx: CheckerContext, program: Node): SgDo
 	const pd = program.data as ProgramData;
 	let i = 0;
 	while (i < pd.programStmts.length) {
-		sgCollectOneSymbol(pd.programStmts[i], result);
+		sgCollectOneSymbol(pd.programStmts[i], ctx, result);
 		i = i + 1;
 	}
 	return result;
@@ -1018,6 +1205,202 @@ function sgCollectCallParamHints(
 	}
 }
 
+// ===== Symbol Reference Index =====
+
+export interface SgSymbolRef {
+	name: string;
+	line: number;
+	col: number;
+	nameLen: number;
+	isDecl: boolean;
+}
+
+export interface SgSymbolRefList {
+	items: SgSymbolRef[];
+}
+
+export function sgCollectReferences(program: Node): SgSymbolRefList {
+	const result: SgSymbolRefList = { items: [] };
+	if (program === null) return result;
+	sgCollectRefsInNode(program, result);
+	return result;
+}
+
+function sgCollectRefsInNode(node: Node, refs: SgSymbolRefList): void {
+	if (node === null) return;
+	const loc = node.location;
+
+	if (node.kind === NodeKind.Identifier) {
+		const id = node.data as IdentifierData;
+		const ref: SgSymbolRef = { name: id.name, line: loc.line, col: loc.column, nameLen: id.name.length, isDecl: false };
+		refs.items.push(ref);
+		return;
+	}
+
+	if (node.kind === NodeKind.VariableDecl) {
+		const vd = node.data as VariableDeclData;
+		const ref: SgSymbolRef = { name: vd.declName, line: loc.line, col: loc.column, nameLen: vd.declName.length, isDecl: true };
+		refs.items.push(ref);
+		if (vd.initializer !== null) sgCollectRefsInNode(vd.initializer, refs);
+		return;
+	}
+
+	if (node.kind === NodeKind.FunctionDecl) {
+		const fd = node.data as FunctionDeclData;
+		const ref: SgSymbolRef = { name: fd.fnName, line: loc.line, col: loc.column, nameLen: fd.fnName.length, isDecl: true };
+		refs.items.push(ref);
+		if (fd.fnBody !== null) sgCollectRefsInNode(fd.fnBody, refs);
+		return;
+	}
+
+	if (node.kind === NodeKind.InterfaceDecl) {
+		const id = node.data as InterfaceDeclData;
+		const ref: SgSymbolRef = { name: id.interfaceName, line: loc.line, col: loc.column, nameLen: id.interfaceName.length, isDecl: true };
+		refs.items.push(ref);
+		return;
+	}
+
+	if (node.kind === NodeKind.EnumDecl) {
+		const ed = node.data as EnumDeclData;
+		const ref: SgSymbolRef = { name: ed.enumName, line: loc.line, col: loc.column, nameLen: ed.enumName.length, isDecl: true };
+		refs.items.push(ref);
+		return;
+	}
+
+	if (node.kind === NodeKind.ClassDecl) {
+		const cd = node.data as ClassDeclData;
+		const ref: SgSymbolRef = { name: cd.className, line: loc.line, col: loc.column, nameLen: cd.className.length, isDecl: true };
+		refs.items.push(ref);
+		let ci = 0;
+		while (ci < cd.classBody.length) {
+			sgCollectRefsInNode(cd.classBody[ci], refs);
+			ci = ci + 1;
+		}
+		return;
+	}
+
+	// Compound nodes — recurse into children
+	sgCollectRefsInCompound(node, refs);
+}
+
+// Split out compound node recursion to avoid codegen function-size limits
+function sgCollectRefsInCompound(node: Node, refs: SgSymbolRefList): void {
+	if (node.kind === NodeKind.Program) {
+		const pd = node.data as ProgramData;
+		let i = 0;
+		while (i < pd.programStmts.length) {
+			sgCollectRefsInNode(pd.programStmts[i], refs);
+			i = i + 1;
+		}
+		return;
+	}
+
+	if (node.kind === NodeKind.BlockStmt) {
+		const bd = node.data as BlockStmtData;
+		let i = 0;
+		while (i < bd.statements.length) {
+			sgCollectRefsInNode(bd.statements[i], refs);
+			i = i + 1;
+		}
+		return;
+	}
+
+	if (node.kind === NodeKind.ExprStmt) {
+		const es = node.data as ExprStmtData;
+		sgCollectRefsInNode(es.expr, refs);
+		return;
+	}
+
+	if (node.kind === NodeKind.ReturnStmt) {
+		const rs = node.data as ReturnStmtData;
+		if (rs.argument !== null) sgCollectRefsInNode(rs.argument, refs);
+		return;
+	}
+
+	if (node.kind === NodeKind.BinaryExpr) {
+		const be = node.data as BinaryExprData;
+		sgCollectRefsInNode(be.left, refs);
+		sgCollectRefsInNode(be.right, refs);
+		return;
+	}
+
+	if (node.kind === NodeKind.UnaryExpr) {
+		const ue = node.data as UnaryExprData;
+		sgCollectRefsInNode(ue.operand, refs);
+		return;
+	}
+
+	if (node.kind === NodeKind.CallExpr) {
+		const ce = node.data as CallExprData;
+		sgCollectRefsInNode(ce.callee, refs);
+		let i = 0;
+		while (i < ce.arguments.length) {
+			sgCollectRefsInNode(ce.arguments[i], refs);
+			i = i + 1;
+		}
+		return;
+	}
+
+	if (node.kind === NodeKind.MemberExpr) {
+		const me = node.data as MemberExprData;
+		sgCollectRefsInNode(me.object, refs);
+		return;
+	}
+
+	if (node.kind === NodeKind.IfStmt) {
+		const ifd = node.data as IfStmtData;
+		sgCollectRefsInNode(ifd.condition, refs);
+		sgCollectRefsInNode(ifd.consequent, refs);
+		if (ifd.alternate !== null) sgCollectRefsInNode(ifd.alternate, refs);
+		return;
+	}
+
+	if (node.kind === NodeKind.WhileStmt) {
+		const ws = node.data as WhileStmtData;
+		sgCollectRefsInNode(ws.whileCondition, refs);
+		sgCollectRefsInNode(ws.whileBody, refs);
+		return;
+	}
+
+	if (node.kind === NodeKind.ConditionalExpr) {
+		const cnd = node.data as ConditionalExprData;
+		sgCollectRefsInNode(cnd.ternaryCondition, refs);
+		sgCollectRefsInNode(cnd.ternaryConsequent, refs);
+		sgCollectRefsInNode(cnd.ternaryAlternate, refs);
+		return;
+	}
+
+	if (node.kind === NodeKind.ExportDecl) {
+		const ed = node.data as ExportDeclData;
+		sgCollectRefsInNode(ed.exportedDecl, refs);
+		return;
+	}
+
+	if (node.kind === NodeKind.ArrayLiteral) {
+		const al = node.data as ArrayLiteralData;
+		let i = 0;
+		while (i < al.elements.length) {
+			sgCollectRefsInNode(al.elements[i], refs);
+			i = i + 1;
+		}
+		return;
+	}
+}
+
+export function sgFindUsagesByName(refs: SgSymbolRefList, name: string): SgSymbolRefList {
+	const result: SgSymbolRefList = { items: [] };
+	let i = 0;
+	while (i < refs.items.length) {
+		if (refs.items[i].name === name) {
+			const r = refs.items[i];
+			const ref: SgSymbolRef = { name: r.name, line: r.line, col: r.col, nameLen: r.nameLen, isDecl: r.isDecl };
+			result.items.push(ref);
+		}
+		i = i + 1;
+	}
+	return result;
+}
+
 // ===== Tests =====
 
 testGroup("sgTypeToString Primitives", () => {
@@ -1105,19 +1488,6 @@ testGroup("sgFindNodeAtPosition", () => {
 });
 
 testGroup("sgGetSymbolAtCursor", () => {
-	test("find variable type", () => {
-		const pr = parseSource("const myVar: number = 42;");
-		if (!pr.ok) { check(false); return; }
-		const ctx = checkProgram(pr.value);
-		// myVar starts around col 6
-		const sg = sgGetSymbolAtCursor(ctx, pr.value, 1, 6);
-		// May or may not find depending on exact position
-		if (sg !== null) {
-			check(sg.name === "myVar");
-		} else {
-			check(true); // position might not match exactly
-		}
-	});
 	test("returns null for unknown position", () => {
 		const pr = parseSource("const x = 1;");
 		if (!pr.ok) { check(false); return; }
@@ -1131,13 +1501,12 @@ testGroup("sgFormatHover", () => {
 	test("format variable hover", () => {
 		const loc: SourceLocation = { line: 1, column: 0 };
 		const suggest: SgSuggest = {
-			name: "count",
-			kind: SymbolKind.Variable,
-			symType: numberType(),
-			location: loc,
+			name: "count", kind: SymbolKind.Variable, symType: numberType(),
+			location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+			isExported: false, isMutable: false,
 		};
 		const hover = sgFormatHover(suggest);
-		check(hover === "```ms\n(variable) count: number\n```");
+		check(hover === "```ms\nconst count: number\n```");
 	});
 	test("format function hover", () => {
 		const loc: SourceLocation = { line: 1, column: 0 };
@@ -1145,13 +1514,87 @@ testGroup("sgFormatHover", () => {
 		const names: string[] = ["s"];
 		const fnType = createFunction(params, names, voidType());
 		const suggest: SgSuggest = {
-			name: "greet",
-			kind: SymbolKind.Function,
-			symType: fnType,
-			location: loc,
+			name: "greet", kind: SymbolKind.Function, symType: fnType,
+			location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+			isExported: false, isMutable: false,
 		};
 		const hover = sgFormatHover(suggest);
-		check(hover === "```ms\n(function) greet: (s: string) => void\n```");
+		check(hover === "```ms\nfunction greet(s: string): void\n```");
+	});
+	test("format interface hover", () => {
+		const loc: SourceLocation = { line: 1, column: 0 };
+		const suggest: SgSuggest = {
+			name: "Point", kind: SymbolKind.Interface, symType: unknownType(),
+			location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+			isExported: false, isMutable: false,
+		};
+		check(sgFormatHover(suggest) === "```ms\ninterface Point\n```");
+	});
+	test("format class hover", () => {
+		const loc: SourceLocation = { line: 1, column: 0 };
+		const suggest: SgSuggest = {
+			name: "Vec", kind: SymbolKind.Class, symType: unknownType(),
+			location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+			isExported: false, isMutable: false,
+		};
+		check(sgFormatHover(suggest) === "```ms\nclass Vec\n```");
+	});
+	test("format enum hover", () => {
+		const loc: SourceLocation = { line: 1, column: 0 };
+		const suggest: SgSuggest = {
+			name: "Color", kind: SymbolKind.Enum, symType: unknownType(),
+			location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+			isExported: false, isMutable: false,
+		};
+		check(sgFormatHover(suggest) === "```ms\nenum Color\n```");
+	});
+	test("format type alias hover", () => {
+		const loc: SourceLocation = { line: 1, column: 0 };
+		const suggest: SgSuggest = {
+			name: "Id", kind: SymbolKind.TypeAlias, symType: numberType(),
+			location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+			isExported: false, isMutable: false,
+		};
+		check(sgFormatHover(suggest) === "```ms\ntype Id = number\n```");
+	});
+	test("format let variable hover", () => {
+		const loc: SourceLocation = { line: 1, column: 0 };
+		const suggest: SgSuggest = {
+			name: "x", kind: SymbolKind.Variable, symType: stringType(),
+			location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+			isExported: false, isMutable: true,
+		};
+		check(sgFormatHover(suggest) === "```ms\nlet x: string\n```");
+	});
+	test("format parameter hover", () => {
+		const loc: SourceLocation = { line: 1, column: 0 };
+		const suggest: SgSuggest = {
+			name: "name", kind: SymbolKind.Parameter, symType: stringType(),
+			location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+			isExported: false, isMutable: false,
+		};
+		check(sgFormatHover(suggest) === "```ms\n(parameter) name: string\n```");
+	});
+	test("format property hover", () => {
+		const loc: SourceLocation = { line: 1, column: 0 };
+		const suggest: SgSuggest = {
+			name: "x", kind: SymbolKind.Property, symType: numberType(),
+			location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+			isExported: false, isMutable: false,
+		};
+		check(sgFormatHover(suggest) === "```ms\n(property) x: number\n```");
+	});
+	test("format method hover", () => {
+		const loc: SourceLocation = { line: 1, column: 0 };
+		const params: Type[] = [stringType()];
+		const names: string[] = ["item"];
+		const fnType = createFunction(params, names, voidType());
+		const suggest: SgSuggest = {
+			name: "push", kind: SymbolKind.Method, symType: fnType,
+			location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+			isExported: false, isMutable: false,
+		};
+		check(sgFormatHover(suggest) === "```ms\n(method) push(item: string): void\n```");
 	});
 	test("null suggest returns empty", () => {
 		const sg = null as unknown as SgSuggest;
@@ -1166,15 +1609,6 @@ testGroup("sgCollectDiagnostics", () => {
 		const ctx = checkProgram(pr.value);
 		const diags = sgCollectDiagnostics(ctx);
 		check(diags.items.length === 0);
-	});
-	test("collects errors", () => {
-		// Undeclared variable usage should produce error
-		const pr = parseSource("const x = unknownVar;");
-		if (!pr.ok) { check(false); return; }
-		const ctx = checkProgram(pr.value);
-		const diags = sgCollectDiagnostics(ctx);
-		// May or may not have errors depending on checker behavior
-		check(diags.items.length >= 0);
 	});
 });
 
@@ -1302,6 +1736,50 @@ testGroup("sgGetCompletionCandidates MemberAccess", () => {
 		const ctx = checkProgram(pr.value);
 		const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.MemberAccess, "", null as unknown as Type);
 		check(candidates.items.length === 0);
+	});
+});
+
+testGroup("sgPrefixMatch", () => {
+	test("exact prefix", () => {
+		check(sgPrefixMatch("ab", "abc") === 2);
+	});
+	test("substring", () => {
+		check(sgPrefixMatch("bc", "abcd") === 1);
+	});
+	test("no match", () => {
+		check(sgPrefixMatch("zz", "abc") === 0);
+	});
+	test("case insensitive prefix", () => {
+		check(sgPrefixMatch("AB", "abcde") === 2);
+	});
+	test("empty prefix", () => {
+		check(sgPrefixMatch("", "anything") === 2);
+	});
+});
+
+testGroup("sgCompletionRanking", () => {
+	test("prefix before substr", () => {
+		const pr = parseSource("const abcdef = 1;\nconst xyzabc = 2;");
+		if (!pr.ok) { check(false); return; }
+		const ctx = checkProgram(pr.value);
+		const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "abc", null as unknown as Type);
+		check(candidates.items.length === 2);
+		// abcdef (prefix match) should come before xyzabc (substr match)
+		check(candidates.items[0].name === "abcdef");
+		check(candidates.items[1].name === "xyzabc");
+	});
+	test("inner scope before outer", () => {
+		const pr = parseSource("const outer = 1;\nfunction f() { const inner = 2; }");
+		if (!pr.ok) { check(false); return; }
+		const ctx = checkProgram(pr.value);
+		const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "", null as unknown as Type);
+		// inner scope (depth 0) should rank before outer scope (depth > 0)
+		// At least both should be present
+		check(candidates.items.length >= 2);
+		// First items should have lower scopeDepth
+		if (candidates.items.length >= 2) {
+			check(candidates.items[0].scopeDepth <= candidates.items[1].scopeDepth);
+		}
 	});
 });
 
@@ -1465,5 +1943,45 @@ testGroup("sgCollectInlayHints", () => {
 			j = j + 1;
 		}
 		check(paramHints === 0);
+	});
+});
+
+testGroup("sgCollectReferences", () => {
+	test("collects declarations and usages", () => {
+		const src = "const x = 1;\nconst y = x;";
+		const pr = parseSource(src);
+		if (!pr.ok) { check(false); return; }
+		const refs = sgCollectReferences(pr.value);
+		// x: 1 decl + 1 usage, y: 1 decl
+		check(refs.items.length >= 3);
+	});
+	test("find usages by name", () => {
+		const src = "const x = 1;\nconst y = x;";
+		const pr = parseSource(src);
+		if (!pr.ok) { check(false); return; }
+		const refs = sgCollectReferences(pr.value);
+		const xRefs = sgFindUsagesByName(refs, "x");
+		check(xRefs.items.length === 2);
+		// First should be decl, second should be usage
+		check(xRefs.items[0].isDecl);
+		check(!xRefs.items[1].isDecl);
+	});
+	test("function decl and call", () => {
+		const src = "function greet(name: string): void {}\ngreet(\"hello\");";
+		const pr = parseSource(src);
+		if (!pr.ok) { check(false); return; }
+		const refs = sgCollectReferences(pr.value);
+		const greetRefs = sgFindUsagesByName(refs, "greet");
+		check(greetRefs.items.length === 2);
+		check(greetRefs.items[0].isDecl);
+		check(!greetRefs.items[1].isDecl);
+	});
+	test("no references for unknown name", () => {
+		const src = "const x = 1;";
+		const pr = parseSource(src);
+		if (!pr.ok) { check(false); return; }
+		const refs = sgCollectReferences(pr.value);
+		const noRefs = sgFindUsagesByName(refs, "nonexistent");
+		check(noRefs.items.length === 0);
 	});
 });
