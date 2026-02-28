@@ -6,14 +6,14 @@
 
 ### Design: Single Source of Truth in `.ms` Files
 
-All builtins declared in `std/core.ms` (auto-imported like Nim's `system.nim`). One declaration = type signature + C mapping. No triple registration like the reference compiler.
+All builtins declared in `std/*.ms` files (auto-imported like Nim's system.nim). Normal MetaScript code — `export`, `class`, `@runtime`, `@builtin`, static/instance extensions. The compiler handles auto-importing.
 
 **3-tier system:**
 
 | Tier | Decorator | Use Case | Example |
 |------|-----------|----------|---------|
-| `@builtin("Name")` | Compiler-intercepted (inline codegen) | `len`, `print`, `sizeof` | `@builtin("LengthStr") export function len(s: string): number;` |
-| `@runtime("c_name")` | Maps to C runtime function | Math, string/array methods | `@runtime("floor") export function floor(x: number): number;` |
+| `@builtin("Name")` | Compiler-intercepted (inline codegen) | `len`, `sizeof` | `@builtin("LengthStr") export function len(s: string): number;` |
+| `@runtime("c_name")` | Maps to C runtime function | Math, string/array methods | `@runtime("ms_floor") export function floor(this typeof Math, x: number): number;` |
 | `extern function` | Raw C FFI | malloc, printf | `extern function malloc(size: number): Ptr<void>;` |
 
 **Checker sees normal signatures** — `@builtin`/`@runtime` are opaque decorators. Only `builtinLower` transform (C-backend, post-analyzer) reads them to rewrite calls.
@@ -22,27 +22,42 @@ All builtins declared in `std/core.ms` (auto-imported like Nim's `system.nim`). 
 
 | Builtin | Mechanism | Why |
 |---------|-----------|-----|
-| `Math.floor()` | Module namespace (`import * as Math from "std/math"`) | Math is a natural module |
-| `console.log()` | Auto-import + `@builtin` | Global, needs printf codegen |
-| `Promise.resolve()` | Static extension (`this typeof Promise`) | Promise is a type, not a module |
-| `Result.ok()` | Static extension (`this typeof Result`) | Result is a type, not a module |
+| `Math.floor()` | Global class + static extension (`this typeof Math`) | Math has constants (pi, e) |
+| `Math.pi` | Property access on global Math class instance | Class field with default value |
+| `console.log()` | Global class + static extension (`this typeof Console`) | Console is a namespace |
+| `Promise.resolve()` | Global class + static extension (`this typeof Promise`) | Promise is a type |
+| `Result.ok()` | Global class + static extension (`this typeof Result`) | Result is a type |
 | `str.trim()` | Instance extension (`this s: string`) | String method |
 | `arr.push()` | Instance extension (`this arr: T[]`) | Array method |
 
 ### Static Extensions (`this typeof Type`)
 
-For types that aren't modules (Promise, Result). Reference compiler already has `is_static_receiver`.
+For global classes used as namespaces or type constructors:
 
 ```ms
-@runtime("ms_promise_resolve")
-export function resolve<T>(this typeof Promise, value: T): Promise<T>;
-// Usage: Promise.resolve(42) → extensionMethodLower → resolve(42) → builtinLower → ms_promise_resolve(42)
+// std/math.ms — both class methods and static extensions work
+
+export class Math {
+    pi: number = 3.141592653589793;
+    e: number = 2.718281828459045;
+
+    @runtime("ms_floor")
+    floor(x: number): number { unreachable; }
+}
+
+// static extensions also work
+@runtime("ms_abs")
+export function abs(this typeof Math, x: number): number { unreachable; }
+
+// Usage: Math.floor(3.7) → ms_floor(3.7)
+// Usage: Math.abs(-5) → ms_abs(-5)
+// Usage: Math.pi → 3.141592653589793
 ```
 
 ### Pipeline Flow
 
 ```
-std/core.ms auto-imported → checker gets real type signatures
+std/*.ms auto-imported → checker gets real type signatures
   → transforms lower extensions (str.trim() → trim(str))
   → analyzer injects DRC
   → builtinLower rewrites to C names (trim(str) → ms_string_trim(str))
@@ -55,11 +70,11 @@ Tree-shaking: demand-driven codegen from `main()`. Unused builtins = zero C outp
 
 | Component | Priority | Notes |
 |-----------|----------|-------|
-| `std/core.ms`, `std/math.ms`, `std/string.ms`, `std/array.ms` | 5a | Declarations with `@builtin`/`@runtime` |
-| Auto-import in checker | 5a | Load std/core.ms before user code |
+| `std/core.ms`, `std/math.ms`, `std/console.ms`, etc. | 5a | Normal `.ms` files with `@builtin`/`@runtime` |
+| Auto-import in checker | 5a | Parse + type-check system modules before user code |
 | `@builtin`/`@runtime` handling in collectPass | 5a | Set Symbol.builtinKind / runtimeName |
-| `transform/c/builtinLower.ms` | 5b | Rewrite builtin calls to C-compatible AST |
-| extern type info fix | 5a | ExternDecl must store param types + return type |
+| `this typeof Type` static extensions | 5a | Parser + checker + extension registry |
+| `transform/native/builtinLower.ms` | 5b | Rewrite builtin calls to C-compatible AST |
 
 ---
 
@@ -73,8 +88,8 @@ Both use `@` syntax with free-form args: `@name`, `@name("str", 42)`, `@name({..
 
 | Decorator | Applies To | Purpose | Status |
 |-----------|-----------|---------|--------|
-| `@runtime("c_name")` | function | Bind to C runtime function. Codegen emits `c_name` unmangled. | DESIGN |
-| `@builtin("Name")` | function | Compiler-intercepted op. Sets `Symbol.builtinKind` for special codegen. | DESIGN |
+| `@runtime("c_name")` | function, method | Bind to C runtime function. Codegen emits `c_name` unmangled. | DONE |
+| `@builtin("Name")` | function, method | Compiler-intercepted op. Sets `Symbol.builtinKind` for special codegen. | DONE |
 | `@derive(Trait, ...)` | class, interface | Auto-generate methods (Eq, Hash, Clone, Debug, Serialize). | REF ONLY |
 | `@comptime` | block | Compile-time evaluation via Hermes VM. | REF ONLY |
 | `@target("c")` | block | Backend-conditional code — only emit for specified target. | DESIGN |
@@ -96,13 +111,13 @@ Both use `@` syntax with free-form args: `@name`, `@name("str", 42)`, `@name({..
 - Multiple decorators stack: `@a @b class Foo {}` → `DecoratedDecl { decorators: [a, b], decoratedNode }` (**DONE**)
 - Checker walks through `DecoratedDecl` to check the inner node (**DONE**)
 - JS codegen skips decorators, emits inner declaration (**DONE**)
-- **NOT DONE**: Decorator semantics — checker/transforms don't read decorator names or arguments yet
+- `@runtime`/`@builtin` set Symbol metadata in collectPass (**DONE**)
 
 ### Implementation Plan
 
 **Phase 5a** (needed for C codegen):
-- `@runtime("c_name")` → collectPass sets `Symbol.runtimeName`
-- `@builtin("Name")` → collectPass sets `Symbol.builtinKind`
+- `@runtime("c_name")` → collectPass sets `Symbol.runtimeName` (**DONE**)
+- `@builtin("Name")` → collectPass sets `Symbol.builtinKind` (**DONE**)
 - `@include("file.h")` → collected on Program node for build system
 - `@target("c")` → transform strips non-matching target blocks
 

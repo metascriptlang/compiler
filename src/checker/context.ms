@@ -56,6 +56,7 @@ export interface ExtensionMethod {
 	receiverTypeName: string;
 	sourcePath: string;
 	fnType: Type;
+	isStatic: boolean;
 }
 
 export interface ExtensionRegistry {
@@ -86,27 +87,51 @@ export function hasExtensionByName(registry: ExtensionRegistry, methodName: stri
 }
 
 // ===== Extension Flag Helpers =====
-// Parse "ext:receiverName:receiverType" from fnFlags (shared by collectPass + resolvePass)
+// Parse "ext:receiverName:receiverType" and "sext:TypeName" from pipe-delimited fnFlags.
+// Segment-aware: works for "async|ext:s:string", not just prefix-only.
+
+function findFlagSegment(flags: string, prefix: string): string {
+	if (flags === "") return "";
+	const parts = splitTopLevel(flags, "|");
+	let i = 0;
+	while (i < parts.length) {
+		const p = trim(parts[i]);
+		if (p.length >= prefix.length && sliceStr(p, 0, prefix.length) === prefix) return p;
+		i += 1;
+	}
+	return "";
+}
 
 export function isExtensionFlag(flags: string): boolean {
-	if (flags.length <= 4) return false;
-	return sliceStr(flags, 0, 4) === "ext:";
+	return findFlagSegment(flags, "ext:") !== "";
+}
+
+export function isStaticExtensionFlag(flags: string): boolean {
+	return findFlagSegment(flags, "sext:") !== "";
 }
 
 export function getExtReceiverName(flags: string): string {
-	if (!isExtensionFlag(flags)) return "";
-	const rest = sliceStr(flags, 4, flags.length);
+	const seg = findFlagSegment(flags, "ext:");
+	if (seg === "") return "";
+	const rest = sliceStr(seg, 4, seg.length);
 	const colonPos = findChar(rest, ":");
 	if (colonPos <= 0) return "";
 	return sliceStr(rest, 0, colonPos);
 }
 
 export function getExtReceiverType(flags: string): string {
-	if (!isExtensionFlag(flags)) return "";
-	const rest = sliceStr(flags, 4, flags.length);
+	const seg = findFlagSegment(flags, "ext:");
+	if (seg === "") return "";
+	const rest = sliceStr(seg, 4, seg.length);
 	const colonPos = findChar(rest, ":");
 	if (colonPos <= 0) return "";
 	return sliceStr(rest, colonPos + 1, rest.length);
+}
+
+export function getStaticExtTypeName(flags: string): string {
+	const seg = findFlagSegment(flags, "sext:");
+	if (seg === "") return "";
+	return sliceStr(seg, 5, seg.length);
 }
 
 // ===== Generic Flag Helpers =====
@@ -325,7 +350,7 @@ testGroup("ExtensionRegistry", () => {
 	});
 	test("register and find", () => {
 		const r = createExtensionRegistry();
-		const m: ExtensionMethod = { methodName: "trim", receiverTypeName: "string", sourcePath: "/a.ms", fnType: unknownType() };
+		const m: ExtensionMethod = { methodName: "trim", receiverTypeName: "string", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false };
 		registerExtension(r, m);
 		const found = findExtension(r, "string", "trim");
 		check(found !== null);
@@ -346,7 +371,7 @@ testGroup("AttachedOps", () => {
 	});
 	test("detect onDestroy", () => {
 		const r = createExtensionRegistry();
-		const m: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Foo", sourcePath: "/a.ms", fnType: unknownType() };
+		const m: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Foo", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false };
 		registerExtension(r, m);
 		const ops = findAttachedOps(r, "Foo");
 		check(hasAttachedOps(ops));
@@ -355,11 +380,11 @@ testGroup("AttachedOps", () => {
 	});
 	test("detect all lifecycle hooks", () => {
 		const r = createExtensionRegistry();
-		const d: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: unknownType() };
+		const d: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false };
 		registerExtension(r, d);
-		const c: ExtensionMethod = { methodName: "onCopy", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: unknownType() };
+		const c: ExtensionMethod = { methodName: "onCopy", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false };
 		registerExtension(r, c);
-		const mv: ExtensionMethod = { methodName: "onMove", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: unknownType() };
+		const mv: ExtensionMethod = { methodName: "onMove", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false };
 		registerExtension(r, mv);
 		const ops = findAttachedOps(r, "Bar");
 		check(hasAttachedOps(ops));
@@ -369,7 +394,7 @@ testGroup("AttachedOps", () => {
 	});
 	test("wrong type no match", () => {
 		const r = createExtensionRegistry();
-		const m: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Foo", sourcePath: "/a.ms", fnType: unknownType() };
+		const m: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Foo", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false };
 		registerExtension(r, m);
 		const ops = findAttachedOps(r, "Bar");
 		check(!hasAttachedOps(ops));
@@ -442,5 +467,54 @@ testGroup("GenericFlagHelpers", () => {
 	});
 	test("stripGenFlag no gen", () => {
 		check(stripGenFlag("async") === "async");
+	});
+});
+
+testGroup("ExtensionFlagHelpers", () => {
+	test("isExtensionFlag prefix", () => {
+		check(isExtensionFlag("ext:s:string"));
+		check(!isExtensionFlag(""));
+		check(!isExtensionFlag("async"));
+	});
+	test("isExtensionFlag pipe-delimited", () => {
+		check(isExtensionFlag("async|ext:s:string"));
+		check(isExtensionFlag("gen:T|ext:self:Array"));
+	});
+	test("getExtReceiverName", () => {
+		check(getExtReceiverName("ext:s:string") === "s");
+		check(getExtReceiverName("async|ext:self:Array") === "self");
+		check(getExtReceiverName("") === "");
+	});
+	test("getExtReceiverType", () => {
+		check(getExtReceiverType("ext:s:string") === "string");
+		check(getExtReceiverType("async|ext:self:Array") === "Array");
+		check(getExtReceiverType("") === "");
+	});
+	test("isStaticExtensionFlag", () => {
+		check(isStaticExtensionFlag("sext:Math"));
+		check(isStaticExtensionFlag("async|sext:Promise"));
+		check(!isStaticExtensionFlag("ext:s:string"));
+		check(!isStaticExtensionFlag(""));
+	});
+	test("getStaticExtTypeName", () => {
+		check(getStaticExtTypeName("sext:Math") === "Math");
+		check(getStaticExtTypeName("async|sext:Promise") === "Promise");
+		check(getStaticExtTypeName("") === "");
+	});
+	test("static extension in registry", () => {
+		const r = createExtensionRegistry();
+		const m: ExtensionMethod = { methodName: "floor", receiverTypeName: "Math", sourcePath: "", fnType: unknownType(), isStatic: true };
+		registerExtension(r, m);
+		const found = findExtension(r, "Math", "floor");
+		check(found !== null);
+		check(found.isStatic);
+	});
+	test("instance extension isStatic false", () => {
+		const r = createExtensionRegistry();
+		const m: ExtensionMethod = { methodName: "trim", receiverTypeName: "string", sourcePath: "", fnType: unknownType(), isStatic: false };
+		registerExtension(r, m);
+		const found = findExtension(r, "string", "trim");
+		check(found !== null);
+		check(!found.isStatic);
 	});
 });

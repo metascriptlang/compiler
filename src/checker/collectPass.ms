@@ -1,8 +1,9 @@
-import { Node, NodeKind, SourceLocation, createNodeAt, ProgramData, FunctionDeclData, ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData } from "../ast/node";
+import { Node, NodeKind, SourceLocation, createNodeAt, ProgramData, FunctionDeclData, ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData } from "../ast/node";
 import { extractDecoratorInfo } from "./decoratorHelpers";
-import { Type, TypeKind, unknownType, createObject, createEnum, createTypeRef } from "./types";
+import { Type, TypeKind, unknownType, createObject, createEnum, createTypeRef, createFunction } from "./types";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, defineSymbol, makeSymbol, lookupSymbol } from "./symbol";
-import { CheckerContext, addError, findExportedSymbol, ExtensionMethod, registerExtension, isExtensionFlag, getExtReceiverType } from "./context";
+import { CheckerContext, addError, findExportedSymbol, ExtensionMethod, registerExtension, isExtensionFlag, isStaticExtensionFlag, getExtReceiverType, getStaticExtTypeName } from "./context";
+import { isGlobalImport } from "./prelude";
 import { sliceStr, findChar } from "../utils/string";
 import { test, check, testGroup } from "std/testing";
 
@@ -59,7 +60,7 @@ export function defineOrError(ctx: CheckerContext, sym: Symbol, node: Node): voi
 
 function collectFunction(ctx: CheckerContext, node: Node): void {
 	const d = node.data as FunctionDeclData;
-	// Check for extension method: fnFlags contains "ext:receiverName:receiverType"
+	// Check for instance extension: fnFlags contains "ext:receiverName:receiverType"
 	if (isExtensionFlag(d.fnFlags) && ctx.extensionRegistry !== null) {
 		const receiverType = getExtReceiverType(d.fnFlags);
 		if (receiverType !== "") {
@@ -68,6 +69,21 @@ function collectFunction(ctx: CheckerContext, node: Node): void {
 				receiverTypeName: receiverType,
 				sourcePath: "",
 				fnType: unknownType(),
+				isStatic: false,
+			};
+			registerExtension(ctx.extensionRegistry, extMethod);
+		}
+	}
+	// Check for static extension: fnFlags contains "sext:TypeName"
+	if (isStaticExtensionFlag(d.fnFlags) && ctx.extensionRegistry !== null) {
+		const staticTypeName = getStaticExtTypeName(d.fnFlags);
+		if (staticTypeName !== "") {
+			const extMethod: ExtensionMethod = {
+				methodName: d.fnName,
+				receiverTypeName: staticTypeName,
+				sourcePath: "",
+				fnType: unknownType(),
+				isStatic: true,
 			};
 			registerExtension(ctx.extensionRegistry, extMethod);
 		}
@@ -78,7 +94,41 @@ function collectFunction(ctx: CheckerContext, node: Node): void {
 
 function collectClass(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ClassDeclData;
-	const classType = createObject(d.className, [], [], false);
+	// Collect member names and types inline (no function calls).
+	// DRC workaround: string[]/Type[] lose push() mutations through function calls (#4)
+	// and through interface field access (#25). Must build arrays locally and pass to createObject.
+	const memberNames: string[] = [];
+	const memberTypes: Type[] = [];
+	let i = 0;
+	while (i < d.classBody.length) {
+		const member = d.classBody[i];
+		if (member.kind === NodeKind.PropertyDecl) {
+			const pd = member.data as PropertyDeclData;
+			memberNames.push(pd.propName);
+			memberTypes.push(unknownType());
+		} else if (member.kind === NodeKind.MethodDecl) {
+			const md = member.data as MethodDeclData;
+			memberNames.push(md.methodName);
+			memberTypes.push(createFunction([], [], unknownType()));
+		} else if (member.kind === NodeKind.DecoratedDecl) {
+			const dd = member.data as DecoratedDeclData;
+			if (dd.decoratedNode.kind === NodeKind.MethodDecl) {
+				const md = dd.decoratedNode.data as MethodDeclData;
+				const fnType = createFunction([], [], unknownType());
+				const info = extractDecoratorInfo(member);
+				if (info.runtimeName !== "") {
+					fnType.typeName = info.runtimeName;
+				}
+				if (info.builtinKind !== "") {
+					fnType.typeName = info.builtinKind;
+				}
+				memberNames.push(md.methodName);
+				memberTypes.push(fnType);
+			}
+		}
+		i += 1;
+	}
+	const classType = createObject(d.className, memberNames, memberTypes, false);
 	// Store base class info for inheritance (used by destructor lifting)
 	if (d.classExtends !== "") {
 		classType.typeExtra = createTypeRef(d.classExtends);
@@ -131,6 +181,9 @@ function resolveImportSourcePath(ctx: CheckerContext, specifier: string): string
 
 function collectImport(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ImportDeclData;
+
+	// std/core is the prelude — already injected into Global scope, skip
+	if (isGlobalImport(d.importSource)) return;
 
 	// Multi-module mode: resolve types from ExportRegistry
 	if (ctx.exportRegistry !== null) {
@@ -213,6 +266,33 @@ export function getDeclName(node: Node): string {
 		NodeKind.VariableDecl => { const d = node.data as VariableDeclData; d.declName; },
 		_ => "",
 	};
+}
+
+// ===== Directive Extraction =====
+
+// Extract standalone directives (@name(...);) from program AST.
+// Directives are ExprStmt { MacroInvocation } nodes in programStmts.
+// Returns encoded strings: "name:arg" (e.g., "include:stdio.h", "passC:-Ifoo").
+export function extractDirectives(program: Node): string[] {
+	const directives: string[] = [];
+	const stmts = (program.data as ProgramData).programStmts;
+	let i = 0;
+	while (i < stmts.length) {
+		const stmt = stmts[i];
+		if (stmt.kind === NodeKind.ExprStmt) {
+			const es = stmt.data as ExprStmtData;
+			if (es.expr.kind === NodeKind.MacroInvocation) {
+				const md = es.expr.data as MacroInvocationData;
+				let dir = md.macroName;
+				if (md.macroArgs.length > 0 && md.macroArgs[0].kind === NodeKind.StringLiteral) {
+					dir = dir + ":" + (md.macroArgs[0].data as StringLiteralData).value;
+				}
+				directives.push(dir);
+			}
+		}
+		i += 1;
+	}
+	return directives;
 }
 
 // ===== Tests =====

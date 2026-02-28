@@ -207,6 +207,14 @@ function liftFuncExpr(node: Node, captures: NameSet, state: LiftState): Node {
 	return liftClosure(d.funcExprBody, d.funcExprParams, d.funcExprParamTypes, d.funcExprFlags, d.funcExprReturnType, captures, state, node.location);
 }
 
+// Non-capturing lift: no env struct, no closure pair — just a module-level FunctionDecl + Identifier ref.
+function liftNonCapturing(body: Node, params: string[], paramTypes: string[], flags: string, returnType: string, state: LiftState, loc: SourceLocation): Node {
+	state.closureCounter += 1;
+	const liftedName = "$fn_" + state.currentFnName + "_" + state.closureCounter.toString();
+	state.liftedFunctions.push(makeFnDecl(liftedName, params, paramTypes, body, flags, returnType, loc));
+	return makeIdent(liftedName, loc);
+}
+
 function makeClosurePair(liftedName: string, captures: NameSet, loc: SourceLocation): Node {
 	const envKeys: string[] = [];
 	const envValues: Node[] = [];
@@ -387,6 +395,8 @@ function tryLiftClosure(node: Node, state: LiftState): Node {
 		if (captures.names.length > 0) {
 			return liftArrow(node, captures, state);
 		}
+		// Non-capturing: lift to module-level FunctionDecl, return Identifier
+		return liftNonCapturing(d.arrowBody, d.arrowParams, d.arrowParamTypes, d.arrowFlags, d.arrowReturnType, state, node.location);
 	} else if (node.kind === NodeKind.FunctionExpr) {
 		const d = node.data as FunctionExprData;
 		for (const p of d.funcExprParams) { defineVar(state.ss, p); }
@@ -395,6 +405,8 @@ function tryLiftClosure(node: Node, state: LiftState): Node {
 		if (captures.names.length > 0) {
 			return liftFuncExpr(node, captures, state);
 		}
+		// Non-capturing: lift to module-level FunctionDecl, return Identifier
+		return liftNonCapturing(d.funcExprBody, d.funcExprParams, d.funcExprParamTypes, d.funcExprFlags, d.funcExprReturnType, state, node.location);
 	} else {
 		popFuncBoundary(state.ss);
 	}
@@ -439,11 +451,14 @@ testGroup("Lambda Lifting", () => {
 	test("function without capture unchanged", () => {
 		check(firstStmtKindAfter("function foo(x) { return x; }", lowerLambda) === NodeKind.FunctionDecl);
 	});
-	test("non-capturing arrow unchanged", () => {
-		check(stmtCountAfter("const f = (x) => x + 1;", lowerLambda) === 1);
+	test("non-capturing arrow lifted", () => {
+		// Arrow lifted to module-level FunctionDecl + original VariableDecl = 2 stmts
+		check(stmtCountAfter("const f = (x) => x + 1;", lowerLambda) === 2);
+		check(firstStmtKindAfter("const f = (x) => x + 1;", lowerLambda) === NodeKind.FunctionDecl);
 	});
-	test("param ref not captured", () => {
-		check(stmtCountAfter("function f(x) { const g = (y) => y + 1; }", lowerLambda) === 1);
+	test("non-capturing arrow in function lifted", () => {
+		// Inner arrow lifted to program level: lifted fn + outer fn = 2 stmts
+		check(stmtCountAfter("function f(x) { const g = (y) => y + 1; }", lowerLambda) === 2);
 	});
 	test("arrow with capture generates 3 stmts", () => {
 		// function outer() { let x = 1; const f = () => x; }
@@ -454,9 +469,14 @@ testGroup("Lambda Lifting", () => {
 		check(firstStmtKindAfter("function outer() { let x = 1; const f = () => x; }", lowerLambda) === NodeKind.InterfaceDecl);
 	});
 	test("builtin name not captured", () => {
-		check(stmtCountAfter("function f() { const g = () => console; }", lowerLambda) === 1);
+		// Arrow referencing builtin is non-capturing, but still lifted: lifted fn + outer fn = 2
+		check(stmtCountAfter("function f() { const g = () => console; }", lowerLambda) === 2);
 	});
 	test("multiple captures one env", () => {
 		check(stmtCountAfter("function f() { let a = 1; let b = 2; const g = () => a + b; }", lowerLambda) === 3);
+	});
+	test("non-capturing function expr lifted", () => {
+		check(stmtCountAfter("const f = function(x) { return x + 1; };", lowerLambda) === 2);
+		check(firstStmtKindAfter("const f = function(x) { return x + 1; };", lowerLambda) === NodeKind.FunctionDecl);
 	});
 });

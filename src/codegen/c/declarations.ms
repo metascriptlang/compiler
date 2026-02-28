@@ -140,12 +140,6 @@ function genInterfaceDecl(g: CGen, node: Node): void {
 	addNewline(types);
 }
 
-// ===== Monomorphized Generic Interface Structs =====
-// Nim-aligned: checker records instantiations, codegen emits concrete structs.
-// Reads from parser/context GenericTypeInstStore (DRC-safe side-channel).
-
-// genGenericTypeInsts is in index.ms (avoids parser/context import here — DRC union sensitivity)
-
 // ===== Class Declaration =====
 
 function genClassDecl(g: CGen, node: Node): void {

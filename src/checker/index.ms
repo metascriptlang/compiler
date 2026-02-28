@@ -30,7 +30,7 @@ export {
 	createExportRegistry, findModuleExports, findExportedSymbol, registerModuleExports,
 	ExtensionMethod, ExtensionRegistry, createExtensionRegistry, registerExtension, findExtension, hasExtensionByName,
 	AttachedOps, findAttachedOps, hasAttachedOps,
-	isExtensionFlag, getExtReceiverName, getExtReceiverType,
+	isExtensionFlag, isStaticExtensionFlag, getExtReceiverName, getExtReceiverType, getStaticExtTypeName,
 } from "./context";
 
 // Re-exports: collectPass.ms (Pass 1)

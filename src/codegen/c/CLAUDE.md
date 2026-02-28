@@ -14,13 +14,11 @@ src/codegen/c/
   index.ms        -- entry: generateC(program, checkerCtx) → string, section assembly
   context.ms      -- CGen, CProc, CBlock, CLoc, CSection enum, getTemp
   types.ms        -- Type → C type mapping, struct/enum emission, forward decls
-  expressions.ms  -- Expression emission with CLoc dest carrier
+  expressions.ms  -- Expression emission (includes call emission, argument handling)
   statements.ms   -- if, while, do-while, block, break, continue, return
   declarations.ms -- Function/class/interface/enum declaration emission
-  calls.ms        -- Call emission, argument handling
   literals.ms     -- String pool, number formatting
   names.ms        -- Name mangling, identifier sanitization
-  rc.ms           -- RC operation emission (reads DRC-injected nodes)
 ```
 
 ---
@@ -40,22 +38,23 @@ enum CSection {
 
 Each section is a `StringBuf`. Final assembly concatenates in enum order.
 
-### Module Initialization (Nim-aligned two-phase)
+### Module Initialization (two-phase)
 
 ```
-main(argc, argv)
-  └─ NimMain()
-       ├─ PreMainInner()          // data init phase
+main(argc, argv, env)
+  └─ MsMain()
+       ├─ MsPreMainInner()        // data init phase
        │    └─ <module>__DatInit000()   // type info, static data
-       └─ NimMainInner()          // code init phase
+       └─ MsMainInner()           // code init phase
             └─ <module>__Init000()      // user top-level code
             └─ main_()                  // user's main() if defined
 ```
 
 - Init function names are module-qualified: `mangleModuleName(path) + "__Init000"`
-- POSIX main forwards `argc`/`argv` into `cmdCount`/`cmdLine` globals
-- User-defined `main()` is mangled to `main_()` (C keyword avoidance) and called from NimMainInner
+- POSIX main forwards `argc`/`argv`/`env` into `cmdCount`/`cmdLine`/`gEnv` globals
+- User-defined `main()` is mangled to `main_()` (C keyword avoidance) and called from MsMainInner
 - DatInit runs before Init to ensure data is ready for user code
+- `ms_program_result` global is the process exit code (returned from main)
 - Multi-module: each module registers its DatInit/Init into the appropriate dispatcher
 
 ### CLoc (expression result carrier — Nim's TLoc)
@@ -159,8 +158,10 @@ By Phase 5, all complex syntax is already lowered:
 | Extension methods → direct call | extensionMethodLower |
 | All RC ops → explicit `ms_decref(&x)` etc. | analyzer/inject |
 | Builtins → plain C-compatible calls | builtinLower |
+| Generic functions → concrete FunctionDecl nodes | monomorphize |
+| Generic types → concrete InterfaceDecl/ClassDecl nodes | monomorphize |
 
-**Codegen is "dumb"** — just emits what it sees. No dispatch tables, no builtin awareness, no RC interleaving.
+**Codegen is "dumb"** — just emits what it sees. No dispatch tables, no builtin awareness, no RC interleaving, no generic awareness.
 
 ---
 
@@ -284,7 +285,7 @@ Lambda lifting (Phase 3) already converts to: lifted function + env struct + `ms
 
 ---
 
-## RC Integration (Minimal)
+## RC Integration (Zero Awareness)
 
 Phase 4 (Analyzer) already injected all RC calls as explicit AST nodes:
 - `=destroy(x)` → `ms_decref(&x)` ExprStmt
@@ -292,7 +293,7 @@ Phase 4 (Analyzer) already injected all RC calls as explicit AST nodes:
 - `=wasMoved(x)` → `ms_ptr_was_moved(&x)` ExprStmt
 - try/finally wrapping → already in AST
 
-Codegen's `rc.ms` only: (1) recognizes DRC-injected call names, (2) determines `&` vs direct pass based on type. **No interleaving of RC logic in codegen** — massive simplification vs reference compiler (6K+ lines scattered across 40K).
+**Codegen has zero RC awareness.** DRC-injected calls (`ms_decref`, `ms_incref`, etc.) are regular `CallExpr` nodes — `genCallExpr` in `expressions.ms` emits them identically to any other function call. No special RC file, no call-name recognition, no `&` vs direct pass logic. **Massive simplification vs reference compiler** (6K+ lines of interleaved RC logic scattered across 40K).
 
 ---
 
@@ -312,7 +313,7 @@ Codegen's `rc.ms` only: (1) recognizes DRC-injected call names, (2) determines `
 ### Phase 5c: Expressions + Statements (~1200 lines) — DONE
 8. ~~`c/expressions.ms` — all expression kinds (returns string snippets, not CLoc — value-type adaptation)~~ DONE
 9. ~~`c/statements.ms` — if, while, do-while, block, break, continue, return, throw, try/catch~~ DONE
-10. ~~`c/calls.ms` — call emission integrated into expressions.ms (genCallExpr)~~ DONE
+10. ~~Call emission — integrated into expressions.ms (genCallExpr)~~ DONE
 
 ### Phase 5d: Declarations (~800 lines) — DONE
 11. ~~`c/declarations.ms` — functions, classes, interfaces, enums, exports, globals~~ DONE
@@ -321,7 +322,7 @@ Codegen's `rc.ms` only: (1) recognizes DRC-injected call names, (2) determines `
 ### Phase 5e: Advanced (~400 lines)
 13. ~~try/catch (setjmp/longjmp) — implemented in statements.ms~~ DONE
 14. ~~Closure emission (env struct + lifted functions) — closure pair detection, ms_closure literal, closure vs direct call protocol, arrow function lifting, fnDeclNames pre-pass~~ DONE
-15. Generic monomorphization — BLOCKED: needs checker-level instantiation registry (substituteType/instantiateGeneric exist but no AST duplication infrastructure yet)
+15. ~~Generic monomorphization — handled by monomorphize module (Phase 2.5). Codegen receives concrete InterfaceDecl/FunctionDecl nodes — zero generic awareness needed.~~ DONE
 
 Test at each phase with `msc test`. Each file gets inline tests.
 

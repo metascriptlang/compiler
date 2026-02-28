@@ -13,14 +13,8 @@ import {
 	ProgramData, FunctionDeclData, BlockStmtData,
 	CallExprData, MemberExprData, IdentifierData,
 	ExprStmtData, VariableDeclData, ReturnStmtData,
-	BinaryExprData, UnaryExprData,
 	IfStmtData, WhileStmtData, DoWhileStmtData,
-	ForOfStmtData, TryCatchStmtData,
-	ExportDeclData, DecoratedDeclData,
-	ClassDeclData, MethodDeclData, ConstructorDeclData,
-	ArrayLiteralData, ObjectLiteralData,
-	ConditionalExprData, ArrayAccessData,
-	MatchStmtData, MatchCaseData,
+	TryCatchStmtData, ExportDeclData,
 	SourceLocation,
 } from "../../ast/node";
 import { TransformContext } from "../context";
@@ -115,14 +109,15 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 		}
 	}
 
-	// Check for method calls: obj.method(args) where method is @runtime
+	// Class method calls (console.log, Math.floor): handled at codegen time
+	// (expressions.ms genCallExpr) to avoid DRC string corruption.
+
+	// Instance extension: obj.method(args) → c_name(obj, args) (add receiver)
 	if (cd.callee.kind === NodeKind.MemberExpr && ctx.checkerCtx !== null) {
 		const me = cd.callee.data as MemberExprData;
 		const sym = lookupSymbol(ctx.checkerCtx.table, me.property);
 		if (sym !== null && sym.runtimeName !== "") {
-			// Rewrite obj.method(args) → c_name(obj, args)
 			const newArgs: Node[] = [];
-			// Walk the object expression
 			const objExpr = walkLowerBuiltins(me.object, ctx);
 			newArgs.push(objExpr);
 			let j = 0;
@@ -141,12 +136,11 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 // Handles @builtin("Name") — known compiler builtins get inline C patterns.
 
 function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext): Node {
-	// For now, pass through — individual builtins added as std/core.ms defines them.
-	// Each builtin kind would get a match arm here:
-	//   "LengthStr" → rewrite to ms_string_length(arg)
-	//   "LengthArr" → rewrite to ms_array_length(arg)
-	//   "Print"     → rewrite to ms_print(args...)
-	//   etc.
+	const cd = node.data as CallExprData;
+	const loc = node.location;
+	if (builtinKind === "LengthStr" && cd.arguments.length === 1) {
+		return makeCall(makeIdent("ms_string_length", loc), cd.arguments, loc);
+	}
 	return node;
 }
 
@@ -246,6 +240,48 @@ function walkTryCatch(node: Node, ctx: TransformContext): Node {
 
 // ===== Tests =====
 
+import { runThreePasses } from "../../checker/checkPass";
+import { createContext } from "../../checker/context";
+import { openScope, ScopeKind } from "../../checker/symbol";
+import { createTransformContextWithChecker } from "../context";
+import { parseSource } from "../../parser/statements/validation";
+import "../../parser/statements/core";
+
+// Simulate the full prelude → check → builtinLower pipeline.
+// Returns the callee name of the first CallExpr in user code after lowering.
+function preludeLowerCallee(preludeSrc: string, userSrc: string): string {
+	// 1. Create checker context, parse+check prelude in Global scope
+	const ctx = createContext();
+	const ppr = parseSource(preludeSrc);
+	if (!ppr.ok) return "PRELUDE_PARSE_ERR";
+	runThreePasses(ctx, ppr.value);
+
+	// 2. Open Module scope, parse+check user code
+	openScope(ctx.table, ScopeKind.Module);
+	const upr = parseSource(userSrc);
+	if (!upr.ok) return "USER_PARSE_ERR";
+	runThreePasses(ctx, upr.value);
+
+	// 3. Run builtinLower on user AST with checker context
+	const tctx = createTransformContextWithChecker(ctx);
+	const lowered = lowerBuiltins(upr.value, tctx);
+
+	// 4. Extract callee name from first ExprStmt's CallExpr
+	const pd = lowered.data as ProgramData;
+	if (pd.programStmts.length === 0) return "NO_STMTS";
+	const stmt = pd.programStmts[0];
+	if (stmt.kind !== NodeKind.ExprStmt) return "NOT_EXPR";
+	const es = stmt.data as ExprStmtData;
+	if (es.expr.kind !== NodeKind.CallExpr) return "NOT_CALL";
+	const cd = es.expr.data as CallExprData;
+	if (cd.callee.kind === NodeKind.Identifier) {
+		const id = cd.callee.data as IdentifierData;
+		return id.name;
+	}
+	if (cd.callee.kind === NodeKind.MemberExpr) return "STILL_MEMBER";
+	return "OTHER_KIND";
+}
+
 testGroup("Builtin Lower", () => {
 	test("passthrough non-call", () => {
 		check(stmtCountAfter("const x = 1;", lowerBuiltins) === 1);
@@ -258,5 +294,12 @@ testGroup("Builtin Lower", () => {
 	});
 	test("passthrough if stmt", () => {
 		check(firstStmtKindAfter("if (x) {}", lowerBuiltins) === NodeKind.IfStmt);
+	});
+	test("prelude class method stays as MemberExpr (codegen handles)", () => {
+		const prelude = "class console { @runtime(\"ms_println\") log(value: string): void { unreachable; } }";
+		const result = preludeLowerCallee(prelude, "console.log(\"hello\");");
+		// Class method calls are NOT rewritten by builtinLower — codegen handles them
+		// directly to avoid DRC string corruption. Result is STILL_MEMBER (MemberExpr callee).
+		check(result === "STILL_MEMBER");
 	});
 });

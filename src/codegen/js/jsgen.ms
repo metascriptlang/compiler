@@ -3,7 +3,7 @@
 // Registers emitNodeDispatch callback, provides generateJS entry point.
 // Tests cover the full pipeline: parse → check → transform → generateJS.
 
-import { Node, NodeKind, ProgramData } from "../../ast/node";
+import { Node, NodeKind, ProgramData, HiddenDerefData } from "../../ast/node";
 import {
 	JSGenerator, createJSGenerator, registerEmitNode,
 	finalize, emit, emitNode, emitLine,
@@ -68,6 +68,7 @@ function emitNodeDispatch(gen: JSGenerator, node: Node): void {
 	if (k === NodeKind.SpreadExpr) { emitSpreadExpr(gen, node); return; }
 	if (k === NodeKind.NewExpr) { emitNewExpr(gen, node); return; }
 	if (k === NodeKind.MoveExpr) { emitMoveExpr(gen, node); return; }
+	if (k === NodeKind.HiddenDeref) { const hd = node.data as HiddenDerefData; emitNodeDispatch(gen, hd.expr); return; }
 	if (k === NodeKind.AwaitExpr) { emitAwaitExpr(gen, node); return; }
 	if (k === NodeKind.YieldExpr) { emitYieldExpr(gen, node); return; }
 

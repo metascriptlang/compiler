@@ -75,9 +75,21 @@ export function parseParamList(state: ParserState): string[] {
 			current(state).kind === TokenKind.Protected || current(state).kind === TokenKind.Readonly) {
 			advance(state);
 		}
-		// Extension method receiver: this name: Type (must be first param)
+		// Extension method receiver (must be first param)
 		if (params.length === 0 && current(state).kind === TokenKind.This) {
 			advance(state);
+			// Static extension: this typeof TypeName
+			if (current(state).kind === TokenKind.Typeof) {
+				advance(state);
+				const typeName = current(state);
+				if (typeName.kind !== TokenKind.Ident) { break; }
+				params.push("typeof:" + typeName.value);
+				advance(state);
+				params.push("");
+				if (current(state).kind === TokenKind.Comma) { advance(state); } else { break; }
+				continue;
+			}
+			// Instance extension: this name: Type
 			const receiverName = current(state);
 			if (receiverName.kind !== TokenKind.Ident) { break; }
 			params.push("this:" + receiverName.value);

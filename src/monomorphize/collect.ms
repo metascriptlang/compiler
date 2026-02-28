@@ -32,7 +32,12 @@ import { CheckerContext, extractGenericNames, stripGenFlag } from "../checker/co
 import { SymbolTable, Symbol, SymbolKind, ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope } from "../checker/symbol";
 import { MonoRegistry, MonoEntry, monoRegister, monoFindEntry, buildTypeArgKeys, monoTypeKey, createMonoRegistry } from "./registry";
 import { sliceStr, trim, splitTopLevel, findChar, charAt } from "../utils/string";
-import { getExplicitTypeArg } from "../parser/context";
+import {
+	getExplicitTypeArg,
+	getGenericTypeInstCount, getGenericTypeInstMangledName,
+	getGenericTypeInstFieldCount, getGenericTypeInstFieldNameAt,
+	getGenericTypeInstFieldTypeAt, resetGenericTypeInsts,
+} from "../parser/context";
 import { callCheckStmt } from "../checker/checkerCallbacks";
 import { test, check, testGroup } from "std/testing";
 
@@ -1162,12 +1167,52 @@ function monoApplySubstitutions(fnNode: Node, entry: MonoEntry): void {
 	}
 }
 
+// ===== Generic Type Instance → InterfaceDecl Nodes =====
+// Nim-aligned: monomorphize creates concrete InterfaceDecl nodes so codegen
+// is fully generic-unaware. Reads from GenericTypeInstStore (populated by checker).
+
+function monoEmitOneTypeInst(program: Node, idx: number): void {
+	const mangledName = getGenericTypeInstMangledName(idx);
+	const fieldCount = getGenericTypeInstFieldCount(idx);
+	const fieldNames: string[] = [];
+	const fieldTypes: string[] = [];
+	let fi = 0;
+	while (fi < fieldCount) {
+		fieldNames.push(getGenericTypeInstFieldNameAt(idx, fi));
+		fieldTypes.push(getGenericTypeInstFieldTypeAt(idx, fi));
+		fi += 1;
+	}
+	const loc: SourceLocation = { line: 0, column: 0 };
+	const data: NodeData = { interfaceName: mangledName, interfaceFields: fieldNames, interfaceFieldTypes: fieldTypes };
+	const declNode = createNodeAt(NodeKind.InterfaceDecl, data, loc);
+	const pd = program.data as ProgramData;
+	pd.programStmts.push(declNode);
+}
+
+function monoEmitTypeInstNodes(program: Node): void {
+	const count = getGenericTypeInstCount();
+	let i = 0;
+	while (i < count) {
+		monoEmitOneTypeInst(program, i);
+		i += 1;
+	}
+	resetGenericTypeInsts();
+}
+
 // ===== Public Entry Point =====
 
 export function monomorphizeProgram(program: Node, checkerCtx: CheckerContext): Node {
 	if (checkerCtx === null) return program;
 	if (program === null) return program;
 	if (program.kind !== NodeKind.Program) return program;
+
+	// Phase 1: Create InterfaceDecl nodes for generic type instantiations
+	// (independent of function monomorphization — Box<number> may exist without generic functions)
+	monoEmitTypeInstNodes(program);
+
+	const pd = program.data as ProgramData;
+
+	// Phase 2: Monomorphize generic functions
 	const declMap = createMonoGenericDeclMap();
 	monoCollectDefinitions(program, declMap);
 	if (declMap.names.length === 0) return program;
@@ -1187,7 +1232,6 @@ export function monomorphizeProgram(program: Node, checkerCtx: CheckerContext): 
 		monoRewriteNode(gn, registry, declMap, checkerCtx);
 	}
 
-	const pd = program.data as ProgramData;
 	for (const gn of generatedNodes) { pd.programStmts.push(gn); }
 	return program;
 }

@@ -12,11 +12,12 @@ import {
 	IdentifierData, BinaryExprData, UnaryExprData,
 	MemberExprData, ArrayAccessData,
 	ConditionalExprData, TypeAssertionData, CallExprData,
-	ObjectLiteralData, ArrayLiteralData, ArrowFunctionData,
-	UpdateExprData, NewExprData, MoveExprData, SpreadExprData, FunctionExprData,
+	ObjectLiteralData, ArrayLiteralData,
+	UpdateExprData, NewExprData, MoveExprData, SpreadExprData,
 	ExprStmtData,
 } from "../../ast/node";
-import { Type, TypeKind } from "../../checker/types";
+import { Type, TypeKind, getProperty } from "../../checker/types";
+import { lookupSymbol, SymbolKind } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, Builder, CSection,
 	initLoc, noLoc, rdLoc,
@@ -201,6 +202,49 @@ function genCallExpr(g: CGen, p: CProc, node: Node): string {
 	if (cd.callee.kind === NodeKind.Identifier) {
 		const id = cd.callee.data as IdentifierData;
 		if (nameSetHas(g.fnDeclNames, id.name)) isDirect = true;
+
+		// @runtime("c_name") on top-level function — emit C name directly (Nim sfImportc)
+		if (g.checkerCtx !== null) {
+			const sym = lookupSymbol(g.checkerCtx.table, id.name);
+			if (sym !== null && sym.runtimeName !== "") {
+				let args = "";
+				let i = 0;
+				while (i < cd.arguments.length) {
+					if (i > 0) args = args + ", ";
+					args = args + genExpr(g, p, cd.arguments[i]);
+					i += 1;
+				}
+				return sym.runtimeName + "(" + args + ")";
+			}
+		}
+	}
+
+	// Class method call: console.log(x) → ms_println(x)
+	// Unwrap HiddenDeref: checker inserts HiddenDeref for class member access (pointer types)
+	if (cd.callee.kind === NodeKind.MemberExpr && g.checkerCtx !== null) {
+		const me = cd.callee.data as MemberExprData;
+		let calleeObj = me.object;
+		if (calleeObj.kind === NodeKind.HiddenDeref) {
+			const hd = calleeObj.data as ExprStmtData;
+			calleeObj = hd.expr;
+		}
+		if (calleeObj.kind === NodeKind.Identifier) {
+			const objId = calleeObj.data as IdentifierData;
+			const objSym = lookupSymbol(g.checkerCtx.table, objId.name);
+			if (objSym !== null && objSym.symbolKind === SymbolKind.Class) {
+				const methodType = getProperty(objSym.symbolType, me.property);
+				if (methodType.typeName !== "") {
+					let args = "";
+					let i = 0;
+					while (i < cd.arguments.length) {
+						if (i > 0) args = args + ", ";
+						args = args + genExpr(g, p, cd.arguments[i]);
+						i += 1;
+					}
+					return methodType.typeName + "(" + args + ")";
+				}
+			}
+		}
 	}
 
 	// MemberExpr callee is always a direct call (method/field access)
@@ -280,55 +324,8 @@ function genArrayLiteral(g: CGen, p: CProc, node: Node): string {
 // Capturing arrows are already transformed into closure pairs (ObjectLiteral).
 
 function genArrowFunction(g: CGen, p: CProc, node: Node): string {
-	const d = node.data as ArrowFunctionData;
-	// Non-capturing arrow: emit as anonymous function pointer
-	// We need to lift it to a module-level function and return its address
-	g.labels += 1;
-	const liftedName = "__anon_" + g.labels;
-
-	// Build parameter list
-	let paramList = "";
-	let i = 0;
-	while (i < d.arrowParams.length) {
-		if (i > 0) paramList = paramList + ", ";
-		const pType = mapArrowParamType(d.arrowParamTypes, i);
-		paramList = paramList + pType + " " + safeName(d.arrowParams[i]);
-		i += 1;
-	}
-	if (d.arrowParams.length === 0) paramList = "void";
-
-	const retType = mapArrowReturnType(d.arrowReturnType);
-	const proto = retType + " " + liftedName + "(" + paramList + ")";
-
-	// Emit the lifted function to Procs section
-	// For now, emit a simple wrapper. Body codegen requires genStmt from statements.
-	addLine(sec(g, CSection.Procs), proto + " {");
-	addLine(sec(g, CSection.Procs), "  /* arrow body */");
-	addLine(sec(g, CSection.Procs), "}");
-
-	return "(void*)" + liftedName;
-}
-
-function mapArrowParamType(paramTypes: string[], idx: number): string {
-	if (idx < paramTypes.length) {
-		const t = paramTypes[idx];
-		if (t === "number" || t === "float64" || t === "") return "double";
-		if (t === "int32") return "int32_t";
-		if (t === "boolean") return "NIM_BOOL";
-		if (t === "string") return "msString";
-		if (t === "void") return "void";
-		return "void*";
-	}
-	return "void*";
-}
-
-function mapArrowReturnType(ret: string): string {
-	if (ret === "" || ret === "void") return "void";
-	if (ret === "number" || ret === "float64") return "double";
-	if (ret === "int32") return "int32_t";
-	if (ret === "boolean") return "NIM_BOOL";
-	if (ret === "string") return "msString";
-	return "void*";
+	// Lambda lifting (Phase 3) lifts all ArrowFunctions — this path is dead.
+	return "0 /* unlowered ArrowFunction */";
 }
 
 // ===== Update Expression (i++, ++i, i--, --i) =====
@@ -384,54 +381,8 @@ function genSpreadExpr(g: CGen, p: CProc, node: Node): string {
 // Same pattern as ArrowFunction.
 
 function genFunctionExpr(g: CGen, p: CProc, node: Node): string {
-	const d = node.data as FunctionExprData;
-	g.labels += 1;
-	const liftedName = "__anon_" + g.labels;
-
-	// Build parameter list
-	let paramList = "";
-	let i = 0;
-	while (i < d.funcExprParams.length) {
-		if (i > 0) paramList = paramList + ", ";
-		const pType = mapFuncExprParamType(d.funcExprParamTypes, i);
-		paramList = paramList + pType + " " + safeName(d.funcExprParams[i]);
-		i += 1;
-	}
-	if (d.funcExprParams.length === 0) paramList = "void";
-
-	const retType = mapFuncExprReturnType(d.funcExprReturnType);
-	const proto = retType + " " + liftedName + "(" + paramList + ")";
-
-	// Emit lifted function to Procs section
-	// Body requires genStmt (in statements.ms) — circular import.
-	// Same limitation as ArrowFunction. Body emitted as placeholder.
-	addLine(sec(g, CSection.Procs), proto + " {");
-	addLine(sec(g, CSection.Procs), "  /* func expr body */");
-	addLine(sec(g, CSection.Procs), "}");
-
-	return "(void*)" + liftedName;
-}
-
-function mapFuncExprParamType(paramTypes: string[], idx: number): string {
-	if (idx < paramTypes.length) {
-		const t = paramTypes[idx];
-		if (t === "number" || t === "float64" || t === "") return "double";
-		if (t === "int32") return "int32_t";
-		if (t === "boolean") return "NIM_BOOL";
-		if (t === "string") return "msString";
-		if (t === "void") return "void";
-		return "void*";
-	}
-	return "void*";
-}
-
-function mapFuncExprReturnType(ret: string): string {
-	if (ret === "" || ret === "void") return "void";
-	if (ret === "number" || ret === "float64") return "double";
-	if (ret === "int32") return "int32_t";
-	if (ret === "boolean") return "NIM_BOOL";
-	if (ret === "string") return "msString";
-	return "void*";
+	// Lambda lifting (Phase 3) lifts all FunctionExpr — this path is dead.
+	return "0 /* unlowered FunctionExpr */";
 }
 
 // ===== Tests =====

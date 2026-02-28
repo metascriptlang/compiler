@@ -10,7 +10,7 @@ import {
 	Node, NodeKind, SourceLocation, createNodeAt,
 	ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData,
 	ClassDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData,
-	TypeAliasDeclData, VariableDeclData,
+	TypeAliasDeclData, VariableDeclData, DecoratedDeclData,
 } from "../ast/node";
 import {
 	Type, TypeKind,
@@ -19,8 +19,9 @@ import {
 	createResult, createTypeRef, createUnion, createGenericParam, createDistinct,
 } from "./types";
 import { Symbol, SymbolKind, ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope } from "./symbol";
-import { CheckerContext, findExtension, isExtensionFlag, getExtReceiverType, extractGenericNames } from "./context";
+import { CheckerContext, findExtension, isExtensionFlag, isStaticExtensionFlag, getExtReceiverType, getStaticExtTypeName, extractGenericNames } from "./context";
 import { trim, sliceStr, findChar, splitTopLevel } from "../utils/string";
+import { getProperty } from "./types";
 import { getGenericDecl, getGenericDeclFieldNames, getGenericDeclFieldTypes, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
 import { test, check, testGroup } from "std/testing";
 
@@ -128,8 +129,21 @@ function buildTypeArgKey(args: string[], ctx: CheckerContext): string {
 	return key;
 }
 
+// Find index of matching generic param for a given field type string.
+// Returns the param index, or -1 if no match. Uses only number locals (DRC-safe).
+function findGenericParamIdx(rawType: string, paramNames: string[]): number {
+	let i = 0;
+	while (i < paramNames.length) {
+		if (trim(paramNames[i]) === rawType) return i;
+		i += 1;
+	}
+	return -1;
+}
+
 // Record a generic type instantiation (e.g., Box<number>) for codegen
 // Looks up field names/types from parser side-channel, substitutes generic params → concrete types
+// NOTE: Avoids all `let` string variables — only const strings + number let variables.
+// DRC generates ms_decref instead of ms_string_decref for let string locals in complex functions.
 function recordGenericTypeInstantiation(baseName: string, genericParams: string, args: string[], ctx: CheckerContext): void {
 	const typeArgKey = buildTypeArgKey(args, ctx);
 	const mangledName = baseName + "__" + typeArgKey;
@@ -138,39 +152,39 @@ function recordGenericTypeInstantiation(baseName: string, genericParams: string,
 	const fieldNamesStr = getGenericDeclFieldNames(baseName);
 	const fieldTypesStr = getGenericDeclFieldTypes(baseName);
 
+	if (fieldNamesStr === "") {
+		addGenericTypeInst(baseName, typeArgKey, mangledName, "", "");
+		return;
+	}
+
 	// Split generic param names: "T,U" → ["T", "U"]
 	const paramNames = splitTopLevel(genericParams, ",");
+	const fnParts = splitTopLevel(fieldNamesStr, "|");
+	const ftParts = splitTopLevel(fieldTypesStr, "|");
 
-	// Build "|"-joined substituted field types
-	let resultFieldNames = "";
-	let resultFieldTypes = "";
+	if (fnParts.length === 0) {
+		addGenericTypeInst(baseName, typeArgKey, mangledName, "", "");
+		return;
+	}
 
-	if (fieldNamesStr !== "") {
-		const fnParts = splitTopLevel(fieldNamesStr, "|");
-		const ftParts = splitTopLevel(fieldTypesStr, "|");
+	// Handle first field separately to initialize result strings from non-empty values
+	const firstRaw = ftParts.length > 0 ? trim(ftParts[0]) : "";
+	const firstIdx = findGenericParamIdx(firstRaw, paramNames);
+	const firstSub = firstIdx >= 0 && firstIdx < args.length ? trim(args[firstIdx]) : firstRaw;
 
-		let fi = 0;
-		while (fi < fnParts.length) {
-			if (fi > 0) { resultFieldNames = resultFieldNames + "|"; resultFieldTypes = resultFieldTypes + "|"; }
-			resultFieldNames = resultFieldNames + trim(fnParts[fi]);
-			// Substitute generic params in field type annotations
-			let fieldType = "";
-			if (fi < ftParts.length) { fieldType = trim(ftParts[fi]); }
-			// Replace each generic param with its concrete type arg
-			let pi = 0;
-			while (pi < paramNames.length) {
-				const paramName = trim(paramNames[pi]);
-				if (pi < args.length) {
-					const argStr = trim(args[pi]);
-					if (fieldType === paramName) {
-						fieldType = argStr;
-					}
-				}
-				pi += 1;
-			}
-			resultFieldTypes = resultFieldTypes + fieldType;
-			fi += 1;
-		}
+	// Only use `let` for result strings initialized from computed values (never from "")
+	let resultFieldNames = trim(fnParts[0]);
+	let resultFieldTypes = firstSub;
+
+	// Append remaining fields with "|" separator
+	let fi = 1;
+	while (fi < fnParts.length) {
+		const rawType = fi < ftParts.length ? trim(ftParts[fi]) : "";
+		const paramIdx = findGenericParamIdx(rawType, paramNames);
+		const subType = paramIdx >= 0 && paramIdx < args.length ? trim(args[paramIdx]) : rawType;
+		resultFieldNames = resultFieldNames + "|" + trim(fnParts[fi]);
+		resultFieldTypes = resultFieldTypes + "|" + subType;
+		fi += 1;
 	}
 
 	addGenericTypeInst(baseName, typeArgKey, mangledName, resultFieldNames, resultFieldTypes);
@@ -271,11 +285,21 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 	}
 
 	sym.symbolType = fnType;
-	// Update extension method type in registry if this is an extension
+	// Update extension method type in registry if this is an instance extension
 	if (isExtensionFlag(d.fnFlags) && ctx.extensionRegistry !== null) {
 		const receiverType = getExtReceiverType(d.fnFlags);
 		if (receiverType !== "") {
 			const ext = findExtension(ctx.extensionRegistry, receiverType, d.fnName);
+			if (ext !== null) {
+				ext.fnType = fnType;
+			}
+		}
+	}
+	// Update static extension method type in registry
+	if (isStaticExtensionFlag(d.fnFlags) && ctx.extensionRegistry !== null) {
+		const staticTypeName = getStaticExtTypeName(d.fnFlags);
+		if (staticTypeName !== "") {
+			const ext = findExtension(ctx.extensionRegistry, staticTypeName, d.fnName);
 			if (ext !== null) {
 				ext.fnType = fnType;
 			}
@@ -351,30 +375,33 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 		}
 	}
 
-	// Build Object type — collect member names and types into local arrays
+	// Save collectPass type to preserve decorator metadata (runtimeName/builtinKind on typeName)
+	const oldType = sym.symbolType;
+
+	// Build Object type — collect members inline (DRC #4: push() through functions loses mutations)
 	const memberNames: string[] = [];
 	const memberTypes: Type[] = [];
-	for (const member of d.classBody) {
-		resolveClassMember(ctx, memberNames, memberTypes, member);
-	}
-
-	if (hasGenerics) {
-		closeScope(ctx.table);
-	}
-
-	sym.symbolType = createObject(d.className, memberNames, memberTypes, false);
-}
-
-function resolveClassMember(ctx: CheckerContext, memberNames: string[], memberTypes: Type[], member: Node): void {
-	match (member.kind) {
-		NodeKind.MethodDecl => {
+	let mi = 0;
+	while (mi < d.classBody.length) {
+		let member = d.classBody[mi];
+		// Unwrap DecoratedDecl to get the inner declaration
+		if (member.kind === NodeKind.DecoratedDecl) {
+			const dd = member.data as DecoratedDeclData;
+			member = dd.decoratedNode;
+		}
+		if (member.kind === NodeKind.MethodDecl) {
 			const md = member.data as MethodDeclData;
 			memberNames.push(md.methodName);
 			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx);
 			const returnType = (md.methodReturnType !== "") ? resolveAnnotation(md.methodReturnType, ctx) : unknownType();
-			memberTypes.push(createFunction(paramTypes, md.methodParams, returnType));
-		},
-		NodeKind.PropertyDecl => {
+			const fnType = createFunction(paramTypes, md.methodParams, returnType);
+			// Carry over typeName from collectPass (stores @runtime/@builtin metadata)
+			const prevMemberType = getProperty(oldType, md.methodName);
+			if (prevMemberType.typeName !== "") {
+				fnType.typeName = prevMemberType.typeName;
+			}
+			memberTypes.push(fnType);
+		} else if (member.kind === NodeKind.PropertyDecl) {
 			const pd = member.data as PropertyDeclData;
 			memberNames.push(pd.propName);
 			if (pd.propType !== "") {
@@ -382,15 +409,20 @@ function resolveClassMember(ctx: CheckerContext, memberNames: string[], memberTy
 			} else {
 				memberTypes.push(unknownType());
 			}
-		},
-		NodeKind.ConstructorDecl => {
+		} else if (member.kind === NodeKind.ConstructorDecl) {
 			memberNames.push("constructor");
 			const cd = member.data as ConstructorDeclData;
 			const paramTypes = resolveTypeStrings(cd.ctorParamTypes, cd.ctorParams.length, ctx);
 			memberTypes.push(createFunction(paramTypes, cd.ctorParams, voidType()));
-		},
-		_ => {},
-	};
+		}
+		mi += 1;
+	}
+
+	if (hasGenerics) {
+		closeScope(ctx.table);
+	}
+
+	sym.symbolType = createObject(d.className, memberNames, memberTypes, false);
 }
 
 // ===== Tests =====

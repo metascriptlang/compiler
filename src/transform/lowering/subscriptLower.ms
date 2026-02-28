@@ -97,6 +97,7 @@ function makeGetterExt(receiverType: string): ExtensionMethod {
 		receiverTypeName: receiverType,
 		sourcePath: "",
 		fnType: createFunction([unknownType()], ["index"], unknownType()),
+		isStatic: false,
 	};
 	return ext;
 }
@@ -107,6 +108,7 @@ function makeSetterExt(receiverType: string): ExtensionMethod {
 		receiverTypeName: receiverType,
 		sourcePath: "",
 		fnType: createFunction([unknownType(), unknownType()], ["index", "value"], unknownType()),
+		isStatic: false,
 	};
 	return ext;
 }

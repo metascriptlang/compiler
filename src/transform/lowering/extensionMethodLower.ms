@@ -13,8 +13,8 @@ import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall } from "../util";
 import { lookupSymbol } from "../../checker/symbol";
-import { TypeKind, getProperty } from "../../checker/types";
-import { ExtensionRegistry, hasExtensionByName } from "../../checker/context";
+import { TypeKind, getProperty, typeNameOf } from "../../checker/types";
+import { ExtensionRegistry, hasExtensionByName, findExtension } from "../../checker/context";
 import { test, check, testGroup } from "std/testing";
 import { parseInput, getStmts, firstCalleeKind, firstCallArgCount } from "../testUtil";
 import { createTransformContext, createTransformContextWithChecker } from "../context";
@@ -34,6 +34,16 @@ function receiverHasProperty(ctx: TransformContext, obj: Node, name: string): bo
 	if (sym === null) return false;
 	const prop = getProperty(sym.symbolType, name);
 	return prop.kind !== TypeKind.Unknown;
+}
+
+// Get the type name of a receiver node for extension lookup
+function getReceiverTypeName(ctx: TransformContext, obj: Node): string {
+	if (ctx.checkerCtx === null) return "";
+	if (obj.kind !== NodeKind.Identifier) return "";
+	const d = obj.data as IdentifierData;
+	const sym = lookupSymbol(ctx.checkerCtx.table, d.name);
+	if (sym === null) return "";
+	return typeNameOf(sym.symbolType);
 }
 
 // ===== Visitor =====
@@ -56,8 +66,16 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 	// If receiver has a property with this name, it's a regular member call
 	if (receiverHasProperty(ctx, member.object, methodName)) return node;
 
-	// Rewrite: obj.method(a, b) → method(obj, a, b)
+	// Look up the specific extension to determine instance vs static
+	const receiverType = getReceiverTypeName(ctx, member.object);
+	const ext = findExtension(ctx.checkerCtx.extensionRegistry, receiverType, methodName);
+
 	const loc = node.location;
+	// Static extension: Math.floor(x) → floor(x) — no receiver prepend
+	if (ext !== null && ext.isStatic) {
+		return makeCall(makeIdent(methodName, loc), call.arguments, loc);
+	}
+	// Instance extension: s.trim() → trim(s) — prepend receiver
 	const newArgs: Node[] = [];
 	newArgs.push(member.object);
 	let ai = 0;
@@ -97,6 +115,7 @@ function makeTrimExt(): ExtensionMethod {
 		receiverTypeName: "string",
 		sourcePath: "",
 		fnType: createFunction([], [], unknownType()),
+		isStatic: false,
 	};
 	return ext;
 }
@@ -107,6 +126,7 @@ function makePushExt(): ExtensionMethod {
 		receiverTypeName: "Array",
 		sourcePath: "",
 		fnType: createFunction([unknownType()], ["x"], unknownType()),
+		isStatic: false,
 	};
 	return ext;
 }
@@ -148,6 +168,7 @@ testGroup("Extension Method Lowering", () => {
 			receiverTypeName: "string",
 			sourcePath: "",
 			fnType: createFunction([], [], unknownType()),
+			isStatic: false,
 		};
 		registerExtension(cc.extensionRegistry, ext);
 		const fnSym = makeSymbol("run", SymbolKind.Function, ext.fnType, false);
@@ -166,5 +187,28 @@ testGroup("Extension Method Lowering", () => {
 	test("non-matching method unchanged", () => {
 		const prog = setupExtensionCtx("s.length();", makeTrimExt());
 		check(firstCalleeKind(prog) === NodeKind.MemberExpr);
+	});
+	test("static extension no receiver prepend", () => {
+		const result = parseInput("Math.floor(3.7);");
+		if (!result.ok) return;
+		const cc = createContext();
+		const ext: ExtensionMethod = {
+			methodName: "floor",
+			receiverTypeName: "Math",
+			sourcePath: "",
+			fnType: createFunction([unknownType()], ["x"], unknownType()),
+			isStatic: true,
+		};
+		registerExtension(cc.extensionRegistry, ext);
+		const fnSym = makeSymbol("floor", SymbolKind.Function, ext.fnType, false);
+		defineSymbol(cc.table, fnSym);
+		// Math is an identifier with Object type "Math"
+		const mathType = createObject("Math", [], [], false);
+		const mathSym = makeSymbol("Math", SymbolKind.Variable, mathType, false);
+		defineSymbol(cc.table, mathSym);
+		const ctx = createTransformContextWithChecker(cc);
+		const prog = lowerExtensionMethod(result.value, ctx);
+		// Should rewrite to floor(3.7) — callee is Identifier, not MemberExpr
+		check(firstCalleeKind(prog) === NodeKind.Identifier);
 	});
 });

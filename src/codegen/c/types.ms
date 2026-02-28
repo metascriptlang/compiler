@@ -49,16 +49,6 @@ export function typeKey(t: Type): string {
 		},
 		TypeKind.TypeReference => { "typeref:" + t.typeName; },
 		TypeKind.Distinct => { "distinct:" + t.typeName; },
-		TypeKind.GenericInstance => {
-			let key = "gen:" + typeKey(t.typeExtra) + "<";
-			let i = 0;
-			while (i < t.typeChildren.length) {
-				if (i > 0) key = key + ",";
-				key = key + typeKey(t.typeChildren[i]);
-				i += 1;
-			}
-			key + ">";
-		},
 		_ => "unknown",
 	};
 }

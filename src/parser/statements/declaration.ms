@@ -82,6 +82,15 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 // Note: string[] is a value type in C (struct copy), so we can't pass arrays
 // as out-parameters. Instead, we inline the parsing loop at each call site.
 
+// ===== Helpers =====
+
+function stripFirstParam(arr: string[]): string[] {
+	const result: string[] = [];
+	let i = 1;
+	while (i < arr.length) { result.push(arr[i]); i += 1; }
+	return result;
+}
+
 // ===== Function Declaration =====
 // syntax: ('async')? 'function' ('*')? ID '(' params ')' (':' type)? block
 
@@ -116,13 +125,12 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 	const raw = parseParamList(state);
 	const params = extractParamNames(raw);
 	const fnParamTypes = extractParamTypes(raw);
-	// Check for extension method: first param has "this:" prefix from parseParamList
+	// Check for instance extension: first param has "this:" prefix
 	if (params.length > 0 && params[0].length > 5) {
 		const prefix = sliceStr(params[0], 0, 5);
 		if (prefix === "this:") {
 			const receiverName = sliceStr(params[0], 5, params[0].length);
 			const receiverType = fnParamTypes[0];
-			// Build flag BEFORE mutating params (sliceStr may return a view)
 			if (flags === "") {
 				flags = "ext:" + receiverName + ":" + receiverType;
 			} else {
@@ -130,6 +138,24 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 			}
 			params[0] = receiverName;
 		}
+	}
+	// Check for static extension: first param has "typeof:" prefix
+	// Static extensions strip the synthetic typeof param (not a runtime param)
+	if (params.length > 0 && params[0].length > 7 && sliceStr(params[0], 0, 7) === "typeof:") {
+		const staticType = sliceStr(params[0], 7, params[0].length);
+		if (flags === "") { flags = "sext:" + staticType; }
+		else { flags = flags + "|sext:" + staticType; }
+		// Encode generic param names in flags: "gen:T,U"
+		if (genericNames !== "") { flags = flags + "|gen:" + genericNames; }
+		const fnReturnType = captureOptionalType(state);
+		return Result.ok(createNode(NodeKind.FunctionDecl, {
+			fnName: nameToken.value,
+			params: stripFirstParam(params),
+			fnParamTypes: stripFirstParam(fnParamTypes),
+			fnBody: try callBlockParser(state),
+			fnFlags: flags,
+			fnReturnType,
+		}, fnToken));
 	}
 	// Encode generic param names in flags: "gen:T,U"
 	if (genericNames !== "") {
@@ -579,6 +605,20 @@ export function parseClassDecl(state: ParserState): NodeResult {
 
 function parseClassMember(state: ParserState): NodeResult {
 	const memberToken = current(state);
+
+	// Decorator before class member: @name(...) member
+	if (current(state).kind === TokenKind.At) {
+		const decorators: Node[] = [];
+		while (!isAtEnd(state) && current(state).kind === TokenKind.At) {
+			const dec = try parseMacroInvocation(state);
+			decorators.push(dec);
+		}
+		const member = try parseClassMember(state);
+		return Result.ok(createNode(NodeKind.DecoratedDecl, {
+			decorators,
+			decoratedNode: member,
+		}, memberToken));
+	}
 
 	// Skip access modifiers: public, private, protected
 	if (current(state).kind === TokenKind.Public ||

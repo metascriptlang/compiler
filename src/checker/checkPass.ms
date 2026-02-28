@@ -23,11 +23,14 @@ import {
 } from "./symbol";
 import { CheckerContext, createContext, addError, hasErrors, errorCount } from "./context";
 import { collectTopLevel, defineOrError } from "./collectPass";
+import { readFile } from "std/process";
+import { globalImports } from "./prelude";
 import { isAssignable } from "./compat";
 import { resolveDeclarations, resolveAnnotation } from "./resolvePass";
 import { sliceStr } from "../utils/string";
 import { checkExpr, checkEnumExhaustiveness } from "./checkExprPass";
 import { registerCheckStmt } from "./checkerCallbacks";
+import { parseSource } from "../parser/statements/validation";
 import { test, check, testGroup } from "std/testing";
 
 // ===== Statement Checker =====
@@ -118,6 +121,12 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 }
 
 function checkClassMember(ctx: CheckerContext, node: Node): void {
+	// DecoratedDecl wrapping a class member — unwrap and check the inner node
+	if (node.kind === NodeKind.DecoratedDecl) {
+		const dd = node.data as DecoratedDeclData;
+		checkClassMember(ctx, dd.decoratedNode);
+		return;
+	}
 	match (node.kind) {
 		NodeKind.PropertyDecl => {},
 		NodeKind.MethodDecl => {
@@ -412,6 +421,18 @@ export function runThreePasses(ctx: CheckerContext, program: Node): void {
 
 export function checkProgram(program: Node): CheckerContext {
 	const ctx = createContext();
+	// Parse + check global imports in Global scope
+	for (const imp of globalImports()) {
+		const src = readFile(imp);
+		if (src.length > 0) {
+			const pr = parseSource(src);
+			if (pr.ok) {
+				runThreePasses(ctx, pr.value);
+			}
+		}
+	}
+	// User code in Module scope
+	openScope(ctx.table, ScopeKind.Module);
 	runThreePasses(ctx, program);
 	return ctx;
 }
@@ -420,8 +441,6 @@ export function checkProgram(program: Node): CheckerContext {
 registerCheckStmt((ctx: CheckerContext, node: Node): void => { checkStmt(ctx, node); });
 
 // ===== Tests =====
-
-import { parseSource } from "../parser/statements/validation";
 
 export function checkSource(input: string): CheckerContext {
 	const pr = parseSource(input);

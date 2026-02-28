@@ -11,20 +11,14 @@ import {
 	ProgramData, FunctionDeclData, BlockStmtData,
 	ExportDeclData, DecoratedDeclData,
 } from "../../ast/node";
-import { Type } from "../../checker/types";
 import { CheckerContext } from "../../checker/context";
 import {
-	CGen, CSection, Builder,
+	CGen, CSection,
 	createCGen, sec, add, addLine, addNewline,
 	assembleOutput, extract, nameSetAdd, nameSetHas,
 } from "./context";
-import { genDecl, mapTypeAnnotation } from "./declarations";
-import { mangleModuleName, mangleTypeName, mangleFieldName } from "./names";
-import {
-	getGenericTypeInstCount, getGenericTypeInstMangledName,
-	getGenericTypeInstFieldCount, getGenericTypeInstFieldNameAt,
-	getGenericTypeInstFieldTypeAt,
-} from "../../parser/context";
+import { genDecl } from "./declarations";
+import { mangleModuleName } from "./names";
 import { test, check, testGroup } from "std/testing";
 
 // ===== generateC — main entry point =====
@@ -36,6 +30,7 @@ export function generateC(program: Node, ctx: CheckerContext, modulePath: string
 	addLine(sec(g, CSection.Headers), "#include <stdint.h>");
 	addLine(sec(g, CSection.Headers), "#include <stdbool.h>");
 	addLine(sec(g, CSection.Headers), "#include <string.h>");
+	addLine(sec(g, CSection.Headers), "#include \"runtime.h\"");
 
 	// Pre-pass: collect function declaration names for closure call detection
 	if (program !== null && program.kind === NodeKind.Program) {
@@ -52,63 +47,25 @@ export function generateC(program: Node, ctx: CheckerContext, modulePath: string
 		}
 	}
 
-	// Emit monomorphized generic interface/class structs
-	genGenericTypeInsts(g);
-
 	// Generate two-phase init + POSIX main
 	genModuleInitProcs(g);
 
 	return assembleOutput(g);
 }
 
-// ===== Monomorphized Generic Interface/Class Structs =====
-// Checker records instantiations, codegen emits concrete structs.
-// Lives here (not declarations.ms) to avoid parser/context import in declarations.ms
-// which triggers DRC union member count sensitivity.
-
-function genGenericTypeInsts(g: CGen): void {
-	const count = getGenericTypeInstCount();
-	let i = 0;
-	while (i < count) {
-		const name = mangleTypeName(getGenericTypeInstMangledName(i));
-
-		if (!nameSetHas(g.declaredThings, name)) {
-			nameSetAdd(g.declaredThings, name);
-
-			// Forward declaration
-			addLine(sec(g, CSection.ForwardDecls), "typedef struct " + name + " " + name + ";");
-
-			// Full struct definition
-			const types = sec(g, CSection.Types);
-			addLine(types, "struct " + name + " {");
-			const fieldCount = getGenericTypeInstFieldCount(i);
-			let fi = 0;
-			while (fi < fieldCount) {
-				const fieldName = mangleFieldName(getGenericTypeInstFieldNameAt(i, fi));
-				const fieldType = mapTypeAnnotation(getGenericTypeInstFieldTypeAt(i, fi));
-				addLine(types, "  " + fieldType + " " + fieldName + ";");
-				fi += 1;
-			}
-			addLine(types, "};");
-			addNewline(types);
-		}
-		i += 1;
-	}
-}
-
-// ===== Two-Phase Module Initialization (Nim-aligned) =====
+// ===== Two-Phase Module Initialization =====
 //
-// Nim's pattern:
-//   main() → NimMain() → PreMainInner() [DatInit000 calls]
-//                       → NimMainInner() [Init000 calls]
+// Pattern (Nim-inspired, MetaScript-branded):
+//   main() → MsMain() → MsPreMainInner() [DatInit000 calls]
+//                       → MsMainInner()   [Init000 calls]
 //
 // For single-module, we generate:
 //   <module>__DatInit000()  — data/type initialization (runs first)
 //   <module>__Init000()     — user top-level code (runs second)
-//   PreMainInner()          — calls DatInit000 for all modules
-//   NimMainInner()          — calls Init000 for all modules
-//   NimMain()               — calls PreMainInner + NimMainInner
-//   main(argc, argv)        — POSIX entry, forwards args, calls NimMain
+//   MsPreMainInner()       — calls DatInit000 for all modules
+//   MsMainInner()          — calls Init000 for all modules
+//   MsMain()               — calls MsPreMainInner + MsMainInner
+//   main(argc, argv)       — POSIX entry, forwards args, calls MsMain
 
 function genModuleInitProcs(g: CGen): void {
 	const modName = mangleModuleName(g.modulePath);
@@ -143,18 +100,18 @@ function genModuleInitProcs(g: CGen): void {
 		addNewline(procs);
 	}
 
-	// --- PreMainInner: calls all DatInit000 (data init phase) ---
-	addLine(hdrs, "static void PreMainInner(void);");
-	addLine(procs, "static void PreMainInner(void) {");
+	// --- MsPreMainInner: calls all DatInit000 (data init phase) ---
+	addLine(hdrs, "static void MsPreMainInner(void);");
+	addLine(procs, "static void MsPreMainInner(void) {");
 	if (datContent.length > 0) {
 		addLine(procs, "  " + datInitName + "();");
 	}
 	addLine(procs, "}");
 	addNewline(procs);
 
-	// --- NimMainInner: calls all Init000 (code init phase) ---
-	addLine(hdrs, "static void NimMainInner(void);");
-	addLine(procs, "static void NimMainInner(void) {");
+	// --- MsMainInner: calls all Init000 (code init phase) ---
+	addLine(hdrs, "static void MsMainInner(void);");
+	addLine(procs, "static void MsMainInner(void) {");
 	if (initContent.length > 0) {
 		addLine(procs, "  " + initName + "();");
 	}
@@ -164,28 +121,28 @@ function genModuleInitProcs(g: CGen): void {
 	addLine(procs, "}");
 	addNewline(procs);
 
-	// --- NimMain: orchestrates both phases ---
-	addLine(hdrs, "void NimMain(void);");
-	addLine(procs, "void NimMain(void) {");
-	addLine(procs, "  PreMainInner();");
-	addLine(procs, "  NimMainInner();");
+	// --- MsMain: orchestrates both phases ---
+	addLine(hdrs, "void MsMain(void);");
+	addLine(procs, "void MsMain(void) {");
+	addLine(procs, "  MsPreMainInner();");
+	addLine(procs, "  MsMainInner();");
 	addLine(procs, "}");
 	addNewline(procs);
 
 	// --- POSIX main: entry point with argc/argv/env ---
-	// TODO: cmdCount, cmdLine, gEnv, nim_program_result belong in std/core.ms
-	// (auto-imported stdlib, like Nim's system.nim). Relocate when auto-import lands.
+	// TODO: cmdCount, cmdLine, gEnv, ms_program_result belong in std/core.ms
+	// (auto-imported stdlib). Relocate when auto-import lands.
 	const gvars = sec(g, CSection.GlobalVars);
 	addLine(gvars, "int cmdCount;");
 	addLine(gvars, "char** cmdLine;");
 	addLine(gvars, "char** gEnv;");
-	addLine(gvars, "int nim_program_result;");
+	addLine(gvars, "int ms_program_result;");
 	addLine(procs, "int main(int argc, char** argv, char** env) {");
 	addLine(procs, "  cmdLine = argv;");
 	addLine(procs, "  cmdCount = argc;");
 	addLine(procs, "  gEnv = env;");
-	addLine(procs, "  NimMain();");
-	addLine(procs, "  return nim_program_result;");
+	addLine(procs, "  MsMain();");
+	addLine(procs, "  return ms_program_result;");
 	addLine(procs, "}");
 }
 

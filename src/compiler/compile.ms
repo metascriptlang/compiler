@@ -10,15 +10,18 @@ import { analyzeProgram } from "../analyzer/index";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { generateJS } from "../codegen/js/index";
 import { generateC } from "../codegen/c/index";
+import { transformForNative } from "../transform/native/index";
+import { createTransformContextWithChecker } from "../transform/context";
 import { Target } from "./options";
 import { readSource, printErrorsAndExit, emitOutput } from "./io";
+import { error } from "../utils/color";
 
 export function cmdCompile(filePath: string, target: Target, outputPath: string): void {
 	const source = readSource(filePath);
 
 	const parseResult = parseSource(source);
 	if (!parseResult.ok) {
-		console.log("Parse error: " + parseResult.error);
+		console.log(error("parse error") + ": " + parseResult.error);
 		exit(1);
 	}
 	const program = parseResult.value;
@@ -35,7 +38,9 @@ export function cmdCompile(filePath: string, target: Target, outputPath: string)
 		const jsCode = generateJS(transformed);
 		emitOutput(jsCode, filePath, outputPath, ".js");
 	} else {
-		const analyzed = analyzeProgram(transformed, checkerCtx);
+		const nativeCtx = createTransformContextWithChecker(checkerCtx);
+		const nativeTransformed = transformForNative(transformed, nativeCtx);
+		const analyzed = analyzeProgram(nativeTransformed, checkerCtx);
 		const cCode = generateC(analyzed, checkerCtx, filePath);
 		emitOutput(cCode, filePath, outputPath, ".c");
 	}

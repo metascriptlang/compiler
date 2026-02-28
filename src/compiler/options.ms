@@ -1,6 +1,7 @@
 // MetaScript Compiler CLI — Argument parsing and option types
 
 import { argv, exit } from "std/process";
+import { error, bold, cyan } from "../utils/color";
 
 // -- Types --
 
@@ -66,7 +67,7 @@ export function parseArgs(): CliOptions {
 			} else if (targetStr === "c") {
 				opts.target = Target.C;
 			} else {
-				console.log("Error: unknown target '" + targetStr + "'. Valid: c, js");
+				console.log(error("error") + ": unknown target '" + bold(targetStr) + "'. Valid: " + cyan("c") + ", " + cyan("js"));
 				exit(1);
 			}
 		} else if (arg.startsWith("--output=")) {
@@ -76,7 +77,7 @@ export function parseArgs(): CliOptions {
 		} else if (!arg.startsWith("-")) {
 			opts.inputFile = arg;
 		} else {
-			console.log("Error: unknown option '" + arg + "'");
+			console.log(error("error") + ": unknown option '" + bold(arg) + "'");
 			exit(1);
 		}
 		i += 1;
