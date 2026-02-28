@@ -40,11 +40,9 @@ export function lspFmtTextEdit(line: number, col: number, endCol: number, newTex
 function lspBuildCommitCharsArray(chars: string): string {
 	if (chars.length === 0) return "";
 	let arr = "[";
-	let i = 0;
-	while (i < chars.length) {
+	for (let i = 0; i < chars.length; i = i + 1) {
 		if (i > 0) arr = arr + ",";
 		arr = arr + lspJsonString(sliceStr(chars, i, i + 1));
-		i = i + 1;
 	}
 	arr = arr + "]";
 	return arr;

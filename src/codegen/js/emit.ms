@@ -45,10 +45,8 @@ export function emit(gen: JSGenerator, text: string): void {
 }
 
 export function emitIndent(gen: JSGenerator): void {
-	let i = 0;
-	while (i < gen.indentLevel) {
+	for (let i = 0; i < gen.indentLevel; i += 1) {
 		emit(gen, "  ");
-		i += 1;
 	}
 }
 
@@ -67,22 +65,18 @@ export function emitNewline(gen: JSGenerator): void {
 export function emitJoinedStrings(gen: JSGenerator, items: string[], sep: string): void {
 	if (items.length === 0) return;
 	emit(gen, items[0]);
-	let i = 1;
-	while (i < items.length) {
+	for (let i = 1; i < items.length; i += 1) {
 		emit(gen, sep);
 		emit(gen, items[i]);
-		i += 1;
 	}
 }
 
 export function emitJoinedNodes(gen: JSGenerator, items: Node[], sep: string): void {
 	if (items.length === 0) return;
 	emitNode(gen, items[0]);
-	let i = 1;
-	while (i < items.length) {
+	for (let i = 1; i < items.length; i += 1) {
 		emit(gen, sep);
 		emitNode(gen, items[i]);
-		i += 1;
 	}
 }
 
@@ -91,10 +85,8 @@ export function emitBlockInline(gen: JSGenerator, node: Node): void {
 	const d = node.data as BlockStmtData;
 	emit(gen, "{\n");
 	gen.indentLevel = gen.indentLevel + 1;
-	let i = 0;
-	while (i < d.statements.length) {
+	for (let i = 0; i < d.statements.length; i += 1) {
 		emitNode(gen, d.statements[i]);
-		i += 1;
 	}
 	gen.indentLevel = gen.indentLevel - 1;
 	emitIndent(gen);
@@ -128,10 +120,8 @@ export function emitBodyOrEmpty(gen: JSGenerator, body: Node): void {
 
 export function finalize(gen: JSGenerator): string {
 	let result = "";
-	let i = 0;
-	while (i < gen.buf.parts.length) {
+	for (let i = 0; i < gen.buf.parts.length; i += 1) {
 		result = result + gen.buf.parts[i];
-		i += 1;
 	}
 	return result;
 }
@@ -140,8 +130,7 @@ export function finalize(gen: JSGenerator): string {
 
 export function escapeJSString(s: string): string {
 	let result = "";
-	let i = 0;
-	while (i < s.length) {
+	for (let i = 0; i < s.length; i += 1) {
 		const ch = sliceStr(s, i, i + 1);
 		if (ch === "\\") { result = result + "\\\\"; }
 		else if (ch === "\"") { result = result + "\\\""; }
@@ -150,7 +139,6 @@ export function escapeJSString(s: string): string {
 		else if (ch === "\t") { result = result + "\\t"; }
 		else if (ch === "\0") { result = result + "\\0"; }
 		else { result = result + ch; }
-		i += 1;
 	}
 	return result;
 }

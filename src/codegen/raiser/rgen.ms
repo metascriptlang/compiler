@@ -64,8 +64,7 @@ export function generateRaiser(program: Node): RaiserModule {
 	const enumMapItems: RaiserFuncEntry[] = [];
 	const enumMap: RaiserFuncMap = { items: enumMapItems };
 	let funcIdx = 0;
-	let i = 0;
-	while (i < pd.programStmts.length) {
+	for (let i = 0; i < pd.programStmts.length; i = i + 1) {
 		const fnNode = unwrapToFuncDecl(pd.programStmts[i]);
 		if (fnNode !== null) {
 			const fd = fnNode.data as FunctionDeclData;
@@ -78,27 +77,22 @@ export function generateRaiser(program: Node): RaiserModule {
 			// EnumDeclData = { enumName: string, enumMembers: string[] }
 			// Reuse FunctionDeclData overlay: fnName ≡ enumName, params ≡ enumMembers
 			const ed = enumNode.data as FunctionDeclData;
-			let ei = 0;
-			while (ei < ed.params.length) {
+			for (let ei = 0; ei < ed.params.length; ei = ei + 1) {
 				const key = ed.fnName + "." + ed.params[ei];
 				const me: RaiserFuncEntry = { name: key, index: ei };
 				enumMap.items.push(me);
-				ei = ei + 1;
 			}
 		}
-		i = i + 1;
 	}
 
 	// Phase 2a: Compile each function body
-	i = 0;
-	while (i < pd.programStmts.length) {
+	for (let i = 0; i < pd.programStmts.length; i = i + 1) {
 		const fnNode = unwrapToFuncDecl(pd.programStmts[i]);
 		if (fnNode !== null) {
 			const fd = fnNode.data as FunctionDeclData;
 			const func = compileFuncBody(funcMap, enumMap, fd.fnName, fd.params, fd.fnBody, fd.params.length);
 			functions.push(func);
 		}
-		i = i + 1;
 	}
 
 	// Phase 2b: Compile top-level code as entry function
@@ -106,10 +100,8 @@ export function generateRaiser(program: Node): RaiserModule {
 	const s = createCompState();
 	s.funcMap = funcMap;
 	s.enumMap = enumMap;
-	i = 0;
-	while (i < pd.programStmts.length) {
+	for (let i = 0; i < pd.programStmts.length; i = i + 1) {
 		compileStmt(s, pd.programStmts[i]);
-		i = i + 1;
 	}
 
 	// Ensure entry terminates
@@ -137,12 +129,10 @@ function compileFuncBody(funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, fnName:
 	s.enumMap = enumMap;
 
 	// Declare params as locals R[0..arity-1]
-	let i = 0;
-	while (i < arity) {
+	for (let i = 0; i < arity; i = i + 1) {
 		const paramName = params[i];
 		const reg = allocReg(s);
 		declareLocal(s, paramName, reg);
-		i = i + 1;
 	}
 
 	// Compile body

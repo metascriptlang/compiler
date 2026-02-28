@@ -12,8 +12,7 @@ import { test, check, testGroup } from "std/testing";
 
 export function escapeCString(s: string): string {
 	let result = "";
-	let i = 0;
-	while (i < s.length) {
+	for (let i = 0; i < s.length; i += 1) {
 		const ch = charAt(s, i);
 		if (ch === "\\") { result = result + "\\\\"; }
 		else if (ch === "\"") { result = result + "\\\""; }
@@ -22,7 +21,6 @@ export function escapeCString(s: string): string {
 		else if (ch === "\t") { result = result + "\\t"; }
 		else if (ch === "\0") { result = result + "\\0"; }
 		else { result = result + ch; }
-		i += 1;
 	}
 	return result;
 }
@@ -93,12 +91,10 @@ export function formatCFloat32(value: number): string {
 // Emits interned string data declarations to a Builder (the StringPool section).
 
 export function emitStringPoolDecls(pool: StringPool, dest: Builder): void {
-	let i = 0;
-	while (i < pool.entries.length) {
+	for (let i = 0; i < pool.entries.length; i += 1) {
 		const entry = pool.entries[i];
 		const escaped = escapeCString(entry.value);
 		addLine(dest, "static const char " + entry.cName + "[] = \"" + escaped + "\";");
-		i += 1;
 	}
 }
 

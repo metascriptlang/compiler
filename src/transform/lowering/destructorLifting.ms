@@ -315,12 +315,10 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 function typeNeedsHooks(objType: Type, lctx: LiftCtx, loc: SourceLocation): boolean {
 	if (objType.kind !== TypeKind.Object) return false;
 	const probe: StmtBuf = { stmts: [] };
-	let i = 0;
-	while (i < objType.typeNames.length) {
+	for (let i = 0; i < objType.typeNames.length; i += 1) {
 		const visited: NameSet = { names: [] };
 		fillBody("destroy", makeIdent("self", loc), makeIdent("self", loc), objType.typeNames[i], objType.typeChildren[i], lctx, probe, visited, loc);
 		if (probe.stmts.length > 0) return true;
-		i += 1;
 	}
 	return false;
 }
@@ -401,9 +399,7 @@ function generateHook(hook: string, typeName: string, objType: Type, lctx: LiftC
 
 		if (hook === "destroy") {
 			// Destroy: fields first (reverse), then base class (LIFO — Nim pattern)
-			let i = objType.typeNames.length;
-			while (i > 0) {
-				i -= 1;
+			for (let i = objType.typeNames.length - 1; i >= 0; i -= 1) {
 				const visited: NameSet = { names: [] };
 				fillBody(hook, makeIdent(p1, loc), makeIdent(p2, loc), objType.typeNames[i], objType.typeChildren[i], lctx, buf, visited, loc);
 			}
@@ -415,11 +411,9 @@ function generateHook(hook: string, typeName: string, objType: Type, lctx: LiftC
 			if (baseTypeName !== "" && namedTypeHasHooks(baseTypeName, lctx)) {
 				genCall(baseTypeName + hookSuffix(hook), hook, makeIdent(p1, loc), makeIdent(p2, loc), buf, loc);
 			}
-			let i = 0;
-			while (i < objType.typeNames.length) {
+			for (let i = 0; i < objType.typeNames.length; i += 1) {
 				const visited: NameSet = { names: [] };
 				fillBody(hook, makeIdent(p1, loc), makeIdent(p2, loc), objType.typeNames[i], objType.typeChildren[i], lctx, buf, visited, loc);
-				i += 1;
 			}
 		}
 	}

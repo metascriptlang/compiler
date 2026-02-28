@@ -56,8 +56,7 @@ function collectBlockMoved(block: Node): NameSet {
 	if (block === null) return result;
 	if (block.kind !== NodeKind.BlockStmt) return result;
 	const bd = block.data as BlockStmtData;
-	let i = 0;
-	while (i < bd.statements.length) {
+	for (let i = 0; i < bd.statements.length; i += 1) {
 		const wm = getWasMovedVar(bd.statements[i]);
 		if (wm !== "") {
 			nameSetAdd(result, wm);
@@ -69,7 +68,6 @@ function collectBlockMoved(block: Node): NameSet {
 				nameSetAdd(result, v);
 			}
 		}
-		i += 1;
 	}
 	return result;
 }

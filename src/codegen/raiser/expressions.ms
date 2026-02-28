@@ -398,11 +398,9 @@ function compileCallExpr(s: RaiserCompState, node: Node): number {
 
 	if (isConsoleLog(d.callee)) {
 		let lastReg = 0;
-		let i = 0;
-		while (i < d.arguments.length) {
+		for (let i = 0; i < d.arguments.length; i = i + 1) {
 			lastReg = compileExpr(s, d.arguments[i]);
 			emitInst(s, raiserABC(RaiserOpcode.Print, lastReg, 0, 0));
-			i = i + 1;
 		}
 		return lastReg;
 	}
@@ -415,17 +413,14 @@ function compileCallExpr(s: RaiserCompState, node: Node): number {
 			const argCount = d.arguments.length;
 			// Allocate dest + arg slots (dest+1..dest+argCount)
 			const dest = allocReg(s);
-			let i = 0;
-			while (i < argCount) { allocReg(s); i = i + 1; }
+			for (let i = 0; i < argCount; i = i + 1) { allocReg(s); }
 			// Compile each arg, Move result into its expected slot
-			i = 0;
-			while (i < argCount) {
+			for (let i = 0; i < argCount; i = i + 1) {
 				const argReg = compileExpr(s, d.arguments[i]);
 				const targetReg = dest + 1 + i;
 				if (argReg !== targetReg) {
 					emitInst(s, raiserABC(RaiserOpcode.Move, targetReg, argReg, 0));
 				}
-				i = i + 1;
 			}
 			emitInst(s, raiserABC(RaiserOpcode.Call, dest, funcIdx, argCount));
 			return dest;
@@ -455,21 +450,18 @@ function compileClosureCall(s: RaiserCompState, node: Node): number {
 	// Allocate dest + (argCount+1) slots: env as first arg, then real args
 	const totalArgs = argCount + 1;
 	const dest = allocReg(s);
-	let i = 0;
-	while (i < totalArgs) { allocReg(s); i = i + 1; }
+	for (let i = 0; i < totalArgs; i = i + 1) { allocReg(s); }
 
 	// Move env into first arg slot (dest+1)
 	emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1, envReg, 0));
 
 	// Compile each real arg into dest+2..dest+1+argCount
-	i = 0;
-	while (i < argCount) {
+	for (let i = 0; i < argCount; i = i + 1) {
 		const argReg = compileExpr(s, d.arguments[i]);
 		const targetReg = dest + 2 + i;
 		if (argReg !== targetReg) {
 			emitInst(s, raiserABC(RaiserOpcode.Move, targetReg, argReg, 0));
 		}
-		i = i + 1;
 	}
 
 	// Emit CallIndirect: R[dest] = call func[R[fnIdxReg]](R[dest+1..dest+totalArgs])
@@ -550,12 +542,10 @@ function compileObjectLiteral(s: RaiserCompState, node: Node): number {
 	emitInst(s, raiserABC(RaiserOpcode.NewObject, dest, 0, 0));
 
 	// Set each field
-	let i = 0;
-	while (i < d.keys.length) {
+	for (let i = 0; i < d.keys.length; i = i + 1) {
 		const valReg = compileExpr(s, d.properties[i]);
 		const nameIdx = addConst(s, raiserString(d.keys[i]));
 		emitInst(s, raiserABC(RaiserOpcode.StoreField, dest, nameIdx, valReg));
-		i = i + 1;
 	}
 
 	return dest;
@@ -569,21 +559,17 @@ function compileArrayLiteral(s: RaiserCompState, node: Node): number {
 
 	// Reserve dest + N element slots upfront
 	const dest = allocReg(s);
-	let slotIdx = 0;
-	while (slotIdx < elemCount) {
+	for (let slotIdx = 0; slotIdx < elemCount; slotIdx = slotIdx + 1) {
 		allocReg(s);
-		slotIdx = slotIdx + 1;
 	}
 
 	// Compile each element, move result to its slot
-	let i = 0;
-	while (i < elemCount) {
+	for (let i = 0; i < elemCount; i = i + 1) {
 		const elemReg = compileExpr(s, d.elements[i]);
 		const targetReg = dest + 1 + i;
 		if (elemReg !== targetReg) {
 			emitInst(s, raiserABC(RaiserOpcode.Move, targetReg, elemReg, 0));
 		}
-		i = i + 1;
 	}
 
 	emitInst(s, raiserABC(RaiserOpcode.NewArray, dest, elemCount, 0));
@@ -644,11 +630,9 @@ function compileArrayPushCall(s: RaiserCompState, node: Node): number {
 	const md = d.callee.data as MemberExprData;
 	const arrReg = compileExpr(s, md.object);
 	// Push each argument
-	let i = 0;
-	while (i < d.arguments.length) {
+	for (let i = 0; i < d.arguments.length; i = i + 1) {
 		const valReg = compileExpr(s, d.arguments[i]);
 		emitInst(s, raiserABC(RaiserOpcode.ArrayPush, arrReg, valReg, 0));
-		i = i + 1;
 	}
 	return arrReg;
 }

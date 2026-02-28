@@ -2,7 +2,7 @@ import { Node, NodeKind, SourceLocation, createNodeAt, ProgramData, FunctionDecl
 import { extractDecoratorInfo } from "./decoratorHelpers";
 import { Type, TypeKind, unknownType, createObject, createEnum, createTypeRef, createFunction } from "./types";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, defineSymbol, makeSymbol, lookupSymbol } from "./symbol";
-import { CheckerContext, addError, findExportedSymbol, ExtensionMethod, registerExtension, isExtensionFlag, isStaticExtensionFlag, getExtReceiverType, getStaticExtTypeName } from "./context";
+import { CheckerContext, addError, findExportedSymbol, ExtensionMethod, registerExtension, isStaticExtensionFlag, getExtTypeName } from "./context";
 import { isGlobalImport } from "./prelude";
 import { sliceStr, findChar } from "../utils/string";
 import { test, check, testGroup } from "std/testing";
@@ -60,33 +60,17 @@ export function defineOrError(ctx: CheckerContext, sym: Symbol, node: Node): voi
 
 function collectFunction(ctx: CheckerContext, node: Node): void {
 	const d = node.data as FunctionDeclData;
-	// Check for instance extension: fnFlags contains "ext:receiverName:receiverType"
-	if (isExtensionFlag(d.fnFlags) && ctx.extensionRegistry !== null) {
-		const receiverType = getExtReceiverType(d.fnFlags);
-		if (receiverType !== "") {
-			const extMethod: ExtensionMethod = {
-				methodName: d.fnName,
-				receiverTypeName: receiverType,
-				sourcePath: "",
-				fnType: unknownType(),
-				isStatic: false,
-			};
-			registerExtension(ctx.extensionRegistry, extMethod);
-		}
-	}
-	// Check for static extension: fnFlags contains "sext:TypeName"
-	if (isStaticExtensionFlag(d.fnFlags) && ctx.extensionRegistry !== null) {
-		const staticTypeName = getStaticExtTypeName(d.fnFlags);
-		if (staticTypeName !== "") {
-			const extMethod: ExtensionMethod = {
-				methodName: d.fnName,
-				receiverTypeName: staticTypeName,
-				sourcePath: "",
-				fnType: unknownType(),
-				isStatic: true,
-			};
-			registerExtension(ctx.extensionRegistry, extMethod);
-		}
+	// Register extension (instance or static) if applicable
+	const extTypeName = getExtTypeName(d.fnFlags);
+	if (extTypeName !== "" && ctx.extensionRegistry !== null) {
+		const extMethod: ExtensionMethod = {
+			methodName: d.fnName,
+			receiverTypeName: extTypeName,
+			sourcePath: "",
+			fnType: unknownType(),
+			isStatic: isStaticExtensionFlag(d.fnFlags),
+		};
+		registerExtension(ctx.extensionRegistry, extMethod);
 	}
 	// Always define as top-level symbol too (for direct calls)
 	defineOrError(ctx, makeSymbol(d.fnName, SymbolKind.Function, unknownType(), false), node);
@@ -99,8 +83,7 @@ function collectClass(ctx: CheckerContext, node: Node): void {
 	// and through interface field access (#25). Must build arrays locally and pass to createObject.
 	const memberNames: string[] = [];
 	const memberTypes: Type[] = [];
-	let i = 0;
-	while (i < d.classBody.length) {
+	for (let i = 0; i < d.classBody.length; i += 1) {
 		const member = d.classBody[i];
 		if (member.kind === NodeKind.PropertyDecl) {
 			const pd = member.data as PropertyDeclData;
@@ -126,7 +109,6 @@ function collectClass(ctx: CheckerContext, node: Node): void {
 				memberTypes.push(fnType);
 			}
 		}
-		i += 1;
 	}
 	const classType = createObject(d.className, memberNames, memberTypes, false);
 	// Store base class info for inheritance (used by destructor lifting)
@@ -189,8 +171,7 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 	if (ctx.exportRegistry !== null) {
 		const sourcePath = resolveImportSourcePath(ctx, d.importSource);
 
-		let i = 0;
-		while (i < d.importNames.length) {
+		for (let i = 0; i < d.importNames.length; i += 1) {
 			const importName = d.importNames[i];
 			const localAlias = d.importAliases[i];
 
@@ -208,7 +189,6 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 				// std import or unresolvable — fallback to unknownType
 				defineOrError(ctx, makeSymbol(localAlias, SymbolKind.Variable, unknownType(), false), node);
 			}
-			i += 1;
 		}
 		return;
 	}
@@ -276,8 +256,7 @@ export function getDeclName(node: Node): string {
 export function extractDirectives(program: Node): string[] {
 	const directives: string[] = [];
 	const stmts = (program.data as ProgramData).programStmts;
-	let i = 0;
-	while (i < stmts.length) {
+	for (let i = 0; i < stmts.length; i += 1) {
 		const stmt = stmts[i];
 		if (stmt.kind === NodeKind.ExprStmt) {
 			const es = stmt.data as ExprStmtData;
@@ -290,7 +269,6 @@ export function extractDirectives(program: Node): string[] {
 				directives.push(dir);
 			}
 		}
-		i += 1;
 	}
 	return directives;
 }

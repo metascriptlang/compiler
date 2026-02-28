@@ -184,6 +184,12 @@ export function substituteType(t: Type, paramName: string, concrete: Type): Type
 			}
 			createUnion(newMembers)
 		},
+		TypeKind.Map => {
+			const mt = createPrimitive(TypeKind.Map);
+			mt.typeReturn = substituteType(t.typeReturn, paramName, concrete);
+			mt.typeExtra = substituteType(t.typeExtra, paramName, concrete);
+			mt
+		},
 		TypeKind.Ref => createRef(substituteType(t.typeReturn, paramName, concrete)),
 		TypeKind.Ptr => createPtr(substituteType(t.typeReturn, paramName, concrete)),
 		_ => t,
@@ -194,12 +200,80 @@ export function substituteType(t: Type, paramName: string, concrete: Type): Type
 // genericParamNames: ["T", "E"], typeArgs: [numberType(), stringType()]
 export function instantiateGeneric(t: Type, genericParamNames: string[], typeArgs: Type[]): Type {
 	let result = t;
-	let i = 0;
-	while (i < genericParamNames.length && i < typeArgs.length) {
+	const limit = genericParamNames.length < typeArgs.length ? genericParamNames.length : typeArgs.length;
+	for (let i = 0; i < limit; i += 1) {
 		result = substituteType(result, genericParamNames[i], typeArgs[i]);
-		i += 1;
 	}
 	return result;
+}
+
+// ===== Type Unification =====
+// Recursively match formal (may contain GenericParam) against concrete (always resolved).
+// Extracts bindings into UnifyBindings (interface wrapper — arrays are value types, DRC #4).
+
+export interface UnifyBindings {
+	names: string[];
+	types: Type[];
+}
+
+export function createUnifyBindings(): UnifyBindings {
+	return { names: [], types: [] };
+}
+
+export function unifyType(formal: Type, concrete: Type, bindings: UnifyBindings): void {
+	if (formal === null || concrete === null) return;
+	// Direct generic param match
+	if (formal.kind === TypeKind.GenericParam) {
+		bindings.names.push(formal.typeName);
+		bindings.types.push(concrete);
+		return;
+	}
+	// Structural match — same kind, recurse into children
+	if (formal.kind !== concrete.kind) return;
+	if (formal.kind === TypeKind.Array) {
+		unifyType(formal.typeReturn, concrete.typeReturn, bindings);
+		return;
+	}
+	if (formal.kind === TypeKind.Result) {
+		unifyType(formal.typeReturn, concrete.typeReturn, bindings);
+		unifyType(formal.typeExtra, concrete.typeExtra, bindings);
+		return;
+	}
+	if (formal.kind === TypeKind.Function) {
+		const fnLimit = formal.typeChildren.length < concrete.typeChildren.length ? formal.typeChildren.length : concrete.typeChildren.length;
+		for (let i = 0; i < fnLimit; i += 1) {
+			unifyType(formal.typeChildren[i], concrete.typeChildren[i], bindings);
+		}
+		unifyType(formal.typeReturn, concrete.typeReturn, bindings);
+		return;
+	}
+	if (formal.kind === TypeKind.Map) {
+		unifyType(formal.typeReturn, concrete.typeReturn, bindings);
+		unifyType(formal.typeExtra, concrete.typeExtra, bindings);
+		return;
+	}
+	if (formal.kind === TypeKind.Ref || formal.kind === TypeKind.Ptr) {
+		unifyType(formal.typeReturn, concrete.typeReturn, bindings);
+		return;
+	}
+	if (formal.kind === TypeKind.Union || formal.kind === TypeKind.Object) {
+		const uoLimit = formal.typeChildren.length < concrete.typeChildren.length ? formal.typeChildren.length : concrete.typeChildren.length;
+		for (let i = 0; i < uoLimit; i += 1) {
+			unifyType(formal.typeChildren[i], concrete.typeChildren[i], bindings);
+		}
+		return;
+	}
+}
+
+export function hasGenericParams(t: Type): boolean {
+	if (t === null) return false;
+	if (t.kind === TypeKind.GenericParam) return true;
+	if (t.typeReturn !== null && hasGenericParams(t.typeReturn)) return true;
+	if (t.typeExtra !== null && hasGenericParams(t.typeExtra)) return true;
+	for (let i = 0; i < t.typeChildren.length; i += 1) {
+		if (hasGenericParams(t.typeChildren[i])) return true;
+	}
+	return false;
 }
 
 // ===== Type Query Helpers =====
@@ -430,5 +504,53 @@ testGroup("Generic Instantiation", () => {
 	test("primitive unchanged", () => {
 		const result = substituteType(numberType(), "T", stringType());
 		check(result.kind === TypeKind.Number);
+	});
+});
+
+testGroup("Type Unification", () => {
+	test("unify direct generic param", () => {
+		const b = createUnifyBindings();
+		unifyType(createGenericParam("T"), numberType(), b);
+		check(b.names.length === 1);
+		check(b.names[0] === "T");
+		check(b.types[0].kind === TypeKind.Number);
+	});
+	test("unify Array<T> vs Array<string>", () => {
+		const b = createUnifyBindings();
+		unifyType(createArray(createGenericParam("T")), createArray(stringType()), b);
+		check(b.names.length === 1);
+		check(b.names[0] === "T");
+		check(b.types[0].kind === TypeKind.String);
+	});
+	test("unify Result<T, E> vs Result<number, string>", () => {
+		const b = createUnifyBindings();
+		const formal = createResult(createGenericParam("T"), createGenericParam("E"));
+		const concrete = createResult(numberType(), stringType());
+		unifyType(formal, concrete, b);
+		check(b.names.length === 2);
+		check(b.names[0] === "T");
+		check(b.types[0].kind === TypeKind.Number);
+		check(b.names[1] === "E");
+		check(b.types[1].kind === TypeKind.String);
+	});
+	test("unify mismatched kinds", () => {
+		const b = createUnifyBindings();
+		unifyType(createArray(createGenericParam("T")), numberType(), b);
+		check(b.names.length === 0);
+	});
+	test("unify concrete no bindings", () => {
+		const b = createUnifyBindings();
+		unifyType(numberType(), numberType(), b);
+		check(b.names.length === 0);
+	});
+	test("hasGenericParams true", () => {
+		check(hasGenericParams(createGenericParam("T")));
+		check(hasGenericParams(createArray(createGenericParam("T"))));
+		check(hasGenericParams(createFunction([createGenericParam("T")], ["a"], numberType())));
+	});
+	test("hasGenericParams false", () => {
+		check(!hasGenericParams(numberType()));
+		check(!hasGenericParams(createArray(stringType())));
+		check(!hasGenericParams(createFunction([numberType()], ["a"], stringType())));
 	});
 });

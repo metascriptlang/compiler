@@ -143,25 +143,21 @@ function sweepDeadDecls(program: Node, ctx: TransformContext): void {
 	// Phase 1: Pre-compute names for ALL stmts (one getDeclName call per stmt, stored safely)
 	const names: StmtNames = { items: [] };
 	const declNames: NameSet = { names: [] };
-	let idx = 0;
-	while (idx < stmts.length) {
+	for (let idx = 0; idx < stmts.length; idx += 1) {
 		const n = getDeclName(stmts[idx]);
 		names.items.push(n);
 		if (n.length > 0 && isEliminable(stmts[idx])) {
 			nameSetAdd(declNames, n);
 		}
-		idx += 1;
 	}
 	if (declNames.names.length === 0) return;
 
 	// Phase 2: Seed — collect identifier refs from all non-eliminable stmts (entry points)
 	const refs: NameSet = { names: [] };
-	let si = 0;
-	while (si < stmts.length) {
+	for (let si = 0; si < stmts.length; si += 1) {
 		if (!isEliminable(stmts[si])) {
 			collectIdentifiers(stmts[si], refs);
 		}
-		si += 1;
 	}
 
 	// Phase 3: Transitive closure — fixpoint iteration using pre-computed names
@@ -169,8 +165,7 @@ function sweepDeadDecls(program: Node, ctx: TransformContext): void {
 	let changed = true;
 	while (changed) {
 		changed = false;
-		let di = 0;
-		while (di < stmts.length) {
+		for (let di = 0; di < stmts.length; di += 1) {
 			if (isEliminable(stmts[di])) {
 				const n = names.items[di];
 				if (n.length > 0 && nameSetContains(refs, n) && !nameSetContains(alive, n)) {
@@ -179,14 +174,12 @@ function sweepDeadDecls(program: Node, ctx: TransformContext): void {
 					changed = true;
 				}
 			}
-			di += 1;
 		}
 	}
 
 	// Phase 4: Sweep — filter using pre-computed names (no getDeclName calls)
 	const result: Node[] = [];
-	let fi = 0;
-	while (fi < stmts.length) {
+	for (let fi = 0; fi < stmts.length; fi += 1) {
 		if (!isEliminable(stmts[fi])) {
 			result.push(stmts[fi]);
 		} else {
@@ -195,7 +188,6 @@ function sweepDeadDecls(program: Node, ctx: TransformContext): void {
 				result.push(stmts[fi]);
 			}
 		}
-		fi += 1;
 	}
 	pd.programStmts = result;
 }
@@ -287,8 +279,7 @@ export function endsInNoReturn(node: Node, ctx: TransformContext): boolean {
 // Helper: check if all switch cases terminate AND has default
 function switchEndsInNoReturn(cases: Node[], ctx: TransformContext): boolean {
 	let hasDefault = false;
-	let i = 0;
-	while (i < cases.length) {
+	for (let i = 0; i < cases.length; i += 1) {
 		const c = cases[i];
 		if (c.kind === NodeKind.SwitchCase) {
 			const cd = c.data as SwitchCaseData;
@@ -297,7 +288,6 @@ function switchEndsInNoReturn(cases: Node[], ctx: TransformContext): boolean {
 			if (cd.caseStmts.length === 0) return false;
 			if (!endsInNoReturn(cd.caseStmts[cd.caseStmts.length - 1], ctx)) return false;
 		}
-		i += 1;
 	}
 	// Only noReturn when we have a default case (exhaustive)
 	return hasDefault;
@@ -309,8 +299,7 @@ function switchEndsInNoReturn(cases: Node[], ctx: TransformContext): boolean {
 function stripDead(stmts: Node[], ctx: TransformContext): Node[] {
 	const result: Node[] = [];
 	let terminated = false;
-	let i = 0;
-	while (i < stmts.length) {
+	for (let i = 0; i < stmts.length; i += 1) {
 		const stmt = stmts[i];
 		if (terminated) {
 			// After terminator: only keep hoisted declarations
@@ -323,7 +312,6 @@ function stripDead(stmts: Node[], ctx: TransformContext): Node[] {
 				terminated = true;
 			}
 		}
-		i += 1;
 	}
 	return result;
 }
@@ -361,12 +349,10 @@ function eliminateDeadWhile(node: Node): Node {
 // Bottom-up: recurse into each stmt, then apply dead branch/while elimination
 
 function walkStmtList(stmts: Node[], ctx: TransformContext): void {
-	let i = 0;
-	while (i < stmts.length) {
+	for (let i = 0; i < stmts.length; i += 1) {
 		dceInNode(stmts[i], ctx);
 		stmts[i] = eliminateDeadBranch(stmts[i]);
 		stmts[i] = eliminateDeadWhile(stmts[i]);
-		i += 1;
 	}
 }
 

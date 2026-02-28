@@ -10,10 +10,8 @@ import { test, check, testGroup } from "std/testing";
 
 export function taHashString(s: string): number {
 	let hash = 5381;
-	let i = 0;
-	while (i < s.length) {
+	for (let i = 0; i < s.length; i = i + 1) {
 		hash = hash * 33 + s.charCodeAt(i);
-		i = i + 1;
 	}
 	return hash;
 }

@@ -11,6 +11,7 @@ import {
 	DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData,
 	SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData,
 	DestructuringDeclData, ProgramData,
+	MacroInvocationData, StringLiteralData,
 } from "../ast/node";
 import {
 	Type, TypeKind,
@@ -419,6 +420,33 @@ export function runThreePasses(ctx: CheckerContext, program: Node): void {
 	checkProgramBody(ctx, program);       // Pass 3: infer + check
 }
 
+// Extract @include/@link/@passC/@passL directives from program AST into context.
+function collectDirectives(ctx: CheckerContext, program: Node): void {
+	if (program === null) return;
+	if (program.kind !== NodeKind.Program) return;
+	const pd = program.data as ProgramData;
+	for (let i = 0; i < pd.programStmts.length; i += 1) {
+		const stmt = pd.programStmts[i];
+		if (stmt.kind === NodeKind.ExprStmt) {
+			const d = stmt.data as ExprStmtData;
+			if (d.expr.kind === NodeKind.MacroInvocation) {
+				const mi = d.expr.data as MacroInvocationData;
+				if (mi.macroArgs.length > 0 && mi.macroArgs[0].kind === NodeKind.StringLiteral) {
+					const sd = mi.macroArgs[0].data as StringLiteralData;
+					const name = mi.macroName;
+					if (name === "include") {
+						if (ctx.includeDirectives !== "") ctx.includeDirectives = ctx.includeDirectives + "\n";
+						ctx.includeDirectives = ctx.includeDirectives + sd.value;
+					} else if (name === "link" || name === "passC" || name === "passL") {
+						if (ctx.compilerFlags !== "") ctx.compilerFlags = ctx.compilerFlags + " ";
+						ctx.compilerFlags = ctx.compilerFlags + sd.value;
+					}
+				}
+			}
+		}
+	}
+}
+
 export function checkProgram(program: Node): CheckerContext {
 	const ctx = createContext();
 	// Parse + check global imports in Global scope
@@ -428,12 +456,14 @@ export function checkProgram(program: Node): CheckerContext {
 			const pr = parseSource(src);
 			if (pr.ok) {
 				runThreePasses(ctx, pr.value);
+				collectDirectives(ctx, pr.value);
 			}
 		}
 	}
 	// User code in Module scope
 	openScope(ctx.table, ScopeKind.Module);
 	runThreePasses(ctx, program);
+	collectDirectives(ctx, program);
 	return ctx;
 }
 
@@ -851,3 +881,5 @@ testGroup("Resolve Coverage", () => {
 		check(sym.symbolType.kind === TypeKind.Object);
 	});
 });
+
+

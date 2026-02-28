@@ -127,10 +127,8 @@ export function nodeReferencesVar(node: Node, varName: string): boolean {
 // Returns true if `varName` at `stmtIndex` is not referenced in stmts[stmtIndex+1..].
 
 export function isLastReadInBlock(varName: string, stmtIndex: number, stmts: Node[]): boolean {
-	let i = stmtIndex + 1;
-	while (i < stmts.length) {
+	for (let i = stmtIndex + 1; i < stmts.length; i += 1) {
 		if (nodeReferencesVar(stmts[i], varName)) return false;
-		i += 1;
 	}
 	return true;
 }
@@ -141,10 +139,8 @@ export function isLastReadInBlock(varName: string, stmtIndex: number, stmts: Nod
 
 export function isLastReadInContext(varName: string, stmtIndex: number, stmts: Node[], outerCtx: OuterStack): boolean {
 	// Check remaining stmts in current block
-	let i = stmtIndex + 1;
-	while (i < stmts.length) {
+	for (let i = stmtIndex + 1; i < stmts.length; i += 1) {
 		if (nodeReferencesVar(stmts[i], varName)) return false;
-		i += 1;
 	}
 	// Check outer scopes (innermost first)
 	let oi = outerCtx.items.length;
@@ -152,10 +148,8 @@ export function isLastReadInContext(varName: string, stmtIndex: number, stmts: N
 		oi -= 1;
 		const entry = outerCtx.items[oi];
 		if (entry.isFunctionBoundary) break;  // don't look past function boundaries
-		let j = entry.fromIndex;
-		while (j < entry.outerStmts.length) {
+		for (let j = entry.fromIndex; j < entry.outerStmts.length; j += 1) {
 			if (nodeReferencesVar(entry.outerStmts[j], varName)) return false;
-			j += 1;
 		}
 	}
 	return true;

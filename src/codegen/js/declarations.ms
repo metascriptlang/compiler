@@ -14,7 +14,10 @@ import { sliceStr } from "../../utils/string";
 
 function emitFunctionDeclInner(gen: JSGenerator, node: Node): void {
 	const d = node.data as FunctionDeclData;
-	emit(gen, "function ");
+	if (d.fnFlags === "async") { emit(gen, "async function "); }
+	else if (d.fnFlags === "generator") { emit(gen, "function* "); }
+	else if (d.fnFlags === "async_generator") { emit(gen, "async function* "); }
+	else { emit(gen, "function "); }
 	emit(gen, d.fnName);
 	emit(gen, "(");
 	emitJoinedStrings(gen, d.params, ", ");
@@ -41,8 +44,7 @@ function emitEnumDeclInner(gen: JSGenerator, node: Node): void {
 	emit(gen, d.enumName);
 	emit(gen, ") {\n");
 	gen.indentLevel = gen.indentLevel + 1;
-	let i = 0;
-	while (i < d.enumMembers.length) {
+	for (let i = 0; i < d.enumMembers.length; i += 1) {
 		emitIndent(gen);
 		emit(gen, d.enumName);
 		emit(gen, "[");
@@ -54,7 +56,6 @@ function emitEnumDeclInner(gen: JSGenerator, node: Node): void {
 		emit(gen, "] = \"");
 		emit(gen, d.enumMembers[i]);
 		emit(gen, "\";\n");
-		i += 1;
 	}
 	gen.indentLevel = gen.indentLevel - 1;
 	emitIndent(gen);
@@ -82,8 +83,7 @@ function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 	}
 	emit(gen, " {\n");
 	gen.indentLevel = gen.indentLevel + 1;
-	let i = 0;
-	while (i < d.classBody.length) {
+	for (let i = 0; i < d.classBody.length; i += 1) {
 		const member = d.classBody[i];
 		if (member.kind === NodeKind.MethodDecl) {
 			emitMethodDecl(gen, member);
@@ -94,7 +94,6 @@ function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 		} else {
 			emitNode(gen, member);
 		}
-		i += 1;
 	}
 	gen.indentLevel = gen.indentLevel - 1;
 	emitIndent(gen);
@@ -111,9 +110,10 @@ export function emitClassDecl(gen: JSGenerator, node: Node): void {
 export function emitMethodDecl(gen: JSGenerator, node: Node): void {
 	const d = node.data as MethodDeclData;
 	emitIndent(gen);
-	if (d.methodIsStatic) {
-		emit(gen, "static ");
-	}
+	if (d.methodIsStatic) { emit(gen, "static "); }
+	if (d.methodFlags === "async") { emit(gen, "async "); }
+	else if (d.methodFlags === "generator") { emit(gen, "*"); }
+	else if (d.methodFlags === "async_generator") { emit(gen, "async *"); }
 	emit(gen, d.methodName);
 	emit(gen, "(");
 	emitJoinedStrings(gen, d.methodParams, ", ");
@@ -152,8 +152,7 @@ export function emitImportDecl(gen: JSGenerator, node: Node): void {
 		return;
 	}
 	emit(gen, "import { ");
-	let i = 0;
-	while (i < d.importNames.length) {
+	for (let i = 0; i < d.importNames.length; i += 1) {
 		if (i > 0) emit(gen, ", ");
 		emit(gen, d.importNames[i]);
 		// Handle aliases
@@ -161,7 +160,6 @@ export function emitImportDecl(gen: JSGenerator, node: Node): void {
 			emit(gen, " as ");
 			emit(gen, d.importAliases[i]);
 		}
-		i += 1;
 	}
 	emit(gen, " } from \"");
 	emit(gen, convertImportPath(d.importSource));

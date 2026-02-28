@@ -166,7 +166,7 @@ export function dbAnalyze(db: TransAmDb, filePath: string): Node {
 	const ckKey = createQueryKey(TaQueryKind.TypeCheck, fileId);
 	recordDependency(db.depStack, ckKey, 0);
 
-	const transformed = transformProgram(program, checkerCtx);
+	const transformed = transformProgram(program, checkerCtx, false);
 	const analyzed = analyzeProgram(transformed, checkerCtx);
 	nodeCacheStore(analyzeNodeKey(fileId), analyzed);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, 0, true);
@@ -191,7 +191,7 @@ export function dbTransform(db: TransAmDb, filePath: string): Node {
 	const tckKey = createQueryKey(TaQueryKind.TypeCheck, fileId);
 	recordDependency(db.depStack, tckKey, 0);
 
-	const transformed = transformProgram(program, checkerCtx);
+	const transformed = transformProgram(program, checkerCtx, false);
 	nodeCacheStore(transformNodeKey(fileId), transformed);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, 0, true);
 	return transformed;

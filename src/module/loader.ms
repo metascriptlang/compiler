@@ -20,6 +20,7 @@ import { lex } from "../lexer/lexer";
 import { createState } from "../parser/context";
 import { callStateProgramParser } from "../parser/statements/callbacks";
 import { Node, NodeKind, ProgramData, ImportDeclData } from "../ast/node";
+import { readFile } from "std/process";
 import { test, check, testGroup } from "std/testing";
 
 // ===== Source Provider =====
@@ -31,15 +32,28 @@ export interface MapEntry {
 
 export interface SourceProvider {
 	entries: MapEntry[];
+	useFileSystem: boolean;
 }
 
 export function createMapProvider(entries: MapEntry[]): SourceProvider {
-	return { entries };
+	return { entries, useFileSystem: false };
+}
+
+export function createFileSystemProvider(): SourceProvider {
+	return { entries: [], useFileSystem: true };
 }
 
 export function provideSource(provider: SourceProvider, path: string): Result<string, string> {
 	for (const e of provider.entries) {
 		if (e.entryPath === path) return Result.ok(e.entrySource);
+	}
+	if (provider.useFileSystem) {
+		const content = readFile(path);
+		if (content.length > 0) {
+			const cached: MapEntry = { entryPath: path, entrySource: content };
+			provider.entries.push(cached);
+			return Result.ok(content);
+		}
 	}
 	return Result.err("File not found: " + path);
 }

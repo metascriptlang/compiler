@@ -23,41 +23,33 @@ export function createDocumentStore(): LspDocumentStore {
 }
 
 export function storeDocument(store: LspDocumentStore, uri: string, source: string, version: number): void {
-	let i = 0;
-	while (i < store.documents.length) {
+	for (let i = 0; i < store.documents.length; i = i + 1) {
 		if (store.documents[i].uri === uri) {
 			store.documents[i].source = source;
 			store.documents[i].version = version;
 			return;
 		}
-		i = i + 1;
 	}
 	const doc: LspDocument = { uri: uri, source: source, version: version };
 	store.documents.push(doc);
 }
 
 export function getDocument(store: LspDocumentStore, uri: string): LspDocument {
-	let i = 0;
-	while (i < store.documents.length) {
+	for (let i = 0; i < store.documents.length; i = i + 1) {
 		if (store.documents[i].uri === uri) return store.documents[i];
-		i = i + 1;
 	}
 	return null as unknown as LspDocument;
 }
 
 export function removeDocument(store: LspDocumentStore, uri: string): void {
-	let i = 0;
-	while (i < store.documents.length) {
+	for (let i = 0; i < store.documents.length; i = i + 1) {
 		if (store.documents[i].uri === uri) {
-			let j = i;
-			while (j + 1 < store.documents.length) {
+			for (let j = i; j + 1 < store.documents.length; j = j + 1) {
 				store.documents[j] = store.documents[j + 1];
-				j = j + 1;
 			}
 			store.documents.pop();
 			return;
 		}
-		i = i + 1;
 	}
 }
 

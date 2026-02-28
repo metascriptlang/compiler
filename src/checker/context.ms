@@ -93,11 +93,9 @@ export function hasExtensionByName(registry: ExtensionRegistry, methodName: stri
 function findFlagSegment(flags: string, prefix: string): string {
 	if (flags === "") return "";
 	const parts = splitTopLevel(flags, "|");
-	let i = 0;
-	while (i < parts.length) {
+	for (let i = 0; i < parts.length; i += 1) {
 		const p = trim(parts[i]);
 		if (p.length >= prefix.length && sliceStr(p, 0, prefix.length) === prefix) return p;
-		i += 1;
 	}
 	return "";
 }
@@ -134,6 +132,13 @@ export function getStaticExtTypeName(flags: string): string {
 	return sliceStr(seg, 5, seg.length);
 }
 
+// Unified: returns receiver type name for either instance or static extensions, "" if not an extension.
+export function getExtTypeName(flags: string): string {
+	const instType = getExtReceiverType(flags);
+	if (instType !== "") return instType;
+	return getStaticExtTypeName(flags);
+}
+
 // ===== Generic Flag Helpers =====
 // Parse "gen:T,U" from pipe-delimited fnFlags strings (shared by resolvePass + monomorphize)
 
@@ -141,23 +146,19 @@ export function extractGenericNames(flags: string): string[] {
 	const result: string[] = [];
 	if (flags === "") return result;
 	const parts = splitTopLevel(flags, "|");
-	let pi = 0;
-	while (pi < parts.length) {
+	for (let pi = 0; pi < parts.length; pi += 1) {
 		const trimPart = trim(parts[pi]);
 		if (trimPart.length > 4) {
 			const prefix = sliceStr(trimPart, 0, 4);
 			if (prefix === "gen:") {
 				const nameStr = sliceStr(trimPart, 4, trimPart.length);
 				const names = splitTopLevel(nameStr, ",");
-				let ni = 0;
-				while (ni < names.length) {
+				for (let ni = 0; ni < names.length; ni += 1) {
 					const trimName = trim(names[ni]);
 					if (trimName !== "") result.push(trimName);
-					ni += 1;
 				}
 			}
 		}
-		pi += 1;
 	}
 	return result;
 }
@@ -166,8 +167,7 @@ export function stripGenFlag(flags: string): string {
 	if (flags === "") return "";
 	const parts = splitTopLevel(flags, "|");
 	const kept: string[] = [];
-	let i = 0;
-	while (i < parts.length) {
+	for (let i = 0; i < parts.length; i += 1) {
 		const trimPart = trim(parts[i]);
 		if (trimPart.length > 4) {
 			const prefix = sliceStr(trimPart, 0, 4);
@@ -175,14 +175,11 @@ export function stripGenFlag(flags: string): string {
 		} else {
 			if (trimPart !== "") kept.push(trimPart);
 		}
-		i += 1;
 	}
 	if (kept.length === 0) return "";
 	let result = kept[0];
-	let j = 1;
-	while (j < kept.length) {
+	for (let j = 1; j < kept.length; j += 1) {
 		result = result + "|" + kept[j];
-		j += 1;
 	}
 	return result;
 }
@@ -230,6 +227,8 @@ export interface CheckerContext {
 	exportRegistry: ExportRegistry;  // null for single-module mode
 	extensionRegistry: ExtensionRegistry;  // null for single-module mode
 	inferredReturn: Type;  // tracks inferred return type during function body checking
+	includeDirectives: string; // accumulated @include args, newline-separated
+	compilerFlags: string;     // accumulated @link/@passC/@passL args, space-separated
 }
 
 // ===== Constructors =====
@@ -246,6 +245,8 @@ export function createContext(): CheckerContext {
 		exportRegistry: null as unknown as ExportRegistry,
 		extensionRegistry: createExtensionRegistry(),
 		inferredReturn: unknownType(),
+		includeDirectives: "",
+		compilerFlags: "",
 	};
 }
 
@@ -284,23 +285,19 @@ interface CtxCache {
 let _ctxCache: CtxCache = { items: [] };
 
 export function ctxCacheStore(key: number, ctx: CheckerContext): void {
-	let i = 0;
-	while (i < _ctxCache.items.length) {
+	for (let i = 0; i < _ctxCache.items.length; i = i + 1) {
 		if (_ctxCache.items[i].key === key) {
 			_ctxCache.items[i].ctx = ctx;
 			return;
 		}
-		i = i + 1;
 	}
 	const entry: CtxCacheEntry = { key: key, ctx: ctx };
 	_ctxCache.items.push(entry);
 }
 
 export function ctxCacheGet(key: number): CheckerContext {
-	let i = 0;
-	while (i < _ctxCache.items.length) {
+	for (let i = 0; i < _ctxCache.items.length; i = i + 1) {
 		if (_ctxCache.items[i].key === key) return _ctxCache.items[i].ctx;
-		i = i + 1;
 	}
 	return null as unknown as CheckerContext;
 }

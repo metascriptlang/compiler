@@ -41,10 +41,8 @@ export function createCacheStore(capacity: number): TaCacheStore {
 // ===== Lookup =====
 
 function findIndex(cache: TaCacheStore, key: TaQueryKey): number {
-	let i = 0;
-	while (i < cache.entries.items.length) {
+	for (let i = 0; i < cache.entries.items.length; i = i + 1) {
 		if (queryKeysEqual(cache.entries.items[i].key, key)) return i;
-		i = i + 1;
 	}
 	return -1;
 }
@@ -66,24 +64,20 @@ export function cacheContains(cache: TaCacheStore, key: TaQueryKey): boolean {
 function findEvictIndex(cache: TaCacheStore): number {
 	let minAccess = cache.accessCounters.items[0];
 	let minIdx = 0;
-	let i = 1;
-	while (i < cache.accessCounters.items.length) {
+	for (let i = 1; i < cache.accessCounters.items.length; i = i + 1) {
 		if (cache.accessCounters.items[i] < minAccess) {
 			minAccess = cache.accessCounters.items[i];
 			minIdx = i;
 		}
-		i = i + 1;
 	}
 	return minIdx;
 }
 
 function evictAt(cache: TaCacheStore, idx: number): void {
 	// Manual removal: shift elements left, then pop
-	let i = idx;
-	while (i < cache.entries.items.length - 1) {
+	for (let i = idx; i < cache.entries.items.length - 1; i = i + 1) {
 		cache.entries.items[i] = cache.entries.items[i + 1];
 		cache.accessCounters.items[i] = cache.accessCounters.items[i + 1];
-		i = i + 1;
 	}
 	cache.entries.items.pop();
 	cache.accessCounters.items.pop();
@@ -121,22 +115,18 @@ export function cacheRemove(cache: TaCacheStore, key: TaQueryKey): boolean {
 // ===== Bulk State Mutation =====
 
 export function markAllRed(cache: TaCacheStore): void {
-	let i = 0;
-	while (i < cache.entries.items.length) {
+	for (let i = 0; i < cache.entries.items.length; i = i + 1) {
 		if (cache.entries.items[i].state === TaQueryState.Green) {
 			cache.entries.items[i].state = TaQueryState.Red;
 		}
-		i = i + 1;
 	}
 }
 
 export function markQueriesRedForFile(cache: TaCacheStore, fileId: number): void {
-	let i = 0;
-	while (i < cache.entries.items.length) {
+	for (let i = 0; i < cache.entries.items.length; i = i + 1) {
 		if (cache.entries.items[i].key.fileId === fileId) {
 			cache.entries.items[i].state = TaQueryState.Red;
 		}
-		i = i + 1;
 	}
 }
 

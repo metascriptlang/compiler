@@ -169,10 +169,8 @@ export function setNeedsTryToLoop(dctx: DrcContext): void {
 
 // Set needsTry on ALL scopes (return/throw)
 export function setNeedsTryAll(dctx: DrcContext): void {
-	let i = 0;
-	while (i < dctx.scopes.items.length) {
+	for (let i = 0; i < dctx.scopes.items.length; i += 1) {
 		dctx.scopes.items[i].needsTry = true;
-		i += 1;
 	}
 }
 

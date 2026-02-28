@@ -122,10 +122,8 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 
 function compileBlock(s: RaiserCompState, node: Node): void {
 	const d = node.data as BlockStmtData;
-	let i = 0;
-	while (i < d.statements.length) {
+	for (let i = 0; i < d.statements.length; i = i + 1) {
 		compileStmt(s, d.statements[i]);
-		i = i + 1;
 	}
 }
 
@@ -180,10 +178,8 @@ function compileDoWhileStmt(s: RaiserCompState, node: Node): void {
 
 	patchJumpTo(s, exitJump, codeLen(s));
 	const loop = popLoop(s);
-	let i = 0;
-	while (i < loop.breakPatches.items.length) {
+	for (let i = 0; i < loop.breakPatches.items.length; i = i + 1) {
 		patchJumpTo(s, loop.breakPatches.items[i], codeLen(s));
-		i = i + 1;
 	}
 }
 
@@ -206,10 +202,8 @@ function compileWhileStmt(s: RaiserCompState, node: Node): void {
 	// Patch exit + break jumps
 	patchJumpTo(s, exitJump, codeLen(s));
 	const loop = popLoop(s);
-	let i = 0;
-	while (i < loop.breakPatches.items.length) {
+	for (let i = 0; i < loop.breakPatches.items.length; i = i + 1) {
 		patchJumpTo(s, loop.breakPatches.items[i], codeLen(s));
-		i = i + 1;
 	}
 }
 
@@ -251,10 +245,8 @@ function compileForStmt(s: RaiserCompState, node: Node): void {
 		patchJumpTo(s, exitJump, codeLen(s));
 	}
 	const loop = popLoop(s);
-	let i = 0;
-	while (i < loop.breakPatches.items.length) {
+	for (let i = 0; i < loop.breakPatches.items.length; i = i + 1) {
 		patchJumpTo(s, loop.breakPatches.items[i], codeLen(s));
-		i = i + 1;
 	}
 }
 
@@ -304,9 +296,7 @@ function compileForOfStmt(s: RaiserCompState, node: Node): void {
 	// Patch exit + break
 	patchJumpTo(s, exitJump, codeLen(s));
 	const loop = popLoop(s);
-	let i = 0;
-	while (i < loop.breakPatches.items.length) {
+	for (let i = 0; i < loop.breakPatches.items.length; i = i + 1) {
 		patchJumpTo(s, loop.breakPatches.items[i], codeLen(s));
-		i = i + 1;
 	}
 }

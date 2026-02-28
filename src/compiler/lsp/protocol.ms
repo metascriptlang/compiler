@@ -15,8 +15,7 @@ import { test, check, testGroup } from "std/testing";
 export function lspJsonString(val: string): string {
 	// Escape special characters for JSON
 	let result = "\"";
-	let i = 0;
-	while (i < val.length) {
+	for (let i = 0; i < val.length; i = i + 1) {
 		const ch = sliceStr(val, i, i + 1);
 		if (ch === "\\") { result = result + "\\\\"; }
 		else if (ch === "\"") { result = result + "\\\""; }
@@ -24,7 +23,6 @@ export function lspJsonString(val: string): string {
 		else if (ch === "\r") { result = result + "\\r"; }
 		else if (ch === "\t") { result = result + "\\t"; }
 		else { result = result + ch; }
-		i = i + 1;
 	}
 	result = result + "\"";
 	return result;
@@ -53,8 +51,7 @@ export function lspGetField(json: string, field: string): string {
 	const pattern = "\"" + field + "\":\"";
 	const patLen = pattern.length;
 
-	let i = 0;
-	while (i + patLen <= json.length) {
+	for (let i = 0; i + patLen <= json.length; i = i + 1) {
 		const candidate = sliceStr(json, i, i + patLen);
 		if (candidate === pattern) {
 			// Found key. Extract value until closing unescaped quote.
@@ -85,7 +82,6 @@ export function lspGetField(json: string, field: string): string {
 			}
 			return value;
 		}
-		i = i + 1;
 	}
 	return "";
 }
@@ -97,8 +93,7 @@ export function lspGetNumberField(json: string, field: string): number {
 	const pattern = "\"" + field + "\":";
 	const patLen = pattern.length;
 
-	let i = 0;
-	while (i + patLen <= json.length) {
+	for (let i = 0; i + patLen <= json.length; i = i + 1) {
 		const candidate = sliceStr(json, i, i + patLen);
 		if (candidate === pattern) {
 			// Found key. Parse digits.
@@ -124,7 +119,6 @@ export function lspGetNumberField(json: string, field: string): number {
 			if (neg) result = 0 - result;
 			return result;
 		}
-		i = i + 1;
 	}
 	return -1;
 }
@@ -135,8 +129,7 @@ export function lspGetObjectField(json: string, field: string): string {
 	const pattern = "\"" + field + "\":";
 	const patLen = pattern.length;
 
-	let i = 0;
-	while (i + patLen <= json.length) {
+	for (let i = 0; i + patLen <= json.length; i = i + 1) {
 		const candidate = sliceStr(json, i, i + patLen);
 		if (candidate === pattern) {
 			let j = i + patLen;
@@ -166,7 +159,6 @@ export function lspGetObjectField(json: string, field: string): string {
 				}
 			}
 		}
-		i = i + 1;
 	}
 	return "";
 }
@@ -200,13 +192,11 @@ function digitValue(c: string): number {
 
 function parseSimpleInt(s: string): number {
 	let result = 0;
-	let i = 0;
-	while (i < s.length) {
+	for (let i = 0; i < s.length; i = i + 1) {
 		const c = charAt(s, i);
 		const d = digitValue(c);
 		if (d < 0) break;
 		result = result * 10 + d;
-		i = i + 1;
 	}
 	return result;
 }

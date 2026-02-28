@@ -76,15 +76,13 @@ export function buildDiagnosticsJson(uri: string, source: string): string {
 	const diags = sgCollectDiagnostics(ctx);
 
 	let diagArray = "[";
-	let i = 0;
-	while (i < diags.items.length) {
+	for (let i = 0; i < diags.items.length; i = i + 1) {
 		if (i > 0) diagArray = diagArray + ",";
 		const d = diags.items[i];
 		const line = d.line - 1;
 		diagArray = diagArray + lspFmtDiagnostic(
 			line, d.column, d.column + 1, d.severity, d.message, "metascript", 0
 		);
-		i = i + 1;
 	}
 	diagArray = diagArray + "]";
 
@@ -244,8 +242,7 @@ function lspCommitCharsForKind(kind: SymbolKind): string {
 
 function lspFormatCompletionList(id: string, candidates: SgSuggestList): string {
 	let items = "[";
-	let i = 0;
-	while (i < candidates.items.length) {
+	for (let i = 0; i < candidates.items.length; i = i + 1) {
 		if (i > 0) items = items + ",";
 		const item = candidates.items[i];
 		const typeStr = sgTypeToString(item.symType);
@@ -255,7 +252,6 @@ function lspFormatCompletionList(id: string, candidates: SgSuggestList): string 
 		items = items + lspFmtCompletionItem(
 			item.name, kindNum, typeStr, sortText, false, commitChars
 		);
-		i = i + 1;
 	}
 	items = items + "]";
 	return lspResponse(id, items);
@@ -311,8 +307,7 @@ export function handleDocumentSymbol(id: string, params: string, store: LspDocum
 	const symbols = sgCollectSymbolsInFile(ctx, pr.value);
 
 	let items = "[";
-	let i = 0;
-	while (i < symbols.items.length) {
+	for (let i = 0; i < symbols.items.length; i = i + 1) {
 		if (i > 0) items = items + ",";
 		const sym = symbols.items[i];
 		const kindNum = lspDocumentSymbolKind(sym.kind);
@@ -320,7 +315,6 @@ export function handleDocumentSymbol(id: string, params: string, store: LspDocum
 		const symCol = sym.location.column;
 		const endCol = symCol + sym.name.length;
 		items = items + lspFmtDocumentSymbol(sym.name, kindNum, sym.detail, symLine, symCol, endCol);
-		i = i + 1;
 	}
 	items = items + "]";
 	return lspResponse(id, items);
@@ -349,20 +343,16 @@ export function handleSignatureHelp(id: string, params: string, store: LspDocume
 	const activeParam = sgCountActiveParam(doc.source, pos.line, pos.col);
 
 	let sigArray = "[";
-	let i = 0;
-	while (i < sigs.items.length) {
+	for (let i = 0; i < sigs.items.length; i = i + 1) {
 		if (i > 0) sigArray = sigArray + ",";
 		const sig = sigs.items[i];
 		let paramArray = "[";
-		let j = 0;
-		while (j < sig.paramLabels.length) {
+		for (let j = 0; j < sig.paramLabels.length; j = j + 1) {
 			if (j > 0) paramArray = paramArray + ",";
 			paramArray = paramArray + lspFmtSignatureParam(sig.paramLabels[j]);
-			j = j + 1;
 		}
 		paramArray = paramArray + "]";
 		sigArray = sigArray + lspFmtSignature(sig.label, paramArray);
-		i = i + 1;
 	}
 	sigArray = sigArray + "]";
 
@@ -392,8 +382,7 @@ export function handleInlayHint(id: string, params: string, store: LspDocumentSt
 	if (hintsList.items.length === 0) return lspResponse(id, "[]");
 
 	let arr = "[";
-	let i = 0;
-	while (i < hintsList.items.length) {
+	for (let i = 0; i < hintsList.items.length; i = i + 1) {
 		if (i > 0) arr = arr + ",";
 		const h = hintsList.items[i];
 		// LSP InlayHintKind: 1 = Type, 2 = Parameter
@@ -403,7 +392,6 @@ export function handleInlayHint(id: string, params: string, store: LspDocumentSt
 		const padLeft = h.hintKind === SgInlayHintKind.Type;
 		const padRight = h.hintKind === SgInlayHintKind.Parameter;
 		arr = arr + lspFmtInlayHint(h.line - 1, h.col, h.label, lspKind, padLeft, padRight);
-		i = i + 1;
 	}
 	arr = arr + "]";
 	return lspResponse(id, arr);
@@ -427,13 +415,11 @@ export function handleReferences(id: string, params: string, store: LspDocumentS
 	const refs = sgFindUsagesByName(allRefs, suggest.name);
 
 	let arr = "[";
-	let i = 0;
-	while (i < refs.items.length) {
+	for (let i = 0; i < refs.items.length; i = i + 1) {
 		if (i > 0) arr = arr + ",";
 		const ref = refs.items[i];
 		const refLine = ref.line - 1;
 		arr = arr + lspFmtLocation(pos.uri, refLine, ref.col, refLine, ref.col + ref.nameLen);
-		i = i + 1;
 	}
 	arr = arr + "]";
 	return lspResponse(id, arr);
@@ -462,13 +448,11 @@ export function handleRename(id: string, params: string, store: LspDocumentStore
 	if (refs.items.length === 0) return lspResponse(id, "null");
 
 	let edits = "[";
-	let i = 0;
-	while (i < refs.items.length) {
+	for (let i = 0; i < refs.items.length; i = i + 1) {
 		if (i > 0) edits = edits + ",";
 		const ref = refs.items[i];
 		const refLine = ref.line - 1;
 		edits = edits + lspFmtTextEdit(refLine, ref.col, ref.col + ref.nameLen, newName);
-		i = i + 1;
 	}
 	edits = edits + "]";
 

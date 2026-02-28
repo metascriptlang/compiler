@@ -94,8 +94,7 @@ export function mangle(name: string): string {
 		start = 1;
 	}
 
-	let i = start;
-	while (i < name.length) {
+	for (let i = start; i < name.length; i += 1) {
 		const ch = charAt(name, i);
 		if (isAlnumChar(ch)) {
 			result = result + ch;
@@ -105,7 +104,6 @@ export function mangle(name: string): string {
 			result = result + specialCharName(ch);
 			requiresUnderscore = true;
 		}
-		i += 1;
 	}
 
 	if (requiresUnderscore) {
@@ -146,8 +144,7 @@ function isLowerOrDigit(ch: string): boolean {
 
 export function mangleModuleName(modulePath: string): string {
 	let result = "";
-	let i = 0;
-	while (i < modulePath.length) {
+	for (let i = 0; i < modulePath.length; i += 1) {
 		const ch = charAt(modulePath, i);
 		if (isLowerOrDigit(ch)) {
 			result = result + ch;
@@ -158,7 +155,6 @@ export function mangleModuleName(modulePath: string): string {
 		} else {
 			result = result + charOrd(ch);
 		}
-		i += 1;
 	}
 	return result;
 }

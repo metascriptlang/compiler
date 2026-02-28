@@ -44,10 +44,8 @@ export function genStmt(g: CGen, p: CProc, node: Node): void {
 // ===== genStmts — emit a list of statements =====
 
 export function genStmts(g: CGen, p: CProc, stmts: Node[]): void {
-	let i = 0;
-	while (i < stmts.length) {
+	for (let i = 0; i < stmts.length; i += 1) {
 		genStmt(g, p, stmts[i]);
-		i += 1;
 	}
 }
 
@@ -55,6 +53,7 @@ export function genStmts(g: CGen, p: CProc, stmts: Node[]): void {
 
 function genExprStmt(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as ExprStmtData;
+	if (d.expr.kind === NodeKind.MacroInvocation) return;
 	const snippet = genExpr(g, p, d.expr);
 	emitStmtsLine(p, snippet + ";");
 }
@@ -251,10 +250,8 @@ function stmtOutput(input: string): string {
 	const g = createCGen(null as unknown as CheckerContext);
 	const p = createProc("test", null as unknown as Type);
 	// Inline loop instead of genStmts to reduce call depth
-	let i = 0;
-	while (i < pd.programStmts.length) {
+	for (let i = 0; i < pd.programStmts.length; i += 1) {
 		genStmt(g, p, pd.programStmts[i]);
-		i += 1;
 	}
 	return readProcStmts(p);
 }

@@ -3,7 +3,7 @@
 import { exit } from "std/process";
 import { CliOptions, Target, parseArgs } from "./compiler/options";
 import { VERSION, printUsage } from "./compiler/usage";
-import { cmdCompile } from "./compiler/compile";
+import { cmdCompile, cmdBuildJS } from "./compiler/compile";
 import { cmdCheck, cmdDumpTokens, cmdDumpAst, cmdPipeline, cmdRun, cmdTest, cmdFmt } from "./compiler/commands";
 import { lspRunServer } from "./compiler/lsp/server";
 import { error, bold, green, cyan } from "./utils/color";
@@ -51,8 +51,13 @@ function main(): number {
 	} else if (cmd === "lsp") {
 		lspRunServer();
 	} else if (cmd === "build") {
-		console.log(error("error") + ": " + cyan("build") + " command not yet implemented");
-		exit(1);
+		requireFile(opts);
+		if (opts.target === Target.JS) {
+			cmdBuildJS(opts.inputFile, opts.outputPath);
+		} else {
+			console.log(error("error") + ": " + cyan("build") + " for C target not yet implemented");
+			exit(1);
+		}
 	} else {
 		console.log(error("error") + ": unknown command '" + bold(cmd) + "'");
 		printUsage();

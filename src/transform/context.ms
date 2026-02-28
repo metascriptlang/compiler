@@ -7,10 +7,11 @@ export interface TransformContext {
 	errors: string[];
 	fnDeclNames: string[];  // collected function declaration names (for closureCallMarker)
 	checkerCtx: CheckerContext;  // type info from Phase 2 (null in test mode)
+	jsBackend: boolean;  // true = skip C-specific transforms (lambda lifting, destructor lifting, etc.)
 }
 
 export function createTransformContext(): TransformContext {
-	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext };
+	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false };
 }
 
 export function createTransformContextWithChecker(cc: CheckerContext): TransformContext {

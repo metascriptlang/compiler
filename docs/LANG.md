@@ -508,16 +508,72 @@ const result = try divide(10, 2);
 const value = try divide(10, 0) catch 0;
 ```
 
-### Compiler Decorators (@)
+### Decorators & Directives
+
+Both use `@` syntax. Semicolon disambiguates:
+- **Decorator** = `@name(...) decl` — attaches to next declaration
+- **Directive** = `@name(...);` — standalone statement (ends with `;`)
+
+#### Decorators (attach to declarations)
+
 ```typescript
-@derive(Eq, Hash)              // Auto-generate methods
-@comptime { ... }              // Compile-time execution
-@target("c") { ... }           // Backend-conditional code
-@emit("printf(\"hello\");")    // Inline raw C code
-@sizeof(MyStruct)              // Compile-time sizeof
-@external("libc_func")         // Link external C function
-@cImport("header.h")           // Import C declarations
+// Bind to C runtime function — codegen emits c_name as a plain call
+@runtime("ms_println")
+function log(value: string): void { unreachable; }
+// log("hi") → ms_println("hi")
+
+// On class methods (declared in std/core.ms prelude)
+class console {
+	@runtime("ms_println")
+	log(value: string): void { unreachable; }
+}
+// console.log("hi") → ms_println("hi")
+
+// Compiler intrinsic — builtinLower rewrites AST inline
+// Can emit anything: field access, operators, multi-statement patterns
+@builtin("LengthStr")
+export function len(s: string): number;
+// len(s) → ms_string_length(s)  (or future: s->len)
+
+// Multiple decorators stack
+@runtime("ms_floor")
+@inline
+export function floor(x: number): number { unreachable; }
 ```
+
+| Decorator | Applies To | Purpose | Status |
+|-----------|-----------|---------|--------|
+| `@runtime("c_name")` | function, method | Bind to C runtime function (always a function call) | DONE |
+| `@builtin("Name")` | function, method | Compiler intrinsic (inline codegen, no function call) | DONE (stub) |
+| `@derive(Trait, ...)` | class, interface | Auto-generate methods (Eq, Hash, Clone, Debug) | PLANNED |
+| `@comptime` | block | Compile-time evaluation | PLANNED |
+| `@target("c")` | block | Backend-conditional code | PLANNED |
+| `@emit("...")` | statement | Inline raw C/JS code into output | PLANNED |
+| `@inline` | function | Hint to inline function body at call site | PLANNED |
+
+#### Directives (standalone, module-level)
+
+```typescript
+@include("openssl/ssl.h");     // Include C header
+@link("libssl.a");             // Link pre-built archive
+@passC("-I/usr/local/include");// Raw C compiler flag
+@passL("-lssl");               // Raw linker flag
+```
+
+| Directive | Purpose | Status |
+|-----------|---------|--------|
+| `@include("file.h");` | Include C header + auto-compile matching `.c` | PLANNED |
+| `@link("lib.a");` | Link pre-built archive | PLANNED |
+| `@passC("flag");` | Raw C compiler flag | PLANNED |
+| `@passL("flag");` | Raw linker flag | PLANNED |
+
+#### 3-Tier Builtin System
+
+| Tier | Decorator | Output | Adding New Ones |
+|------|-----------|--------|-----------------|
+| `@runtime("c_name")` | Plain C function call | Edit `std/core.ms` + `runtime/*.c` (no compiler rebuild) |
+| `@builtin("Name")` | Inline C (any pattern) | Edit `std/core.ms` + `builtinLower.ms` (compiler rebuild) |
+| `extern function` | Raw C FFI declaration | Edit user code directly |
 
 ### Macros
 ```typescript
@@ -527,21 +583,6 @@ macro deriveEq(target) {
     return target;
 }
 
-#### Decorator & Directive Plumbing
-
-Both use `@` syntax. Semicolon disambiguates:
-- **Decorator** = `@name(...) decl` → attaches to next declaration, stored on Symbol
-- **Directive** = `@name(...);` → standalone with `;`, module-level, stored on Program node
-
-Nim uses same `{. .}` syntax with positional disambiguation (parser context). Haxe has no standalone directives — must attach to a declaration. Our semicolon approach is explicit and simple.
-
-**Symbol fields** (DONE):
-- `runtimeName: string` — set by collectPass when `@runtime("c_name")` found
-- `builtinKind: string` — set by collectPass when `@builtin("Name")` found
-
-**Parser** (DONE): `@name(args) decl` → `DecoratedDecl { decorators: [MacroInvocation], decoratedNode }`. `@name(args);` → `ExprStmt { MacroInvocation }` (standalone directive).
-
-**Collector** (DONE): `collectDecorated` in collectPass.ms reads decorators, calls `extractDecoratorInfo` (from `decoratorHelpers.ms`, returns primitives only — DRC #22 safe), sets `sym.runtimeName`/`sym.builtinKind`. Note: nested `@dec export function` crashes DRC at collect time (DRC #23) — parse-level works.
 ```
 
 ### Extern Declarations (FFI)

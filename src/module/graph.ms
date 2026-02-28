@@ -88,10 +88,8 @@ export function findModule(graph: ModuleGraph, path: string): Module {
 }
 
 export function findModuleIndex(graph: ModuleGraph, path: string): number {
-	let i = 0;
-	while (i < graph.modulePaths.length) {
+	for (let i = 0; i < graph.modulePaths.length; i += 1) {
 		if (graph.modulePaths[i] === path) return i;
-		i += 1;
 	}
 	return -1;
 }

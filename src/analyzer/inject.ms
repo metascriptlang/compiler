@@ -91,12 +91,10 @@ function classifyMemberFieldRc(memberExpr: Node, dctx: DrcContext): RcInfo {
 	const objSym = lookupSymbol(dctx.ctx.checkerCtx.table, objName);
 	if (objSym === null || objSym.symbolType === null) return noRcInfo();
 	const objType = objSym.symbolType;
-	let fi = 0;
-	while (fi < objType.typeNames.length && fi < objType.typeChildren.length) {
+	for (let fi = 0; fi < objType.typeNames.length && fi < objType.typeChildren.length; fi += 1) {
 		if (objType.typeNames[fi] === md.property) {
 			return classifyType(objType.typeChildren[fi], dctx.ctx);
 		}
-		fi += 1;
 	}
 	return noRcInfo();
 }
@@ -215,12 +213,10 @@ function wrapWithTryFinally(bodyStmts: Node[], cleanupStmts: Node[], scope: DrcS
 
 function processStmtList(stmts: Node[], dctx: DrcContext, loc: SourceLocation): Node[] {
 	const out: StmtBuf = { stmts: [] };
-	let i = 0;
-	while (i < stmts.length) {
+	for (let i = 0; i < stmts.length; i += 1) {
 		const processed = processStmt(stmts[i], i, stmts, dctx, loc);
 		out.stmts.push(processed);
 		flushPending(dctx, out);
-		i += 1;
 	}
 	return out.stmts;
 }
@@ -397,8 +393,7 @@ function processCallArgs(callExpr: Node, idx: number, stmts: Node[], dctx: DrcCo
 	const fnType = sym.symbolType;
 	if (fnType.kind !== TypeKind.Function) return pre;
 
-	let ai = 0;
-	while (ai < cd.arguments.length && ai < fnType.typeChildren.length) {
+	for (let ai = 0; ai < cd.arguments.length && ai < fnType.typeChildren.length; ai += 1) {
 		const arg = cd.arguments[ai];
 		if (arg !== null && arg.kind === NodeKind.Identifier) {
 			const argName = (arg.data as IdentifierData).name;
@@ -436,7 +431,6 @@ function processCallArgs(callExpr: Node, idx: number, stmts: Node[], dctx: DrcCo
 				cd.arguments[ai] = makeIdent(tmpName, loc);
 			}
 		}
-		ai += 1;
 	}
 	return pre;
 }
@@ -468,8 +462,7 @@ function emitLiteralFieldCopies(literal: Node, outerType: Type, idx: number, stm
 	if (outerType === null) return;
 	const ld = literal.data as ObjectLiteralData;
 	const fieldTypes = outerType.typeChildren;
-	let fi = 0;
-	while (fi < ld.properties.length && fi < fieldTypes.length) {
+	for (let fi = 0; fi < ld.properties.length && fi < fieldTypes.length; fi += 1) {
 		const prop = ld.properties[fi];
 		if (prop !== null && prop.kind === NodeKind.Identifier) {
 			const propName = (prop.data as IdentifierData).name;
@@ -499,7 +492,6 @@ function emitLiteralFieldCopies(literal: Node, outerType: Type, idx: number, stm
 				}
 			}
 		}
-		fi += 1;
 	}
 }
 
@@ -510,8 +502,7 @@ function emitArrayElementCopies(literal: Node, outerType: Type, idx: number, stm
 	if (!elemRc.needsCleanup) return;
 
 	const ald = literal.data as ArrayLiteralData;
-	let ei = 0;
-	while (ei < ald.elements.length) {
+	for (let ei = 0; ei < ald.elements.length; ei += 1) {
 		const elem = ald.elements[ei];
 		if (elem !== null && elem.kind === NodeKind.Identifier) {
 			const elemName = (elem.data as IdentifierData).name;
@@ -537,7 +528,6 @@ function emitArrayElementCopies(literal: Node, outerType: Type, idx: number, stm
 				}
 			}
 		}
-		ei += 1;
 	}
 }
 
@@ -553,8 +543,7 @@ function isEnvParam(name: string): boolean {
 
 function registerFuncParams(paramNames: string[], paramTypes: Type[], dctx: DrcContext, loc: SourceLocation): void {
 	if (dctx.ctx.checkerCtx === null) return;
-	let pi = 0;
-	while (pi < paramNames.length && pi < paramTypes.length) {
+	for (let pi = 0; pi < paramNames.length && pi < paramTypes.length; pi += 1) {
 		const pName = paramNames[pi];
 		// Skip closure env params (item 11) — they're managed by ms_closure_* infrastructure
 		if (!isEnvParam(pName)) {
@@ -563,7 +552,6 @@ function registerFuncParams(paramNames: string[], paramTypes: Type[], dctx: DrcC
 				registerVar(dctx, pName, pRcInfo, false);
 			}
 		}
-		pi += 1;
 	}
 }
 
@@ -591,8 +579,7 @@ function processFuncBodyWithParams(body: Node, fnName: string, paramNames: strin
 		// For anonymous functions (arrows, func exprs): try to resolve param types from symbol table
 		// The param names are the AST-level names; look each up individually
 		// (This is a fallback — anonymous funcs may not have their type in the global scope)
-		let pi = 0;
-		while (pi < paramNames.length) {
+		for (let pi = 0; pi < paramNames.length; pi += 1) {
 			const pSym = lookupSymbol(dctx.ctx.checkerCtx.table, paramNames[pi]);
 			if (pSym !== null) {
 				const pRcInfo = classifyType(pSym.symbolType, dctx.ctx);
@@ -600,7 +587,6 @@ function processFuncBodyWithParams(body: Node, fnName: string, paramNames: strin
 					registerVar(dctx, paramNames[pi], pRcInfo, false);
 				}
 			}
-			pi += 1;
 		}
 	}
 
@@ -1051,13 +1037,11 @@ function needsReturnIncref(expr: Node, dctx: DrcContext): boolean {
 		const objSym = lookupSymbol(dctx.ctx.checkerCtx.table, objName);
 		if (objSym === null || objSym.symbolType === null) return false;
 		const objType = objSym.symbolType;
-		let fi = 0;
-		while (fi < objType.typeNames.length && fi < objType.typeChildren.length) {
+		for (let fi = 0; fi < objType.typeNames.length && fi < objType.typeChildren.length; fi += 1) {
 			if (objType.typeNames[fi] === md.property) {
 				const rc = classifyType(objType.typeChildren[fi], dctx.ctx);
 				return rc.needsCleanup && (rc.rcKind === RcKind.Ref || rc.rcKind === RcKind.String);
 			}
-			fi += 1;
 		}
 		return false;
 	}

@@ -47,7 +47,7 @@ function analyzePipeline(input: string): Node {
 	if (!parseResult.ok) return null as unknown as Node;
 	const program = parseResult.value;
 	const checkerCtx = checkProgram(program);
-	const transformed = transformProgram(program, checkerCtx);
+	const transformed = transformProgram(program, checkerCtx, false);
 	return analyzeProgram(transformed, checkerCtx);
 }
 

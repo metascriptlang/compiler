@@ -326,12 +326,10 @@ export function heapObjectFieldCount(heap: RaiserObjectHeap, handle: number): nu
 
 export function heapObjectGetField(heap: RaiserObjectHeap, handle: number, name: string): RaiserValue {
 	const obj = heap.objects[handle];
-	let i = 0;
-	while (i < obj.fields.length) {
+	for (let i = 0; i < obj.fields.length; i = i + 1) {
 		if (obj.fields[i].name === name) {
 			return obj.fields[i].value;
 		}
-		i = i + 1;
 	}
 	// Field not found — return nil
 	return { kind: RaiserValueKind.Nil, intVal: 0, floatVal: 0.0, strVal: "" };
@@ -340,8 +338,7 @@ export function heapObjectGetField(heap: RaiserObjectHeap, handle: number, name:
 export function heapObjectSetField(heap: RaiserObjectHeap, handle: number, name: string, val: RaiserValue): void {
 	const obj = heap.objects[handle];
 	// Check if field already exists
-	let i = 0;
-	while (i < obj.fields.length) {
+	for (let i = 0; i < obj.fields.length; i = i + 1) {
 		if (obj.fields[i].name === name) {
 			// Update existing field (deep copy)
 			obj.fields[i].value.kind = val.kind;
@@ -350,7 +347,6 @@ export function heapObjectSetField(heap: RaiserObjectHeap, handle: number, name:
 			obj.fields[i].value.strVal = val.strVal;
 			return;
 		}
-		i = i + 1;
 	}
 	// Add new field (deep copy value)
 	const copy: RaiserValue = { kind: val.kind, intVal: val.intVal, floatVal: val.floatVal, strVal: val.strVal };

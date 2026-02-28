@@ -157,10 +157,8 @@ export function emitSwitchStmt(gen: JSGenerator, node: Node): void {
 	emit(gen, "switch (");
 	emitNode(gen, d.switchDisc);
 	emit(gen, ") {\n");
-	let i = 0;
-	while (i < d.switchCases.length) {
+	for (let i = 0; i < d.switchCases.length; i += 1) {
 		emitSwitchCase(gen, d.switchCases[i]);
-		i += 1;
 	}
 	emitIndent(gen);
 	emit(gen, "}\n");
@@ -172,20 +170,16 @@ export function emitSwitchCase(gen: JSGenerator, node: Node): void {
 		emitIndent(gen);
 		emit(gen, "  default:\n");
 	} else {
-		let ti = 0;
-		while (ti < d.caseTests.length) {
+		for (let ti = 0; ti < d.caseTests.length; ti += 1) {
 			emitIndent(gen);
 			emit(gen, "  case ");
 			emitNode(gen, d.caseTests[ti]);
 			emit(gen, ":\n");
-			ti += 1;
 		}
 	}
 	gen.indentLevel = gen.indentLevel + 2;
-	let si = 0;
-	while (si < d.caseStmts.length) {
+	for (let si = 0; si < d.caseStmts.length; si += 1) {
 		emitNode(gen, d.caseStmts[si]);
-		si += 1;
 	}
 	gen.indentLevel = gen.indentLevel - 2;
 }

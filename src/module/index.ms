@@ -15,6 +15,6 @@ export {
 
 export {
 	MapEntry, SourceProvider,
-	createMapProvider, provideSource,
+	createMapProvider, createFileSystemProvider, provideSource,
 	loadModule, loadModuleGraph,
 } from "./loader";

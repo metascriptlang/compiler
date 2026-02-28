@@ -78,10 +78,8 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 	// Instance extension: s.trim() → trim(s) — prepend receiver
 	const newArgs: Node[] = [];
 	newArgs.push(member.object);
-	let ai = 0;
-	while (ai < call.arguments.length) {
+	for (let ai = 0; ai < call.arguments.length; ai += 1) {
 		newArgs.push(call.arguments[ai]);
-		ai += 1;
 	}
 	return makeCall(makeIdent(methodName, loc), newArgs, loc);
 }

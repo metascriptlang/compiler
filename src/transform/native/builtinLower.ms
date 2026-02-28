@@ -83,10 +83,8 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 	const loc = node.location;
 
 	// Walk arguments recursively first
-	let i = 0;
-	while (i < cd.arguments.length) {
+	for (let i = 0; i < cd.arguments.length; i += 1) {
 		cd.arguments[i] = walkLowerBuiltins(cd.arguments[i], ctx);
-		i += 1;
 	}
 
 	// Walk callee recursively (handles nested calls like f(g(x)))
@@ -120,10 +118,8 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 			const newArgs: Node[] = [];
 			const objExpr = walkLowerBuiltins(me.object, ctx);
 			newArgs.push(objExpr);
-			let j = 0;
-			while (j < cd.arguments.length) {
+			for (let j = 0; j < cd.arguments.length; j += 1) {
 				newArgs.push(cd.arguments[j]);
-				j += 1;
 			}
 			return makeCall(makeIdent(sym.runtimeName, loc), newArgs, loc);
 		}
@@ -148,20 +144,16 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 
 function walkProgram(node: Node, ctx: TransformContext): Node {
 	const pd = node.data as ProgramData;
-	let i = 0;
-	while (i < pd.programStmts.length) {
+	for (let i = 0; i < pd.programStmts.length; i += 1) {
 		pd.programStmts[i] = walkLowerBuiltins(pd.programStmts[i], ctx);
-		i += 1;
 	}
 	return node;
 }
 
 function walkBlock(node: Node, ctx: TransformContext): Node {
 	const bd = node.data as BlockStmtData;
-	let i = 0;
-	while (i < bd.statements.length) {
+	for (let i = 0; i < bd.statements.length; i += 1) {
 		bd.statements[i] = walkLowerBuiltins(bd.statements[i], ctx);
-		i += 1;
 	}
 	return node;
 }

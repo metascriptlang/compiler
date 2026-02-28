@@ -78,9 +78,8 @@ export function disasmInst(inst: RaiserInstruction): string {
 // Disassemble a function to a single string (for test assertions)
 export function disasmFunc(func: RaiserFunction): string {
 	let out = "; " + getFuncName(func) + "\n";
-	let i = 0;
 	const len = getFuncCodeLen(func);
-	while (i < len) {
+	for (let i = 0; i < len; i = i + 1) {
 		const inst = getFuncInst(func, i);
 		let line = "  " + i + ": " + disasmInst(inst);
 		if (inst.op === RaiserOpcode.LoadConst) {
@@ -91,7 +90,6 @@ export function disasmFunc(func: RaiserFunction): string {
 			}
 		}
 		out = out + line + "\n";
-		i = i + 1;
 	}
 	return out;
 }

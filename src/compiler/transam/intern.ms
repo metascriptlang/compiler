@@ -32,12 +32,10 @@ export function createStringInterner(): TaStringInterner {
 
 // Intern a string, returning its unique ID. Deduplicates.
 export function internString(interner: TaStringInterner, s: string): number {
-	let i = 0;
-	while (i < interner.entries.items.length) {
+	for (let i = 0; i < interner.entries.items.length; i = i + 1) {
 		if (interner.entries.items[i].value === s) {
 			return interner.entries.items[i].id;
 		}
-		i = i + 1;
 	}
 	const id = interner.nextId;
 	interner.nextId = interner.nextId + 1;
@@ -48,12 +46,10 @@ export function internString(interner: TaStringInterner, s: string): number {
 
 // Retrieve interned string by ID.
 export function lookupInterned(interner: TaStringInterner, id: number): string {
-	let i = 0;
-	while (i < interner.entries.items.length) {
+	for (let i = 0; i < interner.entries.items.length; i = i + 1) {
 		if (interner.entries.items[i].id === id) {
 			return interner.entries.items[i].value;
 		}
-		i = i + 1;
 	}
 	return "";
 }

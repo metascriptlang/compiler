@@ -54,13 +54,11 @@ export function firstExprKindAfter(input: string, transform: (prog: Node, ctx: T
 export function firstExprKind(prog: Node): NodeKind {
 	if (prog === null) return NodeKind.ExprStmt;
 	const stmts = getStmts(prog);
-	let i = 0;
-	while (i < stmts.length) {
+	for (let i = 0; i < stmts.length; i += 1) {
 		if (stmts[i].kind === NodeKind.ExprStmt) {
 			const d = stmts[i].data as ExprStmtData;
 			return d.expr.kind;
 		}
-		i += 1;
 	}
 	return NodeKind.ExprStmt;
 }
@@ -69,8 +67,7 @@ export function firstExprKind(prog: Node): NodeKind {
 export function firstCalleeKind(prog: Node): NodeKind {
 	if (prog === null) return NodeKind.ExprStmt;
 	const stmts = getStmts(prog);
-	let i = 0;
-	while (i < stmts.length) {
+	for (let i = 0; i < stmts.length; i += 1) {
 		if (stmts[i].kind === NodeKind.ExprStmt) {
 			const d = stmts[i].data as ExprStmtData;
 			if (d.expr.kind === NodeKind.CallExpr) {
@@ -78,7 +75,6 @@ export function firstCalleeKind(prog: Node): NodeKind {
 				return cd.callee.kind;
 			}
 		}
-		i += 1;
 	}
 	return NodeKind.ExprStmt;
 }
@@ -86,8 +82,7 @@ export function firstCalleeKind(prog: Node): NodeKind {
 // Count statements inside the body of the first FunctionDecl after transform.
 export function fnBodyStmtCount(input: string, transform: (prog: Node, ctx: TransformContext) => Node): number {
 	const stmts = transformStmts(input, transform);
-	let i = 0;
-	while (i < stmts.length) {
+	for (let i = 0; i < stmts.length; i += 1) {
 		if (stmts[i].kind === NodeKind.FunctionDecl) {
 			const fd = stmts[i].data as FunctionDeclData;
 			if (fd.fnBody !== null && fd.fnBody.kind === NodeKind.BlockStmt) {
@@ -95,7 +90,6 @@ export function fnBodyStmtCount(input: string, transform: (prog: Node, ctx: Tran
 				return bd.statements.length;
 			}
 		}
-		i += 1;
 	}
 	return -1;
 }
@@ -104,8 +98,7 @@ export function fnBodyStmtCount(input: string, transform: (prog: Node, ctx: Tran
 export function firstCallArgCount(prog: Node): number {
 	if (prog === null) return -1;
 	const stmts = getStmts(prog);
-	let i = 0;
-	while (i < stmts.length) {
+	for (let i = 0; i < stmts.length; i += 1) {
 		if (stmts[i].kind === NodeKind.ExprStmt) {
 			const d = stmts[i].data as ExprStmtData;
 			if (d.expr.kind === NodeKind.CallExpr) {
@@ -113,7 +106,6 @@ export function firstCallArgCount(prog: Node): number {
 				return cd.arguments.length;
 			}
 		}
-		i += 1;
 	}
 	return -1;
 }

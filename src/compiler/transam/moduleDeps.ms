@@ -36,11 +36,9 @@ export function createModuleDepGraph(): TaModuleDepGraph {
 // ===== Edge Operations =====
 
 function edgeExists(deps: TaModuleDepGraph, importer: number, imported: number): boolean {
-	let i = 0;
-	while (i < deps.edges.items.length) {
+	for (let i = 0; i < deps.edges.items.length; i = i + 1) {
 		const e = deps.edges.items[i];
 		if (e.importerFileId === importer && e.importedFileId === imported) return true;
-		i = i + 1;
 	}
 	return false;
 }
@@ -58,10 +56,8 @@ export function clearImportsFor(deps: TaModuleDepGraph, fileId: number): void {
 		i = i - 1;
 		if (deps.edges.items[i].importerFileId === fileId) {
 			// Shift left and pop
-			let j = i;
-			while (j < deps.edges.items.length - 1) {
+			for (let j = i; j < deps.edges.items.length - 1; j = j + 1) {
 				deps.edges.items[j] = deps.edges.items[j + 1];
-				j = j + 1;
 			}
 			deps.edges.items.pop();
 		}
@@ -72,12 +68,10 @@ export function clearImportsFor(deps: TaModuleDepGraph, fileId: number): void {
 
 export function getDirectImporters(deps: TaModuleDepGraph, fileId: number): TaNumberList {
 	const result: TaNumberList = { items: [] };
-	let i = 0;
-	while (i < deps.edges.items.length) {
+	for (let i = 0; i < deps.edges.items.length; i = i + 1) {
 		if (deps.edges.items[i].importedFileId === fileId) {
 			result.items.push(deps.edges.items[i].importerFileId);
 		}
-		i = i + 1;
 	}
 	return result;
 }
@@ -91,14 +85,12 @@ export function getTransitiveDependents(deps: TaModuleDepGraph, fileId: number):
 	while (queue.items.length > 0) {
 		const current = queue.items.shift();
 		const importers = getDirectImporters(deps, current);
-		let i = 0;
-		while (i < importers.items.length) {
+		for (let i = 0; i < importers.items.length; i = i + 1) {
 			const imp = importers.items[i];
 			if (imp !== fileId && !numberListContains(result, imp)) {
 				result.items.push(imp);
 				queue.items.push(imp);
 			}
-			i = i + 1;
 		}
 	}
 	return result;
@@ -107,10 +99,8 @@ export function getTransitiveDependents(deps: TaModuleDepGraph, fileId: number):
 // ===== Helpers =====
 
 function numberListContains(list: TaNumberList, val: number): boolean {
-	let i = 0;
-	while (i < list.items.length) {
+	for (let i = 0; i < list.items.length; i = i + 1) {
 		if (list.items[i] === val) return true;
-		i = i + 1;
 	}
 	return false;
 }

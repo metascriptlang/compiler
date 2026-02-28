@@ -23,10 +23,8 @@ export function writeOutput(filePath: string, content: string): void {
 
 // Print checker errors and exit. Used by compile, run, check commands.
 export function printErrorsAndExit(ctx: CheckerContext, prefix: string): void {
-	let i = 0;
-	while (i < ctx.errors.length) {
+	for (let i = 0; i < ctx.errors.length; i += 1) {
 		console.log(red(prefix) + ctx.errors[i]);
-		i += 1;
 	}
 	exit(1);
 }

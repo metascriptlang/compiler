@@ -340,9 +340,7 @@ function buildStateDispatch(sc: StateCollector, loc: SourceLocation): Node {
 	let current: Node = makeBlock([makeReturn(makeDoneResult(loc), loc)], loc);
 
 	// Build if-else chain from last state to first
-	let i = sc.items.length;
-	while (i > 0) {
-		i -= 1;
+	for (let i = sc.items.length - 1; i >= 0; i -= 1) {
 		const stateIdx = sc.items[i].index;
 		const cond = makeBinary(
 			makeIdent("$state", loc), "===",

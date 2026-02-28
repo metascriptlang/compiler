@@ -106,14 +106,12 @@ export function sgTypeToString(t: Type): string {
 		if (t.typeName.length > 0) return t.typeName;
 		// Anonymous object: { key: type, ... }
 		let result = "{ ";
-		let i = 0;
-		while (i < t.typeNames.length) {
+		for (let i = 0; i < t.typeNames.length; i = i + 1) {
 			if (i > 0) result = result + ", ";
 			result = result + t.typeNames[i] + ": ";
 			if (i < t.typeChildren.length) {
 				result = result + sgTypeToString(t.typeChildren[i]);
 			}
-			i = i + 1;
 		}
 		result = result + " }";
 		return result;
@@ -121,14 +119,12 @@ export function sgTypeToString(t: Type): string {
 
 	if (t.kind === TypeKind.Function) {
 		let result = "(";
-		let i = 0;
-		while (i < t.typeChildren.length) {
+		for (let i = 0; i < t.typeChildren.length; i = i + 1) {
 			if (i > 0) result = result + ", ";
 			if (i < t.typeNames.length && t.typeNames[i].length > 0) {
 				result = result + t.typeNames[i] + ": ";
 			}
 			result = result + sgTypeToString(t.typeChildren[i]);
-			i = i + 1;
 		}
 		result = result + ") => " + sgTypeToString(t.typeReturn);
 		return result;
@@ -138,22 +134,18 @@ export function sgTypeToString(t: Type): string {
 
 	if (t.kind === TypeKind.Union) {
 		let result = "";
-		let i = 0;
-		while (i < t.typeChildren.length) {
+		for (let i = 0; i < t.typeChildren.length; i = i + 1) {
 			if (i > 0) result = result + " | ";
 			result = result + sgTypeToString(t.typeChildren[i]);
-			i = i + 1;
 		}
 		return result;
 	}
 
 	if (t.kind === TypeKind.Tuple) {
 		let result = "[";
-		let i = 0;
-		while (i < t.typeChildren.length) {
+		for (let i = 0; i < t.typeChildren.length; i = i + 1) {
 			if (i > 0) result = result + ", ";
 			result = result + sgTypeToString(t.typeChildren[i]);
-			i = i + 1;
 		}
 		result = result + "]";
 		return result;
@@ -192,11 +184,9 @@ export function sgTypeToString(t: Type): string {
 	if (t.kind === TypeKind.GenericInstance) {
 		let result = sgTypeToString(t.typeExtra);
 		result = result + "<";
-		let i = 0;
-		while (i < t.typeChildren.length) {
+		for (let i = 0; i < t.typeChildren.length; i = i + 1) {
 			if (i > 0) result = result + ", ";
 			result = result + sgTypeToString(t.typeChildren[i]);
-			i = i + 1;
 		}
 		result = result + ">";
 		return result;
@@ -220,14 +210,12 @@ function nodeContains(node: Node, line: number, col: number): boolean {
 
 function sgFindInChildren(children: Node[], line: number, col: number): Node {
 	// Walk children in reverse to find innermost (last matching wins)
-	let i = children.length - 1;
-	while (i >= 0) {
+	for (let i = children.length - 1; i >= 0; i = i - 1) {
 		const child = children[i];
 		if (child !== null && nodeContains(child, line, col)) {
 			const deeper = sgFindNodeAtPosition(child, line, col);
 			if (deeper !== null) return deeper;
 		}
-		i = i - 1;
 	}
 	return null as unknown as Node;
 }
@@ -278,11 +266,9 @@ export function sgFindNodeAtPosition(program: Node, line: number, col: number): 
 	// Call expression
 	if (program.kind === NodeKind.CallExpr) {
 		const cd = program.data as CallExprData;
-		let i = cd.arguments.length - 1;
-		while (i >= 0) {
+		for (let i = cd.arguments.length - 1; i >= 0; i = i - 1) {
 			const found = sgFindNodeAtPosition(cd.arguments[i], line, col);
 			if (found !== null) return found;
-			i = i - 1;
 		}
 		const calFound = sgFindNodeAtPosition(cd.callee, line, col);
 		if (calFound !== null) return calFound;
@@ -451,14 +437,12 @@ function sgSymbolKindName(kind: SymbolKind): string {
 // Format parameter list: (a: number, b: string)
 function sgFormatParamList(t: Type): string {
 	let result = "(";
-	let i = 0;
-	while (i < t.typeChildren.length) {
+	for (let i = 0; i < t.typeChildren.length; i = i + 1) {
 		if (i > 0) result = result + ", ";
 		if (i < t.typeNames.length && t.typeNames[i].length > 0) {
 			result = result + t.typeNames[i] + ": ";
 		}
 		result = result + sgTypeToString(t.typeChildren[i]);
-		i = i + 1;
 	}
 	result = result + ")";
 	return result;
@@ -539,8 +523,7 @@ export function sgSymbolDetail(suggest: SgSuggest): string {
 
 export function sgCollectDiagnostics(ctx: CheckerContext): SgDiagnosticList {
 	const result: SgDiagnosticList = { items: [] };
-	let i = 0;
-	while (i < ctx.errors.length) {
+	for (let i = 0; i < ctx.errors.length; i = i + 1) {
 		const diag: SgDiagnostic = {
 			message: ctx.errors[i],
 			line: 1,
@@ -548,7 +531,6 @@ export function sgCollectDiagnostics(ctx: CheckerContext): SgDiagnosticList {
 			severity: 1,
 		};
 		result.items.push(diag);
-		i = i + 1;
 	}
 	return result;
 }
@@ -558,10 +540,8 @@ export function sgCollectDiagnostics(ctx: CheckerContext): SgDiagnosticList {
 function sgIsIdentChar(ch: string): boolean {
 	if (ch === "_") return true;
 	const identChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-	let i = 0;
-	while (i < identChars.length) {
+	for (let i = 0; i < identChars.length; i = i + 1) {
 		if (charAt(identChars, i) === ch) return true;
-		i = i + 1;
 	}
 	return false;
 }
@@ -614,29 +594,23 @@ function sgPrefixMatch(prefix: string, name: string): number {
 	if (prefix.length > name.length) return 0;
 	// Check prefix match (case-insensitive)
 	let isPrefix = true;
-	let k = 0;
-	while (k < prefix.length) {
+	for (let k = 0; k < prefix.length; k = k + 1) {
 		if (!sgCaseEqual(charAt(prefix, k), charAt(name, k))) {
 			isPrefix = false;
 			break;
 		}
-		k = k + 1;
 	}
 	if (isPrefix) return 2;
 	// Check substring match (case-insensitive)
-	let start = 1;
-	while (start + prefix.length <= name.length) {
+	for (let start = 1; start + prefix.length <= name.length; start = start + 1) {
 		let matched = true;
-		let m = 0;
-		while (m < prefix.length) {
+		for (let m = 0; m < prefix.length; m = m + 1) {
 			if (!sgCaseEqual(charAt(prefix, m), charAt(name, start + m))) {
 				matched = false;
 				break;
 			}
-			m = m + 1;
 		}
 		if (matched) return 1;
-		start = start + 1;
 	}
 	return 0;
 }
@@ -656,8 +630,7 @@ function sgCompareSuggestions(a: SgSuggest, b: SgSuggest): number {
 }
 
 function sgSortSuggestions(list: SgSuggestList): void {
-	let i = 1;
-	while (i < list.items.length) {
+	for (let i = 1; i < list.items.length; i = i + 1) {
 		const current = list.items[i];
 		let j = i - 1;
 		while (j >= 0 && sgCompareSuggestions(list.items[j], current) > 0) {
@@ -665,7 +638,6 @@ function sgSortSuggestions(list: SgSuggestList): void {
 			j = j - 1;
 		}
 		list.items[j + 1] = current;
-		i = i + 1;
 	}
 }
 
@@ -711,8 +683,7 @@ function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverTyp
 	const result: SgSuggestList = { items: [] };
 	// Dot completion: properties from receiver type
 	if (receiverType !== null && receiverType.kind === TypeKind.Object) {
-		let i = 0;
-		while (i < receiverType.typeNames.length) {
+		for (let i = 0; i < receiverType.typeNames.length; i = i + 1) {
 			const propName = receiverType.typeNames[i];
 			const ps = sgPrefixMatch(prefix, propName);
 			if (ps > 0) {
@@ -726,13 +697,11 @@ function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverTyp
 				};
 				result.items.push(item);
 			}
-			i = i + 1;
 		}
 	}
 	// Enum member completion
 	if (receiverType !== null && receiverType.kind === TypeKind.Enum) {
-		let i = 0;
-		while (i < receiverType.typeNames.length) {
+		for (let i = 0; i < receiverType.typeNames.length; i = i + 1) {
 			const memberName = receiverType.typeNames[i];
 			const ps = sgPrefixMatch(prefix, memberName);
 			if (ps > 0) {
@@ -744,15 +713,13 @@ function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverTyp
 				};
 				result.items.push(item);
 			}
-			i = i + 1;
 		}
 	}
 	// Extension methods
 	if (receiverType !== null && ctx.extensionRegistry !== null) {
 		const recTypeName = typeNameOf(receiverType);
 		if (recTypeName.length > 0) {
-			let j = 0;
-			while (j < ctx.extensionRegistry.methods.length) {
+			for (let j = 0; j < ctx.extensionRegistry.methods.length; j = j + 1) {
 				const ext = ctx.extensionRegistry.methods[j];
 				const ps = sgPrefixMatch(prefix, ext.methodName);
 				if (ext.receiverTypeName === recTypeName && ps > 0) {
@@ -764,7 +731,6 @@ function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverTyp
 					};
 					result.items.push(item);
 				}
-				j = j + 1;
 			}
 		}
 	}
@@ -782,8 +748,7 @@ export function sgGetCompletionCandidates(ctx: CheckerContext, kind: SgCompletio
 	let scope = ctx.table.current;
 	let depth = 0;
 	while (scope !== null) {
-		let i = 0;
-		while (i < scope.symbols.length) {
+		for (let i = 0; i < scope.symbols.length; i = i + 1) {
 			const sym = scope.symbols[i];
 			const ps = sgPrefixMatch(prefix, sym.name);
 			if (ps > 0) {
@@ -798,7 +763,6 @@ export function sgGetCompletionCandidates(ctx: CheckerContext, kind: SgCompletio
 					result.items.push(item);
 				}
 			}
-			i = i + 1;
 		}
 		scope = scope.parent;
 		depth = depth + 1;
@@ -814,12 +778,11 @@ export function sgGetCompletionCandidates(ctx: CheckerContext, kind: SgCompletio
 function sgJoinFieldNames(names: string[]): string {
 	if (names.length === 0) return "";
 	let result = "";
-	let i = 0;
 	const limit = 3;
-	while (i < names.length && i < limit) {
+	const maxLen = names.length < limit ? names.length : limit;
+	for (let i = 0; i < maxLen; i = i + 1) {
 		if (i > 0) result = result + ", ";
 		result = result + names[i];
-		i = i + 1;
 	}
 	if (names.length > limit) result = result + ", ...";
 	return result;
@@ -887,10 +850,8 @@ export function sgCollectSymbolsInFile(ctx: CheckerContext, program: Node): SgDo
 	const result: SgDocumentSymbolList = { items: [] };
 	if (program === null || program.kind !== NodeKind.Program) return result;
 	const pd = program.data as ProgramData;
-	let i = 0;
-	while (i < pd.programStmts.length) {
+	for (let i = 0; i < pd.programStmts.length; i = i + 1) {
 		sgCollectOneSymbol(pd.programStmts[i], ctx, result);
-		i = i + 1;
 	}
 	return result;
 }
@@ -900,8 +861,7 @@ export function sgCollectSymbolsInFile(ctx: CheckerContext, program: Node): SgDo
 function sgBuildSignatureInfo(name: string, fnType: Type): SgSignatureInfo {
 	const paramLabels: string[] = [];
 	let label = name + "(";
-	let i = 0;
-	while (i < fnType.typeChildren.length) {
+	for (let i = 0; i < fnType.typeChildren.length; i = i + 1) {
 		if (i > 0) label = label + ", ";
 		let paramLabel = "";
 		if (i < fnType.typeNames.length && fnType.typeNames[i].length > 0) {
@@ -911,7 +871,6 @@ function sgBuildSignatureInfo(name: string, fnType: Type): SgSignatureInfo {
 		}
 		paramLabels.push(paramLabel);
 		label = label + paramLabel;
-		i = i + 1;
 	}
 	label = label + "): " + sgTypeToString(fnType.typeReturn);
 	const info: SgSignatureInfo = { label, paramLabels };
@@ -928,14 +887,12 @@ export function sgFormatSignature(sym: Symbol): SgSignatureList {
 	result.items.push(main);
 
 	// Overloads
-	let i = 0;
-	while (i < sym.overloads.length) {
+	for (let i = 0; i < sym.overloads.length; i = i + 1) {
 		const ovl = sym.overloads[i];
 		if (ovl.symbolType !== null && ovl.symbolType.kind === TypeKind.Function) {
 			const ovlInfo = sgBuildSignatureInfo(sym.name, ovl.symbolType);
 			result.items.push(ovlInfo);
 		}
-		i = i + 1;
 	}
 
 	return result;
@@ -1035,11 +992,9 @@ export function sgCollectInlayHints(
 ): SgInlayHintList {
 	const result: SgInlayHintList = { items: [] };
 	const pd = program.data as ProgramData;
-	let i = 0;
-	while (i < pd.programStmts.length) {
+	for (let i = 0; i < pd.programStmts.length; i = i + 1) {
 		const stmt = pd.programStmts[i];
 		sgCollectHintsInNode(ctx, stmt, startLine, endLine, result);
-		i = i + 1;
 	}
 	return result;
 }
@@ -1081,10 +1036,8 @@ function sgCollectHintsInNode(
 	// Block statements: walk children
 	if (node.kind === NodeKind.BlockStmt) {
 		const bd = node.data as BlockStmtData;
-		let j = 0;
-		while (j < bd.statements.length) {
+		for (let j = 0; j < bd.statements.length; j = j + 1) {
 			sgCollectHintsInNode(ctx, bd.statements[j], startLine, endLine, hints);
-			j = j + 1;
 		}
 		return;
 	}
@@ -1175,10 +1128,10 @@ function sgCollectCallParamHints(
 	const paramNames = sym.symbolType.typeNames;
 	if (paramNames.length === 0) return;
 
-	let j = 0;
-	while (j < cd.arguments.length && j < paramNames.length) {
+	const paramLimit = cd.arguments.length < paramNames.length ? cd.arguments.length : paramNames.length;
+	for (let j = 0; j < paramLimit; j = j + 1) {
 		const arg = cd.arguments[j];
-		if (arg === null) { j = j + 1; continue; }
+		if (arg === null) { continue; }
 		// Skip hints for trivially obvious args (same name as param)
 		let argName = "";
 		if (arg.kind === NodeKind.Identifier) {
@@ -1194,14 +1147,11 @@ function sgCollectCallParamHints(
 			};
 			hints.items.push(hint);
 		}
-		j = j + 1;
 	}
 
 	// Also walk into argument expressions for nested calls
-	j = 0;
-	while (j < cd.arguments.length) {
+	for (let j = 0; j < cd.arguments.length; j = j + 1) {
 		sgCollectHintsInNode(ctx, cd.arguments[j], startLine, endLine, hints);
-		j = j + 1;
 	}
 }
 
@@ -1271,10 +1221,8 @@ function sgCollectRefsInNode(node: Node, refs: SgSymbolRefList): void {
 		const cd = node.data as ClassDeclData;
 		const ref: SgSymbolRef = { name: cd.className, line: loc.line, col: loc.column, nameLen: cd.className.length, isDecl: true };
 		refs.items.push(ref);
-		let ci = 0;
-		while (ci < cd.classBody.length) {
+		for (let ci = 0; ci < cd.classBody.length; ci = ci + 1) {
 			sgCollectRefsInNode(cd.classBody[ci], refs);
-			ci = ci + 1;
 		}
 		return;
 	}
@@ -1287,20 +1235,16 @@ function sgCollectRefsInNode(node: Node, refs: SgSymbolRefList): void {
 function sgCollectRefsInCompound(node: Node, refs: SgSymbolRefList): void {
 	if (node.kind === NodeKind.Program) {
 		const pd = node.data as ProgramData;
-		let i = 0;
-		while (i < pd.programStmts.length) {
+		for (let i = 0; i < pd.programStmts.length; i = i + 1) {
 			sgCollectRefsInNode(pd.programStmts[i], refs);
-			i = i + 1;
 		}
 		return;
 	}
 
 	if (node.kind === NodeKind.BlockStmt) {
 		const bd = node.data as BlockStmtData;
-		let i = 0;
-		while (i < bd.statements.length) {
+		for (let i = 0; i < bd.statements.length; i = i + 1) {
 			sgCollectRefsInNode(bd.statements[i], refs);
-			i = i + 1;
 		}
 		return;
 	}
@@ -1333,10 +1277,8 @@ function sgCollectRefsInCompound(node: Node, refs: SgSymbolRefList): void {
 	if (node.kind === NodeKind.CallExpr) {
 		const ce = node.data as CallExprData;
 		sgCollectRefsInNode(ce.callee, refs);
-		let i = 0;
-		while (i < ce.arguments.length) {
+		for (let i = 0; i < ce.arguments.length; i = i + 1) {
 			sgCollectRefsInNode(ce.arguments[i], refs);
-			i = i + 1;
 		}
 		return;
 	}
@@ -1378,10 +1320,8 @@ function sgCollectRefsInCompound(node: Node, refs: SgSymbolRefList): void {
 
 	if (node.kind === NodeKind.ArrayLiteral) {
 		const al = node.data as ArrayLiteralData;
-		let i = 0;
-		while (i < al.elements.length) {
+		for (let i = 0; i < al.elements.length; i = i + 1) {
 			sgCollectRefsInNode(al.elements[i], refs);
-			i = i + 1;
 		}
 		return;
 	}
@@ -1389,14 +1329,12 @@ function sgCollectRefsInCompound(node: Node, refs: SgSymbolRefList): void {
 
 export function sgFindUsagesByName(refs: SgSymbolRefList, name: string): SgSymbolRefList {
 	const result: SgSymbolRefList = { items: [] };
-	let i = 0;
-	while (i < refs.items.length) {
+	for (let i = 0; i < refs.items.length; i = i + 1) {
 		if (refs.items[i].name === name) {
 			const r = refs.items[i];
 			const ref: SgSymbolRef = { name: r.name, line: r.line, col: r.col, nameLen: r.nameLen, isDecl: r.isDecl };
 			result.items.push(ref);
 		}
-		i = i + 1;
 	}
 	return result;
 }
@@ -1688,11 +1626,9 @@ testGroup("sgGetCompletionCandidates TypeAnnotation", () => {
 		// Should include Foo (interface) but not y (variable)
 		let hasFoo = false;
 		let hasY = false;
-		let i = 0;
-		while (i < candidates.items.length) {
+		for (let i = 0; i < candidates.items.length; i = i + 1) {
 			if (candidates.items[i].name === "Foo") hasFoo = true;
 			if (candidates.items[i].name === "y") hasY = true;
-			i = i + 1;
 		}
 		check(hasFoo);
 		check(!hasY);
@@ -1920,11 +1856,9 @@ testGroup("sgCollectInlayHints", () => {
 		// Should have: type hint for r + param hints a: and b:
 		let typeHints = 0;
 		let paramHints = 0;
-		let j = 0;
-		while (j < hints.items.length) {
+		for (let j = 0; j < hints.items.length; j = j + 1) {
 			if (hints.items[j].hintKind === SgInlayHintKind.Type) { typeHints = typeHints + 1; }
 			if (hints.items[j].hintKind === SgInlayHintKind.Parameter) { paramHints = paramHints + 1; }
-			j = j + 1;
 		}
 		check(typeHints >= 1);  // r: number
 		check(paramHints === 2);  // a: 1, b: 2
@@ -1937,10 +1871,8 @@ testGroup("sgCollectInlayHints", () => {
 		const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
 		// x matches param name "x" — no param hint, just type hint for x
 		let paramHints = 0;
-		let j = 0;
-		while (j < hints.items.length) {
+		for (let j = 0; j < hints.items.length; j = j + 1) {
 			if (hints.items[j].hintKind === SgInlayHintKind.Parameter) { paramHints = paramHints + 1; }
-			j = j + 1;
 		}
 		check(paramHints === 0);
 	});

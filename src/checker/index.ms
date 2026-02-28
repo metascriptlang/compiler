@@ -17,6 +17,7 @@ export {
 	getReturnType, getElementType, getProperty,
 	substituteType, instantiateGeneric, createGenericParam,
 	isPrimitiveKind, typeNameOf,
+	UnifyBindings, createUnifyBindings, unifyType, hasGenericParams,
 } from "./types";
 
 // Re-exports: symbol.ms
@@ -30,7 +31,7 @@ export {
 	createExportRegistry, findModuleExports, findExportedSymbol, registerModuleExports,
 	ExtensionMethod, ExtensionRegistry, createExtensionRegistry, registerExtension, findExtension, hasExtensionByName,
 	AttachedOps, findAttachedOps, hasAttachedOps,
-	isExtensionFlag, isStaticExtensionFlag, getExtReceiverName, getExtReceiverType, getStaticExtTypeName,
+	isExtensionFlag, isStaticExtensionFlag, getExtReceiverName, getExtReceiverType, getStaticExtTypeName, getExtTypeName,
 } from "./context";
 
 // Re-exports: collectPass.ms (Pass 1)

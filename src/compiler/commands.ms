@@ -30,10 +30,8 @@ export function cmdDumpTokens(filePath: string): void {
 		exit(1);
 	}
 	const tokens = result.value;
-	let i = 0;
-	while (i < tokens.length) {
+	for (let i = 0; i < tokens.length; i += 1) {
 		console.log(formatToken(tokens[i]));
-		i += 1;
 	}
 }
 
@@ -48,10 +46,8 @@ export function cmdDumpAst(filePath: string): void {
 	}
 	const program = result.value;
 	const pd = program.data as ProgramData;
-	let i = 0;
-	while (i < pd.programStmts.length) {
+	for (let i = 0; i < pd.programStmts.length; i += 1) {
 		printNode(pd.programStmts[i], 0);
-		i += 1;
 	}
 }
 
@@ -98,10 +94,8 @@ export function cmdPipeline(filePath: string): void {
 	if (hasErrors(checkerCtx)) {
 		const count = errorCount(checkerCtx);
 		console.log("  " + red(count + " error(s)") + ":");
-		let i = 0;
-		while (i < checkerCtx.errors.length) {
+		for (let i = 0; i < checkerCtx.errors.length; i += 1) {
 			console.log("    " + checkerCtx.errors[i]);
-			i += 1;
 		}
 	} else {
 		console.log("  " + green("OK") + " " + dim("no errors"));
@@ -109,7 +103,7 @@ export function cmdPipeline(filePath: string): void {
 
 	// Phase 3: Transform
 	console.log("\n" + cyan("[3/5]") + " Transform...");
-	const transformed = transformProgram(program, checkerCtx);
+	const transformed = transformProgram(program, checkerCtx, false);
 	console.log("  " + green("OK"));
 
 	// Phase 4: Analyze (DRC)
@@ -142,7 +136,7 @@ export function cmdRun(filePath: string, target: Target): void {
 		printErrorsAndExit(checkerCtx, "type error: ");
 	}
 
-	const transformed = transformProgram(program, checkerCtx);
+	const transformed = transformProgram(program, checkerCtx, target === Target.JS);
 
 	if (target === Target.JS) {
 		const jsCode = generateJS(transformed);
@@ -160,7 +154,7 @@ export function cmdRun(filePath: string, target: Target): void {
 		const tmpBin = "/tmp/_msc_run";
 		writeOutput(tmpC, cCode);
 
-		const buildCode = compileC(tmpC, tmpBin);
+		const buildCode = compileC(tmpC, tmpBin, checkerCtx.compilerFlags);
 		if (buildCode !== 0) {
 			console.log(error("error") + ": clang compilation failed " + dim("(exit " + buildCode + ")"));
 	

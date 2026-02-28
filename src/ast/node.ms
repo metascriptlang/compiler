@@ -270,23 +270,19 @@ function createEmptyNodeCache(): NodeCache {
 let _nodeCache: NodeCache = createEmptyNodeCache();
 
 export function nodeCacheStore(key: number, node: Node): void {
-	let i = 0;
-	while (i < _nodeCache.items.length) {
+	for (let i = 0; i < _nodeCache.items.length; i = i + 1) {
 		if (_nodeCache.items[i].key === key) {
 			_nodeCache.items[i].node = node;
 			return;
 		}
-		i = i + 1;
 	}
 	const entry: NodeCacheEntry = { key: key, node: node };
 	_nodeCache.items.push(entry);
 }
 
 export function nodeCacheGet(key: number): Node {
-	let i = 0;
-	while (i < _nodeCache.items.length) {
+	for (let i = 0; i < _nodeCache.items.length; i = i + 1) {
 		if (_nodeCache.items[i].key === key) return _nodeCache.items[i].node;
-		i = i + 1;
 	}
 	return null as unknown as Node;
 }

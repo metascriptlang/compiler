@@ -172,12 +172,11 @@ export function captureGenericParams(state: ParserState): string {
 export function isGenericCallAhead(state: ParserState): boolean {
 	// Current token should be '<'
 	if (isAtEnd(state) || current(state).kind !== TokenKind.Lt) return false;
-	let pos = 1; // peek offset from current position
 	let angleDepth = 1;
 	let braceDepth = 0;
 	let bracketDepth = 0;
 	let parenDepth = 0;
-	while (pos < 100) {
+	for (let pos = 1; pos < 100; pos += 1) {
 		const tok = peek(state, pos);
 		if (tok.kind === TokenKind.Eof) return false;
 		// Track nested delimiters
@@ -202,7 +201,6 @@ export function isGenericCallAhead(state: ParserState): boolean {
 		// Bail on tokens that can't appear in type args
 		if (tok.kind === TokenKind.Semicolon) return false;
 		if (tok.kind === TokenKind.Assign) return false;
-		pos += 1;
 	}
 	return false;
 }
@@ -236,8 +234,7 @@ export function captureGenericTypeArgs(state: ParserState): string {
 	let result = "";
 	let afterSep = false;
 	let argHasTokens = false;
-	let i = 0;
-	while (i < tokens.length) {
+	for (let i = 0; i < tokens.length; i += 1) {
 		if (tokens[i] === "," && depths[i] === 1) {
 			afterSep = true;
 			argHasTokens = false;
@@ -252,7 +249,6 @@ export function captureGenericTypeArgs(state: ParserState): string {
 			result = result + tokens[i];
 			argHasTokens = true;
 		}
-		i += 1;
 	}
 	return result;
 }
@@ -310,10 +306,8 @@ export function addExplicitTypeArg(line: number, col: number, typeArgStr: string
 
 export function getExplicitTypeArg(line: number, col: number): string {
 	const key = line.toString() + ":" + col.toString();
-	let i = 0;
-	while (i < _typeArgStore.items.length) {
+	for (let i = 0; i < _typeArgStore.items.length; i += 1) {
 		if (_typeArgStore.items[i].key === key) return _typeArgStore.items[i].val;
-		i += 1;
 	}
 	return "";
 }
@@ -352,42 +346,34 @@ export function addGenericDecl(name: string, genericParams: string): void {
 
 // Update an existing GenericDeclEntry with field info (called after parsing interface body)
 export function updateGenericDeclFields(name: string, fieldNames: string, fieldTypes: string): void {
-	let i = 0;
-	while (i < _genericDeclStore.items.length) {
+	for (let i = 0; i < _genericDeclStore.items.length; i += 1) {
 		if (_genericDeclStore.items[i].key === name) {
 			_genericDeclStore.items[i].fieldNames = fieldNames;
 			_genericDeclStore.items[i].fieldTypes = fieldTypes;
 			return;
 		}
-		i += 1;
 	}
 }
 
 export function getGenericDecl(name: string): string {
-	let i = 0;
-	while (i < _genericDeclStore.items.length) {
+	for (let i = 0; i < _genericDeclStore.items.length; i += 1) {
 		if (_genericDeclStore.items[i].key === name) return _genericDeclStore.items[i].val;
-		i += 1;
 	}
 	return "";
 }
 
 // Get "|"-joined field names for a generic interface/class
 export function getGenericDeclFieldNames(name: string): string {
-	let i = 0;
-	while (i < _genericDeclStore.items.length) {
+	for (let i = 0; i < _genericDeclStore.items.length; i += 1) {
 		if (_genericDeclStore.items[i].key === name) return _genericDeclStore.items[i].fieldNames;
-		i += 1;
 	}
 	return "";
 }
 
 // Get "|"-joined field type annotations for a generic interface/class
 export function getGenericDeclFieldTypes(name: string): string {
-	let i = 0;
-	while (i < _genericDeclStore.items.length) {
+	for (let i = 0; i < _genericDeclStore.items.length; i += 1) {
 		if (_genericDeclStore.items[i].key === name) return _genericDeclStore.items[i].fieldTypes;
-		i += 1;
 	}
 	return "";
 }
@@ -422,10 +408,8 @@ export function resetGenericTypeInsts(): void {
 
 export function addGenericTypeInst(baseName: string, typeArgKey: string, mangledName: string, fieldNamesJoined: string, fieldTypesJoined: string): void {
 	// Dedup: skip if same baseName + typeArgKey already exists
-	let i = 0;
-	while (i < _genericTypeInstStore.keys.length) {
+	for (let i = 0; i < _genericTypeInstStore.keys.length; i += 1) {
 		if (_genericTypeInstStore.baseNames[i] === baseName && _genericTypeInstStore.typeArgKeys[i] === typeArgKey) return;
-		i += 1;
 	}
 	_genericTypeInstStore.keys.push(mangledName);
 	_genericTypeInstStore.baseNames.push(baseName);
@@ -459,10 +443,8 @@ export function getGenericTypeInstFieldTypes(idx: number): string {
 }
 
 export function findGenericTypeInstIdx(baseName: string, typeArgKey: string): number {
-	let i = 0;
-	while (i < _genericTypeInstStore.keys.length) {
+	for (let i = 0; i < _genericTypeInstStore.keys.length; i += 1) {
 		if (_genericTypeInstStore.baseNames[i] === baseName && _genericTypeInstStore.typeArgKeys[i] === typeArgKey) return i;
-		i += 1;
 	}
 	return -1;
 }
@@ -471,11 +453,9 @@ export function findGenericTypeInstIdx(baseName: string, typeArgKey: string): nu
 function pipeCount(s: string): number {
 	if (s === "") return 0;
 	let count = 1;
-	let i = 0;
-	while (i < s.length) {
+	for (let i = 0; i < s.length; i += 1) {
 		const ch = s[i];
 		if (ch === "|") count += 1;
-		i += 1;
 	}
 	return count;
 }
@@ -484,25 +464,21 @@ function pipeCount(s: string): number {
 function pipeAt(s: string, idx: number): string {
 	let count = 0;
 	let start = 0;
-	let i = 0;
-	while (i < s.length) {
+	for (let i = 0; i < s.length; i += 1) {
 		const ch = s[i];
 		if (ch === "|") {
 			if (count === idx) {
 				let result = "";
-				let j = start;
-				while (j < i) { result = result + s[j]; j += 1; }
+				for (let j = start; j < i; j += 1) { result = result + s[j]; }
 				return result;
 			}
 			count += 1;
 			start = i + 1;
 		}
-		i += 1;
 	}
 	if (count === idx) {
 		let result = "";
-		let j = start;
-		while (j < s.length) { result = result + s[j]; j += 1; }
+		for (let j = start; j < s.length; j += 1) { result = result + s[j]; }
 		return result;
 	}
 	return "";

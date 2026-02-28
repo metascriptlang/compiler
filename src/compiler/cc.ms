@@ -25,20 +25,18 @@ function getCcachePrefix(): string {
 function resolveRuntime(): string {
 	const binDir = resolve1(dirname(argv[0]));
 	let base = binDir;
-	let i = 0;
-	while (i < 5) {
+	for (let i = 0; i < 5; i += 1) {
 		const candidate = join(base, "runtime");
 		const marker = join(candidate, "runtime.h");
 		if (fileExists(marker)) return candidate;
 		base = dirname(base);
-		i = i + 1;
 	}
 	return "";
 }
 
 // -- Clang invocation --
 
-function buildClangCommand(cFile: string, outBinary: string): string {
+function buildClangCommand(cFile: string, outBinary: string, extraFlags: string): string {
 	let cmd = getCcachePrefix() + "clang";
 	cmd = cmd + " -std=c11 -O2 -w";
 
@@ -52,13 +50,14 @@ function buildClangCommand(cFile: string, outBinary: string): string {
 	cmd = cmd + " " + cFile;
 	cmd = cmd + " -o " + outBinary;
 	cmd = cmd + " -lm";
+	if (extraFlags !== "") cmd = cmd + " " + extraFlags;
 	return cmd;
 }
 
 // Compile a .c file to a native binary via clang.
 // Returns 0 on success, non-zero on failure.
-export function compileC(cFile: string, outBinary: string): number {
-	const cmd = buildClangCommand(cFile, outBinary);
+export function compileC(cFile: string, outBinary: string, extraFlags: string): number {
+	const cmd = buildClangCommand(cFile, outBinary, extraFlags);
 	return exec(cmd);
 }
 

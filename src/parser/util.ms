@@ -130,14 +130,12 @@ export function parseParamList(state: ParserState): string[] {
 
 export function extractParamNames(raw: string[]): string[] {
 	const names: string[] = [];
-	let i = 0;
-	while (i < raw.length) { names.push(raw[i]); i += 2; }
+	for (let i = 0; i < raw.length; i += 2) { names.push(raw[i]); }
 	return names;
 }
 
 export function extractParamTypes(raw: string[]): string[] {
 	const types: string[] = [];
-	let i = 1;
-	while (i < raw.length) { types.push(raw[i]); i += 2; }
+	for (let i = 1; i < raw.length; i += 2) { types.push(raw[i]); }
 	return types;
 }

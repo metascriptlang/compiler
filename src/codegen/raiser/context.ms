@@ -117,23 +117,19 @@ export function declareLocalStr(s: RaiserCompState, name: string, reg: number, i
 }
 
 export function isLocalString(s: RaiserCompState, name: string): boolean {
-	let i = s.locals.items.length - 1;
-	while (i >= 0) {
+	for (let i = s.locals.items.length - 1; i >= 0; i = i - 1) {
 		if (s.locals.items[i].name === name) {
 			return s.locals.items[i].isString;
 		}
-		i = i - 1;
 	}
 	return false;
 }
 
 export function resolveLocal(s: RaiserCompState, name: string): number {
-	let i = s.locals.items.length - 1;
-	while (i >= 0) {
+	for (let i = s.locals.items.length - 1; i >= 0; i = i - 1) {
 		if (s.locals.items[i].name === name) {
 			return s.locals.items[i].reg;
 		}
-		i = i - 1;
 	}
 	return -1;
 }
@@ -197,12 +193,10 @@ export function registerFunc(s: RaiserCompState, name: string, index: number): v
 }
 
 export function resolveFunc(s: RaiserCompState, name: string): number {
-	let i = s.funcMap.items.length - 1;
-	while (i >= 0) {
+	for (let i = s.funcMap.items.length - 1; i >= 0; i = i - 1) {
 		if (s.funcMap.items[i].name === name) {
 			return s.funcMap.items[i].index;
 		}
-		i = i - 1;
 	}
 	return -1;
 }
@@ -211,38 +205,32 @@ export function resolveFunc(s: RaiserCompState, name: string): number {
 // Encodes enum entries as "EnumName.MemberName" → index, reusing RaiserFuncEntry.
 
 export function declareEnum(s: RaiserCompState, enumName: string, members: string[]): void {
-	let i = 0;
-	while (i < members.length) {
+	for (let i = 0; i < members.length; i = i + 1) {
 		const key = enumName + "." + members[i];
 		const entry: RaiserFuncEntry = { name: key, index: i };
 		s.enumMap.items.push(entry);
-		i = i + 1;
 	}
 }
 
 export function resolveEnumMember(s: RaiserCompState, enumName: string, memberName: string): number {
 	const key = enumName + "." + memberName;
-	let i = 0;
-	while (i < s.enumMap.items.length) {
+	for (let i = 0; i < s.enumMap.items.length; i = i + 1) {
 		if (s.enumMap.items[i].name === key) {
 			return s.enumMap.items[i].index;
 		}
-		i = i + 1;
 	}
 	return -1;
 }
 
 export function isEnumName(s: RaiserCompState, name: string): boolean {
 	const prefix = name + ".";
-	let i = 0;
-	while (i < s.enumMap.items.length) {
+	for (let i = 0; i < s.enumMap.items.length; i = i + 1) {
 		const entryName = s.enumMap.items[i].name;
 		// Check if entryName starts with prefix
 		if (entryName.length > prefix.length) {
 			const slice = entryName.slice(0, prefix.length);
 			if (slice === prefix) return true;
 		}
-		i = i + 1;
 	}
 	return false;
 }

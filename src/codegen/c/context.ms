@@ -76,10 +76,8 @@ export function addNewline(b: Builder): void {
 }
 
 export function addIndent(b: Builder): void {
-	let i = 0;
-	while (i < b.indent) {
+	for (let i = 0; i < b.indent; i += 1) {
 		b.buf = b.buf + "  ";
-		i += 1;
 	}
 }
 
@@ -202,10 +200,8 @@ export function emitStmts(p: CProc, s: string): void {
 export function emitStmtsLine(p: CProc, s: string): void {
 	const idx = p.blocks.length - 1;
 	let indent = "";
-	let i = 0;
-	while (i < p.blocks[idx].stmts.indent) {
+	for (let i = 0; i < p.blocks[idx].stmts.indent; i += 1) {
 		indent = indent + "  ";
-		i += 1;
 	}
 	p.blocks[idx].stmts.buf = p.blocks[idx].stmts.buf + indent + s + "\n";
 }
@@ -325,22 +321,18 @@ export function createTypeCache(): TypeCache {
 }
 
 export function typeCacheGet(cache: TypeCache, key: string): string {
-	let i = 0;
-	while (i < cache.entries.length) {
+	for (let i = 0; i < cache.entries.length; i += 1) {
 		if (cache.entries[i].key === key) return cache.entries[i].cTypeName;
-		i += 1;
 	}
 	return "";
 }
 
 export function typeCacheSet(cache: TypeCache, key: string, cTypeName: string): void {
-	let i = 0;
-	while (i < cache.entries.length) {
+	for (let i = 0; i < cache.entries.length; i += 1) {
 		if (cache.entries[i].key === key) {
 			cache.entries[i].cTypeName = cTypeName;
 			return;
 		}
-		i += 1;
 	}
 	const entry: TypeCacheEntry = { key, cTypeName };
 	cache.entries.push(entry);
@@ -368,10 +360,8 @@ export function createStringPool(): StringPool {
 
 // Intern a string — returns C name. Deduplicates.
 export function internString(pool: StringPool, value: string): string {
-	let i = 0;
-	while (i < pool.entries.length) {
+	for (let i = 0; i < pool.entries.length; i += 1) {
 		if (pool.entries[i].value === value) return pool.entries[i].cName;
-		i += 1;
 	}
 	pool.counter += 1;
 	const cName = "TMP_STR_" + pool.counter;
@@ -391,10 +381,8 @@ export function createNameSet(): NameSet {
 }
 
 export function nameSetHas(ns: NameSet, name: string): boolean {
-	let i = 0;
-	while (i < ns.names.length) {
+	for (let i = 0; i < ns.names.length; i += 1) {
 		if (ns.names[i] === name) return true;
-		i += 1;
 	}
 	return false;
 }
@@ -424,11 +412,9 @@ export interface CGen {
 export function createCGen(ctx: CheckerContext, modulePath: string): CGen {
 	// Initialize all 10 sections
 	const sections: Builder[] = [];
-	let i = 0;
-	while (i < 10) {
+	for (let i = 0; i < 10; i += 1) {
 		const b = createBuilder();
 		sections.push(b);
-		i += 1;
 	}
 	return {
 		sections,
@@ -461,15 +447,13 @@ export function moduleTemp(g: CGen): string {
 export function assembleOutput(g: CGen): string {
 	let result = "";
 	let needsSep = false;
-	let i = 0;
-	while (i < g.sections.length) {
+	for (let i = 0; i < g.sections.length; i += 1) {
 		const content = extract(g.sections[i]);
 		if (content.length > 0) {
 			if (needsSep) result = result + "\n";
 			result = result + content;
 			needsSep = true;
 		}
-		i += 1;
 	}
 	return result;
 }

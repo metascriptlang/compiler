@@ -192,12 +192,10 @@ export function typeRelation(formal: Type, actual: Type): TypeRelation {
 export function scoreCandidate(paramTypes: Type[], argTypes: Type[]): number {
 	if (paramTypes.length !== argTypes.length) return -1;
 	let score = 0;
-	let i = 0;
-	while (i < paramTypes.length) {
+	for (let i = 0; i < paramTypes.length; i += 1) {
 		const rel = typeRelation(paramTypes[i], argTypes[i]);
 		if (rel === TypeRelation.None) return -1;
 		score = score + (rel as number);
-		i += 1;
 	}
 	return score;
 }

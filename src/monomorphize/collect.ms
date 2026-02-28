@@ -27,7 +27,7 @@ import {
 	BigIntLiteralData, RegexLiteralData,
 	createNodeAt,
 } from "../ast/node";
-import { Type, TypeKind, unknownType, createFunction, createArray } from "../checker/types";
+import { Type, TypeKind, unknownType, numberType, stringType, booleanType, nullType, createFunction, createArray, unifyType, createUnifyBindings } from "../checker/types";
 import { CheckerContext, extractGenericNames, stripGenFlag } from "../checker/context";
 import { SymbolTable, Symbol, SymbolKind, ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope } from "../checker/symbol";
 import { MonoRegistry, MonoEntry, monoRegister, monoFindEntry, buildTypeArgKeys, monoTypeKey, createMonoRegistry } from "./registry";
@@ -57,10 +57,8 @@ export function createMonoGenericDeclMap(): MonoGenericDeclMap {
 }
 
 function monoFindGenericIndex(declMap: MonoGenericDeclMap, name: string): number {
-	let i = 0;
-	while (i < declMap.names.length) {
+	for (let i = 0; i < declMap.names.length; i += 1) {
 		if (declMap.names[i] === name) return i;
-		i += 1;
 	}
 	return -1;
 }
@@ -79,12 +77,10 @@ function monoGetParamNames(declMap: MonoGenericDeclMap, idx: number): string[] {
 function monoResolveExplicitTypeArgs(typeArgStr: string): Type[] {
 	const result: Type[] = [];
 	const parts = splitTopLevel(typeArgStr, ",");
-	let i = 0;
-	while (i < parts.length) {
+	for (let i = 0; i < parts.length; i += 1) {
 		const name = trim(parts[i]);
 		const resolved = monoResolveTypeName(name);
 		if (resolved !== null) result.push(resolved);
-		i += 1;
 	}
 	return result;
 }
@@ -150,14 +146,12 @@ function monoCheckInstantiatedBody(ctx: CheckerContext, fnNode: Node): void {
 
 	// Resolve param types from concrete annotation strings
 	const paramTypes: Type[] = [];
-	let pi = 0;
-	while (pi < d.fnParamTypes.length) {
+	for (let pi = 0; pi < d.fnParamTypes.length; pi += 1) {
 		if (d.fnParamTypes[pi] !== "") {
 			paramTypes.push(monoResolveAnnotation(d.fnParamTypes[pi]));
 		} else {
 			paramTypes.push(unknownType());
 		}
-		pi += 1;
 	}
 
 	// Resolve return type
@@ -181,12 +175,10 @@ function monoCheckInstantiatedBody(ctx: CheckerContext, fnNode: Node): void {
 
 	// Open scope, define params, check body
 	openScope(ctx.table, ScopeKind.Function);
-	let i = 0;
-	while (i < d.params.length) {
+	for (let i = 0; i < d.params.length; i += 1) {
 		let paramType = unknownType();
 		if (i < paramTypes.length) { paramType = paramTypes[i]; }
 		defineSymbol(ctx.table, makeSymbol(d.params[i], SymbolKind.Parameter, paramType, false));
-		i += 1;
 	}
 
 	if (d.fnBody !== null && d.fnBody.kind === NodeKind.BlockStmt) {
@@ -211,10 +203,8 @@ export function monoCollectDefinitions(program: Node, declMap: MonoGenericDeclMa
 	if (program === null) return;
 	if (program.kind !== NodeKind.Program) return;
 	const pd = program.data as ProgramData;
-	let i = 0;
-	while (i < pd.programStmts.length) {
+	for (let i = 0; i < pd.programStmts.length; i += 1) {
 		monoCollectDefStmt(pd.programStmts[i], declMap);
-		i += 1;
 	}
 }
 
@@ -222,10 +212,8 @@ export function monoCollectDefinitions(program: Node, declMap: MonoGenericDeclMa
 function joinWithComma(parts: string[]): string {
 	if (parts.length === 0) return "";
 	let result = parts[0];
-	let i = 1;
-	while (i < parts.length) {
+	for (let i = 1; i < parts.length; i += 1) {
 		result = result + "," + parts[i];
-		i += 1;
 	}
 	return result;
 }
@@ -567,33 +555,30 @@ function monoProcessCallExpr(
 
 // ===== Type Arg Inference =====
 // Match GenericParam formal params against concrete argument types.
-// Same logic as checkExprPass.ms:inferGenericReturn.
+// Uses unifyType for recursive structural matching (handles Array<T>, Result<T,E>, etc.).
+// Mirrors checkExprPass.ms:inferGenericReturn but returns concrete type args for monomorphization.
 
 function monoInferTypeArgs(fnType: Type, argNodes: Node[], ctx: CheckerContext): Type[] {
+	const bindings = createUnifyBindings();
+
+	for (let i = 0; i < fnType.typeChildren.length && i < argNodes.length; i += 1) {
+		const argType = monoInferArgType(argNodes[i], ctx);
+		if (argType !== null && argType.kind !== TypeKind.Unknown && argType.kind !== TypeKind.Error) {
+			unifyType(fnType.typeChildren[i], argType, bindings);
+		}
+	}
+	// Deduplicate: keep first binding for each unique generic param name
 	const result: Type[] = [];
 	const seenNames: string[] = [];
-
-	let i = 0;
-	while (i < fnType.typeChildren.length && i < argNodes.length) {
-		const formal = fnType.typeChildren[i];
-		if (formal.kind === TypeKind.GenericParam) {
-			// Check if we already bound this param name
-			let found = false;
-			let si = 0;
-			while (si < seenNames.length) {
-				if (seenNames[si] === formal.typeName) { found = true; }
-				si += 1;
-			}
-			if (!found) {
-				// Infer argument type from the symbol table
-				const argType = monoInferArgType(argNodes[i], ctx);
-				if (argType !== null && argType.kind !== TypeKind.Unknown && argType.kind !== TypeKind.Error) {
-					seenNames.push(formal.typeName);
-					result.push(argType);
-				}
-			}
+	for (let bi = 0; bi < bindings.names.length; bi += 1) {
+		let found = false;
+		for (let si = 0; si < seenNames.length; si += 1) {
+			if (seenNames[si] === bindings.names[bi]) { found = true; }
 		}
-		i += 1;
+		if (!found) {
+			seenNames.push(bindings.names[bi]);
+			result.push(bindings.types[bi]);
+		}
 	}
 	return result;
 }
@@ -603,18 +588,10 @@ function monoInferTypeArgs(fnType: Type, argNodes: Node[], ctx: CheckerContext):
 function monoInferArgType(node: Node, ctx: CheckerContext): Type {
 	if (node === null) return null as unknown as Type;
 
-	if (node.kind === NodeKind.NumberLiteral) {
-		return { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
-	}
-	if (node.kind === NodeKind.StringLiteral) {
-		return { kind: TypeKind.String, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
-	}
-	if (node.kind === NodeKind.BooleanLiteral) {
-		return { kind: TypeKind.Boolean, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
-	}
-	if (node.kind === NodeKind.NullLiteral) {
-		return { kind: TypeKind.Null, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
-	}
+	if (node.kind === NodeKind.NumberLiteral) return numberType();
+	if (node.kind === NodeKind.StringLiteral) return stringType();
+	if (node.kind === NodeKind.BooleanLiteral) return booleanType();
+	if (node.kind === NodeKind.NullLiteral) return nullType();
 
 	// Identifier: look up in symbol table
 	if (node.kind === NodeKind.Identifier) {
@@ -628,9 +605,7 @@ function monoInferArgType(node: Node, ctx: CheckerContext): Type {
 		const d = node.data as ArrayLiteralData;
 		if (d.elements.length > 0) {
 			const elemType = monoInferArgType(d.elements[0], ctx);
-			if (elemType !== null) {
-				return { kind: TypeKind.Array, typeName: "", typeNames: [], typeChildren: [], typeReturn: elemType, typeExtra: null as unknown as Type, typeFlags: 0 };
-			}
+			if (elemType !== null) return createArray(elemType);
 		}
 	}
 
@@ -1055,8 +1030,7 @@ function monoSubstAnnotation(annotation: string, paramName: string, concreteType
 	while (i < annotation.length) {
 		let isMatch = true;
 		if (i + paramName.length > annotation.length) { isMatch = false; } else {
-			let pi = 0;
-			while (pi < paramName.length) { if (charAt(annotation, i + pi) !== charAt(paramName, pi)) { isMatch = false; } pi += 1; }
+			for (let pi = 0; pi < paramName.length; pi += 1) { if (charAt(annotation, i + pi) !== charAt(paramName, pi)) { isMatch = false; } }
 		}
 		if (isMatch) {
 			let prevOk = true;
@@ -1088,11 +1062,9 @@ function monoFindFnDeclByName(program: Node, fnName: string): Node {
 	if (program === null) return null as unknown as Node;
 	if (program.kind !== NodeKind.Program) return null as unknown as Node;
 	const pd = program.data as ProgramData;
-	let i = 0;
-	while (i < pd.programStmts.length) {
+	for (let i = 0; i < pd.programStmts.length; i += 1) {
 		const found = monoFindFnDeclInStmt(pd.programStmts[i], fnName);
 		if (found !== null) return found;
-		i += 1;
 	}
 	return null as unknown as Node;
 }
@@ -1130,9 +1102,8 @@ function monoInstantiateAllFixedPoint(
 	let prevCount = 0;
 	let keepGoing = true;
 	while (keepGoing && iteration < 50) {
-		let i = 0;
 		let foundNew = false;
-		while (i < registry.entries.items.length) {
+		for (let i = 0; i < registry.entries.items.length; i += 1) {
 			const entry = registry.entries.items[i];
 			if (!entry.isInstantiated) {
 				const cloned = monoInstantiateEntry(program, entry);
@@ -1142,7 +1113,6 @@ function monoInstantiateAllFixedPoint(
 					monoWalkForCalls(cloned, declMap, registry, ctx);
 				}
 			}
-			i += 1;
 		}
 		if (registry.entries.items.length === prevCount) { keepGoing = false; }
 		else { prevCount = registry.entries.items.length; }
@@ -1156,14 +1126,11 @@ function monoApplySubstitutions(fnNode: Node, entry: MonoEntry): void {
 	const d = fnNode.data as FunctionDeclData;
 	d.fnName = entry.mangledName;
 	d.fnFlags = stripGenFlag(d.fnFlags);
-	let pi = 0;
-	while (pi < entry.genericParamNames.length && pi < entry.concreteTypes.length) {
+	for (let pi = 0; pi < entry.genericParamNames.length && pi < entry.concreteTypes.length; pi += 1) {
 		const paramName = entry.genericParamNames[pi];
 		const concreteName = monoConcreteTypeName(entry.concreteTypes[pi]);
-		let ti = 0;
-		while (ti < d.fnParamTypes.length) { d.fnParamTypes[ti] = monoSubstAnnotation(d.fnParamTypes[ti], paramName, concreteName); ti += 1; }
+		for (let ti = 0; ti < d.fnParamTypes.length; ti += 1) { d.fnParamTypes[ti] = monoSubstAnnotation(d.fnParamTypes[ti], paramName, concreteName); }
 		d.fnReturnType = monoSubstAnnotation(d.fnReturnType, paramName, concreteName);
-		pi += 1;
 	}
 }
 
@@ -1176,11 +1143,9 @@ function monoEmitOneTypeInst(program: Node, idx: number): void {
 	const fieldCount = getGenericTypeInstFieldCount(idx);
 	const fieldNames: string[] = [];
 	const fieldTypes: string[] = [];
-	let fi = 0;
-	while (fi < fieldCount) {
+	for (let fi = 0; fi < fieldCount; fi += 1) {
 		fieldNames.push(getGenericTypeInstFieldNameAt(idx, fi));
 		fieldTypes.push(getGenericTypeInstFieldTypeAt(idx, fi));
-		fi += 1;
 	}
 	const loc: SourceLocation = { line: 0, column: 0 };
 	const data: NodeData = { interfaceName: mangledName, interfaceFields: fieldNames, interfaceFieldTypes: fieldTypes };
@@ -1191,10 +1156,8 @@ function monoEmitOneTypeInst(program: Node, idx: number): void {
 
 function monoEmitTypeInstNodes(program: Node): void {
 	const count = getGenericTypeInstCount();
-	let i = 0;
-	while (i < count) {
+	for (let i = 0; i < count; i += 1) {
 		monoEmitOneTypeInst(program, i);
-		i += 1;
 	}
 	resetGenericTypeInsts();
 }

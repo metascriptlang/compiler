@@ -29,10 +29,8 @@ import { stmtCountAfter, firstStmtKindAfter, fnBodyStmtCount } from "../testUtil
 // Replace var decls with assignments (or drop if no init). Recurse into nested blocks.
 
 function convertVarsInStmts(stmts: Node[], loc: SourceLocation): void {
-	let i = 0;
-	while (i < stmts.length) {
+	for (let i = 0; i < stmts.length; i += 1) {
 		convertVarInNode(stmts, i, loc);
-		i += 1;
 	}
 }
 
@@ -107,15 +105,11 @@ function hoistVarsInBody(body: Node, loc: SourceLocation): void {
 
 	// Build new stmt list: hoisted decls + original stmts
 	const newStmts: Node[] = [];
-	let ni = 0;
-	while (ni < ns.names.length) {
+	for (let ni = 0; ni < ns.names.length; ni += 1) {
 		newStmts.push(makeVarDecl(ns.names[ni], makeNull(loc), DeclKind.Let, loc));
-		ni += 1;
 	}
-	let oi = 0;
-	while (oi < bd.statements.length) {
+	for (let oi = 0; oi < bd.statements.length; oi += 1) {
 		newStmts.push(bd.statements[oi]);
-		oi += 1;
 	}
 	bd.statements = newStmts;
 }

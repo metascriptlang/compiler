@@ -1,6 +1,6 @@
 # C Codegen Gap Analysis
 
-Gaps between our C codegen (~2.8K lines, 8 files) and a production-grade C backend (~10K lines).
+Gaps between our C codegen (~3.2K lines, 9 files) and a production-grade C backend (~10K lines).
 Each item: what's missing, why production compilers have it, why we don't yet, how to close.
 
 ---
@@ -70,17 +70,17 @@ Result: `console.log("hello world")` → `ms_println("hello world")` end-to-end.
 
 ### 5. RTTI / Type Info Tables
 
-**Gap**: No runtime type information. Can't dispatch exceptions by type, can't use `is` operator at runtime.
+**Status: NOT NEEDED (intentional design).**
 
-**Why production compilers have it**: Exception dispatch needs RTTI — `catch (e: SpecificError)` must check `e`'s actual type against `SpecificError` at runtime. Also needed for: `isinstance`/`is` checks, reflection, debugger type display. Production compilers emit `TNimType` structs with name, size, field info, parent chain.
+MetaScript's architecture eliminates all use cases that require RTTI:
 
-**Why we don't**: Our try/catch uses setjmp/longjmp (statements.ms:175-206) but catches ALL exceptions — no type filtering. We haven't needed `is` checks yet because the type system is static.
+- **Exception handling**: Untyped catch-all via setjmp/longjmp. Parser accepts `catch (e: Type)` but **discards the type annotation** (`skipOptionalType` in errorHandling.ms). TryCatchStmtData has no `catchType` field.
+- **No `instanceof`/`is` operator**: No runtime type test exists in lexer, parser, or checker.
+- **No virtual dispatch**: `extends` is parsed but checker ignores it — no method overriding, no vtables, no polymorphic call sites.
+- **No tracing GC**: Deterministic RC (Phase 4 DRC) handles all lifetime statically — no type info needed for collection or cycle detection.
+- **Generics monomorphized**: Compile-time specialization, zero runtime generic dispatch.
 
-**How to close**:
-1. Add `TypeInfo` struct emission in types.ms (name + id + parent pointer)
-2. Emit type info table in CSection.Types for each class/interface
-3. Exception dispatch: compare `curr_exception->typeInfo->id` against target
-~150 lines in types.ms + 50 lines in statements.ms.
+**Revisit only if MetaScript adds**: typed exception filtering (`catch (e: FileError)`), virtual method dispatch, reflection API, or tracing GC.
 
 ---
 
@@ -289,25 +289,25 @@ Tier 5 (first-write sink optimization) deferred — requires DrcContext struct c
 | 2 | ~~Pointer accessor (-> vs .)~~ | ~~DONE~~ | ~~86 lines~~ | ~~Completed~~ |
 | 3 | @builtin expansion | Blocking | ~200 lines | No |
 | 4 | ~~std/core.ms auto-import~~ | ~~DONE~~ | ~~~230 lines~~ | ~~Completed~~ |
-| 5 | RTTI / type info | Functional | ~200 lines | No |
+| 5 | RTTI / type info | N/A | 0 lines | Intentionally omitted (static type system) |
 | 6 | Bounds checking | Functional | ~20-100 lines | No |
 | 7 | Overflow checking | Functional | ~80 lines | No |
 | 8 | String concat optimization | Functional | ~80 lines | No |
-| 9 | Missing expression kinds | Partial | ~130 lines | Rework: 15, 16 |
+| 9 | ~~Missing expression kinds~~ | ~~DONE~~ | ~~All 15 kinds~~ | ~~Completed~~ |
 | 10 | Inline arithmetic magic | Optimization | ~30 lines | No |
 | 11 | Sequence construction | Optimization | ~90 lines | No |
 | 12 | NRVO | Optimization | ~100 lines | No |
 | 13 | Multi-module C output | Deferred | ~200 lines | Needs multi-module checker |
 | 14 | Write barriers | N/A | 0 lines | Intentionally omitted (DRC) |
 | 15 | ~~Move marker → DRC~~ | ~~DONE~~ | ~~200 lines~~ | ~~Completed~~ |
-| 16 | Lambda lifting all FunctionExpr | Functional | ~80 lines | No |
+| 16 | ~~Lambda lifting all FunctionExpr~~ | ~~DONE~~ | ~~482 lines~~ | ~~Completed~~ |
 | 17 | openArray (ptr, len) convention | Functional | ~200 lines | Needs runtime array struct |
 
 **Gap #9 status**: ~~All 5 expression kinds done.~~ UpdateExpr correct, NewExpr acceptable (debt), SpreadExpr correct, ~~MoveExpr → Gap 15 (DONE)~~, ~~FunctionExpr → Gap 16 (DONE)~~. openArray → Gap 17 (separate feature).
 
-**Total to close all gaps**: ~1800-2100 lines (excluding generic monomorphization checker work)
-**Current codegen**: ~2800 lines across 8 files
-**Target**: ~5000 lines for production parity
+**Total to close remaining gaps**: ~1000-1200 lines (gaps 3, 5, 6, 7, 8, 10, 11, 12, 13, 17)
+**Current codegen**: ~3200 lines across 9 files (+ ~860 lines pre-codegen transforms)
+**Target**: ~4500 lines for production parity
 
 ---
 

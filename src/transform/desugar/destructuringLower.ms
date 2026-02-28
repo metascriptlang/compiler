@@ -28,8 +28,7 @@ function expandArrayRet(
 ): Node[] {
 	const apd = pattern.data as ArrayPatternData;
 	const out: Node[] = [];
-	let i = 0;
-	while (i < apd.patternElements.length) {
+	for (let i = 0; i < apd.patternElements.length; i += 1) {
 		const elem = apd.patternElements[i];
 
 		// Rest element: last + hasRestElement
@@ -41,7 +40,6 @@ function expandArrayRet(
 				const sliceCall = makeCall(sliceCallee, [sliceArg], loc);
 				out.push(makeVarDecl(id.name, sliceCall, declKind, loc));
 			}
-			i += 1;
 			continue;
 		}
 
@@ -53,8 +51,6 @@ function expandArrayRet(
 				out.push(makeVarDecl(id.name, access, declKind, loc));
 			}
 		}
-
-		i += 1;
 	}
 	return out;
 }

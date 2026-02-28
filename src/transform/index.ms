@@ -60,34 +60,35 @@ import { lowerUpdateExpr } from "./lowering/updateExprLower";
 import { lowerDCE } from "./analysis/dce";
 import { liftDestructors } from "./lowering/destructorLifting";
 
-export function transformProgram(program: Node, checkerCtx: CheckerContext): Node {
+export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
+	ctx.jsBackend = jsBackend;
 	let result = lowerDefer(program, ctx);
 	result = lowerConstFold(result, ctx);
-	result = lowerStringConcatFlatten(result, ctx);
+	if (!jsBackend) { result = lowerStringConcatFlatten(result, ctx); }
 	result = lowerOptionalChain(result, ctx);
 	result = lowerNullishCoalesce(result, ctx);
 	result = lowerTypeCoercion(result, ctx);
-	result = lowerStringTruthiness(result, ctx);
+	if (!jsBackend) { result = lowerStringTruthiness(result, ctx); }
 	result = lowerDestructuring(result, ctx);
 	result = lowerSpread(result, ctx);
-	result = lowerArrayMethodInline(result, ctx);
-	result = lowerForLoop(result, ctx);
-	result = lowerForOf(result, ctx);
+	if (!jsBackend) { result = lowerArrayMethodInline(result, ctx); }
+	if (!jsBackend) { result = lowerForLoop(result, ctx); }
+	if (!jsBackend) { result = lowerForOf(result, ctx); }
 	result = lowerResult(result, ctx);
 	result = lowerResultFieldCheck(result, ctx);
 	result = lowerMatch(result, ctx);
-	result = lowerTailCall(result, ctx);
-	result = lowerAsync(result, ctx);
-	result = lowerGenerator(result, ctx);
-	result = lowerVarHoist(result, ctx);
-	result = lowerLambda(result, ctx);
-	result = lowerRvalue(result, ctx);
+	if (!jsBackend) { result = lowerTailCall(result, ctx); }
+	if (!jsBackend) { result = lowerAsync(result, ctx); }
+	if (!jsBackend) { result = lowerGenerator(result, ctx); }
+	if (!jsBackend) { result = lowerVarHoist(result, ctx); }
+	if (!jsBackend) { result = lowerLambda(result, ctx); }
+	if (!jsBackend) { result = lowerRvalue(result, ctx); }
 	result = lowerExtensionMethod(result, ctx);
 	result = lowerSubscript(result, ctx);
-	result = lowerConditionalExpr(result, ctx);
-	result = lowerUpdateExpr(result, ctx);
+	if (!jsBackend) { result = lowerConditionalExpr(result, ctx); }
+	if (!jsBackend) { result = lowerUpdateExpr(result, ctx); }
 	result = lowerDCE(result, ctx);
-	result = liftDestructors(result, ctx);
+	if (!jsBackend) { result = liftDestructors(result, ctx); }
 	return result;
 }

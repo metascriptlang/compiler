@@ -57,11 +57,9 @@ export interface RaiserVM {
 
 export function createVM(mod: RaiserModule): RaiserVM {
 	const slots: RaiserValue[] = [];
-	let i = 0;
-	while (i < 256) {
+	for (let i = 0; i < 256; i = i + 1) {
 		const nil = raiserNil();
 		slots.push(nil);
-		i = i + 1;
 	}
 	const regs: RaiserRegFile = { slots };
 	const nilVal = raiserNil();
@@ -222,11 +220,9 @@ function vmHandleCallIndirect(vm: RaiserVM, inst: RaiserInstruction): void {
 function vmHandleNewArray(vm: RaiserVM, inst: RaiserInstruction): void {
 	const handle = heapAllocArray(vm.arrayHeap);
 	const elemCount = inst.b;
-	let i = 0;
-	while (i < elemCount) {
+	for (let i = 0; i < elemCount; i = i + 1) {
 		const elem = getReg(vm, vm.baseReg + inst.a + 1 + i);
 		heapArrayPush(vm.arrayHeap, handle, elem);
-		i = i + 1;
 	}
 	const arrVal = raiserArray(handle);
 	setReg(vm, vm.baseReg + inst.a, arrVal);

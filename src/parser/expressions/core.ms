@@ -128,11 +128,9 @@ function parseExprWithPrec(state: ParserState, minPrec: number): ExprResult {
 			skipTypeAnnotation(state);
 			const asEnd = state.position;
 			let asType = "";
-			let ati = asStart;
-			while (ati < asEnd) {
+			for (let ati = asStart; ati < asEnd; ati += 1) {
 				if (ati > asStart) { asType = asType + " "; }
 				asType = asType + state.tokens[ati].value;
-				ati += 1;
 			}
 			left = createNode(NodeKind.TypeAssertion, { asExpr: left, asType }, token);
 			continue;

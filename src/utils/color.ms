@@ -2,9 +2,38 @@
 //
 // Usage: red("error"), bold(green("ok")), dim("hint")
 // Composable: bold(red("fatal")) → "\x1b[1m\x1b[31mfatal\x1b[0m\x1b[0m"
-// Auto-detect: honors NO_COLOR env var (https://no-color.org)
+// Honors NO_COLOR env var (https://no-color.org) and --colors flag
 
+import { getEnv } from "std/process";
 import { test, check, testGroup } from "std/testing";
+
+// ===== Color enable/disable =====
+
+// Wrap in interface to avoid DRC module-level let string reassignment bug
+interface ColorState {
+	enabled: boolean;
+	initialized: boolean;
+}
+
+const state: ColorState = { enabled: true, initialized: false };
+
+function isEnabled(): boolean {
+	if (!state.initialized) {
+		state.initialized = true;
+		// Respect NO_COLOR (https://no-color.org)
+		const noColor = getEnv("NO_COLOR");
+		if (noColor.length > 0) {
+			state.enabled = false;
+		}
+	}
+	return state.enabled;
+}
+
+// Set color mode explicitly (called from CLI --colors flag)
+export function setColorEnabled(enabled: boolean): void {
+	state.enabled = enabled;
+	state.initialized = true;
+}
 
 // ===== ANSI escape sequences =====
 
@@ -14,6 +43,7 @@ const RESET = "\x1b[0m";
 // ===== Core wrap function =====
 
 function wrap(code: string, text: string): string {
+	if (!isEnabled()) return text;
 	return ESC + code + "m" + text + RESET;
 }
 

@@ -1,7 +1,7 @@
 // MetaScript Compiler CLI — Argument parsing and option types
 
 import { argv, exit } from "std/process";
-import { error, bold, cyan } from "../utils/color";
+import { error, bold, cyan, setColorEnabled } from "../utils/color";
 
 // -- Types --
 
@@ -15,6 +15,9 @@ export interface CliOptions {
 	inputFile: string;
 	target: Target;
 	outputPath: string;
+	showTime: boolean;
+	verbose: boolean;
+	errorMax: number;
 }
 
 // -- Argument parsing --
@@ -31,6 +34,9 @@ export function parseArgs(): CliOptions {
 		inputFile: "",
 		target: Target.C,
 		outputPath: "",
+		showTime: false,
+		verbose: false,
+		errorMax: 0,
 	};
 
 	if (argv.length < 2) return opts;
@@ -57,8 +63,7 @@ export function parseArgs(): CliOptions {
 	opts.command = command;
 
 	// Parse remaining args
-	let i = argStart + 1;
-	while (i < argv.length) {
+	for (let i = argStart + 1; i < argv.length; i += 1) {
 		const arg = argv[i];
 		if (arg.startsWith("--target=")) {
 			const targetStr = arg.slice(9, arg.length);
@@ -74,13 +79,22 @@ export function parseArgs(): CliOptions {
 			opts.outputPath = arg.slice(9, arg.length);
 		} else if (arg.startsWith("-o=")) {
 			opts.outputPath = arg.slice(3, arg.length);
+		} else if (arg === "--time" || arg === "-t") {
+			opts.showTime = true;
+		} else if (arg === "--verbose") {
+			opts.verbose = true;
+		} else if (arg.startsWith("--error-max=")) {
+			opts.errorMax = parseInt(arg.slice(12, arg.length));
+		} else if (arg === "--colors=on") {
+			setColorEnabled(true);
+		} else if (arg === "--colors=off" || arg === "--no-color") {
+			setColorEnabled(false);
 		} else if (!arg.startsWith("-")) {
 			opts.inputFile = arg;
 		} else {
 			console.log(error("error") + ": unknown option '" + bold(arg) + "'");
 			exit(1);
 		}
-		i += 1;
 	}
 
 	return opts;

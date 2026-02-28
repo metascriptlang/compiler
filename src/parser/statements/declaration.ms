@@ -86,8 +86,7 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 
 function stripFirstParam(arr: string[]): string[] {
 	const result: string[] = [];
-	let i = 1;
-	while (i < arr.length) { result.push(arr[i]); i += 1; }
+	for (let i = 1; i < arr.length; i += 1) { result.push(arr[i]); }
 	return result;
 }
 
@@ -357,11 +356,9 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 	skipTypeAnnotation(state);
 	const typeEnd = state.position;
 	let aliasType = "";
-	let ti = typeStart;
-	while (ti < typeEnd) {
+	for (let ti = typeStart; ti < typeEnd; ti += 1) {
 		if (ti > typeStart) { aliasType = aliasType + " "; }
 		aliasType = aliasType + state.tokens[ti].value;
-		ti += 1;
 	}
 	consumeSemicolon(state);
 
@@ -492,12 +489,10 @@ export function parseInterfaceDecl(state: ParserState): NodeResult {
 	if (ifaceIsGeneric) {
 		let fnJoined = "";
 		let ftJoined = "";
-		let fi = 0;
-		while (fi < fields.length) {
+		for (let fi = 0; fi < fields.length; fi += 1) {
 			if (fi > 0) { fnJoined = fnJoined + "|"; ftJoined = ftJoined + "|"; }
 			fnJoined = fnJoined + fields[fi];
 			if (fi < fieldTypes.length) { ftJoined = ftJoined + fieldTypes[fi]; }
-			fi += 1;
 		}
 		updateGenericDeclFields(nameToken.value, fnJoined, ftJoined);
 	}
@@ -582,8 +577,7 @@ export function parseClassDecl(state: ParserState): NodeResult {
 	if (classIsGeneric) {
 		let fnJoined = "";
 		let ftJoined = "";
-		let mi = 0;
-		while (mi < members.length) {
+		for (let mi = 0; mi < members.length; mi += 1) {
 			const mk = members[mi].kind;
 			if (mk === NodeKind.PropertyDecl) {
 				const pd = members[mi].data as PropertyDeclData;
@@ -591,7 +585,6 @@ export function parseClassDecl(state: ParserState): NodeResult {
 				fnJoined = fnJoined + pd.propName;
 				ftJoined = ftJoined + pd.propType;
 			}
-			mi += 1;
 		}
 		updateGenericDeclFields(nameToken.value, fnJoined, ftJoined);
 	}
@@ -1036,11 +1029,9 @@ export function parseDistinctTypeDecl(state: ParserState): NodeResult {
 	skipTypeAnnotation(state);
 	const dTypeEnd = state.position;
 	let distinctAliasType = "";
-	let di = dTypeStart;
-	while (di < dTypeEnd) {
+	for (let di = dTypeStart; di < dTypeEnd; di += 1) {
 		if (di > dTypeStart) { distinctAliasType = distinctAliasType + " "; }
 		distinctAliasType = distinctAliasType + state.tokens[di].value;
-		di += 1;
 	}
 	consumeSemicolon(state);
 

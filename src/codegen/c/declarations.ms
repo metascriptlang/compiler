@@ -62,12 +62,10 @@ function genFunctionDecl(g: CGen, node: Node): void {
 
 	// Build parameter list
 	let paramList = "";
-	let i = 0;
-	while (i < d.params.length) {
+	for (let i = 0; i < d.params.length; i += 1) {
 		if (i > 0) paramList = paramList + ", ";
 		const pType = mapParamType(d.fnParamTypes, i);
 		paramList = paramList + pType + " " + safeName(d.params[i]);
-		i += 1;
 	}
 	if (d.params.length === 0) paramList = "void";
 
@@ -105,10 +103,8 @@ function genEnumDecl(g: CGen, node: Node): void {
 	// Emit as typedef + #define constants
 	const types = sec(g, CSection.Types);
 	addLine(types, "typedef int32_t " + name + ";");
-	let i = 0;
-	while (i < d.enumMembers.length) {
+	for (let i = 0; i < d.enumMembers.length; i += 1) {
 		addLine(types, "#define " + name + "_" + d.enumMembers[i] + " (((" + name + ")" + i + "))");
-		i += 1;
 	}
 	addNewline(types);
 }
@@ -129,12 +125,10 @@ function genInterfaceDecl(g: CGen, node: Node): void {
 	// Full struct definition
 	const types = sec(g, CSection.Types);
 	addLine(types, "struct " + name + " {");
-	let i = 0;
-	while (i < d.interfaceFields.length) {
+	for (let i = 0; i < d.interfaceFields.length; i += 1) {
 		const fieldName = mangleFieldName(d.interfaceFields[i]);
 		const fieldType = mapTypeAnnotation(d.interfaceFieldTypes[i]);
 		addLine(types, "  " + fieldType + " " + fieldName + ";");
-		i += 1;
 	}
 	addLine(types, "};");
 	addNewline(types);
@@ -158,8 +152,7 @@ function genClassDecl(g: CGen, node: Node): void {
 	addLine(types, "struct " + name + " {");
 	addLine(types, "  int32_t _rc;");
 	// Emit properties from classBody
-	let i = 0;
-	while (i < d.classBody.length) {
+	for (let i = 0; i < d.classBody.length; i += 1) {
 		const member = d.classBody[i];
 		if (member.kind === NodeKind.PropertyDecl) {
 			const pd = member.data as PropertyDeclData;
@@ -167,21 +160,18 @@ function genClassDecl(g: CGen, node: Node): void {
 			const fieldName = mangleFieldName(pd.propName);
 			addLine(types, "  " + fieldType + " " + fieldName + ";");
 		}
-		i += 1;
 	}
 	addLine(types, "};");
 	addNewline(types);
 
 	// Emit methods as free functions with first param being the class pointer
-	i = 0;
-	while (i < d.classBody.length) {
+	for (let i = 0; i < d.classBody.length; i += 1) {
 		const member = d.classBody[i];
 		if (member.kind === NodeKind.MethodDecl) {
 			genMethodAsFunction(g, member, name);
 		} else if (member.kind === NodeKind.ConstructorDecl) {
 			genConstructor(g, member, name);
 		}
-		i += 1;
 	}
 }
 
@@ -194,12 +184,10 @@ function genMethodAsFunction(g: CGen, node: Node, className: string): void {
 
 	// Build params: (ClassName* self, ...)
 	let paramList = className + "* self";
-	let i = 0;
-	while (i < d.methodParams.length) {
+	for (let i = 0; i < d.methodParams.length; i += 1) {
 		paramList = paramList + ", ";
 		const pType = mapParamType(d.methodParamTypes, i);
 		paramList = paramList + pType + " " + safeName(d.methodParams[i]);
-		i += 1;
 	}
 
 	const proto = cRetType + " " + methodName + "(" + paramList + ")";
@@ -227,12 +215,10 @@ function genConstructor(g: CGen, node: Node, className: string): void {
 
 	// Build params
 	let paramList = "";
-	let i = 0;
-	while (i < d.ctorParams.length) {
+	for (let i = 0; i < d.ctorParams.length; i += 1) {
 		if (i > 0) paramList = paramList + ", ";
 		const pType = mapParamType(d.ctorParamTypes, i);
 		paramList = paramList + pType + " " + safeName(d.ctorParams[i]);
-		i += 1;
 	}
 	if (d.ctorParams.length === 0) paramList = "void";
 
@@ -340,10 +326,8 @@ function declOutput(input: string): string {
 	const prog = pr.value;
 	const pd = prog.data as ProgramData;
 	const g = createCGen(null as unknown as CheckerContext, "test");
-	let i = 0;
-	while (i < pd.programStmts.length) {
+	for (let i = 0; i < pd.programStmts.length; i += 1) {
 		genDecl(g, pd.programStmts[i]);
-		i += 1;
 	}
 	return assembleOutput(g);
 }

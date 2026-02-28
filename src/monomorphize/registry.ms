@@ -68,20 +68,16 @@ export function monoTypeKey(t: Type): string {
 	}
 	if (t.kind === TypeKind.Function) {
 		let key = "fn";
-		let i = 0;
-		while (i < t.typeChildren.length) {
+		for (let i = 0; i < t.typeChildren.length; i += 1) {
 			key = key + "_" + monoTypeKey(t.typeChildren[i]);
-			i += 1;
 		}
 		key = key + "_ret_" + monoTypeKey(t.typeReturn);
 		return key;
 	}
 	if (t.kind === TypeKind.Union) {
 		let key = "union";
-		let i = 0;
-		while (i < t.typeChildren.length) {
+		for (let i = 0; i < t.typeChildren.length; i += 1) {
 			key = key + "_" + monoTypeKey(t.typeChildren[i]);
-			i += 1;
 		}
 		return key;
 	}
@@ -95,13 +91,11 @@ export function monoTypeKey(t: Type): string {
 // pair<number, string> → "pair__number_string"
 export function mangleMonoName(baseName: string, concreteTypes: Type[]): string {
 	let result = baseName + "__";
-	let i = 0;
-	while (i < concreteTypes.length) {
+	for (let i = 0; i < concreteTypes.length; i += 1) {
 		if (i > 0) {
 			result = result + "_";
 		}
 		result = result + monoTypeKey(concreteTypes[i]);
-		i += 1;
 	}
 	return result;
 }
@@ -111,10 +105,8 @@ export function mangleMonoName(baseName: string, concreteTypes: Type[]): string 
 // Compare two type arg key arrays for exact match (Nim: sameInstantiation)
 function sameTypeArgKeys(a: string[], b: string[]): boolean {
 	if (a.length !== b.length) return false;
-	let i = 0;
-	while (i < a.length) {
+	for (let i = 0; i < a.length; i += 1) {
 		if (a[i] !== b[i]) return false;
-		i += 1;
 	}
 	return true;
 }
@@ -122,10 +114,8 @@ function sameTypeArgKeys(a: string[], b: string[]): boolean {
 // Build typeArgKeys from concrete types
 export function buildTypeArgKeys(concreteTypes: Type[]): string[] {
 	const keys: string[] = [];
-	let i = 0;
-	while (i < concreteTypes.length) {
+	for (let i = 0; i < concreteTypes.length; i += 1) {
 		keys.push(monoTypeKey(concreteTypes[i]));
-		i += 1;
 	}
 	return keys;
 }
@@ -135,13 +125,11 @@ export function buildTypeArgKeys(concreteTypes: Type[]): string[] {
 // Find an existing entry for this generic + type args combination.
 // Returns the entry or null (Nim: genericCacheGet)
 export function monoFindEntry(registry: MonoRegistry, genericName: string, typeArgKeys: string[]): MonoEntry {
-	let i = 0;
-	while (i < registry.entries.items.length) {
+	for (let i = 0; i < registry.entries.items.length; i += 1) {
 		const entry = registry.entries.items[i];
 		if (entry.genericName === genericName && sameTypeArgKeys(typeArgKeys, buildTypeArgKeys(entry.concreteTypes))) {
 			return entry;
 		}
-		i += 1;
 	}
 	return null as unknown as MonoEntry;
 }

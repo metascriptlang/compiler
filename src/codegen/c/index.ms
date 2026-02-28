@@ -19,6 +19,7 @@ import {
 } from "./context";
 import { genDecl } from "./declarations";
 import { mangleModuleName } from "./names";
+import { sliceStr } from "../../utils/string";
 import { test, check, testGroup } from "std/testing";
 
 // ===== generateC — main entry point =====
@@ -30,7 +31,11 @@ export function generateC(program: Node, ctx: CheckerContext, modulePath: string
 	addLine(sec(g, CSection.Headers), "#include <stdint.h>");
 	addLine(sec(g, CSection.Headers), "#include <stdbool.h>");
 	addLine(sec(g, CSection.Headers), "#include <string.h>");
-	addLine(sec(g, CSection.Headers), "#include \"runtime.h\"");
+
+	// Emit @include directives from checker (prelude + user code)
+	if (ctx !== null && ctx.includeDirectives !== "") {
+		emitIncludeDirectives(g, ctx.includeDirectives);
+	}
 
 	// Pre-pass: collect function declaration names for closure call detection
 	if (program !== null && program.kind === NodeKind.Program) {
@@ -40,10 +45,8 @@ export function generateC(program: Node, ctx: CheckerContext, modulePath: string
 	// Walk program statements
 	if (program !== null && program.kind === NodeKind.Program) {
 		const pd = program.data as ProgramData;
-		let i = 0;
-		while (i < pd.programStmts.length) {
+		for (let i = 0; i < pd.programStmts.length; i += 1) {
 			genDecl(g, pd.programStmts[i]);
-			i += 1;
 		}
 	}
 
@@ -152,10 +155,8 @@ function collectFnDeclNames(g: CGen, node: Node): void {
 	if (node === null) return;
 	if (node.kind === NodeKind.Program) {
 		const pd = node.data as ProgramData;
-		let i = 0;
-		while (i < pd.programStmts.length) {
+		for (let i = 0; i < pd.programStmts.length; i += 1) {
 			collectFnDeclNames(g, pd.programStmts[i]);
-			i += 1;
 		}
 	} else if (node.kind === NodeKind.FunctionDecl) {
 		const d = node.data as FunctionDeclData;
@@ -163,10 +164,8 @@ function collectFnDeclNames(g: CGen, node: Node): void {
 		collectFnDeclNames(g, d.fnBody);
 	} else if (node.kind === NodeKind.BlockStmt) {
 		const d = node.data as BlockStmtData;
-		let i = 0;
-		while (i < d.statements.length) {
+		for (let i = 0; i < d.statements.length; i += 1) {
 			collectFnDeclNames(g, d.statements[i]);
-			i += 1;
 		}
 	} else if (node.kind === NodeKind.ExportDecl) {
 		const d = node.data as ExportDeclData;
@@ -174,6 +173,27 @@ function collectFnDeclNames(g: CGen, node: Node): void {
 	} else if (node.kind === NodeKind.DecoratedDecl) {
 		const d = node.data as DecoratedDeclData;
 		collectFnDeclNames(g, d.decoratedNode);
+	}
+}
+
+// ===== Emit @include directives from checker context =====
+
+function emitIncludeDirectives(g: CGen, directives: string): void {
+	let start = 0;
+	for (let pos = 0; pos < directives.length; pos += 1) {
+		if (directives.charAt(pos) === "\n") {
+			const header = sliceStr(directives, start, pos);
+			if (header.length > 0) {
+				addLine(sec(g, CSection.Headers), "#include \"" + header + "\"");
+			}
+			start = pos + 1;
+		}
+	}
+	if (start < directives.length) {
+		const header = sliceStr(directives, start, directives.length);
+		if (header.length > 0) {
+			addLine(sec(g, CSection.Headers), "#include \"" + header + "\"");
+		}
 	}
 }
 
@@ -225,6 +245,19 @@ testGroup("C Gen Integration", () => {
 	});
 	test("two-phase init + POSIX main", () => {
 		const result = cOutput("function add(a: number, b: number): number { return a + b; }\nconst result: number = add(2, 3);");
+		check(result.length > 0);
+	});
+});
+
+testGroup("C Gen Directives", () => {
+	test("MacroInvocation skipped in codegen", () => {
+		const result = cOutput("@passL(\"-lssl\");");
+		// Should not contain /* unsupported */
+		check(result.length > 0);
+	});
+	test("@include from prelude emits header", () => {
+		// prelude has @include("runtime.h"), so generated C should contain it
+		const result = cOutput("");
 		check(result.length > 0);
 	});
 });

@@ -129,9 +129,7 @@ function lowerMatchExprInReturn(stmt: Node, ctx: TransformContext): Node[] {
 function buildIfChain(cases: Node[], tempName: string, loc: Node["location"], mode: string, varName: string): Node {
 	let elseNode = makeBlock([], loc);
 
-	let i = cases.length;
-	while (i > 0) {
-		i -= 1;
+	for (let i = cases.length - 1; i >= 0; i -= 1) {
 		const caseNode = cases[i];
 		const caseData = caseNode.data as MatchCaseData;
 
@@ -206,11 +204,9 @@ function getBindingName(patterns: Node[]): string {
 // Build condition from pattern list: $m === p1 || $m === p2 || ...
 function buildPatternCondition(patterns: Node[], tempName: string, loc: Node["location"]): Node {
 	let cond = makePatternTest(patterns[0], tempName, loc);
-	let i = 1;
-	while (i < patterns.length) {
+	for (let i = 1; i < patterns.length; i += 1) {
 		const nextTest = makePatternTest(patterns[i], tempName, loc);
 		cond = makeBinary(cond, "||", nextTest, loc);
-		i += 1;
 	}
 	return cond;
 }

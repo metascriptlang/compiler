@@ -211,15 +211,13 @@ export function emitObjectLiteral(gen: JSGenerator, node: Node): void {
 		return;
 	}
 	emit(gen, "{ ");
-	let i = 0;
-	while (i < d.keys.length) {
+	for (let i = 0; i < d.keys.length; i += 1) {
 		if (i > 0) emit(gen, ", ");
 		emit(gen, d.keys[i]);
 		emit(gen, ": ");
 		if (i < d.properties.length) {
 			emitNode(gen, d.properties[i]);
 		}
-		i += 1;
 	}
 	emit(gen, " }");
 }
@@ -237,7 +235,9 @@ export function emitArrayLiteral(gen: JSGenerator, node: Node): void {
 
 export function emitArrowFunction(gen: JSGenerator, node: Node): void {
 	const d = node.data as ArrowFunctionData;
-	if (d.arrowParams.length === 1) {
+	const isAsync = d.arrowFlags === "async" || d.arrowFlags === "async_generator";
+	if (isAsync) { emit(gen, "async "); }
+	if (d.arrowParams.length === 1 && !isAsync) {
 		emit(gen, d.arrowParams[0]);
 	} else {
 		emit(gen, "(");
@@ -252,7 +252,10 @@ export function emitArrowFunction(gen: JSGenerator, node: Node): void {
 
 export function emitFunctionExpr(gen: JSGenerator, node: Node): void {
 	const d = node.data as FunctionExprData;
-	emit(gen, "function(");
+	if (d.funcExprFlags === "async") { emit(gen, "async function("); }
+	else if (d.funcExprFlags === "generator") { emit(gen, "function*("); }
+	else if (d.funcExprFlags === "async_generator") { emit(gen, "async function*("); }
+	else { emit(gen, "function("); }
 	emitJoinedStrings(gen, d.funcExprParams, ", ");
 	emit(gen, ") ");
 	emitNode(gen, d.funcExprBody);

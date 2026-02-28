@@ -177,11 +177,9 @@ function genEnumType(g: CGen, t: Type): string {
 	addLine(sec(g, CSection.Types), "typedef int32_t " + name + ";");
 
 	// Emit enum constants
-	let i = 0;
-	while (i < t.typeNames.length) {
+	for (let i = 0; i < t.typeNames.length; i += 1) {
 		const memberName = name + "_" + mangle(t.typeNames[i]);
 		addLine(sec(g, CSection.Types), "#define " + memberName + " " + i);
-		i += 1;
 	}
 	addNewline(sec(g, CSection.Types));
 
@@ -217,15 +215,13 @@ function genObjectType(g: CGen, t: Type): string {
 	}
 
 	// Emit fields
-	let i = 0;
-	while (i < t.typeNames.length) {
+	for (let i = 0; i < t.typeNames.length; i += 1) {
 		const fieldName = mangleFieldName(t.typeNames[i]);
 		const fieldType = match (i < t.typeChildren.length) {
 			true => getTypeDesc(g, t.typeChildren[i]),
 			_ => "void",
 		};
 		addLine(b, fieldType + " " + fieldName + ";");
-		i += 1;
 	}
 
 	b.indent -= 1;

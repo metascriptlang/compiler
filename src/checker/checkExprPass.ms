@@ -15,9 +15,10 @@ import {
 	Type, TypeKind,
 	unknownType, numberType, stringType, booleanType,
 	voidType, nullType, errorType,
-	createArray, createFunction, substituteType,
+	createArray, createFunction, substituteType, instantiateGeneric,
 	isNumeric, isStringType, isCallable, getReturnType, getElementType, getProperty,
 	typeNameOf,
+	unifyType, createUnifyBindings, hasGenericParams,
 } from "./types";
 import {
 	Symbol, SymbolKind, ScopeKind,
@@ -203,8 +204,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node): Type {
 	}
 	// Check argument types + infer generic return
 	if (calleeType.kind === TypeKind.Function) {
-		let pi = 0;
-		while (pi < calleeType.typeChildren.length && pi < argTypes.length) {
+		for (let pi = 0; pi < calleeType.typeChildren.length && pi < argTypes.length; pi += 1) {
 			const paramType = calleeType.typeChildren[pi];
 			if (paramType.kind !== TypeKind.Unknown && paramType.kind !== TypeKind.GenericParam
 				&& argTypes[pi].kind !== TypeKind.Unknown && argTypes[pi].kind !== TypeKind.Error) {
@@ -212,7 +212,6 @@ function checkCallExpr(ctx: CheckerContext, node: Node): Type {
 					addError(ctx, "Argument type mismatch in function call");
 				}
 			}
-			pi += 1;
 		}
 		return inferGenericReturn(calleeType, argTypes);
 	}
@@ -222,13 +221,16 @@ function checkCallExpr(ctx: CheckerContext, node: Node): Type {
 export function inferGenericReturn(fnType: Type, argTypes: Type[]): Type {
 	let returnType = fnType.typeReturn;
 	if (returnType === null) return unknownType();
-	let i = 0;
-	while (i < fnType.typeChildren.length && i < argTypes.length) {
-		const formal = fnType.typeChildren[i];
-		if (formal.kind === TypeKind.GenericParam && argTypes[i].kind !== TypeKind.Unknown) {
-			returnType = substituteType(returnType, formal.typeName, argTypes[i]);
+	// Collect all bindings from all params via unification (handles nested generics)
+	const b = createUnifyBindings();
+	for (let i = 0; i < fnType.typeChildren.length && i < argTypes.length; i += 1) {
+		if (argTypes[i].kind !== TypeKind.Unknown) {
+			unifyType(fnType.typeChildren[i], argTypes[i], b);
 		}
-		i += 1;
+	}
+	// Apply all bindings to return type
+	for (let j = 0; j < b.names.length; j += 1) {
+		returnType = substituteType(returnType, b.names[j], b.types[j]);
 	}
 	return returnType;
 }
@@ -288,7 +290,32 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 		const typeName = typeNameOf(objType);
 		if (typeName !== "") {
 			const ext = findExtension(ctx.extensionRegistry, typeName, d.property);
-			if (ext !== null) return ext.fnType;
+			if (ext !== null) {
+				// Instance extension: strip receiver param (index 0) so checkCallExpr
+				// sees only user-visible params. The receiver is already in MemberExpr.object.
+				if (!ext.isStatic && ext.fnType.typeChildren.length > 0) {
+					let srcType = ext.fnType;
+					// Generic: infer type params from receiver first
+					if (hasGenericParams(srcType)) {
+						const eb = createUnifyBindings();
+						unifyType(srcType.typeChildren[0], objType, eb);
+						if (eb.names.length > 0) {
+							srcType = instantiateGeneric(srcType, eb.names, eb.types);
+						}
+					}
+					// Strip receiver — build Function(params[1..], return)
+					const callParams: Type[] = [];
+					const callNames: string[] = [];
+					for (let ci = 1; ci < srcType.typeChildren.length; ci += 1) {
+						callParams.push(srcType.typeChildren[ci]);
+					}
+					for (let ci = 1; ci < srcType.typeNames.length; ci += 1) {
+						callNames.push(srcType.typeNames[ci]);
+					}
+					return createFunction(callParams, callNames, srcType.typeReturn);
+				}
+				return ext.fnType;
+			}
 		}
 	}
 	return propType;

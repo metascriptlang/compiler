@@ -38,19 +38,15 @@ export function createFileInputStore(): TaFileInputStore {
 // ===== Lookup =====
 
 function findByPath(store: TaFileInputStore, filePath: string): number {
-	let i = 0;
-	while (i < store.files.items.length) {
+	for (let i = 0; i < store.files.items.length; i = i + 1) {
 		if (store.files.items[i].filePath === filePath) return i;
-		i = i + 1;
 	}
 	return -1;
 }
 
 function findByFileId(store: TaFileInputStore, fileId: number): number {
-	let i = 0;
-	while (i < store.files.items.length) {
+	for (let i = 0; i < store.files.items.length; i = i + 1) {
 		if (store.files.items[i].fileId === fileId) return i;
-		i = i + 1;
 	}
 	return -1;
 }

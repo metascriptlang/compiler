@@ -12,8 +12,7 @@ export function extractDecoratorInfo(node: Node): DecoratorInfo {
 	const dd = node.data as DecoratedDeclData;
 	let rtName = "";
 	let btKind = "";
-	let i = 0;
-	while (i < dd.decorators.length) {
+	for (let i = 0; i < dd.decorators.length; i += 1) {
 		const dec = dd.decorators[i];
 		if (dec.kind === NodeKind.MacroInvocation) {
 			const md = dec.data as MacroInvocationData;
@@ -29,7 +28,6 @@ export function extractDecoratorInfo(node: Node): DecoratorInfo {
 				}
 			}
 		}
-		i += 1;
 	}
 	return { runtimeName: rtName, builtinKind: btKind };
 }

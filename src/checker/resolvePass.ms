@@ -19,7 +19,7 @@ import {
 	createResult, createTypeRef, createUnion, createGenericParam, createDistinct,
 } from "./types";
 import { Symbol, SymbolKind, ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope } from "./symbol";
-import { CheckerContext, findExtension, isExtensionFlag, isStaticExtensionFlag, getExtReceiverType, getStaticExtTypeName, extractGenericNames } from "./context";
+import { CheckerContext, findExtension, getExtTypeName, extractGenericNames } from "./context";
 import { trim, sliceStr, findChar, splitTopLevel } from "../utils/string";
 import { getProperty } from "./types";
 import { getGenericDecl, getGenericDeclFieldNames, getGenericDeclFieldTypes, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
@@ -120,11 +120,9 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 // Build a type arg key from resolved type arg strings (e.g., "number,string")
 function buildTypeArgKey(args: string[], ctx: CheckerContext): string {
 	let key = "";
-	let i = 0;
-	while (i < args.length) {
+	for (let i = 0; i < args.length; i += 1) {
 		if (i > 0) key = key + ",";
 		key = key + trim(args[i]);
-		i += 1;
 	}
 	return key;
 }
@@ -132,10 +130,8 @@ function buildTypeArgKey(args: string[], ctx: CheckerContext): string {
 // Find index of matching generic param for a given field type string.
 // Returns the param index, or -1 if no match. Uses only number locals (DRC-safe).
 function findGenericParamIdx(rawType: string, paramNames: string[]): number {
-	let i = 0;
-	while (i < paramNames.length) {
+	for (let i = 0; i < paramNames.length; i += 1) {
 		if (trim(paramNames[i]) === rawType) return i;
-		i += 1;
 	}
 	return -1;
 }
@@ -177,14 +173,12 @@ function recordGenericTypeInstantiation(baseName: string, genericParams: string,
 	let resultFieldTypes = firstSub;
 
 	// Append remaining fields with "|" separator
-	let fi = 1;
-	while (fi < fnParts.length) {
+	for (let fi = 1; fi < fnParts.length; fi += 1) {
 		const rawType = fi < ftParts.length ? trim(ftParts[fi]) : "";
 		const paramIdx = findGenericParamIdx(rawType, paramNames);
 		const subType = paramIdx >= 0 && paramIdx < args.length ? trim(args[paramIdx]) : rawType;
 		resultFieldNames = resultFieldNames + "|" + trim(fnParts[fi]);
 		resultFieldTypes = resultFieldTypes + "|" + subType;
-		fi += 1;
 	}
 
 	addGenericTypeInst(baseName, typeArgKey, mangledName, resultFieldNames, resultFieldTypes);
@@ -195,14 +189,12 @@ function recordGenericTypeInstantiation(baseName: string, genericParams: string,
 // Resolve an array of type annotation strings into Type[], matching names 1:1
 function resolveTypeStrings(typeStrs: string[], count: number, ctx: CheckerContext): Type[] {
 	const types: Type[] = [];
-	let i = 0;
-	while (i < count) {
+	for (let i = 0; i < count; i += 1) {
 		if (i < typeStrs.length && typeStrs[i] !== "") {
 			types.push(resolveAnnotation(typeStrs[i], ctx));
 		} else {
 			types.push(unknownType());
 		}
-		i += 1;
 	}
 	return types;
 }
@@ -285,25 +277,11 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 	}
 
 	sym.symbolType = fnType;
-	// Update extension method type in registry if this is an instance extension
-	if (isExtensionFlag(d.fnFlags) && ctx.extensionRegistry !== null) {
-		const receiverType = getExtReceiverType(d.fnFlags);
-		if (receiverType !== "") {
-			const ext = findExtension(ctx.extensionRegistry, receiverType, d.fnName);
-			if (ext !== null) {
-				ext.fnType = fnType;
-			}
-		}
-	}
-	// Update static extension method type in registry
-	if (isStaticExtensionFlag(d.fnFlags) && ctx.extensionRegistry !== null) {
-		const staticTypeName = getStaticExtTypeName(d.fnFlags);
-		if (staticTypeName !== "") {
-			const ext = findExtension(ctx.extensionRegistry, staticTypeName, d.fnName);
-			if (ext !== null) {
-				ext.fnType = fnType;
-			}
-		}
+	// Update extension method type in registry (instance or static)
+	const extTypeName = getExtTypeName(d.fnFlags);
+	if (extTypeName !== "" && ctx.extensionRegistry !== null) {
+		const ext = findExtension(ctx.extensionRegistry, extTypeName, d.fnName);
+		if (ext !== null) { ext.fnType = fnType; }
 	}
 }
 
@@ -381,8 +359,7 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 	// Build Object type — collect members inline (DRC #4: push() through functions loses mutations)
 	const memberNames: string[] = [];
 	const memberTypes: Type[] = [];
-	let mi = 0;
-	while (mi < d.classBody.length) {
+	for (let mi = 0; mi < d.classBody.length; mi += 1) {
 		let member = d.classBody[mi];
 		// Unwrap DecoratedDecl to get the inner declaration
 		if (member.kind === NodeKind.DecoratedDecl) {
@@ -415,7 +392,6 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 			const paramTypes = resolveTypeStrings(cd.ctorParamTypes, cd.ctorParams.length, ctx);
 			memberTypes.push(createFunction(paramTypes, cd.ctorParams, voidType()));
 		}
-		mi += 1;
 	}
 
 	if (hasGenerics) {

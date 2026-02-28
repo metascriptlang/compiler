@@ -17,14 +17,12 @@ export function sliceStr(s: string, start: number, end: number): string {
 }
 
 export function findChar(s: string, ch: string): number {
-	let i = 0;
 	let depth = 0;
-	while (i < s.length) {
+	for (let i = 0; i < s.length; i += 1) {
 		const c = charAt(s, i);
 		if (depth === 0 && c === ch) return i;
 		if (c === "<") { depth += 1; }
 		if (c === ">") { depth -= 1; }
-		i += 1;
 	}
 	return -1;
 }
@@ -33,8 +31,7 @@ export function splitTopLevel(s: string, delim: string): string[] {
 	const parts: string[] = [];
 	let depth = 0;
 	let start = 0;
-	let i = 0;
-	while (i < s.length) {
+	for (let i = 0; i < s.length; i += 1) {
 		const c = charAt(s, i);
 		if (c === "<" || c === "(" || c === "{" || c === "[") { depth += 1; }
 		if (c === ">" || c === ")" || c === "}" || c === "]") { depth -= 1; }
@@ -42,7 +39,6 @@ export function splitTopLevel(s: string, delim: string): string[] {
 			parts.push(trim(sliceStr(s, start, i)));
 			start = i + 1;
 		}
-		i += 1;
 	}
 	if (start < s.length) {
 		parts.push(trim(sliceStr(s, start, s.length)));

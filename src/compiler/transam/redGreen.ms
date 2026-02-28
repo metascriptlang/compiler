@@ -156,10 +156,8 @@ export function invalidateFile(
 	markQueriesRedForFile(cache, fileId);
 
 	const dependents = getTransitiveDependents(moduleDeps, fileId);
-	let i = 0;
-	while (i < dependents.items.length) {
+	for (let i = 0; i < dependents.items.length; i = i + 1) {
 		markQueriesRedForFile(cache, dependents.items[i]);
-		i = i + 1;
 	}
 }
 
