@@ -172,7 +172,7 @@ result_desugar, spread_expand, for_of_lower, liftdestructors, etc.
 ### 3b: Normalization (lambda lifting + extensions)
 
 - Lambda lifting: closures → `struct Env { captures } + function pointer`
-- Extension methods: `arr.map(f)` → `Array_map(arr, f)` (UFCS)
+- Extension methods: `arr.map(f)` → `map(arr, f)` (UFCS, no type prefix)
 - Generator transformation
 
 ### 3c: Lowering

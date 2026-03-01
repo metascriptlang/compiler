@@ -57,6 +57,12 @@ export interface RaiserBuiltinMap {
 	items: RaiserBuiltinEntry[];
 }
 
+// --- Float register tracking ---
+
+export interface RaiserRegFlags {
+	isFloat: number[];
+}
+
 // --- Compiler state ---
 // Enum tracking reuses RaiserFuncMap: entries encoded as "EnumName.MemberName" → index.
 
@@ -69,6 +75,7 @@ export interface RaiserCompState {
 	funcMap: RaiserFuncMap;
 	enumMap: RaiserFuncMap;
 	builtins: RaiserBuiltinMap;
+	regFlags: RaiserRegFlags;
 }
 
 export function createCompState(): RaiserCompState {
@@ -84,7 +91,10 @@ export function createCompState(): RaiserCompState {
 	const enumMap: RaiserFuncMap = { items: enumItems };
 	const builtinItems: RaiserBuiltinEntry[] = [];
 	const builtins: RaiserBuiltinMap = { items: builtinItems };
-	return { code, constants, nextReg: 0, locals, loopStack, funcMap, enumMap, builtins };
+	const floatFlags: number[] = [];
+	for (let i = 0; i < 256; i = i + 1) { floatFlags.push(0); }
+	const regFlags: RaiserRegFlags = { isFloat: floatFlags };
+	return { code, constants, nextReg: 0, locals, loopStack, funcMap, enumMap, builtins, regFlags };
 }
 
 export function emitInst(s: RaiserCompState, inst: RaiserInstruction): void {
@@ -101,6 +111,12 @@ export function allocReg(s: RaiserCompState): number {
 	const r = s.nextReg;
 	s.nextReg = s.nextReg + 1;
 	return r;
+}
+
+// Reset temporary registers after each statement.
+// Locals (R[0..localsCount-1]) are preserved; temps above are reclaimed.
+export function resetTemps(s: RaiserCompState): void {
+	s.nextReg = s.locals.items.length;
 }
 
 // --- Typed emit helpers ---
@@ -247,6 +263,17 @@ export function isEnumName(s: RaiserCompState, name: string): boolean {
 			if (slice === prefix) return true;
 		}
 	}
+	return false;
+}
+
+// --- Float register helpers ---
+
+export function markRegFloat(s: RaiserCompState, reg: number): void {
+	if (reg >= 0 && reg < 256) { s.regFlags.isFloat[reg] = 1; }
+}
+
+export function isRegFloat(s: RaiserCompState, reg: number): boolean {
+	if (reg >= 0 && reg < 256) { return s.regFlags.isFloat[reg] !== 0; }
 	return false;
 }
 

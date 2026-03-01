@@ -21,14 +21,14 @@ import { RaiserContext, createContext, load, execute } from "../../raiser/contex
 import {
 	RaiserCompState, RaiserFuncMap, RaiserFuncEntry,
 	RaiserBuiltinMap, RaiserBuiltinEntry,
-	createCompState, emitLoadConst, emitHalt, emitRet, allocReg,
-	declareLocal, registerFunc, declareEnum, registerBuiltin
+	createCompState, emitInst, emitLoadConst, emitHalt, emitRet, allocReg,
+	declareLocal, registerFunc, declareEnum, registerBuiltin, resetTemps
 } from "./context";
 import { compileStmt } from "./statements";
 
 // --- Unwrap ExportDecl / DecoratedDecl to find inner FunctionDecl ---
 
-function unwrapToFuncDecl(node: Node): Node {
+export function unwrapToFuncDecl(node: Node): Node {
 	if (node.kind === NodeKind.FunctionDecl) return node;
 	if (node.kind === NodeKind.ExportDecl) {
 		const d = node.data as ExportDeclData;
@@ -41,7 +41,7 @@ function unwrapToFuncDecl(node: Node): Node {
 	return null as unknown as Node;
 }
 
-function unwrapToEnumDecl(node: Node): Node {
+export function unwrapToEnumDecl(node: Node): Node {
 	if (node.kind === NodeKind.EnumDecl) return node;
 	if (node.kind === NodeKind.ExportDecl) {
 		const d = node.data as ExportDeclData;
@@ -60,116 +60,27 @@ function unwrapToEnumDecl(node: Node): Node {
 //   Phase 2: Compile each function body + top-level code
 
 export function generateRaiser(program: Node): RaiserModule {
-	const pd = program.data as ProgramData;
-	const functions: RaiserFunction[] = [];
-
-	// Phase 1: Collect function and enum declarations (unwrap export/decorated)
-	const funcMapItems: RaiserFuncEntry[] = [];
-	const funcMap: RaiserFuncMap = { items: funcMapItems };
-	const enumMapItems: RaiserFuncEntry[] = [];
-	const enumMap: RaiserFuncMap = { items: enumMapItems };
-	let funcIdx = 0;
-	for (let i = 0; i < pd.programStmts.length; i = i + 1) {
-		const fnNode = unwrapToFuncDecl(pd.programStmts[i]);
-		if (fnNode !== null) {
-			const fd = fnNode.data as FunctionDeclData;
-			const entry: RaiserFuncEntry = { name: fd.fnName, index: funcIdx };
-			funcMap.items.push(entry);
-			funcIdx = funcIdx + 1;
-		}
-		const enumNode = unwrapToEnumDecl(pd.programStmts[i]);
-		if (enumNode !== null) {
-			// EnumDeclData = { enumName: string, enumMembers: string[] }
-			// Reuse FunctionDeclData overlay: fnName ≡ enumName, params ≡ enumMembers
-			const ed = enumNode.data as FunctionDeclData;
-			for (let ei = 0; ei < ed.params.length; ei = ei + 1) {
-				const key = ed.fnName + "." + ed.params[ei];
-				const me: RaiserFuncEntry = { name: key, index: ei };
-				enumMap.items.push(me);
-			}
-		}
-	}
-
-	// Phase 1b: Register builtin stubs (indices assigned, functions emitted later)
-	// Known builtins: defineConfig (std/build) — returns first argument unchanged
-	const builtinNames: string[] = ["defineConfig"];
-	const builtinMapItems: RaiserBuiltinEntry[] = [];
-	const builtinMap: RaiserBuiltinMap = { items: builtinMapItems };
-	for (let bi = 0; bi < builtinNames.length; bi = bi + 1) {
-		const bName = builtinNames[bi];
-		const bIdx = funcIdx;
-		const bEntry: RaiserFuncEntry = { name: bName, index: bIdx };
-		funcMap.items.push(bEntry);
-		const builtinEntry: RaiserBuiltinEntry = { name: bName, funcIdx: bIdx };
-		builtinMap.items.push(builtinEntry);
-		funcIdx = funcIdx + 1;
-	}
-
-	// Phase 2a: Compile each user function body (pushed in funcMap order)
-	for (let i = 0; i < pd.programStmts.length; i = i + 1) {
-		const fnNode = unwrapToFuncDecl(pd.programStmts[i]);
-		if (fnNode !== null) {
-			const fd = fnNode.data as FunctionDeclData;
-			const func = compileFuncBody(funcMap, enumMap, fd.fnName, fd.params, fd.fnBody, fd.params.length);
-			functions.push(func);
-		}
-	}
-
-	// Phase 2a': Emit builtin stub functions (after user functions, matching index order)
-	for (let bi = 0; bi < builtinNames.length; bi = bi + 1) {
-		const bName = builtinNames[bi];
-		// Passthrough stub: Move R[0] = R[1]; Ret R[0]
-		const stubCode: RaiserInstruction[] = [
-			raiserABC(RaiserOpcode.Move, 0, 1, 0),
-			raiserABC(RaiserOpcode.Ret, 0, 0, 0),
-		];
-		const stubConsts: RaiserValue[] = [];
-		const stubFunc = createRaiserFunction(bName, stubCode, stubConsts, 1, 0, 2);
-		functions.push(stubFunc);
-	}
-
-	// Phase 2b: Compile top-level code as entry function
-	const entryIdx = functions.length;
-	const s = createCompState();
-	s.funcMap = funcMap;
-	s.enumMap = enumMap;
-	s.builtins = builtinMap;
-	for (let i = 0; i < pd.programStmts.length; i = i + 1) {
-		compileStmt(s, pd.programStmts[i]);
-	}
-
-	// Ensure entry terminates
-	if (s.code.length === 0) {
-		emitLoadConst(s, 0, raiserNil());
-		emitHalt(s);
-	} else {
-		const lastInst = s.code[s.code.length - 1];
-		if (lastInst.op !== RaiserOpcode.Ret && lastInst.op !== RaiserOpcode.Halt) {
-			emitHalt(s);
-		}
-	}
-
-	const entryFunc = createRaiserFunction("main", s.code, s.constants, 0, 0, s.nextReg);
-	functions.push(entryFunc);
-
-	return createRaiserModule("main", functions, entryIdx);
+	const input: RaiserModuleInput = { modulePath: "main", program: program };
+	const modules: RaiserModuleInput[] = [];
+	modules.push(input);
+	return generateRaiserProject(modules);
 }
 
 // --- Compile a function body ---
 
-function compileFuncBody(funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, fnName: string, params: string[], body: Node, arity: number): RaiserFunction {
+export function compileFuncBody(funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, fnName: string, params: string[], body: Node, arity: number): RaiserFunction {
 	const s = createCompState();
 	s.funcMap = funcMap;
 	s.enumMap = enumMap;
 
 	// Declare params as locals R[0..arity-1]
-	for (let i = 0; i < arity; i = i + 1) {
+	for (let i = 0; i < arity; i += 1) {
 		const paramName = params[i];
 		const reg = allocReg(s);
 		declareLocal(s, paramName, reg);
 	}
 
-	// Compile body
+	// Compile body (resetTemps handled inside compileBlock/compileStmt)
 	compileStmt(s, body);
 
 	// Ensure function terminates with Ret
@@ -187,6 +98,145 @@ function compileFuncBody(funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, fnName:
 	}
 
 	return createRaiserFunction(fnName, s.code, s.constants, arity, 0, s.nextReg);
+}
+
+// --- Multi-module: Project-level compilation ---
+// Unity build: flatten all modules' functions into a single RaiserModule.
+// VM needs zero changes — Call opcode already indexes by position.
+
+export interface RaiserModuleInput {
+	modulePath: string;
+	program: Node;
+}
+
+export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModule {
+	const functions: RaiserFunction[] = [];
+
+	// --- Pass 1: Global declaration collection ---
+	const globalFuncMapItems: RaiserFuncEntry[] = [];
+	const globalFuncMap: RaiserFuncMap = { items: globalFuncMapItems };
+	const globalEnumMapItems: RaiserFuncEntry[] = [];
+	const globalEnumMap: RaiserFuncMap = { items: globalEnumMapItems };
+	let funcIdx = 0;
+
+	for (let mi = 0; mi < modules.length; mi += 1) {
+		const pd = modules[mi].program.data as ProgramData;
+		for (let i = 0; i < pd.programStmts.length; i += 1) {
+			const fnNode = unwrapToFuncDecl(pd.programStmts[i]);
+			if (fnNode !== null) {
+				const fd = fnNode.data as FunctionDeclData;
+				const entry: RaiserFuncEntry = { name: fd.fnName, index: funcIdx };
+				globalFuncMap.items.push(entry);
+				funcIdx += 1;
+			}
+			const enumNode = unwrapToEnumDecl(pd.programStmts[i]);
+			if (enumNode !== null) {
+				const ed = enumNode.data as FunctionDeclData;
+				for (let ei = 0; ei < ed.params.length; ei += 1) {
+					const key = ed.fnName + "." + ed.params[ei];
+					const me: RaiserFuncEntry = { name: key, index: ei };
+					globalEnumMap.items.push(me);
+				}
+			}
+		}
+	}
+
+	// --- Register builtins ---
+	const builtinNames: string[] = ["defineConfig"];
+	const builtinMapItems: RaiserBuiltinEntry[] = [];
+	const builtinMap: RaiserBuiltinMap = { items: builtinMapItems };
+	for (let bi = 0; bi < builtinNames.length; bi += 1) {
+		const bName = builtinNames[bi];
+		const bIdx = funcIdx;
+		const bEntry: RaiserFuncEntry = { name: bName, index: bIdx };
+		globalFuncMap.items.push(bEntry);
+		const builtinEntry: RaiserBuiltinEntry = { name: bName, funcIdx: bIdx };
+		builtinMap.items.push(builtinEntry);
+		funcIdx += 1;
+	}
+
+	// --- Pass 2: Compile function bodies ---
+	for (let mi = 0; mi < modules.length; mi += 1) {
+		const pd = modules[mi].program.data as ProgramData;
+		for (let i = 0; i < pd.programStmts.length; i += 1) {
+			const fnNode = unwrapToFuncDecl(pd.programStmts[i]);
+			if (fnNode !== null) {
+				const fd = fnNode.data as FunctionDeclData;
+				const func = compileFuncBody(globalFuncMap, globalEnumMap, fd.fnName, fd.params, fd.fnBody, fd.params.length);
+				functions.push(func);
+			}
+		}
+	}
+
+	// --- Emit builtin stubs ---
+	for (let bi = 0; bi < builtinNames.length; bi += 1) {
+		const bName = builtinNames[bi];
+		const stubCode: RaiserInstruction[] = [
+			raiserABC(RaiserOpcode.Move, 0, 1, 0),
+			raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+		];
+		const stubConsts: RaiserValue[] = [];
+		const stubFunc = createRaiserFunction(bName, stubCode, stubConsts, 1, 0, 2);
+		functions.push(stubFunc);
+	}
+
+	// --- Pass 3: Compile init functions for each module ---
+	const initIndices: number[] = [];
+	for (let mi = 0; mi < modules.length; mi += 1) {
+		const pd = modules[mi].program.data as ProgramData;
+		const s = createCompState();
+		s.funcMap = globalFuncMap;
+		s.enumMap = globalEnumMap;
+		s.builtins = builtinMap;
+
+		for (let i = 0; i < pd.programStmts.length; i += 1) {
+			compileStmt(s, pd.programStmts[i]);
+			resetTemps(s);
+		}
+
+		// Post-process: convert Halt → Ret (init functions return to caller)
+		for (let j = 0; j < s.code.length; j += 1) {
+			if (s.code[j].op === RaiserOpcode.Halt) {
+				s.code[j] = raiserABC(RaiserOpcode.Ret, s.code[j].a, 0, 0);
+			}
+		}
+
+		// Ensure init terminates with Ret
+		if (s.code.length === 0) {
+			const nilReg = allocReg(s);
+			emitLoadConst(s, nilReg, raiserNil());
+			emitRet(s, nilReg);
+		} else {
+			const lastOp = s.code[s.code.length - 1].op;
+			if (lastOp !== RaiserOpcode.Ret) {
+				const nilReg = allocReg(s);
+				emitLoadConst(s, nilReg, raiserNil());
+				emitRet(s, nilReg);
+			}
+		}
+
+		const initFunc = createRaiserFunction("__init_" + mi, s.code, s.constants, 0, 0, s.nextReg);
+		functions.push(initFunc);
+		initIndices.push(functions.length - 1);
+	}
+
+	// --- Create synthetic entry function ---
+	// Calls all init functions in order, halts with last result
+	const entryS = createCompState();
+	let lastResultReg = 0;
+	for (let ii = 0; ii < initIndices.length; ii += 1) {
+		const destReg = allocReg(entryS);
+		emitInst(entryS, raiserABC(RaiserOpcode.Call, destReg, initIndices[ii], 0));
+		lastResultReg = destReg;
+	}
+	if (initIndices.length === 0) {
+		emitLoadConst(entryS, 0, raiserNil());
+	}
+	emitInst(entryS, raiserABC(RaiserOpcode.Halt, lastResultReg, 0, 0));
+	const entryFunc = createRaiserFunction("__entry", entryS.code, entryS.constants, 0, 0, entryS.nextReg);
+	functions.push(entryFunc);
+
+	return createRaiserModule("project", functions, functions.length - 1);
 }
 
 // --- Public API ---
@@ -209,12 +259,7 @@ function evalRaiser(code: string): RaiserContext {
 	const parseResult = parseSource(code);
 	if (!parseResult.ok) {
 		check(false);
-		// Return a dummy context to prevent crash
-		const dummyMod = generateRaiser(parseSource("return 0;").value);
-		const ctx = createContext();
-		load(ctx, dummyMod);
-		execute(ctx);
-		return ctx;
+		return createContext();
 	}
 	const mod = generateRaiser(parseResult.value);
 	const ctx = createContext();
@@ -379,6 +424,11 @@ testGroup("Raiser functions", () => {
 	test("nested calls: f(g(2))", () => {
 		const ctx = evalRaiser("function triple(x) { return x * 3; } function inc(x) { return x + 1; } return inc(triple(2));");
 		check(ctx.lastResult.intVal === 7);
+	});
+
+	test("nested calls: same function f(f(x))", () => {
+		const ctx = evalRaiser("function dbl(x) { return x * 2; } return dbl(dbl(3));");
+		check(ctx.lastResult.intVal === 12);
 	});
 
 	test("function with local variable", () => {
@@ -934,5 +984,157 @@ testGroup("Raiser build.ms", () => {
 		check(buildHandle >= 0);
 		const outDir = heapObjectGetString(ctx.objectHeap, buildHandle, "outDir");
 		check(outDir === "out");
+	});
+
+	test("real: neon/build.ms", () => {
+		const src = "import { defineConfig, BuildOptions } from \"std/build\";\nexport default defineConfig({\n\troot: \"src/index.ms\",\n\tformat: {\n\t\ttabWidth: 4,\n\t\tuseTabs: true,\n\t\tsemi: true,\n\t},\n\tbuild: {\n\t\ttargets: [\n\t\t\t{ target: \"native\", outDir: \"build/c\" },\n\t\t\t{ target: \"js\", outDir: \"build/js\" },\n\t\t],\n\t},\n});";
+		const ctx = evalRaiser(src);
+		check(ctx.lastResult.kind === RaiserValueKind.Object);
+		// root
+		const root = heapObjectGetString(ctx.objectHeap, ctx.lastResult.intVal, "root");
+		check(root === "src/index.ms");
+		// format.tabWidth
+		const fmtHandle = heapObjectGetObjectHandle(ctx.objectHeap, ctx.lastResult.intVal, "format");
+		check(fmtHandle >= 0);
+		const tabWidth = heapObjectGetField(ctx.objectHeap, fmtHandle, "tabWidth");
+		check(tabWidth.intVal === 4);
+		// build.targets array
+		const buildHandle = heapObjectGetObjectHandle(ctx.objectHeap, ctx.lastResult.intVal, "build");
+		check(buildHandle >= 0);
+		const targets = heapObjectGetField(ctx.objectHeap, buildHandle, "targets");
+		check(targets.kind === RaiserValueKind.Array);
+		check(heapArrayLen(ctx.arrayHeap, targets.intVal) === 2);
+		// targets[0].target === "native"
+		const t0 = heapArrayGet(ctx.arrayHeap, targets.intVal, 0);
+		check(heapObjectGetString(ctx.objectHeap, t0.intVal, "target") === "native");
+		check(heapObjectGetString(ctx.objectHeap, t0.intVal, "outDir") === "build/c");
+		// targets[1].target === "js"
+		const t1 = heapArrayGet(ctx.arrayHeap, targets.intVal, 1);
+		check(heapObjectGetString(ctx.objectHeap, t1.intVal, "target") === "js");
+		check(heapObjectGetString(ctx.objectHeap, t1.intVal, "outDir") === "build/js");
+	});
+
+	test("float arithmetic: add", () => {
+		const ctx = evalRaiser("return 3.14 + 2.0;");
+		check(ctx.lastResult.kind === RaiserValueKind.Float);
+		check(ctx.lastResult.floatVal > 5.13);
+		check(ctx.lastResult.floatVal < 5.15);
+	});
+
+	test("float arithmetic: mul", () => {
+		const ctx = evalRaiser("return 1.5 * 4.0;");
+		check(ctx.lastResult.kind === RaiserValueKind.Float);
+		check(ctx.lastResult.floatVal === 6.0);
+	});
+
+	test("float arithmetic: sub", () => {
+		const ctx = evalRaiser("return 10.5 - 3.5;");
+		check(ctx.lastResult.kind === RaiserValueKind.Float);
+		check(ctx.lastResult.floatVal === 7.0);
+	});
+
+	test("float arithmetic: div", () => {
+		const ctx = evalRaiser("return 7.5 / 2.5;");
+		check(ctx.lastResult.kind === RaiserValueKind.Float);
+		check(ctx.lastResult.floatVal === 3.0);
+	});
+
+	test("float arithmetic: neg", () => {
+		const ctx = evalRaiser("return -3.14;");
+		check(ctx.lastResult.kind === RaiserValueKind.Float);
+		check(ctx.lastResult.floatVal < -3.13);
+		check(ctx.lastResult.floatVal > -3.15);
+	});
+
+	test("float comparison: less than", () => {
+		const ctx = evalRaiser("if (1.5 < 2.5) { return 1; } return 0;");
+		check(ctx.lastResult.intVal === 1);
+	});
+
+	test("float comparison: greater than", () => {
+		const ctx = evalRaiser("if (3.14 > 2.71) { return 1; } return 0;");
+		check(ctx.lastResult.intVal === 1);
+	});
+
+	test("real: void/build.ms", () => {
+		const src = "import { defineConfig } from \"std/build\";\nexport default defineConfig({\n\troot: \"src/index.ms\",\n\tbuild: {\n\t\ttarget: \"native\",\n\t\toutDir: \"out\",\n\t\toutFile: \"void\",\n\t\toptimize: \"debug\",\n\t},\n});";
+		const ctx = evalRaiser(src);
+		check(ctx.lastResult.kind === RaiserValueKind.Object);
+		// root
+		const root = heapObjectGetString(ctx.objectHeap, ctx.lastResult.intVal, "root");
+		check(root === "src/index.ms");
+		// build.target
+		const buildHandle = heapObjectGetObjectHandle(ctx.objectHeap, ctx.lastResult.intVal, "build");
+		check(buildHandle >= 0);
+		const target = heapObjectGetString(ctx.objectHeap, buildHandle, "target");
+		check(target === "native");
+		// build.outDir
+		const outDir = heapObjectGetString(ctx.objectHeap, buildHandle, "outDir");
+		check(outDir === "out");
+		// build.outFile
+		const outFile = heapObjectGetString(ctx.objectHeap, buildHandle, "outFile");
+		check(outFile === "void");
+		// build.optimize
+		const optimize = heapObjectGetString(ctx.objectHeap, buildHandle, "optimize");
+		check(optimize === "debug");
+	});
+});
+
+testGroup("Raiser bitwise", () => {
+	test("bitwise AND", () => {
+		const ctx = evalRaiser("return 5 & 3;");
+		check(ctx.lastResult.intVal === 1);
+	});
+
+	test("bitwise OR", () => {
+		const ctx = evalRaiser("return 5 | 3;");
+		check(ctx.lastResult.intVal === 7);
+	});
+
+	test("bitwise XOR", () => {
+		const ctx = evalRaiser("return 5 ^ 3;");
+		check(ctx.lastResult.intVal === 6);
+	});
+
+	test("bitwise NOT", () => {
+		const ctx = evalRaiser("return ~0;");
+		check(ctx.lastResult.intVal === -1);
+	});
+
+	test("shift left", () => {
+		const ctx = evalRaiser("return 1 << 3;");
+		check(ctx.lastResult.intVal === 8);
+	});
+
+	test("shift right", () => {
+		const ctx = evalRaiser("return 8 >> 2;");
+		check(ctx.lastResult.intVal === 2);
+	});
+
+	test("complex bitwise", () => {
+		const ctx = evalRaiser("return (0xFF & 0x0F) | 0x30;");
+		check(ctx.lastResult.intVal === 63);
+	});
+});
+
+testGroup("Raiser compound assign targets", () => {
+	test("obj.field += value", () => {
+		const ctx = evalRaiser("let obj = { x: 10 }; obj.x += 5; return obj.x;");
+		check(ctx.lastResult.intVal === 15);
+	});
+
+	test("obj.field -= value", () => {
+		const ctx = evalRaiser("let obj = { x: 10 }; obj.x -= 3; return obj.x;");
+		check(ctx.lastResult.intVal === 7);
+	});
+
+	test("arr[i] += value", () => {
+		const ctx = evalRaiser("let arr = [10, 20, 30]; arr[1] += 5; return arr[1];");
+		check(ctx.lastResult.intVal === 25);
+	});
+
+	test("arr[i] *= value", () => {
+		const ctx = evalRaiser("let arr = [1, 2, 3]; arr[0] *= 10; return arr[0];");
+		check(ctx.lastResult.intVal === 10);
 	});
 });

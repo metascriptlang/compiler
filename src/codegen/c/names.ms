@@ -1,7 +1,8 @@
-// C Codegen — Name Mangling & Identifier Sanitization
+// Codegen — Name Mangling & Identifier Sanitization
 //
-// Follows Nim's mangleutils.nim: character-level mangling for C-safe identifiers,
-// module-qualified proc names, C keyword avoidance.
+// Shared utilities for all codegen backends.
+// Character classification, core mangling, C keyword avoidance,
+// module-qualified proc names, field/local manglers.
 
 import { sliceStr, charAt } from "../../utils/string";
 import { test, check, testGroup } from "std/testing";
@@ -49,7 +50,7 @@ function isAlnumChar(ch: string): boolean {
 	return isAlphaChar(ch) || isDigitChar(ch);
 }
 
-// ===== Special Character Replacement (Nim pattern) =====
+// ===== Special Character Replacement =====
 
 function specialCharName(ch: string): string {
 	return match (ch) {
@@ -77,8 +78,8 @@ function specialCharName(ch: string): string {
 	};
 }
 
-// ===== Core Mangling (Nim's mangle) =====
-// Makes any MetaScript identifier safe for C.
+// ===== Core Mangling =====
+// Makes any identifier safe for native backends.
 // Alphanumeric + underscore pass through. Special chars get word replacements.
 
 export function mangle(name: string): string {
@@ -112,9 +113,9 @@ export function mangle(name: string): string {
 	return result;
 }
 
-// ===== Character Ordinal (Nim parity) =====
-// Nim mangles uppercase, underscore, and special chars to decimal ASCII ordinals.
-// This prevents clashes with Z (path sep) and O (dot) special meanings.
+// ===== Character Ordinal =====
+// Mangles uppercase, underscore, and special chars to decimal ASCII ordinals.
+// Prevents clashes with Z (path sep) and O (dot) special meanings.
 
 function charOrd(ch: string): string {
 	return match (ch) {
@@ -138,8 +139,8 @@ function isLowerOrDigit(ch: string): boolean {
 	};
 }
 
-// ===== Module Name Mangling (Nim-aligned) =====
-// Nim's uniqueModuleName: a-z, 0-9 pass through; / → Z; . → O;
+// ===== Module Name Mangling =====
+// a-z, 0-9 pass through; / → Z; . → O;
 // everything else (A-Z, _, special) → ord(c) as decimal string.
 
 export function mangleModuleName(modulePath: string): string {
@@ -291,17 +292,14 @@ testGroup("C Module Name", () => {
 	test("dots become O", () => {
 		check(mangleModuleName("foo.bar") === "fooObar");
 	});
-	test("uppercase becomes ordinal (Nim parity)", () => {
-		// A=65, B=66, M=77, y=y, C=67, l=l, a=a, s=s
+	test("uppercase becomes ordinal", () => {
 		check(mangleModuleName("MyClass") === "77y67lass");
 		check(mangleModuleName("AB") === "6566");
 	});
 	test("underscore becomes ordinal", () => {
-		// _ = 95
 		check(mangleModuleName("my_mod") === "my95mod");
 	});
 	test("full path with mixed case", () => {
-		// src/codegen/MyGen → srcZcodegenZ77y71en
 		check(mangleModuleName("src/codegen/MyGen") === "srcZcodegenZ77y71en");
 	});
 });

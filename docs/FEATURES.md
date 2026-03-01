@@ -58,7 +58,7 @@ export function abs(this typeof Math, x: number): number { unreachable; }
 
 ```
 std/*.ms auto-imported → checker gets real type signatures
-  → transforms lower extensions (str.trim() → trim(str))
+  → transforms lower extensions (str.trim() → trim(str), no type prefix)
   → analyzer injects DRC
   → builtinLower rewrites to C names (trim(str) → ms_string_trim(str))
   → codegen emits plain calls (no dispatch tables)

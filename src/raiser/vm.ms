@@ -12,7 +12,7 @@ import {
 } from "./bytecode";
 import {
 	RaiserValue, RaiserValueKind,
-	raiserNil, raiserInt, raiserString, raiserArray, raiserToInt, raiserToBool, raiserToString, raiserIsNil,
+	raiserNil, raiserInt, raiserFloat, raiserString, raiserArray, raiserToInt, raiserToBool, raiserToString, raiserIsNil,
 	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapArrayGet, heapArraySet, heapArrayPush, heapArrayLen,
 	RaiserObjectHeap, createObjectHeap, heapAllocObject, heapObjectGetField, heapObjectSetField,
 	raiserObject
@@ -132,6 +132,28 @@ export function execModule(mod: RaiserModule): RaiserVM {
 			vmHandleStrCharAt(vm, inst);
 		} else if (inst.op === RaiserOpcode.StrSlice) {
 			vmHandleStrSlice(vm, inst);
+		} else if (inst.op === RaiserOpcode.AddF64) {
+			vmHandleAddF64(vm, inst);
+		} else if (inst.op === RaiserOpcode.SubF64) {
+			vmHandleSubF64(vm, inst);
+		} else if (inst.op === RaiserOpcode.MulF64) {
+			vmHandleMulF64(vm, inst);
+		} else if (inst.op === RaiserOpcode.DivF64) {
+			vmHandleDivF64(vm, inst);
+		} else if (inst.op === RaiserOpcode.NegF64) {
+			vmHandleNegF64(vm, inst);
+		} else if (inst.op === RaiserOpcode.BeqF64) {
+			vmHandleBeqF64(vm, inst);
+		} else if (inst.op === RaiserOpcode.BneF64) {
+			vmHandleBneF64(vm, inst);
+		} else if (inst.op === RaiserOpcode.BltF64) {
+			vmHandleBltF64(vm, inst);
+		} else if (inst.op === RaiserOpcode.BleF64) {
+			vmHandleBleF64(vm, inst);
+		} else if (inst.op === RaiserOpcode.BgtF64) {
+			vmHandleBgtF64(vm, inst);
+		} else if (inst.op === RaiserOpcode.BgeF64) {
+			vmHandleBgeF64(vm, inst);
 		} else {
 			vm.halted = true;
 		}
@@ -358,6 +380,112 @@ function vmHandleStrSlice(vm: RaiserVM, inst: RaiserInstruction): void {
 	dst.floatVal = 0.0;
 	dst.strVal = src.strVal.slice(startReg.intVal, endReg.intVal);
 }
+
+// --- Float value extraction (handles int-to-float promotion) ---
+
+function asNum(val: RaiserValue): number {
+	if (val.kind === RaiserValueKind.Float) return val.floatVal;
+	return val.intVal;
+}
+
+// --- Float arithmetic handlers ---
+
+function vmHandleAddF64(vm: RaiserVM, inst: RaiserInstruction): void {
+	const lhs = getReg(vm, vm.baseReg + inst.b);
+	const rhs = getReg(vm, vm.baseReg + inst.c);
+	const dst = getReg(vm, vm.baseReg + inst.a);
+	dst.kind = RaiserValueKind.Float;
+	dst.floatVal = asNum(lhs) + asNum(rhs);
+	dst.intVal = 0;
+	dst.strVal = "";
+}
+
+function vmHandleSubF64(vm: RaiserVM, inst: RaiserInstruction): void {
+	const lhs = getReg(vm, vm.baseReg + inst.b);
+	const rhs = getReg(vm, vm.baseReg + inst.c);
+	const dst = getReg(vm, vm.baseReg + inst.a);
+	dst.kind = RaiserValueKind.Float;
+	dst.floatVal = asNum(lhs) - asNum(rhs);
+	dst.intVal = 0;
+	dst.strVal = "";
+}
+
+function vmHandleMulF64(vm: RaiserVM, inst: RaiserInstruction): void {
+	const lhs = getReg(vm, vm.baseReg + inst.b);
+	const rhs = getReg(vm, vm.baseReg + inst.c);
+	const dst = getReg(vm, vm.baseReg + inst.a);
+	dst.kind = RaiserValueKind.Float;
+	dst.floatVal = asNum(lhs) * asNum(rhs);
+	dst.intVal = 0;
+	dst.strVal = "";
+}
+
+function vmHandleDivF64(vm: RaiserVM, inst: RaiserInstruction): void {
+	const lhs = getReg(vm, vm.baseReg + inst.b);
+	const rhs = getReg(vm, vm.baseReg + inst.c);
+	const dst = getReg(vm, vm.baseReg + inst.a);
+	dst.kind = RaiserValueKind.Float;
+	const rv = asNum(rhs);
+	if (rv !== 0.0) {
+		dst.floatVal = asNum(lhs) / rv;
+	} else {
+		dst.floatVal = 0.0;
+	}
+	dst.intVal = 0;
+	dst.strVal = "";
+}
+
+function vmHandleNegF64(vm: RaiserVM, inst: RaiserInstruction): void {
+	const src = getReg(vm, vm.baseReg + inst.b);
+	const dst = getReg(vm, vm.baseReg + inst.a);
+	dst.kind = RaiserValueKind.Float;
+	dst.floatVal = 0.0 - asNum(src);
+	dst.intVal = 0;
+	dst.strVal = "";
+}
+
+// --- Float compare-branch handlers ---
+
+function vmHandleBeqF64(vm: RaiserVM, inst: RaiserInstruction): void {
+	const lhs = getReg(vm, vm.baseReg + inst.a);
+	const rhs = getReg(vm, vm.baseReg + inst.b);
+	if (asNum(lhs) === asNum(rhs)) { vm.ip = vm.ip + inst.c; }
+}
+
+function vmHandleBneF64(vm: RaiserVM, inst: RaiserInstruction): void {
+	const lhs = getReg(vm, vm.baseReg + inst.a);
+	const rhs = getReg(vm, vm.baseReg + inst.b);
+	if (asNum(lhs) !== asNum(rhs)) { vm.ip = vm.ip + inst.c; }
+}
+
+function vmHandleBltF64(vm: RaiserVM, inst: RaiserInstruction): void {
+	const lhs = getReg(vm, vm.baseReg + inst.a);
+	const rhs = getReg(vm, vm.baseReg + inst.b);
+	if (asNum(lhs) < asNum(rhs)) { vm.ip = vm.ip + inst.c; }
+}
+
+function vmHandleBleF64(vm: RaiserVM, inst: RaiserInstruction): void {
+	const lhs = getReg(vm, vm.baseReg + inst.a);
+	const rhs = getReg(vm, vm.baseReg + inst.b);
+	if (asNum(lhs) <= asNum(rhs)) { vm.ip = vm.ip + inst.c; }
+}
+
+function vmHandleBgtF64(vm: RaiserVM, inst: RaiserInstruction): void {
+	const lhs = getReg(vm, vm.baseReg + inst.a);
+	const rhs = getReg(vm, vm.baseReg + inst.b);
+	if (asNum(lhs) > asNum(rhs)) { vm.ip = vm.ip + inst.c; }
+}
+
+function vmHandleBgeF64(vm: RaiserVM, inst: RaiserInstruction): void {
+	const lhs = getReg(vm, vm.baseReg + inst.a);
+	const rhs = getReg(vm, vm.baseReg + inst.b);
+	if (asNum(lhs) >= asNum(rhs)) { vm.ip = vm.ip + inst.c; }
+}
+
+// --- Bitwise handlers ---
+
+// Bitwise ops are handled entirely in C dispatch (vm_dispatch.c)
+// using int64_t casts — MetaScript fallback not needed.
 
 // --- Test helpers ---
 

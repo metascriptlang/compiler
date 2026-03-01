@@ -12,6 +12,8 @@ export interface ExportedSymInfo {
 	name: string;
 	kind: SymbolKind;
 	symType: Type;
+	extReceiverType: string;
+	extIsStatic: boolean;
 }
 
 export interface ModuleExports {
@@ -84,6 +86,14 @@ export function hasExtensionByName(registry: ExtensionRegistry, methodName: stri
 		if (m.methodName === methodName) return true;
 	}
 	return false;
+}
+
+// findExtensionByName — find first extension with this method name (any receiver)
+export function findExtensionByName(registry: ExtensionRegistry, methodName: string): ExtensionMethod {
+	for (const m of registry.methods) {
+		if (m.methodName === methodName) return m;
+	}
+	return null as unknown as ExtensionMethod;
 }
 
 // ===== Extension Flag Helpers =====
@@ -406,7 +416,7 @@ testGroup("ExportRegistry", () => {
 	test("register and find exports", () => {
 		const r = createExportRegistry();
 		const syms: ExportedSymInfo[] = [];
-		const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType() };
+		const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), extReceiverType: "", extIsStatic: false };
 		syms.push(info);
 		registerModuleExports(r, "/src/b.ms", syms);
 		const found = findExportedSymbol(r, "/src/b.ms", "foo");
@@ -422,7 +432,7 @@ testGroup("ExportRegistry", () => {
 	test("missing symbol returns null", () => {
 		const r = createExportRegistry();
 		const syms: ExportedSymInfo[] = [];
-		const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType() };
+		const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), extReceiverType: "", extIsStatic: false };
 		syms.push(info);
 		registerModuleExports(r, "/src/b.ms", syms);
 		const found = findExportedSymbol(r, "/src/b.ms", "bar");

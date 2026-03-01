@@ -135,9 +135,12 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 
 function compileBlock(s: RaiserCompState, node: Node): void {
 	const d = node.data as BlockStmtData;
+	const savedLocals = s.locals.items.length;
 	for (let i = 0; i < d.statements.length; i = i + 1) {
 		compileStmt(s, d.statements[i]);
 	}
+	// Restore locals scope — drop block-scoped vars
+	s.locals.items.length = savedLocals;
 }
 
 // --- Variable Declaration ---

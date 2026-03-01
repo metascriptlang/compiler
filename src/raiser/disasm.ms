@@ -56,6 +56,23 @@ export function opName(op: RaiserOpcode): string {
 		RaiserOpcode.StrCharAt => "StrCharAt",
 		RaiserOpcode.StrSlice => "StrSlice",
 		RaiserOpcode.CallIndirect => "CallIndirect",
+		RaiserOpcode.AddF64 => "AddF64",
+		RaiserOpcode.SubF64 => "SubF64",
+		RaiserOpcode.MulF64 => "MulF64",
+		RaiserOpcode.DivF64 => "DivF64",
+		RaiserOpcode.NegF64 => "NegF64",
+		RaiserOpcode.BeqF64 => "BeqF64",
+		RaiserOpcode.BneF64 => "BneF64",
+		RaiserOpcode.BltF64 => "BltF64",
+		RaiserOpcode.BleF64 => "BleF64",
+		RaiserOpcode.BgtF64 => "BgtF64",
+		RaiserOpcode.BgeF64 => "BgeF64",
+		RaiserOpcode.BitAnd => "BitAnd",
+		RaiserOpcode.BitOr => "BitOr",
+		RaiserOpcode.BitXor => "BitXor",
+		RaiserOpcode.BitNot => "BitNot",
+		RaiserOpcode.ShiftLeft => "ShiftLeft",
+		RaiserOpcode.ShiftRight => "ShiftRight",
 	};
 }
 

@@ -122,7 +122,9 @@ Self-hosted status: All 3 passes implemented. Multi-module type propagation comp
 - `checkModuleGraph()` checks modules in topological order, each getting all 3 passes (Nim-aligned: per-module 3-pass, not 3 passes across all modules)
 - Export marking via `isExported` flag on Symbol (simpler than Nim's dual public/hidden tables)
 - Cross-module type propagation via `ExportRegistry` — exports registered after each module's 3-pass, imported types resolved from registry in downstream modules' collect pass
-- Extension method registry (`ExtensionRegistry`) tracks `function f(this self: Type)` declarations for UFCS-style member resolution
+- Extension method registry (`ExtensionRegistry`) tracks `function f(this self: Type)` declarations for UFCS-style member resolution (instance + static)
+- Cross-module extension propagation: `ExportedSymInfo` carries `extReceiverType`/`extIsStatic`, `collectImport()` registers imported extensions in local registry
+- Generic extension inference: `unifyType()` recursive structural matching extracts type params from receiver (e.g., `T[]` vs `string[]` → `T=string`), pre-substituted in `checkMemberExpr`
 - Function overload resolution via `scoreCandidate()` in `compat.ms` (TypeRelation scoring: Exact > FromLiteral > Generic > Subtype > IntConv > Convertible > None)
 
 Trans-Am incremental engine (see §Trans-Am below) is fully compatible with 3-pass.

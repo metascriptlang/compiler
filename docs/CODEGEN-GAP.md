@@ -5,7 +5,33 @@ Each item: what's missing, why production compilers have it, why we don't yet, h
 
 ---
 
-## Blocking
+## Summary Table
+
+| # | Gap | Severity | Effort | Blocked? |
+|---|-----|----------|--------|----------|
+| 1 | ~~Generic monomorphization~~ | ~~DONE~~ | ~~1560 lines~~ | ~~Completed~~ |
+| 2 | ~~Pointer accessor (-> vs .)~~ | ~~DONE~~ | ~~86 lines~~ | ~~Completed~~ |
+| 3 | @builtin expansion | Blocking | ~200 lines | No |
+| 4 | ~~std/core.ms auto-import~~ | ~~DONE~~ | ~~~230 lines~~ | ~~Completed~~ |
+| 5 | RTTI / type info | N/A | 0 lines | Intentionally omitted (static type system) |
+| 6 | Bounds checking | Functional | ~20-100 lines | No |
+| 7 | Overflow checking | Functional | ~80 lines | No |
+| 8 | String concat optimization | Functional | ~80 lines | No |
+| 9 | ~~Missing expression kinds~~ | ~~DONE~~ | ~~All 15 kinds~~ | ~~Completed~~ |
+| 10 | Inline arithmetic magic | Optimization | ~30 lines | No |
+| 11 | Sequence construction | Optimization | ~90 lines | No |
+| 12 | NRVO | Optimization | ~100 lines | No |
+| 13 | Multi-module C output | Deferred | ~200 lines | Needs multi-module checker |
+| 14 | Write barriers | N/A | 0 lines | Intentionally omitted (DRC) |
+| 15 | ~~Move marker → DRC~~ | ~~DONE~~ | ~~200 lines~~ | ~~Completed~~ |
+| 16 | ~~Lambda lifting all FunctionExpr~~ | ~~DONE~~ | ~~482 lines~~ | ~~Completed~~ |
+| 17 | openArray (ptr, len) convention | Functional | ~200 lines | Needs runtime array struct |
+| 18 | JS string encoding (UTF-8 vs UTF-16) | JS Backend | ~200 lines | No |
+| 19 | String/Array runtime architecture | Tracking | — | See [LANG-RUNTIME.md](LANG-RUNTIME.md) |
+| 20 | JS performance & bundle optimization | JS Backend | ~350 lines | No |
+
+
+## Blockings
 
 ### 1. ~~Generic Monomorphization~~
 
@@ -281,30 +307,6 @@ Tier 5 (first-write sink optimization) deferred — requires DrcContext struct c
 
 ---
 
-## Summary Table
-
-| # | Gap | Severity | Effort | Blocked? |
-|---|-----|----------|--------|----------|
-| 1 | ~~Generic monomorphization~~ | ~~DONE~~ | ~~1560 lines~~ | ~~Completed~~ |
-| 2 | ~~Pointer accessor (-> vs .)~~ | ~~DONE~~ | ~~86 lines~~ | ~~Completed~~ |
-| 3 | @builtin expansion | Blocking | ~200 lines | No |
-| 4 | ~~std/core.ms auto-import~~ | ~~DONE~~ | ~~~230 lines~~ | ~~Completed~~ |
-| 5 | RTTI / type info | N/A | 0 lines | Intentionally omitted (static type system) |
-| 6 | Bounds checking | Functional | ~20-100 lines | No |
-| 7 | Overflow checking | Functional | ~80 lines | No |
-| 8 | String concat optimization | Functional | ~80 lines | No |
-| 9 | ~~Missing expression kinds~~ | ~~DONE~~ | ~~All 15 kinds~~ | ~~Completed~~ |
-| 10 | Inline arithmetic magic | Optimization | ~30 lines | No |
-| 11 | Sequence construction | Optimization | ~90 lines | No |
-| 12 | NRVO | Optimization | ~100 lines | No |
-| 13 | Multi-module C output | Deferred | ~200 lines | Needs multi-module checker |
-| 14 | Write barriers | N/A | 0 lines | Intentionally omitted (DRC) |
-| 15 | ~~Move marker → DRC~~ | ~~DONE~~ | ~~200 lines~~ | ~~Completed~~ |
-| 16 | ~~Lambda lifting all FunctionExpr~~ | ~~DONE~~ | ~~482 lines~~ | ~~Completed~~ |
-| 17 | openArray (ptr, len) convention | Functional | ~200 lines | Needs runtime array struct |
-| 18 | JS string encoding (UTF-8 vs UTF-16) | JS Backend | ~200 lines | No |
-| 19 | JS performance & bundle optimization | JS Backend | ~350 lines | No |
-
 **Gap #9 status**: ~~All 5 expression kinds done.~~ UpdateExpr correct, NewExpr acceptable (debt), SpreadExpr correct, ~~MoveExpr → Gap 15 (DONE)~~, ~~FunctionExpr → Gap 16 (DONE)~~. openArray → Gap 17 (separate feature).
 
 **Total to close remaining gaps**: ~1000-1200 lines (gaps 3, 5, 6, 7, 8, 10, 11, 12, 13, 17)
@@ -357,7 +359,13 @@ buf.add(" world");           // in-place append
 
 ---
 
-### 19. JS Performance & Bundle Optimization
+### 19. String/Array Runtime Architecture
+
+**Relocated to [LANG-RUNTIME.md](LANG-RUNTIME.md)** — covers the full runtime architecture including ORC (pure C), string/array runtime (MetaScript .ms), operation dispatch map (codegen vs stdlib), mutable string cross-backend design, and per-backend representation choices.
+
+---
+
+### 20. JS Performance & Bundle Optimization
 
 **Gap**: JS output is functional but not optimized for production deployment. No minification awareness, no tree-shaking validation, no bundle size tracking.
 
@@ -374,6 +382,48 @@ buf.add(" world");           // in-place append
 Phase 1: Add `--release` flag for JS that emits plain integer enums, skips debug helpers. ~50 lines.
 Phase 2: Source map generation (line mapping from .ms to .js). ~200 lines.
 Phase 3: Benchmark suite comparing MetaScript JS output perf vs hand-written JS. ~100 lines.
+
+---
+
+## Design Note: String/Array Operator Codegen (Why Not `std/core.ms`)
+
+MetaScript has operator overloading and subscript overloading (reference compiler supports both). In theory, all string/array operations could be declared in `std/core.ms` with `@runtime` decorators, making codegen type-unaware. However, 9 operations are intentionally handled in codegen (`expressions.ms`) for the same reason Nim uses `{.magic.}` in `ccgexprs.nim` instead of normal overloaded procs:
+
+### Operations handled in codegen
+
+| Pattern | C Emission | Why codegen |
+|---------|-----------|-------------|
+| `s.length` | `s.len` | Direct struct field access — zero-cost, no function call |
+| `arr.length` | `arr.len` | Same |
+| `s == t` / `s === t` | `ms_string_equals(s, t)` | Empty string optimization: `s == ""` → `(s.len == 0)` (future) |
+| `s != t` / `s !== t` | `(!ms_string_equals(s, t))` | Same |
+| `s < t` / `s > t` / `<=` / `>=` | `(ms_string_compare(s, t) op 0)` | Comparison family shares one runtime call |
+| `s + t` | `ms_string_concat(s, t)` | **Concat chain fusion** (Gap #8): `s + t + u` → single allocation |
+| `s[i]` read | `ms_string_char_at(s, i)` | Bounds checking injection point (Gap #6) |
+| `s[i] = ch` | `ms_string_set_char(&s, i, ch)` | COW mutation guard (Gap #18) |
+| `arr[i]` | `arr.p->data[i]` | Direct data access — no function call overhead |
+
+### Why Nim uses magic for the same operations
+
+Nim has full operator overloading. `len`, `==`, `<`, `&`, `[]`, `[]=` are all declared as `proc` in `system.nim` with `{.magic.}` pragmas. The magic tag tells codegen to emit specialized C instead of a function call. Reasons:
+
+1. **Concat chain fusion**: `s & t & u & v` — magic walks the AST, collects all segments, emits ONE `rawNewString(total_len)` + N `appendString()` calls. A normal `proc &(a, b: string): string` would allocate N-1 intermediate strings.
+
+2. **Compile-time literal folding**: Magic sees `"hello"` in the AST and knows its length at compile time. Pre-allocates exact size. A normal proc receives a runtime value.
+
+3. **Empty string fast path**: `s == ""` → `(s.len == 0)` — no function call. Magic inspects the literal AST node.
+
+4. **Aliasing safety**: `s = "x" & s & "y"` — magic allocates new buffer first, reads old `s`, then assigns. Nested proc calls risk use-after-free.
+
+5. **Direct field access**: `s.len` as a struct field read is zero-cost. Even `static inline` functions have call-site overhead the optimizer may not eliminate in debug builds.
+
+### What stays in `std/core.ms`
+
+All **method calls** (`s.trim()`, `s.includes()`, `arr.push()`, etc.) go through the `@runtime` pipeline — no codegen awareness needed. Only **operators**, **properties**, and **subscripts** require codegen handling because their optimizations depend on AST structure visibility.
+
+### Future: operator overloading in self-hosted compiler
+
+MetaScript the language supports operator/subscript overloading (reference compiler implements it). Once the self-hosted compiler implements these features, the _simple_ cases (equality, comparison) could move to `std/core.ms`. But concat chain fusion and bounds checking will always need codegen involvement — the optimization is fundamentally above the procedure-call abstraction level.
 
 ---
 

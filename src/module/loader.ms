@@ -4,6 +4,12 @@
 // Uses SourceProvider abstraction for testability (MapProvider for tests,
 // FileProvider for real I/O).
 //
+// Supports backend-aware resolution via ResolverConfig:
+//   - Backend-specific extensions (.cms, .jms, .rms, .ems, .wms)
+//   - std/ library resolution against configurable stdPath
+//   - Multiple search paths for bare imports
+//   - Path alias rewriting
+//
 // NOTE: ASTs are NOT stored on Module (DRC lifecycle mangling bug prevents
 // storing Node on interfaces defined outside ast/node.ms). The loader parses
 // temporarily to extract import declarations, then discards the AST.
@@ -15,7 +21,7 @@ import {
 	findModule, addModule,
 	isInImportStack, pushImportStack, popImportStack,
 } from "./graph";
-import { resolveImport, isStdImport } from "./resolver";
+import { resolveImport, resolveImportWithConfig, isStdImport, ResolverConfig } from "./resolver";
 import { lex } from "../lexer/lexer";
 import { createState } from "../parser/context";
 import { callStateProgramParser } from "../parser/statements/callbacks";
@@ -66,7 +72,8 @@ function finalizeModule(graph: ModuleGraph, mod: Module, path: string): void {
 	graph.loadOrder.push(path);
 }
 
-export function loadModule(graph: ModuleGraph, path: string, provider: SourceProvider): Result<boolean, string> {
+// useConfig: 0 = legacy (skip std, .ms only), 1 = use ResolverConfig
+export function loadModule(graph: ModuleGraph, path: string, provider: SourceProvider, config: ResolverConfig, useConfig: number): Result<boolean, string> {
 	// Already in graph — check if still loading (circular import)
 	const existing = findModule(graph, path);
 	if (existing !== null) {
@@ -106,11 +113,16 @@ export function loadModule(graph: ModuleGraph, path: string, provider: SourcePro
 	mod.state = ModuleState.Parsed;
 
 	// Walk AST for import declarations (works on partial ASTs)
+	if (!parseResult.ok) {
+		mod.errors.push("Parse: " + parseResult.error);
+		finalizeModule(graph, mod, path);
+		return Result.ok(false);
+	}
 	const program = parseResult.value;
 	const pd = program.data as ProgramData;
 	for (const stmt of pd.programStmts) {
 		if (stmt.kind === NodeKind.ImportDecl) {
-			processImportDecl(graph, mod, stmt, provider);
+			processImportDecl(graph, mod, stmt, provider, config, useConfig);
 		}
 	}
 
@@ -121,45 +133,78 @@ export function loadModule(graph: ModuleGraph, path: string, provider: SourcePro
 
 // ===== Import Processing =====
 
-function processImportDecl(graph: ModuleGraph, mod: Module, node: Node, provider: SourceProvider): void {
+function processImportDecl(graph: ModuleGraph, mod: Module, node: Node, provider: SourceProvider, config: ResolverConfig, useConfig: number): void {
 	const d = node.data as ImportDeclData;
 	const specifier = d.importSource;
 
-	// Skip std library imports
-	if (isStdImport(specifier)) return;
+	if (useConfig === 0) {
+		// Legacy mode: skip std, resolve .ms only
+		if (isStdImport(specifier)) return;
 
-	// Resolve import to candidate paths
-	const candidates = resolveImport(specifier, mod.path);
-
-	// Try each candidate path
-	let resolved = "";
-	for (const candidate of candidates.paths) {
-		if (resolved === "") {
-			const trySource = provideSource(provider, candidate);
-			if (trySource.ok) {
-				resolved = candidate;
+		const candidates = resolveImport(specifier, mod.path);
+		let resolved = "";
+		for (const candidate of candidates.paths) {
+			if (resolved === "") {
+				const trySource = provideSource(provider, candidate);
+				if (trySource.ok) {
+					resolved = candidate;
+				}
 			}
 		}
+
+		if (resolved === "") {
+			mod.errors.push("Cannot resolve import '" + specifier + "' from " + mod.path);
+			return;
+		}
+
+		const entry = createImportEntry(d.importNames, d.importAliases, resolved, specifier);
+		mod.imports.push(entry);
+		const _loadResult = loadModule(graph, resolved, provider, config, 0);
+	} else {
+		// Config-aware mode: resolve all imports including std/
+		const candidates = resolveImportWithConfig(specifier, mod.path, config);
+
+		let resolved = "";
+		let i = 0;
+		while (i < candidates.paths.length) {
+			if (resolved === "") {
+				const trySource = provideSource(provider, candidates.paths[i]);
+				if (trySource.ok) {
+					resolved = candidates.paths[i];
+				}
+			}
+			i = i + 1;
+		}
+
+		if (resolved === "") {
+			// std/ with empty stdPath: silently skip (handled externally)
+			if (isStdImport(specifier) && config.stdPath.length === 0) return;
+			mod.errors.push("Cannot resolve import '" + specifier + "' from " + mod.path);
+			return;
+		}
+
+		const entry = createImportEntry(d.importNames, d.importAliases, resolved, specifier);
+		mod.imports.push(entry);
+		const _loadResult = loadModule(graph, resolved, provider, config, 1);
 	}
-
-	if (resolved === "") {
-		mod.errors.push("Cannot resolve import '" + specifier + "' from " + mod.path);
-		return;
-	}
-
-	// Create import entry
-	const entry = createImportEntry(d.importNames, d.importAliases, resolved, specifier);
-	mod.imports.push(entry);
-
-	// Recursively load the dependency (capture result to avoid DRC discard issue)
-	const _loadResult = loadModule(graph, resolved, provider);
 }
 
 // ===== Convenience: Load from entry point =====
 
+// Config-aware graph loading
+export function loadModuleGraphWithConfig(entryPath: string, provider: SourceProvider, config: ResolverConfig): ModuleGraph {
+	const graph = createModuleGraph();
+	const _r = loadModule(graph, entryPath, provider, config, 1);
+	return graph;
+}
+
+// Legacy (no config) — backward compat
 export function loadModuleGraph(entryPath: string, provider: SourceProvider): ModuleGraph {
 	const graph = createModuleGraph();
-	const _r = loadModule(graph, entryPath, provider);
+	// Create a dummy config — not used in legacy mode (useConfig=0)
+	const dummyExts: string[] = [];
+	const dummyCfg: ResolverConfig = { backend: 0, stdPath: "", searchPaths: [], extensions: dummyExts, aliasKeys: [], aliasValues: [] };
+	const _r = loadModule(graph, entryPath, provider, dummyCfg, 0);
 	return graph;
 }
 

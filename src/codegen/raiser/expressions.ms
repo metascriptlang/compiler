@@ -7,17 +7,31 @@ import {
 	BinaryExprData, UnaryExprData,
 	CallExprData, IdentifierData, MemberExprData,
 	ConditionalExprData, TypeAssertionData, UpdateExprData,
-	ArrayLiteralData, ArrayAccessData, ObjectLiteralData
+	ArrayLiteralData, ArrayAccessData, ObjectLiteralData,
+	MoveExprData
 } from "../../ast/node";
 import {
 	RaiserOpcode, raiserABC, raiserABx
 } from "../../raiser/bytecode";
-import { raiserInt, raiserNil, raiserBool, raiserString } from "../../raiser/value";
+import { raiserInt, raiserFloat, raiserNil, raiserBool, raiserString } from "../../raiser/value";
 import {
 	RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, resolveLocal,
 	resolveFunc, isLocalString, isEnumName, resolveEnumMember,
-	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen
+	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen,
+	markRegFloat, isRegFloat
 } from "./context";
+
+// --- Float detection ---
+// Check if a number has a fractional part by examining its string representation.
+// "3.14" contains "." → float, "2" does not → int, "2.0" → "2" (no dot) → int (correct: same value)
+
+function numberIsFloat(v: number): boolean {
+	const s = "" + v;
+	for (let i = 0; i < s.length; i = i + 1) {
+		if (s.slice(i, i + 1) === ".") return true;
+	}
+	return false;
+}
 
 // --- Operator → Opcode mapping ---
 
@@ -29,6 +43,29 @@ function arithmeticOpcode(op: string): RaiserOpcode {
 		"/" => RaiserOpcode.DivI64,
 		"%" => RaiserOpcode.ModI64,
 		_ => RaiserOpcode.AddI64,
+	};
+}
+
+function arithmeticOpcodeF64(op: string): RaiserOpcode {
+	return match (op) {
+		"+" => RaiserOpcode.AddF64,
+		"-" => RaiserOpcode.SubF64,
+		"*" => RaiserOpcode.MulF64,
+		"/" => RaiserOpcode.DivF64,
+		"%" => RaiserOpcode.ModI64,
+		_ => RaiserOpcode.AddF64,
+	};
+}
+
+function comparisonOpcodeF64(op: string): RaiserOpcode {
+	return match (op) {
+		"==" | "===" => RaiserOpcode.BeqF64,
+		"!=" | "!==" => RaiserOpcode.BneF64,
+		"<" => RaiserOpcode.BltF64,
+		"<=" => RaiserOpcode.BleF64,
+		">" => RaiserOpcode.BgtF64,
+		">=" => RaiserOpcode.BgeF64,
+		_ => RaiserOpcode.BeqF64,
 	};
 }
 
@@ -62,6 +99,24 @@ function isLogicalOp(op: string): boolean {
 	return match (op) {
 		"&&" | "||" => true,
 		_ => false,
+	};
+}
+
+function isBitwiseOp(op: string): boolean {
+	return match (op) {
+		"&" | "|" | "^" | "<<" | ">>" => true,
+		_ => false,
+	};
+}
+
+function bitwiseOpcode(op: string): RaiserOpcode {
+	return match (op) {
+		"&" => RaiserOpcode.BitAnd,
+		"|" => RaiserOpcode.BitOr,
+		"^" => RaiserOpcode.BitXor,
+		"<<" => RaiserOpcode.ShiftLeft,
+		">>" => RaiserOpcode.ShiftRight,
+		_ => RaiserOpcode.BitAnd,
 	};
 }
 
@@ -115,7 +170,12 @@ export function compileExpr(s: RaiserCompState, node: Node): number {
 	if (k === NodeKind.NumberLiteral) {
 		const d = node.data as NumberLiteralData;
 		const reg = allocReg(s);
-		emitLoadConst(s, reg, raiserInt(d.value));
+		if (numberIsFloat(d.value)) {
+			emitLoadConst(s, reg, raiserFloat(d.value));
+			markRegFloat(s, reg);
+		} else {
+			emitLoadConst(s, reg, raiserInt(d.value));
+		}
 		return reg;
 	}
 
@@ -194,6 +254,11 @@ export function compileExpr(s: RaiserCompState, node: Node): number {
 
 	if (k === NodeKind.ObjectLiteral) {
 		return compileObjectLiteral(s, node);
+	}
+
+	if (k === NodeKind.MoveExpr) {
+		const d = node.data as MoveExprData;
+		return compileExpr(s, d.moveArg);
 	}
 
 	// Fallback: load nil
@@ -279,18 +344,34 @@ function compileBinaryExpr(s: RaiserCompState, node: Node): number {
 	const lReg = compileExpr(s, d.left);
 	const rReg = compileExpr(s, d.right);
 	const dest = allocReg(s);
+	const useFloat = isRegFloat(s, lReg) || isRegFloat(s, rReg);
 
-	// Comparison: R_result = 1; BxxI64 L R 1; R_result = 0
+	// Bitwise operators
+	if (isBitwiseOp(op)) {
+		emitInst(s, raiserABC(bitwiseOpcode(op), dest, lReg, rReg));
+		return dest;
+	}
+
+	// Comparison: R_result = 1; BxxI64/BxxF64 L R 1; R_result = 0
 	if (isComparisonOp(op)) {
 		emitLoadConst(s, dest, raiserInt(1));
-		emitInst(s, raiserABC(comparisonOpcode(op), lReg, rReg, 1));
+		if (useFloat) {
+			emitInst(s, raiserABC(comparisonOpcodeF64(op), lReg, rReg, 1));
+		} else {
+			emitInst(s, raiserABC(comparisonOpcode(op), lReg, rReg, 1));
+		}
 		emitLoadConst(s, dest, raiserInt(0));
 		return dest;
 	}
 
 	// Arithmetic
 	if (isArithmeticOp(op)) {
-		emitInst(s, raiserABC(arithmeticOpcode(op), dest, lReg, rReg));
+		if (useFloat) {
+			emitInst(s, raiserABC(arithmeticOpcodeF64(op), dest, lReg, rReg));
+			markRegFloat(s, dest);
+		} else {
+			emitInst(s, raiserABC(arithmeticOpcode(op), dest, lReg, rReg));
+		}
 		return dest;
 	}
 
@@ -306,7 +387,14 @@ function compileUnaryExpr(s: RaiserCompState, node: Node): number {
 	const dest = allocReg(s);
 
 	if (d.unaryOp === "-") {
-		emitInst(s, raiserABC(RaiserOpcode.NegI64, dest, srcReg, 0));
+		if (isRegFloat(s, srcReg)) {
+			emitInst(s, raiserABC(RaiserOpcode.NegF64, dest, srcReg, 0));
+			markRegFloat(s, dest);
+		} else {
+			emitInst(s, raiserABC(RaiserOpcode.NegI64, dest, srcReg, 0));
+		}
+	} else if (d.unaryOp === "~") {
+		emitInst(s, raiserABC(RaiserOpcode.BitNot, dest, srcReg, 0));
 	} else if (d.unaryOp === "!") {
 		// Logical NOT: result = (src == 0) ? 1 : 0
 		const zeroReg = allocReg(s);
@@ -368,6 +456,36 @@ function compileCompoundAssign(s: RaiserCompState, node: Node): number {
 			}
 			return targetReg;
 		}
+	}
+
+	// Compound assign on member: obj.field += val → LoadField + op + StoreField
+	if (d.left.kind === NodeKind.MemberExpr) {
+		const md = d.left.data as MemberExprData;
+		const objReg = compileExpr(s, md.object);
+		const nameIdx = addConst(s, raiserString(md.property));
+		const tmpReg = allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.LoadField, tmpReg, objReg, nameIdx));
+		const rhsReg = compileExpr(s, d.right);
+		if (op === "+=" && (exprIsString(s, d.left) || exprIsString(s, d.right))) {
+			emitInst(s, raiserABC(RaiserOpcode.ConcatStr, tmpReg, tmpReg, rhsReg));
+		} else {
+			emitInst(s, raiserABC(compoundBaseOpcode(op), tmpReg, tmpReg, rhsReg));
+		}
+		emitInst(s, raiserABC(RaiserOpcode.StoreField, objReg, nameIdx, tmpReg));
+		return tmpReg;
+	}
+
+	// Compound assign on array: arr[i] += val → LoadIndex + op + StoreIndex
+	if (d.left.kind === NodeKind.ArrayAccess) {
+		const ad = d.left.data as ArrayAccessData;
+		const arrReg = compileExpr(s, ad.array);
+		const idxReg = compileExpr(s, ad.index);
+		const tmpReg = allocReg(s);
+		emitInst(s, raiserABC(RaiserOpcode.LoadIndex, tmpReg, arrReg, idxReg));
+		const rhsReg = compileExpr(s, d.right);
+		emitInst(s, raiserABC(compoundBaseOpcode(op), tmpReg, tmpReg, rhsReg));
+		emitInst(s, raiserABC(RaiserOpcode.StoreIndex, arrReg, idxReg, tmpReg));
+		return tmpReg;
 	}
 
 	// Fallback: unsupported compound assign target

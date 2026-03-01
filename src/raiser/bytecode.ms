@@ -58,6 +58,29 @@ export enum RaiserOpcode {
 
 	// Indirect call (1)
 	CallIndirect,     // ABC: R[A] = call func[R[B].intVal](R[A+1]..R[A+C])
+
+	// f64 Arithmetic (5)
+	AddF64,           // ABC: R[A] = R[B].floatVal + R[C].floatVal
+	SubF64,           // ABC: R[A] = R[B].floatVal - R[C].floatVal
+	MulF64,           // ABC: R[A] = R[B].floatVal * R[C].floatVal
+	DivF64,           // ABC: R[A] = R[B].floatVal / R[C].floatVal
+	NegF64,           // ABC: R[A] = -R[B].floatVal
+
+	// f64 Compare-Branch (6)
+	BeqF64,           // ABC: if R[A].floatVal == R[B].floatVal skip C
+	BneF64,           // ABC: if R[A].floatVal != R[B].floatVal skip C
+	BltF64,           // ABC: if R[A].floatVal <  R[B].floatVal skip C
+	BleF64,           // ABC: if R[A].floatVal <= R[B].floatVal skip C
+	BgtF64,           // ABC: if R[A].floatVal >  R[B].floatVal skip C
+	BgeF64,           // ABC: if R[A].floatVal >= R[B].floatVal skip C
+
+	// Bitwise operations (6)
+	BitAnd,           // ABC: R[A] = R[B] & R[C]
+	BitOr,            // ABC: R[A] = R[B] | R[C]
+	BitXor,           // ABC: R[A] = R[B] ^ R[C]
+	BitNot,           // ABC: R[A] = ~R[B]
+	ShiftLeft,        // ABC: R[A] = R[B] << R[C]
+	ShiftRight,       // ABC: R[A] = R[B] >> R[C]
 }
 
 // --- Instruction ---

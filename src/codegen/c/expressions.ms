@@ -127,10 +127,40 @@ export function genExprAssign(g: CGen, p: CProc, node: Node, destSnippet: string
 
 function genBinaryExpr(g: CGen, p: CProc, node: Node): string {
 	const d = node.data as BinaryExprData;
+	// String index assignment: s[i] = ch → ms_string_set_char(&s, i, ch)
+	if (d.operator === "=" && d.left.kind === NodeKind.ArrayAccess) {
+		const ad = d.left.data as ArrayAccessData;
+		if (isStringTyped(ad.array)) {
+			const arr = genExpr(g, p, ad.array);
+			const idx = genExpr(g, p, ad.index);
+			const val = genExpr(g, p, d.right);
+			return "ms_string_set_char(&" + arr + ", " + idx + ", " + val + ")";
+		}
+	}
 	const left = genExpr(g, p, d.left);
 	const right = genExpr(g, p, d.right);
+	// String comparison: use runtime functions instead of C operators
+	if (isStringTyped(d.left) || isStringTyped(d.right)) {
+		if (d.operator === "===" || d.operator === "==") {
+			return "ms_string_equals(" + left + ", " + right + ")";
+		}
+		if (d.operator === "!==" || d.operator === "!=") {
+			return "(!ms_string_equals(" + left + ", " + right + "))";
+		}
+		if (d.operator === "<" || d.operator === ">" || d.operator === "<=" || d.operator === ">=") {
+			return "(ms_string_compare(" + left + ", " + right + ") " + d.operator + " 0)";
+		}
+		if (d.operator === "+") {
+			return "ms_string_concat(" + left + ", " + right + ")";
+		}
+	}
 	const cOp = mapBinaryOp(d.operator);
 	return "(" + left + " " + cOp + " " + right + ")";
+}
+
+function isStringTyped(node: Node): boolean {
+	if (node.nodeType === null) return false;
+	return node.nodeType.kind === TypeKind.String;
 }
 
 function mapBinaryOp(op: string): string {
@@ -164,6 +194,12 @@ function genHiddenDeref(g: CGen, p: CProc, node: Node): string {
 function genMemberExpr(g: CGen, p: CProc, node: Node): string {
 	const d = node.data as MemberExprData;
 	const obj = genExpr(g, p, d.object);
+	// Builtin property remapping: .length → .len for string and array types
+	if (d.property === "length" && d.object.nodeType !== null) {
+		if (d.object.nodeType.kind === TypeKind.String || d.object.nodeType.kind === TypeKind.Array) {
+			return obj + ".len";
+		}
+	}
 	const field = mangleFieldName(d.property);
 	return obj + "." + field;
 }
@@ -176,6 +212,10 @@ function genArrayAccess(g: CGen, p: CProc, node: Node): string {
 	const d = node.data as ArrayAccessData;
 	const arr = genExpr(g, p, d.array);
 	const idx = genExpr(g, p, d.index);
+	// String index read: s[i] → ms_string_char_at(s, i)
+	if (isStringTyped(d.array)) {
+		return "ms_string_char_at(" + arr + ", " + idx + ")";
+	}
 	if (d.array.nodeType !== null && d.array.nodeType.kind === TypeKind.Array) {
 		return arr + ".p->data[" + idx + "]";
 	}

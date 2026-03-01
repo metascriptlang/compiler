@@ -3,15 +3,19 @@
 
 import { Node } from "../ast/node";
 import {
-	CheckerContext, createModuleContext,
+	CheckerContext, createModuleContext, createContext,
 	ExportedSymInfo, createExportRegistry, registerModuleExports,
+	findExtensionByName,
 } from "./context";
-import { SymbolKind } from "./symbol";
+import { SymbolKind, ScopeKind, openScope } from "./symbol";
 import { Module, ModuleGraph, findModule } from "../module/graph";
 import { runThreePasses } from "./checkPass";
+import { globalImports } from "./prelude";
+import { parseSource } from "../parser/statements/validation";
 import { lex } from "../lexer/lexer";
 import { ParserState, createState } from "../parser/context";
 import { callStateProgramParser } from "../parser/statements/callbacks";
+import { readFile } from "std/process";
 import { test, check, testGroup } from "std/testing";
 
 // Nim-aligned: check modules one at a time in topological (loadOrder) sequence.
@@ -19,8 +23,28 @@ import { test, check, testGroup } from "std/testing";
 // Since modules are in dependency order, exports from dependencies are
 // available when checking their dependents.
 
-export function checkModuleGraph(graph: ModuleGraph): void {
+// stdPath: when non-empty, resolves std/ imports against this path.
+// When empty, falls back to relative "std/" (resolved by reference compiler).
+export function checkModuleGraph(graph: ModuleGraph, stdPath: string): void {
 	const registry = createExportRegistry();
+
+	// Load prelude (std/core.ms) into a base context — provides console, Math, etc.
+	// This mirrors what checkProgram() does for single-module builds.
+	const baseCtx = createContext();
+	for (const imp of globalImports()) {
+		let impPath = imp;
+		if (stdPath.length > 0 && imp.length > 4) {
+			// Replace "std/" prefix with absolute stdPath
+			impPath = stdPath + "/" + imp.slice(4, imp.length);
+		}
+		const src = readFile(impPath);
+		if (src.length > 0) {
+			const pr = parseSource(src);
+			if (pr.ok) {
+				runThreePasses(baseCtx, pr.value);
+			}
+		}
+	}
 
 	for (const path of graph.loadOrder) {
 		const mod = findModule(graph, path);
@@ -43,6 +67,15 @@ export function checkModuleGraph(graph: ModuleGraph): void {
 		const ctx = createModuleContext(graph, mod);
 		ctx.exportRegistry = registry;
 
+		// Inject prelude symbols into this module's Global scope
+		// (so console, Math, etc. are available)
+		for (const sym of baseCtx.table.current.symbols) {
+			ctx.table.current.symbols.push(sym);
+		}
+
+		// Open Module scope for this module's declarations
+		openScope(ctx.table, ScopeKind.Module);
+
 		runThreePasses(ctx, pr.value);
 
 		// Copy errors to module
@@ -55,7 +88,17 @@ export function checkModuleGraph(graph: ModuleGraph): void {
 		for (const sym of ctx.table.current.symbols) {
 			if (sym.isExported) {
 				mod.exportNames.push(sym.name);
-				const info: ExportedSymInfo = { name: sym.name, kind: sym.symbolKind, symType: sym.symbolType };
+				// Check if this exported function is an extension method
+				let extRecv = "";
+				let extStatic = false;
+				if (ctx.extensionRegistry !== null && sym.symbolKind === SymbolKind.Function) {
+					const ext = findExtensionByName(ctx.extensionRegistry, sym.name);
+					if (ext !== null) {
+						extRecv = ext.receiverTypeName;
+						extStatic = ext.isStatic;
+					}
+				}
+				const info: ExportedSymInfo = { name: sym.name, kind: sym.symbolKind, symType: sym.symbolType, extReceiverType: extRecv, extIsStatic: extStatic };
 				exports.push(info);
 			}
 		}
@@ -78,7 +121,7 @@ testGroup("Checker Multi-Module", () => {
 		entries.push({ entryPath: "/src/a.ms", entrySource: "const x = 1;" });
 		const provider = createMapProvider(entries);
 		const graph = loadModuleGraph("/src/a.ms", provider);
-		checkModuleGraph(graph);
+		checkModuleGraph(graph, "");
 		check(graph.errors.length === 0);
 		const mod = findModule(graph, "/src/a.ms");
 		check(mod !== null);
@@ -89,7 +132,7 @@ testGroup("Checker Multi-Module", () => {
 		entries.push({ entryPath: "/src/a.ms", entrySource: "const x = y;" });
 		const provider = createMapProvider(entries);
 		const graph = loadModuleGraph("/src/a.ms", provider);
-		checkModuleGraph(graph);
+		checkModuleGraph(graph, "");
 		const mod = findModule(graph, "/src/a.ms");
 		check(mod !== null);
 		check(mod.errors.length > 0);
@@ -99,7 +142,7 @@ testGroup("Checker Multi-Module", () => {
 		entries.push({ entryPath: "/src/a.ms", entrySource: "export function foo() { return 1; } function bar() { return 2; }" });
 		const provider = createMapProvider(entries);
 		const graph = loadModuleGraph("/src/a.ms", provider);
-		checkModuleGraph(graph);
+		checkModuleGraph(graph, "");
 		const mod = findModule(graph, "/src/a.ms");
 		check(mod !== null);
 		check(hasExportName(mod, "foo"));
@@ -111,7 +154,7 @@ testGroup("Checker Multi-Module", () => {
 		entries.push({ entryPath: "/src/b.ms", entrySource: "export function foo() { return 1; }" });
 		const provider = createMapProvider(entries);
 		const graph = loadModuleGraph("/src/a.ms", provider);
-		checkModuleGraph(graph);
+		checkModuleGraph(graph, "");
 		// Both modules should check without errors
 		const modA = findModule(graph, "/src/a.ms");
 		const modB = findModule(graph, "/src/b.ms");
@@ -125,7 +168,7 @@ testGroup("Checker Multi-Module", () => {
 		entries.push({ entryPath: "/src/a.ms", entrySource: "import { foo } from \"./b\"; const x = foo(1);" });
 		const provider = createMapProvider(entries);
 		const graph = loadModuleGraph("/src/a.ms", provider);
-		checkModuleGraph(graph);
+		checkModuleGraph(graph, "");
 		const modA = findModule(graph, "/src/a.ms");
 		const modB = findModule(graph, "/src/b.ms");
 		check(modA !== null);
@@ -139,7 +182,7 @@ testGroup("Checker Multi-Module", () => {
 		entries.push({ entryPath: "/src/a.ms", entrySource: "import { Color } from \"./b\"; const c = Color;" });
 		const provider = createMapProvider(entries);
 		const graph = loadModuleGraph("/src/a.ms", provider);
-		checkModuleGraph(graph);
+		checkModuleGraph(graph, "");
 		const modA = findModule(graph, "/src/a.ms");
 		check(modA !== null);
 		check(modA.errors.length === 0);
@@ -150,7 +193,7 @@ testGroup("Checker Multi-Module", () => {
 		entries.push({ entryPath: "/src/a.ms", entrySource: "import { Point } from \"./b\"; function getX(p: Point): number { return 1; }" });
 		const provider = createMapProvider(entries);
 		const graph = loadModuleGraph("/src/a.ms", provider);
-		checkModuleGraph(graph);
+		checkModuleGraph(graph, "");
 		const modA = findModule(graph, "/src/a.ms");
 		check(modA !== null);
 		check(modA.errors.length === 0);
@@ -161,7 +204,7 @@ testGroup("Checker Multi-Module", () => {
 		entries.push({ entryPath: "/src/a.ms", entrySource: "import { secret } from \"./b\";" });
 		const provider = createMapProvider(entries);
 		const graph = loadModuleGraph("/src/a.ms", provider);
-		checkModuleGraph(graph);
+		checkModuleGraph(graph, "");
 		const modA = findModule(graph, "/src/a.ms");
 		check(modA !== null);
 		check(modA.errors.length > 0);
@@ -173,7 +216,7 @@ testGroup("Checker Multi-Module", () => {
 		entries.push({ entryPath: "/src/a.ms", entrySource: "import { greet } from \"./b\"; const msg = greet(\"world\");" });
 		const provider = createMapProvider(entries);
 		const graph = loadModuleGraph("/src/a.ms", provider);
-		checkModuleGraph(graph);
+		checkModuleGraph(graph, "");
 		const modA = findModule(graph, "/src/a.ms");
 		check(modA !== null);
 		check(modA.errors.length === 0);
@@ -185,7 +228,7 @@ testGroup("Checker Multi-Module", () => {
 		entries.push({ entryPath: "/src/a.ms", entrySource: "import { foo } from \"./b\"; const x = foo();" });
 		const provider = createMapProvider(entries);
 		const graph = loadModuleGraph("/src/a.ms", provider);
-		checkModuleGraph(graph);
+		checkModuleGraph(graph, "");
 		const modA = findModule(graph, "/src/a.ms");
 		const modB = findModule(graph, "/src/b.ms");
 		check(modA !== null);
@@ -200,7 +243,7 @@ testGroup("Checker Multi-Module", () => {
 		entries.push({ entryPath: "/src/a.ms", entrySource: "import { helper } from \"./b\"; const x = helper();" });
 		const provider = createMapProvider(entries);
 		const graph = loadModuleGraph("/src/a.ms", provider);
-		checkModuleGraph(graph);
+		checkModuleGraph(graph, "");
 		const modB = findModule(graph, "/src/b.ms");
 		check(modB !== null);
 		check(hasExportName(modB, "helper"));
@@ -213,11 +256,22 @@ testGroup("Checker Multi-Module", () => {
 		entries.push({ entryPath: "/src/a.ms", entrySource: "export function foo() { return 1; } const = bad;" });
 		const provider = createMapProvider(entries);
 		const graph = loadModuleGraph("/src/a.ms", provider);
-		checkModuleGraph(graph);
+		checkModuleGraph(graph, "");
 		const mod = findModule(graph, "/src/a.ms");
 		check(mod !== null);
 		check(mod.errors.length > 0);
 		check(hasExportName(mod, "foo"));
+	});
+	test("imported extension method available", () => {
+		const entries: MapEntry[] = [];
+		entries.push({ entryPath: "/src/b.ms", entrySource: "export function trim(this s: string): string { return s; }" });
+		entries.push({ entryPath: "/src/a.ms", entrySource: "import { trim } from \"./b\"; const s = \"hello\"; const t = s.trim();" });
+		const provider = createMapProvider(entries);
+		const graph = loadModuleGraph("/src/a.ms", provider);
+		checkModuleGraph(graph, "");
+		const modA = findModule(graph, "/src/a.ms");
+		check(modA !== null);
+		check(modA.errors.length === 0);
 	});
 	test("parse error in dependency doesn't block dependent", () => {
 		const entries: MapEntry[] = [];
@@ -225,7 +279,7 @@ testGroup("Checker Multi-Module", () => {
 		entries.push({ entryPath: "/src/a.ms", entrySource: "import { bar } from \"./b\"; const x = bar;" });
 		const provider = createMapProvider(entries);
 		const graph = loadModuleGraph("/src/a.ms", provider);
-		checkModuleGraph(graph);
+		checkModuleGraph(graph, "");
 		const modA = findModule(graph, "/src/a.ms");
 		check(modA !== null);
 		// Module A can resolve 'bar' from B's partial exports

@@ -180,6 +180,17 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 				if (exportInfo !== null) {
 					// Use actual type and kind from source module
 					defineOrError(ctx, makeSymbol(localAlias, exportInfo.kind, exportInfo.symType, false), node);
+					// If imported symbol is an extension method, register it locally
+					if (exportInfo.extReceiverType !== "" && ctx.extensionRegistry !== null) {
+						const extMethod: ExtensionMethod = {
+							methodName: localAlias,
+							receiverTypeName: exportInfo.extReceiverType,
+							sourcePath: sourcePath,
+							fnType: exportInfo.symType,
+							isStatic: exportInfo.extIsStatic,
+						};
+						registerExtension(ctx.extensionRegistry, extMethod);
+					}
 				} else {
 					// Name not found in source module's exports
 					addError(ctx, "'" + importName + "' is not exported from '" + d.importSource + "'");

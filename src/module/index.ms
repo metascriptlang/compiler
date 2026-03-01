@@ -9,12 +9,13 @@ export {
 } from "./graph";
 
 export {
-	ResolveCandidates, resolveImport,
-	buildFilePath, buildIndexPath, isStdImport,
+	ResolveCandidates, ResolverConfig, resolveImport, resolveImportWithConfig,
+	backendExtension, createDefaultConfig, isStdImport,
+	BACKEND_C, BACKEND_JS, BACKEND_RAISER, BACKEND_ERLANG, BACKEND_WASM,
 } from "./resolver";
 
 export {
 	MapEntry, SourceProvider,
 	createMapProvider, createFileSystemProvider, provideSource,
-	loadModule, loadModuleGraph,
+	loadModule, loadModuleGraph, loadModuleGraphWithConfig,
 } from "./loader";

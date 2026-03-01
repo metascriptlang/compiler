@@ -28,17 +28,23 @@ import { test, check, testGroup } from "std/testing";
 
 // ===== genDecl — main declaration dispatcher =====
 
-export function genDecl(g: CGen, node: Node): void {
+export function genDecl(g: CGen, node: Node, exported: boolean): void {
 	if (node === null) return;
 
 	const k = node.kind;
-	if (k === NodeKind.FunctionDecl) { genFunctionDecl(g, node); }
+	if (k === NodeKind.FunctionDecl) { genFunctionDecl(g, node, exported); }
 	else if (k === NodeKind.EnumDecl) { genEnumDecl(g, node); }
 	else if (k === NodeKind.InterfaceDecl) { genInterfaceDecl(g, node); }
 	else if (k === NodeKind.ClassDecl) { genClassDecl(g, node); }
-	else if (k === NodeKind.ExportDecl) { genExportDecl(g, node); }
+	else if (k === NodeKind.ExportDecl) {
+		const d = node.data as ExportDeclData;
+		genDecl(g, d.exportedDecl, true);
+	}
 	else if (k === NodeKind.ImportDecl) { /* imports handled at module level */ }
-	else if (k === NodeKind.DecoratedDecl) { genDecoratedDecl(g, node); }
+	else if (k === NodeKind.DecoratedDecl) {
+		const d = node.data as DecoratedDeclData;
+		genDecl(g, d.decoratedNode, exported);
+	}
 	else if (k === NodeKind.TypeAliasDecl) { /* type aliases are compile-time only */ }
 	else if (k === NodeKind.ExternDecl) { /* extern declarations handled in types/headers */ }
 	else {
@@ -49,7 +55,7 @@ export function genDecl(g: CGen, node: Node): void {
 
 // ===== Function Declaration =====
 
-function genFunctionDecl(g: CGen, node: Node): void {
+function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	const d = node.data as FunctionDeclData;
 	const name = safeName(d.fnName);
 
@@ -69,8 +75,11 @@ function genFunctionDecl(g: CGen, node: Node): void {
 	}
 	if (d.params.length === 0) paramList = "void";
 
+	// Non-exported functions get static prefix (better optimization, smaller symbol tables)
+	const prefix = exported ? "" : "static ";
+
 	// Emit prototype to ProcHeaders
-	const proto = cRetType + " " + name + "(" + paramList + ")";
+	const proto = prefix + cRetType + " " + name + "(" + paramList + ")";
 	addLine(sec(g, CSection.ProcHeaders), proto + ";");
 
 	// Emit function body to Procs
@@ -239,21 +248,7 @@ function genConstructor(g: CGen, node: Node, className: string): void {
 	}
 }
 
-// ===== Export Declaration =====
-
-function genExportDecl(g: CGen, node: Node): void {
-	const d = node.data as ExportDeclData;
-	// In C backend, exports are just declarations (no export keyword)
-	genDecl(g, d.exportedDecl);
-}
-
-// ===== Decorated Declaration =====
-
-function genDecoratedDecl(g: CGen, node: Node): void {
-	const d = node.data as DecoratedDeclData;
-	// Skip decorators, emit inner declaration
-	genDecl(g, d.decoratedNode);
-}
+// genExportDecl and genDecoratedDecl inlined into genDecl (exported flag threading)
 
 // ===== Top-level Statement =====
 
@@ -308,7 +303,7 @@ export function mapTypeAnnotation(annotation: string): string {
 	return "void*";
 }
 
-function mapParamType(paramTypes: string[], idx: number): string {
+export function mapParamType(paramTypes: string[], idx: number): string {
 	if (idx < paramTypes.length) return mapTypeAnnotation(paramTypes[idx]);
 	return "void*";
 }
@@ -327,7 +322,7 @@ function declOutput(input: string): string {
 	const pd = prog.data as ProgramData;
 	const g = createCGen(null as unknown as CheckerContext, "test");
 	for (let i = 0; i < pd.programStmts.length; i += 1) {
-		genDecl(g, pd.programStmts[i]);
+		genDecl(g, pd.programStmts[i], false);
 	}
 	return assembleOutput(g);
 }
