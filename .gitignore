@@ -3,6 +3,9 @@
 .DS_Store
 
 out/
+examples/
+.zig-cache/
+zig-out/
 
 src/**/*.c
 !src/raiser/dispatch.c

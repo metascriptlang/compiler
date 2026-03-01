@@ -1,0 +1,3 @@
+[submodule "vendor/aro"]
+	path = vendor/aro
+	url = https://github.com/Vexu/arocc.git

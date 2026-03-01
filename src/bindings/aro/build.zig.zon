@@ -1,0 +1,14 @@
+.{
+    .name = .aro_ffi,
+    .version = "0.0.1",
+    .fingerprint = 0x35d869c2d5e8e0ac,
+    .minimum_zig_version = "0.15.0-dev.276+9bbac4288",
+    .dependencies = .{
+        .aro = .{ .path = "../../../vendor/aro" },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "ffi.zig",
+    },
+}
