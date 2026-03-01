@@ -36,7 +36,7 @@ export function checkExpr(ctx: CheckerContext, node: Node): Type {
 		NodeKind.StringLiteral => stringType(),
 		NodeKind.BooleanLiteral => booleanType(),
 		NodeKind.NullLiteral => nullType(),
-		NodeKind.RegexLiteral | NodeKind.QuoteExpr => unknownType(),
+		NodeKind.RegexLiteral | NodeKind.QuoteExpr | NodeKind.ComptimeBlock => unknownType(),
 		NodeKind.Identifier => {
 			const d = node.data as IdentifierData;
 			const sym = lookupSymbol(ctx.table, d.name);

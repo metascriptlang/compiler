@@ -7,7 +7,7 @@ import { Node, NodeKind, DeclKind,
 	ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ArrowFunctionData, FunctionExprData,
 	TypeAssertionData, ConditionalExprData, SpreadExprData, NewExprData, TryExprData,
 	MatchExprData, MatchCaseData, AwaitExprData, YieldExprData, MoveExprData, OutExprData,
-	QuoteExprData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
+	QuoteExprData, ComptimeBlockData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
 	DestructuringDeclData, ExprStmtData, ReturnStmtData, ThrowStmtData, DeferStmtData,
 	VariableDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData,
 	DoWhileStmtData, BlockStmtData, FunctionDeclData, SwitchStmtData, SwitchCaseData,
@@ -530,6 +530,11 @@ export function printNode(node: Node, level: number): void {
 			const data = node.data as QuoteExprData;
 			console.log(`${pad}QuoteExpr:`);
 			printNode(data.quoteBody, level + 1);
+		},
+		NodeKind.ComptimeBlock => {
+			const data = node.data as ComptimeBlockData;
+			console.log(`${pad}ComptimeBlock:`);
+			printNode(data.comptimeBody, level + 1);
 		},
 		_ => {},
 	}

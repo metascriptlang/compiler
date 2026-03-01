@@ -32,8 +32,8 @@ export enum NodeKind {
 	MacroInvocation, DecoratedDecl,
 	// Other
 	DeferStmt,
-	// Extern / Macro / Quote
-	ExternDecl, MacroDecl, QuoteExpr,
+	// Extern / Macro / Quote / Comptime
+	ExternDecl, MacroDecl, QuoteExpr, ComptimeBlock,
 	// Program root
 	Program,
 }
@@ -133,6 +133,7 @@ export type NodeData =
 	| { externKind: string, externName: string }                    // ExternDecl
 	| { macroDeclName: string, macroDeclParams: string[], macroDeclBody: Node } // MacroDecl
 	| { quoteBody: Node }                                          // QuoteExpr
+	| { comptimeBody: Node }                                       // ComptimeBlock
 	// Program root
 	| { programStmts: Node[] }                                     // Program
 
@@ -183,6 +184,7 @@ export type OutExprData = { outArg: Node };
 // HiddenDeref reuses { expr: Node } shape (same as ExprStmt) — no new union variant needed
 export type HiddenDerefData = { expr: Node };
 export type QuoteExprData = { quoteBody: Node };
+export type ComptimeBlockData = { comptimeBody: Node };
 
 // Patterns
 export type ArrayPatternData = { patternElements: Node[], hasRestElement: boolean };

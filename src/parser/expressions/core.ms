@@ -406,6 +406,17 @@ function parsePrimary(state: ParserState): ExprResult {
 		return parseFuncExprBody(state, token, feFlags);
 	}
 
+	// Comptime expression: @comptime { ... }
+	if (token.kind === TokenKind.At) {
+		if (state.position + 1 < state.tokens.length &&
+			state.tokens[state.position + 1].value === "comptime") {
+			advance(state); // consume '@'
+			advance(state); // consume 'comptime'
+			const comptimeBlock = try blockParser(state);
+			return Result.ok(createNode(NodeKind.ComptimeBlock, { comptimeBody: comptimeBlock }, token));
+		}
+	}
+
 	// Quote expression: quote { ... }
 	if (token.kind === TokenKind.Quote) {
 		advance(state);

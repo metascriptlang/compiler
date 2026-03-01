@@ -34,6 +34,19 @@ function parseStatement(state: ParserState): NodeResult {
 		return parseExprStmt(state);
 	}
 
+	// @comptime { ... } — intercept before decorator loop
+	if (token.kind === TokenKind.At) {
+		if (state.position + 1 < state.tokens.length &&
+			state.tokens[state.position + 1].value === "comptime" &&
+			state.position + 2 < state.tokens.length &&
+			state.tokens[state.position + 2].kind === TokenKind.LBrace) {
+			advance(state); // consume '@'
+			advance(state); // consume 'comptime'
+			const comptimeBody = try parseBlockStmt(state);
+			return Result.ok(createNode(NodeKind.ComptimeBlock, { comptimeBody }, token));
+		}
+	}
+
 	// Decorator / directive handling — before match to avoid try-in-match-arm limitation
 	if (token.kind === TokenKind.At) {
 		const decorators: Node[] = [];

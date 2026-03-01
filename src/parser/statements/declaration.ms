@@ -331,6 +331,22 @@ export function parseExportDecl(state: ParserState): NodeResult {
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
 
+	// export default <expr>;
+	if (nextKind === TokenKind.Default) {
+		advance(state);
+		// Check if default is followed by a declaration
+		const afterDefault = current(state).kind;
+		if (afterDefault === TokenKind.Function) {
+			const decl = try parseFunctionDecl(state);
+			return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
+		}
+		// Otherwise treat as expression
+		const expr = try callExprParser(state);
+		consumeSemicolon(state);
+		const exprStmt = createNode(NodeKind.ExprStmt, { expr }, exportToken);
+		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: exprStmt }, exportToken));
+	}
+
 	return Result.err(`Expected declaration after 'export' at line ${current(state).line.toString()}`);
 }
 
@@ -912,6 +928,12 @@ export function parseMacroInvocation(state: ParserState): NodeResult {
 	// Accept identifiers and keywords as macro names (e.g., @export, @inline)
 	const macroName = nameToken.value;
 	advance(state);
+
+	// @comptime { ... } — produce ComptimeBlock instead of MacroInvocation
+	if (macroName === "comptime" && !isAtEnd(state) && current(state).kind === TokenKind.LBrace) {
+		const comptimeBody = try callBlockParser(state);
+		return Result.ok(createNode(NodeKind.ComptimeBlock, { comptimeBody }, atToken));
+	}
 
 	// Optional arguments: @name(arg1, arg2)
 	const args: Node[] = [];

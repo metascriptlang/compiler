@@ -102,6 +102,7 @@ function emitNodeDispatch(gen: JSGenerator, node: Node): void {
 	if (k === NodeKind.TypeAliasDecl) return;
 	if (k === NodeKind.ExternDecl) return;
 	if (k === NodeKind.MacroDecl) return;
+	if (k === NodeKind.ComptimeBlock) return; // should be evaluated before codegen
 	if (k === NodeKind.TypeAnnotation) return;
 
 	// Program — emit all statements

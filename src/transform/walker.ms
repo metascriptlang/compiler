@@ -16,7 +16,7 @@ import {
 	SpreadExprData, NewExprData, TryExprData,
 	MatchExprData, MatchStmtData, MatchCaseData,
 	AwaitExprData, YieldExprData, MoveExprData, OutExprData, HiddenDerefData,
-	TypeAssertionData, DestructuringDeclData, QuoteExprData,
+	TypeAssertionData, DestructuringDeclData, QuoteExprData, ComptimeBlockData,
 	MacroInvocationData,
 } from "../ast/node";
 import { TransformContext } from "./context";
@@ -315,6 +315,10 @@ export function mapChildren(node: Node, f: Visitor): void {
 		NodeKind.QuoteExpr => {
 			const d = node.data as QuoteExprData;
 			d.quoteBody = f(d.quoteBody);
+		},
+		NodeKind.ComptimeBlock => {
+			const d = node.data as ComptimeBlockData;
+			d.comptimeBody = f(d.comptimeBody);
 		},
 		NodeKind.MacroInvocation => {
 			const d = node.data as MacroInvocationData;
