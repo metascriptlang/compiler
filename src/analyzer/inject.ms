@@ -1189,12 +1189,12 @@ function needsReturnIncref(expr: Node, dctx: DrcContext): boolean {
 	return false;
 }
 
-// Emit: { const $ret_N = expr; ms_incref($ret_N); return $ret_N; }
+// Emit: { const $ret_N = expr; msIncref($ret_N); return $ret_N; }
 function emitReturnWithIncref(arg: Node, dctx: DrcContext, loc: SourceLocation): Node {
 	const tmpName = freshTemp(dctx.ctx, "ret");
 	const tmpDecl = makeVarDecl(tmpName, arg, DeclKind.Const, loc);
 	const incref = makeExprStmt(
-		makeCall(makeIdent("ms_incref", loc), [makeIdent(tmpName, loc)], loc), loc);
+		makeCall(makeIdent("msIncref", loc), [makeIdent(tmpName, loc)], loc), loc);
 	markReturnedVarsMoved(arg, dctx);
 	const retStmt = makeReturn(makeIdent(tmpName, loc), loc);
 	return makeBlock([tmpDecl, incref, retStmt], loc);

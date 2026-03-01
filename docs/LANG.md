@@ -572,7 +572,8 @@ export function floor(x: number): number { unreachable; }
 #### Directives (standalone, module-level)
 
 ```typescript
-@include("openssl/ssl.h");     // Include C header
+@include("openssl/ssl.h");     // Include C header (emit #include)
+@compile("bridge.c");          // Compile C source file into build
 @link("libssl.a");             // Link pre-built archive
 @passC("-I/usr/local/include");// Raw C compiler flag
 @passL("-lssl");               // Raw linker flag
@@ -580,10 +581,12 @@ export function floor(x: number): number { unreachable; }
 
 | Directive | Purpose | Status |
 |-----------|---------|--------|
-| `@include("file.h");` | Include C header + auto-compile matching `.c` | PLANNED |
-| `@link("lib.a");` | Link pre-built archive | PLANNED |
-| `@passC("flag");` | Raw C compiler flag | PLANNED |
-| `@passL("flag");` | Raw linker flag | PLANNED |
+| `@include("file.h");` | Include C header (emits `#include` in generated C) | DONE |
+| `@compile("file.c");` | Compile C source file, link into output binary | DONE |
+| `import from "*.h"` | Auto-compiles companion `.c` if it exists at same path | DONE |
+| `@link("lib.a");` | Link pre-built archive | DONE |
+| `@passC("flag");` | Raw C compiler flag | DONE |
+| `@passL("flag");` | Raw linker flag | DONE |
 
 #### 3-Tier Builtin System
 

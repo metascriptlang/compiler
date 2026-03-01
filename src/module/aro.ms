@@ -1,12 +1,14 @@
-// C Header Parser — converts C headers to MetaScript source via ARO
+// C Header Module — ARO parsing + import-name synthesis for .h imports
 //
-// Called during multi-module compilation when .h imports are encountered.
-// Generates synthetic MetaScript source with export extern function declarations
-// that the normal 3-pass checker can process.
+// Provides two strategies for generating MetaScript source from C headers:
+//   1. ARO (full): parses actual C header, extracts types/functions/enums
+//   2. Synthesis (fallback): generates `export extern function NAME(): int64;`
+//      from the import names found in the module graph
+//
+// `preprocessHeaders(graph)` runs strategy 1 with fallback to 2.
 //
 // Build prerequisites:
-//   cd src/bindings/aro && zig build
-//   clang -c src/bindings/aro/bridge.c -I<runtime_dir> -o src/bindings/aro/bridge.o
+//   cd src/bindings/aro && zig build    (bridge.c auto-compiled by @include)
 
 // ARO link directives are in bindings/aro/index.ms (resolved relative to that module's dir)
 
@@ -18,20 +20,11 @@ import {
 	ms_aro_enum_count, ms_aro_enum_name, ms_aro_enum_member_count, ms_aro_enum_member_name,
 	ms_aro_typedef_count, ms_aro_typedef_name, ms_aro_typedef_target,
 } from "../bindings/aro/index";
-import { sliceStr, trim } from "../utils/string";
+import { ModuleGraph, findModule } from "./graph";
+import { sliceStr, trim, endsWith } from "../utils/string";
 import { test, check, testGroup } from "std/testing";
 
 // ===== C Type → MetaScript Type Mapping =====
-
-function endsWith(s: string, suffix: string): boolean {
-	if (s.length < suffix.length) return false;
-	return sliceStr(s, s.length - suffix.length, s.length) === suffix;
-}
-
-function startsWith(s: string, prefix: string): boolean {
-	if (s.length < prefix.length) return false;
-	return sliceStr(s, 0, prefix.length) === prefix;
-}
 
 // Strip trailing C qualifiers (restrict, volatile, _Nonnull, etc.)
 function stripQualifiers(t: string): string {
@@ -193,6 +186,52 @@ export function parseCHeader(headerPath: string): string {
 
 	ms_aro_free();
 	return source;
+}
+
+// ===== Import-Name Synthesis (fallback when ARO unavailable) =====
+
+// Generate synthetic MetaScript source for a C header module.
+// Scans the module graph for all names imported from headerPath
+// and generates `export extern function NAME(): int64;` for each.
+// Actual C prototypes come from @include — this just satisfies the checker.
+export function synthesizeHeaderSource(graph: ModuleGraph, headerPath: string): string {
+	let source = "// Synthetic module for C header: " + headerPath + "\n";
+	const emitted: string[] = [];
+
+	for (const gmod of graph.modules) {
+		for (const imp of gmod.imports) {
+			if (imp.sourcePath === headerPath) {
+				for (const name of imp.names) {
+					let found = false;
+					for (const e of emitted) {
+						if (e === name) { found = true; }
+					}
+					if (!found) {
+						source = source + "export extern function " + name + "(): int64;\n";
+						emitted.push(name);
+					}
+				}
+			}
+		}
+	}
+	return source;
+}
+
+// ===== Header Pre-processing (ARO with synthesis fallback) =====
+
+// Pre-process all C header modules in the graph.
+// Tries ARO parsing first (type-aware); falls back to import-name synthesis.
+export function preprocessHeaders(graph: ModuleGraph, verbose: boolean): void {
+	for (const modPath of graph.loadOrder) {
+		const hmod = findModule(graph, modPath);
+		if (hmod === null || !hmod.isCHeader) continue;
+		const aroSource = parseCHeader(hmod.path);
+		if (aroSource.length > 60) {
+			hmod.source = aroSource;
+		} else {
+			hmod.source = synthesizeHeaderSource(graph, hmod.path);
+		}
+	}
 }
 
 // ===== Tests =====

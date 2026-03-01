@@ -15,12 +15,12 @@ import { test, check, testGroup } from "std/testing";
 
 export enum RcKind {
 	None,       // primitive/enum/void — no RC
-	String,     // ms_string_incref / ms_string_decref
-	Array,      // ms_array_* (variant depends on element type)
-	Ref,        // ms_incref / ms_decref (pointers, interfaces, classes)
-	Closure,    // ms_closure_*
-	Map,        // ms_map_*
-	Set,        // ms_set_*
+	String,     // msStringIncref / msStringDecref
+	Array,      // msArray* (variant depends on element type)
+	Ref,        // msIncref / msDecref (pointers, interfaces, classes)
+	Closure,    // msClosure*
+	Map,        // msMap*
+	Set,        // msSet*
 	Named,      // TypeName_destroy / TypeName_copy (from destructorLifting)
 }
 
@@ -68,19 +68,19 @@ function isPointerType(t: Type, ctx: TransformContext): boolean {
 function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 	const elem = t.typeReturn;  // Array element type stored in typeReturn
 	if (elem === null || isPrimitiveKind(elem.kind)) {
-		return makeRcInfo(RcKind.Array, "", "ms_array_destroy", "ms_array_copy", "ms_array_number_was_moved", "ms_array_number_sink");
+		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink");
 	}
 	if (elem.kind === TypeKind.String) {
-		return makeRcInfo(RcKind.Array, "", "ms_array_string_destroy", "ms_array_string_copy", "ms_array_string_was_moved", "ms_array_string_sink");
+		return makeRcInfo(RcKind.Array, "", "msArrayStringDestroy", "msArrayStringCopy", "msArrayStringWasMoved", "msArrayStringSink");
 	}
-	return makeRcInfo(RcKind.Array, "", "MS_ARRAY_REF_DESTROY", "MS_ARRAY_REF_COPY", "MS_ARRAY_REF_WAS_MOVED", "MS_ARRAY_REF_COPY");
+	return makeRcInfo(RcKind.Array, "", "msArrayRefDestroy", "msArrayRefCopy", "msArrayRefWasMoved", "msArrayRefCopy");
 }
 
 // ===== Sub-classifiers for complex arms =====
 
 function classifyObject(t: Type, ctx: TransformContext): RcInfo {
 	if (isPointerType(t, ctx)) {
-		return makeRcInfo(RcKind.Ref, t.typeName, "ms_decref", "ms_incref", "ms_ptr_was_moved", "");
+		return makeRcInfo(RcKind.Ref, t.typeName, "msDecref", "msIncref", "msPtrWasMoved", "");
 	}
 	if (t.typeName !== "") {
 		return makeRcInfo(RcKind.Named, t.typeName, t.typeName + "_destroy", t.typeName + "_copy", t.typeName + "_wasMoved", t.typeName + "_sink");
@@ -102,12 +102,12 @@ export function classifyType(t: Type, ctx: TransformContext): RcInfo {
 	if (isPrimitiveKind(t.kind)) return noRcInfo();
 
 	return match (t.kind) {
-		TypeKind.String => makeRcInfo(RcKind.String, "", "ms_string_decref", "ms_string_incref", "ms_string_was_moved", "ms_string_sink"),
+		TypeKind.String => makeRcInfo(RcKind.String, "", "msStringDecref", "msStringIncref", "msStringWasMoved", "msStringSink"),
 		TypeKind.Array => classifyArray(t, ctx),
-		TypeKind.Ref | TypeKind.Ptr => makeRcInfo(RcKind.Ref, "", "ms_decref", "ms_incref", "ms_ptr_was_moved", ""),
-		TypeKind.Function => makeRcInfo(RcKind.Closure, "", "ms_closure_destroy", "ms_closure_copy", "ms_closure_was_moved", "ms_closure_sink"),
-		TypeKind.Map => makeRcInfo(RcKind.Map, "", "ms_map_free", "ms_map_copy", "ms_map_was_moved", "ms_map_sink"),
-		TypeKind.Set => makeRcInfo(RcKind.Set, "", "ms_set_free", "ms_set_copy", "", ""),
+		TypeKind.Ref | TypeKind.Ptr => makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", ""),
+		TypeKind.Function => makeRcInfo(RcKind.Closure, "", "msClosureDestroy", "msClosureCopy", "msClosureWasMoved", "msClosureSink"),
+		TypeKind.Map => makeRcInfo(RcKind.Map, "", "msMapFree", "msMapCopy", "msMapWasMoved", "msMapSink"),
+		TypeKind.Set => makeRcInfo(RcKind.Set, "", "msSetFree", "msSetCopy", "", ""),
 		TypeKind.Object => classifyObject(t, ctx),
 		TypeKind.TypeReference => classifyTypeRef(t, ctx),
 		TypeKind.Distinct => { if (t.typeReturn !== null) { classifyType(t.typeReturn, ctx) } else { noRcInfo() } },
@@ -183,29 +183,29 @@ testGroup("Classify RC Types", () => {
 		const info = classifyType(stringType(), ctx);
 		check(info.rcKind === RcKind.String);
 		check(info.needsCleanup);
-		check(info.destroyFn === "ms_string_decref");
-		check(info.copyFn === "ms_string_incref");
-		check(info.wasMovedFn === "ms_string_was_moved");
+		check(info.destroyFn === "msStringDecref");
+		check(info.copyFn === "msStringIncref");
+		check(info.wasMovedFn === "msStringWasMoved");
 	});
 	test("array of number → Array", () => {
 		const ctx = createTransformContext();
 		const info = classifyType(createArray(numberType()), ctx);
 		check(info.rcKind === RcKind.Array);
 		check(info.needsCleanup);
-		check(info.destroyFn === "ms_array_destroy");
+		check(info.destroyFn === "msArrayDestroy");
 	});
 	test("array of string → Array (string variant)", () => {
 		const ctx = createTransformContext();
 		const info = classifyType(createArray(stringType()), ctx);
 		check(info.rcKind === RcKind.Array);
-		check(info.destroyFn === "ms_array_string_destroy");
+		check(info.destroyFn === "msArrayStringDestroy");
 	});
 	test("function → Closure", () => {
 		const ctx = createTransformContext();
 		const info = classifyType(createFunction([], [], voidType()), ctx);
 		check(info.rcKind === RcKind.Closure);
 		check(info.needsCleanup);
-		check(info.destroyFn === "ms_closure_destroy");
+		check(info.destroyFn === "msClosureDestroy");
 	});
 	test("named object → Named", () => {
 		const ctx = createTransformContext();
@@ -226,7 +226,7 @@ testGroup("Classify RC Types", () => {
 		const t = createPrimitive(TypeKind.Ref);
 		const info = classifyType(t, ctx);
 		check(info.rcKind === RcKind.Ref);
-		check(info.destroyFn === "ms_decref");
+		check(info.destroyFn === "msDecref");
 	});
 });
 

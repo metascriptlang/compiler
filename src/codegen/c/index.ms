@@ -23,6 +23,7 @@ import {
 } from "./context";
 import { genDecl, mapTypeAnnotation, mapParamType } from "./declarations";
 import { mangleModuleName, safeName } from "./names";
+import { emitStringPoolDecls } from "./literals";
 import { sliceStr } from "../../utils/string";
 import { test, check, testGroup } from "std/testing";
 
@@ -76,6 +77,9 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 	// Generate per-module init functions (non-static for cross-module visibility)
 	genModuleInitFns(g);
 
+	// Emit string literal pool declarations
+	emitStringPoolDecls(g.stringPool, sec(g, CSection.StringPool));
+
 	return assembleOutput(g);
 }
 
@@ -102,7 +106,7 @@ function genModuleInitFns(g: CGen): void {
 	// DatInit000: data/type initialization (non-static for cross-module visibility)
 	addLine(hdrs, "void " + datInitName + "(void);");
 	addLine(procs, "void " + datInitName + "(void) {");
-	addLine(procs, "  static NIM_BOOL " + datInitName + "_guard_ = 0;");
+	addLine(procs, "  static MS_BOOL " + datInitName + "_guard_ = 0;");
 	addLine(procs, "  if (" + datInitName + "_guard_) return;");
 	addLine(procs, "  " + datInitName + "_guard_ = 1;");
 	if (datContent.length > 0) {
@@ -114,7 +118,7 @@ function genModuleInitFns(g: CGen): void {
 	// Init000: user top-level code (non-static for cross-module visibility)
 	addLine(hdrs, "void " + initName + "(void);");
 	addLine(procs, "void " + initName + "(void) {");
-	addLine(procs, "  static NIM_BOOL " + initName + "_guard_ = 0;");
+	addLine(procs, "  static MS_BOOL " + initName + "_guard_ = 0;");
 	addLine(procs, "  if (" + initName + "_guard_) return;");
 	addLine(procs, "  " + initName + "_guard_ = 1;");
 	if (initContent.length > 0) {
@@ -137,6 +141,9 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 		const modName = mangleModuleName(modulePaths[i]);
 		out = out + "void " + modName + "__DatInit000(void);\n";
 		out = out + "void " + modName + "__Init000(void);\n";
+	}
+	if (hasUserMain) {
+		out = out + "void main_(void);\n";
 	}
 	out = out + "\n";
 
@@ -412,7 +419,7 @@ testGroup("C Gen Directives", () => {
 		check(result.length > 0);
 	});
 	test("@include from prelude emits header", () => {
-		// prelude has @include("runtime.h"), so generated C should contain it
+		// prelude has @include("system.h"), so generated C should contain it
 		const result = cOutput("");
 		check(result.length > 0);
 	});

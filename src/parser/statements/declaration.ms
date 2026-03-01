@@ -1,7 +1,7 @@
 // Declaration Parsers - variable, function, import, export, type alias, enum, interface
 // Uses callback injection via util.ms to avoid circular imports
 
-import { Token, TokenKind } from "../../lexer/token";
+import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, NodeData, createNode, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, skipDestructurePattern, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, addGenericDecl, updateGenericDeclFields } from "../context";
 import { skipTypeAnnotation } from "../typeAnnotation";
@@ -202,7 +202,7 @@ export function parseImportDecl(state: ParserState): NodeResult {
 	const aliases: string[] = [];
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
 		const specifier = current(state);
-		if (specifier.kind !== TokenKind.Ident) { break; }
+		if (!isIdentOrKeyword(specifier.kind)) { break; }
 		const specName = specifier.value;
 		advance(state);
 		if (!isAtEnd(state) && current(state).kind === TokenKind.As) {
@@ -261,7 +261,7 @@ export function parseExportDecl(state: ParserState): NodeResult {
 		const aliases: string[] = [];
 		while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
 			const specifier = current(state);
-			if (specifier.kind !== TokenKind.Ident) { break; }
+			if (!isIdentOrKeyword(specifier.kind)) { break; }
 			const specName = specifier.value;
 			advance(state);
 			if (!isAtEnd(state) && current(state).kind === TokenKind.As) {

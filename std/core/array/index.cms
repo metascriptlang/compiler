@@ -1,0 +1,99 @@
+// MetaScript Array Prelude — C Backend
+// Extension methods backed by runtime/core/array.h
+// Loaded automatically via globalImports() -> "std/core/array"
+
+@include("core/array.h");
+
+// ===== Number Array =====
+
+@runtime("&msNumberArrayPush")
+function push(this arr: number[], value: number): void { unreachable; }
+
+@runtime("&msNumberArrayPop")
+function pop(this arr: number[]): number { unreachable; }
+
+@runtime("&msNumberArrayShift")
+function shift(this arr: number[]): number { unreachable; }
+
+@runtime("&msNumberArrayAt")
+function at(this arr: number[], idx: number): number { unreachable; }
+
+@runtime("&msNumberArrayIndexOf")
+function indexOf(this arr: number[], value: number): number { unreachable; }
+
+@runtime("&msNumberArrayIncludes")
+function includes(this arr: number[], value: number): boolean { unreachable; }
+
+@runtime("&msNumberArraySlice")
+function slice(this arr: number[], start: number, end: number): number[] { unreachable; }
+
+@runtime("&msNumberArrayConcat")
+function concat(this arr: number[], other: number[]): number[] { unreachable; }
+
+@runtime("&msNumberArrayReverse")
+function reverse(this arr: number[]): void { unreachable; }
+
+@runtime("&msNumberArraySort")
+function sort(this arr: number[]): void { unreachable; }
+
+@runtime("&msNumberArrayFill")
+function fill(this arr: number[], value: number): void { unreachable; }
+
+@runtime("&msNumberArrayCount")
+function count(this arr: number[], value: number): number { unreachable; }
+
+@runtime("&msNumberArrayJoin")
+function join(this arr: number[], sep: string): string { unreachable; }
+
+@runtime("&msNumberArraySetLen")
+function setLen(this arr: number[], newLen: number): void { unreachable; }
+
+@runtime("&msNumberArrayCapacity")
+function capacity(this arr: number[]): number { unreachable; }
+
+// ===== String Array =====
+
+@runtime("&msStringArrayPush")
+function push(this arr: string[], value: string): void { unreachable; }
+
+@runtime("&msStringArrayPop")
+function pop(this arr: string[]): string { unreachable; }
+
+@runtime("&msStringArrayShift")
+function shift(this arr: string[]): string { unreachable; }
+
+@runtime("&msStringArrayAt")
+function at(this arr: string[], idx: number): string { unreachable; }
+
+@runtime("&msStringArrayIndexOf")
+function indexOf(this arr: string[], value: string): number { unreachable; }
+
+@runtime("&msStringArrayIncludes")
+function includes(this arr: string[], value: string): boolean { unreachable; }
+
+@runtime("&msStringArraySlice")
+function slice(this arr: string[], start: number, end: number): string[] { unreachable; }
+
+@runtime("&msStringArrayConcat")
+function concat(this arr: string[], other: string[]): string[] { unreachable; }
+
+@runtime("&msStringArrayReverse")
+function reverse(this arr: string[]): void { unreachable; }
+
+@runtime("&msStringArraySort")
+function sort(this arr: string[]): void { unreachable; }
+
+@runtime("&msStringArrayFill")
+function fill(this arr: string[], value: string): void { unreachable; }
+
+@runtime("&msStringArrayCount")
+function count(this arr: string[], value: string): number { unreachable; }
+
+@runtime("&msStringArrayJoin")
+function join(this arr: string[], sep: string): string { unreachable; }
+
+@runtime("&msStringArraySetLen")
+function setLen(this arr: string[], newLen: number): void { unreachable; }
+
+@runtime("&msStringArrayCapacity")
+function capacity(this arr: string[]): number { unreachable; }

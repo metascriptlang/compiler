@@ -25,10 +25,10 @@ import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, Builder, CSection,
 	initLoc, noLoc, rdLoc,
 	add, addLine, sec,
-	pStmts, getTemp, nameSetHas, emitStmtsLine,
+	pStmts, getTemp, nameSetHas, emitStmtsLine, internString,
 } from "./context";
 import { mangle, mangleFieldName, safeName } from "./names";
-import { formatCNumber, cBoolLiteral, cNullLiteral, cStringLiteral } from "./literals";
+import { formatCNumber, cBoolLiteral, cNullLiteral, cStringLiteral, msStringPoolRef } from "./literals";
 import { charAt, sliceStr } from "../../utils/string";
 import { test, check, testGroup } from "std/testing";
 
@@ -45,7 +45,7 @@ function joinArgs(g: CGen, p: CProc, args: Node[]): string {
 // ===== genExpr — returns C snippet for any expression =====
 
 export function genExpr(g: CGen, p: CProc, node: Node): string {
-	if (node === null) return "NIM_NIL";
+	if (node === null) return "MS_NIL";
 
 	return match (node.kind) {
 		NodeKind.NumberLiteral => {
@@ -54,7 +54,8 @@ export function genExpr(g: CGen, p: CProc, node: Node): string {
 		},
 		NodeKind.StringLiteral => {
 			const d = node.data as StringLiteralData;
-			cStringLiteral(d.value);
+			const poolName = internString(g.stringPool, d.value);
+			msStringPoolRef(poolName, d.value.length);
 		},
 		NodeKind.BooleanLiteral => {
 			const d = node.data as BooleanLiteralData;
@@ -139,7 +140,7 @@ function genBinaryExpr(g: CGen, p: CProc, node: Node): string {
 			const idx = genExpr(g, p, ad.index);
 			const val = genExpr(g, p, d.right);
 			// COW guard: ensure string payload is mutable before writing
-			return "(ms_prepare_str_mutation(&" + arr + "), ms_string_set_char(&" + arr + ", " + idx + ", " + val + "))";
+			return "(msStringPrepareMutation(&" + arr + "), msStringSetChar(&" + arr + ", " + idx + ", " + val + "))";
 		}
 		if (isArrayTyped(ad.array)) {
 			const arr = genExpr(g, p, ad.array);
@@ -155,15 +156,15 @@ function genBinaryExpr(g: CGen, p: CProc, node: Node): string {
 		if (d.operator === "===" || d.operator === "==") {
 			if (isEmptyStringLiteral(d.right)) return "(" + left + ".len == 0)";
 			if (isEmptyStringLiteral(d.left)) return "(" + right + ".len == 0)";
-			return "ms_string_equals(" + left + ", " + right + ")";
+			return "msStringEquals(" + left + ", " + right + ")";
 		}
 		if (d.operator === "!==" || d.operator === "!=") {
 			if (isEmptyStringLiteral(d.right)) return "(" + left + ".len != 0)";
 			if (isEmptyStringLiteral(d.left)) return "(" + right + ".len != 0)";
-			return "(!ms_string_equals(" + left + ", " + right + "))";
+			return "(!msStringEquals(" + left + ", " + right + "))";
 		}
 		if (d.operator === "<" || d.operator === ">" || d.operator === "<=" || d.operator === ">=") {
-			return "(ms_string_compare(" + left + ", " + right + ") " + d.operator + " 0)";
+			return "(msStringCompare(" + left + ", " + right + ") " + d.operator + " 0)";
 		}
 		if (d.operator === "+") {
 			// Concat chain fusion: s + t + u → ms_string_concat_many(3, s, t, u)
@@ -185,9 +186,9 @@ function genBinaryExpr(g: CGen, p: CProc, node: Node): string {
 				ri -= 1;
 			}
 			if (reversed.length === 2) {
-				return "ms_string_concat(" + reversed[0] + ", " + reversed[1] + ")";
+				return "msStringConcat(" + reversed[0] + ", " + reversed[1] + ")";
 			}
-			let result = "ms_string_concat_many(" + reversed.length;
+			let result = "msStringConcatMany(" + reversed.length;
 			let i = 0;
 			while (i < reversed.length) {
 				result = result + ", " + reversed[i];
@@ -267,11 +268,11 @@ function genArrayAccess(g: CGen, p: CProc, node: Node): string {
 	const idx = genExpr(g, p, d.index);
 	// String index read: s[i] → bounds check + ms_string_char_at(s, i)
 	if (isStringTyped(d.array)) {
-		return "({ NI __idx = " + idx + "; if ((NU)__idx >= (NU)(" + arr + ".len)) ms_raise_index_error(__idx, " + arr + ".len); ms_string_char_at(" + arr + ", __idx); })";
+		return "({ int32_t __idx = " + idx + "; if ((uint64_t)__idx >= (uint64_t)(" + arr + ".len)) msRaiseIndexError(__idx, " + arr + ".len); msStringCharAt(" + arr + ", __idx); })";
 	}
 	// Array index read: arr[i] → bounds check + arr.p->data[i]
 	if (d.array.nodeType !== null && d.array.nodeType.kind === TypeKind.Array) {
-		return "({ NI __idx = " + idx + "; if ((NU)__idx >= (NU)(" + arr + ".len)) ms_raise_index_error(__idx, " + arr + ".len); " + arr + ".p->data[__idx]; })";
+		return "({ int32_t __idx = " + idx + "; if ((uint64_t)__idx >= (uint64_t)(" + arr + ".len)) msRaiseIndexError(__idx, " + arr + ".len); " + arr + ".p->data[__idx]; })";
 	}
 	return arr + "[" + idx + "]";
 }
@@ -367,6 +368,10 @@ function genCallExpr(g: CGen, p: CProc, node: Node): string {
 				const mangledName = resolveOverloadCallName(g, p, sym, node);
 				return mangledName + "(" + joinArgs(g, p, cd.arguments) + ")";
 			}
+			// Unknown identifier (no symbol) → direct call.
+			// DRC-injected lifecycle functions (msStringDecref, msDecref, etc.)
+			// have no symbol in the checker table — emit as direct C function calls.
+			if (sym === null) isDirect = true;
 		}
 	}
 
@@ -523,7 +528,7 @@ function codegenInheritanceDepth(g: CGen, sourceType: Type, targetType: Type): n
 
 // ===== Object Literal =====
 // Two cases:
-// 1. Closure pair: { fn: liftedFn, env: { captured vars } } → (ms_closure){ .fn = ..., .env = ... }
+// 1. Closure pair: { fn: liftedFn, env: { captured vars } } → (msClosure){ .fn = ..., .env = ... }
 // 2. General struct: { x: 1, y: 2 } → (StructType){ .x = 1, .y = 2 }
 
 function genObjectLiteral(g: CGen, p: CProc, node: Node): string {
@@ -531,10 +536,10 @@ function genObjectLiteral(g: CGen, p: CProc, node: Node): string {
 
 	// Detect closure pair: keys are ["fn", "env"] with exactly 2 entries
 	if (d.keys.length === 2 && d.keys[0] === "fn" && d.keys[1] === "env") {
-		// Closure literal: (ms_closure){ .fn = ..., .env = ... }
+		// Closure literal: (msClosure){ .fn = ..., .env = ... }
 		const fnExpr = genExpr(g, p, d.properties[0]);
 		const envExpr = genExpr(g, p, d.properties[1]);
-		return "(ms_closure){ .fn = (void*)" + fnExpr + ", .env = (void*)&" + envExpr + " }";
+		return "(msClosure){ .fn = (void*)" + fnExpr + ", .env = (void*)&" + envExpr + " }";
 	}
 
 	// General struct literal: { .field1 = val1, .field2 = val2 }
@@ -579,7 +584,7 @@ function genArrayLiteral(g: CGen, p: CProc, node: Node): string {
 	// CRITICAL: cast to (double) — C varargs promotes int literals to 4 bytes
 	// but va_arg(args, double) reads 8 bytes → garbage without cast
 	if (elemKind === TypeKind.Number || elemKind === TypeKind.Float64) {
-		let result = "ms_array_number_from(" + d.elements.length;
+		let result = "msNumberArrayFrom(" + d.elements.length;
 		let i = 0;
 		while (i < d.elements.length) {
 			result = result + ", (double)(" + genExpr(g, p, d.elements[i]) + ")";
@@ -590,7 +595,7 @@ function genArrayLiteral(g: CGen, p: CProc, node: Node): string {
 
 	// String array: variadic ms_string_array_new_with(count, e1, ...)
 	if (elemKind === TypeKind.String) {
-		let result = "ms_string_array_new_with(" + d.elements.length;
+		let result = "msStringArrayFrom(" + d.elements.length;
 		let i = 0;
 		while (i < d.elements.length) {
 			result = result + ", " + genExpr(g, p, d.elements[i]);
@@ -605,7 +610,7 @@ function genArrayLiteral(g: CGen, p: CProc, node: Node): string {
 	emitStmtsLine(p, tmpName + " = (" + arrayTypeName + "){0};");
 	let i = 0;
 	while (i < d.elements.length) {
-		emitStmtsLine(p, "ms_array_push_ref(&" + tmpName + ", " + genExpr(g, p, d.elements[i]) + ");");
+		emitStmtsLine(p, "msRefArrayPush(&" + tmpName + ", " + genExpr(g, p, d.elements[i]) + ");");
 		i += 1;
 	}
 	return tmpName;
@@ -710,23 +715,24 @@ testGroup("C Expr Number", () => {
 });
 
 testGroup("C Expr String", () => {
-	test("simple string", () => {
-		check(exprSnippet("\"hello\";") === "\"hello\"");
+	test("simple string uses pool ref", () => {
+		const result = exprSnippet("\"hello\";");
+		check(result === "MS_STRING_LIT(&TMP_STR_1, 5)");
 	});
 });
 
 testGroup("C Expr Bool", () => {
 	test("true", () => {
-		check(exprSnippet("true;") === "NIM_TRUE");
+		check(exprSnippet("true;") === "MS_TRUE");
 	});
 	test("false", () => {
-		check(exprSnippet("false;") === "NIM_FALSE");
+		check(exprSnippet("false;") === "MS_FALSE");
 	});
 });
 
 testGroup("C Expr Null", () => {
 	test("null literal", () => {
-		check(exprSnippet("null;") === "NIM_NIL");
+		check(exprSnippet("null;") === "MS_NIL");
 	});
 });
 

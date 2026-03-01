@@ -3,7 +3,7 @@
 // Invokes clang to compile generated C source into native binaries.
 
 import { argv, exec, fileExists } from "std/process";
-import { dirname, join, resolve1 } from "std/fs/path";
+import { dirname, join, resolve } from "std/fs/path";
 import { CliOptions } from "./options";
 
 // -- ccache detection --
@@ -24,11 +24,11 @@ function getCcachePrefix(): string {
 
 // Find the compiler's runtime/ directory by walking up from argv[0].
 function resolveRuntime(): string {
-	const binDir = resolve1(dirname(argv[0]));
+	const binDir = resolve(dirname(argv[0]));
 	let base = binDir;
 	for (let i = 0; i < 5; i += 1) {
 		const candidate = join(base, "runtime");
-		const marker = join(candidate, "runtime.h");
+		const marker = join(candidate, "system.h");
 		if (fileExists(marker)) return candidate;
 		base = dirname(base);
 	}
@@ -105,7 +105,10 @@ function buildCompileCommand(cFile: string, outBinary: string, extraFlags: strin
 	const rtDir = resolveRuntime();
 	if (rtDir !== "") {
 		cmd = cmd + " -iquote" + rtDir;
-		cmd = cmd + " " + join(rtDir, "io.c");
+		cmd = cmd + " " + join(rtDir, "system.c");
+		cmd = cmd + " " + join(rtDir, "core/string.c");
+		cmd = cmd + " " + join(rtDir, "core/array.c");
+		cmd = cmd + " " + join(rtDir, "mem/orc.c");
 	}
 
 	cmd = cmd + " " + cFile;
@@ -146,7 +149,11 @@ export function linkObjects(oFileList: string, outBinary: string, extraFlags: st
 
 	const rtDir = resolveRuntime();
 	if (rtDir !== "") {
-		cmd = cmd + " " + join(rtDir, "io.c");
+		cmd = cmd + " -iquote" + rtDir;
+		cmd = cmd + " " + join(rtDir, "system.c");
+		cmd = cmd + " " + join(rtDir, "core/string.c");
+		cmd = cmd + " " + join(rtDir, "core/array.c");
+		cmd = cmd + " " + join(rtDir, "mem/orc.c");
 	}
 
 	cmd = cmd + " " + oFileList;

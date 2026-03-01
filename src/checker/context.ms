@@ -112,6 +112,22 @@ export function findAllExtensions(registry: ExtensionRegistry, receiverTypeName:
 	return results;
 }
 
+// findAllExtensionsByName — find ALL extensions with a given method name (any receiver).
+// Nim-aligned: candidates are collected by name, then filtered by type compatibility
+// at the call site using isAssignable (not string comparison on receiverTypeName).
+export function findAllExtensionsByName(registry: ExtensionRegistry, methodName: string): ExtensionMethod[] {
+	const results: ExtensionMethod[] = [];
+	let i = 0;
+	while (i < registry.methods.length) {
+		const m = registry.methods[i];
+		if (m.methodName === methodName) {
+			results.push(m);
+		}
+		i = i + 1;
+	}
+	return results;
+}
+
 // ===== Extension Flag Helpers =====
 // Parse "ext:receiverName:receiverType" and "sext:TypeName" from pipe-delimited fnFlags.
 // Segment-aware: works for "async|ext:s:string", not just prefix-only.
@@ -254,6 +270,7 @@ export interface CheckerContext {
 	extensionRegistry: ExtensionRegistry;  // null for single-module mode
 	inferredReturn: Type;  // tracks inferred return type during function body checking
 	includeDirectives: string; // accumulated @include args, newline-separated
+	compileDirectives: string; // accumulated @compile args, newline-separated
 	compilerFlags: string;     // accumulated @link/@passC/@passL args, space-separated
 }
 
@@ -272,6 +289,7 @@ export function createContext(): CheckerContext {
 		extensionRegistry: createExtensionRegistry(),
 		inferredReturn: unknownType(),
 		includeDirectives: "",
+		compileDirectives: "",
 		compilerFlags: "",
 	};
 }

@@ -26,6 +26,12 @@ const nativeApp = @nativeJsx(el);  // → UIKit calls
 
 // Direct application (most common):
 const app = @jsx <View><Text>hello</Text></View>;
+
+// Macro pipelines — a macro can return Node (still compile-time), not just runtime:
+const raw = <View><Text>{count()}</Text></View>;   // Node
+const validated = @addAria(raw);                    // macro returns modified JSX → still Node
+const optimized = @staticAnalysis(validated);       // macro returns modified JSX → still Node
+const app = @render(optimized);                     // macro returns runtime code → Element
 ```
 
 **One invariant: zero `Node` at codegen.** Everything else is free.
@@ -34,9 +40,13 @@ const app = @jsx <View><Text>hello</Text></View>;
 
 1. **Checker** recognizes `Node` type as compile-time only (like Nim's `tfTriggersCompileTime` flag)
 2. **Propagation** — any function/interface containing `Node` in its signature becomes compile-time only
-3. **Macro expansion** — when a macro argument is a const identifier whose initializer is a `Node` value, the initializer AST is inlined as the macro's argument
-4. **Erasure** — after all macros expand, `Node`-only const declarations are erased from the AST
-5. **Safety net** — any `Node` surviving to codegen = compile error: *"compile-time Node not consumed by a macro"*
+3. **Macro expansion** (top-to-bottom) — when a macro argument is a const identifier whose initializer is a `Node` value, the initializer AST is inlined as the macro's argument
+4. **Chaining** — if a macro returns a `Node` value (e.g. modified JSX), the result stays as a Node const, available for the next macro. If it returns runtime code, the result becomes runtime.
+5. **Re-expansion** — after each macro expansion, the output is re-walked for nested macros/JSX (depth-limited)
+6. **Erasure** — after all macros expand, `Node`-only const declarations are erased from the AST
+7. **Safety net** — any `Node` surviving to codegen = compile error: *"compile-time Node not consumed by a macro"*
+
+**Ordering constraint**: expansion processes declarations top-to-bottom. A Node const must be declared before it's referenced as a macro argument (same as Nim).
 
 ### Nim comparison
 
@@ -342,7 +352,12 @@ const node = quote { const ${varName} = ${initValue}; };
 @target("c") { extern function malloc(size: number): number; }
 @target("js") { function allocate(size: number): number { return 0; } }
 @emit("#include <stdio.h>");
-@include("mylib.h");  @link("libcrypto.a");  @passC("-DDEBUG=1");  @passL("-lssl");
+@emit("#include <stdio.h>");
+@include("mylib.h");
+@compile("mylib.h");
+@link("libcrypto.a");
+@passC("-DDEBUG=1");
+@passL("-lssl");
 ```
 
 | Directive | Status |
@@ -362,18 +377,30 @@ Node  --nodeToValue()-->  RaiserValue (Object with named fields)
 
 The checker validates macro code statically. The Raiser executes it dynamically with field access. Type safety at compile time, not runtime.
 
+### nodeToValue() — DONE
+
+`nodeToValue(node, objHeap, arrHeap)` in `src/compiler/comptime.ms` serializes any `Node` into a `RaiserValue` Object on the Raiser heap. Covers all 62 NodeKinds: literals (6), identifier (1), expressions (24), patterns (4), statements (19), declarations (14), testing (2), program (1).
+
+Each Node becomes an Object with fields:
+- `kind` — integer (NodeKind enum ordinal)
+- `line` / `column` — source location
+- Kind-specific data fields (matching NodeData type aliases)
+- Child nodes serialized recursively, arrays via `heapAllocArray`/`heapArrayPush`
+
+DRC-safe helpers: `serializeNodes`, `serializeStrings`, `setStr`, `setBool`, `setNode`, `setNodes`, `setStrs`.
+
 ## Phased Implementation Plan
 
 ### Phase A: Node Serialization (Node <-> RaiserValue)
 
-**Prerequisite for all macro expansion. Can be built and tested independently.**
+**Prerequisite for all macro expansion. Load-bearing for macro chaining** — without complete round-trip serialization, macros that return modified AST (not just runtime code) silently corrupt the tree. Must handle all NodeKinds, preserve SourceLocation and nodeType.
 
-| Task | Description |
-|------|-------------|
-| A1 | `nodeToValue()` — recursive Node -> RaiserObject for all 40+ NodeKinds |
-| A2 | `valueToNode()` — extend beyond literals, reverse of A1 |
-| A3 | Round-trip tests: node -> value -> node preserves structure |
-| A4 | `typeToValue()` / `valueToType()` — serialize Type for nodeType access |
+| Task | Description | Status |
+|------|-------------|--------|
+| A1 | `nodeToValue()` — recursive Node -> RaiserObject for all 62 NodeKinds | **DONE** |
+| A2 | `valueToNode()` — extend beyond literals, reverse of A1 | TODO |
+| A3 | Round-trip tests: node -> value -> node preserves structure | TODO |
+| A4 | `typeToValue()` / `valueToType()` — serialize Type for nodeType access | TODO |
 
 ### Phase B: Macro Expansion Pass
 

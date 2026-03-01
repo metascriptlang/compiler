@@ -162,6 +162,17 @@ function sweepDeadDecls(program: Node, ctx: TransformContext): void {
 
 	// Phase 3: Transitive closure — fixpoint iteration using pre-computed names
 	const alive: NameSet = { names: [] };
+	// User-defined main() is always alive (called by dispatcher, not user code)
+	if (nameSetContains(declNames, "main")) {
+		nameSetAdd(alive, "main");
+		// Also seed refs from main's body
+		for (let mi = 0; mi < stmts.length; mi += 1) {
+			const mn = names.items[mi];
+			if (mn === "main") {
+				collectIdentifiers(stmts[mi], refs);
+			}
+		}
+	}
 	let changed = true;
 	while (changed) {
 		changed = false;

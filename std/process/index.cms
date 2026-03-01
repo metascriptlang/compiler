@@ -1,0 +1,92 @@
+/**
+ * Process — C/POSIX Backend
+ *
+ * Provides command-line arguments, process exit, working directory,
+ * file I/O, shell execution, environment variables, and monotonic clock.
+ */
+
+@include("process/native.h");
+
+extern function msProcessArgc(): number;
+extern function msProcessArgvAt(idx: number): string;
+extern function msProcessExit(code: number): void;
+extern function msProcessCwd(): string;
+extern function msProcessReadFile(path: string): string;
+extern function msProcessWriteFile(path: string, content: string): number;
+extern function msProcessFileExists(path: string): number;
+extern function msProcessExec(command: string): number;
+extern function msProcessGetEnv(name: string): string;
+extern function msProcessClockMs(): number;
+
+// =============================================================================
+// Command-line arguments
+// =============================================================================
+
+function buildArgv(): string[] {
+	const result: string[] = [];
+	const count = msProcessArgc();
+	let i = 0;
+	while (i < count) {
+		result.push(msProcessArgvAt(i));
+		i += 1;
+	}
+	return result;
+}
+
+export const argv: string[] = buildArgv();
+
+// =============================================================================
+// Process control
+// =============================================================================
+
+export function exit(code: number): void {
+	msProcessExit(code);
+}
+
+// =============================================================================
+// Working directory
+// =============================================================================
+
+export function cwd(): string {
+	return msProcessCwd();
+}
+
+// =============================================================================
+// File I/O
+// =============================================================================
+
+export function readFile(path: string): string {
+	return msProcessReadFile(path);
+}
+
+export function writeFile(path: string, content: string): boolean {
+	return msProcessWriteFile(path, content) === 1;
+}
+
+export function fileExists(path: string): boolean {
+	return msProcessFileExists(path) === 1;
+}
+
+// =============================================================================
+// Shell execution
+// =============================================================================
+
+export function exec(command: string): number {
+	return msProcessExec(command);
+}
+
+// =============================================================================
+// Environment variables
+// =============================================================================
+
+export function getEnv(name: string): string {
+	return msProcessGetEnv(name);
+}
+
+// =============================================================================
+// Monotonic clock
+// =============================================================================
+
+export function clockMs(): number {
+	return msProcessClockMs();
+}

@@ -55,7 +55,7 @@ function extractStringArray(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap,
 
 // --- Public API ---
 
-function defaultResolveSection(): ResolveSection {
+export function defaultResolveSection(): ResolveSection {
 	const sp: string[] = [];
 	const ext: string[] = [];
 	const ak: string[] = [];

@@ -32,6 +32,8 @@ export enum NodeKind {
 	MacroInvocation, DecoratedDecl,
 	// Other
 	DeferStmt,
+	// Testing
+	TestDecl, ExpectStmt,
 	// Extern / Macro / Quote / Comptime
 	ExternDecl, MacroDecl, QuoteExpr, ComptimeBlock,
 	// Program root
@@ -129,6 +131,9 @@ export type NodeData =
 	| { macroName: string, macroArgs: Node[] }                     // MacroInvocation
 	| { decorators: Node[], decoratedNode: Node }                  // DecoratedDecl
 	| { deferExpr: Node }                                          // DeferStmt
+	// Testing variants
+	| { testName: string, testBody: Node }                         // TestDecl
+	| { expectExpr: Node }                                         // ExpectStmt
 	// Extern / Macro / Quote variants
 	| { externKind: string, externName: string }                    // ExternDecl
 	| { macroDeclName: string, macroDeclParams: string[], macroDeclBody: Node } // MacroDecl
@@ -197,6 +202,8 @@ export type ExprStmtData = { expr: Node };
 export type ReturnStmtData = { argument: Node };
 export type ThrowStmtData = { throwArg: Node };
 export type DeferStmtData = { deferExpr: Node };
+export type TestDeclData = { testName: string, testBody: Node };
+export type ExpectStmtData = { expectExpr: Node };
 export type VariableDeclData = { declName: string, declType: string, initializer: Node, declKind: DeclKind };
 export type IfStmtData = { condition: Node, consequent: Node, alternate: Node };
 export type WhileStmtData = { whileCondition: Node, whileBody: Node };

@@ -16,14 +16,14 @@ import { generateC, generateCModule, genProjectDispatcher, programHasMain, colle
 import { transformForNative } from "../transform/native/index";
 import { createTransformContextWithChecker } from "../transform/context";
 import { findModule, ModuleGraph } from "../module/graph";
-import { createFileSystemProvider, loadModuleGraph, loadModuleGraphWithConfig } from "../module/loader";
+import { createFileSystemProvider, loadModuleGraphWithConfig } from "../module/loader";
 import { ResolverConfig, createDefaultConfig, BACKEND_C, BACKEND_JS, BACKEND_RAISER } from "../module/resolver";
-import { ResolveSection } from "./buildConfig";
+import { ResolveSection, defaultResolveSection } from "./buildConfig";
 import { evaluateComptimeBlocks } from "./comptime";
 import { CliOptions, Target, MODE_DEBUG, MODE_RELEASE } from "./options";
 import { readSource, writeOutput, printErrorsAndExit, emitOutput, printTiming, verboseLog, replaceExt, dirName, baseName, stripBase, ensureDir, getJSRuntime, exeSuffix, outDirForMode } from "./io";
 import { compileC, compileCFile, linkObjects, appendFlag, cliCompileFlags, cliLinkFlags } from "./cc";
-import { parseCHeader } from "../module/cheader";
+import { preprocessHeaders } from "../module/aro";
 import { error, success, bold, dim, green, red, cyan } from "../utils/color";
 import { clockMs } from "std/process";
 
@@ -95,45 +95,6 @@ export function buildResolverConfig(target: Target, resolve: ResolveSection): Re
 	return config;
 }
 
-// Generate synthetic MetaScript source for a C header module.
-// Scans the module graph for all names imported from the given headerPath
-// and generates `export extern function NAME(): int64;` for each.
-// Actual C prototypes come from @include — this just satisfies the checker.
-function synthesizeCHeaderSource(graph: ModuleGraph, headerPath: string): string {
-	let source = "// Synthetic module for C header: " + headerPath + "\n";
-	const emitted: string[] = [];
-
-	let mi = 0;
-	while (mi < graph.modules.length) {
-		const mod = graph.modules[mi];
-		let ii = 0;
-		while (ii < mod.imports.length) {
-			const imp = mod.imports[ii];
-			if (imp.sourcePath === headerPath) {
-				let ni = 0;
-				while (ni < imp.names.length) {
-					const name = imp.names[ni];
-					// Deduplicate
-					let found = false;
-					let ei = 0;
-					while (ei < emitted.length) {
-						if (emitted[ei] === name) { found = true; }
-						ei = ei + 1;
-					}
-					if (!found) {
-						source = source + "export extern function " + name + "(): int64;\n";
-						emitted.push(name);
-					}
-					ni = ni + 1;
-				}
-			}
-			ii = ii + 1;
-		}
-		mi = mi + 1;
-	}
-	return source;
-}
-
 // Report graph-level errors (e.g., circular deps, missing entry).
 function reportGraphErrors(graph: ModuleGraph): void {
 	for (const err of graph.errors) {
@@ -156,48 +117,21 @@ function exitOnModuleErrors(graph: ModuleGraph, prefix: string): void {
 	if (hasErr) exit(1);
 }
 
-// Legacy load — backward compat for commands that don't have build.ms config.
-function loadAndCheckGraphLegacy(entryPath: string, verbose: boolean): ModuleGraph {
-	const dummyExts: string[] = [];
-	const dummyCfg: ResolverConfig = { backend: 0, stdPath: "", searchPaths: [], extensions: dummyExts, aliasKeys: [], aliasValues: [] };
-	return loadAndCheckGraph(entryPath, verbose, dummyCfg, 0);
-}
-
 // Load module graph, validate, and cross-module type check. Exits on errors.
-// When useConfig=1, uses config-aware resolution (backend extensions, std/, search paths).
-// When useConfig=0, falls back to legacy .ms-only resolution.
-function loadAndCheckGraph(entryPath: string, verbose: boolean, config: ResolverConfig, useConfig: number): ModuleGraph {
+// Always config-aware — uses ResolverConfig for backend extensions, std/, search paths.
+// Commands without build.ms pass buildResolverConfig(target, defaultResolveSection()).
+function loadAndCheckGraph(entryPath: string, verbose: boolean, config: ResolverConfig): ModuleGraph {
 	if (verbose) verboseLog("loading module graph from " + entryPath);
 	const provider = createFileSystemProvider();
-	let graph: ModuleGraph;
-	if (useConfig === 1) {
-		graph = loadModuleGraphWithConfig(entryPath, provider, config);
-	} else {
-		graph = loadModuleGraph(entryPath, provider);
-	}
+	const graph = loadModuleGraphWithConfig(entryPath, provider, config);
 	reportGraphErrors(graph);
 	exitOnModuleErrors(graph, "error");
 
-	// Pre-process C header modules: parse with ARO for type-aware imports.
-	// Falls back to import-name synthesis if ARO parsing fails.
-	for (let hi = 0; hi < graph.loadOrder.length; hi += 1) {
-		const hmod = findModule(graph, graph.loadOrder[hi]);
-		if (hmod !== null && hmod.isCHeader) {
-			if (verbose) verboseLog("parsing C header " + hmod.path);
-			const aroSource = parseCHeader(hmod.path);
-			if (aroSource.length > 60) {
-				hmod.source = aroSource;
-			} else {
-				if (verbose) verboseLog("  ARO fallback → import-name synthesis");
-				hmod.source = synthesizeCHeaderSource(graph, hmod.path);
-			}
-		}
-	}
+	// Pre-process C header modules (ARO parse with import-name synthesis fallback)
+	preprocessHeaders(graph, verbose);
 
 	if (verbose) verboseLog("cross-module type check");
-	let stdPath = "";
-	if (useConfig === 1) { stdPath = config.stdPath; }
-	checkModuleGraph(graph, stdPath);
+	checkModuleGraph(graph, config.stdPath);
 	exitOnModuleErrors(graph, "type error");
 	return graph;
 }
@@ -217,6 +151,69 @@ function collectAllPrototypes(graph: ModuleGraph): string {
 		allProtos = allProtos + collectExportedPrototypes(monoed);
 	}
 	return allProtos;
+}
+
+// Counter for unique @compile .o filenames across modules.
+let compileObjCount = 0;
+
+// Process @compile("foo.c") directives: compile each .c file to .o relative to module dir.
+// Returns space-separated .o file paths to add to the link list.
+function processCompileDirectives(directives: string, moduleDir: string, allFlags: string, mode: number, ccOption: number, verbose: boolean): string {
+	if (directives === "") return "";
+	let oFiles = "";
+	let start = 0;
+	let idx = 0;
+	while (idx <= directives.length) {
+		let atEnd = idx === directives.length;
+		let atNewline = false;
+		if (!atEnd) {
+			atNewline = directives.slice(idx, idx + 1) === "\n";
+		}
+		if (atEnd || atNewline) {
+			if (idx > start) {
+				const cPath = directives.slice(start, idx);
+				// Resolve relative to the declaring module's directory
+				const fullPath = moduleDir + "/" + cPath;
+				const oFile = "/tmp/_msc_compile_" + compileObjCount + ".o";
+				compileObjCount = compileObjCount + 1;
+				if (verbose) verboseLog("  @compile " + fullPath + " → " + oFile);
+				const ccCode = compileCFile(fullPath, oFile, allFlags, mode, ccOption);
+				if (ccCode !== 0) {
+					console.log(error("error") + ": @compile failed for " + fullPath + " " + dim("(exit " + ccCode + ")"));
+					exit(1);
+				}
+				oFiles = appendFlag(oFiles, oFile);
+			}
+			start = idx + 1;
+		}
+		idx = idx + 1;
+	}
+	return oFiles;
+}
+
+// Auto-compile companion .c files for .h imports.
+// For each .h module in the graph, checks if a .c file exists at the same path.
+// If so, compiles it to .o and returns accumulated object file paths.
+function compileHeaderCompanions(graph: ModuleGraph, allFlags: string, mode: number, ccOption: number, verbose: boolean): string {
+	let oFiles = "";
+	for (let i = 0; i < graph.loadOrder.length; i += 1) {
+		const modPath = graph.loadOrder[i];
+		const mod = findModule(graph, modPath);
+		if (mod === null || !mod.isCHeader) continue;
+		// lib.h → lib.c
+		const cPath = mod.path.slice(0, mod.path.length - 2) + ".c";
+		if (exec("test -f " + cPath) === 0) {
+			const oFile = "/tmp/_msc_hcompanion_" + i + ".o";
+			if (verbose) verboseLog("  companion " + cPath + " → " + oFile);
+			const ccCode = compileCFile(cPath, oFile, allFlags, mode, ccOption);
+			if (ccCode !== 0) {
+				console.log(error("error") + ": companion compile failed for " + cPath + " " + dim("(exit " + ccCode + ")"));
+				exit(1);
+			}
+			oFiles = appendFlag(oFiles, oFile);
+		}
+	}
+	return oFiles;
 }
 
 // ===== Dependency File Output =====
@@ -244,7 +241,8 @@ function needsRebuild(graph: ModuleGraph, outputBinary: string): boolean {
 // ===== Multi-Module JS Build =====
 
 export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOptions): void {
-	const graph = loadAndCheckGraphLegacy(entryPath, opts.verbose);
+	const config = buildResolverConfig(Target.JS, defaultResolveSection());
+	const graph = loadAndCheckGraph(entryPath, opts.verbose, config);
 	const outDir = outputDir !== "" ? outputDir : "out/debug";
 	ensureDir(outDir);
 	const baseDir = dirName(entryPath);
@@ -298,7 +296,8 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 
 export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	const t0 = clockMs();
-	const graph = loadAndCheckGraphLegacy(entryPath, opts.verbose);
+	const config = buildResolverConfig(Target.C, defaultResolveSection());
+	const graph = loadAndCheckGraph(entryPath, opts.verbose, config);
 
 	// Compute output binary path early for change detection
 	let outBinary = opts.outputPath;
@@ -328,6 +327,10 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	let allFlags = cliCompileFlags(opts);
 	let oFiles = "";
 	let compiled = 0;
+
+	// Auto-compile companion .c files for .h imports
+	const companionObjs = compileHeaderCompanions(graph, allFlags, opts.mode, opts.ccCompiler, opts.verbose);
+	oFiles = appendFlag(oFiles, companionObjs);
 
 	for (let i = 0; i < graph.loadOrder.length; i += 1) {
 		const modPath = graph.loadOrder[i];
@@ -370,6 +373,10 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 
 		// Accumulate compiler flags from @passC/@passL directives
 		allFlags = appendFlag(allFlags, ctx.compilerFlags);
+
+		// Process @compile("foo.c") directives — compile extra C sources
+		const compileObjs = processCompileDirectives(ctx.compileDirectives, dirName(modPath), allFlags, opts.mode, opts.ccCompiler, opts.verbose);
+		oFiles = appendFlag(oFiles, compileObjs);
 
 		// Check for user main() in entry module
 		if (modPath === entryPath) {
@@ -444,7 +451,8 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 
 export function cmdTest(filePath: string, opts: CliOptions): void {
 	const t0 = clockMs();
-	const graph = loadAndCheckGraphLegacy(filePath, opts.verbose);
+	const config = buildResolverConfig(Target.C, defaultResolveSection());
+	const graph = loadAndCheckGraph(filePath, opts.verbose, config);
 
 	// Pass 1: Collect exported prototypes
 	if (opts.verbose) verboseLog("collecting cross-module prototypes");
@@ -454,6 +462,10 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	let allFlags = cliCompileFlags(opts);
 	let oFiles = "";
 	let compiled = 0;
+
+	// Auto-compile companion .c files for .h imports
+	const companionObjs = compileHeaderCompanions(graph, allFlags, opts.mode, opts.ccCompiler, opts.verbose);
+	oFiles = appendFlag(oFiles, companionObjs);
 
 	for (let i = 0; i < graph.loadOrder.length; i += 1) {
 		const modPath = graph.loadOrder[i];
@@ -484,6 +496,10 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const cCode = generateCModule(analyzed, ctx, modPath, allProtos);
 
 		allFlags = appendFlag(allFlags, ctx.compilerFlags);
+
+		// Process @compile("foo.c") directives
+		const compileObjs = processCompileDirectives(ctx.compileDirectives, dirName(modPath), allFlags, opts.mode, opts.ccCompiler, opts.verbose);
+		oFiles = appendFlag(oFiles, compileObjs);
 
 		const cFile = "/tmp/_msc_test_" + compiled + ".c";
 		const oFile = "/tmp/_msc_test_" + compiled + ".o";
@@ -529,7 +545,8 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 
 export function cmdRunJS(filePath: string, opts: CliOptions): void {
 	const t0 = clockMs();
-	const graph = loadAndCheckGraphLegacy(filePath, opts.verbose);
+	const config = buildResolverConfig(Target.JS, defaultResolveSection());
+	const graph = loadAndCheckGraph(filePath, opts.verbose, config);
 
 	const outDir = "out/debug";
 	ensureDir(outDir);
@@ -581,7 +598,8 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 
 export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 	const t0 = clockMs();
-	const graph = loadAndCheckGraphLegacy(filePath, opts.verbose);
+	const config = buildResolverConfig(Target.Raiser, defaultResolveSection());
+	const graph = loadAndCheckGraph(filePath, opts.verbose, config);
 
 	// Parse each module → RaiserModuleInput (topological order)
 	const modules: RaiserModuleInput[] = [];

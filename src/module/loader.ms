@@ -18,7 +18,7 @@
 import {
 	Module, ModuleGraph, ModuleState, ImportEntry,
 	createModuleGraph, createModule, createImportEntry,
-	findModule, addModule,
+	findModule, hasModule, addModule,
 	isInImportStack, pushImportStack, popImportStack,
 } from "./graph";
 import { resolveImport, resolveImportWithConfig, isStdImport, ResolverConfig } from "./resolver";
@@ -80,37 +80,39 @@ function finalizeModule(graph: ModuleGraph, mod: Module, path: string): void {
 	graph.loadOrder.push(path);
 }
 
-// useConfig: 0 = legacy (skip std, .ms only), 1 = use ResolverConfig
-export function loadModule(graph: ModuleGraph, path: string, provider: SourceProvider, config: ResolverConfig, useConfig: number): Result<boolean, string> {
-	// Already in graph — check if still loading (circular import)
-	const existing = findModule(graph, path);
-	if (existing !== null) {
-		if (existing.state === ModuleState.Loading) {
-			graph.errors.push("Circular import detected: " + path);
-		}
-		return Result.ok(true);
-	}
-
-	// Create module, mark as loading, add to graph BEFORE recursion
+// Helper: create module, add to graph, push import stack.
+// Isolates Module* from caller's DRC scope (avoids premature ms_decref).
+function createAndAddModule(graph: ModuleGraph, path: string): void {
 	const mod = createModule(path);
 	mod.state = ModuleState.Loading;
 	addModule(graph, mod);
 	pushImportStack(graph, path);
+}
 
-	// C header files: skip lex/parse, create synthetic module
-	if (isCHeaderPath(path)) {
-		mod.isCHeader = true;
-		mod.source = "// C header: " + path;
-		finalizeModule(graph, mod, path);
-		return Result.ok(true);
-	}
+// Mark a module as .h and finalize (pop stack + mark ready + add to loadOrder)
+function markCHeader(graph: ModuleGraph, path: string): void {
+	const mod = findModule(graph, path);
+	if (mod === null) return;
+	mod.isCHeader = true;
+	mod.source = "// C header: " + path;
+	popImportStack(graph);
+	mod.state = ModuleState.Ready;
+	graph.loadOrder.push(path);
+}
+
+// Load .ms source module — DRC-isolated (mod stays in this scope)
+function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProvider, config: ResolverConfig, useConfig: number): boolean {
+	const mod = createModule(path);
+	mod.state = ModuleState.Loading;
+	addModule(graph, mod);
+	pushImportStack(graph, path);
 
 	// Read source
 	const sourceResult = provideSource(provider, path);
 	if (!sourceResult.ok) {
 		mod.errors.push(sourceResult.error);
 		finalizeModule(graph, mod, path);
-		return Result.ok(false);
+		return false;
 	}
 	mod.source = sourceResult.value;
 
@@ -119,7 +121,7 @@ export function loadModule(graph: ModuleGraph, path: string, provider: SourcePro
 	if (!lr.ok) {
 		mod.errors.push("Lex: " + lr.error);
 		finalizeModule(graph, mod, path);
-		return Result.ok(false);
+		return false;
 	}
 	const parseState = createState(lr.value);
 	const parseResult = callStateProgramParser(parseState);
@@ -132,7 +134,7 @@ export function loadModule(graph: ModuleGraph, path: string, provider: SourcePro
 	if (!parseResult.ok) {
 		mod.errors.push("Parse: " + parseResult.error);
 		finalizeModule(graph, mod, path);
-		return Result.ok(false);
+		return false;
 	}
 	const program = parseResult.value;
 	const pd = program.data as ProgramData;
@@ -144,7 +146,32 @@ export function loadModule(graph: ModuleGraph, path: string, provider: SourcePro
 
 	// Done loading — mark ready, add to topological order
 	finalizeModule(graph, mod, path);
-	return Result.ok(true);
+	return true;
+}
+
+// useConfig: 0 = bare (skip std, .ms only), 1 = full (use ResolverConfig)
+export function loadModule(graph: ModuleGraph, path: string, provider: SourceProvider, config: ResolverConfig, useConfig: number): Result<boolean, string> {
+	// Already in graph — check if still loading (circular import)
+	if (hasModule(graph, path)) {
+		const existing = findModule(graph, path);
+		if (existing !== null) {
+			if (existing.state === ModuleState.Loading) {
+				graph.errors.push("Circular import detected: " + path);
+			}
+		}
+		return Result.ok(true);
+	}
+
+	// C header files: skip lex/parse, create synthetic module
+	if (isCHeaderPath(path)) {
+		createAndAddModule(graph, path);
+		markCHeader(graph, path);
+		return Result.ok(true);
+	}
+
+	// Regular source module
+	const loaded = loadSourceModule(graph, path, provider, config, useConfig);
+	return Result.ok(loaded);
 }
 
 // ===== Import Processing =====
@@ -154,7 +181,7 @@ function processImportDecl(graph: ModuleGraph, mod: Module, node: Node, provider
 	const specifier = d.importSource;
 
 	if (useConfig === 0) {
-		// Legacy mode: skip std, resolve .ms only
+		// Bare mode: skip std, resolve .ms only
 		if (isStdImport(specifier)) return;
 
 		const candidates = resolveImport(specifier, mod.path);
@@ -214,10 +241,10 @@ export function loadModuleGraphWithConfig(entryPath: string, provider: SourcePro
 	return graph;
 }
 
-// Legacy (no config) — backward compat
+// Bare mode (no config) — skips std/, resolves .ms only
 export function loadModuleGraph(entryPath: string, provider: SourceProvider): ModuleGraph {
 	const graph = createModuleGraph();
-	// Create a dummy config — not used in legacy mode (useConfig=0)
+	// Dummy config — not used in bare mode (useConfig=0)
 	const dummyExts: string[] = [];
 	const dummyCfg: ResolverConfig = { backend: 0, stdPath: "", searchPaths: [], extensions: dummyExts, aliasKeys: [], aliasValues: [] };
 	const _r = loadModule(graph, entryPath, provider, dummyCfg, 0);

@@ -17,7 +17,7 @@ import {
 	MatchExprData, MatchStmtData, MatchCaseData,
 	AwaitExprData, YieldExprData, MoveExprData, OutExprData, HiddenDerefData,
 	TypeAssertionData, DestructuringDeclData, QuoteExprData, ComptimeBlockData,
-	MacroInvocationData,
+	MacroInvocationData, TestDeclData, ExpectStmtData,
 } from "../ast/node";
 import { TransformContext } from "./context";
 
@@ -328,6 +328,14 @@ export function mapChildren(node: Node, f: Visitor): void {
 				i += 1;
 			}
 		},
+		NodeKind.TestDecl => {
+			const d = node.data as TestDeclData;
+			d.testBody = f(d.testBody);
+		},
+		NodeKind.ExpectStmt => {
+			const d = node.data as ExpectStmtData;
+			d.expectExpr = f(d.expectExpr);
+		},
 		// Leaf nodes (no children to walk)
 		_ => {},
 	};
@@ -400,6 +408,10 @@ export function walkExpandBlocks(node: Node, expander: StmtExpander, ctx: Transf
 		NodeKind.ExportDecl => {
 			const d = node.data as ExportDeclData;
 			walkExpandBlocks(d.exportedDecl, expander, ctx);
+		},
+		NodeKind.TestDecl => {
+			const d = node.data as TestDeclData;
+			walkExpandBlocks(d.testBody, expander, ctx);
 		},
 		_ => {},
 	};

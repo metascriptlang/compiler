@@ -22,6 +22,7 @@ import {
 import { genExpr } from "./expressions";
 import { genStmt, genStmts } from "./statements";
 import { mangle, mangleTypeName, mangleFieldName, safeName } from "./names";
+import { getSimpleTypeDesc, getTypeDesc } from "./types";
 import { Symbol, lookupSymbol, hasOverloads } from "../../checker/symbol";
 // NOTE: parser/context imports are in index.ms (not here) to avoid DRC union member count issues.
 // genGenericTypeInsts lives in index.ms for the same reason.
@@ -48,6 +49,7 @@ export function genDecl(g: CGen, node: Node, exported: boolean): void {
 	}
 	else if (k === NodeKind.TypeAliasDecl) { /* type aliases are compile-time only */ }
 	else if (k === NodeKind.ExternDecl) { /* extern declarations handled in types/headers */ }
+	else if (k === NodeKind.TestDecl) { /* stripped in non-test builds */ }
 	else {
 		// Statement or variable at top level
 		genTopLevelStmt(g, node);
@@ -95,7 +97,9 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 
 	// Non-exported functions get static prefix (better optimization, smaller symbol tables)
 	// Extern functions are never static — they link to external C symbols
-	const prefix = (exported || isExtern) ? "" : "static ";
+	// main() is never static — called from dispatcher
+	const isMain = d.fnName === "main";
+	const prefix = (exported || isExtern || isMain) ? "" : "static ";
 
 	// Emit prototype to ProcHeaders — NRVO functions return void
 	const actualRetType = nrvo ? "void" : cRetType;
@@ -268,10 +272,9 @@ function genClassDecl(g: CGen, node: Node): void {
 	// Forward declaration
 	addLine(sec(g, CSection.ForwardDecls), "typedef struct " + name + " " + name + ";");
 
-	// Struct with refcount header
+	// Struct — no refcount field; msRefHeader (16 bytes) is prepended by msAllocTyped
 	const types = sec(g, CSection.Types);
 	addLine(types, "struct " + name + " {");
-	addLine(types, "  int32_t _rc;");
 	// Emit properties from classBody
 	for (let i = 0; i < d.classBody.length; i += 1) {
 		const member = d.classBody[i];
@@ -283,6 +286,12 @@ function genClassDecl(g: CGen, node: Node): void {
 		}
 	}
 	addLine(types, "};");
+	addNewline(types);
+
+	// Emit msTypeInfo for ORC (static const, one per class)
+	// destroy and trace are NULL initially; destructorLifting emits them when needed.
+	// msDecref handles NULL destroy gracefully (just frees).
+	addLine(types, "static const msTypeInfo " + name + "_type = { NULL, NULL, MS_ACYCLIC_FLAG };");
 	addNewline(types);
 
 	// Emit methods as free functions with first param being the class pointer
@@ -346,18 +355,23 @@ function genConstructor(g: CGen, node: Node, className: string): void {
 	const proto = className + "* " + ctorName + "(" + paramList + ")";
 	addLine(sec(g, CSection.ProcHeaders), proto + ";");
 
+	const procs = sec(g, CSection.Procs);
+	addLine(procs, proto + " {");
+	// Allocate with RTTI: msAllocTyped(sizeof(Type), &Type_type)
+	addLine(procs, "  " + className + "* self = (" + className + "*)msAllocTyped(sizeof(" + className + "), &" + className + "_type);");
+
 	if (d.ctorBody !== null) {
 		const p = createProc(ctorName, null as unknown as Type);
 		genStmt(g, p, d.ctorBody);
 		const locals = readProcLocals(p);
 		const stmts = readProcStmts(p);
-		const procs = sec(g, CSection.Procs);
-		addLine(procs, proto + " {");
 		if (locals.length > 0) add(procs, locals);
 		add(procs, stmts);
-		addLine(procs, "}");
-		addNewline(procs);
 	}
+
+	addLine(procs, "  return self;");
+	addLine(procs, "}");
+	addNewline(procs);
 }
 
 // genExportDecl and genDecoratedDecl inlined into genDecl (exported flag threading)
@@ -382,7 +396,17 @@ function genTopLevelStmt(g: CGen, node: Node): void {
 function genGlobalVar(g: CGen, node: Node): void {
 	const d = node.data as VariableDeclData;
 	const varName = safeName(d.declName);
-	const cType = mapTypeAnnotation(d.declType);
+
+	let cType = "";
+	if (d.declType !== "") {
+		cType = mapTypeAnnotation(d.declType);
+	} else if (node.nodeType !== null) {
+		cType = getSimpleTypeDesc(node.nodeType);
+		if (cType === "") {
+			cType = getTypeDesc(g, node.nodeType);
+		}
+	}
+	if (cType === "") cType = "double";
 
 	// Always emit uninitialized declaration to GlobalVars
 	addLine(sec(g, CSection.GlobalVars), cType + " " + varName + ";");
@@ -409,7 +433,7 @@ export function mapTypeAnnotation(annotation: string): string {
 	if (annotation === "int64") return "int64_t";
 	if (annotation === "uint32") return "uint32_t";
 	if (annotation === "float32") return "float";
-	if (annotation === "boolean") return "NIM_BOOL";
+	if (annotation === "boolean") return "MS_BOOL";
 	if (annotation === "string") return "msString";
 	if (annotation === "void") return "void";
 	return "void*";

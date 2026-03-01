@@ -24,25 +24,25 @@ import { testLoc } from "./inject";
 // ===== Known wasMoved / destroy function names =====
 
 function isWasMovedFn(name: string): boolean {
-	return name === "ms_string_was_moved"
-		|| name === "ms_array_number_was_moved"
-		|| name === "ms_array_string_was_moved"
-		|| name === "MS_ARRAY_REF_WAS_MOVED"
-		|| name === "ms_closure_was_moved"
-		|| name === "ms_map_was_moved"
-		|| name === "ms_ptr_was_moved"
+	return name === "msStringWasMoved"
+		|| name === "msArrayNumberWasMoved"
+		|| name === "msArrayStringWasMoved"
+		|| name === "msArrayRefWasMoved"
+		|| name === "msClosureWasMoved"
+		|| name === "msMapWasMoved"
+		|| name === "msPtrWasMoved"
 		|| name.endsWith("_wasMoved");
 }
 
 function isDestroyFn(name: string): boolean {
-	return name === "ms_string_decref"
-		|| name === "ms_decref"
-		|| name === "ms_array_destroy"
-		|| name === "ms_array_string_destroy"
-		|| name === "MS_ARRAY_REF_DESTROY"
-		|| name === "ms_closure_destroy"
-		|| name === "ms_map_free"
-		|| name === "ms_set_free"
+	return name === "msStringDecref"
+		|| name === "msDecref"
+		|| name === "msArrayDestroy"
+		|| name === "msArrayStringDestroy"
+		|| name === "msArrayRefDestroy"
+		|| name === "msClosureDestroy"
+		|| name === "msMapFree"
+		|| name === "msSetFree"
 		|| name.endsWith("_destroy");
 }
 
@@ -242,13 +242,13 @@ export function optimizeDrc(program: Node): Node {
 function makeWmCall(varName: string): Node {
 	const loc = testLoc();
 	return makeExprStmt(
-		makeCall(makeIdent("ms_string_was_moved", loc), [makeIdent(varName, loc)], loc), loc);
+		makeCall(makeIdent("msStringWasMoved", loc), [makeIdent(varName, loc)], loc), loc);
 }
 
 function makeDestroyCallForTest(varName: string): Node {
 	const loc = testLoc();
 	return makeExprStmt(
-		makeCall(makeIdent("ms_string_decref", loc), [makeIdent(varName, loc)], loc), loc);
+		makeCall(makeIdent("msStringDecref", loc), [makeIdent(varName, loc)], loc), loc);
 }
 
 function makeOtherStmt(): Node {

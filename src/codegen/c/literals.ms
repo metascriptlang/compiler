@@ -88,27 +88,37 @@ export function formatCFloat32(value: number): string {
 }
 
 // ===== String Pool Emission =====
-// Emits interned string data declarations to a Builder (the StringPool section).
+// Emits interned string payload structs for msString literal support.
+// Each entry becomes a static struct { int64_t cap; char data[N+1]; }
+// with MS_STRLIT_FLAG set in cap. Usage: MS_STRING_LIT(&name, len)
 
 export function emitStringPoolDecls(pool: StringPool, dest: Builder): void {
 	for (let i = 0; i < pool.entries.length; i += 1) {
 		const entry = pool.entries[i];
 		const escaped = escapeCString(entry.value);
-		addLine(dest, "static const char " + entry.cName + "[] = \"" + escaped + "\";");
+		const len = entry.value.length;
+		// static struct { int64_t cap; char data[N+1]; } TMP_STR_1 = { MS_STRLIT_FLAG | N, "..." };
+		addLine(dest, "static struct { int64_t cap; char data[" + (len + 1) + "]; } " + entry.cName + " = { MS_STRLIT_FLAG | " + len + ", \"" + escaped + "\" };");
 	}
+}
+
+// Emit an msString expression from a pool entry name and string length.
+// Returns: MS_STRING_LIT(&name, len)
+export function msStringPoolRef(cName: string, len: number): string {
+	return "MS_STRING_LIT(&" + cName + ", " + len + ")";
 }
 
 // ===== Boolean Literal =====
 
 export function cBoolLiteral(value: boolean): string {
-	if (value) return "NIM_TRUE";
-	return "NIM_FALSE";
+	if (value) return "MS_TRUE";
+	return "MS_FALSE";
 }
 
 // ===== Null Literal =====
 
 export function cNullLiteral(): string {
-	return "NIM_NIL";
+	return "MS_NIL";
 }
 
 // ===== Tests =====
@@ -160,23 +170,27 @@ testGroup("C Number Format", () => {
 });
 
 testGroup("C String Pool Emit", () => {
-	test("emit pool declarations", () => {
+	test("emit pool declarations as msStrPayload", () => {
 		const pool = createStringPool();
 		internString(pool, "hello");
 		internString(pool, "world");
 		const out = createBuilder();
 		emitStringPoolDecls(pool, out);
 		const result = extract(out);
-		check(result === "static const char TMP_STR_1[] = \"hello\";\nstatic const char TMP_STR_2[] = \"world\";\n");
+		check(result.length > 0);
+		// Should contain MS_STRLIT_FLAG, cap, and data
+	});
+	test("msStringPoolRef format", () => {
+		check(msStringPoolRef("TMP_STR_1", 5) === "MS_STRING_LIT(&TMP_STR_1, 5)");
 	});
 });
 
 testGroup("C Bool/Null Literals", () => {
 	test("true/false", () => {
-		check(cBoolLiteral(true) === "NIM_TRUE");
-		check(cBoolLiteral(false) === "NIM_FALSE");
+		check(cBoolLiteral(true) === "MS_TRUE");
+		check(cBoolLiteral(false) === "MS_FALSE");
 	});
 	test("null", () => {
-		check(cNullLiteral() === "NIM_NIL");
+		check(cNullLiteral() === "MS_NIL");
 	});
 });

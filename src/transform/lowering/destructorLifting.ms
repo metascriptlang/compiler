@@ -162,10 +162,10 @@ function genInlineSink(destroyFn: string, xf: Node, yf: Node, buf: StmtBuf, loc:
 // --- Nim's fillStrOp ---
 function stringOp(hook: string, xf: Node, yf: Node, fieldName: string, buf: StmtBuf, loc: SourceLocation): void {
 	match (hook) {
-		"destroy" => { genCall("ms_string_decref", hook, xf, yf, buf, loc); },
-		"copy" => { genCopyRef("ms_string_incref", xf, yf, fieldName, buf, loc); },
-		"sink" => { genInlineSink("ms_string_decref", xf, yf, buf, loc); },
-		"wasMoved" => { genCall("ms_string_was_moved", hook, xf, yf, buf, loc); },
+		"destroy" => { genCall("msStringDecref", hook, xf, yf, buf, loc); },
+		"copy" => { genCopyRef("msStringIncref", xf, yf, fieldName, buf, loc); },
+		"sink" => { genInlineSink("msStringDecref", xf, yf, buf, loc); },
+		"wasMoved" => { genCall("msStringWasMoved", hook, xf, yf, buf, loc); },
 		_ => {},
 	};
 }
@@ -174,39 +174,43 @@ function stringOp(hook: string, xf: Node, yf: Node, fieldName: string, buf: Stmt
 function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, buf: StmtBuf, loc: SourceLocation): void {
 	if (elem === null || isPrimitiveKind(elem.kind)) {
 		match (hook) {
-			"destroy" => { genCall("ms_array_destroy", hook, xf, yf, buf, loc); },
-			"copy" => { genCall("ms_array_copy", hook, xf, yf, buf, loc); },
-			"sink" => { genInlineSink("ms_array_destroy", xf, yf, buf, loc); },
-			"wasMoved" => { genCall("ms_array_number_was_moved", hook, xf, yf, buf, loc); },
+			"destroy" => { genCall("msArrayDestroy", hook, xf, yf, buf, loc); },
+			"copy" => { genCall("msArrayCopy", hook, xf, yf, buf, loc); },
+			"sink" => { genInlineSink("msArrayDestroy", xf, yf, buf, loc); },
+			"wasMoved" => { genCall("msArrayNumberWasMoved", hook, xf, yf, buf, loc); },
 			_ => {},
 		};
 	} else if (elem.kind === TypeKind.String) {
 		match (hook) {
-			"destroy" => { genCall("ms_array_string_destroy", hook, xf, yf, buf, loc); },
-			"copy" => { genCall("ms_array_string_copy", hook, xf, yf, buf, loc); },
-			"sink" => { genInlineSink("ms_array_string_destroy", xf, yf, buf, loc); },
-			"wasMoved" => { genCall("ms_array_string_was_moved", hook, xf, yf, buf, loc); },
+			"destroy" => { genCall("msArrayStringDestroy", hook, xf, yf, buf, loc); },
+			"copy" => { genCall("msArrayStringCopy", hook, xf, yf, buf, loc); },
+			"sink" => { genInlineSink("msArrayStringDestroy", xf, yf, buf, loc); },
+			"wasMoved" => { genCall("msArrayStringWasMoved", hook, xf, yf, buf, loc); },
 			_ => {},
 		};
 	} else {
 		match (hook) {
-			"destroy" => { genCall("MS_ARRAY_REF_DESTROY", hook, xf, yf, buf, loc); },
-			"copy" => { genCall("MS_ARRAY_REF_COPY", hook, xf, yf, buf, loc); },
-			"sink" => { genInlineSink("MS_ARRAY_REF_DESTROY", xf, yf, buf, loc); },
-			"wasMoved" => { genCall("MS_ARRAY_REF_WAS_MOVED", hook, xf, yf, buf, loc); },
-			"trace" => { genCall("ms_array_ref_trace", hook, xf, yf, buf, loc); },
+			"destroy" => { genCall("msArrayRefDestroy", hook, xf, yf, buf, loc); },
+			"copy" => { genCall("msArrayRefCopy", hook, xf, yf, buf, loc); },
+			"sink" => { genInlineSink("msArrayRefDestroy", xf, yf, buf, loc); },
+			"wasMoved" => { genCall("msArrayRefWasMoved", hook, xf, yf, buf, loc); },
+			"trace" => { genCall("msArrayRefTrace", hook, xf, yf, buf, loc); },
 			_ => {},
 		};
 	}
 }
 
 // --- Nim's atomicRefOp (shared by Ref, Ptr, Object-pointer) ---
-function refOp(hook: string, xf: Node, yf: Node, fieldName: string, buf: StmtBuf, loc: SourceLocation): void {
+// isCyclic: true for types that can form reference cycles (Nim parity: atomicRefOp)
+// Cyclic types use msDecrefCyclic/msIncrefCyclic (ORC-aware when MS_ORC defined)
+function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: boolean, buf: StmtBuf, loc: SourceLocation): void {
+	const decrefFn = isCyclic ? "msDecrefCyclic" : "msDecref";
+	const increfFn = isCyclic ? "msIncrefCyclic" : "msIncref";
 	match (hook) {
-		"destroy" => { genCall("ms_decref", hook, xf, yf, buf, loc); },
-		"copy" => { genCopyRef("ms_incref", xf, yf, fieldName, buf, loc); },
+		"destroy" => { genCall(decrefFn, hook, xf, yf, buf, loc); },
+		"copy" => { genCopyRef(increfFn, xf, yf, fieldName, buf, loc); },
 		"sink" => { buf.stmts.push(makeExprStmt(makeAssign(xf, yf, loc), loc)); },
-		"wasMoved" => { genCall("ms_ptr_was_moved", hook, xf, yf, buf, loc); },
+		"wasMoved" => { genCall("msPtrWasMoved", hook, xf, yf, buf, loc); },
 		"trace" => {
 			// Call callback(field) — yf is the trace callback
 			buf.stmts.push(makeExprStmt(makeCall(yf, [xf], loc), loc));
@@ -221,18 +225,18 @@ function namedObjOp(hook: string, typeName: string, xf: Node, yf: Node, buf: Stm
 		genInlineSink(typeName + "_destroy", xf, yf, buf, loc);
 		return;
 	}
-	const name = hook === "wasMoved" ? "object_was_moved" : typeName + hookSuffix(hook);
+	const name = hook === "wasMoved" ? "msObjectWasMoved" : typeName + hookSuffix(hook);
 	genCall(name, hook, xf, yf, buf, loc);
 }
 
 // --- Parameterized runtime op (shared by closure, map) ---
-function runtimeOp(prefix: string, destroyName: string, hasTrace: boolean, hook: string, xf: Node, yf: Node, buf: StmtBuf, loc: SourceLocation): void {
+function runtimeOp(prefix: string, destroyName: string, copySuffix: string, wasMovedSuffix: string, traceSuffix: string, hasTrace: boolean, hook: string, xf: Node, yf: Node, buf: StmtBuf, loc: SourceLocation): void {
 	match (hook) {
 		"destroy" => { genCall(destroyName, hook, xf, yf, buf, loc); },
-		"copy" => { genCall(prefix + "_copy", hook, xf, yf, buf, loc); },
+		"copy" => { genCall(prefix + copySuffix, hook, xf, yf, buf, loc); },
 		"sink" => { genInlineSink(destroyName, xf, yf, buf, loc); },
-		"wasMoved" => { genCall(prefix + "_was_moved", hook, xf, yf, buf, loc); },
-		"trace" => { if (hasTrace) genCall(prefix + "_trace", hook, xf, yf, buf, loc); },
+		"wasMoved" => { genCall(prefix + wasMovedSuffix, hook, xf, yf, buf, loc); },
+		"trace" => { if (hasTrace) genCall(prefix + traceSuffix, hook, xf, yf, buf, loc); },
 		_ => {},
 	};
 }
@@ -240,9 +244,9 @@ function runtimeOp(prefix: string, destroyName: string, hasTrace: boolean, hook:
 // --- Set lifecycle ---
 function setOp(hook: string, xf: Node, yf: Node, buf: StmtBuf, loc: SourceLocation): void {
 	match (hook) {
-		"destroy" => { genCall("ms_set_free", hook, xf, yf, buf, loc); },
-		"copy" => { genCall("ms_set_copy", hook, xf, yf, buf, loc); },
-		"sink" => { genInlineSink("ms_set_free", xf, yf, buf, loc); },
+		"destroy" => { genCall("msSetFree", hook, xf, yf, buf, loc); },
+		"copy" => { genCall("msSetCopy", hook, xf, yf, buf, loc); },
+		"sink" => { genInlineSink("msSetFree", xf, yf, buf, loc); },
 		_ => { defaultOp(hook, xf, yf, buf, loc); },
 	};
 }
@@ -264,7 +268,8 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 		TypeKind.Array => { arrayOp(hook, fieldType.typeReturn, xf, yf, buf, loc); },
 		TypeKind.Object => {
 			if (isPointerType(fieldType, lctx.ctx)) {
-				refOp(hook, xf, yf, fieldName, buf, loc);
+				const cyclic = isCyclicType(fieldType, lctx, visited);
+				refOp(hook, xf, yf, fieldName, cyclic, buf, loc);
 			} else if (fieldType.typeName !== "") {
 				ensureTypeHooks(fieldType.typeName, lctx, loc);
 				if (namedTypeHasHooks(fieldType.typeName, lctx)) {
@@ -276,9 +281,12 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				defaultOp(hook, xf, yf, buf, loc);
 			}
 		},
-		TypeKind.Ref | TypeKind.Ptr => { refOp(hook, xf, yf, fieldName, buf, loc); },
-		TypeKind.Function => { runtimeOp("ms_closure", "ms_closure_destroy", true, hook, xf, yf, buf, loc); },
-		TypeKind.Map => { runtimeOp("ms_map", "ms_map_free", false, hook, xf, yf, buf, loc); },
+		TypeKind.Ref | TypeKind.Ptr => {
+			const cyclic = isCyclicType(fieldType, lctx, visited);
+			refOp(hook, xf, yf, fieldName, cyclic, buf, loc);
+		},
+		TypeKind.Function => { runtimeOp("msClosure", "msClosureDestroy", "Copy", "WasMoved", "Trace", true, hook, xf, yf, buf, loc); },
+		TypeKind.Map => { runtimeOp("msMap", "msMapFree", "Copy", "WasMoved", "Trace", false, hook, xf, yf, buf, loc); },
 		TypeKind.Set => { setOp(hook, xf, yf, buf, loc); },
 		TypeKind.Tuple => {
 			// Iterate tuple fields by name (Nim's fillBodyTup)

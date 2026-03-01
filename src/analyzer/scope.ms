@@ -233,15 +233,15 @@ function testDrcCtx(): DrcContext {
 export function testStringRc(): RcInfo {
 	return {
 		rcKind: RcKind.String, typeName: "", needsCleanup: true,
-		destroyFn: "ms_string_decref", copyFn: "ms_string_incref",
-		wasMovedFn: "ms_string_was_moved", sinkFn: "ms_string_sink",
+		destroyFn: "msStringDecref", copyFn: "msStringIncref",
+		wasMovedFn: "msStringWasMoved", sinkFn: "msStringSink",
 	};
 }
 
 function testMinimalRc(): RcInfo {
 	return {
 		rcKind: RcKind.String, typeName: "", needsCleanup: true,
-		destroyFn: "ms_string_decref", copyFn: "",
+		destroyFn: "msStringDecref", copyFn: "",
 		wasMovedFn: "", sinkFn: "",
 	};
 }

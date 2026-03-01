@@ -10,6 +10,7 @@ import {
 	BreakStmtData, ContinueStmtData, DeclKind,
 	TryCatchStmtData, ThrowStmtData,
 	SwitchStmtData, SwitchCaseData,
+	ExpectStmtData,
 } from "../../ast/node";
 import { Type, TypeKind } from "../../checker/types";
 import {
@@ -20,6 +21,7 @@ import {
 } from "./context";
 import { genExpr } from "./expressions";
 import { safeName } from "./names";
+import { getSimpleTypeDesc, getTypeDesc } from "./types";
 import { sliceStr } from "../../utils/string";
 import { test, check, testGroup } from "std/testing";
 
@@ -41,6 +43,7 @@ export function genStmt(g: CGen, p: CProc, node: Node): void {
 	else if (k === NodeKind.ThrowStmt) { genThrowStmt(g, p, node); }
 	else if (k === NodeKind.TryCatchStmt) { genTryCatchStmt(g, p, node); }
 	else if (k === NodeKind.SwitchStmt) { genSwitchStmt(g, p, node); }
+	else if (k === NodeKind.ExpectStmt) { genExpectStmt(g, p, node); }
 	else { emitStmtsLine(p, "/* unsupported stmt: " + k + " */"); }
 }
 
@@ -63,21 +66,38 @@ function genExprStmt(g: CGen, p: CProc, node: Node): void {
 
 // ===== Variable Declaration =====
 
-function genVarDecl(g: CGen, p: CProc, node: Node): void {
-	const d = node.data as VariableDeclData;
-	const varName = safeName(d.declName);
-
-	const cType = match (d.declType) {
-		"number" | "float64" | "" => "double",
+function mapDeclTypeStr(dt: string): string {
+	return match (dt) {
+		"number" | "float64" => "double",
 		"int32" => "int32_t",
 		"int64" => "int64_t",
 		"uint32" => "uint32_t",
 		"float32" => "float",
-		"boolean" => "NIM_BOOL",
+		"boolean" => "MS_BOOL",
 		"string" => "msString",
 		"void" => "void",
-		_ => "/* " + d.declType + " */ void*",
+		_ => "",
 	};
+}
+
+function genVarDecl(g: CGen, p: CProc, node: Node): void {
+	const d = node.data as VariableDeclData;
+	const varName = safeName(d.declName);
+
+	let cType = "";
+	if (d.declType !== "") {
+		cType = mapDeclTypeStr(d.declType);
+		if (cType === "") {
+			cType = "/* " + d.declType + " */ void*";
+		}
+	} else if (node.nodeType !== null) {
+		// Use checker's inferred type
+		cType = getSimpleTypeDesc(node.nodeType);
+		if (cType === "") {
+			cType = getTypeDesc(g, node.nodeType);
+		}
+	}
+	if (cType === "") cType = "double";
 
 	if (d.initializer !== null) {
 		const initSnippet = genExpr(g, p, d.initializer);
@@ -198,7 +218,7 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Node): void {
 	// Try body
 	genStmt(g, p, d.tryBody);
 	// After try body, check error flag
-	emitStmtsLine(p, "if (ms_nimErr_) goto " + catchLabel + ";");
+	emitStmtsLine(p, "if (msErr) goto " + catchLabel + ";");
 	emitStmtsLine(p, "goto " + finallyLabel + ";");
 
 	// Catch label
@@ -207,8 +227,8 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Node): void {
 	if (d.catchName !== "") {
 		emitStmtsLine(p, "msException* " + safeName(d.catchName) + " = ms_curr_exception;");
 	}
-	emitStmtsLine(p, "ms_nimErr_ = NIM_FALSE;");
-	emitStmtsLine(p, "ms_clear_exception();");
+	emitStmtsLine(p, "msErr = MS_FALSE;");
+	emitStmtsLine(p, "msClearException();");
 	if (d.catchBody !== null) {
 		genStmt(g, p, d.catchBody);
 	}
@@ -246,7 +266,7 @@ function genTryCatchSetjmp(g: CGen, p: CProc, node: Node): void {
 	if (d.catchName !== "") {
 		emitStmtsLine(p, "msException* " + safeName(d.catchName) + " = ms_curr_exception;");
 	}
-	emitStmtsLine(p, "ms_clear_exception();");
+	emitStmtsLine(p, "msClearException();");
 	if (d.catchBody !== null) {
 		genStmt(g, p, d.catchBody);
 	}
@@ -327,6 +347,14 @@ function genBlockOrBraces(g: CGen, p: CProc, node: Node): void {
 	}
 }
 
+// ===== Expect Statement =====
+
+function genExpectStmt(g: CGen, p: CProc, node: Node): void {
+	const d = node.data as ExpectStmtData;
+	const cond = genExpr(g, p, d.expectExpr);
+	emitStmtsLine(p, `if (!(${cond})) { ms_test_check_fail("expect failed", __FILE__, __LINE__); return; }`);
+}
+
 // ===== Tests =====
 
 import { createCGen, createProc } from "./context";
@@ -366,7 +394,7 @@ testGroup("C Stmt VarDecl", () => {
 		check(stmtOutput("const n: int32 = 0;") === "int32_t n = 0;\n");
 	});
 	test("bool type", () => {
-		check(stmtOutput("const flag: boolean = true;") === "NIM_BOOL flag = NIM_TRUE;\n");
+		check(stmtOutput("const flag: boolean = true;") === "MS_BOOL flag = MS_TRUE;\n");
 	});
 });
 

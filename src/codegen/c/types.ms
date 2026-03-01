@@ -63,7 +63,7 @@ export function getSimpleTypeDesc(t: Type): string {
 		TypeKind.Int32 => "int32_t",
 		TypeKind.Int64 => "int64_t",
 		TypeKind.Uint32 => "uint32_t",
-		TypeKind.Boolean => "NIM_BOOL",
+		TypeKind.Boolean => "MS_BOOL",
 		TypeKind.String => "msString",
 		TypeKind.Void | TypeKind.Null => "void",
 		_ => "",
@@ -209,10 +209,7 @@ function genObjectType(g: CGen, t: Type): string {
 	addLine(b, "struct " + name + " {");
 	b.indent += 1;
 
-	// For classes, add RC header
-	if (!isInterface) {
-		addLine(b, "NI refcount;");
-	}
+	// Classes: no refcount field — msRefHeader (16 bytes) is prepended by msAlloc
 
 	// Emit fields
 	for (let i = 0; i < t.typeNames.length; i += 1) {
@@ -249,12 +246,12 @@ function genArrayType(g: CGen, t: Type): string {
 }
 
 // ===== Function Type Generation =====
-// Closure: ms_closure { .fn, .env }. Raw function pointer for non-capturing.
+// Closure: msClosure { .fn, .env }. Raw function pointer for non-capturing.
 
 function genFunctionType(g: CGen, t: Type): string {
 	const key = typeKey(t);
 	// Default to closure type
-	const cType = "ms_closure";
+	const cType = "msClosure";
 	typeCacheSet(g.typeCache, key, cType);
 	return cType;
 }
@@ -275,7 +272,7 @@ function genResultType(g: CGen, t: Type): string {
 	const b = sec(g, CSection.Types);
 	addLine(b, "struct " + name + " {");
 	b.indent += 1;
-	addLine(b, "NIM_BOOL ok;");
+	addLine(b, "MS_BOOL ok;");
 	addLine(b, okType + " value;");
 	addLine(b, errType + " error;");
 	b.indent -= 1;
@@ -313,7 +310,7 @@ testGroup("C Simple Type", () => {
 	test("primitives", () => {
 		check(getSimpleTypeDesc(createPrimitive(TypeKind.Number)) === "double");
 		check(getSimpleTypeDesc(createPrimitive(TypeKind.Int32)) === "int32_t");
-		check(getSimpleTypeDesc(createPrimitive(TypeKind.Boolean)) === "NIM_BOOL");
+		check(getSimpleTypeDesc(createPrimitive(TypeKind.Boolean)) === "MS_BOOL");
 		check(getSimpleTypeDesc(createPrimitive(TypeKind.String)) === "msString");
 		check(getSimpleTypeDesc(createPrimitive(TypeKind.Void)) === "void");
 	});
@@ -383,7 +380,7 @@ testGroup("C Type Desc", () => {
 		const types = extract(sec(g, CSection.Types));
 		check(types === "struct Point {\n  int32_t x;\n  int32_t y;\n};\n\n");
 	});
-	test("class emits struct with refcount", () => {
+	test("class emits struct without refcount", () => {
 		const propNames: string[] = [];
 		propNames.push("name");
 		const propTypes: Type[] = [];
@@ -392,7 +389,7 @@ testGroup("C Type Desc", () => {
 		const result = getTypeDesc(g, createObject("Person", propNames, propTypes, false));
 		check(result === "Person*");
 		const types = extract(sec(g, CSection.Types));
-		check(types === "struct Person {\n  NI refcount;\n  msString name;\n};\n\n");
+		check(types === "struct Person {\n  msString name;\n};\n\n");
 	});
 	test("array type", () => {
 		const g = createCGen(null as unknown as CheckerContext);

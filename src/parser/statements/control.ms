@@ -436,6 +436,34 @@ export function parseUnreachableStmt(state: ParserState): NodeResult {
 	return Result.ok(createNode(NodeKind.UnreachableStmt, { unreachableMsg: msg }, unreachableToken));
 }
 
+// ===== Test Declaration =====
+// syntax: 'test' StringLiteral Block
+
+export function parseTestDecl(state: ParserState): NodeResult {
+	const testToken = current(state);
+	advance(state); // consume 'test'
+
+	if (isAtEnd(state) || current(state).kind !== TokenKind.String) {
+		return Result.err(`Expected string literal after 'test' at line ${testToken.line.toString()}`);
+	}
+	const name = current(state).value;
+	advance(state); // consume string
+
+	const body = try callBlockParser(state);
+	return Result.ok(createNode(NodeKind.TestDecl, { testName: name, testBody: body }, testToken));
+}
+
+// ===== Expect Statement =====
+// syntax: 'expect' expr ';'
+
+export function parseExpectStmt(state: ParserState): NodeResult {
+	const expectToken = current(state);
+	advance(state); // consume 'expect'
+	const expr = try callExprParser(state);
+	consumeSemicolon(state);
+	return Result.ok(createNode(NodeKind.ExpectStmt, { expectExpr: expr }, expectToken));
+}
+
 // ===== Tests =====
 
 testGroup("Stmt Control Flow", () => {
@@ -467,4 +495,16 @@ testGroup("Stmt Control Flow", () => {
 	// Unreachable
 	test("unreachable bare", () => { check(programOk("unreachable;")); });
 	test("unreachable msg", () => { check(programOk("unreachable(\"should not reach\");")); });
+	// Test declaration
+	test("test decl basic", () => { check(programOk("test \"basic\" { const x = 1; }")); });
+	test("test decl with expect", () => { check(programOk("test \"math\" { expect 1 === 1; }")); });
+	test("test decl multi expect", () => { check(programOk("test \"multi\" { expect 1 === 1; expect 2 > 1; }")); });
+	test("test is TestDecl", () => { check(stmtKind("test \"x\" { }") === NodeKind.TestDecl); });
+	test("test no string rejects", () => { check(!programOk("test { }")); });
+	test("test with code body", () => { check(programOk("test \"loops\" { let x = 0; while (x < 3) { x = x + 1; } expect x === 3; }")); });
+	// Expect statement
+	test("expect is ExpectStmt", () => { check(stmtKind("expect x;") === NodeKind.ExpectStmt); });
+	test("expect comparison", () => { check(programOk("expect x === 1;")); });
+	test("expect negation", () => { check(programOk("expect !done;")); });
+	test("expect binary", () => { check(programOk("expect a > b;")); });
 });

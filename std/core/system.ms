@@ -1,6 +1,6 @@
-@include("runtime.h");
+@include("system.h");
 
 class console {
-  @runtime("ms_println")
+  @runtime("msPrintln")
   log(value: string): void { unreachable; }
 }

@@ -11,7 +11,7 @@
 
 import { dirname, join } from "std/fs/path";
 import { test, check, testGroup } from "std/testing";
-import { sliceStr } from "../utils/string";
+import { sliceStr, endsWith } from "../utils/string";
 
 // ===== Backend Constants =====
 
@@ -70,9 +70,9 @@ export function createDefaultConfig(backend: number, stdPath: string): ResolverC
 	};
 }
 
-// Minimal config for backward compatibility (legacy 2-arg resolveImport callers).
+// Minimal config for bare mode (2-arg resolveImport callers).
 // Only resolves .ms, no std path, no search paths.
-function legacyConfig(): ResolverConfig {
+function bareConfig(): ResolverConfig {
 	const extensions: string[] = [];
 	extensions.push(".ms");
 	return {
@@ -127,14 +127,14 @@ export function resolveImportWithConfig(specifier: string, fromFile: string, con
 }
 
 // ===== Backward-Compatible Import Resolution =====
-// Legacy 2-arg version — std imports return empty, only .ms extension.
+// Bare 2-arg version — std imports return empty, only .ms extension.
 // Self-contained (does NOT call resolveImportWithConfig) to avoid DRC issues
 // with temporary ResolverConfig/extensions array.
 
 export function resolveImport(specifier: string, fromFile: string): ResolveCandidates {
 	const result: ResolveCandidates = { paths: [] };
 
-	// Std library — handled externally in legacy mode
+	// Std library — handled externally in bare mode
 	if (isStdImport(specifier)) return result;
 
 	// Bare specifiers — unsupported in legacy mode
@@ -226,11 +226,6 @@ function hasKnownExtension(specifier: string): boolean {
 		|| endsWith(specifier, ".ts")
 		|| endsWith(specifier, ".js")
 		|| endsWith(specifier, ".h");
-}
-
-function endsWith(s: string, suffix: string): boolean {
-	if (s.length < suffix.length) return false;
-	return sliceStr(s, s.length - suffix.length, s.length) === suffix;
 }
 
 // ===== Helpers =====

@@ -28,6 +28,7 @@ function collectDecl(ctx: CheckerContext, node: Node): void {
 		NodeKind.ImportDecl => collectImport(ctx, node),
 		NodeKind.ExportDecl => collectExport(ctx, node),
 		NodeKind.DecoratedDecl => collectDecorated(ctx, node),
+		NodeKind.TestDecl => {},
 		_ => {},
 	};
 }

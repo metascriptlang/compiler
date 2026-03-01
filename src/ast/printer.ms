@@ -14,7 +14,8 @@ import { Node, NodeKind, DeclKind,
 	MatchStmtData, TryCatchStmtData, UnreachableStmtData, TypeAnnotationData,
 	MacroInvocationData, ImportDeclData, ExportDeclData, TypeAliasDeclData, EnumDeclData,
 	InterfaceDeclData, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData,
-	ExternDeclData, MacroDeclData, DecoratedDeclData, ProgramData
+	ExternDeclData, MacroDeclData, DecoratedDeclData, ProgramData,
+	TestDeclData, ExpectStmtData,
 } from "./node";
 
 // ===== Indentation Helper =====
@@ -535,6 +536,16 @@ export function printNode(node: Node, level: number): void {
 			const data = node.data as ComptimeBlockData;
 			console.log(`${pad}ComptimeBlock:`);
 			printNode(data.comptimeBody, level + 1);
+		},
+		NodeKind.TestDecl => {
+			const data = node.data as TestDeclData;
+			console.log(`${pad}TestDecl: "${data.testName}"`);
+			printNode(data.testBody, level + 1);
+		},
+		NodeKind.ExpectStmt => {
+			const data = node.data as ExpectStmtData;
+			console.log(`${pad}ExpectStmt:`);
+			printNode(data.expectExpr, level + 1);
 		},
 		_ => {},
 	}

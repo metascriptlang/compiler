@@ -1,0 +1,116 @@
+// MetaScript String Prelude — C Backend
+// Extension methods backed by runtime/core/string.h
+// Loaded automatically via globalImports() -> "std/core/string"
+
+@include("core/string.h");
+
+// ===== Comparison =====
+
+@runtime("msStringEquals")
+function equals(this s: string, other: string): boolean { unreachable; }
+
+@runtime("msStringEqualsIgnoreCase")
+function equalsIgnoreCase(this s: string, other: string): boolean { unreachable; }
+
+@runtime("msStringStartsWith")
+function startsWith(this s: string, prefix: string): boolean { unreachable; }
+
+@runtime("msStringEndsWith")
+function endsWith(this s: string, suffix: string): boolean { unreachable; }
+
+@runtime("msStringContains")
+function contains(this s: string, sub: string): boolean { unreachable; }
+
+// ===== Search =====
+
+@runtime("msStringIndexOf")
+function indexOf(this s: string, sub: string, start: number): number { unreachable; }
+
+@runtime("msStringLastIndexOf")
+function lastIndexOf(this s: string, sub: string): number { unreachable; }
+
+@runtime("msStringCount")
+function count(this s: string, sub: string): number { unreachable; }
+
+// ===== Extraction =====
+
+@runtime("msStringCharAt")
+function charAt(this s: string, idx: number): string { unreachable; }
+
+@runtime("msStringCharCodeAt")
+function charCodeAt(this s: string, idx: number): number { unreachable; }
+
+@runtime("msStringSlice")
+function slice(this s: string, start: number, end: number): string { unreachable; }
+
+@runtime("msStringSubstring")
+function substring(this s: string, start: number, end: number): string { unreachable; }
+
+// ===== Transformation =====
+
+@runtime("msStringToLower")
+function toLower(this s: string): string { unreachable; }
+
+@runtime("msStringToUpper")
+function toUpper(this s: string): string { unreachable; }
+
+@runtime("msStringTrim")
+function trim(this s: string): string { unreachable; }
+
+@runtime("msStringTrimStart")
+function trimStart(this s: string): string { unreachable; }
+
+@runtime("msStringTrimEnd")
+function trimEnd(this s: string): string { unreachable; }
+
+@runtime("msStringRepeat")
+function repeat(this s: string, count: number): string { unreachable; }
+
+@runtime("msStringReplace")
+function replace(this s: string, search: string, replacement: string): string { unreachable; }
+
+@runtime("msStringReplaceAll")
+function replaceAll(this s: string, search: string, replacement: string): string { unreachable; }
+
+@runtime("msStringReverse")
+function reverse(this s: string): string { unreachable; }
+
+@runtime("msStringPadStart")
+function padStart(this s: string, targetLen: number, pad: string): string { unreachable; }
+
+@runtime("msStringPadEnd")
+function padEnd(this s: string, targetLen: number, pad: string): string { unreachable; }
+
+// ===== Splitting =====
+
+@runtime("msStringSplit")
+function split(this s: string, delimiter: string): string[] { unreachable; }
+
+// ===== Parsing =====
+
+@runtime("msStringParseFloat")
+function parseFloat(this s: string): number { unreachable; }
+
+@runtime("msStringParseInt")
+function parseInt(this s: string): number { unreachable; }
+
+// ===== Capacity & Length =====
+
+@runtime("msStringCapacity")
+function capacity(this s: string): number { unreachable; }
+
+@runtime("&msStringSetLength")
+function setLength(this s: string, newLen: number): void { unreachable; }
+
+// ===== In-Place Append =====
+
+@runtime("&msStringAppend")
+function append(this s: string, other: string): void { unreachable; }
+
+// ===== In-Place Operations =====
+
+@runtime("&msStringSetSlice")
+function setSlice(this s: string, start: number, end: number): void { unreachable; }
+
+@runtime("&msStringStripInPlace")
+function stripInPlace(this s: string): void { unreachable; }

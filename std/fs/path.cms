@@ -1,0 +1,25 @@
+/**
+ * Path Utilities — C Backend
+ *
+ * POSIX path manipulation bridged to C via native.h.
+ */
+
+@include("fs/path.h");
+
+extern function msFsDirname(p: string): string;
+extern function msFsJoin(a: string, b: string): string;
+extern function msFsResolve(p: string, cwdStr: string): string;
+
+import { cwd } from "std/process";
+
+export function dirname(p: string): string {
+	return msFsDirname(p);
+}
+
+export function join(a: string, b: string): string {
+	return msFsJoin(a, b);
+}
+
+export function resolve(p: string): string {
+	return msFsResolve(p, cwd());
+}

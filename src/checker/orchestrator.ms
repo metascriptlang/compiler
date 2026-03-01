@@ -9,6 +9,7 @@ import {
 } from "./context";
 import { SymbolKind, ScopeKind, openScope } from "./symbol";
 import { Module, ModuleGraph, findModule } from "../module/graph";
+import { preprocessHeaders } from "../module/aro";
 import { runThreePasses } from "./checkPass";
 import { globalImports } from "./prelude";
 import { parseSource } from "../parser/statements/validation";
@@ -18,89 +19,47 @@ import { callStateProgramParser } from "../parser/statements/callbacks";
 import { readFile } from "std/process";
 import { test, check, testGroup } from "std/testing";
 
-// Check if source already has extern function declarations (synthesized by compile.ms).
-// The loader sets source to "// C header: <path>" — if it still starts with that prefix,
-// it hasn't been synthesized yet.
-function sourceHasExtern(source: string): boolean {
-	if (source.length < 15) return false;
-	// If source starts with "// Synthetic", it was already synthesized
-	return source.slice(0, 14) === "// Synthetic m";
-}
-
-// Synthesize MetaScript source for a C header module from import names.
-// Each imported name becomes `export extern function NAME(): int64;`.
-function synthesizeHeaderSource(graph: ModuleGraph, headerPath: string): string {
-	let source = "// Synthetic module for C header: " + headerPath + "\n";
-	const emitted: string[] = [];
-
-	let mi = 0;
-	while (mi < graph.modules.length) {
-		const gmod = graph.modules[mi];
-		let ii = 0;
-		while (ii < gmod.imports.length) {
-			const imp = gmod.imports[ii];
-			if (imp.sourcePath === headerPath) {
-				let ni = 0;
-				while (ni < imp.names.length) {
-					const name = imp.names[ni];
-					let found = false;
-					let ei = 0;
-					while (ei < emitted.length) {
-						if (emitted[ei] === name) { found = true; }
-						ei = ei + 1;
-					}
-					if (!found) {
-						source = source + "export extern function " + name + "(): int64;\n";
-						emitted.push(name);
-					}
-					ni = ni + 1;
-				}
-			}
-			ii = ii + 1;
-		}
-		mi = mi + 1;
-	}
-	return source;
-}
-
 // Nim-aligned: check modules one at a time in topological (loadOrder) sequence.
 // Each module gets all 3 passes before moving to the next.
 // Since modules are in dependency order, exports from dependencies are
 // available when checking their dependents.
+
+// Load a prelude import by probing: .ms → /index.cms → /index.ms
+function loadPreludeInto(ctx: CheckerContext, specifier: string, stdPath: string): void {
+	const base = stdPath.length > 0 ? stdPath + "/" + specifier.slice(4, specifier.length) : specifier;
+	let src = readFile(base + ".ms");
+	if (src.length === 0) {
+		src = readFile(base + "/index.cms");
+	}
+	if (src.length === 0) {
+		src = readFile(base + "/index.ms");
+	}
+	if (src.length > 0) {
+		const pr = parseSource(src);
+		if (pr.ok) {
+			runThreePasses(ctx, pr.value);
+		}
+	}
+}
 
 // stdPath: when non-empty, resolves std/ imports against this path.
 // When empty, falls back to relative "std/" (resolved by reference compiler).
 export function checkModuleGraph(graph: ModuleGraph, stdPath: string): void {
 	const registry = createExportRegistry();
 
-	// Load prelude (std/core.ms) into a base context — provides console, Math, etc.
-	// This mirrors what checkProgram() does for single-module builds.
+	// Load prelude into a base context — provides console, string methods, etc.
 	const baseCtx = createContext();
 	for (const imp of globalImports()) {
-		let impPath = imp;
-		if (stdPath.length > 0 && imp.length > 4) {
-			// Replace "std/" prefix with absolute stdPath
-			impPath = stdPath + "/" + imp.slice(4, imp.length);
-		}
-		const src = readFile(impPath);
-		if (src.length > 0) {
-			const pr = parseSource(src);
-			if (pr.ok) {
-				runThreePasses(baseCtx, pr.value);
-			}
-		}
+		loadPreludeInto(baseCtx, imp, stdPath);
 	}
+
+	// Pre-process C header modules (synthesis fallback for test/direct-call paths)
+	preprocessHeaders(graph, false);
 
 	for (const path of graph.loadOrder) {
 		const mod = findModule(graph, path);
 		if (mod === null) continue;
 		if (mod.source === "") continue;
-
-		// C header modules: synthesize extern function source from import names
-		// (compile.ms may have already done this; this handles test/direct-call paths)
-		if (mod.isCHeader && !sourceHasExtern(mod.source)) {
-			mod.source = synthesizeHeaderSource(graph, mod.path);
-		}
 
 		// Parse with recovery — always get partial AST, errors in state.errors
 		const lr = lex(mod.source);

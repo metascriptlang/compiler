@@ -1,0 +1,28 @@
+/**
+ * I/O — C/POSIX Backend
+ *
+ * Provides stdin reading and stdout/stderr writing.
+ */
+
+@include("io/native.h");
+
+extern function msReadLine(): string;
+extern function msReadBytes(n: number): string;
+extern function msWriteStdout(s: string): void;
+extern function msWriteStderr(s: string): void;
+
+export function readLine(): string {
+	return msReadLine();
+}
+
+export function readBytes(n: number): string {
+	return msReadBytes(n);
+}
+
+export function writeStdout(s: string): void {
+	msWriteStdout(s);
+}
+
+export function writeStderr(s: string): void {
+	msWriteStderr(s);
+}

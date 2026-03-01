@@ -449,6 +449,26 @@ MetaScript the language supports operator/subscript overloading (reference compi
 
 ---
 
+## Optimization TODO: Runtime Dead Code Elimination
+
+**Current**: `runtime/core/string.c` + `runtime/core/array.c` are compiled and linked in full — all 60+ functions present in every binary regardless of usage.
+
+**Nim's approach**: Runtime procs are Nim source (strs_v2.nim, seqs_v2.nim) that flow through the same compilation pipeline as user code. Dead code elimination at codegen level — only reachable procs get C code emitted. Zero waste.
+
+**Our gap**: Our runtime is pre-written C, bypasses the MetaScript pipeline entirely.
+
+**Options (easiest → hardest)**:
+
+| Approach | Effort | Effect |
+|----------|--------|--------|
+| `-Wl,-dead_strip` (macOS) / `-ffunction-sections -Wl,--gc-sections` (Linux) in cc.ms | 1 line | Linker strips unreachable functions from binary |
+| Split runtime into per-function headers with `static inline` | Medium | Compiler DCE at compile time |
+| Write runtime in MetaScript with `@runtime` + codegen-on-demand | Large | True Nim parity — only referenced functions exist in C output |
+
+Option 1 is sufficient for now. Option 3 is the long-term architectural goal.
+
+---
+
 ## Design Note: `nodeType` Field
 
 Gap #2 required every expression node to carry its resolved type (like Nim's `n.typ: PType`). The field is `nodeType: Type` on the Node interface, set by `checkExpr()` during Phase 2. Types are owned by CheckerContext and outlive Nodes — safe borrowed reference. Initialized to `null as unknown as Type` in `createNode()`.

@@ -11,13 +11,12 @@ import { test, check, testGroup } from "std/testing";
 // Default global imports. Returns array (module-level const string[] hits DRC bug).
 // Later: merge with build.ms globalImports.
 export function globalImports(): string[] {
-	return ["std/core.ms"];
+	return ["std/core/system", "std/core/string", "std/core/array"];
 }
 
 export function isGlobalImport(path: string): boolean {
 	for (const entry of globalImports()) {
 		if (path === entry) return true;
-		if (path + ".ms" === entry) return true;
 	}
 	return false;
 }
@@ -25,18 +24,18 @@ export function isGlobalImport(path: string): boolean {
 // ===== Tests =====
 
 testGroup("Global Imports", () => {
-	test("globalImports has std/core.ms", () => {
+	test("globalImports has system, string, array", () => {
 		const imports = globalImports();
-		check(imports.length === 1);
-		check(imports[0] === "std/core.ms");
+		check(imports.length === 3);
+		check(imports[0] === "std/core/system");
+		check(imports[1] === "std/core/string");
+		check(imports[2] === "std/core/array");
 	});
 
-	test("isGlobalImport with extension", () => {
-		check(isGlobalImport("std/core.ms"));
-	});
-
-	test("isGlobalImport without extension", () => {
-		check(isGlobalImport("std/core"));
+	test("isGlobalImport matches", () => {
+		check(isGlobalImport("std/core/system"));
+		check(isGlobalImport("std/core/string"));
+		check(isGlobalImport("std/core/array"));
 	});
 
 	test("isGlobalImport rejects non-global", () => {

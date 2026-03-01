@@ -12,6 +12,7 @@ import {
 	SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData,
 	DestructuringDeclData, ProgramData,
 	MacroInvocationData, StringLiteralData, CallExprData,
+	TestDeclData, ExpectStmtData,
 } from "../ast/node";
 import {
 	Type, TypeKind,
@@ -74,6 +75,14 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 			checkStmt(ctx, d.decoratedNode);
 		},
 		NodeKind.DestructuringDecl => checkDestructuringDecl(ctx, node),
+		NodeKind.TestDecl => {
+			const d = node.data as TestDeclData;
+			checkBlock(ctx, d.testBody);
+		},
+		NodeKind.ExpectStmt => {
+			const d = node.data as ExpectStmtData;
+			checkExpr(ctx, d.expectExpr);
+		},
 		_ => {},
 	};
 }
@@ -88,6 +97,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	if (d.declType !== "") {
 		varType = resolveAnnotation(d.declType, ctx);
 	}
+	node.nodeType = varType;
 	defineOrError(ctx, makeSymbol(d.declName, SymbolKind.Variable, varType, d.declKind !== DeclKind.Const), node);
 }
 
@@ -574,6 +584,9 @@ function collectDirectives(ctx: CheckerContext, program: Node): void {
 					if (name === "include") {
 						if (ctx.includeDirectives !== "") ctx.includeDirectives = ctx.includeDirectives + "\n";
 						ctx.includeDirectives = ctx.includeDirectives + sd.value;
+					} else if (name === "compile") {
+						if (ctx.compileDirectives !== "") ctx.compileDirectives = ctx.compileDirectives + "\n";
+						ctx.compileDirectives = ctx.compileDirectives + sd.value;
 					} else if (name === "link" || name === "passC" || name === "passL") {
 						if (ctx.compilerFlags !== "") ctx.compilerFlags = ctx.compilerFlags + " ";
 						ctx.compilerFlags = ctx.compilerFlags + sd.value;
@@ -587,21 +600,32 @@ function collectDirectives(ctx: CheckerContext, program: Node): void {
 export function checkProgram(program: Node): CheckerContext {
 	const ctx = createContext();
 	// Parse + check global imports in Global scope
+	// Probes: specifier.ms → specifier/index.cms → specifier/index.ms
 	for (const imp of globalImports()) {
-		const src = readFile(imp);
-		if (src.length > 0) {
-			const pr = parseSource(src);
-			if (pr.ok) {
-				runThreePasses(ctx, pr.value);
-				collectDirectives(ctx, pr.value);
-			}
-		}
+		loadPreludeImport(ctx, imp);
 	}
 	// User code in Module scope
 	openScope(ctx.table, ScopeKind.Module);
 	runThreePasses(ctx, program);
 	collectDirectives(ctx, program);
 	return ctx;
+}
+
+function loadPreludeImport(ctx: CheckerContext, specifier: string): void {
+	let src = readFile(specifier + ".ms");
+	if (src.length === 0) {
+		src = readFile(specifier + "/index.cms");
+	}
+	if (src.length === 0) {
+		src = readFile(specifier + "/index.ms");
+	}
+	if (src.length > 0) {
+		const pr = parseSource(src);
+		if (pr.ok) {
+			runThreePasses(ctx, pr.value);
+			collectDirectives(ctx, pr.value);
+		}
+	}
 }
 
 // Register callback at module load time
@@ -909,6 +933,20 @@ testGroup("Checker Extension Overloads", () => {
 	});
 	test("extension overload call resolves by arity", () => {
 		const ctx = checkSource("function double(this n: number): number { return n; } function double(this n: number, scale: number): number { return n; } const x = double(1); const y = double(1, 2);");
+		check(!hasErrors(ctx));
+	});
+	test("same-name extensions on different types filter by receiver", () => {
+		// Bug repro: indexOf on string vs number[] — must resolve by receiver type, not pick first match
+		const ctx = checkSource("function indexOf(this s: string, sub: string, start: number): number { return 0; } function indexOf(this arr: number[], value: number): number { return 0; } const msg: string = \"hello\"; const idx: number = msg.indexOf(\"world\", 0);");
+		check(!hasErrors(ctx));
+	});
+	test("same-name extensions array receiver resolves correctly", () => {
+		const ctx = checkSource("function indexOf(this s: string, sub: string, start: number): number { return 0; } function indexOf(this arr: number[], value: number): number { return 0; } const a: number[] = [1, 2, 3]; const idx: number = a.indexOf(42);");
+		check(!hasErrors(ctx));
+	});
+	test("generic extension matches compatible array receiver", () => {
+		// first<T>(this arr: T[]) called as a.first() — T unifies with number
+		const ctx = checkSource("function first<T>(this arr: T[]): T { return arr[0]; } const a: number[] = [1, 2]; const x: number = a.first();");
 		check(!hasErrors(ctx));
 	});
 });

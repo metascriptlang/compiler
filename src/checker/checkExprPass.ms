@@ -25,7 +25,7 @@ import {
 	Symbol, SymbolKind, ScopeKind,
 	defineSymbol, lookupSymbol, makeSymbol, openScope, closeScope, hasOverloads,
 } from "./symbol";
-import { CheckerContext, addError, findExtension, findAllExtensions, ExtensionMethod } from "./context";
+import { CheckerContext, addError, findAllExtensionsByName, ExtensionMethod } from "./context";
 import {
 	scoreCandidate, isAssignable, resolveOverloadIdx,
 	findFirstMismatch, typeRelation, TypeRelation,
@@ -33,6 +33,55 @@ import {
 } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
 import { getDefaultText } from "../parser/context";
+
+// ===== Nim-Aligned Extension Receiver Matching =====
+// Nim's isAttachableRoutineTo() compares nominal types by identity.
+// We use isAssignable on the extension's receiver param type (fnType.typeChildren[0])
+// instead of string-based receiverTypeName comparison, which breaks for parameterized
+// types like number[] (parser produces "number [ ]" but typeNameOf returns "Array").
+
+function isReceiverMatch(ext: ExtensionMethod, objType: Type): boolean {
+	// Static extensions: string-based matching (receiver not in typeChildren)
+	if (ext.isStatic) {
+		return ext.receiverTypeName === typeNameOf(objType);
+	}
+	// Instance extensions: type-based matching on first param
+	if (ext.fnType.kind !== TypeKind.Function) return false;
+	if (ext.fnType.typeChildren.length === 0) return false;
+	const receiverType = ext.fnType.typeChildren[0];
+	// Unknown receiver: match any (conservative — unresolved type)
+	if (receiverType.kind === TypeKind.Unknown) return true;
+	// Generic extensions: try unification on receiver param (Nim-aligned selective match).
+	// e.g. map<T>(this arr: T[]) should match number[] but NOT string.
+	if (hasGenericParams(ext.fnType)) {
+		const eb = createUnifyBindings();
+		unifyType(receiverType, objType, eb);
+		return eb.names.length > 0;
+	}
+	// Concrete: check type compatibility
+	return isAssignable(objType, receiverType);
+}
+
+function findFirstMatchingExt(exts: ExtensionMethod[], objType: Type): ExtensionMethod {
+	let i = 0;
+	while (i < exts.length) {
+		if (isReceiverMatch(exts[i], objType)) return exts[i];
+		i = i + 1;
+	}
+	return null as unknown as ExtensionMethod;
+}
+
+function filterExtsByReceiverType(exts: ExtensionMethod[], objType: Type): ExtensionMethod[] {
+	const results: ExtensionMethod[] = [];
+	let i = 0;
+	while (i < exts.length) {
+		if (isReceiverMatch(exts[i], objType)) {
+			results.push(exts[i]);
+		}
+		i = i + 1;
+	}
+	return results;
+}
 
 // ===== Expression Checker =====
 
@@ -270,16 +319,15 @@ function checkCallExpr(ctx: CheckerContext, node: Node): Type {
 		}
 	}
 	// Extension method overloads: obj.method(args) where multiple extensions match
+	// Nim-aligned: collect all extensions by name, then filter by receiver type compatibility
 	if (d.callee.kind === NodeKind.MemberExpr && ctx.extensionRegistry !== null) {
 		const me = d.callee.data as MemberExprData;
 		const objType = me.object.nodeType;
 		if (objType !== null) {
-			const typeName = typeNameOf(objType);
-			if (typeName !== "") {
-				const allExts = findAllExtensions(ctx.extensionRegistry, typeName, me.property);
-				if (allExts.length > 1) {
-					return resolveExtensionOverloadCall(ctx, allExts, argTypes, objType, me.property);
-				}
+			const allByName = findAllExtensionsByName(ctx.extensionRegistry, me.property);
+			const filtered = filterExtsByReceiverType(allByName, objType);
+			if (filtered.length > 1) {
+				return resolveExtensionOverloadCall(ctx, filtered, argTypes, objType, me.property);
 			}
 		}
 	}
@@ -577,37 +625,35 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 	}
 	const propType = getProperty(objType, d.property);
 	if (propType.kind !== TypeKind.Unknown) return propType;
-	// Fall back to extension registry
+	// Fall back to extension registry — Nim-aligned type-based lookup
 	if (ctx.extensionRegistry !== null) {
-		const typeName = typeNameOf(objType);
-		if (typeName !== "") {
-			const ext = findExtension(ctx.extensionRegistry, typeName, d.property);
-			if (ext !== null) {
-				// Instance extension: strip receiver param (index 0) so checkCallExpr
-				// sees only user-visible params. The receiver is already in MemberExpr.object.
-				if (!ext.isStatic && ext.fnType.typeChildren.length > 0) {
-					let srcType = ext.fnType;
-					// Generic: infer type params from receiver first
-					if (hasGenericParams(srcType)) {
-						const eb = createUnifyBindings();
-						unifyType(srcType.typeChildren[0], objType, eb);
-						if (eb.names.length > 0) {
-							srcType = instantiateGeneric(srcType, eb.names, eb.types);
-						}
+		const allByName = findAllExtensionsByName(ctx.extensionRegistry, d.property);
+		const ext = findFirstMatchingExt(allByName, objType);
+		if (ext !== null) {
+			// Instance extension: strip receiver param (index 0) so checkCallExpr
+			// sees only user-visible params. The receiver is already in MemberExpr.object.
+			if (!ext.isStatic && ext.fnType.typeChildren.length > 0) {
+				let srcType = ext.fnType;
+				// Generic: infer type params from receiver first
+				if (hasGenericParams(srcType)) {
+					const eb = createUnifyBindings();
+					unifyType(srcType.typeChildren[0], objType, eb);
+					if (eb.names.length > 0) {
+						srcType = instantiateGeneric(srcType, eb.names, eb.types);
 					}
-					// Strip receiver — build Function(params[1..], return)
-					const callParams: Type[] = [];
-					const callNames: string[] = [];
-					for (let ci = 1; ci < srcType.typeChildren.length; ci += 1) {
-						callParams.push(srcType.typeChildren[ci]);
-					}
-					for (let ci = 1; ci < srcType.typeNames.length; ci += 1) {
-						callNames.push(srcType.typeNames[ci]);
-					}
-					return createFunction(callParams, callNames, srcType.typeReturn);
 				}
-				return ext.fnType;
+				// Strip receiver — build Function(params[1..], return)
+				const callParams: Type[] = [];
+				const callNames: string[] = [];
+				for (let ci = 1; ci < srcType.typeChildren.length; ci += 1) {
+					callParams.push(srcType.typeChildren[ci]);
+				}
+				for (let ci = 1; ci < srcType.typeNames.length; ci += 1) {
+					callNames.push(srcType.typeNames[ci]);
+				}
+				return createFunction(callParams, callNames, srcType.typeReturn);
 			}
+			return ext.fnType;
 		}
 	}
 	return propType;

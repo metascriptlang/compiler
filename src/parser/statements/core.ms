@@ -6,7 +6,7 @@ import { Node, NodeKind, NodeData, createNode, MatchExprData } from "../../ast/n
 import { ParserState, createState, current, advance, isAtEnd, consumeSemicolon, addError, synchronize } from "../context";
 import { parseExpressionFromState, registerBlockParser } from "../expressions/core";
 import { parseMatchExpr } from "../expressions/match";
-import { parseIfStmt, parseWhileStmt, parseForStmt, parseBreakStmt, parseContinueStmt, parseReturnStmt, parseDoWhileStmt, parseSwitchStmt, parseDeferStmt, parseUnreachableStmt } from "./control";
+import { parseIfStmt, parseWhileStmt, parseForStmt, parseBreakStmt, parseContinueStmt, parseReturnStmt, parseDoWhileStmt, parseSwitchStmt, parseDeferStmt, parseUnreachableStmt, parseTestDecl, parseExpectStmt } from "./control";
 import { parseVariableDecl, parseFunctionDecl, parseImportDecl, parseExportDecl, parseTypeAliasDecl, parseEnumDecl, parseInterfaceDecl, parseClassDecl, parseMacroInvocation, parseExternDecl, parseDistinctTypeDecl, parseMacroDecl } from "./declaration";
 import { parseThrowStmt, parseTryCatchStmt } from "./errorHandling";
 import { registerStmtBlockParser, registerStmtExprParser, registerStmtParser, registerStmtProgramParser, registerStateProgramParser } from "./callbacks";
@@ -92,6 +92,8 @@ function parseStatement(state: ParserState): NodeResult {
 		TokenKind.Distinct => parseDistinctTypeDecl(state),
 		TokenKind.Macro => parseMacroDecl(state),
 		TokenKind.Match => parseMatchStmt(state),
+		TokenKind.Test => parseTestDecl(state),
+		TokenKind.Expect => parseExpectStmt(state),
 		_ => parseExprStmt(state),
 	};
 }
@@ -257,7 +259,7 @@ testGroup("Stmt Rejects", () => {
 testGroup("Stmt Smoke", () => {
 	// Block body with arrow
 	test("arrow block body", () => { check(programOk("const f = () => { return 1; };")); });
-	test("testGroup pattern", () => { check(programOk("testGroup(\"g\", () => { test(\"t\", () => { check(1); }); });")); });
+	test("test keyword syntax", () => { check(programOk("test \"basic\" { expect 1 === 1; }")); });
 	// Object/array in stmt context
 	test("object in var", () => { check(programOk("const x = { a: 1, b: 2 };")); });
 	test("createNode pattern", () => {
