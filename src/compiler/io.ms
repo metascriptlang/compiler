@@ -1,8 +1,9 @@
 // MetaScript Compiler CLI — File I/O and shared error helpers
 
-import { exit, readFile, writeFile, clockMs } from "std/process";
+import { exit, exec, readFile, writeFile, clockMs } from "std/process";
 import { CheckerContext, hasErrors, errorCount } from "../checker/context";
 import { error, red, green, bold, dim, path } from "../utils/color";
+import { test, check, testGroup } from "std/testing";
 
 // -- Shared timing + verbose helpers --
 // Extracted to separate functions to avoid DRC discard-variable bugs
@@ -30,6 +31,89 @@ export function replaceExt(inputFile: string, newExt: string): string {
 	}
 	return inputFile + newExt;
 }
+
+// Get directory name from path. dirName("a/b/c.ms") → "a/b", dirName("c.ms") → "."
+export function dirName(filePath: string): string {
+	let lastSlash = -1;
+	for (let i = 0; i < filePath.length; i += 1) {
+		if (filePath.charCodeAt(i) === "/".code) {
+			lastSlash = i;
+		}
+	}
+	if (lastSlash < 0) return ".";
+	return filePath.slice(0, lastSlash);
+}
+
+// Get filename from path. baseName("a/b/c.ms") → "c.ms", baseName("c.ms") → "c.ms"
+export function baseName(filePath: string): string {
+	let lastSlash = -1;
+	for (let i = 0; i < filePath.length; i += 1) {
+		if (filePath.charCodeAt(i) === "/".code) {
+			lastSlash = i;
+		}
+	}
+	if (lastSlash < 0) return filePath;
+	return filePath.slice(lastSlash + 1, filePath.length);
+}
+
+// Strip base directory prefix from path. stripBase("a/b/c.ms", "a/b") → "c.ms"
+export function stripBase(fullPath: string, baseDir: string): string {
+	if (baseDir === ".") return fullPath;
+	if (fullPath.startsWith(baseDir)) {
+		const after = baseDir.length;
+		if (after < fullPath.length && fullPath.charCodeAt(after) === "/".code) {
+			return fullPath.slice(after + 1, fullPath.length);
+		}
+	}
+	return fullPath;
+}
+
+// Ensure directory exists (creates parent directories as needed).
+export function ensureDir(dir: string): void {
+	exec("mkdir -p " + dir);
+}
+
+// -- JS runtime detection (bun preferred, node fallback) --
+
+let jsRuntime = "";
+let jsRuntimeChecked = false;
+
+export function getJSRuntime(): string {
+	if (!jsRuntimeChecked) {
+		jsRuntimeChecked = true;
+		if (exec("which bun > /dev/null 2>&1") === 0) {
+			jsRuntime = "bun";
+		} else {
+			jsRuntime = "node";
+		}
+	}
+	return jsRuntime;
+}
+
+// -- Platform detection --
+// -1=unchecked, 0=unix, 1=windows
+let platformIsWindows = -1;
+
+export function exeSuffix(): string {
+	if (platformIsWindows < 0) {
+		if (exec("test -f /bin/sh") !== 0) {
+			platformIsWindows = 1;
+		} else {
+			platformIsWindows = 0;
+		}
+	}
+	if (platformIsWindows === 1) return ".exe";
+	return "";
+}
+
+// -- Output directory based on build mode --
+
+export function outDirForMode(mode: number): string {
+	if (mode > 0) return "out/release";
+	return "out/debug";
+}
+
+// -- File I/O --
 
 export function readSource(filePath: string): string {
 	const source = readFile(filePath);
@@ -71,3 +155,44 @@ export function emitOutput(code: string, filePath: string, outputPath: string, e
 	writeOutput(outFile, code);
 	console.log(green("Wrote") + " " + bold(outFile));
 }
+
+// ===== Tests =====
+
+testGroup("Path Utilities", () => {
+	test("replaceExt .ms to .js", () => {
+		check(replaceExt("foo.ms", ".js") === "foo.js");
+	});
+	test("replaceExt .ms to empty", () => {
+		check(replaceExt("foo.ms", "") === "foo");
+	});
+	test("replaceExt no .ms", () => {
+		check(replaceExt("foo", ".js") === "foo.js");
+	});
+	test("dirName with slashes", () => {
+		check(dirName("a/b/c.ms") === "a/b");
+	});
+	test("dirName no slash", () => {
+		check(dirName("c.ms") === ".");
+	});
+	test("dirName deep path", () => {
+		check(dirName("src/compiler/io.ms") === "src/compiler");
+	});
+	test("baseName with slashes", () => {
+		check(baseName("a/b/c.ms") === "c.ms");
+	});
+	test("baseName no slash", () => {
+		check(baseName("c.ms") === "c.ms");
+	});
+	test("stripBase removes prefix", () => {
+		check(stripBase("a/b/c.ms", "a/b") === "c.ms");
+	});
+	test("stripBase dot passthrough", () => {
+		check(stripBase("c.ms", ".") === "c.ms");
+	});
+	test("stripBase no match", () => {
+		check(stripBase("x/y.ms", "a/b") === "x/y.ms");
+	});
+	test("stripBase partial prefix no match", () => {
+		check(stripBase("a/bc/d.ms", "a/b") === "a/bc/d.ms");
+	});
+});

@@ -16,11 +16,13 @@ import { generateC, generateCModule, genProjectDispatcher, programHasMain, colle
 import { transformForNative } from "../transform/native/index";
 import { createTransformContextWithChecker } from "../transform/context";
 import { findModule, ModuleGraph } from "../module/graph";
-import { createFileSystemProvider, loadModuleGraph } from "../module/loader";
+import { createFileSystemProvider, loadModuleGraph, loadModuleGraphWithConfig } from "../module/loader";
+import { ResolverConfig, createDefaultConfig, BACKEND_C, BACKEND_JS, BACKEND_RAISER } from "../module/resolver";
+import { ResolveSection } from "./buildConfig";
 import { evaluateComptimeBlocks } from "./comptime";
 import { CliOptions, Target, MODE_DEBUG, MODE_RELEASE } from "./options";
 import { readSource, writeOutput, printErrorsAndExit, emitOutput, printTiming, verboseLog, replaceExt, dirName, baseName, stripBase, ensureDir, getJSRuntime, exeSuffix, outDirForMode } from "./io";
-import { compileC, compileCFile, linkObjects } from "./cc";
+import { compileC, compileCFile, linkObjects, appendFlag, cliCompileFlags, cliLinkFlags } from "./cc";
 import { error, success, bold, dim, green, red, cyan } from "../utils/color";
 import { clockMs } from "std/process";
 
@@ -71,12 +73,31 @@ export function cmdCompile(filePath: string, opts: CliOptions, outputPath: strin
 
 // ===== Multi-Module Helpers =====
 
+// Build ResolverConfig from CLI target + optional build.ms resolve section.
+export function buildResolverConfig(target: Target, resolve: ResolveSection): ResolverConfig {
+	let backend = BACKEND_C;
+	if (target === Target.JS) { backend = BACKEND_JS; }
+	if (target === Target.Raiser) { backend = BACKEND_RAISER; }
+	// Default stdPath to "std" (relative to CWD). Future: MSC_STD_PATH env var.
+	const config = createDefaultConfig(backend, "std");
+	// Override with build.ms settings if provided
+	if (resolve.extensions.length > 0) {
+		config.extensions = resolve.extensions;
+	}
+	if (resolve.searchPaths.length > 0) {
+		config.searchPaths = resolve.searchPaths;
+	}
+	if (resolve.aliasKeys.length > 0) {
+		config.aliasKeys = resolve.aliasKeys;
+		config.aliasValues = resolve.aliasValues;
+	}
+	return config;
+}
+
 // Report graph-level errors (e.g., circular deps, missing entry).
 function reportGraphErrors(graph: ModuleGraph): void {
-	if (graph.errors.length > 0) {
-		for (let i = 0; i < graph.errors.length; i += 1) {
-			console.log(red("graph error: ") + graph.errors[i]);
-		}
+	for (const err of graph.errors) {
+		console.log(red("graph error: ") + err);
 	}
 }
 
@@ -87,23 +108,39 @@ function exitOnModuleErrors(graph: ModuleGraph, prefix: string): void {
 		const mod = graph.modules[i];
 		if (mod.errors.length > 0) {
 			hasErr = true;
-			for (let j = 0; j < mod.errors.length; j += 1) {
-				console.log(red(prefix) + " [" + mod.path + "]: " + mod.errors[j]);
+			for (const e of mod.errors) {
+				console.log(red(prefix) + " [" + mod.path + "]: " + e);
 			}
 		}
 	}
 	if (hasErr) exit(1);
 }
 
+// Legacy load — backward compat for commands that don't have build.ms config.
+function loadAndCheckGraphLegacy(entryPath: string, verbose: boolean): ModuleGraph {
+	const dummyExts: string[] = [];
+	const dummyCfg: ResolverConfig = { backend: 0, stdPath: "", searchPaths: [], extensions: dummyExts, aliasKeys: [], aliasValues: [] };
+	return loadAndCheckGraph(entryPath, verbose, dummyCfg, 0);
+}
+
 // Load module graph, validate, and cross-module type check. Exits on errors.
-function loadAndCheckGraph(entryPath: string, verbose: boolean): ModuleGraph {
+// When useConfig=1, uses config-aware resolution (backend extensions, std/, search paths).
+// When useConfig=0, falls back to legacy .ms-only resolution.
+function loadAndCheckGraph(entryPath: string, verbose: boolean, config: ResolverConfig, useConfig: number): ModuleGraph {
 	if (verbose) verboseLog("loading module graph from " + entryPath);
 	const provider = createFileSystemProvider();
-	const graph = loadModuleGraph(entryPath, provider);
+	let graph: ModuleGraph;
+	if (useConfig === 1) {
+		graph = loadModuleGraphWithConfig(entryPath, provider, config);
+	} else {
+		graph = loadModuleGraph(entryPath, provider);
+	}
 	reportGraphErrors(graph);
 	exitOnModuleErrors(graph, "error");
 	if (verbose) verboseLog("cross-module type check");
-	checkModuleGraph(graph);
+	let stdPath = "";
+	if (useConfig === 1) { stdPath = config.stdPath; }
+	checkModuleGraph(graph, stdPath);
 	exitOnModuleErrors(graph, "type error");
 	return graph;
 }
@@ -111,8 +148,7 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean): ModuleGraph {
 // Collect exported C prototypes from all modules (Pass 1 for C builds).
 function collectAllPrototypes(graph: ModuleGraph): string {
 	let allProtos = "";
-	for (let i = 0; i < graph.loadOrder.length; i += 1) {
-		const modPath = graph.loadOrder[i];
+	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
 		const pr = parseSource(mod.source);
@@ -128,8 +164,8 @@ function collectAllPrototypes(graph: ModuleGraph): string {
 
 function writeDepsFile(graph: ModuleGraph, entryPath: string, outDir: string): void {
 	let depsContent = "";
-	for (let i = 0; i < graph.loadOrder.length; i += 1) {
-		depsContent = depsContent + graph.loadOrder[i] + "\n";
+	for (const modPath of graph.loadOrder) {
+		depsContent = depsContent + modPath + "\n";
 	}
 	const depsPath = outDir + "/" + replaceExt(baseName(entryPath), ".deps");
 	writeOutput(depsPath, depsContent);
@@ -149,7 +185,7 @@ function needsRebuild(graph: ModuleGraph, outputBinary: string): boolean {
 // ===== Multi-Module JS Build =====
 
 export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOptions): void {
-	const graph = loadAndCheckGraph(entryPath, opts.verbose);
+	const graph = loadAndCheckGraphLegacy(entryPath, opts.verbose);
 	const outDir = outputDir !== "" ? outputDir : "out/debug";
 	ensureDir(outDir);
 	const baseDir = dirName(entryPath);
@@ -202,7 +238,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 
 export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	const t0 = clockMs();
-	const graph = loadAndCheckGraph(entryPath, opts.verbose);
+	const graph = loadAndCheckGraphLegacy(entryPath, opts.verbose);
 
 	// Compute output binary path early for change detection
 	let outBinary = opts.outputPath;
@@ -229,14 +265,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 
 	// Pass 2: Full pipeline + codegen + per-module compile to .o
 	let hasUserMain = false;
-	let allFlags = "";
-	if (opts.sanitize !== "") {
-		allFlags = "-fsanitize=" + opts.sanitize;
-	}
-	if (opts.passC !== "") {
-		if (allFlags.length > 0) allFlags = allFlags + " ";
-		allFlags = allFlags + opts.passC;
-	}
+	let allFlags = cliCompileFlags(opts);
 	let oFiles = "";
 	let compiled = 0;
 
@@ -278,10 +307,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		const cCode = generateCModule(analyzed, ctx, modPath, allProtos);
 
 		// Accumulate compiler flags from @passC/@passL directives
-		if (ctx.compilerFlags !== "") {
-			if (allFlags.length > 0) allFlags = allFlags + " ";
-			allFlags = allFlags + ctx.compilerFlags;
-		}
+		allFlags = appendFlag(allFlags, ctx.compilerFlags);
 
 		// Check for user main() in entry module
 		if (modPath === entryPath) {
@@ -308,8 +334,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 				console.log(error("error") + ": compile failed for " + modPath + " " + dim("(exit " + ccCode + ")"));
 				exit(1);
 			}
-			if (oFiles.length > 0) oFiles = oFiles + " ";
-			oFiles = oFiles + oFile;
+			oFiles = appendFlag(oFiles, oFile);
 		}
 		compiled = compiled + 1;
 	}
@@ -332,19 +357,10 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		console.log(error("error") + ": compile failed for dispatcher " + dim("(exit " + dispCode + ")"));
 		exit(1);
 	}
-	if (oFiles.length > 0) oFiles = oFiles + " ";
-	oFiles = oFiles + dispObj;
+	oFiles = appendFlag(oFiles, dispObj);
 
 	// Link all .o files into final binary
-	let linkFlags = allFlags;
-	if (opts.passL !== "") {
-		if (linkFlags.length > 0) linkFlags = linkFlags + " ";
-		linkFlags = linkFlags + opts.passL;
-	}
-	if (opts.strip) {
-		if (linkFlags.length > 0) linkFlags = linkFlags + " ";
-		linkFlags = linkFlags + "-s";
-	}
+	const linkFlags = cliLinkFlags(allFlags, opts);
 	if (opts.verbose) verboseLog("linking → " + outBinary);
 	const linkCode = linkObjects(oFiles, outBinary, linkFlags, opts.mode, opts.ccCompiler);
 	if (linkCode !== 0) {
@@ -366,21 +382,14 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 
 export function cmdTest(filePath: string, opts: CliOptions): void {
 	const t0 = clockMs();
-	const graph = loadAndCheckGraph(filePath, opts.verbose);
+	const graph = loadAndCheckGraphLegacy(filePath, opts.verbose);
 
 	// Pass 1: Collect exported prototypes
 	if (opts.verbose) verboseLog("collecting cross-module prototypes");
 	const allProtos = collectAllPrototypes(graph);
 
 	// Pass 2: Full pipeline + codegen + compile each module
-	let allFlags = "";
-	if (opts.sanitize !== "") {
-		allFlags = "-fsanitize=" + opts.sanitize;
-	}
-	if (opts.passC !== "") {
-		if (allFlags.length > 0) allFlags = allFlags + " ";
-		allFlags = allFlags + opts.passC;
-	}
+	let allFlags = cliCompileFlags(opts);
 	let oFiles = "";
 	let compiled = 0;
 
@@ -410,10 +419,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const analyzed = analyzeProgram(nativeTransformed, ctx);
 		const cCode = generateCModule(analyzed, ctx, modPath, allProtos);
 
-		if (ctx.compilerFlags !== "") {
-			if (allFlags.length > 0) allFlags = allFlags + " ";
-			allFlags = allFlags + ctx.compilerFlags;
-		}
+		allFlags = appendFlag(allFlags, ctx.compilerFlags);
 
 		const cFile = "/tmp/_msc_test_" + compiled + ".c";
 		const oFile = "/tmp/_msc_test_" + compiled + ".o";
@@ -423,8 +429,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 			console.log(error("error") + ": compile failed for " + modPath + " " + dim("(exit " + ccCode + ")"));
 			exit(1);
 		}
-		if (oFiles.length > 0) oFiles = oFiles + " ";
-		oFiles = oFiles + oFile;
+		oFiles = appendFlag(oFiles, oFile);
 		compiled = compiled + 1;
 	}
 
@@ -439,8 +444,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		console.log(error("error") + ": compile failed for test dispatcher " + dim("(exit " + dispCode + ")"));
 		exit(1);
 	}
-	if (oFiles.length > 0) oFiles = oFiles + " ";
-	oFiles = oFiles + dispObj;
+	oFiles = appendFlag(oFiles, dispObj);
 
 	// Link and execute
 	ensureDir("out/debug");
@@ -461,7 +465,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 
 export function cmdRunJS(filePath: string, opts: CliOptions): void {
 	const t0 = clockMs();
-	const graph = loadAndCheckGraph(filePath, opts.verbose);
+	const graph = loadAndCheckGraphLegacy(filePath, opts.verbose);
 
 	const outDir = "out/debug";
 	ensureDir(outDir);
@@ -512,7 +516,7 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 
 export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 	const t0 = clockMs();
-	const graph = loadAndCheckGraph(filePath, opts.verbose);
+	const graph = loadAndCheckGraphLegacy(filePath, opts.verbose);
 
 	// Parse each module → RaiserModuleInput (topological order)
 	const modules: RaiserModuleInput[] = [];

@@ -10,14 +10,12 @@ import { CheckerContext, hasErrors, errorCount } from "../checker/context";
 import { checkProgram } from "../checker/checkPass";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
-// import { monomorphizeProgram } from "../monomorphize/collect";
-import { generateJS } from "../codegen/js/index";
 import { generateC } from "../codegen/c/index";
 import { transformForNative } from "../transform/native/index";
 import { createTransformContextWithChecker } from "../transform/context";
-import { CliOptions, Target } from "./options";
-import { readSource, writeOutput, printErrorsAndExit, printTiming, verboseLog } from "./io";
-import { compileC } from "./cc";
+import { CliOptions } from "./options";
+import { readSource, writeOutput, printErrorsAndExit, printTiming, verboseLog, replaceExt, baseName, ensureDir } from "./io";
+import { compileC, appendFlag, cliAllFlags } from "./cc";
 import { error, success, bold, cyan, dim, green, red, yellow, path } from "../utils/color";
 
 // -- dump-tokens --
@@ -30,10 +28,8 @@ export function cmdDumpTokens(filePath: string): void {
 		exit(1);
 	}
 	const tokens = result.value;
-	let i = 0;
-	while (i < tokens.length) {
-		console.log(formatToken(tokens[i]));
-		i += 1;
+	for (const tok of tokens) {
+		console.log(formatToken(tok));
 	}
 }
 
@@ -100,10 +96,8 @@ export function cmdPipeline(filePath: string): void {
 	if (hasErrors(checkerCtx)) {
 		const count = errorCount(checkerCtx);
 		console.log("  " + red(count + " error(s)") + ":");
-		let i = 0;
-		while (i < checkerCtx.errors.length) {
-			console.log("    " + checkerCtx.errors[i]);
-			i += 1;
+		for (const err of checkerCtx.errors) {
+			console.log("    " + err);
 		}
 	} else {
 		console.log("  " + green("OK") + " " + dim("no errors"));
@@ -148,52 +142,68 @@ export function cmdRun(filePath: string, opts: CliOptions): void {
 	}
 
 	if (opts.verbose) verboseLog("transform");
-	const transformed = transformProgram(program, checkerCtx, opts.target === Target.JS);
+	const transformed = transformProgram(program, checkerCtx, false);
 
-	if (opts.target === Target.JS) {
-		if (opts.verbose) verboseLog("codegen js");
-		const jsCode = generateJS(transformed);
-		const tmpFile = "/tmp/_msc_run.js";
-		writeOutput(tmpFile, jsCode);
-		if (opts.showTime) printTiming("compiled", t0);
-		const code = exec("node " + tmpFile);
-		exit(code);
-	} else {
-		if (opts.verbose) verboseLog("transform (native)");
-		const nativeCtx = createTransformContextWithChecker(checkerCtx);
-		const nativeTransformed = transformForNative(transformed, nativeCtx);
-		if (opts.verbose) verboseLog("analyze (DRC)");
-		const analyzed = analyzeProgram(nativeTransformed, checkerCtx);
-		if (opts.verbose) verboseLog("codegen c");
-		const cCode = generateC(analyzed, checkerCtx, filePath);
-		const tmpC = "/tmp/_msc_run.c";
-		const tmpBin = "/tmp/_msc_run";
-		writeOutput(tmpC, cCode);
+	if (opts.verbose) verboseLog("transform (native)");
+	const nativeCtx = createTransformContextWithChecker(checkerCtx);
+	const nativeTransformed = transformForNative(transformed, nativeCtx);
+	if (opts.verbose) verboseLog("analyze (DRC)");
+	const analyzed = analyzeProgram(nativeTransformed, checkerCtx);
+	if (opts.verbose) verboseLog("codegen c");
+	const cCode = generateC(analyzed, checkerCtx, filePath);
+	const tmpC = "/tmp/_msc_run.c";
+	ensureDir("out/debug");
+	const binName = replaceExt(baseName(filePath), "");
+	const tmpBin = "out/debug/" + binName;
+	writeOutput(tmpC, cCode);
 
-		if (opts.verbose) verboseLog("clang");
-		const buildCode = compileC(tmpC, tmpBin, checkerCtx.compilerFlags);
-		if (buildCode !== 0) {
-			console.log(error("error") + ": clang compilation failed " + dim("(exit " + buildCode + ")"));
-			exit(1);
-		}
-
-		if (opts.showTime) printTiming("compiled", t0);
-		const runCode = exec(tmpBin);
-		exit(runCode);
+	if (opts.verbose) verboseLog("cc");
+	const runFlags = appendFlag(checkerCtx.compilerFlags, cliAllFlags(opts));
+	const buildCode = compileC(tmpC, tmpBin, runFlags, opts.mode, opts.ccCompiler);
+	if (buildCode !== 0) {
+		console.log(error("error") + ": C compilation failed " + dim("(exit " + buildCode + ")"));
+		exit(1);
 	}
-}
 
-// -- test --
-
-export function cmdTest(filePath: string): void {
-	console.log(error("error") + ": " + cyan("test") + " command not yet implemented in self-hosted compiler");
-	console.log(dim("Use the reference compiler: msc test " + filePath));
-	exit(1);
+	if (opts.showTime) printTiming("compiled", t0);
+	const runCode = exec(tmpBin);
+	exit(runCode);
 }
 
 // -- fmt --
 
 export function cmdFmt(filePath: string): void {
-	console.log(error("error") + ": " + cyan("fmt") + " command not yet implemented");
-	exit(1);
+	const code = exec("msc fmt " + filePath);
+	if (code !== 0) {
+		console.log(error("error") + ": formatter failed " + dim("(exit " + code + ")"));
+	}
+	exit(code);
+}
+
+// -- init --
+
+export function cmdInit(name: string): void {
+	if (name === "") name = ".";
+	if (name !== ".") {
+		exec("mkdir -p " + name + "/src");
+	} else {
+		exec("mkdir -p src");
+	}
+	const buildPath = name + "/build.ms";
+	const srcPath = name + "/src/index.ms";
+	const buildContent = "export const root = \"src/index.ms\";\nexport const build = {\n\ttarget: \"c\",\n\toptimize: \"debug\",\n};\n";
+	const srcContent = "function main(): number {\n\tconsole.log(\"hello, metascript!\");\n\treturn 0;\n}\n";
+	writeOutput(buildPath, buildContent);
+	writeOutput(srcPath, srcContent);
+	console.log(success("Created") + " project in " + bold(name));
+	console.log(dim("  " + buildPath));
+	console.log(dim("  " + srcPath));
+}
+
+// -- clean --
+
+export function cmdClean(): void {
+	exec("rm -rf out");
+	exec("rm -f /tmp/_msc_*.c /tmp/_msc_*.o");
+	console.log(success("Cleaned") + " build artifacts");
 }

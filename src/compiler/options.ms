@@ -8,7 +8,13 @@ import { error, bold, cyan, setColorEnabled } from "../utils/color";
 export enum Target {
 	C,
 	JS,
+	Raiser,
 }
+
+// Build mode: 0=debug, 1=release, 2=danger
+export const MODE_DEBUG = 0;
+export const MODE_RELEASE = 1;
+export const MODE_DANGER = 2;
 
 export interface CliOptions {
 	command: string;
@@ -18,6 +24,15 @@ export interface CliOptions {
 	showTime: boolean;
 	verbose: boolean;
 	errorMax: number;
+	mode: number;
+	ccCompiler: number;
+	genDeps: boolean;
+	forceRebuild: boolean;
+	strip: boolean;
+	sanitize: string;
+	passC: string;
+	passL: string;
+	emitC: boolean;
 }
 
 // -- Helpers --
@@ -52,6 +67,15 @@ export function parseArgs(): CliOptions {
 		showTime: false,
 		verbose: false,
 		errorMax: 0,
+		mode: MODE_DEBUG,
+		ccCompiler: 0,
+		genDeps: false,
+		forceRebuild: false,
+		strip: false,
+		sanitize: "",
+		passC: "",
+		passL: "",
+		emitC: false,
 	};
 
 	if (argv.length < 2) return opts;
@@ -79,8 +103,10 @@ export function parseArgs(): CliOptions {
 				opts.target = Target.JS;
 			} else if (targetStr === "c") {
 				opts.target = Target.C;
+			} else if (targetStr === "raiser" || targetStr === "vm") {
+				opts.target = Target.Raiser;
 			} else {
-				console.log(error("error") + ": unknown target '" + bold(targetStr) + "'. Valid: " + cyan("c") + ", " + cyan("js"));
+				console.log(error("error") + ": unknown target '" + bold(targetStr) + "'. Valid: " + cyan("c") + ", " + cyan("js") + ", " + cyan("raiser"));
 				exit(1);
 			}
 		} else if (arg.startsWith("--output=")) {
@@ -93,6 +119,30 @@ export function parseArgs(): CliOptions {
 			opts.verbose = true;
 		} else if (arg.startsWith("--error-max=")) {
 			opts.errorMax = parseIntStr(arg.slice(12, arg.length));
+		} else if (arg === "--release") {
+			opts.mode = MODE_RELEASE;
+		} else if (arg === "--danger") {
+			opts.mode = MODE_DANGER;
+		} else if (arg === "--cc=clang") {
+			opts.ccCompiler = 1;
+		} else if (arg === "--cc=gcc") {
+			opts.ccCompiler = 2;
+		} else if (arg === "--gendeps") {
+			opts.genDeps = true;
+		} else if (arg === "--force" || arg === "-f") {
+			opts.forceRebuild = true;
+		} else if (arg === "--strip") {
+			opts.strip = true;
+		} else if (arg.startsWith("--sanitize=")) {
+			opts.sanitize = arg.slice(11, arg.length);
+		} else if (arg.startsWith("--passC=")) {
+			if (opts.passC.length > 0) opts.passC = opts.passC + " ";
+			opts.passC = opts.passC + arg.slice(8, arg.length);
+		} else if (arg.startsWith("--passL=")) {
+			if (opts.passL.length > 0) opts.passL = opts.passL + " ";
+			opts.passL = opts.passL + arg.slice(8, arg.length);
+		} else if (arg === "--emit=c") {
+			opts.emitC = true;
 		} else if (arg === "--colors=on") {
 			setColorEnabled(true);
 		} else if (arg === "--colors=off" || arg === "--no-color") {

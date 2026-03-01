@@ -16,7 +16,10 @@ export function printUsage(): void {
 	console.log("  " + cyan("run") + " <file>            Compile and run");
 	console.log("  " + cyan("test") + " <file>           Run tests");
 	console.log("  " + cyan("check") + " <file>          Type check only (no codegen)");
-	console.log("  " + cyan("build") + "                 Build using build.ms config");
+	console.log("  " + cyan("build") + "                 Build project (reads build.ms)");
+	console.log("  " + cyan("build") + " <file>          Build from explicit entry point");
+	console.log("  " + cyan("init") + " [name]            Create new project");
+	console.log("  " + cyan("clean") + "                 Remove build artifacts");
 	console.log("");
 	console.log(yellow("VISIBILITY/DEBUGGING:"));
 	console.log("  " + cyan("dump-tokens") + " <file>    Show tokenization output");
@@ -33,6 +36,16 @@ export function printUsage(): void {
 	console.log("  " + cyan("--error-max") + "=<N>       Stop after N errors " + dim("(0 = all)"));
 	console.log("  " + cyan("--colors") + "=<on|off>     Force color output on/off");
 	console.log("  " + cyan("--no-color") + "            Disable color output");
+	console.log("  " + cyan("--release") + "             Optimize for speed " + dim("(-O2)"));
+	console.log("  " + cyan("--danger") + "              Maximum optimization " + dim("(-O3 -flto)"));
+	console.log("  " + cyan("--cc") + "=<clang|gcc>      C compiler " + dim("(default: auto-detect)"));
+	console.log("  " + cyan("--strip") + "               Strip symbols from binary");
+	console.log("  " + cyan("--sanitize") + "=<mode>    Enable sanitizer " + dim("(address|undefined|thread)"));
+	console.log("  " + cyan("--passC") + "=<flags>      Extra C compiler flags");
+	console.log("  " + cyan("--passL") + "=<flags>      Extra linker flags");
+	console.log("  " + cyan("--emit") + "=c             Emit C source only " + dim("(no compile/link)"));
+	console.log("  " + cyan("--gendeps") + "             Write .deps file with module paths");
+	console.log("  " + cyan("-f") + ", " + cyan("--force") + "           Force full rebuild");
 	console.log("");
 	console.log(yellow("EXAMPLES:"));
 	console.log("  msc compile hello.ms                    " + dim("# Compile to C (default)"));
@@ -41,6 +54,7 @@ export function printUsage(): void {
 	console.log("  msc test src/index.ms                   " + dim("# Run tests"));
 	console.log("  msc check src/index.ms                  " + dim("# Type check only"));
 	console.log("  msc dump-ast hello.ms                   " + dim("# Show AST"));
+	console.log("  msc build                               " + dim("# Build using build.ms config"));
 	console.log("  msc pipeline hello.ms                   " + dim("# Show all pipeline stages"));
 	console.log("");
 }

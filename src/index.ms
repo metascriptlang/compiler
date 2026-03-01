@@ -1,11 +1,13 @@
 // MetaScript Compiler CLI — Entry point (dispatch only)
 
 import { exit } from "std/process";
-import { CliOptions, Target, parseArgs } from "./compiler/options";
+import { CliOptions, Target, parseArgs, MODE_DEBUG, MODE_RELEASE, MODE_DANGER } from "./compiler/options";
 import { VERSION, printUsage } from "./compiler/usage";
-import { cmdCompile, cmdBuildJS, cmdBuildC } from "./compiler/compile";
-import { cmdCheck, cmdDumpTokens, cmdDumpAst, cmdPipeline, cmdRun, cmdTest, cmdFmt } from "./compiler/commands";
+import { cmdCompile, cmdBuildJS, cmdBuildC, cmdRunJS, cmdRunRaiser, cmdTest } from "./compiler/compile";
+import { cmdCheck, cmdDumpTokens, cmdDumpAst, cmdPipeline, cmdRun, cmdFmt, cmdInit, cmdClean } from "./compiler/commands";
 import { lspRunServer } from "./compiler/lsp/server";
+import { loadBuildConfig, BuildConfig } from "./compiler/buildConfig";
+import { verboseLog } from "./compiler/io";
 import { error, bold, green, cyan } from "./utils/color";
 
 function requireFile(opts: CliOptions): void {
@@ -28,11 +30,25 @@ function main(): number {
 		requireFile(opts);
 		cmdCompile(opts.inputFile, opts, opts.outputPath);
 	} else if (cmd === "run") {
+		if (opts.inputFile === "") {
+			const cfg = loadBuildConfig("build.ms", opts.showTime);
+			if (cfg.valid) { opts.inputFile = cfg.root; }
+		}
 		requireFile(opts);
-		cmdRun(opts.inputFile, opts);
+		if (opts.target === Target.JS) {
+			cmdRunJS(opts.inputFile, opts);
+		} else if (opts.target === Target.Raiser) {
+			cmdRunRaiser(opts.inputFile, opts);
+		} else {
+			cmdRun(opts.inputFile, opts);
+		}
 	} else if (cmd === "test") {
 		requireFile(opts);
-		cmdTest(opts.inputFile);
+		if (opts.target === Target.JS) {
+			cmdRunJS(opts.inputFile, opts);
+		} else {
+			cmdTest(opts.inputFile, opts);
+		}
 	} else if (cmd === "check") {
 		requireFile(opts);
 		cmdCheck(opts.inputFile, opts);
@@ -48,14 +64,41 @@ function main(): number {
 	} else if (cmd === "fmt") {
 		requireFile(opts);
 		cmdFmt(opts.inputFile);
+	} else if (cmd === "init") {
+		cmdInit(opts.inputFile);
+	} else if (cmd === "clean") {
+		cmdClean();
 	} else if (cmd === "lsp") {
 		lspRunServer();
 	} else if (cmd === "build") {
-		requireFile(opts);
-		if (opts.target === Target.JS) {
-			cmdBuildJS(opts.inputFile, opts.outputPath);
+		if (opts.inputFile !== "") {
+			if (opts.target === Target.JS) {
+				cmdBuildJS(opts.inputFile, opts.outputPath, opts);
+			} else {
+				cmdBuildC(opts.inputFile, opts);
+			}
 		} else {
-			cmdBuildC(opts.inputFile, opts);
+			const cfg = loadBuildConfig("build.ms", opts.showTime);
+			if (!cfg.valid) {
+				console.log(error("error") + ": no build.ms found or missing 'root' field");
+				printUsage();
+				exit(1);
+			}
+			if (opts.verbose) {
+				verboseLog("build.ms: root=" + cfg.root + " target=" + cfg.build.target);
+			}
+			if (opts.mode === MODE_DEBUG && cfg.build.optimize === "release") {
+				opts.mode = MODE_RELEASE;
+			}
+			if (cfg.build.target === "js" || opts.target === Target.JS) {
+				const outDir = cfg.build.outDir !== "" ? cfg.build.outDir : opts.outputPath;
+				cmdBuildJS(cfg.root, outDir, opts);
+			} else {
+				if (opts.outputPath === "" && cfg.build.outFile !== "") {
+					opts.outputPath = cfg.build.outFile;
+				}
+				cmdBuildC(cfg.root, opts);
+			}
 		}
 	} else {
 		console.log(error("error") + ": unknown command '" + bold(cmd) + "'");
