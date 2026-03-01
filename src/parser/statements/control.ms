@@ -11,8 +11,20 @@ import { test, check, testGroup } from "std/testing";
 
 type NodeResult = Result<Node, string>;
 
+// ===== Body: block or single statement =====
+// if (x) doSomething(); — wraps single stmt in BlockStmt for uniform downstream handling
+
+function parseBodyOrStmt(state: ParserState): NodeResult {
+	if (current(state).kind === TokenKind.LBrace) {
+		return callBlockParser(state);
+	}
+	const tok = current(state);
+	const stmt = try callStmtParser(state);
+	return Result.ok(createNode(NodeKind.BlockStmt, { statements: [stmt] }, tok));
+}
+
 // ===== If Statement =====
-// syntax: 'if' '(' expr ')' block ('else' (ifStmt | block))?
+// syntax: 'if' '(' expr ')' (block | stmt) ('else' (ifStmt | block | stmt))?
 
 export function parseIfStmt(state: ParserState): NodeResult {
 	const ifToken = current(state);
@@ -28,7 +40,7 @@ export function parseIfStmt(state: ParserState): NodeResult {
 	}
 
 	advance(state);
-	const consequent = try callBlockParser(state);
+	const consequent = try parseBodyOrStmt(state);
 	// Handle else branch: early return avoids try-in-assignment
 	if (!isAtEnd(state) && current(state).kind === TokenKind.Else) {
 		advance(state);
@@ -43,7 +55,7 @@ export function parseIfStmt(state: ParserState): NodeResult {
 		return Result.ok(createNode(NodeKind.IfStmt, {
 			condition,
 			consequent,
-			alternate: try callBlockParser(state),
+			alternate: try parseBodyOrStmt(state),
 		}, ifToken));
 	}
 
@@ -73,7 +85,7 @@ export function parseWhileStmt(state: ParserState): NodeResult {
 	advance(state);
 	return Result.ok(createNode(NodeKind.WhileStmt, {
 		whileCondition: condition,
-		whileBody: try callBlockParser(state),
+		whileBody: try parseBodyOrStmt(state),
 	}, whileToken));
 }
 
@@ -111,7 +123,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 					forOfBinding: "_destructure",
 					forOfIsConst: forIsConst,
 					forOfIterable: iterable,
-					forOfBody: try callBlockParser(state),
+					forOfBody: try parseBodyOrStmt(state),
 				}, forToken));
 			}
 			if (!isAtEnd(state) && current(state).kind === TokenKind.In) {
@@ -125,7 +137,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 					forInBinding: "_destructure",
 					forInIsConst: forIsConst,
 					forInObject: obj,
-					forInBody: try callBlockParser(state),
+					forInBody: try parseBodyOrStmt(state),
 				}, forToken));
 			}
 			return Result.err(`Expected 'of' or 'in' after destructuring pattern at line ${current(state).line.toString()}`);
@@ -149,7 +161,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 					forOfBinding: nameToken.value,
 					forOfIsConst: forIsConst,
 					forOfIterable: iterable,
-					forOfBody: try callBlockParser(state),
+					forOfBody: try parseBodyOrStmt(state),
 				}, forToken));
 			}
 			if (afterName < state.tokens.length && state.tokens[afterName].kind === TokenKind.In) {
@@ -166,7 +178,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 					forInBinding: nameToken.value,
 					forInIsConst: forIsConst,
 					forInObject: obj,
-					forInBody: try callBlockParser(state),
+					forInBody: try parseBodyOrStmt(state),
 				}, forToken));
 			}
 		}
@@ -213,7 +225,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 			forInit: initNode,
 			forCondition: cond,
 			forUpdate: update,
-			forBody: try callBlockParser(state),
+			forBody: try parseBodyOrStmt(state),
 		}, forToken));
 	}
 
@@ -241,7 +253,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 		forInit: exprInitNode,
 		forCondition: exprCond,
 		forUpdate: exprUpdate,
-		forBody: try callBlockParser(state),
+		forBody: try parseBodyOrStmt(state),
 	}, forToken));
 }
 
@@ -471,6 +483,10 @@ testGroup("Stmt Control Flow", () => {
 	test("simple if", () => { check(programOk("if (x) { y; }")); });
 	test("if-else", () => { check(programOk("if (x) { a; } else { b; }")); });
 	test("if-else-if-else", () => { check(programOk("if (a) { x; } else if (b) { y; } else { z; }")); });
+	// Braceless bodies
+	test("if braceless", () => { check(programOk("if (x) y;")); });
+	test("if-else braceless", () => { check(programOk("if (x) a; else b;")); });
+	test("while braceless", () => { check(programOk("while (x) y;")); });
 	// While
 	test("while", () => { check(programOk("while (x) { y; }")); });
 	// Return

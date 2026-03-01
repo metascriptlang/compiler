@@ -14,7 +14,7 @@
 
 import {
 	Node, NodeKind,
-	BinaryExprData, UnaryExprData,
+	BinaryExprData, UnaryExprData, MemberExprData,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 } from "../../ast/node";
 import { TransformContext } from "../context";
@@ -34,6 +34,7 @@ function foldNode(node: Node): Node {
 	return match (node.kind) {
 		NodeKind.BinaryExpr => foldBinary(node),
 		NodeKind.UnaryExpr => foldUnary(node),
+		NodeKind.MemberExpr => foldMember(node),
 		_ => node,
 	};
 }
@@ -132,6 +133,21 @@ function foldUnary(node: Node): Node {
 		_ => {},
 	};
 
+	return node;
+}
+
+// ===== Member Folding =====
+// "a".code → NumberLiteral(97) — compile-time character code
+
+function foldMember(node: Node): Node {
+	const d = node.data as MemberExprData;
+	if (d.property === "code" && d.object.kind === NodeKind.StringLiteral) {
+		const sd = d.object.data as StringLiteralData;
+		if (sd.value.length > 0) {
+			const cc = sd.value.charCodeAt(0);
+			return makeNumber(cc, node.location);
+		}
+	}
 	return node;
 }
 

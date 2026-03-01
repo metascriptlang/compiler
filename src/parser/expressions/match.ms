@@ -134,10 +134,19 @@ function parseSinglePattern(state: ParserState): ExprResult {
 		return Result.ok(createNode(NodeKind.NumberLiteral, { value: parseFloat(token.value) }, token));
 	}
 
-	// String literal
+	// String literal — with optional .code suffix ("a".code → MemberExpr)
 	if (token.kind === TokenKind.String) {
 		advance(state);
-		return Result.ok(createNode(NodeKind.StringLiteral, { value: token.value }, token));
+		let node = createNode(NodeKind.StringLiteral, { value: token.value }, token);
+		if (!isAtEnd(state) && current(state).kind === TokenKind.Dot) {
+			advance(state);
+			if (!isAtEnd(state) && isIdentOrKeyword(current(state).kind)) {
+				const prop = current(state);
+				advance(state);
+				node = createNode(NodeKind.MemberExpr, { object: node, property: prop.value, isOptional: false }, token);
+			}
+		}
+		return Result.ok(node);
 	}
 
 	// Boolean/null/identifier (including _ wildcard)
@@ -183,6 +192,7 @@ testGroup("Expr Match", () => {
 	test("numeric or-patterns", () => { check(parseOk("match (x) { 1 | 2 | 3 => \"few\", _ => \"many\" }")); });
 	test("single case", () => { check(parseOk("match (x) { _ => 0 }")); });
 	test("wildcard only", () => { check(parseOk("match (x) { _ => x }")); });
+	test("string.code pattern", () => { check(parseOk("match (ch) { \"n\".code => 1, _ => 0 }")); });
 	test("call in arm", () => { check(parseOk("match (x) { 1 => foo(), _ => bar() }")); });
 	test("binary in arm", () => { check(parseOk("match (x) { 1 => a + b, _ => c }")); });
 });
