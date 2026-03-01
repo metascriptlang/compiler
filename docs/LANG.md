@@ -7,7 +7,7 @@ MetaScript is a systems programming language with TypeScript syntax that compile
 | Type | Description | C Mapping |
 |------|-------------|-----------|
 | `number` | IEEE 754 f64 | `double` |
-| `string` | Immutable UTF-8 | `msString` |
+| `string` | Mutable UTF-8 (TS superset) | `msString` |
 | `boolean` | true/false | `bool` |
 | `void` | No value | `void` |
 | `never` | Unreachable | N/A |
@@ -592,6 +592,61 @@ export function floor(x: number): number { unreachable; }
 | `@runtime("c_name")` | Plain C function call | Edit `std/core.ms` + `runtime/*.c` (no compiler rebuild) |
 | `@builtin("Name")` | Inline C (any pattern) | Edit `std/core.ms` + `builtinLower.ms` (compiler rebuild) |
 | `extern function` | Raw C FFI declaration | Edit user code directly |
+
+### Mutable Strings
+
+MetaScript strings are mutable — a TypeScript superset. All TS string code works unchanged; mutation is purely additive.
+
+```typescript
+// TypeScript-compatible (unchanged behavior)
+const s = "hello";            // const → no mutation, no reassignment
+let t = s.slice(1);           // returns new string
+let u = s + " world";         // concat returns new string
+
+// MetaScript extension (new capability)
+let buf = "hello";
+buf[0] = "H";                 // char assignment — TS rejects, MS allows
+buf.add(" world");            // in-place append
+// buf is now "Hello world"
+```
+
+Rules:
+- `const` strings: immutable (same as TS)
+- `let` strings: reassignable (same as TS) AND mutable (MS extension)
+- `.slice()`, `.replace()`, `+`: return new strings (same as TS)
+- `s[i] = ch`, `.add()`: mutation ops — no existing TS code uses them, purely additive
+
+### Three-Tier Array System
+
+MetaScript has three array types for systems programming control over allocation, expressed as TypeScript-compatible syntax.
+
+```typescript
+// Dynamic array — standard TypeScript, heap-allocated, growable
+const items: number[] = [1, 2, 3];
+items.push(4);
+
+// Fixed-size array — stack-allocated, zero heap overhead
+const matrix: number[4] = [1, 0, 0, 1];
+// matrix.push(5);              // compile error: fixed size
+
+// Span — non-owning view, accepts both T[] and T[N]
+function sum(data: Span<number>): number {
+    let total = 0;
+    for (const x of data) total += x;
+    return total;
+}
+sum(items);                    // number[]  → Span<number> (implicit)
+sum(matrix);                   // number[4] → Span<number> (implicit)
+sum(items.span(1, 3));         // zero-copy slice, no allocation
+```
+
+| Type | Allocation | Growable | Use Case |
+|------|-----------|----------|----------|
+| `T[]` | Heap (RC) | Yes | General-purpose, all TS array code |
+| `T[N]` | Stack | No | Fixed buffers, matrices, SIMD, embedded |
+| `Span<T>` | None (view) | N/A | Unified function params, zero-copy slicing |
+
+Restrictions: `Span<T>` cannot be returned or stored (dangling pointer). `T[N]` size must be compile-time constant. See `docs/LANG-RUNTIME.md` for full design.
 
 ### Macros
 ```typescript

@@ -965,4 +965,34 @@ testGroup("VM call indirect", () => {
 		const vm = execModule(mod);
 		check(vm.exitValue.intVal === 42);
 	});
+
+	test("two objects bidirectional link in function", () => {
+		// mk(n): NewObj R1, NewObj R2, Store R2."ref"=R1, Store R1."get"=R2, Store R1."n"=R0, Ret R1
+		// entry: LoadConst R2 5, Move R1 R2, Call R0 mk 1, LoadField R1 R0 "n", Halt R1
+		const mkCode: RaiserInstruction[] = [
+			raiserABC(RaiserOpcode.NewObject, 1, 0, 0),       // R1 = {} (self)
+			raiserABC(RaiserOpcode.NewObject, 2, 0, 0),       // R2 = {} (cl)
+			raiserABC(RaiserOpcode.StoreField, 2, 0, 1),      // cl."ref" = self
+			raiserABC(RaiserOpcode.StoreField, 1, 1, 2),      // self."get" = cl
+			raiserABC(RaiserOpcode.StoreField, 1, 2, 0),      // self."n" = n
+			raiserABC(RaiserOpcode.Ret, 1, 0, 0),
+		];
+		const mkConsts: RaiserValue[] = [raiserString("ref"), raiserString("get"), raiserString("n")];
+		const mk = createRaiserFunction("mk", mkCode, mkConsts, 1, 0, 3);
+
+		const entryCode: RaiserInstruction[] = [
+			raiserABx(RaiserOpcode.LoadConst, 2, 0),          // R2 = 5
+			raiserABC(RaiserOpcode.Move, 1, 2, 0),            // R1 = R2
+			raiserABC(RaiserOpcode.Call, 0, 0, 1),             // R0 = mk(R1=5)
+			raiserABC(RaiserOpcode.LoadField, 1, 0, 1),       // R1 = R0."n"
+			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+		];
+		const entryConsts: RaiserValue[] = [raiserInt(5), raiserString("n")];
+		const entry = createRaiserFunction("main", entryCode, entryConsts, 0, 0, 4);
+
+		const funcs: RaiserFunction[] = [mk, entry];
+		const mod = createRaiserModule("test", funcs, 1);
+		const vm = execModule(mod);
+		check(vm.exitValue.intVal === 5);
+	});
 });

@@ -8,7 +8,7 @@
 //
 // Becomes:
 //   interface $Env_outer_1 { x: unknown; }
-//   function $lifted_outer_1(_envP) { return _envP.x + 1; }
+//   function $lifted_outer_1(_envP, ...) { return _envP.x + 1; }
 //   function outer() {
 //     let x = 10;
 //     const f = { fn: $lifted_outer_1, env: { x: x } };
@@ -182,17 +182,18 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 	state.envStructs.push(makeInterfaceDecl(envName, envFields, envFieldTypes, loc));
 
 	// Rewrite body to replace captured vars with _envP.name
-	rewriteNode(body, captures);
+	// Must capture return value: for expression bodies (single Identifier), rewriteNode
+	// returns a NEW node (MemberExpr); for block bodies, it mutates children in-place.
+	const rewrittenBody = rewriteNode(body, captures);
 
-	// Lifted function params: original + _envP
-	const liftedParams: string[] = [];
-	const liftedParamTypes: string[] = [];
+	// Lifted function params: _envP first, then original params
+	// env-first matches closure call convention: callee.fn(callee.env, args...)
+	const liftedParams: string[] = ["_envP"];
+	const liftedParamTypes: string[] = [envName];
 	for (const p of params) { liftedParams.push(p); }
 	for (const t of paramTypes) { liftedParamTypes.push(t); }
-	liftedParams.push("_envP");
-	liftedParamTypes.push(envName);
 
-	state.liftedFunctions.push(makeFnDecl(liftedName, liftedParams, liftedParamTypes, body, flags, returnType, loc));
+	state.liftedFunctions.push(makeFnDecl(liftedName, liftedParams, liftedParamTypes, rewrittenBody, flags, returnType, loc));
 
 	return makeClosurePair(liftedName, captures, loc);
 }

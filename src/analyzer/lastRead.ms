@@ -133,21 +133,100 @@ export function isLastReadInBlock(varName: string, stmtIndex: number, stmts: Nod
 	return true;
 }
 
-// ===== isLastReadInContext — cross-scope forward scan =====
+// ===== Termination Analysis (lightweight CFG) =====
+// Determines if control flow from a given point will DEFINITELY terminate
+// (via return/break/throw/continue) before reaching the end of the block.
+// When a block definitely terminates, outer scope references are unreachable
+// from this code path — enabling move optimizations inside terminated branches.
+//
+// This replaces a full CFG builder with a focused analysis that captures the
+// most common optimization: guard clause patterns (if (err) return; use(x);)
+// and exhaustive if/else where both branches terminate.
+
+function isTerminatingStmt(node: Node): boolean {
+	if (node === null) return false;
+	const k = node.kind;
+	return k === NodeKind.ReturnStmt
+		|| k === NodeKind.ThrowStmt
+		|| k === NodeKind.BreakStmt
+		|| k === NodeKind.ContinueStmt;
+}
+
+// Returns true if block contents definitely terminate (never fall through).
+function blockDefinitelyTerminates(node: Node): boolean {
+	if (node === null) return false;
+	if (node.kind !== NodeKind.BlockStmt) return isTerminatingStmt(node);
+	const stmts = (node.data as BlockStmtData).statements;
+	return stmtsDefinitelyTerminate(stmts, 0);
+}
+
+// Returns true if stmts[fromIndex..] definitely terminate before reaching end.
+function stmtsDefinitelyTerminate(stmts: Node[], fromIndex: number): boolean {
+	let i = fromIndex;
+	while (i < stmts.length) {
+		const stmt = stmts[i];
+		if (stmt === null) {
+			i = i + 1;
+			continue;
+		}
+		// Direct terminating statement
+		if (isTerminatingStmt(stmt)) return true;
+		// If-else: terminates if BOTH branches terminate
+		if (stmt.kind === NodeKind.IfStmt) {
+			const d = stmt.data as IfStmtData;
+			if (d.alternate !== null && !isEmptyBlockNode(d.alternate)) {
+				if (blockDefinitelyTerminates(d.consequent)
+					&& blockDefinitelyTerminates(d.alternate)) {
+					return true;
+				}
+			}
+		}
+		i = i + 1;
+	}
+	return false;
+}
+
+// Helper: check if a node is an empty block (no statements)
+function isEmptyBlockNode(node: Node): boolean {
+	if (node === null) return true;
+	if (node.kind !== NodeKind.BlockStmt) return false;
+	const stmts = (node.data as BlockStmtData).statements;
+	return stmts.length === 0;
+}
+
+// ===== isLastReadInContext — cross-scope forward scan with termination analysis =====
 // Like isLastReadInBlock, but also checks remaining statements in outer scopes.
 // Stops at function boundaries (variables don't escape function scope).
+//
+// CFG enhancement: if the remaining statements in the current block definitely
+// terminate (return/break/throw/continue), outer scope references are unreachable
+// from this path — skip the outer scope check and return true.
 
 export function isLastReadInContext(varName: string, stmtIndex: number, stmts: Node[], outerCtx: OuterStack): boolean {
 	// Check remaining stmts in current block
 	for (let i = stmtIndex + 1; i < stmts.length; i += 1) {
 		if (nodeReferencesVar(stmts[i], varName)) return false;
 	}
+	// CFG enhancement: if remaining stmts definitely terminate, outer scope
+	// is unreachable from this path — variable IS last-read regardless of outer uses.
+	if (stmtsDefinitelyTerminate(stmts, stmtIndex + 1)) return true;
 	// Check outer scopes (innermost first)
 	let oi = outerCtx.items.length;
 	while (oi > 0) {
 		oi -= 1;
 		const entry = outerCtx.items[oi];
 		if (entry.isFunctionBoundary) break;  // don't look past function boundaries
+		// CFG enhancement: if outer scope's remaining stmts terminate,
+		// skip further outer scope checks (that scope never falls through either)
+		if (stmtsDefinitelyTerminate(entry.outerStmts, entry.fromIndex)) {
+			// Still check this scope's remaining stmts for references
+			let j = entry.fromIndex;
+			while (j < entry.outerStmts.length) {
+				if (nodeReferencesVar(entry.outerStmts[j], varName)) return false;
+				j = j + 1;
+			}
+			return true;  // this scope terminates, no need to check further outer
+		}
 		for (let j = entry.fromIndex; j < entry.outerStmts.length; j += 1) {
 			if (nodeReferencesVar(entry.outerStmts[j], varName)) return false;
 		}
@@ -271,5 +350,56 @@ testGroup("deepAliases", () => {
 	test("nested alias", () => {
 		const expr = getExpr("g(f(x));");
 		check(deepAliases("x", expr));
+	});
+});
+
+testGroup("Termination Analysis", () => {
+	test("return terminates block", () => {
+		// Inside a branch that returns, outer x ref shouldn't prevent move
+		const innerStmts = getStmts("const b = a; return b;");
+		const outerStmts = getStmts("foo(a);");
+		const outer: OuterStack = { items: [
+			{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
+		] };
+		// "a" at index 0 in innerStmts — return at index 1 terminates
+		// outer scope has foo(a) but unreachable from this path
+		check(isLastReadInContext("a", 0, innerStmts, outer));
+	});
+	test("throw terminates block", () => {
+		const innerStmts = getStmts("const b = a; throw b;");
+		const outerStmts = getStmts("foo(a);");
+		const outer: OuterStack = { items: [
+			{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
+		] };
+		check(isLastReadInContext("a", 0, innerStmts, outer));
+	});
+	test("no termination checks outer normally", () => {
+		const innerStmts = getStmts("const b = a;");
+		const outerStmts = getStmts("foo(a);");
+		const outer: OuterStack = { items: [
+			{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
+		] };
+		// No terminating stmt — outer foo(a) prevents last-read
+		check(!isLastReadInContext("a", 0, innerStmts, outer));
+	});
+	test("exhaustive if-else terminates", () => {
+		// if (c) { return x; } else { return y; } — both branches return
+		const innerStmts = getStmts("const b = a; if (c) { return x; } else { return y; }");
+		const outerStmts = getStmts("foo(a);");
+		const outer: OuterStack = { items: [
+			{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
+		] };
+		// After stmt 0, the if-else at stmt 1 definitely terminates
+		check(isLastReadInContext("a", 0, innerStmts, outer));
+	});
+	test("non-exhaustive if does not terminate", () => {
+		// if (c) { return x; } — no else, falls through
+		const innerStmts = getStmts("const b = a; if (c) { return x; }");
+		const outerStmts = getStmts("foo(a);");
+		const outer: OuterStack = { items: [
+			{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
+		] };
+		// No else branch — control may fall through to outer foo(a)
+		check(!isLastReadInContext("a", 0, innerStmts, outer));
 	});
 });

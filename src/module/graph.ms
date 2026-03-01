@@ -40,6 +40,7 @@ export interface Module {
 	exportNames: string[];     // names of exported symbols (for lookup)
 	imports: ImportEntry[];    // resolved import dependencies
 	errors: string[];          // per-module errors
+	isCHeader: boolean;        // true if loaded from .h file (C header module)
 }
 
 // ===== Module Graph =====
@@ -72,6 +73,7 @@ export function createModule(path: string): Module {
 		exportNames: [],
 		imports: [],
 		errors: [],
+		isCHeader: false,
 	};
 }
 

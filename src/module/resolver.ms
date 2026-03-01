@@ -140,9 +140,16 @@ export function resolveImport(specifier: string, fromFile: string): ResolveCandi
 	// Bare specifiers — unsupported in legacy mode
 	if (!isRelative(specifier)) return result;
 
-	// Relative imports: two candidates (.ms only)
 	const baseDir = dirname(fromFile);
 	const base = join(baseDir, specifier);
+
+	// If specifier has a known extension (.h, .ms, etc.), use it directly
+	if (hasKnownExtension(specifier)) {
+		result.paths.push(base);
+		return result;
+	}
+
+	// Relative imports: two candidates (.ms only)
 	result.paths.push(base + ".ms");
 	result.paths.push(join(base, "index.ms"));
 
@@ -217,7 +224,8 @@ function hasKnownExtension(specifier: string): boolean {
 		|| endsWith(specifier, ".ems")
 		|| endsWith(specifier, ".wms")
 		|| endsWith(specifier, ".ts")
-		|| endsWith(specifier, ".js");
+		|| endsWith(specifier, ".js")
+		|| endsWith(specifier, ".h");
 }
 
 function endsWith(s: string, suffix: string): boolean {
@@ -415,6 +423,12 @@ testGroup("Resolver", () => {
 		const r = resolveImportWithConfig("std/core.cms", "/a/b.ms", cfg);
 		check(r.paths.length === 1);
 		check(r.paths[0] === "/std/core.cms");
+	});
+	test("explicit .h extension resolves directly", () => {
+		const cfg = createDefaultConfig(0, "");
+		const r = resolveImportWithConfig("./dawn.h", "/a/b.ms", cfg);
+		check(r.paths.length === 1);
+		check(r.paths[0] === "/a/dawn.h");
 	});
 	test("JS backend uses .jms first", () => {
 		const cfg = createDefaultConfig(1, "");

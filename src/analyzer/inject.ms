@@ -28,6 +28,7 @@ import { TransformContext, NameSet, nameSetContains, freshTemp, createTransformC
 import {
 	makeIdent, makeBlock, makeExprStmt, makeCall, makeVarDecl,
 	makeReturn, makeAssign, makeTryCatch, makeNull, makeBinary, makeMember,
+	makeUnary,
 } from "../transform/util";
 import { RcInfo, RcKind, classifyType, isFreshExpr, noRcInfo } from "./classify";
 import {
@@ -541,7 +542,118 @@ function isEnvParam(name: string): boolean {
 	return name.slice(0, 6) === "__envP";
 }
 
-function registerFuncParams(paramNames: string[], paramTypes: Type[], dctx: DrcContext, loc: SourceLocation): void {
+// ===== Sink Parameter Inference =====
+// A parameter is a sink candidate if it's only used in return positions.
+// Returns true if paramName appears ONLY as a direct return argument (consumed),
+// never read in other contexts (no copy needed).
+
+function isParamSinkCandidate(paramName: string, body: Node): boolean {
+	if (body === null) return false;
+	if (body.kind !== NodeKind.BlockStmt) return false;
+	const bd = body.data as BlockStmtData;
+	// Count: total refs and return-only refs
+	let totalRefs = 0;
+	let returnRefs = 0;
+	countParamUsage(paramName, bd.statements, totalRefs, returnRefs);
+	// Workaround: can't use out params, so re-implement inline
+	const counts = countParamUsageInline(paramName, bd.statements);
+	// Sink if: at least 1 use AND all uses are return-only
+	return counts.total > 0 && counts.total === counts.returns;
+}
+
+interface UsageCounts {
+	total: number;
+	returns: number;
+}
+
+function countParamUsageInline(paramName: string, stmts: Node[]): UsageCounts {
+	let total = 0;
+	let returns = 0;
+	let i = 0;
+	while (i < stmts.length) {
+		const s = stmts[i];
+		if (s.kind === NodeKind.ReturnStmt) {
+			const rd = s.data as ReturnStmtData;
+			if (rd.argument !== null && rd.argument.kind === NodeKind.Identifier) {
+				const id = rd.argument.data as IdentifierData;
+				if (id.name === paramName) {
+					total = total + 1;
+					returns = returns + 1;
+				}
+			} else if (rd.argument !== null && nodeRefsParam(rd.argument, paramName)) {
+				// Used in return but not as direct identifier (e.g., return f(param))
+				total = total + countRefsInNode(rd.argument, paramName);
+			}
+		} else {
+			// Any other statement: count all refs
+			total = total + countRefsInNode(s, paramName);
+		}
+		i = i + 1;
+	}
+	return { total, returns };
+}
+
+function countRefsInNode(node: Node, paramName: string): number {
+	if (node === null) return 0;
+	if (node.kind === NodeKind.Identifier) {
+		const id = node.data as IdentifierData;
+		if (id.name === paramName) return 1;
+		return 0;
+	}
+	if (node.kind === NodeKind.BinaryExpr) {
+		const bd = node.data as BinaryExprData;
+		return countRefsInNode(bd.left, paramName) + countRefsInNode(bd.right, paramName);
+	}
+	if (node.kind === NodeKind.CallExpr) {
+		const cd = node.data as CallExprData;
+		let count = countRefsInNode(cd.callee, paramName);
+		let j = 0;
+		while (j < cd.arguments.length) {
+			count = count + countRefsInNode(cd.arguments[j], paramName);
+			j = j + 1;
+		}
+		return count;
+	}
+	if (node.kind === NodeKind.ExprStmt) {
+		const ed = node.data as ExprStmtData;
+		return countRefsInNode(ed.expr, paramName);
+	}
+	if (node.kind === NodeKind.VariableDecl) {
+		const vd = node.data as VariableDeclData;
+		if (vd.initializer !== null) return countRefsInNode(vd.initializer, paramName);
+		return 0;
+	}
+	if (node.kind === NodeKind.IfStmt) {
+		const id = node.data as IfStmtData;
+		return countRefsInNode(id.condition, paramName)
+			+ countRefsInNode(id.consequent, paramName)
+			+ countRefsInNode(id.alternate, paramName);
+	}
+	if (node.kind === NodeKind.BlockStmt) {
+		const bd = node.data as BlockStmtData;
+		let count = 0;
+		let k = 0;
+		while (k < bd.statements.length) {
+			count = count + countRefsInNode(bd.statements[k], paramName);
+			k = k + 1;
+		}
+		return count;
+	}
+	if (node.kind === NodeKind.MemberExpr) {
+		const md = node.data as MemberExprData;
+		return countRefsInNode(md.object, paramName);
+	}
+	return 0;
+}
+
+function nodeRefsParam(node: Node, paramName: string): boolean {
+	return countRefsInNode(node, paramName) > 0;
+}
+
+// Unused — kept for signature compatibility with plan
+function countParamUsage(paramName: string, stmts: Node[], total: number, returns: number): void {}
+
+function registerFuncParams(paramNames: string[], paramTypes: Type[], dctx: DrcContext, loc: SourceLocation, body: Node): void {
 	if (dctx.ctx.checkerCtx === null) return;
 	for (let pi = 0; pi < paramNames.length && pi < paramTypes.length; pi += 1) {
 		const pName = paramNames[pi];
@@ -549,7 +661,9 @@ function registerFuncParams(paramNames: string[], paramTypes: Type[], dctx: DrcC
 		if (!isEnvParam(pName)) {
 			const pRcInfo = classifyType(paramTypes[pi], dctx.ctx);
 			if (pRcInfo.needsCleanup) {
-				registerVar(dctx, pName, pRcInfo, false);
+				// Sink inference: if param is only used in return position, mark as cursor (skip cleanup)
+				const isSink = body !== null && isParamSinkCandidate(pName, body);
+				registerVar(dctx, pName, pRcInfo, isSink);
 			}
 		}
 	}
@@ -572,7 +686,7 @@ function processFuncBodyWithParams(body: Node, fnName: string, paramNames: strin
 		if (fnSym !== null && fnSym.symbolType !== null) {
 			const fnType = fnSym.symbolType;
 			if (fnType.kind === TypeKind.Function) {
-				registerFuncParams(fnType.typeNames, fnType.typeChildren, dctx, loc);
+				registerFuncParams(fnType.typeNames, fnType.typeChildren, dctx, loc, body);
 			}
 		}
 	} else if (dctx.ctx.checkerCtx !== null && paramNames.length > 0) {
@@ -584,7 +698,8 @@ function processFuncBodyWithParams(body: Node, fnName: string, paramNames: strin
 			if (pSym !== null) {
 				const pRcInfo = classifyType(pSym.symbolType, dctx.ctx);
 				if (pRcInfo.needsCleanup && !isEnvParam(paramNames[pi])) {
-					registerVar(dctx, paramNames[pi], pRcInfo, false);
+					const isSink = isParamSinkCandidate(paramNames[pi], body);
+					registerVar(dctx, paramNames[pi], pRcInfo, isSink);
 				}
 			}
 		}
@@ -968,6 +1083,20 @@ function processCompoundAssignment(stmt: Node, bd: BinaryExprData, idx: number, 
 
 	const rcInfo = classifyType(sym.symbolType, dctx.ctx);
 	if (!rcInfo.needsCleanup) return stmt;
+
+	// Fused string append: s += rhs → ms_string_append(&s, rhs) (in-place, no alloc)
+	// Skip when rhs aliases s (self-append s += s needs save/concat/destroy)
+	if (rcInfo.rcKind === RcKind.String && bd.operator === "+=") {
+		if (!deepAliases(leftD.name, bd.right)) {
+			const addrOf = makeUnary("&", makeIdent(leftD.name, loc), loc);
+			const appendCall = makeCall(
+				makeIdent("ms_string_append", loc),
+				[addrOf, bd.right],
+				loc
+			);
+			return makeExprStmt(appendCall, loc);
+		}
+	}
 
 	// Desugar: x += y  ->  { const $old = x; x = x op y; destroy($old); }
 	// The RHS (x op y) produces a fresh value, so no copy needed.
@@ -1356,6 +1485,19 @@ testGroup("DRC Inject Sink Params", () => {
 		check(isEnvParam("__envP_raw"));
 		check(!isEnvParam("param"));
 		check(!isEnvParam("env"));
+	});
+	test("isParamSinkCandidate detects return-only", () => {
+		// Build: { return s; } — s only used as return arg → sink
+		const body = makeBlock([makeReturn(makeIdent("s", testLoc()), testLoc())], testLoc());
+		check(isParamSinkCandidate("s", body));
+	});
+	test("isParamSinkCandidate rejects used param", () => {
+		// Build: { const x = s; return x; } — s used in var init → not sink
+		const body = makeBlock([
+			makeVarDecl("x", makeIdent("s", testLoc()), DeclKind.Const, testLoc()),
+			makeReturn(makeIdent("x", testLoc()), testLoc()),
+		], testLoc());
+		check(!isParamSinkCandidate("s", body));
 	});
 	test("recordMoveInContext finds correct scope", () => {
 		const dctx = testDrcContext("const x = 1;");

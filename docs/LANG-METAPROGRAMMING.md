@@ -1,16 +1,76 @@
 # MetaScript Metaprogramming
 
-Compile-time code execution, AST manipulation, and code generation. Three tiers of capability, each building on the previous.
+Compile-time code execution and AST manipulation. Macros are **normal MetaScript code** that imports from `std/metaprogramming` and runs in the Raiser bytecode VM during compilation. No special macro API — the compiler's own typed AST is the macro author's API.
 
-## Overview
+## Core Principle: `Node` is Compile-Time Only
+
+`Node` (from `std/metaprogramming`) is a **compile-time-only type** — like Nim's `NimNode`. Values of type `Node` exist only during compilation and are erased before codegen. Any `Node` remaining in the AST at codegen is a compile error.
+
+Multiple sources produce `Node` values — all follow the same rules:
+
+```ms
+import { Node, NodeKind, createNode } from "std/metaprogramming";
+
+// All of these produce Node — all compile-time only:
+const el = <View><Text>hello</Text></View>;           // JSX → Node
+const tmpl = quote { const x = 42; };                 // quote → Node
+const node = createNode(NodeKind.BinaryExpr, ...);    // manual → Node
+
+// Macros consume Node and return runtime AST:
+const app = @jsx(el);              // Node → runtime code
+const code = @inject(tmpl);        // Node → runtime code
+
+// Same Node, different macros, different output:
+const webApp = @webJsx(el);        // → DOM calls
+const nativeApp = @nativeJsx(el);  // → UIKit calls
+
+// Direct application (most common):
+const app = @jsx <View><Text>hello</Text></View>;
+```
+
+**One invariant: zero `Node` at codegen.** Everything else is free.
+
+### How it works
+
+1. **Checker** recognizes `Node` type as compile-time only (like Nim's `tfTriggersCompileTime` flag)
+2. **Propagation** — any function/interface containing `Node` in its signature becomes compile-time only
+3. **Macro expansion** — when a macro argument is a const identifier whose initializer is a `Node` value, the initializer AST is inlined as the macro's argument
+4. **Erasure** — after all macros expand, `Node`-only const declarations are erased from the AST
+5. **Safety net** — any `Node` surviving to codegen = compile error: *"compile-time Node not consumed by a macro"*
+
+### Nim comparison
+
+| | Nim | MetaScript |
+|--|-----|-----------|
+| Compile-time AST type | `NimNode` | `Node` |
+| Enforcement | `tfTriggersCompileTime` flag propagates to containers/procs | Checker flag, same propagation |
+| Backend safety | C/JS codegen emits hard error if NimNode leaks | Same |
+| Storage scope | Only inside macros/`static` blocks | Also at module scope (const only) — slightly more permissive |
+| Erasure | Implicit (macro bodies only generate VM bytecode) | Explicit (Node consts erased after expansion) |
+
+The module-scope extension enables the "store and reuse" pattern (`const el = <View/>; @jsx(el); @native(el);`) that Nim doesn't support. Cost: ~15 lines of const-inlining logic in macro expansion.
+
+## Architecture
 
 ```
-Tier 1: @comptime { }          — compile-time evaluation (constants, config)
-Tier 2: macro + quote { }      — AST-level code generation (@derive, custom transforms)
-Tier 3: @target / @emit        — backend-specific code injection
+macro.ms  -> [Parse] -> [Check] -> [Transform] -> Raiser VM (compile-time)
+                                                       |
+                                                 receives target Node
+                                                 returns modified Node
+                                                       |
+app.ms    -> [Parse] -> [Check] -> [MacroExpand] -> [Transform] -> [Analyze] -> [Codegen]
+                                       ^
+                                  find @macroName on declaration
+                                  inline Node const arguments
+                                  load macro .ms -> eval in Raiser
+                                  pass target Node -> get back modified Node
+                                  splice result into AST
+                                  erase consumed Node consts
 ```
 
-All metaprogramming runs at **compile time** — zero runtime cost. The Raiser bytecode VM executes compile-time code in-process (~0.5ms startup).
+Macros live in **phases 1-3 only**. Fully type-checked MetaScript, never reaches C/JS codegen. The Raiser VM is dynamically typed at runtime, but the source was already validated by the checker — same model as TypeScript (and Haxe).
+
+`std/metaprogramming` re-exports `Node`, `NodeKind`, `createNode`, all `*Data` type aliases, `Type`, and `TypeKind` from compiler internals. Macro authors never import from `ast/node` directly.
 
 ## Tier 1: @comptime — Compile-Time Evaluation
 
@@ -19,300 +79,355 @@ All metaprogramming runs at **compile time** — zero runtime cost. The Raiser b
 Evaluate a block at compile time; the result replaces the block in the AST as a literal.
 
 ```ms
-// Expression position — result folded into AST
-const SIZE = @comptime { return 4 * 1024; };           // → 4096
-const GREETING = @comptime { return "hello world"; };  // → "hello world"
+const SIZE = @comptime { return 4 * 1024; };           // -> 4096
+const GREETING = @comptime { return "hello world"; };  // -> "hello world"
 
-// Local computation
 const TABLE = @comptime {
     const items: number[] = [];
     let i = 0;
-    while (i < 10) {
-        items.push(i * i);
-        i = i + 1;
-    }
+    while (i < 10) { items.push(i * i); i = i + 1; }
     return items;
 };
-// → [0, 1, 4, 9, 16, 25, 36, 49, 64, 81]
-
-// Objects
-const CONFIG = @comptime {
-    return { maxRetries: 3, timeout: 5000, debug: false };
-};
+// -> [0, 1, 4, 9, 16, 25, 36, 49, 64, 81]
 ```
 
-### Supported return types
-
-| Type | Example | AST Node |
-|------|---------|----------|
-| number | `return 42;` | NumberLiteral |
-| string | `return "hello";` | StringLiteral |
-| boolean | `return true;` | BooleanLiteral |
-| null | `return null;` | NullLiteral |
-| array | `return [1, 2, 3];` | ArrayLiteral |
-| object | `return { x: 10 };` | ObjectLiteral |
-
-### Pipeline position
-
-```
-Parse → Check → Transform → ComptimeEval → Analyze → Codegen
-                                 ↑
-                          evaluateComptimeBlocks()
-                          walks AST, finds ComptimeBlock nodes,
-                          evaluates via Raiser VM, replaces with literals
-```
-
-### Implementation
-
-| File | Role |
-|------|------|
-| `src/ast/node.ms` | `NodeKind.ComptimeBlock`, `ComptimeBlockData { comptimeBody: Node }` |
-| `src/parser/statements/core.ms` | Statement-level `@comptime { }` intercept |
-| `src/parser/expressions/core.ms` | Expression-level `@comptime { }` in parsePrimary |
-| `src/parser/statements/declaration.ms` | Fallback in parseMacroInvocation |
-| `src/compiler/comptime.ms` | `evaluateComptimeBlocks()` — walker + evaluator |
-| `src/codegen/raiser/eval.ms` | `evalASTFull()` — AST-based Raiser pipeline |
-
-### Current limitations
-
-- **Self-contained only** — no access to surrounding scope (`const N = 10; @comptime { return N; }` won't work)
-- **Expression-position only** — statement-position @comptime (side effects) not yet handled
-- **No imports** inside @comptime blocks
-- **No type propagation** — checker sees @comptime result as `unknown`
+Supports: number, string, boolean, null, array, object returns. Each maps to the corresponding literal AST node.
 
 ### Planned enhancements
 
 1. **Scope capture** — read surrounding `const` declarations (immutable values only)
-2. **@comptime functions** — `@comptime function hash(s: string): number { ... }` evaluated at every call site
-3. **Type inference** — run comptime eval during checking, propagate result type
+2. **@comptime functions** — `@comptime function f(): number { ... }` evaluated at every call site
+3. **Type inference** — propagate result type back to checker
 4. **Statement-position** — `@comptime { assert(SIZE > 0); }` as compile-time assertions
-5. **@compileError** — `@comptime { if (!valid) @compileError("bad config"); }` static error reporting
+5. **@compileError** — static error reporting from compile-time code
 
-## Tier 2: Macros — AST Code Generation
+## Tier 2: Macros — Typed AST Manipulation
 
 **Status: Parsing DONE, expansion NOT YET**
 
-User-defined compile-time functions that receive and transform AST nodes.
+Macros receive `Node` values (AST), walk them node-by-node, analyze/reclassify/restructure, and return transformed AST. The compiler's own typed `Node` is the macro's input and output. `node.nodeType` gives type info after phase 2.
 
-### macro declaration
+### The Core Concept: AST In -> Manipulate -> AST Out
 
-```ms
-macro deriveEq(target) {
-    // target = the decorated class/interface AST node
-    const fields = target.fields;
+A macro is a function that receives `Node`, inspects it however it wants, builds new `Node` trees, and returns the result. The returned AST replaces the original in the compilation pipeline.
 
-    const method = quote {
-        equals(other: ${target.name}): boolean {
-            return ${genFieldComparisons(fields)};
-        }
-    };
-
-    target.addMethod(method);
-    return target;
-}
+```
+User writes:        const el = <View style={s}><Text>hello</Text></View>;
+                    const app = @jsx(el);
+                                      |
+                              Macro expansion inlines el's JSX AST
+                                      |
+                                      v
+                    +-------------------------------------------+
+                    | User's macro receives JSXElement node     |
+                    |                                           |
+                    |  1. Walk JSX children                     |
+                    |  2. Identify <View> -> platform element   |
+                    |  3. Extract style attribute                |
+                    |  4. Detect "hello" is static text         |
+                    |  5. Build: makeElement("View")            |
+                    |     + bindProps(el, {style: s})           |
+                    |     + insertChild(Text, el)               |
+                    |  6. Return non-JSX AST (runtime code)     |
+                    +-------------------------------------------+
+                                      |
+                              el const erased (was only macro input)
+                                      |
+                                      v
+Compiler continues: [Transform] -> [Analyze] -> [Codegen]
+                    (zero Node values remain)
 ```
 
-- `macro` keyword declares a compile-time function
-- First parameter receives the decorated AST node
-- Returns modified AST (or new AST via `quote`)
-- Body executes in the Raiser VM at compile time
+### Macro Invocation Forms
 
-### macro invocation (as decorator)
+Macros can receive any `Node` type as argument — blocks, functions, expressions:
+
+| Form | User writes | Macro receives |
+|------|------------|----------------|
+| Decorator | `@log class Foo {}` | `ClassDecl` node |
+| Block | `@routes { GET "/" -> home; }` | `BlockStmt` node |
+| Function | `@effect(() => { body })` | `ArrowFunction` node (params + body) |
+| Expression | `@validate(x + y)` | `BinaryExpr` node |
+| JSX | `@jsx <View>...</View>` | `JSXElement` node |
+| Const ref | `@jsx(el)` where `const el = <View/>` | `JSXElement` node (inlined) |
+
+The function form is particularly useful — the macro gets **parameter context** along with the body:
 
 ```ms
-@deriveEq
-class Point {
-    x: number;
-    y: number;
-}
+@effect((count: number) => {
+    console.log("Count changed: " + String(count));
+    document.title = String(count);
+});
+// Macro sees: arrowParams = ["count"], arrowParamTypes = ["number"]
+//             arrowBody = the two statements
+// -> analyzes body for reactive deps on `count`
+// -> wraps in createEffect with dependency tracking on the count signal
+```
 
-// After expansion:
-class Point {
-    x: number;
-    y: number;
-    equals(other: Point): boolean {
-        return this.x === other.x && this.y === other.y;
+### Full Example: JSX Transform Macro
+
+JSX in MetaScript is **pure AST** (`Node` values) — the compiler produces JSXElement/JSXText/etc. nodes but does NOT transform them. The developer writes a macro that decides what JSX means. This is more powerful than JavaScript, where the compiler hardcodes `React.createElement`.
+
+**The developer defines a macro:**
+
+```ms
+import { Node, NodeKind, createNode, JSXElementData } from "std/metaprogramming";
+
+// This macro receives JSX AST and returns imperative code AST
+macro jsx(node: Node): Node { /* see "How it works internally" below */ }
+```
+
+**What the user writes:**
+
+```ms
+// Store as compile-time Node (reusable template)
+const ui = <View style={styles.container}>
+    <Text>Count: {String(count())}</Text>
+    <Button onPress={increment}>
+        <Text>Add</Text>
+    </Button>
+</View>;
+
+// Transform for different targets
+const webApp = @webJsx(ui);      // → DOM manipulation code
+const nativeApp = @nativeJsx(ui); // → UIKit calls
+
+// Or direct (most common)
+const app = @jsx <View><Text>hello</Text></View>;
+```
+
+**What the macro produces (returned AST, before later pipeline phases):**
+
+```ms
+const app = () => {
+    const el = makeElement("View");
+    bindProps(el, { style: styles.container });
+
+    // {String(count())} — detected as REACTIVE (contains count() call)
+    // -> wrapped in createEffect for automatic re-render
+    const textEl = makeElement("Text");
+    const dispose = createEffect(() => {
+        updateTextContent(textEl, "Count: " + String(count()));
+    });
+    onCleanup(dispose);
+    insertChild(textEl, el);
+
+    // <Button> with static <Text>Add</Text> — no effect wrapper needed
+    const btnEl = makeElement("Button");
+    bindProps(btnEl, { onPress: increment });
+    const btnText = makeElement("Text");
+    updateTextContent(btnText, "Add");
+    insertChild(btnText, btnEl);
+    insertChild(btnEl, el);
+
+    return el;
+};
+```
+
+### How it works internally
+
+The JSX parser produces its own AST nodes (JSXElement, JSXText, JSXExpressionContainer) — all `Node` values, compile-time only. The user's macro walks this tree and returns regular AST nodes that codegen understands:
+
+```ms
+function processJSXElement(node: Node, out: Node[], loc: SourceLocation): void {
+    const jsx = node.data as JSXElementData;
+    const tag = jsx.tagName;
+
+    if (isBuiltInElement(tag)) {
+        // <View>, <Text>, <Button>, <Image>, <ScrollView>
+        processBuiltIn(tag, jsx.attributes, jsx.children, out, loc);
+    } else {
+        // <Counter>, <UserCard> — user component, call as function
+        processComponent(tag, jsx.attributes, jsx.children, out, loc);
     }
 }
 ```
 
-### quote / unquote (quasiquotation)
+**`processBuiltIn`** is the heart — classifies attributes and analyzes children:
 
 ```ms
-// quote captures a block as an AST node (not executed)
-const ast = quote { const x = 42; };
+function processBuiltIn(tag: string, attrs: Node[], children: Node[],
+                         out: Node[], loc: SourceLocation): void {
+    // 1. Create element
+    out.push(makeVarDecl("el", makeCall("makeElement", [makeStr(tag, loc)], loc), loc));
 
-// ${expr} interpolation splices a computed AST into the template
-const name = "count";
-const init = quote { 0 };
-const decl = quote { const ${name} = ${init}; };
-```
+    // 2. Classify attributes — route to different runtime APIs
+    const animatable = extractAnimatable(attrs);   // opacity, scale, translateX
+    const events = extractEvents(attrs);           // onPress, onScroll
+    const remaining = extractRemaining(attrs);     // style, className, etc.
 
-- `quote { }` → `QuoteExpr` node, body stored as AST
-- `${expr}` → interpolation, evaluated at macro expansion time, result spliced into quoted AST
-- Self-hosted parser handles `quote { }` but `${}` interpolation is not yet implemented
+    // 3. Bind each category differently
+    bindAnimatableProps(animatable, out, loc);      // -> bindStyleProp() subscription
+    bindEventHandlers(events, out, loc);            // -> addEventListener()
+    bindStaticProps(remaining, out, loc);            // -> bindProps()
 
-### @derive — built-in attribute macros
+    // 4. Process children — the key part
+    let i = 0;
+    while (i < children.length) {
+        const child = children[i];
 
-```ms
-@derive(Eq, Hash)
-class Token {
-    kind: TokenKind;
-    value: string;
+        if (child.kind === NodeKind.JSXText) {
+            // Static text: "Add" — direct insertion, zero overhead
+            out.push(makeCall("insertChild", [makeStr(child.text, loc), ident("el")], loc));
+
+        } else if (child.kind === NodeKind.JSXExpressionContainer) {
+            // Expression: {String(count())} — check for reactivity
+            const expr = child.expression;
+
+            if (containsReactiveCall(expr)) {
+                // REACTIVE — wrap in createEffect
+                out.push(wrapInEffect(expr, loc));
+            } else {
+                // STATIC expression — evaluate once
+                out.push(makeCall("insertChild", [expr, ident("el")], loc));
+            }
+
+        } else if (child.kind === NodeKind.JSXElement) {
+            // Nested element — recurse
+            processJSXElement(child, out, loc);
+        }
+        i = i + 1;
+    }
 }
 ```
 
-Built-in derive traits (planned):
+**`containsReactiveCall`** — the compile-time expression analyzer:
 
-| Trait | Generates | Notes |
-|-------|-----------|-------|
-| `Eq` | `equals(other): boolean` | Structural field-by-field comparison |
-| `Hash` | `hash(): number` | FNV-1a over all fields |
-| `Clone` | `clone(): T` | Deep copy |
-| `Debug` | `toString(): string` | Debug string representation |
-| `Serialize` | `toJSON(): string` | JSON serialization |
-
-### Implementation plan
-
+```ms
+function containsReactiveCall(node: Node): boolean {
+    if (node.kind === NodeKind.CallExpr) {
+        const name = getCalleeName((node.data as CallExprData).callee);
+        if (isReactiveSymbol(name)) return true;
+    }
+    if (node.kind === NodeKind.BinaryExpr) {
+        const bin = node.data as BinaryExprData;
+        return containsReactiveCall(bin.left) || containsReactiveCall(bin.right);
+    }
+    if (node.kind === NodeKind.MemberExpr) {
+        return containsReactiveCall((node.data as MemberExprData).object);
+    }
+    return false;
+}
 ```
-Phase 1: MacroExpander pass (walks AST, finds MacroInvocation → MacroDecl, expands)
-Phase 2: quote { } expansion (QuoteExpr → cloned AST subtree)
-Phase 3: ${} interpolation in quote blocks
-Phase 4: Built-in @derive traits (Eq first, then Hash, Clone, Debug)
-Phase 5: Standard library macros (std/macros/derive.ms)
+
+`"Count: " + String(count())` contains `count()` which is reactive, so the whole expression gets wrapped in `createEffect`. `"Add"` is static text — no wrapping, zero overhead. This selective wrapping is only possible with compile-time AST analysis.
+
+### Why this can't be done with functions
+
+- **AST access**: The macro sees `count()` as a `CallExpr` node. A runtime function only sees `"Count: 5"` — can't know which parts are reactive.
+- **Selective wrapping**: Static children get zero overhead. Reactive children get `createEffect`. Requires compile-time analysis.
+- **Attribute reclassification**: `style`, `onPress`, `opacity` silently route to different runtime APIs. A function can't restructure the call site.
+- **Zero-cost abstraction**: JSX compiles away entirely into `makeElement`/`insertChild`/`bindProps` calls. No virtual DOM, no diffing.
+- **Developer control**: Unlike JS where the compiler decides JSX semantics, in MetaScript the developer writes the macro — same JSX syntax can target React-style vDOM, SolidJS-style reactivity, native platform calls, or anything else.
+
+### quote / unquote (syntactic sugar)
+
+Building AST manually via `createNode()` is verbose. `quote { }` provides a template shorthand:
+
+```ms
+// Manual:
+createNodeAt(NodeKind.VariableDecl, { declName: "x", declKind: DeclKind.Const, ... }, loc);
+
+// quote — parsed into AST template, ${} splices values:
+const node = quote { const ${varName} = ${initValue}; };
 ```
 
-| File | Role | Status |
-|------|------|--------|
-| `src/ast/node.ms` | `MacroDecl`, `MacroInvocation`, `QuoteExpr` NodeKinds | DONE |
-| `src/parser/statements/declaration.ms` | `parseMacroDecl`, `parseMacroInvocation` | DONE |
-| `src/parser/expressions/core.ms` | `quote { }` parsing | DONE |
-| `src/checker/collectPass.ms` | Macro symbol registration | DONE |
-| `src/compiler/macroExpand.ms` | Macro expansion pass | TODO |
-| `src/compiler/quoteExpand.ms` | Quote/unquote expansion | TODO |
+`quote` produces a `Node` value (compile-time only, same as JSX and `createNode`). Everything it does can be done with `createNode()` directly. Parser handles `quote { }` already; `${}` interpolation is TODO.
 
 ## Tier 3: Directives — Backend-Specific Control
 
 **Status: Parsed + collected, expansion partial**
 
-### @target — conditional compilation
-
 ```ms
-@target("c") {
-    extern function malloc(size: number): number;
-    extern function free(ptr: number): void;
-}
-
-@target("js") {
-    function allocate(size: number): number {
-        return 0; // JS doesn't need manual allocation
-    }
-}
-```
-
-- Strips the block entirely if compiling for a different backend
-- Parsed as `MacroInvocation` with block body
-- Checker should strip mismatched blocks during collect pass
-
-### @emit — inline code injection
-
-```ms
+@target("c") { extern function malloc(size: number): number; }
+@target("js") { function allocate(size: number): number { return 0; } }
 @emit("#include <stdio.h>");
-
-function print(msg: string): void {
-    @emit("printf(\"%s\\n\", msg.data);");
-}
+@include("mylib.h");  @link("libcrypto.a");  @passC("-DDEBUG=1");  @passL("-lssl");
 ```
 
-- Injects raw backend code at the current position
-- Backend-specific (C strings for C target, JS for JS target)
-- Use sparingly — breaks portability
+| Directive | Status |
+|-----------|--------|
+| `@include` / `@link` / `@passC` / `@passL` | DONE |
+| `@target("backend")` | Parsed, expansion TODO |
+| `@emit("code")` | Parsed, expansion TODO |
 
-### @include / @link / @passC / @passL — build directives
+## Node Serialization — The Bridge
 
-```ms
-@include("mylib.h");        // -I path for C compiler
-@link("libcrypto.a");       // link library
-@passC("-DDEBUG=1");        // pass flag to C compiler
-@passL("-lssl");            // pass flag to linker
-```
-
-- Collected during checker Pass 1 (collectPass)
-- Stored on `CheckerContext.compilerFlags`
-- Forwarded to `compileCFile` / `linkObjects` in compile.ms
-
-| Directive | collectPass field | Status |
-|-----------|-------------------|--------|
-| `@include("file")` | `ctx.includes` | DONE |
-| `@link("lib")` | `ctx.links` | DONE |
-| `@passC("flag")` | `ctx.compilerFlags` | DONE |
-| `@passL("flag")` | `ctx.compilerFlags` | DONE |
-| `@target("backend")` | strip/keep block | Parsed, expansion TODO |
-| `@emit("code")` | inline injection | Parsed, expansion TODO |
-
-## @comptime functions (future)
-
-Decorator form — marks a function as compile-time-only:
-
-```ms
-@comptime
-function fib(n: number): number {
-    if (n <= 1) return n;
-    return fib(n - 1) + fib(n - 2);
-}
-
-const FIB10 = fib(10);  // evaluated at compile time → 55
-```
-
-- Function body runs in Raiser VM when called with constant arguments
-- Result folded into AST at every call site
-- Non-constant arguments → compile error
-- Enables: lookup tables, compile-time validation, const-evaluated configs
-
-## Roadmap
+Macros run in the Raiser VM but manipulate compiler `Node` structs. Bidirectional conversion:
 
 ```
-DONE    @comptime { } expression-position MVP
-        Parser for macro, quote, all directives
-        collectPass for @include/@link/@passC/@passL
-        @runtime/@builtin decorator handling
-
-TODO    @comptime scope capture (read outer const)
-        @comptime functions (decorator form)
-        @comptime type propagation
-        @target block stripping
-        @emit code injection
-        MacroExpander pass
-        quote expansion (no interpolation)
-        quote ${} interpolation
-        @derive(Eq) built-in
-        @derive(Hash, Clone, Debug, Serialize)
-        std/macros/derive.ms (self-hosted derive)
-        @compileError
-        Statement-position @comptime
+Node  --nodeToValue()-->  RaiserValue (Object with named fields)
+      <--valueToNode()--  (extends existing comptime.ms literal converter)
 ```
 
-## Architecture Notes
+The checker validates macro code statically. The Raiser executes it dynamically with field access. Type safety at compile time, not runtime.
 
-### VM choice
+## Phased Implementation Plan
 
-The self-hosted compiler uses the **Raiser bytecode VM** for all compile-time execution. This differs from the reference compiler which uses Hermes (Facebook's JS engine). The Raiser VM:
-- Starts in ~0.5ms (no JIT warmup)
-- Executes MetaScript directly (no JS transpilation step)
-- Shares the same AST/type infrastructure as the compiler
-- Limitation: no network/filesystem access inside @comptime (reference compiler's Hermes has `fetch()`)
+### Phase A: Node Serialization (Node <-> RaiserValue)
 
-### Macro expansion pipeline position
+**Prerequisite for all macro expansion. Can be built and tested independently.**
+
+| Task | Description |
+|------|-------------|
+| A1 | `nodeToValue()` — recursive Node -> RaiserObject for all 40+ NodeKinds |
+| A2 | `valueToNode()` — extend beyond literals, reverse of A1 |
+| A3 | Round-trip tests: node -> value -> node preserves structure |
+| A4 | `typeToValue()` / `valueToType()` — serialize Type for nodeType access |
+
+### Phase B: Macro Expansion Pass
+
+**Core macro execution. Depends on Phase A.**
+
+| Task | Description |
+|------|-------------|
+| B1 | Walk AST, find DecoratedDecl with MacroInvocation decorators |
+| B2 | Macro lookup by name (same file, then imports) |
+| B3 | Compile macro: parse -> check -> transform -> Raiser bytecode (cached) |
+| B4 | Execute: serialize target, call in Raiser VM, deserialize result, splice |
+| B5 | Re-expansion with depth limit (macros can generate macro invocations) |
+| B6 | Node const inlining: resolve const identifiers to their Node initializers |
+| B7 | Node const erasure: remove consumed Node-only declarations from AST |
+| B8 | Safety check: error on any remaining Node values in AST |
+
+**File:** `src/compiler/macroExpand.ms`
+
+### Phase C: quote / unquote Interpolation
+
+| Task | Description |
+|------|-------------|
+| C1 | Parser: `in_quote_context`, parse `${ expr }` as interpolation |
+| C2 | Generate `__ms_interp_N` placeholder identifiers |
+| C3 | Substitute placeholders with evaluated expressions at expansion time |
+
+### Phase D: Utility Functions
+
+| Task | Description |
+|------|-------------|
+| D1 | `genSym(prefix)` — unique identifier generation |
+| D2 | `@compileError(msg)` — compile-time error reporting |
+| D3 | `@comptime` scope capture — read surrounding const declarations |
+| D4 | `walkNode(node, visitor)`, `mapNode(node, transform)` — traversal helpers |
+
+### Phase E: Directives Expansion
+
+`@target` block stripping, `@emit` code injection, `@comptime` functions, statement-position `@comptime`. Independent of macro expansion.
+
+### Dependency Graph
 
 ```
-Parse → Check → Monomorphize → MacroExpand → Transform → ComptimeEval → Analyze → Codegen
-                                    ↑
-                              Runs user macros (@derive etc.)
-                              before transforms normalize AST
+A (serialization) -> B (expansion) -> C (quote interpolation)
+D (utilities)    -- independent, parallel with B/C
+E (directives)   -- independent, parallel with everything
 ```
 
-Macros run **after** type checking (so they can inspect types) but **before** transforms (so generated code goes through the full lowering pipeline).
+## Key Design Decisions
 
-### Hygiene
-
-Macro-generated identifiers use `genSym()` to produce unique names (`__ms_derive_0`, `__ms_derive_1`, ...) avoiding conflicts with user code. Not full hygienic macros (Scheme-style) — uses name mangling similar to Rust's `proc_macro` approach.
+- **`Node` is compile-time only** — same proven model as Nim's `NimNode`. JSX, `quote`, `createNode` all produce `Node`. Zero `Node` at codegen.
+- **No special macro API** — compiler's own AST types are the API. Same proven approach as Haxe (10+ years production). No `MacroContext`, `ASTBuilder`, or `MacroTarget`.
+- **Type-checked macros** — checker validates Node access, createNode() calls, `as` casts to `*Data` types before macro ever runs.
+- **Module-scope Node consts** — extends Nim's model to allow `const el = <View/>` at top level, enabling reuse across multiple macros. Erased after expansion.
+- **node.nodeType over Context.typeof()** — type info already on every Node after phase 2. No separate API call needed (simpler than Haxe).
+- **quote is sugar** — everything `quote { }` does can be done with `createNode()`. Complex macros use createNode() for full control.
+- **Raiser VM is sufficient** — executes MetaScript natively, ~0.5ms startup, negligible compile-time cost.
+- **std/metaprogramming as stable API** — decouples macro authors from internal file paths.

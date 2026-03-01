@@ -49,6 +49,12 @@ export function formatToken(token: Token): string {
 	return `[${tokenKindToString(token.kind)}: '${token.value}' at line ${token.line.toString()}]`;
 }
 
+// Returns true for Ident and all keyword tokens.
+// Used by member expression parsing to allow keywords as property names (e.g., obj.get, obj.set).
+export function isIdentOrKeyword(kind: TokenKind): boolean {
+	return kind === TokenKind.Ident || ((kind as number) >= (TokenKind.Break as number) && kind !== TokenKind.Eof);
+}
+
 // Map identifier string to keyword TokenKind (or Ident)
 // Compiler generates FNV-1a hash table for 80+ string cases — O(1) lookup
 export function identToKeyword(ident: string): TokenKind {

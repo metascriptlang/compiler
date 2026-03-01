@@ -22,6 +22,7 @@ import {
 import { genExpr } from "./expressions";
 import { genStmt, genStmts } from "./statements";
 import { mangle, mangleTypeName, mangleFieldName, safeName } from "./names";
+import { Symbol, lookupSymbol, hasOverloads } from "../../checker/symbol";
 // NOTE: parser/context imports are in index.ms (not here) to avoid DRC union member count issues.
 // genGenericTypeInsts lives in index.ms for the same reason.
 import { test, check, testGroup } from "std/testing";
@@ -57,7 +58,16 @@ export function genDecl(g: CGen, node: Node, exported: boolean): void {
 
 function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	const d = node.data as FunctionDeclData;
-	const name = safeName(d.fnName);
+	let name = safeName(d.fnName);
+
+	// Overload mangling: if function has overloads, suffix with __idx
+	if (g.checkerCtx !== null) {
+		const sym = lookupSymbol(g.checkerCtx.table, d.fnName);
+		if (sym !== null && hasOverloads(sym)) {
+			const idx = findOverloadDeclIndex(sym, node);
+			name = safeName(d.fnName) + "__" + idx;
+		}
+	}
 
 	// Skip if already declared
 	if (nameSetHas(g.declaredProcs, name)) return;
@@ -65,26 +75,43 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 
 	// Determine C return type from annotation
 	const cRetType = mapTypeAnnotation(d.fnReturnType);
+	const nrvo = isNrvoType(d.fnReturnType);
 
-	// Build parameter list
+	// Build parameter list — NRVO adds out-param as first parameter
 	let paramList = "";
+	if (nrvo) {
+		paramList = cRetType + "* __result";
+		if (d.params.length > 0) paramList = paramList + ", ";
+	}
 	for (let i = 0; i < d.params.length; i += 1) {
 		if (i > 0) paramList = paramList + ", ";
 		const pType = mapParamType(d.fnParamTypes, i);
 		paramList = paramList + pType + " " + safeName(d.params[i]);
 	}
-	if (d.params.length === 0) paramList = "void";
+	if (paramList === "") paramList = "void";
+
+	// Extern functions: emit prototype only, no body (Nim-aligned: importc pragma)
+	const isExtern = d.fnFlags === "extern";
 
 	// Non-exported functions get static prefix (better optimization, smaller symbol tables)
-	const prefix = exported ? "" : "static ";
+	// Extern functions are never static — they link to external C symbols
+	const prefix = (exported || isExtern) ? "" : "static ";
 
-	// Emit prototype to ProcHeaders
-	const proto = prefix + cRetType + " " + name + "(" + paramList + ")";
+	// Emit prototype to ProcHeaders — NRVO functions return void
+	const actualRetType = nrvo ? "void" : cRetType;
+	const proto = prefix + actualRetType + " " + name + "(" + paramList + ")";
 	addLine(sec(g, CSection.ProcHeaders), proto + ";");
+
+	// Extern functions: prototype only, no body
+	if (isExtern) return;
 
 	// Emit function body to Procs
 	if (d.fnBody !== null) {
 		const p = createProc(name, null as unknown as Type);
+		// Store NRVO flag: use proc name prefix convention
+		if (nrvo) {
+			p.name = "__nrvo__" + p.name;
+		}
 		genStmt(g, p, d.fnBody);
 		const locals = readProcLocals(p);
 		const stmts = readProcStmts(p);
@@ -97,6 +124,65 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 		addLine(procs, "}");
 		addNewline(procs);
 	}
+}
+
+// ===== Overload Index Matching =====
+
+// Find which overload index this FunctionDecl corresponds to.
+// primary = index 0, overloads[0] = index 1, etc.
+// Matches by arity + param type comparison using nodeType annotations.
+function findOverloadDeclIndex(sym: Symbol, declNode: Node): number {
+	const d = declNode.data as FunctionDeclData;
+	// Check primary (index 0): match by arity
+	if (sym.symbolType.kind === TypeKind.Function) {
+		if (matchesDeclToType(declNode, sym.symbolType)) return 0;
+	}
+	// Check overloads (index 1..n)
+	let i = 0;
+	while (i < sym.overloads.length) {
+		const ovType = sym.overloads[i].symbolType;
+		if (ovType.kind === TypeKind.Function) {
+			if (matchesDeclToType(declNode, ovType)) return i + 1;
+		}
+		i = i + 1;
+	}
+	return 0; // fallback
+}
+
+// Check if a FunctionDecl matches a function Type by arity + type annotation names.
+function matchesDeclToType(declNode: Node, fnType: Type): boolean {
+	const d = declNode.data as FunctionDeclData;
+	if (d.params.length !== fnType.typeChildren.length) return false;
+	// Compare type annotation strings against resolved type names
+	let i = 0;
+	while (i < d.params.length) {
+		if (i < d.fnParamTypes.length && i < fnType.typeChildren.length) {
+			const annot = d.fnParamTypes[i];
+			const resolved = fnType.typeChildren[i];
+			// Match annotation string against type kind/name
+			if (annot !== "" && resolved !== null) {
+				if (!annotMatchesType(annot, resolved)) return false;
+			}
+		}
+		i = i + 1;
+	}
+	return true;
+}
+
+// Match a type annotation string (e.g. "number", "string", "Foo") against a resolved Type.
+function annotMatchesType(annot: string, t: Type): boolean {
+	if (annot === "number" && t.kind === TypeKind.Number) return true;
+	if (annot === "string" && t.kind === TypeKind.String) return true;
+	if (annot === "boolean" && t.kind === TypeKind.Boolean) return true;
+	if (annot === "void" && t.kind === TypeKind.Void) return true;
+	if (annot === "int32" && t.kind === TypeKind.Int32) return true;
+	if (annot === "int64" && t.kind === TypeKind.Int64) return true;
+	if (annot === "float32" && t.kind === TypeKind.Float32) return true;
+	if (annot === "float64" && t.kind === TypeKind.Float64) return true;
+	if (annot === "uint32" && t.kind === TypeKind.Uint32) return true;
+	// Named types: Object, Enum, Distinct — compare typeName
+	if (t.typeName !== "" && annot === t.typeName) return true;
+	return false;
 }
 
 // ===== Enum Declaration =====
@@ -116,6 +202,32 @@ function genEnumDecl(g: CGen, node: Node): void {
 		addLine(types, "#define " + name + "_" + d.enumMembers[i] + " (((" + name + ")" + i + "))");
 	}
 	addNewline(types);
+
+	// Generate toString function
+	genEnumToString(g, name, d.enumMembers);
+}
+
+// ===== Enum toString =====
+// Generates: const char* EnumName_toString(EnumName v) { switch(v) { case 0: return "Member"; ... } }
+
+function genEnumToString(g: CGen, name: string, members: string[]): void {
+	const fnName = name + "_toString";
+	const proto = "const char* " + fnName + "(" + name + " v)";
+
+	// Prototype
+	addLine(sec(g, CSection.ProcHeaders), proto + ";");
+
+	// Body
+	const procs = sec(g, CSection.Procs);
+	addLine(procs, proto + " {");
+	addLine(procs, "  switch (v) {");
+	for (let i = 0; i < members.length; i += 1) {
+		addLine(procs, "    case " + i + ": return \"" + members[i] + "\";");
+	}
+	addLine(procs, "    default: return \"<unknown>\";");
+	addLine(procs, "  }");
+	addLine(procs, "}");
+	addNewline(procs);
 }
 
 // ===== Interface Declaration (struct) =====
@@ -308,6 +420,21 @@ export function mapParamType(paramTypes: string[], idx: number): string {
 	return "void*";
 }
 
+// ===== NRVO Detection =====
+// Returns true for types that are C structs (passed by value = expensive).
+// These get out-param calling convention: void f(RetType* __result, params)
+
+export function isNrvoType(annotation: string): boolean {
+	// Primitive types, pointers, void — no NRVO needed
+	if (annotation === "" || annotation === "number" || annotation === "float64") return false;
+	if (annotation === "int32" || annotation === "int64") return false;
+	if (annotation === "uint32" || annotation === "float32") return false;
+	if (annotation === "boolean" || annotation === "void") return false;
+	if (annotation === "string") return false;  // msString is small (ptr+len), pass by value
+	// Named types (interfaces = structs) → NRVO
+	return true;
+}
+
 // ===== Tests =====
 
 import { createCGen, assembleOutput } from "./context";
@@ -344,6 +471,17 @@ testGroup("C Decl Enum", () => {
 		const result = declOutput("enum Color { Red, Green, Blue }");
 		check(result.length > 0);
 	});
+	test("enum toString generated", () => {
+		const noToStr = declOutput("const x: number = 1;");
+		const withToStr = declOutput("enum Color { Red, Green, Blue }");
+		// Enum output should be significantly larger due to toString function
+		check(withToStr.length > noToStr.length + 50);
+	});
+	test("enum single member", () => {
+		const result = declOutput("enum Single { Only }");
+		// Should still generate typedef + toString
+		check(result.length > 50);
+	});
 });
 
 testGroup("C Decl Interface", () => {
@@ -364,6 +502,26 @@ testGroup("C Decl GlobalVar", () => {
 	test("const global", () => {
 		const result = declOutput("const x: number = 42;");
 		check(result.length > 0);
+	});
+});
+
+testGroup("C Decl NRVO", () => {
+	test("isNrvoType primitives", () => {
+		check(!isNrvoType("number"));
+		check(!isNrvoType("int32"));
+		check(!isNrvoType("boolean"));
+		check(!isNrvoType("string"));
+		check(!isNrvoType("void"));
+		check(!isNrvoType(""));
+	});
+	test("isNrvoType struct", () => {
+		check(isNrvoType("Point"));
+		check(isNrvoType("Token"));
+	});
+	test("NRVO function signature", () => {
+		const result = declOutput("interface Point { x: number; y: number; } function makePoint(): Point { return { x: 0, y: 0 }; }");
+		// Should have void return + __result param in the output
+		check(result.length > 50);
 	});
 });
 

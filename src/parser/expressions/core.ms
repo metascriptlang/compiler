@@ -1,7 +1,7 @@
 // Core Expression Parser - Pratt parsing with operator precedence
 // Pattern: ~/projects/metascript/src/parser/parser.zig parseExpression()
 
-import { Token, TokenKind } from "../../lexer/token";
+import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, NodeData, Expression, createNode, QuoteExprData, BlockStmtData } from "../../ast/node";
 import { ParserState, createState, current, advance, isAtEnd, isGenericCallAhead, captureGenericTypeArgs, addExplicitTypeArg } from "../context";
 import { skipTypeAnnotation } from "../typeAnnotation";
@@ -77,7 +77,7 @@ function parseExprWithPrec(state: ParserState, minPrec: number): ExprResult {
 		if (token.kind === TokenKind.Dot) {
 			advance(state);
 			const prop = current(state);
-			if (prop.kind === TokenKind.Ident) {
+			if (isIdentOrKeyword(prop.kind)) {
 				advance(state);
 				const memberData: NodeData = {
 					object: left,
@@ -93,7 +93,7 @@ function parseExprWithPrec(state: ParserState, minPrec: number): ExprResult {
 		if (token.kind === TokenKind.QuestionDot) {
 			advance(state);
 			const prop = current(state);
-			if (prop.kind === TokenKind.Ident) {
+			if (isIdentOrKeyword(prop.kind)) {
 				advance(state);
 				left = createNode(NodeKind.MemberExpr, { object: left, property: prop.value, isOptional: true }, token);
 			}
@@ -194,7 +194,7 @@ function parseFuncExprBody(state: ParserState, token: Token, feFlags: string): E
 		advance(state);
 	}
 	// Parse params
-	const raw = parseParamList(state);
+	const raw = parseParamList(state, "");
 	const funcExprParams = extractParamNames(raw);
 	const funcExprParamTypes = extractParamTypes(raw);
 	// Optional return type
@@ -315,7 +315,7 @@ function parsePrimary(state: ParserState): ExprResult {
 			const dotToken = current(state);
 			advance(state);
 			const prop = current(state);
-			if (prop.kind === TokenKind.Ident) {
+			if (isIdentOrKeyword(prop.kind)) {
 				advance(state);
 				callee = createNode(NodeKind.MemberExpr, { object: callee, property: prop.value, isOptional: false }, dotToken);
 			}

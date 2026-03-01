@@ -4,7 +4,7 @@
 // Test callbacks are lazy (registered during load, executed after), so
 // parseFn is always set by the time tests actually run.
 
-import { Token, TokenKind } from "../../lexer/token";
+import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, Expression, createNode, createNodeAt, BinaryExprData, UnaryExprData, UpdateExprData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd } from "../context";
 import { lex } from "../../lexer/lexer";
@@ -93,7 +93,7 @@ export function parseMemberChain(state: ParserState, base: Node): Node {
 		const dotToken = current(state);
 		advance(state);
 		const prop = current(state);
-		if (prop.kind === TokenKind.Ident) {
+		if (isIdentOrKeyword(prop.kind)) {
 			advance(state);
 			node = createNode(NodeKind.MemberExpr, { object: node, property: prop.value, isOptional: false }, dotToken);
 		} else {

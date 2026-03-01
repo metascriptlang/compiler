@@ -11,7 +11,7 @@ import {
 	DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData,
 	SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData,
 	DestructuringDeclData, ProgramData,
-	MacroInvocationData, StringLiteralData,
+	MacroInvocationData, StringLiteralData, CallExprData,
 } from "../ast/node";
 import {
 	Type, TypeKind,
@@ -109,6 +109,11 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 		sym.symbolType.typeReturn = ctx.inferredReturn;
 	}
 
+	// @pure effect check: warn on impure calls inside pure functions
+	if (sym !== null && sym.builtinKind === "pure" && d.fnBody !== null) {
+		checkPurityViolations(ctx, d.fnBody);
+	}
+
 	ctx.inferredReturn = savedReturn;
 }
 
@@ -154,9 +159,16 @@ function checkExportDecl(ctx: CheckerContext, node: Node): void {
 // ===== Null Narrowing =====
 
 // Analyze condition for null check: returns "+varName" for !== null, "-varName" for === null, "" for no match
+// Also handles: x !== null && expr → "+varName" (logical AND with null check on left)
 function analyzeNullCheck(condition: Node): string {
 	if (condition.kind !== NodeKind.BinaryExpr) return "";
 	const d = condition.data as BinaryExprData;
+
+	// Logical AND: x !== null && ...  → null check on left side
+	if (d.operator === "&&") {
+		return analyzeNullCheck(d.left);
+	}
+
 	// x !== null or x === null
 	if (d.left.kind === NodeKind.Identifier && d.right.kind === NodeKind.NullLiteral) {
 		const id = d.left.data as IdentifierData;
@@ -185,6 +197,106 @@ function removeNullFromType(t: Type): Type {
 	}
 	if (t.kind === TypeKind.Null) return unknownType();
 	return t;
+}
+
+// ===== Effect System (@pure) =====
+// Walk function body looking for impure operations: calls to non-pure functions.
+
+function checkPurityViolations(ctx: CheckerContext, body: Node): void {
+	if (body === null) return;
+	if (body.kind === NodeKind.BlockStmt) {
+		const bd = body.data as BlockStmtData;
+		let i = 0;
+		while (i < bd.statements.length) {
+			checkPurityViolations(ctx, bd.statements[i]);
+			i = i + 1;
+		}
+		return;
+	}
+	if (body.kind === NodeKind.ExprStmt) {
+		const ed = body.data as ExprStmtData;
+		checkPurityViolations(ctx, ed.expr);
+		return;
+	}
+	if (body.kind === NodeKind.ReturnStmt) {
+		const rd = body.data as ReturnStmtData;
+		if (rd.argument !== null) checkPurityViolations(ctx, rd.argument);
+		return;
+	}
+	if (body.kind === NodeKind.IfStmt) {
+		const id = body.data as IfStmtData;
+		checkPurityViolations(ctx, id.condition);
+		checkPurityViolations(ctx, id.consequent);
+		if (id.alternate !== null) checkPurityViolations(ctx, id.alternate);
+		return;
+	}
+	if (body.kind === NodeKind.VariableDecl) {
+		const vd = body.data as VariableDeclData;
+		if (vd.initializer !== null) checkPurityViolations(ctx, vd.initializer);
+		return;
+	}
+	if (body.kind === NodeKind.CallExpr) {
+		const cd = body.data as CallExprData;
+		// Check if callee is a known pure function
+		if (cd.callee.kind === NodeKind.Identifier) {
+			const callId = cd.callee.data as IdentifierData;
+			const calleeSym = lookupSymbol(ctx.table, callId.name);
+			if (calleeSym !== null && calleeSym.builtinKind !== "pure") {
+				addError(ctx, "@pure function calls impure function '" + callId.name + "'");
+			}
+		} else if (cd.callee.kind === NodeKind.MemberExpr) {
+			// member calls (e.g. console.log) are impure by default
+			const me = cd.callee.data as MemberExprData;
+			addError(ctx, "@pure function calls impure method '" + me.property + "'");
+		}
+		// Also check arguments for nested impure calls
+		let j = 0;
+		while (j < cd.arguments.length) {
+			checkPurityViolations(ctx, cd.arguments[j]);
+			j = j + 1;
+		}
+		return;
+	}
+	if (body.kind === NodeKind.BinaryExpr) {
+		const bd = body.data as BinaryExprData;
+		checkPurityViolations(ctx, bd.left);
+		checkPurityViolations(ctx, bd.right);
+		return;
+	}
+}
+
+// Guard clause detection: if (x === null) { return/throw/break/continue } → narrow x for rest of block
+// Returns "+varName" if guard narrows to non-null, "" if not a guard clause.
+function tryGuardClauseNarrow(ctx: CheckerContext, node: Node): string {
+	const d = node.data as IfStmtData;
+	const narrowResult = analyzeNullCheck(d.condition);
+	if (narrowResult === "") return "";
+
+	const isNotNull = sliceStr(narrowResult, 0, 1) === "+";
+	// Guard clause: if (x === null) return; → x is non-null after
+	// Guard clause: if (x !== null) { ... } else return; → x is non-null after (but this is handled by if-else narrowing)
+	// We only handle: condition is === null AND consequent is definite exit
+	if (!isNotNull && isDefiniteExit(d.consequent)) {
+		const varName = sliceStr(narrowResult, 1, narrowResult.length);
+		return "+" + varName;
+	}
+	return "";
+}
+
+// Check if a block/statement always exits (return, throw, break, continue, unreachable)
+function isDefiniteExit(node: Node): boolean {
+	if (node === null) return false;
+	if (node.kind === NodeKind.ReturnStmt) return true;
+	if (node.kind === NodeKind.ThrowStmt) return true;
+	if (node.kind === NodeKind.BreakStmt) return true;
+	if (node.kind === NodeKind.ContinueStmt) return true;
+	if (node.kind === NodeKind.BlockStmt) {
+		const bd = node.data as BlockStmtData;
+		if (bd.statements.length === 0) return false;
+		// Last statement determines exit
+		return isDefiniteExit(bd.statements[bd.statements.length - 1]);
+	}
+	return false;
 }
 
 function checkIfStmt(ctx: CheckerContext, node: Node): void {
@@ -277,8 +389,33 @@ function checkDoWhileStmt(ctx: CheckerContext, node: Node): void {
 function checkBlock(ctx: CheckerContext, node: Node): void {
 	const d = node.data as BlockStmtData;
 	openScope(ctx.table, ScopeKind.Block);
-	for (const stmt of d.statements) {
+	let i = 0;
+	while (i < d.statements.length) {
+		const stmt = d.statements[i];
 		checkStmt(ctx, stmt);
+
+		// Guard clause narrowing: if (x === null) return; → x is non-null for rest of block
+		if (stmt.kind === NodeKind.IfStmt) {
+			const guardNarrow = tryGuardClauseNarrow(ctx, stmt);
+			if (guardNarrow !== "") {
+				const varName = sliceStr(guardNarrow, 1, guardNarrow.length);
+				const sym = lookupSymbol(ctx.table, varName);
+				if (sym !== null) {
+					const saved = sym.symbolType;
+					sym.symbolType = removeNullFromType(saved);
+					// Check remaining statements with narrowed type
+					let j = i + 1;
+					while (j < d.statements.length) {
+						checkStmt(ctx, d.statements[j]);
+						j = j + 1;
+					}
+					sym.symbolType = saved;
+					closeScope(ctx.table);
+					return;
+				}
+			}
+		}
+		i = i + 1;
 	}
 	closeScope(ctx.table);
 }
@@ -750,6 +887,32 @@ testGroup("Checker Overloads", () => {
 	});
 });
 
+testGroup("Checker Overload Errors", () => {
+	test("no match reports error", () => {
+		const ctx = checkSource("function add(a: number, b: number): number { return a; } function add(a: string, b: string): string { return a; } const x = add(true);");
+		check(hasErrors(ctx));
+	});
+	test("ambiguous call reports error", () => {
+		// Same param types, different return types → ambiguous
+		const ctx = checkSource("function f(a: number): number { return a; } function f(a: number): string { return \"hi\"; } const x = f(1);");
+		check(hasErrors(ctx));
+	});
+	test("arity-based overload resolution", () => {
+		const ctx = checkSource("function f(a: number): number { return a; } function f(a: number, b: number): number { return a; } const x = f(1); const y = f(1, 2);");
+		check(!hasErrors(ctx));
+	});
+});
+
+testGroup("Checker Extension Overloads", () => {
+	test("two extension overloads no error", () => {
+		check(checkOk("function trim(this s: string): string { return s; } function trim(this s: string, ch: string): string { return s; }"));
+	});
+	test("extension overload call resolves by arity", () => {
+		const ctx = checkSource("function double(this n: number): number { return n; } function double(this n: number, scale: number): number { return n; } const x = double(1); const y = double(1, 2);");
+		check(!hasErrors(ctx));
+	});
+});
+
 testGroup("Checker Extensions", () => {
 	test("extension method registered", () => {
 		const ctx = checkSource("function trim(this s: string): string { return s; }");
@@ -842,6 +1005,30 @@ testGroup("Null Narrowing", () => {
 		const narrowed = removeNullFromType(unionType);
 		check(narrowed.kind === TypeKind.String);
 	});
+	test("guard clause narrows after early return", () => {
+		// if (x === null) return; → x should be non-null after
+		check(checkOk("function f(x: string): string { if (x === null) return \"\"; const y = x; return y; }"));
+	});
+	test("guard clause narrows after throw", () => {
+		check(checkOk("function f(x: string): string { if (x === null) throw \"err\"; return x; }"));
+	});
+	test("logical AND null check", () => {
+		// x !== null && x > 0 → x is non-null in consequent
+		check(checkOk("const x = 1; if (x !== null && x > 0) { const y = x; }"));
+	});
+});
+
+testGroup("Effect System", () => {
+	test("pure function with pure ops passes", () => {
+		check(checkOk("@pure function add(a: number, b: number): number { return a + b; }"));
+	});
+	test("pure function calling impure warns", () => {
+		const ctx = checkSource("function impure(): void {} @pure function bad(): void { impure(); }");
+		check(hasErrors(ctx));
+	});
+	test("pure calling pure is ok", () => {
+		check(checkOk("@pure function helper(x: number): number { return x; } @pure function main(a: number): number { return helper(a); }"));
+	});
 });
 
 testGroup("Resolve Coverage", () => {
@@ -879,6 +1066,30 @@ testGroup("Resolve Coverage", () => {
 		const sym = lookupSymbol(ctx.table, "Point");
 		check(sym !== null);
 		check(sym.symbolType.kind === TypeKind.Object);
+	});
+});
+
+testGroup("Default Parameters", () => {
+	test("decl with default parses ok", () => {
+		check(checkOk("function f1(x: number, y: number = 5) { return x; }"));
+	});
+	test("call with all args", () => {
+		check(checkOk("function f2(x: number, y: number = 5) { return x; } f2(1, 2);"));
+	});
+	test("call with default fills missing arg", () => {
+		check(checkOk("function f3(x: number, y: number = 5) { return x; } f3(1);"));
+	});
+	test("multiple defaults partial fill", () => {
+		check(checkOk("function f4(a: number, b: number = 1, c: number = 2) { return a; } f4(0);"));
+	});
+	test("all defaults omitted", () => {
+		check(checkOk("function f5(x: number = 10) { return x; } f5();"));
+	});
+	test("string default", () => {
+		check(checkOk("function f6(x: string = \"hi\") { return x; } f6();"));
+	});
+	test("boolean default", () => {
+		check(checkOk("function f7(x: boolean = true) { return x; } f7();"));
 	});
 });
 

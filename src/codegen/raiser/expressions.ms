@@ -565,25 +565,40 @@ function compileClosureCall(s: RaiserCompState, node: Node): number {
 	const envConstIdx = addConst(s, raiserString("env"));
 	emitInst(s, raiserABC(RaiserOpcode.LoadField, envReg, closureReg, envConstIdx));
 
-	// Allocate dest + (argCount+1) slots: env as first arg, then real args
+	// Precompile all args into temp registers
+	const argRegs: number[] = [];
+	for (let i = 0; i < argCount; i = i + 1) {
+		argRegs.push(compileExpr(s, d.arguments[i]));
+	}
+
+	// Allocate dest + (argCount+1) slots (worst case: env + args)
 	const totalArgs = argCount + 1;
 	const dest = allocReg(s);
 	for (let i = 0; i < totalArgs; i = i + 1) { allocReg(s); }
 
-	// Move env into first arg slot (dest+1)
+	// Runtime check: if env is -1 (non-capturing sentinel), skip env passing
+	const sentinelReg = allocReg(s);
+	emitLoadConst(s, sentinelReg, raiserInt(-1));
+	// BneI64 envReg, sentinelReg, 1 → if env != -1, skip next instruction (jump past no-env path)
+	emitInst(s, raiserABC(RaiserOpcode.BneI64, envReg, sentinelReg, 1));
+	const jumpToNoEnv = emitJumpPlaceholder(s);
+
+	// WITH ENV path: env as first arg, then real args
 	emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1, envReg, 0));
-
-	// Compile each real arg into dest+2..dest+1+argCount
 	for (let i = 0; i < argCount; i = i + 1) {
-		const argReg = compileExpr(s, d.arguments[i]);
-		const targetReg = dest + 2 + i;
-		if (argReg !== targetReg) {
-			emitInst(s, raiserABC(RaiserOpcode.Move, targetReg, argReg, 0));
-		}
+		emitInst(s, raiserABC(RaiserOpcode.Move, dest + 2 + i, argRegs[i], 0));
 	}
-
-	// Emit CallIndirect: R[dest] = call func[R[fnIdxReg]](R[dest+1..dest+totalArgs])
 	emitInst(s, raiserABC(RaiserOpcode.CallIndirect, dest, fnIdxReg, totalArgs));
+	const jumpPastNoEnv = emitJumpPlaceholder(s);
+
+	// NO ENV path: just real args, no env
+	patchJumpTo(s, jumpToNoEnv, codeLen(s));
+	for (let i = 0; i < argCount; i = i + 1) {
+		emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1 + i, argRegs[i], 0));
+	}
+	emitInst(s, raiserABC(RaiserOpcode.CallIndirect, dest, fnIdxReg, argCount));
+
+	patchJumpTo(s, jumpPastNoEnv, codeLen(s));
 	return dest;
 }
 
@@ -754,8 +769,6 @@ function compileArrayPushCall(s: RaiserCompState, node: Node): number {
 	}
 	return arrReg;
 }
-
-// --- Console.log detection ---
 
 // --- String method detection + compilation ---
 

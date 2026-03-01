@@ -19,14 +19,20 @@ import {
 	isNumeric, isStringType, isCallable, getReturnType, getElementType, getProperty,
 	typeNameOf,
 	unifyType, createUnifyBindings, hasGenericParams,
+	getMinArity,
 } from "./types";
 import {
 	Symbol, SymbolKind, ScopeKind,
 	defineSymbol, lookupSymbol, makeSymbol, openScope, closeScope, hasOverloads,
 } from "./symbol";
-import { CheckerContext, addError, findExtension } from "./context";
-import { scoreCandidate, isAssignable } from "./compat";
+import { CheckerContext, addError, findExtension, findAllExtensions, ExtensionMethod } from "./context";
+import {
+	scoreCandidate, isAssignable, resolveOverloadIdx,
+	findFirstMismatch, typeRelation, TypeRelation,
+	scoreCandidatePriority, isNoMatch, emptyCandidateScore, cmpCandidates,
+} from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
+import { getDefaultText } from "../parser/context";
 
 // ===== Expression Checker =====
 
@@ -184,6 +190,67 @@ function inferUnaryOp(op: string): Type {
 	};
 }
 
+// ===== Default Parameter Filling =====
+
+function getCalleeNameForDefaults(callNode: Node): string {
+	const cd = callNode.data as CallExprData;
+	if (cd.callee.kind === NodeKind.Identifier) {
+		return (cd.callee.data as IdentifierData).name;
+	}
+	return "";
+}
+
+function makeNumberDefault(val: number): Node {
+	const tok = createToken(TokenKind.Number, "", 0);
+	return createNode(NodeKind.NumberLiteral, { value: val }, tok);
+}
+function makeStringDefault(val: string): Node {
+	const tok = createToken(TokenKind.String, "", 0);
+	return createNode(NodeKind.StringLiteral, { value: val }, tok);
+}
+function makeBoolDefault(val: boolean): Node {
+	const tok = createToken(TokenKind.Ident, "", 0);
+	return createNode(NodeKind.BooleanLiteral, { boolValue: val }, tok);
+}
+function makeNullDefault(): Node {
+	const tok = createToken(TokenKind.Ident, "", 0);
+	return createNode(NodeKind.NullLiteral, { nullPlaceholder: true }, tok);
+}
+function makeIdentDefault(name: string): Node {
+	const tok = createToken(TokenKind.Ident, "", 0);
+	return createNode(NodeKind.Identifier, { name }, tok);
+}
+
+function defaultTextToNode(text: string): Node {
+	if (text === "true") return makeBoolDefault(true);
+	if (text === "false") return makeBoolDefault(false);
+	if (text === "null") return makeNullDefault();
+	if (text === "\"\"") return makeStringDefault("");
+	// String literal: starts with "
+	if (text.length > 1 && text[0] === "\"") {
+		return makeStringDefault(text.slice(1, text.length - 1));
+	}
+	// Try parsing as number (num !== num checks for NaN)
+	const num = parseFloat(text);
+	if (num === num) return makeNumberDefault(num);
+	// Empty array — use identifier fallback
+	// Identifier (enum member, variable, etc.)
+	return makeIdentDefault(text);
+}
+
+function fillDefaultArgsForNode(ctx: CheckerContext, callNode: Node, fnName: string,
+	totalParams: number): void {
+	const cd = callNode.data as CallExprData;
+	let argIdx = cd.arguments.length;
+	while (argIdx < totalParams) {
+		const text = getDefaultText(fnName, argIdx);
+		if (text === "") { argIdx = argIdx + 1; continue; }
+		const defNode = defaultTextToNode(text);
+		cd.arguments.push(defNode);
+		argIdx = argIdx + 1;
+	}
+}
+
 // ===== Call Expression + Overload Resolution =====
 
 function checkCallExpr(ctx: CheckerContext, node: Node): Type {
@@ -199,11 +266,38 @@ function checkCallExpr(ctx: CheckerContext, node: Node): Type {
 		const calleeName = (d.callee.data as IdentifierData).name;
 		const sym = lookupSymbol(ctx.table, calleeName);
 		if (sym !== null && hasOverloads(sym)) {
-			return resolveOverloadCall(sym, argTypes);
+			return resolveOverloadCall(ctx, sym, argTypes, node);
+		}
+	}
+	// Extension method overloads: obj.method(args) where multiple extensions match
+	if (d.callee.kind === NodeKind.MemberExpr && ctx.extensionRegistry !== null) {
+		const me = d.callee.data as MemberExprData;
+		const objType = me.object.nodeType;
+		if (objType !== null) {
+			const typeName = typeNameOf(objType);
+			if (typeName !== "") {
+				const allExts = findAllExtensions(ctx.extensionRegistry, typeName, me.property);
+				if (allExts.length > 1) {
+					return resolveExtensionOverloadCall(ctx, allExts, argTypes, objType, me.property);
+				}
+			}
 		}
 	}
 	// Check argument types + infer generic return
 	if (calleeType.kind === TypeKind.Function) {
+		// Fill default arguments if too few args provided
+		const minAr = getMinArity(calleeType);
+		if (argTypes.length < minAr) {
+			addError(ctx, "Too few arguments: expected at least " + intToString(minAr) + ", got " + intToString(argTypes.length));
+		} else if (argTypes.length > calleeType.typeChildren.length) {
+			addError(ctx, "Too many arguments: expected at most " + intToString(calleeType.typeChildren.length) + ", got " + intToString(argTypes.length));
+		} else if (argTypes.length < calleeType.typeChildren.length) {
+			const calleeNameForDef = getCalleeNameForDefaults(node);
+			if (calleeNameForDef !== "") {
+				fillDefaultArgsForNode(ctx, node, calleeNameForDef, calleeType.typeChildren.length);
+			}
+		}
+		// Type-check only provided args (defaults are trusted)
 		for (let pi = 0; pi < calleeType.typeChildren.length && pi < argTypes.length; pi += 1) {
 			const paramType = calleeType.typeChildren[pi];
 			if (paramType.kind !== TypeKind.Unknown && paramType.kind !== TypeKind.GenericParam
@@ -235,26 +329,224 @@ export function inferGenericReturn(fnType: Type, argTypes: Type[]): Type {
 	return returnType;
 }
 
-function resolveOverloadCall(sym: Symbol, argTypes: Type[]): Type {
-	let bestScore = -1;
-	let bestType = sym.symbolType;
-	if (sym.symbolType.kind === TypeKind.Function) {
-		const score = scoreCandidate(sym.symbolType.typeChildren, argTypes);
-		if (score > bestScore) {
-			bestScore = score;
-			bestType = sym.symbolType;
-		}
+function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, argTypes: Type[], callNode: Node): Type {
+	// Build candidate array: primary at [0], overloads at [1..n]
+	const candidates: Type[] = [];
+	candidates.push(sym.symbolType);
+	let oi = 0;
+	while (oi < sym.overloads.length) {
+		candidates.push(sym.overloads[oi].symbolType);
+		oi = oi + 1;
 	}
-	for (const overload of sym.overloads) {
-		if (overload.symbolType.kind === TypeKind.Function) {
-			const score = scoreCandidate(overload.symbolType.typeChildren, argTypes);
-			if (score > bestScore) {
-				bestScore = score;
-				bestType = overload.symbolType;
+	// All same scope for now (cross-module scope = Phase 6)
+	const scopeDepths: number[] = [];
+	let di = 0;
+	while (di < candidates.length) {
+		scopeDepths.push(0);
+		di = di + 1;
+	}
+	const idx = resolveOverloadIdxWithInheritance(ctx, candidates, argTypes, scopeDepths);
+	if (idx === -2) {
+		// Ambiguous call — find the two matching candidates for error
+		addError(ctx, "Ambiguous call to overloaded function '" + sym.name + "'");
+		return getReturnType(sym.symbolType);
+	}
+	if (idx === -1) {
+		// No matching overload — detailed error with per-candidate mismatch
+		let msg = "No matching overload for '" + sym.name + "'\n  Expected one of:";
+		let ci = 0;
+		while (ci < candidates.length) {
+			if (candidates[ci].kind === TypeKind.Function) {
+				msg = msg + "\n    " + formatCandidateSig(sym.name, candidates[ci]);
+				const mpos = findFirstMismatch(candidates[ci].typeChildren, argTypes, getMinArity(candidates[ci]));
+				if (mpos >= 0 && mpos < argTypes.length && mpos < candidates[ci].typeChildren.length) {
+					msg = msg + "\n      first mismatch at position " + intToString(mpos + 1) + ": expected '" + typeNameOf(candidates[ci].typeChildren[mpos]) + "', got '" + typeNameOf(argTypes[mpos]) + "'";
+				} else if (candidates[ci].typeChildren.length !== argTypes.length) {
+					msg = msg + "\n      expected " + intToString(candidates[ci].typeChildren.length) + " argument(s), got " + intToString(argTypes.length);
+				}
+			}
+			ci = ci + 1;
+		}
+		addError(ctx, msg);
+		return getReturnType(sym.symbolType);
+	}
+	// Success — fill default args if needed, then infer generic return
+	const winner = candidates[idx];
+	if (winner.kind === TypeKind.Function && argTypes.length < winner.typeChildren.length) {
+		fillDefaultArgsForNode(ctx, callNode, sym.name, winner.typeChildren.length);
+	}
+	return inferGenericReturn(winner, argTypes);
+}
+
+// Resolve extension method overloads: multiple extensions match same receiver+method.
+// Each extension's fnType includes the receiver as param[0]; strip it before scoring.
+function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod[],
+	argTypes: Type[], objType: Type, methodName: string): Type {
+	const candidates: Type[] = [];
+	let ei = 0;
+	while (ei < exts.length) {
+		let srcType = exts[ei].fnType;
+		// Generic: infer type params from receiver first
+		if (hasGenericParams(srcType)) {
+			const eb = createUnifyBindings();
+			unifyType(srcType.typeChildren[0], objType, eb);
+			if (eb.names.length > 0) {
+				srcType = instantiateGeneric(srcType, eb.names, eb.types);
 			}
 		}
+		// Strip receiver param — build Function(params[1..], return)
+		if (!exts[ei].isStatic && srcType.typeChildren.length > 0) {
+			const callParams: Type[] = [];
+			const callNames: string[] = [];
+			let ci = 1;
+			while (ci < srcType.typeChildren.length) {
+				callParams.push(srcType.typeChildren[ci]);
+				ci = ci + 1;
+			}
+			ci = 1;
+			while (ci < srcType.typeNames.length) {
+				callNames.push(srcType.typeNames[ci]);
+				ci = ci + 1;
+			}
+			candidates.push(createFunction(callParams, callNames, srcType.typeReturn));
+		} else {
+			candidates.push(srcType);
+		}
+		ei = ei + 1;
 	}
-	return getReturnType(bestType);
+	// Score and resolve
+	const scopeDepths: number[] = [];
+	let di = 0;
+	while (di < candidates.length) {
+		scopeDepths.push(0);
+		di = di + 1;
+	}
+	const idx = resolveOverloadIdxWithInheritance(ctx, candidates, argTypes, scopeDepths);
+	if (idx === -2) {
+		addError(ctx, "Ambiguous call to overloaded extension method '" + methodName + "'");
+		return getReturnType(candidates[0]);
+	}
+	if (idx === -1) {
+		let msg = "No matching overload for extension method '" + methodName + "'\n  Expected one of:";
+		let ci = 0;
+		while (ci < candidates.length) {
+			if (candidates[ci].kind === TypeKind.Function) {
+				msg = msg + "\n    " + formatCandidateSig(methodName, candidates[ci]);
+			}
+			ci = ci + 1;
+		}
+		addError(ctx, msg);
+		return getReturnType(candidates[0]);
+	}
+	return inferGenericReturn(candidates[idx], argTypes);
+}
+
+function formatCandidateSig(name: string, fnType: Type): string {
+	let sig = "function " + name + "(";
+	let pi = 0;
+	while (pi < fnType.typeChildren.length) {
+		if (pi > 0) sig = sig + ", ";
+		if (pi < fnType.typeNames.length) {
+			sig = sig + fnType.typeNames[pi] + ": ";
+		}
+		sig = sig + typeNameOf(fnType.typeChildren[pi]);
+		pi = pi + 1;
+	}
+	sig = sig + ")";
+	if (fnType.typeReturn !== null) {
+		sig = sig + ": " + typeNameOf(fnType.typeReturn);
+	}
+	return sig;
+}
+
+function intToString(n: number): string {
+	return match (n) {
+		0 => "0", 1 => "1", 2 => "2", 3 => "3", 4 => "4",
+		5 => "5", 6 => "6", 7 => "7", 8 => "8", 9 => "9",
+		10 => "10", 11 => "11", 12 => "12", 13 => "13", 14 => "14",
+		15 => "15", 16 => "16", 17 => "17", 18 => "18", 19 => "19",
+		20 => "20",
+		_ => "?",
+	};
+}
+
+// ===== Inheritance Depth (inline — avoids importing symbol.ms in compat.ms) =====
+
+// Walk class inheritance chain from sourceType to targetType.
+// Returns depth (1 = direct parent, 2 = grandparent), or -1 if not in chain.
+function inheritanceDepth(sourceType: Type, targetType: Type, ctx: CheckerContext): number {
+	if (sourceType === null || targetType === null) return -1;
+	if (sourceType.typeName === "" || targetType.typeName === "") return -1;
+	let current = sourceType;
+	let depth = 0;
+	while (current !== null) {
+		depth = depth + 1;
+		if (current.typeExtra === null) return -1;
+		if (current.typeExtra.typeName === "") return -1;
+		if (current.typeExtra.typeName === targetType.typeName) return depth;
+		const baseSym = lookupSymbol(ctx.table, current.typeExtra.typeName);
+		if (baseSym === null) return -1;
+		if (baseSym.symbolKind !== SymbolKind.Class) return -1;
+		current = baseSym.symbolType;
+		if (depth > 20) return -1;
+	}
+	return -1;
+}
+
+// Resolve overloads with inheritance penalty.
+function resolveOverloadIdxWithInheritance(ctx: CheckerContext, candidates: Type[],
+	argTypes: Type[], scopeDepths: number[]): number {
+	let bestIdx = -1;
+	let bestScore = emptyCandidateScore();
+	let bestType: Type = null as unknown as Type;
+	let ambiguous = false;
+	let i = 0;
+	while (i < candidates.length) {
+		if (candidates[i].kind !== TypeKind.Function) { i = i + 1; continue; }
+		const score = scoreCandidatePriority(candidates[i].typeChildren, argTypes, getMinArity(candidates[i]));
+		if (isNoMatch(score)) { i = i + 1; continue; }
+		if (i < scopeDepths.length) {
+			score.calleeScope = scopeDepths[i];
+		}
+		// Compute inheritance penalty
+		let maxDepth = -1;
+		let pi = 0;
+		while (pi < candidates[i].typeChildren.length && pi < argTypes.length) {
+			const pType = candidates[i].typeChildren[pi];
+			const aType = argTypes[pi];
+			if (pType.kind === TypeKind.Object && aType.kind === TypeKind.Object) {
+				if (pType.typeName !== "" && aType.typeName !== "" && pType.typeName !== aType.typeName) {
+					const depth = inheritanceDepth(aType, pType, ctx);
+					if (depth > 0 && (maxDepth === -1 || depth > maxDepth)) {
+						maxDepth = depth;
+					}
+				}
+			}
+			pi = pi + 1;
+		}
+		if (maxDepth > 0) {
+			score.inheritancePenalty = maxDepth;
+		}
+		if (bestIdx === -1) {
+			bestIdx = i;
+			bestScore = score;
+			bestType = candidates[i];
+			ambiguous = false;
+		} else {
+			const cmp = cmpCandidates(score, bestScore, candidates[i], bestType);
+			if (cmp > 0) {
+				bestIdx = i;
+				bestScore = score;
+				bestType = candidates[i];
+				ambiguous = false;
+			} else if (cmp === 0) {
+				ambiguous = true;
+			}
+		}
+		i = i + 1;
+	}
+	if (ambiguous) return -2;
+	return bestIdx;
 }
 
 // ===== Member Expression + Extension Method Resolution =====

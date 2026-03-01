@@ -27,6 +27,7 @@ import { createState } from "../parser/context";
 import { callStateProgramParser } from "../parser/statements/callbacks";
 import { Node, NodeKind, ProgramData, ImportDeclData } from "../ast/node";
 import { readFile } from "std/process";
+import { sliceStr } from "../utils/string";
 import { test, check, testGroup } from "std/testing";
 
 // ===== Source Provider =====
@@ -64,6 +65,13 @@ export function provideSource(provider: SourceProvider, path: string): Result<st
 	return Result.err("File not found: " + path);
 }
 
+// ===== C Header Detection =====
+
+function isCHeaderPath(path: string): boolean {
+	if (path.length < 3) return false;
+	return sliceStr(path, path.length - 2, path.length) === ".h";
+}
+
 // ===== Module Loading =====
 
 function finalizeModule(graph: ModuleGraph, mod: Module, path: string): void {
@@ -88,6 +96,14 @@ export function loadModule(graph: ModuleGraph, path: string, provider: SourcePro
 	mod.state = ModuleState.Loading;
 	addModule(graph, mod);
 	pushImportStack(graph, path);
+
+	// C header files: skip lex/parse, create synthetic module
+	if (isCHeaderPath(path)) {
+		mod.isCHeader = true;
+		mod.source = "// C header: " + path;
+		finalizeModule(graph, mod, path);
+		return Result.ok(true);
+	}
 
 	// Read source
 	const sourceResult = provideSource(provider, path);
@@ -299,6 +315,22 @@ testGroup("ModuleLoader", () => {
 		const provider = createMapProvider(entries);
 		const graph = loadModuleGraph("/src/a.ms", provider);
 		check(graph.modules.length === 2);
+	});
+	test("C header import creates module", () => {
+		const entries: MapEntry[] = [];
+		entries.push(makeEntry("/src/app.ms", "import { foo } from \"./lib.h\";"));
+		entries.push(makeEntry("/src/lib.h", "void foo(int x);"));
+		const provider = createMapProvider(entries);
+		const graph = loadModuleGraph("/src/app.ms", provider);
+		check(graph.modules.length === 2);
+		check(graph.errors.length === 0);
+		const hmod = findModule(graph, "/src/lib.h");
+		check(hmod !== null);
+		check(hmod.isCHeader);
+		check(hmod.state === ModuleState.Ready);
+		const appMod = findModule(graph, "/src/app.ms");
+		check(appMod !== null);
+		check(appMod.errors.length === 0);
 	});
 	test("parse error recorded", () => {
 		const entries: MapEntry[] = [];

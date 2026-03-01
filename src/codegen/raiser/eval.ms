@@ -27,7 +27,7 @@ export function evalSourceFull(code: string): RaiserContext {
 
 export function evalASTFull(program: Node): RaiserContext {
 	const checkerCtx = checkProgram(program);
-	const transformed = transformProgram(program, checkerCtx, true);
+	const transformed = transformProgram(program, checkerCtx, false);
 	const mod = generateRaiser(transformed);
 	const ctx = createContext();
 	load(ctx, mod);
@@ -94,6 +94,78 @@ testGroup("Raiser Phase 3: basics", () => {
 		check(ctx.lastResult.kind === RaiserValueKind.Object);
 		const root = heapObjectGetString(ctx.objectHeap, ctx.lastResult.intVal, "root");
 		check(root === "src/main.ms");
+	});
+});
+
+testGroup("Raiser Phase 3: tail call", () => {
+	test("sum 1..100", () => {
+		const ctx = evalFull("function sum(n: number, acc: number): number { if (n <= 0) { return acc; } return sum(n - 1, acc + n); } return sum(100, 0);");
+		check(ctx.lastResult.intVal === 5050);
+	});
+});
+
+testGroup("Raiser Phase 3: arrow", () => {
+	test("arrow no captures", () => {
+		const ctx = evalFull("const f = (x: number): number => x * 2; return f(21);");
+		check(ctx.lastResult.intVal === 42);
+	});
+
+	test("arrow block body no captures", () => {
+		const ctx = evalFull("const f = (a: number, b: number): number => { return a + b; }; return f(10, 20);");
+		check(ctx.lastResult.intVal === 30);
+	});
+
+	test("arrow used in expression", () => {
+		const ctx = evalFull("const dbl = (x: number): number => x * 2; return dbl(3) + dbl(4);");
+		check(ctx.lastResult.intVal === 14);
+	});
+
+	test("arrow passed to function", () => {
+		const ctx = evalFull("function apply(f: (x: number) => number, x: number): number { return f(x); } const dbl = (x: number): number => x * 2; return apply(dbl, 5);");
+		check(ctx.lastResult.intVal === 10);
+	});
+
+	test("multiple arrows", () => {
+		const ctx = evalFull("const add1 = (x: number): number => x + 1; const dbl = (x: number): number => x * 2; return dbl(add1(3));");
+		check(ctx.lastResult.intVal === 8);
+	});
+});
+
+// --- Closure with captures ---
+
+testGroup("Raiser Phase 3: closures", () => {
+	test("capture local variable", () => {
+		const ctx = evalFull("function make(): number { const x = 42; const f = (): number => x; return f(); } return make();");
+		check(ctx.lastResult.intVal === 42);
+	});
+
+	test("capture in top-level scope", () => {
+		const ctx = evalFull("const x = 99; const f = (): number => x; return f();");
+		check(ctx.lastResult.intVal === 99);
+	});
+});
+
+// --- Class Tests ---
+
+testGroup("Raiser classes (multi-module)", () => {
+	test("class ctor returns object", () => {
+		const ctx = evalProject(["const p = Point_new(42); return p.x;", "class Point { x: number; constructor(x) { this.x = x; } }"]);
+		check(ctx.lastResult.intVal === 42);
+	});
+
+	test("class with method", () => {
+		const ctx = evalProject(["const b = Box_new(99); return b.getVal();", "class Box { val: number; constructor(v) { this.val = v; } getVal() { return this.val; } }"]);
+		check(ctx.lastResult.intVal === 99);
+	});
+
+	test("class with multiple methods", () => {
+		const ctx = evalProject(["const m = Calc_new(3, 4); return m.sum() + m.product();", "class Calc { a: number; b: number; constructor(a, b) { this.a = a; this.b = b; } sum() { return this.a + this.b; } product() { return this.a * this.b; } }"]);
+		check(ctx.lastResult.intVal === 19);
+	});
+
+	test("class and function in same module", () => {
+		const ctx = evalProject(["const pt = Pt_new(55); return readX(pt);", "class Pt { x: number; constructor(x) { this.x = x; } } function readX(p) { return p.x; }"]);
+		check(ctx.lastResult.intVal === 55);
 	});
 });
 

@@ -1,10 +1,11 @@
-// Builtin Lowering — rewrite @runtime/@builtin calls to C-compatible AST
+// Builtin Lowering — rewrite @builtin calls + MemberExpr→direct call for extensions
 //
 // Runs post-analyzer, pre-codegen. Reads decorator metadata from Symbol
 // (runtimeName, builtinKind set by collectPass).
 //
-// @runtime("c_name") → rewrite callee identifier to C function name
+// @runtime("c_name") → left for genCallExpr in codegen (handles &prefix, array suffix)
 // @builtin("Name")   → inline expansion for known builtins
+// MemberExpr callee  → Identifier callee (move receiver to first arg)
 //
 // This is an AST-to-AST transform — codegen sees only plain calls.
 
@@ -90,16 +91,12 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 	// Walk callee recursively (handles nested calls like f(g(x)))
 	cd.callee = walkLowerBuiltins(cd.callee, ctx);
 
-	// Check if callee is an identifier that resolves to a @runtime symbol
+	// Check if callee is an identifier that resolves to a @builtin symbol
+	// @runtime is handled by genCallExpr in codegen (& prefix, array type suffix)
 	if (cd.callee.kind === NodeKind.Identifier && ctx.checkerCtx !== null) {
 		const id = cd.callee.data as IdentifierData;
 		const sym = lookupSymbol(ctx.checkerCtx.table, id.name);
 		if (sym !== null) {
-			// @runtime("c_name") → replace callee with C function name
-			if (sym.runtimeName !== "") {
-				cd.callee = makeIdent(sym.runtimeName, loc);
-				return node;
-			}
 			// @builtin("Name") → inline expansion
 			if (sym.builtinKind !== "") {
 				return lowerBuiltinCall(node, sym.builtinKind, ctx);
@@ -110,18 +107,20 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 	// Class method calls (console.log, Math.floor): handled at codegen time
 	// (expressions.ms genCallExpr) to avoid DRC string corruption.
 
-	// Instance extension: obj.method(args) → c_name(obj, args) (add receiver)
+	// Instance extension fallback: obj.method(args) → method(obj, args)
+	// Moves receiver to first arg, keeps MS function name for genCallExpr symbol lookup.
+	// genCallExpr reads sym.runtimeName for C name, & prefix, and array suffix.
 	if (cd.callee.kind === NodeKind.MemberExpr && ctx.checkerCtx !== null) {
 		const me = cd.callee.data as MemberExprData;
 		const sym = lookupSymbol(ctx.checkerCtx.table, me.property);
 		if (sym !== null && sym.runtimeName !== "") {
-			const newArgs: Node[] = [];
 			const objExpr = walkLowerBuiltins(me.object, ctx);
+			const newArgs: Node[] = [];
 			newArgs.push(objExpr);
 			for (let j = 0; j < cd.arguments.length; j += 1) {
 				newArgs.push(cd.arguments[j]);
 			}
-			return makeCall(makeIdent(sym.runtimeName, loc), newArgs, loc);
+			return makeCall(makeIdent(me.property, loc), newArgs, loc);
 		}
 	}
 
@@ -293,5 +292,11 @@ testGroup("Builtin Lower", () => {
 		// Class method calls are NOT rewritten by builtinLower — codegen handles them
 		// directly to avoid DRC string corruption. Result is STILL_MEMBER (MemberExpr callee).
 		check(result === "STILL_MEMBER");
+	});
+	test("@runtime identifier callee left for codegen", () => {
+		const prelude = "@runtime(\"ms_parse_int\") function parseInt(s: string): number { unreachable; }";
+		const result = preludeLowerCallee(prelude, "parseInt(\"42\");");
+		// @runtime on identifier callee is NOT rewritten — genCallExpr handles it
+		check(result === "parseInt");
 	});
 });

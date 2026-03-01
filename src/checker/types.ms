@@ -156,6 +156,20 @@ export function unknownType(): Type { return createPrimitive(TypeKind.Unknown); 
 export function neverType(): Type { return createPrimitive(TypeKind.Never); }
 export function errorType(): Type { return createPrimitive(TypeKind.Error); }
 
+// ===== Min Arity (Default Parameters) =====
+// Encoded in typeFlags bits 8-15. Zero = not set = all params required.
+// Stores minArity + 1 so that 0 means "not set" (backward compatible).
+
+export function setMinArity(t: Type, minArity: number): void {
+	t.typeFlags = (t.typeFlags & 0xFF) | ((minArity + 1) << 8);
+}
+
+export function getMinArity(t: Type): number {
+	const encoded = (t.typeFlags >> 8) & 0xFF;
+	if (encoded === 0) return t.typeChildren.length;
+	return encoded - 1;
+}
+
 // ===== Generic Instantiation =====
 
 // Substitute a generic parameter name with a concrete type throughout a type tree.
@@ -552,5 +566,29 @@ testGroup("Type Unification", () => {
 		check(!hasGenericParams(numberType()));
 		check(!hasGenericParams(createArray(stringType())));
 		check(!hasGenericParams(createFunction([numberType()], ["a"], stringType())));
+	});
+});
+
+testGroup("MinArity", () => {
+	test("default returns param count", () => {
+		const fn1 = createFunction([numberType(), stringType()], ["a", "b"], voidType());
+		check(getMinArity(fn1) === 2);
+	});
+	test("setMinArity stores correctly", () => {
+		const fn2 = createFunction([numberType(), stringType()], ["a", "b"], voidType());
+		setMinArity(fn2, 1);
+		check(getMinArity(fn2) === 1);
+	});
+	test("setMinArity zero", () => {
+		const fn3 = createFunction([numberType()], ["a"], voidType());
+		setMinArity(fn3, 0);
+		check(getMinArity(fn3) === 0);
+	});
+	test("preserves low bits", () => {
+		const fn4 = createFunction([numberType()], ["a"], voidType());
+		fn4.typeFlags = 1;
+		setMinArity(fn4, 1);
+		check(getMinArity(fn4) === 1);
+		check((fn4.typeFlags & 0xFF) === 1);
 	});
 });

@@ -4,12 +4,13 @@
 import { test, check, testGroup } from "std/testing";
 import {
 	Node, NodeKind, ProgramData, FunctionDeclData,
-	ExportDeclData, DecoratedDeclData
+	ExportDeclData, DecoratedDeclData,
+	ClassDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData
 } from "../../ast/node";
 import { parseSource } from "../../parser/index";
 import { RaiserOpcode, RaiserInstruction, raiserABC } from "../../raiser/bytecode";
 import {
-	RaiserValue, RaiserValueKind, raiserNil,
+	RaiserValue, RaiserValueKind, raiserNil, raiserInt, raiserString,
 	heapObjectGetField, heapObjectGetString, heapObjectGetObjectHandle,
 	heapArrayGet, heapArrayLen
 } from "../../raiser/value";
@@ -22,36 +23,37 @@ import {
 	RaiserCompState, RaiserFuncMap, RaiserFuncEntry,
 	RaiserBuiltinMap, RaiserBuiltinEntry,
 	createCompState, emitInst, emitLoadConst, emitHalt, emitRet, allocReg,
-	declareLocal, registerFunc, declareEnum, registerBuiltin, resetTemps
+	addConst, declareLocal, registerFunc, declareEnum, registerBuiltin, resetTemps,
+	resolveFunc, emitClosurePair
 } from "./context";
 import { compileStmt } from "./statements";
+import { compileExpr } from "./expressions";
 
-// --- Unwrap ExportDecl / DecoratedDecl to find inner FunctionDecl ---
+// --- Unwrap ExportDecl / DecoratedDecl to find inner declaration of a given kind ---
 
-export function unwrapToFuncDecl(node: Node): Node {
-	if (node.kind === NodeKind.FunctionDecl) return node;
+function unwrapToKind(node: Node, targetKind: NodeKind): Node {
+	if (node.kind === targetKind) return node;
 	if (node.kind === NodeKind.ExportDecl) {
 		const d = node.data as ExportDeclData;
-		return unwrapToFuncDecl(d.exportedDecl);
+		return unwrapToKind(d.exportedDecl, targetKind);
 	}
 	if (node.kind === NodeKind.DecoratedDecl) {
 		const d = node.data as DecoratedDeclData;
-		return unwrapToFuncDecl(d.decoratedNode);
+		return unwrapToKind(d.decoratedNode, targetKind);
 	}
 	return null as unknown as Node;
 }
 
+export function unwrapToFuncDecl(node: Node): Node {
+	return unwrapToKind(node, NodeKind.FunctionDecl);
+}
+
 export function unwrapToEnumDecl(node: Node): Node {
-	if (node.kind === NodeKind.EnumDecl) return node;
-	if (node.kind === NodeKind.ExportDecl) {
-		const d = node.data as ExportDeclData;
-		return unwrapToEnumDecl(d.exportedDecl);
-	}
-	if (node.kind === NodeKind.DecoratedDecl) {
-		const d = node.data as DecoratedDeclData;
-		return unwrapToEnumDecl(d.decoratedNode);
-	}
-	return null as unknown as Node;
+	return unwrapToKind(node, NodeKind.EnumDecl);
+}
+
+export function unwrapToClassDecl(node: Node): Node {
+	return unwrapToKind(node, NodeKind.ClassDecl);
 }
 
 // --- Top-level: AST → RaiserModule ---
@@ -64,6 +66,19 @@ export function generateRaiser(program: Node): RaiserModule {
 	const modules: RaiserModuleInput[] = [];
 	modules.push(input);
 	return generateRaiserProject(modules);
+}
+
+// --- Expression-body detection ---
+// Returns true if the node is an expression (not a statement), used to detect
+// arrow function expression bodies like `(x) => x * 2`.
+
+function isExpressionBody(node: Node): boolean {
+	const k = node.kind;
+	return k !== NodeKind.BlockStmt && k !== NodeKind.ReturnStmt &&
+		k !== NodeKind.IfStmt && k !== NodeKind.WhileStmt &&
+		k !== NodeKind.ForStmt && k !== NodeKind.ForOfStmt &&
+		k !== NodeKind.ExprStmt && k !== NodeKind.VariableDecl &&
+		k !== NodeKind.DoWhileStmt;
 }
 
 // --- Compile a function body ---
@@ -80,8 +95,14 @@ export function compileFuncBody(funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, 
 		declareLocal(s, paramName, reg);
 	}
 
-	// Compile body (resetTemps handled inside compileBlock/compileStmt)
-	compileStmt(s, body);
+	// Expression-body functions (e.g., arrow `(x) => x * 2` lifted to FunctionDecl):
+	// body is a bare expression, not a statement — compile as return <expr>.
+	if (isExpressionBody(body)) {
+		const exprReg = compileExpr(s, body);
+		emitRet(s, exprReg);
+	} else {
+		compileStmt(s, body);
+	}
 
 	// Ensure function terminates with Ret
 	if (s.code.length === 0) {
@@ -98,6 +119,67 @@ export function compileFuncBody(funcMap: RaiserFuncMap, enumMap: RaiserFuncMap, 
 	}
 
 	return createRaiserFunction(fnName, s.code, s.constants, arity, 0, s.nextReg);
+}
+
+// --- Class constructor compilation ---
+// Creates ClassName_new(params...): allocates object, sets property defaults,
+// stores method closures, executes ctor body, returns this.
+
+function compileClassConstructor(
+	funcMap: RaiserFuncMap, enumMap: RaiserFuncMap,
+	className: string, classBody: Node[],
+	ctorParams: string[], ctorBody: Node
+): RaiserFunction {
+	const s = createCompState();
+	s.funcMap = funcMap;
+	s.enumMap = enumMap;
+
+	// Declare ctor params
+	const arity = ctorParams.length;
+	for (let i = 0; i < arity; i += 1) {
+		const reg = allocReg(s);
+		declareLocal(s, ctorParams[i], reg);
+	}
+
+	// Create this object
+	const thisReg = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.NewObject, thisReg, 0, 0));
+	declareLocal(s, "this", thisReg);
+
+	// Set default properties (nil)
+	for (let ci = 0; ci < classBody.length; ci += 1) {
+		if (classBody[ci].kind === NodeKind.PropertyDecl) {
+			const pd = classBody[ci].data as PropertyDeclData;
+			const nilReg = allocReg(s);
+			emitLoadConst(s, nilReg, raiserNil());
+			const nameIdx = addConst(s, raiserString(pd.propName));
+			emitInst(s, raiserABC(RaiserOpcode.StoreField, thisReg, nameIdx, nilReg));
+		}
+	}
+
+	// Store method closures: { fn: funcIdx, env: this }
+	for (let ci = 0; ci < classBody.length; ci += 1) {
+		if (classBody[ci].kind === NodeKind.MethodDecl) {
+			const md = classBody[ci].data as MethodDeclData;
+			const methodKey = className + "_" + md.methodName;
+			const methodIdx = resolveFunc(s, methodKey);
+			if (methodIdx >= 0) {
+				const closureReg = emitClosurePair(s, methodIdx, thisReg);
+				const methodNameIdx = addConst(s, raiserString(md.methodName));
+				emitInst(s, raiserABC(RaiserOpcode.StoreField, thisReg, methodNameIdx, closureReg));
+			}
+		}
+	}
+
+	// Execute constructor body
+	if (ctorBody !== null) {
+		compileStmt(s, ctorBody);
+	}
+
+	// Always return this
+	emitRet(s, thisReg);
+
+	return createRaiserFunction(className + "_new", s.code, s.constants, arity, 0, s.nextReg);
 }
 
 // --- Multi-module: Project-level compilation ---
@@ -119,6 +201,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 	const globalEnumMap: RaiserFuncMap = { items: globalEnumMapItems };
 	let funcIdx = 0;
 
+	// Pass 1a: Collect functions + enums (must match Phase 2 compilation order)
 	for (let mi = 0; mi < modules.length; mi += 1) {
 		const pd = modules[mi].program.data as ProgramData;
 		for (let i = 0; i < pd.programStmts.length; i += 1) {
@@ -136,6 +219,44 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 					const key = ed.fnName + "." + ed.params[ei];
 					const me: RaiserFuncEntry = { name: key, index: ei };
 					globalEnumMap.items.push(me);
+				}
+			}
+		}
+	}
+
+	// Pass 1b: Collect classes (methods + constructors, must match Phase 2b order)
+	for (let mi = 0; mi < modules.length; mi += 1) {
+		const pd = modules[mi].program.data as ProgramData;
+		for (let i = 0; i < pd.programStmts.length; i += 1) {
+			const classNode = unwrapToClassDecl(pd.programStmts[i]);
+			if (classNode !== null) {
+				const cd = classNode.data as ClassDeclData;
+				let hasCtor = false;
+				// Methods first (must match Phase 2b compilation order)
+				for (let ci = 0; ci < cd.classBody.length; ci += 1) {
+					if (cd.classBody[ci].kind === NodeKind.MethodDecl) {
+						const md = cd.classBody[ci].data as MethodDeclData;
+						const methodKey = cd.className + "_" + md.methodName;
+						const mEntry: RaiserFuncEntry = { name: methodKey, index: funcIdx };
+						globalFuncMap.items.push(mEntry);
+						funcIdx += 1;
+					}
+				}
+				// Constructor second
+				for (let ci = 0; ci < cd.classBody.length; ci += 1) {
+					if (cd.classBody[ci].kind === NodeKind.ConstructorDecl) {
+						hasCtor = true;
+						const ctorKey = cd.className + "_new";
+						const cEntry: RaiserFuncEntry = { name: ctorKey, index: funcIdx };
+						globalFuncMap.items.push(cEntry);
+						funcIdx += 1;
+					}
+				}
+				if (!hasCtor) {
+					const ctorKey = cd.className + "_new";
+					const cEntry: RaiserFuncEntry = { name: ctorKey, index: funcIdx };
+					globalFuncMap.items.push(cEntry);
+					funcIdx += 1;
 				}
 			}
 		}
@@ -164,6 +285,45 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 				const fd = fnNode.data as FunctionDeclData;
 				const func = compileFuncBody(globalFuncMap, globalEnumMap, fd.fnName, fd.params, fd.fnBody, fd.params.length);
 				functions.push(func);
+			}
+		}
+	}
+
+	// --- Pass 2b: Compile class methods and constructors ---
+	for (let mi = 0; mi < modules.length; mi += 1) {
+		const pd = modules[mi].program.data as ProgramData;
+		for (let i = 0; i < pd.programStmts.length; i += 1) {
+			const classNode = unwrapToClassDecl(pd.programStmts[i]);
+			if (classNode !== null) {
+				const cd = classNode.data as ClassDeclData;
+				let hasCtor = false;
+				// Methods first (same order as Phase 1 collection)
+				for (let ci = 0; ci < cd.classBody.length; ci += 1) {
+					if (cd.classBody[ci].kind === NodeKind.MethodDecl) {
+						const md = cd.classBody[ci].data as MethodDeclData;
+						const methodName = cd.className + "_" + md.methodName;
+						const methodParams: string[] = ["this"];
+						for (let pi = 0; pi < md.methodParams.length; pi += 1) {
+							methodParams.push(md.methodParams[pi]);
+						}
+						const func = compileFuncBody(globalFuncMap, globalEnumMap, methodName, methodParams, md.methodBody, methodParams.length);
+						functions.push(func);
+					}
+				}
+				// Constructor
+				for (let ci = 0; ci < cd.classBody.length; ci += 1) {
+					if (cd.classBody[ci].kind === NodeKind.ConstructorDecl) {
+						hasCtor = true;
+						const ctd = cd.classBody[ci].data as ConstructorDeclData;
+						const func = compileClassConstructor(globalFuncMap, globalEnumMap, cd.className, cd.classBody, ctd.ctorParams, ctd.ctorBody);
+						functions.push(func);
+					}
+				}
+				if (!hasCtor) {
+					const noParams: string[] = [];
+					const func = compileClassConstructor(globalFuncMap, globalEnumMap, cd.className, cd.classBody, noParams, null as unknown as Node);
+					functions.push(func);
+				}
 			}
 		}
 	}
@@ -915,6 +1075,31 @@ testGroup("Raiser closures", () => {
 		const ctx = evalRaiser("function inner(_e2) { return _e2.x + _e2.y; } function outer(_e1) { return { fn: inner, env: { x: _e1.a, y: _e1.b } }; } const f = { fn: outer, env: { a: 3, b: 7 } }; const g = f(); return g();");
 		check(ctx.lastResult.intVal === 10);
 	});
+
+	test("lambda-lifted capture pattern", () => {
+		const ctx = evalRaiser("function lifted1(_envP) { return _envP.x; } const x = 99; const f = { fn: lifted1, env: { x: x } }; return f();");
+		check(ctx.lastResult.intVal === 99);
+	});
+
+	test("lambda-lifted capture with args", () => {
+		const ctx = evalRaiser("function lifted1(_envP, y) { return _envP.x + y; } const x = 10; const f = { fn: lifted1, env: { x: x } }; return f(32);");
+		check(ctx.lastResult.intVal === 42);
+	});
+
+	test("lambda-lifted capture inside function", () => {
+		const ctx = evalRaiser("function lifted1(_envP) { return _envP.x; } function make() { const x = 42; const f = { fn: lifted1, env: { x: x } }; return f(); } return make();");
+		check(ctx.lastResult.intVal === 42);
+	});
+
+	test("lambda-lifted multiple captures", () => {
+		const ctx = evalRaiser("function lifted1(_envP) { return _envP.a * _envP.b + _envP.c; } const a = 3; const b = 4; const c = 5; const f = { fn: lifted1, env: { a: a, b: b, c: c } }; return f();");
+		check(ctx.lastResult.intVal === 17);
+	});
+
+	test("non-capturing closure pair with -1 sentinel", () => {
+		const ctx = evalRaiser("function add(a, b) { return a + b; } const f = { fn: add, env: -1 }; return f(10, 20);");
+		check(ctx.lastResult.intVal === 30);
+	});
 });
 
 testGroup("Raiser build.ms", () => {
@@ -1135,6 +1320,163 @@ testGroup("Raiser compound assign targets", () => {
 
 	test("arr[i] *= value", () => {
 		const ctx = evalRaiser("let arr = [1, 2, 3]; arr[0] *= 10; return arr[0];");
+		check(ctx.lastResult.intVal === 10);
+	});
+});
+
+testGroup("Raiser classes", () => {
+	test("constructor and field access", () => {
+		const ctx = evalRaiser("class Point { constructor(x, y) { this.x = x; this.y = y; } } const p = Point_new(3, 4); return p.x;");
+		check(ctx.lastResult.intVal === 3);
+	});
+
+	test("second field access", () => {
+		const ctx = evalRaiser("class Point { constructor(x, y) { this.x = x; this.y = y; } } const p = Point_new(3, 4); return p.y;");
+		check(ctx.lastResult.intVal === 4);
+	});
+
+	test("method returning constant", () => {
+		const ctx = evalRaiser("class Box { answer() { return 42; } } const b = Box_new(); return b.answer();");
+		check(ctx.lastResult.intVal === 42);
+	});
+
+	test("method accessing this field", () => {
+		const ctx = evalRaiser("class Box { constructor(v) { this.val = v; } getVal() { return this.val; } } const b = Box_new(42); return b.getVal();");
+		check(ctx.lastResult.intVal === 42);
+	});
+
+	test("method with params", () => {
+		const ctx = evalRaiser("class Calc { constructor(base) { this.base = base; } add(n) { return this.base + n; } } const c = Calc_new(10); return c.add(5);");
+		check(ctx.lastResult.intVal === 15);
+	});
+
+	test("closure env mutation", () => {
+		const ctx = evalRaiser("function inc(_e) { _e.n = _e.n + 1; } const obj = { n: 0 }; const f = { fn: inc, env: obj }; f(); return obj.n;");
+		check(ctx.lastResult.intVal === 1);
+	});
+
+	test("method mutation single call", () => {
+		const ctx = evalRaiser("class Counter { constructor(n) { this.n = n; } inc() { this.n = this.n + 1; return this.n; } } const c = Counter_new(0); return c.inc();");
+		check(ctx.lastResult.intVal === 1);
+	});
+
+	test("method mutation two calls", () => {
+		const ctx = evalRaiser("class Counter { constructor(n) { this.n = n; } inc() { this.n = this.n + 1; return this.n; } } const c = Counter_new(0); c.inc(); return c.inc();");
+		check(ctx.lastResult.intVal === 2);
+	});
+
+	test("two objects in function", () => {
+		const ctx = evalRaiser("function mk(n) { const self = {}; const other = {}; self.n = n; return self; } const c = mk(5); return c.n;");
+		check(ctx.lastResult.intVal === 5);
+	});
+
+	test("two fields on one object in function", () => {
+		const ctx = evalRaiser("function mk(n) { const self = {}; self.x = 1; self.n = n; return self; } const c = mk(5); return c.n;");
+		check(ctx.lastResult.intVal === 5);
+	});
+
+	test("one-way link only", () => {
+		const ctx = evalRaiser("function mk(n) { const self = {}; const cl = {}; self.other = cl; self.n = n; return self; } const c = mk(5); return c.n;");
+		check(ctx.lastResult.intVal === 5);
+	});
+
+	test("reverse link only", () => {
+		const ctx = evalRaiser("function mk(n) { const self = {}; const cl = {}; cl.ref = self; self.n = n; return self; } const c = mk(5); return c.n;");
+		check(ctx.lastResult.intVal === 5);
+	});
+
+	test("forward obj link then read", () => {
+		const ctx = evalRaiser("function mk(n) { const self = {}; const cl = {}; self.other = cl; self.n = n; return self; } const c = mk(5); return c.n;");
+		check(ctx.lastResult.intVal === 5);
+	});
+
+	test("forward obj link return const", () => {
+		const ctx = evalRaiser("function mk() { const self = {}; const cl = {}; self.other = cl; self.n = 42; return self.n; }  return mk();");
+		check(ctx.lastResult.intVal === 42);
+	});
+
+	test("field name get on single obj", () => {
+		const ctx = evalRaiser("function mk() { const a = {}; a.get = 42; return a.get; } return mk();");
+		check(ctx.lastResult.intVal === 42);
+	});
+
+	test("field name get store obj no bidir", () => {
+		const ctx = evalRaiser("function mk() { const a = {}; const b = {}; a.get = b; a.n = 42; return 99; } return mk();");
+		check(ctx.lastResult.intVal === 99);
+	});
+
+	test("field name get store obj bidir", () => {
+		const ctx = evalRaiser("function mk() { const a = {}; const b = {}; b.ref = a; a.get = b; a.n = 42; return 99; } return mk();");
+		check(ctx.lastResult.intVal === 99);
+	});
+
+	test("field name gett bidir", () => {
+		const ctx = evalRaiser("function mk() { const a = {}; const b = {}; b.ref = a; a.gett = b; a.n = 42; return 99; } return mk();");
+		check(ctx.lastResult.intVal === 99);
+	});
+
+	test("field name ge bidir", () => {
+		const ctx = evalRaiser("function mk() { const a = {}; const b = {}; b.ref = a; a.ge = b; a.n = 42; return 99; } return mk();");
+		check(ctx.lastResult.intVal === 99);
+	});
+
+	test("field name set bidir", () => {
+		const ctx = evalRaiser("function mk() { const a = {}; const b = {}; b.ref = a; a.set = b; a.n = 42; return 99; } return mk();");
+		check(ctx.lastResult.intVal === 99);
+	});
+
+	test("bidir link print each step", () => {
+		const ctx = evalRaiser("function mk() { const a = {}; const b = {}; a.n = 10; console.log(a.n); b.ref = a; console.log(a.n); a.other = b; console.log(a.n); return a.n; } return mk();");
+		check(ctx.lastOutput === "10\n10\n10\n");
+	});
+
+	test("set n before bidir then return n", () => {
+		const ctx = evalRaiser("function mk() { const a = {}; const b = {}; a.n = 42; b.ref = a; a.other = b; return a.n; } return mk();");
+		check(ctx.lastResult.intVal === 42);
+	});
+
+	test("set n after bidir then return n", () => {
+		const ctx = evalRaiser("function mk() { const a = {}; const b = {}; b.ref = a; a.other = b; a.n = 42; return a.n; } return mk();");
+		check(ctx.lastResult.intVal === 42);
+	});
+
+	test("bidir then return 1 no field", () => {
+		const ctx = evalRaiser("function mk() { const a = {}; const b = {}; b.ref = a; a.other = b; return 1; } return mk();");
+		check(ctx.lastResult.intVal === 1);
+	});
+
+	test("set n after bidir return const", () => {
+		const ctx = evalRaiser("function mk() { const a = {}; const b = {}; b.ref = a; a.other = b; a.n = 42; return 99; } return mk();");
+		check(ctx.lastResult.intVal === 99);
+	});
+
+	test("bidir top level", () => {
+		const ctx = evalRaiser("const self = {}; const cl = {}; cl.ref = self; self.get = cl; self.n = 5; return self.n;");
+		check(ctx.lastResult.intVal === 5);
+	});
+
+	test("two objects linked", () => {
+		const ctx = evalRaiser("function mk(n) { const self = {}; const cl = {}; cl.ref = self; self.get = cl; self.n = n; return self; } const c = mk(5); return c.n;");
+		check(ctx.lastResult.intVal === 5);
+	});
+
+	test("class direct field with methods", () => {
+		const ctx = evalRaiser("class Box { constructor(v) { this.val = v; } getVal() { return this.val; } } const b = Box_new(42); return b.val;");
+		check(ctx.lastResult.intVal === 42);
+	});
+
+	test("no explicit constructor", () => {
+		const ctx = evalRaiser("class Greeter { greet() { return 42; } } const g = Greeter_new(); return g.greet();");
+		check(ctx.lastResult.intVal === 42);
+	});
+
+	test("method calling another method", () => {
+		const ctx = evalRaiser("class Math { dbl(x) { return x * 2; } quad(x) { return this.dbl(this.dbl(x)); } } const m = Math_new(); return m.quad(3);");
+		check(ctx.lastResult.intVal === 12);
+	});
+
+	test("class instance as value", () => {
+		const ctx = evalRaiser("class Pair { constructor(a, b) { this.a = a; this.b = b; } sum() { return this.a + this.b; } } const p = Pair_new(3, 7); const result = p.sum(); return result;");
 		check(ctx.lastResult.intVal === 10);
 	});
 });

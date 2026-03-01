@@ -121,7 +121,7 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 		return Result.err(`Expected '(' after function name at line ${current(state).line.toString()}`);
 	}
 
-	const raw = parseParamList(state);
+	const raw = parseParamList(state, nameToken.value);
 	const params = extractParamNames(raw);
 	const fnParamTypes = extractParamTypes(raw);
 	// Check for instance extension: first param has "this:" prefix
@@ -328,6 +328,12 @@ export function parseExportDecl(state: ParserState): NodeResult {
 	// export async function f() {}
 	if (nextKind === TokenKind.Async) {
 		const decl = try parseFunctionDecl(state);
+		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
+	}
+
+	// export extern function f(): void;
+	if (nextKind === TokenKind.Extern) {
+		const decl = try parseExternDecl(state);
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
 
@@ -717,7 +723,7 @@ function parseClassMember(state: ParserState): NodeResult {
 function parseClassConstructor(state: ParserState): NodeResult {
 	const ctorToken = current(state);
 	advance(state);
-	const raw = parseParamList(state);
+	const raw = parseParamList(state, "constructor");
 	const ctorParams = extractParamNames(raw);
 	const ctorParamTypes = extractParamTypes(raw);
 	const body = try callBlockParser(state);
@@ -734,7 +740,7 @@ function parseClassAccessor(state: ParserState, isStatic: boolean, flags: string
 	advance(state);
 	const accName = current(state).value;
 	advance(state);
-	const raw = parseParamList(state);
+	const raw = parseParamList(state, accKind + "_" + accName);
 	const methodParams = extractParamNames(raw);
 	const methodParamTypes = extractParamTypes(raw);
 	const methodReturnType = captureOptionalType(state);
@@ -751,7 +757,7 @@ function parseClassAccessor(state: ParserState, isStatic: boolean, flags: string
 }
 
 function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: boolean, flags: string): NodeResult {
-	const raw = parseParamList(state);
+	const raw = parseParamList(state, nameToken.value);
 	const methodParams = extractParamNames(raw);
 	const methodParamTypes = extractParamTypes(raw);
 	// Optional return type
@@ -1000,10 +1006,33 @@ export function parseExternDecl(state: ParserState): NodeResult {
 	// Skip optional generic params: <T, U>
 	skipGenericParams(state);
 
-	// Skip optional param list: (params)
-	skipBalanced(state, TokenKind.LParen, TokenKind.RParen);
+	// Extern functions → FunctionDecl with "extern" in fnFlags (Nim-aligned: importc pragma on proc)
+	if (externKind === "function") {
+		const raw = parseParamList(state, nameToken.value);
+		const params = extractParamNames(raw);
+		const fnParamTypes = extractParamTypes(raw);
+		const fnReturnType = captureOptionalType(state);
 
-	// Skip optional return type: : type
+		// Skip body or semicolon
+		let fnBody: Node = createNode(NodeKind.BlockStmt, { statements: [] as Node[] }, externToken);
+		if (!isAtEnd(state) && current(state).kind === TokenKind.LBrace) {
+			fnBody = try callBlockParser(state);
+		} else {
+			consumeSemicolon(state);
+		}
+
+		return Result.ok(createNode(NodeKind.FunctionDecl, {
+			fnName: nameToken.value,
+			params,
+			fnParamTypes,
+			fnBody,
+			fnFlags: "extern",
+			fnReturnType,
+		}, externToken));
+	}
+
+	// Non-function externs: keep ExternDecl node
+	skipBalanced(state, TokenKind.LParen, TokenKind.RParen);
 	skipOptionalType(state);
 
 	// Skip optional 'extends' clause
@@ -1077,7 +1106,7 @@ export function parseMacroDecl(state: ParserState): NodeResult {
 	}
 	advance(state);
 
-	const raw = parseParamList(state);
+	const raw = parseParamList(state, nameToken.value);
 	const macroDeclParams = extractParamNames(raw);
 
 	// Optional return type
@@ -1151,11 +1180,12 @@ testGroup("Stmt Declarations", () => {
 	test("extern let", () => { check(programOk("extern let counter: number;")); });
 	test("extern interface", () => { check(programOk("extern interface Stream { read(): number; }")); });
 	test("extern macro", () => { check(programOk("extern macro @inject;")); });
-	test("extern is ExternDecl", () => { check(stmtKind("extern function f(): void;") === NodeKind.ExternDecl); });
-	test("extern kind field", () => {
-		const d = stmtAt("extern function printf(fmt: string): void;", 0).data as ExternDeclData;
-		check(d.externKind === "function");
+	test("extern function is FunctionDecl", () => { check(stmtKind("extern function f(): void;") === NodeKind.FunctionDecl); });
+	test("extern function has extern flag", () => {
+		const d = stmtAt("extern function printf(fmt: string): void;", 0).data as FunctionDeclData;
+		check(d.fnFlags === "extern");
 	});
+	test("extern const is ExternDecl", () => { check(stmtKind("extern const STDIN: int32;") === NodeKind.ExternDecl); });
 	test("extern name field", () => {
 		const d = stmtAt("extern const STDIN: FILE;", 0).data as ExternDeclData;
 		check(d.externName === "STDIN");
@@ -1167,6 +1197,8 @@ testGroup("Stmt Declarations", () => {
 	test("extern generics", () => { check(programOk("extern function sort<T>(arr: T[]): void;")); });
 	test("extern extends", () => { check(programOk("extern class Derived extends Base {}")); });
 	test("extern error", () => { check(!programOk("extern 42")); });
+	test("export extern function", () => { check(programOk("export extern function foo(x: number): void;")); });
+	test("export extern function is ExportDecl", () => { check(stmtKind("export extern function foo(): void;") === NodeKind.ExportDecl); });
 	// Distinct type
 	test("distinct type", () => { check(programOk("distinct type UserId = number;")); });
 	test("distinct type string", () => { check(programOk("distinct type Email = string;")); });

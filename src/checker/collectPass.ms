@@ -1,7 +1,7 @@
 import { Node, NodeKind, SourceLocation, createNodeAt, ProgramData, FunctionDeclData, ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData } from "../ast/node";
 import { extractDecoratorInfo } from "./decoratorHelpers";
 import { Type, TypeKind, unknownType, createObject, createEnum, createTypeRef, createFunction } from "./types";
-import { Symbol, SymbolKind, SymbolTable, ScopeKind, defineSymbol, makeSymbol, lookupSymbol } from "./symbol";
+import { Symbol, SymbolKind, SymbolTable, ScopeKind, defineSymbol, makeSymbol, lookupSymbol, lookupLocal } from "./symbol";
 import { CheckerContext, addError, findExportedSymbol, ExtensionMethod, registerExtension, isStaticExtensionFlag, getExtTypeName } from "./context";
 import { isGlobalImport } from "./prelude";
 import { sliceStr, findChar } from "../utils/string";
@@ -180,6 +180,18 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 				if (exportInfo !== null) {
 					// Use actual type and kind from source module
 					defineOrError(ctx, makeSymbol(localAlias, exportInfo.kind, exportInfo.symType, false), node);
+					// Register overloads from source module
+					if (exportInfo.overloadTypes.length > 0) {
+						const primarySym = lookupLocal(ctx.table, localAlias);
+						if (primarySym !== null) {
+							let ovIdx = 0;
+							while (ovIdx < exportInfo.overloadTypes.length) {
+								const ovSym = makeSymbol(localAlias, exportInfo.kind, exportInfo.overloadTypes[ovIdx], false);
+								primarySym.overloads.push(ovSym);
+								ovIdx = ovIdx + 1;
+							}
+						}
+					}
 					// If imported symbol is an extension method, register it locally
 					if (exportInfo.extReceiverType !== "" && ctx.extensionRegistry !== null) {
 						const extMethod: ExtensionMethod = {

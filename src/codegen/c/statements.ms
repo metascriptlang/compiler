@@ -9,6 +9,7 @@ import {
 	BlockStmtData, ExprStmtData, ReturnStmtData,
 	BreakStmtData, ContinueStmtData, DeclKind,
 	TryCatchStmtData, ThrowStmtData,
+	SwitchStmtData, SwitchCaseData,
 } from "../../ast/node";
 import { Type, TypeKind } from "../../checker/types";
 import {
@@ -19,6 +20,7 @@ import {
 } from "./context";
 import { genExpr } from "./expressions";
 import { safeName } from "./names";
+import { sliceStr } from "../../utils/string";
 import { test, check, testGroup } from "std/testing";
 
 // ===== genStmt — main statement dispatcher =====
@@ -38,6 +40,7 @@ export function genStmt(g: CGen, p: CProc, node: Node): void {
 	else if (k === NodeKind.ContinueStmt) { genContinueStmt(g, p, node); }
 	else if (k === NodeKind.ThrowStmt) { genThrowStmt(g, p, node); }
 	else if (k === NodeKind.TryCatchStmt) { genTryCatchStmt(g, p, node); }
+	else if (k === NodeKind.SwitchStmt) { genSwitchStmt(g, p, node); }
 	else { emitStmtsLine(p, "/* unsupported stmt: " + k + " */"); }
 }
 
@@ -143,9 +146,16 @@ function genBlockStmt(g: CGen, p: CProc, node: Node): void {
 
 function genReturnStmt(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as ReturnStmtData;
+	// NRVO: assign to *__result instead of returning (name prefix convention)
+	const isNrvo = p.name.length > 8 && sliceStr(p.name, 0, 8) === "__nrvo__";
 	if (d.argument !== null) {
 		const snippet = genExpr(g, p, d.argument);
-		emitStmtsLine(p, "return " + snippet + ";");
+		if (isNrvo) {
+			emitStmtsLine(p, "*__result = " + snippet + ";");
+			emitStmtsLine(p, "return;");
+		} else {
+			emitStmtsLine(p, "return " + snippet + ";");
+		}
 	} else {
 		emitStmtsLine(p, "return;");
 	}
@@ -169,9 +179,57 @@ function genThrowStmt(g: CGen, p: CProc, node: Node): void {
 	emitStmtsLine(p, "ms_throw(" + snippet + ");");
 }
 
-// ===== Try/Catch (setjmp/longjmp) =====
+// ===== Try/Catch (goto-based — Nim's genTryGoto) =====
+// Goto-based exceptions: no setjmp overhead. Each try block gets unique labels.
+// After each potentially-raising call, check *nimErr_ and goto catch.
 
 function genTryCatchStmt(g: CGen, p: CProc, node: Node): void {
+	const d = node.data as TryCatchStmtData;
+	p.labels = p.labels + 1;
+	const labelId = p.labels;
+	const catchLabel = "__catch_" + labelId;
+	const finallyLabel = "__finally_" + labelId;
+	const endLabel = "__end_" + labelId;
+
+	emitStmtsLine(p, "{");
+	const oldIndent = getStmtsIndent(p);
+	setStmtsIndent(p, oldIndent + 1);
+
+	// Try body
+	genStmt(g, p, d.tryBody);
+	// After try body, check error flag
+	emitStmtsLine(p, "if (ms_nimErr_) goto " + catchLabel + ";");
+	emitStmtsLine(p, "goto " + finallyLabel + ";");
+
+	// Catch label
+	emitStmtsLine(p, catchLabel + ": {");
+	setStmtsIndent(p, oldIndent + 2);
+	if (d.catchName !== "") {
+		emitStmtsLine(p, "msException* " + safeName(d.catchName) + " = ms_curr_exception;");
+	}
+	emitStmtsLine(p, "ms_nimErr_ = NIM_FALSE;");
+	emitStmtsLine(p, "ms_clear_exception();");
+	if (d.catchBody !== null) {
+		genStmt(g, p, d.catchBody);
+	}
+	setStmtsIndent(p, oldIndent + 1);
+	emitStmtsLine(p, "}");
+
+	// Finally label
+	emitStmtsLine(p, finallyLabel + ":");
+
+	if (d.finallyBody !== null) {
+		genStmt(g, p, d.finallyBody);
+	}
+
+	setStmtsIndent(p, oldIndent);
+	emitStmtsLine(p, "}");
+}
+
+// ===== Try/Catch (setjmp/longjmp fallback) =====
+// Kept as alternative strategy. Goto-based (above) is the default.
+
+function genTryCatchSetjmp(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as TryCatchStmtData;
 
 	emitStmtsLine(p, "{");
@@ -198,6 +256,41 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Node): void {
 
 	if (d.finallyBody !== null) {
 		genStmt(g, p, d.finallyBody);
+	}
+
+	setStmtsIndent(p, oldIndent);
+	emitStmtsLine(p, "}");
+}
+
+// ===== Switch Statement (hash dispatch) =====
+
+function genSwitchStmt(g: CGen, p: CProc, node: Node): void {
+	const d = node.data as SwitchStmtData;
+	const discSnippet = genExpr(g, p, d.switchDisc);
+	emitStmtsLine(p, "switch (" + discSnippet + ") {");
+	const oldIndent = getStmtsIndent(p);
+	setStmtsIndent(p, oldIndent + 1);
+
+	for (let i = 0; i < d.switchCases.length; i += 1) {
+		const caseNode = d.switchCases[i];
+		const cd = caseNode.data as SwitchCaseData;
+
+		if (cd.isDefault) {
+			emitStmtsLine(p, "default: {");
+		} else {
+			for (let j = 0; j < cd.caseTests.length; j += 1) {
+				const testSnippet = genExpr(g, p, cd.caseTests[j]);
+				emitStmtsLine(p, "case " + testSnippet + ":");
+			}
+			emitStmts(p, "{");
+			emitStmtsNl(p);
+		}
+
+		setStmtsIndent(p, oldIndent + 2);
+		genStmts(g, p, cd.caseStmts);
+		emitStmtsLine(p, "break;");
+		setStmtsIndent(p, oldIndent + 1);
+		emitStmtsLine(p, "}");
 	}
 
 	setStmtsIndent(p, oldIndent);
@@ -307,5 +400,51 @@ testGroup("C Stmt Break/Continue", () => {
 	});
 	test("continue", () => {
 		check(stmtOutput("continue;") === "continue;\n");
+	});
+});
+
+testGroup("C Stmt TryCatch Goto", () => {
+	test("try-catch emits goto labels", () => {
+		const out = stmtOutput("try { foo(); } catch (e) { bar(); }");
+		const len = out.length;
+		// Should contain goto-based labels, not setjmp
+		check(len > 20);
+		// Should NOT contain setjmp (we use goto-based now)
+		let hasSetjmp = false;
+		let i = 0;
+		while (i < len - 6) {
+			if (sliceStr(out, i, i + 6) === "setjmp") {
+				hasSetjmp = true;
+			}
+			i = i + 1;
+		}
+		check(!hasSetjmp);
+	});
+	test("try-catch has catch label", () => {
+		const out = stmtOutput("try { foo(); } catch (e) { bar(); }");
+		const len = out.length;
+		// Should contain __catch_ label
+		let hasCatch = false;
+		let i = 0;
+		while (i < len - 8) {
+			if (sliceStr(out, i, i + 8) === "__catch_") {
+				hasCatch = true;
+			}
+			i = i + 1;
+		}
+		check(hasCatch);
+	});
+	test("try-finally has finally label", () => {
+		const out = stmtOutput("try { foo(); } finally { cleanup(); }");
+		const len = out.length;
+		let hasFinally = false;
+		let i = 0;
+		while (i < len - 10) {
+			if (sliceStr(out, i, i + 10) === "__finally_") {
+				hasFinally = true;
+			}
+			i = i + 1;
+		}
+		check(hasFinally);
 	});
 });

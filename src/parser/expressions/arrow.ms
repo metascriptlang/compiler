@@ -60,7 +60,7 @@ export function parseArrowFunction(
 	flags: string
 ): ExprResult {
 	const arrowToken = current(state);
-	const raw = parseParamList(state);
+	const raw = parseParamList(state, "");
 	const arrowParams = extractParamNames(raw);
 	const arrowParamTypes = extractParamTypes(raw);
 

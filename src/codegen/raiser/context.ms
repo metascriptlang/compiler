@@ -292,3 +292,38 @@ export function resolveBuiltin(s: RaiserCompState, name: string): number {
 	}
 	return -1;
 }
+
+// --- Closure pair helpers ---
+// Emit a closure pair object { fn: funcIdx, env: envReg | -1 } into destReg.
+// envVal = -1 sentinel means non-capturing (no env), otherwise envVal is a register holding the env.
+
+export function emitClosurePair(s: RaiserCompState, funcIdx: number, envReg: number): number {
+	const pairReg = allocReg(s);
+	emitInst(s, raiserABC(RaiserOpcode.NewObject, pairReg, 0, 0));
+	const fnReg = allocReg(s);
+	emitLoadConst(s, fnReg, raiserInt(funcIdx));
+	const fnConst = addConst(s, raiserString("fn"));
+	emitInst(s, raiserABC(RaiserOpcode.StoreField, pairReg, fnConst, fnReg));
+	const envConst = addConst(s, raiserString("env"));
+	if (envReg < 0) {
+		// Non-capturing: store -1 sentinel
+		const sentinelReg = allocReg(s);
+		emitLoadConst(s, sentinelReg, raiserInt(-1));
+		emitInst(s, raiserABC(RaiserOpcode.StoreField, pairReg, envConst, sentinelReg));
+	} else {
+		// Capturing: store actual env register
+		emitInst(s, raiserABC(RaiserOpcode.StoreField, pairReg, envConst, envReg));
+	}
+	return pairReg;
+}
+
+// --- Loop break-patch helper ---
+// Patches all break-jump placeholders to the current code position, then pops the loop.
+
+export function patchLoopBreaks(s: RaiserCompState): void {
+	const loop = popLoop(s);
+	const target = codeLen(s);
+	for (let i = 0; i < loop.breakPatches.items.length; i = i + 1) {
+		patchJumpTo(s, loop.breakPatches.items[i], target);
+	}
+}

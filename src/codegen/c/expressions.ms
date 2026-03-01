@@ -16,8 +16,11 @@ import {
 	UpdateExprData, NewExprData, MoveExprData, SpreadExprData,
 	ExprStmtData,
 } from "../../ast/node";
-import { Type, TypeKind, getProperty } from "../../checker/types";
-import { lookupSymbol, SymbolKind } from "../../checker/symbol";
+import { Type, TypeKind, getProperty, getMinArity } from "../../checker/types";
+import { Symbol, lookupSymbol, SymbolKind, hasOverloads } from "../../checker/symbol";
+import {
+	resolveOverloadIdx, scoreCandidatePriority, isNoMatch, emptyCandidateScore, cmpCandidates,
+} from "../../checker/compat";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, Builder, CSection,
 	initLoc, noLoc, rdLoc,
@@ -26,6 +29,7 @@ import {
 } from "./context";
 import { mangle, mangleFieldName, safeName } from "./names";
 import { formatCNumber, cBoolLiteral, cNullLiteral, cStringLiteral } from "./literals";
+import { charAt, sliceStr } from "../../utils/string";
 import { test, check, testGroup } from "std/testing";
 
 // Join call arguments with comma separator.
@@ -134,7 +138,14 @@ function genBinaryExpr(g: CGen, p: CProc, node: Node): string {
 			const arr = genExpr(g, p, ad.array);
 			const idx = genExpr(g, p, ad.index);
 			const val = genExpr(g, p, d.right);
-			return "ms_string_set_char(&" + arr + ", " + idx + ", " + val + ")";
+			// COW guard: ensure string payload is mutable before writing
+			return "(ms_prepare_str_mutation(&" + arr + "), ms_string_set_char(&" + arr + ", " + idx + ", " + val + "))";
+		}
+		if (isArrayTyped(ad.array)) {
+			const arr = genExpr(g, p, ad.array);
+			const idx = genExpr(g, p, ad.index);
+			const val = genExpr(g, p, d.right);
+			return arr + ".p->data[" + idx + "] = " + val;
 		}
 	}
 	const left = genExpr(g, p, d.left);
@@ -142,16 +153,47 @@ function genBinaryExpr(g: CGen, p: CProc, node: Node): string {
 	// String comparison: use runtime functions instead of C operators
 	if (isStringTyped(d.left) || isStringTyped(d.right)) {
 		if (d.operator === "===" || d.operator === "==") {
+			if (isEmptyStringLiteral(d.right)) return "(" + left + ".len == 0)";
+			if (isEmptyStringLiteral(d.left)) return "(" + right + ".len == 0)";
 			return "ms_string_equals(" + left + ", " + right + ")";
 		}
 		if (d.operator === "!==" || d.operator === "!=") {
+			if (isEmptyStringLiteral(d.right)) return "(" + left + ".len != 0)";
+			if (isEmptyStringLiteral(d.left)) return "(" + right + ".len != 0)";
 			return "(!ms_string_equals(" + left + ", " + right + "))";
 		}
 		if (d.operator === "<" || d.operator === ">" || d.operator === "<=" || d.operator === ">=") {
 			return "(ms_string_compare(" + left + ", " + right + ") " + d.operator + " 0)";
 		}
 		if (d.operator === "+") {
-			return "ms_string_concat(" + left + ", " + right + ")";
+			// Concat chain fusion: s + t + u → ms_string_concat_many(3, s, t, u)
+			// AST is left-associative: ((s + t) + u) — walk left spine, collect rights
+			let operands: string[] = [];
+			let cur = node;
+			while (cur.kind === NodeKind.BinaryExpr) {
+				const cd = cur.data as BinaryExprData;
+				if (cd.operator !== "+" || !isStringTyped(cd.left)) break;
+				operands.push(genExpr(g, p, cd.right));
+				cur = cd.left;
+			}
+			operands.push(genExpr(g, p, cur));
+			// operands are in reverse order (rightmost first), reverse them
+			let reversed: string[] = [];
+			let ri = operands.length - 1;
+			while (ri >= 0) {
+				reversed.push(operands[ri]);
+				ri -= 1;
+			}
+			if (reversed.length === 2) {
+				return "ms_string_concat(" + reversed[0] + ", " + reversed[1] + ")";
+			}
+			let result = "ms_string_concat_many(" + reversed.length;
+			let i = 0;
+			while (i < reversed.length) {
+				result = result + ", " + reversed[i];
+				i += 1;
+			}
+			return result + ")";
 		}
 	}
 	const cOp = mapBinaryOp(d.operator);
@@ -161,6 +203,17 @@ function genBinaryExpr(g: CGen, p: CProc, node: Node): string {
 function isStringTyped(node: Node): boolean {
 	if (node.nodeType === null) return false;
 	return node.nodeType.kind === TypeKind.String;
+}
+
+function isArrayTyped(node: Node): boolean {
+	if (node.nodeType === null) return false;
+	return node.nodeType.kind === TypeKind.Array;
+}
+
+function isEmptyStringLiteral(node: Node): boolean {
+	if (node.kind !== NodeKind.StringLiteral) return false;
+	const d = node.data as StringLiteralData;
+	return d.value === "";
 }
 
 function mapBinaryOp(op: string): string {
@@ -212,12 +265,13 @@ function genArrayAccess(g: CGen, p: CProc, node: Node): string {
 	const d = node.data as ArrayAccessData;
 	const arr = genExpr(g, p, d.array);
 	const idx = genExpr(g, p, d.index);
-	// String index read: s[i] → ms_string_char_at(s, i)
+	// String index read: s[i] → bounds check + ms_string_char_at(s, i)
 	if (isStringTyped(d.array)) {
-		return "ms_string_char_at(" + arr + ", " + idx + ")";
+		return "({ NI __idx = " + idx + "; if ((NU)__idx >= (NU)(" + arr + ".len)) ms_raise_index_error(__idx, " + arr + ".len); ms_string_char_at(" + arr + ", __idx); })";
 	}
+	// Array index read: arr[i] → bounds check + arr.p->data[i]
 	if (d.array.nodeType !== null && d.array.nodeType.kind === TypeKind.Array) {
-		return arr + ".p->data[" + idx + "]";
+		return "({ NI __idx = " + idx + "; if ((NU)__idx >= (NU)(" + arr + ".len)) ms_raise_index_error(__idx, " + arr + ".len); " + arr + ".p->data[__idx]; })";
 	}
 	return arr + "[" + idx + "]";
 }
@@ -246,6 +300,49 @@ function genTypeAssertion(g: CGen, p: CProc, node: Node): string {
 // Direct call: foo(args)
 // Closure call: MS_CLOSURE_CALL(closureVar, args) or closureVar.fn(closureVar.env, args)
 
+// Emit a @runtime call: strip & prefix → &first_arg, add array type suffix.
+function emitRuntimeCall(g: CGen, p: CProc, runtimeName: string, args: Node[]): string {
+	let cName = runtimeName;
+	let needsAddr = false;
+
+	// & prefix → mutating method, first arg needs address-of
+	if (cName.length > 0 && charAt(cName, 0) === "&") {
+		cName = sliceStr(cName, 1, cName.length);
+		needsAddr = true;
+	}
+
+	// Array type suffix: ms_array_X → ms_array_X_number/_string/_ref
+	if (args.length > 0 && args[0].nodeType !== null) {
+		const recvType = args[0].nodeType;
+		if (recvType.kind === TypeKind.Array) {
+			if (cName.length >= 9 && sliceStr(cName, 0, 9) === "ms_array_") {
+				if (recvType.typeReturn !== null) {
+					const ek = recvType.typeReturn.kind;
+					if (ek === TypeKind.Number || ek === TypeKind.Float64) {
+						cName = cName + "_number";
+					} else if (ek === TypeKind.String) {
+						cName = cName + "_string";
+					} else {
+						cName = cName + "_ref";
+					}
+				}
+			}
+		}
+	}
+
+	// Build call with & on first arg if mutating
+	if (needsAddr && args.length > 0) {
+		let result = cName + "(&(" + genExpr(g, p, args[0]) + ")";
+		let i = 1;
+		while (i < args.length) {
+			result = result + ", " + genExpr(g, p, args[i]);
+			i = i + 1;
+		}
+		return result + ")";
+	}
+	return cName + "(" + joinArgs(g, p, args) + ")";
+}
+
 function genCallExpr(g: CGen, p: CProc, node: Node): string {
 	const cd = node.data as CallExprData;
 	let isDirect = false;
@@ -259,10 +356,16 @@ function genCallExpr(g: CGen, p: CProc, node: Node): string {
 		if (nameSetHas(g.fnDeclNames, id.name)) isDirect = true;
 
 		// @runtime("c_name") on top-level function — emit C name directly (Nim sfImportc)
+		// Handles & prefix (mutating → address-of on first arg) and array type suffix.
 		if (g.checkerCtx !== null) {
 			const sym = lookupSymbol(g.checkerCtx.table, id.name);
 			if (sym !== null && sym.runtimeName !== "") {
-				return sym.runtimeName + "(" + joinArgs(g, p, cd.arguments) + ")";
+				return emitRuntimeCall(g, p, sym.runtimeName, cd.arguments);
+			}
+			// Overload resolution: resolve call to correct mangled name
+			if (sym !== null && hasOverloads(sym)) {
+				const mangledName = resolveOverloadCallName(g, p, sym, node);
+				return mangledName + "(" + joinArgs(g, p, cd.arguments) + ")";
 			}
 		}
 	}
@@ -302,6 +405,120 @@ function genCallExpr(g: CGen, p: CProc, node: Node): string {
 	const rest = joinArgs(g, p, cd.arguments);
 	if (rest !== "") envArgs = envArgs + ", " + rest;
 	return "((" + callee + ").fn(" + envArgs + "))";
+}
+
+// ===== Overload Call Resolution =====
+
+function resolveOverloadCallName(g: CGen, p: CProc, sym: Symbol, callNode: Node): string {
+	const cd = callNode.data as CallExprData;
+	// Build candidate Type[] from sym + overloads
+	const candidates: Type[] = [];
+	candidates.push(sym.symbolType);
+	let oi = 0;
+	while (oi < sym.overloads.length) {
+		candidates.push(sym.overloads[oi].symbolType);
+		oi = oi + 1;
+	}
+	// Collect arg types from nodeType annotations (set by checker)
+	const argTypes: Type[] = [];
+	let ai = 0;
+	while (ai < cd.arguments.length) {
+		if (cd.arguments[ai].nodeType !== null) {
+			argTypes.push(cd.arguments[ai].nodeType);
+		} else {
+			// Fallback: use unknown type
+			argTypes.push(sym.symbolType);
+		}
+		ai = ai + 1;
+	}
+	// Inheritance-aware overload resolution (matches checker's resolveOverloadIdxWithInheritance)
+	const idx = codegenResolveOverloadIdx(g, candidates, argTypes);
+	if (idx >= 0) {
+		// Check if winner has runtimeName
+		if (idx === 0 && sym.runtimeName !== "") {
+			return sym.runtimeName;
+		}
+		if (idx > 0 && sym.overloads[idx - 1].runtimeName !== "") {
+			return sym.overloads[idx - 1].runtimeName;
+		}
+		return safeName(sym.name) + "__" + idx;
+	}
+	// Fallback: no match → use primary name (checker should have caught the error)
+	return safeName(sym.name) + "__0";
+}
+
+// Inline inheritance-aware overload resolution for codegen.
+// Mirrors resolveOverloadIdxWithInheritance from checkExprPass.ms without importing it.
+function codegenResolveOverloadIdx(g: CGen, candidates: Type[], argTypes: Type[]): number {
+	let bestIdx = -1;
+	let bestScore = emptyCandidateScore();
+	let bestType: Type = null as unknown as Type;
+	let ambiguous = false;
+	let i = 0;
+	while (i < candidates.length) {
+		if (candidates[i].kind !== TypeKind.Function) { i = i + 1; continue; }
+		const score = scoreCandidatePriority(candidates[i].typeChildren, argTypes, getMinArity(candidates[i]));
+		if (isNoMatch(score)) { i = i + 1; continue; }
+		// Compute inheritance penalty via typeExtra chain
+		let maxDepth = -1;
+		let pi = 0;
+		while (pi < candidates[i].typeChildren.length && pi < argTypes.length) {
+			const pType = candidates[i].typeChildren[pi];
+			const aType = argTypes[pi];
+			if (pType.kind === TypeKind.Object && aType.kind === TypeKind.Object) {
+				if (pType.typeName !== "" && aType.typeName !== "" && pType.typeName !== aType.typeName) {
+					const depth = codegenInheritanceDepth(g, aType, pType);
+					if (depth > 0 && (maxDepth === -1 || depth > maxDepth)) {
+						maxDepth = depth;
+					}
+				}
+			}
+			pi = pi + 1;
+		}
+		if (maxDepth > 0) {
+			score.inheritancePenalty = maxDepth;
+		}
+		if (bestIdx === -1) {
+			bestIdx = i;
+			bestScore = score;
+			bestType = candidates[i];
+			ambiguous = false;
+		} else {
+			const cmp = cmpCandidates(score, bestScore, candidates[i], bestType);
+			if (cmp > 0) {
+				bestIdx = i;
+				bestScore = score;
+				bestType = candidates[i];
+				ambiguous = false;
+			} else if (cmp === 0) {
+				ambiguous = true;
+			}
+		}
+		i = i + 1;
+	}
+	if (ambiguous) return -2;
+	return bestIdx;
+}
+
+// Walk class inheritance chain from sourceType to targetType using checker context.
+function codegenInheritanceDepth(g: CGen, sourceType: Type, targetType: Type): number {
+	if (sourceType === null || targetType === null) return -1;
+	if (sourceType.typeName === "" || targetType.typeName === "") return -1;
+	if (g.checkerCtx === null) return -1;
+	let current = sourceType;
+	let depth = 0;
+	while (current !== null) {
+		depth = depth + 1;
+		if (current.typeExtra === null) return -1;
+		if (current.typeExtra.typeName === "") return -1;
+		if (current.typeExtra.typeName === targetType.typeName) return depth;
+		const baseSym = lookupSymbol(g.checkerCtx.table, current.typeExtra.typeName);
+		if (baseSym === null) return -1;
+		if (baseSym.symbolKind !== SymbolKind.Class) return -1;
+		current = baseSym.symbolType;
+		if (depth > 20) return -1;
+	}
+	return -1;
 }
 
 // ===== Object Literal =====

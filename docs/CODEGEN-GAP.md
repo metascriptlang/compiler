@@ -29,6 +29,7 @@ Each item: what's missing, why production compilers have it, why we don't yet, h
 | 18 | JS string encoding (UTF-8 vs UTF-16) | JS Backend | ~200 lines | No |
 | 19 | String/Array runtime architecture | Tracking | — | See [LANG-RUNTIME.md](LANG-RUNTIME.md) |
 | 20 | JS performance & bundle optimization | JS Backend | ~350 lines | No |
+| 21 | Default parameter limitations | Edge Case | ~100 lines | No |
 
 
 ## Blockings
@@ -385,6 +386,27 @@ Phase 3: Benchmark suite comparing MetaScript JS output perf vs hand-written JS.
 
 ---
 
+### 21. Default Parameter Limitations
+
+**Status: PARTIAL — core works, two edge cases remain.**
+
+Default parameters (`function f(x: number = 5)`) are implemented end-to-end: parser captures default text in `DefaultParamStore` (context.ms), `minArity` encoded in `typeFlags` bits 8-15 (types.ms), flexible arity scoring in `scoreCandidatePriority` (compat.ms), call-site filling via `fillDefaultArgsForNode` (checkExprPass.ms). Simple literal defaults (numbers, strings, booleans, null, identifiers) work for same-module calls.
+
+**Remaining limitations**:
+
+1. **Cross-module defaults**: `DefaultParamStore` is a process-global side-channel keyed by function name. Defaults are only available within the module that parsed them. Calling `f(1)` from another module when `f(x: number, y: number = 5)` is defined elsewhere fails — the caller doesn't have the default text. Production compilers store defaults on the parameter Symbol (`PSym.ast` field) so they travel cross-module for free via symbol sharing.
+
+2. **Complex default expressions**: `defaultTextToNode()` only handles simple literals (`5`, `"hello"`, `true`, `false`, `null`, identifiers). Expressions like `f(x = a + b)`, `f(x = someFunc())`, or `f(x = [1, 2])` are stored as text but fail to reconstruct into AST nodes. Fix: lex the text and run the expression parser instead of pattern-matching literals.
+
+3. **`const r = f(1)` DRC interaction**: Assigning default-filled call results to a variable (`const r = f(1);`) triggers DRC heap-use-after-free. Statement-form calls (`f(1);`) work fine. Root cause: DRC cleanup of the Result interacts with the newly-inserted default argument nodes.
+
+**How to close**:
+- Issue 1: Module-qualify store keys (`modulePath + ":" + fnName`), or migrate to storing defaults on Symbol (matches production architecture). ~50 lines.
+- Issue 2: Replace literal matching in `defaultTextToNode` with `lex(text) → createState → parseExpression`. ~30 lines, isolated change.
+- Issue 3: Investigate DRC interaction with inserted nodes in assignment context. ~20 lines.
+
+---
+
 ## Design Note: String/Array Operator Codegen (Why Not `std/core.ms`)
 
 MetaScript has operator overloading and subscript overloading (reference compiler supports both). In theory, all string/array operations could be declared in `std/core.ms` with `@runtime` decorators, making codegen type-unaware. However, 9 operations are intentionally handled in codegen (`expressions.ms`) for the same reason Nim uses `{.magic.}` in `ccgexprs.nim` instead of normal overloaded procs:
@@ -400,7 +422,7 @@ MetaScript has operator overloading and subscript overloading (reference compile
 | `s < t` / `s > t` / `<=` / `>=` | `(ms_string_compare(s, t) op 0)` | Comparison family shares one runtime call |
 | `s + t` | `ms_string_concat(s, t)` | **Concat chain fusion** (Gap #8): `s + t + u` → single allocation |
 | `s[i]` read | `ms_string_char_at(s, i)` | Bounds checking injection point (Gap #6) |
-| `s[i] = ch` | `ms_string_set_char(&s, i, ch)` | COW mutation guard (Gap #18) |
+| `s[i] = ch` | `(ms_prepare_str_mutation(&s), ms_string_set_char(&s, i, ch))` | ~~COW mutation guard~~ DONE |
 | `arr[i]` | `arr.p->data[i]` | Direct data access — no function call overhead |
 
 ### Why Nim uses magic for the same operations

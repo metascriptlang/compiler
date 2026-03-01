@@ -26,6 +26,8 @@ export function extractDecoratorInfo(node: Node): DecoratorInfo {
 				if (arg.kind === NodeKind.StringLiteral) {
 					btKind = (arg.data as StringLiteralData).value;
 				}
+			} else if (md.macroName === "pure") {
+				btKind = "pure";
 			}
 		}
 	}

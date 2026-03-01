@@ -15,6 +15,7 @@ import {
 	ExportDeclData, DecoratedDeclData, ImportDeclData,
 } from "../../ast/node";
 import { CheckerContext } from "../../checker/context";
+import { lookupSymbol, hasOverloads } from "../../checker/symbol";
 import {
 	CGen, CSection,
 	createCGen, sec, add, addLine, addNewline,
@@ -290,7 +291,21 @@ function collectFnDeclNames(g: CGen, node: Node): void {
 		}
 	} else if (node.kind === NodeKind.FunctionDecl) {
 		const d = node.data as FunctionDeclData;
-		if (d.fnName !== "") nameSetAdd(g.fnDeclNames, d.fnName);
+		if (d.fnName !== "") {
+			nameSetAdd(g.fnDeclNames, d.fnName);
+			// Register overloaded name variants for closure detection
+			if (g.checkerCtx !== null) {
+				const sym = lookupSymbol(g.checkerCtx.table, d.fnName);
+				if (sym !== null && hasOverloads(sym)) {
+					nameSetAdd(g.fnDeclNames, safeName(d.fnName) + "__0");
+					let ovi = 0;
+					while (ovi < sym.overloads.length) {
+						nameSetAdd(g.fnDeclNames, safeName(d.fnName) + "__" + (ovi + 1));
+						ovi = ovi + 1;
+					}
+				}
+			}
+		}
 		collectFnDeclNames(g, d.fnBody);
 	} else if (node.kind === NodeKind.BlockStmt) {
 		const d = node.data as BlockStmtData;

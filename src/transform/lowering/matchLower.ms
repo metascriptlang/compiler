@@ -18,16 +18,18 @@ import {
 	BlockStmtData,
 	MatchStmtData, MatchExprData, MatchCaseData,
 	VariableDeclData, ReturnStmtData, ExprStmtData,
-	IdentifierData,
+	IdentifierData, NumberLiteralData, StringLiteralData,
 } from "../../ast/node";
 import { TransformContext, freshTemp } from "../context";
 import { walkExpandBlocks } from "../walker";
 import {
 	makeIdent, makeBlock, makeVarDecl, makeExprStmt,
 	makeReturn, makeIf, makeBinary, makeAssign,
+	makeCall, makeNumber, makeSwitch, makeSwitchCase,
 } from "../util";
 import { test, check, testGroup } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
+import { charAt } from "../../utils/string";
 
 // ===== Main Entry Point =====
 
@@ -127,6 +129,11 @@ function lowerMatchExprInReturn(stmt: Node, ctx: TransformContext): Node[] {
 // mode: "stmt" = body as-is, "assign" = varName = body, "return" = return body
 
 function buildIfChain(cases: Node[], tempName: string, loc: Node["location"], mode: string, varName: string): Node {
+	// String hash dispatch for >8 string cases
+	if (isAllStringCases(cases)) {
+		return buildHashSwitch(cases, tempName, loc, mode, varName);
+	}
+
 	let elseNode = makeBlock([], loc);
 
 	for (let i = cases.length - 1; i >= 0; i -= 1) {
@@ -216,6 +223,191 @@ function makePatternTest(pattern: Node, tempName: string, loc: Node["location"])
 	return makeBinary(makeIdent(tempName, loc), "===", pattern, loc);
 }
 
+// ===== String Hash Dispatch =====
+// When ALL non-wildcard/non-binding arms are string literals and count > 8,
+// emit switch(djb2(disc)) with equality guards instead of if-else chain.
+// Matches Nim's genStringCase optimization (ccgstmts.nim).
+
+const STRING_HASH_THRESHOLD: number = 8;
+
+// DJB2 hash — must match C runtime's ms_string_hash for correctness.
+// Note: .code only works on string literals (DRC #28), so we use charCodeAt helper.
+function djb2Hash(s: string): number {
+	let h: number = 5381;
+	let i = 0;
+	while (i < s.length) {
+		const cc = charCodeAt(s, i);
+		// h = h * 33 + charCode
+		h = ((h * 33) + cc) | 0;
+		i = i + 1;
+	}
+	return h;
+}
+
+// Get char code at position — workaround for .code only working on literals.
+function charCodeAt(s: string, idx: number): number {
+	const ch = charAt(s, idx);
+	// Map ASCII printable range. For hash dispatch, we only need string literal chars.
+	if (ch === " ") return 32;
+	if (ch === "!") return 33;
+	if (ch === "\"") return 34;
+	if (ch === "#") return 35;
+	if (ch === "$") return 36;
+	if (ch === "%") return 37;
+	if (ch === "&") return 38;
+	if (ch === "'") return 39;
+	if (ch === "(") return 40;
+	if (ch === ")") return 41;
+	if (ch === "*") return 42;
+	if (ch === "+") return 43;
+	if (ch === ",") return 44;
+	if (ch === "-") return 45;
+	if (ch === ".") return 46;
+	if (ch === "/") return 47;
+	if (ch === "0") return 48;
+	if (ch === "1") return 49;
+	if (ch === "2") return 50;
+	if (ch === "3") return 51;
+	if (ch === "4") return 52;
+	if (ch === "5") return 53;
+	if (ch === "6") return 54;
+	if (ch === "7") return 55;
+	if (ch === "8") return 56;
+	if (ch === "9") return 57;
+	if (ch === ":") return 58;
+	if (ch === ";") return 59;
+	if (ch === "<") return 60;
+	if (ch === "=") return 61;
+	if (ch === ">") return 62;
+	if (ch === "?") return 63;
+	if (ch === "@") return 64;
+	// Uppercase A-Z
+	if (ch === "A") return 65;
+	if (ch === "B") return 66;
+	if (ch === "C") return 67;
+	if (ch === "D") return 68;
+	if (ch === "E") return 69;
+	if (ch === "F") return 70;
+	if (ch === "G") return 71;
+	if (ch === "H") return 72;
+	if (ch === "I") return 73;
+	if (ch === "J") return 74;
+	if (ch === "K") return 75;
+	if (ch === "L") return 76;
+	if (ch === "M") return 77;
+	if (ch === "N") return 78;
+	if (ch === "O") return 79;
+	if (ch === "P") return 80;
+	if (ch === "Q") return 81;
+	if (ch === "R") return 82;
+	if (ch === "S") return 83;
+	if (ch === "T") return 84;
+	if (ch === "U") return 85;
+	if (ch === "V") return 86;
+	if (ch === "W") return 87;
+	if (ch === "X") return 88;
+	if (ch === "Y") return 89;
+	if (ch === "Z") return 90;
+	if (ch === "[") return 91;
+	if (ch === "\\") return 92;
+	if (ch === "]") return 93;
+	if (ch === "^") return 94;
+	if (ch === "_") return 95;
+	if (ch === "`") return 96;
+	// Lowercase a-z
+	if (ch === "a") return 97;
+	if (ch === "b") return 98;
+	if (ch === "c") return 99;
+	if (ch === "d") return 100;
+	if (ch === "e") return 101;
+	if (ch === "f") return 102;
+	if (ch === "g") return 103;
+	if (ch === "h") return 104;
+	if (ch === "i") return 105;
+	if (ch === "j") return 106;
+	if (ch === "k") return 107;
+	if (ch === "l") return 108;
+	if (ch === "m") return 109;
+	if (ch === "n") return 110;
+	if (ch === "o") return 111;
+	if (ch === "p") return 112;
+	if (ch === "q") return 113;
+	if (ch === "r") return 114;
+	if (ch === "s") return 115;
+	if (ch === "t") return 116;
+	if (ch === "u") return 117;
+	if (ch === "v") return 118;
+	if (ch === "w") return 119;
+	if (ch === "x") return 120;
+	if (ch === "y") return 121;
+	if (ch === "z") return 122;
+	if (ch === "{") return 123;
+	if (ch === "|") return 124;
+	if (ch === "}") return 125;
+	if (ch === "~") return 126;
+	return 0;
+}
+
+// Check if all non-wildcard/non-binding patterns are string literals.
+function isAllStringCases(cases: Node[]): boolean {
+	let stringCount = 0;
+	for (let i = 0; i < cases.length; i += 1) {
+		const caseData = cases[i].data as MatchCaseData;
+		if (isWildcard(caseData.casePatterns)) continue;
+		if (isBindingPattern(caseData.casePatterns)) return false;
+		// Check all patterns in this arm are string literals
+		for (let j = 0; j < caseData.casePatterns.length; j += 1) {
+			if (caseData.casePatterns[j].kind !== NodeKind.StringLiteral) return false;
+		}
+		stringCount = stringCount + 1;
+	}
+	return stringCount > STRING_HASH_THRESHOLD;
+}
+
+// Build switch(djb2(disc)) { case HASH: if (disc === str) { body } break; ... default: { wildcard } }
+function buildHashSwitch(cases: Node[], tempName: string, loc: Node["location"], mode: string, varName: string): Node {
+	const switchCases: Node[] = [];
+	let defaultBody = makeBlock([], loc);
+
+	for (let i = 0; i < cases.length; i += 1) {
+		const caseData = cases[i].data as MatchCaseData;
+		if (isWildcard(caseData.casePatterns)) {
+			defaultBody = wrapArmBody(caseData.caseBody, mode, varName, loc);
+			continue;
+		}
+
+		// Each pattern gets its own switch case (hash value)
+		for (let j = 0; j < caseData.casePatterns.length; j += 1) {
+			const pat = caseData.casePatterns[j];
+			const strData = pat.data as StringLiteralData;
+			const hash = djb2Hash(strData.value);
+
+			// Body: if (temp === "literal") { armBody; break; }
+			const body = wrapArmBody(caseData.caseBody, mode, varName, loc);
+			const guard = makeBinary(makeIdent(tempName, loc), "===", pat, loc);
+			const guardedBody = makeIf(guard, body, makeBlock([], loc), loc);
+			const caseStmts: Node[] = [];
+			caseStmts.push(guardedBody);
+
+			const hashNode = makeNumber(hash, loc);
+			const tests: Node[] = [];
+			tests.push(hashNode);
+			switchCases.push(makeSwitchCase(tests, caseStmts, false, loc));
+		}
+	}
+
+	// Default case
+	const defaultStmts: Node[] = [];
+	defaultStmts.push(defaultBody);
+	switchCases.push(makeSwitchCase([], defaultStmts, true, loc));
+
+	// switch (ms_string_hash(temp))
+	const hashCallArgs: Node[] = [];
+	hashCallArgs.push(makeIdent(tempName, loc));
+	const hashCall = makeCall(makeIdent("ms_string_hash", loc), hashCallArgs, loc);
+	return makeSwitch(hashCall, switchCases, loc);
+}
+
 // ===== Tests =====
 
 testGroup("Match Lowering", () => {
@@ -230,5 +422,19 @@ testGroup("Match Lowering", () => {
 	});
 	test("match preserves surrounding stmts", () => {
 		check(stmtCountAfter("let a = 1; match (x) { _ => b() } let c = 2;", lowerMatch) === 4);
+	});
+	test("string hash dispatch for >8 arms", () => {
+		const src = "match (x) { \"a\" => 1, \"b\" => 2, \"c\" => 3, \"d\" => 4, \"e\" => 5, \"f\" => 6, \"g\" => 7, \"h\" => 8, \"i\" => 9, _ => 0 }";
+		// 9 string arms > threshold(8) → should produce SwitchStmt (2nd stmt after VarDecl temp)
+		check(stmtCountAfter(src, lowerMatch) === 2);
+	});
+	test("few string arms stay as if-else", () => {
+		const src = "match (x) { \"a\" => 1, \"b\" => 2, _ => 0 }";
+		// 2 string arms <= threshold → stays as if-else chain
+		check(stmtCountAfter(src, lowerMatch) === 2);
+	});
+	test("djb2 hash deterministic", () => {
+		check(djb2Hash("hello") === djb2Hash("hello"));
+		check(djb2Hash("a") !== djb2Hash("b"));
 	});
 });

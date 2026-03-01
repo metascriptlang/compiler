@@ -18,6 +18,51 @@ import { callStateProgramParser } from "../parser/statements/callbacks";
 import { readFile } from "std/process";
 import { test, check, testGroup } from "std/testing";
 
+// Check if source already has extern function declarations (synthesized by compile.ms).
+// The loader sets source to "// C header: <path>" — if it still starts with that prefix,
+// it hasn't been synthesized yet.
+function sourceHasExtern(source: string): boolean {
+	if (source.length < 15) return false;
+	// If source starts with "// Synthetic", it was already synthesized
+	return source.slice(0, 14) === "// Synthetic m";
+}
+
+// Synthesize MetaScript source for a C header module from import names.
+// Each imported name becomes `export extern function NAME(): int64;`.
+function synthesizeHeaderSource(graph: ModuleGraph, headerPath: string): string {
+	let source = "// Synthetic module for C header: " + headerPath + "\n";
+	const emitted: string[] = [];
+
+	let mi = 0;
+	while (mi < graph.modules.length) {
+		const gmod = graph.modules[mi];
+		let ii = 0;
+		while (ii < gmod.imports.length) {
+			const imp = gmod.imports[ii];
+			if (imp.sourcePath === headerPath) {
+				let ni = 0;
+				while (ni < imp.names.length) {
+					const name = imp.names[ni];
+					let found = false;
+					let ei = 0;
+					while (ei < emitted.length) {
+						if (emitted[ei] === name) { found = true; }
+						ei = ei + 1;
+					}
+					if (!found) {
+						source = source + "export extern function " + name + "(): int64;\n";
+						emitted.push(name);
+					}
+					ni = ni + 1;
+				}
+			}
+			ii = ii + 1;
+		}
+		mi = mi + 1;
+	}
+	return source;
+}
+
 // Nim-aligned: check modules one at a time in topological (loadOrder) sequence.
 // Each module gets all 3 passes before moving to the next.
 // Since modules are in dependency order, exports from dependencies are
@@ -50,6 +95,12 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): void {
 		const mod = findModule(graph, path);
 		if (mod === null) continue;
 		if (mod.source === "") continue;
+
+		// C header modules: synthesize extern function source from import names
+		// (compile.ms may have already done this; this handles test/direct-call paths)
+		if (mod.isCHeader && !sourceHasExtern(mod.source)) {
+			mod.source = synthesizeHeaderSource(graph, mod.path);
+		}
 
 		// Parse with recovery — always get partial AST, errors in state.errors
 		const lr = lex(mod.source);
@@ -98,7 +149,16 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): void {
 						extStatic = ext.isStatic;
 					}
 				}
-				const info: ExportedSymInfo = { name: sym.name, kind: sym.symbolKind, symType: sym.symbolType, extReceiverType: extRecv, extIsStatic: extStatic };
+				// Collect overload types if function has overloads
+				const ovTypes: Type[] = [];
+				if (sym.overloads.length > 0) {
+					let ovi = 0;
+					while (ovi < sym.overloads.length) {
+						ovTypes.push(sym.overloads[ovi].symbolType);
+						ovi = ovi + 1;
+					}
+				}
+				const info: ExportedSymInfo = { name: sym.name, kind: sym.symbolKind, symType: sym.symbolType, overloadTypes: ovTypes, extReceiverType: extRecv, extIsStatic: extStatic };
 				exports.push(info);
 			}
 		}
@@ -283,6 +343,21 @@ testGroup("Checker Multi-Module", () => {
 		const modA = findModule(graph, "/src/a.ms");
 		check(modA !== null);
 		// Module A can resolve 'bar' from B's partial exports
+		check(modA.errors.length === 0);
+	});
+	test("C header import synthesizes exports", () => {
+		const entries: MapEntry[] = [];
+		entries.push({ entryPath: "/src/lib.h", entrySource: "void foo(int x);" });
+		entries.push({ entryPath: "/src/a.ms", entrySource: "import { foo } from \"./lib.h\"; const x = foo;" });
+		const provider = createMapProvider(entries);
+		const graph = loadModuleGraph("/src/a.ms", provider);
+		checkModuleGraph(graph, "");
+		const hmod = findModule(graph, "/src/lib.h");
+		check(hmod !== null);
+		check(hmod.isCHeader);
+		check(hasExportName(hmod, "foo"));
+		const modA = findModule(graph, "/src/a.ms");
+		check(modA !== null);
 		check(modA.errors.length === 0);
 	});
 });

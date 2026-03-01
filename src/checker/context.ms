@@ -12,6 +12,7 @@ export interface ExportedSymInfo {
 	name: string;
 	kind: SymbolKind;
 	symType: Type;
+	overloadTypes: Type[];
 	extReceiverType: string;
 	extIsStatic: boolean;
 }
@@ -94,6 +95,21 @@ export function findExtensionByName(registry: ExtensionRegistry, methodName: str
 		if (m.methodName === methodName) return m;
 	}
 	return null as unknown as ExtensionMethod;
+}
+
+// findAllExtensions — find ALL extensions matching receiver type + method name.
+// Returns array of matching ExtensionMethods for overload resolution.
+export function findAllExtensions(registry: ExtensionRegistry, receiverTypeName: string, methodName: string): ExtensionMethod[] {
+	const results: ExtensionMethod[] = [];
+	let i = 0;
+	while (i < registry.methods.length) {
+		const m = registry.methods[i];
+		if (m.receiverTypeName === receiverTypeName && m.methodName === methodName) {
+			results.push(m);
+		}
+		i = i + 1;
+	}
+	return results;
 }
 
 // ===== Extension Flag Helpers =====

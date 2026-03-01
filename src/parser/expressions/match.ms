@@ -2,7 +2,7 @@
 // Pattern: ~/projects/metascript/src/parser/parser.zig parseMatchStatement()
 // Uses callback injection to avoid circular imports with expression.ms
 
-import { Token, TokenKind } from "../../lexer/token";
+import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, NodeData, Expression, createNode } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, expect, peek } from "../context";
 import { parseOk } from "./util";
@@ -151,7 +151,7 @@ function parseSinglePattern(state: ParserState): ExprResult {
 		while (!isAtEnd(state) && current(state).kind === TokenKind.Dot) {
 			advance(state);
 			const prop = current(state);
-			if (prop.kind === TokenKind.Ident) {
+			if (isIdentOrKeyword(prop.kind)) {
 				advance(state);
 				node = createNode(NodeKind.MemberExpr, { object: node, property: prop.value, isOptional: false }, token);
 			} else {

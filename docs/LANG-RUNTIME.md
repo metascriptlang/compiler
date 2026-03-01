@@ -116,7 +116,7 @@ These use AST-level type inspection (`nodeType`) to emit specialized code per ba
 | Greater/equal | `s >= t` | `(ms_string_compare(s, t) >= 0)` | (mLeStr flipped) |
 | Concat | `s + t` | `ms_string_concat(s, t)` | `mConStrStr` |
 | Index read | `s[i]` | `ms_string_char_at(s, i)` | subscript magic |
-| Index write | `s[i] = ch` | `ms_string_set_char(&s, i, ch)` | subscript + `nimPrepareStrMutationV2` |
+| Index write | `s[i] = ch` | `(ms_prepare_str_mutation(&s), ms_string_set_char(&s, i, ch))` | subscript + `nimPrepareStrMutationV2` |
 
 **Array primitives:**
 
@@ -125,14 +125,14 @@ These use AST-level type inspection (`nodeType`) to emit specialized code per ba
 | Length | `arr.length` | `arr.len` | `mLengthSeq` |
 | Index read | `arr[i]` | `arr.p->data[i]` | `mArrGet` |
 
-**Not yet implemented (planned for codegen):**
+**Codegen optimizations:**
 
-| Operation | MetaScript | Planned C Emission | Nim Magic | Gap |
-|-----------|-----------|-------------------|-----------|-----|
-| Concat chain | `s + t + u` | single `rawNewString` + N appends | `mConStrStr` (chain walk) | #8 |
-| Empty string fast path | `s == ""` | `(s.len == 0)` | `mEqStr` (literal check) | — |
-| Bounds check | `arr[i]` | `if (i >= len) ms_raise_index(i, len)` | subscript magic | #6 |
-| Array index write | `arr[i] = v` | `arr.p->data[i] = v` | `mArrPut` | — |
+| Operation | MetaScript | C Emission | Nim Magic |
+|-----------|-----------|-----------|-----------|
+| Concat chain | `s + t + u` | `ms_string_concat_many(3, s, t, u)` | `mConStrStr` (chain walk) |
+| Empty string fast path | `s == ""` | `(s.len == 0)` | `mEqStr` (literal check) |
+| Bounds check | `arr[i]` | `({ if(i>=len) ms_raise_index_error(...); arr.p->data[i]; })` | subscript magic |
+| Array index write | `arr[i] = v` | `arr.p->data[i] = v` | `mArrPut` |
 
 ### Why these are in codegen (not `std/core.ms`)
 
@@ -188,17 +188,20 @@ These are normal extension methods: `collectPass` → `extensionMethodLower` →
 
 | Component | Status |
 |-----------|--------|
-| Codegen primitives (12 operations) | **DONE** — `src/codegen/c/expressions.ms` |
+| Codegen primitives (16 operations) | **DONE** — `src/codegen/c/expressions.ms` |
+| Concat chain fusion | **DONE** — `ms_string_concat_many()` |
+| Bounds checking | **DONE** — GCC statement expression with `ms_raise_index_error` |
+| Empty string fast path | **DONE** — `s.len == 0` |
+| Array index write | **DONE** — `arr.p->data[i] = v` |
 | `std/core.ms` declarations (65 methods+functions) | **DONE** — all `@runtime` annotated |
 | C runtime implementations | **DONE** — in reference compiler `src/runtime/ms_string.h`, `ms_array.h` |
 | Compiler pipeline (collect → UFCS → builtinLower) | **DONE** |
 | ORC foundation (pure C) | **DONE** — reference compiler `src/runtime/orc.h` |
 | Runtime rewrite to .ms | NOT STARTED — currently pure C headers |
 | JS backend string runtime | NOT STARTED — currently uses native JS strings (no mutation support) |
-| Concat chain fusion | NOT DONE (Gap #8) |
-| Bounds checking | NOT DONE (Gap #6) |
-| Empty string fast path | NOT DONE |
-| COW for string literals | NOT DONE |
+| Fixed-size arrays (`T[N]`) | NOT STARTED — type system + stack allocation |
+| Span/view type (`Span<T>`) | NOT STARTED — non-owning view unifying `T[]` and `T[N]` |
+| COW for string literals | **DONE** — `ms_prepare_str_mutation(&s)` before `ms_string_set_char` |
 | HOF inline expansion (map, filter, reduce, find, every, some) | NOT DONE |
 
 ---
@@ -252,3 +255,129 @@ buf.add(" world");            // in-place append
 - **Raiser**: VM-managed string object with mutation support.
 
 **Encoding**: UTF-8 in C, char codes in JS. Identical behavior for ASCII (0-127). Non-ASCII diverges — accept pragmatically. Future `Rune` iterator for explicit Unicode work.
+
+---
+
+## Three-Tier Array Type System
+
+MetaScript is a systems programming language with TypeScript syntax. Like Nim's `array[N,T]` / `seq[T]` / `openArray[T]` split, MetaScript needs three array tiers for performance-critical code — but expressed as TypeScript-compatible syntax.
+
+### The Problem
+
+Nim has three distinct sequence types because systems programming demands control over allocation:
+
+| Nim Type | Allocation | Size | Growable |
+|----------|-----------|------|----------|
+| `array[N, T]` | Stack | Fixed at compile time | No |
+| `seq[T]` | Heap | Dynamic | Yes |
+| `openArray[T]` | None (view) | Borrowed pointer + length | N/A |
+
+Without all three, you either waste heap allocations on known-size data, or duplicate every function for arrays vs sequences. `openArray` unifies them — ~70+ stdlib functions in Nim accept `openArray` to work with both.
+
+### MetaScript Mapping
+
+| Nim | MetaScript | C Backend | JS Backend |
+|-----|-----------|-----------|------------|
+| `array[N, T]` | `T[N]` | `T arr[N]` (stack) | `Array(N)` (pre-sized) |
+| `seq[T]` | `T[]` | `msArray { len, p }` (heap) | `Array` (native) |
+| `openArray[T]` | `Span<T>` | `{ T* data, NI len }` (view) | `{ data, offset, len }` (view) |
+
+### Syntax (TypeScript Superset)
+
+```ms
+// Dynamic array — existing TypeScript syntax, unchanged
+const items: number[] = [1, 2, 3];    // heap-allocated, growable
+items.push(4);                         // works
+
+// Fixed-size array — new syntax, no TS conflict (TS doesn't have T[N])
+const matrix: number[4] = [1, 0, 0, 1];  // stack-allocated, fixed size
+// matrix.push(5);                        // compile error: fixed size
+
+// Span — looks like a generic type, TS-compatible surface syntax
+function sum(data: Span<number>): number {
+    let total = 0;
+    for (const x of data) total += x;
+    return total;
+}
+
+// Implicit coercion at call site — both work
+sum(items);                // number[]  → Span<number>
+sum(matrix);               // number[4] → Span<number>
+sum(items.span(1, 3));     // zero-copy slice view
+```
+
+### Why Each Tier Exists
+
+**`T[N]` (fixed-size array)** — Stack allocation, zero heap overhead. Essential for:
+- Embedded/real-time systems (no allocator)
+- Small fixed buffers (4x4 matrix, RGB color, SIMD lanes)
+- Struct fields with known size (avoids pointer indirection)
+
+**`T[]` (dynamic array)** — Heap-allocated, growable. The default for general programming:
+- All existing TypeScript array code works unchanged
+- `push`, `pop`, `splice`, `map`, `filter` — full API
+- Reference-counted (ORC) in C backend, GC in JS backend
+
+**`Span<T>` (non-owning view)** — Pointer + length, zero allocation. Enables:
+- Single function signature accepting both `T[N]` and `T[]`
+- Zero-copy slicing: `arr.span(2, 5)` borrows, no allocation
+- Same pattern as Rust's `&[T]`, Go's slice, C++20's `std::span`
+
+### Implicit Coercion Rules
+
+The compiler inserts conversions at call sites when a function expects `Span<T>`:
+
+```
+// T[N] → Span<T>:  { data: &arr[0], len: N }  (N is compile-time constant)
+// T[]  → Span<T>:  { data: arr.p->data, len: arr.len }
+// Span<T>.span(start, end) → Span<T>:  { data: data+start, len: end-start }
+```
+
+### Restrictions
+
+- `Span<T>` **cannot be returned** from functions — dangling pointer risk (same as Nim's openArray)
+- `Span<T>` **cannot be stored** in interfaces/classes — lifetime not tracked
+- `T[N]` size must be a **compile-time constant** (literal or const generic)
+- `T[N]` **cannot be resized** — no `push`, `pop`, `splice`
+
+---
+
+## Pipeline Parity TODO
+
+Items tracked in `docs/FEATURE-GAP.md` that must be completed for full pipeline parity. Return here when ready.
+
+### ~~Implementable NOW — ALL DONE~~
+
+| # | Gap | Phase | Status |
+|---|-----|-------|--------|
+| ~~1~~ | ~~Enum toString generation~~ | ~~Codegen~~ | ~~DONE~~ |
+| ~~2~~ | ~~String case hash dispatch (>8 arms)~~ | ~~Transform~~ | ~~DONE~~ |
+| ~~3~~ | ~~Effect system (`@pure`, `@raises`)~~ | ~~Checker~~ | ~~DONE~~ |
+| ~~4~~ | ~~Enhanced null safety (guard clauses, `&&` narrowing)~~ | ~~Checker~~ | ~~DONE~~ |
+| ~~5~~ | ~~CFG-based data flow analysis~~ | ~~Analyzer~~ | ~~DONE~~ |
+| ~~6~~ | ~~Sink parameter inference~~ | ~~Analyzer~~ | ~~DONE~~ |
+| ~~7~~ | ~~NRVO (named return value optimization)~~ | ~~Codegen~~ | ~~DONE~~ |
+| ~~8~~ | ~~Goto-based exceptions~~ | ~~Codegen~~ | ~~DONE~~ |
+
+### BLOCKED (needs prerequisite work)
+
+| Gap | Blocker |
+|-----|---------|
+| Borrow/cursor inference | Needs CFG (#5) + Span\<T\> type |
+
+### DEFERRED (needs new language features)
+
+| Gap | Blocker |
+|-----|---------|
+| Concepts / type classes | Type system design |
+| Multi-methods + VTables | Language feature |
+| Template/macro system | Hermes VM integration |
+| Converter procs | `converter` keyword semantics |
+| Proc inlining | `@inline` implementation |
+| Spawn / parallel | Threading model |
+| Isolation check | Threading model |
+| Custom numeric literals | Syntax extension |
+| Unicode operators | Syntax extension |
+| RTTI V2 | Runtime design |
+
+See `docs/FEATURE-GAP.md` for full details, source references, and line estimates.

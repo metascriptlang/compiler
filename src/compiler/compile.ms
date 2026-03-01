@@ -23,6 +23,7 @@ import { evaluateComptimeBlocks } from "./comptime";
 import { CliOptions, Target, MODE_DEBUG, MODE_RELEASE } from "./options";
 import { readSource, writeOutput, printErrorsAndExit, emitOutput, printTiming, verboseLog, replaceExt, dirName, baseName, stripBase, ensureDir, getJSRuntime, exeSuffix, outDirForMode } from "./io";
 import { compileC, compileCFile, linkObjects, appendFlag, cliCompileFlags, cliLinkFlags } from "./cc";
+import { parseCHeader } from "../module/cheader";
 import { error, success, bold, dim, green, red, cyan } from "../utils/color";
 import { clockMs } from "std/process";
 
@@ -94,6 +95,45 @@ export function buildResolverConfig(target: Target, resolve: ResolveSection): Re
 	return config;
 }
 
+// Generate synthetic MetaScript source for a C header module.
+// Scans the module graph for all names imported from the given headerPath
+// and generates `export extern function NAME(): int64;` for each.
+// Actual C prototypes come from @include — this just satisfies the checker.
+function synthesizeCHeaderSource(graph: ModuleGraph, headerPath: string): string {
+	let source = "// Synthetic module for C header: " + headerPath + "\n";
+	const emitted: string[] = [];
+
+	let mi = 0;
+	while (mi < graph.modules.length) {
+		const mod = graph.modules[mi];
+		let ii = 0;
+		while (ii < mod.imports.length) {
+			const imp = mod.imports[ii];
+			if (imp.sourcePath === headerPath) {
+				let ni = 0;
+				while (ni < imp.names.length) {
+					const name = imp.names[ni];
+					// Deduplicate
+					let found = false;
+					let ei = 0;
+					while (ei < emitted.length) {
+						if (emitted[ei] === name) { found = true; }
+						ei = ei + 1;
+					}
+					if (!found) {
+						source = source + "export extern function " + name + "(): int64;\n";
+						emitted.push(name);
+					}
+					ni = ni + 1;
+				}
+			}
+			ii = ii + 1;
+		}
+		mi = mi + 1;
+	}
+	return source;
+}
+
 // Report graph-level errors (e.g., circular deps, missing entry).
 function reportGraphErrors(graph: ModuleGraph): void {
 	for (const err of graph.errors) {
@@ -137,6 +177,23 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 	}
 	reportGraphErrors(graph);
 	exitOnModuleErrors(graph, "error");
+
+	// Pre-process C header modules: parse with ARO for type-aware imports.
+	// Falls back to import-name synthesis if ARO parsing fails.
+	for (let hi = 0; hi < graph.loadOrder.length; hi += 1) {
+		const hmod = findModule(graph, graph.loadOrder[hi]);
+		if (hmod !== null && hmod.isCHeader) {
+			if (verbose) verboseLog("parsing C header " + hmod.path);
+			const aroSource = parseCHeader(hmod.path);
+			if (aroSource.length > 60) {
+				hmod.source = aroSource;
+			} else {
+				if (verbose) verboseLog("  ARO fallback → import-name synthesis");
+				hmod.source = synthesizeCHeaderSource(graph, hmod.path);
+			}
+		}
+	}
+
 	if (verbose) verboseLog("cross-module type check");
 	let stdPath = "";
 	if (useConfig === 1) { stdPath = config.stdPath; }
@@ -146,11 +203,13 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 }
 
 // Collect exported C prototypes from all modules (Pass 1 for C builds).
+// C header modules (.h) are skipped — their prototypes come from @include.
 function collectAllPrototypes(graph: ModuleGraph): string {
 	let allProtos = "";
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
+		if (mod.isCHeader) continue;
 		const pr = parseSource(mod.source);
 		if (!pr.ok) continue;
 		const ctx = checkProgram(pr.value);
@@ -196,6 +255,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		const modPath = graph.loadOrder[i];
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
+		if (mod.isCHeader) continue;
 
 		// Parse
 		const pr = parseSource(mod.source);
@@ -273,6 +333,8 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		const modPath = graph.loadOrder[i];
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
+		// Skip C header modules — prototypes come from @include, symbols from @link
+		if (mod.isCHeader) continue;
 
 		if (opts.verbose) verboseLog("compiling " + modPath);
 
@@ -397,6 +459,8 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const modPath = graph.loadOrder[i];
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
+		// Skip C header modules — prototypes come from @include, symbols from @link
+		if (mod.isCHeader) continue;
 
 		if (opts.verbose) verboseLog("compiling " + modPath);
 
@@ -476,6 +540,7 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 		const modPath = graph.loadOrder[i];
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
+		if (mod.isCHeader) continue;
 
 		if (opts.verbose) verboseLog("compiling " + modPath);
 
@@ -524,6 +589,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 		const modPath = graph.loadOrder[i];
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
+		if (mod.isCHeader) continue;
 
 		if (opts.verbose) verboseLog("parsing " + modPath);
 		const pr = parseSource(mod.source);

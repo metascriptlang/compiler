@@ -17,12 +17,13 @@ import {
 	unknownType, numberType, stringType, booleanType, voidType, nullType, neverType,
 	createPrimitive, createArray, createFunction, createObject,
 	createResult, createTypeRef, createUnion, createGenericParam, createDistinct,
+	setMinArity,
 } from "./types";
 import { Symbol, SymbolKind, ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames } from "./context";
 import { trim, sliceStr, findChar, splitTopLevel } from "../utils/string";
 import { getProperty } from "./types";
-import { getGenericDecl, getGenericDeclFieldNames, getGenericDeclFieldTypes, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
+import { getGenericDecl, getGenericDeclFieldNames, getGenericDeclFieldTypes, addGenericTypeInst, findGenericTypeInstIdx, getDefaultCount, getDefaultText, addDefaultParam } from "../parser/context";
 import { test, check, testGroup } from "std/testing";
 
 // ===== A. Resolve Annotation Strings =====
@@ -260,6 +261,12 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 	const paramTypes = resolveTypeStrings(d.fnParamTypes, d.params.length, ctx);
 	const returnType = (d.fnReturnType !== "") ? resolveAnnotation(d.fnReturnType, ctx) : unknownType();
 	const fnType = createFunction(paramTypes, d.params, returnType);
+
+	// Set minArity for functions with default parameters
+	const defCount = getDefaultCount(d.fnName, d.params.length);
+	if (defCount > 0) {
+		setMinArity(fnType, d.params.length - defCount);
+	}
 
 	if (genericNames.length > 0) {
 		closeScope(ctx.table);
@@ -634,5 +641,16 @@ testGroup("Generic Constraints", () => {
 		const t = resolveAnnotation("Box<number>", ctx);
 		check(t.kind === TypeKind.TypeReference);
 		check(t.typeName === "Box__number");
+	});
+});
+
+testGroup("Default Param Resolve", () => {
+	test("getDefaultCount after parse", () => {
+		const cnt = getDefaultCount("testFn1", 2);
+		// testFn1 was parsed in util.ms tests — may or may not be available
+		// Direct test: add entry and check
+		addDefaultParam("resolveTestFn", 1, "42");
+		check(getDefaultCount("resolveTestFn", 2) === 1);
+		check(getDefaultText("resolveTestFn", 1) === "42");
 	});
 });
