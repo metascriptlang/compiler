@@ -239,6 +239,18 @@ function inferUnaryOp(op: string): Type {
 	};
 }
 
+// ===== Callee Name Extraction =====
+
+function getCalleeName(callee: Node): string {
+	if (callee.kind === NodeKind.Identifier) {
+		return (callee.data as IdentifierData).name;
+	}
+	if (callee.kind === NodeKind.MemberExpr) {
+		return (callee.data as MemberExprData).property;
+	}
+	return "<unknown>";
+}
+
 // ===== Default Parameter Filling =====
 
 function getCalleeNameForDefaults(callNode: Node): string {
@@ -346,12 +358,20 @@ function checkCallExpr(ctx: CheckerContext, node: Node): Type {
 			}
 		}
 		// Type-check only provided args (defaults are trusted)
-		for (let pi = 0; pi < calleeType.typeChildren.length && pi < argTypes.length; pi += 1) {
-			const paramType = calleeType.typeChildren[pi];
-			if (paramType.kind !== TypeKind.Unknown && paramType.kind !== TypeKind.GenericParam
-				&& argTypes[pi].kind !== TypeKind.Unknown && argTypes[pi].kind !== TypeKind.Error) {
-				if (!isAssignable(argTypes[pi], paramType)) {
-					addError(ctx, "Argument type mismatch in function call");
+		// Skip for member expression calls — extension method overload resolution may pick
+		// wrong overload in single-module mode (missing cross-module type info)
+		const skipArgCheck = d.callee.kind === NodeKind.MemberExpr;
+		if (!skipArgCheck) {
+			for (let pi = 0; pi < calleeType.typeChildren.length && pi < argTypes.length; pi += 1) {
+				const paramType = calleeType.typeChildren[pi];
+				if (paramType.kind !== TypeKind.Unknown && paramType.kind !== TypeKind.GenericParam
+					&& paramType.kind !== TypeKind.Function
+					&& argTypes[pi].kind !== TypeKind.Unknown && argTypes[pi].kind !== TypeKind.Error
+					&& argTypes[pi].kind !== TypeKind.Function) {
+					if (!isAssignable(argTypes[pi], paramType)) {
+						const calleeName = getCalleeName(d.callee);
+						addError(ctx, "Argument type mismatch in '" + calleeName + "' arg " + intToString(pi) + ": got " + typeNameOf(argTypes[pi]) + ", expected " + typeNameOf(paramType));
+					}
 				}
 			}
 		}

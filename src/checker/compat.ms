@@ -86,8 +86,10 @@ function isFunctionAssignable(source: Type, target: Type): boolean {
 	return true;
 }
 
-// Object assignability: structural (source has all target properties)
+// Object assignability: nominal first, then structural (source has all target properties)
 function isObjectAssignable(source: Type, target: Type): boolean {
+	// Nominal: same typeName means same type (handles self-referencing types like Type, Scope)
+	if (source.typeName !== "" && source.typeName === target.typeName) return true;
 	let targetIdx = 0;
 	for (const targetProp of target.typeNames) {
 		// Look for matching prop in source
@@ -505,6 +507,11 @@ testGroup("Compat Functions", () => {
 });
 
 testGroup("Compat Objects", () => {
+	test("nominal same name", () => {
+		const o1 = createObject("Type", ["kind"], [numberType()], false);
+		const o2 = createObject("Type", ["kind"], [unknownType()], false);
+		check(isAssignable(o1, o2));
+	});
 	test("exact match", () => {
 		const o1 = createObject("A", ["x"], [numberType()], false);
 		const o2 = createObject("B", ["x"], [numberType()], false);
