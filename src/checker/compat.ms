@@ -135,6 +135,14 @@ export function typeRelation(formal: Type, actual: Type): TypeRelation {
 				if (formal.typeName === actual.typeName) return TypeRelation.Exact;
 				TypeRelation.None
 			},
+			TypeKind.Array | TypeKind.Ref | TypeKind.Ptr => {
+				if (formal.typeReturn !== null && actual.typeReturn !== null) {
+					const elemRel = typeRelation(formal.typeReturn, actual.typeReturn);
+					if (elemRel === TypeRelation.None) return TypeRelation.None;
+					return elemRel;
+				}
+				TypeRelation.Exact
+			},
 			TypeKind.Result => {
 				if (formal.typeReturn !== null && actual.typeReturn !== null) {
 					const okRel = typeRelation(formal.typeReturn, actual.typeReturn);
@@ -661,6 +669,24 @@ testGroup("TypeRelation Extended", () => {
 		const r1 = createResult(numberType(), stringType());
 		const r2 = createResult(stringType(), stringType());
 		check(typeRelation(r1, r2) === TypeRelation.None);
+	});
+	test("array same element exact", () => {
+		check(typeRelation(createArray(numberType()), createArray(numberType())) === TypeRelation.Exact);
+	});
+	test("array different element none", () => {
+		check(typeRelation(createArray(numberType()), createArray(stringType())) === TypeRelation.None);
+	});
+	test("ref same inner exact", () => {
+		check(typeRelation(createRef(numberType()), createRef(numberType())) === TypeRelation.Exact);
+	});
+	test("ref different inner none", () => {
+		check(typeRelation(createRef(numberType()), createRef(stringType())) === TypeRelation.None);
+	});
+	test("ptr same inner exact", () => {
+		check(typeRelation(createPtr(numberType()), createPtr(numberType())) === TypeRelation.Exact);
+	});
+	test("ptr different inner none", () => {
+		check(typeRelation(createPtr(numberType()), createPtr(stringType())) === TypeRelation.None);
 	});
 	test("from literal", () => {
 		check(typeRelation(createPrimitive(TypeKind.Int32), numberType()) === TypeRelation.FromLiteral);
