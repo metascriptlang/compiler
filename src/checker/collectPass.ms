@@ -234,11 +234,42 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 
 function collectExport(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ExportDeclData;
-	collectDecl(ctx, d.exportedDecl);
 
 	// Re-export case: export { X, Y } from "./mod" — exportedDecl is an ImportDecl
+	// When a hub module both imports and re-exports the same symbol, the direct import
+	// already defined it. Skip re-import for existing symbols (dedup — same approach
+	// as reference compilers using idempotent set-add for import deduplication).
 	if (d.exportedDecl.kind === NodeKind.ImportDecl) {
 		const imp = d.exportedDecl.data as ImportDeclData;
+
+		if (!isGlobalImport(imp.importSource)) {
+			// Import only symbols not already in scope
+			for (let i = 0; i < imp.importAliases.length; i += 1) {
+				const alias = imp.importAliases[i];
+				if (lookupLocal(ctx.table, alias) === null) {
+					// Not yet in scope — define it
+					if (ctx.exportRegistry !== null) {
+						const sourcePath = resolveImportSourcePath(ctx, imp.importSource);
+						const importName = imp.importNames[i];
+						if (sourcePath !== "") {
+							const exportInfo = findExportedSymbol(ctx.exportRegistry, sourcePath, importName);
+							if (exportInfo !== null) {
+								defineOrError(ctx, makeSymbol(alias, exportInfo.kind, exportInfo.symType, false), node);
+							} else {
+								addError(ctx, "'" + importName + "' is not exported from '" + imp.importSource + "'");
+								defineOrError(ctx, makeSymbol(alias, SymbolKind.Variable, unknownType(), false), node);
+							}
+						} else {
+							defineOrError(ctx, makeSymbol(alias, SymbolKind.Variable, unknownType(), false), node);
+						}
+					} else {
+						defineOrError(ctx, makeSymbol(alias, SymbolKind.Variable, unknownType(), false), node);
+					}
+				}
+			}
+		}
+
+		// Mark all as exported (whether freshly imported or pre-existing)
 		for (const alias of imp.importAliases) {
 			const sym = lookupSymbol(ctx.table, alias);
 			if (sym !== null) {
@@ -249,6 +280,7 @@ function collectExport(ctx: CheckerContext, node: Node): void {
 	}
 
 	// Regular export: single declaration
+	collectDecl(ctx, d.exportedDecl);
 	const name = getDeclName(d.exportedDecl);
 	if (name !== "") {
 		const sym = lookupSymbol(ctx.table, name);
@@ -481,5 +513,15 @@ testGroup("Collector", () => {
 	test("standalone directive parses", () => {
 		const r = parseSource("@emit(\"#include <stdio.h>\");");
 		check(r.ok);
+	});
+	test("import + re-export dedup does not error", () => {
+		// import { X } from "./mod" + export { X } from "./mod" should not produce duplicate error
+		const ctx = collectFromSource("import { foo } from \"./other\";\nexport { foo } from \"./other\";");
+		check(ctx.errors.length === 0);
+		const sym = lookupSymbol(ctx.table, "foo");
+		check(sym !== null);
+		if (sym !== null) {
+			check(sym.isExported);
+		}
 	});
 });
