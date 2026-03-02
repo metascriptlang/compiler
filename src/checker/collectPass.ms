@@ -43,8 +43,17 @@ function collectDecorated(ctx: CheckerContext, node: Node): void {
 	const sym = lookupSymbol(ctx.table, declName);
 	if (sym === null) return;
 	const info = extractDecoratorInfo(node);
-	if (info.runtimeName !== "") sym.runtimeName = info.runtimeName;
-	if (info.builtinKind !== "") sym.builtinKind = info.builtinKind;
+	// For overloaded functions, the new function was just pushed as the last overload.
+	// Set runtimeName/builtinKind on the correct symbol (not the primary).
+	// CRITICAL: must write directly through array index — intermediate variable creates a clone (DRC #25).
+	if (sym.overloads.length > 0) {
+		const idx = sym.overloads.length - 1;
+		if (info.runtimeName !== "") sym.overloads[idx].runtimeName = info.runtimeName;
+		if (info.builtinKind !== "") sym.overloads[idx].builtinKind = info.builtinKind;
+	} else {
+		if (info.runtimeName !== "") sym.runtimeName = info.runtimeName;
+		if (info.builtinKind !== "") sym.builtinKind = info.builtinKind;
+	}
 }
 
 // ===== Define + Error Helper =====
@@ -438,6 +447,20 @@ testGroup("Collector", () => {
 		check(sym !== null);
 		if (sym !== null) {
 			check(sym.builtinKind === "LengthStr");
+		}
+	});
+	test("overloaded @builtin routes to correct overload", () => {
+		const ctx = collectFromSource("function len(s: string): number { return 0; }\n@builtin(\"LengthArr\") function len(arr: number[]): number { return 0; }");
+		const sym = lookupSymbol(ctx.table, "len");
+		check(sym !== null);
+		if (sym !== null) {
+			// Primary (first len) should NOT have builtinKind
+			check(sym.builtinKind === "");
+			// Overload (second len) should have builtinKind
+			check(sym.overloads.length === 1);
+			if (sym.overloads.length > 0) {
+				check(sym.overloads[0].builtinKind === "LengthArr");
+			}
 		}
 	});
 	test("no decorator leaves fields empty", () => {

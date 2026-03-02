@@ -240,6 +240,10 @@ function resolveDecl(ctx: CheckerContext, node: Node): void {
 			const d = node.data as ExportDeclData;
 			resolveDecl(ctx, d.exportedDecl);
 		},
+		NodeKind.DecoratedDecl => {
+			const dd = node.data as DecoratedDeclData;
+			resolveDecl(ctx, dd.decoratedNode);
+		},
 		_ => {},
 	};
 }
@@ -532,6 +536,22 @@ testGroup("Resolve Declarations", () => {
 		check(sym.symbolType.kind === TypeKind.Function);
 		check(sym.symbolType.typeChildren[0].kind === TypeKind.Number);
 		check(sym.symbolType.typeChildren[1].kind === TypeKind.Number);
+		check(sym.symbolType.typeReturn.kind === TypeKind.Number);
+	});
+});
+
+testGroup("Decorated Declaration Resolve", () => {
+	test("decorated function gets resolved", () => {
+		const ctx = createContext();
+		defineSymbol(ctx.table, makeSymbol("floor", SymbolKind.Function, unknownType(), false));
+		const zl: SourceLocation = { line: 0, column: 0 };
+		const fnNode = createNodeAt(NodeKind.FunctionDecl, { fnName: "floor", params: ["x"], fnParamTypes: ["number"], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "number" }, zl);
+		const decoNode = createNodeAt(NodeKind.DecoratedDecl, { decorators: [], decoratedNode: fnNode }, zl);
+		const node = createNodeAt(NodeKind.Program, { programStmts: [decoNode] }, zl);
+		resolveDeclarations(ctx, node);
+		const sym = lookupSymbol(ctx.table, "floor");
+		check(sym !== null);
+		check(sym.symbolType.kind === TypeKind.Function);
 		check(sym.symbolType.typeReturn.kind === TypeKind.Number);
 	});
 });

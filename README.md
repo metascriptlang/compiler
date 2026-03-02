@@ -56,14 +56,13 @@ src/
 
 ## Current Status
 
-🚧 **Early Development** - This is an actively developed project. The compiler currently demonstrates:
+**Pre-Bootstrap** - The compiler pipeline is complete through all 5 phases. Currently closing gaps between the clean and hacked versions to achieve self-compilation.
 
-- ✅ Lexical analysis (tokenization)
-- ✅ Cross-module imports
-- ✅ Type inference for imported functions
-- 🚧 Parser (in progress)
-- 🚧 Type checker (in progress)
-- 🚧 Code generator (in progress)
+- Phase 1 (Parse + Module): Complete — 37 NodeKind, 80+ TokenKind, recursive descent + Pratt
+- Phase 2 (TypeCheck): Complete — 3-pass (collect, resolve, check), cross-module propagation
+- Phase 3 (Transform): Complete — 27 general + 4 C-backend transforms
+- Phase 4 (Analyzer/DRC): Complete — deterministic reference counting injection
+- Phase 5 (Codegen): Complete — C, JavaScript, and Raiser bytecode backends
 
 ## Architecture
 
@@ -97,27 +96,27 @@ msc run src/index.ms
 
 ## Roadmap
 
-### Phase 1: Foundation (Current)
-- [ ] Project structure
-- [ ] Lexer implementation
-- [ ] Cross-module imports
-- [ ] Parser implementation
-- [ ] Basic type checker
+### Phase 1: Foundation
+- [x] ~~Project structure~~
+- [x] ~~Lexer implementation~~
+- [x] ~~Cross-module imports~~
+- [x] ~~Parser implementation~~
+- [x] ~~Basic type checker~~
 
-### Phase 2: Self-Hosting
+### Phase 2: Self-Hosting (Current)
 - [ ] Compile the compiler with itself
-- [ ] Bootstrap process documentation
+- [x] ~~Bootstrap process documentation~~
 - [ ] Performance benchmarking
 
 ### Phase 3: Production Ready
-- [ ] Full type system implementation
-- [ ] Optimization passes
-- [ ] Error recovery and diagnostics
+- [x] ~~Full type system implementation (single-module)~~
+- [x] ~~Optimization passes (27 general + 4 C-backend transforms)~~
+- [x] ~~Error recovery and diagnostics~~
 - [ ] Standard library integration
 
 ### Phase 4: Community
 - [ ] Plugin system
-- [ ] Language server protocol (LSP)
+- [x] ~~Language server protocol (LSP)~~
 - [ ] Package manager integration
 - [ ] Comprehensive documentation
 
