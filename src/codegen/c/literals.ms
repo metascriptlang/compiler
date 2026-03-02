@@ -174,9 +174,9 @@ testGroup("C String Pool Emit", () => {
 		const pool = createStringPool();
 		internString(pool, "hello");
 		internString(pool, "world");
-		const out = createBuilder();
-		emitStringPoolDecls(pool, out);
-		const result = extract(out);
+		const builder = createBuilder();
+		emitStringPoolDecls(pool, builder);
+		const result = extract(builder);
 		check(result.length > 0);
 		// Should contain MS_STRLIT_FLAG, cap, and data
 	});

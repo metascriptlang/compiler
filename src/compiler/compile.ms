@@ -631,11 +631,11 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 
 	if (ctx.lastOutput.length > 0) {
 		// Print captured output (strip trailing newline for clean display)
-		const out = ctx.lastOutput;
-		if (out.length > 0 && out.slice(out.length - 1, out.length) === "\n") {
-			console.log(out.slice(0, out.length - 1));
+		const lastOut = ctx.lastOutput;
+		if (lastOut.length > 0 && lastOut.slice(lastOut.length - 1, lastOut.length) === "\n") {
+			console.log(lastOut.slice(0, lastOut.length - 1));
 		} else {
-			console.log(out);
+			console.log(lastOut);
 		}
 	}
 }

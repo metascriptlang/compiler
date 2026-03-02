@@ -433,15 +433,15 @@ testGroup("C Stmt Break/Continue", () => {
 
 testGroup("C Stmt TryCatch Goto", () => {
 	test("try-catch emits goto labels", () => {
-		const out = stmtOutput("try { foo(); } catch (e) { bar(); }");
-		const len = out.length;
+		const tc = stmtOutput("try { foo(); } catch (e) { bar(); }");
+		const len = tc.length;
 		// Should contain goto-based labels, not setjmp
 		check(len > 20);
 		// Should NOT contain setjmp (we use goto-based now)
 		let hasSetjmp = false;
 		let i = 0;
 		while (i < len - 6) {
-			if (sliceStr(out, i, i + 6) === "setjmp") {
+			if (sliceStr(tc, i, i + 6) === "setjmp") {
 				hasSetjmp = true;
 			}
 			i = i + 1;
@@ -449,13 +449,13 @@ testGroup("C Stmt TryCatch Goto", () => {
 		check(!hasSetjmp);
 	});
 	test("try-catch has catch label", () => {
-		const out = stmtOutput("try { foo(); } catch (e) { bar(); }");
-		const len = out.length;
+		const tc = stmtOutput("try { foo(); } catch (e) { bar(); }");
+		const len = tc.length;
 		// Should contain __catch_ label
 		let hasCatch = false;
 		let i = 0;
 		while (i < len - 8) {
-			if (sliceStr(out, i, i + 8) === "__catch_") {
+			if (sliceStr(tc, i, i + 8) === "__catch_") {
 				hasCatch = true;
 			}
 			i = i + 1;
@@ -463,12 +463,12 @@ testGroup("C Stmt TryCatch Goto", () => {
 		check(hasCatch);
 	});
 	test("try-finally has finally label", () => {
-		const out = stmtOutput("try { foo(); } finally { cleanup(); }");
-		const len = out.length;
+		const tf = stmtOutput("try { foo(); } finally { cleanup(); }");
+		const len = tf.length;
 		let hasFinally = false;
 		let i = 0;
 		while (i < len - 10) {
-			if (sliceStr(out, i, i + 10) === "__finally_") {
+			if (sliceStr(tf, i, i + 10) === "__finally_") {
 				hasFinally = true;
 			}
 			i = i + 1;

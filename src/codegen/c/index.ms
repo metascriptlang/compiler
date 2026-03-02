@@ -134,47 +134,47 @@ function genModuleInitFns(g: CGen): void {
 // MsMain, global vars, and POSIX main. Used by both single-module and multi-module builds.
 
 export function genProjectDispatcher(modulePaths: string[], entryPath: string, hasUserMain: boolean): string {
-	let out = "";
+	let result = "";
 
 	// Forward declarations for all module init functions
 	for (let i = 0; i < modulePaths.length; i += 1) {
 		const modName = mangleModuleName(modulePaths[i]);
-		out = out + "void " + modName + "__DatInit000(void);\n";
-		out = out + "void " + modName + "__Init000(void);\n";
+		result = result + "void " + modName + "__DatInit000(void);\n";
+		result = result + "void " + modName + "__Init000(void);\n";
 	}
 	if (hasUserMain) {
-		out = out + "void main_(void);\n";
+		result = result + "void main_(void);\n";
 	}
-	out = out + "\n";
+	result = result + "\n";
 
 	// MsPreMainInner — calls DatInit000 for all modules in topological order
-	out = out + "static void MsPreMainInner(void) {\n";
+	result = result + "static void MsPreMainInner(void) {\n";
 	for (let i = 0; i < modulePaths.length; i += 1) {
-		out = out + "  " + mangleModuleName(modulePaths[i]) + "__DatInit000();\n";
+		result = result + "  " + mangleModuleName(modulePaths[i]) + "__DatInit000();\n";
 	}
-	out = out + "}\n\n";
+	result = result + "}\n\n";
 
 	// MsMainInner — dependency Init000, then entry Init000, then user main
-	out = out + "static void MsMainInner(void) {\n";
+	result = result + "static void MsMainInner(void) {\n";
 	for (let i = 0; i < modulePaths.length; i += 1) {
 		if (modulePaths[i] !== entryPath) {
-			out = out + "  " + mangleModuleName(modulePaths[i]) + "__Init000();\n";
+			result = result + "  " + mangleModuleName(modulePaths[i]) + "__Init000();\n";
 		}
 	}
-	out = out + "  " + mangleModuleName(entryPath) + "__Init000();\n";
+	result = result + "  " + mangleModuleName(entryPath) + "__Init000();\n";
 	if (hasUserMain) {
-		out = out + "  main_();\n";
+		result = result + "  main_();\n";
 	}
-	out = out + "}\n\n";
+	result = result + "}\n\n";
 
 	// MsMain + globals + POSIX main
-	out = out + "void MsMain(void) {\n  MsPreMainInner();\n  MsMainInner();\n}\n\n";
-	out = out + "int cmdCount;\nchar** cmdLine;\nchar** gEnv;\nint ms_program_result;\n\n";
-	out = out + "int main(int argc, char** argv, char** env) {\n";
-	out = out + "  cmdLine = argv;\n  cmdCount = argc;\n  gEnv = env;\n";
-	out = out + "  MsMain();\n  return ms_program_result;\n}\n";
+	result = result + "void MsMain(void) {\n  MsPreMainInner();\n  MsMainInner();\n}\n\n";
+	result = result + "int cmdCount;\nchar** cmdLine;\nchar** gEnv;\nint ms_program_result;\n\n";
+	result = result + "int main(int argc, char** argv, char** env) {\n";
+	result = result + "  cmdLine = argv;\n  cmdCount = argc;\n  gEnv = env;\n";
+	result = result + "  MsMain();\n  return ms_program_result;\n}\n";
 
-	return out;
+	return result;
 }
 
 // ===== Collect Function Prototypes =====

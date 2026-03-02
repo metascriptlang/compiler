@@ -27,7 +27,7 @@ function expandArrayRet(
 	loc: Node["location"], ctx: TransformContext
 ): Node[] {
 	const apd = pattern.data as ArrayPatternData;
-	const out: Node[] = [];
+	const items: Node[] = [];
 	for (let i = 0; i < apd.patternElements.length; i += 1) {
 		const elem = apd.patternElements[i];
 
@@ -38,7 +38,7 @@ function expandArrayRet(
 				const sliceCallee = makeMember(base, "slice", loc);
 				const sliceArg = makeNumber(i, loc);
 				const sliceCall = makeCall(sliceCallee, [sliceArg], loc);
-				out.push(makeVarDecl(id.name, sliceCall, declKind, loc));
+				items.push(makeVarDecl(id.name, sliceCall, declKind, loc));
 			}
 			continue;
 		}
@@ -48,11 +48,11 @@ function expandArrayRet(
 			const id = elem.data as IdentifierData;
 			if (id.name !== "_") {
 				const access = makeArrayAccess(base, makeNumber(i, loc), loc);
-				out.push(makeVarDecl(id.name, access, declKind, loc));
+				items.push(makeVarDecl(id.name, access, declKind, loc));
 			}
 		}
 	}
-	return out;
+	return items;
 }
 
 // Expand object pattern {x, y: z} → member access
@@ -61,17 +61,17 @@ function expandObjectRet(
 	loc: Node["location"], ctx: TransformContext
 ): Node[] {
 	const opd = pattern.data as ObjectPatternData;
-	const out: Node[] = [];
+	const items: Node[] = [];
 	for (const prop of opd.patternProps) {
 		if (prop.kind !== NodeKind.ObjectPatternProp) continue;
 		const p = prop.data as ObjectPatternPropData;
 		if (p.propAlias.kind === NodeKind.Identifier) {
 			const id = p.propAlias.data as IdentifierData;
 			const memberAccess = makeMember(base, p.propKey, loc);
-			out.push(makeVarDecl(id.name, memberAccess, declKind, loc));
+			items.push(makeVarDecl(id.name, memberAccess, declKind, loc));
 		}
 	}
-	return out;
+	return items;
 }
 
 function expandDestructuring(stmt: Node, ctx: TransformContext): Node[] {

@@ -213,13 +213,13 @@ function wrapWithTryFinally(bodyStmts: Node[], cleanupStmts: Node[], scope: DrcS
 // ===== Statement List Processing =====
 
 function processStmtList(stmts: Node[], dctx: DrcContext, loc: SourceLocation): Node[] {
-	const out: StmtBuf = { stmts: [] };
+	const buf: StmtBuf = { stmts: [] };
 	for (let i = 0; i < stmts.length; i += 1) {
 		const processed = processStmt(stmts[i], i, stmts, dctx, loc);
-		out.stmts.push(processed);
-		flushPending(dctx, out);
+		buf.stmts.push(processed);
+		flushPending(dctx, buf);
 	}
-	return out.stmts;
+	return buf.stmts;
 }
 
 // ===== Empty NameSet factory (avoids repeated `{ names: [] }`) =====
