@@ -5,7 +5,7 @@ import {
 	RaiserOpcode, RaiserInstruction,
 	raiserABC, raiserABx, raiserAx
 } from "../../raiser/bytecode";
-import { RaiserValue, raiserInt, raiserNil, raiserBool } from "../../raiser/value";
+import { RaiserValue, raiserInt, raiserNil, raiserBool, raiserString } from "../../raiser/value";
 
 // --- Locals ---
 
