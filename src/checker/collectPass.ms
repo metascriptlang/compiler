@@ -28,9 +28,15 @@ function collectDecl(ctx: CheckerContext, node: Node): void {
 		NodeKind.ImportDecl => collectImport(ctx, node),
 		NodeKind.ExportDecl => collectExport(ctx, node),
 		NodeKind.DecoratedDecl => collectDecorated(ctx, node),
+		NodeKind.VariableDecl => collectVariable(ctx, node),
 		NodeKind.TestDecl => {},
 		_ => {},
 	};
+}
+
+function collectVariable(ctx: CheckerContext, node: Node): void {
+	const d = node.data as VariableDeclData;
+	defineOrError(ctx, makeSymbol(d.declName, SymbolKind.Variable, unknownType(), false), node);
 }
 
 // ===== Decorator Handling =====
@@ -415,9 +421,9 @@ testGroup("Collector", () => {
 		const zl: SourceLocation = { line: 0, column: 0 };
 		check(getDeclName(createNodeAt(NodeKind.FunctionDecl, { fnName: "test", params: [], fnParamTypes: [], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "" }, zl)) === "test");
 	});
-	test("skip variables", () => {
-		check(!hasSymbol("const x = 1;", "x"));
-		check(!hasSymbol("let y = 2;", "y"));
+	test("collect variables in pass 1", () => {
+		check(hasSymbol("const x = 1;", "x"));
+		check(hasSymbol("let y = 2;", "y"));
 	});
 	test("multiple decls", () => {
 		const ctx = collectFromSource("function a() { return 1; } class B {} enum C { X }");
@@ -519,6 +525,14 @@ testGroup("Collector", () => {
 		const ctx = collectFromSource("import { foo } from \"./other\";\nexport { foo } from \"./other\";");
 		check(ctx.errors.length === 0);
 		const sym = lookupSymbol(ctx.table, "foo");
+		check(sym !== null);
+		if (sym !== null) {
+			check(sym.isExported);
+		}
+	});
+	test("VariableDecl collected in pass 1", () => {
+		const ctx = collectFromSource("export const x = 42;");
+		const sym = lookupSymbol(ctx.table, "x");
 		check(sym !== null);
 		if (sym !== null) {
 			check(sym.isExported);

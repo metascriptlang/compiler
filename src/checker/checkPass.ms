@@ -21,7 +21,7 @@ import {
 } from "./types";
 import {
 	Symbol, SymbolKind, ScopeKind,
-	defineSymbol, lookupSymbol, makeSymbol, openScope, closeScope,
+	defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope,
 } from "./symbol";
 import { CheckerContext, createContext, addError, hasErrors, errorCount } from "./context";
 import { collectTopLevel, defineOrError } from "./collectPass";
@@ -98,7 +98,14 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		varType = resolveAnnotation(d.declType, ctx);
 	}
 	node.nodeType = varType;
-	defineOrError(ctx, makeSymbol(d.declName, SymbolKind.Variable, varType, d.declKind !== DeclKind.Const), node);
+	// If already collected in pass 1 (e.g. export const), update type
+	const existing = lookupLocal(ctx.table, d.declName);
+	if (existing !== null) {
+		existing.symbolType = varType;
+		existing.isMutable = d.declKind !== DeclKind.Const;
+	} else {
+		defineOrError(ctx, makeSymbol(d.declName, SymbolKind.Variable, varType, d.declKind !== DeclKind.Const), node);
+	}
 }
 
 function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
