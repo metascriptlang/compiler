@@ -40,7 +40,7 @@ export function evalASTFull(program: Node): RaiserContext {
 function evalFull(code: string): RaiserContext {
 	const parseResult = parseSource(code);
 	if (!parseResult.ok) {
-		check(false);
+		unreachable;
 		return createContext();
 	}
 	return evalASTFull(parseResult.value);
@@ -137,7 +137,7 @@ testGroup("Raiser Phase 3: arrow", () => {
 function evalRaiserDirect(code: string): RaiserContext {
 	const parseResult = parseSource(code);
 	if (!parseResult.ok) {
-		check(false);
+		unreachable;
 		return createContext();
 	}
 	const mod = generateRaiser(parseResult.value);
@@ -224,7 +224,7 @@ function evalProject(codes: string[]): RaiserContext {
 	let i = codes.length - 1;
 	while (i >= 0) {
 		const pr = parseSource(codes[i]);
-		if (!pr.ok) { check(false); return createContext(); }
+		if (!pr.ok) { unreachable; return createContext(); }
 		const path = "/src/" + names[i] + ".ms";
 		const input: RaiserModuleInput = { modulePath: path, program: pr.value };
 		modules.push(input);

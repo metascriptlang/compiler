@@ -418,7 +418,7 @@ export function evalSource(code: string): RaiserContext {
 function evalRaiser(code: string): RaiserContext {
 	const parseResult = parseSource(code);
 	if (!parseResult.ok) {
-		check(false);
+		unreachable;
 		return createContext();
 	}
 	const mod = generateRaiser(parseResult.value);
