@@ -4,7 +4,7 @@
 // sameInstantiation() + genericCacheGet() in seminst.nim.
 
 import { Type, TypeKind } from "../checker/types";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 // ===== Data Structures =====
 
@@ -12,7 +12,7 @@ import { test, check, testGroup } from "std/testing";
 // Example: identity<number> → { genericName: "identity", typeArgKeys: ["number"] }
 export interface MonoKey {
 	genericName: string;
-	typeArgKeys: string[];   // DRC-safe: string[] wrapped in interface
+	typeArgKeys: string[];
 }
 
 // Tracks one instantiation entry
@@ -24,22 +24,16 @@ export interface MonoEntry {
 	isInstantiated: boolean;     // true after Pass 2 clones the body
 }
 
-// Wraps MonoEntry[] for DRC-safe mutation propagation (gotcha #4)
-export interface MonoEntryList {
-	items: MonoEntry[];
-}
-
 // The registry itself
 export interface MonoRegistry {
-	entries: MonoEntryList;
+	entries: MonoEntry[];
 }
 
 // ===== Constructors =====
 
 export function createMonoRegistry(): MonoRegistry {
 	const entries: MonoEntry[] = [];
-	const list: MonoEntryList = { items: entries };
-	return { entries: list };
+	return { entries };
 }
 
 // ===== Type Key Generation =====
@@ -125,8 +119,8 @@ export function buildTypeArgKeys(concreteTypes: Type[]): string[] {
 // Find an existing entry for this generic + type args combination.
 // Returns the entry or null (Nim: genericCacheGet)
 export function monoFindEntry(registry: MonoRegistry, genericName: string, typeArgKeys: string[]): MonoEntry {
-	for (let i = 0; i < registry.entries.items.length; i += 1) {
-		const entry = registry.entries.items[i];
+	for (let i = 0; i < registry.entries.length; i += 1) {
+		const entry = registry.entries[i];
 		if (entry.genericName === genericName && sameTypeArgKeys(typeArgKeys, buildTypeArgKeys(entry.concreteTypes))) {
 			return entry;
 		}
@@ -156,79 +150,76 @@ export function monoRegister(
 		concreteTypes: concreteTypes,
 		isInstantiated: false,
 	};
-	registry.entries.items.push(entry);
+	registry.entries.push(entry);
 	return entry;
 }
 
 // ===== Tests =====
+test "monoTypeKey primitives" {
+	const num: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
+	check(monoTypeKey(num) === "number");
+	const str: Type = { kind: TypeKind.String, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
+	check(monoTypeKey(str) === "string");
+	const b: Type = { kind: TypeKind.Boolean, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
+	check(monoTypeKey(b) === "boolean");
+}
 
-testGroup("MonoRegistry", () => {
-	test("monoTypeKey primitives", () => {
-		const num: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
-		check(monoTypeKey(num) === "number");
-		const str: Type = { kind: TypeKind.String, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
-		check(monoTypeKey(str) === "string");
-		const b: Type = { kind: TypeKind.Boolean, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
-		check(monoTypeKey(b) === "boolean");
-	});
+test "monoTypeKey array" {
+	const numT: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
+	const arrT: Type = { kind: TypeKind.Array, typeName: "", typeNames: [], typeChildren: [], typeReturn: numT, typeExtra: null as unknown as Type, typeFlags: 0 };
+	check(monoTypeKey(arrT) === "arr_number");
+}
 
-	test("monoTypeKey array", () => {
-		const numT: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
-		const arrT: Type = { kind: TypeKind.Array, typeName: "", typeNames: [], typeChildren: [], typeReturn: numT, typeExtra: null as unknown as Type, typeFlags: 0 };
-		check(monoTypeKey(arrT) === "arr_number");
-	});
+test "monoTypeKey object" {
+	const obj: Type = { kind: TypeKind.Object, typeName: "Box", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
+	check(monoTypeKey(obj) === "Box");
+}
 
-	test("monoTypeKey object", () => {
-		const obj: Type = { kind: TypeKind.Object, typeName: "Box", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
-		check(monoTypeKey(obj) === "Box");
-	});
+test "mangleMonoName single param" {
+	const num: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
+	const types: Type[] = [num];
+	check(mangleMonoName("identity", types) === "identity__number");
+}
 
-	test("mangleMonoName single param", () => {
-		const num: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
-		const types: Type[] = [num];
-		check(mangleMonoName("identity", types) === "identity__number");
-	});
+test "mangleMonoName two params" {
+	const num: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
+	const str: Type = { kind: TypeKind.String, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
+	const types: Type[] = [num, str];
+	check(mangleMonoName("pair", types) === "pair__number_string");
+}
 
-	test("mangleMonoName two params", () => {
-		const num: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
-		const str: Type = { kind: TypeKind.String, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
-		const types: Type[] = [num, str];
-		check(mangleMonoName("pair", types) === "pair__number_string");
-	});
+test "registry dedup" {
+	const reg = createMonoRegistry();
+	const num: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
+	const params: string[] = ["T"];
+	const types1: Type[] = [num];
+	const entry1 = monoRegister(reg, "identity", params, types1);
+	check(entry1.mangledName === "identity__number");
+	check(reg.entries.length === 1);
 
-	test("registry dedup", () => {
-		const reg = createMonoRegistry();
-		const num: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
-		const params: string[] = ["T"];
-		const types1: Type[] = [num];
-		const entry1 = monoRegister(reg, "identity", params, types1);
-		check(entry1.mangledName === "identity__number");
-		check(reg.entries.items.length === 1);
+	// Same instantiation → dedup
+	const num2: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
+	const types2: Type[] = [num2];
+	const entry2 = monoRegister(reg, "identity", params, types2);
+	check(entry2.mangledName === "identity__number");
+	check(reg.entries.length === 1);
+}
 
-		// Same instantiation → dedup
-		const num2: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
-		const types2: Type[] = [num2];
-		const entry2 = monoRegister(reg, "identity", params, types2);
-		check(entry2.mangledName === "identity__number");
-		check(reg.entries.items.length === 1);
-	});
+test "registry different types" {
+	const reg = createMonoRegistry();
+	const num: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
+	const str: Type = { kind: TypeKind.String, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
+	const params: string[] = ["T"];
+	const types1: Type[] = [num];
+	const types2: Type[] = [str];
+	monoRegister(reg, "identity", params, types1);
+	monoRegister(reg, "identity", params, types2);
+	check(reg.entries.length === 2);
+}
 
-	test("registry different types", () => {
-		const reg = createMonoRegistry();
-		const num: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
-		const str: Type = { kind: TypeKind.String, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
-		const params: string[] = ["T"];
-		const types1: Type[] = [num];
-		const types2: Type[] = [str];
-		monoRegister(reg, "identity", params, types1);
-		monoRegister(reg, "identity", params, types2);
-		check(reg.entries.items.length === 2);
-	});
-
-	test("findEntry returns null for missing", () => {
-		const reg = createMonoRegistry();
-		const keys: string[] = ["number"];
-		const result = monoFindEntry(reg, "nonexistent", keys);
-		check(result === null);
-	});
-});
+test "findEntry returns null for missing" {
+	const reg = createMonoRegistry();
+	const keys: string[] = ["number"];
+	const result = monoFindEntry(reg, "nonexistent", keys);
+	check(result === null);
+}

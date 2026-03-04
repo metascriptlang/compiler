@@ -12,7 +12,7 @@ import {
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall } from "../util";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { firstExprKindAfter, stmtCountAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -59,24 +59,14 @@ function expandSpread(node: Node): Node {
 }
 
 // ===== Tests =====
+test "no spread passthrough" { check(firstExprKindAfter("f(a, b);", lowerSpread) === NodeKind.CallExpr); }
 
-testGroup("Spread Expansion", () => {
-	test("no spread passthrough", () => {
-		check(firstExprKindAfter("f(a, b);", lowerSpread) === NodeKind.CallExpr);
-	});
-	test("spread array literal inlined", () => {
-		check(firstExprKindAfter("f(...[1, 2]);", lowerSpread) === NodeKind.CallExpr);
-	});
-	test("non-call unchanged", () => {
-		check(firstExprKindAfter("x + y;", lowerSpread) === NodeKind.BinaryExpr);
-	});
-	test("standalone expr unchanged", () => {
-		check(firstExprKindAfter("x;", lowerSpread) === NodeKind.Identifier);
-	});
-	test("nested call unchanged", () => {
-		check(firstExprKindAfter("f(g());", lowerSpread) === NodeKind.CallExpr);
-	});
-	test("non-expr passthrough", () => {
-		check(stmtCountAfter("const x = 1;", lowerSpread) === 1);
-	});
-});
+test "spread array literal inlined" { check(firstExprKindAfter("f(...[1, 2]);", lowerSpread) === NodeKind.CallExpr); }
+
+test "non-call unchanged" { check(firstExprKindAfter("x + y;", lowerSpread) === NodeKind.BinaryExpr); }
+
+test "standalone expr unchanged" { check(firstExprKindAfter("x;", lowerSpread) === NodeKind.Identifier); }
+
+test "nested call unchanged" { check(firstExprKindAfter("f(g());", lowerSpread) === NodeKind.CallExpr); }
+
+test "non-expr passthrough" { check(stmtCountAfter("const x = 1;", lowerSpread) === 1); }

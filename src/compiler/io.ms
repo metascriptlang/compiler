@@ -3,7 +3,7 @@
 import { exit, exec, readFile, writeFile, clockMs } from "std/process";
 import { CheckerContext, hasErrors, errorCount } from "../checker/context";
 import { error, red, green, bold, dim, path } from "../utils/color";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 // -- Shared timing + verbose helpers --
 // Extracted to separate functions to avoid DRC discard-variable bugs
@@ -157,42 +157,26 @@ export function emitOutput(code: string, filePath: string, outputPath: string, e
 }
 
 // ===== Tests =====
+test "replaceExt .ms to .js" { check(replaceExt("foo.ms", ".js") === "foo.js"); }
 
-testGroup("Path Utilities", () => {
-	test("replaceExt .ms to .js", () => {
-		check(replaceExt("foo.ms", ".js") === "foo.js");
-	});
-	test("replaceExt .ms to empty", () => {
-		check(replaceExt("foo.ms", "") === "foo");
-	});
-	test("replaceExt no .ms", () => {
-		check(replaceExt("foo", ".js") === "foo.js");
-	});
-	test("dirName with slashes", () => {
-		check(dirName("a/b/c.ms") === "a/b");
-	});
-	test("dirName no slash", () => {
-		check(dirName("c.ms") === ".");
-	});
-	test("dirName deep path", () => {
-		check(dirName("src/compiler/io.ms") === "src/compiler");
-	});
-	test("baseName with slashes", () => {
-		check(baseName("a/b/c.ms") === "c.ms");
-	});
-	test("baseName no slash", () => {
-		check(baseName("c.ms") === "c.ms");
-	});
-	test("stripBase removes prefix", () => {
-		check(stripBase("a/b/c.ms", "a/b") === "c.ms");
-	});
-	test("stripBase dot passthrough", () => {
-		check(stripBase("c.ms", ".") === "c.ms");
-	});
-	test("stripBase no match", () => {
-		check(stripBase("x/y.ms", "a/b") === "x/y.ms");
-	});
-	test("stripBase partial prefix no match", () => {
-		check(stripBase("a/bc/d.ms", "a/b") === "a/bc/d.ms");
-	});
-});
+test "replaceExt .ms to empty" { check(replaceExt("foo.ms", "") === "foo"); }
+
+test "replaceExt no .ms" { check(replaceExt("foo", ".js") === "foo.js"); }
+
+test "dirName with slashes" { check(dirName("a/b/c.ms") === "a/b"); }
+
+test "dirName no slash" { check(dirName("c.ms") === "."); }
+
+test "dirName deep path" { check(dirName("src/compiler/io.ms") === "src/compiler"); }
+
+test "baseName with slashes" { check(baseName("a/b/c.ms") === "c.ms"); }
+
+test "baseName no slash" { check(baseName("c.ms") === "c.ms"); }
+
+test "stripBase removes prefix" { check(stripBase("a/b/c.ms", "a/b") === "c.ms"); }
+
+test "stripBase dot passthrough" { check(stripBase("c.ms", ".") === "c.ms"); }
+
+test "stripBase no match" { check(stripBase("x/y.ms", "a/b") === "x/y.ms"); }
+
+test "stripBase partial prefix no match" { check(stripBase("a/bc/d.ms", "a/b") === "a/bc/d.ms"); }

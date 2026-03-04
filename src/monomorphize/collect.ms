@@ -25,6 +25,7 @@ import {
 	PropertyDeclData, ExternDeclData, TypeAnnotationData,
 	BreakStmtData, ContinueStmtData, UnreachableStmtData,
 	BigIntLiteralData, RegexLiteralData,
+	HiddenStdConvData,
 	createNodeAt,
 } from "../ast/node";
 import { Type, TypeKind, unknownType, numberType, stringType, booleanType, nullType, createFunction, createArray, unifyType, createUnifyBindings } from "../checker/types";
@@ -39,7 +40,7 @@ import {
 	getGenericTypeInstFieldTypeAt, resetGenericTypeInsts,
 } from "../parser/context";
 import { callCheckStmt } from "../checker/checkerCallbacks";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 // ===== Generic Declaration Map =====
 // Primitives only — no Node fields (DRC workaround #22: cross-module Node in interface
@@ -208,7 +209,7 @@ export function monoCollectDefinitions(program: Node, declMap: MonoGenericDeclMa
 	}
 }
 
-// Join string array with comma — extracted to avoid DRC ms_decref bug on let-string in try/finally
+// Join string array with comma — extracted to avoid DRC msDecref bug on let-string in try/finally
 function joinWithComma(parts: string[]): string {
 	if (parts.length === 0) return "";
 	let result = parts[0];
@@ -505,6 +506,16 @@ function monoWalkForCalls(
 	if (kind === NodeKind.YieldExpr) {
 		const d = node.data as YieldExprData;
 		monoWalkForCalls(d.yieldArg, declMap, registry, ctx);
+		return;
+	}
+	if (kind === NodeKind.HiddenDeref || kind === NodeKind.HiddenAddr) {
+		const d = node.data as ExprStmtData;
+		monoWalkForCalls(d.expr, declMap, registry, ctx);
+		return;
+	}
+	if (kind === NodeKind.HiddenStdConv || kind === NodeKind.HiddenSubConv) {
+		const d = node.data as HiddenStdConvData;
+		monoWalkForCalls(d.convExpr, declMap, registry, ctx);
 		return;
 	}
 	// Leaf nodes (Identifier, literals, break, continue, etc.): no children to walk
@@ -877,6 +888,16 @@ export function monoRewriteNode(
 		monoRewriteNode(d.yieldArg, registry, declMap, ctx);
 		return;
 	}
+	if (kind === NodeKind.HiddenDeref || kind === NodeKind.HiddenAddr) {
+		const d = node.data as ExprStmtData;
+		monoRewriteNode(d.expr, registry, declMap, ctx);
+		return;
+	}
+	if (kind === NodeKind.HiddenStdConv || kind === NodeKind.HiddenSubConv) {
+		const d = node.data as HiddenStdConvData;
+		monoRewriteNode(d.convExpr, registry, declMap, ctx);
+		return;
+	}
 }
 
 // Rewrite a single CallExpr — replace callee with monomorphized name
@@ -953,7 +974,7 @@ function monoCloneNode(node: Node): Node {
 	if (kind === NodeKind.BinaryExpr) { const d = node.data as BinaryExprData; const data: NodeData = { operator: d.operator, left: monoCloneNode(d.left), right: monoCloneNode(d.right) }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.UnaryExpr) { const d = node.data as UnaryExprData; const data: NodeData = { unaryOp: d.unaryOp, operand: monoCloneNode(d.operand) }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.UpdateExpr) { const d = node.data as UpdateExprData; const data: NodeData = { updateOp: d.updateOp, updateArg: monoCloneNode(d.updateArg), isPrefix: d.isPrefix }; return createNodeAt(kind, data, loc); }
-	if (kind === NodeKind.CallExpr) { const d = node.data as CallExprData; const data: NodeData = { callee: monoCloneNode(d.callee), arguments: cloneNodeArray(d.arguments) }; return createNodeAt(kind, data, loc); }
+	if (kind === NodeKind.CallExpr) { const d = node.data as CallExprData; const data: NodeData = { callee: monoCloneNode(d.callee), arguments: cloneNodeArray(d.arguments), isDirectCall: d.isDirectCall, resolvedOverloadIdx: d.resolvedOverloadIdx }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.MemberExpr) { const d = node.data as MemberExprData; const data: NodeData = { object: monoCloneNode(d.object), property: d.property, isOptional: d.isOptional }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.ArrayAccess) { const d = node.data as ArrayAccessData; const data: NodeData = { array: monoCloneNode(d.array), index: monoCloneNode(d.index) }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.ObjectLiteral) { const d = node.data as ObjectLiteralData; const data: NodeData = { properties: cloneNodeArray(d.properties), keys: cloneStringArray(d.keys) }; return createNodeAt(kind, data, loc); }
@@ -971,7 +992,8 @@ function monoCloneNode(node: Node): Node {
 	if (kind === NodeKind.YieldExpr) { const d = node.data as YieldExprData; const data: NodeData = { yieldArg: monoCloneNode(d.yieldArg), isDelegate: d.isDelegate }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.MoveExpr) { const d = node.data as MoveExprData; const data: NodeData = { moveArg: monoCloneNode(d.moveArg) }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.OutExpr) { const d = node.data as OutExprData; const data: NodeData = { outArg: monoCloneNode(d.outArg) }; return createNodeAt(kind, data, loc); }
-	if (kind === NodeKind.HiddenDeref) { const d = node.data as ExprStmtData; const data: NodeData = { expr: monoCloneNode(d.expr) }; return createNodeAt(kind, data, loc); }
+	if (kind === NodeKind.HiddenDeref || kind === NodeKind.HiddenAddr) { const d = node.data as ExprStmtData; const data: NodeData = { expr: monoCloneNode(d.expr) }; return createNodeAt(kind, data, loc); }
+	if (kind === NodeKind.HiddenStdConv || kind === NodeKind.HiddenSubConv) { const d = node.data as HiddenStdConvData; const data: NodeData = { convExpr: monoCloneNode(d.convExpr), convType: d.convType }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.TypeAnnotation) { const d = node.data as TypeAnnotationData; const data: NodeData = { annotationType: d.annotationType }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.DestructuringDecl) { const d = node.data as DestructuringDeclData; const data: NodeData = { destrPattern: monoCloneNode(d.destrPattern), destrInit: monoCloneNode(d.destrInit), destrIsConst: d.destrIsConst }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.VariableDecl) { const d = node.data as VariableDeclData; const data: NodeData = { declName: d.declName, declType: d.declType, initializer: monoCloneNode(d.initializer), declKind: d.declKind }; return createNodeAt(kind, data, loc); }
@@ -1103,8 +1125,8 @@ function monoInstantiateAllFixedPoint(
 	let keepGoing = true;
 	while (keepGoing && iteration < 50) {
 		let foundNew = false;
-		for (let i = 0; i < registry.entries.items.length; i += 1) {
-			const entry = registry.entries.items[i];
+		for (let i = 0; i < registry.entries.length; i += 1) {
+			const entry = registry.entries[i];
 			if (!entry.isInstantiated) {
 				const cloned = monoInstantiateEntry(program, entry);
 				if (cloned !== null) {
@@ -1114,8 +1136,8 @@ function monoInstantiateAllFixedPoint(
 				}
 			}
 		}
-		if (registry.entries.items.length === prevCount) { keepGoing = false; }
-		else { prevCount = registry.entries.items.length; }
+		if (registry.entries.length === prevCount) { keepGoing = false; }
+		else { prevCount = registry.entries.length; }
 		iteration += 1;
 	}
 	return generated;
@@ -1181,7 +1203,7 @@ export function monomorphizeProgram(program: Node, checkerCtx: CheckerContext): 
 	if (declMap.names.length === 0) return program;
 	const registry = createMonoRegistry();
 	monoCollectCallSites(program, declMap, registry, checkerCtx);
-	if (registry.entries.items.length === 0) return program;
+	if (registry.entries.length === 0) return program;
 	const generatedNodes = monoInstantiateAllFixedPoint(program, registry, declMap, checkerCtx);
 
 	// Re-type-check instantiated bodies (before rewrite — callee names are still original)
@@ -1200,57 +1222,52 @@ export function monomorphizeProgram(program: Node, checkerCtx: CheckerContext): 
 }
 
 // ===== Tests =====
+test "resolveTypeName number" {
+	const t = monoResolveTypeName("number");
+	check(t.kind === TypeKind.Number);
+}
 
-testGroup("MonoCollect", () => {
-	test("resolveTypeName number", () => {
-		const t = monoResolveTypeName("number");
-		check(t.kind === TypeKind.Number);
-	});
+test "resolveTypeName string" {
+	const t = monoResolveTypeName("string");
+	check(t.kind === TypeKind.String);
+}
 
-	test("resolveTypeName string", () => {
-		const t = monoResolveTypeName("string");
-		check(t.kind === TypeKind.String);
-	});
+test "resolveTypeName named" {
+	const t = monoResolveTypeName("MyInterface");
+	check(t.kind === TypeKind.Object);
+	check(t.typeName === "MyInterface");
+}
 
-	test("resolveTypeName named", () => {
-		const t = monoResolveTypeName("MyInterface");
-		check(t.kind === TypeKind.Object);
-		check(t.typeName === "MyInterface");
-	});
+test "resolveExplicitTypeArgs" {
+	const types = monoResolveExplicitTypeArgs("number,string");
+	check(types.length === 2);
+	check(types[0].kind === TypeKind.Number);
+	check(types[1].kind === TypeKind.String);
+}
 
-	test("resolveExplicitTypeArgs", () => {
-		const types = monoResolveExplicitTypeArgs("number,string");
-		check(types.length === 2);
-		check(types[0].kind === TypeKind.Number);
-		check(types[1].kind === TypeKind.String);
-	});
+test "resolveAnnotation primitives" {
+	check(monoResolveAnnotation("number").kind === TypeKind.Number);
+	check(monoResolveAnnotation("string").kind === TypeKind.String);
+	check(monoResolveAnnotation("boolean").kind === TypeKind.Boolean);
+	check(monoResolveAnnotation("void").kind === TypeKind.Void);
+}
 
-	test("resolveAnnotation primitives", () => {
-		check(monoResolveAnnotation("number").kind === TypeKind.Number);
-		check(monoResolveAnnotation("string").kind === TypeKind.String);
-		check(monoResolveAnnotation("boolean").kind === TypeKind.Boolean);
-		check(monoResolveAnnotation("void").kind === TypeKind.Void);
-	});
+test "resolveAnnotation array suffix" {
+	const arrType = monoResolveAnnotation("number[]");
+	check(arrType.kind === TypeKind.Array);
+	check(arrType.typeReturn.kind === TypeKind.Number);
+}
 
-	test("resolveAnnotation array suffix", () => {
-		const arrType = monoResolveAnnotation("number[]");
-		check(arrType.kind === TypeKind.Array);
-		check(arrType.typeReturn.kind === TypeKind.Number);
-	});
+test "resolveAnnotation Array generic" {
+	const arrType = monoResolveAnnotation("Array<string>");
+	check(arrType.kind === TypeKind.Array);
+	check(arrType.typeReturn.kind === TypeKind.String);
+}
 
-	test("resolveAnnotation Array generic", () => {
-		const arrType = monoResolveAnnotation("Array<string>");
-		check(arrType.kind === TypeKind.Array);
-		check(arrType.typeReturn.kind === TypeKind.String);
-	});
+test "resolveAnnotation named type" {
+	const t = monoResolveAnnotation("MyInterface");
+	check(t.kind === TypeKind.Object);
+	check(t.typeName === "MyInterface");
+}
 
-	test("resolveAnnotation named type", () => {
-		const t = monoResolveAnnotation("MyInterface");
-		check(t.kind === TypeKind.Object);
-		check(t.typeName === "MyInterface");
-	});
-
-	test("resolveAnnotation empty", () => {
-		check(monoResolveAnnotation("").kind === TypeKind.Unknown);
-	});
-});
+test "resolveAnnotation empty" { check(monoResolveAnnotation("").kind === TypeKind.Unknown); }

@@ -1,15 +1,15 @@
 // Optional Coercion — wraps T returns for T|null return types in C
 // Follows reference optional_coercion.zig
 //
-// In C, `T | null` is represented as a tagged union (ms_optional_T).
+// In C, `T | null` is represented as a tagged union (msOptionalT).
 // When a function returns T|null but an arm returns plain T,
-// the value must be wrapped: return ms_optional_wrap(value);
-// When returning null: return ms_optional_null();
+// the value must be wrapped: return msOptionalWrap(value);
+// When returning null: return msOptionalNull();
 //
 // Detection: function has T|null return type annotation (contains "|").
 // All return statements in the body are transformed:
-//   return null   → return ms_optional_null()
-//   return expr   → return ms_optional_wrap(expr)
+//   return null   → return msOptionalNull()
+//   return expr   → return msOptionalWrap(expr)
 
 import {
 	Node, NodeKind,
@@ -19,7 +19,7 @@ import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent } from "../util";
 import { findChar } from "../../utils/string";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { firstStmtKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";
 import { createTransformContext } from "../context";
 
@@ -56,13 +56,13 @@ function transformReturnsInBody(body: Node, retType: string): void {
 			const rd = body.data as ReturnStmtData;
 			const loc = body.location;
 			if (rd.argument.kind === NodeKind.NullLiteral) {
-				// return null → return ms_optional_null()
-				rd.argument = makeCall(makeIdent("ms_optional_null", loc), [], loc);
+				// return null → return msOptionalNull()
+				rd.argument = makeCall(makeIdent("msOptionalNull", loc), [], loc);
 			} else {
-				// return expr → return ms_optional_wrap(expr)
+				// return expr → return msOptionalWrap(expr)
 				const args: Node[] = [];
 				args.push(rd.argument);
-				rd.argument = makeCall(makeIdent("ms_optional_wrap", loc), args, loc);
+				rd.argument = makeCall(makeIdent("msOptionalWrap", loc), args, loc);
 			}
 		},
 		NodeKind.BlockStmt => {
@@ -104,33 +104,27 @@ function getReturnArgKind(input: string): NodeKind {
 }
 
 // ===== Tests =====
+test "non-return unchanged" { check(stmtCountAfter("const x = 1;", coerceOptionals) === 1); }
 
-testGroup("Optional Coercion", () => {
-	test("non-return unchanged", () => {
-		check(stmtCountAfter("const x = 1;", coerceOptionals) === 1);
-	});
-	test("call unchanged", () => {
-		check(firstStmtKindAfter("f();", coerceOptionals) === NodeKind.ExprStmt);
-	});
-	test("while unchanged", () => {
-		check(firstStmtKindAfter("while (true) {}", coerceOptionals) === NodeKind.WhileStmt);
-	});
-	test("if unchanged", () => {
-		check(firstStmtKindAfter("if (x) {}", coerceOptionals) === NodeKind.IfStmt);
-	});
-	test("non-optional function unchanged", () => {
-		check(firstStmtKindAfter("function foo(): number { return 1; }", coerceOptionals) === NodeKind.FunctionDecl);
-	});
-	test("return null in optional fn becomes call", () => {
-		const k = getReturnArgKind("function foo(): number | null { return null; }");
-		check(k === NodeKind.CallExpr);
-	});
-	test("return expr in optional fn becomes call", () => {
-		const k = getReturnArgKind("function foo(): number | null { return 42; }");
-		check(k === NodeKind.CallExpr);
-	});
-	test("return expr in plain fn unchanged", () => {
-		const k = getReturnArgKind("function foo(): number { return 42; }");
-		check(k === NodeKind.NumberLiteral);
-	});
-});
+test "call unchanged" { check(firstStmtKindAfter("f();", coerceOptionals) === NodeKind.ExprStmt); }
+
+test "while unchanged" { check(firstStmtKindAfter("while (true) {}", coerceOptionals) === NodeKind.WhileStmt); }
+
+test "if unchanged" { check(firstStmtKindAfter("if (x) {}", coerceOptionals) === NodeKind.IfStmt); }
+
+test "non-optional function unchanged" { check(firstStmtKindAfter("function foo(): number { return 1; }", coerceOptionals) === NodeKind.FunctionDecl); }
+
+test "return null in optional fn becomes call" {
+	const k = getReturnArgKind("function foo(): number | null { return null; }");
+	check(k === NodeKind.CallExpr);
+}
+
+test "return expr in optional fn becomes call" {
+	const k = getReturnArgKind("function foo(): number | null { return 42; }");
+	check(k === NodeKind.CallExpr);
+}
+
+test "return expr in plain fn unchanged" {
+	const k = getReturnArgKind("function foo(): number { return 42; }");
+	check(k === NodeKind.NumberLiteral);
+}

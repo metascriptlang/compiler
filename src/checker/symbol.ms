@@ -1,20 +1,12 @@
-import { SourceLocation } from "../ast/node";
+import { SourceLocation, Node, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { Type, TypeKind, unknownType } from "./types";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
-// ===== Symbol Kind =====
+// Re-export from ast/node (unified Symbol definition)
+export { Symbol, SymbolKind, SymbolState } from "../ast/node";
 
-export enum SymbolKind {
-	Variable,
-	Function,
-	Class,
-	Interface,
-	TypeAlias,
-	Enum,
-	Parameter,
-	Property,
-	Method,
-}
+// Result<T, E> is now available globally via prelude.
+// In self-hosted source, we use it directly.
 
 // ===== Scope Kind =====
 
@@ -22,18 +14,30 @@ export enum ScopeKind {
 	Global, Module, Function, Block, Class, Loop,
 }
 
-// ===== Symbol =====
+// ===== Symbol Flags (Nim parity: TSymFlags) =====
+// Bitfield for Symbol.symFlags — tracks declaration properties.
+export const SF_NONE: number = 0;
+export const SF_USED: number = 1;          // symbol is referenced somewhere
+export const SF_EXPORTED: number = 2;      // symbol is exported
+export const SF_MUTABLE: number = 4;       // let/var/mutable
+export const SF_FORWARD: number = 8;       // forward declaration (body not yet seen)
+export const SF_NO_SIDE_EFFECT: number = 16; // @pure — no side effects
+export const SF_GLOBAL: number = 32;       // module-level variable
+export const SF_IMPORT_C: number = 64;     // extern declaration (@runtime)
+export const SF_COMPILE_TIME: number = 128; // @comptime
+export const SF_GC_SAFE: number = 256;     // no GC-unsafe operations
+export const SF_WAS_FORWARDED: number = 512; // had forward decl, now has body
+export const SF_STATIC: number = 1024;     // static class member or static linkage
+export const SF_SINK: number = 2048;       // parameter takes ownership
+export const SF_LENT: number = 4096;       // parameter is a borrow (no RC)
 
-export interface Symbol {
-	name: string;
-	symbolKind: SymbolKind;
-	symbolType: Type;
-	isMutable: boolean;
-	isExported: boolean;
-	location: SourceLocation;
-	overloads: Symbol[];    // non-empty when function has overloads
-	runtimeName: string;    // @runtime("c_name") → "c_name", else ""
-	builtinKind: string;    // @builtin("Name") → "Name", else ""
+// Flag helpers
+export function hasFlag(sym: Symbol, flag: number): boolean {
+	return (sym.symFlags & flag) !== 0;
+}
+
+export function setFlag(sym: Symbol, flag: number): void {
+	sym.symFlags = sym.symFlags | flag;
 }
 
 // ===== Scope =====
@@ -122,17 +126,18 @@ export function hasOverloads(sym: Symbol): boolean {
 // ===== Helper: Create Symbol Shorthand =====
 
 export function makeSymbol(name: string, kind: SymbolKind, symType: Type, mutable: boolean): Symbol {
-	return {
-		name,
-		symbolKind: kind,
-		symbolType: symType,
-		isMutable: mutable,
-		isExported: false,
-		location: { line: 0, column: 0 },
-		overloads: [],
-		runtimeName: "",
-		builtinKind: "",
-	};
+	const sym = new Symbol();
+	sym.name = name;
+	sym.symbolKind = kind;
+	sym.symbolType = symType;
+	sym.state = SymbolState.Hollow;
+	sym.location = { line: 0, column: 0 };
+	sym.declNode = null as unknown as Node;
+	sym.overloads = [];
+	sym.runtimeName = "";
+	sym.builtinKind = "";
+	sym.symFlags = mutable ? SF_MUTABLE : SF_NONE;
+	return sym;
 }
 
 // Look up an exported symbol in the table (searches Module and Global scopes)
@@ -141,7 +146,7 @@ export function lookupExport(table: SymbolTable, name: string): Symbol {
 	while (scope !== null) {
 		if (scope.scopeKind === ScopeKind.Module || scope.scopeKind === ScopeKind.Global) {
 			for (const sym of scope.symbols) {
-				if (sym.name === name && sym.isExported) return sym;
+				if (sym.name === name && hasFlag(sym, SF_EXPORTED)) return sym;
 			}
 		}
 		scope = scope.parent;
@@ -153,149 +158,162 @@ export function lookupExport(table: SymbolTable, name: string): Symbol {
 export function isPointerType(t: Type, table: SymbolTable): boolean {
 	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) return true;
 	if (t.kind !== TypeKind.Object || t.typeName === "") return false;
+	// Only classes are pointer types (heap-allocated, RC'd)
+	// Interfaces are value-type structs — NOT pointers (D1 fix)
 	const sym = lookupSymbol(table, t.typeName);
 	if (sym === null) return false;
-	return sym.symbolKind === SymbolKind.Interface || sym.symbolKind === SymbolKind.Class;
+	return sym.symbolKind === SymbolKind.Class;
 }
 
 // ===== Tests =====
+test "create table" {
+	const table = createSymbolTable();
+	check(table.current.scopeKind === ScopeKind.Global);
+	check(table.current.symbols.length === 0);
+}
 
-testGroup("SymbolTable", () => {
-	test("create table", () => {
-		const table = createSymbolTable();
-		check(table.current.scopeKind === ScopeKind.Global);
-		check(table.current.symbols.length === 0);
-	});
-	test("define and lookup", () => {
-		const table = createSymbolTable();
-		const sym = makeSymbol("x", SymbolKind.Variable, unknownType(), false);
-		const result = defineSymbol(table, sym);
-		check(result.ok);
-		check(lookupSymbol(table, "x") !== null);
-	});
-	test("duplicate error", () => {
-		const table = createSymbolTable();
-		const sym1 = makeSymbol("x", SymbolKind.Variable, unknownType(), false);
-		const sym2 = makeSymbol("x", SymbolKind.Variable, unknownType(), true);
-		defineSymbol(table, sym1);
-		const result = defineSymbol(table, sym2);
-		check(!result.ok);
-	});
-	test("scope nesting", () => {
-		const table = createSymbolTable();
-		defineSymbol(table, makeSymbol("a", SymbolKind.Variable, unknownType(), false));
-		openScope(table, ScopeKind.Block);
-		defineSymbol(table, makeSymbol("b", SymbolKind.Variable, unknownType(), false));
-		// Inner scope sees both
-		check(lookupSymbol(table, "a") !== null);
-		check(lookupSymbol(table, "b") !== null);
-		closeScope(table);
-		// Outer scope sees only a
-		check(lookupSymbol(table, "a") !== null);
-		check(lookupSymbol(table, "b") === null);
-	});
-	test("shadowing", () => {
-		const table = createSymbolTable();
-		defineSymbol(table, makeSymbol("x", SymbolKind.Variable, unknownType(), false));
-		openScope(table, ScopeKind.Block);
-		defineSymbol(table, makeSymbol("x", SymbolKind.Variable, unknownType(), true));
-		// Inner lookup finds inner (mutable) shadow
-		const inner = lookupSymbol(table, "x");
-		check(inner !== null);
-		check(inner.isMutable === true);
-		closeScope(table);
-		// Outer lookup finds outer (immutable) original
-		const outer = lookupSymbol(table, "x");
-		check(outer !== null);
-		check(outer.isMutable === false);
-	});
-	test("lookupLocal", () => {
-		const table = createSymbolTable();
-		defineSymbol(table, makeSymbol("x", SymbolKind.Variable, unknownType(), false));
-		openScope(table, ScopeKind.Block);
-		// lookupLocal does NOT find parent scope
-		check(lookupLocal(table, "x") === null);
-		// lookupSymbol DOES find parent scope
-		check(lookupSymbol(table, "x") !== null);
-		closeScope(table);
-	});
-	test("function scope params", () => {
-		const table = createSymbolTable();
-		defineSymbol(table, makeSymbol("add", SymbolKind.Function, unknownType(), false));
-		openScope(table, ScopeKind.Function);
-		defineSymbol(table, makeSymbol("a", SymbolKind.Parameter, unknownType(), false));
-		defineSymbol(table, makeSymbol("b", SymbolKind.Parameter, unknownType(), false));
-		check(lookupSymbol(table, "a") !== null);
-		check(lookupSymbol(table, "b") !== null);
-		check(lookupSymbol(table, "add") !== null);
-		closeScope(table);
-		check(lookupSymbol(table, "a") === null);
-	});
-	test("deeply nested", () => {
-		const table = createSymbolTable();
-		defineSymbol(table, makeSymbol("global", SymbolKind.Variable, unknownType(), false));
-		openScope(table, ScopeKind.Function);
-		defineSymbol(table, makeSymbol("func", SymbolKind.Variable, unknownType(), false));
-		openScope(table, ScopeKind.Block);
-		defineSymbol(table, makeSymbol("block", SymbolKind.Variable, unknownType(), false));
-		openScope(table, ScopeKind.Loop);
-		defineSymbol(table, makeSymbol("loop", SymbolKind.Variable, unknownType(), false));
-		check(lookupSymbol(table, "global") !== null);
-		check(lookupSymbol(table, "func") !== null);
-		check(lookupSymbol(table, "block") !== null);
-		check(lookupSymbol(table, "loop") !== null);
-		closeScope(table);
-		closeScope(table);
-		closeScope(table);
-		check(lookupSymbol(table, "loop") === null);
-	});
-	test("scope kind", () => {
-		const table = createSymbolTable();
-		check(table.current.scopeKind === ScopeKind.Global);
-		openScope(table, ScopeKind.Function);
-		check(table.current.scopeKind === ScopeKind.Function);
-		openScope(table, ScopeKind.Loop);
-		check(table.current.scopeKind === ScopeKind.Loop);
-		closeScope(table);
-		closeScope(table);
-	});
-	test("function overloads allowed", () => {
-		const table = createSymbolTable();
-		const sym1 = makeSymbol("add", SymbolKind.Function, unknownType(), false);
-		const sym2 = makeSymbol("add", SymbolKind.Function, unknownType(), false);
-		const r1 = defineSymbol(table, sym1);
-		check(r1.ok);
-		const r2 = defineSymbol(table, sym2);
-		check(r2.ok);  // no error for function overload
-		const found = lookupSymbol(table, "add");
-		check(found !== null);
-		check(found.overloads.length === 1);
-	});
-	test("non-function duplicate still errors", () => {
-		const table = createSymbolTable();
-		defineSymbol(table, makeSymbol("x", SymbolKind.Variable, unknownType(), false));
-		const r = defineSymbol(table, makeSymbol("x", SymbolKind.Variable, unknownType(), false));
-		check(!r.ok);
-	});
-	test("isExported default false", () => {
-		const sym = makeSymbol("x", SymbolKind.Variable, unknownType(), false);
-		check(!sym.isExported);
-	});
-	test("lookupExport finds exported", () => {
-		const table = createSymbolTable();
-		openScope(table, ScopeKind.Module);
-		const sym = makeSymbol("foo", SymbolKind.Function, unknownType(), false);
-		sym.isExported = true;
-		defineSymbol(table, sym);
-		const found = lookupExport(table, "foo");
-		check(found !== null);
-		check(found.name === "foo");
-	});
-	test("lookupExport skips non-exported", () => {
-		const table = createSymbolTable();
-		openScope(table, ScopeKind.Module);
-		defineSymbol(table, makeSymbol("bar", SymbolKind.Variable, unknownType(), false));
-		const found = lookupExport(table, "bar");
-		check(found === null);
-	});
-});
+test "define and lookup" {
+	const table = createSymbolTable();
+	const sym = makeSymbol("x", SymbolKind.Variable, unknownType(), false);
+	const result = defineSymbol(table, sym);
+	check(result.ok);
+	check(lookupSymbol(table, "x") !== null);
+	check(sym.state === SymbolState.Hollow);
+}
+
+test "duplicate error" {
+	const table = createSymbolTable();
+	const sym1 = makeSymbol("x", SymbolKind.Variable, unknownType(), false);
+	const sym2 = makeSymbol("x", SymbolKind.Variable, unknownType(), true);
+	defineSymbol(table, sym1);
+	const result = defineSymbol(table, sym2);
+	check(!result.ok);
+}
+
+test "scope nesting" {
+	const table = createSymbolTable();
+	defineSymbol(table, makeSymbol("a", SymbolKind.Variable, unknownType(), false));
+	openScope(table, ScopeKind.Block);
+	defineSymbol(table, makeSymbol("b", SymbolKind.Variable, unknownType(), false));
+	// Inner scope sees both
+	check(lookupSymbol(table, "a") !== null);
+	check(lookupSymbol(table, "b") !== null);
+	closeScope(table);
+	// Outer scope sees only a
+	check(lookupSymbol(table, "a") !== null);
+	check(lookupSymbol(table, "b") === null);
+}
+
+test "shadowing" {
+	const table = createSymbolTable();
+	defineSymbol(table, makeSymbol("x", SymbolKind.Variable, unknownType(), false));
+	openScope(table, ScopeKind.Block);
+	defineSymbol(table, makeSymbol("x", SymbolKind.Variable, unknownType(), true));
+	// Inner lookup finds inner (mutable) shadow
+	const inner = lookupSymbol(table, "x");
+	check(inner !== null);
+	check(hasFlag(inner, SF_MUTABLE));
+	closeScope(table);
+	// Outer lookup finds outer (immutable) original
+	const outer = lookupSymbol(table, "x");
+	check(outer !== null);
+	check(!hasFlag(outer, SF_MUTABLE));
+}
+
+test "lookupLocal" {
+	const table = createSymbolTable();
+	defineSymbol(table, makeSymbol("x", SymbolKind.Variable, unknownType(), false));
+	openScope(table, ScopeKind.Block);
+	// lookupLocal does NOT find parent scope
+	check(lookupLocal(table, "x") === null);
+	// lookupSymbol DOES find parent scope
+	check(lookupSymbol(table, "x") !== null);
+	closeScope(table);
+}
+
+test "function scope params" {
+	const table = createSymbolTable();
+	defineSymbol(table, makeSymbol("add", SymbolKind.Function, unknownType(), false));
+	openScope(table, ScopeKind.Function);
+	defineSymbol(table, makeSymbol("a", SymbolKind.Parameter, unknownType(), false));
+	defineSymbol(table, makeSymbol("b", SymbolKind.Parameter, unknownType(), false));
+	check(lookupSymbol(table, "a") !== null);
+	check(lookupSymbol(table, "b") !== null);
+	check(lookupSymbol(table, "add") !== null);
+	closeScope(table);
+	check(lookupSymbol(table, "a") === null);
+}
+
+test "deeply nested" {
+	const table = createSymbolTable();
+	defineSymbol(table, makeSymbol("global", SymbolKind.Variable, unknownType(), false));
+	openScope(table, ScopeKind.Function);
+	defineSymbol(table, makeSymbol("func", SymbolKind.Variable, unknownType(), false));
+	openScope(table, ScopeKind.Block);
+	defineSymbol(table, makeSymbol("block", SymbolKind.Variable, unknownType(), false));
+	openScope(table, ScopeKind.Loop);
+	defineSymbol(table, makeSymbol("loop", SymbolKind.Variable, unknownType(), false));
+	check(lookupSymbol(table, "global") !== null);
+	check(lookupSymbol(table, "func") !== null);
+	check(lookupSymbol(table, "block") !== null);
+	check(lookupSymbol(table, "loop") !== null);
+	closeScope(table);
+	closeScope(table);
+	closeScope(table);
+	check(lookupSymbol(table, "loop") === null);
+}
+
+test "scope kind" {
+	const table = createSymbolTable();
+	check(table.current.scopeKind === ScopeKind.Global);
+	openScope(table, ScopeKind.Function);
+	check(table.current.scopeKind === ScopeKind.Function);
+	openScope(table, ScopeKind.Loop);
+	check(table.current.scopeKind === ScopeKind.Loop);
+	closeScope(table);
+	closeScope(table);
+}
+
+test "function overloads allowed" {
+	const table = createSymbolTable();
+	const sym1 = makeSymbol("add", SymbolKind.Function, unknownType(), false);
+	const sym2 = makeSymbol("add", SymbolKind.Function, unknownType(), false);
+	const r1 = defineSymbol(table, sym1);
+	check(r1.ok);
+	const r2 = defineSymbol(table, sym2);
+	check(r2.ok);  // no error for function overload
+	const found = lookupSymbol(table, "add");
+	check(found !== null);
+	check(found.overloads.length === 1);
+}
+
+test "non-function duplicate still errors" {
+	const table = createSymbolTable();
+	defineSymbol(table, makeSymbol("x", SymbolKind.Variable, unknownType(), false));
+	const r = defineSymbol(table, makeSymbol("x", SymbolKind.Variable, unknownType(), false));
+	check(!r.ok);
+}
+
+test "SF_EXPORTED default false" {
+	const sym = makeSymbol("x", SymbolKind.Variable, unknownType(), false);
+	check(!hasFlag(sym, SF_EXPORTED));
+}
+
+test "lookupExport finds exported" {
+	const table = createSymbolTable();
+	openScope(table, ScopeKind.Module);
+	const sym = makeSymbol("foo", SymbolKind.Function, unknownType(), false);
+	setFlag(sym, SF_EXPORTED);
+	defineSymbol(table, sym);
+	const found = lookupExport(table, "foo");
+	check(found !== null);
+	check(found.name === "foo");
+}
+
+test "lookupExport skips non-exported" {
+	const table = createSymbolTable();
+	openScope(table, ScopeKind.Module);
+	defineSymbol(table, makeSymbol("bar", SymbolKind.Variable, unknownType(), false));
+	const found = lookupExport(table, "bar");
+	check(found === null);
+}

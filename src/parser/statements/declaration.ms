@@ -9,7 +9,7 @@ import { parseParamList, extractParamNames, extractParamTypes, captureOptionalTy
 import { callBlockParser, callExprParser } from "./callbacks";
 import { sliceStr } from "../../utils/string";
 import { programOk, stmtKind, stmtAt } from "./validation";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 type NodeResult = Result<Node, string>;
 
@@ -79,8 +79,6 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 }
 
 // ===== Specifier List Helper =====
-// Note: string[] is a value type in C (struct copy), so we can't pass arrays
-// as out-parameters. Instead, we inline the parsing loop at each call site.
 
 // ===== Helpers =====
 
@@ -109,8 +107,10 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 		advance(state); // consume '*'
 	}
 	const nameToken = current(state);
-	// Accept Ident or TemplateNoSub (backtick-stropped operator name, e.g. `[]`)
-	if (nameToken.kind !== TokenKind.Ident && nameToken.kind !== TokenKind.TemplateNoSub) {
+	// Accept Ident, TemplateNoSub, or contextual keywords (test, expect, require) that can be function names
+	if (nameToken.kind !== TokenKind.Ident && nameToken.kind !== TokenKind.TemplateNoSub
+		&& nameToken.kind !== TokenKind.Test && nameToken.kind !== TokenKind.Expect
+		&& nameToken.kind !== TokenKind.Require) {
 		return Result.err(`Expected function name at line ${nameToken.line.toString()}`);
 	}
 
@@ -1122,186 +1122,249 @@ export function parseMacroDecl(state: ParserState): NodeResult {
 }
 
 // ===== Tests =====
+// Variable — const vs let
+test "const decl" { check(programOk("const x = 42;")); }
 
-testGroup("Stmt Declarations", () => {
-	// Variable — const vs let
-	test("const decl", () => { check(programOk("const x = 42;")); });
-	test("let decl", () => { check(programOk("let y = 0;")); });
-	// Function — empty, with params, with body
-	test("function empty", () => { check(programOk("function f() { }")); });
-	test("function multi-stmt", () => { check(programOk("function f() { const x = 1; return x; }")); });
-	// Import — distinct paths: named, aliased, side-effect
-	test("import named", () => { check(programOk("import { Token, TokenKind } from \"./token\";")); });
-	test("import aliased", () => { check(programOk("import { Token as T } from \"./token\";")); });
-	test("import side-effect", () => { check(programOk("import \"./polyfill\";")); });
-	// Export — distinct paths: decl, re-export, re-export aliased
-	test("export function", () => { check(programOk("export function f() { return 1; }")); });
-	test("export const", () => { check(programOk("export const x = 42;")); });
-	test("re-export", () => { check(programOk("export { Node, NodeKind } from \"./node\";")); });
-	test("re-export aliased", () => { check(programOk("export { Token as T } from \"./token\";")); });
-	// Type alias — distinct paths: simple, generic, union, function type
-	test("type simple", () => { check(programOk("type ID = number;")); });
-	test("type generic", () => { check(programOk("type NodeResult = Result<Node, string>;")); });
-	test("type leading pipe", () => { check(programOk("type Data = | { x: number } | { y: string };")); });
-	test("type function", () => { check(programOk("type Handler = (a: string) => void;")); });
-	// Enum
-	test("enum", () => { check(programOk("enum Color { Red, Green, Blue }")); });
-	test("enum with values", () => { check(programOk("enum Status { Active = 1, Inactive = 0 }")); });
-	// Interface — distinct paths: simple, optional, extends
-	test("interface", () => { check(programOk("interface Point { x: number; y: number; }")); });
-	test("interface optional", () => { check(programOk("interface Opt { value?: number; }")); });
-	test("interface extends", () => { check(programOk("interface Dog extends Animal { breed: string; }")); });
-	// Param features — exercises parseParamList + skipDefaultValue
-	test("rest param", () => { check(programOk("function f(...args) { return args; }")); });
-	test("default param", () => { check(programOk("function f(x = 5) { return x; }")); });
-	test("default param complex", () => { check(programOk("function f(x = [1, 2], y = {a: 3}) {}")); });
-	test("typed param", () => { check(programOk("function f(x: number, y: string) {}")); });
-	// Enum with complex values — exercises skipDefaultValue depth tracking
-	test("enum complex value", () => { check(programOk("enum E { A = fn(1, 2), B = arr[0] }")); });
-	// Var declarations
-	test("var decl", () => { check(programOk("var x = 1;")); });
-	test("var is VariableDecl", () => { check(stmtKind("var x = 1;") === NodeKind.VariableDecl); });
-	test("var declKind is Var", () => {
-		const d = stmtAt("var x = 1;", 0).data as VariableDeclData;
-		check(d.declKind === DeclKind.Var);
-	});
-	test("var declName", () => {
-		const d = stmtAt("var x = 1;", 0).data as VariableDeclData;
-		check(d.declName === "x");
-	});
-	test("var typed", () => { check(programOk("var x: number = 1;")); });
-	// Extern declarations — all 9 kinds
-	test("extern function", () => { check(programOk("extern function printf(fmt: string): void;")); });
-	test("extern class empty", () => { check(programOk("extern class FILE {}")); });
-	test("extern const", () => { check(programOk("extern const STDIN: FILE;")); });
-	test("extern enum", () => { check(programOk("extern enum Color { Red, Green }")); });
-	test("extern type", () => { check(programOk("extern type Ptr;")); });
-	test("extern var", () => { check(programOk("extern var errno: number;")); });
-	test("extern let", () => { check(programOk("extern let counter: number;")); });
-	test("extern interface", () => { check(programOk("extern interface Stream { read(): number; }")); });
-	test("extern macro", () => { check(programOk("extern macro @inject;")); });
-	test("extern function is FunctionDecl", () => { check(stmtKind("extern function f(): void;") === NodeKind.FunctionDecl); });
-	test("extern function has extern flag", () => {
-		const d = stmtAt("extern function printf(fmt: string): void;", 0).data as FunctionDeclData;
-		check(d.fnFlags === "extern");
-	});
-	test("extern const is ExternDecl", () => { check(stmtKind("extern const STDIN: int32;") === NodeKind.ExternDecl); });
-	test("extern name field", () => {
-		const d = stmtAt("extern const STDIN: FILE;", 0).data as ExternDeclData;
-		check(d.externName === "STDIN");
-	});
-	test("extern class kind", () => {
-		const d = stmtAt("extern class FILE {}", 0).data as ExternDeclData;
-		check(d.externKind === "class");
-	});
-	test("extern generics", () => { check(programOk("extern function sort<T>(arr: T[]): void;")); });
-	test("extern extends", () => { check(programOk("extern class Derived extends Base {}")); });
-	test("extern error", () => { check(!programOk("extern 42")); });
-	test("export extern function", () => { check(programOk("export extern function foo(x: number): void;")); });
-	test("export extern function is ExportDecl", () => { check(stmtKind("export extern function foo(): void;") === NodeKind.ExportDecl); });
-	// Distinct type
-	test("distinct type", () => { check(programOk("distinct type UserId = number;")); });
-	test("distinct type string", () => { check(programOk("distinct type Email = string;")); });
-	test("distinct is TypeAliasDecl", () => { check(stmtKind("distinct type X = number;") === NodeKind.TypeAliasDecl); });
-	test("distinct flag true", () => {
-		const d = stmtAt("distinct type UserId = number;", 0).data as TypeAliasDeclData;
-		check(d.aliasIsDistinct);
-	});
-	test("distinct name field", () => {
-		const d = stmtAt("distinct type Email = string;", 0).data as TypeAliasDeclData;
-		check(d.aliasName === "Email");
-	});
-	test("type alias not distinct", () => {
-		const d = stmtAt("type ID = number;", 0).data as TypeAliasDeclData;
-		check(!d.aliasIsDistinct);
-	});
-	// Macro declaration
-	test("macro decl", () => { check(programOk("macro deriveEq(target) { return target; }")); });
-	test("macro is MacroDecl", () => { check(stmtKind("macro foo(x) { return x; }") === NodeKind.MacroDecl); });
-	test("macro name field", () => {
-		const d = stmtAt("macro deriveEq(target) { return target; }", 0).data as MacroDeclData;
-		check(d.macroDeclName === "deriveEq");
-	});
-	test("macro multi param", () => { check(programOk("macro foo(a, b, c) { return a; }")); });
-	test("macro params field", () => {
-		const d = stmtAt("macro foo(a, b, c) { return a; }", 0).data as MacroDeclData;
-		check(d.macroDeclParams.length === 3);
-	});
-	test("macro body is block", () => {
-		const d = stmtAt("macro foo(x) { return x; }", 0).data as MacroDeclData;
-		check(d.macroDeclBody.kind === NodeKind.BlockStmt);
-	});
-	test("macro return type", () => { check(programOk("macro foo(): Node { return x; }")); });
-	test("macro empty params", () => { check(programOk("macro noop() { }")); });
-});
+test "let decl" { check(programOk("let y = 0;")); }
+// Function — empty, with params, with body
+test "function empty" { check(programOk("function f() { }")); }
 
-testGroup("Async/Generator Decl", () => {
-	test("async function", () => { check(programOk("async function f() {}")); });
-	test("generator function", () => { check(programOk("function* gen() { yield 1; }")); });
-	test("async generator", () => { check(programOk("async function* both() { yield 1; }")); });
-	test("export async", () => { check(programOk("export async function f() {}")); });
-});
+test "function multi-stmt" { check(programOk("function f() { const x = 1; return x; }")); }
+// Import — distinct paths: named, aliased, side-effect
+test "import named" { check(programOk("import { Token, TokenKind } from \"./token\";")); }
 
-testGroup("Extension Methods", () => {
-	test("extension parses", () => {
-		check(programOk("function f(this s: string) { return 1; }"));
-	});
-	test("extension flags", () => {
-		const n = stmtAt("function f(this s: string) { return 1; }", 0);
-		const d = n.data as FunctionDeclData;
-		check(d.fnFlags === "ext:s:string");
-	});
-	test("extension keeps receiver in params", () => {
-		const n = stmtAt("function f(this s: string) { return 1; }", 0);
-		const d = n.data as FunctionDeclData;
-		check(d.params.length === 1);
-		check(d.params[0] === "s");
-	});
-	test("extension with extra params", () => {
-		const n = stmtAt("function f(this s: string, n: number) { return 1; }", 0);
-		const d = n.data as FunctionDeclData;
-		check(d.params.length === 2);
-		check(d.params[0] === "s");
-		check(d.params[1] === "n");
-	});
-	test("no receiver flags empty", () => {
-		const n = stmtAt("function f(x: number) { return 1; }", 0);
-		const d = n.data as FunctionDeclData;
-		check(d.fnFlags === "");
-	});
-});
+test "import aliased" { check(programOk("import { Token as T } from \"./token\";")); }
 
-testGroup("Destructuring Decl", () => {
-	test("object destructure", () => { check(stmtKind("const {a, b} = obj;") === NodeKind.DestructuringDecl); });
-	test("array destructure", () => { check(programOk("const [x, y] = arr;")); });
-	test("nested object", () => { check(programOk("const {a: {b, c}} = obj;")); });
-	test("object rest", () => { check(programOk("const {a, ...rest} = obj;")); });
-	test("array rest", () => { check(programOk("const [first, ...rest] = arr;")); });
-	test("let destructure", () => { check(programOk("let {x, y} = point;")); });
-	test("func destr param", () => { check(programOk("function f({x, y}) { return x; }")); });
-	test("func array param", () => { check(programOk("function f([a, b]) { return a; }")); });
-	test("arrow destr param", () => { check(programOk("const f = ({x}) => x;")); });
-});
+test "import side-effect" { check(programOk("import \"./polyfill\";")); }
+// Export — distinct paths: decl, re-export, re-export aliased
+test "export function" { check(programOk("export function f() { return 1; }")); }
 
-testGroup("Stmt Class", () => {
-	// Distinct member types
-	test("property", () => { check(programOk("class Foo { name: string; }")); });
-	test("method", () => { check(programOk("class Foo { greet() { return 1; } }")); });
-	test("constructor", () => { check(programOk("class Foo { constructor(x: number) { this.x = x; } }")); });
-	// Modifiers — each tests a distinct parser path
-	test("extends", () => { check(programOk("class Dog extends Animal { bark() { return 1; } }")); });
-	test("static", () => { check(programOk("class Foo { static create() { return 1; } }")); });
-	test("abstract", () => { check(programOk("abstract class Shape { abstract area(): number; }")); });
-	test("getter setter", () => { check(programOk("class Foo { get name() { return 1; } set name(v: string) { this.x = v; } }")); });
-	test("export class", () => { check(programOk("export class Foo { x: number; }")); });
-	test("async method", () => { check(programOk("class Foo { async fetch() {} }")); });
-	test("generator method", () => { check(programOk("class Foo { *items() { yield 1; } }")); });
-	// Complex
-	test("multi members", () => { check(programOk("class Point { x: number; y: number; toString() { return 1; } }")); });
-	test("constructor public", () => { check(programOk("class Foo { constructor(public name: string) { } }")); });
-	// Generic classes — exercises skipGenericParams in context.ms
-	test("generic class", () => { check(programOk("class Container<T> { value: T; }")); });
-	test("generic extends", () => { check(programOk("class List<T> extends Base<T> {}")); });
-	test("multi generic", () => { check(programOk("class Map<K, V> { lookup(k: K): V {} }")); });
-	test("implements", () => { check(programOk("class Foo implements Bar {}")); });
-});
+test "export const" { check(programOk("export const x = 42;")); }
+
+test "re-export" { check(programOk("export { Node, NodeKind } from \"./node\";")); }
+
+test "re-export aliased" { check(programOk("export { Token as T } from \"./token\";")); }
+// Type alias — distinct paths: simple, generic, union, function type
+test "type simple" { check(programOk("type ID = number;")); }
+
+test "type generic" { check(programOk("type NodeResult = Result<Node, string>;")); }
+
+test "type leading pipe" { check(programOk("type Data = | { x: number } | { y: string };")); }
+
+test "type function" { check(programOk("type Handler = (a: string) => void;")); }
+// Enum
+test "enum" { check(programOk("enum Color { Red, Green, Blue }")); }
+
+test "enum with values" { check(programOk("enum Status { Active = 1, Inactive = 0 }")); }
+// Interface — distinct paths: simple, optional, extends
+test "interface" { check(programOk("interface Point { x: number; y: number; }")); }
+
+test "interface optional" { check(programOk("interface Opt { value?: number; }")); }
+
+test "interface extends" { check(programOk("interface Dog extends Animal { breed: string; }")); }
+// Param features — exercises parseParamList + skipDefaultValue
+test "rest param" { check(programOk("function f(...args) { return args; }")); }
+
+test "default param" { check(programOk("function f(x = 5) { return x; }")); }
+
+test "default param complex" { check(programOk("function f(x = [1, 2], y = {a: 3}) {}")); }
+
+test "typed param" { check(programOk("function f(x: number, y: string) {}")); }
+// Enum with complex values — exercises skipDefaultValue depth tracking
+test "enum complex value" { check(programOk("enum E { A = fn(1, 2), B = arr[0] }")); }
+// Var declarations
+test "var decl" { check(programOk("var x = 1;")); }
+
+test "var is VariableDecl" { check(stmtKind("var x = 1;") === NodeKind.VariableDecl); }
+
+test "var declKind is Var" {
+	const d = stmtAt("var x = 1;", 0).data as VariableDeclData;
+	check(d.declKind === DeclKind.Var);
+}
+
+test "var declName" {
+	const d = stmtAt("var x = 1;", 0).data as VariableDeclData;
+	check(d.declName === "x");
+}
+
+test "var typed" { check(programOk("var x: number = 1;")); }
+// Extern declarations — all 9 kinds
+test "extern function" { check(programOk("extern function printf(fmt: string): void;")); }
+
+test "extern class empty" { check(programOk("extern class FILE {}")); }
+
+test "extern const" { check(programOk("extern const STDIN: FILE;")); }
+
+test "extern enum" { check(programOk("extern enum Color { Red, Green }")); }
+
+test "extern type" { check(programOk("extern type Ptr;")); }
+
+test "extern var" { check(programOk("extern var errno: number;")); }
+
+test "extern let" { check(programOk("extern let counter: number;")); }
+
+test "extern interface" { check(programOk("extern interface Stream { read(): number; }")); }
+
+test "extern macro" { check(programOk("extern macro @inject;")); }
+
+test "extern function is FunctionDecl" { check(stmtKind("extern function f(): void;") === NodeKind.FunctionDecl); }
+
+test "extern function has extern flag" {
+	const d = stmtAt("extern function printf(fmt: string): void;", 0).data as FunctionDeclData;
+	check(d.fnFlags === "extern");
+}
+
+test "extern const is ExternDecl" { check(stmtKind("extern const STDIN: int32;") === NodeKind.ExternDecl); }
+
+test "extern name field" {
+	const d = stmtAt("extern const STDIN: FILE;", 0).data as ExternDeclData;
+	check(d.externName === "STDIN");
+}
+
+test "extern class kind" {
+	const d = stmtAt("extern class FILE {}", 0).data as ExternDeclData;
+	check(d.externKind === "class");
+}
+
+test "extern generics" { check(programOk("extern function sort<T>(arr: T[]): void;")); }
+
+test "extern extends" { check(programOk("extern class Derived extends Base {}")); }
+
+test "extern error" { check(!programOk("extern 42")); }
+
+test "export extern function" { check(programOk("export extern function foo(x: number): void;")); }
+
+test "export extern function is ExportDecl" { check(stmtKind("export extern function foo(): void;") === NodeKind.ExportDecl); }
+// Distinct type
+test "distinct type" { check(programOk("distinct type UserId = number;")); }
+
+test "distinct type string" { check(programOk("distinct type Email = string;")); }
+
+test "distinct is TypeAliasDecl" { check(stmtKind("distinct type X = number;") === NodeKind.TypeAliasDecl); }
+
+test "distinct flag true" {
+	const d = stmtAt("distinct type UserId = number;", 0).data as TypeAliasDeclData;
+	check(d.aliasIsDistinct);
+}
+
+test "distinct name field" {
+	const d = stmtAt("distinct type Email = string;", 0).data as TypeAliasDeclData;
+	check(d.aliasName === "Email");
+}
+
+test "type alias not distinct" {
+	const d = stmtAt("type ID = number;", 0).data as TypeAliasDeclData;
+	check(!d.aliasIsDistinct);
+}
+// Macro declaration
+test "macro decl" { check(programOk("macro deriveEq(target) { return target; }")); }
+
+test "macro is MacroDecl" { check(stmtKind("macro foo(x) { return x; }") === NodeKind.MacroDecl); }
+
+test "macro name field" {
+	const d = stmtAt("macro deriveEq(target) { return target; }", 0).data as MacroDeclData;
+	check(d.macroDeclName === "deriveEq");
+}
+
+test "macro multi param" { check(programOk("macro foo(a, b, c) { return a; }")); }
+
+test "macro params field" {
+	const d = stmtAt("macro foo(a, b, c) { return a; }", 0).data as MacroDeclData;
+	check(d.macroDeclParams.length === 3);
+}
+
+test "macro body is block" {
+	const d = stmtAt("macro foo(x) { return x; }", 0).data as MacroDeclData;
+	check(d.macroDeclBody.kind === NodeKind.BlockStmt);
+}
+
+test "macro return type" { check(programOk("macro foo(): Node { return x; }")); }
+
+test "macro empty params" { check(programOk("macro noop() { }")); }
+
+test "async function" { check(programOk("async function f() {}")); }
+
+test "generator function" { check(programOk("function* gen() { yield 1; }")); }
+
+test "async generator" { check(programOk("async function* both() { yield 1; }")); }
+
+test "export async" { check(programOk("export async function f() {}")); }
+
+test "extension parses" { check(programOk("function f(this s: string) { return 1; }")); }
+
+test "extension flags" {
+	const n = stmtAt("function f(this s: string) { return 1; }", 0);
+	const d = n.data as FunctionDeclData;
+	check(d.fnFlags === "ext:s:string");
+}
+
+test "extension keeps receiver in params" {
+	const n = stmtAt("function f(this s: string) { return 1; }", 0);
+	const d = n.data as FunctionDeclData;
+	check(d.params.length === 1);
+	check(d.params[0] === "s");
+}
+
+test "extension with extra params" {
+	const n = stmtAt("function f(this s: string, n: number) { return 1; }", 0);
+	const d = n.data as FunctionDeclData;
+	check(d.params.length === 2);
+	check(d.params[0] === "s");
+	check(d.params[1] === "n");
+}
+
+test "no receiver flags empty" {
+	const n = stmtAt("function f(x: number) { return 1; }", 0);
+	const d = n.data as FunctionDeclData;
+	check(d.fnFlags === "");
+}
+
+test "object destructure" { check(stmtKind("const {a, b} = obj;") === NodeKind.DestructuringDecl); }
+
+test "array destructure" { check(programOk("const [x, y] = arr;")); }
+
+test "nested object" { check(programOk("const {a: {b, c}} = obj;")); }
+
+test "object rest" { check(programOk("const {a, ...rest} = obj;")); }
+
+test "array rest" { check(programOk("const [first, ...rest] = arr;")); }
+
+test "let destructure" { check(programOk("let {x, y} = point;")); }
+
+test "func destr param" { check(programOk("function f({x, y}) { return x; }")); }
+
+test "func array param" { check(programOk("function f([a, b]) { return a; }")); }
+
+test "arrow destr param" { check(programOk("const f = ({x}) => x;")); }
+// Distinct member types
+test "property" { check(programOk("class Foo { name: string; }")); }
+
+test "method" { check(programOk("class Foo { greet() { return 1; } }")); }
+
+test "constructor" { check(programOk("class Foo { constructor(x: number) { this.x = x; } }")); }
+// Modifiers — each tests a distinct parser path
+test "extends" { check(programOk("class Dog extends Animal { bark() { return 1; } }")); }
+
+test "static" { check(programOk("class Foo { static create() { return 1; } }")); }
+
+test "abstract" { check(programOk("abstract class Shape { abstract area(): number; }")); }
+
+test "getter setter" { check(programOk("class Foo { get name() { return 1; } set name(v: string) { this.x = v; } }")); }
+
+test "export class" { check(programOk("export class Foo { x: number; }")); }
+
+test "async method" { check(programOk("class Foo { async fetch() {} }")); }
+
+test "generator method" { check(programOk("class Foo { *items() { yield 1; } }")); }
+// Complex
+test "multi members" { check(programOk("class Point { x: number; y: number; toString() { return 1; } }")); }
+
+test "constructor public" { check(programOk("class Foo { constructor(public name: string) { } }")); }
+// Generic classes — exercises skipGenericParams in context.ms
+test "generic class" { check(programOk("class Container<T> { value: T; }")); }
+
+test "generic extends" { check(programOk("class List<T> extends Base<T> {}")); }
+
+test "multi generic" { check(programOk("class Map<K, V> { lookup(k: K): V {} }")); }
+
+test "implements" { check(programOk("class Foo implements Bar {}")); }

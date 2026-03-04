@@ -2,7 +2,7 @@
 // 32-bit instructions, Lua-style ABC/ABx/Ax encoding.
 // Opcodes grow incrementally: i64 first, then i32/f32/f64.
 
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 // --- Opcodes ---
 // Start with i64 + control. Add typed variants as layers.
@@ -137,69 +137,64 @@ export function getSignedAx(inst: RaiserInstruction): number {
 }
 
 // --- Tests ---
+test "ABC round-trip" {
+	const inst = raiserABC(RaiserOpcode.AddI64, 2, 0, 1);
+	check(inst.op === RaiserOpcode.AddI64);
+	check(inst.a === 2);
+	check(inst.b === 0);
+	check(inst.c === 1);
+}
 
-testGroup("RaiserInstruction encoding", () => {
-	test("ABC round-trip", () => {
-		const inst = raiserABC(RaiserOpcode.AddI64, 2, 0, 1);
-		check(inst.op === RaiserOpcode.AddI64);
-		check(inst.a === 2);
-		check(inst.b === 0);
-		check(inst.c === 1);
-	});
+test "ABx round-trip small" {
+	const inst = raiserABx(RaiserOpcode.LoadConst, 3, 42);
+	check(inst.op === RaiserOpcode.LoadConst);
+	check(inst.a === 3);
+	check(getBx(inst) === 42);
+}
 
-	test("ABx round-trip small", () => {
-		const inst = raiserABx(RaiserOpcode.LoadConst, 3, 42);
-		check(inst.op === RaiserOpcode.LoadConst);
-		check(inst.a === 3);
-		check(getBx(inst) === 42);
-	});
+test "ABx round-trip large" {
+	const inst = raiserABx(RaiserOpcode.LoadConst, 0, 1000);
+	check(getBx(inst) === 1000);
+}
 
-	test("ABx round-trip large", () => {
-		const inst = raiserABx(RaiserOpcode.LoadConst, 0, 1000);
-		check(getBx(inst) === 1000);
-	});
+test "ABx max value" {
+	const inst = raiserABx(RaiserOpcode.LoadConst, 0, 65535);
+	check(getBx(inst) === 65535);
+}
 
-	test("ABx max value", () => {
-		const inst = raiserABx(RaiserOpcode.LoadConst, 0, 65535);
-		check(getBx(inst) === 65535);
-	});
+test "Ax positive jump" {
+	const inst = raiserAx(RaiserOpcode.Jump, 10);
+	check(inst.op === RaiserOpcode.Jump);
+	check(getSignedAx(inst) === 10);
+}
 
-	test("Ax positive jump", () => {
-		const inst = raiserAx(RaiserOpcode.Jump, 10);
-		check(inst.op === RaiserOpcode.Jump);
-		check(getSignedAx(inst) === 10);
-	});
+test "Ax negative jump" {
+	const inst = raiserAx(RaiserOpcode.Jump, -5);
+	check(getSignedAx(inst) === -5);
+}
 
-	test("Ax negative jump", () => {
-		const inst = raiserAx(RaiserOpcode.Jump, -5);
-		check(getSignedAx(inst) === -5);
-	});
+test "Ax zero" {
+	const inst = raiserAx(RaiserOpcode.Jump, 0);
+	check(getSignedAx(inst) === 0);
+}
 
-	test("Ax zero", () => {
-		const inst = raiserAx(RaiserOpcode.Jump, 0);
-		check(getSignedAx(inst) === 0);
-	});
+test "signed Bx negative" {
+	const inst = raiserABx(RaiserOpcode.LoadConst, 0, 65535);
+	check(getSignedBx(inst) === -1);
+}
 
-	test("signed Bx negative", () => {
-		const inst = raiserABx(RaiserOpcode.LoadConst, 0, 65535);
-		check(getSignedBx(inst) === -1);
-	});
+test "signed Bx positive" {
+	const inst = raiserABx(RaiserOpcode.LoadConst, 0, 100);
+	check(getSignedBx(inst) === 100);
+}
 
-	test("signed Bx positive", () => {
-		const inst = raiserABx(RaiserOpcode.LoadConst, 0, 100);
-		check(getSignedBx(inst) === 100);
-	});
-});
+test "first opcode is LoadConst" {
+	const inst = raiserABC(RaiserOpcode.LoadConst, 0, 0, 0);
+	check(inst.op === RaiserOpcode.LoadConst);
+}
 
-testGroup("RaiserOpcode enum values", () => {
-	test("first opcode is LoadConst", () => {
-		const inst = raiserABC(RaiserOpcode.LoadConst, 0, 0, 0);
-		check(inst.op === RaiserOpcode.LoadConst);
-	});
-
-	test("opcodes are distinct", () => {
-		check(RaiserOpcode.AddI64 !== RaiserOpcode.SubI64);
-		check(RaiserOpcode.Jump !== RaiserOpcode.Call);
-		check(RaiserOpcode.Halt !== RaiserOpcode.Ret);
-	});
-});
+test "opcodes are distinct" {
+	check(RaiserOpcode.AddI64 !== RaiserOpcode.SubI64);
+	check(RaiserOpcode.Jump !== RaiserOpcode.Call);
+	check(RaiserOpcode.Halt !== RaiserOpcode.Ret);
+}

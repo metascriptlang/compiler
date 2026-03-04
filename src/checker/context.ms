@@ -2,7 +2,7 @@ import { Type, TypeKind, unknownType } from "./types";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, createSymbolTable } from "./symbol";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
 import { sliceStr, findChar, trim, splitTopLevel } from "../utils/string";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 // ===== Export Registry (cross-module type propagation) =====
 // Lives only during checkModuleGraph execution — NOT on Module/ModuleGraph (DRC constraint).
@@ -352,210 +352,215 @@ export function ctxCacheClear(): void {
 }
 
 // ===== Tests =====
+test "create context" {
+	const ctx = createContext();
+	check(!hasErrors(ctx));
+	check(ctx.table.current.scopeKind === ScopeKind.Global);
+	check(ctx.currentFunction === null);
+	check(!ctx.inLoop);
+	check(ctx.moduleGraph === null);
+	check(ctx.currentModule === null);
+}
 
-testGroup("CheckerContext", () => {
-	test("create context", () => {
-		const ctx = createContext();
-		check(!hasErrors(ctx));
-		check(ctx.table.current.scopeKind === ScopeKind.Global);
-		check(ctx.currentFunction === null);
-		check(!ctx.inLoop);
-		check(ctx.moduleGraph === null);
-		check(ctx.currentModule === null);
-	});
-	test("create module context", () => {
-		const graph = createModuleGraph();
-		const mod = createModule("/a/b.ms");
-		const ctx = createModuleContext(graph, mod);
-		check(!hasErrors(ctx));
-		check(ctx.moduleGraph !== null);
-		check(ctx.currentModule !== null);
-		check(ctx.currentModule.path === "/a/b.ms");
-		check(ctx.exportRegistry === null);
-	});
-	test("error collection", () => {
-		const ctx = createContext();
-		check(errorCount(ctx) === 0);
-		addError(ctx, "test error");
-		check(hasErrors(ctx));
-		check(errorCount(ctx) === 1);
-		addError(ctx, "another error");
-		check(errorCount(ctx) === 2);
-	});
-});
+test "create module context" {
+	const graph = createModuleGraph();
+	const mod = createModule("/a/b.ms");
+	const ctx = createModuleContext(graph, mod);
+	check(!hasErrors(ctx));
+	check(ctx.moduleGraph !== null);
+	check(ctx.currentModule !== null);
+	check(ctx.currentModule.path === "/a/b.ms");
+	check(ctx.exportRegistry === null);
+}
 
-testGroup("ExtensionRegistry", () => {
-	test("create empty", () => {
-		const r = createExtensionRegistry();
-		check(r.methods.length === 0);
-	});
-	test("register and find", () => {
-		const r = createExtensionRegistry();
-		const m: ExtensionMethod = { methodName: "trim", receiverTypeName: "string", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false };
-		registerExtension(r, m);
-		const found = findExtension(r, "string", "trim");
-		check(found !== null);
-		check(found.methodName === "trim");
-	});
-	test("not found", () => {
-		const r = createExtensionRegistry();
-		const found = findExtension(r, "string", "nope");
-		check(found === null);
-	});
-});
+test "error collection" {
+	const ctx = createContext();
+	check(errorCount(ctx) === 0);
+	addError(ctx, "test error");
+	check(hasErrors(ctx));
+	check(errorCount(ctx) === 1);
+	addError(ctx, "another error");
+	check(errorCount(ctx) === 2);
+}
 
-testGroup("AttachedOps", () => {
-	test("no attached ops", () => {
-		const r = createExtensionRegistry();
-		const ops = findAttachedOps(r, "Foo");
-		check(!hasAttachedOps(ops));
-	});
-	test("detect onDestroy", () => {
-		const r = createExtensionRegistry();
-		const m: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Foo", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false };
-		registerExtension(r, m);
-		const ops = findAttachedOps(r, "Foo");
-		check(hasAttachedOps(ops));
-		check(ops.onDestroy !== null);
-		check(ops.onCopy === null);
-	});
-	test("detect all lifecycle hooks", () => {
-		const r = createExtensionRegistry();
-		const d: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false };
-		registerExtension(r, d);
-		const c: ExtensionMethod = { methodName: "onCopy", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false };
-		registerExtension(r, c);
-		const mv: ExtensionMethod = { methodName: "onMove", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false };
-		registerExtension(r, mv);
-		const ops = findAttachedOps(r, "Bar");
-		check(hasAttachedOps(ops));
-		check(ops.onDestroy !== null);
-		check(ops.onCopy !== null);
-		check(ops.onMove !== null);
-	});
-	test("wrong type no match", () => {
-		const r = createExtensionRegistry();
-		const m: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Foo", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false };
-		registerExtension(r, m);
-		const ops = findAttachedOps(r, "Bar");
-		check(!hasAttachedOps(ops));
-	});
-});
+test "create empty" {
+	const r = createExtensionRegistry();
+	check(r.methods.length === 0);
+}
 
-testGroup("ExportRegistry", () => {
-	test("create empty registry", () => {
-		const r = createExportRegistry();
-		check(r.entries.length === 0);
-	});
-	test("register and find exports", () => {
-		const r = createExportRegistry();
-		const syms: ExportedSymInfo[] = [];
-		const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), extReceiverType: "", extIsStatic: false };
-		syms.push(info);
-		registerModuleExports(r, "/src/b.ms", syms);
-		const found = findExportedSymbol(r, "/src/b.ms", "foo");
-		check(found !== null);
-		check(found.name === "foo");
-		check(found.kind === SymbolKind.Function);
-	});
-	test("missing module returns null", () => {
-		const r = createExportRegistry();
-		const found = findExportedSymbol(r, "/nope.ms", "x");
-		check(found === null);
-	});
-	test("missing symbol returns null", () => {
-		const r = createExportRegistry();
-		const syms: ExportedSymInfo[] = [];
-		const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), extReceiverType: "", extIsStatic: false };
-		syms.push(info);
-		registerModuleExports(r, "/src/b.ms", syms);
-		const found = findExportedSymbol(r, "/src/b.ms", "bar");
-		check(found === null);
-	});
-});
+test "register and find" {
+	const r = createExtensionRegistry();
+	const m: ExtensionMethod = { methodName: "trim", receiverTypeName: "string", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false };
+	registerExtension(r, m);
+	const found = findExtension(r, "string", "trim");
+	check(found !== null);
+	check(found.methodName === "trim");
+}
 
-testGroup("GenericFlagHelpers", () => {
-	test("extractGenericNames single", () => {
-		const names = extractGenericNames("gen:T");
-		check(names.length === 1);
-		check(names[0] === "T");
-	});
-	test("extractGenericNames multiple", () => {
-		const names = extractGenericNames("gen:T,U,V");
-		check(names.length === 3);
-		check(names[0] === "T");
-		check(names[1] === "U");
-		check(names[2] === "V");
-	});
-	test("extractGenericNames with async", () => {
-		const names = extractGenericNames("async|gen:T");
-		check(names.length === 1);
-		check(names[0] === "T");
-	});
-	test("extractGenericNames empty", () => {
-		const names = extractGenericNames("");
-		check(names.length === 0);
-	});
-	test("extractGenericNames no gen", () => {
-		const names = extractGenericNames("async");
-		check(names.length === 0);
-	});
-	test("stripGenFlag simple", () => {
-		check(stripGenFlag("gen:T") === "");
-	});
-	test("stripGenFlag with async", () => {
-		check(stripGenFlag("async|gen:T") === "async");
-	});
-	test("stripGenFlag no gen", () => {
-		check(stripGenFlag("async") === "async");
-	});
-});
+test "not found" {
+	const r = createExtensionRegistry();
+	const found = findExtension(r, "string", "nope");
+	check(found === null);
+}
 
-testGroup("ExtensionFlagHelpers", () => {
-	test("isExtensionFlag prefix", () => {
-		check(isExtensionFlag("ext:s:string"));
-		check(!isExtensionFlag(""));
-		check(!isExtensionFlag("async"));
-	});
-	test("isExtensionFlag pipe-delimited", () => {
-		check(isExtensionFlag("async|ext:s:string"));
-		check(isExtensionFlag("gen:T|ext:self:Array"));
-	});
-	test("getExtReceiverName", () => {
-		check(getExtReceiverName("ext:s:string") === "s");
-		check(getExtReceiverName("async|ext:self:Array") === "self");
-		check(getExtReceiverName("") === "");
-	});
-	test("getExtReceiverType", () => {
-		check(getExtReceiverType("ext:s:string") === "string");
-		check(getExtReceiverType("async|ext:self:Array") === "Array");
-		check(getExtReceiverType("") === "");
-	});
-	test("isStaticExtensionFlag", () => {
-		check(isStaticExtensionFlag("sext:Math"));
-		check(isStaticExtensionFlag("async|sext:Promise"));
-		check(!isStaticExtensionFlag("ext:s:string"));
-		check(!isStaticExtensionFlag(""));
-	});
-	test("getStaticExtTypeName", () => {
-		check(getStaticExtTypeName("sext:Math") === "Math");
-		check(getStaticExtTypeName("async|sext:Promise") === "Promise");
-		check(getStaticExtTypeName("") === "");
-	});
-	test("static extension in registry", () => {
-		const r = createExtensionRegistry();
-		const m: ExtensionMethod = { methodName: "floor", receiverTypeName: "Math", sourcePath: "", fnType: unknownType(), isStatic: true };
-		registerExtension(r, m);
-		const found = findExtension(r, "Math", "floor");
-		check(found !== null);
-		check(found.isStatic);
-	});
-	test("instance extension isStatic false", () => {
-		const r = createExtensionRegistry();
-		const m: ExtensionMethod = { methodName: "trim", receiverTypeName: "string", sourcePath: "", fnType: unknownType(), isStatic: false };
-		registerExtension(r, m);
-		const found = findExtension(r, "string", "trim");
-		check(found !== null);
-		check(!found.isStatic);
-	});
-});
+test "no attached ops" {
+	const r = createExtensionRegistry();
+	const ops = findAttachedOps(r, "Foo");
+	check(!hasAttachedOps(ops));
+}
+
+test "detect onDestroy" {
+	const r = createExtensionRegistry();
+	const m: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Foo", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false };
+	registerExtension(r, m);
+	const ops = findAttachedOps(r, "Foo");
+	check(hasAttachedOps(ops));
+	check(ops.onDestroy !== null);
+	check(ops.onCopy === null);
+}
+
+test "detect all lifecycle hooks" {
+	const r = createExtensionRegistry();
+	const d: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false };
+	registerExtension(r, d);
+	const c: ExtensionMethod = { methodName: "onCopy", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false };
+	registerExtension(r, c);
+	const mv: ExtensionMethod = { methodName: "onMove", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false };
+	registerExtension(r, mv);
+	const ops = findAttachedOps(r, "Bar");
+	check(hasAttachedOps(ops));
+	check(ops.onDestroy !== null);
+	check(ops.onCopy !== null);
+	check(ops.onMove !== null);
+}
+
+test "wrong type no match" {
+	const r = createExtensionRegistry();
+	const m: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Foo", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false };
+	registerExtension(r, m);
+	const ops = findAttachedOps(r, "Bar");
+	check(!hasAttachedOps(ops));
+}
+
+test "create empty registry" {
+	const r = createExportRegistry();
+	check(r.entries.length === 0);
+}
+
+test "register and find exports" {
+	const r = createExportRegistry();
+	const syms: ExportedSymInfo[] = [];
+	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), extReceiverType: "", extIsStatic: false };
+	syms.push(info);
+	registerModuleExports(r, "/src/b.ms", syms);
+	const found = findExportedSymbol(r, "/src/b.ms", "foo");
+	check(found !== null);
+	check(found.name === "foo");
+	check(found.kind === SymbolKind.Function);
+}
+
+test "missing module returns null" {
+	const r = createExportRegistry();
+	const found = findExportedSymbol(r, "/nope.ms", "x");
+	check(found === null);
+}
+
+test "missing symbol returns null" {
+	const r = createExportRegistry();
+	const syms: ExportedSymInfo[] = [];
+	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), extReceiverType: "", extIsStatic: false };
+	syms.push(info);
+	registerModuleExports(r, "/src/b.ms", syms);
+	const found = findExportedSymbol(r, "/src/b.ms", "bar");
+	check(found === null);
+}
+
+test "extractGenericNames single" {
+	const names = extractGenericNames("gen:T");
+	check(names.length === 1);
+	check(names[0] === "T");
+}
+
+test "extractGenericNames multiple" {
+	const names = extractGenericNames("gen:T,U,V");
+	check(names.length === 3);
+	check(names[0] === "T");
+	check(names[1] === "U");
+	check(names[2] === "V");
+}
+
+test "extractGenericNames with async" {
+	const names = extractGenericNames("async|gen:T");
+	check(names.length === 1);
+	check(names[0] === "T");
+}
+
+test "extractGenericNames empty" {
+	const names = extractGenericNames("");
+	check(names.length === 0);
+}
+
+test "extractGenericNames no gen" {
+	const names = extractGenericNames("async");
+	check(names.length === 0);
+}
+
+test "stripGenFlag simple" { check(stripGenFlag("gen:T") === ""); }
+
+test "stripGenFlag with async" { check(stripGenFlag("async|gen:T") === "async"); }
+
+test "stripGenFlag no gen" { check(stripGenFlag("async") === "async"); }
+
+test "isExtensionFlag prefix" {
+	check(isExtensionFlag("ext:s:string"));
+	check(!isExtensionFlag(""));
+	check(!isExtensionFlag("async"));
+}
+
+test "isExtensionFlag pipe-delimited" {
+	check(isExtensionFlag("async|ext:s:string"));
+	check(isExtensionFlag("gen:T|ext:self:Array"));
+}
+
+test "getExtReceiverName" {
+	check(getExtReceiverName("ext:s:string") === "s");
+	check(getExtReceiverName("async|ext:self:Array") === "self");
+	check(getExtReceiverName("") === "");
+}
+
+test "getExtReceiverType" {
+	check(getExtReceiverType("ext:s:string") === "string");
+	check(getExtReceiverType("async|ext:self:Array") === "Array");
+	check(getExtReceiverType("") === "");
+}
+
+test "isStaticExtensionFlag" {
+	check(isStaticExtensionFlag("sext:Math"));
+	check(isStaticExtensionFlag("async|sext:Promise"));
+	check(!isStaticExtensionFlag("ext:s:string"));
+	check(!isStaticExtensionFlag(""));
+}
+
+test "getStaticExtTypeName" {
+	check(getStaticExtTypeName("sext:Math") === "Math");
+	check(getStaticExtTypeName("async|sext:Promise") === "Promise");
+	check(getStaticExtTypeName("") === "");
+}
+
+test "static extension in registry" {
+	const r = createExtensionRegistry();
+	const m: ExtensionMethod = { methodName: "floor", receiverTypeName: "Math", sourcePath: "", fnType: unknownType(), isStatic: true };
+	registerExtension(r, m);
+	const found = findExtension(r, "Math", "floor");
+	check(found !== null);
+	check(found.isStatic);
+}
+
+test "instance extension isStatic false" {
+	const r = createExtensionRegistry();
+	const m: ExtensionMethod = { methodName: "trim", receiverTypeName: "string", sourcePath: "", fnType: unknownType(), isStatic: false };
+	registerExtension(r, m);
+	const found = findExtension(r, "string", "trim");
+	check(found !== null);
+	check(!found.isStatic);
+}

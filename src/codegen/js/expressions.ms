@@ -118,52 +118,8 @@ export function emitUpdateExpr(gen: JSGenerator, node: Node): void {
 
 // ===== Call Expression =====
 
-function isResultOkCall(node: Node): boolean {
-	if (node.kind !== NodeKind.CallExpr) return false;
-	const d = node.data as CallExprData;
-	if (d.callee.kind !== NodeKind.MemberExpr) return false;
-	const m = d.callee.data as MemberExprData;
-	if (m.object.kind !== NodeKind.Identifier) return false;
-	const id = m.object.data as IdentifierData;
-	return id.name === "Result" && m.property === "ok";
-}
-
-function isResultErrCall(node: Node): boolean {
-	if (node.kind !== NodeKind.CallExpr) return false;
-	const d = node.data as CallExprData;
-	if (d.callee.kind !== NodeKind.MemberExpr) return false;
-	const m = d.callee.data as MemberExprData;
-	if (m.object.kind !== NodeKind.Identifier) return false;
-	const id = m.object.data as IdentifierData;
-	return id.name === "Result" && m.property === "err";
-}
-
 export function emitCallExpr(gen: JSGenerator, node: Node): void {
 	const d = node.data as CallExprData;
-
-	// Denormalize Result.ok(x) → { ok: true, value: x }
-	if (isResultOkCall(node)) {
-		emit(gen, "{ ok: true, value: ");
-		if (d.arguments.length > 0) {
-			emitNode(gen, d.arguments[0]);
-		} else {
-			emit(gen, "undefined");
-		}
-		emit(gen, " }");
-		return;
-	}
-
-	// Denormalize Result.err(e) → { ok: false, error: e }
-	if (isResultErrCall(node)) {
-		emit(gen, "{ ok: false, error: ");
-		if (d.arguments.length > 0) {
-			emitNode(gen, d.arguments[0]);
-		} else {
-			emit(gen, "undefined");
-		}
-		emit(gen, " }");
-		return;
-	}
 
 	// Regular function call
 	emitNode(gen, d.callee);

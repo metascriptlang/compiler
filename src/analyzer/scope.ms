@@ -5,13 +5,13 @@
 //   - wasMoved: variables whose ownership was transferred (skip destroy)
 //   - needsTry: whether scope needs try/finally wrapping for cleanup
 //
-// DRC-safe: all array-holding fields wrapped in interfaces (gotcha #4).
+// Arrays passed by pointer — bare T[] types (wrappers removed).
 
 import { Node, SourceLocation } from "../ast/node";
 import { RcInfo, RcKind, noRcInfo } from "./classify";
 import { TransformContext, freshTemp, createTransformContext } from "../transform/context";
 import { makeExprStmt, makeNull } from "../transform/util";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 // ===== Variable Info =====
 
@@ -21,38 +21,18 @@ export interface VarInfo {
 	isCursor: boolean;    // borrowed ref — never destroyed
 }
 
-// ===== DRC-safe list wrappers (string[]/Node[] are value types — gotcha #4) =====
-
-export interface VarInfoList {
-	items: VarInfo[];
-}
-
 export interface MovedVar {
 	varName: string;
-}
-
-export interface MovedVarList {
-	items: MovedVar[];
-}
-
-export interface StmtBuf {
-	stmts: Node[];
 }
 
 // ===== DRC Scope =====
 
 export interface DrcScope {
-	varsToCleanup: VarInfoList;   // variables needing cleanup at scope exit
-	wasMoved: MovedVarList;       // variables that were moved (skip destroy)
+	varsToCleanup: VarInfo[];     // variables needing cleanup at scope exit
+	wasMoved: MovedVar[];         // variables that were moved (skip destroy)
 	needsTry: boolean;            // does this scope need try/finally wrapping?
 	isLoop: boolean;              // is this a loop body scope?
 	isFunction: boolean;          // is this a function scope?
-}
-
-// ===== DRC Context =====
-
-export interface DrcScopeStack {
-	items: DrcScope[];
 }
 
 // ===== Outer Statement Context (for cross-scope last-read analysis) =====
@@ -63,15 +43,16 @@ export interface OuterEntry {
 	isFunctionBoundary: boolean;  // function boundary — stop cross-scope search
 }
 
-export interface OuterStack {
-	items: OuterEntry[];
-}
+// ===== DRC Context =====
 
 export interface DrcContext {
 	ctx: TransformContext;
-	scopes: DrcScopeStack;          // scope stack
-	pendingStmts: StmtBuf;       // stmts to flush after current statement
-	outerCtx: OuterStack;        // cross-scope remaining stmts for last-read
+	scopes: DrcScope[];          // scope stack
+	pendingStmts: Node[];        // stmts to flush after current statement
+	preStmts: Node[];            // stmts to flush before current statement
+	outerCtx: OuterEntry[];      // cross-scope remaining stmts for last-read
+	currentStmtIdx: number;      // Index of the statement currently being processed
+	currentStmtList: Node[];     // The list containing the current statement
 }
 
 // ===== Constructors =====
@@ -79,16 +60,19 @@ export interface DrcContext {
 export function createDrcContext(ctx: TransformContext): DrcContext {
 	return {
 		ctx,
-		scopes: { items: [] },
-		pendingStmts: { stmts: [] },
-		outerCtx: { items: [] },
+		scopes: [],
+		pendingStmts: [],
+		preStmts: [],
+		outerCtx: [],
+		currentStmtIdx: 0,
+		currentStmtList: [],
 	};
 }
 
 function createScope(isLoop: boolean, isFunction: boolean): DrcScope {
 	return {
-		varsToCleanup: { items: [] },
-		wasMoved: { items: [] },
+		varsToCleanup: [],
+		wasMoved: [],
 		needsTry: false,
 		isLoop,
 		isFunction,
@@ -99,19 +83,19 @@ function createScope(isLoop: boolean, isFunction: boolean): DrcScope {
 
 export function pushScope(dctx: DrcContext, isLoop: boolean, isFunction: boolean): void {
 	const scope = createScope(isLoop, isFunction);
-	dctx.scopes.items.push(scope);
+	dctx.scopes.push(scope);
 }
 
 export function popScope(dctx: DrcContext): DrcScope {
-	return dctx.scopes.items.pop();
+	return dctx.scopes.pop();
 }
 
 export function currentScope(dctx: DrcContext): DrcScope {
-	return dctx.scopes.items[dctx.scopes.items.length - 1];
+	return dctx.scopes[dctx.scopes.length - 1];
 }
 
 export function scopeDepth(dctx: DrcContext): number {
-	return dctx.scopes.items.length;
+	return dctx.scopes.length;
 }
 
 // ===== Variable Registration =====
@@ -121,7 +105,7 @@ export function registerVar(dctx: DrcContext, varName: string, rcInfo: RcInfo, i
 	if (isCursor) return;  // cursors are borrowed, never cleaned up
 	const scope = currentScope(dctx);
 	const info: VarInfo = { varName, rcInfo, isCursor: false };
-	scope.varsToCleanup.items.push(info);
+	scope.varsToCleanup.push(info);
 }
 
 // ===== Move Tracking =====
@@ -129,11 +113,11 @@ export function registerVar(dctx: DrcContext, varName: string, rcInfo: RcInfo, i
 export function recordMove(dctx: DrcContext, varName: string): void {
 	const scope = currentScope(dctx);
 	const mv: MovedVar = { varName };
-	scope.wasMoved.items.push(mv);
+	scope.wasMoved.push(mv);
 }
 
 export function wasMovedInScope(scope: DrcScope, varName: string): boolean {
-	for (const mv of scope.wasMoved.items) {
+	for (const mv of scope.wasMoved) {
 		if (mv.varName === varName) return true;
 	}
 	return false;
@@ -141,13 +125,13 @@ export function wasMovedInScope(scope: DrcScope, varName: string): boolean {
 
 // Record move in the scope that actually tracks the variable (for return cleanup)
 export function recordMoveInContext(dctx: DrcContext, varName: string): void {
-	let i = dctx.scopes.items.length;
+	let i = dctx.scopes.length;
 	while (i > 0) {
 		i -= 1;
-		const vi = findVarInfo(dctx.scopes.items[i], varName);
+		const vi = findVarInfo(dctx.scopes[i], varName);
 		if (vi !== null) {
 			const mv: MovedVar = { varName };
-			dctx.scopes.items[i].wasMoved.items.push(mv);
+			dctx.scopes[i].wasMoved.push(mv);
 			return;
 		}
 	}
@@ -159,25 +143,25 @@ export function recordMoveInContext(dctx: DrcContext, varName: string): void {
 
 // Set needsTry on all scopes from innermost to loop boundary (break/continue)
 export function setNeedsTryToLoop(dctx: DrcContext): void {
-	let i = dctx.scopes.items.length;
+	let i = dctx.scopes.length;
 	while (i > 0) {
 		i -= 1;
-		dctx.scopes.items[i].needsTry = true;
-		if (dctx.scopes.items[i].isLoop) return;
+		dctx.scopes[i].needsTry = true;
+		if (dctx.scopes[i].isLoop) return;
 	}
 }
 
 // Set needsTry on ALL scopes (return/throw)
 export function setNeedsTryAll(dctx: DrcContext): void {
-	for (let i = 0; i < dctx.scopes.items.length; i += 1) {
-		dctx.scopes.items[i].needsTry = true;
+	for (let i = 0; i < dctx.scopes.length; i += 1) {
+		dctx.scopes[i].needsTry = true;
 	}
 }
 
 // ===== Lookup =====
 
 export function findVarInfo(scope: DrcScope, varName: string): VarInfo {
-	for (const vi of scope.varsToCleanup.items) {
+	for (const vi of scope.varsToCleanup) {
 		if (vi.varName === varName) return vi;
 	}
 	return null as unknown as VarInfo;
@@ -185,42 +169,58 @@ export function findVarInfo(scope: DrcScope, varName: string): VarInfo {
 
 // Search all scopes from innermost outward
 export function findVarInfoInContext(dctx: DrcContext, varName: string): VarInfo {
-	let i = dctx.scopes.items.length;
+	let i = dctx.scopes.length;
 	while (i > 0) {
 		i -= 1;
-		const vi = findVarInfo(dctx.scopes.items[i], varName);
+		const vi = findVarInfo(dctx.scopes[i], varName);
 		if (vi !== null) return vi;
 	}
 	return null as unknown as VarInfo;
 }
 
-// ===== Pending Statement Buffer =====
+// ===== Pending Statement Buffers =====
 
 export function addPending(dctx: DrcContext, stmt: Node): void {
-	dctx.pendingStmts.stmts.push(stmt);
+	dctx.pendingStmts.push(stmt);
 }
 
-export function flushPending(dctx: DrcContext, target: StmtBuf): void {
-	while (dctx.pendingStmts.stmts.length > 0) {
-		const s = dctx.pendingStmts.stmts[0];
-		target.stmts.push(s);
-		dctx.pendingStmts.stmts.shift();
+export function addPre(dctx: DrcContext, stmt: Node): void {
+	dctx.preStmts.push(stmt);
+}
+
+export function flushPending(dctx: DrcContext, target: Node[]): void {
+	for (const s of dctx.pendingStmts) {
+		target.push(s);
 	}
+	const empty: Node[] = [];
+	dctx.pendingStmts = empty;
+}
+
+export function flushPre(dctx: DrcContext, target: Node[]): void {
+	for (const s of dctx.preStmts) {
+		target.push(s);
+	}
+	const empty: Node[] = [];
+	dctx.preStmts = empty;
 }
 
 export function hasPending(dctx: DrcContext): boolean {
-	return dctx.pendingStmts.stmts.length > 0;
+	return dctx.pendingStmts.length > 0;
+}
+
+export function hasPre(dctx: DrcContext): boolean {
+	return dctx.preStmts.length > 0;
 }
 
 // ===== Outer Statement Context Operations =====
 
 export function pushOuterStmts(dctx: DrcContext, stmts: Node[], fromIndex: number, isFunctionBoundary: boolean): void {
 	const entry: OuterEntry = { outerStmts: stmts, fromIndex, isFunctionBoundary };
-	dctx.outerCtx.items.push(entry);
+	dctx.outerCtx.push(entry);
 }
 
 export function popOuterStmts(dctx: DrcContext): void {
-	dctx.outerCtx.items.pop();
+	dctx.outerCtx.pop();
 }
 
 // ===== Test Helpers =====
@@ -247,150 +247,145 @@ function testMinimalRc(): RcInfo {
 }
 
 // ===== Tests =====
+test "create context" {
+	const dctx = testDrcCtx();
+	check(scopeDepth(dctx) === 0);
+}
 
-testGroup("DrcScope Basics", () => {
-	test("create context", () => {
-		const dctx = testDrcCtx();
-		check(scopeDepth(dctx) === 0);
-	});
-	test("push and pop scope", () => {
-		const dctx = testDrcCtx();
-		pushScope(dctx, false, true);
-		check(scopeDepth(dctx) === 1);
-		check(currentScope(dctx).isFunction);
-		check(!currentScope(dctx).isLoop);
-		popScope(dctx);
-		check(scopeDepth(dctx) === 0);
-	});
-	test("nested scopes", () => {
-		const dctx = testDrcCtx();
-		pushScope(dctx, false, true);
-		pushScope(dctx, true, false);
-		check(scopeDepth(dctx) === 2);
-		check(currentScope(dctx).isLoop);
-		popScope(dctx);
-		check(scopeDepth(dctx) === 1);
-		check(currentScope(dctx).isFunction);
-		popScope(dctx);
-	});
-});
+test "push and pop scope" {
+	const dctx = testDrcCtx();
+	pushScope(dctx, false, true);
+	check(scopeDepth(dctx) === 1);
+	check(currentScope(dctx).isFunction);
+	check(!currentScope(dctx).isLoop);
+	popScope(dctx);
+	check(scopeDepth(dctx) === 0);
+}
 
-testGroup("DrcScope RegisterVar", () => {
-	test("register RC var", () => {
-		const dctx = testDrcCtx();
-		pushScope(dctx, false, true);
-		const rcInfo = testStringRc();
-		registerVar(dctx, "s", rcInfo, false);
-		check(currentScope(dctx).varsToCleanup.items.length === 1);
-		check(currentScope(dctx).varsToCleanup.items[0].varName === "s");
-		popScope(dctx);
-	});
-	test("skip non-cleanup type", () => {
-		const dctx = testDrcCtx();
-		pushScope(dctx, false, true);
-		const info = noRcInfo();
-		registerVar(dctx, "x", info, false);
-		check(currentScope(dctx).varsToCleanup.items.length === 0);
-		popScope(dctx);
-	});
-	test("skip cursor", () => {
-		const dctx = testDrcCtx();
-		pushScope(dctx, false, true);
-		const rcInfo = testStringRc();
-		registerVar(dctx, "s", rcInfo, true);
-		check(currentScope(dctx).varsToCleanup.items.length === 0);
-		popScope(dctx);
-	});
-});
+test "nested scopes" {
+	const dctx = testDrcCtx();
+	pushScope(dctx, false, true);
+	pushScope(dctx, true, false);
+	check(scopeDepth(dctx) === 2);
+	check(currentScope(dctx).isLoop);
+	popScope(dctx);
+	check(scopeDepth(dctx) === 1);
+	check(currentScope(dctx).isFunction);
+	popScope(dctx);
+}
 
-testGroup("DrcScope MoveTracking", () => {
-	test("recordMove + wasMovedInScope", () => {
-		const dctx = testDrcCtx();
-		pushScope(dctx, false, true);
-		recordMove(dctx, "x");
-		check(wasMovedInScope(currentScope(dctx), "x"));
-		check(!wasMovedInScope(currentScope(dctx), "y"));
-		popScope(dctx);
-	});
-});
+test "register RC var" {
+	const dctx = testDrcCtx();
+	pushScope(dctx, false, true);
+	const rcInfo = testStringRc();
+	registerVar(dctx, "s", rcInfo, false);
+	check(currentScope(dctx).varsToCleanup.length === 1);
+	check(currentScope(dctx).varsToCleanup[0].varName === "s");
+	popScope(dctx);
+}
 
-testGroup("DrcScope NeedsTry", () => {
-	test("setNeedsTryAll", () => {
-		const dctx = testDrcCtx();
-		pushScope(dctx, false, true);
-		pushScope(dctx, true, false);
-		pushScope(dctx, false, false);
-		setNeedsTryAll(dctx);
-		check(dctx.scopes.items[0].needsTry);
-		check(dctx.scopes.items[1].needsTry);
-		check(dctx.scopes.items[2].needsTry);
-		popScope(dctx);
-		popScope(dctx);
-		popScope(dctx);
-	});
-	test("setNeedsTryToLoop stops at loop", () => {
-		const dctx = testDrcCtx();
-		pushScope(dctx, false, true);   // function
-		pushScope(dctx, true, false);   // loop
-		pushScope(dctx, false, false);  // block inside loop
-		setNeedsTryToLoop(dctx);
-		check(!dctx.scopes.items[0].needsTry);  // function — NOT set
-		check(dctx.scopes.items[1].needsTry);    // loop — set (it's the boundary)
-		check(dctx.scopes.items[2].needsTry);    // block — set
-		popScope(dctx);
-		popScope(dctx);
-		popScope(dctx);
-	});
-});
+test "skip non-cleanup type" {
+	const dctx = testDrcCtx();
+	pushScope(dctx, false, true);
+	const info = noRcInfo();
+	registerVar(dctx, "x", info, false);
+	check(currentScope(dctx).varsToCleanup.length === 0);
+	popScope(dctx);
+}
 
-testGroup("DrcScope FindVar", () => {
-	test("findVarInfo found", () => {
-		const dctx = testDrcCtx();
-		pushScope(dctx, false, true);
-		const rcInfo = testMinimalRc();
-		registerVar(dctx, "s", rcInfo, false);
-		const vi = findVarInfo(currentScope(dctx), "s");
-		check(vi !== null);
-		check(vi.varName === "s");
-		popScope(dctx);
-	});
-	test("findVarInfo not found", () => {
-		const dctx = testDrcCtx();
-		pushScope(dctx, false, true);
-		const vi = findVarInfo(currentScope(dctx), "nope");
-		check(vi === null);
-		popScope(dctx);
-	});
-	test("findVarInfoInContext searches outer scopes", () => {
-		const dctx = testDrcCtx();
-		pushScope(dctx, false, true);
-		const rcInfo = testMinimalRc();
-		registerVar(dctx, "outer", rcInfo, false);
-		pushScope(dctx, false, false);
-		const vi = findVarInfoInContext(dctx, "outer");
-		check(vi !== null);
-		check(vi.varName === "outer");
-		const none = findVarInfoInContext(dctx, "nope");
-		check(none === null);
-		popScope(dctx);
-		popScope(dctx);
-	});
-});
+test "skip cursor" {
+	const dctx = testDrcCtx();
+	pushScope(dctx, false, true);
+	const rcInfo = testStringRc();
+	registerVar(dctx, "s", rcInfo, true);
+	check(currentScope(dctx).varsToCleanup.length === 0);
+	popScope(dctx);
+}
 
-testGroup("DrcScope Pending", () => {
-	test("initially empty", () => {
-		const dctx = testDrcCtx();
-		check(!hasPending(dctx));
-		check(dctx.pendingStmts.stmts.length === 0);
-	});
-	test("add and flush cycle", () => {
-		const dctx = testDrcCtx();
-		const loc: SourceLocation = { line: 0, column: 0 };
-		addPending(dctx, makeExprStmt(makeNull(loc), loc));
-		check(hasPending(dctx));
-		const target: StmtBuf = { stmts: [] };
-		flushPending(dctx, target);
-		check(!hasPending(dctx));
-		check(target.stmts.length === 1);
-	});
-});
+test "recordMove + wasMovedInScope" {
+	const dctx = testDrcCtx();
+	pushScope(dctx, false, true);
+	recordMove(dctx, "x");
+	check(wasMovedInScope(currentScope(dctx), "x"));
+	check(!wasMovedInScope(currentScope(dctx), "y"));
+	popScope(dctx);
+}
+
+test "setNeedsTryAll" {
+	const dctx = testDrcCtx();
+	pushScope(dctx, false, true);
+	pushScope(dctx, true, false);
+	pushScope(dctx, false, false);
+	setNeedsTryAll(dctx);
+	check(dctx.scopes[0].needsTry);
+	check(dctx.scopes[1].needsTry);
+	check(dctx.scopes[2].needsTry);
+	popScope(dctx);
+	popScope(dctx);
+	popScope(dctx);
+}
+
+test "setNeedsTryToLoop stops at loop" {
+	const dctx = testDrcCtx();
+	pushScope(dctx, false, true);   // function
+	pushScope(dctx, true, false);   // loop
+	pushScope(dctx, false, false);  // block inside loop
+	setNeedsTryToLoop(dctx);
+	check(!dctx.scopes[0].needsTry);  // function — NOT set
+	check(dctx.scopes[1].needsTry);    // loop — set (it's the boundary)
+	check(dctx.scopes[2].needsTry);    // block — set
+	popScope(dctx);
+	popScope(dctx);
+	popScope(dctx);
+}
+
+test "findVarInfo found" {
+	const dctx = testDrcCtx();
+	pushScope(dctx, false, true);
+	const rcInfo = testMinimalRc();
+	registerVar(dctx, "s", rcInfo, false);
+	const vi = findVarInfo(currentScope(dctx), "s");
+	check(vi !== null);
+	check(vi.varName === "s");
+	popScope(dctx);
+}
+
+test "findVarInfo not found" {
+	const dctx = testDrcCtx();
+	pushScope(dctx, false, true);
+	const vi = findVarInfo(currentScope(dctx), "nope");
+	check(vi === null);
+	popScope(dctx);
+}
+
+test "findVarInfoInContext searches outer scopes" {
+	const dctx = testDrcCtx();
+	pushScope(dctx, false, true);
+	const rcInfo = testMinimalRc();
+	registerVar(dctx, "outer", rcInfo, false);
+	pushScope(dctx, false, false);
+	const vi = findVarInfoInContext(dctx, "outer");
+	check(vi !== null);
+	check(vi.varName === "outer");
+	const none = findVarInfoInContext(dctx, "nope");
+	check(none === null);
+	popScope(dctx);
+	popScope(dctx);
+}
+
+test "initially empty" {
+	const dctx = testDrcCtx();
+	check(!hasPending(dctx));
+	check(dctx.pendingStmts.length === 0);
+}
+
+test "add and flush cycle" {
+	const dctx = testDrcCtx();
+	const loc: SourceLocation = { line: 0, column: 0 };
+	addPending(dctx, makeExprStmt(makeNull(loc), loc));
+	check(hasPending(dctx));
+	const target: Node[] = [];
+	flushPending(dctx, target);
+	check(!hasPending(dctx));
+	check(target.length === 1);
+}

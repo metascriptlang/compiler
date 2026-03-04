@@ -32,13 +32,13 @@ import { lookupSymbol, makeSymbol, SymbolKind, defineSymbol } from "../../checke
 import { CheckerContext, createContext } from "../../checker/context";
 import { getDeclName } from "../../checker/collectPass";
 import { makeBlock } from "../util";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts } from "../testUtil";
 
 // ===== AliveSyms (Level 2 — public API for Phase 5 codegen) =====
 
 export function createAliveSyms(): NameSet {
-	const syms: NameSet = { names: [] };
+	const syms: NameSet = [];
 	return syms;
 }
 
@@ -129,9 +129,7 @@ function isCompilerGenerated(name: string): boolean {
 }
 
 // Pre-computed per-stmt name list (avoids repeated getDeclName calls — DRC string return bug)
-interface StmtNames {
-	items: string[];
-}
+type StmtNames = string[];
 
 // Main Level 2 algorithm: mark-sweep reachability on top-level declarations.
 function sweepDeadDecls(program: Node, ctx: TransformContext): void {
@@ -141,19 +139,19 @@ function sweepDeadDecls(program: Node, ctx: TransformContext): void {
 	if (stmts.length === 0) return;
 
 	// Phase 1: Pre-compute names for ALL stmts (one getDeclName call per stmt, stored safely)
-	const names: StmtNames = { items: [] };
-	const declNames: NameSet = { names: [] };
+	const names: StmtNames = [];
+	const declNames: NameSet = [];
 	for (let idx = 0; idx < stmts.length; idx += 1) {
 		const n = getDeclName(stmts[idx]);
-		names.items.push(n);
+		names.push(n);
 		if (n.length > 0 && isEliminable(stmts[idx])) {
 			nameSetAdd(declNames, n);
 		}
 	}
-	if (declNames.names.length === 0) return;
+	if (declNames.length === 0) return;
 
 	// Phase 2: Seed — collect identifier refs from all non-eliminable stmts (entry points)
-	const refs: NameSet = { names: [] };
+	const refs: NameSet = [];
 	for (let si = 0; si < stmts.length; si += 1) {
 		if (!isEliminable(stmts[si])) {
 			collectIdentifiers(stmts[si], refs);
@@ -161,13 +159,13 @@ function sweepDeadDecls(program: Node, ctx: TransformContext): void {
 	}
 
 	// Phase 3: Transitive closure — fixpoint iteration using pre-computed names
-	const alive: NameSet = { names: [] };
+	const alive: NameSet = [];
 	// User-defined main() is always alive (called by dispatcher, not user code)
 	if (nameSetContains(declNames, "main")) {
 		nameSetAdd(alive, "main");
 		// Also seed refs from main's body
 		for (let mi = 0; mi < stmts.length; mi += 1) {
-			const mn = names.items[mi];
+			const mn = names[mi];
 			if (mn === "main") {
 				collectIdentifiers(stmts[mi], refs);
 			}
@@ -178,7 +176,7 @@ function sweepDeadDecls(program: Node, ctx: TransformContext): void {
 		changed = false;
 		for (let di = 0; di < stmts.length; di += 1) {
 			if (isEliminable(stmts[di])) {
-				const n = names.items[di];
+				const n = names[di];
 				if (n.length > 0 && nameSetContains(refs, n) && !nameSetContains(alive, n)) {
 					nameSetAdd(alive, n);
 					collectIdentifiers(stmts[di], refs);
@@ -194,7 +192,7 @@ function sweepDeadDecls(program: Node, ctx: TransformContext): void {
 		if (!isEliminable(stmts[fi])) {
 			result.push(stmts[fi]);
 		} else {
-			const n = names.items[fi];
+			const n = names[fi];
 			if (nameSetContains(alive, n) || isCompilerGenerated(n)) {
 				result.push(stmts[fi]);
 			}
@@ -486,161 +484,130 @@ function stmtCountWithChecker(input: string, setup: (cc: CheckerContext) => void
 }
 
 // ===== Tests =====
+test "passthrough unchanged" { check(stmtCountAfter("const x = 1;", lowerDCE) === 1); }
 
-testGroup("DCE Unreachable", () => {
-	test("passthrough unchanged", () => {
-		check(stmtCountAfter("const x = 1;", lowerDCE) === 1);
-	});
-	test("strips after return", () => {
-		check(stmtCountAfter("return 1; const x = 2; const y = 3;", lowerDCE) === 1);
-	});
-	test("strips after throw", () => {
-		check(stmtCountAfter("throw 1; const x = 2;", lowerDCE) === 1);
-	});
-	test("hoisted function removed if unreferenced", () => {
-		// Level 1 preserves hoisted decl, but Level 2 eliminates it (nobody calls helper)
-		check(stmtCountAfter("return 1; function helper() { return 2; }", lowerDCE) === 1);
-	});
-	test("hoisted class removed if unreferenced", () => {
-		check(stmtCountAfter("return 1; class Foo {}", lowerDCE) === 1);
-	});
-	test("function body dead code removed", () => {
-		// foo() call keeps the function alive; Level 1 strips dead const inside body
-		check(stmtCountAfter("function foo() { return 1; const dead = 2; } foo();", lowerDCE) === 2);
-		check(firstStmtKindAfter("function foo() { return 1; const dead = 2; } foo();", lowerDCE) === NodeKind.FunctionDecl);
-	});
-});
+test "strips after return" { check(stmtCountAfter("return 1; const x = 2; const y = 3;", lowerDCE) === 1); }
 
-testGroup("DCE Dead Branches", () => {
-	test("if true keeps consequent", () => {
-		check(firstStmtKindAfter("if (true) { const x = 1; } else { const y = 2; }", lowerDCE) === NodeKind.BlockStmt);
-		check(stmtCountAfter("if (true) { const x = 1; } else { const y = 2; }", lowerDCE) === 1);
-	});
-	test("if false keeps alternate", () => {
-		check(firstStmtKindAfter("if (false) { const x = 1; } else { const y = 2; }", lowerDCE) === NodeKind.BlockStmt);
-	});
-	test("if false no else becomes empty block", () => {
-		check(firstStmtKindAfter("if (false) { const x = 1; }", lowerDCE) === NodeKind.BlockStmt);
-		check(stmtCountAfter("if (false) { const x = 1; }", lowerDCE) === 1);
-	});
-	test("dynamic condition preserved", () => {
-		check(firstStmtKindAfter("if (x) { const a = 1; }", lowerDCE) === NodeKind.IfStmt);
-	});
-});
+test "strips after throw" { check(stmtCountAfter("throw 1; const x = 2;", lowerDCE) === 1); }
 
-testGroup("DCE Dead While", () => {
-	test("while false removed", () => {
-		check(firstStmtKindAfter("while (false) { doWork(); }", lowerDCE) === NodeKind.BlockStmt);
-	});
-	test("while true preserved", () => {
-		check(firstStmtKindAfter("while (true) { break; }", lowerDCE) === NodeKind.WhileStmt);
-	});
-});
+test "hoisted function removed if unreferenced" {
+	// Level 1 preserves hoisted decl, but Level 2 eliminates it (nobody calls helper)
+	check(stmtCountAfter("return 1; function helper() { return 2; }", lowerDCE) === 1);
+}
 
-testGroup("DCE endsInNoReturn", () => {
-	test("if-else both return strips after", () => {
-		check(stmtCountAfter("if (x) { return 1; } else { return 2; } const dead = 3;", lowerDCE) === 1);
-	});
-	test("if-else one branch falls through keeps after", () => {
-		check(stmtCountAfter("if (x) { return 1; } else { const y = 2; } const alive = 3;", lowerDCE) === 2);
-	});
-	test("if without else keeps after", () => {
-		check(stmtCountAfter("if (x) { return 1; } const alive = 2;", lowerDCE) === 2);
-	});
-	test("nested if-else both return", () => {
-		const code = "if (a) { if (b) { return 1; } else { return 2; } } else { return 3; } const dead = 4;";
-		check(stmtCountAfter(code, lowerDCE) === 1);
-	});
-	test("block ending in return", () => {
-		check(stmtCountAfter("{ return 1; } const dead = 2;", lowerDCE) === 1);
-	});
-	test("block not ending in return", () => {
-		check(stmtCountAfter("{ const x = 1; } const alive = 2;", lowerDCE) === 2);
-	});
-	test("throw in both if branches", () => {
-		check(stmtCountAfter("if (x) { throw 1; } else { throw 2; } const dead = 3;", lowerDCE) === 1);
-	});
-	test("else-if chain all return", () => {
-		const code = "if (a) { return 1; } else if (b) { return 2; } else { return 3; } const dead = 4;";
-		check(stmtCountAfter(code, lowerDCE) === 1);
-	});
-	test("else-if chain missing else", () => {
-		const code = "if (a) { return 1; } else if (b) { return 2; } const alive = 3;";
-		check(stmtCountAfter(code, lowerDCE) === 2);
-	});
-});
+test "hoisted class removed if unreferenced" { check(stmtCountAfter("return 1; class Foo {}", lowerDCE) === 1); }
 
-testGroup("DCE Never Return", () => {
-	test("never call strips after", () => {
-		const count = stmtCountWithChecker("fail(); const dead = 2;", (cc: CheckerContext) => {
-			const fnType = createFunction([], [], neverType());
-			const sym = makeSymbol("fail", SymbolKind.Function, fnType, false);
-			defineSymbol(cc.table, sym);
-		});
-		check(count === 1);
-	});
-	test("void call keeps after", () => {
-		const count = stmtCountWithChecker("log(); const alive = 2;", (cc: CheckerContext) => {
-			const fnType = createFunction([], [], voidType());
-			const sym = makeSymbol("log", SymbolKind.Function, fnType, false);
-			defineSymbol(cc.table, sym);
-		});
-		check(count === 2);
-	});
-	test("unknown function keeps after", () => {
-		// No symbol registered — conservative, keeps code
-		const count = stmtCountWithChecker("mystery(); const alive = 2;", (cc: CheckerContext) => {});
-		check(count === 2);
-	});
-	test("null checker graceful", () => {
-		// stmtCountAfter uses null checkerCtx — must not crash
-		check(stmtCountAfter("foo(); const alive = 2;", lowerDCE) === 2);
-	});
-});
+test "function body dead code removed" {
+	// foo() call keeps the function alive; Level 1 strips dead const inside body
+	check(stmtCountAfter("function foo() { return 1; const dead = 2; } foo();", lowerDCE) === 2);
+	check(firstStmtKindAfter("function foo() { return 1; const dead = 2; } foo();", lowerDCE) === NodeKind.FunctionDecl);
+}
 
-testGroup("DCE Dead Declarations", () => {
-	test("unused function removed", () => {
-		check(stmtCountAfter("function unused() {} const x = 1;", lowerDCE) === 1);
-	});
-	test("used function kept", () => {
-		check(stmtCountAfter("function add(a, b) { return 1; } add(1, 2);", lowerDCE) === 2);
-	});
-	test("exported function always kept", () => {
-		check(stmtCountAfter("export function api() { return 1; }", lowerDCE) === 1);
-	});
-	test("mutual recursion both dead", () => {
-		check(stmtCountAfter("function a() { b(); } function b() { a(); }", lowerDCE) === 0);
-	});
-	test("mutual recursion alive via call", () => {
-		check(stmtCountAfter("function a() { b(); } function b() { a(); } a();", lowerDCE) === 3);
-	});
-	test("unused class removed", () => {
-		check(stmtCountAfter("class Dead {} const x = 1;", lowerDCE) === 1);
-	});
-	test("used class kept", () => {
-		check(stmtCountAfter("class Alive {} const x = Alive;", lowerDCE) === 2);
-	});
-	test("transitive liveness", () => {
-		check(stmtCountAfter("function helper() { return 1; } function api() { return helper(); } api();", lowerDCE) === 3);
-	});
-	test("unused enum removed", () => {
-		check(stmtCountAfter("enum Color { Red, Green } const x = 1;", lowerDCE) === 1);
-	});
-	test("variable decl always kept", () => {
-		// Variable declarations have side effects (initializer runs)
-		check(stmtCountAfter("const x = 1;", lowerDCE) === 1);
-	});
-});
+test "if true keeps consequent" {
+	check(firstStmtKindAfter("if (true) { const x = 1; } else { const y = 2; }", lowerDCE) === NodeKind.BlockStmt);
+	check(stmtCountAfter("if (true) { const x = 1; } else { const y = 2; }", lowerDCE) === 1);
+}
 
-testGroup("DCE AliveSyms", () => {
-	test("isAlive false for empty", () => {
-		const syms = createAliveSyms();
-		check(!isAlive(syms, "anything"));
+test "if false keeps alternate" { check(firstStmtKindAfter("if (false) { const x = 1; } else { const y = 2; }", lowerDCE) === NodeKind.BlockStmt); }
+
+test "if false no else becomes empty block" {
+	check(firstStmtKindAfter("if (false) { const x = 1; }", lowerDCE) === NodeKind.BlockStmt);
+	check(stmtCountAfter("if (false) { const x = 1; }", lowerDCE) === 1);
+}
+
+test "dynamic condition preserved" { check(firstStmtKindAfter("if (x) { const a = 1; }", lowerDCE) === NodeKind.IfStmt); }
+
+test "while false removed" { check(firstStmtKindAfter("while (false) { doWork(); }", lowerDCE) === NodeKind.BlockStmt); }
+
+test "while true preserved" { check(firstStmtKindAfter("while (true) { break; }", lowerDCE) === NodeKind.WhileStmt); }
+
+test "if-else both return strips after" { check(stmtCountAfter("if (x) { return 1; } else { return 2; } const dead = 3;", lowerDCE) === 1); }
+
+test "if-else one branch falls through keeps after" { check(stmtCountAfter("if (x) { return 1; } else { const y = 2; } const alive = 3;", lowerDCE) === 2); }
+
+test "if without else keeps after" { check(stmtCountAfter("if (x) { return 1; } const alive = 2;", lowerDCE) === 2); }
+
+test "nested if-else both return" {
+	const code = "if (a) { if (b) { return 1; } else { return 2; } } else { return 3; } const dead = 4;";
+	check(stmtCountAfter(code, lowerDCE) === 1);
+}
+
+test "block ending in return" { check(stmtCountAfter("{ return 1; } const dead = 2;", lowerDCE) === 1); }
+
+test "block not ending in return" { check(stmtCountAfter("{ const x = 1; } const alive = 2;", lowerDCE) === 2); }
+
+test "throw in both if branches" { check(stmtCountAfter("if (x) { throw 1; } else { throw 2; } const dead = 3;", lowerDCE) === 1); }
+
+test "else-if chain all return" {
+	const code = "if (a) { return 1; } else if (b) { return 2; } else { return 3; } const dead = 4;";
+	check(stmtCountAfter(code, lowerDCE) === 1);
+}
+
+test "else-if chain missing else" {
+	const code = "if (a) { return 1; } else if (b) { return 2; } const alive = 3;";
+	check(stmtCountAfter(code, lowerDCE) === 2);
+}
+
+test "never call strips after" {
+	const count = stmtCountWithChecker("fail(); const dead = 2;", (cc: CheckerContext) => {
+		const fnType = createFunction([], [], neverType());
+		const sym = makeSymbol("fail", SymbolKind.Function, fnType, false);
+		defineSymbol(cc.table, sym);
 	});
-	test("markAlive then isAlive", () => {
-		const syms = createAliveSyms();
-		markAlive(syms, "foo");
-		check(isAlive(syms, "foo"));
-		check(!isAlive(syms, "bar"));
+	check(count === 1);
+}
+
+test "void call keeps after" {
+	const count = stmtCountWithChecker("log(); const alive = 2;", (cc: CheckerContext) => {
+		const fnType = createFunction([], [], voidType());
+		const sym = makeSymbol("log", SymbolKind.Function, fnType, false);
+		defineSymbol(cc.table, sym);
 	});
-});
+	check(count === 2);
+}
+
+test "unknown function keeps after" {
+	// No symbol registered — conservative, keeps code
+	const count = stmtCountWithChecker("mystery(); const alive = 2;", (cc: CheckerContext) => {});
+	check(count === 2);
+}
+
+test "null checker graceful" {
+	// stmtCountAfter uses null checkerCtx — must not crash
+	check(stmtCountAfter("foo(); const alive = 2;", lowerDCE) === 2);
+}
+
+test "unused function removed" { check(stmtCountAfter("function unused() {} const x = 1;", lowerDCE) === 1); }
+
+test "used function kept" { check(stmtCountAfter("function add(a, b) { return 1; } add(1, 2);", lowerDCE) === 2); }
+
+test "exported function always kept" { check(stmtCountAfter("export function api() { return 1; }", lowerDCE) === 1); }
+
+test "mutual recursion both dead" { check(stmtCountAfter("function a() { b(); } function b() { a(); }", lowerDCE) === 0); }
+
+test "mutual recursion alive via call" { check(stmtCountAfter("function a() { b(); } function b() { a(); } a();", lowerDCE) === 3); }
+
+test "unused class removed" { check(stmtCountAfter("class Dead {} const x = 1;", lowerDCE) === 1); }
+
+test "used class kept" { check(stmtCountAfter("class Alive {} const x = Alive;", lowerDCE) === 2); }
+
+test "transitive liveness" { check(stmtCountAfter("function helper() { return 1; } function api() { return helper(); } api();", lowerDCE) === 3); }
+
+test "unused enum removed" { check(stmtCountAfter("enum Color { Red, Green } const x = 1;", lowerDCE) === 1); }
+
+test "variable decl always kept" {
+	// Variable declarations have side effects (initializer runs)
+	check(stmtCountAfter("const x = 1;", lowerDCE) === 1);
+}
+
+test "isAlive false for empty" {
+	const syms = createAliveSyms();
+	check(!isAlive(syms, "anything"));
+}
+
+test "markAlive then isAlive" {
+	const syms = createAliveSyms();
+	markAlive(syms, "foo");
+	check(isAlive(syms, "foo"));
+	check(!isAlive(syms, "bar"));
+}

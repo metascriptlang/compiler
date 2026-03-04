@@ -126,8 +126,8 @@ static void markGrayCallback(void* child, void* env) {
 	if (getColor(h) != MS_COL_GRAY) {
 		setColor(h, MS_COL_GRAY);
 		/* Recursively trace children */
-		if (h->type != NULL && h->type->trace != NULL) {
-			h->type->trace(child, NULL);
+		if (h->type != NULL && h->type->traceFn != NULL) {
+			h->type->traceFn(child, NULL);
 		}
 	}
 }
@@ -136,8 +136,8 @@ static void markGray(void* p, const msTypeInfo* type) {
 	if (p == NULL) return;
 	msRefHeader* h = msHeader(p);
 	setColor(h, MS_COL_GRAY);
-	if (type != NULL && type->trace != NULL) {
-		type->trace(p, (void*)markGrayCallback);
+	if (type != NULL && type->traceFn != NULL) {
+		type->traceFn(p, (void*)markGrayCallback);
 	}
 }
 
@@ -152,8 +152,8 @@ static void scanBlackCallback(void* child, void* env) {
 	incCount(h);
 	if (getColor(h) != MS_COL_BLACK) {
 		setColor(h, MS_COL_BLACK);
-		if (h->type != NULL && h->type->trace != NULL) {
-			h->type->trace(child, (void*)scanBlackCallback);
+		if (h->type != NULL && h->type->traceFn != NULL) {
+			h->type->traceFn(child, (void*)scanBlackCallback);
 		}
 	}
 }
@@ -166,14 +166,14 @@ static void scan(void* p, const msTypeInfo* type) {
 	if (getCount(h) > 0) {
 		/* Still has external references — not garbage */
 		setColor(h, MS_COL_BLACK);
-		if (type != NULL && type->trace != NULL) {
-			type->trace(p, (void*)scanBlackCallback);
+		if (type != NULL && type->traceFn != NULL) {
+			type->traceFn(p, (void*)scanBlackCallback);
 		}
 	} else {
 		/* Unreachable from outside the cycle — mark white */
 		setColor(h, MS_COL_WHITE);
-		if (type != NULL && type->trace != NULL) {
-			type->trace(p, NULL);
+		if (type != NULL && type->traceFn != NULL) {
+			type->traceFn(p, NULL);
 		}
 	}
 }
@@ -189,8 +189,8 @@ static void collectWhiteCallback(void* child, void* env) {
 	msRefHeader* h = msHeader(child);
 	if (getColor(h) == MS_COL_WHITE) {
 		setColor(h, MS_COL_BLACK);
-		if (h->type != NULL && h->type->trace != NULL) {
-			h->type->trace(child, (void*)collectWhiteCallback);
+		if (h->type != NULL && h->type->traceFn != NULL) {
+			h->type->traceFn(child, (void*)collectWhiteCallback);
 		}
 		msCell cell = { child, h->type };
 		msCellSeqPush(&toFree, cell);
@@ -203,8 +203,8 @@ static void collectWhite(void* p, const msTypeInfo* type) {
 	if (getColor(h) != MS_COL_WHITE) return;
 
 	setColor(h, MS_COL_BLACK);
-	if (type != NULL && type->trace != NULL) {
-		type->trace(p, (void*)collectWhiteCallback);
+	if (type != NULL && type->traceFn != NULL) {
+		type->traceFn(p, (void*)collectWhiteCallback);
 	}
 	msCell cell = { p, type };
 	msCellSeqPush(&toFree, cell);
@@ -254,8 +254,8 @@ void msOrcCollect(void) {
 		msRefHeader* h = msHeader(p);
 		h->rootIdx = -1;
 		/* Run destructor */
-		if (type != NULL && type->destroy != NULL) {
-			type->destroy(p);
+		if (type != NULL && type->destroyFn != NULL) {
+			type->destroyFn(p);
 		}
 		/* Free memory */
 		msDestroyAndDispose(p);

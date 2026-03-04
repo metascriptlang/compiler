@@ -6,7 +6,7 @@ import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, NodeData, Expression, createNode } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd } from "../context";
 import { parseOk } from "./util";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 type ExprResult = Result<Expression, string>;
 type PrecParserFn = (state: ParserState, minPrec: number) => ExprResult;
@@ -57,12 +57,14 @@ export function parseTemplateLiteral(state: ParserState, parsePrec: PrecParserFn
 }
 
 // ===== Tests =====
+test "no substitution" { check(parseOk("`hello`")); }
 
-testGroup("Expr Template Literals", () => {
-	test("no substitution", () => { check(parseOk("`hello`")); });
-	test("single interpolation", () => { check(parseOk("`hello ${name}`")); });
-	test("two interpolations", () => { check(parseOk("`${a} and ${b}`")); });
-	test("expr in interpolation", () => { check(parseOk("`sum is ${a + b}`")); });
-	test("method call", () => { check(parseOk("`num ${x.toString()}`")); });
-	test("three adjacent", () => { check(parseOk("`${a}${b}${c}`")); });
-});
+test "single interpolation" { check(parseOk("`hello ${name}`")); }
+
+test "two interpolations" { check(parseOk("`${a} and ${b}`")); }
+
+test "expr in interpolation" { check(parseOk("`sum is ${a + b}`")); }
+
+test "method call" { check(parseOk("`num ${x.toString()}`")); }
+
+test "three adjacent" { check(parseOk("`${a}${b}${c}`")); }

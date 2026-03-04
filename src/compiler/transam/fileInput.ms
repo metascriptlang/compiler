@@ -3,10 +3,10 @@
 // Each file gets a sequential fileId. Change detection via string equality.
 // Phase 2: add content hash for Salsa output-hash optimization.
 //
-// DRC-safe: array wrapped in interface.
+// Arrays passed by pointer — bare T[] types.
 
 import { taHashString } from "./hash";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 // ===== File Entry =====
 
@@ -17,20 +17,16 @@ export interface TaFileEntry {
 	fileId: number;
 }
 
-export interface TaFileEntryList {
-	items: TaFileEntry[];
-}
-
 // ===== File Input Store =====
 
 export interface TaFileInputStore {
-	files: TaFileEntryList;
+	files: TaFileEntry[];
 	nextFileId: number;
 }
 
 export function createFileInputStore(): TaFileInputStore {
 	return {
-		files: { items: [] },
+		files: [],
 		nextFileId: 0,
 	};
 }
@@ -38,15 +34,15 @@ export function createFileInputStore(): TaFileInputStore {
 // ===== Lookup =====
 
 function findByPath(store: TaFileInputStore, filePath: string): number {
-	for (let i = 0; i < store.files.items.length; i = i + 1) {
-		if (store.files.items[i].filePath === filePath) return i;
+	for (let i = 0; i < store.files.length; i = i + 1) {
+		if (store.files[i].filePath === filePath) return i;
 	}
 	return -1;
 }
 
 function findByFileId(store: TaFileInputStore, fileId: number): number {
-	for (let i = 0; i < store.files.items.length; i = i + 1) {
-		if (store.files.items[i].fileId === fileId) return i;
+	for (let i = 0; i < store.files.length; i = i + 1) {
+		if (store.files[i].fileId === fileId) return i;
 	}
 	return -1;
 }
@@ -58,9 +54,9 @@ export function setFileText(store: TaFileInputStore, filePath: string, source: s
 	const idx = findByPath(store, filePath);
 	if (idx >= 0) {
 		// Existing file — check if content changed
-		if (store.files.items[idx].source === source) return false;
-		store.files.items[idx].source = source;
-		store.files.items[idx].sourceHash = taHashString(source);
+		if (store.files[idx].source === source) return false;
+		store.files[idx].source = source;
+		store.files[idx].sourceHash = taHashString(source);
 		return true;
 	}
 	// New file
@@ -72,26 +68,26 @@ export function setFileText(store: TaFileInputStore, filePath: string, source: s
 		sourceHash: taHashString(source),
 		fileId,
 	};
-	store.files.items.push(entry);
+	store.files.push(entry);
 	return true;
 }
 
 export function getFileText(store: TaFileInputStore, fileId: number): string {
 	const idx = findByFileId(store, fileId);
 	if (idx < 0) return "";
-	return store.files.items[idx].source;
+	return store.files[idx].source;
 }
 
 export function getFileHash(store: TaFileInputStore, fileId: number): number {
 	const idx = findByFileId(store, fileId);
 	if (idx < 0) return 0;
-	return store.files.items[idx].sourceHash;
+	return store.files[idx].sourceHash;
 }
 
 export function getFileId(store: TaFileInputStore, filePath: string): number {
 	const idx = findByPath(store, filePath);
 	if (idx < 0) return -1;
-	return store.files.items[idx].fileId;
+	return store.files[idx].fileId;
 }
 
 export function hasFile(store: TaFileInputStore, filePath: string): boolean {
@@ -99,64 +95,67 @@ export function hasFile(store: TaFileInputStore, filePath: string): boolean {
 }
 
 // ===== Tests =====
+test "starts empty" {
+	const store = createFileInputStore();
+	check(store.files.length === 0);
+	check(store.nextFileId === 0);
+}
 
-testGroup("TaFileInputStore Basics", () => {
-	test("starts empty", () => {
-		const store = createFileInputStore();
-		check(store.files.items.length === 0);
-		check(store.nextFileId === 0);
-	});
-	test("set new file returns true", () => {
-		const store = createFileInputStore();
-		check(setFileText(store, "a.ms", "const x = 1;"));
-	});
-	test("set same content returns false", () => {
-		const store = createFileInputStore();
-		setFileText(store, "a.ms", "const x = 1;");
-		check(!setFileText(store, "a.ms", "const x = 1;"));
-	});
-	test("set different content returns true", () => {
-		const store = createFileInputStore();
-		setFileText(store, "a.ms", "const x = 1;");
-		check(setFileText(store, "a.ms", "const x = 2;"));
-	});
-});
+test "set new file returns true" {
+	const store = createFileInputStore();
+	check(setFileText(store, "a.ms", "const x = 1;"));
+}
 
-testGroup("TaFileInputStore Lookup", () => {
-	test("getFileId sequential", () => {
-		const store = createFileInputStore();
-		setFileText(store, "a.ms", "a");
-		setFileText(store, "b.ms", "b");
-		check(getFileId(store, "a.ms") === 0);
-		check(getFileId(store, "b.ms") === 1);
-	});
-	test("getFileId unknown returns -1", () => {
-		const store = createFileInputStore();
-		check(getFileId(store, "unknown.ms") === -1);
-	});
-	test("getFileText retrieves source", () => {
-		const store = createFileInputStore();
-		setFileText(store, "a.ms", "hello world");
-		const id = getFileId(store, "a.ms");
-		check(getFileText(store, id) === "hello world");
-	});
-	test("getFileText after update", () => {
-		const store = createFileInputStore();
-		setFileText(store, "a.ms", "v1");
-		const id = getFileId(store, "a.ms");
-		setFileText(store, "a.ms", "v2");
-		check(getFileText(store, id) === "v2");
-	});
-	test("hasFile true/false", () => {
-		const store = createFileInputStore();
-		check(!hasFile(store, "a.ms"));
-		setFileText(store, "a.ms", "x");
-		check(hasFile(store, "a.ms"));
-	});
-	test("getFileHash nonzero", () => {
-		const store = createFileInputStore();
-		setFileText(store, "a.ms", "content");
-		const id = getFileId(store, "a.ms");
-		check(getFileHash(store, id) !== 0);
-	});
-});
+test "set same content returns false" {
+	const store = createFileInputStore();
+	setFileText(store, "a.ms", "const x = 1;");
+	check(!setFileText(store, "a.ms", "const x = 1;"));
+}
+
+test "set different content returns true" {
+	const store = createFileInputStore();
+	setFileText(store, "a.ms", "const x = 1;");
+	check(setFileText(store, "a.ms", "const x = 2;"));
+}
+
+test "getFileId sequential" {
+	const store = createFileInputStore();
+	setFileText(store, "a.ms", "a");
+	setFileText(store, "b.ms", "b");
+	check(getFileId(store, "a.ms") === 0);
+	check(getFileId(store, "b.ms") === 1);
+}
+
+test "getFileId unknown returns -1" {
+	const store = createFileInputStore();
+	check(getFileId(store, "unknown.ms") === -1);
+}
+
+test "getFileText retrieves source" {
+	const store = createFileInputStore();
+	setFileText(store, "a.ms", "hello world");
+	const id = getFileId(store, "a.ms");
+	check(getFileText(store, id) === "hello world");
+}
+
+test "getFileText after update" {
+	const store = createFileInputStore();
+	setFileText(store, "a.ms", "v1");
+	const id = getFileId(store, "a.ms");
+	setFileText(store, "a.ms", "v2");
+	check(getFileText(store, id) === "v2");
+}
+
+test "hasFile true/false" {
+	const store = createFileInputStore();
+	check(!hasFile(store, "a.ms"));
+	setFileText(store, "a.ms", "x");
+	check(hasFile(store, "a.ms"));
+}
+
+test "getFileHash nonzero" {
+	const store = createFileInputStore();
+	setFileText(store, "a.ms", "content");
+	const id = getFileId(store, "a.ms");
+	check(getFileHash(store, id) !== 0);
+}

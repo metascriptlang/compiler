@@ -14,7 +14,7 @@ import {
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeBool, makeBlock, makeWhile, makeExprStmt, extractBodyStmts } from "../util";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { firstStmtKindAfter, stmtCountAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -36,7 +36,7 @@ function lowerForNode(node: Node): Node {
 	}
 
 	// 2. Condition (default to true for infinite loop)
-	let cond: Node;
+	let cond: Node = null as unknown as Node;
 	if (d.forCondition !== null) {
 		cond = d.forCondition;
 	} else {
@@ -60,28 +60,16 @@ function lowerForNode(node: Node): Node {
 }
 
 // ===== Tests =====
+test "basic for becomes block" { check(firstStmtKindAfter("for (let i = 0; i < 10; i++) {}", lowerForLoop) === NodeKind.BlockStmt); }
 
-testGroup("For Loop Lowering", () => {
-	test("basic for becomes block", () => {
-		check(firstStmtKindAfter("for (let i = 0; i < 10; i++) {}", lowerForLoop) === NodeKind.BlockStmt);
-	});
-	test("while unchanged", () => {
-		check(firstStmtKindAfter("while (true) {}", lowerForLoop) === NodeKind.WhileStmt);
-	});
-	test("for-of unchanged", () => {
-		check(firstStmtKindAfter("for (const x of arr) { x; }", lowerForLoop) === NodeKind.ForOfStmt);
-	});
-	// Note: for(;;) not supported by parser — it always requires init/cond/update expressions
-	test("for with update only", () => {
-		check(firstStmtKindAfter("for (let i = 0; i < 5; i++) { i; }", lowerForLoop) === NodeKind.BlockStmt);
-	});
-	test("non-loop passthrough", () => {
-		check(stmtCountAfter("const x = 1;", lowerForLoop) === 1);
-	});
-	test("preserves surrounding stmts", () => {
-		check(stmtCountAfter("let a = 1; for (let i = 0; i < 2; i++) {} let b = 2;", lowerForLoop) === 3);
-	});
-	test("if stmt unchanged", () => {
-		check(firstStmtKindAfter("if (x) {}", lowerForLoop) === NodeKind.IfStmt);
-	});
-});
+test "while unchanged" { check(firstStmtKindAfter("while (true) {}", lowerForLoop) === NodeKind.WhileStmt); }
+
+test "for-of unchanged" { check(firstStmtKindAfter("for (const x of arr) { x; }", lowerForLoop) === NodeKind.ForOfStmt); }
+// Note: for(;;) not supported by parser — it always requires init/cond/update expressions
+test "for with update only" { check(firstStmtKindAfter("for (let i = 0; i < 5; i++) { i; }", lowerForLoop) === NodeKind.BlockStmt); }
+
+test "non-loop passthrough" { check(stmtCountAfter("const x = 1;", lowerForLoop) === 1); }
+
+test "preserves surrounding stmts" { check(stmtCountAfter("let a = 1; for (let i = 0; i < 2; i++) {} let b = 2;", lowerForLoop) === 3); }
+
+test "if stmt unchanged" { check(firstStmtKindAfter("if (x) {}", lowerForLoop) === NodeKind.IfStmt); }

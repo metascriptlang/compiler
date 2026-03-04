@@ -22,12 +22,12 @@ Workarounds for bugs in the reference compiler (Zig-based `msc`). Each entry: pr
 
 ---
 
-## 3. `string[]` / `Node[]` are value types — mutation loss
+## 3. `string[]` is a value type — mutation loss (ARRAYS FIXED)
 
-**Problem:** Pushing to an array inside a function does not propagate to the caller.
+**Problem:** Pushing to a string array inside a function does not propagate to the caller.
 **Context:** `function addItem(arr: string[], item: string) { arr.push(item); }` — caller's array unchanged after call.
-**Why:** Arrays are value types in MetaScript. Function parameters receive a copy, so mutations are local to the callee.
-**Fix:** Wrap arrays in an interface: `interface Items { items: string[]; }` — interfaces are pointer types, so mutations propagate. See `src/analyzer/scope.ms` lines 26-40.
+**Why:** Strings are still value types in MetaScript. Function parameters receive a copy, so mutations are local to the callee.
+**Status:** Arrays (`T[]` for non-string T) are now fixed via the `pointerParam` transform (Nim's `nkHiddenAddr`/`nkHiddenDeref` pattern). Array wrappers have been removed — bare `T[]` types work correctly. **Strings remain value types** — string array (`string[]`) mutation still does not propagate. Wrap in interface if needed.
 
 ---
 
@@ -157,11 +157,11 @@ Workarounds for bugs in the reference compiler (Zig-based `msc`). Each entry: pr
 
 ---
 
-## 18. NodeData union size change breaks ms_clone
+## 18. NodeData union size change breaks msClone
 
-**Problem:** Adding fields to the NodeData union can cause `for..of` over `Node[]` to emit broken `ms_clone` calls.
+**Problem:** Adding fields to the NodeData union can cause `for..of` over `Node[]` to emit broken `msClone` calls.
 **Context:** After extending NodeData with a new variant, existing `for (const node of nodes)` loops crash with memory corruption.
-**Why:** The `ms_clone` function is generated based on union size. When the union grows, stale clone implementations may copy the wrong number of bytes.
+**Why:** The `msClone` function is generated based on union size. When the union grows, stale clone implementations may copy the wrong number of bytes.
 **Fix:** Convert affected `for..of` loops to `while` loops with index access: `while (i < nodes.length) { const node = nodes[i]; ... }`. Rebuild with `rm -rf .zig-cache`.
 
 ---
@@ -197,5 +197,5 @@ Workarounds for bugs in the reference compiler (Zig-based `msc`). Each entry: pr
 
 **Problem:** A helper module that imports NodeData union member types and returns `Node` or `Node[]` to the caller causes ASan SEGV crashes.
 **Context:** `decoratorHelpers.ms` imports `DecoratedDeclData`, returns `Node` via `getDecoratedInnerNode()` — caller in `collectPass.ms` crashes on the returned Node.
-**Why:** Each compilation unit generates its own lifecycle hooks (ms_clone, ms_destroy) for the NodeData union based on which member types are visible. When a Node crosses module boundaries, the caller's hooks disagree with the callee's hooks on union layout.
+**Why:** Each compilation unit generates its own lifecycle hooks (msClone, msDestroy) for the NodeData union based on which member types are visible. When a Node crosses module boundaries, the caller's hooks disagree with the callee's hooks on union layout.
 **Fix:** Helper modules must return only primitives (string, number, enum, simple interfaces with primitive fields). Keep Node/Node[] access local to the file that uses it. See `src/checker/decoratorHelpers.ms` for the pattern.

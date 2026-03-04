@@ -10,9 +10,9 @@ import {
 	BreakStmtData, ContinueStmtData, DeclKind,
 	TryCatchStmtData, ThrowStmtData,
 	SwitchStmtData, SwitchCaseData,
-	ExpectStmtData,
+	ExpectStmtData, CallExprData, IdentifierData,
 } from "../../ast/node";
-import { Type, TypeKind } from "../../checker/types";
+import { Type, TypeKind, isInterfaceType } from "../../checker/types";
 import {
 	CGen, CProc,
 	emitStmts, emitStmtsLine, emitStmtsNl,
@@ -21,9 +21,38 @@ import {
 } from "./context";
 import { genExpr } from "./expressions";
 import { safeName } from "./names";
-import { getSimpleTypeDesc, getTypeDesc } from "./types";
-import { sliceStr } from "../../utils/string";
-import { test, check, testGroup } from "std/testing";
+import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType } from "./types";
+
+// ===== NRVO Call Site Helpers =====
+// G3 fix: detect calls to NRVO functions and emit fn(&dest, args) instead of dest = fn(args)
+
+function isStructType(t: Type): boolean {
+	if (t === null) return false;
+	return match (t.kind) {
+		TypeKind.String | TypeKind.Array | TypeKind.Map | TypeKind.Set => true,
+		TypeKind.Object => { isInterfaceType(t) },
+		TypeKind.Result | TypeKind.Tuple => true,
+		TypeKind.Function => true,  // msClosure is a struct
+		_ => false,
+	};
+}
+
+function isNrvoCallSite(callNode: Node): boolean {
+	if (callNode.nodeType === null) return false;
+	return isNrvoReturnType(callNode.nodeType);
+}
+
+function genNrvoCallExpr(g: CGen, p: CProc, callNode: Node, destVar: string): string {
+	const cd = callNode.data as CallExprData;
+	let callee = genExpr(g, p, cd.callee);
+	let args = "&" + destVar;
+	for (let i = 0; i < cd.arguments.length; i += 1) {
+		args = args + ", " + genExpr(g, p, cd.arguments[i]);
+	}
+	return callee + "(" + args + ")";
+}
+import { sliceStr, charAt } from "../../utils/string";
+import { check } from "std/testing";
 
 // ===== genStmt — main statement dispatcher =====
 
@@ -66,42 +95,33 @@ function genExprStmt(g: CGen, p: CProc, node: Node): void {
 
 // ===== Variable Declaration =====
 
-function mapDeclTypeStr(dt: string): string {
-	return match (dt) {
-		"number" | "float64" => "double",
-		"int32" => "int32_t",
-		"int64" => "int64_t",
-		"uint32" => "uint32_t",
-		"float32" => "float",
-		"boolean" => "MS_BOOL",
-		"string" => "msString",
-		"void" => "void",
-		_ => "",
-	};
-}
-
 function genVarDecl(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as VariableDeclData;
 	const varName = safeName(d.declName);
 
+	// Type resolution priority: nodeType (checker) > initializer.nodeType (DRC) > fallback
 	let cType = "";
-	if (d.declType !== "") {
-		cType = mapDeclTypeStr(d.declType);
-		if (cType === "") {
-			cType = "/* " + d.declType + " */ void*";
-		}
-	} else if (node.nodeType !== null) {
-		// Use checker's inferred type
-		cType = getSimpleTypeDesc(node.nodeType);
-		if (cType === "") {
-			cType = getTypeDesc(g, node.nodeType);
-		}
+	if (node.nodeType !== null) {
+		cType = getTypeDesc(g, node.nodeType);
+	} else if (d.initializer !== null && d.initializer.nodeType !== null) {
+		cType = getTypeDesc(g, d.initializer.nodeType);
 	}
 	if (cType === "") cType = "double";
 
 	if (d.initializer !== null) {
-		const initSnippet = genExpr(g, p, d.initializer);
-		emitStmtsLine(p, cType + " " + varName + " = " + initSnippet + ";");
+		// G3 fix: NRVO call sites — when initializer is a call returning a struct,
+		// emit "Type var; fn(&var, args);" instead of "Type var = fn(args);"
+		if (d.initializer.kind === NodeKind.CallExpr && isNrvoCallSite(d.initializer)) {
+			emitStmtsLine(p, cType + " " + varName + ";");
+			const nrvoCall = genNrvoCallExpr(g, p, d.initializer, varName);
+			emitStmtsLine(p, nrvoCall + ";");
+		} else if (d.initializer.kind === NodeKind.NullLiteral && isStructType(node.nodeType)) {
+			// D2 fix: struct-type null init → {0} instead of MS_NIL
+			emitStmtsLine(p, cType + " " + varName + " = {0};");
+		} else {
+			const initSnippet = genExpr(g, p, d.initializer);
+			emitStmtsLine(p, cType + " " + varName + " = " + initSnippet + ";");
+		}
 	} else {
 		emitStmtsLine(p, cType + " " + varName + ";");
 	}
@@ -166,12 +186,19 @@ function genBlockStmt(g: CGen, p: CProc, node: Node): void {
 
 function genReturnStmt(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as ReturnStmtData;
-	// NRVO: assign to *__result instead of returning (name prefix convention)
-	const isNrvo = p.name.length > 8 && sliceStr(p.name, 0, 8) === "__nrvo__";
+	// NRVO: assign to *__result instead of returning (boolean flag, not name prefix)
+	const isNrvo = p.isNrvo;
 	if (d.argument !== null) {
 		const snippet = genExpr(g, p, d.argument);
 		if (isNrvo) {
-			emitStmtsLine(p, "*__result = " + snippet + ";");
+			// G4 fix: compound literals need (StructType) cast for C99
+			// If genObjectLiteral didn't add the cast (nodeType was null), add it here
+			const needsCast = d.argument.kind === NodeKind.ObjectLiteral && snippet.length > 0 && charAt(snippet, 0) !== "(";
+			if (needsCast && p.returnType !== null && p.returnType.typeName !== "") {
+				emitStmtsLine(p, "*__result = (" + safeName(p.returnType.typeName) + ")" + snippet + ";");
+			} else {
+				emitStmtsLine(p, "*__result = " + snippet + ";");
+			}
 			emitStmtsLine(p, "return;");
 		} else {
 			emitStmtsLine(p, "return " + snippet + ";");
@@ -196,7 +223,7 @@ function genContinueStmt(g: CGen, p: CProc, node: Node): void {
 function genThrowStmt(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as ThrowStmtData;
 	const snippet = genExpr(g, p, d.throwArg);
-	emitStmtsLine(p, "ms_throw(" + snippet + ");");
+	emitStmtsLine(p, "msThrow(" + snippet + ");");
 }
 
 // ===== Try/Catch (goto-based — Nim's genTryGoto) =====
@@ -225,7 +252,7 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Node): void {
 	emitStmtsLine(p, catchLabel + ": {");
 	setStmtsIndent(p, oldIndent + 2);
 	if (d.catchName !== "") {
-		emitStmtsLine(p, "msException* " + safeName(d.catchName) + " = ms_curr_exception;");
+		emitStmtsLine(p, "msException* " + safeName(d.catchName) + " = msCurrException;");
 	}
 	emitStmtsLine(p, "msErr = MS_FALSE;");
 	emitStmtsLine(p, "msClearException();");
@@ -256,7 +283,7 @@ function genTryCatchSetjmp(g: CGen, p: CProc, node: Node): void {
 	const oldIndent = getStmtsIndent(p);
 	setStmtsIndent(p, oldIndent + 1);
 	emitStmtsLine(p, "msSafePoint __sp;");
-	emitStmtsLine(p, "ms_push_safepoint(&__sp);");
+	emitStmtsLine(p, "msPushSafepoint(&__sp);");
 	emitStmtsLine(p, "if (setjmp(__sp.context) == 0) {");
 	setStmtsIndent(p, oldIndent + 2);
 	genStmt(g, p, d.tryBody);
@@ -264,7 +291,7 @@ function genTryCatchSetjmp(g: CGen, p: CProc, node: Node): void {
 	emitStmtsLine(p, "} else {");
 	setStmtsIndent(p, oldIndent + 2);
 	if (d.catchName !== "") {
-		emitStmtsLine(p, "msException* " + safeName(d.catchName) + " = ms_curr_exception;");
+		emitStmtsLine(p, "msException* " + safeName(d.catchName) + " = msCurrException;");
 	}
 	emitStmtsLine(p, "msClearException();");
 	if (d.catchBody !== null) {
@@ -272,7 +299,7 @@ function genTryCatchSetjmp(g: CGen, p: CProc, node: Node): void {
 	}
 	setStmtsIndent(p, oldIndent + 1);
 	emitStmtsLine(p, "}");
-	emitStmtsLine(p, "ms_pop_safepoint();");
+	emitStmtsLine(p, "msPopSafepoint();");
 
 	if (d.finallyBody !== null) {
 		genStmt(g, p, d.finallyBody);
@@ -352,7 +379,7 @@ function genBlockOrBraces(g: CGen, p: CProc, node: Node): void {
 function genExpectStmt(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as ExpectStmtData;
 	const cond = genExpr(g, p, d.expectExpr);
-	emitStmtsLine(p, `if (!(${cond})) { ms_test_check_fail("expect failed", __FILE__, __LINE__); return; }`);
+	emitStmtsLine(p, `if (!(${cond})) { msTestCheckFail("expect failed", __FILE__, __LINE__); return; }`);
 }
 
 // ===== Tests =====
@@ -368,7 +395,7 @@ function stmtOutput(input: string): string {
 	if (!pr.ok) return "PARSE_ERROR: " + pr.error;
 	const prog = pr.value;
 	const pd = prog.data as ProgramData;
-	const g = createCGen(null as unknown as CheckerContext);
+	const g = createCGen(null as unknown as CheckerContext, "");
 	const p = createProc("test", null as unknown as Type);
 	// Inline loop instead of genStmts to reduce call depth
 	for (let i = 0; i < pd.programStmts.length; i += 1) {
@@ -377,102 +404,79 @@ function stmtOutput(input: string): string {
 	return readProcStmts(p);
 }
 
-testGroup("C Stmt ExprStmt", () => {
-	test("simple call", () => {
-		check(stmtOutput("foo();") === "foo();\n");
-	});
-});
+test "simple call" { check(stmtOutput("foo();") === "foo();\n"); }
 
-testGroup("C Stmt VarDecl", () => {
-	test("const with init", () => {
-		check(stmtOutput("const x: number = 42;") === "double x = 42;\n");
-	});
-	test("let with init", () => {
-		check(stmtOutput("let x: number = 0;") === "double x = 0;\n");
-	});
-	test("int32 type", () => {
-		check(stmtOutput("const n: int32 = 0;") === "int32_t n = 0;\n");
-	});
-	test("bool type", () => {
-		check(stmtOutput("const flag: boolean = true;") === "MS_BOOL flag = MS_TRUE;\n");
-	});
-});
+test "const with init" { check(stmtOutput("const x: number = 42;") === "double x = 42;\n"); }
 
-testGroup("C Stmt If", () => {
-	test("simple if", () => {
-		const result = stmtOutput("if (x) { foo(); }");
-		check(result === "if (x) {\n  foo();\n}\n");
-	});
-	test("if-else", () => {
-		const result = stmtOutput("if (x) { a(); } else { b(); }");
-		check(result === "if (x) {\n  a();\n}\n else {\n  b();\n}\n\n");
-	});
-});
+test "let with init" { check(stmtOutput("let x: number = 0;") === "double x = 0;\n"); }
 
-testGroup("C Stmt While", () => {
-	test("simple while", () => {
-		const result = stmtOutput("while (x) { foo(); }");
-		check(result === "while (x) {\n  foo();\n}\n\n");
-	});
-});
+test "int32 type" { check(stmtOutput("const n: int32 = 0;") === "int32_t n = 0;\n"); }
 
-testGroup("C Stmt Return", () => {
-	test("return value", () => {
-		check(stmtOutput("return 42;") === "return 42;\n");
-	});
-});
+test "bool type" { check(stmtOutput("const flag: boolean = true;") === "MS_BOOL flag = MS_TRUE;\n"); }
 
-testGroup("C Stmt Break/Continue", () => {
-	test("break", () => {
-		check(stmtOutput("break;") === "break;\n");
-	});
-	test("continue", () => {
-		check(stmtOutput("continue;") === "continue;\n");
-	});
-});
+test "simple if" {
+	const result = stmtOutput("if (x) { foo(); }");
+	check(result === "if (x) {\n  foo();\n}\n");
+}
 
-testGroup("C Stmt TryCatch Goto", () => {
-	test("try-catch emits goto labels", () => {
-		const tc = stmtOutput("try { foo(); } catch (e) { bar(); }");
-		const len = tc.length;
-		// Should contain goto-based labels, not setjmp
-		check(len > 20);
-		// Should NOT contain setjmp (we use goto-based now)
-		let hasSetjmp = false;
-		let i = 0;
-		while (i < len - 6) {
-			if (sliceStr(tc, i, i + 6) === "setjmp") {
-				hasSetjmp = true;
-			}
-			i = i + 1;
+test "if-else" {
+	const result = stmtOutput("if (x) { a(); } else { b(); }");
+	check(result === "if (x) {\n  a();\n}\n else {\n  b();\n}\n\n");
+}
+
+test "simple while" {
+	const result = stmtOutput("while (x) { foo(); }");
+	check(result === "while (x) {\n  foo();\n}\n\n");
+}
+
+test "return value" { check(stmtOutput("return 42;") === "return 42;\n"); }
+
+test "break" { check(stmtOutput("break;") === "break;\n"); }
+
+test "continue" { check(stmtOutput("continue;") === "continue;\n"); }
+
+test "try-catch emits goto labels" {
+	const tc = stmtOutput("try { foo(); } catch (e) { bar(); }");
+	const len = tc.length;
+	// Should contain goto-based labels, not setjmp
+	check(len > 20);
+	// Should NOT contain setjmp (we use goto-based now)
+	let hasSetjmp = false;
+	let i = 0;
+	while (i < len - 6) {
+		if (sliceStr(tc, i, i + 6) === "setjmp") {
+			hasSetjmp = true;
 		}
-		check(!hasSetjmp);
-	});
-	test("try-catch has catch label", () => {
-		const tc = stmtOutput("try { foo(); } catch (e) { bar(); }");
-		const len = tc.length;
-		// Should contain __catch_ label
-		let hasCatch = false;
-		let i = 0;
-		while (i < len - 8) {
-			if (sliceStr(tc, i, i + 8) === "__catch_") {
-				hasCatch = true;
-			}
-			i = i + 1;
+		i = i + 1;
+	}
+	check(!hasSetjmp);
+}
+
+test "try-catch has catch label" {
+	const tc = stmtOutput("try { foo(); } catch (e) { bar(); }");
+	const len = tc.length;
+	// Should contain __catch_ label
+	let hasCatch = false;
+	let i = 0;
+	while (i < len - 8) {
+		if (sliceStr(tc, i, i + 8) === "__catch_") {
+			hasCatch = true;
 		}
-		check(hasCatch);
-	});
-	test("try-finally has finally label", () => {
-		const tf = stmtOutput("try { foo(); } finally { cleanup(); }");
-		const len = tf.length;
-		let hasFinally = false;
-		let i = 0;
-		while (i < len - 10) {
-			if (sliceStr(tf, i, i + 10) === "__finally_") {
-				hasFinally = true;
-			}
-			i = i + 1;
+		i = i + 1;
+	}
+	check(hasCatch);
+}
+
+test "try-finally has finally label" {
+	const tf = stmtOutput("try { foo(); } finally { cleanup(); }");
+	const len = tf.length;
+	let hasFinally = false;
+	let i = 0;
+	while (i < len - 10) {
+		if (sliceStr(tf, i, i + 10) === "__finally_") {
+			hasFinally = true;
 		}
-		check(hasFinally);
-	});
-});
+		i = i + 1;
+	}
+	check(hasFinally);
+}

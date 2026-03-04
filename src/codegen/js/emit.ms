@@ -1,27 +1,21 @@
 // JavaScript Codegen — Emit Helpers
 //
-// StringBuf accumulator, JSGenerator context, low-level emit functions.
+// JSGenerator context, low-level emit functions.
 // emitNode delegates to registered callback (set by jsgen.ms) to break circular imports.
 
 import { Node, NodeKind, BlockStmtData } from "../../ast/node";
 import { sliceStr } from "../../utils/string";
-import { test, check, testGroup } from "std/testing";
-
-// ===== String Buffer =====
-
-export interface StringBuf {
-	parts: string[];
-}
+import { check } from "std/testing";
 
 // ===== JS Generator =====
 
 export interface JSGenerator {
-	buf: StringBuf;
+	buf: string[];
 	indentLevel: number;
 }
 
 export function createJSGenerator(): JSGenerator {
-	return { buf: { parts: [] }, indentLevel: 0 };
+	return { buf: [], indentLevel: 0 };
 }
 
 // ===== Callback Registration (breaks circular imports) =====
@@ -41,7 +35,7 @@ export function emitNode(gen: JSGenerator, node: Node): void {
 // ===== Emit Helpers =====
 
 export function emit(gen: JSGenerator, text: string): void {
-	gen.buf.parts.push(text);
+	gen.buf.push(text);
 }
 
 export function emitIndent(gen: JSGenerator): void {
@@ -120,8 +114,8 @@ export function emitBodyOrEmpty(gen: JSGenerator, body: Node): void {
 
 export function finalize(gen: JSGenerator): string {
 	let result = "";
-	for (let i = 0; i < gen.buf.parts.length; i += 1) {
-		result = result + gen.buf.parts[i];
+	for (let i = 0; i < gen.buf.length; i += 1) {
+		result = result + gen.buf[i];
 	}
 	return result;
 }
@@ -156,34 +150,35 @@ export function convertImportPath(path: string): string {
 }
 
 // ===== Tests =====
+test "StringBuf accumulation" {
+	const gen = createJSGenerator();
+	emit(gen, "hello");
+	emit(gen, " ");
+	emit(gen, "world");
+	check(finalize(gen) === "hello world");
+}
 
-testGroup("JS Emit Helpers", () => {
-	test("StringBuf accumulation", () => {
-		const gen = createJSGenerator();
-		emit(gen, "hello");
-		emit(gen, " ");
-		emit(gen, "world");
-		check(finalize(gen) === "hello world");
-	});
-	test("indentation", () => {
-		const gen = createJSGenerator();
-		gen.indentLevel = 2;
-		emitIndent(gen);
-		emit(gen, "x");
-		check(finalize(gen) === "    x");
-	});
-	test("emitLine", () => {
-		const gen = createJSGenerator();
-		emitLine(gen, "const x = 1;");
-		check(finalize(gen) === "const x = 1;\n");
-	});
-	test("escapeJSString basics", () => {
-		check(escapeJSString("hello") === "hello");
-		check(escapeJSString("a\\b") === "a\\\\b");
-	});
-	test("convertImportPath", () => {
-		check(convertImportPath("./module.ms") === "./module.js");
-		check(convertImportPath("./module") === "./module");
-		check(convertImportPath("std/testing") === "std/testing");
-	});
-});
+test "indentation" {
+	const gen = createJSGenerator();
+	gen.indentLevel = 2;
+	emitIndent(gen);
+	emit(gen, "x");
+	check(finalize(gen) === "    x");
+}
+
+test "emitLine" {
+	const gen = createJSGenerator();
+	emitLine(gen, "const x = 1;");
+	check(finalize(gen) === "const x = 1;\n");
+}
+
+test "escapeJSString basics" {
+	check(escapeJSString("hello") === "hello");
+	check(escapeJSString("a\\b") === "a\\\\b");
+}
+
+test "convertImportPath" {
+	check(convertImportPath("./module.ms") === "./module.js");
+	check(convertImportPath("./module") === "./module");
+	check(convertImportPath("std/testing") === "std/testing");
+}

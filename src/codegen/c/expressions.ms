@@ -7,20 +7,17 @@
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
 import {
-	Node, NodeKind,
+	Node, NodeKind, NF_CLOSURE,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 	IdentifierData, BinaryExprData, UnaryExprData,
 	MemberExprData, ArrayAccessData,
 	ConditionalExprData, TypeAssertionData, CallExprData,
 	ObjectLiteralData, ArrayLiteralData,
 	UpdateExprData, NewExprData, MoveExprData, SpreadExprData,
-	ExprStmtData,
+	ExprStmtData, HiddenStdConvData, HiddenDerefData,
 } from "../../ast/node";
 import { Type, TypeKind, getProperty, getMinArity } from "../../checker/types";
-import { Symbol, lookupSymbol, SymbolKind, hasOverloads } from "../../checker/symbol";
-import {
-	resolveOverloadIdx, scoreCandidatePriority, isNoMatch, emptyCandidateScore, cmpCandidates,
-} from "../../checker/compat";
+import { SymbolKind } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, Builder, CSection,
 	initLoc, noLoc, rdLoc,
@@ -28,9 +25,10 @@ import {
 	pStmts, getTemp, nameSetHas, emitStmtsLine, internString,
 } from "./context";
 import { mangle, mangleFieldName, safeName } from "./names";
+import { getTypeDesc, isNrvoReturnType, intToString } from "./types";
 import { formatCNumber, cBoolLiteral, cNullLiteral, cStringLiteral, msStringPoolRef } from "./literals";
 import { charAt, sliceStr } from "../../utils/string";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 // Join call arguments with comma separator.
 function joinArgs(g: CGen, p: CProc, args: Node[]): string {
@@ -116,10 +114,19 @@ export function genExpr(g: CGen, p: CProc, node: Node): string {
 		NodeKind.HiddenDeref => {
 			genHiddenDeref(g, p, node);
 		},
-		_ => "/* unsupported expr */0",
-	};
-}
-
+		NodeKind.HiddenAddr => {
+			const d = node.data as ExprStmtData;
+			"&(" + genExpr(g, p, d.expr) + ")";
+		},
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
+			const d = node.data as HiddenStdConvData;
+			const targetC = getTypeDesc(g, d.convType);
+			"((" + targetC + ")(" + genExpr(g, p, d.convExpr) + "))";
+		},
+		_ => "/* unsupported expression */",
+		};
+		return result;
+		}
 // ===== genExprAssign — evaluate expression and assign to dest =====
 // For statement-level: `dest = expr;`
 
@@ -132,16 +139,9 @@ export function genExprAssign(g: CGen, p: CProc, node: Node, destSnippet: string
 
 function genBinaryExpr(g: CGen, p: CProc, node: Node): string {
 	const d = node.data as BinaryExprData;
-	// String index assignment: s[i] = ch → ms_string_set_char(&s, i, ch)
+	// Array indexed assignment: arr[i] = val → arr.p->data[i] = val
 	if (d.operator === "=" && d.left.kind === NodeKind.ArrayAccess) {
 		const ad = d.left.data as ArrayAccessData;
-		if (isStringTyped(ad.array)) {
-			const arr = genExpr(g, p, ad.array);
-			const idx = genExpr(g, p, ad.index);
-			const val = genExpr(g, p, d.right);
-			// COW guard: ensure string payload is mutable before writing
-			return "(msStringPrepareMutation(&" + arr + "), msStringSetChar(&" + arr + ", " + idx + ", " + val + "))";
-		}
 		if (isArrayTyped(ad.array)) {
 			const arr = genExpr(g, p, ad.array);
 			const idx = genExpr(g, p, ad.index);
@@ -149,54 +149,10 @@ function genBinaryExpr(g: CGen, p: CProc, node: Node): string {
 			return arr + ".p->data[" + idx + "] = " + val;
 		}
 	}
+	// String ops (==, +, <, s[i]=ch) are lowered to runtime calls by stringOpLower transform.
+	// Codegen just emits mechanical C operators.
 	const left = genExpr(g, p, d.left);
 	const right = genExpr(g, p, d.right);
-	// String comparison: use runtime functions instead of C operators
-	if (isStringTyped(d.left) || isStringTyped(d.right)) {
-		if (d.operator === "===" || d.operator === "==") {
-			if (isEmptyStringLiteral(d.right)) return "(" + left + ".len == 0)";
-			if (isEmptyStringLiteral(d.left)) return "(" + right + ".len == 0)";
-			return "msStringEquals(" + left + ", " + right + ")";
-		}
-		if (d.operator === "!==" || d.operator === "!=") {
-			if (isEmptyStringLiteral(d.right)) return "(" + left + ".len != 0)";
-			if (isEmptyStringLiteral(d.left)) return "(" + right + ".len != 0)";
-			return "(!msStringEquals(" + left + ", " + right + "))";
-		}
-		if (d.operator === "<" || d.operator === ">" || d.operator === "<=" || d.operator === ">=") {
-			return "(msStringCompare(" + left + ", " + right + ") " + d.operator + " 0)";
-		}
-		if (d.operator === "+") {
-			// Concat chain fusion: s + t + u → ms_string_concat_many(3, s, t, u)
-			// AST is left-associative: ((s + t) + u) — walk left spine, collect rights
-			let operands: string[] = [];
-			let cur = node;
-			while (cur.kind === NodeKind.BinaryExpr) {
-				const cd = cur.data as BinaryExprData;
-				if (cd.operator !== "+" || !isStringTyped(cd.left)) break;
-				operands.push(genExpr(g, p, cd.right));
-				cur = cd.left;
-			}
-			operands.push(genExpr(g, p, cur));
-			// operands are in reverse order (rightmost first), reverse them
-			let reversed: string[] = [];
-			let ri = operands.length - 1;
-			while (ri >= 0) {
-				reversed.push(operands[ri]);
-				ri -= 1;
-			}
-			if (reversed.length === 2) {
-				return "msStringConcat(" + reversed[0] + ", " + reversed[1] + ")";
-			}
-			let result = "msStringConcatMany(" + reversed.length;
-			let i = 0;
-			while (i < reversed.length) {
-				result = result + ", " + reversed[i];
-				i += 1;
-			}
-			return result + ")";
-		}
-	}
 	const cOp = mapBinaryOp(d.operator);
 	return "(" + left + " " + cOp + " " + right + ")";
 }
@@ -209,12 +165,6 @@ function isStringTyped(node: Node): boolean {
 function isArrayTyped(node: Node): boolean {
 	if (node.nodeType === null) return false;
 	return node.nodeType.kind === TypeKind.Array;
-}
-
-function isEmptyStringLiteral(node: Node): boolean {
-	if (node.kind !== NodeKind.StringLiteral) return false;
-	const d = node.data as StringLiteralData;
-	return d.value === "";
 }
 
 function mapBinaryOp(op: string): string {
@@ -250,9 +200,15 @@ function genMemberExpr(g: CGen, p: CProc, node: Node): string {
 	const obj = genExpr(g, p, d.object);
 	// Builtin property remapping: .length → .len for string and array types
 	if (d.property === "length" && d.object.nodeType !== null) {
-		if (d.object.nodeType.kind === TypeKind.String || d.object.nodeType.kind === TypeKind.Array) {
+		const ok = d.object.nodeType.kind;
+		if (ok === TypeKind.String || ok === TypeKind.Array || ok === TypeKind.SizedArray || ok === TypeKind.Span) {
 			return obj + ".len";
 		}
+	}
+	if (d.property === "data" && d.object.nodeType !== null) {
+		const ok = d.object.nodeType.kind;
+		if (ok === TypeKind.Array) return obj + ".p->data";
+		if (ok === TypeKind.SizedArray || ok === TypeKind.Span) return obj + ".data";
 	}
 	const field = mangleFieldName(d.property);
 	return obj + "." + field;
@@ -271,8 +227,18 @@ function genArrayAccess(g: CGen, p: CProc, node: Node): string {
 		return "({ int32_t __idx = " + idx + "; if ((uint64_t)__idx >= (uint64_t)(" + arr + ".len)) msRaiseIndexError(__idx, " + arr + ".len); msStringCharAt(" + arr + ", __idx); })";
 	}
 	// Array index read: arr[i] → bounds check + arr.p->data[i]
-	if (d.array.nodeType !== null && d.array.nodeType.kind === TypeKind.Array) {
-		return "({ int32_t __idx = " + idx + "; if ((uint64_t)__idx >= (uint64_t)(" + arr + ".len)) msRaiseIndexError(__idx, " + arr + ".len); " + arr + ".p->data[__idx]; })";
+	if (d.array.nodeType !== null) {
+		const ak = d.array.nodeType.kind;
+		if (ak === TypeKind.Array) {
+			return "({ int32_t __idx = " + idx + "; if ((uint64_t)__idx >= (uint64_t)(" + arr + ".len)) msRaiseIndexError(__idx, " + arr + ".len); " + arr + ".p->data[__idx]; })";
+		}
+		if (ak === TypeKind.SizedArray) {
+			const size = d.array.nodeType.typeFlags;
+			return "({ int32_t __idx = " + idx + "; if ((uint64_t)__idx >= (uint64_t)(" + intToString(size) + ")) msRaiseIndexError(__idx, " + intToString(size) + "); " + arr + ".data[__idx]; })";
+		}
+		if (ak === TypeKind.Span) {
+			return "({ int32_t __idx = " + idx + "; if ((uint64_t)__idx >= (uint64_t)(" + arr + ".len)) msRaiseIndexError(__idx, " + arr + ".len); " + arr + ".data[__idx]; })";
+		}
 	}
 	return arr + "[" + idx + "]";
 }
@@ -292,14 +258,14 @@ function genConditionalExpr(g: CGen, p: CProc, node: Node): string {
 function genTypeAssertion(g: CGen, p: CProc, node: Node): string {
 	const d = node.data as TypeAssertionData;
 	const expr = genExpr(g, p, d.asExpr);
-	const targetType = mangle(d.asType);
+	// Use resolved Type from checker (Nim parity: node.typ), fallback to string mangle for null ctx
+	const targetType = (node.nodeType !== null) ? getTypeDesc(g, node.nodeType) : mangle(d.asType);
 	return "((" + targetType + ")" + expr + ")";
 }
 
 // ===== Call Expression =====
-// Detects closure calls vs direct calls using fnDeclNames from closureCallMarker.
 // Direct call: foo(args)
-// Closure call: MS_CLOSURE_CALL(closureVar, args) or closureVar.fn(closureVar.env, args)
+// Closure call: callee.fn(callee.env, args) — detected via isDirectCall flag from closureCallMarker
 
 // Emit a @runtime call: strip & prefix → &first_arg, add array type suffix.
 function emitRuntimeCall(g: CGen, p: CProc, runtimeName: string, args: Node[]): string {
@@ -346,62 +312,37 @@ function emitRuntimeCall(g: CGen, p: CProc, runtimeName: string, args: Node[]): 
 
 function genCallExpr(g: CGen, p: CProc, node: Node): string {
 	const cd = node.data as CallExprData;
-	let isDirect = false;
 
-	// If no fnDeclNames were collected (no closure marker pass), treat all as direct
-	if (g.fnDeclNames.names.length === 0) isDirect = true;
+	// Pre-resolved symbol from checker (Nim parity: call[0].sym)
+	const sym = node.resolvedSym;
 
-	// Check if callee is a known direct function (not a closure)
-	if (cd.callee.kind === NodeKind.Identifier) {
-		const id = cd.callee.data as IdentifierData;
-		if (nameSetHas(g.fnDeclNames, id.name)) isDirect = true;
-
-		// @runtime("c_name") on top-level function — emit C name directly (Nim sfImportc)
-		// Handles & prefix (mutating → address-of on first arg) and array type suffix.
-		if (g.checkerCtx !== null) {
-			const sym = lookupSymbol(g.checkerCtx.table, id.name);
-			if (sym !== null && sym.runtimeName !== "") {
-				return emitRuntimeCall(g, p, sym.runtimeName, cd.arguments);
-			}
-			// Overload resolution: resolve call to correct mangled name
-			if (sym !== null && hasOverloads(sym)) {
-				const mangledName = resolveOverloadCallName(g, p, sym, node);
-				return mangledName + "(" + joinArgs(g, p, cd.arguments) + ")";
-			}
-			// Unknown identifier (no symbol) → direct call.
-			// DRC-injected lifecycle functions (msStringDecref, msDecref, etc.)
-			// have no symbol in the checker table — emit as direct C function calls.
-			if (sym === null) isDirect = true;
-		}
+	// @runtime("c_name") — emit C name directly (Nim: sfImportc)
+	if (sym !== null && sym.runtimeName !== "") {
+		return emitRuntimeCall(g, p, sym.runtimeName, cd.arguments);
 	}
 
-	// Class method call: console.log(x) → ms_println(x)
-	// Unwrap HiddenDeref: checker inserts HiddenDeref for class member access (pointer types)
-	if (cd.callee.kind === NodeKind.MemberExpr && g.checkerCtx !== null) {
-		const me = cd.callee.data as MemberExprData;
-		let calleeObj = me.object;
-		if (calleeObj.kind === NodeKind.HiddenDeref) {
-			const hd = calleeObj.data as ExprStmtData;
-			calleeObj = hd.expr;
+	// Overloaded call — checker pre-resolved the winner (resolvedOverloadIdx + resolvedSym)
+	if (sym !== null && sym.overloads !== null && sym.overloads.length > 0) {
+		const idx = cd.resolvedOverloadIdx;
+		// Check if winner has runtimeName
+		if (idx === 0 && sym.runtimeName !== "") {
+			return sym.runtimeName + "(" + joinArgs(g, p, cd.arguments) + ")";
 		}
-		if (calleeObj.kind === NodeKind.Identifier) {
-			const objId = calleeObj.data as IdentifierData;
-			const objSym = lookupSymbol(g.checkerCtx.table, objId.name);
-			if (objSym !== null && objSym.symbolKind === SymbolKind.Class) {
-				const methodType = getProperty(objSym.symbolType, me.property);
-				if (methodType.typeName !== "") {
-					return methodType.typeName + "(" + joinArgs(g, p, cd.arguments) + ")";
-				}
-			}
+		if (idx > 0 && idx - 1 < sym.overloads.length && sym.overloads[idx - 1].runtimeName !== "") {
+			return sym.overloads[idx - 1].runtimeName + "(" + joinArgs(g, p, cd.arguments) + ")";
 		}
+		if (idx >= 0) {
+			return safeName(sym.name) + "__" + idx + "(" + joinArgs(g, p, cd.arguments) + ")";
+		}
+		// Fallback: no match → use primary name
+		return safeName(sym.name) + "__0(" + joinArgs(g, p, cd.arguments) + ")";
 	}
-
-	// MemberExpr callee is always a direct call (method/field access)
-	if (cd.callee.kind === NodeKind.MemberExpr) isDirect = true;
 
 	const callee = genExpr(g, p, cd.callee);
 
-	if (isDirect) {
+	// Nim parity: check callConv on callee type, fallback to isDirectCall flag
+
+	if (cd.isDirectCall) {
 		return callee + "(" + joinArgs(g, p, cd.arguments) + ")";
 	}
 
@@ -412,120 +353,6 @@ function genCallExpr(g: CGen, p: CProc, node: Node): string {
 	return "((" + callee + ").fn(" + envArgs + "))";
 }
 
-// ===== Overload Call Resolution =====
-
-function resolveOverloadCallName(g: CGen, p: CProc, sym: Symbol, callNode: Node): string {
-	const cd = callNode.data as CallExprData;
-	// Build candidate Type[] from sym + overloads
-	const candidates: Type[] = [];
-	candidates.push(sym.symbolType);
-	let oi = 0;
-	while (oi < sym.overloads.length) {
-		candidates.push(sym.overloads[oi].symbolType);
-		oi = oi + 1;
-	}
-	// Collect arg types from nodeType annotations (set by checker)
-	const argTypes: Type[] = [];
-	let ai = 0;
-	while (ai < cd.arguments.length) {
-		if (cd.arguments[ai].nodeType !== null) {
-			argTypes.push(cd.arguments[ai].nodeType);
-		} else {
-			// Fallback: use unknown type
-			argTypes.push(sym.symbolType);
-		}
-		ai = ai + 1;
-	}
-	// Inheritance-aware overload resolution (matches checker's resolveOverloadIdxWithInheritance)
-	const idx = codegenResolveOverloadIdx(g, candidates, argTypes);
-	if (idx >= 0) {
-		// Check if winner has runtimeName
-		if (idx === 0 && sym.runtimeName !== "") {
-			return sym.runtimeName;
-		}
-		if (idx > 0 && sym.overloads[idx - 1].runtimeName !== "") {
-			return sym.overloads[idx - 1].runtimeName;
-		}
-		return safeName(sym.name) + "__" + idx;
-	}
-	// Fallback: no match → use primary name (checker should have caught the error)
-	return safeName(sym.name) + "__0";
-}
-
-// Inline inheritance-aware overload resolution for codegen.
-// Mirrors resolveOverloadIdxWithInheritance from checkExprPass.ms without importing it.
-function codegenResolveOverloadIdx(g: CGen, candidates: Type[], argTypes: Type[]): number {
-	let bestIdx = -1;
-	let bestScore = emptyCandidateScore();
-	let bestType: Type = null as unknown as Type;
-	let ambiguous = false;
-	let i = 0;
-	while (i < candidates.length) {
-		if (candidates[i].kind !== TypeKind.Function) { i = i + 1; continue; }
-		const score = scoreCandidatePriority(candidates[i].typeChildren, argTypes, getMinArity(candidates[i]));
-		if (isNoMatch(score)) { i = i + 1; continue; }
-		// Compute inheritance penalty via typeExtra chain
-		let maxDepth = -1;
-		let pi = 0;
-		while (pi < candidates[i].typeChildren.length && pi < argTypes.length) {
-			const pType = candidates[i].typeChildren[pi];
-			const aType = argTypes[pi];
-			if (pType.kind === TypeKind.Object && aType.kind === TypeKind.Object) {
-				if (pType.typeName !== "" && aType.typeName !== "" && pType.typeName !== aType.typeName) {
-					const depth = codegenInheritanceDepth(g, aType, pType);
-					if (depth > 0 && (maxDepth === -1 || depth > maxDepth)) {
-						maxDepth = depth;
-					}
-				}
-			}
-			pi = pi + 1;
-		}
-		if (maxDepth > 0) {
-			score.inheritancePenalty = maxDepth;
-		}
-		if (bestIdx === -1) {
-			bestIdx = i;
-			bestScore = score;
-			bestType = candidates[i];
-			ambiguous = false;
-		} else {
-			const cmp = cmpCandidates(score, bestScore, candidates[i], bestType);
-			if (cmp > 0) {
-				bestIdx = i;
-				bestScore = score;
-				bestType = candidates[i];
-				ambiguous = false;
-			} else if (cmp === 0) {
-				ambiguous = true;
-			}
-		}
-		i = i + 1;
-	}
-	if (ambiguous) return -2;
-	return bestIdx;
-}
-
-// Walk class inheritance chain from sourceType to targetType using checker context.
-function codegenInheritanceDepth(g: CGen, sourceType: Type, targetType: Type): number {
-	if (sourceType === null || targetType === null) return -1;
-	if (sourceType.typeName === "" || targetType.typeName === "") return -1;
-	if (g.checkerCtx === null) return -1;
-	let current = sourceType;
-	let depth = 0;
-	while (current !== null) {
-		depth = depth + 1;
-		if (current.typeExtra === null) return -1;
-		if (current.typeExtra.typeName === "") return -1;
-		if (current.typeExtra.typeName === targetType.typeName) return depth;
-		const baseSym = lookupSymbol(g.checkerCtx.table, current.typeExtra.typeName);
-		if (baseSym === null) return -1;
-		if (baseSym.symbolKind !== SymbolKind.Class) return -1;
-		current = baseSym.symbolType;
-		if (depth > 20) return -1;
-	}
-	return -1;
-}
-
 // ===== Object Literal =====
 // Two cases:
 // 1. Closure pair: { fn: liftedFn, env: { captured vars } } → (msClosure){ .fn = ..., .env = ... }
@@ -534,16 +361,21 @@ function codegenInheritanceDepth(g: CGen, sourceType: Type, targetType: Type): n
 function genObjectLiteral(g: CGen, p: CProc, node: Node): string {
 	const d = node.data as ObjectLiteralData;
 
-	// Detect closure pair: keys are ["fn", "env"] with exactly 2 entries
-	if (d.keys.length === 2 && d.keys[0] === "fn" && d.keys[1] === "env") {
+	// Detect closure pair via NF_CLOSURE flag (set by lambda lifting, no string matching)
+	if ((node.flags & NF_CLOSURE) !== 0) {
 		// Closure literal: (msClosure){ .fn = ..., .env = ... }
 		const fnExpr = genExpr(g, p, d.properties[0]);
 		const envExpr = genExpr(g, p, d.properties[1]);
 		return "(msClosure){ .fn = (void*)" + fnExpr + ", .env = (void*)&" + envExpr + " }";
 	}
 
-	// General struct literal: { .field1 = val1, .field2 = val2 }
-	let result = "{ ";
+	// General struct literal: (StructType){ .field1 = val1, .field2 = val2 }
+	// Use getTypeDesc for prefix if it's a struct-like type (Interface, Result, Tuple)
+	let prefix = "";
+	if (node.nodeType !== null && isNrvoReturnType(node.nodeType)) {
+		prefix = "(" + getTypeDesc(g, node.nodeType) + ")";
+	}
+	let result = prefix + "{ ";
 	for (let i = 0; i < d.keys.length; i += 1) {
 		if (i > 0) result = result + ", ";
 		result = result + "." + mangleFieldName(d.keys[i]) + " = " + genExpr(g, p, d.properties[i]);
@@ -697,151 +529,80 @@ function exprSnippet(input: string): string {
 	const stmt = pd.programStmts[0];
 	if (stmt.kind !== NodeKind.ExprStmt) return "NOT_EXPR_STMT";
 	const es = stmt.data as ExprStmtData;
-	const g = createCGen(null as unknown as CheckerContext);
+	const g = createCGen(null as unknown as CheckerContext, "");
 	const p = createProc("test", null as unknown as Type);
 	return genExpr(g, p, es.expr);
 }
 
-testGroup("C Expr Number", () => {
-	test("integer", () => {
-		check(exprSnippet("42;") === "42");
-	});
-	test("float", () => {
-		check(exprSnippet("3.14;") === "3.14");
-	});
-	test("zero", () => {
-		check(exprSnippet("0;") === "0");
-	});
-});
+test "integer" { check(exprSnippet("42;") === "42"); }
 
-testGroup("C Expr String", () => {
-	test("simple string uses pool ref", () => {
-		const result = exprSnippet("\"hello\";");
-		check(result === "MS_STRING_LIT(&TMP_STR_1, 5)");
-	});
-});
+test "float" { check(exprSnippet("3.14;") === "3.14"); }
 
-testGroup("C Expr Bool", () => {
-	test("true", () => {
-		check(exprSnippet("true;") === "MS_TRUE");
-	});
-	test("false", () => {
-		check(exprSnippet("false;") === "MS_FALSE");
-	});
-});
+test "zero" { check(exprSnippet("0;") === "0"); }
 
-testGroup("C Expr Null", () => {
-	test("null literal", () => {
-		check(exprSnippet("null;") === "MS_NIL");
-	});
-});
+test "simple string uses pool ref" {
+	const result = exprSnippet("\"hello\";");
+	check(result === "MS_STRING_LIT(&TMP_STR_1, 5)");
+}
 
-testGroup("C Expr Identifier", () => {
-	test("simple name", () => {
-		check(exprSnippet("foo;") === "foo");
-	});
-});
+test "true" { check(exprSnippet("true;") === "MS_TRUE"); }
 
-testGroup("C Expr Binary", () => {
-	test("addition", () => {
-		check(exprSnippet("a + b;") === "(a + b)");
-	});
-	test("equality", () => {
-		check(exprSnippet("x === y;") === "(x == y)");
-	});
-	test("not equal", () => {
-		check(exprSnippet("x !== y;") === "(x != y)");
-	});
-	test("nested", () => {
-		check(exprSnippet("a + b * c;") === "(a + (b * c))");
-	});
-});
+test "false" { check(exprSnippet("false;") === "MS_FALSE"); }
 
-testGroup("C Expr Unary", () => {
-	test("negation", () => {
-		check(exprSnippet("-x;") === "(-x)");
-	});
-	test("logical not", () => {
-		check(exprSnippet("!flag;") === "(!flag)");
-	});
-});
+test "null literal" { check(exprSnippet("null;") === "MS_NIL"); }
 
-testGroup("C Expr Call", () => {
-	test("no args", () => {
-		check(exprSnippet("foo();") === "foo()");
-	});
-	test("with args", () => {
-		check(exprSnippet("foo(a, b);") === "foo(a, b)");
-	});
-	test("nested call", () => {
-		check(exprSnippet("foo(bar(x));") === "foo(bar(x))");
-	});
-});
+test "simple name" { check(exprSnippet("foo;") === "foo"); }
 
-testGroup("C Expr Member", () => {
-	test("dot access", () => {
-		check(exprSnippet("obj.x;") === "obj.x");
-	});
-});
+test "addition" { check(exprSnippet("a + b;") === "(a + b)"); }
 
-testGroup("C Expr Array Access", () => {
-	test("bracket access", () => {
-		check(exprSnippet("arr[0];") === "arr[0]");
-	});
-	test("expression index", () => {
-		check(exprSnippet("arr[i + 1];") === "arr[(i + 1)]");
-	});
-});
+test "equality" { check(exprSnippet("x === y;") === "(x == y)"); }
 
-testGroup("C Expr Ternary", () => {
-	test("conditional", () => {
-		check(exprSnippet("a ? b : c;") === "(a ? b : c)");
-	});
-});
+test "not equal" { check(exprSnippet("x !== y;") === "(x != y)"); }
 
+test "nested" { check(exprSnippet("a + b * c;") === "(a + (b * c))"); }
 
-testGroup("C Expr Array", () => {
-	test("empty array", () => {
-		// Without nodeType, falls back to generic msArray
-		check(exprSnippet("[];") === "(msArray){0}");
-	});
-	test("array with elements no type", () => {
-		// Without nodeType (no checker), falls back to temp + push
-		const result = exprSnippet("[1, 2, 3];");
-		// Returns temp name (setup emitted to proc stmts)
-		check(result.length > 0);
-	});
-});
+test "negation" { check(exprSnippet("-x;") === "(-x)"); }
 
-testGroup("C Expr Update", () => {
-	test("postfix increment", () => {
-		check(exprSnippet("x++;") === "(x++)");
-	});
-	test("prefix increment", () => {
-		check(exprSnippet("++x;") === "(++x)");
-	});
-	test("postfix decrement", () => {
-		check(exprSnippet("x--;") === "(x--)");
-	});
-	test("prefix decrement", () => {
-		check(exprSnippet("--x;") === "(--x)");
-	});
-});
+test "logical not" { check(exprSnippet("!flag;") === "(!flag)"); }
 
-testGroup("C Expr New", () => {
-	test("simple new", () => {
-		check(exprSnippet("new Foo();") === "Foo_new()");
-	});
-	test("new with args", () => {
-		check(exprSnippet("new Bar(1, 2);") === "Bar_new(1, 2)");
-	});
-});
+test "no args" { check(exprSnippet("foo();") === "foo()"); }
 
-testGroup("C Expr Move", () => {
-	test("move identifier", () => {
-		check(exprSnippet("move x;") === "x");
-	});
-	test("move call", () => {
-		check(exprSnippet("move f();") === "f()");
-	});
-});
+test "with args" { check(exprSnippet("foo(a, b);") === "foo(a, b)"); }
+
+test "nested call" { check(exprSnippet("foo(bar(x));") === "foo(bar(x))"); }
+
+test "dot access" { check(exprSnippet("obj.x;") === "obj.x"); }
+
+test "bracket access" { check(exprSnippet("arr[0];") === "arr[0]"); }
+
+test "expression index" { check(exprSnippet("arr[i + 1];") === "arr[(i + 1)]"); }
+
+test "conditional" { check(exprSnippet("a ? b : c;") === "(a ? b : c)"); }
+
+test "empty array" {
+	// Without nodeType, falls back to generic msArray
+	check(exprSnippet("[];") === "(msArray){0}");
+}
+
+test "array with elements no type" {
+	// Without nodeType (no checker), falls back to temp + push
+	const result = exprSnippet("[1, 2, 3];");
+	// Returns temp name (setup emitted to proc stmts)
+	check(result.length > 0);
+}
+
+test "postfix increment" { check(exprSnippet("x++;") === "(x++)"); }
+
+test "prefix increment" { check(exprSnippet("++x;") === "(++x)"); }
+
+test "postfix decrement" { check(exprSnippet("x--;") === "(x--)"); }
+
+test "prefix decrement" { check(exprSnippet("--x;") === "(--x)"); }
+
+test "simple new" { check(exprSnippet("new Foo();") === "Foo_new()"); }
+
+test "new with args" { check(exprSnippet("new Bar(1, 2);") === "Bar_new(1, 2)"); }
+
+test "move identifier" { check(exprSnippet("move x;") === "x"); }
+
+test "move call" { check(exprSnippet("move f();") === "f()"); }

@@ -16,7 +16,7 @@ import { lookupSymbol, SymbolKind, defineSymbol, makeSymbol } from "../../checke
 import { TypeKind, unknownType, createObject, createFunction, createArray, typeNameOf } from "../../checker/types";
 import { ExtensionRegistry, ExtensionMethod, createContext, registerExtension, findExtension } from "../../checker/context";
 import { createTransformContext, createTransformContextWithChecker } from "../context";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { parseInput, getStmts, firstExprKind, firstCallArgCount } from "../testUtil";
 
 // ===== Helpers =====
@@ -137,61 +137,65 @@ function setupSubscriptCtx(input: string, receiverName: string, receiverType: st
 }
 
 // ===== Tests =====
+test "getter rewritten to call" {
+	const prog = setupSubscriptCtx("buf[0];", "buf", "Buffer", "get");
+	check(firstExprKind(prog) === NodeKind.CallExpr);
+}
 
-testGroup("Subscript Lowering", () => {
-	test("getter rewritten to call", () => {
-		const prog = setupSubscriptCtx("buf[0];", "buf", "Buffer", "get");
-		check(firstExprKind(prog) === NodeKind.CallExpr);
-	});
-	test("setter rewritten to call", () => {
-		const prog = setupSubscriptCtx("buf[0] = 1;", "buf", "Buffer", "set");
-		check(firstExprKind(prog) === NodeKind.CallExpr);
-	});
-	test("builtin array unchanged", () => {
-		const result = parseInput("arr[0];");
-		if (!result.ok) return;
-		const cc = createContext();
-		const getter = makeGetterExt("Array");
-		registerExtension(cc.extensionRegistry, getter);
-		const arrType = createArray(unknownType());
-		const arrSym = makeSymbol("arr", SymbolKind.Variable, arrType, false);
-		defineSymbol(cc.table, arrSym);
-		const ctx = createTransformContextWithChecker(cc);
-		const prog = lowerSubscript(result.value, ctx);
-		check(firstExprKind(prog) === NodeKind.ArrayAccess);
-	});
-	test("no extension unchanged", () => {
-		const result = parseInput("obj[0];");
-		if (!result.ok) return;
-		const cc = createContext();
-		const objType = createObject("Widget", [], [], false);
-		const objSym = makeSymbol("obj", SymbolKind.Variable, objType, false);
-		defineSymbol(cc.table, objSym);
-		const ctx = createTransformContextWithChecker(cc);
-		const prog = lowerSubscript(result.value, ctx);
-		check(firstExprKind(prog) === NodeKind.ArrayAccess);
-	});
-	test("no checker no rewrite", () => {
-		const result = parseInput("buf[0];");
-		if (!result.ok) return;
-		const ctx = createTransformContext();
-		const prog = lowerSubscript(result.value, ctx);
-		check(firstExprKind(prog) === NodeKind.ArrayAccess);
-	});
-	test("getter has 2 args", () => {
-		const prog = setupSubscriptCtx("buf[i];", "buf", "Buffer", "get");
-		check(firstCallArgCount(prog) === 2);
-	});
-	test("setter has 3 args", () => {
-		const prog = setupSubscriptCtx("buf[i] = v;", "buf", "Buffer", "set");
-		check(firstCallArgCount(prog) === 3);
-	});
-	test("parser accepts backtick function name", () => {
-		const result = parseInput("function `[]`(this b: Buffer, i: number): number { return 0; }");
-		check(result.ok);
-		if (!result.ok) return;
-		const stmts = getStmts(result.value);
-		check(stmts.length > 0);
-		check(stmts[0].kind === NodeKind.FunctionDecl);
-	});
-});
+test "setter rewritten to call" {
+	const prog = setupSubscriptCtx("buf[0] = 1;", "buf", "Buffer", "set");
+	check(firstExprKind(prog) === NodeKind.CallExpr);
+}
+
+test "builtin array unchanged" {
+	const result = parseInput("arr[0];");
+	if (!result.ok) return;
+	const cc = createContext();
+	const getter = makeGetterExt("Array");
+	registerExtension(cc.extensionRegistry, getter);
+	const arrType = createArray(unknownType());
+	const arrSym = makeSymbol("arr", SymbolKind.Variable, arrType, false);
+	defineSymbol(cc.table, arrSym);
+	const ctx = createTransformContextWithChecker(cc);
+	const prog = lowerSubscript(result.value, ctx);
+	check(firstExprKind(prog) === NodeKind.ArrayAccess);
+}
+
+test "no extension unchanged" {
+	const result = parseInput("obj[0];");
+	if (!result.ok) return;
+	const cc = createContext();
+	const objType = createObject("Widget", [], [], false);
+	const objSym = makeSymbol("obj", SymbolKind.Variable, objType, false);
+	defineSymbol(cc.table, objSym);
+	const ctx = createTransformContextWithChecker(cc);
+	const prog = lowerSubscript(result.value, ctx);
+	check(firstExprKind(prog) === NodeKind.ArrayAccess);
+}
+
+test "no checker no rewrite" {
+	const result = parseInput("buf[0];");
+	if (!result.ok) return;
+	const ctx = createTransformContext();
+	const prog = lowerSubscript(result.value, ctx);
+	check(firstExprKind(prog) === NodeKind.ArrayAccess);
+}
+
+test "getter has 2 args" {
+	const prog = setupSubscriptCtx("buf[i];", "buf", "Buffer", "get");
+	check(firstCallArgCount(prog) === 2);
+}
+
+test "setter has 3 args" {
+	const prog = setupSubscriptCtx("buf[i] = v;", "buf", "Buffer", "set");
+	check(firstCallArgCount(prog) === 3);
+}
+
+test "parser accepts backtick function name" {
+	const result = parseInput("function `[]`(this b: Buffer, i: number): number { return 0; }");
+	check(result.ok);
+	if (!result.ok) return;
+	const stmts = getStmts(result.value);
+	check(stmts.length > 0);
+	check(stmts[0].kind === NodeKind.FunctionDecl);
+}

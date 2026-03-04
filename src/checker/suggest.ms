@@ -16,14 +16,14 @@ import { Node, NodeKind, SourceLocation, ProgramData,
 import { Type, TypeKind, typeNameOf,
 	numberType, stringType, booleanType, voidType, nullType,
 	unknownType, neverType, errorType } from "./types";
-import { Symbol, SymbolKind, SymbolTable, Scope, lookupSymbol, makeSymbol } from "./symbol";
+import { Symbol, SymbolKind, SymbolTable, Scope, lookupSymbol, makeSymbol, hasFlag, SF_EXPORTED, SF_MUTABLE } from "./symbol";
 import { CheckerContext } from "./context";
 import { sliceStr, charAt } from "../utils/string";
 import { checkProgram } from "./checkPass";
 import { parseSource } from "../parser/statements/validation";
 // Import parseProgram to trigger callback registration (side-effect import)
 import { parseProgram } from "../parser/statements/core";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 // ===== Data Types =====
 
@@ -46,18 +46,10 @@ export interface SgDiagnostic {
 	severity: number;  // 1=Error, 2=Warning
 }
 
-export interface SgDiagnosticList {
-	items: SgDiagnostic[];
-}
-
 export enum SgCompletionKind {
 	Identifier,
 	MemberAccess,
 	TypeAnnotation,
-}
-
-export interface SgSuggestList {
-	items: SgSuggest[];
 }
 
 export interface SgDocumentSymbol {
@@ -67,17 +59,9 @@ export interface SgDocumentSymbol {
 	detail: string;    // type signature for outline view
 }
 
-export interface SgDocumentSymbolList {
-	items: SgDocumentSymbol[];
-}
-
 export interface SgSignatureInfo {
 	label: string;
 	paramLabels: string[];
-}
-
-export interface SgSignatureList {
-	items: SgSignatureInfo[];
 }
 
 // ===== sgTypeToString — full recursive type formatting =====
@@ -386,7 +370,7 @@ export function sgGetSymbolAtCursor(ctx: CheckerContext, program: Node, line: nu
 		const suggest: SgSuggest = {
 			name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
 			location: sym.location, prefixScore: 0, scopeDepth: 0, contextFit: false,
-			isExported: sym.isExported, isMutable: sym.isMutable,
+			isExported: hasFlag(sym, SF_EXPORTED), isMutable: hasFlag(sym, SF_MUTABLE),
 		};
 		return suggest;
 	}
@@ -398,7 +382,7 @@ export function sgGetSymbolAtCursor(ctx: CheckerContext, program: Node, line: nu
 		const suggest: SgSuggest = {
 			name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
 			location: sym.location, prefixScore: 0, scopeDepth: 0, contextFit: false,
-			isExported: sym.isExported, isMutable: sym.isMutable,
+			isExported: hasFlag(sym, SF_EXPORTED), isMutable: hasFlag(sym, SF_MUTABLE),
 		};
 		return suggest;
 	}
@@ -410,7 +394,7 @@ export function sgGetSymbolAtCursor(ctx: CheckerContext, program: Node, line: nu
 		const suggest: SgSuggest = {
 			name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
 			location: sym.location, prefixScore: 0, scopeDepth: 0, contextFit: false,
-			isExported: sym.isExported, isMutable: sym.isMutable,
+			isExported: hasFlag(sym, SF_EXPORTED), isMutable: hasFlag(sym, SF_MUTABLE),
 		};
 		return suggest;
 	}
@@ -521,8 +505,8 @@ export function sgSymbolDetail(suggest: SgSuggest): string {
 
 // ===== sgCollectDiagnostics — wrap checker errors =====
 
-export function sgCollectDiagnostics(ctx: CheckerContext): SgDiagnosticList {
-	const result: SgDiagnosticList = { items: [] };
+export function sgCollectDiagnostics(ctx: CheckerContext): SgDiagnostic[] {
+	const result: SgDiagnostic[] = [];
 	for (let i = 0; i < ctx.errors.length; i = i + 1) {
 		const diag: SgDiagnostic = {
 			message: ctx.errors[i],
@@ -530,7 +514,7 @@ export function sgCollectDiagnostics(ctx: CheckerContext): SgDiagnosticList {
 			column: 0,
 			severity: 1,
 		};
-		result.items.push(diag);
+		result.push(diag);
 	}
 	return result;
 }
@@ -629,15 +613,15 @@ function sgCompareSuggestions(a: SgSuggest, b: SgSuggest): number {
 	return 0;
 }
 
-function sgSortSuggestions(list: SgSuggestList): void {
-	for (let i = 1; i < list.items.length; i = i + 1) {
-		const current = list.items[i];
+function sgSortSuggestions(list: SgSuggest[]): void {
+	for (let i = 1; i < list.length; i = i + 1) {
+		const current = list[i];
 		let j = i - 1;
-		while (j >= 0 && sgCompareSuggestions(list.items[j], current) > 0) {
-			list.items[j + 1] = list.items[j];
+		while (j >= 0 && sgCompareSuggestions(list[j], current) > 0) {
+			list[j + 1] = list[j];
 			j = j - 1;
 		}
-		list.items[j + 1] = current;
+		list[j + 1] = current;
 	}
 }
 
@@ -679,8 +663,8 @@ export function sgGetPrefix(source: string, line: number, col: number): string {
 
 // ===== sgGetCompletionCandidates — collect matching symbols =====
 
-function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverType: Type): SgSuggestList {
-	const result: SgSuggestList = { items: [] };
+function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverType: Type): SgSuggest[] {
+	const result: SgSuggest[] = [];
 	// Dot completion: properties from receiver type
 	if (receiverType !== null && receiverType.kind === TypeKind.Object) {
 		for (let i = 0; i < receiverType.typeNames.length; i = i + 1) {
@@ -695,7 +679,7 @@ function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverTyp
 					location: loc, prefixScore: ps, scopeDepth: 0, contextFit: false,
 					isExported: false, isMutable: false,
 				};
-				result.items.push(item);
+				result.push(item);
 			}
 		}
 	}
@@ -711,7 +695,7 @@ function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverTyp
 					location: loc, prefixScore: ps, scopeDepth: 0, contextFit: false,
 					isExported: false, isMutable: false,
 				};
-				result.items.push(item);
+				result.push(item);
 			}
 		}
 	}
@@ -729,7 +713,7 @@ function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverTyp
 						location: loc, prefixScore: ps, scopeDepth: 0, contextFit: false,
 					isExported: false, isMutable: false,
 					};
-					result.items.push(item);
+					result.push(item);
 				}
 			}
 		}
@@ -738,13 +722,13 @@ function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverTyp
 	return result;
 }
 
-export function sgGetCompletionCandidates(ctx: CheckerContext, kind: SgCompletionKind, prefix: string, receiverType: Type): SgSuggestList {
+export function sgGetCompletionCandidates(ctx: CheckerContext, kind: SgCompletionKind, prefix: string, receiverType: Type): SgSuggest[] {
 	if (kind === SgCompletionKind.MemberAccess) {
 		return sgCompleteMemberAccess(ctx, prefix, receiverType);
 	}
 
 	// Walk scope chain for Identifier or TypeAnnotation
-	const result: SgSuggestList = { items: [] };
+	const result: SgSuggest[] = [];
 	let scope = ctx.table.current;
 	let depth = 0;
 	while (scope !== null) {
@@ -758,9 +742,9 @@ export function sgGetCompletionCandidates(ctx: CheckerContext, kind: SgCompletio
 					const item: SgSuggest = {
 						name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
 						location: sym.location, prefixScore: ps, scopeDepth: depth, contextFit: cf,
-						isExported: sym.isExported, isMutable: sym.isMutable,
+						isExported: hasFlag(sym, SF_EXPORTED), isMutable: hasFlag(sym, SF_MUTABLE),
 					};
-					result.items.push(item);
+					result.push(item);
 				}
 			}
 		}
@@ -795,48 +779,48 @@ function sgGetSymbolDetail(ctx: CheckerContext, name: string): string {
 	return sgTypeToString(sym.symbolType);
 }
 
-function sgCollectOneSymbol(node: Node, ctx: CheckerContext, result: SgDocumentSymbolList): void {
+function sgCollectOneSymbol(node: Node, ctx: CheckerContext, result: SgDocumentSymbol[]): void {
 	if (node === null) return;
 
 	if (node.kind === NodeKind.FunctionDecl) {
 		const fd = node.data as FunctionDeclData;
 		const dt = sgGetSymbolDetail(ctx, fd.fnName);
 		const item: SgDocumentSymbol = { name: fd.fnName, kind: SymbolKind.Function, location: node.location, detail: dt };
-		result.items.push(item);
+		result.push(item);
 		return;
 	}
 	if (node.kind === NodeKind.VariableDecl) {
 		const vd = node.data as VariableDeclData;
 		const dt = sgGetSymbolDetail(ctx, vd.declName);
 		const item: SgDocumentSymbol = { name: vd.declName, kind: SymbolKind.Variable, location: node.location, detail: dt };
-		result.items.push(item);
+		result.push(item);
 		return;
 	}
 	if (node.kind === NodeKind.InterfaceDecl) {
 		const ifd = node.data as InterfaceDeclData;
 		const dt = sgJoinFieldNames(ifd.interfaceFields);
 		const item: SgDocumentSymbol = { name: ifd.interfaceName, kind: SymbolKind.Interface, location: node.location, detail: dt };
-		result.items.push(item);
+		result.push(item);
 		return;
 	}
 	if (node.kind === NodeKind.EnumDecl) {
 		const ed = node.data as EnumDeclData;
 		const dt = sgJoinFieldNames(ed.enumMembers);
 		const item: SgDocumentSymbol = { name: ed.enumName, kind: SymbolKind.Enum, location: node.location, detail: dt };
-		result.items.push(item);
+		result.push(item);
 		return;
 	}
 	if (node.kind === NodeKind.ClassDecl) {
 		const cd = node.data as ClassDeclData;
 		const item: SgDocumentSymbol = { name: cd.className, kind: SymbolKind.Class, location: node.location, detail: cd.classExtends };
-		result.items.push(item);
+		result.push(item);
 		return;
 	}
 	if (node.kind === NodeKind.TypeAliasDecl) {
 		const td = node.data as TypeAliasDeclData;
 		const dt = sgGetSymbolDetail(ctx, td.aliasName);
 		const item: SgDocumentSymbol = { name: td.aliasName, kind: SymbolKind.TypeAlias, location: node.location, detail: dt };
-		result.items.push(item);
+		result.push(item);
 		return;
 	}
 	if (node.kind === NodeKind.ExportDecl) {
@@ -846,8 +830,8 @@ function sgCollectOneSymbol(node: Node, ctx: CheckerContext, result: SgDocumentS
 	}
 }
 
-export function sgCollectSymbolsInFile(ctx: CheckerContext, program: Node): SgDocumentSymbolList {
-	const result: SgDocumentSymbolList = { items: [] };
+export function sgCollectSymbolsInFile(ctx: CheckerContext, program: Node): SgDocumentSymbol[] {
+	const result: SgDocumentSymbol[] = [];
 	if (program === null || program.kind !== NodeKind.Program) return result;
 	const pd = program.data as ProgramData;
 	for (let i = 0; i < pd.programStmts.length; i = i + 1) {
@@ -877,21 +861,21 @@ function sgBuildSignatureInfo(name: string, fnType: Type): SgSignatureInfo {
 	return info;
 }
 
-export function sgFormatSignature(sym: Symbol): SgSignatureList {
-	const result: SgSignatureList = { items: [] };
+export function sgFormatSignature(sym: Symbol): SgSignatureInfo[] {
+	const result: SgSignatureInfo[] = [];
 	if (sym === null) return result;
 	if (sym.symbolType === null || sym.symbolType.kind !== TypeKind.Function) return result;
 
 	// Main signature
 	const main = sgBuildSignatureInfo(sym.name, sym.symbolType);
-	result.items.push(main);
+	result.push(main);
 
 	// Overloads
 	for (let i = 0; i < sym.overloads.length; i = i + 1) {
 		const ovl = sym.overloads[i];
 		if (ovl.symbolType !== null && ovl.symbolType.kind === TypeKind.Function) {
 			const ovlInfo = sgBuildSignatureInfo(sym.name, ovl.symbolType);
-			result.items.push(ovlInfo);
+			result.push(ovlInfo);
 		}
 	}
 
@@ -980,17 +964,13 @@ export interface SgInlayHint {
 	hintKind: SgInlayHintKind;
 }
 
-export interface SgInlayHintList {
-	items: SgInlayHint[];
-}
-
 // Walk top-level statements in range [startLine, endLine] (1-indexed, inclusive).
 // Collect type hints for variables without annotations,
 // and parameter name hints at call sites.
 export function sgCollectInlayHints(
 	ctx: CheckerContext, program: Node, startLine: number, endLine: number
-): SgInlayHintList {
-	const result: SgInlayHintList = { items: [] };
+): SgInlayHint[] {
+	const result: SgInlayHint[] = [];
 	const pd = program.data as ProgramData;
 	for (let i = 0; i < pd.programStmts.length; i = i + 1) {
 		const stmt = pd.programStmts[i];
@@ -1000,7 +980,7 @@ export function sgCollectInlayHints(
 }
 
 function sgCollectHintsInNode(
-	ctx: CheckerContext, node: Node, startLine: number, endLine: number, hints: SgInlayHintList
+	ctx: CheckerContext, node: Node, startLine: number, endLine: number, hints: SgInlayHint[]
 ): void {
 	if (node === null) return;
 	const loc = node.location;
@@ -1079,7 +1059,7 @@ function sgCollectHintsInNode(
 }
 
 function sgCollectVarTypeHint(
-	ctx: CheckerContext, node: Node, startLine: number, endLine: number, hints: SgInlayHintList
+	ctx: CheckerContext, node: Node, startLine: number, endLine: number, hints: SgInlayHint[]
 ): void {
 	const vd = node.data as VariableDeclData;
 	if (node.location.line < startLine) return;
@@ -1101,11 +1081,11 @@ function sgCollectVarTypeHint(
 		col: node.location.column + vd.declName.length,
 		hintKind: SgInlayHintKind.Type,
 	};
-	hints.items.push(hint);
+	hints.push(hint);
 }
 
 function sgCollectCallParamHints(
-	ctx: CheckerContext, node: Node, startLine: number, endLine: number, hints: SgInlayHintList
+	ctx: CheckerContext, node: Node, startLine: number, endLine: number, hints: SgInlayHint[]
 ): void {
 	const cd = node.data as CallExprData;
 	if (node.location.line < startLine) return;
@@ -1145,7 +1125,7 @@ function sgCollectCallParamHints(
 				col: arg.location.column,
 				hintKind: SgInlayHintKind.Parameter,
 			};
-			hints.items.push(hint);
+			hints.push(hint);
 		}
 	}
 
@@ -1165,32 +1145,28 @@ export interface SgSymbolRef {
 	isDecl: boolean;
 }
 
-export interface SgSymbolRefList {
-	items: SgSymbolRef[];
-}
-
-export function sgCollectReferences(program: Node): SgSymbolRefList {
-	const result: SgSymbolRefList = { items: [] };
+export function sgCollectReferences(program: Node): SgSymbolRef[] {
+	const result: SgSymbolRef[] = [];
 	if (program === null) return result;
 	sgCollectRefsInNode(program, result);
 	return result;
 }
 
-function sgCollectRefsInNode(node: Node, refs: SgSymbolRefList): void {
+function sgCollectRefsInNode(node: Node, refs: SgSymbolRef[]): void {
 	if (node === null) return;
 	const loc = node.location;
 
 	if (node.kind === NodeKind.Identifier) {
 		const id = node.data as IdentifierData;
 		const ref: SgSymbolRef = { name: id.name, line: loc.line, col: loc.column, nameLen: id.name.length, isDecl: false };
-		refs.items.push(ref);
+		refs.push(ref);
 		return;
 	}
 
 	if (node.kind === NodeKind.VariableDecl) {
 		const vd = node.data as VariableDeclData;
 		const ref: SgSymbolRef = { name: vd.declName, line: loc.line, col: loc.column, nameLen: vd.declName.length, isDecl: true };
-		refs.items.push(ref);
+		refs.push(ref);
 		if (vd.initializer !== null) sgCollectRefsInNode(vd.initializer, refs);
 		return;
 	}
@@ -1198,7 +1174,7 @@ function sgCollectRefsInNode(node: Node, refs: SgSymbolRefList): void {
 	if (node.kind === NodeKind.FunctionDecl) {
 		const fd = node.data as FunctionDeclData;
 		const ref: SgSymbolRef = { name: fd.fnName, line: loc.line, col: loc.column, nameLen: fd.fnName.length, isDecl: true };
-		refs.items.push(ref);
+		refs.push(ref);
 		if (fd.fnBody !== null) sgCollectRefsInNode(fd.fnBody, refs);
 		return;
 	}
@@ -1206,21 +1182,21 @@ function sgCollectRefsInNode(node: Node, refs: SgSymbolRefList): void {
 	if (node.kind === NodeKind.InterfaceDecl) {
 		const id = node.data as InterfaceDeclData;
 		const ref: SgSymbolRef = { name: id.interfaceName, line: loc.line, col: loc.column, nameLen: id.interfaceName.length, isDecl: true };
-		refs.items.push(ref);
+		refs.push(ref);
 		return;
 	}
 
 	if (node.kind === NodeKind.EnumDecl) {
 		const ed = node.data as EnumDeclData;
 		const ref: SgSymbolRef = { name: ed.enumName, line: loc.line, col: loc.column, nameLen: ed.enumName.length, isDecl: true };
-		refs.items.push(ref);
+		refs.push(ref);
 		return;
 	}
 
 	if (node.kind === NodeKind.ClassDecl) {
 		const cd = node.data as ClassDeclData;
 		const ref: SgSymbolRef = { name: cd.className, line: loc.line, col: loc.column, nameLen: cd.className.length, isDecl: true };
-		refs.items.push(ref);
+		refs.push(ref);
 		for (let ci = 0; ci < cd.classBody.length; ci = ci + 1) {
 			sgCollectRefsInNode(cd.classBody[ci], refs);
 		}
@@ -1232,7 +1208,7 @@ function sgCollectRefsInNode(node: Node, refs: SgSymbolRefList): void {
 }
 
 // Split out compound node recursion to avoid codegen function-size limits
-function sgCollectRefsInCompound(node: Node, refs: SgSymbolRefList): void {
+function sgCollectRefsInCompound(node: Node, refs: SgSymbolRef[]): void {
 	if (node.kind === NodeKind.Program) {
 		const pd = node.data as ProgramData;
 		for (let i = 0; i < pd.programStmts.length; i = i + 1) {
@@ -1327,593 +1303,563 @@ function sgCollectRefsInCompound(node: Node, refs: SgSymbolRefList): void {
 	}
 }
 
-export function sgFindUsagesByName(refs: SgSymbolRefList, name: string): SgSymbolRefList {
-	const result: SgSymbolRefList = { items: [] };
-	for (let i = 0; i < refs.items.length; i = i + 1) {
-		if (refs.items[i].name === name) {
-			const r = refs.items[i];
+export function sgFindUsagesByName(refs: SgSymbolRef[], name: string): SgSymbolRef[] {
+	const result: SgSymbolRef[] = [];
+	for (let i = 0; i < refs.length; i = i + 1) {
+		if (refs[i].name === name) {
+			const r = refs[i];
 			const ref: SgSymbolRef = { name: r.name, line: r.line, col: r.col, nameLen: r.nameLen, isDecl: r.isDecl };
-			result.items.push(ref);
+			result.push(ref);
 		}
 	}
 	return result;
 }
 
 // ===== Tests =====
+test "number" { check(sgTypeToString(numberType()) === "number"); }
 
-testGroup("sgTypeToString Primitives", () => {
-	test("number", () => {
-		check(sgTypeToString(numberType()) === "number");
-	});
-	test("string", () => {
-		check(sgTypeToString(stringType()) === "string");
-	});
-	test("boolean", () => {
-		check(sgTypeToString(booleanType()) === "boolean");
-	});
-	test("void", () => {
-		check(sgTypeToString(voidType()) === "void");
-	});
-	test("null", () => {
-		check(sgTypeToString(nullType()) === "null");
-	});
-	test("unknown", () => {
-		check(sgTypeToString(unknownType()) === "unknown");
-	});
-	test("never", () => {
-		check(sgTypeToString(neverType()) === "never");
-	});
-	test("error", () => {
-		check(sgTypeToString(errorType()) === "error");
-	});
-});
+test "string" { check(sgTypeToString(stringType()) === "string"); }
+
+test "boolean" { check(sgTypeToString(booleanType()) === "boolean"); }
+
+test "void" { check(sgTypeToString(voidType()) === "void"); }
+
+test "null" { check(sgTypeToString(nullType()) === "null"); }
+
+test "unknown" { check(sgTypeToString(unknownType()) === "unknown"); }
+
+test "never" { check(sgTypeToString(neverType()) === "never"); }
+
+test "error" { check(sgTypeToString(errorType()) === "error"); }
 
 import { createArray, createFunction, createEnum, createObject, createResult } from "./types";
+test "array" {
+	const t = createArray(numberType());
+	check(sgTypeToString(t) === "number[]");
+}
 
-testGroup("sgTypeToString Compound", () => {
-	test("array", () => {
-		const t = createArray(numberType());
-		check(sgTypeToString(t) === "number[]");
-	});
-	test("function no params", () => {
-		const params: Type[] = [];
-		const names: string[] = [];
-		const t = createFunction(params, names, voidType());
-		check(sgTypeToString(t) === "() => void");
-	});
-	test("function with params", () => {
-		const params: Type[] = [numberType(), stringType()];
-		const names: string[] = ["a", "b"];
-		const t = createFunction(params, names, booleanType());
-		check(sgTypeToString(t) === "(a: number, b: string) => boolean");
-	});
-	test("enum", () => {
-		const members: string[] = ["A", "B"];
-		const t = createEnum("Color", members);
-		check(sgTypeToString(t) === "Color");
-	});
-	test("named object", () => {
-		const propNames: string[] = ["x", "y"];
-		const propTypes: Type[] = [numberType(), numberType()];
-		const t = createObject("Point", propNames, propTypes, true);
-		check(sgTypeToString(t) === "Point");
-	});
-	test("result", () => {
-		const t = createResult(numberType(), stringType());
-		check(sgTypeToString(t) === "Result<number, string>");
-	});
-});
+test "function no params" {
+	const params: Type[] = [];
+	const names: string[] = [];
+	const t = createFunction(params, names, voidType());
+	check(sgTypeToString(t) === "() => void");
+}
 
-testGroup("sgFindNodeAtPosition", () => {
-	test("find identifier in simple decl", () => {
-		const pr = parseSource("const x = 42;");
-		if (!pr.ok) { check(false); return; }
-		// "const x" - x is at col 6
-		const node = sgFindNodeAtPosition(pr.value, 1, 6);
-		check(node !== null);
-	});
-	test("find in function body", () => {
-		const pr = parseSource("function foo() { return 1; }");
-		if (!pr.ok) { check(false); return; }
-		const node = sgFindNodeAtPosition(pr.value, 1, 17);
-		check(node !== null);
-	});
-	test("returns null for null node", () => {
-		const nullNode = null as unknown as Node;
-		const node = sgFindNodeAtPosition(nullNode, 1, 0);
-		check(node === null);
-	});
-});
+test "function with params" {
+	const params: Type[] = [numberType(), stringType()];
+	const names: string[] = ["a", "b"];
+	const t = createFunction(params, names, booleanType());
+	check(sgTypeToString(t) === "(a: number, b: string) => boolean");
+}
 
-testGroup("sgGetSymbolAtCursor", () => {
-	test("returns null for unknown position", () => {
-		const pr = parseSource("const x = 1;");
-		if (!pr.ok) { check(false); return; }
-		const ctx = checkProgram(pr.value);
-		const sg = sgGetSymbolAtCursor(ctx, pr.value, 100, 0);
-		check(sg === null);
-	});
-});
+test "enum" {
+	const members: string[] = ["A", "B"];
+	const t = createEnum("Color", members);
+	check(sgTypeToString(t) === "Color");
+}
 
-testGroup("sgFormatHover", () => {
-	test("format variable hover", () => {
-		const loc: SourceLocation = { line: 1, column: 0 };
-		const suggest: SgSuggest = {
-			name: "count", kind: SymbolKind.Variable, symType: numberType(),
-			location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
-			isExported: false, isMutable: false,
-		};
-		const hover = sgFormatHover(suggest);
-		check(hover === "```ms\nconst count: number\n```");
-	});
-	test("format function hover", () => {
-		const loc: SourceLocation = { line: 1, column: 0 };
-		const params: Type[] = [stringType()];
-		const names: string[] = ["s"];
-		const fnType = createFunction(params, names, voidType());
-		const suggest: SgSuggest = {
-			name: "greet", kind: SymbolKind.Function, symType: fnType,
-			location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
-			isExported: false, isMutable: false,
-		};
-		const hover = sgFormatHover(suggest);
-		check(hover === "```ms\nfunction greet(s: string): void\n```");
-	});
-	test("format interface hover", () => {
-		const loc: SourceLocation = { line: 1, column: 0 };
-		const suggest: SgSuggest = {
-			name: "Point", kind: SymbolKind.Interface, symType: unknownType(),
-			location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
-			isExported: false, isMutable: false,
-		};
-		check(sgFormatHover(suggest) === "```ms\ninterface Point\n```");
-	});
-	test("format class hover", () => {
-		const loc: SourceLocation = { line: 1, column: 0 };
-		const suggest: SgSuggest = {
-			name: "Vec", kind: SymbolKind.Class, symType: unknownType(),
-			location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
-			isExported: false, isMutable: false,
-		};
-		check(sgFormatHover(suggest) === "```ms\nclass Vec\n```");
-	});
-	test("format enum hover", () => {
-		const loc: SourceLocation = { line: 1, column: 0 };
-		const suggest: SgSuggest = {
-			name: "Color", kind: SymbolKind.Enum, symType: unknownType(),
-			location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
-			isExported: false, isMutable: false,
-		};
-		check(sgFormatHover(suggest) === "```ms\nenum Color\n```");
-	});
-	test("format type alias hover", () => {
-		const loc: SourceLocation = { line: 1, column: 0 };
-		const suggest: SgSuggest = {
-			name: "Id", kind: SymbolKind.TypeAlias, symType: numberType(),
-			location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
-			isExported: false, isMutable: false,
-		};
-		check(sgFormatHover(suggest) === "```ms\ntype Id = number\n```");
-	});
-	test("format let variable hover", () => {
-		const loc: SourceLocation = { line: 1, column: 0 };
-		const suggest: SgSuggest = {
-			name: "x", kind: SymbolKind.Variable, symType: stringType(),
-			location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
-			isExported: false, isMutable: true,
-		};
-		check(sgFormatHover(suggest) === "```ms\nlet x: string\n```");
-	});
-	test("format parameter hover", () => {
-		const loc: SourceLocation = { line: 1, column: 0 };
-		const suggest: SgSuggest = {
-			name: "name", kind: SymbolKind.Parameter, symType: stringType(),
-			location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
-			isExported: false, isMutable: false,
-		};
-		check(sgFormatHover(suggest) === "```ms\n(parameter) name: string\n```");
-	});
-	test("format property hover", () => {
-		const loc: SourceLocation = { line: 1, column: 0 };
-		const suggest: SgSuggest = {
-			name: "x", kind: SymbolKind.Property, symType: numberType(),
-			location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
-			isExported: false, isMutable: false,
-		};
-		check(sgFormatHover(suggest) === "```ms\n(property) x: number\n```");
-	});
-	test("format method hover", () => {
-		const loc: SourceLocation = { line: 1, column: 0 };
-		const params: Type[] = [stringType()];
-		const names: string[] = ["item"];
-		const fnType = createFunction(params, names, voidType());
-		const suggest: SgSuggest = {
-			name: "push", kind: SymbolKind.Method, symType: fnType,
-			location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
-			isExported: false, isMutable: false,
-		};
-		check(sgFormatHover(suggest) === "```ms\n(method) push(item: string): void\n```");
-	});
-	test("null suggest returns empty", () => {
-		const sg = null as unknown as SgSuggest;
-		check(sgFormatHover(sg) === "");
-	});
-});
+test "named object" {
+	const propNames: string[] = ["x", "y"];
+	const propTypes: Type[] = [numberType(), numberType()];
+	const t = createObject("Point", propNames, propTypes, true);
+	check(sgTypeToString(t) === "Point");
+}
 
-testGroup("sgCollectDiagnostics", () => {
-	test("empty errors", () => {
-		const pr = parseSource("const x = 1;");
-		if (!pr.ok) { check(false); return; }
-		const ctx = checkProgram(pr.value);
-		const diags = sgCollectDiagnostics(ctx);
-		check(diags.items.length === 0);
-	});
-});
+test "result" {
+	const t = createResult(numberType(), stringType());
+	check(sgTypeToString(t) === "Result<number, string>");
+}
 
-testGroup("sgDetectCompletionContext", () => {
-	test("dot triggers MemberAccess", () => {
-		// "foo.b" — cursor at col 5 (after 'b')
-		check(sgDetectCompletionContext("foo.b", 1, 5) === SgCompletionKind.MemberAccess);
-	});
-	test("dot with no prefix", () => {
-		// "foo." — cursor at col 4 (right after '.')
-		check(sgDetectCompletionContext("foo.", 1, 4) === SgCompletionKind.MemberAccess);
-	});
-	test("colon triggers TypeAnnotation", () => {
-		// "x: num" — cursor at col 6
-		check(sgDetectCompletionContext("x: num", 1, 6) === SgCompletionKind.TypeAnnotation);
-	});
-	test("bare identifier", () => {
-		// "con" — cursor at col 3
-		check(sgDetectCompletionContext("con", 1, 3) === SgCompletionKind.Identifier);
-	});
-	test("start of line", () => {
-		check(sgDetectCompletionContext("x", 1, 0) === SgCompletionKind.Identifier);
-	});
-});
+test "find identifier in simple decl" {
+	const pr = parseSource("const x = 42;");
+	if (!pr.ok) { check(false); return; }
+	// "const x" - x is at col 6
+	const node = sgFindNodeAtPosition(pr.value, 1, 6);
+	check(node !== null);
+}
 
-testGroup("sgGetPrefix", () => {
-	test("extracts prefix", () => {
-		check(sgGetPrefix("foo.bar", 1, 7) === "bar");
-	});
-	test("no prefix after dot", () => {
-		check(sgGetPrefix("foo.", 1, 4) === "");
-	});
-	test("whole word", () => {
-		check(sgGetPrefix("hello", 1, 5) === "hello");
-	});
-	test("empty at start", () => {
-		check(sgGetPrefix("x", 1, 0) === "");
-	});
-	test("prefix with underscore", () => {
-		check(sgGetPrefix("my_var", 1, 6) === "my_var");
-	});
-	test("second line", () => {
-		check(sgGetPrefix("abc\ndef", 2, 3) === "def");
-	});
-});
+test "find in function body" {
+	const pr = parseSource("function foo() { return 1; }");
+	if (!pr.ok) { check(false); return; }
+	const node = sgFindNodeAtPosition(pr.value, 1, 17);
+	check(node !== null);
+}
 
-testGroup("sgGetCompletionCandidates Identifier", () => {
-	test("finds top-level symbols", () => {
-		const pr = parseSource("const abc = 1;\nconst abd = 2;\nconst xyz = 3;");
-		if (!pr.ok) { check(false); return; }
-		const ctx = checkProgram(pr.value);
-		const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "ab", null as unknown as Type);
-		check(candidates.items.length === 2);
-	});
-	test("empty prefix returns all", () => {
-		const pr = parseSource("const a = 1;\nconst b = 2;");
-		if (!pr.ok) { check(false); return; }
-		const ctx = checkProgram(pr.value);
-		const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "", null as unknown as Type);
-		check(candidates.items.length >= 2);
-	});
-	test("no match returns empty", () => {
-		const pr = parseSource("const abc = 1;");
-		if (!pr.ok) { check(false); return; }
-		const ctx = checkProgram(pr.value);
-		const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "zzz", null as unknown as Type);
-		check(candidates.items.length === 0);
-	});
-});
+test "returns null for null node" {
+	const nullNode = null as unknown as Node;
+	const node = sgFindNodeAtPosition(nullNode, 1, 0);
+	check(node === null);
+}
 
-testGroup("sgGetCompletionCandidates TypeAnnotation", () => {
-	test("only returns types", () => {
-		const pr = parseSource("interface Foo { x: number; }\nconst y = 1;");
-		if (!pr.ok) { check(false); return; }
-		const ctx = checkProgram(pr.value);
-		const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.TypeAnnotation, "", null as unknown as Type);
-		// Should include Foo (interface) but not y (variable)
-		let hasFoo = false;
-		let hasY = false;
-		for (let i = 0; i < candidates.items.length; i = i + 1) {
-			if (candidates.items[i].name === "Foo") hasFoo = true;
-			if (candidates.items[i].name === "y") hasY = true;
-		}
-		check(hasFoo);
-		check(!hasY);
-	});
-});
+test "returns null for unknown position" {
+	const pr = parseSource("const x = 1;");
+	if (!pr.ok) { check(false); return; }
+	const ctx = checkProgram(pr.value);
+	const sg = sgGetSymbolAtCursor(ctx, pr.value, 100, 0);
+	check(sg === null);
+}
 
-testGroup("sgGetCompletionCandidates MemberAccess", () => {
-	test("object properties", () => {
-		const propNames: string[] = ["x", "y", "z"];
-		const propTypes: Type[] = [numberType(), numberType(), stringType()];
-		const objType = createObject("Point", propNames, propTypes, true);
-		const pr = parseSource("const a = 1;");
-		if (!pr.ok) { check(false); return; }
-		const ctx = checkProgram(pr.value);
-		const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.MemberAccess, "", objType);
-		check(candidates.items.length === 3);
-	});
-	test("object properties with prefix", () => {
-		const propNames: string[] = ["xPos", "yPos", "name"];
-		const propTypes: Type[] = [numberType(), numberType(), stringType()];
-		const objType = createObject("Obj", propNames, propTypes, true);
-		const pr = parseSource("const a = 1;");
-		if (!pr.ok) { check(false); return; }
-		const ctx = checkProgram(pr.value);
-		const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.MemberAccess, "x", objType);
-		check(candidates.items.length === 1);
-		check(candidates.items[0].name === "xPos");
-	});
-	test("enum members", () => {
-		const members: string[] = ["Red", "Green", "Blue"];
-		const enumType = createEnum("Color", members);
-		const pr = parseSource("const a = 1;");
-		if (!pr.ok) { check(false); return; }
-		const ctx = checkProgram(pr.value);
-		const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.MemberAccess, "", enumType);
-		check(candidates.items.length === 3);
-	});
-	test("null receiver returns empty", () => {
-		const pr = parseSource("const a = 1;");
-		if (!pr.ok) { check(false); return; }
-		const ctx = checkProgram(pr.value);
-		const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.MemberAccess, "", null as unknown as Type);
-		check(candidates.items.length === 0);
-	});
-});
+test "format variable hover" {
+	const loc: SourceLocation = { line: 1, column: 0 };
+	const suggest: SgSuggest = {
+		name: "count", kind: SymbolKind.Variable, symType: numberType(),
+		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+		isExported: false, isMutable: false,
+	};
+	const hover = sgFormatHover(suggest);
+	check(hover === "```ms\nconst count: number\n```");
+}
 
-testGroup("sgPrefixMatch", () => {
-	test("exact prefix", () => {
-		check(sgPrefixMatch("ab", "abc") === 2);
-	});
-	test("substring", () => {
-		check(sgPrefixMatch("bc", "abcd") === 1);
-	});
-	test("no match", () => {
-		check(sgPrefixMatch("zz", "abc") === 0);
-	});
-	test("case insensitive prefix", () => {
-		check(sgPrefixMatch("AB", "abcde") === 2);
-	});
-	test("empty prefix", () => {
-		check(sgPrefixMatch("", "anything") === 2);
-	});
-});
+test "format function hover" {
+	const loc: SourceLocation = { line: 1, column: 0 };
+	const params: Type[] = [stringType()];
+	const names: string[] = ["s"];
+	const fnType = createFunction(params, names, voidType());
+	const suggest: SgSuggest = {
+		name: "greet", kind: SymbolKind.Function, symType: fnType,
+		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+		isExported: false, isMutable: false,
+	};
+	const hover = sgFormatHover(suggest);
+	check(hover === "```ms\nfunction greet(s: string): void\n```");
+}
 
-testGroup("sgCompletionRanking", () => {
-	test("prefix before substr", () => {
-		const pr = parseSource("const abcdef = 1;\nconst xyzabc = 2;");
-		if (!pr.ok) { check(false); return; }
-		const ctx = checkProgram(pr.value);
-		const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "abc", null as unknown as Type);
-		check(candidates.items.length === 2);
-		// abcdef (prefix match) should come before xyzabc (substr match)
-		check(candidates.items[0].name === "abcdef");
-		check(candidates.items[1].name === "xyzabc");
-	});
-	test("inner scope before outer", () => {
-		const pr = parseSource("const outer = 1;\nfunction f() { const inner = 2; }");
-		if (!pr.ok) { check(false); return; }
-		const ctx = checkProgram(pr.value);
-		const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "", null as unknown as Type);
-		// inner scope (depth 0) should rank before outer scope (depth > 0)
-		// At least both should be present
-		check(candidates.items.length >= 2);
-		// First items should have lower scopeDepth
-		if (candidates.items.length >= 2) {
-			check(candidates.items[0].scopeDepth <= candidates.items[1].scopeDepth);
-		}
-	});
-});
+test "format interface hover" {
+	const loc: SourceLocation = { line: 1, column: 0 };
+	const suggest: SgSuggest = {
+		name: "Point", kind: SymbolKind.Interface, symType: unknownType(),
+		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+		isExported: false, isMutable: false,
+	};
+	check(sgFormatHover(suggest) === "```ms\ninterface Point\n```");
+}
 
-testGroup("sgCollectSymbolsInFile", () => {
-	test("collects function and variable", () => {
-		const pr = parseSource("function foo() { return 1; }\nconst x = 1;");
-		if (!pr.ok) { check(false); return; }
-		const ctx = checkProgram(pr.value);
-		const symbols = sgCollectSymbolsInFile(ctx, pr.value);
-		check(symbols.items.length === 2);
-		check(symbols.items[0].name === "foo");
-		check(symbols.items[0].kind === SymbolKind.Function);
-		check(symbols.items[1].name === "x");
-		check(symbols.items[1].kind === SymbolKind.Variable);
-	});
-	test("collects interface and enum", () => {
-		const pr = parseSource("interface Point { x: number; }\nenum Color { Red, Green }");
-		if (!pr.ok) { check(false); return; }
-		const ctx = checkProgram(pr.value);
-		const symbols = sgCollectSymbolsInFile(ctx, pr.value);
-		check(symbols.items.length === 2);
-		check(symbols.items[0].name === "Point");
-		check(symbols.items[0].kind === SymbolKind.Interface);
-		check(symbols.items[1].name === "Color");
-		check(symbols.items[1].kind === SymbolKind.Enum);
-	});
-	test("unwraps export decl", () => {
-		const pr = parseSource("export function bar() { return 1; }");
-		if (!pr.ok) { check(false); return; }
-		const ctx = checkProgram(pr.value);
-		const symbols = sgCollectSymbolsInFile(ctx, pr.value);
-		check(symbols.items.length === 1);
-		check(symbols.items[0].name === "bar");
-	});
-	test("empty program", () => {
-		const pr = parseSource("");
-		if (!pr.ok) { check(false); return; }
-		const ctx = checkProgram(pr.value);
-		const symbols = sgCollectSymbolsInFile(ctx, pr.value);
-		check(symbols.items.length === 0);
-	});
-});
+test "format class hover" {
+	const loc: SourceLocation = { line: 1, column: 0 };
+	const suggest: SgSuggest = {
+		name: "Vec", kind: SymbolKind.Class, symType: unknownType(),
+		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+		isExported: false, isMutable: false,
+	};
+	check(sgFormatHover(suggest) === "```ms\nclass Vec\n```");
+}
 
-testGroup("sgFormatSignature", () => {
-	test("function with params", () => {
-		const params: Type[] = [numberType(), stringType()];
-		const names: string[] = ["line", "msg"];
-		const fnType = createFunction(params, names, voidType());
-		const sym = makeSymbol("log", SymbolKind.Function, fnType, false);
-		const sigs = sgFormatSignature(sym);
-		check(sigs.items.length === 1);
-		check(sigs.items[0].label === "log(line: number, msg: string): void");
-		check(sigs.items[0].paramLabels.length === 2);
-	});
-	test("function no params", () => {
-		const params: Type[] = [];
-		const names: string[] = [];
-		const fnType = createFunction(params, names, booleanType());
-		const sym = makeSymbol("check", SymbolKind.Function, fnType, false);
-		const sigs = sgFormatSignature(sym);
-		check(sigs.items.length === 1);
-		check(sigs.items[0].label === "check(): boolean");
-		check(sigs.items[0].paramLabels.length === 0);
-	});
-	test("null symbol returns empty", () => {
-		const nullSym = null as unknown as Symbol;
-		const sigs = sgFormatSignature(nullSym);
-		check(sigs.items.length === 0);
-	});
-	test("non-function symbol returns empty", () => {
-		const sym = makeSymbol("x", SymbolKind.Variable, numberType(), false);
-		const sigs = sgFormatSignature(sym);
-		check(sigs.items.length === 0);
-	});
-});
+test "format enum hover" {
+	const loc: SourceLocation = { line: 1, column: 0 };
+	const suggest: SgSuggest = {
+		name: "Color", kind: SymbolKind.Enum, symType: unknownType(),
+		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+		isExported: false, isMutable: false,
+	};
+	check(sgFormatHover(suggest) === "```ms\nenum Color\n```");
+}
 
-testGroup("sgGetCalleeAtCursor", () => {
-	test("simple call", () => {
-		check(sgGetCalleeAtCursor("foo(x", 1, 4) === "foo");
-	});
-	test("call with space before paren", () => {
-		check(sgGetCalleeAtCursor("foo (x", 1, 5) === "foo");
-	});
-	test("nested call — inner", () => {
-		check(sgGetCalleeAtCursor("foo(bar(x", 1, 8) === "bar");
-	});
-	test("not inside call returns empty", () => {
-		check(sgGetCalleeAtCursor("hello", 1, 3) === "");
-	});
-	test("after comma", () => {
-		check(sgGetCalleeAtCursor("add(1, 2", 1, 7) === "add");
-	});
-});
+test "format type alias hover" {
+	const loc: SourceLocation = { line: 1, column: 0 };
+	const suggest: SgSuggest = {
+		name: "Id", kind: SymbolKind.TypeAlias, symType: numberType(),
+		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+		isExported: false, isMutable: false,
+	};
+	check(sgFormatHover(suggest) === "```ms\ntype Id = number\n```");
+}
 
-testGroup("sgCountActiveParam", () => {
-	test("first param", () => {
-		// foo(| — cursor just after (
-		check(sgCountActiveParam("foo(x", 1, 4) === 0);
-	});
-	test("second param", () => {
-		// foo(a, | — cursor after comma
-		check(sgCountActiveParam("foo(a, b", 1, 7) === 1);
-	});
-	test("third param", () => {
-		check(sgCountActiveParam("foo(a, b, c", 1, 10) === 2);
-	});
-	test("nested parens ignored", () => {
-		// foo(bar(1, 2), | — inner commas don't count
-		check(sgCountActiveParam("foo(bar(1, 2), x", 1, 15) === 1);
-	});
-});
+test "format let variable hover" {
+	const loc: SourceLocation = { line: 1, column: 0 };
+	const suggest: SgSuggest = {
+		name: "x", kind: SymbolKind.Variable, symType: stringType(),
+		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+		isExported: false, isMutable: true,
+	};
+	check(sgFormatHover(suggest) === "```ms\nlet x: string\n```");
+}
 
-testGroup("sgCollectInlayHints", () => {
-	test("type hint for untyped variable", () => {
-		const src = "const x = 42;";
-		const pr = parseSource(src);
-		if (!pr.ok) { check(false); return; }
-		const ctx = checkProgram(pr.value);
-		const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
-		check(hints.items.length === 1);
-		check(hints.items[0].label === ": number");
-		check(hints.items[0].hintKind === SgInlayHintKind.Type);
-	});
-	test("no hint for explicitly typed variable", () => {
-		const src = "const x: number = 42;";
-		const pr = parseSource(src);
-		if (!pr.ok) { check(false); return; }
-		const ctx = checkProgram(pr.value);
-		const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
-		check(hints.items.length === 0);
-	});
-	test("parameter hints at call site", () => {
-		const src = "function add(a: number, b: number): number { return a + b; }\nconst r = add(1, 2);";
-		const pr = parseSource(src);
-		if (!pr.ok) { check(false); return; }
-		const ctx = checkProgram(pr.value);
-		const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
-		// Should have: type hint for r + param hints a: and b:
-		let typeHints = 0;
-		let paramHints = 0;
-		for (let j = 0; j < hints.items.length; j = j + 1) {
-			if (hints.items[j].hintKind === SgInlayHintKind.Type) { typeHints = typeHints + 1; }
-			if (hints.items[j].hintKind === SgInlayHintKind.Parameter) { paramHints = paramHints + 1; }
-		}
-		check(typeHints >= 1);  // r: number
-		check(paramHints === 2);  // a: 1, b: 2
-	});
-	test("skip param hint when arg matches param name", () => {
-		const src = "function foo(x: number): void {}\nconst x = 5;\nfoo(x);";
-		const pr = parseSource(src);
-		if (!pr.ok) { check(false); return; }
-		const ctx = checkProgram(pr.value);
-		const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
-		// x matches param name "x" — no param hint, just type hint for x
-		let paramHints = 0;
-		for (let j = 0; j < hints.items.length; j = j + 1) {
-			if (hints.items[j].hintKind === SgInlayHintKind.Parameter) { paramHints = paramHints + 1; }
-		}
-		check(paramHints === 0);
-	});
-});
+test "format parameter hover" {
+	const loc: SourceLocation = { line: 1, column: 0 };
+	const suggest: SgSuggest = {
+		name: "name", kind: SymbolKind.Parameter, symType: stringType(),
+		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+		isExported: false, isMutable: false,
+	};
+	check(sgFormatHover(suggest) === "```ms\n(parameter) name: string\n```");
+}
 
-testGroup("sgCollectReferences", () => {
-	test("collects declarations and usages", () => {
-		const src = "const x = 1;\nconst y = x;";
-		const pr = parseSource(src);
-		if (!pr.ok) { check(false); return; }
-		const refs = sgCollectReferences(pr.value);
-		// x: 1 decl + 1 usage, y: 1 decl
-		check(refs.items.length >= 3);
-	});
-	test("find usages by name", () => {
-		const src = "const x = 1;\nconst y = x;";
-		const pr = parseSource(src);
-		if (!pr.ok) { check(false); return; }
-		const refs = sgCollectReferences(pr.value);
-		const xRefs = sgFindUsagesByName(refs, "x");
-		check(xRefs.items.length === 2);
-		// First should be decl, second should be usage
-		check(xRefs.items[0].isDecl);
-		check(!xRefs.items[1].isDecl);
-	});
-	test("function decl and call", () => {
-		const src = "function greet(name: string): void {}\ngreet(\"hello\");";
-		const pr = parseSource(src);
-		if (!pr.ok) { check(false); return; }
-		const refs = sgCollectReferences(pr.value);
-		const greetRefs = sgFindUsagesByName(refs, "greet");
-		check(greetRefs.items.length === 2);
-		check(greetRefs.items[0].isDecl);
-		check(!greetRefs.items[1].isDecl);
-	});
-	test("no references for unknown name", () => {
-		const src = "const x = 1;";
-		const pr = parseSource(src);
-		if (!pr.ok) { check(false); return; }
-		const refs = sgCollectReferences(pr.value);
-		const noRefs = sgFindUsagesByName(refs, "nonexistent");
-		check(noRefs.items.length === 0);
-	});
-});
+test "format property hover" {
+	const loc: SourceLocation = { line: 1, column: 0 };
+	const suggest: SgSuggest = {
+		name: "x", kind: SymbolKind.Property, symType: numberType(),
+		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+		isExported: false, isMutable: false,
+	};
+	check(sgFormatHover(suggest) === "```ms\n(property) x: number\n```");
+}
+
+test "format method hover" {
+	const loc: SourceLocation = { line: 1, column: 0 };
+	const params: Type[] = [stringType()];
+	const names: string[] = ["item"];
+	const fnType = createFunction(params, names, voidType());
+	const suggest: SgSuggest = {
+		name: "push", kind: SymbolKind.Method, symType: fnType,
+		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+		isExported: false, isMutable: false,
+	};
+	check(sgFormatHover(suggest) === "```ms\n(method) push(item: string): void\n```");
+}
+
+test "null suggest returns empty" {
+	const sg = null as unknown as SgSuggest;
+	check(sgFormatHover(sg) === "");
+}
+
+test "empty errors" {
+	const pr = parseSource("const x = 1;");
+	if (!pr.ok) { check(false); return; }
+	const ctx = checkProgram(pr.value);
+	const diags = sgCollectDiagnostics(ctx);
+	check(diags.length === 0);
+}
+
+test "dot triggers MemberAccess" {
+	// "foo.b" — cursor at col 5 (after 'b')
+	check(sgDetectCompletionContext("foo.b", 1, 5) === SgCompletionKind.MemberAccess);
+}
+
+test "dot with no prefix" {
+	// "foo." — cursor at col 4 (right after '.')
+	check(sgDetectCompletionContext("foo.", 1, 4) === SgCompletionKind.MemberAccess);
+}
+
+test "colon triggers TypeAnnotation" {
+	// "x: num" — cursor at col 6
+	check(sgDetectCompletionContext("x: num", 1, 6) === SgCompletionKind.TypeAnnotation);
+}
+
+test "bare identifier" {
+	// "con" — cursor at col 3
+	check(sgDetectCompletionContext("con", 1, 3) === SgCompletionKind.Identifier);
+}
+
+test "start of line" { check(sgDetectCompletionContext("x", 1, 0) === SgCompletionKind.Identifier); }
+
+test "extracts prefix" { check(sgGetPrefix("foo.bar", 1, 7) === "bar"); }
+
+test "no prefix after dot" { check(sgGetPrefix("foo.", 1, 4) === ""); }
+
+test "whole word" { check(sgGetPrefix("hello", 1, 5) === "hello"); }
+
+test "empty at start" { check(sgGetPrefix("x", 1, 0) === ""); }
+
+test "prefix with underscore" { check(sgGetPrefix("my_var", 1, 6) === "my_var"); }
+
+test "second line" { check(sgGetPrefix("abc\ndef", 2, 3) === "def"); }
+
+test "finds top-level symbols" {
+	const pr = parseSource("const abc = 1;\nconst abd = 2;\nconst xyz = 3;");
+	if (!pr.ok) { check(false); return; }
+	const ctx = checkProgram(pr.value);
+	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "ab", null as unknown as Type);
+	check(candidates.length === 2);
+}
+
+test "empty prefix returns all" {
+	const pr = parseSource("const a = 1;\nconst b = 2;");
+	if (!pr.ok) { check(false); return; }
+	const ctx = checkProgram(pr.value);
+	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "", null as unknown as Type);
+	check(candidates.length >= 2);
+}
+
+test "no match returns empty" {
+	const pr = parseSource("const abc = 1;");
+	if (!pr.ok) { check(false); return; }
+	const ctx = checkProgram(pr.value);
+	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "zzz", null as unknown as Type);
+	check(candidates.length === 0);
+}
+
+test "only returns types" {
+	const pr = parseSource("interface Foo { x: number; }\nconst y = 1;");
+	if (!pr.ok) { check(false); return; }
+	const ctx = checkProgram(pr.value);
+	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.TypeAnnotation, "", null as unknown as Type);
+	// Should include Foo (interface) but not y (variable)
+	let hasFoo = false;
+	let hasY = false;
+	for (let i = 0; i < candidates.length; i = i + 1) {
+		if (candidates[i].name === "Foo") hasFoo = true;
+		if (candidates[i].name === "y") hasY = true;
+	}
+	check(hasFoo);
+	check(!hasY);
+}
+
+test "object properties" {
+	const propNames: string[] = ["x", "y", "z"];
+	const propTypes: Type[] = [numberType(), numberType(), stringType()];
+	const objType = createObject("Point", propNames, propTypes, true);
+	const pr = parseSource("const a = 1;");
+	if (!pr.ok) { check(false); return; }
+	const ctx = checkProgram(pr.value);
+	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.MemberAccess, "", objType);
+	check(candidates.length === 3);
+}
+
+test "object properties with prefix" {
+	const propNames: string[] = ["xPos", "yPos", "name"];
+	const propTypes: Type[] = [numberType(), numberType(), stringType()];
+	const objType = createObject("Obj", propNames, propTypes, true);
+	const pr = parseSource("const a = 1;");
+	if (!pr.ok) { check(false); return; }
+	const ctx = checkProgram(pr.value);
+	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.MemberAccess, "x", objType);
+	check(candidates.length === 1);
+	check(candidates[0].name === "xPos");
+}
+
+test "enum members" {
+	const members: string[] = ["Red", "Green", "Blue"];
+	const enumType = createEnum("Color", members);
+	const pr = parseSource("const a = 1;");
+	if (!pr.ok) { check(false); return; }
+	const ctx = checkProgram(pr.value);
+	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.MemberAccess, "", enumType);
+	check(candidates.length === 3);
+}
+
+test "null receiver returns empty" {
+	const pr = parseSource("const a = 1;");
+	if (!pr.ok) { check(false); return; }
+	const ctx = checkProgram(pr.value);
+	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.MemberAccess, "", null as unknown as Type);
+	check(candidates.length === 0);
+}
+
+test "exact prefix" { check(sgPrefixMatch("ab", "abc") === 2); }
+
+test "substring" { check(sgPrefixMatch("bc", "abcd") === 1); }
+
+test "no match" { check(sgPrefixMatch("zz", "abc") === 0); }
+
+test "case insensitive prefix" { check(sgPrefixMatch("AB", "abcde") === 2); }
+
+test "empty prefix" { check(sgPrefixMatch("", "anything") === 2); }
+
+test "prefix before substr" {
+	const pr = parseSource("const abcdef = 1;\nconst xyzabc = 2;");
+	if (!pr.ok) { check(false); return; }
+	const ctx = checkProgram(pr.value);
+	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "abc", null as unknown as Type);
+	check(candidates.length === 2);
+	// abcdef (prefix match) should come before xyzabc (substr match)
+	check(candidates[0].name === "abcdef");
+	check(candidates[1].name === "xyzabc");
+}
+
+test "inner scope before outer" {
+	const pr = parseSource("const outer = 1;\nfunction f() { const inner = 2; }");
+	if (!pr.ok) { check(false); return; }
+	const ctx = checkProgram(pr.value);
+	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "", null as unknown as Type);
+	// inner scope (depth 0) should rank before outer scope (depth > 0)
+	// At least both should be present
+	check(candidates.length >= 2);
+	// First items should have lower scopeDepth
+	if (candidates.length >= 2) {
+		check(candidates[0].scopeDepth <= candidates[1].scopeDepth);
+	}
+}
+
+test "collects function and variable" {
+	const pr = parseSource("function foo() { return 1; }\nconst x = 1;");
+	if (!pr.ok) { check(false); return; }
+	const ctx = checkProgram(pr.value);
+	const symbols = sgCollectSymbolsInFile(ctx, pr.value);
+	check(symbols.length === 2);
+	check(symbols[0].name === "foo");
+	check(symbols[0].kind === SymbolKind.Function);
+	check(symbols[1].name === "x");
+	check(symbols[1].kind === SymbolKind.Variable);
+}
+
+test "collects interface and enum" {
+	const pr = parseSource("interface Point { x: number; }\nenum Color { Red, Green }");
+	if (!pr.ok) { check(false); return; }
+	const ctx = checkProgram(pr.value);
+	const symbols = sgCollectSymbolsInFile(ctx, pr.value);
+	check(symbols.length === 2);
+	check(symbols[0].name === "Point");
+	check(symbols[0].kind === SymbolKind.Interface);
+	check(symbols[1].name === "Color");
+	check(symbols[1].kind === SymbolKind.Enum);
+}
+
+test "unwraps export decl" {
+	const pr = parseSource("export function bar() { return 1; }");
+	if (!pr.ok) { check(false); return; }
+	const ctx = checkProgram(pr.value);
+	const symbols = sgCollectSymbolsInFile(ctx, pr.value);
+	check(symbols.length === 1);
+	check(symbols[0].name === "bar");
+}
+
+test "empty program" {
+	const pr = parseSource("");
+	if (!pr.ok) { check(false); return; }
+	const ctx = checkProgram(pr.value);
+	const symbols = sgCollectSymbolsInFile(ctx, pr.value);
+	check(symbols.length === 0);
+}
+
+test "function with params" {
+	const params: Type[] = [numberType(), stringType()];
+	const names: string[] = ["line", "msg"];
+	const fnType = createFunction(params, names, voidType());
+	const sym = makeSymbol("log", SymbolKind.Function, fnType, false);
+	const sigs = sgFormatSignature(sym);
+	check(sigs.length === 1);
+	check(sigs[0].label === "log(line: number, msg: string): void");
+	check(sigs[0].paramLabels.length === 2);
+}
+
+test "function no params" {
+	const params: Type[] = [];
+	const names: string[] = [];
+	const fnType = createFunction(params, names, booleanType());
+	const sym = makeSymbol("check", SymbolKind.Function, fnType, false);
+	const sigs = sgFormatSignature(sym);
+	check(sigs.length === 1);
+	check(sigs[0].label === "check(): boolean");
+	check(sigs[0].paramLabels.length === 0);
+}
+
+test "null symbol returns empty" {
+	const nullSym = null as unknown as Symbol;
+	const sigs = sgFormatSignature(nullSym);
+	check(sigs.length === 0);
+}
+
+test "non-function symbol returns empty" {
+	const sym = makeSymbol("x", SymbolKind.Variable, numberType(), false);
+	const sigs = sgFormatSignature(sym);
+	check(sigs.length === 0);
+}
+
+test "simple call" { check(sgGetCalleeAtCursor("foo(x", 1, 4) === "foo"); }
+
+test "call with space before paren" { check(sgGetCalleeAtCursor("foo (x", 1, 5) === "foo"); }
+
+test "nested call — inner" { check(sgGetCalleeAtCursor("foo(bar(x", 1, 8) === "bar"); }
+
+test "not inside call returns empty" { check(sgGetCalleeAtCursor("hello", 1, 3) === ""); }
+
+test "after comma" { check(sgGetCalleeAtCursor("add(1, 2", 1, 7) === "add"); }
+
+test "first param" {
+	// foo(| — cursor just after (
+	check(sgCountActiveParam("foo(x", 1, 4) === 0);
+}
+
+test "second param" {
+	// foo(a, | — cursor after comma
+	check(sgCountActiveParam("foo(a, b", 1, 7) === 1);
+}
+
+test "third param" { check(sgCountActiveParam("foo(a, b, c", 1, 10) === 2); }
+
+test "nested parens ignored" {
+	// foo(bar(1, 2), | — inner commas don't count
+	check(sgCountActiveParam("foo(bar(1, 2), x", 1, 15) === 1);
+}
+
+test "type hint for untyped variable" {
+	const src = "const x = 42;";
+	const pr = parseSource(src);
+	if (!pr.ok) { check(false); return; }
+	const ctx = checkProgram(pr.value);
+	const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
+	check(hints.length === 1);
+	check(hints[0].label === ": number");
+	check(hints[0].hintKind === SgInlayHintKind.Type);
+}
+
+test "no hint for explicitly typed variable" {
+	const src = "const x: number = 42;";
+	const pr = parseSource(src);
+	if (!pr.ok) { check(false); return; }
+	const ctx = checkProgram(pr.value);
+	const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
+	check(hints.length === 0);
+}
+
+test "parameter hints at call site" {
+	const src = "function add(a: number, b: number): number { return a + b; }\nconst r = add(1, 2);";
+	const pr = parseSource(src);
+	if (!pr.ok) { check(false); return; }
+	const ctx = checkProgram(pr.value);
+	const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
+	// Should have: type hint for r + param hints a: and b:
+	let typeHints = 0;
+	let paramHints = 0;
+	for (let j = 0; j < hints.length; j = j + 1) {
+		if (hints[j].hintKind === SgInlayHintKind.Type) { typeHints = typeHints + 1; }
+		if (hints[j].hintKind === SgInlayHintKind.Parameter) { paramHints = paramHints + 1; }
+	}
+	check(typeHints >= 1);  // r: number
+	check(paramHints === 2);  // a: 1, b: 2
+}
+
+test "skip param hint when arg matches param name" {
+	const src = "function foo(x: number): void {}\nconst x = 5;\nfoo(x);";
+	const pr = parseSource(src);
+	if (!pr.ok) { check(false); return; }
+	const ctx = checkProgram(pr.value);
+	const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
+	// x matches param name "x" — no param hint, just type hint for x
+	let paramHints = 0;
+	for (let j = 0; j < hints.length; j = j + 1) {
+		if (hints[j].hintKind === SgInlayHintKind.Parameter) { paramHints = paramHints + 1; }
+	}
+	check(paramHints === 0);
+}
+
+test "collects declarations and usages" {
+	const src = "const x = 1;\nconst y = x;";
+	const pr = parseSource(src);
+	if (!pr.ok) { check(false); return; }
+	const refs = sgCollectReferences(pr.value);
+	// x: 1 decl + 1 usage, y: 1 decl
+	check(refs.length >= 3);
+}
+
+test "find usages by name" {
+	const src = "const x = 1;\nconst y = x;";
+	const pr = parseSource(src);
+	if (!pr.ok) { check(false); return; }
+	const refs = sgCollectReferences(pr.value);
+	const xRefs = sgFindUsagesByName(refs, "x");
+	check(xRefs.length === 2);
+	// First should be decl, second should be usage
+	check(xRefs[0].isDecl);
+	check(!xRefs[1].isDecl);
+}
+
+test "function decl and call" {
+	const src = "function greet(name: string): void {}\ngreet(\"hello\");";
+	const pr = parseSource(src);
+	if (!pr.ok) { check(false); return; }
+	const refs = sgCollectReferences(pr.value);
+	const greetRefs = sgFindUsagesByName(refs, "greet");
+	check(greetRefs.length === 2);
+	check(greetRefs[0].isDecl);
+	check(!greetRefs[1].isDecl);
+}
+
+test "no references for unknown name" {
+	const src = "const x = 1;";
+	const pr = parseSource(src);
+	if (!pr.ok) { check(false); return; }
+	const refs = sgCollectReferences(pr.value);
+	const noRefs = sgFindUsagesByName(refs, "nonexistent");
+	check(noRefs.length === 0);
+}

@@ -28,7 +28,7 @@ import { callStateProgramParser } from "../parser/statements/callbacks";
 import { Node, NodeKind, ProgramData, ImportDeclData } from "../ast/node";
 import { readFile } from "std/process";
 import { sliceStr } from "../utils/string";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 // ===== Source Provider =====
 
@@ -81,7 +81,7 @@ function finalizeModule(graph: ModuleGraph, mod: Module, path: string): void {
 }
 
 // Helper: create module, add to graph, push import stack.
-// Isolates Module* from caller's DRC scope (avoids premature ms_decref).
+// Isolates Module* from caller's DRC scope (avoids premature msDecref).
 function createAndAddModule(graph: ModuleGraph, path: string): void {
 	const mod = createModule(path);
 	mod.state = ModuleState.Loading;
@@ -186,7 +186,7 @@ function processImportDecl(graph: ModuleGraph, mod: Module, node: Node, provider
 
 		const candidates = resolveImport(specifier, mod.path);
 		let resolved = "";
-		for (const candidate of candidates.paths) {
+		for (const candidate of candidates) {
 			if (resolved === "") {
 				const trySource = provideSource(provider, candidate);
 				if (trySource.ok) {
@@ -209,11 +209,11 @@ function processImportDecl(graph: ModuleGraph, mod: Module, node: Node, provider
 
 		let resolved = "";
 		let i = 0;
-		while (i < candidates.paths.length) {
+		while (i < candidates.length) {
 			if (resolved === "") {
-				const trySource = provideSource(provider, candidates.paths[i]);
+				const trySource = provideSource(provider, candidates[i]);
 				if (trySource.ok) {
-					resolved = candidates.paths[i];
+					resolved = candidates[i];
 				}
 			}
 			i = i + 1;
@@ -257,136 +257,144 @@ function makeEntry(path: string, source: string): MapEntry {
 	return { entryPath: path, entrySource: source };
 }
 
-testGroup("ModuleLoader", () => {
-	test("single module", () => {
-		const entries: MapEntry[] = [];
-		entries.push(makeEntry("/src/a.ms", "const x = 1;"));
-		const provider = createMapProvider(entries);
-		const graph = loadModuleGraph("/src/a.ms", provider);
-		check(graph.modules.length === 1);
-		check(graph.loadOrder.length === 1);
-		check(graph.loadOrder[0] === "/src/a.ms");
-		const mod = findModule(graph, "/src/a.ms");
-		check(mod !== null);
-		check(mod.state === ModuleState.Ready);
-		check(mod.source === "const x = 1;");
-	});
-	test("A imports B chain", () => {
-		const entries: MapEntry[] = [];
-		entries.push(makeEntry("/src/a.ms", "import { foo } from \"./b\";"));
-		entries.push(makeEntry("/src/b.ms", "export function foo() { return 1; }"));
-		const provider = createMapProvider(entries);
-		const graph = loadModuleGraph("/src/a.ms", provider);
-		check(graph.modules.length === 2);
-		// Topological: B before A (dependency loaded first)
-		check(graph.loadOrder[0] === "/src/b.ms");
-		check(graph.loadOrder[1] === "/src/a.ms");
-		// A has import entry pointing to B
-		const modA = findModule(graph, "/src/a.ms");
-		check(modA !== null);
-		check(modA.imports.length === 1);
-		check(modA.imports[0].sourcePath === "/src/b.ms");
-	});
-	test("circular import handled", () => {
-		const entries: MapEntry[] = [];
-		entries.push(makeEntry("/src/a.ms", "import { b } from \"./b\";"));
-		entries.push(makeEntry("/src/b.ms", "import { a } from \"./a\";"));
-		const provider = createMapProvider(entries);
-		const graph = loadModuleGraph("/src/a.ms", provider);
-		// Both modules loaded (circular doesn't crash)
-		check(graph.modules.length === 2);
-		// Both end up in Ready state
-		const modA = findModule(graph, "/src/a.ms");
-		const modB = findModule(graph, "/src/b.ms");
-		check(modA !== null);
-		check(modB !== null);
-		check(modA.state === ModuleState.Ready);
-		check(modB.state === ModuleState.Ready);
-	});
-	test("diamond dependency", () => {
-		const entries: MapEntry[] = [];
-		entries.push(makeEntry("/src/a.ms", "import { b } from \"./b\"; import { c } from \"./c\";"));
-		entries.push(makeEntry("/src/b.ms", "import { d } from \"./d\"; export const b = 1;"));
-		entries.push(makeEntry("/src/c.ms", "import { d } from \"./d\"; export const c = 2;"));
-		entries.push(makeEntry("/src/d.ms", "export const d = 3;"));
-		const provider = createMapProvider(entries);
-		const graph = loadModuleGraph("/src/a.ms", provider);
-		check(graph.modules.length === 4);
-		// D should be loaded once (not duplicated)
-		check(graph.loadOrder[0] === "/src/d.ms");
-		check(graph.errors.length === 0);
-	});
-	test("missing module error", () => {
-		const entries: MapEntry[] = [];
-		entries.push(makeEntry("/src/a.ms", "import { x } from \"./missing\";"));
-		const provider = createMapProvider(entries);
-		const graph = loadModuleGraph("/src/a.ms", provider);
-		const mod = findModule(graph, "/src/a.ms");
-		check(mod !== null);
-		check(mod.errors.length > 0);
-	});
-	test("std import skipped", () => {
-		const entries: MapEntry[] = [];
-		entries.push(makeEntry("/src/a.ms", "import { test } from \"std/testing\"; const x = 1;"));
-		const provider = createMapProvider(entries);
-		const graph = loadModuleGraph("/src/a.ms", provider);
-		check(graph.modules.length === 1);
-		const mod = findModule(graph, "/src/a.ms");
-		check(mod !== null);
-		check(mod.imports.length === 0);
-	});
-	test("no duplicate loading", () => {
-		const entries: MapEntry[] = [];
-		entries.push(makeEntry("/src/a.ms", "import { x } from \"./b\"; import { y } from \"./b\";"));
-		entries.push(makeEntry("/src/b.ms", "export const x = 1; export const y = 2;"));
-		const provider = createMapProvider(entries);
-		const graph = loadModuleGraph("/src/a.ms", provider);
-		check(graph.modules.length === 2);
-	});
-	test("C header import creates module", () => {
-		const entries: MapEntry[] = [];
-		entries.push(makeEntry("/src/app.ms", "import { foo } from \"./lib.h\";"));
-		entries.push(makeEntry("/src/lib.h", "void foo(int x);"));
-		const provider = createMapProvider(entries);
-		const graph = loadModuleGraph("/src/app.ms", provider);
-		check(graph.modules.length === 2);
-		check(graph.errors.length === 0);
-		const hmod = findModule(graph, "/src/lib.h");
-		check(hmod !== null);
-		check(hmod.isCHeader);
-		check(hmod.state === ModuleState.Ready);
-		const appMod = findModule(graph, "/src/app.ms");
-		check(appMod !== null);
-		check(appMod.errors.length === 0);
-	});
-	test("parse error recorded", () => {
-		const entries: MapEntry[] = [];
-		entries.push(makeEntry("/src/a.ms", "const x = ;"));
-		const provider = createMapProvider(entries);
-		const graph = loadModuleGraph("/src/a.ms", provider);
-		const mod = findModule(graph, "/src/a.ms");
-		check(mod !== null);
-		check(mod.errors.length > 0);
-		check(mod.state === ModuleState.Ready);
-	});
-	test("loadOrder is topological", () => {
-		const entries: MapEntry[] = [];
-		entries.push(makeEntry("/src/main.ms", "import { a } from \"./a\";"));
-		entries.push(makeEntry("/src/a.ms", "import { b } from \"./b\"; export const a = 1;"));
-		entries.push(makeEntry("/src/b.ms", "export const b = 2;"));
-		const provider = createMapProvider(entries);
-		const graph = loadModuleGraph("/src/main.ms", provider);
-		check(graph.loadOrder[0] === "/src/b.ms");
-		check(graph.loadOrder[1] === "/src/a.ms");
-		check(graph.loadOrder[2] === "/src/main.ms");
-	});
-	test("module source stored", () => {
-		const entries: MapEntry[] = [];
-		entries.push(makeEntry("/src/a.ms", "const x = 42;"));
-		const provider = createMapProvider(entries);
-		const graph = loadModuleGraph("/src/a.ms", provider);
-		const mod = findModule(graph, "/src/a.ms");
-		check(mod !== null);
-		check(mod.source === "const x = 42;");
-	});
-});
+test "single module" {
+	const entries: MapEntry[] = [];
+	entries.push(makeEntry("/src/a.ms", "const x = 1;"));
+	const provider = createMapProvider(entries);
+	const graph = loadModuleGraph("/src/a.ms", provider);
+	check(graph.modules.length === 1);
+	check(graph.loadOrder.length === 1);
+	check(graph.loadOrder[0] === "/src/a.ms");
+	const mod = findModule(graph, "/src/a.ms");
+	check(mod !== null);
+	check(mod.state === ModuleState.Ready);
+	check(mod.source === "const x = 1;");
+}
+
+test "A imports B chain" {
+	const entries: MapEntry[] = [];
+	entries.push(makeEntry("/src/a.ms", "import { foo } from \"./b\";"));
+	entries.push(makeEntry("/src/b.ms", "export function foo() { return 1; }"));
+	const provider = createMapProvider(entries);
+	const graph = loadModuleGraph("/src/a.ms", provider);
+	check(graph.modules.length === 2);
+	// Topological: B before A (dependency loaded first)
+	check(graph.loadOrder[0] === "/src/b.ms");
+	check(graph.loadOrder[1] === "/src/a.ms");
+	// A has import entry pointing to B
+	const modA = findModule(graph, "/src/a.ms");
+	check(modA !== null);
+	check(modA.imports.length === 1);
+	check(modA.imports[0].sourcePath === "/src/b.ms");
+}
+
+test "circular import handled" {
+	const entries: MapEntry[] = [];
+	entries.push(makeEntry("/src/a.ms", "import { b } from \"./b\";"));
+	entries.push(makeEntry("/src/b.ms", "import { a } from \"./a\";"));
+	const provider = createMapProvider(entries);
+	const graph = loadModuleGraph("/src/a.ms", provider);
+	// Both modules loaded (circular doesn't crash)
+	check(graph.modules.length === 2);
+	// Both end up in Ready state
+	const modA = findModule(graph, "/src/a.ms");
+	const modB = findModule(graph, "/src/b.ms");
+	check(modA !== null);
+	check(modB !== null);
+	check(modA.state === ModuleState.Ready);
+	check(modB.state === ModuleState.Ready);
+}
+
+test "diamond dependency" {
+	const entries: MapEntry[] = [];
+	entries.push(makeEntry("/src/a.ms", "import { b } from \"./b\"; import { c } from \"./c\";"));
+	entries.push(makeEntry("/src/b.ms", "import { d } from \"./d\"; export const b = 1;"));
+	entries.push(makeEntry("/src/c.ms", "import { d } from \"./d\"; export const c = 2;"));
+	entries.push(makeEntry("/src/d.ms", "export const d = 3;"));
+	const provider = createMapProvider(entries);
+	const graph = loadModuleGraph("/src/a.ms", provider);
+	check(graph.modules.length === 4);
+	// D should be loaded once (not duplicated)
+	check(graph.loadOrder[0] === "/src/d.ms");
+	check(graph.errors.length === 0);
+}
+
+test "missing module error" {
+	const entries: MapEntry[] = [];
+	entries.push(makeEntry("/src/a.ms", "import { x } from \"./missing\";"));
+	const provider = createMapProvider(entries);
+	const graph = loadModuleGraph("/src/a.ms", provider);
+	const mod = findModule(graph, "/src/a.ms");
+	check(mod !== null);
+	check(mod.errors.length > 0);
+}
+
+test "std import skipped" {
+	const entries: MapEntry[] = [];
+	entries.push(makeEntry("/src/a.ms", "import { test } from \"std/testing\"; const x = 1;"));
+	const provider = createMapProvider(entries);
+	const graph = loadModuleGraph("/src/a.ms", provider);
+	check(graph.modules.length === 1);
+	const mod = findModule(graph, "/src/a.ms");
+	check(mod !== null);
+	check(mod.imports.length === 0);
+}
+
+test "no duplicate loading" {
+	const entries: MapEntry[] = [];
+	entries.push(makeEntry("/src/a.ms", "import { x } from \"./b\"; import { y } from \"./b\";"));
+	entries.push(makeEntry("/src/b.ms", "export const x = 1; export const y = 2;"));
+	const provider = createMapProvider(entries);
+	const graph = loadModuleGraph("/src/a.ms", provider);
+	check(graph.modules.length === 2);
+}
+
+test "C header import creates module" {
+	const entries: MapEntry[] = [];
+	entries.push(makeEntry("/src/app.ms", "import { foo } from \"./lib.h\";"));
+	entries.push(makeEntry("/src/lib.h", "void foo(int x);"));
+	const provider = createMapProvider(entries);
+	const graph = loadModuleGraph("/src/app.ms", provider);
+	check(graph.modules.length === 2);
+	check(graph.errors.length === 0);
+	const hmod = findModule(graph, "/src/lib.h");
+	check(hmod !== null);
+	check(hmod.isCHeader);
+	check(hmod.state === ModuleState.Ready);
+	const appMod = findModule(graph, "/src/app.ms");
+	check(appMod !== null);
+	check(appMod.errors.length === 0);
+}
+
+test "parse error recorded" {
+	const entries: MapEntry[] = [];
+	entries.push(makeEntry("/src/a.ms", "const x = ;"));
+	const provider = createMapProvider(entries);
+	const graph = loadModuleGraph("/src/a.ms", provider);
+	const mod = findModule(graph, "/src/a.ms");
+	check(mod !== null);
+	check(mod.errors.length > 0);
+	check(mod.state === ModuleState.Ready);
+}
+
+test "loadOrder is topological" {
+	const entries: MapEntry[] = [];
+	entries.push(makeEntry("/src/main.ms", "import { a } from \"./a\";"));
+	entries.push(makeEntry("/src/a.ms", "import { b } from \"./b\"; export const a = 1;"));
+	entries.push(makeEntry("/src/b.ms", "export const b = 2;"));
+	const provider = createMapProvider(entries);
+	const graph = loadModuleGraph("/src/main.ms", provider);
+	check(graph.loadOrder[0] === "/src/b.ms");
+	check(graph.loadOrder[1] === "/src/a.ms");
+	check(graph.loadOrder[2] === "/src/main.ms");
+}
+
+test "module source stored" {
+	const entries: MapEntry[] = [];
+	entries.push(makeEntry("/src/a.ms", "const x = 42;"));
+	const provider = createMapProvider(entries);
+	const graph = loadModuleGraph("/src/a.ms", provider);
+	const mod = findModule(graph, "/src/a.ms");
+	check(mod !== null);
+	check(mod.source === "const x = 42;");
+}

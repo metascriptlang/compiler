@@ -22,14 +22,10 @@ export function createTransformContextWithChecker(cc: CheckerContext): Transform
 
 // ===== NameSet =====
 // Reusable string-name collector with contains/addUnique ops.
-// Wraps string[] in interface to avoid DRC value-type gotcha (#4).
-
-export interface NameSet {
-	names: string[];
-}
+export type NameSet = string[];
 
 export function nameSetContains(ns: NameSet, name: string): boolean {
-	for (const n of ns.names) {
+	for (const n of ns) {
 		if (n === name) return true;
 	}
 	return false;
@@ -37,15 +33,15 @@ export function nameSetContains(ns: NameSet, name: string): boolean {
 
 export function nameSetAdd(ns: NameSet, name: string): void {
 	if (!nameSetContains(ns, name)) {
-		ns.names.push(name);
+		ns.push(name);
 	}
 }
 
 export function nameSetIntersect(a: NameSet, b: NameSet): NameSet {
-	const result: NameSet = { names: [] };
-	for (const n of a.names) {
+	const result: NameSet = [];
+	for (const n of a) {
 		if (nameSetContains(b, n)) {
-			result.names.push(n);
+			result.push(n);
 		}
 	}
 	return result;

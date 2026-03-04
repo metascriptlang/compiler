@@ -23,7 +23,7 @@ import {
 	makeBinary, makeAssign, makeExprStmt, makeMember, makeArrayAccess,
 	extractBodyStmts, boolToDeclKind,
 } from "../util";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -88,15 +88,8 @@ function forOfVisitor(ctx: TransformContext): (node: Node) => Node {
 }
 
 // ===== Tests =====
+test "for-of becomes block" { check(firstStmtKindAfter("for (const x of arr) { use(x); }", lowerForOf) === NodeKind.BlockStmt); }
 
-testGroup("ForOf Lowering", () => {
-	test("for-of becomes block", () => {
-		check(firstStmtKindAfter("for (const x of arr) { use(x); }", lowerForOf) === NodeKind.BlockStmt);
-	});
-	test("regular for unchanged", () => {
-		check(firstStmtKindAfter("for (let i = 0; i < 10; i++) {}", lowerForOf) === NodeKind.ForStmt);
-	});
-	test("for-of preserves surrounding stmts", () => {
-		check(stmtCountAfter("x(); for (const i of arr) {} y();", lowerForOf) === 3);
-	});
-});
+test "regular for unchanged" { check(firstStmtKindAfter("for (let i = 0; i < 10; i++) {}", lowerForOf) === NodeKind.ForStmt); }
+
+test "for-of preserves surrounding stmts" { check(stmtCountAfter("x(); for (const i of arr) {} y();", lowerForOf) === 3); }

@@ -7,7 +7,7 @@ import { ParserState, createState, current, advance, isAtEnd, peek } from "../co
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, skipOptionalType } from "../util";
 import { lex } from "../../lexer/lexer";
 import { parseOk, mockExpr } from "./util";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 type ExprResult = Result<Expression, string>;
 type ExprParser = (state: ParserState, minPrec: number) => ExprResult;
@@ -124,17 +124,19 @@ function arrowParamCount(input: string): number {
 	const data = result.value.data as ArrowFunctionData;
 	return data.arrowParams.length;
 }
+// Detection
+test "detect arrow" { check(checkArrow("() => 42")); }
 
-testGroup("Arrow Structure", () => {
-	// Detection
-	test("detect arrow", () => { check(checkArrow("() => 42")); });
-	test("detect typed", () => { check(checkArrow("(x: number) => x")); });
-	test("reject paren expr", () => { check(!checkArrow("(a + b)")); });
-	test("reject call", () => { check(!checkArrow("f(a)")); });
-	// Param counts
-	test("zero params", () => { check(arrowParamCount("() => 42") === 0); });
-	test("two params", () => { check(arrowParamCount("(a, b) => a") === 2); });
-	// Integration
-	test("arrow as arg", () => { check(parseOk("f((x) => x)")); });
-	test("paren expr still works", () => { check(parseOk("(a + b) * c")); });
-});
+test "detect typed" { check(checkArrow("(x: number) => x")); }
+
+test "reject paren expr" { check(!checkArrow("(a + b)")); }
+
+test "reject call" { check(!checkArrow("f(a)")); }
+// Param counts
+test "zero params" { check(arrowParamCount("() => 42") === 0); }
+
+test "two params" { check(arrowParamCount("(a, b) => a") === 2); }
+// Integration
+test "arrow as arg" { check(parseOk("f((x) => x)")); }
+
+test "paren expr still works" { check(parseOk("(a + b) * c")); }

@@ -7,6 +7,39 @@ Emits C source from the post-analyzer AST. Nim-aligned architecture (section-bas
 
 ---
 
+## CRITICAL: Codegen Is a Thin/Dumb Emitter
+
+**The C codegen layer (`src/codegen/c/`) must be a thin/dumb emitter.** It should only dump what earlier phases (Transform, Checker, Analyzer) have already processed and transformed. It must NOT contain logic that belongs in Transform or earlier phases.
+
+### The Rule
+
+Whenever working on something that ends at C codegen, **first check `~/projects/nim/compiler/`** (especially `ccgexprs.nim`, `ccgstmts.nim`, `ccgtypes.nim`, `transf.nim`, `lambdalifting.nim`, `closureiters.nim`) to see if the equivalent logic lives in an earlier phase (transform, semantic analysis, etc.) rather than codegen. **If Nim handles it before codegen, we should too.**
+
+### Why This Matters — Evidence from 7 Issues (2026-03-04)
+
+Every time we put logic in codegen that belongs earlier, we create bugs that are hard to diagnose and fix:
+
+| Issue | What Went Wrong | Where the Fix Belongs |
+|-------|-----------------|-----------------------|
+| #7 `stringTruthiness` wrongly applying to booleans | Transform applied string coercion to non-string types | **Transform** (stringTruthiness), NOT codegen |
+| #5 String param `*` mismatch | Pointer/value confusion reaching codegen unresolved | **Transform/Checker** — resolve before codegen sees it |
+| #3 Function type emitted as `void*` | Type alias not resolved, codegen guessing | **Type resolution** phase, not codegen fallback |
+| #1 Result.ok/err not denormalized | JS codegen has helpers but C doesn't; try expressions not hoisted | **Transform** (resultDesugar) should hoist try expressions |
+| #6 JS method calls broken | builtinLower desugars for C only, not target-aware | **Transform** (builtinLower) should be target-aware |
+| #4 Async env typed as `double` | Transform creates untyped synthetic nodes | **Transform** — Nim transforms pre-check so types are resolved |
+| #2 try/catch runtime | Codegen pattern correct, just needs runtime types | Correctly in **codegen** (the exception) |
+
+Only 1 of 7 issues actually belonged in codegen. The other 6 were transform/checker bugs that manifested as codegen failures because codegen was forced to compensate for incomplete earlier phases.
+
+### Checklist Before Adding Codegen Logic
+
+1. Does Nim handle this in `transf.nim`, `lambdalifting.nim`, `closureiters.nim`, or semantic analysis? If yes, put it in our Transform phase.
+2. Is this a type resolution issue? If yes, it belongs in the Checker or type resolution pass.
+3. Is this a desugaring/lowering? If yes, it belongs in `src/transform/`.
+4. Is this pure C syntax emission (mapping an already-resolved AST node to a C string)? Only then does it belong here.
+
+---
+
 ## File Structure
 
 ```
@@ -54,7 +87,7 @@ main(argc, argv, env)
 - POSIX main forwards `argc`/`argv`/`env` into `cmdCount`/`cmdLine`/`gEnv` globals
 - User-defined `main()` is mangled to `main_()` (C keyword avoidance) and called from MsMainInner
 - DatInit runs before Init to ensure data is ready for user code
-- `ms_program_result` global is the process exit code (returned from main)
+- `msProgramResult` global is the process exit code (returned from main)
 - Multi-module: each module registers its DatInit/Init into the appropriate dispatcher
 
 ### CLoc (expression result carrier — Nim's TLoc)
@@ -130,11 +163,11 @@ interface CGen {
 | enum | `typedef int32_t EnumName;` | value |
 | interface (value type) | `struct InterfaceName { ... }` | value (copied) |
 | class | `ClassName*` | pointer (RC) |
-| `Array<number>` | `msNumberArray` | value (RC) |
-| `Array<string>` | `msStringArray` | value (RC) |
-| `Array<T*>` | `msArray` | value (RC) |
+| `Array<number>` | `msNumberArray` | value (RC); mutable params → pointer |
+| `Array<string>` | `msStringArray` | value (RC); mutable params → pointer |
+| `Array<T*>` | `msArray` | value (RC); mutable params → pointer |
 | `Result<T, E>` | `msResult_T_E` struct | value |
-| `Function` (closure) | `ms_closure` (`{fn, env}`) | value (RC on env) |
+| `Function` (closure) | `msClosure` (`{fn, env}`) | value (RC on env) |
 | `Map<K, V>` / `Set<T>` | `msMap` / `msSet` | value (RC) |
 | `Ref<T>` / `Ptr<T>` | `T*` | pointer |
 
@@ -156,7 +189,7 @@ By Phase 5, all complex syntax is already lowered:
 | Destructuring → multiple VariableDecl | destructuringLower |
 | Arrow with captures → lifted fn + env struct | lambdaLifting |
 | Extension methods → direct call | extensionMethodLower |
-| All RC ops → explicit `ms_decref(&x)` etc. | analyzer/inject |
+| All RC ops → explicit `msDecref(&x)` etc. | analyzer/inject |
 | Builtins → plain C-compatible calls | builtinLower |
 | Generic functions → concrete FunctionDecl nodes | monomorphize |
 | Generic types → concrete InterfaceDecl/ClassDecl nodes | monomorphize |
@@ -259,41 +292,41 @@ Temps declared in `proc.locals`, used in `proc.stmts` — guarantees valid C89 (
 | `if/while/do-while` | Direct 1:1 mapping |
 | `return expr;` | `return expr;` (DRC cleanup already injected) |
 | `try/catch/finally` | `setjmp`/`longjmp` pattern (see below) |
-| `throw expr` | `ms_throw(expr);` |
+| `throw expr` | `msThrow(expr);` |
 
 ### try/catch via setjmp/longjmp
 
 ```c
 {
   msSafePoint __sp;
-  ms_push_safepoint(&__sp);
+  msPushSafepoint(&__sp);
   if (setjmp(__sp.context) == 0) {
     // try body
   } else {
-    msException* e = ms_curr_exception;
-    ms_clear_exception();
+    msException* e = msCurrException;
+    msClearException();
     // catch body
   }
-  ms_pop_safepoint();
+  msPopSafepoint();
   // finally body
 }
 ```
 
 ### Closures
 
-Lambda lifting (Phase 3) already converts to: lifted function + env struct + `ms_closure { .fn, .env }`. Codegen emits env struct in `Types`, lifted function in `Procs`, closure construction at use site.
+Lambda lifting (Phase 3) already converts to: lifted function + env struct + `msClosure { .fn, .env }`. Codegen emits env struct in `Types`, lifted function in `Procs`, closure construction at use site.
 
 ---
 
 ## RC Integration (Zero Awareness)
 
 Phase 4 (Analyzer) already injected all RC calls as explicit AST nodes:
-- `=destroy(x)` → `ms_decref(&x)` ExprStmt
-- `=copy(x)` → `ms_incref(x)` ExprStmt
-- `=wasMoved(x)` → `ms_ptr_was_moved(&x)` ExprStmt
+- `=destroy(x)` → `msDecref(&x)` ExprStmt
+- `=copy(x)` → `msIncref(x)` ExprStmt
+- `=wasMoved(x)` → `msPtrWasMoved(&x)` ExprStmt
 - try/finally wrapping → already in AST
 
-**Codegen has zero RC awareness.** DRC-injected calls (`ms_decref`, `ms_incref`, etc.) are regular `CallExpr` nodes — `genCallExpr` in `expressions.ms` emits them identically to any other function call. No special RC file, no call-name recognition, no `&` vs direct pass logic. **Massive simplification vs reference compiler** (6K+ lines of interleaved RC logic scattered across 40K).
+**Codegen has zero RC awareness.** DRC-injected calls (`msDecref`, `msIncref`, etc.) are regular `CallExpr` nodes — `genCallExpr` in `expressions.ms` emits them identically to any other function call. No special RC file, no call-name recognition, no `&` vs direct pass logic. **Massive simplification vs reference compiler** (6K+ lines of interleaved RC logic scattered across 40K).
 
 ---
 
@@ -321,7 +354,7 @@ Phase 4 (Analyzer) already injected all RC calls as explicit AST nodes:
 
 ### Phase 5e: Advanced (~400 lines)
 13. ~~try/catch (setjmp/longjmp) — implemented in statements.ms~~ DONE
-14. ~~Closure emission (env struct + lifted functions) — closure pair detection, ms_closure literal, closure vs direct call protocol, arrow function lifting, fnDeclNames pre-pass~~ DONE
+14. ~~Closure emission (env struct + lifted functions) — closure pair detection, msClosure literal, closure vs direct call protocol, arrow function lifting, fnDeclNames pre-pass~~ DONE
 15. ~~Generic monomorphization — handled by monomorphize module (Phase 2.5). Codegen receives concrete InterfaceDecl/FunctionDecl nodes — zero generic awareness needed.~~ DONE
 
 Test at each phase with `msc test`. Each file gets inline tests.

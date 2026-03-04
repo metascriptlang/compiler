@@ -17,7 +17,7 @@ import {
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeBinary, makeMember, makeNumber } from "../util";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { firstStmtKindAfter, firstExprKindAfter, stmtCountAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -76,24 +76,14 @@ function isAlreadyBoolean(node: Node): boolean {
 }
 
 // ===== Tests =====
+test "if with comparison unchanged" { check(firstStmtKindAfter("if (x > 0) {}", lowerStringTruthiness) === NodeKind.IfStmt); }
 
-testGroup("String Truthiness", () => {
-	test("if with comparison unchanged", () => {
-		check(firstStmtKindAfter("if (x > 0) {}", lowerStringTruthiness) === NodeKind.IfStmt);
-	});
-	test("while bool unchanged", () => {
-		check(firstStmtKindAfter("while (true) {}", lowerStringTruthiness) === NodeKind.WhileStmt);
-	});
-	test("call condition unchanged", () => {
-		check(firstStmtKindAfter("if (f()) {}", lowerStringTruthiness) === NodeKind.IfStmt);
-	});
-	test("binary expr unchanged", () => {
-		check(firstExprKindAfter("x + y;", lowerStringTruthiness) === NodeKind.BinaryExpr);
-	});
-	test("non-condition passthrough", () => {
-		check(stmtCountAfter("const x = 1;", lowerStringTruthiness) === 1);
-	});
-	test("already boolean passthrough", () => {
-		check(firstStmtKindAfter("if (x === y) {}", lowerStringTruthiness) === NodeKind.IfStmt);
-	});
-});
+test "while bool unchanged" { check(firstStmtKindAfter("while (true) {}", lowerStringTruthiness) === NodeKind.WhileStmt); }
+
+test "call condition unchanged" { check(firstStmtKindAfter("if (f()) {}", lowerStringTruthiness) === NodeKind.IfStmt); }
+
+test "binary expr unchanged" { check(firstExprKindAfter("x + y;", lowerStringTruthiness) === NodeKind.BinaryExpr); }
+
+test "non-condition passthrough" { check(stmtCountAfter("const x = 1;", lowerStringTruthiness) === 1); }
+
+test "already boolean passthrough" { check(firstStmtKindAfter("if (x === y) {}", lowerStringTruthiness) === NodeKind.IfStmt); }

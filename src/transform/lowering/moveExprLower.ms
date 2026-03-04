@@ -1,7 +1,7 @@
 // Move Expression Lowering — rewrite `move x` to just `x`
 //
 // `move` is an ownership transfer hint. Phase 4 DRC analyzer already recognizes
-// MoveExpr as a "fresh expression" (no incref) and injects ms_was_moved(&x)
+// MoveExpr as a "fresh expression" (no incref) and injects msWasMoved(&x)
 // after the move site. By the time we reach C codegen, the move semantics are
 // fully expressed via DRC-injected calls.
 //
@@ -11,7 +11,7 @@
 import { Node, NodeKind, MoveExprData } from "../../ast/node";
 import { TransformContext, createTransformContext } from "../context";
 import { walkNode } from "../walker";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";
 import { ExprStmtData } from "../../ast/node";
 
@@ -31,18 +31,10 @@ export function lowerMoveExpr(program: Node, ctx: TransformContext): Node {
 }
 
 // ===== Tests =====
+test "move x becomes Identifier" { check(firstExprKindAfter("move x;", lowerMoveExpr) === NodeKind.Identifier); }
 
-testGroup("Move Expr Lowering", () => {
-	test("move x becomes Identifier", () => {
-		check(firstExprKindAfter("move x;", lowerMoveExpr) === NodeKind.Identifier);
-	});
-	test("move f() becomes CallExpr", () => {
-		check(firstExprKindAfter("move f();", lowerMoveExpr) === NodeKind.CallExpr);
-	});
-	test("non-move unchanged", () => {
-		check(firstExprKindAfter("x;", lowerMoveExpr) === NodeKind.Identifier);
-	});
-	test("stmt count preserved", () => {
-		check(stmtCountAfter("move a; move b;", lowerMoveExpr) === 2);
-	});
-});
+test "move f() becomes CallExpr" { check(firstExprKindAfter("move f();", lowerMoveExpr) === NodeKind.CallExpr); }
+
+test "non-move unchanged" { check(firstExprKindAfter("x;", lowerMoveExpr) === NodeKind.Identifier); }
+
+test "stmt count preserved" { check(stmtCountAfter("move a; move b;", lowerMoveExpr) === 2); }

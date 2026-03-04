@@ -8,7 +8,7 @@ import { Token, TokenKind } from "../lexer/token";
 import { Node, NodeKind, createNode, TypeAnnotationData } from "../ast/node";
 import { ParserState, createState, current, advance, isAtEnd, skipBalanced, skipGenericParams } from "./context";
 import { lex } from "../lexer/lexer";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 type NodeResult = Result<Node, string>;
 
@@ -71,10 +71,9 @@ function skipTypeAtom(state: ParserState): void {
 	// Generic type arguments: Type<A, B> — handles >> and >>> for nested generics
 	skipGenericParams(state);
 
-	// Array type suffix: T[] or T[][]
+	// Array type suffix: T[] or T[N] or T[][]
 	while (!isAtEnd(state) && current(state).kind === TokenKind.LBracket) {
-		advance(state);
-		if (current(state).kind === TokenKind.RBracket) { advance(state); }
+		skipBalanced(state, TokenKind.LBracket, TokenKind.RBracket);
 	}
 
 	// Optional marker: T?
@@ -98,59 +97,69 @@ function skipsType(typeStr: string): boolean {
 	return skipsTo(typeStr + " = x", TokenKind.Assign);
 }
 
-testGroup("TypeAnnotation Simple Types", () => {
-	test("identifier type", () => { check(skipsType("number")); });
-	test("custom type", () => { check(skipsType("Foo")); });
-	test("string keyword", () => { check(skipsType("string")); });
-	test("boolean keyword", () => { check(skipsType("boolean")); });
-	test("void keyword", () => { check(skipsType("void")); });
-});
+test "identifier type" { check(skipsType("number")); }
 
-testGroup("TypeAnnotation Generic Types", () => {
-	test("single generic", () => { check(skipsType("Array<number>")); });
-	test("two generics", () => { check(skipsType("Map<string, number>")); });
-	test("nested generics", () => { check(skipsType("Result<Array<number>, string>")); });
-	test("nested generics no space", () => { check(skipsType("Result<Array<number>>")); });
-	test("triple nested generics", () => { check(skipsType("Map<string, Result<Array<number>>>")); });
-	test("array in generic arg", () => { check(skipsType("Result<Node[], string>")); });
-	test("array in both generic args", () => { check(skipsType("Map<string[], number[]>")); });
-});
+test "custom type" { check(skipsType("Foo")); }
 
-testGroup("TypeAnnotation Array Types", () => {
-	test("single array", () => { check(skipsType("number[]")); });
-	test("double array", () => { check(skipsType("number[][]")); });
-	test("generic array", () => { check(skipsType("Array<string>[]")); });
-});
+test "string keyword" { check(skipsType("string")); }
 
-testGroup("TypeAnnotation Union Types", () => {
-	test("two types", () => { check(skipsType("string | number")); });
-	test("three types", () => { check(skipsType("string | number | boolean")); });
-	test("union with array", () => { check(skipsType("string[] | number")); });
-});
+test "boolean keyword" { check(skipsType("boolean")); }
 
-testGroup("TypeAnnotation Optional Types", () => {
-	test("simple optional", () => { check(skipsType("string?")); });
-	test("generic optional", () => { check(skipsType("Array<number>?")); });
-	test("array optional", () => { check(skipsType("string[]?")); });
-});
+test "void keyword" { check(skipsType("void")); }
 
-testGroup("TypeAnnotation Function Types", () => {
-	test("no params", () => { check(skipsType("() => void")); });
-	test("one param", () => { check(skipsType("(a: string) => number")); });
-	test("two params", () => { check(skipsType("(a: string, b: number) => boolean")); });
-});
+test "single generic" { check(skipsType("Array<number>")); }
 
-testGroup("TypeAnnotation Object Types", () => {
-	test("single field", () => { check(skipsType("{ x: number }")); });
-	test("two fields", () => { check(skipsType("{ x: number; y: string }")); });
-	test("nested object", () => { check(skipsType("{ a: { b: number } }")); });
-});
+test "two generics" { check(skipsType("Map<string, number>")); }
 
-testGroup("TypeAnnotation Complex Combinations", () => {
-	test("generic with array suffix", () => { check(skipsType("Result<Node, string>[]")); });
-	test("union of generics", () => { check(skipsType("Result<A, B> | Error")); });
-	test("optional generic array", () => { check(skipsType("Map<string, number>[]?")); });
-});
+test "nested generics" { check(skipsType("Result<Array<number>, string>")); }
+
+test "nested generics no space" { check(skipsType("Result<Array<number>>")); }
+
+test "triple nested generics" { check(skipsType("Map<string, Result<Array<number>>>")); }
+
+test "array in generic arg" { check(skipsType("Result<Node[], string>")); }
+
+test "array in both generic args" { check(skipsType("Map<string[], number[]>")); }
+
+test "single array" { check(skipsType("number[]")); }
+
+test "fixed array" { check(skipsType("number[4]")); }
+
+test "fixed array multi-dimensional" { check(skipsType("number[4][2]")); }
+
+test "double array" { check(skipsType("number[][]")); }
+
+test "generic array" { check(skipsType("Array<string>[]")); }
+
+test "two types" { check(skipsType("string | number")); }
+
+test "three types" { check(skipsType("string | number | boolean")); }
+
+test "union with array" { check(skipsType("string[] | number")); }
+
+test "simple optional" { check(skipsType("string?")); }
+
+test "generic optional" { check(skipsType("Array<number>?")); }
+
+test "array optional" { check(skipsType("string[]?")); }
+
+test "no params" { check(skipsType("() => void")); }
+
+test "one param" { check(skipsType("(a: string) => number")); }
+
+test "two params" { check(skipsType("(a: string, b: number) => boolean")); }
+
+test "single field" { check(skipsType("{ x: number }")); }
+
+test "two fields" { check(skipsType("{ x: number; y: string }")); }
+
+test "nested object" { check(skipsType("{ a: { b: number } }")); }
+
+test "generic with array suffix" { check(skipsType("Result<Node, string>[]")); }
+
+test "union of generics" { check(skipsType("Result<A, B> | Error")); }
+
+test "optional generic array" { check(skipsType("Map<string, number>[]?")); }
 
 // ===== TypeAnnotation Node Tests =====
 
@@ -173,9 +182,10 @@ function annotationText(typeStr: string): string {
 	return data.annotationType;
 }
 
-testGroup("TypeAnnotation Node", () => {
-	test("kind is TypeAnnotation", () => { check(annotationKind("number") === NodeKind.TypeAnnotation); });
-	test("simple type text", () => { check(annotationText("number") === "number"); });
-	test("generic type text", () => { check(annotationText("Result<Node, string>") !== ""); });
-	test("union type text", () => { check(annotationText("string | number") !== ""); });
-});
+test "kind is TypeAnnotation" { check(annotationKind("number") === NodeKind.TypeAnnotation); }
+
+test "simple type text" { check(annotationText("number") === "number"); }
+
+test "generic type text" { check(annotationText("Result<Node, string>") !== ""); }
+
+test "union type text" { check(annotationText("string | number") !== ""); }

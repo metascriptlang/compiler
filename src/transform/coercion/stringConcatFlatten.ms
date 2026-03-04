@@ -1,7 +1,7 @@
 // String Concat Flatten — flattens nested string + chains into single concat call
 // Follows reference string_concat_flatten.zig + Nim's transf pattern
 //
-// "hello " + name + "!"   →   ms_string_concat("hello ", name, "!")
+// "hello " + name + "!"   →   msStringConcat("hello ", name, "!")
 // x + y                   →   x + y  (unchanged — can't prove string without type info)
 //
 // Conservative: only flattens when at least one operand is a StringLiteral.
@@ -15,7 +15,7 @@ import {
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent } from "../util";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { firstExprKindAfter, stmtCountAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -46,9 +46,9 @@ function flattenConcat(node: Node): Node {
 	// 2-part concat is fine as binary — no benefit from call
 	if (parts.length < 3) return node;
 
-	// Flatten to ms_string_concat(part1, part2, ..., partN)
+	// Flatten to msStringConcat(part1, part2, ..., partN)
 	const loc = node.location;
-	return makeCall(makeIdent("ms_string_concat", loc), parts, loc);
+	return makeCall(makeIdent("msStringConcat", loc), parts, loc);
 }
 
 // Recursively collect parts from a left-associative + chain
@@ -66,25 +66,17 @@ function collectParts(node: Node, parts: Node[]): void {
 }
 
 // ===== Tests =====
+test "variable addition unchanged" { check(firstExprKindAfter("x + y;", lowerStringConcatFlatten) === NodeKind.BinaryExpr); }
 
-testGroup("String Concat Flatten", () => {
-	test("variable addition unchanged", () => {
-		check(firstExprKindAfter("x + y;", lowerStringConcatFlatten) === NodeKind.BinaryExpr);
-	});
-	test("non-binary unchanged", () => {
-		check(firstExprKindAfter("f();", lowerStringConcatFlatten) === NodeKind.CallExpr);
-	});
-	test("single stmt passthrough", () => {
-		check(stmtCountAfter("const x = 1;", lowerStringConcatFlatten) === 1);
-	});
-	test("non-string binary unchanged", () => {
-		check(firstExprKindAfter("x * y;", lowerStringConcatFlatten) === NodeKind.BinaryExpr);
-	});
-	test("identifier unchanged", () => {
-		check(firstExprKindAfter("x;", lowerStringConcatFlatten) === NodeKind.Identifier);
-	});
-	test("two-part string stays binary", () => {
-		// "a" + x is only 2 parts — no benefit from flattening
-		check(firstExprKindAfter("\"a\" + x;", lowerStringConcatFlatten) === NodeKind.BinaryExpr);
-	});
-});
+test "non-binary unchanged" { check(firstExprKindAfter("f();", lowerStringConcatFlatten) === NodeKind.CallExpr); }
+
+test "single stmt passthrough" { check(stmtCountAfter("const x = 1;", lowerStringConcatFlatten) === 1); }
+
+test "non-string binary unchanged" { check(firstExprKindAfter("x * y;", lowerStringConcatFlatten) === NodeKind.BinaryExpr); }
+
+test "identifier unchanged" { check(firstExprKindAfter("x;", lowerStringConcatFlatten) === NodeKind.Identifier); }
+
+test "two-part string stays binary" {
+	// "a" + x is only 2 parts — no benefit from flattening
+	check(firstExprKindAfter("\"a\" + x;", lowerStringConcatFlatten) === NodeKind.BinaryExpr);
+}

@@ -20,7 +20,7 @@ import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { lookupSymbol } from "../../checker/symbol";
 import { TypeKind } from "../../checker/types";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { firstStmtKindAfter, stmtCountAfter, parseInput } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -65,54 +65,34 @@ export function isPrimitiveTypeName(typeName: string): boolean {
 }
 
 // ===== Tests =====
+test "non-function passthrough" { check(stmtCountAfter("const x = 1;", markPointerParams) === 1); }
 
-testGroup("Pointer Param Marker", () => {
-	test("non-function passthrough", () => {
-		check(stmtCountAfter("const x = 1;", markPointerParams) === 1);
-	});
-	test("function stays FunctionDecl", () => {
-		check(firstStmtKindAfter("function foo() {}", markPointerParams) === NodeKind.FunctionDecl);
-	});
-	test("while unchanged", () => {
-		check(firstStmtKindAfter("while (true) {}", markPointerParams) === NodeKind.WhileStmt);
-	});
-	test("if unchanged", () => {
-		check(firstStmtKindAfter("if (x) {}", markPointerParams) === NodeKind.IfStmt);
-	});
-	test("stmt count preserved", () => {
-		check(stmtCountAfter("let a = 1; let b = 2;", markPointerParams) === 2);
-	});
-	test("isPrimitive number", () => {
-		check(isPrimitiveTypeName("number"));
-	});
-	test("isPrimitive string", () => {
-		check(isPrimitiveTypeName("string"));
-	});
-	test("isPrimitive boolean", () => {
-		check(isPrimitiveTypeName("boolean"));
-	});
-	test("isPrimitive void", () => {
-		check(isPrimitiveTypeName("void"));
-	});
-	test("isPrimitive int32", () => {
-		check(isPrimitiveTypeName("int32"));
-	});
-	test("isPrimitive float64", () => {
-		check(isPrimitiveTypeName("float64"));
-	});
-	test("not primitive Node", () => {
-		check(!isPrimitiveTypeName("Node"));
-	});
-	test("not primitive Token", () => {
-		check(!isPrimitiveTypeName("Token"));
-	});
-	test("not primitive Array", () => {
-		check(!isPrimitiveTypeName("Array"));
-	});
-	test("not primitive empty", () => {
-		check(!isPrimitiveTypeName(""));
-	});
-	test("function with params stays FunctionDecl", () => {
-		check(firstStmtKindAfter("function foo(x: number, y: Node): void {}", markPointerParams) === NodeKind.FunctionDecl);
-	});
-});
+test "function stays FunctionDecl" { check(firstStmtKindAfter("function foo() {}", markPointerParams) === NodeKind.FunctionDecl); }
+
+test "while unchanged" { check(firstStmtKindAfter("while (true) {}", markPointerParams) === NodeKind.WhileStmt); }
+
+test "if unchanged" { check(firstStmtKindAfter("if (x) {}", markPointerParams) === NodeKind.IfStmt); }
+
+test "stmt count preserved" { check(stmtCountAfter("let a = 1; let b = 2;", markPointerParams) === 2); }
+
+test "isPrimitive number" { check(isPrimitiveTypeName("number")); }
+
+test "isPrimitive string" { check(isPrimitiveTypeName("string")); }
+
+test "isPrimitive boolean" { check(isPrimitiveTypeName("boolean")); }
+
+test "isPrimitive void" { check(isPrimitiveTypeName("void")); }
+
+test "isPrimitive int32" { check(isPrimitiveTypeName("int32")); }
+
+test "isPrimitive float64" { check(isPrimitiveTypeName("float64")); }
+
+test "not primitive Node" { check(!isPrimitiveTypeName("Node")); }
+
+test "not primitive Token" { check(!isPrimitiveTypeName("Token")); }
+
+test "not primitive Array" { check(!isPrimitiveTypeName("Array")); }
+
+test "not primitive empty" { check(!isPrimitiveTypeName("")); }
+
+test "function with params stays FunctionDecl" { check(firstStmtKindAfter("function foo(x: number, y: Node): void {}", markPointerParams) === NodeKind.FunctionDecl); }

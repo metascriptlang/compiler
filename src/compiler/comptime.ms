@@ -1,7 +1,7 @@
 // ComptimeEval — Evaluate @comptime blocks via Raiser VM, fold results into AST
 // Runs after transforms, before analyzer/codegen.
 
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import {
 	Node, NodeKind, DeclKind, SourceLocation, createNode,
 	// Literals
@@ -637,104 +637,99 @@ export function evaluateComptimeBlocks(program: Node): Node {
 }
 
 // --- Tests ---
+test "int value" {
+	const ctx = evalASTFull(createNode(NodeKind.Program, {
+		programStmts: [
+			createNode(NodeKind.ReturnStmt, {
+				argument: createNode(NodeKind.NumberLiteral, { value: 42 }, createToken(TokenKind.Number, "42", 1)),
+			}, createToken(TokenKind.Return, "return", 1)),
+		],
+	}, createToken(TokenKind.Ident, "", 1)));
+	const loc: SourceLocation = { line: 1, column: 0 };
+	const result = valueToNode(ctx.lastResult, ctx.objectHeap, ctx.arrayHeap, loc);
+	check(result.kind === NodeKind.NumberLiteral);
+}
 
-testGroup("Comptime: valueToNode", () => {
-	test("int value", () => {
-		const ctx = evalASTFull(createNode(NodeKind.Program, {
-			programStmts: [
-				createNode(NodeKind.ReturnStmt, {
-					argument: createNode(NodeKind.NumberLiteral, { value: 42 }, createToken(TokenKind.Number, "42", 1)),
-				}, createToken(TokenKind.Return, "return", 1)),
-			],
-		}, createToken(TokenKind.Ident, "", 1)));
-		const loc: SourceLocation = { line: 1, column: 0 };
-		const result = valueToNode(ctx.lastResult, ctx.objectHeap, ctx.arrayHeap, loc);
-		check(result.kind === NodeKind.NumberLiteral);
-	});
-});
+test "NumberLiteral serialization" {
+	const objHeap = createObjectHeap();
+	const arrHeap = createArrayHeap();
+	const loc: SourceLocation = { line: 5, column: 10 };
+	const node = mkNumber(42, loc);
+	const val = nodeToValue(node, objHeap, arrHeap);
+	check(val.kind === RaiserValueKind.Object);
+	// Verify kind field
+	const kindVal = heapObjectGetField(objHeap, val.intVal, "kind");
+	check(kindVal.intVal === (NodeKind.NumberLiteral as number));
+	// Verify value field
+	const numVal = heapObjectGetField(objHeap, val.intVal, "value");
+	check(numVal.floatVal === 42);
+	// Verify location
+	const lineVal = heapObjectGetField(objHeap, val.intVal, "line");
+	check(lineVal.intVal === 5);
+}
 
-testGroup("Comptime: nodeToValue", () => {
-	test("NumberLiteral serialization", () => {
-		const objHeap = createObjectHeap();
-		const arrHeap = createArrayHeap();
-		const loc: SourceLocation = { line: 5, column: 10 };
-		const node = mkNumber(42, loc);
-		const val = nodeToValue(node, objHeap, arrHeap);
-		check(val.kind === RaiserValueKind.Object);
-		// Verify kind field
-		const kindVal = heapObjectGetField(objHeap, val.intVal, "kind");
-		check(kindVal.intVal === (NodeKind.NumberLiteral as number));
-		// Verify value field
-		const numVal = heapObjectGetField(objHeap, val.intVal, "value");
-		check(numVal.floatVal === 42);
-		// Verify location
-		const lineVal = heapObjectGetField(objHeap, val.intVal, "line");
-		check(lineVal.intVal === 5);
-	});
+test "StringLiteral serialization" {
+	const objHeap = createObjectHeap();
+	const arrHeap = createArrayHeap();
+	const loc: SourceLocation = { line: 1, column: 0 };
+	const node = mkString("hello", loc);
+	const val = nodeToValue(node, objHeap, arrHeap);
+	check(val.kind === RaiserValueKind.Object);
+	const kindVal = heapObjectGetField(objHeap, val.intVal, "kind");
+	check(kindVal.intVal === (NodeKind.StringLiteral as number));
+	const strVal = heapObjectGetField(objHeap, val.intVal, "value");
+	check(strVal.strVal === "hello");
+}
 
-	test("StringLiteral serialization", () => {
-		const objHeap = createObjectHeap();
-		const arrHeap = createArrayHeap();
-		const loc: SourceLocation = { line: 1, column: 0 };
-		const node = mkString("hello", loc);
-		const val = nodeToValue(node, objHeap, arrHeap);
-		check(val.kind === RaiserValueKind.Object);
-		const kindVal = heapObjectGetField(objHeap, val.intVal, "kind");
-		check(kindVal.intVal === (NodeKind.StringLiteral as number));
-		const strVal = heapObjectGetField(objHeap, val.intVal, "value");
-		check(strVal.strVal === "hello");
-	});
+test "BooleanLiteral serialization" {
+	const objHeap = createObjectHeap();
+	const arrHeap = createArrayHeap();
+	const loc: SourceLocation = { line: 1, column: 0 };
+	const node = mkBool(true, loc);
+	const val = nodeToValue(node, objHeap, arrHeap);
+	check(val.kind === RaiserValueKind.Object);
+	const kindVal = heapObjectGetField(objHeap, val.intVal, "kind");
+	check(kindVal.intVal === (NodeKind.BooleanLiteral as number));
+	const bVal = heapObjectGetField(objHeap, val.intVal, "boolValue");
+	check(bVal.intVal === 1);
+}
 
-	test("BooleanLiteral serialization", () => {
-		const objHeap = createObjectHeap();
-		const arrHeap = createArrayHeap();
-		const loc: SourceLocation = { line: 1, column: 0 };
-		const node = mkBool(true, loc);
-		const val = nodeToValue(node, objHeap, arrHeap);
-		check(val.kind === RaiserValueKind.Object);
-		const kindVal = heapObjectGetField(objHeap, val.intVal, "kind");
-		check(kindVal.intVal === (NodeKind.BooleanLiteral as number));
-		const bVal = heapObjectGetField(objHeap, val.intVal, "boolValue");
-		check(bVal.intVal === 1);
-	});
+test "Identifier serialization" {
+	const objHeap = createObjectHeap();
+	const arrHeap = createArrayHeap();
+	const loc: SourceLocation = { line: 1, column: 0 };
+	const node = createNode(NodeKind.Identifier, { name: "foo" }, synthToken(loc));
+	const val = nodeToValue(node, objHeap, arrHeap);
+	check(val.kind === RaiserValueKind.Object);
+	const kindVal = heapObjectGetField(objHeap, val.intVal, "kind");
+	check(kindVal.intVal === (NodeKind.Identifier as number));
+	const nameVal = heapObjectGetField(objHeap, val.intVal, "name");
+	check(nameVal.strVal === "foo");
+}
 
-	test("Identifier serialization", () => {
-		const objHeap = createObjectHeap();
-		const arrHeap = createArrayHeap();
-		const loc: SourceLocation = { line: 1, column: 0 };
-		const node = createNode(NodeKind.Identifier, { name: "foo" }, synthToken(loc));
-		const val = nodeToValue(node, objHeap, arrHeap);
-		check(val.kind === RaiserValueKind.Object);
-		const kindVal = heapObjectGetField(objHeap, val.intVal, "kind");
-		check(kindVal.intVal === (NodeKind.Identifier as number));
-		const nameVal = heapObjectGetField(objHeap, val.intVal, "name");
-		check(nameVal.strVal === "foo");
-	});
-
-	test("BinaryExpr serialization", () => {
-		const objHeap = createObjectHeap();
-		const arrHeap = createArrayHeap();
-		const loc: SourceLocation = { line: 1, column: 0 };
-		const left = mkNumber(2, loc);
-		const right = mkNumber(3, loc);
-		const binNode = createNode(NodeKind.BinaryExpr, {
-			operator: "+", left, right,
-		}, synthToken(loc));
-		const val = nodeToValue(binNode, objHeap, arrHeap);
-		check(val.kind === RaiserValueKind.Object);
-		// Verify operator
-		const opVal = heapObjectGetField(objHeap, val.intVal, "operator");
-		check(opVal.strVal === "+");
-		// Verify left child is an object
-		const leftVal = heapObjectGetField(objHeap, val.intVal, "left");
-		check(leftVal.kind === RaiserValueKind.Object);
-		// Verify left child kind is NumberLiteral
-		const leftKind = heapObjectGetField(objHeap, leftVal.intVal, "kind");
-		check(leftKind.intVal === (NodeKind.NumberLiteral as number));
-		// Verify right child
-		const rightVal = heapObjectGetField(objHeap, val.intVal, "right");
-		check(rightVal.kind === RaiserValueKind.Object);
-		const rightKind = heapObjectGetField(objHeap, rightVal.intVal, "kind");
-		check(rightKind.intVal === (NodeKind.NumberLiteral as number));
-	});
-});
+test "BinaryExpr serialization" {
+	const objHeap = createObjectHeap();
+	const arrHeap = createArrayHeap();
+	const loc: SourceLocation = { line: 1, column: 0 };
+	const left = mkNumber(2, loc);
+	const right = mkNumber(3, loc);
+	const binNode = createNode(NodeKind.BinaryExpr, {
+		operator: "+", left, right,
+	}, synthToken(loc));
+	const val = nodeToValue(binNode, objHeap, arrHeap);
+	check(val.kind === RaiserValueKind.Object);
+	// Verify operator
+	const opVal = heapObjectGetField(objHeap, val.intVal, "operator");
+	check(opVal.strVal === "+");
+	// Verify left child is an object
+	const leftVal = heapObjectGetField(objHeap, val.intVal, "left");
+	check(leftVal.kind === RaiserValueKind.Object);
+	// Verify left child kind is NumberLiteral
+	const leftKind = heapObjectGetField(objHeap, leftVal.intVal, "kind");
+	check(leftKind.intVal === (NodeKind.NumberLiteral as number));
+	// Verify right child
+	const rightVal = heapObjectGetField(objHeap, val.intVal, "right");
+	check(rightVal.kind === RaiserValueKind.Object);
+	const rightKind = heapObjectGetField(objHeap, rightVal.intVal, "kind");
+	check(rightKind.intVal === (NodeKind.NumberLiteral as number));
+}

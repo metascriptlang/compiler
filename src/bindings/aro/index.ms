@@ -17,42 +17,42 @@
 // ===== Parse =====
 
 // Parse a C header file. Returns 0 on success, 1 on error.
-extern function ms_aro_parse(path: string): int32;
+extern function msAroParse(path: string): int32;
 
 // Get error message (empty string if no error).
-extern function ms_aro_error(): string;
+extern function msAroError(): string;
 
 // Free the current parse result.
-extern function ms_aro_free(): void;
+extern function msAroFree(): void;
 
 // ===== Functions =====
 
-extern function ms_aro_func_count(): int32;
-extern function ms_aro_func_name(i: int32): string;
-extern function ms_aro_func_return_type(i: int32): string;
-extern function ms_aro_func_param_count(i: int32): int32;
-extern function ms_aro_func_param_name(fi: int32, pi: int32): string;
-extern function ms_aro_func_param_type(fi: int32, pi: int32): string;
-extern function ms_aro_func_is_variadic(i: int32): int32;
+extern function msAroFuncCount(): int32;
+extern function msAroFuncName(i: int32): string;
+extern function msAroFuncReturnType(i: int32): string;
+extern function msAroFuncParamCount(i: int32): int32;
+extern function msAroFuncParamName(fi: int32, pi: int32): string;
+extern function msAroFuncParamType(fi: int32, pi: int32): string;
+extern function msAroFuncIsVariadic(i: int32): int32;
 
 // ===== Structs =====
 
-extern function ms_aro_struct_count(): int32;
-extern function ms_aro_struct_name(i: int32): string;
-extern function ms_aro_struct_is_union(i: int32): int32;
-extern function ms_aro_struct_field_count(i: int32): int32;
-extern function ms_aro_struct_field_name(si: int32, fi: int32): string;
-extern function ms_aro_struct_field_type(si: int32, fi: int32): string;
+extern function msAroStructCount(): int32;
+extern function msAroStructName(i: int32): string;
+extern function msAroStructIsUnion(i: int32): int32;
+extern function msAroStructFieldCount(i: int32): int32;
+extern function msAroStructFieldName(si: int32, fi: int32): string;
+extern function msAroStructFieldType(si: int32, fi: int32): string;
 
 // ===== Enums =====
 
-extern function ms_aro_enum_count(): int32;
-extern function ms_aro_enum_name(i: int32): string;
-extern function ms_aro_enum_member_count(i: int32): int32;
-extern function ms_aro_enum_member_name(ei: int32, mi: int32): string;
+extern function msAroEnumCount(): int32;
+extern function msAroEnumName(i: int32): string;
+extern function msAroEnumMemberCount(i: int32): int32;
+extern function msAroEnumMemberName(ei: int32, mi: int32): string;
 
 // ===== Typedefs =====
 
-extern function ms_aro_typedef_count(): int32;
-extern function ms_aro_typedef_name(i: int32): string;
-extern function ms_aro_typedef_target(i: int32): string;
+extern function msAroTypedefCount(): int32;
+extern function msAroTypedefName(i: int32): string;
+extern function msAroTypedefTarget(i: int32): string;

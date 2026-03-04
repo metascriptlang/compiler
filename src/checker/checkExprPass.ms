@@ -2,12 +2,13 @@
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
 import {
-	Node, NodeKind, createNode,
+	Node, NodeKind, createNode, NF_SEM,
 	IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData,
 	CallExprData, MemberExprData, ArrayAccessData,
 	ObjectLiteralData, ArrayLiteralData, ConditionalExprData,
 	TypeAssertionData, SpreadExprData, NewExprData, TryExprData,
 	AwaitExprData, YieldExprData, MoveExprData, OutExprData,
+	HiddenDerefData, HiddenStdConvData,
 	ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData,
 } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
@@ -15,23 +16,24 @@ import {
 	Type, TypeKind,
 	unknownType, numberType, stringType, booleanType,
 	voidType, nullType, errorType,
-	createArray, createFunction, substituteType, instantiateGeneric,
+	createArray, createFunction, createTypeRef, substituteType, instantiateGeneric,
 	isNumeric, isStringType, isCallable, getReturnType, getElementType, getProperty,
 	typeNameOf,
 	unifyType, createUnifyBindings, hasGenericParams,
 	getMinArity,
 } from "./types";
 import {
-	Symbol, SymbolKind, ScopeKind,
+	Symbol, SymbolKind, ScopeKind, SymbolState,
 	defineSymbol, lookupSymbol, makeSymbol, openScope, closeScope, hasOverloads,
 } from "./symbol";
 import { CheckerContext, addError, findAllExtensionsByName, ExtensionMethod } from "./context";
 import {
-	scoreCandidate, isAssignable, resolveOverloadIdx,
+	scoreCandidate, isAssignable, needsStdConv, resolveOverloadIdx,
 	findFirstMismatch, typeRelation, TypeRelation,
 	scoreCandidatePriority, isNoMatch, emptyCandidateScore, cmpCandidates,
 } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
+import { resolveAnnotation, ensureShaped } from "./resolvePass";
 import { getDefaultText } from "../parser/context";
 
 // ===== Nim-Aligned Extension Receiver Matching =====
@@ -53,12 +55,12 @@ function isReceiverMatch(ext: ExtensionMethod, objType: Type): boolean {
 	if (receiverType.kind === TypeKind.Unknown) return true;
 	// Generic extensions: try unification on receiver param (Nim-aligned selective match).
 	// e.g. map<T>(this arr: T[]) should match number[] but NOT string.
-	if (hasGenericParams(ext.fnType)) {
+	if (hasGenericParams(receiverType)) {
 		const eb = createUnifyBindings();
 		unifyType(receiverType, objType, eb);
 		return eb.names.length > 0;
 	}
-	// Concrete: check type compatibility
+	// Concrete: check type compatibility (handles Span coercion)
 	return isAssignable(objType, receiverType);
 }
 
@@ -86,6 +88,9 @@ function filterExtsByReceiverType(exts: ExtensionMethod[], objType: Type): Exten
 // ===== Expression Checker =====
 
 export function checkExpr(ctx: CheckerContext, node: Node): Type {
+	// Nim parity: skip already-checked nodes (nfSem guard)
+	if ((node.flags & NF_SEM) !== 0 && node.nodeType !== null) return node.nodeType;
+
 	const result = match (node.kind) {
 		NodeKind.NumberLiteral | NodeKind.BigIntLiteral => numberType(),
 		NodeKind.StringLiteral => stringType(),
@@ -99,6 +104,9 @@ export function checkExpr(ctx: CheckerContext, node: Node): Type {
 				addError(ctx, `Undefined variable '${d.name}'`);
 				return errorType();
 			}
+			// Demand-driven: ensure the symbol's signature is resolved before using its type
+			ensureShaped(sym, ctx);
+			node.resolvedSym = sym;
 			sym.symbolType;
 		},
 		NodeKind.BinaryExpr => {
@@ -155,7 +163,9 @@ export function checkExpr(ctx: CheckerContext, node: Node): Type {
 		NodeKind.TypeAssertion => {
 			const d = node.data as TypeAssertionData;
 			checkExpr(ctx, d.asExpr);
-			unknownType();
+			const targetType = (d.asType !== "") ? resolveAnnotation(d.asType, ctx) : unknownType();
+			node.nodeType = targetType;
+			targetType;
 		},
 		NodeKind.SpreadExpr => {
 			const d = node.data as SpreadExprData;
@@ -206,9 +216,19 @@ export function checkExpr(ctx: CheckerContext, node: Node): Type {
 			checkExpr(ctx, d.outArg);
 			unknownType();
 		},
+		NodeKind.HiddenDeref | NodeKind.HiddenAddr => {
+			const d = node.data as HiddenDerefData;
+			checkExpr(ctx, d.expr);
+		},
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
+			const d = node.data as HiddenStdConvData;
+			checkExpr(ctx, d.convExpr);
+			d.convType;
+		},
 		_ => unknownType(),
 	};
-	node.nodeType = result ;
+	node.nodeType = result;
+	node.flags = node.flags | NF_SEM;
 	return result;
 }
 
@@ -322,12 +342,22 @@ function checkCallExpr(ctx: CheckerContext, node: Node): Type {
 		argTypes.push(argType);
 	}
 	const calleeType = checkExpr(ctx, d.callee);
-	// Check for overloads
+	// Check for overloads + set resolvedSym for direct calls
 	if (d.callee.kind === NodeKind.Identifier) {
 		const calleeName = (d.callee.data as IdentifierData).name;
 		const sym = lookupSymbol(ctx.table, calleeName);
-		if (sym !== null && hasOverloads(sym)) {
-			return resolveOverloadCall(ctx, sym, argTypes, node);
+		if (sym !== null) {
+			// Demand-driven: ensure callee signature is ready
+			ensureShaped(sym, ctx);
+			node.resolvedSym = sym;
+			if (hasOverloads(sym)) {
+				return resolveOverloadCall(ctx, sym, argTypes, node);
+			}
+		}
+	} else if (d.callee.kind === NodeKind.MemberExpr) {
+		// Method call: resolveMemberExpr already set resolvedSym on the callee node
+		if (d.callee.resolvedSym !== null) {
+			node.resolvedSym = d.callee.resolvedSym;
 		}
 	}
 	// Extension method overloads: obj.method(args) where multiple extensions match
@@ -358,20 +388,22 @@ function checkCallExpr(ctx: CheckerContext, node: Node): Type {
 			}
 		}
 		// Type-check only provided args (defaults are trusted)
-		// Skip for member expression calls — extension method overload resolution may pick
-		// wrong overload in single-module mode (missing cross-module type info)
-		const skipArgCheck = d.callee.kind === NodeKind.MemberExpr;
-		if (!skipArgCheck) {
-			for (let pi = 0; pi < calleeType.typeChildren.length && pi < argTypes.length; pi += 1) {
-				const paramType = calleeType.typeChildren[pi];
-				if (paramType.kind !== TypeKind.Unknown && paramType.kind !== TypeKind.GenericParam
-					&& paramType.kind !== TypeKind.Function
-					&& argTypes[pi].kind !== TypeKind.Unknown && argTypes[pi].kind !== TypeKind.Error
-					&& argTypes[pi].kind !== TypeKind.Function) {
-					if (!isAssignable(argTypes[pi], paramType)) {
-						const calleeName = getCalleeName(d.callee);
-						addError(ctx, "Argument type mismatch in '" + calleeName + "' arg " + intToString(pi) + ": got " + typeNameOf(argTypes[pi]) + ", expected " + typeNameOf(paramType));
-					}
+		for (let pi = 0; pi < calleeType.typeChildren.length && pi < argTypes.length; pi += 1) {
+			const paramType = calleeType.typeChildren[pi];
+			if (paramType.kind !== TypeKind.Unknown && paramType.kind !== TypeKind.GenericParam
+				&& paramType.kind !== TypeKind.Function
+				&& argTypes[pi].kind !== TypeKind.Unknown && argTypes[pi].kind !== TypeKind.Error
+				&& argTypes[pi].kind !== TypeKind.Function) {
+				if (!isAssignable(argTypes[pi], paramType)) {
+					const calleeName = getCalleeName(d.callee);
+					addError(ctx, "Argument type mismatch in '" + calleeName + "' arg " + intToString(pi) + ": got " + typeNameOf(argTypes[pi]) + ", expected " + typeNameOf(paramType));
+				} else if (needsStdConv(argTypes[pi], paramType)) {
+					// Nim parity: insert HiddenStdConv for numeric widening/narrowing OR Span coercion
+					const convTok = createToken(TokenKind.Ident, "", d.arguments[pi].location.line);
+					const convNode = createNode(NodeKind.HiddenStdConv, { convExpr: d.arguments[pi], convType: paramType }, convTok);
+					convNode.nodeType = paramType;
+					convNode.flags = convNode.flags | 1; // NF_SEM
+					d.arguments[pi] = convNode;
 				}
 			}
 		}
@@ -438,7 +470,14 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, argTypes: Type[],
 		addError(ctx, msg);
 		return getReturnType(sym.symbolType);
 	}
-	// Success — fill default args if needed, then infer generic return
+	// Success — store resolved index + symbol on AST node, fill default args, infer return
+	const cd = callNode.data as CallExprData;
+	cd.resolvedOverloadIdx = idx;
+	if (idx === 0) {
+		callNode.resolvedSym = sym;
+	} else if (idx > 0 && idx - 1 < sym.overloads.length) {
+		callNode.resolvedSym = sym.overloads[idx - 1];
+	}
 	const winner = candidates[idx];
 	if (winner.kind === TypeKind.Function && argTypes.length < winner.typeChildren.length) {
 		fillDefaultArgsForNode(ctx, callNode, sym.name, winner.typeChildren.length);
@@ -636,6 +675,23 @@ function isPointerInC(t: Type, ctx: CheckerContext): boolean {
 function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 	const d = node.data as MemberExprData;
 	const objType = checkExpr(ctx, d.object);
+	// Enum member access: Color.Red → rewrite to Identifier "Color_Red" (Nim parity: nkSym)
+	// This rewrites the AST so codegen never sees enum-specific MemberExpr
+	if (objType.kind === TypeKind.Enum) {
+		const enumName = objType.typeName;
+		const mangledName = enumName + "_" + d.property;
+		// Rewrite entire node to Identifier
+		node.kind = NodeKind.Identifier;
+		node.data = { name: mangledName };
+		// Find and set the resolved enum member symbol
+		const enumSym = lookupSymbol(ctx.table, enumName);
+		if (enumSym !== null) {
+			const memberSym = lookupSymbol(ctx.table, mangledName);
+			node.resolvedSym = memberSym;
+		}
+		node.nodeType = objType;
+		return objType;
+	}
 	// Insert HiddenDeref for pointer types (class, ref, ptr) — generates (*obj).field in C
 	if (isPointerInC(objType, ctx)) {
 		const tok = createToken(TokenKind.Ident, "", node.location.line);
@@ -644,12 +700,64 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 		d.object = derefNode;
 	}
 	const propType = getProperty(objType, d.property);
-	if (propType.kind !== TypeKind.Unknown) return propType;
+	// Result fields: ok, value, error — synthetic symbol (no typeName on Result)
+	if (objType.kind === TypeKind.Result && propType.kind !== TypeKind.Unknown) {
+		const resultPropSym = makeSymbol(d.property, SymbolKind.Property, propType, false);
+		resultPropSym.state = SymbolState.Shaped;
+		node.resolvedSym = resultPropSym;
+		return propType;
+	}
+	if (propType.kind !== TypeKind.Unknown) {
+		// Resolve property symbol: search symbol table for ClassName_propName
+		if (objType.typeName !== "") {
+			const propSymName = objType.typeName + "_" + d.property;
+			const propSym = lookupSymbol(ctx.table, propSymName);
+			if (propSym !== null) {
+				ensureShaped(propSym, ctx);
+				node.resolvedSym = propSym;
+			} else {
+				// Search within the object type's own members if not found in top-level table
+				// (e.g. for members of classes defined in the same module)
+				let mi = 0;
+				for (const mName of objType.typeNames) {
+					if (mName === d.property) {
+						// Create a synthetic symbol for this member to satisfy the validator
+						const synthSym = makeSymbol(mName, SymbolKind.Method, objType.typeChildren[mi], false);
+						synthSym.state = SymbolState.Shaped;
+						node.resolvedSym = synthSym;
+						break;
+					}
+					mi = mi + 1;
+				}
+			}
+		}
+		return propType;
+	}
+
+	// Builtin properties: .length on array/string
+	if (d.property === "length" && (objType.kind === TypeKind.Array || objType.kind === TypeKind.String)) {
+		// Create a synthetic symbol for 'length' to satisfy the validator
+		const lengthSym = makeSymbol("length", SymbolKind.Property, numberType(), false);
+		lengthSym.state = SymbolState.Shaped;
+		node.resolvedSym = lengthSym;
+		return numberType();
+	}
 	// Fall back to extension registry — Nim-aligned type-based lookup
 	if (ctx.extensionRegistry !== null) {
 		const allByName = findAllExtensionsByName(ctx.extensionRegistry, d.property);
-		const ext = findFirstMatchingExt(allByName, objType);
+		let ext = findFirstMatchingExt(allByName, objType);
+		// Static extension fallback: match 'typeof Type'
+		if (ext === null && objType.typeName !== "") {
+			const staticType = createTypeRef("typeof " + objType.typeName);
+			ext = findFirstMatchingExt(allByName, staticType);
+		}
 		if (ext !== null) {
+			// Resolve to specific extension symbol
+			const extSym = lookupSymbol(ctx.table, ext.methodName);
+			if (extSym !== null) {
+				ensureShaped(extSym, ctx);
+				node.resolvedSym = extSym;
+			}
 			// Instance extension: strip receiver param (index 0) so checkCallExpr
 			// sees only user-visible params. The receiver is already in MemberExpr.object.
 			if (!ext.isStatic && ext.fnType.typeChildren.length > 0) {

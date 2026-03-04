@@ -2,8 +2,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-/* DRC globals */
+/* DRC / exception globals */
 bool msErr = false;
+msException* msCurrException = NULL;
 
 void msPrintln(msString s) {
 	if (s.p != NULL && s.len > 0) {

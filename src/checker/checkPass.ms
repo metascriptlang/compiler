@@ -20,20 +20,23 @@ import {
 	createUnion,
 } from "./types";
 import {
-	Symbol, SymbolKind, ScopeKind,
+	Symbol, SymbolKind, SymbolState, ScopeKind,
 	defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope,
+	setFlag, SF_MUTABLE, SF_LENT,
 } from "./symbol";
-import { CheckerContext, createContext, addError, hasErrors, errorCount } from "./context";
+import { CheckerContext, createContext, addError, hasErrors, errorCount, createExtensionRegistry } from "./context";
 import { collectTopLevel, defineOrError } from "./collectPass";
 import { readFile } from "std/process";
 import { globalImports } from "./prelude";
 import { isAssignable } from "./compat";
-import { resolveDeclarations, resolveAnnotation } from "./resolvePass";
+import { resolveDeclarations, resolveAnnotation, ensureShaped } from "./resolvePass";
+import { inferOwnership } from "./ownershipInference";
+import { validateTypedAST } from "./validate";
 import { sliceStr } from "../utils/string";
 import { checkExpr, checkEnumExhaustiveness } from "./checkExprPass";
 import { registerCheckStmt } from "./checkerCallbacks";
 import { parseSource } from "../parser/statements/validation";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 // ===== Statement Checker =====
 
@@ -77,7 +80,11 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 		NodeKind.DestructuringDecl => checkDestructuringDecl(ctx, node),
 		NodeKind.TestDecl => {
 			const d = node.data as TestDeclData;
+			// Test blocks compile to functions — allow return statements inside
+			const savedFunction = ctx.currentFunction;
+			ctx.currentFunction = makeSymbol("__test__", SymbolKind.Function, unknownType(), false);
 			checkBlock(ctx, d.testBody);
+			ctx.currentFunction = savedFunction;
 		},
 		NodeKind.ExpectStmt => {
 			const d = node.data as ExpectStmtData;
@@ -102,7 +109,9 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	const existing = lookupLocal(ctx.table, d.declName);
 	if (existing !== null) {
 		existing.symbolType = varType;
-		existing.isMutable = d.declKind !== DeclKind.Const;
+		if (d.declKind !== DeclKind.Const) {
+			setFlag(existing, SF_MUTABLE);
+		}
 	} else {
 		defineOrError(ctx, makeSymbol(d.declName, SymbolKind.Variable, varType, d.declKind !== DeclKind.Const), node);
 	}
@@ -111,15 +120,27 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as FunctionDeclData;
 	const sym = lookupSymbol(ctx.table, d.fnName);
+	if (sym === null) return;
+	node.resolvedSym = sym;
+
+	// Demand-driven: ensure signature is shaped before checking body
+	ensureShaped(sym, ctx);
+
+	// Multi-pass parity: avoid re-checking body if already done
+	if (sym.state === SymbolState.Checked) return;
+	sym.state = SymbolState.Checking;
+
+	const fnType = sym.symbolType;
+	node.nodeType = fnType;
 
 	// Save/restore inferredReturn for nested functions
 	const savedReturn = ctx.inferredReturn;
-	ctx.inferredReturn = unknownType();
+	ctx.inferredReturn = fnType.typeReturn;
 
 	checkFunctionBody(ctx, sym, d.params, d.fnBody);
 
 	// If return type was unknown (no annotation), use inferred type
-	if (sym !== null && sym.symbolType.kind === TypeKind.Function
+	if (sym.symbolType.kind === TypeKind.Function
 		&& sym.symbolType.typeReturn !== null
 		&& sym.symbolType.typeReturn.kind === TypeKind.Unknown
 		&& ctx.inferredReturn.kind !== TypeKind.Unknown) {
@@ -127,20 +148,33 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 	}
 
 	// @pure effect check: warn on impure calls inside pure functions
-	if (sym !== null && sym.builtinKind === "pure" && d.fnBody !== null) {
+	if (sym.builtinKind === "pure" && d.fnBody !== null) {
 		checkPurityViolations(ctx, d.fnBody);
 	}
 
 	ctx.inferredReturn = savedReturn;
+	sym.state = SymbolState.Checked;
 }
 
 function checkClassDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ClassDeclData;
+	const sym = lookupSymbol(ctx.table, d.className);
+	if (sym === null) return;
+	node.resolvedSym = sym;
+
+	// Demand-driven: ensure class fields/methods are shaped
+	ensureShaped(sym, ctx);
+
+	if (sym.state === SymbolState.Checked) return;
+	sym.state = SymbolState.Checking;
+
 	openScope(ctx.table, ScopeKind.Class);
 	for (const member of d.classBody) {
 		checkClassMember(ctx, member);
 	}
 	closeScope(ctx.table);
+
+	sym.state = SymbolState.Checked;
 }
 
 function checkClassMember(ctx: CheckerContext, node: Node): void {
@@ -523,7 +557,12 @@ function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], b
 		if (sym !== null && sym.symbolType.kind === TypeKind.Function && i < sym.symbolType.typeChildren.length) {
 			paramType = sym.symbolType.typeChildren[i];
 		}
-		defineSymbol(ctx.table, makeSymbol(param, SymbolKind.Parameter, paramType, false));
+		const paramSym = makeSymbol(param, SymbolKind.Parameter, paramType, false);
+		// Receiver is implicitly LENT (borrowed)
+		if (param === "this" || (i === 0 && param === "self")) {
+			setFlag(paramSym, SF_LENT);
+		}
+		defineSymbol(ctx.table, paramSym);
 		i += 1;
 	}
 	if (body.kind === NodeKind.BlockStmt) {
@@ -606,15 +645,26 @@ function collectDirectives(ctx: CheckerContext, program: Node): void {
 
 export function checkProgram(program: Node): CheckerContext {
 	const ctx = createContext();
-	// Parse + check global imports in Global scope
-	// Probes: specifier.ms → specifier/index.cms → specifier/index.ms
+	ctx.extensionRegistry = createExtensionRegistry();
+	// User code + Prelude in Module scope (so extensions register correctly)
+	openScope(ctx.table, ScopeKind.Module);
+	// Parse + check global imports
 	for (const imp of globalImports()) {
 		loadPreludeImport(ctx, imp);
 	}
-	// User code in Module scope
-	openScope(ctx.table, ScopeKind.Module);
+	// Demand-driven: ensure console is available as a global
+	const consoleClass = lookupSymbol(ctx.table, "console");
+	if (consoleClass !== null) {
+		const consoleGlobal = makeSymbol("console", SymbolKind.Variable, consoleClass.symbolType, false);
+		defineSymbol(ctx.table, consoleGlobal);
+		consoleGlobal.state = SymbolState.Shaped;
+	}
 	runThreePasses(ctx, program);
 	collectDirectives(ctx, program);
+
+	// Phase 2.5: Ownership Inference (Nim parity: sinkparameter_inference.nim)
+	inferOwnership(ctx, program);
+
 	return ctx;
 }
 
@@ -631,6 +681,11 @@ function loadPreludeImport(ctx: CheckerContext, specifier: string): void {
 		if (pr.ok) {
 			runThreePasses(ctx, pr.value);
 			collectDirectives(ctx, pr.value);
+			// Demand-driven resolution: ensure all prelude symbols are shaped
+			const scope = ctx.table.current;
+			for (const sym of scope.symbols) {
+				ensureShaped(sym, ctx);
+			}
 		}
 	}
 }
@@ -656,486 +711,434 @@ function checkErrors(input: string): number {
 	return errorCount(ctx);
 }
 
-testGroup("Checker Scope", () => {
-	test("variable decl", () => {
-		check(checkOk("const x = 1;"));
-		check(checkOk("let y = 2;"));
-		check(checkOk("var z = 3;"));
-	});
-	test("variable use", () => {
-		check(checkOk("const x = 1; const y = x;"));
-	});
-	test("undefined variable", () => {
-		check(!checkOk("const x = y;"));
-		check(checkErrors("const x = y;") === 1);
-	});
-	test("function scope", () => {
-		check(checkOk("function foo(a, b) { const x = a; }"));
-	});
-	test("forward reference", () => {
-		check(checkOk("const x = foo; function foo() { return 1; }"));
-	});
-	test("block scope", () => {
-		check(checkOk("const x = 1; if (true) { const y = x; }"));
-	});
-	test("nested scope isolation", () => {
-		check(!checkOk("if (true) { const y = 1; } const z = y;"));
-	});
-});
+test "variable decl" {
+	check(checkOk("const x = 1;"));
+	check(checkOk("let y = 2;"));
+	check(checkOk("var z = 3;"));
+}
 
-testGroup("Checker Loops", () => {
-	test("break in loop", () => {
-		check(checkOk("while (true) { break; }"));
-	});
-	test("break outside loop", () => {
-		check(!checkOk("break;"));
-	});
-	test("continue in loop", () => {
-		check(checkOk("for (let i = 0; i < 10; i++) { continue; }"));
-	});
-	test("continue outside loop", () => {
-		check(!checkOk("continue;"));
-	});
-	test("for-of binding", () => {
-		check(checkOk("const items = 1; for (const item of items) { const x = item; }"));
-	});
-});
+test "variable use" { check(checkOk("const x = 1; const y = x;")); }
 
-testGroup("Checker Functions", () => {
-	test("return in function", () => {
-		check(checkOk("function foo() { return 1; }"));
-	});
-	test("return outside function", () => {
-		check(!checkOk("return 1;"));
-	});
-	test("class method scope", () => {
-		check(checkOk("class Foo { bar(x) { return x; } }"));
-	});
-	test("try-catch param", () => {
-		check(checkOk("try { const x = 1; } catch (e) { const y = e; }"));
-	});
-	test("arrow function", () => {
-		check(checkOk("const f = (x) => x;"));
-	});
-});
+test "undefined variable" {
+	check(!checkOk("const x = y;"));
+	check(checkErrors("const x = y;") === 1);
+}
 
-testGroup("Checker Literals", () => {
-	test("number type", () => {
-		const ctx = checkSource("const x = 42;");
-		const sym = lookupSymbol(ctx.table, "x");
-		check(sym !== null);
-		check(sym.symbolType.kind === TypeKind.Number);
-	});
-	test("string type", () => {
-		const ctx = checkSource("const s = \"hello\";");
-		const sym = lookupSymbol(ctx.table, "s");
-		check(sym !== null);
-		check(sym.symbolType.kind === TypeKind.String);
-	});
-	test("boolean type", () => {
-		const ctx = checkSource("const b = true;");
-		const sym = lookupSymbol(ctx.table, "b");
-		check(sym !== null);
-		check(sym.symbolType.kind === TypeKind.Boolean);
-	});
-	test("null type", () => {
-		const ctx = checkSource("const n = null;");
-		const sym = lookupSymbol(ctx.table, "n");
-		check(sym !== null);
-		check(sym.symbolType.kind === TypeKind.Null);
-	});
-});
+test "function scope" { check(checkOk("function foo(a, b) { const x = a; }")); }
 
-testGroup("Checker Operators", () => {
-	test("arithmetic returns number", () => {
-		const ctx = checkSource("const x = 1 + 2;");
-		const sym = lookupSymbol(ctx.table, "x");
-		check(sym !== null);
-		check(sym.symbolType.kind === TypeKind.Number);
-	});
-	test("string concat returns string", () => {
-		const ctx = checkSource("const x = \"a\" + \"b\";");
-		const sym = lookupSymbol(ctx.table, "x");
-		check(sym !== null);
-		check(sym.symbolType.kind === TypeKind.String);
-	});
-	test("comparison returns boolean", () => {
-		const ctx = checkSource("const x = 1 < 2;");
-		const sym = lookupSymbol(ctx.table, "x");
-		check(sym !== null);
-		check(sym.symbolType.kind === TypeKind.Boolean);
-	});
-	test("equality returns boolean", () => {
-		const ctx = checkSource("const x = 1 === 2;");
-		const sym = lookupSymbol(ctx.table, "x");
-		check(sym !== null);
-		check(sym.symbolType.kind === TypeKind.Boolean);
-	});
-	test("negation returns boolean", () => {
-		const ctx = checkSource("const x = !true;");
-		const sym = lookupSymbol(ctx.table, "x");
-		check(sym !== null);
-		check(sym.symbolType.kind === TypeKind.Boolean);
-	});
-	test("unary minus returns number", () => {
-		const ctx = checkSource("const x = -5;");
-		const sym = lookupSymbol(ctx.table, "x");
-		check(sym !== null);
-		check(sym.symbolType.kind === TypeKind.Number);
-	});
-});
+test "forward reference" { check(checkOk("const x = foo; function foo() { return 1; }")); }
 
-testGroup("Checker 3-Pass", () => {
-	test("function has Function type after resolve", () => {
-		const ctx = checkSource("function foo(a, b) { return 1; }");
-		const sym = lookupSymbol(ctx.table, "foo");
-		check(sym !== null);
-		check(sym.symbolType.kind === TypeKind.Function);
-		check(sym.symbolType.typeChildren.length === 2);
-		check(sym.symbolType.typeNames.length === 2);
-	});
-	test("call returns function return type", () => {
-		const ctx = checkSource("function foo(a, b) { return 1; } const x = foo(1, 2);");
-		const sym = lookupSymbol(ctx.table, "x");
-		check(sym !== null);
-		// foo's return type inferred as number from body
-		check(sym.symbolType.kind === TypeKind.Number);
-	});
-	test("forward reference to function is callable", () => {
-		const ctx = checkSource("const x = foo(1); function foo(a) { return 1; }");
-		check(!hasErrors(ctx));
-	});
-	test("typed function params resolved", () => {
-		const ctx = checkSource("function add(a: number, b: number): number { return a; }");
-		const sym = lookupSymbol(ctx.table, "add");
-		check(sym !== null);
-		check(sym.symbolType.kind === TypeKind.Function);
-		check(sym.symbolType.typeChildren[0].kind === TypeKind.Number);
-		check(sym.symbolType.typeChildren[1].kind === TypeKind.Number);
-		check(sym.symbolType.typeReturn.kind === TypeKind.Number);
-	});
-	test("typed function call returns annotated type", () => {
-		const ctx = checkSource("function greet(name: string): string { return name; } const x = greet(\"hi\");");
-		const sym = lookupSymbol(ctx.table, "x");
-		check(sym !== null);
-		check(sym.symbolType.kind === TypeKind.String);
-	});
-	test("array literal infers element type", () => {
-		const ctx = checkSource("const arr = [1, 2, 3];");
-		const sym = lookupSymbol(ctx.table, "arr");
-		check(sym !== null);
-		check(sym.symbolType.kind === TypeKind.Array);
-		check(sym.symbolType.typeReturn.kind === TypeKind.Number);
-	});
-	test("arrow function has Function type", () => {
-		const ctx = checkSource("const f = (x) => x;");
-		const sym = lookupSymbol(ctx.table, "f");
-		check(sym !== null);
-		check(sym.symbolType.kind === TypeKind.Function);
-	});
-});
+test "block scope" { check(checkOk("const x = 1; if (true) { const y = x; }")); }
 
-testGroup("Checker Return Inference", () => {
-	test("inferred return type from body", () => {
-		const ctx = checkSource("function foo() { return 42; }");
-		const sym = lookupSymbol(ctx.table, "foo");
-		check(sym !== null);
-		check(sym.symbolType.typeReturn.kind === TypeKind.Number);
-	});
-	test("annotated return type preserved", () => {
-		const ctx = checkSource("function bar(): string { return \"hi\"; }");
-		const sym = lookupSymbol(ctx.table, "bar");
-		check(sym !== null);
-		check(sym.symbolType.typeReturn.kind === TypeKind.String);
-	});
-	test("arrow infers return type", () => {
-		const ctx = checkSource("const f = (x) => 42;");
-		const sym = lookupSymbol(ctx.table, "f");
-		check(sym !== null);
-		check(sym.symbolType.typeReturn.kind === TypeKind.Number);
-	});
-	test("string return inferred", () => {
-		const ctx = checkSource("function greet() { return \"hello\"; }");
-		const sym = lookupSymbol(ctx.table, "greet");
-		check(sym !== null);
-		check(sym.symbolType.typeReturn.kind === TypeKind.String);
-	});
-	test("boolean return inferred", () => {
-		const ctx = checkSource("function isOk() { return true; }");
-		const sym = lookupSymbol(ctx.table, "isOk");
-		check(sym !== null);
-		check(sym.symbolType.typeReturn.kind === TypeKind.Boolean);
-	});
-	test("no return stays unknown", () => {
-		const ctx = checkSource("function noop() { const x = 1; }");
-		const sym = lookupSymbol(ctx.table, "noop");
-		check(sym !== null);
-		check(sym.symbolType.typeReturn.kind === TypeKind.Unknown);
-	});
-});
+test "nested scope isolation" { check(!checkOk("if (true) { const y = 1; } const z = y;")); }
 
-testGroup("Checker Type Enforcement", () => {
-	test("return type mismatch detected", () => {
-		check(!checkOk("function foo(): number { return \"hello\"; }"));
-	});
-	test("return type match ok", () => {
-		check(checkOk("function foo(): number { return 42; }"));
-	});
-	test("return string match ok", () => {
-		check(checkOk("function bar(): string { return \"hi\"; }"));
-	});
-	test("arg type mismatch detected", () => {
-		check(!checkOk("function add(a: number, b: number): number { return a; } const x = add(\"hi\", 2);"));
-	});
-	test("arg type match ok", () => {
-		check(checkOk("function add(a: number, b: number): number { return a; } const x = add(1, 2);"));
-	});
-	test("numeric widening ok", () => {
-		check(checkOk("function f(n: number): number { return n; } const x = f(42);"));
-	});
-});
+test "break in loop" { check(checkOk("while (true) { break; }")); }
 
-testGroup("Checker Overloads", () => {
-	test("two overloads no error", () => {
-		check(checkOk("function add(a: number, b: number): number { return a; } function add(a: string, b: string): string { return a; }"));
-	});
-	test("overload different arity no error", () => {
-		check(checkOk("function f(a: number): number { return a; } function f(a: number, b: number): number { return a; }"));
-	});
-	test("overload call resolves", () => {
-		const ctx = checkSource("function f(a: number): number { return a; } function f(a: string): string { return a; } const x = f(1);");
-		check(!hasErrors(ctx));
-		const sym = lookupSymbol(ctx.table, "x");
-		check(sym !== null);
-		check(sym.symbolType.kind === TypeKind.Number);
-	});
-	test("overload call picks string version", () => {
-		const ctx = checkSource("function f(a: number): number { return a; } function f(a: string): string { return a; } const y = f(\"hi\");");
-		check(!hasErrors(ctx));
-		const sym = lookupSymbol(ctx.table, "y");
-		check(sym !== null);
-		check(sym.symbolType.kind === TypeKind.String);
-	});
-});
+test "break outside loop" { check(!checkOk("break;")); }
 
-testGroup("Checker Overload Errors", () => {
-	test("no match reports error", () => {
-		const ctx = checkSource("function add(a: number, b: number): number { return a; } function add(a: string, b: string): string { return a; } const x = add(true);");
-		check(hasErrors(ctx));
-	});
-	test("ambiguous call reports error", () => {
-		// Same param types, different return types → ambiguous
-		const ctx = checkSource("function f(a: number): number { return a; } function f(a: number): string { return \"hi\"; } const x = f(1);");
-		check(hasErrors(ctx));
-	});
-	test("arity-based overload resolution", () => {
-		const ctx = checkSource("function f(a: number): number { return a; } function f(a: number, b: number): number { return a; } const x = f(1); const y = f(1, 2);");
-		check(!hasErrors(ctx));
-	});
-});
+test "continue in loop" { check(checkOk("for (let i = 0; i < 10; i++) { continue; }")); }
 
-testGroup("Checker Extension Overloads", () => {
-	test("two extension overloads no error", () => {
-		check(checkOk("function trim(this s: string): string { return s; } function trim(this s: string, ch: string): string { return s; }"));
-	});
-	test("extension overload call resolves by arity", () => {
-		const ctx = checkSource("function double(this n: number): number { return n; } function double(this n: number, scale: number): number { return n; } const x = double(1); const y = double(1, 2);");
-		check(!hasErrors(ctx));
-	});
-	test("same-name extensions on different types filter by receiver", () => {
-		// Bug repro: indexOf on string vs number[] — must resolve by receiver type, not pick first match
-		const ctx = checkSource("function indexOf(this s: string, sub: string, start: number): number { return 0; } function indexOf(this arr: number[], value: number): number { return 0; } const msg: string = \"hello\"; const idx: number = msg.indexOf(\"world\", 0);");
-		check(!hasErrors(ctx));
-	});
-	test("same-name extensions array receiver resolves correctly", () => {
-		const ctx = checkSource("function indexOf(this s: string, sub: string, start: number): number { return 0; } function indexOf(this arr: number[], value: number): number { return 0; } const a: number[] = [1, 2, 3]; const idx: number = a.indexOf(42);");
-		check(!hasErrors(ctx));
-	});
-	test("generic extension matches compatible array receiver", () => {
-		// first<T>(this arr: T[]) called as a.first() — T unifies with number
-		const ctx = checkSource("function first<T>(this arr: T[]): T { return arr[0]; } const a: number[] = [1, 2]; const x: number = a.first();");
-		check(!hasErrors(ctx));
-	});
-});
+test "continue outside loop" { check(!checkOk("continue;")); }
 
-testGroup("Checker Extensions", () => {
-	test("extension method registered", () => {
-		const ctx = checkSource("function trim(this s: string): string { return s; }");
-		check(!hasErrors(ctx));
-		const sym = lookupSymbol(ctx.table, "trim");
-		check(sym !== null);
-		check(sym.symbolType.kind === TypeKind.Function);
-	});
-	test("extension method callable as function", () => {
-		const ctx = checkSource("function double(this n: number): number { return n; } const x = double(1);");
-		check(!hasErrors(ctx));
-	});
-	test("extension on builtin type no error", () => {
-		check(checkOk("function len(this s: string): number { return 0; }"));
-	});
-});
+test "for-of binding" { check(checkOk("const items = 1; for (const item of items) { const x = item; }")); }
 
-testGroup("Checker Generics", () => {
-	test("generic function parses ok", () => {
-		check(checkOk("function wrap<T>(x: T): T { return x; }"));
-	});
-	test("generic param resolved as GenericParam", () => {
-		const ctx = checkSource("function id<T>(x: T): T { return x; }");
-		check(!hasErrors(ctx));
-		const sym = lookupSymbol(ctx.table, "id");
-		check(sym !== null);
-		check(sym.symbolType.kind === TypeKind.Function);
-		check(sym.symbolType.typeChildren[0].kind === TypeKind.GenericParam);
-		check(sym.symbolType.typeReturn.kind === TypeKind.GenericParam);
-	});
-	test("generic call infers return type", () => {
-		const ctx = checkSource("function id<T>(x: T): T { return x; } const n = id(42);");
-		check(!hasErrors(ctx));
-		const sym = lookupSymbol(ctx.table, "n");
-		check(sym !== null);
-		check(sym.symbolType.kind === TypeKind.Number);
-	});
-	test("two generic params", () => {
-		const ctx = checkSource("function first<T, U>(a: T, b: U): T { return a; } const x = first(1, \"hi\");");
-		check(!hasErrors(ctx));
-		const sym = lookupSymbol(ctx.table, "x");
-		check(sym !== null);
-		check(sym.symbolType.kind === TypeKind.Number);
-	});
-	test("generic with annotated return", () => {
-		check(checkOk("function identity<T>(x: T): T { return x; }"));
-	});
-});
+test "return in function" { check(checkOk("function foo() { return 1; }")); }
 
-testGroup("Match Exhaustiveness", () => {
-	test("wildcard always exhaustive", () => {
-		check(checkOk("enum Color { Red, Green, Blue } function f(): number { const c = Color.Red; return match (c) { _ => 0 }; }"));
-	});
-	test("all members covered", () => {
-		check(checkOk("enum Color { Red, Green, Blue } function f(): number { const c = Color.Red; return match (c) { Color.Red => 1, Color.Green => 2, Color.Blue => 3 }; }"));
-	});
-	test("missing member errors", () => {
-		check(!checkOk("enum Color { Red, Green, Blue } function f(): number { const c = Color.Red; return match (c) { Color.Red => 1, Color.Green => 2 }; }"));
-	});
-	test("binding acts as wildcard", () => {
-		check(checkOk("enum Color { Red, Green } function f(): number { const c = Color.Red; return match (c) { Color.Red => 1, other => 0 }; }"));
-	});
-	test("non-enum no exhaustiveness check", () => {
-		check(checkOk("const x = match (42) { 1 => \"one\", _ => \"other\" };"));
-	});
-	test("match expr returns arm type", () => {
-		const ctx = checkSource("const x = match (1) { 1 => 42, _ => 0 };");
-		check(!hasErrors(ctx));
-		const sym = lookupSymbol(ctx.table, "x");
-		check(sym !== null);
-		check(sym.symbolType.kind === TypeKind.Number);
-	});
-});
+test "return outside function" { check(!checkOk("return 1;")); }
 
-testGroup("Null Narrowing", () => {
-	test("basic not-null check", () => {
-		check(checkOk("const x = 1; if (x !== null) { const y = x; }"));
-	});
-	test("reversed null check", () => {
-		check(checkOk("const x = 1; if (null !== x) { const y = x; }"));
-	});
-	test("equals null narrows", () => {
-		check(checkOk("const x = 1; if (x === null) { const y = x; }"));
-	});
-	test("no narrowing without null check", () => {
-		check(checkOk("const x = 1; if (x === x) { const y = x; }"));
-	});
-	test("removeNullFromType unit", () => {
-		const unionType = createUnion([stringType(), nullType()]);
-		const narrowed = removeNullFromType(unionType);
-		check(narrowed.kind === TypeKind.String);
-	});
-	test("guard clause narrows after early return", () => {
-		// if (x === null) return; → x should be non-null after
-		check(checkOk("function f(x: string): string { if (x === null) return \"\"; const y = x; return y; }"));
-	});
-	test("guard clause narrows after throw", () => {
-		check(checkOk("function f(x: string): string { if (x === null) throw \"err\"; return x; }"));
-	});
-	test("logical AND null check", () => {
-		// x !== null && x > 0 → x is non-null in consequent
-		check(checkOk("const x = 1; if (x !== null && x > 0) { const y = x; }"));
-	});
-});
+test "class method scope" { check(checkOk("class Foo { bar(x) { return x; } }")); }
 
-testGroup("Effect System", () => {
-	test("pure function with pure ops passes", () => {
-		check(checkOk("@pure function add(a: number, b: number): number { return a + b; }"));
-	});
-	test("pure function calling impure warns", () => {
-		const ctx = checkSource("function impure(): void {} @pure function bad(): void { impure(); }");
-		check(hasErrors(ctx));
-	});
-	test("pure calling pure is ok", () => {
-		check(checkOk("@pure function helper(x: number): number { return x; } @pure function main(a: number): number { return helper(a); }"));
-	});
-});
+test "try-catch param" { check(checkOk("try { const x = 1; } catch (e) { const y = e; }")); }
 
-testGroup("Resolve Coverage", () => {
-	test("type alias resolves to type", () => {
-		const ctx = checkSource("type ID = number;");
-		check(!hasErrors(ctx));
-		const sym = lookupSymbol(ctx.table, "ID");
-		check(sym !== null);
-		check(sym.symbolType.kind === TypeKind.Number);
-	});
-	test("type alias Result resolved", () => {
-		const ctx = checkSource("type MyResult = Result<number, string>;");
-		check(!hasErrors(ctx));
-		const sym = lookupSymbol(ctx.table, "MyResult");
-		check(sym !== null);
-		check(sym.symbolType.kind === TypeKind.Result);
-	});
-	test("distinct type creates Distinct wrapper", () => {
-		const ctx = checkSource("distinct type UserId = number;");
-		check(!hasErrors(ctx));
-		const sym = lookupSymbol(ctx.table, "UserId");
-		check(sym !== null);
-		check(sym.symbolType.kind === TypeKind.Distinct);
-	});
-	test("variable annotation overrides inference", () => {
-		const ctx = checkSource("const x: string = \"hello\";");
-		check(!hasErrors(ctx));
-		const sym = lookupSymbol(ctx.table, "x");
-		check(sym !== null);
-		check(sym.symbolType.kind === TypeKind.String);
-	});
-	test("class property type resolved", () => {
-		const ctx = checkSource("class Point { x: number; y: string; getX() { return 1; } }");
-		check(!hasErrors(ctx));
-		const sym = lookupSymbol(ctx.table, "Point");
-		check(sym !== null);
-		check(sym.symbolType.kind === TypeKind.Object);
-	});
-});
+test "arrow function" { check(checkOk("const f = (x) => x;")); }
 
-testGroup("Default Parameters", () => {
-	test("decl with default parses ok", () => {
-		check(checkOk("function f1(x: number, y: number = 5) { return x; }"));
-	});
-	test("call with all args", () => {
-		check(checkOk("function f2(x: number, y: number = 5) { return x; } f2(1, 2);"));
-	});
-	test("call with default fills missing arg", () => {
-		check(checkOk("function f3(x: number, y: number = 5) { return x; } f3(1);"));
-	});
-	test("multiple defaults partial fill", () => {
-		check(checkOk("function f4(a: number, b: number = 1, c: number = 2) { return a; } f4(0);"));
-	});
-	test("all defaults omitted", () => {
-		check(checkOk("function f5(x: number = 10) { return x; } f5();"));
-	});
-	test("string default", () => {
-		check(checkOk("function f6(x: string = \"hi\") { return x; } f6();"));
-	});
-	test("boolean default", () => {
-		check(checkOk("function f7(x: boolean = true) { return x; } f7();"));
-	});
-});
+test "number type" {
+	const ctx = checkSource("const x = 42;");
+	const sym = lookupSymbol(ctx.table, "x");
+	check(sym !== null);
+	check(sym.symbolType.kind === TypeKind.Number);
+}
 
+test "string type" {
+	const ctx = checkSource("const s = \"hello\";");
+	const sym = lookupSymbol(ctx.table, "s");
+	check(sym !== null);
+	check(sym.symbolType.kind === TypeKind.String);
+}
+
+test "boolean type" {
+	const ctx = checkSource("const b = true;");
+	const sym = lookupSymbol(ctx.table, "b");
+	check(sym !== null);
+	check(sym.symbolType.kind === TypeKind.Boolean);
+}
+
+test "null type" {
+	const ctx = checkSource("const n = null;");
+	const sym = lookupSymbol(ctx.table, "n");
+	check(sym !== null);
+	check(sym.symbolType.kind === TypeKind.Null);
+}
+
+test "arithmetic returns number" {
+	const ctx = checkSource("const x = 1 + 2;");
+	const sym = lookupSymbol(ctx.table, "x");
+	check(sym !== null);
+	check(sym.symbolType.kind === TypeKind.Number);
+}
+
+test "string concat returns string" {
+	const ctx = checkSource("const x = \"a\" + \"b\";");
+	const sym = lookupSymbol(ctx.table, "x");
+	check(sym !== null);
+	check(sym.symbolType.kind === TypeKind.String);
+}
+
+test "comparison returns boolean" {
+	const ctx = checkSource("const x = 1 < 2;");
+	const sym = lookupSymbol(ctx.table, "x");
+	check(sym !== null);
+	check(sym.symbolType.kind === TypeKind.Boolean);
+}
+
+test "equality returns boolean" {
+	const ctx = checkSource("const x = 1 === 2;");
+	const sym = lookupSymbol(ctx.table, "x");
+	check(sym !== null);
+	check(sym.symbolType.kind === TypeKind.Boolean);
+}
+
+test "negation returns boolean" {
+	const ctx = checkSource("const x = !true;");
+	const sym = lookupSymbol(ctx.table, "x");
+	check(sym !== null);
+	check(sym.symbolType.kind === TypeKind.Boolean);
+}
+
+test "unary minus returns number" {
+	const ctx = checkSource("const x = -5;");
+	const sym = lookupSymbol(ctx.table, "x");
+	check(sym !== null);
+	check(sym.symbolType.kind === TypeKind.Number);
+}
+
+test "function has Function type after resolve" {
+	const ctx = checkSource("function foo(a, b) { return 1; }");
+	const sym = lookupSymbol(ctx.table, "foo");
+	check(sym !== null);
+	check(sym.symbolType.kind === TypeKind.Function);
+	check(sym.symbolType.typeChildren.length === 2);
+	check(sym.symbolType.typeNames.length === 2);
+}
+
+test "call returns function return type" {
+	const ctx = checkSource("function foo(a, b) { return 1; } const x = foo(1, 2);");
+	const sym = lookupSymbol(ctx.table, "x");
+	check(sym !== null);
+	// foo's return type inferred as number from body
+	check(sym.symbolType.kind === TypeKind.Number);
+}
+
+test "forward reference to function is callable" {
+	const ctx = checkSource("const x = foo(1); function foo(a) { return 1; }");
+	check(!hasErrors(ctx));
+}
+
+test "typed function params resolved" {
+	const ctx = checkSource("function add(a: number, b: number): number { return a; }");
+	const sym = lookupSymbol(ctx.table, "add");
+	check(sym !== null);
+	check(sym.symbolType.kind === TypeKind.Function);
+	check(sym.symbolType.typeChildren[0].kind === TypeKind.Number);
+	check(sym.symbolType.typeChildren[1].kind === TypeKind.Number);
+	check(sym.symbolType.typeReturn.kind === TypeKind.Number);
+}
+
+test "typed function call returns annotated type" {
+	const ctx = checkSource("function greet(name: string): string { return name; } const x = greet(\"hi\");");
+	const sym = lookupSymbol(ctx.table, "x");
+	check(sym !== null);
+	check(sym.symbolType.kind === TypeKind.String);
+}
+
+test "array literal infers element type" {
+	const ctx = checkSource("const arr = [1, 2, 3];");
+	const sym = lookupSymbol(ctx.table, "arr");
+	check(sym !== null);
+	check(sym.symbolType.kind === TypeKind.Array);
+	check(sym.symbolType.typeReturn.kind === TypeKind.Number);
+}
+
+test "arrow function has Function type" {
+	const ctx = checkSource("const f = (x) => x;");
+	const sym = lookupSymbol(ctx.table, "f");
+	check(sym !== null);
+	check(sym.symbolType.kind === TypeKind.Function);
+}
+
+test "inferred return type from body" {
+	const ctx = checkSource("function foo() { return 42; }");
+	const sym = lookupSymbol(ctx.table, "foo");
+	check(sym !== null);
+	check(sym.symbolType.typeReturn.kind === TypeKind.Number);
+}
+
+test "annotated return type preserved" {
+	const ctx = checkSource("function bar(): string { return \"hi\"; }");
+	const sym = lookupSymbol(ctx.table, "bar");
+	check(sym !== null);
+	check(sym.symbolType.typeReturn.kind === TypeKind.String);
+}
+
+test "arrow infers return type" {
+	const ctx = checkSource("const f = (x) => 42;");
+	const sym = lookupSymbol(ctx.table, "f");
+	check(sym !== null);
+	check(sym.symbolType.typeReturn.kind === TypeKind.Number);
+}
+
+test "string return inferred" {
+	const ctx = checkSource("function greet() { return \"hello\"; }");
+	const sym = lookupSymbol(ctx.table, "greet");
+	check(sym !== null);
+	check(sym.symbolType.typeReturn.kind === TypeKind.String);
+}
+
+test "boolean return inferred" {
+	const ctx = checkSource("function isOk() { return true; }");
+	const sym = lookupSymbol(ctx.table, "isOk");
+	check(sym !== null);
+	check(sym.symbolType.typeReturn.kind === TypeKind.Boolean);
+}
+
+test "no return stays unknown" {
+	const ctx = checkSource("function noop() { const x = 1; }");
+	const sym = lookupSymbol(ctx.table, "noop");
+	check(sym !== null);
+	check(sym.symbolType.typeReturn.kind === TypeKind.Unknown);
+}
+
+test "return type mismatch detected" { check(!checkOk("function foo(): number { return \"hello\"; }")); }
+
+test "return type match ok" { check(checkOk("function foo(): number { return 42; }")); }
+
+test "return string match ok" { check(checkOk("function bar(): string { return \"hi\"; }")); }
+
+test "arg type mismatch detected" { check(!checkOk("function add(a: number, b: number): number { return a; } const x = add(\"hi\", 2);")); }
+
+test "arg type match ok" { check(checkOk("function add(a: number, b: number): number { return a; } const x = add(1, 2);")); }
+
+test "numeric widening ok" { check(checkOk("function f(n: number): number { return n; } const x = f(42);")); }
+
+test "two overloads no error" { check(checkOk("function add(a: number, b: number): number { return a; } function add(a: string, b: string): string { return a; }")); }
+
+test "overload different arity no error" { check(checkOk("function f(a: number): number { return a; } function f(a: number, b: number): number { return a; }")); }
+
+test "overload call resolves" {
+	const ctx = checkSource("function f(a: number): number { return a; } function f(a: string): string { return a; } const x = f(1);");
+	check(!hasErrors(ctx));
+	const sym = lookupSymbol(ctx.table, "x");
+	check(sym !== null);
+	check(sym.symbolType.kind === TypeKind.Number);
+}
+
+test "overload call picks string version" {
+	const ctx = checkSource("function f(a: number): number { return a; } function f(a: string): string { return a; } const y = f(\"hi\");");
+	check(!hasErrors(ctx));
+	const sym = lookupSymbol(ctx.table, "y");
+	check(sym !== null);
+	check(sym.symbolType.kind === TypeKind.String);
+}
+
+test "no match reports error" {
+	const ctx = checkSource("function add(a: number, b: number): number { return a; } function add(a: string, b: string): string { return a; } const x = add(true);");
+	check(hasErrors(ctx));
+}
+
+test "ambiguous call reports error" {
+	// Same param types, different return types → ambiguous
+	const ctx = checkSource("function f(a: number): number { return a; } function f(a: number): string { return \"hi\"; } const x = f(1);");
+	check(hasErrors(ctx));
+}
+
+test "arity-based overload resolution" {
+	const ctx = checkSource("function f(a: number): number { return a; } function f(a: number, b: number): number { return a; } const x = f(1); const y = f(1, 2);");
+	check(!hasErrors(ctx));
+}
+
+test "two extension overloads no error" { check(checkOk("function trim(this s: string): string { return s; } function trim(this s: string, ch: string): string { return s; }")); }
+
+test "extension overload call resolves by arity" {
+	const ctx = checkSource("function double(this n: number): number { return n; } function double(this n: number, scale: number): number { return n; } const x = double(1); const y = double(1, 2);");
+	check(!hasErrors(ctx));
+}
+
+test "same-name extensions on different types filter by receiver" {
+	// Bug repro: indexOf on string vs number[] — must resolve by receiver type, not pick first match
+	const ctx = checkSource("function indexOf(this s: string, sub: string, start: number): number { return 0; } function indexOf(this arr: number[], value: number): number { return 0; } const msg: string = \"hello\"; const idx: number = msg.indexOf(\"world\", 0);");
+	check(!hasErrors(ctx));
+}
+
+test "same-name extensions array receiver resolves correctly" {
+	const ctx = checkSource("function indexOf(this s: string, sub: string, start: number): number { return 0; } function indexOf(this arr: number[], value: number): number { return 0; } const a: number[] = [1, 2, 3]; const idx: number = a.indexOf(42);");
+	check(!hasErrors(ctx));
+}
+
+test "generic extension matches compatible array receiver" {
+	// first<T>(this arr: T[]) called as a.first() — T unifies with number
+	const ctx = checkSource("function first<T>(this arr: T[]): T { return arr[0]; } const a: number[] = [1, 2]; const x: number = a.first();");
+	check(!hasErrors(ctx));
+}
+
+test "extension method registered" {
+	const ctx = checkSource("function trim(this s: string): string { return s; }");
+	check(!hasErrors(ctx));
+	const sym = lookupSymbol(ctx.table, "trim");
+	check(sym !== null);
+	check(sym.symbolType.kind === TypeKind.Function);
+}
+
+test "extension method callable as function" {
+	const ctx = checkSource("function double(this n: number): number { return n; } const x = double(1);");
+	check(!hasErrors(ctx));
+}
+
+test "extension on builtin type no error" { check(checkOk("function len(this s: string): number { return 0; }")); }
+
+test "generic function parses ok" { check(checkOk("function wrap<T>(x: T): T { return x; }")); }
+
+test "generic param resolved as GenericParam" {
+	const ctx = checkSource("function id<T>(x: T): T { return x; }");
+	check(!hasErrors(ctx));
+	const sym = lookupSymbol(ctx.table, "id");
+	check(sym !== null);
+	check(sym.symbolType.kind === TypeKind.Function);
+	check(sym.symbolType.typeChildren[0].kind === TypeKind.GenericParam);
+	check(sym.symbolType.typeReturn.kind === TypeKind.GenericParam);
+}
+
+test "generic call infers return type" {
+	const ctx = checkSource("function id<T>(x: T): T { return x; } const n = id(42);");
+	check(!hasErrors(ctx));
+	const sym = lookupSymbol(ctx.table, "n");
+	check(sym !== null);
+	check(sym.symbolType.kind === TypeKind.Number);
+}
+
+test "two generic params" {
+	const ctx = checkSource("function first<T, U>(a: T, b: U): T { return a; } const x = first(1, \"hi\");");
+	check(!hasErrors(ctx));
+	const sym = lookupSymbol(ctx.table, "x");
+	check(sym !== null);
+	check(sym.symbolType.kind === TypeKind.Number);
+}
+
+test "generic with annotated return" { check(checkOk("function identity<T>(x: T): T { return x; }")); }
+
+test "wildcard always exhaustive" { check(checkOk("enum Color { Red, Green, Blue } function f(): number { const c = Color.Red; return match (c) { _ => 0 }; }")); }
+
+test "all members covered" { check(checkOk("enum Color { Red, Green, Blue } function f(): number { const c = Color.Red; return match (c) { Color.Red => 1, Color.Green => 2, Color.Blue => 3 }; }")); }
+
+test "missing member errors" { check(!checkOk("enum Color { Red, Green, Blue } function f(): number { const c = Color.Red; return match (c) { Color.Red => 1, Color.Green => 2 }; }")); }
+
+test "binding acts as wildcard" { check(checkOk("enum Color { Red, Green } function f(): number { const c = Color.Red; return match (c) { Color.Red => 1, other => 0 }; }")); }
+
+test "non-enum no exhaustiveness check" { check(checkOk("const x = match (42) { 1 => \"one\", _ => \"other\" };")); }
+
+test "match expr returns arm type" {
+	const ctx = checkSource("const x = match (1) { 1 => 42, _ => 0 };");
+	check(!hasErrors(ctx));
+	const sym = lookupSymbol(ctx.table, "x");
+	check(sym !== null);
+	check(sym.symbolType.kind === TypeKind.Number);
+}
+
+test "basic not-null check" { check(checkOk("const x = 1; if (x !== null) { const y = x; }")); }
+
+test "reversed null check" { check(checkOk("const x = 1; if (null !== x) { const y = x; }")); }
+
+test "equals null narrows" { check(checkOk("const x = 1; if (x === null) { const y = x; }")); }
+
+test "no narrowing without null check" { check(checkOk("const x = 1; if (x === x) { const y = x; }")); }
+
+test "removeNullFromType unit" {
+	const unionType = createUnion([stringType(), nullType()]);
+	const narrowed = removeNullFromType(unionType);
+	check(narrowed.kind === TypeKind.String);
+}
+
+test "guard clause narrows after early return" {
+	// if (x === null) return; → x should be non-null after
+	check(checkOk("function f(x: string): string { if (x === null) return \"\"; const y = x; return y; }"));
+}
+
+test "guard clause narrows after throw" { check(checkOk("function f(x: string): string { if (x === null) throw \"err\"; return x; }")); }
+
+test "logical AND null check" {
+	// x !== null && x > 0 → x is non-null in consequent
+	check(checkOk("const x = 1; if (x !== null && x > 0) { const y = x; }"));
+}
+
+test "pure function with pure ops passes" { check(checkOk("@pure function add(a: number, b: number): number { return a + b; }")); }
+
+test "pure function calling impure warns" {
+	const ctx = checkSource("function impure(): void {} @pure function bad(): void { impure(); }");
+	check(hasErrors(ctx));
+}
+
+test "pure calling pure is ok" { check(checkOk("@pure function helper(x: number): number { return x; } @pure function main(a: number): number { return helper(a); }")); }
+
+test "type alias resolves to type" {
+	const ctx = checkSource("type ID = number;");
+	check(!hasErrors(ctx));
+	const sym = lookupSymbol(ctx.table, "ID");
+	check(sym !== null);
+	check(sym.symbolType.kind === TypeKind.Number);
+}
+
+test "type alias Result resolved" {
+	const ctx = checkSource("type MyResult = Result<number, string>;");
+	check(!hasErrors(ctx));
+	const sym = lookupSymbol(ctx.table, "MyResult");
+	check(sym !== null);
+	check(sym.symbolType.kind === TypeKind.Result);
+}
+
+test "distinct type creates Distinct wrapper" {
+	const ctx = checkSource("distinct type UserId = number;");
+	check(!hasErrors(ctx));
+	const sym = lookupSymbol(ctx.table, "UserId");
+	check(sym !== null);
+	check(sym.symbolType.kind === TypeKind.Distinct);
+}
+
+test "variable annotation overrides inference" {
+	const ctx = checkSource("const x: string = \"hello\";");
+	check(!hasErrors(ctx));
+	const sym = lookupSymbol(ctx.table, "x");
+	check(sym !== null);
+	check(sym.symbolType.kind === TypeKind.String);
+}
+
+test "class property type resolved" {
+	const ctx = checkSource("class Point { x: number; y: string; getX() { return 1; } }");
+	check(!hasErrors(ctx));
+	const sym = lookupSymbol(ctx.table, "Point");
+	check(sym !== null);
+	check(sym.symbolType.kind === TypeKind.Object);
+}
+
+test "decl with default parses ok" { check(checkOk("function f1(x: number, y: number = 5) { return x; }")); }
+
+test "call with all args" { check(checkOk("function f2(x: number, y: number = 5) { return x; } f2(1, 2);")); }
+
+test "call with default fills missing arg" { check(checkOk("function f3(x: number, y: number = 5) { return x; } f3(1);")); }
+
+test "multiple defaults partial fill" { check(checkOk("function f4(a: number, b: number = 1, c: number = 2) { return a; } f4(0);")); }
+
+test "all defaults omitted" { check(checkOk("function f5(x: number = 10) { return x; } f5();")); }
+
+test "string default" { check(checkOk("function f6(x: string = \"hi\") { return x; } f6();")); }
+
+test "boolean default" { check(checkOk("function f7(x: boolean = true) { return x; } f7();")); }
 

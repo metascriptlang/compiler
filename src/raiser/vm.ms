@@ -4,7 +4,7 @@
 @include("vm_dispatch.h")
 import { raiser_dispatch_impl } from "./vm_dispatch.h";
 
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import {
 	RaiserOpcode, RaiserInstruction,
 	raiserABC, raiserABx, raiserAx,
@@ -502,497 +502,474 @@ function execBinOp(op: RaiserOpcode, a: number, b: number): RaiserVM {
 }
 
 // --- Tests ---
-
-testGroup("VM execute", () => {
-	test("halt returns constant", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABx(RaiserOpcode.LoadConst, 0, 0),
-				raiserABC(RaiserOpcode.Halt, 0, 0, 0),
-			],
-			[raiserInt(42)]
-		));
-		check(vm.exitValue.intVal === 42);
-	});
-
-	test("add: 10 + 20 = 30", () => {
-		check(execBinOp(RaiserOpcode.AddI64, 10, 20).exitValue.intVal === 30);
-	});
-
-	test("sub: 100 - 42 = 58", () => {
-		check(execBinOp(RaiserOpcode.SubI64, 100, 42).exitValue.intVal === 58);
-	});
-
-	test("mul: 6 * 7 = 42", () => {
-		check(execBinOp(RaiserOpcode.MulI64, 6, 7).exitValue.intVal === 42);
-	});
-
-	test("div: 84 / 2 = 42", () => {
-		check(execBinOp(RaiserOpcode.DivI64, 84, 2).exitValue.intVal === 42);
-	});
-
-	test("mod: 17 % 5 = 2", () => {
-		check(execBinOp(RaiserOpcode.ModI64, 17, 5).exitValue.intVal === 2);
-	});
-
-	test("neg: -(7) = -7", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABx(RaiserOpcode.LoadConst, 0, 0),
-				raiserABC(RaiserOpcode.NegI64, 1, 0, 0),
-				raiserABC(RaiserOpcode.Halt, 1, 0, 0),
-			],
-			[raiserInt(7)]
-		));
-		check(vm.exitValue.intVal === -7);
-	});
-
-	test("chained: (2 + 3) * 4 = 20", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABx(RaiserOpcode.LoadConst, 0, 0),
-				raiserABx(RaiserOpcode.LoadConst, 1, 1),
-				raiserABC(RaiserOpcode.AddI64, 2, 0, 1),
-				raiserABx(RaiserOpcode.LoadConst, 3, 2),
-				raiserABC(RaiserOpcode.MulI64, 4, 2, 3),
-				raiserABC(RaiserOpcode.Halt, 4, 0, 0),
-			],
-			[raiserInt(2), raiserInt(3), raiserInt(4)]
-		));
-		check(vm.exitValue.intVal === 20);
-	});
-
-	test("print captures output", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABx(RaiserOpcode.LoadConst, 0, 0),
-				raiserABC(RaiserOpcode.Print, 0, 0, 0),
-				raiserABC(RaiserOpcode.Halt, 0, 0, 0),
-			],
-			[raiserInt(42)]
-		));
-		check(vm.output === "42\n");
-	});
-});
-
-testGroup("VM branches", () => {
-	test("bgt: 10 > 5 → true branch", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABx(RaiserOpcode.LoadConst, 0, 0),     // R0 = 10
-				raiserABx(RaiserOpcode.LoadConst, 1, 1),     // R1 = 5
-				raiserABC(RaiserOpcode.BgtI64, 0, 1, 1),     // if R0 > R1 skip 1
-				raiserAx(RaiserOpcode.Jump, 2),               // else jump +2
-				raiserABx(RaiserOpcode.LoadConst, 2, 2),     // true: R2 = 1
-				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
-				raiserABx(RaiserOpcode.LoadConst, 2, 3),     // false: R2 = 0
-				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
-			],
-			[raiserInt(10), raiserInt(5), raiserInt(1), raiserInt(0)]
-		));
-		check(vm.exitValue.intVal === 1);
-	});
-
-	test("bgt: 3 > 5 → false branch", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABx(RaiserOpcode.LoadConst, 0, 0),
-				raiserABx(RaiserOpcode.LoadConst, 1, 1),
-				raiserABC(RaiserOpcode.BgtI64, 0, 1, 1),
-				raiserAx(RaiserOpcode.Jump, 2),
-				raiserABx(RaiserOpcode.LoadConst, 2, 2),
-				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
-				raiserABx(RaiserOpcode.LoadConst, 2, 3),
-				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
-			],
-			[raiserInt(3), raiserInt(5), raiserInt(1), raiserInt(0)]
-		));
-		check(vm.exitValue.intVal === 0);
-	});
-
-	test("loop: sum 1..5 = 15", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABx(RaiserOpcode.LoadConst, 0, 0),     // 0: R0 = 0 (sum)
-				raiserABx(RaiserOpcode.LoadConst, 1, 1),     // 1: R1 = 1 (i)
-				raiserABx(RaiserOpcode.LoadConst, 2, 2),     // 2: R2 = 5 (limit)
-				raiserABx(RaiserOpcode.LoadConst, 3, 1),     // 3: R3 = 1 (incr)
-				raiserABC(RaiserOpcode.BgtI64, 1, 2, 3),     // 4: if i > limit skip 3 → halt
-				raiserABC(RaiserOpcode.AddI64, 0, 0, 1),     // 5: sum += i
-				raiserABC(RaiserOpcode.AddI64, 1, 1, 3),     // 6: i += 1
-				raiserAx(RaiserOpcode.Jump, -4),              // 7: back to cmp (ip=8-4=4)
-				raiserABC(RaiserOpcode.Halt, 0, 0, 0),       // 8: halt
-			],
-			[raiserInt(0), raiserInt(1), raiserInt(5)]
-		));
-		check(vm.exitValue.intVal === 15);
-	});
-
-	test("beq: equal values", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABx(RaiserOpcode.LoadConst, 0, 0),
-				raiserABx(RaiserOpcode.LoadConst, 1, 0),
-				raiserABC(RaiserOpcode.BeqI64, 0, 1, 1),     // if R0 == R1 skip 1
-				raiserAx(RaiserOpcode.Jump, 1),
-				raiserABx(RaiserOpcode.LoadConst, 2, 1),     // R2 = 1 (equal)
-				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
-			],
-			[raiserInt(7), raiserInt(1)]
-		));
-		check(vm.exitValue.intVal === 1);
-	});
-});
-
-testGroup("VM arrays", () => {
-	test("NewArray empty", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABC(RaiserOpcode.NewArray, 0, 0, 0),   // R0 = []
-				raiserABC(RaiserOpcode.Halt, 0, 0, 0),
-			],
-			[]
-		));
-		check(vm.exitValue.kind === RaiserValueKind.Array);
-	});
-
-	test("NewArray with elements + LoadIndex", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABx(RaiserOpcode.LoadConst, 1, 0),     // R1 = 10
-				raiserABx(RaiserOpcode.LoadConst, 2, 1),     // R2 = 20
-				raiserABC(RaiserOpcode.NewArray, 0, 2, 0),   // R0 = [R1, R2] = [10, 20]
-				raiserABx(RaiserOpcode.LoadConst, 3, 2),     // R3 = 1 (index)
-				raiserABC(RaiserOpcode.LoadIndex, 4, 0, 3),  // R4 = R0[1] = 20
-				raiserABC(RaiserOpcode.Halt, 4, 0, 0),
-			],
-			[raiserInt(10), raiserInt(20), raiserInt(1)]
-		));
-		check(vm.exitValue.intVal === 20);
-	});
-
-	test("ArrayLen", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABx(RaiserOpcode.LoadConst, 1, 0),
-				raiserABx(RaiserOpcode.LoadConst, 2, 1),
-				raiserABx(RaiserOpcode.LoadConst, 3, 2),
-				raiserABC(RaiserOpcode.NewArray, 0, 3, 0),   // R0 = [1, 2, 3]
-				raiserABC(RaiserOpcode.ArrayLen, 4, 0, 0),   // R4 = len(R0) = 3
-				raiserABC(RaiserOpcode.Halt, 4, 0, 0),
-			],
-			[raiserInt(1), raiserInt(2), raiserInt(3)]
-		));
-		check(vm.exitValue.intVal === 3);
-	});
-
-	test("ArrayPush + ArrayLen", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABC(RaiserOpcode.NewArray, 0, 0, 0),   // R0 = []
-				raiserABx(RaiserOpcode.LoadConst, 1, 0),     // R1 = 42
-				raiserABC(RaiserOpcode.ArrayPush, 0, 1, 0),  // R0.push(42)
-				raiserABC(RaiserOpcode.ArrayLen, 2, 0, 0),   // R2 = len(R0) = 1
-				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
-			],
-			[raiserInt(42)]
-		));
-		check(vm.exitValue.intVal === 1);
-	});
-
-	test("StoreIndex", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABx(RaiserOpcode.LoadConst, 1, 0),     // R1 = 0
-				raiserABC(RaiserOpcode.NewArray, 0, 1, 0),   // R0 = [0]
-				raiserABx(RaiserOpcode.LoadConst, 2, 1),     // R2 = 0 (index)
-				raiserABx(RaiserOpcode.LoadConst, 3, 2),     // R3 = 99 (value)
-				raiserABC(RaiserOpcode.StoreIndex, 0, 2, 3), // R0[0] = 99
-				raiserABC(RaiserOpcode.LoadIndex, 4, 0, 2),  // R4 = R0[0] = 99
-				raiserABC(RaiserOpcode.Halt, 4, 0, 0),
-			],
-			[raiserInt(0), raiserInt(0), raiserInt(99)]
-		));
-		check(vm.exitValue.intVal === 99);
-	});
-});
-
-testGroup("VM objects", () => {
-	test("NewObject + StoreField + LoadField", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABC(RaiserOpcode.NewObject, 0, 0, 0),   // R0 = {}
-				raiserABx(RaiserOpcode.LoadConst, 1, 0),      // R1 = 42
-				raiserABC(RaiserOpcode.StoreField, 0, 1, 1),  // R0.field(K1="x") = R1(42)
-				raiserABC(RaiserOpcode.LoadField, 2, 0, 1),   // R2 = R0.field(K1="x")
-				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
-			],
-			[raiserInt(42), raiserString("x")]
-		));
-		check(vm.exitValue.intVal === 42);
-	});
-
-	test("multiple fields", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABC(RaiserOpcode.NewObject, 0, 0, 0),   // R0 = {}
-				raiserABx(RaiserOpcode.LoadConst, 1, 0),      // R1 = 10
-				raiserABC(RaiserOpcode.StoreField, 0, 2, 1),  // R0["x"] = 10
-				raiserABx(RaiserOpcode.LoadConst, 1, 1),      // R1 = 20
-				raiserABC(RaiserOpcode.StoreField, 0, 3, 1),  // R0["y"] = 20
-				raiserABC(RaiserOpcode.LoadField, 2, 0, 3),   // R2 = R0["y"]
-				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
-			],
-			[raiserInt(10), raiserInt(20), raiserString("x"), raiserString("y")]
-		));
-		check(vm.exitValue.intVal === 20);
-	});
-
-	test("field update", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABC(RaiserOpcode.NewObject, 0, 0, 0),   // R0 = {}
-				raiserABx(RaiserOpcode.LoadConst, 1, 0),      // R1 = 1
-				raiserABC(RaiserOpcode.StoreField, 0, 2, 1),  // R0["x"] = 1
-				raiserABx(RaiserOpcode.LoadConst, 1, 1),      // R1 = 99
-				raiserABC(RaiserOpcode.StoreField, 0, 2, 1),  // R0["x"] = 99
-				raiserABC(RaiserOpcode.LoadField, 2, 0, 2),   // R2 = R0["x"]
-				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
-			],
-			[raiserInt(1), raiserInt(99), raiserString("x")]
-		));
-		check(vm.exitValue.intVal === 99);
-	});
-});
-
-testGroup("VM strings", () => {
-	test("ConcatStr: two strings", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABx(RaiserOpcode.LoadConst, 0, 0),       // R0 = "hello"
-				raiserABx(RaiserOpcode.LoadConst, 1, 1),       // R1 = " world"
-				raiserABC(RaiserOpcode.ConcatStr, 2, 0, 1),    // R2 = "hello world"
-				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
-			],
-			[raiserString("hello"), raiserString(" world")]
-		));
-		check(vm.exitValue.strVal === "hello world");
-	});
-
-	test("ConcatStr: int + string coercion", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABx(RaiserOpcode.LoadConst, 0, 0),       // R0 = "val: "
-				raiserABx(RaiserOpcode.LoadConst, 1, 1),       // R1 = 42
-				raiserABC(RaiserOpcode.ConcatStr, 2, 0, 1),    // R2 = "val: 42"
-				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
-			],
-			[raiserString("val: "), raiserInt(42)]
-		));
-		check(vm.exitValue.strVal === "val: 42");
-	});
-
-	test("EqStr: equal strings skip", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABx(RaiserOpcode.LoadConst, 0, 0),       // R0 = "abc"
-				raiserABx(RaiserOpcode.LoadConst, 1, 0),       // R1 = "abc"
-				raiserABx(RaiserOpcode.LoadConst, 2, 1),       // R2 = 1 (true)
-				raiserABC(RaiserOpcode.EqStr, 0, 1, 1),        // if R0.str == R1.str skip 1
-				raiserABx(RaiserOpcode.LoadConst, 2, 2),       // R2 = 0 (false)
-				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
-			],
-			[raiserString("abc"), raiserInt(1), raiserInt(0)]
-		));
-		check(vm.exitValue.intVal === 1);
-	});
-
-	test("EqStr: unequal strings no skip", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABx(RaiserOpcode.LoadConst, 0, 0),       // R0 = "abc"
-				raiserABx(RaiserOpcode.LoadConst, 1, 1),       // R1 = "def"
-				raiserABx(RaiserOpcode.LoadConst, 2, 2),       // R2 = 1 (true)
-				raiserABC(RaiserOpcode.EqStr, 0, 1, 1),        // if R0.str == R1.str skip 1
-				raiserABx(RaiserOpcode.LoadConst, 2, 3),       // R2 = 0 (false)
-				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
-			],
-			[raiserString("abc"), raiserString("def"), raiserInt(1), raiserInt(0)]
-		));
-		check(vm.exitValue.intVal === 0);
-	});
-
-	test("NeStr: unequal strings skip", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABx(RaiserOpcode.LoadConst, 0, 0),       // R0 = "abc"
-				raiserABx(RaiserOpcode.LoadConst, 1, 1),       // R1 = "def"
-				raiserABx(RaiserOpcode.LoadConst, 2, 2),       // R2 = 1 (true)
-				raiserABC(RaiserOpcode.NeStr, 0, 1, 1),        // if R0.str != R1.str skip 1
-				raiserABx(RaiserOpcode.LoadConst, 2, 3),       // R2 = 0 (false)
-				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
-			],
-			[raiserString("abc"), raiserString("def"), raiserInt(1), raiserInt(0)]
-		));
-		check(vm.exitValue.intVal === 1);
-	});
-
-	test("StrLen: string length", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABx(RaiserOpcode.LoadConst, 0, 0),       // R0 = "hello"
-				raiserABC(RaiserOpcode.StrLen, 1, 0, 0),       // R1 = len("hello") = 5
-				raiserABC(RaiserOpcode.Halt, 1, 0, 0),
-			],
-			[raiserString("hello")]
-		));
-		check(vm.exitValue.intVal === 5);
-	});
-
-	test("StrCharAt: get character", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABx(RaiserOpcode.LoadConst, 0, 0),       // R0 = "hello"
-				raiserABx(RaiserOpcode.LoadConst, 1, 1),       // R1 = 1
-				raiserABC(RaiserOpcode.StrCharAt, 2, 0, 1),    // R2 = "e"
-				raiserABC(RaiserOpcode.Halt, 2, 0, 0),
-			],
-			[raiserString("hello"), raiserInt(1)]
-		));
-		check(vm.exitValue.strVal === "e");
-	});
-
-	test("StrSlice: substring", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABx(RaiserOpcode.LoadConst, 0, 0),       // R0 = "hello world"
-				raiserABx(RaiserOpcode.LoadConst, 1, 1),       // R1 = 0 (start)
-				raiserABx(RaiserOpcode.LoadConst, 2, 2),       // R2 = 5 (end, at C+1)
-				raiserABC(RaiserOpcode.StrSlice, 3, 0, 1),     // R3 = slice(R0, R1, R2)
-				raiserABC(RaiserOpcode.Halt, 3, 0, 0),
-			],
-			[raiserString("hello world"), raiserInt(0), raiserInt(5)]
-		));
-		check(vm.exitValue.strVal === "hello");
-	});
-
-	test("StrLen: empty string", () => {
-		const vm = execModule(makeTestModule(
-			[
-				raiserABx(RaiserOpcode.LoadConst, 0, 0),
-				raiserABC(RaiserOpcode.StrLen, 1, 0, 0),
-				raiserABC(RaiserOpcode.Halt, 1, 0, 0),
-			],
-			[raiserString("")]
-		));
-		check(vm.exitValue.intVal === 0);
-	});
-});
-
-testGroup("VM call indirect", () => {
-	test("CallIndirect basic", () => {
-		// func0: return 42
-		// entry: R0 = funcIdx(0), CallIndirect R1 R0 0 → R1 = func0() = 42
-		const func0Code: RaiserInstruction[] = [
-			raiserABx(RaiserOpcode.LoadConst, 0, 0),  // R0 = 42
-			raiserABC(RaiserOpcode.Ret, 0, 0, 0),
-		];
-		const func0Consts: RaiserValue[] = [raiserInt(42)];
-		const f0 = createRaiserFunction("func0", func0Code, func0Consts, 0, 0, 2);
-
-		const entryCode: RaiserInstruction[] = [
-			raiserABx(RaiserOpcode.LoadConst, 0, 0),  // R0 = 0 (funcIdx of func0)
-			raiserABC(RaiserOpcode.CallIndirect, 1, 0, 0),  // R1 = call func[R0]()
-			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
-		];
-		const entryConsts: RaiserValue[] = [raiserInt(0)];
-		const entry = createRaiserFunction("main", entryCode, entryConsts, 0, 0, 4);
-
-		const funcs: RaiserFunction[] = [f0, entry];
-		const mod = createRaiserModule("test", funcs, 1);
-		const vm = execModule(mod);
-		check(vm.exitValue.intVal === 42);
-	});
-
-	test("CallIndirect with args", () => {
-		// func0(a, b): return a + b
-		// entry: R0 = funcIdx(0), R2 = 10, R3 = 20, CallIndirect R1 R0 2 → R1 = func0(10,20) = 30
-		const func0Code: RaiserInstruction[] = [
-			raiserABC(RaiserOpcode.AddI64, 2, 0, 1),  // R2 = R0 + R1
-			raiserABC(RaiserOpcode.Ret, 2, 0, 0),
-		];
-		const func0Consts: RaiserValue[] = [];
-		const f0 = createRaiserFunction("add", func0Code, func0Consts, 2, 0, 4);
-
-		const entryCode: RaiserInstruction[] = [
-			raiserABx(RaiserOpcode.LoadConst, 0, 0),  // R0 = 0 (funcIdx)
-			raiserABx(RaiserOpcode.LoadConst, 2, 1),  // R2 = 10 (arg1 at dest+1)
-			raiserABx(RaiserOpcode.LoadConst, 3, 2),  // R3 = 20 (arg2 at dest+2)
-			raiserABC(RaiserOpcode.CallIndirect, 1, 0, 2),  // R1 = call func[R0](R2, R3)
-			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
-		];
-		const entryConsts: RaiserValue[] = [raiserInt(0), raiserInt(10), raiserInt(20)];
-		const entry = createRaiserFunction("main", entryCode, entryConsts, 0, 0, 6);
-
-		const funcs: RaiserFunction[] = [f0, entry];
-		const mod = createRaiserModule("test", funcs, 1);
-		const vm = execModule(mod);
-		check(vm.exitValue.intVal === 30);
-	});
-
-	test("CallIndirect return value", () => {
-		// func0(): return 7
-		// entry: call func0 via indirect, multiply result by 6
-		const func0Code: RaiserInstruction[] = [
+test "halt returns constant" {
+	const vm = execModule(makeTestModule(
+		[
 			raiserABx(RaiserOpcode.LoadConst, 0, 0),
-			raiserABC(RaiserOpcode.Ret, 0, 0, 0),
-		];
-		const func0Consts: RaiserValue[] = [raiserInt(7)];
-		const f0 = createRaiserFunction("seven", func0Code, func0Consts, 0, 0, 2);
+			raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+		],
+		[raiserInt(42)]
+	));
+	check(vm.exitValue.intVal === 42);
+}
 
-		const entryCode: RaiserInstruction[] = [
-			raiserABx(RaiserOpcode.LoadConst, 0, 0),  // R0 = 0 (funcIdx)
-			raiserABC(RaiserOpcode.CallIndirect, 1, 0, 0),  // R1 = call func[R0]() = 7
-			raiserABx(RaiserOpcode.LoadConst, 2, 1),  // R2 = 6
-			raiserABC(RaiserOpcode.MulI64, 3, 1, 2),  // R3 = R1 * R2 = 42
-			raiserABC(RaiserOpcode.Halt, 3, 0, 0),
-		];
-		const entryConsts: RaiserValue[] = [raiserInt(0), raiserInt(6)];
-		const entry = createRaiserFunction("main", entryCode, entryConsts, 0, 0, 6);
+test "add: 10 + 20 = 30" { check(execBinOp(RaiserOpcode.AddI64, 10, 20).exitValue.intVal === 30); }
 
-		const funcs: RaiserFunction[] = [f0, entry];
-		const mod = createRaiserModule("test", funcs, 1);
-		const vm = execModule(mod);
-		check(vm.exitValue.intVal === 42);
-	});
+test "sub: 100 - 42 = 58" { check(execBinOp(RaiserOpcode.SubI64, 100, 42).exitValue.intVal === 58); }
 
-	test("two objects bidirectional link in function", () => {
-		// mk(n): NewObj R1, NewObj R2, Store R2."ref"=R1, Store R1."get"=R2, Store R1."n"=R0, Ret R1
-		// entry: LoadConst R2 5, Move R1 R2, Call R0 mk 1, LoadField R1 R0 "n", Halt R1
-		const mkCode: RaiserInstruction[] = [
-			raiserABC(RaiserOpcode.NewObject, 1, 0, 0),       // R1 = {} (self)
-			raiserABC(RaiserOpcode.NewObject, 2, 0, 0),       // R2 = {} (cl)
-			raiserABC(RaiserOpcode.StoreField, 2, 0, 1),      // cl."ref" = self
-			raiserABC(RaiserOpcode.StoreField, 1, 1, 2),      // self."get" = cl
-			raiserABC(RaiserOpcode.StoreField, 1, 2, 0),      // self."n" = n
-			raiserABC(RaiserOpcode.Ret, 1, 0, 0),
-		];
-		const mkConsts: RaiserValue[] = [raiserString("ref"), raiserString("get"), raiserString("n")];
-		const mk = createRaiserFunction("mk", mkCode, mkConsts, 1, 0, 3);
+test "mul: 6 * 7 = 42" { check(execBinOp(RaiserOpcode.MulI64, 6, 7).exitValue.intVal === 42); }
 
-		const entryCode: RaiserInstruction[] = [
-			raiserABx(RaiserOpcode.LoadConst, 2, 0),          // R2 = 5
-			raiserABC(RaiserOpcode.Move, 1, 2, 0),            // R1 = R2
-			raiserABC(RaiserOpcode.Call, 0, 0, 1),             // R0 = mk(R1=5)
-			raiserABC(RaiserOpcode.LoadField, 1, 0, 1),       // R1 = R0."n"
+test "div: 84 / 2 = 42" { check(execBinOp(RaiserOpcode.DivI64, 84, 2).exitValue.intVal === 42); }
+
+test "mod: 17 % 5 = 2" { check(execBinOp(RaiserOpcode.ModI64, 17, 5).exitValue.intVal === 2); }
+
+test "neg: -(7) = -7" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABC(RaiserOpcode.NegI64, 1, 0, 0),
 			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
-		];
-		const entryConsts: RaiserValue[] = [raiserInt(5), raiserString("n")];
-		const entry = createRaiserFunction("main", entryCode, entryConsts, 0, 0, 4);
+		],
+		[raiserInt(7)]
+	));
+	check(vm.exitValue.intVal === -7);
+}
 
-		const funcs: RaiserFunction[] = [mk, entry];
-		const mod = createRaiserModule("test", funcs, 1);
-		const vm = execModule(mod);
-		check(vm.exitValue.intVal === 5);
-	});
-});
+test "chained: (2 + 3) * 4 = 20" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 1, 1),
+			raiserABC(RaiserOpcode.AddI64, 2, 0, 1),
+			raiserABx(RaiserOpcode.LoadConst, 3, 2),
+			raiserABC(RaiserOpcode.MulI64, 4, 2, 3),
+			raiserABC(RaiserOpcode.Halt, 4, 0, 0),
+		],
+		[raiserInt(2), raiserInt(3), raiserInt(4)]
+	));
+	check(vm.exitValue.intVal === 20);
+}
+
+test "print captures output" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABC(RaiserOpcode.Print, 0, 0, 0),
+			raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+		],
+		[raiserInt(42)]
+	));
+	check(vm.output === "42\n");
+}
+
+test "bgt: 10 > 5 → true branch" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),     // R0 = 10
+			raiserABx(RaiserOpcode.LoadConst, 1, 1),     // R1 = 5
+			raiserABC(RaiserOpcode.BgtI64, 0, 1, 1),     // if R0 > R1 skip 1
+			raiserAx(RaiserOpcode.Jump, 2),               // else jump +2
+			raiserABx(RaiserOpcode.LoadConst, 2, 2),     // true: R2 = 1
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 2, 3),     // false: R2 = 0
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserInt(10), raiserInt(5), raiserInt(1), raiserInt(0)]
+	));
+	check(vm.exitValue.intVal === 1);
+}
+
+test "bgt: 3 > 5 → false branch" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 1, 1),
+			raiserABC(RaiserOpcode.BgtI64, 0, 1, 1),
+			raiserAx(RaiserOpcode.Jump, 2),
+			raiserABx(RaiserOpcode.LoadConst, 2, 2),
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 2, 3),
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserInt(3), raiserInt(5), raiserInt(1), raiserInt(0)]
+	));
+	check(vm.exitValue.intVal === 0);
+}
+
+test "loop: sum 1..5 = 15" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),     // 0: R0 = 0 (sum)
+			raiserABx(RaiserOpcode.LoadConst, 1, 1),     // 1: R1 = 1 (i)
+			raiserABx(RaiserOpcode.LoadConst, 2, 2),     // 2: R2 = 5 (limit)
+			raiserABx(RaiserOpcode.LoadConst, 3, 1),     // 3: R3 = 1 (incr)
+			raiserABC(RaiserOpcode.BgtI64, 1, 2, 3),     // 4: if i > limit skip 3 → halt
+			raiserABC(RaiserOpcode.AddI64, 0, 0, 1),     // 5: sum += i
+			raiserABC(RaiserOpcode.AddI64, 1, 1, 3),     // 6: i += 1
+			raiserAx(RaiserOpcode.Jump, -4),              // 7: back to cmp (ip=8-4=4)
+			raiserABC(RaiserOpcode.Halt, 0, 0, 0),       // 8: halt
+		],
+		[raiserInt(0), raiserInt(1), raiserInt(5)]
+	));
+	check(vm.exitValue.intVal === 15);
+}
+
+test "beq: equal values" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),
+			raiserABC(RaiserOpcode.BeqI64, 0, 1, 1),     // if R0 == R1 skip 1
+			raiserAx(RaiserOpcode.Jump, 1),
+			raiserABx(RaiserOpcode.LoadConst, 2, 1),     // R2 = 1 (equal)
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserInt(7), raiserInt(1)]
+	));
+	check(vm.exitValue.intVal === 1);
+}
+
+test "NewArray empty" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABC(RaiserOpcode.NewArray, 0, 0, 0),   // R0 = []
+			raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+		],
+		[]
+	));
+	check(vm.exitValue.kind === RaiserValueKind.Array);
+}
+
+test "NewArray with elements + LoadIndex" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),     // R1 = 10
+			raiserABx(RaiserOpcode.LoadConst, 2, 1),     // R2 = 20
+			raiserABC(RaiserOpcode.NewArray, 0, 2, 0),   // R0 = [R1, R2] = [10, 20]
+			raiserABx(RaiserOpcode.LoadConst, 3, 2),     // R3 = 1 (index)
+			raiserABC(RaiserOpcode.LoadIndex, 4, 0, 3),  // R4 = R0[1] = 20
+			raiserABC(RaiserOpcode.Halt, 4, 0, 0),
+		],
+		[raiserInt(10), raiserInt(20), raiserInt(1)]
+	));
+	check(vm.exitValue.intVal === 20);
+}
+
+test "ArrayLen" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),
+			raiserABx(RaiserOpcode.LoadConst, 2, 1),
+			raiserABx(RaiserOpcode.LoadConst, 3, 2),
+			raiserABC(RaiserOpcode.NewArray, 0, 3, 0),   // R0 = [1, 2, 3]
+			raiserABC(RaiserOpcode.ArrayLen, 4, 0, 0),   // R4 = len(R0) = 3
+			raiserABC(RaiserOpcode.Halt, 4, 0, 0),
+		],
+		[raiserInt(1), raiserInt(2), raiserInt(3)]
+	));
+	check(vm.exitValue.intVal === 3);
+}
+
+test "ArrayPush + ArrayLen" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABC(RaiserOpcode.NewArray, 0, 0, 0),   // R0 = []
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),     // R1 = 42
+			raiserABC(RaiserOpcode.ArrayPush, 0, 1, 0),  // R0.push(42)
+			raiserABC(RaiserOpcode.ArrayLen, 2, 0, 0),   // R2 = len(R0) = 1
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserInt(42)]
+	));
+	check(vm.exitValue.intVal === 1);
+}
+
+test "StoreIndex" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),     // R1 = 0
+			raiserABC(RaiserOpcode.NewArray, 0, 1, 0),   // R0 = [0]
+			raiserABx(RaiserOpcode.LoadConst, 2, 1),     // R2 = 0 (index)
+			raiserABx(RaiserOpcode.LoadConst, 3, 2),     // R3 = 99 (value)
+			raiserABC(RaiserOpcode.StoreIndex, 0, 2, 3), // R0[0] = 99
+			raiserABC(RaiserOpcode.LoadIndex, 4, 0, 2),  // R4 = R0[0] = 99
+			raiserABC(RaiserOpcode.Halt, 4, 0, 0),
+		],
+		[raiserInt(0), raiserInt(0), raiserInt(99)]
+	));
+	check(vm.exitValue.intVal === 99);
+}
+
+test "NewObject + StoreField + LoadField" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABC(RaiserOpcode.NewObject, 0, 0, 0),   // R0 = {}
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),      // R1 = 42
+			raiserABC(RaiserOpcode.StoreField, 0, 1, 1),  // R0.field(K1="x") = R1(42)
+			raiserABC(RaiserOpcode.LoadField, 2, 0, 1),   // R2 = R0.field(K1="x")
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserInt(42), raiserString("x")]
+	));
+	check(vm.exitValue.intVal === 42);
+}
+
+test "multiple fields" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABC(RaiserOpcode.NewObject, 0, 0, 0),   // R0 = {}
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),      // R1 = 10
+			raiserABC(RaiserOpcode.StoreField, 0, 2, 1),  // R0["x"] = 10
+			raiserABx(RaiserOpcode.LoadConst, 1, 1),      // R1 = 20
+			raiserABC(RaiserOpcode.StoreField, 0, 3, 1),  // R0["y"] = 20
+			raiserABC(RaiserOpcode.LoadField, 2, 0, 3),   // R2 = R0["y"]
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserInt(10), raiserInt(20), raiserString("x"), raiserString("y")]
+	));
+	check(vm.exitValue.intVal === 20);
+}
+
+test "field update" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABC(RaiserOpcode.NewObject, 0, 0, 0),   // R0 = {}
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),      // R1 = 1
+			raiserABC(RaiserOpcode.StoreField, 0, 2, 1),  // R0["x"] = 1
+			raiserABx(RaiserOpcode.LoadConst, 1, 1),      // R1 = 99
+			raiserABC(RaiserOpcode.StoreField, 0, 2, 1),  // R0["x"] = 99
+			raiserABC(RaiserOpcode.LoadField, 2, 0, 2),   // R2 = R0["x"]
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserInt(1), raiserInt(99), raiserString("x")]
+	));
+	check(vm.exitValue.intVal === 99);
+}
+
+test "ConcatStr: two strings" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),       // R0 = "hello"
+			raiserABx(RaiserOpcode.LoadConst, 1, 1),       // R1 = " world"
+			raiserABC(RaiserOpcode.ConcatStr, 2, 0, 1),    // R2 = "hello world"
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserString("hello"), raiserString(" world")]
+	));
+	check(vm.exitValue.strVal === "hello world");
+}
+
+test "ConcatStr: int + string coercion" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),       // R0 = "val: "
+			raiserABx(RaiserOpcode.LoadConst, 1, 1),       // R1 = 42
+			raiserABC(RaiserOpcode.ConcatStr, 2, 0, 1),    // R2 = "val: 42"
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserString("val: "), raiserInt(42)]
+	));
+	check(vm.exitValue.strVal === "val: 42");
+}
+
+test "EqStr: equal strings skip" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),       // R0 = "abc"
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),       // R1 = "abc"
+			raiserABx(RaiserOpcode.LoadConst, 2, 1),       // R2 = 1 (true)
+			raiserABC(RaiserOpcode.EqStr, 0, 1, 1),        // if R0.str == R1.str skip 1
+			raiserABx(RaiserOpcode.LoadConst, 2, 2),       // R2 = 0 (false)
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserString("abc"), raiserInt(1), raiserInt(0)]
+	));
+	check(vm.exitValue.intVal === 1);
+}
+
+test "EqStr: unequal strings no skip" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),       // R0 = "abc"
+			raiserABx(RaiserOpcode.LoadConst, 1, 1),       // R1 = "def"
+			raiserABx(RaiserOpcode.LoadConst, 2, 2),       // R2 = 1 (true)
+			raiserABC(RaiserOpcode.EqStr, 0, 1, 1),        // if R0.str == R1.str skip 1
+			raiserABx(RaiserOpcode.LoadConst, 2, 3),       // R2 = 0 (false)
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserString("abc"), raiserString("def"), raiserInt(1), raiserInt(0)]
+	));
+	check(vm.exitValue.intVal === 0);
+}
+
+test "NeStr: unequal strings skip" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),       // R0 = "abc"
+			raiserABx(RaiserOpcode.LoadConst, 1, 1),       // R1 = "def"
+			raiserABx(RaiserOpcode.LoadConst, 2, 2),       // R2 = 1 (true)
+			raiserABC(RaiserOpcode.NeStr, 0, 1, 1),        // if R0.str != R1.str skip 1
+			raiserABx(RaiserOpcode.LoadConst, 2, 3),       // R2 = 0 (false)
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserString("abc"), raiserString("def"), raiserInt(1), raiserInt(0)]
+	));
+	check(vm.exitValue.intVal === 1);
+}
+
+test "StrLen: string length" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),       // R0 = "hello"
+			raiserABC(RaiserOpcode.StrLen, 1, 0, 0),       // R1 = len("hello") = 5
+			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+		],
+		[raiserString("hello")]
+	));
+	check(vm.exitValue.intVal === 5);
+}
+
+test "StrCharAt: get character" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),       // R0 = "hello"
+			raiserABx(RaiserOpcode.LoadConst, 1, 1),       // R1 = 1
+			raiserABC(RaiserOpcode.StrCharAt, 2, 0, 1),    // R2 = "e"
+			raiserABC(RaiserOpcode.Halt, 2, 0, 0),
+		],
+		[raiserString("hello"), raiserInt(1)]
+	));
+	check(vm.exitValue.strVal === "e");
+}
+
+test "StrSlice: substring" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),       // R0 = "hello world"
+			raiserABx(RaiserOpcode.LoadConst, 1, 1),       // R1 = 0 (start)
+			raiserABx(RaiserOpcode.LoadConst, 2, 2),       // R2 = 5 (end, at C+1)
+			raiserABC(RaiserOpcode.StrSlice, 3, 0, 1),     // R3 = slice(R0, R1, R2)
+			raiserABC(RaiserOpcode.Halt, 3, 0, 0),
+		],
+		[raiserString("hello world"), raiserInt(0), raiserInt(5)]
+	));
+	check(vm.exitValue.strVal === "hello");
+}
+
+test "StrLen: empty string" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABC(RaiserOpcode.StrLen, 1, 0, 0),
+			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+		],
+		[raiserString("")]
+	));
+	check(vm.exitValue.intVal === 0);
+}
+
+test "CallIndirect basic" {
+	// func0: return 42
+	// entry: R0 = funcIdx(0), CallIndirect R1 R0 0 → R1 = func0() = 42
+	const func0Code: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),  // R0 = 42
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	];
+	const func0Consts: RaiserValue[] = [raiserInt(42)];
+	const f0 = createRaiserFunction("func0", func0Code, func0Consts, 0, 0, 2);
+
+	const entryCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),  // R0 = 0 (funcIdx of func0)
+		raiserABC(RaiserOpcode.CallIndirect, 1, 0, 0),  // R1 = call func[R0]()
+		raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+	];
+	const entryConsts: RaiserValue[] = [raiserInt(0)];
+	const entry = createRaiserFunction("main", entryCode, entryConsts, 0, 0, 4);
+
+	const funcs: RaiserFunction[] = [f0, entry];
+	const mod = createRaiserModule("test", funcs, 1);
+	const vm = execModule(mod);
+	check(vm.exitValue.intVal === 42);
+}
+
+test "CallIndirect with args" {
+	// func0(a, b): return a + b
+	// entry: R0 = funcIdx(0), R2 = 10, R3 = 20, CallIndirect R1 R0 2 → R1 = func0(10,20) = 30
+	const func0Code: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.AddI64, 2, 0, 1),  // R2 = R0 + R1
+		raiserABC(RaiserOpcode.Ret, 2, 0, 0),
+	];
+	const func0Consts: RaiserValue[] = [];
+	const f0 = createRaiserFunction("add", func0Code, func0Consts, 2, 0, 4);
+
+	const entryCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),  // R0 = 0 (funcIdx)
+		raiserABx(RaiserOpcode.LoadConst, 2, 1),  // R2 = 10 (arg1 at dest+1)
+		raiserABx(RaiserOpcode.LoadConst, 3, 2),  // R3 = 20 (arg2 at dest+2)
+		raiserABC(RaiserOpcode.CallIndirect, 1, 0, 2),  // R1 = call func[R0](R2, R3)
+		raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+	];
+	const entryConsts: RaiserValue[] = [raiserInt(0), raiserInt(10), raiserInt(20)];
+	const entry = createRaiserFunction("main", entryCode, entryConsts, 0, 0, 6);
+
+	const funcs: RaiserFunction[] = [f0, entry];
+	const mod = createRaiserModule("test", funcs, 1);
+	const vm = execModule(mod);
+	check(vm.exitValue.intVal === 30);
+}
+
+test "CallIndirect return value" {
+	// func0(): return 7
+	// entry: call func0 via indirect, multiply result by 6
+	const func0Code: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),
+		raiserABC(RaiserOpcode.Ret, 0, 0, 0),
+	];
+	const func0Consts: RaiserValue[] = [raiserInt(7)];
+	const f0 = createRaiserFunction("seven", func0Code, func0Consts, 0, 0, 2);
+
+	const entryCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 0, 0),  // R0 = 0 (funcIdx)
+		raiserABC(RaiserOpcode.CallIndirect, 1, 0, 0),  // R1 = call func[R0]() = 7
+		raiserABx(RaiserOpcode.LoadConst, 2, 1),  // R2 = 6
+		raiserABC(RaiserOpcode.MulI64, 3, 1, 2),  // R3 = R1 * R2 = 42
+		raiserABC(RaiserOpcode.Halt, 3, 0, 0),
+	];
+	const entryConsts: RaiserValue[] = [raiserInt(0), raiserInt(6)];
+	const entry = createRaiserFunction("main", entryCode, entryConsts, 0, 0, 6);
+
+	const funcs: RaiserFunction[] = [f0, entry];
+	const mod = createRaiserModule("test", funcs, 1);
+	const vm = execModule(mod);
+	check(vm.exitValue.intVal === 42);
+}
+
+test "two objects bidirectional link in function" {
+	// mk(n): NewObj R1, NewObj R2, Store R2."ref"=R1, Store R1."get"=R2, Store R1."n"=R0, Ret R1
+	// entry: LoadConst R2 5, Move R1 R2, Call R0 mk 1, LoadField R1 R0 "n", Halt R1
+	const mkCode: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.NewObject, 1, 0, 0),       // R1 = {} (self)
+		raiserABC(RaiserOpcode.NewObject, 2, 0, 0),       // R2 = {} (cl)
+		raiserABC(RaiserOpcode.StoreField, 2, 0, 1),      // cl."ref" = self
+		raiserABC(RaiserOpcode.StoreField, 1, 1, 2),      // self."get" = cl
+		raiserABC(RaiserOpcode.StoreField, 1, 2, 0),      // self."n" = n
+		raiserABC(RaiserOpcode.Ret, 1, 0, 0),
+	];
+	const mkConsts: RaiserValue[] = [raiserString("ref"), raiserString("get"), raiserString("n")];
+	const mk = createRaiserFunction("mk", mkCode, mkConsts, 1, 0, 3);
+
+	const entryCode: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 2, 0),          // R2 = 5
+		raiserABC(RaiserOpcode.Move, 1, 2, 0),            // R1 = R2
+		raiserABC(RaiserOpcode.Call, 0, 0, 1),             // R0 = mk(R1=5)
+		raiserABC(RaiserOpcode.LoadField, 1, 0, 1),       // R1 = R0."n"
+		raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+	];
+	const entryConsts: RaiserValue[] = [raiserInt(5), raiserString("n")];
+	const entry = createRaiserFunction("main", entryCode, entryConsts, 0, 0, 4);
+
+	const funcs: RaiserFunction[] = [mk, entry];
+	const mod = createRaiserModule("test", funcs, 1);
+	const vm = execModule(mod);
+	check(vm.exitValue.intVal === 5);
+}

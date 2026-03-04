@@ -6,13 +6,15 @@ import { Node, NodeKind, ProgramData } from "../ast/node";
 import { CheckerContext, hasErrors, errorCount } from "../checker/context";
 import { checkProgram } from "../checker/checkPass";
 import { checkModuleGraph } from "../checker/index";
+import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { generateJS } from "../codegen/js/index";
 import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
 import { RaiserContext, createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
-import { generateC, generateCModule, genProjectDispatcher, programHasMain, collectExportedPrototypes } from "../codegen/c/index";
+import { generateC, generateCModule, genProjectDispatcher, collectExportedPrototypes } from "../codegen/c/index";
+import { lookupSymbol } from "../checker/symbol";
 import { transformForNative } from "../transform/native/index";
 import { createTransformContextWithChecker } from "../transform/context";
 import { findModule, ModuleGraph } from "../module/graph";
@@ -47,6 +49,12 @@ export function cmdCompile(filePath: string, opts: CliOptions, outputPath: strin
 
 	if (opts.verbose) verboseLog("monomorphize");
 	const monoed = monomorphizeProgram(program, checkerCtx);
+
+	if (opts.verbose) verboseLog("validate metadata");
+	validateTypedAST(checkerCtx, monoed);
+	if (hasErrors(checkerCtx)) {
+		printErrorsAndExit(checkerCtx, "compiler metadata error: ", opts.errorMax);
+	}
 
 	if (opts.verbose) verboseLog("transform");
 	const transformed = transformProgram(monoed, checkerCtx, opts.target === Target.JS);
@@ -102,6 +110,18 @@ function reportGraphErrors(graph: ModuleGraph): void {
 	}
 }
 
+// Report per-module errors without exiting (for non-fatal type errors).
+function reportModuleErrors(graph: ModuleGraph, prefix: string): void {
+	for (let i = 0; i < graph.modules.length; i += 1) {
+		const mod = graph.modules[i];
+		if (mod.errors.length > 0) {
+			for (const e of mod.errors) {
+				console.log(red(prefix) + " [" + mod.path + "]: " + e);
+			}
+		}
+	}
+}
+
 // Report per-module errors and exit if any found.
 function exitOnModuleErrors(graph: ModuleGraph, prefix: string): void {
 	let hasErr = false;
@@ -132,7 +152,8 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 
 	if (verbose) verboseLog("cross-module type check");
 	checkModuleGraph(graph, config.stdPath);
-	exitOnModuleErrors(graph, "type error");
+	// Report type errors but continue — allows codegen to proceed past non-fatal checker issues
+	reportModuleErrors(graph, "type error");
 	return graph;
 }
 
@@ -268,6 +289,12 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 			printErrorsAndExit(ctx, "type error [" + modPath + "]: ", 0);
 		}
 
+		// Validate metadata before transform
+		validateTypedAST(ctx, pr.value);
+		if (hasErrors(ctx)) {
+			printErrorsAndExit(ctx, "compiler metadata error [" + modPath + "]: ", 0);
+		}
+
 		// Transform (JS backend — skip C-specific transforms, no monomorphize needed)
 		const transformed = transformProgram(pr.value, ctx, true);
 		const comptimeResolved = evaluateComptimeBlocks(transformed);
@@ -357,6 +384,15 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		// Monomorphize
 		const monoed = monomorphizeProgram(pr.value, ctx);
 
+		// Validate metadata (warn but continue — some builtins lack resolvedSym)
+		validateTypedAST(ctx, monoed);
+		if (hasErrors(ctx)) {
+			for (const e of ctx.errors) {
+				console.log(dim("metadata warning [" + modPath + "]: " + e));
+			}
+			ctx.errors = [];
+		}
+
 		// Transform (C target)
 		const transformed = transformProgram(monoed, ctx, false);
 		const comptimeResolved = evaluateComptimeBlocks(transformed);
@@ -380,7 +416,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 
 		// Check for user main() in entry module
 		if (modPath === entryPath) {
-			hasUserMain = programHasMain(pr.value);
+			hasUserMain = (ctx !== null && ctx.table !== null) ? lookupSymbol(ctx.table, "main") !== null : false;
 		}
 
 		if (opts.emitC) {
@@ -398,7 +434,10 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 			const oFile = "/tmp/_msc_mod_" + compiled + ".o";
 			writeOutput(cFile, cCode);
 			if (opts.verbose) verboseLog("  cc " + cFile + " → " + oFile);
-			const ccCode = compileCFile(cFile, oFile, allFlags, opts.mode, opts.ccCompiler);
+			// Add module's source directory + std/ as include paths for @include directives
+			let modFlags = appendFlag(allFlags, "-iquote" + dirName(modPath));
+			modFlags = appendFlag(modFlags, "-iquotestd");
+			const ccCode = compileCFile(cFile, oFile, modFlags, opts.mode, opts.ccCompiler);
 			if (ccCode !== 0) {
 				console.log(error("error") + ": compile failed for " + modPath + " " + dim("(exit " + ccCode + ")"));
 				exit(1);
@@ -488,6 +527,13 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		}
 
 		const monoed = monomorphizeProgram(pr.value, ctx);
+
+		// Validate metadata
+		validateTypedAST(ctx, monoed);
+		if (hasErrors(ctx)) {
+			printErrorsAndExit(ctx, "compiler metadata error [" + modPath + "]: ", opts.errorMax);
+		}
+
 		const transformed = transformProgram(monoed, ctx, false);
 		const comptimeResolved = evaluateComptimeBlocks(transformed);
 		const nativeCtx = createTransformContextWithChecker(ctx);

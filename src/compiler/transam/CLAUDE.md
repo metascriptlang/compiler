@@ -319,7 +319,7 @@ src/transam/
 | Aspect | Reference (God Struct) | Self-Hosted (Module-per-Concern) |
 |--------|----------------------|--------------------------------|
 | File size | `transam.zig`: 800+ lines just for fields | ~80-200 lines per file |
-| DRC safety | N/A (Zig manual memory) | Each module manages its own DRC-safe containers |
+| DRC safety | N/A (Zig manual memory) | Arrays passed by pointer; bare `T[]` types (wrappers removed) |
 | Circular imports | One file, no problem | Hub re-exports, callback injection |
 | Testing | Hard to isolate | Each module has inline tests |
 | Compilation | Recompiles everything | Smaller files = faster incremental |
@@ -442,22 +442,14 @@ Every data structure must respect MetaScript DRC workarounds. Violating these ca
 | 9 | Loop-var vs param codegen | Extract mutation of loop-iterated nodes into separate functions |
 | 10 | No C-style for in match arms | Use while or for..of inside match blocks |
 
-### DRC-Safe Container Pattern
+### Array Parameter Passing
 
-Following `src/analyzer/scope.ms` (VarInfoList, MovedVarList, StmtBuf):
+Arrays are now passed by pointer (hidden_addr/hidden_deref). No wrapper interfaces needed:
 
 ```ms
-// BAD: string[] is value type -- push() won't propagate
-interface BadCache {
-    keys: string[];
-}
-
-// GOOD: wrap in interface (pointer type)
-interface TaKeyList {
-    items: string[];
-}
+// Arrays use bare T[] types — push() propagates to caller
 interface GoodCache {
-    keys: TaKeyList;
+    keys: string[];
 }
 ```
 

@@ -15,23 +15,25 @@ import {
 	ExportDeclData, DecoratedDeclData, ImportDeclData,
 } from "../../ast/node";
 import { CheckerContext } from "../../checker/context";
-import { lookupSymbol, hasOverloads } from "../../checker/symbol";
+import { lookupSymbol } from "../../checker/symbol";
+// lookupSymbol removed — codegen uses node.resolvedSym (Nim parity)
 import {
 	CGen, CSection,
 	createCGen, sec, add, addLine, addNewline,
 	assembleOutput, extract, nameSetAdd, nameSetHas,
 } from "./context";
-import { genDecl, mapTypeAnnotation, mapParamType } from "./declarations";
+import { genDecl } from "./declarations";
 import { mangleModuleName, safeName } from "./names";
+import { getSimpleTypeDesc } from "./types";
 import { emitStringPoolDecls } from "./literals";
 import { sliceStr } from "../../utils/string";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 // ===== generateC — single-module entry point (backwards compatible) =====
 
 export function generateC(program: Node, ctx: CheckerContext, modulePath: string): string {
 	const moduleCode = generateCModule(program, ctx, modulePath, "");
-	const hasMain = programHasMain(program);
+	const hasMain = (ctx !== null && ctx.table !== null) ? lookupSymbol(ctx.table, "main") !== null : false;
 	const paths: string[] = [modulePath];
 	const dispatcher = genProjectDispatcher(paths, modulePath, hasMain);
 	return moduleCode + "\n" + dispatcher;
@@ -59,11 +61,6 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 	// Emit cross-module prototypes (for separate compilation)
 	if (crossModuleProtos.length > 0) {
 		add(sec(g, CSection.ProcHeaders), crossModuleProtos);
-	}
-
-	// Pre-pass: collect function declaration names for closure call detection
-	if (program !== null && program.kind === NodeKind.Program) {
-		collectFnDeclNames(g, program);
 	}
 
 	// Walk program statements
@@ -169,10 +166,10 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 
 	// MsMain + globals + POSIX main
 	result = result + "void MsMain(void) {\n  MsPreMainInner();\n  MsMainInner();\n}\n\n";
-	result = result + "int cmdCount;\nchar** cmdLine;\nchar** gEnv;\nint ms_program_result;\n\n";
+	result = result + "int cmdCount;\nchar** cmdLine;\nchar** gEnv;\nint msProgramResult;\n\n";
 	result = result + "int main(int argc, char** argv, char** env) {\n";
 	result = result + "  cmdLine = argv;\n  cmdCount = argc;\n  gEnv = env;\n";
-	result = result + "  MsMain();\n  return ms_program_result;\n}\n";
+	result = result + "  MsMain();\n  return msProgramResult;\n}\n";
 
 	return result;
 }
@@ -215,15 +212,19 @@ function protoFromStmt(node: Node): string {
 function buildFnProto(node: Node): string {
 	const d = node.data as FunctionDeclData;
 	const name = safeName(d.fnName);
-	const retType = mapTypeAnnotation(d.fnReturnType);
+	const fnType = node.nodeType;
+	if (fnType === null) return "";
+	const retType = getSimpleTypeDesc(fnType.typeReturn);
+	const finalRetType = (retType !== "") ? retType : "void*";
 	let paramList = "";
 	for (let i = 0; i < d.params.length; i += 1) {
 		if (i > 0) paramList = paramList + ", ";
-		const pType = mapParamType(d.fnParamTypes, i);
-		paramList = paramList + pType + " " + safeName(d.params[i]);
+		const pType = getSimpleTypeDesc(fnType.typeChildren[i]);
+		const finalPType = (pType !== "") ? pType : "void*";
+		paramList = paramList + finalPType + " " + safeName(d.params[i]);
 	}
 	if (d.params.length === 0) paramList = "void";
-	return retType + " " + name + "(" + paramList + ");";
+	return finalRetType + " " + name + "(" + paramList + ");";
 }
 
 // ===== Collect Exported Function Prototypes =====
@@ -256,81 +257,6 @@ function exportedProtoFromStmt(node: Node): string {
 		return exportedProtoFromStmt(d.decoratedNode);
 	}
 	return "";
-}
-
-// ===== Check if program has user-defined main() =====
-
-export function programHasMain(program: Node): boolean {
-	if (program === null) return false;
-	if (program.kind !== NodeKind.Program) return false;
-	const pd = program.data as ProgramData;
-	for (let i = 0; i < pd.programStmts.length; i += 1) {
-		if (stmtIsMain(pd.programStmts[i])) return true;
-	}
-	return false;
-}
-
-function stmtIsMain(node: Node): boolean {
-	if (node === null) return false;
-	if (node.kind === NodeKind.FunctionDecl) {
-		const d = node.data as FunctionDeclData;
-		return d.fnName === "main";
-	}
-	if (node.kind === NodeKind.ExportDecl) {
-		const d = node.data as ExportDeclData;
-		return stmtIsMain(d.exportedDecl);
-	}
-	if (node.kind === NodeKind.DecoratedDecl) {
-		const d = node.data as DecoratedDeclData;
-		return stmtIsMain(d.decoratedNode);
-	}
-	return false;
-}
-
-// ===== Pre-pass: collect function names for closure detection =====
-
-function collectFnDeclNames(g: CGen, node: Node): void {
-	if (node === null) return;
-	if (node.kind === NodeKind.Program) {
-		const pd = node.data as ProgramData;
-		for (let i = 0; i < pd.programStmts.length; i += 1) {
-			collectFnDeclNames(g, pd.programStmts[i]);
-		}
-	} else if (node.kind === NodeKind.FunctionDecl) {
-		const d = node.data as FunctionDeclData;
-		if (d.fnName !== "") {
-			nameSetAdd(g.fnDeclNames, d.fnName);
-			// Register overloaded name variants for closure detection
-			if (g.checkerCtx !== null) {
-				const sym = lookupSymbol(g.checkerCtx.table, d.fnName);
-				if (sym !== null && hasOverloads(sym)) {
-					nameSetAdd(g.fnDeclNames, safeName(d.fnName) + "__0");
-					let ovi = 0;
-					while (ovi < sym.overloads.length) {
-						nameSetAdd(g.fnDeclNames, safeName(d.fnName) + "__" + (ovi + 1));
-						ovi = ovi + 1;
-					}
-				}
-			}
-		}
-		collectFnDeclNames(g, d.fnBody);
-	} else if (node.kind === NodeKind.BlockStmt) {
-		const d = node.data as BlockStmtData;
-		for (let i = 0; i < d.statements.length; i += 1) {
-			collectFnDeclNames(g, d.statements[i]);
-		}
-	} else if (node.kind === NodeKind.ExportDecl) {
-		const d = node.data as ExportDeclData;
-		collectFnDeclNames(g, d.exportedDecl);
-	} else if (node.kind === NodeKind.DecoratedDecl) {
-		const d = node.data as DecoratedDeclData;
-		collectFnDeclNames(g, d.decoratedNode);
-	} else if (node.kind === NodeKind.ImportDecl) {
-		const d = node.data as ImportDeclData;
-		for (let i = 0; i < d.importNames.length; i += 1) {
-			nameSetAdd(g.fnDeclNames, d.importNames[i]);
-		}
-	}
 }
 
 // ===== Emit @include directives from checker context =====
@@ -371,99 +297,82 @@ function cModuleOutput(input: string): string {
 	return generateCModule(pr.value, null as unknown as CheckerContext, "test/input", "");
 }
 
-testGroup("C Gen Headers", () => {
-	test("empty program has headers", () => {
-		const result = cOutput("");
-		check(result.length > 0);
-	});
-	test("headers include stdint", () => {
-		const result = cOutput("");
-		// stdint.h should be present
-		check(result.length > 10);
-	});
-});
+test "empty program has headers" {
+	const result = cOutput("");
+	check(result.length > 0);
+}
 
-testGroup("C Gen Function", () => {
-	test("simple function", () => {
-		const result = cOutput("function foo(): void { return; }");
-		check(result.length > 0);
-	});
-});
+test "headers include stdint" {
+	const result = cOutput("");
+	// stdint.h should be present
+	check(result.length > 10);
+}
 
-testGroup("C Gen Enum", () => {
-	test("enum output", () => {
-		const result = cOutput("enum Dir { North, South, East, West }");
-		check(result.length > 0);
-	});
-});
+test "simple function" {
+	const result = cOutput("function foo(): void { return; }");
+	check(result.length > 0);
+}
 
-testGroup("C Gen Integration", () => {
-	test("function + call", () => {
-		const result = cOutput("function add(a: number, b: number): number { return a + b; }");
-		check(result.length > 0);
-	});
-	test("global var init in module Init000", () => {
-		const result = cOutput("function add(a: number, b: number): number { return a + b; }\nconst result: number = add(2, 3);");
-		check(result.length > 0);
-	});
-	test("two-phase init + POSIX main", () => {
-		const result = cOutput("function add(a: number, b: number): number { return a + b; }\nconst result: number = add(2, 3);");
-		check(result.length > 0);
-	});
-});
+test "enum output" {
+	const result = cOutput("enum Dir { North, South, East, West }");
+	check(result.length > 0);
+}
 
-testGroup("C Gen Directives", () => {
-	test("MacroInvocation skipped in codegen", () => {
-		const result = cOutput("@passL(\"-lssl\");");
-		// Should not contain /* unsupported */
-		check(result.length > 0);
-	});
-	test("@include from prelude emits header", () => {
-		// prelude has @include("system.h"), so generated C should contain it
-		const result = cOutput("");
-		check(result.length > 0);
-	});
-});
+test "function + call" {
+	const result = cOutput("function add(a: number, b: number): number { return a + b; }");
+	check(result.length > 0);
+}
 
-testGroup("C Gen Closure", () => {
-	test("function names collected", () => {
-		// After generateC, foo should be in fnDeclNames so calls to foo are direct
-		const result = cOutput("function foo(): void {} function bar(): void { foo(); }");
-		check(result.length > 0);
-	});
-	test("array literal", () => {
-		const result = cOutput("const arr: number = [1, 2, 3];");
-		check(result.length > 0);
-	});
-});
+test "global var init in module Init000" {
+	const result = cOutput("function add(a: number, b: number): number { return a + b; }\nconst result: number = add(2, 3);");
+	check(result.length > 0);
+}
 
-testGroup("C Gen Module", () => {
-	test("generateCModule produces code without dispatcher", () => {
-		const result = cModuleOutput("function foo(): void { return; }");
-		check(result.length > 0);
-	});
-	test("programHasMain detects main function", () => {
-		const pr = parseSource("function main(): number { return 0; }");
-		check(pr.ok);
-		check(programHasMain(pr.value));
-	});
-	test("programHasMain returns false when no main", () => {
-		const pr = parseSource("function foo(): void {}");
-		check(pr.ok);
-		check(!programHasMain(pr.value));
-	});
-	test("collectFunctionPrototypes extracts protos", () => {
-		const pr = parseSource("function add(a: number, b: number): number { return a + b; }");
-		check(pr.ok);
-		const protos = collectFunctionPrototypes(pr.value);
-		check(protos.length > 0);
-	});
-	test("collectExportedPrototypes only exported", () => {
-		const pr = parseSource("function helper(): void {}\nexport function api(): void {}");
-		check(pr.ok);
-		const exported = collectExportedPrototypes(pr.value);
-		const all = collectFunctionPrototypes(pr.value);
-		check(exported.length > 0);
-		check(all.length > exported.length);
-	});
-});
+test "two-phase init + POSIX main" {
+	const result = cOutput("function add(a: number, b: number): number { return a + b; }\nconst result: number = add(2, 3);");
+	check(result.length > 0);
+}
+
+test "MacroInvocation skipped in codegen" {
+	const result = cOutput("@passL(\"-lssl\");");
+	// Should not contain /* unsupported */
+	check(result.length > 0);
+}
+
+test "@include from prelude emits header" {
+	// prelude has @include("system.h"), so generated C should contain it
+	const result = cOutput("");
+	check(result.length > 0);
+}
+
+test "direct call detection" {
+	// closureCallMarker sets isDirectCall on CallExpr nodes — codegen reads the flag
+	const result = cOutput("function foo(): void {} function bar(): void { foo(); }");
+	check(result.length > 0);
+}
+
+test "array literal" {
+	const result = cOutput("const arr: number = [1, 2, 3];");
+	check(result.length > 0);
+}
+
+test "generateCModule produces code without dispatcher" {
+	const result = cModuleOutput("function foo(): void { return; }");
+	check(result.length > 0);
+}
+
+test "collectFunctionPrototypes extracts protos" {
+	const pr = parseSource("function add(a: number, b: number): number { return a + b; }");
+	check(pr.ok);
+	const protos = collectFunctionPrototypes(pr.value);
+	check(protos.length > 0);
+}
+
+test "collectExportedPrototypes only exported" {
+	const pr = parseSource("function helper(): void {}\nexport function api(): void {}");
+	check(pr.ok);
+	const exported = collectExportedPrototypes(pr.value);
+	const all = collectFunctionPrototypes(pr.value);
+	check(exported.length > 0);
+	check(all.length > exported.length);
+}

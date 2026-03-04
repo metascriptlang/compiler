@@ -8,7 +8,7 @@ import { Node, NodeKind, MemberExprData } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeMember, makeNull, makeBinary, makeConditional } from "../util";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { firstExprKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -33,15 +33,8 @@ function lowerOptionalNode(node: Node): Node {
 }
 
 // ===== Tests =====
+test "regular member unchanged" { check(firstExprKindAfter("a.b;", lowerOptionalChain) === NodeKind.MemberExpr); }
 
-testGroup("Optional Chain Lowering", () => {
-	test("regular member unchanged", () => {
-		check(firstExprKindAfter("a.b;", lowerOptionalChain) === NodeKind.MemberExpr);
-	});
-	test("optional chain becomes conditional", () => {
-		check(firstExprKindAfter("a?.b;", lowerOptionalChain) === NodeKind.ConditionalExpr);
-	});
-	test("call expr unchanged", () => {
-		check(firstExprKindAfter("f();", lowerOptionalChain) === NodeKind.CallExpr);
-	});
-});
+test "optional chain becomes conditional" { check(firstExprKindAfter("a?.b;", lowerOptionalChain) === NodeKind.ConditionalExpr); }
+
+test "call expr unchanged" { check(firstExprKindAfter("f();", lowerOptionalChain) === NodeKind.CallExpr); }

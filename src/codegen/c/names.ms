@@ -5,7 +5,7 @@
 // module-qualified proc names, field/local manglers.
 
 import { sliceStr, charAt } from "../../utils/string";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 // ===== C Keywords — identifiers that need escaping =====
 
@@ -201,105 +201,81 @@ export function safeName(name: string): string {
 }
 
 // ===== Tests =====
+test "simple names pass through" {
+	check(mangle("foo") === "foo");
+	check(mangle("bar123") === "bar123");
+	check(mangle("_private") === "_private");
+}
 
-testGroup("C Name Mangle", () => {
-	test("simple names pass through", () => {
-		check(mangle("foo") === "foo");
-		check(mangle("bar123") === "bar123");
-		check(mangle("_private") === "_private");
-	});
-	test("leading digit", () => {
-		check(mangle("3d") === "X3d");
-	});
-	test("special chars get word replacements", () => {
-		check(mangle("a+b") === "aplusb_");
-		check(mangle("x=y") === "xeqy_");
-		check(mangle("<") === "lt_");
-		check(mangle("a.b") === "adotb_");
-	});
-	test("empty name", () => {
-		check(mangle("") === "empty_");
-	});
-	test("multiple special chars", () => {
-		check(mangle("a+b*c") === "aplusbstarc_");
-	});
-});
+test "leading digit" { check(mangle("3d") === "X3d"); }
 
-testGroup("C Name Keywords", () => {
-	test("C keywords detected", () => {
-		check(isCKeyword("int"));
-		check(isCKeyword("void"));
-		check(isCKeyword("return"));
-		check(isCKeyword("struct"));
-	});
-	test("non-keywords pass", () => {
-		check(!isCKeyword("foo"));
-		check(!isCKeyword("myVar"));
-	});
-});
+test "special chars get word replacements" {
+	check(mangle("a+b") === "aplusb_");
+	check(mangle("x=y") === "xeqy_");
+	check(mangle("<") === "lt_");
+	check(mangle("a.b") === "adotb_");
+}
 
-testGroup("C Name Proc", () => {
-	test("mangleProcName", () => {
-		check(mangleProcName("myFunc", "mymod", 42) === "myFunc__mymod_u42");
-	});
-	test("mangleProcName with special", () => {
-		check(mangleProcName("a+b", "ops", 1) === "aplusb___ops_u1");
-	});
-});
+test "empty name" { check(mangle("") === "empty_"); }
 
-testGroup("C Name Field", () => {
-	test("normal field", () => {
-		check(mangleFieldName("x") === "x");
-		check(mangleFieldName("myField") === "myField");
-	});
-	test("keyword field", () => {
-		check(mangleFieldName("int") === "int_0");
-		check(mangleFieldName("return") === "return_0");
-	});
-});
+test "multiple special chars" { check(mangle("a+b*c") === "aplusbstarc_"); }
 
-testGroup("C Name Local", () => {
-	test("top scope", () => {
-		check(mangleLocalName("x", 0) === "x");
-		check(mangleLocalName("foo", 0) === "foo");
-	});
-	test("nested scope", () => {
-		check(mangleLocalName("x", 1) === "x_1");
-		check(mangleLocalName("x", 3) === "x_3");
-	});
-	test("keyword at top scope", () => {
-		check(mangleLocalName("int", 0) === "int_0");
-	});
-});
+test "C keywords detected" {
+	check(isCKeyword("int"));
+	check(isCKeyword("void"));
+	check(isCKeyword("return"));
+	check(isCKeyword("struct"));
+}
 
-testGroup("C Name Safe", () => {
-	test("normal name", () => {
-		check(safeName("foo") === "foo");
-	});
-	test("keyword gets suffix", () => {
-		check(safeName("int") === "int_");
-		check(safeName("void") === "void_");
-	});
-});
+test "non-keywords pass" {
+	check(!isCKeyword("foo"));
+	check(!isCKeyword("myVar"));
+}
 
-testGroup("C Module Name", () => {
-	test("simple lowercase path", () => {
-		check(mangleModuleName("mymod") === "mymod");
-	});
-	test("path separators become Z", () => {
-		check(mangleModuleName("src/codegen/c") === "srcZcodegenZc");
-	});
-	test("dots become O", () => {
-		check(mangleModuleName("foo.bar") === "fooObar");
-	});
-	test("uppercase becomes ordinal", () => {
-		check(mangleModuleName("MyClass") === "77y67lass");
-		check(mangleModuleName("AB") === "6566");
-	});
-	test("underscore becomes ordinal", () => {
-		check(mangleModuleName("my_mod") === "my95mod");
-	});
-	test("full path with mixed case", () => {
-		check(mangleModuleName("src/codegen/MyGen") === "srcZcodegenZ77y71en");
-	});
-});
+test "mangleProcName" { check(mangleProcName("myFunc", "mymod", 42) === "myFunc__mymod_u42"); }
+
+test "mangleProcName with special" { check(mangleProcName("a+b", "ops", 1) === "aplusb___ops_u1"); }
+
+test "normal field" {
+	check(mangleFieldName("x") === "x");
+	check(mangleFieldName("myField") === "myField");
+}
+
+test "keyword field" {
+	check(mangleFieldName("int") === "int_0");
+	check(mangleFieldName("return") === "return_0");
+}
+
+test "top scope" {
+	check(mangleLocalName("x", 0) === "x");
+	check(mangleLocalName("foo", 0) === "foo");
+}
+
+test "nested scope" {
+	check(mangleLocalName("x", 1) === "x_1");
+	check(mangleLocalName("x", 3) === "x_3");
+}
+
+test "keyword at top scope" { check(mangleLocalName("int", 0) === "int_0"); }
+
+test "normal name" { check(safeName("foo") === "foo"); }
+
+test "keyword gets suffix" {
+	check(safeName("int") === "int_");
+	check(safeName("void") === "void_");
+}
+
+test "simple lowercase path" { check(mangleModuleName("mymod") === "mymod"); }
+
+test "path separators become Z" { check(mangleModuleName("src/codegen/c") === "srcZcodegenZc"); }
+
+test "dots become O" { check(mangleModuleName("foo.bar") === "fooObar"); }
+
+test "uppercase becomes ordinal" {
+	check(mangleModuleName("MyClass") === "77y67lass");
+	check(mangleModuleName("AB") === "6566");
+}
+
+test "underscore becomes ordinal" { check(mangleModuleName("my_mod") === "my95mod"); }
+
+test "full path with mixed case" { check(mangleModuleName("src/codegen/MyGen") === "srcZcodegenZ77y71en"); }

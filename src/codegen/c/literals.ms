@@ -5,7 +5,7 @@
 
 import { sliceStr, charAt } from "../../utils/string";
 import { Builder, add, addLine, addNewline, createBuilder, extract, StringPool, createStringPool, internString } from "./context";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 // ===== C String Escaping =====
 // Produces a C-compatible escaped string literal body (without quotes).
@@ -122,75 +122,51 @@ export function cNullLiteral(): string {
 }
 
 // ===== Tests =====
+test "plain string" { check(escapeCString("hello") === "hello"); }
 
-testGroup("C String Escape", () => {
-	test("plain string", () => {
-		check(escapeCString("hello") === "hello");
-	});
-	test("escape backslash", () => {
-		check(escapeCString("a\\b") === "a\\\\b");
-	});
-	test("escape quotes", () => {
-		check(escapeCString("a\"b") === "a\\\"b");
-	});
-	test("escape newline", () => {
-		check(escapeCString("a\nb") === "a\\nb");
-	});
-	test("escape tab", () => {
-		check(escapeCString("a\tb") === "a\\tb");
-	});
-	test("cStringLiteral wraps in quotes", () => {
-		check(cStringLiteral("hello") === "\"hello\"");
-		check(cStringLiteral("a\"b") === "\"a\\\"b\"");
-	});
-});
+test "escape backslash" { check(escapeCString("a\\b") === "a\\\\b"); }
 
-testGroup("C Number Format", () => {
-	test("zero", () => {
-		check(formatCNumber(0.0) === "0");
-	});
-	test("positive integer", () => {
-		check(formatCNumber(42.0) === "42");
-	});
-	test("negative integer", () => {
-		check(formatCNumber(-7.0) === "-7");
-	});
-	test("int32 suffix", () => {
-		check(formatCInt32(42) === "42");
-	});
-	test("int64 suffix", () => {
-		check(formatCInt64(42) === "42LL");
-	});
-	test("uint32 suffix", () => {
-		check(formatCUint32(42) === "42U");
-	});
-	test("float32 suffix", () => {
-		check(formatCFloat32(3.14) === "3.14f");
-	});
-});
+test "escape quotes" { check(escapeCString("a\"b") === "a\\\"b"); }
 
-testGroup("C String Pool Emit", () => {
-	test("emit pool declarations as msStrPayload", () => {
-		const pool = createStringPool();
-		internString(pool, "hello");
-		internString(pool, "world");
-		const builder = createBuilder();
-		emitStringPoolDecls(pool, builder);
-		const result = extract(builder);
-		check(result.length > 0);
-		// Should contain MS_STRLIT_FLAG, cap, and data
-	});
-	test("msStringPoolRef format", () => {
-		check(msStringPoolRef("TMP_STR_1", 5) === "MS_STRING_LIT(&TMP_STR_1, 5)");
-	});
-});
+test "escape newline" { check(escapeCString("a\nb") === "a\\nb"); }
 
-testGroup("C Bool/Null Literals", () => {
-	test("true/false", () => {
-		check(cBoolLiteral(true) === "MS_TRUE");
-		check(cBoolLiteral(false) === "MS_FALSE");
-	});
-	test("null", () => {
-		check(cNullLiteral() === "MS_NIL");
-	});
-});
+test "escape tab" { check(escapeCString("a\tb") === "a\\tb"); }
+
+test "cStringLiteral wraps in quotes" {
+	check(cStringLiteral("hello") === "\"hello\"");
+	check(cStringLiteral("a\"b") === "\"a\\\"b\"");
+}
+
+test "zero" { check(formatCNumber(0.0) === "0"); }
+
+test "positive integer" { check(formatCNumber(42.0) === "42"); }
+
+test "negative integer" { check(formatCNumber(-7.0) === "-7"); }
+
+test "int32 suffix" { check(formatCInt32(42) === "42"); }
+
+test "int64 suffix" { check(formatCInt64(42) === "42LL"); }
+
+test "uint32 suffix" { check(formatCUint32(42) === "42U"); }
+
+test "float32 suffix" { check(formatCFloat32(3.14) === "3.14f"); }
+
+test "emit pool declarations as msStrPayload" {
+	const pool = createStringPool();
+	internString(pool, "hello");
+	internString(pool, "world");
+	const builder = createBuilder();
+	emitStringPoolDecls(pool, builder);
+	const result = extract(builder);
+	check(result.length > 0);
+	// Should contain MS_STRLIT_FLAG, cap, and data
+}
+
+test "msStringPoolRef format" { check(msStringPoolRef("TMP_STR_1", 5) === "MS_STRING_LIT(&TMP_STR_1, 5)"); }
+
+test "true/false" {
+	check(cBoolLiteral(true) === "MS_TRUE");
+	check(cBoolLiteral(false) === "MS_FALSE");
+}
+
+test "null" { check(cNullLiteral() === "MS_NIL"); }

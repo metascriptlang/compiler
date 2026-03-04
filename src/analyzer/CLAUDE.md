@@ -127,16 +127,16 @@ For each block:
 | TypeKind | RcKind | destroy | copy | wasMoved | sink |
 |----------|--------|---------|------|----------|------|
 | Number/Bool/Void/Null/Int*/Enum | None | -- | -- | -- | -- |
-| String | String | `ms_string_decref` | `ms_string_incref` | `ms_string_was_moved` | `ms_string_sink` |
-| Array (number elem) | Array | `ms_array_destroy` | `ms_array_copy` | `ms_array_number_was_moved` | `ms_array_number_sink` |
-| Array (string elem) | Array | `ms_array_string_destroy` | `ms_array_string_copy` | `ms_array_string_was_moved` | `ms_array_string_sink` |
+| String | String | `msStringDecref` | `msStringIncref` | `msStringWasMoved` | `msStringSink` |
+| Array (number elem) | Array | `msArrayDestroy` | `msArrayCopy` | `msArrayNumberWasMoved` | `msArrayNumberSink` |
+| Array (string elem) | Array | `msArrayStringDestroy` | `msArrayStringCopy` | `msArrayStringWasMoved` | `msArrayStringSink` |
 | Array (ref elem) | Array | `MS_ARRAY_REF_DESTROY` | `MS_ARRAY_REF_COPY` | `MS_ARRAY_REF_WAS_MOVED` | `MS_ARRAY_REF_COPY` |
-| Ref / Ptr | Ref | `ms_decref` | `ms_incref` | `ms_ptr_was_moved` | -- |
-| Object (interface/class) | Ref | `ms_decref` | `ms_incref` | `ms_ptr_was_moved` | -- |
+| Ref / Ptr | Ref | `msDecref` | `msIncref` | `msPtrWasMoved` | -- |
+| Object (interface/class) | Ref | `msDecref` | `msIncref` | `msPtrWasMoved` | -- |
 | Object (named value type) | Named | `T_destroy` | `T_copy` | `T_wasMoved` | `T_sink` |
-| Function (closure) | Closure | `ms_closure_destroy` | `ms_closure_copy` | `ms_closure_was_moved` | `ms_closure_sink` |
-| Map | Map | `ms_map_free` | `ms_map_copy` | `ms_map_was_moved` | `ms_map_sink` |
-| Set | Set | `ms_set_free` | `ms_set_copy` | -- | -- |
+| Function (closure) | Closure | `msClosureDestroy` | `msClosureCopy` | `msClosureWasMoved` | `msClosureSink` |
+| Map | Map | `msMapFree` | `msMapCopy` | `msMapWasMoved` | `msMapSink` |
+| Set | Set | `msSetFree` | `msSetCopy` | -- | -- |
 
 ---
 
@@ -149,7 +149,7 @@ For each block:
 1. **Clean modular architecture** -- 6 focused files vs 4,771-line monolith (reference) or scattered across many files (Nim). Each file has inline tests.
 2. **Cross-scope last-read via OuterStack** -- Elegant forward-scan across nested blocks within a function. Neither reference (CFG per-function) nor Nim (CFG per-function) have this specific abstraction.
 3. **Branch-aware optimizer** -- `collectIfMoved()` + `nameSetIntersect()` is cleaner than Nim's equivalent while achieving the same result.
-4. **DRC-safe data structures** -- All arrays wrapped in interfaces (`VarInfoList`, `MovedVarList`, `StmtBuf`), preventing value-type array bugs.
+4. **Clean data structures** -- Bare `T[]` types throughout (no wrapper interfaces). Strings still value types.
 5. **Compound assignment handling** -- Proper `x += y` desugaring for RC types, handled more cleanly than reference.
 6. **Per-module inline tests** -- Comprehensive test groups per file. Neither reference nor Nim have this for the DRC layer.
 

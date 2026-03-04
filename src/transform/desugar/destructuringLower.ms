@@ -1,7 +1,7 @@
 // Destructuring Lowering — transforms DestructuringDecl → temp var + field access
 
 import {
-	Node, NodeKind, DeclKind,
+	Node, NodeKind, DeclKind, SourceLocation,
 	DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
 	IdentifierData,
 } from "../../ast/node";
@@ -11,7 +11,7 @@ import {
 	makeIdent, makeVarDecl, makeNumber, makeArrayAccess, makeMember, makeCall,
 	boolToDeclKind,
 } from "../util";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -24,7 +24,7 @@ export function lowerDestructuring(program: Node, ctx: TransformContext): Node {
 // Expand array pattern [a, b, ...rest] → indexed access
 function expandArrayRet(
 	pattern: Node, base: Node, declKind: DeclKind,
-	loc: Node["location"], ctx: TransformContext
+	loc: SourceLocation, ctx: TransformContext
 ): Node[] {
 	const apd = pattern.data as ArrayPatternData;
 	const items: Node[] = [];
@@ -58,7 +58,7 @@ function expandArrayRet(
 // Expand object pattern {x, y: z} → member access
 function expandObjectRet(
 	pattern: Node, base: Node, declKind: DeclKind,
-	loc: Node["location"], ctx: TransformContext
+	loc: SourceLocation, ctx: TransformContext
 ): Node[] {
 	const opd = pattern.data as ObjectPatternData;
 	const items: Node[] = [];
@@ -81,7 +81,7 @@ function expandDestructuring(stmt: Node, ctx: TransformContext): Node[] {
 	const result: Node[] = [];
 
 	// Simple RHS (identifier/member/access) → skip temp
-	let baseExpr: Node;
+	let baseExpr: Node = null as unknown as Node;
 	const initKind = d.destrInit.kind;
 	if (initKind === NodeKind.Identifier || initKind === NodeKind.MemberExpr || initKind === NodeKind.ArrayAccess) {
 		baseExpr = d.destrInit;
@@ -109,24 +109,14 @@ function expandDestructuring(stmt: Node, ctx: TransformContext): Node[] {
 }
 
 // ===== Tests =====
+test "array 2 elements" { check(stmtCountAfter("const [a, b] = f();", lowerDestructuring) === 3); }
 
-testGroup("Destructuring Lowering", () => {
-	test("array 2 elements", () => {
-		check(stmtCountAfter("const [a, b] = f();", lowerDestructuring) === 3);
-	});
-	test("first stmt is temp VarDecl", () => {
-		check(firstStmtKindAfter("const [a, b] = f();", lowerDestructuring) === NodeKind.VariableDecl);
-	});
-	test("object destructuring", () => {
-		check(stmtCountAfter("const { x, y } = f();", lowerDestructuring) === 3);
-	});
-	test("simple RHS skips temp", () => {
-		check(stmtCountAfter("const [a, b] = myVar;", lowerDestructuring) === 2);
-	});
-	test("non-destructuring passthrough", () => {
-		check(stmtCountAfter("const x = 1;", lowerDestructuring) === 1);
-	});
-	test("preserves surrounding stmts", () => {
-		check(stmtCountAfter("let z = 0; const [a, b] = f(); let w = 1;", lowerDestructuring) === 5);
-	});
-});
+test "first stmt is temp VarDecl" { check(firstStmtKindAfter("const [a, b] = f();", lowerDestructuring) === NodeKind.VariableDecl); }
+
+test "object destructuring" { check(stmtCountAfter("const { x, y } = f();", lowerDestructuring) === 3); }
+
+test "simple RHS skips temp" { check(stmtCountAfter("const [a, b] = myVar;", lowerDestructuring) === 2); }
+
+test "non-destructuring passthrough" { check(stmtCountAfter("const x = 1;", lowerDestructuring) === 1); }
+
+test "preserves surrounding stmts" { check(stmtCountAfter("let z = 0; const [a, b] = f(); let w = 1;", lowerDestructuring) === 5); }

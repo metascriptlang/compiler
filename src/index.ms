@@ -18,7 +18,7 @@ function requireFile(opts: CliOptions): void {
 	}
 }
 
-function main(): number {
+export function main(): number {
 	const opts = parseArgs();
 	const cmd = opts.command;
 

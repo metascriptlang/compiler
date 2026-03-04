@@ -212,7 +212,7 @@ export function captureGenericTypeArgs(state: ParserState): string {
 	if (isAtEnd(state) || current(state).kind !== TokenKind.Lt) return "";
 	advance(state); // consume <
 	// Two-pass: first collect token values with separators, then split.
-	// Avoid `let str = ""; str = "";` — DRC generates ms_decref on struct msString.
+	// Avoid `let str = ""; str = "";` — DRC generates msDecref on struct msString.
 	const tokens: string[] = [];
 	const depths: number[] = [];
 	let depth = 1;
@@ -230,7 +230,7 @@ export function captureGenericTypeArgs(state: ParserState): string {
 	}
 	// Build comma-separated type args in single pass.
 	// Depth-1 commas are arg separators → emit our ",".
-	// NEVER reset a string variable to "" — DRC generates ms_decref(msString) → void* mismatch.
+	// NEVER reset a string variable to "" — DRC generates msDecref(msString) → void* mismatch.
 	let result = "";
 	let afterSep = false;
 	let argHasTokens = false;

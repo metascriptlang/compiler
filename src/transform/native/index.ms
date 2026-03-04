@@ -21,6 +21,8 @@ import { markPointerParams } from "./pointerParam";
 import { injectRangeChecks } from "./rangeCheckInject";
 import { coerceOptionals } from "./optionalCoercion";
 import { lowerBuiltins } from "./builtinLower";
+import { lowerStringOps } from "./stringOpLower";
+import { lowerEnumToString } from "./enumToStringLower";
 
 export function transformForNative(program: Node, ctx: TransformContext): Node {
 	let result = lowerNewExpr(program, ctx);
@@ -28,6 +30,8 @@ export function transformForNative(program: Node, ctx: TransformContext): Node {
 	result = markPointerParams(result, ctx);
 	result = injectRangeChecks(result, ctx);
 	result = coerceOptionals(result, ctx);
+	result = lowerEnumToString(result, ctx);
 	result = lowerBuiltins(result, ctx);
+	result = lowerStringOps(result, ctx);
 	return result;
 }

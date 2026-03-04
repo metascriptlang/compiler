@@ -35,7 +35,7 @@ import {
 	makeObjectLiteral, syntheticToken, extractBodyStmts,
 	collectDeclNames,
 } from "../util";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
 // ===== Data Structures =====
@@ -356,7 +356,7 @@ function buildStateDispatch(sc: StateCollector, loc: SourceLocation): Node {
 
 function transformGeneratorFn(params: string[], paramTypes: string[], body: Node, flags: string, returnType: string, loc: SourceLocation): Node {
 	// 1. Collect all local variable names
-	const nc: NameSet = { names: [] };
+	const nc: NameSet = [];
 	collectDeclNames(body, nc, false);
 
 	// 2. Extract body statements
@@ -404,7 +404,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	//   return { next: function() { while(true) { if-else dispatch } } };
 	const newBodyStmts: Node[] = [];
 	newBodyStmts.push(makeVarDecl("$state", makeNumber(0, loc), DeclKind.Let, loc));
-	for (const localName of nc.names) {
+	for (const localName of nc) {
 		newBodyStmts.push(makeVarDecl(localName, makeNull(loc), DeclKind.Let, loc));
 	}
 	newBodyStmts.push(makeReturn(iterObj, loc));
@@ -482,31 +482,21 @@ export function lowerGenerator(program: Node, ctx: TransformContext): Node {
 }
 
 // ===== Tests =====
+test "non-generator passthrough" { check(firstStmtKindAfter("function foo() { return 1; }", lowerGenerator) === NodeKind.FunctionDecl); }
 
-testGroup("Generator Lowering", () => {
-	test("non-generator passthrough", () => {
-		check(firstStmtKindAfter("function foo() { return 1; }", lowerGenerator) === NodeKind.FunctionDecl);
-	});
-	test("stmt count passthrough", () => {
-		check(stmtCountAfter("const x = 1;", lowerGenerator) === 1);
-	});
-	test("generator still one stmt", () => {
-		// function* gen() { yield 1; } → function gen() { ... } — still 1 top-level stmt
-		check(stmtCountAfter("function* gen() { yield 1; }", lowerGenerator) === 1);
-	});
-	test("generator flag removed", () => {
-		check(firstStmtKindAfter("function* gen() { yield 1; }", lowerGenerator) === NodeKind.FunctionDecl);
-	});
-	test("two yields", () => {
-		check(stmtCountAfter("function* gen() { yield 1; yield 2; }", lowerGenerator) === 1);
-	});
-	test("yield with locals", () => {
-		check(stmtCountAfter("function* gen() { let x = 1; yield x; }", lowerGenerator) === 1);
-	});
-	test("while yield loop", () => {
-		check(stmtCountAfter("function* gen() { let i = 0; while (i < 3) { yield i; i = i + 1; } }", lowerGenerator) === 1);
-	});
-	test("regular function unchanged", () => {
-		check(stmtCountAfter("function f() { while (true) {} }", lowerGenerator) === 1);
-	});
-});
+test "stmt count passthrough" { check(stmtCountAfter("const x = 1;", lowerGenerator) === 1); }
+
+test "generator still one stmt" {
+	// function* gen() { yield 1; } → function gen() { ... } — still 1 top-level stmt
+	check(stmtCountAfter("function* gen() { yield 1; }", lowerGenerator) === 1);
+}
+
+test "generator flag removed" { check(firstStmtKindAfter("function* gen() { yield 1; }", lowerGenerator) === NodeKind.FunctionDecl); }
+
+test "two yields" { check(stmtCountAfter("function* gen() { yield 1; yield 2; }", lowerGenerator) === 1); }
+
+test "yield with locals" { check(stmtCountAfter("function* gen() { let x = 1; yield x; }", lowerGenerator) === 1); }
+
+test "while yield loop" { check(stmtCountAfter("function* gen() { let i = 0; while (i < 3) { yield i; i = i + 1; } }", lowerGenerator) === 1); }
+
+test "regular function unchanged" { check(stmtCountAfter("function f() { while (true) {} }", lowerGenerator) === 1); }

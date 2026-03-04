@@ -6,7 +6,7 @@ import { Node, NodeKind, NodeData, Expression, createNode, ObjectLiteralData } f
 import { ParserState, createState, current, advance, isAtEnd } from "../context";
 import { lex } from "../../lexer/lexer";
 import { parseOk, mockExpr } from "./util";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 type ExprResult = Result<Expression, string>;
 type ExprParser = (state: ParserState, minPrec: number) => ExprResult;
@@ -110,14 +110,18 @@ function objOk(input: string): boolean {
 	return result.ok;
 }
 
-testGroup("Object Structure", () => {
-	test("empty", () => { check(objKeyCount("{}") === 0); });
-	test("two props", () => { check(objKeyCount("{ x: 1, y: 2 }") === 2); });
-	test("shorthand", () => { check(objKeyCount("{ x }") === 1); });
-	test("mixed", () => { check(objKeyCount("{ x, y: 2 }") === 2); });
-	test("trailing comma", () => { check(objKeyCount("{ x: 1, }") === 1); });
-	test("non-ident key fails", () => { check(!objOk("{ 42: x }")); });
-	// Integration
-	test("nested", () => { check(parseOk("f({ a: { b: 1 } })")); });
-	test("createNode pattern", () => { check(parseOk("f({ kind, value, line: 1 })")); });
-});
+test "empty" { check(objKeyCount("{}") === 0); }
+
+test "two props" { check(objKeyCount("{ x: 1, y: 2 }") === 2); }
+
+test "shorthand" { check(objKeyCount("{ x }") === 1); }
+
+test "mixed" { check(objKeyCount("{ x, y: 2 }") === 2); }
+
+test "trailing comma" { check(objKeyCount("{ x: 1, }") === 1); }
+
+test "non-ident key fails" { check(!objOk("{ 42: x }")); }
+// Integration
+test "nested" { check(parseOk("f({ a: { b: 1 } })")); }
+
+test "createNode pattern" { check(parseOk("f({ kind, value, line: 1 })")); }

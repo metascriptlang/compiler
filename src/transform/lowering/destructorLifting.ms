@@ -27,18 +27,11 @@ import {
 } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createTransformContextWithChecker } from "../context";
 import { makeIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeNull, makeString, makeBool, makeObjectLiteral } from "../util";
-import { Type, TypeKind, isPrimitiveKind } from "../../checker/types";
+import { Type, TypeKind, isPrimitiveKind, AttachedOp, setAttachedOp } from "../../checker/types";
 import { lookupSymbol, SymbolKind, isPointerType as isPointerTypeBase } from "../../checker/symbol";
 import { checkProgram } from "../../checker/checkPass";
-import { StmtBuf } from "../../analyzer/scope";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { parseInput } from "../testUtil";
-
-// ===== DRC-safe collectors (Node[] is value type — gotcha #4) =====
-
-interface DeclCollector {
-	decls: Node[];
-}
 
 // ===== Lift Context (Nim's TLiftCtx) =====
 
@@ -46,7 +39,7 @@ interface LiftCtx {
 	ctx: TransformContext;
 	generated: NameSet;    // fully generated types (dedup)
 	generating: NameSet;   // currently generating (cycle guard)
-	collector: DeclCollector;
+	collector: Node[];
 	cyclicCache: NameSet;     // types confirmed cyclic
 	nonCyclicCache: NameSet;  // types confirmed non-cyclic
 }
@@ -124,43 +117,43 @@ function hookSuffix(hook: string): string {
 // ===== Nim's defaultOp =====
 // Primitives: copy/sink => assign, destroy/wasMoved => no-op
 
-function defaultOp(hook: string, x: Node, y: Node, buf: StmtBuf, loc: SourceLocation): void {
+function defaultOp(hook: string, x: Node, y: Node, buf: Node[], loc: SourceLocation): void {
 	if (hook === "copy" || hook === "sink") {
-		buf.stmts.push(makeExprStmt(makeAssign(x, y, loc), loc));
+		buf.push(makeExprStmt(makeAssign(x, y, loc), loc));
 	}
 }
 
 // ===== Emit helpers =====
 
 // Emit runtime call — unary (destroy/wasMoved) or binary (copy/sink)
-function genCall(name: string, hook: string, x: Node, y: Node, buf: StmtBuf, loc: SourceLocation): void {
+function genCall(name: string, hook: string, x: Node, y: Node, buf: Node[], loc: SourceLocation): void {
 	if (hook === "destroy" || hook === "wasMoved") {
-		buf.stmts.push(makeExprStmt(makeCall(makeIdent(name, loc), [x], loc), loc));
+		buf.push(makeExprStmt(makeCall(makeIdent(name, loc), [x], loc), loc));
 	} else {
-		buf.stmts.push(makeExprStmt(makeCall(makeIdent(name, loc), [x, y], loc), loc));
+		buf.push(makeExprStmt(makeCall(makeIdent(name, loc), [x, y], loc), loc));
 	}
 }
 
 // Copy-ref pattern: assign + incref on fresh dest node (avoids AST sharing)
-function genCopyRef(increfFn: string, x: Node, y: Node, fieldName: string, buf: StmtBuf, loc: SourceLocation): void {
-	buf.stmts.push(makeExprStmt(makeAssign(x, y, loc), loc));
+function genCopyRef(increfFn: string, x: Node, y: Node, fieldName: string, buf: Node[], loc: SourceLocation): void {
+	buf.push(makeExprStmt(makeAssign(x, y, loc), loc));
 	const fresh = fieldName !== ""
 		? makeMember(makeIdent("dest", loc), fieldName, loc)
 		: makeIdent("dest", loc);
-	buf.stmts.push(makeExprStmt(makeCall(makeIdent(increfFn, loc), [fresh], loc), loc));
+	buf.push(makeExprStmt(makeCall(makeIdent(increfFn, loc), [fresh], loc), loc));
 }
 
 // Inline sink: destroy old value + raw assign (eliminates per-field function call)
-function genInlineSink(destroyFn: string, xf: Node, yf: Node, buf: StmtBuf, loc: SourceLocation): void {
+function genInlineSink(destroyFn: string, xf: Node, yf: Node, buf: Node[], loc: SourceLocation): void {
 	genCall(destroyFn, "destroy", xf, yf, buf, loc);
-	buf.stmts.push(makeExprStmt(makeAssign(xf, yf, loc), loc));
+	buf.push(makeExprStmt(makeAssign(xf, yf, loc), loc));
 }
 
 // ===== Type Family Helpers (Nim's modular pattern) =====
 // Each helper owns all runtime names for its type family.
 
 // --- Nim's fillStrOp ---
-function stringOp(hook: string, xf: Node, yf: Node, fieldName: string, buf: StmtBuf, loc: SourceLocation): void {
+function stringOp(hook: string, xf: Node, yf: Node, fieldName: string, buf: Node[], loc: SourceLocation): void {
 	match (hook) {
 		"destroy" => { genCall("msStringDecref", hook, xf, yf, buf, loc); },
 		"copy" => { genCopyRef("msStringIncref", xf, yf, fieldName, buf, loc); },
@@ -171,7 +164,7 @@ function stringOp(hook: string, xf: Node, yf: Node, fieldName: string, buf: Stmt
 }
 
 // --- Nim's fillSeqOp (3 element specializations) ---
-function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, buf: StmtBuf, loc: SourceLocation): void {
+function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, buf: Node[], loc: SourceLocation): void {
 	if (elem === null || isPrimitiveKind(elem.kind)) {
 		match (hook) {
 			"destroy" => { genCall("msArrayDestroy", hook, xf, yf, buf, loc); },
@@ -203,24 +196,24 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, buf: StmtBuf, loc
 // --- Nim's atomicRefOp (shared by Ref, Ptr, Object-pointer) ---
 // isCyclic: true for types that can form reference cycles (Nim parity: atomicRefOp)
 // Cyclic types use msDecrefCyclic/msIncrefCyclic (ORC-aware when MS_ORC defined)
-function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: boolean, buf: StmtBuf, loc: SourceLocation): void {
+function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: boolean, buf: Node[], loc: SourceLocation): void {
 	const decrefFn = isCyclic ? "msDecrefCyclic" : "msDecref";
 	const increfFn = isCyclic ? "msIncrefCyclic" : "msIncref";
 	match (hook) {
 		"destroy" => { genCall(decrefFn, hook, xf, yf, buf, loc); },
 		"copy" => { genCopyRef(increfFn, xf, yf, fieldName, buf, loc); },
-		"sink" => { buf.stmts.push(makeExprStmt(makeAssign(xf, yf, loc), loc)); },
+		"sink" => { buf.push(makeExprStmt(makeAssign(xf, yf, loc), loc)); },
 		"wasMoved" => { genCall("msPtrWasMoved", hook, xf, yf, buf, loc); },
 		"trace" => {
 			// Call callback(field) — yf is the trace callback
-			buf.stmts.push(makeExprStmt(makeCall(yf, [xf], loc), loc));
+			buf.push(makeExprStmt(makeCall(yf, [xf], loc), loc));
 		},
 		_ => {},
 	};
 }
 
 // --- Nim's fillBodyObjT for named value-type objects ---
-function namedObjOp(hook: string, typeName: string, xf: Node, yf: Node, buf: StmtBuf, loc: SourceLocation): void {
+function namedObjOp(hook: string, typeName: string, xf: Node, yf: Node, buf: Node[], loc: SourceLocation): void {
 	if (hook === "sink") {
 		genInlineSink(typeName + "_destroy", xf, yf, buf, loc);
 		return;
@@ -230,7 +223,7 @@ function namedObjOp(hook: string, typeName: string, xf: Node, yf: Node, buf: Stm
 }
 
 // --- Parameterized runtime op (shared by closure, map) ---
-function runtimeOp(prefix: string, destroyName: string, copySuffix: string, wasMovedSuffix: string, traceSuffix: string, hasTrace: boolean, hook: string, xf: Node, yf: Node, buf: StmtBuf, loc: SourceLocation): void {
+function runtimeOp(prefix: string, destroyName: string, copySuffix: string, wasMovedSuffix: string, traceSuffix: string, hasTrace: boolean, hook: string, xf: Node, yf: Node, buf: Node[], loc: SourceLocation): void {
 	match (hook) {
 		"destroy" => { genCall(destroyName, hook, xf, yf, buf, loc); },
 		"copy" => { genCall(prefix + copySuffix, hook, xf, yf, buf, loc); },
@@ -242,7 +235,7 @@ function runtimeOp(prefix: string, destroyName: string, copySuffix: string, wasM
 }
 
 // --- Set lifecycle ---
-function setOp(hook: string, xf: Node, yf: Node, buf: StmtBuf, loc: SourceLocation): void {
+function setOp(hook: string, xf: Node, yf: Node, buf: Node[], loc: SourceLocation): void {
 	match (hook) {
 		"destroy" => { genCall("msSetFree", hook, xf, yf, buf, loc); },
 		"copy" => { genCall("msSetCopy", hook, xf, yf, buf, loc); },
@@ -254,13 +247,26 @@ function setOp(hook: string, xf: Node, yf: Node, buf: StmtBuf, loc: SourceLocati
 // ===== fillBody — pure routing table (Nim pattern) =====
 // Routes TypeKind to type family helper. No inline hook logic.
 
-function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: Type, lctx: LiftCtx, buf: StmtBuf, visited: NameSet, loc: SourceLocation): void {
+function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: Type, lctx: LiftCtx, buf: Node[], visited: NameSet, loc: SourceLocation): void {
 	const xf = fieldName !== ""
 		? makeMember(x, fieldName, loc)
 		: x;
 	const yf = fieldName !== ""
 		? makeMember(y, fieldName, loc)
 		: y;
+
+	// Tuple case extracted from match (MetaScript match arm limitation with block-scoped vars)
+	if (fieldType.kind === TypeKind.Tuple) {
+		let ti = 0;
+		while (ti < fieldType.typeChildren.length) {
+			const visited2: NameSet = [];
+			if (ti < fieldType.typeNames.length) {
+				fillBody(hook, xf, yf, fieldType.typeNames[ti], fieldType.typeChildren[ti], lctx, buf, visited2, loc);
+			}
+			ti += 1;
+		}
+		return;
+	}
 
 	// Primitives fall through to _ => defaultOp (isPrimitiveKind is canonical list)
 	match (fieldType.kind) {
@@ -288,17 +294,6 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 		TypeKind.Function => { runtimeOp("msClosure", "msClosureDestroy", "Copy", "WasMoved", "Trace", true, hook, xf, yf, buf, loc); },
 		TypeKind.Map => { runtimeOp("msMap", "msMapFree", "Copy", "WasMoved", "Trace", false, hook, xf, yf, buf, loc); },
 		TypeKind.Set => { setOp(hook, xf, yf, buf, loc); },
-		TypeKind.Tuple => {
-			// Iterate tuple fields by name (Nim's fillBodyTup)
-			let ti = 0;
-			while (ti < fieldType.typeChildren.length) {
-				const visited2: NameSet = { names: [] };
-				if (ti < fieldType.typeNames.length) {
-					fillBody(hook, xf, yf, fieldType.typeNames[ti], fieldType.typeChildren[ti], lctx, buf, visited2, loc);
-				}
-				ti += 1;
-			}
-		},
 		TypeKind.Result | TypeKind.Union => {},
 		TypeKind.Distinct => {
 			if (fieldType.typeReturn !== null) {
@@ -322,11 +317,11 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 
 function typeNeedsHooks(objType: Type, lctx: LiftCtx, loc: SourceLocation): boolean {
 	if (objType.kind !== TypeKind.Object) return false;
-	const probe: StmtBuf = { stmts: [] };
+	const probe: Node[] = [];
 	for (let i = 0; i < objType.typeNames.length; i += 1) {
-		const visited: NameSet = { names: [] };
+		const visited: NameSet = [];
 		fillBody("destroy", makeIdent("self", loc), makeIdent("self", loc), objType.typeNames[i], objType.typeChildren[i], lctx, probe, visited, loc);
-		if (probe.stmts.length > 0) return true;
+		if (probe.length > 0) return true;
 	}
 	return false;
 }
@@ -369,7 +364,7 @@ function hasUserDefinedHook(typeName: string, hook: string, lctx: LiftCtx): bool
 // ===== Generate a single hook (Nim's produceSym per op) =====
 
 function generateHook(hook: string, typeName: string, objType: Type, lctx: LiftCtx, loc: SourceLocation): void {
-	const buf: StmtBuf = { stmts: [] };
+	const buf: Node[] = [];
 	const isTrace = hook === "trace";
 	const isUnary = hook === "destroy" || hook === "wasMoved" || isTrace;
 	const p1 = isUnary ? "self" : "dest";
@@ -387,16 +382,16 @@ function generateHook(hook: string, typeName: string, objType: Type, lctx: LiftC
 			makeNull(loc),
 			loc,
 		);
-		buf.stmts.push(selfCheck);
+		buf.push(selfCheck);
 	}
 
 	// User-defined hook dispatch (Nim's considerUserDefinedOp)
 	if (hasUserDefinedHook(typeName, hook, lctx)) {
 		const uName = userHookName(typeName, hook);
 		if (isUnary) {
-			buf.stmts.push(makeExprStmt(makeCall(makeIdent(uName, loc), [makeIdent(p1, loc)], loc), loc));
+			buf.push(makeExprStmt(makeCall(makeIdent(uName, loc), [makeIdent(p1, loc)], loc), loc));
 		} else {
-			buf.stmts.push(makeExprStmt(makeCall(makeIdent(uName, loc), [makeIdent(p1, loc), makeIdent(p2, loc)], loc), loc));
+			buf.push(makeExprStmt(makeCall(makeIdent(uName, loc), [makeIdent(p1, loc), makeIdent(p2, loc)], loc), loc));
 		}
 	} else {
 		// Inheritance: ensure base class hooks exist (Nim's fillBodyObjTImpl)
@@ -408,7 +403,7 @@ function generateHook(hook: string, typeName: string, objType: Type, lctx: LiftC
 		if (hook === "destroy") {
 			// Destroy: fields first (reverse), then base class (LIFO — Nim pattern)
 			for (let i = objType.typeNames.length - 1; i >= 0; i -= 1) {
-				const visited: NameSet = { names: [] };
+				const visited: NameSet = [];
 				fillBody(hook, makeIdent(p1, loc), makeIdent(p2, loc), objType.typeNames[i], objType.typeChildren[i], lctx, buf, visited, loc);
 			}
 			if (baseTypeName !== "" && namedTypeHasHooks(baseTypeName, lctx)) {
@@ -420,7 +415,7 @@ function generateHook(hook: string, typeName: string, objType: Type, lctx: LiftC
 				genCall(baseTypeName + hookSuffix(hook), hook, makeIdent(p1, loc), makeIdent(p2, loc), buf, loc);
 			}
 			for (let i = 0; i < objType.typeNames.length; i += 1) {
-				const visited: NameSet = { names: [] };
+				const visited: NameSet = [];
 				fillBody(hook, makeIdent(p1, loc), makeIdent(p2, loc), objType.typeNames[i], objType.typeChildren[i], lctx, buf, visited, loc);
 			}
 		}
@@ -430,11 +425,11 @@ function generateHook(hook: string, typeName: string, objType: Type, lctx: LiftC
 
 	if (isTrace) {
 		// trace(self, callback) — callback is a function pointer (void*)
-		lctx.collector.decls.push(makeFnDecl(typeName + suffix, [p1, p2], [typeName, "void*"], makeBlock(buf.stmts, loc), "", "void", loc));
+		lctx.collector.push(makeFnDecl(typeName + suffix, [p1, p2], [typeName, "void*"], makeBlock(buf, loc), "", "void", loc));
 	} else if (isUnary) {
-		lctx.collector.decls.push(makeFnDecl(typeName + suffix, [p1], [typeName], makeBlock(buf.stmts, loc), "", "void", loc));
+		lctx.collector.push(makeFnDecl(typeName + suffix, [p1], [typeName], makeBlock(buf, loc), "", "void", loc));
 	} else {
-		lctx.collector.decls.push(makeFnDecl(typeName + suffix, [p1, p2], [typeName, typeName], makeBlock(buf.stmts, loc), "", "void", loc));
+		lctx.collector.push(makeFnDecl(typeName + suffix, [p1, p2], [typeName, typeName], makeBlock(buf, loc), "", "void", loc));
 	}
 }
 
@@ -458,11 +453,18 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 	generateHook("sink", typeName, objType, lctx, loc);
 	generateHook("wasMoved", typeName, objType, lctx, loc);
 
+	// Register hooks on the type (Nim parity: TTypeAttachedOp)
+	setAttachedOp(objType, AttachedOp.AttachedDestructor, typeName + "_destroy");
+	setAttachedOp(objType, AttachedOp.AttachedAsgn, typeName + "_copy");
+	setAttachedOp(objType, AttachedOp.AttachedSink, typeName + "_sink");
+	setAttachedOp(objType, AttachedOp.AttachedWasMoved, typeName + "_wasMoved");
+
 	// =trace: ORC cycle detection (only for cyclic types)
-	const visited: NameSet = { names: [] };
+	const visited: NameSet = [];
 	const hasCycles = isCyclicType(objType, lctx, visited);
 	if (hasCycles) {
 		generateHook("trace", typeName, objType, lctx, loc);
+		setAttachedOp(objType, AttachedOp.AttachedTrace, typeName + "_trace");
 	}
 
 	// =dup: init + copy, return (Nim pattern)
@@ -470,16 +472,17 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 	dupStmts.push(makeVarDecl("$result", makeIdent("src", loc), DeclKind.Let, loc));
 	dupStmts.push(makeExprStmt(makeCall(makeIdent(typeName + "_copy", loc), [makeIdent("$result", loc), makeIdent("src", loc)], loc), loc));
 	dupStmts.push(makeReturn(makeIdent("$result", loc), loc));
-	lctx.collector.decls.push(makeFnDecl(typeName + "_dup", ["src"], [typeName], makeBlock(dupStmts, loc), "", typeName, loc));
+	lctx.collector.push(makeFnDecl(typeName + "_dup", ["src"], [typeName], makeBlock(dupStmts, loc), "", typeName, loc));
+	setAttachedOp(objType, AttachedOp.AttachedDup, typeName + "_dup");
 
 	// msTypeInfo generation for ORC runtime
 	const traceFn = hasCycles ? makeIdent(typeName + "_trace", loc) : makeNull(loc);
 	const typeInfoObj = makeObjectLiteral(
-		["name", "is_cyclic", "trace_fn", "destroy_fn"],
+		["name", "isCyclic", "traceFn", "destroyFn"],
 		[makeString(typeName, loc), makeBool(hasCycles, loc), traceFn, makeIdent(typeName + "_destroy", loc)],
 		loc,
 	);
-	lctx.collector.decls.push(makeVarDecl(typeName + "_typeInfo", typeInfoObj, DeclKind.Const, loc));
+	lctx.collector.push(makeVarDecl(typeName + "_typeInfo", typeInfoObj, DeclKind.Const, loc));
 
 	nameSetAdd(lctx.generated, typeName);
 }
@@ -512,18 +515,18 @@ export function liftDestructors(program: Node, ctx: TransformContext): Node {
 	const pd = program.data as ProgramData;
 	const lctx: LiftCtx = {
 		ctx,
-		generated: { names: [] },
-		generating: { names: [] },
-		collector: { decls: [] },
-		cyclicCache: { names: [] },
-		nonCyclicCache: { names: [] },
+		generated: [],
+		generating: [],
+		collector: [],
+		cyclicCache: [],
+		nonCyclicCache: [],
 	};
 
 	for (const stmt of pd.programStmts) {
 		processDecl(stmt, lctx);
 	}
 
-	for (const decl of lctx.collector.decls) {
+	for (const decl of lctx.collector) {
 		pd.programStmts.push(decl);
 	}
 
@@ -588,57 +591,36 @@ function hasTypeInfo(input: string, typeName: string): boolean {
 	return false;
 }
 
-testGroup("Destructor Lifting - Generic", () => {
-	test("primitive-only no hooks", () => {
-		check(generatedFnCount("interface Point { x: number; y: number; }") === 0);
-	});
-	test("string field generates 5 hooks", () => {
-		check(generatedFnCount("interface Token { value: string; }") === 5);
-	});
-	test("array field generates 5 hooks", () => {
-		check(generatedFnCount("interface Data { items: number[]; }") === 5);
-	});
-	test("nested interface generates 10 hooks", () => {
-		check(generatedFnCount("interface A { name: string; } interface B { a: A; }") === 10);
-	});
-	test("no duplicates", () => {
-		check(generatedFnCount("interface A { name: string; } interface B { a1: A; a2: A; }") === 10);
-	});
-	test("exported interface", () => {
-		check(generatedFnCount("export interface Token { value: string; }") === 5);
-	});
-	test("no interfaces passthrough", () => {
-		check(generatedFnCount("const x = 1;") === 0);
-	});
-});
+test "primitive-only no hooks" { check(generatedFnCount("interface Point { x: number; y: number; }") === 0); }
 
-testGroup("Destructor Lifting - Lifecycle", () => {
-	// =trace: Function fields are cyclic (closures capture refs)
-	test("trace NOT generated for flat string", () => {
-		check(!hasGeneratedFn("interface Token { value: string; }", "Token_trace"));
-	});
+test "string field generates 5 hooks" { check(generatedFnCount("interface Token { value: string; }") === 5); }
 
-	// TypeInfo generated alongside hooks
-	test("typeInfo generated", () => {
-		check(hasTypeInfo("interface Token { value: string; }", "Token"));
-	});
-	test("typeInfo NOT generated for primitives", () => {
-		check(!hasTypeInfo("interface Point { x: number; y: number; }", "Point"));
-	});
+test "array field generates 5 hooks" { check(generatedFnCount("interface Data { items: number[]; }") === 5); }
 
-	// Inheritance: child with own hookable field + base both generate hooks
-	test("inheritance generates parent hooks", () => {
-		const src = "interface Base { name: string; } class Child extends Base { extra: string; }";
-		check(hasGeneratedFn(src, "Base_destroy"));
-	});
+test "nested interface generates 10 hooks" { check(generatedFnCount("interface A { name: string; } interface B { a: A; }") === 10); }
 
-	// All 5 core hooks present for a hookable type
-	test("all core hooks generated", () => {
-		const src = "interface Wrap { data: string; }";
-		check(hasGeneratedFn(src, "_destroy"));
-		check(hasGeneratedFn(src, "_copy"));
-		check(hasGeneratedFn(src, "_sink"));
-		check(hasGeneratedFn(src, "_wasMoved"));
-		check(hasGeneratedFn(src, "_dup"));
-	});
-});
+test "no duplicates" { check(generatedFnCount("interface A { name: string; } interface B { a1: A; a2: A; }") === 10); }
+
+test "exported interface" { check(generatedFnCount("export interface Token { value: string; }") === 5); }
+
+test "no interfaces passthrough" { check(generatedFnCount("const x = 1;") === 0); }
+// =trace: Function fields are cyclic (closures capture refs)
+test "trace NOT generated for flat string" { check(!hasGeneratedFn("interface Token { value: string; }", "Token_trace")); }
+// TypeInfo generated alongside hooks
+test "typeInfo generated" { check(hasTypeInfo("interface Token { value: string; }", "Token")); }
+
+test "typeInfo NOT generated for primitives" { check(!hasTypeInfo("interface Point { x: number; y: number; }", "Point")); }
+// Inheritance: child with own hookable field + base both generate hooks
+test "inheritance generates parent hooks" {
+	const src = "interface Base { name: string; } class Child extends Base { extra: string; }";
+	check(hasGeneratedFn(src, "Base_destroy"));
+}
+// All 5 core hooks present for a hookable type
+test "all core hooks generated" {
+	const src = "interface Wrap { data: string; }";
+	check(hasGeneratedFn(src, "_destroy"));
+	check(hasGeneratedFn(src, "_copy"));
+	check(hasGeneratedFn(src, "_sink"));
+	check(hasGeneratedFn(src, "_wasMoved"));
+	check(hasGeneratedFn(src, "_dup"));
+}

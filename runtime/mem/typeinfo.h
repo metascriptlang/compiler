@@ -9,6 +9,7 @@
 #define MS_TYPEINFO_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 /* Destructor: called to clean up object fields before freeing */
 typedef void (*msDestroyProc)(void*);
@@ -18,11 +19,10 @@ typedef void (*msDestroyProc)(void*);
 typedef void (*msTraceProc)(void*, void*);
 
 typedef struct {
-	msDestroyProc destroy;   /* TypeName_destroy function (NULL if no RC fields) */
-	msTraceProc trace;       /* TypeName_trace function (NULL if acyclic) */
-	uint32_t flags;          /* bit 0 = acyclic (no cycles possible) */
+	const char* name;        /* Class name for diagnostics */
+	bool isCyclic;           /* True if type can form reference cycles */
+	msTraceProc traceFn;     /* TypeName_trace function (NULL if acyclic) */
+	msDestroyProc destroyFn; /* TypeName_destroy function (NULL if no RC fields) */
 } msTypeInfo;
-
-#define MS_ACYCLIC_FLAG 1
 
 #endif /* MS_TYPEINFO_H */

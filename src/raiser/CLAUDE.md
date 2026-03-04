@@ -475,7 +475,7 @@ rm -rf out && msc test src/index.ms                          # everything
 
 | Rule | Application in Raiser |
 |------|----------------------|
-| string[] in interface | `RvCodeBuf { items: RvInstruction[] }`, `RvConstPool { values: RvValue[] }`, `RvCallStack { frames: RvCallFrame[] }` |
+| Arrays by pointer | Wrappers removed — bare `T[]` types (`RaiserInstruction[]`, `RaiserValue[]`, etc.) |
 | No try in match arms | Dispatch uses if/else chain, never match |
 | const before function arg | Store `RvValue` in const before pushing to arrays |
 | No C-style for in match | Use while loops everywhere |

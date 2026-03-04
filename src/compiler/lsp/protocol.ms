@@ -8,7 +8,7 @@
 // Currently std/json's JsonNode has opaque object/array access (MVP limitation).
 
 import { sliceStr, charAt } from "../../utils/string";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 // ===== JSON Building =====
 
@@ -219,123 +219,110 @@ export function lspErrorResponse(id: string, code: number, message: string): str
 }
 
 // ===== Tests =====
+test "simple string" { check(lspJsonString("hello") === "\"hello\""); }
 
-testGroup("lspJsonString", () => {
-	test("simple string", () => {
-		check(lspJsonString("hello") === "\"hello\"");
-	});
-	test("escapes backslash", () => {
-		check(lspJsonString("a\\b") === "\"a\\\\b\"");
-	});
-	test("escapes quote", () => {
-		check(lspJsonString("a\"b") === "\"a\\\"b\"");
-	});
-	test("escapes newline", () => {
-		check(lspJsonString("a\nb") === "\"a\\nb\"");
-	});
-	test("empty string", () => {
-		check(lspJsonString("") === "\"\"");
-	});
-});
+test "escapes backslash" { check(lspJsonString("a\\b") === "\"a\\\\b\""); }
 
-testGroup("lspJsonPrimitives", () => {
-	test("number", () => {
-		check(lspJsonNumber(42) === "42");
-		check(lspJsonNumber(0) === "0");
-	});
-	test("bool true", () => {
-		check(lspJsonBool(true) === "true");
-	});
-	test("bool false", () => {
-		check(lspJsonBool(false) === "false");
-	});
-	test("null", () => {
-		check(lspJsonNull() === "null");
-	});
-});
+test "escapes quote" { check(lspJsonString("a\"b") === "\"a\\\"b\""); }
 
-testGroup("lspGetField", () => {
-	test("extract method", () => {
-		const json = "{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"id\":1}";
-		check(lspGetField(json, "method") === "initialize");
-	});
-	test("extract nested value", () => {
-		const json = "{\"uri\":\"file:///a.ms\",\"text\":\"const x = 1;\"}";
-		check(lspGetField(json, "uri") === "file:///a.ms");
-		check(lspGetField(json, "text") === "const x = 1;");
-	});
-	test("missing field", () => {
-		const json = "{\"a\":\"1\"}";
-		check(lspGetField(json, "b") === "");
-	});
-	test("escaped value", () => {
-		const json = "{\"msg\":\"hello\\nworld\"}";
-		check(lspGetField(json, "msg") === "hello\nworld");
-	});
-});
+test "escapes newline" { check(lspJsonString("a\nb") === "\"a\\nb\""); }
 
-testGroup("lspGetNumberField", () => {
-	test("extract id", () => {
-		const json = "{\"jsonrpc\":\"2.0\",\"id\":42}";
-		check(lspGetNumberField(json, "id") === 42);
-	});
-	test("extract zero", () => {
-		const json = "{\"line\":0,\"character\":5}";
-		check(lspGetNumberField(json, "line") === 0);
-		check(lspGetNumberField(json, "character") === 5);
-	});
-	test("missing field", () => {
-		const json = "{\"a\":1}";
-		check(lspGetNumberField(json, "b") === -1);
-	});
-});
+test "empty string" { check(lspJsonString("") === "\"\""); }
 
-testGroup("lspGetObjectField", () => {
-	test("extract params", () => {
-		const json = "{\"method\":\"hover\",\"params\":{\"line\":1,\"col\":5}}";
-		const params = lspGetObjectField(json, "params");
-		check(params === "{\"line\":1,\"col\":5}");
-	});
-	test("nested object", () => {
-		const json = "{\"params\":{\"position\":{\"line\":0}}}";
-		const params = lspGetObjectField(json, "params");
-		check(params === "{\"position\":{\"line\":0}}");
-	});
-	test("missing object", () => {
-		const json = "{\"a\":1}";
-		check(lspGetObjectField(json, "b") === "");
-	});
-});
+test "number" {
+	check(lspJsonNumber(42) === "42");
+	check(lspJsonNumber(0) === "0");
+}
 
-testGroup("lspResponseBuilders", () => {
-	test("response format", () => {
-		const r = lspResponse("1", "{\"capabilities\":{}}");
-		check(lspGetField(r, "jsonrpc") === "2.0");
-		check(lspGetNumberField(r, "id") === 1);
-	});
-	test("notification format", () => {
-		const n = lspNotification("textDocument/publishDiagnostics", "{\"uri\":\"file:///a.ms\"}");
-		check(lspGetField(n, "method") === "textDocument/publishDiagnostics");
-	});
-	test("error response format", () => {
-		const e = lspErrorResponse("1", -32601, "Method not found");
-		check(lspGetNumberField(e, "id") === 1);
-	});
-});
+test "bool true" { check(lspJsonBool(true) === "true"); }
 
-testGroup("lspFraming", () => {
-	test("parse content length", () => {
-		check(lspParseContentLength("Content-Length: 123") === 123);
-		check(lspParseContentLength("Content-Length: 0") === 0);
-	});
-	test("not content length", () => {
-		check(lspParseContentLength("Content-Type: json") === -1);
-		check(lspParseContentLength("") === -1);
-	});
-	test("format message", () => {
-		const msg = lspFormatMessage("{\"id\":1}");
-		// Should start with Content-Length header
-		const prefix = sliceStr(msg, 0, 16);
-		check(prefix === "Content-Length: ");
-	});
-});
+test "bool false" { check(lspJsonBool(false) === "false"); }
+
+test "null" { check(lspJsonNull() === "null"); }
+
+test "extract method" {
+	const json = "{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"id\":1}";
+	check(lspGetField(json, "method") === "initialize");
+}
+
+test "extract nested value" {
+	const json = "{\"uri\":\"file:///a.ms\",\"text\":\"const x = 1;\"}";
+	check(lspGetField(json, "uri") === "file:///a.ms");
+	check(lspGetField(json, "text") === "const x = 1;");
+}
+
+test "missing field" {
+	const json = "{\"a\":\"1\"}";
+	check(lspGetField(json, "b") === "");
+}
+
+test "escaped value" {
+	const json = "{\"msg\":\"hello\\nworld\"}";
+	check(lspGetField(json, "msg") === "hello\nworld");
+}
+
+test "extract id" {
+	const json = "{\"jsonrpc\":\"2.0\",\"id\":42}";
+	check(lspGetNumberField(json, "id") === 42);
+}
+
+test "extract zero" {
+	const json = "{\"line\":0,\"character\":5}";
+	check(lspGetNumberField(json, "line") === 0);
+	check(lspGetNumberField(json, "character") === 5);
+}
+
+test "missing field" {
+	const json = "{\"a\":1}";
+	check(lspGetNumberField(json, "b") === -1);
+}
+
+test "extract params" {
+	const json = "{\"method\":\"hover\",\"params\":{\"line\":1,\"col\":5}}";
+	const params = lspGetObjectField(json, "params");
+	check(params === "{\"line\":1,\"col\":5}");
+}
+
+test "nested object" {
+	const json = "{\"params\":{\"position\":{\"line\":0}}}";
+	const params = lspGetObjectField(json, "params");
+	check(params === "{\"position\":{\"line\":0}}");
+}
+
+test "missing object" {
+	const json = "{\"a\":1}";
+	check(lspGetObjectField(json, "b") === "");
+}
+
+test "response format" {
+	const r = lspResponse("1", "{\"capabilities\":{}}");
+	check(lspGetField(r, "jsonrpc") === "2.0");
+	check(lspGetNumberField(r, "id") === 1);
+}
+
+test "notification format" {
+	const n = lspNotification("textDocument/publishDiagnostics", "{\"uri\":\"file:///a.ms\"}");
+	check(lspGetField(n, "method") === "textDocument/publishDiagnostics");
+}
+
+test "error response format" {
+	const e = lspErrorResponse("1", -32601, "Method not found");
+	check(lspGetNumberField(e, "id") === 1);
+}
+
+test "parse content length" {
+	check(lspParseContentLength("Content-Length: 123") === 123);
+	check(lspParseContentLength("Content-Length: 0") === 0);
+}
+
+test "not content length" {
+	check(lspParseContentLength("Content-Type: json") === -1);
+	check(lspParseContentLength("") === -1);
+}
+
+test "format message" {
+	const msg = lspFormatMessage("{\"id\":1}");
+	// Should start with Content-Length header
+	const prefix = sliceStr(msg, 0, 16);
+	check(prefix === "Content-Length: ");
+}

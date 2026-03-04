@@ -44,7 +44,14 @@ typedef struct {
 	void* env;
 } msClosure;
 
-/* Exception handling stubs */
+/* Exception handling */
+typedef struct {
+	const char* message;
+	int code;
+} msException;
+
+extern MS_BOOL msErr;
+extern msException* msCurrException;
 void msClearException(void);
 
 /* ===== DRC Lifecycle Macros ===== */
@@ -84,7 +91,7 @@ void msClearException(void);
 #define msDecref(p)           do { \
 	if ((p) != NULL && msDecRefIsLast(p)) { \
 		const msTypeInfo* __t = msHeader(p)->type; \
-		if (__t != NULL && __t->destroy != NULL) __t->destroy(p); \
+		if (__t != NULL && __t->destroyFn != NULL) __t->destroyFn(p); \
 		msDestroyAndDispose(p); \
 	} \
 } while(0)
@@ -96,7 +103,7 @@ void msClearException(void);
 #define msDecrefCyclic(p)     do { \
 	if ((p) != NULL && msOrcDecRefIsLast(p)) { \
 		const msTypeInfo* __t = msHeader(p)->type; \
-		if (__t != NULL && __t->destroy != NULL) __t->destroy(p); \
+		if (__t != NULL && __t->destroyFn != NULL) __t->destroyFn(p); \
 		msDestroyAndDispose(p); \
 	} \
 } while(0)

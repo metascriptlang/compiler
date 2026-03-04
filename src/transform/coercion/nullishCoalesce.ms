@@ -8,7 +8,7 @@ import { Node, NodeKind, BinaryExprData } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeNull, makeBinary, makeConditional } from "../util";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { firstExprKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -31,15 +31,8 @@ function lowerNullishNode(node: Node): Node {
 }
 
 // ===== Tests =====
+test "nullish coalesce becomes conditional" { check(firstExprKindAfter("x ?? 42;", lowerNullishCoalesce) === NodeKind.ConditionalExpr); }
 
-testGroup("Nullish Coalesce Lowering", () => {
-	test("nullish coalesce becomes conditional", () => {
-		check(firstExprKindAfter("x ?? 42;", lowerNullishCoalesce) === NodeKind.ConditionalExpr);
-	});
-	test("other binary unchanged", () => {
-		check(firstExprKindAfter("x + y;", lowerNullishCoalesce) === NodeKind.BinaryExpr);
-	});
-	test("logical or unchanged", () => {
-		check(firstExprKindAfter("x || y;", lowerNullishCoalesce) === NodeKind.BinaryExpr);
-	});
-});
+test "other binary unchanged" { check(firstExprKindAfter("x + y;", lowerNullishCoalesce) === NodeKind.BinaryExpr); }
+
+test "logical or unchanged" { check(firstExprKindAfter("x || y;", lowerNullishCoalesce) === NodeKind.BinaryExpr); }

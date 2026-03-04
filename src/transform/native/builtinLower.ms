@@ -11,70 +11,28 @@
 
 import {
 	Node, NodeKind,
-	ProgramData, FunctionDeclData, BlockStmtData,
 	CallExprData, MemberExprData, IdentifierData,
-	ExprStmtData, VariableDeclData, ReturnStmtData,
-	IfStmtData, WhileStmtData, DoWhileStmtData,
-	TryCatchStmtData, ExportDeclData,
-	SourceLocation,
 } from "../../ast/node";
+import { TypeKind } from "../../checker/types";
 import { TransformContext } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
-import { makeIdent, makeCall } from "../util";
-import { test, check, testGroup } from "std/testing";
+import { walkNode } from "../walker";
+import {
+	makeIdent, makeCall, makeIdentResolved, makeCallResolved,
+	makeObjectLiteral, makeBool,
+} from "../util";
+import { check } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter, firstExprKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
 
 export function lowerBuiltins(program: Node, ctx: TransformContext): Node {
-	return walkLowerBuiltins(program, ctx);
-}
-
-// ===== Recursive Walker =====
-// Rewrites CallExpr nodes where the callee resolves to a @runtime/@builtin symbol.
-
-function walkLowerBuiltins(node: Node, ctx: TransformContext): Node {
-	if (node === null) return node;
-
-	return match (node.kind) {
-		NodeKind.CallExpr => {
-			lowerCallExpr(node, ctx);
-		},
-		NodeKind.Program => {
-			walkProgram(node, ctx);
-		},
-		NodeKind.BlockStmt => {
-			walkBlock(node, ctx);
-		},
-		NodeKind.FunctionDecl => {
-			walkFunctionDecl(node, ctx);
-		},
-		NodeKind.IfStmt => {
-			walkIf(node, ctx);
-		},
-		NodeKind.WhileStmt => {
-			walkWhile(node, ctx);
-		},
-		NodeKind.DoWhileStmt => {
-			walkDoWhile(node, ctx);
-		},
-		NodeKind.ExprStmt => {
-			walkExprStmt(node, ctx);
-		},
-		NodeKind.VariableDecl => {
-			walkVarDecl(node, ctx);
-		},
-		NodeKind.ReturnStmt => {
-			walkReturn(node, ctx);
-		},
-		NodeKind.ExportDecl => {
-			walkExport(node, ctx);
-		},
-		NodeKind.TryCatchStmt => {
-			walkTryCatch(node, ctx);
-		},
-		_ => node,
-	};
+	return walkNode(program, (node: Node): Node => {
+		if (node.kind === NodeKind.CallExpr) {
+			return lowerCallExpr(node, ctx);
+		}
+		return node;
+	});
 }
 
 // ===== Call Expression Lowering =====
@@ -83,44 +41,43 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 	const cd = node.data as CallExprData;
 	const loc = node.location;
 
-	// Walk arguments recursively first
-	for (let i = 0; i < cd.arguments.length; i += 1) {
-		cd.arguments[i] = walkLowerBuiltins(cd.arguments[i], ctx);
-	}
-
-	// Walk callee recursively (handles nested calls like f(g(x)))
-	cd.callee = walkLowerBuiltins(cd.callee, ctx);
-
-	// Check if callee is an identifier that resolves to a @builtin symbol
-	// @runtime is handled by genCallExpr in codegen (& prefix, array type suffix)
-	if (cd.callee.kind === NodeKind.Identifier && ctx.checkerCtx !== null) {
-		const id = cd.callee.data as IdentifierData;
-		const sym = lookupSymbol(ctx.checkerCtx.table, id.name);
-		if (sym !== null) {
-			// @builtin("Name") → inline expansion
-			if (sym.builtinKind !== "") {
-				return lowerBuiltinCall(node, sym.builtinKind, ctx);
-			}
+	// Check for @builtin or @runtime resolution via pre-resolved symbol
+	const sym = node.resolvedSym;
+	if (sym !== null) {
+		// @builtin("Name") → inline expansion
+		if (sym.builtinKind !== "") {
+			return lowerBuiltinCall(node, sym.builtinKind, ctx);
 		}
 	}
 
-	// Class method calls (console.log, Math.floor): handled at codegen time
-	// (expressions.ms genCallExpr) to avoid DRC string corruption.
+	// Resolve class method calls (console.log, Math.floor) definitively.
+	// These reach here as MemberExpr callees with a resolvedSym pointing to the method.
+	if (cd.callee.kind === NodeKind.MemberExpr && cd.callee.resolvedSym !== null) {
+		const methodSym = cd.callee.resolvedSym;
+		if (methodSym.runtimeName !== "") {
+			// Found a @runtime method (like console.log → msPrintln)
+			// Rewrite to a direct call: msPrintln(s)
+			const newCallee = makeIdentResolved(methodSym, loc);
+			cd.callee = newCallee;
+			node.resolvedSym = methodSym;
+			cd.isDirectCall = true;
+			return node;
+		}
+	}
 
 	// Instance extension fallback: obj.method(args) → method(obj, args)
-	// Moves receiver to first arg, keeps MS function name for genCallExpr symbol lookup.
-	// genCallExpr reads sym.runtimeName for C name, & prefix, and array suffix.
 	if (cd.callee.kind === NodeKind.MemberExpr && ctx.checkerCtx !== null) {
 		const me = cd.callee.data as MemberExprData;
 		const sym = lookupSymbol(ctx.checkerCtx.table, me.property);
 		if (sym !== null && sym.runtimeName !== "") {
-			const objExpr = walkLowerBuiltins(me.object, ctx);
 			const newArgs: Node[] = [];
-			newArgs.push(objExpr);
+			newArgs.push(me.object);
 			for (let j = 0; j < cd.arguments.length; j += 1) {
 				newArgs.push(cd.arguments[j]);
 			}
-			return makeCall(makeIdent(me.property, loc), newArgs, loc);
+			const newCall = makeCallResolved(makeIdentResolved(sym, loc), newArgs, sym, loc);
+			newCall.nodeType = node.nodeType;
+			return newCall;
 		}
 	}
 
@@ -133,100 +90,51 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext): Node {
 	const cd = node.data as CallExprData;
 	const loc = node.location;
+
 	if (builtinKind === "LengthStr" && cd.arguments.length === 1) {
-		return makeCall(makeIdent("ms_string_length", loc), cd.arguments, loc);
+		return makeCall(makeIdent("msStringLength", loc), cd.arguments, loc);
 	}
-	return node;
-}
 
-// ===== Statement/Declaration Walkers =====
-
-function walkProgram(node: Node, ctx: TransformContext): Node {
-	const pd = node.data as ProgramData;
-	for (let i = 0; i < pd.programStmts.length; i += 1) {
-		pd.programStmts[i] = walkLowerBuiltins(pd.programStmts[i], ctx);
+	if (builtinKind === "msResultOk") {
+		return rewriteResultToLiteral(node, true, ctx);
 	}
-	return node;
-}
-
-function walkBlock(node: Node, ctx: TransformContext): Node {
-	const bd = node.data as BlockStmtData;
-	for (let i = 0; i < bd.statements.length; i += 1) {
-		bd.statements[i] = walkLowerBuiltins(bd.statements[i], ctx);
+	if (builtinKind === "msResultErr") {
+		return rewriteResultToLiteral(node, false, ctx);
 	}
+
 	return node;
 }
 
-function walkFunctionDecl(node: Node, ctx: TransformContext): Node {
-	const d = node.data as FunctionDeclData;
-	if (d.fnBody !== null) {
-		d.fnBody = walkLowerBuiltins(d.fnBody, ctx);
+function rewriteResultToLiteral(node: Node, isOk: boolean, ctx: TransformContext): Node {
+	const cd = node.data as CallExprData;
+	const loc = node.location;
+	const resType = node.nodeType;
+	if (resType === null || resType.kind !== TypeKind.Result) {
+		console.log("Result lowering: missing or non-Result nodeType at line " + loc.line);
+		return node;
 	}
-	return node;
-}
 
-function walkIf(node: Node, ctx: TransformContext): Node {
-	const d = node.data as IfStmtData;
-	d.condition = walkLowerBuiltins(d.condition, ctx);
-	d.consequent = walkLowerBuiltins(d.consequent, ctx);
-	if (d.alternate !== null) {
-		d.alternate = walkLowerBuiltins(d.alternate, ctx);
+	const keys: string[] = ["ok"];
+	const values: Node[] = [makeBool(isOk, loc)];
+
+	if (isOk) {
+		// Only add value if T is not void
+		if (resType.typeReturn.kind !== TypeKind.Void) {
+			keys.push("value");
+			values.push(cd.arguments[0]);
+		}
+	} else {
+		// Only add error if E is not void
+		if (resType.typeExtra.kind !== TypeKind.Void) {
+			keys.push("error");
+			values.push(cd.arguments[0]);
+		}
 	}
-	return node;
-}
 
-function walkWhile(node: Node, ctx: TransformContext): Node {
-	const d = node.data as WhileStmtData;
-	d.whileCondition = walkLowerBuiltins(d.whileCondition, ctx);
-	d.whileBody = walkLowerBuiltins(d.whileBody, ctx);
-	return node;
-}
-
-function walkDoWhile(node: Node, ctx: TransformContext): Node {
-	const d = node.data as DoWhileStmtData;
-	d.doBody = walkLowerBuiltins(d.doBody, ctx);
-	d.doCondition = walkLowerBuiltins(d.doCondition, ctx);
-	return node;
-}
-
-function walkExprStmt(node: Node, ctx: TransformContext): Node {
-	const d = node.data as ExprStmtData;
-	d.expr = walkLowerBuiltins(d.expr, ctx);
-	return node;
-}
-
-function walkVarDecl(node: Node, ctx: TransformContext): Node {
-	const d = node.data as VariableDeclData;
-	if (d.initializer !== null) {
-		d.initializer = walkLowerBuiltins(d.initializer, ctx);
-	}
-	return node;
-}
-
-function walkReturn(node: Node, ctx: TransformContext): Node {
-	const d = node.data as ReturnStmtData;
-	if (d.argument !== null) {
-		d.argument = walkLowerBuiltins(d.argument, ctx);
-	}
-	return node;
-}
-
-function walkExport(node: Node, ctx: TransformContext): Node {
-	const d = node.data as ExportDeclData;
-	d.exportedDecl = walkLowerBuiltins(d.exportedDecl, ctx);
-	return node;
-}
-
-function walkTryCatch(node: Node, ctx: TransformContext): Node {
-	const d = node.data as TryCatchStmtData;
-	d.tryBody = walkLowerBuiltins(d.tryBody, ctx);
-	if (d.catchBody !== null) {
-		d.catchBody = walkLowerBuiltins(d.catchBody, ctx);
-	}
-	if (d.finallyBody !== null) {
-		d.finallyBody = walkLowerBuiltins(d.finallyBody, ctx);
-	}
-	return node;
+	const literal = makeObjectLiteral(keys, values, loc);
+	// V4: CRITICAL — preserve the monomorphized Result type from the call node
+	literal.nodeType = resType;
+	return literal;
 }
 
 // ===== Tests =====
@@ -237,6 +145,7 @@ import { openScope, ScopeKind } from "../../checker/symbol";
 import { createTransformContextWithChecker } from "../context";
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
+import { ProgramData, ExprStmtData } from "../../ast/node";
 
 // Simulate the full prelude → check → builtinLower pipeline.
 // Returns the callee name of the first CallExpr in user code after lowering.
@@ -273,30 +182,24 @@ function preludeLowerCallee(preludeSrc: string, userSrc: string): string {
 	return "OTHER_KIND";
 }
 
-testGroup("Builtin Lower", () => {
-	test("passthrough non-call", () => {
-		check(stmtCountAfter("const x = 1;", lowerBuiltins) === 1);
-	});
-	test("passthrough plain call", () => {
-		check(firstExprKindAfter("foo();", lowerBuiltins) === NodeKind.CallExpr);
-	});
-	test("passthrough function decl", () => {
-		check(firstStmtKindAfter("function foo() {}", lowerBuiltins) === NodeKind.FunctionDecl);
-	});
-	test("passthrough if stmt", () => {
-		check(firstStmtKindAfter("if (x) {}", lowerBuiltins) === NodeKind.IfStmt);
-	});
-	test("prelude class method stays as MemberExpr (codegen handles)", () => {
-		const prelude = "class console { @runtime(\"ms_println\") log(value: string): void { unreachable; } }";
-		const result = preludeLowerCallee(prelude, "console.log(\"hello\");");
-		// Class method calls are NOT rewritten by builtinLower — codegen handles them
-		// directly to avoid DRC string corruption. Result is STILL_MEMBER (MemberExpr callee).
-		check(result === "STILL_MEMBER");
-	});
-	test("@runtime identifier callee left for codegen", () => {
-		const prelude = "@runtime(\"ms_parse_int\") function parseInt(s: string): number { unreachable; }";
-		const result = preludeLowerCallee(prelude, "parseInt(\"42\");");
-		// @runtime on identifier callee is NOT rewritten — genCallExpr handles it
-		check(result === "parseInt");
-	});
-});
+test "passthrough non-call" { check(stmtCountAfter("const x = 1;", lowerBuiltins) === 1); }
+
+test "passthrough plain call" { check(firstExprKindAfter("foo();", lowerBuiltins) === NodeKind.CallExpr); }
+
+test "passthrough function decl" { check(firstStmtKindAfter("function foo() {}", lowerBuiltins) === NodeKind.FunctionDecl); }
+
+test "passthrough if stmt" { check(firstStmtKindAfter("if (x) {}", lowerBuiltins) === NodeKind.IfStmt); }
+
+test "prelude class method is rewritten to runtime call" {
+	const prelude = "class console { @runtime(\"msPrintln\") log(value: string): void { unreachable; } }";
+	const result = preludeLowerCallee(prelude, "console.log(\"hello\");");
+	// Class method calls ARE now rewritten by builtinLower definitively.
+	check(result === "msPrintln");
+}
+
+test "@runtime identifier callee left for codegen" {
+	const prelude = "@runtime(\"msStringParseInt\") function parseInt(s: string): number { unreachable; }";
+	const result = preludeLowerCallee(prelude, "parseInt(\"42\");");
+	// @runtime on identifier callee is NOT rewritten — genCallExpr handles it
+	check(result === "parseInt");
+}

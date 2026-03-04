@@ -4,7 +4,7 @@
 // Phase 2: will add AST content-addressed hashing (hashNode).
 
 import { TaQueryKey, TaQueryKind } from "./revision";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 // ===== String Hash (djb2) =====
 
@@ -40,43 +40,33 @@ export function taHashKey(key: TaQueryKey): number {
 }
 
 // ===== Tests =====
+test "empty string has known value" {
+	const h = taHashString("");
+	check(h === 5381);
+}
 
-testGroup("TaHashString", () => {
-	test("empty string has known value", () => {
-		const h = taHashString("");
-		check(h === 5381);
-	});
-	test("same string same hash", () => {
-		check(taHashString("hello") === taHashString("hello"));
-	});
-	test("different strings different hashes", () => {
-		check(taHashString("abc") !== taHashString("xyz"));
-	});
-	test("single char", () => {
-		const h = taHashString("a");
-		check(h !== 5381);  // different from empty
-		check(h !== 0);
-	});
-});
+test "same string same hash" { check(taHashString("hello") === taHashString("hello")); }
 
-testGroup("TaHashCombine", () => {
-	test("combine is deterministic", () => {
-		check(taCombineHash(1, 2) === taCombineHash(1, 2));
-	});
-	test("order matters", () => {
-		check(taCombineHash(1, 2) !== taCombineHash(2, 1));
-	});
-});
+test "different strings different hashes" { check(taHashString("abc") !== taHashString("xyz")); }
 
-testGroup("TaHashKey", () => {
-	test("different kinds produce different hashes", () => {
-		const a: TaQueryKey = { queryKind: 0, fileId: 1 };
-		const b: TaQueryKey = { queryKind: 1, fileId: 1 };
-		check(taHashKey(a) !== taHashKey(b));
-	});
-	test("different fileIds produce different hashes", () => {
-		const a: TaQueryKey = { queryKind: 0, fileId: 1 };
-		const b: TaQueryKey = { queryKind: 0, fileId: 2 };
-		check(taHashKey(a) !== taHashKey(b));
-	});
-});
+test "single char" {
+	const h = taHashString("a");
+	check(h !== 5381);  // different from empty
+	check(h !== 0);
+}
+
+test "combine is deterministic" { check(taCombineHash(1, 2) === taCombineHash(1, 2)); }
+
+test "order matters" { check(taCombineHash(1, 2) !== taCombineHash(2, 1)); }
+
+test "different kinds produce different hashes" {
+	const a: TaQueryKey = { queryKind: 0, fileId: 1 };
+	const b: TaQueryKey = { queryKind: 1, fileId: 1 };
+	check(taHashKey(a) !== taHashKey(b));
+}
+
+test "different fileIds produce different hashes" {
+	const a: TaQueryKey = { queryKind: 0, fileId: 1 };
+	const b: TaQueryKey = { queryKind: 0, fileId: 2 };
+	check(taHashKey(a) !== taHashKey(b));
+}

@@ -44,7 +44,7 @@ import { lowerSpread } from "./desugar/spreadExpand";
 import { lowerArrayMethodInline } from "./desugar/arrayMethodInline";
 import { lowerForLoop } from "./lowering/forLoopLower";
 import { lowerForOf } from "./lowering/forOfLower";
-import { lowerResult } from "./desugar/resultDesugar";
+import { lowerTryExpr } from "./desugar/resultDesugar";
 import { lowerResultFieldCheck } from "./desugar/resultFieldCheck";
 import { lowerMatch } from "./lowering/matchLower";
 import { lowerTailCall } from "./lowering/tailCallLower";
@@ -54,9 +54,11 @@ import { lowerVarHoist } from "./lowering/varHoist";
 import { lowerLambda } from "./lowering/lambdaLifting";
 import { lowerRvalue } from "./lowering/rvalueLower";
 import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
+import { lowerBuiltins } from "./native/builtinLower";
 import { lowerSubscript } from "./lowering/subscriptLower";
 import { lowerConditionalExpr } from "./lowering/conditionalExprLower";
 import { lowerUpdateExpr } from "./lowering/updateExprLower";
+import { spanLower } from "./lowering/spanLower";
 import { lowerDCE } from "./analysis/dce";
 import { liftDestructors } from "./lowering/destructorLifting";
 
@@ -75,17 +77,17 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerArrayMethodInline(result, ctx); }
 	if (!jsBackend) { result = lowerForLoop(result, ctx); }
 	if (!jsBackend) { result = lowerForOf(result, ctx); }
-	result = lowerResult(result, ctx);
+	if (!jsBackend) { result = lowerTryExpr(result, ctx); }
 	result = lowerResultFieldCheck(result, ctx);
 	result = lowerMatch(result, ctx);
 	if (!jsBackend) { result = lowerTailCall(result, ctx); }
-	if (!jsBackend) { result = lowerAsync(result, ctx); }
 	if (!jsBackend) { result = lowerGenerator(result, ctx); }
 	if (!jsBackend) { result = lowerVarHoist(result, ctx); }
 	if (!jsBackend) { result = lowerLambda(result, ctx); }
-	if (!jsBackend) { result = lowerRvalue(result, ctx); }
 	result = lowerExtensionMethod(result, ctx);
+	result = lowerBuiltins(result, ctx);
 	result = lowerSubscript(result, ctx);
+	if (!jsBackend) { result = spanLower(result, ctx); }
 	if (!jsBackend) { result = lowerConditionalExpr(result, ctx); }
 	if (!jsBackend) { result = lowerUpdateExpr(result, ctx); }
 	result = lowerDCE(result, ctx);

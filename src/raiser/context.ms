@@ -10,7 +10,7 @@
 //   load(ctx, macroModule);
 //   execute(ctx);                // macro sees build.ms results
 
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import {
 	RaiserValue, RaiserValueKind, raiserNil, raiserInt, raiserToString, raiserIsNil,
 	RaiserArrayHeap, createArrayHeap,
@@ -57,56 +57,53 @@ export function execute(ctx: RaiserContext): boolean {
 }
 
 // --- Tests ---
+test "create + load + execute" {
+	const ctx = createContext();
+	const mod = makeTestModule(
+		[raiserABx(RaiserOpcode.LoadConst, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)],
+		[raiserInt(42)]
+	);
+	load(ctx, mod);
+	execute(ctx);
+	check(ctx.lastResult.intVal === 42);
+}
 
-testGroup("RaiserContext", () => {
-	test("create + load + execute", () => {
-		const ctx = createContext();
-		const mod = makeTestModule(
-			[raiserABx(RaiserOpcode.LoadConst, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)],
-			[raiserInt(42)]
-		);
-		load(ctx, mod);
-		execute(ctx);
-		check(ctx.lastResult.intVal === 42);
-	});
+test "execute without load returns false" {
+	const ctx = createContext();
+	const ok = execute(ctx);
+	check(!ok);
+}
 
-	test("execute without load returns false", () => {
-		const ctx = createContext();
-		const ok = execute(ctx);
-		check(!ok);
-	});
+test "load replaces module" {
+	const ctx = createContext();
+	const mod1 = makeTestModule(
+		[raiserABx(RaiserOpcode.LoadConst, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)],
+		[raiserInt(10)]
+	);
+	const mod2 = makeTestModule(
+		[raiserABx(RaiserOpcode.LoadConst, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)],
+		[raiserInt(20)]
+	);
+	load(ctx, mod1);
+	execute(ctx);
+	check(ctx.lastResult.intVal === 10);
 
-	test("load replaces module", () => {
-		const ctx = createContext();
-		const mod1 = makeTestModule(
-			[raiserABx(RaiserOpcode.LoadConst, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)],
-			[raiserInt(10)]
-		);
-		const mod2 = makeTestModule(
-			[raiserABx(RaiserOpcode.LoadConst, 0, 0), raiserABC(RaiserOpcode.Halt, 0, 0, 0)],
-			[raiserInt(20)]
-		);
-		load(ctx, mod1);
-		execute(ctx);
-		check(ctx.lastResult.intVal === 10);
+	load(ctx, mod2);
+	execute(ctx);
+	check(ctx.lastResult.intVal === 20);
+}
 
-		load(ctx, mod2);
-		execute(ctx);
-		check(ctx.lastResult.intVal === 20);
-	});
-
-	test("output captured", () => {
-		const ctx = createContext();
-		const mod = makeTestModule(
-			[
-				raiserABx(RaiserOpcode.LoadConst, 0, 0),
-				raiserABC(RaiserOpcode.Print, 0, 0, 0),
-				raiserABC(RaiserOpcode.Halt, 0, 0, 0),
-			],
-			[raiserInt(99)]
-		);
-		load(ctx, mod);
-		execute(ctx);
-		check(ctx.lastOutput === "99\n");
-	});
-});
+test "output captured" {
+	const ctx = createContext();
+	const mod = makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABC(RaiserOpcode.Print, 0, 0, 0),
+			raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+		],
+		[raiserInt(99)]
+	);
+	load(ctx, mod);
+	execute(ctx);
+	check(ctx.lastOutput === "99\n");
+}

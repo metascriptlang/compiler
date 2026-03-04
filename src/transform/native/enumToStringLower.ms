@@ -1,0 +1,210 @@
+// Enum ToString Lowering — inject FunctionDecl for each EnumDecl
+//
+// Nim generates enum-to-string procs in the semantic phase (enumtostr.nim:genEnumToStrProc).
+// We inject a synthetic FunctionDecl with a SwitchStmt body into the program statements.
+// Codegen then sees a normal FunctionDecl and emits it.
+//
+// Primary path: extract enum info from checker's symbol table (post-DCE safe).
+// Fallback path: walk AST programStmts (for tests without checker context).
+
+import {
+	Node, NodeKind,
+	ProgramData, EnumDeclData, ExportDeclData,
+} from "../../ast/node";
+import { TransformContext } from "../context";
+import {
+	makeSwitch, makeSwitchCase, makeReturn, makeString, makeNumber,
+	makeIdent, makeBlock, makeFnDecl, syntheticToken,
+} from "../util";
+import {
+	createEnum, stringType, createFunction, TypeKind,
+} from "../../checker/types";
+import { SymbolKind } from "../../checker/symbol";
+import { SourceLocation } from "../../ast/node";
+
+// Build a toString FunctionDecl for an enum:
+//   function EnumName_toString(v: int32): string {
+//     switch (v) { case 0: return "Member0"; ... default: return "<unknown>"; }
+//   }
+
+function makeEnumToString(enumName: string, members: string[], loc: SourceLocation): Node {
+	const cases: Node[] = [];
+	let i = 0;
+	while (i < members.length) {
+		const retStmt = makeReturn(makeString(members[i], loc), loc);
+		cases.push(makeSwitchCase([makeNumber(i, loc)], [retStmt], false, loc));
+		i = i + 1;
+	}
+	// Default case: return "<unknown>"
+	cases.push(makeSwitchCase([], [makeReturn(makeString("<unknown>", loc), loc)], true, loc));
+
+	const switchStmt = makeSwitch(makeIdent("v", loc), cases, loc);
+	const body = makeBlock([switchStmt], loc);
+	const fn = makeFnDecl(enumName + "_toString", ["v"], ["int32"], body, "", "string", loc);
+	// Override nodeType with proper enum param type
+	fn.nodeType = createFunction([createEnum(enumName, members)], ["v"], stringType());
+	return fn;
+}
+
+function getEnumFromStmt(stmt: Node): Node {
+	if (stmt === null) return null as unknown as Node;
+	if (stmt.kind === NodeKind.EnumDecl) return stmt;
+	if (stmt.kind === NodeKind.ExportDecl) {
+		const d = stmt.data as ExportDeclData;
+		if (d.exportedDecl !== null && d.exportedDecl.kind === NodeKind.EnumDecl) {
+			return d.exportedDecl;
+		}
+	}
+	return null as unknown as Node;
+}
+
+// ===== Tests =====
+
+import { check } from "std/testing";
+import { createNode } from "../../ast/node";
+import { createToken, TokenKind } from "../../lexer/token";
+
+function makeTestEnum(name: string, members: string[]): Node {
+	const tok = createToken(TokenKind.Ident, name, 1);
+	return createNode(NodeKind.EnumDecl, { enumName: name, enumMembers: members }, tok);
+}
+
+function makeTestProgram(stmts: Node[]): Node {
+	const tok = createToken(TokenKind.Ident, "test", 1);
+	return createNode(NodeKind.Program, { programStmts: stmts }, tok);
+}
+
+test "enum toString injects FunctionDecl" {
+	const enumNode = makeTestEnum("Color", ["Red", "Green", "Blue"]);
+	const prog = makeTestProgram([enumNode]);
+	const pd = prog.data as ProgramData;
+	check(pd.programStmts.length === 1);
+	const result = lowerEnumToString(prog, null as unknown as TransformContext);
+	const rd = result.data as ProgramData;
+	check(rd.programStmts.length === 2);
+	check(rd.programStmts[1].kind === NodeKind.FunctionDecl);
+}
+
+test "enum toString body has switch" {
+	const enumNode = makeTestEnum("Dir", ["N", "S"]);
+	const prog = makeTestProgram([enumNode]);
+	const result = lowerEnumToString(prog, null as unknown as TransformContext);
+	const rd = result.data as ProgramData;
+	const fn = rd.programStmts[1];
+	check(fn.kind === NodeKind.FunctionDecl);
+	check(fn.nodeType !== null);
+}
+
+import { parseSource } from "../../parser/statements/validation";
+import "../../parser/statements/core";
+import { generateCModule } from "../../codegen/c/index";
+import { CheckerContext } from "../../checker/context";
+import { FunctionDeclData } from "../../ast/node";
+
+test "enum toString E2E: parse → transform → codegen" {
+	const pr = parseSource("enum Color { Red, Green, Blue }");
+	check(pr.ok);
+	const transformed = lowerEnumToString(pr.value, null as unknown as TransformContext);
+	const td = transformed.data as ProgramData;
+	// Verify transform injected FunctionDecl
+	check(td.programStmts.length === 2);
+	check(td.programStmts[0].kind === NodeKind.EnumDecl);
+	check(td.programStmts[1].kind === NodeKind.FunctionDecl);
+	const fd = td.programStmts[1].data as FunctionDeclData;
+	check(fd.fnName === "Color_toString");
+	// Generate C — should include the toString function
+	const cCode = generateCModule(transformed, null as unknown as CheckerContext, "test/input", "");
+	check(cCode.length > 50);
+}
+
+import { transformForNative } from "./index";
+import { createTransformContext } from "../context";
+
+test "enum toString E2E: full native pipeline → codegen" {
+	const pr = parseSource("enum Color { Red, Green, Blue }");
+	check(pr.ok);
+	const ctx = createTransformContext();
+	const transformed = transformForNative(pr.value, ctx);
+	const td = transformed.data as ProgramData;
+	// Should have EnumDecl + FunctionDecl (toString)
+	check(td.programStmts.length === 2);
+	check(td.programStmts[1].kind === NodeKind.FunctionDecl);
+	// Generate C
+	const cCode = generateCModule(transformed, null as unknown as CheckerContext, "test/input", "");
+	// Check that the output includes the toString function
+	check(cCode.length > 100);
+}
+
+import { checkProgram } from "../../checker/index";
+import { transformProgram } from "../../transform/index";
+import { createTransformContextWithChecker } from "../context";
+
+test "enum toString E2E: full pipeline with checker (post-DCE)" {
+	const pr = parseSource("enum Color { Red, Green, Blue }\nconst x: Color = Color.Green;");
+	check(pr.ok);
+	// Run full pipeline: check → transform (includes DCE) → native transform
+	const checkerCtx = checkProgram(pr.value);
+	const transformed = transformProgram(pr.value, checkerCtx, false);
+	const nativeCtx = createTransformContextWithChecker(checkerCtx);
+	const nativeTransformed = transformForNative(transformed, nativeCtx);
+	const td = nativeTransformed.data as ProgramData;
+	// DCE may strip EnumDecl, but toString should still be injected from checker symbols
+	let hasToString = false;
+	let i = 0;
+	while (i < td.programStmts.length) {
+		if (td.programStmts[i].kind === NodeKind.FunctionDecl) {
+			const fd = td.programStmts[i].data as FunctionDeclData;
+			if (fd.fnName === "Color_toString") {
+				hasToString = true;
+			}
+		}
+		i = i + 1;
+	}
+	check(hasToString);
+	// Generate C — should include toString
+	const cCode = generateCModule(nativeTransformed, checkerCtx, "test/input", "");
+	check(cCode.length > 100);
+}
+
+export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
+	if (program === null || program.kind !== NodeKind.Program) return program;
+	const pd = program.data as ProgramData;
+
+	// Primary path: extract enums from checker's symbol table (DCE-safe).
+	// Walk all scopes from current up to global — user enums are typically
+	// in the module scope (table.current), not the root global scope.
+	if (ctx !== null && ctx.checkerCtx !== null && ctx.checkerCtx.table !== null) {
+		let scope = ctx.checkerCtx.table.current;
+		while (scope !== null) {
+			for (const sym of scope.symbols) {
+				if (sym.symbolKind === SymbolKind.Enum && sym.symbolType !== null && sym.symbolType.kind === TypeKind.Enum) {
+					const t = sym.symbolType;
+					const toStringFn = makeEnumToString(t.typeName, t.typeNames, sym.location);
+					pd.programStmts.push(toStringFn);
+				}
+			}
+			scope = scope.parent;
+		}
+		return program;
+	}
+
+	// Fallback: walk programStmts (test mode without checker context)
+	const newStmts: Node[] = [];
+	let i = 0;
+	while (i < pd.programStmts.length) {
+		const stmt = pd.programStmts[i];
+		newStmts.push(stmt);
+
+		const enumNode = getEnumFromStmt(stmt);
+		if (enumNode !== null) {
+			const d = enumNode.data as EnumDeclData;
+			const loc = enumNode.location;
+			const toStringFn = makeEnumToString(d.enumName, d.enumMembers, loc);
+			newStmts.push(toStringFn);
+		}
+		i = i + 1;
+	}
+
+	pd.programStmts = newStmts;
+	return program;
+}

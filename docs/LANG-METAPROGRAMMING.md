@@ -366,6 +366,38 @@ const node = quote { const ${varName} = ${initValue}; };
 | `@target("backend")` | Parsed, expansion TODO |
 | `@emit("code")` | Parsed, expansion TODO |
 
+## Tier 4: Intrinsics & Runtime Mapping
+
+**Status: DONE**
+
+While Tier 2 macros are user-defined, Tier 4 handles **compiler-intrinsic** logic and direct backend symbol mapping. This layer ensures that high-level MetaScript constructs are lowered into backend-primitive structures before reaching the "DUMB" codegen layer.
+
+### @runtime("symbol") — External Symbol Mapping
+
+Maps a MetaScript function or method directly to a literal symbol in the backend.
+
+- **On Function**: Codegen uses the provided string as the literal C/JS function name, bypassing standard mangling.
+- **On Method**: `builtinLower` intercepts calls to this method and rewrites them into direct calls (e.g., `console.log(s)` → `msPrintln(s)`).
+- **Nim Parity**: Equivalent to `{.importc: "symbol".}`.
+
+### @builtin("kind") — Structural Intrinsics
+
+Identifies "magic" functions that require structural AST transformation rather than simple renaming.
+
+- **Behavior**: `builtinLower` checks the `builtinKind` on the resolved symbol and performs a complex AST rewrite.
+- **Example**: `Result.ok(val)` is marked `@builtin("msResultOk")`. The transformer expands this into an `ObjectLiteral` node: `{ ok: true, value: val }`.
+- **Nim Parity**: Equivalent to Nim's `magic` system (e.g., `mResultOk`).
+
+### Builtin Lowering (`src/transform/native/builtinLower.ms`)
+
+The "Magic" expansion pass. It is the primary bridge between high-level semantics and backend primitives.
+
+1. **Renaming**: Applies `@runtime` names definitively.
+2. **Normalization**: Flattens extension methods (`obj.method()` → `method(obj)`) via UFCS.
+3. **Structural Expansion**: Inlines specialized AST structures for `@builtin` calls.
+
+By performing these rewrites in the **Transform** phase (AST-to-AST), we keep the **Codegen** layer strictly "DUMB"—it only needs to know how to emit syntax for basic nodes like `CallExpr` or `ObjectLiteral`, without needing to understand high-level types like `Result`.
+
 ## Node Serialization — The Bridge
 
 Macros run in the Raiser VM but manipulate compiler `Node` structs. Bidirectional conversion:

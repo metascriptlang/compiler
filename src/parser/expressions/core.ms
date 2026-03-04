@@ -13,7 +13,7 @@ import { parseObjectLiteral } from "./object";
 import { parseExprList, parseCallExpr } from "./call";
 import { parseTemplateLiteral } from "./template";
 import { registerParseExpr, parseOk, exprKind, exprNode, exprOp, binLeftKind } from "./util";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 type ExprResult = Result<Expression, string>;
 
@@ -456,97 +456,139 @@ function parsePrimary(state: ParserState): ExprResult {
 // ===== Core Expression Tests =====
 
 // --- Structural: verify AST node kinds, operators, precedence tree shape ---
+// Kind verification
+test "number kind" { check(exprKind("42") === NodeKind.NumberLiteral); }
 
-testGroup("Expr Structure", () => {
-	// Kind verification
-	test("number kind", () => { check(exprKind("42") === NodeKind.NumberLiteral); });
-	test("string kind", () => { check(exprKind("\"hi\"") === NodeKind.StringLiteral); });
-	test("ident kind", () => { check(exprKind("x") === NodeKind.Identifier); });
-	test("binary kind", () => { check(exprKind("a + b") === NodeKind.BinaryExpr); });
-	test("unary kind", () => { check(exprKind("-x") === NodeKind.UnaryExpr); });
-	test("call kind", () => { check(exprKind("f()") === NodeKind.CallExpr); });
-	test("member kind", () => { check(exprKind("a.b") === NodeKind.MemberExpr); });
-	test("index kind", () => { check(exprKind("a[0]") === NodeKind.ArrayAccess); });
-	test("array kind", () => { check(exprKind("[1]") === NodeKind.ArrayLiteral); });
-	test("ternary kind", () => { check(exprKind("a ? b : c") === NodeKind.ConditionalExpr); });
-	test("new kind", () => { check(exprKind("new X()") === NodeKind.NewExpr); });
-	test("spread kind", () => { check(exprKind("...x") === NodeKind.SpreadExpr); });
-	test("try kind", () => { check(exprKind("try x") === NodeKind.TryExpr); });
-	test("as kind", () => { check(exprKind("x as number") === NodeKind.TypeAssertion); });
-	test("true kind", () => { check(exprKind("true") === NodeKind.BooleanLiteral); });
-	test("false kind", () => { check(exprKind("false") === NodeKind.BooleanLiteral); });
-	test("null kind", () => { check(exprKind("null") === NodeKind.NullLiteral); });
-	test("bigint kind", () => { check(exprKind("123n") === NodeKind.BigIntLiteral); });
-	test("regex kind", () => { check(exprKind("/abc/g") === NodeKind.RegexLiteral); });
-	test("update kind", () => { check(exprKind("x++") === NodeKind.UpdateExpr); });
-	test("await kind", () => { check(exprKind("await p") === NodeKind.AwaitExpr); });
-	test("move kind", () => { check(exprKind("move x") === NodeKind.MoveExpr); });
-	test("yield kind", () => { check(exprKind("yield x") === NodeKind.YieldExpr); });
-	test("out kind", () => { check(exprKind("out x") === NodeKind.OutExpr); });
-	test("quote kind", () => { check(exprKind("quote { const x = 1; }") === NodeKind.QuoteExpr); });
-	test("quote body is block", () => {
-		const d = exprNode("quote { const x = 1; }").data as QuoteExprData;
-		check(d.quoteBody.kind === NodeKind.BlockStmt);
-	});
-	test("quote multi ok", () => { check(parseOk("quote { const x = 1; const y = 2; }")); });
-	test("quote multi stmt", () => {
-		const d = exprNode("quote { const x = 1; const y = 2; }").data as QuoteExprData;
-		const block = d.quoteBody.data as BlockStmtData;
-		check(block.statements.length === 2);
-	});
-	test("func expr kind", () => { check(exprKind("function() {}") === NodeKind.FunctionExpr); });
-	test("generator func expr", () => { check(exprKind("function*() {}") === NodeKind.FunctionExpr); });
-	test("async func expr", () => { check(exprKind("async function() {}") === NodeKind.FunctionExpr); });
-	test("async arrow kind", () => { check(exprKind("async () => 42") === NodeKind.ArrowFunction); });
-	// Operator extraction
-	test("+ op", () => { check(exprOp("a + b") === "+"); });
-	test("=== op", () => { check(exprOp("a === b") === "==="); });
-	test("&& op", () => { check(exprOp("a && b") === "&&"); });
-	test("?? op", () => { check(exprOp("a ?? b") === "??"); });
-	test("unary - op", () => { check(exprOp("-x") === "-"); });
-	test("unary ! op", () => { check(exprOp("!x") === "!"); });
-	test("pre++ op", () => { check(exprOp("++x") === "++"); });
-	test("typeof op", () => { check(exprOp("typeof x") === "typeof"); });
-	// Precedence tree shape
-	test("* tighter than +", () => { check(binLeftKind("a + b * c") === NodeKind.Identifier); });
-	test("+ left-assoc", () => { check(binLeftKind("a + b + c") === NodeKind.BinaryExpr); });
-	test("* in + left", () => { check(binLeftKind("a * b + c") === NodeKind.BinaryExpr); });
-	test("&& tighter than ||", () => { check(binLeftKind("a || b && c") === NodeKind.Identifier); });
-});
+test "string kind" { check(exprKind("\"hi\"") === NodeKind.StringLiteral); }
+
+test "ident kind" { check(exprKind("x") === NodeKind.Identifier); }
+
+test "binary kind" { check(exprKind("a + b") === NodeKind.BinaryExpr); }
+
+test "unary kind" { check(exprKind("-x") === NodeKind.UnaryExpr); }
+
+test "call kind" { check(exprKind("f()") === NodeKind.CallExpr); }
+
+test "member kind" { check(exprKind("a.b") === NodeKind.MemberExpr); }
+
+test "index kind" { check(exprKind("a[0]") === NodeKind.ArrayAccess); }
+
+test "array kind" { check(exprKind("[1]") === NodeKind.ArrayLiteral); }
+
+test "ternary kind" { check(exprKind("a ? b : c") === NodeKind.ConditionalExpr); }
+
+test "new kind" { check(exprKind("new X()") === NodeKind.NewExpr); }
+
+test "spread kind" { check(exprKind("...x") === NodeKind.SpreadExpr); }
+
+test "try kind" { check(exprKind("try x") === NodeKind.TryExpr); }
+
+test "as kind" { check(exprKind("x as number") === NodeKind.TypeAssertion); }
+
+test "true kind" { check(exprKind("true") === NodeKind.BooleanLiteral); }
+
+test "false kind" { check(exprKind("false") === NodeKind.BooleanLiteral); }
+
+test "null kind" { check(exprKind("null") === NodeKind.NullLiteral); }
+
+test "bigint kind" { check(exprKind("123n") === NodeKind.BigIntLiteral); }
+
+test "regex kind" { check(exprKind("/abc/g") === NodeKind.RegexLiteral); }
+
+test "update kind" { check(exprKind("x++") === NodeKind.UpdateExpr); }
+
+test "await kind" { check(exprKind("await p") === NodeKind.AwaitExpr); }
+
+test "move kind" { check(exprKind("move x") === NodeKind.MoveExpr); }
+
+test "yield kind" { check(exprKind("yield x") === NodeKind.YieldExpr); }
+
+test "out kind" { check(exprKind("out x") === NodeKind.OutExpr); }
+
+test "quote kind" { check(exprKind("quote { const x = 1; }") === NodeKind.QuoteExpr); }
+
+test "quote body is block" {
+	const d = exprNode("quote { const x = 1; }").data as QuoteExprData;
+	check(d.quoteBody.kind === NodeKind.BlockStmt);
+}
+
+test "quote multi ok" { check(parseOk("quote { const x = 1; const y = 2; }")); }
+
+test "quote multi stmt" {
+	const d = exprNode("quote { const x = 1; const y = 2; }").data as QuoteExprData;
+	const block = d.quoteBody.data as BlockStmtData;
+	check(block.statements.length === 2);
+}
+
+test "func expr kind" { check(exprKind("function() {}") === NodeKind.FunctionExpr); }
+
+test "generator func expr" { check(exprKind("function*() {}") === NodeKind.FunctionExpr); }
+
+test "async func expr" { check(exprKind("async function() {}") === NodeKind.FunctionExpr); }
+
+test "async arrow kind" { check(exprKind("async () => 42") === NodeKind.ArrowFunction); }
+// Operator extraction
+test "+ op" { check(exprOp("a + b") === "+"); }
+
+test "=== op" { check(exprOp("a === b") === "==="); }
+
+test "&& op" { check(exprOp("a && b") === "&&"); }
+
+test "?? op" { check(exprOp("a ?? b") === "??"); }
+
+test "unary - op" { check(exprOp("-x") === "-"); }
+
+test "unary ! op" { check(exprOp("!x") === "!"); }
+
+test "pre++ op" { check(exprOp("++x") === "++"); }
+
+test "typeof op" { check(exprOp("typeof x") === "typeof"); }
+// Precedence tree shape
+test "* tighter than +" { check(binLeftKind("a + b * c") === NodeKind.Identifier); }
+
+test "+ left-assoc" { check(binLeftKind("a + b + c") === NodeKind.BinaryExpr); }
+
+test "* in + left" { check(binLeftKind("a * b + c") === NodeKind.BinaryExpr); }
+
+test "&& tighter than ||" { check(binLeftKind("a || b && c") === NodeKind.Identifier); }
 
 // --- Smoke: each tests a distinct parser path not covered by structural tests ---
+// Postfix combinations
+test "member call" { check(parseOk("a.b(c)")); }
 
-testGroup("Expr Smoke", () => {
-	// Postfix combinations
-	test("member call", () => { check(parseOk("a.b(c)")); });
-	test("call member", () => { check(parseOk("a(b).c")); });
-	test("optional chain", () => { check(parseOk("a?.b?.c")); });
-	// Parenthesized
-	test("parens", () => { check(parseOk("(a + b) * c")); });
-	// Right-associative
-	test("** right assoc", () => { check(parseOk("a ** b ** c")); });
-	test("assign right assoc", () => { check(parseOk("a = b = c")); });
-	// Compound expressions
-	test("complex mixed", () => { check(parseOk("f(a).b + g(c).d")); });
-	test("nested arrays", () => { check(parseOk("[[1], [2]][0]")); });
-	// Try
-	test("try catch", () => { check(parseOk("try f() catch 0")); });
-	test("nested try", () => { check(parseOk("try f(try g())")); });
-	// Type assertions
-	test("as object type", () => { check(parseOk("node.data as { name: string }")); });
-	// Remaining operators
-	test("in operator", () => { check(parseOk("\"x\" in obj")); });
-	test("instanceof", () => { check(parseOk("a instanceof Foo")); });
-	test("pipe", () => { check(parseOk("a |> b")); });
-	// New with member
-	test("new member", () => { check(parseOk("new A.B()")); });
-	// Delete/void
-	test("delete", () => { check(parseOk("delete obj.x")); });
-	test("void", () => { check(parseOk("void 0")); });
-});
+test "call member" { check(parseOk("a(b).c")); }
 
-testGroup("Expr Rejects", () => {
-	test("lone operator", () => { check(!parseOk("+")); });
-	test("empty string", () => { check(!parseOk("")); });
-});
+test "optional chain" { check(parseOk("a?.b?.c")); }
+// Parenthesized
+test "parens" { check(parseOk("(a + b) * c")); }
+// Right-associative
+test "** right assoc" { check(parseOk("a ** b ** c")); }
+
+test "assign right assoc" { check(parseOk("a = b = c")); }
+// Compound expressions
+test "complex mixed" { check(parseOk("f(a).b + g(c).d")); }
+
+test "nested arrays" { check(parseOk("[[1], [2]][0]")); }
+// Try
+test "try catch" { check(parseOk("try f() catch 0")); }
+
+test "nested try" { check(parseOk("try f(try g())")); }
+// Type assertions
+test "as object type" { check(parseOk("node.data as { name: string }")); }
+// Remaining operators
+test "in operator" { check(parseOk("\"x\" in obj")); }
+
+test "instanceof" { check(parseOk("a instanceof Foo")); }
+
+test "pipe" { check(parseOk("a |> b")); }
+// New with member
+test "new member" { check(parseOk("new A.B()")); }
+// Delete/void
+test "delete" { check(parseOk("delete obj.x")); }
+
+test "void" { check(parseOk("void 0")); }
+
+test "lone operator" { check(!parseOk("+")); }
+
+test "empty string" { check(!parseOk("")); }
 

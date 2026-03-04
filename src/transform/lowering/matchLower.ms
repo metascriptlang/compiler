@@ -14,7 +14,7 @@
 // Binding patterns (identifier) → const name = $m; prepended to body
 
 import {
-	Node, NodeKind, DeclKind,
+	Node, NodeKind, DeclKind, SourceLocation,
 	BlockStmtData,
 	MatchStmtData, MatchExprData, MatchCaseData,
 	VariableDeclData, ReturnStmtData, ExprStmtData,
@@ -27,7 +27,7 @@ import {
 	makeReturn, makeIf, makeBinary, makeAssign,
 	makeCall, makeNumber, makeSwitch, makeSwitchCase,
 } from "../util";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 import { charAt } from "../../utils/string";
 
@@ -98,7 +98,11 @@ function lowerMatchExprInVar(stmt: Node, ctx: TransformContext): Node[] {
 	result.push(makeVarDecl(tempName, matchData.matchDisc, DeclKind.Const, loc));
 	// let x; (uninitialized, to be assigned in each branch)
 	const placeholder = makeIdent("undefined", loc);
-	result.push(makeVarDecl(varData.declName, placeholder, DeclKind.Let, loc));
+	const letDecl = makeVarDecl(varData.declName, placeholder, DeclKind.Let, loc);
+	if (stmt.nodeType !== null) {
+		letDecl.nodeType = stmt.nodeType;
+	}
+	result.push(letDecl);
 	// if-chain with assignment: x = armValue
 	const ifChain = buildIfChain(matchData.matchCases, tempName, loc, "assign", varData.declName);
 	result.push(ifChain);
@@ -128,7 +132,7 @@ function lowerMatchExprInReturn(stmt: Node, ctx: TransformContext): Node[] {
 // Unified builder for all match contexts.
 // mode: "stmt" = body as-is, "assign" = varName = body, "return" = return body
 
-function buildIfChain(cases: Node[], tempName: string, loc: Node["location"], mode: string, varName: string): Node {
+function buildIfChain(cases: Node[], tempName: string, loc: SourceLocation, mode: string, varName: string): Node {
 	// String hash dispatch for >8 string cases
 	if (isAllStringCases(cases)) {
 		return buildHashSwitch(cases, tempName, loc, mode, varName);
@@ -162,7 +166,7 @@ function buildIfChain(cases: Node[], tempName: string, loc: Node["location"], mo
 	return elseNode;
 }
 
-function wrapArmBody(armBody: Node, mode: string, varName: string, loc: Node["location"]): Node {
+function wrapArmBody(armBody: Node, mode: string, varName: string, loc: SourceLocation): Node {
 	return match (mode) {
 		"assign" => makeBlock([makeExprStmt(makeAssign(makeIdent(varName, loc), armBody, loc), loc)], loc),
 		"return" => makeBlock([makeReturn(armBody, loc)], loc),
@@ -170,7 +174,7 @@ function wrapArmBody(armBody: Node, mode: string, varName: string, loc: Node["lo
 	};
 }
 
-function prependToBody(decl: Node, body: Node, loc: Node["location"]): Node {
+function prependToBody(decl: Node, body: Node, loc: SourceLocation): Node {
 	if (body.kind === NodeKind.BlockStmt) {
 		const bodyData = body.data as BlockStmtData;
 		const newStmts: Node[] = [];
@@ -209,7 +213,7 @@ function getBindingName(patterns: Node[]): string {
 }
 
 // Build condition from pattern list: $m === p1 || $m === p2 || ...
-function buildPatternCondition(patterns: Node[], tempName: string, loc: Node["location"]): Node {
+function buildPatternCondition(patterns: Node[], tempName: string, loc: SourceLocation): Node {
 	let cond = makePatternTest(patterns[0], tempName, loc);
 	for (let i = 1; i < patterns.length; i += 1) {
 		const nextTest = makePatternTest(patterns[i], tempName, loc);
@@ -219,7 +223,7 @@ function buildPatternCondition(patterns: Node[], tempName: string, loc: Node["lo
 }
 
 // Build a single pattern test: $m === pattern
-function makePatternTest(pattern: Node, tempName: string, loc: Node["location"]): Node {
+function makePatternTest(pattern: Node, tempName: string, loc: SourceLocation): Node {
 	return makeBinary(makeIdent(tempName, loc), "===", pattern, loc);
 }
 
@@ -230,7 +234,7 @@ function makePatternTest(pattern: Node, tempName: string, loc: Node["location"])
 
 const STRING_HASH_THRESHOLD: number = 8;
 
-// DJB2 hash — must match C runtime's ms_string_hash for correctness.
+// DJB2 hash — must match C runtime's msStringHash for correctness.
 // Note: .code only works on string literals (DRC #28), so we use charCodeAt helper.
 function djb2Hash(s: string): number {
 	let h: number = 5381;
@@ -365,7 +369,7 @@ function isAllStringCases(cases: Node[]): boolean {
 }
 
 // Build switch(djb2(disc)) { case HASH: if (disc === str) { body } break; ... default: { wildcard } }
-function buildHashSwitch(cases: Node[], tempName: string, loc: Node["location"], mode: string, varName: string): Node {
+function buildHashSwitch(cases: Node[], tempName: string, loc: SourceLocation, mode: string, varName: string): Node {
 	const switchCases: Node[] = [];
 	let defaultBody = makeBlock([], loc);
 
@@ -401,40 +405,35 @@ function buildHashSwitch(cases: Node[], tempName: string, loc: Node["location"],
 	defaultStmts.push(defaultBody);
 	switchCases.push(makeSwitchCase([], defaultStmts, true, loc));
 
-	// switch (ms_string_hash(temp))
+	// switch (msStringHash(temp))
 	const hashCallArgs: Node[] = [];
 	hashCallArgs.push(makeIdent(tempName, loc));
-	const hashCall = makeCall(makeIdent("ms_string_hash", loc), hashCallArgs, loc);
+	const hashCall = makeCall(makeIdent("msStringHash", loc), hashCallArgs, loc);
 	return makeSwitch(hashCall, switchCases, loc);
 }
 
 // ===== Tests =====
+test "match stmt becomes if chain" { check(stmtCountAfter("match (x) { 1 => foo(), _ => bar() }", lowerMatch) === 2); }
 
-testGroup("Match Lowering", () => {
-	test("match stmt becomes if chain", () => {
-		check(stmtCountAfter("match (x) { 1 => foo(), _ => bar() }", lowerMatch) === 2);
-	});
-	test("match first stmt is VarDecl (discriminant temp)", () => {
-		check(firstStmtKindAfter("match (x) { 1 => a(), _ => b() }", lowerMatch) === NodeKind.VariableDecl);
-	});
-	test("no match passthrough", () => {
-		check(stmtCountAfter("const x = 1;", lowerMatch) === 1);
-	});
-	test("match preserves surrounding stmts", () => {
-		check(stmtCountAfter("let a = 1; match (x) { _ => b() } let c = 2;", lowerMatch) === 4);
-	});
-	test("string hash dispatch for >8 arms", () => {
-		const src = "match (x) { \"a\" => 1, \"b\" => 2, \"c\" => 3, \"d\" => 4, \"e\" => 5, \"f\" => 6, \"g\" => 7, \"h\" => 8, \"i\" => 9, _ => 0 }";
-		// 9 string arms > threshold(8) → should produce SwitchStmt (2nd stmt after VarDecl temp)
-		check(stmtCountAfter(src, lowerMatch) === 2);
-	});
-	test("few string arms stay as if-else", () => {
-		const src = "match (x) { \"a\" => 1, \"b\" => 2, _ => 0 }";
-		// 2 string arms <= threshold → stays as if-else chain
-		check(stmtCountAfter(src, lowerMatch) === 2);
-	});
-	test("djb2 hash deterministic", () => {
-		check(djb2Hash("hello") === djb2Hash("hello"));
-		check(djb2Hash("a") !== djb2Hash("b"));
-	});
-});
+test "match first stmt is VarDecl (discriminant temp)" { check(firstStmtKindAfter("match (x) { 1 => a(), _ => b() }", lowerMatch) === NodeKind.VariableDecl); }
+
+test "no match passthrough" { check(stmtCountAfter("const x = 1;", lowerMatch) === 1); }
+
+test "match preserves surrounding stmts" { check(stmtCountAfter("let a = 1; match (x) { _ => b() } let c = 2;", lowerMatch) === 4); }
+
+test "string hash dispatch for >8 arms" {
+	const src = "match (x) { \"a\" => 1, \"b\" => 2, \"c\" => 3, \"d\" => 4, \"e\" => 5, \"f\" => 6, \"g\" => 7, \"h\" => 8, \"i\" => 9, _ => 0 }";
+	// 9 string arms > threshold(8) → should produce SwitchStmt (2nd stmt after VarDecl temp)
+	check(stmtCountAfter(src, lowerMatch) === 2);
+}
+
+test "few string arms stay as if-else" {
+	const src = "match (x) { \"a\" => 1, \"b\" => 2, _ => 0 }";
+	// 2 string arms <= threshold → stays as if-else chain
+	check(stmtCountAfter(src, lowerMatch) === 2);
+}
+
+test "djb2 hash deterministic" {
+	check(djb2Hash("hello") === djb2Hash("hello"));
+	check(djb2Hash("a") !== djb2Hash("b"));
+}

@@ -14,7 +14,7 @@ import {
 	ExportDeclData, ClassDeclData, MethodDeclData, ConstructorDeclData,
 	ForOfStmtData, DoWhileStmtData, ReturnStmtData,
 } from "../ast/node";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, nameSetIntersect } from "../transform/context";
 import {
 	makeIdent, makeBlock, makeExprStmt, makeCall,
@@ -52,7 +52,7 @@ function isDestroyFn(name: string): boolean {
 
 // Scan a block's top-level statements for wasMoved calls
 function collectBlockMoved(block: Node): NameSet {
-	const result: NameSet = { names: [] };
+	const result: NameSet = [];
 	if (block === null) return result;
 	if (block.kind !== NodeKind.BlockStmt) return result;
 	const bd = block.data as BlockStmtData;
@@ -64,7 +64,7 @@ function collectBlockMoved(block: Node): NameSet {
 		// Also collect from nested if/else branches
 		if (bd.statements[i].kind === NodeKind.IfStmt) {
 			const nested = collectIfMoved(bd.statements[i]);
-			for (const v of nested.names) {
+			for (const v of nested) {
 				nameSetAdd(result, v);
 			}
 		}
@@ -78,7 +78,7 @@ function collectIfMoved(ifNode: Node): NameSet {
 	const consMoved = collectBlockMoved(d.consequent);
 
 	// No else — can't guarantee moved on all paths
-	if (d.alternate === null) return { names: [] };
+	if (d.alternate === null) return [];
 
 	// else-if chain: recurse
 	if (d.alternate.kind === NodeKind.IfStmt) {
@@ -135,7 +135,7 @@ function getDestroyVar(stmt: Node): string {
 
 function optimizeBlock(stmts: Node[]): Node[] {
 	const result: Node[] = [];
-	const moved: NameSet = { names: [] };
+	const moved: NameSet = [];
 
 	let i = 0;
 	while (i < stmts.length) {
@@ -160,7 +160,7 @@ function optimizeBlock(stmts: Node[]): Node[] {
 		// Collect moved vars from exhaustive if/else branches
 		if (stmt.kind === NodeKind.IfStmt) {
 			const ifMoved = collectIfMoved(stmt);
-			for (const v of ifMoved.names) {
+			for (const v of ifMoved) {
 				nameSetAdd(moved, v);
 			}
 		}
@@ -256,116 +256,118 @@ function makeOtherStmt(): Node {
 	return makeExprStmt(makeIdent("something", loc), loc);
 }
 
-testGroup("DRC Optimize wasMoved+destroy", () => {
-	test("eliminates wasMoved+destroy pair", () => {
-		const wm = makeWmCall("x");
-		const destroy = makeDestroyCallForTest("x");
-		const stmts: Node[] = [wm, destroy];
-		const result = optimizeBlock(stmts);
-		// destroy eliminated, only wasMoved remains
-		check(result.length === 1);
-	});
-	test("eliminates non-adjacent wasMoved+destroy", () => {
-		const wm = makeWmCall("x");
-		const other = makeOtherStmt();
-		const destroy = makeDestroyCallForTest("x");
-		const stmts: Node[] = [wm, other, destroy];
-		const result = optimizeBlock(stmts);
-		// Non-adjacent destroy eliminated — wasMoved + other remain
-		check(result.length === 2);
-	});
-	test("preserves different vars", () => {
-		const wm = makeWmCall("x");
-		const destroy = makeDestroyCallForTest("y");
-		const stmts: Node[] = [wm, destroy];
-		const result = optimizeBlock(stmts);
-		// Different vars — both preserved
-		check(result.length === 2);
-	});
-	test("eliminates multiple pairs", () => {
-		const wm1 = makeWmCall("a");
-		const d1 = makeDestroyCallForTest("a");
-		const wm2 = makeWmCall("b");
-		const d2 = makeDestroyCallForTest("b");
-		const stmts: Node[] = [wm1, d1, wm2, d2];
-		const result = optimizeBlock(stmts);
-		// Both destroy calls eliminated
-		check(result.length === 2);
-	});
-	test("preserves standalone wasMoved", () => {
-		const wm = makeWmCall("x");
-		const other = makeOtherStmt();
-		const stmts: Node[] = [wm, other];
-		const result = optimizeBlock(stmts);
-		check(result.length === 2);
-	});
-	test("preserves standalone destroy", () => {
-		const destroy = makeDestroyCallForTest("x");
-		const other = makeOtherStmt();
-		const stmts: Node[] = [destroy, other];
-		const result = optimizeBlock(stmts);
-		check(result.length === 2);
-	});
-});
+test "eliminates wasMoved+destroy pair" {
+	const wm = makeWmCall("x");
+	const destroy = makeDestroyCallForTest("x");
+	const stmts: Node[] = [wm, destroy];
+	const result = optimizeBlock(stmts);
+	// destroy eliminated, only wasMoved remains
+	check(result.length === 1);
+}
 
-testGroup("DRC Optimize getWasMovedVar", () => {
-	test("extracts var from wasMoved call", () => {
-		const wm = makeWmCall("myVar");
-		const name = getWasMovedVar(wm);
-		check(name === "myVar");
-	});
-	test("returns empty for non-wasMoved", () => {
-		const other = makeOtherStmt();
-		const name = getWasMovedVar(other);
-		check(name === "");
-	});
-});
+test "eliminates non-adjacent wasMoved+destroy" {
+	const wm = makeWmCall("x");
+	const other = makeOtherStmt();
+	const destroy = makeDestroyCallForTest("x");
+	const stmts: Node[] = [wm, other, destroy];
+	const result = optimizeBlock(stmts);
+	// Non-adjacent destroy eliminated — wasMoved + other remain
+	check(result.length === 2);
+}
 
-testGroup("DRC Optimize Branch-Aware", () => {
-	test("if/else both move same var → eliminate destroy", () => {
-		const loc = testLoc();
-		// Build: if (cond) { wasMoved(x); } else { wasMoved(x); } destroy(x);
-		const wmCons = makeWmCall("x");
-		const consBlock = makeBlock([wmCons], loc);
-		const wmAlt = makeWmCall("x");
-		const altBlock = makeBlock([wmAlt], loc);
-		const ifNode: Node = {
-			kind: NodeKind.IfStmt, location: loc,
-			data: { condition: makeIdent("cond", loc), consequent: consBlock, alternate: altBlock },
-		};
-		const destroy = makeDestroyCallForTest("x");
-		const stmts: Node[] = [ifNode, destroy];
-		const result = optimizeBlock(stmts);
-		// destroy(x) eliminated — x was moved on all paths
-		check(result.length === 1);
-	});
-	test("if without else → preserve destroy", () => {
-		const loc = testLoc();
-		const wmCons = makeWmCall("x");
-		const consBlock = makeBlock([wmCons], loc);
-		const ifNode: Node = {
-			kind: NodeKind.IfStmt, location: loc,
-			data: { condition: makeIdent("cond", loc), consequent: consBlock, alternate: null as unknown as Node },
-		};
-		const destroy = makeDestroyCallForTest("x");
-		const stmts: Node[] = [ifNode, destroy];
-		const result = optimizeBlock(stmts);
-		// No else — can't guarantee moved, destroy preserved
-		check(result.length === 2);
-	});
-	test("if/else move different vars → preserve both destroys", () => {
-		const loc = testLoc();
-		const consBlock = makeBlock([makeWmCall("x")], loc);
-		const altBlock = makeBlock([makeWmCall("y")], loc);
-		const ifNode: Node = {
-			kind: NodeKind.IfStmt, location: loc,
-			data: { condition: makeIdent("cond", loc), consequent: consBlock, alternate: altBlock },
-		};
-		const destroyX = makeDestroyCallForTest("x");
-		const destroyY = makeDestroyCallForTest("y");
-		const stmts: Node[] = [ifNode, destroyX, destroyY];
-		const result = optimizeBlock(stmts);
-		// Neither is moved on ALL paths — both preserved
-		check(result.length === 3);
-	});
-});
+test "preserves different vars" {
+	const wm = makeWmCall("x");
+	const destroy = makeDestroyCallForTest("y");
+	const stmts: Node[] = [wm, destroy];
+	const result = optimizeBlock(stmts);
+	// Different vars — both preserved
+	check(result.length === 2);
+}
+
+test "eliminates multiple pairs" {
+	const wm1 = makeWmCall("a");
+	const d1 = makeDestroyCallForTest("a");
+	const wm2 = makeWmCall("b");
+	const d2 = makeDestroyCallForTest("b");
+	const stmts: Node[] = [wm1, d1, wm2, d2];
+	const result = optimizeBlock(stmts);
+	// Both destroy calls eliminated
+	check(result.length === 2);
+}
+
+test "preserves standalone wasMoved" {
+	const wm = makeWmCall("x");
+	const other = makeOtherStmt();
+	const stmts: Node[] = [wm, other];
+	const result = optimizeBlock(stmts);
+	check(result.length === 2);
+}
+
+test "preserves standalone destroy" {
+	const destroy = makeDestroyCallForTest("x");
+	const other = makeOtherStmt();
+	const stmts: Node[] = [destroy, other];
+	const result = optimizeBlock(stmts);
+	check(result.length === 2);
+}
+
+test "extracts var from wasMoved call" {
+	const wm = makeWmCall("myVar");
+	const name = getWasMovedVar(wm);
+	check(name === "myVar");
+}
+
+test "returns empty for non-wasMoved" {
+	const other = makeOtherStmt();
+	const name = getWasMovedVar(other);
+	check(name === "");
+}
+
+test "if/else both move same var → eliminate destroy" {
+	const loc = testLoc();
+	// Build: if (cond) { wasMoved(x); } else { wasMoved(x); } destroy(x);
+	const wmCons = makeWmCall("x");
+	const consBlock = makeBlock([wmCons], loc);
+	const wmAlt = makeWmCall("x");
+	const altBlock = makeBlock([wmAlt], loc);
+	const ifNode: Node = {
+		kind: NodeKind.IfStmt, location: loc,
+		data: { condition: makeIdent("cond", loc), consequent: consBlock, alternate: altBlock },
+	};
+	const destroy = makeDestroyCallForTest("x");
+	const stmts: Node[] = [ifNode, destroy];
+	const result = optimizeBlock(stmts);
+	// destroy(x) eliminated — x was moved on all paths
+	check(result.length === 1);
+}
+
+test "if without else → preserve destroy" {
+	const loc = testLoc();
+	const wmCons = makeWmCall("x");
+	const consBlock = makeBlock([wmCons], loc);
+	const ifNode: Node = {
+		kind: NodeKind.IfStmt, location: loc,
+		data: { condition: makeIdent("cond", loc), consequent: consBlock, alternate: null as unknown as Node },
+	};
+	const destroy = makeDestroyCallForTest("x");
+	const stmts: Node[] = [ifNode, destroy];
+	const result = optimizeBlock(stmts);
+	// No else — can't guarantee moved, destroy preserved
+	check(result.length === 2);
+}
+
+test "if/else move different vars → preserve both destroys" {
+	const loc = testLoc();
+	const consBlock = makeBlock([makeWmCall("x")], loc);
+	const altBlock = makeBlock([makeWmCall("y")], loc);
+	const ifNode: Node = {
+		kind: NodeKind.IfStmt, location: loc,
+		data: { condition: makeIdent("cond", loc), consequent: consBlock, alternate: altBlock },
+	};
+	const destroyX = makeDestroyCallForTest("x");
+	const destroyY = makeDestroyCallForTest("y");
+	const stmts: Node[] = [ifNode, destroyX, destroyY];
+	const result = optimizeBlock(stmts);
+	// Neither is moved on ALL paths — both preserved
+	check(result.length === 3);
+}

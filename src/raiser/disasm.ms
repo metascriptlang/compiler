@@ -1,7 +1,7 @@
 // Raiser VM — Disassembler
 // Human-readable bytecode formatting for debugging and test output.
 
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import {
 	RaiserOpcode, RaiserInstruction,
 	raiserABC, raiserABx, raiserAx,
@@ -119,39 +119,36 @@ export function printModule(mod: RaiserModule): void {
 }
 
 // --- Tests ---
+test "ABC instruction format" {
+	const inst = raiserABC(RaiserOpcode.AddI64, 2, 0, 1);
+	check(disasmInst(inst) === "AddI64 R2 R0 R1");
+}
 
-testGroup("Disassembler", () => {
-	test("ABC instruction format", () => {
-		const inst = raiserABC(RaiserOpcode.AddI64, 2, 0, 1);
-		check(disasmInst(inst) === "AddI64 R2 R0 R1");
-	});
+test "ABx instruction format" {
+	const inst = raiserABx(RaiserOpcode.LoadConst, 0, 3);
+	check(disasmInst(inst) === "LoadConst R0 K3");
+}
 
-	test("ABx instruction format", () => {
-		const inst = raiserABx(RaiserOpcode.LoadConst, 0, 3);
-		check(disasmInst(inst) === "LoadConst R0 K3");
-	});
+test "Ax instruction format" {
+	const inst = raiserAx(RaiserOpcode.Jump, -4);
+	check(disasmInst(inst) === "Jump -4");
+}
 
-	test("Ax instruction format", () => {
-		const inst = raiserAx(RaiserOpcode.Jump, -4);
-		check(disasmInst(inst) === "Jump -4");
-	});
+test "Halt format" {
+	const inst = raiserABC(RaiserOpcode.Halt, 2, 0, 0);
+	check(disasmInst(inst) === "Halt R2 R0 R0");
+}
 
-	test("Halt format", () => {
-		const inst = raiserABC(RaiserOpcode.Halt, 2, 0, 0);
-		check(disasmInst(inst) === "Halt R2 R0 R0");
-	});
-
-	test("disasmFunc includes constant annotations", () => {
-		const mod = makeTestModule(
-			[
-				raiserABx(RaiserOpcode.LoadConst, 0, 0),
-				raiserABC(RaiserOpcode.Halt, 0, 0, 0),
-			],
-			[raiserInt(42)]
-		);
-		const entry = getModuleEntry(mod);
-		const s = disasmFunc(entry);
-		check(s.length > 0);
-		// Should contain "LoadConst" and the constant value annotation
-	});
-});
+test "disasmFunc includes constant annotations" {
+	const mod = makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),
+			raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+		],
+		[raiserInt(42)]
+	);
+	const entry = getModuleEntry(mod);
+	const s = disasmFunc(entry);
+	check(s.length > 0);
+	// Should contain "LoadConst" and the constant value annotation
+}

@@ -4,7 +4,7 @@
 import { Token, TokenKind, identToKeyword } from "./token";
 import { LexerState, createLexerState, peek, peekAt, advanceChar, skip, addToken } from "./state";
 import { isDigit, isHexDigit, isLetter, isAlphanumeric, isBinaryDigit, isOctalDigit } from "./chars";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 // ===== Shared Escape Sequence Handler =====
 
@@ -445,227 +445,212 @@ export function scanPunctuation(s: LexerState): boolean {
 }
 
 // ===== Tests =====
+test "integer" {
+	const s = createLexerState("42");
+	scanNumber(s);
+	check(s.tokens.length === 1);
+	check(s.tokens[0].kind === TokenKind.Number);
+	check(s.tokens[0].value === "42");
+}
 
-testGroup("Scan Number", () => {
-	test("integer", () => {
-		const s = createLexerState("42");
-		scanNumber(s);
-		check(s.tokens.length === 1);
-		check(s.tokens[0].kind === TokenKind.Number);
-		check(s.tokens[0].value === "42");
-	});
+test "float" {
+	const s = createLexerState("3.14");
+	scanNumber(s);
+	check(s.tokens[0].kind === TokenKind.Number);
+	check(s.tokens[0].value === "3.14");
+}
 
-	test("float", () => {
-		const s = createLexerState("3.14");
-		scanNumber(s);
-		check(s.tokens[0].kind === TokenKind.Number);
-		check(s.tokens[0].value === "3.14");
-	});
+test "hex" {
+	const s = createLexerState("0xFF");
+	scanNumber(s);
+	check(s.tokens[0].value === "0xFF");
+}
 
-	test("hex", () => {
-		const s = createLexerState("0xFF");
-		scanNumber(s);
-		check(s.tokens[0].value === "0xFF");
-	});
+test "hex with underscore" {
+	const s = createLexerState("0xFF_FF");
+	scanNumber(s);
+	check(s.tokens[0].value === "0xFFFF");
+}
 
-	test("hex with underscore", () => {
-		const s = createLexerState("0xFF_FF");
-		scanNumber(s);
-		check(s.tokens[0].value === "0xFFFF");
-	});
+test "binary" {
+	const s = createLexerState("0b1010");
+	scanNumber(s);
+	check(s.tokens[0].value === "0b1010");
+}
 
-	test("binary", () => {
-		const s = createLexerState("0b1010");
-		scanNumber(s);
-		check(s.tokens[0].value === "0b1010");
-	});
+test "octal" {
+	const s = createLexerState("0o777");
+	scanNumber(s);
+	check(s.tokens[0].value === "0o777");
+}
 
-	test("octal", () => {
-		const s = createLexerState("0o777");
-		scanNumber(s);
-		check(s.tokens[0].value === "0o777");
-	});
+test "underscore separator" {
+	const s = createLexerState("1_000_000");
+	scanNumber(s);
+	check(s.tokens[0].value === "1000000");
+}
 
-	test("underscore separator", () => {
-		const s = createLexerState("1_000_000");
-		scanNumber(s);
-		check(s.tokens[0].value === "1000000");
-	});
+test "exponent" {
+	const s = createLexerState("1e10");
+	scanNumber(s);
+	check(s.tokens[0].value === "1e10");
+}
 
-	test("exponent", () => {
-		const s = createLexerState("1e10");
-		scanNumber(s);
-		check(s.tokens[0].value === "1e10");
-	});
+test "negative exponent" {
+	const s = createLexerState("1.5e-3");
+	scanNumber(s);
+	check(s.tokens[0].value === "1.5e-3");
+}
 
-	test("negative exponent", () => {
-		const s = createLexerState("1.5e-3");
-		scanNumber(s);
-		check(s.tokens[0].value === "1.5e-3");
-	});
+test "bigint" {
+	const s = createLexerState("123n");
+	scanNumber(s);
+	check(s.tokens[0].kind === TokenKind.BigInt);
+	check(s.tokens[0].value === "123n");
+}
 
-	test("bigint", () => {
-		const s = createLexerState("123n");
-		scanNumber(s);
-		check(s.tokens[0].kind === TokenKind.BigInt);
-		check(s.tokens[0].value === "123n");
-	});
+test "does not consume dot before non-digit" {
+	const s = createLexerState("0.x");
+	scanNumber(s);
+	check(s.tokens[0].value === "0");
+	check(s.pos === 1);
+}
 
-	test("does not consume dot before non-digit", () => {
-		const s = createLexerState("0.x");
-		scanNumber(s);
-		check(s.tokens[0].value === "0");
-		check(s.pos === 1);
-	});
-});
+test "double-quoted" {
+	const s = createLexerState("\"hello\"");
+	scanString(s, "\"".code);
+	check(s.tokens[0].kind === TokenKind.String);
+	check(s.tokens[0].value === "hello");
+}
 
-testGroup("Scan String", () => {
-	test("double-quoted", () => {
-		const s = createLexerState("\"hello\"");
-		scanString(s, "\"".code);
-		check(s.tokens[0].kind === TokenKind.String);
-		check(s.tokens[0].value === "hello");
-	});
+test "single-quoted" {
+	const s = createLexerState("'world'");
+	scanString(s, "'".code);
+	check(s.tokens[0].value === "world");
+}
 
-	test("single-quoted", () => {
-		const s = createLexerState("'world'");
-		scanString(s, "'".code);
-		check(s.tokens[0].value === "world");
-	});
+test "escape sequences" {
+	const s = createLexerState("\"a\\nb\\tc\"");
+	scanString(s, "\"".code);
+	check(s.tokens[0].value === "a\nb\tc");
+}
 
-	test("escape sequences", () => {
-		const s = createLexerState("\"a\\nb\\tc\"");
-		scanString(s, "\"".code);
-		check(s.tokens[0].value === "a\nb\tc");
-	});
+test "escaped quote" {
+	const s = createLexerState("\"say \\\"hi\\\"\"");
+	scanString(s, "\"".code);
+	check(s.tokens[0].value === "say \"hi\"");
+}
 
-	test("escaped quote", () => {
-		const s = createLexerState("\"say \\\"hi\\\"\"");
-		scanString(s, "\"".code);
-		check(s.tokens[0].value === "say \"hi\"");
-	});
+test "empty" {
+	const s = createLexerState("\"\"");
+	scanString(s, "\"".code);
+	check(s.tokens[0].value === "");
+}
 
-	test("empty", () => {
-		const s = createLexerState("\"\"");
-		scanString(s, "\"".code);
-		check(s.tokens[0].value === "");
-	});
-});
+test "simple" {
+	const s = createLexerState("`hello`");
+	scanTemplateString(s);
+	check(s.tokens[0].kind === TokenKind.TemplateNoSub);
+	check(s.tokens[0].value === "hello");
+}
 
-testGroup("Scan Template Strings", () => {
-	test("simple", () => {
-		const s = createLexerState("`hello`");
-		scanTemplateString(s);
-		check(s.tokens[0].kind === TokenKind.TemplateNoSub);
-		check(s.tokens[0].value === "hello");
-	});
+test "with substitution start" {
+	const s = createLexerState("`hi ${");
+	scanTemplateString(s);
+	check(s.tokens[0].kind === TokenKind.TemplateHead);
+	check(s.tokens[0].value === "hi ");
+}
 
-	test("with substitution start", () => {
-		const s = createLexerState("`hi ${");
-		scanTemplateString(s);
-		check(s.tokens[0].kind === TokenKind.TemplateHead);
-		check(s.tokens[0].value === "hi ");
-	});
+test "escaped backtick" {
+	const s = createLexerState("`a\\`b`");
+	scanTemplateString(s);
+	check(s.tokens[0].value === "a`b");
+}
 
-	test("escaped backtick", () => {
-		const s = createLexerState("`a\\`b`");
-		scanTemplateString(s);
-		check(s.tokens[0].value === "a`b");
-	});
+test "escaped dollar" {
+	const s = createLexerState("`\\$100`");
+	scanTemplateString(s);
+	check(s.tokens[0].value === "$100");
+}
 
-	test("escaped dollar", () => {
-		const s = createLexerState("`\\$100`");
-		scanTemplateString(s);
-		check(s.tokens[0].value === "$100");
-	});
-});
+test "simple" {
+	const s = createLexerState("myVar");
+	scanIdentifier(s);
+	check(s.tokens[0].kind === TokenKind.Ident);
+	check(s.tokens[0].value === "myVar");
+}
 
-testGroup("Scan Identifiers", () => {
-	test("simple", () => {
-		const s = createLexerState("myVar");
-		scanIdentifier(s);
-		check(s.tokens[0].kind === TokenKind.Ident);
-		check(s.tokens[0].value === "myVar");
-	});
+test "keyword" {
+	const s = createLexerState("const");
+	scanIdentifier(s);
+	check(s.tokens[0].kind === TokenKind.Const);
+	check(s.tokens[0].value === "const");
+}
 
-	test("keyword", () => {
-		const s = createLexerState("const");
-		scanIdentifier(s);
-		check(s.tokens[0].kind === TokenKind.Const);
-		check(s.tokens[0].value === "const");
-	});
+test "keyword prefix is ident" {
+	const s = createLexerState("constX");
+	scanIdentifier(s);
+	check(s.tokens[0].kind === TokenKind.Ident);
+	check(s.tokens[0].value === "constX");
+}
 
-	test("keyword prefix is ident", () => {
-		const s = createLexerState("constX");
-		scanIdentifier(s);
-		check(s.tokens[0].kind === TokenKind.Ident);
-		check(s.tokens[0].value === "constX");
-	});
-});
+test "line comment" {
+	const s = createLexerState("// comment\ncode");
+	skip(s, 2);
+	skipLineComment(s);
+	check(peek(s) === "\n".code);
+}
 
-testGroup("Skip Comment", () => {
-	test("line comment", () => {
-		const s = createLexerState("// comment\ncode");
-		skip(s, 2);
-		skipLineComment(s);
-		check(peek(s) === "\n".code);
-	});
+test "block comment" {
+	const s = createLexerState("/* block */rest");
+	skip(s, 2);
+	skipBlockComment(s);
+	check(s.source.charAt(s.pos) === "r");
+}
 
-	test("block comment", () => {
-		const s = createLexerState("/* block */rest");
-		skip(s, 2);
-		skipBlockComment(s);
-		check(s.source.charAt(s.pos) === "r");
-	});
-});
+test "===" {
+	const s = createLexerState("===");
+	check(scanOperator(s));
+	check(s.tokens[0].kind === TokenKind.EqEqEq);
+}
 
-testGroup("Scan Operators", () => {
-	test("===", () => {
-		const s = createLexerState("===");
-		check(scanOperator(s));
-		check(s.tokens[0].kind === TokenKind.EqEqEq);
-	});
+test "!==" {
+	const s = createLexerState("!==");
+	check(scanOperator(s));
+	check(s.tokens[0].kind === TokenKind.BangEqEq);
+}
 
-	test("!==", () => {
-		const s = createLexerState("!==");
-		check(scanOperator(s));
-		check(s.tokens[0].kind === TokenKind.BangEqEq);
-	});
+test ">>>" {
+	const s = createLexerState(">>>");
+	check(scanOperator(s));
+	check(s.tokens[0].kind === TokenKind.GtGtGt);
+}
 
-	test(">>>", () => {
-		const s = createLexerState(">>>");
-		check(scanOperator(s));
-		check(s.tokens[0].kind === TokenKind.GtGtGt);
-	});
+test "=>" {
+	const s = createLexerState("=>");
+	check(scanOperator(s));
+	check(s.tokens[0].kind === TokenKind.Arrow);
+}
 
-	test("=>", () => {
-		const s = createLexerState("=>");
-		check(scanOperator(s));
-		check(s.tokens[0].kind === TokenKind.Arrow);
-	});
+test "line comment consumed" {
+	const s = createLexerState("// comment\nx");
+	check(scanOperator(s));
+	check(s.tokens.length === 0);
+}
 
-	test("line comment consumed", () => {
-		const s = createLexerState("// comment\nx");
-		check(scanOperator(s));
-		check(s.tokens.length === 0);
-	});
+test "unrecognized char returns false" {
+	const s = createLexerState("a");
+	check(!scanOperator(s));
+	check(s.tokens.length === 0);
+}
 
-	test("unrecognized char returns false", () => {
-		const s = createLexerState("a");
-		check(!scanOperator(s));
-		check(s.tokens.length === 0);
-	});
-});
+test "all delimiters" {
+	const s = createLexerState("(");
+	check(scanPunctuation(s));
+	check(s.tokens[0].kind === TokenKind.LParen);
+}
 
-testGroup("Scan Punctuation", () => {
-	test("all delimiters", () => {
-		const s = createLexerState("(");
-		check(scanPunctuation(s));
-		check(s.tokens[0].kind === TokenKind.LParen);
-	});
-
-	test("unrecognized returns false", () => {
-		const s = createLexerState("a");
-		check(!scanPunctuation(s));
-	});
-});
+test "unrecognized returns false" {
+	const s = createLexerState("a");
+	check(!scanPunctuation(s));
+}

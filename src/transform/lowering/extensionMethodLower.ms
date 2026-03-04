@@ -15,7 +15,7 @@ import { makeIdent, makeCall } from "../util";
 import { lookupSymbol } from "../../checker/symbol";
 import { TypeKind, getProperty, typeNameOf } from "../../checker/types";
 import { ExtensionRegistry, hasExtensionByName, findExtension } from "../../checker/context";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { parseInput, getStmts, firstCalleeKind, firstCallArgCount } from "../testUtil";
 import { createTransformContext, createTransformContextWithChecker } from "../context";
 import { createContext, registerExtension, ExtensionMethod } from "../../checker/context";
@@ -28,22 +28,18 @@ import { unknownType, createObject, createFunction } from "../../checker/types";
 // If so, it's a regular member call (class/interface method), not an extension.
 function receiverHasProperty(ctx: TransformContext, obj: Node, name: string): boolean {
 	if (ctx.checkerCtx === null) return false;
-	if (obj.kind !== NodeKind.Identifier) return false;
-	const d = obj.data as IdentifierData;
-	const sym = lookupSymbol(ctx.checkerCtx.table, d.name);
-	if (sym === null) return false;
-	const prop = getProperty(sym.symbolType, name);
+	const objType = obj.nodeType;
+	if (objType === null) return false;
+	const prop = getProperty(objType, name);
 	return prop.kind !== TypeKind.Unknown;
 }
 
 // Get the type name of a receiver node for extension lookup
 function getReceiverTypeName(ctx: TransformContext, obj: Node): string {
 	if (ctx.checkerCtx === null) return "";
-	if (obj.kind !== NodeKind.Identifier) return "";
-	const d = obj.data as IdentifierData;
-	const sym = lookupSymbol(ctx.checkerCtx.table, d.name);
-	if (sym === null) return "";
-	return typeNameOf(sym.symbolType);
+	const objType = obj.nodeType;
+	if (objType === null) return "";
+	return typeNameOf(objType);
 }
 
 // ===== Visitor =====
@@ -73,7 +69,12 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 	const loc = node.location;
 	// Static extension: Math.floor(x) → floor(x) — no receiver prepend
 	if (ext !== null && ext.isStatic) {
-		return makeCall(makeIdent(methodName, loc), call.arguments, loc);
+		const newCall = makeCall(makeIdent(methodName, loc), call.arguments, loc);
+		// Propagate resolvedSym from the registry/table
+		const extSym = lookupSymbol(ctx.checkerCtx.table, methodName);
+		if (extSym !== null) newCall.resolvedSym = extSym;
+		newCall.nodeType = node.nodeType;
+		return newCall;
 	}
 	// Instance extension: s.trim() → trim(s) — prepend receiver
 	const newArgs: Node[] = [];
@@ -81,7 +82,12 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 	for (let ai = 0; ai < call.arguments.length; ai += 1) {
 		newArgs.push(call.arguments[ai]);
 	}
-	return makeCall(makeIdent(methodName, loc), newArgs, loc);
+	const newCall = makeCall(makeIdent(methodName, loc), newArgs, loc);
+	// Propagate resolvedSym
+	const extSym = lookupSymbol(ctx.checkerCtx.table, methodName);
+	if (extSym !== null) newCall.resolvedSym = extSym;
+	newCall.nodeType = node.nodeType;
+	return newCall;
 }
 
 // ===== Entry Point =====
@@ -129,84 +135,90 @@ function makePushExt(): ExtensionMethod {
 	return ext;
 }
 
-testGroup("Extension Method Lowering", () => {
-	test("extension call rewritten to direct call", () => {
-		const prog = setupExtensionCtx("s.trim();", makeTrimExt());
-		check(firstCalleeKind(prog) === NodeKind.Identifier);
-	});
-	test("non-extension call unchanged", () => {
-		const result = parseInput("foo.bar();");
-		if (!result.ok) return;
-		const cc = createContext();
-		const ctx = createTransformContextWithChecker(cc);
-		const prog = lowerExtensionMethod(result.value, ctx);
-		check(firstCalleeKind(prog) === NodeKind.MemberExpr);
-	});
-	test("no checker context no rewrite", () => {
-		const result = parseInput("s.trim();");
-		if (!result.ok) return;
-		const ctx = createTransformContext();
-		const prog = lowerExtensionMethod(result.value, ctx);
-		check(firstCalleeKind(prog) === NodeKind.MemberExpr);
-	});
-	test("extension with args prepends receiver", () => {
-		const prog = setupExtensionCtx("a.push(1);", makePushExt());
-		check(firstCallArgCount(prog) === 2);
-	});
-	test("extension no args gets receiver only", () => {
-		const prog = setupExtensionCtx("s.trim();", makeTrimExt());
-		check(firstCallArgCount(prog) === 1);
-	});
-	test("class member takes priority over extension", () => {
-		const result = parseInput("t.run();");
-		if (!result.ok) return;
-		const cc = createContext();
-		const ext: ExtensionMethod = {
-			methodName: "run",
-			receiverTypeName: "string",
-			sourcePath: "",
-			fnType: createFunction([], [], unknownType()),
-			isStatic: false,
-		};
-		registerExtension(cc.extensionRegistry, ext);
-		const fnSym = makeSymbol("run", SymbolKind.Function, ext.fnType, false);
-		defineSymbol(cc.table, fnSym);
-		const taskType = createObject("Task", ["run"], [createFunction([], [], unknownType())], false);
-		const tSym = makeSymbol("t", SymbolKind.Variable, taskType, false);
-		defineSymbol(cc.table, tSym);
-		const ctx = createTransformContextWithChecker(cc);
-		const prog = lowerExtensionMethod(result.value, ctx);
-		check(firstCalleeKind(prog) === NodeKind.MemberExpr);
-	});
-	test("regular function call unchanged", () => {
-		const prog = setupExtensionCtx("trim();", makeTrimExt());
-		check(firstCalleeKind(prog) === NodeKind.Identifier);
-	});
-	test("non-matching method unchanged", () => {
-		const prog = setupExtensionCtx("s.length();", makeTrimExt());
-		check(firstCalleeKind(prog) === NodeKind.MemberExpr);
-	});
-	test("static extension no receiver prepend", () => {
-		const result = parseInput("Math.floor(3.7);");
-		if (!result.ok) return;
-		const cc = createContext();
-		const ext: ExtensionMethod = {
-			methodName: "floor",
-			receiverTypeName: "Math",
-			sourcePath: "",
-			fnType: createFunction([unknownType()], ["x"], unknownType()),
-			isStatic: true,
-		};
-		registerExtension(cc.extensionRegistry, ext);
-		const fnSym = makeSymbol("floor", SymbolKind.Function, ext.fnType, false);
-		defineSymbol(cc.table, fnSym);
-		// Math is an identifier with Object type "Math"
-		const mathType = createObject("Math", [], [], false);
-		const mathSym = makeSymbol("Math", SymbolKind.Variable, mathType, false);
-		defineSymbol(cc.table, mathSym);
-		const ctx = createTransformContextWithChecker(cc);
-		const prog = lowerExtensionMethod(result.value, ctx);
-		// Should rewrite to floor(3.7) — callee is Identifier, not MemberExpr
-		check(firstCalleeKind(prog) === NodeKind.Identifier);
-	});
-});
+test "extension call rewritten to direct call" {
+	const prog = setupExtensionCtx("s.trim();", makeTrimExt());
+	check(firstCalleeKind(prog) === NodeKind.Identifier);
+}
+
+test "non-extension call unchanged" {
+	const result = parseInput("foo.bar();");
+	if (!result.ok) return;
+	const cc = createContext();
+	const ctx = createTransformContextWithChecker(cc);
+	const prog = lowerExtensionMethod(result.value, ctx);
+	check(firstCalleeKind(prog) === NodeKind.MemberExpr);
+}
+
+test "no checker context no rewrite" {
+	const result = parseInput("s.trim();");
+	if (!result.ok) return;
+	const ctx = createTransformContext();
+	const prog = lowerExtensionMethod(result.value, ctx);
+	check(firstCalleeKind(prog) === NodeKind.MemberExpr);
+}
+
+test "extension with args prepends receiver" {
+	const prog = setupExtensionCtx("a.push(1);", makePushExt());
+	check(firstCallArgCount(prog) === 2);
+}
+
+test "extension no args gets receiver only" {
+	const prog = setupExtensionCtx("s.trim();", makeTrimExt());
+	check(firstCallArgCount(prog) === 1);
+}
+
+test "class member takes priority over extension" {
+	const result = parseInput("t.run();");
+	if (!result.ok) return;
+	const cc = createContext();
+	const ext: ExtensionMethod = {
+		methodName: "run",
+		receiverTypeName: "string",
+		sourcePath: "",
+		fnType: createFunction([], [], unknownType()),
+		isStatic: false,
+	};
+	registerExtension(cc.extensionRegistry, ext);
+	const fnSym = makeSymbol("run", SymbolKind.Function, ext.fnType, false);
+	defineSymbol(cc.table, fnSym);
+	const taskType = createObject("Task", ["run"], [createFunction([], [], unknownType())], false);
+	const tSym = makeSymbol("t", SymbolKind.Variable, taskType, false);
+	defineSymbol(cc.table, tSym);
+	const ctx = createTransformContextWithChecker(cc);
+	const prog = lowerExtensionMethod(result.value, ctx);
+	check(firstCalleeKind(prog) === NodeKind.MemberExpr);
+}
+
+test "regular function call unchanged" {
+	const prog = setupExtensionCtx("trim();", makeTrimExt());
+	check(firstCalleeKind(prog) === NodeKind.Identifier);
+}
+
+test "non-matching method unchanged" {
+	const prog = setupExtensionCtx("s.length();", makeTrimExt());
+	check(firstCalleeKind(prog) === NodeKind.MemberExpr);
+}
+
+test "static extension no receiver prepend" {
+	const result = parseInput("Math.floor(3.7);");
+	if (!result.ok) return;
+	const cc = createContext();
+	const ext: ExtensionMethod = {
+		methodName: "floor",
+		receiverTypeName: "Math",
+		sourcePath: "",
+		fnType: createFunction([unknownType()], ["x"], unknownType()),
+		isStatic: true,
+	};
+	registerExtension(cc.extensionRegistry, ext);
+	const fnSym = makeSymbol("floor", SymbolKind.Function, ext.fnType, false);
+	defineSymbol(cc.table, fnSym);
+	// Math is an identifier with Object type "Math"
+	const mathType = createObject("Math", [], [], false);
+	const mathSym = makeSymbol("Math", SymbolKind.Variable, mathType, false);
+	defineSymbol(cc.table, mathSym);
+	const ctx = createTransformContextWithChecker(cc);
+	const prog = lowerExtensionMethod(result.value, ctx);
+	// Should rewrite to floor(3.7) — callee is Identifier, not MemberExpr
+	check(firstCalleeKind(prog) === NodeKind.Identifier);
+}

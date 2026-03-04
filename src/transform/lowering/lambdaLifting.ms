@@ -15,7 +15,7 @@
 //   }
 
 import {
-	Node, NodeKind, SourceLocation,
+	Node, NodeKind, SourceLocation, NF_CLOSURE,
 	ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData,
 	FunctionExprData, MethodDeclData, ConstructorDeclData,
 	ExportDeclData, ClassDeclData, DecoratedDeclData,
@@ -31,7 +31,7 @@ import {
 	makeIdent, makeMember,
 	makeFnDecl, makeInterfaceDecl, makeObjectLiteral,
 } from "../util";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
 // ===== Scope Stack =====
@@ -122,7 +122,7 @@ function createLiftState(): LiftState {
 // NOTE: string[] is VALUE TYPE in MetaScript — wrap in interface for mutation propagation.
 
 function detectCaptures(body: Node, ss: ScopeStack): NameSet {
-	const cc: NameSet = { names: [] };
+	const cc: NameSet = [];
 	collectCaptures(body, ss, cc);
 	return cc;
 }
@@ -175,7 +175,7 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 	// Env struct
 	const envFields: string[] = [];
 	const envFieldTypes: string[] = [];
-	for (const name of captures.names) {
+	for (const name of captures) {
 		envFields.push(name);
 		envFieldTypes.push("unknown");
 	}
@@ -219,7 +219,7 @@ function liftNonCapturing(body: Node, params: string[], paramTypes: string[], fl
 function makeClosurePair(liftedName: string, captures: NameSet, loc: SourceLocation): Node {
 	const envKeys: string[] = [];
 	const envValues: Node[] = [];
-	for (const name of captures.names) {
+	for (const name of captures) {
 		envKeys.push(name);
 		envValues.push(makeIdent(name, loc));
 	}
@@ -231,7 +231,9 @@ function makeClosurePair(liftedName: string, captures: NameSet, loc: SourceLocat
 	const closureValues: Node[] = [];
 	closureValues.push(makeIdent(liftedName, loc));
 	closureValues.push(envObj);
-	return makeObjectLiteral(closureKeys, closureValues, loc);
+	const pair = makeObjectLiteral(closureKeys, closureValues, loc);
+	pair.flags = pair.flags | NF_CLOSURE;
+	return pair;
 }
 
 // ===== Main Walk =====
@@ -376,6 +378,7 @@ function walkLiftBody(body: Node, state: LiftState): void {
 // Walk a node, lifting closures if it's an ArrowFunction/FunctionExpr with captures.
 // Returns the (possibly replaced) node.
 function walkOrLift(node: Node, state: LiftState): Node {
+	if (node === null) return null as unknown as Node;
 	if (node.kind === NodeKind.ArrowFunction || node.kind === NodeKind.FunctionExpr) {
 		return tryLiftClosure(node, state);
 	}
@@ -393,7 +396,7 @@ function tryLiftClosure(node: Node, state: LiftState): Node {
 		for (const p of d.arrowParams) { defineVar(state.ss, p); }
 		const captures = detectCaptures(d.arrowBody, state.ss);
 		popFuncBoundary(state.ss);
-		if (captures.names.length > 0) {
+		if (captures.length > 0) {
 			return liftArrow(node, captures, state);
 		}
 		// Non-capturing: lift to module-level FunctionDecl, return Identifier
@@ -403,7 +406,7 @@ function tryLiftClosure(node: Node, state: LiftState): Node {
 		for (const p of d.funcExprParams) { defineVar(state.ss, p); }
 		const captures = detectCaptures(d.funcExprBody, state.ss);
 		popFuncBoundary(state.ss);
-		if (captures.names.length > 0) {
+		if (captures.length > 0) {
 			return liftFuncExpr(node, captures, state);
 		}
 		// Non-capturing: lift to module-level FunctionDecl, return Identifier
@@ -444,40 +447,37 @@ export function lowerLambda(program: Node, ctx: TransformContext): Node {
 }
 
 // ===== Tests =====
+test "no closures passthrough" { check(stmtCountAfter("const x = 1;", lowerLambda) === 1); }
 
-testGroup("Lambda Lifting", () => {
-	test("no closures passthrough", () => {
-		check(stmtCountAfter("const x = 1;", lowerLambda) === 1);
-	});
-	test("function without capture unchanged", () => {
-		check(firstStmtKindAfter("function foo(x) { return x; }", lowerLambda) === NodeKind.FunctionDecl);
-	});
-	test("non-capturing arrow lifted", () => {
-		// Arrow lifted to module-level FunctionDecl + original VariableDecl = 2 stmts
-		check(stmtCountAfter("const f = (x) => x + 1;", lowerLambda) === 2);
-		check(firstStmtKindAfter("const f = (x) => x + 1;", lowerLambda) === NodeKind.FunctionDecl);
-	});
-	test("non-capturing arrow in function lifted", () => {
-		// Inner arrow lifted to program level: lifted fn + outer fn = 2 stmts
-		check(stmtCountAfter("function f(x) { const g = (y) => y + 1; }", lowerLambda) === 2);
-	});
-	test("arrow with capture generates 3 stmts", () => {
-		// function outer() { let x = 1; const f = () => x; }
-		// → env struct + lifted fn + original fn = 3 stmts
-		check(stmtCountAfter("function outer() { let x = 1; const f = () => x; }", lowerLambda) === 3);
-	});
-	test("env struct is first stmt", () => {
-		check(firstStmtKindAfter("function outer() { let x = 1; const f = () => x; }", lowerLambda) === NodeKind.InterfaceDecl);
-	});
-	test("builtin name not captured", () => {
-		// Arrow referencing builtin is non-capturing, but still lifted: lifted fn + outer fn = 2
-		check(stmtCountAfter("function f() { const g = () => console; }", lowerLambda) === 2);
-	});
-	test("multiple captures one env", () => {
-		check(stmtCountAfter("function f() { let a = 1; let b = 2; const g = () => a + b; }", lowerLambda) === 3);
-	});
-	test("non-capturing function expr lifted", () => {
-		check(stmtCountAfter("const f = function(x) { return x + 1; };", lowerLambda) === 2);
-		check(firstStmtKindAfter("const f = function(x) { return x + 1; };", lowerLambda) === NodeKind.FunctionDecl);
-	});
-});
+test "function without capture unchanged" { check(firstStmtKindAfter("function foo(x) { return x; }", lowerLambda) === NodeKind.FunctionDecl); }
+
+test "non-capturing arrow lifted" {
+	// Arrow lifted to module-level FunctionDecl + original VariableDecl = 2 stmts
+	check(stmtCountAfter("const f = (x) => x + 1;", lowerLambda) === 2);
+	check(firstStmtKindAfter("const f = (x) => x + 1;", lowerLambda) === NodeKind.FunctionDecl);
+}
+
+test "non-capturing arrow in function lifted" {
+	// Inner arrow lifted to program level: lifted fn + outer fn = 2 stmts
+	check(stmtCountAfter("function f(x) { const g = (y) => y + 1; }", lowerLambda) === 2);
+}
+
+test "arrow with capture generates 3 stmts" {
+	// function outer() { let x = 1; const f = () => x; }
+	// → env struct + lifted fn + original fn = 3 stmts
+	check(stmtCountAfter("function outer() { let x = 1; const f = () => x; }", lowerLambda) === 3);
+}
+
+test "env struct is first stmt" { check(firstStmtKindAfter("function outer() { let x = 1; const f = () => x; }", lowerLambda) === NodeKind.InterfaceDecl); }
+
+test "builtin name not captured" {
+	// Arrow referencing builtin is non-capturing, but still lifted: lifted fn + outer fn = 2
+	check(stmtCountAfter("function f() { const g = () => console; }", lowerLambda) === 2);
+}
+
+test "multiple captures one env" { check(stmtCountAfter("function f() { let a = 1; let b = 2; const g = () => a + b; }", lowerLambda) === 3); }
+
+test "non-capturing function expr lifted" {
+	check(stmtCountAfter("const f = function(x) { return x + 1; };", lowerLambda) === 2);
+	check(firstStmtKindAfter("const f = function(x) { return x + 1; };", lowerLambda) === NodeKind.FunctionDecl);
+}

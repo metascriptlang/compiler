@@ -2,7 +2,7 @@
 // Day-1: flat tagged interface. No NaN-boxing.
 // Bool stored as intVal (0/1) to keep the interface simple.
 
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 export enum RaiserValueKind {
 	Nil,
@@ -110,84 +110,75 @@ export function raiserToString(v: RaiserValue): string {
 }
 
 // --- Tests ---
+test "nil" {
+	const v = raiserNil();
+	check(v.kind === RaiserValueKind.Nil);
+	check(raiserIsNil(v));
+	check(!raiserToBool(v));
+}
 
-testGroup("RaiserValue constructors", () => {
-	test("nil", () => {
-		const v = raiserNil();
-		check(v.kind === RaiserValueKind.Nil);
-		check(raiserIsNil(v));
-		check(!raiserToBool(v));
-	});
+test "bool true" {
+	const v = raiserBool(true);
+	check(v.kind === RaiserValueKind.Bool);
+	check(v.intVal === 1);
+	check(raiserToBool(v));
+}
 
-	test("bool true", () => {
-		const v = raiserBool(true);
-		check(v.kind === RaiserValueKind.Bool);
-		check(v.intVal === 1);
-		check(raiserToBool(v));
-	});
+test "bool false" {
+	const v = raiserBool(false);
+	check(v.kind === RaiserValueKind.Bool);
+	check(v.intVal === 0);
+	check(!raiserToBool(v));
+}
 
-	test("bool false", () => {
-		const v = raiserBool(false);
-		check(v.kind === RaiserValueKind.Bool);
-		check(v.intVal === 0);
-		check(!raiserToBool(v));
-	});
+test "int" {
+	const v = raiserInt(42);
+	check(v.kind === RaiserValueKind.Int);
+	check(raiserToInt(v) === 42);
+	check(raiserToBool(v));
+}
 
-	test("int", () => {
-		const v = raiserInt(42);
-		check(v.kind === RaiserValueKind.Int);
-		check(raiserToInt(v) === 42);
-		check(raiserToBool(v));
-	});
+test "int zero is falsy" {
+	const v = raiserInt(0);
+	check(!raiserToBool(v));
+}
 
-	test("int zero is falsy", () => {
-		const v = raiserInt(0);
-		check(!raiserToBool(v));
-	});
+test "float" {
+	const v = raiserFloat(3.14);
+	check(v.kind === RaiserValueKind.Float);
+	check(v.floatVal === 3.14);
+}
 
-	test("float", () => {
-		const v = raiserFloat(3.14);
-		check(v.kind === RaiserValueKind.Float);
-		check(v.floatVal === 3.14);
-	});
+test "int to float conversion" {
+	const v = raiserInt(5);
+	check(raiserToFloat(v) === 5.0);
+}
 
-	test("int to float conversion", () => {
-		const v = raiserInt(5);
-		check(raiserToFloat(v) === 5.0);
-	});
-});
+test "nil equals nil" { check(raiserEqual(raiserNil(), raiserNil())); }
 
-testGroup("RaiserValue equality", () => {
-	test("nil equals nil", () => {
-		check(raiserEqual(raiserNil(), raiserNil()));
-	});
+test "int equals same int" { check(raiserEqual(raiserInt(42), raiserInt(42))); }
 
-	test("int equals same int", () => {
-		check(raiserEqual(raiserInt(42), raiserInt(42)));
-	});
+test "int not equals different int" { check(!raiserEqual(raiserInt(1), raiserInt(2))); }
 
-	test("int not equals different int", () => {
-		check(!raiserEqual(raiserInt(1), raiserInt(2)));
-	});
+test "different kinds not equal" {
+	check(!raiserEqual(raiserInt(0), raiserNil()));
+	check(!raiserEqual(raiserInt(1), raiserBool(true)));
+}
 
-	test("different kinds not equal", () => {
-		check(!raiserEqual(raiserInt(0), raiserNil()));
-		check(!raiserEqual(raiserInt(1), raiserBool(true)));
-	});
+test "bool equality" {
+	check(raiserEqual(raiserBool(true), raiserBool(true)));
+	check(!raiserEqual(raiserBool(true), raiserBool(false)));
+}
 
-	test("bool equality", () => {
-		check(raiserEqual(raiserBool(true), raiserBool(true)));
-		check(!raiserEqual(raiserBool(true), raiserBool(false)));
-	});
-});
+test "nil" { check(raiserToString(raiserNil()) === "nil"); }
 
-testGroup("RaiserValue toString", () => {
-	test("nil", () => { check(raiserToString(raiserNil()) === "nil"); });
-	test("true", () => { check(raiserToString(raiserBool(true)) === "true"); });
-	test("false", () => { check(raiserToString(raiserBool(false)) === "false"); });
-	test("int", () => { check(raiserToString(raiserInt(42)) === "42"); });
-	test("array", () => { check(raiserToString(raiserArray(0)) === "[array]"); });
-});
+test "true" { check(raiserToString(raiserBool(true)) === "true"); }
+
+test "false" { check(raiserToString(raiserBool(false)) === "false"); }
+
+test "int" { check(raiserToString(raiserInt(42)) === "42"); }
+
+test "array" { check(raiserToString(raiserArray(0)) === "[array]"); }
 
 // --- Array Heap ---
 // Arrays live on a side heap. RaiserValue with kind=Array stores an integer handle
@@ -238,56 +229,53 @@ export function heapArrayPush(heap: RaiserArrayHeap, handle: number, val: Raiser
 }
 
 // --- Array Heap Tests ---
+test "alloc empty array" {
+	const heap = createArrayHeap();
+	const h = heapAllocArray(heap);
+	check(h === 0);
+	check(heapArrayLen(heap, h) === 0);
+}
 
-testGroup("RaiserArrayHeap", () => {
-	test("alloc empty array", () => {
-		const heap = createArrayHeap();
-		const h = heapAllocArray(heap);
-		check(h === 0);
-		check(heapArrayLen(heap, h) === 0);
-	});
+test "push and get" {
+	const heap = createArrayHeap();
+	const h = heapAllocArray(heap);
+	const v1 = raiserInt(10);
+	const v2 = raiserInt(20);
+	heapArrayPush(heap, h, v1);
+	heapArrayPush(heap, h, v2);
+	check(heapArrayLen(heap, h) === 2);
+	check(heapArrayGet(heap, h, 0).intVal === 10);
+	check(heapArrayGet(heap, h, 1).intVal === 20);
+}
 
-	test("push and get", () => {
-		const heap = createArrayHeap();
-		const h = heapAllocArray(heap);
-		const v1 = raiserInt(10);
-		const v2 = raiserInt(20);
-		heapArrayPush(heap, h, v1);
-		heapArrayPush(heap, h, v2);
-		check(heapArrayLen(heap, h) === 2);
-		check(heapArrayGet(heap, h, 0).intVal === 10);
-		check(heapArrayGet(heap, h, 1).intVal === 20);
-	});
+test "set element" {
+	const heap = createArrayHeap();
+	const h = heapAllocArray(heap);
+	const v0 = raiserInt(0);
+	heapArrayPush(heap, h, v0);
+	const v42 = raiserInt(42);
+	heapArraySet(heap, h, 0, v42);
+	check(heapArrayGet(heap, h, 0).intVal === 42);
+}
 
-	test("set element", () => {
-		const heap = createArrayHeap();
-		const h = heapAllocArray(heap);
-		const v0 = raiserInt(0);
-		heapArrayPush(heap, h, v0);
-		const v42 = raiserInt(42);
-		heapArraySet(heap, h, 0, v42);
-		check(heapArrayGet(heap, h, 0).intVal === 42);
-	});
+test "multiple arrays independent" {
+	const heap = createArrayHeap();
+	const h1 = heapAllocArray(heap);
+	const h2 = heapAllocArray(heap);
+	const v1 = raiserInt(1);
+	const v2 = raiserInt(2);
+	heapArrayPush(heap, h1, v1);
+	heapArrayPush(heap, h2, v2);
+	check(heapArrayGet(heap, h1, 0).intVal === 1);
+	check(heapArrayGet(heap, h2, 0).intVal === 2);
+}
 
-	test("multiple arrays independent", () => {
-		const heap = createArrayHeap();
-		const h1 = heapAllocArray(heap);
-		const h2 = heapAllocArray(heap);
-		const v1 = raiserInt(1);
-		const v2 = raiserInt(2);
-		heapArrayPush(heap, h1, v1);
-		heapArrayPush(heap, h2, v2);
-		check(heapArrayGet(heap, h1, 0).intVal === 1);
-		check(heapArrayGet(heap, h2, 0).intVal === 2);
-	});
-
-	test("array value kind", () => {
-		const v = raiserArray(3);
-		check(v.kind === RaiserValueKind.Array);
-		check(v.intVal === 3);
-		check(raiserToBool(v));
-	});
-});
+test "array value kind" {
+	const v = raiserArray(3);
+	check(v.kind === RaiserValueKind.Array);
+	check(v.intVal === 3);
+	check(raiserToBool(v));
+}
 
 // --- Object Heap ---
 // Objects live on a side heap like arrays. Fields stored as name-value pairs.
@@ -374,58 +362,55 @@ export function heapObjectGetObjectHandle(heap: RaiserObjectHeap, handle: number
 }
 
 // --- Object Heap Tests ---
+test "alloc empty object" {
+	const heap = createObjectHeap();
+	const h = heapAllocObject(heap);
+	check(h === 0);
+	check(heapObjectFieldCount(heap, h) === 0);
+}
 
-testGroup("RaiserObjectHeap", () => {
-	test("alloc empty object", () => {
-		const heap = createObjectHeap();
-		const h = heapAllocObject(heap);
-		check(h === 0);
-		check(heapObjectFieldCount(heap, h) === 0);
-	});
+test "set and get field" {
+	const heap = createObjectHeap();
+	const h = heapAllocObject(heap);
+	const v = raiserInt(42);
+	heapObjectSetField(heap, h, "x", v);
+	check(heapObjectFieldCount(heap, h) === 1);
+	check(heapObjectGetField(heap, h, "x").intVal === 42);
+}
 
-	test("set and get field", () => {
-		const heap = createObjectHeap();
-		const h = heapAllocObject(heap);
-		const v = raiserInt(42);
-		heapObjectSetField(heap, h, "x", v);
-		check(heapObjectFieldCount(heap, h) === 1);
-		check(heapObjectGetField(heap, h, "x").intVal === 42);
-	});
+test "multiple fields" {
+	const heap = createObjectHeap();
+	const h = heapAllocObject(heap);
+	const v1 = raiserInt(10);
+	const v2 = raiserInt(20);
+	heapObjectSetField(heap, h, "x", v1);
+	heapObjectSetField(heap, h, "y", v2);
+	check(heapObjectFieldCount(heap, h) === 2);
+	check(heapObjectGetField(heap, h, "x").intVal === 10);
+	check(heapObjectGetField(heap, h, "y").intVal === 20);
+}
 
-	test("multiple fields", () => {
-		const heap = createObjectHeap();
-		const h = heapAllocObject(heap);
-		const v1 = raiserInt(10);
-		const v2 = raiserInt(20);
-		heapObjectSetField(heap, h, "x", v1);
-		heapObjectSetField(heap, h, "y", v2);
-		check(heapObjectFieldCount(heap, h) === 2);
-		check(heapObjectGetField(heap, h, "x").intVal === 10);
-		check(heapObjectGetField(heap, h, "y").intVal === 20);
-	});
+test "update existing field" {
+	const heap = createObjectHeap();
+	const h = heapAllocObject(heap);
+	const v1 = raiserInt(1);
+	heapObjectSetField(heap, h, "x", v1);
+	const v2 = raiserInt(99);
+	heapObjectSetField(heap, h, "x", v2);
+	check(heapObjectFieldCount(heap, h) === 1);
+	check(heapObjectGetField(heap, h, "x").intVal === 99);
+}
 
-	test("update existing field", () => {
-		const heap = createObjectHeap();
-		const h = heapAllocObject(heap);
-		const v1 = raiserInt(1);
-		heapObjectSetField(heap, h, "x", v1);
-		const v2 = raiserInt(99);
-		heapObjectSetField(heap, h, "x", v2);
-		check(heapObjectFieldCount(heap, h) === 1);
-		check(heapObjectGetField(heap, h, "x").intVal === 99);
-	});
+test "get missing field returns nil" {
+	const heap = createObjectHeap();
+	const h = heapAllocObject(heap);
+	const val = heapObjectGetField(heap, h, "missing");
+	check(val.kind === RaiserValueKind.Nil);
+}
 
-	test("get missing field returns nil", () => {
-		const heap = createObjectHeap();
-		const h = heapAllocObject(heap);
-		const val = heapObjectGetField(heap, h, "missing");
-		check(val.kind === RaiserValueKind.Nil);
-	});
-
-	test("object value kind", () => {
-		const v = raiserObject(5);
-		check(v.kind === RaiserValueKind.Object);
-		check(v.intVal === 5);
-		check(raiserToBool(v));
-	});
-});
+test "object value kind" {
+	const v = raiserObject(5);
+	check(v.kind === RaiserValueKind.Object);
+	check(v.intVal === 5);
+	check(raiserToBool(v));
+}

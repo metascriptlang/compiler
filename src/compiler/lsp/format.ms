@@ -7,7 +7,7 @@
 
 import { lspJsonString, lspJsonNumber, lspJsonBool } from "./protocol";
 import { sliceStr, charAt } from "../../utils/string";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 // ===== Position + Range =====
 
@@ -149,109 +149,93 @@ export function lspFmtSignatureHelp(signaturesJson: string, activeSig: number, a
 }
 
 // ===== Tests =====
+test "basic" { check(lspFmtPosition(0, 5) === "{\"line\":0,\"character\":5}"); }
 
-testGroup("LspFmtPosition", () => {
-	test("basic", () => {
-		check(lspFmtPosition(0, 5) === "{\"line\":0,\"character\":5}");
-	});
-	test("zero", () => {
-		check(lspFmtPosition(0, 0) === "{\"line\":0,\"character\":0}");
-	});
-});
+test "zero" { check(lspFmtPosition(0, 0) === "{\"line\":0,\"character\":0}"); }
 
-testGroup("LspFmtRange", () => {
-	test("single line", () => {
-		const r = lspFmtLineRange(3, 5, 10);
-		check(r === "{\"start\":{\"line\":3,\"character\":5},\"end\":{\"line\":3,\"character\":10}}");
-	});
-	test("multi line", () => {
-		const r = lspFmtRange(1, 0, 5, 10);
-		check(r === "{\"start\":{\"line\":1,\"character\":0},\"end\":{\"line\":5,\"character\":10}}");
-	});
-});
+test "single line" {
+	const r = lspFmtLineRange(3, 5, 10);
+	check(r === "{\"start\":{\"line\":3,\"character\":5},\"end\":{\"line\":3,\"character\":10}}");
+}
 
-testGroup("LspFmtLocation", () => {
-	test("basic", () => {
-		const loc = lspFmtLocation("file:///a.ms", 0, 5, 0, 10);
-		check(loc.length > 30);
-	});
-});
+test "multi line" {
+	const r = lspFmtRange(1, 0, 5, 10);
+	check(r === "{\"start\":{\"line\":1,\"character\":0},\"end\":{\"line\":5,\"character\":10}}");
+}
 
-testGroup("LspFmtTextEdit", () => {
-	test("basic", () => {
-		const e = lspFmtTextEdit(0, 5, 8, "newName");
-		check(e.length > 30);
-	});
-});
+test "basic" {
+	const loc = lspFmtLocation("file:///a.ms", 0, 5, 0, 10);
+	check(loc.length > 30);
+}
 
-testGroup("LspFmtCompletionItem", () => {
-	test("basic", () => {
-		const item = lspFmtCompletionItem("foo", 6, "number", "11", false, "");
-		check(item.length > 20);
-	});
-	test("with sortText", () => {
-		const item = lspFmtCompletionItem("bar", 3, "()", "10", false, "");
-		check(item.length > 20);
-	});
-	test("deprecated tag", () => {
-		const item = lspFmtCompletionItem("old", 6, "string", "z11", true, "");
-		check(item.length > 30);
-	});
-	test("commit chars", () => {
-		const item = lspFmtCompletionItem("fn", 3, "()", "11", false, "(.");
-		check(item.length > 40);
-	});
-});
+test "basic" {
+	const e = lspFmtTextEdit(0, 5, 8, "newName");
+	check(e.length > 30);
+}
 
-testGroup("LspFmtHoverResult", () => {
-	test("code only", () => {
-		const h = lspFmtHoverResult("```ms\n(variable) x: number\n```", "");
-		check(h.length > 30);
-	});
-	test("with documentation", () => {
-		const h = lspFmtHoverResult("```ms\n(variable) x: number\n```", "(exported)");
-		check(h.length > 50);
-	});
-});
+test "basic" {
+	const item = lspFmtCompletionItem("foo", 6, "number", "11", false, "");
+	check(item.length > 20);
+}
 
-testGroup("LspFmtDiagnostic", () => {
-	test("without code", () => {
-		const d = lspFmtDiagnostic(0, 5, 8, 1, "type error", "metascript", 0);
-		check(d.length > 30);
-	});
-	test("with code", () => {
-		const d = lspFmtDiagnostic(0, 5, 8, 1, "type error", "metascript", 2304);
-		check(d.length > 40);
-	});
-});
+test "with sortText" {
+	const item = lspFmtCompletionItem("bar", 3, "()", "10", false, "");
+	check(item.length > 20);
+}
 
-testGroup("LspFmtDocumentSymbol", () => {
-	test("without detail", () => {
-		const s = lspFmtDocumentSymbol("foo", 12, "", 0, 5, 8);
-		check(s.length > 20);
-	});
-	test("with detail", () => {
-		const s = lspFmtDocumentSymbol("foo", 12, "(a: number) => void", 0, 5, 8);
-		check(s.length > 40);
-	});
-});
+test "deprecated tag" {
+	const item = lspFmtCompletionItem("old", 6, "string", "z11", true, "");
+	check(item.length > 30);
+}
 
-testGroup("LspFmtInlayHint", () => {
-	test("type hint", () => {
-		const h = lspFmtInlayHint(0, 5, ": number", 1, true, false);
-		check(h.length > 30);
-	});
-	test("param hint", () => {
-		const h = lspFmtInlayHint(0, 3, "name:", 2, false, true);
-		check(h.length > 30);
-	});
-});
+test "commit chars" {
+	const item = lspFmtCompletionItem("fn", 3, "()", "11", false, "(.");
+	check(item.length > 40);
+}
 
-testGroup("LspFmtSignature", () => {
-	test("basic", () => {
-		const p = lspFmtSignatureParam("a: number");
-		const sig = lspFmtSignature("foo(a: number)", "[" + p + "]");
-		const help = lspFmtSignatureHelp("[" + sig + "]", 0, 0);
-		check(help.length > 40);
-	});
-});
+test "code only" {
+	const h = lspFmtHoverResult("```ms\n(variable) x: number\n```", "");
+	check(h.length > 30);
+}
+
+test "with documentation" {
+	const h = lspFmtHoverResult("```ms\n(variable) x: number\n```", "(exported)");
+	check(h.length > 50);
+}
+
+test "without code" {
+	const d = lspFmtDiagnostic(0, 5, 8, 1, "type error", "metascript", 0);
+	check(d.length > 30);
+}
+
+test "with code" {
+	const d = lspFmtDiagnostic(0, 5, 8, 1, "type error", "metascript", 2304);
+	check(d.length > 40);
+}
+
+test "without detail" {
+	const s = lspFmtDocumentSymbol("foo", 12, "", 0, 5, 8);
+	check(s.length > 20);
+}
+
+test "with detail" {
+	const s = lspFmtDocumentSymbol("foo", 12, "(a: number) => void", 0, 5, 8);
+	check(s.length > 40);
+}
+
+test "type hint" {
+	const h = lspFmtInlayHint(0, 5, ": number", 1, true, false);
+	check(h.length > 30);
+}
+
+test "param hint" {
+	const h = lspFmtInlayHint(0, 3, "name:", 2, false, true);
+	check(h.length > 30);
+}
+
+test "basic" {
+	const p = lspFmtSignatureParam("a: number");
+	const sig = lspFmtSignature("foo(a: number)", "[" + p + "]");
+	const help = lspFmtSignatureHelp("[" + sig + "]", 0, 0);
+	check(help.length > 40);
+}

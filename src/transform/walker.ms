@@ -15,7 +15,8 @@ import {
 	ObjectLiteralData, ArrayLiteralData, ConditionalExprData,
 	SpreadExprData, NewExprData, TryExprData,
 	MatchExprData, MatchStmtData, MatchCaseData,
-	AwaitExprData, YieldExprData, MoveExprData, OutExprData, HiddenDerefData,
+	AwaitExprData, YieldExprData, MoveExprData, OutExprData,
+	HiddenDerefData, HiddenStdConvData,
 	TypeAssertionData, DestructuringDeclData, QuoteExprData, ComptimeBlockData,
 	MacroInvocationData, TestDeclData, ExpectStmtData,
 } from "../ast/node";
@@ -31,6 +32,7 @@ type ExpandingVisitor = (node: Node) => Node[];
 // Bottom-up: recurse into children first, then apply visitor to the node itself
 
 export function walkNode(node: Node, visitor: Visitor): Node {
+	if (node === null) return null as unknown as Node;
 	// Recurse into children first (bottom-up)
 	walkChildren(node, visitor);
 	// Then let visitor transform this node
@@ -299,9 +301,13 @@ export function mapChildren(node: Node, f: Visitor): void {
 			const d = node.data as OutExprData;
 			d.outArg = f(d.outArg);
 		},
-		NodeKind.HiddenDeref => {
+		NodeKind.HiddenDeref | NodeKind.HiddenAddr => {
 			const d = node.data as HiddenDerefData;
 			d.expr = f(d.expr);
+		},
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
+			const d = node.data as HiddenStdConvData;
+			d.convExpr = f(d.convExpr);
 		},
 		NodeKind.TypeAssertion => {
 			const d = node.data as TypeAssertionData;

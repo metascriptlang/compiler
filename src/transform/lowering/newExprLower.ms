@@ -8,7 +8,7 @@ import { Node, NodeKind, NewExprData, IdentifierData, MemberExprData } from "../
 import { TransformContext, createTransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent } from "../util";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";
 import { ExprStmtData, CallExprData } from "../../ast/node";
 
@@ -66,32 +66,26 @@ function getCallName(input: string): string {
 }
 
 // ===== Tests =====
+test "new Foo() becomes Foo_new()" { check(getCallName("new Foo();") === "Foo_new"); }
 
-testGroup("New Expr Lowering", () => {
-	test("new Foo() becomes Foo_new()", () => {
-		check(getCallName("new Foo();") === "Foo_new");
-	});
-	test("new Bar(x, y) becomes Bar_new(x, y)", () => {
-		const name = getCallName("new Bar(x, y);");
-		check(name === "Bar_new");
-	});
-	test("result is CallExpr", () => {
-		check(firstExprKindAfter("new Foo();", lowerNewExpr) === NodeKind.CallExpr);
-	});
-	test("non-new unchanged", () => {
-		check(firstExprKindAfter("foo();", lowerNewExpr) === NodeKind.CallExpr);
-	});
-	test("stmt count preserved", () => {
-		check(stmtCountAfter("new A(); new B();", lowerNewExpr) === 2);
-	});
-	test("new with args preserved count", () => {
-		const result = parseInput("new Foo(1, 2);");
-		if (!result.ok) { check(false); return; }
-		const ctx = createTransformContext();
-		const prog = lowerNewExpr(result.value, ctx);
-		const stmts = getStmts(prog);
-		const sd = stmts[0].data as ExprStmtData;
-		const cd = sd.expr.data as CallExprData;
-		check(cd.arguments.length === 2);
-	});
-});
+test "new Bar(x, y) becomes Bar_new(x, y)" {
+	const name = getCallName("new Bar(x, y);");
+	check(name === "Bar_new");
+}
+
+test "result is CallExpr" { check(firstExprKindAfter("new Foo();", lowerNewExpr) === NodeKind.CallExpr); }
+
+test "non-new unchanged" { check(firstExprKindAfter("foo();", lowerNewExpr) === NodeKind.CallExpr); }
+
+test "stmt count preserved" { check(stmtCountAfter("new A(); new B();", lowerNewExpr) === 2); }
+
+test "new with args preserved count" {
+	const result = parseInput("new Foo(1, 2);");
+	if (!result.ok) { check(false); return; }
+	const ctx = createTransformContext();
+	const prog = lowerNewExpr(result.value, ctx);
+	const stmts = getStmts(prog);
+	const sd = stmts[0].data as ExprStmtData;
+	const cd = sd.expr.data as CallExprData;
+	check(cd.arguments.length === 2);
+}

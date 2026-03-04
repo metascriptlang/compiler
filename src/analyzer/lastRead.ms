@@ -19,103 +19,105 @@ import {
 	WhileStmtData, ForStmtData, ForOfStmtData, BlockStmtData,
 	TryCatchStmtData, SwitchStmtData, SwitchCaseData,
 	ThrowStmtData, DoWhileStmtData, FunctionDeclData,
-	ExportDeclData, MoveExprData,
+	ExportDeclData, MoveExprData, Symbol
 } from "../ast/node";
-import { OuterStack } from "./scope";
-import { test, check, testGroup } from "std/testing";
+import { SymbolKind, makeSymbol } from "../checker/symbol";
+import { unknownType } from "../checker/types";
+import { OuterEntry } from "./scope";
+import { check } from "std/testing";
 import { parseInput } from "../transform/testUtil";
 
 // ===== nodeReferencesVar — recursive check =====
 // Returns true if `node` (or any sub-expression) references `varName`.
 
-function anyChildReferences(nodes: Node[], varName: string): boolean {
+function anyChildReferences(nodes: Node[], targetSym: Symbol): boolean {
 	for (const n of nodes) {
-		if (nodeReferencesVar(n, varName)) return true;
+		if (nodeReferencesVar(n, targetSym)) return true;
 	}
 	return false;
 }
 
-export function nodeReferencesVar(node: Node, varName: string): boolean {
-	if (node === null) return false;
+export function nodeReferencesVar(node: Node, targetSym: Symbol): boolean {
+	if (node === null || targetSym === null) return false;
 
 	return match (node.kind) {
 		// Expression nodes
-		NodeKind.Identifier => (node.data as IdentifierData).name === varName,
+		NodeKind.Identifier => node.resolvedSym === targetSym,
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
-			nodeReferencesVar(d.left, varName) || nodeReferencesVar(d.right, varName)
+			nodeReferencesVar(d.left, targetSym) || nodeReferencesVar(d.right, targetSym)
 		},
-		NodeKind.UnaryExpr => nodeReferencesVar((node.data as UnaryExprData).operand, varName),
-		NodeKind.UpdateExpr => nodeReferencesVar((node.data as UpdateExprData).updateArg, varName),
+		NodeKind.UnaryExpr => nodeReferencesVar((node.data as UnaryExprData).operand, targetSym),
+		NodeKind.UpdateExpr => nodeReferencesVar((node.data as UpdateExprData).updateArg, targetSym),
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
-			nodeReferencesVar(d.callee, varName) || anyChildReferences(d.arguments, varName)
+			nodeReferencesVar(d.callee, targetSym) || anyChildReferences(d.arguments, targetSym)
 		},
-		NodeKind.MemberExpr => nodeReferencesVar((node.data as MemberExprData).object, varName),
+		NodeKind.MemberExpr => nodeReferencesVar((node.data as MemberExprData).object, targetSym),
 		NodeKind.ArrayAccess => {
 			const d = node.data as ArrayAccessData;
-			nodeReferencesVar(d.array, varName) || nodeReferencesVar(d.index, varName)
+			nodeReferencesVar(d.array, targetSym) || nodeReferencesVar(d.index, targetSym)
 		},
-		NodeKind.ObjectLiteral => anyChildReferences((node.data as ObjectLiteralData).properties, varName),
-		NodeKind.ArrayLiteral => anyChildReferences((node.data as ArrayLiteralData).elements, varName),
+		NodeKind.ObjectLiteral => anyChildReferences((node.data as ObjectLiteralData).properties, targetSym),
+		NodeKind.ArrayLiteral => anyChildReferences((node.data as ArrayLiteralData).elements, targetSym),
 		NodeKind.ConditionalExpr => {
 			const d = node.data as ConditionalExprData;
-			nodeReferencesVar(d.ternaryCondition, varName)
-				|| nodeReferencesVar(d.ternaryConsequent, varName)
-				|| nodeReferencesVar(d.ternaryAlternate, varName)
+			nodeReferencesVar(d.ternaryCondition, targetSym)
+				|| nodeReferencesVar(d.ternaryConsequent, targetSym)
+				|| nodeReferencesVar(d.ternaryAlternate, targetSym)
 		},
-		NodeKind.SpreadExpr => nodeReferencesVar((node.data as SpreadExprData).spreadArg, varName),
+		NodeKind.SpreadExpr => nodeReferencesVar((node.data as SpreadExprData).spreadArg, targetSym),
 		NodeKind.NewExpr => {
 			const d = node.data as NewExprData;
-			nodeReferencesVar(d.newCallee, varName) || anyChildReferences(d.newArguments, varName)
+			nodeReferencesVar(d.newCallee, targetSym) || anyChildReferences(d.newArguments, targetSym)
 		},
-		NodeKind.TypeAssertion => nodeReferencesVar((node.data as TypeAssertionData).asExpr, varName),
-		NodeKind.MoveExpr => nodeReferencesVar((node.data as MoveExprData).moveArg, varName),
+		NodeKind.TypeAssertion => nodeReferencesVar((node.data as TypeAssertionData).asExpr, targetSym),
+		NodeKind.MoveExpr => nodeReferencesVar((node.data as MoveExprData).moveArg, targetSym),
 
 		// Statement nodes
-		NodeKind.ExprStmt => nodeReferencesVar((node.data as ExprStmtData).expr, varName),
-		NodeKind.VariableDecl => nodeReferencesVar((node.data as VariableDeclData).initializer, varName),
-		NodeKind.ReturnStmt => nodeReferencesVar((node.data as ReturnStmtData).argument, varName),
-		NodeKind.ThrowStmt => nodeReferencesVar((node.data as ThrowStmtData).throwArg, varName),
+		NodeKind.ExprStmt => nodeReferencesVar((node.data as ExprStmtData).expr, targetSym),
+		NodeKind.VariableDecl => nodeReferencesVar((node.data as VariableDeclData).initializer, targetSym),
+		NodeKind.ReturnStmt => nodeReferencesVar((node.data as ReturnStmtData).argument, targetSym),
+		NodeKind.ThrowStmt => nodeReferencesVar((node.data as ThrowStmtData).throwArg, targetSym),
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
-			nodeReferencesVar(d.condition, varName)
-				|| nodeReferencesVar(d.consequent, varName)
-				|| nodeReferencesVar(d.alternate, varName)
+			nodeReferencesVar(d.condition, targetSym)
+				|| nodeReferencesVar(d.consequent, targetSym)
+				|| nodeReferencesVar(d.alternate, targetSym)
 		},
 		NodeKind.WhileStmt => {
 			const d = node.data as WhileStmtData;
-			nodeReferencesVar(d.whileCondition, varName) || nodeReferencesVar(d.whileBody, varName)
+			nodeReferencesVar(d.whileCondition, targetSym) || nodeReferencesVar(d.whileBody, targetSym)
 		},
 		NodeKind.ForStmt => {
 			const d = node.data as ForStmtData;
-			nodeReferencesVar(d.forInit, varName) || nodeReferencesVar(d.forCondition, varName)
-				|| nodeReferencesVar(d.forUpdate, varName) || nodeReferencesVar(d.forBody, varName)
+			nodeReferencesVar(d.forInit, targetSym) || nodeReferencesVar(d.forCondition, targetSym)
+				|| nodeReferencesVar(d.forUpdate, targetSym) || nodeReferencesVar(d.forBody, targetSym)
 		},
 		NodeKind.ForOfStmt => {
 			const d = node.data as ForOfStmtData;
-			nodeReferencesVar(d.forOfIterable, varName) || nodeReferencesVar(d.forOfBody, varName)
+			nodeReferencesVar(d.forOfIterable, targetSym) || nodeReferencesVar(d.forOfBody, targetSym)
 		},
 		NodeKind.DoWhileStmt => {
 			const d = node.data as DoWhileStmtData;
-			nodeReferencesVar(d.doBody, varName) || nodeReferencesVar(d.doCondition, varName)
+			nodeReferencesVar(d.doBody, targetSym) || nodeReferencesVar(d.doCondition, targetSym)
 		},
-		NodeKind.BlockStmt => anyChildReferences((node.data as BlockStmtData).statements, varName),
+		NodeKind.BlockStmt => anyChildReferences((node.data as BlockStmtData).statements, targetSym),
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
-			nodeReferencesVar(d.tryBody, varName)
-				|| nodeReferencesVar(d.catchBody, varName)
-				|| nodeReferencesVar(d.finallyBody, varName)
+			nodeReferencesVar(d.tryBody, targetSym)
+				|| nodeReferencesVar(d.catchBody, targetSym)
+				|| nodeReferencesVar(d.finallyBody, targetSym)
 		},
 		NodeKind.SwitchStmt => {
 			const d = node.data as SwitchStmtData;
-			nodeReferencesVar(d.switchDisc, varName) || anyChildReferences(d.switchCases, varName)
+			nodeReferencesVar(d.switchDisc, targetSym) || anyChildReferences(d.switchCases, targetSym)
 		},
 		NodeKind.SwitchCase => {
 			const d = node.data as SwitchCaseData;
-			anyChildReferences(d.caseTests, varName) || anyChildReferences(d.caseStmts, varName)
+			anyChildReferences(d.caseTests, targetSym) || anyChildReferences(d.caseStmts, targetSym)
 		},
-		NodeKind.ExportDecl => nodeReferencesVar((node.data as ExportDeclData).exportedDecl, varName),
+		NodeKind.ExportDecl => nodeReferencesVar((node.data as ExportDeclData).exportedDecl, targetSym),
 
 		// Function boundaries: don't look inside inner functions
 		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => false,
@@ -126,9 +128,9 @@ export function nodeReferencesVar(node: Node, varName: string): boolean {
 // ===== isLastReadInBlock — forward scan =====
 // Returns true if `varName` at `stmtIndex` is not referenced in stmts[stmtIndex+1..].
 
-export function isLastReadInBlock(varName: string, stmtIndex: number, stmts: Node[]): boolean {
+export function isLastReadInBlock(targetSym: Symbol, stmtIndex: number, stmts: Node[]): boolean {
 	for (let i = stmtIndex + 1; i < stmts.length; i += 1) {
-		if (nodeReferencesVar(stmts[i], varName)) return false;
+		if (nodeReferencesVar(stmts[i], targetSym)) return false;
 	}
 	return true;
 }
@@ -202,19 +204,19 @@ function isEmptyBlockNode(node: Node): boolean {
 // terminate (return/break/throw/continue), outer scope references are unreachable
 // from this path — skip the outer scope check and return true.
 
-export function isLastReadInContext(varName: string, stmtIndex: number, stmts: Node[], outerCtx: OuterStack): boolean {
+export function isLastReadInContext(targetSym: Symbol, stmtIndex: number, stmts: Node[], outerCtx: OuterEntry[]): boolean {
 	// Check remaining stmts in current block
 	for (let i = stmtIndex + 1; i < stmts.length; i += 1) {
-		if (nodeReferencesVar(stmts[i], varName)) return false;
+		if (nodeReferencesVar(stmts[i], targetSym)) return false;
 	}
 	// CFG enhancement: if remaining stmts definitely terminate, outer scope
 	// is unreachable from this path — variable IS last-read regardless of outer uses.
 	if (stmtsDefinitelyTerminate(stmts, stmtIndex + 1)) return true;
 	// Check outer scopes (innermost first)
-	let oi = outerCtx.items.length;
+	let oi = outerCtx.length;
 	while (oi > 0) {
 		oi -= 1;
-		const entry = outerCtx.items[oi];
+		const entry = outerCtx[oi];
 		if (entry.isFunctionBoundary) break;  // don't look past function boundaries
 		// CFG enhancement: if outer scope's remaining stmts terminate,
 		// skip further outer scope checks (that scope never falls through either)
@@ -222,13 +224,13 @@ export function isLastReadInContext(varName: string, stmtIndex: number, stmts: N
 			// Still check this scope's remaining stmts for references
 			let j = entry.fromIndex;
 			while (j < entry.outerStmts.length) {
-				if (nodeReferencesVar(entry.outerStmts[j], varName)) return false;
+				if (nodeReferencesVar(entry.outerStmts[j], targetSym)) return false;
 				j = j + 1;
 			}
 			return true;  // this scope terminates, no need to check further outer
 		}
 		for (let j = entry.fromIndex; j < entry.outerStmts.length; j += 1) {
-			if (nodeReferencesVar(entry.outerStmts[j], varName)) return false;
+			if (nodeReferencesVar(entry.outerStmts[j], targetSym)) return false;
 		}
 	}
 	return true;
@@ -238,8 +240,8 @@ export function isLastReadInContext(varName: string, stmtIndex: number, stmts: N
 // Returns true if `expr` references `varName` anywhere in its tree.
 // Used for: `x = f(x)` → must save old x before destroy.
 
-export function deepAliases(varName: string, expr: Node): boolean {
-	return nodeReferencesVar(expr, varName);
+export function deepAliases(targetSym: Symbol, expr: Node): boolean {
+	return nodeReferencesVar(expr, targetSym);
 }
 
 // ===== Test Helpers =====
@@ -261,145 +263,249 @@ function getExpr(input: string): Node {
 	return d.expr;
 }
 
+// ===== Test Helpers: Symbol Attachment =====
+
+function makeTestSym(name: string): Symbol {
+	return makeSymbol(name, SymbolKind.Variable, unknownType(), false);
+}
+
+function attachSymToNode(node: Node, name: string, sym: Symbol): void {
+	if (node === null) return;
+	if (node.kind === NodeKind.Identifier) {
+		if ((node.data as IdentifierData).name === name) node.resolvedSym = sym;
+		return;
+	}
+	if (node.kind === NodeKind.BinaryExpr) {
+		const d = node.data as BinaryExprData;
+		attachSymToNode(d.left, name, sym);
+		attachSymToNode(d.right, name, sym);
+		return;
+	}
+	if (node.kind === NodeKind.UnaryExpr) {
+		attachSymToNode((node.data as UnaryExprData).operand, name, sym);
+		return;
+	}
+	if (node.kind === NodeKind.CallExpr) {
+		const d = node.data as CallExprData;
+		attachSymToNode(d.callee, name, sym);
+		for (const a of d.arguments) { attachSymToNode(a, name, sym); }
+		return;
+	}
+	if (node.kind === NodeKind.MemberExpr) {
+		attachSymToNode((node.data as MemberExprData).object, name, sym);
+		return;
+	}
+	if (node.kind === NodeKind.ExprStmt) {
+		attachSymToNode((node.data as ExprStmtData).expr, name, sym);
+		return;
+	}
+	if (node.kind === NodeKind.VariableDecl) {
+		attachSymToNode((node.data as VariableDeclData).initializer, name, sym);
+		return;
+	}
+	if (node.kind === NodeKind.ReturnStmt) {
+		attachSymToNode((node.data as ReturnStmtData).argument, name, sym);
+		return;
+	}
+	if (node.kind === NodeKind.ThrowStmt) {
+		attachSymToNode((node.data as ThrowStmtData).throwArg, name, sym);
+		return;
+	}
+	if (node.kind === NodeKind.IfStmt) {
+		const d = node.data as IfStmtData;
+		attachSymToNode(d.condition, name, sym);
+		attachSymToNode(d.consequent, name, sym);
+		attachSymToNode(d.alternate, name, sym);
+		return;
+	}
+	if (node.kind === NodeKind.BlockStmt) {
+		for (const s of (node.data as BlockStmtData).statements) { attachSymToNode(s, name, sym); }
+		return;
+	}
+	// FunctionDecl, ArrowFunction, FunctionExpr: don't recurse (boundary)
+}
+
+function attachSym(nodes: Node[], name: string, sym: Symbol): void {
+	for (const n of nodes) { attachSymToNode(n, name, sym); }
+}
+
 // ===== Tests =====
+test "identifier matches" {
+	const expr = getExpr("x;");
+	const symX = makeTestSym("x");
+	attachSymToNode(expr, "x", symX);
+	check(nodeReferencesVar(expr, symX));
+	check(!nodeReferencesVar(expr, makeTestSym("y")));
+}
 
-testGroup("nodeReferencesVar", () => {
-	test("identifier matches", () => {
-		const expr = getExpr("x;");
-		check(nodeReferencesVar(expr, "x"));
-		check(!nodeReferencesVar(expr, "y"));
-	});
-	test("binary expr references", () => {
-		const expr = getExpr("x + y;");
-		check(nodeReferencesVar(expr, "x"));
-		check(nodeReferencesVar(expr, "y"));
-		check(!nodeReferencesVar(expr, "z"));
-	});
-	test("call expr references", () => {
-		const expr = getExpr("foo(a, b);");
-		check(nodeReferencesVar(expr, "foo"));
-		check(nodeReferencesVar(expr, "a"));
-		check(nodeReferencesVar(expr, "b"));
-		check(!nodeReferencesVar(expr, "c"));
-	});
-	test("member expr references object", () => {
-		const expr = getExpr("obj.prop;");
-		check(nodeReferencesVar(expr, "obj"));
-		check(!nodeReferencesVar(expr, "prop"));
-	});
-	test("function boundary stops scan", () => {
-		const stmts = getStmts("function f() { return x; }");
-		check(stmts.length > 0);
-		check(!nodeReferencesVar(stmts[0], "x"));
-	});
-	test("null node", () => {
-		check(!nodeReferencesVar(null as unknown as Node, "x"));
-	});
-});
+test "binary expr references" {
+	const expr = getExpr("x + y;");
+	const symX = makeTestSym("x");
+	const symY = makeTestSym("y");
+	attachSymToNode(expr, "x", symX);
+	attachSymToNode(expr, "y", symY);
+	check(nodeReferencesVar(expr, symX));
+	check(nodeReferencesVar(expr, symY));
+	check(!nodeReferencesVar(expr, makeTestSym("z")));
+}
 
-testGroup("isLastReadInBlock", () => {
-	test("last stmt is last read", () => {
-		const stmts = getStmts("const a = 1; const b = a;");
-		check(isLastReadInBlock("a", 1, stmts));
-	});
-	test("not last when used later", () => {
-		const stmts = getStmts("const a = 1; const b = a; const c = a;");
-		check(!isLastReadInBlock("a", 1, stmts));
-	});
-	test("different var is last read", () => {
-		const stmts = getStmts("const a = 1; const b = a; const c = b;");
-		check(isLastReadInBlock("a", 1, stmts));
-	});
-});
+test "call expr references" {
+	const expr = getExpr("foo(a, b);");
+	const symFoo = makeTestSym("foo");
+	const symA = makeTestSym("a");
+	const symB = makeTestSym("b");
+	attachSymToNode(expr, "foo", symFoo);
+	attachSymToNode(expr, "a", symA);
+	attachSymToNode(expr, "b", symB);
+	check(nodeReferencesVar(expr, symFoo));
+	check(nodeReferencesVar(expr, symA));
+	check(nodeReferencesVar(expr, symB));
+	check(!nodeReferencesVar(expr, makeTestSym("c")));
+}
 
-testGroup("isLastReadInContext", () => {
-	test("no outer context = same as isLastReadInBlock", () => {
-		const stmts = getStmts("const a = 1; const b = a;");
-		const emptyOuter: OuterStack = { items: [] };
-		check(isLastReadInContext("a", 1, stmts, emptyOuter));
-	});
-	test("not last when used in outer scope", () => {
-		// Inner block: [const b = a]  Outer remaining: [const c = a]
-		const outerStmts = getStmts("const a = 1; const c = a;");
-		const innerStmts = getStmts("const b = a;");
-		const outer: OuterStack = { items: [
-			{ outerStmts, fromIndex: 1, isFunctionBoundary: false },
-		] };
-		// "a" at index 0 in innerStmts — not referenced in innerStmts[1..] (none)
-		// But referenced in outerStmts[1] — so NOT last read
-		check(!isLastReadInContext("a", 0, innerStmts, outer));
-	});
-	test("function boundary stops outer search", () => {
-		const outerStmts = getStmts("const a = 1; const c = a;");
-		const innerStmts = getStmts("const b = a;");
-		const outer: OuterStack = { items: [
-			{ outerStmts, fromIndex: 1, isFunctionBoundary: false },
-			{ outerStmts: [], fromIndex: 0, isFunctionBoundary: true },
-		] };
-		// Function boundary blocks outer search — IS last read
-		check(isLastReadInContext("a", 0, innerStmts, outer));
-	});
-});
+test "member expr references object" {
+	const expr = getExpr("obj.prop;");
+	const symObj = makeTestSym("obj");
+	attachSymToNode(expr, "obj", symObj);
+	check(nodeReferencesVar(expr, symObj));
+	check(!nodeReferencesVar(expr, makeTestSym("prop")));
+}
 
-testGroup("deepAliases", () => {
-	test("simple alias", () => {
-		const expr = getExpr("f(x);");
-		check(deepAliases("x", expr));
-		check(!deepAliases("y", expr));
-	});
-	test("nested alias", () => {
-		const expr = getExpr("g(f(x));");
-		check(deepAliases("x", expr));
-	});
-});
+test "function boundary stops scan" {
+	const stmts = getStmts("function f() { return x; }");
+	const symX = makeTestSym("x");
+	attachSym(stmts, "x", symX);
+	check(stmts.length > 0);
+	check(!nodeReferencesVar(stmts[0], symX));
+}
 
-testGroup("Termination Analysis", () => {
-	test("return terminates block", () => {
-		// Inside a branch that returns, outer x ref shouldn't prevent move
-		const innerStmts = getStmts("const b = a; return b;");
-		const outerStmts = getStmts("foo(a);");
-		const outer: OuterStack = { items: [
-			{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
-		] };
-		// "a" at index 0 in innerStmts — return at index 1 terminates
-		// outer scope has foo(a) but unreachable from this path
-		check(isLastReadInContext("a", 0, innerStmts, outer));
-	});
-	test("throw terminates block", () => {
-		const innerStmts = getStmts("const b = a; throw b;");
-		const outerStmts = getStmts("foo(a);");
-		const outer: OuterStack = { items: [
-			{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
-		] };
-		check(isLastReadInContext("a", 0, innerStmts, outer));
-	});
-	test("no termination checks outer normally", () => {
-		const innerStmts = getStmts("const b = a;");
-		const outerStmts = getStmts("foo(a);");
-		const outer: OuterStack = { items: [
-			{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
-		] };
-		// No terminating stmt — outer foo(a) prevents last-read
-		check(!isLastReadInContext("a", 0, innerStmts, outer));
-	});
-	test("exhaustive if-else terminates", () => {
-		// if (c) { return x; } else { return y; } — both branches return
-		const innerStmts = getStmts("const b = a; if (c) { return x; } else { return y; }");
-		const outerStmts = getStmts("foo(a);");
-		const outer: OuterStack = { items: [
-			{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
-		] };
-		// After stmt 0, the if-else at stmt 1 definitely terminates
-		check(isLastReadInContext("a", 0, innerStmts, outer));
-	});
-	test("non-exhaustive if does not terminate", () => {
-		// if (c) { return x; } — no else, falls through
-		const innerStmts = getStmts("const b = a; if (c) { return x; }");
-		const outerStmts = getStmts("foo(a);");
-		const outer: OuterStack = { items: [
-			{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
-		] };
-		// No else branch — control may fall through to outer foo(a)
-		check(!isLastReadInContext("a", 0, innerStmts, outer));
-	});
-});
+test "null node" { check(!nodeReferencesVar(null as unknown as Node, makeTestSym("x"))); }
+
+test "last stmt is last read" {
+	const stmts = getStmts("const a = 1; const b = a;");
+	const symA = makeTestSym("a");
+	attachSym(stmts, "a", symA);
+	check(isLastReadInBlock(symA, 1, stmts));
+}
+
+test "not last when used later" {
+	const stmts = getStmts("const a = 1; const b = a; const c = a;");
+	const symA = makeTestSym("a");
+	attachSym(stmts, "a", symA);
+	check(!isLastReadInBlock(symA, 1, stmts));
+}
+
+test "different var is last read" {
+	const stmts = getStmts("const a = 1; const b = a; const c = b;");
+	const symA = makeTestSym("a");
+	attachSym(stmts, "a", symA);
+	check(isLastReadInBlock(symA, 1, stmts));
+}
+
+test "no outer context = same as isLastReadInBlock" {
+	const stmts = getStmts("const a = 1; const b = a;");
+	const symA = makeTestSym("a");
+	attachSym(stmts, "a", symA);
+	const emptyOuter: OuterEntry[] = [];
+	check(isLastReadInContext(symA, 1, stmts, emptyOuter));
+}
+
+test "not last when used in outer scope" {
+	const outerStmts = getStmts("const a = 1; const c = a;");
+	const innerStmts = getStmts("const b = a;");
+	const symA = makeTestSym("a");
+	attachSym(outerStmts, "a", symA);
+	attachSym(innerStmts, "a", symA);
+	const outer: OuterEntry[] = [
+		{ outerStmts, fromIndex: 1, isFunctionBoundary: false },
+	];
+	check(!isLastReadInContext(symA, 0, innerStmts, outer));
+}
+
+test "function boundary stops outer search" {
+	const outerStmts = getStmts("const a = 1; const c = a;");
+	const innerStmts = getStmts("const b = a;");
+	const symA = makeTestSym("a");
+	attachSym(outerStmts, "a", symA);
+	attachSym(innerStmts, "a", symA);
+	const outer: OuterEntry[] = [
+		{ outerStmts, fromIndex: 1, isFunctionBoundary: false },
+		{ outerStmts: [], fromIndex: 0, isFunctionBoundary: true },
+	];
+	check(isLastReadInContext(symA, 0, innerStmts, outer));
+}
+
+test "simple alias" {
+	const expr = getExpr("f(x);");
+	const symX = makeTestSym("x");
+	attachSymToNode(expr, "x", symX);
+	check(deepAliases(symX, expr));
+	check(!deepAliases(makeTestSym("y"), expr));
+}
+
+test "nested alias" {
+	const expr = getExpr("g(f(x));");
+	const symX = makeTestSym("x");
+	attachSymToNode(expr, "x", symX);
+	check(deepAliases(symX, expr));
+}
+
+test "return terminates block" {
+	const innerStmts = getStmts("const b = a; return b;");
+	const outerStmts = getStmts("foo(a);");
+	const symA = makeTestSym("a");
+	attachSym(innerStmts, "a", symA);
+	attachSym(outerStmts, "a", symA);
+	const outer: OuterEntry[] = [
+		{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
+	];
+	check(isLastReadInContext(symA, 0, innerStmts, outer));
+}
+
+test "throw terminates block" {
+	const innerStmts = getStmts("const b = a; throw b;");
+	const outerStmts = getStmts("foo(a);");
+	const symA = makeTestSym("a");
+	attachSym(innerStmts, "a", symA);
+	attachSym(outerStmts, "a", symA);
+	const outer: OuterEntry[] = [
+		{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
+	];
+	check(isLastReadInContext(symA, 0, innerStmts, outer));
+}
+
+test "no termination checks outer normally" {
+	const innerStmts = getStmts("const b = a;");
+	const outerStmts = getStmts("foo(a);");
+	const symA = makeTestSym("a");
+	attachSym(innerStmts, "a", symA);
+	attachSym(outerStmts, "a", symA);
+	const outer: OuterEntry[] = [
+		{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
+	];
+	check(!isLastReadInContext(symA, 0, innerStmts, outer));
+}
+
+test "exhaustive if-else terminates" {
+	const innerStmts = getStmts("const b = a; if (c) { return x; } else { return y; }");
+	const outerStmts = getStmts("foo(a);");
+	const symA = makeTestSym("a");
+	attachSym(innerStmts, "a", symA);
+	attachSym(outerStmts, "a", symA);
+	const outer: OuterEntry[] = [
+		{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
+	];
+	check(isLastReadInContext(symA, 0, innerStmts, outer));
+}
+
+test "non-exhaustive if does not terminate" {
+	const innerStmts = getStmts("const b = a; if (c) { return x; }");
+	const outerStmts = getStmts("foo(a);");
+	const symA = makeTestSym("a");
+	attachSym(innerStmts, "a", symA);
+	attachSym(outerStmts, "a", symA);
+	const outer: OuterEntry[] = [
+		{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
+	];
+	check(!isLastReadInContext(symA, 0, innerStmts, outer));
+}

@@ -1,6 +1,6 @@
 // String Utilities - DRC-safe string helpers (no indexOf/includes)
 
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 export function endsWith(s: string, suffix: string): boolean {
 	if (s.length < suffix.length) return false;
@@ -58,13 +58,18 @@ export function splitTopLevel(s: string, delim: string): string[] {
 	return parts;
 }
 
-testGroup("StringUtils", () => {
-	test("endsWith match", () => { check(endsWith("hello.ms", ".ms")); });
-	test("endsWith no match", () => { check(!endsWith("hello.ms", ".js")); });
-	test("endsWith too short", () => { check(!endsWith("ab", "abc")); });
-	test("endsWith exact", () => { check(endsWith(".h", ".h")); });
-	test("startsWith match", () => { check(startsWith("std/testing", "std/")); });
-	test("startsWith no match", () => { check(!startsWith("./foo", "std/")); });
-	test("startsWith too short", () => { check(!startsWith("st", "std/")); });
-	test("startsWith exact", () => { check(startsWith("abc", "abc")); });
-});
+test "endsWith match" { check(endsWith("hello.ms", ".ms")); }
+
+test "endsWith no match" { check(!endsWith("hello.ms", ".js")); }
+
+test "endsWith too short" { check(!endsWith("ab", "abc")); }
+
+test "endsWith exact" { check(endsWith(".h", ".h")); }
+
+test "startsWith match" { check(startsWith("std/testing", "std/")); }
+
+test "startsWith no match" { check(!startsWith("./foo", "std/")); }
+
+test "startsWith too short" { check(!startsWith("st", "std/")); }
+
+test "startsWith exact" { check(startsWith("abc", "abc")); }

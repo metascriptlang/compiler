@@ -5,11 +5,11 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { Type, TypeKind, isPrimitiveKind, createPrimitive, createObject, createArray, createFunction, numberType, stringType, booleanType, voidType, nullType, unknownType } from "../checker/types";
-import { lookupSymbol, SymbolKind, isPointerType as isPointerTypeBase } from "../checker/symbol";
+import { Type, TypeKind, isPrimitiveKind, hasDestructor, createPrimitive, createObject, createArray, createFunction, numberType, stringType, booleanType, voidType, nullType, unknownType } from "../checker/types";
+import { lookupSymbol, SymbolKind, isPointerType as isPointerTypeBase, Symbol, hasFlag, SF_SINK, SF_LENT } from "../checker/symbol";
 import { TransformContext, createTransformContext } from "../transform/context";
 import { NodeKind } from "../ast/node";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 // ===== RC Classification Kind =====
 
@@ -83,7 +83,16 @@ function classifyObject(t: Type, ctx: TransformContext): RcInfo {
 		return makeRcInfo(RcKind.Ref, t.typeName, "msDecref", "msIncref", "msPtrWasMoved", "");
 	}
 	if (t.typeName !== "") {
-		return makeRcInfo(RcKind.Named, t.typeName, t.typeName + "_destroy", t.typeName + "_copy", t.typeName + "_wasMoved", t.typeName + "_sink");
+		// Nim parity: only generate RC hooks if type has a destructor (D1 gate)
+		// Value-type interfaces without managed fields get noRcInfo (no cleanup needed)
+		if (hasDestructor(t)) {
+			return makeRcInfo(RcKind.Named, t.typeName, t.typeName + "_destroy", t.typeName + "_copy", t.typeName + "_wasMoved", t.typeName + "_sink");
+		}
+		// Fallback: if attachedOps not populated yet (pre-destructorLifting), use name-based heuristic
+		if (t.attachedOps.length === 0) {
+			return makeRcInfo(RcKind.Named, t.typeName, t.typeName + "_destroy", t.typeName + "_copy", t.typeName + "_wasMoved", t.typeName + "_sink");
+		}
+		return noRcInfo();
 	}
 	return noRcInfo();
 }
@@ -93,6 +102,18 @@ function classifyTypeRef(t: Type, ctx: TransformContext): RcInfo {
 	const sym = lookupSymbol(ctx.checkerCtx.table, t.typeName);
 	if (sym === null) return noRcInfo();
 	return classifyType(sym.symbolType, ctx);
+}
+
+// ===== Ownership Helpers =====
+
+export function isSinkParam(sym: Symbol): boolean {
+	if (sym === null) return false;
+	return hasFlag(sym, SF_SINK);
+}
+
+export function isLentParam(sym: Symbol): boolean {
+	if (sym === null) return false;
+	return hasFlag(sym, SF_LENT);
 }
 
 // ===== Main Classification Entry Point =====
@@ -132,124 +153,122 @@ export function isFreshExpr(kind: NodeKind): boolean {
 }
 
 // ===== Tests =====
+test "number → None" {
+	const ctx = createTransformContext();
+	const info = classifyType(numberType(), ctx);
+	check(info.rcKind === RcKind.None);
+	check(!info.needsCleanup);
+}
 
-testGroup("Classify Primitives", () => {
-	test("number → None", () => {
-		const ctx = createTransformContext();
-		const info = classifyType(numberType(), ctx);
-		check(info.rcKind === RcKind.None);
-		check(!info.needsCleanup);
-	});
-	test("boolean → None", () => {
-		const ctx = createTransformContext();
-		const info = classifyType(booleanType(), ctx);
-		check(info.rcKind === RcKind.None);
-	});
-	test("void → None", () => {
-		const ctx = createTransformContext();
-		const info = classifyType(voidType(), ctx);
-		check(info.rcKind === RcKind.None);
-	});
-	test("null → None", () => {
-		const ctx = createTransformContext();
-		const info = classifyType(nullType(), ctx);
-		check(info.rcKind === RcKind.None);
-	});
-	test("unknown → None", () => {
-		const ctx = createTransformContext();
-		const info = classifyType(unknownType(), ctx);
-		check(info.rcKind === RcKind.None);
-	});
-	test("int32 → None", () => {
-		const ctx = createTransformContext();
-		const info = classifyType(createPrimitive(TypeKind.Int32), ctx);
-		check(info.rcKind === RcKind.None);
-	});
-	test("enum → None", () => {
-		const ctx = createTransformContext();
-		const info = classifyType(createPrimitive(TypeKind.Enum), ctx);
-		check(info.rcKind === RcKind.None);
-	});
-	test("null type input → None", () => {
-		const ctx = createTransformContext();
-		const info = classifyType(null as unknown as Type, ctx);
-		check(info.rcKind === RcKind.None);
-	});
-});
+test "boolean → None" {
+	const ctx = createTransformContext();
+	const info = classifyType(booleanType(), ctx);
+	check(info.rcKind === RcKind.None);
+}
 
-testGroup("Classify RC Types", () => {
-	test("string → String", () => {
-		const ctx = createTransformContext();
-		const info = classifyType(stringType(), ctx);
-		check(info.rcKind === RcKind.String);
-		check(info.needsCleanup);
-		check(info.destroyFn === "msStringDecref");
-		check(info.copyFn === "msStringIncref");
-		check(info.wasMovedFn === "msStringWasMoved");
-	});
-	test("array of number → Array", () => {
-		const ctx = createTransformContext();
-		const info = classifyType(createArray(numberType()), ctx);
-		check(info.rcKind === RcKind.Array);
-		check(info.needsCleanup);
-		check(info.destroyFn === "msArrayDestroy");
-	});
-	test("array of string → Array (string variant)", () => {
-		const ctx = createTransformContext();
-		const info = classifyType(createArray(stringType()), ctx);
-		check(info.rcKind === RcKind.Array);
-		check(info.destroyFn === "msArrayStringDestroy");
-	});
-	test("function → Closure", () => {
-		const ctx = createTransformContext();
-		const info = classifyType(createFunction([], [], voidType()), ctx);
-		check(info.rcKind === RcKind.Closure);
-		check(info.needsCleanup);
-		check(info.destroyFn === "msClosureDestroy");
-	});
-	test("named object → Named", () => {
-		const ctx = createTransformContext();
-		const info = classifyType(createObject("Token", ["kind"], [numberType()], false), ctx);
-		check(info.rcKind === RcKind.Named);
-		check(info.needsCleanup);
-		check(info.destroyFn === "Token_destroy");
-		check(info.copyFn === "Token_copy");
-		check(info.wasMovedFn === "Token_wasMoved");
-	});
-	test("anonymous object → None", () => {
-		const ctx = createTransformContext();
-		const info = classifyType(createObject("", ["x"], [numberType()], false), ctx);
-		check(info.rcKind === RcKind.None);
-	});
-	test("ref → Ref", () => {
-		const ctx = createTransformContext();
-		const t = createPrimitive(TypeKind.Ref);
-		const info = classifyType(t, ctx);
-		check(info.rcKind === RcKind.Ref);
-		check(info.destroyFn === "msDecref");
-	});
-});
+test "void → None" {
+	const ctx = createTransformContext();
+	const info = classifyType(voidType(), ctx);
+	check(info.rcKind === RcKind.None);
+}
 
-testGroup("Classify isFreshExpr", () => {
-	test("call is fresh", () => {
-		check(isFreshExpr(NodeKind.CallExpr));
-	});
-	test("new is fresh", () => {
-		check(isFreshExpr(NodeKind.NewExpr));
-	});
-	test("object literal is fresh", () => {
-		check(isFreshExpr(NodeKind.ObjectLiteral));
-	});
-	test("string literal is fresh", () => {
-		check(isFreshExpr(NodeKind.StringLiteral));
-	});
-	test("identifier is NOT fresh", () => {
-		check(!isFreshExpr(NodeKind.Identifier));
-	});
-	test("member access is NOT fresh", () => {
-		check(!isFreshExpr(NodeKind.MemberExpr));
-	});
-	test("binary expr is NOT fresh", () => {
-		check(!isFreshExpr(NodeKind.BinaryExpr));
-	});
-});
+test "null → None" {
+	const ctx = createTransformContext();
+	const info = classifyType(nullType(), ctx);
+	check(info.rcKind === RcKind.None);
+}
+
+test "unknown → None" {
+	const ctx = createTransformContext();
+	const info = classifyType(unknownType(), ctx);
+	check(info.rcKind === RcKind.None);
+}
+
+test "int32 → None" {
+	const ctx = createTransformContext();
+	const info = classifyType(createPrimitive(TypeKind.Int32), ctx);
+	check(info.rcKind === RcKind.None);
+}
+
+test "enum → None" {
+	const ctx = createTransformContext();
+	const info = classifyType(createPrimitive(TypeKind.Enum), ctx);
+	check(info.rcKind === RcKind.None);
+}
+
+test "null type input → None" {
+	const ctx = createTransformContext();
+	const info = classifyType(null as unknown as Type, ctx);
+	check(info.rcKind === RcKind.None);
+}
+
+test "string → String" {
+	const ctx = createTransformContext();
+	const info = classifyType(stringType(), ctx);
+	check(info.rcKind === RcKind.String);
+	check(info.needsCleanup);
+	check(info.destroyFn === "msStringDecref");
+	check(info.copyFn === "msStringIncref");
+	check(info.wasMovedFn === "msStringWasMoved");
+}
+
+test "array of number → Array" {
+	const ctx = createTransformContext();
+	const info = classifyType(createArray(numberType()), ctx);
+	check(info.rcKind === RcKind.Array);
+	check(info.needsCleanup);
+	check(info.destroyFn === "msArrayDestroy");
+}
+
+test "array of string → Array (string variant)" {
+	const ctx = createTransformContext();
+	const info = classifyType(createArray(stringType()), ctx);
+	check(info.rcKind === RcKind.Array);
+	check(info.destroyFn === "msArrayStringDestroy");
+}
+
+test "function → Closure" {
+	const ctx = createTransformContext();
+	const info = classifyType(createFunction([], [], voidType()), ctx);
+	check(info.rcKind === RcKind.Closure);
+	check(info.needsCleanup);
+	check(info.destroyFn === "msClosureDestroy");
+}
+
+test "named object → Named" {
+	const ctx = createTransformContext();
+	const info = classifyType(createObject("Token", ["kind"], [numberType()], false), ctx);
+	check(info.rcKind === RcKind.Named);
+	check(info.needsCleanup);
+	check(info.destroyFn === "Token_destroy");
+	check(info.copyFn === "Token_copy");
+	check(info.wasMovedFn === "Token_wasMoved");
+}
+
+test "anonymous object → None" {
+	const ctx = createTransformContext();
+	const info = classifyType(createObject("", ["x"], [numberType()], false), ctx);
+	check(info.rcKind === RcKind.None);
+}
+
+test "ref → Ref" {
+	const ctx = createTransformContext();
+	const t = createPrimitive(TypeKind.Ref);
+	const info = classifyType(t, ctx);
+	check(info.rcKind === RcKind.Ref);
+	check(info.destroyFn === "msDecref");
+}
+
+test "call is fresh" { check(isFreshExpr(NodeKind.CallExpr)); }
+
+test "new is fresh" { check(isFreshExpr(NodeKind.NewExpr)); }
+
+test "object literal is fresh" { check(isFreshExpr(NodeKind.ObjectLiteral)); }
+
+test "string literal is fresh" { check(isFreshExpr(NodeKind.StringLiteral)); }
+
+test "identifier is NOT fresh" { check(!isFreshExpr(NodeKind.Identifier)); }
+
+test "member access is NOT fresh" { check(!isFreshExpr(NodeKind.MemberExpr)); }
+
+test "binary expr is NOT fresh" { check(!isFreshExpr(NodeKind.BinaryExpr)); }

@@ -23,7 +23,7 @@ import {
 } from "../../ast/node";
 import { TransformContext } from "../context";
 import { makeBlock, makeExprStmt, makeTryCatch } from "../util";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -207,23 +207,18 @@ function lowerDeferInBlock(stmts: Node[], loc: SourceLocation): Node[] {
 }
 
 // ===== Tests =====
+test "no defer passthrough" { check(firstStmtKindAfter("const x = 1;", lowerDefer) === NodeKind.VariableDecl); }
 
-testGroup("Defer Lowering", () => {
-	test("no defer passthrough", () => {
-		check(firstStmtKindAfter("const x = 1;", lowerDefer) === NodeKind.VariableDecl);
-	});
-	test("single defer becomes try-catch", () => {
-		check(firstStmtKindAfter("defer cleanup(); work();", lowerDefer) === NodeKind.TryCatchStmt);
-	});
-	test("defer at start", () => {
-		check(stmtCountAfter("defer cleanup();", lowerDefer) === 1);
-		check(firstStmtKindAfter("defer cleanup();", lowerDefer) === NodeKind.TryCatchStmt);
-	});
-	test("defer preserves before stmts", () => {
-		check(stmtCountAfter("setup(); defer cleanup(); work();", lowerDefer) === 2);
-	});
-	test("multiple defers nest", () => {
-		check(stmtCountAfter("defer a(); defer b(); work();", lowerDefer) === 1);
-		check(firstStmtKindAfter("defer a(); defer b(); work();", lowerDefer) === NodeKind.TryCatchStmt);
-	});
-});
+test "single defer becomes try-catch" { check(firstStmtKindAfter("defer cleanup(); work();", lowerDefer) === NodeKind.TryCatchStmt); }
+
+test "defer at start" {
+	check(stmtCountAfter("defer cleanup();", lowerDefer) === 1);
+	check(firstStmtKindAfter("defer cleanup();", lowerDefer) === NodeKind.TryCatchStmt);
+}
+
+test "defer preserves before stmts" { check(stmtCountAfter("setup(); defer cleanup(); work();", lowerDefer) === 2); }
+
+test "multiple defers nest" {
+	check(stmtCountAfter("defer a(); defer b(); work();", lowerDefer) === 1);
+	check(firstStmtKindAfter("defer a(); defer b(); work();", lowerDefer) === NodeKind.TryCatchStmt);
+}

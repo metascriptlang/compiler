@@ -1,6 +1,6 @@
 // Token types and utilities for the MetaScript lexer
 
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 export enum TokenKind {
 	// Literals
@@ -308,13 +308,16 @@ export function tokenKindToString(kind: TokenKind): string {
 }
 
 // ===== Token Tests =====
+test "identToKeyword const" { check(identToKeyword("const") === TokenKind.Const); }
 
-testGroup("Token Utilities", () => {
-	test("identToKeyword const", () => { check(identToKeyword("const") === TokenKind.Const); });
-	test("identToKeyword let", () => { check(identToKeyword("let") === TokenKind.Let); });
-	test("identToKeyword ident", () => { check(identToKeyword("notAKeyword") === TokenKind.Ident); });
-	test("identToKeyword underscore", () => { check(identToKeyword("_private") === TokenKind.Ident); });
-	test("kindToString Plus", () => { check(tokenKindToString(TokenKind.Plus) === "PLUS"); });
-	test("kindToString Eof", () => { check(tokenKindToString(TokenKind.Eof) === "EOF"); });
-	test("kindToString Const", () => { check(tokenKindToString(TokenKind.Const) === "CONST"); });
-});
+test "identToKeyword let" { check(identToKeyword("let") === TokenKind.Let); }
+
+test "identToKeyword ident" { check(identToKeyword("notAKeyword") === TokenKind.Ident); }
+
+test "identToKeyword underscore" { check(identToKeyword("_private") === TokenKind.Ident); }
+
+test "kindToString Plus" { check(tokenKindToString(TokenKind.Plus) === "PLUS"); }
+
+test "kindToString Eof" { check(tokenKindToString(TokenKind.Eof) === "EOF"); }
+
+test "kindToString Const" { check(tokenKindToString(TokenKind.Const) === "CONST"); }

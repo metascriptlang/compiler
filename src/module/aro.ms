@@ -13,16 +13,16 @@
 // ARO link directives are in bindings/aro/index.ms (resolved relative to that module's dir)
 
 import {
-	ms_aro_parse, ms_aro_error, ms_aro_free,
-	ms_aro_func_count, ms_aro_func_name, ms_aro_func_return_type,
-	ms_aro_func_param_count, ms_aro_func_param_name, ms_aro_func_param_type,
-	ms_aro_func_is_variadic,
-	ms_aro_enum_count, ms_aro_enum_name, ms_aro_enum_member_count, ms_aro_enum_member_name,
-	ms_aro_typedef_count, ms_aro_typedef_name, ms_aro_typedef_target,
+	msAroParse, msAroError, msAroFree,
+	msAroFuncCount, msAroFuncName, msAroFuncReturnType,
+	msAroFuncParamCount, msAroFuncParamName, msAroFuncParamType,
+	msAroFuncIsVariadic,
+	msAroEnumCount, msAroEnumName, msAroEnumMemberCount, msAroEnumMemberName,
+	msAroTypedefCount, msAroTypedefName, msAroTypedefTarget,
 } from "../bindings/aro/index";
 import { ModuleGraph, findModule } from "./graph";
 import { sliceStr, trim, endsWith } from "../utils/string";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 // ===== C Type → MetaScript Type Mapping =====
 
@@ -122,10 +122,10 @@ function safeParamName(name: string): string {
 // Parse a C header file and return synthetic MetaScript source.
 // The source contains export extern function declarations for each C function.
 export function parseCHeader(headerPath: string): string {
-	const rc = ms_aro_parse(headerPath);
+	const rc = msAroParse(headerPath);
 	if (rc !== 0) {
-		const errMsg = ms_aro_error();
-		ms_aro_free();
+		const errMsg = msAroError();
+		msAroFree();
 		return "// ARO parse error: " + errMsg + "\n";
 	}
 
@@ -133,15 +133,15 @@ export function parseCHeader(headerPath: string): string {
 
 	// === Enums ===
 	let ei = 0;
-	const enumCount = ms_aro_enum_count();
+	const enumCount = msAroEnumCount();
 	while (ei < enumCount) {
-		const ename = ms_aro_enum_name(ei);
+		const ename = msAroEnumName(ei);
 		if (ename.length > 0) {
 			source = source + "\nexport enum " + ename + " {\n";
 			let mi = 0;
-			const memberCount = ms_aro_enum_member_count(ei);
+			const memberCount = msAroEnumMemberCount(ei);
 			while (mi < memberCount) {
-				const mname = ms_aro_enum_member_name(ei, mi);
+				const mname = msAroEnumMemberName(ei, mi);
 				source = source + "\t" + mname + ",\n";
 				mi = mi + 1;
 			}
@@ -152,10 +152,10 @@ export function parseCHeader(headerPath: string): string {
 
 	// === Typedefs (as type aliases) ===
 	let ti = 0;
-	const typedefCount = ms_aro_typedef_count();
+	const typedefCount = msAroTypedefCount();
 	while (ti < typedefCount) {
-		const tname = ms_aro_typedef_name(ti);
-		const ttarget = mapCType(ms_aro_typedef_target(ti));
+		const tname = msAroTypedefName(ti);
+		const ttarget = mapCType(msAroTypedefTarget(ti));
 		if (tname.length > 0) {
 			source = source + "export type " + tname + " = " + ttarget + ";\n";
 		}
@@ -164,18 +164,18 @@ export function parseCHeader(headerPath: string): string {
 
 	// === Functions ===
 	let fi = 0;
-	const funcCount = ms_aro_func_count();
+	const funcCount = msAroFuncCount();
 	while (fi < funcCount) {
-		const fname = ms_aro_func_name(fi);
-		const retType = mapCType(ms_aro_func_return_type(fi));
+		const fname = msAroFuncName(fi);
+		const retType = mapCType(msAroFuncReturnType(fi));
 		source = source + "export extern function " + fname + "(";
 
 		let pi = 0;
-		const paramCount = ms_aro_func_param_count(fi);
+		const paramCount = msAroFuncParamCount(fi);
 		while (pi < paramCount) {
 			if (pi > 0) { source = source + ", "; }
-			const pname = safeParamName(ms_aro_func_param_name(fi, pi));
-			const ptype = mapCType(ms_aro_func_param_type(fi, pi));
+			const pname = safeParamName(msAroFuncParamName(fi, pi));
+			const ptype = mapCType(msAroFuncParamType(fi, pi));
 			source = source + pname + ": " + ptype;
 			pi = pi + 1;
 		}
@@ -184,7 +184,7 @@ export function parseCHeader(headerPath: string): string {
 		fi = fi + 1;
 	}
 
-	ms_aro_free();
+	msAroFree();
 	return source;
 }
 
@@ -235,31 +235,52 @@ export function preprocessHeaders(graph: ModuleGraph, verbose: boolean): void {
 }
 
 // ===== Tests =====
+test "void" { check(mapCType("void") === "void"); }
 
-testGroup("CHeaderTypeMap", () => {
-	test("void", () => { check(mapCType("void") === "void"); });
-	test("int", () => { check(mapCType("int") === "int32"); });
-	test("unsigned int", () => { check(mapCType("unsigned int") === "uint32"); });
-	test("float", () => { check(mapCType("float") === "float32"); });
-	test("double", () => { check(mapCType("double") === "float64"); });
-	test("bool", () => { check(mapCType("bool") === "boolean"); });
-	test("_Bool", () => { check(mapCType("_Bool") === "boolean"); });
-	test("char", () => { check(mapCType("char") === "int8"); });
-	test("unsigned char", () => { check(mapCType("unsigned char") === "uint8"); });
-	test("int32_t", () => { check(mapCType("int32_t") === "int32"); });
-	test("uint64_t", () => { check(mapCType("uint64_t") === "uint64"); });
-	test("size_t", () => { check(mapCType("size_t") === "uint64"); });
-	test("char *", () => { check(mapCType("char *") === "string"); });
-	test("const char *", () => { check(mapCType("const char *") === "string"); });
-	test("void *", () => { check(mapCType("void *") === "int64"); });
-	test("int *", () => { check(mapCType("int *") === "int64"); });
-	test("msString", () => { check(mapCType("msString") === "string"); });
-	test("msBool", () => { check(mapCType("msBool") === "boolean"); });
-	test("short", () => { check(mapCType("short") === "int16"); });
-	test("long", () => { check(mapCType("long") === "int64"); });
-	test("long long", () => { check(mapCType("long long") === "int64"); });
-	test("whitespace trimmed", () => { check(mapCType("  int  ") === "int32"); });
-	test("safe param name type", () => { check(safeParamName("type") === "argType"); });
-	test("safe param name normal", () => { check(safeParamName("count") === "count"); });
-	test("safe param name empty", () => { check(safeParamName("") === "p"); });
-});
+test "int" { check(mapCType("int") === "int32"); }
+
+test "unsigned int" { check(mapCType("unsigned int") === "uint32"); }
+
+test "float" { check(mapCType("float") === "float32"); }
+
+test "double" { check(mapCType("double") === "float64"); }
+
+test "bool" { check(mapCType("bool") === "boolean"); }
+
+test "_Bool" { check(mapCType("_Bool") === "boolean"); }
+
+test "char" { check(mapCType("char") === "int8"); }
+
+test "unsigned char" { check(mapCType("unsigned char") === "uint8"); }
+
+test "int32_t" { check(mapCType("int32_t") === "int32"); }
+
+test "uint64_t" { check(mapCType("uint64_t") === "uint64"); }
+
+test "size_t" { check(mapCType("size_t") === "uint64"); }
+
+test "char *" { check(mapCType("char *") === "string"); }
+
+test "const char *" { check(mapCType("const char *") === "string"); }
+
+test "void *" { check(mapCType("void *") === "int64"); }
+
+test "int *" { check(mapCType("int *") === "int64"); }
+
+test "msString" { check(mapCType("msString") === "string"); }
+
+test "msBool" { check(mapCType("msBool") === "boolean"); }
+
+test "short" { check(mapCType("short") === "int16"); }
+
+test "long" { check(mapCType("long") === "int64"); }
+
+test "long long" { check(mapCType("long long") === "int64"); }
+
+test "whitespace trimmed" { check(mapCType("  int  ") === "int32"); }
+
+test "safe param name type" { check(safeParamName("type") === "argType"); }
+
+test "safe param name normal" { check(safeParamName("count") === "count"); }
+
+test "safe param name empty" { check(safeParamName("") === "p"); }

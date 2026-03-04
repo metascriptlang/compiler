@@ -13,7 +13,7 @@ import {
 import { LspDocumentStore, createDocumentStore } from "./store";
 import { lspDispatch } from "./handlers";
 import { readLine, readBytes, writeStdout, writeStderr } from "std/io";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 // ===== Server State =====
 
@@ -123,59 +123,52 @@ export function processMessage(msg: string, state: LspServerState): string {
 }
 
 // ===== Tests =====
+test "uri to path" { check(lspUriToPath("file:///Users/foo/bar.ms") === "/Users/foo/bar.ms"); }
 
-testGroup("LspUriConversion", () => {
-	test("uri to path", () => {
-		check(lspUriToPath("file:///Users/foo/bar.ms") === "/Users/foo/bar.ms");
-	});
-	test("path to uri", () => {
-		check(lspPathToUri("/a/b.ms") === "file:///a/b.ms");
-	});
-	test("non-file uri unchanged", () => {
-		check(lspUriToPath("http://example.com") === "http://example.com");
-	});
-});
+test "path to uri" { check(lspPathToUri("/a/b.ms") === "file:///a/b.ms"); }
 
-testGroup("LspServerState", () => {
-	test("create state", () => {
-		const state = createServerState();
-		check(!state.initialized);
-		check(!state.shutdownRequested);
-	});
-	test("initialize sets flag", () => {
-		const state = createServerState();
-		const initMsg = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}";
-		const response = processMessage(initMsg, state);
-		check(state.initialized);
-		check(response.length > 0);
-	});
-	test("shutdown sets flag", () => {
-		const state = createServerState();
-		const shutdownMsg = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\",\"params\":{}}";
-		processMessage(shutdownMsg, state);
-		check(state.shutdownRequested);
-	});
-});
+test "non-file uri unchanged" { check(lspUriToPath("http://example.com") === "http://example.com"); }
 
-testGroup("LspProcessMessage", () => {
-	test("hover on unknown uri returns null result", () => {
-		const state = createServerState();
-		const hoverMsg = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":0}}}";
-		const response = processMessage(hoverMsg, state);
-		// Should return a valid response (null hover since doc not open)
-		check(response.length > 0);
-		check(lspGetNumberField(response, "id") === 3);
-	});
-	test("unknown notification returns empty", () => {
-		const state = createServerState();
-		// No "id" field — pure notification
-		const notif = "{\"jsonrpc\":\"2.0\",\"method\":\"$/setTrace\",\"params\":{\"value\":\"off\"}}";
-		const response = processMessage(notif, state);
-		check(response === "");
-	});
-	test("content length parsing", () => {
-		check(lspParseContentLength("Content-Length: 52") === 52);
-		check(lspParseContentLength("Content-Length: 0") === 0);
-		check(lspParseContentLength("Content-Type: text") === -1);
-	});
-});
+test "create state" {
+	const state = createServerState();
+	check(!state.initialized);
+	check(!state.shutdownRequested);
+}
+
+test "initialize sets flag" {
+	const state = createServerState();
+	const initMsg = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}";
+	const response = processMessage(initMsg, state);
+	check(state.initialized);
+	check(response.length > 0);
+}
+
+test "shutdown sets flag" {
+	const state = createServerState();
+	const shutdownMsg = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\",\"params\":{}}";
+	processMessage(shutdownMsg, state);
+	check(state.shutdownRequested);
+}
+
+test "hover on unknown uri returns null result" {
+	const state = createServerState();
+	const hoverMsg = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":0}}}";
+	const response = processMessage(hoverMsg, state);
+	// Should return a valid response (null hover since doc not open)
+	check(response.length > 0);
+	check(lspGetNumberField(response, "id") === 3);
+}
+
+test "unknown notification returns empty" {
+	const state = createServerState();
+	// No "id" field — pure notification
+	const notif = "{\"jsonrpc\":\"2.0\",\"method\":\"$/setTrace\",\"params\":{\"value\":\"off\"}}";
+	const response = processMessage(notif, state);
+	check(response === "");
+}
+
+test "content length parsing" {
+	check(lspParseContentLength("Content-Length: 52") === 52);
+	check(lspParseContentLength("Content-Length: 0") === 0);
+	check(lspParseContentLength("Content-Type: text") === -1);
+}

@@ -7,7 +7,7 @@ import { ParserState, current, advance, isAtEnd, consumeSemicolon } from "../con
 import { skipOptionalType } from "../util";
 import { callBlockParser, callExprParser } from "./callbacks";
 import { programOk } from "./validation";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 type NodeResult = Result<Node, string>;
 
@@ -81,16 +81,17 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 }
 
 // ===== Tests =====
+// Throw
+test "throw string" { check(programOk("throw \"error\";")); }
 
-testGroup("Stmt Error Handling", () => {
-	// Throw
-	test("throw string", () => { check(programOk("throw \"error\";")); });
-	test("throw expr", () => { check(programOk("throw error;")); });
-	// Try — distinct paths: catch, finally, both, no-param catch
-	test("try-catch", () => { check(programOk("try { x; } catch (e) { y; }")); });
-	test("try-finally", () => { check(programOk("try { x; } finally { y; }")); });
-	test("try-catch-finally", () => { check(programOk("try { x; } catch (e) { y; } finally { z; }")); });
-	test("catch no param", () => { check(programOk("try { x; } catch { y; }")); });
-	// Negative
-	test("try alone rejects", () => { check(!programOk("try { x; }")); });
-});
+test "throw expr" { check(programOk("throw error;")); }
+// Try — distinct paths: catch, finally, both, no-param catch
+test "try-catch" { check(programOk("try { x; } catch (e) { y; }")); }
+
+test "try-finally" { check(programOk("try { x; } finally { y; }")); }
+
+test "try-catch-finally" { check(programOk("try { x; } catch (e) { y; } finally { z; }")); }
+
+test "catch no param" { check(programOk("try { x; } catch { y; }")); }
+// Negative
+test "try alone rejects" { check(!programOk("try { x; }")); }

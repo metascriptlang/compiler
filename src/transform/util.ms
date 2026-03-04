@@ -3,10 +3,15 @@
 
 import { Token, TokenKind, createToken } from "../lexer/token";
 import {
-	Node, NodeKind, DeclKind, SourceLocation, createNode,
+	Node, NodeKind, DeclKind, SourceLocation, createNode, Symbol,
 	BlockStmtData, VariableDeclData, IfStmtData, WhileStmtData,
 	TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData,
+	CallExprData, MemberExprData, IdentifierData,
 } from "../ast/node";
+import {
+	Type, TypeKind, createFunction, createObject, createTypeRef,
+	numberType, stringType, booleanType, voidType, nullType, unknownType, getSysType,
+} from "../checker/types";
 import { TransformContext, freshTemp, NameSet, nameSetAdd } from "./context";
 
 // Create a synthetic token from a source location (for transform-generated nodes)
@@ -20,20 +25,36 @@ export function makeIdent(identName: string, loc: SourceLocation): Node {
 	return createNode(NodeKind.Identifier, { name: identName }, syntheticToken(loc));
 }
 
+// Decisive variant: creates an identifier already linked to a symbol
+export function makeIdentResolved(sym: Symbol, loc: SourceLocation): Node {
+	const n = createNode(NodeKind.Identifier, { name: sym.name }, syntheticToken(loc));
+	n.resolvedSym = sym;
+	n.nodeType = sym.symbolType;
+	return n;
+}
+
 export function makeNull(loc: SourceLocation): Node {
-	return createNode(NodeKind.NullLiteral, { nullPlaceholder: true }, syntheticToken(loc));
+	const n = createNode(NodeKind.NullLiteral, { nullPlaceholder: true }, syntheticToken(loc));
+	n.nodeType = nullType();
+	return n;
 }
 
 export function makeNumber(val: number, loc: SourceLocation): Node {
-	return createNode(NodeKind.NumberLiteral, { value: val }, syntheticToken(loc));
+	const n = createNode(NodeKind.NumberLiteral, { value: val }, syntheticToken(loc));
+	n.nodeType = numberType();
+	return n;
 }
 
 export function makeString(val: string, loc: SourceLocation): Node {
-	return createNode(NodeKind.StringLiteral, { value: val }, syntheticToken(loc));
+	const n = createNode(NodeKind.StringLiteral, { value: val }, syntheticToken(loc));
+	n.nodeType = stringType();
+	return n;
 }
 
 export function makeBool(val: boolean, loc: SourceLocation): Node {
-	return createNode(NodeKind.BooleanLiteral, { boolValue: val }, syntheticToken(loc));
+	const n = createNode(NodeKind.BooleanLiteral, { boolValue: val }, syntheticToken(loc));
+	n.nodeType = booleanType();
+	return n;
 }
 
 // ===== Statement Builders =====
@@ -43,7 +64,11 @@ export function makeBlock(stmts: Node[], loc: SourceLocation): Node {
 }
 
 export function makeVarDecl(varName: string, init: Node, declKind: DeclKind, loc: SourceLocation): Node {
-	return createNode(NodeKind.VariableDecl, { declName: varName, declType: "", initializer: init, declKind }, syntheticToken(loc));
+	const n = createNode(NodeKind.VariableDecl, { declName: varName, declType: "", initializer: init, declKind }, syntheticToken(loc));
+	if (init !== null && init.nodeType !== null) {
+		n.nodeType = init.nodeType;
+	}
+	return n;
 }
 
 export function makeExprStmt(exprNode: Node, loc: SourceLocation): Node {
@@ -73,31 +98,101 @@ export function makeContinue(loc: SourceLocation): Node {
 // ===== Expression Builders =====
 
 export function makeBinary(leftNode: Node, op: string, rightNode: Node, loc: SourceLocation): Node {
-	return createNode(NodeKind.BinaryExpr, { operator: op, left: leftNode, right: rightNode }, syntheticToken(loc));
+	const n = createNode(NodeKind.BinaryExpr, { operator: op, left: leftNode, right: rightNode }, syntheticToken(loc));
+	if (op === "===" || op === "!==" || op === "==" || op === "!=" || op === "<" || op === ">" || op === "<=" || op === ">=" || op === "||" || op === "&&") {
+		n.nodeType = booleanType();
+	} else if (leftNode !== null && leftNode.nodeType !== null) {
+		n.nodeType = leftNode.nodeType;
+	}
+	return n;
 }
 
 export function makeUnary(op: string, arg: Node, loc: SourceLocation): Node {
-	return createNode(NodeKind.UnaryExpr, { unaryOp: op, operand: arg }, syntheticToken(loc));
+	const n = createNode(NodeKind.UnaryExpr, { unaryOp: op, operand: arg }, syntheticToken(loc));
+	if (op === "!") {
+		n.nodeType = booleanType();
+	} else if (op === "typeof") {
+		n.nodeType = stringType();
+	} else if (arg !== null && arg.nodeType !== null) {
+		n.nodeType = arg.nodeType;
+	}
+	return n;
 }
 
 export function makeCall(calleeNode: Node, args: Node[], loc: SourceLocation): Node {
-	return createNode(NodeKind.CallExpr, { callee: calleeNode, arguments: args }, syntheticToken(loc));
+	const n = createNode(NodeKind.CallExpr, { callee: calleeNode, arguments: args, isDirectCall: true, resolvedOverloadIdx: -1 }, syntheticToken(loc));
+	if (calleeNode !== null) {
+		if (calleeNode.resolvedSym !== null) {
+			n.resolvedSym = calleeNode.resolvedSym;
+		}
+		if (calleeNode.nodeType !== null && calleeNode.nodeType.kind === TypeKind.Function) {
+			if (calleeNode.nodeType.typeReturn !== null) {
+				n.nodeType = calleeNode.nodeType.typeReturn;
+			}
+		}
+	}
+	return n;
+}
+
+// Decisive variant: creates a call with an explicit resolved symbol
+export function makeCallResolved(calleeNode: Node, args: Node[], sym: Symbol, loc: SourceLocation): Node {
+	const n = createNode(NodeKind.CallExpr, { callee: calleeNode, arguments: args, isDirectCall: true, resolvedOverloadIdx: -1 }, syntheticToken(loc));
+	n.resolvedSym = sym;
+	if (sym.symbolType !== null && sym.symbolType.kind === TypeKind.Function) {
+		n.nodeType = sym.symbolType.typeReturn;
+	}
+	return n;
 }
 
 export function makeMember(obj: Node, prop: string, loc: SourceLocation): Node {
-	return createNode(NodeKind.MemberExpr, { object: obj, property: prop, isOptional: false }, syntheticToken(loc));
+	const n = createNode(NodeKind.MemberExpr, { object: obj, property: prop, isOptional: false }, syntheticToken(loc));
+	if (obj !== null && obj.nodeType !== null) {
+		if ((obj.nodeType.kind === TypeKind.Array || obj.nodeType.kind === TypeKind.String) && prop === "length") {
+			n.nodeType = numberType();
+		} else if (obj.nodeType.kind === TypeKind.Result) {
+			if (prop === "ok") { n.nodeType = booleanType(); }
+			else if (prop === "value" && obj.nodeType.typeReturn !== null) { n.nodeType = obj.nodeType.typeReturn; }
+			else if (prop === "error" && obj.nodeType.typeExtra !== null) { n.nodeType = obj.nodeType.typeExtra; }
+		} else if (obj.nodeType.kind === TypeKind.Object) {
+			let pi = 0;
+			while (pi < obj.nodeType.typeNames.length) {
+				if (obj.nodeType.typeNames[pi] === prop) {
+					n.nodeType = obj.nodeType.typeChildren[pi];
+					pi = obj.nodeType.typeNames.length;
+				}
+				pi = pi + 1;
+			}
+		}
+	}
+	return n;
 }
 
 export function makeConditional(cond: Node, cons: Node, alt: Node, loc: SourceLocation): Node {
-	return createNode(NodeKind.ConditionalExpr, { ternaryCondition: cond, ternaryConsequent: cons, ternaryAlternate: alt }, syntheticToken(loc));
+	const n = createNode(NodeKind.ConditionalExpr, { ternaryCondition: cond, ternaryConsequent: cons, ternaryAlternate: alt }, syntheticToken(loc));
+	if (cons !== null && cons.nodeType !== null) {
+		n.nodeType = cons.nodeType;
+	} else if (alt !== null && alt.nodeType !== null) {
+		n.nodeType = alt.nodeType;
+	}
+	return n;
 }
 
 export function makeAssign(leftNode: Node, rightNode: Node, loc: SourceLocation): Node {
-	return createNode(NodeKind.BinaryExpr, { operator: "=", left: leftNode, right: rightNode }, syntheticToken(loc));
+	const n = createNode(NodeKind.BinaryExpr, { operator: "=", left: leftNode, right: rightNode }, syntheticToken(loc));
+	if (rightNode !== null && rightNode.nodeType !== null) {
+		n.nodeType = rightNode.nodeType;
+	}
+	return n;
 }
 
 export function makeArrayAccess(obj: Node, idx: Node, loc: SourceLocation): Node {
-	return createNode(NodeKind.ArrayAccess, { array: obj, index: idx }, syntheticToken(loc));
+	const n = createNode(NodeKind.ArrayAccess, { array: obj, index: idx }, syntheticToken(loc));
+	if (obj !== null && obj.nodeType !== null && obj.nodeType.kind === TypeKind.Array) {
+		if (obj.nodeType.typeReturn !== null) {
+			n.nodeType = obj.nodeType.typeReturn;
+		}
+	}
+	return n;
 }
 
 export function makeSwitch(disc: Node, cases: Node[], loc: SourceLocation): Node {
@@ -111,20 +206,72 @@ export function makeSwitchCase(tests: Node[], stmts: Node[], isDefault: boolean,
 // ===== Declaration Builders =====
 
 export function makeFnDecl(name: string, fnParams: string[], paramTypes: string[], body: Node, flags: string, returnType: string, loc: SourceLocation): Node {
-	return createNode(NodeKind.FunctionDecl, {
+	const n = createNode(NodeKind.FunctionDecl, {
 		fnName: name, params: fnParams, fnParamTypes: paramTypes,
 		fnBody: body, fnFlags: flags, fnReturnType: returnType,
 	}, syntheticToken(loc));
+	// Build Type from string annotations for codegen (Nim parity: every decl has nodeType)
+	const resolvedParams: Type[] = [];
+	for (let i = 0; i < paramTypes.length; i += 1) {
+		resolvedParams.push(resolveSimpleTypeStr(paramTypes[i]));
+	}
+	const resolvedRet = resolveSimpleTypeStr(returnType);
+	n.nodeType = createFunction(resolvedParams, fnParams, resolvedRet);
+	return n;
 }
 
 export function makeInterfaceDecl(name: string, fields: string[], fieldTypes: string[], loc: SourceLocation): Node {
-	return createNode(NodeKind.InterfaceDecl, {
+	const n = createNode(NodeKind.InterfaceDecl, {
 		interfaceName: name, interfaceFields: fields, interfaceFieldTypes: fieldTypes,
 	}, syntheticToken(loc));
+	// Build Type for codegen (Nim parity)
+	const resolvedFieldTypes: Type[] = [];
+	for (let i = 0; i < fieldTypes.length; i += 1) {
+		resolvedFieldTypes.push(resolveSimpleTypeStr(fieldTypes[i]));
+	}
+	n.nodeType = createObject(name, fields, resolvedFieldTypes, true);
+	return n;
+}
+
+// Resolve simple type annotation strings to Type objects for transform-generated nodes.
+// Handles primitives and named types (Object/interface names). Complex types (Array<T>,
+// Result<T,E>) remain as TypeReference — codegen uses getTypeDesc for those.
+function resolveSimpleTypeStr(annotation: string): Type {
+	if (annotation === "") return unknownType();
+	return match (annotation) {
+		"number" | "float64" => numberType(),
+		"string" => stringType(),
+		"boolean" => booleanType(),
+		"void" => voidType(),
+		"null" => nullType(),
+		"int32" => getSysType(TypeKind.Int32),
+		"int64" => getSysType(TypeKind.Int64),
+		"uint32" => getSysType(TypeKind.Uint32),
+		"float32" => getSysType(TypeKind.Float32),
+		_ => createTypeRef(annotation),
+	};
 }
 
 export function makeObjectLiteral(keys: string[], values: Node[], loc: SourceLocation): Node {
 	return createNode(NodeKind.ObjectLiteral, { properties: values, keys }, syntheticToken(loc));
+}
+
+export function makeHiddenAddr(inner: Node, loc: SourceLocation): Node {
+	const n = createNode(NodeKind.HiddenAddr, { expr: inner }, syntheticToken(loc));
+	if (inner !== null) n.nodeType = inner.nodeType;
+	return n;
+}
+
+export function makeHiddenStdConv(inner: Node, targetType: Type, loc: SourceLocation): Node {
+	const n = createNode(NodeKind.HiddenStdConv, { convExpr: inner, convType: targetType }, syntheticToken(loc));
+	n.nodeType = targetType;
+	return n;
+}
+
+export function makeHiddenSubConv(inner: Node, targetType: Type, loc: SourceLocation): Node {
+	const n = createNode(NodeKind.HiddenSubConv, { convExpr: inner, convType: targetType }, syntheticToken(loc));
+	n.nodeType = targetType;
+	return n;
 }
 
 // ===== Declaration Collection =====
@@ -203,10 +350,12 @@ export function boolToDeclKind(isConst: boolean): DeclKind {
 // Follows Nim's lowerings.nim:evalOnce pattern.
 export function evalOnce(expr: Node, ctx: TransformContext, loc: SourceLocation): { decl: Node, ref: Node } {
 	const name = freshTemp(ctx, "tmp");
-	return {
-		decl: makeVarDecl(name, expr, DeclKind.Const, loc),
-		ref: makeIdent(name, loc),
-	};
+	const decl = makeVarDecl(name, expr, DeclKind.Const, loc);
+	const ref = makeIdent(name, loc);
+	if (expr !== null && expr.nodeType !== null) {
+		ref.nodeType = expr.nodeType;
+	}
+	return { decl, ref };
 }
 
 // Extract statements from a body node (block → its stmts, single stmt → [stmt])

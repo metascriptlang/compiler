@@ -13,7 +13,7 @@ import { Node, NodeKind, ExprStmtData, ConditionalExprData } from "../../ast/nod
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeIf, makeBlock, makeExprStmt } from "../util";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter } from "../testUtil";
 
 // ===== Visitor =====
@@ -38,24 +38,14 @@ export function lowerConditionalExpr(program: Node, ctx: TransformContext): Node
 }
 
 // ===== Tests =====
+test "ternary in stmt becomes if" { check(firstStmtKindAfter("a ? b : c;", lowerConditionalExpr) === NodeKind.IfStmt); }
 
-testGroup("Conditional Expr Lowering", () => {
-	test("ternary in stmt becomes if", () => {
-		check(firstStmtKindAfter("a ? b : c;", lowerConditionalExpr) === NodeKind.IfStmt);
-	});
-	test("non-ternary ExprStmt unchanged", () => {
-		check(firstStmtKindAfter("f();", lowerConditionalExpr) === NodeKind.ExprStmt);
-	});
-	test("variable decl with ternary unchanged", () => {
-		check(firstStmtKindAfter("const x = a ? b : c;", lowerConditionalExpr) === NodeKind.VariableDecl);
-	});
-	test("while unchanged", () => {
-		check(firstStmtKindAfter("while (true) {}", lowerConditionalExpr) === NodeKind.WhileStmt);
-	});
-	test("stmt count preserved", () => {
-		check(stmtCountAfter("let a = 1; let b = 2;", lowerConditionalExpr) === 2);
-	});
-	test("binary expr unchanged", () => {
-		check(firstExprKindAfter("x + y;", lowerConditionalExpr) === NodeKind.BinaryExpr);
-	});
-});
+test "non-ternary ExprStmt unchanged" { check(firstStmtKindAfter("f();", lowerConditionalExpr) === NodeKind.ExprStmt); }
+
+test "variable decl with ternary unchanged" { check(firstStmtKindAfter("const x = a ? b : c;", lowerConditionalExpr) === NodeKind.VariableDecl); }
+
+test "while unchanged" { check(firstStmtKindAfter("while (true) {}", lowerConditionalExpr) === NodeKind.WhileStmt); }
+
+test "stmt count preserved" { check(stmtCountAfter("let a = 1; let b = 2;", lowerConditionalExpr) === 2); }
+
+test "binary expr unchanged" { check(firstExprKindAfter("x + y;", lowerConditionalExpr) === NodeKind.BinaryExpr); }

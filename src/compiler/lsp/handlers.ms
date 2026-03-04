@@ -29,12 +29,12 @@ import {
 	sgCollectInlayHints,
 	sgCollectReferences, sgFindUsagesByName,
 	sgFormatHoverDoc,
-	SgSuggest, SgSuggestList, SgCompletionKind,
-	SgSymbolRef, SgSymbolRefList,
-	SgDocumentSymbol, SgDocumentSymbolList,
-	SgSignatureInfo, SgSignatureList,
-	SgInlayHint, SgInlayHintList, SgInlayHintKind,
-	SgDiagnostic, SgDiagnosticList
+	SgSuggest, SgCompletionKind,
+	SgSymbolRef,
+	SgDocumentSymbol,
+	SgSignatureInfo,
+	SgInlayHint, SgInlayHintKind,
+	SgDiagnostic
 } from "../../checker/suggest";
 import { parseSource } from "../../parser/statements/validation";
 import { parseProgram } from "../../parser/statements/core";
@@ -43,7 +43,7 @@ import { CheckerContext, createContext } from "../../checker/context";
 import { SymbolKind, lookupSymbol } from "../../checker/symbol";
 import { Type, TypeKind, unknownType, getProperty } from "../../checker/types";
 import { Node, IdentifierData, MemberExprData, NodeKind } from "../../ast/node";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 // ===== Shared Helpers =====
 
@@ -76,9 +76,9 @@ export function buildDiagnosticsJson(uri: string, source: string): string {
 	const diags = sgCollectDiagnostics(ctx);
 
 	let diagArray = "[";
-	for (let i = 0; i < diags.items.length; i = i + 1) {
+	for (let i = 0; i < diags.length; i = i + 1) {
 		if (i > 0) diagArray = diagArray + ",";
-		const d = diags.items[i];
+		const d = diags[i];
 		const line = d.line - 1;
 		diagArray = diagArray + lspFmtDiagnostic(
 			line, d.column, d.column + 1, d.severity, d.message, "metascript", 0
@@ -240,11 +240,11 @@ function lspCommitCharsForKind(kind: SymbolKind): string {
 	};
 }
 
-function lspFormatCompletionList(id: string, candidates: SgSuggestList): string {
+function lspFormatCompletionList(id: string, candidates: SgSuggest[]): string {
 	let items = "[";
-	for (let i = 0; i < candidates.items.length; i = i + 1) {
+	for (let i = 0; i < candidates.length; i = i + 1) {
 		if (i > 0) items = items + ",";
-		const item = candidates.items[i];
+		const item = candidates[i];
 		const typeStr = sgTypeToString(item.symType);
 		const kindNum = lspCompletionItemKind(item.kind);
 		const sortText = lspCompletionSortText(item);
@@ -307,9 +307,9 @@ export function handleDocumentSymbol(id: string, params: string, store: LspDocum
 	const symbols = sgCollectSymbolsInFile(ctx, pr.value);
 
 	let items = "[";
-	for (let i = 0; i < symbols.items.length; i = i + 1) {
+	for (let i = 0; i < symbols.length; i = i + 1) {
 		if (i > 0) items = items + ",";
-		const sym = symbols.items[i];
+		const sym = symbols[i];
 		const kindNum = lspDocumentSymbolKind(sym.kind);
 		const symLine = sym.location.line - 1;
 		const symCol = sym.location.column;
@@ -338,14 +338,14 @@ export function handleSignatureHelp(id: string, params: string, store: LspDocume
 	if (sym === null) return lspResponse(id, "null");
 
 	const sigs = sgFormatSignature(sym);
-	if (sigs.items.length === 0) return lspResponse(id, "null");
+	if (sigs.length === 0) return lspResponse(id, "null");
 
 	const activeParam = sgCountActiveParam(doc.source, pos.line, pos.col);
 
 	let sigArray = "[";
-	for (let i = 0; i < sigs.items.length; i = i + 1) {
+	for (let i = 0; i < sigs.length; i = i + 1) {
 		if (i > 0) sigArray = sigArray + ",";
-		const sig = sigs.items[i];
+		const sig = sigs[i];
 		let paramArray = "[";
 		for (let j = 0; j < sig.paramLabels.length; j = j + 1) {
 			if (j > 0) paramArray = paramArray + ",";
@@ -379,12 +379,12 @@ export function handleInlayHint(id: string, params: string, store: LspDocumentSt
 	const ctx = checkProgram(pr.value);
 	const hintsList = sgCollectInlayHints(ctx, pr.value, startLine, endLine);
 
-	if (hintsList.items.length === 0) return lspResponse(id, "[]");
+	if (hintsList.length === 0) return lspResponse(id, "[]");
 
 	let arr = "[";
-	for (let i = 0; i < hintsList.items.length; i = i + 1) {
+	for (let i = 0; i < hintsList.length; i = i + 1) {
 		if (i > 0) arr = arr + ",";
-		const h = hintsList.items[i];
+		const h = hintsList[i];
 		// LSP InlayHintKind: 1 = Type, 2 = Parameter
 		const lspKind = h.hintKind === SgInlayHintKind.Type ? 1 : 2;
 		// Type hints: paddingLeft (space before ": number")
@@ -415,9 +415,9 @@ export function handleReferences(id: string, params: string, store: LspDocumentS
 	const refs = sgFindUsagesByName(allRefs, suggest.name);
 
 	let arr = "[";
-	for (let i = 0; i < refs.items.length; i = i + 1) {
+	for (let i = 0; i < refs.length; i = i + 1) {
 		if (i > 0) arr = arr + ",";
-		const ref = refs.items[i];
+		const ref = refs[i];
 		const refLine = ref.line - 1;
 		arr = arr + lspFmtLocation(pos.uri, refLine, ref.col, refLine, ref.col + ref.nameLen);
 	}
@@ -445,12 +445,12 @@ export function handleRename(id: string, params: string, store: LspDocumentStore
 	const allRefs = sgCollectReferences(pr.value);
 	const refs = sgFindUsagesByName(allRefs, suggest.name);
 
-	if (refs.items.length === 0) return lspResponse(id, "null");
+	if (refs.length === 0) return lspResponse(id, "null");
 
 	let edits = "[";
-	for (let i = 0; i < refs.items.length; i = i + 1) {
+	for (let i = 0; i < refs.length; i = i + 1) {
 		if (i > 0) edits = edits + ",";
-		const ref = refs.items[i];
+		const ref = refs[i];
 		const refLine = ref.line - 1;
 		edits = edits + lspFmtTextEdit(refLine, ref.col, ref.col + ref.nameLen, newName);
 	}
@@ -482,245 +482,241 @@ export function lspDispatch(method: string, id: string, params: string, store: L
 }
 
 // ===== Tests =====
+test "returns capabilities" {
+	const r = handleInitialize("1");
+	check(lspGetField(r, "jsonrpc") === "2.0");
+	check(lspGetNumberField(r, "id") === 1);
+	// Should contain capabilities
+	const result = lspGetObjectField(r, "result");
+	check(result.length > 0);
+}
 
-testGroup("LspHandleInitialize", () => {
-	test("returns capabilities", () => {
-		const r = handleInitialize("1");
-		check(lspGetField(r, "jsonrpc") === "2.0");
-		check(lspGetNumberField(r, "id") === 1);
-		// Should contain capabilities
-		const result = lspGetObjectField(r, "result");
-		check(result.length > 0);
-	});
-});
+test "returns null result" {
+	const r = handleShutdown("2");
+	check(lspGetNumberField(r, "id") === 2);
+}
 
-testGroup("LspHandleShutdown", () => {
-	test("returns null result", () => {
-		const r = handleShutdown("2");
-		check(lspGetNumberField(r, "id") === 2);
-	});
-});
+test "clean source has no diagnostics" {
+	const diags = buildDiagnosticsJson("file:///test.ms", "const x = 1;");
+	check(lspGetField(diags, "uri") === "file:///test.ms");
+}
 
-testGroup("LspBuildDiagnostics", () => {
-	test("clean source has no diagnostics", () => {
-		const diags = buildDiagnosticsJson("file:///test.ms", "const x = 1;");
-		check(lspGetField(diags, "uri") === "file:///test.ms");
-	});
-});
+test "initialize" {
+	const store = createDocumentStore();
+	const r = lspDispatch("initialize", "1", "{}", store);
+	check(lspGetNumberField(r, "id") === 1);
+}
 
-testGroup("LspDispatch", () => {
-	test("initialize", () => {
-		const store = createDocumentStore();
-		const r = lspDispatch("initialize", "1", "{}", store);
-		check(lspGetNumberField(r, "id") === 1);
-	});
-	test("shutdown", () => {
-		const store = createDocumentStore();
-		const r = lspDispatch("shutdown", "2", "{}", store);
-		check(lspGetNumberField(r, "id") === 2);
-	});
-	test("unknown method with id", () => {
-		const store = createDocumentStore();
-		const r = lspDispatch("unknown/method", "3", "{}", store);
-		// Should return error response
-		check(r.length > 0);
-	});
-	test("unknown notification", () => {
-		const store = createDocumentStore();
-		const r = lspDispatch("$/unknownNotification", "", "{}", store);
-		check(r === "");
-	});
-	test("completion dispatch", () => {
-		const store = createDocumentStore();
-		storeDocument(store, "file:///test.ms", "const abc = 1;\nconst abd = 2;", 1);
-		const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":3}}";
-		const r = lspDispatch("textDocument/completion", "10", params, store);
-		check(lspGetNumberField(r, "id") === 10);
-		check(r.length > 0);
-	});
-	test("definition dispatch", () => {
-		const store = createDocumentStore();
-		storeDocument(store, "file:///test.ms", "const myVar = 42;", 1);
-		const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
-		const r = lspDispatch("textDocument/definition", "11", params, store);
-		check(lspGetNumberField(r, "id") === 11);
-		check(r.length > 0);
-	});
-});
+test "shutdown" {
+	const store = createDocumentStore();
+	const r = lspDispatch("shutdown", "2", "{}", store);
+	check(lspGetNumberField(r, "id") === 2);
+}
 
-testGroup("LspCompletion", () => {
-	test("returns completion items", () => {
-		const store = createDocumentStore();
-		// Cursor at line 1 (0-indexed), char 0 → empty prefix → returns all symbols
-		storeDocument(store, "file:///test.ms", "const abc = 1;\nconst abd = 2;", 1);
-		const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":0}}";
-		const r = handleCompletion("5", params, store);
-		check(lspGetNumberField(r, "id") === 5);
-		// Response with items should be much longer than a minimal empty response
-		check(r.length > 50);
-	});
-	test("unknown doc returns empty", () => {
-		const store = createDocumentStore();
-		const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0}}";
-		const r = handleCompletion("6", params, store);
-		check(lspGetNumberField(r, "id") === 6);
-	});
-});
+test "unknown method with id" {
+	const store = createDocumentStore();
+	const r = lspDispatch("unknown/method", "3", "{}", store);
+	// Should return error response
+	check(r.length > 0);
+}
 
-testGroup("LspDefinition", () => {
-	test("returns location for known symbol", () => {
-		const store = createDocumentStore();
-		storeDocument(store, "file:///test.ms", "const myVar = 42;", 1);
-		const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
-		const r = handleDefinition("7", params, store);
-		check(lspGetNumberField(r, "id") === 7);
-		check(r.length > 0);
-	});
-	test("unknown doc returns null", () => {
-		const store = createDocumentStore();
-		const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0}}";
-		const r = handleDefinition("8", params, store);
-		check(lspGetNumberField(r, "id") === 8);
-	});
-	test("unknown position returns null result", () => {
-		const store = createDocumentStore();
-		storeDocument(store, "file:///test.ms", "const x = 1;", 1);
-		const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":99,\"character\":0}}";
-		const r = handleDefinition("9", params, store);
-		check(lspGetNumberField(r, "id") === 9);
-	});
-});
+test "unknown notification" {
+	const store = createDocumentStore();
+	const r = lspDispatch("$/unknownNotification", "", "{}", store);
+	check(r === "");
+}
 
-testGroup("LspDocumentSymbol", () => {
-	test("returns symbols for file", () => {
-		const store = createDocumentStore();
-		storeDocument(store, "file:///test.ms", "function foo() { return 1; }\nconst x = 1;", 1);
-		const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"}}";
-		const r = handleDocumentSymbol("20", params, store);
-		check(lspGetNumberField(r, "id") === 20);
-		// Should have symbols (response much longer than empty)
-		check(r.length > 60);
-	});
-	test("unknown doc returns empty array", () => {
-		const store = createDocumentStore();
-		const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"}}";
-		const r = handleDocumentSymbol("21", params, store);
-		check(lspGetNumberField(r, "id") === 21);
-	});
-	test("dispatch routes correctly", () => {
-		const store = createDocumentStore();
-		storeDocument(store, "file:///test.ms", "const a = 1;", 1);
-		const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"}}";
-		const r = lspDispatch("textDocument/documentSymbol", "22", params, store);
-		check(lspGetNumberField(r, "id") === 22);
-		check(r.length > 0);
-	});
-});
+test "completion dispatch" {
+	const store = createDocumentStore();
+	storeDocument(store, "file:///test.ms", "const abc = 1;\nconst abd = 2;", 1);
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":3}}";
+	const r = lspDispatch("textDocument/completion", "10", params, store);
+	check(lspGetNumberField(r, "id") === 10);
+	check(r.length > 0);
+}
 
-testGroup("LspSignatureHelp", () => {
-	test("returns signature for function", () => {
-		const store = createDocumentStore();
-		storeDocument(store, "file:///test.ms", "function greet(name: string): void { }\ngreet(", 1);
-		const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":6}}";
-		const r = handleSignatureHelp("30", params, store);
-		check(lspGetNumberField(r, "id") === 30);
-		// May or may not find symbol at call site — depends on AST position
-		check(r.length > 0);
-	});
-	test("unknown doc returns null", () => {
-		const store = createDocumentStore();
-		const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0}}";
-		const r = handleSignatureHelp("31", params, store);
-		check(lspGetNumberField(r, "id") === 31);
-	});
-	test("dispatch routes correctly", () => {
-		const store = createDocumentStore();
-		storeDocument(store, "file:///test.ms", "const x = 1;", 1);
-		const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":0}}";
-		const r = lspDispatch("textDocument/signatureHelp", "32", params, store);
-		check(lspGetNumberField(r, "id") === 32);
-	});
-});
+test "definition dispatch" {
+	const store = createDocumentStore();
+	storeDocument(store, "file:///test.ms", "const myVar = 42;", 1);
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
+	const r = lspDispatch("textDocument/definition", "11", params, store);
+	check(lspGetNumberField(r, "id") === 11);
+	check(r.length > 0);
+}
 
-testGroup("LspInlayHint", () => {
-	test("type hint for untyped var", () => {
-		const store = createDocumentStore();
-		storeDocument(store, "file:///test.ms", "const x = 42;", 1);
-		const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":10,\"character\":0}}}";
-		const r = handleInlayHint("40", params, store);
-		check(lspGetNumberField(r, "id") === 40);
-		// Should contain a type hint
-		check(r.length > 50);
-	});
-	test("empty for unknown doc", () => {
-		const store = createDocumentStore();
-		const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":10,\"character\":0}}}";
-		const r = handleInlayHint("41", params, store);
-		check(lspGetNumberField(r, "id") === 41);
-	});
-	test("dispatch routes correctly", () => {
-		const store = createDocumentStore();
-		storeDocument(store, "file:///test.ms", "const y = true;", 1);
-		const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":10,\"character\":0}}}";
-		const r = lspDispatch("textDocument/inlayHint", "42", params, store);
-		check(lspGetNumberField(r, "id") === 42);
-	});
-});
+test "returns completion items" {
+	const store = createDocumentStore();
+	// Cursor at line 1 (0-indexed), char 0 → empty prefix → returns all symbols
+	storeDocument(store, "file:///test.ms", "const abc = 1;\nconst abd = 2;", 1);
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":0}}";
+	const r = handleCompletion("5", params, store);
+	check(lspGetNumberField(r, "id") === 5);
+	// Response with items should be much longer than a minimal empty response
+	check(r.length > 50);
+}
 
-testGroup("LspReferences", () => {
-	test("finds all references to a variable", () => {
-		const store = createDocumentStore();
-		storeDocument(store, "file:///test.ms", "const abc = 1;\nconst def = abc + 2;", 1);
-		// Cursor on "abc" declaration at line 0, col 6
-		const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
-		const r = handleReferences("50", params, store);
-		check(lspGetNumberField(r, "id") === 50);
-		// Should find at least 2 references (decl + usage)
-		check(r.length > 60);
-	});
-	test("unknown doc returns empty", () => {
-		const store = createDocumentStore();
-		const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0}}";
-		const r = handleReferences("51", params, store);
-		check(lspGetNumberField(r, "id") === 51);
-	});
-	test("dispatch routes correctly", () => {
-		const store = createDocumentStore();
-		storeDocument(store, "file:///test.ms", "const x = 1;", 1);
-		const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
-		const r = lspDispatch("textDocument/references", "52", params, store);
-		check(lspGetNumberField(r, "id") === 52);
-	});
-});
+test "unknown doc returns empty" {
+	const store = createDocumentStore();
+	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0}}";
+	const r = handleCompletion("6", params, store);
+	check(lspGetNumberField(r, "id") === 6);
+}
 
-testGroup("LspRename", () => {
-	test("renames variable occurrences", () => {
-		const store = createDocumentStore();
-		storeDocument(store, "file:///test.ms", "const abc = 1;\nconst def = abc + 2;", 1);
-		const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6},\"newName\":\"xyz\"}";
-		const r = handleRename("60", params, store);
-		check(lspGetNumberField(r, "id") === 60);
-		// Should contain workspace edit with changes
-		check(r.length > 60);
-	});
-	test("unknown doc returns null", () => {
-		const store = createDocumentStore();
-		const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0},\"newName\":\"xyz\"}";
-		const r = handleRename("61", params, store);
-		check(lspGetNumberField(r, "id") === 61);
-	});
-	test("empty newName returns null", () => {
-		const store = createDocumentStore();
-		storeDocument(store, "file:///test.ms", "const x = 1;", 1);
-		const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
-		const r = handleRename("62", params, store);
-		check(lspGetNumberField(r, "id") === 62);
-	});
-	test("dispatch routes correctly", () => {
-		const store = createDocumentStore();
-		storeDocument(store, "file:///test.ms", "const x = 1;", 1);
-		const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6},\"newName\":\"y\"}";
-		const r = lspDispatch("textDocument/rename", "63", params, store);
-		check(lspGetNumberField(r, "id") === 63);
-	});
-});
+test "returns location for known symbol" {
+	const store = createDocumentStore();
+	storeDocument(store, "file:///test.ms", "const myVar = 42;", 1);
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
+	const r = handleDefinition("7", params, store);
+	check(lspGetNumberField(r, "id") === 7);
+	check(r.length > 0);
+}
+
+test "unknown doc returns null" {
+	const store = createDocumentStore();
+	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0}}";
+	const r = handleDefinition("8", params, store);
+	check(lspGetNumberField(r, "id") === 8);
+}
+
+test "unknown position returns null result" {
+	const store = createDocumentStore();
+	storeDocument(store, "file:///test.ms", "const x = 1;", 1);
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":99,\"character\":0}}";
+	const r = handleDefinition("9", params, store);
+	check(lspGetNumberField(r, "id") === 9);
+}
+
+test "returns symbols for file" {
+	const store = createDocumentStore();
+	storeDocument(store, "file:///test.ms", "function foo() { return 1; }\nconst x = 1;", 1);
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"}}";
+	const r = handleDocumentSymbol("20", params, store);
+	check(lspGetNumberField(r, "id") === 20);
+	// Should have symbols (response much longer than empty)
+	check(r.length > 60);
+}
+
+test "unknown doc returns empty array" {
+	const store = createDocumentStore();
+	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"}}";
+	const r = handleDocumentSymbol("21", params, store);
+	check(lspGetNumberField(r, "id") === 21);
+}
+
+test "dispatch routes correctly" {
+	const store = createDocumentStore();
+	storeDocument(store, "file:///test.ms", "const a = 1;", 1);
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"}}";
+	const r = lspDispatch("textDocument/documentSymbol", "22", params, store);
+	check(lspGetNumberField(r, "id") === 22);
+	check(r.length > 0);
+}
+
+test "returns signature for function" {
+	const store = createDocumentStore();
+	storeDocument(store, "file:///test.ms", "function greet(name: string): void { }\ngreet(", 1);
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":6}}";
+	const r = handleSignatureHelp("30", params, store);
+	check(lspGetNumberField(r, "id") === 30);
+	// May or may not find symbol at call site — depends on AST position
+	check(r.length > 0);
+}
+
+test "unknown doc returns null" {
+	const store = createDocumentStore();
+	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0}}";
+	const r = handleSignatureHelp("31", params, store);
+	check(lspGetNumberField(r, "id") === 31);
+}
+
+test "dispatch routes correctly" {
+	const store = createDocumentStore();
+	storeDocument(store, "file:///test.ms", "const x = 1;", 1);
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":0}}";
+	const r = lspDispatch("textDocument/signatureHelp", "32", params, store);
+	check(lspGetNumberField(r, "id") === 32);
+}
+
+test "type hint for untyped var" {
+	const store = createDocumentStore();
+	storeDocument(store, "file:///test.ms", "const x = 42;", 1);
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":10,\"character\":0}}}";
+	const r = handleInlayHint("40", params, store);
+	check(lspGetNumberField(r, "id") === 40);
+	// Should contain a type hint
+	check(r.length > 50);
+}
+
+test "empty for unknown doc" {
+	const store = createDocumentStore();
+	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":10,\"character\":0}}}";
+	const r = handleInlayHint("41", params, store);
+	check(lspGetNumberField(r, "id") === 41);
+}
+
+test "dispatch routes correctly" {
+	const store = createDocumentStore();
+	storeDocument(store, "file:///test.ms", "const y = true;", 1);
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":10,\"character\":0}}}";
+	const r = lspDispatch("textDocument/inlayHint", "42", params, store);
+	check(lspGetNumberField(r, "id") === 42);
+}
+
+test "finds all references to a variable" {
+	const store = createDocumentStore();
+	storeDocument(store, "file:///test.ms", "const abc = 1;\nconst def = abc + 2;", 1);
+	// Cursor on "abc" declaration at line 0, col 6
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
+	const r = handleReferences("50", params, store);
+	check(lspGetNumberField(r, "id") === 50);
+	// Should find at least 2 references (decl + usage)
+	check(r.length > 60);
+}
+
+test "unknown doc returns empty" {
+	const store = createDocumentStore();
+	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0}}";
+	const r = handleReferences("51", params, store);
+	check(lspGetNumberField(r, "id") === 51);
+}
+
+test "dispatch routes correctly" {
+	const store = createDocumentStore();
+	storeDocument(store, "file:///test.ms", "const x = 1;", 1);
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
+	const r = lspDispatch("textDocument/references", "52", params, store);
+	check(lspGetNumberField(r, "id") === 52);
+}
+
+test "renames variable occurrences" {
+	const store = createDocumentStore();
+	storeDocument(store, "file:///test.ms", "const abc = 1;\nconst def = abc + 2;", 1);
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6},\"newName\":\"xyz\"}";
+	const r = handleRename("60", params, store);
+	check(lspGetNumberField(r, "id") === 60);
+	// Should contain workspace edit with changes
+	check(r.length > 60);
+}
+
+test "unknown doc returns null" {
+	const store = createDocumentStore();
+	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0},\"newName\":\"xyz\"}";
+	const r = handleRename("61", params, store);
+	check(lspGetNumberField(r, "id") === 61);
+}
+
+test "empty newName returns null" {
+	const store = createDocumentStore();
+	storeDocument(store, "file:///test.ms", "const x = 1;", 1);
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
+	const r = handleRename("62", params, store);
+	check(lspGetNumberField(r, "id") === 62);
+}
+
+test "dispatch routes correctly" {
+	const store = createDocumentStore();
+	storeDocument(store, "file:///test.ms", "const x = 1;", 1);
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6},\"newName\":\"y\"}";
+	const r = lspDispatch("textDocument/rename", "63", params, store);
+	check(lspGetNumberField(r, "id") === 63);
+}

@@ -22,7 +22,7 @@ import {
 } from "../../ast/node";
 import { TransformContext, NameSet } from "../context";
 import { makeVarDecl, makeIdent, makeNull, makeAssign, makeExprStmt, makeBlock, collectDeclNames } from "../util";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter, fnBodyStmtCount } from "../testUtil";
 
 // ===== Conversion =====
@@ -93,10 +93,10 @@ function convertVarInBody(body: Node, loc: SourceLocation): void {
 // ===== Per-Function Hoisting =====
 
 function hoistVarsInBody(body: Node, loc: SourceLocation): void {
-	const ns: NameSet = { names: [] };
+	const ns: NameSet = [];
 	collectDeclNames(body, ns, true);
 
-	if (ns.names.length === 0) return;
+	if (ns.length === 0) return;
 
 	if (body.kind !== NodeKind.BlockStmt) return;
 	const bd = body.data as BlockStmtData;
@@ -105,8 +105,8 @@ function hoistVarsInBody(body: Node, loc: SourceLocation): void {
 
 	// Build new stmt list: hoisted decls + original stmts
 	const newStmts: Node[] = [];
-	for (let ni = 0; ni < ns.names.length; ni += 1) {
-		newStmts.push(makeVarDecl(ns.names[ni], makeNull(loc), DeclKind.Let, loc));
+	for (let ni = 0; ni < ns.length; ni += 1) {
+		newStmts.push(makeVarDecl(ns[ni], makeNull(loc), DeclKind.Let, loc));
 	}
 	for (let oi = 0; oi < bd.statements.length; oi += 1) {
 		newStmts.push(bd.statements[oi]);
@@ -191,35 +191,26 @@ export function lowerVarHoist(program: Node, ctx: TransformContext): Node {
 }
 
 // ===== Tests =====
+test "const unchanged" { check(stmtCountAfter("const x = 1;", lowerVarHoist) === 1); }
 
-testGroup("Var Hoist", () => {
-	test("const unchanged", () => {
-		check(stmtCountAfter("const x = 1;", lowerVarHoist) === 1);
-	});
-	test("let unchanged", () => {
-		check(stmtCountAfter("let x = 1;", lowerVarHoist) === 1);
-	});
-	test("module var stays", () => {
-		check(firstStmtKindAfter("var x = 1;", lowerVarHoist) === NodeKind.VariableDecl);
-	});
-	test("function with var", () => {
-		check(stmtCountAfter("function f() { var x = 1; }", lowerVarHoist) === 1);
-	});
-	test("function with var is FunctionDecl", () => {
-		check(firstStmtKindAfter("function f() { var x = 1; }", lowerVarHoist) === NodeKind.FunctionDecl);
-	});
-	test("no var passthrough", () => {
-		check(stmtCountAfter("function f() { let x = 1; }", lowerVarHoist) === 1);
-	});
-	test("stmt count preserved", () => {
-		check(stmtCountAfter("let a = 1; let b = 2;", lowerVarHoist) === 2);
-	});
-	test("var hoisted adds let at top", () => {
-		// function f() { var x = 1; } → body has 2 stmts: let x = null; x = 1;
-		check(fnBodyStmtCount("function f() { var x = 1; }", lowerVarHoist) === 2);
-	});
-	test("nested fn var not hoisted to outer", () => {
-		// function f() { function g() { var x = 1; } } → outer body still 1 stmt (nested fn)
-		check(fnBodyStmtCount("function f() { function g() { var x = 1; } }", lowerVarHoist) === 1);
-	});
-});
+test "let unchanged" { check(stmtCountAfter("let x = 1;", lowerVarHoist) === 1); }
+
+test "module var stays" { check(firstStmtKindAfter("var x = 1;", lowerVarHoist) === NodeKind.VariableDecl); }
+
+test "function with var" { check(stmtCountAfter("function f() { var x = 1; }", lowerVarHoist) === 1); }
+
+test "function with var is FunctionDecl" { check(firstStmtKindAfter("function f() { var x = 1; }", lowerVarHoist) === NodeKind.FunctionDecl); }
+
+test "no var passthrough" { check(stmtCountAfter("function f() { let x = 1; }", lowerVarHoist) === 1); }
+
+test "stmt count preserved" { check(stmtCountAfter("let a = 1; let b = 2;", lowerVarHoist) === 2); }
+
+test "var hoisted adds let at top" {
+	// function f() { var x = 1; } → body has 2 stmts: let x = null; x = 1;
+	check(fnBodyStmtCount("function f() { var x = 1; }", lowerVarHoist) === 2);
+}
+
+test "nested fn var not hoisted to outer" {
+	// function f() { function g() { var x = 1; } } → outer body still 1 stmt (nested fn)
+	check(fnBodyStmtCount("function f() { function g() { var x = 1; } }", lowerVarHoist) === 1);
+}

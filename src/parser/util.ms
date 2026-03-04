@@ -5,7 +5,7 @@ import { Token, TokenKind } from "../lexer/token";
 import { ParserState, createState, current, advance, isAtEnd, skipDestructurePattern, addDefaultParam, getDefaultText, getDefaultCount } from "./context";
 import { skipTypeAnnotation } from "./typeAnnotation";
 import { lex } from "../lexer/lexer";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 // ===== Skip Optional Type Annotation =====
 // Checks for ':' and skips the following type. Used after identifiers/params.
@@ -175,21 +175,21 @@ function parseParams(input: string, fnName: string): string[] {
 	return parseParamList(state, fnName);
 }
 
-testGroup("DefaultParamStore", () => {
-	test("capture number default", () => {
-		const raw = parseParams("(x: number, y: number = 5)", "testFn1");
-		check(raw.length === 4);
-		const text = getDefaultText("testFn1", 1);
-		check(text === "5");
-	});
-	test("getDefaultCount", () => {
-		parseParams("(a: number, b: number = 1, c: number = 2)", "testFn2");
-		check(getDefaultCount("testFn2", 3) === 2);
-	});
-	test("no default returns empty", () => {
-		parseParams("(x: number, y: string)", "testFn3");
-		check(getDefaultText("testFn3", 0) === "");
-		check(getDefaultText("testFn3", 1) === "");
-		check(getDefaultCount("testFn3", 2) === 0);
-	});
-});
+test "capture number default" {
+	const raw = parseParams("(x: number, y: number = 5)", "testFn1");
+	check(raw.length === 4);
+	const text = getDefaultText("testFn1", 1);
+	check(text === "5");
+}
+
+test "getDefaultCount" {
+	parseParams("(a: number, b: number = 1, c: number = 2)", "testFn2");
+	check(getDefaultCount("testFn2", 3) === 2);
+}
+
+test "no default returns empty" {
+	parseParams("(x: number, y: string)", "testFn3");
+	check(getDefaultText("testFn3", 0) === "");
+	check(getDefaultText("testFn3", 1) === "");
+	check(getDefaultCount("testFn3", 2) === 0);
+}

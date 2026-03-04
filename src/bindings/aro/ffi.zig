@@ -461,7 +461,7 @@ fn collectEnum(
 
 // ── Exported C API ───────────────────────────────────────────────────
 
-export fn aro_parse_header(
+export fn aroParseHeader(
     path: [*:0]const u8,
     include_dirs: ?[*]const [*:0]const u8,
     n_include_dirs: c_int,
@@ -469,75 +469,75 @@ export fn aro_parse_header(
     return parseHeaderImpl(path, include_dirs, n_include_dirs) catch null;
 }
 
-export fn aro_num_functions(r: *AroResult) c_int {
+export fn aroNumFunctions(r: *AroResult) c_int {
     return r.n_functions;
 }
-export fn aro_fn_name(r: *AroResult, i: c_int) [*:0]const u8 {
+export fn aroFnName(r: *AroResult, i: c_int) [*:0]const u8 {
     return r.functions[@intCast(i)].name;
 }
-export fn aro_fn_return_type(r: *AroResult, i: c_int) [*:0]const u8 {
+export fn aroFnReturnType(r: *AroResult, i: c_int) [*:0]const u8 {
     return r.functions[@intCast(i)].return_type;
 }
-export fn aro_fn_num_params(r: *AroResult, i: c_int) c_int {
+export fn aroFnNumParams(r: *AroResult, i: c_int) c_int {
     return r.functions[@intCast(i)].n_params;
 }
-export fn aro_fn_param_name(r: *AroResult, fi: c_int, pi: c_int) [*:0]const u8 {
+export fn aroFnParamName(r: *AroResult, fi: c_int, pi: c_int) [*:0]const u8 {
     return r.functions[@intCast(fi)].params[@intCast(pi)].name;
 }
-export fn aro_fn_param_type(r: *AroResult, fi: c_int, pi: c_int) [*:0]const u8 {
+export fn aroFnParamType(r: *AroResult, fi: c_int, pi: c_int) [*:0]const u8 {
     return r.functions[@intCast(fi)].params[@intCast(pi)].type_str;
 }
-export fn aro_fn_is_variadic(r: *AroResult, i: c_int) bool {
+export fn aroFnIsVariadic(r: *AroResult, i: c_int) bool {
     return r.functions[@intCast(i)].is_variadic;
 }
 
-export fn aro_num_structs(r: *AroResult) c_int {
+export fn aroNumStructs(r: *AroResult) c_int {
     return r.n_structs;
 }
-export fn aro_struct_name(r: *AroResult, i: c_int) [*:0]const u8 {
+export fn aroStructName(r: *AroResult, i: c_int) [*:0]const u8 {
     return r.structs[@intCast(i)].name;
 }
-export fn aro_struct_is_union(r: *AroResult, i: c_int) bool {
+export fn aroStructIsUnion(r: *AroResult, i: c_int) bool {
     return r.structs[@intCast(i)].is_union;
 }
-export fn aro_struct_num_fields(r: *AroResult, i: c_int) c_int {
+export fn aroStructNumFields(r: *AroResult, i: c_int) c_int {
     return r.structs[@intCast(i)].n_fields;
 }
-export fn aro_struct_field_name(r: *AroResult, si: c_int, fi: c_int) [*:0]const u8 {
+export fn aroStructFieldName(r: *AroResult, si: c_int, fi: c_int) [*:0]const u8 {
     return r.structs[@intCast(si)].fields[@intCast(fi)].name;
 }
-export fn aro_struct_field_type(r: *AroResult, si: c_int, fi: c_int) [*:0]const u8 {
+export fn aroStructFieldType(r: *AroResult, si: c_int, fi: c_int) [*:0]const u8 {
     return r.structs[@intCast(si)].fields[@intCast(fi)].type_str;
 }
 
-export fn aro_num_enums(r: *AroResult) c_int {
+export fn aroNumEnums(r: *AroResult) c_int {
     return r.n_enums;
 }
-export fn aro_enum_name(r: *AroResult, i: c_int) [*:0]const u8 {
+export fn aroEnumName(r: *AroResult, i: c_int) [*:0]const u8 {
     return r.enums[@intCast(i)].name;
 }
-export fn aro_enum_num_members(r: *AroResult, i: c_int) c_int {
+export fn aroEnumNumMembers(r: *AroResult, i: c_int) c_int {
     return r.enums[@intCast(i)].n_members;
 }
-export fn aro_enum_member_name(r: *AroResult, ei: c_int, mi: c_int) [*:0]const u8 {
+export fn aroEnumMemberName(r: *AroResult, ei: c_int, mi: c_int) [*:0]const u8 {
     return r.enums[@intCast(ei)].members[@intCast(mi)].name;
 }
 
-export fn aro_num_typedefs(r: *AroResult) c_int {
+export fn aroNumTypedefs(r: *AroResult) c_int {
     return r.n_typedefs;
 }
-export fn aro_typedef_name(r: *AroResult, i: c_int) [*:0]const u8 {
+export fn aroTypedefName(r: *AroResult, i: c_int) [*:0]const u8 {
     return r.typedefs[@intCast(i)].name;
 }
-export fn aro_typedef_target(r: *AroResult, i: c_int) [*:0]const u8 {
+export fn aroTypedefTarget(r: *AroResult, i: c_int) [*:0]const u8 {
     return r.typedefs[@intCast(i)].target;
 }
 
-export fn aro_error_msg(r: *AroResult) ?[*:0]const u8 {
+export fn aroErrorMsg(r: *AroResult) ?[*:0]const u8 {
     return r.error_msg;
 }
 
-export fn aro_result_free(r: *AroResult) void {
+export fn aroResultFree(r: *AroResult) void {
     const arena_ptr = r.arena;
     arena_ptr.deinit();
     std.heap.page_allocator.destroy(arena_ptr);

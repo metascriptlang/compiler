@@ -2,7 +2,7 @@
 // Pattern: ~/projects/metascript/src/lexer/lexer.zig (LexerState)
 
 import { Token, TokenKind } from "./token";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 
 
 export interface LexerState {
@@ -55,73 +55,70 @@ export function addToken(s: LexerState, kind: TokenKind, value: string, line: nu
 }
 
 // ===== Tests =====
+test "createLexerState" {
+	const s = createLexerState("abc");
+	check(s.pos === 0);
+	check(s.line === 1);
+	check(s.column === 1);
+	check(s.tokens.length === 0);
+}
 
-testGroup("Lexer State", () => {
-	test("createLexerState", () => {
-		const s = createLexerState("abc");
-		check(s.pos === 0);
-		check(s.line === 1);
-		check(s.column === 1);
-		check(s.tokens.length === 0);
-	});
+test "peek at start" {
+	const s = createLexerState("xy");
+	check(peek(s) === "x".code);
+}
 
-	test("peek at start", () => {
-		const s = createLexerState("xy");
-		check(peek(s) === "x".code);
-	});
+test "peek at EOF returns 0" {
+	const s = createLexerState("");
+	check(peek(s) === 0);
+}
 
-	test("peek at EOF returns 0", () => {
-		const s = createLexerState("");
-		check(peek(s) === 0);
-	});
+test "peekAt with offset" {
+	const s = createLexerState("abc");
+	check(peekAt(s, 0) === "a".code);
+	check(peekAt(s, 1) === "b".code);
+	check(peekAt(s, 2) === "c".code);
+	check(peekAt(s, 3) === 0);
+}
 
-	test("peekAt with offset", () => {
-		const s = createLexerState("abc");
-		check(peekAt(s, 0) === "a".code);
-		check(peekAt(s, 1) === "b".code);
-		check(peekAt(s, 2) === "c".code);
-		check(peekAt(s, 3) === 0);
-	});
+test "advanceChar updates pos and column" {
+	const s = createLexerState("ab");
+	const ch = advanceChar(s);
+	check(ch === "a".code);
+	check(s.pos === 1);
+	check(s.column === 2);
+	check(s.line === 1);
+}
 
-	test("advanceChar updates pos and column", () => {
-		const s = createLexerState("ab");
-		const ch = advanceChar(s);
-		check(ch === "a".code);
-		check(s.pos === 1);
-		check(s.column === 2);
-		check(s.line === 1);
-	});
+test "advanceChar newline updates line" {
+	const s = createLexerState("\nx");
+	advanceChar(s);
+	check(s.line === 2);
+	check(s.column === 1);
+}
 
-	test("advanceChar newline updates line", () => {
-		const s = createLexerState("\nx");
-		advanceChar(s);
-		check(s.line === 2);
-		check(s.column === 1);
-	});
+test "skip advances N chars" {
+	const s = createLexerState("abcde");
+	skip(s, 3);
+	check(s.pos === 3);
+	check(peek(s) === "d".code);
+}
 
-	test("skip advances N chars", () => {
-		const s = createLexerState("abcde");
-		skip(s, 3);
-		check(s.pos === 3);
-		check(peek(s) === "d".code);
-	});
+test "addToken appends to tokens" {
+	const s = createLexerState("");
+	addToken(s, TokenKind.Number, "42", 1, 1);
+	check(s.tokens.length === 1);
+	check(s.tokens[0].kind === TokenKind.Number);
+	check(s.tokens[0].value === "42");
+	check(s.tokens[0].line === 1);
+	check(s.tokens[0].column === 1);
+}
 
-	test("addToken appends to tokens", () => {
-		const s = createLexerState("");
-		addToken(s, TokenKind.Number, "42", 1, 1);
-		check(s.tokens.length === 1);
-		check(s.tokens[0].kind === TokenKind.Number);
-		check(s.tokens[0].value === "42");
-		check(s.tokens[0].line === 1);
-		check(s.tokens[0].column === 1);
-	});
-
-	test("line tracking across multiple newlines", () => {
-		const s = createLexerState("\n\n\nx");
-		skip(s, 3);
-		check(s.line === 4);
-		check(s.column === 1);
-		advanceChar(s);
-		check(s.column === 2);
-	});
-});
+test "line tracking across multiple newlines" {
+	const s = createLexerState("\n\n\nx");
+	skip(s, 3);
+	check(s.line === 4);
+	check(s.column === 1);
+	advanceChar(s);
+	check(s.column === 2);
+}

@@ -20,9 +20,10 @@
 //     if (!$result_0.ok) { return Result.err($result_0.error); }
 
 import {
-	Node, NodeKind, DeclKind,
+	Node, NodeKind, DeclKind, SourceLocation,
 	VariableDeclData, ReturnStmtData, ExprStmtData, TryExprData,
 } from "../../ast/node";
+import { Type, TypeKind, booleanType } from "../../checker/types";
 import { TransformContext, freshTemp } from "../context";
 import { walkExpandBlocks } from "../walker";
 import {
@@ -30,12 +31,12 @@ import {
 	makeReturn, makeIf, makeMember, makeCall, makeConditional,
 	makeUnary,
 } from "../util";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
 
-export function lowerResult(program: Node, ctx: TransformContext): Node {
+export function lowerTryExpr(program: Node, ctx: TransformContext): Node {
 	walkExpandBlocks(program, expandStmt, ctx);
 	return program;
 }
@@ -69,26 +70,41 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 // Case 1: const x = try f();
 function expandVarDeclTry(stmt: Node, ctx: TransformContext): Node[] {
 	const d = stmt.data as VariableDeclData;
-	const tryData = d.initializer.data as TryExprData;
+	const tryExpr = d.initializer;
+	const tryData = tryExpr.data as TryExprData;
 	const loc = stmt.location;
 	const tempName = freshTemp(ctx, "result");
 	const result: Node[] = [];
 
 	// const $result_N = f();
-	result.push(makeVarDecl(tempName, tryData.tryArg, DeclKind.Const, loc));
+	const resType = tryExpr.nodeType; // Result<T, E>
+	const resDecl = makeVarDecl(tempName, tryData.tryArg, DeclKind.Const, loc);
+	resDecl.nodeType = resType;
+	result.push(resDecl);
 
 	if (tryData.hasCatch) {
 		// Case 2: const x = $result.ok ? $result.value : catchVal;
 		const okCheck = makeMember(makeIdent(tempName, loc), "ok", loc);
+		okCheck.nodeType = booleanType();
 		const valueAccess = makeMember(makeIdent(tempName, loc), "value", loc);
+		if (resType !== null) valueAccess.nodeType = resType.typeReturn;
+
 		const condExpr = makeConditional(okCheck, valueAccess, tryData.catchVal, loc);
-		result.push(makeVarDecl(d.declName, condExpr, d.declKind, loc));
+		condExpr.nodeType = stmt.nodeType; // the type of the variable being declared
+
+		const varDecl = makeVarDecl(d.declName, condExpr, d.declKind, loc);
+		varDecl.nodeType = stmt.nodeType;
+		result.push(varDecl);
 	} else {
 		// if (!$result.ok) { return Result.err($result.error); }
-		result.push(makeErrorCheck(tempName, loc));
+		result.push(makeErrorCheck(tempName, resType, loc));
 		// const x = $result.value;
 		const valueAccess = makeMember(makeIdent(tempName, loc), "value", loc);
-		result.push(makeVarDecl(d.declName, valueAccess, d.declKind, loc));
+		if (resType !== null) valueAccess.nodeType = resType.typeReturn;
+
+		const varDecl = makeVarDecl(d.declName, valueAccess, d.declKind, loc);
+		varDecl.nodeType = stmt.nodeType;
+		result.push(varDecl);
 	}
 
 	return result;
@@ -97,17 +113,24 @@ function expandVarDeclTry(stmt: Node, ctx: TransformContext): Node[] {
 // Case 3: return try f();
 function expandReturnTry(stmt: Node, ctx: TransformContext): Node[] {
 	const d = stmt.data as ReturnStmtData;
-	const tryData = d.argument.data as TryExprData;
+	const tryExpr = d.argument;
+	const tryData = tryExpr.data as TryExprData;
 	const loc = stmt.location;
 	const tempName = freshTemp(ctx, "result");
 	const result: Node[] = [];
 
 	// const $result_N = f();
-	result.push(makeVarDecl(tempName, tryData.tryArg, DeclKind.Const, loc));
+	const resType = tryExpr.nodeType; // Result<T, E>
+	const resDecl = makeVarDecl(tempName, tryData.tryArg, DeclKind.Const, loc);
+	resDecl.nodeType = resType;
+	result.push(resDecl);
+
 	// if (!$result.ok) { return Result.err($result.error); }
-	result.push(makeErrorCheck(tempName, loc));
+	result.push(makeErrorCheck(tempName, resType, loc));
+
 	// return $result.value;
 	const valueAccess = makeMember(makeIdent(tempName, loc), "value", loc);
+	if (resType !== null) valueAccess.nodeType = resType.typeReturn;
 	result.push(makeReturn(valueAccess, loc));
 
 	return result;
@@ -116,24 +139,33 @@ function expandReturnTry(stmt: Node, ctx: TransformContext): Node[] {
 // Case 4: try f(); (standalone ExprStmt)
 function expandExprStmtTry(stmt: Node, ctx: TransformContext): Node[] {
 	const d = stmt.data as ExprStmtData;
-	const tryData = d.expr.data as TryExprData;
+	const tryExpr = d.expr;
+	const tryData = tryExpr.data as TryExprData;
 	const loc = stmt.location;
 	const tempName = freshTemp(ctx, "result");
 	const result: Node[] = [];
 
 	// const $result_N = f();
-	result.push(makeVarDecl(tempName, tryData.tryArg, DeclKind.Const, loc));
+	const resType = tryExpr.nodeType; // Result<T, E>
+	const resDecl = makeVarDecl(tempName, tryData.tryArg, DeclKind.Const, loc);
+	resDecl.nodeType = resType;
+	result.push(resDecl);
+
 	// if (!$result.ok) { return Result.err($result.error); }
-	result.push(makeErrorCheck(tempName, loc));
+	result.push(makeErrorCheck(tempName, resType, loc));
 
 	return result;
 }
 
 // Build: if (!$result.ok) { return Result.err($result.error); }
-function makeErrorCheck(tempName: string, loc: Node["location"]): Node {
+function makeErrorCheck(tempName: string, resType: Type, loc: SourceLocation): Node {
 	const okAccess = makeMember(makeIdent(tempName, loc), "ok", loc);
+	okAccess.nodeType = booleanType();
 	const notOk = makeUnary("!", okAccess, loc);
+	notOk.nodeType = booleanType();
+
 	const errorAccess = makeMember(makeIdent(tempName, loc), "error", loc);
+	if (resType !== null) errorAccess.nodeType = resType.typeExtra;
 
 	// Result.err($result.error)
 	const resultErr = makeCall(
@@ -141,6 +173,8 @@ function makeErrorCheck(tempName: string, loc: Node["location"]): Node {
 		[errorAccess],
 		loc
 	);
+	// V4 FIX: Ensure Result.err call has the same Result type as the original call
+	resultErr.nodeType = resType;
 
 	const returnStmt = makeReturn(resultErr, loc);
 	const thenBlock = makeBlock([returnStmt], loc);
@@ -149,21 +183,12 @@ function makeErrorCheck(tempName: string, loc: Node["location"]): Node {
 }
 
 // ===== Tests =====
+test "var decl try expands to 3 stmts" { check(stmtCountAfter("const x = try f;", lowerTryExpr) === 3); }
 
-testGroup("Result Desugar", () => {
-	test("var decl try expands to 3 stmts", () => {
-		check(stmtCountAfter("const x = try f;", lowerResult) === 3);
-	});
-	test("var decl try first is VariableDecl", () => {
-		check(firstStmtKindAfter("const x = try f;", lowerResult) === NodeKind.VariableDecl);
-	});
-	test("try catch expands to 2 stmts", () => {
-		check(stmtCountAfter("const x = try f catch \"default\";", lowerResult) === 2);
-	});
-	test("no try passthrough", () => {
-		check(stmtCountAfter("const x = 1;", lowerResult) === 1);
-	});
-	test("multiple stmts preserved", () => {
-		check(stmtCountAfter("let a = 1; const x = try f; let b = 2;", lowerResult) === 5);
-	});
-});
+test "var decl try first is VariableDecl" { check(firstStmtKindAfter("const x = try f;", lowerTryExpr) === NodeKind.VariableDecl); }
+
+test "try catch expands to 2 stmts" { check(stmtCountAfter("const x = try f catch \"default\";", lowerTryExpr) === 2); }
+
+test "no try passthrough" { check(stmtCountAfter("const x = 1;", lowerTryExpr) === 1); }
+
+test "multiple stmts preserved" { check(stmtCountAfter("let a = 1; const x = try f; let b = 2;", lowerTryExpr) === 5); }

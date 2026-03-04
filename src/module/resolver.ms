@@ -10,7 +10,7 @@
 // Pure function — no filesystem access. The loader tries candidates in order.
 
 import { dirname, join } from "std/fs/path";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { sliceStr, endsWith } from "../utils/string";
 
 // ===== Backend Constants =====
@@ -22,11 +22,8 @@ export const BACKEND_ERLANG = 3;
 export const BACKEND_WASM = 4;
 
 // ===== Resolution Result =====
-// Wraps string[] in interface to avoid DRC value-type gotcha (#4).
 
-export interface ResolveCandidates {
-	paths: string[];
-}
+export type ResolveCandidates = string[];
 
 // ===== Resolver Configuration =====
 // Pure data — no FS access, no caching. Passed through from CLI/build.ms.
@@ -88,7 +85,7 @@ function bareConfig(): ResolverConfig {
 // ===== Import Resolution (Full) =====
 
 export function resolveImportWithConfig(specifier: string, fromFile: string, config: ResolverConfig): ResolveCandidates {
-	const result: ResolveCandidates = { paths: [] };
+	const result: ResolveCandidates = [];
 
 	// Apply alias rewriting
 	const spec = applyAlias(specifier, config);
@@ -128,11 +125,9 @@ export function resolveImportWithConfig(specifier: string, fromFile: string, con
 
 // ===== Backward-Compatible Import Resolution =====
 // Bare 2-arg version — std imports return empty, only .ms extension.
-// Self-contained (does NOT call resolveImportWithConfig) to avoid DRC issues
-// with temporary ResolverConfig/extensions array.
 
 export function resolveImport(specifier: string, fromFile: string): ResolveCandidates {
-	const result: ResolveCandidates = { paths: [] };
+	const result: ResolveCandidates = [];
 
 	// Std library — handled externally in bare mode
 	if (isStdImport(specifier)) return result;
@@ -145,13 +140,13 @@ export function resolveImport(specifier: string, fromFile: string): ResolveCandi
 
 	// If specifier has a known extension (.h, .ms, etc.), use it directly
 	if (hasKnownExtension(specifier)) {
-		result.paths.push(base);
+		result.push(base);
 		return result;
 	}
 
 	// Relative imports: two candidates (.ms only)
-	result.paths.push(base + ".ms");
-	result.paths.push(join(base, "index.ms"));
+	result.push(base + ".ms");
+	result.push(join(base, "index.ms"));
 
 	return result;
 }
@@ -163,13 +158,13 @@ function addExtensionCandidates(result: ResolveCandidates, base: string, extensi
 	// Direct file candidates: base + ext
 	let i = 0;
 	while (i < extensions.length) {
-		result.paths.push(base + extensions[i]);
+		result.push(base + extensions[i]);
 		i = i + 1;
 	}
 	// Index file candidates: base/index + ext
 	i = 0;
 	while (i < extensions.length) {
-		result.paths.push(join(base, "index" + extensions[i]));
+		result.push(join(base, "index" + extensions[i]));
 		i = i + 1;
 	}
 }
@@ -178,17 +173,17 @@ function addExtensionCandidates(result: ResolveCandidates, base: string, extensi
 function addDirectCandidates(result: ResolveCandidates, spec: string, fromFile: string, config: ResolverConfig): void {
 	if (isRelative(spec)) {
 		const baseDir = dirname(fromFile);
-		result.paths.push(join(baseDir, spec));
+		result.push(join(baseDir, spec));
 	} else if (isStdImport(spec)) {
 		if (config.stdPath.length > 0) {
 			const subpath = sliceStr(spec, 4, spec.length);
-			result.paths.push(join(config.stdPath, subpath));
+			result.push(join(config.stdPath, subpath));
 		}
 	} else {
 		// Bare with extension — try search paths
 		let i = 0;
 		while (i < config.searchPaths.length) {
-			result.paths.push(join(config.searchPaths[i], spec));
+			result.push(join(config.searchPaths[i], spec));
 			i = i + 1;
 		}
 	}
@@ -254,198 +249,205 @@ export function buildIndexPath(specifier: string, fromFile: string): string {
 }
 
 // ===== Tests =====
+// -- Legacy (2-arg) backward compat --
+test "std imports return empty (legacy)" {
+	const r1 = resolveImport("std/testing", "/a/b.ms");
+	check(r1.length === 0);
+	const r2 = resolveImport("std/fs/path", "/a/b.ms");
+	check(r2.length === 0);
+}
 
-testGroup("Resolver", () => {
-	// -- Legacy (2-arg) backward compat --
-	test("std imports return empty (legacy)", () => {
-		const r1 = resolveImport("std/testing", "/a/b.ms");
-		check(r1.paths.length === 0);
-		const r2 = resolveImport("std/fs/path", "/a/b.ms");
-		check(r2.paths.length === 0);
-	});
-	test("bare imports return empty (legacy)", () => {
-		const r = resolveImport("lodash", "/a/b.ms");
-		check(r.paths.length === 0);
-	});
-	test("relative import returns two candidates (legacy)", () => {
-		const r = resolveImport("./foo", "/a/b.ms");
-		check(r.paths.length === 2);
-		check(r.paths[0] === "/a/foo.ms");
-		check(r.paths[1] === "/a/foo/index.ms");
-	});
-	test("parent directory import (legacy)", () => {
-		const r = resolveImport("../bar", "/a/b/c.ms");
-		check(r.paths.length === 2);
-		check(r.paths[0] === "/a/bar.ms");
-		check(r.paths[1] === "/a/bar/index.ms");
-	});
-	test("nested relative import (legacy)", () => {
-		const r = resolveImport("./sub/mod", "/proj/src/index.ms");
-		check(r.paths.length === 2);
-		check(r.paths[0] === "/proj/src/sub/mod.ms");
-		check(r.paths[1] === "/proj/src/sub/mod/index.ms");
-	});
-	test("isStdImport", () => {
-		check(isStdImport("std/fs"));
-		check(isStdImport("std/testing"));
-		check(!isStdImport("./foo"));
-		check(!isStdImport("ab"));
-	});
-	test("buildFilePath", () => {
-		check(buildFilePath("./foo", "/a/b.ms") === "/a/foo.ms");
-	});
-	test("buildIndexPath", () => {
-		check(buildIndexPath("./sub", "/a/b.ms") === "/a/sub/index.ms");
-	});
+test "bare imports return empty (legacy)" {
+	const r = resolveImport("lodash", "/a/b.ms");
+	check(r.length === 0);
+}
 
-	// -- Backend extension mapping --
-	test("backendExtension C", () => {
-		check(backendExtension(0) === ".cms");
-	});
-	test("backendExtension JS", () => {
-		check(backendExtension(1) === ".jms");
-	});
-	test("backendExtension Raiser", () => {
-		check(backendExtension(2) === ".rms");
-	});
-	test("backendExtension Erlang", () => {
-		check(backendExtension(3) === ".ems");
-	});
-	test("backendExtension Wasm", () => {
-		check(backendExtension(4) === ".wms");
-	});
+test "relative import returns two candidates (legacy)" {
+	const r = resolveImport("./foo", "/a/b.ms");
+	check(r.length === 2);
+	check(r[0] === "/a/foo.ms");
+	check(r[1] === "/a/foo/index.ms");
+}
 
-	// -- Default config --
-	test("createDefaultConfig C has 4 extensions", () => {
-		const cfg = createDefaultConfig(0, "/usr/lib/msc/std");
-		check(cfg.extensions.length === 4);
-		check(cfg.extensions[0] === ".cms");
-		check(cfg.extensions[1] === ".ms");
-		check(cfg.extensions[2] === ".ts");
-		check(cfg.extensions[3] === ".js");
-		check(cfg.stdPath === "/usr/lib/msc/std");
-	});
-	test("createDefaultConfig JS has .jms first", () => {
-		const cfg = createDefaultConfig(1, "/std");
-		check(cfg.extensions[0] === ".jms");
-	});
+test "parent directory import (legacy)" {
+	const r = resolveImport("../bar", "/a/b/c.ms");
+	check(r.length === 2);
+	check(r[0] === "/a/bar.ms");
+	check(r[1] === "/a/bar/index.ms");
+}
 
-	// -- Full resolution with config --
-	test("relative with C backend generates 8 candidates", () => {
-		const cfg = createDefaultConfig(0, "");
-		const r = resolveImportWithConfig("./foo", "/a/b.ms", cfg);
-		check(r.paths.length === 8);
-		check(r.paths[0] === "/a/foo.cms");
-		check(r.paths[1] === "/a/foo.ms");
-		check(r.paths[2] === "/a/foo.ts");
-		check(r.paths[3] === "/a/foo.js");
-		check(r.paths[4] === "/a/foo/index.cms");
-		check(r.paths[5] === "/a/foo/index.ms");
-		check(r.paths[6] === "/a/foo/index.ts");
-		check(r.paths[7] === "/a/foo/index.js");
-	});
-	test("std/ with config resolves against stdPath", () => {
-		const cfg = createDefaultConfig(0, "/lib/std");
-		const r = resolveImportWithConfig("std/testing", "/a/b.ms", cfg);
-		check(r.paths.length === 8);
-		check(r.paths[0] === "/lib/std/testing.cms");
-		check(r.paths[1] === "/lib/std/testing.ms");
-		check(r.paths[4] === "/lib/std/testing/index.cms");
-		check(r.paths[5] === "/lib/std/testing/index.ms");
-	});
-	test("std/ without stdPath returns empty", () => {
-		const cfg = createDefaultConfig(0, "");
-		const r = resolveImportWithConfig("std/testing", "/a/b.ms", cfg);
-		check(r.paths.length === 0);
-	});
-	test("bare import with search paths", () => {
-		const cfg = createDefaultConfig(0, "");
-		cfg.searchPaths.push("/proj/lib");
-		cfg.searchPaths.push("/proj/vendor");
-		const r = resolveImportWithConfig("ui/grid", "/a/b.ms", cfg);
-		// 2 search paths x 8 candidates each = 16
-		check(r.paths.length === 16);
-		check(r.paths[0] === "/proj/lib/ui/grid.cms");
-		check(r.paths[1] === "/proj/lib/ui/grid.ms");
-		check(r.paths[8] === "/proj/vendor/ui/grid.cms");
-	});
-	test("bare import without search paths returns empty", () => {
-		const cfg = createDefaultConfig(0, "");
-		const r = resolveImportWithConfig("lodash", "/a/b.ms", cfg);
-		check(r.paths.length === 0);
-	});
-	test("alias rewriting", () => {
-		const cfg = createDefaultConfig(0, "");
-		cfg.aliasKeys.push("@app");
-		cfg.aliasValues.push("./src");
-		const r = resolveImportWithConfig("@app/utils", "/proj/index.ms", cfg);
-		// Alias rewrites to ./src/utils, then relative resolution
-		check(r.paths.length === 8);
-		check(r.paths[0] === "/proj/src/utils.cms");
-		check(r.paths[1] === "/proj/src/utils.ms");
-	});
-	test("alias exact match", () => {
-		const cfg = createDefaultConfig(1, "");
-		cfg.aliasKeys.push("@root");
-		cfg.aliasValues.push("./src/index");
-		const r = resolveImportWithConfig("@root", "/proj/main.ms", cfg);
-		check(r.paths.length === 8);
-		check(r.paths[0] === "/proj/src/index.jms");
-		check(r.paths[1] === "/proj/src/index.ms");
-	});
-	test("alias does not match partial prefix", () => {
-		const cfg = createDefaultConfig(0, "");
-		cfg.aliasKeys.push("@app");
-		cfg.aliasValues.push("./src");
-		// "@application" should NOT match "@app" alias
-		const r = resolveImportWithConfig("@application", "/proj/index.ms", cfg);
-		check(r.paths.length === 0); // bare import, no search paths
-	});
-	test("explicit extension skips probing", () => {
-		const cfg = createDefaultConfig(0, "");
-		const r = resolveImportWithConfig("./foo.ms", "/a/b.ms", cfg);
-		check(r.paths.length === 1);
-		check(r.paths[0] === "/a/foo.ms");
-	});
-	test("explicit .ts extension", () => {
-		const cfg = createDefaultConfig(0, "");
-		const r = resolveImportWithConfig("./lib.ts", "/a/b.ms", cfg);
-		check(r.paths.length === 1);
-		check(r.paths[0] === "/a/lib.ts");
-	});
-	test("explicit .cms extension", () => {
-		const cfg = createDefaultConfig(0, "/std");
-		const r = resolveImportWithConfig("std/core.cms", "/a/b.ms", cfg);
-		check(r.paths.length === 1);
-		check(r.paths[0] === "/std/core.cms");
-	});
-	test("explicit .h extension resolves directly", () => {
-		const cfg = createDefaultConfig(0, "");
-		const r = resolveImportWithConfig("./dawn.h", "/a/b.ms", cfg);
-		check(r.paths.length === 1);
-		check(r.paths[0] === "/a/dawn.h");
-	});
-	test("JS backend uses .jms first", () => {
-		const cfg = createDefaultConfig(1, "");
-		const r = resolveImportWithConfig("./parser", "/a/b.ms", cfg);
-		check(r.paths[0] === "/a/parser.jms");
-		check(r.paths[1] === "/a/parser.ms");
-	});
-	test("Raiser backend uses .rms first", () => {
-		const cfg = createDefaultConfig(2, "");
-		const r = resolveImportWithConfig("./vm", "/a/b.ms", cfg);
-		check(r.paths[0] === "/a/vm.rms");
-	});
-	test("parent dir with config", () => {
-		const cfg = createDefaultConfig(0, "");
-		const r = resolveImportWithConfig("../bar", "/a/b/c.ms", cfg);
-		check(r.paths[0] === "/a/bar.cms");
-		check(r.paths[1] === "/a/bar.ms");
-	});
-	test("std nested path", () => {
-		const cfg = createDefaultConfig(0, "/lib/std");
-		const r = resolveImportWithConfig("std/fs/path", "/a/b.ms", cfg);
-		check(r.paths[0] === "/lib/std/fs/path.cms");
-		check(r.paths[1] === "/lib/std/fs/path.ms");
-	});
-});
+test "nested relative import (legacy)" {
+	const r = resolveImport("./sub/mod", "/proj/src/index.ms");
+	check(r.length === 2);
+	check(r[0] === "/proj/src/sub/mod.ms");
+	check(r[1] === "/proj/src/sub/mod/index.ms");
+}
+
+test "isStdImport" {
+	check(isStdImport("std/fs"));
+	check(isStdImport("std/testing"));
+	check(!isStdImport("./foo"));
+	check(!isStdImport("ab"));
+}
+
+test "buildFilePath" { check(buildFilePath("./foo", "/a/b.ms") === "/a/foo.ms"); }
+
+test "buildIndexPath" { check(buildIndexPath("./sub", "/a/b.ms") === "/a/sub/index.ms"); }
+// -- Backend extension mapping --
+test "backendExtension C" { check(backendExtension(0) === ".cms"); }
+
+test "backendExtension JS" { check(backendExtension(1) === ".jms"); }
+
+test "backendExtension Raiser" { check(backendExtension(2) === ".rms"); }
+
+test "backendExtension Erlang" { check(backendExtension(3) === ".ems"); }
+
+test "backendExtension Wasm" { check(backendExtension(4) === ".wms"); }
+// -- Default config --
+test "createDefaultConfig C has 4 extensions" {
+	const cfg = createDefaultConfig(0, "/usr/lib/msc/std");
+	check(cfg.extensions.length === 4);
+	check(cfg.extensions[0] === ".cms");
+	check(cfg.extensions[1] === ".ms");
+	check(cfg.extensions[2] === ".ts");
+	check(cfg.extensions[3] === ".js");
+	check(cfg.stdPath === "/usr/lib/msc/std");
+}
+
+test "createDefaultConfig JS has .jms first" {
+	const cfg = createDefaultConfig(1, "/std");
+	check(cfg.extensions[0] === ".jms");
+}
+// -- Full resolution with config --
+test "relative with C backend generates 8 candidates" {
+	const cfg = createDefaultConfig(0, "");
+	const r = resolveImportWithConfig("./foo", "/a/b.ms", cfg);
+	check(r.length === 8);
+	check(r[0] === "/a/foo.cms");
+	check(r[1] === "/a/foo.ms");
+	check(r[2] === "/a/foo.ts");
+	check(r[3] === "/a/foo.js");
+	check(r[4] === "/a/foo/index.cms");
+	check(r[5] === "/a/foo/index.ms");
+	check(r[6] === "/a/foo/index.ts");
+	check(r[7] === "/a/foo/index.js");
+}
+
+test "std/ with config resolves against stdPath" {
+	const cfg = createDefaultConfig(0, "/lib/std");
+	const r = resolveImportWithConfig("std/testing", "/a/b.ms", cfg);
+	check(r.length === 8);
+	check(r[0] === "/lib/std/testing.cms");
+	check(r[1] === "/lib/std/testing.ms");
+	check(r[4] === "/lib/std/testing/index.cms");
+	check(r[5] === "/lib/std/testing/index.ms");
+}
+
+test "std/ without stdPath returns empty" {
+	const cfg = createDefaultConfig(0, "");
+	const r = resolveImportWithConfig("std/testing", "/a/b.ms", cfg);
+	check(r.length === 0);
+}
+
+test "bare import with search paths" {
+	const cfg = createDefaultConfig(0, "");
+	cfg.searchPaths.push("/proj/lib");
+	cfg.searchPaths.push("/proj/vendor");
+	const r = resolveImportWithConfig("ui/grid", "/a/b.ms", cfg);
+	// 2 search paths x 8 candidates each = 16
+	check(r.length === 16);
+	check(r[0] === "/proj/lib/ui/grid.cms");
+	check(r[1] === "/proj/lib/ui/grid.ms");
+	check(r[8] === "/proj/vendor/ui/grid.cms");
+}
+
+test "bare import without search paths returns empty" {
+	const cfg = createDefaultConfig(0, "");
+	const r = resolveImportWithConfig("lodash", "/a/b.ms", cfg);
+	check(r.length === 0);
+}
+
+test "alias rewriting" {
+	const cfg = createDefaultConfig(0, "");
+	cfg.aliasKeys.push("@app");
+	cfg.aliasValues.push("./src");
+	const r = resolveImportWithConfig("@app/utils", "/proj/index.ms", cfg);
+	// Alias rewrites to ./src/utils, then relative resolution
+	check(r.length === 8);
+	check(r[0] === "/proj/src/utils.cms");
+	check(r[1] === "/proj/src/utils.ms");
+}
+
+test "alias exact match" {
+	const cfg = createDefaultConfig(1, "");
+	cfg.aliasKeys.push("@root");
+	cfg.aliasValues.push("./src/index");
+	const r = resolveImportWithConfig("@root", "/proj/main.ms", cfg);
+	check(r.length === 8);
+	check(r[0] === "/proj/src/index.jms");
+	check(r[1] === "/proj/src/index.ms");
+}
+
+test "alias does not match partial prefix" {
+	const cfg = createDefaultConfig(0, "");
+	cfg.aliasKeys.push("@app");
+	cfg.aliasValues.push("./src");
+	// "@application" should NOT match "@app" alias
+	const r = resolveImportWithConfig("@application", "/proj/index.ms", cfg);
+	check(r.length === 0); // bare import, no search paths
+}
+
+test "explicit extension skips probing" {
+	const cfg = createDefaultConfig(0, "");
+	const r = resolveImportWithConfig("./foo.ms", "/a/b.ms", cfg);
+	check(r.length === 1);
+	check(r[0] === "/a/foo.ms");
+}
+
+test "explicit .ts extension" {
+	const cfg = createDefaultConfig(0, "");
+	const r = resolveImportWithConfig("./lib.ts", "/a/b.ms", cfg);
+	check(r.length === 1);
+	check(r[0] === "/a/lib.ts");
+}
+
+test "explicit .cms extension" {
+	const cfg = createDefaultConfig(0, "/std");
+	const r = resolveImportWithConfig("std/core.cms", "/a/b.ms", cfg);
+	check(r.length === 1);
+	check(r[0] === "/std/core.cms");
+}
+
+test "explicit .h extension resolves directly" {
+	const cfg = createDefaultConfig(0, "");
+	const r = resolveImportWithConfig("./dawn.h", "/a/b.ms", cfg);
+	check(r.length === 1);
+	check(r[0] === "/a/dawn.h");
+}
+
+test "JS backend uses .jms first" {
+	const cfg = createDefaultConfig(1, "");
+	const r = resolveImportWithConfig("./parser", "/a/b.ms", cfg);
+	check(r[0] === "/a/parser.jms");
+	check(r[1] === "/a/parser.ms");
+}
+
+test "Raiser backend uses .rms first" {
+	const cfg = createDefaultConfig(2, "");
+	const r = resolveImportWithConfig("./vm", "/a/b.ms", cfg);
+	check(r[0] === "/a/vm.rms");
+}
+
+test "parent dir with config" {
+	const cfg = createDefaultConfig(0, "");
+	const r = resolveImportWithConfig("../bar", "/a/b/c.ms", cfg);
+	check(r[0] === "/a/bar.cms");
+	check(r[1] === "/a/bar.ms");
+}
+
+test "std nested path" {
+	const cfg = createDefaultConfig(0, "/lib/std");
+	const r = resolveImportWithConfig("std/fs/path", "/a/b.ms", cfg);
+	check(r[0] === "/lib/std/fs/path.cms");
+	check(r[1] === "/lib/std/fs/path.ms");
+}

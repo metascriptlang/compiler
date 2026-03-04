@@ -1,8 +1,8 @@
 // Result Field Check — wraps $result_N.value/.error with discriminant safety checks
 // Follows reference result_field_check.zig (Nim's nkCheckedFieldExpr pattern)
 //
-// $result_0.value  →  { ms_result_check_value($result_0); $result_0.value; }
-// $result_0.error  →  { ms_result_check_error($result_0); $result_0.error; }
+// $result_0.value  →  { msResultCheckValue($result_0); $result_0.value; }
+// $result_0.error  →  { msResultCheckError($result_0); $result_0.error; }
 // $result_0.ok     →  $result_0.ok  (unchanged — ok IS the discriminant)
 //
 // Only transforms access on variables named $result_* (our freshTemp convention).
@@ -15,7 +15,7 @@ import {
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent, makeBlock, makeExprStmt } from "../util";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { firstExprKindAfter, stmtCountAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -36,8 +36,8 @@ function checkResultField(node: Node): Node {
 
 	return match (d.property) {
 		"ok" => node,
-		"value" => wrapWithCheck(node, d.object, "ms_result_check_value"),
-		"error" => wrapWithCheck(node, d.object, "ms_result_check_error"),
+		"value" => wrapWithCheck(node, d.object, "msResultCheckValue"),
+		"error" => wrapWithCheck(node, d.object, "msResultCheckError"),
 		_ => node,
 	};
 }
@@ -57,24 +57,14 @@ function wrapWithCheck(accessNode: Node, resultObj: Node, checkFnName: string): 
 }
 
 // ===== Tests =====
+test "non-member unchanged" { check(firstExprKindAfter("x + y;", lowerResultFieldCheck) === NodeKind.BinaryExpr); }
 
-testGroup("Result Field Check", () => {
-	test("non-member unchanged", () => {
-		check(firstExprKindAfter("x + y;", lowerResultFieldCheck) === NodeKind.BinaryExpr);
-	});
-	test("regular member unchanged", () => {
-		check(firstExprKindAfter("obj.name;", lowerResultFieldCheck) === NodeKind.MemberExpr);
-	});
-	test("non-result .value unchanged", () => {
-		check(firstExprKindAfter("obj.value;", lowerResultFieldCheck) === NodeKind.MemberExpr);
-	});
-	test("passthrough for non-expr", () => {
-		check(stmtCountAfter("const x = 1;", lowerResultFieldCheck) === 1);
-	});
-	test("call expr unchanged", () => {
-		check(firstExprKindAfter("f();", lowerResultFieldCheck) === NodeKind.CallExpr);
-	});
-	test("identifier unchanged", () => {
-		check(firstExprKindAfter("x;", lowerResultFieldCheck) === NodeKind.Identifier);
-	});
-});
+test "regular member unchanged" { check(firstExprKindAfter("obj.name;", lowerResultFieldCheck) === NodeKind.MemberExpr); }
+
+test "non-result .value unchanged" { check(firstExprKindAfter("obj.value;", lowerResultFieldCheck) === NodeKind.MemberExpr); }
+
+test "passthrough for non-expr" { check(stmtCountAfter("const x = 1;", lowerResultFieldCheck) === 1); }
+
+test "call expr unchanged" { check(firstExprKindAfter("f();", lowerResultFieldCheck) === NodeKind.CallExpr); }
+
+test "identifier unchanged" { check(firstExprKindAfter("x;", lowerResultFieldCheck) === NodeKind.Identifier); }

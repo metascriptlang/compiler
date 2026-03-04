@@ -13,14 +13,14 @@
 //   "a" + 1          — mixed types
 
 import {
-	Node, NodeKind,
+	Node, NodeKind, SourceLocation,
 	BinaryExprData, UnaryExprData, MemberExprData,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeNumber, makeString, makeBool } from "../util";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { firstExprKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -69,7 +69,7 @@ function foldBinary(node: Node): Node {
 	};
 }
 
-function foldNumberBinary(op: string, lv: number, rv: number, loc: Node["location"], fallback: Node): Node {
+function foldNumberBinary(op: string, lv: number, rv: number, loc: SourceLocation, fallback: Node): Node {
 	// Guard: division by zero — leave as runtime
 	if (rv === 0 && (op === "/" || op === "%")) return fallback;
 
@@ -89,7 +89,7 @@ function foldNumberBinary(op: string, lv: number, rv: number, loc: Node["locatio
 	};
 }
 
-function foldStringBinary(op: string, lv: string, rv: string, loc: Node["location"], fallback: Node): Node {
+function foldStringBinary(op: string, lv: string, rv: string, loc: SourceLocation, fallback: Node): Node {
 	return match (op) {
 		"+" => makeString(lv + rv, loc),
 		"===" => makeBool(lv === rv, loc),
@@ -98,7 +98,7 @@ function foldStringBinary(op: string, lv: string, rv: string, loc: Node["locatio
 	};
 }
 
-function foldBoolBinary(op: string, lb: boolean, rb: boolean, loc: Node["location"], fallback: Node): Node {
+function foldBoolBinary(op: string, lb: boolean, rb: boolean, loc: SourceLocation, fallback: Node): Node {
 	return match (op) {
 		"===" => makeBool(lb === rb, loc),
 		"!==" => makeBool(lb !== rb, loc),
@@ -152,30 +152,18 @@ function foldMember(node: Node): Node {
 }
 
 // ===== Tests =====
+test "number addition" { check(firstExprKindAfter("2 + 3;", lowerConstFold) === NodeKind.NumberLiteral); }
 
-testGroup("Constant Folding", () => {
-	test("number addition", () => {
-		check(firstExprKindAfter("2 + 3;", lowerConstFold) === NodeKind.NumberLiteral);
-	});
-	test("string concat", () => {
-		check(firstExprKindAfter("\"a\" + \"b\";", lowerConstFold) === NodeKind.StringLiteral);
-	});
-	test("boolean negation", () => {
-		check(firstExprKindAfter("!true;", lowerConstFold) === NodeKind.BooleanLiteral);
-	});
-	test("comparison", () => {
-		check(firstExprKindAfter("5 > 3;", lowerConstFold) === NodeKind.BooleanLiteral);
-	});
-	test("non-constant unchanged", () => {
-		check(firstExprKindAfter("x + y;", lowerConstFold) === NodeKind.BinaryExpr);
-	});
-	test("nested constant folds bottom-up", () => {
-		check(firstExprKindAfter("(2 + 3) * 4;", lowerConstFold) === NodeKind.NumberLiteral);
-	});
-	test("mixed types unchanged", () => {
-		check(firstExprKindAfter("1 + x;", lowerConstFold) === NodeKind.BinaryExpr);
-	});
-	test("division by zero unchanged", () => {
-		check(firstExprKindAfter("1 / 0;", lowerConstFold) === NodeKind.BinaryExpr);
-	});
-});
+test "string concat" { check(firstExprKindAfter("\"a\" + \"b\";", lowerConstFold) === NodeKind.StringLiteral); }
+
+test "boolean negation" { check(firstExprKindAfter("!true;", lowerConstFold) === NodeKind.BooleanLiteral); }
+
+test "comparison" { check(firstExprKindAfter("5 > 3;", lowerConstFold) === NodeKind.BooleanLiteral); }
+
+test "non-constant unchanged" { check(firstExprKindAfter("x + y;", lowerConstFold) === NodeKind.BinaryExpr); }
+
+test "nested constant folds bottom-up" { check(firstExprKindAfter("(2 + 3) * 4;", lowerConstFold) === NodeKind.NumberLiteral); }
+
+test "mixed types unchanged" { check(firstExprKindAfter("1 + x;", lowerConstFold) === NodeKind.BinaryExpr); }
+
+test "division by zero unchanged" { check(firstExprKindAfter("1 / 0;", lowerConstFold) === NodeKind.BinaryExpr); }

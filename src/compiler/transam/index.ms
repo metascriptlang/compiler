@@ -17,7 +17,7 @@ import {
 import { taHashString } from "./hash";
 import {
 	TaCacheEntry, createCacheEntry,
-	TaDependencyStack, TaDependencyList,
+	TaDependencyStack,
 	createDependencyStack, pushFrame, popFrame,
 	recordDependency, hasActiveFrame
 } from "./query";
@@ -42,7 +42,7 @@ import {
 	TaStringInterner, createStringInterner,
 	internString, lookupInterned, internedCount
 } from "./intern";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { parseSource } from "../../parser/statements/validation";
 import { checkProgram } from "../../checker/index";
 import { transformProgram } from "../../transform/index";
@@ -251,109 +251,111 @@ function isValidProgram(program: Node): boolean {
 	return program.kind === NodeKind.Program;
 }
 
-testGroup("TransAmDb Basics", () => {
-	test("create db", () => {
-		const db = createTransAmDb(100);
-		check(db.revision.value === 0);
-		check(db.cache.capacity === 100);
-	});
-	test("set file text increments revision", () => {
-		const db = createTransAmDb(100);
-		dbSetFileText(db, "a.ms", "const x = 1;");
-		check(db.revision.value === 1);
-	});
-	test("same content does not increment", () => {
-		const db = createTransAmDb(100);
-		dbSetFileText(db, "a.ms", "const x = 1;");
-		check(db.revision.value === 1);
-		dbSetFileText(db, "a.ms", "const x = 1;");
-		check(db.revision.value === 1);  // no change
-	});
-});
+test "create db" {
+	const db = createTransAmDb(100);
+	check(db.revision.value === 0);
+	check(db.cache.capacity === 100);
+}
 
-testGroup("TransAmDb Parse", () => {
-	test("parse produces AST", () => {
-		const db = createTransAmDb(100);
-		dbSetFileText(db, "test.ms", "const x = 1;");
-		const result = dbParse(db, "test.ms");
-		check(result !== null);
-		check(result.kind === NodeKind.Program);
-	});
-	test("parse caches result", () => {
-		const db = createTransAmDb(100);
-		dbSetFileText(db, "test.ms", "const y = 2;");
-		const r1 = dbParse(db, "test.ms");
-		check(r1 !== null);
-		// Second call should hit cache
-		const key = createQueryKey(TaQueryKind.Parse, 0);
-		check(cacheContains(db.cache, key));
-	});
-	test("file change invalidates parse", () => {
-		const db = createTransAmDb(100);
-		dbSetFileText(db, "test.ms", "const a = 1;");
-		dbParse(db, "test.ms");
-		// Change file
-		dbSetFileText(db, "test.ms", "const b = 2;");
-		// Cache entry should be RED
-		const key = createQueryKey(TaQueryKind.Parse, 0);
-		const entry = cacheGet(db.cache, key);
-		check(entry !== null);
-		check(entry.state === TaQueryState.Red);
-	});
-});
+test "set file text increments revision" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "a.ms", "const x = 1;");
+	check(db.revision.value === 1);
+}
 
-testGroup("TransAmDb Pipeline", () => {
-	test("full pipeline produces analyzed AST", () => {
-		const db = createTransAmDb(100);
-		dbSetFileText(db, "test.ms", "const x = 1; const y = 2;");
-		const result = dbAnalyze(db, "test.ms");
-		check(result !== null);
-		check(isValidProgram(result));
-	});
-	test("unknown file returns null", () => {
-		const db = createTransAmDb(100);
-		const result = dbParse(db, "nonexistent.ms");
-		check(result === null);
-	});
-	test("dbTransform produces transformed AST", () => {
-		const db = createTransAmDb(100);
-		dbSetFileText(db, "t.ms", "const x = 1;");
-		const result = dbTransform(db, "t.ms");
-		check(result !== null);
-		check(result.kind === NodeKind.Program);
-	});
-	test("dbCompileSource runs full pipeline", () => {
-		const db = createTransAmDb(100);
-		const result = dbCompileSource(db, "const a = 1; const b = 2;");
-		check(result !== null);
-		check(isValidProgram(result));
-	});
-	test("dbCompileToJS runs without analyzer", () => {
-		const db = createTransAmDb(100);
-		const result = dbCompileToJS(db, "const x = 42;");
-		check(result !== null);
-		check(result.kind === NodeKind.Program);
-	});
-	test("dbCompileSource caches on same input", () => {
-		const db = createTransAmDb(100);
-		dbCompileSource(db, "const z = 1;");
-		check(db.revision.value === 1);
-		// Same input should not increment revision
-		dbCompileSource(db, "const z = 1;");
-		check(db.revision.value === 1);
-	});
-});
+test "same content does not increment" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "a.ms", "const x = 1;");
+	check(db.revision.value === 1);
+	dbSetFileText(db, "a.ms", "const x = 1;");
+	check(db.revision.value === 1);  // no change
+}
 
-testGroup("TransAmDb Cancel+Intern", () => {
-	test("db has cancel context", () => {
-		const db = createTransAmDb(100);
-		check(db.cancelCtx.version === 0);
-		check(!db.cancelCtx.cancelled);
-	});
-	test("db has string interner", () => {
-		const db = createTransAmDb(100);
-		const id = internString(db.interner, "hello");
-		check(id === 0);
-		check(lookupInterned(db.interner, id) === "hello");
-	});
-});
+test "parse produces AST" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "test.ms", "const x = 1;");
+	const result = dbParse(db, "test.ms");
+	check(result !== null);
+	check(result.kind === NodeKind.Program);
+}
+
+test "parse caches result" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "test.ms", "const y = 2;");
+	const r1 = dbParse(db, "test.ms");
+	check(r1 !== null);
+	// Second call should hit cache
+	const key = createQueryKey(TaQueryKind.Parse, 0);
+	check(cacheContains(db.cache, key));
+}
+
+test "file change invalidates parse" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "test.ms", "const a = 1;");
+	dbParse(db, "test.ms");
+	// Change file
+	dbSetFileText(db, "test.ms", "const b = 2;");
+	// Cache entry should be RED
+	const key = createQueryKey(TaQueryKind.Parse, 0);
+	const entry = cacheGet(db.cache, key);
+	check(entry !== null);
+	check(entry.state === TaQueryState.Red);
+}
+
+test "full pipeline produces analyzed AST" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "test.ms", "const x = 1; const y = 2;");
+	const result = dbAnalyze(db, "test.ms");
+	check(result !== null);
+	check(isValidProgram(result));
+}
+
+test "unknown file returns null" {
+	const db = createTransAmDb(100);
+	const result = dbParse(db, "nonexistent.ms");
+	check(result === null);
+}
+
+test "dbTransform produces transformed AST" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "t.ms", "const x = 1;");
+	const result = dbTransform(db, "t.ms");
+	check(result !== null);
+	check(result.kind === NodeKind.Program);
+}
+
+test "dbCompileSource runs full pipeline" {
+	const db = createTransAmDb(100);
+	const result = dbCompileSource(db, "const a = 1; const b = 2;");
+	check(result !== null);
+	check(isValidProgram(result));
+}
+
+test "dbCompileToJS runs without analyzer" {
+	const db = createTransAmDb(100);
+	const result = dbCompileToJS(db, "const x = 42;");
+	check(result !== null);
+	check(result.kind === NodeKind.Program);
+}
+
+test "dbCompileSource caches on same input" {
+	const db = createTransAmDb(100);
+	dbCompileSource(db, "const z = 1;");
+	check(db.revision.value === 1);
+	// Same input should not increment revision
+	dbCompileSource(db, "const z = 1;");
+	check(db.revision.value === 1);
+}
+
+test "db has cancel context" {
+	const db = createTransAmDb(100);
+	check(db.cancelCtx.version === 0);
+	check(!db.cancelCtx.cancelled);
+}
+
+test "db has string interner" {
+	const db = createTransAmDb(100);
+	const id = internString(db.interner, "hello");
+	check(id === 0);
+	check(lookupInterned(db.interner, id) === "hello");
+}

@@ -17,7 +17,7 @@
 // }
 
 import {
-	Node, NodeKind, DeclKind,
+	Node, NodeKind, DeclKind, SourceLocation,
 	FunctionDeclData, ReturnStmtData, CallExprData,
 	IdentifierData, BlockStmtData, IfStmtData,
 } from "../../ast/node";
@@ -28,7 +28,7 @@ import {
 	makeIdent, makeAssign, makeExprStmt, makeContinue,
 	extractBodyStmts,
 } from "../util";
-import { test, check, testGroup } from "std/testing";
+import { check } from "std/testing";
 import { firstStmtKindAfter, stmtCountAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -92,6 +92,7 @@ function hasTailCall(body: Node, fnName: string): boolean {
 
 // Check if an expression is a call to fnName
 function isTailCallExpr(expr: Node, fnName: string): boolean {
+	if (expr === null) return false;
 	if (expr.kind !== NodeKind.CallExpr) return false;
 	const cd = expr.data as CallExprData;
 	if (cd.callee.kind !== NodeKind.Identifier) return false;
@@ -138,7 +139,7 @@ function transformBody(body: Node, fnName: string, params: string[], ctx: Transf
 }
 
 // Build replacement for tail call: temp vars for args, reassign params, continue
-function buildTailCallReplacement(callExpr: Node, params: string[], loc: Node["location"], ctx: TransformContext): Node {
+function buildTailCallReplacement(callExpr: Node, params: string[], loc: SourceLocation, ctx: TransformContext): Node {
 	const cd = callExpr.data as CallExprData;
 	const stmts: Node[] = [];
 
@@ -163,24 +164,14 @@ function buildTailCallReplacement(callExpr: Node, params: string[], loc: Node["l
 }
 
 // ===== Tests =====
+test "non-recursive unchanged" { check(firstStmtKindAfter("function foo(x: number): number { return x + 1; }", lowerTailCall) === NodeKind.FunctionDecl); }
 
-testGroup("Tail Call Lowering", () => {
-	test("non-recursive unchanged", () => {
-		check(firstStmtKindAfter("function foo(x: number): number { return x + 1; }", lowerTailCall) === NodeKind.FunctionDecl);
-	});
-	test("simple passthrough", () => {
-		check(stmtCountAfter("const x = 1;", lowerTailCall) === 1);
-	});
-	test("while unchanged", () => {
-		check(firstStmtKindAfter("while (true) {}", lowerTailCall) === NodeKind.WhileStmt);
-	});
-	test("if stmt unchanged", () => {
-		check(firstStmtKindAfter("if (x) {}", lowerTailCall) === NodeKind.IfStmt);
-	});
-	test("non-function passthrough", () => {
-		check(stmtCountAfter("let a = 1; let b = 2;", lowerTailCall) === 2);
-	});
-	test("arrow function unchanged", () => {
-		check(firstStmtKindAfter("const f = (x: number): number => x + 1;", lowerTailCall) === NodeKind.VariableDecl);
-	});
-});
+test "simple passthrough" { check(stmtCountAfter("const x = 1;", lowerTailCall) === 1); }
+
+test "while unchanged" { check(firstStmtKindAfter("while (true) {}", lowerTailCall) === NodeKind.WhileStmt); }
+
+test "if stmt unchanged" { check(firstStmtKindAfter("if (x) {}", lowerTailCall) === NodeKind.IfStmt); }
+
+test "non-function passthrough" { check(stmtCountAfter("let a = 1; let b = 2;", lowerTailCall) === 2); }
+
+test "arrow function unchanged" { check(firstStmtKindAfter("const f = (x: number): number => x + 1;", lowerTailCall) === NodeKind.VariableDecl); }
