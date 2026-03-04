@@ -94,6 +94,24 @@ export function hasFile(store: TaFileInputStore, filePath: string): boolean {
 	return findByPath(store, filePath) >= 0;
 }
 
+// Reverse lookup: fileId → file path. Returns "" if not found.
+export function getFilePath(store: TaFileInputStore, fileId: number): string {
+	const idx = findByFileId(store, fileId);
+	if (idx < 0) return "";
+	return store.files[idx].filePath;
+}
+
+// Count of all known files
+export function getFileCount(store: TaFileInputStore): number {
+	return store.files.length;
+}
+
+// Get file path by sequential index (0..count-1). Returns "" if out of range.
+export function getFilePathByIndex(store: TaFileInputStore, index: number): string {
+	if (index < 0 || index >= store.files.length) return "";
+	return store.files[index].filePath;
+}
+
 // ===== Tests =====
 test "starts empty" {
 	const store = createFileInputStore();
@@ -151,6 +169,14 @@ test "hasFile true/false" {
 	check(!hasFile(store, "a.ms"));
 	setFileText(store, "a.ms", "x");
 	check(hasFile(store, "a.ms"));
+}
+
+test "getFilePath reverse lookup" {
+	const store = createFileInputStore();
+	setFileText(store, "/a/b.ms", "x");
+	const id = getFileId(store, "/a/b.ms");
+	check(getFilePath(store, id) === "/a/b.ms");
+	check(getFilePath(store, 999) === "");
 }
 
 test "getFileHash nonzero" {

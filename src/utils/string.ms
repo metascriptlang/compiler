@@ -12,7 +12,7 @@ export function startsWith(s: string, prefix: string): boolean {
 	return sliceStr(s, 0, prefix.length) === prefix;
 }
 
-export function trim(s: string): string {
+export function trimStr(s: string): string {
 	let start = 0;
 	let end = s.length;
 	while (start < end && charAt(s, start) === " ") { start += 1; }
@@ -48,12 +48,12 @@ export function splitTopLevel(s: string, delim: string): string[] {
 		if (c === "<" || c === "(" || c === "{" || c === "[") { depth += 1; }
 		if (c === ">" || c === ")" || c === "}" || c === "]") { depth -= 1; }
 		if (depth === 0 && c === delim) {
-			parts.push(trim(sliceStr(s, start, i)));
+			parts.push(trimStr(sliceStr(s, start, i)));
 			start = i + 1;
 		}
 	}
 	if (start < s.length) {
-		parts.push(trim(sliceStr(s, start, s.length)));
+		parts.push(trimStr(sliceStr(s, start, s.length)));
 	}
 	return parts;
 }

@@ -23,10 +23,11 @@ import {
 import { TransformContext, freshTemp } from "../context";
 import { walkExpandBlocks } from "../walker";
 import {
-	makeIdent, makeBlock, makeVarDecl, makeExprStmt,
+	makeIdent, makeTypedIdent, makeBlock, makeVarDecl, makeExprStmt,
 	makeReturn, makeIf, makeBinary, makeAssign,
 	makeCall, makeNumber, makeSwitch, makeSwitchCase,
 } from "../util";
+import { Type } from "../../checker/types";
 import { check } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 import { charAt } from "../../utils/string";
@@ -77,9 +78,10 @@ function lowerMatchStmt(matchNode: Node, ctx: TransformContext): Node[] {
 
 	// const $match_N = discriminant;
 	result.push(makeVarDecl(tempName, d.matchStmtDisc, DeclKind.Const, loc));
+	const discType = d.matchStmtDisc.nodeType;
 
 	// Build if-else chain from cases
-	const ifChain = buildIfChain(d.matchStmtCases, tempName, loc, "stmt", "");
+	const ifChain = buildIfChain(d.matchStmtCases, tempName, discType, loc, "stmt", "");
 	result.push(ifChain);
 
 	return result;
@@ -96,6 +98,7 @@ function lowerMatchExprInVar(stmt: Node, ctx: TransformContext): Node[] {
 
 	// const $match_N = discriminant;
 	result.push(makeVarDecl(tempName, matchData.matchDisc, DeclKind.Const, loc));
+	const discType = matchData.matchDisc.nodeType;
 	// let x; (uninitialized, to be assigned in each branch)
 	const placeholder = makeIdent("undefined", loc);
 	const letDecl = makeVarDecl(varData.declName, placeholder, DeclKind.Let, loc);
@@ -104,7 +107,7 @@ function lowerMatchExprInVar(stmt: Node, ctx: TransformContext): Node[] {
 	}
 	result.push(letDecl);
 	// if-chain with assignment: x = armValue
-	const ifChain = buildIfChain(matchData.matchCases, tempName, loc, "assign", varData.declName);
+	const ifChain = buildIfChain(matchData.matchCases, tempName, discType, loc, "assign", varData.declName);
 	result.push(ifChain);
 
 	return result;
@@ -121,8 +124,9 @@ function lowerMatchExprInReturn(stmt: Node, ctx: TransformContext): Node[] {
 
 	// const $match_N = discriminant;
 	result.push(makeVarDecl(tempName, matchData.matchDisc, DeclKind.Const, loc));
+	const discType = matchData.matchDisc.nodeType;
 	// if-chain with return: return armValue
-	const ifChain = buildIfChain(matchData.matchCases, tempName, loc, "return", "");
+	const ifChain = buildIfChain(matchData.matchCases, tempName, discType, loc, "return", "");
 	result.push(ifChain);
 
 	return result;
@@ -132,10 +136,10 @@ function lowerMatchExprInReturn(stmt: Node, ctx: TransformContext): Node[] {
 // Unified builder for all match contexts.
 // mode: "stmt" = body as-is, "assign" = varName = body, "return" = return body
 
-function buildIfChain(cases: Node[], tempName: string, loc: SourceLocation, mode: string, varName: string): Node {
+function buildIfChain(cases: Node[], tempName: string, discType: Type, loc: SourceLocation, mode: string, varName: string): Node {
 	// String hash dispatch for >8 string cases
 	if (isAllStringCases(cases)) {
-		return buildHashSwitch(cases, tempName, loc, mode, varName);
+		return buildHashSwitch(cases, tempName, discType, loc, mode, varName);
 	}
 
 	let elseNode = makeBlock([], loc);
@@ -154,12 +158,12 @@ function buildIfChain(cases: Node[], tempName: string, loc: SourceLocation, mode
 
 		if (isBindingPattern(caseData.casePatterns)) {
 			const bindingName = getBindingName(caseData.casePatterns);
-			const bindDecl = makeVarDecl(bindingName, makeIdent(tempName, loc), DeclKind.Const, loc);
+			const bindDecl = makeVarDecl(bindingName, makeTypedIdent(tempName, discType, loc), DeclKind.Const, loc);
 			elseNode = prependToBody(bindDecl, body, loc);
 			continue;
 		}
 
-		const cond = buildPatternCondition(caseData.casePatterns, tempName, loc);
+		const cond = buildPatternCondition(caseData.casePatterns, tempName, discType, loc);
 		elseNode = makeIf(cond, body, elseNode, loc);
 	}
 
@@ -213,18 +217,18 @@ function getBindingName(patterns: Node[]): string {
 }
 
 // Build condition from pattern list: $m === p1 || $m === p2 || ...
-function buildPatternCondition(patterns: Node[], tempName: string, loc: SourceLocation): Node {
-	let cond = makePatternTest(patterns[0], tempName, loc);
+function buildPatternCondition(patterns: Node[], tempName: string, discType: Type, loc: SourceLocation): Node {
+	let cond = makePatternTest(patterns[0], tempName, discType, loc);
 	for (let i = 1; i < patterns.length; i += 1) {
-		const nextTest = makePatternTest(patterns[i], tempName, loc);
+		const nextTest = makePatternTest(patterns[i], tempName, discType, loc);
 		cond = makeBinary(cond, "||", nextTest, loc);
 	}
 	return cond;
 }
 
 // Build a single pattern test: $m === pattern
-function makePatternTest(pattern: Node, tempName: string, loc: SourceLocation): Node {
-	return makeBinary(makeIdent(tempName, loc), "===", pattern, loc);
+function makePatternTest(pattern: Node, tempName: string, discType: Type, loc: SourceLocation): Node {
+	return makeBinary(makeTypedIdent(tempName, discType, loc), "===", pattern, loc);
 }
 
 // ===== String Hash Dispatch =====
@@ -369,7 +373,7 @@ function isAllStringCases(cases: Node[]): boolean {
 }
 
 // Build switch(djb2(disc)) { case HASH: if (disc === str) { body } break; ... default: { wildcard } }
-function buildHashSwitch(cases: Node[], tempName: string, loc: SourceLocation, mode: string, varName: string): Node {
+function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: SourceLocation, mode: string, varName: string): Node {
 	const switchCases: Node[] = [];
 	let defaultBody = makeBlock([], loc);
 
@@ -388,7 +392,7 @@ function buildHashSwitch(cases: Node[], tempName: string, loc: SourceLocation, m
 
 			// Body: if (temp === "literal") { armBody; break; }
 			const body = wrapArmBody(caseData.caseBody, mode, varName, loc);
-			const guard = makeBinary(makeIdent(tempName, loc), "===", pat, loc);
+			const guard = makeBinary(makeTypedIdent(tempName, discType, loc), "===", pat, loc);
 			const guardedBody = makeIf(guard, body, makeBlock([], loc), loc);
 			const caseStmts: Node[] = [];
 			caseStmts.push(guardedBody);
@@ -407,7 +411,7 @@ function buildHashSwitch(cases: Node[], tempName: string, loc: SourceLocation, m
 
 	// switch (msStringHash(temp))
 	const hashCallArgs: Node[] = [];
-	hashCallArgs.push(makeIdent(tempName, loc));
+	hashCallArgs.push(makeTypedIdent(tempName, discType, loc));
 	const hashCall = makeCall(makeIdent("msStringHash", loc), hashCallArgs, loc);
 	return makeSwitch(hashCall, switchCases, loc);
 }

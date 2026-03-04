@@ -27,7 +27,8 @@ import {
 } from "./cache";
 import {
 	TaFileInputStore, createFileInputStore,
-	setFileText, getFileText, getFileHash, getFileId, hasFile
+	setFileText, getFileText, getFileHash, getFileId, getFilePath, hasFile,
+	getFileCount, getFilePathByIndex
 } from "./fileInput";
 import {
 	TaModuleDepGraph, createModuleDepGraph,
@@ -44,7 +45,7 @@ import {
 } from "./intern";
 import { check } from "std/testing";
 import { parseSource } from "../../parser/statements/validation";
-import { checkProgram } from "../../checker/index";
+import { checkProgram, checkProgramCancellable } from "../../checker/index";
 import { transformProgram } from "../../transform/index";
 import { analyzeProgram } from "../../analyzer/index";
 
@@ -94,6 +95,16 @@ export function dbSetFileText(db: TransAmDb, filePath: string, source: string): 
 	return true;
 }
 
+// Count of all files in the DB
+export function dbGetFileCount(db: TransAmDb): number {
+	return getFileCount(db.fileInput);
+}
+
+// Get file path by sequential index (0..count-1)
+export function dbGetFilePathByIndex(db: TransAmDb, index: number): string {
+	return getFilePathByIndex(db.fileInput, index);
+}
+
 // Execute parse query for a file. Returns the parsed Node.
 export function dbParse(db: TransAmDb, filePath: string): Node {
 	const fileId = getFileId(db.fileInput, filePath);
@@ -141,7 +152,15 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const pKey = createQueryKey(TaQueryKind.Parse, fileId);
 	recordDependency(db.depStack, pKey, 0);
 
-	const checkerCtx = checkProgram(program);
+	const startVersion = getCancelVersion(db.cancelCtx);
+	const checkerCtx = checkProgramCancellable(program, db.cancelCtx, startVersion);
+
+	// If cancelled, discard frame without caching — partial result not reliable
+	if (checkCancel(db.cancelCtx, startVersion)) {
+		popFrame(db.depStack);
+		return checkerCtx;
+	}
+
 	ctxCacheStore(checkCtxKey(fileId), checkerCtx);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, 0, true);
 	return checkerCtx;
@@ -228,11 +247,12 @@ export {
 export { TaCacheStore, createCacheStore, cacheGet, cachePut } from "./cache";
 export {
 	TaFileInputStore, createFileInputStore,
-	setFileText, getFileText, getFileHash, getFileId, hasFile
+	setFileText, getFileText, getFileHash, getFileId, getFilePath, hasFile,
+	getFileCount, getFilePathByIndex
 } from "./fileInput";
 export {
 	TaModuleDepGraph, createModuleDepGraph,
-	recordModuleImport, getTransitiveDependents
+	recordModuleImport, clearImportsFor, getTransitiveDependents
 } from "./moduleDeps";
 export { tryMarkGreen, executeQueryWith, invalidateFile } from "./redGreen";
 export {

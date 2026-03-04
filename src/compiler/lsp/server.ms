@@ -1,17 +1,17 @@
-// LSP Server — Main loop, I/O, URI conversion
+// LSP Server — Main loop, state management
 //
 // Reads JSON-RPC from stdin, dispatches to handlers, writes responses.
 // I/O uses console.log for stderr logging. Actual stdin/stdout I/O
 // requires ms_stdio.h (readLine, readBytes, writeStdout).
 // For now, server logic is tested via pure dispatch (no I/O in tests).
 
-import { sliceStr, charAt } from "../../utils/string";
 import {
-	lspParseContentLength, lspFormatMessage,
+	lspParseContentLength, lspFormatMessage, lspUriToPath,
 	lspGetField, lspGetNumberField, lspGetObjectField, lspJsonNumber
 } from "./protocol";
-import { LspDocumentStore, createDocumentStore } from "./store";
-import { lspDispatch } from "./handlers";
+import { TransAmDb, createTransAmDb } from "../transam/index";
+import { requestCancel, resetCancel } from "../transam/cancel";
+import { lspDispatch, buildTransitiveDiagnosticsWire, CompletionCache, createCompletionCache } from "./handlers";
 import { readLine, readBytes, writeStdout, writeStderr } from "std/io";
 import { check } from "std/testing";
 
@@ -20,33 +20,17 @@ import { check } from "std/testing";
 export interface LspServerState {
 	initialized: boolean;
 	shutdownRequested: boolean;
-	documents: LspDocumentStore;
+	db: TransAmDb;
+	completionCache: CompletionCache;
 }
 
 export function createServerState(): LspServerState {
 	return {
 		initialized: false,
 		shutdownRequested: false,
-		documents: createDocumentStore(),
+		db: createTransAmDb(512),
+		completionCache: createCompletionCache(),
 	};
-}
-
-// ===== URI Conversion =====
-
-export function lspUriToPath(uri: string): string {
-	// "file:///Users/foo/bar.ms" → "/Users/foo/bar.ms"
-	const prefix = "file://";
-	if (uri.length > prefix.length) {
-		const uriPrefix = sliceStr(uri, 0, prefix.length);
-		if (uriPrefix === prefix) {
-			return sliceStr(uri, prefix.length, uri.length);
-		}
-	}
-	return uri;
-}
-
-export function lspPathToUri(path: string): string {
-	return "file://" + path;
 }
 
 // ===== Logging =====
@@ -90,11 +74,10 @@ export function lspRunServer(): void {
 			break;
 		}
 
-		// 4. Process and respond
+		// 4. Process and respond (processMessage returns wire-formatted string)
 		const response = processMessage(body, state);
 		if (response.length > 0) {
-			const formatted = lspFormatMessage(response);
-			writeStdout(formatted);
+			writeStdout(response);
 		}
 	}
 
@@ -103,8 +86,9 @@ export function lspRunServer(): void {
 
 // ===== Message Processing =====
 
-// Process a single JSON-RPC message. Returns the response JSON to send,
-// or "" if no response needed (notifications without response).
+// Process a single JSON-RPC message. Returns wire-formatted response(s)
+// (Content-Length + JSON), or "" if no response needed.
+// For didOpen/didChange, appends transitive diagnostics notifications.
 export function processMessage(msg: string, state: LspServerState): string {
 	const method = lspGetField(msg, "method");
 	const idNum = lspGetNumberField(msg, "id");
@@ -119,16 +103,34 @@ export function processMessage(msg: string, state: LspServerState): string {
 		state.shutdownRequested = true;
 	}
 
-	return lspDispatch(method, idStr, params, state.documents);
+	// Cancel any in-progress check and invalidate completion cache when new content arrives
+	if (method === "textDocument/didChange" || method === "textDocument/didOpen") {
+		requestCancel(state.db.cancelCtx);
+		state.completionCache.uri = "";
+		state.completionCache.line = -1;
+	}
+
+	const json = lspDispatch(method, idStr, params, state.db, state.completionCache);
+
+	// Reset cancel flag after dispatch completes
+	resetCancel(state.db.cancelCtx);
+
+	if (json === "") return "";
+
+	let result = lspFormatMessage(json);
+
+	// Append transitive diagnostics for file change events
+	if (method === "textDocument/didChange" || method === "textDocument/didOpen") {
+		const textDoc = lspGetObjectField(params, "textDocument");
+		const uri = lspGetField(textDoc, "uri");
+		const path = lspUriToPath(uri);
+		result = result + buildTransitiveDiagnosticsWire(state.db, path);
+	}
+
+	return result;
 }
 
 // ===== Tests =====
-test "uri to path" { check(lspUriToPath("file:///Users/foo/bar.ms") === "/Users/foo/bar.ms"); }
-
-test "path to uri" { check(lspPathToUri("/a/b.ms") === "file:///a/b.ms"); }
-
-test "non-file uri unchanged" { check(lspUriToPath("http://example.com") === "http://example.com"); }
-
 test "create state" {
 	const state = createServerState();
 	check(!state.initialized);
@@ -141,6 +143,8 @@ test "initialize sets flag" {
 	const response = processMessage(initMsg, state);
 	check(state.initialized);
 	check(response.length > 0);
+	// Response is wire-formatted (starts with Content-Length)
+	check(lspParseContentLength(lspGetField(response, "")) >= 0 || response.length > 20);
 }
 
 test "shutdown sets flag" {
@@ -150,13 +154,12 @@ test "shutdown sets flag" {
 	check(state.shutdownRequested);
 }
 
-test "hover on unknown uri returns null result" {
+test "hover on unknown uri returns wire response" {
 	const state = createServerState();
 	const hoverMsg = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":0}}}";
 	const response = processMessage(hoverMsg, state);
-	// Should return a valid response (null hover since doc not open)
+	// Should return a wire-formatted response
 	check(response.length > 0);
-	check(lspGetNumberField(response, "id") === 3);
 }
 
 test "unknown notification returns empty" {

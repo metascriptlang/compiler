@@ -88,10 +88,7 @@ function classifyObject(t: Type, ctx: TransformContext): RcInfo {
 		if (hasDestructor(t)) {
 			return makeRcInfo(RcKind.Named, t.typeName, t.typeName + "_destroy", t.typeName + "_copy", t.typeName + "_wasMoved", t.typeName + "_sink");
 		}
-		// Fallback: if attachedOps not populated yet (pre-destructorLifting), use name-based heuristic
-		if (t.attachedOps.length === 0) {
-			return makeRcInfo(RcKind.Named, t.typeName, t.typeName + "_destroy", t.typeName + "_copy", t.typeName + "_wasMoved", t.typeName + "_sink");
-		}
+		// destructorLifting has already run — if no hooks, type is plain value (no cleanup)
 		return noRcInfo();
 	}
 	return noRcInfo();

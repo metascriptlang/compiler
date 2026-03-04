@@ -18,6 +18,7 @@ import {
 	emitStmts, emitStmtsLine, emitStmtsNl,
 	getStmtsIndent, setStmtsIndent,
 	pushBlock, popBlock, readProcStmts,
+	nameSetHas,
 } from "./context";
 import { genExpr } from "./expressions";
 import { safeName } from "./names";
@@ -38,8 +39,28 @@ function isStructType(t: Type): boolean {
 }
 
 function isNrvoCallSite(callNode: Node): boolean {
-	if (callNode.nodeType === null) return false;
-	return isNrvoReturnType(callNode.nodeType);
+	// Only apply NRVO when callee is a known Function (not runtime macros)
+	const cd = callNode.data as CallExprData;
+	if (cd.callee !== null && cd.callee.nodeType !== null && cd.callee.nodeType.kind === TypeKind.Function) {
+		if (cd.callee.nodeType.typeReturn !== null) return isNrvoReturnType(cd.callee.nodeType.typeReturn);
+	}
+	if (callNode.resolvedSym !== null && callNode.resolvedSym.symbolType !== null) {
+		const st = callNode.resolvedSym.symbolType;
+		if (st.kind === TypeKind.Function && st.typeReturn !== null) return isNrvoReturnType(st.typeReturn);
+	}
+	return false;
+}
+
+function getNrvoReturnType(callNode: Node): Type {
+	const cd = callNode.data as CallExprData;
+	if (cd.callee !== null && cd.callee.nodeType !== null && cd.callee.nodeType.kind === TypeKind.Function) {
+		return cd.callee.nodeType.typeReturn;
+	}
+	if (callNode.resolvedSym !== null && callNode.resolvedSym.symbolType !== null) {
+		const st = callNode.resolvedSym.symbolType;
+		if (st.kind === TypeKind.Function) return st.typeReturn;
+	}
+	return null as unknown as Type;
 }
 
 function genNrvoCallExpr(g: CGen, p: CProc, callNode: Node, destVar: string): string {
@@ -99,12 +120,19 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as VariableDeclData;
 	const varName = safeName(d.declName);
 
-	// Type resolution priority: nodeType (checker) > initializer.nodeType (DRC) > fallback
+	// Type resolution priority: nodeType (checker) > initializer.nodeType (DRC) > annotation fallback
 	let cType = "";
 	if (node.nodeType !== null) {
 		cType = getTypeDesc(g, node.nodeType);
 	} else if (d.initializer !== null && d.initializer.nodeType !== null) {
 		cType = getTypeDesc(g, d.initializer.nodeType);
+	}
+	// Fallback: if type is void* or empty, check annotation against cross-module types
+	if ((cType === "" || cType === "void*") && d.declType.length > 0) {
+		const annotName = safeName(d.declType);
+		if (nameSetHas(g.knownTypeNames, annotName)) {
+			cType = nameSetHas(g.knownClassNames, annotName) ? annotName + "*" : annotName;
+		}
 	}
 	if (cType === "") cType = "double";
 
@@ -112,6 +140,11 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 		// G3 fix: NRVO call sites — when initializer is a call returning a struct,
 		// emit "Type var; fn(&var, args);" instead of "Type var = fn(args);"
 		if (d.initializer.kind === NodeKind.CallExpr && isNrvoCallSite(d.initializer)) {
+			// Derive type from callee return type if cType is unresolved
+			if (cType === "void*" || cType === "double") {
+				const retType = getNrvoReturnType(d.initializer);
+				if (retType !== null) cType = getTypeDesc(g, retType);
+			}
 			emitStmtsLine(p, cType + " " + varName + ";");
 			const nrvoCall = genNrvoCallExpr(g, p, d.initializer, varName);
 			emitStmtsLine(p, nrvoCall + ";");
@@ -130,21 +163,28 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 // ===== If Statement =====
 
 function genIfStmt(g: CGen, p: CProc, node: Node): void {
-	const d = node.data as IfStmtData;
-	const condSnippet = genExpr(g, p, d.condition);
-
-	emitStmts(p, "if (" + condSnippet + ") ");
-	genBlockOrBraces(g, p, d.consequent);
-
-	if (isEmptyBlock(d.alternate)) {
-		// No else — genBlockOrBraces already emitted closing brace + newline
-	} else if (d.alternate.kind === NodeKind.IfStmt) {
-		emitStmts(p, " else ");
-		genStmt(g, p, d.alternate);
-	} else {
-		emitStmts(p, " else ");
-		genBlockOrBraces(g, p, d.alternate);
-		emitStmtsNl(p);
+	let current = node;
+	let isFirst = true;
+	while (current !== null && current.kind === NodeKind.IfStmt) {
+		const d = current.data as IfStmtData;
+		const condSnippet = genExpr(g, p, d.condition);
+		if (isFirst) {
+			emitStmts(p, "if (" + condSnippet + ") ");
+			isFirst = false;
+		} else {
+			emitStmts(p, " else if (" + condSnippet + ") ");
+		}
+		genBlockOrBraces(g, p, d.consequent);
+		if (isEmptyBlock(d.alternate)) {
+			current = null;
+		} else if (d.alternate.kind === NodeKind.IfStmt) {
+			current = d.alternate;
+		} else {
+			emitStmts(p, " else ");
+			genBlockOrBraces(g, p, d.alternate);
+			emitStmtsNl(p);
+			current = null;
+		}
 	}
 }
 
@@ -479,4 +519,27 @@ test "try-finally has finally label" {
 		i = i + 1;
 	}
 	check(hasFinally);
+}
+
+test "long if-else chain (100 branches)" {
+	// Build: if (a) { f(); } else if (b) { f(); } else if ... (100 branches)
+	// This simulates match-lowered code that previously caused stack overflow.
+	let input = "if (a) { f(); }";
+	let i = 0;
+	while (i < 99) {
+		input = input + " else if (b) { f(); }";
+		i += 1;
+	}
+	const result = stmtOutput(input);
+	check(result.length > 0);
+	// Should contain "else if" pattern (iterative, not recursive)
+	let elseIfCount = 0;
+	let j = 0;
+	while (j < result.length - 7) {
+		if (sliceStr(result, j, j + 7) === "else if") {
+			elseIfCount = elseIfCount + 1;
+		}
+		j += 1;
+	}
+	check(elseIfCount === 99);
 }

@@ -218,7 +218,75 @@ export function lspErrorResponse(id: string, code: number, message: string): str
 	return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":{\"code\":" + lspJsonNumber(code) + ",\"message\":" + lspJsonString(message) + "}}";
 }
 
+// ===== URI Conversion =====
+
+export function lspUriToPath(uri: string): string {
+	// "file:///Users/foo/bar.ms" → "/Users/foo/bar.ms"
+	const prefix = "file://";
+	if (uri.length > prefix.length) {
+		const uriPrefix = sliceStr(uri, 0, prefix.length);
+		if (uriPrefix === prefix) {
+			return sliceStr(uri, prefix.length, uri.length);
+		}
+	}
+	return uri;
+}
+
+export function lspPathToUri(path: string): string {
+	return "file://" + path;
+}
+
+// ===== Path Helpers =====
+
+// Extract directory from a path: "/a/b/c.ms" → "/a/b"
+export function lspDirname(path: string): string {
+	let lastSlash = -1;
+	for (let i = 0; i < path.length; i = i + 1) {
+		if (charAt(path, i) === "/") lastSlash = i;
+	}
+	if (lastSlash <= 0) return "/";
+	return sliceStr(path, 0, lastSlash);
+}
+
+// Resolve a relative import specifier against a base file path.
+// Handles "./foo", "../bar", "../../baz". Auto-appends ".ms" if missing.
+// Returns "" for non-relative imports (std/*, bare module names).
+export function lspResolveImport(basePath: string, importSpec: string): string {
+	if (importSpec.length === 0) return "";
+	// Must start with "./" or "../" to be relative
+	if (charAt(importSpec, 0) !== ".") return "";
+	if (importSpec.length < 2) return "";
+	const second = charAt(importSpec, 1);
+	if (second !== "/" && second !== ".") return "";
+
+	let dir = lspDirname(basePath);
+	let spec = importSpec;
+
+	// Process "../" prefixes
+	while (spec.length >= 3 && sliceStr(spec, 0, 3) === "../") {
+		dir = lspDirname(dir);
+		spec = sliceStr(spec, 3, spec.length);
+	}
+	// Process "./" prefix
+	if (spec.length >= 2 && sliceStr(spec, 0, 2) === "./") {
+		spec = sliceStr(spec, 2, spec.length);
+	}
+
+	let result = dir + "/" + spec;
+	// Auto-append .ms if not already present
+	if (result.length < 3 || sliceStr(result, result.length - 3, result.length) !== ".ms") {
+		result = result + ".ms";
+	}
+	return result;
+}
+
 // ===== Tests =====
+test "uri to path" { check(lspUriToPath("file:///Users/foo/bar.ms") === "/Users/foo/bar.ms"); }
+
+test "path to uri" { check(lspPathToUri("/a/b.ms") === "file:///a/b.ms"); }
+
+test "non-file uri unchanged" { check(lspUriToPath("http://example.com") === "http://example.com"); }
+
 test "simple string" { check(lspJsonString("hello") === "\"hello\""); }
 
 test "escapes backslash" { check(lspJsonString("a\\b") === "\"a\\\\b\""); }
@@ -325,4 +393,25 @@ test "format message" {
 	// Should start with Content-Length header
 	const prefix = sliceStr(msg, 0, 16);
 	check(prefix === "Content-Length: ");
+}
+
+test "dirname basic" {
+	check(lspDirname("/a/b/c.ms") === "/a/b");
+	check(lspDirname("/a/b.ms") === "/a");
+	check(lspDirname("/a.ms") === "/");
+}
+
+test "resolve import same dir" {
+	check(lspResolveImport("/a/b/c.ms", "./utils") === "/a/b/utils.ms");
+	check(lspResolveImport("/a/b/c.ms", "./utils.ms") === "/a/b/utils.ms");
+}
+
+test "resolve import parent dir" {
+	check(lspResolveImport("/a/b/c.ms", "../utils") === "/a/utils.ms");
+	check(lspResolveImport("/a/b/c/d.ms", "../../utils") === "/a/utils.ms");
+}
+
+test "resolve import non-relative returns empty" {
+	check(lspResolveImport("/a/b.ms", "std/testing") === "");
+	check(lspResolveImport("/a/b.ms", "lodash") === "");
 }

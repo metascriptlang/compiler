@@ -140,4 +140,45 @@ typedef struct { void* impl; } msSet;
 /* Bounds check failure — prints error and exits */
 _Noreturn void msRaiseIndexError(int64_t idx, int64_t len);
 
+/* ===== Bounds-Checked Array Access Macros ===== */
+/* GCC statement expressions returning lvalues via dereferenced-pointer trick.
+   Both reads (x = msNumberArrayAccess(a, i)) and writes (msNumberArrayAccess(a, i) = x) work. */
+
+#define msNumberArrayAccess(a, i) (*({ \
+	int32_t __idx = (i); \
+	if ((uint32_t)__idx >= (uint32_t)(a).len) msRaiseIndexError(__idx, (a).len); \
+	&((a).p->data[__idx]); \
+}))
+
+#define msStringArrayAccess(a, i) (*({ \
+	int32_t __idx = (i); \
+	if ((uint32_t)__idx >= (uint32_t)(a).len) msRaiseIndexError(__idx, (a).len); \
+	&((a).p->data[__idx]); \
+}))
+
+#define msRefArrayAccess(a, i) (*({ \
+	int32_t __idx = (i); \
+	if ((uint32_t)__idx >= (uint32_t)(a).len) msRaiseIndexError(__idx, (a).len); \
+	&((a).p->data[__idx]); \
+}))
+
+#define msSizedArrayAccess(a, i, n) (*({ \
+	int32_t __idx = (i); \
+	if ((uint32_t)__idx >= (uint32_t)(n)) msRaiseIndexError(__idx, (n)); \
+	&((a).data[__idx]); \
+}))
+
+#define msSpanAccess(a, i) (*({ \
+	int32_t __idx = (i); \
+	if ((uint32_t)__idx >= (uint32_t)(a).len) msRaiseIndexError(__idx, (a).len); \
+	&((a).data[__idx]); \
+}))
+
+/* String char access is read-only — no lvalue trick needed */
+#define msStringCharAccess(s, i) ({ \
+	int32_t __idx = (i); \
+	if ((uint32_t)__idx >= (uint32_t)(s).len) msRaiseIndexError(__idx, (s).len); \
+	msStringCharAt((s), __idx); \
+})
+
 #endif /* SYSTEM_H */

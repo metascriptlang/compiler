@@ -1,7 +1,7 @@
 // String Concat Flatten — flattens nested string + chains into single concat call
 // Follows reference string_concat_flatten.zig + Nim's transf pattern
 //
-// "hello " + name + "!"   →   msStringConcat("hello ", name, "!")
+// "hello " + name + "!"   →   msStringConcat(msStringConcat("hello ", name), "!")
 // x + y                   →   x + y  (unchanged — can't prove string without type info)
 //
 // Conservative: only flattens when at least one operand is a StringLiteral.
@@ -46,9 +46,16 @@ function flattenConcat(node: Node): Node {
 	// 2-part concat is fine as binary — no benefit from call
 	if (parts.length < 3) return node;
 
-	// Flatten to msStringConcat(part1, part2, ..., partN)
+	// Build nested binary msStringConcat calls (left-fold):
+	// a + b + c + d  →  msStringConcat(msStringConcat(msStringConcat(a, b), c), d)
 	const loc = node.location;
-	return makeCall(makeIdent("msStringConcat", loc), parts, loc);
+	let result = makeCall(makeIdent("msStringConcat", loc), [parts[0], parts[1]], loc);
+	let i = 2;
+	while (i < parts.length) {
+		result = makeCall(makeIdent("msStringConcat", loc), [result, parts[i]], loc);
+		i += 1;
+	}
+	return result;
 }
 
 // Recursively collect parts from a left-associative + chain

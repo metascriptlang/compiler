@@ -4,21 +4,20 @@ export {
 	lspJsonString, lspJsonNumber, lspJsonBool, lspJsonNull,
 	lspGetField, lspGetNumberField, lspGetObjectField,
 	lspResponse, lspNotification, lspErrorResponse,
-	lspParseContentLength, lspFormatMessage
+	lspParseContentLength, lspFormatMessage,
+	lspUriToPath, lspPathToUri,
+	lspDirname, lspResolveImport
 } from "./protocol";
-
-export {
-	LspDocument, LspDocumentStore,
-	createDocumentStore, storeDocument, getDocument, removeDocument
-} from "./store";
 
 export {
 	handleInitialize, handleShutdown, handleHover,
 	handleCompletion, handleDefinition,
 	handleDocumentSymbol, handleSignatureHelp, handleInlayHint,
-	handleReferences, handleRename,
+	handleReferences, handleRename, handleSemanticTokensFull,
 	handleDidOpen, handleDidChange, handleDidClose,
-	buildDiagnosticsJson, lspDispatch
+	buildDiagnosticsJson, lspDispatch,
+	recordImportsForFile, buildTransitiveDiagnosticsWire,
+	CompletionCache, createCompletionCache
 } from "./handlers";
 
 export {
@@ -32,6 +31,5 @@ export {
 
 export {
 	LspServerState, createServerState,
-	lspUriToPath, lspPathToUri, processMessage,
-	lspRunServer
+	processMessage, lspRunServer
 } from "./server";

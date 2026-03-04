@@ -27,6 +27,7 @@ export { createSymbolTable, openScope, closeScope, defineSymbol, lookupSymbol, l
 
 // Re-exports: context.ms
 export {
+	CancelCtx, isCancelled,
 	CheckerContext, createContext, createModuleContext, addError, hasErrors, errorCount,
 	ExportedSymInfo, ModuleExports, ExportRegistry,
 	createExportRegistry, findModuleExports, findExportedSymbol, registerModuleExports,
@@ -45,7 +46,7 @@ export { resolveAnnotation, resolveDeclarations } from "./resolvePass";
 export { isAssignable, TypeRelation, typeRelation, scoreCandidate } from "./compat";
 
 // Re-exports: checkPass.ms (Pass 3 — statements)
-export { checkStmt, checkProgramBody, checkProgram, checkSource, runThreePasses } from "./checkPass";
+export { checkStmt, checkProgramBody, checkProgram, checkProgramCancellable, checkProgramWithRegistry, checkSource, runThreePasses } from "./checkPass";
 
 // Re-exports: checkExprPass.ms (Pass 3 — expressions)
 export { checkExpr } from "./checkExprPass";

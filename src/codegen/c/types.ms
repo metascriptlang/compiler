@@ -5,7 +5,8 @@
 // Topological emit with cycle detection via forward declarations.
 
 import { Type, TypeKind, isInterfaceType } from "../../checker/types";
-import { CGen, CSection, Builder, TypeCache, add, addLine, addNewline, extract, sec, createBuilder, typeCacheGet, typeCacheSet, typeCacheHas } from "./context";
+import { findChar } from "../../utils/string";
+import { CGen, CSection, Builder, TypeCache, add, addLine, addNewline, extract, sec, createBuilder, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas } from "./context";
 import { mangle, mangleTypeName, mangleFieldName } from "./names";
 import { check } from "std/testing";
 
@@ -68,7 +69,7 @@ export function intToString(n: number): string {
 // ===== Primitive Type Mapping =====
 
 export function getSimpleTypeDesc(t: Type): string {
-	if (t === null) return "void";
+	if (!t) return "void";
 	return match (t.kind) {
 		TypeKind.Number | TypeKind.Float64 => "double",
 		TypeKind.Float32 => "float",
@@ -137,7 +138,10 @@ export function ensureForwardDecl(g: CGen, typeName: string): void {
 // Emits type definitions to CGen sections as side effect.
 
 export function getTypeDesc(g: CGen, t: Type): string {
-	if (t === null) return "void";
+	if (t === null) return "void*";
+	const __k = t.kind;
+	if (__k === null) return "void*";
+	if (__k !== __k) return "void*";  // NaN check fallback
 
 	// Check simple types first (no caching needed)
 	const simple = getSimpleTypeDesc(t);
@@ -147,6 +151,23 @@ export function getTypeDesc(g: CGen, t: Type): string {
 	const key = typeKey(t);
 	const cached = typeCacheGet(g.typeCache, key);
 	if (cached !== "") return cached;
+
+	// Handle TypeReference before match — avoid match arm value propagation gotcha
+	if (t.kind === TypeKind.TypeReference) {
+		if (findChar(t.typeName, "=".code) >= 0 || (t.typeName.length > 0 && t.typeName.charAt(0) === "(")) {
+			return "msClosure";
+		}
+		if (t.typeName === "unknown" || t.typeName === "undefined" || t.typeName === "any" || t.typeName === "never") {
+			return "void*";
+		}
+		const name = mangle(t.typeName);
+		ensureForwardDecl(g, name);
+		// Class types need pointer semantics (Name* not Name)
+		if (nameSetHas(g.knownClassNames, name)) {
+			return name + "*";
+		}
+		return name;
+	}
 
 	// Generate based on kind
 	const result = match (t.kind) {
@@ -177,12 +198,13 @@ export function getTypeDesc(g: CGen, t: Type): string {
 		TypeKind.Result => {
 			genResultType(g, t);
 		},
-		TypeKind.TypeReference => {
-			// Unresolved type ref — use mangled name, assume forward declared
-			const name = mangle(t.typeName);
-			ensureForwardDecl(g, name);
-			name;
-		},
+		TypeKind.TypeReference => "void*", // handled above, shouldn't reach here
+		TypeKind.Unknown => "void*",
+		TypeKind.Any => "void*",
+		TypeKind.Union => "void*",
+		TypeKind.Intersection => "void*",
+		TypeKind.Tuple => "void*",
+		TypeKind.Generic | TypeKind.GenericParam => "void*",
 		_ => "void",
 	};
 
@@ -227,8 +249,24 @@ function genObjectType(g: CGen, t: Type): string {
 	// Ensure forward declaration
 	ensureForwardDecl(g, name);
 
-	// Emit struct definition
+	// Pre-resolve field types BEFORE emitting struct body.
+	// This ensures nested type definitions (enums, other structs) are emitted
+	// to CSection.Types before the struct body starts, avoiding inline typedefs.
+	const fieldTypes: string[] = [];
+	for (let i = 0; i < t.typeNames.length; i += 1) {
+		let ft = (i < t.typeChildren.length) ? getTypeDesc(g, t.typeChildren[i]) : "void";
+		// Self-referential fields: same interface type as containing struct → must be pointer
+		// C cannot contain a struct by value inside itself (infinite size)
+		if (iface && ft === name) {
+			ft = name + "*";
+		}
+		fieldTypes.push(ft);
+	}
+
+	// Emit struct definition (guarded to avoid redefinition with cross-module protos)
 	const b = sec(g, CSection.Types);
+	addLine(b, "#ifndef " + name + "_DEFINED");
+	addLine(b, "#define " + name + "_DEFINED");
 	addLine(b, "struct " + name + " {");
 	b.indent += 1;
 
@@ -236,16 +274,12 @@ function genObjectType(g: CGen, t: Type): string {
 
 	// Emit fields
 	for (let i = 0; i < t.typeNames.length; i += 1) {
-		const fieldName = mangleFieldName(t.typeNames[i]);
-		const fieldType = match (i < t.typeChildren.length) {
-			true => getTypeDesc(g, t.typeChildren[i]),
-			_ => "void",
-		};
-		addLine(b, fieldType + " " + fieldName + ";");
+		addLine(b, fieldTypes[i] + " " + mangleFieldName(t.typeNames[i]) + ";");
 	}
 
 	b.indent -= 1;
 	addLine(b, "};");
+	addLine(b, "#endif");
 	addNewline(b);
 
 	return cTypeName;
@@ -261,7 +295,7 @@ function genArrayType(g: CGen, t: Type): string {
 	const arrType = match (elemType) {
 		"double" => "msNumberArray",
 		"msString" => "msStringArray",
-		_ => "msArray",
+		_ => "msRefArray",
 	};
 
 	typeCacheSet(g.typeCache, key, arrType);
@@ -332,9 +366,11 @@ export function genResultType(g: CGen, t: Type): string {
 	const name = "msResult_" + mangle(okType) + "_" + mangle(errType);
 	typeCacheSet(g.typeCache, key, name);
 
-	// Emit struct
+	// Emit struct (guarded to avoid redefinition when cross-module protos exist)
 	ensureForwardDecl(g, name);
 	const b = sec(g, CSection.Types);
+	addLine(b, "#ifndef " + name + "_DEFINED");
+	addLine(b, "#define " + name + "_DEFINED");
 	addLine(b, "struct " + name + " {");
 	b.indent += 1;
 	addLine(b, "MS_BOOL ok;");
@@ -346,6 +382,7 @@ export function genResultType(g: CGen, t: Type): string {
 	}
 	b.indent -= 1;
 	addLine(b, "};");
+	addLine(b, "#endif");
 	addNewline(b);
 
 	return name;

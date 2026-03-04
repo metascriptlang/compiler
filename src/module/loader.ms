@@ -114,7 +114,7 @@ function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProv
 		finalizeModule(graph, mod, path);
 		return false;
 	}
-	mod.source = sourceResult.value;
+	mod.source = sourceResult.value; console.log("Parsing: " + path);
 
 	// Parse with recovery — always get partial AST, errors in state.errors
 	const lr = lex(mod.source);

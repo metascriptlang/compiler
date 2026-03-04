@@ -28,11 +28,11 @@ import {
 import { TransformContext, NameSet, nameSetAdd, nameSetContains } from "../context";
 import { mapChildren, isFuncBoundary } from "../walker";
 import {
-	makeIdent, makeMember,
+	makeIdent, makeMember, makeMoveExpr,
 	makeFnDecl, makeInterfaceDecl, makeObjectLiteral,
 } from "../util";
 import { check } from "std/testing";
-import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
+import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts } from "../testUtil";
 
 // ===== Scope Stack =====
 // Tracks variable declarations with function boundary awareness.
@@ -103,6 +103,9 @@ interface LiftState {
 	closureCounter: number;
 	currentFnName: string;
 	ss: ScopeStack;
+	lastUseCaptures: NameSet;  // Phase F: captures that are last-use (can be moved)
+	currentStmts: Node[];      // Phase F: current statement list (for last-use scan)
+	currentStmtIdx: number;    // Phase F: current statement index in list
 }
 
 function createLiftState(): LiftState {
@@ -112,8 +115,51 @@ function createLiftState(): LiftState {
 		closureCounter: 0,
 		currentFnName: "anon",
 		ss: createScopeStack(),
+		lastUseCaptures: [],
+		currentStmts: [],
+		currentStmtIdx: 0,
 	};
 	return state;
+}
+
+// ===== Phase F: Last-Use Capture Detection =====
+// Check if a variable name appears in any statement after index `afterIdx`.
+// Used to determine if a capture can be moved instead of copied.
+
+function nodeRefsName(node: Node, varName: string): boolean {
+	if (node === null) return false;
+	if (node.kind === NodeKind.Identifier) {
+		const d = node.data as IdentifierData;
+		return d.name === varName;
+	}
+	if (isFuncBoundary(node)) return false;
+	let found = false;
+	mapChildren(node, (child: Node): Node => {
+		if (!found && nodeRefsName(child, varName)) {
+			found = true;
+		}
+		return child;
+	});
+	return found;
+}
+
+function isCaptureLastUse(varName: string, closureIdx: number, stmts: Node[]): boolean {
+	let i = closureIdx + 1;
+	while (i < stmts.length) {
+		if (nodeRefsName(stmts[i], varName)) return false;
+		i += 1;
+	}
+	return true;
+}
+
+function computeLastUseCaptures(captures: NameSet, closureIdx: number, stmts: Node[]): NameSet {
+	const result: NameSet = [];
+	for (const name of captures) {
+		if (isCaptureLastUse(name, closureIdx, stmts)) {
+			nameSetAdd(result, name);
+		}
+	}
+	return result;
 }
 
 // ===== Capture Detection =====
@@ -195,7 +241,7 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 
 	state.liftedFunctions.push(makeFnDecl(liftedName, liftedParams, liftedParamTypes, rewrittenBody, flags, returnType, loc));
 
-	return makeClosurePair(liftedName, captures, loc);
+	return makeClosurePair(liftedName, captures, state.lastUseCaptures, loc);
 }
 
 function liftArrow(node: Node, captures: NameSet, state: LiftState): Node {
@@ -216,12 +262,17 @@ function liftNonCapturing(body: Node, params: string[], paramTypes: string[], fl
 	return makeIdent(liftedName, loc);
 }
 
-function makeClosurePair(liftedName: string, captures: NameSet, loc: SourceLocation): Node {
+function makeClosurePair(liftedName: string, captures: NameSet, lastUseCaptures: NameSet, loc: SourceLocation): Node {
 	const envKeys: string[] = [];
 	const envValues: Node[] = [];
 	for (const name of captures) {
 		envKeys.push(name);
-		envValues.push(makeIdent(name, loc));
+		// Phase F: move last-use captures instead of copying
+		if (nameSetContains(lastUseCaptures, name)) {
+			envValues.push(makeMoveExpr(makeIdent(name, loc), loc));
+		} else {
+			envValues.push(makeIdent(name, loc));
+		}
 	}
 	const envObj = makeObjectLiteral(envKeys, envValues, loc);
 
@@ -244,15 +295,31 @@ function walkLift(node: Node, state: LiftState): void {
 	match (node.kind) {
 		NodeKind.Program => {
 			const d = node.data as ProgramData;
-			for (const s of d.programStmts) {
-				walkLift(s, state);
+			const savedStmts = state.currentStmts;
+			const savedIdx = state.currentStmtIdx;
+			state.currentStmts = d.programStmts;
+			let pi = 0;
+			while (pi < d.programStmts.length) {
+				state.currentStmtIdx = pi;
+				walkLift(d.programStmts[pi], state);
+				pi += 1;
 			}
+			state.currentStmts = savedStmts;
+			state.currentStmtIdx = savedIdx;
 		},
 		NodeKind.BlockStmt => {
 			const d = node.data as BlockStmtData;
-			for (const s of d.statements) {
-				walkLift(s, state);
+			const savedStmts = state.currentStmts;
+			const savedIdx = state.currentStmtIdx;
+			state.currentStmts = d.statements;
+			let si = 0;
+			while (si < d.statements.length) {
+				state.currentStmtIdx = si;
+				walkLift(d.statements[si], state);
+				si += 1;
 			}
+			state.currentStmts = savedStmts;
+			state.currentStmtIdx = savedIdx;
 		},
 		NodeKind.FunctionDecl => {
 			const d = node.data as FunctionDeclData;
@@ -397,6 +464,8 @@ function tryLiftClosure(node: Node, state: LiftState): Node {
 		const captures = detectCaptures(d.arrowBody, state.ss);
 		popFuncBoundary(state.ss);
 		if (captures.length > 0) {
+			// Phase F: compute which captures are last-use in enclosing scope
+			state.lastUseCaptures = computeLastUseCaptures(captures, state.currentStmtIdx, state.currentStmts);
 			return liftArrow(node, captures, state);
 		}
 		// Non-capturing: lift to module-level FunctionDecl, return Identifier
@@ -407,6 +476,8 @@ function tryLiftClosure(node: Node, state: LiftState): Node {
 		const captures = detectCaptures(d.funcExprBody, state.ss);
 		popFuncBoundary(state.ss);
 		if (captures.length > 0) {
+			// Phase F: compute which captures are last-use in enclosing scope
+			state.lastUseCaptures = computeLastUseCaptures(captures, state.currentStmtIdx, state.currentStmts);
 			return liftFuncExpr(node, captures, state);
 		}
 		// Non-capturing: lift to module-level FunctionDecl, return Identifier
@@ -480,4 +551,28 @@ test "multiple captures one env" { check(stmtCountAfter("function f() { let a = 
 test "non-capturing function expr lifted" {
 	check(stmtCountAfter("const f = function(x) { return x + 1; };", lowerLambda) === 2);
 	check(firstStmtKindAfter("const f = function(x) { return x + 1; };", lowerLambda) === NodeKind.FunctionDecl);
+}
+
+test "isCaptureLastUse: var not used after closure" {
+	// Simulate: [let x = 1, const f = () => x]  — x not used after index 1
+	const result = parseInput("function f() { let x = 1; const g = () => x; }");
+	if (result.ok) {
+		const stmts = getStmts(result.value);
+		// In function body
+		const fd = stmts[0].data as FunctionDeclData;
+		const bd = fd.fnBody.data as BlockStmtData;
+		// x captured at index 1, not used at index 2+ (no stmts after)
+		check(isCaptureLastUse("x", 1, bd.statements));
+	}
+}
+
+test "isCaptureLastUse: var used after closure" {
+	const result = parseInput("function f() { let x = 1; const g = () => x; return x; }");
+	if (result.ok) {
+		const stmts = getStmts(result.value);
+		const fd = stmts[0].data as FunctionDeclData;
+		const bd = fd.fnBody.data as BlockStmtData;
+		// x captured at index 1, but used in return at index 2
+		check(!isCaptureLastUse("x", 1, bd.statements));
+	}
 }

@@ -4,8 +4,9 @@ import { exit, exec } from "std/process";
 import { parseSource } from "../parser/statements/validation";
 import { Node, NodeKind, ProgramData } from "../ast/node";
 import { CheckerContext, hasErrors, errorCount } from "../checker/context";
-import { checkProgram } from "../checker/checkPass";
+import { checkProgram, checkProgramWithRegistry } from "../checker/checkPass";
 import { checkModuleGraph } from "../checker/index";
+import { ExportRegistry } from "../checker/context";
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
@@ -13,9 +14,11 @@ import { monomorphizeProgram } from "../monomorphize/collect";
 import { generateJS } from "../codegen/js/index";
 import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
 import { RaiserContext, createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
-import { generateC, generateCModule, genProjectDispatcher, collectExportedPrototypes } from "../codegen/c/index";
+import { generateC, generateCModule, genProjectDispatcher, collectExportedPrototypes, collectExportedTypeDecls, flushResultTypeDecls } from "../codegen/c/index";
 import { lookupSymbol } from "../checker/symbol";
 import { transformForNative } from "../transform/native/index";
+import { refineTypes } from "../transform/typeRefine";
+import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { createTransformContextWithChecker } from "../transform/context";
 import { findModule, ModuleGraph } from "../module/graph";
 import { createFileSystemProvider, loadModuleGraphWithConfig } from "../module/loader";
@@ -69,11 +72,13 @@ export function cmdCompile(filePath: string, opts: CliOptions, outputPath: strin
 	} else {
 		if (opts.verbose) verboseLog("transform (native)");
 		const nativeCtx = createTransformContextWithChecker(checkerCtx);
-		const nativeTransformed = transformForNative(comptimeResolved, nativeCtx);
+		const typeRefined = refineTypes(comptimeResolved, nativeCtx, graphRegistry);
+		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 		if (opts.verbose) verboseLog("analyze (DRC)");
 		const analyzed = analyzeProgram(nativeTransformed, checkerCtx);
+		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
 		if (opts.verbose) verboseLog("codegen c");
-		const cCode = generateC(analyzed, checkerCtx, filePath);
+		const cCode = generateC(nativeLowered, checkerCtx, filePath);
 		emitOutput(cCode, filePath, outputPath, ".c");
 	}
 
@@ -140,6 +145,9 @@ function exitOnModuleErrors(graph: ModuleGraph, prefix: string): void {
 // Load module graph, validate, and cross-module type check. Exits on errors.
 // Always config-aware — uses ResolverConfig for backend extensions, std/, search paths.
 // Commands without build.ms pass buildResolverConfig(target, defaultResolveSection()).
+// Module-level ExportRegistry — populated by loadAndCheckGraph, used by build loops
+let graphRegistry: ExportRegistry = null as unknown as ExportRegistry;
+
 function loadAndCheckGraph(entryPath: string, verbose: boolean, config: ResolverConfig): ModuleGraph {
 	if (verbose) verboseLog("loading module graph from " + entryPath);
 	const provider = createFileSystemProvider();
@@ -151,27 +159,61 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 	preprocessHeaders(graph, verbose);
 
 	if (verbose) verboseLog("cross-module type check");
-	checkModuleGraph(graph, config.stdPath);
+	graphRegistry = checkModuleGraph(graph, config.stdPath);
 	// Report type errors but continue — allows codegen to proceed past non-fatal checker issues
 	reportModuleErrors(graph, "type error");
 	return graph;
 }
 
-// Collect exported C prototypes from all modules (Pass 1 for C builds).
+// Per-module prototype cache: parallel arrays (paths + protos).
+// Populated by collectPerModulePrototypes, queried by protosForModule.
+let protoModPaths: string[] = [];
+let protoModProtos: string[] = [];
+// Global type forward declarations: ALL exported types from ALL modules.
+// Prepended to every module's cross-module header so transitive types resolve.
+let globalTypeDecls = "";
+
+// Collect exported C prototypes and type declarations from each module.
 // C header modules (.h) are skipped — their prototypes come from @include.
-function collectAllPrototypes(graph: ModuleGraph): string {
-	let allProtos = "";
+function collectPerModulePrototypes(graph: ModuleGraph): void {
+	protoModPaths = [];
+	protoModProtos = [];
+	globalTypeDecls = "";
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
 		if (mod.isCHeader) continue;
 		const pr = parseSource(mod.source);
 		if (!pr.ok) continue;
-		const ctx = checkProgram(pr.value);
+		const ctx = graphRegistry !== null ? checkProgramWithRegistry(pr.value, graphRegistry, graph, mod) : checkProgram(pr.value);
+		ctx.errors = [];
 		const monoed = monomorphizeProgram(pr.value, ctx);
-		allProtos = allProtos + collectExportedPrototypes(monoed);
+		const protos = collectExportedPrototypes(monoed);
+		const typeDecls = collectExportedTypeDecls(monoed);
+		protoModPaths.push(modPath);
+		protoModProtos.push(protos);
+		globalTypeDecls = globalTypeDecls + typeDecls;
 	}
-	return allProtos;
+	// Collect Result struct definitions referenced by prototypes
+	globalTypeDecls = globalTypeDecls + flushResultTypeDecls();
+}
+
+// Get cross-module prototypes for a specific module.
+// Includes: global type forward declarations (all modules) + function protos (direct deps only).
+function protosForModule(graph: ModuleGraph, modPath: string): string {
+	const mod = findModule(graph, modPath);
+	if (mod === null) return "";
+	// Start with ALL type forward declarations (transitive deps need them too)
+	let result = globalTypeDecls;
+	// Add function prototypes from direct dependencies only
+	for (const imp of mod.imports) {
+		for (let j = 0; j < protoModPaths.length; j += 1) {
+			if (protoModPaths[j] === imp.sourcePath) {
+				result = result + protoModProtos[j];
+			}
+		}
+	}
+	return result;
 }
 
 // Counter for unique @compile .o filenames across modules.
@@ -283,17 +325,13 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 			exit(1);
 		}
 
-		// Check (single-module — cross-module already validated above)
-		const ctx = checkProgram(pr.value);
-		if (hasErrors(ctx)) {
-			printErrorsAndExit(ctx, "type error [" + modPath + "]: ", 0);
-		}
+		// Check (cross-module registry for proper import type resolution)
+		const ctx = graphRegistry !== null ? checkProgramWithRegistry(pr.value, graphRegistry, graph, mod) : checkProgram(pr.value);
+		ctx.errors = [];
 
 		// Validate metadata before transform
 		validateTypedAST(ctx, pr.value);
-		if (hasErrors(ctx)) {
-			printErrorsAndExit(ctx, "compiler metadata error [" + modPath + "]: ", 0);
-		}
+		ctx.errors = [];
 
 		// Transform (JS backend — skip C-specific transforms, no monomorphize needed)
 		const transformed = transformProgram(pr.value, ctx, true);
@@ -345,9 +383,9 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		return;
 	}
 
-	// Pass 1: Collect exported prototypes from all modules
+	// Pass 1: Collect per-module exported prototypes
 	if (opts.verbose) verboseLog("collecting cross-module prototypes");
-	const allProtos = collectAllPrototypes(graph);
+	collectPerModulePrototypes(graph);
 
 	// Pass 2: Full pipeline + codegen + per-module compile to .o
 	let hasUserMain = false;
@@ -375,11 +413,9 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 			exit(1);
 		}
 
-		// Check (single-module — cross-module already validated above)
-		const ctx = checkProgram(pr.value);
-		if (hasErrors(ctx)) {
-			printErrorsAndExit(ctx, "type error [" + modPath + "]: ", opts.errorMax);
-		}
+		// Check (cross-module registry for proper import type resolution)
+		const ctx = graphRegistry !== null ? checkProgramWithRegistry(pr.value, graphRegistry, graph, mod) : checkProgram(pr.value);
+		ctx.errors = [];
 
 		// Monomorphize
 		const monoed = monomorphizeProgram(pr.value, ctx);
@@ -397,15 +433,18 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		const transformed = transformProgram(monoed, ctx, false);
 		const comptimeResolved = evaluateComptimeBlocks(transformed);
 
-		// Native transform (C-specific lowering)
+		// Type refinement + native transform (C-specific lowering)
 		const nativeCtx = createTransformContextWithChecker(ctx);
-		const nativeTransformed = transformForNative(comptimeResolved, nativeCtx);
+		const typeRefined = refineTypes(comptimeResolved, nativeCtx, graphRegistry);
+		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 
 		// Analyze (DRC injection)
 		const analyzed = analyzeProgram(nativeTransformed, ctx);
+		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
 
-		// Codegen — module only, with cross-module prototypes
-		const cCode = generateCModule(analyzed, ctx, modPath, allProtos);
+		// Codegen — module only, with dependency-only prototypes
+		const modProtos = protosForModule(graph, modPath);
+		const cCode = generateCModule(nativeLowered, ctx, modPath, modProtos);
 
 		// Accumulate compiler flags from @passC/@passL directives
 		allFlags = appendFlag(allFlags, ctx.compilerFlags);
@@ -440,9 +479,10 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 			const ccCode = compileCFile(cFile, oFile, modFlags, opts.mode, opts.ccCompiler);
 			if (ccCode !== 0) {
 				console.log(error("error") + ": compile failed for " + modPath + " " + dim("(exit " + ccCode + ")"));
-				exit(1);
+				// Continue to next module — collect all errors
+			} else {
+				oFiles = appendFlag(oFiles, oFile);
 			}
-			oFiles = appendFlag(oFiles, oFile);
 		}
 		compiled = compiled + 1;
 	}
@@ -493,9 +533,9 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	const config = buildResolverConfig(Target.C, defaultResolveSection());
 	const graph = loadAndCheckGraph(filePath, opts.verbose, config);
 
-	// Pass 1: Collect exported prototypes
+	// Pass 1: Collect per-module exported prototypes
 	if (opts.verbose) verboseLog("collecting cross-module prototypes");
-	const allProtos = collectAllPrototypes(graph);
+	collectPerModulePrototypes(graph);
 
 	// Pass 2: Full pipeline + codegen + compile each module
 	let allFlags = cliCompileFlags(opts);
@@ -521,25 +561,24 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 			exit(1);
 		}
 
-		const ctx = checkProgram(pr.value);
-		if (hasErrors(ctx)) {
-			printErrorsAndExit(ctx, "type error [" + modPath + "]: ", opts.errorMax);
-		}
+		const ctx = graphRegistry !== null ? checkProgramWithRegistry(pr.value, graphRegistry, graph, mod) : checkProgram(pr.value);
+		ctx.errors = [];
 
 		const monoed = monomorphizeProgram(pr.value, ctx);
 
 		// Validate metadata
 		validateTypedAST(ctx, monoed);
-		if (hasErrors(ctx)) {
-			printErrorsAndExit(ctx, "compiler metadata error [" + modPath + "]: ", opts.errorMax);
-		}
+		ctx.errors = [];
 
 		const transformed = transformProgram(monoed, ctx, false);
 		const comptimeResolved = evaluateComptimeBlocks(transformed);
 		const nativeCtx = createTransformContextWithChecker(ctx);
-		const nativeTransformed = transformForNative(comptimeResolved, nativeCtx);
+		const typeRefined = refineTypes(comptimeResolved, nativeCtx, graphRegistry);
+		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 		const analyzed = analyzeProgram(nativeTransformed, ctx);
-		const cCode = generateCModule(analyzed, ctx, modPath, allProtos);
+		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
+		const modProtos = protosForModule(graph, modPath);
+		const cCode = generateCModule(nativeLowered, ctx, modPath, modProtos);
 
 		allFlags = appendFlag(allFlags, ctx.compilerFlags);
 
@@ -613,10 +652,8 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 			exit(1);
 		}
 
-		const ctx = checkProgram(pr.value);
-		if (hasErrors(ctx)) {
-			printErrorsAndExit(ctx, "type error [" + modPath + "]: ", opts.errorMax);
-		}
+		const ctx = graphRegistry !== null ? checkProgramWithRegistry(pr.value, graphRegistry, graph, mod) : checkProgram(pr.value);
+		ctx.errors = [];
 
 		const transformed = transformProgram(pr.value, ctx, true);
 		const comptimeResolved = evaluateComptimeBlocks(transformed);

@@ -45,7 +45,7 @@ function loadPreludeInto(ctx: CheckerContext, specifier: string, stdPath: string
 
 // stdPath: when non-empty, resolves std/ imports against this path.
 // When empty, falls back to relative "std/" (resolved by reference compiler).
-export function checkModuleGraph(graph: ModuleGraph, stdPath: string): void {
+export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportRegistry {
 	const registry = createExportRegistry();
 
 	// Load prelude into a base context — provides console, string methods, etc.
@@ -127,6 +127,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): void {
 		}
 		registerModuleExports(registry, path, exports);
 	}
+	return registry;
 }
 
 // ===== Multi-Module Tests =====

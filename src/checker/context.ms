@@ -1,7 +1,7 @@
 import { Type, TypeKind, unknownType } from "./types";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, createSymbolTable } from "./symbol";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
-import { sliceStr, findChar, trim, splitTopLevel } from "../utils/string";
+import { sliceStr, findChar, trimStr, splitTopLevel } from "../utils/string";
 import { check } from "std/testing";
 
 // ===== Export Registry (cross-module type propagation) =====
@@ -136,7 +136,7 @@ function findFlagSegment(flags: string, prefix: string): string {
 	if (flags === "") return "";
 	const parts = splitTopLevel(flags, "|");
 	for (let i = 0; i < parts.length; i += 1) {
-		const p = trim(parts[i]);
+		const p = trimStr(parts[i]);
 		if (p.length >= prefix.length && sliceStr(p, 0, prefix.length) === prefix) return p;
 	}
 	return "";
@@ -189,14 +189,14 @@ export function extractGenericNames(flags: string): string[] {
 	if (flags === "") return result;
 	const parts = splitTopLevel(flags, "|");
 	for (let pi = 0; pi < parts.length; pi += 1) {
-		const trimPart = trim(parts[pi]);
+		const trimPart = trimStr(parts[pi]);
 		if (trimPart.length > 4) {
 			const prefix = sliceStr(trimPart, 0, 4);
 			if (prefix === "gen:") {
 				const nameStr = sliceStr(trimPart, 4, trimPart.length);
 				const names = splitTopLevel(nameStr, ",");
 				for (let ni = 0; ni < names.length; ni += 1) {
-					const trimName = trim(names[ni]);
+					const trimName = trimStr(names[ni]);
 					if (trimName !== "") result.push(trimName);
 				}
 			}
@@ -210,7 +210,7 @@ export function stripGenFlag(flags: string): string {
 	const parts = splitTopLevel(flags, "|");
 	const kept: string[] = [];
 	for (let i = 0; i < parts.length; i += 1) {
-		const trimPart = trim(parts[i]);
+		const trimPart = trimStr(parts[i]);
 		if (trimPart.length > 4) {
 			const prefix = sliceStr(trimPart, 0, 4);
 			if (prefix !== "gen:") kept.push(trimPart);
@@ -257,6 +257,20 @@ export function hasAttachedOps(ops: AttachedOps): boolean {
 	return ops.onDestroy !== null || ops.onCopy !== null || ops.onMove !== null;
 }
 
+// ===== Cancel Context =====
+// Matches TaCancelContext shape — avoids checker→transam circular dependency.
+// LSP assigns db.cancelCtx to ctx.cancelCtx (structural compatibility under Bun).
+
+export interface CancelCtx {
+	version: number;
+	cancelled: boolean;
+}
+
+export function isCancelled(cancel: CancelCtx, startVersion: number): boolean {
+	if (cancel === null) return false;
+	return cancel.version !== startVersion || cancel.cancelled;
+}
+
 // ===== Checker Context =====
 
 export interface CheckerContext {
@@ -272,6 +286,8 @@ export interface CheckerContext {
 	includeDirectives: string; // accumulated @include args, newline-separated
 	compileDirectives: string; // accumulated @compile args, newline-separated
 	compilerFlags: string;     // accumulated @link/@passC/@passL args, space-separated
+	cancelCtx: CancelCtx;       // null in batch mode, set for LSP
+	cancelVersion: number;       // version at check start
 }
 
 // ===== Constructors =====
@@ -291,6 +307,8 @@ export function createContext(): CheckerContext {
 		includeDirectives: "",
 		compileDirectives: "",
 		compilerFlags: "",
+		cancelCtx: null as unknown as CancelCtx,
+		cancelVersion: 0,
 	};
 }
 

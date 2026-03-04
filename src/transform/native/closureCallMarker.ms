@@ -1,192 +1,165 @@
 // Closure Call Marker — identifies CallExpr nodes where callee is a closure
-// Follows reference closure_call_marker.zig
+// Uses resolvedSym metadata from the checker to decisively distinguish
+// direct function calls from closure calls (variable/parameter with function type).
 //
 // In C, closure calls use a different calling convention (ms_closure.fn + env pointer)
-// vs direct function calls. This pass collects all FunctionDecl names so C codegen
-// can distinguish direct calls from closure calls.
+// vs direct function calls. This pass sets isDirectCall = false on closure CallExprs.
 //
-// Algorithm:
-// 1. Pre-pass: collect all FunctionDecl names into ctx.fnDeclNames
-// 2. C codegen checks: if callee identifier is NOT in fnDeclNames, use closure protocol
+// Decision logic:
+//   MemberExpr callee       → always direct (method/extension)
+//   Identifier, no symbol   → direct (conservative — handles runtime/synthetic calls)
+//   Identifier, Function    → direct
+//   Identifier, Method      → direct
+//   Identifier, Class       → direct (constructor)
+//   Identifier, Variable    → closure
+//   Identifier, Parameter   → closure
 
 import {
-	Node, NodeKind,
-	ProgramData, FunctionDeclData, BlockStmtData,
-	CallExprData, IdentifierData, ExprStmtData,
-	VariableDeclData, IfStmtData, WhileStmtData,
-	ReturnStmtData, TryCatchStmtData, DoWhileStmtData,
-	SwitchStmtData, SwitchCaseData, ExportDeclData,
-	DecoratedDeclData, ImportDeclData,
+	Node, NodeKind, SymbolKind, Symbol,
+	CallExprData,
 } from "../../ast/node";
-import { TypeKind, CallingConvention } from "../../checker/types";
-import { TransformContext, nameSetContains } from "../context";
-import { check } from "std/testing";
-import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
+import { Type, TypeKind, CallingConvention } from "../../checker/types";
+import { Token } from "../../lexer/token";
+import { TransformContext } from "../context";
+import { walkNode } from "../walker";
 
 // ===== Main Entry Point =====
 
 export function markClosureCalls(program: Node, ctx: TransformContext): Node {
-	collectFunctionNames(program, ctx);
-	markDirectCalls(program, ctx);
+	walkNode(program, markCall);
 	return program;
 }
 
-// Recursively collect all FunctionDecl and ImportDecl names in the program
-function collectFunctionNames(node: Node, ctx: TransformContext): void {
-	if (node === null) return;
-	if (node.kind === NodeKind.FunctionDecl) {
-		const d = node.data as FunctionDeclData;
-		if (d.fnName !== "") {
-			ctx.fnDeclNames.push(d.fnName);
-		}
-		collectFunctionNames(d.fnBody, ctx);
-	} else if (node.kind === NodeKind.Program) {
-		const pd = node.data as ProgramData;
-		let i = 0;
-		while (i < pd.programStmts.length) {
-			collectFunctionNames(pd.programStmts[i], ctx);
-			i = i + 1;
-		}
-	} else if (node.kind === NodeKind.BlockStmt) {
-		const bd = node.data as BlockStmtData;
-		let i = 0;
-		while (i < bd.statements.length) {
-			collectFunctionNames(bd.statements[i], ctx);
-			i = i + 1;
-		}
-	} else if (node.kind === NodeKind.ImportDecl) {
-		const d = node.data as ImportDeclData;
-		let i = 0;
-		while (i < d.importNames.length) {
-			ctx.fnDeclNames.push(d.importNames[i]);
-			i = i + 1;
-		}
-	} else if (node.kind === NodeKind.ExportDecl) {
-		const d = node.data as ExportDeclData;
-		collectFunctionNames(d.exportedDecl, ctx);
-	} else if (node.kind === NodeKind.DecoratedDecl) {
-		const d = node.data as DecoratedDeclData;
-		collectFunctionNames(d.decoratedNode, ctx);
-	}
-}
+function markCall(node: Node): Node {
+	if (node.kind !== NodeKind.CallExpr) return node;
+	const cd = node.data as CallExprData;
 
-// Walk AST and set isDirectCall on every CallExpr whose callee is a known function name
-// or a MemberExpr (always direct — method/extension call)
-function markDirectCalls(node: Node, ctx: TransformContext): void {
-	if (node === null) return;
-	match (node.kind) {
-		NodeKind.CallExpr => {
-			const cd = node.data as CallExprData;
-			// Default is true (set by parser). Mark as closure call only when
-			// callee is an identifier NOT in the known function names set.
-			if (cd.callee.kind === NodeKind.Identifier) {
-				const id = cd.callee.data as IdentifierData;
-				if (!nameSetContains(ctx.fnDeclNames, id.name)) {
-					cd.isDirectCall = false;
-					// Nim parity: set callConv on callee type (ccClosure)
-					if (cd.callee.nodeType !== null && cd.callee.nodeType.kind === TypeKind.Function) {
-						cd.callee.nodeType.callConv = CallingConvention.CcClosure;
-					}
-				}
-			}
-			// Walk callee and arguments
-			markDirectCalls(cd.callee, ctx);
-			let ai = 0;
-			while (ai < cd.arguments.length) {
-				markDirectCalls(cd.arguments[ai], ctx);
-				ai = ai + 1;
-			}
-		},
-		NodeKind.Program => {
-			const pd = node.data as ProgramData;
-			let i = 0;
-			while (i < pd.programStmts.length) {
-				markDirectCalls(pd.programStmts[i], ctx);
-				i = i + 1;
-			}
-		},
-		NodeKind.BlockStmt => {
-			const bd = node.data as BlockStmtData;
-			let i = 0;
-			while (i < bd.statements.length) {
-				markDirectCalls(bd.statements[i], ctx);
-				i = i + 1;
-			}
-		},
-		NodeKind.FunctionDecl => {
-			const fd = node.data as FunctionDeclData;
-			markDirectCalls(fd.fnBody, ctx);
-		},
-		NodeKind.ExprStmt => {
-			const ed = node.data as ExprStmtData;
-			markDirectCalls(ed.expr, ctx);
-		},
-		NodeKind.VariableDecl => {
-			const vd = node.data as VariableDeclData;
-			markDirectCalls(vd.initializer, ctx);
-		},
-		NodeKind.ReturnStmt => {
-			const rd = node.data as ReturnStmtData;
-			markDirectCalls(rd.argument, ctx);
-		},
-		NodeKind.IfStmt => {
-			const id = node.data as IfStmtData;
-			markDirectCalls(id.condition, ctx);
-			markDirectCalls(id.consequent, ctx);
-			markDirectCalls(id.alternate, ctx);
-		},
-		NodeKind.WhileStmt => {
-			const wd = node.data as WhileStmtData;
-			markDirectCalls(wd.whileCondition, ctx);
-			markDirectCalls(wd.whileBody, ctx);
-		},
-		NodeKind.TryCatchStmt => {
-			const td = node.data as TryCatchStmtData;
-			markDirectCalls(td.tryBody, ctx);
-			markDirectCalls(td.catchBody, ctx);
-			markDirectCalls(td.finallyBody, ctx);
-		},
-		NodeKind.DoWhileStmt => {
-			const dd = node.data as DoWhileStmtData;
-			markDirectCalls(dd.doBody, ctx);
-			markDirectCalls(dd.doCondition, ctx);
-		},
-		NodeKind.SwitchStmt => {
-			const sd = node.data as SwitchStmtData;
-			markDirectCalls(sd.switchDisc, ctx);
-			let si = 0;
-			while (si < sd.switchCases.length) {
-				markDirectCalls(sd.switchCases[si], ctx);
-				si = si + 1;
-			}
-		},
-		NodeKind.SwitchCase => {
-			const sc = node.data as SwitchCaseData;
-			let ci = 0;
-			while (ci < sc.caseStmts.length) {
-				markDirectCalls(sc.caseStmts[ci], ctx);
-				ci = ci + 1;
-			}
-		},
-		NodeKind.ExportDecl => {
-			const xd = node.data as ExportDeclData;
-			markDirectCalls(xd.exportedDecl, ctx);
-		},
-		NodeKind.DecoratedDecl => {
-			const dd = node.data as DecoratedDeclData;
-			markDirectCalls(dd.decoratedNode, ctx);
-		},
-		_ => {},
-	};
+	// Only Identifier callees can be closures.
+	// MemberExpr callees are always direct (method/extension).
+	if (cd.callee.kind !== NodeKind.Identifier) return node;
+
+	const sym = cd.callee.resolvedSym;
+
+	// No resolvedSym → conservative: leave isDirectCall = true (default from parser).
+	// Handles synthetic/runtime calls (ms* prefix etc.) that may lack symbols.
+	if (sym === null) return node;
+
+	// Function/Method/Class symbols → direct call (default is already true)
+	if (sym.symbolKind === SymbolKind.Function) return node;
+	if (sym.symbolKind === SymbolKind.Method) return node;
+	if (sym.symbolKind === SymbolKind.Class) return node;
+
+	// Variable/Parameter with Function type → closure call
+	if (sym.symbolKind === SymbolKind.Variable || sym.symbolKind === SymbolKind.Parameter) {
+		cd.isDirectCall = false;
+		// Nim parity: set callConv on callee type (ccClosure)
+		if (cd.callee.nodeType !== null && cd.callee.nodeType.kind === TypeKind.Function) {
+			cd.callee.nodeType.callConv = CallingConvention.CcClosure;
+		}
+	}
+
+	return node;
 }
 
 // ===== Tests =====
-test "stmt passthrough" { check(stmtCountAfter("const x = 1;", markClosureCalls) === 1); }
+import { check } from "std/testing";
+import { Type, createFunction, numberType, voidType } from "../../checker/types";
+import { makeSymbol } from "../../checker/symbol";
+import { SourceLocation, createNode } from "../../ast/node";
+import { makeIdent, makeCall, makeMember, makeBlock } from "../util";
+import { makeCtx } from "../testUtil";
 
-test "function stays FunctionDecl" { check(firstStmtKindAfter("function foo() {}", markClosureCalls) === NodeKind.FunctionDecl); }
+// Helper: wrap statements in a Program node for markClosureCalls
+function wrapProgram(stmts: Node[]): Node {
+	return createNode(NodeKind.Program, { programStmts: stmts, programImports: [] }, { kind: 0, value: "", line: 0, column: 0 } as unknown as Token);
+}
 
-test "while unchanged" { check(firstStmtKindAfter("while (true) {}", markClosureCalls) === NodeKind.WhileStmt); }
+// Helper: create an ExprStmt wrapping a CallExpr, return the CallExpr's data
+function makeTestCall(calleeName: string, sym: Symbol, calleeType: Type): { prog: Node, cd: CallExprData } {
+	const loc: SourceLocation = { line: 0, column: 0 };
+	const callee = makeIdent(calleeName, loc);
+	if (sym !== null) {
+		callee.resolvedSym = sym;
+	}
+	if (calleeType !== null) {
+		callee.nodeType = calleeType;
+	}
+	const callNode = makeCall(callee, [], loc);
+	const cd = callNode.data as CallExprData;
+	const exprStmt = createNode(NodeKind.ExprStmt, { expr: callNode }, { kind: 0, value: "", line: 0, column: 0 } as unknown as Token);
+	const prog = wrapProgram([exprStmt]);
+	return { prog, cd };
+}
 
-test "preserves stmts" { check(stmtCountAfter("let a = 1; let b = 2;", markClosureCalls) === 2); }
+// Helper: create a MemberExpr-based call (obj.method())
+function makeMemberTestCall(): { prog: Node, cd: CallExprData } {
+	const loc: SourceLocation = { line: 0, column: 0 };
+	const obj = makeIdent("obj", loc);
+	const mem = makeMember(obj, "method", loc);
+	const callNode = makeCall(mem, [], loc);
+	const cd = callNode.data as CallExprData;
+	const exprStmt = createNode(NodeKind.ExprStmt, { expr: callNode }, { kind: 0, value: "", line: 0, column: 0 } as unknown as Token);
+	const prog = wrapProgram([exprStmt]);
+	return { prog, cd };
+}
 
-test "if unchanged" { check(firstStmtKindAfter("if (x) {}", markClosureCalls) === NodeKind.IfStmt); }
+test "Function symbol is direct call" {
+	const fnType = createFunction([numberType()], voidType());
+	const sym = makeSymbol("foo", SymbolKind.Function, fnType, false);
+	const t = makeTestCall("foo", sym, fnType);
+	markClosureCalls(t.prog, makeCtx());
+	check(t.cd.isDirectCall === true);
+}
+
+test "Variable symbol is closure call" {
+	const fnType = createFunction([numberType()], voidType());
+	const sym = makeSymbol("cb", SymbolKind.Variable, fnType, false);
+	const t = makeTestCall("cb", sym, fnType);
+	markClosureCalls(t.prog, makeCtx());
+	check(t.cd.isDirectCall === false);
+}
+
+test "Parameter symbol is closure call" {
+	const fnType = createFunction([numberType()], voidType());
+	const sym = makeSymbol("handler", SymbolKind.Parameter, fnType, false);
+	const t = makeTestCall("handler", sym, fnType);
+	markClosureCalls(t.prog, makeCtx());
+	check(t.cd.isDirectCall === false);
+}
+
+test "no resolvedSym stays direct (conservative)" {
+	const t = makeTestCall("unknown", null as unknown as Symbol, null as unknown as Type);
+	markClosureCalls(t.prog, makeCtx());
+	check(t.cd.isDirectCall === true);
+}
+
+test "MemberExpr callee is always direct" {
+	const t = makeMemberTestCall();
+	markClosureCalls(t.prog, makeCtx());
+	check(t.cd.isDirectCall === true);
+}
+
+test "closure call sets CcClosure callConv" {
+	const fnType = createFunction([numberType()], voidType());
+	const sym = makeSymbol("cb", SymbolKind.Variable, fnType, false);
+	const t = makeTestCall("cb", sym, fnType);
+	markClosureCalls(t.prog, makeCtx());
+	check(t.cd.isDirectCall === false);
+	check(t.cd.callee.nodeType !== null);
+	check(t.cd.callee.nodeType.callConv === CallingConvention.CcClosure);
+}
+
+test "Method symbol is direct call" {
+	const fnType = createFunction([], voidType());
+	const sym = makeSymbol("doStuff", SymbolKind.Method, fnType, false);
+	const t = makeTestCall("doStuff", sym, fnType);
+	markClosureCalls(t.prog, makeCtx());
+	check(t.cd.isDirectCall === true);
+}
+
+test "Class symbol is direct call" {
+	const sym = makeSymbol("Foo", SymbolKind.Class, null as unknown as Type, false);
+	const t = makeTestCall("Foo", sym, null as unknown as Type);
+	markClosureCalls(t.prog, makeCtx());
+	check(t.cd.isDirectCall === true);
+}

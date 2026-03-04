@@ -9,7 +9,9 @@
 
 import { Node, SourceLocation } from "../ast/node";
 import { RcInfo, RcKind, noRcInfo } from "./classify";
-import { TransformContext, freshTemp, createTransformContext } from "../transform/context";
+import { CursorSet, createCursorSet } from "./cursors";
+import { CfgCache, createCfgCache } from "./cfg";
+import { TransformContext, NameSet, freshTemp, createTransformContext } from "../transform/context";
 import { makeExprStmt, makeNull } from "../transform/util";
 import { check } from "std/testing";
 
@@ -19,6 +21,7 @@ export interface VarInfo {
 	varName: string;
 	rcInfo: RcInfo;
 	isCursor: boolean;    // borrowed ref — never destroyed
+	isInitialized: boolean; // first-write optimization: skip destroy on first assignment
 }
 
 export interface MovedVar {
@@ -53,6 +56,10 @@ export interface DrcContext {
 	outerCtx: OuterEntry[];      // cross-scope remaining stmts for last-read
 	currentStmtIdx: number;      // Index of the statement currently being processed
 	currentStmtList: Node[];     // The list containing the current statement
+	finallyProtectedVars: NameSet;  // vars in enclosing finally blocks — never last-read (Phase A)
+	cursors: CursorSet;             // cursor variables — skip all RC ops (Phase B)
+	cfgCache: CfgCache;             // CFG cache per variable — Phase C
+	currentFuncBody: Node;          // current function body for CFG building — Phase C
 }
 
 // ===== Constructors =====
@@ -66,6 +73,10 @@ export function createDrcContext(ctx: TransformContext): DrcContext {
 		outerCtx: [],
 		currentStmtIdx: 0,
 		currentStmtList: [],
+		finallyProtectedVars: [],
+		cursors: createCursorSet(),
+		cfgCache: createCfgCache(),
+		currentFuncBody: null as unknown as Node,
 	};
 }
 
@@ -104,8 +115,16 @@ export function registerVar(dctx: DrcContext, varName: string, rcInfo: RcInfo, i
 	if (!rcInfo.needsCleanup) return;
 	if (isCursor) return;  // cursors are borrowed, never cleaned up
 	const scope = currentScope(dctx);
-	const info: VarInfo = { varName, rcInfo, isCursor: false };
+	const info: VarInfo = { varName, rcInfo, isCursor: false, isInitialized: true };
 	scope.varsToCleanup.push(info);
+}
+
+// Mark a variable as uninitialized (for `let x;` without initializer — Phase D first-write optimization)
+export function markUninitialized(dctx: DrcContext, varName: string): void {
+	const vi = findVarInfoInContext(dctx, varName);
+	if (vi !== null) {
+		vi.isInitialized = false;
+	}
 }
 
 // ===== Move Tracking =====

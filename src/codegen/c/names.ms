@@ -192,11 +192,30 @@ export function mangleLocalName(name: string, scopeDepth: number): string {
 	return mangled;
 }
 
-// ===== Safe Identifier — just keyword avoidance, no module prefix =====
+// ===== C Standard Library Collision Check =====
+// Names that conflict with C stdlib/POSIX functions and must be mangled.
+
+function isCStdlibName(name: string): boolean {
+	return match (name) {
+		"exit" | "abort" | "free" | "malloc" | "calloc" | "realloc" => true,
+		"printf" | "fprintf" | "sprintf" | "snprintf" | "puts" | "putchar" => true,
+		"getchar" | "gets" | "fgets" | "fopen" | "fclose" | "fread" | "fwrite" => true,
+		"strlen" | "strcmp" | "strcpy" | "strcat" | "strncmp" | "strncpy" => true,
+		"memcpy" | "memset" | "memmove" | "memcmp" => true,
+		"atoi" | "atof" | "atol" | "strtol" | "strtod" => true,
+		"signal" | "raise" | "time" | "clock" | "sleep" | "usleep" => true,
+		"read" | "write" | "open" | "close" | "stat" | "fstat" | "lstat" => true,
+		"getenv" | "setenv" | "system" | "remove" | "rename" => true,
+		"isdigit" | "isalpha" | "isalnum" | "isspace" | "toupper" | "tolower" => true,
+		_ => false,
+	};
+}
+
+// ===== Safe Identifier — keyword + stdlib avoidance, no module prefix =====
 
 export function safeName(name: string): string {
 	const mangled = mangle(name);
-	if (isCKeyword(mangled)) return mangled + "_";
+	if (isCKeyword(mangled) || isCStdlibName(mangled)) return mangled + "_";
 	return mangled;
 }
 

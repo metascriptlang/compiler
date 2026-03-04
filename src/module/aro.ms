@@ -21,7 +21,7 @@ import {
 	msAroTypedefCount, msAroTypedefName, msAroTypedefTarget,
 } from "../bindings/aro/index";
 import { ModuleGraph, findModule } from "./graph";
-import { sliceStr, trim, endsWith } from "../utils/string";
+import { sliceStr, trimStr, endsWith } from "../utils/string";
 import { check } from "std/testing";
 
 // ===== C Type → MetaScript Type Mapping =====
@@ -35,18 +35,18 @@ function stripQualifiers(t: string): string {
 	if (endsWith(s, " _Nonnull")) { s = sliceStr(s, 0, s.length - 9); }
 	if (endsWith(s, " _Nullable")) { s = sliceStr(s, 0, s.length - 10); }
 	if (endsWith(s, " __restrict")) { s = sliceStr(s, 0, s.length - 11); }
-	return trim(s);
+	return trimStr(s);
 }
 
 // Map a C type string to a MetaScript type annotation string.
 export function mapCType(ctype: string): string {
-	const t = stripQualifiers(trim(ctype));
+	const t = stripQualifiers(trimStr(ctype));
 
 	// Pointer types
 	if (endsWith(t, "*")) {
 		// Get base type (trim trailing * and spaces)
 		let baseEnd = t.length - 1;
-		const base = trim(sliceStr(t, 0, baseEnd));
+		const base = trimStr(sliceStr(t, 0, baseEnd));
 
 		// char* / const char* → string
 		if (base === "char" || base === "const char") return "string";

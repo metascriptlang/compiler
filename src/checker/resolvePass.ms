@@ -22,7 +22,7 @@ import {
 } from "./types";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, lookupSymbol, lookupLocal, defineSymbol, makeSymbol, openScope, closeScope, SymbolState, hasFlag, setFlag, SF_EXPORTED, SF_MUTABLE } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError } from "./context";
-import { trim, sliceStr, findChar, splitTopLevel } from "../utils/string";
+import { trimStr, sliceStr, findChar, splitTopLevel } from "../utils/string";
 import { getProperty } from "./types";
 import { getGenericDecl, getGenericDeclFieldNames, getGenericDeclFieldTypes, addGenericTypeInst, findGenericTypeInstIdx, getDefaultCount, getDefaultText, addDefaultParam } from "../parser/context";
 import { check } from "std/testing";
@@ -30,7 +30,7 @@ import { check } from "std/testing";
 // ===== A. Resolve Annotation Strings =====
 
 export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
-	const trimmed = trim(text);
+	const trimmed = trimStr(text);
 	if (trimmed === "") return unknownType();
 
 	// Check for union types (split on top-level |)
@@ -44,7 +44,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 
 	// Check for array suffix [] or [ ] (token-joined form from captureOptionalType)
 	if (trimmed.endsWith("[ ]")) {
-		const inner = trim(sliceStr(trimmed, 0, trimmed.length - 3));
+		const inner = trimStr(sliceStr(trimmed, 0, trimmed.length - 3));
 		return createArray(resolveAnnotation(inner, ctx));
 	}
 	if (trimmed.endsWith("[]")) {
@@ -54,8 +54,8 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 	if (trimmed.endsWith("]")) {
 		const openBracket = findChar(trimmed, "[");
 		if (openBracket > 0) {
-			const inner = trim(sliceStr(trimmed, 0, openBracket));
-			const sizeStr = trim(sliceStr(trimmed, openBracket + 1, trimmed.length - 1));
+			const inner = trimStr(sliceStr(trimmed, 0, openBracket));
+			const sizeStr = trimStr(sliceStr(trimmed, openBracket + 1, trimmed.length - 1));
 			if (sizeStr === "" || sizeStr === " ") {
 				return createArray(resolveAnnotation(inner, ctx));
 			}
@@ -67,8 +67,8 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 	// Check for generic types: Name<A, B> or Name < A , B > (token-joined form)
 	const angleBracket = findChar(trimmed, "<");
 	if (angleBracket > 0 && trimmed.endsWith(">")) {
-		const baseName = trim(sliceStr(trimmed, 0, angleBracket));
-		const argsText = trim(sliceStr(trimmed, angleBracket + 1, trimmed.length - 1));
+		const baseName = trimStr(sliceStr(trimmed, 0, angleBracket));
+		const argsText = trimStr(sliceStr(trimmed, angleBracket + 1, trimmed.length - 1));
 		const args = splitTopLevel(argsText, ",");
 
 		if (baseName === "Result" && args.length === 2) {
@@ -174,7 +174,7 @@ function buildTypeArgKey(args: string[], ctx: CheckerContext): string {
 	let key = "";
 	for (let i = 0; i < args.length; i += 1) {
 		if (i > 0) key = key + ",";
-		key = key + trim(args[i]);
+		key = key + trimStr(args[i]);
 	}
 	return key;
 }
@@ -183,7 +183,7 @@ function buildTypeArgKey(args: string[], ctx: CheckerContext): string {
 // Returns the param index, or -1 if no match. Uses only number locals (DRC-safe).
 function findGenericParamIdx(rawType: string, paramNames: string[]): number {
 	for (let i = 0; i < paramNames.length; i += 1) {
-		if (trim(paramNames[i]) === rawType) return i;
+		if (trimStr(paramNames[i]) === rawType) return i;
 	}
 	return -1;
 }
@@ -216,20 +216,20 @@ function recordGenericTypeInstantiation(baseName: string, genericParams: string,
 	}
 
 	// Handle first field separately to initialize result strings from non-empty values
-	const firstRaw = ftParts.length > 0 ? trim(ftParts[0]) : "";
+	const firstRaw = ftParts.length > 0 ? trimStr(ftParts[0]) : "";
 	const firstIdx = findGenericParamIdx(firstRaw, paramNames);
-	const firstSub = firstIdx >= 0 && firstIdx < args.length ? trim(args[firstIdx]) : firstRaw;
+	const firstSub = firstIdx >= 0 && firstIdx < args.length ? trimStr(args[firstIdx]) : firstRaw;
 
 	// Only use `let` for result strings initialized from computed values (never from "")
-	let resultFieldNames = trim(fnParts[0]);
+	let resultFieldNames = trimStr(fnParts[0]);
 	let resultFieldTypes = firstSub;
 
 	// Append remaining fields with "|" separator
 	for (let fi = 1; fi < fnParts.length; fi += 1) {
-		const rawType = fi < ftParts.length ? trim(ftParts[fi]) : "";
+		const rawType = fi < ftParts.length ? trimStr(ftParts[fi]) : "";
 		const paramIdx = findGenericParamIdx(rawType, paramNames);
-		const subType = paramIdx >= 0 && paramIdx < args.length ? trim(args[paramIdx]) : rawType;
-		resultFieldNames = resultFieldNames + "|" + trim(fnParts[fi]);
+		const subType = paramIdx >= 0 && paramIdx < args.length ? trimStr(args[paramIdx]) : rawType;
+		resultFieldNames = resultFieldNames + "|" + trimStr(fnParts[fi]);
 		resultFieldTypes = resultFieldTypes + "|" + subType;
 	}
 
@@ -388,7 +388,7 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 		openScope(ctx.table, ScopeKind.Block);
 		const genericNames = splitTopLevel(genericStr, ",");
 		for (const gp of genericNames) {
-			const trimGp = trim(gp);
+			const trimGp = trimStr(gp);
 			if (trimGp !== "") {
 				defineGenericParam(ctx, trimGp);
 			}
@@ -453,7 +453,7 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 		openScope(ctx.table, ScopeKind.Block);
 		const genericNames = splitTopLevel(genericStr, ",");
 		for (const gp of genericNames) {
-			const trimGp = trim(gp);
+			const trimGp = trimStr(gp);
 			if (trimGp !== "") {
 				defineGenericParam(ctx, trimGp);
 			}

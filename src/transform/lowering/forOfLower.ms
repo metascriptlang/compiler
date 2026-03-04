@@ -19,10 +19,11 @@ import {
 import { TransformContext, freshTemp } from "../context";
 import { walkNode } from "../walker";
 import {
-	makeIdent, makeNumber, makeBlock, makeVarDecl, makeWhile,
+	makeIdent, makeTypedIdent, makeNumber, makeBlock, makeVarDecl, makeWhile,
 	makeBinary, makeAssign, makeExprStmt, makeMember, makeArrayAccess,
 	extractBodyStmts, boolToDeclKind,
 } from "../util";
+import { numberType } from "../../checker/types";
 import { check } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
@@ -46,23 +47,24 @@ function forOfVisitor(ctx: TransformContext): (node: Node) => Node {
 
 		// const $iter = arr;
 		const iterDecl = makeVarDecl(iterName, d.forOfIterable, DeclKind.Const, loc);
+		const iterType = d.forOfIterable.nodeType;
 
 		// let $idx = 0;
 		const idxDecl = makeVarDecl(idxName, makeNumber(0, loc), DeclKind.Let, loc);
 
 		// const $len = $iter.length;
-		const lenExpr = makeMember(makeIdent(iterName, loc), "length", loc);
+		const lenExpr = makeMember(makeTypedIdent(iterName, iterType, loc), "length", loc);
 		const lenDecl = makeVarDecl(lenName, lenExpr, DeclKind.Const, loc);
 
 		// const item = $iter[$idx];
-		const itemAccess = makeArrayAccess(makeIdent(iterName, loc), makeIdent(idxName, loc), loc);
+		const itemAccess = makeArrayAccess(makeTypedIdent(iterName, iterType, loc), makeTypedIdent(idxName, numberType(), loc), loc);
 		const itemDk = boolToDeclKind(d.forOfIsConst);
 		const itemDecl = makeVarDecl(d.forOfBinding, itemAccess, itemDk, loc);
 
 		// $idx = $idx + 1;
 		const increment = makeAssign(
-			makeIdent(idxName, loc),
-			makeBinary(makeIdent(idxName, loc), "+", makeNumber(1, loc), loc),
+			makeTypedIdent(idxName, numberType(), loc),
+			makeBinary(makeTypedIdent(idxName, numberType(), loc), "+", makeNumber(1, loc), loc),
 			loc
 		);
 		const incStmt = makeExprStmt(increment, loc);
@@ -78,7 +80,7 @@ function forOfVisitor(ctx: TransformContext): (node: Node) => Node {
 		whileStmts.push(incStmt);
 
 		// while ($idx < $len) { ... }
-		const whileCond = makeBinary(makeIdent(idxName, loc), "<", makeIdent(lenName, loc), loc);
+		const whileCond = makeBinary(makeTypedIdent(idxName, numberType(), loc), "<", makeTypedIdent(lenName, numberType(), loc), loc);
 		const whileBody = makeBlock(whileStmts, loc);
 		const whileNode = makeWhile(whileCond, whileBody, loc);
 

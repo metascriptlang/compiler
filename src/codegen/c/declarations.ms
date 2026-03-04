@@ -11,13 +11,16 @@ import {
 	VariableDeclData, DecoratedDeclData,
 	ProgramData, BlockStmtData,
 	PropertyDeclData, MethodDeclData, ConstructorDeclData,
+	ObjectLiteralData,
 } from "../../ast/node";
+import { sliceStr } from "../../utils/string";
 import { Type, TypeKind } from "../../checker/types";
 import {
 	CGen, CProc, CSection, Builder,
 	createProc, createBuilder, add, addLine, addNewline,
 	sec, extract, nameSetHas, nameSetAdd,
 	emitStmts, emitStmtsLine, readProcStmts, readProcLocals,
+	typeCacheSet, typeCacheHas,
 } from "./context";
 import { genExpr } from "./expressions";
 import { genStmt, genStmts } from "./statements";
@@ -80,7 +83,15 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 
 	// Determine C return type — MUST have nodeType (Decisive Checker mandate)
 	const fnType = node.nodeType;
-	const cRetType = getTypeDesc(g, fnType.typeReturn);
+	if (fnType === null) return;
+	let cRetType = getTypeDesc(g, fnType.typeReturn);
+	// Fallback: if return type is void* but annotation names a known cross-module type, use it
+	if (cRetType === "void*" && d.fnReturnType.length > 0) {
+		const annotRetName = safeName(d.fnReturnType);
+		if (nameSetHas(g.knownTypeNames, annotRetName)) {
+			cRetType = nameSetHas(g.knownClassNames, annotRetName) ? annotRetName + "*" : annotRetName;
+		}
+	}
 	const nrvo = isNrvoReturnType(fnType.typeReturn);
 
 	// Build parameter list — NRVO adds out-param as first parameter
@@ -91,7 +102,14 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	}
 	for (let i = 0; i < d.params.length; i += 1) {
 		if (i > 0) paramList = paramList + ", ";
-		const pType = getTypeDesc(g, fnType.typeChildren[i]);
+		let pType = (i < fnType.typeChildren.length) ? getTypeDesc(g, fnType.typeChildren[i]) : "void*";
+		// Fallback: if type is void* but annotation names a known cross-module type, use it
+		if (pType === "void*" && i < d.fnParamTypes.length && d.fnParamTypes[i].length > 0) {
+			const annotName = safeName(d.fnParamTypes[i]);
+			if (nameSetHas(g.knownTypeNames, annotName)) {
+				pType = nameSetHas(g.knownClassNames, annotName) ? annotName + "*" : annotName;
+			}
+		}
 		paramList = paramList + pType + " " + safeName(d.params[i]);
 	}
 	if (paramList === "") paramList = "void";
@@ -146,11 +164,18 @@ function findOverloadIdx(primarySym: Symbol, declSym: Symbol): number {
 
 function genEnumDecl(g: CGen, node: Node): void {
 	const d = node.data as EnumDeclData;
-	const name = mangleTypeName(d.enumName);
+	const name = mangle(d.enumName);
 
-	// Skip if already declared
-	if (nameSetHas(g.declaredThings, name)) return;
+	// Skip if already declared (check both declaration set and type cache)
+	const key = "enum:" + d.enumName;
+	if (nameSetHas(g.declaredThings, name) || typeCacheHas(g.typeCache, key)) return;
 	nameSetAdd(g.declaredThings, name);
+
+	// Register in type cache to prevent genEnumType from re-emitting
+	typeCacheSet(g.typeCache, key, name);
+
+	// Register as known enum for cross-module member access (TokenKind.Eof → TokenKind_Eof)
+	nameSetAdd(g.knownEnumNames, name);
 
 	// Emit as typedef + #define constants
 	const types = sec(g, CSection.Types);
@@ -166,22 +191,32 @@ function genEnumDecl(g: CGen, node: Node): void {
 function genInterfaceDecl(g: CGen, node: Node): void {
 	const d = node.data as InterfaceDeclData;
 
-	const name = mangleTypeName(d.interfaceName);
+	const name = mangle(d.interfaceName);
 
-	if (nameSetHas(g.declaredThings, name)) return;
+	// Skip if already declared (check both declaration set and type cache)
+	const ifaceKey = "object:" + d.interfaceName;
+	if (nameSetHas(g.declaredThings, name) || typeCacheHas(g.typeCache, ifaceKey)) return;
 	nameSetAdd(g.declaredThings, name);
+
+	// Register in type cache to prevent genObjectType from re-emitting
+	typeCacheSet(g.typeCache, ifaceKey, name);
 
 	// Forward declaration
 	addLine(sec(g, CSection.ForwardDecls), "typedef struct " + name + " " + name + ";");
 
-	// Full struct definition
+	// Pre-resolve field types (ensures nested type definitions are emitted before struct body)
+	const ifaceType = node.nodeType;
+	const fieldTypes: string[] = [];
+	for (let i = 0; i < d.interfaceFields.length; i += 1) {
+		const ft = (ifaceType !== null && i < ifaceType.typeChildren.length) ? getTypeDesc(g, ifaceType.typeChildren[i]) : "void*";
+		fieldTypes.push(ft);
+	}
+
+	// Full struct definition (all referenced types already emitted above)
 	const types = sec(g, CSection.Types);
 	addLine(types, "struct " + name + " {");
-	const ifaceType = node.nodeType;
 	for (let i = 0; i < d.interfaceFields.length; i += 1) {
-		const fieldName = mangleFieldName(d.interfaceFields[i]);
-		const fieldType = getTypeDesc(g, ifaceType.typeChildren[i]);
-		addLine(types, "  " + fieldType + " " + fieldName + ";");
+		addLine(types, "  " + fieldTypes[i] + " " + mangleFieldName(d.interfaceFields[i]) + ";");
 	}
 	addLine(types, "};");
 	addNewline(types);
@@ -192,10 +227,15 @@ function genInterfaceDecl(g: CGen, node: Node): void {
 function genClassDecl(g: CGen, node: Node): void {
 	const d = node.data as ClassDeclData;
 
-	const name = mangleTypeName(d.className);
+	const name = mangle(d.className);
 
-	if (nameSetHas(g.declaredThings, name)) return;
+	// Skip if already declared (check both declaration set and type cache)
+	const classKey = "object:" + d.className;
+	if (nameSetHas(g.declaredThings, name) || typeCacheHas(g.typeCache, classKey)) return;
 	nameSetAdd(g.declaredThings, name);
+
+	// Register in type cache to prevent genObjectType from re-emitting
+	typeCacheSet(g.typeCache, classKey, name + "*");
 
 	// Forward declaration
 	addLine(sec(g, CSection.ForwardDecls), "typedef struct " + name + " " + name + ";");
@@ -216,10 +256,9 @@ function genClassDecl(g: CGen, node: Node): void {
 	addLine(types, "};");
 	addNewline(types);
 
-	// Emit msTypeInfo for ORC (static const, one per class)
-	// destroy and trace are NULL initially; destructorLifting emits them when needed.
-	// msDecref handles NULL destroy gracefully (just frees).
-	addLine(types, "static const msTypeInfo " + name + "_type = { NULL, NULL, MS_ACYCLIC_FLAG };");
+	// Emit msTypeInfo for ORC (mutable so DatInit can patch in destroy/trace ptrs)
+	// Fields: { name, isCyclic, traceFn, destroyFn }
+	addLine(types, "static msTypeInfo " + name + "_type = { \"" + d.className + "\", false, NULL, NULL };");
 	addNewline(types);
 
 	// Emit methods as free functions with first param being the class pointer
@@ -326,8 +365,14 @@ function genGlobalVar(g: CGen, node: Node): void {
 	const d = node.data as VariableDeclData;
 	const varName = safeName(d.declName);
 
-	const cType = getTypeDesc(g, node.nodeType);
+	// Detect _typeInfo vars from destructorLifting (ORC runtime RTTI)
+	const nameLen = d.declName.length;
+	if (nameLen > 9 && sliceStr(d.declName, nameLen - 9, nameLen) === "_typeInfo") {
+		genTypeInfoVar(g, d, varName);
+		return;
+	}
 
+	const cType = getTypeDesc(g, node.nodeType);
 	// Always emit uninitialized declaration to GlobalVars
 	addLine(sec(g, CSection.GlobalVars), cType + " " + varName + ";");
 
@@ -340,6 +385,37 @@ function genGlobalVar(g: CGen, node: Node): void {
 			add(sec(g, CSection.ModuleInit), locals);
 		}
 		addLine(sec(g, CSection.ModuleInit), "  " + varName + " = " + initSnippet + ";");
+	}
+}
+
+// ===== TypeInfo Variable (from destructorLifting) =====
+// Emits msTypeInfo declaration to GlobalVars and field assignments to DatInit.
+// The ObjectLiteral initializer has fields { name, isCyclic, traceFn, destroyFn }.
+
+function genTypeInfoVar(g: CGen, d: VariableDeclData, varName: string): void {
+	// Extract base type name: strip "_typeInfo" suffix (9 chars)
+	const baseName = sliceStr(d.declName, 0, d.declName.length - 9);
+
+	// Emit declaration
+	addLine(sec(g, CSection.GlobalVars), "static msTypeInfo " + varName + ";");
+
+	// Emit field assignments to DatInit (runs before user code)
+	if (d.initializer !== null && d.initializer.kind === NodeKind.ObjectLiteral) {
+		const od = d.initializer.data as ObjectLiteralData;
+		const datInit = sec(g, CSection.DatInit);
+		const p = createProc("__datinit", null as unknown as Type);
+
+		for (let i = 0; i < od.keys.length; i += 1) {
+			const key = od.keys[i];
+			if (key === "name") {
+				// name field: emit C string literal (const char*), not msString
+				addLine(datInit, "  " + varName + ".name = \"" + baseName + "\";");
+			} else {
+				// isCyclic/traceFn/destroyFn: use genExpr for the value
+				const val = genExpr(g, p, od.properties[i]);
+				addLine(datInit, "  " + varName + "." + key + " = " + val + ";");
+			}
+		}
 	}
 }
 

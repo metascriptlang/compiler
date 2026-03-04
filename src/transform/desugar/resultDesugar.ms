@@ -20,19 +20,47 @@
 //     if (!$result_0.ok) { return Result.err($result_0.error); }
 
 import {
-	Node, NodeKind, DeclKind, SourceLocation,
+	Node, NodeKind, DeclKind, SourceLocation, Symbol, SymbolKind, SymbolState,
 	VariableDeclData, ReturnStmtData, ExprStmtData, TryExprData,
 } from "../../ast/node";
-import { Type, TypeKind, booleanType } from "../../checker/types";
+import { Type, TypeKind, booleanType, getProperty } from "../../checker/types";
+import { makeSymbol, lookupSymbol } from "../../checker/symbol";
 import { TransformContext, freshTemp } from "../context";
 import { walkExpandBlocks } from "../walker";
 import {
 	makeIdent, makeVarDecl, makeBlock, makeExprStmt,
-	makeReturn, makeIf, makeMember, makeCall, makeConditional,
+	makeReturn, makeIf, makeMember, makeCall, makeCallResolved, makeConditional,
 	makeUnary,
 } from "../util";
 import { check } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
+
+// ===== Helpers: Typed Result Access =====
+
+// Create a member access on a Result variable with resolvedSym for the property.
+// Uses getProperty(resType, propName) internally — single source of truth for type derivation.
+function makeResultMember(tempName: string, resType: Type, propName: string, loc: SourceLocation): Node {
+	const ref = makeIdent(tempName, loc);
+	const mem = makeMember(ref, propName, loc);
+
+	// Context-aware: derive type from Result type structure
+	if (resType !== null) {
+		const propType = getProperty(resType, propName);
+		mem.nodeType = propType;
+		// Synthetic property symbol (mirrors checkExprPass.ms line 703-707)
+		const propSym = makeSymbol(propName, SymbolKind.Property, propType, false);
+		propSym.state = SymbolState.Shaped;
+		mem.resolvedSym = propSym;
+	}
+	return mem;
+}
+
+// Look up the Result.err symbol from checker context (returns null if unavailable)
+function lookupResultErr(ctx: TransformContext): Symbol {
+	if (ctx.checkerCtx === null) return null as unknown as Symbol;
+	if (ctx.checkerCtx.table === null) return null as unknown as Symbol;
+	return lookupSymbol(ctx.checkerCtx.table, "err");
+}
 
 // ===== Main Entry Point =====
 
@@ -84,23 +112,20 @@ function expandVarDeclTry(stmt: Node, ctx: TransformContext): Node[] {
 
 	if (tryData.hasCatch) {
 		// Case 2: const x = $result.ok ? $result.value : catchVal;
-		const okCheck = makeMember(makeIdent(tempName, loc), "ok", loc);
-		okCheck.nodeType = booleanType();
-		const valueAccess = makeMember(makeIdent(tempName, loc), "value", loc);
-		if (resType !== null) valueAccess.nodeType = resType.typeReturn;
+		const okCheck = makeResultMember(tempName, resType, "ok", loc);
+		const valueAccess = makeResultMember(tempName, resType, "value", loc);
 
 		const condExpr = makeConditional(okCheck, valueAccess, tryData.catchVal, loc);
-		condExpr.nodeType = stmt.nodeType; // the type of the variable being declared
+		condExpr.nodeType = stmt.nodeType;
 
 		const varDecl = makeVarDecl(d.declName, condExpr, d.declKind, loc);
 		varDecl.nodeType = stmt.nodeType;
 		result.push(varDecl);
 	} else {
 		// if (!$result.ok) { return Result.err($result.error); }
-		result.push(makeErrorCheck(tempName, resType, loc));
+		result.push(makeErrorCheck(tempName, resType, loc, ctx));
 		// const x = $result.value;
-		const valueAccess = makeMember(makeIdent(tempName, loc), "value", loc);
-		if (resType !== null) valueAccess.nodeType = resType.typeReturn;
+		const valueAccess = makeResultMember(tempName, resType, "value", loc);
 
 		const varDecl = makeVarDecl(d.declName, valueAccess, d.declKind, loc);
 		varDecl.nodeType = stmt.nodeType;
@@ -126,11 +151,10 @@ function expandReturnTry(stmt: Node, ctx: TransformContext): Node[] {
 	result.push(resDecl);
 
 	// if (!$result.ok) { return Result.err($result.error); }
-	result.push(makeErrorCheck(tempName, resType, loc));
+	result.push(makeErrorCheck(tempName, resType, loc, ctx));
 
 	// return $result.value;
-	const valueAccess = makeMember(makeIdent(tempName, loc), "value", loc);
-	if (resType !== null) valueAccess.nodeType = resType.typeReturn;
+	const valueAccess = makeResultMember(tempName, resType, "value", loc);
 	result.push(makeReturn(valueAccess, loc));
 
 	return result;
@@ -152,28 +176,35 @@ function expandExprStmtTry(stmt: Node, ctx: TransformContext): Node[] {
 	result.push(resDecl);
 
 	// if (!$result.ok) { return Result.err($result.error); }
-	result.push(makeErrorCheck(tempName, resType, loc));
+	result.push(makeErrorCheck(tempName, resType, loc, ctx));
 
 	return result;
 }
 
 // Build: if (!$result.ok) { return Result.err($result.error); }
-function makeErrorCheck(tempName: string, resType: Type, loc: SourceLocation): Node {
-	const okAccess = makeMember(makeIdent(tempName, loc), "ok", loc);
-	okAccess.nodeType = booleanType();
+function makeErrorCheck(tempName: string, resType: Type, loc: SourceLocation, ctx: TransformContext): Node {
+	const okAccess = makeResultMember(tempName, resType, "ok", loc);
 	const notOk = makeUnary("!", okAccess, loc);
 	notOk.nodeType = booleanType();
 
-	const errorAccess = makeMember(makeIdent(tempName, loc), "error", loc);
-	if (resType !== null) errorAccess.nodeType = resType.typeExtra;
+	const errorAccess = makeResultMember(tempName, resType, "error", loc);
 
-	// Result.err($result.error)
-	const resultErr = makeCall(
-		makeMember(makeIdent("Result", loc), "err", loc),
-		[errorAccess],
-		loc
-	);
-	// V4 FIX: Ensure Result.err call has the same Result type as the original call
+	// Result.err($result.error) — with resolvedSym for downstream builtinLower
+	const errSym = lookupResultErr(ctx);
+	let resultErr: Node = null as unknown as Node;
+	if (errSym !== null) {
+		const callee = makeIdent("err", loc);
+		callee.resolvedSym = errSym;
+		callee.nodeType = errSym.symbolType;
+		resultErr = makeCallResolved(callee, [errorAccess], errSym, loc);
+	} else {
+		// Fallback: no checker context (test mode) — use unresolved call
+		resultErr = makeCall(
+			makeMember(makeIdent("Result", loc), "err", loc),
+			[errorAccess],
+			loc
+		);
+	}
 	resultErr.nodeType = resType;
 
 	const returnStmt = makeReturn(resultErr, loc);
@@ -183,6 +214,15 @@ function makeErrorCheck(tempName: string, resType: Type, loc: SourceLocation): N
 }
 
 // ===== Tests =====
+import {
+	ProgramData, IfStmtData, BlockStmtData, ReturnStmtData as RetData,
+	CallExprData as CData, MemberExprData as MData,
+} from "../../ast/node";
+import { parseInput, makeCtx, getStmts } from "../testUtil";
+import { TypeKind as TK, createResult, numberType, stringType } from "../../checker/types";
+
+// --- Structural tests (pipeline output shape) ---
+
 test "var decl try expands to 3 stmts" { check(stmtCountAfter("const x = try f;", lowerTryExpr) === 3); }
 
 test "var decl try first is VariableDecl" { check(firstStmtKindAfter("const x = try f;", lowerTryExpr) === NodeKind.VariableDecl); }
@@ -192,3 +232,61 @@ test "try catch expands to 2 stmts" { check(stmtCountAfter("const x = try f catc
 test "no try passthrough" { check(stmtCountAfter("const x = 1;", lowerTryExpr) === 1); }
 
 test "multiple stmts preserved" { check(stmtCountAfter("let a = 1; const x = try f; let b = 2;", lowerTryExpr) === 5); }
+
+// --- Direct helper tests (bypass pipeline, verify resolvedSym/nodeType) ---
+
+test "makeResultMember sets resolvedSym for .ok" {
+	const resType = createResult(numberType(), stringType());
+	const loc: SourceLocation = { line: 0, column: 0 };
+	const mem = makeResultMember("$r", resType, "ok", loc);
+	check(mem.kind === NodeKind.MemberExpr);
+	check(mem.resolvedSym !== null);
+	check(mem.nodeType !== null);
+}
+
+test "makeResultMember sets correct type for .value" {
+	const resType = createResult(numberType(), stringType());
+	const loc: SourceLocation = { line: 0, column: 0 };
+	const mem = makeResultMember("$r", resType, "value", loc);
+	check(mem.nodeType !== null);
+	check(mem.nodeType.kind === TK.Number);
+	check(mem.resolvedSym !== null);
+}
+
+test "makeResultMember sets correct type for .error" {
+	const resType = createResult(numberType(), stringType());
+	const loc: SourceLocation = { line: 0, column: 0 };
+	const mem = makeResultMember("$r", resType, "error", loc);
+	check(mem.nodeType !== null);
+	check(mem.nodeType.kind === TK.String);
+	check(mem.resolvedSym !== null);
+}
+
+test "makeResultMember with null resType is graceful" {
+	const loc: SourceLocation = { line: 0, column: 0 };
+	const mem = makeResultMember("$r", null as unknown as Type, "ok", loc);
+	check(mem.kind === NodeKind.MemberExpr);
+}
+
+test "makeErrorCheck produces IfStmt with return" {
+	const resType = createResult(numberType(), stringType());
+	const loc: SourceLocation = { line: 0, column: 0 };
+	const ifNode = makeErrorCheck("$r", resType, loc, makeCtx());
+	check(ifNode.kind === NodeKind.IfStmt);
+	const ifData = ifNode.data as IfStmtData;
+	check(ifData.condition.kind === NodeKind.UnaryExpr);
+	const thenBlock = ifData.consequent.data as BlockStmtData;
+	check(thenBlock.statements.length === 1);
+	check(thenBlock.statements[0].kind === NodeKind.ReturnStmt);
+}
+
+test "makeErrorCheck Result.err call has nodeType" {
+	const resType = createResult(numberType(), stringType());
+	const loc: SourceLocation = { line: 0, column: 0 };
+	const ifNode = makeErrorCheck("$r", resType, loc, makeCtx());
+	const ifData = ifNode.data as IfStmtData;
+	const thenBlock = ifData.consequent.data as BlockStmtData;
+	const retData = thenBlock.statements[0].data as RetData;
+	check(retData.argument.nodeType !== null);
+	check(retData.argument.nodeType.kind === TK.Result);
+}

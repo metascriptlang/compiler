@@ -32,7 +32,7 @@ import { Type, TypeKind, unknownType, numberType, stringType, booleanType, nullT
 import { CheckerContext, extractGenericNames, stripGenFlag } from "../checker/context";
 import { SymbolTable, Symbol, SymbolKind, ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope } from "../checker/symbol";
 import { MonoRegistry, MonoEntry, monoRegister, monoFindEntry, buildTypeArgKeys, monoTypeKey, createMonoRegistry } from "./registry";
-import { sliceStr, trim, splitTopLevel, findChar, charAt } from "../utils/string";
+import { sliceStr, trimStr, splitTopLevel, findChar, charAt } from "../utils/string";
 import {
 	getExplicitTypeArg,
 	getGenericTypeInstCount, getGenericTypeInstMangledName,
@@ -79,7 +79,7 @@ function monoResolveExplicitTypeArgs(typeArgStr: string): Type[] {
 	const result: Type[] = [];
 	const parts = splitTopLevel(typeArgStr, ",");
 	for (let i = 0; i < parts.length; i += 1) {
-		const name = trim(parts[i]);
+		const name = trimStr(parts[i]);
 		const resolved = monoResolveTypeName(name);
 		if (resolved !== null) result.push(resolved);
 	}
@@ -100,7 +100,7 @@ function monoResolveTypeName(name: string): Type {
 // (DRC safety). Handles primitives, arrays, and named types.
 
 function monoResolveAnnotation(annotation: string): Type {
-	const trimmed = trim(annotation);
+	const trimmed = trimStr(annotation);
 	if (trimmed === "") return unknownType();
 	// Array suffix: number[]
 	if (trimmed.length > 2) {
@@ -114,7 +114,7 @@ function monoResolveAnnotation(annotation: string): Type {
 	if (trimmed.length > 4) {
 		const suffix3 = sliceStr(trimmed, trimmed.length - 3, trimmed.length);
 		if (suffix3 === "[ ]") {
-			const inner = trim(sliceStr(trimmed, 0, trimmed.length - 3));
+			const inner = trimStr(sliceStr(trimmed, 0, trimmed.length - 3));
 			return createArray(monoResolveAnnotation(inner));
 		}
 	}
@@ -123,8 +123,8 @@ function monoResolveAnnotation(annotation: string): Type {
 	if (angleBracket > 0) {
 		const lastChar = charAt(trimmed, trimmed.length - 1);
 		if (lastChar === ">") {
-			const baseName = trim(sliceStr(trimmed, 0, angleBracket));
-			const argsText = trim(sliceStr(trimmed, angleBracket + 1, trimmed.length - 1));
+			const baseName = trimStr(sliceStr(trimmed, 0, angleBracket));
+			const argsText = trimStr(sliceStr(trimmed, angleBracket + 1, trimmed.length - 1));
 			if (baseName === "Array") {
 				return createArray(monoResolveAnnotation(argsText));
 			}

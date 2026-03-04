@@ -24,7 +24,8 @@ import {
 	defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope,
 	setFlag, SF_MUTABLE, SF_LENT,
 } from "./symbol";
-import { CheckerContext, createContext, addError, hasErrors, errorCount, createExtensionRegistry } from "./context";
+import { CheckerContext, CancelCtx, createContext, createModuleContext, addError, hasErrors, errorCount, createExtensionRegistry, ExportRegistry, isCancelled } from "./context";
+import { Module, ModuleGraph } from "../module/graph";
 import { collectTopLevel, defineOrError } from "./collectPass";
 import { readFile } from "std/process";
 import { globalImports } from "./prelude";
@@ -442,6 +443,7 @@ function checkBlock(ctx: CheckerContext, node: Node): void {
 	openScope(ctx.table, ScopeKind.Block);
 	let i = 0;
 	while (i < d.statements.length) {
+		if (isCancelled(ctx.cancelCtx, ctx.cancelVersion)) { closeScope(ctx.table); return; }
 		const stmt = d.statements[i];
 		checkStmt(ctx, stmt);
 
@@ -600,6 +602,7 @@ function checkDestructuringDecl(ctx: CheckerContext, node: Node): void {
 export function checkProgramBody(ctx: CheckerContext, program: Node): void {
 	const stmts = program.data as ProgramData;
 	for (const stmt of stmts.programStmts) {
+		if (isCancelled(ctx.cancelCtx, ctx.cancelVersion)) return;
 		checkStmt(ctx, stmt);
 	}
 }
@@ -644,7 +647,15 @@ function collectDirectives(ctx: CheckerContext, program: Node): void {
 }
 
 export function checkProgram(program: Node): CheckerContext {
+	return checkProgramCancellable(program, null as unknown as CancelCtx, 0);
+}
+
+// Cancellable variant: inject cancel context before running passes.
+// LSP uses this to abort long checks on keystroke.
+export function checkProgramCancellable(program: Node, cancelCtx: CancelCtx, cancelVersion: number): CheckerContext {
 	const ctx = createContext();
+	ctx.cancelCtx = cancelCtx;
+	ctx.cancelVersion = cancelVersion;
 	ctx.extensionRegistry = createExtensionRegistry();
 	// User code + Prelude in Module scope (so extensions register correctly)
 	openScope(ctx.table, ScopeKind.Module);
@@ -665,6 +676,27 @@ export function checkProgram(program: Node): CheckerContext {
 	// Phase 2.5: Ownership Inference (Nim parity: sinkparameter_inference.nim)
 	inferOwnership(ctx, program);
 
+	return ctx;
+}
+
+// Cross-module variant: uses ExportRegistry for proper import type resolution
+export function checkProgramWithRegistry(program: Node, registry: ExportRegistry, graph: ModuleGraph, mod: Module): CheckerContext {
+	const ctx = createModuleContext(graph, mod);
+	ctx.extensionRegistry = createExtensionRegistry();
+	ctx.exportRegistry = registry;
+	openScope(ctx.table, ScopeKind.Module);
+	for (const imp of globalImports()) {
+		loadPreludeImport(ctx, imp);
+	}
+	const consoleClass = lookupSymbol(ctx.table, "console");
+	if (consoleClass !== null) {
+		const consoleGlobal = makeSymbol("console", SymbolKind.Variable, consoleClass.symbolType, false);
+		defineSymbol(ctx.table, consoleGlobal);
+		consoleGlobal.state = SymbolState.Shaped;
+	}
+	runThreePasses(ctx, program);
+	collectDirectives(ctx, program);
+	inferOwnership(ctx, program);
 	return ctx;
 }
 

@@ -25,12 +25,53 @@ import {
 	pStmts, getTemp, nameSetHas, emitStmtsLine, internString,
 } from "./context";
 import { mangle, mangleFieldName, safeName } from "./names";
-import { getTypeDesc, isNrvoReturnType, intToString } from "./types";
+import { getTypeDesc, isNrvoReturnType } from "./types";
 import { formatCNumber, cBoolLiteral, cNullLiteral, cStringLiteral, msStringPoolRef } from "./literals";
 import { charAt, sliceStr } from "../../utils/string";
 import { check } from "std/testing";
 
-// Join call arguments with comma separator.
+// ===== Iterative genExpr infrastructure =====
+// Post-order stack traversal: Discover pushes children, Emit combines results.
+
+interface ExprStackItem {
+	node: Node;
+	phase: number;       // 0 = Discover, 1 = Emit
+	childCount: number;  // results to pop during Emit
+	tag: number;         // sub-case dispatch (0 = default)
+}
+
+const TAG_DEFAULT = 0;
+const TAG_CALL_OVERLOAD = 2;
+const TAG_CALL_DIRECT = 3;
+const TAG_CALL_CLOSURE = 4;
+
+// Read i-th child from top N results on the stack.
+function peekResult(results: string[], childCount: number, idx: number): string {
+	return results[results.length - childCount + idx];
+}
+
+// Remove top N results from the stack.
+function truncResults(results: string[], count: number): void {
+	let i = 0;
+	while (i < count) {
+		results.pop();
+		i += 1;
+	}
+}
+
+// Comma-join top N results from the stack, then remove them.
+function joinChildResults(results: string[], count: number): string {
+	let s = "";
+	let i = 0;
+	while (i < count) {
+		if (i > 0) s = s + ", ";
+		s = s + results[results.length - count + i];
+		i += 1;
+	}
+	truncResults(results, count);
+	return s;
+}
+
 function joinArgs(g: CGen, p: CProc, args: Node[]): string {
 	let result = "";
 	for (let i = 0; i < args.length; i += 1) {
@@ -40,93 +81,520 @@ function joinArgs(g: CGen, p: CProc, args: Node[]): string {
 	return result;
 }
 
-// ===== genExpr — returns C snippet for any expression =====
+// ===== genExpr — iterative post-order stack traversal =====
 
 export function genExpr(g: CGen, p: CProc, node: Node): string {
 	if (node === null) return "MS_NIL";
-
-	return match (node.kind) {
-		NodeKind.NumberLiteral => {
-			const d = node.data as NumberLiteralData;
-			formatCNumber(d.value);
-		},
-		NodeKind.StringLiteral => {
-			const d = node.data as StringLiteralData;
-			const poolName = internString(g.stringPool, d.value);
-			msStringPoolRef(poolName, d.value.length);
-		},
-		NodeKind.BooleanLiteral => {
-			const d = node.data as BooleanLiteralData;
-			cBoolLiteral(d.boolValue);
-		},
-		NodeKind.NullLiteral => {
-			cNullLiteral();
-		},
-		NodeKind.Identifier => {
-			const d = node.data as IdentifierData;
-			safeName(d.name);
-		},
-		NodeKind.BinaryExpr => {
-			genBinaryExpr(g, p, node);
-		},
-		NodeKind.UnaryExpr => {
-			genUnaryExpr(g, p, node);
-		},
-		NodeKind.MemberExpr => {
-			genMemberExpr(g, p, node);
-		},
-		NodeKind.ArrayAccess => {
-			genArrayAccess(g, p, node);
-		},
-		NodeKind.ConditionalExpr => {
-			genConditionalExpr(g, p, node);
-		},
-		NodeKind.TypeAssertion => {
-			genTypeAssertion(g, p, node);
-		},
-		NodeKind.CallExpr => {
-			genCallExpr(g, p, node);
-		},
-		NodeKind.ObjectLiteral => {
-			genObjectLiteral(g, p, node);
-		},
-		NodeKind.ArrayLiteral => {
-			genArrayLiteral(g, p, node);
-		},
-		NodeKind.ArrowFunction => {
-			genArrowFunction(g, p, node);
-		},
-		NodeKind.UpdateExpr => {
-			genUpdateExpr(g, p, node);
-		},
-		NodeKind.NewExpr => {
-			genNewExpr(g, p, node);
-		},
-		NodeKind.MoveExpr => {
-			genMoveExpr(g, p, node);
-		},
-		NodeKind.SpreadExpr => {
-			genSpreadExpr(g, p, node);
-		},
-		NodeKind.FunctionExpr => {
-			genFunctionExpr(g, p, node);
-		},
-		NodeKind.HiddenDeref => {
-			genHiddenDeref(g, p, node);
-		},
-		NodeKind.HiddenAddr => {
-			const d = node.data as ExprStmtData;
-			"&(" + genExpr(g, p, d.expr) + ")";
-		},
-		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
-			const d = node.data as HiddenStdConvData;
-			const targetC = getTypeDesc(g, d.convType);
-			"((" + targetC + ")(" + genExpr(g, p, d.convExpr) + "))";
-		},
-		_ => "/* unsupported expression */",
-		};
-		return result;
+	const workStack: ExprStackItem[] = [];
+	const results: string[] = [];
+	workStack.push({ node, phase: 0, childCount: 0, tag: 0 });
+	while (workStack.length > 0) {
+		const item = workStack[workStack.length - 1];
+		workStack.pop();
+		if (item.phase === 0) {
+			discoverExpr(g, p, item.node, workStack, results);
+		} else {
+			emitExpr(g, p, item, results);
 		}
+	}
+	if (results.length === 0) return "MS_NIL";
+	return results[results.length - 1];
+}
+
+// ===== Discover phase: push leaf results or Emit + children =====
+
+function discoverExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[], results: string[]): void {
+	if (node === null) {
+		results.push("MS_NIL");
+		return;
+	}
+	const kind = node.kind;
+
+	// Leaf nodes — push result directly, no Emit needed
+	if (kind === NodeKind.NumberLiteral) {
+		const d = node.data as NumberLiteralData;
+		results.push(formatCNumber(d.value));
+		return;
+	}
+	if (kind === NodeKind.StringLiteral) {
+		const d = node.data as StringLiteralData;
+		const poolName = internString(g.stringPool, d.value);
+		results.push(msStringPoolRef(poolName, d.value.length));
+		return;
+	}
+	if (kind === NodeKind.BooleanLiteral) {
+		const d = node.data as BooleanLiteralData;
+		results.push(cBoolLiteral(d.boolValue));
+		return;
+	}
+	if (kind === NodeKind.NullLiteral) {
+		results.push(cNullLiteral());
+		return;
+	}
+	if (kind === NodeKind.Identifier) {
+		const d = node.data as IdentifierData;
+		results.push(safeName(d.name));
+		return;
+	}
+	if (kind === NodeKind.ArrowFunction) {
+		results.push("0 /* unlowered ArrowFunction */");
+		return;
+	}
+	if (kind === NodeKind.FunctionExpr) {
+		results.push("0 /* unlowered FunctionExpr */");
+		return;
+	}
+
+	// MoveExpr — passthrough, just redirect to inner node
+	if (kind === NodeKind.MoveExpr) {
+		const d = node.data as MoveExprData;
+		workStack.push({ node: d.moveArg, phase: 0, childCount: 0, tag: 0 });
+		return;
+	}
+
+	// BinaryExpr — 2 children
+	if (kind === NodeKind.BinaryExpr) {
+		const d = node.data as BinaryExprData;
+		workStack.push({ node, phase: 1, childCount: 2, tag: TAG_DEFAULT });
+		workStack.push({ node: d.right, phase: 0, childCount: 0, tag: 0 });
+		workStack.push({ node: d.left, phase: 0, childCount: 0, tag: 0 });
+		return;
+	}
+
+	// UnaryExpr — 1 child
+	if (kind === NodeKind.UnaryExpr) {
+		const d = node.data as UnaryExprData;
+		workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
+		workStack.push({ node: d.operand, phase: 0, childCount: 0, tag: 0 });
+		return;
+	}
+
+	// UpdateExpr — 1 child
+	if (kind === NodeKind.UpdateExpr) {
+		const d = node.data as UpdateExprData;
+		workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
+		workStack.push({ node: d.updateArg, phase: 0, childCount: 0, tag: 0 });
+		return;
+	}
+
+	// MemberExpr — 0 or 1 child (enum member is leaf)
+	if (kind === NodeKind.MemberExpr) {
+		const d = node.data as MemberExprData;
+		// Enum member: leaf
+		if (d.object.kind === NodeKind.Identifier) {
+			const id = d.object.data as IdentifierData;
+			if (nameSetHas(g.knownEnumNames, safeName(id.name))) {
+				results.push(safeName(id.name) + "_" + d.property);
+				return;
+			}
+		}
+		// Normal: 1 child (object)
+		workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
+		workStack.push({ node: d.object, phase: 0, childCount: 0, tag: 0 });
+		return;
+	}
+
+	// ArrayAccess — 2 children
+	if (kind === NodeKind.ArrayAccess) {
+		const d = node.data as ArrayAccessData;
+		workStack.push({ node, phase: 1, childCount: 2, tag: TAG_DEFAULT });
+		workStack.push({ node: d.index, phase: 0, childCount: 0, tag: 0 });
+		workStack.push({ node: d.array, phase: 0, childCount: 0, tag: 0 });
+		return;
+	}
+
+	// ConditionalExpr — 3 children
+	if (kind === NodeKind.ConditionalExpr) {
+		const d = node.data as ConditionalExprData;
+		workStack.push({ node, phase: 1, childCount: 3, tag: TAG_DEFAULT });
+		workStack.push({ node: d.ternaryAlternate, phase: 0, childCount: 0, tag: 0 });
+		workStack.push({ node: d.ternaryConsequent, phase: 0, childCount: 0, tag: 0 });
+		workStack.push({ node: d.ternaryCondition, phase: 0, childCount: 0, tag: 0 });
+		return;
+	}
+
+	// TypeAssertion — 1 child
+	if (kind === NodeKind.TypeAssertion) {
+		const d = node.data as TypeAssertionData;
+		workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
+		workStack.push({ node: d.asExpr, phase: 0, childCount: 0, tag: 0 });
+		return;
+	}
+
+	// SpreadExpr — 1 child
+	if (kind === NodeKind.SpreadExpr) {
+		const d = node.data as SpreadExprData;
+		workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
+		workStack.push({ node: d.spreadArg, phase: 0, childCount: 0, tag: 0 });
+		return;
+	}
+
+	// HiddenDeref — 1 child
+	if (kind === NodeKind.HiddenDeref) {
+		const d = node.data as ExprStmtData;
+		workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
+		workStack.push({ node: d.expr, phase: 0, childCount: 0, tag: 0 });
+		return;
+	}
+
+	// HiddenAddr — 1 child
+	if (kind === NodeKind.HiddenAddr) {
+		const d = node.data as ExprStmtData;
+		workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
+		workStack.push({ node: d.expr, phase: 0, childCount: 0, tag: 0 });
+		return;
+	}
+
+	// HiddenStdConv / HiddenSubConv — 1 child
+	if (kind === NodeKind.HiddenStdConv || kind === NodeKind.HiddenSubConv) {
+		const d = node.data as HiddenStdConvData;
+		workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
+		workStack.push({ node: d.convExpr, phase: 0, childCount: 0, tag: 0 });
+		return;
+	}
+
+	// ArrayLiteral — keep recursive (side effects: getTemp, emitStmtsLine)
+	if (kind === NodeKind.ArrayLiteral) {
+		results.push(genArrayLiteral(g, p, node));
+		return;
+	}
+
+	// CallExpr — dispatch by call type
+	if (kind === NodeKind.CallExpr) {
+		discoverCallExpr(g, p, node, workStack, results);
+		return;
+	}
+
+	// ObjectLiteral — N children (property values)
+	if (kind === NodeKind.ObjectLiteral) {
+		const d = node.data as ObjectLiteralData;
+		const n = d.properties.length;
+		workStack.push({ node, phase: 1, childCount: n, tag: TAG_DEFAULT });
+		// Push children in reverse order
+		let i = n - 1;
+		while (i >= 0) {
+			workStack.push({ node: d.properties[i], phase: 0, childCount: 0, tag: 0 });
+			i -= 1;
+		}
+		return;
+	}
+
+	// NewExpr — 1 + N children (callee + args)
+	if (kind === NodeKind.NewExpr) {
+		const d = node.data as NewExprData;
+		const n = 1 + d.newArguments.length;
+		workStack.push({ node, phase: 1, childCount: n, tag: TAG_DEFAULT });
+		// Push in reverse: args then callee
+		let i = d.newArguments.length - 1;
+		while (i >= 0) {
+			workStack.push({ node: d.newArguments[i], phase: 0, childCount: 0, tag: 0 });
+			i -= 1;
+		}
+		workStack.push({ node: d.newCallee, phase: 0, childCount: 0, tag: 0 });
+		return;
+	}
+
+	// Fallback
+	results.push("/* unsupported expression */");
+}
+
+// ===== Discover CallExpr — split by call type =====
+
+function discoverCallExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[], results: string[]): void {
+	const cd = node.data as CallExprData;
+	const sym = node.resolvedSym;
+
+	// @runtime("c_name") — keep recursive (emitRuntimeCall has side effects)
+	if (sym !== null && sym.runtimeName !== "") {
+		results.push(emitRuntimeCall(g, p, sym.runtimeName, cd.arguments));
+		return;
+	}
+
+	// Overloaded call — args only, name resolved during Emit
+	if (sym !== null && sym.overloads !== null && sym.overloads.length > 0) {
+		const n = cd.arguments.length;
+		workStack.push({ node, phase: 1, childCount: n, tag: TAG_CALL_OVERLOAD });
+		let i = n - 1;
+		while (i >= 0) {
+			workStack.push({ node: cd.arguments[i], phase: 0, childCount: 0, tag: 0 });
+			i -= 1;
+		}
+		return;
+	}
+
+	// Direct call or closure call: callee + args
+	const n = 1 + cd.arguments.length;
+	const tag = cd.isDirectCall ? TAG_CALL_DIRECT : TAG_CALL_CLOSURE;
+	workStack.push({ node, phase: 1, childCount: n, tag });
+	// Push in reverse: args then callee
+	let i = cd.arguments.length - 1;
+	while (i >= 0) {
+		workStack.push({ node: cd.arguments[i], phase: 0, childCount: 0, tag: 0 });
+		i -= 1;
+	}
+	workStack.push({ node: cd.callee, phase: 0, childCount: 0, tag: 0 });
+}
+
+// ===== Emit phase: combine child results =====
+
+function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): void {
+	const node = item.node;
+	const kind = node.kind;
+	const cc = item.childCount;
+	const tag = item.tag;
+
+	// BinaryExpr
+	if (kind === NodeKind.BinaryExpr) {
+		const left = peekResult(results, cc, 0);
+		const right = peekResult(results, cc, 1);
+		truncResults(results, cc);
+		const d = node.data as BinaryExprData;
+		const cOp = mapBinaryOp(d.operator);
+		results.push("(" + left + " " + cOp + " " + right + ")");
+		return;
+	}
+
+	// UnaryExpr
+	if (kind === NodeKind.UnaryExpr) {
+		const operand = peekResult(results, cc, 0);
+		truncResults(results, cc);
+		const d = node.data as UnaryExprData;
+		results.push("(" + d.unaryOp + operand + ")");
+		return;
+	}
+
+	// UpdateExpr
+	if (kind === NodeKind.UpdateExpr) {
+		const operand = peekResult(results, cc, 0);
+		truncResults(results, cc);
+		const d = node.data as UpdateExprData;
+		if (d.isPrefix) {
+			results.push("(" + d.updateOp + operand + ")");
+		} else {
+			results.push("(" + operand + d.updateOp + ")");
+		}
+		return;
+	}
+
+	// MemberExpr
+	if (kind === NodeKind.MemberExpr) {
+		const obj = peekResult(results, cc, 0);
+		truncResults(results, cc);
+		const d = node.data as MemberExprData;
+		// Builtin property remapping (.data only — .length→.len handled by nativeLower)
+		if (d.property === "data" && d.object.nodeType !== null) {
+			const ok = d.object.nodeType.kind;
+			if (ok === TypeKind.Array) {
+				results.push(obj + ".p->data");
+				return;
+			}
+			if (ok === TypeKind.SizedArray || ok === TypeKind.Span) {
+				results.push(obj + ".data");
+				return;
+			}
+		}
+		const field = mangleFieldName(d.property);
+		results.push(obj + "." + field);
+		return;
+	}
+
+	// ArrayAccess — after nativeLower, only untyped/raw accesses reach here
+	if (kind === NodeKind.ArrayAccess) {
+		const arr = peekResult(results, cc, 0);
+		const idx = peekResult(results, cc, 1);
+		truncResults(results, cc);
+		results.push(arr + "[" + idx + "]");
+		return;
+	}
+
+	// ConditionalExpr
+	if (kind === NodeKind.ConditionalExpr) {
+		const cond = peekResult(results, cc, 0);
+		const cons = peekResult(results, cc, 1);
+		const alt = peekResult(results, cc, 2);
+		truncResults(results, cc);
+		results.push("(" + cond + " ? " + cons + " : " + alt + ")");
+		return;
+	}
+
+	// TypeAssertion
+	if (kind === NodeKind.TypeAssertion) {
+		const expr = peekResult(results, cc, 0);
+		truncResults(results, cc);
+		const d = node.data as TypeAssertionData;
+		const targetType = (node.nodeType !== null) ? getTypeDesc(g, node.nodeType) : mangle(d.asType);
+		results.push("((" + targetType + ")" + expr + ")");
+		return;
+	}
+
+	// SpreadExpr
+	if (kind === NodeKind.SpreadExpr) {
+		const inner = peekResult(results, cc, 0);
+		truncResults(results, cc);
+		results.push("/* spread */ " + inner);
+		return;
+	}
+
+	// HiddenDeref
+	if (kind === NodeKind.HiddenDeref) {
+		const inner = peekResult(results, cc, 0);
+		truncResults(results, cc);
+		results.push("(*" + inner + ")");
+		return;
+	}
+
+	// HiddenAddr
+	if (kind === NodeKind.HiddenAddr) {
+		const inner = peekResult(results, cc, 0);
+		truncResults(results, cc);
+		results.push("&(" + inner + ")");
+		return;
+	}
+
+	// HiddenStdConv / HiddenSubConv
+	if (kind === NodeKind.HiddenStdConv || kind === NodeKind.HiddenSubConv) {
+		const inner = peekResult(results, cc, 0);
+		truncResults(results, cc);
+		const d = node.data as HiddenStdConvData;
+		const targetC = getTypeDesc(g, d.convType);
+		results.push("((" + targetC + ")(" + inner + "))");
+		return;
+	}
+
+	// CallExpr
+	if (kind === NodeKind.CallExpr) {
+		emitCallExpr(g, p, item, results);
+		return;
+	}
+
+	// ObjectLiteral
+	if (kind === NodeKind.ObjectLiteral) {
+		const d = node.data as ObjectLiteralData;
+		if ((node.flags & NF_CLOSURE) !== 0) {
+			// Closure literal: (msClosure){ .fn = ..., .env = ... }
+			const fnExpr = peekResult(results, cc, 0);
+			const envExpr = peekResult(results, cc, 1);
+			truncResults(results, cc);
+			results.push("(msClosure){ .fn = (void*)" + fnExpr + ", .env = (void*)&" + envExpr + " }");
+		} else {
+			// General struct literal
+			let prefix = "";
+			if (node.nodeType !== null && isNrvoReturnType(node.nodeType)) {
+				prefix = "(" + getTypeDesc(g, node.nodeType) + ")";
+			}
+			let result = prefix + "{ ";
+			let i = 0;
+			while (i < d.keys.length) {
+				if (i > 0) result = result + ", ";
+				result = result + "." + mangleFieldName(d.keys[i]) + " = " + peekResult(results, cc, i);
+				i += 1;
+			}
+			result = result + " }";
+			truncResults(results, cc);
+			results.push(result);
+		}
+		return;
+	}
+
+	// NewExpr
+	if (kind === NodeKind.NewExpr) {
+		const callee = peekResult(results, cc, 0);
+		let args = "";
+		let i = 1;
+		while (i < cc) {
+			if (i > 1) args = args + ", ";
+			args = args + peekResult(results, cc, i);
+			i += 1;
+		}
+		truncResults(results, cc);
+		results.push(callee + "_new(" + args + ")");
+		return;
+	}
+
+	// Fallback
+	truncResults(results, cc);
+	results.push("/* unsupported expression */");
+}
+
+// ===== NRVO Return Type Detection =====
+// Returns the NRVO return type if the callee returns a struct, null otherwise.
+
+function calleeNrvoReturnType(callNode: Node): Type {
+	// Only apply NRVO when callee is a known Function (not runtime macros)
+	const cd = callNode.data as CallExprData;
+	// Source 1: callee's function type → return type
+	if (cd.callee !== null && cd.callee.nodeType !== null && cd.callee.nodeType.kind === TypeKind.Function) {
+		const ret = cd.callee.nodeType.typeReturn;
+		if (ret !== null && isNrvoReturnType(ret)) return ret;
+	}
+	// Source 2: resolvedSym on CallExpr
+	if (callNode.resolvedSym !== null && callNode.resolvedSym.symbolType !== null) {
+		const st = callNode.resolvedSym.symbolType;
+		if (st.kind === TypeKind.Function && st.typeReturn !== null && isNrvoReturnType(st.typeReturn)) {
+			return st.typeReturn;
+		}
+	}
+	return null as unknown as Type;
+}
+
+// ===== Emit CallExpr =====
+
+function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): void {
+	const node = item.node;
+	const cd = node.data as CallExprData;
+	const cc = item.childCount;
+	const tag = item.tag;
+	const sym = node.resolvedSym;
+
+	if (tag === TAG_CALL_OVERLOAD) {
+		// Overloaded: all cc children are args
+		const argsStr = joinChildResults(results, cc);
+		const idx = cd.resolvedOverloadIdx;
+		if (idx === 0 && sym.runtimeName !== "") {
+			results.push(sym.runtimeName + "(" + argsStr + ")");
+		} else if (idx > 0 && idx - 1 < sym.overloads.length && sym.overloads[idx - 1].runtimeName !== "") {
+			results.push(sym.overloads[idx - 1].runtimeName + "(" + argsStr + ")");
+		} else if (idx >= 0) {
+			results.push(safeName(sym.name) + "__" + idx + "(" + argsStr + ")");
+		} else {
+			results.push(safeName(sym.name) + "__0(" + argsStr + ")");
+		}
+		return;
+	}
+
+	// Direct or closure: first child is callee, rest are args
+	const callee = peekResult(results, cc, 0);
+	let argsStr = "";
+	let i = 1;
+	while (i < cc) {
+		if (i > 1) argsStr = argsStr + ", ";
+		argsStr = argsStr + peekResult(results, cc, i);
+		i += 1;
+	}
+	truncResults(results, cc);
+
+	if (tag === TAG_CALL_DIRECT) {
+		// NRVO: call returns void, result via out-param
+		const nrvoType = calleeNrvoReturnType(node);
+		if (nrvoType !== null) {
+			const cType = getTypeDesc(g, nrvoType);
+			const tmp = getTemp(p, cType);
+			let nrvoArgs = "&" + tmp.snippet;
+			if (argsStr !== "") nrvoArgs = nrvoArgs + ", " + argsStr;
+			emitStmtsLine(p, callee + "(" + nrvoArgs + ");");
+			results.push(tmp.snippet);
+		} else if (argsStr === "") {
+			results.push(callee + "()");
+		} else {
+			results.push(callee + "(" + argsStr + ")");
+		}
+	} else {
+		// TAG_CALL_CLOSURE
+		let envArgs = callee + ".env";
+		if (argsStr !== "") envArgs = envArgs + ", " + argsStr;
+		results.push("((" + callee + ").fn(" + envArgs + "))");
+	}
+}
 // ===== genExprAssign — evaluate expression and assign to dest =====
 // For statement-level: `dest = expr;`
 
@@ -135,37 +603,7 @@ export function genExprAssign(g: CGen, p: CProc, node: Node, destSnippet: string
 	addLine(pStmts(p), destSnippet + " = " + snippet + ";");
 }
 
-// ===== Binary Expression =====
-
-function genBinaryExpr(g: CGen, p: CProc, node: Node): string {
-	const d = node.data as BinaryExprData;
-	// Array indexed assignment: arr[i] = val → arr.p->data[i] = val
-	if (d.operator === "=" && d.left.kind === NodeKind.ArrayAccess) {
-		const ad = d.left.data as ArrayAccessData;
-		if (isArrayTyped(ad.array)) {
-			const arr = genExpr(g, p, ad.array);
-			const idx = genExpr(g, p, ad.index);
-			const val = genExpr(g, p, d.right);
-			return arr + ".p->data[" + idx + "] = " + val;
-		}
-	}
-	// String ops (==, +, <, s[i]=ch) are lowered to runtime calls by stringOpLower transform.
-	// Codegen just emits mechanical C operators.
-	const left = genExpr(g, p, d.left);
-	const right = genExpr(g, p, d.right);
-	const cOp = mapBinaryOp(d.operator);
-	return "(" + left + " " + cOp + " " + right + ")";
-}
-
-function isStringTyped(node: Node): boolean {
-	if (node.nodeType === null) return false;
-	return node.nodeType.kind === TypeKind.String;
-}
-
-function isArrayTyped(node: Node): boolean {
-	if (node.nodeType === null) return false;
-	return node.nodeType.kind === TypeKind.Array;
-}
+// ===== Binary helpers =====
 
 function mapBinaryOp(op: string): string {
 	return match (op) {
@@ -177,91 +615,8 @@ function mapBinaryOp(op: string): string {
 	};
 }
 
-// ===== Unary Expression =====
-
-function genUnaryExpr(g: CGen, p: CProc, node: Node): string {
-	const d = node.data as UnaryExprData;
-	const operand = genExpr(g, p, d.operand);
-	return "(" + d.unaryOp + operand + ")";
-}
-
-// ===== Hidden Deref (compiler-inserted pointer dereference) =====
-
-function genHiddenDeref(g: CGen, p: CProc, node: Node): string {
-	const d = node.data as ExprStmtData;
-	const inner = genExpr(g, p, d.expr);
-	return "(*" + inner + ")";
-}
-
-// ===== Member Expression =====
-
-function genMemberExpr(g: CGen, p: CProc, node: Node): string {
-	const d = node.data as MemberExprData;
-	const obj = genExpr(g, p, d.object);
-	// Builtin property remapping: .length → .len for string and array types
-	if (d.property === "length" && d.object.nodeType !== null) {
-		const ok = d.object.nodeType.kind;
-		if (ok === TypeKind.String || ok === TypeKind.Array || ok === TypeKind.SizedArray || ok === TypeKind.Span) {
-			return obj + ".len";
-		}
-	}
-	if (d.property === "data" && d.object.nodeType !== null) {
-		const ok = d.object.nodeType.kind;
-		if (ok === TypeKind.Array) return obj + ".p->data";
-		if (ok === TypeKind.SizedArray || ok === TypeKind.Span) return obj + ".data";
-	}
-	const field = mangleFieldName(d.property);
-	return obj + "." + field;
-}
-
-// ===== Array Access =====
-// Runtime arrays use .p->data[idx] (struct with payload pointer).
-// Raw C arrays keep arr[idx] (fallback when nodeType unavailable).
-
-function genArrayAccess(g: CGen, p: CProc, node: Node): string {
-	const d = node.data as ArrayAccessData;
-	const arr = genExpr(g, p, d.array);
-	const idx = genExpr(g, p, d.index);
-	// String index read: s[i] → bounds check + ms_string_char_at(s, i)
-	if (isStringTyped(d.array)) {
-		return "({ int32_t __idx = " + idx + "; if ((uint64_t)__idx >= (uint64_t)(" + arr + ".len)) msRaiseIndexError(__idx, " + arr + ".len); msStringCharAt(" + arr + ", __idx); })";
-	}
-	// Array index read: arr[i] → bounds check + arr.p->data[i]
-	if (d.array.nodeType !== null) {
-		const ak = d.array.nodeType.kind;
-		if (ak === TypeKind.Array) {
-			return "({ int32_t __idx = " + idx + "; if ((uint64_t)__idx >= (uint64_t)(" + arr + ".len)) msRaiseIndexError(__idx, " + arr + ".len); " + arr + ".p->data[__idx]; })";
-		}
-		if (ak === TypeKind.SizedArray) {
-			const size = d.array.nodeType.typeFlags;
-			return "({ int32_t __idx = " + idx + "; if ((uint64_t)__idx >= (uint64_t)(" + intToString(size) + ")) msRaiseIndexError(__idx, " + intToString(size) + "); " + arr + ".data[__idx]; })";
-		}
-		if (ak === TypeKind.Span) {
-			return "({ int32_t __idx = " + idx + "; if ((uint64_t)__idx >= (uint64_t)(" + arr + ".len)) msRaiseIndexError(__idx, " + arr + ".len); " + arr + ".data[__idx]; })";
-		}
-	}
-	return arr + "[" + idx + "]";
-}
-
-// ===== Conditional Expression =====
-
-function genConditionalExpr(g: CGen, p: CProc, node: Node): string {
-	const d = node.data as ConditionalExprData;
-	const cond = genExpr(g, p, d.ternaryCondition);
-	const cons = genExpr(g, p, d.ternaryConsequent);
-	const alt = genExpr(g, p, d.ternaryAlternate);
-	return "(" + cond + " ? " + cons + " : " + alt + ")";
-}
-
-// ===== Type Assertion (as cast) =====
-
-function genTypeAssertion(g: CGen, p: CProc, node: Node): string {
-	const d = node.data as TypeAssertionData;
-	const expr = genExpr(g, p, d.asExpr);
-	// Use resolved Type from checker (Nim parity: node.typ), fallback to string mangle for null ctx
-	const targetType = (node.nodeType !== null) ? getTypeDesc(g, node.nodeType) : mangle(d.asType);
-	return "((" + targetType + ")" + expr + ")";
-}
+// (genUnaryExpr, genHiddenDeref, genMemberExpr, genArrayAccess, genConditionalExpr, genTypeAssertion
+//  absorbed into iterative discoverExpr/emitExpr above)
 
 // ===== Call Expression =====
 // Direct call: foo(args)
@@ -310,80 +665,6 @@ function emitRuntimeCall(g: CGen, p: CProc, runtimeName: string, args: Node[]): 
 	return cName + "(" + joinArgs(g, p, args) + ")";
 }
 
-function genCallExpr(g: CGen, p: CProc, node: Node): string {
-	const cd = node.data as CallExprData;
-
-	// Pre-resolved symbol from checker (Nim parity: call[0].sym)
-	const sym = node.resolvedSym;
-
-	// @runtime("c_name") — emit C name directly (Nim: sfImportc)
-	if (sym !== null && sym.runtimeName !== "") {
-		return emitRuntimeCall(g, p, sym.runtimeName, cd.arguments);
-	}
-
-	// Overloaded call — checker pre-resolved the winner (resolvedOverloadIdx + resolvedSym)
-	if (sym !== null && sym.overloads !== null && sym.overloads.length > 0) {
-		const idx = cd.resolvedOverloadIdx;
-		// Check if winner has runtimeName
-		if (idx === 0 && sym.runtimeName !== "") {
-			return sym.runtimeName + "(" + joinArgs(g, p, cd.arguments) + ")";
-		}
-		if (idx > 0 && idx - 1 < sym.overloads.length && sym.overloads[idx - 1].runtimeName !== "") {
-			return sym.overloads[idx - 1].runtimeName + "(" + joinArgs(g, p, cd.arguments) + ")";
-		}
-		if (idx >= 0) {
-			return safeName(sym.name) + "__" + idx + "(" + joinArgs(g, p, cd.arguments) + ")";
-		}
-		// Fallback: no match → use primary name
-		return safeName(sym.name) + "__0(" + joinArgs(g, p, cd.arguments) + ")";
-	}
-
-	const callee = genExpr(g, p, cd.callee);
-
-	// Nim parity: check callConv on callee type, fallback to isDirectCall flag
-
-	if (cd.isDirectCall) {
-		return callee + "(" + joinArgs(g, p, cd.arguments) + ")";
-	}
-
-	// Closure call: callee.fn(callee.env, args...)
-	let envArgs = callee + ".env";
-	const rest = joinArgs(g, p, cd.arguments);
-	if (rest !== "") envArgs = envArgs + ", " + rest;
-	return "((" + callee + ").fn(" + envArgs + "))";
-}
-
-// ===== Object Literal =====
-// Two cases:
-// 1. Closure pair: { fn: liftedFn, env: { captured vars } } → (msClosure){ .fn = ..., .env = ... }
-// 2. General struct: { x: 1, y: 2 } → (StructType){ .x = 1, .y = 2 }
-
-function genObjectLiteral(g: CGen, p: CProc, node: Node): string {
-	const d = node.data as ObjectLiteralData;
-
-	// Detect closure pair via NF_CLOSURE flag (set by lambda lifting, no string matching)
-	if ((node.flags & NF_CLOSURE) !== 0) {
-		// Closure literal: (msClosure){ .fn = ..., .env = ... }
-		const fnExpr = genExpr(g, p, d.properties[0]);
-		const envExpr = genExpr(g, p, d.properties[1]);
-		return "(msClosure){ .fn = (void*)" + fnExpr + ", .env = (void*)&" + envExpr + " }";
-	}
-
-	// General struct literal: (StructType){ .field1 = val1, .field2 = val2 }
-	// Use getTypeDesc for prefix if it's a struct-like type (Interface, Result, Tuple)
-	let prefix = "";
-	if (node.nodeType !== null && isNrvoReturnType(node.nodeType)) {
-		prefix = "(" + getTypeDesc(g, node.nodeType) + ")";
-	}
-	let result = prefix + "{ ";
-	for (let i = 0; i < d.keys.length; i += 1) {
-		if (i > 0) result = result + ", ";
-		result = result + "." + mangleFieldName(d.keys[i]) + " = " + genExpr(g, p, d.properties[i]);
-	}
-	result = result + " }";
-	return result;
-}
-
 // ===== Array Literal =====
 // Emits runtime array construction based on element type:
 //   number[]  → ms_array_number_from(count, (double)e1, ...)
@@ -395,7 +676,7 @@ function genArrayLiteral(g: CGen, p: CProc, node: Node): string {
 
 	// Determine element type from nodeType (set by checker)
 	let elemKind = TypeKind.Void;
-	let arrayTypeName = "msArray";
+	let arrayTypeName = "msRefArray";
 	if (node.nodeType !== null && node.nodeType.kind === TypeKind.Array) {
 		if (node.nodeType.typeReturn !== null) {
 			elemKind = node.nodeType.typeReturn.kind;
@@ -446,70 +727,6 @@ function genArrayLiteral(g: CGen, p: CProc, node: Node): string {
 		i += 1;
 	}
 	return tmpName;
-}
-
-// ===== Arrow Function (non-capturing) =====
-// Non-capturing arrows that survive lambda lifting are emitted as function pointers.
-// Capturing arrows are already transformed into closure pairs (ObjectLiteral).
-
-function genArrowFunction(g: CGen, p: CProc, node: Node): string {
-	// Lambda lifting (Phase 3) lifts all ArrowFunctions — this path is dead.
-	return "0 /* unlowered ArrowFunction */";
-}
-
-// ===== Update Expression (i++, ++i, i--, --i) =====
-// Phase 3 lowers statement-position updates to assignment.
-// Expression-position updates survive — emit directly (C supports natively).
-
-function genUpdateExpr(g: CGen, p: CProc, node: Node): string {
-	const d = node.data as UpdateExprData;
-	const operand = genExpr(g, p, d.updateArg);
-	if (d.isPrefix) return "(" + d.updateOp + operand + ")";
-	return "(" + operand + d.updateOp + ")";
-}
-
-// ===== New Expression =====
-// `new Foo(args)` → `ClassName_new(args)` (constructor call).
-// Classes emit ClassName_new() in declarations.ms.
-
-function genNewExpr(g: CGen, p: CProc, node: Node): string {
-	const d = node.data as NewExprData;
-	const callee = genExpr(g, p, d.newCallee);
-	let args = "";
-	for (let i = 0; i < d.newArguments.length; i += 1) {
-		if (i > 0) args = args + ", ";
-		args = args + genExpr(g, p, d.newArguments[i]);
-	}
-	return callee + "_new(" + args + ")";
-}
-
-// ===== Move Expression =====
-// `move x` → emit inner expression. DRC (Phase 4) already injected
-// ms_was_moved(&x) after the move site. Codegen just passes through.
-
-function genMoveExpr(g: CGen, p: CProc, node: Node): string {
-	const d = node.data as MoveExprData;
-	return genExpr(g, p, d.moveArg);
-}
-
-// ===== Spread Expression =====
-// Phase 3 inlines literal spreads: `f(...[a, b])` → `f(a, b)`.
-// Dynamic spreads (`f(...arr)`) survive — no C equivalent.
-// Emit the inner expression with a warning comment.
-
-function genSpreadExpr(g: CGen, p: CProc, node: Node): string {
-	const d = node.data as SpreadExprData;
-	return "/* spread */ " + genExpr(g, p, d.spreadArg);
-}
-
-// ===== Function Expression =====
-// Non-capturing function expressions are lifted to module-level functions.
-// Capturing ones are already transformed to closure pairs by lambda lifting.
-// Same pattern as ArrowFunction.
-
-function genFunctionExpr(g: CGen, p: CProc, node: Node): string {
-	// Lambda lifting (Phase 3) lifts all FunctionExpr — this path is dead.
-	return "0 /* unlowered FunctionExpr */";
 }
 
 // ===== Tests =====
@@ -606,3 +823,69 @@ test "new with args" { check(exprSnippet("new Bar(1, 2);") === "Bar_new(1, 2)");
 test "move identifier" { check(exprSnippet("move x;") === "x"); }
 
 test "move call" { check(exprSnippet("move f();") === "f()"); }
+
+test "deeply nested binary (100 levels)" {
+	// Build: a + a + a + ... (100 times) → deeply nested left-recursive BinaryExpr
+	let input = "a";
+	let i = 0;
+	while (i < 99) {
+		input = input + " + a";
+		i += 1;
+	}
+	input = input + ";";
+	const result = exprSnippet(input);
+	// Should not stack overflow and should produce valid output
+	check(result.length > 0);
+	// Innermost pair should be (a + a)
+	let hasInner = false;
+	let j = 0;
+	while (j < result.length - 7) {
+		if (sliceStr(result, j, j + 7) === "(a + a)") {
+			hasInner = true;
+		}
+		j += 1;
+	}
+	check(hasInner);
+}
+
+test "deeply nested calls (50 levels)" {
+	// Build: f(f(f(... f(x) ...)))
+	let input = "";
+	let i = 0;
+	while (i < 50) {
+		input = input + "f(";
+		i += 1;
+	}
+	input = input + "x";
+	i = 0;
+	while (i < 50) {
+		input = input + ")";
+		i += 1;
+	}
+	input = input + ";";
+	const result = exprSnippet(input);
+	check(result.length > 0);
+	// Should contain f(f( pattern
+	let hasNested = false;
+	let j = 0;
+	while (j < result.length - 4) {
+		if (sliceStr(result, j, j + 4) === "f(f(") {
+			hasNested = true;
+		}
+		j += 1;
+	}
+	check(hasNested);
+}
+
+test "deeply nested ternary (30 levels)" {
+	// Build: a ? b : (a ? b : (a ? b : ... c))
+	let input = "";
+	let i = 0;
+	while (i < 30) {
+		input = input + "a ? b : ";
+		i += 1;
+	}
+	input = input + "c;";
+	const result = exprSnippet(input);
+	check(result.length > 0);
+}

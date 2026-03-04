@@ -26,7 +26,7 @@ import {
 	Symbol, SymbolKind, ScopeKind, SymbolState,
 	defineSymbol, lookupSymbol, makeSymbol, openScope, closeScope, hasOverloads,
 } from "./symbol";
-import { CheckerContext, addError, findAllExtensionsByName, ExtensionMethod } from "./context";
+import { CheckerContext, addError, findAllExtensionsByName, ExtensionMethod, isCancelled } from "./context";
 import {
 	scoreCandidate, isAssignable, needsStdConv, resolveOverloadIdx,
 	findFirstMismatch, typeRelation, TypeRelation,
@@ -90,6 +90,7 @@ function filterExtsByReceiverType(exts: ExtensionMethod[], objType: Type): Exten
 export function checkExpr(ctx: CheckerContext, node: Node): Type {
 	// Nim parity: skip already-checked nodes (nfSem guard)
 	if ((node.flags & NF_SEM) !== 0 && node.nodeType !== null) return node.nodeType;
+	if (isCancelled(ctx.cancelCtx, ctx.cancelVersion)) return unknownType();
 
 	const result = match (node.kind) {
 		NodeKind.NumberLiteral | NodeKind.BigIntLiteral => numberType(),

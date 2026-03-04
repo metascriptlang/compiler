@@ -1,7 +1,7 @@
 import { Node, NodeKind, SourceLocation, createNodeAt, ProgramData, FunctionDeclData, ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind } from "../ast/node";
 import { extractDecoratorInfo } from "./decoratorHelpers";
 import { Type, TypeKind, unknownType, createObject, createEnum, createTypeRef, createFunction } from "./types";
-import { Symbol, SymbolKind, SymbolTable, ScopeKind, defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SF_EXPORTED, SF_MUTABLE } from "./symbol";
+import { Symbol, SymbolKind, SymbolTable, ScopeKind, defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SF_EXPORTED, SF_MUTABLE, SF_IMPORT_C } from "./symbol";
 import { CheckerContext, addError, findExportedSymbol, ExtensionMethod, registerExtension, isStaticExtensionFlag, getExtTypeName } from "./context";
 import { isGlobalImport } from "./prelude";
 import { sliceStr, findChar } from "../utils/string";
@@ -95,6 +95,7 @@ function collectFunction(ctx: CheckerContext, node: Node): void {
 	// Extern functions are FFI bindings — implicitly exported for cross-module use
 	if (d.fnFlags === "extern" || d.fnFlags.indexOf("extern") >= 0) {
 		setFlag(sym, SF_EXPORTED);
+		setFlag(sym, SF_IMPORT_C);
 	}
 	defineOrError(ctx, sym, node);
 }

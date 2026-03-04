@@ -25,6 +25,13 @@ export function makeIdent(identName: string, loc: SourceLocation): Node {
 	return createNode(NodeKind.Identifier, { name: identName }, syntheticToken(loc));
 }
 
+// Typed variant: creates an identifier with a known Type (for synthetic temps)
+export function makeTypedIdent(identName: string, t: Type, loc: SourceLocation): Node {
+	const n = createNode(NodeKind.Identifier, { name: identName }, syntheticToken(loc));
+	if (t !== null) { n.nodeType = t; }
+	return n;
+}
+
 // Decisive variant: creates an identifier already linked to a symbol
 export function makeIdentResolved(sym: Symbol, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.Identifier, { name: sym.name }, syntheticToken(loc));
@@ -105,6 +112,10 @@ export function makeBinary(leftNode: Node, op: string, rightNode: Node, loc: Sou
 		n.nodeType = leftNode.nodeType;
 	}
 	return n;
+}
+
+export function makeMoveExpr(inner: Node, loc: SourceLocation): Node {
+	return createNode(NodeKind.MoveExpr, { moveArg: inner }, syntheticToken(loc));
 }
 
 export function makeUnary(op: string, arg: Node, loc: SourceLocation): Node {

@@ -543,6 +543,19 @@ export function clearCfgCache(cache: CfgCache): void {
 	}
 }
 
+// ===== Cached Last-Read Query (Phase C) =====
+// Builds CFG once per variable per function, caches for reuse.
+
+export function isLastReadCfgCached(varName: string, node: Node, funcBody: Node, cache: CfgCache): boolean {
+	if (node === null || funcBody === null) return false;
+	let cfg = getCachedCfg(cache, varName);
+	if (cfg === null) {
+		cfg = buildCfg(funcBody, varName);
+		cacheCfg(cache, varName, cfg);
+	}
+	return isLastReadCfg(cfg, node.location.line, node.location.column);
+}
+
 // ===== Test Helpers =====
 
 function getBody(code: string): Node {
