@@ -25,7 +25,7 @@ Each item: what's missing, why production compilers have it, why we don't yet, h
 | 14 | Write barriers | N/A | 0 lines | Intentionally omitted (DRC) |
 | 15 | ~~Move marker → DRC~~ | ~~DONE~~ | ~~200 lines~~ | ~~Completed~~ |
 | 16 | ~~Lambda lifting all FunctionExpr~~ | ~~DONE~~ | ~~482 lines~~ | ~~Completed~~ |
-| 17 | openArray (ptr, len) convention | Functional | ~200 lines | Needs runtime array struct |
+| 17 | openArray (ptr, len) convention | Functional | ~200 lines | Infrastructure DONE (TypeKind.Span). Needs calling convention logic. |
 | 18 | JS string encoding (UTF-8 vs UTF-16) | JS Backend | ~200 lines | No |
 | 19 | String/Array runtime architecture | Tracking | — | See [LANG-RUNTIME.md](LANG-RUNTIME.md) |
 | 20 | JS performance & bundle optimization | JS Backend | ~350 lines | No |

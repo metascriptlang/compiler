@@ -102,7 +102,14 @@ function parseExprWithPrec(state: ParserState, minPrec: number): ExprResult {
 
 		if (token.kind === TokenKind.LBracket) {
 			advance(state);
-			const idx = try parseExprWithPrec(state, 0);
+			let idx = try parseExprWithPrec(state, 0);
+			// Range syntax: arr[start..end] → ArrayAccess(arr, BinaryExpr("..", start, end))
+			if (current(state).kind === TokenKind.DotDot) {
+				const dotDotTok = current(state);
+				advance(state);
+				const endIdx = try parseExprWithPrec(state, 0);
+				idx = createNode(NodeKind.BinaryExpr, { operator: "..", left: idx, right: endIdx }, dotDotTok);
+			}
 			if (current(state).kind === TokenKind.RBracket) {
 				advance(state);
 			}

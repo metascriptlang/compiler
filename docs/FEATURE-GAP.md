@@ -146,8 +146,8 @@ All 8 gaps that could be filled without new language features have been implemen
 
 | Gap | Nim Source | Blocker |
 |-----|-----------|---------|
-| Fixed-size arrays `T[N]` | `array[N, T]` (system.nim) | Parser (`T[N]` syntax) + TypeKind.FixedArray + stack codegen |
-| Span\<T\> (non-owning view) | `openArray[T]` (system.nim) | Needs `T[N]` first + implicit coercion + lifetime restrictions |
+| Fixed-size arrays `T[N]` | `array[N, T]` (system.nim) | NOW | TypeKind.SizedArray + stack codegen infrastructure DONE. Parser needs T[N] syntax. |
+| Span\<T\> (non-owning view) | `openArray[T]` (system.nim) | IN-PROGRESS | TypeKind.Span + codegen infrastructure DONE. Needs openArray calling convention. |
 | Concepts / type classes | concepts.nim | Type system design |
 | Multi-methods + VTables | cgmeth.nim + vtables.nim | Language feature |
 | Template/macro system | semtempl.nim + VM | Hermes VM integration |

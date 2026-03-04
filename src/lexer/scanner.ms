@@ -374,6 +374,7 @@ export function scanOperator(s: LexerState): boolean {
 		},
 		".".code => {
 			if (next === ".".code && peekAt(s, 2) === ".".code) { skip(s, 3); addToken(s, TokenKind.DotDotDot, "...", startLine, startCol); }
+			else if (next === ".".code) { skip(s, 2); addToken(s, TokenKind.DotDot, "..", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Dot, ".", startLine, startCol); }
 			true
 		},

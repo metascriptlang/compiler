@@ -619,37 +619,81 @@ Rules:
 - `.slice()`, `.replace()`, `+`: return new strings (same as TS)
 - `s[i] = ch`, `.add()`: mutation ops — no existing TS code uses them, purely additive
 
-### Three-Tier Array System
+## Three-Tier Array System
 
-MetaScript has three array types for systems programming control over allocation, expressed as TypeScript-compatible syntax.
+MetaScript provides three distinct array types to give developers fine-grained control over memory allocation and performance while maintaining TypeScript syntax compatibility.
 
+### 1. Dynamic Arrays (`T[]`)
+The standard general-purpose array. It is heap-allocated and managed via Deterministic Reference Counting (DRC).
+
+- **Allocation**: Heap (Reference Counted).
+- **Size**: Growable.
+- **Behavior**: Passed by reference (incref/decref).
+- **Usage**:
+  ```typescript
+  const items: number[] = [1, 2, 3];
+  items.push(4); // Growable
+  ```
+
+### 2. Fixed-Size Arrays (`T[N]`)
+Used for high-performance scenarios where heap allocation is undesirable. These are allocated directly on the C stack.
+
+- **Allocation**: Stack (within a C struct).
+- **Size**: Fixed at compile-time (must be a constant).
+- **Behavior**: Passed by value (struct copy) unless passed to a `Span<T>`.
+- **Usage**:
+  ```typescript
+  const buffer: uint8[1024] = [0]; // Stack-allocated 1KB buffer
+  // buffer.push(1);               // Compile Error: Fixed size
+  ```
+
+### 3. Spans (`Span<T>`)
+A non-owning view (pointer + length) into a `T[]` or `T[N]`. This is the MetaScript equivalent of Nim's `openArray` or Zig's slices.
+
+- **Allocation**: None (View only).
+- **Size**: Fixed window into existing data.
+- **Behavior**: **Zero-copy calling convention**. When passed to a function, it is expanded into two scalar C arguments: `T* data` and `int64_t len`.
+- **Usage**:
+  ```typescript
+  function process(data: Span<number>): void {
+      for (const x of data) console.log(x);
+  }
+
+  const dynamic = [1, 2, 3];
+  const fixed: number[3] = [4, 5, 6];
+
+  process(dynamic); // Implicit coercion: zero-copy
+  process(fixed);   // Implicit coercion: zero-copy
+  ```
+
+---
+
+### Key Usage & Implementation Notices
+
+#### Implicit Coercion (The Bridge)
+The compiler automatically coerces `T[]` and `T[N]` into a `Span<T>` when passed as function arguments. This allows you to write a single function that accepts any array-like source without performance penalties.
+
+#### Zero-Copy Slicing
+Slicing an array into a `Span` is a zero-cost operation. It performs pointer arithmetic and does not trigger a heap allocation.
 ```typescript
-// Dynamic array — standard TypeScript, heap-allocated, growable
-const items: number[] = [1, 2, 3];
-items.push(4);
-
-// Fixed-size array — stack-allocated, zero heap overhead
-const matrix: number[4] = [1, 0, 0, 1];
-// matrix.push(5);              // compile error: fixed size
-
-// Span — non-owning view, accepts both T[] and T[N]
-function sum(data: Span<number>): number {
-    let total = 0;
-    for (const x of data) total += x;
-    return total;
-}
-sum(items);                    // number[]  → Span<number> (implicit)
-sum(matrix);                   // number[4] → Span<number> (implicit)
-sum(items.span(1, 3));         // zero-copy slice, no allocation
+const items = [10, 20, 30, 40, 50];
+const subView: Span<number> = items[1..3]; // Points to items.data + 1, length 2
 ```
 
-| Type | Allocation | Growable | Use Case |
-|------|-----------|----------|----------|
-| `T[]` | Heap (RC) | Yes | General-purpose, all TS array code |
-| `T[N]` | Stack | No | Fixed buffers, matrices, SIMD, embedded |
-| `Span<T>` | None (view) | N/A | Unified function params, zero-copy slicing |
+#### Lifetime Restrictions (Safety)
+To prevent dangling pointers, `Span<T>` is subject to strict "Borrow" rules:
+1. **No Storage**: A `Span<T>` cannot be stored as a field in a class or interface.
+2. **No Return**: A `Span<T>` created from a local variable cannot be returned from a function.
+3. **Parameter Primary**: The primary use case for `Span<T>` is as a function parameter to enable zero-copy data processing.
 
-Restrictions: `Span<T>` cannot be returned or stored (dangling pointer). `T[N]` size must be compile-time constant. See `docs/LANG-RUNTIME.md` for full design.
+#### Summary Table
+
+| Type | Allocation | Passed As (C) | Ownership | Use Case |
+| :--- | :--- | :--- | :--- | :--- |
+| `T[]` | Heap | Pointer (RC) | Owned | General app logic |
+| `T[N]` | Stack | Struct (Copy) | Owned | SIMD, Buffers, Math |
+| `Span<T>`| N/A | `ptr` + `len` | Borrowed | Performance, Parsers |
+
 
 ### Macros
 ```typescript

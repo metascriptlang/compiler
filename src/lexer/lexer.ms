@@ -316,10 +316,9 @@ test "operators jammed without spaces" {
 	check(lexCount("a<b") === 3);
 }
 
-test "dot-dot is two dots not spread" {
-	check(lexLen("..") === 3);
-	check(lexKindAt("..", 0) === TokenKind.Dot);
-	check(lexKindAt("..", 1) === TokenKind.Dot);
+test "dot-dot is range operator" {
+	check(lexLen("..") === 2);
+	check(lexKindAt("..", 0) === TokenKind.DotDot);
 }
 
 test "CRLF handling" {

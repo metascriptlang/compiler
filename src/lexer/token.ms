@@ -16,7 +16,7 @@ export enum TokenKind {
 	Amp, Pipe, Caret, Tilde, LtLt, GtGt, GtGtGt,
 	PlusPlus, MinusMinus,
 	Question, QuestionQuestion, QuestionDot,
-	Dot, DotDotDot, Arrow, PipeGt,
+	Dot, DotDot, DotDotDot, Arrow, PipeGt,
 	LParen, RParen, LBrace, RBrace, LBracket, RBracket,
 	Semicolon, Colon, Comma, At,
 	// Keywords
@@ -200,6 +200,7 @@ export function tokenKindToString(kind: TokenKind): string {
 		TokenKind.QuestionQuestion => "QUESTION_QUESTION",
 		TokenKind.QuestionDot => "QUESTION_DOT",
 		TokenKind.Dot => "DOT",
+		TokenKind.DotDot => "DOT_DOT",
 		TokenKind.DotDotDot => "DOT_DOT_DOT",
 		TokenKind.Arrow => "ARROW",
 		TokenKind.PipeGt => "PIPE_GT",

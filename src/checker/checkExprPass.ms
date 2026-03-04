@@ -16,7 +16,7 @@ import {
 	Type, TypeKind,
 	unknownType, numberType, stringType, booleanType,
 	voidType, nullType, errorType,
-	createArray, createFunction, createTypeRef, substituteType, instantiateGeneric,
+	createArray, createSpan, createFunction, createTypeRef, substituteType, instantiateGeneric,
 	isNumeric, isStringType, isCallable, getReturnType, getElementType, getProperty,
 	typeNameOf,
 	unifyType, createUnifyBindings, hasGenericParams,
@@ -132,7 +132,18 @@ export function checkExpr(ctx: CheckerContext, node: Node): Type {
 			const d = node.data as ArrayAccessData;
 			const arrType = checkExpr(ctx, d.array);
 			checkExpr(ctx, d.index);
-			getElementType(arrType);
+			// Range access: arr[start..end] returns Span<elemType>
+			if (d.index.kind === NodeKind.BinaryExpr) {
+				const bd = d.index.data as BinaryExprData;
+				if (bd.operator === "..") {
+					const elemType = getElementType(arrType);
+					createSpan(elemType);
+				} else {
+					getElementType(arrType);
+				}
+			} else {
+				getElementType(arrType);
+			}
 		},
 		NodeKind.ObjectLiteral => {
 			const d = node.data as ObjectLiteralData;
