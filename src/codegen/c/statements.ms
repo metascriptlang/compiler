@@ -18,7 +18,6 @@ import {
 	emitStmts, emitStmtsLine, emitStmtsNl,
 	getStmtsIndent, setStmtsIndent,
 	pushBlock, popBlock, readProcStmts,
-	nameSetHas,
 } from "./context";
 import { genExpr } from "./expressions";
 import { safeName } from "./names";
@@ -126,13 +125,6 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 		cType = getTypeDesc(g, node.nodeType);
 	} else if (d.initializer !== null && d.initializer.nodeType !== null) {
 		cType = getTypeDesc(g, d.initializer.nodeType);
-	}
-	// Fallback: if type is void* or empty, check annotation against cross-module types
-	if ((cType === "" || cType === "void*") && d.declType.length > 0) {
-		const annotName = safeName(d.declType);
-		if (nameSetHas(g.knownTypeNames, annotName)) {
-			cType = nameSetHas(g.knownClassNames, annotName) ? annotName + "*" : annotName;
-		}
 	}
 	if (cType === "") cType = "double";
 

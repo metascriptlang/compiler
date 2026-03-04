@@ -445,7 +445,19 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 	if (sym.symbolType.kind !== TypeKind.Object) return;
 
 	const objType = sym.symbolType;
-	if (!typeNeedsHooks(objType, lctx, loc)) return;
+	if (!typeNeedsHooks(objType, lctx, loc)) {
+		// Classes still need a minimal _typeInfo for msAllocTyped (even without RC hooks)
+		if (sym.symbolKind === SymbolKind.Class) {
+			const typeInfoObj = makeObjectLiteral(
+				["name", "isCyclic", "traceFn", "destroyFn"],
+				[makeString(typeName, loc), makeBool(false, loc), makeNull(loc), makeNull(loc)],
+				loc,
+			);
+			lctx.collector.push(makeVarDecl(typeName + "_typeInfo", typeInfoObj, DeclKind.Const, loc));
+			nameSetAdd(lctx.generated, typeName);
+		}
+		return;
+	}
 
 	// 4 core hooks via fillBody dispatch
 	generateHook("destroy", typeName, objType, lctx, loc);

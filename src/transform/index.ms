@@ -59,6 +59,7 @@ import { lowerSubscript } from "./lowering/subscriptLower";
 import { lowerConditionalExpr } from "./lowering/conditionalExprLower";
 import { lowerUpdateExpr } from "./lowering/updateExprLower";
 import { spanLower } from "./lowering/spanLower";
+import { spanParamExpand } from "./native/spanParamExpand";
 import { lowerDCE } from "./analysis/dce";
 import { liftDestructors } from "./lowering/destructorLifting";
 
@@ -88,6 +89,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = lowerBuiltins(result, ctx);
 	result = lowerSubscript(result, ctx);
 	if (!jsBackend) { result = spanLower(result, ctx); }
+	if (!jsBackend) { result = spanParamExpand(result, ctx); }
 	if (!jsBackend) { result = lowerConditionalExpr(result, ctx); }
 	if (!jsBackend) { result = lowerUpdateExpr(result, ctx); }
 	result = lowerDCE(result, ctx);

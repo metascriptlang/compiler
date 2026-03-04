@@ -27,7 +27,7 @@ import {
 import { mangle, mangleFieldName, safeName } from "./names";
 import { getTypeDesc, isNrvoReturnType } from "./types";
 import { formatCNumber, cBoolLiteral, cNullLiteral, cStringLiteral, msStringPoolRef } from "./literals";
-import { charAt, sliceStr } from "../../utils/string";
+import { charAt, sliceStr, findChar } from "../../utils/string";
 import { check } from "std/testing";
 
 // ===== Iterative genExpr infrastructure =====
@@ -381,17 +381,10 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 		const obj = peekResult(results, cc, 0);
 		truncResults(results, cc);
 		const d = node.data as MemberExprData;
-		// Builtin property remapping (.data only — .length→.len handled by nativeLower)
-		if (d.property === "data" && d.object.nodeType !== null) {
-			const ok = d.object.nodeType.kind;
-			if (ok === TypeKind.Array) {
-				results.push(obj + ".p->data");
-				return;
-			}
-			if (ok === TypeKind.SizedArray || ok === TypeKind.Span) {
-				results.push(obj + ".data");
-				return;
-			}
+		// Pre-formatted property (e.g. "p->data" from nativeLower) — emit raw
+		if (findChar(d.property, ">") >= 0) {
+			results.push(obj + "." + d.property);
+			return;
 		}
 		const field = mangleFieldName(d.property);
 		results.push(obj + "." + field);
@@ -564,11 +557,18 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 
 	// Direct or closure: first child is callee, rest are args
 	const callee = peekResult(results, cc, 0);
+	// C varargs: msNumberArrayFrom(count, (double)(e1), ...) — va_arg reads 8 bytes for double
+	const isNumberArrayFrom = callee === "msNumberArrayFrom";
 	let argsStr = "";
 	let i = 1;
 	while (i < cc) {
 		if (i > 1) argsStr = argsStr + ", ";
-		argsStr = argsStr + peekResult(results, cc, i);
+		const arg = peekResult(results, cc, i);
+		if (isNumberArrayFrom && i > 1) {
+			argsStr = argsStr + "(double)(" + arg + ")";
+		} else {
+			argsStr = argsStr + arg;
+		}
 		i += 1;
 	}
 	truncResults(results, cc);
@@ -674,17 +674,16 @@ function emitRuntimeCall(g: CGen, p: CProc, runtimeName: string, args: Node[]): 
 function genArrayLiteral(g: CGen, p: CProc, node: Node): string {
 	const d = node.data as ArrayLiteralData;
 
-	// Determine element type from nodeType (set by checker)
-	let elemKind = TypeKind.Void;
+	// Determine array type name from nodeType (for empty array zero-init)
 	let arrayTypeName = "msRefArray";
 	if (node.nodeType !== null && node.nodeType.kind === TypeKind.Array) {
-		if (node.nodeType.typeReturn !== null) {
-			elemKind = node.nodeType.typeReturn.kind;
-		}
-		if (elemKind === TypeKind.Number || elemKind === TypeKind.Float64) {
-			arrayTypeName = "msNumberArray";
-		} else if (elemKind === TypeKind.String) {
-			arrayTypeName = "msStringArray";
+		const elemType = node.nodeType.typeReturn;
+		if (elemType !== null) {
+			if (elemType.kind === TypeKind.Number || elemType.kind === TypeKind.Float64) {
+				arrayTypeName = "msNumberArray";
+			} else if (elemType.kind === TypeKind.String) {
+				arrayTypeName = "msStringArray";
+			}
 		}
 	}
 
@@ -693,31 +692,8 @@ function genArrayLiteral(g: CGen, p: CProc, node: Node): string {
 		return "(" + arrayTypeName + "){0}";
 	}
 
-	// Number array: variadic ms_array_number_from(count, (double)e1, ...)
-	// CRITICAL: cast to (double) — C varargs promotes int literals to 4 bytes
-	// but va_arg(args, double) reads 8 bytes → garbage without cast
-	if (elemKind === TypeKind.Number || elemKind === TypeKind.Float64) {
-		let result = "msNumberArrayFrom(" + d.elements.length;
-		let i = 0;
-		while (i < d.elements.length) {
-			result = result + ", (double)(" + genExpr(g, p, d.elements[i]) + ")";
-			i += 1;
-		}
-		return result + ")";
-	}
-
-	// String array: variadic ms_string_array_new_with(count, e1, ...)
-	if (elemKind === TypeKind.String) {
-		let result = "msStringArrayFrom(" + d.elements.length;
-		let i = 0;
-		while (i < d.elements.length) {
-			result = result + ", " + genExpr(g, p, d.elements[i]);
-			i += 1;
-		}
-		return result + ")";
-	}
-
 	// Non-primitive: temp + push pattern
+	// (number/string arrays already lowered to msNumberArrayFrom/msStringArrayFrom CallExpr by nativeLower)
 	const tmp = getTemp(p, arrayTypeName);
 	const tmpName = tmp.snippet;
 	emitStmtsLine(p, tmpName + " = (" + arrayTypeName + "){0};");
@@ -797,8 +773,8 @@ test "expression index" { check(exprSnippet("arr[i + 1];") === "arr[(i + 1)]"); 
 test "conditional" { check(exprSnippet("a ? b : c;") === "(a ? b : c)"); }
 
 test "empty array" {
-	// Without nodeType, falls back to generic msArray
-	check(exprSnippet("[];") === "(msArray){0}");
+	// Without nodeType, falls back to generic msRefArray
+	check(exprSnippet("[];") === "(msRefArray){0}");
 }
 
 test "array with elements no type" {

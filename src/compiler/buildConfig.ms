@@ -1,6 +1,8 @@
 // MetaScript Compiler CLI — build.ms config loader
-// Executes build.ms through the Raiser bytecode VM and extracts BuildConfig.
+// TEMPORARY: Raiser VM detached for C-backend bootstrap.
+// Hardcoded defaults — build.ms is not evaluated.
 
+/* RAISER VM DETACHED — uncomment to re-attach:
 import { readFile, fileExists, clockMs } from "std/process";
 import { evalSourceFull } from "../codegen/raiser/eval";
 import {
@@ -10,6 +12,7 @@ import {
 	RaiserObjectHeap, RaiserArrayHeap,
 } from "../raiser/value";
 import { error, dim } from "../utils/color";
+END RAISER VM DETACHED */
 
 // --- Interfaces ---
 
@@ -34,25 +37,6 @@ export interface BuildConfig {
 	valid: boolean;
 }
 
-// --- Helpers ---
-
-function extractStringArray(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, objHandle: number, fieldName: string): string[] {
-	const result: string[] = [];
-	const val = heapObjectGetField(objHeap, objHandle, fieldName);
-	if (val.kind !== RaiserValueKind.Array) return result;
-	const arrHandle = val.intVal;
-	const len = heapArrayLen(arrHeap, arrHandle);
-	let i = 0;
-	while (i < len) {
-		const elem = heapArrayGet(arrHeap, arrHandle, i);
-		if (elem.kind === RaiserValueKind.String) {
-			result.push(elem.strVal);
-		}
-		i = i + 1;
-	}
-	return result;
-}
-
 // --- Public API ---
 
 export function defaultResolveSection(): ResolveSection {
@@ -64,6 +48,30 @@ export function defaultResolveSection(): ResolveSection {
 }
 
 export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfig {
+	// TEMPORARY: Hardcode config for C-Backend bootstrap — bypasses Raiser VM
+	const defBs: BuildSection = { target: "c", outDir: "out", outFile: "", optimize: "debug" };
+	const defRs = defaultResolveSection();
+	return { root: "src/index.ms", build: defBs, resolve: defRs, valid: true };
+	/* Original implementation (uncomment to re-attach):
+
+	// --- Helpers ---
+	function extractStringArray(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, objHandle: number, fieldName: string): string[] {
+		const result: string[] = [];
+		const val = heapObjectGetField(objHeap, objHandle, fieldName);
+		if (val.kind !== RaiserValueKind.Array) return result;
+		const arrHandle = val.intVal;
+		const len = heapArrayLen(arrHeap, arrHandle);
+		let i = 0;
+		while (i < len) {
+			const elem = heapArrayGet(arrHeap, arrHandle, i);
+			if (elem.kind === RaiserValueKind.String) {
+				result.push(elem.strVal);
+			}
+			i = i + 1;
+		}
+		return result;
+	}
+
 	const defBs: BuildSection = { target: "c", outDir: "out", outFile: "", optimize: "debug" };
 	const defRs = defaultResolveSection();
 	const defCfg: BuildConfig = { root: "", build: defBs, resolve: defRs, valid: false };
@@ -128,4 +136,5 @@ export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfi
 
 	const bs: BuildSection = { target: bsTarget, outDir: bsOutDir, outFile: bsOutFile, optimize: bsOptimize };
 	return { root, build: bs, resolve: rs, valid: true };
+	*/
 }

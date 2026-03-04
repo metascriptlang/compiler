@@ -12,8 +12,9 @@ import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { generateJS } from "../codegen/js/index";
-import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
-import { RaiserContext, createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
+// TEMPORARY: Raiser VM detached for C-backend bootstrap
+// import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
+// import { RaiserContext, createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
 import { generateC, generateCModule, genProjectDispatcher, collectExportedPrototypes, collectExportedTypeDecls, flushResultTypeDecls } from "../codegen/c/index";
 import { lookupSymbol } from "../checker/symbol";
 import { transformForNative } from "../transform/native/index";
@@ -680,6 +681,10 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 // compiles to bytecode via generateRaiserProject, executes in-process.
 
 export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
+	// TEMPORARY: Raiser VM detached for C-backend bootstrap
+	console.log("Raiser (VM) backend is currently detached for bootstrap.");
+	return;
+	/* Original implementation (uncomment to re-attach):
 	const t0 = clockMs();
 	const config = buildResolverConfig(Target.Raiser, defaultResolveSection());
 	const graph = loadAndCheckGraph(filePath, opts.verbose, config);
@@ -721,4 +726,5 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 			console.log(lastOut);
 		}
 	}
+	*/
 }

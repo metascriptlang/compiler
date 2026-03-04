@@ -14,7 +14,8 @@
 
 import {
 	Node, NodeKind,
-	ArrayAccessData, MemberExprData,
+	ArrayAccessData, MemberExprData, ArrayLiteralData,
+	VariableDeclData, BinaryExprData,
 } from "../../ast/node";
 import { Type, TypeKind } from "../../checker/types";
 import { TransformContext } from "../context";
@@ -24,8 +25,36 @@ import { makeCall, makeIdent, makeNumber } from "../util";
 // ===== Main Entry Point =====
 
 export function lowerNativeAccess(program: Node, ctx: TransformContext): Node {
+	// Pre-pass: propagate SizedArray type from declarations/assignments to ArrayLiteral initializers.
+	// Without this, ArrayLiterals infer TypeKind.Array and get heap-allocated by rewriteArrayLiteral.
+	walkNode(program, propagateSizedArrayType);
 	walkNode(program, rewriteAccess);
 	return program;
+}
+
+// Propagate SizedArray type to ArrayLiteral initializers so rewriteArrayLiteral skips them.
+function propagateSizedArrayType(node: Node): Node {
+	// VariableDecl: const fixed: number[3] = [10, 20, 30]
+	if (node.kind === NodeKind.VariableDecl) {
+		const d = node.data as VariableDeclData;
+		if (node.nodeType !== null && node.nodeType.kind === TypeKind.SizedArray) {
+			if (d.initializer !== null && d.initializer.kind === NodeKind.ArrayLiteral) {
+				d.initializer.nodeType = node.nodeType;
+			}
+		}
+	}
+	// Assignment: fixed = [10, 20, 30]
+	if (node.kind === NodeKind.BinaryExpr) {
+		const d = node.data as BinaryExprData;
+		if (d.operator === "=") {
+			if (d.left.nodeType !== null && d.left.nodeType.kind === TypeKind.SizedArray) {
+				if (d.right !== null && d.right.kind === NodeKind.ArrayLiteral) {
+					d.right.nodeType = d.left.nodeType;
+				}
+			}
+		}
+	}
+	return node;
 }
 
 // ===== Rewriter =====
@@ -33,6 +62,7 @@ export function lowerNativeAccess(program: Node, ctx: TransformContext): Node {
 function rewriteAccess(node: Node): Node {
 	if (node.kind === NodeKind.ArrayAccess) return rewriteArrayAccess(node);
 	if (node.kind === NodeKind.MemberExpr) return rewriteMemberExpr(node);
+	if (node.kind === NodeKind.ArrayLiteral) return rewriteArrayLiteral(node);
 	return node;
 }
 
@@ -92,15 +122,68 @@ function getArrayMacroName(elemType: Type): string {
 
 function rewriteMemberExpr(node: Node): Node {
 	const d = node.data as MemberExprData;
-	if (d.property !== "length") return node;
-
 	const objType = d.object.nodeType;
 	if (objType === null) return node;
 
-	if (objType.kind === TypeKind.Array || objType.kind === TypeKind.SizedArray ||
-		objType.kind === TypeKind.Span || objType.kind === TypeKind.String) {
-		d.property = "len";
+	// .length → .len for array/string types
+	if (d.property === "length") {
+		if (objType.kind === TypeKind.Array || objType.kind === TypeKind.SizedArray ||
+			objType.kind === TypeKind.Span || objType.kind === TypeKind.String) {
+			d.property = "len";
+		}
+		return node;
 	}
+
+	// .data → .p->data for Array (pointer dereference through p field)
+	// SizedArray/Span: .data stays as .data (direct field)
+	if (d.property === "data") {
+		if (objType.kind === TypeKind.Array) {
+			d.property = "p->data";
+		}
+	}
+
+	return node;
+}
+
+// ===== Array Literal Lowering =====
+// Rewrites typed array literals to variadic runtime calls:
+//   [1, 2, 3]  on number[]  →  CallExpr("msNumberArrayFrom", [3, 1, 2, 3])
+//   ["a", "b"] on string[]  →  CallExpr("msStringArrayFrom", [2, "a", "b"])
+// Other types (object[], ref[]) stay as ArrayLiteral for codegen's Temp+Push pattern.
+
+function rewriteArrayLiteral(node: Node): Node {
+	const d = node.data as ArrayLiteralData;
+	if (d.elements.length === 0) return node;
+
+	const arrType = node.nodeType;
+	if (arrType === null || arrType.kind !== TypeKind.Array) return node;
+	const elemType = arrType.typeReturn;
+	if (elemType === null) return node;
+
+	const loc = node.location;
+
+	// number[]/float64[] → msNumberArrayFrom(count, e1, e2, ...)
+	if (elemType.kind === TypeKind.Number || elemType.kind === TypeKind.Float64) {
+		const args: Node[] = [makeNumber(d.elements.length, loc)];
+		for (let i = 0; i < d.elements.length; i += 1) {
+			args.push(d.elements[i]);
+		}
+		const call = makeCall(makeIdent("msNumberArrayFrom", loc), args, loc);
+		call.nodeType = node.nodeType;
+		return call;
+	}
+
+	// string[] → msStringArrayFrom(count, e1, e2, ...)
+	if (elemType.kind === TypeKind.String) {
+		const args: Node[] = [makeNumber(d.elements.length, loc)];
+		for (let i = 0; i < d.elements.length; i += 1) {
+			args.push(d.elements[i]);
+		}
+		const call = makeCall(makeIdent("msStringArrayFrom", loc), args, loc);
+		call.nodeType = node.nodeType;
+		return call;
+	}
+
 	return node;
 }
 

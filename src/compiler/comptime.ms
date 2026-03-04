@@ -1,6 +1,9 @@
 // ComptimeEval — Evaluate @comptime blocks via Raiser VM, fold results into AST
-// Runs after transforms, before analyzer/codegen.
+// TEMPORARY: Raiser VM detached for C-backend bootstrap. Pass-through only.
 
+import { Node } from "../ast/node";
+
+/* RAISER VM DETACHED — uncomment to re-attach:
 import { check } from "std/testing";
 import {
 	Node, NodeKind, DeclKind, SourceLocation, createNode,
@@ -46,7 +49,9 @@ import {
 	createObjectHeap, createArrayHeap,
 } from "../raiser/value";
 import { RaiserContext } from "../raiser/context";
+END RAISER VM DETACHED */
 
+/* RAISER VM DETACHED — internal functions (uncomment to re-attach):
 // --- Node builders (inlined to avoid import graph issues with transform/util) ---
 
 function synthToken(loc: SourceLocation): Token {
@@ -629,13 +634,20 @@ function walkNode(node: Node): Node {
 	return node;
 }
 
+END RAISER VM DETACHED — internal functions */
+
 // --- Public API ---
 
 export function evaluateComptimeBlocks(program: Node): Node {
+	// TEMPORARY: Skip @comptime evaluation for C-Backend bootstrap
+	return program;
+	/* Original implementation (uncomment to re-attach):
 	if (!hasComptimeBlock(program)) return program;
 	return walkNode(program);
+	*/
 }
 
+/* RAISER VM DETACHED — tests (uncomment to re-attach):
 // --- Tests ---
 test "int value" {
 	const ctx = evalASTFull(createNode(NodeKind.Program, {
@@ -733,3 +745,4 @@ test "BinaryExpr serialization" {
 	const rightKind = heapObjectGetField(objHeap, rightVal.intVal, "kind");
 	check(rightKind.intVal === (NodeKind.NumberLiteral as number));
 }
+END RAISER VM DETACHED — tests */
