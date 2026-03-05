@@ -30,7 +30,7 @@ import { walkExpandBlocks } from "../walker";
 import {
 	makeIdent, makeVarDecl, makeBlock, makeExprStmt,
 	makeReturn, makeIf, makeMember, makeCall, makeCallResolved, makeConditional,
-	makeUnary,
+	makeUnary, makeObjectLiteral, makeBool,
 } from "../util";
 import { check } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
@@ -74,7 +74,10 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 	match (stmt.kind) {
 		NodeKind.VariableDecl => {
 			const d = stmt.data as VariableDeclData;
-			if (d.initializer.kind === NodeKind.TryExpr) {
+			if (d.initializer !== null) {
+				console.log("[VarDecl]", d.declName, "init:", d.initializer.kind, "TryExpr=", NodeKind.TryExpr);
+			}
+			if (d.initializer !== null && d.initializer.kind === NodeKind.TryExpr) {
 				return expandVarDeclTry(stmt, ctx);
 			}
 		},
@@ -189,22 +192,9 @@ function makeErrorCheck(tempName: string, resType: Type, loc: SourceLocation, ct
 
 	const errorAccess = makeResultMember(tempName, resType, "error", loc);
 
-	// Result.err($result.error) — with resolvedSym for downstream builtinLower
-	const errSym = lookupResultErr(ctx);
-	let resultErr: Node = null as unknown as Node;
-	if (errSym !== null) {
-		const callee = makeIdent("err", loc);
-		callee.resolvedSym = errSym;
-		callee.nodeType = errSym.symbolType;
-		resultErr = makeCallResolved(callee, [errorAccess], errSym, loc);
-	} else {
-		// Fallback: no checker context (test mode) — use unresolved call
-		resultErr = makeCall(
-			makeMember(makeIdent("Result", loc), "err", loc),
-			[errorAccess],
-			loc
-		);
-	}
+	// Build ObjectLiteral { ok: false, error: $result.error } directly
+	// (bypasses builtinLower — synthetic calls may lack resolvedSym.builtinKind)
+	const resultErr = makeObjectLiteral(["ok", "error"], [makeBool(false, loc), errorAccess], loc);
 	resultErr.nodeType = resType;
 
 	const returnStmt = makeReturn(resultErr, loc);

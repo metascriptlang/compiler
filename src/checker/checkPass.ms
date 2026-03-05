@@ -61,18 +61,18 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 		NodeKind.ContinueStmt => { if (!ctx.inLoop) { addError(ctx, "continue outside of loop"); } },
 		NodeKind.ExprStmt => {
 			const d = node.data as ExprStmtData;
-			checkExpr(ctx, d.expr);
+			checkExpr(ctx, d.expr, null as unknown as Type);
 		},
 		NodeKind.ThrowStmt => {
 			const d = node.data as ThrowStmtData;
-			checkExpr(ctx, d.throwArg);
+			checkExpr(ctx, d.throwArg, null as unknown as Type);
 		},
 		NodeKind.TryCatchStmt => checkTryCatch(ctx, node),
 		NodeKind.SwitchStmt => checkSwitchStmt(ctx, node),
 		NodeKind.MatchStmt => checkMatchStmt(ctx, node),
 		NodeKind.DeferStmt => {
 			const d = node.data as DeferStmtData;
-			checkExpr(ctx, d.deferExpr);
+			checkExpr(ctx, d.deferExpr, null as unknown as Type);
 		},
 		NodeKind.DecoratedDecl => {
 			const d = node.data as DecoratedDeclData;
@@ -89,7 +89,7 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 		},
 		NodeKind.ExpectStmt => {
 			const d = node.data as ExpectStmtData;
-			checkExpr(ctx, d.expectExpr);
+			checkExpr(ctx, d.expectExpr, null as unknown as Type);
 		},
 		_ => {},
 	};
@@ -99,11 +99,16 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 
 function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as VariableDeclData;
-	const initType = checkExpr(ctx, d.initializer);
+	// Resolve declared type FIRST so it can flow as expectedType into initializer (Nim parity)
+	let declType = null as unknown as Type;
+	if (d.declType !== "") {
+		declType = resolveAnnotation(d.declType, ctx);
+	}
+	const initType = checkExpr(ctx, d.initializer, declType);
 	// Prefer explicit type annotation over inferred type
 	let varType = initType;
-	if (d.declType !== "") {
-		varType = resolveAnnotation(d.declType, ctx);
+	if (declType !== null) {
+		varType = declType;
 	}
 	node.nodeType = varType;
 	// If already collected in pass 1 (e.g. export const), update type
@@ -353,7 +358,7 @@ function isDefiniteExit(node: Node): boolean {
 
 function checkIfStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as IfStmtData;
-	checkExpr(ctx, d.condition);
+	checkExpr(ctx, d.condition, null as unknown as Type);
 
 	// Analyze condition for null narrowing
 	const narrowResult = analyzeNullCheck(d.condition);
@@ -396,7 +401,7 @@ function checkIfStmt(ctx: CheckerContext, node: Node): void {
 
 function checkWhileStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as WhileStmtData;
-	checkExpr(ctx, d.whileCondition);
+	checkExpr(ctx, d.whileCondition, null as unknown as Type);
 	const saved = enterLoopScope(ctx);
 	checkStmt(ctx, d.whileBody);
 	exitLoopScope(ctx, saved);
@@ -406,15 +411,15 @@ function checkForStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ForStmtData;
 	const saved = enterLoopScope(ctx);
 	checkStmt(ctx, d.forInit);
-	checkExpr(ctx, d.forCondition);
-	checkExpr(ctx, d.forUpdate);
+	checkExpr(ctx, d.forCondition, null as unknown as Type);
+	checkExpr(ctx, d.forUpdate, null as unknown as Type);
 	checkStmt(ctx, d.forBody);
 	exitLoopScope(ctx, saved);
 }
 
 function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ForOfStmtData;
-	checkExpr(ctx, d.forOfIterable);
+	checkExpr(ctx, d.forOfIterable, null as unknown as Type);
 	// Infer binding type from iterable
 	let elemType = unknownType();
 	const iterType = d.forOfIterable.nodeType;
@@ -487,7 +492,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 
 function checkForInStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ForInStmtData;
-	checkExpr(ctx, d.forInObject);
+	checkExpr(ctx, d.forInObject, null as unknown as Type);
 	const saved = enterLoopScope(ctx);
 	defineSymbol(ctx.table, makeSymbol(d.forInBinding, SymbolKind.Variable, unknownType(), !d.forInIsConst));
 	checkStmt(ctx, d.forInBody);
@@ -499,7 +504,7 @@ function checkDoWhileStmt(ctx: CheckerContext, node: Node): void {
 	const saved = enterLoopScope(ctx);
 	checkStmt(ctx, d.doBody);
 	exitLoopScope(ctx, saved);
-	checkExpr(ctx, d.doCondition);
+	checkExpr(ctx, d.doCondition, null as unknown as Type);
 }
 
 function checkBlock(ctx: CheckerContext, node: Node): void {
@@ -543,7 +548,15 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 		addError(ctx, "return outside of function");
 	}
 	if (d.argument !== null && d.argument.kind !== NodeKind.NullLiteral) {
-		const retType = checkExpr(ctx, d.argument);
+		// Pass declared return type as expectedType (Nim parity)
+		let returnExpected = null as unknown as Type;
+		if (ctx.currentFunction !== null
+			&& ctx.currentFunction.symbolType.kind === TypeKind.Function
+			&& ctx.currentFunction.symbolType.typeReturn !== null
+			&& ctx.currentFunction.symbolType.typeReturn.kind !== TypeKind.Unknown) {
+			returnExpected = ctx.currentFunction.symbolType.typeReturn;
+		}
+		const retType = checkExpr(ctx, d.argument, returnExpected);
 		// Track inferred return type (first return wins)
 		if (ctx.inferredReturn.kind === TypeKind.Unknown) {
 			ctx.inferredReturn = retType;
@@ -580,17 +593,17 @@ function checkTryCatch(ctx: CheckerContext, node: Node): void {
 
 function checkSwitchStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as SwitchStmtData;
-	checkExpr(ctx, d.switchDisc);
+	checkExpr(ctx, d.switchDisc, null as unknown as Type);
 	for (const c of d.switchCases) {
 		const cd = c.data as SwitchCaseData;
-		for (const t of cd.caseTests) { checkExpr(ctx, t); }
+		for (const t of cd.caseTests) { checkExpr(ctx, t, null as unknown as Type); }
 		for (const s of cd.caseStmts) { checkStmt(ctx, s); }
 	}
 }
 
 function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as MatchStmtData;
-	const discType = checkExpr(ctx, d.matchStmtDisc);
+	const discType = checkExpr(ctx, d.matchStmtDisc, null as unknown as Type);
 	let hasWildcard = false;
 	const coveredMembers: string[] = [];
 	for (const c of d.matchStmtCases) {
@@ -600,6 +613,8 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 			if (p.kind === NodeKind.MemberExpr) {
 				const pmd = p.data as MemberExprData;
 				coveredMembers.push(pmd.property);
+				// Check the pattern — triggers enum MemberExpr → Identifier rewrite
+				checkExpr(ctx, p, discType);
 			}
 		}
 		checkStmt(ctx, cd.caseBody);
@@ -635,7 +650,7 @@ function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], b
 		checkStmt(ctx, body);
 	} else {
 		// Expression body (arrow functions) — infer return type
-		const exprType = checkExpr(ctx, body);
+		const exprType = checkExpr(ctx, body, null as unknown as Type);
 		if (ctx.inferredReturn.kind === TypeKind.Unknown) {
 			ctx.inferredReturn = exprType;
 		}
@@ -658,7 +673,7 @@ function exitLoopScope(ctx: CheckerContext, saved: boolean): void {
 
 function checkDestructuringDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as DestructuringDeclData;
-	checkExpr(ctx, d.destrInit);
+	checkExpr(ctx, d.destrInit, null as unknown as Type);
 }
 
 // ===== Check Program Body =====

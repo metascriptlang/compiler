@@ -10,12 +10,9 @@ import { CheckerContext, hasErrors, errorCount } from "../checker/context";
 import { checkProgram } from "../checker/checkPass";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
-import { generateC } from "../codegen/c/index";
-import { transformForNative } from "../transform/native/index";
-import { createTransformContextWithChecker } from "../transform/context";
 import { CliOptions } from "./options";
 import { readSource, writeOutput, printErrorsAndExit, printTiming, verboseLog, replaceExt, baseName, ensureDir } from "./io";
-import { compileC, appendFlag, cliAllFlags } from "./cc";
+import { cmdBuildC } from "./compile";
 import { error, success, bold, cyan, dim, green, red, yellow, path } from "../utils/color";
 
 // -- dump-tokens --
@@ -122,48 +119,18 @@ export function cmdPipeline(filePath: string): void {
 }
 
 // -- run --
+// Delegates to multi-module build (cmdBuildC) so imports resolve correctly,
+// then executes the resulting binary.
 
 export function cmdRun(filePath: string, opts: CliOptions): void {
 	const t0 = clockMs();
-	const source = readSource(filePath);
-
-	if (opts.verbose) verboseLog("parse " + filePath);
-	const parseResult = parseSource(source);
-	if (!parseResult.ok) {
-		console.log(error("parse error") + ": " + parseResult.error);
-		exit(1);
-	}
-	const program = parseResult.value;
-
-	if (opts.verbose) verboseLog("check");
-	const checkerCtx = checkProgram(program);
-	if (hasErrors(checkerCtx)) {
-		printErrorsAndExit(checkerCtx, "type error: ", opts.errorMax);
-	}
-
-	if (opts.verbose) verboseLog("transform");
-	const transformed = transformProgram(program, checkerCtx, false);
-
-	if (opts.verbose) verboseLog("transform (native)");
-	const nativeCtx = createTransformContextWithChecker(checkerCtx);
-	const nativeTransformed = transformForNative(transformed, nativeCtx);
-	if (opts.verbose) verboseLog("analyze (DRC)");
-	const analyzed = analyzeProgram(nativeTransformed, checkerCtx);
-	if (opts.verbose) verboseLog("codegen c");
-	const cCode = generateC(analyzed, checkerCtx, filePath);
-	const tmpC = "/tmp/_msc_run.c";
+	// Build to out/debug/<name> via the full multi-module pipeline
 	ensureDir("out/debug");
 	const binName = replaceExt(baseName(filePath), "");
 	const tmpBin = "out/debug/" + binName;
-	writeOutput(tmpC, cCode);
-
-	if (opts.verbose) verboseLog("cc");
-	const runFlags = appendFlag(checkerCtx.compilerFlags, cliAllFlags(opts));
-	const buildCode = compileC(tmpC, tmpBin, runFlags, opts.mode, opts.ccCompiler);
-	if (buildCode !== 0) {
-		console.log(error("error") + ": C compilation failed " + dim("(exit " + buildCode + ")"));
-		exit(1);
-	}
+	opts.outputPath = tmpBin;
+	opts.forceRebuild = true;
+	cmdBuildC(filePath, opts);
 
 	if (opts.showTime) printTiming("compiled", t0);
 	const runCode = exec(tmpBin);

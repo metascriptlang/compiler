@@ -137,14 +137,14 @@ function discoverExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[],
 		// Built-in numeric constants → C99 macros
 		if (d.name === "NaN") { results.push("NAN"); return; }
 		if (d.name === "Infinity") { results.push("INFINITY"); return; }
-		// Auto-declare DRC sink temps on first use
+		// Auto-declare DRC sink temps on first use (zero-init for goto safety)
 		if (startsWith(d.name, "$sink_") && p !== null) {
 			let alreadySeen = false;
 			for (const s of p.seenSinks) { if (s === d.name) alreadySeen = true; }
 			if (!alreadySeen) {
 				p.seenSinks.push(d.name);
 				const cType = node.nodeType !== null ? getTypeDesc(g, node.nodeType) : "void*";
-				emitProcLocalsLine(p, "  " + cType + " " + safeName(d.name) + ";");
+				emitProcLocalsLine(p, "  " + cType + " " + safeName(d.name) + " = {0};");
 			}
 		}
 		results.push(safeName(d.name));
@@ -191,18 +191,11 @@ function discoverExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[],
 		return;
 	}
 
-	// MemberExpr — 0 or 1 child (enum member is leaf)
+	// MemberExpr — 1 child (object)
+	// Note: Enum member access (Color.Red) is rewritten to Identifier("Color_Red")
+	// by the checker (checkMemberExpr), so MemberExpr with enum objects never reaches codegen.
 	if (kind === NodeKind.MemberExpr) {
 		const d = node.data as MemberExprData;
-		// Enum member: leaf
-		if (d.object.kind === NodeKind.Identifier) {
-			const id = d.object.data as IdentifierData;
-			if (nameSetHas(g.knownEnumNames, safeName(id.name))) {
-				results.push(safeName(id.name) + "_" + d.property);
-				return;
-			}
-		}
-		// Normal: 1 child (object)
 		workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
 		workStack.push({ node: d.object, phase: 0, childCount: 0, tag: 0 });
 		return;
@@ -331,9 +324,9 @@ function discoverCallExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackIte
 	const cd = node.data as CallExprData;
 	const sym = node.resolvedSym;
 
-	// @runtime("c_name") — keep recursive (emitRuntimeCall has side effects)
-	if (sym !== null && sym.runtimeName !== "") {
-		results.push(emitRuntimeCall(g, p, sym.runtimeName, cd.arguments));
+	// @runtime("c_name") — keep recursive (emitNativeCall has side effects)
+	if (sym !== null && sym.nativeName !== "") {
+		results.push(emitNativeCall(g, p, sym.nativeName, cd.arguments));
 		return;
 	}
 
@@ -516,10 +509,13 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 			truncResults(results, cc);
 			results.push("(msClosure){ .fn = (void*)" + fnExpr + ", .env = (void*)&" + envExpr + " }");
 		} else {
-			// General struct literal
+			// General struct literal — ALL compound literals need (Type) prefix in C
 			let prefix = "";
-			if (node.nodeType !== null && isNrvoReturnType(node.nodeType)) {
-				prefix = "(" + getTypeDesc(g, node.nodeType) + ")";
+			if (node.nodeType !== null) {
+				const td = getTypeDesc(g, node.nodeType);
+				if (td !== "void*" && td !== "double") {
+					prefix = "(" + td + ")";
+				}
 			}
 			let result = prefix + "{ ";
 			let i = 0;
@@ -617,10 +613,10 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 			ai += 1;
 		}
 		truncResults(results, cc);
-		if (idx === 0 && sym.runtimeName !== "") {
-			results.push(sym.runtimeName + "(" + argsStr + ")");
-		} else if (idx > 0 && idx - 1 < sym.overloads.length && sym.overloads[idx - 1].runtimeName !== "") {
-			results.push(sym.overloads[idx - 1].runtimeName + "(" + argsStr + ")");
+		if (idx === 0 && sym.nativeName !== "") {
+			results.push(sym.nativeName + "(" + argsStr + ")");
+		} else if (idx > 0 && idx - 1 < sym.overloads.length && sym.overloads[idx - 1].nativeName !== "") {
+			results.push(sym.overloads[idx - 1].nativeName + "(" + argsStr + ")");
 		} else if (idx >= 0) {
 			results.push(safeName(sym.name) + "__" + idx + "(" + argsStr + ")");
 		} else {
@@ -710,8 +706,8 @@ function mapBinaryOp(op: string): string {
 // Closure call: callee.fn(callee.env, args) — detected via isDirectCall flag from closureCallMarker
 
 // Emit a @runtime call: strip & prefix → &first_arg, add array type suffix.
-function emitRuntimeCall(g: CGen, p: CProc, runtimeName: string, args: Node[]): string {
-	let cName = runtimeName;
+function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Node[]): string {
+	let cName = nativeName;
 	let needsAddr = false;
 
 	// & prefix → mutating method, first arg needs address-of

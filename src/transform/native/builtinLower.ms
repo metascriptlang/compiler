@@ -1,7 +1,7 @@
 // Builtin Lowering — rewrite @builtin calls + MemberExpr→direct call for extensions
 //
 // Runs post-analyzer, pre-codegen. Reads decorator metadata from Symbol
-// (runtimeName, builtinKind set by collectPass).
+// (nativeName, builtinKind set by collectPass).
 //
 // @runtime("c_name") → left for genCallExpr in codegen (handles &prefix, array suffix)
 // @builtin("Name")   → inline expansion for known builtins
@@ -49,25 +49,14 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 			return lowerBuiltinCall(node, sym.builtinKind, ctx);
 		}
 	}
-	// Static extension @builtin fallback: when resolvedSym lacks builtinKind
-	// (cross-module compilation re-registers symbols without decorator metadata),
-	// look up the method symbol directly by name in the checker scope.
-	if (cd.callee.kind === NodeKind.MemberExpr && ctx.checkerCtx !== null) {
-		const me = cd.callee.data as MemberExprData;
-		const extSym = lookupSymbol(ctx.checkerCtx.table, me.property);
-		if (extSym !== null && extSym.builtinKind !== "") {
-			return lowerBuiltinCall(node, extSym.builtinKind, ctx);
-		}
-	}
-
 	// Resolve class method calls (console.log, Math.floor) definitively.
 	// These reach here as MemberExpr callees with a resolvedSym pointing to the method.
 	if (cd.callee.kind === NodeKind.MemberExpr && cd.callee.resolvedSym !== null) {
 		const methodSym = cd.callee.resolvedSym;
-		if (methodSym.runtimeName !== "") {
+		if (methodSym.nativeName !== "") {
 			// Found a @runtime method (like console.log → msPrintln)
-			// Rewrite to a direct call using the runtimeName as the C function name
-			const newCallee = makeIdent(methodSym.runtimeName, loc);
+			// Rewrite to a direct call using the nativeName as the C function name
+			const newCallee = makeIdent(methodSym.nativeName, loc);
 			newCallee.resolvedSym = methodSym;
 			cd.callee = newCallee;
 			node.resolvedSym = methodSym;
@@ -80,7 +69,7 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 	if (cd.callee.kind === NodeKind.MemberExpr && ctx.checkerCtx !== null) {
 		const me = cd.callee.data as MemberExprData;
 		const sym = lookupSymbol(ctx.checkerCtx.table, me.property);
-		if (sym !== null && sym.runtimeName !== "") {
+		if (sym !== null && sym.nativeName !== "") {
 			const newArgs: Node[] = [];
 			newArgs.push(me.object);
 			for (let j = 0; j < cd.arguments.length; j += 1) {

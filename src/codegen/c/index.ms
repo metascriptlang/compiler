@@ -582,54 +582,11 @@ function registerClassFromInner(g: CGen, node: Node): void {
 	}
 }
 
-// ===== Collect Exported Enum Names =====
-// Returns list of enum names exported by a module. Used by cross-module builds
-// to register enum names in CGen.knownEnumNames so genMemberExpr can emit
-// EnumName_Member instead of EnumName.Member.
-
-export function collectExportedEnumNames(program: Node): string[] {
-	const names: string[] = [];
-	if (program === null || program.kind !== NodeKind.Program) return names;
-	const pd = program.data as ProgramData;
-	for (let i = 0; i < pd.programStmts.length; i += 1) {
-		const n = enumNameFromStmt(pd.programStmts[i]);
-		if (n !== "") names.push(n);
-	}
-	return names;
-}
-
-function enumNameFromStmt(node: Node): string {
-	if (node === null) return "";
-	if (node.kind === NodeKind.ExportDecl) {
-		const d = node.data as ExportDeclData;
-		return enumNameFromInner(d.exportedDecl);
-	}
-	if (node.kind === NodeKind.DecoratedDecl) {
-		const d = node.data as DecoratedDeclData;
-		return enumNameFromStmt(d.decoratedNode);
-	}
-	return "";
-}
-
-function enumNameFromInner(node: Node): string {
-	if (node === null) return "";
-	if (node.kind === NodeKind.EnumDecl) {
-		const d = node.data as EnumDeclData;
-		return safeName(d.enumName);
-	}
-	if (node.kind === NodeKind.DecoratedDecl) {
-		const d = node.data as DecoratedDeclData;
-		return enumNameFromInner(d.decoratedNode);
-	}
-	return "";
-}
-
 // ===== Register Cross-Module Type Names =====
 // Two-phase registration:
 // 1. String-parsing: scans forward decl string for enum/struct names (existing)
 // 2. ExportRegistry: iterates checker exports to distinguish class (pointer) from interface (value)
 //
-// knownEnumNames  — enum names for MemberExpr rewriting (TokenKind.Eof → TokenKind_Eof)
 // knownTypeNames  — all cross-module type names (enums + interfaces + classes)
 // knownClassNames — class names only (need pointer semantics: Name*)
 
@@ -650,7 +607,6 @@ function registerCrossModuleTypes(g: CGen, protos: string): void {
 				}
 				const name = sliceStr(rest, 0, nameEnd);
 				if (name.length > 0) {
-					nameSetAdd(g.knownEnumNames, name);
 					nameSetAdd(g.knownTypeNames, name);
 				}
 			} else if (startsWith(line, structPrefix)) {
@@ -860,7 +816,6 @@ test "registerCrossModuleTypes parses enum and struct names" {
 	const g = createCGen(null as unknown as CheckerContext, "test");
 	const protos = "typedef int32_t Color;\ntypedef struct Token Token;\n";
 	registerCrossModuleTypes(g, protos);
-	check(nameSetHas(g.knownEnumNames, "Color"));
 	check(nameSetHas(g.knownTypeNames, "Color"));
 	check(nameSetHas(g.knownTypeNames, "Token"));
 	check(!nameSetHas(g.knownClassNames, "Token"));

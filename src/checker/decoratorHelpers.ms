@@ -3,7 +3,7 @@
 import { Node, NodeKind, DecoratedDeclData, MacroInvocationData, StringLiteralData } from "../ast/node";
 
 export interface DecoratorInfo {
-	runtimeName: string;
+	nativeName: string;
 	builtinKind: string;
 }
 
@@ -31,5 +31,5 @@ export function extractDecoratorInfo(node: Node): DecoratorInfo {
 			}
 		}
 	}
-	return { runtimeName: rtName, builtinKind: btKind };
+	return { nativeName: rtName, builtinKind: btKind };
 }

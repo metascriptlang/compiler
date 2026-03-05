@@ -496,53 +496,5 @@ export function getGenericTypeInstFieldTypeAt(instIdx: number, fieldIdx: number)
 	return pipeAt(_genericTypeInstStore.fieldTypes[instIdx], fieldIdx);
 }
 
-// ===== Default Parameter Side-Channel =====
-// Parser stores default value source text for function parameters with defaults.
-// Checker reads this to know minArity and to re-parse defaults at call sites.
-// DRC-safe: string/number fields only, module-level side-channel.
-// Same SoA pattern as GenericTypeInstStore.
-
-interface DefaultParamStore {
-	fnKeys: string[];       // function name (e.g., "foo")
-	paramIdxs: number[];    // 0-based parameter index
-	defaultTexts: string[]; // reconstructed source text (e.g., "5", "\"hello\"")
-}
-
-function createDefaultParamStore(): DefaultParamStore {
-	return { fnKeys: [], paramIdxs: [], defaultTexts: [] };
-}
-
-let _defaultParamStore: DefaultParamStore = createDefaultParamStore();
-
-export function resetDefaultParamStore(): void {
-	_defaultParamStore = createDefaultParamStore();
-}
-
-export function addDefaultParam(fnKey: string, paramIdx: number, text: string): void {
-	_defaultParamStore.fnKeys.push(fnKey);
-	_defaultParamStore.paramIdxs.push(paramIdx);
-	_defaultParamStore.defaultTexts.push(text);
-}
-
-export function getDefaultText(fnKey: string, paramIdx: number): string {
-	let i = 0;
-	while (i < _defaultParamStore.fnKeys.length) {
-		if (_defaultParamStore.fnKeys[i] === fnKey && _defaultParamStore.paramIdxs[i] === paramIdx) {
-			return _defaultParamStore.defaultTexts[i];
-		}
-		i = i + 1;
-	}
-	return "";
-}
-
-export function getDefaultCount(fnKey: string, totalParams: number): number {
-	let count = 0;
-	let i = 0;
-	while (i < _defaultParamStore.fnKeys.length) {
-		if (_defaultParamStore.fnKeys[i] === fnKey && _defaultParamStore.paramIdxs[i] < totalParams) {
-			count = count + 1;
-		}
-		i = i + 1;
-	}
-	return count;
-}
+// DefaultParamStore DELETED — defaults now stored on FunctionDeclData.fnDefaults
+// and read via resolvedSym.declNode (see checkExprPass.ms:fillDefaultArgsForNode)

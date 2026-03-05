@@ -160,9 +160,6 @@ function genEnumDecl(g: CGen, node: Node): void {
 	// Register in type cache to prevent genEnumType from re-emitting
 	typeCacheSet(g.typeCache, key, name);
 
-	// Register as known enum for cross-module member access (TokenKind.Eof → TokenKind_Eof)
-	nameSetAdd(g.knownEnumNames, name);
-
 	// Emit as typedef + #define constants
 	const types = sec(g, CSection.Types);
 	addLine(types, "typedef int32_t " + name + ";");

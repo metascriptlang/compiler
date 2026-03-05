@@ -5,7 +5,7 @@ import { Node } from "../ast/node";
 import {
 	CheckerContext, createModuleContext, createContext,
 	ExportedSymInfo, createExportRegistry, registerModuleExports,
-	findExtensionByName,
+	findExtensionByName, findExtensionByType, registerExtension,
 } from "./context";
 import { SymbolKind, ScopeKind, openScope, hasFlag, SF_EXPORTED } from "./symbol";
 import { Module, ModuleGraph, findModule } from "../module/graph";
@@ -84,6 +84,14 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 			ctx.table.current.symbols.push(sym);
 		}
 
+		// Inject prelude extensions into this module's extension registry
+		// (so arr.push(), str.trim() etc. resolve as extension methods)
+		if (baseCtx.extensionRegistry !== null && ctx.extensionRegistry !== null) {
+			for (const ext of baseCtx.extensionRegistry.methods) {
+				registerExtension(ctx.extensionRegistry, ext);
+			}
+		}
+
 		// Open Module scope for this module's declarations
 		openScope(ctx.table, ScopeKind.Module);
 
@@ -106,22 +114,65 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 				let extRecv = "";
 				let extStatic = false;
 				if (ctx.extensionRegistry !== null && sym.symbolKind === SymbolKind.Function) {
-					const ext = findExtensionByName(ctx.extensionRegistry, sym.name);
+					// Use sym reference to find the primary extension (not findExtensionByName which grabs first)
+					const ext = findExtensionByType(ctx.extensionRegistry, sym.name, sym.symbolType);
 					if (ext !== null) {
 						extRecv = ext.receiverTypeName;
 						extStatic = ext.isStatic;
+					} else {
+						// Fallback: first match (non-overloaded extensions)
+						const extFb = findExtensionByName(ctx.extensionRegistry, sym.name);
+						if (extFb !== null) {
+							extRecv = extFb.receiverTypeName;
+							extStatic = extFb.isStatic;
+						}
 					}
 				}
-				// Collect overload types if function has overloads
+				// Collect overload types + per-overload extension metadata
 				const ovTypes: Type[] = [];
+				const ovExtRecvs: string[] = [];
+				const ovExtStatics: boolean[] = [];
 				if (sym.overloads.length > 0) {
 					let ovi = 0;
 					while (ovi < sym.overloads.length) {
 						ovTypes.push(sym.overloads[ovi].symbolType);
+						if (ctx.extensionRegistry !== null) {
+							const ovExt = findExtensionByType(ctx.extensionRegistry, sym.name, sym.overloads[ovi].symbolType);
+							if (ovExt !== null) {
+								ovExtRecvs.push(ovExt.receiverTypeName);
+								ovExtStatics.push(ovExt.isStatic);
+							} else {
+								ovExtRecvs.push("");
+								ovExtStatics.push(false);
+							}
+						} else {
+							ovExtRecvs.push("");
+							ovExtStatics.push(false);
+						}
 						ovi = ovi + 1;
 					}
 				}
-				const info: ExportedSymInfo = { name: sym.name, kind: sym.symbolKind, symType: sym.symbolType, overloadTypes: ovTypes, extReceiverType: extRecv, extIsStatic: extStatic };
+				// Collect per-overload nativeName/builtinKind
+				const ovRtNames: string[] = [];
+				const ovBiKinds: string[] = [];
+				if (sym.overloads.length > 0) {
+					let ovi2 = 0;
+					while (ovi2 < sym.overloads.length) {
+						ovRtNames.push(sym.overloads[ovi2].nativeName);
+						ovBiKinds.push(sym.overloads[ovi2].builtinKind);
+						ovi2 = ovi2 + 1;
+					}
+				}
+				// Collect per-overload defaultParamText
+				const ovDefTexts: string[][] = [];
+				if (sym.overloads.length > 0) {
+					let ovi3 = 0;
+					while (ovi3 < sym.overloads.length) {
+						ovDefTexts.push(sym.overloads[ovi3].defaultParamText);
+						ovi3 = ovi3 + 1;
+					}
+				}
+				const info: ExportedSymInfo = { name: sym.name, kind: sym.symbolKind, symType: sym.symbolType, overloadTypes: ovTypes, extReceiverType: extRecv, extIsStatic: extStatic, overloadExtReceiverTypes: ovExtRecvs, overloadExtIsStatic: ovExtStatics, nativeName: sym.nativeName, builtinKind: sym.builtinKind, overloadNativeNames: ovRtNames, overloadBuiltinKinds: ovBiKinds, defaultTexts: sym.defaultParamText, overloadDefaultTexts: ovDefTexts };
 				exports.push(info);
 			}
 		}

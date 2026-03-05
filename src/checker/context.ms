@@ -15,6 +15,14 @@ export interface ExportedSymInfo {
 	overloadTypes: Type[];
 	extReceiverType: string;
 	extIsStatic: boolean;
+	overloadExtReceiverTypes: string[];
+	overloadExtIsStatic: boolean[];
+	nativeName: string;
+	builtinKind: string;
+	overloadNativeNames: string[];
+	overloadBuiltinKinds: string[];
+	defaultTexts: string[];
+	overloadDefaultTexts: string[][];
 }
 
 export interface ModuleExports {
@@ -60,6 +68,7 @@ export interface ExtensionMethod {
 	sourcePath: string;
 	fnType: Type;
 	isStatic: boolean;
+	sym: Symbol;
 }
 
 export interface ExtensionRegistry {
@@ -93,6 +102,14 @@ export function hasExtensionByName(registry: ExtensionRegistry, methodName: stri
 export function findExtensionByName(registry: ExtensionRegistry, methodName: string): ExtensionMethod {
 	for (const m of registry.methods) {
 		if (m.methodName === methodName) return m;
+	}
+	return null as unknown as ExtensionMethod;
+}
+
+// findExtensionByType — find extension matching method name + fnType identity (for overload export)
+export function findExtensionByType(registry: ExtensionRegistry, methodName: string, fnType: Type): ExtensionMethod {
+	for (const m of registry.methods) {
+		if (m.methodName === methodName && m.fnType === fnType) return m;
 	}
 	return null as unknown as ExtensionMethod;
 }
@@ -408,7 +425,7 @@ test "create empty" {
 
 test "register and find" {
 	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "trim", receiverTypeName: "string", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false };
+	const m: ExtensionMethod = { methodName: "trim", receiverTypeName: "string", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false, sym: null as unknown as Symbol };
 	registerExtension(r, m);
 	const found = findExtension(r, "string", "trim");
 	check(found !== null);
@@ -429,7 +446,7 @@ test "no attached ops" {
 
 test "detect onDestroy" {
 	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Foo", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false };
+	const m: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Foo", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false, sym: null as unknown as Symbol };
 	registerExtension(r, m);
 	const ops = findAttachedOps(r, "Foo");
 	check(hasAttachedOps(ops));
@@ -439,11 +456,11 @@ test "detect onDestroy" {
 
 test "detect all lifecycle hooks" {
 	const r = createExtensionRegistry();
-	const d: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false };
+	const d: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false, sym: null as unknown as Symbol };
 	registerExtension(r, d);
-	const c: ExtensionMethod = { methodName: "onCopy", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false };
+	const c: ExtensionMethod = { methodName: "onCopy", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false, sym: null as unknown as Symbol };
 	registerExtension(r, c);
-	const mv: ExtensionMethod = { methodName: "onMove", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false };
+	const mv: ExtensionMethod = { methodName: "onMove", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false, sym: null as unknown as Symbol };
 	registerExtension(r, mv);
 	const ops = findAttachedOps(r, "Bar");
 	check(hasAttachedOps(ops));
@@ -454,7 +471,7 @@ test "detect all lifecycle hooks" {
 
 test "wrong type no match" {
 	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Foo", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false };
+	const m: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Foo", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false, sym: null as unknown as Symbol };
 	registerExtension(r, m);
 	const ops = findAttachedOps(r, "Bar");
 	check(!hasAttachedOps(ops));
@@ -468,7 +485,7 @@ test "create empty registry" {
 test "register and find exports" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), extReceiverType: "", extIsStatic: false };
+	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultTexts: [], overloadDefaultTexts: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "foo");
@@ -486,7 +503,7 @@ test "missing module returns null" {
 test "missing symbol returns null" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), extReceiverType: "", extIsStatic: false };
+	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultTexts: [], overloadDefaultTexts: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "bar");
@@ -567,7 +584,7 @@ test "getStaticExtTypeName" {
 
 test "static extension in registry" {
 	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "floor", receiverTypeName: "Math", sourcePath: "", fnType: unknownType(), isStatic: true };
+	const m: ExtensionMethod = { methodName: "floor", receiverTypeName: "Math", sourcePath: "", fnType: unknownType(), isStatic: true, sym: null as unknown as Symbol };
 	registerExtension(r, m);
 	const found = findExtension(r, "Math", "floor");
 	check(found !== null);
@@ -576,7 +593,7 @@ test "static extension in registry" {
 
 test "instance extension isStatic false" {
 	const r = createExtensionRegistry();
-	const m: ExtensionMethod = { methodName: "trim", receiverTypeName: "string", sourcePath: "", fnType: unknownType(), isStatic: false };
+	const m: ExtensionMethod = { methodName: "trim", receiverTypeName: "string", sourcePath: "", fnType: unknownType(), isStatic: false, sym: null as unknown as Symbol };
 	registerExtension(r, m);
 	const found = findExtension(r, "string", "trim");
 	check(found !== null);

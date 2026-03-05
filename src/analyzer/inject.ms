@@ -1037,12 +1037,25 @@ function processFuncBodyWithParams(body: Node, fnName: string, paramNames: strin
 function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation): Node {
 	const d = stmt.data as VariableDeclData;
 
-	// Look up declared type from symbol table
+	// Prefer nodeType from checker (set on the VariableDecl during check pass)
+	// Fall back to symbol table lookup only if nodeType is absent
 	if (dctx.ctx.checkerCtx === null) return stmt;
-	const sym = lookupSymbol(dctx.ctx.checkerCtx.table, d.declName);
-	if (sym === null) return stmt;
+	let varType: Type = null as unknown as Type;
+	if (stmt.nodeType !== null) {
+		varType = stmt.nodeType;
+	} else {
+		const sym = lookupSymbol(dctx.ctx.checkerCtx.table, d.declName);
+		// Only use symbol if it's a Variable/Parameter — avoid name collisions with extension methods
+		if (sym !== null && (sym.symbolKind === SymbolKind.Variable || sym.symbolKind === SymbolKind.Parameter)) {
+			varType = sym.symbolType;
+		} else if (sym !== null && sym.symbolKind === SymbolKind.Function) {
+			// Name collision: local variable shadowed by function — skip RC
+			return stmt;
+		}
+	}
+	if (varType === null) return stmt;
 
-	const rcInfo = classifyType(sym.symbolType, dctx.ctx);
+	const rcInfo = classifyType(varType, dctx.ctx);
 	if (!rcInfo.needsCleanup) return stmt;
 
 	// Internal temps ($ prefix) initialized from existing variables are Cursors (Lent).
@@ -1072,13 +1085,13 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 
 	// Object literal: fresh as whole, but RC fields need incref
 	if (init.kind === NodeKind.ObjectLiteral) {
-		emitLiteralFieldCopies(init, sym.symbolType, idx, stmts, dctx, loc);
+		emitLiteralFieldCopies(init, varType, idx, stmts, dctx, loc);
 		return stmt;
 	}
 
 	// Array literal: fresh as whole, but RC elements need incref
 	if (init.kind === NodeKind.ArrayLiteral) {
-		emitArrayElementCopies(init, sym.symbolType, idx, stmts, dctx, loc);
+		emitArrayElementCopies(init, varType, idx, stmts, dctx, loc);
 		return stmt;
 	}
 

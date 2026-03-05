@@ -44,6 +44,10 @@ function markCall(node: Node): Node {
 	// Handles synthetic/runtime calls (ms* prefix etc.) that may lack symbols.
 	if (sym === null) return node;
 
+	// Runtime-backed functions are always direct calls (never closures).
+	// This catches cross-module @runtime functions whose symbolKind may not propagate.
+	if (sym.nativeName !== "") return node;
+
 	// Function/Method/Class symbols → direct call (default is already true)
 	if (sym.symbolKind === SymbolKind.Function) return node;
 	if (sym.symbolKind === SymbolKind.Method) return node;

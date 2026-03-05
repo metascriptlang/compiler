@@ -10,6 +10,7 @@ import {
 	AwaitExprData, YieldExprData, MoveExprData, OutExprData,
 	HiddenDerefData, HiddenStdConvData,
 	ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData,
+	FunctionDeclData, BlockStmtData, ExprStmtData,
 } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import {
@@ -34,7 +35,6 @@ import {
 } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
 import { resolveAnnotation, ensureShaped } from "./resolvePass";
-import { getDefaultText } from "../parser/context";
 
 // ===== Nim-Aligned Extension Receiver Matching =====
 // Nim's isAttachableRoutineTo() compares nominal types by identity.
@@ -60,7 +60,17 @@ function isReceiverMatch(ext: ExtensionMethod, objType: Type): boolean {
 		unifyType(receiverType, objType, eb);
 		return eb.names.length > 0;
 	}
-	// Concrete: check type compatibility (handles Span coercion)
+	// Concrete array extensions: match only when element types are directly compatible.
+	// Strict check prevents push(this arr: number[]) from falsely matching Node[] or Type[].
+	// Unknown elements fall through to isAssignable (preserves inference-pending behavior).
+	if (receiverType.kind === TypeKind.Array && objType.kind === TypeKind.Array) {
+		const recvElem = receiverType.typeReturn;
+		const objElem = objType.typeReturn;
+		if (recvElem === null || objElem === null) return false;
+		if (recvElem.kind !== TypeKind.Unknown && objElem.kind !== TypeKind.Unknown) {
+			return isAssignable(objElem, recvElem);
+		}
+	}
 	return isAssignable(objType, receiverType);
 }
 
@@ -87,7 +97,7 @@ function filterExtsByReceiverType(exts: ExtensionMethod[], objType: Type): Exten
 
 // ===== Expression Checker =====
 
-export function checkExpr(ctx: CheckerContext, node: Node): Type {
+export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): Type {
 	// Nim parity: skip already-checked nodes (nfSem guard)
 	if ((node.flags & NF_SEM) !== 0 && node.nodeType !== null) return node.nodeType;
 	if (isCancelled(ctx.cancelCtx, ctx.cancelVersion)) return unknownType();
@@ -112,26 +122,28 @@ export function checkExpr(ctx: CheckerContext, node: Node): Type {
 		},
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
-			const leftType = checkExpr(ctx, d.left);
-			const rightType = checkExpr(ctx, d.right);
+			const leftType = checkExpr(ctx, d.left, null as unknown as Type);
+			// For assignment, pass LHS type as expectedType to RHS
+			const rightExpected = (d.operator === "=") ? leftType : null as unknown as Type;
+			const rightType = checkExpr(ctx, d.right, rightExpected);
 			inferBinaryOp(d.operator, leftType, rightType);
 		},
 		NodeKind.UnaryExpr => {
 			const d = node.data as UnaryExprData;
-			checkExpr(ctx, d.operand);
+			checkExpr(ctx, d.operand, null as unknown as Type);
 			inferUnaryOp(d.unaryOp);
 		},
 		NodeKind.UpdateExpr => {
 			const d = node.data as UpdateExprData;
-			checkExpr(ctx, d.updateArg);
+			checkExpr(ctx, d.updateArg, null as unknown as Type);
 			numberType();
 		},
-		NodeKind.CallExpr => checkCallExpr(ctx, node),
+		NodeKind.CallExpr => checkCallExpr(ctx, node, expectedType),
 		NodeKind.MemberExpr => checkMemberExpr(ctx, node),
 		NodeKind.ArrayAccess => {
 			const d = node.data as ArrayAccessData;
-			const arrType = checkExpr(ctx, d.array);
-			checkExpr(ctx, d.index);
+			const arrType = checkExpr(ctx, d.array, null as unknown as Type);
+			checkExpr(ctx, d.index, null as unknown as Type);
 			// Range access: arr[start..end] returns Span<elemType>
 			if (d.index.kind === NodeKind.BinaryExpr) {
 				const bd = d.index.data as BinaryExprData;
@@ -147,48 +159,76 @@ export function checkExpr(ctx: CheckerContext, node: Node): Type {
 		},
 		NodeKind.ObjectLiteral => {
 			const d = node.data as ObjectLiteralData;
-			for (const prop of d.properties) {
-				checkExpr(ctx, prop);
+			if (expectedType !== null && expectedType.kind === TypeKind.Object
+				&& expectedType.typeChildren !== null) {
+				// Nim parity: stamp literal with expected type, propagate field types
+				node.nodeType = expectedType;
+				let fi = 0;
+				while (fi < d.properties.length) {
+					const fieldExpected = (fi < expectedType.typeChildren.length)
+						? expectedType.typeChildren[fi]
+						: null as unknown as Type;
+					checkExpr(ctx, d.properties[fi], fieldExpected);
+					fi = fi + 1;
+				}
+				expectedType;
+			} else {
+				for (const prop of d.properties) {
+					checkExpr(ctx, prop, null as unknown as Type);
+				}
+				unknownType();
 			}
-			unknownType();
 		},
 		NodeKind.ArrayLiteral => {
 			const d = node.data as ArrayLiteralData;
+			const elemExpected = (expectedType !== null
+				&& (expectedType.kind === TypeKind.Array || expectedType.kind === TypeKind.SizedArray)
+				&& expectedType.typeReturn !== null)
+				? expectedType.typeReturn
+				: null as unknown as Type;
 			if (d.elements.length === 0) {
-				createArray(unknownType());
+				if (expectedType !== null && (expectedType.kind === TypeKind.Array || expectedType.kind === TypeKind.SizedArray)) {
+					expectedType;
+				} else {
+					createArray(unknownType());
+				}
 			} else {
-				const elemType = checkExpr(ctx, d.elements[0]);
+				const elemType = checkExpr(ctx, d.elements[0], elemExpected);
 				let i = 1;
-				while (i < d.elements.length) { checkExpr(ctx, d.elements[i]); i += 1; }
-				createArray(elemType);
+				while (i < d.elements.length) { checkExpr(ctx, d.elements[i], elemExpected); i += 1; }
+				if (expectedType !== null && (expectedType.kind === TypeKind.Array || expectedType.kind === TypeKind.SizedArray)) {
+					expectedType;
+				} else {
+					createArray(elemType);
+				}
 			}
 		},
 		NodeKind.ArrowFunction => checkArrowExpr(ctx, node),
 		NodeKind.FunctionExpr => checkFuncExpr(ctx, node),
 		NodeKind.ConditionalExpr => {
 			const d = node.data as ConditionalExprData;
-			checkExpr(ctx, d.ternaryCondition);
-			const consequentType = checkExpr(ctx, d.ternaryConsequent);
-			checkExpr(ctx, d.ternaryAlternate);
+			checkExpr(ctx, d.ternaryCondition, null as unknown as Type);
+			const consequentType = checkExpr(ctx, d.ternaryConsequent, expectedType);
+			checkExpr(ctx, d.ternaryAlternate, expectedType);
 			consequentType;
 		},
 		NodeKind.TypeAssertion => {
 			const d = node.data as TypeAssertionData;
-			checkExpr(ctx, d.asExpr);
+			checkExpr(ctx, d.asExpr, null as unknown as Type);
 			const targetType = (d.asType !== "") ? resolveAnnotation(d.asType, ctx) : unknownType();
 			node.nodeType = targetType;
 			targetType;
 		},
 		NodeKind.SpreadExpr => {
 			const d = node.data as SpreadExprData;
-			checkExpr(ctx, d.spreadArg);
+			checkExpr(ctx, d.spreadArg, null as unknown as Type);
 			unknownType();
 		},
 		NodeKind.NewExpr => {
 			const d = node.data as NewExprData;
-			const calleeType = checkExpr(ctx, d.newCallee);
+			const calleeType = checkExpr(ctx, d.newCallee, null as unknown as Type);
 			for (const arg of d.newArguments) {
-				checkExpr(ctx, arg);
+				checkExpr(ctx, arg, null as unknown as Type);
 			}
 			if (calleeType.kind === TypeKind.Object) {
 				calleeType;
@@ -196,20 +236,16 @@ export function checkExpr(ctx: CheckerContext, node: Node): Type {
 				unknownType();
 			}
 		},
-		NodeKind.TryExpr => {
-			const d = node.data as TryExprData;
-			checkExpr(ctx, d.tryArg);
-			unknownType();
-		},
+		NodeKind.TryExpr => checkTryExpr(ctx, node),
 		NodeKind.MatchExpr => checkMatchExpr(ctx, node),
 		NodeKind.AwaitExpr => {
 			const d = node.data as AwaitExprData;
-			checkExpr(ctx, d.awaitArg);
+			checkExpr(ctx, d.awaitArg, null as unknown as Type);
 			unknownType();
 		},
 		NodeKind.YieldExpr => {
 			const d = node.data as YieldExprData;
-			checkExpr(ctx, d.yieldArg);
+			checkExpr(ctx, d.yieldArg, null as unknown as Type);
 			unknownType();
 		},
 		NodeKind.MoveExpr => {
@@ -221,20 +257,20 @@ export function checkExpr(ctx: CheckerContext, node: Node): Type {
 				&& d.moveArg.kind !== NodeKind.CallExpr) {
 				addError(ctx, "invalid 'move' operand: expected identifier, field access, array access, or call expression");
 			}
-			checkExpr(ctx, d.moveArg);
+			checkExpr(ctx, d.moveArg, null as unknown as Type);
 		},
 		NodeKind.OutExpr => {
 			const d = node.data as OutExprData;
-			checkExpr(ctx, d.outArg);
+			checkExpr(ctx, d.outArg, null as unknown as Type);
 			unknownType();
 		},
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => {
 			const d = node.data as HiddenDerefData;
-			checkExpr(ctx, d.expr);
+			checkExpr(ctx, d.expr, null as unknown as Type);
 		},
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
 			const d = node.data as HiddenStdConvData;
-			checkExpr(ctx, d.convExpr);
+			checkExpr(ctx, d.convExpr, null as unknown as Type);
 			d.convType;
 		},
 		_ => unknownType(),
@@ -334,9 +370,24 @@ function defaultTextToNode(text: string): Node {
 function fillDefaultArgsForNode(ctx: CheckerContext, callNode: Node, fnName: string,
 	totalParams: number): void {
 	const cd = callNode.data as CallExprData;
+	// Get defaults from Symbol (works for both same-module and cross-module)
+	let fnDefaults: string[] = null as unknown as string[];
+	if (cd.callee.resolvedSym !== null) {
+		// Prefer Symbol.defaultParamText (set by resolvePass + collectPass cross-module)
+		if (cd.callee.resolvedSym.defaultParamText !== null && cd.callee.resolvedSym.defaultParamText.length > 0) {
+			fnDefaults = cd.callee.resolvedSym.defaultParamText;
+		} else if (cd.callee.resolvedSym.declNode !== null && cd.callee.resolvedSym.declNode.kind === NodeKind.FunctionDecl) {
+			// Fallback: read from FunctionDeclData.fnDefaults (same-module, declNode is the actual FunctionDecl)
+			const declData = cd.callee.resolvedSym.declNode.data as FunctionDeclData;
+			if (declData.fnDefaults !== null) fnDefaults = declData.fnDefaults;
+		}
+	}
 	let argIdx = cd.arguments.length;
 	while (argIdx < totalParams) {
-		const text = getDefaultText(fnName, argIdx);
+		let text = "";
+		if (fnDefaults !== null && argIdx < fnDefaults.length) {
+			text = fnDefaults[argIdx];
+		}
 		if (text === "") { argIdx = argIdx + 1; continue; }
 		const defNode = defaultTextToNode(text);
 		cd.arguments.push(defNode);
@@ -344,16 +395,32 @@ function fillDefaultArgsForNode(ctx: CheckerContext, callNode: Node, fnName: str
 	}
 }
 
+// ===== TryExpr =====
+
+function checkTryExpr(ctx: CheckerContext, node: Node): Type {
+	const d = node.data as TryExprData;
+	const argType = checkExpr(ctx, d.tryArg, null as unknown as Type);
+	// Store full Result<T,E> on node for resultDesugar to access .ok/.value/.error
+	node.nodeType = argType;
+	if (d.hasCatch) {
+		checkExpr(ctx, d.catchVal, null as unknown as Type);
+	}
+	// TryExpr evaluates to T (unwrapped value), not Result<T,E>
+	if (argType !== null && argType.kind === TypeKind.Result && argType.typeReturn !== null) {
+		return argType.typeReturn;
+	}
+	return argType;
+}
+
 // ===== Call Expression + Overload Resolution =====
 
-function checkCallExpr(ctx: CheckerContext, node: Node): Type {
+function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Type {
 	const d = node.data as CallExprData;
-	const argTypes: Type[] = [];
-	for (const arg of d.arguments) {
-		const argType = checkExpr(ctx, arg);
-		argTypes.push(argType);
-	}
-	let calleeType = checkExpr(ctx, d.callee);
+	// Check callee FIRST to get param types for expectedType propagation (Nim parity)
+	let calleeType = checkExpr(ctx, d.callee, null as unknown as Type);
+	// Detect overloaded paths early — these need argTypes for scoring
+	let needsOverloadScoring = false;
+	let overloadSym: Symbol = null as unknown as Symbol;
 	// Check for overloads + set resolvedSym for direct calls
 	if (d.callee.kind === NodeKind.Identifier) {
 		const calleeName = (d.callee.data as IdentifierData).name;
@@ -363,7 +430,8 @@ function checkCallExpr(ctx: CheckerContext, node: Node): Type {
 			ensureShaped(sym, ctx);
 			node.resolvedSym = sym;
 			if (hasOverloads(sym)) {
-				return resolveOverloadCall(ctx, sym, argTypes, node);
+				needsOverloadScoring = true;
+				overloadSym = sym;
 			}
 		}
 	} else if (d.callee.kind === NodeKind.MemberExpr) {
@@ -382,7 +450,8 @@ function checkCallExpr(ctx: CheckerContext, node: Node): Type {
 				const staticType = createTypeRef("typeof " + objType.typeName);
 				const ext = findFirstMatchingExt(allByName, staticType);
 				if (ext !== null) {
-					const extSym = lookupSymbol(ctx.table, ext.methodName);
+					// Direct sym link — no name-based lookup
+					const extSym = ext.sym !== null ? ext.sym : lookupSymbol(ctx.table, ext.methodName);
 					if (extSym !== null) {
 						ensureShaped(extSym, ctx);
 						node.resolvedSym = extSym;
@@ -396,16 +465,50 @@ function checkCallExpr(ctx: CheckerContext, node: Node): Type {
 			}
 		}
 	}
+	// Check args — with expectedType from callee params for non-overloaded calls
+	const argTypes: Type[] = [];
+	let ai = 0;
+	while (ai < d.arguments.length) {
+		let paramExpected = null as unknown as Type;
+		if (!needsOverloadScoring && calleeType.kind === TypeKind.Function
+			&& calleeType.typeChildren !== null
+			&& ai < calleeType.typeChildren.length) {
+			paramExpected = calleeType.typeChildren[ai];
+		}
+		const argType = checkExpr(ctx, d.arguments[ai], paramExpected);
+		argTypes.push(argType);
+		ai = ai + 1;
+	}
+	// Overloaded direct calls — use argTypes for scoring
+	if (needsOverloadScoring) {
+		return resolveOverloadCall(ctx, overloadSym, argTypes, node);
+	}
 	// Extension method overloads: obj.method(args) where multiple extensions match
 	// Nim-aligned: collect all extensions by name, then filter by receiver type compatibility
+	// Skip when objType is Unknown — can't meaningfully select an overload
 	if (d.callee.kind === NodeKind.MemberExpr && ctx.extensionRegistry !== null) {
 		const me = d.callee.data as MemberExprData;
 		const objType = me.object.nodeType;
-		if (objType !== null) {
+		if (objType !== null && objType.kind !== TypeKind.Unknown) {
 			const allByName = findAllExtensionsByName(ctx.extensionRegistry, me.property);
 			const filtered = filterExtsByReceiverType(allByName, objType);
-			if (filtered.length > 1) {
-				return resolveExtensionOverloadCall(ctx, filtered, argTypes, objType, me.property);
+			if (filtered.length === 1) {
+				// Single match — use directly
+				const winner = filtered[0];
+				if (winner.sym !== null) node.resolvedSym = winner.sym;
+				// Strip receiver and return inferred type
+				let srcType = winner.fnType;
+				if (!winner.isStatic && srcType.typeChildren.length > 0) {
+					if (hasGenericParams(srcType)) {
+						const eb = createUnifyBindings();
+						unifyType(srcType.typeChildren[0], objType, eb);
+						if (eb.names.length > 0) srcType = instantiateGeneric(srcType, eb.names, eb.types);
+					}
+					return inferGenericReturn(srcType, argTypes, expectedType);
+				}
+				return inferGenericReturn(srcType, argTypes, expectedType);
+			} else if (filtered.length > 1) {
+				return resolveExtensionOverloadCall(ctx, filtered, argTypes, objType, me.property, node);
 			}
 		}
 	}
@@ -426,6 +529,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node): Type {
 		// Type-check only provided args (defaults are trusted)
 		for (let pi = 0; pi < calleeType.typeChildren.length && pi < argTypes.length; pi += 1) {
 			const paramType = calleeType.typeChildren[pi];
+			if (argTypes[pi] === null || argTypes[pi] === undefined) continue;
 			if (paramType.kind !== TypeKind.Unknown && paramType.kind !== TypeKind.GenericParam
 				&& paramType.kind !== TypeKind.Function
 				&& argTypes[pi].kind !== TypeKind.Unknown && argTypes[pi].kind !== TypeKind.Error
@@ -443,20 +547,26 @@ function checkCallExpr(ctx: CheckerContext, node: Node): Type {
 				}
 			}
 		}
-		return inferGenericReturn(calleeType, argTypes);
+		return inferGenericReturn(calleeType, argTypes, expectedType);
 	}
 	return getReturnType(calleeType);
 }
 
-export function inferGenericReturn(fnType: Type, argTypes: Type[]): Type {
+export function inferGenericReturn(fnType: Type, argTypes: Type[], expectedType: Type): Type {
 	let returnType = fnType.typeReturn;
 	if (returnType === null) return unknownType();
 	// Collect all bindings from all params via unification (handles nested generics)
 	const b = createUnifyBindings();
 	for (let i = 0; i < fnType.typeChildren.length && i < argTypes.length; i += 1) {
-		if (argTypes[i].kind !== TypeKind.Unknown) {
+		if (argTypes[i] !== null && argTypes[i] !== undefined && argTypes[i].kind !== TypeKind.Unknown) {
 			unifyType(fnType.typeChildren[i], argTypes[i], b);
 		}
+	}
+	// If expected type is available (e.g. from variable decl or return stmt),
+	// unify return type with it to bind remaining generic params.
+	// This handles Result.ok(x) where T is known from arg but E needs expected type.
+	if (expectedType !== null && expectedType.kind !== TypeKind.Unknown) {
+		unifyType(returnType, expectedType, b);
 	}
 	// Apply all bindings to return type
 	for (let j = 0; j < b.names.length; j += 1) {
@@ -518,13 +628,13 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, argTypes: Type[],
 	if (winner.kind === TypeKind.Function && argTypes.length < winner.typeChildren.length) {
 		fillDefaultArgsForNode(ctx, callNode, sym.name, winner.typeChildren.length);
 	}
-	return inferGenericReturn(winner, argTypes);
+	return inferGenericReturn(winner, argTypes, null as unknown as Type);
 }
 
 // Resolve extension method overloads: multiple extensions match same receiver+method.
 // Each extension's fnType includes the receiver as param[0]; strip it before scoring.
 function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod[],
-	argTypes: Type[], objType: Type, methodName: string): Type {
+	argTypes: Type[], objType: Type, methodName: string, callNode: Node): Type {
 	const candidates: Type[] = [];
 	let ei = 0;
 	while (ei < exts.length) {
@@ -564,10 +674,25 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		scopeDepths.push(0);
 		di = di + 1;
 	}
-	const idx = resolveOverloadIdxWithInheritance(ctx, candidates, argTypes, scopeDepths);
+	let idx = resolveOverloadIdxWithInheritance(ctx, candidates, argTypes, scopeDepths);
 	if (idx === -2) {
-		addError(ctx, "Ambiguous call to overloaded extension method '" + methodName + "'");
-		return getReturnType(candidates[0]);
+		// Tiebreaker: prefer concrete extension over generic (Nim: concrete always wins)
+		let concreteIdx = -1;
+		let concreteCount = 0;
+		let ti = 0;
+		while (ti < exts.length) {
+			if (!hasGenericParams(exts[ti].fnType)) {
+				concreteIdx = ti;
+				concreteCount = concreteCount + 1;
+			}
+			ti = ti + 1;
+		}
+		if (concreteCount === 1) {
+			idx = concreteIdx;
+		} else {
+			addError(ctx, "Ambiguous call to overloaded extension method '" + methodName + "'");
+			return getReturnType(candidates[0]);
+		}
 	}
 	if (idx === -1) {
 		let msg = "No matching overload for extension method '" + methodName + "'\n  Expected one of:";
@@ -581,7 +706,11 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		addError(ctx, msg);
 		return getReturnType(candidates[0]);
 	}
-	return inferGenericReturn(candidates[idx], argTypes);
+	// Set resolvedSym to the winning extension's symbol
+	if (idx >= 0 && idx < exts.length && exts[idx].sym !== null) {
+		callNode.resolvedSym = exts[idx].sym;
+	}
+	return inferGenericReturn(candidates[idx], argTypes, null as unknown as Type);
 }
 
 function formatCandidateSig(name: string, fnType: Type): string {
@@ -710,7 +839,7 @@ function isPointerInC(t: Type, ctx: CheckerContext): boolean {
 
 function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 	const d = node.data as MemberExprData;
-	const objType = checkExpr(ctx, d.object);
+	const objType = checkExpr(ctx, d.object, null as unknown as Type);
 	// Enum member access: Color.Red → rewrite to Identifier "Color_Red" (Nim parity: nkSym)
 	// This rewrites the AST so codegen never sees enum-specific MemberExpr
 	if (objType.kind === TypeKind.Enum) {
@@ -761,9 +890,9 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 						const synthSym = makeSymbol(mName, SymbolKind.Method, objType.typeChildren[mi], false);
 						synthSym.state = SymbolState.Shaped;
 						// Transfer @runtime metadata from Type to Symbol
-						// (collectPass stores runtimeName in Type.typeName for class methods)
+						// (collectPass stores nativeName in Type.typeName for class methods)
 						if (objType.typeChildren[mi].typeName !== "") {
-							synthSym.runtimeName = objType.typeChildren[mi].typeName;
+							synthSym.nativeName = objType.typeChildren[mi].typeName;
 						}
 						node.resolvedSym = synthSym;
 						break;
@@ -856,11 +985,10 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 			ext = findFirstMatchingExt(allByName, staticType);
 		}
 		if (ext !== null) {
-			// Resolve to specific extension symbol
-			const extSym = lookupSymbol(ctx.table, ext.methodName);
-			if (extSym !== null) {
-				ensureShaped(extSym, ctx);
-				node.resolvedSym = extSym;
+			// Direct sym link — no name-based lookup needed
+			if (ext.sym !== null) {
+				ensureShaped(ext.sym, ctx);
+				node.resolvedSym = ext.sym;
 			}
 			// Instance extension: strip receiver param (index 0) so checkCallExpr
 			// sees only user-visible params. The receiver is already in MemberExpr.object.
@@ -895,7 +1023,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 
 function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 	const d = node.data as MatchExprData;
-	const discType = checkExpr(ctx, d.matchDisc);
+	const discType = checkExpr(ctx, d.matchDisc, null as unknown as Type);
 	let returnType = unknownType();
 	let hasWildcard = false;
 	const coveredMembers: string[] = [];
@@ -906,9 +1034,24 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 			if (p.kind === NodeKind.MemberExpr) {
 				const pmd = p.data as MemberExprData;
 				coveredMembers.push(pmd.property);
+				// Check the pattern — triggers enum MemberExpr → Identifier rewrite
+				checkExpr(ctx, p, discType);
 			}
 		}
-		const bodyType = checkExpr(ctx, cd.caseBody);
+		let bodyType = unknownType();
+		if (cd.caseBody.kind === NodeKind.BlockStmt) {
+			// Block arm: check statements inside, infer type from last expression
+			callCheckStmt(ctx, cd.caseBody);
+			const bd = cd.caseBody.data as BlockStmtData;
+			if (bd.statements.length > 0) {
+				const last = bd.statements[bd.statements.length - 1];
+				if (last.kind === NodeKind.ExprStmt) {
+					bodyType = checkExpr(ctx, (last.data as ExprStmtData).expr, null as unknown as Type);
+				}
+			}
+		} else {
+			bodyType = checkExpr(ctx, cd.caseBody, null as unknown as Type);
+		}
 		if (returnType.kind === TypeKind.Unknown && bodyType.kind !== TypeKind.Unknown) {
 			returnType = bodyType;
 		}
@@ -947,7 +1090,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	if (body.kind === NodeKind.BlockStmt) {
 		callCheckStmt(ctx, body);
 	} else {
-		const exprType = checkExpr(ctx, body);
+		const exprType = checkExpr(ctx, body, null as unknown as Type);
 		if (ctx.inferredReturn.kind === TypeKind.Unknown) {
 			ctx.inferredReturn = exprType;
 		}
@@ -977,4 +1120,4 @@ function checkFuncExpr(ctx: CheckerContext, node: Node): Type {
 }
 
 // Register callback at module load time
-registerCheckExpr((ctx: CheckerContext, node: Node): Type => { return checkExpr(ctx, node); });
+registerCheckExpr((ctx: CheckerContext, node: Node, expectedType: Type): Type => { return checkExpr(ctx, node, expectedType); });

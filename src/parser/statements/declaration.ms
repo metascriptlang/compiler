@@ -5,7 +5,7 @@ import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, NodeData, createNode, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, skipDestructurePattern, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, addGenericDecl, updateGenericDeclFields } from "../context";
 import { skipTypeAnnotation } from "../typeAnnotation";
-import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, skipDefaultValue, skipOptionalType } from "../util";
+import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, skipDefaultValue, skipOptionalType, getLastParsedDefaults } from "../util";
 import { callBlockParser, callExprParser } from "./callbacks";
 import { sliceStr } from "../../utils/string";
 import { programOk, stmtKind, stmtAt } from "./validation";
@@ -122,6 +122,7 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 	}
 
 	const raw = parseParamList(state, nameToken.value);
+	const fnDefaults = getLastParsedDefaults();
 	const params = extractParamNames(raw);
 	const fnParamTypes = extractParamTypes(raw);
 	// Check for instance extension: first param has "this:" prefix
@@ -154,6 +155,7 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 			fnBody: try callBlockParser(state),
 			fnFlags: flags,
 			fnReturnType,
+			fnDefaults,
 		}, fnToken));
 	}
 	// Encode generic param names in flags: "gen:T,U"
@@ -171,6 +173,7 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 		fnBody: try callBlockParser(state),
 		fnFlags: flags,
 		fnReturnType,
+		fnDefaults,
 	}, fnToken));
 }
 
@@ -1028,6 +1031,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 			fnBody,
 			fnFlags: "extern",
 			fnReturnType,
+			fnDefaults: getLastParsedDefaults(),
 		}, externToken));
 	}
 

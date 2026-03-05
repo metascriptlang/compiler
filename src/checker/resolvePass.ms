@@ -24,7 +24,7 @@ import { Symbol, SymbolKind, SymbolTable, ScopeKind, lookupSymbol, lookupLocal, 
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError } from "./context";
 import { trimStr, sliceStr, findChar, splitTopLevel, parseIntStr } from "../utils/string";
 import { getProperty } from "./types";
-import { getGenericDecl, getGenericDeclFieldNames, getGenericDeclFieldTypes, addGenericTypeInst, findGenericTypeInstIdx, getDefaultCount, getDefaultText, addDefaultParam } from "../parser/context";
+import { getGenericDecl, getGenericDeclFieldNames, getGenericDeclFieldTypes, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
 import { check } from "std/testing";
 
 // ===== A. Resolve Annotation Strings =====
@@ -360,7 +360,14 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 	const fnType = createFunction(paramTypes, d.params, returnType);
 
 	// Set minArity for functions with default parameters
-	const defCount = getDefaultCount(d.fnName, d.params.length);
+	let defCount = 0;
+	if (d.fnDefaults !== null) {
+		let di = 0;
+		while (di < d.fnDefaults.length) {
+			if (d.fnDefaults[di] !== "") defCount = defCount + 1;
+			di = di + 1;
+		}
+	}
 	if (defCount > 0) {
 		setMinArity(fnType, d.params.length - defCount);
 	}
@@ -378,6 +385,19 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 				// Ensure overload sym also points to its declNode
 				overload.declNode = node;
 				overload.state = SymbolState.Shaped;
+				// Copy defaults to overload sym for cross-module availability
+				if (d.fnDefaults !== null && d.fnDefaults.length > 0) {
+					overload.defaultParamText = d.fnDefaults;
+				}
+				// Update extension method type for overloads too
+				const extTypeName2 = getExtTypeName(d.fnFlags);
+				if (extTypeName2 !== "" && ctx.extensionRegistry !== null) {
+					const ext2 = findExtension(ctx.extensionRegistry, extTypeName2, d.fnName);
+					if (ext2 !== null) {
+						ext2.fnType = fnType;
+						if (ext2.sym === null) ext2.sym = overload;
+					}
+				}
 				return;
 			}
 		}
@@ -385,11 +405,18 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 
 	sym.symbolType = fnType;
 	node.nodeType = fnType;
+	// Copy defaults to primary sym for cross-module availability
+	if (d.fnDefaults !== null && d.fnDefaults.length > 0) {
+		sym.defaultParamText = d.fnDefaults;
+	}
 	// Update extension method type in registry (instance or static)
 	const extTypeName = getExtTypeName(d.fnFlags);
 	if (extTypeName !== "" && ctx.extensionRegistry !== null) {
 		const ext = findExtension(ctx.extensionRegistry, extTypeName, d.fnName);
-		if (ext !== null) { ext.fnType = fnType; }
+		if (ext !== null) {
+			ext.fnType = fnType;
+			if (ext.sym === null) ext.sym = sym;
+		}
 	}
 }
 
@@ -481,7 +508,7 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 		}
 	}
 
-	// Save collectPass type to preserve decorator metadata (runtimeName/builtinKind on typeName)
+	// Save collectPass type to preserve decorator metadata (nativeName/builtinKind on typeName)
 	const oldType = sym.symbolType;
 
 	// Build Object type — collect members inline
@@ -653,7 +680,7 @@ test "function gets Function type" {
 	defineSymbol(ctx.table, symStub);
 	// Simulate a FunctionDecl node
 	const zl: SourceLocation = { line: 0, column: 0 };
-	const fnNode = createNodeAt(NodeKind.FunctionDecl, { fnName: "foo", params: ["a", "b"], fnParamTypes: ["", ""], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "" }, zl);
+	const fnNode = createNodeAt(NodeKind.FunctionDecl, { fnName: "foo", params: ["a", "b"], fnParamTypes: ["", ""], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "", fnDefaults: [] }, zl);
 	symStub.declNode = fnNode;
 	const node = createNodeAt(NodeKind.Program, { programStmts: [fnNode] }, zl);
 	resolveDeclarations(ctx, node);
@@ -670,7 +697,7 @@ test "function with typed params" {
 	const symStub = makeSymbol("add", SymbolKind.Function, unknownType(), false);
 	defineSymbol(ctx.table, symStub);
 	const zl: SourceLocation = { line: 0, column: 0 };
-	const fnNode = createNodeAt(NodeKind.FunctionDecl, { fnName: "add", params: ["a", "b"], fnParamTypes: ["number", "number"], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "number" }, zl);
+	const fnNode = createNodeAt(NodeKind.FunctionDecl, { fnName: "add", params: ["a", "b"], fnParamTypes: ["number", "number"], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "number", fnDefaults: [] }, zl);
 	symStub.declNode = fnNode;
 	const node = createNodeAt(NodeKind.Program, { programStmts: [fnNode] }, zl);
 	resolveDeclarations(ctx, node);
@@ -687,7 +714,7 @@ test "decorated function gets resolved" {
 	const symStub = makeSymbol("floor", SymbolKind.Function, unknownType(), false);
 	defineSymbol(ctx.table, symStub);
 	const zl: SourceLocation = { line: 0, column: 0 };
-	const fnNode = createNodeAt(NodeKind.FunctionDecl, { fnName: "floor", params: ["x"], fnParamTypes: ["number"], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "number" }, zl);
+	const fnNode = createNodeAt(NodeKind.FunctionDecl, { fnName: "floor", params: ["x"], fnParamTypes: ["number"], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "number", fnDefaults: [] }, zl);
 	symStub.declNode = fnNode;
 	const decoNode = createNodeAt(NodeKind.DecoratedDecl, { decorators: [], decoratedNode: fnNode }, zl);
 	const node = createNodeAt(NodeKind.Program, { programStmts: [decoNode] }, zl);
@@ -808,11 +835,11 @@ test "constrained interface Box<T extends number>" {
 	check(t.typeName === "Box__number");
 }
 
-test "getDefaultCount after parse" {
-	const cnt = getDefaultCount("testFn1", 2);
-	// testFn1 was parsed in util.ms tests — may or may not be available
-	// Direct test: add entry and check
-	addDefaultParam("resolveTestFn", 1, "42");
-	check(getDefaultCount("resolveTestFn", 2) === 1);
-	check(getDefaultText("resolveTestFn", 1) === "42");
+test "fnDefaults on FunctionDeclData" {
+	const zl: SourceLocation = { line: 0, column: 0 };
+	const fnNode = createNodeAt(NodeKind.FunctionDecl, { fnName: "defTest", params: ["a", "b"], fnParamTypes: ["number", "number"], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "", fnDefaults: ["", "42"] }, zl);
+	const d = fnNode.data as FunctionDeclData;
+	check(d.fnDefaults.length === 2);
+	check(d.fnDefaults[0] === "");
+	check(d.fnDefaults[1] === "42");
 }

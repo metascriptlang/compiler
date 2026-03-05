@@ -78,7 +78,7 @@ function recoverKnownField(node: Node, typeName: string, prop: string): void {
 	else if (typeName === "Symbol") {
 		if (prop === "symbolKind") { node.nodeType = registryTypeLookup("SymbolKind"); }
 		else if (prop === "symbolType") { node.nodeType = registryTypeLookup("Type"); }
-		else if (prop === "name" || prop === "runtimeName" || prop === "builtinKind") { node.nodeType = stringType(); }
+		else if (prop === "name" || prop === "nativeName" || prop === "builtinKind") { node.nodeType = stringType(); }
 		else if (prop === "symFlags") { node.nodeType = numberType(); }
 		else if (prop === "declNode") { node.nodeType = registryTypeLookup("Node"); }
 		else if (prop === "overloads") { node.nodeType = registryTypeLookup("msRefArray"); }

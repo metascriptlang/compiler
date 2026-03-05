@@ -420,6 +420,58 @@ export function walkExpandBlocks(node: Node, expander: StmtExpander, ctx: Transf
 			const d = node.data as TestDeclData;
 			walkExpandBlocks(d.testBody, expander, ctx);
 		},
+		// Control flow — recurse into bodies so nested return-match gets expanded
+		NodeKind.IfStmt => {
+			const d = node.data as IfStmtData;
+			walkExpandBlocks(d.consequent, expander, ctx);
+			walkExpandBlocks(d.alternate, expander, ctx);
+		},
+		NodeKind.WhileStmt => {
+			const d = node.data as WhileStmtData;
+			walkExpandBlocks(d.whileBody, expander, ctx);
+		},
+		NodeKind.ForStmt => {
+			const d = node.data as ForStmtData;
+			walkExpandBlocks(d.forBody, expander, ctx);
+		},
+		NodeKind.ForOfStmt => {
+			const d = node.data as ForOfStmtData;
+			walkExpandBlocks(d.forOfBody, expander, ctx);
+		},
+		NodeKind.TryCatchStmt => {
+			const d = node.data as TryCatchStmtData;
+			walkExpandBlocks(d.tryBody, expander, ctx);
+			walkExpandBlocks(d.catchBody, expander, ctx);
+			walkExpandBlocks(d.finallyBody, expander, ctx);
+		},
+		NodeKind.SwitchStmt => {
+			const d = node.data as SwitchStmtData;
+			let i = 0;
+			while (i < d.switchCases.length) {
+				walkExpandBlocks(d.switchCases[i], expander, ctx);
+				i = i + 1;
+			}
+		},
+		NodeKind.SwitchCase => {
+			const d = node.data as SwitchCaseData;
+			let j = 0;
+			while (j < d.caseStmts.length) {
+				walkExpandBlocks(d.caseStmts[j], expander, ctx);
+				j = j + 1;
+			}
+		},
+		NodeKind.DecoratedDecl => {
+			const d = node.data as DecoratedDeclData;
+			walkExpandBlocks(d.decoratedNode, expander, ctx);
+		},
+		NodeKind.ClassDecl => {
+			const d = node.data as ClassDeclData;
+			let i = 0;
+			while (i < d.classBody.length) {
+				walkExpandBlocks(d.classBody[i], expander, ctx);
+				i = i + 1;
+			}
+		},
 		_ => {},
 	};
 }

@@ -12,7 +12,7 @@
 // Only runs for C backend (JS handles string ops natively).
 
 import {
-	Node, NodeKind,
+	Node, NodeKind, SourceLocation,
 	BinaryExprData, ArrayAccessData, StringLiteralData,
 } from "../../ast/node";
 import { TypeKind } from "../../checker/types";
@@ -96,8 +96,11 @@ function rewriteStringOp(node: Node): Node {
 
 	// String concatenation: s + t → msStringConcat(s, t)
 	// Note: 3+ chains already handled by stringConcatFlatten (runs earlier)
+	// Coerce non-string operands (number/boolean) to string
 	if (d.operator === "+") {
-		const result = makeCall(makeIdent("msStringConcat", loc), [d.left, d.right], loc);
+		const left = coercePartToString(d.left, loc);
+		const right = coercePartToString(d.right, loc);
+		const result = makeCall(makeIdent("msStringConcat", loc), [left, right], loc);
 		result.nodeType = node.nodeType;
 		return result;
 	}
@@ -119,6 +122,25 @@ function rewriteStringIndexAssign(arr: Node, idx: Node, val: Node, original: Nod
 }
 
 // ===== Helpers =====
+
+// Coerce non-string operands in string concat context
+function coercePartToString(node: Node, loc: SourceLocation): Node {
+	if (node.kind === NodeKind.StringLiteral) return node;
+	if (node.nodeType !== null && node.nodeType.kind === TypeKind.String) return node;
+	if (node.nodeType !== null) {
+		if (node.nodeType.kind === TypeKind.Number || node.nodeType.kind === TypeKind.Int32 ||
+			node.nodeType.kind === TypeKind.Float32 || node.nodeType.kind === TypeKind.Float64) {
+			return makeCall(makeIdent("msNumberToString", loc), [node], loc);
+		}
+		if (node.nodeType.kind === TypeKind.Boolean) {
+			return makeCall(makeIdent("msNumberToString", loc), [node], loc);
+		}
+	}
+	if (node.kind === NodeKind.NumberLiteral) {
+		return makeCall(makeIdent("msNumberToString", loc), [node], loc);
+	}
+	return node;
+}
 
 function isStringTyped(node: Node): boolean {
 	if (node === null) return false;

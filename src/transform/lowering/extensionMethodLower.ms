@@ -70,9 +70,13 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 	// Static extension: Math.floor(x) → floor(x) — no receiver prepend
 	if (ext !== null && ext.isStatic) {
 		const newCall = makeCall(makeIdent(methodName, loc), call.arguments, loc);
-		// Propagate resolvedSym from the registry/table
-		const extSym = lookupSymbol(ctx.checkerCtx.table, methodName);
-		if (extSym !== null) newCall.resolvedSym = extSym;
+		// Trust resolvedSym from checker; fallback to lookupSymbol for unchecked paths
+		if (node.resolvedSym !== null) {
+			newCall.resolvedSym = node.resolvedSym;
+		} else {
+			const extSym = lookupSymbol(ctx.checkerCtx.table, methodName);
+			if (extSym !== null) newCall.resolvedSym = extSym;
+		}
 		newCall.nodeType = node.nodeType;
 		return newCall;
 	}
@@ -83,9 +87,13 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 		newArgs.push(call.arguments[ai]);
 	}
 	const newCall = makeCall(makeIdent(methodName, loc), newArgs, loc);
-	// Propagate resolvedSym
-	const extSym = lookupSymbol(ctx.checkerCtx.table, methodName);
-	if (extSym !== null) newCall.resolvedSym = extSym;
+	// Trust resolvedSym from checker; fallback to lookupSymbol for unchecked paths
+	if (node.resolvedSym !== null) {
+		newCall.resolvedSym = node.resolvedSym;
+	} else {
+		const extSym = lookupSymbol(ctx.checkerCtx.table, methodName);
+		if (extSym !== null) newCall.resolvedSym = extSym;
+	}
 	newCall.nodeType = node.nodeType;
 	return newCall;
 }
@@ -120,6 +128,7 @@ function makeTrimExt(): ExtensionMethod {
 		sourcePath: "",
 		fnType: createFunction([], [], unknownType()),
 		isStatic: false,
+		sym: null as unknown as Symbol,
 	};
 	return ext;
 }
@@ -131,6 +140,7 @@ function makePushExt(): ExtensionMethod {
 		sourcePath: "",
 		fnType: createFunction([unknownType()], ["x"], unknownType()),
 		isStatic: false,
+		sym: null as unknown as Symbol,
 	};
 	return ext;
 }
@@ -177,6 +187,7 @@ test "class member takes priority over extension" {
 		sourcePath: "",
 		fnType: createFunction([], [], unknownType()),
 		isStatic: false,
+		sym: null as unknown as Symbol,
 	};
 	registerExtension(cc.extensionRegistry, ext);
 	const fnSym = makeSymbol("run", SymbolKind.Function, ext.fnType, false);
@@ -209,6 +220,7 @@ test "static extension no receiver prepend" {
 		sourcePath: "",
 		fnType: createFunction([unknownType()], ["x"], unknownType()),
 		isStatic: true,
+		sym: null as unknown as Symbol,
 	};
 	registerExtension(cc.extensionRegistry, ext);
 	const fnSym = makeSymbol("floor", SymbolKind.Function, ext.fnType, false);

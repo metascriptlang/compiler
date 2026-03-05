@@ -2,7 +2,7 @@
 // Lives at parser/ level to avoid circular imports between expressions/ and statements/
 
 import { Token, TokenKind } from "../lexer/token";
-import { ParserState, createState, current, advance, isAtEnd, skipDestructurePattern, addDefaultParam, getDefaultText, getDefaultCount } from "./context";
+import { ParserState, createState, current, advance, isAtEnd, skipDestructurePattern } from "./context";
 import { skipTypeAnnotation } from "./typeAnnotation";
 import { lex } from "../lexer/lexer";
 import { check } from "std/testing";
@@ -65,8 +65,19 @@ export function skipDefaultValue(state: ParserState): void {
 // Handles: rest params, destructured params, type annotations, default values,
 // constructor modifiers (public/private/protected/readonly)
 
+// Module-level: defaults from the last parseParamList call.
+// Indexed by param position (0-based). Empty string = no default.
+let _lastDefaults: string[] = [];
+
+// Get defaults from the most recent parseParamList call.
+// Returns array parallel to params: "" for no default, text otherwise.
+export function getLastParsedDefaults(): string[] {
+	return _lastDefaults;
+}
+
 export function parseParamList(state: ParserState, fnName: string): string[] {
 	const params: string[] = [];
+	_lastDefaults = [];
 	if (current(state).kind !== TokenKind.LParen) { return params; }
 	advance(state);
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RParen) {
@@ -118,7 +129,8 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 						dti = dti + 1;
 					}
 					const dIdx = (params.length - 2) / 2;
-					addDefaultParam(fnName, dIdx, dText);
+					while (_lastDefaults.length < dIdx) { _lastDefaults.push(""); }
+					_lastDefaults.push(dText);
 				}
 			}
 			if (current(state).kind === TokenKind.Comma) { advance(state); } else { break; }
@@ -143,7 +155,8 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 					ti = ti + 1;
 				}
 				const paramIdx = (params.length - 2) / 2;
-				addDefaultParam(fnName, paramIdx, defaultText);
+				while (_lastDefaults.length < paramIdx) { _lastDefaults.push(""); }
+				_lastDefaults.push(defaultText);
 			}
 		}
 		if (current(state).kind === TokenKind.Comma) { advance(state); } else { break; }
@@ -175,21 +188,26 @@ function parseParams(input: string, fnName: string): string[] {
 	return parseParamList(state, fnName);
 }
 
-test "capture number default" {
+test "capture number default via getLastParsedDefaults" {
 	const raw = parseParams("(x: number, y: number = 5)", "testFn1");
 	check(raw.length === 4);
-	const text = getDefaultText("testFn1", 1);
-	check(text === "5");
+	const defs = getLastParsedDefaults();
+	check(defs.length === 2);
+	check(defs[0] === "");
+	check(defs[1] === "5");
 }
 
-test "getDefaultCount" {
+test "multiple defaults via getLastParsedDefaults" {
 	parseParams("(a: number, b: number = 1, c: number = 2)", "testFn2");
-	check(getDefaultCount("testFn2", 3) === 2);
+	const defs = getLastParsedDefaults();
+	check(defs.length === 3);
+	check(defs[0] === "");
+	check(defs[1] === "1");
+	check(defs[2] === "2");
 }
 
-test "no default returns empty" {
+test "no default returns empty array" {
 	parseParams("(x: number, y: string)", "testFn3");
-	check(getDefaultText("testFn3", 0) === "");
-	check(getDefaultText("testFn3", 1) === "");
-	check(getDefaultCount("testFn3", 2) === 0);
+	const defs = getLastParsedDefaults();
+	check(defs.length === 0);
 }

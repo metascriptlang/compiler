@@ -217,9 +217,11 @@ export function makeSwitchCase(tests: Node[], stmts: Node[], isDefault: boolean,
 // ===== Declaration Builders =====
 
 export function makeFnDecl(name: string, fnParams: string[], paramTypes: string[], body: Node, flags: string, returnType: string, loc: SourceLocation): Node {
+	const emptyDefaults: string[] = [];
 	const n = createNode(NodeKind.FunctionDecl, {
 		fnName: name, params: fnParams, fnParamTypes: paramTypes,
 		fnBody: body, fnFlags: flags, fnReturnType: returnType,
+		fnDefaults: emptyDefaults,
 	}, syntheticToken(loc));
 	// Build Type from string annotations for codegen (Nim parity: every decl has nodeType)
 	const resolvedParams: Type[] = [];
@@ -265,6 +267,13 @@ function resolveSimpleTypeStr(annotation: string): Type {
 
 export function makeObjectLiteral(keys: string[], values: Node[], loc: SourceLocation): Node {
 	return createNode(NodeKind.ObjectLiteral, { properties: values, keys }, syntheticToken(loc));
+}
+
+// Typed variant: creates an ObjectLiteral with a known Type (Nim parity: nkObjConstr + type)
+export function makeTypedObjectLiteral(keys: string[], values: Node[], t: Type, loc: SourceLocation): Node {
+	const n = createNode(NodeKind.ObjectLiteral, { properties: values, keys }, syntheticToken(loc));
+	if (t !== null) { n.nodeType = t; }
+	return n;
 }
 
 export function makeHiddenAddr(inner: Node, loc: SourceLocation): Node {

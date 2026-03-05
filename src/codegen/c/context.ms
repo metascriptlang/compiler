@@ -405,7 +405,6 @@ export interface CGen {
 	stringPool: StringPool;    // interned string literals
 	declaredProcs: NameSet;    // prevents duplicate prototypes
 	declaredThings: NameSet;   // prevents duplicate declarations
-	knownEnumNames: NameSet;   // cross-module enum type names (for Member.Access → Member_Access)
 	knownTypeNames: NameSet;   // cross-module type names (enums + structs, for TypeReference resolution)
 	knownClassNames: NameSet;  // cross-module class names (need pointer semantics: Name*)
 	checkerCtx: CheckerContext;
@@ -428,7 +427,6 @@ export function createCGen(ctx: CheckerContext, modulePath: string): CGen {
 		stringPool: createStringPool(),
 		declaredProcs: createNameSet(),
 		declaredThings: createNameSet(),
-		knownEnumNames: createNameSet(),
 		knownTypeNames: createNameSet(),
 		knownClassNames: createNameSet(),
 		checkerCtx: ctx,

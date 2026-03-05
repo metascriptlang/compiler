@@ -627,6 +627,7 @@ function walkNode(node: Node): Node {
 		return createNode(NodeKind.FunctionDecl, {
 			fnName: d.fnName, params: d.params, fnParamTypes: d.fnParamTypes,
 			fnBody: newBody, fnFlags: d.fnFlags, fnReturnType: d.fnReturnType,
+			fnDefaults: d.fnDefaults,
 		}, synthToken(node.location));
 	} else if (node.kind === NodeKind.IfStmt) {
 		const d = node.data as IfStmtData;

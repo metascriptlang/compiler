@@ -9,9 +9,10 @@
 // Chains of length 2 are left as binary (no benefit from flattening).
 
 import {
-	Node, NodeKind,
+	Node, NodeKind, SourceLocation,
 	BinaryExprData, StringLiteralData,
 } from "../../ast/node";
+import { TypeKind } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent, makeNumber } from "../util";
@@ -48,13 +49,35 @@ function flattenConcat(node: Node): Node {
 
 	// Build single variadic call: msStringConcatMany(N, a, b, c, ...)
 	// One allocation, one pass — eliminates intermediate string allocations.
+	// Non-string parts get wrapped in msNumberToString/msBoolToString.
 	const loc = node.location;
 	const countNode = makeNumber(parts.length, loc);
 	const allArgs: Node[] = [countNode];
 	for (const p of parts) {
-		allArgs.push(p);
+		allArgs.push(coerceToString(p, loc));
 	}
 	return makeCall(makeIdent("msStringConcatMany", loc), allArgs, loc);
+}
+
+// Wrap non-string parts in conversion calls for C backend
+function coerceToString(node: Node, loc: SourceLocation): Node {
+	// Already a string literal — no conversion needed
+	if (node.kind === NodeKind.StringLiteral) return node;
+	// Check nodeType (set by checker) for numeric/boolean types
+	if (node.nodeType !== null) {
+		if (node.nodeType.kind === TypeKind.Number || node.nodeType.kind === TypeKind.Int32 ||
+			node.nodeType.kind === TypeKind.Float32 || node.nodeType.kind === TypeKind.Float64) {
+			return makeCall(makeIdent("msNumberToString", loc), [node], loc);
+		}
+		if (node.nodeType.kind === TypeKind.Boolean) {
+			return makeCall(makeIdent("msNumberToString", loc), [node], loc);
+		}
+	}
+	// Syntactic fallback: NumberLiteral → always numeric
+	if (node.kind === NodeKind.NumberLiteral) {
+		return makeCall(makeIdent("msNumberToString", loc), [node], loc);
+	}
+	return node;
 }
 
 // Recursively collect parts from a left-associative + chain

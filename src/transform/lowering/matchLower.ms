@@ -17,7 +17,7 @@ import {
 	Node, NodeKind, DeclKind, SourceLocation,
 	BlockStmtData,
 	MatchStmtData, MatchExprData, MatchCaseData,
-	VariableDeclData, ReturnStmtData, ExprStmtData,
+	VariableDeclData, ReturnStmtData, ExprStmtData, IfStmtData,
 	IdentifierData, NumberLiteralData, StringLiteralData,
 } from "../../ast/node";
 import { TransformContext, freshTemp } from "../context";
@@ -62,6 +62,10 @@ function expandMatchStmt(stmt: Node, ctx: TransformContext): Node[] {
 			if (d.expr.kind === NodeKind.MatchStmt) {
 				return lowerMatchStmt(d.expr, ctx);
 			}
+			if (d.expr.kind === NodeKind.MatchExpr) {
+				// MatchExpr at statement position (discards value) — lower as stmt
+				return lowerMatchExprAsStmt(d.expr, ctx);
+			}
 		},
 		_ => {},
 	};
@@ -84,6 +88,20 @@ function lowerMatchStmt(matchNode: Node, ctx: TransformContext): Node[] {
 	const ifChain = buildIfChain(d.matchStmtCases, tempName, discType, loc, "stmt", "");
 	result.push(ifChain);
 
+	return result;
+}
+
+// ===== MatchExpr at statement position (value discarded) =====
+
+function lowerMatchExprAsStmt(matchNode: Node, ctx: TransformContext): Node[] {
+	const d = matchNode.data as MatchExprData;
+	const loc = matchNode.location;
+	const tempName = freshTemp(ctx, "match");
+	const result: Node[] = [];
+	result.push(makeVarDecl(tempName, d.matchDisc, DeclKind.Const, loc));
+	const discType = d.matchDisc.nodeType;
+	const ifChain = buildIfChain(d.matchCases, tempName, discType, loc, "stmt", "");
+	result.push(ifChain);
 	return result;
 }
 
@@ -142,6 +160,13 @@ function buildIfChain(cases: Node[], tempName: string, discType: Type, loc: Sour
 		return buildHashSwitch(cases, tempName, discType, loc, mode, varName);
 	}
 
+	// Check if any case is a wildcard/binding — if not, last arm becomes the else
+	let hasDefault = false;
+	for (let ci = 0; ci < cases.length; ci += 1) {
+		const cd = cases[ci].data as MatchCaseData;
+		if (isWildcard(cd.casePatterns) || isBindingPattern(cd.casePatterns)) { hasDefault = true; }
+	}
+
 	let elseNode = makeBlock([], loc);
 
 	for (let i = cases.length - 1; i >= 0; i -= 1) {
@@ -163,6 +188,13 @@ function buildIfChain(cases: Node[], tempName: string, discType: Type, loc: Sour
 			continue;
 		}
 
+		// No wildcard and this is the last arm → use as unconditional else
+		// (checker verified exhaustiveness, so this is safe)
+		if (!hasDefault && i === cases.length - 1) {
+			elseNode = body;
+			continue;
+		}
+
 		const cond = buildPatternCondition(caseData.casePatterns, tempName, discType, loc);
 		elseNode = makeIf(cond, body, elseNode, loc);
 	}
@@ -170,12 +202,56 @@ function buildIfChain(cases: Node[], tempName: string, discType: Type, loc: Sour
 	return elseNode;
 }
 
+// ===== moveInto — Unified Result Destination Insertion =====
+// Nim pattern: jsgen.nim moveInto + semexprs.nim
+// Pushes the "result destination" (return or assignment) into terminal positions.
+// C has no expression-blocks — this makes each arm produce a statement-level result.
+
 function wrapArmBody(armBody: Node, mode: string, varName: string, loc: SourceLocation): Node {
-	return match (mode) {
-		"assign" => makeBlock([makeExprStmt(makeAssign(makeIdent(varName, loc), armBody, loc), loc)], loc),
-		"return" => makeBlock([makeReturn(armBody, loc)], loc),
-		_ => armBody,
-	};
+	if (mode === "stmt") return armBody;
+	return moveInto(armBody, mode, varName, loc);
+}
+
+// Recursive: walks into blocks and if-else to find terminal expressions.
+// Returns a new node with return/assign inserted at every terminal position.
+function moveInto(node: Node, mode: string, varName: string, loc: SourceLocation): Node {
+	// BlockStmt: keep leading stmts, moveInto the last one
+	if (node.kind === NodeKind.BlockStmt) {
+		const bd = node.data as BlockStmtData;
+		if (bd.statements.length === 0) return node;
+		const newStmts: Node[] = [];
+		let si = 0;
+		while (si < bd.statements.length - 1) {
+			newStmts.push(bd.statements[si]);
+			si = si + 1;
+		}
+		newStmts.push(moveInto(bd.statements[bd.statements.length - 1], mode, varName, loc));
+		return makeBlock(newStmts, loc);
+	}
+	// IfStmt: recurse into both branches
+	if (node.kind === NodeKind.IfStmt) {
+		const d = node.data as IfStmtData;
+		d.consequent = moveInto(d.consequent, mode, varName, loc);
+		if (d.alternate !== null) {
+			d.alternate = moveInto(d.alternate, mode, varName, loc);
+		}
+		return node;
+	}
+	// ExprStmt: unwrap and wrap in return/assign
+	if (node.kind === NodeKind.ExprStmt) {
+		const expr = (node.data as ExprStmtData).expr;
+		return emitResult(expr, mode, varName, loc);
+	}
+	// Bare expression (not wrapped in ExprStmt): wrap directly
+	return emitResult(node, mode, varName, loc);
+}
+
+// Emit the final result: either return expr or varName = expr
+function emitResult(expr: Node, mode: string, varName: string, loc: SourceLocation): Node {
+	if (mode === "return") {
+		return makeReturn(expr, loc);
+	}
+	return makeExprStmt(makeAssign(makeIdent(varName, loc), expr, loc), loc);
 }
 
 function prependToBody(decl: Node, body: Node, loc: SourceLocation): Node {
@@ -201,12 +277,14 @@ function isWildcard(patterns: Node[]): boolean {
 	return id.name === "_";
 }
 
-// Check if pattern list is a binding (single identifier, not _, not a literal/member)
+// Check if pattern list is a binding (single identifier, not _, not a literal/member/enum-rewrite)
 function isBindingPattern(patterns: Node[]): boolean {
 	if (patterns.length !== 1) return false;
 	if (patterns[0].kind !== NodeKind.Identifier) return false;
 	const id = patterns[0].data as IdentifierData;
 	if (id.name === "_") return false;
+	// If the identifier has a resolvedSym, it's an enum value (rewritten from MemberExpr by checker), not a binding
+	if (patterns[0].resolvedSym !== null) return false;
 	return true;
 }
 

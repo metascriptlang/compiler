@@ -18,7 +18,7 @@ import { Type, TypeKind, createSizedArray, createPtr } from "../../checker/types
 import { TransformContext, freshTemp } from "../context";
 import { walkNode } from "../walker";
 import {
-	makeMember, makeObjectLiteral, makeNumber, makeBinary,
+	makeMember, makeTypedObjectLiteral, makeNumber, makeBinary,
 	makeVarDecl, makeTypedIdent, makeHiddenAddr,
 } from "../util";
 
@@ -49,23 +49,17 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 						// Note: C backend handles .p->data for Array member access
 						const dataExpr = makeMember(d.convExpr, "data", loc);
 						const lenExpr = makeMember(d.convExpr, "length", loc);
-						const spanInit = makeObjectLiteral(["data", "len"], [dataExpr, lenExpr], loc);
-						spanInit.nodeType = targetType;
-						return spanInit;
+						return makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], targetType, loc);
 					} else if (srcType.kind === TypeKind.SizedArray) {
 						// SizedArray -> Span: { data: arr.data, len: N }
 						const dataExpr = makeMember(d.convExpr, "data", loc);
 						const lenExpr = makeNumber(srcType.typeFlags, loc);
-						const spanInit = makeObjectLiteral(["data", "len"], [dataExpr, lenExpr], loc);
-						spanInit.nodeType = targetType;
-						return spanInit;
+						return makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], targetType, loc);
 					} else if (srcType.kind === TypeKind.String) {
 						// String -> Span<char>: { data: str.data, len: str.len }
 						const dataExpr2 = makeMember(d.convExpr, "data", loc);
 						const lenExpr2 = makeMember(d.convExpr, "len", loc);
-						const spanInit2 = makeObjectLiteral(["data", "len"], [dataExpr2, lenExpr2], loc);
-						spanInit2.nodeType = targetType;
-						return spanInit2;
+						return makeTypedObjectLiteral(["data", "len"], [dataExpr2, lenExpr2], targetType, loc);
 					}
 				}
 			}
@@ -133,9 +127,7 @@ function lowerRangeAccess(node: Node, ctx: TransformContext): Node {
 		lenExpr = makeBinary(lenExpr, "+", makeNumber(1, loc), loc);
 	}
 
-	const spanInit = makeObjectLiteral(["data", "len"], [dataExpr, lenExpr], loc);
-	spanInit.nodeType = resultType;
-	return spanInit;
+	return makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], resultType, loc);
 }
 
 // ===== Stack-Promoted Literals =====
@@ -152,9 +144,7 @@ function lowerLiteralToSpan(literal: Node, spanType: Type, ctx: TransformContext
 		const loc = literal.location;
 		const dataExpr = makeNumber(0, loc); // NULL pointer
 		const lenExpr = makeNumber(0, loc);
-		const spanInit = makeObjectLiteral(["data", "len"], [dataExpr, lenExpr], loc);
-		spanInit.nodeType = spanType;
-		return spanInit;
+		return makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], spanType, loc);
 	}
 
 	const loc = literal.location;
@@ -175,8 +165,7 @@ function lowerLiteralToSpan(literal: Node, spanType: Type, ctx: TransformContext
 	const tempRef = makeTypedIdent(tempName, sizedType, loc);
 	const dataExpr = makeMember(tempRef, "data", loc);
 	const lenExpr = makeNumber(elemCount, loc);
-	const spanInit = makeObjectLiteral(["data", "len"], [dataExpr, lenExpr], loc);
-	spanInit.nodeType = spanType;
+	const spanInit = makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], spanType, loc);
 
 	// Wrap in a block expression: { const temp = [...]; { data: temp.data, len: N } }
 	// Since we can't easily create block expressions, we use a pattern where

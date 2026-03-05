@@ -35,9 +35,10 @@ export class Symbol {
 	location: SourceLocation;
 	declNode: Node;
 	overloads: Symbol[];
-	runtimeName: string;
+	nativeName: string;
 	builtinKind: string;
 	symFlags: number;
+	defaultParamText: string[];
 }
 
 // ===== Node Flags (Nim parity: TNodeFlags) =====
@@ -161,7 +162,7 @@ export type NodeData =
 	| { argument: Node }                                           // ReturnStmt
 	| { breakLabel: string }                                       // BreakStmt
 	| { continueLabel: string }                                    // ContinueStmt
-	| { fnName: string, params: string[], fnParamTypes: string[], fnBody: Node, fnFlags: string, fnReturnType: string } // FunctionDecl
+	| { fnName: string, params: string[], fnParamTypes: string[], fnBody: Node, fnFlags: string, fnReturnType: string, fnDefaults: string[] } // FunctionDecl
 	| { doBody: Node, doCondition: Node }                          // DoWhileStmt
 	| { switchDisc: Node, switchCases: Node[] }                    // SwitchStmt
 	| { caseTests: Node[], caseStmts: Node[], isDefault: boolean } // SwitchCase
@@ -271,7 +272,7 @@ export type ForOfStmtData = { forOfBinding: string, forOfIsConst: boolean, forOf
 export type ForInStmtData = { forInBinding: string, forInIsConst: boolean, forInObject: Node, forInBody: Node };
 export type DoWhileStmtData = { doBody: Node, doCondition: Node };
 export type BlockStmtData = { statements: Node[] };
-export type FunctionDeclData = { fnName: string, params: string[], fnParamTypes: string[], fnBody: Node, fnFlags: string, fnReturnType: string };
+export type FunctionDeclData = { fnName: string, params: string[], fnParamTypes: string[], fnBody: Node, fnFlags: string, fnReturnType: string, fnDefaults: string[] };
 export type SwitchStmtData = { switchDisc: Node, switchCases: Node[] };
 export type SwitchCaseData = { caseTests: Node[], caseStmts: Node[], isDefault: boolean };
 export type MatchStmtData = { matchStmtDisc: Node, matchStmtCases: Node[] };

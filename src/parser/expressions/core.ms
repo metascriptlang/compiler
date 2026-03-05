@@ -287,7 +287,8 @@ function parsePrimary(state: ParserState): ExprResult {
 	// Try expression: try expr [catch defaultValue]
 	if (token.kind === TokenKind.Try) {
 		advance(state);
-		const arg = try parsePrimary(state);
+		// Parse full expression (not just primary) so try f(x) → TryExpr(CallExpr(f, [x]))
+		const arg = try parseExprWithPrec(state, 0);
 		if (!isAtEnd(state) && current(state).kind === TokenKind.Catch) {
 			advance(state);
 			const catchExpr = try parseExprWithPrec(state, 0);

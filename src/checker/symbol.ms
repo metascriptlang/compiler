@@ -134,8 +134,9 @@ export function makeSymbol(name: string, kind: SymbolKind, symType: Type, mutabl
 	sym.location = { line: 0, column: 0 };
 	sym.declNode = null as unknown as Node;
 	sym.overloads = [];
-	sym.runtimeName = "";
+	sym.nativeName = "";
 	sym.builtinKind = "";
+	sym.defaultParamText = [];
 	sym.symFlags = mutable ? SF_MUTABLE : SF_NONE;
 	return sym;
 }

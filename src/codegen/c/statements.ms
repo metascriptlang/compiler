@@ -37,6 +37,12 @@ function isStructType(t: Type): boolean {
 	};
 }
 
+function isNumericCType(cType: string): boolean {
+	return cType === "double" || cType === "float" || cType === "bool"
+		|| cType === "int32_t" || cType === "int64_t" || cType === "int16_t" || cType === "int8_t"
+		|| cType === "uint8_t" || cType === "uint16_t" || cType === "uint32_t" || cType === "uint64_t";
+}
+
 function isNrvoCallSite(callNode: Node): boolean {
 	// Only apply NRVO when callee is a known Function (not runtime macros)
 	const cd = callNode.data as CallExprData;
@@ -147,6 +153,9 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 		} else if (d.initializer.kind === NodeKind.NullLiteral && isStructType(node.nodeType)) {
 			// D2 fix: struct-type null init → {0} instead of MS_NIL
 			emitStmtsLine(p, cType + " " + varName + " = {0};");
+		} else if (d.initializer.kind === NodeKind.NullLiteral && isNumericCType(cType)) {
+			// Numeric-type null init → 0 instead of MS_NIL (DRC-hoisted primitives)
+			emitStmtsLine(p, cType + " " + varName + " = 0;");
 		} else if (d.initializer.kind === NodeKind.ArrayLiteral && (d.initializer.data as ArrayLiteralData).elements.length === 0) {
 			// Empty array: use declared type for zero-init (avoids msRefArray default)
 			emitStmtsLine(p, cType + " " + varName + " = (" + cType + "){0};");

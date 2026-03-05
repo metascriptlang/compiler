@@ -51,14 +51,14 @@ function collectDecorated(ctx: CheckerContext, node: Node): void {
 	if (sym === null) return;
 	const info = extractDecoratorInfo(node);
 	// For overloaded functions, the new function was just pushed as the last overload.
-	// Set runtimeName/builtinKind on the correct symbol (not the primary).
+	// Set nativeName/builtinKind on the correct symbol (not the primary).
 	// CRITICAL: must write directly through array index — intermediate variable creates a clone (DRC #25).
 	if (sym.overloads.length > 0) {
 		const idx = sym.overloads.length - 1;
-		if (info.runtimeName !== "") sym.overloads[idx].runtimeName = info.runtimeName;
+		if (info.nativeName !== "") sym.overloads[idx].nativeName = info.nativeName;
 		if (info.builtinKind !== "") sym.overloads[idx].builtinKind = info.builtinKind;
 	} else {
-		if (info.runtimeName !== "") sym.runtimeName = info.runtimeName;
+		if (info.nativeName !== "") sym.nativeName = info.nativeName;
 		if (info.builtinKind !== "") sym.builtinKind = info.builtinKind;
 	}
 }
@@ -78,7 +78,15 @@ export function defineOrError(ctx: CheckerContext, sym: Symbol, node: Node): voi
 
 function collectFunction(ctx: CheckerContext, node: Node): void {
 	const d = node.data as FunctionDeclData;
-	// Register extension (instance or static) if applicable
+	// Define symbol first — needed so extension can link to it
+	const sym = makeSymbol(d.fnName, SymbolKind.Function, unknownType(), false);
+	// Extern functions are FFI bindings — implicitly exported for cross-module use
+	if (d.fnFlags === "extern" || d.fnFlags.indexOf("extern") >= 0) {
+		setFlag(sym, SF_EXPORTED);
+		setFlag(sym, SF_IMPORT_C);
+	}
+	defineOrError(ctx, sym, node);
+	// Register extension (instance or static) with direct sym link
 	const extTypeName = getExtTypeName(d.fnFlags);
 	if (extTypeName !== "" && ctx.extensionRegistry !== null) {
 		const extMethod: ExtensionMethod = {
@@ -87,17 +95,10 @@ function collectFunction(ctx: CheckerContext, node: Node): void {
 			sourcePath: "",
 			fnType: unknownType(),
 			isStatic: isStaticExtensionFlag(d.fnFlags),
+			sym: sym,
 		};
 		registerExtension(ctx.extensionRegistry, extMethod);
 	}
-	// Always define as top-level symbol too (for direct calls)
-	const sym = makeSymbol(d.fnName, SymbolKind.Function, unknownType(), false);
-	// Extern functions are FFI bindings — implicitly exported for cross-module use
-	if (d.fnFlags === "extern" || d.fnFlags.indexOf("extern") >= 0) {
-		setFlag(sym, SF_EXPORTED);
-		setFlag(sym, SF_IMPORT_C);
-	}
-	defineOrError(ctx, sym, node);
 }
 
 function collectClass(ctx: CheckerContext, node: Node): void {
@@ -121,8 +122,8 @@ function collectClass(ctx: CheckerContext, node: Node): void {
 				const md = dd.decoratedNode.data as MethodDeclData;
 				const fnType = createFunction([], [], unknownType());
 				const info = extractDecoratorInfo(member);
-				if (info.runtimeName !== "") {
-					fnType.typeName = info.runtimeName;
+				if (info.nativeName !== "") {
+					fnType.typeName = info.nativeName;
 				}
 				if (info.builtinKind !== "") {
 					fnType.typeName = info.builtinKind;
@@ -218,19 +219,45 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 				if (exportInfo !== null) {
 					// Use actual type and kind from source module
 					defineOrError(ctx, makeSymbol(localAlias, exportInfo.kind, exportInfo.symType, false), node);
+					const primarySym = lookupLocal(ctx.table, localAlias);
+					// Restore cross-module metadata (nativeName, builtinKind, defaults)
+					if (primarySym !== null) {
+						if (exportInfo.nativeName !== "") primarySym.nativeName = exportInfo.nativeName;
+						if (exportInfo.builtinKind !== "") primarySym.builtinKind = exportInfo.builtinKind;
+						if (exportInfo.defaultTexts !== null && exportInfo.defaultTexts.length > 0) primarySym.defaultParamText = exportInfo.defaultTexts;
+					}
 					// Register overloads from source module
-					if (exportInfo.overloadTypes.length > 0) {
-						const primarySym = lookupLocal(ctx.table, localAlias);
-						if (primarySym !== null) {
-							let ovIdx = 0;
-							while (ovIdx < exportInfo.overloadTypes.length) {
-								const ovSym = makeSymbol(localAlias, exportInfo.kind, exportInfo.overloadTypes[ovIdx], false);
-								primarySym.overloads.push(ovSym);
-								ovIdx = ovIdx + 1;
+					if (exportInfo.overloadTypes.length > 0 && primarySym !== null) {
+						let ovIdx = 0;
+						while (ovIdx < exportInfo.overloadTypes.length) {
+							const ovSym = makeSymbol(localAlias, exportInfo.kind, exportInfo.overloadTypes[ovIdx], false);
+							// Restore per-overload cross-module metadata
+							if (exportInfo.overloadNativeNames !== null && ovIdx < exportInfo.overloadNativeNames.length && exportInfo.overloadNativeNames[ovIdx] !== "") {
+								ovSym.nativeName = exportInfo.overloadNativeNames[ovIdx];
 							}
+							if (exportInfo.overloadBuiltinKinds !== null && ovIdx < exportInfo.overloadBuiltinKinds.length && exportInfo.overloadBuiltinKinds[ovIdx] !== "") {
+								ovSym.builtinKind = exportInfo.overloadBuiltinKinds[ovIdx];
+							}
+							if (exportInfo.overloadDefaultTexts !== null && ovIdx < exportInfo.overloadDefaultTexts.length && exportInfo.overloadDefaultTexts[ovIdx] !== null && exportInfo.overloadDefaultTexts[ovIdx].length > 0) {
+								ovSym.defaultParamText = exportInfo.overloadDefaultTexts[ovIdx];
+							}
+							primarySym.overloads.push(ovSym);
+							// Register per-overload extension if it has one
+							if (ctx.extensionRegistry !== null && exportInfo.overloadExtReceiverTypes !== null && ovIdx < exportInfo.overloadExtReceiverTypes.length && exportInfo.overloadExtReceiverTypes[ovIdx] !== "") {
+								const ovExt: ExtensionMethod = {
+									methodName: localAlias,
+									receiverTypeName: exportInfo.overloadExtReceiverTypes[ovIdx],
+									sourcePath: sourcePath,
+									fnType: exportInfo.overloadTypes[ovIdx],
+									isStatic: exportInfo.overloadExtIsStatic[ovIdx],
+									sym: ovSym,
+								};
+								registerExtension(ctx.extensionRegistry, ovExt);
+							}
+							ovIdx = ovIdx + 1;
 						}
 					}
-					// If imported symbol is an extension method, register it locally
+					// If imported symbol is an extension method, register primary locally
 					if (exportInfo.extReceiverType !== "" && ctx.extensionRegistry !== null) {
 						const extMethod: ExtensionMethod = {
 							methodName: localAlias,
@@ -238,6 +265,7 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 							sourcePath: sourcePath,
 							fnType: exportInfo.symType,
 							isStatic: exportInfo.extIsStatic,
+							sym: primarySym !== null ? primarySym : null as unknown as Symbol,
 						};
 						registerExtension(ctx.extensionRegistry, extMethod);
 					}
@@ -456,7 +484,7 @@ test "non-export not marked" {
 
 test "getDeclName function" {
 	const zl: SourceLocation = { line: 0, column: 0 };
-	check(getDeclName(createNodeAt(NodeKind.FunctionDecl, { fnName: "test", params: [], fnParamTypes: [], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "" }, zl)) === "test");
+	check(getDeclName(createNodeAt(NodeKind.FunctionDecl, { fnName: "test", params: [], fnParamTypes: [], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "", fnDefaults: [] }, zl)) === "test");
 }
 
 test "collect variables in pass 1" {
@@ -515,12 +543,12 @@ test "re-export with alias marks alias exported" {
 	}
 }
 
-test "decorator @runtime sets runtimeName" {
+test "decorator @runtime sets nativeName" {
 	const ctx = collectFromSource("@runtime(\"msFloor\") function floor(x: number): number { return x; }");
 	const sym = lookupSymbol(ctx.table, "floor");
 	check(sym !== null);
 	if (sym !== null) {
-		check(sym.runtimeName === "msFloor");
+		check(sym.nativeName === "msFloor");
 	}
 }
 
@@ -553,7 +581,7 @@ test "no decorator leaves fields empty" {
 	const sym = lookupSymbol(ctx.table, "foo");
 	check(sym !== null);
 	if (sym !== null) {
-		check(sym.runtimeName === "");
+		check(sym.nativeName === "");
 		check(sym.builtinKind === "");
 	}
 }
