@@ -5,7 +5,7 @@ import { check } from "std/testing";
 import { Node, NodeKind } from "../../ast/node";
 import { parseSource } from "../../parser/index";
 import { checkProgram } from "../../checker/index";
-import { transformProgram } from "../../transform/index";
+import { CheckerContext } from "../../checker/context";
 import {
 	RaiserValueKind, RaiserValue,
 	heapObjectGetField, heapObjectGetString, heapObjectGetObjectHandle,
@@ -27,8 +27,7 @@ export function evalSourceFull(code: string): RaiserContext {
 
 export function evalASTFull(program: Node): RaiserContext {
 	const checkerCtx = checkProgram(program);
-	const transformed = transformProgram(program, checkerCtx, false);
-	const mod = generateRaiser(transformed);
+	const mod = generateRaiser(program, checkerCtx);
 	const ctx = createContext();
 	load(ctx, mod);
 	execute(ctx);
@@ -131,7 +130,7 @@ function evalRaiserDirect(code: string): RaiserContext {
 		unreachable;
 		return createContext();
 	}
-	const mod = generateRaiser(parseResult.value);
+	const mod = generateRaiser(parseResult.value, null as unknown as CheckerContext);
 	const ctx = createContext();
 	load(ctx, mod);
 	execute(ctx);
@@ -215,7 +214,7 @@ function evalProject(codes: string[]): RaiserContext {
 		modules.push(input);
 		i = i - 1;
 	}
-	const raiserMod = generateRaiserProject(modules);
+	const raiserMod = generateRaiserProject(modules, null as unknown as CheckerContext);
 	const ctx = createContext();
 	load(ctx, raiserMod);
 	execute(ctx);

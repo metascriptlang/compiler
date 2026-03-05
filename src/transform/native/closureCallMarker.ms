@@ -104,7 +104,7 @@ function makeMemberTestCall(): { prog: Node, cd: CallExprData } {
 }
 
 test "Function symbol is direct call" {
-	const fnType = createFunction([numberType()], voidType());
+	const fnType = createFunction([numberType()], [], voidType());
 	const sym = makeSymbol("foo", SymbolKind.Function, fnType, false);
 	const t = makeTestCall("foo", sym, fnType);
 	markClosureCalls(t.prog, makeCtx());
@@ -112,7 +112,7 @@ test "Function symbol is direct call" {
 }
 
 test "Variable symbol is closure call" {
-	const fnType = createFunction([numberType()], voidType());
+	const fnType = createFunction([numberType()], [], voidType());
 	const sym = makeSymbol("cb", SymbolKind.Variable, fnType, false);
 	const t = makeTestCall("cb", sym, fnType);
 	markClosureCalls(t.prog, makeCtx());
@@ -120,7 +120,7 @@ test "Variable symbol is closure call" {
 }
 
 test "Parameter symbol is closure call" {
-	const fnType = createFunction([numberType()], voidType());
+	const fnType = createFunction([numberType()], [], voidType());
 	const sym = makeSymbol("handler", SymbolKind.Parameter, fnType, false);
 	const t = makeTestCall("handler", sym, fnType);
 	markClosureCalls(t.prog, makeCtx());
@@ -140,7 +140,7 @@ test "MemberExpr callee is always direct" {
 }
 
 test "closure call sets CcClosure callConv" {
-	const fnType = createFunction([numberType()], voidType());
+	const fnType = createFunction([numberType()], [], voidType());
 	const sym = makeSymbol("cb", SymbolKind.Variable, fnType, false);
 	const t = makeTestCall("cb", sym, fnType);
 	markClosureCalls(t.prog, makeCtx());
@@ -150,7 +150,7 @@ test "closure call sets CcClosure callConv" {
 }
 
 test "Method symbol is direct call" {
-	const fnType = createFunction([], voidType());
+	const fnType = createFunction([], [], voidType());
 	const sym = makeSymbol("doStuff", SymbolKind.Method, fnType, false);
 	const t = makeTestCall("doStuff", sym, fnType);
 	markClosureCalls(t.prog, makeCtx());

@@ -487,6 +487,55 @@ msString msStringPadEnd(msString s, int64_t targetLen, msString pad) {
 	return result;
 }
 
+/* ===== Length (Encoding-Aware) ===== */
+
+/* Count UTF-16 code units — TypeScript .length parity.
+   UTF-8 lead byte patterns:
+   0xxxxxxx = 1-byte (ASCII) → 1 UTF-16 unit
+   110xxxxx = 2-byte → 1 UTF-16 unit
+   1110xxxx = 3-byte → 1 UTF-16 unit (BMP)
+   11110xxx = 4-byte → 2 UTF-16 units (surrogate pair) */
+int64_t msStringLength(msString s) {
+	if (s.len == 0 || s.p == NULL) return 0;
+	const unsigned char* p = (const unsigned char*)s.p->data;
+	const unsigned char* end = p + s.len;
+	int64_t count = 0;
+	while (p < end) {
+		unsigned char c = *p;
+		if (c < 0x80) {
+			p += 1;
+			count += 1;
+		} else if ((c & 0xE0) == 0xC0) {
+			p += 2;
+			count += 1;
+		} else if ((c & 0xF0) == 0xE0) {
+			p += 3;
+			count += 1;
+		} else {
+			p += 4;
+			count += 2; /* surrogate pair */
+		}
+	}
+	return count;
+}
+
+/* Count Unicode scalar values (codepoints) */
+int64_t msStringUnicodeLength(msString s) {
+	if (s.len == 0 || s.p == NULL) return 0;
+	const unsigned char* p = (const unsigned char*)s.p->data;
+	const unsigned char* end = p + s.len;
+	int64_t count = 0;
+	while (p < end) {
+		unsigned char c = *p;
+		if (c < 0x80) p += 1;
+		else if ((c & 0xE0) == 0xC0) p += 2;
+		else if ((c & 0xF0) == 0xE0) p += 3;
+		else p += 4;
+		count += 1;
+	}
+	return count;
+}
+
 /* ===== Building ===== */
 
 msString msStringConcat(msString a, msString b) {
@@ -538,6 +587,7 @@ msString msStringConcatMany(int64_t count, ...) {
 
 void msStringSetChar(msString* s, int64_t idx, msString ch) {
 	if (idx < 0 || idx >= s->len || s->p == NULL) return;
+	msStringPrepareMutation(s);
 	if (ch.len > 0 && ch.p != NULL) {
 		s->p->data[idx] = ch.p->data[0];
 	} else {

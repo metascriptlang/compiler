@@ -27,6 +27,7 @@ import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 // ===== Detection =====
 
 function getArrayMethodName(node: Node): string {
+	if (node === null) return "";
 	if (node.kind !== NodeKind.CallExpr) return "";
 	const cd = node.data as CallExprData;
 	if (cd.callee.kind !== NodeKind.MemberExpr) return "";

@@ -169,6 +169,15 @@ msString msStringReverse(msString s);
 msString msStringPadStart(msString s, int64_t targetLen, msString pad);
 msString msStringPadEnd(msString s, int64_t targetLen, msString pad);
 
+/* ===== Length (Encoding-Aware) ===== */
+
+/* Count UTF-16 code units (TypeScript .length parity) */
+/* BMP chars (1-3 UTF-8 bytes) = 1 unit, supplementary (4 bytes) = 2 units */
+int64_t msStringLength(msString s);
+
+/* Count Unicode scalar values (codepoints) */
+int64_t msStringUnicodeLength(msString s);
+
 /* ===== Building ===== */
 
 /* Concatenate two strings into a new one */

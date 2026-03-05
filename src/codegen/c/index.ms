@@ -25,7 +25,7 @@ import {
 } from "./context";
 import { genDecl } from "./declarations";
 import { mangleModuleName, safeName } from "./names";
-import { getSimpleTypeDesc, isNrvoReturnType } from "./types";
+import { getSimpleTypeDesc, isNrvoReturnType, getTypeDesc, anonTypeName, isAnonTypeName, hashToBase36, buildAnonStructDef } from "./types";
 import { Type, TypeKind, isInterfaceType } from "../../checker/types";
 import { mangle } from "./names";
 import { emitStringPoolDecls } from "./literals";
@@ -237,7 +237,8 @@ function typeDescForProto(t: Type): string {
 		return mangle(t.typeName);
 	}
 	if (t.kind === TypeKind.Object) {
-		const name = mangle(t.typeName);
+		// Anonymous/structural types get hash-based names; named types get mangled names
+		const name = isAnonTypeName(t.typeName) ? anonTypeName(t) : mangle(t.typeName);
 		if (isInterfaceType(t)) return name;  // value type struct
 		return name + "*";  // class = pointer to struct
 	}
@@ -293,12 +294,30 @@ function typeDescForProto(t: Type): string {
 			return "msClosure";
 		}
 		if (t.typeName === "unknown" || t.typeName === "undefined" || t.typeName === "any" || t.typeName === "never") return "void*";
+		// Anonymous type aliases (discriminated union variants) → hash-based name
+		if (isAnonTypeName(t.typeName)) {
+			const anonName = "msAnon_" + hashToBase36(t.typeName);
+			emitProtoAnonStruct(anonName, t.typeName);
+			return anonName;
+		}
 		// Named type ref — use mangled name (forward decl should exist)
 		return mangle(t.typeName);
 	}
 	if (t.kind === TypeKind.Void || t.kind === TypeKind.Null) return "void";
 	// Fallback for Unknown, Any, Union, etc.
 	return "void*";
+}
+
+// Emit an anonymous struct definition into protoResultTypeDefs.
+// Delegates to buildAnonStructDef (types.ms) for parsing and C mapping.
+function emitProtoAnonStruct(structName: string, rawName: string): void {
+	let found = false;
+	for (let ri = 0; ri < protoResultTypes.length; ri += 1) {
+		if (protoResultTypes[ri] === structName) { found = true; }
+	}
+	if (found) return;
+	protoResultTypes.push(structName);
+	protoResultTypeDefs.push(buildAnonStructDef(structName, rawName));
 }
 
 // Returns collected Result type struct definitions. Call after ALL modules' prototypes collected.
@@ -464,6 +483,93 @@ function typeDeclFromInner(node: Node): string {
 		return typeDeclFromInner(d.decoratedNode);
 	}
 	return "";
+}
+
+// ===== CGen-Based Exported Type Collection =====
+// Uses getTypeDesc() for recursive topological ordering of struct bodies.
+// Forward decls go to CSection.ForwardDecls, struct bodies to CSection.Types.
+
+export function emitExportedTypesViaCGen(g: CGen, program: Node): void {
+	if (program === null || program.kind !== NodeKind.Program) return;
+	const pd = program.data as ProgramData;
+	for (let i = 0; i < pd.programStmts.length; i += 1) {
+		emitTypeDeclViaCGen(g, pd.programStmts[i]);
+	}
+}
+
+function emitTypeDeclViaCGen(g: CGen, node: Node): void {
+	if (node === null) return;
+	if (node.kind === NodeKind.ExportDecl) {
+		const d = node.data as ExportDeclData;
+		emitTypeDeclViaCGenInner(g, d.exportedDecl);
+	} else if (node.kind === NodeKind.DecoratedDecl) {
+		const d = node.data as DecoratedDeclData;
+		emitTypeDeclViaCGen(g, d.decoratedNode);
+	}
+}
+
+function emitTypeDeclViaCGenInner(g: CGen, node: Node): void {
+	if (node === null) return;
+	if (node.kind === NodeKind.EnumDecl || node.kind === NodeKind.InterfaceDecl || node.kind === NodeKind.ClassDecl) {
+		const t = node.nodeType;
+		if (t !== null) {
+			// getTypeDesc recursively emits field type struct bodies BEFORE this type
+			getTypeDesc(g, t);
+		} else {
+			// No Type info — fall back to forward declaration only
+			if (node.kind === NodeKind.EnumDecl) {
+				const d = node.data as EnumDeclData;
+				const name = safeName(d.enumName);
+				addLine(sec(g, CSection.Types), "typedef int32_t " + name + ";");
+				for (let i = 0; i < d.enumMembers.length; i += 1) {
+					addLine(sec(g, CSection.Types), "#define " + name + "_" + d.enumMembers[i] + " (((" + name + ")" + i + "))");
+				}
+			} else if (node.kind === NodeKind.InterfaceDecl) {
+				const d = node.data as InterfaceDeclData;
+				addLine(sec(g, CSection.ForwardDecls), "typedef struct " + safeName(d.interfaceName) + " " + safeName(d.interfaceName) + ";");
+			} else if (node.kind === NodeKind.ClassDecl) {
+				const d = node.data as ClassDeclData;
+				addLine(sec(g, CSection.ForwardDecls), "typedef struct " + safeName(d.className) + " " + safeName(d.className) + ";");
+			}
+		}
+	} else if (node.kind === NodeKind.DecoratedDecl) {
+		const d = node.data as DecoratedDeclData;
+		emitTypeDeclViaCGenInner(g, d.decoratedNode);
+	}
+}
+
+// ===== Register Exported Class Names =====
+// Pre-populates g.knownClassNames so getTypeDesc for TypeReference
+// correctly emits ClassName* for class fields.
+
+export function registerExportedClassNames(g: CGen, program: Node): void {
+	if (program === null || program.kind !== NodeKind.Program) return;
+	const pd = program.data as ProgramData;
+	for (let i = 0; i < pd.programStmts.length; i += 1) {
+		registerClassFromStmt(g, pd.programStmts[i]);
+	}
+}
+
+function registerClassFromStmt(g: CGen, node: Node): void {
+	if (node === null) return;
+	if (node.kind === NodeKind.ExportDecl) {
+		const d = node.data as ExportDeclData;
+		registerClassFromInner(g, d.exportedDecl);
+	} else if (node.kind === NodeKind.DecoratedDecl) {
+		const d = node.data as DecoratedDeclData;
+		registerClassFromStmt(g, d.decoratedNode);
+	}
+}
+
+function registerClassFromInner(g: CGen, node: Node): void {
+	if (node === null) return;
+	if (node.kind === NodeKind.ClassDecl) {
+		const d = node.data as ClassDeclData;
+		nameSetAdd(g.knownClassNames, safeName(d.className));
+	} else if (node.kind === NodeKind.DecoratedDecl) {
+		const d = node.data as DecoratedDeclData;
+		registerClassFromInner(g, d.decoratedNode);
+	}
 }
 
 // ===== Collect Exported Enum Names =====

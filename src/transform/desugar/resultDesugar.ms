@@ -80,7 +80,7 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 		},
 		NodeKind.ReturnStmt => {
 			const d = stmt.data as ReturnStmtData;
-			if (d.argument.kind === NodeKind.TryExpr) {
+			if (d.argument !== null && d.argument.kind === NodeKind.TryExpr) {
 				return expandReturnTry(stmt, ctx);
 			}
 		},

@@ -20,7 +20,8 @@ import {
 import {
 	RaiserModule, RaiserFunction,
 	makeTestModule, getModuleEntry, getModuleFunc,
-	getFuncCodeLen, getFuncInst, getFuncConst
+	getFuncCodeLen, getFuncInst, getFuncConst,
+	createRaiserFunction, createRaiserModule
 } from "./module";
 
 // --- VM State ---

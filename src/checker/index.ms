@@ -5,7 +5,7 @@ import { check } from "std/testing";
 // Re-exports: types.ms
 export { TypeKind, Type } from "./types";
 export {
-	numberType, stringType, booleanType, voidType,
+	numberType, stringType, booleanType, voidType, charType,
 	nullType, unknownType, neverType, errorType,
 } from "./types";
 export {

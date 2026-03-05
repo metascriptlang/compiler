@@ -25,7 +25,7 @@ import {
 	pStmts, getTemp, nameSetHas, emitStmtsLine, internString,
 } from "./context";
 import { mangle, mangleFieldName, safeName } from "./names";
-import { getTypeDesc, isNrvoReturnType } from "./types";
+import { getTypeDesc, isNrvoReturnType, intToString } from "./types";
 import { formatCNumber, cBoolLiteral, cNullLiteral, cStringLiteral, msStringPoolRef } from "./literals";
 import { charAt, sliceStr, findChar } from "../../utils/string";
 import { check } from "std/testing";
@@ -673,6 +673,20 @@ function emitRuntimeCall(g: CGen, p: CProc, runtimeName: string, args: Node[]): 
 
 function genArrayLiteral(g: CGen, p: CProc, node: Node): string {
 	const d = node.data as ArrayLiteralData;
+
+	// Tuple literal: C99 compound literal with designated initializers
+	if (node.nodeType !== null && node.nodeType.kind === TypeKind.Tuple) {
+		const typeName = getTypeDesc(g, node.nodeType);
+		let result = "(" + typeName + "){ ";
+		let i = 0;
+		while (i < d.elements.length) {
+			if (i > 0) result = result + ", ";
+			result = result + "._" + intToString(i) + " = " + genExpr(g, p, d.elements[i]);
+			i += 1;
+		}
+		result = result + " }";
+		return result;
+	}
 
 	// Determine array type name from nodeType (for empty array zero-init)
 	let arrayTypeName = "msRefArray";

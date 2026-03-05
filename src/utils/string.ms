@@ -58,6 +58,19 @@ export function splitTopLevel(s: string, delim: string): string[] {
 	return parts;
 }
 
+export function parseIntStr(s: string): number {
+	let result = 0;
+	let i = 0;
+	while (i < s.length) {
+		const code = s.charCodeAt(i);
+		if (code >= "0".code && code <= "9".code) {
+			result = result * 10 + (code - "0".code);
+		}
+		i = i + 1;
+	}
+	return result;
+}
+
 test "endsWith match" { check(endsWith("hello.ms", ".ms")); }
 
 test "endsWith no match" { check(!endsWith("hello.ms", ".js")); }

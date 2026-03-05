@@ -25,7 +25,8 @@ typedef struct {
 	msDestroyProc destroyFn; /* TypeName_destroy function (NULL if no RC fields) */
 } msTypeInfo;
 
-/* Convenience: initial acyclic TypeInfo (no trace, no destroy) */
+/* Convenience flags for isCyclic field */
 #define MS_ACYCLIC_FLAG false
+#define MS_CYCLIC_FLAG true
 
 #endif /* MS_TYPEINFO_H */

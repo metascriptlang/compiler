@@ -2,6 +2,7 @@
 
 import { argv, exit } from "std/process";
 import { error, bold, cyan, setColorEnabled } from "../utils/color";
+import { parseIntStr } from "../utils/string";
 
 // -- Types --
 
@@ -33,21 +34,6 @@ export interface CliOptions {
 	passC: string;
 	passL: string;
 	emitC: boolean;
-}
-
-// -- Helpers --
-
-function parseIntStr(s: string): number {
-	let result = 0;
-	let i = 0;
-	while (i < s.length) {
-		const code = s.charCodeAt(i);
-		if (code >= "0".code && code <= "9".code) {
-			result = result * 10 + (code - "0".code);
-		}
-		i += 1;
-	}
-	return result;
 }
 
 // -- Argument parsing --

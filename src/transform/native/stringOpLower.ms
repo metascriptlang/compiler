@@ -50,13 +50,13 @@ function rewriteStringOp(node: Node): Node {
 	if (d.operator === "===" || d.operator === "==") {
 		// Optimization: compare against "" → .length === 0
 		if (isEmptyStringLiteral(d.right)) {
-			const lenAccess = makeMember(d.left, "length", loc);
+			const lenAccess = makeMember(d.left, "byteLength", loc);
 			const result = makeBinary(lenAccess, "===", makeNumberLit(0, loc), loc);
 			result.nodeType = node.nodeType;
 			return result;
 		}
 		if (isEmptyStringLiteral(d.left)) {
-			const lenAccess = makeMember(d.right, "length", loc);
+			const lenAccess = makeMember(d.right, "byteLength", loc);
 			const result = makeBinary(lenAccess, "===", makeNumberLit(0, loc), loc);
 			result.nodeType = node.nodeType;
 			return result;
@@ -69,13 +69,13 @@ function rewriteStringOp(node: Node): Node {
 	// String inequality: s !== t → !msStringEquals(s, t)
 	if (d.operator === "!==" || d.operator === "!=") {
 		if (isEmptyStringLiteral(d.right)) {
-			const lenAccess = makeMember(d.left, "length", loc);
+			const lenAccess = makeMember(d.left, "byteLength", loc);
 			const result = makeBinary(lenAccess, "!==", makeNumberLit(0, loc), loc);
 			result.nodeType = node.nodeType;
 			return result;
 		}
 		if (isEmptyStringLiteral(d.left)) {
-			const lenAccess = makeMember(d.right, "length", loc);
+			const lenAccess = makeMember(d.right, "byteLength", loc);
 			const result = makeBinary(lenAccess, "!==", makeNumberLit(0, loc), loc);
 			result.nodeType = node.nodeType;
 			return result;

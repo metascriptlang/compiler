@@ -260,9 +260,11 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 		let ti = 0;
 		while (ti < fieldType.typeChildren.length) {
 			const visited2: NameSet = [];
-			if (ti < fieldType.typeNames.length) {
-				fillBody(hook, xf, yf, fieldType.typeNames[ti], fieldType.typeChildren[ti], lctx, buf, visited2, loc);
-			}
+			// Use named field if available, otherwise positional _0, _1 pattern
+			const tupleFn = (ti < fieldType.typeNames.length && fieldType.typeNames[ti].length > 0)
+				? fieldType.typeNames[ti]
+				: "_" + ti.toString();
+			fillBody(hook, xf, yf, tupleFn, fieldType.typeChildren[ti], lctx, buf, visited2, loc);
 			ti += 1;
 		}
 		return;

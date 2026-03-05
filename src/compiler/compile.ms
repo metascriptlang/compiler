@@ -15,7 +15,12 @@ import { generateJS } from "../codegen/js/index";
 // TEMPORARY: Raiser VM detached for C-backend bootstrap
 // import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
 // import { RaiserContext, createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
-import { generateC, generateCModule, genProjectDispatcher, collectExportedPrototypes, collectExportedTypeDecls, flushResultTypeDecls } from "../codegen/c/index";
+import { generateC, generateCModule, genProjectDispatcher, collectExportedPrototypes, collectExportedTypeDecls, flushResultTypeDecls, emitExportedTypesViaCGen, registerExportedClassNames } from "../codegen/c/index";
+import { createCGen, sec, extract } from "../codegen/c/context";
+// CSection enum indices (from context.ms) — using literals because cross-module
+// enum resolution fails under Bun bootstrap checker ("un-resolved identifier").
+const CSECTION_FORWARD_DECLS = 1;
+const CSECTION_TYPES = 2;
 import { lookupSymbol } from "../checker/symbol";
 import { transformForNative } from "../transform/native/index";
 import { refineTypes } from "../transform/typeRefine";
@@ -175,11 +180,23 @@ let protoModProtos: string[] = [];
 let globalTypeDecls = "";
 
 // Collect exported C prototypes and type declarations from each module.
+// Uses a temporary CGen for type emission — getTypeDesc() handles topological ordering
+// via recursive descent (field types emitted BEFORE containing struct).
 // C header modules (.h) are skipped — their prototypes come from @include.
 function collectPerModulePrototypes(graph: ModuleGraph): void {
 	protoModPaths = [];
 	protoModProtos = [];
 	globalTypeDecls = "";
+
+	// Create a temporary CGen shared across ALL modules for type collection.
+	// This gives us: forward decls in ForwardDecls section, struct bodies in Types section,
+	// with recursive getTypeDesc() ensuring topological ordering.
+	const protoGen = createCGen(null as unknown as CheckerContext, "__protos");
+
+	// Phase 1: Parse + check all modules, register class names in protoGen.
+	// This ensures getTypeDesc for TypeReference correctly emits ClassName* for class fields.
+	const monoed_programs: Node[] = [];
+	const monoed_paths: string[] = [];
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
@@ -189,14 +206,26 @@ function collectPerModulePrototypes(graph: ModuleGraph): void {
 		const ctx = graphRegistry !== null ? checkProgramWithRegistry(pr.value, graphRegistry, graph, mod) : checkProgram(pr.value);
 		ctx.errors = [];
 		const monoed = monomorphizeProgram(pr.value, ctx);
-		const protos = collectExportedPrototypes(monoed);
-		const typeDecls = collectExportedTypeDecls(monoed);
-		protoModPaths.push(modPath);
-		protoModProtos.push(protos);
-		globalTypeDecls = globalTypeDecls + typeDecls;
+		registerExportedClassNames(protoGen, monoed);
+		monoed_programs.push(monoed);
+		monoed_paths.push(modPath);
 	}
-	// Collect Result struct definitions referenced by prototypes
-	globalTypeDecls = globalTypeDecls + flushResultTypeDecls();
+
+	// Phase 2: Emit all exported types via CGen (recursive topological ordering).
+	// Collect function prototypes as before.
+	for (let i = 0; i < monoed_programs.length; i += 1) {
+		emitExportedTypesViaCGen(protoGen, monoed_programs[i]);
+		const protos = collectExportedPrototypes(monoed_programs[i]);
+		protoModPaths.push(monoed_paths[i]);
+		protoModProtos.push(protos);
+	}
+
+	// Phase 3: Extract ForwardDecls FIRST (typedefs break pointer cycles),
+	// then Types (struct bodies in dependency order).
+	const forwardDecls = extract(sec(protoGen, CSECTION_FORWARD_DECLS));
+	const typeBodies = extract(sec(protoGen, CSECTION_TYPES));
+	const resultDecls = flushResultTypeDecls();
+	globalTypeDecls = forwardDecls + typeBodies + resultDecls;
 }
 
 // Get cross-module prototypes for a specific module.

@@ -14,7 +14,7 @@ import {
 import { TokenKind, createToken } from "../lexer/token";
 import {
 	Type, TypeKind,
-	unknownType, numberType, stringType, booleanType,
+	unknownType, numberType, stringType, booleanType, charType,
 	voidType, nullType, errorType,
 	createArray, createSpan, createFunction, createTypeRef, substituteType, instantiateGeneric,
 	isNumeric, isStringType, isCallable, getReturnType, getElementType, getProperty,
@@ -135,8 +135,8 @@ export function checkExpr(ctx: CheckerContext, node: Node): Type {
 			// Range access: arr[start..end] returns Span<elemType>
 			if (d.index.kind === NodeKind.BinaryExpr) {
 				const bd = d.index.data as BinaryExprData;
-				if (bd.operator === "..") {
-					const elemType = getElementType(arrType);
+				if (bd.operator === ".." || bd.operator === "...") {
+					const elemType = (arrType.kind === TypeKind.String) ? charType() : getElementType(arrType);
 					createSpan(elemType);
 				} else {
 					getElementType(arrType);
@@ -673,7 +673,7 @@ function resolveOverloadIdxWithInheritance(ctx: CheckerContext, candidates: Type
 // Check if a type maps to a pointer in C (class, ref, ptr — NOT interface)
 function isPointerInC(t: Type, ctx: CheckerContext): boolean {
 	if (t === null) return false;
-	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) return true;
+	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr || t.kind === TypeKind.Borrow) return true;
 	if (t.kind !== TypeKind.Object) return false;
 	// Interface = value type in C, Class = pointer type
 	const isInterface = (t.typeFlags & 1) !== 0;
@@ -753,6 +753,43 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 		lengthSym.state = SymbolState.Shaped;
 		node.resolvedSym = lengthSym;
 		return numberType();
+	}
+	// String-specific properties: .byteLength, .unicodeLength
+	if ((d.property === "byteLength" || d.property === "unicodeLength") && objType.kind === TypeKind.String) {
+		const propSym = makeSymbol(d.property, SymbolKind.Property, numberType(), false);
+		propSym.state = SymbolState.Shaped;
+		node.resolvedSym = propSym;
+		return numberType();
+	}
+	// Map properties and methods
+	if (objType.kind === TypeKind.Map) {
+		if (d.property === "size") {
+			const sizeSym = makeSymbol("size", SymbolKind.Property, numberType(), false);
+			sizeSym.state = SymbolState.Shaped;
+			node.resolvedSym = sizeSym;
+			return numberType();
+		}
+		// Map methods: get, set, has, delete, clear → function types
+		const valType = objType.typeExtra !== null ? objType.typeExtra : unknownType();
+		const keyType = objType.typeReturn !== null ? objType.typeReturn : unknownType();
+		let methodType: Type = null as unknown as Type;
+		if (d.property === "get") {
+			methodType = createFunction([keyType], ["key"], valType);
+		} else if (d.property === "has") {
+			methodType = createFunction([keyType], ["key"], booleanType());
+		} else if (d.property === "set") {
+			methodType = createFunction([keyType, valType], ["key", "value"], voidType());
+		} else if (d.property === "delete") {
+			methodType = createFunction([keyType], ["key"], booleanType());
+		} else if (d.property === "clear") {
+			methodType = createFunction([], [], voidType());
+		}
+		if (methodType !== null) {
+			const methodSym = makeSymbol(d.property, SymbolKind.Method, methodType, false);
+			methodSym.state = SymbolState.Shaped;
+			node.resolvedSym = methodSym;
+			return methodType;
+		}
 	}
 	// Fall back to extension registry — Nim-aligned type-based lookup
 	if (ctx.extensionRegistry !== null) {

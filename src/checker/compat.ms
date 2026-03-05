@@ -29,11 +29,19 @@ export function isAssignable(source: Type, target: Type): boolean {
 		};
 	}
 
-	// Implicit coercion to Span: T[] -> Span<T> or T[N] -> Span<T>
+	// Implicit coercion to Span: T[] -> Span<T> or T[N] -> Span<T> or string -> Span<char>
 	if (target.kind === TypeKind.Span) {
 		if (source.kind === TypeKind.Array || source.kind === TypeKind.SizedArray) {
 			return isAssignable(source.typeReturn, target.typeReturn);
 		}
+		if (source.kind === TypeKind.String && target.typeReturn !== null && target.typeReturn.kind === TypeKind.Char) {
+			return true;
+		}
+	}
+
+	// Implicit borrow promotion: T -> Borrow<T> (zero-copy const pointer)
+	if (target.kind === TypeKind.Borrow && target.typeReturn !== null) {
+		return isAssignable(source, target.typeReturn);
 	}
 
 	// Unknown on either side: inference pending, allow
@@ -91,9 +99,14 @@ export function needsStdConv(source: Type, target: Type): boolean {
 	if (source.kind === target.kind) return false;
 	// Numeric widening/narrowing: int32→number, float32→number, etc.
 	if (isNumeric(source) && isNumeric(target)) return true;
-	// Array/SizedArray to Span coercion requires struct initializer
+	// Array/SizedArray/String to Span coercion requires struct initializer
 	if (target.kind === TypeKind.Span) {
 		if (source.kind === TypeKind.Array || source.kind === TypeKind.SizedArray) return true;
+		if (source.kind === TypeKind.String && target.typeReturn !== null && target.typeReturn.kind === TypeKind.Char) return true;
+	}
+	// Borrow promotion: T → Borrow<T> (take address)
+	if (target.kind === TypeKind.Borrow && target.typeReturn !== null) {
+		if (source.kind !== TypeKind.Borrow) return true;
 	}
 	return false;
 }

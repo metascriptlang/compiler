@@ -22,6 +22,9 @@
 /* Array runtime (msNumberArray, msStringArray, msRefArray) */
 #include "core/array.h"
 
+/* Map runtime (msMap — string-keyed hash map) */
+#include "core/map.h"
+
 /* ===== Type Aliases (C89 portability + codegen convenience) ===== */
 typedef bool MS_BOOL;
 #define MS_TRUE true
@@ -119,13 +122,13 @@ void msClearException(void);
 #define msClosureSink(d, s)   do { msClosureDestroy(d); (d) = (s); } while(0)
 #define msClosureTrace(c)     /* TODO: ORC trace */
 
-/* --- Map lifecycle (stubs) --- */
-typedef struct { void* impl; } msMap;
-#define msMapFree(m)          do { (m).impl = NULL; } while(0)
-#define msMapCopy(m)          /* no-op stub */
-#define msMapWasMoved(m)      do { (m).impl = NULL; } while(0)
-#define msMapSink(d, s)       do { (d) = (s); } while(0)
-#define msMapTrace(m)         /* no-op stub */
+/* --- Map lifecycle --- */
+/* DRC emits these as fn(varName) — macros handle address-of */
+#define msMapFree(m)          msMapDestroy(&(m))
+#define msMapCopy(m)          do { msMap __mc = msMapCopyFn(m); (m) = __mc; } while(0)
+#define msMapWasMoved(m)      do { (m).len = 0; (m).p = NULL; } while(0)
+#define msMapSink(d, s)       do { msMapDestroy(&(d)); (d) = (s); } while(0)
+#define msMapTrace(m)         /* TODO: ORC trace */
 
 /* --- Set lifecycle (stubs) --- */
 typedef struct { void* impl; } msSet;

@@ -28,6 +28,10 @@ import {
 } from "./context";
 import { compileStmt } from "./statements";
 import { compileExpr } from "./expressions";
+import { CheckerContext, ExportRegistry } from "../../checker/context";
+import { transformForRaiser } from "../../transform/raiserLowering";
+import { refineTypes } from "../../transform/typeRefine";
+import { createTransformContextWithChecker } from "../../transform/context";
 
 // --- Unwrap ExportDecl / DecoratedDecl to find inner declaration of a given kind ---
 
@@ -61,11 +65,11 @@ export function unwrapToClassDecl(node: Node): Node {
 //   Phase 1: Collect FunctionDecl names → assign module indices
 //   Phase 2: Compile each function body + top-level code
 
-export function generateRaiser(program: Node): RaiserModule {
+export function generateRaiser(program: Node, checkerCtx: CheckerContext): RaiserModule {
 	const input: RaiserModuleInput = { modulePath: "main", program: program };
 	const modules: RaiserModuleInput[] = [];
 	modules.push(input);
-	return generateRaiserProject(modules);
+	return generateRaiserProject(modules, checkerCtx);
 }
 
 // --- Expression-body detection ---
@@ -191,8 +195,17 @@ export interface RaiserModuleInput {
 	program: Node;
 }
 
-export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModule {
+export function generateRaiserProject(modules: RaiserModuleInput[], checkerCtx: CheckerContext): RaiserModule {
 	const functions: RaiserFunction[] = [];
+
+	// --- Pass 0: Apply Raiser lowering transforms ---
+	if (checkerCtx !== null) {
+		const txCtx = createTransformContextWithChecker(checkerCtx);
+		for (let mi = 0; mi < modules.length; mi += 1) {
+			modules[mi].program = refineTypes(modules[mi].program, txCtx, null as unknown as ExportRegistry);
+			modules[mi].program = transformForRaiser(modules[mi].program, checkerCtx);
+		}
+	}
 
 	// --- Pass 1: Global declaration collection ---
 	const globalFuncMapItems: RaiserFuncEntry[] = [];
@@ -406,7 +419,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[]): RaiserModul
 export function evalSource(code: string): RaiserContext {
 	const parseResult = parseSource(code);
 	if (!parseResult.ok) return createContext();
-	const mod = generateRaiser(parseResult.value);
+	const mod = generateRaiser(parseResult.value, null as unknown as CheckerContext);
 	const ctx = createContext();
 	load(ctx, mod);
 	execute(ctx);
@@ -421,7 +434,7 @@ function evalRaiser(code: string): RaiserContext {
 		unreachable;
 		return createContext();
 	}
-	const mod = generateRaiser(parseResult.value);
+	const mod = generateRaiser(parseResult.value, null as unknown as CheckerContext);
 	const ctx = createContext();
 	load(ctx, mod);
 	execute(ctx);

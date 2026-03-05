@@ -9,6 +9,7 @@ MetaScript is a systems programming language with TypeScript syntax that compile
 | `number` | IEEE 754 f64 | `double` |
 | `string` | Mutable UTF-8 (TS superset) | `msString` |
 | `boolean` | true/false | `bool` |
+| `char` | 8-bit character | `char` / `int8_t` |
 | `void` | No value | `void` |
 | `never` | Unreachable | N/A |
 | `null` | Null value | `NULL` |
@@ -62,6 +63,7 @@ static    type      unknown
 match     when      unreachable
 defer     distinct  move      out
 macro     quote     extern
+test      expect
 int8      int16     int32     int64
 uint8     uint16    uint32    uint64
 float32   float64   int       float     double
@@ -132,7 +134,8 @@ float32   float64   int       float     double
 | `??` | QUESTION_QUESTION | Nullish coalescing |
 | `?.` | QUESTION_DOT | Optional chaining |
 | `.` | DOT | Member access |
-| `...` | DOT_DOT_DOT | Spread / rest |
+| `..` | DOT_DOT | Exclusive Range (exclusive end) |
+| `...` | DOT_DOT_DOT | Inclusive Range / Spread / Rest |
 | `=>` | ARROW | Arrow function |
 | `\|>` | PIPE_GT | Pipeline operator |
 
@@ -162,10 +165,11 @@ float32   float64   int       float     double
 123n            // BigInt (n suffix, integers only)
 ```
 
-### Strings
+### Strings & Characters
 ```typescript
-"hello"         // Double-quoted
-'world'         // Single-quoted
+"hello"         // Double-quoted string
+'world'         // Single-quoted string
+'a'             // char literal (length 1 single quotes)
 "line\nnext"    // Escape sequences: \n \t \r \\ \" \'
 
 // Character code (compile-time fold, single-char literal only)
@@ -596,32 +600,146 @@ export function floor(x: number): number { unreachable; }
 | `@builtin("Name")` | Inline C (any pattern) | Edit `std/core.ms` + `builtinLower.ms` (compiler rebuild) |
 | `extern function` | Raw C FFI declaration | Edit user code directly |
 
-### Mutable Strings
+## Strings and Characters
 
-MetaScript strings are mutable — a TypeScript superset. All TS string code works unchanged; mutation is purely additive.
+MetaScript provides a high-performance string system that is a systems-programming superset of TypeScript. It adds support for in-place mutation, primitive characters, and zero-copy views.
+
+### 1. The `char` Primitive
+MetaScript introduces `char` as a first-class primitive type (mapped to C `char`/`int8`). 
+
+- **Access**: Accessing a string by index (`s[i]`) returns a `char`, not a string.
+- **Literals**: Character literals use single quotes (e.g., `'a'`).
+- **Numeric**: `char` is a numeric type and can participate in arithmetic or be cast to `number`.
 
 ```typescript
-// TypeScript-compatible (unchanged behavior)
-const s = "hello";            // const → no mutation, no reassignment
-let t = s.slice(1);           // returns new string
-let u = s + " world";         // concat returns new string
-
-// MetaScript extension (new capability)
-let buf = "hello";
-buf[0] = "H";                 // char assignment — TS rejects, MS allows
-buf.add(" world");            // in-place append
-// buf is now "Hello world"
+const c: char = 'A';
+const s = "hello";
+const first: char = s[0]; // Returns 'h' as char
 ```
 
-Rules:
-- `const` strings: immutable (same as TS)
-- `let` strings: reassignable (same as TS) AND mutable (MS extension)
-- `.slice()`, `.replace()`, `+`: return new strings (same as TS)
-- `s[i] = ch`, `.add()`: mutation ops — no existing TS code uses them, purely additive
+### 2. Mutable Strings
+Strings in MetaScript are mutable when declared with `let`. All standard TypeScript string methods (`slice`, `replace`, etc.) remain available and return new strings.
 
-## Three-Tier Array System
+- **`.length`**: Returns the number of characters (UTF-16 code units), matching TypeScript behavior.
+- **`.byteLength`**: Returns the raw number of bytes in the UTF-8 buffer (Systems-optimized).
+- **`.unicodeLength`**: Returns the number of actual Unicode code points.
 
-MetaScript provides three distinct array types to give developers fine-grained control over memory allocation and performance while maintaining TypeScript syntax compatibility.
+```typescript
+let buf = "🚀";
+console.log(buf.length);        // 2 (TS compatibility)
+console.log(buf.byteLength);    // 4 (UTF-8 bytes)
+buf[0] = 'H';                   // Mutation (requires caution with UTF-8)
+```
+
+### 3. Zero-Copy String Views (`Span<char>`)
+To avoid heap allocations when parsing or processing strings, MetaScript allows viewing a `string` as a `Span<char>`. 
+
+- **Zero-Copy Slicing**: Slicing a string with `..` (exclusive) or `...` (inclusive) into a `Span` context performs pointer arithmetic instead of a heap copy.
+- **Unified Params**: Functions taking `Span<char>` can accept both `string` and `Span<char>` arguments zero-copy.
+
+```typescript
+function parseIdent(view: Span<char>): void {
+    // Process characters without allocating tiny strings
+}
+
+const source = "function main()";
+parseIdent(source[0...7]); // Zero-copy view of "function"
+```
+
+### 4. Borrowed References (`Borrow<T>`)
+To achieve peak performance with large structs, MetaScript provides the `Borrow<T>` type (similar to Nim's `lent T`).
+
+- **Purpose**: Avoid memory copies when accessing large objects or array elements.
+- **Behavior**: Passes a pointer instead of copying the struct value.
+- **Safety**: Managed by the analyzer to ensure the borrow does not outlive the owner.
+
+```typescript
+interface LargeData { /* many fields */ }
+const data: LargeData[] = [...];
+
+// No copy: 'item' is a pointer to the element in the array
+const item: Borrow<LargeData> = data[0]; 
+```
+
+### 4. Efficient Concatenation
+The compiler automatically optimizes string concatenation chains (`a + b + c + d`). 
+
+- **Fusion**: Multiple `+` operations are fused into a single variadic call (`msStringConcatMany`).
+- **Single Allocation**: The total length is pre-calculated, resulting in exactly one heap allocation for the entire chain.
+
+---
+
+### Comparison: String vs Span<char>
+
+| Feature | `string` | `Span<char>` |
+| :--- | :--- | :--- |
+| **Ownership** | Owned (Heap/RC) | Borrowed (View) |
+| **Slicing** | Returns new `string` (Copy) | Returns `Span<char>` (Zero-copy) |
+| **Mutation** | Allowed (COW-protected) | Allowed (on source buffer) |
+| **Use Case** | Storage, standard TS code | Parsing, high-perf processing |
+
+## Collections and Compound Types
+
+MetaScript provides a robust set of collection types that map to high-performance C implementations while maintaining TypeScript's ergonomic syntax.
+
+### 1. Map<K, V> (HashMap)
+A high-performance, open-addressing hash table.
+
+- **Implementation**: ARC-managed `msMap` with a Structure-of-Arrays (SoA) layout for optimal cache performance.
+- **Key Types**: Phase 1 supports `string` keys (systems-optimized).
+- **Methods**: `get()`, `set()`, `has()`, `delete()`, `clear()`, and `.size`.
+
+```typescript
+const symbols = new Map<string, Symbol>();
+symbols.set("main", sym);
+if (symbols.has("main")) {
+    const s = symbols.get("main");
+}
+```
+
+### 2. Set<T>
+A collection of unique values, implemented as a wrapper around `Map<T, void>`.
+
+- **Methods**: `add()`, `has()`, `delete()`, `clear()`, and `.size`.
+
+```typescript
+const visited = new Set<string>();
+visited.add("module_a");
+if (visited.has("module_a")) { /* ... */ }
+```
+
+### 3. Tuples
+Fixed-size, heterogeneous collections.
+
+- **Implementation**: Tuples are lowered to **unique C structs** (stack-allocated) rather than heap-allocated arrays.
+- **Access**: Indexed access (`t[0]`) is rewritten to direct struct field access (`t._0`) in C.
+
+```typescript
+function getResponse(): [string, number] {
+    return ["OK", 200];
+}
+
+const [msg, code] = getResponse();
+console.log(msg); // msg is pair._0 in C
+```
+
+### 4. Record<K, V>
+A TypeScript utility type that is semantically identical to `Map<K, V>` in MetaScript.
+
+```typescript
+const registry: Record<string, number> = new Map();
+```
+
+---
+
+### Collection Performance & Memory
+
+| Type | Allocation | Access Time | C Mapping |
+| :--- | :--- | :--- | :--- |
+| `Map<K, V>` | Heap (RC) | O(1) Average | `msMap` |
+| `Set<T>` | Heap (RC) | O(1) Average | `msMap` (value-less) |
+| `Tuple` | **Stack** | O(1) Direct | Custom `struct` |
+| `Array` | Heap (RC) | O(1) Direct | `msArray` |
 
 ### 1. Dynamic Arrays (`T[]`)
 The standard general-purpose array. It is heap-allocated and managed via Deterministic Reference Counting (DRC).
@@ -674,10 +792,15 @@ A non-owning view (pointer + length) into a `T[]` or `T[N]`. This is the MetaScr
 The compiler automatically coerces `T[]` and `T[N]` into a `Span<T>` when passed as function arguments. This allows you to write a single function that accepts any array-like source without performance penalties.
 
 #### Zero-Copy Slicing
-Slicing an array into a `Span` is a zero-cost operation. It performs pointer arithmetic and does not trigger a heap allocation.
+Slicing an array into a `Span` is a zero-cost operation. MetaScript supports both exclusive and inclusive ranges:
+
+- **Exclusive (`..`)**: `arr[start..end]` — slice from `start` to `end` (length = `end - start`). Matches TypeScript `slice` semantics.
+- **Inclusive (`...`)**: `arr[start...end]` — slice from `start` to `end` inclusive (length = `end - start + 1`).
+
 ```typescript
 const items = [10, 20, 30, 40, 50];
-const subView: Span<number> = items[1..3]; // Points to items.data + 1, length 2
+const exc: Span<number> = items[1..3];  // [20, 30] (length 2)
+const inc: Span<number> = items[1...3]; // [20, 30, 40] (length 3)
 ```
 
 #### Lifetime Restrictions (Safety)
@@ -716,6 +839,15 @@ extern const STDIN: FILE;
 ```typescript
 distinct type UserId = number;    // Nominal typing wrapper
 distinct type Email = string;     // Cannot assign string to Email
+```
+
+### Quote Expressions
+```typescript
+// Capture a block of code as an AST (for macros)
+const code = quote {
+    const x = 1;
+    console.log(x);
+};
 ```
 
 ### Unreachable
@@ -811,31 +943,33 @@ Output
 
 ## Testing Framework
 
-Built-in testing via `std/testing`. Tests are compiler intrinsics — `check()` captures expression sides at compile time (no runtime reflection), and test code is stripped from non-test builds.
+Built-in testing via the `test` and `expect` keywords. Tests are compiler intrinsics — `expect` captures expression sides at compile time (no runtime reflection), and test code is stripped from non-test builds.
 
 ```typescript
-import { test, check, require } from "std/testing";
+test "addition" {
+    expect add(1, 2) === 3;
+}
 
-test("addition", () => {
-    check(add(1, 2) === 3);     // non-fatal, prints "FAIL: 3 === 4" on mismatch
-    require(setup() !== null);   // fatal, aborts current test on failure
-});
+test "setup" {
+    const s = setup();
+    expect s !== null;
+}
 
-testGroup("edge cases", () => {
-    test("large numbers", () => {
-        check(add(999999, 1) === 1000000);
-    });
-});
+// Grouping (planned)
+// testGroup "edge cases" {
+//     test "large numbers" {
+//         expect add(999999, 1) === 1000000;
+//     }
+// }
 ```
 
 Run with `msc test file.ms`. Supports `--filter="name"` to run matching tests only.
 
 | Function | Behavior |
 |----------|----------|
-| `test(name, body)` | Register a test case |
-| `check(expr)` | Non-fatal assertion with expression capture |
-| `require(expr)` | Fatal assertion — aborts test on failure |
-| `testGroup(name, body)` | Group related tests under a heading |
+| `test "name" { ... }` | Register a test case |
+| `expect expr;` | Assertion with expression capture |
+| `testGroup(name, body)` | Group related tests (legacy function style) |
 
 Output: `PASS`/`FAIL` per test, summary line (`N passed, N failed, N skipped`), exit code 1 on any failure.
 

@@ -47,7 +47,7 @@ The compiler must be helpful, not just correct.
 
 **Goal**: Eliminate heap allocations when performing array/string slicing, matching the performance of Nim's `openArray` slices and Zig's slices.
 
-### 1. Zero-Copy Slicing Syntax: `arr[start...end]`
+### ~~B1. Zero-Copy Slicing Syntax: `arr[start...end]`~~ (DONE)
 Currently, slicing an array in MetaScript triggers a call to the C runtime's `msArraySlice`, which allocates new heap memory and copies data.
 
 *   **The Strategy**: Transform the `ArrayAccess` with a range into a `Span` literal.
@@ -60,10 +60,40 @@ Currently, slicing an array in MetaScript triggers a call to the C runtime's `ms
     *   **Resulting C**: `msSpan_double s = { .data = arr.p->data + 1, .len = 2 };`
 *   **Benefit**: Zero heap overhead. This is essential for high-performance parsers where the Lexer needs to "view" tokens without copying them from the source buffer.
 
-### 2. Stack-Promoted Literals
+### ~~B2. Stack-Promoted Literals~~ (DONE)
 *   **The Strategy**: Promote `[1, 2, 3]` directly to the C stack when passed to a `Span<T>` parameter.
 *   **Transformation**: Instead of creating a temporary heap-allocated `msArray`, the compiler emits a C99 compound literal or a temporary stack struct.
 *   **Benefit**: Massive reduction in heap pressure for constant lookups and small utility calls.
+
+---
+
+## The Gaskets and Governors Pillar (Internal Safety)
+
+**Goal**: Ensure the safety of systems-level optimizations (COW, Spans) without requiring manual developer intervention.
+
+### ~~1. COW Enforcement (The Gasket)~~ (DONE)
+Prevent accidental corruption of shared string literals or constant arrays.
+*   **The Strategy**: Rigorously inject `msStringPrepareMutation(&s)` in `nativeLower.ms` before any mutating operation (`s[i] = ch`, `s.add()`).
+*   **Mechanism**: Fast bitwise check on the `strlitFlag` in the payload capacity.
+
+### 2. Escape Analysis (The Governor)
+Prevent memory corruption from dangling pointers when using zero-copy views.
+*   **The Strategy**: Implement a pass in `src/analyzer/index.ms` to ensure a `Span<T>` never "escapes" its owner's scope.
+*   **Rules**:
+    *   Block `Span` from being returned from a function (unless the owner is a parameter).
+    *   Block `Span` from being stored in a global variable or a class field.
+
+---
+
+## ~~The Borrow Pillar (`Borrow<T>`)~~ (DONE)
+
+**Goal**: Achieve 100% performance parity with Nim's `lent T` by avoiding memory copies for large structs.
+
+*   **Syntax**: `const x: Borrow<LargeStruct> = arr[0];`
+*   **Implementation**: 
+    1.  Add `TypeKind.Borrow` to the type system.
+    2.  Update `src/codegen/c/` to emit raw pointers for `Borrow` types.
+    3.  Integrate with the analyzer to enforce strict lifetime safety.
 
 ---
 
@@ -74,6 +104,9 @@ Currently, slicing an array in MetaScript triggers a call to the C runtime's `ms
 | **Cycle Detection** | PLANNED | P0 | `src/module/loader.ms`, `src/module/graph.ms` |
 | **C-Caching** | PLANNED | P1 | `src/compiler/compile.ms`, `src/compiler/io.ms` |
 | **Error Type Sink** | PLANNED | P1 | `src/checker/context.ms`, `src/checker/checkPass.ms` |
+| **COW Enforcement** | **DONE** | P1 | `src/transform/native/nativeLower.ms` |
+| **Escape Analysis** | PLANNED | P2 | `src/analyzer/index.ms` |
+| **Borrow Pillar** | **DONE** | P2 | `src/checker/types.ms`, `src/codegen/c/` |
 | ~~Zero-Copy Slicing~~ | **DONE** | P1 | `src/transform/lowering/spanLower.ms` |
 | ~~Stack Literals~~ | **DONE** | P2 | `src/transform/lowering/spanLower.ms` |
 

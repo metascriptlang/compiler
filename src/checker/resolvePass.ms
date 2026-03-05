@@ -14,15 +14,15 @@ import {
 } from "../ast/node";
 import {
 	Type, TypeKind,
-	unknownType, numberType, stringType, booleanType, voidType, nullType, neverType,
+	unknownType, numberType, stringType, booleanType, voidType, nullType, neverType, charType,
 	createPrimitive, createArray, createFunction, createObject,
 	createResult, createTypeRef, createUnion, createGenericParam, createDistinct,
-	createSizedArray, createSpan,
-	setMinArity,
+	createSizedArray, createSpan, createBorrow,
+	setMinArity, typeNameOf,
 } from "./types";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, lookupSymbol, lookupLocal, defineSymbol, makeSymbol, openScope, closeScope, SymbolState, hasFlag, setFlag, SF_EXPORTED, SF_MUTABLE } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError } from "./context";
-import { trimStr, sliceStr, findChar, splitTopLevel } from "../utils/string";
+import { trimStr, sliceStr, findChar, splitTopLevel, parseIntStr } from "../utils/string";
 import { getProperty } from "./types";
 import { getGenericDecl, getGenericDeclFieldNames, getGenericDeclFieldTypes, addGenericTypeInst, findGenericTypeInstIdx, getDefaultCount, getDefaultText, addDefaultParam } from "../parser/context";
 import { check } from "std/testing";
@@ -59,7 +59,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 			if (sizeStr === "" || sizeStr === " ") {
 				return createArray(resolveAnnotation(inner, ctx));
 			}
-			const size = parseInt(sizeStr, 10);
+			const size = parseIntStr(sizeStr);
 			return createSizedArray(resolveAnnotation(inner, ctx), size);
 		}
 	}
@@ -80,10 +80,17 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 		if (baseName === "Span" && args.length === 1) {
 			return createSpan(resolveAnnotation(args[0], ctx));
 		}
+		if (baseName === "Borrow" && args.length === 1) {
+			return createBorrow(resolveAnnotation(args[0], ctx));
+		}
 		if (baseName === "Map" && args.length === 2) {
 			const t = createPrimitive(TypeKind.Map);
 			t.typeReturn = resolveAnnotation(args[0], ctx);
 			t.typeExtra = resolveAnnotation(args[1], ctx);
+			// Phase 1 restriction: only string keys in C backend
+			if (t.typeReturn.kind !== TypeKind.String && t.typeReturn.kind !== TypeKind.Unknown) {
+				addError(ctx, "Only string keys are supported for Map in the C backend (Phase 1). Got: " + typeNameOf(t.typeReturn));
+			}
 			return t;
 		}
 		if (baseName === "Record" && args.length === 2) {
@@ -91,6 +98,10 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 			const t = createPrimitive(TypeKind.Map);
 			t.typeReturn = resolveAnnotation(args[0], ctx);
 			t.typeExtra = resolveAnnotation(args[1], ctx);
+			// Phase 1 restriction: only string keys in C backend
+			if (t.typeReturn.kind !== TypeKind.String && t.typeReturn.kind !== TypeKind.Unknown) {
+				addError(ctx, "Only string keys are supported for Map in the C backend (Phase 1). Got: " + typeNameOf(t.typeReturn));
+			}
 			return t;
 		}
 		// Generic instance: check if this is a generic interface/class
@@ -126,6 +137,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 		"uint32" => createPrimitive(TypeKind.Uint32),
 		"float32" => createPrimitive(TypeKind.Float32),
 		"float64" => createPrimitive(TypeKind.Float64),
+		"char" => charType(),
 		_ => {
 			const sym = lookupSymbol(ctx.table, trimmed);
 			if (sym !== null) {

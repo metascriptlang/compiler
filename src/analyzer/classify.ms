@@ -130,6 +130,18 @@ export function classifyType(t: Type, ctx: TransformContext): RcInfo {
 		TypeKind.TypeReference => classifyTypeRef(t, ctx),
 		TypeKind.Distinct => { if (t.typeReturn !== null) { classifyType(t.typeReturn, ctx) } else { noRcInfo() } },
 		TypeKind.Union | TypeKind.Result => makeRcInfo(RcKind.Named, "", "", "", "", ""),
+		TypeKind.Tuple => {
+			// Check if any element needs RC
+			let hasRc = false;
+			let i = 0;
+			while (i < t.typeChildren.length) {
+				if (classifyType(t.typeChildren[i], ctx).needsCleanup) { hasRc = true; }
+				i += 1;
+			}
+			// TODO: Tuples with RC elements need per-field hooks from destructorLifting.
+			// For now, emit Named with empty hooks (no-op cleanup).
+			if (hasRc) { makeRcInfo(RcKind.Named, "", "", "", "", "") } else { noRcInfo() }
+		},
 		_ => noRcInfo(),
 	};
 }

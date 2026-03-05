@@ -19,7 +19,7 @@ import { TransformContext, freshTemp } from "../context";
 import { walkNode } from "../walker";
 import {
 	makeMember, makeObjectLiteral, makeNumber, makeBinary,
-	makeVarDecl, makeTypedIdent,
+	makeVarDecl, makeTypedIdent, makeHiddenAddr,
 } from "../util";
 
 export function spanLower(program: Node, ctx: TransformContext): Node {
@@ -59,10 +59,26 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 						const spanInit = makeObjectLiteral(["data", "len"], [dataExpr, lenExpr], loc);
 						spanInit.nodeType = targetType;
 						return spanInit;
+					} else if (srcType.kind === TypeKind.String) {
+						// String -> Span<char>: { data: str.data, len: str.len }
+						const dataExpr2 = makeMember(d.convExpr, "data", loc);
+						const lenExpr2 = makeMember(d.convExpr, "len", loc);
+						const spanInit2 = makeObjectLiteral(["data", "len"], [dataExpr2, lenExpr2], loc);
+						spanInit2.nodeType = targetType;
+						return spanInit2;
 					}
 				}
 			}
+
+			// Borrow promotion: HiddenStdConv(expr, Borrow<T>) → HiddenAddr(expr) (takes &expr in C)
+			if (targetType.kind === TypeKind.Borrow) {
+				const loc = node.location;
+				const addr = makeHiddenAddr(d.convExpr, loc);
+				addr.nodeType = targetType;
+				return addr;
+			}
 		}
+
 		return node;
 	});
 }
@@ -73,10 +89,10 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 function lowerRangeAccess(node: Node, ctx: TransformContext): Node {
 	const d = node.data as ArrayAccessData;
 
-	// Only handle range index (BinaryExpr with ".." operator)
+	// Only handle range index (BinaryExpr with ".." or "..." operator)
 	if (d.index.kind !== NodeKind.BinaryExpr) return node;
 	const bd = d.index.data as BinaryExprData;
-	if (bd.operator !== "..") return node;
+	if (bd.operator !== ".." && bd.operator !== "...") return node;
 
 	// Only handle when result type is Span
 	const resultType = node.nodeType;
@@ -97,6 +113,9 @@ function lowerRangeAccess(node: Node, ctx: TransformContext): Node {
 	} else if (arrType.kind === TypeKind.SizedArray || arrType.kind === TypeKind.Span) {
 		// Stack array or span: arr.data + start
 		dataBase = makeMember(d.array, "data", loc);
+	} else if (arrType.kind === TypeKind.String) {
+		// String: str.data + start (nativeLower rewrites .data to .p->data for Strings)
+		dataBase = makeMember(d.array, "data", loc);
 	} else {
 		return node;
 	}
@@ -108,8 +127,11 @@ function lowerRangeAccess(node: Node, ctx: TransformContext): Node {
 		dataExpr.nodeType = createPtr(resultType.typeReturn);
 	}
 
-	// len = end - start
-	const lenExpr = makeBinary(endExpr, "-", startExpr, loc);
+	// len = end - start (exclusive ..) or (end - start) + 1 (inclusive ...)
+	let lenExpr = makeBinary(endExpr, "-", startExpr, loc);
+	if (bd.operator === "...") {
+		lenExpr = makeBinary(lenExpr, "+", makeNumber(1, loc), loc);
+	}
 
 	const spanInit = makeObjectLiteral(["data", "len"], [dataExpr, lenExpr], loc);
 	spanInit.nodeType = resultType;

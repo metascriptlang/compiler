@@ -10,7 +10,7 @@ import { check } from "std/testing";
 
 export enum TypeKind {
 	// Primitives
-	Number, String, Boolean, Void, Null, Unknown, Never,
+	Number, String, Boolean, Void, Char, Null, Unknown, Never,
 	// Sized integers/floats (C interop)
 	Int32, Int64, Uint32, Float32, Float64,
 	// Compound
@@ -18,7 +18,7 @@ export enum TypeKind {
 	// Generics
 	GenericParam, GenericInstance,
 	// Memory
-	Ref, Ptr,
+	Ref, Ptr, Borrow,
 	// Special
 	TypeReference, Union, Enum, Result,
 	// Distinct
@@ -194,6 +194,20 @@ export function createPtr(inner: Type): Type {
 	return t;
 }
 
+export function createBorrow(inner: Type): Type {
+	const t = emptyType();
+	t.kind = TypeKind.Borrow;
+	t.typeReturn = inner;
+	return t;
+}
+
+export function createTuple(elementTypes: Type[]): Type {
+	const t = emptyType();
+	t.kind = TypeKind.Tuple;
+	t.typeChildren = elementTypes;
+	return t;
+}
+
 export function createDistinct(inner: Type): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Distinct;
@@ -238,6 +252,7 @@ export function nullType(): Type { return getSysType(TypeKind.Null); }
 export function unknownType(): Type { return getSysType(TypeKind.Unknown); }
 export function neverType(): Type { return getSysType(TypeKind.Never); }
 export function errorType(): Type { return getSysType(TypeKind.Error); }
+export function charType(): Type { return getSysType(TypeKind.Char); }
 
 // ===== Min Arity (Default Parameters) =====
 // Encoded in typeFlags bits 8-15. Zero = not set = all params required.
@@ -325,6 +340,14 @@ export function substituteType(t: Type, paramName: string, concrete: Type): Type
 		},
 		TypeKind.Ref => createRef(substituteType(t.typeReturn, paramName, concrete)),
 		TypeKind.Ptr => createPtr(substituteType(t.typeReturn, paramName, concrete)),
+		TypeKind.Borrow => createBorrow(substituteType(t.typeReturn, paramName, concrete)),
+		TypeKind.Tuple => {
+			const newChildren: Type[] = [];
+			for (const child of t.typeChildren) {
+				newChildren.push(substituteType(child, paramName, concrete));
+			}
+			createTuple(newChildren)
+		},
 		_ => t,
 	};
 }
@@ -414,7 +437,8 @@ export function hasGenericParams(t: Type): boolean {
 export function isNumeric(t: Type): boolean {
 	return t.kind === TypeKind.Number || t.kind === TypeKind.Int32 ||
 		t.kind === TypeKind.Int64 || t.kind === TypeKind.Uint32 ||
-		t.kind === TypeKind.Float32 || t.kind === TypeKind.Float64;
+		t.kind === TypeKind.Float32 || t.kind === TypeKind.Float64 ||
+		t.kind === TypeKind.Char;
 }
 
 export function isStringType(t: Type): boolean {
@@ -479,6 +503,7 @@ export function isPrimitiveKind(kind: TypeKind): boolean {
 		|| kind === TypeKind.Enum
 		|| kind === TypeKind.Never
 		|| kind === TypeKind.Unknown
+		|| kind === TypeKind.Char
 		|| kind === TypeKind.Error;
 }
 
@@ -489,6 +514,7 @@ export function typeNameOf(t: Type): string {
 		TypeKind.String => "string",
 		TypeKind.Number => "number",
 		TypeKind.Boolean => "boolean",
+		TypeKind.Char => "char",
 		TypeKind.Int32 => "int32",
 		TypeKind.Int64 => "int64",
 		TypeKind.Uint32 => "uint32",
@@ -497,7 +523,9 @@ export function typeNameOf(t: Type): string {
 		TypeKind.Array => "Array",
 		TypeKind.SizedArray => "Array", // Both map to "Array" for extension lookup (UFCS)
 		TypeKind.Span => "Span",
+		TypeKind.Borrow => "Borrow",
 		TypeKind.Map => "Map",
+		TypeKind.Tuple => "Tuple",
 		TypeKind.Result => "Result",
 		TypeKind.Enum => t.typeName,
 		_ => "",
@@ -749,4 +777,25 @@ test "preserves low bits" {
 	setMinArity(fn4, 1);
 	check(getMinArity(fn4) === 1);
 	check((fn4.typeFlags & 0xFF) === 1);
+}
+
+test "createTuple" {
+	const tup = createTuple([numberType(), stringType()]);
+	check(tup.kind === TypeKind.Tuple);
+	check(tup.typeChildren.length === 2);
+	check(tup.typeChildren[0].kind === TypeKind.Number);
+	check(tup.typeChildren[1].kind === TypeKind.String);
+}
+
+test "typeNameOf Tuple" {
+	const tup = createTuple([numberType()]);
+	check(typeNameOf(tup) === "Tuple");
+}
+
+test "substituteType Tuple" {
+	const tup = createTuple([createGenericParam("T"), numberType()]);
+	const result = substituteType(tup, "T", stringType());
+	check(result.kind === TypeKind.Tuple);
+	check(result.typeChildren[0].kind === TypeKind.String);
+	check(result.typeChildren[1].kind === TypeKind.Number);
 }

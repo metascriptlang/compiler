@@ -27,6 +27,26 @@ Source.ms --> [1 Parse] --> [2 TypeCheck] --> [3 Transform] --> [4 Analyzer] -->
 - Phase 4 (Analyzer): COMPLETE -- DRC injection (6 files, ~2500 lines, 14 gap items, cross-scope last-read, branch-aware optimizer)
 - Phase 5 (Codegen): NEXT -- C backend (primary), JS backend (secondary)
 
+## CRITICAL: Codegen Must Be Thin/Dumb
+
+**`src/codegen/c/` is a dumb emitter.** It only dumps what earlier phases already processed. If you find yourself adding logic to C codegen, STOP and check if it belongs in Transform or Checker instead.
+
+**The rule**: Before adding ANY codegen logic, check `~/projects/nim/compiler/` (`transf.nim`, `lambdalifting.nim`, `closureiters.nim`, `ccgexprs.nim`, `ccgtypes.nim`). If Nim handles it before codegen, we must too.
+
+**Evidence (7 issues traced 2026-03-04)**: 6 of 7 C backend failures were bugs in Transform/Checker that surfaced in codegen. Only 1 (exception runtime types) actually belonged in codegen.
+
+| Symptom in Codegen | Actual Root Cause |
+|---|---|
+| Boolean `cond` emits `cond.length > 0` | **Transform** — `stringTruthiness` doesn't check types |
+| String param `msString*` vs `msString` value | **Checker/Decl** — spurious pointer on string params |
+| Function type alias → `void*` | **Type resolution** — alias not resolved to `msClosure` |
+| `Result.ok()` emitted literally | **Transform** — `resultDesugar` doesn't hoist try exprs |
+| JS `push(arr,x)` not `arr.push(x)` | **Transform** — `builtinLower` not target-aware |
+| Async env typed as `double` | **Transform** — synthetic nodes lack type info (Nim transforms pre-check) |
+| `ms_throw` undefined | **Runtime** — missing C types/functions (correctly in codegen) |
+
+**Checklist**: (1) Does Nim do it in `transf.nim` or earlier? → put in Transform. (2) Is it type resolution? → put in Checker. (3) Is it desugaring/lowering? → put in `src/transform/`. (4) Is it pure C syntax emission? → only then codegen.
+
 ## Project Structure
 
 ```
@@ -263,27 +283,10 @@ Rule of thumb: inside match arms, use `while` or `for..of` — never C-style `fo
 1. `interface` is a data struct, not a behavioral contract -- no `implements`, no method dispatch
 2. `type` is a reserved keyword -- use `tokenType`, `nodeType` for variable names
 3. No `indexOf`/`includes` on strings -- use `slice`, `length`, `findChar`, `charAt` from `utils/string.ms`
-4. `string[]` is a value type -- `push()` inside functions does not propagate to caller (wrap in interface)
+4. Arrays are now passed by pointer (no wrapper needed). Strings are still value types -- `push()` on `string[]` inside functions does not propagate to caller.
 5. Match `_` is the wildcard, not `default`; bare identifiers are bindings, not comparisons
 6. `null as unknown as T` is the null pattern, not `undefined`
 7. `for (const x of arr)` works, but `for..in` is rarely used -- prefer `while` with index for mutation
-
-## Reference Compiler Gotchas (Bugs Affecting All .ms Code)
-
-These are NOT design choices -- they are reference compiler codegen bugs you MUST work around:
-
-1. **NEVER** `let x; x = try f();` -- analyzer destroys the intermediate Result, use-after-free. Use `const x = try f();`
-2. **NEVER** pass `makeSymbol(...)` or fresh interface as function arg -- analyzer double-frees. Store in local `const` first, or create inside the callee.
-3. **ALWAYS** use `const x = try f();` with immediate use in the return expression.
-4. **string[] is VALUE TYPE** -- `push()` inside functions does not propagate to caller. Inline loops or wrap in interface.
-5. **try inside match arms** -- emits `/* unsupported: try_expr */`. Avoid.
-6. **break/continue in match arms** -- targets the switch, not the enclosing loop.
-7. **Standalone `try f();` in while loop** -- analyzer scope bug, all outer variables become undeclared. Use `advance()` instead.
-8. **No indexOf/includes** -- use `slice`, `length`, `findChar`, `charAt` from `utils/string.ms`.
-9. **`type` is reserved** -- use `tokenType`, `nodeType`, etc.
-10. **Circular imports silently drop** -- keep mutually recursive functions in the same file.
-11. **C-style `for` in match arms** -- `for (let i = 0; ...)` hits codegen unreachable inside match block arms (not normalized). Use `while` loop or `for..of` instead.
-12. **Statement-form match with block arms** -- `match (x) { "a" => { sideEffect(); }, _ => {} };` silently doesn't execute arms. `return match` with expression/value arms works fine. Use if-else for side-effect dispatch.
 
 ## Match Expression Rules
 

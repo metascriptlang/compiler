@@ -23,6 +23,12 @@ function lowerNewNode(node: Node): Node {
 	// Extract class name from callee
 	if (d.newCallee.kind === NodeKind.Identifier) {
 		const id = d.newCallee.data as IdentifierData;
+		// Runtime-provided types → direct runtime constructor
+		if (id.name === "Map") {
+			const call = makeCall(makeIdent("msMapNew", loc), [], loc);
+			call.nodeType = node.nodeType;
+			return call;
+		}
 		const ctorName = id.name + "_new";
 		return makeCall(makeIdent(ctorName, loc), d.newArguments, loc);
 	}
@@ -72,6 +78,8 @@ test "new Bar(x, y) becomes Bar_new(x, y)" {
 	const name = getCallName("new Bar(x, y);");
 	check(name === "Bar_new");
 }
+
+test "new Map() becomes msMapNew()" { check(getCallName("new Map();") === "msMapNew"); }
 
 test "result is CallExpr" { check(firstExprKindAfter("new Foo();", lowerNewExpr) === NodeKind.CallExpr); }
 

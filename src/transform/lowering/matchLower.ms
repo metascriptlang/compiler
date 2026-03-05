@@ -53,7 +53,7 @@ function expandMatchStmt(stmt: Node, ctx: TransformContext): Node[] {
 		},
 		NodeKind.ReturnStmt => {
 			const d = stmt.data as ReturnStmtData;
-			if (d.argument.kind === NodeKind.MatchExpr) {
+			if (d.argument !== null && d.argument.kind === NodeKind.MatchExpr) {
 				return lowerMatchExprInReturn(stmt, ctx);
 			}
 		},

@@ -135,13 +135,13 @@ export function parseCHeader(headerPath: string): string {
 	let ei = 0;
 	const enumCount = msAroEnumCount();
 	while (ei < enumCount) {
-		const ename = msAroEnumName(ei);
+		const ename = msAroEnumName(ei as int32);
 		if (ename.length > 0) {
 			source = source + "\nexport enum " + ename + " {\n";
 			let mi = 0;
-			const memberCount = msAroEnumMemberCount(ei);
+			const memberCount = msAroEnumMemberCount(ei as int32);
 			while (mi < memberCount) {
-				const mname = msAroEnumMemberName(ei, mi);
+				const mname = msAroEnumMemberName(ei as int32, mi as int32);
 				source = source + "\t" + mname + ",\n";
 				mi = mi + 1;
 			}
@@ -154,8 +154,8 @@ export function parseCHeader(headerPath: string): string {
 	let ti = 0;
 	const typedefCount = msAroTypedefCount();
 	while (ti < typedefCount) {
-		const tname = msAroTypedefName(ti);
-		const ttarget = mapCType(msAroTypedefTarget(ti));
+		const tname = msAroTypedefName(ti as int32);
+		const ttarget = mapCType(msAroTypedefTarget(ti as int32));
 		if (tname.length > 0) {
 			source = source + "export type " + tname + " = " + ttarget + ";\n";
 		}
@@ -166,16 +166,16 @@ export function parseCHeader(headerPath: string): string {
 	let fi = 0;
 	const funcCount = msAroFuncCount();
 	while (fi < funcCount) {
-		const fname = msAroFuncName(fi);
-		const retType = mapCType(msAroFuncReturnType(fi));
+		const fname = msAroFuncName(fi as int32);
+		const retType = mapCType(msAroFuncReturnType(fi as int32));
 		source = source + "export extern function " + fname + "(";
 
 		let pi = 0;
-		const paramCount = msAroFuncParamCount(fi);
+		const paramCount = msAroFuncParamCount(fi as int32);
 		while (pi < paramCount) {
 			if (pi > 0) { source = source + ", "; }
-			const pname = safeParamName(msAroFuncParamName(fi, pi));
-			const ptype = mapCType(msAroFuncParamType(fi, pi));
+			const pname = safeParamName(msAroFuncParamName(fi as int32, pi as int32));
+			const ptype = mapCType(msAroFuncParamType(fi as int32, pi as int32));
 			source = source + pname + ": " + ptype;
 			pi = pi + 1;
 		}

@@ -15,12 +15,13 @@
 import {
 	Node, NodeKind,
 	ArrayAccessData, MemberExprData, ArrayLiteralData,
-	VariableDeclData, BinaryExprData,
+	VariableDeclData, BinaryExprData, CallExprData,
+	NumberLiteralData,
 } from "../../ast/node";
 import { Type, TypeKind } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, makeIdent, makeNumber } from "../util";
+import { makeCall, makeIdent, makeNumber, makeHiddenAddr, makeMember } from "../util";
 
 // ===== Main Entry Point =====
 
@@ -63,6 +64,7 @@ function rewriteAccess(node: Node): Node {
 	if (node.kind === NodeKind.ArrayAccess) return rewriteArrayAccess(node);
 	if (node.kind === NodeKind.MemberExpr) return rewriteMemberExpr(node);
 	if (node.kind === NodeKind.ArrayLiteral) return rewriteArrayLiteral(node);
+	if (node.kind === NodeKind.CallExpr) return rewriteMapMethodCall(node);
 	return node;
 }
 
@@ -102,6 +104,20 @@ function rewriteArrayAccess(node: Node): Node {
 		return result;
 	}
 
+	// Tuple index: t[0] → t._0 (rewrite ArrayAccess → MemberExpr)
+	if (arrType.kind === TypeKind.Tuple) {
+		if (d.index.kind === NodeKind.NumberLiteral) {
+			const idx = (d.index.data as NumberLiteralData).value;
+			const fieldName = "_" + idx.toString();
+			const result = makeMember(d.array, fieldName, loc);
+			if (arrType.typeChildren !== null && idx < arrType.typeChildren.length) {
+				result.nodeType = arrType.typeChildren[idx];
+			}
+			return result;
+		}
+		return node;
+	}
+
 	return node;
 }
 
@@ -114,6 +130,7 @@ function getArrayMacroName(elemType: Type): string {
 	if (elemType.kind === TypeKind.Uint32) return "msNumberArrayAccess";
 	if (elemType.kind === TypeKind.Float32) return "msNumberArrayAccess";
 	if (elemType.kind === TypeKind.Float64) return "msNumberArrayAccess";
+	if (elemType.kind === TypeKind.Char) return "msNumberArrayAccess";
 	if (elemType.kind === TypeKind.String) return "msStringArrayAccess";
 	return "msRefArrayAccess";
 }
@@ -125,11 +142,37 @@ function rewriteMemberExpr(node: Node): Node {
 	const objType = d.object.nodeType;
 	if (objType === null) return node;
 
-	// .length → .len for array/string types
+	// .length on String → msStringLength(s) (UTF-16 code units, TS parity)
+	// .length on arrays → .len (direct field access)
 	if (d.property === "length") {
+		if (objType.kind === TypeKind.String) {
+			const loc = node.location;
+			const result = makeCall(makeIdent("msStringLength", loc), [d.object], loc);
+			result.nodeType = node.nodeType;
+			return result;
+		}
 		if (objType.kind === TypeKind.Array || objType.kind === TypeKind.SizedArray ||
-			objType.kind === TypeKind.Span || objType.kind === TypeKind.String) {
+			objType.kind === TypeKind.Span) {
 			d.property = "len";
+		}
+		return node;
+	}
+
+	// .byteLength on String → .len (raw UTF-8 byte count)
+	if (d.property === "byteLength") {
+		if (objType.kind === TypeKind.String) {
+			d.property = "len";
+		}
+		return node;
+	}
+
+	// .unicodeLength on String → msStringUnicodeLength(s) (codepoint count)
+	if (d.property === "unicodeLength") {
+		if (objType.kind === TypeKind.String) {
+			const loc = node.location;
+			const result = makeCall(makeIdent("msStringUnicodeLength", loc), [d.object], loc);
+			result.nodeType = node.nodeType;
+			return result;
 		}
 		return node;
 	}
@@ -140,6 +183,61 @@ function rewriteMemberExpr(node: Node): Node {
 		if (objType.kind === TypeKind.Array) {
 			d.property = "p->data";
 		}
+	}
+
+	// Map.size → m.len (direct field access)
+	if (d.property === "size" && objType.kind === TypeKind.Map) {
+		d.property = "len";
+	}
+
+	return node;
+}
+
+// ===== Map Method Call Lowering =====
+// Rewrites:
+//   m.get(k)     → msMapGet(m, k)
+//   m.set(k, v)  → msMapSet(&m, k, v)      (mutating)
+//   m.has(k)     → msMapHas(m, k)
+//   m.delete(k)  → msMapDelete(&m, k)      (mutating)
+//   m.clear()    → msMapClear(&m)           (mutating)
+
+function rewriteMapMethodCall(node: Node): Node {
+	const cd = node.data as CallExprData;
+	if (cd.callee.kind !== NodeKind.MemberExpr) return node;
+	const me = cd.callee.data as MemberExprData;
+	const objType = me.object.nodeType;
+	if (objType === null || objType.kind !== TypeKind.Map) return node;
+
+	const loc = node.location;
+	const method = me.property;
+
+	if (method === "get" && cd.arguments.length === 1) {
+		const result = makeCall(makeIdent("msMapGet", loc), [me.object, cd.arguments[0]], loc);
+		result.nodeType = node.nodeType;
+		return result;
+	}
+	if (method === "set" && cd.arguments.length === 2) {
+		const addr = makeHiddenAddr(me.object, loc);
+		const result = makeCall(makeIdent("msMapSet", loc), [addr, cd.arguments[0], cd.arguments[1]], loc);
+		result.nodeType = node.nodeType;
+		return result;
+	}
+	if (method === "has" && cd.arguments.length === 1) {
+		const result = makeCall(makeIdent("msMapHas", loc), [me.object, cd.arguments[0]], loc);
+		result.nodeType = node.nodeType;
+		return result;
+	}
+	if (method === "delete" && cd.arguments.length === 1) {
+		const addr = makeHiddenAddr(me.object, loc);
+		const result = makeCall(makeIdent("msMapDelete", loc), [addr, cd.arguments[0]], loc);
+		result.nodeType = node.nodeType;
+		return result;
+	}
+	if (method === "clear" && cd.arguments.length === 0) {
+		const addr = makeHiddenAddr(me.object, loc);
+		const result = makeCall(makeIdent("msMapClear", loc), [addr], loc);
+		result.nodeType = node.nodeType;
+		return result;
 	}
 
 	return node;

@@ -14,6 +14,7 @@ import {
 	IfStmtData, WhileStmtData, DoWhileStmtData,
 	ConditionalExprData, UnaryExprData, BinaryExprData,
 } from "../../ast/node";
+import { TypeKind } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeBinary, makeMember, makeNumber } from "../util";
@@ -56,10 +57,12 @@ function truthifyNode(node: Node): Node {
 // Wrap a bare identifier/member condition with .length > 0
 // Only wraps if the condition is NOT already a boolean expression
 function wrapTruthiness(cond: Node): Node {
+	// Type-aware: boolean-typed nodes never need .length > 0 wrap
+	if (cond.nodeType !== null && cond.nodeType.kind === TypeKind.Boolean) return cond;
 	if (isAlreadyBoolean(cond)) return cond;
 	if (cond.kind === NodeKind.Identifier || cond.kind === NodeKind.MemberExpr) {
 		const loc = cond.location;
-		const lengthAccess = makeMember(cond, "length", loc);
+		const lengthAccess = makeMember(cond, "byteLength", loc);
 		return makeBinary(lengthAccess, ">", makeNumber(0, loc), loc);
 	}
 	return cond;
