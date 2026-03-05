@@ -353,7 +353,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node): Type {
 		const argType = checkExpr(ctx, arg);
 		argTypes.push(argType);
 	}
-	const calleeType = checkExpr(ctx, d.callee);
+	let calleeType = checkExpr(ctx, d.callee);
 	// Check for overloads + set resolvedSym for direct calls
 	if (d.callee.kind === NodeKind.Identifier) {
 		const calleeName = (d.callee.data as IdentifierData).name;
@@ -370,6 +370,30 @@ function checkCallExpr(ctx: CheckerContext, node: Node): Type {
 		// Method call: resolveMemberExpr already set resolvedSym on the callee node
 		if (d.callee.resolvedSym !== null) {
 			node.resolvedSym = d.callee.resolvedSym;
+		}
+		// Static extension override: when MemberExpr resolved to a property (e.g. Result.ok field)
+		// but a static extension function exists with @builtin (e.g. Result.ok() constructor),
+		// prefer the extension function for call expressions.
+		if (ctx.extensionRegistry !== null) {
+			const me = d.callee.data as MemberExprData;
+			const objType = me.object.nodeType;
+			if (objType !== null && objType.typeName !== "") {
+				const allByName = findAllExtensionsByName(ctx.extensionRegistry, me.property);
+				const staticType = createTypeRef("typeof " + objType.typeName);
+				const ext = findFirstMatchingExt(allByName, staticType);
+				if (ext !== null) {
+					const extSym = lookupSymbol(ctx.table, ext.methodName);
+					if (extSym !== null) {
+						ensureShaped(extSym, ctx);
+						node.resolvedSym = extSym;
+						d.callee.resolvedSym = extSym;
+						// Update calleeType so generic return inference works below
+						if (extSym.symbolType.kind === TypeKind.Function) {
+							calleeType = extSym.symbolType;
+						}
+					}
+				}
+			}
 		}
 	}
 	// Extension method overloads: obj.method(args) where multiple extensions match
@@ -736,6 +760,11 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 						// Create a synthetic symbol for this member to satisfy the validator
 						const synthSym = makeSymbol(mName, SymbolKind.Method, objType.typeChildren[mi], false);
 						synthSym.state = SymbolState.Shaped;
+						// Transfer @runtime metadata from Type to Symbol
+						// (collectPass stores runtimeName in Type.typeName for class methods)
+						if (objType.typeChildren[mi].typeName !== "") {
+							synthSym.runtimeName = objType.typeChildren[mi].typeName;
+						}
 						node.resolvedSym = synthSym;
 						break;
 					}
@@ -747,7 +776,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 	}
 
 	// Builtin properties: .length on array/string
-	if (d.property === "length" && (objType.kind === TypeKind.Array || objType.kind === TypeKind.String)) {
+	if (d.property === "length" && (objType.kind === TypeKind.Array || objType.kind === TypeKind.String || objType.kind === TypeKind.CString)) {
 		// Create a synthetic symbol for 'length' to satisfy the validator
 		const lengthSym = makeSymbol("length", SymbolKind.Property, numberType(), false);
 		lengthSym.state = SymbolState.Shaped;
@@ -781,6 +810,32 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 			methodType = createFunction([keyType, valType], ["key", "value"], voidType());
 		} else if (d.property === "delete") {
 			methodType = createFunction([keyType], ["key"], booleanType());
+		} else if (d.property === "clear") {
+			methodType = createFunction([], [], voidType());
+		}
+		if (methodType !== null) {
+			const methodSym = makeSymbol(d.property, SymbolKind.Method, methodType, false);
+			methodSym.state = SymbolState.Shaped;
+			node.resolvedSym = methodSym;
+			return methodType;
+		}
+	}
+	// Set properties and methods
+	if (objType.kind === TypeKind.Set) {
+		if (d.property === "size") {
+			const sizeSym = makeSymbol("size", SymbolKind.Property, numberType(), false);
+			sizeSym.state = SymbolState.Shaped;
+			node.resolvedSym = sizeSym;
+			return numberType();
+		}
+		const elemType = objType.typeReturn !== null ? objType.typeReturn : unknownType();
+		let methodType: Type = null as unknown as Type;
+		if (d.property === "has") {
+			methodType = createFunction([elemType], ["value"], booleanType());
+		} else if (d.property === "add") {
+			methodType = createFunction([elemType], ["value"], voidType());
+		} else if (d.property === "delete") {
+			methodType = createFunction([elemType], ["value"], booleanType());
 		} else if (d.property === "clear") {
 			methodType = createFunction([], [], voidType());
 		}

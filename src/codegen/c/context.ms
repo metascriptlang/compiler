@@ -160,6 +160,7 @@ export interface CProc {
 	breakIdx: number;      // which block a 'break' exits
 	withinLoop: number;    // > 0 means inside a loop
 	params: string[];      // parameter names (mangled)
+	seenSinks: string[];   // tracks declared $sink_N_ temps (prevents duplicates)
 }
 
 export function createProc(name: string, returnType: Type): CProc {
@@ -175,6 +176,7 @@ export function createProc(name: string, returnType: Type): CProc {
 		breakIdx: 0,
 		withinLoop: 0,
 		params: [],
+		seenSinks: [],
 	};
 }
 

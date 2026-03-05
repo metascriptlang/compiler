@@ -535,31 +535,44 @@ function processStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, l
 
 	popOuterStmts(dctx);
 
-	// canRaise: if stmt contains a call and scope has RC vars, set needsTry
-	// This ensures try/finally wrapping for exception safety from function calls.
-	if (scopeDepth(dctx) > 0 && stmtMayCall(stmt) && currentScope(dctx).varsToCleanup.length > 0) {
+	// Blocker 28: only set needsTry when a statement could actually throw.
+	// RC runtime calls (ms* prefix) and DRC synthetics ($ prefix) are nothrow.
+	if (scopeDepth(dctx) > 0 && stmtCanThrow(stmt) && currentScope(dctx).varsToCleanup.length > 0) {
 		currentScope(dctx).needsTry = true;
 	}
 
 	return result;
 }
 
-// Check if a statement may invoke a function call (conservative: only direct patterns)
-function stmtMayCall(node: Node): boolean {
+// Blocker 28: Check if a call expression could throw an exception.
+// RC runtime (ms*) and DRC synthetic ($*) calls are nothrow by convention.
+function callCanThrow(callExpr: Node): boolean {
+	const cd = callExpr.data as CallExprData;
+	if (cd.callee.kind === NodeKind.Identifier) {
+		const name = (cd.callee.data as IdentifierData).name;
+		if (name.startsWith("ms")) return false;
+		if (name.startsWith("$")) return false;
+	}
+	return true;
+}
+
+// Blocker 28: Check if a statement could throw — stricter than old stmtMayCall.
+// Only returns true for ThrowStmt or user function calls that could throw.
+function stmtCanThrow(node: Node): boolean {
 	if (node === null) return false;
+	if (node.kind === NodeKind.ThrowStmt) return true;
 	if (node.kind === NodeKind.ExprStmt) {
 		const expr = (node.data as ExprStmtData).expr;
-		if (expr !== null && expr.kind === NodeKind.CallExpr) return true;
-		// Assignment with call RHS: x = f()
+		if (expr !== null && expr.kind === NodeKind.CallExpr) return callCanThrow(expr);
 		if (expr !== null && expr.kind === NodeKind.BinaryExpr) {
 			const bd = expr.data as BinaryExprData;
-			if (bd.right !== null && bd.right.kind === NodeKind.CallExpr) return true;
+			if (bd.right !== null && bd.right.kind === NodeKind.CallExpr) return callCanThrow(bd.right);
 		}
 		return false;
 	}
 	if (node.kind === NodeKind.VariableDecl) {
 		const vd = node.data as VariableDeclData;
-		return vd.initializer !== null && vd.initializer.kind === NodeKind.CallExpr;
+		return vd.initializer !== null && vd.initializer.kind === NodeKind.CallExpr && callCanThrow(vd.initializer);
 	}
 	return false;
 }
@@ -659,17 +672,25 @@ function processCallArgs(callExpr: Node, idx: number, stmts: Node[], dctx: DrcCo
 		// Sinks use Consumed mode (processNode decides MOVE vs COPY).
 		cd.arguments[ai] = processNode(arg, dctx, isLent ? DrcMode.Normal : DrcMode.Consumed);
 
-		// Special case: Nested calls in sink positions need extraction to temps 
+		// Special case: Nested calls in sink positions need extraction to temps
 		// if they weren't already handled, to prevent RC leaks from discarded returns.
 		if (!isLent && arg !== null && arg.kind === NodeKind.CallExpr) {
 			const nestedRc = classifyNestedCallReturn(arg, dctx);
 			if (nestedRc.needsCleanup) {
 				const tmpName = freshTemp(dctx.ctx, "sink");
 				const sinkDecl = makeVarDecl(tmpName, cd.arguments[ai], DeclKind.Const, loc);
-				if (arg.nodeType !== null) sinkDecl.nodeType = arg.nodeType;
+				// Blocker 27: stamp return type from callee's function signature
+				const retType = getCallReturnType(arg, dctx);
+				if (retType !== null) {
+					sinkDecl.nodeType = retType;
+				} else if (arg.nodeType !== null) {
+					sinkDecl.nodeType = arg.nodeType;
+				}
 				pre.push(sinkDecl);
 				registerVar(dctx, tmpName, nestedRc, false);
-				cd.arguments[ai] = makeIdent(tmpName, loc);
+				const ident = makeIdent(tmpName, loc);
+				if (sinkDecl.nodeType !== null) ident.nodeType = sinkDecl.nodeType;
+				cd.arguments[ai] = ident;
 			}
 		}
 	}
@@ -687,6 +708,18 @@ function classifyNestedCallReturn(callExpr: Node, dctx: DrcContext): RcInfo {
 	if (sym.symbolType.kind !== TypeKind.Function) return noRcInfo();
 	if (sym.symbolType.typeReturn === null) return noRcInfo();
 	return classifyType(sym.symbolType.typeReturn, dctx.ctx);
+}
+
+// Get the return Type of a nested call expression (Blocker 27: typed sinks)
+function getCallReturnType(callExpr: Node, dctx: DrcContext): Type {
+	if (dctx.ctx.checkerCtx === null) return null as unknown as Type;
+	const cd = callExpr.data as CallExprData;
+	if (cd.callee.kind !== NodeKind.Identifier) return null as unknown as Type;
+	const calleeName = (cd.callee.data as IdentifierData).name;
+	const sym = lookupSymbol(dctx.ctx.checkerCtx.table, calleeName);
+	if (sym === null || sym.symbolType === null) return null as unknown as Type;
+	if (sym.symbolType.kind !== TypeKind.Function) return null as unknown as Type;
+	return sym.symbolType.typeReturn;
 }
 
 // Wrap a statement with pre-statements from call arg processing
@@ -1887,25 +1920,49 @@ test "classifyNestedCallReturn unknown function returns noRcInfo" {
 	check(!rc.needsCleanup);
 }
 
-test "stmtMayCall detects call in ExprStmt" {
+test "stmtCanThrow detects user call in ExprStmt" {
 	const loc = testLoc();
 	const call = makeExprStmt(makeCall(makeIdent("foo", loc), [], loc), loc);
-	check(stmtMayCall(call));
+	check(stmtCanThrow(call));
 }
 
-test "stmtMayCall detects call in VarDecl init" {
+test "stmtCanThrow detects user call in VarDecl init" {
 	const loc = testLoc();
 	const decl = makeVarDecl("x", makeCall(makeIdent("foo", loc), [], loc), DeclKind.Const, loc);
-	check(stmtMayCall(decl));
+	check(stmtCanThrow(decl));
 }
 
-test "stmtMayCall false for non-call" {
+test "stmtCanThrow false for non-call" {
 	const loc = testLoc();
 	const stmt = makeExprStmt(makeIdent("x", loc), loc);
-	check(!stmtMayCall(stmt));
+	check(!stmtCanThrow(stmt));
 }
 
-test "stmtMayCall false for null" { check(!stmtMayCall(null as unknown as Node)); }
+test "stmtCanThrow false for null" { check(!stmtCanThrow(null as unknown as Node)); }
+
+test "callCanThrow false for ms-prefixed runtime calls" {
+	const loc = testLoc();
+	const call = makeCall(makeIdent("msStringDecref", loc), [], loc);
+	check(!callCanThrow(call));
+}
+
+test "callCanThrow true for user functions" {
+	const loc = testLoc();
+	const call = makeCall(makeIdent("parseExpr", loc), [], loc);
+	check(callCanThrow(call));
+}
+
+test "stmtCanThrow true for ThrowStmt" {
+	const loc = testLoc();
+	const throwStmt: Node = { kind: NodeKind.ThrowStmt, data: { throwArg: makeNull(loc) }, location: loc, nodeType: null as unknown as Type, resolvedSym: null as unknown as Symbol, flags: 0 };
+	check(stmtCanThrow(throwStmt));
+}
+
+test "stmtCanThrow false for ms-prefixed call in VarDecl" {
+	const loc = testLoc();
+	const decl = makeVarDecl("x", makeCall(makeIdent("msArrayCopy", loc), [], loc), DeclKind.Const, loc);
+	check(!stmtCanThrow(decl));
+}
 
 test "needsReturnIncref false for call expr (fresh)" {
 	const dctx = testDrcContext("function getString(): string { return \"\"; }");

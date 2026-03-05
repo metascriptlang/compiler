@@ -130,10 +130,14 @@ void msClearException(void);
 #define msMapSink(d, s)       do { msMapDestroy(&(d)); (d) = (s); } while(0)
 #define msMapTrace(m)         /* TODO: ORC trace */
 
-/* --- Set lifecycle (stubs) --- */
-typedef struct { void* impl; } msSet;
-#define msSetFree(s)          do { (s).impl = NULL; } while(0)
-#define msSetCopy(s)          /* no-op stub */
+/* --- Set = Map with NULL values --- */
+typedef msMap msSet;
+#define msSetNew()            msMapNew(NULL)
+#define msSetFree(s)          msMapFree(s)
+#define msSetCopy(s)          msMapCopy(s)
+#define msSetWasMoved(s)      msMapWasMoved(s)
+#define msSetSink(d, s)       msMapSink(d, s)
+#define msSetTrace(s)         msMapTrace(s)
 
 /* --- Named object wasMoved (no-op for value-type named objects) --- */
 #define msObjectWasMoved(p)   /* no-op */

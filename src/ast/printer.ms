@@ -148,7 +148,13 @@ export function printNode(node: Node, level: number): void {
 		NodeKind.ForOfStmt => {
 			const data = node.data as ForOfStmtData;
 			const keyword = match (data.forOfIsConst) { true => "const", _ => "let" };
-			console.log(`${pad}ForOfStmt: ${keyword} ${data.forOfBinding}`);
+			if (data.forOfPattern !== null) {
+				console.log(`${pad}ForOfStmt: ${keyword} [pattern]`);
+				console.log(`${pad}  Pattern:`);
+				printNode(data.forOfPattern, level + 2);
+			} else {
+				console.log(`${pad}ForOfStmt: ${keyword} ${data.forOfBinding}`);
+			}
 			console.log(`${pad}  Iterable:`);
 			printNode(data.forOfIterable, level + 2);
 			console.log(`${pad}  Body:`);

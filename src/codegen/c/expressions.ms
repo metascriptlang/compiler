@@ -23,11 +23,12 @@ import {
 	initLoc, noLoc, rdLoc,
 	add, addLine, sec,
 	pStmts, getTemp, nameSetHas, emitStmtsLine, internString,
+	emitProcLocalsLine,
 } from "./context";
 import { mangle, mangleFieldName, safeName } from "./names";
-import { getTypeDesc, isNrvoReturnType, intToString } from "./types";
+import { getTypeDesc, isNrvoReturnType, intToString, isPointerType, annotationToC } from "./types";
 import { formatCNumber, cBoolLiteral, cNullLiteral, cStringLiteral, msStringPoolRef } from "./literals";
-import { charAt, sliceStr, findChar } from "../../utils/string";
+import { charAt, sliceStr, findChar, startsWith } from "../../utils/string";
 import { check } from "std/testing";
 
 // ===== Iterative genExpr infrastructure =====
@@ -43,7 +44,7 @@ interface ExprStackItem {
 const TAG_DEFAULT = 0;
 const TAG_CALL_OVERLOAD = 2;
 const TAG_CALL_DIRECT = 3;
-const TAG_CALL_CLOSURE = 4;
+// TAG_CALL_CLOSURE removed — closure calls lowered to direct calls in closureCallLower.ms
 
 // Read i-th child from top N results on the stack.
 function peekResult(results: string[], childCount: number, idx: number): string {
@@ -133,6 +134,19 @@ function discoverExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[],
 	}
 	if (kind === NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
+		// Built-in numeric constants → C99 macros
+		if (d.name === "NaN") { results.push("NAN"); return; }
+		if (d.name === "Infinity") { results.push("INFINITY"); return; }
+		// Auto-declare DRC sink temps on first use
+		if (startsWith(d.name, "$sink_") && p !== null) {
+			let alreadySeen = false;
+			for (const s of p.seenSinks) { if (s === d.name) alreadySeen = true; }
+			if (!alreadySeen) {
+				p.seenSinks.push(d.name);
+				const cType = node.nodeType !== null ? getTypeDesc(g, node.nodeType) : "void*";
+				emitProcLocalsLine(p, "  " + cType + " " + safeName(d.name) + ";");
+			}
+		}
 		results.push(safeName(d.name));
 		return;
 	}
@@ -269,6 +283,19 @@ function discoverExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[],
 	if (kind === NodeKind.ObjectLiteral) {
 		const d = node.data as ObjectLiteralData;
 		const n = d.properties.length;
+		// Propagate field types from parent struct to untyped children (e.g. empty array literals)
+		if (node.nodeType !== null && node.nodeType.typeChildren !== null) {
+			let fi = 0;
+			while (fi < n && fi < d.keys.length) {
+				if (d.properties[fi].nodeType === null) {
+					const fieldType = getProperty(node.nodeType, d.keys[fi]);
+					if (fieldType !== null) {
+						d.properties[fi].nodeType = fieldType;
+					}
+				}
+				fi += 1;
+			}
+		}
 		workStack.push({ node, phase: 1, childCount: n, tag: TAG_DEFAULT });
 		// Push children in reverse order
 		let i = n - 1;
@@ -322,9 +349,9 @@ function discoverCallExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackIte
 		return;
 	}
 
-	// Direct call or closure call: callee + args
+	// Direct call: callee + args
 	const n = 1 + cd.arguments.length;
-	const tag = cd.isDirectCall ? TAG_CALL_DIRECT : TAG_CALL_CLOSURE;
+	const tag = TAG_CALL_DIRECT;
 	workStack.push({ node, phase: 1, childCount: n, tag });
 	// Push in reverse: args then callee
 	let i = cd.arguments.length - 1;
@@ -349,8 +376,20 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 		const right = peekResult(results, cc, 1);
 		truncResults(results, cc);
 		const d = node.data as BinaryExprData;
+		let finalRight = right;
+		if (d.operator === "=" && d.left.nodeType !== null && d.right.nodeType !== null) {
+			const leftCType = getTypeDesc(g, d.left.nodeType);
+			const rightCType = getTypeDesc(g, d.right.nodeType);
+			if (leftCType !== rightCType && leftCType !== "void*" && rightCType !== "void") {
+				const destIsPtr = leftCType.indexOf("*") >= 0;
+				const srcIsPtr = rightCType.indexOf("*") >= 0;
+				if (destIsPtr === srcIsPtr) {
+					finalRight = "((" + leftCType + ")(" + right + "))";
+				}
+			}
+		}
 		const cOp = mapBinaryOp(d.operator);
-		results.push("(" + left + " " + cOp + " " + right + ")");
+		results.push("(" + left + " " + cOp + " " + finalRight + ")");
 		return;
 	}
 
@@ -384,6 +423,13 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 		// Pre-formatted property (e.g. "p->data" from nativeLower) — emit raw
 		if (findChar(d.property, ">") >= 0) {
 			results.push(obj + "." + d.property);
+			return;
+		}
+		// Universal .length/.byteLength → .len fallback
+		// No C struct in our system has .length — all arrays/strings/maps use .len
+		// nativeLower remaps when objType is available; this catches null-objType cases
+		if (d.property === "length" || d.property === "byteLength") {
+			results.push(obj + ".len");
 			return;
 		}
 		const field = mangleFieldName(d.property);
@@ -540,9 +586,37 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 	const sym = node.resolvedSym;
 
 	if (tag === TAG_CALL_OVERLOAD) {
-		// Overloaded: all cc children are args
-		const argsStr = joinChildResults(results, cc);
+		// Overloaded: all cc children are args (no callee child)
 		const idx = cd.resolvedOverloadIdx;
+		// Resolve the chosen overload's function type for ABI shim
+		let ovType = sym.symbolType;
+		if (idx > 0 && idx - 1 < sym.overloads.length) {
+			ovType = sym.overloads[idx - 1].symbolType;
+		}
+		const hasOvParams = ovType !== null && ovType.kind === TypeKind.Function && ovType.typeChildren !== null;
+		// Build args with pointer/value ABI shim
+		let argsStr = "";
+		let ai = 0;
+		while (ai < cc) {
+			if (ai > 0) argsStr = argsStr + ", ";
+			let arg = results[results.length - cc + ai];
+			if (hasOvParams && ai < ovType.typeChildren.length && ai < cd.arguments.length) {
+				const paramType = ovType.typeChildren[ai];
+				const argNode = cd.arguments[ai];
+				if (paramType !== null && argNode.nodeType !== null) {
+					const paramIsPtr = isPointerType(paramType);
+					const argIsPtr = isPointerType(argNode.nodeType);
+					if (paramIsPtr && !argIsPtr) {
+						arg = "&(" + arg + ")";
+					} else if (!paramIsPtr && argIsPtr) {
+						arg = "*(" + arg + ")";
+					}
+				}
+			}
+			argsStr = argsStr + arg;
+			ai += 1;
+		}
+		truncResults(results, cc);
 		if (idx === 0 && sym.runtimeName !== "") {
 			results.push(sym.runtimeName + "(" + argsStr + ")");
 		} else if (idx > 0 && idx - 1 < sym.overloads.length && sym.overloads[idx - 1].runtimeName !== "") {
@@ -559,16 +633,34 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 	const callee = peekResult(results, cc, 0);
 	// C varargs: msNumberArrayFrom(count, (double)(e1), ...) — va_arg reads 8 bytes for double
 	const isNumberArrayFrom = callee === "msNumberArrayFrom";
+	// Resolve callee's function type for parameter type checking
+	const calleeType = sym !== null && sym.symbolType !== null ? sym.symbolType : (cd.callee.nodeType !== null ? cd.callee.nodeType : null as unknown as Type);
+	const hasParamTypes = calleeType !== null && calleeType.kind === TypeKind.Function && calleeType.typeChildren !== null;
 	let argsStr = "";
 	let i = 1;
 	while (i < cc) {
 		if (i > 1) argsStr = argsStr + ", ";
-		const arg = peekResult(results, cc, i);
+		let arg = peekResult(results, cc, i);
 		if (isNumberArrayFrom && i > 1) {
-			argsStr = argsStr + "(double)(" + arg + ")";
-		} else {
-			argsStr = argsStr + arg;
+			arg = "(double)(" + arg + ")";
+		} else if (hasParamTypes) {
+			// Pointer/value ABI shim: auto-insert & or * for mismatches
+			const argIdx = i - 1;
+			if (argIdx < calleeType.typeChildren.length && argIdx < cd.arguments.length) {
+				const paramType = calleeType.typeChildren[argIdx];
+				const argNode = cd.arguments[argIdx];
+				if (paramType !== null && argNode.nodeType !== null) {
+					const paramIsPtr = isPointerType(paramType);
+					const argIsPtr = isPointerType(argNode.nodeType);
+					if (paramIsPtr && !argIsPtr) {
+						arg = "&(" + arg + ")";
+					} else if (!paramIsPtr && argIsPtr) {
+						arg = "*(" + arg + ")";
+					}
+				}
+			}
 		}
+		argsStr = argsStr + arg;
 		i += 1;
 	}
 	truncResults(results, cc);
@@ -588,11 +680,6 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 		} else {
 			results.push(callee + "(" + argsStr + ")");
 		}
-	} else {
-		// TAG_CALL_CLOSURE
-		let envArgs = callee + ".env";
-		if (argsStr !== "") envArgs = envArgs + ", " + argsStr;
-		results.push("((" + callee + ").fn(" + envArgs + "))");
 	}
 }
 // ===== genExprAssign — evaluate expression and assign to dest =====
@@ -688,16 +775,14 @@ function genArrayLiteral(g: CGen, p: CProc, node: Node): string {
 		return result;
 	}
 
-	// Determine array type name from nodeType (for empty array zero-init)
+	// Determine array type name from nodeType — delegates to genArrayType for accurate dispatch
 	let arrayTypeName = "msRefArray";
-	if (node.nodeType !== null && node.nodeType.kind === TypeKind.Array) {
-		const elemType = node.nodeType.typeReturn;
-		if (elemType !== null) {
-			if (elemType.kind === TypeKind.Number || elemType.kind === TypeKind.Float64) {
-				arrayTypeName = "msNumberArray";
-			} else if (elemType.kind === TypeKind.String) {
-				arrayTypeName = "msStringArray";
-			}
+	if (node.nodeType !== null) {
+		if (node.nodeType.kind === TypeKind.Array || node.nodeType.kind === TypeKind.SizedArray) {
+			arrayTypeName = getTypeDesc(g, node.nodeType);
+		} else if (node.nodeType.typeName !== null && node.nodeType.typeName !== "") {
+			// Fallback: use string annotation (e.g. "string[]" → "msStringArray")
+			arrayTypeName = annotationToC(node.nodeType.typeName);
 		}
 	}
 

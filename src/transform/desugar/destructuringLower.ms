@@ -87,7 +87,12 @@ function expandDestructuring(stmt: Node, ctx: TransformContext): Node[] {
 		baseExpr = d.destrInit;
 	} else {
 		const tempName = freshTemp(ctx, "destr");
-		result.push(makeVarDecl(tempName, d.destrInit, DeclKind.Const, loc));
+		const tempDecl = makeVarDecl(tempName, d.destrInit, DeclKind.Const, loc);
+		// Propagate type so nativeLower can rewrite tuple access (t[0] → t._0)
+		if (d.destrInit.nodeType !== null) {
+			tempDecl.nodeType = d.destrInit.nodeType;
+		}
+		result.push(tempDecl);
 		baseExpr = makeIdent(tempName, loc);
 	}
 

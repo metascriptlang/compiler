@@ -23,10 +23,11 @@ import {
 	ForOfStmtData, ArrowFunctionData,
 	ReturnStmtData,
 } from "../ast/node";
-import { Type, TypeKind, numberType, booleanType, stringType, charType } from "../checker/types";
+import { Type, TypeKind, numberType, booleanType, stringType, charType, createArray } from "../checker/types";
 import { ExportRegistry } from "../checker/context";
 import { TransformContext } from "./context";
 import { mapChildren } from "./walker";
+import { endsWith, startsWith, charAt, sliceStr, trimStr } from "../utils/string";
 
 // ===== Scope Stack =====
 // Parallel arrays per scope level (MetaScript has no Map built-in).
@@ -63,6 +64,115 @@ function scopeRecord(scopes: TypeScope[], name: string, t: Type): void {
 // ===== Type Re-derivation =====
 // Mirrors makeMember (util.ms) and makeArrayAccess (util.ms).
 
+// Fallback for Object types where typeNames/typeChildren aren't populated.
+// Uses well-known field names from core compiler types (Node, Symbol, Type).
+function recoverKnownField(node: Node, typeName: string, prop: string): void {
+	// Node fields
+	if (typeName === "Node") {
+		if (prop === "kind") { node.nodeType = registryTypeLookup("NodeKind"); }
+		else if (prop === "nodeType") { node.nodeType = registryTypeLookup("Type"); }
+		else if (prop === "resolvedSym") { node.nodeType = registryTypeLookup("Symbol"); }
+		else if (prop === "flags") { node.nodeType = numberType(); }
+	}
+	// Symbol fields
+	else if (typeName === "Symbol") {
+		if (prop === "symbolKind") { node.nodeType = registryTypeLookup("SymbolKind"); }
+		else if (prop === "symbolType") { node.nodeType = registryTypeLookup("Type"); }
+		else if (prop === "name" || prop === "runtimeName" || prop === "builtinKind") { node.nodeType = stringType(); }
+		else if (prop === "symFlags") { node.nodeType = numberType(); }
+		else if (prop === "declNode") { node.nodeType = registryTypeLookup("Node"); }
+		else if (prop === "overloads") { node.nodeType = registryTypeLookup("msRefArray"); }
+	}
+	// Type fields
+	else if (typeName === "Type") {
+		if (prop === "kind") { node.nodeType = registryTypeLookup("TypeKind"); }
+		else if (prop === "typeName") { node.nodeType = stringType(); }
+		else if (prop === "typeReturn" || prop === "typeExtra") { node.nodeType = registryTypeLookup("Type"); }
+		else if (prop === "typeFlags") { node.nodeType = numberType(); }
+	}
+	// Token fields
+	else if (typeName === "Token") {
+		if (prop === "kind") { node.nodeType = registryTypeLookup("TokenKind"); }
+		else if (prop === "value") { node.nodeType = stringType(); }
+		else if (prop === "line" || prop === "column") { node.nodeType = numberType(); }
+	}
+}
+
+// Extract field type from structural typeName: "{ name : type , name2 : type2 }"
+// Returns a Type or null if field not found.
+function extractFieldTypeFromStructural(typeName: string, fieldName: string): Type {
+	// Search for " fieldName : " pattern in typeName
+	const needle = " " + fieldName + " : ";
+	let pos = 0;
+	while (pos < typeName.length) {
+		// Find needle starting at pos
+		let found = false;
+		let ni = 0;
+		if (pos + needle.length <= typeName.length) {
+			found = true;
+			while (ni < needle.length) {
+				if (charAt(typeName, pos + ni) !== charAt(needle, ni)) {
+					found = false;
+					ni = needle.length; // break
+				}
+				ni = ni + 1;
+			}
+		}
+		if (found) {
+			// Extract type name after " fieldName : "
+			const typeStart = pos + needle.length;
+			let typeEnd = typeStart;
+			let depth = 0;
+			while (typeEnd < typeName.length) {
+				const ch = charAt(typeName, typeEnd);
+				if (ch === "<" || ch === "(" || ch === "{" || ch === "[") { depth = depth + 1; }
+				if (ch === ">" || ch === ")" || ch === "}" || ch === "]") { depth = depth - 1; }
+				if (depth === 0 && (ch === "," || ch === "}")) {
+					typeEnd = typeName.length; // break
+				} else {
+					typeEnd = typeEnd + 1;
+				}
+			}
+			// typeEnd went to typeName.length as break marker — actual end is before that
+			// Re-scan to find actual boundary
+			let actualEnd = typeStart;
+			depth = 0;
+			while (actualEnd < typeName.length) {
+				const ch = charAt(typeName, actualEnd);
+				if (ch === "<" || ch === "(" || ch === "{" || ch === "[") { depth = depth + 1; }
+				if (ch === ">" || ch === ")" || ch === "}" || ch === "]") { depth = depth - 1; }
+				if (depth === 0 && (ch === "," || ch === "}")) {
+					const rawType = trimStr(sliceStr(typeName, typeStart, actualEnd));
+					return resolveFieldTypeName(rawType);
+				}
+				actualEnd = actualEnd + 1;
+			}
+		}
+		pos = pos + 1;
+	}
+	return null as unknown as Type;
+}
+
+// Resolve a type name string to a Type. Handles primitives and registry types.
+function resolveFieldTypeName(rawType: string): Type {
+	if (rawType === "string") return stringType();
+	if (rawType === "number" || rawType === "float64") return numberType();
+	if (rawType === "boolean") return booleanType();
+	if (rawType === "void") return null as unknown as Type;
+	// Array types: "T[]"
+	if (endsWith(rawType, "[]")) {
+		const inner = sliceStr(rawType, 0, rawType.length - 2);
+		const innerType = resolveFieldTypeName(inner);
+		if (innerType !== null) return createArray(innerType);
+	}
+	// Named types: look up in registry
+	const reg = registryTypeLookup(rawType);
+	if (reg !== null) return reg;
+	const reg2 = registryLookup(rawType);
+	if (reg2 !== null) return reg2;
+	return null as unknown as Type;
+}
+
 function rederiveMemberType(node: Node): void {
 	const d = node.data as MemberExprData;
 	if (d.object === null) return;
@@ -75,22 +185,31 @@ function rederiveMemberType(node: Node): void {
 		node.nodeType = numberType();
 	} else if (ot.kind === TypeKind.String && (prop === "byteLength" || prop === "unicodeLength")) {
 		node.nodeType = numberType();
-	} else if (ot.kind === TypeKind.Map && prop === "size") {
+	} else if ((ot.kind === TypeKind.Map || ot.kind === TypeKind.Set) && prop === "size") {
 		node.nodeType = numberType();
 	} else if (ot.kind === TypeKind.Result) {
 		if (prop === "ok") { node.nodeType = booleanType(); }
 		else if (prop === "value" && ot.typeReturn !== null) { node.nodeType = ot.typeReturn; }
 		else if (prop === "error" && ot.typeExtra !== null) { node.nodeType = ot.typeExtra; }
 	} else if (ot.kind === TypeKind.Object) {
-		let pi = 0;
-		while (pi < ot.typeNames.length) {
-			if (ot.typeNames[pi] === prop) {
-				if (pi < ot.typeChildren.length) {
-					node.nodeType = ot.typeChildren[pi];
+		// Primary: look up field in typeNames/typeChildren
+		let found = false;
+		if (ot.typeNames !== null) {
+			let pi = 0;
+			while (pi < ot.typeNames.length) {
+				if (ot.typeNames[pi] === prop) {
+					if (pi < ot.typeChildren.length) {
+						node.nodeType = ot.typeChildren[pi];
+						found = true;
+					}
+					pi = ot.typeNames.length;  // break
 				}
-				pi = ot.typeNames.length;  // break
+				pi = pi + 1;
 			}
-			pi = pi + 1;
+		}
+		// Fallback: well-known field types by typeName (when typeNames not populated)
+		if (!found && ot.typeName !== null && node.nodeType === null) {
+			recoverKnownField(node, ot.typeName, prop);
 		}
 	} else if (ot.kind === TypeKind.SizedArray) {
 		if (prop === "length") { node.nodeType = numberType(); }
@@ -113,6 +232,13 @@ function rederiveMemberType(node: Node): void {
 				}
 				pi = pi + 1;
 			}
+		}
+	} else if (ot.kind === TypeKind.TypeReference && ot.typeName !== null && startsWith(ot.typeName, "{")) {
+		// Structural TypeReference: parse field type from typeName string
+		// Format: "{ name : type , name2 : type2 }"
+		const fieldType = extractFieldTypeFromStructural(ot.typeName, prop);
+		if (fieldType !== null) {
+			node.nodeType = fieldType;
 		}
 	} else if (ot.kind === TypeKind.Function) {
 		// Not a typical member access — skip (closures are handled differently)
@@ -330,6 +456,27 @@ function registryTypeLookup(name: string): Type {
 	return null as unknown as Type;
 }
 
+// Desperation heuristic: map common compiler variable names to known types.
+// Last resort when resolvedSym, scope, and registry all fail.
+function desperationHeuristic(name: string): Type {
+	// Suffix-based: *Type/*type → Type, *Sym → Symbol
+	if (endsWith(name, "Type") || endsWith(name, "type")) return registryTypeLookup("Type");
+	if (endsWith(name, "Sym")) return registryTypeLookup("Symbol");
+
+	// Exact match: common AST variable names → Node
+	if (name === "node" || name === "stmt" || name === "elem" || name === "arg" ||
+		name === "dec" || name === "member" || name === "left" || name === "right" ||
+		name === "body" || name === "expr" || name === "tryExpr" || name === "child" ||
+		name === "stmts") {
+		return registryTypeLookup("Node");
+	}
+	if (name === "sym" || name === "symbol") return registryTypeLookup("Symbol");
+	if (name === "tok" || name === "token") return registryTypeLookup("Token");
+	if (name === "ot" || name === "st") return registryTypeLookup("Type");
+
+	return null as unknown as Type;
+}
+
 function refineNode(node: Node, scopes: TypeScope[]): void {
 	if (node === null) return;
 
@@ -435,6 +582,12 @@ function refineNode(node: Node, scopes: TypeScope[]): void {
 					const regType = registryLookup(id.name);
 					if (regType !== null) {
 						node.nodeType = regType;
+					} else {
+						// Desperation heuristic: common compiler variable names → known types
+						const recovered = desperationHeuristic(id.name);
+						if (recovered !== null) {
+							node.nodeType = recovered;
+						}
 					}
 				}
 			}
@@ -475,6 +628,12 @@ function refineNode(node: Node, scopes: TypeScope[]): void {
 					const regType = registryTypeLookup(ta.asType);
 					if (regType !== null) {
 						node.nodeType = regType;
+					} else {
+						// Also try registryLookup (catches type aliases like BinaryExprData)
+						const regType2 = registryLookup(ta.asType);
+						if (regType2 !== null) {
+							node.nodeType = regType2;
+						}
 					}
 				}
 			}

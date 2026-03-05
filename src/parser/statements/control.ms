@@ -6,6 +6,7 @@ import { Node, NodeKind, DeclKind, NodeData, createNode } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, skipDestructurePattern, consumeSemicolon } from "../context";
 import { skipOptionalType } from "../util";
 import { callBlockParser, callExprParser, callStmtParser } from "./callbacks";
+import { parseArrayPattern, parseObjectPattern } from "./declaration";
 import { programOk, stmtKind } from "./validation";
 import { check } from "std/testing";
 
@@ -108,9 +109,14 @@ export function parseForStmt(state: ParserState): NodeResult {
 		const forIsConst = bindingToken.kind === TokenKind.Const;
 		advance(state);
 
-		// Destructured for-of: for (const { a, b } of items) or for (const [a, b] of items)
-		if (current(state).kind === TokenKind.LBrace || current(state).kind === TokenKind.LBracket) {
-			skipDestructurePattern(state);
+		// Destructured for-of: for (const [a, b] of items) or for (const { a, b } of items)
+		if (current(state).kind === TokenKind.LBracket || current(state).kind === TokenKind.LBrace) {
+			let pattern: Node = null as unknown as Node;
+			if (current(state).kind === TokenKind.LBracket) {
+				pattern = try parseArrayPattern(state);
+			} else {
+				pattern = try parseObjectPattern(state);
+			}
 			// Now expect 'of' or 'in'
 			if (!isAtEnd(state) && current(state).kind === TokenKind.Of) {
 				advance(state); // consume 'of'
@@ -124,6 +130,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 					forOfIsConst: forIsConst,
 					forOfIterable: iterable,
 					forOfBody: try parseBodyOrStmt(state),
+					forOfPattern: pattern,
 				}, forToken));
 			}
 			if (!isAtEnd(state) && current(state).kind === TokenKind.In) {
@@ -162,6 +169,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 					forOfIsConst: forIsConst,
 					forOfIterable: iterable,
 					forOfBody: try parseBodyOrStmt(state),
+					forOfPattern: null as unknown as Node,
 				}, forToken));
 			}
 			if (afterName < state.tokens.length && state.tokens[afterName].kind === TokenKind.In) {

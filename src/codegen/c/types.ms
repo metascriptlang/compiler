@@ -107,6 +107,7 @@ export function annotationToC(annotation: string): string {
 	if (s === "uint64") return "uint64_t";
 	if (s === "boolean") return "MS_BOOL";
 	if (s === "string") return "msString";
+	if (s === "cstring") return "const char*";
 	if (s === "void" || s === "null") return "void*";
 	// Array types: "T[]", "T []", "T [ ]" (checker may include spaces)
 	if (endsWith(s, "[]") || endsWith(s, "[ ]")) {
@@ -175,6 +176,7 @@ export function typeKey(t: Type): string {
 		TypeKind.String => "string",
 		TypeKind.Boolean => "boolean",
 		TypeKind.Char => "char",
+		TypeKind.CString => "cstring",
 		TypeKind.Void => "void",
 		TypeKind.Null => "null",
 		TypeKind.Enum => { "enum:" + t.typeName; },
@@ -250,6 +252,7 @@ export function getSimpleTypeDesc(t: Type): string {
 		TypeKind.Boolean => "MS_BOOL",
 		TypeKind.Char => "char",
 		TypeKind.String => "msString",
+		TypeKind.CString => "const char*",
 		TypeKind.Void | TypeKind.Null => "void",
 		_ => "",
 	};
@@ -279,7 +282,7 @@ export function needsRC(t: Type): boolean {
 		TypeKind.Span => false, // Span is non-owning
 		TypeKind.Object => { !isInterfaceType(t) },
 		TypeKind.Ref => true,
-		TypeKind.Map => true,
+		TypeKind.Map | TypeKind.Set => true,
 		TypeKind.Tuple => {
 			let i = 0;
 			while (i < t.typeChildren.length) {
@@ -847,6 +850,8 @@ test "tuple needsRC without RC elements" {
 	const t = createTuple([createPrimitive(TypeKind.Number), createPrimitive(TypeKind.Int32)]);
 	check(!needsRC(t));
 }
+
+test "set needs RC" { check(needsRC(createPrimitive(TypeKind.Set))); }
 
 test "anonymous type emits struct with hash name" {
 	const names1: string[] = [];

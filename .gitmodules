@@ -1,3 +1,12 @@
 [submodule "vendor/aro"]
 	path = vendor/aro
 	url = https://github.com/Vexu/arocc.git
+[submodule "metascript.nvim"]
+	path = tools/editor-plugin/metascript.nvim
+	url = https://github.com/metascriptlang/metascript.nvim.git
+[submodule "metascript-vscode"]
+	path = tools/editor-plugin/vscode
+	url = https://github.com/metascriptlang/metascript-vscode.git
+[submodule "metascript-zed"]
+	path = tools/editor-plugin/zed
+	url = https://github.com/metascriptlang/metascript-zed.git

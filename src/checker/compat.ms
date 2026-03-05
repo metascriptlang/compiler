@@ -72,6 +72,11 @@ export function isAssignable(source: Type, target: Type): boolean {
 		return true;
 	}
 
+	// String → CString implicit coercion (zero-copy pointer extraction)
+	if (source.kind === TypeKind.String && target.kind === TypeKind.CString) {
+		return true;
+	}
+
 	// Source is union: all members must be assignable to target
 	if (source.kind === TypeKind.Union) {
 		for (const member of source.typeChildren) {
@@ -104,6 +109,8 @@ export function needsStdConv(source: Type, target: Type): boolean {
 		if (source.kind === TypeKind.Array || source.kind === TypeKind.SizedArray) return true;
 		if (source.kind === TypeKind.String && target.typeReturn !== null && target.typeReturn.kind === TypeKind.Char) return true;
 	}
+	// String → CString requires msCStr extraction
+	if (source.kind === TypeKind.String && target.kind === TypeKind.CString) return true;
 	// Borrow promotion: T → Borrow<T> (take address)
 	if (target.kind === TypeKind.Borrow && target.typeReturn !== null) {
 		if (source.kind !== TypeKind.Borrow) return true;

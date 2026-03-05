@@ -13,10 +13,10 @@
 // Runtime macros are GCC statement expressions returning lvalues (read + write).
 
 import {
-	Node, NodeKind,
+	Node, NodeKind, SourceLocation,
 	ArrayAccessData, MemberExprData, ArrayLiteralData,
 	VariableDeclData, BinaryExprData, CallExprData,
-	NumberLiteralData,
+	NumberLiteralData, HiddenStdConvData,
 } from "../../ast/node";
 import { Type, TypeKind } from "../../checker/types";
 import { TransformContext } from "../context";
@@ -64,8 +64,27 @@ function rewriteAccess(node: Node): Node {
 	if (node.kind === NodeKind.ArrayAccess) return rewriteArrayAccess(node);
 	if (node.kind === NodeKind.MemberExpr) return rewriteMemberExpr(node);
 	if (node.kind === NodeKind.ArrayLiteral) return rewriteArrayLiteral(node);
-	if (node.kind === NodeKind.CallExpr) return rewriteMapMethodCall(node);
+	if (node.kind === NodeKind.HiddenStdConv) return rewriteCStringConv(node);
+	if (node.kind === NodeKind.CallExpr) {
+		const r = rewriteMapMethodCall(node);
+		if (r !== node) return r;
+		return rewriteSetMethodCall(node);
+	}
 	return node;
+}
+
+// ===== CString Conversion =====
+
+function rewriteCStringConv(node: Node): Node {
+	const d = node.data as HiddenStdConvData;
+	if (d.convType === null) return node;
+	if (d.convType.kind !== TypeKind.CString) return node;
+	// Only rewrite string → cstring (not cstring → cstring identity)
+	if (d.convExpr.nodeType !== null && d.convExpr.nodeType.kind === TypeKind.CString) return node;
+	const loc = node.location;
+	const result = makeCall(makeIdent("msCStr", loc), [d.convExpr], loc);
+	result.nodeType = d.convType;
+	return result;
 }
 
 // ===== Array/String Index Access =====
@@ -142,9 +161,16 @@ function rewriteMemberExpr(node: Node): Node {
 	const objType = d.object.nodeType;
 	if (objType === null) return node;
 
+	// .length on CString → strlen(s) (C standard library)
 	// .length on String → msStringLength(s) (UTF-16 code units, TS parity)
 	// .length on arrays → .len (direct field access)
 	if (d.property === "length") {
+		if (objType.kind === TypeKind.CString) {
+			const loc = node.location;
+			const result = makeCall(makeIdent("strlen", loc), [d.object], loc);
+			result.nodeType = node.nodeType;
+			return result;
+		}
 		if (objType.kind === TypeKind.String) {
 			const loc = node.location;
 			const result = makeCall(makeIdent("msStringLength", loc), [d.object], loc);
@@ -186,7 +212,7 @@ function rewriteMemberExpr(node: Node): Node {
 	}
 
 	// Map.size → m.len (direct field access)
-	if (d.property === "size" && objType.kind === TypeKind.Map) {
+	if (d.property === "size" && (objType.kind === TypeKind.Map || objType.kind === TypeKind.Set)) {
 		d.property = "len";
 	}
 
@@ -201,6 +227,14 @@ function rewriteMemberExpr(node: Node): Node {
 //   m.delete(k)  → msMapDelete(&m, k)      (mutating)
 //   m.clear()    → msMapClear(&m)           (mutating)
 
+// Wrap numeric key argument with msNumToKey() conversion if Map has number key type
+function wrapNumericKey(key: Node, objType: Type, loc: SourceLocation): Node {
+	if (objType !== null && objType.typeReturn !== null && objType.typeReturn.kind === TypeKind.Number) {
+		return makeCall(makeIdent("msNumToKey", loc), [key], loc);
+	}
+	return key;
+}
+
 function rewriteMapMethodCall(node: Node): Node {
 	const cd = node.data as CallExprData;
 	if (cd.callee.kind !== NodeKind.MemberExpr) return node;
@@ -212,24 +246,75 @@ function rewriteMapMethodCall(node: Node): Node {
 	const method = me.property;
 
 	if (method === "get" && cd.arguments.length === 1) {
-		const result = makeCall(makeIdent("msMapGet", loc), [me.object, cd.arguments[0]], loc);
+		const wrappedKey = wrapNumericKey(cd.arguments[0], objType, loc);
+		const result = makeCall(makeIdent("msMapGet", loc), [me.object, wrappedKey], loc);
 		result.nodeType = node.nodeType;
 		return result;
 	}
 	if (method === "set" && cd.arguments.length === 2) {
 		const addr = makeHiddenAddr(me.object, loc);
-		const result = makeCall(makeIdent("msMapSet", loc), [addr, cd.arguments[0], cd.arguments[1]], loc);
+		const wrappedKey = wrapNumericKey(cd.arguments[0], objType, loc);
+		const result = makeCall(makeIdent("msMapSet", loc), [addr, wrappedKey, cd.arguments[1]], loc);
 		result.nodeType = node.nodeType;
 		return result;
 	}
 	if (method === "has" && cd.arguments.length === 1) {
-		const result = makeCall(makeIdent("msMapHas", loc), [me.object, cd.arguments[0]], loc);
+		const wrappedKey = wrapNumericKey(cd.arguments[0], objType, loc);
+		const result = makeCall(makeIdent("msMapHas", loc), [me.object, wrappedKey], loc);
 		result.nodeType = node.nodeType;
 		return result;
 	}
 	if (method === "delete" && cd.arguments.length === 1) {
 		const addr = makeHiddenAddr(me.object, loc);
-		const result = makeCall(makeIdent("msMapDelete", loc), [addr, cd.arguments[0]], loc);
+		const wrappedKey = wrapNumericKey(cd.arguments[0], objType, loc);
+		const result = makeCall(makeIdent("msMapDelete", loc), [addr, wrappedKey], loc);
+		result.nodeType = node.nodeType;
+		return result;
+	}
+	if (method === "clear" && cd.arguments.length === 0) {
+		const addr = makeHiddenAddr(me.object, loc);
+		const result = makeCall(makeIdent("msMapClear", loc), [addr], loc);
+		result.nodeType = node.nodeType;
+		return result;
+	}
+
+	return node;
+}
+
+// ===== Set Method Call Lowering =====
+// Set methods lower directly to msMap* calls (msSet = msMap, values ignored):
+//   s.add(v)     → msMapSet(&s, v, NULL)    (mutating)
+//   s.has(v)     → msMapHas(s, v)
+//   s.delete(v)  → msMapDelete(&s, v)       (mutating)
+//   s.clear()    → msMapClear(&s)           (mutating)
+
+function rewriteSetMethodCall(node: Node): Node {
+	const cd = node.data as CallExprData;
+	if (cd.callee.kind !== NodeKind.MemberExpr) return node;
+	const me = cd.callee.data as MemberExprData;
+	const objType = me.object.nodeType;
+	if (objType === null || objType.kind !== TypeKind.Set) return node;
+
+	const loc = node.location;
+	const method = me.property;
+
+	if (method === "add" && cd.arguments.length === 1) {
+		const addr = makeHiddenAddr(me.object, loc);
+		const wrappedElem = wrapNumericKey(cd.arguments[0], objType, loc);
+		const result = makeCall(makeIdent("msMapSet", loc), [addr, wrappedElem, makeIdent("NULL", loc)], loc);
+		result.nodeType = node.nodeType;
+		return result;
+	}
+	if (method === "has" && cd.arguments.length === 1) {
+		const wrappedElem = wrapNumericKey(cd.arguments[0], objType, loc);
+		const result = makeCall(makeIdent("msMapHas", loc), [me.object, wrappedElem], loc);
+		result.nodeType = node.nodeType;
+		return result;
+	}
+	if (method === "delete" && cd.arguments.length === 1) {
+		const addr = makeHiddenAddr(me.object, loc);
+		const wrappedElem = wrapNumericKey(cd.arguments[0], objType, loc);
+		const result = makeCall(makeIdent("msMapDelete", loc), [addr, wrappedElem], loc);
 		result.nodeType = node.nodeType;
 		return result;
 	}

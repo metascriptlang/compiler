@@ -10,13 +10,13 @@ import {
 	IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData,
 	DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData,
 	SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData,
-	DestructuringDeclData, ProgramData,
+	DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ProgramData,
 	MacroInvocationData, StringLiteralData, CallExprData,
 	TestDeclData, ExpectStmtData,
 } from "../ast/node";
 import {
 	Type, TypeKind,
-	unknownType, nullType, stringType,
+	unknownType, nullType, stringType, charType, numberType,
 	createUnion,
 } from "./types";
 import {
@@ -415,10 +415,74 @@ function checkForStmt(ctx: CheckerContext, node: Node): void {
 function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ForOfStmtData;
 	checkExpr(ctx, d.forOfIterable);
+	// Infer binding type from iterable
+	let elemType = unknownType();
+	const iterType = d.forOfIterable.nodeType;
+	if (iterType !== null) {
+		if ((iterType.kind === TypeKind.Array || iterType.kind === TypeKind.SizedArray || iterType.kind === TypeKind.Span) && iterType.typeReturn !== null) {
+			elemType = iterType.typeReturn;
+		} else if (iterType.kind === TypeKind.String) {
+			elemType = charType();
+		} else if (iterType.kind === TypeKind.Set && iterType.typeReturn !== null) {
+			elemType = iterType.typeReturn;
+		} else if (iterType.kind === TypeKind.Map && iterType.typeReturn !== null) {
+			// Non-destructured for-of on Map yields keys
+			elemType = iterType.typeReturn;
+		}
+	}
 	const saved = enterLoopScope(ctx);
-	defineSymbol(ctx.table, makeSymbol(d.forOfBinding, SymbolKind.Variable, unknownType(), !d.forOfIsConst));
+	if (d.forOfPattern !== null) {
+		// Destructured for-of: define symbols for each pattern element
+		defineForOfPatternBindings(ctx, d.forOfPattern, iterType, d.forOfIsConst);
+	} else {
+		defineSymbol(ctx.table, makeSymbol(d.forOfBinding, SymbolKind.Variable, elemType, !d.forOfIsConst));
+	}
 	checkStmt(ctx, d.forOfBody);
 	exitLoopScope(ctx, saved);
+}
+
+function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType: Type, isConst: boolean): void {
+	if (pattern.kind === NodeKind.ArrayPattern) {
+		const apd = pattern.data as ArrayPatternData;
+		let i = 0;
+		while (i < apd.patternElements.length) {
+			const elem = apd.patternElements[i];
+			if (elem.kind === NodeKind.Identifier) {
+				const id = elem.data as IdentifierData;
+				if (id.name !== "_") {
+					let elemType = unknownType();
+					if (iterType !== null && iterType.kind === TypeKind.Map) {
+						// Map [key, value]: element 0 = key type, element 1 = value type
+						if (i === 0) {
+							elemType = stringType();
+						} else if (i === 1 && iterType.typeReturn !== null) {
+							elemType = iterType.typeReturn;
+						}
+					} else if (iterType !== null && iterType.kind === TypeKind.Tuple && iterType.typeChildren !== null && i < iterType.typeChildren.length) {
+						elemType = iterType.typeChildren[i];
+					} else if (iterType !== null && (iterType.kind === TypeKind.Array || iterType.kind === TypeKind.SizedArray) && iterType.typeReturn !== null) {
+						// Array of tuples: element type from tuple children
+						const tupleType = iterType.typeReturn;
+						if (tupleType !== null && tupleType.kind === TypeKind.Tuple && tupleType.typeChildren !== null && i < tupleType.typeChildren.length) {
+							elemType = tupleType.typeChildren[i];
+						}
+					}
+					defineSymbol(ctx.table, makeSymbol(id.name, SymbolKind.Variable, elemType, !isConst));
+				}
+			}
+			i += 1;
+		}
+	} else if (pattern.kind === NodeKind.ObjectPattern) {
+		const opd = pattern.data as ObjectPatternData;
+		for (const prop of opd.patternProps) {
+			if (prop.kind !== NodeKind.ObjectPatternProp) continue;
+			const p = prop.data as ObjectPatternPropData;
+			if (p.propAlias.kind === NodeKind.Identifier) {
+				const id = p.propAlias.data as IdentifierData;
+				defineSymbol(ctx.table, makeSymbol(id.name, SymbolKind.Variable, unknownType(), !isConst));
+			}
+		}
+	}
 }
 
 function checkForInStmt(ctx: CheckerContext, node: Node): void {
@@ -646,6 +710,17 @@ function collectDirectives(ctx: CheckerContext, program: Node): void {
 	}
 }
 
+function defineBuiltinConstants(ctx: CheckerContext): void {
+	const nanSym = makeSymbol("NaN", SymbolKind.Variable, numberType(), false);
+	nanSym.state = SymbolState.Checked;
+	nanSym.builtinKind = "NaN";
+	defineSymbol(ctx.table, nanSym);
+	const infSym = makeSymbol("Infinity", SymbolKind.Variable, numberType(), false);
+	infSym.state = SymbolState.Checked;
+	infSym.builtinKind = "Infinity";
+	defineSymbol(ctx.table, infSym);
+}
+
 export function checkProgram(program: Node): CheckerContext {
 	return checkProgramCancellable(program, null as unknown as CancelCtx, 0);
 }
@@ -670,6 +745,8 @@ export function checkProgramCancellable(program: Node, cancelCtx: CancelCtx, can
 		defineSymbol(ctx.table, consoleGlobal);
 		consoleGlobal.state = SymbolState.Shaped;
 	}
+	// Built-in numeric constants: NaN, Infinity
+	defineBuiltinConstants(ctx);
 	runThreePasses(ctx, program);
 	collectDirectives(ctx, program);
 
@@ -694,6 +771,7 @@ export function checkProgramWithRegistry(program: Node, registry: ExportRegistry
 		defineSymbol(ctx.table, consoleGlobal);
 		consoleGlobal.state = SymbolState.Shaped;
 	}
+	defineBuiltinConstants(ctx);
 	runThreePasses(ctx, program);
 	collectDirectives(ctx, program);
 	inferOwnership(ctx, program);

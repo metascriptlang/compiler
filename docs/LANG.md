@@ -10,6 +10,7 @@ MetaScript is a systems programming language with TypeScript syntax that compile
 | `string` | Mutable UTF-8 (TS superset) | `msString` |
 | `boolean` | true/false | `bool` |
 | `char` | 8-bit character | `char` / `int8_t` |
+| `cstring` | C-compatible string | `const char*` |
 | `void` | No value | `void` |
 | `never` | Unreachable | N/A |
 | `null` | Null value | `NULL` |
@@ -830,7 +831,9 @@ macro deriveEq(target) {
 
 ### Extern Declarations (FFI)
 ```typescript
-extern function printf(fmt: string, ...args: unknown[]): void;
+// cstring is used for zero-copy C interop. 
+// Standard 'string' implicitly coerces to 'cstring'.
+extern function printf(fmt: cstring, ...args: unknown[]): void;
 extern class FILE { }
 extern const STDIN: FILE;
 ```

@@ -18,7 +18,7 @@ import {
 } from "./value";
 import { RaiserModule, makeTestModule } from "./module";
 import { RaiserOpcode, RaiserInstruction, raiserABC, raiserABx } from "./bytecode";
-import { RaiserVM, execModule } from "./vm";
+import { RaiserVM, execModule, vmDumpStack } from "./vm";
 
 // --- Context ---
 
@@ -29,6 +29,7 @@ export interface RaiserContext {
 	lastOutput: string;
 	arrayHeap: RaiserArrayHeap;
 	objectHeap: RaiserObjectHeap;
+	lastError: string;
 }
 
 export function createContext(): RaiserContext {
@@ -38,7 +39,7 @@ export function createContext(): RaiserContext {
 	const nilResult = raiserNil();
 	const arrayHeap = createArrayHeap();
 	const objectHeap = createObjectHeap();
-	return { mod: emptyMod, hasModule: false, lastResult: nilResult, lastOutput: "", arrayHeap, objectHeap };
+	return { mod: emptyMod, hasModule: false, lastResult: nilResult, lastOutput: "", arrayHeap, objectHeap, lastError: "" };
 }
 
 export function load(ctx: RaiserContext, mod: RaiserModule): void {
@@ -53,6 +54,11 @@ export function execute(ctx: RaiserContext): boolean {
 	ctx.lastOutput = vm.output;
 	ctx.arrayHeap = vm.arrayHeap;
 	ctx.objectHeap = vm.objectHeap;
+	if (vm.error !== "") {
+		ctx.lastError = vm.error + "\n" + vmDumpStack(vm);
+		return false;
+	}
+	ctx.lastError = "";
 	return true;
 }
 
@@ -106,4 +112,18 @@ test "output captured" {
 	load(ctx, mod);
 	execute(ctx);
 	check(ctx.lastOutput === "99\n");
+}
+
+test "error propagates with stack trace" {
+	const ctx = createContext();
+	// Unknown opcode should produce error + stack trace
+	const code: RaiserInstruction[] = [
+		{ op: 999 as RaiserOpcode, a: 0, b: 0, c: 0, cachedIdx: -1, line: 0 },
+	];
+	const consts: RaiserValue[] = [];
+	const mod = makeTestModule(code, consts);
+	load(ctx, mod);
+	const ok = execute(ctx);
+	check(!ok);
+	check(ctx.lastError.length > 0);
 }

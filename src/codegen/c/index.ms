@@ -36,9 +36,14 @@ import { check } from "std/testing";
 
 export function generateC(program: Node, ctx: CheckerContext, modulePath: string): string {
 	const moduleCode = generateCModule(program, ctx, modulePath, "");
-	const hasMain = (ctx !== null && ctx.table !== null) ? lookupSymbol(ctx.table, "main") !== null : false;
+	const mainSym = (ctx !== null && ctx.table !== null) ? lookupSymbol(ctx.table, "main") : null;
+	const hasMain = mainSym !== null;
+	let mainRet = "void";
+	if (mainSym !== null && mainSym.symbolType !== null && mainSym.symbolType.typeReturn !== null) {
+		mainRet = typeDescForProto(mainSym.symbolType.typeReturn);
+	}
 	const paths: string[] = [modulePath];
-	const dispatcher = genProjectDispatcher(paths, modulePath, hasMain);
+	const dispatcher = genProjectDispatcher(paths, modulePath, hasMain, mainRet);
 	return moduleCode + "\n" + dispatcher;
 }
 
@@ -137,8 +142,9 @@ function genModuleInitFns(g: CGen): void {
 // Generates the global init dispatcher: forward decls, MsPreMainInner, MsMainInner,
 // MsMain, global vars, and POSIX main. Used by both single-module and multi-module builds.
 
-export function genProjectDispatcher(modulePaths: string[], entryPath: string, hasUserMain: boolean): string {
+export function genProjectDispatcher(modulePaths: string[], entryPath: string, hasUserMain: boolean, mainRetType: string): string {
 	let result = "";
+	const retType = (mainRetType.length > 0) ? mainRetType : "void";
 
 	// Forward declarations for all module init functions
 	for (let i = 0; i < modulePaths.length; i += 1) {
@@ -147,7 +153,7 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 		result = result + "void " + modName + "__Init000(void);\n";
 	}
 	if (hasUserMain) {
-		result = result + "void main_(void);\n";
+		result = result + retType + " main_(void);\n";
 	}
 	result = result + "\n";
 
@@ -167,7 +173,11 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 	}
 	result = result + "  " + mangleModuleName(entryPath) + "__Init000();\n";
 	if (hasUserMain) {
-		result = result + "  main_();\n";
+		if (retType !== "void") {
+			result = result + "  msProgramResult = (int)main_();\n";
+		} else {
+			result = result + "  main_();\n";
+		}
 	}
 	result = result + "}\n\n";
 

@@ -85,6 +85,7 @@ export function mapChildren(node: Node, f: Visitor): void {
 			const d = node.data as ForOfStmtData;
 			d.forOfIterable = f(d.forOfIterable);
 			d.forOfBody = f(d.forOfBody);
+			if (d.forOfPattern !== null) { d.forOfPattern = f(d.forOfPattern); }
 		},
 		NodeKind.ForInStmt => {
 			const d = node.data as ForInStmtData;

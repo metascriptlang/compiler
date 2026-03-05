@@ -15,8 +15,9 @@ Comprehensive status of non-array/string primitive and compound types in MetaScr
 | ~~`string`~~ | ~~Managed~~ | ~~**DONE**~~ | ~~COW / UTF-8~~ | ~~TS `.length` parity implemented~~ |
 | ~~`Tuple`~~ | ~~Compound~~ | ~~**DONE**~~ | ~~Proper C structs~~ | ~~Nim has anonymous structs~~ |
 | ~~`Map<K, V>`~~ | ~~Managed~~ | ~~**DONE**~~ | ~~Open-addressing SoA~~ | ~~High-perf C runtime implemented~~ |
-| `Set<T>` | Managed | **STUB** | Type system only | Nim has `HashSet` |
+| ~~`Set<T>`~~ | ~~Managed~~ | ~~**DONE**~~ | ~~Map wrapper (typedef)~~ | ~~Nim has `HashSet`~~ |
 | ~~`Result<T, E>`~~ | ~~Compound~~ | ~~**DONE**~~ | ~~Object literal lowering~~ | ~~Rust/Nim parity~~ |
+| ~~`cstring`~~ | ~~Primitive~~ | ~~**DONE**~~ | ~~Pointer alias~~ | ~~Nim/C interop parity~~ |
 
 ---
 
@@ -63,11 +64,11 @@ This roadmap tracks the transition of compound types from **STUB** to **PRODUCTI
 *   [x] **M1.4: Method Lowering**: Rewrite `m.get()`, `m.set()`, `m.has()` in `src/transform/native/builtinLower.ms`.
 *   **Expectation**: `const m = new Map<string, number>(); m.set("a", 1);` compiles and runs in C.
 
-### Phase 2: Set & Iteration (P1)
+### Phase 2: Set & Iteration (P1) — ~~DONE~~
 **Goal**: Unblock graph traversal (module loader) and provide idiomatic `for-of` support.
-*   [ ] **M2.1: Set implementation**: Implement `Set<T>` as a wrapper around `Map<T, void>`.
-*   [ ] **M2.2: Iterator Protocol**: Support `for (const [k, v] of map)` in `nativeLower.ms`.
-*   [ ] **M2.3: Key/Value Views**: Implement `map.keys()` and `map.values()` zero-copy views.
+*   [x] **M2.1: Set implementation**: Implement `Set<T>` as a wrapper around `Map<T, void>`.
+*   [x] **M2.2: Iterator Protocol**: Support `for (const [k, v] of map)` in `nativeLower.ms`.
+*   [x] **M2.3: Key/Value Views**: Implement `map.keys()` and `map.values()` zero-copy views.
 *   **Expectation**: The compiler's module dependency graph can be traversed using native `Set` objects.
 
 ### Phase 3: Tuple & Anonymous Structs (P1) — ~~DONE~~
@@ -76,11 +77,19 @@ This roadmap tracks the transition of compound types from **STUB** to **PRODUCTI
 *   [x] **M3.2: Index remapping**: Rewrite `t.0`, `t.1` to direct C struct field access in `nativeLower.ms`.
 *   **Expectation**: Tuples become type-safe, stack-allocated records in C.
 
-### Phase 4: Full TS Utility Parity (P2)
+### Phase 4: Full TS Utility Parity (P2) — ~~DONE~~
 **Goal**: Complete the "Dumb Codegen" mapping for all remaining TS types.
-*   [ ] **M4.1: Record<K, V>**: Ensure full desugaring to `Map<K, V>`.
-*   [ ] **M4.2: WeakMap/WeakSet**: Decide on implementation (or stub for systems safety).
-*   [ ] **M4.3: Standard Methods**: Implement `Map.clear()`, `Map.size` (getter), etc.
+*   [x] **M4.1: Record<K, V>**: Ensure full desugaring to `Map<K, V>`.
+*   [x] **M4.2: WeakMap/WeakSet**: Decide on implementation (stubbed for now).
+*   [x] **M4.3: Standard Methods**: Implement `Map.clear()`, `Map.size` (getter), etc.
+
+### Phase 5: The FFI Bridge (cstring) (Strategic P1) — ~~DONE~~
+**Goal**: Enable seamless, zero-copy interop with C libraries by providing a type that is implicitly compatible with `string`.
+*   [x] **M5.1: TypeKind.CString**: Add `TypeKind.CString` to the type system.
+*   [x] **M5.2: Implicit Coercion**: Allow `string -> cstring` implicit conversion in the checker.
+*   [x] **M5.3: Codegen Mapping**: Map `cstring` to `const char*` in the C backend.
+*   [x] **M5.4: Pointer Extraction**: Transform `string -> cstring` by extracting the raw buffer pointer (`s.p->data`).
+*   **Expectation**: `extern function puts(s: cstring): void; const msg = "hi"; puts(msg);` works with zero overhead.
 
 ---
 
@@ -89,7 +98,8 @@ This roadmap tracks the transition of compound types from **STUB** to **PRODUCTI
 | Feature | Status | Priority | Files Involved |
 | :--- | :--- | :--- | :--- |
 | ~~**Map Foundation**~~ | ~~**DONE**~~ | ~~P0~~ | ~~`runtime/core/map.c`, `std/core/map.ms`~~ |
-| **Set Wrapper** | PLANNED | P1 | `std/core/set.ms` |
+| ~~**Set Wrapper**~~ | ~~**DONE**~~ | ~~P1~~ | ~~`std/core/set.ms`~~ |
 | ~~**Tuple Structs**~~ | ~~**DONE**~~ | ~~P1~~ | ~~`src/codegen/c/types.ms`~~ |
-| **Map Iteration** | PLANNED | P1 | `src/transform/native/nativeLower.ms` |
+| ~~**Map Iteration**~~ | ~~**DONE**~~ | ~~P1~~ | ~~`src/transform/native/nativeLower.ms`~~ |
+| ~~**FFI Bridge**~~ | ~~**DONE**~~ | ~~P1~~ | ~~`src/checker/compat.ms`, `src/codegen/c/`~~ |
 

@@ -17,6 +17,7 @@ import { Node } from "../../ast/node";
 import { TransformContext } from "../context";
 import { lowerNewExpr } from "../lowering/newExprLower";
 import { markClosureCalls } from "./closureCallMarker";
+import { lowerClosureCalls } from "./closureCallLower";
 import { markPointerParams } from "./pointerParam";
 import { injectRangeChecks } from "./rangeCheckInject";
 import { coerceOptionals } from "./optionalCoercion";
@@ -27,6 +28,7 @@ import { lowerEnumToString } from "./enumToStringLower";
 export function transformForNative(program: Node, ctx: TransformContext): Node {
 	let result = lowerNewExpr(program, ctx);
 	result = markClosureCalls(result, ctx);
+	result = lowerClosureCalls(result, ctx);
 	result = markPointerParams(result, ctx);
 	result = injectRangeChecks(result, ctx);
 	result = coerceOptionals(result, ctx);

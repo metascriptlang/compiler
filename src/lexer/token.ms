@@ -29,7 +29,7 @@ export enum TokenKind {
 	Private, Protected, Public, Readonly, Require, Set, Static, Type, Unknown, Yield,
 	Match, When, Unreachable, Defer, Distinct, Move, Out, Test, Expect, Macro, Extern, Quote, Char,
 	Int8, Int16, Int32, Int64, Uint8, Uint16, Uint32, Uint64,
-	Float32, Float64, Int, Float, Double,
+	Float32, Float64, Int, Float, Double, CString,
 	// EOF
 	Eof,
 }
@@ -149,6 +149,7 @@ export function identToKeyword(ident: string): TokenKind {
 		"int" => TokenKind.Int,
 		"float" => TokenKind.Float,
 		"double" => TokenKind.Double,
+		"cstring" => TokenKind.CString,
 		_ => TokenKind.Ident,
 	};
 }
@@ -305,6 +306,7 @@ export function tokenKindToString(kind: TokenKind): string {
 		TokenKind.Int => "INT",
 		TokenKind.Float => "FLOAT",
 		TokenKind.Double => "DOUBLE",
+		TokenKind.CString => "CSTRING",
 		TokenKind.Eof => "EOF",
 		_ => "UNKNOWN_TOKEN",
 	};

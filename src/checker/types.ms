@@ -14,7 +14,7 @@ export enum TypeKind {
 	// Sized integers/floats (C interop)
 	Int32, Int64, Uint32, Float32, Float64,
 	// Compound
-	Object, Array, SizedArray, Span, Function, Tuple, Map, Set,
+	Object, Array, SizedArray, Span, Function, Tuple, Map, Set, CString,
 	// Generics
 	GenericParam, GenericInstance,
 	// Memory
@@ -208,6 +208,13 @@ export function createTuple(elementTypes: Type[]): Type {
 	return t;
 }
 
+export function createSet(elemType: Type): Type {
+	const t = emptyType();
+	t.kind = TypeKind.Set;
+	t.typeReturn = elemType;
+	return t;
+}
+
 export function createDistinct(inner: Type): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Distinct;
@@ -253,6 +260,7 @@ export function unknownType(): Type { return getSysType(TypeKind.Unknown); }
 export function neverType(): Type { return getSysType(TypeKind.Never); }
 export function errorType(): Type { return getSysType(TypeKind.Error); }
 export function charType(): Type { return getSysType(TypeKind.Char); }
+export function cstringType(): Type { return getSysType(TypeKind.CString); }
 
 // ===== Min Arity (Default Parameters) =====
 // Encoded in typeFlags bits 8-15. Zero = not set = all params required.
@@ -313,7 +321,8 @@ export function substituteType(t: Type, paramName: string, concrete: Type): Type
 	return match (t.kind) {
 		TypeKind.Number | TypeKind.String | TypeKind.Boolean |
 		TypeKind.Void | TypeKind.Null | TypeKind.Unknown |
-		TypeKind.Never | TypeKind.Error | TypeKind.GenericParam => t,
+		TypeKind.Never | TypeKind.Error | TypeKind.GenericParam |
+		TypeKind.CString => t,
 		TypeKind.Array => createArray(substituteType(t.typeReturn, paramName, concrete)),
 		TypeKind.SizedArray => createSizedArray(substituteType(t.typeReturn, paramName, concrete), t.typeFlags),
 		TypeKind.Span => createSpan(substituteType(t.typeReturn, paramName, concrete)),
@@ -341,6 +350,7 @@ export function substituteType(t: Type, paramName: string, concrete: Type): Type
 		TypeKind.Ref => createRef(substituteType(t.typeReturn, paramName, concrete)),
 		TypeKind.Ptr => createPtr(substituteType(t.typeReturn, paramName, concrete)),
 		TypeKind.Borrow => createBorrow(substituteType(t.typeReturn, paramName, concrete)),
+		TypeKind.Set => createSet(substituteType(t.typeReturn, paramName, concrete)),
 		TypeKind.Tuple => {
 			const newChildren: Type[] = [];
 			for (const child of t.typeChildren) {
@@ -504,6 +514,7 @@ export function isPrimitiveKind(kind: TypeKind): boolean {
 		|| kind === TypeKind.Never
 		|| kind === TypeKind.Unknown
 		|| kind === TypeKind.Char
+		|| kind === TypeKind.CString
 		|| kind === TypeKind.Error;
 }
 
@@ -526,6 +537,8 @@ export function typeNameOf(t: Type): string {
 		TypeKind.Borrow => "Borrow",
 		TypeKind.Map => "Map",
 		TypeKind.Tuple => "Tuple",
+		TypeKind.Set => "Set",
+		TypeKind.CString => "cstring",
 		TypeKind.Result => "Result",
 		TypeKind.Enum => t.typeName,
 		_ => "",
@@ -798,4 +811,21 @@ test "substituteType Tuple" {
 	check(result.kind === TypeKind.Tuple);
 	check(result.typeChildren[0].kind === TypeKind.String);
 	check(result.typeChildren[1].kind === TypeKind.Number);
+}
+
+test "createSet" {
+	const s = createSet(stringType());
+	check(s.kind === TypeKind.Set);
+	check(s.typeReturn.kind === TypeKind.String);
+}
+
+test "typeNameOf Set" {
+	check(typeNameOf(createSet(stringType())) === "Set");
+}
+
+test "substituteType Set" {
+	const s = createSet(createGenericParam("T"));
+	const result = substituteType(s, "T", stringType());
+	check(result.kind === TypeKind.Set);
+	check(result.typeReturn.kind === TypeKind.String);
 }

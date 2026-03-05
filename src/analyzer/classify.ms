@@ -125,7 +125,7 @@ export function classifyType(t: Type, ctx: TransformContext): RcInfo {
 		TypeKind.Ref | TypeKind.Ptr => makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", ""),
 		TypeKind.Function => makeRcInfo(RcKind.Closure, "", "msClosureDestroy", "msClosureCopy", "msClosureWasMoved", "msClosureSink"),
 		TypeKind.Map => makeRcInfo(RcKind.Map, "", "msMapFree", "msMapCopy", "msMapWasMoved", "msMapSink"),
-		TypeKind.Set => makeRcInfo(RcKind.Set, "", "msSetFree", "msSetCopy", "", ""),
+		TypeKind.Set => makeRcInfo(RcKind.Set, "", "msSetFree", "msSetCopy", "msSetWasMoved", "msSetSink"),
 		TypeKind.Object => classifyObject(t, ctx),
 		TypeKind.TypeReference => classifyTypeRef(t, ctx),
 		TypeKind.Distinct => { if (t.typeReturn !== null) { classifyType(t.typeReturn, ctx) } else { noRcInfo() } },

@@ -12,11 +12,11 @@ import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
 import { monomorphizeProgram } from "../monomorphize/collect";
 import { generateJS } from "../codegen/js/index";
-// TEMPORARY: Raiser VM detached for C-backend bootstrap
-// import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
-// import { RaiserContext, createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
+import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
+import { RaiserContext, createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
 import { generateC, generateCModule, genProjectDispatcher, collectExportedPrototypes, collectExportedTypeDecls, flushResultTypeDecls, emitExportedTypesViaCGen, registerExportedClassNames } from "../codegen/c/index";
 import { createCGen, sec, extract } from "../codegen/c/context";
+import { getSimpleTypeDesc } from "../codegen/c/types";
 // CSection enum indices (from context.ms) — using literals because cross-module
 // enum resolution fails under Bun bootstrap checker ("un-resolved identifier").
 const CSECTION_FORWARD_DECLS = 1;
@@ -65,20 +65,20 @@ export function cmdCompile(filePath: string, opts: CliOptions, outputPath: strin
 		printErrorsAndExit(checkerCtx, "compiler metadata error: ", opts.errorMax);
 	}
 
-	if (opts.verbose) verboseLog("transform");
-	const transformed = transformProgram(monoed, checkerCtx, opts.target === Target.JS);
+	// Evaluate @comptime blocks (before transforms — results become literals)
+	const comptimeResolved = evaluateComptimeBlocks(monoed);
 
-	// Evaluate @comptime blocks
-	const comptimeResolved = evaluateComptimeBlocks(transformed);
+	if (opts.verbose) verboseLog("transform");
+	const transformed = transformProgram(comptimeResolved, checkerCtx, opts.target === Target.JS);
 
 	if (opts.target === Target.JS) {
 		if (opts.verbose) verboseLog("codegen js");
-		const jsCode = generateJS(comptimeResolved);
+		const jsCode = generateJS(transformed);
 		emitOutput(jsCode, filePath, outputPath, ".js");
 	} else {
 		if (opts.verbose) verboseLog("transform (native)");
 		const nativeCtx = createTransformContextWithChecker(checkerCtx);
-		const typeRefined = refineTypes(comptimeResolved, nativeCtx, graphRegistry);
+		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 		if (opts.verbose) verboseLog("analyze (DRC)");
 		const analyzed = analyzeProgram(nativeTransformed, checkerCtx);
@@ -363,12 +363,14 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		validateTypedAST(ctx, pr.value);
 		ctx.errors = [];
 
+		// Evaluate @comptime blocks before transforms
+		const comptimeResolved = evaluateComptimeBlocks(pr.value);
+
 		// Transform (JS backend — skip C-specific transforms, no monomorphize needed)
-		const transformed = transformProgram(pr.value, ctx, true);
-		const comptimeResolved = evaluateComptimeBlocks(transformed);
+		const transformed = transformProgram(comptimeResolved, ctx, true);
 
 		// Generate JS
-		const jsCode = generateJS(comptimeResolved);
+		const jsCode = generateJS(transformed);
 
 		// Write output to out/debug/ preserving relative structure
 		const relPath = stripBase(modPath, baseDir);
@@ -419,6 +421,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 
 	// Pass 2: Full pipeline + codegen + per-module compile to .o
 	let hasUserMain = false;
+	let mainRetType = "void";
 	let allFlags = cliCompileFlags(opts);
 	let oFiles = "";
 	let compiled = 0;
@@ -459,13 +462,15 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 			ctx.errors = [];
 		}
 
+		// Evaluate @comptime blocks before transforms
+		const comptimeResolved = evaluateComptimeBlocks(monoed);
+
 		// Transform (C target)
-		const transformed = transformProgram(monoed, ctx, false);
-		const comptimeResolved = evaluateComptimeBlocks(transformed);
+		const transformed = transformProgram(comptimeResolved, ctx, false);
 
 		// Type refinement + native transform (C-specific lowering)
 		const nativeCtx = createTransformContextWithChecker(ctx);
-		const typeRefined = refineTypes(comptimeResolved, nativeCtx, graphRegistry);
+		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 
 		// Analyze (DRC injection)
@@ -484,8 +489,13 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		oFiles = appendFlag(oFiles, compileObjs);
 
 		// Check for user main() in entry module
-		if (modPath === entryPath) {
-			hasUserMain = (ctx !== null && ctx.table !== null) ? lookupSymbol(ctx.table, "main") !== null : false;
+		if (modPath === entryPath && ctx !== null && ctx.table !== null) {
+			const mainSym = lookupSymbol(ctx.table, "main");
+			hasUserMain = mainSym !== null;
+			if (mainSym !== null && mainSym.symbolType !== null && mainSym.symbolType.typeReturn !== null) {
+				const ret = getSimpleTypeDesc(mainSym.symbolType.typeReturn);
+				if (ret !== "") mainRetType = ret;
+			}
 		}
 
 		if (opts.emitC) {
@@ -526,7 +536,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 
 	// Generate global init dispatcher and compile to .o
 	if (opts.verbose) verboseLog("generating dispatcher");
-	const dispatcher = genProjectDispatcher(graph.loadOrder, entryPath, hasUserMain);
+	const dispatcher = genProjectDispatcher(graph.loadOrder, entryPath, hasUserMain, mainRetType);
 	const dispFile = "/tmp/_msc_dispatch.c";
 	const dispObj = "/tmp/_msc_dispatch.o";
 	writeOutput(dispFile, dispatcher);
@@ -600,10 +610,10 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		validateTypedAST(ctx, monoed);
 		ctx.errors = [];
 
-		const transformed = transformProgram(monoed, ctx, false);
-		const comptimeResolved = evaluateComptimeBlocks(transformed);
+		const comptimeResolved = evaluateComptimeBlocks(monoed);
+		const transformed = transformProgram(comptimeResolved, ctx, false);
 		const nativeCtx = createTransformContextWithChecker(ctx);
-		const typeRefined = refineTypes(comptimeResolved, nativeCtx, graphRegistry);
+		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 		const analyzed = analyzeProgram(nativeTransformed, ctx);
 		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
@@ -630,7 +640,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 
 	// Generate dispatcher with hasUserMain=false (suppress user's main)
 	if (opts.verbose) verboseLog("generating test dispatcher");
-	const dispatcher = genProjectDispatcher(graph.loadOrder, filePath, false);
+	const dispatcher = genProjectDispatcher(graph.loadOrder, filePath, false, "void");
 	const dispFile = "/tmp/_msc_test_dispatch.c";
 	const dispObj = "/tmp/_msc_test_dispatch.o";
 	writeOutput(dispFile, dispatcher);
@@ -685,9 +695,9 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 		const ctx = graphRegistry !== null ? checkProgramWithRegistry(pr.value, graphRegistry, graph, mod) : checkProgram(pr.value);
 		ctx.errors = [];
 
-		const transformed = transformProgram(pr.value, ctx, true);
-		const comptimeResolved = evaluateComptimeBlocks(transformed);
-		const jsCode = generateJS(comptimeResolved);
+		const comptimeResolved = evaluateComptimeBlocks(pr.value);
+		const transformed = transformProgram(comptimeResolved, ctx, true);
+		const jsCode = generateJS(transformed);
 
 		const relPath = stripBase(modPath, baseDir);
 		const outPath = outDir + "/" + replaceExt(relPath, ".js");
@@ -710,10 +720,6 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 // compiles to bytecode via generateRaiserProject, executes in-process.
 
 export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
-	// TEMPORARY: Raiser VM detached for C-backend bootstrap
-	console.log("Raiser (VM) backend is currently detached for bootstrap.");
-	return;
-	/* Original implementation (uncomment to re-attach):
 	const t0 = clockMs();
 	const config = buildResolverConfig(Target.Raiser, defaultResolveSection());
 	const graph = loadAndCheckGraph(filePath, opts.verbose, config);
@@ -738,7 +744,7 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 	}
 
 	if (opts.verbose) verboseLog("generating bytecode (" + modules.length + " modules)");
-	const raiserMod = generateRaiserProject(modules);
+	const raiserMod = generateRaiserProject(modules, null as unknown as CheckerContext);
 
 	if (opts.showTime) printTiming("compiled", t0);
 
@@ -755,5 +761,4 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 			console.log(lastOut);
 		}
 	}
-	*/
 }

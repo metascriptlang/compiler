@@ -13,7 +13,7 @@ import {
 	Node, NodeKind,
 	CallExprData, MemberExprData, IdentifierData,
 } from "../../ast/node";
-import { TypeKind } from "../../checker/types";
+import { TypeKind, createResult, stringType, unknownType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { walkNode } from "../walker";
@@ -49,6 +49,16 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 			return lowerBuiltinCall(node, sym.builtinKind, ctx);
 		}
 	}
+	// Static extension @builtin fallback: when resolvedSym lacks builtinKind
+	// (cross-module compilation re-registers symbols without decorator metadata),
+	// look up the method symbol directly by name in the checker scope.
+	if (cd.callee.kind === NodeKind.MemberExpr && ctx.checkerCtx !== null) {
+		const me = cd.callee.data as MemberExprData;
+		const extSym = lookupSymbol(ctx.checkerCtx.table, me.property);
+		if (extSym !== null && extSym.builtinKind !== "") {
+			return lowerBuiltinCall(node, extSym.builtinKind, ctx);
+		}
+	}
 
 	// Resolve class method calls (console.log, Math.floor) definitively.
 	// These reach here as MemberExpr callees with a resolvedSym pointing to the method.
@@ -56,8 +66,9 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 		const methodSym = cd.callee.resolvedSym;
 		if (methodSym.runtimeName !== "") {
 			// Found a @runtime method (like console.log → msPrintln)
-			// Rewrite to a direct call: msPrintln(s)
-			const newCallee = makeIdentResolved(methodSym, loc);
+			// Rewrite to a direct call using the runtimeName as the C function name
+			const newCallee = makeIdent(methodSym.runtimeName, loc);
+			newCallee.resolvedSym = methodSym;
 			cd.callee = newCallee;
 			node.resolvedSym = methodSym;
 			cd.isDirectCall = true;
@@ -108,10 +119,20 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 function rewriteResultToLiteral(node: Node, isOk: boolean, ctx: TransformContext): Node {
 	const cd = node.data as CallExprData;
 	const loc = node.location;
-	const resType = node.nodeType;
+	let resType = node.nodeType;
+	// Fallback: infer Result type from argument when nodeType is missing
 	if (resType === null || resType.kind !== TypeKind.Result) {
-		console.log("Result lowering: missing or non-Result nodeType at line " + loc.line);
-		return node;
+		if (cd.arguments.length > 0 && cd.arguments[0].nodeType !== null) {
+			if (isOk) {
+				resType = createResult(cd.arguments[0].nodeType, stringType());
+			} else {
+				resType = createResult(unknownType(), cd.arguments[0].nodeType);
+			}
+			node.nodeType = resType;
+		}
+		if (resType === null || resType.kind !== TypeKind.Result) {
+			return node;
+		}
 	}
 
 	const keys: string[] = ["ok"];

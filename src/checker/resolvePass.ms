@@ -14,7 +14,7 @@ import {
 } from "../ast/node";
 import {
 	Type, TypeKind,
-	unknownType, numberType, stringType, booleanType, voidType, nullType, neverType, charType,
+	unknownType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType,
 	createPrimitive, createArray, createFunction, createObject,
 	createResult, createTypeRef, createUnion, createGenericParam, createDistinct,
 	createSizedArray, createSpan, createBorrow,
@@ -87,9 +87,18 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 			const t = createPrimitive(TypeKind.Map);
 			t.typeReturn = resolveAnnotation(args[0], ctx);
 			t.typeExtra = resolveAnnotation(args[1], ctx);
-			// Phase 1 restriction: only string keys in C backend
-			if (t.typeReturn.kind !== TypeKind.String && t.typeReturn.kind !== TypeKind.Unknown) {
-				addError(ctx, "Only string keys are supported for Map in the C backend (Phase 1). Got: " + typeNameOf(t.typeReturn));
+			// String and number keys supported; others rejected
+			if (t.typeReturn.kind !== TypeKind.String && t.typeReturn.kind !== TypeKind.Number && t.typeReturn.kind !== TypeKind.Unknown) {
+				addError(ctx, "Only string or number keys are supported for Map in the C backend. Got: " + typeNameOf(t.typeReturn));
+			}
+			return t;
+		}
+		if (baseName === "Set" && args.length === 1) {
+			const t = createPrimitive(TypeKind.Set);
+			t.typeReturn = resolveAnnotation(args[0], ctx);
+			// String and number elements supported; others rejected
+			if (t.typeReturn.kind !== TypeKind.String && t.typeReturn.kind !== TypeKind.Number && t.typeReturn.kind !== TypeKind.Unknown) {
+				addError(ctx, "Only string or number elements are supported for Set in the C backend. Got: " + typeNameOf(t.typeReturn));
 			}
 			return t;
 		}
@@ -98,9 +107,8 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 			const t = createPrimitive(TypeKind.Map);
 			t.typeReturn = resolveAnnotation(args[0], ctx);
 			t.typeExtra = resolveAnnotation(args[1], ctx);
-			// Phase 1 restriction: only string keys in C backend
-			if (t.typeReturn.kind !== TypeKind.String && t.typeReturn.kind !== TypeKind.Unknown) {
-				addError(ctx, "Only string keys are supported for Map in the C backend (Phase 1). Got: " + typeNameOf(t.typeReturn));
+			if (t.typeReturn.kind !== TypeKind.String && t.typeReturn.kind !== TypeKind.Number && t.typeReturn.kind !== TypeKind.Unknown) {
+				addError(ctx, "Only string or number keys are supported for Map in the C backend. Got: " + typeNameOf(t.typeReturn));
 			}
 			return t;
 		}
@@ -138,6 +146,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 		"float32" => createPrimitive(TypeKind.Float32),
 		"float64" => createPrimitive(TypeKind.Float64),
 		"char" => charType(),
+		"cstring" => cstringType(),
 		_ => {
 			const sym = lookupSymbol(ctx.table, trimmed);
 			if (sym !== null) {

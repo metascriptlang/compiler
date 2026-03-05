@@ -20,12 +20,13 @@ static msMapPayload* msMapAllocPayload(int64_t cap) {
 	return p;
 }
 
-static void msMapFreePayload(msMapPayload* p) {
+static void msMapFreePayload(msMapPayload* p, msMapValueDestructor valDestroy) {
 	if (p == NULL) return;
-	/* Destroy all active keys */
+	/* Destroy all active keys and values */
 	for (int64_t i = 0; i < p->cap; i++) {
 		if (p->states[i] == MS_MAP_USED) {
 			msStringDestroy(p->keys[i]);
+			if (valDestroy && p->values[i]) valDestroy(p->values[i]);
 		}
 	}
 	free(p->states);
@@ -99,23 +100,32 @@ static void msMapRehash(msMap* m, int64_t newCap) {
 
 /* ===== Public API ===== */
 
-msMap msMapNew(void) {
-	return MS_EMPTY_MAP;
+msMap msMapNew(msMapValueDestructor valDestroy) {
+	msMap m;
+	m.len = 0;
+	m.p = NULL;
+	m.valDestroy = valDestroy;
+	return m;
 }
 
 void msMapDestroy(msMap* m) {
 	if (m->p != NULL) {
-		msMapFreePayload(m->p);
+		msMapFreePayload(m->p, m->valDestroy);
 		m->p = NULL;
 	}
 	m->len = 0;
 }
 
 msMap msMapCopyFn(msMap m) {
-	if (m.p == NULL) return MS_EMPTY_MAP;
+	if (m.p == NULL) {
+		msMap e = MS_EMPTY_MAP;
+		e.valDestroy = m.valDestroy;
+		return e;
+	}
 
 	msMap copy;
 	copy.len = m.len;
+	copy.valDestroy = m.valDestroy;
 	copy.p = msMapAllocPayload(m.p->cap);
 
 	memcpy(copy.p->states, m.p->states, m.p->cap * sizeof(uint8_t));
@@ -150,7 +160,8 @@ void msMapSet(msMap* m, msString key, void* value) {
 	int64_t slot = msMapFindSlot(m->p, key, &found);
 
 	if (found) {
-		/* Update existing — value only (key already matches) */
+		/* Update existing — destroy old value, then store new */
+		if (m->valDestroy && m->p->values[slot]) m->valDestroy(m->p->values[slot]);
 		m->p->values[slot] = value;
 	} else {
 		/* Insert new */
@@ -189,7 +200,8 @@ bool msMapDelete(msMap* m, msString key) {
 	int64_t slot = msMapFindSlot(m->p, key, &found);
 	if (!found) return false;
 
-	/* Tombstone deletion */
+	/* Tombstone deletion — destroy value before clearing */
+	if (m->valDestroy && m->p->values[slot]) m->valDestroy(m->p->values[slot]);
 	m->p->states[slot] = MS_MAP_DELETED;
 	msStringDestroy(m->p->keys[slot]);
 	m->p->keys[slot] = MS_EMPTY_STRING;
@@ -209,6 +221,7 @@ void msMapClear(msMap* m) {
 		if (m->p->states[i] == MS_MAP_USED) {
 			msStringDestroy(m->p->keys[i]);
 			m->p->keys[i] = MS_EMPTY_STRING;
+			if (m->valDestroy && m->p->values[i]) m->valDestroy(m->p->values[i]);
 			m->p->values[i] = NULL;
 		}
 		m->p->states[i] = MS_MAP_EMPTY;

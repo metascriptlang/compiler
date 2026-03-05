@@ -1,9 +1,5 @@
 // ComptimeEval — Evaluate @comptime blocks via Raiser VM, fold results into AST
-// TEMPORARY: Raiser VM detached for C-backend bootstrap. Pass-through only.
 
-import { Node } from "../ast/node";
-
-/* RAISER VM DETACHED — uncomment to re-attach:
 import { check } from "std/testing";
 import {
 	Node, NodeKind, DeclKind, SourceLocation, createNode,
@@ -38,6 +34,7 @@ import {
 	ProgramData,
 } from "../ast/node";
 import { Token, TokenKind, createToken } from "../lexer/token";
+import { parseSource } from "../parser/index";
 import { evalASTFull } from "../codegen/raiser/eval";
 import {
 	RaiserValueKind, RaiserValue,
@@ -47,11 +44,10 @@ import {
 	heapAllocObject, heapObjectSetField, heapObjectGetField,
 	heapAllocArray, heapArrayPush,
 	createObjectHeap, createArrayHeap,
+	clearObjectHeap, clearArrayHeap,
 } from "../raiser/value";
 import { RaiserContext } from "../raiser/context";
-END RAISER VM DETACHED */
 
-/* RAISER VM DETACHED — internal functions (uncomment to re-attach):
 // --- Node builders (inlined to avoid import graph issues with transform/util) ---
 
 function synthToken(loc: SourceLocation): Token {
@@ -527,14 +523,35 @@ function evalComptimeBlock(node: Node): Node {
 	const bodyData = body.data as BlockStmtData;
 	const stmts = bodyData.statements;
 
+	// Transform last ExprStmt into ReturnStmt so the VM captures the value
+	// (standard comptime/REPL semantics — implicit return of last expression)
+	const finalStmts: Node[] = [];
+	let si = 0;
+	while (si < stmts.length) {
+		if (si === stmts.length - 1 && stmts[si].kind === NodeKind.ExprStmt) {
+			const ed = stmts[si].data as ExprStmtData;
+			finalStmts.push(createNode(NodeKind.ReturnStmt, { argument: ed.expr }, synthToken(loc)));
+		} else {
+			finalStmts.push(stmts[si]);
+		}
+		si = si + 1;
+	}
+
 	// Wrap in a synthetic Program node for the Raiser pipeline
-	const program = createNode(NodeKind.Program, { programStmts: stmts }, synthToken(loc));
+	const program = createNode(NodeKind.Program, { programStmts: finalStmts }, synthToken(loc));
 
 	// Evaluate through the Raiser VM
-	const ctx = evalASTFull(program);
+	let ctx = evalASTFull(program);
 
 	// Convert VM result back to an AST literal
-	return valueToNode(ctx.lastResult, ctx.objectHeap, ctx.arrayHeap, loc);
+	const result = valueToNode(ctx.lastResult, ctx.objectHeap, ctx.arrayHeap, loc);
+
+	// Reclaim VM heaps — prevents monotonic growth during long builds
+	clearObjectHeap(ctx.objectHeap);
+	clearArrayHeap(ctx.arrayHeap);
+	ctx = null as unknown as RaiserContext;
+
+	return result;
 }
 
 // --- First pass: check if AST contains any ComptimeBlock nodes ---
@@ -557,6 +574,9 @@ function hasComptimeBlock(node: Node): boolean {
 			if (hasComptimeBlock(d.statements[i])) return true;
 			i = i + 1;
 		}
+	} else if (node.kind === NodeKind.ExportDecl) {
+		const d = node.data as ExportDeclData;
+		return hasComptimeBlock(d.exportedDecl);
 	} else if (node.kind === NodeKind.FunctionDecl) {
 		const d = node.data as FunctionDeclData;
 		return hasComptimeBlock(d.fnBody);
@@ -621,6 +641,10 @@ function walkNode(node: Node): Node {
 		return createNode(NodeKind.WhileStmt, {
 			whileCondition: d.whileCondition, whileBody: newBody,
 		}, synthToken(node.location));
+	} else if (node.kind === NodeKind.ExportDecl) {
+		const d = node.data as ExportDeclData;
+		const newDecl = walkNode(d.exportedDecl);
+		return createNode(NodeKind.ExportDecl, { exportedDecl: newDecl }, synthToken(node.location));
 	} else if (node.kind === NodeKind.Program) {
 		const d = node.data as ProgramData;
 		const newStmts: Node[] = [];
@@ -634,20 +658,13 @@ function walkNode(node: Node): Node {
 	return node;
 }
 
-END RAISER VM DETACHED — internal functions */
-
 // --- Public API ---
 
 export function evaluateComptimeBlocks(program: Node): Node {
-	// TEMPORARY: Skip @comptime evaluation for C-Backend bootstrap
-	return program;
-	/* Original implementation (uncomment to re-attach):
 	if (!hasComptimeBlock(program)) return program;
 	return walkNode(program);
-	*/
 }
 
-/* RAISER VM DETACHED — tests (uncomment to re-attach):
 // --- Tests ---
 test "int value" {
 	const ctx = evalASTFull(createNode(NodeKind.Program, {
@@ -745,4 +762,49 @@ test "BinaryExpr serialization" {
 	const rightKind = heapObjectGetField(objHeap, rightVal.intVal, "kind");
 	check(rightKind.intVal === (NodeKind.NumberLiteral as number));
 }
-END RAISER VM DETACHED — tests */
+
+// --- E2E Comptime Tests ---
+
+test "comptime int arithmetic" {
+	const pr = parseSource("const VERSION = @comptime { 10 + 5 };");
+	check(pr.ok);
+	const result = evaluateComptimeBlocks(pr.value);
+	const pd = result.data as ProgramData;
+	const varDecl = pd.programStmts[0];
+	check(varDecl.kind === NodeKind.VariableDecl);
+	const vd = varDecl.data as VariableDeclData;
+	check(vd.initializer.kind === NodeKind.NumberLiteral);
+	const nd = vd.initializer.data as NumberLiteralData;
+	check(nd.value === 15);
+}
+
+test "comptime string" {
+	const pr = parseSource("const PLATFORM = @comptime { \"darwin\" };");
+	check(pr.ok);
+	const result = evaluateComptimeBlocks(pr.value);
+	const pd = result.data as ProgramData;
+	const varDecl = pd.programStmts[0];
+	const vd = varDecl.data as VariableDeclData;
+	check(vd.initializer.kind === NodeKind.StringLiteral);
+	const sd = vd.initializer.data as StringLiteralData;
+	check(sd.value === "darwin");
+}
+
+test "comptime boolean" {
+	const pr = parseSource("const DEBUG = @comptime { true };");
+	check(pr.ok);
+	const result = evaluateComptimeBlocks(pr.value);
+	const pd = result.data as ProgramData;
+	const varDecl = pd.programStmts[0];
+	const vd = varDecl.data as VariableDeclData;
+	check(vd.initializer.kind === NodeKind.BooleanLiteral);
+	const bd = vd.initializer.data as BooleanLiteralData;
+	check(bd.boolValue === true);
+}
+
+test "no comptime passes through" {
+	const pr = parseSource("const x = 42;");
+	check(pr.ok);
+	const result = evaluateComptimeBlocks(pr.value);
+	check(result === pr.value);
+}

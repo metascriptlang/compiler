@@ -13,12 +13,18 @@
 
 #include "../mem/arc.h"
 #include "string.h"
+#include <stdlib.h>
 
 /* ===== Slot States ===== */
 
 #define MS_MAP_EMPTY   0
 #define MS_MAP_DELETED 1
 #define MS_MAP_USED    2
+
+/* ===== Value Destructor Callback ===== */
+/* Called when a managed value is removed (overwrite, delete, clear, destroy). */
+/* NULL = no-op (primitives, Set values). */
+typedef void (*msMapValueDestructor)(void*);
 
 /* ===== Payload (SoA layout) ===== */
 
@@ -32,13 +38,14 @@ typedef struct {
 /* ===== Map Value Type ===== */
 
 typedef struct {
-	int64_t len;          /* number of active (USED) entries */
-	msMapPayload* p;      /* NULL if empty */
+	int64_t len;              /* number of active (USED) entries */
+	msMapPayload* p;          /* NULL if empty */
+	msMapValueDestructor valDestroy;  /* called on value removal (NULL = no-op) */
 } msMap;
 
 /* ===== Constants ===== */
 
-#define MS_EMPTY_MAP ((msMap){0, NULL})
+#define MS_EMPTY_MAP ((msMap){0, NULL, NULL})
 #define MS_MAP_INITIAL_CAP 8
 #define MS_MAP_LOAD_FACTOR_NUM 7
 #define MS_MAP_LOAD_FACTOR_DEN 10
@@ -57,7 +64,7 @@ static inline uint64_t msHashString(msString s) {
 
 /* ===== Lifecycle ===== */
 
-msMap msMapNew(void);
+msMap msMapNew(msMapValueDestructor valDestroy);
 void msMapDestroy(msMap* m);
 msMap msMapCopyFn(msMap m);  /* DRC uses msMapCopy macro in system.h */
 
@@ -69,5 +76,28 @@ bool msMapHas(msMap m, msString key);
 bool msMapDelete(msMap* m, msString key);
 int64_t msMapSize(msMap m);
 void msMapClear(msMap* m);
+
+/* ===== Iteration Helpers ===== */
+/* Used by for-of lowering to scan occupied slots. */
+
+static inline int64_t msMapCap(msMap m) { return m.p ? m.p->cap : 0; }
+static inline uint8_t msMapSlotState(msMap m, int64_t i) { return m.p->states[i]; }
+static inline msString msMapSlotKey(msMap m, int64_t i) { return m.p->keys[i]; }
+static inline void* msMapSlotValue(msMap m, int64_t i) { return m.p->values[i]; }
+
+/* ===== Numeric Key Helpers ===== */
+/* Store numeric keys as their string representation via snprintf.        */
+/* This reuses all existing string-key infrastructure (DJB2, comparison). */
+
+static inline msString msNumToKey(double v) {
+	char buf[32];
+	int n = snprintf(buf, sizeof(buf), "%.17g", v);
+	return msStringNew(buf, (int64_t)n);
+}
+
+static inline double msKeyToNum(msString s) {
+	if (s.len == 0 || s.p == NULL) return 0.0;
+	return strtod(s.p->data, NULL);
+}
 
 #endif /* MS_MAP_H */

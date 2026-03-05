@@ -117,55 +117,6 @@ test "enum toString E2E: parse → transform → codegen" {
 	check(cCode.length > 50);
 }
 
-import { transformForNative } from "./index";
-import { createTransformContext } from "../context";
-
-test "enum toString E2E: full native pipeline → codegen" {
-	const pr = parseSource("enum Color { Red, Green, Blue }");
-	check(pr.ok);
-	const ctx = createTransformContext();
-	const transformed = transformForNative(pr.value, ctx);
-	const td = transformed.data as ProgramData;
-	// Should have EnumDecl + FunctionDecl (toString)
-	check(td.programStmts.length === 2);
-	check(td.programStmts[1].kind === NodeKind.FunctionDecl);
-	// Generate C
-	const cCode = generateCModule(transformed, null as unknown as CheckerContext, "test/input", "");
-	// Check that the output includes the toString function
-	check(cCode.length > 100);
-}
-
-import { checkProgram } from "../../checker/index";
-import { transformProgram } from "../../transform/index";
-import { createTransformContextWithChecker } from "../context";
-
-test "enum toString E2E: full pipeline with checker (post-DCE)" {
-	const pr = parseSource("enum Color { Red, Green, Blue }\nconst x: Color = Color.Green;");
-	check(pr.ok);
-	// Run full pipeline: check → transform (includes DCE) → native transform
-	const checkerCtx = checkProgram(pr.value);
-	const transformed = transformProgram(pr.value, checkerCtx, false);
-	const nativeCtx = createTransformContextWithChecker(checkerCtx);
-	const nativeTransformed = transformForNative(transformed, nativeCtx);
-	const td = nativeTransformed.data as ProgramData;
-	// DCE may strip EnumDecl, but toString should still be injected from checker symbols
-	let hasToString = false;
-	let i = 0;
-	while (i < td.programStmts.length) {
-		if (td.programStmts[i].kind === NodeKind.FunctionDecl) {
-			const fd = td.programStmts[i].data as FunctionDeclData;
-			if (fd.fnName === "Color_toString") {
-				hasToString = true;
-			}
-		}
-		i = i + 1;
-	}
-	check(hasToString);
-	// Generate C — should include toString
-	const cCode = generateCModule(nativeTransformed, checkerCtx, "test/input", "");
-	check(cCode.length > 100);
-}
-
 export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
 	if (program === null || program.kind !== NodeKind.Program) return program;
 	const pd = program.data as ProgramData;

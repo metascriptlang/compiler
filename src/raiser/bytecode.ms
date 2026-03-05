@@ -81,6 +81,9 @@ export enum RaiserOpcode {
 	BitNot,           // ABC: R[A] = ~R[B]
 	ShiftLeft,        // ABC: R[A] = R[B] << R[C]
 	ShiftRight,       // ABC: R[A] = R[B] >> R[C]
+
+	// Host builtins (1)
+	Builtin,          // ABC: R[A] = builtin[B](args from R[A+1]..R[A+C])
 }
 
 // --- Instruction ---
@@ -92,18 +95,20 @@ export interface RaiserInstruction {
 	a: number;
 	b: number;
 	c: number;
+	cachedIdx: number;  // MIC: cached field index for LoadField/StoreField (-1 = miss)
+	line: number;       // Source line number for diagnostics (0 = unknown)
 }
 
 // --- Constructors ---
 
 export function raiserABC(op: RaiserOpcode, a: number, b: number, c: number): RaiserInstruction {
-	return { op, a, b, c };
+	return { op, a, b, c, cachedIdx: -1, line: 0 };
 }
 
 export function raiserABx(op: RaiserOpcode, a: number, bx: number): RaiserInstruction {
 	const bHigh = (bx / 256) | 0;
 	const bLow = bx - bHigh * 256;
-	return { op, a, b: bHigh, c: bLow };
+	return { op, a, b: bHigh, c: bLow, cachedIdx: -1, line: 0 };
 }
 
 export function raiserAx(op: RaiserOpcode, ax: number): RaiserInstruction {
@@ -115,7 +120,7 @@ export function raiserAx(op: RaiserOpcode, ax: number): RaiserInstruction {
 	const rem = raw - aHigh * 65536;
 	const bMid = (rem / 256) | 0;
 	const cLow = rem - bMid * 256;
-	return { op, a: aHigh, b: bMid, c: cLow };
+	return { op, a: aHigh, b: bMid, c: cLow, cachedIdx: -1, line: 0 };
 }
 
 // --- Decoders ---

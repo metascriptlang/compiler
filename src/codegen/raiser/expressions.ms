@@ -523,6 +523,36 @@ function compileCallExpr(s: RaiserCompState, node: Node): number {
 		return lastReg;
 	}
 
+	// Host builtins: readFile, writeFile
+	if (d.callee.kind === NodeKind.Identifier) {
+		const bid = d.callee.data as IdentifierData;
+		if (bid.name === "readFile" && d.arguments.length === 1) {
+			const dest = allocReg(s);
+			allocReg(s); // arg slot
+			const argReg = compileExpr(s, d.arguments[0]);
+			if (argReg !== dest + 1) {
+				emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1, argReg, 0));
+			}
+			emitInst(s, raiserABC(RaiserOpcode.Builtin, dest, 0, 1));
+			return dest;
+		}
+		if (bid.name === "writeFile" && d.arguments.length === 2) {
+			const dest = allocReg(s);
+			allocReg(s); // arg1 slot
+			allocReg(s); // arg2 slot
+			const arg1Reg = compileExpr(s, d.arguments[0]);
+			const arg2Reg = compileExpr(s, d.arguments[1]);
+			if (arg1Reg !== dest + 1) {
+				emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1, arg1Reg, 0));
+			}
+			if (arg2Reg !== dest + 2) {
+				emitInst(s, raiserABC(RaiserOpcode.Move, dest + 2, arg2Reg, 0));
+			}
+			emitInst(s, raiserABC(RaiserOpcode.Builtin, dest, 1, 2));
+			return dest;
+		}
+	}
+
 	// User function call: callee must be Identifier
 	if (d.callee.kind === NodeKind.Identifier) {
 		const calleeId = d.callee.data as IdentifierData;

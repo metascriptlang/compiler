@@ -5,12 +5,36 @@
 // Follows Nim's rawGenNew pattern: allocation delegated to constructor function.
 
 import { Node, NodeKind, NewExprData, IdentifierData, MemberExprData } from "../../ast/node";
+import { Type, TypeKind } from "../../checker/types";
 import { TransformContext, createTransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent } from "../util";
 import { check } from "std/testing";
 import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";
 import { ExprStmtData, CallExprData } from "../../ast/node";
+
+// ===== Value Destructor Resolution =====
+// Resolves the C destructor function name for a Map's value type.
+// Only pointer-type values (classes/objects on the heap) have destructors.
+// Value-type structs (string, array) require boxing — deferred.
+
+function resolveValueDestructor(valueType: Type): string {
+	if (valueType === null) return "NULL";
+	// Object types (classes/interfaces) are heap-allocated pointers — destructor frees them
+	if (valueType.kind === TypeKind.Object) {
+		if (valueType.typeName !== null && valueType.typeName.length > 0) {
+			return "(msMapValueDestructor)" + valueType.typeName + "_destroy";
+		}
+	}
+	// Ref/Ptr types (generic heap objects) — use msDecref-style cleanup
+	if (valueType.kind === TypeKind.Ref) {
+		if (valueType.typeName !== null && valueType.typeName.length > 0) {
+			return "(msMapValueDestructor)" + valueType.typeName + "_destroy";
+		}
+	}
+	// Primitives, enums, etc. — no cleanup needed
+	return "NULL";
+}
 
 // ===== Visitor =====
 
@@ -25,7 +49,18 @@ function lowerNewNode(node: Node): Node {
 		const id = d.newCallee.data as IdentifierData;
 		// Runtime-provided types → direct runtime constructor
 		if (id.name === "Map") {
-			const call = makeCall(makeIdent("msMapNew", loc), [], loc);
+			// Resolve value destructor from Map's typeExtra (value type)
+			let destructorName = "NULL";
+			if (node.nodeType !== null && node.nodeType.typeExtra !== null) {
+				destructorName = resolveValueDestructor(node.nodeType.typeExtra);
+			}
+			const call = makeCall(makeIdent("msMapNew", loc), [makeIdent(destructorName, loc)], loc);
+			call.nodeType = node.nodeType;
+			return call;
+		}
+		if (id.name === "Set") {
+			// Set has no values — always NULL destructor
+			const call = makeCall(makeIdent("msSetNew", loc), [], loc);
 			call.nodeType = node.nodeType;
 			return call;
 		}

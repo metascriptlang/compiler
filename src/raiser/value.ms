@@ -361,6 +361,17 @@ export function heapObjectGetObjectHandle(heap: RaiserObjectHeap, handle: number
 	return -1;
 }
 
+// --- Heap Recycling ---
+// Reset heaps to reclaim memory between @comptime evaluations.
+
+export function clearArrayHeap(heap: RaiserArrayHeap): void {
+	heap.arrays.length = 0;
+}
+
+export function clearObjectHeap(heap: RaiserObjectHeap): void {
+	heap.objects.length = 0;
+}
+
 // --- Object Heap Tests ---
 test "alloc empty object" {
 	const heap = createObjectHeap();
@@ -413,4 +424,30 @@ test "object value kind" {
 	check(v.kind === RaiserValueKind.Object);
 	check(v.intVal === 5);
 	check(raiserToBool(v));
+}
+
+test "clearArrayHeap resets storage" {
+	const heap = createArrayHeap();
+	const h = heapAllocArray(heap);
+	const v = raiserInt(1);
+	heapArrayPush(heap, h, v);
+	check(heap.arrays.length === 1);
+	clearArrayHeap(heap);
+	check(heap.arrays.length === 0);
+	// Re-allocate works after clear
+	const h2 = heapAllocArray(heap);
+	check(h2 === 0);
+}
+
+test "clearObjectHeap resets storage" {
+	const heap = createObjectHeap();
+	const h = heapAllocObject(heap);
+	const v = raiserInt(42);
+	heapObjectSetField(heap, h, "x", v);
+	check(heap.objects.length === 1);
+	clearObjectHeap(heap);
+	check(heap.objects.length === 0);
+	// Re-allocate works after clear
+	const h2 = heapAllocObject(heap);
+	check(h2 === 0);
 }

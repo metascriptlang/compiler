@@ -82,6 +82,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = lowerResultFieldCheck(result, ctx);
 	result = lowerMatch(result, ctx);
 	if (!jsBackend) { result = lowerTailCall(result, ctx); }
+	if (!jsBackend) { result = lowerAsync(result, ctx); }
 	if (!jsBackend) { result = lowerGenerator(result, ctx); }
 	if (!jsBackend) { result = lowerVarHoist(result, ctx); }
 	if (!jsBackend) { result = lowerLambda(result, ctx); }

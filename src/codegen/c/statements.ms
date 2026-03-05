@@ -5,7 +5,7 @@
 
 import {
 	Node, NodeKind,
-	VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData,
+	VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData,
 	BlockStmtData, ExprStmtData, ReturnStmtData,
 	BreakStmtData, ContinueStmtData, DeclKind,
 	TryCatchStmtData, ThrowStmtData,
@@ -129,6 +129,10 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 	if (cType === "") cType = "double";
 
 	if (d.initializer !== null) {
+		// Propagate declared type to untyped initializer (e.g. let arr: string[] = [])
+		if (d.initializer.nodeType === null && node.nodeType !== null) {
+			d.initializer.nodeType = node.nodeType;
+		}
 		// G3 fix: NRVO call sites — when initializer is a call returning a struct,
 		// emit "Type var; fn(&var, args);" instead of "Type var = fn(args);"
 		if (d.initializer.kind === NodeKind.CallExpr && isNrvoCallSite(d.initializer)) {
@@ -143,13 +147,34 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 		} else if (d.initializer.kind === NodeKind.NullLiteral && isStructType(node.nodeType)) {
 			// D2 fix: struct-type null init → {0} instead of MS_NIL
 			emitStmtsLine(p, cType + " " + varName + " = {0};");
+		} else if (d.initializer.kind === NodeKind.ArrayLiteral && (d.initializer.data as ArrayLiteralData).elements.length === 0) {
+			// Empty array: use declared type for zero-init (avoids msRefArray default)
+			emitStmtsLine(p, cType + " " + varName + " = (" + cType + "){0};");
 		} else {
 			const initSnippet = genExpr(g, p, d.initializer);
-			emitStmtsLine(p, cType + " " + varName + " = " + initSnippet + ";");
+			let finalInit = initSnippet;
+			if (d.initializer.nodeType !== null) {
+				const sourceCType = getTypeDesc(g, d.initializer.nodeType);
+				if (cType !== sourceCType && cType !== "void*" && sourceCType !== "void") {
+					// Only cast between compatible C categories (both pointer or both non-pointer)
+					const destIsPtr = cType.indexOf("*") >= 0;
+					const srcIsPtr = sourceCType.indexOf("*") >= 0;
+					if (destIsPtr === srcIsPtr) {
+						finalInit = "((" + cType + ")(" + initSnippet + "))";
+					}
+				}
+			}
+			emitStmtsLine(p, cType + " " + varName + " = " + finalInit + ";");
 		}
 	} else {
 		emitStmtsLine(p, cType + " " + varName + ";");
 	}
+}
+
+// Wrap a condition string in parens, but avoid double-wrapping when genBinaryExpr already added them.
+function wrapCond(s: string): string {
+	if (s.length >= 2 && sliceStr(s, 0, 1) === "(" && sliceStr(s, s.length - 1, s.length) === ")") return s;
+	return "(" + s + ")";
 }
 
 // ===== If Statement =====
@@ -161,10 +186,10 @@ function genIfStmt(g: CGen, p: CProc, node: Node): void {
 		const d = current.data as IfStmtData;
 		const condSnippet = genExpr(g, p, d.condition);
 		if (isFirst) {
-			emitStmts(p, "if (" + condSnippet + ") ");
+			emitStmts(p, "if " + wrapCond(condSnippet) + " ");
 			isFirst = false;
 		} else {
-			emitStmts(p, " else if (" + condSnippet + ") ");
+			emitStmts(p, " else if " + wrapCond(condSnippet) + " ");
 		}
 		genBlockOrBraces(g, p, d.consequent);
 		if (isEmptyBlock(d.alternate)) {
@@ -186,7 +211,7 @@ function genWhileStmt(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as WhileStmtData;
 	const condSnippet = genExpr(g, p, d.whileCondition);
 
-	emitStmts(p, "while (" + condSnippet + ") ");
+	emitStmts(p, "while " + wrapCond(condSnippet) + " ");
 	genBlockOrBraces(g, p, d.whileBody);
 	emitStmtsNl(p);
 }
@@ -199,7 +224,7 @@ function genDoWhileStmt(g: CGen, p: CProc, node: Node): void {
 	emitStmts(p, "do ");
 	genBlockOrBraces(g, p, d.doBody);
 	const condSnippet = genExpr(g, p, d.doCondition);
-	emitStmtsLine(p, " while (" + condSnippet + ");");
+	emitStmtsLine(p, " while " + wrapCond(condSnippet) + ";");
 }
 
 // ===== Block Statement =====
