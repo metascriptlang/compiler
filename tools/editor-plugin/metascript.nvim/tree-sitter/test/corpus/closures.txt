@@ -1,0 +1,865 @@
+================================================================================
+Arrow function: Single param no parens
+================================================================================
+
+const double = x => x * 2;
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (arrow_function
+      parameters: (identifier)
+      body: (binary_expression
+        (identifier)
+        (number)))))
+
+================================================================================
+Arrow function: Single param with parens
+================================================================================
+
+const double = (x) => x * 2;
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (arrow_function
+      parameters: (arrow_function_parameters
+        (arrow_function_parameter
+          name: (identifier)))
+      body: (binary_expression
+        (identifier)
+        (number)))))
+
+================================================================================
+Arrow function: Multiple params
+================================================================================
+
+const add = (x, y) => x + y;
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (arrow_function
+      parameters: (arrow_function_parameters
+        (arrow_function_parameter
+          name: (identifier))
+        (arrow_function_parameter
+          name: (identifier)))
+      body: (binary_expression
+        (identifier)
+        (identifier)))))
+
+================================================================================
+Arrow function: No params
+================================================================================
+
+const noop = () => null;
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (arrow_function
+      parameters: (arrow_function_parameters)
+      body: (null))))
+
+================================================================================
+Arrow function: Typed param
+================================================================================
+
+const double = (x: number) => x * 2;
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (arrow_function
+      parameters: (arrow_function_parameters
+        (arrow_function_parameter
+          name: (identifier)
+          (type_annotation
+            (type
+              (primitive_type)))))
+      body: (binary_expression
+        (identifier)
+        (number)))))
+
+================================================================================
+Arrow function: Multiple typed params
+================================================================================
+
+const add = (x: number, y: number) => x + y;
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (arrow_function
+      parameters: (arrow_function_parameters
+        (arrow_function_parameter
+          name: (identifier)
+          (type_annotation
+            (type
+              (primitive_type))))
+        (arrow_function_parameter
+          name: (identifier)
+          (type_annotation
+            (type
+              (primitive_type)))))
+      body: (binary_expression
+        (identifier)
+        (identifier)))))
+
+================================================================================
+Arrow function: With return type
+================================================================================
+
+const toString = (x: number): string => x.toString();
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (arrow_function
+      parameters: (arrow_function_parameters
+        (arrow_function_parameter
+          name: (identifier)
+          (type_annotation
+            (type
+              (primitive_type)))))
+      return_type: (type_annotation
+        (type
+          (primitive_type)))
+      body: (call_expression
+        function: (member_expression
+          object: (identifier)
+          property: (identifier))
+        arguments: (arguments)))))
+
+================================================================================
+Arrow function: Block body
+================================================================================
+
+const double = (x) => {
+    return x * 2;
+};
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (arrow_function
+      parameters: (arrow_function_parameters
+        (arrow_function_parameter
+          name: (identifier)))
+      body: (block
+        (return_statement
+          (binary_expression
+            (identifier)
+            (number)))))))
+
+================================================================================
+Arrow function: Block body with return type
+================================================================================
+
+const double = (x: number): number => {
+    return x * 2;
+};
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (arrow_function
+      parameters: (arrow_function_parameters
+        (arrow_function_parameter
+          name: (identifier)
+          (type_annotation
+            (type
+              (primitive_type)))))
+      return_type: (type_annotation
+        (type
+          (primitive_type)))
+      body: (block
+        (return_statement
+          (binary_expression
+            (identifier)
+            (number)))))))
+
+================================================================================
+Arrow function: Async
+================================================================================
+
+const fetchData = async (url) => await fetch(url);
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (arrow_function
+      parameters: (arrow_function_parameters
+        (arrow_function_parameter
+          name: (identifier)))
+      body: (await_expression
+        (call_expression
+          function: (identifier)
+          arguments: (arguments
+            (identifier)))))))
+
+================================================================================
+Arrow function: Async with typed return
+================================================================================
+
+const fetchData = async (url: string): Promise => await fetch(url);
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (arrow_function
+      parameters: (arrow_function_parameters
+        (arrow_function_parameter
+          name: (identifier)
+          (type_annotation
+            (type
+              (primitive_type)))))
+      return_type: (type_annotation
+        (type
+          (type_identifier)))
+      body: (await_expression
+        (call_expression
+          function: (identifier)
+          arguments: (arguments
+            (identifier)))))))
+
+================================================================================
+Arrow function: Rest parameter
+================================================================================
+
+const sum = (...nums) => nums.reduce((a, b) => a + b);
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (arrow_function
+      parameters: (arrow_function_parameters
+        (arrow_function_parameter
+          (rest_parameter
+            name: (identifier))))
+      body: (call_expression
+        function: (member_expression
+          object: (identifier)
+          property: (identifier))
+        arguments: (arguments
+          (arrow_function
+            parameters: (arrow_function_parameters
+              (arrow_function_parameter
+                name: (identifier))
+              (arrow_function_parameter
+                name: (identifier)))
+            body: (binary_expression
+              (identifier)
+              (identifier))))))))
+
+================================================================================
+Arrow function: Default parameter (typed)
+================================================================================
+
+const greet = (name: string = "World") => "Hello, " + name;
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (arrow_function
+      parameters: (arrow_function_parameters
+        (arrow_function_parameter
+          name: (identifier)
+          (type_annotation
+            (type
+              (primitive_type)))
+          default: (string)))
+      body: (binary_expression
+        (string)
+        (identifier)))))
+
+================================================================================
+Arrow function: Mixed typed and default params
+================================================================================
+
+const greet = (name: string, times: number = 1) => name;
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (arrow_function
+      parameters: (arrow_function_parameters
+        (arrow_function_parameter
+          name: (identifier)
+          (type_annotation
+            (type
+              (primitive_type))))
+        (arrow_function_parameter
+          name: (identifier)
+          (type_annotation
+            (type
+              (primitive_type)))
+          default: (number)))
+      body: (identifier))))
+
+================================================================================
+Arrow function: Nested arrows
+================================================================================
+
+const compose = (f) => (g) => (x) => f(g(x));
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (arrow_function
+      parameters: (arrow_function_parameters
+        (arrow_function_parameter
+          name: (identifier)))
+      body: (arrow_function
+        parameters: (arrow_function_parameters
+          (arrow_function_parameter
+            name: (identifier)))
+        body: (arrow_function
+          parameters: (arrow_function_parameters
+            (arrow_function_parameter
+              name: (identifier)))
+          body: (call_expression
+            function: (identifier)
+            arguments: (arguments
+              (call_expression
+                function: (identifier)
+                arguments: (arguments
+                  (identifier))))))))))
+
+================================================================================
+Arrow function: Returning object (with parens)
+================================================================================
+
+const makePoint = (x, y) => ({ x: x, y: y });
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (arrow_function
+      parameters: (arrow_function_parameters
+        (arrow_function_parameter
+          name: (identifier))
+        (arrow_function_parameter
+          name: (identifier)))
+      body: (parenthesized_expression
+        (object
+          (pair
+            key: (identifier)
+            value: (identifier))
+          (pair
+            key: (identifier)
+            value: (identifier)))))))
+
+================================================================================
+Arrow function: In array map
+================================================================================
+
+const doubled = [1, 2, 3].map(x => x * 2);
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (call_expression
+      function: (member_expression
+        object: (array
+          (number)
+          (number)
+          (number))
+        property: (identifier))
+      arguments: (arguments
+        (arrow_function
+          parameters: (identifier)
+          body: (binary_expression
+            (identifier)
+            (number)))))))
+
+================================================================================
+Arrow function: In callback
+================================================================================
+
+setTimeout(() => console.log("done"), 1000);
+
+--------------------------------------------------------------------------------
+
+(program
+  (expression_statement
+    (call_expression
+      function: (identifier)
+      arguments: (arguments
+        (arrow_function
+          parameters: (arrow_function_parameters)
+          body: (call_expression
+            function: (member_expression
+              object: (identifier)
+              property: (identifier))
+            arguments: (arguments
+              (string))))
+        (number)))))
+
+================================================================================
+Function type: Basic (type only)
+================================================================================
+
+type Callback = (number) => void;
+
+--------------------------------------------------------------------------------
+
+(program
+  (type_alias_declaration
+    name: (type_identifier)
+    (type
+      (function_type
+        (function_type_parameter
+          (primitive_type))
+        return_type: (type
+          (primitive_type))))))
+
+================================================================================
+Function type: Named parameter (TypeScript style)
+================================================================================
+
+type Callback = (x: number) => void;
+
+--------------------------------------------------------------------------------
+
+(program
+  (type_alias_declaration
+    name: (type_identifier)
+    (type
+      (function_type
+        (function_type_parameter
+          name: (identifier)
+          type: (primitive_type))
+        return_type: (type
+          (primitive_type))))))
+
+================================================================================
+Function type: No params
+================================================================================
+
+type Thunk = () => void;
+
+--------------------------------------------------------------------------------
+
+(program
+  (type_alias_declaration
+    name: (type_identifier)
+    (type
+      (function_type
+        return_type: (type
+          (primitive_type))))))
+
+================================================================================
+Function type: Multiple params (types only)
+================================================================================
+
+type BinaryOp = (number, number) => number;
+
+--------------------------------------------------------------------------------
+
+(program
+  (type_alias_declaration
+    name: (type_identifier)
+    (type
+      (function_type
+        (function_type_parameter
+          (primitive_type))
+        (function_type_parameter
+          (primitive_type))
+        return_type: (type
+          (primitive_type))))))
+
+================================================================================
+Function type: Multiple named params
+================================================================================
+
+type BinaryOp = (a: number, b: number) => number;
+
+--------------------------------------------------------------------------------
+
+(program
+  (type_alias_declaration
+    name: (type_identifier)
+    (type
+      (function_type
+        (function_type_parameter
+          name: (identifier)
+          type: (primitive_type))
+        (function_type_parameter
+          name: (identifier)
+          type: (primitive_type))
+        return_type: (type
+          (primitive_type))))))
+
+================================================================================
+Function type: In variable declaration
+================================================================================
+
+const fn: (number) => string = x => x.toString();
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (type_annotation
+      (type
+        (function_type
+          (function_type_parameter
+            (primitive_type))
+          return_type: (type
+            (primitive_type)))))
+    (arrow_function
+      parameters: (identifier)
+      body: (call_expression
+        function: (member_expression
+          object: (identifier)
+          property: (identifier))
+        arguments: (arguments)))))
+
+================================================================================
+Arrow function: As argument with type annotation
+================================================================================
+
+const result = process((x: number): string => x.toString());
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (call_expression
+      function: (identifier)
+      arguments: (arguments
+        (arrow_function
+          parameters: (arrow_function_parameters
+            (arrow_function_parameter
+              name: (identifier)
+              (type_annotation
+                (type
+                  (primitive_type)))))
+          return_type: (type_annotation
+            (type
+              (primitive_type)))
+          body: (call_expression
+            function: (member_expression
+              object: (identifier)
+              property: (identifier))
+            arguments: (arguments)))))))
+
+================================================================================
+Arrow function: IIFE (Immediately Invoked)
+================================================================================
+
+const value = ((x) => x * 2)(5);
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (call_expression
+      function: (parenthesized_expression
+        (arrow_function
+          parameters: (arrow_function_parameters
+            (arrow_function_parameter
+              name: (identifier)))
+          body: (binary_expression
+            (identifier)
+            (number))))
+      arguments: (arguments
+        (number)))))
+
+================================================================================
+Arrow function: In ternary
+================================================================================
+
+const fn = cond ? (x) => x + 1 : (x) => x - 1;
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (ternary_expression
+      (identifier)
+      (arrow_function
+        parameters: (arrow_function_parameters
+          (arrow_function_parameter
+            name: (identifier)))
+        body: (binary_expression
+          (identifier)
+          (number)))
+      (arrow_function
+        parameters: (arrow_function_parameters
+          (arrow_function_parameter
+            name: (identifier)))
+        body: (binary_expression
+          (identifier)
+          (number))))))
+
+================================================================================
+Arrow function: Generic type parameter
+================================================================================
+
+const identity = <T>(x: T): T => x;
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (arrow_function
+      type_parameters: (type_parameters
+        (identifier))
+      parameters: (arrow_function_parameters
+        (arrow_function_parameter
+          name: (identifier)
+          (type_annotation
+            (type
+              (type_identifier)))))
+      return_type: (type_annotation
+        (type
+          (type_identifier)))
+      body: (identifier))))
+
+================================================================================
+Arrow function: Generic with multiple type params
+================================================================================
+
+const map = <T, U>(arr: Array, fn: (T) => U): Array => arr;
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (arrow_function
+      type_parameters: (type_parameters
+        (identifier)
+        (identifier))
+      parameters: (arrow_function_parameters
+        (arrow_function_parameter
+          name: (identifier)
+          (type_annotation
+            (type
+              (type_identifier))))
+        (arrow_function_parameter
+          name: (identifier)
+          (type_annotation
+            (type
+              (function_type
+                (function_type_parameter
+                  (type_identifier))
+                return_type: (type
+                  (type_identifier)))))))
+      return_type: (type_annotation
+        (type
+          (type_identifier)))
+      body: (identifier))))
+
+================================================================================
+Arrow function: Array destructuring
+================================================================================
+
+const sum = ([a, b]) => a + b;
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (arrow_function
+      parameters: (arrow_function_parameters
+        (arrow_function_parameter
+          pattern: (array_pattern
+            (pattern_element
+              name: (identifier))
+            (pattern_element
+              name: (identifier)))))
+      body: (binary_expression
+        (identifier)
+        (identifier)))))
+
+================================================================================
+Arrow function: Object destructuring shorthand
+================================================================================
+
+const getXY = ({x, y}) => x + y;
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (arrow_function
+      parameters: (arrow_function_parameters
+        (arrow_function_parameter
+          pattern: (object_pattern
+            (pattern_property
+              name: (identifier))
+            (pattern_property
+              name: (identifier)))))
+      body: (binary_expression
+        (identifier)
+        (identifier)))))
+
+================================================================================
+Arrow function: Object destructuring with alias
+================================================================================
+
+const f = ({x: a, y: b}) => a + b;
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (arrow_function
+      parameters: (arrow_function_parameters
+        (arrow_function_parameter
+          pattern: (object_pattern
+            (pattern_property
+              key: (identifier)
+              value: (identifier))
+            (pattern_property
+              key: (identifier)
+              value: (identifier)))))
+      body: (binary_expression
+        (identifier)
+        (identifier)))))
+
+================================================================================
+Arrow function: Array destructuring with rest
+================================================================================
+
+const first = ([head, ...tail]) => head;
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (arrow_function
+      parameters: (arrow_function_parameters
+        (arrow_function_parameter
+          pattern: (array_pattern
+            (pattern_element
+              name: (identifier))
+            (rest_pattern
+              name: (identifier)))))
+      body: (identifier))))
+
+================================================================================
+Arrow function: Nested destructuring
+================================================================================
+
+const deep = ({a: {b, c}}) => b + c;
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (arrow_function
+      parameters: (arrow_function_parameters
+        (arrow_function_parameter
+          pattern: (object_pattern
+            (pattern_property
+              key: (identifier)
+              value: (object_pattern
+                (pattern_property
+                  name: (identifier))
+                (pattern_property
+                  name: (identifier)))))))
+      body: (binary_expression
+        (identifier)
+        (identifier)))))
+
+================================================================================
+Arrow function: Destructuring with default
+================================================================================
+
+const withDefault = ([a, b = 0]) => a + b;
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (arrow_function
+      parameters: (arrow_function_parameters
+        (arrow_function_parameter
+          pattern: (array_pattern
+            (pattern_element
+              name: (identifier))
+            (pattern_element
+              name: (identifier)
+              default: (number)))))
+      body: (binary_expression
+        (identifier)
+        (identifier)))))
+
+================================================================================
+Arrow function: Mixed destructuring and regular params
+================================================================================
+
+const mixed = (x, {y}, [z]) => x + y + z;
+
+--------------------------------------------------------------------------------
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (arrow_function
+      parameters: (arrow_function_parameters
+        (arrow_function_parameter
+          name: (identifier))
+        (arrow_function_parameter
+          pattern: (object_pattern
+            (pattern_property
+              name: (identifier))))
+        (arrow_function_parameter
+          pattern: (array_pattern
+            (pattern_element
+              name: (identifier)))))
+      body: (binary_expression
+        (binary_expression
+          (identifier)
+          (identifier))
+        (identifier)))))

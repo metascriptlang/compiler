@@ -1,0 +1,199 @@
+{
+  "name": "metascript",
+  "displayName": "MetaScript",
+  "description": "Language support for MetaScript — TypeScript syntax with compile-time macros, match expressions, Result types, and three backends (C, JavaScript, Erlang)",
+  "version": "0.2.0",
+  "publisher": "metascript-lang",
+  "license": "MIT",
+  "icon": "icons/metascript-icon.svg",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nickhatzz/metascript"
+  },
+  "bugs": {
+    "url": "https://github.com/nickhatzz/metascript/issues"
+  },
+  "homepage": "https://github.com/nickhatzz/metascript#readme",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Snippets"
+  ],
+  "keywords": [
+    "metascript",
+    "typescript",
+    "systems programming",
+    "macros",
+    "compile-time"
+  ],
+  "activationEvents": [
+    "onLanguage:metascript"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "metascript",
+        "aliases": [
+          "MetaScript",
+          "metascript",
+          "ms"
+        ],
+        "extensions": [
+          ".ms",
+          ".mts"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/metascript-light.svg",
+          "dark": "./icons/metascript-dark.svg"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "metascript",
+        "scopeName": "source.metascript",
+        "path": "./syntaxes/metascript.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "metascript",
+        "path": "./snippets/metascript.json"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "MetaScript",
+      "properties": {
+        "metascript.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the MetaScript language server executable (msc). Leave empty to auto-detect from workspace or PATH.",
+          "scope": "machine-overridable"
+        },
+        "metascript.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the MetaScript language server.",
+          "scope": "window"
+        },
+        "metascript.diagnostics.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable diagnostics from the language server.",
+          "scope": "resource"
+        },
+        "metascript.inlayHints.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable inlay hints for type annotations, parameter names, and other contextual information.",
+          "scope": "resource"
+        },
+        "metascript.semanticHighlighting.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable semantic token highlighting powered by the language server. Provides more accurate highlighting than TextMate grammar alone.",
+          "scope": "resource"
+        },
+        "metascript.completion.snippets": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable snippet completions from the language server.",
+          "scope": "resource"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "metascript.restartServer",
+        "title": "Restart Language Server",
+        "category": "MetaScript"
+      },
+      {
+        "command": "metascript.expandMacro",
+        "title": "Expand Macro at Cursor",
+        "category": "MetaScript"
+      },
+      {
+        "command": "metascript.showOutput",
+        "title": "Show Output Channel",
+        "category": "MetaScript"
+      }
+    ],
+    "semanticTokenScopes": [
+      {
+        "language": "metascript",
+        "scopes": {
+          "namespace": ["entity.name.namespace.metascript"],
+          "type": ["entity.name.type.metascript"],
+          "type.defaultLibrary": ["support.type.builtin.metascript"],
+          "class": ["entity.name.type.class.metascript"],
+          "enum": ["entity.name.type.enum.metascript"],
+          "interface": ["entity.name.type.interface.metascript"],
+          "struct": ["entity.name.type.struct.metascript"],
+          "typeParameter": ["entity.name.type.parameter.metascript"],
+          "parameter": ["variable.parameter.metascript"],
+          "variable": ["variable.other.metascript"],
+          "variable.readonly": ["variable.other.constant.metascript"],
+          "property": ["variable.other.property.metascript"],
+          "enumMember": ["variable.other.enummember.metascript"],
+          "function": ["entity.name.function.metascript"],
+          "method": ["entity.name.function.method.metascript"],
+          "macro": ["entity.name.function.macro.metascript"],
+          "keyword": ["keyword.control.metascript"],
+          "modifier": ["keyword.modifier.metascript"],
+          "comment": ["comment.metascript"],
+          "string": ["string.quoted.double.metascript"],
+          "number": ["constant.numeric.metascript"],
+          "regexp": ["string.regexp.metascript"],
+          "operator": ["keyword.operator.metascript"],
+          "decorator": ["entity.name.function.decorator.metascript"]
+        }
+      }
+    ],
+    "semanticTokenModifiers": [
+      {
+        "id": "mutable",
+        "description": "Annotates a mutable variable or parameter"
+      },
+      {
+        "id": "comptime",
+        "description": "Annotates a compile-time evaluated expression"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "webpack --mode production",
+    "watch": "webpack --mode development --watch",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "eslint": "^8.54.0",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.3.2",
+    "webpack": "^5.89.0",
+    "webpack-cli": "^5.1.4",
+    "@vscode/vsce": "^2.22.0"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

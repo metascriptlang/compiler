@@ -1,0 +1,649 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "MetaScript",
+  "scopeName": "source.metascript",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#jsx" },
+    { "include": "#embedded-code" },
+    { "include": "#macro-decorators" },
+    { "include": "#macro-keywords" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#constants" },
+    { "include": "#operators" },
+    { "include": "#functions" },
+    { "include": "#variables" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.metascript",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.documentation.metascript",
+          "begin": "/\\*\\*(?!/)",
+          "end": "\\*/",
+          "patterns": [
+            {
+              "match": "(@)(param|returns|throws|example|see|since|deprecated)\\b",
+              "captures": {
+                "1": { "name": "punctuation.definition.tag.metascript" },
+                "2": { "name": "storage.type.class.jsdoc" }
+              }
+            }
+          ]
+        },
+        {
+          "name": "comment.block.metascript",
+          "begin": "/\\*",
+          "end": "\\*/",
+          "patterns": [
+            {
+              "name": "comment.block.metascript",
+              "match": "."
+            }
+          ]
+        }
+      ]
+    },
+
+    "jsx": {
+      "patterns": [
+        {
+          "comment": "Self-closing JSX tag: <Component ... />",
+          "name": "meta.tag.metascript",
+          "begin": "(<)([A-Z][a-zA-Z0-9_.]*|[a-z][a-z0-9-]*)(?=\\s|/?>)",
+          "beginCaptures": {
+            "1": { "name": "punctuation.definition.tag.begin.metascript" },
+            "2": { "name": "entity.name.tag.metascript" }
+          },
+          "end": "(/?>)",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.tag.end.metascript" }
+          },
+          "patterns": [
+            { "include": "#jsx-attributes" }
+          ]
+        },
+        {
+          "comment": "Closing JSX tag: </Component>",
+          "name": "meta.tag.metascript",
+          "match": "(</)([A-Z][a-zA-Z0-9_.]*|[a-z][a-z0-9-]*)(>)",
+          "captures": {
+            "1": { "name": "punctuation.definition.tag.begin.metascript" },
+            "2": { "name": "entity.name.tag.metascript" },
+            "3": { "name": "punctuation.definition.tag.end.metascript" }
+          }
+        }
+      ]
+    },
+
+    "jsx-attributes": {
+      "patterns": [
+        {
+          "comment": "JSX expression attribute: prop={expr}",
+          "begin": "\\{",
+          "end": "\\}",
+          "beginCaptures": { "0": { "name": "punctuation.section.embedded.begin.metascript" } },
+          "endCaptures": { "0": { "name": "punctuation.section.embedded.end.metascript" } },
+          "patterns": [
+            { "include": "source.metascript" }
+          ]
+        },
+        {
+          "comment": "JSX string attribute: prop=\"value\"",
+          "match": "([a-zA-Z_][a-zA-Z0-9_-]*)\\s*(=)\\s*(\"[^\"]*\")",
+          "captures": {
+            "1": { "name": "entity.other.attribute-name.metascript" },
+            "2": { "name": "keyword.operator.assignment.metascript" },
+            "3": { "name": "string.quoted.double.metascript" }
+          }
+        },
+        {
+          "comment": "JSX expression attribute: prop={expr}",
+          "match": "([a-zA-Z_][a-zA-Z0-9_-]*)\\s*(=)",
+          "captures": {
+            "1": { "name": "entity.other.attribute-name.metascript" },
+            "2": { "name": "keyword.operator.assignment.metascript" }
+          }
+        },
+        {
+          "comment": "JSX boolean attribute: disabled",
+          "match": "([a-zA-Z_][a-zA-Z0-9_-]*)(?=\\s|/?>)",
+          "captures": {
+            "1": { "name": "entity.other.attribute-name.metascript" }
+          }
+        }
+      ]
+    },
+
+    "macro-decorators": {
+      "patterns": [
+        {
+          "comment": "Compiler-provided annotations (@cImport, @jsImport, @erlImport, @external, @inline, @deprecated)",
+          "match": "(@)(cImport|cimport|jsImport|erlImport|external|inline|deprecated)\\b",
+          "captures": {
+            "1": { "name": "punctuation.definition.annotation.metascript" },
+            "2": { "name": "entity.name.function.decorator.builtin.metascript" }
+          }
+        },
+        {
+          "comment": "Compiler directives (@target, @comptime)",
+          "match": "(@)(target|comptime)\\b",
+          "captures": {
+            "1": { "name": "punctuation.definition.annotation.metascript" },
+            "2": { "name": "keyword.control.directive.metascript" }
+          }
+        },
+        {
+          "comment": "Compiler intrinsics (@emit, @sizeof, @alignof, @typeinfo, @currentTarget)",
+          "match": "(@)(emit|sizeof|alignof|typeinfo|currentTarget)\\b",
+          "captures": {
+            "1": { "name": "punctuation.definition.annotation.metascript" },
+            "2": { "name": "support.function.builtin.metascript" }
+          }
+        },
+        {
+          "comment": "FFI decorators (@native, @library, @include)",
+          "match": "(@)(native|library|include)\\b",
+          "captures": {
+            "1": { "name": "punctuation.definition.annotation.metascript" },
+            "2": { "name": "entity.name.function.decorator.ffi.metascript" }
+          }
+        },
+        {
+          "comment": "Legacy @extern statement",
+          "match": "(@)(extern)\\b",
+          "captures": {
+            "1": { "name": "punctuation.definition.annotation.metascript" },
+            "2": { "name": "keyword.other.deprecated.metascript" }
+          }
+        },
+        {
+          "comment": "Standard library macro decorators (@derive, @serialize, @test, @benchmark, etc.)",
+          "match": "(@)(derive|serialize|test|benchmark|packed|align|bitcast)\\b",
+          "captures": {
+            "1": { "name": "punctuation.definition.annotation.metascript" },
+            "2": { "name": "entity.name.function.decorator.metascript" }
+          }
+        },
+        {
+          "comment": "Runtime binding decorator (@runtime)",
+          "match": "(@)(runtime)\\b",
+          "captures": {
+            "1": { "name": "punctuation.definition.annotation.metascript" },
+            "2": { "name": "entity.name.function.decorator.ffi.metascript" }
+          }
+        },
+        {
+          "comment": "Generic decorator @name",
+          "match": "(@)([a-zA-Z_][a-zA-Z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "punctuation.definition.annotation.metascript" },
+            "2": { "name": "entity.name.function.decorator.metascript" }
+          }
+        }
+      ]
+    },
+
+    "macro-keywords": {
+      "patterns": [
+        {
+          "name": "keyword.other.macro.metascript",
+          "match": "\\b(macro|extern|defer|distinct|quote)\\b"
+        }
+      ]
+    },
+
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.metascript",
+          "match": "\\b(if|else|for|while|do|return|break|continue|switch|case|default|try|catch|finally|throw|match|when|yield|test|expect)\\b"
+        },
+        {
+          "name": "keyword.declaration.metascript",
+          "match": "\\b(class|interface|function|const|let|var|type|enum|struct|union)\\b"
+        },
+        {
+          "name": "keyword.modifier.metascript",
+          "match": "\\b(async|await|static|public|private|protected|readonly|abstract|override|export|import|from|as|default|extends|implements|new)\\b"
+        },
+        {
+          "name": "keyword.operator.expression.metascript",
+          "match": "\\b(typeof|instanceof|in|of|is|keyof)\\b"
+        },
+        {
+          "name": "keyword.other.move.metascript",
+          "match": "\\b(move)\\b"
+        },
+        {
+          "name": "keyword.other.ownership.metascript",
+          "match": "\\b(borrow|copy|own)\\b"
+        },
+        {
+          "comment": "out parameter modifier",
+          "name": "keyword.other.out.metascript",
+          "match": "\\b(out)\\b(?=\\s+[a-zA-Z_])"
+        },
+        {
+          "name": "keyword.control.unreachable.metascript",
+          "match": "\\b(unreachable)\\b"
+        }
+      ]
+    },
+
+    "types": {
+      "patterns": [
+        {
+          "comment": "Sized integer types (MetaScript-specific)",
+          "name": "support.type.primitive.sized.metascript",
+          "match": "\\b(int8|int16|int32|int64|uint8|uint16|uint32|uint64|float32|float64|int|float|double)\\b"
+        },
+        {
+          "comment": "Primitive types",
+          "name": "support.type.primitive.metascript",
+          "match": "\\b(void|bool|i8|i16|i32|i64|i128|u8|u16|u32|u64|u128|f32|f64|usize|isize|char|string|any|never|unknown|number|boolean)\\b"
+        },
+        {
+          "comment": "Built-in generic types",
+          "name": "support.type.builtin.metascript",
+          "match": "\\b(Array|Map|Set|Promise|Result|Option|Error|String|Buffer|Slice|Range)\\b"
+        },
+        {
+          "comment": "Type annotation after colon (simple)",
+          "match": ":\\s*([A-Z][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "entity.name.type.metascript" }
+          }
+        },
+        {
+          "comment": "Generic type parameters T, U, etc. in angle brackets (nested-safe)",
+          "begin": "<(?=[A-Z])",
+          "end": ">",
+          "beginCaptures": { "0": { "name": "punctuation.definition.typeparameters.begin.metascript" } },
+          "endCaptures": { "0": { "name": "punctuation.definition.typeparameters.end.metascript" } },
+          "patterns": [
+            {
+              "name": "entity.name.type.parameter.metascript",
+              "match": "[A-Z][a-zA-Z0-9_]*"
+            },
+            {
+              "name": "punctuation.separator.comma.metascript",
+              "match": ","
+            },
+            { "include": "#types" },
+            { "include": "#keywords" }
+          ]
+        }
+      ]
+    },
+
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.metascript",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.metascript",
+              "match": "\\\\(x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\\{[0-9a-fA-F]+\\}|[0-7]{1,3}|[nrtbfav\\\\'\"/0])"
+            },
+            {
+              "name": "constant.character.escape.metascript",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.metascript",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "name": "constant.character.escape.metascript",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.template.metascript",
+          "begin": "`",
+          "end": "`",
+          "patterns": [
+            {
+              "name": "constant.character.escape.metascript",
+              "match": "\\\\."
+            },
+            {
+              "name": "meta.template.expression.metascript",
+              "begin": "\\$\\{",
+              "end": "\\}",
+              "beginCaptures": {
+                "0": { "name": "punctuation.definition.template-expression.begin.metascript" }
+              },
+              "endCaptures": {
+                "0": { "name": "punctuation.definition.template-expression.end.metascript" }
+              },
+              "patterns": [
+                { "include": "source.metascript" }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.metascript",
+          "match": "\\b0[xX][0-9a-fA-F][0-9a-fA-F_]*n?\\b"
+        },
+        {
+          "name": "constant.numeric.binary.metascript",
+          "match": "\\b0[bB][01][01_]*n?\\b"
+        },
+        {
+          "name": "constant.numeric.octal.metascript",
+          "match": "\\b0[oO][0-7][0-7_]*n?\\b"
+        },
+        {
+          "name": "constant.numeric.float.metascript",
+          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*([eE][+-]?[0-9][0-9_]*)?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.metascript",
+          "match": "\\b[0-9][0-9_]*n?\\b"
+        }
+      ]
+    },
+
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.metascript",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "constant.language.null.metascript",
+          "match": "\\b(null|undefined|nil)\\b"
+        },
+        {
+          "name": "variable.language.this.metascript",
+          "match": "\\b(this|self|super)\\b"
+        },
+        {
+          "comment": "Match wildcard pattern _",
+          "name": "variable.language.wildcard.metascript",
+          "match": "\\b_\\b"
+        }
+      ]
+    },
+
+    "operators": {
+      "patterns": [
+        {
+          "comment": "Match arm fat arrow (higher priority)",
+          "name": "keyword.operator.arrow.match.metascript",
+          "match": "=>"
+        },
+        {
+          "name": "keyword.operator.assignment.compound.metascript",
+          "match": "(\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|<<=|>>=)"
+        },
+        {
+          "name": "keyword.operator.assignment.metascript",
+          "match": "(?<![=!<>])=(?!=)"
+        },
+        {
+          "name": "keyword.operator.comparison.metascript",
+          "match": "(===|!==|==|!=|<=|>=)"
+        },
+        {
+          "name": "keyword.operator.logical.metascript",
+          "match": "(&&|\\|\\||!(?!=)|\\?\\?)"
+        },
+        {
+          "name": "keyword.operator.arithmetic.metascript",
+          "match": "(\\+\\+|--|\\*\\*|\\+|-|\\*|/|%)"
+        },
+        {
+          "name": "keyword.operator.bitwise.metascript",
+          "match": "(&|\\||\\^|~|<<|>>)(?!=)"
+        },
+        {
+          "name": "keyword.operator.spread.metascript",
+          "match": "\\.\\.\\."
+        },
+        {
+          "name": "keyword.operator.range.metascript",
+          "match": "\\.\\."
+        },
+        {
+          "name": "keyword.operator.optional-chain.metascript",
+          "match": "\\?\\."
+        },
+        {
+          "name": "keyword.operator.ternary.metascript",
+          "match": "\\?"
+        },
+        {
+          "comment": "Pipe operator",
+          "name": "keyword.operator.pipe.metascript",
+          "match": "\\|>"
+        },
+        {
+          "comment": "Match alternative separator |",
+          "name": "keyword.operator.alternative.metascript",
+          "match": "\\|(?![>=|])"
+        }
+      ]
+    },
+
+    "functions": {
+      "patterns": [
+        {
+          "comment": "Function declaration",
+          "match": "\\b(function)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\(|<)",
+          "captures": {
+            "1": { "name": "keyword.declaration.function.metascript" },
+            "2": { "name": "entity.name.function.metascript" }
+          }
+        },
+        {
+          "comment": "Macro declaration",
+          "match": "\\b(macro)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\(|<)",
+          "captures": {
+            "1": { "name": "keyword.declaration.macro.metascript" },
+            "2": { "name": "entity.name.function.macro.metascript" }
+          }
+        },
+        {
+          "comment": "Method definition in class/interface body",
+          "match": "^\\s*(?:async\\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\(|<)(?!\\s*(if|else|for|while|switch|catch|function|class|interface|type|enum|match))",
+          "captures": {
+            "1": { "name": "entity.name.function.method.metascript" }
+          }
+        },
+        {
+          "comment": ".code compile-time char code access",
+          "match": "(\\.)(code)\\b(?!\\s*\\()",
+          "captures": {
+            "1": { "name": "punctuation.accessor.metascript" },
+            "2": { "name": "support.constant.charcode.metascript" }
+          }
+        },
+        {
+          "comment": "Function call",
+          "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "entity.name.function.call.metascript" }
+          }
+        }
+      ]
+    },
+
+    "variables": {
+      "patterns": [
+        {
+          "comment": "Static extension receiver: this typeof Type",
+          "match": "\\b(this)\\s+(typeof)\\s+([A-Z][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.other.this.metascript" },
+            "2": { "name": "keyword.operator.expression.metascript" },
+            "3": { "name": "entity.name.type.metascript" }
+          }
+        },
+        {
+          "comment": "Instance extension receiver: this name: Type",
+          "match": "\\b(this)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*:",
+          "captures": {
+            "1": { "name": "keyword.other.this.metascript" },
+            "2": { "name": "variable.parameter.receiver.metascript" }
+          }
+        },
+        {
+          "comment": "Variable declaration",
+          "match": "\\b(const|let|var)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.metascript" },
+            "2": { "name": "variable.other.metascript" }
+          }
+        },
+        {
+          "comment": "Distinct type declaration",
+          "match": "\\b(distinct)\\s+(type)\\s+([A-Z][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.other.macro.metascript" },
+            "2": { "name": "keyword.declaration.type.metascript" },
+            "3": { "name": "entity.name.type.alias.metascript" }
+          }
+        },
+        {
+          "comment": "Class declaration",
+          "match": "\\b(class)\\s+([A-Z][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.class.metascript" },
+            "2": { "name": "entity.name.type.class.metascript" }
+          }
+        },
+        {
+          "comment": "Interface declaration",
+          "match": "\\b(interface)\\s+([A-Z][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.interface.metascript" },
+            "2": { "name": "entity.name.type.interface.metascript" }
+          }
+        },
+        {
+          "comment": "Type alias declaration",
+          "match": "\\b(type)\\s+([A-Z][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.type.metascript" },
+            "2": { "name": "entity.name.type.alias.metascript" }
+          }
+        },
+        {
+          "comment": "Enum declaration",
+          "match": "\\b(enum)\\s+([A-Z][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": { "name": "keyword.declaration.enum.metascript" },
+            "2": { "name": "entity.name.type.enum.metascript" }
+          }
+        },
+        {
+          "comment": "Parameter with type annotation",
+          "match": "([a-zA-Z_][a-zA-Z0-9_]*)\\s*:\\s*",
+          "captures": {
+            "1": { "name": "variable.parameter.metascript" }
+          }
+        },
+        {
+          "comment": "Property access (not followed by parenthesis = not a method call)",
+          "match": "\\.([a-zA-Z_][a-zA-Z0-9_]*)\\b(?!\\s*\\()",
+          "captures": {
+            "1": { "name": "variable.other.property.metascript" }
+          }
+        }
+      ]
+    },
+
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.bracket.round.metascript",
+          "match": "[()]"
+        },
+        {
+          "name": "punctuation.bracket.square.metascript",
+          "match": "[\\[\\]]"
+        },
+        {
+          "name": "punctuation.bracket.curly.metascript",
+          "match": "[{}]"
+        },
+        {
+          "name": "punctuation.separator.comma.metascript",
+          "match": ","
+        },
+        {
+          "name": "punctuation.terminator.statement.metascript",
+          "match": ";"
+        },
+        {
+          "name": "punctuation.accessor.metascript",
+          "match": "\\."
+        }
+      ]
+    },
+    "embedded-code": {
+      "patterns": [
+        {
+          "comment": "@emit(\"...\") injection",
+          "begin": "(@emit)\\s*(\\()\\s*(\")",
+          "beginCaptures": {
+            "1": { "name": "support.function.builtin.metascript" },
+            "2": { "name": "punctuation.section.group.begin.metascript" },
+            "3": { "name": "punctuation.definition.string.begin.metascript" }
+          },
+          "end": "(\")\\s*(\\))",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.string.end.metascript" },
+            "2": { "name": "punctuation.section.group.end.metascript" }
+          },
+          "contentName": "source.c",
+          "patterns": [
+            { "include": "source.c" }
+          ]
+        },
+        {
+          "comment": "@emit<T>(\"...\") injection",
+          "begin": "(@emit)\\s*(<[^>]*>)\\s*(\\()\\s*(\")",
+          "beginCaptures": {
+            "1": { "name": "support.function.builtin.metascript" },
+            "2": { "include": "#types" },
+            "3": { "name": "punctuation.section.group.begin.metascript" },
+            "4": { "name": "punctuation.definition.string.begin.metascript" }
+          },
+          "end": "(\")\\s*(\\))",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.string.end.metascript" },
+            "2": { "name": "punctuation.section.group.end.metascript" }
+          },
+          "contentName": "source.c",
+          "patterns": [
+            { "include": "source.c" }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,299 @@
+{
+  "Function": {
+    "prefix": "fn",
+    "body": [
+      "function ${1:name}(${2:params}): ${3:void} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Function declaration"
+  },
+  "Export Function": {
+    "prefix": "efn",
+    "body": [
+      "export function ${1:name}(${2:params}): ${3:void} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Exported function declaration"
+  },
+  "Interface": {
+    "prefix": "iface",
+    "body": [
+      "interface ${1:Name} {",
+      "\t${2:field}: ${3:type};",
+      "}"
+    ],
+    "description": "Interface (data struct) declaration"
+  },
+  "Match Expression": {
+    "prefix": "match",
+    "body": [
+      "match (${1:expr}) {",
+      "\t${2:pattern} => ${3:value},",
+      "\t_ => ${0:default},",
+      "}"
+    ],
+    "description": "Match expression"
+  },
+  "Match Expression (return)": {
+    "prefix": "rmatch",
+    "body": [
+      "return match (${1:expr}) {",
+      "\t${2:pattern} => ${3:value},",
+      "\t_ => ${0:default},",
+      "};"
+    ],
+    "description": "Match expression with return"
+  },
+  "Match Block Arms": {
+    "prefix": "matchb",
+    "body": [
+      "match (${1:expr}) {",
+      "\t${2:pattern} => {",
+      "\t\t$0",
+      "\t},",
+      "\t_ => {},",
+      "}"
+    ],
+    "description": "Match expression with block arms"
+  },
+  "Enum": {
+    "prefix": "enum",
+    "body": [
+      "enum ${1:Name} {",
+      "\t${2:Member},",
+      "}"
+    ],
+    "description": "Enum declaration"
+  },
+  "For Of": {
+    "prefix": "forof",
+    "body": [
+      "for (const ${1:item} of ${2:items}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "For-of loop"
+  },
+  "While Loop": {
+    "prefix": "while",
+    "body": [
+      "while (${1:condition}) {",
+      "\t$0",
+      "}"
+    ],
+    "description": "While loop"
+  },
+  "Test": {
+    "prefix": "test",
+    "body": [
+      "test \"${1:description}\" {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Test declaration"
+  },
+  "Expect": {
+    "prefix": "exp",
+    "body": [
+      "expect ${1:condition};"
+    ],
+    "description": "Expect assertion"
+  },
+  "Test Group": {
+    "prefix": "testgroup",
+    "body": [
+      "testGroup(\"${1:group}\", () => {",
+      "\ttest(\"${2:test}\", () => {",
+      "\t\t$0",
+      "\t});",
+      "});"
+    ],
+    "description": "Test group with a test case"
+  },
+  "Import": {
+    "prefix": "imp",
+    "body": [
+      "import { ${2:symbol} } from \"${1:module}\";"
+    ],
+    "description": "Import statement"
+  },
+  "Import All": {
+    "prefix": "impa",
+    "body": [
+      "import * as ${2:name} from \"${1:module}\";"
+    ],
+    "description": "Import all as namespace"
+  },
+  "Result Type": {
+    "prefix": "result",
+    "body": [
+      "Result<${1:T}, ${2:string}>"
+    ],
+    "description": "Result<T, E> type annotation"
+  },
+  "Result Ok": {
+    "prefix": "ok",
+    "body": [
+      "Result.ok(${1:value})"
+    ],
+    "description": "Result.ok() constructor"
+  },
+  "Result Err": {
+    "prefix": "err",
+    "body": [
+      "Result.err(${1:error})"
+    ],
+    "description": "Result.err() constructor"
+  },
+  "Try Expression": {
+    "prefix": "try",
+    "body": [
+      "try ${1:expr} catch ${2:default}"
+    ],
+    "description": "Try expression with catch fallback"
+  },
+  "Try Unwrap": {
+    "prefix": "tryu",
+    "body": [
+      "const ${1:value} = try ${2:expr};"
+    ],
+    "description": "Try unwrap (early return on error)"
+  },
+  "Macro Target": {
+    "prefix": "target",
+    "body": [
+      "@target(\"${1|c,js,erlang|}\") {",
+      "\t$0",
+      "}"
+    ],
+    "description": "@target conditional compilation block"
+  },
+  "Macro Comptime": {
+    "prefix": "comptime",
+    "body": [
+      "@comptime {",
+      "\t$0",
+      "}"
+    ],
+    "description": "@comptime compile-time evaluation block"
+  },
+  "Macro Emit": {
+    "prefix": "emit",
+    "body": [
+      "@emit(\"${1:code}\")"
+    ],
+    "description": "@emit inline backend code"
+  },
+  "Macro Derive": {
+    "prefix": "derive",
+    "body": [
+      "@derive(${1|Eq,Hash,Clone,Debug|})"
+    ],
+    "description": "@derive automatic trait implementation"
+  },
+  "Defer": {
+    "prefix": "defer",
+    "body": [
+      "defer ${1:cleanup()};"
+    ],
+    "description": "Defer statement (runs at scope exit)"
+  },
+  "Arrow Function": {
+    "prefix": "arrow",
+    "body": [
+      "(${1:params}) => ${0:body}"
+    ],
+    "description": "Arrow function expression"
+  },
+  "Arrow Function (block)": {
+    "prefix": "arrowb",
+    "body": [
+      "(${1:params}) => {",
+      "\t$0",
+      "}"
+    ],
+    "description": "Arrow function with block body"
+  },
+  "Class": {
+    "prefix": "class",
+    "body": [
+      "class ${1:Name} {",
+      "\t${2:field}: ${3:type};",
+      "",
+      "\tconstructor(${4:params}) {",
+      "\t\t$0",
+      "\t}",
+      "}"
+    ],
+    "description": "Class declaration"
+  },
+  "Type Alias": {
+    "prefix": "type",
+    "body": [
+      "type ${1:Name} = ${0:type};"
+    ],
+    "description": "Type alias declaration"
+  },
+  "Distinct Type": {
+    "prefix": "distinct",
+    "body": [
+      "distinct type ${1:Name} = ${0:type};"
+    ],
+    "description": "Distinct (nominal) type declaration"
+  },
+  "Extern Function": {
+    "prefix": "extern",
+    "body": [
+      "extern function ${1:name}(${2:params}): ${3:void};"
+    ],
+    "description": "Extern function declaration (C FFI)"
+  },
+  "If-Else": {
+    "prefix": "ife",
+    "body": [
+      "if (${1:condition}) {",
+      "\t$2",
+      "} else {",
+      "\t$0",
+      "}"
+    ],
+    "description": "If-else statement"
+  },
+  "Check Assertion": {
+    "prefix": "check",
+    "body": [
+      "check(${1:condition});"
+    ],
+    "description": "Non-fatal test assertion"
+  },
+  "Require Assertion": {
+    "prefix": "require",
+    "body": [
+      "require(${1:condition});"
+    ],
+    "description": "Fatal test assertion"
+  },
+  "Move": {
+    "prefix": "move",
+    "body": [
+      "move ${1:value}"
+    ],
+    "description": "Move ownership transfer"
+  },
+  "Out Parameter": {
+    "prefix": "outp",
+    "body": [
+      "out ${1:name}: ${2:type}"
+    ],
+    "description": "Out parameter in function signature"
+  },
+  "Function Type": {
+    "prefix": "fntype",
+    "body": [
+      "(${1:params}) => ${0:returnType}"
+    ],
+    "description": "Function type annotation"
+  }
+}

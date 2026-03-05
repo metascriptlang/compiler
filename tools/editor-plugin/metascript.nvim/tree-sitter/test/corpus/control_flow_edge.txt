@@ -1,0 +1,452 @@
+================================================================================
+Edge: Await expression
+================================================================================
+
+await fetch(url);
+
+--------------------------------------------------------------------------------
+
+(program
+  (expression_statement
+    (await_expression (call_expression function: (identifier) arguments: (arguments (identifier))))))
+
+================================================================================
+Edge: Chained await
+================================================================================
+
+await (await getPromise()).value;
+
+--------------------------------------------------------------------------------
+
+(program
+  (expression_statement
+    (await_expression
+      (member_expression
+        object: (parenthesized_expression
+          (await_expression (call_expression function: (identifier) arguments: (arguments))))
+        property: (identifier)))))
+
+================================================================================
+Edge: Subscript expression basic
+================================================================================
+
+arr[0];
+
+--------------------------------------------------------------------------------
+
+(program
+  (expression_statement
+    (subscript_expression
+      object: (identifier)
+      index: (number))))
+
+================================================================================
+Edge: Subscript expression with variable
+================================================================================
+
+obj[key];
+
+--------------------------------------------------------------------------------
+
+(program
+  (expression_statement
+    (subscript_expression
+      object: (identifier)
+      index: (identifier))))
+
+================================================================================
+Edge: Subscript assignment
+================================================================================
+
+arr[i] = value;
+
+--------------------------------------------------------------------------------
+
+(program
+  (expression_statement
+    (assignment_expression
+      left: (subscript_expression
+        object: (identifier)
+        index: (identifier))
+      right: (identifier))))
+
+================================================================================
+Edge: Chained subscript
+================================================================================
+
+matrix[i][j];
+
+--------------------------------------------------------------------------------
+
+(program
+  (expression_statement
+    (subscript_expression
+      object: (subscript_expression
+        object: (identifier)
+        index: (identifier))
+      index: (identifier))))
+
+================================================================================
+Edge: Member then subscript
+================================================================================
+
+obj.items[0];
+
+--------------------------------------------------------------------------------
+
+(program
+  (expression_statement
+    (subscript_expression
+      object: (member_expression
+        object: (identifier)
+        property: (identifier))
+      index: (number))))
+
+================================================================================
+Edge: Subscript then member
+================================================================================
+
+arr[0].name;
+
+--------------------------------------------------------------------------------
+
+(program
+  (expression_statement
+    (member_expression
+      object: (subscript_expression
+        object: (identifier)
+        index: (number))
+      property: (identifier))))
+
+================================================================================
+Edge: Complex subscript chain
+================================================================================
+
+a.b[c].d[e].f;
+
+--------------------------------------------------------------------------------
+
+(program
+  (expression_statement
+    (member_expression
+      object: (subscript_expression
+        object: (member_expression
+          object: (subscript_expression
+            object: (member_expression
+              object: (identifier)
+              property: (identifier))
+            index: (identifier))
+          property: (identifier))
+        index: (identifier))
+      property: (identifier))))
+
+================================================================================
+Edge: Switch with expression cases
+================================================================================
+
+switch (x) {
+  case 1 + 2:
+    handleSum();
+    break;
+  case getValue():
+    handleDynamic();
+    break;
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (switch_statement
+    discriminant: (identifier)
+    body: (switch_body
+      (switch_case
+        test: (binary_expression (number) (number))
+        (expression_statement (call_expression function: (identifier) arguments: (arguments)))
+        (break_statement))
+      (switch_case
+        test: (call_expression function: (identifier) arguments: (arguments))
+        (expression_statement (call_expression function: (identifier) arguments: (arguments)))
+        (break_statement)))))
+
+================================================================================
+Edge: For-of with destructuring-like pattern (identifier only for now)
+================================================================================
+
+for (const x of arr) {
+  log(x);
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (for_of_statement
+    name: (identifier)
+    iterable: (identifier)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier)
+          arguments: (arguments (identifier)))))))
+
+================================================================================
+Edge: Deeply nested control flow
+================================================================================
+
+outer: for (const a of arr1) {
+  for (const b of arr2) {
+    switch (b) {
+      case 1:
+        do {
+          if (cond) {
+            break outer;
+          }
+        } while (running);
+        break;
+    }
+  }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (labeled_statement
+    label: (identifier)
+    body: (for_of_statement
+      name: (identifier)
+      iterable: (identifier)
+      body: (block
+        (for_of_statement
+          name: (identifier)
+          iterable: (identifier)
+          body: (block
+            (switch_statement
+              discriminant: (identifier)
+              body: (switch_body
+                (switch_case
+                  test: (number)
+                  (do_while_statement
+                    body: (block
+                      (if_statement
+                        (identifier)
+                        (block (break_statement label: (identifier)))))
+                    condition: (identifier))
+                  (break_statement))))))))))
+
+================================================================================
+Edge: Switch with string cases
+================================================================================
+
+switch (status) {
+  case "pending":
+    wait();
+    break;
+  case "done":
+    finish();
+    break;
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (switch_statement
+    discriminant: (identifier)
+    body: (switch_body
+      (switch_case
+        test: (string)
+        (expression_statement (call_expression function: (identifier) arguments: (arguments)))
+        (break_statement))
+      (switch_case
+        test: (string)
+        (expression_statement (call_expression function: (identifier) arguments: (arguments)))
+        (break_statement)))))
+
+================================================================================
+Edge: While with complex body
+================================================================================
+
+while (i < len) {
+  switch (arr[i]) {
+    case 0:
+      break;
+    default:
+      i = i + 1;
+      continue;
+  }
+  process(i);
+  i = i + 1;
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (while_statement
+    (binary_expression (identifier) (identifier))
+    (block
+      (switch_statement
+        discriminant: (subscript_expression object: (identifier) index: (identifier))
+        body: (switch_body
+          (switch_case
+            test: (number)
+            (break_statement))
+          (switch_default
+            (expression_statement (assignment_expression left: (identifier) right: (binary_expression (identifier) (number))))
+            (continue_statement))))
+      (expression_statement (call_expression function: (identifier) arguments: (arguments (identifier))))
+      (expression_statement (assignment_expression left: (identifier) right: (binary_expression (identifier) (number)))))))
+
+================================================================================
+Edge: Do-while without semicolon
+================================================================================
+
+do { x = x + 1; } while (x < 10)
+
+--------------------------------------------------------------------------------
+
+(program
+  (do_while_statement
+    body: (block
+      (expression_statement
+        (assignment_expression
+          left: (identifier)
+          right: (binary_expression (identifier) (number)))))
+    condition: (binary_expression (identifier) (number))))
+
+================================================================================
+Edge: Labeled switch (unusual but valid)
+================================================================================
+
+switchBlock: switch (x) {
+  case 1:
+    break switchBlock;
+  default:
+    fallback();
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (labeled_statement
+    label: (identifier)
+    body: (switch_statement
+      discriminant: (identifier)
+      body: (switch_body
+        (switch_case
+          test: (number)
+          (break_statement label: (identifier)))
+        (switch_default
+          (expression_statement (call_expression function: (identifier) arguments: (arguments))))))))
+
+================================================================================
+Edge: Multiple statements in switch case
+================================================================================
+
+switch (mode) {
+  case 1:
+    const x = 10;
+    process(x);
+    log(x);
+    break;
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (switch_statement
+    discriminant: (identifier)
+    body: (switch_body
+      (switch_case
+        test: (number)
+        (variable_declaration name: (identifier) (number))
+        (expression_statement (call_expression function: (identifier) arguments: (arguments (identifier))))
+        (expression_statement (call_expression function: (identifier) arguments: (arguments (identifier))))
+        (break_statement)))))
+
+================================================================================
+Edge: For-of with call chain
+================================================================================
+
+for (const x of a().b().c()) {
+  use(x);
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (for_of_statement
+    name: (identifier)
+    iterable: (call_expression
+      function: (member_expression
+        object: (call_expression
+          function: (member_expression
+            object: (call_expression
+              function: (identifier)
+              arguments: (arguments))
+            property: (identifier))
+          arguments: (arguments))
+        property: (identifier))
+      arguments: (arguments))
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier)
+          arguments: (arguments (identifier)))))))
+
+================================================================================
+Edge: Await in for-of body
+================================================================================
+
+for (const item of items) {
+  await process(item);
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (for_of_statement
+    name: (identifier)
+    iterable: (identifier)
+    body: (block
+      (expression_statement
+        (await_expression
+          (call_expression
+            function: (identifier)
+            arguments: (arguments (identifier))))))))
+
+================================================================================
+Edge: Return inside switch
+================================================================================
+
+function f(x: number): number {
+  switch (x) {
+    case 0:
+      return 0;
+    case 1:
+      return 1;
+    default:
+      return x;
+  }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (function_declaration
+    name: (identifier)
+    (parameters
+      (parameter
+        name: (identifier)
+        (type_annotation (type (primitive_type)))))
+    (type_annotation (type (primitive_type)))
+    body: (function_body
+      (function_body_statement
+        (switch_statement
+          discriminant: (identifier)
+          body: (switch_body
+            (switch_case
+              test: (number)
+              (return_statement (number)))
+            (switch_case
+              test: (number)
+              (return_statement (number)))
+            (switch_default
+              (return_statement (identifier)))))))))

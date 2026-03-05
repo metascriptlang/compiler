@@ -1,0 +1,718 @@
+==================
+User macro declaration (basic)
+==================
+
+macro deriveEq(target) {
+    return target;
+}
+
+---
+
+(program
+  (macro_declaration
+    name: (identifier)
+    (parameters
+      (parameter
+        name: (identifier)))
+    body: (macro_body
+      (return_statement
+        (identifier)))))
+
+==================
+User macro declaration (with type annotation)
+==================
+
+macro transform(input: any): any {
+    return input;
+}
+
+---
+
+(program
+  (macro_declaration
+    name: (identifier)
+    (parameters
+      (parameter
+        name: (identifier)
+        (type_annotation
+          (type
+            (primitive_type)))))
+    (type_annotation
+      (type
+        (primitive_type)))
+    body: (macro_body
+      (return_statement
+        (identifier)))))
+
+==================
+User macro declaration (with type parameters)
+==================
+
+macro identity<T>(value: T): T {
+    return value;
+}
+
+---
+
+(program
+  (macro_declaration
+    name: (identifier)
+    (type_parameters
+      (identifier))
+    (parameters
+      (parameter
+        name: (identifier)
+        (type_annotation
+          (type
+            (type_identifier)))))
+    (type_annotation
+      (type
+        (type_identifier)))
+    body: (macro_body
+      (return_statement
+        (identifier)))))
+
+==================
+User macro with @target block
+==================
+
+macro crossPlatform(target) {
+    @target("c") {
+        @emit("code();")
+    }
+    return target;
+}
+
+---
+
+(program
+  (macro_declaration
+    name: (identifier)
+    (parameters
+      (parameter
+        name: (identifier)))
+    body: (macro_body
+      (macro_target_block
+        (string)
+        (macro_target_body
+          (macro_emit_statement
+            (string))))
+      (return_statement
+        (identifier)))))
+
+==================
+User macro with @target else chain
+==================
+
+macro multiTarget(target) {
+    @target("c") {
+        @emit("c_code();")
+    } else @target("js") {
+        @emit("js_code();")
+    } else {
+        @emit("fallback();")
+    }
+    return target;
+}
+
+---
+
+(program
+  (macro_declaration
+    name: (identifier)
+    (parameters
+      (parameter
+        name: (identifier)))
+    body: (macro_body
+      (macro_target_block
+        (string)
+        (macro_target_body
+          (macro_emit_statement
+            (string)))
+        (macro_target_else
+          (macro_target_block
+            (string)
+            (macro_target_body
+              (macro_emit_statement
+                (string)))
+            (macro_target_else
+              (macro_target_body
+                (macro_emit_statement
+                  (string)))))))
+      (return_statement
+        (identifier)))))
+
+==================
+Exported user macro
+==================
+
+export macro deriveTrait(target) {
+    return target;
+}
+
+---
+
+(program
+  (export_statement
+    (macro_declaration
+      name: (identifier)
+      (parameters
+        (parameter
+          name: (identifier)))
+      body: (macro_body
+        (return_statement
+          (identifier))))))
+
+==================
+Extern macro declaration (compiler intrinsic)
+==================
+
+extern macro @target(...platforms: string[]): void;
+
+---
+
+(program
+  (extern_declaration
+    (extern_macro
+      name: (macro_name
+        (identifier))
+      (parameters
+        (parameter
+          name: (identifier)
+          (type_annotation
+            (type
+              (array_type
+                (type
+                  (primitive_type)))))))
+      (type_annotation
+        (type
+          (primitive_type))))))
+
+==================
+Extern macro with simple parameter
+==================
+
+extern macro @emit(code: string): void;
+
+---
+
+(program
+  (extern_declaration
+    (extern_macro
+      name: (macro_name
+        (identifier))
+      (parameters
+        (parameter
+          name: (identifier)
+          (type_annotation
+            (type
+              (primitive_type)))))
+      (type_annotation
+        (type
+          (primitive_type))))))
+
+==================
+Extern macro with type parameter
+==================
+
+extern macro @emit<T>(code: string): T;
+
+---
+
+(program
+  (extern_declaration
+    (extern_macro
+      name: (macro_name
+        (identifier))
+      (type_parameters
+        (identifier))
+      (parameters
+        (parameter
+          name: (identifier)
+          (type_annotation
+            (type
+              (primitive_type)))))
+      (type_annotation
+        (type
+          (type_identifier))))))
+
+==================
+Extern macro with multiple type parameters
+==================
+
+extern macro @convert<From, To>(value: From): To;
+
+---
+
+(program
+  (extern_declaration
+    (extern_macro
+      name: (macro_name
+        (identifier))
+      (type_parameters
+        (identifier)
+        (identifier))
+      (parameters
+        (parameter
+          name: (identifier)
+          (type_annotation
+            (type
+              (type_identifier)))))
+      (type_annotation
+        (type
+          (type_identifier))))))
+
+==================
+Macro decorator on class
+==================
+
+@derive(Eq, Hash)
+class User {
+    name: string;
+}
+
+---
+
+(program
+  (class_declaration
+    (macro_decorator
+      name: (identifier)
+      (macro_arguments
+        (identifier)
+        (identifier)))
+    name: (type_identifier)
+    body: (class_body
+      (property_declaration
+        name: (identifier)
+        (type_annotation
+          (type
+            (primitive_type)))))))
+
+==================
+Comptime block
+==================
+
+const config = @comptime {
+    return "production";
+};
+
+---
+
+(program
+  (variable_declaration
+    name: (identifier)
+    (macro_comptime
+      (block
+        (return_statement
+          (string))))))
+
+==================
+Function declaration with @target inside
+==================
+
+function greet(name: string): void {
+    @target("c") {
+        @emit("printf($name);")
+    }
+}
+
+---
+
+(program
+  (function_declaration
+    name: (identifier)
+    (parameters
+      (parameter
+        name: (identifier)
+        (type_annotation
+          (type
+            (primitive_type)))))
+    (type_annotation
+      (type
+        (primitive_type)))
+    body: (function_body
+      (function_body_statement
+        (macro_target_block
+          (string)
+          (macro_target_body
+            (macro_emit_statement
+              (string))))))))
+
+==================
+Function with @extern (legacy)
+==================
+
+export function platform(): string {
+    @extern("ms_os_platform");
+}
+
+---
+
+(program
+  (export_statement
+    (function_declaration
+      name: (identifier)
+      (parameters)
+      (type_annotation
+        (type
+          (primitive_type)))
+      body: (function_body
+        (function_body_statement
+          (macro_extern_statement
+            (string)))))))
+
+==================
+Import statement
+==================
+
+import { readFile, writeFile } from "std/fs";
+
+---
+
+(program
+  (import_statement
+    (import_clause
+      (identifier)
+      (identifier))
+    (string)))
+
+==================
+Interface declaration
+==================
+
+export interface Stats {
+    size: number;
+    isFile(): boolean;
+}
+
+---
+
+(program
+  (export_statement
+    (interface_declaration
+      name: (type_identifier)
+      body: (interface_body
+        (interface_property
+          name: (identifier)
+          (type_annotation
+            (type
+              (primitive_type))))
+        (interface_method
+          name: (identifier)
+          (parameters)
+          (type_annotation
+            (type
+              (primitive_type))))))))
+
+==================
+User macro called like function
+==================
+
+class User {
+    name: string;
+}
+deriveEq(User);
+
+---
+
+(program
+  (class_declaration
+    name: (type_identifier)
+    body: (class_body
+      (property_declaration
+        name: (identifier)
+        (type_annotation
+          (type
+            (primitive_type))))))
+  (expression_statement
+    (call_expression
+      function: (identifier)
+      arguments: (arguments
+        (identifier)))))
+
+==================
+@emit with type parameter in expression
+==================
+
+function getValue(): number {
+    return @emit<number>("get_value()");
+}
+
+---
+
+(program
+  (function_declaration
+    name: (identifier)
+    (parameters)
+    (type_annotation
+      (type
+        (primitive_type)))
+    body: (function_body
+      (function_body_statement
+        (return_statement
+          (macro_emit_expr
+            (type_parameters
+              (identifier))
+            (string)))))))
+
+==================
+Multiple extern macros (compiler.ms style)
+==================
+
+extern macro @target(...platforms: string[]): void;
+extern macro @emit(code: string): void;
+extern macro @inline(): void;
+extern macro @sizeof<T>(): usize;
+
+---
+
+(program
+  (extern_declaration
+    (extern_macro
+      name: (macro_name
+        (identifier))
+      (parameters
+        (parameter
+          name: (identifier)
+          (type_annotation
+            (type
+              (array_type
+                (type
+                  (primitive_type)))))))
+      (type_annotation
+        (type
+          (primitive_type)))))
+  (extern_declaration
+    (extern_macro
+      name: (macro_name
+        (identifier))
+      (parameters
+        (parameter
+          name: (identifier)
+          (type_annotation
+            (type
+              (primitive_type)))))
+      (type_annotation
+        (type
+          (primitive_type)))))
+  (extern_declaration
+    (extern_macro
+      name: (macro_name
+        (identifier))
+      (parameters)
+      (type_annotation
+        (type
+          (primitive_type)))))
+  (extern_declaration
+    (extern_macro
+      name: (macro_name
+        (identifier))
+      (type_parameters
+        (identifier))
+      (parameters)
+      (type_annotation
+        (type
+          (type_identifier))))))
+
+==================
+Complex user macro (derive.ms style)
+==================
+
+macro deriveEq(target) {
+    const body = ast.createBlock([]);
+    const method = ast.createMethod("equals", body);
+    target.addMethod(method);
+    return target;
+}
+
+---
+
+(program
+  (macro_declaration
+    name: (identifier)
+    (parameters
+      (parameter
+        name: (identifier)))
+    body: (macro_body
+      (variable_declaration
+        name: (identifier)
+        (call_expression
+          function: (member_expression
+            object: (identifier)
+            property: (identifier))
+          arguments: (arguments
+            (array))))
+      (variable_declaration
+        name: (identifier)
+        (call_expression
+          function: (member_expression
+            object: (identifier)
+            property: (identifier))
+          arguments: (arguments
+            (string)
+            (identifier))))
+      (expression_statement
+        (call_expression
+          function: (member_expression
+            object: (identifier)
+            property: (identifier))
+          arguments: (arguments
+            (identifier))))
+      (return_statement
+        (identifier)))))
+
+==================
+@target with multiple platforms
+==================
+
+function code(): void {
+    @target("c", "js") {
+        @emit("shared_code();")
+    }
+}
+
+---
+
+(program
+  (function_declaration
+    name: (identifier)
+    (parameters)
+    (type_annotation
+      (type
+        (primitive_type)))
+    body: (function_body
+      (function_body_statement
+        (macro_target_block
+          (string)
+          (string)
+          (macro_target_body
+            (macro_emit_statement
+              (string))))))))
+
+==================
+Extension method: Instance basic
+==================
+
+function doubled(this n: number): number {
+    return n * 2;
+}
+
+---
+
+(program
+  (function_declaration
+    name: (identifier)
+    (parameters
+      (parameter
+        (this_parameter
+          name: (identifier)
+          receiver_type: (type
+            (primitive_type)))))
+    (type_annotation
+      (type
+        (primitive_type)))
+    body: (function_body
+      (function_body_statement
+        (return_statement
+          (binary_expression
+            (identifier)
+            (number)))))))
+
+==================
+Extension method: Instance with custom type
+==================
+
+function isEmpty(this arr: Array): boolean {
+    return arr.length == 0;
+}
+
+---
+
+(program
+  (function_declaration
+    name: (identifier)
+    (parameters
+      (parameter
+        (this_parameter
+          name: (identifier)
+          receiver_type: (type
+            (type_identifier)))))
+    (type_annotation
+      (type
+        (primitive_type)))
+    body: (function_body
+      (function_body_statement
+        (return_statement
+          (binary_expression
+            (member_expression
+              object: (identifier)
+              property: (identifier))
+            (number)))))))
+
+==================
+Extension method: Instance with additional params
+==================
+
+function slice(this s: string, start: number, end: number): string {
+    return s;
+}
+
+---
+
+(program
+  (function_declaration
+    name: (identifier)
+    (parameters
+      (parameter
+        (this_parameter
+          name: (identifier)
+          receiver_type: (type
+            (primitive_type))))
+      (parameter
+        name: (identifier)
+        (type_annotation
+          (type
+            (primitive_type))))
+      (parameter
+        name: (identifier)
+        (type_annotation
+          (type
+            (primitive_type)))))
+    (type_annotation
+      (type
+        (primitive_type)))
+    body: (function_body
+      (function_body_statement
+        (return_statement
+          (identifier))))))
+
+==================
+Extension method: Static extension (typeof)
+==================
+
+function resolve(this typeof Promise, value: number): number {
+    return value;
+}
+
+---
+
+(program
+  (function_declaration
+    name: (identifier)
+    (parameters
+      (parameter
+        (this_parameter
+          receiver_type: (type
+            (type_identifier))))
+      (parameter
+        name: (identifier)
+        (type_annotation
+          (type
+            (primitive_type)))))
+    (type_annotation
+      (type
+        (primitive_type)))
+    body: (function_body
+      (function_body_statement
+        (return_statement
+          (identifier))))))

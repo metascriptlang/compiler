@@ -1,0 +1,30 @@
+{
+  "name": "tree-sitter-metascript",
+  "version": "0.1.0",
+  "description": "Metascript grammar for tree-sitter",
+  "main": "bindings/node",
+  "keywords": [
+    "tree-sitter",
+    "parser",
+    "metascript"
+  ],
+  "author": "Metascript Contributors",
+  "license": "MIT",
+  "dependencies": {
+    "nan": "^2.18.0"
+  },
+  "devDependencies": {
+    "tree-sitter-cli": "^0.20.8"
+  },
+  "scripts": {
+    "build": "tree-sitter generate && node-gyp build",
+    "test": "tree-sitter test"
+  },
+  "tree-sitter": [
+    {
+      "scope": "source.metascript",
+      "file-types": ["ms", "mts"],
+      "highlights": "queries/highlights.scm"
+    }
+  ]
+}

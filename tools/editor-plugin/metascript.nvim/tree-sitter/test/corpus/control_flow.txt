@@ -1,0 +1,627 @@
+================================================================================
+Switch: Basic
+================================================================================
+
+switch (x) {
+  case 1:
+    foo();
+    break;
+  default:
+    bar();
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (switch_statement
+    discriminant: (identifier)
+    body: (switch_body
+      (switch_case
+        test: (number)
+        (expression_statement (call_expression function: (identifier) arguments: (arguments)))
+        (break_statement))
+      (switch_default
+        (expression_statement (call_expression function: (identifier) arguments: (arguments)))))))
+
+================================================================================
+Switch: Multiple fallthrough cases
+================================================================================
+
+switch (ch) {
+  case 1:
+  case 2:
+  case 3:
+    handleDigit();
+    break;
+  case 4:
+  case 5:
+    handleHighDigit();
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (switch_statement
+    discriminant: (identifier)
+    body: (switch_body
+      (switch_case test: (number))
+      (switch_case test: (number))
+      (switch_case
+        test: (number)
+        (expression_statement (call_expression function: (identifier) arguments: (arguments)))
+        (break_statement))
+      (switch_case test: (number))
+      (switch_case
+        test: (number)
+        (expression_statement (call_expression function: (identifier) arguments: (arguments)))))))
+
+================================================================================
+Switch: Default in middle
+================================================================================
+
+switch (x) {
+  case 1:
+    one();
+    break;
+  default:
+    other();
+    break;
+  case 2:
+    two();
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (switch_statement
+    discriminant: (identifier)
+    body: (switch_body
+      (switch_case
+        test: (number)
+        (expression_statement (call_expression function: (identifier) arguments: (arguments)))
+        (break_statement))
+      (switch_default
+        (expression_statement (call_expression function: (identifier) arguments: (arguments)))
+        (break_statement))
+      (switch_case
+        test: (number)
+        (expression_statement (call_expression function: (identifier) arguments: (arguments)))))))
+
+================================================================================
+Switch: Complex discriminant expression
+================================================================================
+
+switch (obj.getType().valueOf()) {
+  case "string":
+    handleString();
+    break;
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (switch_statement
+    discriminant: (call_expression
+      function: (member_expression
+        object: (call_expression
+          function: (member_expression
+            object: (identifier)
+            property: (identifier))
+          arguments: (arguments))
+        property: (identifier))
+      arguments: (arguments))
+    body: (switch_body
+      (switch_case
+        test: (string)
+        (expression_statement (call_expression function: (identifier) arguments: (arguments)))
+        (break_statement)))))
+
+================================================================================
+Switch: Nested switches
+================================================================================
+
+switch (a) {
+  case 1:
+    switch (b) {
+      case 10:
+        inner();
+        break;
+    }
+    break;
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (switch_statement
+    discriminant: (identifier)
+    body: (switch_body
+      (switch_case
+        test: (number)
+        (switch_statement
+          discriminant: (identifier)
+          body: (switch_body
+            (switch_case
+              test: (number)
+              (expression_statement (call_expression function: (identifier) arguments: (arguments)))
+              (break_statement))))
+        (break_statement)))))
+
+================================================================================
+Switch: Empty cases
+================================================================================
+
+switch (x) {
+  case 1:
+  case 2:
+  default:
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (switch_statement
+    discriminant: (identifier)
+    body: (switch_body
+      (switch_case test: (number))
+      (switch_case test: (number))
+      (switch_default))))
+
+================================================================================
+For-of: Basic
+================================================================================
+
+for (const item of items) {
+  process(item);
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (for_of_statement
+    name: (identifier)
+    iterable: (identifier)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier)
+          arguments: (arguments (identifier)))))))
+
+================================================================================
+For-of: With let
+================================================================================
+
+for (let x of getArray()) {
+  x = x + 1;
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (for_of_statement
+    name: (identifier)
+    iterable: (call_expression function: (identifier) arguments: (arguments))
+    body: (block
+      (expression_statement
+        (assignment_expression
+          left: (identifier)
+          right: (binary_expression (identifier) (number)))))))
+
+================================================================================
+For-of: Await (async iteration)
+================================================================================
+
+for await (const chunk of stream) {
+  handle(chunk);
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (for_of_statement
+    name: (identifier)
+    iterable: (identifier)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier)
+          arguments: (arguments (identifier)))))))
+
+================================================================================
+For-of: Complex iterable expression
+================================================================================
+
+for (const item of obj.items.filter(x => x.active)) {
+  log(item);
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (for_of_statement
+    name: (identifier)
+    iterable: (call_expression
+      function: (member_expression
+        object: (member_expression
+          object: (identifier)
+          property: (identifier))
+        property: (identifier))
+      arguments: (arguments
+        (arrow_function
+          parameters: (identifier)
+          body: (member_expression
+            object: (identifier)
+            property: (identifier)))))
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier)
+          arguments: (arguments (identifier)))))))
+
+================================================================================
+For-in: Basic
+================================================================================
+
+for (const key in obj) {
+  console.log(key);
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (for_in_statement
+    name: (identifier)
+    object: (identifier)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (member_expression
+            object: (identifier)
+            property: (identifier))
+          arguments: (arguments (identifier)))))))
+
+================================================================================
+For-in: Complex object expression
+================================================================================
+
+for (let prop in getConfig().settings) {
+  apply(prop);
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (for_in_statement
+    name: (identifier)
+    object: (member_expression
+      object: (call_expression function: (identifier) arguments: (arguments))
+      property: (identifier))
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier)
+          arguments: (arguments (identifier)))))))
+
+================================================================================
+Do-while: Basic
+================================================================================
+
+do {
+  x = x + 1;
+} while (x < 10);
+
+--------------------------------------------------------------------------------
+
+(program
+  (do_while_statement
+    body: (block
+      (expression_statement
+        (assignment_expression
+          left: (identifier)
+          right: (binary_expression (identifier) (number)))))
+    condition: (binary_expression (identifier) (number))))
+
+================================================================================
+Do-while: Single statement body
+================================================================================
+
+do x = x + 1; while (x < 10);
+
+--------------------------------------------------------------------------------
+
+(program
+  (do_while_statement
+    body: (expression_statement
+      (assignment_expression
+        left: (identifier)
+        right: (binary_expression (identifier) (number))))
+    condition: (binary_expression (identifier) (number))))
+
+================================================================================
+Do-while: Complex condition
+================================================================================
+
+do {
+  process();
+} while (a > 0 && b < 100 || c === 0);
+
+--------------------------------------------------------------------------------
+
+(program
+  (do_while_statement
+    body: (block
+      (expression_statement (call_expression function: (identifier) arguments: (arguments))))
+    condition: (binary_expression
+      (binary_expression
+        (binary_expression (identifier) (number))
+        (binary_expression (identifier) (number)))
+      (binary_expression (identifier) (number)))))
+
+================================================================================
+Do-while: Nested
+================================================================================
+
+do {
+  do {
+    inner();
+  } while (b);
+} while (a);
+
+--------------------------------------------------------------------------------
+
+(program
+  (do_while_statement
+    body: (block
+      (do_while_statement
+        body: (block
+          (expression_statement (call_expression function: (identifier) arguments: (arguments))))
+        condition: (identifier)))
+    condition: (identifier)))
+
+================================================================================
+Break: Simple
+================================================================================
+
+break;
+
+--------------------------------------------------------------------------------
+
+(program (break_statement))
+
+================================================================================
+Break: With label
+================================================================================
+
+break outer;
+
+--------------------------------------------------------------------------------
+
+(program (break_statement label: (identifier)))
+
+================================================================================
+Continue: Simple
+================================================================================
+
+continue;
+
+--------------------------------------------------------------------------------
+
+(program (continue_statement))
+
+================================================================================
+Continue: With label
+================================================================================
+
+continue loop;
+
+--------------------------------------------------------------------------------
+
+(program (continue_statement label: (identifier)))
+
+================================================================================
+Labeled: Basic loop
+================================================================================
+
+loop: while (true) {
+  break loop;
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (labeled_statement
+    label: (identifier)
+    body: (while_statement
+      (boolean)
+      (block (break_statement label: (identifier))))))
+
+================================================================================
+Labeled: Nested loops with multiple labels
+================================================================================
+
+outer: for (let i = 0; i < 10; i = i + 1) {
+  inner: for (let j = 0; j < 10; j = j + 1) {
+    if (i === j) {
+      continue outer;
+    }
+    if (j === 5) {
+      break inner;
+    }
+  }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (labeled_statement
+    label: (identifier)
+    body: (for_statement
+      (variable_declaration name: (identifier) (number))
+      (binary_expression (identifier) (number))
+      (assignment_expression left: (identifier) right: (binary_expression (identifier) (number)))
+      (block
+        (labeled_statement
+          label: (identifier)
+          body: (for_statement
+            (variable_declaration name: (identifier) (number))
+            (binary_expression (identifier) (number))
+            (assignment_expression left: (identifier) right: (binary_expression (identifier) (number)))
+            (block
+              (if_statement
+                (binary_expression (identifier) (identifier))
+                (block (continue_statement label: (identifier))))
+              (if_statement
+                (binary_expression (identifier) (number))
+                (block (break_statement label: (identifier)))))))))))
+
+================================================================================
+Complex: Switch inside for-of
+================================================================================
+
+for (const item of items) {
+  switch (item.type) {
+    case "a":
+      handleA();
+      break;
+    case "b":
+      handleB();
+      continue;
+    default:
+      skip();
+  }
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (for_of_statement
+    name: (identifier)
+    iterable: (identifier)
+    body: (block
+      (switch_statement
+        discriminant: (member_expression object: (identifier) property: (identifier))
+        body: (switch_body
+          (switch_case
+            test: (string)
+            (expression_statement (call_expression function: (identifier) arguments: (arguments)))
+            (break_statement))
+          (switch_case
+            test: (string)
+            (expression_statement (call_expression function: (identifier) arguments: (arguments)))
+            (continue_statement))
+          (switch_default
+            (expression_statement (call_expression function: (identifier) arguments: (arguments)))))))))
+
+================================================================================
+Complex: Do-while with switch
+================================================================================
+
+do {
+  switch (state) {
+    case 0:
+      state = 1;
+      break;
+    case 1:
+      state = 2;
+      break;
+    default:
+      done = true;
+  }
+} while (done !== true);
+
+--------------------------------------------------------------------------------
+
+(program
+  (do_while_statement
+    body: (block
+      (switch_statement
+        discriminant: (identifier)
+        body: (switch_body
+          (switch_case
+            test: (number)
+            (expression_statement (assignment_expression left: (identifier) right: (number)))
+            (break_statement))
+          (switch_case
+            test: (number)
+            (expression_statement (assignment_expression left: (identifier) right: (number)))
+            (break_statement))
+          (switch_default
+            (expression_statement (assignment_expression left: (identifier) right: (boolean)))))))
+    condition: (binary_expression (identifier) (boolean))))
+
+================================================================================
+Complex: Triple nested labels
+================================================================================
+
+a: b: c: while (true) {
+  break c;
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (labeled_statement
+    label: (identifier)
+    body: (labeled_statement
+      label: (identifier)
+      body: (labeled_statement
+        label: (identifier)
+        body: (while_statement
+          (boolean)
+          (block (break_statement label: (identifier))))))))
+
+================================================================================
+Edge: For-of single statement
+================================================================================
+
+for (const x of arr) log(x);
+
+--------------------------------------------------------------------------------
+
+(program
+  (for_of_statement
+    name: (identifier)
+    iterable: (identifier)
+    body: (expression_statement
+      (call_expression
+        function: (identifier)
+        arguments: (arguments (identifier))))))
+
+================================================================================
+Edge: For-in single statement
+================================================================================
+
+for (var k in obj) print(k);
+
+--------------------------------------------------------------------------------
+
+(program
+  (for_in_statement
+    name: (identifier)
+    object: (identifier)
+    body: (expression_statement
+      (call_expression
+        function: (identifier)
+        arguments: (arguments (identifier))))))
+
+================================================================================
+Edge: Labeled block (not loop)
+================================================================================
+
+block: {
+  doSomething();
+  if (cond) break block;
+  doMore();
+}
+
+--------------------------------------------------------------------------------
+
+(program
+  (labeled_statement
+    label: (identifier)
+    body: (block
+      (expression_statement (call_expression function: (identifier) arguments: (arguments)))
+      (if_statement
+        (identifier)
+        (break_statement label: (identifier)))
+      (expression_statement (call_expression function: (identifier) arguments: (arguments))))))
