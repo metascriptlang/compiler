@@ -4,7 +4,7 @@ import { exit, exec } from "std/process";
 import { parseSource } from "../parser/statements/validation";
 import { Node, NodeKind, ProgramData } from "../ast/node";
 import { CheckerContext, hasErrors, hasFatalErrors, errorCount } from "../checker/context";
-import { checkProgram, checkProgramWithRegistry } from "../checker/checkPass";
+import { checkProgramWithRegistry } from "../checker/checkPass";
 import { checkModuleGraph, getPreludeContext } from "../checker/index";
 import { ExportRegistry } from "../checker/context";
 import { validateTypedAST } from "../checker/validate";
@@ -155,7 +155,7 @@ function computeProjectAliveSet(graph: ModuleGraph, entryPath: string, isTest: b
 		if (mod.isCHeader) continue;
 		const pr = parseSource(mod.source);
 		if (!pr.ok) continue;
-		const ctx = graphRegistry !== null ? checkProgramWithRegistry(pr.value, graphRegistry, graph, mod, graphPreludeCtx) : checkProgram(pr.value);
+		const ctx = checkProgramWithRegistry(pr.value, graphRegistry, graph, mod, graphPreludeCtx);
 		exitOnFatalCheckerErrors(ctx, modPath);
 		ctx.errors = [];
 		const monoed = monomorphizeProgram(pr.value, ctx);
@@ -277,7 +277,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		}
 
 		// Check (cross-module registry for proper import type resolution)
-		const ctx = graphRegistry !== null ? checkProgramWithRegistry(pr.value, graphRegistry, graph, mod, graphPreludeCtx) : checkProgram(pr.value);
+		const ctx = checkProgramWithRegistry(pr.value, graphRegistry, graph, mod, graphPreludeCtx);
 		exitOnFatalCheckerErrors(ctx, modPath);
 		ctx.errors = [];
 
@@ -372,7 +372,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		}
 
 		// Check (cross-module registry for proper import type resolution)
-		const ctx = graphRegistry !== null ? checkProgramWithRegistry(pr.value, graphRegistry, graph, mod, graphPreludeCtx) : checkProgram(pr.value);
+		const ctx = checkProgramWithRegistry(pr.value, graphRegistry, graph, mod, graphPreludeCtx);
 		exitOnFatalCheckerErrors(ctx, modPath);
 		ctx.errors = [];
 
@@ -535,7 +535,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 			exit(1);
 		}
 
-		const ctx = graphRegistry !== null ? checkProgramWithRegistry(pr.value, graphRegistry, graph, mod, graphPreludeCtx) : checkProgram(pr.value);
+		const ctx = checkProgramWithRegistry(pr.value, graphRegistry, graph, mod, graphPreludeCtx);
 		exitOnFatalCheckerErrors(ctx, modPath);
 		ctx.errors = [];
 
@@ -629,7 +629,7 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 			exit(1);
 		}
 
-		const ctx = graphRegistry !== null ? checkProgramWithRegistry(pr.value, graphRegistry, graph, mod, graphPreludeCtx) : checkProgram(pr.value);
+		const ctx = checkProgramWithRegistry(pr.value, graphRegistry, graph, mod, graphPreludeCtx);
 		exitOnFatalCheckerErrors(ctx, modPath);
 		ctx.errors = [];
 

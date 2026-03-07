@@ -3,7 +3,7 @@
 import {
 	Type, TypeKind, isNumeric,
 	numberType, stringType, booleanType, voidType, nullType, unknownType, errorType,
-	createPrimitive, createArray, createFunction, createObject, createUnion,
+	createPrimitive, createArray, createFunction, createStruct, createUnion,
 	createEnum, createResult, createRef, createPtr, createDistinct, createGenericParam,
 	createSizedArray, createSpan,
 	getMinArity,
@@ -18,7 +18,7 @@ export function isAssignable(source: Type, target: Type): boolean {
 		return match (source.kind) {
 			TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Ref | TypeKind.Ptr => isAssignable(source.typeReturn, target.typeReturn),
 			TypeKind.Function => isFunctionAssignable(source, target),
-			TypeKind.Object => isObjectAssignable(source, target),
+			TypeKind.Struct => isObjectAssignable(source, target),
 			TypeKind.Enum | TypeKind.Distinct => source.typeName === target.typeName,
 			TypeKind.Result => {
 				const okCompat = isAssignable(source.typeReturn, target.typeReturn);
@@ -62,7 +62,7 @@ export function isAssignable(source: Type, target: Type): boolean {
 	// null assignable to nullable targets (Object, Array, SizedArray, Span, Function, Ref, Ptr)
 	if (source.kind === TypeKind.Null) {
 		return match (target.kind) {
-			TypeKind.Object | TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Function | TypeKind.Ref | TypeKind.Ptr => true,
+			TypeKind.Struct | TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Function | TypeKind.Ref | TypeKind.Ptr => true,
 			_ => false,
 		};
 	}
@@ -176,7 +176,7 @@ export function typeRelation(formal: Type, actual: Type): TypeRelation {
 	// Same kind: dispatch on type-specific rules
 	if (formal.kind === actual.kind) {
 		return match (formal.kind) {
-			TypeKind.Object => {
+			TypeKind.Struct => {
 				if (formal.typeName === actual.typeName) return TypeRelation.Exact;
 				if (isObjectAssignable(actual, formal)) return TypeRelation.Subtype;
 				TypeRelation.None
@@ -236,7 +236,7 @@ export function typeRelation(formal: Type, actual: Type): TypeRelation {
 	}
 	// Null to nullable
 	if (actual.kind === TypeKind.Null) {
-		if (formal.kind === TypeKind.Object || formal.kind === TypeKind.Array ||
+		if (formal.kind === TypeKind.Struct || formal.kind === TypeKind.Array ||
 			formal.kind === TypeKind.SizedArray || formal.kind === TypeKind.Span ||
 			formal.kind === TypeKind.Function || formal.kind === TypeKind.Ref || formal.kind === TypeKind.Ptr) {
 			return TypeRelation.Subtype;
@@ -528,7 +528,7 @@ test "numeric widening" {
 }
 
 test "null to nullable" {
-	assert isAssignable(nullType(), createObject("Foo", [], [], false));
+	assert isAssignable(nullType(), createStruct("Foo", [], [], false));
 	assert isAssignable(nullType(), createArray(numberType()));
 	assert !isAssignable(nullType(), numberType());
 }
@@ -558,26 +558,26 @@ test "covariant return" {
 }
 
 test "nominal same name" {
-	const o1 = createObject("Type", ["kind"], [numberType()], false);
-	const o2 = createObject("Type", ["kind"], [unknownType()], false);
+	const o1 = createStruct("Type", ["kind"], [numberType()], false);
+	const o2 = createStruct("Type", ["kind"], [unknownType()], false);
 	assert isAssignable(o1, o2);
 }
 
 test "exact match" {
-	const o1 = createObject("A", ["x"], [numberType()], false);
-	const o2 = createObject("B", ["x"], [numberType()], false);
+	const o1 = createStruct("A", ["x"], [numberType()], false);
+	const o2 = createStruct("B", ["x"], [numberType()], false);
 	assert isAssignable(o1, o2);
 }
 
 test "source has extra props" {
-	const o1 = createObject("A", ["x", "y"], [numberType(), stringType()], false);
-	const o2 = createObject("B", ["x"], [numberType()], false);
+	const o1 = createStruct("A", ["x", "y"], [numberType(), stringType()], false);
+	const o2 = createStruct("B", ["x"], [numberType()], false);
 	assert isAssignable(o1, o2);
 }
 
 test "source missing prop" {
-	const o1 = createObject("A", ["x"], [numberType()], false);
-	const o2 = createObject("B", ["x", "y"], [numberType(), stringType()], false);
+	const o1 = createStruct("A", ["x"], [numberType()], false);
+	const o2 = createStruct("B", ["x", "y"], [numberType(), stringType()], false);
 	assert !isAssignable(o1, o2);
 }
 
@@ -595,7 +595,7 @@ test "unknown = generic" {
 
 test "int conversion" { assert typeRelation(numberType(), createPrimitive(TypeKind.Int32)) === TypeRelation.IntConv; }
 
-test "null to object" { assert typeRelation(createObject("Foo", [], [], false), nullType()) === TypeRelation.Subtype; }
+test "null to object" { assert typeRelation(createStruct("Foo", [], [], false), nullType()) === TypeRelation.Subtype; }
 
 test "exact args" {
 	const score = scoreCandidate([numberType(), stringType()], [numberType(), stringType()]);

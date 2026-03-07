@@ -15,7 +15,7 @@ import {
 import {
 	Type, TypeKind,
 	unknownType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType,
-	createPrimitive, createArray, createFunction, createObject,
+	createPrimitive, createArray, createFunction, createStruct,
 	createResult, createTypeRef, createUnion, createGenericParam, createDistinct,
 	createSizedArray, createSpan, createBorrow, createPtr, createRef, createMaybeType,
 	setMinArity, typeNameOf, assignType, isInterfaceType, unwrapRef,
@@ -128,7 +128,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 	// Object literal type: { field: Type, ... }
 	if (charAt(trimmed, 0) === "{" && trimmed.endsWith("}")) {
 		const inner = trimStr(sliceStr(trimmed, 1, trimmed.length - 1));
-		if (inner === "") return createObject("", [], [], true);
+		if (inner === "") return createStruct("", [], [], true);
 		const fields = splitTopLevel(inner, ",");
 		const names: string[] = [];
 		const types: Type[] = [];
@@ -146,7 +146,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 			}
 			fi = fi + 1;
 		}
-		return createObject("", names, types, true);
+		return createStruct("", names, types, true);
 	}
 
 	// Check for array suffix [] or [ ] (token-joined form from captureOptionalType)
@@ -590,7 +590,7 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 		fi += 1;
 	}
 
-	const ifaceType = createObject(d.interfaceName, d.interfaceFields, fieldTypes, true);
+	const ifaceType = createStruct(d.interfaceName, d.interfaceFields, fieldTypes, true);
 	assignType(sym.symbolType, ifaceType);
 	node.nodeType = sym.symbolType;
 }
@@ -700,7 +700,7 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 		closeScope(ctx.table);
 	}
 
-	const classType = createObject(d.className, memberNames, memberTypes, true);
+	const classType = createStruct(d.className, memberNames, memberTypes, true);
 	// Preserve typeExtra (base class info set by collectPass)
 	// sym.symbolType is Ref(Object) from collectPass — update the inner Object, not the Ref
 	const inner = unwrapRef(sym.symbolType);
@@ -816,9 +816,9 @@ test "string | number" {
 
 test "known symbol" {
 	const ctx = createContext();
-	defineSymbol(ctx.table, makeSymbol("MyType", SymbolKind.Interface, createObject("MyType", [], [], true), false));
+	defineSymbol(ctx.table, makeSymbol("MyType", SymbolKind.Interface, createStruct("MyType", [], [], true), false));
 	const t = resolveAnnotation("MyType", ctx);
-	assert t.kind === TypeKind.Object;
+	assert t.kind === TypeKind.Struct;
 	assert t.typeName === "MyType";
 }
 
@@ -924,10 +924,10 @@ test "non-generic base falls through" {
 	resetGenericTypeInsts();
 	// No addGenericDecl for "Foo" — should fall through to symbol lookup
 	const ctx = createContext();
-	defineSymbol(ctx.table, makeSymbol("Foo", SymbolKind.Interface, createObject("Foo", [], [], true), false));
+	defineSymbol(ctx.table, makeSymbol("Foo", SymbolKind.Interface, createStruct("Foo", [], [], true), false));
 	const t = resolveAnnotation("Foo<number>", ctx);
 	// Non-generic: returns base type (Foo)
-	assert t.kind === TypeKind.Object;
+	assert t.kind === TypeKind.Struct;
 	assert t.typeName === "Foo";
 }
 

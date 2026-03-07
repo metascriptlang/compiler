@@ -9,7 +9,7 @@ export {
 	nullType, unknownType, neverType, errorType,
 } from "./types";
 export {
-	createPrimitive, createObject, createArray, createSizedArray, createSpan, createFunction,
+	createPrimitive, createStruct, createArray, createSizedArray, createSpan, createFunction,
 	createEnum, createResult, createTypeRef, createGenericParam,
 } from "./types";
 export {
@@ -46,7 +46,7 @@ export { resolveAnnotation, resolveDeclarations } from "./resolvePass";
 export { isAssignable, TypeRelation, typeRelation, scoreCandidate } from "./compat";
 
 // Re-exports: checkPass.ms (Pass 3 — statements)
-export { checkStmt, checkProgramBody, checkProgram, checkProgramCancellable, checkProgramWithRegistry, checkProgramWithRegistryCancellable, checkSource, runThreePasses, buildPreludeContext } from "./checkPass";
+export { checkStmt, checkProgramBody, checkProgram, checkProgramWithRegistry, checkProgramWithRegistryCancellable, checkSource, runThreePasses, buildPreludeContext } from "./checkPass";
 
 // Re-exports: checkExprPass.ms (Pass 3 — expressions)
 export { checkExpr } from "./checkExprPass";
@@ -101,11 +101,11 @@ test "function resolved as callable" {
 	assert sym.symbolType.typeNames.length === 2;
 }
 
-test "class resolved with members" {
+test "class resolved as Ref<Object>" {
 	const ctx = checkSource("class Vec { getX() { return 1; } }");
 	const sym = lookupSymbol(ctx.table, "Vec");
 	assert sym !== null;
-	assert sym.symbolType.kind === TypeKind.Object;
+	assert sym.symbolType.kind === TypeKind.Ref;
 }
 
 test "arithmetic inference" {

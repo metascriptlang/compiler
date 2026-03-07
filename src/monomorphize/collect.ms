@@ -91,7 +91,7 @@ function monoResolveTypeName(name: string): Type {
 	if (name === "boolean") return { kind: TypeKind.Boolean, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
 	if (name === "void") return { kind: TypeKind.Void, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
 	// Named types (interfaces, classes, enums)
-	return { kind: TypeKind.Object, typeName: name, typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
+	return { kind: TypeKind.Struct, typeName: name, typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
 }
 
 // ===== Resolve Annotation String → Type =====
@@ -1075,7 +1075,7 @@ function monoConcreteTypeName(t: Type): string {
 	if (t.kind === TypeKind.Null) return "null";
 	if (t.kind === TypeKind.Array) return "Array<" + monoConcreteTypeName(t.typeReturn) + ">";
 	if (t.kind === TypeKind.Result) return "Result<" + monoConcreteTypeName(t.typeReturn) + ", " + monoConcreteTypeName(t.typeExtra) + ">";
-	if (t.kind === TypeKind.Object) return t.typeName;
+	if (t.kind === TypeKind.Struct) return t.typeName;
 	if (t.kind === TypeKind.Enum) return t.typeName;
 	return "unknown";
 }
@@ -1234,7 +1234,7 @@ test "resolveTypeName string" {
 
 test "resolveTypeName named" {
 	const t = monoResolveTypeName("MyInterface");
-	assert t.kind === TypeKind.Object;
+	assert t.kind === TypeKind.Struct;
 	assert t.typeName === "MyInterface";
 }
 
@@ -1266,7 +1266,7 @@ test "resolveAnnotation Array generic" {
 
 test "resolveAnnotation named type" {
 	const t = monoResolveAnnotation("MyInterface");
-	assert t.kind === TypeKind.Object;
+	assert t.kind === TypeKind.Struct;
 	assert t.typeName === "MyInterface";
 }
 

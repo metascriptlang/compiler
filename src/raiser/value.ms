@@ -293,7 +293,7 @@ export interface RaiserObjectHeap {
 	objects: RaiserObjectData[];
 }
 
-export function createObjectHeap(): RaiserObjectHeap {
+export function createStructHeap(): RaiserObjectHeap {
 	const objects: RaiserObjectData[] = [];
 	return { objects };
 }
@@ -373,14 +373,14 @@ export function clearObjectHeap(heap: RaiserObjectHeap): void {
 
 // --- Object Heap Tests ---
 test "alloc empty object" {
-	const heap = createObjectHeap();
+	const heap = createStructHeap();
 	const h = heapAllocObject(heap);
 	assert h === 0;
 	assert heapObjectFieldCount(heap, h) === 0;
 }
 
 test "set and get field" {
-	const heap = createObjectHeap();
+	const heap = createStructHeap();
 	const h = heapAllocObject(heap);
 	const v = raiserInt(42);
 	heapObjectSetField(heap, h, "x", v);
@@ -389,7 +389,7 @@ test "set and get field" {
 }
 
 test "multiple fields" {
-	const heap = createObjectHeap();
+	const heap = createStructHeap();
 	const h = heapAllocObject(heap);
 	const v1 = raiserInt(10);
 	const v2 = raiserInt(20);
@@ -401,7 +401,7 @@ test "multiple fields" {
 }
 
 test "update existing field" {
-	const heap = createObjectHeap();
+	const heap = createStructHeap();
 	const h = heapAllocObject(heap);
 	const v1 = raiserInt(1);
 	heapObjectSetField(heap, h, "x", v1);
@@ -412,7 +412,7 @@ test "update existing field" {
 }
 
 test "get missing field returns nil" {
-	const heap = createObjectHeap();
+	const heap = createStructHeap();
 	const h = heapAllocObject(heap);
 	const val = heapObjectGetField(heap, h, "missing");
 	assert val.kind === RaiserValueKind.Nil;
@@ -439,7 +439,7 @@ test "clearArrayHeap resets storage" {
 }
 
 test "clearObjectHeap resets storage" {
-	const heap = createObjectHeap();
+	const heap = createStructHeap();
 	const h = heapAllocObject(heap);
 	const v = raiserInt(42);
 	heapObjectSetField(heap, h, "x", v);

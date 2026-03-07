@@ -1508,6 +1508,25 @@ function emitSaveAssignDestroy(stmt: Node, lhsExpr: Node, rhs: Node, rcInfo: RcI
 		return makeBlock([saveTmp, stmt, makeDestroyCall(tmpName, rcInfo, loc)], loc);
 	}
 
+	// Nim parity (moveOrCopy → genCopy): for Named types, call =copy(dest, src) directly.
+	// The copy hook handles old-value cleanup internally (setLen frees old payload,
+	// checkSelfAssignment prevents use-after-free on self-copy).
+	// Using save-assign-copy-temp would self-copy a local, breaking array types
+	// where msArraySetLen frees the payload that both dest and src point to.
+	if (rcInfo.rcKind === RcKind.Named && rcInfo.copyFn !== "") {
+		if (rcInfo.seqLike) {
+			// seq copy: dest by-pointer, src by-value
+			const copyCall = makeExprStmt(
+				makeCall(makeIdent(rcInfo.copyFn, loc), [makeHiddenAddr(lhsExpr, loc), rhs], loc), loc);
+			return copyCall;
+		}
+		const copyCall = makeExprStmt(
+			makeCall(makeIdent(rcInfo.copyFn, loc), [makeHiddenAddr(lhsExpr, loc), makeHiddenAddr(rhs, loc)], loc), loc);
+		return copyCall;
+	}
+
+	// Ref/String/Closure: save old → assign → incref(new) → destroy(old)
+	// Unary incref has no self-copy issue.
 	const result: Node[] = [saveTmp, stmt];
 	if (rcInfo.copyFn !== "") {
 		const tmpNew = freshTemp(dctx.ctx, "new" + prefix);

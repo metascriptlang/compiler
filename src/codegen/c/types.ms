@@ -45,11 +45,11 @@ let deferredArrayContentStructs: string[] = [];
 function anonFieldKey(t: Type): string {
 	if (t === null) return "null";
 	// For anonymous nested objects, recurse
-	if (t.kind === TypeKind.Object && t.typeName.length === 0) {
+	if (t.kind === TypeKind.Struct && t.typeName.length === 0) {
 		return "anon(" + anonStructuralKey(t) + ")";
 	}
 	// Named objects use their name
-	if (t.kind === TypeKind.Object) return t.typeName;
+	if (t.kind === TypeKind.Struct) return t.typeName;
 	// Everything else uses the standard typeKey
 	const simple = getSimpleTypeDesc(t);
 	if (simple !== "") return simple;
@@ -217,7 +217,7 @@ export function typeKey(t: Type): string {
 		TypeKind.Void => "void",
 		TypeKind.Null => "null",
 		TypeKind.Enum => { "enum:" + t.typeName; },
-		TypeKind.Object => {
+		TypeKind.Struct => {
 			// Anonymous/structural types: use structural key to distinguish
 			if (isAnonTypeName(t.typeName)) {
 				"anon(" + anonStructuralKey(t) + ")";
@@ -392,7 +392,7 @@ export function getTypeForward(g: CGen, t: Type): string {
 	const cached = typeCacheGet(g.typeCache, key);
 	if (cached !== "") return cached;
 	// For Object/Enum/TypeReference — forward-declare only
-	if (t.kind === TypeKind.Object || t.kind === TypeKind.Enum) {
+	if (t.kind === TypeKind.Struct || t.kind === TypeKind.Enum) {
 		const name = isAnonTypeName(t.typeName) ? anonTypeName(t) : mangle(t.typeName);
 		ensureForwardDecl(g, name);
 		return name;
@@ -473,7 +473,7 @@ export function getTypeDesc(g: CGen, t: Type): string {
 		TypeKind.Enum => {
 			genEnumType(g, t);
 		},
-		TypeKind.Object => {
+		TypeKind.Struct => {
 			genObjectType(g, t);
 		},
 		TypeKind.Array => {
@@ -642,7 +642,7 @@ function genUnionType(g: CGen, t: Type): string {
 		const varName = name + "_v" + intToString(vi);
 
 		// Cache variant Object type so getTypeDesc returns the variant struct name
-		if (variant !== null && variant.kind === TypeKind.Object) {
+		if (variant !== null && variant.kind === TypeKind.Struct) {
 			const varKey = typeKey(variant);
 			typeCacheSet(g.typeCache, varKey, varName);
 		}
@@ -952,7 +952,7 @@ function genTupleType(g: CGen, t: Type): string {
 
 // ===== Tests =====
 
-import { createPrimitive, createObject, createArray, createFunction, createEnum, createResult, createTypeRef, createRef, createTuple } from "../../checker/types";
+import { createPrimitive, createStruct, createArray, createFunction, createEnum, createResult, createTypeRef, createRef, createTuple } from "../../checker/types";
 import { createCGen } from "./context";
 import { CheckerContext } from "../../checker/context";
 test "primitive keys" {
@@ -964,7 +964,7 @@ test "primitive keys" {
 
 test "enum key" { assert typeKey(createEnum("Color", ["Red", "Green"])) === "enum:Color"; }
 
-test "object key" { assert typeKey(createObject("Foo", [], [], true)) === "object:Foo"; }
+test "object key" { assert typeKey(createStruct("Foo", [], [], true)) === "object:Foo"; }
 
 test "null type" { assert typeKey(null as unknown as Type) === "null"; }
 
@@ -978,12 +978,12 @@ test "primitives" {
 
 test "non-primitive returns empty" {
 	assert getSimpleTypeDesc(createEnum("X", [])) === "";
-	assert getSimpleTypeDesc(createObject("Y", [], [], true)) === "";
+	assert getSimpleTypeDesc(createStruct("Y", [], [], true)) === "";
 }
 
-test "class (Ref<Object>) is pointer" { assert isPointerType(createRef(createObject("Foo", [], [], true))); }
+test "class (Ref<Object>) is pointer" { assert isPointerType(createRef(createStruct("Foo", [], [], true))); }
 
-test "interface is not pointer" { assert !isPointerType(createObject("Bar", [], [], true)); }
+test "interface is not pointer" { assert !isPointerType(createStruct("Bar", [], [], true)); }
 
 test "ref is pointer" { assert isPointerType(createRef(createPrimitive(TypeKind.Int32))); }
 
@@ -993,9 +993,9 @@ test "string needs RC" { assert needsRC(createPrimitive(TypeKind.String)); }
 
 test "array needs RC" { assert needsRC(createArray(createPrimitive(TypeKind.Number))); }
 
-test "class (Ref<Object>) needs RC" { assert needsRC(createRef(createObject("Foo", [], [], true))); }
+test "class (Ref<Object>) needs RC" { assert needsRC(createRef(createStruct("Foo", [], [], true))); }
 
-test "interface no RC" { assert !needsRC(createObject("Bar", [], [], true)); }
+test "interface no RC" { assert !needsRC(createStruct("Bar", [], [], true)); }
 
 test "number no RC" { assert !needsRC(createPrimitive(TypeKind.Number)); }
 
@@ -1041,7 +1041,7 @@ test "interface emits struct" {
 	propTypes.push(createPrimitive(TypeKind.Int32));
 	propTypes.push(createPrimitive(TypeKind.Int32));
 	const g = createCGen(null as unknown as CheckerContext, "");
-	const result = getTypeDesc(g, createObject("Point", propNames, propTypes, true));
+	const result = getTypeDesc(g, createStruct("Point", propNames, propTypes, true));
 	assert result === "Point";
 	const types = extract(sec(g, CSection.Types));
 	assert types === "#ifndef Point_DEFINED\n#define Point_DEFINED\nstruct Point {\n  int32_t x;\n  int32_t y;\n};\n#endif\n\n";
@@ -1053,7 +1053,7 @@ test "class (Ref<Object>) emits struct with pointer" {
 	const propTypes: Type[] = [];
 	propTypes.push(createPrimitive(TypeKind.String));
 	const g = createCGen(null as unknown as CheckerContext, "");
-	const result = getTypeDesc(g, createRef(createObject("Person", propNames, propTypes, true)));
+	const result = getTypeDesc(g, createRef(createStruct("Person", propNames, propTypes, true)));
 	assert result === "Person*";
 	const types = extract(sec(g, CSection.Types));
 	assert types === "#ifndef Person_DEFINED\n#define Person_DEFINED\nstruct Person {\n  msString name;\n};\n#endif\n\n";
@@ -1067,7 +1067,7 @@ test "array type" {
 
 test "forward decl emitted" {
 	const g = createCGen(null as unknown as CheckerContext, "");
-	getTypeDesc(g, createObject("Widget", [], [], true));
+	getTypeDesc(g, createStruct("Widget", [], [], true));
 	const fwd = extract(sec(g, CSection.ForwardDecls));
 	assert fwd === "typedef struct Widget Widget;\n";
 }
@@ -1088,7 +1088,7 @@ test "anonymous type gets unique name" {
 	const types1: Type[] = [];
 	types1.push(createPrimitive(TypeKind.Number));
 	types1.push(createPrimitive(TypeKind.Number));
-	const anon1 = createObject("", names1, types1, true);
+	const anon1 = createStruct("", names1, types1, true);
 	const name1 = anonTypeName(anon1);
 	assert name1 !== "empty_";
 	assert name1.length > 7; // "msAnon_" + at least 1 char
@@ -1101,7 +1101,7 @@ test "different anonymous types get different names" {
 	const types1: Type[] = [];
 	types1.push(createPrimitive(TypeKind.Number));
 	types1.push(createPrimitive(TypeKind.Number));
-	const anon1 = createObject("", names1, types1, true);
+	const anon1 = createStruct("", names1, types1, true);
 
 	const names2: string[] = [];
 	names2.push("a");
@@ -1109,7 +1109,7 @@ test "different anonymous types get different names" {
 	const types2: Type[] = [];
 	types2.push(createPrimitive(TypeKind.String));
 	types2.push(createPrimitive(TypeKind.Boolean));
-	const anon2 = createObject("", names2, types2, true);
+	const anon2 = createStruct("", names2, types2, true);
 
 	assert anonTypeName(anon1) !== anonTypeName(anon2);
 }
@@ -1119,13 +1119,13 @@ test "same anonymous type gets same name (deterministic)" {
 	names1.push("x");
 	const types1: Type[] = [];
 	types1.push(createPrimitive(TypeKind.Int32));
-	const anon1 = createObject("", names1, types1, true);
+	const anon1 = createStruct("", names1, types1, true);
 
 	const names2: string[] = [];
 	names2.push("x");
 	const types2: Type[] = [];
 	types2.push(createPrimitive(TypeKind.Int32));
-	const anon2 = createObject("", names2, types2, true);
+	const anon2 = createStruct("", names2, types2, true);
 
 	assert anonTypeName(anon1) === anonTypeName(anon2);
 }
@@ -1135,13 +1135,13 @@ test "anonymous type cache key distinguishes" {
 	names1.push("x");
 	const types1: Type[] = [];
 	types1.push(createPrimitive(TypeKind.Number));
-	const anon1 = createObject("", names1, types1, true);
+	const anon1 = createStruct("", names1, types1, true);
 
 	const names2: string[] = [];
 	names2.push("y");
 	const types2: Type[] = [];
 	types2.push(createPrimitive(TypeKind.String));
-	const anon2 = createObject("", names2, types2, true);
+	const anon2 = createStruct("", names2, types2, true);
 
 	assert typeKey(anon1) !== typeKey(anon2);
 }
@@ -1180,7 +1180,7 @@ test "anonymous type emits struct with hash name" {
 	const types1: Type[] = [];
 	types1.push(createPrimitive(TypeKind.Number));
 	types1.push(createPrimitive(TypeKind.Number));
-	const anon = createObject("", names1, types1, true);
+	const anon = createStruct("", names1, types1, true);
 	const g = createCGen(null as unknown as CheckerContext, "");
 	const result = getTypeDesc(g, anon);
 	// Should NOT be "empty_"

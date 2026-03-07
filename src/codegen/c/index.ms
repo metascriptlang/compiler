@@ -288,7 +288,7 @@ function registerFieldTypes(g: CGen, t: Type): void {
 // Register a single named type into the registry if not already present.
 function registerNamedType(g: CGen, t: Type): void {
 	if (t === null) return;
-	if ((t.kind === TypeKind.Object || t.kind === TypeKind.Enum || t.kind === TypeKind.Union) && t.typeName.length > 0) {
+	if ((t.kind === TypeKind.Struct || t.kind === TypeKind.Enum || t.kind === TypeKind.Union) && t.typeName.length > 0) {
 		if (typeRegistryLookup(g.typeRegistry, t.typeName) === null) {
 			typeRegistryAdd(g.typeRegistry, t.typeName, t);
 		}

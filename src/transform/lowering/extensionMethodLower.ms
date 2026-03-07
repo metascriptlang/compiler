@@ -19,7 +19,7 @@ import { parseInput, getStmts, firstCalleeKind, firstCallArgCount } from "../tes
 import { createTransformContext, createTransformContextWithChecker } from "../context";
 import { createContext, registerExtension, ExtensionMethod } from "../../checker/context";
 import { defineSymbol, makeSymbol, SymbolKind } from "../../checker/symbol";
-import { unknownType, createObject, createFunction } from "../../checker/types";
+import { unknownType, createStruct, createFunction } from "../../checker/types";
 
 // ===== Helpers =====
 
@@ -211,7 +211,7 @@ test "class member takes priority over extension" {
 	registerExtension(cc.extensionRegistry, ext);
 	const fnSym = makeSymbol("run", SymbolKind.Function, ext.fnType, false);
 	defineSymbol(cc.table, fnSym);
-	const taskType = createObject("Task", ["run"], [createFunction([], [], unknownType())], false);
+	const taskType = createStruct("Task", ["run"], [createFunction([], [], unknownType())], false);
 	const tSym = makeSymbol("t", SymbolKind.Variable, taskType, false);
 	defineSymbol(cc.table, tSym);
 	const ctx = createTransformContextWithChecker(cc);
@@ -245,7 +245,7 @@ test "static extension no receiver prepend" {
 	const fnSym = makeSymbol("floor", SymbolKind.Function, ext.fnType, false);
 	defineSymbol(cc.table, fnSym);
 	// Math is an identifier with Object type "Math"
-	const mathType = createObject("Math", [], [], false);
+	const mathType = createStruct("Math", [], [], false);
 	const mathSym = makeSymbol("Math", SymbolKind.Variable, mathType, false);
 	defineSymbol(cc.table, mathSym);
 	const ctx = createTransformContextWithChecker(cc);

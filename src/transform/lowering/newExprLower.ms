@@ -20,7 +20,7 @@ import { ExprStmtData, CallExprData } from "../../ast/node";
 function resolveValueDestructor(valueType: Type): string {
 	if (valueType === null) return "NULL";
 	// Object types (classes/interfaces) are heap-allocated pointers — destructor frees them
-	if (valueType.kind === TypeKind.Object) {
+	if (valueType.kind === TypeKind.Struct) {
 		if (valueType.typeName !== null && valueType.typeName.length > 0) {
 			return "(msMapValueDestructor)" + valueType.typeName + "_destroy";
 		}

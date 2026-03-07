@@ -19,7 +19,7 @@ import {
 	FunctionDeclData, ExportDeclData, DecoratedDeclData,
 	MacroInvocationData, ExprStmtData, StringLiteralData,
 } from "../../ast/node";
-import { Type, TypeKind, createObject, createPtr } from "../../checker/types";
+import { Type, TypeKind, createStruct, createPtr } from "../../checker/types";
 import { Symbol, SymbolFlag, hasFlag } from "../../checker/symbol";
 import { TransformContext } from "../context";
 import { walkNode, mapChildren } from "../walker";
@@ -76,7 +76,7 @@ export function liftHcrState(program: Node, ctx: TransformContext): Node {
 		fieldNames.push(globals[i].name);
 		fieldTypes.push(globals[i].declType);
 	}
-	const gsType = createObject("_GlobalState", fieldNames, fieldTypes, true);
+	const gsType = createStruct("_GlobalState", fieldNames, fieldTypes, true);
 	const gsPtrType = createPtr(gsType);
 
 	// Build a name set for O(1) lookup of globals
@@ -230,7 +230,7 @@ function typeToCStr(t: Type): string {
 		TypeKind.Uint32 => "uint32_t",
 		TypeKind.Uint64 => "uint64_t",
 		TypeKind.Float32 => "float",
-		TypeKind.Object => {
+		TypeKind.Struct => {
 			if (t.typeName !== null && t.typeName.length > 0) {
 				t.typeName
 			} else {

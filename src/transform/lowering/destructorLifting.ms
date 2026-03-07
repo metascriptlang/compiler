@@ -63,7 +63,7 @@ function isCyclicType(t: Type, lctx: LiftCtx, visited: NameSet): boolean {
 			if (t.typeReturn === null) return false;
 			return isCyclicType(t.typeReturn, lctx, visited);
 		},
-		TypeKind.Object => {
+		TypeKind.Struct => {
 			if (t.typeName !== "") {
 				if (nameSetContains(lctx.cyclicCache, t.typeName)) return true;
 				if (nameSetContains(lctx.nonCyclicCache, t.typeName)) return false;
@@ -395,7 +395,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 	match (fieldType.kind) {
 		TypeKind.String => { stringOp(hook, xf, yf, fieldName, buf, loc); },
 		TypeKind.Array => { arrayOp(hook, fieldType.typeReturn, xf, yf, lctx, buf, loc); },
-		TypeKind.Object => {
+		TypeKind.Struct => {
 			if (fieldType.typeName !== "") {
 				ensureTypeHooks(fieldType.typeName, lctx, loc);
 				if (namedTypeHasHooks(fieldType.typeName, lctx)) {
@@ -444,7 +444,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 // Probe: run fillBody("destroy") on throwaway buf. If it emits anything, type needs hooks.
 
 function typeNeedsHooks(objType: Type, lctx: LiftCtx, loc: SourceLocation): boolean {
-	if (objType.kind !== TypeKind.Object && objType.kind !== TypeKind.Union) return false;
+	if (objType.kind !== TypeKind.Struct && objType.kind !== TypeKind.Union) return false;
 	const probe: Node[] = [];
 	if (objType.kind === TypeKind.Union) {
 		// Probe each variant's fields
@@ -680,7 +680,7 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 	const sym = lookupSymbol(lctx.ctx.checkerCtx.table, typeName);
 	if (sym === null) return;
 	const objType = unwrapRef(sym.symbolType);
-	if (objType.kind !== TypeKind.Object && objType.kind !== TypeKind.Union) return;
+	if (objType.kind !== TypeKind.Struct && objType.kind !== TypeKind.Union) return;
 	if (!typeNeedsHooks(objType, lctx, loc)) {
 		// Classes still need a minimal _typeInfo for msAllocTyped (even without RC hooks)
 		if (sym.symbolKind === SymbolKind.Class) {
@@ -752,7 +752,7 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 
 function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx, loc: SourceLocation): Node {
 	// For nested value-type objects, call their _eq function
-	if (fieldType.kind === TypeKind.Object && fieldType.typeName !== "") {
+	if (fieldType.kind === TypeKind.Struct && fieldType.typeName !== "") {
 		return makeCall(makeIdent(fieldType.typeName + "_eq", loc), [makeHiddenAddr(aField, loc), makeHiddenAddr(bField, loc)], loc);
 	}
 	// For TypeReference, resolve and recurse
@@ -798,7 +798,7 @@ function ensureEq(typeName: string, lctx: LiftCtx, loc: SourceLocation): void {
 	const sym = lookupSymbol(lctx.ctx.checkerCtx.table, typeName);
 	if (sym === null) return;
 	// Only for value-type objects (interfaces), not ref-type classes (Ref<Object>)
-	if (sym.symbolType.kind !== TypeKind.Object) return;
+	if (sym.symbolType.kind !== TypeKind.Struct) return;
 
 	generateEq(typeName, sym.symbolType, lctx, loc);
 }

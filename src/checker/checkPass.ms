@@ -826,7 +826,7 @@ function checkProgramCore(
 ): CheckerContext {
 	const ctx = mod !== null ? createModuleContext(graph, mod) : createContext();
 	ctx.extensionRegistry = createExtensionRegistry();
-	if (registry !== null) ctx.exportRegistry = registry;
+	if (registry !== null) ctx.exportRegistry = registry;  // override empty default with caller's registry
 	if (cancelCtx !== null) { ctx.cancelCtx = cancelCtx; ctx.cancelVersion = cancelVersion; }
 	injectPrelude(ctx, preludeCtx);
 	const consoleClass = lookupSymbol(ctx.table, "console");
@@ -848,11 +848,6 @@ function checkProgramCore(
 export function checkProgram(program: Node): CheckerContext {
 	const preludeCtx = buildPreludeContext("");
 	return checkProgramCore(program, preludeCtx, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, null as unknown as CancelCtx, 0);
-}
-
-export function checkProgramCancellable(program: Node, cancelCtx: CancelCtx, cancelVersion: number): CheckerContext {
-	const preludeCtx = buildPreludeContext("");
-	return checkProgramCore(program, preludeCtx, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, cancelCtx, cancelVersion);
 }
 
 export function checkProgramWithRegistry(program: Node, registry: ExportRegistry, graph: ModuleGraph, mod: Module, preludeCtx: CheckerContext): CheckerContext {
@@ -1303,7 +1298,7 @@ test "class property type resolved" {
 	assert !hasErrors(ctx);
 	const sym = lookupSymbol(ctx.table, "Point");
 	assert sym !== null;
-	assert sym.symbolType.kind === TypeKind.Object;
+	assert sym.symbolType.kind === TypeKind.Ref;
 }
 
 test "decl with default parses ok" { assert checkOk("function f1(x: number, y: number = 5) { return x; }"); }

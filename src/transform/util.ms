@@ -9,7 +9,7 @@ import {
 	CallExprData, MemberExprData, IdentifierData,
 } from "../ast/node";
 import {
-	Type, TypeKind, createFunction, createObject, createTypeRef,
+	Type, TypeKind, createFunction, createStruct, createTypeRef,
 	numberType, stringType, booleanType, voidType, nullType, unknownType, getSysType,
 } from "../checker/types";
 import { TransformContext, freshTemp, NameSet, nameSetAdd } from "./context";
@@ -164,7 +164,7 @@ export function makeMember(obj: Node, prop: string, loc: SourceLocation): Node {
 			if (prop === "ok") { n.nodeType = booleanType(); }
 			else if (prop === "value" && obj.nodeType.typeReturn !== null) { n.nodeType = obj.nodeType.typeReturn; }
 			else if (prop === "error" && obj.nodeType.typeExtra !== null) { n.nodeType = obj.nodeType.typeExtra; }
-		} else if (obj.nodeType.kind === TypeKind.Object) {
+		} else if (obj.nodeType.kind === TypeKind.Struct) {
 			let pi = 0;
 			while (pi < obj.nodeType.typeNames.length) {
 				if (obj.nodeType.typeNames[pi] === prop) {
@@ -242,7 +242,7 @@ export function makeInterfaceDecl(name: string, fields: string[], fieldTypes: st
 	for (let i = 0; i < fieldTypes.length; i += 1) {
 		resolvedFieldTypes.push(resolveSimpleTypeStr(fieldTypes[i]));
 	}
-	n.nodeType = createObject(name, fields, resolvedFieldTypes, true);
+	n.nodeType = createStruct(name, fields, resolvedFieldTypes, true);
 	return n;
 }
 

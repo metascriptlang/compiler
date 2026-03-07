@@ -89,7 +89,7 @@ export function sgTypeToString(t: Type): string {
 		return elem + "[]";
 	}
 
-	if (t.kind === TypeKind.Object) {
+	if (t.kind === TypeKind.Struct) {
 		if (t.typeName.length > 0) return t.typeName;
 		// Anonymous object: { key: type, ... }
 		let result = "{ ";
@@ -491,7 +491,7 @@ export function sgFormatHover(suggest: SgSuggest): string {
 	}
 	// Interface: interface Name { field1: T1; field2: T2 }
 	if (suggest.kind === SymbolKind.Interface) {
-		if (suggest.symType !== null && suggest.symType.kind === TypeKind.Object && suggest.symType.typeNames.length > 0) {
+		if (suggest.symType !== null && suggest.symType.kind === TypeKind.Struct && suggest.symType.typeNames.length > 0) {
 			const fields = sgFormatFieldList(suggest.symType);
 			return "```ms\ninterface " + suggest.name + " { " + fields + " }\n```";
 		}
@@ -861,7 +861,7 @@ export function sgGetPrefix(source: string, line: number, col: number): string {
 function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverType: Type): SgSuggest[] {
 	const result: SgSuggest[] = [];
 	// Dot completion: properties from receiver type
-	if (receiverType !== null && receiverType.kind === TypeKind.Object) {
+	if (receiverType !== null && receiverType.kind === TypeKind.Struct) {
 		for (let i = 0; i < receiverType.typeNames.length; i = i + 1) {
 			const propName = receiverType.typeNames[i];
 			const ps = sgPrefixMatch(prefix, propName);
@@ -1627,7 +1627,7 @@ test "never" { assert sgTypeToString(neverType()) === "never"; }
 
 test "error" { assert sgTypeToString(errorType()) === "error"; }
 
-import { createArray, createFunction, createEnum, createObject, createResult } from "./types";
+import { createArray, createFunction, createEnum, createStruct, createResult } from "./types";
 test "array" {
 	const t = createArray(numberType());
 	assert sgTypeToString(t) === "number[]";
@@ -1656,7 +1656,7 @@ test "enum" {
 test "named object" {
 	const propNames: string[] = ["x", "y"];
 	const propTypes: Type[] = [numberType(), numberType()];
-	const t = createObject("Point", propNames, propTypes, true);
+	const t = createStruct("Point", propNames, propTypes, true);
 	assert sgTypeToString(t) === "Point";
 }
 
@@ -1892,7 +1892,7 @@ test "only returns types" {
 test "object properties" {
 	const propNames: string[] = ["x", "y", "z"];
 	const propTypes: Type[] = [numberType(), numberType(), stringType()];
-	const objType = createObject("Point", propNames, propTypes, true);
+	const objType = createStruct("Point", propNames, propTypes, true);
 	const pr = parseSource("const a = 1;");
 	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
@@ -1903,7 +1903,7 @@ test "object properties" {
 test "object properties with prefix" {
 	const propNames: string[] = ["xPos", "yPos", "name"];
 	const propTypes: Type[] = [numberType(), numberType(), stringType()];
-	const objType = createObject("Obj", propNames, propTypes, true);
+	const objType = createStruct("Obj", propNames, propTypes, true);
 	const pr = parseSource("const a = 1;");
 	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);

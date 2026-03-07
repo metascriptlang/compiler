@@ -191,7 +191,7 @@ function rederiveMemberType(node: Node): void {
 		if (prop === "ok") { node.nodeType = booleanType(); }
 		else if (prop === "value" && ot.typeReturn !== null) { node.nodeType = ot.typeReturn; }
 		else if (prop === "error" && ot.typeExtra !== null) { node.nodeType = ot.typeExtra; }
-	} else if (ot.kind === TypeKind.Object) {
+	} else if (ot.kind === TypeKind.Struct) {
 		// Primary: look up field in typeNames/typeChildren
 		let found = false;
 		if (ot.typeNames !== null) {
@@ -437,7 +437,7 @@ function registryTypeLookup(name: string): Type {
 			const sym = entry.symbols[si];
 			if (sym.name === name && sym.symType !== null) {
 				const k = sym.symType.kind;
-				if (k === TypeKind.Object || k === TypeKind.Enum || k === TypeKind.Array ||
+				if (k === TypeKind.Struct || k === TypeKind.Enum || k === TypeKind.Array ||
 					k === TypeKind.Result || k === TypeKind.Span || k === TypeKind.Tuple ||
 					k === TypeKind.Function || k === TypeKind.Ref || k === TypeKind.Ptr) {
 					return sym.symType;

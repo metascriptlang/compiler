@@ -108,7 +108,7 @@ export function isNullExpr(node: Node): boolean {
 // Excludes Maybe<T> types which need special null comparison handling.
 function isValueObject(t: Type): boolean {
 	if (t === null) return false;
-	if (t.kind !== TypeKind.Object) return false;
+	if (t.kind !== TypeKind.Struct) return false;
 	if (isMaybeType(t)) return false;
 	return t.typeName !== "";
 }
@@ -285,7 +285,7 @@ export function lowerOperators(program: Node, ctx: TransformContext): Node {
 // ===== Tests =====
 
 import { createContext, createExtensionRegistry, registerExtension } from "../../checker/context";
-import { createObject, createFunction, createTuple, createRef, createPtr, createMaybeType, unknownType, numberType, stringType, booleanType } from "../../checker/types";
+import { createStruct, createFunction, createTuple, createRef, createPtr, createMaybeType, unknownType, numberType, stringType, booleanType } from "../../checker/types";
 import { Symbol, defineSymbol, makeSymbol, SymbolKind, createSymbolTable } from "../../checker/symbol";
 import { createTransformContext, createTransformContextWithChecker } from "../context";
 import { parseInput, getStmts, firstExprKind, firstCallArgCount } from "../testUtil";
@@ -306,7 +306,7 @@ function setupCtx(typeName: string, opName: string): TransformContext {
 	const registry = createExtensionRegistry();
 	registerExtension(registry, makeOpExt(typeName, opName));
 	checkerCtx.extensionRegistry = registry;
-	const objType = createObject(typeName, [], [], true);
+	const objType = createStruct(typeName, [], [], true);
 	defineSymbol(checkerCtx.table, makeSymbol("a", SymbolKind.Variable, objType, false));
 	defineSymbol(checkerCtx.table, makeSymbol("b", SymbolKind.Variable, objType, false));
 	return createTransformContextWithChecker(checkerCtx);
@@ -363,7 +363,7 @@ test "operator lower auto-rewrites === on interface without explicit extension" 
 	// reference parity: all value-type objects get auto-generated == (no explicit extension needed)
 	const checkerCtx = createContext();
 	checkerCtx.extensionRegistry = createExtensionRegistry();
-	const objType = createObject("Token", [], [], true);
+	const objType = createStruct("Token", [], [], true);
 	defineSymbol(checkerCtx.table, makeSymbol("a", SymbolKind.Variable, objType, false));
 	defineSymbol(checkerCtx.table, makeSymbol("b", SymbolKind.Variable, objType, false));
 	const ctx = createTransformContextWithChecker(checkerCtx);
@@ -380,7 +380,7 @@ test "operator lower does not rewrite Ref types" {
 	// Classes (Ref<Object>) are reference types — no auto-generated ==
 	const checkerCtx = createContext();
 	checkerCtx.extensionRegistry = createExtensionRegistry();
-	const objType = createRef(createObject("MyClass", [], [], true));
+	const objType = createRef(createStruct("MyClass", [], [], true));
 	defineSymbol(checkerCtx.table, makeSymbol("a", SymbolKind.Variable, objType, false));
 	defineSymbol(checkerCtx.table, makeSymbol("b", SymbolKind.Variable, objType, false));
 	const ctx = createTransformContextWithChecker(checkerCtx);
@@ -396,7 +396,7 @@ test "!== derives from == on interface (auto-generated)" {
 	// Reference: template `!=`*(x, y) = not (x == y)
 	const checkerCtx = createContext();
 	checkerCtx.extensionRegistry = createExtensionRegistry();
-	const objType = createObject("Token", [], [], true);
+	const objType = createStruct("Token", [], [], true);
 	defineSymbol(checkerCtx.table, makeSymbol("a", SymbolKind.Variable, objType, false));
 	defineSymbol(checkerCtx.table, makeSymbol("b", SymbolKind.Variable, objType, false));
 	const ctx = createTransformContextWithChecker(checkerCtx);
@@ -441,7 +441,7 @@ test "> not derived without < defined" {
 	// No < extension → > stays as BinaryExpr
 	const checkerCtx = createContext();
 	checkerCtx.extensionRegistry = createExtensionRegistry();
-	const objType = createObject("Vec", [], [], true);
+	const objType = createStruct("Vec", [], [], true);
 	defineSymbol(checkerCtx.table, makeSymbol("a", SymbolKind.Variable, objType, false));
 	defineSymbol(checkerCtx.table, makeSymbol("b", SymbolKind.Variable, objType, false));
 	const ctx = createTransformContextWithChecker(checkerCtx);
@@ -458,7 +458,7 @@ test "explicit != overrides derivation from ==" {
 	registerExtension(registry, makeOpExt("Token", "=="));
 	registerExtension(registry, makeOpExt("Token", "!="));
 	checkerCtx.extensionRegistry = registry;
-	const objType = createObject("Token", [], [], true);
+	const objType = createStruct("Token", [], [], true);
 	defineSymbol(checkerCtx.table, makeSymbol("a", SymbolKind.Variable, objType, false));
 	defineSymbol(checkerCtx.table, makeSymbol("b", SymbolKind.Variable, objType, false));
 	const ctx = createTransformContextWithChecker(checkerCtx);
@@ -542,7 +542,7 @@ test "Ref !== null is NOT constant-folded" {
 	// Ref<Object> is a pointer type — null comparison should pass through
 	const checkerCtx = createContext();
 	checkerCtx.extensionRegistry = createExtensionRegistry();
-	const refType = createRef(createObject("MyClass", [], [], true));
+	const refType = createRef(createStruct("MyClass", [], [], true));
 	defineSymbol(checkerCtx.table, makeSymbol("x", SymbolKind.Variable, refType, false));
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	const pr = parseInput("x !== null;");
@@ -555,7 +555,7 @@ test "Ref !== null is NOT constant-folded" {
 test "Ptr !== null is NOT constant-folded" {
 	const checkerCtx = createContext();
 	checkerCtx.extensionRegistry = createExtensionRegistry();
-	const ptrType = createPtr(createObject("Buffer", [], [], true));
+	const ptrType = createPtr(createStruct("Buffer", [], [], true));
 	defineSymbol(checkerCtx.table, makeSymbol("p", SymbolKind.Variable, ptrType, false));
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	const pr = parseInput("p !== null;");
@@ -567,7 +567,7 @@ test "Ptr !== null is NOT constant-folded" {
 test "Maybe<Interface> !== null rewrites to .present" {
 	const checkerCtx = createContext();
 	checkerCtx.extensionRegistry = createExtensionRegistry();
-	const maybeType = createMaybeType(createObject("Token", [], [], true));
+	const maybeType = createMaybeType(createStruct("Token", [], [], true));
 	defineSymbol(checkerCtx.table, makeSymbol("t", SymbolKind.Variable, maybeType, false));
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	const pr = parseInput("t !== null;");
@@ -581,7 +581,7 @@ test "interface !== null constant-folds to true" {
 	// Plain interface (non-nullable) — null comparison is always true
 	const checkerCtx = createContext();
 	checkerCtx.extensionRegistry = createExtensionRegistry();
-	const objType = createObject("Token", [], [], true);
+	const objType = createStruct("Token", [], [], true);
 	defineSymbol(checkerCtx.table, makeSymbol("t", SymbolKind.Variable, objType, false));
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	const pr = parseInput("t !== null;");

@@ -13,7 +13,7 @@ import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall } from "../util";
 import { lookupSymbol, SymbolKind, defineSymbol, makeSymbol } from "../../checker/symbol";
-import { TypeKind, unknownType, createObject, createFunction, createArray, typeNameOf } from "../../checker/types";
+import { TypeKind, unknownType, createStruct, createFunction, createArray, typeNameOf } from "../../checker/types";
 import { ExtensionRegistry, ExtensionMethod, createContext, registerExtension, findExtension } from "../../checker/context";
 import { createTransformContext, createTransformContextWithChecker } from "../context";
 import { parseInput, getStmts, firstExprKind, firstCallArgCount } from "../testUtil";
@@ -130,7 +130,7 @@ function setupSubscriptCtx(input: string, receiverName: string, receiverType: st
 		const sSym = makeSymbol("[]=", SymbolKind.Function, setter.fnType, false);
 		defineSymbol(cc.table, sSym);
 	}
-	const objType = createObject(receiverType, [], [], false);
+	const objType = createStruct(receiverType, [], [], false);
 	const varSym = makeSymbol(receiverName, SymbolKind.Variable, objType, false);
 	defineSymbol(cc.table, varSym);
 	const ctx = createTransformContextWithChecker(cc);
@@ -166,7 +166,7 @@ test "no extension unchanged" {
 	const result = parseInput("obj[0];");
 	if (!result.ok) return;
 	const cc = createContext();
-	const objType = createObject("Widget", [], [], false);
+	const objType = createStruct("Widget", [], [], false);
 	const objSym = makeSymbol("obj", SymbolKind.Variable, objType, false);
 	defineSymbol(cc.table, objSym);
 	const ctx = createTransformContextWithChecker(cc);

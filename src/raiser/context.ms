@@ -13,7 +13,7 @@
 import {
 	RaiserValue, RaiserValueKind, raiserNil, raiserInt, raiserToString, raiserIsNil,
 	RaiserArrayHeap, createArrayHeap,
-	RaiserObjectHeap, createObjectHeap
+	RaiserObjectHeap, createStructHeap
 } from "./value";
 import { RaiserModule, makeTestModule } from "./module";
 import { RaiserOpcode, RaiserInstruction, raiserABC, raiserABx } from "./bytecode";
@@ -37,7 +37,7 @@ export function createContext(): RaiserContext {
 	const emptyMod = makeTestModule(haltCode, haltConsts);
 	const nilResult = raiserNil();
 	const arrayHeap = createArrayHeap();
-	const objectHeap = createObjectHeap();
+	const objectHeap = createStructHeap();
 	return { mod: emptyMod, hasModule: false, lastResult: nilResult, lastOutput: "", arrayHeap, objectHeap, lastError: "" };
 }
 

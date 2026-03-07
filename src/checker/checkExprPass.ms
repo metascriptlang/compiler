@@ -167,7 +167,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 		},
 		NodeKind.ObjectLiteral => {
 			const d = node.data as ObjectLiteralData;
-			if (expectedType !== null && expectedType.kind === TypeKind.Object
+			if (expectedType !== null && expectedType.kind === TypeKind.Struct
 				&& expectedType.typeChildren !== null) {
 				// Implementation parity: stamp literal with expected type, propagate field types
 				node.nodeType = expectedType;
@@ -227,7 +227,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			// reference parity: resolve as-cast target to actual union variant type.
 			// If source is Union and target matches a variant by first field name,
 			// use the variant type (preserves identity for codegen variant access).
-			if (srcType !== null && srcType.kind === TypeKind.Union && targetType.kind === TypeKind.Object && srcType.typeChildren !== null && targetType.typeNames !== null && targetType.typeNames.length > 0) {
+			if (srcType !== null && srcType.kind === TypeKind.Union && targetType.kind === TypeKind.Struct && srcType.typeChildren !== null && targetType.typeNames !== null && targetType.typeNames.length > 0) {
 				const firstField = targetType.typeNames[0];
 				let vi = 0;
 				while (vi < srcType.typeChildren.length) {
@@ -255,7 +255,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			for (const arg of d.newArguments) {
 				checkExpr(ctx, arg, null as unknown as Type);
 			}
-			if (calleeType.kind === TypeKind.Object || calleeType.kind === TypeKind.Ref) {
+			if (calleeType.kind === TypeKind.Struct || calleeType.kind === TypeKind.Ref) {
 				calleeType;
 			} else {
 				unknownType();
@@ -843,7 +843,7 @@ function resolveOverloadIdxWithInheritance(ctx: CheckerContext, candidates: Type
 		while (pi < candidates[i].typeChildren.length && pi < argTypes.length) {
 			const pType = candidates[i].typeChildren[pi];
 			const aType = argTypes[pi];
-			if (pType.kind === TypeKind.Object && aType.kind === TypeKind.Object) {
+			if (pType.kind === TypeKind.Struct && aType.kind === TypeKind.Struct) {
 				if (pType.typeName !== "" && aType.typeName !== "" && pType.typeName !== aType.typeName) {
 					const depth = inheritanceDepth(aType, pType, ctx);
 					if (depth > 0 && (maxDepth === -1 || depth > maxDepth)) {

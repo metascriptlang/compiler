@@ -33,7 +33,7 @@ function isStructType(t: Type): boolean {
 	if (t === null) return false;
 	return match (t.kind) {
 		TypeKind.String | TypeKind.Array | TypeKind.Map | TypeKind.Set => true,
-		TypeKind.Object => { isInterfaceType(t) },
+		TypeKind.Struct => { isInterfaceType(t) },
 		TypeKind.Result | TypeKind.Tuple => true,
 		TypeKind.Function => true,  // msClosure is a struct
 		_ => false,

@@ -1,6 +1,6 @@
 import { Node, NodeKind, SourceLocation, createNodeAt, ProgramData, FunctionDeclData, ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind } from "../ast/node";
 import { extractDecoratorInfo } from "./decoratorHelpers";
-import { Type, TypeKind, unknownType, emptyType, createObject, createEnum, createTypeRef, createFunction, createRef } from "./types";
+import { Type, TypeKind, unknownType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, addError, findExportedSymbol, findModuleExports, ExtensionMethod, registerExtension, isStaticExtensionFlag, getExtTypeName, findExtension } from "./context";
 import { isGlobalImport } from "./prelude";
@@ -163,7 +163,7 @@ function collectFunction(ctx: CheckerContext, node: Node): void {
 
 function collectClass(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ClassDeclData;
-	// Collect member names and types inline, pass to createObject.
+	// Collect member names and types inline, pass to createStruct.
 	const memberNames: string[] = [];
 	const memberTypes: Type[] = [];
 	for (let i = 0; i < d.classBody.length; i += 1) {
@@ -194,7 +194,7 @@ function collectClass(ctx: CheckerContext, node: Node): void {
 			}
 		}
 	}
-	const innerType = createObject(d.className, memberNames, memberTypes, true);
+	const innerType = createStruct(d.className, memberNames, memberTypes, true);
 	// Store base class info for inheritance (used by destructor lifting)
 	if (d.classExtends !== "") {
 		innerType.typeExtra = createTypeRef(d.classExtends);
@@ -206,7 +206,7 @@ function collectClass(ctx: CheckerContext, node: Node): void {
 
 function collectInterface(ctx: CheckerContext, node: Node): void {
 	const d = node.data as InterfaceDeclData;
-	defineOrError(ctx, makeSymbol(d.interfaceName, SymbolKind.Interface, createObject(d.interfaceName, [], [], true), false), node);
+	defineOrError(ctx, makeSymbol(d.interfaceName, SymbolKind.Interface, createStruct(d.interfaceName, [], [], true), false), node);
 }
 
 function collectEnumDecl(ctx: CheckerContext, node: Node): void {
@@ -290,135 +290,127 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 	// std/core is the prelude — already injected into Global scope, skip
 	if (isGlobalImport(d.importSource)) return;
 
-	// Multi-module mode: resolve types from ExportRegistry
-	if (ctx.exportRegistry !== null) {
-		const sourcePath = resolveImportSourcePath(ctx, d.importSource);
+	// Resolve types from ExportRegistry
+	const sourcePath = resolveImportSourcePath(ctx, d.importSource);
 
-		for (let i = 0; i < d.importNames.length; i += 1) {
-			const importName = d.importNames[i];
-			const localAlias = d.importAliases[i];
+	for (let i = 0; i < d.importNames.length; i += 1) {
+		const importName = d.importNames[i];
+		const localAlias = d.importAliases[i];
 
-			// Dedup: skip if already imported (same file may import same symbol twice, e.g. main + test section)
-			if (lookupLocal(ctx.table, localAlias) !== null) continue;
+		// Dedup: skip if already imported (same file may import same symbol twice, e.g. main + test section)
+		if (lookupLocal(ctx.table, localAlias) !== null) continue;
 
-			if (sourcePath !== "") {
-				const exportInfo = findExportedSymbol(ctx.exportRegistry, sourcePath, importName);
-				if (exportInfo !== null) {
-					// Use actual type and kind from source module
-					const importedSym = makeSymbol(localAlias, exportInfo.kind, exportInfo.symType, false);
-					importedSym.modulePath = sourcePath;
-					defineOrError(ctx, importedSym, node);
-					// Implementation parity: import enum members alongside enum type
-					// (rawImportSymbol registers each skEnumField in the importing scope)
-					if (exportInfo.kind === SymbolKind.Enum && exportInfo.symType.typeNames !== null) {
-						const enumTypeName = exportInfo.symType.typeName;
-						let mi = 0;
-						while (mi < exportInfo.symType.typeNames.length) {
-							const mangledName = enumTypeName + "_" + exportInfo.symType.typeNames[mi];
-							if (lookupLocal(ctx.table, mangledName) === null) {
-								defineOrError(ctx, makeSymbol(mangledName, SymbolKind.Variable, exportInfo.symType, false), node);
-							}
-							mi = mi + 1;
+		if (sourcePath !== "") {
+			const exportInfo = findExportedSymbol(ctx.exportRegistry, sourcePath, importName);
+			if (exportInfo !== null) {
+				// Use actual type and kind from source module
+				const importedSym = makeSymbol(localAlias, exportInfo.kind, exportInfo.symType, false);
+				importedSym.modulePath = sourcePath;
+				defineOrError(ctx, importedSym, node);
+				// Implementation parity: import enum members alongside enum type
+				// (rawImportSymbol registers each skEnumField in the importing scope)
+				if (exportInfo.kind === SymbolKind.Enum && exportInfo.symType.typeNames !== null) {
+					const enumTypeName = exportInfo.symType.typeName;
+					let mi = 0;
+					while (mi < exportInfo.symType.typeNames.length) {
+						const mangledName = enumTypeName + "_" + exportInfo.symType.typeNames[mi];
+						if (lookupLocal(ctx.table, mangledName) === null) {
+							defineOrError(ctx, makeSymbol(mangledName, SymbolKind.Variable, exportInfo.symType, false), node);
 						}
+						mi = mi + 1;
 					}
-					const primarySym = lookupLocal(ctx.table, localAlias);
-					// Restore cross-module metadata (nativeName, builtinKind, defaults)
-					if (primarySym !== null) {
-						if (exportInfo.nativeName !== "") primarySym.nativeName = exportInfo.nativeName;
-						if (exportInfo.builtinKind !== "") primarySym.builtinKind = exportInfo.builtinKind;
-						if (exportInfo.defaultTexts !== null && exportInfo.defaultTexts.length > 0) primarySym.defaultParamText = exportInfo.defaultTexts;
-					}
-					// Register overloads from source module
-					if (exportInfo.overloadTypes.length > 0 && primarySym !== null) {
-						let ovIdx = 0;
-						while (ovIdx < exportInfo.overloadTypes.length) {
-							const ovSym = makeSymbol(localAlias, exportInfo.kind, exportInfo.overloadTypes[ovIdx], false);
-							ovSym.modulePath = sourcePath;
-							// Restore per-overload cross-module metadata
-							if (exportInfo.overloadNativeNames !== null && ovIdx < exportInfo.overloadNativeNames.length && exportInfo.overloadNativeNames[ovIdx] !== "") {
-								ovSym.nativeName = exportInfo.overloadNativeNames[ovIdx];
-							}
-							if (exportInfo.overloadBuiltinKinds !== null && ovIdx < exportInfo.overloadBuiltinKinds.length && exportInfo.overloadBuiltinKinds[ovIdx] !== "") {
-								ovSym.builtinKind = exportInfo.overloadBuiltinKinds[ovIdx];
-							}
-							if (exportInfo.overloadDefaultTexts !== null && ovIdx < exportInfo.overloadDefaultTexts.length && exportInfo.overloadDefaultTexts[ovIdx] !== null && exportInfo.overloadDefaultTexts[ovIdx].length > 0) {
-								ovSym.defaultParamText = exportInfo.overloadDefaultTexts[ovIdx];
-							}
-							primarySym.overloads.push(ovSym);
-							// Register per-overload extension if it has one
-							if (ctx.extensionRegistry !== null && exportInfo.overloadExtReceiverTypes !== null && ovIdx < exportInfo.overloadExtReceiverTypes.length && exportInfo.overloadExtReceiverTypes[ovIdx] !== "") {
-								const ovExt: ExtensionMethod = {
-									methodName: localAlias,
-									receiverTypeName: exportInfo.overloadExtReceiverTypes[ovIdx],
-									sourcePath: sourcePath,
-									fnType: exportInfo.overloadTypes[ovIdx],
-									isStatic: exportInfo.overloadExtIsStatic[ovIdx],
-									sym: ovSym,
-								};
-								registerExtension(ctx.extensionRegistry, ovExt);
-							}
-							ovIdx = ovIdx + 1;
+				}
+				const primarySym = lookupLocal(ctx.table, localAlias);
+				// Restore cross-module metadata (nativeName, builtinKind, defaults)
+				if (primarySym !== null) {
+					if (exportInfo.nativeName !== "") primarySym.nativeName = exportInfo.nativeName;
+					if (exportInfo.builtinKind !== "") primarySym.builtinKind = exportInfo.builtinKind;
+					if (exportInfo.defaultTexts !== null && exportInfo.defaultTexts.length > 0) primarySym.defaultParamText = exportInfo.defaultTexts;
+				}
+				// Register overloads from source module
+				if (exportInfo.overloadTypes.length > 0 && primarySym !== null) {
+					let ovIdx = 0;
+					while (ovIdx < exportInfo.overloadTypes.length) {
+						const ovSym = makeSymbol(localAlias, exportInfo.kind, exportInfo.overloadTypes[ovIdx], false);
+						ovSym.modulePath = sourcePath;
+						// Restore per-overload cross-module metadata
+						if (exportInfo.overloadNativeNames !== null && ovIdx < exportInfo.overloadNativeNames.length && exportInfo.overloadNativeNames[ovIdx] !== "") {
+							ovSym.nativeName = exportInfo.overloadNativeNames[ovIdx];
 						}
+						if (exportInfo.overloadBuiltinKinds !== null && ovIdx < exportInfo.overloadBuiltinKinds.length && exportInfo.overloadBuiltinKinds[ovIdx] !== "") {
+							ovSym.builtinKind = exportInfo.overloadBuiltinKinds[ovIdx];
+						}
+						if (exportInfo.overloadDefaultTexts !== null && ovIdx < exportInfo.overloadDefaultTexts.length && exportInfo.overloadDefaultTexts[ovIdx] !== null && exportInfo.overloadDefaultTexts[ovIdx].length > 0) {
+							ovSym.defaultParamText = exportInfo.overloadDefaultTexts[ovIdx];
+						}
+						primarySym.overloads.push(ovSym);
+						// Register per-overload extension if it has one
+						if (ctx.extensionRegistry !== null && exportInfo.overloadExtReceiverTypes !== null && ovIdx < exportInfo.overloadExtReceiverTypes.length && exportInfo.overloadExtReceiverTypes[ovIdx] !== "") {
+							const ovExt: ExtensionMethod = {
+								methodName: localAlias,
+								receiverTypeName: exportInfo.overloadExtReceiverTypes[ovIdx],
+								sourcePath: sourcePath,
+								fnType: exportInfo.overloadTypes[ovIdx],
+								isStatic: exportInfo.overloadExtIsStatic[ovIdx],
+								sym: ovSym,
+							};
+							registerExtension(ctx.extensionRegistry, ovExt);
+						}
+						ovIdx = ovIdx + 1;
 					}
-					// If imported symbol is an extension method, register primary locally
-					if (exportInfo.extReceiverType !== "" && ctx.extensionRegistry !== null) {
-						const extMethod: ExtensionMethod = {
-							methodName: localAlias,
-							receiverTypeName: exportInfo.extReceiverType,
-							sourcePath: sourcePath,
-							fnType: exportInfo.symType,
-							isStatic: exportInfo.extIsStatic,
-							sym: primarySym !== null ? primarySym : null as unknown as Symbol,
-						};
-						registerExtension(ctx.extensionRegistry, extMethod);
-					}
-				} else {
-					// Name not found in source module's exports
-					// Suppress error for circular back-edges (Phase 1 placeholders may lack this name)
-					const isCircular = ctx.moduleGraph !== null
-						&& ctx.currentModule !== null
-						&& isCircularBackEdge(ctx.moduleGraph, ctx.currentModule.path, sourcePath);
-					if (!isCircular) {
-						addError(ctx, "'" + importName + "' is not exported from '" + d.importSource + "'", node.location.line, node.location.column);
-					}
-					defineOrError(ctx, makeSymbol(localAlias, SymbolKind.Variable, unknownType(), false), node);
+				}
+				// If imported symbol is an extension method, register primary locally
+				if (exportInfo.extReceiverType !== "" && ctx.extensionRegistry !== null) {
+					const extMethod: ExtensionMethod = {
+						methodName: localAlias,
+						receiverTypeName: exportInfo.extReceiverType,
+						sourcePath: sourcePath,
+						fnType: exportInfo.symType,
+						isStatic: exportInfo.extIsStatic,
+						sym: primarySym !== null ? primarySym : null as unknown as Symbol,
+					};
+					registerExtension(ctx.extensionRegistry, extMethod);
 				}
 			} else {
-				// std import or unresolvable — fallback to unknownType
+				// Name not found in source module's exports
+				// Suppress error for circular back-edges (Phase 1 placeholders may lack this name)
+				const isCircular = ctx.moduleGraph !== null
+					&& ctx.currentModule !== null
+					&& isCircularBackEdge(ctx.moduleGraph, ctx.currentModule.path, sourcePath);
+				if (!isCircular) {
+					addError(ctx, "'" + importName + "' is not exported from '" + d.importSource + "'", node.location.line, node.location.column);
+				}
 				defineOrError(ctx, makeSymbol(localAlias, SymbolKind.Variable, unknownType(), false), node);
 			}
+		} else {
+			// std import or unresolvable — fallback to unknownType
+			defineOrError(ctx, makeSymbol(localAlias, SymbolKind.Variable, unknownType(), false), node);
 		}
+	}
 
-		// Auto-propagate exported operator overloads from imported module (reference parity).
-		// When you import anything from a module, all its exported operator functions
-		// become available automatically — no need to import them by name.
-		if (ctx.extensionRegistry !== null && sourcePath !== "") {
-			const modExports = findModuleExports(ctx.exportRegistry, sourcePath);
-			if (modExports !== null) {
-				for (const sym of modExports.symbols) {
-					if (sym.extReceiverType !== "" && isOperatorSymName(sym.name)) {
-						// Only register if not already present
-						if (findExtension(ctx.extensionRegistry, sym.extReceiverType, sym.name) === null) {
-							const opExt: ExtensionMethod = {
-								methodName: sym.name,
-								receiverTypeName: sym.extReceiverType,
-								sourcePath: sourcePath,
-								fnType: sym.symType,
-								isStatic: sym.extIsStatic,
-								sym: null as unknown as Symbol,
-							};
-							registerExtension(ctx.extensionRegistry, opExt);
-						}
+	// Auto-propagate exported operator overloads from imported module.
+	// When you import anything from a module, all its exported operator functions
+	// become available automatically — no need to import them by name.
+	if (ctx.extensionRegistry !== null && sourcePath !== "") {
+		const modExports = findModuleExports(ctx.exportRegistry, sourcePath);
+		if (modExports !== null) {
+			for (const sym of modExports.symbols) {
+				if (sym.extReceiverType !== "" && isOperatorSymName(sym.name)) {
+					// Only register if not already present
+					if (findExtension(ctx.extensionRegistry, sym.extReceiverType, sym.name) === null) {
+						const opExt: ExtensionMethod = {
+							methodName: sym.name,
+							receiverTypeName: sym.extReceiverType,
+							sourcePath: sourcePath,
+							fnType: sym.symType,
+							isStatic: sym.extIsStatic,
+							sym: null as unknown as Symbol,
+						};
+						registerExtension(ctx.extensionRegistry, opExt);
 					}
 				}
 			}
 		}
-		return;
-	}
-
-	// Single-module fallback: all imports get unknownType (use aliases for local names)
-	for (const alias of d.importAliases) {
-		defineOrError(ctx, makeSymbol(alias, SymbolKind.Variable, unknownType(), false), node);
 	}
 }
 
@@ -438,25 +430,21 @@ function collectExport(ctx: CheckerContext, node: Node): void {
 				const alias = imp.importAliases[i];
 				if (lookupLocal(ctx.table, alias) === null) {
 					// Not yet in scope — define it
-					if (ctx.exportRegistry !== null) {
-						const sourcePath = resolveImportSourcePath(ctx, imp.importSource);
-						const importName = imp.importNames[i];
-						if (sourcePath !== "") {
-							const exportInfo = findExportedSymbol(ctx.exportRegistry, sourcePath, importName);
-							if (exportInfo !== null) {
-								const reExpSym = makeSymbol(alias, exportInfo.kind, exportInfo.symType, false);
-								reExpSym.modulePath = sourcePath;
-								defineOrError(ctx, reExpSym, node);
-							} else {
-								const isCirc = ctx.moduleGraph !== null
-									&& ctx.currentModule !== null
-									&& isCircularBackEdge(ctx.moduleGraph, ctx.currentModule.path, sourcePath);
-								if (!isCirc) {
-									addError(ctx, "'" + importName + "' is not exported from '" + imp.importSource + "'", node.location.line, node.location.column);
-								}
-								defineOrError(ctx, makeSymbol(alias, SymbolKind.Variable, unknownType(), false), node);
-							}
+					const sourcePath = resolveImportSourcePath(ctx, imp.importSource);
+					const importName = imp.importNames[i];
+					if (sourcePath !== "") {
+						const exportInfo = findExportedSymbol(ctx.exportRegistry, sourcePath, importName);
+						if (exportInfo !== null) {
+							const reExpSym = makeSymbol(alias, exportInfo.kind, exportInfo.symType, false);
+							reExpSym.modulePath = sourcePath;
+							defineOrError(ctx, reExpSym, node);
 						} else {
+							const isCirc = ctx.moduleGraph !== null
+								&& ctx.currentModule !== null
+								&& isCircularBackEdge(ctx.moduleGraph, ctx.currentModule.path, sourcePath);
+							if (!isCirc) {
+								addError(ctx, "'" + importName + "' is not exported from '" + imp.importSource + "'", node.location.line, node.location.column);
+							}
 							defineOrError(ctx, makeSymbol(alias, SymbolKind.Variable, unknownType(), false), node);
 						}
 					} else {

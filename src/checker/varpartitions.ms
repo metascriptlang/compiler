@@ -135,7 +135,7 @@ function containsPointer(t: Type): boolean {
 	if (t.kind === TypeKind.Ref) return true;
 	if (t.kind === TypeKind.Ptr) return true;
 	if (t.kind === TypeKind.Function) return true;
-	if (t.kind === TypeKind.Object) return true;
+	if (t.kind === TypeKind.Struct) return true;
 	if (t.kind === TypeKind.Union) return true;
 	return false;
 }

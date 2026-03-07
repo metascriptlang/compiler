@@ -28,7 +28,7 @@ export enum TypeKind {
 	// Sized integers/floats (C interop)
 	Int8, Int16, Int32, Int64, Uint8, Uint16, Uint32, Uint64, Float32, Float64,
 	// Compound
-	Object, Array, SizedArray, Span, Function, Tuple, Map, Set, CString,
+	Struct, Array, SizedArray, Span, Function, Tuple, Map, Set, CString,
 	// Generics
 	GenericParam, GenericInstance,
 	// Memory
@@ -142,9 +142,9 @@ export function createPrimitive(kind: TypeKind): Type {
 	return t;
 }
 
-export function createObject(name: string, propNames: string[], propTypes: Type[], isInterface: boolean): Type {
+export function createStruct(name: string, propNames: string[], propTypes: Type[], isInterface: boolean): Type {
 	const t = emptyType();
-	t.kind = TypeKind.Object;
+	t.kind = TypeKind.Struct;
 	t.typeName = name;
 	t.typeNames = propNames;
 	t.typeChildren = propTypes;
@@ -228,7 +228,7 @@ export function createMaybeType(inner: Type): Type {
 		i += 1;
 	}
 	const t = emptyType();
-	t.kind = TypeKind.Object;
+	t.kind = TypeKind.Struct;
 	t.typeName = "Maybe_" + name;
 	t.typeNames = ["value", "present"];
 	t.typeChildren = [inner, booleanType()];
@@ -416,13 +416,8 @@ function typeKey(t: Type): string {
 
 export function isInterfaceType(t: Type): boolean {
 	if (t === null) return false;
-	if (t.kind !== TypeKind.Object) return false;
+	if (t.kind !== TypeKind.Struct) return false;
 	return (t.typeFlags & 1) !== 0;
-}
-
-export function isClassType(t: Type): boolean {
-	if (t === null) return false;
-	return t.kind === TypeKind.Ref && t.typeReturn !== null && t.typeReturn.kind === TypeKind.Object;
 }
 
 export function isMaybeType(t: Type): boolean {
@@ -470,7 +465,7 @@ function getTypeSizeInner(t: Type): number {
 		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow => targetPtrSize,
 		TypeKind.Array => targetPtrSize + targetPtrSize, // msArray: data ptr + length
 		TypeKind.Function => targetPtrSize + targetPtrSize, // msClosure: fn ptr + env ptr
-		TypeKind.Object => {
+		TypeKind.Struct => {
 			// Sum of field sizes
 			if (t.typeChildren === null) { targetPtrSize; } else {
 				let size = 0;
@@ -626,7 +621,7 @@ export function unifyType(formal: Type, concrete: Type, bindings: UnifyBindings)
 		unifyType(formal.typeReturn, concrete.typeReturn, bindings);
 		return;
 	}
-	if (formal.kind === TypeKind.Union || formal.kind === TypeKind.Object) {
+	if (formal.kind === TypeKind.Union || formal.kind === TypeKind.Struct) {
 		const uoLimit = formal.typeChildren.length < concrete.typeChildren.length ? formal.typeChildren.length : concrete.typeChildren.length;
 		for (let i = 0; i < uoLimit; i += 1) {
 			unifyType(formal.typeChildren[i], concrete.typeChildren[i], bindings);
@@ -640,7 +635,7 @@ export function hasGenericParams(t: Type): boolean {
 	if (t === null) return false;
 	if (t.kind === TypeKind.GenericParam) return true;
 	// Named types can't contain GenericParams (they're resolved) — skip to avoid cycles
-	if ((t.kind === TypeKind.Object || t.kind === TypeKind.Union) && t.typeName !== "") return false;
+	if ((t.kind === TypeKind.Struct || t.kind === TypeKind.Union) && t.typeName !== "") return false;
 	if (t.typeReturn !== null && hasGenericParams(t.typeReturn)) return true;
 	if (t.typeExtra !== null && hasGenericParams(t.typeExtra)) return true;
 	for (let i = 0; i < t.typeChildren.length; i += 1) {
@@ -694,7 +689,7 @@ export function getProperty(t: Type, name: string): Type {
 	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) {
 		if (t.typeReturn !== null) return getProperty(t.typeReturn, name);
 	}
-	if (t.kind === TypeKind.Object) {
+	if (t.kind === TypeKind.Struct) {
 		let i = 0;
 		for (const propName of t.typeNames) {
 			if (propName === name) {
@@ -745,7 +740,7 @@ export function isPrimitiveKind(kind: TypeKind): boolean {
 
 // typeNameOf — maps Type to its canonical string name (used by checker + transforms)
 export function typeNameOf(t: Type): string {
-	if (t.kind === TypeKind.Object) return t.typeName;
+	if (t.kind === TypeKind.Struct) return t.typeName;
 	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) {
 		if (t.typeReturn !== null) return typeNameOf(t.typeReturn);
 		return "";
@@ -790,7 +785,7 @@ function alignTo(offset: number, align: number): number {
 // alignOfType — natural alignment for C ABI (target-aware)
 export function alignOfType(t: Type): number {
 	const ps = targetPtrSize;
-	if (t.kind === TypeKind.Object || t.kind === TypeKind.Tuple) {
+	if (t.kind === TypeKind.Struct || t.kind === TypeKind.Tuple) {
 		return alignOfStruct(t);
 	}
 	if (t.kind === TypeKind.Distinct && t.typeReturn !== null) {
@@ -825,7 +820,7 @@ function alignOfStruct(t: Type): number {
 // Mirrors standard reference implementation for size/alignment: fields are aligned, struct is padded to maxAlign.
 export function sizeOfType(t: Type): number {
 	const ps = targetPtrSize;
-	if (t.kind === TypeKind.Object || t.kind === TypeKind.Tuple) {
+	if (t.kind === TypeKind.Struct || t.kind === TypeKind.Tuple) {
 		return sizeOfStruct(t);
 	}
 	if (t.kind === TypeKind.Distinct && t.typeReturn !== null) {
@@ -901,9 +896,9 @@ test "createFunction" {
 	assert fnType.typeReturn.kind === TypeKind.Boolean;
 }
 
-test "createObject" {
-	const obj = createObject("Point", ["x"], [numberType()], false);
-	assert obj.kind === TypeKind.Object;
+test "createStruct" {
+	const obj = createStruct("Point", ["x"], [numberType()], false);
+	assert obj.kind === TypeKind.Struct;
 	assert obj.typeName === "Point";
 	assert obj.typeNames.length === 1;
 	assert obj.typeChildren.length === 1;
@@ -976,7 +971,7 @@ test "getElementType" {
 }
 
 test "getProperty" {
-	const obj = createObject("Point", ["x", "y"], [numberType(), stringType()], false);
+	const obj = createStruct("Point", ["x", "y"], [numberType(), stringType()], false);
 	assert getProperty(obj, "x").kind === TypeKind.Number;
 	assert getProperty(obj, "y").kind === TypeKind.String;
 	assert getProperty(obj, "z").kind === TypeKind.Unknown;
@@ -1175,19 +1170,19 @@ test "sizeOfType primitives 32-bit" {
 }
 
 test "sizeOfType object no padding" {
-	const obj = createObject("Pair", ["x", "y"], [createPrimitive(TypeKind.Int32), createPrimitive(TypeKind.Int32)], true);
+	const obj = createStruct("Pair", ["x", "y"], [createPrimitive(TypeKind.Int32), createPrimitive(TypeKind.Int32)], true);
 	assert sizeOfType(obj) === 8;
 }
 
 test "sizeOfType object with padding" {
 	// { char (1 byte) + padding(3) + int32 (4 bytes) } = 8
-	const obj = createObject("Mixed", ["a", "b"], [createPrimitive(TypeKind.Char), createPrimitive(TypeKind.Int32)], true);
+	const obj = createStruct("Mixed", ["a", "b"], [createPrimitive(TypeKind.Char), createPrimitive(TypeKind.Int32)], true);
 	assert sizeOfType(obj) === 8;
 }
 
 test "sizeOfType object tail padding" {
 	// { int64 (8 bytes) + char (1 byte) + padding(7) } = 16 (aligned to maxAlign=8)
-	const obj = createObject("Tail", ["x", "y"], [createPrimitive(TypeKind.Int64), createPrimitive(TypeKind.Char)], true);
+	const obj = createStruct("Tail", ["x", "y"], [createPrimitive(TypeKind.Int64), createPrimitive(TypeKind.Char)], true);
 	assert sizeOfType(obj) === 16;
 }
 
@@ -1212,9 +1207,9 @@ test "alignOfType 32-bit" {
 // ===== Maybe<T> + Nullable Pointer Tests =====
 
 test "createMaybeType for interface creates wrapper" {
-	const inner = createObject("Token", ["kind"], [numberType()], true);
+	const inner = createStruct("Token", ["kind"], [numberType()], true);
 	const maybe = createMaybeType(inner);
-	assert maybe.kind === TypeKind.Object;
+	assert maybe.kind === TypeKind.Struct;
 	assert maybe.typeName === "Maybe_Token";
 	assert maybe.typeNames.length === 2;
 	assert maybe.typeNames[0] === "value";
@@ -1224,7 +1219,7 @@ test "createMaybeType for interface creates wrapper" {
 }
 
 test "createMaybeType for Ref returns bare pointer" {
-	const refType = createRef(createObject("Foo", [], [], true));
+	const refType = createRef(createStruct("Foo", [], [], true));
 	const result = createMaybeType(refType);
 	// Should return the Ref type unchanged — no wrapper
 	assert result.kind === TypeKind.Ref;
@@ -1233,7 +1228,7 @@ test "createMaybeType for Ref returns bare pointer" {
 }
 
 test "createMaybeType for Ptr returns bare pointer" {
-	const ptrType = createPtr(createObject("Bar", [], [], true));
+	const ptrType = createPtr(createStruct("Bar", [], [], true));
 	const result = createMaybeType(ptrType);
 	// Should return the Ptr type unchanged — no wrapper
 	assert result.kind === TypeKind.Ptr;
@@ -1250,11 +1245,11 @@ test "isMaybeType false for Ptr" {
 }
 
 test "isMaybeType false for plain interface" {
-	assert !isMaybeType(createObject("Token", [], [], true));
+	assert !isMaybeType(createStruct("Token", [], [], true));
 }
 
 test "createMaybeType caches by name" {
-	const inner = createObject("Cached", [], [], true);
+	const inner = createStruct("Cached", [], [], true);
 	const m1 = createMaybeType(inner);
 	const m2 = createMaybeType(inner);
 	assert m1 === m2;

@@ -5,7 +5,7 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { Type, TypeKind, isPrimitiveKind, hasDestructor, isInterfaceType, createPrimitive, createObject, createArray, createFunction, numberType, stringType, booleanType, voidType, nullType, unknownType } from "../checker/types";
+import { Type, TypeKind, isPrimitiveKind, hasDestructor, isInterfaceType, createPrimitive, createStruct, createArray, createFunction, numberType, stringType, booleanType, voidType, nullType, unknownType } from "../checker/types";
 import { lookupSymbol, SymbolKind, Symbol, hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, createTransformContext } from "../transform/context";
 import { NodeKind } from "../ast/node";
@@ -131,7 +131,7 @@ export function classifyType(t: Type, ctx: TransformContext): RcInfo {
 		TypeKind.Function => makeRcInfo(RcKind.Closure, "", "msClosureDestroy", "msClosureCopy", "msClosureWasMoved", "msClosureSink", false),
 		TypeKind.Map => makeRcInfo(RcKind.Map, "", "msMapFree", "msMapCopy", "msMapWasMoved", "msMapSink", false),
 		TypeKind.Set => makeRcInfo(RcKind.Set, "", "msSetFree", "msSetCopy", "msSetWasMoved", "msSetSink", false),
-		TypeKind.Object => classifyObject(t, ctx),
+		TypeKind.Struct => classifyObject(t, ctx),
 		TypeKind.TypeReference => classifyTypeRef(t, ctx),
 		TypeKind.Distinct => { if (t.typeReturn !== null) { classifyType(t.typeReturn, ctx) } else { noRcInfo() } },
 		TypeKind.Union => {
@@ -257,7 +257,7 @@ test "function → Closure" {
 
 test "named object → Named" {
 	const ctx = createTransformContext();
-	const info = classifyType(createObject("Token", ["kind"], [numberType()], false), ctx);
+	const info = classifyType(createStruct("Token", ["kind"], [numberType()], false), ctx);
 	assert info.rcKind === RcKind.Named;
 	assert info.needsCleanup;
 	assert info.destroyFn === "Token_destroy";
@@ -267,7 +267,7 @@ test "named object → Named" {
 
 test "anonymous object → None" {
 	const ctx = createTransformContext();
-	const info = classifyType(createObject("", ["x"], [numberType()], false), ctx);
+	const info = classifyType(createStruct("", ["x"], [numberType()], false), ctx);
 	assert info.rcKind === RcKind.None;
 }
 

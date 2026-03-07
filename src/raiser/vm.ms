@@ -14,7 +14,7 @@ import {
 	RaiserValue, RaiserValueKind,
 	raiserNil, raiserInt, raiserFloat, raiserString, raiserArray, raiserToInt, raiserToBool, raiserToString, raiserIsNil,
 	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapArrayGet, heapArraySet, heapArrayPush, heapArrayLen,
-	RaiserObjectHeap, RaiserObjectField, createObjectHeap, heapAllocObject, heapObjectGetField, heapObjectSetField,
+	RaiserObjectHeap, RaiserObjectField, createStructHeap, heapAllocObject, heapObjectGetField, heapObjectSetField,
 	raiserObject
 } from "./value";
 import {
@@ -71,7 +71,7 @@ export function createVM(mod: RaiserModule): RaiserVM {
 	const callFrames: RaiserCallFrame[] = [];
 	const callStack: RaiserCallFrames = { items: callFrames };
 	const arrayHeap = createArrayHeap();
-	const objectHeap = createObjectHeap();
+	const objectHeap = createStructHeap();
 	return { mod, regs, ip: 0, halted: false, exitValue: nilVal, output: "", funcIdx: mod.entry, baseReg: 0, callStack, arrayHeap, objectHeap, opCount: 0, opLimit: 10000000, error: "" };
 }
 

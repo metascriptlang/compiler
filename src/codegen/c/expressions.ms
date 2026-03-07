@@ -536,7 +536,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 		}
 		// Case 1b: Source type unknown but target resolves to a union variant (UnionName_vN)
 		// This handles `obj.data as { field: T }` when obj.data nodeType isn't set
-		if (node.nodeType !== null && node.nodeType.kind === TypeKind.Object) {
+		if (node.nodeType !== null && node.nodeType.kind === TypeKind.Struct) {
 			const targetCType = getTypeDesc(g, node.nodeType);
 			// Look for "_v" + digit at end (e.g., "DocData_v1", "DocData_v12")
 			let vPos = targetCType.length - 1;
@@ -559,7 +559,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 			const unionName = getTypeDesc(g, unionType);
 			// Find variant by matching source Object type OR ObjectLiteral keys
 			let varIdx = -1;
-			if (srcType !== null && srcType.kind === TypeKind.Object) {
+			if (srcType !== null && srcType.kind === TypeKind.Struct) {
 				varIdx = findUnionVariantIndex(unionType, srcType);
 			}
 			if (varIdx < 0 && d.asExpr !== null && d.asExpr.kind === NodeKind.ObjectLiteral) {

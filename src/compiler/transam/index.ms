@@ -46,7 +46,7 @@ import {
 } from "./intern";
 
 import { parseSource } from "../../parser/statements/validation";
-import { checkProgram, checkProgramCancellable, checkProgramWithRegistryCancellable, buildPreludeContext } from "../../checker/index";
+import { checkProgram, checkProgramWithRegistryCancellable, buildPreludeContext } from "../../checker/index";
 import { transformProgram } from "../../transform/index";
 import { analyzeProgram } from "../../analyzer/index";
 import {

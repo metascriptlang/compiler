@@ -316,10 +316,10 @@ export interface CheckerContext {
 	currentFunction: Symbol;   // innermost function (for return type validation)
 	inLoop: boolean;           // break/continue validation
 	inTestBlock: boolean;      // assert validation — only allowed inside test blocks
-	moduleGraph: ModuleGraph;  // null for single-module mode
-	currentModule: Module;     // null for single-module mode
-	exportRegistry: ExportRegistry;  // null for single-module mode
-	extensionRegistry: ExtensionRegistry;  // null for single-module mode
+	moduleGraph: ModuleGraph;
+	currentModule: Module;
+	exportRegistry: ExportRegistry;
+	extensionRegistry: ExtensionRegistry;
 	inferredReturn: Type;  // tracks inferred return type during function body checking
 	includeDirectives: string; // accumulated @include args, newline-separated
 	compileDirectives: string; // accumulated @compile args, newline-separated
@@ -343,7 +343,7 @@ export function createContext(): CheckerContext {
 		inTestBlock: false,
 		moduleGraph: null as unknown as ModuleGraph,
 		currentModule: null as unknown as Module,
-		exportRegistry: null as unknown as ExportRegistry,
+		exportRegistry: createExportRegistry(),
 		extensionRegistry: createExtensionRegistry(),
 		inferredReturn: unknownType(),
 		includeDirectives: "",
@@ -450,7 +450,7 @@ test "create module context" {
 	assert ctx.moduleGraph !== null;
 	assert ctx.currentModule !== null;
 	assert ctx.currentModule.path === "/a/b.ms";
-	assert ctx.exportRegistry === null;
+	assert ctx.exportRegistry !== null;
 }
 
 test "error collection" {

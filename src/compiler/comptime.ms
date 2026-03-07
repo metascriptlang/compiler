@@ -43,7 +43,7 @@ import {
 	raiserInt, raiserFloat, raiserBool, raiserString, raiserNil, raiserObject, raiserArray,
 	heapAllocObject, heapObjectSetField, heapObjectGetField,
 	heapAllocArray, heapArrayPush,
-	createObjectHeap, createArrayHeap,
+	createStructHeap, createArrayHeap,
 	clearObjectHeap, clearArrayHeap,
 } from "../raiser/value";
 import { RaiserContext } from "../raiser/context";
@@ -689,7 +689,7 @@ test "int value" {
 }
 
 test "NumberLiteral serialization" {
-	const objHeap = createObjectHeap();
+	const objHeap = createStructHeap();
 	const arrHeap = createArrayHeap();
 	const loc: SourceLocation = { line: 5, column: 10 };
 	const node = mkNumber(42, loc);
@@ -707,7 +707,7 @@ test "NumberLiteral serialization" {
 }
 
 test "StringLiteral serialization" {
-	const objHeap = createObjectHeap();
+	const objHeap = createStructHeap();
 	const arrHeap = createArrayHeap();
 	const loc: SourceLocation = { line: 1, column: 0 };
 	const node = mkString("hello", loc);
@@ -720,7 +720,7 @@ test "StringLiteral serialization" {
 }
 
 test "BooleanLiteral serialization" {
-	const objHeap = createObjectHeap();
+	const objHeap = createStructHeap();
 	const arrHeap = createArrayHeap();
 	const loc: SourceLocation = { line: 1, column: 0 };
 	const node = mkBool(true, loc);
@@ -733,7 +733,7 @@ test "BooleanLiteral serialization" {
 }
 
 test "Identifier serialization" {
-	const objHeap = createObjectHeap();
+	const objHeap = createStructHeap();
 	const arrHeap = createArrayHeap();
 	const loc: SourceLocation = { line: 1, column: 0 };
 	const node = createNode(NodeKind.Identifier, { name: "foo" }, synthToken(loc));
@@ -746,7 +746,7 @@ test "Identifier serialization" {
 }
 
 test "BinaryExpr serialization" {
-	const objHeap = createObjectHeap();
+	const objHeap = createStructHeap();
 	const arrHeap = createArrayHeap();
 	const loc: SourceLocation = { line: 1, column: 0 };
 	const left = mkNumber(2, loc);

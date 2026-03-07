@@ -59,7 +59,7 @@ export function monoTypeKey(t: Type): string {
 	if (t.kind === TypeKind.Array) return "arr_" + monoTypeKey(t.typeReturn);
 	if (t.kind === TypeKind.Ref) return "ref_" + monoTypeKey(t.typeReturn);
 	if (t.kind === TypeKind.Ptr) return "ptr_" + monoTypeKey(t.typeReturn);
-	if (t.kind === TypeKind.Object) return t.typeName;
+	if (t.kind === TypeKind.Struct) return t.typeName;
 	if (t.kind === TypeKind.Enum) return t.typeName;
 	if (t.kind === TypeKind.Result) {
 		return "result_" + monoTypeKey(t.typeReturn) + "_" + monoTypeKey(t.typeExtra);
@@ -175,7 +175,7 @@ test "monoTypeKey array" {
 }
 
 test "monoTypeKey object" {
-	const obj: Type = { kind: TypeKind.Object, typeName: "Box", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
+	const obj: Type = { kind: TypeKind.Struct, typeName: "Box", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
 	assert monoTypeKey(obj) === "Box";
 }
 
