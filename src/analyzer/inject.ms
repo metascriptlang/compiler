@@ -312,6 +312,10 @@ function makeRcCallStmt(fnName: string, varName: string, loc: SourceLocation): N
 
 function makeDestroyCall(varName: string, rcInfo: RcInfo, loc: SourceLocation): Node {
 	if (rcInfo.rcKind === RcKind.Named) {
+		// Nim parity (symPrototype): seq/string destroy takes by-value (not var/pointer)
+		if (rcInfo.seqLike) {
+			return makeRcCallStmt(rcInfo.destroyFn, varName, loc);
+		}
 		return makeExprStmt(
 			makeCall(makeIdent(rcInfo.destroyFn, loc), [makeHiddenAddr(makeIdent(varName, loc), loc)], loc), loc);
 	}
@@ -331,10 +335,20 @@ function makeWasMovedCall(varName: string, rcInfo: RcInfo, loc: SourceLocation):
 // Ref/String/Closure/Map/Set copy is unary (incref).
 function makeCopyAfterInit(destName: string, rcInfo: RcInfo, loc: SourceLocation, srcName: string): Node {
 	if (rcInfo.rcKind === RcKind.Named && srcName !== "") {
+		// Nim parity (symPrototype): seq copy = dest var (HiddenAddr), src by-value
+		if (rcInfo.seqLike) {
+			return makeExprStmt(
+				makeCall(makeIdent(rcInfo.copyFn, loc), [makeHiddenAddr(makeIdent(destName, loc), loc), makeIdent(srcName, loc)], loc), loc);
+		}
 		return makeExprStmt(
 			makeCall(makeIdent(rcInfo.copyFn, loc), [makeHiddenAddr(makeIdent(destName, loc), loc), makeHiddenAddr(makeIdent(srcName, loc), loc)], loc), loc);
 	}
 	if (rcInfo.rcKind === RcKind.Named) {
+		// Self-copy (no separate src): dest for both args
+		if (rcInfo.seqLike) {
+			return makeExprStmt(
+				makeCall(makeIdent(rcInfo.copyFn, loc), [makeHiddenAddr(makeIdent(destName, loc), loc), makeIdent(destName, loc)], loc), loc);
+		}
 		return makeExprStmt(
 			makeCall(makeIdent(rcInfo.copyFn, loc), [makeHiddenAddr(makeIdent(destName, loc), loc), makeHiddenAddr(makeIdent(destName, loc), loc)], loc), loc);
 	}
@@ -345,6 +359,11 @@ function makeCopyAfterInit(destName: string, rcInfo: RcInfo, loc: SourceLocation
 // Sink call: sinkFn(dest, src) — atomic destroy-old + assign-new
 function makeSinkCall(destName: string, srcExpr: Node, rcInfo: RcInfo, loc: SourceLocation): Node {
 	if (rcInfo.rcKind === RcKind.Named) {
+		// Nim parity: seq sink = dest var (HiddenAddr), src by-value
+		if (rcInfo.seqLike) {
+			return makeExprStmt(
+				makeCall(makeIdent(rcInfo.sinkFn, loc), [makeHiddenAddr(makeIdent(destName, loc), loc), srcExpr], loc), loc);
+		}
 		return makeExprStmt(
 			makeCall(makeIdent(rcInfo.sinkFn, loc), [makeHiddenAddr(makeIdent(destName, loc), loc), makeHiddenAddr(srcExpr, loc)], loc), loc);
 	}

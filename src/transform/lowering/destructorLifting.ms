@@ -43,7 +43,7 @@ interface LiftCtx {
 	collector: Node[];
 	cyclicCache: NameSet;     // types confirmed cyclic
 	nonCyclicCache: NameSet;  // types confirmed non-cyclic
-	neededSeqHooks: NameSet;  // array hook families needed (e.g., "msSeqString", "msSeqRef")
+	neededSeqHooks: NameSet;  // array hook families needed (e.g., "msStringArray", "msRefArray")
 }
 
 function namedTypeHasHooks(typeName: string, lctx: LiftCtx): boolean {
@@ -257,9 +257,9 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 	const needsElemLoop = elem !== null && !isPrimitiveKind(elem.kind);
 	if (needsElemLoop && elem !== null) {
 		if (elem.kind === TypeKind.String) {
-			nameSetAdd(lctx.neededSeqHooks, "msSeqString");
+			nameSetAdd(lctx.neededSeqHooks, "msStringArray");
 		} else {
-			nameSetAdd(lctx.neededSeqHooks, "msSeqRef");
+			nameSetAdd(lctx.neededSeqHooks, "msRefArray");
 		}
 	}
 	match (hook) {
@@ -275,7 +275,19 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 				genCall("msArrayCopy", hook, xf, yf, buf, loc);
 			}
 		},
-		"sink" => { genInlineSink("msArrayDestroy", xf, yf, buf, loc); },
+		"sink" => {
+			// Nim parity (genMove lines 2745-2751): if (dest.p != src.p) { destroy(dest) }; dest = src
+			const guardCond = makeBinary(
+				makeMember(clonePath(xf, loc), "p", loc),
+				"!==",
+				makeMember(clonePath(yf, loc), "p", loc),
+				loc
+			);
+			const destroyStmt: Node[] = [];
+			genCall("msArrayDestroy", "destroy", clonePath(xf, loc), yf, destroyStmt, loc);
+			buf.push(makeIf(guardCond, makeBlock(destroyStmt, loc), null as unknown as Node, loc));
+			buf.push(makeExprStmt(makeAssign(clonePath(xf, loc), clonePath(yf, loc), loc), loc));
+		},
 		"wasMoved" => { genCall("msArrayWasMoved", hook, xf, yf, buf, loc); },
 		"trace" => {
 			if (needsElemLoop) { genArrayLoop("trace", elem, xf, yf, lctx, buf, loc); }
@@ -703,11 +715,21 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 		setAttachedOp(objType, AttachedOp.AttachedTrace, typeName + "_trace");
 	}
 
-	// =dup: init + copy, return (standard pattern)
+	// =dup: init + copy, return
 	const dupStmts: Node[] = [];
-	dupStmts.push(makeVarDecl("$result", makeIdent("src", loc), DeclKind.Let, loc));
-	dupStmts.push(makeExprStmt(makeCall(makeIdent(typeName + "_copy", loc), [makeHiddenAddr(makeIdent("$result", loc), loc), makeHiddenAddr(makeIdent("src", loc), loc)], loc), loc));
-	dupStmts.push(makeReturn(makeIdent("$result", loc), loc));
+	const isClass = sym.symbolKind === SymbolKind.Class;
+	if (isClass) {
+		// Nim parity (atomicRefOp attachedDup, liftdestructors.nim:793-801):
+		// ref types: result = src; incref(result). No =copy call — just pointer copy + refcount.
+		dupStmts.push(makeVarDecl("$result", makeIdent("src", loc), DeclKind.Let, loc));
+		dupStmts.push(makeExprStmt(makeCall(makeIdent("msIncref", loc), [makeIdent("$result", loc)], loc), loc));
+		dupStmts.push(makeReturn(makeIdent("$result", loc), loc));
+	} else {
+		// Value types: result = src; TypeName_copy(&result, &src); return result.
+		dupStmts.push(makeVarDecl("$result", makeIdent("src", loc), DeclKind.Let, loc));
+		dupStmts.push(makeExprStmt(makeCall(makeIdent(typeName + "_copy", loc), [makeHiddenAddr(makeIdent("$result", loc), loc), makeHiddenAddr(makeIdent("src", loc), loc)], loc), loc));
+		dupStmts.push(makeReturn(makeIdent("$result", loc), loc));
+	}
 	lctx.collector.push(makeFnDecl(typeName + "_dup", ["src"], [typeName], makeBlock(dupStmts, loc), "", typeName, loc));
 	setAttachedOp(objType, AttachedOp.AttachedDup, typeName + "_dup");
 
@@ -866,14 +888,52 @@ function generateArrayHook(hook: string, seqName: string, elemType: Type, arrayT
 	const p1 = isUnary ? "self" : "dest";
 	const p2 = isUnary ? "self" : "src";
 
-	// Nim parity (produceSym): create derefed param nodes upfront.
-	// Nim: d = newDeref(newSymNode(dest)) — single deref, passed to all body generators.
-	// No post-body wrapBodyIdentifiers needed.
-	const d1 = makeHiddenDeref(makeIdent(p1, loc), loc);
-	d1.nodeType = arrayType;
-	const d2 = makeHiddenDeref(makeIdent(p2, loc), loc);
-	d2.nodeType = arrayType;
-	arrayOp(hook, elemType, d1, d2, lctx, buf, loc);
+	// Nim parity (symPrototype lines 1138-1147):
+	//   destroy: dest.typ = typ (by-value for seq in ARC/ORC)
+	//   wasMoved: dest.typ = makeVarType (by-pointer)
+	//   copy/sink: dest = makeVarType (by-pointer), src.typ = typ (by-value)
+	// Nim parity (produceSym line 1193):
+	//   d = if firstParamType == tyVar: newDeref(dest) else: dest
+	//   src = newSymNode(src) — always raw (by-value)
+
+	if (hook === "destroy") {
+		// destroy(self: seq) — by-value, no deref
+		const selfNode = makeIdent(p1, loc);
+		selfNode.nodeType = arrayType;
+		arrayOp(hook, elemType, selfNode, selfNode, lctx, buf, loc);
+	} else if (hook === "wasMoved") {
+		// wasMoved(self: var seq) — by-pointer, deref in body
+		const d1 = makeHiddenDeref(makeIdent(p1, loc), loc);
+		d1.nodeType = arrayType;
+		arrayOp(hook, elemType, d1, d1, lctx, buf, loc);
+	} else if (hook === "copy") {
+		// copy(dest: var seq, src: seq) — dest deref, src raw
+		const destNode = makeHiddenDeref(makeIdent(p1, loc), loc);
+		destNode.nodeType = arrayType;
+		const srcNode = makeIdent(p2, loc);
+		srcNode.nodeType = arrayType;
+		// Nim parity (checkSelfAssignment): if dest.p == src.p return
+		const selfCheck = makeIf(
+			makeBinary(
+				makeMember(clonePath(destNode, loc), "p", loc),
+				"===",
+				makeMember(clonePath(srcNode, loc), "p", loc),
+				loc
+			),
+			makeBlock([makeReturn(null as unknown as Node, loc)], loc),
+			null as unknown as Node,
+			loc
+		);
+		buf.push(selfCheck);
+		arrayOp(hook, elemType, destNode, srcNode, lctx, buf, loc);
+	} else {
+		// sink(dest: var seq, src: seq) — dest deref, src raw
+		const destNode = makeHiddenDeref(makeIdent(p1, loc), loc);
+		destNode.nodeType = arrayType;
+		const srcNode = makeIdent(p2, loc);
+		srcNode.nodeType = arrayType;
+		arrayOp(hook, elemType, destNode, srcNode, lctx, buf, loc);
+	}
 
 	const suffix = hookSuffix(hook);
 
@@ -884,22 +944,46 @@ function generateArrayHook(hook: string, seqName: string, elemType: Type, arrayT
 		fnNode = makeFnDecl(seqName + suffix, [p1, p2], [seqName, seqName], makeBlock(buf, loc), "", "void", loc);
 	}
 
-	// Set param types to Ptr<Array> (arrays are 16 bytes < ccgIntroducedPtr threshold,
-	// so markPointerParams won't handle them — we set pointer types directly).
+	// Nim parity (symPrototype): set param types based on hook kind.
+	// Arrays are 16 bytes < ccgIntroducedPtr threshold, so markPointerParams won't handle them.
+	// destroy: by-value (no Ptr wrap)
+	// wasMoved: by-pointer (Ptr wrap)
+	// copy/sink: dest by-pointer, src by-value
 	if (fnNode.nodeType !== null && fnNode.nodeType.typeChildren !== null) {
-		let pi = 0;
-		while (pi < fnNode.nodeType.typeChildren.length) {
-			fnNode.nodeType.typeChildren[pi] = createPtr(arrayType);
-			pi += 1;
+		if (hook === "destroy") {
+			// All params stay as arrayType (by-value)
+			let pi = 0;
+			while (pi < fnNode.nodeType.typeChildren.length) {
+				fnNode.nodeType.typeChildren[pi] = arrayType;
+				pi += 1;
+			}
+		} else if (hook === "wasMoved") {
+			// self → Ptr<Array>
+			fnNode.nodeType.typeChildren[0] = createPtr(arrayType);
+		} else {
+			// copy/sink: dest → Ptr<Array>, src stays arrayType
+			fnNode.nodeType.typeChildren[0] = createPtr(arrayType);
+			if (fnNode.nodeType.typeChildren.length > 1) {
+				fnNode.nodeType.typeChildren[1] = arrayType;
+			}
 		}
 	}
 	if (fnNode.resolvedSym !== null && fnNode.resolvedSym.symbolType !== null) {
 		const symType = fnNode.resolvedSym.symbolType;
 		if (symType.typeChildren !== null) {
-			let pi = 0;
-			while (pi < symType.typeChildren.length) {
-				symType.typeChildren[pi] = createPtr(arrayType);
-				pi += 1;
+			if (hook === "destroy") {
+				let pi = 0;
+				while (pi < symType.typeChildren.length) {
+					symType.typeChildren[pi] = arrayType;
+					pi += 1;
+				}
+			} else if (hook === "wasMoved") {
+				symType.typeChildren[0] = createPtr(arrayType);
+			} else {
+				symType.typeChildren[0] = createPtr(arrayType);
+				if (symType.typeChildren.length > 1) {
+					symType.typeChildren[1] = arrayType;
+				}
 			}
 		}
 	}
@@ -908,24 +992,24 @@ function generateArrayHook(hook: string, seqName: string, elemType: Type, arrayT
 }
 
 function generateArrayHooks(lctx: LiftCtx, loc: SourceLocation): void {
-	if (nameSetContains(lctx.neededSeqHooks, "msSeqString") && !nameSetContains(lctx.generated, "msSeqString")) {
-		nameSetAdd(lctx.generated, "msSeqString");
+	if (nameSetContains(lctx.neededSeqHooks, "msStringArray") && !nameSetContains(lctx.generated, "msStringArray")) {
+		nameSetAdd(lctx.generated, "msStringArray");
 		const strElemType = stringType();
 		const strArrayType = createArray(strElemType);
-		generateArrayHook("destroy", "msSeqString", strElemType, strArrayType, lctx, loc);
-		generateArrayHook("copy", "msSeqString", strElemType, strArrayType, lctx, loc);
-		generateArrayHook("sink", "msSeqString", strElemType, strArrayType, lctx, loc);
-		generateArrayHook("wasMoved", "msSeqString", strElemType, strArrayType, lctx, loc);
+		generateArrayHook("destroy", "msStringArray", strElemType, strArrayType, lctx, loc);
+		generateArrayHook("copy", "msStringArray", strElemType, strArrayType, lctx, loc);
+		generateArrayHook("sink", "msStringArray", strElemType, strArrayType, lctx, loc);
+		generateArrayHook("wasMoved", "msStringArray", strElemType, strArrayType, lctx, loc);
 	}
 
-	if (nameSetContains(lctx.neededSeqHooks, "msSeqRef") && !nameSetContains(lctx.generated, "msSeqRef")) {
-		nameSetAdd(lctx.generated, "msSeqRef");
+	if (nameSetContains(lctx.neededSeqHooks, "msRefArray") && !nameSetContains(lctx.generated, "msRefArray")) {
+		nameSetAdd(lctx.generated, "msRefArray");
 		const refElemType = createPrimitive(TypeKind.Ref);
 		const refArrayType = createArray(refElemType);
-		generateArrayHook("destroy", "msSeqRef", refElemType, refArrayType, lctx, loc);
-		generateArrayHook("copy", "msSeqRef", refElemType, refArrayType, lctx, loc);
-		generateArrayHook("sink", "msSeqRef", refElemType, refArrayType, lctx, loc);
-		generateArrayHook("wasMoved", "msSeqRef", refElemType, refArrayType, lctx, loc);
+		generateArrayHook("destroy", "msRefArray", refElemType, refArrayType, lctx, loc);
+		generateArrayHook("copy", "msRefArray", refElemType, refArrayType, lctx, loc);
+		generateArrayHook("sink", "msRefArray", refElemType, refArrayType, lctx, loc);
+		generateArrayHook("wasMoved", "msRefArray", refElemType, refArrayType, lctx, loc);
 	}
 }
 
@@ -939,9 +1023,9 @@ function scanTypeForArrays(t: Type, lctx: LiftCtx, visited: NameSet): void {
 		const elem = t.typeReturn;
 		if (elem !== null && !isPrimitiveKind(elem.kind)) {
 			if (elem.kind === TypeKind.String) {
-				nameSetAdd(lctx.neededSeqHooks, "msSeqString");
+				nameSetAdd(lctx.neededSeqHooks, "msStringArray");
 			} else {
-				nameSetAdd(lctx.neededSeqHooks, "msSeqRef");
+				nameSetAdd(lctx.neededSeqHooks, "msRefArray");
 			}
 		}
 		return;

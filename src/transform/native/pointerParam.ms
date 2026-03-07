@@ -44,6 +44,8 @@ function safeLoc(node: Node): SourceLocation {
 // We don't have inheritance or forwarded types, so all interfaces are "final + no base".
 // Threshold: 24 bytes (floatSize=8 * 3) on 64-bit.
 const PTR_THRESHOLD: number = 24;
+// typeFlags bit 5: marks Ptr<T> types introduced by ccgIntroducedPtr (not user-declared)
+const TF_CCG_INTRODUCED: number = 32;
 
 export function ccgIntroducedPtr(t: Type): boolean {
 	if (t === null) return false;
@@ -91,7 +93,9 @@ function transformFunction(node: Node): void {
 			if (ccgIntroducedPtr(paramType)) {
 				ptrParams.push(d.params[i]);
 				// Wrap param type: T → Ptr<T> so codegen emits T*
-				fnType.typeChildren[i] = createPtr(paramType);
+				const introduced = createPtr(paramType);
+				introduced.typeFlags = introduced.typeFlags | TF_CCG_INTRODUCED;
+				fnType.typeChildren[i] = introduced;
 			}
 		}
 		i += 1;
@@ -106,7 +110,9 @@ function transformFunction(node: Node): void {
 			i = 0;
 			while (i < d.params.length && i < symType.typeChildren.length) {
 				if (ccgIntroducedPtr(symType.typeChildren[i])) {
-					symType.typeChildren[i] = createPtr(symType.typeChildren[i]);
+					const introduced = createPtr(symType.typeChildren[i]);
+					introduced.typeFlags = introduced.typeFlags | TF_CCG_INTRODUCED;
+					symType.typeChildren[i] = introduced;
 				}
 				i += 1;
 			}
@@ -321,7 +327,8 @@ function transformCallSite(node: Node): void {
 	const minLen = (paramTypes.length < cd.arguments.length) ? paramTypes.length : cd.arguments.length;
 	while (i < minLen) {
 		// If Pass 1 wrapped the param type in Ptr<T>, the arg needs HiddenAddr
-		if (paramTypes[i] !== null && paramTypes[i].kind === TypeKind.Ptr) {
+		// Only match ccg-introduced Ptrs (TF_CCG_INTRODUCED flag), not user-declared Ptr<T>
+		if (paramTypes[i] !== null && paramTypes[i].kind === TypeKind.Ptr && (paramTypes[i].typeFlags & TF_CCG_INTRODUCED) !== 0) {
 			const arg = cd.arguments[i];
 			// Don't double-wrap: if already HiddenAddr, skip
 			if (arg.kind !== NodeKind.HiddenAddr) {

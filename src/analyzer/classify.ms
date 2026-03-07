@@ -33,6 +33,7 @@ export interface RcInfo {
 	copyFn: string;          // runtime function name for =copy
 	wasMovedFn: string;      // runtime function name for =wasMoved
 	sinkFn: string;          // runtime function name for =sink (empty = raw assign)
+	seqLike: boolean;        // Nim parity: seq/string destroy by-value, copy src by-value
 }
 
 // ===== Sentinel — no RC needed =====
@@ -46,13 +47,14 @@ export function noRcInfo(): RcInfo {
 		copyFn: "",
 		wasMovedFn: "",
 		sinkFn: "",
+		seqLike: false,
 	};
 }
 
 // ===== RC Info Factory — reduces verbose inline literals =====
 
-function makeRcInfo(kind: RcKind, typeName: string, destroy: string, copy: string, wasMoved: string, sink: string): RcInfo {
-	return { rcKind: kind, typeName, needsCleanup: true, destroyFn: destroy, copyFn: copy, wasMovedFn: wasMoved, sinkFn: sink };
+function makeRcInfo(kind: RcKind, typeName: string, destroy: string, copy: string, wasMoved: string, sink: string, seqLike: boolean): RcInfo {
+	return { rcKind: kind, typeName, needsCleanup: true, destroyFn: destroy, copyFn: copy, wasMovedFn: wasMoved, sinkFn: sink, seqLike };
 }
 
 // ===== Array Subclassification =====
@@ -60,15 +62,16 @@ function makeRcInfo(kind: RcKind, typeName: string, destroy: string, copy: strin
 function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 	const elem = t.typeReturn;  // Array element type stored in typeReturn
 	if (elem !== null && elem.kind === TypeKind.Uint8) {
-		return makeRcInfo(RcKind.Array, "", "msArrayUint8Destroy", "msArrayUint8Copy", "msArrayUint8WasMoved", "msArrayUint8Sink");
+		return makeRcInfo(RcKind.Array, "", "msArrayUint8Destroy", "msArrayUint8Copy", "msArrayUint8WasMoved", "msArrayUint8Sink", false);
 	}
 	if (elem === null || isPrimitiveKind(elem.kind)) {
-		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink");
+		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
 	}
+	// Nim parity: non-primitive element arrays use standalone generated hooks (fillSeqOp)
 	if (elem.kind === TypeKind.String) {
-		return makeRcInfo(RcKind.Named, "", "msSeqString_destroy", "msSeqString_copy", "msSeqString_wasMoved", "msSeqString_sink");
+		return makeRcInfo(RcKind.Named, "", "msStringArray_destroy", "msStringArray_copy", "msStringArray_wasMoved", "msStringArray_sink", true);
 	}
-	return makeRcInfo(RcKind.Named, "", "msSeqRef_destroy", "msSeqRef_copy", "msSeqRef_wasMoved", "msSeqRef_sink");
+	return makeRcInfo(RcKind.Named, "", "msRefArray_destroy", "msRefArray_copy", "msRefArray_wasMoved", "msRefArray_sink", true);
 }
 
 // ===== Sub-classifiers for complex arms =====
@@ -79,7 +82,7 @@ function classifyObject(t: Type, ctx: TransformContext): RcInfo {
 		// Implementation parity: only generate RC hooks if type has a destructor
 		// Value-type interfaces without managed fields get noRcInfo (no cleanup needed)
 		if (hasDestructor(t)) {
-			return makeRcInfo(RcKind.Named, t.typeName, t.typeName + "_destroy", t.typeName + "_copy", t.typeName + "_wasMoved", t.typeName + "_sink");
+			return makeRcInfo(RcKind.Named, t.typeName, t.typeName + "_destroy", t.typeName + "_copy", t.typeName + "_wasMoved", t.typeName + "_sink", false);
 		}
 		// destructorLifting has already run — if no hooks, type is plain value (no cleanup)
 		return noRcInfo();
@@ -113,30 +116,30 @@ export function classifyType(t: Type, ctx: TransformContext): RcInfo {
 	if (isPrimitiveKind(t.kind)) return noRcInfo();
 
 	return match (t.kind) {
-		TypeKind.String => makeRcInfo(RcKind.String, "", "msStringDecref", "msStringIncref", "msStringWasMoved", "msStringSink"),
+		TypeKind.String => makeRcInfo(RcKind.String, "", "msStringDecref", "msStringIncref", "msStringWasMoved", "msStringSink", false),
 		TypeKind.Array => classifyArray(t, ctx),
-		TypeKind.Ref => makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", ""),
+		TypeKind.Ref => makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false),
 		TypeKind.Ptr => {
 			// Ptr<T> where T is interface/span/result/tuple = borrowed (ccgIntroducedPtr), no RC
 			const inner = t.typeReturn;
 			if (inner !== null && (isInterfaceType(inner) || inner.kind === TypeKind.Span || inner.kind === TypeKind.Result || inner.kind === TypeKind.Tuple)) {
 				noRcInfo()
 			} else {
-				makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "")
+				makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false)
 			}
 		},
-		TypeKind.Function => makeRcInfo(RcKind.Closure, "", "msClosureDestroy", "msClosureCopy", "msClosureWasMoved", "msClosureSink"),
-		TypeKind.Map => makeRcInfo(RcKind.Map, "", "msMapFree", "msMapCopy", "msMapWasMoved", "msMapSink"),
-		TypeKind.Set => makeRcInfo(RcKind.Set, "", "msSetFree", "msSetCopy", "msSetWasMoved", "msSetSink"),
+		TypeKind.Function => makeRcInfo(RcKind.Closure, "", "msClosureDestroy", "msClosureCopy", "msClosureWasMoved", "msClosureSink", false),
+		TypeKind.Map => makeRcInfo(RcKind.Map, "", "msMapFree", "msMapCopy", "msMapWasMoved", "msMapSink", false),
+		TypeKind.Set => makeRcInfo(RcKind.Set, "", "msSetFree", "msSetCopy", "msSetWasMoved", "msSetSink", false),
 		TypeKind.Object => classifyObject(t, ctx),
 		TypeKind.TypeReference => classifyTypeRef(t, ctx),
 		TypeKind.Distinct => { if (t.typeReturn !== null) { classifyType(t.typeReturn, ctx) } else { noRcInfo() } },
 		TypeKind.Union => {
 			if (t.typeName !== "" && hasDestructor(t)) {
-				makeRcInfo(RcKind.Named, t.typeName, t.typeName + "_destroy", t.typeName + "_copy", t.typeName + "_wasMoved", t.typeName + "_sink")
+				makeRcInfo(RcKind.Named, t.typeName, t.typeName + "_destroy", t.typeName + "_copy", t.typeName + "_wasMoved", t.typeName + "_sink", false)
 			} else { noRcInfo() }
 		},
-		TypeKind.Result => makeRcInfo(RcKind.Named, "", "", "", "", ""),
+		TypeKind.Result => makeRcInfo(RcKind.Named, "", "", "", "", "", false),
 		TypeKind.Tuple => {
 			// Check if any element needs RC
 			let hasRc = false;
@@ -147,7 +150,7 @@ export function classifyType(t: Type, ctx: TransformContext): RcInfo {
 			}
 			// TODO: Tuples with RC elements need per-field hooks from destructorLifting.
 			// For now, emit Named with empty hooks (no-op cleanup).
-			if (hasRc) { makeRcInfo(RcKind.Named, "", "", "", "", "") } else { noRcInfo() }
+			if (hasRc) { makeRcInfo(RcKind.Named, "", "", "", "", "", false) } else { noRcInfo() }
 		},
 		_ => noRcInfo(),
 	};
@@ -240,7 +243,8 @@ test "array of string → Named (standalone procs)" {
 	const ctx = createTransformContext();
 	const info = classifyType(createArray(stringType()), ctx);
 	assert info.rcKind === RcKind.Named;
-	assert info.destroyFn === "msSeqString_destroy";
+	assert info.seqLike;
+	assert info.destroyFn === "msStringArray_destroy";
 }
 
 test "function → Closure" {

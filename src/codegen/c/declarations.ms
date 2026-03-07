@@ -87,13 +87,28 @@ export function ensureDrcProto(g: CGen, callee: string): void {
 	const typeName = callee.slice(0, lastUnderscore);
 	const suffix = callee.slice(lastUnderscore, callee.length);
 
+	// Nim parity (symPrototype): seq/array hooks have different param conventions
+	// destroy: by-value; wasMoved: by-pointer; copy/sink: dest by-pointer, src by-value
+	const isSeqHook = typeName === "msStringArray" || typeName === "msRefArray";
+
 	let proto = "";
-	if (suffix === "_destroy" || suffix === "_wasMoved") {
-		// void TypeName_destroy(TypeName* self)
+	if (suffix === "_destroy") {
+		if (isSeqHook) {
+			// Nim parity: destroy(self: seq) — by-value
+			proto = "void " + callee + "(" + typeName + " self)";
+		} else {
+			proto = "void " + callee + "(" + typeName + "* self)";
+		}
+	} else if (suffix === "_wasMoved") {
+		// Always by-pointer (var param in Nim)
 		proto = "void " + callee + "(" + typeName + "* self)";
 	} else if (suffix === "_copy" || suffix === "_sink") {
-		// void TypeName_copy(TypeName* dest, TypeName* src)
-		proto = "void " + callee + "(" + typeName + "* dest, " + typeName + "* src)";
+		if (isSeqHook) {
+			// Nim parity: copy/sink(dest: var seq, src: seq) — dest ptr, src value
+			proto = "void " + callee + "(" + typeName + "* dest, " + typeName + " src)";
+		} else {
+			proto = "void " + callee + "(" + typeName + "* dest, " + typeName + "* src)";
+		}
 	} else if (suffix === "_dup") {
 		// TypeName TypeName_dup(TypeName* src)
 		proto = typeName + " " + callee + "(" + typeName + "* src)";
@@ -106,6 +121,8 @@ export function ensureDrcProto(g: CGen, callee: string): void {
 	} else {
 		return;
 	}
+	// Per-module array/seq hooks need static linkage (generated in every module that uses them)
+	if (isSeqHook) proto = "static " + proto;
 	addLine(sec(g, CSection.ProcHeaders), proto + ";");
 }
 
@@ -204,11 +221,21 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	// DRC lifecycle hooks need external linkage for cross-module access (reference parity)
 	const isExported = sym !== null && (exported || hasFlag(sym, SymbolFlag.Exported));
 	const isDrcHook = isDrcLifecycleName(d.fnName);
-	const prefix = (isExported || isExternFn || isMain || isDrcHook) ? "" : "static ";
+	// Array/seq hooks (msStringArray_*, msRefArray_*) are generated per-module —
+	// they need static linkage to avoid duplicate symbols at link time.
+	// Named type hooks (Token_destroy etc.) are generated once in defining module → external.
+	const isPerModuleHook = isDrcHook && (d.fnName.slice(0, 13) === "msStringArray" || d.fnName.slice(0, 10) === "msRefArray");
+	const prefix = (isExported || isExternFn || isMain || (isDrcHook && !isPerModuleHook)) ? "" : "static ";
 
 	// Emit prototype to ProcHeaders — NRVO functions return void (skip if already forward-declared)
 	const actualRetType = nrvo ? "void" : cRetType;
 	const proto = prefix + actualRetType + " " + name + "(" + paramList + ")";
+
+	// Extern functions with 'from' clause bind to existing C functions — header provides declaration.
+	// Extern functions without 'from' use mangled name and need our prototype.
+	const hasNativeName = sym !== null && sym.nativeName !== "";
+	if (isExternFn && hasNativeName) return;
+
 	if (!alreadyDeclared) {
 		addLine(sec(g, CSection.ProcHeaders), proto + ";");
 	}
