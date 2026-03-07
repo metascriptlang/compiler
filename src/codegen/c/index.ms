@@ -51,10 +51,11 @@ export function generateC(program: Node, ctx: CheckerContext, modulePath: string
 // and per-module DatInit000/Init000 (non-static for cross-module visibility).
 // Does NOT generate the global dispatcher (MsPreMainInner/MsMainInner/MsMain/POSIX main).
 
-export function generateCModule(program: Node, ctx: CheckerContext, modulePath: string, aliveSet: AliveSet, isTestBuild: boolean): string {
+export function generateCModule(program: Node, ctx: CheckerContext, modulePath: string, aliveSet: AliveSet, isTestBuild: boolean, isHcr: boolean): string {
 	const g = createCGen(ctx, modulePath);
 	g.aliveSet = aliveSet;
 	g.isTestBuild = isTestBuild;
+	g.isHcr = isHcr;
 
 	// Standard C headers (Standard reference implementation pattern)
 	addLine(sec(g, CSection.Headers), "#include <stdint.h>");
@@ -108,8 +109,8 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 
 function genModuleInitFns(g: CGen): void {
 	const modName = mangleModuleName(g.modulePath);
-	const datInitName = modName + "__DatInit000";
-	const initName = modName + "__Init000";
+	const datInitName = g.isHcr ? "DatInit000" : modName + "__DatInit000";
+	const initName = g.isHcr ? "Init000" : modName + "__Init000";
 
 	const datContent = extract(sec(g, CSection.DatInit));
 	const initContent = extract(sec(g, CSection.ModuleInit));

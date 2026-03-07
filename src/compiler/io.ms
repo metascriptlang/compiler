@@ -106,6 +106,19 @@ export function exeSuffix(): string {
 	return "";
 }
 
+export function soSuffix(): string {
+	if (platformIsWindows < 0) {
+		if (exec("test -f /bin/sh") !== 0) {
+			platformIsWindows = 1;
+		} else {
+			platformIsWindows = 0;
+		}
+	}
+	if (platformIsWindows === 1) return ".dll";
+	if (exec("test $(uname) = Darwin") === 0) return ".dylib";
+	return ".so";
+}
+
 // -- Output directory based on build mode --
 
 export function outDirForMode(mode: number): string {

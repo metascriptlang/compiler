@@ -25,6 +25,7 @@ import { lookupSymbol } from "../checker/symbol";
 import { transformForNative } from "../transform/native/index";
 import { refineTypes } from "../transform/typeRefine";
 import { lowerNativeAccess } from "../transform/native/nativeLower";
+import { liftHcrState } from "../transform/native/hcrLift";
 import { createTransformContextWithChecker } from "../transform/context";
 import { findModule, ModuleGraph } from "../module/graph";
 import { createFileSystemProvider, loadModuleGraphWithConfig } from "../module/loader";
@@ -32,7 +33,7 @@ import { ResolverConfig, createDefaultConfig, BACKEND_C, BACKEND_JS, BACKEND_RAI
 import { ResolveSection, defaultResolveSection } from "./buildConfig";
 import { evaluateComptimeBlocks } from "./comptime";
 import { CliOptions, Target, MODE_DEBUG, MODE_RELEASE } from "./options";
-import { readSource, writeOutput, printErrorsAndExit, printTiming, verboseLog, replaceExt, dirName, baseName, stripBase, ensureDir, getJSRuntime, exeSuffix, outDirForMode } from "./io";
+import { readSource, writeOutput, printErrorsAndExit, printTiming, verboseLog, replaceExt, dirName, baseName, stripBase, ensureDir, getJSRuntime, exeSuffix, soSuffix, outDirForMode } from "./io";
 import { compileC, compileCFile, linkObjects, appendFlag, cliCompileFlags, cliLinkFlags } from "./cc";
 import { preprocessHeaders } from "../module/aro";
 import { error, success, bold, dim, green, red, yellow, cyan } from "../utils/color";
@@ -324,7 +325,8 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	if (outBinary === "") {
 		const outDir = outDirForMode(opts.mode);
 		ensureDir(outDir);
-		outBinary = outDir + "/" + replaceExt(baseName(entryPath), "") + exeSuffix();
+		const suffix = opts.isHcr ? soSuffix() : exeSuffix();
+		outBinary = outDir + "/" + replaceExt(baseName(entryPath), "") + suffix;
 	}
 
 	// Change detection: skip if all sources are older than binary
@@ -397,13 +399,16 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 
+		// HCR state lifting (--hcr only)
+		const hcrResult = opts.isHcr ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
+
 		// Analyze (DRC injection)
-		const analyzed = analyzeProgram(nativeTransformed, ctx);
+		const analyzed = analyzeProgram(hcrResult, ctx);
 
 		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
 
 		// Codegen — each module is self-contained (reference parity, no shared proto header)
-		const cCode = generateCModule(nativeLowered, ctx, modPath, protoAliveSet, false);
+		const cCode = generateCModule(nativeLowered, ctx, modPath, protoAliveSet, false, opts.isHcr);
 
 		// Accumulate compiler flags from @passC/@passL directives
 		allFlags = appendFlag(allFlags, ctx.compilerFlags);
@@ -459,20 +464,22 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		return;
 	}
 
-	// Generate global init dispatcher and compile to .o
-	if (opts.verbose) verboseLog("generating dispatcher");
-	const dispatcher = genProjectDispatcher(graph.loadOrder, entryPath, hasUserMain, mainRetType);
-	const dispFile = "/tmp/_msc_dispatch.c";
-	const dispObj = "/tmp/_msc_dispatch.o";
-	writeOutput(dispFile, dispatcher);
-	const dispCode = compileCFile(dispFile, dispObj, "", opts.mode, opts.ccCompiler);
-	if (dispCode !== 0) {
-		console.log(error("error") + ": compile failed for dispatcher " + dim("(exit " + dispCode + ")"));
-		exit(1);
+	// Generate global init dispatcher and compile to .o (skip for HCR — .so has no main)
+	if (!opts.isHcr) {
+		if (opts.verbose) verboseLog("generating dispatcher");
+		const dispatcher = genProjectDispatcher(graph.loadOrder, entryPath, hasUserMain, mainRetType);
+		const dispFile = "/tmp/_msc_dispatch.c";
+		const dispObj = "/tmp/_msc_dispatch.o";
+		writeOutput(dispFile, dispatcher);
+		const dispCode = compileCFile(dispFile, dispObj, "", opts.mode, opts.ccCompiler);
+		if (dispCode !== 0) {
+			console.log(error("error") + ": compile failed for dispatcher " + dim("(exit " + dispCode + ")"));
+			exit(1);
+		}
+		oFiles = appendFlag(oFiles, dispObj);
 	}
-	oFiles = appendFlag(oFiles, dispObj);
 
-	// Link all .o files into final binary
+	// Link all .o files into final binary (or shared library for HCR)
 	const linkFlags = cliLinkFlags(allFlags, opts);
 	if (opts.verbose) verboseLog("linking → " + outBinary);
 	const linkCode = linkObjects(oFiles, outBinary, linkFlags, opts.mode, opts.ccCompiler);
@@ -543,9 +550,10 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const nativeCtx = createTransformContextWithChecker(ctx);
 		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
-		const analyzed = analyzeProgram(nativeTransformed, ctx);
+		const hcrResult = opts.isHcr ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
+		const analyzed = analyzeProgram(hcrResult, ctx);
 		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
-		const cCode = generateCModule(nativeLowered, ctx, modPath, protoAliveSet, true);
+		const cCode = generateCModule(nativeLowered, ctx, modPath, protoAliveSet, true, opts.isHcr);
 
 		allFlags = appendFlag(allFlags, ctx.compilerFlags);
 

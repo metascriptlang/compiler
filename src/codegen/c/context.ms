@@ -480,6 +480,7 @@ export interface CGen {
 	initProc: CProc;           // shared CProc for Init000 (persistent temp counter)
 	aliveSet: AliveSet;        // global DCE reachability set (empty = no filtering)
 	isTestBuild: boolean;      // true when compiling via cmdTest (assert = non-fatal)
+	isHcr: boolean;            // true when --hcr (fixed Init000 names for dlsym)
 	testEntries: TestEntry[];  // collected test wrapper functions (test builds only)
 	nextTestId: number;        // unique ID for test wrapper function names
 }
@@ -513,6 +514,7 @@ export function createCGen(ctx: CheckerContext, modulePath: string): CGen {
 		initProc: createProc("__init000", null as unknown as Type),
 		aliveSet: createAliveSet(),
 		isTestBuild: false,
+		isHcr: false,
 		testEntries: [],
 		nextTestId: 0,
 	};

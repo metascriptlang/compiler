@@ -35,6 +35,7 @@ export interface CliOptions {
 	passL: string;
 	emitC: boolean;
 	fmtCheck: boolean;
+	isHcr: boolean;
 }
 
 // -- Argument parsing --
@@ -64,6 +65,7 @@ export function parseArgs(): CliOptions {
 		passL: "",
 		emitC: false,
 		fmtCheck: false,
+		isHcr: false,
 	};
 
 	if (argv.length < 2) return opts;
@@ -131,6 +133,8 @@ export function parseArgs(): CliOptions {
 			opts.passL = opts.passL + arg.slice(8, arg.length);
 		} else if (arg === "--check") {
 			opts.fmtCheck = true;
+		} else if (arg === "--hcr") {
+			opts.isHcr = true;
 		} else if (arg === "--emit=c") {
 			opts.emitC = true;
 		} else if (arg === "--colors=on") {
