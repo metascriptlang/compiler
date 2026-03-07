@@ -97,22 +97,27 @@ export function liftHcrState(program: Node, ctx: TransformContext): Node {
 	// Include hcr.h
 	emitNodes.push(makeEmitStmt("/*INCLUDESECTION*/#include \"hcr.h\"", loc));
 
-	// GlobalState struct typedef
-	let structDef = "/*TYPESECTION*/typedef struct {";
+	// GlobalState struct typedef (with _struct_hash for reload safety)
+	let structDef = "/*TYPESECTION*/typedef struct { uint64_t _struct_hash;";
 	for (let i = 0; i < globals.length; i += 1) {
 		structDef = structDef + " " + typeToCStr(globals[i].declType) + " " + globals[i].name + ";";
 	}
 	structDef = structDef + " } _GlobalState;";
 	emitNodes.push(makeEmitStmt(structDef, loc));
 
+	// Structural hash of GlobalState layout (djb2 over field names + types)
+	const structHash = computeStructHash(globals);
+	emitNodes.push(makeEmitStmt("#define _MS_STRUCT_HASH " + structHash + "ULL", loc));
+
 	// Global pointer variable
 	emitNodes.push(makeEmitStmt("_GlobalState* _ms_gs;", loc));
 
 	// Handover function — allocates GlobalState on first load, reuses on reload.
-	// Init000 handles field initialization via assignments in program statements.
-	// Dispatcher calls: _ms_gs = _hcr_handover(old); Init000();
+	// On reload, checks structural hash to detect incompatible layout changes.
 	const handover = "__attribute__((visibility(\"default\"))) void* _hcr_handover(void* old_state) { "
-		+ "if (old_state == NULL) { _ms_gs = (_GlobalState*)calloc(1, sizeof(_GlobalState)); return _ms_gs; } "
+		+ "if (old_state == NULL) { _ms_gs = (_GlobalState*)calloc(1, sizeof(_GlobalState)); _ms_gs->_struct_hash = _MS_STRUCT_HASH; return _ms_gs; } "
+		+ "if (((_GlobalState*)old_state)->_struct_hash != _MS_STRUCT_HASH) { "
+		+ "fprintf(stderr, \"HCR: incompatible state layout change, full restart required\\n\"); return ((void*)0); } "
 		+ "_ms_gs = (_GlobalState*)old_state; return _ms_gs; }";
 	emitNodes.push(makeEmitStmt(handover, loc));
 
@@ -255,4 +260,18 @@ function typeToCStr(t: Type): string {
 		TypeKind.Ptr => "void*",
 		_ => "void*",
 	};
+}
+
+// ===== Structural Hash =====
+// djb2 hash over field "name:ctype;" pairs. Detects layout changes at reload time.
+
+function computeStructHash(globals: HcrGlobal[]): number {
+	let hash = 5381;
+	for (let i = 0; i < globals.length; i += 1) {
+		const s = globals[i].name + ":" + typeToCStr(globals[i].declType) + ";";
+		for (let j = 0; j < s.length; j += 1) {
+			hash = (hash * 33 + s.charCodeAt(j)) % 4294967296;
+		}
+	}
+	return hash;
 }
