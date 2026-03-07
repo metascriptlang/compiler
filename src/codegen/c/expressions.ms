@@ -16,7 +16,7 @@ import {
 	UpdateExprData, NewExprData, MoveExprData, SpreadExprData,
 	ExprStmtData, HiddenStdConvData, HiddenDerefData,
 } from "../../ast/node";
-import { Type, TypeKind, isIntegerType, getProperty, getMinArity } from "../../checker/types";
+import { Type, TypeKind, isIntegerType, getProperty, getMinArity, isInterfaceType } from "../../checker/types";
 import { SymbolKind } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, Builder, CSection,
@@ -172,7 +172,12 @@ function discoverExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[],
 		return;
 	}
 	if (kind === NodeKind.NullLiteral) {
-		results.push(cNullLiteral());
+		if (node.nodeType !== null && isInterfaceType(node.nodeType)) {
+			const cType = getTypeDesc(g, node.nodeType);
+			results.push("(" + cType + "){0}");
+		} else {
+			results.push(cNullLiteral());
+		}
 		return;
 	}
 	if (kind === NodeKind.Identifier) {
@@ -566,12 +571,12 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 			}
 			if (varIdx >= 0) {
 				const varName = unionName + "_v" + intToString(varIdx);
-				results.push("(" + unionName + "){ .v" + intToString(varIdx) + " = (" + varName + ")" + expr + " }");
+				results.push("(" + unionName + "){ ._tag = " + intToString(varIdx) + ", .v" + intToString(varIdx) + " = (" + varName + ")" + expr + " }");
 				return;
 			}
 			// Empty object literal (e.g., {} as DocData for Nil/HardLine variants)
 			if (d.asExpr !== null && d.asExpr.kind === NodeKind.ObjectLiteral) {
-				results.push("(" + unionName + "){0}");
+				results.push("(" + unionName + "){ ._tag = -1 }");
 				return;
 			}
 		}

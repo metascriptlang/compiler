@@ -17,8 +17,8 @@ import {
 	unknownType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType,
 	createPrimitive, createArray, createFunction, createObject,
 	createResult, createTypeRef, createUnion, createGenericParam, createDistinct,
-	createSizedArray, createSpan, createBorrow,
-	setMinArity, typeNameOf, assignType,
+	createSizedArray, createSpan, createBorrow, createPtr, createRef, createMaybeType,
+	setMinArity, typeNameOf, assignType, isInterfaceType, unwrapRef,
 } from "./types";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, lookupSymbol, lookupLocal, defineSymbol, makeSymbol, openScope, closeScope, SymbolState, hasFlag, setFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError } from "./context";
@@ -104,13 +104,31 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 			}
 			ui += 1;
 		}
+		// T | null where T is interface → Maybe<T> (Nim Option[T] parity)
+		if (members.length === 2) {
+			if (isInterfaceType(members[0]) && members[1] !== null && members[1].kind === TypeKind.Null) {
+				return createMaybeType(members[0]);
+			}
+			if (members[0] !== null && members[0].kind === TypeKind.Null && isInterfaceType(members[1])) {
+				return createMaybeType(members[1]);
+			}
+			// Ref<T> | null or Ptr<T> | null → bare pointer (already nullable in C)
+			const m0kind = members[0] !== null ? members[0].kind : TypeKind.Unknown;
+			const m1kind = members[1] !== null ? members[1].kind : TypeKind.Unknown;
+			if ((m0kind === TypeKind.Ref || m0kind === TypeKind.Ptr) && m1kind === TypeKind.Null) {
+				return members[0];
+			}
+			if (m0kind === TypeKind.Null && (m1kind === TypeKind.Ref || m1kind === TypeKind.Ptr)) {
+				return members[1];
+			}
+		}
 		if (members.length > 0) return createUnion(members);
 	}
 
 	// Object literal type: { field: Type, ... }
 	if (charAt(trimmed, 0) === "{" && trimmed.endsWith("}")) {
 		const inner = trimStr(sliceStr(trimmed, 1, trimmed.length - 1));
-		if (inner === "") return createObject("", [], [], false);
+		if (inner === "") return createObject("", [], [], true);
 		const fields = splitTopLevel(inner, ",");
 		const names: string[] = [];
 		const types: Type[] = [];
@@ -128,7 +146,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 			}
 			fi = fi + 1;
 		}
-		return createObject("", names, types, false);
+		return createObject("", names, types, true);
 	}
 
 	// Check for array suffix [] or [ ] (token-joined form from captureOptionalType)
@@ -171,6 +189,12 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 		}
 		if (baseName === "Borrow" && args.length === 1) {
 			return createBorrow(resolveAnnotation(args[0], ctx));
+		}
+		if (baseName === "Ptr" && args.length === 1) {
+			return createPtr(resolveAnnotation(args[0], ctx));
+		}
+		if (baseName === "Ref" && args.length === 1) {
+			return createRef(resolveAnnotation(args[0], ctx));
 		}
 		if (baseName === "Map" && args.length === 2) {
 			const t = createPrimitive(TypeKind.Map);
@@ -552,6 +576,20 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 		closeScope(ctx.table);
 	}
 
+	// Nim parity: self-referential value fields → auto-promote to Ref<T>
+	// C cannot embed struct T by value inside itself (infinite size).
+	// Nim requires explicit `ref T` and errors otherwise. We auto-promote with a warning.
+	let fi = 0;
+	while (fi < fieldTypes.length) {
+		const ft = fieldTypes[fi];
+		if (ft !== null && isInterfaceType(ft) && ft.typeName === d.interfaceName) {
+			fieldTypes[fi] = createRef(ft);
+			const fieldName = fi < d.interfaceFields.length ? d.interfaceFields[fi] : "?";
+			addError(ctx, "warning: self-referential field '" + fieldName + "' in '" + d.interfaceName + "' auto-promoted to Ref<" + d.interfaceName + ">", node.location.line, 0);
+		}
+		fi += 1;
+	}
+
 	const ifaceType = createObject(d.interfaceName, d.interfaceFields, fieldTypes, true);
 	assignType(sym.symbolType, ifaceType);
 	node.nodeType = sym.symbolType;
@@ -662,12 +700,14 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 		closeScope(ctx.table);
 	}
 
-	const classType = createObject(d.className, memberNames, memberTypes, false);
+	const classType = createObject(d.className, memberNames, memberTypes, true);
 	// Preserve typeExtra (base class info set by collectPass)
-	if (sym.symbolType.typeExtra !== null) {
-		classType.typeExtra = sym.symbolType.typeExtra;
+	// sym.symbolType is Ref(Object) from collectPass — update the inner Object, not the Ref
+	const inner = unwrapRef(sym.symbolType);
+	if (inner.typeExtra !== null) {
+		classType.typeExtra = inner.typeExtra;
 	}
-	assignType(sym.symbolType, classType);
+	assignType(inner, classType);
 	node.nodeType = sym.symbolType;
 }
 
@@ -950,4 +990,40 @@ test "fnDefaults on FunctionDeclData" {
 	assert d.fnDefaults.length === 2;
 	assert d.fnDefaults[0] === "";
 	assert d.fnDefaults[1] === "42";
+}
+
+// ===== Nullable Pointer Resolution Tests =====
+
+test "Ref<number> | null resolves to bare Ref" {
+	const t = resolveWith("Ref<number> | null");
+	assert t.kind === TypeKind.Ref;
+	assert t.typeReturn.kind === TypeKind.Number;
+}
+
+test "null | Ref<string> resolves to bare Ref" {
+	const t = resolveWith("null | Ref<string>");
+	assert t.kind === TypeKind.Ref;
+	assert t.typeReturn.kind === TypeKind.String;
+}
+
+test "Ptr<number> | null resolves to bare Ptr" {
+	const t = resolveWith("Ptr<number> | null");
+	assert t.kind === TypeKind.Ptr;
+	assert t.typeReturn.kind === TypeKind.Number;
+}
+
+test "null | Ptr<boolean> resolves to bare Ptr" {
+	const t = resolveWith("null | Ptr<boolean>");
+	assert t.kind === TypeKind.Ptr;
+	assert t.typeReturn.kind === TypeKind.Boolean;
+}
+
+test "string | null stays Union (not pointer)" {
+	const t = resolveWith("string | null");
+	assert t.kind === TypeKind.Union;
+}
+
+test "number | null stays Union (not pointer)" {
+	const t = resolveWith("number | null");
+	assert t.kind === TypeKind.Union;
 }

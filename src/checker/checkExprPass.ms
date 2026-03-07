@@ -19,7 +19,7 @@ import {
 	voidType, nullType, errorType,
 	createArray, createSpan, createFunction, createTypeRef, substituteType, instantiateGeneric,
 	isNumeric, isStringType, isCallable, getReturnType, getElementType, getProperty, sizeOfType,
-	typeNameOf,
+	typeNameOf, unwrapRef,
 	unifyType, createUnifyBindings, hasGenericParams,
 	getMinArity,
 } from "./types";
@@ -255,7 +255,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			for (const arg of d.newArguments) {
 				checkExpr(ctx, arg, null as unknown as Type);
 			}
-			if (calleeType.kind === TypeKind.Object) {
+			if (calleeType.kind === TypeKind.Object || calleeType.kind === TypeKind.Ref) {
 				calleeType;
 			} else {
 				unknownType();
@@ -795,18 +795,21 @@ function intToString(n: number): string {
 // Returns depth (1 = direct parent, 2 = grandparent), or -1 if not in chain.
 function inheritanceDepth(sourceType: Type, targetType: Type, ctx: CheckerContext): number {
 	if (sourceType === null || targetType === null) return -1;
-	if (sourceType.typeName === "" || targetType.typeName === "") return -1;
-	let current = sourceType;
+	// Unwrap Ref<Object> to access inner Object's typeName/typeExtra
+	const src = unwrapRef(sourceType);
+	const tgt = unwrapRef(targetType);
+	if (src.typeName === "" || tgt.typeName === "") return -1;
+	let current = src;
 	let depth = 0;
 	while (current !== null) {
 		depth = depth + 1;
 		if (current.typeExtra === null) return -1;
 		if (current.typeExtra.typeName === "") return -1;
-		if (current.typeExtra.typeName === targetType.typeName) return depth;
+		if (current.typeExtra.typeName === tgt.typeName) return depth;
 		const baseSym = lookupSymbol(ctx.table, current.typeExtra.typeName);
 		if (baseSym === null) return -1;
 		if (baseSym.symbolKind !== SymbolKind.Class) return -1;
-		current = baseSym.symbolType;
+		current = unwrapRef(baseSym.symbolType);
 		if (depth > 20) return -1;
 	}
 	return -1;
@@ -870,18 +873,10 @@ function resolveOverloadIdxWithInheritance(ctx: CheckerContext, candidates: Type
 
 // ===== Member Expression + Extension Method Resolution =====
 
-// Check if a type maps to a pointer in C (class, ref, ptr — NOT interface)
+// Check if a type maps to a pointer in C (Ref, Ptr, Borrow — NOT Object/interface)
 function isPointerInC(t: Type, ctx: CheckerContext): boolean {
 	if (t === null) return false;
-	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr || t.kind === TypeKind.Borrow) return true;
-	if (t.kind !== TypeKind.Object) return false;
-	// Interface = value type in C, Class = pointer type
-	const isInterface = (t.typeFlags & 1) !== 0;
-	if (isInterface) return false;
-	if (t.typeName === "") return false;
-	const sym = lookupSymbol(ctx.table, t.typeName);
-	if (sym === null) return false;
-	return sym.symbolKind === SymbolKind.Class;
+	return t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr || t.kind === TypeKind.Borrow;
 }
 
 function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
@@ -1084,11 +1079,18 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 	for (const c of d.matchCases) {
 		const cd = c.data as MatchCaseData;
 		for (const p of cd.casePatterns) {
-			if (p.kind === NodeKind.Identifier) { hasWildcard = true; }
-			if (p.kind === NodeKind.MemberExpr) {
-				const pmd = p.data as MemberExprData;
-				coveredMembers.push(pmd.property);
-				// Check the pattern — triggers enum MemberExpr → Identifier rewrite
+			if (p.kind === NodeKind.Identifier) {
+				// Wildcard/binding — Nim's else has no pattern nodes at all.
+				// We set nodeType for validator; no symbol needed (never referenced).
+				hasWildcard = true;
+				p.nodeType = discType;
+			} else {
+				// Extract enum member name before checkExpr (which rewrites MemberExpr → Identifier)
+				if (p.kind === NodeKind.MemberExpr) {
+					const pmd = p.data as MemberExprData;
+					coveredMembers.push(pmd.property);
+				}
+				// All pattern expressions: semConstExpr + fitNode (Nim parity)
 				checkExpr(ctx, p, discType);
 			}
 		}

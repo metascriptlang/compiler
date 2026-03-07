@@ -158,15 +158,9 @@ export function lookupExport(table: SymbolTable, name: string): Symbol {
 	return null as unknown as Symbol;
 }
 
-// isPointerType — used by destructorLifting and analyzer/classify for RC classification
+// isPointerType — Ref/Ptr are pointer types, Objects are always value types
 export function isPointerType(t: Type, table: SymbolTable): boolean {
-	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) return true;
-	if (t.kind !== TypeKind.Object || t.typeName === "") return false;
-	// Only classes are pointer types (heap-allocated, RC'd)
-	// Interfaces are value-type structs — NOT pointers (D1 fix)
-	const sym = lookupSymbol(table, t.typeName);
-	if (sym === null) return false;
-	return sym.symbolKind === SymbolKind.Class;
+	return t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr;
 }
 
 // ===== Tests =====

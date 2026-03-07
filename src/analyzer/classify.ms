@@ -6,7 +6,7 @@
 // The RcInfo result carries enough info to emit the correct AST calls.
 
 import { Type, TypeKind, isPrimitiveKind, hasDestructor, isInterfaceType, createPrimitive, createObject, createArray, createFunction, numberType, stringType, booleanType, voidType, nullType, unknownType } from "../checker/types";
-import { lookupSymbol, SymbolKind, isPointerType as isPointerTypeBase, Symbol, hasFlag, SymbolFlag } from "../checker/symbol";
+import { lookupSymbol, SymbolKind, Symbol, hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, createTransformContext } from "../transform/context";
 import { NodeKind } from "../ast/node";
 
@@ -55,13 +55,6 @@ function makeRcInfo(kind: RcKind, typeName: string, destroy: string, copy: strin
 	return { rcKind: kind, typeName, needsCleanup: true, destroyFn: destroy, copyFn: copy, wasMovedFn: wasMoved, sinkFn: sink };
 }
 
-// ===== Pointer Type Wrapper (adapts SymbolTable-based helper to TransformContext) =====
-
-function isPointerType(t: Type, ctx: TransformContext): boolean {
-	if (ctx.checkerCtx === null) return false;
-	return isPointerTypeBase(t, ctx.checkerCtx.table);
-}
-
 // ===== Array Subclassification =====
 
 function classifyArray(t: Type, ctx: TransformContext): RcInfo {
@@ -81,9 +74,7 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 // ===== Sub-classifiers for complex arms =====
 
 function classifyObject(t: Type, ctx: TransformContext): RcInfo {
-	if (isPointerType(t, ctx)) {
-		return makeRcInfo(RcKind.Ref, t.typeName, "msDecref", "msIncref", "msPtrWasMoved", "");
-	}
+	// Objects are always value types now — Ref<Object> is handled by TypeKind.Ref arm
 	if (t.typeName !== "") {
 		// Implementation parity: only generate RC hooks if type has a destructor
 		// Value-type interfaces without managed fields get noRcInfo (no cleanup needed)
@@ -140,7 +131,12 @@ export function classifyType(t: Type, ctx: TransformContext): RcInfo {
 		TypeKind.Object => classifyObject(t, ctx),
 		TypeKind.TypeReference => classifyTypeRef(t, ctx),
 		TypeKind.Distinct => { if (t.typeReturn !== null) { classifyType(t.typeReturn, ctx) } else { noRcInfo() } },
-		TypeKind.Union | TypeKind.Result => makeRcInfo(RcKind.Named, "", "", "", "", ""),
+		TypeKind.Union => {
+			if (t.typeName !== "" && hasDestructor(t)) {
+				makeRcInfo(RcKind.Named, t.typeName, t.typeName + "_destroy", t.typeName + "_copy", t.typeName + "_wasMoved", t.typeName + "_sink")
+			} else { noRcInfo() }
+		},
+		TypeKind.Result => makeRcInfo(RcKind.Named, "", "", "", "", ""),
 		TypeKind.Tuple => {
 			// Check if any element needs RC
 			let hasRc = false;

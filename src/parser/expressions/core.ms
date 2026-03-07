@@ -293,9 +293,8 @@ function parsePrimary(state: ParserState): ExprResult {
 				tryArg: arg, hasCatch: true, catchVal: catchExpr,
 			}, token));
 		}
-		const dummy = createNode(NodeKind.Identifier, { name: "" }, token);
 		return Result.ok(createNode(NodeKind.TryExpr, {
-			tryArg: arg, hasCatch: false, catchVal: dummy,
+			tryArg: arg, hasCatch: false, catchVal: null as unknown as Node,
 		}, token));
 	}
 

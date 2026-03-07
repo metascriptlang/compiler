@@ -1,6 +1,6 @@
 import { Node, NodeKind, SourceLocation, createNodeAt, ProgramData, FunctionDeclData, ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind } from "../ast/node";
 import { extractDecoratorInfo } from "./decoratorHelpers";
-import { Type, TypeKind, unknownType, emptyType, createObject, createEnum, createTypeRef, createFunction } from "./types";
+import { Type, TypeKind, unknownType, emptyType, createObject, createEnum, createTypeRef, createFunction, createRef } from "./types";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, addError, findExportedSymbol, findModuleExports, ExtensionMethod, registerExtension, isStaticExtensionFlag, getExtTypeName, findExtension } from "./context";
 import { isGlobalImport } from "./prelude";
@@ -194,11 +194,12 @@ function collectClass(ctx: CheckerContext, node: Node): void {
 			}
 		}
 	}
-	const classType = createObject(d.className, memberNames, memberTypes, false);
+	const innerType = createObject(d.className, memberNames, memberTypes, true);
 	// Store base class info for inheritance (used by destructor lifting)
 	if (d.classExtends !== "") {
-		classType.typeExtra = createTypeRef(d.classExtends);
+		innerType.typeExtra = createTypeRef(d.classExtends);
 	}
+	const classType = createRef(innerType);
 	const sym = makeSymbol(d.className, SymbolKind.Class, classType, false);
 	defineOrError(ctx, sym, node);
 }

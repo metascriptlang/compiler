@@ -270,7 +270,7 @@ export function forEachChild(node: Node, cb: ChildVisitor): void {
 		NodeKind.TryExpr => {
 			const d = node.data as TryExprData;
 			cb(d.tryArg);
-			cb(d.catchVal);
+			if (d.hasCatch) { cb(d.catchVal); }
 		},
 		NodeKind.AwaitExpr => {
 			const d = node.data as AwaitExprData;

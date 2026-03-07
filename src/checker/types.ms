@@ -213,6 +213,32 @@ export function createUnion(types: Type[]): Type {
 	return t;
 }
 
+// Maybe<T> — Nim Option[T] parity. Wrapper struct { value: T, present: bool }.
+// Only for interfaces. Cached by inner type name to avoid duplicates.
+const _maybeCache: Type[] = [];
+const _maybeCacheNames: string[] = [];
+
+export function createMaybeType(inner: Type): Type {
+	// Pointer types are inherently nullable — no wrapper needed (Nim parity: Option[ref T] = ref T)
+	if (inner.kind === TypeKind.Ref || inner.kind === TypeKind.Ptr) return inner;
+	const name = inner.typeName;
+	let i = 0;
+	while (i < _maybeCacheNames.length) {
+		if (_maybeCacheNames[i] === name) return _maybeCache[i];
+		i += 1;
+	}
+	const t = emptyType();
+	t.kind = TypeKind.Object;
+	t.typeName = "Maybe_" + name;
+	t.typeNames = ["value", "present"];
+	t.typeChildren = [inner, booleanType()];
+	t.typeFlags = 1 | 16;   // isInterface (bit 0) + isMaybe (bit 4)
+	t.typeReturn = inner;    // store inner type for unwrapping
+	_maybeCache.push(t);
+	_maybeCacheNames.push(name);
+	return t;
+}
+
 export function createRef(inner: Type): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Ref;
@@ -396,8 +422,23 @@ export function isInterfaceType(t: Type): boolean {
 
 export function isClassType(t: Type): boolean {
 	if (t === null) return false;
-	if (t.kind !== TypeKind.Object) return false;
-	return (t.typeFlags & 1) === 0 && t.typeName !== "";
+	return t.kind === TypeKind.Ref && t.typeReturn !== null && t.typeReturn.kind === TypeKind.Object;
+}
+
+export function isMaybeType(t: Type): boolean {
+	if (t === null) return false;
+	return (t.typeFlags & 16) !== 0;
+}
+
+export function unwrapMaybeType(t: Type): Type {
+	return t.typeReturn;
+}
+
+// unwrapRef — unwrap Ref<T> or Ptr<T> to get inner type (like Nim's skipTypes)
+export function unwrapRef(t: Type): Type {
+	if (t === null) return t;
+	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) return t.typeReturn;
+	return t;
 }
 
 // ===== Type Size Estimation (Nim parity: getSize in ccgutils) =====
@@ -649,6 +690,10 @@ export function getElementType(t: Type): Type {
 }
 
 export function getProperty(t: Type, name: string): Type {
+	// Unwrap Ref/Ptr to access inner Object's properties (class types are Ref<Object>)
+	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) {
+		if (t.typeReturn !== null) return getProperty(t.typeReturn, name);
+	}
 	if (t.kind === TypeKind.Object) {
 		let i = 0;
 		for (const propName of t.typeNames) {
@@ -701,6 +746,10 @@ export function isPrimitiveKind(kind: TypeKind): boolean {
 // typeNameOf — maps Type to its canonical string name (used by checker + transforms)
 export function typeNameOf(t: Type): string {
 	if (t.kind === TypeKind.Object) return t.typeName;
+	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) {
+		if (t.typeReturn !== null) return typeNameOf(t.typeReturn);
+		return "";
+	}
 	return match (t.kind) {
 		TypeKind.String => "string",
 		TypeKind.Number => "number",
@@ -1158,4 +1207,55 @@ test "alignOfType 32-bit" {
 	assert alignOfType(createPrimitive(TypeKind.Ref)) === 4;
 	assert alignOfType(createPrimitive(TypeKind.Int32)) === 4;
 	setTargetSizes(8, 8);
+}
+
+// ===== Maybe<T> + Nullable Pointer Tests =====
+
+test "createMaybeType for interface creates wrapper" {
+	const inner = createObject("Token", ["kind"], [numberType()], true);
+	const maybe = createMaybeType(inner);
+	assert maybe.kind === TypeKind.Object;
+	assert maybe.typeName === "Maybe_Token";
+	assert maybe.typeNames.length === 2;
+	assert maybe.typeNames[0] === "value";
+	assert maybe.typeNames[1] === "present";
+	assert isMaybeType(maybe);
+	assert unwrapMaybeType(maybe).typeName === "Token";
+}
+
+test "createMaybeType for Ref returns bare pointer" {
+	const refType = createRef(createObject("Foo", [], [], true));
+	const result = createMaybeType(refType);
+	// Should return the Ref type unchanged — no wrapper
+	assert result.kind === TypeKind.Ref;
+	assert result === refType;
+	assert !isMaybeType(result);
+}
+
+test "createMaybeType for Ptr returns bare pointer" {
+	const ptrType = createPtr(createObject("Bar", [], [], true));
+	const result = createMaybeType(ptrType);
+	// Should return the Ptr type unchanged — no wrapper
+	assert result.kind === TypeKind.Ptr;
+	assert result === ptrType;
+	assert !isMaybeType(result);
+}
+
+test "isMaybeType false for Ref" {
+	assert !isMaybeType(createRef(numberType()));
+}
+
+test "isMaybeType false for Ptr" {
+	assert !isMaybeType(createPtr(numberType()));
+}
+
+test "isMaybeType false for plain interface" {
+	assert !isMaybeType(createObject("Token", [], [], true));
+}
+
+test "createMaybeType caches by name" {
+	const inner = createObject("Cached", [], [], true);
+	const m1 = createMaybeType(inner);
+	const m2 = createMaybeType(inner);
+	assert m1 === m2;
 }

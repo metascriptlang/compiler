@@ -171,8 +171,8 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	}
 	let name = mangledFunctionName(sym, d.fnName, ovIdx);
 
-	// Skip if already declared
-	if (nameSetHas(g.declaredProcs, name)) return;
+	// Track whether we already emitted the proto or the body
+	const alreadyDeclared = nameSetHas(g.declaredProcs, name);
 	nameSetAdd(g.declaredProcs, name);
 
 	// Determine C return type — MUST have nodeType (Decisive Checker mandate)
@@ -206,10 +206,12 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	const isDrcHook = isDrcLifecycleName(d.fnName);
 	const prefix = (isExported || isExternFn || isMain || isDrcHook) ? "" : "static ";
 
-	// Emit prototype to ProcHeaders — NRVO functions return void
+	// Emit prototype to ProcHeaders — NRVO functions return void (skip if already forward-declared)
 	const actualRetType = nrvo ? "void" : cRetType;
 	const proto = prefix + actualRetType + " " + name + "(" + paramList + ")";
-	addLine(sec(g, CSection.ProcHeaders), proto + ";");
+	if (!alreadyDeclared) {
+		addLine(sec(g, CSection.ProcHeaders), proto + ";");
+	}
 
 	// Extern functions: prototype only, no body
 	if (isExternFn) return;

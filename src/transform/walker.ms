@@ -285,7 +285,7 @@ export function mapChildren(node: Node, f: Visitor): void {
 		NodeKind.TryExpr => {
 			const d = node.data as TryExprData;
 			d.tryArg = f(d.tryArg);
-			d.catchVal = f(d.catchVal);
+			if (d.hasCatch) { d.catchVal = f(d.catchVal); }
 		},
 		NodeKind.AwaitExpr => {
 			const d = node.data as AwaitExprData;

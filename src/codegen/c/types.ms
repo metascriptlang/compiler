@@ -320,7 +320,6 @@ export function getSimpleTypeDesc(t: Type): string {
 export function isPointerType(t: Type): boolean {
 	if (t === null) return false;
 	return match (t.kind) {
-		TypeKind.Object => { !isInterfaceType(t) },
 		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow => true,
 		_ => false,
 	};
@@ -336,7 +335,6 @@ export function needsRC(t: Type): boolean {
 		TypeKind.Array => true,
 		TypeKind.SizedArray => needsRC(t.typeReturn), // Recurse for nested RC
 		TypeKind.Span => false, // Span is non-owning
-		TypeKind.Object => { !isInterfaceType(t) },
 		TypeKind.Ref => true,
 		TypeKind.Map | TypeKind.Set => true,
 		TypeKind.Tuple => {
@@ -551,19 +549,15 @@ function genEnumType(g: CGen, t: Type): string {
 }
 
 // ===== Object Type Generation =====
-// Handles both interfaces (value types) and classes (pointer types).
+// Objects are always value-type structs. Pointer semantics come from Ref<T>/Ptr<T> wrapping.
 
 function genObjectType(g: CGen, t: Type): string {
 	// Anonymous/structural types get hash-based names; named types get mangled names
 	const name = isAnonTypeName(t.typeName) ? anonTypeName(t) : mangle(t.typeName);
 	const key = typeKey(t);
-	const iface = isInterfaceType(t);
 
-	// For classes, the C type is a pointer to the struct
-	const cTypeName = match (iface) {
-		true => name,
-		_ => name + "*",
-	};
+	// Always value type — Ref<Object> adds the * via TypeKind.Ref path
+	const cTypeName = name;
 	typeCacheSet(g.typeCache, key, cTypeName);
 
 	// Ensure forward declaration
@@ -580,9 +574,9 @@ function genObjectType(g: CGen, t: Type): string {
 	const fieldTypes: string[] = [];
 	for (let i = 0; i < t.typeNames.length; i += 1) {
 		let ft = (i < t.typeChildren.length) ? getTypeDesc(g, t.typeChildren[i]) : "void";
-		// Self-referential fields: same interface type as containing struct → must be pointer
+		// Self-referential fields: same type as containing struct → must be pointer
 		// C cannot contain a struct by value inside itself (infinite size)
-		if (iface && ft === name) {
+		if (ft === name) {
 			ft = name + "*";
 		}
 		fieldTypes.push(ft);
@@ -697,6 +691,7 @@ function genUnionType(g: CGen, t: Type): string {
 	addLine(b, "#define " + name + "_DEFINED");
 	addLine(b, "struct " + name + " {");
 	b.indent += 1;
+	addLine(b, "int32_t _tag;");
 	addLine(b, "union {");
 	b.indent += 1;
 	vi = 0;
@@ -986,7 +981,7 @@ test "non-primitive returns empty" {
 	assert getSimpleTypeDesc(createObject("Y", [], [], true)) === "";
 }
 
-test "class is pointer" { assert isPointerType(createObject("Foo", [], [], false)); }
+test "class (Ref<Object>) is pointer" { assert isPointerType(createRef(createObject("Foo", [], [], true))); }
 
 test "interface is not pointer" { assert !isPointerType(createObject("Bar", [], [], true)); }
 
@@ -998,7 +993,7 @@ test "string needs RC" { assert needsRC(createPrimitive(TypeKind.String)); }
 
 test "array needs RC" { assert needsRC(createArray(createPrimitive(TypeKind.Number))); }
 
-test "class needs RC" { assert needsRC(createObject("Foo", [], [], false)); }
+test "class (Ref<Object>) needs RC" { assert needsRC(createRef(createObject("Foo", [], [], true))); }
 
 test "interface no RC" { assert !needsRC(createObject("Bar", [], [], true)); }
 
@@ -1052,13 +1047,13 @@ test "interface emits struct" {
 	assert types === "#ifndef Point_DEFINED\n#define Point_DEFINED\nstruct Point {\n  int32_t x;\n  int32_t y;\n};\n#endif\n\n";
 }
 
-test "class emits struct without refcount" {
+test "class (Ref<Object>) emits struct with pointer" {
 	const propNames: string[] = [];
 	propNames.push("name");
 	const propTypes: Type[] = [];
 	propTypes.push(createPrimitive(TypeKind.String));
 	const g = createCGen(null as unknown as CheckerContext, "");
-	const result = getTypeDesc(g, createObject("Person", propNames, propTypes, false));
+	const result = getTypeDesc(g, createRef(createObject("Person", propNames, propTypes, true)));
 	assert result === "Person*";
 	const types = extract(sec(g, CSection.Types));
 	assert types === "#ifndef Person_DEFINED\n#define Person_DEFINED\nstruct Person {\n  msString name;\n};\n#endif\n\n";

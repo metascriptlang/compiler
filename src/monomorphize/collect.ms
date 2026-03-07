@@ -458,7 +458,7 @@ function monoWalkForCalls(
 	if (kind === NodeKind.TryExpr) {
 		const d = node.data as TryExprData;
 		monoWalkForCalls(d.tryArg, declMap, registry, ctx);
-		monoWalkForCalls(d.catchVal, declMap, registry, ctx);
+		if (d.hasCatch) { monoWalkForCalls(d.catchVal, declMap, registry, ctx); }
 		return;
 	}
 	if (kind === NodeKind.ClassDecl) {
@@ -838,7 +838,7 @@ export function monoRewriteNode(
 	if (kind === NodeKind.TryExpr) {
 		const d = node.data as TryExprData;
 		monoRewriteNode(d.tryArg, registry, declMap, ctx);
-		monoRewriteNode(d.catchVal, registry, declMap, ctx);
+		if (d.hasCatch) { monoRewriteNode(d.catchVal, registry, declMap, ctx); }
 		return;
 	}
 	if (kind === NodeKind.ClassDecl) {
@@ -984,7 +984,7 @@ function monoCloneNode(node: Node): Node {
 	if (kind === NodeKind.ConditionalExpr) { const d = node.data as ConditionalExprData; const data: NodeData = { ternaryCondition: monoCloneNode(d.ternaryCondition), ternaryConsequent: monoCloneNode(d.ternaryConsequent), ternaryAlternate: monoCloneNode(d.ternaryAlternate) }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.SpreadExpr) { const d = node.data as SpreadExprData; const data: NodeData = { spreadArg: monoCloneNode(d.spreadArg) }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.NewExpr) { const d = node.data as NewExprData; const data: NodeData = { newCallee: monoCloneNode(d.newCallee), newArguments: cloneNodeArray(d.newArguments) }; return createNodeAt(kind, data, loc); }
-	if (kind === NodeKind.TryExpr) { const d = node.data as TryExprData; const data: NodeData = { tryArg: monoCloneNode(d.tryArg), hasCatch: d.hasCatch, catchVal: monoCloneNode(d.catchVal) }; return createNodeAt(kind, data, loc); }
+	if (kind === NodeKind.TryExpr) { const d = node.data as TryExprData; const data: NodeData = { tryArg: monoCloneNode(d.tryArg), hasCatch: d.hasCatch, catchVal: d.hasCatch ? monoCloneNode(d.catchVal) : null as unknown as Node }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.MatchExpr) { const d = node.data as MatchExprData; const data: NodeData = { matchDisc: monoCloneNode(d.matchDisc), matchCases: cloneNodeArray(d.matchCases) }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.MatchCase) { const d = node.data as MatchCaseData; const data: NodeData = { casePatterns: cloneNodeArray(d.casePatterns), caseBody: monoCloneNode(d.caseBody) }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.AwaitExpr) { const d = node.data as AwaitExprData; const data: NodeData = { awaitArg: monoCloneNode(d.awaitArg) }; return createNodeAt(kind, data, loc); }

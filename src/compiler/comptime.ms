@@ -283,7 +283,7 @@ function nodeToValue(node: Node, objHeap: RaiserObjectHeap, arrHeap: RaiserArray
 		const d = node.data as TryExprData;
 		setNode(objHeap, arrHeap, handle, "tryArg", d.tryArg);
 		setBool(objHeap, handle, "hasCatch", d.hasCatch);
-		setNode(objHeap, arrHeap, handle, "catchVal", d.catchVal);
+		if (d.hasCatch) { setNode(objHeap, arrHeap, handle, "catchVal", d.catchVal); }
 	} else if (node.kind === NodeKind.MatchExpr) {
 		const d = node.data as MatchExprData;
 		setNode(objHeap, arrHeap, handle, "matchDisc", d.matchDisc);

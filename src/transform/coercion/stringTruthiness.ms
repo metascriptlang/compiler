@@ -14,10 +14,11 @@ import {
 	IfStmtData, WhileStmtData, DoWhileStmtData,
 	ConditionalExprData, UnaryExprData, BinaryExprData,
 } from "../../ast/node";
-import { TypeKind } from "../../checker/types";
+import { TypeKind, isInterfaceType, isMaybeType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeBinary, makeMember, makeNumber } from "../util";
+import { makeBinary, makeMember, makeNumber, makeBool } from "../util";
+
 import { firstStmtKindAfter, firstExprKindAfter, stmtCountAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -53,11 +54,21 @@ function truthifyNode(node: Node): Node {
 	};
 }
 
-// Wrap a bare identifier/member condition with .length > 0
-// Only wraps if the condition is NOT already a boolean expression
+// Wrap a condition for C boolean context.
+// Type-aware checks first (Nim parity), then syntactic fallback.
 function wrapTruthiness(cond: Node): Node {
-	// Type-aware: boolean-typed nodes never need .length > 0 wrap
+	// Type-aware: boolean-typed nodes need no wrapping
 	if (cond.nodeType !== null && cond.nodeType.kind === TypeKind.Boolean) return cond;
+	// Maybe<T> in boolean context → .present
+	if (cond.nodeType !== null && isMaybeType(cond.nodeType)) {
+		return makeMember(cond, "present", cond.location);
+	}
+	// Non-nullable value types → always true (Nim: forceBool rejects objects in boolean context)
+	if (cond.nodeType !== null && isInterfaceType(cond.nodeType)) return makeBool(true, cond.location);
+	// Arrays → len > 0
+	if (cond.nodeType !== null && cond.nodeType.kind === TypeKind.Array) {
+		return makeBinary(makeMember(cond, "len", cond.location), ">", makeNumber(0, cond.location), cond.location);
+	}
 	if (isAlreadyBoolean(cond)) return cond;
 	if (cond.kind === NodeKind.Identifier || cond.kind === NodeKind.MemberExpr) {
 		const loc = cond.location;

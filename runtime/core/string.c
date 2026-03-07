@@ -32,7 +32,7 @@ static msStrPayload* reallocPayload(msStrPayload* old, int64_t newCap) {
 }
 
 /* Zeroing realloc — zeros only [oldCap+1..newCap) region.
- /* Standard reference implementation: reallocPayload0(old, contentSize(oldLen), contentSize(newLen)) */
+   Standard reference implementation: reallocPayload0(old, contentSize(oldLen), contentSize(newLen)) */
 static msStrPayload* reallocPayload0(msStrPayload* old, int64_t oldCap, int64_t newCap) {
 	msStrPayload* p = (msStrPayload*)realloc(old, msStrContentSize(newCap));
 	if (p) {

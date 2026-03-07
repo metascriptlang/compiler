@@ -24,7 +24,11 @@ export function validateTypedAST(ctx: CheckerContext, node: Node): void {
 			NodeKind.Identifier => {
 				if (node.resolvedSym === null) {
 					const d = node.data as IdentifierData;
-					addError(ctx, `Internal Error: un-resolved identifier '${d.name}' at line ${node.location.line}`, node.location.line, node.location.column);
+					// Skip match wildcard/binding patterns — Nim's else has no pattern node,
+					// ours has an Identifier with nodeType set but no symbol (never referenced).
+					if (node.nodeType !== null) {} else {
+						addError(ctx, `Internal Error: un-resolved identifier '${d.name}' at line ${node.location.line}`, node.location.line, node.location.column);
+					}
 				}
 			},
 			NodeKind.CallExpr => {

@@ -18,12 +18,12 @@
 //
 // Reference compiler: parser.zig:7162 isOperatorName, lexer.zig:422 scanBacktick
 
-import { Node, NodeKind, BinaryExprData, IdentifierData, SourceLocation, ProgramData } from "../../ast/node";
+import { Node, NodeKind, BinaryExprData, IdentifierData, TypeAssertionData, SourceLocation, ProgramData } from "../../ast/node";
 import { TransformContext, PendingTupleOp } from "../context";
 import { walkNode } from "../walker";
-import { makeIdent, makeCall, makeUnary } from "../util";
+import { makeIdent, makeCall, makeUnary, makeBool, makeMember } from "../util";
 import { lookupSymbol } from "../../checker/symbol";
-import { Type, TypeKind, typeNameOf, tupleTypeName, createFunction, booleanType } from "../../checker/types";
+import { Type, TypeKind, typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType } from "../../checker/types";
 import { findExtension, ExtensionMethod } from "../../checker/context";
 
 // ===== Type Resolution =====
@@ -92,15 +92,25 @@ function derivedBaseOp(opName: string): string {
 	};
 }
 
+// ===== Null Detection =====
+
+// Recursively unwrap TypeAssertion to detect null expressions.
+// `null as unknown as Type` → TypeAssertion(TypeAssertion(NullLiteral, "unknown"), "Type")
+export function isNullExpr(node: Node): boolean {
+	if (node.kind === NodeKind.NullLiteral) return true;
+	if (node.kind === NodeKind.TypeAssertion) return isNullExpr((node.data as TypeAssertionData).asExpr);
+	return false;
+}
+
 // ===== Operator Resolution =====
 
 // Check if a type is a value-type object (interface) — candidate for auto-generated ==.
+// Excludes Maybe<T> types which need special null comparison handling.
 function isValueObject(t: Type): boolean {
 	if (t === null) return false;
 	if (t.kind !== TypeKind.Object) return false;
-	if (t.typeName === "") return false;
-	// isInterface flag is bit 0 of typeFlags
-	return (t.typeFlags & 1) !== 0;
+	if (isMaybeType(t)) return false;
+	return t.typeName !== "";
 }
 
 // Check if a base operator has an implementation for a given type.
@@ -211,8 +221,23 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	// 2. Built-in types use native C operators — no rewrite needed.
 	if (isBuiltinType(typeName)) return node;
 
-	// 3. Null comparisons — value types can't be nil (Nim: objects != nil is type error).
-	if (d.left.kind === NodeKind.NullLiteral || d.right.kind === NodeKind.NullLiteral) return node;
+	// 3. Null comparisons on non-nullable value types → constant bool
+	// Nim parity: objects can't be nil (sigmatch.nim:typeRel, system.nim:1452-1457)
+	const hasNullLeft = isNullExpr(d.left);
+	const hasNullRight = isNullExpr(d.right);
+	if (hasNullLeft || hasNullRight) {
+		const valueType = hasNullLeft ? resolveType(ctx, d.right) : leftType;
+		if (valueType !== null && isValueObject(valueType)) {
+			return makeBool(opName === "!=", loc);
+		}
+		// Maybe<T>: x !== null → x.present, x === null → !x.present
+		if (valueType !== null && isMaybeType(valueType)) {
+			const nonNullSide = hasNullLeft ? d.right : d.left;
+			const member = makeMember(nonNullSide, "present", loc);
+			if (opName === "!=") return member;
+			return makeUnary("!", member, loc);
+		}
+	}
 
 	// 4. Derived operators (reference: system/reference comparisons templates).
 	//    != → not(==), > → swap(<), >= → swap(<=)
@@ -260,7 +285,7 @@ export function lowerOperators(program: Node, ctx: TransformContext): Node {
 // ===== Tests =====
 
 import { createContext, createExtensionRegistry, registerExtension } from "../../checker/context";
-import { createObject, createFunction, createTuple, unknownType, numberType, stringType, booleanType } from "../../checker/types";
+import { createObject, createFunction, createTuple, createRef, createPtr, createMaybeType, unknownType, numberType, stringType, booleanType } from "../../checker/types";
 import { Symbol, defineSymbol, makeSymbol, SymbolKind, createSymbolTable } from "../../checker/symbol";
 import { createTransformContext, createTransformContextWithChecker } from "../context";
 import { parseInput, getStmts, firstExprKind, firstCallArgCount } from "../testUtil";
@@ -351,11 +376,11 @@ test "operator lower auto-rewrites === on interface without explicit extension" 
 	check(firstExprKind(result) === NodeKind.CallExpr);
 }
 
-test "operator lower does not rewrite non-interface objects" {
-	// Classes are reference types — no auto-generated ==
+test "operator lower does not rewrite Ref types" {
+	// Classes (Ref<Object>) are reference types — no auto-generated ==
 	const checkerCtx = createContext();
 	checkerCtx.extensionRegistry = createExtensionRegistry();
-	const objType = createObject("MyClass", [], [], false);
+	const objType = createRef(createObject("MyClass", [], [], true));
 	defineSymbol(checkerCtx.table, makeSymbol("a", SymbolKind.Variable, objType, false));
 	defineSymbol(checkerCtx.table, makeSymbol("b", SymbolKind.Variable, objType, false));
 	const ctx = createTransformContextWithChecker(checkerCtx);
@@ -509,4 +534,59 @@ test "pending tuple ops dedup" {
 	lowerOperators(pr2.value, ctx);
 	// Same tuple type used twice — should only have 1 pending entry
 	check(ctx.pendingTupleOps.length === 1);
+}
+
+// ===== Nullable Pointer Tests =====
+
+test "Ref !== null is NOT constant-folded" {
+	// Ref<Object> is a pointer type — null comparison should pass through
+	const checkerCtx = createContext();
+	checkerCtx.extensionRegistry = createExtensionRegistry();
+	const refType = createRef(createObject("MyClass", [], [], true));
+	defineSymbol(checkerCtx.table, makeSymbol("x", SymbolKind.Variable, refType, false));
+	const ctx = createTransformContextWithChecker(checkerCtx);
+	const pr = parseInput("x !== null;");
+	if (!pr.ok) return;
+	const result = lowerOperators(pr.value, ctx);
+	// Should remain BinaryExpr (not constant-folded to BooleanLiteral)
+	check(firstExprKind(result) === NodeKind.BinaryExpr);
+}
+
+test "Ptr !== null is NOT constant-folded" {
+	const checkerCtx = createContext();
+	checkerCtx.extensionRegistry = createExtensionRegistry();
+	const ptrType = createPtr(createObject("Buffer", [], [], true));
+	defineSymbol(checkerCtx.table, makeSymbol("p", SymbolKind.Variable, ptrType, false));
+	const ctx = createTransformContextWithChecker(checkerCtx);
+	const pr = parseInput("p !== null;");
+	if (!pr.ok) return;
+	const result = lowerOperators(pr.value, ctx);
+	check(firstExprKind(result) === NodeKind.BinaryExpr);
+}
+
+test "Maybe<Interface> !== null rewrites to .present" {
+	const checkerCtx = createContext();
+	checkerCtx.extensionRegistry = createExtensionRegistry();
+	const maybeType = createMaybeType(createObject("Token", [], [], true));
+	defineSymbol(checkerCtx.table, makeSymbol("t", SymbolKind.Variable, maybeType, false));
+	const ctx = createTransformContextWithChecker(checkerCtx);
+	const pr = parseInput("t !== null;");
+	if (!pr.ok) return;
+	const result = lowerOperators(pr.value, ctx);
+	// Should rewrite to t.present → MemberExpr
+	check(firstExprKind(result) === NodeKind.MemberExpr);
+}
+
+test "interface !== null constant-folds to true" {
+	// Plain interface (non-nullable) — null comparison is always true
+	const checkerCtx = createContext();
+	checkerCtx.extensionRegistry = createExtensionRegistry();
+	const objType = createObject("Token", [], [], true);
+	defineSymbol(checkerCtx.table, makeSymbol("t", SymbolKind.Variable, objType, false));
+	const ctx = createTransformContextWithChecker(checkerCtx);
+	const pr = parseInput("t !== null;");
+	if (!pr.ok) return;
+	const result = lowerOperators(pr.value, ctx);
+	// Should constant-fold to BooleanLiteral(true)
+	check(firstExprKind(result) === NodeKind.BooleanLiteral);
 }

@@ -17,7 +17,7 @@ import {
 import {
 	Type, TypeKind,
 	unknownType, nullType, stringType, charType, numberType,
-	createUnion,
+	createUnion, isMaybeType, unwrapMaybeType,
 } from "./types";
 import {
 	Symbol, SymbolKind, SymbolState, ScopeKind,
@@ -248,6 +248,8 @@ function analyzeNullCheck(condition: Node): string {
 
 // Remove Null from a type (for narrowing after null checks)
 function removeNullFromType(t: Type): Type {
+	// Maybe<T> → T (Nim: Option[T].get)
+	if (isMaybeType(t)) return unwrapMaybeType(t);
 	if (t.kind === TypeKind.Union) {
 		const nonNull: Type[] = [];
 		for (const member of t.typeChildren) {
@@ -614,11 +616,18 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 	for (const c of d.matchStmtCases) {
 		const cd = c.data as MatchCaseData;
 		for (const p of cd.casePatterns) {
-			if (p.kind === NodeKind.Identifier) { hasWildcard = true; }
-			if (p.kind === NodeKind.MemberExpr) {
-				const pmd = p.data as MemberExprData;
-				coveredMembers.push(pmd.property);
-				// Check the pattern — triggers enum MemberExpr → Identifier rewrite
+			if (p.kind === NodeKind.Identifier) {
+				// Wildcard/binding — Nim's else has no pattern nodes at all.
+				// We set nodeType for validator; no symbol needed (never referenced).
+				hasWildcard = true;
+				p.nodeType = discType;
+			} else {
+				// Extract enum member name before checkExpr (which rewrites MemberExpr → Identifier)
+				if (p.kind === NodeKind.MemberExpr) {
+					const pmd = p.data as MemberExprData;
+					coveredMembers.push(pmd.property);
+				}
+				// All pattern expressions: semConstExpr + fitNode (Nim parity)
 				checkExpr(ctx, p, discType);
 			}
 		}
