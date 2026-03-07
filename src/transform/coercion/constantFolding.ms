@@ -20,7 +20,6 @@ import {
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeNumber, makeString, makeBool } from "../util";
-import { check } from "std/testing";
 import { firstExprKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -152,18 +151,18 @@ function foldMember(node: Node): Node {
 }
 
 // ===== Tests =====
-test "number addition" { check(firstExprKindAfter("2 + 3;", lowerConstFold) === NodeKind.NumberLiteral); }
+test "number addition" { expect(firstExprKindAfter("2 + 3;", lowerConstFold) === NodeKind.NumberLiteral); }
 
-test "string concat" { check(firstExprKindAfter("\"a\" + \"b\";", lowerConstFold) === NodeKind.StringLiteral); }
+test "string concat" { expect(firstExprKindAfter("\"a\" + \"b\";", lowerConstFold) === NodeKind.StringLiteral); }
 
-test "boolean negation" { check(firstExprKindAfter("!true;", lowerConstFold) === NodeKind.BooleanLiteral); }
+test "boolean negation" { expect(firstExprKindAfter("!true;", lowerConstFold) === NodeKind.BooleanLiteral); }
 
-test "comparison" { check(firstExprKindAfter("5 > 3;", lowerConstFold) === NodeKind.BooleanLiteral); }
+test "comparison" { expect(firstExprKindAfter("5 > 3;", lowerConstFold) === NodeKind.BooleanLiteral); }
 
-test "non-constant unchanged" { check(firstExprKindAfter("x + y;", lowerConstFold) === NodeKind.BinaryExpr); }
+test "non-constant unchanged" { expect(firstExprKindAfter("x + y;", lowerConstFold) === NodeKind.BinaryExpr); }
 
-test "nested constant folds bottom-up" { check(firstExprKindAfter("(2 + 3) * 4;", lowerConstFold) === NodeKind.NumberLiteral); }
+test "nested constant folds bottom-up" { expect(firstExprKindAfter("(2 + 3) * 4;", lowerConstFold) === NodeKind.NumberLiteral); }
 
-test "mixed types unchanged" { check(firstExprKindAfter("1 + x;", lowerConstFold) === NodeKind.BinaryExpr); }
+test "mixed types unchanged" { expect(firstExprKindAfter("1 + x;", lowerConstFold) === NodeKind.BinaryExpr); }
 
-test "division by zero unchanged" { check(firstExprKindAfter("1 / 0;", lowerConstFold) === NodeKind.BinaryExpr); }
+test "division by zero unchanged" { expect(firstExprKindAfter("1 / 0;", lowerConstFold) === NodeKind.BinaryExpr); }

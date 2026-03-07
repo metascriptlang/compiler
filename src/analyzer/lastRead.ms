@@ -24,7 +24,6 @@ import {
 import { SymbolKind, makeSymbol } from "../checker/symbol";
 import { unknownType } from "../checker/types";
 import { OuterEntry } from "./scope";
-import { check } from "std/testing";
 import { parseInput } from "../transform/testUtil";
 
 // ===== nodeReferencesVar — recursive check =====
@@ -334,8 +333,8 @@ test "identifier matches" {
 	const expr = getExpr("x;");
 	const symX = makeTestSym("x");
 	attachSymToNode(expr, "x", symX);
-	check(nodeReferencesVar(expr, symX));
-	check(!nodeReferencesVar(expr, makeTestSym("y")));
+	expect(nodeReferencesVar(expr, symX));
+	expect(!nodeReferencesVar(expr, makeTestSym("y")));
 }
 
 test "binary expr references" {
@@ -344,9 +343,9 @@ test "binary expr references" {
 	const symY = makeTestSym("y");
 	attachSymToNode(expr, "x", symX);
 	attachSymToNode(expr, "y", symY);
-	check(nodeReferencesVar(expr, symX));
-	check(nodeReferencesVar(expr, symY));
-	check(!nodeReferencesVar(expr, makeTestSym("z")));
+	expect(nodeReferencesVar(expr, symX));
+	expect(nodeReferencesVar(expr, symY));
+	expect(!nodeReferencesVar(expr, makeTestSym("z")));
 }
 
 test "call expr references" {
@@ -357,49 +356,49 @@ test "call expr references" {
 	attachSymToNode(expr, "foo", symFoo);
 	attachSymToNode(expr, "a", symA);
 	attachSymToNode(expr, "b", symB);
-	check(nodeReferencesVar(expr, symFoo));
-	check(nodeReferencesVar(expr, symA));
-	check(nodeReferencesVar(expr, symB));
-	check(!nodeReferencesVar(expr, makeTestSym("c")));
+	expect(nodeReferencesVar(expr, symFoo));
+	expect(nodeReferencesVar(expr, symA));
+	expect(nodeReferencesVar(expr, symB));
+	expect(!nodeReferencesVar(expr, makeTestSym("c")));
 }
 
 test "member expr references object" {
 	const expr = getExpr("obj.prop;");
 	const symObj = makeTestSym("obj");
 	attachSymToNode(expr, "obj", symObj);
-	check(nodeReferencesVar(expr, symObj));
-	check(!nodeReferencesVar(expr, makeTestSym("prop")));
+	expect(nodeReferencesVar(expr, symObj));
+	expect(!nodeReferencesVar(expr, makeTestSym("prop")));
 }
 
 test "function boundary stops scan" {
 	const stmts = getStmts("function f() { return x; }");
 	const symX = makeTestSym("x");
 	attachSym(stmts, "x", symX);
-	check(stmts.length > 0);
-	check(!nodeReferencesVar(stmts[0], symX));
+	expect(stmts.length > 0);
+	expect(!nodeReferencesVar(stmts[0], symX));
 }
 
-test "null node" { check(!nodeReferencesVar(null as unknown as Node, makeTestSym("x"))); }
+test "null node" { expect(!nodeReferencesVar(null as unknown as Node, makeTestSym("x"))); }
 
 test "last stmt is last read" {
 	const stmts = getStmts("const a = 1; const b = a;");
 	const symA = makeTestSym("a");
 	attachSym(stmts, "a", symA);
-	check(isLastReadInBlock(symA, 1, stmts));
+	expect(isLastReadInBlock(symA, 1, stmts));
 }
 
 test "not last when used later" {
 	const stmts = getStmts("const a = 1; const b = a; const c = a;");
 	const symA = makeTestSym("a");
 	attachSym(stmts, "a", symA);
-	check(!isLastReadInBlock(symA, 1, stmts));
+	expect(!isLastReadInBlock(symA, 1, stmts));
 }
 
 test "different var is last read" {
 	const stmts = getStmts("const a = 1; const b = a; const c = b;");
 	const symA = makeTestSym("a");
 	attachSym(stmts, "a", symA);
-	check(isLastReadInBlock(symA, 1, stmts));
+	expect(isLastReadInBlock(symA, 1, stmts));
 }
 
 test "no outer context = same as isLastReadInBlock" {
@@ -407,7 +406,7 @@ test "no outer context = same as isLastReadInBlock" {
 	const symA = makeTestSym("a");
 	attachSym(stmts, "a", symA);
 	const emptyOuter: OuterEntry[] = [];
-	check(isLastReadInContext(symA, 1, stmts, emptyOuter));
+	expect(isLastReadInContext(symA, 1, stmts, emptyOuter));
 }
 
 test "not last when used in outer scope" {
@@ -419,7 +418,7 @@ test "not last when used in outer scope" {
 	const outer: OuterEntry[] = [
 		{ outerStmts, fromIndex: 1, isFunctionBoundary: false },
 	];
-	check(!isLastReadInContext(symA, 0, innerStmts, outer));
+	expect(!isLastReadInContext(symA, 0, innerStmts, outer));
 }
 
 test "function boundary stops outer search" {
@@ -432,22 +431,22 @@ test "function boundary stops outer search" {
 		{ outerStmts, fromIndex: 1, isFunctionBoundary: false },
 		{ outerStmts: [], fromIndex: 0, isFunctionBoundary: true },
 	];
-	check(isLastReadInContext(symA, 0, innerStmts, outer));
+	expect(isLastReadInContext(symA, 0, innerStmts, outer));
 }
 
 test "simple alias" {
 	const expr = getExpr("f(x);");
 	const symX = makeTestSym("x");
 	attachSymToNode(expr, "x", symX);
-	check(deepAliases(symX, expr));
-	check(!deepAliases(makeTestSym("y"), expr));
+	expect(deepAliases(symX, expr));
+	expect(!deepAliases(makeTestSym("y"), expr));
 }
 
 test "nested alias" {
 	const expr = getExpr("g(f(x));");
 	const symX = makeTestSym("x");
 	attachSymToNode(expr, "x", symX);
-	check(deepAliases(symX, expr));
+	expect(deepAliases(symX, expr));
 }
 
 test "return terminates block" {
@@ -459,7 +458,7 @@ test "return terminates block" {
 	const outer: OuterEntry[] = [
 		{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
 	];
-	check(isLastReadInContext(symA, 0, innerStmts, outer));
+	expect(isLastReadInContext(symA, 0, innerStmts, outer));
 }
 
 test "throw terminates block" {
@@ -471,7 +470,7 @@ test "throw terminates block" {
 	const outer: OuterEntry[] = [
 		{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
 	];
-	check(isLastReadInContext(symA, 0, innerStmts, outer));
+	expect(isLastReadInContext(symA, 0, innerStmts, outer));
 }
 
 test "no termination checks outer normally" {
@@ -483,7 +482,7 @@ test "no termination checks outer normally" {
 	const outer: OuterEntry[] = [
 		{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
 	];
-	check(!isLastReadInContext(symA, 0, innerStmts, outer));
+	expect(!isLastReadInContext(symA, 0, innerStmts, outer));
 }
 
 test "exhaustive if-else terminates" {
@@ -495,7 +494,7 @@ test "exhaustive if-else terminates" {
 	const outer: OuterEntry[] = [
 		{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
 	];
-	check(isLastReadInContext(symA, 0, innerStmts, outer));
+	expect(isLastReadInContext(symA, 0, innerStmts, outer));
 }
 
 test "non-exhaustive if does not terminate" {
@@ -507,5 +506,5 @@ test "non-exhaustive if does not terminate" {
 	const outer: OuterEntry[] = [
 		{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
 	];
-	check(!isLastReadInContext(symA, 0, innerStmts, outer));
+	expect(!isLastReadInContext(symA, 0, innerStmts, outer));
 }

@@ -35,7 +35,6 @@ import {
 	makeObjectLiteral, syntheticToken, extractBodyStmts,
 	collectDeclNames,
 } from "../util";
-import { check } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
 // ===== Data Structures =====
@@ -482,21 +481,21 @@ export function lowerGenerator(program: Node, ctx: TransformContext): Node {
 }
 
 // ===== Tests =====
-test "non-generator passthrough" { check(firstStmtKindAfter("function foo() { return 1; }", lowerGenerator) === NodeKind.FunctionDecl); }
+test "non-generator passthrough" { expect(firstStmtKindAfter("function foo() { return 1; }", lowerGenerator) === NodeKind.FunctionDecl); }
 
-test "stmt count passthrough" { check(stmtCountAfter("const x = 1;", lowerGenerator) === 1); }
+test "stmt count passthrough" { expect(stmtCountAfter("const x = 1;", lowerGenerator) === 1); }
 
 test "generator still one stmt" {
 	// function* gen() { yield 1; } → function gen() { ... } — still 1 top-level stmt
-	check(stmtCountAfter("function* gen() { yield 1; }", lowerGenerator) === 1);
+	expect(stmtCountAfter("function* gen() { yield 1; }", lowerGenerator) === 1);
 }
 
-test "generator flag removed" { check(firstStmtKindAfter("function* gen() { yield 1; }", lowerGenerator) === NodeKind.FunctionDecl); }
+test "generator flag removed" { expect(firstStmtKindAfter("function* gen() { yield 1; }", lowerGenerator) === NodeKind.FunctionDecl); }
 
-test "two yields" { check(stmtCountAfter("function* gen() { yield 1; yield 2; }", lowerGenerator) === 1); }
+test "two yields" { expect(stmtCountAfter("function* gen() { yield 1; yield 2; }", lowerGenerator) === 1); }
 
-test "yield with locals" { check(stmtCountAfter("function* gen() { let x = 1; yield x; }", lowerGenerator) === 1); }
+test "yield with locals" { expect(stmtCountAfter("function* gen() { let x = 1; yield x; }", lowerGenerator) === 1); }
 
-test "while yield loop" { check(stmtCountAfter("function* gen() { let i = 0; while (i < 3) { yield i; i = i + 1; } }", lowerGenerator) === 1); }
+test "while yield loop" { expect(stmtCountAfter("function* gen() { let i = 0; while (i < 3) { yield i; i = i + 1; } }", lowerGenerator) === 1); }
 
-test "regular function unchanged" { check(stmtCountAfter("function f() { while (true) {} }", lowerGenerator) === 1); }
+test "regular function unchanged" { expect(stmtCountAfter("function f() { while (true) {} }", lowerGenerator) === 1); }

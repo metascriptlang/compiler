@@ -13,7 +13,7 @@ import { injectProgram } from "./inject";
 import { optimizeDrc } from "./optimize";
 import { classifyType, RcKind, noRcInfo } from "./classify";
 import { isLastReadInBlock, deepAliases } from "./lastRead";
-import { check } from "std/testing";
+
 import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/index";
 import { transformProgram } from "../transform/index";
@@ -60,31 +60,31 @@ function getStmtCount(program: Node): number {
 
 test "primitives pass through unchanged" {
 	const result = analyzePipeline("const x = 1; const y = 2;");
-	check(result !== null);
+	expect(result !== null);
 	// Primitive-only code: no RC calls inserted
-	check(getStmtCount(result) === 2);
+	expect(getStmtCount(result) === 2);
 }
 
 test "null checker skips analysis" {
 	const parseResult = parseSource("const x = 1;");
 	if (!parseResult.ok) {
-		check(false);
+		expect(false);
 		return;
 	}
 	const program = parseResult.value;
 	const result = analyzeProgram(program, null as unknown as CheckerContext);
-	check(result !== null);
+	expect(result !== null);
 	// Should return program unchanged
-	check(getStmtCount(result) === 1);
+	expect(getStmtCount(result) === 1);
 }
 
 test "function with primitives" {
 	const result = analyzePipeline("function add(a: number, b: number): number { return a + b; }");
-	check(result !== null);
+	expect(result !== null);
 }
 
 test "empty program" {
 	const result = analyzePipeline("");
-	check(result !== null);
-	check(getStmtCount(result) === 0);
+	expect(result !== null);
+	expect(getStmtCount(result) === 0);
 }

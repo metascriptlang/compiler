@@ -6,7 +6,8 @@ import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, NodeData, Expression, createNode } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, expect, peek } from "../context";
 import { parseOk } from "./util";
-import { check } from "std/testing";
+import { isIdentLike } from "../util";
+
 
 type ExprResult = Result<Expression, string>;
 type ExprParser = (state: ParserState, minPrec: number) => ExprResult;
@@ -150,7 +151,7 @@ function parseSinglePattern(state: ParserState): ExprResult {
 	}
 
 	// Boolean/null/identifier (including _ wildcard)
-	if (token.kind === TokenKind.Ident ||
+	if (isIdentLike(token) ||
 		token.kind === TokenKind.True || token.kind === TokenKind.False ||
 		token.kind === TokenKind.Null) {
 		advance(state);
@@ -182,24 +183,24 @@ function parseSinglePattern(state: ParserState): ExprResult {
 }
 
 // ===== Tests =====
-test "number patterns" { check(parseOk("match (x) { 1 => \"one\", _ => \"other\" }")); }
+test "number patterns" { expect(parseOk("match (x) { 1 => \"one\", _ => \"other\" }")); }
 
-test "string patterns" { check(parseOk("match (s) { \"a\" => 1, \"b\" => 2, _ => 0 }")); }
+test "string patterns" { expect(parseOk("match (s) { \"a\" => 1, \"b\" => 2, _ => 0 }")); }
 
-test "bool patterns" { check(parseOk("match (b) { true => \"yes\", _ => \"no\" }")); }
+test "bool patterns" { expect(parseOk("match (b) { true => \"yes\", _ => \"no\" }")); }
 
-test "member patterns" { check(parseOk("match (k) { Kind.A => 1, Kind.B => 2, _ => 0 }")); }
+test "member patterns" { expect(parseOk("match (k) { Kind.A => 1, Kind.B => 2, _ => 0 }")); }
 
-test "or-patterns" { check(parseOk("match (k) { Kind.A | Kind.B => 1, _ => 0 }")); }
+test "or-patterns" { expect(parseOk("match (k) { Kind.A | Kind.B => 1, _ => 0 }")); }
 
-test "numeric or-patterns" { check(parseOk("match (x) { 1 | 2 | 3 => \"few\", _ => \"many\" }")); }
+test "numeric or-patterns" { expect(parseOk("match (x) { 1 | 2 | 3 => \"few\", _ => \"many\" }")); }
 
-test "single case" { check(parseOk("match (x) { _ => 0 }")); }
+test "single case" { expect(parseOk("match (x) { _ => 0 }")); }
 
-test "wildcard only" { check(parseOk("match (x) { _ => x }")); }
+test "wildcard only" { expect(parseOk("match (x) { _ => x }")); }
 
-test "string.code pattern" { check(parseOk("match (ch) { \"n\".code => 1, _ => 0 }")); }
+test "string.code pattern" { expect(parseOk("match (ch) { \"n\".code => 1, _ => 0 }")); }
 
-test "call in arm" { check(parseOk("match (x) { 1 => foo(), _ => bar() }")); }
+test "call in arm" { expect(parseOk("match (x) { 1 => foo(), _ => bar() }")); }
 
-test "binary in arm" { check(parseOk("match (x) { 1 => a + b, _ => c }")); }
+test "binary in arm" { expect(parseOk("match (x) { 1 => a + b, _ => c }")); }

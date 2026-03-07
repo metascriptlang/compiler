@@ -1,7 +1,5 @@
 // Token types and utilities for the MetaScript lexer
 
-import { check } from "std/testing";
-
 export enum TokenKind {
 	// Literals
 	Number, BigInt, String, Regex, TemplateHead, TemplateMiddle, TemplateTail, TemplateNoSub,
@@ -27,9 +25,10 @@ export enum TokenKind {
 	Abstract, As, Asserts, Async, Await, Constructor, Declare, From, Get,
 	Implements, Infer, Is, Keyof, Namespace, Never, Of,
 	Private, Protected, Public, Readonly, Require, Set, Static, Type, Unknown, Yield,
-	Match, When, Unreachable, Defer, Distinct, Move, Out, Test, Expect, Macro, Extern, Quote, Char,
+	Match, When, Unreachable, Defer, Distinct, Move, Out, Test, Expect, Macro, Extern, Quote, Char, Sizeof,
 	Int8, Int16, Int32, Int64, Uint8, Uint16, Uint32, Uint64,
 	Float32, Float64, Int, Float, Double, CString,
+	Comment,
 	// EOF
 	Eof,
 }
@@ -52,7 +51,7 @@ export function formatToken(token: Token): string {
 // Returns true for Ident and all keyword tokens.
 // Used by member expression parsing to allow keywords as property names (e.g., obj.get, obj.set).
 export function isIdentOrKeyword(kind: TokenKind): boolean {
-	return kind === TokenKind.Ident || ((kind as number) >= (TokenKind.Break as number) && kind !== TokenKind.Eof);
+	return kind === TokenKind.Ident || ((kind as number) >= (TokenKind.Break as number) && kind !== TokenKind.Comment && kind !== TokenKind.Eof);
 }
 
 // Map identifier string to keyword TokenKind (or Ident)
@@ -131,11 +130,11 @@ export function identToKeyword(ident: string): TokenKind {
 		"move" => TokenKind.Move,
 		"out" => TokenKind.Out,
 		"test" => TokenKind.Test,
-		"expect" => TokenKind.Expect,
 		"macro" => TokenKind.Macro,
 		"extern" => TokenKind.Extern,
 		"quote" => TokenKind.Quote,
 		"char" => TokenKind.Char,
+		"sizeof" => TokenKind.Sizeof,
 		"int8" => TokenKind.Int8,
 		"int16" => TokenKind.Int16,
 		"int32" => TokenKind.Int32,
@@ -293,36 +292,40 @@ export function tokenKindToString(kind: TokenKind): string {
 		TokenKind.Extern => "EXTERN",
 		TokenKind.Quote => "QUOTE",
 		TokenKind.Char => "CHAR",
+		TokenKind.Sizeof => "SIZEOF",
 		TokenKind.Int8 => "INT8",
 		TokenKind.Int16 => "INT16",
 		TokenKind.Int32 => "INT32",
 		TokenKind.Int64 => "INT64",
 		TokenKind.Uint8 => "UINT8",
 		TokenKind.Uint16 => "UINT16",
-		TokenKind.Uint32 => "UINT32",
-		TokenKind.Uint64 => "UINT64",
+		TokenKind.Uint32 => "Uint32",
+		TokenKind.Uint64 => "Uint64",
 		TokenKind.Float32 => "FLOAT32",
 		TokenKind.Float64 => "FLOAT64",
 		TokenKind.Int => "INT",
 		TokenKind.Float => "FLOAT",
 		TokenKind.Double => "DOUBLE",
 		TokenKind.CString => "CSTRING",
+		TokenKind.Comment => "COMMENT",
 		TokenKind.Eof => "EOF",
 		_ => "UNKNOWN_TOKEN",
 	};
 }
 
 // ===== Token Tests =====
-test "identToKeyword const" { check(identToKeyword("const") === TokenKind.Const); }
+test "identToKeyword const" { expect(identToKeyword("const") === TokenKind.Const); }
 
-test "identToKeyword let" { check(identToKeyword("let") === TokenKind.Let); }
+test "identToKeyword let" { expect(identToKeyword("let") === TokenKind.Let); }
 
-test "identToKeyword ident" { check(identToKeyword("notAKeyword") === TokenKind.Ident); }
+test "identToKeyword ident" { expect(identToKeyword("foo") === TokenKind.Ident); }
 
-test "identToKeyword underscore" { check(identToKeyword("_private") === TokenKind.Ident); }
+test "identToKeyword sizeof" { expect(identToKeyword("sizeof") === TokenKind.Sizeof); }
 
-test "kindToString Plus" { check(tokenKindToString(TokenKind.Plus) === "PLUS"); }
+test "identToKeyword underscore" { expect(identToKeyword("_") === TokenKind.Ident); }
 
-test "kindToString Eof" { check(tokenKindToString(TokenKind.Eof) === "EOF"); }
+test "kindToString Plus" { expect(tokenKindToString(TokenKind.Plus) === "PLUS"); }
 
-test "kindToString Const" { check(tokenKindToString(TokenKind.Const) === "CONST"); }
+test "kindToString Eof" { expect(tokenKindToString(TokenKind.Eof) === "EOF"); }
+
+test "kindToString Const" { expect(tokenKindToString(TokenKind.Const) === "CONST"); }

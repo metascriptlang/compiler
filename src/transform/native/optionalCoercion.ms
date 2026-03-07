@@ -19,7 +19,6 @@ import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent } from "../util";
 import { findChar } from "../../utils/string";
-import { check } from "std/testing";
 import { firstStmtKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";
 import { createTransformContext } from "../context";
 
@@ -104,27 +103,27 @@ function getReturnArgKind(input: string): NodeKind {
 }
 
 // ===== Tests =====
-test "non-return unchanged" { check(stmtCountAfter("const x = 1;", coerceOptionals) === 1); }
+test "non-return unchanged" { expect(stmtCountAfter("const x = 1;", coerceOptionals) === 1); }
 
-test "call unchanged" { check(firstStmtKindAfter("f();", coerceOptionals) === NodeKind.ExprStmt); }
+test "call unchanged" { expect(firstStmtKindAfter("f();", coerceOptionals) === NodeKind.ExprStmt); }
 
-test "while unchanged" { check(firstStmtKindAfter("while (true) {}", coerceOptionals) === NodeKind.WhileStmt); }
+test "while unchanged" { expect(firstStmtKindAfter("while (true) {}", coerceOptionals) === NodeKind.WhileStmt); }
 
-test "if unchanged" { check(firstStmtKindAfter("if (x) {}", coerceOptionals) === NodeKind.IfStmt); }
+test "if unchanged" { expect(firstStmtKindAfter("if (x) {}", coerceOptionals) === NodeKind.IfStmt); }
 
-test "non-optional function unchanged" { check(firstStmtKindAfter("function foo(): number { return 1; }", coerceOptionals) === NodeKind.FunctionDecl); }
+test "non-optional function unchanged" { expect(firstStmtKindAfter("function foo(): number { return 1; }", coerceOptionals) === NodeKind.FunctionDecl); }
 
 test "return null in optional fn becomes call" {
 	const k = getReturnArgKind("function foo(): number | null { return null; }");
-	check(k === NodeKind.CallExpr);
+	expect(k === NodeKind.CallExpr);
 }
 
 test "return expr in optional fn becomes call" {
 	const k = getReturnArgKind("function foo(): number | null { return 42; }");
-	check(k === NodeKind.CallExpr);
+	expect(k === NodeKind.CallExpr);
 }
 
 test "return expr in plain fn unchanged" {
 	const k = getReturnArgKind("function foo(): number { return 42; }");
-	check(k === NodeKind.NumberLiteral);
+	expect(k === NodeKind.NumberLiteral);
 }

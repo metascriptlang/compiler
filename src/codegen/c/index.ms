@@ -1,7 +1,7 @@
 // C Codegen — Entry Point
 //
 // generateC(program, checkerCtx, modulePath) → string  (single-module, backwards compatible)
-// generateCModule(program, checkerCtx, modulePath, crossModuleProtos) → string  (module-only, no dispatcher)
+// generateCModule(program, checkerCtx, modulePath, externalTypes) → string  (module-only, no dispatcher)
 // genProjectDispatcher(modulePaths, entryPath, hasUserMain) → string  (global init dispatcher)
 // collectFunctionPrototypes(program) → string  (C function forward declarations)
 //
@@ -19,9 +19,10 @@ import { CheckerContext, ExportRegistry } from "../../checker/context";
 import { lookupSymbol } from "../../checker/symbol";
 // lookupSymbol removed — codegen uses node.resolvedSym (Nim parity)
 import {
-	CGen, CSection,
-	createCGen, sec, add, addLine, addNewline,
+	CGen, CSection, TypeCache, AliveSet,
+	createCGen, createTypeCache, createAliveSet, createBuilder, sec, add, addLine, addNewline,
 	assembleOutput, extract, nameSetAdd, nameSetHas,
+	typeCacheSet,
 } from "./context";
 import { genDecl } from "./declarations";
 import { mangleModuleName, safeName } from "./names";
@@ -30,12 +31,11 @@ import { Type, TypeKind, isInterfaceType } from "../../checker/types";
 import { mangle } from "./names";
 import { emitStringPoolDecls } from "./literals";
 import { sliceStr, startsWith, findChar } from "../../utils/string";
-import { check } from "std/testing";
 
 // ===== generateC — single-module entry point (backwards compatible) =====
 
 export function generateC(program: Node, ctx: CheckerContext, modulePath: string): string {
-	const moduleCode = generateCModule(program, ctx, modulePath, "");
+	const moduleCode = generateCModule(program, ctx, modulePath, createTypeCache(), createAliveSet(), false);
 	const mainSym = (ctx !== null && ctx.table !== null) ? lookupSymbol(ctx.table, "main") : null;
 	const hasMain = mainSym !== null;
 	let mainRet = "void";
@@ -53,26 +53,34 @@ export function generateC(program: Node, ctx: CheckerContext, modulePath: string
 // and per-module DatInit000/Init000 (non-static for cross-module visibility).
 // Does NOT generate the global dispatcher (MsPreMainInner/MsMainInner/MsMain/POSIX main).
 
-export function generateCModule(program: Node, ctx: CheckerContext, modulePath: string, crossModuleProtos: string): string {
+export function generateCModule(program: Node, ctx: CheckerContext, modulePath: string, externalTypes: TypeCache, aliveSet: AliveSet, isTestBuild: boolean): string {
 	const g = createCGen(ctx, modulePath);
+	g.externalTypes = externalTypes;
+	g.aliveSet = aliveSet;
+	g.isTestBuild = isTestBuild;
 
-	// Standard C headers
+	// Standard C headers (Nim pattern: nimbase.h is always included unconditionally)
 	addLine(sec(g, CSection.Headers), "#include <stdint.h>");
 	addLine(sec(g, CSection.Headers), "#include <stdbool.h>");
 	addLine(sec(g, CSection.Headers), "#include <string.h>");
+	addLine(sec(g, CSection.Headers), "#include <math.h>");
+	addLine(sec(g, CSection.Headers), "#include \"system.h\"");
+	nameSetAdd(g.declaredThings, "inc:system.h"); // prevent duplicate from @include
+	// B2: core/string.h and core/array.h conditionally included after AST walk
 
-	// Emit @include directives from checker (prelude + user code)
+	// Include shared proto header if we have external types (multi-module build)
+	if (externalTypes.entries.length > 0) {
+		addLine(sec(g, CSection.Headers), "#include \"msProto.h\"");
+	}
+
+	// Emit additional @include directives from checker (user code @include pragmas)
 	if (ctx !== null && ctx.includeDirectives !== "") {
 		emitIncludeDirectives(g, ctx.includeDirectives);
 	}
 
-	// Emit cross-module type forward decls + function prototypes.
-	// ForwardDecls comes before Types, so imported types are available
-	// when this module's own type definitions are emitted.
-	if (crossModuleProtos.length > 0) {
-		add(sec(g, CSection.ForwardDecls), crossModuleProtos);
-		// Register cross-module type names for enum rewriting + class/interface distinction
-		registerCrossModuleTypes(g, crossModuleProtos);
+	// Register cross-module type names from ExportRegistry (class/interface distinction)
+	if (externalTypes.entries.length > 0) {
+		registerCrossModuleTypesFromRegistry(g);
 	}
 
 	// Walk program statements
@@ -85,6 +93,14 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 
 	// Generate per-module init functions (non-static for cross-module visibility)
 	genModuleInitFns(g);
+
+	// B2: Conditional runtime injection — only include headers for used runtime features
+	// Each module includes only the runtime headers it actually needs.
+	// msProto.h also conditionally includes them for proto-level types.
+	// Duplicate includes are harmless (standard include guards).
+	if (g.stringPool.entries.length > 0) g.needsStringRT = true;
+	if (g.needsStringRT) addLine(sec(g, CSection.Headers), "#include \"core/string.h\"");
+	if (g.needsArrayRT) addLine(sec(g, CSection.Headers), "#include \"core/array.h\"");
 
 	// Emit string literal pool declarations
 	emitStringPoolDecls(g.stringPool, sec(g, CSection.StringPool));
@@ -143,52 +159,70 @@ function genModuleInitFns(g: CGen): void {
 // MsMain, global vars, and POSIX main. Used by both single-module and multi-module builds.
 
 export function genProjectDispatcher(modulePaths: string[], entryPath: string, hasUserMain: boolean, mainRetType: string): string {
-	let result = "";
+	const b = createBuilder();
 	const retType = (mainRetType.length > 0) ? mainRetType : "void";
 
 	// Forward declarations for all module init functions
 	for (let i = 0; i < modulePaths.length; i += 1) {
 		const modName = mangleModuleName(modulePaths[i]);
-		result = result + "void " + modName + "__DatInit000(void);\n";
-		result = result + "void " + modName + "__Init000(void);\n";
+		addLine(b, "void " + modName + "__DatInit000(void);");
+		addLine(b, "void " + modName + "__Init000(void);");
 	}
 	if (hasUserMain) {
-		result = result + retType + " main_(void);\n";
+		addLine(b, retType + " main_(void);");
 	}
-	result = result + "\n";
+	addNewline(b);
 
 	// MsPreMainInner — calls DatInit000 for all modules in topological order
-	result = result + "static void MsPreMainInner(void) {\n";
+	addLine(b, "static void MsPreMainInner(void) {");
+	b.indent += 1;
 	for (let i = 0; i < modulePaths.length; i += 1) {
-		result = result + "  " + mangleModuleName(modulePaths[i]) + "__DatInit000();\n";
+		addLine(b, mangleModuleName(modulePaths[i]) + "__DatInit000();");
 	}
-	result = result + "}\n\n";
+	b.indent -= 1;
+	addLine(b, "}");
+	addNewline(b);
 
 	// MsMainInner — dependency Init000, then entry Init000, then user main
-	result = result + "static void MsMainInner(void) {\n";
+	addLine(b, "static void MsMainInner(void) {");
+	b.indent += 1;
 	for (let i = 0; i < modulePaths.length; i += 1) {
 		if (modulePaths[i] !== entryPath) {
-			result = result + "  " + mangleModuleName(modulePaths[i]) + "__Init000();\n";
+			addLine(b, mangleModuleName(modulePaths[i]) + "__Init000();");
 		}
 	}
-	result = result + "  " + mangleModuleName(entryPath) + "__Init000();\n";
+	addLine(b, mangleModuleName(entryPath) + "__Init000();");
 	if (hasUserMain) {
 		if (retType !== "void") {
-			result = result + "  msProgramResult = (int)main_();\n";
+			addLine(b, "msProgramResult = (int)main_();");
 		} else {
-			result = result + "  main_();\n";
+			addLine(b, "main_();");
 		}
 	}
-	result = result + "}\n\n";
+	b.indent -= 1;
+	addLine(b, "}");
+	addNewline(b);
 
 	// MsMain + globals + POSIX main
-	result = result + "void MsMain(void) {\n  MsPreMainInner();\n  MsMainInner();\n}\n\n";
-	result = result + "int cmdCount;\nchar** cmdLine;\nchar** gEnv;\nint msProgramResult;\n\n";
-	result = result + "int main(int argc, char** argv, char** env) {\n";
-	result = result + "  cmdLine = argv;\n  cmdCount = argc;\n  gEnv = env;\n";
-	result = result + "  MsMain();\n  return msProgramResult;\n}\n";
+	addLine(b, "void MsMain(void) {");
+	addLine(b, "  MsPreMainInner();");
+	addLine(b, "  MsMainInner();");
+	addLine(b, "}");
+	addNewline(b);
+	addLine(b, "int cmdCount;");
+	addLine(b, "char** cmdLine;");
+	addLine(b, "char** gEnv;");
+	addLine(b, "int msProgramResult;");
+	addNewline(b);
+	addLine(b, "int main(int argc, char** argv, char** env) {");
+	addLine(b, "  cmdLine = argv;");
+	addLine(b, "  cmdCount = argc;");
+	addLine(b, "  gEnv = env;");
+	addLine(b, "  MsMain();");
+	addLine(b, "  return msProgramResult;");
+	addLine(b, "}");
 
-	return result;
+	return extract(b);
 }
 
 // ===== Collect Function Prototypes =====
@@ -197,16 +231,19 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 // Used by multi-module builds to generate a shared proto header
 // so cross-module calls have proper declarations.
 
-export function collectFunctionPrototypes(program: Node): string {
+export function collectFunctionPrototypes(program: Node, g: CGen): string {
 	let protos = "";
 	if (program === null || program.kind !== NodeKind.Program) return protos;
 	const pd = program.data as ProgramData;
+	const prevGen = _protoGen;
+	_protoGen = g;
 	for (let i = 0; i < pd.programStmts.length; i += 1) {
 		const proto = protoFromStmt(pd.programStmts[i]);
 		if (proto.length > 0) {
 			protos = protos + proto + "\n";
 		}
 	}
+	_protoGen = prevGen;
 	return protos;
 }
 
@@ -226,19 +263,31 @@ function protoFromStmt(node: Node): string {
 	return "";
 }
 
-// ===== Type Description for Prototypes (no CGen needed) =====
+// ===== Type Description for Prototypes =====
 // Maps a Type to its C type string for use in cross-module function prototypes.
-// Unlike getTypeDesc which needs CGen for section emission, this is pure string mapping.
-// Forward declarations for struct types are already emitted by collectExportedTypeDecls.
+// Nim pattern: when a CGen is available (production), delegates to getTypeDesc which
+// emits typedefs as side effects. Falls back to pure string mapping when no CGen (tests).
 
 // Collects Result types encountered during prototype building.
 // After collecting protos, call emitResultTypeDecls() to get struct definitions.
 let protoResultTypes: string[] = [];
 let protoResultTypeDefs: string[] = [];
 
+// Module-level CGen for prototype building (Nim pattern: getTypeDescAux always has BModule).
+// When set, typeDescForProto delegates compound types to getTypeDesc(g, t) which emits
+// typedefs as side effects. When null, falls back to pure string mapping (tests only).
+let _protoGen: CGen = null as unknown as CGen;
+
 function typeDescForProto(t: Type): string {
 	if (!t) return "void*";
 	if (!t.kind && t.kind !== 0) return "void*";
+	// Nim pattern: when a CGen is available, delegate to getTypeDesc which emits
+	// typedefs as side effects (like Nim's getTypeDescAux always taking BModule).
+	// This ensures array-of-struct typedefs, Result types, etc. are emitted properly.
+	if (_protoGen !== null) {
+		return getTypeDesc(_protoGen, t);
+	}
+	// Fallback: pure string mapping (tests only, no typedef emission)
 	// Try simple types first
 	const simple = getSimpleTypeDesc(t);
 	if (simple !== "") return simple;
@@ -258,6 +307,9 @@ function typeDescForProto(t: Type): string {
 			const elemSimple = getSimpleTypeDesc(t.typeReturn);
 			if (elemSimple === "double") return "msNumberArray";
 			if (elemSimple === "msString") return "msStringArray";
+			// Per-type array typedef for value-type structs
+			const elemDesc = typeDescForProto(t.typeReturn);
+			return mangle(elemDesc) + "Array";
 		}
 		return "msRefArray";
 	}
@@ -300,7 +352,7 @@ function typeDescForProto(t: Type): string {
 	}
 	if (t.kind === TypeKind.TypeReference) {
 		// Function type annotation strings (e.g. "( ) => void") → msClosure
-		if (findChar(t.typeName, "=".code) >= 0 || (t.typeName.length > 0 && t.typeName.charAt(0) === "(")) {
+		if (findChar(t.typeName, "=") >= 0 || (t.typeName.length > 0 && t.typeName.charAt(0) === "(")) {
 			return "msClosure";
 		}
 		if (t.typeName === "unknown" || t.typeName === "undefined" || t.typeName === "any" || t.typeName === "never") return "void*";
@@ -358,11 +410,13 @@ function buildFnProto(node: Node): string {
 	}
 	for (let i = 0; i < d.params.length; i += 1) {
 		if (i > 0) paramList = paramList + ", ";
-		const pType = (i < fnType.typeChildren.length) ? typeDescForProto(fnType.typeChildren[i]) : "void*";
+		let pType = "void*";
+		if (i < fnType.typeChildren.length) { pType = typeDescForProto(fnType.typeChildren[i]); }
 		paramList = paramList + pType + " " + safeName(d.params[i]);
 	}
 	if (paramList === "") paramList = "void";
-	const cRetType = nrvo ? "void" : retType;
+	let cRetType = retType;
+	if (nrvo) { cRetType = "void"; }
 	return cRetType + " " + name + "(" + paramList + ");";
 }
 
@@ -372,16 +426,19 @@ function buildFnProto(node: Node): string {
 // EXPORTED functions. Used for cross-module prototype headers in
 // separate compilation (non-exported functions are static, invisible).
 
-export function collectExportedPrototypes(program: Node): string {
+export function collectExportedPrototypes(program: Node, g: CGen): string {
 	let protos = "";
 	if (program === null || program.kind !== NodeKind.Program) return protos;
 	const pd = program.data as ProgramData;
+	const prevGen = _protoGen;
+	_protoGen = g;
 	for (let i = 0; i < pd.programStmts.length; i += 1) {
 		const proto = exportedProtoFromStmt(pd.programStmts[i]);
 		if (proto.length > 0) {
 			protos = protos + proto + "\n";
 		}
 	}
+	_protoGen = prevGen;
 	return protos;
 }
 
@@ -644,6 +701,27 @@ function registerCrossModuleTypes(g: CGen, protos: string): void {
 	}
 }
 
+// ===== Register Cross-Module Types from ExportRegistry Only =====
+// Used by the new proto header path — no string parsing needed since
+// types come from externalTypes cache, not inline proto text.
+
+function registerCrossModuleTypesFromRegistry(g: CGen): void {
+	const reg = (g.checkerCtx !== null) ? g.checkerCtx.exportRegistry : null as unknown as ExportRegistry;
+	if (reg !== null) {
+		for (const entry of reg.entries) {
+			for (const sym of entry.symbols) {
+				const name = safeName(sym.name);
+				if (sym.kind === SymbolKind.Class) {
+					nameSetAdd(g.knownClassNames, name);
+					nameSetAdd(g.knownTypeNames, name);
+				} else if (sym.kind === SymbolKind.Interface) {
+					nameSetAdd(g.knownTypeNames, name);
+				}
+			}
+		}
+	}
+}
+
 // ===== Emit @include directives from checker context =====
 
 function emitIncludeDirectives(g: CGen, directives: string): void {
@@ -652,7 +730,7 @@ function emitIncludeDirectives(g: CGen, directives: string): void {
 		if (directives.charAt(pos) === "\n") {
 			const header = sliceStr(directives, start, pos);
 			if (header.length > 0) {
-				addLine(sec(g, CSection.Headers), "#include \"" + header + "\"");
+				emitOneInclude(g, header);
 			}
 			start = pos + 1;
 		}
@@ -660,9 +738,20 @@ function emitIncludeDirectives(g: CGen, directives: string): void {
 	if (start < directives.length) {
 		const header = sliceStr(directives, start, directives.length);
 		if (header.length > 0) {
-			addLine(sec(g, CSection.Headers), "#include \"" + header + "\"");
+			emitOneInclude(g, header);
 		}
 	}
+}
+
+// B2: @include directives for runtime headers set flags instead of emitting directly.
+// This deduplicates with the B2 conditional include at end of generateCModule.
+function emitOneInclude(g: CGen, header: string): void {
+	if (header === "core/string.h") { g.needsStringRT = true; return; }
+	if (header === "core/array.h") { g.needsArrayRT = true; return; }
+	// Skip headers already emitted by generateCModule (system.h)
+	if (nameSetHas(g.declaredThings, "inc:" + header)) return;
+	nameSetAdd(g.declaredThings, "inc:" + header);
+	addLine(sec(g, CSection.Headers), "#include \"" + header + "\"");
 }
 
 // ===== Tests =====
@@ -680,87 +769,99 @@ function cOutput(input: string): string {
 function cModuleOutput(input: string): string {
 	const pr = parseSource(input);
 	if (!pr.ok) return "PARSE_ERROR: " + pr.error;
-	return generateCModule(pr.value, null as unknown as CheckerContext, "test/input", "");
+	return generateCModule(pr.value, null as unknown as CheckerContext, "test/input", createTypeCache(), createAliveSet(), true);
 }
 
 test "empty program has headers" {
 	const result = cOutput("");
-	check(result.length > 0);
+	expect(result.length > 0);
 }
 
 test "headers include stdint" {
 	const result = cOutput("");
 	// stdint.h should be present
-	check(result.length > 10);
+	expect(result.length > 10);
 }
 
 test "simple function" {
 	const result = cOutput("function foo(): void { return; }");
-	check(result.length > 0);
+	expect(result.length > 0);
 }
 
 test "enum output" {
 	const result = cOutput("enum Dir { North, South, East, West }");
-	check(result.length > 0);
+	expect(result.length > 0);
 }
 
 test "function + call" {
 	const result = cOutput("function add(a: number, b: number): number { return a + b; }");
-	check(result.length > 0);
+	expect(result.length > 0);
 }
 
 test "global var init in module Init000" {
 	const result = cOutput("function add(a: number, b: number): number { return a + b; }\nconst result: number = add(2, 3);");
-	check(result.length > 0);
+	expect(result.length > 0);
 }
 
 test "two-phase init + POSIX main" {
 	const result = cOutput("function add(a: number, b: number): number { return a + b; }\nconst result: number = add(2, 3);");
-	check(result.length > 0);
+	expect(result.length > 0);
 }
 
 test "MacroInvocation skipped in codegen" {
 	const result = cOutput("@passL(\"-lssl\");");
 	// Should not contain /* unsupported */
-	check(result.length > 0);
+	expect(result.length > 0);
 }
 
 test "@include from prelude emits header" {
 	// prelude has @include("system.h"), so generated C should contain it
 	const result = cOutput("");
-	check(result.length > 0);
+	expect(result.length > 0);
 }
 
 test "direct call detection" {
 	// closureCallMarker sets isDirectCall on CallExpr nodes — codegen reads the flag
 	const result = cOutput("function foo(): void {} function bar(): void { foo(); }");
-	check(result.length > 0);
+	expect(result.length > 0);
 }
 
 test "array literal" {
 	const result = cOutput("const arr: number = [1, 2, 3];");
-	check(result.length > 0);
+	expect(result.length > 0);
 }
 
 test "generateCModule produces code without dispatcher" {
 	const result = cModuleOutput("function foo(): void { return; }");
-	check(result.length > 0);
+	expect(result.length > 0);
+}
+
+test "B2: math-only module excludes string and array headers" {
+	const result = cModuleOutput("function add(a: number, b: number): number { return a + b; }");
+	// Should NOT include core/string.h or core/array.h for pure numeric code
+	expect(result.indexOf("core/string.h") < 0);
+	expect(result.indexOf("core/array.h") < 0);
+}
+
+test "B2: string usage includes string header" {
+	const result = cModuleOutput("const name: string = \"hello\";");
+	expect(result.indexOf("core/string") >= 0);
 }
 
 test "collectFunctionPrototypes extracts protos" {
 	const pr = parseSource("function add(a: number, b: number): number { return a + b; }");
-	check(pr.ok);
-	const protos = collectFunctionPrototypes(pr.value);
-	check(protos.length > 0);
+	expect(pr.ok);
+	const protos = collectFunctionPrototypes(pr.value, null as unknown as CGen);
+	expect(protos.length > 0);
 }
 
 test "collectExportedPrototypes only exported" {
 	const pr = parseSource("function helper(): void {}\nexport function api(): void {}");
-	check(pr.ok);
-	const exported = collectExportedPrototypes(pr.value);
-	const all = collectFunctionPrototypes(pr.value);
-	check(exported.length > 0);
-	check(all.length > exported.length);
+	expect(pr.ok);
+	const exported = collectExportedPrototypes(pr.value, null as unknown as CGen);
+	const all = collectFunctionPrototypes(pr.value, null as unknown as CGen);
+	expect(exported.length > 0);
+	expect(all.length > exported.length);
 }
 
 // Helper: find inner decl node from "export class Foo { ... }" and set nodeType
@@ -785,49 +886,49 @@ function setExportedDeclType(program: Node, objType: Type): void {
 
 test "class type decl emits full struct body" {
 	const pr = parseSource("export class User { name: string; age: number; }");
-	check(pr.ok);
+	expect(pr.ok);
 	const classType = createObject("User", ["name", "age"], [stringType(), numberType()], false);
 	setExportedDeclType(pr.value, classType);
 	const decls = collectExportedTypeDecls(pr.value);
 	// Full struct body: should contain "struct User {" and field definitions
-	check(decls.length > 50);
+	expect(decls.length > 50);
 }
 
 test "class with no nodeType falls back to forward decl" {
 	const pr = parseSource("export class Empty {}");
-	check(pr.ok);
+	expect(pr.ok);
 	const decls = collectExportedTypeDecls(pr.value);
-	check(decls.length > 0);
+	expect(decls.length > 0);
 	// Without nodeType, just a forward decl (no struct body)
-	check(decls.length < 50);
+	expect(decls.length < 50);
 }
 
 test "interface type decl emits full struct body" {
 	const pr = parseSource("export interface Token { kind: number; value: string; }");
-	check(pr.ok);
+	expect(pr.ok);
 	const ifaceType = createObject("Token", ["kind", "value"], [numberType(), stringType()], true);
 	setExportedDeclType(pr.value, ifaceType);
 	const decls = collectExportedTypeDecls(pr.value);
 	// Full struct body: should contain "struct Token {" and field definitions
-	check(decls.length > 50);
+	expect(decls.length > 50);
 }
 
 test "registerCrossModuleTypes parses enum and struct names" {
 	const g = createCGen(null as unknown as CheckerContext, "test");
 	const protos = "typedef int32_t Color;\ntypedef struct Token Token;\n";
 	registerCrossModuleTypes(g, protos);
-	check(nameSetHas(g.knownTypeNames, "Color"));
-	check(nameSetHas(g.knownTypeNames, "Token"));
-	check(!nameSetHas(g.knownClassNames, "Token"));
+	expect(nameSetHas(g.knownTypeNames, "Color"));
+	expect(nameSetHas(g.knownTypeNames, "Token"));
+	expect(!nameSetHas(g.knownClassNames, "Token"));
 }
 
 test "knownClassNames enables pointer semantics in fallback" {
 	const g = createCGen(null as unknown as CheckerContext, "test");
 	nameSetAdd(g.knownClassNames, "User");
 	nameSetAdd(g.knownTypeNames, "User");
-	check(nameSetHas(g.knownClassNames, "User"));
-	check(nameSetHas(g.knownTypeNames, "User"));
+	expect(nameSetHas(g.knownClassNames, "User"));
+	expect(nameSetHas(g.knownTypeNames, "User"));
 	// Interface not in knownClassNames
 	nameSetAdd(g.knownTypeNames, "Token");
-	check(!nameSetHas(g.knownClassNames, "Token"));
+	expect(!nameSetHas(g.knownClassNames, "Token"));
 }

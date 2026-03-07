@@ -6,7 +6,8 @@ import { Node, NodeKind, NodeData, Expression, createNode, ObjectLiteralData } f
 import { ParserState, createState, current, advance, isAtEnd } from "../context";
 import { lex } from "../../lexer/lexer";
 import { parseOk, mockExpr } from "./util";
-import { check } from "std/testing";
+import { isIdentLike } from "../util";
+
 
 type ExprResult = Result<Expression, string>;
 type ExprParser = (state: ParserState, minPrec: number) => ExprResult;
@@ -58,7 +59,7 @@ export function parseObjectLiteral(state: ParserState, exprParser: ExprParser): 
 		}
 
 		const keyToken = current(state);
-		if (keyToken.kind !== TokenKind.Ident) {
+		if (!isIdentLike(keyToken)) {
 			return Result.err(`Expected property name at line ${keyToken.line.toString()}`);
 		}
 		advance(state);
@@ -110,18 +111,18 @@ function objOk(input: string): boolean {
 	return result.ok;
 }
 
-test "empty" { check(objKeyCount("{}") === 0); }
+test "empty" { expect(objKeyCount("{}") === 0); }
 
-test "two props" { check(objKeyCount("{ x: 1, y: 2 }") === 2); }
+test "two props" { expect(objKeyCount("{ x: 1, y: 2 }") === 2); }
 
-test "shorthand" { check(objKeyCount("{ x }") === 1); }
+test "shorthand" { expect(objKeyCount("{ x }") === 1); }
 
-test "mixed" { check(objKeyCount("{ x, y: 2 }") === 2); }
+test "mixed" { expect(objKeyCount("{ x, y: 2 }") === 2); }
 
-test "trailing comma" { check(objKeyCount("{ x: 1, }") === 1); }
+test "trailing comma" { expect(objKeyCount("{ x: 1, }") === 1); }
 
-test "non-ident key fails" { check(!objOk("{ 42: x }")); }
+test "non-ident key fails" { expect(!objOk("{ 42: x }")); }
 // Integration
-test "nested" { check(parseOk("f({ a: { b: 1 } })")); }
+test "nested" { expect(parseOk("f({ a: { b: 1 } })")); }
 
-test "createNode pattern" { check(parseOk("f({ kind, value, line: 1 })")); }
+test "createNode pattern" { expect(parseOk("f({ kind, value, line: 1 })")); }

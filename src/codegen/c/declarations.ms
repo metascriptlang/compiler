@@ -4,11 +4,12 @@
 // Emits to appropriate CGen sections (Types, ProcHeaders, Procs, ForwardDecls).
 
 import {
-	Node, NodeKind, DeclKind,
+	Node, NodeKind, DeclKind, ExternKind,
 	FunctionDeclData, EnumDeclData,
 	InterfaceDeclData, ClassDeclData,
 	ExportDeclData, ImportDeclData,
 	VariableDeclData, DecoratedDeclData,
+	ExternDeclData,
 	ProgramData, BlockStmtData,
 	PropertyDeclData, MethodDeclData, ConstructorDeclData,
 	ObjectLiteralData,
@@ -20,27 +21,53 @@ import {
 	createProc, createBuilder, add, addLine, addNewline,
 	sec, extract, nameSetHas, nameSetAdd,
 	emitStmts, emitStmtsLine, readProcStmts, readProcLocals,
-	typeCacheSet, typeCacheHas,
+	clearProcBuffers, typeCacheSet, typeCacheHas,
+	aliveSetHas,
 } from "./context";
 import { genExpr } from "./expressions";
 import { genStmt, genStmts } from "./statements";
 import { mangle, mangleTypeName, mangleFieldName, safeName } from "./names";
-import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType } from "./types";
+import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, annotationToC } from "./types";
 import {
 	Symbol, SymbolKind, SymbolState,
 	hasFlag, SF_EXPORTED, SF_STATIC, SF_IMPORT_C,
 } from "../../checker/symbol";
 // NOTE: parser/context imports are in index.ms (not here) to avoid DRC union member count issues.
 // genGenericTypeInsts lives in index.ms for the same reason.
-import { check } from "std/testing";
 
 // ===== genDecl — main declaration dispatcher =====
+
+// DCE: check if a function declaration is alive (reachable).
+// Empty aliveSet means no DCE filtering (single-module or DCE disabled).
+function isDeclAlive(g: CGen, node: Node): boolean {
+	if (g.aliveSet.entries.length === 0) return true;
+	const d = node.data as FunctionDeclData;
+	const name = d.fnName;
+	// Compiler-generated functions are always alive — produced by transforms
+	// after reachability analysis runs on pre-transform ASTs.
+	// Prefixes: $lifted_, $Env_ (lambda lifting), =copy/=dup (operators)
+	// Suffixes: _destroy, _trace, _copy, _sink, _wasMoved, _dup (destructorLifting)
+	if (name.length > 0 && name.slice(0, 1) === "$") return true;
+	if (name.length > 0 && name.slice(0, 1) === "=") return true;
+	if (endsWith(name, "_destroy") || endsWith(name, "_trace") ||
+		endsWith(name, "_copy") || endsWith(name, "_sink") ||
+		endsWith(name, "_wasMoved") || endsWith(name, "_dup")) return true;
+	return aliveSetHas(g.aliveSet, g.modulePath, name);
+}
+
+function endsWith(s: string, suffix: string): boolean {
+	if (suffix.length > s.length) return false;
+	return s.slice(s.length - suffix.length, s.length) === suffix;
+}
 
 export function genDecl(g: CGen, node: Node, exported: boolean): void {
 	if (node === null) return;
 
 	const k = node.kind;
-	if (k === NodeKind.FunctionDecl) { genFunctionDecl(g, node, exported); }
+	if (k === NodeKind.FunctionDecl) {
+		if (!isDeclAlive(g, node)) return;
+		genFunctionDecl(g, node, exported);
+	}
 	else if (k === NodeKind.EnumDecl) { genEnumDecl(g, node); }
 	else if (k === NodeKind.InterfaceDecl) { genInterfaceDecl(g, node); }
 	else if (k === NodeKind.ClassDecl) { genClassDecl(g, node); }
@@ -54,7 +81,7 @@ export function genDecl(g: CGen, node: Node, exported: boolean): void {
 		genDecl(g, d.decoratedNode, exported);
 	}
 	else if (k === NodeKind.TypeAliasDecl) { /* type aliases are compile-time only */ }
-	else if (k === NodeKind.ExternDecl) { /* extern declarations handled in types/headers */ }
+	else if (k === NodeKind.ExternDecl) { genExternDecl(g, node); }
 	else if (k === NodeKind.TestDecl) { /* stripped in non-test builds */ }
 	else {
 		// Statement or variable at top level
@@ -62,17 +89,33 @@ export function genDecl(g: CGen, node: Node, exported: boolean): void {
 	}
 }
 
+// ===== Extern Declaration (non-function) =====
+// Nim pattern: importc + header → codegen emits nothing (header provides it).
+// Only emit forward struct decl for opaque types without a providing header.
+// Variables/consts: always provided by @include headers — no codegen emission.
+// Functions: handled by FunctionDecl path (prototype only via SF_IMPORT_C).
+
+function genExternDecl(g: CGen, node: Node): void {
+	const d = node.data as ExternDeclData;
+
+	if (d.externKind === ExternKind.Class || d.externKind === ExternKind.Interface || d.externKind === ExternKind.Type) {
+		// Opaque type forward decl: typedef struct Name Name;
+		// If @include provides full definition, this is harmless (forward decl before full def is valid C).
+		addLine(sec(g, CSection.ForwardDecls), "typedef struct " + d.externName + " " + d.externName + ";");
+	}
+	// Vars/consts/enums/macros: provided by @include headers, no emission needed.
+}
+
 // ===== Function Declaration =====
 
 function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	const d = node.data as FunctionDeclData;
 	const sym = node.resolvedSym;
-	if (sym === null) return;
 
 	let name = safeName(d.fnName);
 
 	// Overload mangling: if function has overloads, suffix with __idx
-	if (sym.overloads !== null && sym.overloads.length > 0) {
+	if (sym !== null && sym.overloads !== null && sym.overloads.length > 0) {
 		const idx = findOverloadIdx(sym, node.resolvedSym);
 		name = safeName(d.fnName) + "__" + idx;
 	}
@@ -102,9 +145,10 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 
 	// Non-exported functions get static prefix (Nim parity)
 	// main() is never static — called from dispatcher
+	// Lifted functions (sym === null) are always static
 	const isMain = d.fnName === "main";
-	const isExported = exported || hasFlag(sym, SF_EXPORTED);
-	const isExtern = hasFlag(sym, SF_IMPORT_C);
+	const isExported = sym !== null && (exported || hasFlag(sym, SF_EXPORTED));
+	const isExtern = sym !== null && hasFlag(sym, SF_IMPORT_C);
 	const prefix = (isExported || isExtern || isMain) ? "" : "static ";
 
 	// Emit prototype to ProcHeaders — NRVO functions return void
@@ -155,6 +199,8 @@ function genEnumDecl(g: CGen, node: Node): void {
 	// Skip if already declared (check both declaration set and type cache)
 	const key = "enum:" + d.enumName;
 	if (nameSetHas(g.declaredThings, name) || typeCacheHas(g.typeCache, key)) return;
+	// Skip if type is in shared proto header (externalTypes suppression)
+	if (typeCacheHas(g.externalTypes, key)) return;
 	nameSetAdd(g.declaredThings, name);
 
 	// Register in type cache to prevent genEnumType from re-emitting
@@ -179,6 +225,8 @@ function genInterfaceDecl(g: CGen, node: Node): void {
 	// Skip if already declared (check both declaration set and type cache)
 	const ifaceKey = "object:" + d.interfaceName;
 	if (nameSetHas(g.declaredThings, name) || typeCacheHas(g.typeCache, ifaceKey)) return;
+	// Skip if type is in shared proto header (externalTypes suppression)
+	if (typeCacheHas(g.externalTypes, ifaceKey)) return;
 	nameSetAdd(g.declaredThings, name);
 
 	// Register in type cache to prevent genObjectType from re-emitting
@@ -215,6 +263,8 @@ function genClassDecl(g: CGen, node: Node): void {
 	// Skip if already declared (check both declaration set and type cache)
 	const classKey = "object:" + d.className;
 	if (nameSetHas(g.declaredThings, name) || typeCacheHas(g.typeCache, classKey)) return;
+	// Skip if type is in shared proto header (externalTypes suppression)
+	if (typeCacheHas(g.externalTypes, classKey)) return;
 	nameSetAdd(g.declaredThings, name);
 
 	// Register in type cache to prevent genObjectType from re-emitting
@@ -333,11 +383,18 @@ function genTopLevelStmt(g: CGen, node: Node): void {
 		genGlobalVar(g, node);
 		return;
 	}
-	// Other statements go to ModuleInit
-	const p = createProc("__module_init", null as unknown as Type);
+	// Other statements go to ModuleInit — use shared initProc for consistent temp counter
+	const p = g.initProc;
 	genStmt(g, p, node);
+	const locals = readProcLocals(p);
 	const stmts = readProcStmts(p);
-	add(sec(g, CSection.ModuleInit), stmts);
+	clearProcBuffers(p);
+	if (locals.length > 0) {
+		add(sec(g, CSection.ModuleInit), locals);
+	}
+	if (stmts.length > 0) {
+		add(sec(g, CSection.ModuleInit), stmts);
+	}
 }
 
 // ===== Global Variable Declaration =====
@@ -359,11 +416,17 @@ function genGlobalVar(g: CGen, node: Node): void {
 
 	// Non-trivial initializers go to ModuleInit (not valid as C global initializers)
 	if (d.initializer !== null) {
-		const p = createProc("__init", null as unknown as Type);
+		const p = g.initProc;
 		const initSnippet = genExpr(g, p, d.initializer);
 		const locals = readProcLocals(p);
+		const stmts = readProcStmts(p);
+		// Clear after read — shared initProc persists across all global vars
+		clearProcBuffers(p);
 		if (locals.length > 0) {
 			add(sec(g, CSection.ModuleInit), locals);
+		}
+		if (stmts.length > 0) {
+			add(sec(g, CSection.ModuleInit), stmts);
 		}
 		addLine(sec(g, CSection.ModuleInit), "  " + varName + " = " + initSnippet + ";");
 	}
@@ -439,38 +502,38 @@ function declOutput(input: string): string {
 
 test "simple function" {
 	const result = declOutput("function foo(): void { return; }");
-	check(result.length > 0);
+	expect(result.length > 0);
 	// Should have prototype and body
 }
 
 test "function with params" {
 	const result = declOutput("function add(a: number, b: number): number { return a + b; }");
-	check(result.length > 0);
+	expect(result.length > 0);
 }
 
 test "simple enum" {
 	const result = declOutput("enum Color { Red, Green, Blue }");
-	check(result.length > 0);
+	expect(result.length > 0);
 }
 
 test "simple interface" {
 	const result = declOutput("interface Point { x: number; y: number; }");
-	check(result.length > 0);
+	expect(result.length > 0);
 }
 
 test "exported function" {
 	const result = declOutput("export function bar(): void { return; }");
-	check(result.length > 0);
+	expect(result.length > 0);
 }
 
 test "const global" {
 	const result = declOutput("const x: number = 42;");
-	check(result.length > 0);
+	expect(result.length > 0);
 }
 
 test "NRVO function signature" {
 	const result = declOutput("interface Point { x: number; y: number; } function makePoint(): Point { return { x: 0, y: 0 }; }");
 	// Should have void return + __result param in the output
-	check(result.length > 50);
+	expect(result.length > 50);
 }
 

@@ -6,7 +6,7 @@
 // Arrays passed by pointer — bare T[] types.
 
 import { taHashString } from "./hash";
-import { check } from "std/testing";
+
 
 // ===== File Entry =====
 
@@ -115,45 +115,45 @@ export function getFilePathByIndex(store: TaFileInputStore, index: number): stri
 // ===== Tests =====
 test "starts empty" {
 	const store = createFileInputStore();
-	check(store.files.length === 0);
-	check(store.nextFileId === 0);
+	expect(store.files.length === 0);
+	expect(store.nextFileId === 0);
 }
 
 test "set new file returns true" {
 	const store = createFileInputStore();
-	check(setFileText(store, "a.ms", "const x = 1;"));
+	expect(setFileText(store, "a.ms", "const x = 1;"));
 }
 
 test "set same content returns false" {
 	const store = createFileInputStore();
 	setFileText(store, "a.ms", "const x = 1;");
-	check(!setFileText(store, "a.ms", "const x = 1;"));
+	expect(!setFileText(store, "a.ms", "const x = 1;"));
 }
 
 test "set different content returns true" {
 	const store = createFileInputStore();
 	setFileText(store, "a.ms", "const x = 1;");
-	check(setFileText(store, "a.ms", "const x = 2;"));
+	expect(setFileText(store, "a.ms", "const x = 2;"));
 }
 
 test "getFileId sequential" {
 	const store = createFileInputStore();
 	setFileText(store, "a.ms", "a");
 	setFileText(store, "b.ms", "b");
-	check(getFileId(store, "a.ms") === 0);
-	check(getFileId(store, "b.ms") === 1);
+	expect(getFileId(store, "a.ms") === 0);
+	expect(getFileId(store, "b.ms") === 1);
 }
 
 test "getFileId unknown returns -1" {
 	const store = createFileInputStore();
-	check(getFileId(store, "unknown.ms") === -1);
+	expect(getFileId(store, "unknown.ms") === -1);
 }
 
 test "getFileText retrieves source" {
 	const store = createFileInputStore();
 	setFileText(store, "a.ms", "hello world");
 	const id = getFileId(store, "a.ms");
-	check(getFileText(store, id) === "hello world");
+	expect(getFileText(store, id) === "hello world");
 }
 
 test "getFileText after update" {
@@ -161,27 +161,27 @@ test "getFileText after update" {
 	setFileText(store, "a.ms", "v1");
 	const id = getFileId(store, "a.ms");
 	setFileText(store, "a.ms", "v2");
-	check(getFileText(store, id) === "v2");
+	expect(getFileText(store, id) === "v2");
 }
 
 test "hasFile true/false" {
 	const store = createFileInputStore();
-	check(!hasFile(store, "a.ms"));
+	expect(!hasFile(store, "a.ms"));
 	setFileText(store, "a.ms", "x");
-	check(hasFile(store, "a.ms"));
+	expect(hasFile(store, "a.ms"));
 }
 
 test "getFilePath reverse lookup" {
 	const store = createFileInputStore();
 	setFileText(store, "/a/b.ms", "x");
 	const id = getFileId(store, "/a/b.ms");
-	check(getFilePath(store, id) === "/a/b.ms");
-	check(getFilePath(store, 999) === "");
+	expect(getFilePath(store, id) === "/a/b.ms");
+	expect(getFilePath(store, 999) === "");
 }
 
 test "getFileHash nonzero" {
 	const store = createFileInputStore();
 	setFileText(store, "a.ms", "content");
 	const id = getFileId(store, "a.ms");
-	check(getFileHash(store, id) !== 0);
+	expect(getFileHash(store, id) !== 0);
 }

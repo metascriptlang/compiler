@@ -13,7 +13,6 @@ import { Node, NodeKind, ExprStmtData, ConditionalExprData } from "../../ast/nod
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeIf, makeBlock, makeExprStmt } from "../util";
-import { check } from "std/testing";
 import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter } from "../testUtil";
 
 // ===== Visitor =====
@@ -38,14 +37,14 @@ export function lowerConditionalExpr(program: Node, ctx: TransformContext): Node
 }
 
 // ===== Tests =====
-test "ternary in stmt becomes if" { check(firstStmtKindAfter("a ? b : c;", lowerConditionalExpr) === NodeKind.IfStmt); }
+test "ternary in stmt becomes if" { expect(firstStmtKindAfter("a ? b : c;", lowerConditionalExpr) === NodeKind.IfStmt); }
 
-test "non-ternary ExprStmt unchanged" { check(firstStmtKindAfter("f();", lowerConditionalExpr) === NodeKind.ExprStmt); }
+test "non-ternary ExprStmt unchanged" { expect(firstStmtKindAfter("f();", lowerConditionalExpr) === NodeKind.ExprStmt); }
 
-test "variable decl with ternary unchanged" { check(firstStmtKindAfter("const x = a ? b : c;", lowerConditionalExpr) === NodeKind.VariableDecl); }
+test "variable decl with ternary unchanged" { expect(firstStmtKindAfter("const x = a ? b : c;", lowerConditionalExpr) === NodeKind.VariableDecl); }
 
-test "while unchanged" { check(firstStmtKindAfter("while (true) {}", lowerConditionalExpr) === NodeKind.WhileStmt); }
+test "while unchanged" { expect(firstStmtKindAfter("while (true) {}", lowerConditionalExpr) === NodeKind.WhileStmt); }
 
-test "stmt count preserved" { check(stmtCountAfter("let a = 1; let b = 2;", lowerConditionalExpr) === 2); }
+test "stmt count preserved" { expect(stmtCountAfter("let a = 1; let b = 2;", lowerConditionalExpr) === 2); }
 
-test "binary expr unchanged" { check(firstExprKindAfter("x + y;", lowerConditionalExpr) === NodeKind.BinaryExpr); }
+test "binary expr unchanged" { expect(firstExprKindAfter("x + y;", lowerConditionalExpr) === NodeKind.BinaryExpr); }

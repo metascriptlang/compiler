@@ -10,7 +10,6 @@ import { Node, NodeKind, ExprStmtData, UpdateExprData } from "../../ast/node";
 import { TransformContext, createTransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeExprStmt, makeAssign, makeBinary, makeNumber } from "../util";
-import { check } from "std/testing";
 import { firstStmtKindAfter, stmtCountAfter, firstExprKindAfter, parseInput, getStmts } from "../testUtil";
 
 // ===== Visitor =====
@@ -52,16 +51,16 @@ function innerExprKindAfterUpdate(input: string): NodeKind {
 }
 
 // ===== Tests =====
-test "x++ becomes assignment" { check(innerExprKindAfterUpdate("x++;") === NodeKind.BinaryExpr); }
+test "x++ becomes assignment" { expect(innerExprKindAfterUpdate("x++;") === NodeKind.BinaryExpr); }
 
-test "--x becomes assignment" { check(innerExprKindAfterUpdate("--x;") === NodeKind.BinaryExpr); }
+test "--x becomes assignment" { expect(innerExprKindAfterUpdate("--x;") === NodeKind.BinaryExpr); }
 
-test "x-- becomes assignment" { check(innerExprKindAfterUpdate("x--;") === NodeKind.BinaryExpr); }
+test "x-- becomes assignment" { expect(innerExprKindAfterUpdate("x--;") === NodeKind.BinaryExpr); }
 
-test "++x becomes assignment" { check(innerExprKindAfterUpdate("++x;") === NodeKind.BinaryExpr); }
+test "++x becomes assignment" { expect(innerExprKindAfterUpdate("++x;") === NodeKind.BinaryExpr); }
 
-test "non-update ExprStmt unchanged" { check(firstExprKindAfter("f();", lowerUpdateExpr) === NodeKind.CallExpr); }
+test "non-update ExprStmt unchanged" { expect(firstExprKindAfter("f();", lowerUpdateExpr) === NodeKind.CallExpr); }
 
-test "while unchanged" { check(firstStmtKindAfter("while (true) {}", lowerUpdateExpr) === NodeKind.WhileStmt); }
+test "while unchanged" { expect(firstStmtKindAfter("while (true) {}", lowerUpdateExpr) === NodeKind.WhileStmt); }
 
-test "stmt count preserved" { check(stmtCountAfter("let a = 1; let b = 2;", lowerUpdateExpr) === 2); }
+test "stmt count preserved" { expect(stmtCountAfter("let a = 1; let b = 2;", lowerUpdateExpr) === 2); }

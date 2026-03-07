@@ -13,7 +13,7 @@ import { TransAmDb, createTransAmDb } from "../transam/index";
 import { requestCancel, resetCancel } from "../transam/cancel";
 import { lspDispatch, buildTransitiveDiagnosticsWire, CompletionCache, createCompletionCache } from "./handlers";
 import { readLine, readBytes, writeStdout, writeStderr } from "std/io";
-import { check } from "std/testing";
+
 
 // ===== Server State =====
 
@@ -133,25 +133,25 @@ export function processMessage(msg: string, state: LspServerState): string {
 // ===== Tests =====
 test "create state" {
 	const state = createServerState();
-	check(!state.initialized);
-	check(!state.shutdownRequested);
+	expect(!state.initialized);
+	expect(!state.shutdownRequested);
 }
 
 test "initialize sets flag" {
 	const state = createServerState();
 	const initMsg = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}";
 	const response = processMessage(initMsg, state);
-	check(state.initialized);
-	check(response.length > 0);
+	expect(state.initialized);
+	expect(response.length > 0);
 	// Response is wire-formatted (starts with Content-Length)
-	check(lspParseContentLength(lspGetField(response, "")) >= 0 || response.length > 20);
+	expect(lspParseContentLength(lspGetField(response, "")) >= 0 || response.length > 20);
 }
 
 test "shutdown sets flag" {
 	const state = createServerState();
 	const shutdownMsg = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\",\"params\":{}}";
 	processMessage(shutdownMsg, state);
-	check(state.shutdownRequested);
+	expect(state.shutdownRequested);
 }
 
 test "hover on unknown uri returns wire response" {
@@ -159,7 +159,7 @@ test "hover on unknown uri returns wire response" {
 	const hoverMsg = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":0}}}";
 	const response = processMessage(hoverMsg, state);
 	// Should return a wire-formatted response
-	check(response.length > 0);
+	expect(response.length > 0);
 }
 
 test "unknown notification returns empty" {
@@ -167,11 +167,11 @@ test "unknown notification returns empty" {
 	// No "id" field — pure notification
 	const notif = "{\"jsonrpc\":\"2.0\",\"method\":\"$/setTrace\",\"params\":{\"value\":\"off\"}}";
 	const response = processMessage(notif, state);
-	check(response === "");
+	expect(response === "");
 }
 
 test "content length parsing" {
-	check(lspParseContentLength("Content-Length: 52") === 52);
-	check(lspParseContentLength("Content-Length: 0") === 0);
-	check(lspParseContentLength("Content-Type: text") === -1);
+	expect(lspParseContentLength("Content-Length: 52") === 52);
+	expect(lspParseContentLength("Content-Length: 0") === 0);
+	expect(lspParseContentLength("Content-Type: text") === -1);
 }

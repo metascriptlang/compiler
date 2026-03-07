@@ -2,6 +2,7 @@
 // Pattern: ~/projects/metascript/src/parser/context.zig
 
 import { Token, TokenKind } from "../lexer/token";
+import { isIdentLike } from "./util";
 
 // ===== Parser State =====
 
@@ -10,34 +11,78 @@ export interface ParserState {
 	position: number;
 	errors: string[];
 	panicMode: boolean;
+	pendingComments: Token[]; // Added for comment preservation
 }
 
 export function createState(tokens: Token[]): ParserState {
-	return { tokens, position: 0, errors: [], panicMode: false };
+	return { tokens, position: 0, errors: [], panicMode: false, pendingComments: [] };
 }
 
-export function current(state: ParserState): Token {
+// Internal helper to get the raw token at current position (including comments)
+function rawCurrent(state: ParserState): Token {
 	return state.tokens[state.position];
 }
 
+// Public helper to get the next non-comment token.
+// Transparently skips comments so parser logic remains focused on semantics.
+export function current(state: ParserState): Token {
+	let pos = state.position;
+	while (pos < state.tokens.length && state.tokens[pos].kind === TokenKind.Comment) {
+		pos += 1;
+	}
+	if (pos < state.tokens.length) return state.tokens[pos];
+	return state.tokens[state.tokens.length - 1]; // Safe EOF fallback
+}
+
 export function advance(state: ParserState): Token {
-	const token = current(state);
-	state.position += 1;
+	// Skip and collect leading comments into the side-channel
+	while (state.position < state.tokens.length && state.tokens[state.position].kind === TokenKind.Comment) {
+		state.pendingComments.push(state.tokens[state.position]);
+		state.position += 1;
+	}
+	
+	const token = state.tokens[state.position];
+	if (token.kind !== TokenKind.Eof) {
+		state.position += 1;
+	}
 	return token;
 }
 
+// Helper to take and clear pending comments (the "Harvest")
+// Audit fix: Also harvests comments at current position that haven't been "advanced" over yet.
+export function takePendingComments(state: ParserState): Token[] {
+	while (state.position < state.tokens.length && state.tokens[state.position].kind === TokenKind.Comment) {
+		state.pendingComments.push(state.tokens[state.position]);
+		state.position += 1;
+	}
+	const comments = state.pendingComments;
+	state.pendingComments = [];
+	return comments;
+}
+
 export function isAtEnd(state: ParserState): boolean {
-	return current(state).kind === TokenKind.Eof;
+	let pos = state.position;
+	// Skip comments to see if we are genuinely at EOF
+	while (pos < state.tokens.length && state.tokens[pos].kind === TokenKind.Comment) {
+		pos += 1;
+	}
+	if (pos >= state.tokens.length) return true;
+	return state.tokens[pos].kind === TokenKind.Eof;
 }
 
 // ===== Lookahead =====
 
 export function peek(state: ParserState, offset: number): Token {
-	const idx = state.position + offset;
-	if (idx < state.tokens.length) {
-		return state.tokens[idx];
+	let pos = state.position;
+	let count = 0;
+	while (pos < state.tokens.length) {
+		if (state.tokens[pos].kind !== TokenKind.Comment) {
+			if (count === offset) return state.tokens[pos];
+			count += 1;
+		}
+		pos += 1;
 	}
-	return state.tokens[state.tokens.length - 1];
+	return state.tokens[state.tokens.length - 1]; // EOF
 }
 
 // ===== Expect Helper =====
@@ -95,6 +140,18 @@ export function synchronize(state: ParserState): void {
 
 // ===== Common Helpers =====
 
+// Collect token text from a raw index range, skipping Comment tokens.
+// Used by type annotation capture, as-type, sizeof, alias, default value reconstruction.
+export function collectTokenText(state: ParserState, start: number, end: number): string {
+	let text = "";
+	for (let i = start; i < end; i += 1) {
+		if (state.tokens[i].kind === TokenKind.Comment) continue;
+		if (text !== "") text = text + " ";
+		text = text + state.tokens[i].value;
+	}
+	return text;
+}
+
 // Consume optional trailing semicolon
 export function consumeSemicolon(state: ParserState): void {
 	if (!isAtEnd(state) && current(state).kind === TokenKind.Semicolon) {
@@ -141,7 +198,7 @@ export function captureGenericParams(state: ParserState): string {
 	let names = "";
 	let depth = 1;
 	while (!isAtEnd(state) && depth > 0) {
-		if (current(state).kind === TokenKind.Ident && depth === 1) {
+		if (isIdentLike(current(state)) && depth === 1) {
 			if (names !== "") { names = names + ","; }
 			names = names + current(state).value;
 			advance(state);
@@ -149,7 +206,7 @@ export function captureGenericParams(state: ParserState): string {
 			if (!isAtEnd(state) && current(state).kind === TokenKind.Extends && depth === 1) {
 				advance(state); // skip 'extends'
 				// Capture constraint type name
-				if (!isAtEnd(state) && current(state).kind === TokenKind.Ident) {
+				if (!isAtEnd(state) && isIdentLike(current(state))) {
 					names = names + ":" + current(state).value;
 					advance(state);
 				}

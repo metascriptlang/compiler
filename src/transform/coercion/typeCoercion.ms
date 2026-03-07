@@ -5,7 +5,6 @@ import { Node, NodeKind, CallExprData, IdentifierData } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeMember, makeCall } from "../util";
-import { check } from "std/testing";
 import { firstExprKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -33,10 +32,10 @@ function lowerCoercionNode(node: Node): Node {
 }
 
 // ===== Tests =====
-test "String(x) becomes call" { check(firstExprKindAfter("String(x);", lowerTypeCoercion) === NodeKind.CallExpr); }
+test "String(x) becomes call" { expect(firstExprKindAfter("String(x);", lowerTypeCoercion) === NodeKind.CallExpr); }
 
-test "Number(x) unchanged" { check(firstExprKindAfter("Number(x);", lowerTypeCoercion) === NodeKind.CallExpr); }
+test "Number(x) unchanged" { expect(firstExprKindAfter("Number(x);", lowerTypeCoercion) === NodeKind.CallExpr); }
 
-test "regular call unchanged" { check(firstExprKindAfter("foo(x);", lowerTypeCoercion) === NodeKind.CallExpr); }
+test "regular call unchanged" { expect(firstExprKindAfter("foo(x);", lowerTypeCoercion) === NodeKind.CallExpr); }
 
-test "String() no args unchanged" { check(firstExprKindAfter("String();", lowerTypeCoercion) === NodeKind.CallExpr); }
+test "String() no args unchanged" { expect(firstExprKindAfter("String();", lowerTypeCoercion) === NodeKind.CallExpr); }

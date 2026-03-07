@@ -5,7 +5,7 @@
 // Honors NO_COLOR env var (https://no-color.org) and --colors flag
 
 import { getEnv } from "std/process";
-import { check } from "std/testing";
+
 
 // ===== Color enable/disable =====
 
@@ -197,72 +197,72 @@ export function stripAnsi(text: string): string {
 // ===== Tests =====
 test "red wraps text" {
 	const result = red("hello");
-	check(result.length > 5);
+	expect(result.length > 5);
 }
 
 test "bold wraps text" {
 	const result = bold("hello");
-	check(result.length > 5);
+	expect(result.length > 5);
 }
 
 test "green wraps text" {
 	const result = green("ok");
-	check(result.length > 2);
+	expect(result.length > 2);
 }
 
 test "bold + red composes" {
 	const result = bold(red("error"));
-	check(result.length > 10);
+	expect(result.length > 10);
 }
 
 test "dim composes" {
 	const result = dim(gray("faded"));
-	check(result.length > 5);
+	expect(result.length > 5);
 }
 
 test "error is bold red" {
 	const e = error("fail");
-	check(e.length > 4);
+	expect(e.length > 4);
 }
 
 test "success is bold green" {
 	const s = success("pass");
-	check(s.length > 4);
+	expect(s.length > 4);
 }
 
 test "warning is bold yellow" {
 	const w = warning("warn");
-	check(w.length > 4);
+	expect(w.length > 4);
 }
 
 test "info is bold cyan" {
 	const inf = info("note");
-	check(inf.length > 4);
+	expect(inf.length > 4);
 }
 
 test "hint is dim" {
 	const h = hint("maybe");
-	check(h.length > 5);
+	expect(h.length > 5);
 }
 
 test "path is underline cyan" {
 	const p = path("/foo/bar");
-	check(p.length > 8);
+	expect(p.length > 8);
 }
 
 test "strip removes codes" {
 	const colored = red("hello");
 	const stripped = stripAnsi(colored);
-	check(stripped === "hello");
+	expect(stripped === "hello");
 }
 
 test "strip handles nested" {
 	const colored = bold(red("x"));
 	const stripped = stripAnsi(colored);
-	check(stripped === "x");
+	expect(stripped === "x");
 }
 
 test "strip preserves plain text" {
 	const stripped = stripAnsi("plain");
-	check(stripped === "plain");
+	expect(stripped === "plain");
 }

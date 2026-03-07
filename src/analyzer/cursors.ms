@@ -23,7 +23,6 @@ import {
 	ProgramData,
 	DeclKind,
 } from "../ast/node";
-import { check } from "std/testing";
 import { parseInput } from "../transform/testUtil";
 
 // ===== Cursor Set =====
@@ -354,65 +353,65 @@ function getFuncBody(input: string): Node {
 test "local read-only borrow is cursor" {
 	const body = getFuncBody("function f(arr: string[]) { const x = arr.length; }");
 	const cs = inferCursors(body);
-	check(isCursorVar(cs, "x"));
+	expect(isCursorVar(cs, "x"));
 }
 
 test "returned variable is not cursor" {
 	const body = getFuncBody("function f(arr: string[]) { const x = arr[0]; return x; }");
 	const cs = inferCursors(body);
-	check(!isCursorVar(cs, "x"));
+	expect(!isCursorVar(cs, "x"));
 }
 
 test "call argument is not cursor" {
 	const body = getFuncBody("function f(arr: string[]) { const x = arr[0]; process(x); }");
 	const cs = inferCursors(body);
-	check(!isCursorVar(cs, "x"));
+	expect(!isCursorVar(cs, "x"));
 }
 
 test "assigned to another var is not cursor" {
 	const body = getFuncBody("function f(arr: string[]) { const x = arr[0]; const y = x; }");
 	const cs = inferCursors(body);
-	check(!isCursorVar(cs, "x"));
+	expect(!isCursorVar(cs, "x"));
 }
 
 test "let variable is not cursor" {
 	const body = getFuncBody("function f(arr: string[]) { let x = arr[0]; }");
 	const cs = inferCursors(body);
-	check(!isCursorVar(cs, "x"));
+	expect(!isCursorVar(cs, "x"));
 }
 
 test "call result is not cursor" {
 	const body = getFuncBody("function f() { const x = getValue(); }");
 	const cs = inferCursors(body);
-	check(!isCursorVar(cs, "x"));
+	expect(!isCursorVar(cs, "x"));
 }
 
 test "member access with only read use is cursor" {
 	const body = getFuncBody("function f(obj: any) { const name = obj.name; if (name) {} }");
 	const cs = inferCursors(body);
-	check(isCursorVar(cs, "name"));
+	expect(isCursorVar(cs, "name"));
 }
 
 test "thrown variable is not cursor" {
 	const body = getFuncBody("function f(arr: string[]) { const x = arr[0]; throw x; }");
 	const cs = inferCursors(body);
-	check(!isCursorVar(cs, "x"));
+	expect(!isCursorVar(cs, "x"));
 }
 
 test "stored in object is not cursor" {
 	const body = getFuncBody("function f(arr: string[]) { const x = arr[0]; const obj = { val: x }; }");
 	const cs = inferCursors(body);
-	check(!isCursorVar(cs, "x"));
+	expect(!isCursorVar(cs, "x"));
 }
 
 test "DRC temp is not cursor" {
 	const body = getFuncBody("function f(arr: string[]) { const $result = arr[0]; }");
 	const cs = inferCursors(body);
-	check(!isCursorVar(cs, "$result"));
+	expect(!isCursorVar(cs, "$result"));
 }
 
 test "nested block cursor" {
 	const body = getFuncBody("function f(obj: any) { if (true) { const x = obj.name; } }");
 	const cs = inferCursors(body);
-	check(isCursorVar(cs, "x"));
+	expect(isCursorVar(cs, "x"));
 }

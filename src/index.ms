@@ -63,7 +63,7 @@ export function main(): number {
 		cmdPipeline(opts.inputFile);
 	} else if (cmd === "fmt") {
 		requireFile(opts);
-		cmdFmt(opts.inputFile);
+		cmdFmt(opts.inputFile, opts);
 	} else if (cmd === "init") {
 		cmdInit(opts.inputFile);
 	} else if (cmd === "clean") {

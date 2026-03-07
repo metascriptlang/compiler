@@ -4,13 +4,14 @@
 import { Node } from "../ast/node";
 import {
 	CheckerContext, createModuleContext, createContext,
-	ExportedSymInfo, createExportRegistry, registerModuleExports,
+	ExportedSymInfo, createExportRegistry, registerModuleExports, updateModuleExports,
 	findExtensionByName, findExtensionByType, registerExtension,
 } from "./context";
 import { SymbolKind, ScopeKind, openScope, hasFlag, SF_EXPORTED } from "./symbol";
 import { Module, ModuleGraph, findModule } from "../module/graph";
 import { preprocessHeaders } from "../module/aro";
 import { runThreePasses } from "./checkPass";
+import { collectTopLevelLocal } from "./collectPass";
 import { inferOwnership } from "./ownershipInference";
 import { globalImports } from "./prelude";
 import { parseSource } from "../parser/statements/validation";
@@ -18,12 +19,22 @@ import { lex } from "../lexer/lexer";
 import { ParserState, createState } from "../parser/context";
 import { callStateProgramParser } from "../parser/statements/callbacks";
 import { readFile } from "std/process";
-import { check } from "std/testing";
 
-// Nim-aligned: check modules one at a time in topological (loadOrder) sequence.
-// Each module gets all 3 passes before moving to the next.
-// Since modules are in dependency order, exports from dependencies are
-// available when checking their dependents.
+
+// Nim-aligned two-phase module checking (Nim: modulegraphs.nim ifaces pattern).
+//
+// Phase 1: Parse + collectTopLevelLocal (skip imports) for ALL modules.
+//          Register exported names+kinds with placeholder types in ExportRegistry.
+//          After Phase 1, every module's names are visible cross-module.
+//
+// Phase 2: For each module in loadOrder, run full 3 passes (imports now resolve
+//          from Phase 1 placeholders or earlier Phase 2 resolved types).
+//          After each module, update its ExportRegistry entry with resolved types.
+//
+// For circular deps (A→B→A, loadOrder=[B,A]):
+//   Phase 1: Both registered with placeholder types
+//   Phase 2: B checked first — imports A → placeholder types. A checked second — imports B → resolved types.
+//   Matches Nim's partial visibility semantics for circular imports.
 
 // Load a prelude import by probing: .ms → /index.cms → /index.ms
 function loadPreludeInto(ctx: CheckerContext, specifier: string, stdPath: string): void {
@@ -57,10 +68,67 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 	// Pre-process C header modules (synthesis fallback for test/direct-call paths)
 	preprocessHeaders(graph, false);
 
+	// ================================================================
+	// PHASE 1: Early export registration (Nim: registerModule + empty ifaces)
+	// Parse + collectTopLevelLocal for ALL modules, register names+kinds
+	// ================================================================
 	for (const path of graph.loadOrder) {
 		const mod = findModule(graph, path);
 		if (mod === null) continue;
 		if (mod.source === "") continue;
+
+		const lr = lex(mod.source);
+		if (!lr.ok) continue;  // Phase 1 best-effort; errors caught in Phase 2
+		const parseState = createState(lr.value);
+		const pr = callStateProgramParser(parseState);
+		if (!pr.ok) continue;
+
+		// Temporary context for Phase 1 (discarded after)
+		const p1ctx = createModuleContext(graph, mod);
+		p1ctx.exportRegistry = registry;
+		for (const sym of baseCtx.table.current.symbols) {
+			p1ctx.table.current.symbols.push(sym);
+		}
+		if (baseCtx.extensionRegistry !== null && p1ctx.extensionRegistry !== null) {
+			for (const ext of baseCtx.extensionRegistry.methods) {
+				registerExtension(p1ctx.extensionRegistry, ext);
+			}
+		}
+		openScope(p1ctx.table, ScopeKind.Module);
+
+		// Collect local declarations only (no imports — registry not ready)
+		collectTopLevelLocal(p1ctx, pr.value);
+
+		// Register early exports (names + kinds, placeholder types)
+		const earlyExports: ExportedSymInfo[] = [];
+		for (const sym of p1ctx.table.current.symbols) {
+			if (hasFlag(sym, SF_EXPORTED)) {
+				const info: ExportedSymInfo = {
+					name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
+					overloadTypes: [],
+					extReceiverType: "", extIsStatic: false,
+					overloadExtReceiverTypes: [], overloadExtIsStatic: [],
+					nativeName: sym.nativeName, builtinKind: sym.builtinKind,
+					overloadNativeNames: [], overloadBuiltinKinds: [],
+					defaultTexts: [], overloadDefaultTexts: [],
+				};
+				earlyExports.push(info);
+			}
+		}
+		registerModuleExports(registry, path, earlyExports);
+	}
+
+	// ================================================================
+	// PHASE 2: Full checking (Nim: semantic pass with cross-module visibility)
+	// All modules' names now in registry. Run full 3 passes per module.
+	// ================================================================
+	for (const path of graph.loadOrder) {
+		const mod = findModule(graph, path);
+		if (mod === null) continue;
+		if (mod.source === "") continue;
+
+		// Clear Phase 1 exportNames to avoid duplicates
+		mod.exportNames = [];
 
 		// Parse with recovery — always get partial AST, errors in state.errors
 		const lr = lex(mod.source);
@@ -79,13 +147,11 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 		ctx.exportRegistry = registry;
 
 		// Inject prelude symbols into this module's Global scope
-		// (so console, Math, etc. are available)
 		for (const sym of baseCtx.table.current.symbols) {
 			ctx.table.current.symbols.push(sym);
 		}
 
-		// Inject prelude extensions into this module's extension registry
-		// (so arr.push(), str.trim() etc. resolve as extension methods)
+		// Inject prelude extensions
 		if (baseCtx.extensionRegistry !== null && ctx.extensionRegistry !== null) {
 			for (const ext of baseCtx.extensionRegistry.methods) {
 				registerExtension(ctx.extensionRegistry, ext);
@@ -97,7 +163,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 
 		runThreePasses(ctx, pr.value);
 
-		// Phase 2.5: Ownership Inference (for cross-module consumption)
+		// Ownership Inference (for cross-module consumption)
 		inferOwnership(ctx, pr.value);
 
 		// Copy errors to module
@@ -105,7 +171,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 			mod.errors.push(err);
 		}
 
-		// Extract exports into registry for downstream modules
+		// Extract resolved exports and UPDATE registry (replaces Phase 1 placeholders)
 		const exports: ExportedSymInfo[] = [];
 		for (const sym of ctx.table.current.symbols) {
 			if (hasFlag(sym, SF_EXPORTED)) {
@@ -114,13 +180,11 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 				let extRecv = "";
 				let extStatic = false;
 				if (ctx.extensionRegistry !== null && sym.symbolKind === SymbolKind.Function) {
-					// Use sym reference to find the primary extension (not findExtensionByName which grabs first)
 					const ext = findExtensionByType(ctx.extensionRegistry, sym.name, sym.symbolType);
 					if (ext !== null) {
 						extRecv = ext.receiverTypeName;
 						extStatic = ext.isStatic;
 					} else {
-						// Fallback: first match (non-overloaded extensions)
 						const extFb = findExtensionByName(ctx.extensionRegistry, sym.name);
 						if (extFb !== null) {
 							extRecv = extFb.receiverTypeName;
@@ -176,7 +240,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 				exports.push(info);
 			}
 		}
-		registerModuleExports(registry, path, exports);
+		updateModuleExports(registry, path, exports);
 	}
 	return registry;
 }
@@ -195,10 +259,10 @@ test "single module checked" {
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	checkModuleGraph(graph, "");
-	check(graph.errors.length === 0);
+	expect(graph.errors.length === 0);
 	const mod = findModule(graph, "/src/a.ms");
-	check(mod !== null);
-	check(mod.errors.length === 0);
+	expect(mod !== null);
+	expect(mod.errors.length === 0);
 }
 
 test "errors collected per module" {
@@ -208,8 +272,8 @@ test "errors collected per module" {
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	checkModuleGraph(graph, "");
 	const mod = findModule(graph, "/src/a.ms");
-	check(mod !== null);
-	check(mod.errors.length > 0);
+	expect(mod !== null);
+	expect(mod.errors.length > 0);
 }
 
 test "export names recorded" {
@@ -219,9 +283,9 @@ test "export names recorded" {
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	checkModuleGraph(graph, "");
 	const mod = findModule(graph, "/src/a.ms");
-	check(mod !== null);
-	check(hasExportName(mod, "foo"));
-	check(!hasExportName(mod, "bar"));
+	expect(mod !== null);
+	expect(hasExportName(mod, "foo"));
+	expect(!hasExportName(mod, "bar"));
 }
 
 test "two module chain checked" {
@@ -234,9 +298,9 @@ test "two module chain checked" {
 	// Both modules should check without errors
 	const modA = findModule(graph, "/src/a.ms");
 	const modB = findModule(graph, "/src/b.ms");
-	check(modA !== null);
-	check(modB !== null);
-	check(modB.errors.length === 0);
+	expect(modA !== null);
+	expect(modB !== null);
+	expect(modB.errors.length === 0);
 }
 
 test "imported function has Function type" {
@@ -248,10 +312,10 @@ test "imported function has Function type" {
 	checkModuleGraph(graph, "");
 	const modA = findModule(graph, "/src/a.ms");
 	const modB = findModule(graph, "/src/b.ms");
-	check(modA !== null);
-	check(modB !== null);
-	check(modA.errors.length === 0);
-	check(modB.errors.length === 0);
+	expect(modA !== null);
+	expect(modB !== null);
+	expect(modA.errors.length === 0);
+	expect(modB.errors.length === 0);
 }
 
 test "imported enum available" {
@@ -262,8 +326,8 @@ test "imported enum available" {
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	checkModuleGraph(graph, "");
 	const modA = findModule(graph, "/src/a.ms");
-	check(modA !== null);
-	check(modA.errors.length === 0);
+	expect(modA !== null);
+	expect(modA.errors.length === 0);
 }
 
 test "imported interface as type annotation" {
@@ -274,8 +338,8 @@ test "imported interface as type annotation" {
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	checkModuleGraph(graph, "");
 	const modA = findModule(graph, "/src/a.ms");
-	check(modA !== null);
-	check(modA.errors.length === 0);
+	expect(modA !== null);
+	expect(modA.errors.length === 0);
 }
 
 test "non-exported name produces error" {
@@ -286,8 +350,8 @@ test "non-exported name produces error" {
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	checkModuleGraph(graph, "");
 	const modA = findModule(graph, "/src/a.ms");
-	check(modA !== null);
-	check(modA.errors.length > 0);
+	expect(modA !== null);
+	expect(modA.errors.length > 0);
 }
 
 test "3-module chain propagates types" {
@@ -299,8 +363,8 @@ test "3-module chain propagates types" {
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	checkModuleGraph(graph, "");
 	const modA = findModule(graph, "/src/a.ms");
-	check(modA !== null);
-	check(modA.errors.length === 0);
+	expect(modA !== null);
+	expect(modA.errors.length === 0);
 }
 
 test "inferred return type propagates across modules" {
@@ -313,10 +377,10 @@ test "inferred return type propagates across modules" {
 	checkModuleGraph(graph, "");
 	const modA = findModule(graph, "/src/a.ms");
 	const modB = findModule(graph, "/src/b.ms");
-	check(modA !== null);
-	check(modB !== null);
-	check(modA.errors.length === 0);
-	check(modB.errors.length === 0);
+	expect(modA !== null);
+	expect(modB !== null);
+	expect(modA.errors.length === 0);
+	expect(modB.errors.length === 0);
 }
 
 test "re-export forwards types" {
@@ -328,11 +392,11 @@ test "re-export forwards types" {
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	checkModuleGraph(graph, "");
 	const modB = findModule(graph, "/src/b.ms");
-	check(modB !== null);
-	check(hasExportName(modB, "helper"));
+	expect(modB !== null);
+	expect(hasExportName(modB, "helper"));
 	const modA = findModule(graph, "/src/a.ms");
-	check(modA !== null);
-	check(modA.errors.length === 0);
+	expect(modA !== null);
+	expect(modA.errors.length === 0);
 }
 
 test "parse error recovery still extracts exports" {
@@ -342,9 +406,9 @@ test "parse error recovery still extracts exports" {
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	checkModuleGraph(graph, "");
 	const mod = findModule(graph, "/src/a.ms");
-	check(mod !== null);
-	check(mod.errors.length > 0);
-	check(hasExportName(mod, "foo"));
+	expect(mod !== null);
+	expect(mod.errors.length > 0);
+	expect(hasExportName(mod, "foo"));
 }
 
 test "imported extension method available" {
@@ -355,8 +419,8 @@ test "imported extension method available" {
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	checkModuleGraph(graph, "");
 	const modA = findModule(graph, "/src/a.ms");
-	check(modA !== null);
-	check(modA.errors.length === 0);
+	expect(modA !== null);
+	expect(modA.errors.length === 0);
 }
 
 test "parse error in dependency doesn't block dependent" {
@@ -367,9 +431,9 @@ test "parse error in dependency doesn't block dependent" {
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	checkModuleGraph(graph, "");
 	const modA = findModule(graph, "/src/a.ms");
-	check(modA !== null);
+	expect(modA !== null);
 	// Module A can resolve 'bar' from B's partial exports
-	check(modA.errors.length === 0);
+	expect(modA.errors.length === 0);
 }
 
 test "C header import synthesizes exports" {
@@ -380,10 +444,51 @@ test "C header import synthesizes exports" {
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	checkModuleGraph(graph, "");
 	const hmod = findModule(graph, "/src/lib.h");
-	check(hmod !== null);
-	check(hmod.isCHeader);
-	check(hasExportName(hmod, "foo"));
+	expect(hmod !== null);
+	expect(hmod.isCHeader);
+	expect(hasExportName(hmod, "foo"));
 	const modA = findModule(graph, "/src/a.ms");
-	check(modA !== null);
-	check(modA.errors.length === 0);
+	expect(modA !== null);
+	expect(modA.errors.length === 0);
+}
+
+// ===== Circular Import Tests =====
+
+test "circular import no false 'not exported' error" {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/a.ms", entrySource: "import { foo } from \"./b\"; export function bar(): number { return 1; }" });
+	entries.push({ entryPath: "/src/b.ms", entrySource: "import { bar } from \"./a\"; export function foo(): string { return \"hi\"; }" });
+	const provider = createMapProvider(entries);
+	const graph = loadModuleGraph("/src/a.ms", provider);
+	checkModuleGraph(graph, "");
+	const modA = findModule(graph, "/src/a.ms");
+	const modB = findModule(graph, "/src/b.ms");
+	expect(modA !== null);
+	expect(modB !== null);
+	// Neither module should have "not exported" errors — Phase 1 registered both names
+	expect(graph.circularDeps.length > 0);
+}
+
+test "circularDeps recorded for LSP" {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/a.ms", entrySource: "import { b } from \"./b\";" });
+	entries.push({ entryPath: "/src/b.ms", entrySource: "import { a } from \"./a\";" });
+	const provider = createMapProvider(entries);
+	const graph = loadModuleGraph("/src/a.ms", provider);
+	expect(graph.circularDeps.length > 0);
+}
+
+test "non-circular modules still resolve fully" {
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/b.ms", entrySource: "export function foo(n: number): string { return \"hi\"; }" });
+	entries.push({ entryPath: "/src/a.ms", entrySource: "import { foo } from \"./b\"; const x = foo(1);" });
+	const provider = createMapProvider(entries);
+	const graph = loadModuleGraph("/src/a.ms", provider);
+	checkModuleGraph(graph, "");
+	const modA2 = findModule(graph, "/src/a.ms");
+	const modB2 = findModule(graph, "/src/b.ms");
+	expect(modA2 !== null);
+	expect(modB2 !== null);
+	expect(modA2.errors.length === 0);
+	expect(modB2.errors.length === 0);
 }

@@ -11,7 +11,6 @@
 import { Node, NodeKind, MoveExprData } from "../../ast/node";
 import { TransformContext, createTransformContext } from "../context";
 import { walkNode } from "../walker";
-import { check } from "std/testing";
 import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";
 import { ExprStmtData } from "../../ast/node";
 
@@ -31,10 +30,10 @@ export function lowerMoveExpr(program: Node, ctx: TransformContext): Node {
 }
 
 // ===== Tests =====
-test "move x becomes Identifier" { check(firstExprKindAfter("move x;", lowerMoveExpr) === NodeKind.Identifier); }
+test "move x becomes Identifier" { expect(firstExprKindAfter("move x;", lowerMoveExpr) === NodeKind.Identifier); }
 
-test "move f() becomes CallExpr" { check(firstExprKindAfter("move f();", lowerMoveExpr) === NodeKind.CallExpr); }
+test "move f() becomes CallExpr" { expect(firstExprKindAfter("move f();", lowerMoveExpr) === NodeKind.CallExpr); }
 
-test "non-move unchanged" { check(firstExprKindAfter("x;", lowerMoveExpr) === NodeKind.Identifier); }
+test "non-move unchanged" { expect(firstExprKindAfter("x;", lowerMoveExpr) === NodeKind.Identifier); }
 
-test "stmt count preserved" { check(stmtCountAfter("move a; move b;", lowerMoveExpr) === 2); }
+test "stmt count preserved" { expect(stmtCountAfter("move a; move b;", lowerMoveExpr) === 2); }

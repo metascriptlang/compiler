@@ -30,7 +30,6 @@ import { makeIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, m
 import { Type, TypeKind, isPrimitiveKind, AttachedOp, setAttachedOp } from "../../checker/types";
 import { lookupSymbol, SymbolKind, isPointerType as isPointerTypeBase } from "../../checker/symbol";
 import { checkProgram } from "../../checker/checkPass";
-import { check } from "std/testing";
 import { parseInput } from "../testUtil";
 
 // ===== Lift Context (Nim's TLiftCtx) =====
@@ -605,36 +604,36 @@ function hasTypeInfo(input: string, typeName: string): boolean {
 	return false;
 }
 
-test "primitive-only no hooks" { check(generatedFnCount("interface Point { x: number; y: number; }") === 0); }
+test "primitive-only no hooks" { expect(generatedFnCount("interface Point { x: number; y: number; }") === 0); }
 
-test "string field generates 5 hooks" { check(generatedFnCount("interface Token { value: string; }") === 5); }
+test "string field generates 5 hooks" { expect(generatedFnCount("interface Token { value: string; }") === 5); }
 
-test "array field generates 5 hooks" { check(generatedFnCount("interface Data { items: number[]; }") === 5); }
+test "array field generates 5 hooks" { expect(generatedFnCount("interface Data { items: number[]; }") === 5); }
 
-test "nested interface generates 10 hooks" { check(generatedFnCount("interface A { name: string; } interface B { a: A; }") === 10); }
+test "nested interface generates 10 hooks" { expect(generatedFnCount("interface A { name: string; } interface B { a: A; }") === 10); }
 
-test "no duplicates" { check(generatedFnCount("interface A { name: string; } interface B { a1: A; a2: A; }") === 10); }
+test "no duplicates" { expect(generatedFnCount("interface A { name: string; } interface B { a1: A; a2: A; }") === 10); }
 
-test "exported interface" { check(generatedFnCount("export interface Token { value: string; }") === 5); }
+test "exported interface" { expect(generatedFnCount("export interface Token { value: string; }") === 5); }
 
-test "no interfaces passthrough" { check(generatedFnCount("const x = 1;") === 0); }
+test "no interfaces passthrough" { expect(generatedFnCount("const x = 1;") === 0); }
 // =trace: Function fields are cyclic (closures capture refs)
-test "trace NOT generated for flat string" { check(!hasGeneratedFn("interface Token { value: string; }", "Token_trace")); }
+test "trace NOT generated for flat string" { expect(!hasGeneratedFn("interface Token { value: string; }", "Token_trace")); }
 // TypeInfo generated alongside hooks
-test "typeInfo generated" { check(hasTypeInfo("interface Token { value: string; }", "Token")); }
+test "typeInfo generated" { expect(hasTypeInfo("interface Token { value: string; }", "Token")); }
 
-test "typeInfo NOT generated for primitives" { check(!hasTypeInfo("interface Point { x: number; y: number; }", "Point")); }
+test "typeInfo NOT generated for primitives" { expect(!hasTypeInfo("interface Point { x: number; y: number; }", "Point")); }
 // Inheritance: child with own hookable field + base both generate hooks
 test "inheritance generates parent hooks" {
 	const src = "interface Base { name: string; } class Child extends Base { extra: string; }";
-	check(hasGeneratedFn(src, "Base_destroy"));
+	expect(hasGeneratedFn(src, "Base_destroy"));
 }
 // All 5 core hooks present for a hookable type
 test "all core hooks generated" {
 	const src = "interface Wrap { data: string; }";
-	check(hasGeneratedFn(src, "_destroy"));
-	check(hasGeneratedFn(src, "_copy"));
-	check(hasGeneratedFn(src, "_sink"));
-	check(hasGeneratedFn(src, "_wasMoved"));
-	check(hasGeneratedFn(src, "_dup"));
+	expect(hasGeneratedFn(src, "_destroy"));
+	expect(hasGeneratedFn(src, "_copy"));
+	expect(hasGeneratedFn(src, "_sink"));
+	expect(hasGeneratedFn(src, "_wasMoved"));
+	expect(hasGeneratedFn(src, "_dup"));
 }

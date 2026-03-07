@@ -8,7 +8,7 @@
 // dbExecute runs the full pipeline through the red-green engine.
 
 import { Node, NodeKind, nodeCacheStore, nodeCacheGet } from "../../ast/node";
-import { CheckerContext, ctxCacheStore, ctxCacheGet } from "../../checker/context";
+import { CheckerContext, ctxCacheStore, ctxCacheGet, createContext } from "../../checker/context";
 import {
 	TaQueryKey, TaQueryKind, TaQueryState, TaDurability,
 	TaRevision, createRevision, incrementRevision,
@@ -43,11 +43,25 @@ import {
 	TaStringInterner, createStringInterner,
 	internString, lookupInterned, internedCount
 } from "./intern";
-import { check } from "std/testing";
+
 import { parseSource } from "../../parser/statements/validation";
-import { checkProgram, checkProgramCancellable } from "../../checker/index";
+import { checkProgram, checkProgramCancellable, checkProgramWithRegistryCancellable } from "../../checker/index";
 import { transformProgram } from "../../transform/index";
 import { analyzeProgram } from "../../analyzer/index";
+import {
+	ExportRegistry, createExportRegistry, ExportedSymInfo,
+	findModuleExports, registerModuleExports,
+} from "../../checker/context";
+import { collectTopLevelLocal } from "../../checker/collectPass";
+import { SF_EXPORTED, hasFlag, openScope, ScopeKind } from "../../checker/symbol";
+import {
+	ImportDeclData, ExportDeclData, ProgramData,
+} from "../../ast/node";
+import {
+	Module, ModuleGraph, createModule, createModuleGraph, addModule,
+	ImportEntry, createImportEntry,
+} from "../../module/graph";
+import { getDirectImports } from "./moduleDeps";
 
 // ===== TransAmDb =====
 // Node/CheckerContext caches live in ast/node.ms and checker/context.ms
@@ -63,6 +77,7 @@ export interface TransAmDb {
 	moduleDeps: TaModuleDepGraph;
 	cancelCtx: TaCancelContext;
 	interner: TaStringInterner;
+	exportRegistry: ExportRegistry;
 }
 
 export function createTransAmDb(cacheCapacity: number): TransAmDb {
@@ -74,6 +89,7 @@ export function createTransAmDb(cacheCapacity: number): TransAmDb {
 		moduleDeps: createModuleDepGraph(),
 		cancelCtx: createCancelContext(),
 		interner: createStringInterner(),
+		exportRegistry: createExportRegistry(),
 	};
 }
 
@@ -92,7 +108,33 @@ export function dbSetFileText(db: TransAmDb, filePath: string, source: string): 
 	incrementRevision(db.revision);
 	const fileId = getFileId(db.fileInput, filePath);
 	invalidateFile(db.cache, db.moduleDeps, fileId);
+	// Invalidate ExportRegistry for this file + transitive dependents
+	dbInvalidateExports(db, fileId);
 	return true;
+}
+
+// Remove ExportRegistry entries for a file and its transitive dependents
+function dbInvalidateExports(db: TransAmDb, fileId: number): void {
+	const path = getFilePath(db.fileInput, fileId);
+	if (path !== "") removeExportEntry(db.exportRegistry, path);
+	const deps = getTransitiveDependents(db.moduleDeps, fileId);
+	for (let i = 0; i < deps.length; i = i + 1) {
+		const depPath = getFilePath(db.fileInput, deps[i]);
+		if (depPath !== "") removeExportEntry(db.exportRegistry, depPath);
+	}
+}
+
+function removeExportEntry(registry: ExportRegistry, path: string): void {
+	for (let i = 0; i < registry.entries.length; i = i + 1) {
+		if (registry.entries[i].modulePath === path) {
+			// Shift left and pop
+			for (let j = i; j < registry.entries.length - 1; j = j + 1) {
+				registry.entries[j] = registry.entries[j + 1];
+			}
+			registry.entries.pop();
+			return;
+		}
+	}
 }
 
 // Count of all files in the DB
@@ -134,6 +176,130 @@ export function dbParse(db: TransAmDb, filePath: string): Node {
 	return program;
 }
 
+// ===== Cross-Module Export Registration =====
+
+// Lazily ensure all files imported by `filePath` have their exports in the registry.
+// Walks dep edges (already stored by recordImportsForFile), runs Phase 1 for unregistered deps.
+function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: string[]): void {
+	// Cycle protection
+	for (let vi = 0; vi < visited.length; vi = vi + 1) {
+		if (visited[vi] === filePath) return;
+	}
+	visited.push(filePath);
+
+	const fileId = getFileId(db.fileInput, filePath);
+	if (fileId < 0) return;
+
+	const depIds = getDirectImports(db.moduleDeps, fileId);
+	for (let i = 0; i < depIds.length; i = i + 1) {
+		const depId = depIds[i];
+		const depPath = getFilePath(db.fileInput, depId);
+		if (depPath === "") continue;
+
+		// Skip if already registered
+		if (findModuleExports(db.exportRegistry, depPath) !== null) {
+			// Still recurse for transitive deps
+			dbEnsureExportsRegistered(db, depPath, visited);
+			continue;
+		}
+
+		// Phase 1: parse + collectTopLevelLocal → register exports
+		const depProgram = dbParse(db, depPath);
+		if (depProgram === null) continue;
+
+		const tmpCtx = createTempCollectContext();
+		collectTopLevelLocal(tmpCtx, depProgram);
+
+		const earlyExports: ExportedSymInfo[] = [];
+		for (const sym of tmpCtx.table.current.symbols) {
+			if (hasFlag(sym, SF_EXPORTED)) {
+				const info: ExportedSymInfo = {
+					name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
+					overloadTypes: [],
+					extReceiverType: "", extIsStatic: false,
+					overloadExtReceiverTypes: [], overloadExtIsStatic: [],
+					nativeName: sym.nativeName, builtinKind: sym.builtinKind,
+					overloadNativeNames: [], overloadBuiltinKinds: [],
+					defaultTexts: [], overloadDefaultTexts: [],
+				};
+				earlyExports.push(info);
+			}
+		}
+		registerModuleExports(db.exportRegistry, depPath, earlyExports);
+
+		// Recurse for transitive deps
+		dbEnsureExportsRegistered(db, depPath, visited);
+	}
+}
+
+// Create a minimal CheckerContext for Phase 1 collection (no imports, no type checking)
+function createTempCollectContext(): CheckerContext {
+	const ctx = createContext();
+	openScope(ctx.table, ScopeKind.Module);
+	return ctx;
+}
+
+// Build ImportEntry[] from parsed program's import declarations + dep edge resolution
+function buildImportEntries(db: TransAmDb, filePath: string, program: Node): ImportEntry[] {
+	const entries: ImportEntry[] = [];
+	if (program === null) return entries;
+	if (program.kind !== NodeKind.Program) return entries;
+	const pd = program.data as ProgramData;
+	const fileId = getFileId(db.fileInput, filePath);
+
+	for (let i = 0; i < pd.programStmts.length; i = i + 1) {
+		let stmt = pd.programStmts[i];
+		// Unwrap ExportDecl (re-exports)
+		if (stmt.kind === NodeKind.ExportDecl) {
+			const ed = stmt.data as ExportDeclData;
+			stmt = ed.exportedDecl;
+		}
+		if (stmt.kind !== NodeKind.ImportDecl) continue;
+		const imp = stmt.data as ImportDeclData;
+
+		// Find resolved path from dep edges
+		let resolvedPath = "";
+		const depIds = getDirectImports(db.moduleDeps, fileId);
+		for (let di = 0; di < depIds.length; di = di + 1) {
+			const dp = getFilePath(db.fileInput, depIds[di]);
+			// Match: dep path should end with the import specifier (+ .ms suffix)
+			// More robust: check if this dep was recorded for this import
+			if (dp !== "") {
+				// Simple heuristic: if specifier is "./foo", path ends with "/foo.ms"
+				if (matchesImportSpec(dp, imp.importSource)) {
+					resolvedPath = dp;
+					break;
+				}
+			}
+		}
+
+		entries.push(createImportEntry(imp.importNames, imp.importAliases, resolvedPath, imp.importSource));
+	}
+	return entries;
+}
+
+// Check if an absolute path matches an import specifier
+function matchesImportSpec(absPath: string, spec: string): boolean {
+	if (spec === "" || absPath === "") return false;
+	// Strip leading "./" or "../" to get the relative stem
+	let stem = spec;
+	while (stem.length >= 3 && stem[0] === "." && stem[1] === "." && stem[2] === "/") {
+		stem = stem.slice(3, stem.length);
+	}
+	if (stem.length >= 2 && stem[0] === "." && stem[1] === "/") {
+		stem = stem.slice(2, stem.length);
+	}
+	// absPath should end with /stem.ms or /stem/index.ms or /stem/index.cms
+	const suffixes = ["/" + stem + ".ms", "/" + stem + "/index.ms", "/" + stem + "/index.cms"];
+	for (let si = 0; si < suffixes.length; si = si + 1) {
+		const suf = suffixes[si];
+		if (absPath.length >= suf.length) {
+			if (absPath.slice(absPath.length - suf.length, absPath.length) === suf) return true;
+		}
+	}
+	return false;
+}
+
 // Execute type check query. Returns CheckerContext.
 export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const fileId = getFileId(db.fileInput, filePath);
@@ -148,12 +314,26 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const program = dbParse(db, filePath);
 	if (program === null) return null as unknown as CheckerContext;
 
+	// Ensure cross-module exports are registered for all dependencies
+	const visitedPaths: string[] = [];
+	dbEnsureExportsRegistered(db, filePath, visitedPaths);
+
 	pushFrame(db.depStack, key);
 	const pKey = createQueryKey(TaQueryKind.Parse, fileId);
 	recordDependency(db.depStack, pKey, 0);
 
 	const startVersion = getCancelVersion(db.cancelCtx);
-	const checkerCtx = checkProgramCancellable(program, db.cancelCtx, startVersion);
+
+	// Cross-module: build synthetic Module + ModuleGraph, use ExportRegistry
+	const imports = buildImportEntries(db, filePath, program);
+	const mod = createModule(filePath);
+	mod.imports = imports;
+	const graph = createModuleGraph();
+	addModule(graph, mod);
+	const checkerCtx = checkProgramWithRegistryCancellable(
+		program, db.exportRegistry, graph, mod,
+		db.cancelCtx, startVersion
+	);
 
 	// If cancelled, discard frame without caching — partial result not reliable
 	if (checkCancel(db.cancelCtx, startVersion)) {
@@ -252,7 +432,8 @@ export {
 } from "./fileInput";
 export {
 	TaModuleDepGraph, createModuleDepGraph,
-	recordModuleImport, clearImportsFor, getTransitiveDependents
+	recordModuleImport, clearImportsFor, getTransitiveDependents,
+	getDirectImports, detectCycle
 } from "./moduleDeps";
 export { tryMarkGreen, executeQueryWith, invalidateFile } from "./redGreen";
 export {
@@ -273,40 +454,40 @@ function isValidProgram(program: Node): boolean {
 
 test "create db" {
 	const db = createTransAmDb(100);
-	check(db.revision.value === 0);
-	check(db.cache.capacity === 100);
+	expect(db.revision.value === 0);
+	expect(db.cache.capacity === 100);
 }
 
 test "set file text increments revision" {
 	const db = createTransAmDb(100);
 	dbSetFileText(db, "a.ms", "const x = 1;");
-	check(db.revision.value === 1);
+	expect(db.revision.value === 1);
 }
 
 test "same content does not increment" {
 	const db = createTransAmDb(100);
 	dbSetFileText(db, "a.ms", "const x = 1;");
-	check(db.revision.value === 1);
+	expect(db.revision.value === 1);
 	dbSetFileText(db, "a.ms", "const x = 1;");
-	check(db.revision.value === 1);  // no change
+	expect(db.revision.value === 1);  // no change
 }
 
 test "parse produces AST" {
 	const db = createTransAmDb(100);
 	dbSetFileText(db, "test.ms", "const x = 1;");
 	const result = dbParse(db, "test.ms");
-	check(result !== null);
-	check(result.kind === NodeKind.Program);
+	expect(result !== null);
+	expect(result.kind === NodeKind.Program);
 }
 
 test "parse caches result" {
 	const db = createTransAmDb(100);
 	dbSetFileText(db, "test.ms", "const y = 2;");
 	const r1 = dbParse(db, "test.ms");
-	check(r1 !== null);
+	expect(r1 !== null);
 	// Second call should hit cache
 	const key = createQueryKey(TaQueryKind.Parse, 0);
-	check(cacheContains(db.cache, key));
+	expect(cacheContains(db.cache, key));
 }
 
 test "file change invalidates parse" {
@@ -318,64 +499,64 @@ test "file change invalidates parse" {
 	// Cache entry should be RED
 	const key = createQueryKey(TaQueryKind.Parse, 0);
 	const entry = cacheGet(db.cache, key);
-	check(entry !== null);
-	check(entry.state === TaQueryState.Red);
+	expect(entry !== null);
+	expect(entry.state === TaQueryState.Red);
 }
 
 test "full pipeline produces analyzed AST" {
 	const db = createTransAmDb(100);
 	dbSetFileText(db, "test.ms", "const x = 1; const y = 2;");
 	const result = dbAnalyze(db, "test.ms");
-	check(result !== null);
-	check(isValidProgram(result));
+	expect(result !== null);
+	expect(isValidProgram(result));
 }
 
 test "unknown file returns null" {
 	const db = createTransAmDb(100);
 	const result = dbParse(db, "nonexistent.ms");
-	check(result === null);
+	expect(result === null);
 }
 
 test "dbTransform produces transformed AST" {
 	const db = createTransAmDb(100);
 	dbSetFileText(db, "t.ms", "const x = 1;");
 	const result = dbTransform(db, "t.ms");
-	check(result !== null);
-	check(result.kind === NodeKind.Program);
+	expect(result !== null);
+	expect(result.kind === NodeKind.Program);
 }
 
 test "dbCompileSource runs full pipeline" {
 	const db = createTransAmDb(100);
 	const result = dbCompileSource(db, "const a = 1; const b = 2;");
-	check(result !== null);
-	check(isValidProgram(result));
+	expect(result !== null);
+	expect(isValidProgram(result));
 }
 
 test "dbCompileToJS runs without analyzer" {
 	const db = createTransAmDb(100);
 	const result = dbCompileToJS(db, "const x = 42;");
-	check(result !== null);
-	check(result.kind === NodeKind.Program);
+	expect(result !== null);
+	expect(result.kind === NodeKind.Program);
 }
 
 test "dbCompileSource caches on same input" {
 	const db = createTransAmDb(100);
 	dbCompileSource(db, "const z = 1;");
-	check(db.revision.value === 1);
+	expect(db.revision.value === 1);
 	// Same input should not increment revision
 	dbCompileSource(db, "const z = 1;");
-	check(db.revision.value === 1);
+	expect(db.revision.value === 1);
 }
 
 test "db has cancel context" {
 	const db = createTransAmDb(100);
-	check(db.cancelCtx.version === 0);
-	check(!db.cancelCtx.cancelled);
+	expect(db.cancelCtx.version === 0);
+	expect(!db.cancelCtx.cancelled);
 }
 
 test "db has string interner" {
 	const db = createTransAmDb(100);
 	const id = internString(db.interner, "hello");
-	check(id === 0);
-	check(lookupInterned(db.interner, id) === "hello");
+	expect(id === 0);
+	expect(lookupInterned(db.interner, id) === "hello");
 }

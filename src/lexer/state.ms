@@ -2,7 +2,6 @@
 // Pattern: ~/projects/metascript/src/lexer/lexer.zig (LexerState)
 
 import { Token, TokenKind } from "./token";
-import { check } from "std/testing";
 
 
 export interface LexerState {
@@ -11,13 +10,14 @@ export interface LexerState {
 	line: number;
 	column: number;
 	tokens: Token[];
+	comments: Token[]; // Added for comment preservation
 	templateDepth: number;
 	braceStack: number[];
 	lastToken: TokenKind;
 }
 
 export function createLexerState(source: string): LexerState {
-	return { source, pos: 0, line: 1, column: 1, tokens: [], templateDepth: 0, braceStack: [], lastToken: TokenKind.Eof };
+	return { source, pos: 0, line: 1, column: 1, tokens: [], comments: [], templateDepth: 0, braceStack: [], lastToken: TokenKind.Eof };
 }
 
 export function peek(s: LexerState): number {
@@ -54,71 +54,103 @@ export function addToken(s: LexerState, kind: TokenKind, value: string, line: nu
 	s.lastToken = kind;
 }
 
+// Comment preservation: push to both tokens (for parser) and comments (for direct access)
+export function addComment(s: LexerState, value: string, line: number, column: number): void {
+	const tok: Token = { kind: TokenKind.Comment, value, line, column };
+	s.tokens.push(tok);
+	s.comments.push(tok);
+}
+
+export function allowsRegexAfter(s: LexerState): boolean {
+	const last = s.lastToken;
+	// After operators, punctuation that starts expressions, keywords — regex allowed
+	if (last === TokenKind.Assign || last === TokenKind.LParen || last === TokenKind.LBracket ||
+		last === TokenKind.LBrace || last === TokenKind.Comma || last === TokenKind.Semicolon ||
+		last === TokenKind.Colon || last === TokenKind.Question || last === TokenKind.Bang ||
+		last === TokenKind.Tilde || last === TokenKind.Plus || last === TokenKind.Minus ||
+		last === TokenKind.Star || last === TokenKind.Percent || last === TokenKind.Amp ||
+		last === TokenKind.Pipe || last === TokenKind.Caret || last === TokenKind.EqEq ||
+		last === TokenKind.EqEqEq || last === TokenKind.BangEq || last === TokenKind.BangEqEq ||
+		last === TokenKind.LtEq || last === TokenKind.Gt || last === TokenKind.GtEq ||
+		last === TokenKind.AmpAmp || last === TokenKind.PipePipe || last === TokenKind.PlusEq ||
+		last === TokenKind.MinusEq || last === TokenKind.StarEq || last === TokenKind.SlashEq ||
+		last === TokenKind.Arrow || last === TokenKind.Eof || last === TokenKind.Return ||
+		last === TokenKind.Case || last === TokenKind.Delete || last === TokenKind.In ||
+		last === TokenKind.Instanceof || last === TokenKind.New || last === TokenKind.Typeof ||
+		last === TokenKind.Void || last === TokenKind.If || last === TokenKind.While ||
+		last === TokenKind.For || last === TokenKind.Await || last === TokenKind.Yield) {
+		return true;
+	}
+	// After values, identifiers, closing brackets — expect division, not regex
+	return false;
+}
+
 // ===== Tests =====
 test "createLexerState" {
 	const s = createLexerState("abc");
-	check(s.pos === 0);
-	check(s.line === 1);
-	check(s.column === 1);
-	check(s.tokens.length === 0);
+	expect(s.pos === 0);
+	expect(s.line === 1);
+	expect(s.column === 1);
+	expect(s.tokens.length === 0);
+	expect(s.comments.length === 0);
 }
 
 test "peek at start" {
 	const s = createLexerState("xy");
-	check(peek(s) === "x".code);
+	expect(peek(s) === "x".code);
 }
 
 test "peek at EOF returns 0" {
 	const s = createLexerState("");
-	check(peek(s) === 0);
+	expect(peek(s) === 0);
 }
 
 test "peekAt with offset" {
 	const s = createLexerState("abc");
-	check(peekAt(s, 0) === "a".code);
-	check(peekAt(s, 1) === "b".code);
-	check(peekAt(s, 2) === "c".code);
-	check(peekAt(s, 3) === 0);
+	expect(peekAt(s, 0) === "a".code);
+	expect(peekAt(s, 1) === "b".code);
+	expect(peekAt(s, 2) === "c".code);
+	expect(peekAt(s, 3) === 0);
 }
 
 test "advanceChar updates pos and column" {
 	const s = createLexerState("ab");
 	const ch = advanceChar(s);
-	check(ch === "a".code);
-	check(s.pos === 1);
-	check(s.column === 2);
-	check(s.line === 1);
+	expect(ch === "a".code);
+	expect(s.pos === 1);
+	expect(s.column === 2);
+	expect(s.line === 1);
 }
 
 test "advanceChar newline updates line" {
 	const s = createLexerState("\nx");
 	advanceChar(s);
-	check(s.line === 2);
-	check(s.column === 1);
+	expect(s.line === 2);
+	expect(s.column === 1);
 }
 
 test "skip advances N chars" {
 	const s = createLexerState("abcde");
 	skip(s, 3);
-	check(s.pos === 3);
-	check(peek(s) === "d".code);
+	expect(s.pos === 3);
+	expect(peek(s) === "d".code);
 }
 
 test "addToken appends to tokens" {
 	const s = createLexerState("");
 	addToken(s, TokenKind.Number, "42", 1, 1);
-	check(s.tokens.length === 1);
-	check(s.tokens[0].kind === TokenKind.Number);
-	check(s.tokens[0].value === "42");
-	check(s.tokens[0].line === 1);
-	check(s.tokens[0].column === 1);
+	expect(s.tokens.length === 1);
+	expect(s.tokens[0].kind === TokenKind.Number);
+	expect(s.tokens[0].value === "42");
+	expect(s.tokens[0].line === 1);
+	expect(s.tokens[0].column === 1);
 }
 
 test "line tracking across multiple newlines" {
 	const s = createLexerState("\n\n\nx");
 	skip(s, 3);
-	check(s.line === 4);
-	check(s.column === 1);
+	expect(s.line === 4);
+	expect(s.column === 1);
 	advanceChar(s);
-	check(s.column === 2);
+	expect(s.column === 2);
 }

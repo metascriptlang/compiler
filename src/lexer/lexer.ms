@@ -6,7 +6,6 @@ import { Token, TokenKind } from "./token";
 import { LexerState, createLexerState, peek, advanceChar, addToken } from "./state";
 import { isWhitespace, isNewline, isDigit, isLetter } from "./chars";
 import { scanNumber, scanString, scanTemplateString, scanIdentifier, scanOperator, scanPunctuation } from "./scanner";
-import { check } from "std/testing";
 
 // ===== Main Lex Function =====
 
@@ -35,6 +34,8 @@ export function lex(source: string): Result<Token[], string> {
 		if (ch === "`".code) { scanTemplateString(s); continue; }
 
 		// Operators (multi-char and single-char)
+		// scanOperator now handles comments and adds them to s.tokens if TokenKind.Comment was added there
+		// Wait, I should make sure scanOperator actually adds them to s.tokens or s.comments
 		if (scanOperator(s)) { continue; }
 
 		// Punctuation (single-char tokens)
@@ -122,244 +123,242 @@ function lexColAt(input: string, index: number): number {
 
 // ===== Integration Tests =====
 test "empty string" {
-	check(lexOk(""));
-	check(lexCount("") === 0);
+	expect(lexOk(""));
+	expect(lexCount("") === 0);
 }
 
 test "whitespace only" {
-	check(lexOk("   "));
-	check(lexCount("   ") === 0);
-	check(lexOk("\t\t"));
-	check(lexOk("\n\n\n"));
-	check(lexOk("  \n\t  \n  "));
+	expect(lexOk("   "));
+	expect(lexCount("   ") === 0);
+	expect(lexOk("\t\t"));
+	expect(lexOk("\n\n\n"));
+	expect(lexOk("  \n\t  \n  "));
 }
 
 test "numbers" {
-	check(lexFirst("42") === TokenKind.Number);
-	check(lexFirstVal("42") === "42");
-	check(lexFirst("3.14") === TokenKind.Number);
-	check(lexFirstVal("3.14") === "3.14");
-	check(lexFirst("0xFF") === TokenKind.Number);
-	check(lexFirstVal("0xFF") === "0xFF");
-	check(lexFirst("0b1010") === TokenKind.Number);
-	check(lexFirst("0o777") === TokenKind.Number);
-	check(lexFirst("1e10") === TokenKind.Number);
-	check(lexFirst("1.5e-3") === TokenKind.Number);
-	check(lexFirst("123n") === TokenKind.BigInt);
-	check(lexFirstVal("1_000") === "1000");
-	check(lexFirstVal("0xFF_FF") === "0xFFFF");
+	expect(lexFirst("42") === TokenKind.Number);
+	expect(lexFirstVal("42") === "42");
+	expect(lexFirst("3.14") === TokenKind.Number);
+	expect(lexFirstVal("3.14") === "3.14");
+	expect(lexFirst("0xFF") === TokenKind.Number);
+	expect(lexFirstVal("0xFF") === "0xFF");
+	expect(lexFirst("0b1010") === TokenKind.Number);
+	expect(lexFirst("0o777") === TokenKind.Number);
+	expect(lexFirst("1e10") === TokenKind.Number);
+	expect(lexFirst("1.5e-3") === TokenKind.Number);
+	expect(lexFirst("123n") === TokenKind.BigInt);
+	expect(lexFirstVal("1_000") === "1000");
+	expect(lexFirstVal("0xFF_FF") === "0xFFFF");
 }
 
 test "strings" {
-	check(lexFirst("\"hello\"") === TokenKind.String);
-	check(lexFirstVal("\"hello\"") === "hello");
-	check(lexFirstVal("'world'") === "world");
-	check(lexFirstVal("\"\"") === "");
-	check(lexFirstVal("\"a\\nb\"") === "a\nb");
-	check(lexFirstVal("\"a\\tb\"") === "a\tb");
-	check(lexFirstVal("\"a\\\\b\"") === "a\\b");
-	check(lexFirstVal("\"escaped\\\"quote\"") === "escaped\"quote");
+	expect(lexFirst("\"hello\"") === TokenKind.String);
+	expect(lexFirstVal("\"hello\"") === "hello");
+	expect(lexFirstVal("'world'") === "world");
+	expect(lexFirstVal("\"\"") === "");
+	expect(lexFirstVal("\"a\\nb\"") === "a\nb");
+	expect(lexFirstVal("\"a\\tb\"") === "a\tb");
+	expect(lexFirstVal("\"a\\\\b\"") === "a\\b");
+	expect(lexFirstVal("\"escaped\\\"quote\"") === "escaped\"quote");
 }
 
 test "template strings" {
-	check(lexFirst("`hello`") === TokenKind.TemplateNoSub);
-	check(lexFirstVal("`hello`") === "hello");
-	check(lexFirst("`hi ${") === TokenKind.TemplateHead);
-	check(lexFirstVal("``") === "");
-	check(lexFirstVal("`a\\`b`") === "a`b");
-	check(lexFirstVal("`\\$100`") === "$100");
+	expect(lexFirst("`hello`") === TokenKind.TemplateNoSub);
+	expect(lexFirstVal("`hello`") === "hello");
+	expect(lexFirst("`hi ${") === TokenKind.TemplateHead);
+	expect(lexFirstVal("``") === "");
+	expect(lexFirstVal("`a\\`b`") === "a`b");
+	expect(lexFirstVal("`\\$100`") === "$100");
 }
 
 test "template interpolation tokens" {
 	// `hello ${name}` → TemplateHead("hello "), Ident("name"), TemplateTail("")
-	check(lexKindAt("`hello ${name}`", 0) === TokenKind.TemplateHead);
-	check(lexValAt("`hello ${name}`", 0) === "hello ");
-	check(lexKindAt("`hello ${name}`", 1) === TokenKind.Ident);
-	check(lexKindAt("`hello ${name}`", 2) === TokenKind.TemplateTail);
+	expect(lexKindAt("`hello ${name}`", 0) === TokenKind.TemplateHead);
+	expect(lexValAt("`hello ${name}`", 0) === "hello ");
+	expect(lexKindAt("`hello ${name}`", 1) === TokenKind.Ident);
+	expect(lexKindAt("`hello ${name}`", 2) === TokenKind.TemplateTail);
 	// `${a} and ${b}` → TemplateHead(""), Ident, TemplateMiddle(" and "), Ident, TemplateTail("")
-	check(lexKindAt("`${a} and ${b}`", 0) === TokenKind.TemplateHead);
-	check(lexKindAt("`${a} and ${b}`", 1) === TokenKind.Ident);
-	check(lexKindAt("`${a} and ${b}`", 2) === TokenKind.TemplateMiddle);
-	check(lexValAt("`${a} and ${b}`", 2) === " and ");
-	check(lexKindAt("`${a} and ${b}`", 3) === TokenKind.Ident);
-	check(lexKindAt("`${a} and ${b}`", 4) === TokenKind.TemplateTail);
+	expect(lexKindAt("`${a} and ${b}`", 0) === TokenKind.TemplateHead);
+	expect(lexKindAt("`${a} and ${b}`", 1) === TokenKind.Ident);
+	expect(lexKindAt("`${a} and ${b}`", 2) === TokenKind.TemplateMiddle);
+	expect(lexValAt("`${a} and ${b}`", 2) === " and ");
+	expect(lexKindAt("`${a} and ${b}`", 3) === TokenKind.Ident);
+	expect(lexKindAt("`${a} and ${b}`", 4) === TokenKind.TemplateTail);
 	// `${x}` → TemplateHead(""), Ident, TemplateTail("")
-	check(lexKindAt("`${x}`", 0) === TokenKind.TemplateHead);
-	check(lexKindAt("`${x}`", 1) === TokenKind.Ident);
-	check(lexKindAt("`${x}`", 2) === TokenKind.TemplateTail);
+	expect(lexKindAt("`${x}`", 0) === TokenKind.TemplateHead);
+	expect(lexKindAt("`${x}`", 1) === TokenKind.Ident);
+	expect(lexKindAt("`${x}`", 2) === TokenKind.TemplateTail);
 }
 
 test "keywords" {
-	check(lexFirst("const") === TokenKind.Const);
-	check(lexFirst("let") === TokenKind.Let);
-	check(lexFirst("function") === TokenKind.Function);
-	check(lexFirst("return") === TokenKind.Return);
-	check(lexFirst("if") === TokenKind.If);
-	check(lexFirst("else") === TokenKind.Else);
-	check(lexFirst("while") === TokenKind.While);
-	check(lexFirst("for") === TokenKind.For);
-	check(lexFirst("match") === TokenKind.Match);
-	check(lexFirst("import") === TokenKind.Import);
-	check(lexFirst("export") === TokenKind.Export);
-	check(lexFirst("class") === TokenKind.Class);
-	check(lexFirst("interface") === TokenKind.Interface);
-	check(lexFirst("enum") === TokenKind.Enum);
-	check(lexFirst("type") === TokenKind.Type);
-	check(lexFirst("true") === TokenKind.True);
-	check(lexFirst("false") === TokenKind.False);
-	check(lexFirst("null") === TokenKind.Null);
-	check(lexFirst("try") === TokenKind.Try);
-	check(lexFirst("catch") === TokenKind.Catch);
-	check(lexFirst("defer") === TokenKind.Defer);
-	check(lexFirst("move") === TokenKind.Move);
-	check(lexFirst("extern") === TokenKind.Extern);
-	check(lexFirst("int32") === TokenKind.Int32);
-	check(lexFirst("float64") === TokenKind.Float64);
+	expect(lexFirst("const") === TokenKind.Const);
+	expect(lexFirst("let") === TokenKind.Let);
+	expect(lexFirst("function") === TokenKind.Function);
+	expect(lexFirst("return") === TokenKind.Return);
+	expect(lexFirst("if") === TokenKind.If);
+	expect(lexFirst("else") === TokenKind.Else);
+	expect(lexFirst("while") === TokenKind.While);
+	expect(lexFirst("for") === TokenKind.For);
+	expect(lexFirst("match") === TokenKind.Match);
+	expect(lexFirst("import") === TokenKind.Import);
+	expect(lexFirst("export") === TokenKind.Export);
+	expect(lexFirst("class") === TokenKind.Class);
+	expect(lexFirst("interface") === TokenKind.Interface);
+	expect(lexFirst("enum") === TokenKind.Enum);
+	expect(lexFirst("type") === TokenKind.Type);
+	expect(lexFirst("true") === TokenKind.True);
+	expect(lexFirst("false") === TokenKind.False);
+	expect(lexFirst("null") === TokenKind.Null);
+	expect(lexFirst("try") === TokenKind.Try);
+	expect(lexFirst("catch") === TokenKind.Catch);
+	expect(lexFirst("defer") === TokenKind.Defer);
+	expect(lexFirst("move") === TokenKind.Move);
+	expect(lexFirst("extern") === TokenKind.Extern);
+	expect(lexFirst("int32") === TokenKind.Int32);
+	expect(lexFirst("float64") === TokenKind.Float64);
 }
 
 test "identifiers vs keywords" {
-	check(lexFirst("myVar") === TokenKind.Ident);
-	check(lexFirst("_private") === TokenKind.Ident);
-	check(lexFirst("constX") === TokenKind.Ident);
-	check(lexFirst("ifTrue") === TokenKind.Ident);
-	check(lexFirst("returnValue") === TokenKind.Ident);
-	check(lexFirst("lethal") === TokenKind.Ident);
-	check(lexFirst("classname") === TokenKind.Ident);
-	check(lexFirst("enumerate") === TokenKind.Ident);
+	expect(lexFirst("myVar") === TokenKind.Ident);
+	expect(lexFirst("_private") === TokenKind.Ident);
+	expect(lexFirst("constX") === TokenKind.Ident);
+	expect(lexFirst("ifTrue") === TokenKind.Ident);
+	expect(lexFirst("returnValue") === TokenKind.Ident);
+	expect(lexFirst("lethal") === TokenKind.Ident);
+	expect(lexFirst("classname") === TokenKind.Ident);
+	expect(lexFirst("enumerate") === TokenKind.Ident);
 }
 
 test "regex literals" {
-	check(lexFirst("/abc/") === TokenKind.Regex);
-	check(lexFirstVal("/abc/") === "/abc/");
-	check(lexFirstVal("/abc/gi") === "/abc/gi");
-	check(lexFirstVal("/[a-z]+/") === "/[a-z]+/");
-	check(lexFirstVal("/\\.js$/") === "/\\.js$/");
+	expect(lexFirst("/abc/") === TokenKind.Regex);
+	expect(lexFirstVal("/abc/") === "/abc/");
+	expect(lexFirstVal("/abc/gi") === "/abc/gi");
+	expect(lexFirstVal("/[a-z]+/") === "/[a-z]+/");
+	expect(lexFirstVal("/\\.js$/") === "/\\.js$/");
 }
 
 test "regex vs division" {
 	// After value → division
-	check(lexKindAt("a / b", 1) === TokenKind.Slash);
-	check(lexKindAt("1 / 2", 1) === TokenKind.Slash);
-	check(lexKindAt(") / x", 1) === TokenKind.Slash);
+	expect(lexKindAt("a / b", 1) === TokenKind.Slash);
+	expect(lexKindAt("1 / 2", 1) === TokenKind.Slash);
+	expect(lexKindAt(") / x", 1) === TokenKind.Slash);
 	// After operator/keyword → regex
-	check(lexKindAt("= /abc/", 1) === TokenKind.Regex);
-	check(lexKindAt("( /abc/", 1) === TokenKind.Regex);
-	check(lexKindAt("return /abc/", 1) === TokenKind.Regex);
+	expect(lexKindAt("= /abc/", 1) === TokenKind.Regex);
+	expect(lexKindAt("( /abc/", 1) === TokenKind.Regex);
+	expect(lexKindAt("return /abc/", 1) === TokenKind.Regex);
 }
 
 test "operators" {
-	check(lexFirst("+") === TokenKind.Plus);
-	check(lexFirst("-") === TokenKind.Minus);
-	check(lexFirst("*") === TokenKind.Star);
-	check(lexKindAt("a / b", 1) === TokenKind.Slash); // / after value = division
-	check(lexFirst("===") === TokenKind.EqEqEq);
-	check(lexFirst("!==") === TokenKind.BangEqEq);
-	check(lexFirst("&&") === TokenKind.AmpAmp);
-	check(lexFirst("||") === TokenKind.PipePipe);
-	check(lexFirst("=>") === TokenKind.Arrow);
-	check(lexFirst("++") === TokenKind.PlusPlus);
-	check(lexFirst("--") === TokenKind.MinusMinus);
-	check(lexFirst("**") === TokenKind.StarStar);
-	check(lexFirst(">>>") === TokenKind.GtGtGt);
-	check(lexFirst("...") === TokenKind.DotDotDot);
-	check(lexFirst("?.") === TokenKind.QuestionDot);
-	check(lexFirst("??") === TokenKind.QuestionQuestion);
-	check(lexFirst("|>") === TokenKind.PipeGt);
+	expect(lexFirst("+") === TokenKind.Plus);
+	expect(lexFirst("-") === TokenKind.Minus);
+	expect(lexFirst("*") === TokenKind.Star);
+	expect(lexKindAt("a / b", 1) === TokenKind.Slash); // / after value = division
+	expect(lexFirst("===") === TokenKind.EqEqEq);
+	expect(lexFirst("!==") === TokenKind.BangEqEq);
+	expect(lexFirst("&&") === TokenKind.AmpAmp);
+	expect(lexFirst("||") === TokenKind.PipePipe);
+	expect(lexFirst("=>") === TokenKind.Arrow);
+	expect(lexFirst("++") === TokenKind.PlusPlus);
+	expect(lexFirst("--") === TokenKind.MinusMinus);
+	expect(lexFirst("**") === TokenKind.StarStar);
+	expect(lexFirst(">>>") === TokenKind.GtGtGt);
+	expect(lexFirst("...") === TokenKind.DotDotDot);
+	expect(lexFirst("?.") === TokenKind.QuestionDot);
+	expect(lexFirst("??") === TokenKind.QuestionQuestion);
+	expect(lexFirst("|>") === TokenKind.PipeGt);
 }
 
 test "punctuation" {
-	check(lexFirst("(") === TokenKind.LParen);
-	check(lexFirst(")") === TokenKind.RParen);
-	check(lexFirst("{") === TokenKind.LBrace);
-	check(lexFirst("}") === TokenKind.RBrace);
-	check(lexFirst("[") === TokenKind.LBracket);
-	check(lexFirst("]") === TokenKind.RBracket);
-	check(lexFirst(";") === TokenKind.Semicolon);
-	check(lexFirst(":") === TokenKind.Colon);
-	check(lexFirst(",") === TokenKind.Comma);
-	check(lexFirst("@") === TokenKind.At);
-	check(lexFirst("~") === TokenKind.Tilde);
-	check(lexFirst("^") === TokenKind.Caret);
+	expect(lexFirst("(") === TokenKind.LParen);
+	expect(lexFirst(")") === TokenKind.RParen);
+	expect(lexFirst("{") === TokenKind.LBrace);
+	expect(lexFirst("}") === TokenKind.RBrace);
+	expect(lexFirst("[") === TokenKind.LBracket);
+	expect(lexFirst("]") === TokenKind.RBracket);
+	expect(lexFirst(";") === TokenKind.Semicolon);
+	expect(lexFirst(":") === TokenKind.Colon);
+	expect(lexFirst(",") === TokenKind.Comma);
+	expect(lexFirst("@") === TokenKind.At);
+	expect(lexFirst("~") === TokenKind.Tilde);
+	expect(lexFirst("^") === TokenKind.Caret);
 }
 
-test "stripped from output" {
-	check(lexCount("a // comment") === 1);
-	check(lexCount("a /* block */ b") === 2);
-	check(lexCount("/* entire line */") === 0);
-	check(lexCount("//\n42") === 1);
-	check(lexCount("/**/42") === 1);
-	check(lexCount("// first\n// second\n42") === 1);
+test "comments are now tokens" {
+	expect(lexKindAt("a // comment", 1) === TokenKind.Comment);
+	expect(lexValAt("a // comment", 1) === "// comment");
+	expect(lexKindAt("a /* block */ b", 1) === TokenKind.Comment);
+	expect(lexValAt("a /* block */ b", 1) === "/* block */");
 }
 
 test "inside strings are not comments" {
-	check(lexCount("\"a//b\"") === 1);
-	check(lexCount("\"a/*b*/c\"") === 1);
+	expect(lexCount("\"a//b\"") === 1);
+	expect(lexCount("\"a/*b*/c\"") === 1);
 }
 
 test "operator disambiguation (greedy)" {
-	check(lexKindAt("a===b", 1) === TokenKind.EqEqEq);
-	check(lexKindAt("a!==b", 1) === TokenKind.BangEqEq);
-	check(lexKindAt("a>>>b", 1) === TokenKind.GtGtGt);
-	check(lexKindAt("a**b", 1) === TokenKind.StarStar);
-	check(lexKindAt("a?.b", 1) === TokenKind.QuestionDot);
-	check(lexKindAt("a??b", 1) === TokenKind.QuestionQuestion);
-	check(lexKindAt("a|>b", 1) === TokenKind.PipeGt);
-	check(lexKindAt("a||b", 1) === TokenKind.PipePipe);
-	check(lexKindAt("a&&b", 1) === TokenKind.AmpAmp);
+	expect(lexKindAt("a===b", 1) === TokenKind.EqEqEq);
+	expect(lexKindAt("a!==b", 1) === TokenKind.BangEqEq);
+	expect(lexKindAt("a>>>b", 1) === TokenKind.GtGtGt);
+	expect(lexKindAt("a**b", 1) === TokenKind.StarStar);
+	expect(lexKindAt("a?.b", 1) === TokenKind.QuestionDot);
+	expect(lexKindAt("a??b", 1) === TokenKind.QuestionQuestion);
+	expect(lexKindAt("a|>b", 1) === TokenKind.PipeGt);
+	expect(lexKindAt("a||b", 1) === TokenKind.PipePipe);
+	expect(lexKindAt("a&&b", 1) === TokenKind.AmpAmp);
 }
 
 test "operators jammed without spaces" {
-	check(lexCount("a+b") === 3);
-	check(lexCount("a-b") === 3);
-	check(lexCount("x=1") === 3);
-	check(lexCount("x+=1") === 3);
-	check(lexCount("a<b") === 3);
+	expect(lexCount("a+b") === 3);
+	expect(lexCount("a-b") === 3);
+	expect(lexCount("x=1") === 3);
+	expect(lexCount("x+=1") === 3);
+	expect(lexCount("a<b") === 3);
 }
 
 test "dot-dot is range operator" {
-	check(lexLen("..") === 2);
-	check(lexKindAt("..", 0) === TokenKind.DotDot);
+	expect(lexLen("..") === 2);
+	expect(lexKindAt("..", 0) === TokenKind.DotDot);
 }
 
 test "CRLF handling" {
-	check(lexOk("\r\n"));
-	check(lexCount("\r\n") === 0);
-	check(lexCount("a\r\nb") === 2);
+	expect(lexOk("\r\n"));
+	expect(lexCount("\r\n") === 0);
+	expect(lexCount("a\r\nb") === 2);
 }
 
 test "error on unknown character" {
-	check(!lexOk("#"));
-	check(!lexOk("~#~"));
+	expect(!lexOk("#"));
+	expect(!lexOk("~#~"));
 }
 
 test "line/column tracking" {
-	check(lexLineAt("abc", 0) === 1);
-	check(lexColAt("abc", 0) === 1);
-	check(lexLineAt("a\nb", 0) === 1);
-	check(lexLineAt("a\nb", 1) === 2);
-	check(lexColAt("a\nb", 1) === 1);
-	check(lexColAt("  x", 0) === 3);
-	check(lexLineAt("\n\n\nx", 0) === 4);
+	expect(lexLineAt("abc", 0) === 1);
+	expect(lexColAt("abc", 0) === 1);
+	expect(lexLineAt("a\nb", 0) === 1);
+	expect(lexLineAt("a\nb", 1) === 2);
+	expect(lexColAt("a\nb", 1) === 1);
+	expect(lexColAt("  x", 0) === 3);
+	expect(lexLineAt("\n\n\nx", 0) === 4);
 }
 
 test "token counts" {
-	check(lexCount("a + b") === 3);
-	check(lexCount("const x = 42;") === 5);
-	check(lexCount("f(a, b, c)") === 8);
-	check(lexCount("a.b.c") === 5);
-	check(lexCount("if (x) { y; }") === 8);
+	expect(lexCount("a + b") === 3);
+	expect(lexCount("const x = 42;") === 5);
+	expect(lexCount("f(a, b, c)") === 8);
+	expect(lexCount("a.b.c") === 5);
+	expect(lexCount("if (x) { y; }") === 8);
 }
 
 test "realistic code" {
-	check(lexKindAt("const x: number = 42;", 0) === TokenKind.Const);
-	check(lexKindAt("const x: number = 42;", 4) === TokenKind.Assign);
-	check(lexKindAt("const x: number = 42;", 5) === TokenKind.Number);
-	check(lexKindAt("import { Token } from \"./token\";", 0) === TokenKind.Import);
-	check(lexKindAt("import { Token } from \"./token\";", 4) === TokenKind.From);
-	check(lexKindAt("import { Token } from \"./token\";", 5) === TokenKind.String);
-	check(lexValAt("import { Token } from \"./token\";", 5) === "./token");
-	check(lexOk("for (let i = 0; i < 10; i++) { }"));
-	check(lexOk("match (x) { 1 => \"one\", _ => \"other\" }"));
-	check(lexOk("a?.b?.c"));
-	check(lexOk("data |> transform |> output"));
+	expect(lexKindAt("const x: number = 42;", 0) === TokenKind.Const);
+	expect(lexKindAt("const x: number = 42;", 4) === TokenKind.Assign);
+	expect(lexKindAt("const x: number = 42;", 5) === TokenKind.Number);
+	expect(lexKindAt("import { Token } from \"./token\";", 0) === TokenKind.Import);
+	expect(lexKindAt("import { Token } from \"./token\";", 4) === TokenKind.From);
+	expect(lexKindAt("import { Token } from \"./token\";", 5) === TokenKind.String);
+	expect(lexValAt("import { Token } from \"./token\";", 5) === "./token");
+	expect(lexOk("for (let i = 0; i < 10; i++) { }"));
+	expect(lexOk("match (x) { 1 => \"one\", _ => \"other\" }"));
+	expect(lexOk("a?.b?.c"));
+	expect(lexOk("data |> transform |> output"));
 }

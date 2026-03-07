@@ -1,7 +1,7 @@
 // Character Classification — Pure functions for lexer character tests
 // No imports needed — operates on character codes (numbers)
 
-import { check } from "std/testing";
+
 
 // ===== Character Classifiers =====
 
@@ -39,79 +39,79 @@ export function isOctalDigit(ch: number): boolean {
 
 // ===== Tests =====
 test "isWhitespace" {
-	check(isWhitespace(" ".code));
-	check(isWhitespace("\t".code));
-	check(isWhitespace("\r".code));
-	check(!isWhitespace("\n".code));
-	check(!isWhitespace("a".code));
-	check(!isWhitespace("0".code));
+	expect(isWhitespace(" ".code));
+	expect(isWhitespace("\t".code));
+	expect(isWhitespace("\r".code));
+	expect(!isWhitespace("\n".code));
+	expect(!isWhitespace("a".code));
+	expect(!isWhitespace("0".code));
 }
 
 test "isNewline" {
-	check(isNewline("\n".code));
-	check(!isNewline("\r".code));
-	check(!isNewline(" ".code));
-	check(!isNewline("x".code));
+	expect(isNewline("\n".code));
+	expect(!isNewline("\r".code));
+	expect(!isNewline(" ".code));
+	expect(!isNewline("x".code));
 }
 
 test "isDigit" {
-	check(isDigit("0".code));
-	check(isDigit("5".code));
-	check(isDigit("9".code));
-	check(!isDigit("a".code));
-	check(!isDigit("A".code));
-	check(!isDigit(" ".code));
-	check(!isDigit("/".code));
+	expect(isDigit("0".code));
+	expect(isDigit("5".code));
+	expect(isDigit("9".code));
+	expect(!isDigit("a".code));
+	expect(!isDigit("A".code));
+	expect(!isDigit(" ".code));
+	expect(!isDigit("/".code));
 }
 
 test "isHexDigit" {
-	check(isHexDigit("0".code));
-	check(isHexDigit("9".code));
-	check(isHexDigit("a".code));
-	check(isHexDigit("f".code));
-	check(isHexDigit("A".code));
-	check(isHexDigit("F".code));
-	check(!isHexDigit("g".code));
-	check(!isHexDigit("G".code));
-	check(!isHexDigit("z".code));
-	check(!isHexDigit(" ".code));
+	expect(isHexDigit("0".code));
+	expect(isHexDigit("9".code));
+	expect(isHexDigit("a".code));
+	expect(isHexDigit("f".code));
+	expect(isHexDigit("A".code));
+	expect(isHexDigit("F".code));
+	expect(!isHexDigit("g".code));
+	expect(!isHexDigit("G".code));
+	expect(!isHexDigit("z".code));
+	expect(!isHexDigit(" ".code));
 }
 
 test "isLetter" {
-	check(isLetter("a".code));
-	check(isLetter("z".code));
-	check(isLetter("A".code));
-	check(isLetter("Z".code));
-	check(isLetter("_".code));
-	check(!isLetter("0".code));
-	check(!isLetter("9".code));
-	check(!isLetter(" ".code));
-	check(!isLetter("-".code));
+	expect(isLetter("a".code));
+	expect(isLetter("z".code));
+	expect(isLetter("A".code));
+	expect(isLetter("Z".code));
+	expect(isLetter("_".code));
+	expect(!isLetter("0".code));
+	expect(!isLetter("9".code));
+	expect(!isLetter(" ".code));
+	expect(!isLetter("-".code));
 }
 
 test "isAlphanumeric" {
-	check(isAlphanumeric("a".code));
-	check(isAlphanumeric("Z".code));
-	check(isAlphanumeric("_".code));
-	check(isAlphanumeric("0".code));
-	check(isAlphanumeric("9".code));
-	check(!isAlphanumeric(" ".code));
-	check(!isAlphanumeric("-".code));
-	check(!isAlphanumeric(".".code));
+	expect(isAlphanumeric("a".code));
+	expect(isAlphanumeric("Z".code));
+	expect(isAlphanumeric("_".code));
+	expect(isAlphanumeric("0".code));
+	expect(isAlphanumeric("9".code));
+	expect(!isAlphanumeric(" ".code));
+	expect(!isAlphanumeric("-".code));
+	expect(!isAlphanumeric(".".code));
 }
 
 test "isBinaryDigit" {
-	check(isBinaryDigit("0".code));
-	check(isBinaryDigit("1".code));
-	check(!isBinaryDigit("2".code));
-	check(!isBinaryDigit("9".code));
-	check(!isBinaryDigit("a".code));
+	expect(isBinaryDigit("0".code));
+	expect(isBinaryDigit("1".code));
+	expect(!isBinaryDigit("2".code));
+	expect(!isBinaryDigit("9".code));
+	expect(!isBinaryDigit("a".code));
 }
 
 test "isOctalDigit" {
-	check(isOctalDigit("0".code));
-	check(isOctalDigit("7".code));
-	check(!isOctalDigit("8".code));
-	check(!isOctalDigit("9".code));
-	check(!isOctalDigit("a".code));
+	expect(isOctalDigit("0".code));
+	expect(isOctalDigit("7".code));
+	expect(!isOctalDigit("8".code));
+	expect(!isOctalDigit("9".code));
+	expect(!isOctalDigit("a".code));
 }

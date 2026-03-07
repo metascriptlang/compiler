@@ -10,7 +10,6 @@
 // Pure function — no filesystem access. The loader tries candidates in order.
 
 import { dirname, join } from "std/fs/path";
-import { check } from "std/testing";
 import { sliceStr, endsWith } from "../utils/string";
 
 // ===== Backend Constants =====
@@ -252,101 +251,101 @@ export function buildIndexPath(specifier: string, fromFile: string): string {
 // -- Legacy (2-arg) backward compat --
 test "std imports return empty (legacy)" {
 	const r1 = resolveImport("std/testing", "/a/b.ms");
-	check(r1.length === 0);
+	expect(r1.length === 0);
 	const r2 = resolveImport("std/fs/path", "/a/b.ms");
-	check(r2.length === 0);
+	expect(r2.length === 0);
 }
 
 test "bare imports return empty (legacy)" {
 	const r = resolveImport("lodash", "/a/b.ms");
-	check(r.length === 0);
+	expect(r.length === 0);
 }
 
 test "relative import returns two candidates (legacy)" {
 	const r = resolveImport("./foo", "/a/b.ms");
-	check(r.length === 2);
-	check(r[0] === "/a/foo.ms");
-	check(r[1] === "/a/foo/index.ms");
+	expect(r.length === 2);
+	expect(r[0] === "/a/foo.ms");
+	expect(r[1] === "/a/foo/index.ms");
 }
 
 test "parent directory import (legacy)" {
 	const r = resolveImport("../bar", "/a/b/c.ms");
-	check(r.length === 2);
-	check(r[0] === "/a/bar.ms");
-	check(r[1] === "/a/bar/index.ms");
+	expect(r.length === 2);
+	expect(r[0] === "/a/bar.ms");
+	expect(r[1] === "/a/bar/index.ms");
 }
 
 test "nested relative import (legacy)" {
 	const r = resolveImport("./sub/mod", "/proj/src/index.ms");
-	check(r.length === 2);
-	check(r[0] === "/proj/src/sub/mod.ms");
-	check(r[1] === "/proj/src/sub/mod/index.ms");
+	expect(r.length === 2);
+	expect(r[0] === "/proj/src/sub/mod.ms");
+	expect(r[1] === "/proj/src/sub/mod/index.ms");
 }
 
 test "isStdImport" {
-	check(isStdImport("std/fs"));
-	check(isStdImport("std/testing"));
-	check(!isStdImport("./foo"));
-	check(!isStdImport("ab"));
+	expect(isStdImport("std/fs"));
+	expect(isStdImport("std/testing"));
+	expect(!isStdImport("./foo"));
+	expect(!isStdImport("ab"));
 }
 
-test "buildFilePath" { check(buildFilePath("./foo", "/a/b.ms") === "/a/foo.ms"); }
+test "buildFilePath" { expect(buildFilePath("./foo", "/a/b.ms") === "/a/foo.ms"); }
 
-test "buildIndexPath" { check(buildIndexPath("./sub", "/a/b.ms") === "/a/sub/index.ms"); }
+test "buildIndexPath" { expect(buildIndexPath("./sub", "/a/b.ms") === "/a/sub/index.ms"); }
 // -- Backend extension mapping --
-test "backendExtension C" { check(backendExtension(0) === ".cms"); }
+test "backendExtension C" { expect(backendExtension(0) === ".cms"); }
 
-test "backendExtension JS" { check(backendExtension(1) === ".jms"); }
+test "backendExtension JS" { expect(backendExtension(1) === ".jms"); }
 
-test "backendExtension Raiser" { check(backendExtension(2) === ".rms"); }
+test "backendExtension Raiser" { expect(backendExtension(2) === ".rms"); }
 
-test "backendExtension Erlang" { check(backendExtension(3) === ".ems"); }
+test "backendExtension Erlang" { expect(backendExtension(3) === ".ems"); }
 
-test "backendExtension Wasm" { check(backendExtension(4) === ".wms"); }
+test "backendExtension Wasm" { expect(backendExtension(4) === ".wms"); }
 // -- Default config --
 test "createDefaultConfig C has 4 extensions" {
 	const cfg = createDefaultConfig(0, "/usr/lib/msc/std");
-	check(cfg.extensions.length === 4);
-	check(cfg.extensions[0] === ".cms");
-	check(cfg.extensions[1] === ".ms");
-	check(cfg.extensions[2] === ".ts");
-	check(cfg.extensions[3] === ".js");
-	check(cfg.stdPath === "/usr/lib/msc/std");
+	expect(cfg.extensions.length === 4);
+	expect(cfg.extensions[0] === ".cms");
+	expect(cfg.extensions[1] === ".ms");
+	expect(cfg.extensions[2] === ".ts");
+	expect(cfg.extensions[3] === ".js");
+	expect(cfg.stdPath === "/usr/lib/msc/std");
 }
 
 test "createDefaultConfig JS has .jms first" {
 	const cfg = createDefaultConfig(1, "/std");
-	check(cfg.extensions[0] === ".jms");
+	expect(cfg.extensions[0] === ".jms");
 }
 // -- Full resolution with config --
 test "relative with C backend generates 8 candidates" {
 	const cfg = createDefaultConfig(0, "");
 	const r = resolveImportWithConfig("./foo", "/a/b.ms", cfg);
-	check(r.length === 8);
-	check(r[0] === "/a/foo.cms");
-	check(r[1] === "/a/foo.ms");
-	check(r[2] === "/a/foo.ts");
-	check(r[3] === "/a/foo.js");
-	check(r[4] === "/a/foo/index.cms");
-	check(r[5] === "/a/foo/index.ms");
-	check(r[6] === "/a/foo/index.ts");
-	check(r[7] === "/a/foo/index.js");
+	expect(r.length === 8);
+	expect(r[0] === "/a/foo.cms");
+	expect(r[1] === "/a/foo.ms");
+	expect(r[2] === "/a/foo.ts");
+	expect(r[3] === "/a/foo.js");
+	expect(r[4] === "/a/foo/index.cms");
+	expect(r[5] === "/a/foo/index.ms");
+	expect(r[6] === "/a/foo/index.ts");
+	expect(r[7] === "/a/foo/index.js");
 }
 
 test "std/ with config resolves against stdPath" {
 	const cfg = createDefaultConfig(0, "/lib/std");
 	const r = resolveImportWithConfig("std/testing", "/a/b.ms", cfg);
-	check(r.length === 8);
-	check(r[0] === "/lib/std/testing.cms");
-	check(r[1] === "/lib/std/testing.ms");
-	check(r[4] === "/lib/std/testing/index.cms");
-	check(r[5] === "/lib/std/testing/index.ms");
+	expect(r.length === 8);
+	expect(r[0] === "/lib/std/testing.cms");
+	expect(r[1] === "/lib/std/testing.ms");
+	expect(r[4] === "/lib/std/testing/index.cms");
+	expect(r[5] === "/lib/std/testing/index.ms");
 }
 
 test "std/ without stdPath returns empty" {
 	const cfg = createDefaultConfig(0, "");
 	const r = resolveImportWithConfig("std/testing", "/a/b.ms", cfg);
-	check(r.length === 0);
+	expect(r.length === 0);
 }
 
 test "bare import with search paths" {
@@ -355,16 +354,16 @@ test "bare import with search paths" {
 	cfg.searchPaths.push("/proj/vendor");
 	const r = resolveImportWithConfig("ui/grid", "/a/b.ms", cfg);
 	// 2 search paths x 8 candidates each = 16
-	check(r.length === 16);
-	check(r[0] === "/proj/lib/ui/grid.cms");
-	check(r[1] === "/proj/lib/ui/grid.ms");
-	check(r[8] === "/proj/vendor/ui/grid.cms");
+	expect(r.length === 16);
+	expect(r[0] === "/proj/lib/ui/grid.cms");
+	expect(r[1] === "/proj/lib/ui/grid.ms");
+	expect(r[8] === "/proj/vendor/ui/grid.cms");
 }
 
 test "bare import without search paths returns empty" {
 	const cfg = createDefaultConfig(0, "");
 	const r = resolveImportWithConfig("lodash", "/a/b.ms", cfg);
-	check(r.length === 0);
+	expect(r.length === 0);
 }
 
 test "alias rewriting" {
@@ -373,9 +372,9 @@ test "alias rewriting" {
 	cfg.aliasValues.push("./src");
 	const r = resolveImportWithConfig("@app/utils", "/proj/index.ms", cfg);
 	// Alias rewrites to ./src/utils, then relative resolution
-	check(r.length === 8);
-	check(r[0] === "/proj/src/utils.cms");
-	check(r[1] === "/proj/src/utils.ms");
+	expect(r.length === 8);
+	expect(r[0] === "/proj/src/utils.cms");
+	expect(r[1] === "/proj/src/utils.ms");
 }
 
 test "alias exact match" {
@@ -383,9 +382,9 @@ test "alias exact match" {
 	cfg.aliasKeys.push("@root");
 	cfg.aliasValues.push("./src/index");
 	const r = resolveImportWithConfig("@root", "/proj/main.ms", cfg);
-	check(r.length === 8);
-	check(r[0] === "/proj/src/index.jms");
-	check(r[1] === "/proj/src/index.ms");
+	expect(r.length === 8);
+	expect(r[0] === "/proj/src/index.jms");
+	expect(r[1] === "/proj/src/index.ms");
 }
 
 test "alias does not match partial prefix" {
@@ -394,60 +393,60 @@ test "alias does not match partial prefix" {
 	cfg.aliasValues.push("./src");
 	// "@application" should NOT match "@app" alias
 	const r = resolveImportWithConfig("@application", "/proj/index.ms", cfg);
-	check(r.length === 0); // bare import, no search paths
+	expect(r.length === 0); // bare import, no search paths
 }
 
 test "explicit extension skips probing" {
 	const cfg = createDefaultConfig(0, "");
 	const r = resolveImportWithConfig("./foo.ms", "/a/b.ms", cfg);
-	check(r.length === 1);
-	check(r[0] === "/a/foo.ms");
+	expect(r.length === 1);
+	expect(r[0] === "/a/foo.ms");
 }
 
 test "explicit .ts extension" {
 	const cfg = createDefaultConfig(0, "");
 	const r = resolveImportWithConfig("./lib.ts", "/a/b.ms", cfg);
-	check(r.length === 1);
-	check(r[0] === "/a/lib.ts");
+	expect(r.length === 1);
+	expect(r[0] === "/a/lib.ts");
 }
 
 test "explicit .cms extension" {
 	const cfg = createDefaultConfig(0, "/std");
 	const r = resolveImportWithConfig("std/core.cms", "/a/b.ms", cfg);
-	check(r.length === 1);
-	check(r[0] === "/std/core.cms");
+	expect(r.length === 1);
+	expect(r[0] === "/std/core.cms");
 }
 
 test "explicit .h extension resolves directly" {
 	const cfg = createDefaultConfig(0, "");
 	const r = resolveImportWithConfig("./dawn.h", "/a/b.ms", cfg);
-	check(r.length === 1);
-	check(r[0] === "/a/dawn.h");
+	expect(r.length === 1);
+	expect(r[0] === "/a/dawn.h");
 }
 
 test "JS backend uses .jms first" {
 	const cfg = createDefaultConfig(1, "");
 	const r = resolveImportWithConfig("./parser", "/a/b.ms", cfg);
-	check(r[0] === "/a/parser.jms");
-	check(r[1] === "/a/parser.ms");
+	expect(r[0] === "/a/parser.jms");
+	expect(r[1] === "/a/parser.ms");
 }
 
 test "Raiser backend uses .rms first" {
 	const cfg = createDefaultConfig(2, "");
 	const r = resolveImportWithConfig("./vm", "/a/b.ms", cfg);
-	check(r[0] === "/a/vm.rms");
+	expect(r[0] === "/a/vm.rms");
 }
 
 test "parent dir with config" {
 	const cfg = createDefaultConfig(0, "");
 	const r = resolveImportWithConfig("../bar", "/a/b/c.ms", cfg);
-	check(r[0] === "/a/bar.cms");
-	check(r[1] === "/a/bar.ms");
+	expect(r[0] === "/a/bar.cms");
+	expect(r[1] === "/a/bar.ms");
 }
 
 test "std nested path" {
 	const cfg = createDefaultConfig(0, "/lib/std");
 	const r = resolveImportWithConfig("std/fs/path", "/a/b.ms", cfg);
-	check(r[0] === "/lib/std/fs/path.cms");
-	check(r[1] === "/lib/std/fs/path.ms");
+	expect(r[0] === "/lib/std/fs/path.cms");
+	expect(r[1] === "/lib/std/fs/path.ms");
 }

@@ -4,7 +4,6 @@
 // sameInstantiation() + genericCacheGet() in seminst.nim.
 
 import { Type, TypeKind } from "../checker/types";
-import { check } from "std/testing";
 
 // ===== Data Structures =====
 
@@ -157,35 +156,35 @@ export function monoRegister(
 // ===== Tests =====
 test "monoTypeKey primitives" {
 	const num: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
-	check(monoTypeKey(num) === "number");
+	expect(monoTypeKey(num) === "number");
 	const str: Type = { kind: TypeKind.String, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
-	check(monoTypeKey(str) === "string");
+	expect(monoTypeKey(str) === "string");
 	const b: Type = { kind: TypeKind.Boolean, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
-	check(monoTypeKey(b) === "boolean");
+	expect(monoTypeKey(b) === "boolean");
 }
 
 test "monoTypeKey array" {
 	const numT: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
 	const arrT: Type = { kind: TypeKind.Array, typeName: "", typeNames: [], typeChildren: [], typeReturn: numT, typeExtra: null as unknown as Type, typeFlags: 0 };
-	check(monoTypeKey(arrT) === "arr_number");
+	expect(monoTypeKey(arrT) === "arr_number");
 }
 
 test "monoTypeKey object" {
 	const obj: Type = { kind: TypeKind.Object, typeName: "Box", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
-	check(monoTypeKey(obj) === "Box");
+	expect(monoTypeKey(obj) === "Box");
 }
 
 test "mangleMonoName single param" {
 	const num: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
 	const types: Type[] = [num];
-	check(mangleMonoName("identity", types) === "identity__number");
+	expect(mangleMonoName("identity", types) === "identity__number");
 }
 
 test "mangleMonoName two params" {
 	const num: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
 	const str: Type = { kind: TypeKind.String, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
 	const types: Type[] = [num, str];
-	check(mangleMonoName("pair", types) === "pair__number_string");
+	expect(mangleMonoName("pair", types) === "pair__number_string");
 }
 
 test "registry dedup" {
@@ -194,15 +193,15 @@ test "registry dedup" {
 	const params: string[] = ["T"];
 	const types1: Type[] = [num];
 	const entry1 = monoRegister(reg, "identity", params, types1);
-	check(entry1.mangledName === "identity__number");
-	check(reg.entries.length === 1);
+	expect(entry1.mangledName === "identity__number");
+	expect(reg.entries.length === 1);
 
 	// Same instantiation → dedup
 	const num2: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
 	const types2: Type[] = [num2];
 	const entry2 = monoRegister(reg, "identity", params, types2);
-	check(entry2.mangledName === "identity__number");
-	check(reg.entries.length === 1);
+	expect(entry2.mangledName === "identity__number");
+	expect(reg.entries.length === 1);
 }
 
 test "registry different types" {
@@ -214,12 +213,12 @@ test "registry different types" {
 	const types2: Type[] = [str];
 	monoRegister(reg, "identity", params, types1);
 	monoRegister(reg, "identity", params, types2);
-	check(reg.entries.length === 2);
+	expect(reg.entries.length === 2);
 }
 
 test "findEntry returns null for missing" {
 	const reg = createMonoRegistry();
 	const keys: string[] = ["number"];
 	const result = monoFindEntry(reg, "nonexistent", keys);
-	check(result === null);
+	expect(result === null);
 }

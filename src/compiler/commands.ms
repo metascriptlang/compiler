@@ -4,16 +4,22 @@ import { exit, exec, clockMs } from "std/process";
 import { lex } from "../lexer/index";
 import { formatToken } from "../lexer/token";
 import { parseSource } from "../parser/statements/validation";
+import { registerCoreParsers } from "../parser/statements/core"; // Moved to top
 import { Node, NodeKind, ProgramData } from "../ast/node";
-import { printNode } from "../ast/index";
+import { printNode as printAstNode } from "../ast/index";
 import { CheckerContext, hasErrors, errorCount } from "../checker/context";
 import { checkProgram } from "../checker/checkPass";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
-import { CliOptions } from "./options";
+import { CliOptions, Target } from "./options";
 import { readSource, writeOutput, printErrorsAndExit, printTiming, verboseLog, replaceExt, baseName, ensureDir } from "./io";
 import { cmdBuildC } from "./compile";
 import { error, success, bold, cyan, dim, green, red, yellow, path } from "../utils/color";
+
+// Formatter imports
+import { defaultFormatOptions } from "./fmt/options";
+import { formatDoc } from "./fmt/layout";
+import { printNode as printFormattedNode } from "./fmt/printer/index";
 
 // -- dump-tokens --
 
@@ -33,6 +39,7 @@ export function cmdDumpTokens(filePath: string): void {
 // -- dump-ast --
 
 export function cmdDumpAst(filePath: string): void {
+	registerCoreParsers();
 	const source = readSource(filePath);
 	const result = parseSource(source);
 	if (!result.ok) {
@@ -43,7 +50,7 @@ export function cmdDumpAst(filePath: string): void {
 	const pd = program.data as ProgramData;
 	let i = 0;
 	while (i < pd.programStmts.length) {
-		printNode(pd.programStmts[i], 0);
+		printAstNode(pd.programStmts[i], 0);
 		i += 1;
 	}
 }
@@ -139,12 +146,30 @@ export function cmdRun(filePath: string, opts: CliOptions): void {
 
 // -- fmt --
 
-export function cmdFmt(filePath: string): void {
-	const code = exec("msc fmt " + filePath);
-	if (code !== 0) {
-		console.log(error("error") + ": formatter failed " + dim("(exit " + code + ")"));
+export function cmdFmt(filePath: string, opts: CliOptions): void {
+	registerCoreParsers();
+	const source = readSource(filePath);
+	const result = parseSource(source);
+	if (!result.ok) {
+		console.log(error("parse error") + ": " + result.error);
+		exit(1);
 	}
-	exit(code);
+	const program = result.value;
+	const options = defaultFormatOptions();
+
+	const doc = printFormattedNode(program, options);
+	const formatted = formatDoc(doc, options);
+
+	if (formatted !== source) {
+		if (opts.fmtCheck) {
+			console.log(red("Unformatted") + " " + path(filePath));
+			exit(1);
+		}
+		writeOutput(filePath, formatted);
+		console.log(success("Formatted") + " " + path(filePath));
+	} else {
+		console.log(dim("Unchanged") + " " + path(filePath));
+	}
 }
 
 // -- init --

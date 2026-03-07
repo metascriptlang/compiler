@@ -5,7 +5,7 @@ import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, ProgramData, createNodeAt } from "../../ast/node";
 import { ParserState, createState } from "../context";
 import { lex } from "../../lexer/lexer";
-import { callProgramParser, callStateProgramParser } from "./callbacks";
+import { callStateProgramParser } from "./callbacks";
 
 type NodeResult = Result<Node, string>;
 

@@ -26,10 +26,9 @@ import {
 	emitProcLocalsLine,
 } from "./context";
 import { mangle, mangleFieldName, safeName } from "./names";
-import { getTypeDesc, isNrvoReturnType, intToString, isPointerType, annotationToC } from "./types";
+import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, intToString, isPointerType, annotationToC, genClHalfCast, genClFullCast } from "./types";
 import { formatCNumber, cBoolLiteral, cNullLiteral, cStringLiteral, msStringPoolRef } from "./literals";
 import { charAt, sliceStr, findChar, startsWith } from "../../utils/string";
-import { check } from "std/testing";
 
 // ===== Iterative genExpr infrastructure =====
 // Post-order stack traversal: Discover pushes children, Emit combines results.
@@ -324,7 +323,7 @@ function discoverCallExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackIte
 	const cd = node.data as CallExprData;
 	const sym = node.resolvedSym;
 
-	// @runtime("c_name") — keep recursive (emitNativeCall has side effects)
+	// extern from "c_name" — keep recursive (emitNativeCall has side effects)
 	if (sym !== null && sym.nativeName !== "") {
 		results.push(emitNativeCall(g, p, sym.nativeName, cd.arguments));
 		return;
@@ -379,6 +378,16 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 				if (destIsPtr === srcIsPtr) {
 					finalRight = "((" + leftCType + ")(" + right + "))";
 				}
+			}
+		}
+		// Modulo on doubles requires fmod() in C (% is integer-only)
+		// Integer types (int32, int64 etc.) keep native %
+		if (d.operator === "%") {
+			const lt = d.left.nodeType;
+			const isInt = lt !== null && (lt.kind === TypeKind.Int32 || lt.kind === TypeKind.Int64 || lt.kind === TypeKind.Uint32);
+			if (!isInt) {
+				results.push("fmod(" + left + ", " + finalRight + ")");
+				return;
 			}
 		}
 		const cOp = mapBinaryOp(d.operator);
@@ -454,7 +463,19 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 		const expr = peekResult(results, cc, 0);
 		truncResults(results, cc);
 		const d = node.data as TypeAssertionData;
-		const targetType = (node.nodeType !== null) ? getTypeDesc(g, node.nodeType) : mangle(d.asType);
+		// Nim's clHalf pattern: "__clHalf__" marker → generate typed fn pointer cast
+		// from nodeType (the callee's Function type). Codegen-only concern.
+		// See ccgtypes.nim:getClosureType(m, typ, clHalf)
+		let targetType = "";
+		if (d.asType === "__clFull__") {
+			targetType = genClFullCast(g, node.nodeType);
+		} else if (d.asType === "__clHalf__") {
+			targetType = genClHalfCast(g, node.nodeType);
+		} else if (node.nodeType !== null) {
+			targetType = getTypeDesc(g, node.nodeType);
+		} else {
+			targetType = mangle(d.asType);
+		}
 		results.push("((" + targetType + ")" + expr + ")");
 		return;
 	}
@@ -504,10 +525,24 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 		const d = node.data as ObjectLiteralData;
 		if ((node.flags & NF_CLOSURE) !== 0) {
 			// Closure literal: (msClosure){ .fn = ..., .env = ... }
+			// Nim pattern: env is heap-allocated via msAllocTyped, fields initialized,
+			// then closure pair references the pointer.
 			const fnExpr = peekResult(results, cc, 0);
 			const envExpr = peekResult(results, cc, 1);
 			truncResults(results, cc);
-			results.push("(msClosure){ .fn = (void*)" + fnExpr + ", .env = (void*)&" + envExpr + " }");
+			if (envExpr === "MS_NIL" || envExpr === "NULL") {
+				results.push("(msClosure){ .fn = (void*)" + fnExpr + ", .env = NULL }");
+			} else {
+				// Nim pattern: heap-allocate env struct, init fields, use pointer.
+				const envNode = d.properties[1];
+				const envTypeName = (envNode !== null && envNode.nodeType !== null) ? getTypeDesc(g, envNode.nodeType) : "void";
+				g.labels += 1;
+				const envTemp = "_env" + g.labels + "_";
+				emitProcLocalsLine(p, envTypeName + "* " + envTemp + ";");
+				emitStmtsLine(p, envTemp + " = (" + envTypeName + "*)msAllocTyped(sizeof(" + envTypeName + "), NULL);");
+				emitStmtsLine(p, "*" + envTemp + " = " + envExpr + ";");
+				results.push("(msClosure){ .fn = (void*)" + fnExpr + ", .env = (void*)" + envTemp + " }");
+			}
 		} else {
 			// General struct literal — ALL compound literals need (Type) prefix in C
 			let prefix = "";
@@ -551,27 +586,6 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 	results.push("/* unsupported expression */");
 }
 
-// ===== NRVO Return Type Detection =====
-// Returns the NRVO return type if the callee returns a struct, null otherwise.
-
-function calleeNrvoReturnType(callNode: Node): Type {
-	// Only apply NRVO when callee is a known Function (not runtime macros)
-	const cd = callNode.data as CallExprData;
-	// Source 1: callee's function type → return type
-	if (cd.callee !== null && cd.callee.nodeType !== null && cd.callee.nodeType.kind === TypeKind.Function) {
-		const ret = cd.callee.nodeType.typeReturn;
-		if (ret !== null && isNrvoReturnType(ret)) return ret;
-	}
-	// Source 2: resolvedSym on CallExpr
-	if (callNode.resolvedSym !== null && callNode.resolvedSym.symbolType !== null) {
-		const st = callNode.resolvedSym.symbolType;
-		if (st.kind === TypeKind.Function && st.typeReturn !== null && isNrvoReturnType(st.typeReturn)) {
-			return st.typeReturn;
-		}
-	}
-	return null as unknown as Type;
-}
-
 // ===== Emit CallExpr =====
 
 function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): void {
@@ -590,16 +604,27 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 			ovType = sym.overloads[idx - 1].symbolType;
 		}
 		const hasOvParams = ovType !== null && ovType.kind === TypeKind.Function && ovType.typeChildren !== null;
+		// Resolve nativeName early — need to know if & prefix requires first-arg address-of
+		let ovNativeName = "";
+		if (idx === 0 && sym.nativeName !== "") {
+			ovNativeName = sym.nativeName;
+		} else if (idx > 0 && idx - 1 < sym.overloads.length && sym.overloads[idx - 1].nativeName !== "") {
+			ovNativeName = sym.overloads[idx - 1].nativeName;
+		}
+		const ovNeedsAddr = hasAddrPrefix(ovNativeName);
 		// Build args with pointer/value ABI shim
 		let argsStr = "";
 		let ai = 0;
 		while (ai < cc) {
 			if (ai > 0) argsStr = argsStr + ", ";
 			let arg = results[results.length - cc + ai];
-			if (hasOvParams && ai < ovType.typeChildren.length && ai < cd.arguments.length) {
+			// & prefix on nativeName: wrap first arg with &(...)
+			if (ovNeedsAddr && ai === 0) {
+				arg = "&(" + arg + ")";
+			} else if (hasOvParams && ai < ovType.typeChildren.length && ai < cd.arguments.length) {
 				const paramType = ovType.typeChildren[ai];
 				const argNode = cd.arguments[ai];
-				if (paramType !== null && argNode.nodeType !== null) {
+				if (paramType !== null && argNode.nodeType !== null && argNode.kind !== NodeKind.HiddenAddr) {
 					const paramIsPtr = isPointerType(paramType);
 					const argIsPtr = isPointerType(argNode.nodeType);
 					if (paramIsPtr && !argIsPtr) {
@@ -613,11 +638,11 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 			ai += 1;
 		}
 		truncResults(results, cc);
-		if (idx === 0 && sym.nativeName !== "") {
-			results.push(sym.nativeName + "(" + argsStr + ")");
-		} else if (idx > 0 && idx - 1 < sym.overloads.length && sym.overloads[idx - 1].nativeName !== "") {
-			results.push(sym.overloads[idx - 1].nativeName + "(" + argsStr + ")");
-		} else if (idx >= 0) {
+		if (ovNativeName !== "") {
+			results.push(stripAddrPrefix(ovNativeName) + "(" + argsStr + ")");
+			return;
+		}
+		if (idx >= 0) {
 			results.push(safeName(sym.name) + "__" + idx + "(" + argsStr + ")");
 		} else {
 			results.push(safeName(sym.name) + "__0(" + argsStr + ")");
@@ -640,12 +665,11 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 		if (isNumberArrayFrom && i > 1) {
 			arg = "(double)(" + arg + ")";
 		} else if (hasParamTypes) {
-			// Pointer/value ABI shim: auto-insert & or * for mismatches
 			const argIdx = i - 1;
 			if (argIdx < calleeType.typeChildren.length && argIdx < cd.arguments.length) {
 				const paramType = calleeType.typeChildren[argIdx];
 				const argNode = cd.arguments[argIdx];
-				if (paramType !== null && argNode.nodeType !== null) {
+				if (paramType !== null && argNode.nodeType !== null && argNode.kind !== NodeKind.HiddenAddr) {
 					const paramIsPtr = isPointerType(paramType);
 					const argIsPtr = isPointerType(argNode.nodeType);
 					if (paramIsPtr && !argIsPtr) {
@@ -662,19 +686,22 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 	truncResults(results, cc);
 
 	if (tag === TAG_CALL_DIRECT) {
+		// TypeAssertion callee already emits ((Type)expr) — outer parens handle precedence.
+		const calleeStr = callee;
 		// NRVO: call returns void, result via out-param
-		const nrvoType = calleeNrvoReturnType(node);
+		const nrvoRet = getCalleeReturnType(node);
+		const nrvoType = (nrvoRet !== null && isNrvoReturnType(nrvoRet)) ? nrvoRet : null as unknown as Type;
 		if (nrvoType !== null) {
 			const cType = getTypeDesc(g, nrvoType);
 			const tmp = getTemp(p, cType);
 			let nrvoArgs = "&" + tmp.snippet;
 			if (argsStr !== "") nrvoArgs = nrvoArgs + ", " + argsStr;
-			emitStmtsLine(p, callee + "(" + nrvoArgs + ");");
+			emitStmtsLine(p, calleeStr + "(" + nrvoArgs + ");");
 			results.push(tmp.snippet);
 		} else if (argsStr === "") {
-			results.push(callee + "()");
+			results.push(calleeStr + "()");
 		} else {
-			results.push(callee + "(" + argsStr + ")");
+			results.push(calleeStr + "(" + argsStr + ")");
 		}
 	}
 }
@@ -705,16 +732,22 @@ function mapBinaryOp(op: string): string {
 // Direct call: foo(args)
 // Closure call: callee.fn(callee.env, args) — detected via isDirectCall flag from closureCallMarker
 
-// Emit a @runtime call: strip & prefix → &first_arg, add array type suffix.
-function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Node[]): string {
-	let cName = nativeName;
-	let needsAddr = false;
-
-	// & prefix → mutating method, first arg needs address-of
-	if (cName.length > 0 && charAt(cName, 0) === "&") {
-		cName = sliceStr(cName, 1, cName.length);
-		needsAddr = true;
+// Emit an extern native call: strip & prefix → &first_arg, add array type suffix.
+// Strip & prefix from nativeName. Returns [cleanName, needsAddr].
+function stripAddrPrefix(nativeName: string): string {
+	if (nativeName.length > 0 && charAt(nativeName, 0) === "&") {
+		return sliceStr(nativeName, 1, nativeName.length);
 	}
+	return nativeName;
+}
+
+function hasAddrPrefix(nativeName: string): boolean {
+	return nativeName.length > 0 && charAt(nativeName, 0) === "&";
+}
+
+function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Node[]): string {
+	const needsAddr = hasAddrPrefix(nativeName);
+	let cName = stripAddrPrefix(nativeName);
 
 	// Array type suffix: ms_array_X → ms_array_X_number/_string/_ref
 	if (args.length > 0 && args[0].nodeType !== null) {
@@ -794,7 +827,7 @@ function genArrayLiteral(g: CGen, p: CProc, node: Node): string {
 	emitStmtsLine(p, tmpName + " = (" + arrayTypeName + "){0};");
 	let i = 0;
 	while (i < d.elements.length) {
-		emitStmtsLine(p, "msRefArrayPush(&" + tmpName + ", " + genExpr(g, p, d.elements[i]) + ");");
+		emitStmtsLine(p, "msGenericArrayPush(&" + tmpName + ", " + genExpr(g, p, d.elements[i]) + ");");
 		i += 1;
 	}
 	return tmpName;
@@ -822,78 +855,78 @@ function exprSnippet(input: string): string {
 	return genExpr(g, p, es.expr);
 }
 
-test "integer" { check(exprSnippet("42;") === "42"); }
+test "integer" { expect(exprSnippet("42;") === "42"); }
 
-test "float" { check(exprSnippet("3.14;") === "3.14"); }
+test "float" { expect(exprSnippet("3.14;") === "3.14"); }
 
-test "zero" { check(exprSnippet("0;") === "0"); }
+test "zero" { expect(exprSnippet("0;") === "0"); }
 
 test "simple string uses pool ref" {
 	const result = exprSnippet("\"hello\";");
-	check(result === "MS_STRING_LIT(&TMP_STR_1, 5)");
+	expect(result === "MS_STRING_LIT(&TMP_STR_1, 5)");
 }
 
-test "true" { check(exprSnippet("true;") === "MS_TRUE"); }
+test "true" { expect(exprSnippet("true;") === "MS_TRUE"); }
 
-test "false" { check(exprSnippet("false;") === "MS_FALSE"); }
+test "false" { expect(exprSnippet("false;") === "MS_FALSE"); }
 
-test "null literal" { check(exprSnippet("null;") === "MS_NIL"); }
+test "null literal" { expect(exprSnippet("null;") === "MS_NIL"); }
 
-test "simple name" { check(exprSnippet("foo;") === "foo"); }
+test "simple name" { expect(exprSnippet("foo;") === "foo"); }
 
-test "addition" { check(exprSnippet("a + b;") === "(a + b)"); }
+test "addition" { expect(exprSnippet("a + b;") === "(a + b)"); }
 
-test "equality" { check(exprSnippet("x === y;") === "(x == y)"); }
+test "equality" { expect(exprSnippet("x === y;") === "(x == y)"); }
 
-test "not equal" { check(exprSnippet("x !== y;") === "(x != y)"); }
+test "not equal" { expect(exprSnippet("x !== y;") === "(x != y)"); }
 
-test "nested" { check(exprSnippet("a + b * c;") === "(a + (b * c))"); }
+test "nested" { expect(exprSnippet("a + b * c;") === "(a + (b * c))"); }
 
-test "negation" { check(exprSnippet("-x;") === "(-x)"); }
+test "negation" { expect(exprSnippet("-x;") === "(-x)"); }
 
-test "logical not" { check(exprSnippet("!flag;") === "(!flag)"); }
+test "logical not" { expect(exprSnippet("!flag;") === "(!flag)"); }
 
-test "no args" { check(exprSnippet("foo();") === "foo()"); }
+test "no args" { expect(exprSnippet("foo();") === "foo()"); }
 
-test "with args" { check(exprSnippet("foo(a, b);") === "foo(a, b)"); }
+test "with args" { expect(exprSnippet("foo(a, b);") === "foo(a, b)"); }
 
-test "nested call" { check(exprSnippet("foo(bar(x));") === "foo(bar(x))"); }
+test "nested call" { expect(exprSnippet("foo(bar(x));") === "foo(bar(x))"); }
 
-test "dot access" { check(exprSnippet("obj.x;") === "obj.x"); }
+test "dot access" { expect(exprSnippet("obj.x;") === "obj.x"); }
 
-test "bracket access" { check(exprSnippet("arr[0];") === "arr[0]"); }
+test "bracket access" { expect(exprSnippet("arr[0];") === "arr[0]"); }
 
-test "expression index" { check(exprSnippet("arr[i + 1];") === "arr[(i + 1)]"); }
+test "expression index" { expect(exprSnippet("arr[i + 1];") === "arr[(i + 1)]"); }
 
-test "conditional" { check(exprSnippet("a ? b : c;") === "(a ? b : c)"); }
+test "conditional" { expect(exprSnippet("a ? b : c;") === "(a ? b : c)"); }
 
 test "empty array" {
 	// Without nodeType, falls back to generic msRefArray
-	check(exprSnippet("[];") === "(msRefArray){0}");
+	expect(exprSnippet("[];") === "(msRefArray){0}");
 }
 
 test "array with elements no type" {
 	// Without nodeType (no checker), falls back to temp + push
 	const result = exprSnippet("[1, 2, 3];");
 	// Returns temp name (setup emitted to proc stmts)
-	check(result.length > 0);
+	expect(result.length > 0);
 }
 
-test "postfix increment" { check(exprSnippet("x++;") === "(x++)"); }
+test "postfix increment" { expect(exprSnippet("x++;") === "(x++)"); }
 
-test "prefix increment" { check(exprSnippet("++x;") === "(++x)"); }
+test "prefix increment" { expect(exprSnippet("++x;") === "(++x)"); }
 
-test "postfix decrement" { check(exprSnippet("x--;") === "(x--)"); }
+test "postfix decrement" { expect(exprSnippet("x--;") === "(x--)"); }
 
-test "prefix decrement" { check(exprSnippet("--x;") === "(--x)"); }
+test "prefix decrement" { expect(exprSnippet("--x;") === "(--x)"); }
 
-test "simple new" { check(exprSnippet("new Foo();") === "Foo_new()"); }
+test "simple new" { expect(exprSnippet("new Foo();") === "Foo_new()"); }
 
-test "new with args" { check(exprSnippet("new Bar(1, 2);") === "Bar_new(1, 2)"); }
+test "new with args" { expect(exprSnippet("new Bar(1, 2);") === "Bar_new(1, 2)"); }
 
-test "move identifier" { check(exprSnippet("move x;") === "x"); }
+test "move identifier" { expect(exprSnippet("move x;") === "x"); }
 
-test "move call" { check(exprSnippet("move f();") === "f()"); }
+test "move call" { expect(exprSnippet("move f();") === "f()"); }
 
 test "deeply nested binary (100 levels)" {
 	// Build: a + a + a + ... (100 times) → deeply nested left-recursive BinaryExpr
@@ -906,7 +939,7 @@ test "deeply nested binary (100 levels)" {
 	input = input + ";";
 	const result = exprSnippet(input);
 	// Should not stack overflow and should produce valid output
-	check(result.length > 0);
+	expect(result.length > 0);
 	// Innermost pair should be (a + a)
 	let hasInner = false;
 	let j = 0;
@@ -916,7 +949,7 @@ test "deeply nested binary (100 levels)" {
 		}
 		j += 1;
 	}
-	check(hasInner);
+	expect(hasInner);
 }
 
 test "deeply nested calls (50 levels)" {
@@ -935,7 +968,7 @@ test "deeply nested calls (50 levels)" {
 	}
 	input = input + ";";
 	const result = exprSnippet(input);
-	check(result.length > 0);
+	expect(result.length > 0);
 	// Should contain f(f( pattern
 	let hasNested = false;
 	let j = 0;
@@ -945,7 +978,7 @@ test "deeply nested calls (50 levels)" {
 		}
 		j += 1;
 	}
-	check(hasNested);
+	expect(hasNested);
 }
 
 test "deeply nested ternary (30 levels)" {
@@ -958,5 +991,5 @@ test "deeply nested ternary (30 levels)" {
 	}
 	input = input + "c;";
 	const result = exprSnippet(input);
-	check(result.length > 0);
+	expect(result.length > 0);
 }

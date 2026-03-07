@@ -16,6 +16,16 @@ void msPrintln(msString s) {
 
 void msClearException(void) {
 	msErr = false;
+	msCurrException = NULL;
+}
+
+static msException __staticException;
+
+void msThrow(msString msg) {
+	__staticException.message = (msg.p != NULL) ? msg.p->data : "";
+	__staticException.code = 1;
+	msCurrException = &__staticException;
+	msErr = true;
 }
 
 _Noreturn void msRaiseIndexError(int64_t idx, int64_t len) {

@@ -668,4 +668,3 @@ function seedFunctionParams(fnNode: Node, scopes: TypeScope[]): void {
 }
 
 // ===== Tests =====
-import { check } from "std/testing";

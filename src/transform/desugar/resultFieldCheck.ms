@@ -15,7 +15,6 @@ import {
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent, makeBlock, makeExprStmt } from "../util";
-import { check } from "std/testing";
 import { firstExprKindAfter, stmtCountAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -57,14 +56,14 @@ function wrapWithCheck(accessNode: Node, resultObj: Node, checkFnName: string): 
 }
 
 // ===== Tests =====
-test "non-member unchanged" { check(firstExprKindAfter("x + y;", lowerResultFieldCheck) === NodeKind.BinaryExpr); }
+test "non-member unchanged" { expect(firstExprKindAfter("x + y;", lowerResultFieldCheck) === NodeKind.BinaryExpr); }
 
-test "regular member unchanged" { check(firstExprKindAfter("obj.name;", lowerResultFieldCheck) === NodeKind.MemberExpr); }
+test "regular member unchanged" { expect(firstExprKindAfter("obj.name;", lowerResultFieldCheck) === NodeKind.MemberExpr); }
 
-test "non-result .value unchanged" { check(firstExprKindAfter("obj.value;", lowerResultFieldCheck) === NodeKind.MemberExpr); }
+test "non-result .value unchanged" { expect(firstExprKindAfter("obj.value;", lowerResultFieldCheck) === NodeKind.MemberExpr); }
 
-test "passthrough for non-expr" { check(stmtCountAfter("const x = 1;", lowerResultFieldCheck) === 1); }
+test "passthrough for non-expr" { expect(stmtCountAfter("const x = 1;", lowerResultFieldCheck) === 1); }
 
-test "call expr unchanged" { check(firstExprKindAfter("f();", lowerResultFieldCheck) === NodeKind.CallExpr); }
+test "call expr unchanged" { expect(firstExprKindAfter("f();", lowerResultFieldCheck) === NodeKind.CallExpr); }
 
-test "identifier unchanged" { check(firstExprKindAfter("x;", lowerResultFieldCheck) === NodeKind.Identifier); }
+test "identifier unchanged" { expect(firstExprKindAfter("x;", lowerResultFieldCheck) === NodeKind.Identifier); }

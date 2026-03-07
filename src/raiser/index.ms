@@ -2,7 +2,6 @@
 // Pure bytecode executor. No source language knowledge.
 // `msc test src/raiser/index.ms` is the primary feedback loop.
 
-import { check } from "std/testing";
 
 // Layer 0: Data types
 export { RaiserOpcode, RaiserInstruction, raiserABC, raiserABx, raiserAx, getBx, getSignedBx, getSignedAx } from "./bytecode";
@@ -37,11 +36,11 @@ test "arithmetic: (2 + 3) * 4 = 20" {
 		[raiserInt(2), raiserInt(3), raiserInt(4)]
 	);
 	const entry = getModuleEntry(mod);
-	check(getFuncCodeLen(entry) === 6);
-	check(disasmInst(getFuncInst(entry, 0)) === "LoadConst R0 K0");
-	check(disasmInst(getFuncInst(entry, 2)) === "AddI64 R2 R0 R1");
+	expect(getFuncCodeLen(entry) === 6);
+	expect(disasmInst(getFuncInst(entry, 0)) === "LoadConst R0 K0");
+	expect(disasmInst(getFuncInst(entry, 2)) === "AddI64 R2 R0 R1");
 	const vm = execModule(mod);
-	check(vm.exitValue.intVal === 20);
+	expect(vm.exitValue.intVal === 20);
 }
 
 test "branch: if 10 > 5 then 1 else 0" {
@@ -59,7 +58,7 @@ test "branch: if 10 > 5 then 1 else 0" {
 		[raiserInt(10), raiserInt(5), raiserInt(1), raiserInt(0)]
 	);
 	const vm = execModule(mod);
-	check(vm.exitValue.intVal === 1);
+	expect(vm.exitValue.intVal === 1);
 }
 
 test "loop: sum 1..5 = 15" {
@@ -78,7 +77,7 @@ test "loop: sum 1..5 = 15" {
 		[raiserInt(0), raiserInt(1), raiserInt(5)]
 	);
 	const vm = execModule(mod);
-	check(vm.exitValue.intVal === 15);
+	expect(vm.exitValue.intVal === 15);
 }
 
 test "disassembly output" {
@@ -93,7 +92,7 @@ test "disassembly output" {
 	);
 	const entry = getModuleEntry(mod);
 	const s = disasmFunc(entry);
-	check(s.length > 0);
+	expect(s.length > 0);
 }
 
 test "load + execute" {
@@ -109,7 +108,7 @@ test "load + execute" {
 	);
 	load(ctx, mod);
 	execute(ctx);
-	check(ctx.lastResult.intVal === 42);
+	expect(ctx.lastResult.intVal === 42);
 }
 
 test "sequential modules" {
@@ -124,9 +123,9 @@ test "sequential modules" {
 	);
 	load(ctx, mod1);
 	execute(ctx);
-	check(ctx.lastResult.intVal === 10);
+	expect(ctx.lastResult.intVal === 10);
 
 	load(ctx, mod2);
 	execute(ctx);
-	check(ctx.lastResult.intVal === 20);
+	expect(ctx.lastResult.intVal === 20);
 }

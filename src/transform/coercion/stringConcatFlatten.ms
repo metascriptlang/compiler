@@ -16,7 +16,6 @@ import { TypeKind } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent, makeNumber } from "../util";
-import { check } from "std/testing";
 import { firstExprKindAfter, stmtCountAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -95,17 +94,17 @@ function collectParts(node: Node, parts: Node[]): void {
 }
 
 // ===== Tests =====
-test "variable addition unchanged" { check(firstExprKindAfter("x + y;", lowerStringConcatFlatten) === NodeKind.BinaryExpr); }
+test "variable addition unchanged" { expect(firstExprKindAfter("x + y;", lowerStringConcatFlatten) === NodeKind.BinaryExpr); }
 
-test "non-binary unchanged" { check(firstExprKindAfter("f();", lowerStringConcatFlatten) === NodeKind.CallExpr); }
+test "non-binary unchanged" { expect(firstExprKindAfter("f();", lowerStringConcatFlatten) === NodeKind.CallExpr); }
 
-test "single stmt passthrough" { check(stmtCountAfter("const x = 1;", lowerStringConcatFlatten) === 1); }
+test "single stmt passthrough" { expect(stmtCountAfter("const x = 1;", lowerStringConcatFlatten) === 1); }
 
-test "non-string binary unchanged" { check(firstExprKindAfter("x * y;", lowerStringConcatFlatten) === NodeKind.BinaryExpr); }
+test "non-string binary unchanged" { expect(firstExprKindAfter("x * y;", lowerStringConcatFlatten) === NodeKind.BinaryExpr); }
 
-test "identifier unchanged" { check(firstExprKindAfter("x;", lowerStringConcatFlatten) === NodeKind.Identifier); }
+test "identifier unchanged" { expect(firstExprKindAfter("x;", lowerStringConcatFlatten) === NodeKind.Identifier); }
 
 test "two-part string stays binary" {
 	// "a" + x is only 2 parts — no benefit from flattening
-	check(firstExprKindAfter("\"a\" + x;", lowerStringConcatFlatten) === NodeKind.BinaryExpr);
+	expect(firstExprKindAfter("\"a\" + x;", lowerStringConcatFlatten) === NodeKind.BinaryExpr);
 }

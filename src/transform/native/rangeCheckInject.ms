@@ -13,7 +13,6 @@ import {
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent, makeNumber } from "../util";
-import { check } from "std/testing";
 import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";
 import { ExprStmtData } from "../../ast/node";
 import { createTransformContext } from "../context";
@@ -108,28 +107,28 @@ function parsedAsType(input: string): string {
 }
 
 // ===== Tests =====
-test "non-cast unchanged" { check(firstExprKindAfter("x + y;", injectRangeChecks) === NodeKind.BinaryExpr); }
+test "non-cast unchanged" { expect(firstExprKindAfter("x + y;", injectRangeChecks) === NodeKind.BinaryExpr); }
 
-test "call unchanged" { check(firstExprKindAfter("f();", injectRangeChecks) === NodeKind.CallExpr); }
+test "call unchanged" { expect(firstExprKindAfter("f();", injectRangeChecks) === NodeKind.CallExpr); }
 
-test "passthrough" { check(stmtCountAfter("const x = 1;", injectRangeChecks) === 1); }
+test "passthrough" { expect(stmtCountAfter("const x = 1;", injectRangeChecks) === 1); }
 
-test "member access unchanged" { check(firstExprKindAfter("obj.x;", injectRangeChecks) === NodeKind.MemberExpr); }
+test "member access unchanged" { expect(firstExprKindAfter("obj.x;", injectRangeChecks) === NodeKind.MemberExpr); }
 
-test "identifier unchanged" { check(firstExprKindAfter("x;", injectRangeChecks) === NodeKind.Identifier); }
+test "identifier unchanged" { expect(firstExprKindAfter("x;", injectRangeChecks) === NodeKind.Identifier); }
 
-test "parser stores asType" { check(parsedAsType("x as int8;") === "int8"); }
+test "parser stores asType" { expect(parsedAsType("x as int8;") === "int8"); }
 
-test "parser stores asType number" { check(parsedAsType("x as number;") === "number"); }
+test "parser stores asType number" { expect(parsedAsType("x as number;") === "number"); }
 
-test "parser stores asType union" { check(parsedAsType("x as string | null;") === "string | null"); }
+test "parser stores asType union" { expect(parsedAsType("x as string | null;") === "string | null"); }
 
-test "cast to int8 becomes range check" { check(castExprKind("x as int8;") === NodeKind.CallExpr); }
+test "cast to int8 becomes range check" { expect(castExprKind("x as int8;") === NodeKind.CallExpr); }
 
-test "cast to uint16 becomes range check" { check(castExprKind("x as uint16;") === NodeKind.CallExpr); }
+test "cast to uint16 becomes range check" { expect(castExprKind("x as uint16;") === NodeKind.CallExpr); }
 
-test "cast to int32 becomes range check" { check(castExprKind("x as int32;") === NodeKind.CallExpr); }
+test "cast to int32 becomes range check" { expect(castExprKind("x as int32;") === NodeKind.CallExpr); }
 
-test "cast to number unchanged" { check(castExprKind("x as number;") === NodeKind.TypeAssertion); }
+test "cast to number unchanged" { expect(castExprKind("x as number;") === NodeKind.TypeAssertion); }
 
-test "cast to string unchanged" { check(castExprKind("x as string;") === NodeKind.TypeAssertion); }
+test "cast to string unchanged" { expect(castExprKind("x as string;") === NodeKind.TypeAssertion); }

@@ -3,7 +3,7 @@
 // All other transam/ files import from here.
 // Ta-prefixed to avoid C namespace collision.
 
-import { check } from "std/testing";
+
 
 // ===== Query Kind — what type of computation is cached =====
 
@@ -65,54 +65,54 @@ export function queryKeysEqual(a: TaQueryKey, b: TaQueryKey): boolean {
 // ===== Tests =====
 test "init starts at zero" {
 	const rev = createRevision();
-	check(rev.value === 0);
+	expect(rev.value === 0);
 }
 
 test "increment advances" {
 	const rev = createRevision();
 	incrementRevision(rev);
-	check(rev.value === 1);
+	expect(rev.value === 1);
 	incrementRevision(rev);
-	check(rev.value === 2);
+	expect(rev.value === 2);
 }
 
 test "create stores kind and fileId" {
 	const key = createQueryKey(TaQueryKind.Parse, 42);
-	check(key.queryKind === TaQueryKind.Parse);
-	check(key.fileId === 42);
+	expect(key.queryKind === TaQueryKind.Parse);
+	expect(key.fileId === 42);
 }
 
 test "equal keys match" {
 	const a = createQueryKey(TaQueryKind.Parse, 1);
 	const b = createQueryKey(TaQueryKind.Parse, 1);
-	check(queryKeysEqual(a, b));
+	expect(queryKeysEqual(a, b));
 }
 
 test "different kind does not match" {
 	const a = createQueryKey(TaQueryKind.Parse, 1);
 	const b = createQueryKey(TaQueryKind.TypeCheck, 1);
-	check(!queryKeysEqual(a, b));
+	expect(!queryKeysEqual(a, b));
 }
 
 test "different fileId does not match" {
 	const a = createQueryKey(TaQueryKind.Parse, 1);
 	const b = createQueryKey(TaQueryKind.Parse, 2);
-	check(!queryKeysEqual(a, b));
+	expect(!queryKeysEqual(a, b));
 }
 
 test "query kinds are distinct" {
-	check(TaQueryKind.FileText !== TaQueryKind.Parse);
-	check(TaQueryKind.Parse !== TaQueryKind.TypeCheck);
-	check(TaQueryKind.TypeCheck !== TaQueryKind.Transform);
-	check(TaQueryKind.Transform !== TaQueryKind.Analyze);
+	expect(TaQueryKind.FileText !== TaQueryKind.Parse);
+	expect(TaQueryKind.Parse !== TaQueryKind.TypeCheck);
+	expect(TaQueryKind.TypeCheck !== TaQueryKind.Transform);
+	expect(TaQueryKind.Transform !== TaQueryKind.Analyze);
 }
 
 test "query states are distinct" {
-	check(TaQueryState.Green !== TaQueryState.Red);
-	check(TaQueryState.Red !== TaQueryState.Yellow);
+	expect(TaQueryState.Green !== TaQueryState.Red);
+	expect(TaQueryState.Red !== TaQueryState.Yellow);
 }
 
 test "durability levels are distinct" {
-	check(TaDurability.Low !== TaDurability.Medium);
-	check(TaDurability.Medium !== TaDurability.High);
+	expect(TaDurability.Low !== TaDurability.Medium);
+	expect(TaDurability.Medium !== TaDurability.High);
 }

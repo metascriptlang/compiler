@@ -10,7 +10,7 @@ import {
 	BreakStmtData, ContinueStmtData, DeclKind,
 	TryCatchStmtData, ThrowStmtData,
 	SwitchStmtData, SwitchCaseData,
-	ExpectStmtData, CallExprData, IdentifierData,
+	CallExprData, IdentifierData,
 } from "../../ast/node";
 import { Type, TypeKind, isInterfaceType } from "../../checker/types";
 import {
@@ -21,7 +21,7 @@ import {
 } from "./context";
 import { genExpr } from "./expressions";
 import { safeName } from "./names";
-import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType } from "./types";
+import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, getCalleeReturnType } from "./types";
 
 // ===== NRVO Call Site Helpers =====
 // G3 fix: detect calls to NRVO functions and emit fn(&dest, args) instead of dest = fn(args)
@@ -43,31 +43,6 @@ function isNumericCType(cType: string): boolean {
 		|| cType === "uint8_t" || cType === "uint16_t" || cType === "uint32_t" || cType === "uint64_t";
 }
 
-function isNrvoCallSite(callNode: Node): boolean {
-	// Only apply NRVO when callee is a known Function (not runtime macros)
-	const cd = callNode.data as CallExprData;
-	if (cd.callee !== null && cd.callee.nodeType !== null && cd.callee.nodeType.kind === TypeKind.Function) {
-		if (cd.callee.nodeType.typeReturn !== null) return isNrvoReturnType(cd.callee.nodeType.typeReturn);
-	}
-	if (callNode.resolvedSym !== null && callNode.resolvedSym.symbolType !== null) {
-		const st = callNode.resolvedSym.symbolType;
-		if (st.kind === TypeKind.Function && st.typeReturn !== null) return isNrvoReturnType(st.typeReturn);
-	}
-	return false;
-}
-
-function getNrvoReturnType(callNode: Node): Type {
-	const cd = callNode.data as CallExprData;
-	if (cd.callee !== null && cd.callee.nodeType !== null && cd.callee.nodeType.kind === TypeKind.Function) {
-		return cd.callee.nodeType.typeReturn;
-	}
-	if (callNode.resolvedSym !== null && callNode.resolvedSym.symbolType !== null) {
-		const st = callNode.resolvedSym.symbolType;
-		if (st.kind === TypeKind.Function) return st.typeReturn;
-	}
-	return null as unknown as Type;
-}
-
 function genNrvoCallExpr(g: CGen, p: CProc, callNode: Node, destVar: string): string {
 	const cd = callNode.data as CallExprData;
 	let callee = genExpr(g, p, cd.callee);
@@ -78,7 +53,6 @@ function genNrvoCallExpr(g: CGen, p: CProc, callNode: Node, destVar: string): st
 	return callee + "(" + args + ")";
 }
 import { sliceStr, charAt } from "../../utils/string";
-import { check } from "std/testing";
 
 // ===== genStmt — main statement dispatcher =====
 
@@ -98,7 +72,6 @@ export function genStmt(g: CGen, p: CProc, node: Node): void {
 	else if (k === NodeKind.ThrowStmt) { genThrowStmt(g, p, node); }
 	else if (k === NodeKind.TryCatchStmt) { genTryCatchStmt(g, p, node); }
 	else if (k === NodeKind.SwitchStmt) { genSwitchStmt(g, p, node); }
-	else if (k === NodeKind.ExpectStmt) { genExpectStmt(g, p, node); }
 	else { emitStmtsLine(p, "/* unsupported stmt: " + k + " */"); }
 }
 
@@ -115,6 +88,14 @@ export function genStmts(g: CGen, p: CProc, stmts: Node[]): void {
 function genExprStmt(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as ExprStmtData;
 	if (d.expr.kind === NodeKind.MacroInvocation) return;
+	// Intercept expect() builtin — emit if/fail instead of function call
+	if (d.expr.kind === NodeKind.CallExpr && d.expr.resolvedSym !== null) {
+		const sym = d.expr.resolvedSym;
+		if (sym.builtinKind === "Expect") {
+			genExpectStmt(g, p, d.expr);
+			return;
+		}
+	}
 	const snippet = genExpr(g, p, d.expr);
 	emitStmtsLine(p, snippet + ";");
 }
@@ -141,11 +122,11 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 		}
 		// G3 fix: NRVO call sites — when initializer is a call returning a struct,
 		// emit "Type var; fn(&var, args);" instead of "Type var = fn(args);"
-		if (d.initializer.kind === NodeKind.CallExpr && isNrvoCallSite(d.initializer)) {
+		const nrvoRet = (d.initializer.kind === NodeKind.CallExpr) ? getCalleeReturnType(d.initializer) : null as unknown as Type;
+		if (nrvoRet !== null && isNrvoReturnType(nrvoRet)) {
 			// Derive type from callee return type if cType is unresolved
 			if (cType === "void*" || cType === "double") {
-				const retType = getNrvoReturnType(d.initializer);
-				if (retType !== null) cType = getTypeDesc(g, retType);
+				cType = getTypeDesc(g, nrvoRet);
 			}
 			emitStmtsLine(p, cType + " " + varName + ";");
 			const nrvoCall = genNrvoCallExpr(g, p, d.initializer, varName);
@@ -180,10 +161,26 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 	}
 }
 
-// Wrap a condition string in parens, but avoid double-wrapping when genBinaryExpr already added them.
+// Wrap a condition string in parens. Always wraps — the old "already wrapped" heuristic
+// broke on closure calls where first ( and last ) aren't matching parens.
+// Nim pattern: removeSinglePar (cbuilderexprs.nim) — expressions produce
+// "(a == b)" via cOp, if/while adds "if (...)", strip outer layer to avoid
+// double-wrap that triggers -Wparentheses-equality.
+function removeSinglePar(s: string): string {
+	if (s.length < 2 || s[0] !== "(" || s[s.length - 1] !== ")") return s;
+	let depth = 0;
+	let i = 0;
+	while (i < s.length - 1) {
+		if (s[i] === "(") { depth = depth + 1; }
+		else if (s[i] === ")") { depth = depth - 1; }
+		if (depth === 0) return s;
+		i = i + 1;
+	}
+	return s.slice(1, s.length - 1);
+}
+
 function wrapCond(s: string): string {
-	if (s.length >= 2 && sliceStr(s, 0, 1) === "(" && sliceStr(s, s.length - 1, s.length) === ")") return s;
-	return "(" + s + ")";
+	return "(" + removeSinglePar(s) + ")";
 }
 
 // ===== If Statement =====
@@ -310,23 +307,26 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Node): void {
 
 	// Try body
 	genStmt(g, p, d.tryBody);
-	// After try body, check error flag
-	emitStmtsLine(p, "if (msErr) goto " + catchLabel + ";");
-	emitStmtsLine(p, "goto " + finallyLabel + ";");
 
-	// Catch label
-	emitStmtsLine(p, catchLabel + ": {");
-	setStmtsIndent(p, oldIndent + 2);
-	if (d.catchName !== "") {
-		emitStmtsLine(p, "msException* " + safeName(d.catchName) + " = msCurrException;");
-	}
-	emitStmtsLine(p, "msErr = MS_FALSE;");
-	emitStmtsLine(p, "msClearException();");
-	if (d.catchBody !== null) {
+	const hasCatch = d.catchName !== "" || (d.catchBody !== null && d.catchBody.kind === NodeKind.BlockStmt && (d.catchBody.data as BlockStmtData).statements.length > 0);
+
+	if (hasCatch) {
+		// After try body, check error flag
+		emitStmtsLine(p, "if (msErr) goto " + catchLabel + ";");
+		emitStmtsLine(p, "goto " + finallyLabel + ";");
+
+		// Catch label
+		emitStmtsLine(p, catchLabel + ": {");
+		setStmtsIndent(p, oldIndent + 2);
+		if (d.catchName !== "") {
+			emitStmtsLine(p, "msException* " + safeName(d.catchName) + " = msCurrException;");
+		}
+		emitStmtsLine(p, "msErr = MS_FALSE;");
+		emitStmtsLine(p, "msClearException();");
 		genStmt(g, p, d.catchBody);
+		setStmtsIndent(p, oldIndent + 1);
+		emitStmtsLine(p, "}");
 	}
-	setStmtsIndent(p, oldIndent + 1);
-	emitStmtsLine(p, "}");
 
 	// Finally label
 	emitStmtsLine(p, finallyLabel + ":");
@@ -440,12 +440,21 @@ function genBlockOrBraces(g: CGen, p: CProc, node: Node): void {
 	}
 }
 
-// ===== Expect Statement =====
+// ===== Expect Builtin =====
 
 function genExpectStmt(g: CGen, p: CProc, node: Node): void {
-	const d = node.data as ExpectStmtData;
-	const cond = genExpr(g, p, d.expectExpr);
-	emitStmtsLine(p, `if (!(${cond})) { msTestCheckFail("expect failed", __FILE__, __LINE__); return; }`);
+	const cd = node.data as CallExprData;
+	if (cd.arguments.length < 1) return;
+	const cond = genExpr(g, p, cd.arguments[0]);
+	let msg = "\"assertion failed\"";
+	if (cd.arguments.length >= 2) {
+		msg = genExpr(g, p, cd.arguments[1]);
+	}
+	if (g.isTestBuild) {
+		emitStmtsLine(p, "if (!(" + cond + ")) { msTestCheckFail(" + msg + ", __FILE__, __LINE__); return; }");
+	} else {
+		emitStmtsLine(p, "if (!(" + cond + ")) { fprintf(stderr, \"assert: %s\\n\", " + msg + "); abort(); }");
+	}
 }
 
 // ===== Tests =====
@@ -470,42 +479,42 @@ function stmtOutput(input: string): string {
 	return readProcStmts(p);
 }
 
-test "simple call" { check(stmtOutput("foo();") === "foo();\n"); }
+test "simple call" { expect(stmtOutput("foo();") === "foo();\n"); }
 
-test "const with init" { check(stmtOutput("const x: number = 42;") === "double x = 42;\n"); }
+test "const with init" { expect(stmtOutput("const x: number = 42;") === "double x = 42;\n"); }
 
-test "let with init" { check(stmtOutput("let x: number = 0;") === "double x = 0;\n"); }
+test "let with init" { expect(stmtOutput("let x: number = 0;") === "double x = 0;\n"); }
 
-test "int32 type" { check(stmtOutput("const n: int32 = 0;") === "int32_t n = 0;\n"); }
+test "int32 type" { expect(stmtOutput("const n: int32 = 0;") === "int32_t n = 0;\n"); }
 
-test "bool type" { check(stmtOutput("const flag: boolean = true;") === "MS_BOOL flag = MS_TRUE;\n"); }
+test "bool type" { expect(stmtOutput("const flag: boolean = true;") === "MS_BOOL flag = MS_TRUE;\n"); }
 
 test "simple if" {
 	const result = stmtOutput("if (x) { foo(); }");
-	check(result === "if (x) {\n  foo();\n}\n");
+	expect(result === "if (x) {\n  foo();\n}\n");
 }
 
 test "if-else" {
 	const result = stmtOutput("if (x) { a(); } else { b(); }");
-	check(result === "if (x) {\n  a();\n}\n else {\n  b();\n}\n\n");
+	expect(result === "if (x) {\n  a();\n}\n else {\n  b();\n}\n\n");
 }
 
 test "simple while" {
 	const result = stmtOutput("while (x) { foo(); }");
-	check(result === "while (x) {\n  foo();\n}\n\n");
+	expect(result === "while (x) {\n  foo();\n}\n\n");
 }
 
-test "return value" { check(stmtOutput("return 42;") === "return 42;\n"); }
+test "return value" { expect(stmtOutput("return 42;") === "return 42;\n"); }
 
-test "break" { check(stmtOutput("break;") === "break;\n"); }
+test "break" { expect(stmtOutput("break;") === "break;\n"); }
 
-test "continue" { check(stmtOutput("continue;") === "continue;\n"); }
+test "continue" { expect(stmtOutput("continue;") === "continue;\n"); }
 
 test "try-catch emits goto labels" {
 	const tc = stmtOutput("try { foo(); } catch (e) { bar(); }");
 	const len = tc.length;
 	// Should contain goto-based labels, not setjmp
-	check(len > 20);
+	expect(len > 20);
 	// Should NOT contain setjmp (we use goto-based now)
 	let hasSetjmp = false;
 	let i = 0;
@@ -515,7 +524,7 @@ test "try-catch emits goto labels" {
 		}
 		i = i + 1;
 	}
-	check(!hasSetjmp);
+	expect(!hasSetjmp);
 }
 
 test "try-catch has catch label" {
@@ -530,7 +539,7 @@ test "try-catch has catch label" {
 		}
 		i = i + 1;
 	}
-	check(hasCatch);
+	expect(hasCatch);
 }
 
 test "try-finally has finally label" {
@@ -544,7 +553,7 @@ test "try-finally has finally label" {
 		}
 		i = i + 1;
 	}
-	check(hasFinally);
+	expect(hasFinally);
 }
 
 test "long if-else chain (100 branches)" {
@@ -557,7 +566,7 @@ test "long if-else chain (100 branches)" {
 		i += 1;
 	}
 	const result = stmtOutput(input);
-	check(result.length > 0);
+	expect(result.length > 0);
 	// Should contain "else if" pattern (iterative, not recursive)
 	let elseIfCount = 0;
 	let j = 0;
@@ -567,5 +576,5 @@ test "long if-else chain (100 branches)" {
 		}
 		j += 1;
 	}
-	check(elseIfCount === 99);
+	expect(elseIfCount === 99);
 }

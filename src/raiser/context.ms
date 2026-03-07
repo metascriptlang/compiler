@@ -10,7 +10,6 @@
 //   load(ctx, macroModule);
 //   execute(ctx);                // macro sees build.ms results
 
-import { check } from "std/testing";
 import {
 	RaiserValue, RaiserValueKind, raiserNil, raiserInt, raiserToString, raiserIsNil,
 	RaiserArrayHeap, createArrayHeap,
@@ -71,13 +70,13 @@ test "create + load + execute" {
 	);
 	load(ctx, mod);
 	execute(ctx);
-	check(ctx.lastResult.intVal === 42);
+	expect(ctx.lastResult.intVal === 42);
 }
 
 test "execute without load returns false" {
 	const ctx = createContext();
 	const ok = execute(ctx);
-	check(!ok);
+	expect(!ok);
 }
 
 test "load replaces module" {
@@ -92,11 +91,11 @@ test "load replaces module" {
 	);
 	load(ctx, mod1);
 	execute(ctx);
-	check(ctx.lastResult.intVal === 10);
+	expect(ctx.lastResult.intVal === 10);
 
 	load(ctx, mod2);
 	execute(ctx);
-	check(ctx.lastResult.intVal === 20);
+	expect(ctx.lastResult.intVal === 20);
 }
 
 test "output captured" {
@@ -111,7 +110,7 @@ test "output captured" {
 	);
 	load(ctx, mod);
 	execute(ctx);
-	check(ctx.lastOutput === "99\n");
+	expect(ctx.lastOutput === "99\n");
 }
 
 test "error propagates with stack trace" {
@@ -124,6 +123,6 @@ test "error propagates with stack trace" {
 	const mod = makeTestModule(code, consts);
 	load(ctx, mod);
 	const ok = execute(ctx);
-	check(!ok);
-	check(ctx.lastError.length > 0);
+	expect(!ok);
+	expect(ctx.lastError.length > 0);
 }

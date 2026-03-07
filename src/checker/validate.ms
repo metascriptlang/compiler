@@ -8,7 +8,7 @@
 
 import { Node, NodeKind, ProgramData, FunctionDeclData, ClassDeclData, VariableDeclData, ExprStmtData, CallExprData, MemberExprData, IdentifierData, BinaryExprData, UnaryExprData, IfStmtData, WhileStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, BlockStmtData, DecoratedDeclData, ExportDeclData } from "../ast/node";
 import { CheckerContext, addError } from "./context";
-import { check } from "std/testing";
+
 
 export function validateTypedAST(ctx: CheckerContext, node: Node): void {
 	if (node === null) return;

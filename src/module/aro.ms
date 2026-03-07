@@ -22,7 +22,6 @@ import {
 } from "../bindings/aro/index";
 import { ModuleGraph, findModule } from "./graph";
 import { sliceStr, trimStr, endsWith } from "../utils/string";
-import { check } from "std/testing";
 
 // ===== C Type → MetaScript Type Mapping =====
 
@@ -235,52 +234,52 @@ export function preprocessHeaders(graph: ModuleGraph, verbose: boolean): void {
 }
 
 // ===== Tests =====
-test "void" { check(mapCType("void") === "void"); }
+test "void" { expect(mapCType("void") === "void"); }
 
-test "int" { check(mapCType("int") === "int32"); }
+test "int" { expect(mapCType("int") === "int32"); }
 
-test "unsigned int" { check(mapCType("unsigned int") === "uint32"); }
+test "unsigned int" { expect(mapCType("unsigned int") === "uint32"); }
 
-test "float" { check(mapCType("float") === "float32"); }
+test "float" { expect(mapCType("float") === "float32"); }
 
-test "double" { check(mapCType("double") === "float64"); }
+test "double" { expect(mapCType("double") === "float64"); }
 
-test "bool" { check(mapCType("bool") === "boolean"); }
+test "bool" { expect(mapCType("bool") === "boolean"); }
 
-test "_Bool" { check(mapCType("_Bool") === "boolean"); }
+test "_Bool" { expect(mapCType("_Bool") === "boolean"); }
 
-test "char" { check(mapCType("char") === "int8"); }
+test "char" { expect(mapCType("char") === "int8"); }
 
-test "unsigned char" { check(mapCType("unsigned char") === "uint8"); }
+test "unsigned char" { expect(mapCType("unsigned char") === "uint8"); }
 
-test "int32_t" { check(mapCType("int32_t") === "int32"); }
+test "int32_t" { expect(mapCType("int32_t") === "int32"); }
 
-test "uint64_t" { check(mapCType("uint64_t") === "uint64"); }
+test "uint64_t" { expect(mapCType("uint64_t") === "uint64"); }
 
-test "size_t" { check(mapCType("size_t") === "uint64"); }
+test "size_t" { expect(mapCType("size_t") === "uint64"); }
 
-test "char *" { check(mapCType("char *") === "string"); }
+test "char *" { expect(mapCType("char *") === "string"); }
 
-test "const char *" { check(mapCType("const char *") === "string"); }
+test "const char *" { expect(mapCType("const char *") === "string"); }
 
-test "void *" { check(mapCType("void *") === "int64"); }
+test "void *" { expect(mapCType("void *") === "int64"); }
 
-test "int *" { check(mapCType("int *") === "int64"); }
+test "int *" { expect(mapCType("int *") === "int64"); }
 
-test "msString" { check(mapCType("msString") === "string"); }
+test "msString" { expect(mapCType("msString") === "string"); }
 
-test "msBool" { check(mapCType("msBool") === "boolean"); }
+test "msBool" { expect(mapCType("msBool") === "boolean"); }
 
-test "short" { check(mapCType("short") === "int16"); }
+test "short" { expect(mapCType("short") === "int16"); }
 
-test "long" { check(mapCType("long") === "int64"); }
+test "long" { expect(mapCType("long") === "int64"); }
 
-test "long long" { check(mapCType("long long") === "int64"); }
+test "long long" { expect(mapCType("long long") === "int64"); }
 
-test "whitespace trimmed" { check(mapCType("  int  ") === "int32"); }
+test "whitespace trimmed" { expect(mapCType("  int  ") === "int32"); }
 
-test "safe param name type" { check(safeParamName("type") === "argType"); }
+test "safe param name type" { expect(safeParamName("type") === "argType"); }
 
-test "safe param name normal" { check(safeParamName("count") === "count"); }
+test "safe param name normal" { expect(safeParamName("count") === "count"); }
 
-test "safe param name empty" { check(safeParamName("") === "p"); }
+test "safe param name empty" { expect(safeParamName("") === "p"); }

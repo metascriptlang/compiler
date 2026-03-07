@@ -18,7 +18,7 @@ import {
 	ThrowStmtData, DoWhileStmtData, FunctionDeclData,
 	ExportDeclData, ForStmtData, ForOfStmtData,
 } from "../ast/node";
-import { check } from "std/testing";
+
 import { parseInput } from "../transform/testUtil";
 
 // ===== Data Structures =====
@@ -579,52 +579,52 @@ function countKind(code: string, vn: string, kind: CfgInstrKind): number {
 test "simple use" {
 	const vn = "a";
 	const ts = "const a = 1; foo(a);";
-	check(countKind(ts, vn, CfgInstrKind.CfgUse) === 1);
-	check(countKind(ts, vn, CfgInstrKind.CfgDef) === 1);
+	expect(countKind(ts, vn, CfgInstrKind.CfgUse) === 1);
+	expect(countKind(ts, vn, CfgInstrKind.CfgDef) === 1);
 }
 
 test "multiple uses" {
 	const vn = "a";
 	const ts = "const a = 1; foo(a); bar(a);";
-	check(countKind(ts, vn, CfgInstrKind.CfgUse) === 2);
+	expect(countKind(ts, vn, CfgInstrKind.CfgUse) === 2);
 }
 
 test "assignment is def" {
 	const vn = "a";
 	const ts = "let a = 1; a = 2;";
-	check(countKind(ts, vn, CfgInstrKind.CfgDef) === 2);
+	expect(countKind(ts, vn, CfgInstrKind.CfgDef) === 2);
 }
 
 test "if-else has fork" {
 	const vn = "x";
 	const ts = "if (c) { foo(x); } else { bar(x); }";
-	check(countKind(ts, vn, CfgInstrKind.CfgFork) === 1);
+	expect(countKind(ts, vn, CfgInstrKind.CfgFork) === 1);
 }
 
 test "while has fork and loop" {
 	const vn = "x";
 	const ts = "while (c) { foo(x); }";
-	check(countKind(ts, vn, CfgInstrKind.CfgFork) === 1);
-	check(countKind(ts, vn, CfgInstrKind.CfgLoop) === 1);
+	expect(countKind(ts, vn, CfgInstrKind.CfgFork) === 1);
+	expect(countKind(ts, vn, CfgInstrKind.CfgLoop) === 1);
 }
 
 test "return has goto" {
 	const vn = "x";
 	const ts = "foo(x); return x;";
-	check(countKind(ts, vn, CfgInstrKind.CfgGoto) === 1);
+	expect(countKind(ts, vn, CfgInstrKind.CfgGoto) === 1);
 }
 
 test "function boundary stops" {
 	const vn = "x";
 	const ts = "const x = 1; function f() { return x; }";
-	check(countKind(ts, vn, CfgInstrKind.CfgUse) === 0);
-	check(countKind(ts, vn, CfgInstrKind.CfgDef) === 1);
+	expect(countKind(ts, vn, CfgInstrKind.CfgUse) === 0);
+	expect(countKind(ts, vn, CfgInstrKind.CfgDef) === 1);
 }
 
 test "last stmt is last read" {
 	const ts = "const a = 1; const b = a;";
 	const body = getBody(ts);
-	if (body === null) { check(false); return; }
+	if (body === null) { expect(false); return; }
 	const vn = "a";
 	const cfg = buildCfg(body, vn);
 	// Find the use of a
@@ -636,13 +636,13 @@ test "last stmt is last read" {
 			useCol = instr.col;
 		}
 	}
-	check(isLastReadCfg(cfg, useLine, useCol));
+	expect(isLastReadCfg(cfg, useLine, useCol));
 }
 
 test "not last when used after" {
 	const ts = "const a = 1; const b = a; const c = a;";
 	const body = getBody(ts);
-	if (body === null) { check(false); return; }
+	if (body === null) { expect(false); return; }
 	const vn = "a";
 	const cfg = buildCfg(body, vn);
 	// Find first use of a
@@ -655,14 +655,14 @@ test "not last when used after" {
 			break;
 		}
 	}
-	check(!isLastReadCfg(cfg, useLine, useCol));
+	expect(!isLastReadCfg(cfg, useLine, useCol));
 }
 
 test "branch merge: both branches consume" {
 	// KEY TEST: x used in both branches, not after → last read before if
 	const ts = "const x = getValue(); if (c) { use(x); } else { other(x); }";
 	const body = getBody(ts);
-	if (body === null) { check(false); return; }
+	if (body === null) { expect(false); return; }
 	const vn = "x";
 	const cfg = buildCfg(body, vn);
 	// Find uses of x (getValue() init is a def, not use)
@@ -679,14 +679,14 @@ test "branch merge: both branches consume" {
 		}
 	}
 	// Both branches use x, but each branch's use is last on its path
-	check(useCount === 2);
-	check(isLastReadCfg(cfg, firstUseLine, firstUseCol));
+	expect(useCount === 2);
+	expect(isLastReadCfg(cfg, firstUseLine, firstUseCol));
 }
 
 test "branch merge: used after if is not last read" {
 	const ts = "const x = getValue(); if (c) { use(x); } else { other(x); } final(x);";
 	const body = getBody(ts);
-	if (body === null) { check(false); return; }
+	if (body === null) { expect(false); return; }
 	const vn = "x";
 	const cfg = buildCfg(body, vn);
 	// First use should not be last read (final(x) follows)
@@ -699,14 +699,14 @@ test "branch merge: used after if is not last read" {
 			break;
 		}
 	}
-	check(!isLastReadCfg(cfg, firstUseLine, firstUseCol));
+	expect(!isLastReadCfg(cfg, firstUseLine, firstUseCol));
 }
 
 test "def in one branch makes other last-read" {
 	// x is used in if-branch, then reassigned in else-branch
 	const ts = "let x = 1; if (c) { use(x); } else { x = 2; } foo(x);";
 	const body = getBody(ts);
-	if (body === null) { check(false); return; }
+	if (body === null) { expect(false); return; }
 	const vn = "x";
 	const cfg = buildCfg(body, vn);
 	// The use in use(x) in the if-branch: foo(x) follows on that path → not last read
@@ -719,14 +719,14 @@ test "def in one branch makes other last-read" {
 			break;
 		}
 	}
-	check(!isLastReadCfg(cfg, firstUseLine, firstUseCol));
+	expect(!isLastReadCfg(cfg, firstUseLine, firstUseCol));
 }
 
 test "return terminates path" {
 	// After return, outer scope is unreachable on this path
 	const ts = "const x = 1; if (c) { return x; } foo(x);";
 	const body = getBody(ts);
-	if (body === null) { check(false); return; }
+	if (body === null) { expect(false); return; }
 	const vn = "x";
 	const cfg = buildCfg(body, vn);
 	// Find the use in "return x"
@@ -743,14 +743,14 @@ test "return terminates path" {
 		}
 	}
 	// The first use (return x) is last read on its path because return terminates
-	check(isLastReadCfg(cfg, returnUseLine, returnUseCol));
+	expect(isLastReadCfg(cfg, returnUseLine, returnUseCol));
 }
 
 test "loop use is not last read" {
 	// x used in loop body — loop repeats → not last read
 	const ts = "const x = 1; while (c) { use(x); }";
 	const body = getBody(ts);
-	if (body === null) { check(false); return; }
+	if (body === null) { expect(false); return; }
 	const vn = "x";
 	const cfg = buildCfg(body, vn);
 	let useLine = 0;
@@ -762,5 +762,5 @@ test "loop use is not last read" {
 			break;
 		}
 	}
-	check(!isLastReadCfg(cfg, useLine, useCol));
+	expect(!isLastReadCfg(cfg, useLine, useCol));
 }

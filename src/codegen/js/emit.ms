@@ -5,7 +5,7 @@
 
 import { Node, NodeKind, BlockStmtData } from "../../ast/node";
 import { sliceStr } from "../../utils/string";
-import { check } from "std/testing";
+
 
 // ===== JS Generator =====
 
@@ -155,7 +155,7 @@ test "StringBuf accumulation" {
 	emit(gen, "hello");
 	emit(gen, " ");
 	emit(gen, "world");
-	check(finalize(gen) === "hello world");
+	expect(finalize(gen) === "hello world");
 }
 
 test "indentation" {
@@ -163,22 +163,22 @@ test "indentation" {
 	gen.indentLevel = 2;
 	emitIndent(gen);
 	emit(gen, "x");
-	check(finalize(gen) === "    x");
+	expect(finalize(gen) === "    x");
 }
 
 test "emitLine" {
 	const gen = createJSGenerator();
 	emitLine(gen, "const x = 1;");
-	check(finalize(gen) === "const x = 1;\n");
+	expect(finalize(gen) === "const x = 1;\n");
 }
 
 test "escapeJSString basics" {
-	check(escapeJSString("hello") === "hello");
-	check(escapeJSString("a\\b") === "a\\\\b");
+	expect(escapeJSString("hello") === "hello");
+	expect(escapeJSString("a\\b") === "a\\\\b");
 }
 
 test "convertImportPath" {
-	check(convertImportPath("./module.ms") === "./module.js");
-	check(convertImportPath("./module") === "./module");
-	check(convertImportPath("std/testing") === "std/testing");
+	expect(convertImportPath("./module.ms") === "./module.js");
+	expect(convertImportPath("./module") === "./module");
+	expect(convertImportPath("std/testing") === "std/testing");
 }

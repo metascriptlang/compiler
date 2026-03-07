@@ -2,10 +2,25 @@
 // Lives at parser/ level to avoid circular imports between expressions/ and statements/
 
 import { Token, TokenKind } from "../lexer/token";
-import { ParserState, createState, current, advance, isAtEnd, skipDestructurePattern } from "./context";
+import { Node } from "../ast/node";
+import { ParserState, createState, current, advance, isAtEnd, skipDestructurePattern, takePendingComments, collectTokenText } from "./context";
 import { skipTypeAnnotation } from "./typeAnnotation";
 import { lex } from "../lexer/lexer";
-import { check } from "std/testing";
+
+
+// ===== Comment Preservation =====
+
+export function attachComments(state: ParserState, node: Node): Node {
+	if (node !== null) {
+		const comments = takePendingComments(state);
+		let i = 0;
+		while (i < comments.length) {
+			node.comments.push(comments[i]);
+			i = i + 1;
+		}
+	}
+	return node;
+}
 
 // ===== Skip Optional Type Annotation =====
 // Checks for ':' and skips the following type. Used after identifiers/params.
@@ -26,14 +41,19 @@ export function captureOptionalType(state: ParserState): string {
 		const typeStart = state.position;
 		skipTypeAnnotation(state);
 		const typeEnd = state.position;
-		let typeText = "";
-		for (let i = typeStart; i < typeEnd; i++) {
-			if (i > typeStart) { typeText += " "; }
-			typeText += state.tokens[i].value;
-		}
-		return typeText;
+		return collectTokenText(state, typeStart, typeEnd);
 	}
 	return "";
+}
+
+// ===== Identifier Recognition =====
+// Returns true if the token is an identifier or a contextual keyword
+// that can be used in identifier positions (variable names, fields, etc.)
+export function isIdentLike(token: Token): boolean {
+	const k = token.kind;
+	if (k === TokenKind.Ident) { return true; }
+	// Keywords from Abstract onwards are contextual (can be used as variable/param names)
+	return (k as number) >= (TokenKind.Abstract as number) && k !== TokenKind.Comment && k !== TokenKind.Eof;
 }
 
 // ===== Initializer/Default Value Skip =====
@@ -95,7 +115,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 			if (current(state).kind === TokenKind.Typeof) {
 				advance(state);
 				const typeName = current(state);
-				if (typeName.kind !== TokenKind.Ident) { break; }
+				if (!isIdentLike(typeName)) { break; }
 				params.push("typeof:" + typeName.value);
 				advance(state);
 				params.push("");
@@ -104,7 +124,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 			}
 			// Instance extension: this name: Type
 			const receiverName = current(state);
-			if (receiverName.kind !== TokenKind.Ident) { break; }
+			if (!isIdentLike(receiverName)) { break; }
 			params.push("this:" + receiverName.value);
 			advance(state);
 			params.push(captureOptionalType(state));
@@ -121,13 +141,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 				const dStartIdx = state.position;
 				skipDefaultValue(state);
 				if (fnName !== "") {
-					let dText = "";
-					let dti = dStartIdx;
-					while (dti < state.position) {
-						if (dti > dStartIdx) dText = dText + " ";
-						dText = dText + state.tokens[dti].value;
-						dti = dti + 1;
-					}
+					const dText = collectTokenText(state, dStartIdx, state.position);
 					const dIdx = (params.length - 2) / 2;
 					while (_lastDefaults.length < dIdx) { _lastDefaults.push(""); }
 					_lastDefaults.push(dText);
@@ -137,7 +151,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 			continue;
 		}
 		const param = current(state);
-		if (param.kind !== TokenKind.Ident) { break; }
+		if (!isIdentLike(param)) { break; }
 		params.push(paramPrefix + param.value);
 		advance(state);
 		params.push(captureOptionalType(state));
@@ -147,13 +161,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 			const startIdx = state.position;
 			skipDefaultValue(state);
 			if (fnName !== "") {
-				let defaultText = "";
-				let ti = startIdx;
-				while (ti < state.position) {
-					if (ti > startIdx) defaultText = defaultText + " ";
-					defaultText = defaultText + state.tokens[ti].value;
-					ti = ti + 1;
-				}
+				const defaultText = collectTokenText(state, startIdx, state.position);
 				const paramIdx = (params.length - 2) / 2;
 				while (_lastDefaults.length < paramIdx) { _lastDefaults.push(""); }
 				_lastDefaults.push(defaultText);
@@ -190,24 +198,24 @@ function parseParams(input: string, fnName: string): string[] {
 
 test "capture number default via getLastParsedDefaults" {
 	const raw = parseParams("(x: number, y: number = 5)", "testFn1");
-	check(raw.length === 4);
+	expect(raw.length === 4);
 	const defs = getLastParsedDefaults();
-	check(defs.length === 2);
-	check(defs[0] === "");
-	check(defs[1] === "5");
+	expect(defs.length === 2);
+	expect(defs[0] === "");
+	expect(defs[1] === "5");
 }
 
 test "multiple defaults via getLastParsedDefaults" {
 	parseParams("(a: number, b: number = 1, c: number = 2)", "testFn2");
 	const defs = getLastParsedDefaults();
-	check(defs.length === 3);
-	check(defs[0] === "");
-	check(defs[1] === "1");
-	check(defs[2] === "2");
+	expect(defs.length === 3);
+	expect(defs[0] === "");
+	expect(defs[1] === "1");
+	expect(defs[2] === "2");
 }
 
 test "no default returns empty array" {
 	parseParams("(x: number, y: string)", "testFn3");
 	const defs = getLastParsedDefaults();
-	check(defs.length === 0);
+	expect(defs.length === 0);
 }

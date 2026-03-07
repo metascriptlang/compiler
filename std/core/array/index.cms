@@ -6,94 +6,78 @@
 
 // ===== Number Array =====
 
-@runtime("&msNumberArrayPush")
-function push(this arr: number[], value: number): void { unreachable; }
+extern function push(this arr: number[], value: number): void from "&msNumberArrayPush";
 
-@runtime("&msNumberArrayPop")
-function pop(this arr: number[]): number { unreachable; }
+extern function pop(this arr: number[]): number from "&msNumberArrayPop";
 
-@runtime("&msNumberArrayShift")
-function shift(this arr: number[]): number { unreachable; }
+extern function shift(this arr: number[]): number from "&msNumberArrayShift";
 
-@runtime("&msNumberArrayAt")
-function at(this arr: number[], idx: number): number { unreachable; }
+extern function at(this arr: number[], idx: number): number from "&msNumberArrayAt";
 
-@runtime("&msNumberArrayIndexOf")
-function indexOf(this arr: number[], value: number): number { unreachable; }
+extern function indexOf(this arr: number[], value: number): number from "&msNumberArrayIndexOf";
 
-@runtime("&msNumberArrayIncludes")
-function includes(this arr: number[], value: number): boolean { unreachable; }
+extern function includes(this arr: number[], value: number): boolean from "&msNumberArrayIncludes";
 
-@runtime("&msNumberArraySlice")
-function slice(this arr: number[], start: number, end: number): number[] { unreachable; }
+extern function slice(this arr: number[], start: number, end: number): number[] from "&msNumberArraySlice";
 
-@runtime("&msNumberArrayConcat")
-function concat(this arr: number[], other: number[]): number[] { unreachable; }
+extern function concat(this arr: number[], other: number[]): number[] from "&msNumberArrayConcat";
 
-@runtime("&msNumberArrayReverse")
-function reverse(this arr: number[]): void { unreachable; }
+extern function reverse(this arr: number[]): void from "&msNumberArrayReverse";
 
-@runtime("&msNumberArraySort")
-function sort(this arr: number[]): void { unreachable; }
+extern function sort(this arr: number[]): void from "&msNumberArraySort";
 
-@runtime("&msNumberArrayFill")
-function fill(this arr: number[], value: number): void { unreachable; }
+extern function fill(this arr: number[], value: number): void from "&msNumberArrayFill";
 
-@runtime("&msNumberArrayCount")
-function count(this arr: number[], value: number): number { unreachable; }
+extern function count(this arr: number[], value: number): number from "&msNumberArrayCount";
 
-@runtime("&msNumberArrayJoin")
-function join(this arr: number[], sep: string): string { unreachable; }
+extern function join(this arr: number[], sep: string): string from "&msNumberArrayJoin";
 
-@runtime("&msNumberArraySetLen")
-function setLen(this arr: number[], newLen: number): void { unreachable; }
+extern function setLen(this arr: number[], newLen: number): void from "&msNumberArraySetLen";
 
-@runtime("&msNumberArrayCapacity")
-function capacity(this arr: number[]): number { unreachable; }
+extern function capacity(this arr: number[]): number from "&msNumberArrayCapacity";
 
 // ===== String Array =====
 
-@runtime("&msStringArrayPush")
-function push(this arr: string[], value: string): void { unreachable; }
+extern function push(this arr: string[], value: string): void from "&msStringArrayPush";
 
-@runtime("&msStringArrayPop")
-function pop(this arr: string[]): string { unreachable; }
+extern function pop(this arr: string[]): string from "&msStringArrayPop";
 
-@runtime("&msStringArrayShift")
-function shift(this arr: string[]): string { unreachable; }
+extern function shift(this arr: string[]): string from "&msStringArrayShift";
 
-@runtime("&msStringArrayAt")
-function at(this arr: string[], idx: number): string { unreachable; }
+extern function at(this arr: string[], idx: number): string from "&msStringArrayAt";
 
-@runtime("&msStringArrayIndexOf")
-function indexOf(this arr: string[], value: string): number { unreachable; }
+extern function indexOf(this arr: string[], value: string): number from "&msStringArrayIndexOf";
 
-@runtime("&msStringArrayIncludes")
-function includes(this arr: string[], value: string): boolean { unreachable; }
+extern function includes(this arr: string[], value: string): boolean from "&msStringArrayIncludes";
 
-@runtime("&msStringArraySlice")
-function slice(this arr: string[], start: number, end: number): string[] { unreachable; }
+extern function slice(this arr: string[], start: number, end: number): string[] from "&msStringArraySlice";
 
-@runtime("&msStringArrayConcat")
-function concat(this arr: string[], other: string[]): string[] { unreachable; }
+extern function concat(this arr: string[], other: string[]): string[] from "&msStringArrayConcat";
 
-@runtime("&msStringArrayReverse")
-function reverse(this arr: string[]): void { unreachable; }
+extern function reverse(this arr: string[]): void from "&msStringArrayReverse";
 
-@runtime("&msStringArraySort")
-function sort(this arr: string[]): void { unreachable; }
+extern function sort(this arr: string[]): void from "&msStringArraySort";
 
-@runtime("&msStringArrayFill")
-function fill(this arr: string[], value: string): void { unreachable; }
+extern function fill(this arr: string[], value: string): void from "&msStringArrayFill";
 
-@runtime("&msStringArrayCount")
-function count(this arr: string[], value: string): number { unreachable; }
+extern function count(this arr: string[], value: string): number from "&msStringArrayCount";
 
-@runtime("&msStringArrayJoin")
-function join(this arr: string[], sep: string): string { unreachable; }
+extern function join(this arr: string[], sep: string): string from "&msStringArrayJoin";
 
-@runtime("&msStringArraySetLen")
-function setLen(this arr: string[], newLen: number): void { unreachable; }
+extern function setLen(this arr: string[], newLen: number): void from "&msStringArraySetLen";
 
-@runtime("&msStringArrayCapacity")
-function capacity(this arr: string[]): number { unreachable; }
+extern function capacity(this arr: string[]): number from "&msStringArrayCapacity";
+
+// ===== Generic Array (matches any T[] not covered by number[]/string[]) =====
+// Uses msGenericArray* macros which work with any MS_ARRAY(T) typedef.
+// These are C macros (not functions) that use sizeof(arr->p->data[0]) for type safety.
+
+extern function push<T>(this arr: T[], value: T): void from "&msGenericArrayPush";
+
+extern function pop<T>(this arr: T[]): T from "&msGenericArrayPop";
+
+extern function at<T>(this arr: T[], idx: number): T from "&msGenericArrayAt";
+
+extern function setLen<T>(this arr: T[], newLen: number): void from "&msGenericArraySetLen";
+
+extern function capacity<T>(this arr: T[]): number from "&msGenericArrayCapacity";

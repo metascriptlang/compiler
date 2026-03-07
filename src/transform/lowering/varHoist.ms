@@ -22,7 +22,6 @@ import {
 } from "../../ast/node";
 import { TransformContext, NameSet } from "../context";
 import { makeVarDecl, makeIdent, makeNull, makeAssign, makeExprStmt, makeBlock, collectDeclNames } from "../util";
-import { check } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter, fnBodyStmtCount } from "../testUtil";
 
 // ===== Conversion =====
@@ -191,26 +190,26 @@ export function lowerVarHoist(program: Node, ctx: TransformContext): Node {
 }
 
 // ===== Tests =====
-test "const unchanged" { check(stmtCountAfter("const x = 1;", lowerVarHoist) === 1); }
+test "const unchanged" { expect(stmtCountAfter("const x = 1;", lowerVarHoist) === 1); }
 
-test "let unchanged" { check(stmtCountAfter("let x = 1;", lowerVarHoist) === 1); }
+test "let unchanged" { expect(stmtCountAfter("let x = 1;", lowerVarHoist) === 1); }
 
-test "module var stays" { check(firstStmtKindAfter("var x = 1;", lowerVarHoist) === NodeKind.VariableDecl); }
+test "module var stays" { expect(firstStmtKindAfter("var x = 1;", lowerVarHoist) === NodeKind.VariableDecl); }
 
-test "function with var" { check(stmtCountAfter("function f() { var x = 1; }", lowerVarHoist) === 1); }
+test "function with var" { expect(stmtCountAfter("function f() { var x = 1; }", lowerVarHoist) === 1); }
 
-test "function with var is FunctionDecl" { check(firstStmtKindAfter("function f() { var x = 1; }", lowerVarHoist) === NodeKind.FunctionDecl); }
+test "function with var is FunctionDecl" { expect(firstStmtKindAfter("function f() { var x = 1; }", lowerVarHoist) === NodeKind.FunctionDecl); }
 
-test "no var passthrough" { check(stmtCountAfter("function f() { let x = 1; }", lowerVarHoist) === 1); }
+test "no var passthrough" { expect(stmtCountAfter("function f() { let x = 1; }", lowerVarHoist) === 1); }
 
-test "stmt count preserved" { check(stmtCountAfter("let a = 1; let b = 2;", lowerVarHoist) === 2); }
+test "stmt count preserved" { expect(stmtCountAfter("let a = 1; let b = 2;", lowerVarHoist) === 2); }
 
 test "var hoisted adds let at top" {
 	// function f() { var x = 1; } → body has 2 stmts: let x = null; x = 1;
-	check(fnBodyStmtCount("function f() { var x = 1; }", lowerVarHoist) === 2);
+	expect(fnBodyStmtCount("function f() { var x = 1; }", lowerVarHoist) === 2);
 }
 
 test "nested fn var not hoisted to outer" {
 	// function f() { function g() { var x = 1; } } → outer body still 1 stmt (nested fn)
-	check(fnBodyStmtCount("function f() { function g() { var x = 1; } }", lowerVarHoist) === 1);
+	expect(fnBodyStmtCount("function f() { function g() { var x = 1; } }", lowerVarHoist) === 1);
 }

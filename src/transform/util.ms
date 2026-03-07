@@ -251,6 +251,7 @@ export function makeInterfaceDecl(name: string, fields: string[], fieldTypes: st
 // Result<T,E>) remain as TypeReference — codegen uses getTypeDesc for those.
 function resolveSimpleTypeStr(annotation: string): Type {
 	if (annotation === "") return unknownType();
+	if (annotation === "void*") return unknownType();  // void* → Unknown → "void*" in codegen
 	return match (annotation) {
 		"number" | "float64" => numberType(),
 		"string" => stringType(),
@@ -279,6 +280,19 @@ export function makeTypedObjectLiteral(keys: string[], values: Node[], t: Type, 
 export function makeHiddenAddr(inner: Node, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.HiddenAddr, { expr: inner }, syntheticToken(loc));
 	if (inner !== null) n.nodeType = inner.nodeType;
+	return n;
+}
+
+export function makeHiddenDeref(inner: Node, loc: SourceLocation): Node {
+	const n = createNode(NodeKind.HiddenDeref, { expr: inner }, syntheticToken(loc));
+	if (inner !== null && inner.nodeType !== null) {
+		// Deref of Ptr<T> → type is T
+		if (inner.nodeType.kind === TypeKind.Ptr && inner.nodeType.typeReturn !== null) {
+			n.nodeType = inner.nodeType.typeReturn;
+		} else {
+			n.nodeType = inner.nodeType;
+		}
+	}
 	return n;
 }
 

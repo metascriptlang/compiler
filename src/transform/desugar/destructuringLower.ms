@@ -11,7 +11,6 @@ import {
 	makeIdent, makeVarDecl, makeNumber, makeArrayAccess, makeMember, makeCall,
 	boolToDeclKind,
 } from "../util";
-import { check } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -114,14 +113,14 @@ function expandDestructuring(stmt: Node, ctx: TransformContext): Node[] {
 }
 
 // ===== Tests =====
-test "array 2 elements" { check(stmtCountAfter("const [a, b] = f();", lowerDestructuring) === 3); }
+test "array 2 elements" { expect(stmtCountAfter("const [a, b] = f();", lowerDestructuring) === 3); }
 
-test "first stmt is temp VarDecl" { check(firstStmtKindAfter("const [a, b] = f();", lowerDestructuring) === NodeKind.VariableDecl); }
+test "first stmt is temp VarDecl" { expect(firstStmtKindAfter("const [a, b] = f();", lowerDestructuring) === NodeKind.VariableDecl); }
 
-test "object destructuring" { check(stmtCountAfter("const { x, y } = f();", lowerDestructuring) === 3); }
+test "object destructuring" { expect(stmtCountAfter("const { x, y } = f();", lowerDestructuring) === 3); }
 
-test "simple RHS skips temp" { check(stmtCountAfter("const [a, b] = myVar;", lowerDestructuring) === 2); }
+test "simple RHS skips temp" { expect(stmtCountAfter("const [a, b] = myVar;", lowerDestructuring) === 2); }
 
-test "non-destructuring passthrough" { check(stmtCountAfter("const x = 1;", lowerDestructuring) === 1); }
+test "non-destructuring passthrough" { expect(stmtCountAfter("const x = 1;", lowerDestructuring) === 1); }
 
-test "preserves surrounding stmts" { check(stmtCountAfter("let z = 0; const [a, b] = f(); let w = 1;", lowerDestructuring) === 5); }
+test "preserves surrounding stmts" { expect(stmtCountAfter("let z = 0; const [a, b] = f(); let w = 1;", lowerDestructuring) === 5); }

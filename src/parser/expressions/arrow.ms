@@ -4,10 +4,10 @@
 import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, NodeData, Expression, createNode, ArrowFunctionData } from "../../ast/node";
 import { ParserState, createState, current, advance, isAtEnd, peek } from "../context";
-import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, skipOptionalType } from "../util";
+import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, skipOptionalType, isIdentLike } from "../util";
 import { lex } from "../../lexer/lexer";
 import { parseOk, mockExpr } from "./util";
-import { check } from "std/testing";
+
 
 type ExprResult = Result<Expression, string>;
 type ExprParser = (state: ParserState, minPrec: number) => ExprResult;
@@ -34,7 +34,7 @@ export function isArrowFunction(state: ParserState): boolean {
 	if (p1.kind === TokenKind.LBrace || p1.kind === TokenKind.LBracket) { return true; }
 
 	// Must have identifier as first param
-	if (p1.kind !== TokenKind.Ident) { return false; }
+	if (!isIdentLike(p1)) { return false; }
 
 	const p2 = peek(state, 2);
 	// (ident) =>  (single untyped param)
@@ -125,18 +125,18 @@ function arrowParamCount(input: string): number {
 	return data.arrowParams.length;
 }
 // Detection
-test "detect arrow" { check(checkArrow("() => 42")); }
+test "detect arrow" { expect(checkArrow("() => 42")); }
 
-test "detect typed" { check(checkArrow("(x: number) => x")); }
+test "detect typed" { expect(checkArrow("(x: number) => x")); }
 
-test "reject paren expr" { check(!checkArrow("(a + b)")); }
+test "reject paren expr" { expect(!checkArrow("(a + b)")); }
 
-test "reject call" { check(!checkArrow("f(a)")); }
+test "reject call" { expect(!checkArrow("f(a)")); }
 // Param counts
-test "zero params" { check(arrowParamCount("() => 42") === 0); }
+test "zero params" { expect(arrowParamCount("() => 42") === 0); }
 
-test "two params" { check(arrowParamCount("(a, b) => a") === 2); }
+test "two params" { expect(arrowParamCount("(a, b) => a") === 2); }
 // Integration
-test "arrow as arg" { check(parseOk("f((x) => x)")); }
+test "arrow as arg" { expect(parseOk("f((x) => x)")); }
 
-test "paren expr still works" { check(parseOk("(a + b) * c")); }
+test "paren expr still works" { expect(parseOk("(a + b) * c")); }

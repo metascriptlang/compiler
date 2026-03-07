@@ -26,7 +26,6 @@ import {
 	makeBinary, makeAssign, makeExprStmt, makeMember, makeArrayAccess, makeCall, makeIf,
 	extractBodyStmts, boolToDeclKind,
 } from "../util";
-import { check } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -249,12 +248,12 @@ function expandArrayPattern(pattern: Node, baseExpr: Node, dk: DeclKind, loc: So
 }
 
 // ===== Tests =====
-test "for-of becomes block" { check(firstStmtKindAfter("for (const x of arr) { use(x); }", lowerForOf) === NodeKind.BlockStmt); }
+test "for-of becomes block" { expect(firstStmtKindAfter("for (const x of arr) { use(x); }", lowerForOf) === NodeKind.BlockStmt); }
 
-test "regular for unchanged" { check(firstStmtKindAfter("for (let i = 0; i < 10; i++) {}", lowerForOf) === NodeKind.ForStmt); }
+test "regular for unchanged" { expect(firstStmtKindAfter("for (let i = 0; i < 10; i++) {}", lowerForOf) === NodeKind.ForStmt); }
 
-test "for-of preserves surrounding stmts" { check(stmtCountAfter("x(); for (const i of arr) {} y();", lowerForOf) === 3); }
+test "for-of preserves surrounding stmts" { expect(stmtCountAfter("x(); for (const i of arr) {} y();", lowerForOf) === 3); }
 
-test "destructured for-of becomes block" { check(firstStmtKindAfter("for (const [a, b] of arr) { use(a); }", lowerForOf) === NodeKind.BlockStmt); }
+test "destructured for-of becomes block" { expect(firstStmtKindAfter("for (const [a, b] of arr) { use(a); }", lowerForOf) === NodeKind.BlockStmt); }
 
-test "destructured for-of preserves surrounding" { check(stmtCountAfter("x(); for (const [a, b] of arr) {} y();", lowerForOf) === 3); }
+test "destructured for-of preserves surrounding" { expect(stmtCountAfter("x(); for (const [a, b] of arr) {} y();", lowerForOf) === 3); }

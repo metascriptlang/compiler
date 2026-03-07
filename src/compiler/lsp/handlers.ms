@@ -10,6 +10,7 @@ import {
 	recordModuleImport, clearImportsFor, getTransitiveDependents,
 	dbGetFileCount, dbGetFilePathByIndex
 } from "../transam/index";
+import { detectCycle } from "../transam/moduleDeps";
 import { readFile } from "std/process";
 import {
 	lspJsonString, lspJsonNumber, lspJsonBool, lspJsonNull,
@@ -46,7 +47,12 @@ import { CheckerContext, createContext } from "../../checker/context";
 import { SymbolKind, lookupSymbol } from "../../checker/symbol";
 import { Type, TypeKind, unknownType, getProperty } from "../../checker/types";
 import { Node, IdentifierData, MemberExprData, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../../ast/node";
-import { check } from "std/testing";
+import { defaultFormatOptions } from "../fmt/options";
+import { printNode as printFormattedNode } from "../fmt/printer";
+import { formatDoc } from "../fmt/layout";
+import { registerCoreParsers } from "../../parser/statements/core";
+import { parseSource } from "../../parser/statements/validation";
+
 
 // ===== Completion Cache =====
 // Caches last completion list per file for zero-lag character-by-character filtering.
@@ -86,24 +92,111 @@ function dbGetSource(db: TransAmDb, path: string): string {
 	return getFileText(db.fileInput, fileId);
 }
 
+// ===== Format Violation Check =====
+
+// Returns a single LSP diagnostic JSON string if the file is unformatted, empty string otherwise.
+// Severity 4 = Hint (renders as faint underline / info squiggle in editors).
+function checkFormatViolation(db: TransAmDb, path: string): string {
+	const source = dbGetSource(db, path);
+	if (source === "") return "";
+
+	if (!_fmtParsersRegistered) {
+		registerCoreParsers();
+		_fmtParsersRegistered = true;
+	}
+
+	const parseResult = parseSource(source);
+	if (!parseResult.ok) return "";
+
+	const options = defaultFormatOptions();
+	const doc = printFormattedNode(parseResult.value, options);
+	const formatted = formatDoc(doc, options);
+
+	if (formatted === source) return "";
+
+	// Place diagnostic at line 0, col 0 with hint severity
+	return lspFmtDiagnostic(0, 0, 1, 2, "File is not formatted. Run 'msc fmt' or use format document.", "metascript-fmt", 0);
+}
+
+// Extract filename from absolute path (for diagnostic messages)
+function lspBasename(path: string): string {
+	if (path === "") return "";
+	let lastSlash = -1;
+	for (let i = path.length - 1; i >= 0; i = i - 1) {
+		if (path[i] === "/") { lastSlash = i; break; }
+	}
+	if (lastSlash >= 0) return path.slice(lastSlash + 1, path.length);
+	return path;
+}
+
 // ===== Diagnostics =====
 
 export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): string {
 	const ctx = dbTypeCheck(db, path);
-	if (ctx === null) {
-		return lspFmtPublishDiagnostics(uri, "[]");
-	}
-	const diags = sgCollectDiagnostics(ctx);
 
 	let diagArray = "[";
-	for (let i = 0; i < diags.length; i = i + 1) {
-		if (i > 0) diagArray = diagArray + ",";
-		const d = diags[i];
-		const line = d.line - 1;
-		diagArray = diagArray + lspFmtDiagnostic(
-			line, d.column, d.column + 1, d.severity, d.message, "metascript", 0
-		);
+	let diagCount = 0;
+
+	if (ctx !== null) {
+		const diags = sgCollectDiagnostics(ctx);
+		for (let i = 0; i < diags.length; i = i + 1) {
+			if (diagCount > 0) diagArray = diagArray + ",";
+			const d = diags[i];
+			const line = d.line - 1;
+			diagArray = diagArray + lspFmtDiagnostic(
+				line, d.column, d.column + 1, d.severity, d.message, "metascript", 0
+			);
+			diagCount = diagCount + 1;
+		}
 	}
+
+	// Circular dependency warnings — at the import declaration line
+	const circProgram = dbParse(db, path);
+	if (circProgram !== null && circProgram.kind === NodeKind.Program) {
+		const circPd = circProgram.data as ProgramData;
+		const circFileId = getFileId(db.fileInput, path);
+		for (let ci = 0; ci < circPd.programStmts.length; ci = ci + 1) {
+			let circStmt = circPd.programStmts[ci];
+			if (circStmt.kind === NodeKind.ExportDecl) {
+				const ced = circStmt.data as ExportDeclData;
+				circStmt = ced.exportedDecl;
+			}
+			if (circStmt.kind === NodeKind.ImportDecl) {
+				const circImp = circStmt.data as ImportDeclData;
+				const circTarget = lspResolveImport(path, circImp.importSource);
+				if (circTarget !== "") {
+					const circTargetId = getFileId(db.fileInput, circTarget);
+					if (circTargetId >= 0 && circFileId >= 0) {
+						const cycle = detectCycle(db.moduleDeps, circFileId, circTargetId);
+						if (cycle.length > 0) {
+							// Build cycle path string
+							let cyclePath = "";
+							for (let cpi = 0; cpi < cycle.length; cpi = cpi + 1) {
+								if (cpi > 0) cyclePath = cyclePath + " -> ";
+								const cp = getFilePath(db.fileInput, cycle[cpi]);
+								cyclePath = cyclePath + lspBasename(cp);
+							}
+							cyclePath = cyclePath + " -> " + lspBasename(path);
+							const circLine = circStmt.location !== null ? circStmt.location.line - 1 : 0;
+							if (diagCount > 0) diagArray = diagArray + ",";
+							diagArray = diagArray + lspFmtDiagnostic(
+								circLine, 0, 1, 2, "Circular import: " + cyclePath, "metascript", 0
+							);
+							diagCount = diagCount + 1;
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Format violation diagnostic — warning severity (2)
+	const fmtDiag = checkFormatViolation(db, path);
+	if (fmtDiag !== "") {
+		if (diagCount > 0) diagArray = diagArray + ",";
+		diagArray = diagArray + fmtDiag;
+	}
+
 	diagArray = diagArray + "]";
 
 	return lspFmtPublishDiagnostics(uri, diagArray);
@@ -181,13 +274,14 @@ export function handleInitialize(id: string): string {
 		+ ",\"inlayHintProvider\":true"
 		+ ",\"referencesProvider\":true"
 		+ ",\"renameProvider\":true"
+		+ ",\"documentFormattingProvider\":true"
 		+ ",\"semanticTokensProvider\":{\"legend\":{\"tokenTypes\":"
 		+ "[\"namespace\",\"type\",\"class\",\"enum\",\"interface\",\"struct\","
 		+ "\"typeParameter\",\"parameter\",\"variable\",\"property\","
 		+ "\"enumMember\",\"event\",\"function\",\"method\",\"macro\","
 		+ "\"keyword\",\"modifier\",\"comment\",\"string\",\"number\","
 		+ "\"regexp\",\"operator\",\"decorator\"],"
-		+ "\"tokenModifiers\":[\"declaration\",\"definition\",\"readonly\",\"static\"]}"
+		+ "\"tokenModifiers\":[\"declaration\",\"definition\",\"readonly\",\"static\",\"defaultLibrary\"]}"
 		+ ",\"full\":true}"
 		+ "}}";
 	return lspResponse(id, caps);
@@ -742,6 +836,47 @@ export function handleSemanticTokensFull(id: string, params: string, db: TransAm
 	return lspResponse(id, "{\"data\":" + data + "}");
 }
 
+// ===== Formatting =====
+
+let _fmtParsersRegistered = false;
+
+export function handleFormatting(id: string, params: string, db: TransAmDb): string {
+	const textDoc = lspGetObjectField(params, "textDocument");
+	const uri = lspGetField(textDoc, "uri");
+	const path = lspUriToPath(uri);
+	const source = dbGetSource(db, path);
+	if (source === "") return lspResponse(id, "[]");
+
+	if (!_fmtParsersRegistered) {
+		registerCoreParsers();
+		_fmtParsersRegistered = true;
+	}
+
+	const parseResult = parseSource(source);
+	if (!parseResult.ok) return lspResponse(id, "[]");
+
+	const options = defaultFormatOptions();
+	const doc = printFormattedNode(parseResult.value, options);
+	const formatted = formatDoc(doc, options);
+
+	if (formatted === source) return lspResponse(id, "[]");
+
+	// Single TextEdit replacing entire document
+	let lineCount = 0;
+	for (let i = 0; i < source.length; i = i + 1) {
+		if (source[i] === "\n") lineCount = lineCount + 1;
+	}
+	let lastLineLen = 0;
+	let lastNl = -1;
+	for (let j = source.length - 1; j >= 0; j = j - 1) {
+		if (source[j] === "\n") { lastNl = j; break; }
+	}
+	lastLineLen = source.length - lastNl - 1;
+	const range = lspFmtRange(0, 0, lineCount, lastLineLen);
+	const edit = "{\"range\":" + range + ",\"newText\":" + lspJsonString(formatted) + "}";
+	return lspResponse(id, "[" + edit + "]");
+}
+
 // ===== Dispatch =====
 
 export function lspDispatch(method: string, id: string, params: string, db: TransAmDb, cache: CompletionCache): string {
@@ -759,6 +894,7 @@ export function lspDispatch(method: string, id: string, params: string, db: Tran
 	if (method === "textDocument/references") return handleReferences(id, params, db);
 	if (method === "textDocument/rename") return handleRename(id, params, db);
 	if (method === "textDocument/semanticTokens/full") return handleSemanticTokensFull(id, params, db);
+	if (method === "textDocument/formatting") return handleFormatting(id, params, db);
 	if (id.length > 0) return lspErrorResponse(id, -32601, "Method not found");
 	return "";
 }
@@ -779,76 +915,76 @@ function testCache(): CompletionCache {
 
 test "returns capabilities" {
 	const r = handleInitialize("1");
-	check(lspGetField(r, "jsonrpc") === "2.0");
-	check(lspGetNumberField(r, "id") === 1);
+	expect(lspGetField(r, "jsonrpc") === "2.0");
+	expect(lspGetNumberField(r, "id") === 1);
 	const result = lspGetObjectField(r, "result");
-	check(result.length > 0);
+	expect(result.length > 0);
 }
 
 test "returns null result" {
 	const r = handleShutdown("2");
-	check(lspGetNumberField(r, "id") === 2);
+	expect(lspGetNumberField(r, "id") === 2);
 }
 
 test "clean source has no diagnostics" {
 	const db = testDb("file:///test.ms", "const x = 1;");
 	const diags = buildDiagnosticsJson("file:///test.ms", db, lspUriToPath("file:///test.ms"));
-	check(lspGetField(diags, "uri") === "file:///test.ms");
+	expect(lspGetField(diags, "uri") === "file:///test.ms");
 }
 
 test "initialize" {
 	const db = createTransAmDb(100);
 	const r = lspDispatch("initialize", "1", "{}", db, testCache());
-	check(lspGetNumberField(r, "id") === 1);
+	expect(lspGetNumberField(r, "id") === 1);
 }
 
 test "shutdown" {
 	const db = createTransAmDb(100);
 	const r = lspDispatch("shutdown", "2", "{}", db, testCache());
-	check(lspGetNumberField(r, "id") === 2);
+	expect(lspGetNumberField(r, "id") === 2);
 }
 
 test "unknown method with id" {
 	const db = createTransAmDb(100);
 	const r = lspDispatch("unknown/method", "3", "{}", db, testCache());
-	check(r.length > 0);
+	expect(r.length > 0);
 }
 
 test "unknown notification" {
 	const db = createTransAmDb(100);
 	const r = lspDispatch("$/unknownNotification", "", "{}", db, testCache());
-	check(r === "");
+	expect(r === "");
 }
 
 test "completion dispatch" {
 	const db = testDb("file:///test.ms", "const abc = 1;\nconst abd = 2;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":3}}";
 	const r = lspDispatch("textDocument/completion", "10", params, db, testCache());
-	check(lspGetNumberField(r, "id") === 10);
-	check(r.length > 0);
+	expect(lspGetNumberField(r, "id") === 10);
+	expect(r.length > 0);
 }
 
 test "definition dispatch" {
 	const db = testDb("file:///test.ms", "const myVar = 42;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
 	const r = lspDispatch("textDocument/definition", "11", params, db, testCache());
-	check(lspGetNumberField(r, "id") === 11);
-	check(r.length > 0);
+	expect(lspGetNumberField(r, "id") === 11);
+	expect(r.length > 0);
 }
 
 test "returns completion items" {
 	const db = testDb("file:///test.ms", "const abc = 1;\nconst abd = 2;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":0}}";
 	const r = handleCompletion("5", params, db, testCache());
-	check(lspGetNumberField(r, "id") === 5);
-	check(r.length > 50);
+	expect(lspGetNumberField(r, "id") === 5);
+	expect(r.length > 50);
 }
 
 test "unknown doc returns empty" {
 	const db = createTransAmDb(100);
 	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0}}";
 	const r = handleCompletion("6", params, db, testCache());
-	check(lspGetNumberField(r, "id") === 6);
+	expect(lspGetNumberField(r, "id") === 6);
 }
 
 test "completion cache hit on prefix extend" {
@@ -857,12 +993,12 @@ test "completion cache hit on prefix extend" {
 	// First completion: "ab" prefix — populates cache
 	const params1 = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":2}}";
 	const r1 = handleCompletion("10", params1, db, cache);
-	check(cache.items.length > 0);
-	check(cache.uri === "file:///test.ms");
+	expect(cache.items.length > 0);
+	expect(cache.uri === "file:///test.ms");
 	// Second completion: same line, prefix extends to "abd" — should hit cache
 	const params2 = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":3}}";
 	const r2 = handleCompletion("11", params2, db, cache);
-	check(r2.length > 0);
+	expect(r2.length > 0);
 }
 
 test "completion cache miss on different line" {
@@ -875,147 +1011,147 @@ test "completion cache miss on different line" {
 	// Request on line 3 — different line, should miss cache and recompute
 	const params2 = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":2,\"character\":2}}";
 	handleCompletion("11", params2, db, cache);
-	check(cache.line !== cachedLine);
+	expect(cache.line !== cachedLine);
 }
 
 test "returns location for known symbol" {
 	const db = testDb("file:///test.ms", "const myVar = 42;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
 	const r = handleDefinition("7", params, db);
-	check(lspGetNumberField(r, "id") === 7);
-	check(r.length > 0);
+	expect(lspGetNumberField(r, "id") === 7);
+	expect(r.length > 0);
 }
 
 test "unknown doc returns null" {
 	const db = createTransAmDb(100);
 	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0}}";
 	const r = handleDefinition("8", params, db);
-	check(lspGetNumberField(r, "id") === 8);
+	expect(lspGetNumberField(r, "id") === 8);
 }
 
 test "unknown position returns null result" {
 	const db = testDb("file:///test.ms", "const x = 1;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":99,\"character\":0}}";
 	const r = handleDefinition("9", params, db);
-	check(lspGetNumberField(r, "id") === 9);
+	expect(lspGetNumberField(r, "id") === 9);
 }
 
 test "returns symbols for file" {
 	const db = testDb("file:///test.ms", "function foo() { return 1; }\nconst x = 1;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"}}";
 	const r = handleDocumentSymbol("20", params, db);
-	check(lspGetNumberField(r, "id") === 20);
-	check(r.length > 60);
+	expect(lspGetNumberField(r, "id") === 20);
+	expect(r.length > 60);
 }
 
 test "unknown doc returns empty array" {
 	const db = createTransAmDb(100);
 	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"}}";
 	const r = handleDocumentSymbol("21", params, db);
-	check(lspGetNumberField(r, "id") === 21);
+	expect(lspGetNumberField(r, "id") === 21);
 }
 
 test "dispatch routes correctly" {
 	const db = testDb("file:///test.ms", "const a = 1;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"}}";
 	const r = lspDispatch("textDocument/documentSymbol", "22", params, db, testCache());
-	check(lspGetNumberField(r, "id") === 22);
-	check(r.length > 0);
+	expect(lspGetNumberField(r, "id") === 22);
+	expect(r.length > 0);
 }
 
 test "returns signature for function" {
 	const db = testDb("file:///test.ms", "function greet(name: string): void { }\ngreet(");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":6}}";
 	const r = handleSignatureHelp("30", params, db);
-	check(lspGetNumberField(r, "id") === 30);
-	check(r.length > 0);
+	expect(lspGetNumberField(r, "id") === 30);
+	expect(r.length > 0);
 }
 
 test "unknown doc returns null" {
 	const db = createTransAmDb(100);
 	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0}}";
 	const r = handleSignatureHelp("31", params, db);
-	check(lspGetNumberField(r, "id") === 31);
+	expect(lspGetNumberField(r, "id") === 31);
 }
 
 test "dispatch routes correctly" {
 	const db = testDb("file:///test.ms", "const x = 1;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":0}}";
 	const r = lspDispatch("textDocument/signatureHelp", "32", params, db, testCache());
-	check(lspGetNumberField(r, "id") === 32);
+	expect(lspGetNumberField(r, "id") === 32);
 }
 
 test "type hint for untyped var" {
 	const db = testDb("file:///test.ms", "const x = 42;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":10,\"character\":0}}}";
 	const r = handleInlayHint("40", params, db);
-	check(lspGetNumberField(r, "id") === 40);
-	check(r.length > 50);
+	expect(lspGetNumberField(r, "id") === 40);
+	expect(r.length > 50);
 }
 
 test "empty for unknown doc" {
 	const db = createTransAmDb(100);
 	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":10,\"character\":0}}}";
 	const r = handleInlayHint("41", params, db);
-	check(lspGetNumberField(r, "id") === 41);
+	expect(lspGetNumberField(r, "id") === 41);
 }
 
 test "dispatch routes correctly" {
 	const db = testDb("file:///test.ms", "const y = true;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":10,\"character\":0}}}";
 	const r = lspDispatch("textDocument/inlayHint", "42", params, db, testCache());
-	check(lspGetNumberField(r, "id") === 42);
+	expect(lspGetNumberField(r, "id") === 42);
 }
 
 test "finds all references to a variable" {
 	const db = testDb("file:///test.ms", "const abc = 1;\nconst def = abc + 2;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
 	const r = handleReferences("50", params, db);
-	check(lspGetNumberField(r, "id") === 50);
-	check(r.length > 60);
+	expect(lspGetNumberField(r, "id") === 50);
+	expect(r.length > 60);
 }
 
 test "unknown doc returns empty" {
 	const db = createTransAmDb(100);
 	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0}}";
 	const r = handleReferences("51", params, db);
-	check(lspGetNumberField(r, "id") === 51);
+	expect(lspGetNumberField(r, "id") === 51);
 }
 
 test "dispatch routes correctly" {
 	const db = testDb("file:///test.ms", "const x = 1;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
 	const r = lspDispatch("textDocument/references", "52", params, db, testCache());
-	check(lspGetNumberField(r, "id") === 52);
+	expect(lspGetNumberField(r, "id") === 52);
 }
 
 test "renames variable occurrences" {
 	const db = testDb("file:///test.ms", "const abc = 1;\nconst def = abc + 2;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6},\"newName\":\"xyz\"}";
 	const r = handleRename("60", params, db);
-	check(lspGetNumberField(r, "id") === 60);
-	check(r.length > 60);
+	expect(lspGetNumberField(r, "id") === 60);
+	expect(r.length > 60);
 }
 
 test "unknown doc returns null" {
 	const db = createTransAmDb(100);
 	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0},\"newName\":\"xyz\"}";
 	const r = handleRename("61", params, db);
-	check(lspGetNumberField(r, "id") === 61);
+	expect(lspGetNumberField(r, "id") === 61);
 }
 
 test "empty newName returns null" {
 	const db = testDb("file:///test.ms", "const x = 1;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
 	const r = handleRename("62", params, db);
-	check(lspGetNumberField(r, "id") === 62);
+	expect(lspGetNumberField(r, "id") === 62);
 }
 
 test "dispatch routes correctly" {
 	const db = testDb("file:///test.ms", "const x = 1;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6},\"newName\":\"y\"}";
 	const r = lspDispatch("textDocument/rename", "63", params, db, testCache());
-	check(lspGetNumberField(r, "id") === 63);
+	expect(lspGetNumberField(r, "id") === 63);
 }
 
 test "Trans-Am cache hit on comment-only change" {
@@ -1024,12 +1160,12 @@ test "Trans-Am cache hit on comment-only change" {
 	dbSetFileText(db, path, "const x = 1;");
 	// First query — populates cache
 	const ctx1 = dbTypeCheck(db, path);
-	check(ctx1 !== null);
-	check(db.revision.value === 1);
+	expect(ctx1 !== null);
+	expect(db.revision.value === 1);
 	// Comment-only change — content hash changes but semantics identical
 	dbSetFileText(db, path, "const x = 1; // comment");
-	check(db.revision.value === 2);
+	expect(db.revision.value === 2);
 	// Second query — should re-execute (parse output differs) but Trans-Am handles it
 	const ctx2 = dbTypeCheck(db, path);
-	check(ctx2 !== null);
+	expect(ctx2 !== null);
 }

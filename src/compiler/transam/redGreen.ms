@@ -25,7 +25,7 @@ import {
 } from "./cache";
 import { TaFileInputStore, createFileInputStore, setFileText, getFileHash } from "./fileInput";
 import { TaModuleDepGraph, createModuleDepGraph, getTransitiveDependents, recordModuleImport } from "./moduleDeps";
-import { check } from "std/testing";
+
 
 // ===== Callback Registration for Query Executor =====
 // avoids function-type parameters (closure codegen issues)
@@ -180,7 +180,7 @@ test "empty cache returns false" {
 	const cache = createCacheStore(100);
 	const fileInput = createFileInputStore();
 	const key = createQueryKey(TaQueryKind.Parse, 0);
-	check(!tryMarkGreen(cache, fileInput, key, 1));
+	expect(!tryMarkGreen(cache, fileInput, key, 1));
 }
 
 test "green entry at current revision returns true" {
@@ -191,7 +191,7 @@ test "green entry at current revision returns true" {
 	entry.state = TaQueryState.Green;
 	entry.verifiedAt = 5;
 	cachePut(cache, entry);
-	check(tryMarkGreen(cache, fileInput, key, 5));
+	expect(tryMarkGreen(cache, fileInput, key, 5));
 }
 
 test "entry with no deps verifies green" {
@@ -203,7 +203,7 @@ test "entry with no deps verifies green" {
 	entry.verifiedAt = 0;
 	cachePut(cache, entry);
 	// No dependencies -> all deps verified trivially -> Green
-	check(tryMarkGreen(cache, fileInput, key, 1));
+	expect(tryMarkGreen(cache, fileInput, key, 1));
 }
 
 test "file dependency hash mismatch -> false" {
@@ -216,7 +216,7 @@ test "file dependency hash mismatch -> false" {
 	entry.verifiedAt = 0;
 	entry.dependencies = makeTestDeps(0, 999);
 	cachePut(cache, entry);
-	check(!tryMarkGreen(cache, fileInput, parseKey, 1));
+	expect(!tryMarkGreen(cache, fileInput, parseKey, 1));
 }
 
 test "file dependency hash match -> true" {
@@ -230,7 +230,7 @@ test "file dependency hash match -> true" {
 	entry.verifiedAt = 0;
 	entry.dependencies = makeTestDeps(0, actualHash);
 	cachePut(cache, entry);
-	check(tryMarkGreen(cache, fileInput, parseKey, 1));
+	expect(tryMarkGreen(cache, fileInput, parseKey, 1));
 }
 
 test "stores entry as Green" {
@@ -241,10 +241,10 @@ test "stores entry as Green" {
 	pushFrame(depStack, key);
 	executeQueryWith(cache, fileInput, depStack, key, 1, 42, true);
 	const entry = cacheGet(cache, key);
-	check(entry !== null);
-	check(entry.state === TaQueryState.Green);
-	check(entry.computedAt === 1);
-	check(entry.outputHash === 42);
+	expect(entry !== null);
+	expect(entry.state === TaQueryState.Green);
+	expect(entry.computedAt === 1);
+	expect(entry.outputHash === 42);
 }
 
 test "collects dependencies from frame" {
@@ -257,8 +257,8 @@ test "collects dependencies from frame" {
 	recordDependency(depStack, depKey, 100);
 	executeQueryWith(cache, fileInput, depStack, key, 1, 42, true);
 	const entry = cacheGet(cache, key);
-	check(entry.dependencies.length === 1);
-	check(queryKeysEqual(entry.dependencies[0].depKey, depKey));
+	expect(entry.dependencies.length === 1);
+	expect(queryKeysEqual(entry.dependencies[0].depKey, depKey));
 }
 
 test "not computed is no-op" {
@@ -267,7 +267,7 @@ test "not computed is no-op" {
 	const depStack = createDependencyStack();
 	const key = createQueryKey(TaQueryKind.Parse, 0);
 	executeQueryWith(cache, fileInput, depStack, key, 1, 0, false);
-	check(!cacheContains(cache, key));
+	expect(!cacheContains(cache, key));
 }
 
 test "marks file queries red" {
@@ -278,7 +278,7 @@ test "marks file queries red" {
 	entry.state = TaQueryState.Green;
 	cachePut(cache, entry);
 	invalidateFile(cache, moduleDeps, 0);
-	check(cacheGet(cache, key).state === TaQueryState.Red);
+	expect(cacheGet(cache, key).state === TaQueryState.Red);
 }
 
 test "marks transitive dependents red" {
@@ -294,6 +294,6 @@ test "marks transitive dependents red" {
 	cachePut(cache, e0);
 	cachePut(cache, e1);
 	invalidateFile(cache, moduleDeps, 1);
-	check(cacheGet(cache, k1).state === TaQueryState.Red);
-	check(cacheGet(cache, k0).state === TaQueryState.Red);
+	expect(cacheGet(cache, k1).state === TaQueryState.Red);
+	expect(cacheGet(cache, k0).state === TaQueryState.Red);
 }

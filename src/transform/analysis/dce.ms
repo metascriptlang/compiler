@@ -32,7 +32,6 @@ import { lookupSymbol, makeSymbol, SymbolKind, defineSymbol } from "../../checke
 import { CheckerContext, createContext } from "../../checker/context";
 import { getDeclName } from "../../checker/collectPass";
 import { makeBlock } from "../util";
-import { check } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts } from "../testUtil";
 
 // ===== AliveSyms (Level 2 — public API for Phase 5 codegen) =====
@@ -484,68 +483,68 @@ function stmtCountWithChecker(input: string, setup: (cc: CheckerContext) => void
 }
 
 // ===== Tests =====
-test "passthrough unchanged" { check(stmtCountAfter("const x = 1;", lowerDCE) === 1); }
+test "passthrough unchanged" { expect(stmtCountAfter("const x = 1;", lowerDCE) === 1); }
 
-test "strips after return" { check(stmtCountAfter("return 1; const x = 2; const y = 3;", lowerDCE) === 1); }
+test "strips after return" { expect(stmtCountAfter("return 1; const x = 2; const y = 3;", lowerDCE) === 1); }
 
-test "strips after throw" { check(stmtCountAfter("throw 1; const x = 2;", lowerDCE) === 1); }
+test "strips after throw" { expect(stmtCountAfter("throw 1; const x = 2;", lowerDCE) === 1); }
 
 test "hoisted function removed if unreferenced" {
 	// Level 1 preserves hoisted decl, but Level 2 eliminates it (nobody calls helper)
-	check(stmtCountAfter("return 1; function helper() { return 2; }", lowerDCE) === 1);
+	expect(stmtCountAfter("return 1; function helper() { return 2; }", lowerDCE) === 1);
 }
 
-test "hoisted class removed if unreferenced" { check(stmtCountAfter("return 1; class Foo {}", lowerDCE) === 1); }
+test "hoisted class removed if unreferenced" { expect(stmtCountAfter("return 1; class Foo {}", lowerDCE) === 1); }
 
 test "function body dead code removed" {
 	// foo() call keeps the function alive; Level 1 strips dead const inside body
-	check(stmtCountAfter("function foo() { return 1; const dead = 2; } foo();", lowerDCE) === 2);
-	check(firstStmtKindAfter("function foo() { return 1; const dead = 2; } foo();", lowerDCE) === NodeKind.FunctionDecl);
+	expect(stmtCountAfter("function foo() { return 1; const dead = 2; } foo();", lowerDCE) === 2);
+	expect(firstStmtKindAfter("function foo() { return 1; const dead = 2; } foo();", lowerDCE) === NodeKind.FunctionDecl);
 }
 
 test "if true keeps consequent" {
-	check(firstStmtKindAfter("if (true) { const x = 1; } else { const y = 2; }", lowerDCE) === NodeKind.BlockStmt);
-	check(stmtCountAfter("if (true) { const x = 1; } else { const y = 2; }", lowerDCE) === 1);
+	expect(firstStmtKindAfter("if (true) { const x = 1; } else { const y = 2; }", lowerDCE) === NodeKind.BlockStmt);
+	expect(stmtCountAfter("if (true) { const x = 1; } else { const y = 2; }", lowerDCE) === 1);
 }
 
-test "if false keeps alternate" { check(firstStmtKindAfter("if (false) { const x = 1; } else { const y = 2; }", lowerDCE) === NodeKind.BlockStmt); }
+test "if false keeps alternate" { expect(firstStmtKindAfter("if (false) { const x = 1; } else { const y = 2; }", lowerDCE) === NodeKind.BlockStmt); }
 
 test "if false no else becomes empty block" {
-	check(firstStmtKindAfter("if (false) { const x = 1; }", lowerDCE) === NodeKind.BlockStmt);
-	check(stmtCountAfter("if (false) { const x = 1; }", lowerDCE) === 1);
+	expect(firstStmtKindAfter("if (false) { const x = 1; }", lowerDCE) === NodeKind.BlockStmt);
+	expect(stmtCountAfter("if (false) { const x = 1; }", lowerDCE) === 1);
 }
 
-test "dynamic condition preserved" { check(firstStmtKindAfter("if (x) { const a = 1; }", lowerDCE) === NodeKind.IfStmt); }
+test "dynamic condition preserved" { expect(firstStmtKindAfter("if (x) { const a = 1; }", lowerDCE) === NodeKind.IfStmt); }
 
-test "while false removed" { check(firstStmtKindAfter("while (false) { doWork(); }", lowerDCE) === NodeKind.BlockStmt); }
+test "while false removed" { expect(firstStmtKindAfter("while (false) { doWork(); }", lowerDCE) === NodeKind.BlockStmt); }
 
-test "while true preserved" { check(firstStmtKindAfter("while (true) { break; }", lowerDCE) === NodeKind.WhileStmt); }
+test "while true preserved" { expect(firstStmtKindAfter("while (true) { break; }", lowerDCE) === NodeKind.WhileStmt); }
 
-test "if-else both return strips after" { check(stmtCountAfter("if (x) { return 1; } else { return 2; } const dead = 3;", lowerDCE) === 1); }
+test "if-else both return strips after" { expect(stmtCountAfter("if (x) { return 1; } else { return 2; } const dead = 3;", lowerDCE) === 1); }
 
-test "if-else one branch falls through keeps after" { check(stmtCountAfter("if (x) { return 1; } else { const y = 2; } const alive = 3;", lowerDCE) === 2); }
+test "if-else one branch falls through keeps after" { expect(stmtCountAfter("if (x) { return 1; } else { const y = 2; } const alive = 3;", lowerDCE) === 2); }
 
-test "if without else keeps after" { check(stmtCountAfter("if (x) { return 1; } const alive = 2;", lowerDCE) === 2); }
+test "if without else keeps after" { expect(stmtCountAfter("if (x) { return 1; } const alive = 2;", lowerDCE) === 2); }
 
 test "nested if-else both return" {
 	const code = "if (a) { if (b) { return 1; } else { return 2; } } else { return 3; } const dead = 4;";
-	check(stmtCountAfter(code, lowerDCE) === 1);
+	expect(stmtCountAfter(code, lowerDCE) === 1);
 }
 
-test "block ending in return" { check(stmtCountAfter("{ return 1; } const dead = 2;", lowerDCE) === 1); }
+test "block ending in return" { expect(stmtCountAfter("{ return 1; } const dead = 2;", lowerDCE) === 1); }
 
-test "block not ending in return" { check(stmtCountAfter("{ const x = 1; } const alive = 2;", lowerDCE) === 2); }
+test "block not ending in return" { expect(stmtCountAfter("{ const x = 1; } const alive = 2;", lowerDCE) === 2); }
 
-test "throw in both if branches" { check(stmtCountAfter("if (x) { throw 1; } else { throw 2; } const dead = 3;", lowerDCE) === 1); }
+test "throw in both if branches" { expect(stmtCountAfter("if (x) { throw 1; } else { throw 2; } const dead = 3;", lowerDCE) === 1); }
 
 test "else-if chain all return" {
 	const code = "if (a) { return 1; } else if (b) { return 2; } else { return 3; } const dead = 4;";
-	check(stmtCountAfter(code, lowerDCE) === 1);
+	expect(stmtCountAfter(code, lowerDCE) === 1);
 }
 
 test "else-if chain missing else" {
 	const code = "if (a) { return 1; } else if (b) { return 2; } const alive = 3;";
-	check(stmtCountAfter(code, lowerDCE) === 2);
+	expect(stmtCountAfter(code, lowerDCE) === 2);
 }
 
 test "never call strips after" {
@@ -554,7 +553,7 @@ test "never call strips after" {
 		const sym = makeSymbol("fail", SymbolKind.Function, fnType, false);
 		defineSymbol(cc.table, sym);
 	});
-	check(count === 1);
+	expect(count === 1);
 }
 
 test "void call keeps after" {
@@ -563,51 +562,51 @@ test "void call keeps after" {
 		const sym = makeSymbol("log", SymbolKind.Function, fnType, false);
 		defineSymbol(cc.table, sym);
 	});
-	check(count === 2);
+	expect(count === 2);
 }
 
 test "unknown function keeps after" {
 	// No symbol registered — conservative, keeps code
 	const count = stmtCountWithChecker("mystery(); const alive = 2;", (cc: CheckerContext) => {});
-	check(count === 2);
+	expect(count === 2);
 }
 
 test "null checker graceful" {
 	// stmtCountAfter uses null checkerCtx — must not crash
-	check(stmtCountAfter("foo(); const alive = 2;", lowerDCE) === 2);
+	expect(stmtCountAfter("foo(); const alive = 2;", lowerDCE) === 2);
 }
 
-test "unused function removed" { check(stmtCountAfter("function unused() {} const x = 1;", lowerDCE) === 1); }
+test "unused function removed" { expect(stmtCountAfter("function unused() {} const x = 1;", lowerDCE) === 1); }
 
-test "used function kept" { check(stmtCountAfter("function add(a, b) { return 1; } add(1, 2);", lowerDCE) === 2); }
+test "used function kept" { expect(stmtCountAfter("function add(a, b) { return 1; } add(1, 2);", lowerDCE) === 2); }
 
-test "exported function always kept" { check(stmtCountAfter("export function api() { return 1; }", lowerDCE) === 1); }
+test "exported function always kept" { expect(stmtCountAfter("export function api() { return 1; }", lowerDCE) === 1); }
 
-test "mutual recursion both dead" { check(stmtCountAfter("function a() { b(); } function b() { a(); }", lowerDCE) === 0); }
+test "mutual recursion both dead" { expect(stmtCountAfter("function a() { b(); } function b() { a(); }", lowerDCE) === 0); }
 
-test "mutual recursion alive via call" { check(stmtCountAfter("function a() { b(); } function b() { a(); } a();", lowerDCE) === 3); }
+test "mutual recursion alive via call" { expect(stmtCountAfter("function a() { b(); } function b() { a(); } a();", lowerDCE) === 3); }
 
-test "unused class removed" { check(stmtCountAfter("class Dead {} const x = 1;", lowerDCE) === 1); }
+test "unused class removed" { expect(stmtCountAfter("class Dead {} const x = 1;", lowerDCE) === 1); }
 
-test "used class kept" { check(stmtCountAfter("class Alive {} const x = Alive;", lowerDCE) === 2); }
+test "used class kept" { expect(stmtCountAfter("class Alive {} const x = Alive;", lowerDCE) === 2); }
 
-test "transitive liveness" { check(stmtCountAfter("function helper() { return 1; } function api() { return helper(); } api();", lowerDCE) === 3); }
+test "transitive liveness" { expect(stmtCountAfter("function helper() { return 1; } function api() { return helper(); } api();", lowerDCE) === 3); }
 
-test "unused enum removed" { check(stmtCountAfter("enum Color { Red, Green } const x = 1;", lowerDCE) === 1); }
+test "unused enum removed" { expect(stmtCountAfter("enum Color { Red, Green } const x = 1;", lowerDCE) === 1); }
 
 test "variable decl always kept" {
 	// Variable declarations have side effects (initializer runs)
-	check(stmtCountAfter("const x = 1;", lowerDCE) === 1);
+	expect(stmtCountAfter("const x = 1;", lowerDCE) === 1);
 }
 
 test "isAlive false for empty" {
 	const syms = createAliveSyms();
-	check(!isAlive(syms, "anything"));
+	expect(!isAlive(syms, "anything"));
 }
 
 test "markAlive then isAlive" {
 	const syms = createAliveSyms();
 	markAlive(syms, "foo");
-	check(isAlive(syms, "foo"));
-	check(!isAlive(syms, "bar"));
+	expect(isAlive(syms, "foo"));
+	expect(!isAlive(syms, "bar"));
 }

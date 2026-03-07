@@ -1,3 +1,5 @@
+// AST Node definitions for the MetaScript compiler
+
 import { Token } from "../lexer/token";
 import { Type } from "../checker/types";
 
@@ -86,9 +88,11 @@ export enum NodeKind {
 	// Other
 	DeferStmt,
 	// Testing
-	TestDecl, ExpectStmt,
+	TestDecl,
 	// Extern / Macro / Quote / Comptime
 	ExternDecl, MacroDecl, QuoteExpr, ComptimeBlock,
+	// Self-hosting primitives
+	SizeofExpr,
 	// Program root
 	Program,
 }
@@ -99,6 +103,19 @@ export enum DeclKind {
 	Const,
 	Let,
 	Var,
+}
+
+export enum ExternKind {
+	Invalid,
+	Function,
+	Class,
+	Interface,
+	Const,
+	Var,
+	Let,
+	Type,
+	Enum,
+	Macro,
 }
 
 // ===== Source Location =====
@@ -143,6 +160,7 @@ export type NodeData =
 	| { yieldArg: Node, isDelegate: boolean }                      // YieldExpr
 	| { moveArg: Node }                                            // MoveExpr
 	| { outArg: Node }                                             // OutExpr
+	| { sizeofType: string }                                       // SizeofExpr
 	| { convExpr: Node, convType: Type }                           // HiddenStdConv, HiddenSubConv
 	| { annotationType: string }                                   // TypeAnnotation
 	// Pattern variants
@@ -162,7 +180,7 @@ export type NodeData =
 	| { argument: Node }                                           // ReturnStmt
 	| { breakLabel: string }                                       // BreakStmt
 	| { continueLabel: string }                                    // ContinueStmt
-	| { fnName: string, params: string[], fnParamTypes: string[], fnBody: Node, fnFlags: string, fnReturnType: string, fnDefaults: string[] } // FunctionDecl
+	| { fnName: string, params: string[], fnParamTypes: string[], fnBody: Node, fnFlags: string, fnReturnType: string, fnDefaults: string[], nativeName: string } // FunctionDecl
 	| { doBody: Node, doCondition: Node }                          // DoWhileStmt
 	| { switchDisc: Node, switchCases: Node[] }                    // SwitchStmt
 	| { caseTests: Node[], caseStmts: Node[], isDefault: boolean } // SwitchCase
@@ -176,7 +194,7 @@ export type NodeData =
 	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[] } // InterfaceDecl
 	| { className: string, classExtends: string, classBody: Node[] } // ClassDecl
 	| { propName: string, propType: string, propIsStatic: boolean }                 // PropertyDecl
-	| { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodReturnType: string } // MethodDecl
+	| { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodReturnType: string, nativeName: string } // MethodDecl
 	| { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node } // ConstructorDecl
 	// Error handling variants
 	| { throwArg: Node }                                           // ThrowStmt
@@ -187,9 +205,8 @@ export type NodeData =
 	| { deferExpr: Node }                                          // DeferStmt
 	// Testing variants
 	| { testName: string, testBody: Node }                         // TestDecl
-	| { expectExpr: Node }                                         // ExpectStmt
 	// Extern / Macro / Quote variants
-	| { externKind: string, externName: string }                    // ExternDecl
+	| { externKind: ExternKind, externName: string, nativeName: string, externType: string } // ExternDecl
 	| { macroDeclName: string, macroDeclParams: string[], macroDeclBody: Node } // MacroDecl
 	| { quoteBody: Node }                                          // QuoteExpr
 	| { comptimeBody: Node }                                       // ComptimeBlock
@@ -205,6 +222,7 @@ export class Node {
 	nodeType: Type;
 	resolvedSym: Symbol;
 	flags: number;
+	comments: Token[]; // Added for comment preservation
 }
 
 export type Expression = Node;
@@ -242,14 +260,9 @@ export type AwaitExprData = { awaitArg: Node };
 export type YieldExprData = { yieldArg: Node, isDelegate: boolean };
 export type MoveExprData = { moveArg: Node };
 export type OutExprData = { outArg: Node };
-// HiddenDeref/HiddenAddr reuse { expr: Node } shape (same as ExprStmt) — no new union variant needed
-export type HiddenDerefData = { expr: Node };
-export type HiddenAddrData = { expr: Node };
-// HiddenStdConv/HiddenSubConv carry target type for codegen cast emission
+export type SizeofExprData = { sizeofType: string };
 export type HiddenStdConvData = { convExpr: Node, convType: Type };
-export type HiddenSubConvData = { convExpr: Node, convType: Type };
-export type QuoteExprData = { quoteBody: Node };
-export type ComptimeBlockData = { comptimeBody: Node };
+export type TypeAnnotationData = { annotationType: string };
 
 // Patterns
 export type ArrayPatternData = { patternElements: Node[], hasRestElement: boolean };
@@ -258,32 +271,23 @@ export type ObjectPatternPropData = { propKey: string, propAlias: Node };
 export type DestructuringDeclData = { destrPattern: Node, destrInit: Node, destrIsConst: boolean };
 
 // Statements
-export type ExprStmtData = { expr: Node };
-export type ReturnStmtData = { argument: Node };
-export type ThrowStmtData = { throwArg: Node };
-export type DeferStmtData = { deferExpr: Node };
-export type TestDeclData = { testName: string, testBody: Node };
-export type ExpectStmtData = { expectExpr: Node };
 export type VariableDeclData = { declName: string, declType: string, initializer: Node, declKind: DeclKind };
 export type IfStmtData = { condition: Node, consequent: Node, alternate: Node };
 export type WhileStmtData = { whileCondition: Node, whileBody: Node };
 export type ForStmtData = { forInit: Node, forCondition: Node, forUpdate: Node, forBody: Node };
-export type ForOfStmtData = { forOfBinding: string, forOfIsConst: boolean, forOfIterable: Node, forOfBody: Node, forOfPattern: Node };
+export type ForOfStmtData = { forOfBinding: string, forOfIsConst: boolean, forOfIterable: Node, forOfBody: Node };
 export type ForInStmtData = { forInBinding: string, forInIsConst: boolean, forInObject: Node, forInBody: Node };
-export type DoWhileStmtData = { doBody: Node, doCondition: Node };
 export type BlockStmtData = { statements: Node[] };
-export type FunctionDeclData = { fnName: string, params: string[], fnParamTypes: string[], fnBody: Node, fnFlags: string, fnReturnType: string, fnDefaults: string[] };
-export type SwitchStmtData = { switchDisc: Node, switchCases: Node[] };
-export type SwitchCaseData = { caseTests: Node[], caseStmts: Node[], isDefault: boolean };
-export type MatchStmtData = { matchStmtDisc: Node, matchStmtCases: Node[] };
-export type TryCatchStmtData = { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node };
+export type ExprStmtData = { expr: Node };
+export type ReturnStmtData = { argument: Node };
 export type BreakStmtData = { breakLabel: string };
 export type ContinueStmtData = { continueLabel: string };
+export type FunctionDeclData = { fnName: string, params: string[], fnParamTypes: string[], fnBody: Node, fnFlags: string, fnReturnType: string, fnDefaults: string[], nativeName: string };
+export type DoWhileStmtData = { doBody: Node, doCondition: Node };
+export type SwitchStmtData = { switchDisc: Node, switchCases: Node[] };
+export type SwitchCaseData = { caseTests: Node[], caseStmts: Node[], isDefault: boolean };
 export type UnreachableStmtData = { unreachableMsg: string };
-
-// Other
-export type TypeAnnotationData = { annotationType: string };
-export type MacroInvocationData = { macroName: string, macroArgs: Node[] };
+export type MatchStmtData = { matchStmtDisc: Node, matchStmtCases: Node[] };
 
 // Declarations
 export type ImportDeclData = { importNames: string[], importAliases: string[], importSource: string };
@@ -293,12 +297,20 @@ export type EnumDeclData = { enumName: string, enumMembers: string[] };
 export type InterfaceDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[] };
 export type ClassDeclData = { className: string, classExtends: string, classBody: Node[] };
 export type PropertyDeclData = { propName: string, propType: string, propIsStatic: boolean };
-export type MethodDeclData = { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodReturnType: string };
+export type MethodDeclData = { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodReturnType: string, nativeName: string };
 export type ConstructorDeclData = { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node };
-export type ExternDeclData = { externKind: string, externName: string };
+export type ExternDeclData = { externKind: ExternKind, externName: string, nativeName: string, externType: string };
 export type MacroDeclData = { macroDeclName: string, macroDeclParams: string[], macroDeclBody: Node };
 export type DecoratedDeclData = { decorators: Node[], decoratedNode: Node };
 export type ProgramData = { programStmts: Node[] };
+export type DeferStmtData = { deferExpr: Node };
+export type ThrowStmtData = { throwArg: Node };
+export type TryCatchStmtData = { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node };
+export type MacroInvocationData = { macroName: string, macroArgs: Node[] };
+export type HiddenDerefData = { convExpr: Node, convType: Type };
+export type TestDeclData = { testName: string, testBody: Node };
+export type QuoteExprData = { quoteBody: Node };
+export type ComptimeBlockData = { comptimeBody: Node };
 
 // ===== Constructors =====
 
@@ -310,6 +322,7 @@ export function createNode(kind: NodeKind, data: NodeData, token: Token): Node {
 	n.nodeType = null as unknown as Type;
 	n.resolvedSym = null as unknown as Symbol;
 	n.flags = 0;
+	n.comments = [];
 	return n;
 }
 
@@ -321,6 +334,7 @@ export function createNodeAt(kind: NodeKind, data: NodeData, loc: SourceLocation
 	n.nodeType = null as unknown as Type;
 	n.resolvedSym = null as unknown as Symbol;
 	n.flags = 0;
+	n.comments = [];
 	return n;
 }
 
@@ -332,36 +346,17 @@ interface NodeCacheEntry {
 	node: Node;
 }
 
-interface NodeCache {
-	items: NodeCacheEntry[];
-}
-
-function createEmptyNodeCache(): NodeCache {
-	const items: NodeCacheEntry[] = [];
-	return { items };
-}
-
-let _nodeCache: NodeCache = createEmptyNodeCache();
-
-export function nodeCacheStore(key: number, node: Node): void {
-	for (let i = 0; i < _nodeCache.items.length; i = i + 1) {
-		if (_nodeCache.items[i].key === key) {
-			_nodeCache.items[i].node = node;
-			return;
-		}
-	}
-	const entry: NodeCacheEntry = { key: key, node: node };
-	_nodeCache.items.push(entry);
-}
+const nodeCache: NodeCacheEntry[] = [];
 
 export function nodeCacheGet(key: number): Node {
-	for (let i = 0; i < _nodeCache.items.length; i = i + 1) {
-		if (_nodeCache.items[i].key === key) return _nodeCache.items[i].node;
+	let i = 0;
+	while (i < nodeCache.length) {
+		if (nodeCache[i].key === key) return nodeCache[i].node;
+		i = i + 1;
 	}
 	return null as unknown as Node;
 }
 
-export function nodeCacheClear(): void {
-	const empty: NodeCacheEntry[] = [];
-	_nodeCache.items = empty;
+export function nodeCacheStore(key: number, node: Node): void {
+	nodeCache.push({ key, node });
 }

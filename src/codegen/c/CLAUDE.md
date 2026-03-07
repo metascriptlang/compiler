@@ -202,13 +202,13 @@ By Phase 5, all complex syntax is already lowered:
 
 ### 3-Tier System (Nim-validated)
 
-| Tier | Decorator | Maps To | Nim Equivalent |
-|------|-----------|---------|----------------|
+| Tier | Syntax | Maps To | Nim Equivalent |
+|------|--------|---------|----------------|
 | `@builtin("Name")` | Compiler-intercepted inline codegen | `{.magic: "Name".}` |
-| `@runtime("c_name")` | C runtime function (unmangled) | `{.importc: "name".}` |
-| `extern function` | Raw C FFI | `{.importc.}` + `{.header.}` |
+| `extern function ... from "c_name"` | C runtime function (unmangled) | `{.importc: "name".}` |
+| `extern function` (no `from`) | Raw C FFI (name = symbol name) | `{.importc.}` + `{.header.}` |
 
-**Checker sees normal signatures** — decorators are opaque metadata. Only `builtinLower` (post-analyzer, C-backend transform) reads them.
+**Checker sees normal signatures.** `extern function ... from` stores `nativeName` on the AST, wired to Symbol by collector. Only `builtinLower` (post-analyzer, C-backend transform) reads `@builtin`.
 
 ### Why builtinLower is Better Than Nim
 
@@ -216,7 +216,7 @@ Nim handles ALL 200+ `TMagic` variants inside codegen (~3200 lines across `ccgex
 - **Separation**: transform handles builtin normalization, codegen handles C emission
 - **Testable**: AST-to-AST rewrite, tested independently
 - **Maintainable**: single file vs scattered 50+ helper functions in codegen
-- **Extensible**: new `@runtime` builtins need only a `.ms` file edit, no compiler changes
+- **Extensible**: new `extern function ... from` declarations need only a `.cms` file edit, no compiler changes
 
 ### Auto-Import (`std/core.ms`)
 
@@ -227,8 +227,7 @@ Like Nim's `system.nim` — compiled first, exports injected into every module's
 For types that aren't modules (Promise, Result). The reference compiler already has `is_static_receiver`.
 
 ```ms
-@runtime("ms_promise_resolve")
-export function resolve<T>(this typeof Promise, value: T): Promise<T>;
+extern function resolve<T>(this typeof Promise, value: T): Promise<T> from "ms_promise_resolve";
 // Promise.resolve(42) → extensionMethodLower → resolve(42) → builtinLower → ms_promise_resolve(42)
 ```
 
@@ -254,12 +253,14 @@ Both use `@` syntax. Semicolon disambiguates:
 Nim uses same `{. .}` syntax with positional disambiguation (parser context). Haxe has no standalone directives — must attach to a declaration. Our semicolon approach is explicit and simple.
 
 **Symbol fields** (DONE):
-- `runtimeName: string` — set by collectPass when `@runtime("c_name")` found
+- `nativeName: string` — set by `extern function ... from "c_name"` syntax
 - `builtinKind: string` — set by collectPass when `@builtin("Name")` found
+
+**FFI**: `extern function name(...): T from "c_name";` — parser stores `nativeName` on FunctionDeclData, collector wires it to `sym.nativeName`. Codegen reads `sym.nativeName` for C emission.
 
 **Parser** (DONE): `@name(args) decl` → `DecoratedDecl { decorators: [MacroInvocation], decoratedNode }`. `@name(args);` → `ExprStmt { MacroInvocation }` (standalone directive).
 
-**Collector** (DONE): `collectDecorated` in collectPass.ms reads decorators, calls `extractDecoratorInfo` (from `decoratorHelpers.ms`, returns primitives only — DRC #22 safe), sets `sym.runtimeName`/`sym.builtinKind`. Note: nested `@dec export function` crashes DRC at collect time (DRC #23) — parse-level works.
+**Collector** (DONE): `collectDecorated` in collectPass.ms reads decorators, calls `extractDecoratorInfo` (from `decoratorHelpers.ms`, returns primitives only — DRC #22 safe), sets `sym.nativeName`/`sym.builtinKind`. `collectFunction` also wires `nativeName` from `extern function ... from` AST. Note: nested `@dec export function` crashes DRC at collect time (DRC #23) — parse-level works.
 
 ---
 
@@ -341,7 +342,7 @@ Phase 4 (Analyzer) already injected all RC calls as explicit AST nodes:
 ### Phase 5b: Builtin Lowering (~400 lines) — DONE
 5. ~~`transform/native/builtinLower.ms` — rewrite builtin MemberExpr/CallExpr to C-compatible AST~~ DONE
 6. ~~Symbol field additions — `runtimeName`, `builtinKind` on Symbol interface~~ DONE
-7. ~~collectPass decorator reading — extract `@runtime`/`@builtin` args~~ DONE
+7. ~~collectPass decorator reading — extract `@builtin` args, `extern from` wiring~~ DONE
 
 ### Phase 5c: Expressions + Statements (~1200 lines) — DONE
 8. ~~`c/expressions.ms` — all expression kinds (returns string snippets, not CLoc — value-type adaptation)~~ DONE

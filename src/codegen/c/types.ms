@@ -5,10 +5,10 @@
 // Topological emit with cycle detection via forward declarations.
 
 import { Type, TypeKind, isInterfaceType } from "../../checker/types";
+import { Node, NodeKind, CallExprData } from "../../ast/node";
 import { findChar, trimStr, splitTopLevel, endsWith } from "../../utils/string";
 import { CGen, CSection, Builder, TypeCache, add, addLine, addNewline, extract, sec, createBuilder, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas } from "./context";
 import { mangle, mangleTypeName, mangleFieldName, safeName } from "./names";
-import { check } from "std/testing";
 
 // ===== Anonymous Type Naming =====
 // Generates deterministic C struct names for anonymous interfaces (typeName === "").
@@ -117,7 +117,8 @@ export function annotationToC(annotation: string): string {
 		elem = trimStr(elem);
 		if (elem === "number") return "msNumberArray";
 		if (elem === "string") return "msStringArray";
-		return "msRefArray";
+		// Per-type array typedef (Nim pattern)
+		return mangle(elem) + "Array";
 	}
 	// Named types — mangle (value-type struct by default)
 	return mangle(s);
@@ -307,6 +308,22 @@ export function isNrvoReturnType(t: Type): boolean {
 	return false;
 }
 
+// ===== NRVO Call-Site Detection (Nim's isInvalidReturnType pattern) =====
+// Centralized two-source callee type lookup. Nim uses a single isInvalidReturnType()
+// in ccgtypes.nim called from 10 locations across 4 files.
+
+export function getCalleeReturnType(callNode: Node): Type {
+	const cd = callNode.data as CallExprData;
+	if (cd.callee !== null && cd.callee.nodeType !== null && cd.callee.nodeType.kind === TypeKind.Function) {
+		return cd.callee.nodeType.typeReturn;
+	}
+	if (callNode.resolvedSym !== null && callNode.resolvedSym.symbolType !== null) {
+		const st = callNode.resolvedSym.symbolType;
+		if (st.kind === TypeKind.Function) return st.typeReturn;
+	}
+	return null as unknown as Type;
+}
+
 // ===== Forward Declaration =====
 // Emits "typedef struct X X;" to cfsForwardDecls if not already done.
 
@@ -314,6 +331,10 @@ export function ensureForwardDecl(g: CGen, typeName: string): void {
 	const key = "fwd:" + typeName;
 	if (typeCacheHas(g.forwTypeCache, key)) return;
 	typeCacheSet(g.forwTypeCache, key, typeName);
+	// Skip runtime types already defined in system.h
+	if (typeName === "msClosure") return;
+	// Skip types already in shared proto header
+	if (typeCacheHas(g.externalTypes, key)) return;
 	addLine(sec(g, CSection.ForwardDecls), "typedef struct " + typeName + " " + typeName + ";");
 }
 
@@ -329,16 +350,24 @@ export function getTypeDesc(g: CGen, t: Type): string {
 
 	// Check simple types first (no caching needed)
 	const simple = getSimpleTypeDesc(t);
-	if (simple !== "") return simple;
+	if (simple !== "") {
+		// B2: track runtime dependencies
+		if (simple === "msString") g.needsStringRT = true;
+		return simple;
+	}
 
 	// Check full cache
 	const key = typeKey(t);
 	const cached = typeCacheGet(g.typeCache, key);
 	if (cached !== "") return cached;
 
+	// Suppression: type already in shared proto header — return name, skip emission
+	const external = typeCacheGet(g.externalTypes, key);
+	if (external !== "") return external;
+
 	// Handle TypeReference before match — avoid match arm value propagation gotcha
 	if (t.kind === TypeKind.TypeReference) {
-		if (findChar(t.typeName, "=".code) >= 0 || (t.typeName.length > 0 && t.typeName.charAt(0) === "(")) {
+		if (findChar(t.typeName, "=") >= 0 || (t.typeName.length > 0 && t.typeName.charAt(0) === "(")) {
 			return "msClosure";
 		}
 		if (t.typeName === "unknown" || t.typeName === "undefined" || t.typeName === "any" || t.typeName === "never") {
@@ -497,20 +526,46 @@ function genObjectType(g: CGen, t: Type): string {
 }
 
 // ===== Array Type Generation =====
+// Nim pattern: each element type gets its own array typedef.
+// Primitives use built-in types (msNumberArray, msStringArray).
+// Struct/interface elements use per-type MS_ARRAY(T) typedefs.
 
 function genArrayType(g: CGen, t: Type): string {
 	const elemType = getTypeDesc(g, t.typeReturn);
 	const key = typeKey(t);
 
-	// Use specific array types for common element types
-	const arrType = match (elemType) {
-		"double" => "msNumberArray",
-		"msString" => "msStringArray",
-		_ => "msRefArray",
-	};
+	// Built-in array types for primitives
+	g.needsArrayRT = true;  // B2: any array type needs array runtime
+	if (elemType === "double") { typeCacheSet(g.typeCache, key, "msNumberArray"); return "msNumberArray"; }
+	if (elemType === "msString") { typeCacheSet(g.typeCache, key, "msStringArray"); return "msStringArray"; }
+	if (elemType === "MS_BOOL") { typeCacheSet(g.typeCache, key, "msNumberArray"); return "msNumberArray"; }
 
-	typeCacheSet(g.typeCache, key, arrType);
-	return arrType;
+	// Pointer element types (classes, refs) → msRefArray (void* indirection is correct)
+	if (t.typeReturn !== null && isPointerType(t.typeReturn)) {
+		typeCacheSet(g.typeCache, key, "msRefArray");
+		return "msRefArray";
+	}
+
+	// Value-type struct elements → per-type MS_ARRAY(struct T) typedef
+	const arrTypeName = mangle(elemType) + "Array";
+	typeCacheSet(g.typeCache, key, arrTypeName);
+
+	// Emit typedef if not already done
+	const fwdKey = "arrtd:" + arrTypeName;
+	if (!typeCacheHas(g.forwTypeCache, fwdKey)) {
+		typeCacheSet(g.forwTypeCache, fwdKey, arrTypeName);
+		// Must go in Types section (after struct definition) because C needs complete type
+		addLine(sec(g, CSection.Types), "typedef MS_ARRAY(struct " + mangle(elemType) + ") " + arrTypeName + ";");
+	}
+
+	return arrTypeName;
+}
+
+// Returns the array type name for a given element type string (for use in expressions/statements).
+export function getArrayTypeName(elemType: string): string {
+	if (elemType === "double") return "msNumberArray";
+	if (elemType === "msString") return "msStringArray";
+	return mangle(elemType) + "Array";
 }
 
 // ===== Sized Array (Stack) =====
@@ -564,6 +619,61 @@ function genFunctionType(g: CGen, t: Type): string {
 	const cType = "msClosure";
 	typeCacheSet(g.typeCache, key, cType);
 	return cType;
+}
+
+// ===== Closure Cast Helpers (Nim's genProcParams pattern) =====
+// Shared helpers for genClHalfCast/genClFullCast — Nim uses a single genProcParams()
+// with a declareEnvironment boolean. We extract the common param/return mapping.
+
+function closureParamTypeToC(g: CGen, pt: Type): string {
+	if (pt === null) return "void*";
+	const simple = getSimpleTypeDesc(pt);
+	if (simple !== "") return simple;
+	return getTypeDesc(g, pt);
+}
+
+function closureRetTypeToC(g: CGen, t: Type): string {
+	if (t !== null && t.kind === TypeKind.Function && t.typeReturn !== null) {
+		return closureParamTypeToC(g, t.typeReturn);
+	}
+	if (t !== null && t.kind === TypeKind.TypeReference) return "void*";
+	return "void";
+}
+
+// ===== Closure Half Type (Nim's clHalf — direct fn pointer without env) =====
+// Generates a C function pointer type string from a Function type:
+//   (n: number) => boolean  →  "MS_BOOL(*)(double)"
+// Nim equivalent: ccgtypes.nim:getClosureType(m, typ, clHalf)
+
+export function genClHalfCast(g: CGen, t: Type): string {
+	const retC = closureRetTypeToC(g, t);
+	let params = "void";
+	if (t !== null && t.kind === TypeKind.Function && t.typeChildren.length > 0) {
+		params = "";
+		let i = 0;
+		while (i < t.typeChildren.length) {
+			if (i > 0) params = params + ", ";
+			params = params + closureParamTypeToC(g, t.typeChildren[i]);
+			i = i + 1;
+		}
+	}
+	return retC + "(*)" + "(" + params + ")";
+}
+
+// Generate a typed function pointer cast for closure calls WITH env (void* first param).
+// Like genClHalfCast but prepends void* to the parameter list.
+// ARM64 requires non-variadic casts — variadic calling convention differs.
+export function genClFullCast(g: CGen, t: Type): string {
+	const retC = closureRetTypeToC(g, t);
+	let params = "void*";  // env param first
+	if (t !== null && t.kind === TypeKind.Function && t.typeChildren.length > 0) {
+		let i = 0;
+		while (i < t.typeChildren.length) {
+			params = params + ", " + closureParamTypeToC(g, t.typeChildren[i]);
+			i = i + 1;
+		}
+	}
+	return retC + "(*)" + "(" + params + ")";
 }
 
 // ===== Result Type Generation =====
@@ -636,58 +746,58 @@ import { createPrimitive, createObject, createArray, createFunction, createEnum,
 import { createCGen } from "./context";
 import { CheckerContext } from "../../checker/context";
 test "primitive keys" {
-	check(typeKey(createPrimitive(TypeKind.Number)) === "number");
-	check(typeKey(createPrimitive(TypeKind.String)) === "string");
-	check(typeKey(createPrimitive(TypeKind.Boolean)) === "boolean");
-	check(typeKey(createPrimitive(TypeKind.Void)) === "void");
+	expect(typeKey(createPrimitive(TypeKind.Number)) === "number");
+	expect(typeKey(createPrimitive(TypeKind.String)) === "string");
+	expect(typeKey(createPrimitive(TypeKind.Boolean)) === "boolean");
+	expect(typeKey(createPrimitive(TypeKind.Void)) === "void");
 }
 
-test "enum key" { check(typeKey(createEnum("Color", ["Red", "Green"])) === "enum:Color"); }
+test "enum key" { expect(typeKey(createEnum("Color", ["Red", "Green"])) === "enum:Color"); }
 
-test "object key" { check(typeKey(createObject("Foo", [], [], true)) === "object:Foo"); }
+test "object key" { expect(typeKey(createObject("Foo", [], [], true)) === "object:Foo"); }
 
-test "null type" { check(typeKey(null as unknown as Type) === "null"); }
+test "null type" { expect(typeKey(null as unknown as Type) === "null"); }
 
 test "primitives" {
-	check(getSimpleTypeDesc(createPrimitive(TypeKind.Number)) === "double");
-	check(getSimpleTypeDesc(createPrimitive(TypeKind.Int32)) === "int32_t");
-	check(getSimpleTypeDesc(createPrimitive(TypeKind.Boolean)) === "MS_BOOL");
-	check(getSimpleTypeDesc(createPrimitive(TypeKind.String)) === "msString");
-	check(getSimpleTypeDesc(createPrimitive(TypeKind.Void)) === "void");
+	expect(getSimpleTypeDesc(createPrimitive(TypeKind.Number)) === "double");
+	expect(getSimpleTypeDesc(createPrimitive(TypeKind.Int32)) === "int32_t");
+	expect(getSimpleTypeDesc(createPrimitive(TypeKind.Boolean)) === "MS_BOOL");
+	expect(getSimpleTypeDesc(createPrimitive(TypeKind.String)) === "msString");
+	expect(getSimpleTypeDesc(createPrimitive(TypeKind.Void)) === "void");
 }
 
 test "non-primitive returns empty" {
-	check(getSimpleTypeDesc(createEnum("X", [])) === "");
-	check(getSimpleTypeDesc(createObject("Y", [], [], true)) === "");
+	expect(getSimpleTypeDesc(createEnum("X", [])) === "");
+	expect(getSimpleTypeDesc(createObject("Y", [], [], true)) === "");
 }
 
-test "class is pointer" { check(isPointerType(createObject("Foo", [], [], false))); }
+test "class is pointer" { expect(isPointerType(createObject("Foo", [], [], false))); }
 
-test "interface is not pointer" { check(!isPointerType(createObject("Bar", [], [], true))); }
+test "interface is not pointer" { expect(!isPointerType(createObject("Bar", [], [], true))); }
 
-test "ref is pointer" { check(isPointerType(createRef(createPrimitive(TypeKind.Int32)))); }
+test "ref is pointer" { expect(isPointerType(createRef(createPrimitive(TypeKind.Int32)))); }
 
-test "primitive is not pointer" { check(!isPointerType(createPrimitive(TypeKind.Number))); }
+test "primitive is not pointer" { expect(!isPointerType(createPrimitive(TypeKind.Number))); }
 
-test "string needs RC" { check(needsRC(createPrimitive(TypeKind.String))); }
+test "string needs RC" { expect(needsRC(createPrimitive(TypeKind.String))); }
 
-test "array needs RC" { check(needsRC(createArray(createPrimitive(TypeKind.Number)))); }
+test "array needs RC" { expect(needsRC(createArray(createPrimitive(TypeKind.Number)))); }
 
-test "class needs RC" { check(needsRC(createObject("Foo", [], [], false))); }
+test "class needs RC" { expect(needsRC(createObject("Foo", [], [], false))); }
 
-test "interface no RC" { check(!needsRC(createObject("Bar", [], [], true))); }
+test "interface no RC" { expect(!needsRC(createObject("Bar", [], [], true))); }
 
-test "number no RC" { check(!needsRC(createPrimitive(TypeKind.Number))); }
+test "number no RC" { expect(!needsRC(createPrimitive(TypeKind.Number))); }
 
-test "map needs RC" { check(needsRC(createPrimitive(TypeKind.Map))); }
+test "map needs RC" { expect(needsRC(createPrimitive(TypeKind.Map))); }
 
-test "map is not pointer" { check(!isPointerType(createPrimitive(TypeKind.Map))); }
+test "map is not pointer" { expect(!isPointerType(createPrimitive(TypeKind.Map))); }
 
 test "map type key" {
 	const t = createPrimitive(TypeKind.Map);
 	t.typeReturn = createPrimitive(TypeKind.String);
 	t.typeExtra = createPrimitive(TypeKind.Number);
-	check(typeKey(t) === "map:string:number");
+	expect(typeKey(t) === "map:string:number");
 }
 
 test "map type desc" {
@@ -695,22 +805,22 @@ test "map type desc" {
 	const t = createPrimitive(TypeKind.Map);
 	t.typeReturn = createPrimitive(TypeKind.String);
 	t.typeExtra = createPrimitive(TypeKind.Number);
-	check(getTypeDesc(g, t) === "msMap");
+	expect(getTypeDesc(g, t) === "msMap");
 }
 
 test "primitive type desc" {
 	const g = createCGen(null as unknown as CheckerContext, "");
-	check(getTypeDesc(g, createPrimitive(TypeKind.Number)) === "double");
-	check(getTypeDesc(g, createPrimitive(TypeKind.Int32)) === "int32_t");
-	check(getTypeDesc(g, createPrimitive(TypeKind.String)) === "msString");
+	expect(getTypeDesc(g, createPrimitive(TypeKind.Number)) === "double");
+	expect(getTypeDesc(g, createPrimitive(TypeKind.Int32)) === "int32_t");
+	expect(getTypeDesc(g, createPrimitive(TypeKind.String)) === "msString");
 }
 
 test "enum emits typedef and defines" {
 	const g = createCGen(null as unknown as CheckerContext, "");
 	const result = getTypeDesc(g, createEnum("Color", ["Red", "Green", "Blue"]));
-	check(result === "Color");
+	expect(result === "Color");
 	const types = extract(sec(g, CSection.Types));
-	check(types === "typedef int32_t Color;\n#define Color_Red 0\n#define Color_Green 1\n#define Color_Blue 2\n\n");
+	expect(types === "typedef int32_t Color;\n#define Color_Red 0\n#define Color_Green 1\n#define Color_Blue 2\n\n");
 }
 
 test "interface emits struct" {
@@ -722,9 +832,9 @@ test "interface emits struct" {
 	propTypes.push(createPrimitive(TypeKind.Int32));
 	const g = createCGen(null as unknown as CheckerContext, "");
 	const result = getTypeDesc(g, createObject("Point", propNames, propTypes, true));
-	check(result === "Point");
+	expect(result === "Point");
 	const types = extract(sec(g, CSection.Types));
-	check(types === "#ifndef Point_DEFINED\n#define Point_DEFINED\nstruct Point {\n  int32_t x;\n  int32_t y;\n};\n#endif\n\n");
+	expect(types === "#ifndef Point_DEFINED\n#define Point_DEFINED\nstruct Point {\n  int32_t x;\n  int32_t y;\n};\n#endif\n\n");
 }
 
 test "class emits struct without refcount" {
@@ -734,22 +844,22 @@ test "class emits struct without refcount" {
 	propTypes.push(createPrimitive(TypeKind.String));
 	const g = createCGen(null as unknown as CheckerContext, "");
 	const result = getTypeDesc(g, createObject("Person", propNames, propTypes, false));
-	check(result === "Person*");
+	expect(result === "Person*");
 	const types = extract(sec(g, CSection.Types));
-	check(types === "#ifndef Person_DEFINED\n#define Person_DEFINED\nstruct Person {\n  msString name;\n};\n#endif\n\n");
+	expect(types === "#ifndef Person_DEFINED\n#define Person_DEFINED\nstruct Person {\n  msString name;\n};\n#endif\n\n");
 }
 
 test "array type" {
 	const g = createCGen(null as unknown as CheckerContext, "");
-	check(getTypeDesc(g, createArray(createPrimitive(TypeKind.Number))) === "msNumberArray");
-	check(getTypeDesc(g, createArray(createPrimitive(TypeKind.String))) === "msStringArray");
+	expect(getTypeDesc(g, createArray(createPrimitive(TypeKind.Number))) === "msNumberArray");
+	expect(getTypeDesc(g, createArray(createPrimitive(TypeKind.String))) === "msStringArray");
 }
 
 test "forward decl emitted" {
 	const g = createCGen(null as unknown as CheckerContext, "");
 	getTypeDesc(g, createObject("Widget", [], [], true));
 	const fwd = extract(sec(g, CSection.ForwardDecls));
-	check(fwd === "typedef struct Widget Widget;\n");
+	expect(fwd === "typedef struct Widget Widget;\n");
 }
 
 test "cached second call" {
@@ -757,8 +867,8 @@ test "cached second call" {
 	const t = createEnum("Dir", ["Up", "Down"]);
 	const r1 = getTypeDesc(g, t);
 	const r2 = getTypeDesc(g, t);
-	check(r1 === r2);
-	check(r1 === "Dir");
+	expect(r1 === r2);
+	expect(r1 === "Dir");
 }
 
 test "anonymous type gets unique name" {
@@ -770,8 +880,8 @@ test "anonymous type gets unique name" {
 	types1.push(createPrimitive(TypeKind.Number));
 	const anon1 = createObject("", names1, types1, true);
 	const name1 = anonTypeName(anon1);
-	check(name1 !== "empty_");
-	check(name1.length > 7); // "msAnon_" + at least 1 char
+	expect(name1 !== "empty_");
+	expect(name1.length > 7); // "msAnon_" + at least 1 char
 }
 
 test "different anonymous types get different names" {
@@ -791,7 +901,7 @@ test "different anonymous types get different names" {
 	types2.push(createPrimitive(TypeKind.Boolean));
 	const anon2 = createObject("", names2, types2, true);
 
-	check(anonTypeName(anon1) !== anonTypeName(anon2));
+	expect(anonTypeName(anon1) !== anonTypeName(anon2));
 }
 
 test "same anonymous type gets same name (deterministic)" {
@@ -807,7 +917,7 @@ test "same anonymous type gets same name (deterministic)" {
 	types2.push(createPrimitive(TypeKind.Int32));
 	const anon2 = createObject("", names2, types2, true);
 
-	check(anonTypeName(anon1) === anonTypeName(anon2));
+	expect(anonTypeName(anon1) === anonTypeName(anon2));
 }
 
 test "anonymous type cache key distinguishes" {
@@ -823,35 +933,35 @@ test "anonymous type cache key distinguishes" {
 	types2.push(createPrimitive(TypeKind.String));
 	const anon2 = createObject("", names2, types2, true);
 
-	check(typeKey(anon1) !== typeKey(anon2));
+	expect(typeKey(anon1) !== typeKey(anon2));
 }
 
 test "tuple type key" {
 	const t = createTuple([createPrimitive(TypeKind.Number), createPrimitive(TypeKind.String)]);
-	check(typeKey(t) === "tuple:number,string");
+	expect(typeKey(t) === "tuple:number,string");
 }
 
 test "tuple type desc emits struct" {
 	const g = createCGen(null as unknown as CheckerContext, "");
 	const t = createTuple([createPrimitive(TypeKind.Number), createPrimitive(TypeKind.String)]);
 	const name = getTypeDesc(g, t);
-	check(name !== "void*");
-	check(name.length > 8); // "msTuple_" + hash
+	expect(name !== "void*");
+	expect(name.length > 8); // "msTuple_" + hash
 	const types = extract(sec(g, CSection.Types));
-	check(types.length > 0);
+	expect(types.length > 0);
 }
 
 test "tuple needsRC with string element" {
 	const t = createTuple([createPrimitive(TypeKind.Number), createPrimitive(TypeKind.String)]);
-	check(needsRC(t));
+	expect(needsRC(t));
 }
 
 test "tuple needsRC without RC elements" {
 	const t = createTuple([createPrimitive(TypeKind.Number), createPrimitive(TypeKind.Int32)]);
-	check(!needsRC(t));
+	expect(!needsRC(t));
 }
 
-test "set needs RC" { check(needsRC(createPrimitive(TypeKind.Set))); }
+test "set needs RC" { expect(needsRC(createPrimitive(TypeKind.Set))); }
 
 test "anonymous type emits struct with hash name" {
 	const names1: string[] = [];
@@ -864,7 +974,7 @@ test "anonymous type emits struct with hash name" {
 	const g = createCGen(null as unknown as CheckerContext, "");
 	const result = getTypeDesc(g, anon);
 	// Should NOT be "empty_"
-	check(result !== "empty_");
+	expect(result !== "empty_");
 	// Should start with msAnon_
-	check(result.length > 7);
+	expect(result.length > 7);
 }

@@ -152,4 +152,68 @@ void msRefArraySetLen(msRefArray* arr, int64_t newLen);
 int64_t msRefArrayCapacity(msRefArray* arr);
 void msRefArraySetLenUninit(msRefArray* arr, int64_t newLen);
 
+/* ===== Generic Typed Array Macro (Nim seqV2 / reference MS_ARRAY pattern) ===== */
+/* Generates per-type array struct: { int64_t len; struct { int64_t cap; T data[]; }* p; }
+ * Usage: typedef MS_ARRAY(struct Token) TokenArray;
+ * Each element type gets its own array with inline value storage (not void* indirection). */
+
+#define MS_ARRAY_PAYLOAD(T) struct { int64_t cap; T data[]; }
+
+#define MS_ARRAY(T) struct { int64_t len; MS_ARRAY_PAYLOAD(T)* p; }
+
+/* Generic empty initializer — works for any MS_ARRAY(T) */
+#define MS_ARRAY_EMPTY {0, NULL}
+
+/* ===== Generic Array Operations (work with any MS_ARRAY(T) type) ===== */
+
+/* Push a value onto the array. Grows capacity if needed.
+ * Uses a helper macro to avoid comma-in-braced-initializer issues with C preprocessor.
+ * Usage: msGenericArrayPush(&arr, value) where value can be a compound literal. */
+#define msGenericArrayPush(arr_ptr, ...) do { \
+	if ((arr_ptr)->p == NULL || (arr_ptr)->len >= (int64_t)((msArrayPayloadBase*)(arr_ptr)->p)->cap) { \
+		(arr_ptr)->p = (__typeof__((arr_ptr)->p))msArrayPrepareAdd( \
+			(arr_ptr)->len, (arr_ptr)->p, 1, sizeof((arr_ptr)->p->data[0])); \
+	} \
+	(arr_ptr)->p->data[(arr_ptr)->len] = (__VA_ARGS__); \
+	(arr_ptr)->len++; \
+} while(0)
+
+/* Access element at index with negative index support. Returns value. */
+#define msGenericArrayAt(arr_ptr, idx) ({ \
+	int64_t _gi = (idx); \
+	if (_gi < 0) _gi = (arr_ptr)->len + _gi; \
+	(arr_ptr)->p->data[_gi]; \
+})
+
+/* Pop last element. Returns the value. */
+#define msGenericArrayPop(arr_ptr) ({ \
+	__typeof__((arr_ptr)->p->data[0]) _pv = (arr_ptr)->p->data[(arr_ptr)->len - 1]; \
+	(arr_ptr)->len--; \
+	_pv; \
+})
+
+/* Set length. Grows with zero-fill if needed. */
+#define msGenericArraySetLen(arr_ptr, newLen) do { \
+	int64_t _nl = (newLen); \
+	if (_nl > (arr_ptr)->len) { \
+		if ((arr_ptr)->p == NULL || _nl > (int64_t)((msArrayPayloadBase*)(arr_ptr)->p)->cap) { \
+			(arr_ptr)->p = (__typeof__((arr_ptr)->p))msArrayPrepareAdd( \
+				(arr_ptr)->len, (arr_ptr)->p, _nl - (arr_ptr)->len, sizeof((arr_ptr)->p->data[0])); \
+		} \
+		memset(&(arr_ptr)->p->data[(arr_ptr)->len], 0, \
+			(_nl - (arr_ptr)->len) * sizeof((arr_ptr)->p->data[0])); \
+	} \
+	(arr_ptr)->len = _nl; \
+} while(0)
+
+/* Destroy (free payload). */
+#define msGenericArrayDestroy(arr_ptr) do { \
+	if ((arr_ptr)->p != NULL) { free((arr_ptr)->p); (arr_ptr)->p = NULL; } \
+	(arr_ptr)->len = 0; \
+} while(0)
+
+/* Capacity query. */
+#define msGenericArrayCapacity(arr_ptr) \
+	((arr_ptr)->p != NULL ? (int64_t)((msArrayPayloadBase*)(arr_ptr)->p)->cap : (int64_t)0)
+
 #endif /* MS_ARRAY_H */

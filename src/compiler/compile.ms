@@ -14,13 +14,12 @@ import { monomorphizeProgram } from "../monomorphize/collect";
 import { generateJS } from "../codegen/js/index";
 import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
 import { RaiserContext, createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
-import { generateC, generateCModule, genProjectDispatcher, collectExportedPrototypes, collectExportedTypeDecls, flushResultTypeDecls, emitExportedTypesViaCGen, registerExportedClassNames } from "../codegen/c/index";
-import { createCGen, sec, extract } from "../codegen/c/context";
+import { generateC, generateCModule, genProjectDispatcher, collectExportedPrototypes, flushResultTypeDecls, emitExportedTypesViaCGen, registerExportedClassNames } from "../codegen/c/index";
+import { registerCoreParsers } from "../parser/statements/core";
+import { createCGen, sec, extract, TypeCache, createTypeCache, typeCacheSet, AliveSet, createAliveSet, CSection } from "../codegen/c/context";
+import { computeAliveSet } from "../checker/reachability";
 import { getSimpleTypeDesc } from "../codegen/c/types";
-// CSection enum indices (from context.ms) — using literals because cross-module
-// enum resolution fails under Bun bootstrap checker ("un-resolved identifier").
-const CSECTION_FORWARD_DECLS = 1;
-const CSECTION_TYPES = 2;
+import { setTargetSizes } from "../checker/types";
 import { lookupSymbol } from "../checker/symbol";
 import { transformForNative } from "../transform/native/index";
 import { refineTypes } from "../transform/typeRefine";
@@ -35,10 +34,12 @@ import { CliOptions, Target, MODE_DEBUG, MODE_RELEASE } from "./options";
 import { readSource, writeOutput, printErrorsAndExit, emitOutput, printTiming, verboseLog, replaceExt, dirName, baseName, stripBase, ensureDir, getJSRuntime, exeSuffix, outDirForMode } from "./io";
 import { compileC, compileCFile, linkObjects, appendFlag, cliCompileFlags, cliLinkFlags } from "./cc";
 import { preprocessHeaders } from "../module/aro";
-import { error, success, bold, dim, green, red, cyan } from "../utils/color";
+import { error, success, bold, dim, green, red, yellow, cyan } from "../utils/color";
 import { clockMs } from "std/process";
 
 export function cmdCompile(filePath: string, opts: CliOptions, outputPath: string): void {
+	registerCoreParsers();
+	setTargetSizes(8, 8);
 	const t0 = clockMs();
 	const source = readSource(filePath);
 
@@ -114,10 +115,17 @@ export function buildResolverConfig(target: Target, resolve: ResolveSection): Re
 	return config;
 }
 
-// Report graph-level errors (e.g., circular deps, missing entry).
+// Report graph-level errors (e.g., missing entry) and circular dep warnings.
 function reportGraphErrors(graph: ModuleGraph): void {
 	for (const err of graph.errors) {
 		console.log(red("graph error: ") + err);
+	}
+	for (const dep of graph.circularDeps) {
+		let circMsg = "circular import: " + dep.fromPath + " <-> " + dep.toPath;
+		if (dep.importLine > 0) {
+			circMsg = circMsg + " (line " + dep.importLine.toString() + ")";
+		}
+		console.log(yellow("warning: ") + circMsg);
 	}
 }
 
@@ -171,22 +179,16 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 	return graph;
 }
 
-// Per-module prototype cache: parallel arrays (paths + protos).
-// Populated by collectPerModulePrototypes, queried by protosForModule.
-let protoModPaths: string[] = [];
-let protoModProtos: string[] = [];
-// Global type forward declarations: ALL exported types from ALL modules.
-// Prepended to every module's cross-module header so transitive types resolve.
-let globalTypeDecls = "";
+// Shared type cache from proto header — populated by writeProtoHeader, passed to each module's CGen.
+let protoExternalTypes: TypeCache = createTypeCache();
+// Global alive set for DCE — populated by writeProtoHeader, passed to each module's CGen.
+let protoAliveSet: AliveSet = createAliveSet();
 
 // Collect exported C prototypes and type declarations from each module.
-// Uses a temporary CGen for type emission — getTypeDesc() handles topological ordering
-// via recursive descent (field types emitted BEFORE containing struct).
-// C header modules (.h) are skipped — their prototypes come from @include.
-function collectPerModulePrototypes(graph: ModuleGraph): void {
-	protoModPaths = [];
-	protoModProtos = [];
-	globalTypeDecls = "";
+// Writes a physical msProto.h header to /tmp and populates protoExternalTypes
+// for type suppression in per-module codegen.
+function writeProtoHeader(graph: ModuleGraph, entryPath: string, isTest: boolean): void {
+	protoExternalTypes = createTypeCache();
 
 	// Create a temporary CGen shared across ALL modules for type collection.
 	// This gives us: forward decls in ForwardDecls section, struct bodies in Types section,
@@ -211,39 +213,44 @@ function collectPerModulePrototypes(graph: ModuleGraph): void {
 		monoed_paths.push(modPath);
 	}
 
+	// Phase 1.5: Compute global reachability for dead code elimination
+	protoAliveSet = computeAliveSet(monoed_programs, monoed_paths, entryPath, isTest);
 	// Phase 2: Emit all exported types via CGen (recursive topological ordering).
-	// Collect function prototypes as before.
+	// Collect function prototypes per module.
+	let allFnProtos = "";
 	for (let i = 0; i < monoed_programs.length; i += 1) {
 		emitExportedTypesViaCGen(protoGen, monoed_programs[i]);
-		const protos = collectExportedPrototypes(monoed_programs[i]);
-		protoModPaths.push(monoed_paths[i]);
-		protoModProtos.push(protos);
+		const protos = collectExportedPrototypes(monoed_programs[i], protoGen);
+		allFnProtos = allFnProtos + protos;
 	}
 
 	// Phase 3: Extract ForwardDecls FIRST (typedefs break pointer cycles),
 	// then Types (struct bodies in dependency order).
-	const forwardDecls = extract(sec(protoGen, CSECTION_FORWARD_DECLS));
-	const typeBodies = extract(sec(protoGen, CSECTION_TYPES));
+	const forwardDecls = extract(sec(protoGen, CSection.ForwardDecls));
+	const typeBodies = extract(sec(protoGen, CSection.Types));
 	const resultDecls = flushResultTypeDecls();
-	globalTypeDecls = forwardDecls + typeBodies + resultDecls;
-}
 
-// Get cross-module prototypes for a specific module.
-// Includes: global type forward declarations (all modules) + function protos (direct deps only).
-function protosForModule(graph: ModuleGraph, modPath: string): string {
-	const mod = findModule(graph, modPath);
-	if (mod === null) return "";
-	// Start with ALL type forward declarations (transitive deps need them too)
-	let result = globalTypeDecls;
-	// Add function prototypes from direct dependencies only
-	for (const imp of mod.imports) {
-		for (let j = 0; j < protoModPaths.length; j += 1) {
-			if (protoModPaths[j] === imp.sourcePath) {
-				result = result + protoModProtos[j];
-			}
-		}
+	// Write physical header file
+	// B2: conditionally include runtime headers based on proto's type usage
+	let header = "#ifndef MSC_PROTO_H\n#define MSC_PROTO_H\n\n";
+	if (protoGen.needsStringRT) header = header + "#include \"core/string.h\"\n";
+	if (protoGen.needsArrayRT) header = header + "#include \"core/array.h\"\n";
+	if (protoGen.needsStringRT || protoGen.needsArrayRT) header = header + "\n";
+	header = header + forwardDecls + typeBodies + resultDecls;
+	header = header + allFnProtos;
+	header = header + "\n#endif /* MSC_PROTO_H */\n";
+	writeOutput("/tmp/msProto.h", header);
+
+	// Copy protoGen's typeCache entries to protoExternalTypes for suppression
+	for (let i = 0; i < protoGen.typeCache.entries.length; i += 1) {
+		typeCacheSet(protoExternalTypes, protoGen.typeCache.entries[i].key, protoGen.typeCache.entries[i].cTypeName);
 	}
-	return result;
+	// Also copy forward decl cache entries for ensureForwardDecl suppression
+	for (let i = 0; i < protoGen.forwTypeCache.entries.length; i += 1) {
+		typeCacheSet(protoExternalTypes, protoGen.forwTypeCache.entries[i].key, protoGen.forwTypeCache.entries[i].cTypeName);
+	}
+	// Sentinel entry: signals multi-module mode so #include "msProto.h" is emitted
+	typeCacheSet(protoExternalTypes, "__msProto__", "1");
 }
 
 // Counter for unique @compile .o filenames across modules.
@@ -334,6 +341,8 @@ function needsRebuild(graph: ModuleGraph, outputBinary: string): boolean {
 // ===== Multi-Module JS Build =====
 
 export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOptions): void {
+	registerCoreParsers();
+	setTargetSizes(8, 8);
 	const config = buildResolverConfig(Target.JS, defaultResolveSection());
 	const graph = loadAndCheckGraph(entryPath, opts.verbose, config);
 	const outDir = outputDir !== "" ? outputDir : "out/debug";
@@ -392,6 +401,8 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 //   Link all .o files into final binary
 
 export function cmdBuildC(entryPath: string, opts: CliOptions): void {
+	registerCoreParsers();
+	setTargetSizes(8, 8);
 	const t0 = clockMs();
 	const config = buildResolverConfig(Target.C, defaultResolveSection());
 	const graph = loadAndCheckGraph(entryPath, opts.verbose, config);
@@ -415,9 +426,9 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		return;
 	}
 
-	// Pass 1: Collect per-module exported prototypes
-	if (opts.verbose) verboseLog("collecting cross-module prototypes");
-	collectPerModulePrototypes(graph);
+	// Pass 1: Collect per-module exported prototypes and write shared header
+	if (opts.verbose) verboseLog("writing shared proto header");
+	writeProtoHeader(graph, entryPath, false);
 
 	// Pass 2: Full pipeline + codegen + per-module compile to .o
 	let hasUserMain = false;
@@ -477,9 +488,8 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		const analyzed = analyzeProgram(nativeTransformed, ctx);
 		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
 
-		// Codegen — module only, with dependency-only prototypes
-		const modProtos = protosForModule(graph, modPath);
-		const cCode = generateCModule(nativeLowered, ctx, modPath, modProtos);
+		// Codegen — module only, types suppressed by externalTypes from proto header
+		const cCode = generateCModule(nativeLowered, ctx, modPath, protoExternalTypes, protoAliveSet, false);
 
 		// Accumulate compiler flags from @passC/@passL directives
 		allFlags = appendFlag(allFlags, ctx.compilerFlags);
@@ -513,9 +523,10 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 			const oFile = "/tmp/_msc_mod_" + compiled + ".o";
 			writeOutput(cFile, cCode);
 			if (opts.verbose) verboseLog("  cc " + cFile + " → " + oFile);
-			// Add module's source directory + std/ as include paths for @include directives
+			// Add module's source directory + std/ + /tmp as include paths
 			let modFlags = appendFlag(allFlags, "-iquote" + dirName(modPath));
 			modFlags = appendFlag(modFlags, "-iquotestd");
+			modFlags = appendFlag(modFlags, "-iquote/tmp");
 			const ccCode = compileCFile(cFile, oFile, modFlags, opts.mode, opts.ccCompiler);
 			if (ccCode !== 0) {
 				console.log(error("error") + ": compile failed for " + modPath + " " + dim("(exit " + ccCode + ")"));
@@ -569,13 +580,15 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 // Inline tests (testGroup/test/check) run during module initialization.
 
 export function cmdTest(filePath: string, opts: CliOptions): void {
+	registerCoreParsers();
+	setTargetSizes(8, 8);
 	const t0 = clockMs();
 	const config = buildResolverConfig(Target.C, defaultResolveSection());
 	const graph = loadAndCheckGraph(filePath, opts.verbose, config);
 
-	// Pass 1: Collect per-module exported prototypes
-	if (opts.verbose) verboseLog("collecting cross-module prototypes");
-	collectPerModulePrototypes(graph);
+	// Pass 1: Collect per-module exported prototypes and write shared header
+	if (opts.verbose) verboseLog("writing shared proto header");
+	writeProtoHeader(graph, filePath, true);
 
 	// Pass 2: Full pipeline + codegen + compile each module
 	let allFlags = cliCompileFlags(opts);
@@ -617,8 +630,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 		const analyzed = analyzeProgram(nativeTransformed, ctx);
 		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
-		const modProtos = protosForModule(graph, modPath);
-		const cCode = generateCModule(nativeLowered, ctx, modPath, modProtos);
+		const cCode = generateCModule(nativeLowered, ctx, modPath, protoExternalTypes, protoAliveSet, true);
 
 		allFlags = appendFlag(allFlags, ctx.compilerFlags);
 
@@ -629,7 +641,8 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const cFile = "/tmp/_msc_test_" + compiled + ".c";
 		const oFile = "/tmp/_msc_test_" + compiled + ".o";
 		writeOutput(cFile, cCode);
-		const ccCode = compileCFile(cFile, oFile, allFlags, opts.mode, opts.ccCompiler);
+		let testModFlags = appendFlag(allFlags, "-iquote/tmp");
+		const ccCode = compileCFile(cFile, oFile, testModFlags, opts.mode, opts.ccCompiler);
 		if (ccCode !== 0) {
 			console.log(error("error") + ": compile failed for " + modPath + " " + dim("(exit " + ccCode + ")"));
 			exit(1);
@@ -669,6 +682,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 // ===== Run JS (multi-module aware) =====
 
 export function cmdRunJS(filePath: string, opts: CliOptions): void {
+	setTargetSizes(8, 8);
 	const t0 = clockMs();
 	const config = buildResolverConfig(Target.JS, defaultResolveSection());
 	const graph = loadAndCheckGraph(filePath, opts.verbose, config);
@@ -720,6 +734,7 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 // compiles to bytecode via generateRaiserProject, executes in-process.
 
 export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
+	setTargetSizes(8, 8);
 	const t0 = clockMs();
 	const config = buildResolverConfig(Target.Raiser, defaultResolveSection());
 	const graph = loadAndCheckGraph(filePath, opts.verbose, config);

@@ -157,7 +157,7 @@ function isEmptyStringLiteral(node: Node): boolean {
 import { createNode } from "../../ast/node";
 import { createToken, TokenKind } from "../../lexer/token";
 
-function makeNumberLit(val: number, loc: { line: number, column: number }): Node {
+function makeNumberLit(val: number, loc: SourceLocation): Node {
 	const tok = createToken(TokenKind.Number, val.toString(), loc.line);
 	return createNode(NodeKind.NumberLiteral, { value: val }, tok);
 }

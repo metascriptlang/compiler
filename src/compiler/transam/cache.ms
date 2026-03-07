@@ -8,7 +8,7 @@
 import { TaQueryKey, TaQueryKind, TaQueryState, TaDurability, createQueryKey, queryKeysEqual } from "./revision";
 import { TaCacheEntry, createCacheEntry } from "./query";
 import { taHashKey } from "./hash";
-import { check } from "std/testing";
+
 
 // ===== Cache Store =====
 
@@ -123,8 +123,8 @@ export function markQueriesRedForFile(cache: TaCacheStore, fileId: number): void
 // ===== Tests =====
 test "create empty" {
 	const cache = createCacheStore(10);
-	check(cache.entries.length === 0);
-	check(cache.capacity === 10);
+	expect(cache.entries.length === 0);
+	expect(cache.capacity === 10);
 }
 
 test "put and get" {
@@ -134,24 +134,24 @@ test "put and get" {
 	entry.state = TaQueryState.Green;
 	cachePut(cache, entry);
 	const got = cacheGet(cache, key);
-	check(got !== null);
-	check(got.state === TaQueryState.Green);
+	expect(got !== null);
+	expect(got.state === TaQueryState.Green);
 }
 
 test "get miss returns null" {
 	const cache = createCacheStore(10);
 	const key = createQueryKey(TaQueryKind.Parse, 99);
 	const got = cacheGet(cache, key);
-	check(got === null);
+	expect(got === null);
 }
 
 test "contains true/false" {
 	const cache = createCacheStore(10);
 	const key = createQueryKey(TaQueryKind.Parse, 0);
-	check(!cacheContains(cache, key));
+	expect(!cacheContains(cache, key));
 	const entry = createCacheEntry(key);
 	cachePut(cache, entry);
-	check(cacheContains(cache, key));
+	expect(cacheContains(cache, key));
 }
 
 test "evicts at capacity" {
@@ -164,13 +164,13 @@ test "evicts at capacity" {
 	const e3 = createCacheEntry(k3);
 	cachePut(cache, e1);
 	cachePut(cache, e2);
-	check(cache.entries.length === 2);
+	expect(cache.entries.length === 2);
 	cachePut(cache, e3);
-	check(cache.entries.length === 2);
+	expect(cache.entries.length === 2);
 	// k1 was least recently used, should be evicted
-	check(!cacheContains(cache, k1));
-	check(cacheContains(cache, k2));
-	check(cacheContains(cache, k3));
+	expect(!cacheContains(cache, k1));
+	expect(cacheContains(cache, k2));
+	expect(cacheContains(cache, k3));
 }
 
 test "accessed entry not evicted" {
@@ -186,9 +186,9 @@ test "accessed entry not evicted" {
 	// Touch k1 so k2 becomes LRU
 	cacheGet(cache, k1);
 	cachePut(cache, e3);
-	check(cacheContains(cache, k1));  // was touched
-	check(!cacheContains(cache, k2)); // evicted (LRU)
-	check(cacheContains(cache, k3));
+	expect(cacheContains(cache, k1));  // was touched
+	expect(!cacheContains(cache, k2)); // evicted (LRU)
+	expect(cacheContains(cache, k3));
 }
 
 test "put existing key updates in place" {
@@ -200,9 +200,9 @@ test "put existing key updates in place" {
 	const e2 = createCacheEntry(key);
 	e2.outputHash = 200;
 	cachePut(cache, e2);
-	check(cache.entries.length === 1);
+	expect(cache.entries.length === 1);
 	const got = cacheGet(cache, key);
-	check(got.outputHash === 200);
+	expect(got.outputHash === 200);
 }
 
 test "remove existing" {
@@ -210,14 +210,14 @@ test "remove existing" {
 	const key = createQueryKey(TaQueryKind.Parse, 1);
 	const entry = createCacheEntry(key);
 	cachePut(cache, entry);
-	check(cacheRemove(cache, key));
-	check(!cacheContains(cache, key));
+	expect(cacheRemove(cache, key));
+	expect(!cacheContains(cache, key));
 }
 
 test "remove nonexistent returns false" {
 	const cache = createCacheStore(10);
 	const key = createQueryKey(TaQueryKind.Parse, 99);
-	check(!cacheRemove(cache, key));
+	expect(!cacheRemove(cache, key));
 }
 
 test "markAllRed turns green to red" {
@@ -231,8 +231,8 @@ test "markAllRed turns green to red" {
 	cachePut(cache, e1);
 	cachePut(cache, e2);
 	markAllRed(cache);
-	check(cacheGet(cache, k1).state === TaQueryState.Red);
-	check(cacheGet(cache, k2).state === TaQueryState.Red);
+	expect(cacheGet(cache, k1).state === TaQueryState.Red);
+	expect(cacheGet(cache, k2).state === TaQueryState.Red);
 }
 
 test "markQueriesRedForFile targets specific file" {
@@ -246,6 +246,6 @@ test "markQueriesRedForFile targets specific file" {
 	cachePut(cache, e1);
 	cachePut(cache, e2);
 	markQueriesRedForFile(cache, 1);
-	check(cacheGet(cache, k1).state === TaQueryState.Red);
-	check(cacheGet(cache, k2).state === TaQueryState.Green);
+	expect(cacheGet(cache, k1).state === TaQueryState.Red);
+	expect(cacheGet(cache, k2).state === TaQueryState.Green);
 }

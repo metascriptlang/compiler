@@ -14,7 +14,6 @@ import {
 	ExportDeclData, ClassDeclData, MethodDeclData, ConstructorDeclData,
 	ForOfStmtData, DoWhileStmtData, ReturnStmtData,
 } from "../ast/node";
-import { check } from "std/testing";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, nameSetIntersect } from "../transform/context";
 import {
 	makeIdent, makeBlock, makeExprStmt, makeCall,
@@ -262,7 +261,7 @@ test "eliminates wasMoved+destroy pair" {
 	const stmts: Node[] = [wm, destroy];
 	const result = optimizeBlock(stmts);
 	// destroy eliminated, only wasMoved remains
-	check(result.length === 1);
+	expect(result.length === 1);
 }
 
 test "eliminates non-adjacent wasMoved+destroy" {
@@ -272,7 +271,7 @@ test "eliminates non-adjacent wasMoved+destroy" {
 	const stmts: Node[] = [wm, other, destroy];
 	const result = optimizeBlock(stmts);
 	// Non-adjacent destroy eliminated — wasMoved + other remain
-	check(result.length === 2);
+	expect(result.length === 2);
 }
 
 test "preserves different vars" {
@@ -281,7 +280,7 @@ test "preserves different vars" {
 	const stmts: Node[] = [wm, destroy];
 	const result = optimizeBlock(stmts);
 	// Different vars — both preserved
-	check(result.length === 2);
+	expect(result.length === 2);
 }
 
 test "eliminates multiple pairs" {
@@ -292,7 +291,7 @@ test "eliminates multiple pairs" {
 	const stmts: Node[] = [wm1, d1, wm2, d2];
 	const result = optimizeBlock(stmts);
 	// Both destroy calls eliminated
-	check(result.length === 2);
+	expect(result.length === 2);
 }
 
 test "preserves standalone wasMoved" {
@@ -300,7 +299,7 @@ test "preserves standalone wasMoved" {
 	const other = makeOtherStmt();
 	const stmts: Node[] = [wm, other];
 	const result = optimizeBlock(stmts);
-	check(result.length === 2);
+	expect(result.length === 2);
 }
 
 test "preserves standalone destroy" {
@@ -308,19 +307,19 @@ test "preserves standalone destroy" {
 	const other = makeOtherStmt();
 	const stmts: Node[] = [destroy, other];
 	const result = optimizeBlock(stmts);
-	check(result.length === 2);
+	expect(result.length === 2);
 }
 
 test "extracts var from wasMoved call" {
 	const wm = makeWmCall("myVar");
 	const name = getWasMovedVar(wm);
-	check(name === "myVar");
+	expect(name === "myVar");
 }
 
 test "returns empty for non-wasMoved" {
 	const other = makeOtherStmt();
 	const name = getWasMovedVar(other);
-	check(name === "");
+	expect(name === "");
 }
 
 test "if/else both move same var → eliminate destroy" {
@@ -338,7 +337,7 @@ test "if/else both move same var → eliminate destroy" {
 	const stmts: Node[] = [ifNode, destroy];
 	const result = optimizeBlock(stmts);
 	// destroy(x) eliminated — x was moved on all paths
-	check(result.length === 1);
+	expect(result.length === 1);
 }
 
 test "if without else → preserve destroy" {
@@ -353,7 +352,7 @@ test "if without else → preserve destroy" {
 	const stmts: Node[] = [ifNode, destroy];
 	const result = optimizeBlock(stmts);
 	// No else — can't guarantee moved, destroy preserved
-	check(result.length === 2);
+	expect(result.length === 2);
 }
 
 test "if/else move different vars → preserve both destroys" {
@@ -369,5 +368,5 @@ test "if/else move different vars → preserve both destroys" {
 	const stmts: Node[] = [ifNode, destroyX, destroyY];
 	const result = optimizeBlock(stmts);
 	// Neither is moved on ALL paths — both preserved
-	check(result.length === 3);
+	expect(result.length === 3);
 }

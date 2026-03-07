@@ -6,7 +6,7 @@ import { Node, NodeKind, DeclKind,
 	IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData,
 	ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ArrowFunctionData, FunctionExprData,
 	TypeAssertionData, ConditionalExprData, SpreadExprData, NewExprData, TryExprData,
-	MatchExprData, MatchCaseData, AwaitExprData, YieldExprData, MoveExprData, OutExprData,
+	MatchExprData, MatchCaseData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData,
 	QuoteExprData, ComptimeBlockData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
 	DestructuringDeclData, ExprStmtData, ReturnStmtData, ThrowStmtData, DeferStmtData,
 	VariableDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData,
@@ -14,8 +14,8 @@ import { Node, NodeKind, DeclKind,
 	MatchStmtData, TryCatchStmtData, UnreachableStmtData, TypeAnnotationData,
 	MacroInvocationData, ImportDeclData, ExportDeclData, TypeAliasDeclData, EnumDeclData,
 	InterfaceDeclData, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData,
-	ExternDeclData, MacroDeclData, DecoratedDeclData, ProgramData,
-	TestDeclData, ExpectStmtData,
+	ExternDeclData, ExternKind, MacroDeclData, DecoratedDeclData, ProgramData,
+	TestDeclData,
 	HiddenStdConvData, HiddenSubConvData,
 } from "./node";
 
@@ -425,6 +425,10 @@ export function printNode(node: Node, level: number): void {
 			console.log(`${pad}OutExpr:`);
 			printNode(data.outArg, level + 1);
 		},
+		NodeKind.SizeofExpr => {
+			const data = node.data as SizeofExprData;
+			console.log(`${pad}SizeofExpr: ${data.sizeofType}`);
+		},
 		NodeKind.HiddenDeref => {
 			const data = node.data as ExprStmtData;
 			console.log(`${pad}HiddenDeref:`);
@@ -542,7 +546,19 @@ export function printNode(node: Node, level: number): void {
 		},
 		NodeKind.ExternDecl => {
 			const data = node.data as ExternDeclData;
-			console.log(`${pad}ExternDecl: extern ${data.externKind} ${data.externName}`);
+			const ekStr = match (data.externKind) {
+				ExternKind.Function => "function",
+				ExternKind.Class => "class",
+				ExternKind.Interface => "interface",
+				ExternKind.Const => "const",
+				ExternKind.Var => "var",
+				ExternKind.Let => "let",
+				ExternKind.Type => "type",
+				ExternKind.Enum => "enum",
+				ExternKind.Macro => "macro",
+				_ => "?",
+			};
+			console.log(`${pad}ExternDecl: extern ${ekStr} ${data.externName}`);
 		},
 		NodeKind.MacroDecl => {
 			const data = node.data as MacroDeclData;
@@ -563,11 +579,6 @@ export function printNode(node: Node, level: number): void {
 			const data = node.data as TestDeclData;
 			console.log(`${pad}TestDecl: "${data.testName}"`);
 			printNode(data.testBody, level + 1);
-		},
-		NodeKind.ExpectStmt => {
-			const data = node.data as ExpectStmtData;
-			console.log(`${pad}ExpectStmt:`);
-			printNode(data.expectExpr, level + 1);
 		},
 		_ => {},
 	}

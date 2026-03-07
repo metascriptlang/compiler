@@ -9,7 +9,6 @@ import { Type, TypeKind } from "../../checker/types";
 import { TransformContext, createTransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent } from "../util";
-import { check } from "std/testing";
 import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";
 import { ExprStmtData, CallExprData } from "../../ast/node";
 
@@ -107,28 +106,28 @@ function getCallName(input: string): string {
 }
 
 // ===== Tests =====
-test "new Foo() becomes Foo_new()" { check(getCallName("new Foo();") === "Foo_new"); }
+test "new Foo() becomes Foo_new()" { expect(getCallName("new Foo();") === "Foo_new"); }
 
 test "new Bar(x, y) becomes Bar_new(x, y)" {
 	const name = getCallName("new Bar(x, y);");
-	check(name === "Bar_new");
+	expect(name === "Bar_new");
 }
 
-test "new Map() becomes msMapNew()" { check(getCallName("new Map();") === "msMapNew"); }
+test "new Map() becomes msMapNew()" { expect(getCallName("new Map();") === "msMapNew"); }
 
-test "result is CallExpr" { check(firstExprKindAfter("new Foo();", lowerNewExpr) === NodeKind.CallExpr); }
+test "result is CallExpr" { expect(firstExprKindAfter("new Foo();", lowerNewExpr) === NodeKind.CallExpr); }
 
-test "non-new unchanged" { check(firstExprKindAfter("foo();", lowerNewExpr) === NodeKind.CallExpr); }
+test "non-new unchanged" { expect(firstExprKindAfter("foo();", lowerNewExpr) === NodeKind.CallExpr); }
 
-test "stmt count preserved" { check(stmtCountAfter("new A(); new B();", lowerNewExpr) === 2); }
+test "stmt count preserved" { expect(stmtCountAfter("new A(); new B();", lowerNewExpr) === 2); }
 
 test "new with args preserved count" {
 	const result = parseInput("new Foo(1, 2);");
-	if (!result.ok) { check(false); return; }
+	if (!result.ok) { expect(false); return; }
 	const ctx = createTransformContext();
 	const prog = lowerNewExpr(result.value, ctx);
 	const stmts = getStmts(prog);
 	const sd = stmts[0].data as ExprStmtData;
 	const cd = sd.expr.data as CallExprData;
-	check(cd.arguments.length === 2);
+	expect(cd.arguments.length === 2);
 }

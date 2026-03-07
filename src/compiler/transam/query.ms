@@ -7,7 +7,7 @@
 // Arrays passed by pointer — bare T[] types.
 
 import { TaQueryKey, TaQueryKind, TaQueryState, TaDurability, createQueryKey, queryKeysEqual } from "./revision";
-import { check } from "std/testing";
+
 
 // ===== Dependency Entry — "I depended on query X and saw output hash Y" =====
 
@@ -98,28 +98,28 @@ export function recordDurability(stack: TaDependencyStack, dur: TaDurability): v
 test "create starts Red" {
 	const key = createQueryKey(TaQueryKind.Parse, 0);
 	const entry = createCacheEntry(key);
-	check(entry.state === TaQueryState.Red);
-	check(entry.computedAt === 0);
-	check(entry.verifiedAt === 0);
-	check(entry.outputHash === 0);
+	expect(entry.state === TaQueryState.Red);
+	expect(entry.computedAt === 0);
+	expect(entry.verifiedAt === 0);
+	expect(entry.outputHash === 0);
 }
 
 test "dependencies start empty" {
 	const key = createQueryKey(TaQueryKind.Parse, 0);
 	const entry = createCacheEntry(key);
-	check(entry.dependencies.length === 0);
+	expect(entry.dependencies.length === 0);
 }
 
 test "starts empty" {
 	const stack = createDependencyStack();
-	check(!hasActiveFrame(stack));
+	expect(!hasActiveFrame(stack));
 }
 
 test "push makes active" {
 	const stack = createDependencyStack();
 	const key = createQueryKey(TaQueryKind.Parse, 0);
 	pushFrame(stack, key);
-	check(hasActiveFrame(stack));
+	expect(hasActiveFrame(stack));
 }
 
 test "pop returns frame" {
@@ -127,8 +127,8 @@ test "pop returns frame" {
 	const key = createQueryKey(TaQueryKind.Parse, 5);
 	pushFrame(stack, key);
 	const frame = popFrame(stack);
-	check(queryKeysEqual(frame.queryKey, key));
-	check(!hasActiveFrame(stack));
+	expect(queryKeysEqual(frame.queryKey, key));
+	expect(!hasActiveFrame(stack));
 }
 
 test "LIFO order" {
@@ -138,9 +138,9 @@ test "LIFO order" {
 	pushFrame(stack, k1);
 	pushFrame(stack, k2);
 	const f2 = popFrame(stack);
-	check(queryKeysEqual(f2.queryKey, k2));
+	expect(queryKeysEqual(f2.queryKey, k2));
 	const f1 = popFrame(stack);
-	check(queryKeysEqual(f1.queryKey, k1));
+	expect(queryKeysEqual(f1.queryKey, k1));
 }
 
 test "record dependency adds to topmost frame" {
@@ -152,30 +152,30 @@ test "record dependency adds to topmost frame" {
 	pushFrame(stack, k2);
 	recordDependency(stack, depKey, 999);
 	const f2 = popFrame(stack);
-	check(f2.deps.length === 1);
-	check(queryKeysEqual(f2.deps[0].depKey, depKey));
-	check(f2.deps[0].expectedHash === 999);
+	expect(f2.deps.length === 1);
+	expect(queryKeysEqual(f2.deps[0].depKey, depKey));
+	expect(f2.deps[0].expectedHash === 999);
 	const f1 = popFrame(stack);
-	check(f1.deps.length === 0);
+	expect(f1.deps.length === 0);
 }
 
 test "record on empty stack is no-op" {
 	const stack = createDependencyStack();
 	const depKey = createQueryKey(TaQueryKind.FileText, 0);
 	recordDependency(stack, depKey, 0);
-	check(!hasActiveFrame(stack));
+	expect(!hasActiveFrame(stack));
 }
 
 test "minDurability tracks lowest" {
 	const stack = createDependencyStack();
 	const key = createQueryKey(TaQueryKind.Parse, 0);
 	pushFrame(stack, key);
-	check(stack.frames[0].minDurability === TaDurability.High);
+	expect(stack.frames[0].minDurability === TaDurability.High);
 	recordDurability(stack, TaDurability.Medium);
-	check(stack.frames[0].minDurability === TaDurability.Medium);
+	expect(stack.frames[0].minDurability === TaDurability.Medium);
 	recordDurability(stack, TaDurability.Low);
-	check(stack.frames[0].minDurability === TaDurability.Low);
+	expect(stack.frames[0].minDurability === TaDurability.Low);
 	recordDurability(stack, TaDurability.High);  // doesn't raise
-	check(stack.frames[0].minDurability === TaDurability.Low);
+	expect(stack.frames[0].minDurability === TaDurability.Low);
 	popFrame(stack);
 }

@@ -15,7 +15,7 @@
 //   }
 
 import {
-	Node, NodeKind, SourceLocation, NF_CLOSURE,
+	Node, NodeKind, SourceLocation, NF_CLOSURE, createNode,
 	ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData,
 	FunctionExprData, MethodDeclData, ConstructorDeclData,
 	ExportDeclData, ClassDeclData, DecoratedDeclData,
@@ -28,10 +28,11 @@ import {
 import { TransformContext, NameSet, nameSetAdd, nameSetContains } from "../context";
 import { mapChildren, isFuncBoundary } from "../walker";
 import {
-	makeIdent, makeMember, makeMoveExpr,
-	makeFnDecl, makeInterfaceDecl, makeObjectLiteral,
+	makeIdent, makeMember, makeMoveExpr, makeReturn, makeBlock,
+	makeFnDecl, makeInterfaceDecl, makeObjectLiteral, makeHiddenDeref,
+	syntheticToken,
 } from "../util";
-import { check } from "std/testing";
+import { TypeKind, createTypeRef, createPtr } from "../../checker/types";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts } from "../testUtil";
 
 // ===== Scope Stack =====
@@ -97,6 +98,11 @@ function isBuiltinName(name: string): boolean {
 // ===== Lift State =====
 // Accumulated during the walk — env structs and lifted functions prepended to program.
 
+interface VarTypeEntry {
+	name: string;
+	typeStr: string;
+}
+
 interface LiftState {
 	liftedFunctions: Node[];
 	envStructs: Node[];
@@ -106,6 +112,20 @@ interface LiftState {
 	lastUseCaptures: NameSet;  // Phase F: captures that are last-use (can be moved)
 	currentStmts: Node[];      // Phase F: current statement list (for last-use scan)
 	currentStmtIdx: number;    // Phase F: current statement index in list
+	varTypes: VarTypeEntry[];  // Variable name → type string for env field typing
+}
+
+function registerVarType(state: LiftState, name: string, typeStr: string): void {
+	state.varTypes.push({ name, typeStr });
+}
+
+function lookupVarType(state: LiftState, name: string): string {
+	let i = state.varTypes.length - 1;
+	while (i >= 0) {
+		if (state.varTypes[i].name === name) return state.varTypes[i].typeStr;
+		i -= 1;
+	}
+	return "unknown";
 }
 
 function createLiftState(): LiftState {
@@ -118,6 +138,7 @@ function createLiftState(): LiftState {
 		lastUseCaptures: [],
 		currentStmts: [],
 		currentStmtIdx: 0,
+		varTypes: [],
 	};
 	return state;
 }
@@ -194,16 +215,25 @@ function collectCaptures(node: Node, ss: ScopeStack, cc: NameSet): void {
 // ===== Body Rewriting =====
 // Replace captured Identifier nodes with _envP.name MemberExpr.
 
-function rewriteNode(node: Node, captures: NameSet): Node {
+function rewriteNode(node: Node, captures: NameSet, envTypeName: string): Node {
 	if (node.kind === NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
 		if (nameSetContains(captures, d.name)) {
-			return makeMember(makeIdent("_envP", node.location), d.name, node.location);
+			// Nim parity: env param is void*, cast+deref to typed pointer for field access
+			// Produces: (*((EnvType*)_envP)).field  in C
+			const envIdent = makeIdent("_envP", node.location);
+			const ptrType = createPtr(createTypeRef(envTypeName));
+			const cast = createNode(NodeKind.TypeAssertion, { asExpr: envIdent, asType: envTypeName }, syntheticToken(node.location));
+			cast.nodeType = ptrType;
+			const deref = makeHiddenDeref(cast, node.location);
+			const member = makeMember(deref, d.name, node.location);
+			if (node.nodeType !== null) member.nodeType = node.nodeType;
+			return member;
 		}
 		return node;
 	}
 	if (isFuncBoundary(node)) return node;
-	mapChildren(node, (child: Node): Node => rewriteNode(child, captures));
+	mapChildren(node, (child: Node): Node => rewriteNode(child, captures, envTypeName));
 	return node;
 }
 
@@ -218,30 +248,37 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 	const envName = "$Env_" + state.currentFnName + "_" + counter.toString();
 	const liftedName = "$lifted_" + state.currentFnName + "_" + counter.toString();
 
-	// Env struct
+	// Env struct — resolve captured variable types (Nim: createEnvObj uses actual types)
 	const envFields: string[] = [];
 	const envFieldTypes: string[] = [];
 	for (const name of captures) {
 		envFields.push(name);
-		envFieldTypes.push("unknown");
+		envFieldTypes.push(lookupVarType(state, name));
 	}
 	state.envStructs.push(makeInterfaceDecl(envName, envFields, envFieldTypes, loc));
 
-	// Rewrite body to replace captured vars with _envP.name
+	// Rewrite body to replace captured vars with (*((EnvType*)_envP)).name
+	// _envP is void* at runtime; each access casts+derefs to the typed env struct.
 	// Must capture return value: for expression bodies (single Identifier), rewriteNode
 	// returns a NEW node (MemberExpr); for block bodies, it mutates children in-place.
-	const rewrittenBody = rewriteNode(body, captures);
+	let rewrittenBody = rewriteNode(body, captures, envName);
 
-	// Lifted function params: _envP first, then original params
+	// Expression bodies (arrow without block) need wrapping: expr → { return expr; }
+	if (rewrittenBody.kind !== NodeKind.BlockStmt) {
+		rewrittenBody = makeBlock([makeReturn(rewrittenBody, loc)], loc);
+	}
+
+	// Lifted function params: _envP (void*) first, then original params
 	// env-first matches closure call convention: callee.fn(callee.env, args...)
+	// void* matches msClosure.env type — no cast needed at call site
 	const liftedParams: string[] = ["_envP"];
-	const liftedParamTypes: string[] = [envName];
+	const liftedParamTypes: string[] = ["void*"];
 	for (const p of params) { liftedParams.push(p); }
 	for (const t of paramTypes) { liftedParamTypes.push(t); }
 
 	state.liftedFunctions.push(makeFnDecl(liftedName, liftedParams, liftedParamTypes, rewrittenBody, flags, returnType, loc));
 
-	return makeClosurePair(liftedName, captures, state.lastUseCaptures, loc);
+	return makeClosurePair(liftedName, envName, captures, state.lastUseCaptures, loc);
 }
 
 function liftArrow(node: Node, captures: NameSet, state: LiftState): Node {
@@ -258,11 +295,15 @@ function liftFuncExpr(node: Node, captures: NameSet, state: LiftState): Node {
 function liftNonCapturing(body: Node, params: string[], paramTypes: string[], flags: string, returnType: string, state: LiftState, loc: SourceLocation): Node {
 	state.closureCounter += 1;
 	const liftedName = "$fn_" + state.currentFnName + "_" + state.closureCounter.toString();
-	state.liftedFunctions.push(makeFnDecl(liftedName, params, paramTypes, body, flags, returnType, loc));
+	let liftedBody = body;
+	if (liftedBody.kind !== NodeKind.BlockStmt) {
+		liftedBody = makeBlock([makeReturn(liftedBody, loc)], loc);
+	}
+	state.liftedFunctions.push(makeFnDecl(liftedName, params, paramTypes, liftedBody, flags, returnType, loc));
 	return makeIdent(liftedName, loc);
 }
 
-function makeClosurePair(liftedName: string, captures: NameSet, lastUseCaptures: NameSet, loc: SourceLocation): Node {
+function makeClosurePair(liftedName: string, envTypeName: string, captures: NameSet, lastUseCaptures: NameSet, loc: SourceLocation): Node {
 	const envKeys: string[] = [];
 	const envValues: Node[] = [];
 	for (const name of captures) {
@@ -275,6 +316,8 @@ function makeClosurePair(liftedName: string, captures: NameSet, lastUseCaptures:
 		}
 	}
 	const envObj = makeObjectLiteral(envKeys, envValues, loc);
+	// Set nodeType so codegen knows the env struct type for heap allocation
+	envObj.nodeType = createTypeRef(envTypeName);
 
 	const closureKeys: string[] = [];
 	closureKeys.push("fn");
@@ -328,10 +371,31 @@ function walkLift(node: Node, state: LiftState): void {
 				state.currentFnName = d.fnName;
 				defineVar(state.ss, d.fnName);
 			}
-			// Push function boundary, define params
+			// Push function boundary, define params + register types for env field resolution
+			// Prefer resolved types from nodeType (handles type aliases like NumFn → Function)
 			pushFuncBoundary(state.ss);
-			for (const p of d.params) {
-				defineVar(state.ss, p);
+			const fnType = node.nodeType;
+			let pi = 0;
+			while (pi < d.params.length) {
+				defineVar(state.ss, d.params[pi]);
+				let paramTypeStr = (pi < d.fnParamTypes.length) ? d.fnParamTypes[pi] : "";
+				// If checker resolved Function type for this param, use "msClosure" directly.
+				// Also check TypeReference with "=>" annotation (unresolved type alias).
+				if (fnType !== null && fnType.typeChildren !== null && pi < fnType.typeChildren.length) {
+					const pt = fnType.typeChildren[pi];
+					if (pt !== null && pt.kind === TypeKind.Function) {
+						paramTypeStr = "msClosure";
+					} else if (pt !== null && pt.kind === TypeKind.TypeReference) {
+						const tn = pt.typeName;
+						if (tn.length > 0 && (tn.indexOf("=>") >= 0 || tn.charAt(0) === "(")) {
+							paramTypeStr = "msClosure";
+						}
+					}
+				}
+				if (paramTypeStr !== "") {
+					registerVarType(state, d.params[pi], paramTypeStr);
+				}
+				pi += 1;
 			}
 			// Walk body — this may transform inner closures
 			walkLiftBody(d.fnBody, state);
@@ -342,6 +406,9 @@ function walkLift(node: Node, state: LiftState): void {
 			const d = node.data as VariableDeclData;
 			d.initializer = walkOrLift(d.initializer, state);
 			defineVar(state.ss, d.declName);
+			if (d.declType !== "") {
+				registerVarType(state, d.declName, d.declType);
+			}
 		},
 		NodeKind.ExprStmt => {
 			const d = node.data as ExprStmtData;
@@ -518,39 +585,39 @@ export function lowerLambda(program: Node, ctx: TransformContext): Node {
 }
 
 // ===== Tests =====
-test "no closures passthrough" { check(stmtCountAfter("const x = 1;", lowerLambda) === 1); }
+test "no closures passthrough" { expect(stmtCountAfter("const x = 1;", lowerLambda) === 1); }
 
-test "function without capture unchanged" { check(firstStmtKindAfter("function foo(x) { return x; }", lowerLambda) === NodeKind.FunctionDecl); }
+test "function without capture unchanged" { expect(firstStmtKindAfter("function foo(x) { return x; }", lowerLambda) === NodeKind.FunctionDecl); }
 
 test "non-capturing arrow lifted" {
 	// Arrow lifted to module-level FunctionDecl + original VariableDecl = 2 stmts
-	check(stmtCountAfter("const f = (x) => x + 1;", lowerLambda) === 2);
-	check(firstStmtKindAfter("const f = (x) => x + 1;", lowerLambda) === NodeKind.FunctionDecl);
+	expect(stmtCountAfter("const f = (x) => x + 1;", lowerLambda) === 2);
+	expect(firstStmtKindAfter("const f = (x) => x + 1;", lowerLambda) === NodeKind.FunctionDecl);
 }
 
 test "non-capturing arrow in function lifted" {
 	// Inner arrow lifted to program level: lifted fn + outer fn = 2 stmts
-	check(stmtCountAfter("function f(x) { const g = (y) => y + 1; }", lowerLambda) === 2);
+	expect(stmtCountAfter("function f(x) { const g = (y) => y + 1; }", lowerLambda) === 2);
 }
 
 test "arrow with capture generates 3 stmts" {
 	// function outer() { let x = 1; const f = () => x; }
 	// → env struct + lifted fn + original fn = 3 stmts
-	check(stmtCountAfter("function outer() { let x = 1; const f = () => x; }", lowerLambda) === 3);
+	expect(stmtCountAfter("function outer() { let x = 1; const f = () => x; }", lowerLambda) === 3);
 }
 
-test "env struct is first stmt" { check(firstStmtKindAfter("function outer() { let x = 1; const f = () => x; }", lowerLambda) === NodeKind.InterfaceDecl); }
+test "env struct is first stmt" { expect(firstStmtKindAfter("function outer() { let x = 1; const f = () => x; }", lowerLambda) === NodeKind.InterfaceDecl); }
 
 test "builtin name not captured" {
 	// Arrow referencing builtin is non-capturing, but still lifted: lifted fn + outer fn = 2
-	check(stmtCountAfter("function f() { const g = () => console; }", lowerLambda) === 2);
+	expect(stmtCountAfter("function f() { const g = () => console; }", lowerLambda) === 2);
 }
 
-test "multiple captures one env" { check(stmtCountAfter("function f() { let a = 1; let b = 2; const g = () => a + b; }", lowerLambda) === 3); }
+test "multiple captures one env" { expect(stmtCountAfter("function f() { let a = 1; let b = 2; const g = () => a + b; }", lowerLambda) === 3); }
 
 test "non-capturing function expr lifted" {
-	check(stmtCountAfter("const f = function(x) { return x + 1; };", lowerLambda) === 2);
-	check(firstStmtKindAfter("const f = function(x) { return x + 1; };", lowerLambda) === NodeKind.FunctionDecl);
+	expect(stmtCountAfter("const f = function(x) { return x + 1; };", lowerLambda) === 2);
+	expect(firstStmtKindAfter("const f = function(x) { return x + 1; };", lowerLambda) === NodeKind.FunctionDecl);
 }
 
 test "isCaptureLastUse: var not used after closure" {
@@ -562,7 +629,7 @@ test "isCaptureLastUse: var not used after closure" {
 		const fd = stmts[0].data as FunctionDeclData;
 		const bd = fd.fnBody.data as BlockStmtData;
 		// x captured at index 1, not used at index 2+ (no stmts after)
-		check(isCaptureLastUse("x", 1, bd.statements));
+		expect(isCaptureLastUse("x", 1, bd.statements));
 	}
 }
 
@@ -573,6 +640,6 @@ test "isCaptureLastUse: var used after closure" {
 		const fd = stmts[0].data as FunctionDeclData;
 		const bd = fd.fnBody.data as BlockStmtData;
 		// x captured at index 1, but used in return at index 2
-		check(!isCaptureLastUse("x", 1, bd.statements));
+		expect(!isCaptureLastUse("x", 1, bd.statements));
 	}
 }

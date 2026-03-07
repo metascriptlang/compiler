@@ -2,12 +2,12 @@
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
 import {
-	Node, NodeKind, createNode, NF_SEM,
+	Node, NodeKind, NodeData, createNode, NF_SEM,
 	IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData,
 	CallExprData, MemberExprData, ArrayAccessData,
 	ObjectLiteralData, ArrayLiteralData, ConditionalExprData,
 	TypeAssertionData, SpreadExprData, NewExprData, TryExprData,
-	AwaitExprData, YieldExprData, MoveExprData, OutExprData,
+	AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData,
 	HiddenDerefData, HiddenStdConvData,
 	ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData,
 	FunctionDeclData, BlockStmtData, ExprStmtData,
@@ -18,7 +18,7 @@ import {
 	unknownType, numberType, stringType, booleanType, charType,
 	voidType, nullType, errorType,
 	createArray, createSpan, createFunction, createTypeRef, substituteType, instantiateGeneric,
-	isNumeric, isStringType, isCallable, getReturnType, getElementType, getProperty,
+	isNumeric, isStringType, isCallable, getReturnType, getElementType, getProperty, sizeOfType,
 	typeNameOf,
 	unifyType, createUnifyBindings, hasGenericParams,
 	getMinArity,
@@ -264,6 +264,14 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			checkExpr(ctx, d.outArg, null as unknown as Type);
 			unknownType();
 		},
+		NodeKind.SizeofExpr => {
+			const d = node.data as SizeofExprData;
+			const resolved = resolveAnnotation(d.sizeofType, ctx);
+			const size = sizeOfType(resolved);
+			node.kind = NodeKind.NumberLiteral;
+			node.data = { value: size } as unknown as NodeData;
+			numberType();
+		},
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => {
 			const d = node.data as HiddenDerefData;
 			checkExpr(ctx, d.expr, null as unknown as Type);
@@ -400,12 +408,12 @@ function fillDefaultArgsForNode(ctx: CheckerContext, callNode: Node, fnName: str
 function checkTryExpr(ctx: CheckerContext, node: Node): Type {
 	const d = node.data as TryExprData;
 	const argType = checkExpr(ctx, d.tryArg, null as unknown as Type);
-	// Store full Result<T,E> on node for resultDesugar to access .ok/.value/.error
-	node.nodeType = argType;
+	// tryArg.nodeType = Result<T,E> (set by checkExpr on the CallExpr)
+	// resultDesugar reads tryArg.nodeType for the full Result type.
+	// TryExpr itself evaluates to T (the unwrapped value).
 	if (d.hasCatch) {
 		checkExpr(ctx, d.catchVal, null as unknown as Type);
 	}
-	// TryExpr evaluates to T (unwrapped value), not Result<T,E>
 	if (argType !== null && argType.kind === TypeKind.Result && argType.typeReturn !== null) {
 		return argType.typeReturn;
 	}
@@ -529,7 +537,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 		// Type-check only provided args (defaults are trusted)
 		for (let pi = 0; pi < calleeType.typeChildren.length && pi < argTypes.length; pi += 1) {
 			const paramType = calleeType.typeChildren[pi];
-			if (argTypes[pi] === null || argTypes[pi] === undefined) continue;
+			if (argTypes[pi] === null || argTypes[pi] === null) continue;
 			if (paramType.kind !== TypeKind.Unknown && paramType.kind !== TypeKind.GenericParam
 				&& paramType.kind !== TypeKind.Function
 				&& argTypes[pi].kind !== TypeKind.Unknown && argTypes[pi].kind !== TypeKind.Error
@@ -558,7 +566,7 @@ export function inferGenericReturn(fnType: Type, argTypes: Type[], expectedType:
 	// Collect all bindings from all params via unification (handles nested generics)
 	const b = createUnifyBindings();
 	for (let i = 0; i < fnType.typeChildren.length && i < argTypes.length; i += 1) {
-		if (argTypes[i] !== null && argTypes[i] !== undefined && argTypes[i].kind !== TypeKind.Unknown) {
+		if (argTypes[i] !== null && argTypes[i] !== null && argTypes[i].kind !== TypeKind.Unknown) {
 			unifyType(fnType.typeChildren[i], argTypes[i], b);
 		}
 	}
@@ -889,7 +897,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 						// Create a synthetic symbol for this member to satisfy the validator
 						const synthSym = makeSymbol(mName, SymbolKind.Method, objType.typeChildren[mi], false);
 						synthSym.state = SymbolState.Shaped;
-						// Transfer @runtime metadata from Type to Symbol
+						// Transfer nativeName metadata from Type to Symbol
 						// (collectPass stores nativeName in Type.typeName for class methods)
 						if (objType.typeChildren[mi].typeName !== "") {
 							synthSym.nativeName = objType.typeChildren[mi].typeName;
@@ -910,6 +918,13 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 		const lengthSym = makeSymbol("length", SymbolKind.Property, numberType(), false);
 		lengthSym.state = SymbolState.Shaped;
 		node.resolvedSym = lengthSym;
+		return numberType();
+	}
+	// String .code — compile-time char code, folded by constantFolding transform
+	if (d.property === "code" && objType.kind === TypeKind.String) {
+		const codeSym = makeSymbol("code", SymbolKind.Property, numberType(), false);
+		codeSym.state = SymbolState.Shaped;
+		node.resolvedSym = codeSym;
 		return numberType();
 	}
 	// String-specific properties: .byteLength, .unicodeLength

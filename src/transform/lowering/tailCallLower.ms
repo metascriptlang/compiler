@@ -28,7 +28,6 @@ import {
 	makeIdent, makeAssign, makeExprStmt, makeContinue,
 	extractBodyStmts,
 } from "../util";
-import { check } from "std/testing";
 import { firstStmtKindAfter, stmtCountAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -164,14 +163,14 @@ function buildTailCallReplacement(callExpr: Node, params: string[], loc: SourceL
 }
 
 // ===== Tests =====
-test "non-recursive unchanged" { check(firstStmtKindAfter("function foo(x: number): number { return x + 1; }", lowerTailCall) === NodeKind.FunctionDecl); }
+test "non-recursive unchanged" { expect(firstStmtKindAfter("function foo(x: number): number { return x + 1; }", lowerTailCall) === NodeKind.FunctionDecl); }
 
-test "simple passthrough" { check(stmtCountAfter("const x = 1;", lowerTailCall) === 1); }
+test "simple passthrough" { expect(stmtCountAfter("const x = 1;", lowerTailCall) === 1); }
 
-test "while unchanged" { check(firstStmtKindAfter("while (true) {}", lowerTailCall) === NodeKind.WhileStmt); }
+test "while unchanged" { expect(firstStmtKindAfter("while (true) {}", lowerTailCall) === NodeKind.WhileStmt); }
 
-test "if stmt unchanged" { check(firstStmtKindAfter("if (x) {}", lowerTailCall) === NodeKind.IfStmt); }
+test "if stmt unchanged" { expect(firstStmtKindAfter("if (x) {}", lowerTailCall) === NodeKind.IfStmt); }
 
-test "non-function passthrough" { check(stmtCountAfter("let a = 1; let b = 2;", lowerTailCall) === 2); }
+test "non-function passthrough" { expect(stmtCountAfter("let a = 1; let b = 2;", lowerTailCall) === 2); }
 
-test "arrow function unchanged" { check(firstStmtKindAfter("const f = (x: number): number => x + 1;", lowerTailCall) === NodeKind.VariableDecl); }
+test "arrow function unchanged" { expect(firstStmtKindAfter("const f = (x: number): number => x + 1;", lowerTailCall) === NodeKind.VariableDecl); }

@@ -5,7 +5,7 @@
 // module-qualified proc names, field/local manglers.
 
 import { sliceStr, charAt } from "../../utils/string";
-import { check } from "std/testing";
+
 
 // ===== C Keywords — identifiers that need escaping =====
 
@@ -221,80 +221,80 @@ export function safeName(name: string): string {
 
 // ===== Tests =====
 test "simple names pass through" {
-	check(mangle("foo") === "foo");
-	check(mangle("bar123") === "bar123");
-	check(mangle("_private") === "_private");
+	expect(mangle("foo") === "foo");
+	expect(mangle("bar123") === "bar123");
+	expect(mangle("_private") === "_private");
 }
 
-test "leading digit" { check(mangle("3d") === "X3d"); }
+test "leading digit" { expect(mangle("3d") === "X3d"); }
 
 test "special chars get word replacements" {
-	check(mangle("a+b") === "aplusb_");
-	check(mangle("x=y") === "xeqy_");
-	check(mangle("<") === "lt_");
-	check(mangle("a.b") === "adotb_");
+	expect(mangle("a+b") === "aplusb_");
+	expect(mangle("x=y") === "xeqy_");
+	expect(mangle("<") === "lt_");
+	expect(mangle("a.b") === "adotb_");
 }
 
-test "empty name" { check(mangle("") === "empty_"); }
+test "empty name" { expect(mangle("") === "empty_"); }
 
-test "multiple special chars" { check(mangle("a+b*c") === "aplusbstarc_"); }
+test "multiple special chars" { expect(mangle("a+b*c") === "aplusbstarc_"); }
 
 test "C keywords detected" {
-	check(isCKeyword("int"));
-	check(isCKeyword("void"));
-	check(isCKeyword("return"));
-	check(isCKeyword("struct"));
+	expect(isCKeyword("int"));
+	expect(isCKeyword("void"));
+	expect(isCKeyword("return"));
+	expect(isCKeyword("struct"));
 }
 
 test "non-keywords pass" {
-	check(!isCKeyword("foo"));
-	check(!isCKeyword("myVar"));
+	expect(!isCKeyword("foo"));
+	expect(!isCKeyword("myVar"));
 }
 
-test "mangleProcName" { check(mangleProcName("myFunc", "mymod", 42) === "myFunc__mymod_u42"); }
+test "mangleProcName" { expect(mangleProcName("myFunc", "mymod", 42) === "myFunc__mymod_u42"); }
 
-test "mangleProcName with special" { check(mangleProcName("a+b", "ops", 1) === "aplusb___ops_u1"); }
+test "mangleProcName with special" { expect(mangleProcName("a+b", "ops", 1) === "aplusb___ops_u1"); }
 
 test "normal field" {
-	check(mangleFieldName("x") === "x");
-	check(mangleFieldName("myField") === "myField");
+	expect(mangleFieldName("x") === "x");
+	expect(mangleFieldName("myField") === "myField");
 }
 
 test "keyword field" {
-	check(mangleFieldName("int") === "int_0");
-	check(mangleFieldName("return") === "return_0");
+	expect(mangleFieldName("int") === "int_0");
+	expect(mangleFieldName("return") === "return_0");
 }
 
 test "top scope" {
-	check(mangleLocalName("x", 0) === "x");
-	check(mangleLocalName("foo", 0) === "foo");
+	expect(mangleLocalName("x", 0) === "x");
+	expect(mangleLocalName("foo", 0) === "foo");
 }
 
 test "nested scope" {
-	check(mangleLocalName("x", 1) === "x_1");
-	check(mangleLocalName("x", 3) === "x_3");
+	expect(mangleLocalName("x", 1) === "x_1");
+	expect(mangleLocalName("x", 3) === "x_3");
 }
 
-test "keyword at top scope" { check(mangleLocalName("int", 0) === "int_0"); }
+test "keyword at top scope" { expect(mangleLocalName("int", 0) === "int_0"); }
 
-test "normal name" { check(safeName("foo") === "foo"); }
+test "normal name" { expect(safeName("foo") === "foo"); }
 
 test "keyword gets suffix" {
-	check(safeName("int") === "int_");
-	check(safeName("void") === "void_");
+	expect(safeName("int") === "int_");
+	expect(safeName("void") === "void_");
 }
 
-test "simple lowercase path" { check(mangleModuleName("mymod") === "mymod"); }
+test "simple lowercase path" { expect(mangleModuleName("mymod") === "mymod"); }
 
-test "path separators become Z" { check(mangleModuleName("src/codegen/c") === "srcZcodegenZc"); }
+test "path separators become Z" { expect(mangleModuleName("src/codegen/c") === "srcZcodegenZc"); }
 
-test "dots become O" { check(mangleModuleName("foo.bar") === "fooObar"); }
+test "dots become O" { expect(mangleModuleName("foo.bar") === "fooObar"); }
 
 test "uppercase becomes ordinal" {
-	check(mangleModuleName("MyClass") === "77y67lass");
-	check(mangleModuleName("AB") === "6566");
+	expect(mangleModuleName("MyClass") === "77y67lass");
+	expect(mangleModuleName("AB") === "6566");
 }
 
-test "underscore becomes ordinal" { check(mangleModuleName("my_mod") === "my95mod"); }
+test "underscore becomes ordinal" { expect(mangleModuleName("my_mod") === "my95mod"); }
 
-test "full path with mixed case" { check(mangleModuleName("src/codegen/MyGen") === "srcZcodegenZ77y71en"); }
+test "full path with mixed case" { expect(mangleModuleName("src/codegen/MyGen") === "srcZcodegenZ77y71en"); }

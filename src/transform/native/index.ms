@@ -6,7 +6,7 @@
 //  3. pointerParam        — flag parameters that are pointers in C (interfaces, classes)
 //  4. rangeCheckInject    — insert runtime range checks for narrowing integer casts
 //  5. optionalCoercion    — wrap T returns for T|null return types
-//  6. builtinLower        — rewrite @runtime/@builtin calls to C-compatible AST
+//  6. builtinLower        — rewrite @builtin calls + extern extensions to C-compatible AST
 //
 // NOTE: moveExprLower removed — MoveExpr survives to Phase 4 (analyzer) and Phase 5 (codegen).
 // Analyzer handles RC semantics (wasMoved, errFailedMove). Codegen unwraps to inner expression.

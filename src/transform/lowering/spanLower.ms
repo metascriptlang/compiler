@@ -19,7 +19,7 @@ import { TransformContext, freshTemp } from "../context";
 import { walkNode } from "../walker";
 import {
 	makeMember, makeTypedObjectLiteral, makeNumber, makeBinary,
-	makeVarDecl, makeTypedIdent, makeHiddenAddr,
+	makeVarDecl, makeTypedIdent, makeHiddenAddr, makeObjectLiteral,
 } from "../util";
 
 export function spanLower(program: Node, ctx: TransformContext): Node {

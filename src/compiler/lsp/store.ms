@@ -2,7 +2,7 @@
 //
 // Tracks open documents by URI. Used by handlers + server.
 
-import { check } from "std/testing";
+
 
 // ===== Types =====
 
@@ -58,19 +58,19 @@ test "store and get" {
 	const store = createDocumentStore();
 	storeDocument(store, "file:///a.ms", "const x = 1;", 1);
 	const doc = getDocument(store, "file:///a.ms");
-	check(doc !== null);
-	check(doc.source === "const x = 1;");
-	check(doc.version === 1);
+	expect(doc !== null);
+	expect(doc.source === "const x = 1;");
+	expect(doc.version === 1);
 }
 
 test "update existing" {
 	const store = createDocumentStore();
 	storeDocument(store, "file:///a.ms", "const x = 1;", 1);
 	storeDocument(store, "file:///a.ms", "const x = 2;", 2);
-	check(store.documents.length === 1);
+	expect(store.documents.length === 1);
 	const doc = getDocument(store, "file:///a.ms");
-	check(doc.source === "const x = 2;");
-	check(doc.version === 2);
+	expect(doc.source === "const x = 2;");
+	expect(doc.version === 2);
 }
 
 test "remove document" {
@@ -78,11 +78,11 @@ test "remove document" {
 	storeDocument(store, "file:///a.ms", "const x = 1;", 1);
 	removeDocument(store, "file:///a.ms");
 	const doc = getDocument(store, "file:///a.ms");
-	check(doc === null);
+	expect(doc === null);
 }
 
 test "not found" {
 	const store = createDocumentStore();
 	const doc = getDocument(store, "file:///nope.ms");
-	check(doc === null);
+	expect(doc === null);
 }

@@ -1,7 +1,6 @@
 // Raiser VM — Bytecode execution demo
 // Usage: msc test src/raiser/repl.ms
 
-import { check } from "std/testing";
 import { RaiserOpcode, raiserABC, raiserABx, raiserAx } from "./bytecode";
 import { raiserInt, raiserToString } from "./value";
 import { makeTestModule } from "./module";
@@ -20,7 +19,7 @@ test "2 + 2 = 4" {
 	load(ctx, mod);
 	execute(ctx);
 	console.log("  2 + 2 = " + raiserToString(ctx.lastResult));
-	check(ctx.lastResult.intVal === 4);
+	expect(ctx.lastResult.intVal === 4);
 }
 
 test "(2 + 3) * 4 = 20" {
@@ -39,7 +38,7 @@ test "(2 + 3) * 4 = 20" {
 	load(ctx, mod);
 	execute(ctx);
 	console.log("  (2 + 3) * 4 = " + raiserToString(ctx.lastResult));
-	check(ctx.lastResult.intVal === 20);
+	expect(ctx.lastResult.intVal === 20);
 }
 
 test "sum 1..5 = 15 (loop)" {
@@ -61,5 +60,5 @@ test "sum 1..5 = 15 (loop)" {
 	load(ctx, mod);
 	execute(ctx);
 	console.log("  sum 1..5 = " + raiserToString(ctx.lastResult));
-	check(ctx.lastResult.intVal === 15);
+	expect(ctx.lastResult.intVal === 15);
 }

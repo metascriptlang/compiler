@@ -1,6 +1,5 @@
 // String Utilities - DRC-safe string helpers (no indexOf/includes)
 
-import { check } from "std/testing";
 
 export function endsWith(s: string, suffix: string): boolean {
 	if (s.length < suffix.length) return false;
@@ -71,18 +70,18 @@ export function parseIntStr(s: string): number {
 	return result;
 }
 
-test "endsWith match" { check(endsWith("hello.ms", ".ms")); }
+test "endsWith match" { expect(endsWith("hello.ms", ".ms")); }
 
-test "endsWith no match" { check(!endsWith("hello.ms", ".js")); }
+test "endsWith no match" { expect(!endsWith("hello.ms", ".js")); }
 
-test "endsWith too short" { check(!endsWith("ab", "abc")); }
+test "endsWith too short" { expect(!endsWith("ab", "abc")); }
 
-test "endsWith exact" { check(endsWith(".h", ".h")); }
+test "endsWith exact" { expect(endsWith(".h", ".h")); }
 
-test "startsWith match" { check(startsWith("std/testing", "std/")); }
+test "startsWith match" { expect(startsWith("std/testing", "std/")); }
 
-test "startsWith no match" { check(!startsWith("./foo", "std/")); }
+test "startsWith no match" { expect(!startsWith("./foo", "std/")); }
 
-test "startsWith too short" { check(!startsWith("st", "std/")); }
+test "startsWith too short" { expect(!startsWith("st", "std/")); }
 
-test "startsWith exact" { check(startsWith("abc", "abc")); }
+test "startsWith exact" { expect(startsWith("abc", "abc")); }

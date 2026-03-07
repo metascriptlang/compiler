@@ -1,6 +1,5 @@
 // Raiser VM — Module and Function structures
 
-import { check } from "std/testing";
 import { RaiserInstruction, RaiserOpcode, raiserABC, raiserABx } from "./bytecode";
 import { RaiserValue, RaiserValueKind, raiserInt, raiserNil } from "./value";
 
@@ -83,11 +82,11 @@ test "create function" {
 	];
 	const consts: RaiserValue[] = [];
 	const func = createRaiserFunction("main", code, consts, 0, 0, 4);
-	check(getFuncName(func) === "main");
-	check(getFuncCodeLen(func) === 1);
-	check(getFuncConstLen(func) === 0);
-	check(func.arity === 0);
-	check(func.maxRegs === 4);
+	expect(getFuncName(func) === "main");
+	expect(getFuncCodeLen(func) === 1);
+	expect(getFuncConstLen(func) === 0);
+	expect(func.arity === 0);
+	expect(func.maxRegs === 4);
 }
 
 test "function with constants" {
@@ -97,10 +96,10 @@ test "function with constants" {
 	];
 	const consts: RaiserValue[] = [raiserInt(42)];
 	const func = createRaiserFunction("f", code, consts, 0, 1, 4);
-	check(getFuncCodeLen(func) === 2);
-	check(getFuncConstLen(func) === 1);
+	expect(getFuncCodeLen(func) === 2);
+	expect(getFuncConstLen(func) === 1);
 	const c0 = getFuncConst(func, 0);
-	check(c0.intVal === 42);
+	expect(c0.intVal === 42);
 }
 
 test "create module" {
@@ -108,9 +107,9 @@ test "create module" {
 		[raiserABC(RaiserOpcode.Halt, 0, 0, 0)],
 		[]
 	);
-	check(mod.name === "test");
-	check(mod.functions.length === 1);
-	check(mod.entry === 0);
+	expect(mod.name === "test");
+	expect(mod.functions.length === 1);
+	expect(mod.entry === 0);
 }
 
 test "module entry function" {
@@ -122,8 +121,8 @@ test "module entry function" {
 		[raiserInt(99)]
 	);
 	const entry = getModuleEntry(mod);
-	check(getFuncName(entry) === "test");
-	check(getFuncCodeLen(entry) === 2);
+	expect(getFuncName(entry) === "test");
+	expect(getFuncCodeLen(entry) === 2);
 	const inst0 = getFuncInst(entry, 0);
-	check(inst0.op === RaiserOpcode.LoadConst);
+	expect(inst0.op === RaiserOpcode.LoadConst);
 }

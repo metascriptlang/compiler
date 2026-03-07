@@ -4,7 +4,21 @@
 // with self-referencing anonymous struct types (MsAnon collision).
 // Function accessors instead of const singletons to avoid closure capture bugs.
 
-import { check } from "std/testing";
+
+
+// ===== Target Configuration (Nim parity: ConfigRef.target) =====
+// Module-level state set once at startup. Defaults to 64-bit.
+
+let targetPtrSize: number = 8;
+let targetIntSize: number = 8;
+
+export function setTargetSizes(ptrSize: number, intSize: number): void {
+	targetPtrSize = ptrSize;
+	targetIntSize = intSize;
+}
+
+export function getTargetPtrSize(): number { return targetPtrSize; }
+export function getTargetIntSize(): number { return targetIntSize; }
 
 // ===== TypeKind Enum =====
 
@@ -545,190 +559,271 @@ export function typeNameOf(t: Type): string {
 	};
 }
 
+// alignTo — round up offset to alignment boundary
+function alignTo(offset: number, align: number): number {
+	if (align <= 1) return offset;
+	const rem = offset % align;
+	if (rem === 0) return offset;
+	return offset + (align - rem);
+}
+
+// alignOfType — natural alignment for C ABI (target-aware)
+export function alignOfType(t: Type): number {
+	const ps = targetPtrSize;
+	if (t.kind === TypeKind.Object || t.kind === TypeKind.Tuple) {
+		return alignOfStruct(t);
+	}
+	if (t.kind === TypeKind.Distinct && t.typeReturn !== null) {
+		return alignOfType(t.typeReturn);
+	}
+	return match (t.kind) {
+		TypeKind.Boolean | TypeKind.Char => 1,
+		TypeKind.Int32 | TypeKind.Uint32 | TypeKind.Float32 | TypeKind.Enum => 4,
+		TypeKind.Number | TypeKind.Float64 => ps,
+		TypeKind.Int64 => ps,
+		TypeKind.CString | TypeKind.Ref | TypeKind.Ptr | TypeKind.Function => ps,
+		TypeKind.String | TypeKind.Array | TypeKind.Span => ps,
+		_ => 0,
+	};
+}
+
+function alignOfStruct(t: Type): number {
+	let maxAlign = 1;
+	if (t.typeChildren !== null) {
+		let i = 0;
+		while (i < t.typeChildren.length) {
+			const a = alignOfType(t.typeChildren[i]);
+			if (a > maxAlign) maxAlign = a;
+			i = i + 1;
+		}
+	}
+	return maxAlign;
+}
+
+// sizeOfType — compile-time sizeof for primitive and compound types (target-aware C ABI)
+// Mirrors Nim's computeSizeAlign: fields are aligned, struct is padded to maxAlign.
+export function sizeOfType(t: Type): number {
+	const ps = targetPtrSize;
+	if (t.kind === TypeKind.Object || t.kind === TypeKind.Tuple) {
+		return sizeOfStruct(t);
+	}
+	if (t.kind === TypeKind.Distinct && t.typeReturn !== null) {
+		return sizeOfType(t.typeReturn);
+	}
+	return match (t.kind) {
+		TypeKind.Boolean | TypeKind.Char => 1,
+		TypeKind.Int32 | TypeKind.Uint32 | TypeKind.Float32 | TypeKind.Enum => 4,
+		TypeKind.Number | TypeKind.Int64 | TypeKind.Float64 => ps,
+		TypeKind.String => ps * 2,
+		TypeKind.CString | TypeKind.Ref | TypeKind.Ptr => ps,
+		TypeKind.Function => ps * 2,
+		TypeKind.Array | TypeKind.Span => ps * 2,
+		_ => 0,
+	};
+}
+
+function sizeOfStruct(t: Type): number {
+	let offset = 0;
+	let maxAlign = 1;
+	if (t.typeChildren !== null) {
+		let i = 0;
+		while (i < t.typeChildren.length) {
+			const fieldSize = sizeOfType(t.typeChildren[i]);
+			const fieldAlign = alignOfType(t.typeChildren[i]);
+			if (fieldAlign > maxAlign) maxAlign = fieldAlign;
+			offset = alignTo(offset, fieldAlign);
+			offset = offset + fieldSize;
+			i = i + 1;
+		}
+	}
+	if (offset === 0) return 0;
+	return alignTo(offset, maxAlign);
+}
+
 // ===== Tests =====
 test "primitive kinds" {
-	check(numberType().kind === TypeKind.Number);
-	check(stringType().kind === TypeKind.String);
-	check(booleanType().kind === TypeKind.Boolean);
-	check(voidType().kind === TypeKind.Void);
-	check(nullType().kind === TypeKind.Null);
-	check(unknownType().kind === TypeKind.Unknown);
-	check(neverType().kind === TypeKind.Never);
-	check(errorType().kind === TypeKind.Error);
+	expect(numberType().kind === TypeKind.Number);
+	expect(stringType().kind === TypeKind.String);
+	expect(booleanType().kind === TypeKind.Boolean);
+	expect(voidType().kind === TypeKind.Void);
+	expect(nullType().kind === TypeKind.Null);
+	expect(unknownType().kind === TypeKind.Unknown);
+	expect(neverType().kind === TypeKind.Never);
+	expect(errorType().kind === TypeKind.Error);
 }
 
 test "createArray" {
 	const arrType = createArray(numberType());
-	check(arrType.kind === TypeKind.Array);
-	check(arrType.typeReturn.kind === TypeKind.Number);
+	expect(arrType.kind === TypeKind.Array);
+	expect(arrType.typeReturn.kind === TypeKind.Number);
 }
 
 test "createSizedArray" {
 	const arrType = createSizedArray(numberType(), 4);
-	check(arrType.kind === TypeKind.SizedArray);
-	check(arrType.typeReturn.kind === TypeKind.Number);
-	check(arrType.typeFlags === 4);
+	expect(arrType.kind === TypeKind.SizedArray);
+	expect(arrType.typeReturn.kind === TypeKind.Number);
+	expect(arrType.typeFlags === 4);
 }
 
 test "createSpan" {
 	const spanType = createSpan(numberType());
-	check(spanType.kind === TypeKind.Span);
-	check(spanType.typeReturn.kind === TypeKind.Number);
+	expect(spanType.kind === TypeKind.Span);
+	expect(spanType.typeReturn.kind === TypeKind.Number);
 }
 
 test "createFunction" {
 	const fnType = createFunction([numberType(), stringType()], ["a", "b"], booleanType());
-	check(fnType.kind === TypeKind.Function);
-	check(fnType.typeChildren.length === 2);
-	check(fnType.typeNames[0] === "a");
-	check(fnType.typeReturn.kind === TypeKind.Boolean);
+	expect(fnType.kind === TypeKind.Function);
+	expect(fnType.typeChildren.length === 2);
+	expect(fnType.typeNames[0] === "a");
+	expect(fnType.typeReturn.kind === TypeKind.Boolean);
 }
 
 test "createObject" {
 	const obj = createObject("Point", ["x"], [numberType()], false);
-	check(obj.kind === TypeKind.Object);
-	check(obj.typeName === "Point");
-	check(obj.typeNames.length === 1);
-	check(obj.typeChildren.length === 1);
-	check(obj.typeFlags === 0);
+	expect(obj.kind === TypeKind.Object);
+	expect(obj.typeName === "Point");
+	expect(obj.typeNames.length === 1);
+	expect(obj.typeChildren.length === 1);
+	expect(obj.typeFlags === 0);
 }
 
 test "createEnum" {
 	const e = createEnum("Color", ["Red", "Green", "Blue"]);
-	check(e.kind === TypeKind.Enum);
-	check(e.typeName === "Color");
-	check(e.typeNames.length === 3);
+	expect(e.kind === TypeKind.Enum);
+	expect(e.typeName === "Color");
+	expect(e.typeNames.length === 3);
 }
 
 test "createResult" {
 	const r = createResult(numberType(), stringType());
-	check(r.kind === TypeKind.Result);
-	check(r.typeReturn.kind === TypeKind.Number);
-	check(r.typeExtra.kind === TypeKind.String);
+	expect(r.kind === TypeKind.Result);
+	expect(r.typeReturn.kind === TypeKind.Number);
+	expect(r.typeExtra.kind === TypeKind.String);
 }
 
 test "createTypeRef" {
 	const t = createTypeRef("MyType");
-	check(t.kind === TypeKind.TypeReference);
-	check(t.typeName === "MyType");
+	expect(t.kind === TypeKind.TypeReference);
+	expect(t.typeName === "MyType");
 }
 
 test "createRef and Ptr" {
 	const r = createRef(numberType());
-	check(r.kind === TypeKind.Ref);
-	check(r.typeReturn.kind === TypeKind.Number);
+	expect(r.kind === TypeKind.Ref);
+	expect(r.typeReturn.kind === TypeKind.Number);
 	const p = createPtr(stringType());
-	check(p.kind === TypeKind.Ptr);
-	check(p.typeReturn.kind === TypeKind.String);
+	expect(p.kind === TypeKind.Ptr);
+	expect(p.typeReturn.kind === TypeKind.String);
 }
 
 test "isNumeric" {
-	check(isNumeric(numberType()));
-	check(isNumeric(createPrimitive(TypeKind.Int32)));
-	check(isNumeric(createPrimitive(TypeKind.Float64)));
-	check(!isNumeric(stringType()));
-	check(!isNumeric(booleanType()));
+	expect(isNumeric(numberType()));
+	expect(isNumeric(createPrimitive(TypeKind.Int32)));
+	expect(isNumeric(createPrimitive(TypeKind.Float64)));
+	expect(!isNumeric(stringType()));
+	expect(!isNumeric(booleanType()));
 }
 
 test "isStringType" {
-	check(isStringType(stringType()));
-	check(!isStringType(numberType()));
+	expect(isStringType(stringType()));
+	expect(!isStringType(numberType()));
 }
 
 test "isBoolType" {
-	check(isBoolType(booleanType()));
-	check(!isBoolType(numberType()));
+	expect(isBoolType(booleanType()));
+	expect(!isBoolType(numberType()));
 }
 
 test "isCallable" {
 	const fn = createFunction([], [], voidType());
-	check(isCallable(fn));
-	check(!isCallable(numberType()));
+	expect(isCallable(fn));
+	expect(!isCallable(numberType()));
 }
 
 test "getReturnType" {
 	const fn = createFunction([], [], booleanType());
-	check(getReturnType(fn).kind === TypeKind.Boolean);
-	check(getReturnType(numberType()).kind === TypeKind.Unknown);
+	expect(getReturnType(fn).kind === TypeKind.Boolean);
+	expect(getReturnType(numberType()).kind === TypeKind.Unknown);
 }
 
 test "getElementType" {
 	const arr = createArray(stringType());
-	check(getElementType(arr).kind === TypeKind.String);
-	check(getElementType(numberType()).kind === TypeKind.Unknown);
+	expect(getElementType(arr).kind === TypeKind.String);
+	expect(getElementType(numberType()).kind === TypeKind.Unknown);
 }
 
 test "getProperty" {
 	const obj = createObject("Point", ["x", "y"], [numberType(), stringType()], false);
-	check(getProperty(obj, "x").kind === TypeKind.Number);
-	check(getProperty(obj, "y").kind === TypeKind.String);
-	check(getProperty(obj, "z").kind === TypeKind.Unknown);
-	check(getProperty(numberType(), "x").kind === TypeKind.Unknown);
+	expect(getProperty(obj, "x").kind === TypeKind.Number);
+	expect(getProperty(obj, "y").kind === TypeKind.String);
+	expect(getProperty(obj, "z").kind === TypeKind.Unknown);
+	expect(getProperty(numberType(), "x").kind === TypeKind.Unknown);
 }
 
 test "substitute generic param" {
 	const gp = createGenericParam("T");
 	const result = substituteType(gp, "T", numberType());
-	check(result.kind === TypeKind.Number);
+	expect(result.kind === TypeKind.Number);
 }
 
 test "substitute non-matching" {
 	const gp = createGenericParam("T");
 	const result = substituteType(gp, "U", numberType());
-	check(result.kind === TypeKind.GenericParam);
+	expect(result.kind === TypeKind.GenericParam);
 }
 
 test "substitute in array" {
 	const arr = createArray(createGenericParam("T"));
 	const result = substituteType(arr, "T", stringType());
-	check(result.kind === TypeKind.Array);
-	check(result.typeReturn.kind === TypeKind.String);
+	expect(result.kind === TypeKind.Array);
+	expect(result.typeReturn.kind === TypeKind.String);
 }
 
 test "substitute in function" {
 	const fn = createFunction([createGenericParam("T")], ["a"], createGenericParam("T"));
 	const result = substituteType(fn, "T", numberType());
-	check(result.kind === TypeKind.Function);
-	check(result.typeChildren[0].kind === TypeKind.Number);
-	check(result.typeReturn.kind === TypeKind.Number);
+	expect(result.kind === TypeKind.Function);
+	expect(result.typeChildren[0].kind === TypeKind.Number);
+	expect(result.typeReturn.kind === TypeKind.Number);
 }
 
 test "substitute in Result" {
 	const r = createResult(createGenericParam("T"), createGenericParam("E"));
 	const step1 = substituteType(r, "T", numberType());
 	const step2 = substituteType(step1, "E", stringType());
-	check(step2.kind === TypeKind.Result);
-	check(step2.typeReturn.kind === TypeKind.Number);
-	check(step2.typeExtra.kind === TypeKind.String);
+	expect(step2.kind === TypeKind.Result);
+	expect(step2.typeReturn.kind === TypeKind.Number);
+	expect(step2.typeExtra.kind === TypeKind.String);
 }
 
 test "instantiateGeneric multi-param" {
 	const r = createResult(createGenericParam("T"), createGenericParam("E"));
 	const result = instantiateGeneric(r, ["T", "E"], [numberType(), stringType()]);
-	check(result.kind === TypeKind.Result);
-	check(result.typeReturn.kind === TypeKind.Number);
-	check(result.typeExtra.kind === TypeKind.String);
+	expect(result.kind === TypeKind.Result);
+	expect(result.typeReturn.kind === TypeKind.Number);
+	expect(result.typeExtra.kind === TypeKind.String);
 }
 
 test "primitive unchanged" {
 	const result = substituteType(numberType(), "T", stringType());
-	check(result.kind === TypeKind.Number);
+	expect(result.kind === TypeKind.Number);
 }
 
 test "unify direct generic param" {
 	const b = createUnifyBindings();
 	unifyType(createGenericParam("T"), numberType(), b);
-	check(b.names.length === 1);
-	check(b.names[0] === "T");
-	check(b.types[0].kind === TypeKind.Number);
+	expect(b.names.length === 1);
+	expect(b.names[0] === "T");
+	expect(b.types[0].kind === TypeKind.Number);
 }
 
 test "unify Array<T> vs Array<string>" {
 	const b = createUnifyBindings();
 	unifyType(createArray(createGenericParam("T")), createArray(stringType()), b);
-	check(b.names.length === 1);
-	check(b.names[0] === "T");
-	check(b.types[0].kind === TypeKind.String);
+	expect(b.names.length === 1);
+	expect(b.names[0] === "T");
+	expect(b.types[0].kind === TypeKind.String);
 }
 
 test "unify Result<T, E> vs Result<number, string>" {
@@ -736,96 +831,158 @@ test "unify Result<T, E> vs Result<number, string>" {
 	const formal = createResult(createGenericParam("T"), createGenericParam("E"));
 	const concrete = createResult(numberType(), stringType());
 	unifyType(formal, concrete, b);
-	check(b.names.length === 2);
-	check(b.names[0] === "T");
-	check(b.types[0].kind === TypeKind.Number);
-	check(b.names[1] === "E");
-	check(b.types[1].kind === TypeKind.String);
+	expect(b.names.length === 2);
+	expect(b.names[0] === "T");
+	expect(b.types[0].kind === TypeKind.Number);
+	expect(b.names[1] === "E");
+	expect(b.types[1].kind === TypeKind.String);
 }
 
 test "unify mismatched kinds" {
 	const b = createUnifyBindings();
 	unifyType(createArray(createGenericParam("T")), numberType(), b);
-	check(b.names.length === 0);
+	expect(b.names.length === 0);
 }
 
 test "unify concrete no bindings" {
 	const b = createUnifyBindings();
 	unifyType(numberType(), numberType(), b);
-	check(b.names.length === 0);
+	expect(b.names.length === 0);
 }
 
 test "hasGenericParams true" {
-	check(hasGenericParams(createGenericParam("T")));
-	check(hasGenericParams(createArray(createGenericParam("T"))));
-	check(hasGenericParams(createFunction([createGenericParam("T")], ["a"], numberType())));
+	expect(hasGenericParams(createGenericParam("T")));
+	expect(hasGenericParams(createArray(createGenericParam("T"))));
+	expect(hasGenericParams(createFunction([createGenericParam("T")], ["a"], numberType())));
 }
 
 test "hasGenericParams false" {
-	check(!hasGenericParams(numberType()));
-	check(!hasGenericParams(createArray(stringType())));
-	check(!hasGenericParams(createFunction([numberType()], ["a"], stringType())));
+	expect(!hasGenericParams(numberType()));
+	expect(!hasGenericParams(createArray(stringType())));
+	expect(!hasGenericParams(createFunction([numberType()], ["a"], stringType())));
 }
 
 test "default returns param count" {
 	const fn1 = createFunction([numberType(), stringType()], ["a", "b"], voidType());
-	check(getMinArity(fn1) === 2);
+	expect(getMinArity(fn1) === 2);
 }
 
 test "setMinArity stores correctly" {
 	const fn2 = createFunction([numberType(), stringType()], ["a", "b"], voidType());
 	setMinArity(fn2, 1);
-	check(getMinArity(fn2) === 1);
+	expect(getMinArity(fn2) === 1);
 }
 
 test "setMinArity zero" {
 	const fn3 = createFunction([numberType()], ["a"], voidType());
 	setMinArity(fn3, 0);
-	check(getMinArity(fn3) === 0);
+	expect(getMinArity(fn3) === 0);
 }
 
 test "preserves low bits" {
 	const fn4 = createFunction([numberType()], ["a"], voidType());
 	fn4.typeFlags = 1;
 	setMinArity(fn4, 1);
-	check(getMinArity(fn4) === 1);
-	check((fn4.typeFlags & 0xFF) === 1);
+	expect(getMinArity(fn4) === 1);
+	expect((fn4.typeFlags & 0xFF) === 1);
 }
 
 test "createTuple" {
 	const tup = createTuple([numberType(), stringType()]);
-	check(tup.kind === TypeKind.Tuple);
-	check(tup.typeChildren.length === 2);
-	check(tup.typeChildren[0].kind === TypeKind.Number);
-	check(tup.typeChildren[1].kind === TypeKind.String);
+	expect(tup.kind === TypeKind.Tuple);
+	expect(tup.typeChildren.length === 2);
+	expect(tup.typeChildren[0].kind === TypeKind.Number);
+	expect(tup.typeChildren[1].kind === TypeKind.String);
 }
 
 test "typeNameOf Tuple" {
 	const tup = createTuple([numberType()]);
-	check(typeNameOf(tup) === "Tuple");
+	expect(typeNameOf(tup) === "Tuple");
 }
 
 test "substituteType Tuple" {
 	const tup = createTuple([createGenericParam("T"), numberType()]);
 	const result = substituteType(tup, "T", stringType());
-	check(result.kind === TypeKind.Tuple);
-	check(result.typeChildren[0].kind === TypeKind.String);
-	check(result.typeChildren[1].kind === TypeKind.Number);
+	expect(result.kind === TypeKind.Tuple);
+	expect(result.typeChildren[0].kind === TypeKind.String);
+	expect(result.typeChildren[1].kind === TypeKind.Number);
 }
 
 test "createSet" {
 	const s = createSet(stringType());
-	check(s.kind === TypeKind.Set);
-	check(s.typeReturn.kind === TypeKind.String);
+	expect(s.kind === TypeKind.Set);
+	expect(s.typeReturn.kind === TypeKind.String);
 }
 
 test "typeNameOf Set" {
-	check(typeNameOf(createSet(stringType())) === "Set");
+	expect(typeNameOf(createSet(stringType())) === "Set");
 }
 
 test "substituteType Set" {
 	const s = createSet(createGenericParam("T"));
 	const result = substituteType(s, "T", stringType());
-	check(result.kind === TypeKind.Set);
-	check(result.typeReturn.kind === TypeKind.String);
+	expect(result.kind === TypeKind.Set);
+	expect(result.typeReturn.kind === TypeKind.String);
+}
+
+test "sizeOfType primitives 64-bit" {
+	setTargetSizes(8, 8);
+	expect(sizeOfType(createPrimitive(TypeKind.Boolean)) === 1);
+	expect(sizeOfType(createPrimitive(TypeKind.Char)) === 1);
+	expect(sizeOfType(createPrimitive(TypeKind.Int32)) === 4);
+	expect(sizeOfType(createPrimitive(TypeKind.Uint32)) === 4);
+	expect(sizeOfType(createPrimitive(TypeKind.Float32)) === 4);
+	expect(sizeOfType(numberType()) === 8);
+	expect(sizeOfType(createPrimitive(TypeKind.Int64)) === 8);
+	expect(sizeOfType(createPrimitive(TypeKind.Float64)) === 8);
+	expect(sizeOfType(stringType()) === 16);
+	expect(sizeOfType(createArray(numberType())) === 16);
+	expect(sizeOfType(createPrimitive(TypeKind.Enum)) === 4);
+}
+
+test "sizeOfType primitives 32-bit" {
+	setTargetSizes(4, 4);
+	expect(sizeOfType(numberType()) === 4);
+	expect(sizeOfType(stringType()) === 8);
+	expect(sizeOfType(createArray(numberType())) === 8);
+	expect(sizeOfType(createFunction([], [], numberType())) === 8);
+	expect(sizeOfType(createPrimitive(TypeKind.Ref)) === 4);
+	expect(sizeOfType(createPrimitive(TypeKind.Int32)) === 4);
+	expect(sizeOfType(createPrimitive(TypeKind.Int64)) === 4);
+	setTargetSizes(8, 8);
+}
+
+test "sizeOfType object no padding" {
+	const obj = createObject("Pair", ["x", "y"], [createPrimitive(TypeKind.Int32), createPrimitive(TypeKind.Int32)], true);
+	expect(sizeOfType(obj) === 8);
+}
+
+test "sizeOfType object with padding" {
+	// { char (1 byte) + padding(3) + int32 (4 bytes) } = 8
+	const obj = createObject("Mixed", ["a", "b"], [createPrimitive(TypeKind.Char), createPrimitive(TypeKind.Int32)], true);
+	expect(sizeOfType(obj) === 8);
+}
+
+test "sizeOfType object tail padding" {
+	// { int64 (8 bytes) + char (1 byte) + padding(7) } = 16 (aligned to maxAlign=8)
+	const obj = createObject("Tail", ["x", "y"], [createPrimitive(TypeKind.Int64), createPrimitive(TypeKind.Char)], true);
+	expect(sizeOfType(obj) === 16);
+}
+
+test "sizeOfType function closure" {
+	expect(sizeOfType(createFunction([], [], numberType())) === 16);
+}
+
+test "alignOfType" {
+	expect(alignOfType(createPrimitive(TypeKind.Char)) === 1);
+	expect(alignOfType(createPrimitive(TypeKind.Int32)) === 4);
+	expect(alignOfType(numberType()) === 8);
+}
+
+test "alignOfType 32-bit" {
+	setTargetSizes(4, 4);
+	expect(alignOfType(numberType()) === 4);
+	expect(alignOfType(createPrimitive(TypeKind.Ref)) === 4);
+	expect(alignOfType(createPrimitive(TypeKind.Int32)) === 4);
+	setTargetSizes(8, 8);
 }

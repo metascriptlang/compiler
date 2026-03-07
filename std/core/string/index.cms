@@ -6,111 +6,80 @@
 
 // ===== Comparison =====
 
-@runtime("msStringEquals")
-function equals(this s: string, other: string): boolean { unreachable; }
+extern function equals(this s: string, other: string): boolean from "msStringEquals";
 
-@runtime("msStringEqualsIgnoreCase")
-function equalsIgnoreCase(this s: string, other: string): boolean { unreachable; }
+extern function equalsIgnoreCase(this s: string, other: string): boolean from "msStringEqualsIgnoreCase";
 
-@runtime("msStringStartsWith")
-function startsWith(this s: string, prefix: string): boolean { unreachable; }
+extern function startsWith(this s: string, prefix: string): boolean from "msStringStartsWith";
 
-@runtime("msStringEndsWith")
-function endsWith(this s: string, suffix: string): boolean { unreachable; }
+extern function endsWith(this s: string, suffix: string): boolean from "msStringEndsWith";
 
-@runtime("msStringContains")
-function contains(this s: string, sub: string): boolean { unreachable; }
+extern function contains(this s: string, sub: string): boolean from "msStringContains";
 
 // ===== Search =====
 
-@runtime("msStringIndexOf")
-function indexOf(this s: string, sub: string, start: number): number { unreachable; }
+extern function indexOf(this s: string, sub: string, start: number): number from "msStringIndexOf";
 
-@runtime("msStringLastIndexOf")
-function lastIndexOf(this s: string, sub: string): number { unreachable; }
+extern function lastIndexOf(this s: string, sub: string): number from "msStringLastIndexOf";
 
-@runtime("msStringCount")
-function count(this s: string, sub: string): number { unreachable; }
+extern function count(this s: string, sub: string): number from "msStringCount";
 
 // ===== Extraction =====
 
-@runtime("msStringCharAt")
-function charAt(this s: string, idx: number): string { unreachable; }
+extern function charAt(this s: string, idx: number): string from "msStringCharAt";
 
-@runtime("msStringCharCodeAt")
-function charCodeAt(this s: string, idx: number): number { unreachable; }
+extern function charCodeAt(this s: string, idx: number): number from "msStringCharCodeAt";
 
-@runtime("msStringSlice")
-function slice(this s: string, start: number, end: number): string { unreachable; }
+extern function slice(this s: string, start: number, end: number): string from "msStringSlice";
 
-@runtime("msStringSubstring")
-function substring(this s: string, start: number, end: number): string { unreachable; }
+extern function substring(this s: string, start: number, end: number): string from "msStringSubstring";
 
 // ===== Transformation =====
 
-@runtime("msStringToLower")
-function toLower(this s: string): string { unreachable; }
+extern function toLower(this s: string): string from "msStringToLower";
 
-@runtime("msStringToUpper")
-function toUpper(this s: string): string { unreachable; }
+extern function toUpper(this s: string): string from "msStringToUpper";
 
-@runtime("msStringTrim")
-function trim(this s: string): string { unreachable; }
+extern function trim(this s: string): string from "msStringTrim";
 
-@runtime("msStringTrimStart")
-function trimStart(this s: string): string { unreachable; }
+extern function trimStart(this s: string): string from "msStringTrimStart";
 
-@runtime("msStringTrimEnd")
-function trimEnd(this s: string): string { unreachable; }
+extern function trimEnd(this s: string): string from "msStringTrimEnd";
 
-@runtime("msStringRepeat")
-function repeat(this s: string, count: number): string { unreachable; }
+extern function repeat(this s: string, count: number): string from "msStringRepeat";
 
-@runtime("msStringReplace")
-function replace(this s: string, search: string, replacement: string): string { unreachable; }
+extern function replace(this s: string, search: string, replacement: string): string from "msStringReplace";
 
-@runtime("msStringReplaceAll")
-function replaceAll(this s: string, search: string, replacement: string): string { unreachable; }
+extern function replaceAll(this s: string, search: string, replacement: string): string from "msStringReplaceAll";
 
-@runtime("msStringReverse")
-function reverse(this s: string): string { unreachable; }
+extern function reverse(this s: string): string from "msStringReverse";
 
-@runtime("msStringPadStart")
-function padStart(this s: string, targetLen: number, pad: string): string { unreachable; }
+extern function padStart(this s: string, targetLen: number, pad: string): string from "msStringPadStart";
 
-@runtime("msStringPadEnd")
-function padEnd(this s: string, targetLen: number, pad: string): string { unreachable; }
+extern function padEnd(this s: string, targetLen: number, pad: string): string from "msStringPadEnd";
 
 // ===== Splitting =====
 
-@runtime("msStringSplit")
-function split(this s: string, delimiter: string): string[] { unreachable; }
+extern function split(this s: string, delimiter: string): string[] from "msStringSplit";
 
 // ===== Parsing =====
 
-@runtime("msStringParseFloat")
-function parseFloat(this s: string): number { unreachable; }
+extern function parseFloat(this s: string): number from "msStringParseFloat";
 
-@runtime("msStringParseInt")
-function parseInt(this s: string): number { unreachable; }
+extern function parseInt(this s: string): number from "msStringParseInt";
 
 // ===== Capacity & Length =====
 
-@runtime("msStringCapacity")
-function capacity(this s: string): number { unreachable; }
+extern function capacity(this s: string): number from "msStringCapacity";
 
-@runtime("&msStringSetLength")
-function setLength(this s: string, newLen: number): void { unreachable; }
+extern function setLength(this s: string, newLen: number): void from "&msStringSetLength";
 
 // ===== In-Place Append =====
 
-@runtime("&msStringAppend")
-function append(this s: string, other: string): void { unreachable; }
+extern function append(this s: string, other: string): void from "&msStringAppend";
 
 // ===== In-Place Operations =====
 
-@runtime("&msStringSetSlice")
-function setSlice(this s: string, start: number, end: number): void { unreachable; }
+extern function setSlice(this s: string, start: number, end: number): void from "&msStringSetSlice";
 
-@runtime("&msStringStripInPlace")
-function stripInPlace(this s: string): void { unreachable; }
+extern function stripInPlace(this s: string): void from "&msStringStripInPlace";

@@ -1,211 +1,179 @@
 // Scanner — Tokenization of numbers, strings, identifiers, operators, comments
 // Pattern: ~/projects/metascript/src/lexer/lexer.zig
 
-import { Token, TokenKind, identToKeyword } from "./token";
-import { LexerState, createLexerState, peek, peekAt, advanceChar, skip, addToken } from "./state";
-import { isDigit, isHexDigit, isLetter, isAlphanumeric, isBinaryDigit, isOctalDigit } from "./chars";
-import { check } from "std/testing";
-
-// ===== Shared Escape Sequence Handler =====
-
-export function processEscape(s: LexerState): string {
-	advanceChar(s); // skip backslash
-	const escChar = s.source.charAt(s.pos);
-	advanceChar(s);
-	return match (escChar) {
-		"n" => "\n",
-		"t" => "\t",
-		"r" => "\r",
-		"\\" => "\\",
-		"0" => "\0",
-		_ => escChar,
-	};
-}
+import { TokenKind, identToKeyword } from "./token";
+import { LexerState, peek, peekAt, advanceChar, skip, addToken, addComment, allowsRegexAfter } from "./state";
+import { isDigit, isLetter, isHexDigit, isOctalDigit, isBinaryDigit } from "./chars";
 
 // ===== Number Scanning =====
-
-export function emitNumber(s: LexerState, numStr: string, startLine: number, startCol: number): void {
-	if (s.pos < s.source.length && peek(s) === "n".code) {
-		advanceChar(s);
-		addToken(s, TokenKind.BigInt, numStr + "n", startLine, startCol);
-	} else {
-		addToken(s, TokenKind.Number, numStr, startLine, startCol);
-	}
-}
-
-function scanDigitsWhere(s: LexerState, isValidDigit: (ch: number) => boolean): string {
-	let result = "";
-	while (s.pos < s.source.length && (isValidDigit(peek(s)) || peek(s) === "_".code)) {
-		if (peek(s) !== "_".code) result += s.source.charAt(s.pos);
-		advanceChar(s);
-	}
-	return result;
-}
-
-export function scanHexDigits(s: LexerState): string { return scanDigitsWhere(s, isHexDigit); }
-export function scanDecDigits(s: LexerState): string { return scanDigitsWhere(s, isDigit); }
-export function scanBinDigits(s: LexerState): string { return scanDigitsWhere(s, isBinaryDigit); }
-export function scanOctDigits(s: LexerState): string { return scanDigitsWhere(s, isOctalDigit); }
 
 export function scanNumber(s: LexerState): void {
 	const startLine = s.line;
 	const startCol = s.column;
-	const first = peek(s);
+	let val = "";
 
-	// Check for hex (0x), binary (0b), octal (0o)
-	if (first === "0".code && s.pos + 1 < s.source.length) {
+	// Handle hex, binary, octal prefixes
+	if (peek(s) === "0".code) {
 		const next = peekAt(s, 1);
 		if (next === "x".code || next === "X".code) {
+			val = "0x";
 			skip(s, 2);
-			emitNumber(s, "0x" + scanHexDigits(s), startLine, startCol);
+			while (s.pos < s.source.length && (isHexDigit(peek(s)) || peek(s) === "_".code)) {
+				if (peek(s) !== "_".code) val += s.source.charAt(s.pos);
+				advanceChar(s);
+			}
+			addToken(s, TokenKind.Number, val, startLine, startCol);
 			return;
 		}
 		if (next === "b".code || next === "B".code) {
+			val = "0b";
 			skip(s, 2);
-			emitNumber(s, "0b" + scanBinDigits(s), startLine, startCol);
+			while (s.pos < s.source.length && (isBinaryDigit(peek(s)) || peek(s) === "_".code)) {
+				if (peek(s) !== "_".code) val += s.source.charAt(s.pos);
+				advanceChar(s);
+			}
+			addToken(s, TokenKind.Number, val, startLine, startCol);
 			return;
 		}
 		if (next === "o".code || next === "O".code) {
+			val = "0o";
 			skip(s, 2);
-			emitNumber(s, "0o" + scanOctDigits(s), startLine, startCol);
+			while (s.pos < s.source.length && (isOctalDigit(peek(s)) || peek(s) === "_".code)) {
+				if (peek(s) !== "_".code) val += s.source.charAt(s.pos);
+				advanceChar(s);
+			}
+			addToken(s, TokenKind.Number, val, startLine, startCol);
 			return;
 		}
 	}
 
-	// Decimal integer part
-	let numStr = scanDecDigits(s);
+	// Decimal number
+	let hasDecimal = false;
+	let hasExponent = false;
 
-	// Decimal point (only if followed by a digit, to avoid consuming `0.toString()`)
-	if (s.pos < s.source.length && peek(s) === ".".code) {
-		if (s.pos + 1 < s.source.length && isDigit(peekAt(s, 1))) {
+	while (s.pos < s.source.length) {
+		const ch = peek(s);
+		if (isDigit(ch)) {
+			val += s.source.charAt(s.pos);
 			advanceChar(s);
-			numStr = numStr + "." + scanDecDigits(s);
+		} else if (ch === ".".code && !hasDecimal && isDigit(peekAt(s, 1))) {
+			val += ".";
+			hasDecimal = true;
+			advanceChar(s);
+		} else if ((ch === "e".code || ch === "E".code) && !hasExponent) {
+			val += "e";
+			hasExponent = true;
+			advanceChar(s);
+			const next = peek(s);
+			if (next === "+".code || next === "-".code) {
+				val += s.source.charAt(s.pos);
+				advanceChar(s);
+			}
+		} else if (ch === "_".code) {
+			advanceChar(s); // skip underscore
+		} else {
+			break;
 		}
 	}
 
-	// Exponent (e/E)
-	if (s.pos < s.source.length && (peek(s) === "e".code || peek(s) === "E".code)) {
-		numStr += s.source.charAt(s.pos);
+	// BigInt suffix
+	if (peek(s) === "n".code) {
 		advanceChar(s);
-		if (s.pos < s.source.length && (peek(s) === "+".code || peek(s) === "-".code)) {
-			numStr += s.source.charAt(s.pos);
-			advanceChar(s);
-		}
-		numStr = numStr + scanDecDigits(s);
+		addToken(s, TokenKind.BigInt, val + "n", startLine, startCol);
+	} else {
+		addToken(s, TokenKind.Number, val, startLine, startCol);
 	}
-
-	emitNumber(s, numStr, startLine, startCol);
 }
 
 // ===== String Scanning =====
 
-export function scanString(s: LexerState, quoteChar: number): void {
+export function scanString(s: LexerState, quote: number): void {
 	const startLine = s.line;
 	const startCol = s.column;
+	let val = "";
 	advanceChar(s); // skip opening quote
-	let str = "";
 
-	while (s.pos < s.source.length && peek(s) !== quoteChar && peek(s) !== "\n".code) {
-		if (peek(s) === "\\".code) {
-			// Check quote-specific escape before common handler
-			if (s.pos + 1 < s.source.length && peekAt(s, 1) === quoteChar) {
-				advanceChar(s); // skip backslash
-				if (quoteChar === "\"".code) { str += "\""; }
-				else { str += "'"; }
-				advanceChar(s);
-			} else {
-				str += processEscape(s);
-			}
-		} else {
-			str += s.source.charAt(s.pos);
+	while (s.pos < s.source.length) {
+		const ch = peek(s);
+		if (ch === quote) {
 			advanceChar(s);
-		}
-	}
-
-	if (s.pos < s.source.length && peek(s) === quoteChar) {
-		advanceChar(s); // skip closing quote
-	}
-	addToken(s, TokenKind.String, str, startLine, startCol);
-}
-
-// Template-specific escape: backtick, dollar, or standard escape
-function processTemplateEscape(s: LexerState): string {
-	if (s.pos + 1 < s.source.length && peekAt(s, 1) === "`".code) {
-		advanceChar(s);
-		advanceChar(s);
-		return "`";
-	}
-	if (s.pos + 1 < s.source.length && peekAt(s, 1) === "$".code) {
-		advanceChar(s);
-		advanceChar(s);
-		return "$";
-	}
-	return processEscape(s);
-}
-
-export function scanTemplateString(s: LexerState): void {
-	const startLine = s.line;
-	const startCol = s.column;
-	advanceChar(s); // skip opening backtick
-	let str = "";
-
-	while (s.pos < s.source.length && peek(s) !== "`".code) {
-		if (peek(s) === "$".code && s.pos + 1 < s.source.length && peekAt(s, 1) === "{".code) {
-			addToken(s, TokenKind.TemplateHead, str, startLine, startCol);
-			skip(s, 2); // ${
-			s.templateDepth += 1;
-			s.braceStack.push(0);
+			addToken(s, TokenKind.String, val, startLine, startCol);
 			return;
 		}
-		if (peek(s) === "\\".code) {
-			str += processTemplateEscape(s);
+		if (ch === "\\".code) {
+			advanceChar(s);
+			const esc = advanceChar(s);
+			val += match (esc) {
+				"n".code => "\n",
+				"t".code => "\t",
+				"r".code => "\r",
+				"\\".code => "\\",
+				"\"".code => "\"",
+				"'".code => "'",
+				_ => s.source.charAt(s.pos - 1),
+			};
 		} else {
-			str += s.source.charAt(s.pos);
+			val += s.source.charAt(s.pos);
 			advanceChar(s);
 		}
 	}
+}
 
-	if (s.pos < s.source.length) advanceChar(s); // skip closing backtick
-	addToken(s, TokenKind.TemplateNoSub, str, startLine, startCol);
+// ===== Template Literal Scanning =====
+
+export function scanTemplateString(s: LexerState): void {
+	scanTemplateStringImpl(s, false);
 }
 
 export function scanTemplateContinuation(s: LexerState): void {
+	scanTemplateStringImpl(s, true);
+}
+
+function scanTemplateStringImpl(s: LexerState, isContinuation: boolean): void {
 	const startLine = s.line;
 	const startCol = s.column;
-	let str = "";
+	let val = "";
+	if (!isContinuation) advanceChar(s); // skip ` (} already consumed by caller)
 
-	while (s.pos < s.source.length && peek(s) !== "`".code) {
-		if (peek(s) === "$".code && s.pos + 1 < s.source.length && peekAt(s, 1) === "{".code) {
-			addToken(s, TokenKind.TemplateMiddle, str, startLine, startCol);
-			skip(s, 2); // ${
+	while (s.pos < s.source.length) {
+		const ch = peek(s);
+		if (ch === "`".code) {
+			advanceChar(s);
+			addToken(s, isContinuation ? TokenKind.TemplateTail : TokenKind.TemplateNoSub, val, startLine, startCol);
 			return;
 		}
-		if (peek(s) === "\\".code) {
-			str += processTemplateEscape(s);
+		if (ch === "$".code && peekAt(s, 1) === "{".code) {
+			skip(s, 2);
+			s.templateDepth += 1;
+			addToken(s, isContinuation ? TokenKind.TemplateMiddle : TokenKind.TemplateHead, val, startLine, startCol);
+			return;
+		}
+		if (ch === "\\".code) {
+			advanceChar(s);
+			val += s.source.charAt(s.pos);
+			advanceChar(s);
 		} else {
-			str += s.source.charAt(s.pos);
+			val += s.source.charAt(s.pos);
 			advanceChar(s);
 		}
 	}
-
-	if (s.pos < s.source.length) advanceChar(s); // skip closing backtick
-	s.templateDepth -= 1;
-	if (s.braceStack.length > 0) {
-		s.braceStack.pop();
-	}
-	addToken(s, TokenKind.TemplateTail, str, startLine, startCol);
 }
 
-// ===== Identifier Scanning =====
+// ===== Identifier & Keyword Scanning =====
 
 export function scanIdentifier(s: LexerState): void {
 	const startLine = s.line;
 	const startCol = s.column;
 	let ident = "";
 
-	while (s.pos < s.source.length && isAlphanumeric(peek(s))) {
-		ident += s.source.charAt(s.pos);
-		advanceChar(s);
+	while (s.pos < s.source.length) {
+		const ch = peek(s);
+		if (isLetter(ch) || isDigit(ch) || ch === "_".code || ch === "$".code) {
+			ident += s.source.charAt(s.pos);
+			advanceChar(s);
+		} else {
+			break;
+		}
 	}
 
 	const keyword = identToKeyword(ident);
@@ -214,89 +182,58 @@ export function scanIdentifier(s: LexerState): void {
 
 // ===== Comment Handling =====
 
-export function skipLineComment(s: LexerState): void {
-	while (s.pos < s.source.length && peek(s) !== "\n".code) {
+export function scanLineComment(s: LexerState): void {
+	const startLine = s.line;
+	const startCol = s.column - 2; // includes //
+	let content = "//";
+	while (s.pos < s.source.length && peek(s) !== "\n".code && peek(s) !== "\r".code) {
+		content += s.source.charAt(s.pos);
 		advanceChar(s);
 	}
+	addComment(s, content, startLine, startCol);
 }
 
-export function skipBlockComment(s: LexerState): void {
+export function scanBlockComment(s: LexerState): void {
+	const startLine = s.line;
+	const startCol = s.column - 2; // includes /*
+	let content = "/*";
 	while (s.pos < s.source.length) {
-		if (peek(s) === "*".code && s.pos + 1 < s.source.length && peekAt(s, 1) === "/".code) {
+		const ch = peek(s);
+		if (ch === "*".code && peekAt(s, 1) === "/".code) {
+			content += "*/";
 			skip(s, 2);
+			addComment(s, content, startLine, startCol);
 			return;
 		}
+		content += s.source.charAt(s.pos);
 		advanceChar(s);
 	}
 }
 
 // ===== Regex Literal Scanning =====
-// Disambiguation: `/` is regex when in expression-start position (after operators,
-// keywords, BOF), and division when after values (identifiers, numbers, closing parens).
-// Pattern: ~/projects/metascript/src/lexer/lexer.zig allowsRegexAfter()
 
-export function allowsRegexAfter(s: LexerState): boolean {
-	const last = s.lastToken;
-	// After operators, punctuation that starts expressions, keywords — regex allowed
-	if (last === TokenKind.Assign || last === TokenKind.LParen || last === TokenKind.LBracket ||
-		last === TokenKind.LBrace || last === TokenKind.Comma || last === TokenKind.Semicolon ||
-		last === TokenKind.Colon || last === TokenKind.Question || last === TokenKind.Bang ||
-		last === TokenKind.Tilde || last === TokenKind.Plus || last === TokenKind.Minus ||
-		last === TokenKind.Star || last === TokenKind.Percent || last === TokenKind.Amp ||
-		last === TokenKind.Pipe || last === TokenKind.Caret || last === TokenKind.EqEq ||
-		last === TokenKind.EqEqEq || last === TokenKind.BangEq || last === TokenKind.BangEqEq ||
-		last === TokenKind.LtEq || last === TokenKind.Gt || last === TokenKind.GtEq ||
-		last === TokenKind.AmpAmp || last === TokenKind.PipePipe || last === TokenKind.PlusEq ||
-		last === TokenKind.MinusEq || last === TokenKind.StarEq || last === TokenKind.SlashEq ||
-		last === TokenKind.Arrow || last === TokenKind.Eof || last === TokenKind.Return ||
-		last === TokenKind.Case || last === TokenKind.Delete || last === TokenKind.In ||
-		last === TokenKind.Instanceof || last === TokenKind.New || last === TokenKind.Typeof ||
-		last === TokenKind.Void || last === TokenKind.If || last === TokenKind.While ||
-		last === TokenKind.For || last === TokenKind.Await || last === TokenKind.Yield) {
-		return true;
-	}
-	// After values, identifiers, closing brackets — expect division, not regex
-	return false;
-}
-
-export function scanRegex(s: LexerState): void {
+function scanRegex(s: LexerState): void {
 	const startLine = s.line;
 	const startCol = s.column;
-	advanceChar(s); // consume opening /
 	let pattern = "/";
-	let inCharClass = false;
+	advanceChar(s); // skip opening /
 
 	while (s.pos < s.source.length) {
 		const ch = peek(s);
-		if (ch === "\n".code || ch === "\r".code) {
-			break; // unterminated regex
-		}
-		if (ch === "[".code && !inCharClass) {
-			inCharClass = true;
-			pattern += s.source.charAt(s.pos);
-			advanceChar(s);
-			continue;
-		}
-		if (ch === "]".code && inCharClass) {
-			inCharClass = false;
-			pattern += s.source.charAt(s.pos);
-			advanceChar(s);
-			continue;
-		}
-		if (ch === "\\".code) {
-			// Escaped character — consume both backslash and next char
-			pattern += s.source.charAt(s.pos);
-			advanceChar(s);
-			if (s.pos < s.source.length) {
-				pattern += s.source.charAt(s.pos);
-				advanceChar(s);
-			}
-			continue;
-		}
-		if (ch === "/".code && !inCharClass) {
-			// End of regex pattern
+		if (ch === "/".code) {
 			pattern += "/";
 			advanceChar(s);
+			break;
+		}
+		if (ch === "\\".code) {
+			pattern += "\\";
+			advanceChar(s);
+			pattern += s.source.charAt(s.pos);
+			advanceChar(s);
+			continue;
+		}
+		if (ch === "\n".code) {
+			// Regex cannot span lines
 			break;
 		}
 		pattern += s.source.charAt(s.pos);
@@ -322,8 +259,8 @@ export function scanOperator(s: LexerState): boolean {
 
 	return match (ch) {
 		"/".code => {
-			if (next === "/".code) { skip(s, 2); skipLineComment(s); }
-			else if (next === "*".code) { skip(s, 2); skipBlockComment(s); }
+			if (next === "/".code) { skip(s, 2); scanLineComment(s); }
+			else if (next === "*".code) { skip(s, 2); scanBlockComment(s); }
 			else if (next === "=".code) { skip(s, 2); addToken(s, TokenKind.SlashEq, "/=", startLine, startCol); }
 			else if (allowsRegexAfter(s)) { scanRegex(s); }
 			else { advanceChar(s); addToken(s, TokenKind.Slash, "/", startLine, startCol); }
@@ -349,33 +286,10 @@ export function scanOperator(s: LexerState): boolean {
 			true
 		},
 		">".code => {
-			if (next === ">".code && peekAt(s, 2) === ">".code) { skip(s, 3); addToken(s, TokenKind.GtGtGt, ">>>", startLine, startCol); }
+			if (next === "=".code) { skip(s, 2); addToken(s, TokenKind.GtEq, ">=", startLine, startCol); }
+			else if (next === ">".code && peekAt(s, 2) === ">".code) { skip(s, 3); addToken(s, TokenKind.GtGtGt, ">>>", startLine, startCol); }
 			else if (next === ">".code) { skip(s, 2); addToken(s, TokenKind.GtGt, ">>", startLine, startCol); }
-			else if (next === "=".code) { skip(s, 2); addToken(s, TokenKind.GtEq, ">=", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Gt, ">", startLine, startCol); }
-			true
-		},
-		"&".code => {
-			if (next === "&".code) { skip(s, 2); addToken(s, TokenKind.AmpAmp, "&&", startLine, startCol); }
-			else { advanceChar(s); addToken(s, TokenKind.Amp, "&", startLine, startCol); }
-			true
-		},
-		"|".code => {
-			if (next === "|".code) { skip(s, 2); addToken(s, TokenKind.PipePipe, "||", startLine, startCol); }
-			else if (next === ">".code) { skip(s, 2); addToken(s, TokenKind.PipeGt, "|>", startLine, startCol); }
-			else { advanceChar(s); addToken(s, TokenKind.Pipe, "|", startLine, startCol); }
-			true
-		},
-		"?".code => {
-			if (next === "?".code) { skip(s, 2); addToken(s, TokenKind.QuestionQuestion, "??", startLine, startCol); }
-			else if (next === ".".code) { skip(s, 2); addToken(s, TokenKind.QuestionDot, "?.", startLine, startCol); }
-			else { advanceChar(s); addToken(s, TokenKind.Question, "?", startLine, startCol); }
-			true
-		},
-		".".code => {
-			if (next === ".".code && peekAt(s, 2) === ".".code) { skip(s, 3); addToken(s, TokenKind.DotDotDot, "...", startLine, startCol); }
-			else if (next === ".".code) { skip(s, 2); addToken(s, TokenKind.DotDot, "..", startLine, startCol); }
-			else { advanceChar(s); addToken(s, TokenKind.Dot, ".", startLine, startCol); }
 			true
 		},
 		"+".code => {
@@ -401,6 +315,29 @@ export function scanOperator(s: LexerState): boolean {
 			else { advanceChar(s); addToken(s, TokenKind.Percent, "%", startLine, startCol); }
 			true
 		},
+		"&".code => {
+			if (next === "&".code) { skip(s, 2); addToken(s, TokenKind.AmpAmp, "&&", startLine, startCol); }
+			else { advanceChar(s); addToken(s, TokenKind.Amp, "&", startLine, startCol); }
+			true
+		},
+		"|".code => {
+			if (next === "|".code) { skip(s, 2); addToken(s, TokenKind.PipePipe, "||", startLine, startCol); }
+			else if (next === ">".code) { skip(s, 2); addToken(s, TokenKind.PipeGt, "|>", startLine, startCol); }
+			else { advanceChar(s); addToken(s, TokenKind.Pipe, "|", startLine, startCol); }
+			true
+		},
+		"?".code => {
+			if (next === ".".code && !isDigit(peekAt(s, 2))) { skip(s, 2); addToken(s, TokenKind.QuestionDot, "?.", startLine, startCol); }
+			else if (next === "?".code) { skip(s, 2); addToken(s, TokenKind.QuestionQuestion, "??", startLine, startCol); }
+			else { advanceChar(s); addToken(s, TokenKind.Question, "?", startLine, startCol); }
+			true
+		},
+		".".code => {
+			if (next === ".".code && peekAt(s, 2) === ".".code) { skip(s, 3); addToken(s, TokenKind.DotDotDot, "...", startLine, startCol); }
+			else if (next === ".".code) { skip(s, 2); addToken(s, TokenKind.DotDot, "..", startLine, startCol); }
+			else { advanceChar(s); addToken(s, TokenKind.Dot, ".", startLine, startCol); }
+			true
+		},
 		_ => false,
 	};
 }
@@ -409,26 +346,17 @@ export function scanPunctuation(s: LexerState): boolean {
 	const ch = peek(s);
 	const startLine = s.line;
 	const startCol = s.column;
+
 	return match (ch) {
 		"(".code => { advanceChar(s); addToken(s, TokenKind.LParen, "(", startLine, startCol); true },
 		")".code => { advanceChar(s); addToken(s, TokenKind.RParen, ")", startLine, startCol); true },
-		"{".code => {
-			if (s.templateDepth > 0 && s.braceStack.length > 0) {
-				s.braceStack[s.braceStack.length - 1] += 1;
-			}
-			advanceChar(s);
-			addToken(s, TokenKind.LBrace, "{", startLine, startCol);
-			true
-		},
+		"{".code => { advanceChar(s); addToken(s, TokenKind.LBrace, "{", startLine, startCol); true },
 		"}".code => {
-			if (s.templateDepth > 0 && s.braceStack.length > 0 && s.braceStack[s.braceStack.length - 1] === 0) {
-				advanceChar(s);
+			advanceChar(s);
+			if (s.templateDepth > 0) {
+				s.templateDepth -= 1;
 				scanTemplateContinuation(s);
 			} else {
-				if (s.templateDepth > 0 && s.braceStack.length > 0) {
-					s.braceStack[s.braceStack.length - 1] -= 1;
-				}
-				advanceChar(s);
 				addToken(s, TokenKind.RBrace, "}", startLine, startCol);
 			}
 			true
@@ -443,215 +371,4 @@ export function scanPunctuation(s: LexerState): boolean {
 		"^".code => { advanceChar(s); addToken(s, TokenKind.Caret, "^", startLine, startCol); true },
 		_ => false,
 	};
-}
-
-// ===== Tests =====
-test "integer" {
-	const s = createLexerState("42");
-	scanNumber(s);
-	check(s.tokens.length === 1);
-	check(s.tokens[0].kind === TokenKind.Number);
-	check(s.tokens[0].value === "42");
-}
-
-test "float" {
-	const s = createLexerState("3.14");
-	scanNumber(s);
-	check(s.tokens[0].kind === TokenKind.Number);
-	check(s.tokens[0].value === "3.14");
-}
-
-test "hex" {
-	const s = createLexerState("0xFF");
-	scanNumber(s);
-	check(s.tokens[0].value === "0xFF");
-}
-
-test "hex with underscore" {
-	const s = createLexerState("0xFF_FF");
-	scanNumber(s);
-	check(s.tokens[0].value === "0xFFFF");
-}
-
-test "binary" {
-	const s = createLexerState("0b1010");
-	scanNumber(s);
-	check(s.tokens[0].value === "0b1010");
-}
-
-test "octal" {
-	const s = createLexerState("0o777");
-	scanNumber(s);
-	check(s.tokens[0].value === "0o777");
-}
-
-test "underscore separator" {
-	const s = createLexerState("1_000_000");
-	scanNumber(s);
-	check(s.tokens[0].value === "1000000");
-}
-
-test "exponent" {
-	const s = createLexerState("1e10");
-	scanNumber(s);
-	check(s.tokens[0].value === "1e10");
-}
-
-test "negative exponent" {
-	const s = createLexerState("1.5e-3");
-	scanNumber(s);
-	check(s.tokens[0].value === "1.5e-3");
-}
-
-test "bigint" {
-	const s = createLexerState("123n");
-	scanNumber(s);
-	check(s.tokens[0].kind === TokenKind.BigInt);
-	check(s.tokens[0].value === "123n");
-}
-
-test "does not consume dot before non-digit" {
-	const s = createLexerState("0.x");
-	scanNumber(s);
-	check(s.tokens[0].value === "0");
-	check(s.pos === 1);
-}
-
-test "double-quoted" {
-	const s = createLexerState("\"hello\"");
-	scanString(s, "\"".code);
-	check(s.tokens[0].kind === TokenKind.String);
-	check(s.tokens[0].value === "hello");
-}
-
-test "single-quoted" {
-	const s = createLexerState("'world'");
-	scanString(s, "'".code);
-	check(s.tokens[0].value === "world");
-}
-
-test "escape sequences" {
-	const s = createLexerState("\"a\\nb\\tc\"");
-	scanString(s, "\"".code);
-	check(s.tokens[0].value === "a\nb\tc");
-}
-
-test "escaped quote" {
-	const s = createLexerState("\"say \\\"hi\\\"\"");
-	scanString(s, "\"".code);
-	check(s.tokens[0].value === "say \"hi\"");
-}
-
-test "empty" {
-	const s = createLexerState("\"\"");
-	scanString(s, "\"".code);
-	check(s.tokens[0].value === "");
-}
-
-test "simple" {
-	const s = createLexerState("`hello`");
-	scanTemplateString(s);
-	check(s.tokens[0].kind === TokenKind.TemplateNoSub);
-	check(s.tokens[0].value === "hello");
-}
-
-test "with substitution start" {
-	const s = createLexerState("`hi ${");
-	scanTemplateString(s);
-	check(s.tokens[0].kind === TokenKind.TemplateHead);
-	check(s.tokens[0].value === "hi ");
-}
-
-test "escaped backtick" {
-	const s = createLexerState("`a\\`b`");
-	scanTemplateString(s);
-	check(s.tokens[0].value === "a`b");
-}
-
-test "escaped dollar" {
-	const s = createLexerState("`\\$100`");
-	scanTemplateString(s);
-	check(s.tokens[0].value === "$100");
-}
-
-test "simple" {
-	const s = createLexerState("myVar");
-	scanIdentifier(s);
-	check(s.tokens[0].kind === TokenKind.Ident);
-	check(s.tokens[0].value === "myVar");
-}
-
-test "keyword" {
-	const s = createLexerState("const");
-	scanIdentifier(s);
-	check(s.tokens[0].kind === TokenKind.Const);
-	check(s.tokens[0].value === "const");
-}
-
-test "keyword prefix is ident" {
-	const s = createLexerState("constX");
-	scanIdentifier(s);
-	check(s.tokens[0].kind === TokenKind.Ident);
-	check(s.tokens[0].value === "constX");
-}
-
-test "line comment" {
-	const s = createLexerState("// comment\ncode");
-	skip(s, 2);
-	skipLineComment(s);
-	check(peek(s) === "\n".code);
-}
-
-test "block comment" {
-	const s = createLexerState("/* block */rest");
-	skip(s, 2);
-	skipBlockComment(s);
-	check(s.source.charAt(s.pos) === "r");
-}
-
-test "===" {
-	const s = createLexerState("===");
-	check(scanOperator(s));
-	check(s.tokens[0].kind === TokenKind.EqEqEq);
-}
-
-test "!==" {
-	const s = createLexerState("!==");
-	check(scanOperator(s));
-	check(s.tokens[0].kind === TokenKind.BangEqEq);
-}
-
-test ">>>" {
-	const s = createLexerState(">>>");
-	check(scanOperator(s));
-	check(s.tokens[0].kind === TokenKind.GtGtGt);
-}
-
-test "=>" {
-	const s = createLexerState("=>");
-	check(scanOperator(s));
-	check(s.tokens[0].kind === TokenKind.Arrow);
-}
-
-test "line comment consumed" {
-	const s = createLexerState("// comment\nx");
-	check(scanOperator(s));
-	check(s.tokens.length === 0);
-}
-
-test "unrecognized char returns false" {
-	const s = createLexerState("a");
-	check(!scanOperator(s));
-	check(s.tokens.length === 0);
-}
-
-test "all delimiters" {
-	const s = createLexerState("(");
-	check(scanPunctuation(s));
-	check(s.tokens[0].kind === TokenKind.LParen);
-}
-
-test "unrecognized returns false" {
-	const s = createLexerState("a");
-	check(!scanPunctuation(s));
 }

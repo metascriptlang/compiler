@@ -4,11 +4,11 @@
 import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, NodeData, createNode } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, skipDestructurePattern, consumeSemicolon } from "../context";
-import { skipOptionalType } from "../util";
+import { skipOptionalType, isIdentLike } from "../util";
 import { callBlockParser, callExprParser, callStmtParser } from "./callbacks";
 import { parseArrayPattern, parseObjectPattern } from "./declaration";
 import { programOk, stmtKind } from "./validation";
-import { check } from "std/testing";
+
 
 type NodeResult = Result<Node, string>;
 
@@ -151,7 +151,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 		}
 
 		const nameToken = current(state);
-		if (nameToken.kind === TokenKind.Ident) {
+		if (isIdentLike(nameToken)) {
 			// Peek ahead: is this "name of" (for-of), "name in" (for-in), or "name =" (C-style for)?
 			const afterName = state.position + 1;
 			if (afterName < state.tokens.length && state.tokens[afterName].kind === TokenKind.Of) {
@@ -193,7 +193,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 
 		// C-style for with variable declaration: for (let i = 0; ...)
 		const varName = current(state);
-		if (varName.kind !== TokenKind.Ident) {
+		if (!isIdentLike(varName)) {
 			return Result.err(`Expected variable name in for init at line ${varName.line.toString()}`);
 		}
 
@@ -480,79 +480,62 @@ export function parseTestDecl(state: ParserState): NodeResult {
 	return Result.ok(createNode(NodeKind.TestDecl, { testName: name, testBody: body }, testToken));
 }
 
-// ===== Expect Statement =====
-// syntax: 'expect' expr ';'
-
-export function parseExpectStmt(state: ParserState): NodeResult {
-	const expectToken = current(state);
-	advance(state); // consume 'expect'
-	const expr = try callExprParser(state);
-	consumeSemicolon(state);
-	return Result.ok(createNode(NodeKind.ExpectStmt, { expectExpr: expr }, expectToken));
-}
-
 // ===== Tests =====
 // If — distinct paths: simple, else, else-if chain
-test "simple if" { check(programOk("if (x) { y; }")); }
+test "simple if" { expect(programOk("if (x) { y; }")); }
 
-test "if-else" { check(programOk("if (x) { a; } else { b; }")); }
+test "if-else" { expect(programOk("if (x) { a; } else { b; }")); }
 
-test "if-else-if-else" { check(programOk("if (a) { x; } else if (b) { y; } else { z; }")); }
+test "if-else-if-else" { expect(programOk("if (a) { x; } else if (b) { y; } else { z; }")); }
 // Braceless bodies
-test "if braceless" { check(programOk("if (x) y;")); }
+test "if braceless" { expect(programOk("if (x) y;")); }
 
-test "if-else braceless" { check(programOk("if (x) a; else b;")); }
+test "if-else braceless" { expect(programOk("if (x) a; else b;")); }
 
-test "while braceless" { check(programOk("while (x) y;")); }
+test "while braceless" { expect(programOk("while (x) y;")); }
 // While
-test "while" { check(programOk("while (x) { y; }")); }
+test "while" { expect(programOk("while (x) { y; }")); }
 // Return
-test "return expr" { check(programOk("function f(x) { return x + 1; }")); }
+test "return expr" { expect(programOk("function f(x) { return x + 1; }")); }
 // Do-while
-test "do-while" { check(programOk("do { x; } while (y);")); }
+test "do-while" { expect(programOk("do { x; } while (y);")); }
 
-test "do-while no semi" { check(programOk("do { x; } while (y)")); }
+test "do-while no semi" { expect(programOk("do { x; } while (y)")); }
 // Switch — distinct paths: case, default, multi-case, return-in-case
-test "switch case+default" { check(programOk("switch (x) { case 1: a; break; default: b; }")); }
+test "switch case+default" { expect(programOk("switch (x) { case 1: a; break; default: b; }")); }
 
-test "switch multi case" { check(programOk("switch (x) { case 1: a; break; case 2: b; break; }")); }
+test "switch multi case" { expect(programOk("switch (x) { case 1: a; break; case 2: b; break; }")); }
 
-test "switch return" { check(programOk("function f(x) { switch (x) { case 1: return \"one\"; default: return \"other\"; } }")); }
+test "switch return" { expect(programOk("function f(x) { switch (x) { case 1: return \"one\"; default: return \"other\"; } }")); }
 // For-in
-test "for-in const" { check(stmtKind("for (const key in obj) {}") === NodeKind.ForInStmt); }
+test "for-in const" { expect(stmtKind("for (const key in obj) {}") === NodeKind.ForInStmt); }
 
-test "for-in let" { check(programOk("for (let k in obj) { console.log(k); }")); }
+test "for-in let" { expect(programOk("for (let k in obj) { console.log(k); }")); }
 
-test "for-in body" { check(programOk("for (const key in obj) { obj[key]; }")); }
+test "for-in body" { expect(programOk("for (const key in obj) { obj[key]; }")); }
 // For-of with destructuring
-test "for-of destr obj" { check(programOk("for (const {key, value} of entries) { key; }")); }
+test "for-of destr obj" { expect(programOk("for (const {key, value} of entries) { key; }")); }
 
-test "for-of destr arr" { check(programOk("for (const [k, v] of entries) { k; }")); }
+test "for-of destr arr" { expect(programOk("for (const [k, v] of entries) { k; }")); }
 // Defer — expression vs block body
-test "defer call" { check(programOk("function f() { defer cleanup(); }")); }
+test "defer call" { expect(programOk("function f() { defer cleanup(); }")); }
 
-test "defer block" { check(programOk("function f() { defer { close(fd); } }")); }
+test "defer block" { expect(programOk("function f() { defer { close(fd); } }")); }
 // Unreachable
-test "unreachable bare" { check(programOk("unreachable;")); }
+test "unreachable bare" { expect(programOk("unreachable;")); }
 
-test "unreachable msg" { check(programOk("unreachable(\"should not reach\");")); }
+test "unreachable msg" { expect(programOk("unreachable(\"should not reach\");")); }
 // Test declaration
-test "test decl basic" { check(programOk("test \"basic\" { const x = 1; }")); }
+test "test decl basic" { expect(programOk("test \"basic\" { const x = 1; }")); }
 
-test "test decl with expect" { check(programOk("test \"math\" { expect 1 === 1; }")); }
+test "test decl with assert" { expect(programOk("test \"math\" { expect(1 === 1); }")); }
 
-test "test decl multi expect" { check(programOk("test \"multi\" { expect 1 === 1; expect 2 > 1; }")); }
+test "test is TestDecl" { expect(stmtKind("test \"x\" { }") === NodeKind.TestDecl); }
 
-test "test is TestDecl" { check(stmtKind("test \"x\" { }") === NodeKind.TestDecl); }
+test "test no string rejects" { expect(!programOk("test { }")); }
 
-test "test no string rejects" { check(!programOk("test { }")); }
+test "test with code body" { expect(programOk("test \"loops\" { let x = 0; while (x < 3) { x = x + 1; } }")); }
 
-test "test with code body" { check(programOk("test \"loops\" { let x = 0; while (x < 3) { x = x + 1; } expect x === 3; }")); }
-// Expect statement
-test "expect is ExpectStmt" { check(stmtKind("expect x;") === NodeKind.ExpectStmt); }
+test "assert call" { expect(programOk("expect(!done);")); }
 
-test "expect comparison" { check(programOk("expect x === 1;")); }
-
-test "expect negation" { check(programOk("expect !done;")); }
-
-test "expect binary" { check(programOk("expect a > b;")); }
+test "assert binary" { expect(programOk("expect(a > b);")); }

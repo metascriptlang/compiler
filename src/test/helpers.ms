@@ -95,17 +95,17 @@ export function assertNoError(output: string): boolean {
 	return true;
 }
 
-import { check } from "std/testing";
+
 
 test "assertContains basic" {
-	check(assertContains("hello world", "world"));
-	check(assertContains("hello world", "hello"));
-	check(!assertContains("hello", "world"));
-	check(assertContains("abc", ""));
-	check(!assertContains("", "abc"));
+	expect(assertContains("hello world", "world"));
+	expect(assertContains("hello world", "hello"));
+	expect(!assertContains("hello", "world"));
+	expect(assertContains("abc", ""));
+	expect(!assertContains("", "abc"));
 }
 
 test "assertNoError" {
-	check(assertNoError("int32_t x = 42;"));
-	check(!assertNoError("ERROR: parse: unexpected token"));
+	expect(assertNoError("int32_t x = 42;"));
+	expect(!assertNoError("ERROR: parse: unexpected token"));
 }

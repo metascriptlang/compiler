@@ -2,7 +2,7 @@
 // Tests lambda lifting transform + closure codegen.
 
 import { compileToC, assertContains, assertNoError } from "../helpers";
-import { check } from "std/testing";
+
 
 // KNOWN ISSUE: Arrow functions and closures fail in E2E pipeline.
 // The checker/validator/transform chain rejects them before codegen.

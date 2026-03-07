@@ -23,7 +23,6 @@ import { checkProgram } from "./checkPass";
 import { parseSource } from "../parser/statements/validation";
 // Import parseProgram to trigger callback registration (side-effect import)
 import { parseProgram } from "../parser/statements/core";
-import { check } from "std/testing";
 
 // ===== Data Types =====
 
@@ -1459,6 +1458,7 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 			const tt = sgSymbolToTokenType(sym.symbolKind);
 			let mods = 0;
 			if (!hasFlag(sym, SF_MUTABLE) && sym.symbolKind === SymbolKind.Variable) mods = 4; // readonly bit 2
+			if (sym.builtinKind.length > 0) mods = mods | 16; // defaultLibrary bit 4
 			const tok: SgSemanticToken = { line: loc.line, col: loc.column, length: id.name.length, tokenType: tt, modifiers: mods };
 			tokens.push(tok);
 		}
@@ -1839,87 +1839,87 @@ export function sgFindUsagesByName(refs: SgSymbolRef[], name: string): SgSymbolR
 }
 
 // ===== Tests =====
-test "number" { check(sgTypeToString(numberType()) === "number"); }
+test "number" { expect(sgTypeToString(numberType()) === "number"); }
 
-test "string" { check(sgTypeToString(stringType()) === "string"); }
+test "string" { expect(sgTypeToString(stringType()) === "string"); }
 
-test "boolean" { check(sgTypeToString(booleanType()) === "boolean"); }
+test "boolean" { expect(sgTypeToString(booleanType()) === "boolean"); }
 
-test "void" { check(sgTypeToString(voidType()) === "void"); }
+test "void" { expect(sgTypeToString(voidType()) === "void"); }
 
-test "null" { check(sgTypeToString(nullType()) === "null"); }
+test "null" { expect(sgTypeToString(nullType()) === "null"); }
 
-test "unknown" { check(sgTypeToString(unknownType()) === "unknown"); }
+test "unknown" { expect(sgTypeToString(unknownType()) === "unknown"); }
 
-test "never" { check(sgTypeToString(neverType()) === "never"); }
+test "never" { expect(sgTypeToString(neverType()) === "never"); }
 
-test "error" { check(sgTypeToString(errorType()) === "error"); }
+test "error" { expect(sgTypeToString(errorType()) === "error"); }
 
 import { createArray, createFunction, createEnum, createObject, createResult } from "./types";
 test "array" {
 	const t = createArray(numberType());
-	check(sgTypeToString(t) === "number[]");
+	expect(sgTypeToString(t) === "number[]");
 }
 
 test "function no params" {
 	const params: Type[] = [];
 	const names: string[] = [];
 	const t = createFunction(params, names, voidType());
-	check(sgTypeToString(t) === "() => void");
+	expect(sgTypeToString(t) === "() => void");
 }
 
 test "function with params" {
 	const params: Type[] = [numberType(), stringType()];
 	const names: string[] = ["a", "b"];
 	const t = createFunction(params, names, booleanType());
-	check(sgTypeToString(t) === "(a: number, b: string) => boolean");
+	expect(sgTypeToString(t) === "(a: number, b: string) => boolean");
 }
 
 test "enum" {
 	const members: string[] = ["A", "B"];
 	const t = createEnum("Color", members);
-	check(sgTypeToString(t) === "Color");
+	expect(sgTypeToString(t) === "Color");
 }
 
 test "named object" {
 	const propNames: string[] = ["x", "y"];
 	const propTypes: Type[] = [numberType(), numberType()];
 	const t = createObject("Point", propNames, propTypes, true);
-	check(sgTypeToString(t) === "Point");
+	expect(sgTypeToString(t) === "Point");
 }
 
 test "result" {
 	const t = createResult(numberType(), stringType());
-	check(sgTypeToString(t) === "Result<number, string>");
+	expect(sgTypeToString(t) === "Result<number, string>");
 }
 
 test "find identifier in simple decl" {
 	const pr = parseSource("const x = 42;");
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	// "const x" - x is at col 6
 	const node = sgFindNodeAtPosition(pr.value, 1, 6);
-	check(node !== null);
+	expect(node !== null);
 }
 
 test "find in function body" {
 	const pr = parseSource("function foo() { return 1; }");
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const node = sgFindNodeAtPosition(pr.value, 1, 17);
-	check(node !== null);
+	expect(node !== null);
 }
 
 test "returns null for null node" {
 	const nullNode = null as unknown as Node;
 	const node = sgFindNodeAtPosition(nullNode, 1, 0);
-	check(node === null);
+	expect(node === null);
 }
 
 test "returns null for unknown position" {
 	const pr = parseSource("const x = 1;");
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const ctx = checkProgram(pr.value);
 	const sg = sgGetSymbolAtCursor(ctx, pr.value, 100, 0);
-	check(sg === null);
+	expect(sg === null);
 }
 
 test "format variable hover" {
@@ -1930,7 +1930,7 @@ test "format variable hover" {
 		isExported: false, isMutable: false,
 	};
 	const hover = sgFormatHover(suggest);
-	check(hover === "```ms\nconst count: number\n```");
+	expect(hover === "```ms\nconst count: number\n```");
 }
 
 test "format function hover" {
@@ -1944,7 +1944,7 @@ test "format function hover" {
 		isExported: false, isMutable: false,
 	};
 	const hover = sgFormatHover(suggest);
-	check(hover === "```ms\nfunction greet(s: string): void\n```");
+	expect(hover === "```ms\nfunction greet(s: string): void\n```");
 }
 
 test "format interface hover" {
@@ -1954,7 +1954,7 @@ test "format interface hover" {
 		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false,
 	};
-	check(sgFormatHover(suggest) === "```ms\ninterface Point\n```");
+	expect(sgFormatHover(suggest) === "```ms\ninterface Point\n```");
 }
 
 test "format class hover" {
@@ -1964,7 +1964,7 @@ test "format class hover" {
 		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false,
 	};
-	check(sgFormatHover(suggest) === "```ms\nclass Vec\n```");
+	expect(sgFormatHover(suggest) === "```ms\nclass Vec\n```");
 }
 
 test "format enum hover" {
@@ -1974,7 +1974,7 @@ test "format enum hover" {
 		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false,
 	};
-	check(sgFormatHover(suggest) === "```ms\nenum Color\n```");
+	expect(sgFormatHover(suggest) === "```ms\nenum Color\n```");
 }
 
 test "format type alias hover" {
@@ -1984,7 +1984,7 @@ test "format type alias hover" {
 		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false,
 	};
-	check(sgFormatHover(suggest) === "```ms\ntype Id = number\n```");
+	expect(sgFormatHover(suggest) === "```ms\ntype Id = number\n```");
 }
 
 test "format let variable hover" {
@@ -1994,7 +1994,7 @@ test "format let variable hover" {
 		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: true,
 	};
-	check(sgFormatHover(suggest) === "```ms\nlet x: string\n```");
+	expect(sgFormatHover(suggest) === "```ms\nlet x: string\n```");
 }
 
 test "format parameter hover" {
@@ -2004,7 +2004,7 @@ test "format parameter hover" {
 		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false,
 	};
-	check(sgFormatHover(suggest) === "```ms\n(parameter) name: string\n```");
+	expect(sgFormatHover(suggest) === "```ms\n(parameter) name: string\n```");
 }
 
 test "format property hover" {
@@ -2014,7 +2014,7 @@ test "format property hover" {
 		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false,
 	};
-	check(sgFormatHover(suggest) === "```ms\n(property) x: number\n```");
+	expect(sgFormatHover(suggest) === "```ms\n(property) x: number\n```");
 }
 
 test "format method hover" {
@@ -2027,83 +2027,83 @@ test "format method hover" {
 		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false,
 	};
-	check(sgFormatHover(suggest) === "```ms\n(method) push(item: string): void\n```");
+	expect(sgFormatHover(suggest) === "```ms\n(method) push(item: string): void\n```");
 }
 
 test "null suggest returns empty" {
 	const sg = null as unknown as SgSuggest;
-	check(sgFormatHover(sg) === "");
+	expect(sgFormatHover(sg) === "");
 }
 
 test "empty errors" {
 	const pr = parseSource("const x = 1;");
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const ctx = checkProgram(pr.value);
 	const diags = sgCollectDiagnostics(ctx);
-	check(diags.length === 0);
+	expect(diags.length === 0);
 }
 
 test "dot triggers MemberAccess" {
 	// "foo.b" — cursor at col 5 (after 'b')
-	check(sgDetectCompletionContext("foo.b", 1, 5) === SgCompletionKind.MemberAccess);
+	expect(sgDetectCompletionContext("foo.b", 1, 5) === SgCompletionKind.MemberAccess);
 }
 
 test "dot with no prefix" {
 	// "foo." — cursor at col 4 (right after '.')
-	check(sgDetectCompletionContext("foo.", 1, 4) === SgCompletionKind.MemberAccess);
+	expect(sgDetectCompletionContext("foo.", 1, 4) === SgCompletionKind.MemberAccess);
 }
 
 test "colon triggers TypeAnnotation" {
 	// "x: num" — cursor at col 6
-	check(sgDetectCompletionContext("x: num", 1, 6) === SgCompletionKind.TypeAnnotation);
+	expect(sgDetectCompletionContext("x: num", 1, 6) === SgCompletionKind.TypeAnnotation);
 }
 
 test "bare identifier" {
 	// "con" — cursor at col 3
-	check(sgDetectCompletionContext("con", 1, 3) === SgCompletionKind.Identifier);
+	expect(sgDetectCompletionContext("con", 1, 3) === SgCompletionKind.Identifier);
 }
 
-test "start of line" { check(sgDetectCompletionContext("x", 1, 0) === SgCompletionKind.Identifier); }
+test "start of line" { expect(sgDetectCompletionContext("x", 1, 0) === SgCompletionKind.Identifier); }
 
-test "extracts prefix" { check(sgGetPrefix("foo.bar", 1, 7) === "bar"); }
+test "extracts prefix" { expect(sgGetPrefix("foo.bar", 1, 7) === "bar"); }
 
-test "no prefix after dot" { check(sgGetPrefix("foo.", 1, 4) === ""); }
+test "no prefix after dot" { expect(sgGetPrefix("foo.", 1, 4) === ""); }
 
-test "whole word" { check(sgGetPrefix("hello", 1, 5) === "hello"); }
+test "whole word" { expect(sgGetPrefix("hello", 1, 5) === "hello"); }
 
-test "empty at start" { check(sgGetPrefix("x", 1, 0) === ""); }
+test "empty at start" { expect(sgGetPrefix("x", 1, 0) === ""); }
 
-test "prefix with underscore" { check(sgGetPrefix("my_var", 1, 6) === "my_var"); }
+test "prefix with underscore" { expect(sgGetPrefix("my_var", 1, 6) === "my_var"); }
 
-test "second line" { check(sgGetPrefix("abc\ndef", 2, 3) === "def"); }
+test "second line" { expect(sgGetPrefix("abc\ndef", 2, 3) === "def"); }
 
 test "finds top-level symbols" {
 	const pr = parseSource("const abc = 1;\nconst abd = 2;\nconst xyz = 3;");
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const ctx = checkProgram(pr.value);
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "ab", null as unknown as Type);
-	check(candidates.length === 2);
+	expect(candidates.length === 2);
 }
 
 test "empty prefix returns all" {
 	const pr = parseSource("const a = 1;\nconst b = 2;");
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const ctx = checkProgram(pr.value);
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "", null as unknown as Type);
-	check(candidates.length >= 2);
+	expect(candidates.length >= 2);
 }
 
 test "no match returns empty" {
 	const pr = parseSource("const abc = 1;");
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const ctx = checkProgram(pr.value);
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "zzz", null as unknown as Type);
-	check(candidates.length === 0);
+	expect(candidates.length === 0);
 }
 
 test "only returns types" {
 	const pr = parseSource("interface Foo { x: number; }\nconst y = 1;");
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const ctx = checkProgram(pr.value);
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.TypeAnnotation, "", null as unknown as Type);
 	// Should include Foo (interface) but not y (variable)
@@ -2113,8 +2113,8 @@ test "only returns types" {
 		if (candidates[i].name === "Foo") hasFoo = true;
 		if (candidates[i].name === "y") hasY = true;
 	}
-	check(hasFoo);
-	check(!hasY);
+	expect(hasFoo);
+	expect(!hasY);
 }
 
 test "object properties" {
@@ -2122,10 +2122,10 @@ test "object properties" {
 	const propTypes: Type[] = [numberType(), numberType(), stringType()];
 	const objType = createObject("Point", propNames, propTypes, true);
 	const pr = parseSource("const a = 1;");
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const ctx = checkProgram(pr.value);
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.MemberAccess, "", objType);
-	check(candidates.length === 3);
+	expect(candidates.length === 3);
 }
 
 test "object properties with prefix" {
@@ -2133,105 +2133,105 @@ test "object properties with prefix" {
 	const propTypes: Type[] = [numberType(), numberType(), stringType()];
 	const objType = createObject("Obj", propNames, propTypes, true);
 	const pr = parseSource("const a = 1;");
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const ctx = checkProgram(pr.value);
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.MemberAccess, "x", objType);
-	check(candidates.length === 1);
-	check(candidates[0].name === "xPos");
+	expect(candidates.length === 1);
+	expect(candidates[0].name === "xPos");
 }
 
 test "enum members" {
 	const members: string[] = ["Red", "Green", "Blue"];
 	const enumType = createEnum("Color", members);
 	const pr = parseSource("const a = 1;");
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const ctx = checkProgram(pr.value);
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.MemberAccess, "", enumType);
-	check(candidates.length === 3);
+	expect(candidates.length === 3);
 }
 
 test "null receiver returns empty" {
 	const pr = parseSource("const a = 1;");
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const ctx = checkProgram(pr.value);
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.MemberAccess, "", null as unknown as Type);
-	check(candidates.length === 0);
+	expect(candidates.length === 0);
 }
 
-test "exact prefix" { check(sgPrefixMatch("ab", "abc") === 2); }
+test "exact prefix" { expect(sgPrefixMatch("ab", "abc") === 2); }
 
-test "substring" { check(sgPrefixMatch("bc", "abcd") === 1); }
+test "substring" { expect(sgPrefixMatch("bc", "abcd") === 1); }
 
-test "no match" { check(sgPrefixMatch("zz", "abc") === 0); }
+test "no match" { expect(sgPrefixMatch("zz", "abc") === 0); }
 
-test "case insensitive prefix" { check(sgPrefixMatch("AB", "abcde") === 2); }
+test "case insensitive prefix" { expect(sgPrefixMatch("AB", "abcde") === 2); }
 
-test "empty prefix" { check(sgPrefixMatch("", "anything") === 2); }
+test "empty prefix" { expect(sgPrefixMatch("", "anything") === 2); }
 
 test "prefix before substr" {
 	const pr = parseSource("const abcdef = 1;\nconst xyzabc = 2;");
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const ctx = checkProgram(pr.value);
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "abc", null as unknown as Type);
-	check(candidates.length === 2);
+	expect(candidates.length === 2);
 	// abcdef (prefix match) should come before xyzabc (substr match)
-	check(candidates[0].name === "abcdef");
-	check(candidates[1].name === "xyzabc");
+	expect(candidates[0].name === "abcdef");
+	expect(candidates[1].name === "xyzabc");
 }
 
 test "inner scope before outer" {
 	const pr = parseSource("const outer = 1;\nfunction f() { const inner = 2; }");
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const ctx = checkProgram(pr.value);
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "", null as unknown as Type);
 	// inner scope (depth 0) should rank before outer scope (depth > 0)
 	// At least both should be present
-	check(candidates.length >= 2);
+	expect(candidates.length >= 2);
 	// First items should have lower scopeDepth
 	if (candidates.length >= 2) {
-		check(candidates[0].scopeDepth <= candidates[1].scopeDepth);
+		expect(candidates[0].scopeDepth <= candidates[1].scopeDepth);
 	}
 }
 
 test "collects function and variable" {
 	const pr = parseSource("function foo() { return 1; }\nconst x = 1;");
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const ctx = checkProgram(pr.value);
 	const symbols = sgCollectSymbolsInFile(ctx, pr.value);
-	check(symbols.length === 2);
-	check(symbols[0].name === "foo");
-	check(symbols[0].kind === SymbolKind.Function);
-	check(symbols[1].name === "x");
-	check(symbols[1].kind === SymbolKind.Variable);
+	expect(symbols.length === 2);
+	expect(symbols[0].name === "foo");
+	expect(symbols[0].kind === SymbolKind.Function);
+	expect(symbols[1].name === "x");
+	expect(symbols[1].kind === SymbolKind.Variable);
 }
 
 test "collects interface and enum" {
 	const pr = parseSource("interface Point { x: number; }\nenum Color { Red, Green }");
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const ctx = checkProgram(pr.value);
 	const symbols = sgCollectSymbolsInFile(ctx, pr.value);
-	check(symbols.length === 2);
-	check(symbols[0].name === "Point");
-	check(symbols[0].kind === SymbolKind.Interface);
-	check(symbols[1].name === "Color");
-	check(symbols[1].kind === SymbolKind.Enum);
+	expect(symbols.length === 2);
+	expect(symbols[0].name === "Point");
+	expect(symbols[0].kind === SymbolKind.Interface);
+	expect(symbols[1].name === "Color");
+	expect(symbols[1].kind === SymbolKind.Enum);
 }
 
 test "unwraps export decl" {
 	const pr = parseSource("export function bar() { return 1; }");
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const ctx = checkProgram(pr.value);
 	const symbols = sgCollectSymbolsInFile(ctx, pr.value);
-	check(symbols.length === 1);
-	check(symbols[0].name === "bar");
+	expect(symbols.length === 1);
+	expect(symbols[0].name === "bar");
 }
 
 test "empty program" {
 	const pr = parseSource("");
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const ctx = checkProgram(pr.value);
 	const symbols = sgCollectSymbolsInFile(ctx, pr.value);
-	check(symbols.length === 0);
+	expect(symbols.length === 0);
 }
 
 test "function with params" {
@@ -2240,9 +2240,9 @@ test "function with params" {
 	const fnType = createFunction(params, names, voidType());
 	const sym = makeSymbol("log", SymbolKind.Function, fnType, false);
 	const sigs = sgFormatSignature(sym);
-	check(sigs.length === 1);
-	check(sigs[0].label === "log(line: number, msg: string): void");
-	check(sigs[0].paramLabels.length === 2);
+	expect(sigs.length === 1);
+	expect(sigs[0].label === "log(line: number, msg: string): void");
+	expect(sigs[0].paramLabels.length === 2);
 }
 
 test "function no params" {
@@ -2251,74 +2251,74 @@ test "function no params" {
 	const fnType = createFunction(params, names, booleanType());
 	const sym = makeSymbol("check", SymbolKind.Function, fnType, false);
 	const sigs = sgFormatSignature(sym);
-	check(sigs.length === 1);
-	check(sigs[0].label === "check(): boolean");
-	check(sigs[0].paramLabels.length === 0);
+	expect(sigs.length === 1);
+	expect(sigs[0].label === "check(): boolean");
+	expect(sigs[0].paramLabels.length === 0);
 }
 
 test "null symbol returns empty" {
 	const nullSym = null as unknown as Symbol;
 	const sigs = sgFormatSignature(nullSym);
-	check(sigs.length === 0);
+	expect(sigs.length === 0);
 }
 
 test "non-function symbol returns empty" {
 	const sym = makeSymbol("x", SymbolKind.Variable, numberType(), false);
 	const sigs = sgFormatSignature(sym);
-	check(sigs.length === 0);
+	expect(sigs.length === 0);
 }
 
-test "simple call" { check(sgGetCalleeAtCursor("foo(x", 1, 4) === "foo"); }
+test "simple call" { expect(sgGetCalleeAtCursor("foo(x", 1, 4) === "foo"); }
 
-test "call with space before paren" { check(sgGetCalleeAtCursor("foo (x", 1, 5) === "foo"); }
+test "call with space before paren" { expect(sgGetCalleeAtCursor("foo (x", 1, 5) === "foo"); }
 
-test "nested call — inner" { check(sgGetCalleeAtCursor("foo(bar(x", 1, 8) === "bar"); }
+test "nested call — inner" { expect(sgGetCalleeAtCursor("foo(bar(x", 1, 8) === "bar"); }
 
-test "not inside call returns empty" { check(sgGetCalleeAtCursor("hello", 1, 3) === ""); }
+test "not inside call returns empty" { expect(sgGetCalleeAtCursor("hello", 1, 3) === ""); }
 
-test "after comma" { check(sgGetCalleeAtCursor("add(1, 2", 1, 7) === "add"); }
+test "after comma" { expect(sgGetCalleeAtCursor("add(1, 2", 1, 7) === "add"); }
 
 test "first param" {
 	// foo(| — cursor just after (
-	check(sgCountActiveParam("foo(x", 1, 4) === 0);
+	expect(sgCountActiveParam("foo(x", 1, 4) === 0);
 }
 
 test "second param" {
 	// foo(a, | — cursor after comma
-	check(sgCountActiveParam("foo(a, b", 1, 7) === 1);
+	expect(sgCountActiveParam("foo(a, b", 1, 7) === 1);
 }
 
-test "third param" { check(sgCountActiveParam("foo(a, b, c", 1, 10) === 2); }
+test "third param" { expect(sgCountActiveParam("foo(a, b, c", 1, 10) === 2); }
 
 test "nested parens ignored" {
 	// foo(bar(1, 2), | — inner commas don't count
-	check(sgCountActiveParam("foo(bar(1, 2), x", 1, 15) === 1);
+	expect(sgCountActiveParam("foo(bar(1, 2), x", 1, 15) === 1);
 }
 
 test "type hint for untyped variable" {
 	const src = "const x = 42;";
 	const pr = parseSource(src);
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const ctx = checkProgram(pr.value);
 	const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
-	check(hints.length === 1);
-	check(hints[0].label === ": number");
-	check(hints[0].hintKind === SgInlayHintKind.Type);
+	expect(hints.length === 1);
+	expect(hints[0].label === ": number");
+	expect(hints[0].hintKind === SgInlayHintKind.Type);
 }
 
 test "no hint for explicitly typed variable" {
 	const src = "const x: number = 42;";
 	const pr = parseSource(src);
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const ctx = checkProgram(pr.value);
 	const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
-	check(hints.length === 0);
+	expect(hints.length === 0);
 }
 
 test "parameter hints at call site" {
 	const src = "function add(a: number, b: number): number { return a + b; }\nconst r = add(1, 2);";
 	const pr = parseSource(src);
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const ctx = checkProgram(pr.value);
 	const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
 	// Should have: type hint for r + param hints a: and b:
@@ -2328,14 +2328,14 @@ test "parameter hints at call site" {
 		if (hints[j].hintKind === SgInlayHintKind.Type) { typeHints = typeHints + 1; }
 		if (hints[j].hintKind === SgInlayHintKind.Parameter) { paramHints = paramHints + 1; }
 	}
-	check(typeHints >= 1);  // r: number
-	check(paramHints === 2);  // a: 1, b: 2
+	expect(typeHints >= 1);  // r: number
+	expect(paramHints === 2);  // a: 1, b: 2
 }
 
 test "skip param hint when arg matches param name" {
 	const src = "function foo(x: number): void {}\nconst x = 5;\nfoo(x);";
 	const pr = parseSource(src);
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const ctx = checkProgram(pr.value);
 	const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
 	// x matches param name "x" — no param hint, just type hint for x
@@ -2343,48 +2343,48 @@ test "skip param hint when arg matches param name" {
 	for (let j = 0; j < hints.length; j = j + 1) {
 		if (hints[j].hintKind === SgInlayHintKind.Parameter) { paramHints = paramHints + 1; }
 	}
-	check(paramHints === 0);
+	expect(paramHints === 0);
 }
 
 test "collects declarations and usages" {
 	const src = "const x = 1;\nconst y = x;";
 	const pr = parseSource(src);
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const refs = sgCollectReferences(pr.value);
 	// x: 1 decl + 1 usage, y: 1 decl
-	check(refs.length >= 3);
+	expect(refs.length >= 3);
 }
 
 test "find usages by name" {
 	const src = "const x = 1;\nconst y = x;";
 	const pr = parseSource(src);
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const refs = sgCollectReferences(pr.value);
 	const xRefs = sgFindUsagesByName(refs, "x");
-	check(xRefs.length === 2);
+	expect(xRefs.length === 2);
 	// First should be decl, second should be usage
-	check(xRefs[0].isDecl);
-	check(!xRefs[1].isDecl);
+	expect(xRefs[0].isDecl);
+	expect(!xRefs[1].isDecl);
 }
 
 test "function decl and call" {
 	const src = "function greet(name: string): void {}\ngreet(\"hello\");";
 	const pr = parseSource(src);
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const refs = sgCollectReferences(pr.value);
 	const greetRefs = sgFindUsagesByName(refs, "greet");
-	check(greetRefs.length === 2);
-	check(greetRefs[0].isDecl);
-	check(!greetRefs[1].isDecl);
+	expect(greetRefs.length === 2);
+	expect(greetRefs[0].isDecl);
+	expect(!greetRefs[1].isDecl);
 }
 
 test "no references for unknown name" {
 	const src = "const x = 1;";
 	const pr = parseSource(src);
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const refs = sgCollectReferences(pr.value);
 	const noRefs = sgFindUsagesByName(refs, "nonexistent");
-	check(noRefs.length === 0);
+	expect(noRefs.length === 0);
 }
 
 // ===== Doc Comment Tests =====
@@ -2392,37 +2392,37 @@ test "no references for unknown name" {
 test "doc comment extraction" {
 	const src = "// Adds two numbers\nfunction add(x: number): number { return x; }";
 	const comment = sgExtractDocComment(src, 2);
-	check(comment === "Adds two numbers");
+	expect(comment === "Adds two numbers");
 }
 
 test "doc comment multi-line" {
 	const src = "// Line one\n// Line two\nfunction foo(): void {}";
 	const comment = sgExtractDocComment(src, 3);
-	check(comment === "Line one\nLine two");
+	expect(comment === "Line one\nLine two");
 }
 
 test "doc comment stops at blank line" {
 	const src = "// Orphaned\n\n// Real doc\nfunction bar(): void {}";
 	const comment = sgExtractDocComment(src, 4);
-	check(comment === "Real doc");
+	expect(comment === "Real doc");
 }
 
 test "doc comment none" {
 	const src = "const x = 1;\nfunction baz(): void {}";
 	const comment = sgExtractDocComment(src, 2);
-	check(comment === "");
+	expect(comment === "");
 }
 
 test "doc comment first line no crash" {
 	const src = "function first(): void {}";
 	const comment = sgExtractDocComment(src, 1);
-	check(comment === "");
+	expect(comment === "");
 }
 
 test "doc comment with ## style" {
 	const src = "## Nim-style doc\nfunction foo(): void {}";
 	const comment = sgExtractDocComment(src, 2);
-	check(comment === "Nim-style doc");
+	expect(comment === "Nim-style doc");
 }
 
 test "sgFormatHoverDoc with doc comment" {
@@ -2433,7 +2433,7 @@ test "sgFormatHoverDoc with doc comment" {
 		isExported: true, isMutable: false,
 	};
 	const doc = sgFormatHoverDoc(suggest, "A useful function");
-	check(doc === "**exported**\n\n---\n\nA useful function");
+	expect(doc === "**exported**\n\n---\n\nA useful function");
 }
 
 test "sgFormatHoverDoc no comment" {
@@ -2444,7 +2444,7 @@ test "sgFormatHoverDoc no comment" {
 		isExported: false, isMutable: false,
 	};
 	const doc = sgFormatHoverDoc(suggest, "");
-	check(doc === "");
+	expect(doc === "");
 }
 
 // ===== Import Source + Exported Decl Tests =====
@@ -2452,55 +2452,55 @@ test "sgFormatHoverDoc no comment" {
 test "find import source" {
 	const src = "import { add } from \"./math\";\nconst x = add(1);";
 	const pr = parseSource(src);
-	if (!pr.ok) { check(false); return; }
-	check(sgFindImportSource(pr.value, "add") === "./math");
+	if (!pr.ok) { expect(false); return; }
+	expect(sgFindImportSource(pr.value, "add") === "./math");
 }
 
 test "find import source not found" {
 	const src = "import { add } from \"./math\";";
 	const pr = parseSource(src);
-	if (!pr.ok) { check(false); return; }
-	check(sgFindImportSource(pr.value, "unknown") === "");
+	if (!pr.ok) { expect(false); return; }
+	expect(sgFindImportSource(pr.value, "unknown") === "");
 }
 
 test "find exported decl function" {
 	const src = "export function add(x: number): number { return x; }";
 	const pr = parseSource(src);
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const loc = sgFindExportedDecl(pr.value, "add");
-	check(loc.line > 0);
+	expect(loc.line > 0);
 }
 
 test "find exported decl not found" {
 	const src = "function add(x: number): number { return x; }";
 	const pr = parseSource(src);
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const loc = sgFindExportedDecl(pr.value, "unknown");
-	check(loc.line === 0);
+	expect(loc.line === 0);
 }
 
 test "exception hint for function returning Result" {
 	const src = "function parse(s: string): Result<number, string> { return Result.ok(1); }";
 	const pr = parseSource(src);
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const ctx = checkProgram(pr.value);
 	const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
 	let exceptionCount = 0;
 	for (let i = 0; i < hints.length; i = i + 1) {
 		if (hints[i].hintKind === SgInlayHintKind.Exception) exceptionCount = exceptionCount + 1;
 	}
-	check(exceptionCount >= 1);
+	expect(exceptionCount >= 1);
 }
 
 test "no exception hint for non-Result function" {
 	const src = "function add(a: number, b: number): number { return a + b; }";
 	const pr = parseSource(src);
-	if (!pr.ok) { check(false); return; }
+	if (!pr.ok) { expect(false); return; }
 	const ctx = checkProgram(pr.value);
 	const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
 	let exceptionCount = 0;
 	for (let i = 0; i < hints.length; i = i + 1) {
 		if (hints[i].hintKind === SgInlayHintKind.Exception) exceptionCount = exceptionCount + 1;
 	}
-	check(exceptionCount === 0);
+	expect(exceptionCount === 0);
 }

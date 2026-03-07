@@ -1,6 +1,6 @@
 // ComptimeEval — Evaluate @comptime blocks via Raiser VM, fold results into AST
 
-import { check } from "std/testing";
+
 import {
 	Node, NodeKind, DeclKind, SourceLocation, createNode,
 	// Literals
@@ -13,7 +13,7 @@ import {
 	ArrowFunctionData, FunctionExprData, TypeAssertionData,
 	ConditionalExprData, SpreadExprData, NewExprData,
 	TryExprData, MatchExprData, MatchCaseData,
-	AwaitExprData, YieldExprData, MoveExprData, OutExprData,
+	AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData,
 	HiddenDerefData, QuoteExprData, ComptimeBlockData,
 	// Patterns
 	ArrayPatternData, ObjectPatternData, ObjectPatternPropData, DestructuringDeclData,
@@ -24,7 +24,7 @@ import {
 	BlockStmtData, FunctionDeclData,
 	SwitchStmtData, SwitchCaseData, MatchStmtData,
 	TryCatchStmtData, BreakStmtData, ContinueStmtData, UnreachableStmtData,
-	TestDeclData, ExpectStmtData,
+	TestDeclData,
 	// Declarations
 	ImportDeclData, ExportDeclData, TypeAliasDeclData, EnumDeclData,
 	InterfaceDeclData, ClassDeclData, PropertyDeclData,
@@ -305,6 +305,9 @@ function nodeToValue(node: Node, objHeap: RaiserObjectHeap, arrHeap: RaiserArray
 	} else if (node.kind === NodeKind.OutExpr) {
 		const d = node.data as OutExprData;
 		setNode(objHeap, arrHeap, handle, "outArg", d.outArg);
+	} else if (node.kind === NodeKind.SizeofExpr) {
+		const d = node.data as SizeofExprData;
+		setStr(objHeap, handle, "sizeofType", d.sizeofType);
 	} else if (node.kind === NodeKind.HiddenDeref) {
 		const d = node.data as HiddenDerefData;
 		setNode(objHeap, arrHeap, handle, "expr", d.expr);
@@ -477,8 +480,10 @@ function nodeToValue(node: Node, objHeap: RaiserObjectHeap, arrHeap: RaiserArray
 		setNode(objHeap, arrHeap, handle, "ctorBody", d.ctorBody);
 	} else if (node.kind === NodeKind.ExternDecl) {
 		const d = node.data as ExternDeclData;
-		setStr(objHeap, handle, "externKind", d.externKind);
+		heapObjectSetField(objHeap, handle, "externKind", raiserInt(d.externKind as number));
 		setStr(objHeap, handle, "externName", d.externName);
+		setStr(objHeap, handle, "nativeName", d.nativeName);
+		setStr(objHeap, handle, "externType", d.externType);
 	} else if (node.kind === NodeKind.MacroDecl) {
 		const d = node.data as MacroDeclData;
 		setStr(objHeap, handle, "macroDeclName", d.macroDeclName);
@@ -498,9 +503,6 @@ function nodeToValue(node: Node, objHeap: RaiserObjectHeap, arrHeap: RaiserArray
 		const d = node.data as TestDeclData;
 		setStr(objHeap, handle, "testName", d.testName);
 		setNode(objHeap, arrHeap, handle, "testBody", d.testBody);
-	} else if (node.kind === NodeKind.ExpectStmt) {
-		const d = node.data as ExpectStmtData;
-		setNode(objHeap, arrHeap, handle, "expectExpr", d.expectExpr);
 
 	// === Program ===
 	} else if (node.kind === NodeKind.Program) {
@@ -677,7 +679,7 @@ test "int value" {
 	}, createToken(TokenKind.Ident, "", 1)));
 	const loc: SourceLocation = { line: 1, column: 0 };
 	const result = valueToNode(ctx.lastResult, ctx.objectHeap, ctx.arrayHeap, loc);
-	check(result.kind === NodeKind.NumberLiteral);
+	expect(result.kind === NodeKind.NumberLiteral);
 }
 
 test "NumberLiteral serialization" {
@@ -686,16 +688,16 @@ test "NumberLiteral serialization" {
 	const loc: SourceLocation = { line: 5, column: 10 };
 	const node = mkNumber(42, loc);
 	const val = nodeToValue(node, objHeap, arrHeap);
-	check(val.kind === RaiserValueKind.Object);
+	expect(val.kind === RaiserValueKind.Object);
 	// Verify kind field
 	const kindVal = heapObjectGetField(objHeap, val.intVal, "kind");
-	check(kindVal.intVal === (NodeKind.NumberLiteral as number));
+	expect(kindVal.intVal === (NodeKind.NumberLiteral as number));
 	// Verify value field
 	const numVal = heapObjectGetField(objHeap, val.intVal, "value");
-	check(numVal.floatVal === 42);
+	expect(numVal.floatVal === 42);
 	// Verify location
 	const lineVal = heapObjectGetField(objHeap, val.intVal, "line");
-	check(lineVal.intVal === 5);
+	expect(lineVal.intVal === 5);
 }
 
 test "StringLiteral serialization" {
@@ -704,11 +706,11 @@ test "StringLiteral serialization" {
 	const loc: SourceLocation = { line: 1, column: 0 };
 	const node = mkString("hello", loc);
 	const val = nodeToValue(node, objHeap, arrHeap);
-	check(val.kind === RaiserValueKind.Object);
+	expect(val.kind === RaiserValueKind.Object);
 	const kindVal = heapObjectGetField(objHeap, val.intVal, "kind");
-	check(kindVal.intVal === (NodeKind.StringLiteral as number));
+	expect(kindVal.intVal === (NodeKind.StringLiteral as number));
 	const strVal = heapObjectGetField(objHeap, val.intVal, "value");
-	check(strVal.strVal === "hello");
+	expect(strVal.strVal === "hello");
 }
 
 test "BooleanLiteral serialization" {
@@ -717,11 +719,11 @@ test "BooleanLiteral serialization" {
 	const loc: SourceLocation = { line: 1, column: 0 };
 	const node = mkBool(true, loc);
 	const val = nodeToValue(node, objHeap, arrHeap);
-	check(val.kind === RaiserValueKind.Object);
+	expect(val.kind === RaiserValueKind.Object);
 	const kindVal = heapObjectGetField(objHeap, val.intVal, "kind");
-	check(kindVal.intVal === (NodeKind.BooleanLiteral as number));
+	expect(kindVal.intVal === (NodeKind.BooleanLiteral as number));
 	const bVal = heapObjectGetField(objHeap, val.intVal, "boolValue");
-	check(bVal.intVal === 1);
+	expect(bVal.intVal === 1);
 }
 
 test "Identifier serialization" {
@@ -730,11 +732,11 @@ test "Identifier serialization" {
 	const loc: SourceLocation = { line: 1, column: 0 };
 	const node = createNode(NodeKind.Identifier, { name: "foo" }, synthToken(loc));
 	const val = nodeToValue(node, objHeap, arrHeap);
-	check(val.kind === RaiserValueKind.Object);
+	expect(val.kind === RaiserValueKind.Object);
 	const kindVal = heapObjectGetField(objHeap, val.intVal, "kind");
-	check(kindVal.intVal === (NodeKind.Identifier as number));
+	expect(kindVal.intVal === (NodeKind.Identifier as number));
 	const nameVal = heapObjectGetField(objHeap, val.intVal, "name");
-	check(nameVal.strVal === "foo");
+	expect(nameVal.strVal === "foo");
 }
 
 test "BinaryExpr serialization" {
@@ -747,65 +749,65 @@ test "BinaryExpr serialization" {
 		operator: "+", left, right,
 	}, synthToken(loc));
 	const val = nodeToValue(binNode, objHeap, arrHeap);
-	check(val.kind === RaiserValueKind.Object);
+	expect(val.kind === RaiserValueKind.Object);
 	// Verify operator
 	const opVal = heapObjectGetField(objHeap, val.intVal, "operator");
-	check(opVal.strVal === "+");
+	expect(opVal.strVal === "+");
 	// Verify left child is an object
 	const leftVal = heapObjectGetField(objHeap, val.intVal, "left");
-	check(leftVal.kind === RaiserValueKind.Object);
+	expect(leftVal.kind === RaiserValueKind.Object);
 	// Verify left child kind is NumberLiteral
 	const leftKind = heapObjectGetField(objHeap, leftVal.intVal, "kind");
-	check(leftKind.intVal === (NodeKind.NumberLiteral as number));
+	expect(leftKind.intVal === (NodeKind.NumberLiteral as number));
 	// Verify right child
 	const rightVal = heapObjectGetField(objHeap, val.intVal, "right");
-	check(rightVal.kind === RaiserValueKind.Object);
+	expect(rightVal.kind === RaiserValueKind.Object);
 	const rightKind = heapObjectGetField(objHeap, rightVal.intVal, "kind");
-	check(rightKind.intVal === (NodeKind.NumberLiteral as number));
+	expect(rightKind.intVal === (NodeKind.NumberLiteral as number));
 }
 
 // --- E2E Comptime Tests ---
 
 test "comptime int arithmetic" {
 	const pr = parseSource("const VERSION = @comptime { 10 + 5 };");
-	check(pr.ok);
+	expect(pr.ok);
 	const result = evaluateComptimeBlocks(pr.value);
 	const pd = result.data as ProgramData;
 	const varDecl = pd.programStmts[0];
-	check(varDecl.kind === NodeKind.VariableDecl);
+	expect(varDecl.kind === NodeKind.VariableDecl);
 	const vd = varDecl.data as VariableDeclData;
-	check(vd.initializer.kind === NodeKind.NumberLiteral);
+	expect(vd.initializer.kind === NodeKind.NumberLiteral);
 	const nd = vd.initializer.data as NumberLiteralData;
-	check(nd.value === 15);
+	expect(nd.value === 15);
 }
 
 test "comptime string" {
 	const pr = parseSource("const PLATFORM = @comptime { \"darwin\" };");
-	check(pr.ok);
+	expect(pr.ok);
 	const result = evaluateComptimeBlocks(pr.value);
 	const pd = result.data as ProgramData;
 	const varDecl = pd.programStmts[0];
 	const vd = varDecl.data as VariableDeclData;
-	check(vd.initializer.kind === NodeKind.StringLiteral);
+	expect(vd.initializer.kind === NodeKind.StringLiteral);
 	const sd = vd.initializer.data as StringLiteralData;
-	check(sd.value === "darwin");
+	expect(sd.value === "darwin");
 }
 
 test "comptime boolean" {
 	const pr = parseSource("const DEBUG = @comptime { true };");
-	check(pr.ok);
+	expect(pr.ok);
 	const result = evaluateComptimeBlocks(pr.value);
 	const pd = result.data as ProgramData;
 	const varDecl = pd.programStmts[0];
 	const vd = varDecl.data as VariableDeclData;
-	check(vd.initializer.kind === NodeKind.BooleanLiteral);
+	expect(vd.initializer.kind === NodeKind.BooleanLiteral);
 	const bd = vd.initializer.data as BooleanLiteralData;
-	check(bd.boolValue === true);
+	expect(bd.boolValue === true);
 }
 
 test "no comptime passes through" {
 	const pr = parseSource("const x = 42;");
-	check(pr.ok);
+	expect(pr.ok);
 	const result = evaluateComptimeBlocks(pr.value);
-	check(result === pr.value);
+	expect(result === pr.value);
 }

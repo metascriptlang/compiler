@@ -6,7 +6,7 @@ import { Node, NodeKind, NodeData, Expression, createNode, CallExprData } from "
 import { ParserState, createState, current, advance, isAtEnd } from "../context";
 import { lex } from "../../lexer/lexer";
 import { parseOk, mockExpr } from "./util";
-import { check } from "std/testing";
+
 
 type ExprResult = Result<Expression, string>;
 type ExprParser = (state: ParserState, minPrec: number) => ExprResult;
@@ -64,16 +64,16 @@ function listCount(input: string): number {
 	return result.value.length;
 }
 
-test "no args" { check(callArgCount("()") === 0); }
+test "no args" { expect(callArgCount("()") === 0); }
 
-test "two args" { check(callArgCount("(a, b)") === 2); }
+test "two args" { expect(callArgCount("(a, b)") === 2); }
 
-test "trailing comma" { check(callArgCount("(a, b,)") === 2); }
+test "trailing comma" { expect(callArgCount("(a, b,)") === 2); }
 
-test "empty list" { check(listCount("") === 0); }
+test "empty list" { expect(listCount("") === 0); }
 
-test "three items" { check(listCount("a, b, c") === 3); }
+test "three items" { expect(listCount("a, b, c") === 3); }
 
-test "nested call" { check(parseOk("f(g(x))")); }
+test "nested call" { expect(parseOk("f(g(x))")); }
 
-test "expr arg" { check(parseOk("f(1 + 2)")); }
+test "expr arg" { expect(parseOk("f(1 + 2)")); }

@@ -14,7 +14,6 @@ import {
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeBool, makeBlock, makeWhile, makeExprStmt, extractBodyStmts } from "../util";
-import { check } from "std/testing";
 import { firstStmtKindAfter, stmtCountAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -60,16 +59,16 @@ function lowerForNode(node: Node): Node {
 }
 
 // ===== Tests =====
-test "basic for becomes block" { check(firstStmtKindAfter("for (let i = 0; i < 10; i++) {}", lowerForLoop) === NodeKind.BlockStmt); }
+test "basic for becomes block" { expect(firstStmtKindAfter("for (let i = 0; i < 10; i++) {}", lowerForLoop) === NodeKind.BlockStmt); }
 
-test "while unchanged" { check(firstStmtKindAfter("while (true) {}", lowerForLoop) === NodeKind.WhileStmt); }
+test "while unchanged" { expect(firstStmtKindAfter("while (true) {}", lowerForLoop) === NodeKind.WhileStmt); }
 
-test "for-of unchanged" { check(firstStmtKindAfter("for (const x of arr) { x; }", lowerForLoop) === NodeKind.ForOfStmt); }
+test "for-of unchanged" { expect(firstStmtKindAfter("for (const x of arr) { x; }", lowerForLoop) === NodeKind.ForOfStmt); }
 // Note: for(;;) not supported by parser — it always requires init/cond/update expressions
-test "for with update only" { check(firstStmtKindAfter("for (let i = 0; i < 5; i++) { i; }", lowerForLoop) === NodeKind.BlockStmt); }
+test "for with update only" { expect(firstStmtKindAfter("for (let i = 0; i < 5; i++) { i; }", lowerForLoop) === NodeKind.BlockStmt); }
 
-test "non-loop passthrough" { check(stmtCountAfter("const x = 1;", lowerForLoop) === 1); }
+test "non-loop passthrough" { expect(stmtCountAfter("const x = 1;", lowerForLoop) === 1); }
 
-test "preserves surrounding stmts" { check(stmtCountAfter("let a = 1; for (let i = 0; i < 2; i++) {} let b = 2;", lowerForLoop) === 3); }
+test "preserves surrounding stmts" { expect(stmtCountAfter("let a = 1; for (let i = 0; i < 2; i++) {} let b = 2;", lowerForLoop) === 3); }
 
-test "if stmt unchanged" { check(firstStmtKindAfter("if (x) {}", lowerForLoop) === NodeKind.IfStmt); }
+test "if stmt unchanged" { expect(firstStmtKindAfter("if (x) {}", lowerForLoop) === NodeKind.IfStmt); }

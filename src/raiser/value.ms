@@ -2,7 +2,6 @@
 // Day-1: flat tagged interface. No NaN-boxing.
 // Bool stored as intVal (0/1) to keep the interface simple.
 
-import { check } from "std/testing";
 
 export enum RaiserValueKind {
 	Nil,
@@ -112,73 +111,73 @@ export function raiserToString(v: RaiserValue): string {
 // --- Tests ---
 test "nil" {
 	const v = raiserNil();
-	check(v.kind === RaiserValueKind.Nil);
-	check(raiserIsNil(v));
-	check(!raiserToBool(v));
+	expect(v.kind === RaiserValueKind.Nil);
+	expect(raiserIsNil(v));
+	expect(!raiserToBool(v));
 }
 
 test "bool true" {
 	const v = raiserBool(true);
-	check(v.kind === RaiserValueKind.Bool);
-	check(v.intVal === 1);
-	check(raiserToBool(v));
+	expect(v.kind === RaiserValueKind.Bool);
+	expect(v.intVal === 1);
+	expect(raiserToBool(v));
 }
 
 test "bool false" {
 	const v = raiserBool(false);
-	check(v.kind === RaiserValueKind.Bool);
-	check(v.intVal === 0);
-	check(!raiserToBool(v));
+	expect(v.kind === RaiserValueKind.Bool);
+	expect(v.intVal === 0);
+	expect(!raiserToBool(v));
 }
 
 test "int" {
 	const v = raiserInt(42);
-	check(v.kind === RaiserValueKind.Int);
-	check(raiserToInt(v) === 42);
-	check(raiserToBool(v));
+	expect(v.kind === RaiserValueKind.Int);
+	expect(raiserToInt(v) === 42);
+	expect(raiserToBool(v));
 }
 
 test "int zero is falsy" {
 	const v = raiserInt(0);
-	check(!raiserToBool(v));
+	expect(!raiserToBool(v));
 }
 
 test "float" {
 	const v = raiserFloat(3.14);
-	check(v.kind === RaiserValueKind.Float);
-	check(v.floatVal === 3.14);
+	expect(v.kind === RaiserValueKind.Float);
+	expect(v.floatVal === 3.14);
 }
 
 test "int to float conversion" {
 	const v = raiserInt(5);
-	check(raiserToFloat(v) === 5.0);
+	expect(raiserToFloat(v) === 5.0);
 }
 
-test "nil equals nil" { check(raiserEqual(raiserNil(), raiserNil())); }
+test "nil equals nil" { expect(raiserEqual(raiserNil(), raiserNil())); }
 
-test "int equals same int" { check(raiserEqual(raiserInt(42), raiserInt(42))); }
+test "int equals same int" { expect(raiserEqual(raiserInt(42), raiserInt(42))); }
 
-test "int not equals different int" { check(!raiserEqual(raiserInt(1), raiserInt(2))); }
+test "int not equals different int" { expect(!raiserEqual(raiserInt(1), raiserInt(2))); }
 
 test "different kinds not equal" {
-	check(!raiserEqual(raiserInt(0), raiserNil()));
-	check(!raiserEqual(raiserInt(1), raiserBool(true)));
+	expect(!raiserEqual(raiserInt(0), raiserNil()));
+	expect(!raiserEqual(raiserInt(1), raiserBool(true)));
 }
 
 test "bool equality" {
-	check(raiserEqual(raiserBool(true), raiserBool(true)));
-	check(!raiserEqual(raiserBool(true), raiserBool(false)));
+	expect(raiserEqual(raiserBool(true), raiserBool(true)));
+	expect(!raiserEqual(raiserBool(true), raiserBool(false)));
 }
 
-test "nil" { check(raiserToString(raiserNil()) === "nil"); }
+test "nil" { expect(raiserToString(raiserNil()) === "nil"); }
 
-test "true" { check(raiserToString(raiserBool(true)) === "true"); }
+test "true" { expect(raiserToString(raiserBool(true)) === "true"); }
 
-test "false" { check(raiserToString(raiserBool(false)) === "false"); }
+test "false" { expect(raiserToString(raiserBool(false)) === "false"); }
 
-test "int" { check(raiserToString(raiserInt(42)) === "42"); }
+test "int" { expect(raiserToString(raiserInt(42)) === "42"); }
 
-test "array" { check(raiserToString(raiserArray(0)) === "[array]"); }
+test "array" { expect(raiserToString(raiserArray(0)) === "[array]"); }
 
 // --- Array Heap ---
 // Arrays live on a side heap. RaiserValue with kind=Array stores an integer handle
@@ -232,8 +231,8 @@ export function heapArrayPush(heap: RaiserArrayHeap, handle: number, val: Raiser
 test "alloc empty array" {
 	const heap = createArrayHeap();
 	const h = heapAllocArray(heap);
-	check(h === 0);
-	check(heapArrayLen(heap, h) === 0);
+	expect(h === 0);
+	expect(heapArrayLen(heap, h) === 0);
 }
 
 test "push and get" {
@@ -243,9 +242,9 @@ test "push and get" {
 	const v2 = raiserInt(20);
 	heapArrayPush(heap, h, v1);
 	heapArrayPush(heap, h, v2);
-	check(heapArrayLen(heap, h) === 2);
-	check(heapArrayGet(heap, h, 0).intVal === 10);
-	check(heapArrayGet(heap, h, 1).intVal === 20);
+	expect(heapArrayLen(heap, h) === 2);
+	expect(heapArrayGet(heap, h, 0).intVal === 10);
+	expect(heapArrayGet(heap, h, 1).intVal === 20);
 }
 
 test "set element" {
@@ -255,7 +254,7 @@ test "set element" {
 	heapArrayPush(heap, h, v0);
 	const v42 = raiserInt(42);
 	heapArraySet(heap, h, 0, v42);
-	check(heapArrayGet(heap, h, 0).intVal === 42);
+	expect(heapArrayGet(heap, h, 0).intVal === 42);
 }
 
 test "multiple arrays independent" {
@@ -266,15 +265,15 @@ test "multiple arrays independent" {
 	const v2 = raiserInt(2);
 	heapArrayPush(heap, h1, v1);
 	heapArrayPush(heap, h2, v2);
-	check(heapArrayGet(heap, h1, 0).intVal === 1);
-	check(heapArrayGet(heap, h2, 0).intVal === 2);
+	expect(heapArrayGet(heap, h1, 0).intVal === 1);
+	expect(heapArrayGet(heap, h2, 0).intVal === 2);
 }
 
 test "array value kind" {
 	const v = raiserArray(3);
-	check(v.kind === RaiserValueKind.Array);
-	check(v.intVal === 3);
-	check(raiserToBool(v));
+	expect(v.kind === RaiserValueKind.Array);
+	expect(v.intVal === 3);
+	expect(raiserToBool(v));
 }
 
 // --- Object Heap ---
@@ -376,8 +375,8 @@ export function clearObjectHeap(heap: RaiserObjectHeap): void {
 test "alloc empty object" {
 	const heap = createObjectHeap();
 	const h = heapAllocObject(heap);
-	check(h === 0);
-	check(heapObjectFieldCount(heap, h) === 0);
+	expect(h === 0);
+	expect(heapObjectFieldCount(heap, h) === 0);
 }
 
 test "set and get field" {
@@ -385,8 +384,8 @@ test "set and get field" {
 	const h = heapAllocObject(heap);
 	const v = raiserInt(42);
 	heapObjectSetField(heap, h, "x", v);
-	check(heapObjectFieldCount(heap, h) === 1);
-	check(heapObjectGetField(heap, h, "x").intVal === 42);
+	expect(heapObjectFieldCount(heap, h) === 1);
+	expect(heapObjectGetField(heap, h, "x").intVal === 42);
 }
 
 test "multiple fields" {
@@ -396,9 +395,9 @@ test "multiple fields" {
 	const v2 = raiserInt(20);
 	heapObjectSetField(heap, h, "x", v1);
 	heapObjectSetField(heap, h, "y", v2);
-	check(heapObjectFieldCount(heap, h) === 2);
-	check(heapObjectGetField(heap, h, "x").intVal === 10);
-	check(heapObjectGetField(heap, h, "y").intVal === 20);
+	expect(heapObjectFieldCount(heap, h) === 2);
+	expect(heapObjectGetField(heap, h, "x").intVal === 10);
+	expect(heapObjectGetField(heap, h, "y").intVal === 20);
 }
 
 test "update existing field" {
@@ -408,22 +407,22 @@ test "update existing field" {
 	heapObjectSetField(heap, h, "x", v1);
 	const v2 = raiserInt(99);
 	heapObjectSetField(heap, h, "x", v2);
-	check(heapObjectFieldCount(heap, h) === 1);
-	check(heapObjectGetField(heap, h, "x").intVal === 99);
+	expect(heapObjectFieldCount(heap, h) === 1);
+	expect(heapObjectGetField(heap, h, "x").intVal === 99);
 }
 
 test "get missing field returns nil" {
 	const heap = createObjectHeap();
 	const h = heapAllocObject(heap);
 	const val = heapObjectGetField(heap, h, "missing");
-	check(val.kind === RaiserValueKind.Nil);
+	expect(val.kind === RaiserValueKind.Nil);
 }
 
 test "object value kind" {
 	const v = raiserObject(5);
-	check(v.kind === RaiserValueKind.Object);
-	check(v.intVal === 5);
-	check(raiserToBool(v));
+	expect(v.kind === RaiserValueKind.Object);
+	expect(v.intVal === 5);
+	expect(raiserToBool(v));
 }
 
 test "clearArrayHeap resets storage" {
@@ -431,12 +430,12 @@ test "clearArrayHeap resets storage" {
 	const h = heapAllocArray(heap);
 	const v = raiserInt(1);
 	heapArrayPush(heap, h, v);
-	check(heap.arrays.length === 1);
+	expect(heap.arrays.length === 1);
 	clearArrayHeap(heap);
-	check(heap.arrays.length === 0);
+	expect(heap.arrays.length === 0);
 	// Re-allocate works after clear
 	const h2 = heapAllocArray(heap);
-	check(h2 === 0);
+	expect(h2 === 0);
 }
 
 test "clearObjectHeap resets storage" {
@@ -444,10 +443,10 @@ test "clearObjectHeap resets storage" {
 	const h = heapAllocObject(heap);
 	const v = raiserInt(42);
 	heapObjectSetField(heap, h, "x", v);
-	check(heap.objects.length === 1);
+	expect(heap.objects.length === 1);
 	clearObjectHeap(heap);
-	check(heap.objects.length === 0);
+	expect(heap.objects.length === 0);
 	// Re-allocate works after clear
 	const h2 = heapAllocObject(heap);
-	check(h2 === 0);
+	expect(h2 === 0);
 }

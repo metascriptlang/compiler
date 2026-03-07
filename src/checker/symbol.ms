@@ -1,6 +1,6 @@
 import { SourceLocation, Node, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { Type, TypeKind, unknownType } from "./types";
-import { check } from "std/testing";
+
 
 // Re-export from ast/node (unified Symbol definition)
 export { Symbol, SymbolKind, SymbolState } from "../ast/node";
@@ -23,7 +23,7 @@ export const SF_MUTABLE: number = 4;       // let/var/mutable
 export const SF_FORWARD: number = 8;       // forward declaration (body not yet seen)
 export const SF_NO_SIDE_EFFECT: number = 16; // @pure — no side effects
 export const SF_GLOBAL: number = 32;       // module-level variable
-export const SF_IMPORT_C: number = 64;     // extern declaration (@runtime)
+export const SF_IMPORT_C: number = 64;     // extern declaration (extern ... from)
 export const SF_COMPILE_TIME: number = 128; // @comptime
 export const SF_GC_SAFE: number = 256;     // no GC-unsafe operations
 export const SF_WAS_FORWARDED: number = 512; // had forward decl, now has body
@@ -169,17 +169,17 @@ export function isPointerType(t: Type, table: SymbolTable): boolean {
 // ===== Tests =====
 test "create table" {
 	const table = createSymbolTable();
-	check(table.current.scopeKind === ScopeKind.Global);
-	check(table.current.symbols.length === 0);
+	expect(table.current.scopeKind === ScopeKind.Global);
+	expect(table.current.symbols.length === 0);
 }
 
 test "define and lookup" {
 	const table = createSymbolTable();
 	const sym = makeSymbol("x", SymbolKind.Variable, unknownType(), false);
 	const result = defineSymbol(table, sym);
-	check(result.ok);
-	check(lookupSymbol(table, "x") !== null);
-	check(sym.state === SymbolState.Hollow);
+	expect(result.ok);
+	expect(lookupSymbol(table, "x") !== null);
+	expect(sym.state === SymbolState.Hollow);
 }
 
 test "duplicate error" {
@@ -188,7 +188,7 @@ test "duplicate error" {
 	const sym2 = makeSymbol("x", SymbolKind.Variable, unknownType(), true);
 	defineSymbol(table, sym1);
 	const result = defineSymbol(table, sym2);
-	check(!result.ok);
+	expect(!result.ok);
 }
 
 test "scope nesting" {
@@ -197,12 +197,12 @@ test "scope nesting" {
 	openScope(table, ScopeKind.Block);
 	defineSymbol(table, makeSymbol("b", SymbolKind.Variable, unknownType(), false));
 	// Inner scope sees both
-	check(lookupSymbol(table, "a") !== null);
-	check(lookupSymbol(table, "b") !== null);
+	expect(lookupSymbol(table, "a") !== null);
+	expect(lookupSymbol(table, "b") !== null);
 	closeScope(table);
 	// Outer scope sees only a
-	check(lookupSymbol(table, "a") !== null);
-	check(lookupSymbol(table, "b") === null);
+	expect(lookupSymbol(table, "a") !== null);
+	expect(lookupSymbol(table, "b") === null);
 }
 
 test "shadowing" {
@@ -212,13 +212,13 @@ test "shadowing" {
 	defineSymbol(table, makeSymbol("x", SymbolKind.Variable, unknownType(), true));
 	// Inner lookup finds inner (mutable) shadow
 	const inner = lookupSymbol(table, "x");
-	check(inner !== null);
-	check(hasFlag(inner, SF_MUTABLE));
+	expect(inner !== null);
+	expect(hasFlag(inner, SF_MUTABLE));
 	closeScope(table);
 	// Outer lookup finds outer (immutable) original
 	const outer = lookupSymbol(table, "x");
-	check(outer !== null);
-	check(!hasFlag(outer, SF_MUTABLE));
+	expect(outer !== null);
+	expect(!hasFlag(outer, SF_MUTABLE));
 }
 
 test "lookupLocal" {
@@ -226,9 +226,9 @@ test "lookupLocal" {
 	defineSymbol(table, makeSymbol("x", SymbolKind.Variable, unknownType(), false));
 	openScope(table, ScopeKind.Block);
 	// lookupLocal does NOT find parent scope
-	check(lookupLocal(table, "x") === null);
+	expect(lookupLocal(table, "x") === null);
 	// lookupSymbol DOES find parent scope
-	check(lookupSymbol(table, "x") !== null);
+	expect(lookupSymbol(table, "x") !== null);
 	closeScope(table);
 }
 
@@ -238,11 +238,11 @@ test "function scope params" {
 	openScope(table, ScopeKind.Function);
 	defineSymbol(table, makeSymbol("a", SymbolKind.Parameter, unknownType(), false));
 	defineSymbol(table, makeSymbol("b", SymbolKind.Parameter, unknownType(), false));
-	check(lookupSymbol(table, "a") !== null);
-	check(lookupSymbol(table, "b") !== null);
-	check(lookupSymbol(table, "add") !== null);
+	expect(lookupSymbol(table, "a") !== null);
+	expect(lookupSymbol(table, "b") !== null);
+	expect(lookupSymbol(table, "add") !== null);
 	closeScope(table);
-	check(lookupSymbol(table, "a") === null);
+	expect(lookupSymbol(table, "a") === null);
 }
 
 test "deeply nested" {
@@ -254,23 +254,23 @@ test "deeply nested" {
 	defineSymbol(table, makeSymbol("block", SymbolKind.Variable, unknownType(), false));
 	openScope(table, ScopeKind.Loop);
 	defineSymbol(table, makeSymbol("loop", SymbolKind.Variable, unknownType(), false));
-	check(lookupSymbol(table, "global") !== null);
-	check(lookupSymbol(table, "func") !== null);
-	check(lookupSymbol(table, "block") !== null);
-	check(lookupSymbol(table, "loop") !== null);
+	expect(lookupSymbol(table, "global") !== null);
+	expect(lookupSymbol(table, "func") !== null);
+	expect(lookupSymbol(table, "block") !== null);
+	expect(lookupSymbol(table, "loop") !== null);
 	closeScope(table);
 	closeScope(table);
 	closeScope(table);
-	check(lookupSymbol(table, "loop") === null);
+	expect(lookupSymbol(table, "loop") === null);
 }
 
 test "scope kind" {
 	const table = createSymbolTable();
-	check(table.current.scopeKind === ScopeKind.Global);
+	expect(table.current.scopeKind === ScopeKind.Global);
 	openScope(table, ScopeKind.Function);
-	check(table.current.scopeKind === ScopeKind.Function);
+	expect(table.current.scopeKind === ScopeKind.Function);
 	openScope(table, ScopeKind.Loop);
-	check(table.current.scopeKind === ScopeKind.Loop);
+	expect(table.current.scopeKind === ScopeKind.Loop);
 	closeScope(table);
 	closeScope(table);
 }
@@ -280,24 +280,24 @@ test "function overloads allowed" {
 	const sym1 = makeSymbol("add", SymbolKind.Function, unknownType(), false);
 	const sym2 = makeSymbol("add", SymbolKind.Function, unknownType(), false);
 	const r1 = defineSymbol(table, sym1);
-	check(r1.ok);
+	expect(r1.ok);
 	const r2 = defineSymbol(table, sym2);
-	check(r2.ok);  // no error for function overload
+	expect(r2.ok);  // no error for function overload
 	const found = lookupSymbol(table, "add");
-	check(found !== null);
-	check(found.overloads.length === 1);
+	expect(found !== null);
+	expect(found.overloads.length === 1);
 }
 
 test "non-function duplicate still errors" {
 	const table = createSymbolTable();
 	defineSymbol(table, makeSymbol("x", SymbolKind.Variable, unknownType(), false));
 	const r = defineSymbol(table, makeSymbol("x", SymbolKind.Variable, unknownType(), false));
-	check(!r.ok);
+	expect(!r.ok);
 }
 
 test "SF_EXPORTED default false" {
 	const sym = makeSymbol("x", SymbolKind.Variable, unknownType(), false);
-	check(!hasFlag(sym, SF_EXPORTED));
+	expect(!hasFlag(sym, SF_EXPORTED));
 }
 
 test "lookupExport finds exported" {
@@ -307,8 +307,8 @@ test "lookupExport finds exported" {
 	setFlag(sym, SF_EXPORTED);
 	defineSymbol(table, sym);
 	const found = lookupExport(table, "foo");
-	check(found !== null);
-	check(found.name === "foo");
+	expect(found !== null);
+	expect(found.name === "foo");
 }
 
 test "lookupExport skips non-exported" {
@@ -316,5 +316,5 @@ test "lookupExport skips non-exported" {
 	openScope(table, ScopeKind.Module);
 	defineSymbol(table, makeSymbol("bar", SymbolKind.Variable, unknownType(), false));
 	const found = lookupExport(table, "bar");
-	check(found === null);
+	expect(found === null);
 }

@@ -20,7 +20,6 @@ import {
 import { TransformContext } from "../context";
 import { syntheticToken } from "../util";
 import { mapChildren, isFuncBoundary } from "../walker";
-import { check } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
 // ===== Await → Yield Rewriting =====
@@ -155,14 +154,14 @@ export function lowerAsync(program: Node, ctx: TransformContext): Node {
 }
 
 // ===== Tests =====
-test "non-async passthrough" { check(firstStmtKindAfter("function f() { return 1; }", lowerAsync) === NodeKind.FunctionDecl); }
+test "non-async passthrough" { expect(firstStmtKindAfter("function f() { return 1; }", lowerAsync) === NodeKind.FunctionDecl); }
 
-test "stmt count passthrough" { check(stmtCountAfter("const x = 1;", lowerAsync) === 1); }
+test "stmt count passthrough" { expect(stmtCountAfter("const x = 1;", lowerAsync) === 1); }
 
-test "async function still one stmt" { check(stmtCountAfter("async function f() { await x; }", lowerAsync) === 1); }
+test "async function still one stmt" { expect(stmtCountAfter("async function f() { await x; }", lowerAsync) === 1); }
 
-test "async flag cleared" { check(firstStmtKindAfter("async function f() { await x; }", lowerAsync) === NodeKind.FunctionDecl); }
+test "async flag cleared" { expect(firstStmtKindAfter("async function f() { await x; }", lowerAsync) === NodeKind.FunctionDecl); }
 
-test "async arrow unchanged count" { check(stmtCountAfter("const f = async () => await x;", lowerAsync) === 1); }
+test "async arrow unchanged count" { expect(stmtCountAfter("const f = async () => await x;", lowerAsync) === 1); }
 
-test "non-async function preserved" { check(stmtCountAfter("function f() { return 1; }", lowerAsync) === 1); }
+test "non-async function preserved" { expect(stmtCountAfter("function f() { return 1; }", lowerAsync) === 1); }

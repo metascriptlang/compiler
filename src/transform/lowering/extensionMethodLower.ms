@@ -15,7 +15,6 @@ import { makeIdent, makeCall } from "../util";
 import { lookupSymbol } from "../../checker/symbol";
 import { TypeKind, getProperty, typeNameOf } from "../../checker/types";
 import { ExtensionRegistry, hasExtensionByName, findExtension } from "../../checker/context";
-import { check } from "std/testing";
 import { parseInput, getStmts, firstCalleeKind, firstCallArgCount } from "../testUtil";
 import { createTransformContext, createTransformContextWithChecker } from "../context";
 import { createContext, registerExtension, ExtensionMethod } from "../../checker/context";
@@ -147,7 +146,7 @@ function makePushExt(): ExtensionMethod {
 
 test "extension call rewritten to direct call" {
 	const prog = setupExtensionCtx("s.trim();", makeTrimExt());
-	check(firstCalleeKind(prog) === NodeKind.Identifier);
+	expect(firstCalleeKind(prog) === NodeKind.Identifier);
 }
 
 test "non-extension call unchanged" {
@@ -156,7 +155,7 @@ test "non-extension call unchanged" {
 	const cc = createContext();
 	const ctx = createTransformContextWithChecker(cc);
 	const prog = lowerExtensionMethod(result.value, ctx);
-	check(firstCalleeKind(prog) === NodeKind.MemberExpr);
+	expect(firstCalleeKind(prog) === NodeKind.MemberExpr);
 }
 
 test "no checker context no rewrite" {
@@ -164,17 +163,17 @@ test "no checker context no rewrite" {
 	if (!result.ok) return;
 	const ctx = createTransformContext();
 	const prog = lowerExtensionMethod(result.value, ctx);
-	check(firstCalleeKind(prog) === NodeKind.MemberExpr);
+	expect(firstCalleeKind(prog) === NodeKind.MemberExpr);
 }
 
 test "extension with args prepends receiver" {
 	const prog = setupExtensionCtx("a.push(1);", makePushExt());
-	check(firstCallArgCount(prog) === 2);
+	expect(firstCallArgCount(prog) === 2);
 }
 
 test "extension no args gets receiver only" {
 	const prog = setupExtensionCtx("s.trim();", makeTrimExt());
-	check(firstCallArgCount(prog) === 1);
+	expect(firstCallArgCount(prog) === 1);
 }
 
 test "class member takes priority over extension" {
@@ -197,17 +196,17 @@ test "class member takes priority over extension" {
 	defineSymbol(cc.table, tSym);
 	const ctx = createTransformContextWithChecker(cc);
 	const prog = lowerExtensionMethod(result.value, ctx);
-	check(firstCalleeKind(prog) === NodeKind.MemberExpr);
+	expect(firstCalleeKind(prog) === NodeKind.MemberExpr);
 }
 
 test "regular function call unchanged" {
 	const prog = setupExtensionCtx("trim();", makeTrimExt());
-	check(firstCalleeKind(prog) === NodeKind.Identifier);
+	expect(firstCalleeKind(prog) === NodeKind.Identifier);
 }
 
 test "non-matching method unchanged" {
 	const prog = setupExtensionCtx("s.length();", makeTrimExt());
-	check(firstCalleeKind(prog) === NodeKind.MemberExpr);
+	expect(firstCalleeKind(prog) === NodeKind.MemberExpr);
 }
 
 test "static extension no receiver prepend" {
@@ -232,5 +231,5 @@ test "static extension no receiver prepend" {
 	const ctx = createTransformContextWithChecker(cc);
 	const prog = lowerExtensionMethod(result.value, ctx);
 	// Should rewrite to floor(3.7) — callee is Identifier, not MemberExpr
-	check(firstCalleeKind(prog) === NodeKind.Identifier);
+	expect(firstCalleeKind(prog) === NodeKind.Identifier);
 }

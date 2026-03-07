@@ -28,7 +28,6 @@ import {
 	makeCall, makeNumber, makeSwitch, makeSwitchCase,
 } from "../util";
 import { Type } from "../../checker/types";
-import { check } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 import { charAt } from "../../utils/string";
 
@@ -495,27 +494,27 @@ function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: S
 }
 
 // ===== Tests =====
-test "match stmt becomes if chain" { check(stmtCountAfter("match (x) { 1 => foo(), _ => bar() }", lowerMatch) === 2); }
+test "match stmt becomes if chain" { expect(stmtCountAfter("match (x) { 1 => foo(), _ => bar() }", lowerMatch) === 2); }
 
-test "match first stmt is VarDecl (discriminant temp)" { check(firstStmtKindAfter("match (x) { 1 => a(), _ => b() }", lowerMatch) === NodeKind.VariableDecl); }
+test "match first stmt is VarDecl (discriminant temp)" { expect(firstStmtKindAfter("match (x) { 1 => a(), _ => b() }", lowerMatch) === NodeKind.VariableDecl); }
 
-test "no match passthrough" { check(stmtCountAfter("const x = 1;", lowerMatch) === 1); }
+test "no match passthrough" { expect(stmtCountAfter("const x = 1;", lowerMatch) === 1); }
 
-test "match preserves surrounding stmts" { check(stmtCountAfter("let a = 1; match (x) { _ => b() } let c = 2;", lowerMatch) === 4); }
+test "match preserves surrounding stmts" { expect(stmtCountAfter("let a = 1; match (x) { _ => b() } let c = 2;", lowerMatch) === 4); }
 
 test "string hash dispatch for >8 arms" {
 	const src = "match (x) { \"a\" => 1, \"b\" => 2, \"c\" => 3, \"d\" => 4, \"e\" => 5, \"f\" => 6, \"g\" => 7, \"h\" => 8, \"i\" => 9, _ => 0 }";
 	// 9 string arms > threshold(8) → should produce SwitchStmt (2nd stmt after VarDecl temp)
-	check(stmtCountAfter(src, lowerMatch) === 2);
+	expect(stmtCountAfter(src, lowerMatch) === 2);
 }
 
 test "few string arms stay as if-else" {
 	const src = "match (x) { \"a\" => 1, \"b\" => 2, _ => 0 }";
 	// 2 string arms <= threshold → stays as if-else chain
-	check(stmtCountAfter(src, lowerMatch) === 2);
+	expect(stmtCountAfter(src, lowerMatch) === 2);
 }
 
 test "djb2 hash deterministic" {
-	check(djb2Hash("hello") === djb2Hash("hello"));
-	check(djb2Hash("a") !== djb2Hash("b"));
+	expect(djb2Hash("hello") === djb2Hash("hello"));
+	expect(djb2Hash("a") !== djb2Hash("b"));
 }

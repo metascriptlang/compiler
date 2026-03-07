@@ -22,16 +22,75 @@ import {
 } from "./types";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, lookupSymbol, lookupLocal, defineSymbol, makeSymbol, openScope, closeScope, SymbolState, hasFlag, setFlag, SF_EXPORTED, SF_MUTABLE } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError } from "./context";
-import { trimStr, sliceStr, findChar, splitTopLevel, parseIntStr } from "../utils/string";
+import { trimStr, sliceStr, findChar, charAt, splitTopLevel, parseIntStr } from "../utils/string";
 import { getProperty } from "./types";
 import { getGenericDecl, getGenericDeclFieldNames, getGenericDeclFieldTypes, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
-import { check } from "std/testing";
 
 // ===== A. Resolve Annotation Strings =====
+
+// Parse function type string to resolved Function type
+function resolveFunctionType(text: string, ctx: CheckerContext): Type {
+	let depth = 0;
+	let closeIdx = -1;
+	for (let i = 0; i < text.length; i += 1) {
+		const c = charAt(text, i);
+		if (c === "(") depth += 1;
+		if (c === ")") {
+			depth -= 1;
+			if (depth === 0) { closeIdx = i; break; }
+		}
+	}
+	if (closeIdx < 0) return createTypeRef(text);
+
+	const paramsStr = trimStr(sliceStr(text, 1, closeIdx));
+	const afterParen = trimStr(sliceStr(text, closeIdx + 1, text.length));
+	if (afterParen.length < 2) return createTypeRef(text);
+	if (charAt(afterParen, 0) !== "=" || charAt(afterParen, 1) !== ">") return createTypeRef(text);
+	const retStr = trimStr(sliceStr(afterParen, 2, afterParen.length));
+
+	const returnType = (retStr !== "") ? resolveAnnotation(retStr, ctx) : voidType();
+
+	if (paramsStr === "") return createFunction([], [], returnType);
+
+	const paramParts = splitTopLevel(paramsStr, ",");
+	const paramTypes: Type[] = [];
+	const paramNames: string[] = [];
+	for (const part of paramParts) {
+		const colonIdx = findChar(part, ":");
+		if (colonIdx > 0) {
+			paramNames.push(trimStr(sliceStr(part, 0, colonIdx)));
+			paramTypes.push(resolveAnnotation(trimStr(sliceStr(part, colonIdx + 1, part.length)), ctx));
+		} else {
+			paramNames.push("");
+			paramTypes.push(resolveAnnotation(part, ctx));
+		}
+	}
+	return createFunction(paramTypes, paramNames, returnType);
+}
 
 export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 	const trimmed = trimStr(text);
 	if (trimmed === "") return unknownType();
+
+	// Function type: (params) => returnType
+	if (trimmed.length > 0 && charAt(trimmed, 0) === "(") {
+		let fnDepth = 0;
+		let fnCloseIdx = -1;
+		for (let i = 0; i < trimmed.length; i += 1) {
+			const c = charAt(trimmed, i);
+			if (c === "(") fnDepth += 1;
+			if (c === ")") {
+				fnDepth -= 1;
+				if (fnDepth === 0) { fnCloseIdx = i; break; }
+			}
+		}
+		if (fnCloseIdx >= 0) {
+			const afterClose = trimStr(sliceStr(trimmed, fnCloseIdx + 1, trimmed.length));
+			if (afterClose.length >= 2 && charAt(afterClose, 0) === "=" && charAt(afterClose, 1) === ">") {
+				return resolveFunctionType(trimmed, ctx);
+			}
+		}
+	}
 
 	// Check for union types (split on top-level |)
 	const unionParts = splitTopLevel(trimmed, "|");
@@ -527,7 +586,7 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx);
 			const returnType = (md.methodReturnType !== "") ? resolveAnnotation(md.methodReturnType, ctx) : unknownType();
 			const fnType = createFunction(paramTypes, md.methodParams, returnType);
-			// Carry over typeName from collectPass (stores @runtime/@builtin metadata)
+			// Carry over typeName from collectPass (stores @builtin metadata)
 			const prevMemberType = getProperty(oldType, md.methodName);
 			if (prevMemberType.typeName !== "") {
 				fnType.typeName = prevMemberType.typeName;
@@ -580,98 +639,98 @@ function resolveWith(text: string): Type {
 	return resolveAnnotation(text, ctx);
 }
 
-test "number" { check(resolveWith("number").kind === TypeKind.Number); }
+test "number" { expect(resolveWith("number").kind === TypeKind.Number); }
 
-test "string" { check(resolveWith("string").kind === TypeKind.String); }
+test "string" { expect(resolveWith("string").kind === TypeKind.String); }
 
-test "boolean" { check(resolveWith("boolean").kind === TypeKind.Boolean); }
+test "boolean" { expect(resolveWith("boolean").kind === TypeKind.Boolean); }
 
-test "void" { check(resolveWith("void").kind === TypeKind.Void); }
+test "void" { expect(resolveWith("void").kind === TypeKind.Void); }
 
-test "null" { check(resolveWith("null").kind === TypeKind.Null); }
+test "null" { expect(resolveWith("null").kind === TypeKind.Null); }
 
-test "never" { check(resolveWith("never").kind === TypeKind.Never); }
+test "never" { expect(resolveWith("never").kind === TypeKind.Never); }
 
-test "int32" { check(resolveWith("int32").kind === TypeKind.Int32); }
+test "int32" { expect(resolveWith("int32").kind === TypeKind.Int32); }
 
-test "float64" { check(resolveWith("float64").kind === TypeKind.Float64); }
+test "float64" { expect(resolveWith("float64").kind === TypeKind.Float64); }
 
-test "unknown name" { check(resolveWith("Foo").kind === TypeKind.TypeReference); }
+test "unknown name" { expect(resolveWith("Foo").kind === TypeKind.TypeReference); }
 
-test "empty" { check(resolveWith("").kind === TypeKind.Unknown); }
+test "empty" { expect(resolveWith("").kind === TypeKind.Unknown); }
 
 test "number[]" {
 	const t = resolveWith("number[]");
-	check(t.kind === TypeKind.Array);
-	check(t.typeReturn.kind === TypeKind.Number);
+	expect(t.kind === TypeKind.Array);
+	expect(t.typeReturn.kind === TypeKind.Number);
 }
 
 test "string[]" {
 	const t = resolveWith("string[]");
-	check(t.kind === TypeKind.Array);
-	check(t.typeReturn.kind === TypeKind.String);
+	expect(t.kind === TypeKind.Array);
+	expect(t.typeReturn.kind === TypeKind.String);
 }
 
 test "Result<number, string>" {
 	const t = resolveWith("Result<number, string>");
-	check(t.kind === TypeKind.Result);
-	check(t.typeReturn.kind === TypeKind.Number);
-	check(t.typeExtra.kind === TypeKind.String);
+	expect(t.kind === TypeKind.Result);
+	expect(t.typeReturn.kind === TypeKind.Number);
+	expect(t.typeExtra.kind === TypeKind.String);
 }
 
 test "Array<boolean>" {
 	const t = resolveWith("Array<boolean>");
-	check(t.kind === TypeKind.Array);
-	check(t.typeReturn.kind === TypeKind.Boolean);
+	expect(t.kind === TypeKind.Array);
+	expect(t.typeReturn.kind === TypeKind.Boolean);
 }
 
 test "number[4]" {
 	const t = resolveWith("number[4]");
-	check(t.kind === TypeKind.SizedArray);
-	check(t.typeReturn.kind === TypeKind.Number);
-	check(t.typeFlags === 4);
+	expect(t.kind === TypeKind.SizedArray);
+	expect(t.typeReturn.kind === TypeKind.Number);
+	expect(t.typeFlags === 4);
 }
 
 test "Span<boolean>" {
 	const t = resolveWith("Span<boolean>");
-	check(t.kind === TypeKind.Span);
-	check(t.typeReturn.kind === TypeKind.Boolean);
+	expect(t.kind === TypeKind.Span);
+	expect(t.typeReturn.kind === TypeKind.Boolean);
 }
 
 test "Map<string, number>" {
 	const t = resolveWith("Map<string, number>");
-	check(t.kind === TypeKind.Map);
-	check(t.typeReturn.kind === TypeKind.String);
-	check(t.typeExtra.kind === TypeKind.Number);
+	expect(t.kind === TypeKind.Map);
+	expect(t.typeReturn.kind === TypeKind.String);
+	expect(t.typeExtra.kind === TypeKind.Number);
 }
 
 test "Record<string, number> desugars to Map" {
 	const t = resolveWith("Record<string, number>");
-	check(t.kind === TypeKind.Map);
-	check(t.typeReturn.kind === TypeKind.String);
-	check(t.typeExtra.kind === TypeKind.Number);
+	expect(t.kind === TypeKind.Map);
+	expect(t.typeReturn.kind === TypeKind.String);
+	expect(t.typeExtra.kind === TypeKind.Number);
 }
 
 test "Record<string, boolean> value type" {
 	const t = resolveWith("Record<string, boolean>");
-	check(t.kind === TypeKind.Map);
-	check(t.typeExtra.kind === TypeKind.Boolean);
+	expect(t.kind === TypeKind.Map);
+	expect(t.typeExtra.kind === TypeKind.Boolean);
 }
 
 test "string | number" {
 	const t = resolveWith("string | number");
-	check(t.kind === TypeKind.Union);
-	check(t.typeChildren.length === 2);
-	check(t.typeChildren[0].kind === TypeKind.String);
-	check(t.typeChildren[1].kind === TypeKind.Number);
+	expect(t.kind === TypeKind.Union);
+	expect(t.typeChildren.length === 2);
+	expect(t.typeChildren[0].kind === TypeKind.String);
+	expect(t.typeChildren[1].kind === TypeKind.Number);
 }
 
 test "known symbol" {
 	const ctx = createContext();
 	defineSymbol(ctx.table, makeSymbol("MyType", SymbolKind.Interface, createObject("MyType", [], [], true), false));
 	const t = resolveAnnotation("MyType", ctx);
-	check(t.kind === TypeKind.Object);
-	check(t.typeName === "MyType");
+	expect(t.kind === TypeKind.Object);
+	expect(t.typeName === "MyType");
 }
 
 test "function gets Function type" {
@@ -685,11 +744,11 @@ test "function gets Function type" {
 	const node = createNodeAt(NodeKind.Program, { programStmts: [fnNode] }, zl);
 	resolveDeclarations(ctx, node);
 	const sym = lookupSymbol(ctx.table, "foo");
-	check(sym !== null);
-	check(sym.symbolType.kind === TypeKind.Function);
-	check(sym.symbolType.typeChildren.length === 2);
-	check(sym.symbolType.typeNames[0] === "a");
-	check(sym.symbolType.typeNames[1] === "b");
+	expect(sym !== null);
+	expect(sym.symbolType.kind === TypeKind.Function);
+	expect(sym.symbolType.typeChildren.length === 2);
+	expect(sym.symbolType.typeNames[0] === "a");
+	expect(sym.symbolType.typeNames[1] === "b");
 }
 
 test "function with typed params" {
@@ -702,11 +761,11 @@ test "function with typed params" {
 	const node = createNodeAt(NodeKind.Program, { programStmts: [fnNode] }, zl);
 	resolveDeclarations(ctx, node);
 	const sym = lookupSymbol(ctx.table, "add");
-	check(sym !== null);
-	check(sym.symbolType.kind === TypeKind.Function);
-	check(sym.symbolType.typeChildren[0].kind === TypeKind.Number);
-	check(sym.symbolType.typeChildren[1].kind === TypeKind.Number);
-	check(sym.symbolType.typeReturn.kind === TypeKind.Number);
+	expect(sym !== null);
+	expect(sym.symbolType.kind === TypeKind.Function);
+	expect(sym.symbolType.typeChildren[0].kind === TypeKind.Number);
+	expect(sym.symbolType.typeChildren[1].kind === TypeKind.Number);
+	expect(sym.symbolType.typeReturn.kind === TypeKind.Number);
 }
 
 test "decorated function gets resolved" {
@@ -720,9 +779,9 @@ test "decorated function gets resolved" {
 	const node = createNodeAt(NodeKind.Program, { programStmts: [decoNode] }, zl);
 	resolveDeclarations(ctx, node);
 	const sym = lookupSymbol(ctx.table, "floor");
-	check(sym !== null);
-	check(sym.symbolType.kind === TypeKind.Function);
-	check(sym.symbolType.typeReturn.kind === TypeKind.Number);
+	expect(sym !== null);
+	expect(sym.symbolType.kind === TypeKind.Function);
+	expect(sym.symbolType.typeReturn.kind === TypeKind.Number);
 }
 
 test "Box<number> records instantiation" {
@@ -734,15 +793,15 @@ test "Box<number> records instantiation" {
 	// Resolve Box<number> — should record instantiation
 	const ctx = createContext();
 	const t = resolveAnnotation("Box<number>", ctx);
-	check(t.kind === TypeKind.TypeReference);
-	check(t.typeName === "Box__number");
+	expect(t.kind === TypeKind.TypeReference);
+	expect(t.typeName === "Box__number");
 	// Check instantiation was recorded
-	check(getGenericTypeInstCount() === 1);
-	check(getGenericTypeInstBaseName(0) === "Box");
-	check(getGenericTypeInstTypeArgKey(0) === "number");
-	check(getGenericTypeInstMangledName(0) === "Box__number");
-	check(getGenericTypeInstFieldNames(0) === "value");
-	check(getGenericTypeInstFieldTypes(0) === "number");
+	expect(getGenericTypeInstCount() === 1);
+	expect(getGenericTypeInstBaseName(0) === "Box");
+	expect(getGenericTypeInstTypeArgKey(0) === "number");
+	expect(getGenericTypeInstMangledName(0) === "Box__number");
+	expect(getGenericTypeInstFieldNames(0) === "value");
+	expect(getGenericTypeInstFieldTypes(0) === "number");
 }
 
 test "Pair<string, number> records instantiation" {
@@ -752,12 +811,12 @@ test "Pair<string, number> records instantiation" {
 	updateGenericDeclFields("Pair", "first|second", "A|B");
 	const ctx = createContext();
 	const t = resolveAnnotation("Pair<string, number>", ctx);
-	check(t.kind === TypeKind.TypeReference);
-	check(t.typeName === "Pair__string,number");
+	expect(t.kind === TypeKind.TypeReference);
+	expect(t.typeName === "Pair__string,number");
 	const idx = findGenericTypeInstIdx("Pair", "string,number");
-	check(idx >= 0);
-	check(getGenericTypeInstFieldNames(idx) === "first|second");
-	check(getGenericTypeInstFieldTypes(idx) === "string|number");
+	expect(idx >= 0);
+	expect(getGenericTypeInstFieldNames(idx) === "first|second");
+	expect(getGenericTypeInstFieldTypes(idx) === "string|number");
 }
 
 test "dedup instantiation" {
@@ -768,7 +827,7 @@ test "dedup instantiation" {
 	const ctx = createContext();
 	resolveAnnotation("Box<number>", ctx);
 	resolveAnnotation("Box<number>", ctx);
-	check(getGenericTypeInstCount() === 1);
+	expect(getGenericTypeInstCount() === 1);
 }
 
 test "non-generic base falls through" {
@@ -779,8 +838,8 @@ test "non-generic base falls through" {
 	defineSymbol(ctx.table, makeSymbol("Foo", SymbolKind.Interface, createObject("Foo", [], [], true), false));
 	const t = resolveAnnotation("Foo<number>", ctx);
 	// Non-generic: returns base type (Foo)
-	check(t.kind === TypeKind.Object);
-	check(t.typeName === "Foo");
+	expect(t.kind === TypeKind.Object);
+	expect(t.typeName === "Foo");
 }
 
 test "generic class Container<T> records instantiation" {
@@ -791,11 +850,11 @@ test "generic class Container<T> records instantiation" {
 	updateGenericDeclFields("Container", "item|count", "T|number");
 	const ctx = createContext();
 	const t = resolveAnnotation("Container<string>", ctx);
-	check(t.kind === TypeKind.TypeReference);
-	check(t.typeName === "Container__string");
-	check(getGenericTypeInstCount() === 1);
-	check(getGenericTypeInstFieldNames(0) === "item|count");
-	check(getGenericTypeInstFieldTypes(0) === "string|number");
+	expect(t.kind === TypeKind.TypeReference);
+	expect(t.typeName === "Container__string");
+	expect(getGenericTypeInstCount() === 1);
+	expect(getGenericTypeInstFieldNames(0) === "item|count");
+	expect(getGenericTypeInstFieldTypes(0) === "string|number");
 }
 
 test "constraint stored on GenericParam typeExtra" {
@@ -804,11 +863,11 @@ test "constraint stored on GenericParam typeExtra" {
 	openScope(ctx.table, ScopeKind.Block);
 	defineGenericParam(ctx, "T:number");
 	const sym = lookupSymbol(ctx.table, "T");
-	check(sym !== null);
-	check(sym.symbolType.kind === TypeKind.GenericParam);
-	check(sym.symbolType.typeName === "T");
-	check(sym.symbolType.typeExtra !== null);
-	check(sym.symbolType.typeExtra.kind === TypeKind.Number);
+	expect(sym !== null);
+	expect(sym.symbolType.kind === TypeKind.GenericParam);
+	expect(sym.symbolType.typeName === "T");
+	expect(sym.symbolType.typeExtra !== null);
+	expect(sym.symbolType.typeExtra.kind === TypeKind.Number);
 	closeScope(ctx.table);
 }
 
@@ -817,9 +876,9 @@ test "no constraint leaves typeExtra null" {
 	openScope(ctx.table, ScopeKind.Block);
 	defineGenericParam(ctx, "U");
 	const sym = lookupSymbol(ctx.table, "U");
-	check(sym !== null);
-	check(sym.symbolType.kind === TypeKind.GenericParam);
-	check(sym.symbolType.typeName === "U");
+	expect(sym !== null);
+	expect(sym.symbolType.kind === TypeKind.GenericParam);
+	expect(sym.symbolType.typeName === "U");
 	closeScope(ctx.table);
 }
 
@@ -831,15 +890,15 @@ test "constrained interface Box<T extends number>" {
 	updateGenericDeclFields("Box", "value", "T");
 	const ctx = createContext();
 	const t = resolveAnnotation("Box<number>", ctx);
-	check(t.kind === TypeKind.TypeReference);
-	check(t.typeName === "Box__number");
+	expect(t.kind === TypeKind.TypeReference);
+	expect(t.typeName === "Box__number");
 }
 
 test "fnDefaults on FunctionDeclData" {
 	const zl: SourceLocation = { line: 0, column: 0 };
 	const fnNode = createNodeAt(NodeKind.FunctionDecl, { fnName: "defTest", params: ["a", "b"], fnParamTypes: ["number", "number"], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "", fnDefaults: ["", "42"] }, zl);
 	const d = fnNode.data as FunctionDeclData;
-	check(d.fnDefaults.length === 2);
-	check(d.fnDefaults[0] === "");
-	check(d.fnDefaults[1] === "42");
+	expect(d.fnDefaults.length === 2);
+	expect(d.fnDefaults[0] === "");
+	expect(d.fnDefaults[1] === "42");
 }

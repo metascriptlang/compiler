@@ -17,7 +17,6 @@ import { Node, NodeKind, DeclKind, ExprStmtData, CallExprData, MemberExprData } 
 import { TransformContext, freshTemp } from "../context";
 import { walkNode } from "../walker";
 import { makeVarDecl, makeIdent, makeCall, makeMember, makeExprStmt, makeBlock } from "../util";
-import { check } from "std/testing";
 import { firstStmtKindAfter, stmtCountAfter } from "../testUtil";
 
 // ===== Helpers =====
@@ -83,31 +82,31 @@ export function lowerRvalue(program: Node, ctx: TransformContext): Node {
 // ===== Tests =====
 test "method on call becomes block" {
 	// f().method(); → { const $rval_0 = f(); $rval_0.method(); }
-	check(firstStmtKindAfter("f().method();", lowerRvalue) === NodeKind.BlockStmt);
+	expect(firstStmtKindAfter("f().method();", lowerRvalue) === NodeKind.BlockStmt);
 }
 
 test "method on identifier unchanged" {
 	// x.method(); → unchanged (x is lvalue)
-	check(firstStmtKindAfter("x.method();", lowerRvalue) === NodeKind.ExprStmt);
+	expect(firstStmtKindAfter("x.method();", lowerRvalue) === NodeKind.ExprStmt);
 }
 
 test "method on member unchanged" {
 	// a.b.method(); → unchanged (a.b is lvalue)
-	check(firstStmtKindAfter("a.b.method();", lowerRvalue) === NodeKind.ExprStmt);
+	expect(firstStmtKindAfter("a.b.method();", lowerRvalue) === NodeKind.ExprStmt);
 }
 
 test "method on literal becomes block" {
 	// [1,2].push(3); → block
-	check(firstStmtKindAfter("[1,2].push(3);", lowerRvalue) === NodeKind.BlockStmt);
+	expect(firstStmtKindAfter("[1,2].push(3);", lowerRvalue) === NodeKind.BlockStmt);
 }
 
 test "plain call unchanged" {
 	// f(); → unchanged (not a method call)
-	check(firstStmtKindAfter("f();", lowerRvalue) === NodeKind.ExprStmt);
+	expect(firstStmtKindAfter("f();", lowerRvalue) === NodeKind.ExprStmt);
 }
 
-test "non-call unchanged" { check(firstStmtKindAfter("x + y;", lowerRvalue) === NodeKind.ExprStmt); }
+test "non-call unchanged" { expect(firstStmtKindAfter("x + y;", lowerRvalue) === NodeKind.ExprStmt); }
 
-test "while unchanged" { check(firstStmtKindAfter("while (true) {}", lowerRvalue) === NodeKind.WhileStmt); }
+test "while unchanged" { expect(firstStmtKindAfter("while (true) {}", lowerRvalue) === NodeKind.WhileStmt); }
 
-test "stmt count preserved" { check(stmtCountAfter("let a = 1; let b = 2;", lowerRvalue) === 2); }
+test "stmt count preserved" { expect(stmtCountAfter("let a = 1; let b = 2;", lowerRvalue) === 2); }

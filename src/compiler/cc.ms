@@ -79,6 +79,9 @@ export function appendFlag(base: string, flag: string): string {
 export function cliCompileFlags(opts: CliOptions): string {
 	let flags = "";
 	if (opts.sanitize !== "") flags = appendFlag(flags, "-fsanitize=" + opts.sanitize);
+	// Linker DCE: place each function/data in its own section so the linker can strip unused ones
+	flags = appendFlag(flags, "-fdata-sections");
+	flags = appendFlag(flags, "-ffunction-sections");
 	flags = appendFlag(flags, opts.passC);
 	return flags;
 }
@@ -88,6 +91,8 @@ export function cliLinkFlags(base: string, opts: CliOptions): string {
 	let flags = base;
 	flags = appendFlag(flags, opts.passL);
 	if (opts.strip) flags = appendFlag(flags, "-s");
+	// macOS: -dead_strip removes unreachable functions/data from the final binary
+	flags = appendFlag(flags, "-Wl,-dead_strip");
 	return flags;
 }
 

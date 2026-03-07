@@ -8,7 +8,7 @@
 // Currently std/json's JsonNode has opaque object/array access (MVP limitation).
 
 import { sliceStr, charAt } from "../../utils/string";
-import { check } from "std/testing";
+
 
 // ===== JSON Building =====
 
@@ -281,137 +281,137 @@ export function lspResolveImport(basePath: string, importSpec: string): string {
 }
 
 // ===== Tests =====
-test "uri to path" { check(lspUriToPath("file:///Users/foo/bar.ms") === "/Users/foo/bar.ms"); }
+test "uri to path" { expect(lspUriToPath("file:///Users/foo/bar.ms") === "/Users/foo/bar.ms"); }
 
-test "path to uri" { check(lspPathToUri("/a/b.ms") === "file:///a/b.ms"); }
+test "path to uri" { expect(lspPathToUri("/a/b.ms") === "file:///a/b.ms"); }
 
-test "non-file uri unchanged" { check(lspUriToPath("http://example.com") === "http://example.com"); }
+test "non-file uri unchanged" { expect(lspUriToPath("http://example.com") === "http://example.com"); }
 
-test "simple string" { check(lspJsonString("hello") === "\"hello\""); }
+test "simple string" { expect(lspJsonString("hello") === "\"hello\""); }
 
-test "escapes backslash" { check(lspJsonString("a\\b") === "\"a\\\\b\""); }
+test "escapes backslash" { expect(lspJsonString("a\\b") === "\"a\\\\b\""); }
 
-test "escapes quote" { check(lspJsonString("a\"b") === "\"a\\\"b\""); }
+test "escapes quote" { expect(lspJsonString("a\"b") === "\"a\\\"b\""); }
 
-test "escapes newline" { check(lspJsonString("a\nb") === "\"a\\nb\""); }
+test "escapes newline" { expect(lspJsonString("a\nb") === "\"a\\nb\""); }
 
-test "empty string" { check(lspJsonString("") === "\"\""); }
+test "empty string" { expect(lspJsonString("") === "\"\""); }
 
 test "number" {
-	check(lspJsonNumber(42) === "42");
-	check(lspJsonNumber(0) === "0");
+	expect(lspJsonNumber(42) === "42");
+	expect(lspJsonNumber(0) === "0");
 }
 
-test "bool true" { check(lspJsonBool(true) === "true"); }
+test "bool true" { expect(lspJsonBool(true) === "true"); }
 
-test "bool false" { check(lspJsonBool(false) === "false"); }
+test "bool false" { expect(lspJsonBool(false) === "false"); }
 
-test "null" { check(lspJsonNull() === "null"); }
+test "null" { expect(lspJsonNull() === "null"); }
 
 test "extract method" {
 	const json = "{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"id\":1}";
-	check(lspGetField(json, "method") === "initialize");
+	expect(lspGetField(json, "method") === "initialize");
 }
 
 test "extract nested value" {
 	const json = "{\"uri\":\"file:///a.ms\",\"text\":\"const x = 1;\"}";
-	check(lspGetField(json, "uri") === "file:///a.ms");
-	check(lspGetField(json, "text") === "const x = 1;");
+	expect(lspGetField(json, "uri") === "file:///a.ms");
+	expect(lspGetField(json, "text") === "const x = 1;");
 }
 
 test "missing field" {
 	const json = "{\"a\":\"1\"}";
-	check(lspGetField(json, "b") === "");
+	expect(lspGetField(json, "b") === "");
 }
 
 test "escaped value" {
 	const json = "{\"msg\":\"hello\\nworld\"}";
-	check(lspGetField(json, "msg") === "hello\nworld");
+	expect(lspGetField(json, "msg") === "hello\nworld");
 }
 
 test "extract id" {
 	const json = "{\"jsonrpc\":\"2.0\",\"id\":42}";
-	check(lspGetNumberField(json, "id") === 42);
+	expect(lspGetNumberField(json, "id") === 42);
 }
 
 test "extract zero" {
 	const json = "{\"line\":0,\"character\":5}";
-	check(lspGetNumberField(json, "line") === 0);
-	check(lspGetNumberField(json, "character") === 5);
+	expect(lspGetNumberField(json, "line") === 0);
+	expect(lspGetNumberField(json, "character") === 5);
 }
 
 test "missing field" {
 	const json = "{\"a\":1}";
-	check(lspGetNumberField(json, "b") === -1);
+	expect(lspGetNumberField(json, "b") === -1);
 }
 
 test "extract params" {
 	const json = "{\"method\":\"hover\",\"params\":{\"line\":1,\"col\":5}}";
 	const params = lspGetObjectField(json, "params");
-	check(params === "{\"line\":1,\"col\":5}");
+	expect(params === "{\"line\":1,\"col\":5}");
 }
 
 test "nested object" {
 	const json = "{\"params\":{\"position\":{\"line\":0}}}";
 	const params = lspGetObjectField(json, "params");
-	check(params === "{\"position\":{\"line\":0}}");
+	expect(params === "{\"position\":{\"line\":0}}");
 }
 
 test "missing object" {
 	const json = "{\"a\":1}";
-	check(lspGetObjectField(json, "b") === "");
+	expect(lspGetObjectField(json, "b") === "");
 }
 
 test "response format" {
 	const r = lspResponse("1", "{\"capabilities\":{}}");
-	check(lspGetField(r, "jsonrpc") === "2.0");
-	check(lspGetNumberField(r, "id") === 1);
+	expect(lspGetField(r, "jsonrpc") === "2.0");
+	expect(lspGetNumberField(r, "id") === 1);
 }
 
 test "notification format" {
 	const n = lspNotification("textDocument/publishDiagnostics", "{\"uri\":\"file:///a.ms\"}");
-	check(lspGetField(n, "method") === "textDocument/publishDiagnostics");
+	expect(lspGetField(n, "method") === "textDocument/publishDiagnostics");
 }
 
 test "error response format" {
 	const e = lspErrorResponse("1", -32601, "Method not found");
-	check(lspGetNumberField(e, "id") === 1);
+	expect(lspGetNumberField(e, "id") === 1);
 }
 
 test "parse content length" {
-	check(lspParseContentLength("Content-Length: 123") === 123);
-	check(lspParseContentLength("Content-Length: 0") === 0);
+	expect(lspParseContentLength("Content-Length: 123") === 123);
+	expect(lspParseContentLength("Content-Length: 0") === 0);
 }
 
 test "not content length" {
-	check(lspParseContentLength("Content-Type: json") === -1);
-	check(lspParseContentLength("") === -1);
+	expect(lspParseContentLength("Content-Type: json") === -1);
+	expect(lspParseContentLength("") === -1);
 }
 
 test "format message" {
 	const msg = lspFormatMessage("{\"id\":1}");
 	// Should start with Content-Length header
 	const prefix = sliceStr(msg, 0, 16);
-	check(prefix === "Content-Length: ");
+	expect(prefix === "Content-Length: ");
 }
 
 test "dirname basic" {
-	check(lspDirname("/a/b/c.ms") === "/a/b");
-	check(lspDirname("/a/b.ms") === "/a");
-	check(lspDirname("/a.ms") === "/");
+	expect(lspDirname("/a/b/c.ms") === "/a/b");
+	expect(lspDirname("/a/b.ms") === "/a");
+	expect(lspDirname("/a.ms") === "/");
 }
 
 test "resolve import same dir" {
-	check(lspResolveImport("/a/b/c.ms", "./utils") === "/a/b/utils.ms");
-	check(lspResolveImport("/a/b/c.ms", "./utils.ms") === "/a/b/utils.ms");
+	expect(lspResolveImport("/a/b/c.ms", "./utils") === "/a/b/utils.ms");
+	expect(lspResolveImport("/a/b/c.ms", "./utils.ms") === "/a/b/utils.ms");
 }
 
 test "resolve import parent dir" {
-	check(lspResolveImport("/a/b/c.ms", "../utils") === "/a/utils.ms");
-	check(lspResolveImport("/a/b/c/d.ms", "../../utils") === "/a/utils.ms");
+	expect(lspResolveImport("/a/b/c.ms", "../utils") === "/a/utils.ms");
+	expect(lspResolveImport("/a/b/c/d.ms", "../../utils") === "/a/utils.ms");
 }
 
 test "resolve import non-relative returns empty" {
-	check(lspResolveImport("/a/b.ms", "std/testing") === "");
-	check(lspResolveImport("/a/b.ms", "lodash") === "");
+	expect(lspResolveImport("/a/b.ms", "std/testing") === "");
+	expect(lspResolveImport("/a/b.ms", "lodash") === "");
 }

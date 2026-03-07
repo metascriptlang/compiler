@@ -21,7 +21,6 @@ import {
 	makeReturn, makeWhile, makeBinary, makeNumber, makeAssign, makeArrayAccess,
 	makeIf, syntheticToken,
 } from "../util";
-import { check } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
 // ===== Detection =====
@@ -205,22 +204,22 @@ export function lowerArrayMethodInline(program: Node, ctx: TransformContext): No
 }
 
 // ===== Tests =====
-test "return map expands to 5 stmts" { check(stmtCountAfter("return arr.map(fn);", lowerArrayMethodInline) === 5); }
+test "return map expands to 5 stmts" { expect(stmtCountAfter("return arr.map(fn);", lowerArrayMethodInline) === 5); }
 
-test "return filter expands to 5 stmts" { check(stmtCountAfter("return arr.filter(fn);", lowerArrayMethodInline) === 5); }
+test "return filter expands to 5 stmts" { expect(stmtCountAfter("return arr.filter(fn);", lowerArrayMethodInline) === 5); }
 
-test "return reduce expands to 5 stmts" { check(stmtCountAfter("return arr.reduce(fn, 0);", lowerArrayMethodInline) === 5); }
+test "return reduce expands to 5 stmts" { expect(stmtCountAfter("return arr.reduce(fn, 0);", lowerArrayMethodInline) === 5); }
 
-test "const map expands to 5 stmts" { check(stmtCountAfter("const x = arr.map(fn);", lowerArrayMethodInline) === 5); }
+test "const map expands to 5 stmts" { expect(stmtCountAfter("const x = arr.map(fn);", lowerArrayMethodInline) === 5); }
 
-test "first stmt is VarDecl" { check(firstStmtKindAfter("return arr.map(fn);", lowerArrayMethodInline) === NodeKind.VariableDecl); }
+test "first stmt is VarDecl" { expect(firstStmtKindAfter("return arr.map(fn);", lowerArrayMethodInline) === NodeKind.VariableDecl); }
 
-test "non-map method unchanged" { check(stmtCountAfter("return arr.push(1);", lowerArrayMethodInline) === 1); }
+test "non-map method unchanged" { expect(stmtCountAfter("return arr.push(1);", lowerArrayMethodInline) === 1); }
 
-test "plain call unchanged" { check(stmtCountAfter("return f();", lowerArrayMethodInline) === 1); }
+test "plain call unchanged" { expect(stmtCountAfter("return f();", lowerArrayMethodInline) === 1); }
 
-test "non-method return unchanged" { check(stmtCountAfter("return x;", lowerArrayMethodInline) === 1); }
+test "non-method return unchanged" { expect(stmtCountAfter("return x;", lowerArrayMethodInline) === 1); }
 
-test "wrong arg count for map unchanged" { check(stmtCountAfter("return arr.map(fn, extra);", lowerArrayMethodInline) === 1); }
+test "wrong arg count for map unchanged" { expect(stmtCountAfter("return arr.map(fn, extra);", lowerArrayMethodInline) === 1); }
 
-test "wrong arg count for reduce unchanged" { check(stmtCountAfter("return arr.reduce(fn);", lowerArrayMethodInline) === 1); }
+test "wrong arg count for reduce unchanged" { expect(stmtCountAfter("return arr.reduce(fn);", lowerArrayMethodInline) === 1); }

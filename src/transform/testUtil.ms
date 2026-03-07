@@ -5,11 +5,12 @@ import { Node, NodeKind, ProgramData, ExprStmtData, CallExprData, FunctionDeclDa
 import { TransformContext, createTransformContext } from "./context";
 import { lex } from "../lexer/lexer";
 import { parseProgram } from "../parser/statements/core";
+import { createState } from "../parser/context";
 
 export function parseInput(input: string): Result<Node, string> {
 	const lr = lex(input);
 	if (!lr.ok) return Result.err(lr.error);
-	return parseProgram(lr.value);
+	return parseProgram(createState(lr.value));
 }
 
 export function makeCtx(): TransformContext {

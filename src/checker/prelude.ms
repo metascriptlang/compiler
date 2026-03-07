@@ -6,7 +6,7 @@
 // checkProgram() reads globalImports from disk, parses + checks in Global scope.
 // Later: concat with globalImports from build.ms (user-configurable).
 
-import { check } from "std/testing";
+
 
 // Default global imports. Returns array (module-level const string[] hits DRC bug).
 // Later: merge with build.ms globalImports.
@@ -24,19 +24,19 @@ export function isGlobalImport(path: string): boolean {
 // ===== Tests =====
 test "globalImports has system, string, array" {
 	const imports = globalImports();
-	check(imports.length === 3);
-	check(imports[0] === "std/core/system");
-	check(imports[1] === "std/core/string");
-	check(imports[2] === "std/core/array");
+	expect(imports.length === 3);
+	expect(imports[0] === "std/core/system");
+	expect(imports[1] === "std/core/string");
+	expect(imports[2] === "std/core/array");
 }
 
 test "isGlobalImport matches" {
-	check(isGlobalImport("std/core/system"));
-	check(isGlobalImport("std/core/string"));
-	check(isGlobalImport("std/core/array"));
+	expect(isGlobalImport("std/core/system"));
+	expect(isGlobalImport("std/core/string"));
+	expect(isGlobalImport("std/core/array"));
 }
 
 test "isGlobalImport rejects non-global" {
-	check(!isGlobalImport("std/testing"));
-	check(!isGlobalImport("./foo"));
+	expect(!isGlobalImport("std/testing"));
+	expect(!isGlobalImport("./foo"));
 }

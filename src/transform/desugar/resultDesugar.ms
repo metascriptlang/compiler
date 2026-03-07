@@ -32,7 +32,6 @@ import {
 	makeReturn, makeIf, makeMember, makeCall, makeCallResolved, makeConditional,
 	makeUnary, makeObjectLiteral, makeBool,
 } from "../util";
-import { check } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
 // ===== Helpers: Typed Result Access =====
@@ -74,9 +73,6 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 	match (stmt.kind) {
 		NodeKind.VariableDecl => {
 			const d = stmt.data as VariableDeclData;
-			if (d.initializer !== null) {
-				console.log("[VarDecl]", d.declName, "init:", d.initializer.kind, "TryExpr=", NodeKind.TryExpr);
-			}
 			if (d.initializer !== null && d.initializer.kind === NodeKind.TryExpr) {
 				return expandVarDeclTry(stmt, ctx);
 			}
@@ -108,7 +104,9 @@ function expandVarDeclTry(stmt: Node, ctx: TransformContext): Node[] {
 	const result: Node[] = [];
 
 	// const $result_N = f();
-	const resType = tryExpr.nodeType; // Result<T, E>
+	// Read Result<T,E> from the tryArg (CallExpr), not TryExpr itself —
+	// checkExpr overwrites TryExpr.nodeType with T (the unwrapped value type).
+	const resType = tryData.tryArg.nodeType; // Result<T, E>
 	const resDecl = makeVarDecl(tempName, tryData.tryArg, DeclKind.Const, loc);
 	resDecl.nodeType = resType;
 	result.push(resDecl);
@@ -148,7 +146,7 @@ function expandReturnTry(stmt: Node, ctx: TransformContext): Node[] {
 	const result: Node[] = [];
 
 	// const $result_N = f();
-	const resType = tryExpr.nodeType; // Result<T, E>
+	const resType = tryData.tryArg.nodeType; // Result<T, E>
 	const resDecl = makeVarDecl(tempName, tryData.tryArg, DeclKind.Const, loc);
 	resDecl.nodeType = resType;
 	result.push(resDecl);
@@ -173,7 +171,7 @@ function expandExprStmtTry(stmt: Node, ctx: TransformContext): Node[] {
 	const result: Node[] = [];
 
 	// const $result_N = f();
-	const resType = tryExpr.nodeType; // Result<T, E>
+	const resType = tryData.tryArg.nodeType; // Result<T, E>
 	const resDecl = makeVarDecl(tempName, tryData.tryArg, DeclKind.Const, loc);
 	resDecl.nodeType = resType;
 	result.push(resDecl);
@@ -213,15 +211,15 @@ import { TypeKind as TK, createResult, numberType, stringType } from "../../chec
 
 // --- Structural tests (pipeline output shape) ---
 
-test "var decl try expands to 3 stmts" { check(stmtCountAfter("const x = try f;", lowerTryExpr) === 3); }
+test "var decl try expands to 3 stmts" { expect(stmtCountAfter("const x = try f;", lowerTryExpr) === 3); }
 
-test "var decl try first is VariableDecl" { check(firstStmtKindAfter("const x = try f;", lowerTryExpr) === NodeKind.VariableDecl); }
+test "var decl try first is VariableDecl" { expect(firstStmtKindAfter("const x = try f;", lowerTryExpr) === NodeKind.VariableDecl); }
 
-test "try catch expands to 2 stmts" { check(stmtCountAfter("const x = try f catch \"default\";", lowerTryExpr) === 2); }
+test "try catch expands to 2 stmts" { expect(stmtCountAfter("const x = try f catch \"default\";", lowerTryExpr) === 2); }
 
-test "no try passthrough" { check(stmtCountAfter("const x = 1;", lowerTryExpr) === 1); }
+test "no try passthrough" { expect(stmtCountAfter("const x = 1;", lowerTryExpr) === 1); }
 
-test "multiple stmts preserved" { check(stmtCountAfter("let a = 1; const x = try f; let b = 2;", lowerTryExpr) === 5); }
+test "multiple stmts preserved" { expect(stmtCountAfter("let a = 1; const x = try f; let b = 2;", lowerTryExpr) === 5); }
 
 // --- Direct helper tests (bypass pipeline, verify resolvedSym/nodeType) ---
 
@@ -229,45 +227,45 @@ test "makeResultMember sets resolvedSym for .ok" {
 	const resType = createResult(numberType(), stringType());
 	const loc: SourceLocation = { line: 0, column: 0 };
 	const mem = makeResultMember("$r", resType, "ok", loc);
-	check(mem.kind === NodeKind.MemberExpr);
-	check(mem.resolvedSym !== null);
-	check(mem.nodeType !== null);
+	expect(mem.kind === NodeKind.MemberExpr);
+	expect(mem.resolvedSym !== null);
+	expect(mem.nodeType !== null);
 }
 
 test "makeResultMember sets correct type for .value" {
 	const resType = createResult(numberType(), stringType());
 	const loc: SourceLocation = { line: 0, column: 0 };
 	const mem = makeResultMember("$r", resType, "value", loc);
-	check(mem.nodeType !== null);
-	check(mem.nodeType.kind === TK.Number);
-	check(mem.resolvedSym !== null);
+	expect(mem.nodeType !== null);
+	expect(mem.nodeType.kind === TK.Number);
+	expect(mem.resolvedSym !== null);
 }
 
 test "makeResultMember sets correct type for .error" {
 	const resType = createResult(numberType(), stringType());
 	const loc: SourceLocation = { line: 0, column: 0 };
 	const mem = makeResultMember("$r", resType, "error", loc);
-	check(mem.nodeType !== null);
-	check(mem.nodeType.kind === TK.String);
-	check(mem.resolvedSym !== null);
+	expect(mem.nodeType !== null);
+	expect(mem.nodeType.kind === TK.String);
+	expect(mem.resolvedSym !== null);
 }
 
 test "makeResultMember with null resType is graceful" {
 	const loc: SourceLocation = { line: 0, column: 0 };
 	const mem = makeResultMember("$r", null as unknown as Type, "ok", loc);
-	check(mem.kind === NodeKind.MemberExpr);
+	expect(mem.kind === NodeKind.MemberExpr);
 }
 
 test "makeErrorCheck produces IfStmt with return" {
 	const resType = createResult(numberType(), stringType());
 	const loc: SourceLocation = { line: 0, column: 0 };
 	const ifNode = makeErrorCheck("$r", resType, loc, makeCtx());
-	check(ifNode.kind === NodeKind.IfStmt);
+	expect(ifNode.kind === NodeKind.IfStmt);
 	const ifData = ifNode.data as IfStmtData;
-	check(ifData.condition.kind === NodeKind.UnaryExpr);
+	expect(ifData.condition.kind === NodeKind.UnaryExpr);
 	const thenBlock = ifData.consequent.data as BlockStmtData;
-	check(thenBlock.statements.length === 1);
-	check(thenBlock.statements[0].kind === NodeKind.ReturnStmt);
+	expect(thenBlock.statements.length === 1);
+	expect(thenBlock.statements[0].kind === NodeKind.ReturnStmt);
 }
 
 test "makeErrorCheck Result.err call has nodeType" {
@@ -277,6 +275,6 @@ test "makeErrorCheck Result.err call has nodeType" {
 	const ifData = ifNode.data as IfStmtData;
 	const thenBlock = ifData.consequent.data as BlockStmtData;
 	const retData = thenBlock.statements[0].data as RetData;
-	check(retData.argument.nodeType !== null);
-	check(retData.argument.nodeType.kind === TK.Result);
+	expect(retData.argument.nodeType !== null);
+	expect(retData.argument.nodeType.kind === TK.Result);
 }

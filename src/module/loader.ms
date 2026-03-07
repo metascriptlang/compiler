@@ -28,7 +28,6 @@ import { callStateProgramParser } from "../parser/statements/callbacks";
 import { Node, NodeKind, ProgramData, ImportDeclData } from "../ast/node";
 import { readFile } from "std/process";
 import { sliceStr } from "../utils/string";
-import { check } from "std/testing";
 
 // ===== Source Provider =====
 
@@ -114,7 +113,7 @@ function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProv
 		finalizeModule(graph, mod, path);
 		return false;
 	}
-	mod.source = sourceResult.value; console.log("Parsing: " + path);
+	mod.source = sourceResult.value;
 
 	// Parse with recovery — always get partial AST, errors in state.errors
 	const lr = lex(mod.source);
@@ -156,7 +155,20 @@ export function loadModule(graph: ModuleGraph, path: string, provider: SourcePro
 		const existing = findModule(graph, path);
 		if (existing !== null) {
 			if (existing.state === ModuleState.Loading) {
-				graph.errors.push("Circular import detected: " + path);
+				// Nim parity: record cycle info (like c.recursiveDep in importer.nim)
+				// Extract cycle path from importStack
+				const cycle: string[] = [];
+				let inCycle = false;
+				for (const sp of graph.importStack) {
+					if (sp === path) inCycle = true;
+					if (inCycle) cycle.push(sp);
+				}
+				cycle.push(path); // close the cycle
+				const fromPath = graph.importStack.length > 0
+					? graph.importStack[graph.importStack.length - 1]
+					: path;
+				graph.circularDeps.push({ fromPath, toPath: path, cycle, importLine: 0, importNames: [] });
+				// Not a hard error — two-phase checking handles circular deps gracefully
 			}
 		}
 		return Result.ok(true);
@@ -202,7 +214,14 @@ function processImportDecl(graph: ModuleGraph, mod: Module, node: Node, provider
 
 		const entry = createImportEntry(d.importNames, d.importAliases, resolved, specifier);
 		mod.imports.push(entry);
+		const preCircCount = graph.circularDeps.length;
 		const _loadResult = loadModule(graph, resolved, provider, config, 0);
+		// Enrich circular dep with import site info if a new cycle was just detected
+		if (graph.circularDeps.length > preCircCount) {
+			const lastDep = graph.circularDeps[graph.circularDeps.length - 1];
+			lastDep.importLine = node.location !== null ? node.location.line : 0;
+			lastDep.importNames = d.importNames;
+		}
 	} else {
 		// Config-aware mode: resolve all imports including std/
 		const candidates = resolveImportWithConfig(specifier, mod.path, config);
@@ -228,7 +247,13 @@ function processImportDecl(graph: ModuleGraph, mod: Module, node: Node, provider
 
 		const entry = createImportEntry(d.importNames, d.importAliases, resolved, specifier);
 		mod.imports.push(entry);
+		const preCircCount2 = graph.circularDeps.length;
 		const _loadResult = loadModule(graph, resolved, provider, config, 1);
+		if (graph.circularDeps.length > preCircCount2) {
+			const lastDep2 = graph.circularDeps[graph.circularDeps.length - 1];
+			lastDep2.importLine = node.location !== null ? node.location.line : 0;
+			lastDep2.importNames = d.importNames;
+		}
 	}
 }
 
@@ -262,13 +287,13 @@ test "single module" {
 	entries.push(makeEntry("/src/a.ms", "const x = 1;"));
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
-	check(graph.modules.length === 1);
-	check(graph.loadOrder.length === 1);
-	check(graph.loadOrder[0] === "/src/a.ms");
+	expect(graph.modules.length === 1);
+	expect(graph.loadOrder.length === 1);
+	expect(graph.loadOrder[0] === "/src/a.ms");
 	const mod = findModule(graph, "/src/a.ms");
-	check(mod !== null);
-	check(mod.state === ModuleState.Ready);
-	check(mod.source === "const x = 1;");
+	expect(mod !== null);
+	expect(mod.state === ModuleState.Ready);
+	expect(mod.source === "const x = 1;");
 }
 
 test "A imports B chain" {
@@ -277,15 +302,15 @@ test "A imports B chain" {
 	entries.push(makeEntry("/src/b.ms", "export function foo() { return 1; }"));
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
-	check(graph.modules.length === 2);
+	expect(graph.modules.length === 2);
 	// Topological: B before A (dependency loaded first)
-	check(graph.loadOrder[0] === "/src/b.ms");
-	check(graph.loadOrder[1] === "/src/a.ms");
+	expect(graph.loadOrder[0] === "/src/b.ms");
+	expect(graph.loadOrder[1] === "/src/a.ms");
 	// A has import entry pointing to B
 	const modA = findModule(graph, "/src/a.ms");
-	check(modA !== null);
-	check(modA.imports.length === 1);
-	check(modA.imports[0].sourcePath === "/src/b.ms");
+	expect(modA !== null);
+	expect(modA.imports.length === 1);
+	expect(modA.imports[0].sourcePath === "/src/b.ms");
 }
 
 test "circular import handled" {
@@ -295,14 +320,14 @@ test "circular import handled" {
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	// Both modules loaded (circular doesn't crash)
-	check(graph.modules.length === 2);
+	expect(graph.modules.length === 2);
 	// Both end up in Ready state
 	const modA = findModule(graph, "/src/a.ms");
 	const modB = findModule(graph, "/src/b.ms");
-	check(modA !== null);
-	check(modB !== null);
-	check(modA.state === ModuleState.Ready);
-	check(modB.state === ModuleState.Ready);
+	expect(modA !== null);
+	expect(modB !== null);
+	expect(modA.state === ModuleState.Ready);
+	expect(modB.state === ModuleState.Ready);
 }
 
 test "diamond dependency" {
@@ -313,10 +338,10 @@ test "diamond dependency" {
 	entries.push(makeEntry("/src/d.ms", "export const d = 3;"));
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
-	check(graph.modules.length === 4);
+	expect(graph.modules.length === 4);
 	// D should be loaded once (not duplicated)
-	check(graph.loadOrder[0] === "/src/d.ms");
-	check(graph.errors.length === 0);
+	expect(graph.loadOrder[0] === "/src/d.ms");
+	expect(graph.errors.length === 0);
 }
 
 test "missing module error" {
@@ -325,8 +350,8 @@ test "missing module error" {
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	const mod = findModule(graph, "/src/a.ms");
-	check(mod !== null);
-	check(mod.errors.length > 0);
+	expect(mod !== null);
+	expect(mod.errors.length > 0);
 }
 
 test "std import skipped" {
@@ -334,10 +359,10 @@ test "std import skipped" {
 	entries.push(makeEntry("/src/a.ms", "import { test } from \"std/testing\"; const x = 1;"));
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
-	check(graph.modules.length === 1);
+	expect(graph.modules.length === 1);
 	const mod = findModule(graph, "/src/a.ms");
-	check(mod !== null);
-	check(mod.imports.length === 0);
+	expect(mod !== null);
+	expect(mod.imports.length === 0);
 }
 
 test "no duplicate loading" {
@@ -346,7 +371,7 @@ test "no duplicate loading" {
 	entries.push(makeEntry("/src/b.ms", "export const x = 1; export const y = 2;"));
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
-	check(graph.modules.length === 2);
+	expect(graph.modules.length === 2);
 }
 
 test "C header import creates module" {
@@ -355,15 +380,15 @@ test "C header import creates module" {
 	entries.push(makeEntry("/src/lib.h", "void foo(int x);"));
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/app.ms", provider);
-	check(graph.modules.length === 2);
-	check(graph.errors.length === 0);
+	expect(graph.modules.length === 2);
+	expect(graph.errors.length === 0);
 	const hmod = findModule(graph, "/src/lib.h");
-	check(hmod !== null);
-	check(hmod.isCHeader);
-	check(hmod.state === ModuleState.Ready);
+	expect(hmod !== null);
+	expect(hmod.isCHeader);
+	expect(hmod.state === ModuleState.Ready);
 	const appMod = findModule(graph, "/src/app.ms");
-	check(appMod !== null);
-	check(appMod.errors.length === 0);
+	expect(appMod !== null);
+	expect(appMod.errors.length === 0);
 }
 
 test "parse error recorded" {
@@ -372,9 +397,9 @@ test "parse error recorded" {
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	const mod = findModule(graph, "/src/a.ms");
-	check(mod !== null);
-	check(mod.errors.length > 0);
-	check(mod.state === ModuleState.Ready);
+	expect(mod !== null);
+	expect(mod.errors.length > 0);
+	expect(mod.state === ModuleState.Ready);
 }
 
 test "loadOrder is topological" {
@@ -384,9 +409,9 @@ test "loadOrder is topological" {
 	entries.push(makeEntry("/src/b.ms", "export const b = 2;"));
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/main.ms", provider);
-	check(graph.loadOrder[0] === "/src/b.ms");
-	check(graph.loadOrder[1] === "/src/a.ms");
-	check(graph.loadOrder[2] === "/src/main.ms");
+	expect(graph.loadOrder[0] === "/src/b.ms");
+	expect(graph.loadOrder[1] === "/src/a.ms");
+	expect(graph.loadOrder[2] === "/src/main.ms");
 }
 
 test "module source stored" {
@@ -395,6 +420,6 @@ test "module source stored" {
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	const mod = findModule(graph, "/src/a.ms");
-	check(mod !== null);
-	check(mod.source === "const x = 42;");
+	expect(mod !== null);
+	expect(mod.source === "const x = 42;");
 }

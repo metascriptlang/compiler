@@ -1,11 +1,11 @@
 // Builtin Lowering — rewrite @builtin calls + MemberExpr→direct call for extensions
 //
-// Runs post-analyzer, pre-codegen. Reads decorator metadata from Symbol
-// (nativeName, builtinKind set by collectPass).
+// Runs post-analyzer, pre-codegen. Reads metadata from Symbol
+// (nativeName from 'extern ... from', builtinKind from @builtin decorator).
 //
-// @runtime("c_name") → left for genCallExpr in codegen (handles &prefix, array suffix)
-// @builtin("Name")   → inline expansion for known builtins
-// MemberExpr callee  → Identifier callee (move receiver to first arg)
+// extern function ... from "c_name" → nativeName on Symbol, codegen emits C call
+// @builtin("Name")                  → inline expansion for known builtins
+// MemberExpr callee                 → Identifier callee (move receiver to first arg)
 //
 // This is an AST-to-AST transform — codegen sees only plain calls.
 
@@ -21,7 +21,6 @@ import {
 	makeIdent, makeCall, makeIdentResolved, makeCallResolved,
 	makeObjectLiteral, makeBool,
 } from "../util";
-import { check } from "std/testing";
 import { stmtCountAfter, firstStmtKindAfter, firstExprKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -41,7 +40,7 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 	const cd = node.data as CallExprData;
 	const loc = node.location;
 
-	// Check for @builtin or @runtime resolution via pre-resolved symbol
+	// Check for @builtin or extern from resolution via pre-resolved symbol
 	const sym = node.resolvedSym;
 	if (sym !== null) {
 		// @builtin("Name") → inline expansion
@@ -49,12 +48,11 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 			return lowerBuiltinCall(node, sym.builtinKind, ctx);
 		}
 	}
-	// Resolve class method calls (console.log, Math.floor) definitively.
-	// These reach here as MemberExpr callees with a resolvedSym pointing to the method.
+	// Resolve MemberExpr calls with nativeName (e.g. console.log → msPrintln).
+	// These reach here as MemberExpr callees with a resolvedSym pointing to the extern function.
 	if (cd.callee.kind === NodeKind.MemberExpr && cd.callee.resolvedSym !== null) {
 		const methodSym = cd.callee.resolvedSym;
 		if (methodSym.nativeName !== "") {
-			// Found a @runtime method (like console.log → msPrintln)
 			// Rewrite to a direct call using the nativeName as the C function name
 			const newCallee = makeIdent(methodSym.nativeName, loc);
 			newCallee.resolvedSym = methodSym;
@@ -192,24 +190,44 @@ function preludeLowerCallee(preludeSrc: string, userSrc: string): string {
 	return "OTHER_KIND";
 }
 
-test "passthrough non-call" { check(stmtCountAfter("const x = 1;", lowerBuiltins) === 1); }
+test "passthrough non-call" { expect(stmtCountAfter("const x = 1;", lowerBuiltins) === 1); }
 
-test "passthrough plain call" { check(firstExprKindAfter("foo();", lowerBuiltins) === NodeKind.CallExpr); }
+test "passthrough plain call" { expect(firstExprKindAfter("foo();", lowerBuiltins) === NodeKind.CallExpr); }
 
-test "passthrough function decl" { check(firstStmtKindAfter("function foo() {}", lowerBuiltins) === NodeKind.FunctionDecl); }
+test "passthrough function decl" { expect(firstStmtKindAfter("function foo() {}", lowerBuiltins) === NodeKind.FunctionDecl); }
 
-test "passthrough if stmt" { check(firstStmtKindAfter("if (x) {}", lowerBuiltins) === NodeKind.IfStmt); }
+test "passthrough if stmt" { expect(firstStmtKindAfter("if (x) {}", lowerBuiltins) === NodeKind.IfStmt); }
 
-test "prelude class method is rewritten to runtime call" {
-	const prelude = "class console { @runtime(\"msPrintln\") log(value: string): void { unreachable; } }";
-	const result = preludeLowerCallee(prelude, "console.log(\"hello\");");
-	// Class method calls ARE now rewritten by builtinLower definitively.
-	check(result === "msPrintln");
+// Returns the NodeKind of the first ExprStmt's expression after lowering.
+function preludeLowerExprKind(preludeSrc: string, userSrc: string): NodeKind {
+	const ctx = createContext();
+	const ppr = parseSource(preludeSrc);
+	if (!ppr.ok) return NodeKind.NumberLiteral;
+	runThreePasses(ctx, ppr.value);
+	openScope(ctx.table, ScopeKind.Module);
+	const upr = parseSource(userSrc);
+	if (!upr.ok) return NodeKind.NumberLiteral;
+	runThreePasses(ctx, upr.value);
+	const tctx = createTransformContextWithChecker(ctx);
+	const lowered = lowerBuiltins(upr.value, tctx);
+	const pd = lowered.data as ProgramData;
+	if (pd.programStmts.length === 0) return NodeKind.NumberLiteral;
+	const stmt = pd.programStmts[0];
+	if (stmt.kind !== NodeKind.ExprStmt) return NodeKind.NumberLiteral;
+	const es = stmt.data as ExprStmtData;
+	return es.expr.kind;
 }
 
-test "@runtime identifier callee left for codegen" {
-	const prelude = "@runtime(\"msStringParseInt\") function parseInt(s: string): number { unreachable; }";
+test "@builtin on extern function rewrites to object literal" {
+	const prelude = "@builtin(\"msResultOk\") extern function ok(val: number): number;";
+	const kind = preludeLowerExprKind(prelude, "ok(42);");
+	// @builtin("msResultOk") should rewrite call → ObjectLiteral via inline expansion
+	expect(kind === NodeKind.ObjectLiteral);
+}
+
+test "extern from identifier callee left for codegen" {
+	const prelude = "extern function parseInt(s: string): number from \"msStringParseInt\";";
 	const result = preludeLowerCallee(prelude, "parseInt(\"42\");");
-	// @runtime on identifier callee is NOT rewritten — genCallExpr handles it
-	check(result === "parseInt");
+	// extern from on identifier callee is NOT rewritten — genCallExpr handles it
+	expect(result === "parseInt");
 }

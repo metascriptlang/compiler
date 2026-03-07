@@ -2,14 +2,14 @@
 // Uses callback injection via util.ms to avoid circular imports
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, DeclKind, NodeData, createNode, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd, skipDestructurePattern, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, addGenericDecl, updateGenericDeclFields } from "../context";
+import { Node, NodeKind, DeclKind, ExternKind, NodeData, createNode, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData } from "../../ast/node";
+import { ParserState, current, advance, isAtEnd, skipDestructurePattern, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, addGenericDecl, updateGenericDeclFields, collectTokenText } from "../context";
 import { skipTypeAnnotation } from "../typeAnnotation";
-import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, skipDefaultValue, skipOptionalType, getLastParsedDefaults } from "../util";
+import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, skipDefaultValue, skipOptionalType, getLastParsedDefaults, isIdentLike } from "../util";
 import { callBlockParser, callExprParser } from "./callbacks";
 import { sliceStr } from "../../utils/string";
 import { programOk, stmtKind, stmtAt } from "./validation";
-import { check } from "std/testing";
+
 
 type NodeResult = Result<Node, string>;
 
@@ -54,7 +54,7 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 	}
 
 	const nameToken = current(state);
-	if (nameToken.kind !== TokenKind.Ident) {
+	if (!isIdentLike(nameToken)) {
 		return Result.err(`Expected identifier after ${keyword.value} at line ${nameToken.line.toString()}`);
 	}
 
@@ -88,6 +88,32 @@ function stripFirstParam(arr: string[]): string[] {
 	return result;
 }
 
+// Detect extension method `this`/`typeof` in params and append to flags.
+// Mutates params[0] for instance extensions (strips "this:" prefix).
+// Appends generic names. Used by both regular and extern function parsers.
+function applyExtensionFlags(flags: string, params: string[], fnParamTypes: string[], genericNames: string): string {
+	// Instance extension: first param has "this:" prefix
+	if (params.length > 0 && params[0].length > 5 && sliceStr(params[0], 0, 5) === "this:") {
+		const receiverName = sliceStr(params[0], 5, params[0].length);
+		const receiverType = fnParamTypes[0];
+		if (flags === "") { flags = "ext:" + receiverName + ":" + receiverType; }
+		else { flags = flags + "|ext:" + receiverName + ":" + receiverType; }
+		params[0] = receiverName;
+	}
+	// Static extension: first param has "typeof:" prefix
+	if (params.length > 0 && params[0].length > 7 && sliceStr(params[0], 0, 7) === "typeof:") {
+		const staticType = sliceStr(params[0], 7, params[0].length);
+		if (flags === "") { flags = "sext:" + staticType; }
+		else { flags = flags + "|sext:" + staticType; }
+	}
+	// Encode generic param names
+	if (genericNames !== "") {
+		if (flags === "") { flags = "gen:" + genericNames; }
+		else { flags = flags + "|gen:" + genericNames; }
+	}
+	return flags;
+}
+
 // ===== Function Declaration =====
 // syntax: ('async')? 'function' ('*')? ID '(' params ')' (':' type)? block
 
@@ -107,10 +133,8 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 		advance(state); // consume '*'
 	}
 	const nameToken = current(state);
-	// Accept Ident, TemplateNoSub, or contextual keywords (test, expect, require) that can be function names
-	if (nameToken.kind !== TokenKind.Ident && nameToken.kind !== TokenKind.TemplateNoSub
-		&& nameToken.kind !== TokenKind.Test && nameToken.kind !== TokenKind.Expect
-		&& nameToken.kind !== TokenKind.Require) {
+	// Accept Ident, TemplateNoSub, or contextual keywords (test, expect, require, etc.)
+	if (!isIdentLike(nameToken) && nameToken.kind !== TokenKind.TemplateNoSub) {
 		return Result.err(`Expected function name at line ${nameToken.line.toString()}`);
 	}
 
@@ -125,51 +149,20 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 	const fnDefaults = getLastParsedDefaults();
 	const params = extractParamNames(raw);
 	const fnParamTypes = extractParamTypes(raw);
-	// Check for instance extension: first param has "this:" prefix
-	if (params.length > 0 && params[0].length > 5) {
-		const prefix = sliceStr(params[0], 0, 5);
-		if (prefix === "this:") {
-			const receiverName = sliceStr(params[0], 5, params[0].length);
-			const receiverType = fnParamTypes[0];
-			if (flags === "") {
-				flags = "ext:" + receiverName + ":" + receiverType;
-			} else {
-				flags = flags + "|ext:" + receiverName + ":" + receiverType;
-			}
-			params[0] = receiverName;
-		}
-	}
-	// Check for static extension: first param has "typeof:" prefix
+
+	// Detect extension methods and generics — single shared code path
+	flags = applyExtensionFlags(flags, params, fnParamTypes, genericNames);
+
 	// Static extensions strip the synthetic typeof param (not a runtime param)
-	if (params.length > 0 && params[0].length > 7 && sliceStr(params[0], 0, 7) === "typeof:") {
-		const staticType = sliceStr(params[0], 7, params[0].length);
-		if (flags === "") { flags = "sext:" + staticType; }
-		else { flags = flags + "|sext:" + staticType; }
-		// Encode generic param names in flags: "gen:T,U"
-		if (genericNames !== "") { flags = flags + "|gen:" + genericNames; }
-		const fnReturnType = captureOptionalType(state);
-		return Result.ok(createNode(NodeKind.FunctionDecl, {
-			fnName: nameToken.value,
-			params: stripFirstParam(params),
-			fnParamTypes: stripFirstParam(fnParamTypes),
-			fnBody: try callBlockParser(state),
-			fnFlags: flags,
-			fnReturnType,
-			fnDefaults,
-		}, fnToken));
-	}
-	// Encode generic param names in flags: "gen:T,U"
-	if (genericNames !== "") {
-		if (flags === "") { flags = "gen:" + genericNames; }
-		else { flags = flags + "|gen:" + genericNames; }
-	}
+	const isStatic = params.length > 0 && params[0].length > 7 && sliceStr(params[0], 0, 7) === "typeof:";
+
 	// Optional return type annotation: function f(): string { ... }
 	const fnReturnType = captureOptionalType(state);
 
 	return Result.ok(createNode(NodeKind.FunctionDecl, {
 		fnName: nameToken.value,
-		params,
-		fnParamTypes,
+		params: isStatic ? stripFirstParam(params) : params,
+		fnParamTypes: isStatic ? stripFirstParam(fnParamTypes) : fnParamTypes,
 		fnBody: try callBlockParser(state),
 		fnFlags: flags,
 		fnReturnType,
@@ -367,10 +360,9 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 
 	advance(state);
 	const nameToken = current(state);
-	if (nameToken.kind !== TokenKind.Ident) {
+	if (!isIdentLike(nameToken)) {
 		return Result.err(`Expected identifier after 'type' at line ${nameToken.line.toString()}`);
 	}
-
 	advance(state);
 	if (current(state).kind !== TokenKind.Assign) {
 		return Result.err(`Expected '=' in type alias at line ${current(state).line.toString()}`);
@@ -380,11 +372,7 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 	const typeStart = state.position;
 	skipTypeAnnotation(state);
 	const typeEnd = state.position;
-	let aliasType = "";
-	for (let ti = typeStart; ti < typeEnd; ti += 1) {
-		if (ti > typeStart) { aliasType = aliasType + " "; }
-		aliasType = aliasType + state.tokens[ti].value;
-	}
+	const aliasType = collectTokenText(state, typeStart, typeEnd);
 	consumeSemicolon(state);
 
 	return Result.ok(createNode(NodeKind.TypeAliasDecl, {
@@ -402,7 +390,7 @@ export function parseEnumDecl(state: ParserState): NodeResult {
 
 	advance(state);
 	const nameToken = current(state);
-	if (nameToken.kind !== TokenKind.Ident) {
+	if (!isIdentLike(nameToken)) {
 		return Result.err(`Expected identifier after 'enum' at line ${nameToken.line.toString()}`);
 	}
 
@@ -415,7 +403,7 @@ export function parseEnumDecl(state: ParserState): NodeResult {
 	const members: string[] = [];
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
 		const member = current(state);
-		if (member.kind !== TokenKind.Ident) {
+		if (!isIdentLike(member)) {
 			return Result.err(`Expected enum member name at line ${member.line.toString()}`);
 		}
 
@@ -451,7 +439,7 @@ export function parseInterfaceDecl(state: ParserState): NodeResult {
 
 	advance(state);
 	const nameToken = current(state);
-	if (nameToken.kind !== TokenKind.Ident) {
+	if (!isIdentLike(nameToken)) {
 		return Result.err(`Expected identifier after 'interface' at line ${nameToken.line.toString()}`);
 	}
 
@@ -484,7 +472,7 @@ export function parseInterfaceDecl(state: ParserState): NodeResult {
 	const fieldTypes: string[] = [];
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
 		const field = current(state);
-		if (field.kind !== TokenKind.Ident) {
+		if (!isIdentLike(field)) {
 			return Result.err(`Expected field name in interface at line ${field.line.toString()}`);
 		}
 
@@ -544,7 +532,7 @@ export function parseClassDecl(state: ParserState): NodeResult {
 	advance(state);
 
 	const nameToken = current(state);
-	if (nameToken.kind !== TokenKind.Ident) {
+	if (!isIdentLike(nameToken)) {
 		return Result.err(`Expected class name at line ${nameToken.line.toString()}`);
 	}
 	advance(state);
@@ -563,7 +551,7 @@ export function parseClassDecl(state: ParserState): NodeResult {
 	let extendsName = "";
 	if (!isAtEnd(state) && current(state).kind === TokenKind.Extends) {
 		advance(state);
-		if (current(state).kind === TokenKind.Ident) {
+		if (isIdentLike(current(state))) {
 			extendsName = current(state).value;
 			advance(state);
 		}
@@ -662,10 +650,17 @@ function parseClassMember(state: ParserState): NodeResult {
 		advance(state);
 	}
 
-	// Check for async modifier on methods
+	// Check for extern modifier on methods
 	let memberFlags = "";
+	if (current(state).kind === TokenKind.Extern) {
+		memberFlags = "extern";
+		advance(state);
+	}
+
+	// Check for async modifier on methods
 	if (current(state).kind === TokenKind.Async) {
-		memberFlags = "async";
+		if (memberFlags !== "") { memberFlags = memberFlags + "_async"; }
+		else { memberFlags = "async"; }
 		advance(state);
 	}
 
@@ -684,13 +679,13 @@ function parseClassMember(state: ParserState): NodeResult {
 	// Get/Set accessors — early return
 	if ((current(state).kind === TokenKind.Get || current(state).kind === TokenKind.Set) &&
 		state.position + 1 < state.tokens.length &&
-		state.tokens[state.position + 1].kind === TokenKind.Ident) {
+		isIdentLike(state.tokens[state.position + 1])) {
 		return parseClassAccessor(state, memberIsStatic, memberFlags);
 	}
 
 	// Regular member: name followed by ( for method, or : / = / ; for property
 	const nameToken = current(state);
-	if (nameToken.kind !== TokenKind.Ident) {
+	if (!isIdentLike(nameToken)) {
 		return Result.err(`Expected member name in class at line ${nameToken.line.toString()}`);
 	}
 	advance(state);
@@ -765,6 +760,28 @@ function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: bo
 	const methodParamTypes = extractParamTypes(raw);
 	// Optional return type
 	const methodReturnType = captureOptionalType(state);
+
+	// Extern methods: 'from "c_name";' instead of body
+	let methodNativeName = "";
+	if (!isAtEnd(state) && current(state).kind === TokenKind.From) {
+		advance(state); // consume 'from'
+		if (!isAtEnd(state) && current(state).kind === TokenKind.String) {
+			methodNativeName = current(state).value;
+			advance(state);
+		}
+		consumeSemicolon(state);
+		return Result.ok(createNode(NodeKind.MethodDecl, {
+			methodName: nameToken.value,
+			methodParams,
+			methodParamTypes,
+			methodBody: createNode(NodeKind.BlockStmt, { statements: [] }, nameToken),
+			methodIsStatic: isStatic,
+			methodFlags: flags,
+			methodReturnType,
+			nativeName: methodNativeName,
+		}, nameToken));
+	}
+
 	// Abstract methods have no body — just semicolon
 	if (current(state).kind === TokenKind.Semicolon) {
 		consumeSemicolon(state);
@@ -776,6 +793,7 @@ function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: bo
 			methodIsStatic: isStatic,
 			methodFlags: flags,
 			methodReturnType,
+			nativeName: "",
 		}, nameToken));
 	}
 	const body = try callBlockParser(state);
@@ -787,6 +805,7 @@ function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: bo
 		methodIsStatic: isStatic,
 		methodFlags: flags,
 		methodReturnType,
+		nativeName: "",
 	}, nameToken));
 }
 
@@ -806,7 +825,7 @@ export function parseArrayPattern(state: ParserState): NodeResult {
 			const spreadToken = current(state);
 			advance(state);
 			const restIdent = current(state);
-			if (restIdent.kind === TokenKind.Ident) {
+			if (isIdentLike(restIdent)) {
 				advance(state);
 				elements.push(createNode(NodeKind.SpreadExpr, {
 					spreadArg: createNode(NodeKind.Identifier, { name: restIdent.value }, restIdent),
@@ -820,7 +839,7 @@ export function parseArrayPattern(state: ParserState): NodeResult {
 			// Nested object pattern
 			const nested = try parseObjectPattern(state);
 			elements.push(nested);
-		} else if (current(state).kind === TokenKind.Ident) {
+		} else if (isIdentLike(current(state))) {
 			const elemToken = current(state);
 			advance(state);
 			elements.push(createNode(NodeKind.Identifier, { name: elemToken.value }, elemToken));
@@ -860,13 +879,13 @@ export function parseObjectPattern(state: ParserState): NodeResult {
 			const spreadToken = current(state);
 			advance(state);
 			const restIdent = current(state);
-			if (restIdent.kind === TokenKind.Ident) {
+			if (isIdentLike(restIdent)) {
 				advance(state);
 				props.push(createNode(NodeKind.SpreadExpr, {
 					spreadArg: createNode(NodeKind.Identifier, { name: restIdent.value }, restIdent),
 				}, spreadToken));
 			}
-		} else if (current(state).kind === TokenKind.Ident) {
+		} else if (isIdentLike(current(state))) {
 			const keyToken = current(state);
 			advance(state);
 			// Check for rename: { key: alias } or { key: { nested } } or { key: [nested] }
@@ -884,7 +903,7 @@ export function parseObjectPattern(state: ParserState): NodeResult {
 						propKey: keyToken.value,
 						propAlias: nested,
 					}, keyToken));
-				} else if (current(state).kind === TokenKind.Ident) {
+				} else if (isIdentLike(current(state))) {
 					const aliasToken = current(state);
 					advance(state);
 					props.push(createNode(NodeKind.ObjectPatternProp, {
@@ -978,66 +997,82 @@ export function parseExternDecl(state: ParserState): NodeResult {
 	// Determine the extern kind from next keyword
 	const kindToken = current(state);
 	const externKind = match (kindToken.kind) {
-		TokenKind.Function => "function",
-		TokenKind.Class => "class",
-		TokenKind.Const => "const",
-		TokenKind.Var => "var",
-		TokenKind.Let => "let",
-		TokenKind.Type => "type",
-		TokenKind.Enum => "enum",
-		TokenKind.Interface => "interface",
-		TokenKind.Macro => "macro",
-		_ => "",
+		TokenKind.Function => ExternKind.Function,
+		TokenKind.Class => ExternKind.Class,
+		TokenKind.Const => ExternKind.Const,
+		TokenKind.Var => ExternKind.Var,
+		TokenKind.Let => ExternKind.Let,
+		TokenKind.Type => ExternKind.Type,
+		TokenKind.Enum => ExternKind.Enum,
+		TokenKind.Interface => ExternKind.Interface,
+		TokenKind.Macro => ExternKind.Macro,
+		_ => ExternKind.Invalid,
 	};
-	if (externKind === "") {
+	if (externKind === ExternKind.Invalid) {
 		return Result.err(`Expected declaration keyword after 'extern' at line ${kindToken.line.toString()}`);
 	}
 	advance(state); // consume the keyword
 
 	// For macro: optional '@' prefix
-	if (externKind === "macro" && !isAtEnd(state) && current(state).kind === TokenKind.At) {
+	if (externKind === ExternKind.Macro && !isAtEnd(state) && current(state).kind === TokenKind.At) {
 		advance(state);
 	}
 
 	// Parse name
 	const nameToken = current(state);
-	if (nameToken.kind !== TokenKind.Ident) {
+	if (!isIdentLike(nameToken)) {
 		return Result.err(`Expected identifier in extern declaration at line ${nameToken.line.toString()}`);
 	}
 	advance(state);
 
-	// Skip optional generic params: <T, U>
-	skipGenericParams(state);
+	// Capture optional generic params: extern function sort<T>(arr: T[]): void
+	const genericNames = captureGenericParams(state);
 
 	// Extern functions → FunctionDecl with "extern" in fnFlags (Nim-aligned: importc pragma on proc)
-	if (externKind === "function") {
+	if (externKind === ExternKind.Function) {
 		const raw = parseParamList(state, nameToken.value);
 		const params = extractParamNames(raw);
 		const fnParamTypes = extractParamTypes(raw);
+
+		// Detect extension methods (this/typeof) — same logic as regular functions
+		let flags = applyExtensionFlags("extern", params, fnParamTypes, genericNames);
+
 		const fnReturnType = captureOptionalType(state);
 
-		// Skip body or semicolon
+		// Parse optional 'from "c_name"' clause or body/semicolon
+		let nativeName = "";
 		let fnBody: Node = createNode(NodeKind.BlockStmt, { statements: [] as Node[] }, externToken);
-		if (!isAtEnd(state) && current(state).kind === TokenKind.LBrace) {
+		if (!isAtEnd(state) && current(state).kind === TokenKind.From) {
+			advance(state); // consume 'from'
+			if (!isAtEnd(state) && current(state).kind === TokenKind.String) {
+				nativeName = current(state).value;
+				advance(state);
+			}
+			consumeSemicolon(state);
+		} else if (!isAtEnd(state) && current(state).kind === TokenKind.LBrace) {
 			fnBody = try callBlockParser(state);
 		} else {
 			consumeSemicolon(state);
 		}
 
+		// Static extensions strip the synthetic typeof param (not a runtime param)
+		const isStatic = params.length > 0 && params[0].length > 7 && sliceStr(params[0], 0, 7) === "typeof:";
+
 		return Result.ok(createNode(NodeKind.FunctionDecl, {
 			fnName: nameToken.value,
-			params,
-			fnParamTypes,
+			params: isStatic ? stripFirstParam(params) : params,
+			fnParamTypes: isStatic ? stripFirstParam(fnParamTypes) : fnParamTypes,
 			fnBody,
-			fnFlags: "extern",
+			fnFlags: flags,
 			fnReturnType,
 			fnDefaults: getLastParsedDefaults(),
+			nativeName,
 		}, externToken));
 	}
 
 	// Non-function externs: keep ExternDecl node
 	skipBalanced(state, TokenKind.LParen, TokenKind.RParen);
-	skipOptionalType(state);
+	const externType = captureOptionalType(state);
 
 	// Skip optional 'extends' clause
 	if (!isAtEnd(state) && current(state).kind === TokenKind.Extends) {
@@ -1045,8 +1080,16 @@ export function parseExternDecl(state: ParserState): NodeResult {
 		skipTypeAnnotation(state);
 	}
 
-	// Body or semicolon
-	if (!isAtEnd(state) && current(state).kind === TokenKind.LBrace) {
+	// Parse optional 'from "c_name"' clause or body/semicolon
+	let externNativeName = "";
+	if (!isAtEnd(state) && current(state).kind === TokenKind.From) {
+		advance(state); // consume 'from'
+		if (!isAtEnd(state) && current(state).kind === TokenKind.String) {
+			externNativeName = current(state).value;
+			advance(state);
+		}
+		consumeSemicolon(state);
+	} else if (!isAtEnd(state) && current(state).kind === TokenKind.LBrace) {
 		skipBalanced(state, TokenKind.LBrace, TokenKind.RBrace);
 	} else {
 		consumeSemicolon(state);
@@ -1055,6 +1098,8 @@ export function parseExternDecl(state: ParserState): NodeResult {
 	return Result.ok(createNode(NodeKind.ExternDecl, {
 		externKind,
 		externName: nameToken.value,
+		nativeName: externNativeName,
+		externType,
 	}, externToken));
 }
 
@@ -1071,7 +1116,7 @@ export function parseDistinctTypeDecl(state: ParserState): NodeResult {
 	advance(state); // consume 'type'
 
 	const nameToken = current(state);
-	if (nameToken.kind !== TokenKind.Ident) {
+	if (!isIdentLike(nameToken)) {
 		return Result.err(`Expected identifier after 'distinct type' at line ${nameToken.line.toString()}`);
 	}
 	advance(state);
@@ -1083,11 +1128,7 @@ export function parseDistinctTypeDecl(state: ParserState): NodeResult {
 	const dTypeStart = state.position;
 	skipTypeAnnotation(state);
 	const dTypeEnd = state.position;
-	let distinctAliasType = "";
-	for (let di = dTypeStart; di < dTypeEnd; di += 1) {
-		if (di > dTypeStart) { distinctAliasType = distinctAliasType + " "; }
-		distinctAliasType = distinctAliasType + state.tokens[di].value;
-	}
+	const distinctAliasType = collectTokenText(state, dTypeStart, dTypeEnd);
 	consumeSemicolon(state);
 
 	return Result.ok(createNode(NodeKind.TypeAliasDecl, {
@@ -1105,7 +1146,7 @@ export function parseMacroDecl(state: ParserState): NodeResult {
 	advance(state); // consume 'macro'
 
 	const nameToken = current(state);
-	if (nameToken.kind !== TokenKind.Ident) {
+	if (!isIdentLike(nameToken)) {
 		return Result.err(`Expected identifier after 'macro' at line ${nameToken.line.toString()}`);
 	}
 	advance(state);
@@ -1127,248 +1168,285 @@ export function parseMacroDecl(state: ParserState): NodeResult {
 
 // ===== Tests =====
 // Variable — const vs let
-test "const decl" { check(programOk("const x = 42;")); }
+test "const decl" { expect(programOk("const x = 42;")); }
 
-test "let decl" { check(programOk("let y = 0;")); }
+test "let decl" { expect(programOk("let y = 0;")); }
 // Function — empty, with params, with body
-test "function empty" { check(programOk("function f() { }")); }
+test "function empty" { expect(programOk("function f() { }")); }
 
-test "function multi-stmt" { check(programOk("function f() { const x = 1; return x; }")); }
+test "function multi-stmt" { expect(programOk("function f() { const x = 1; return x; }")); }
 // Import — distinct paths: named, aliased, side-effect
-test "import named" { check(programOk("import { Token, TokenKind } from \"./token\";")); }
+test "import named" { expect(programOk("import { Token, TokenKind } from \"./token\";")); }
 
-test "import aliased" { check(programOk("import { Token as T } from \"./token\";")); }
+test "import aliased" { expect(programOk("import { Token as T } from \"./token\";")); }
 
-test "import side-effect" { check(programOk("import \"./polyfill\";")); }
+test "import side-effect" { expect(programOk("import \"./polyfill\";")); }
 // Export — distinct paths: decl, re-export, re-export aliased
-test "export function" { check(programOk("export function f() { return 1; }")); }
+test "export function" { expect(programOk("export function f() { return 1; }")); }
 
-test "export const" { check(programOk("export const x = 42;")); }
+test "export const" { expect(programOk("export const x = 42;")); }
 
-test "re-export" { check(programOk("export { Node, NodeKind } from \"./node\";")); }
+test "re-export" { expect(programOk("export { Node, NodeKind } from \"./node\";")); }
 
-test "re-export aliased" { check(programOk("export { Token as T } from \"./token\";")); }
+test "re-export aliased" { expect(programOk("export { Token as T } from \"./token\";")); }
 // Type alias — distinct paths: simple, generic, union, function type
-test "type simple" { check(programOk("type ID = number;")); }
+test "type simple" { expect(programOk("type ID = number;")); }
 
-test "type generic" { check(programOk("type NodeResult = Result<Node, string>;")); }
+test "type generic" { expect(programOk("type NodeResult = Result<Node, string>;")); }
 
-test "type leading pipe" { check(programOk("type Data = | { x: number } | { y: string };")); }
+test "type leading pipe" { expect(programOk("type Data = | { x: number } | { y: string };")); }
 
-test "type function" { check(programOk("type Handler = (a: string) => void;")); }
+test "type function" { expect(programOk("type Handler = (a: string) => void;")); }
 // Enum
-test "enum" { check(programOk("enum Color { Red, Green, Blue }")); }
+test "enum" { expect(programOk("enum Color { Red, Green, Blue }")); }
 
-test "enum with values" { check(programOk("enum Status { Active = 1, Inactive = 0 }")); }
+test "enum with values" { expect(programOk("enum Status { Active = 1, Inactive = 0 }")); }
 // Interface — distinct paths: simple, optional, extends
-test "interface" { check(programOk("interface Point { x: number; y: number; }")); }
+test "interface" { expect(programOk("interface Point { x: number; y: number; }")); }
 
-test "interface optional" { check(programOk("interface Opt { value?: number; }")); }
+test "interface optional" { expect(programOk("interface Opt { value?: number; }")); }
 
-test "interface extends" { check(programOk("interface Dog extends Animal { breed: string; }")); }
+test "interface extends" { expect(programOk("interface Dog extends Animal { breed: string; }")); }
 // Param features — exercises parseParamList + skipDefaultValue
-test "rest param" { check(programOk("function f(...args) { return args; }")); }
+test "rest param" { expect(programOk("function f(...args) { return args; }")); }
 
-test "default param" { check(programOk("function f(x = 5) { return x; }")); }
+test "default param" { expect(programOk("function f(x = 5) { return x; }")); }
 
-test "default param complex" { check(programOk("function f(x = [1, 2], y = {a: 3}) {}")); }
+test "default param complex" { expect(programOk("function f(x = [1, 2], y = {a: 3}) {}")); }
 
-test "typed param" { check(programOk("function f(x: number, y: string) {}")); }
+test "typed param" { expect(programOk("function f(x: number, y: string) {}")); }
 // Enum with complex values — exercises skipDefaultValue depth tracking
-test "enum complex value" { check(programOk("enum E { A = fn(1, 2), B = arr[0] }")); }
+test "enum complex value" { expect(programOk("enum E { A = fn(1, 2), B = arr[0] }")); }
 // Var declarations
-test "var decl" { check(programOk("var x = 1;")); }
+test "var decl" { expect(programOk("var x = 1;")); }
 
-test "var is VariableDecl" { check(stmtKind("var x = 1;") === NodeKind.VariableDecl); }
+test "var is VariableDecl" { expect(stmtKind("var x = 1;") === NodeKind.VariableDecl); }
 
 test "var declKind is Var" {
 	const d = stmtAt("var x = 1;", 0).data as VariableDeclData;
-	check(d.declKind === DeclKind.Var);
+	expect(d.declKind === DeclKind.Var);
 }
 
 test "var declName" {
 	const d = stmtAt("var x = 1;", 0).data as VariableDeclData;
-	check(d.declName === "x");
+	expect(d.declName === "x");
 }
 
-test "var typed" { check(programOk("var x: number = 1;")); }
+test "var typed" { expect(programOk("var x: number = 1;")); }
 // Extern declarations — all 9 kinds
-test "extern function" { check(programOk("extern function printf(fmt: string): void;")); }
+test "extern function" { expect(programOk("extern function printf(fmt: string): void;")); }
 
-test "extern class empty" { check(programOk("extern class FILE {}")); }
+test "extern class empty" { expect(programOk("extern class FILE {}")); }
 
-test "extern const" { check(programOk("extern const STDIN: FILE;")); }
+test "extern const" { expect(programOk("extern const STDIN: FILE;")); }
 
-test "extern enum" { check(programOk("extern enum Color { Red, Green }")); }
+test "extern enum" { expect(programOk("extern enum Color { Red, Green }")); }
 
-test "extern type" { check(programOk("extern type Ptr;")); }
+test "extern type" { expect(programOk("extern type Ptr;")); }
 
-test "extern var" { check(programOk("extern var errno: number;")); }
+test "extern var" { expect(programOk("extern var errno: number;")); }
 
-test "extern let" { check(programOk("extern let counter: number;")); }
+test "extern let" { expect(programOk("extern let counter: number;")); }
 
-test "extern interface" { check(programOk("extern interface Stream { read(): number; }")); }
+test "extern interface" { expect(programOk("extern interface Stream { read(): number; }")); }
 
-test "extern macro" { check(programOk("extern macro @inject;")); }
+test "extern macro" { expect(programOk("extern macro @inject;")); }
 
-test "extern function is FunctionDecl" { check(stmtKind("extern function f(): void;") === NodeKind.FunctionDecl); }
+test "extern function is FunctionDecl" { expect(stmtKind("extern function f(): void;") === NodeKind.FunctionDecl); }
 
 test "extern function has extern flag" {
 	const d = stmtAt("extern function printf(fmt: string): void;", 0).data as FunctionDeclData;
-	check(d.fnFlags === "extern");
+	expect(d.fnFlags === "extern");
 }
 
-test "extern const is ExternDecl" { check(stmtKind("extern const STDIN: int32;") === NodeKind.ExternDecl); }
+test "extern const is ExternDecl" { expect(stmtKind("extern const STDIN: int32;") === NodeKind.ExternDecl); }
 
 test "extern name field" {
 	const d = stmtAt("extern const STDIN: FILE;", 0).data as ExternDeclData;
-	check(d.externName === "STDIN");
+	expect(d.externName === "STDIN");
+	expect(d.externType === "FILE");
 }
 
 test "extern class kind" {
 	const d = stmtAt("extern class FILE {}", 0).data as ExternDeclData;
-	check(d.externKind === "class");
+	expect(d.externKind === ExternKind.Class);
 }
 
-test "extern generics" { check(programOk("extern function sort<T>(arr: T[]): void;")); }
+test "extern var with type and from" {
+	const d = stmtAt("extern var errno: int32 from \"ms_errno\";", 0).data as ExternDeclData;
+	expect(d.externKind === ExternKind.Var);
+	expect(d.externName === "errno");
+	expect(d.externType === "int32");
+	expect(d.nativeName === "ms_errno");
+}
 
-test "extern extends" { check(programOk("extern class Derived extends Base {}")); }
+test "extern const no from" {
+	const d = stmtAt("extern const STDIN: FILE;", 0).data as ExternDeclData;
+	expect(d.externKind === ExternKind.Const);
+	expect(d.nativeName === "");
+}
 
-test "extern error" { check(!programOk("extern 42")); }
+test "extern class opaque" {
+	const d = stmtAt("extern class FILE;", 0).data as ExternDeclData;
+	expect(d.externKind === ExternKind.Class);
+	expect(d.externType === "");
+}
 
-test "export extern function" { check(programOk("export extern function foo(x: number): void;")); }
+test "extern generics" { expect(programOk("extern function sort<T>(arr: T[]): void;")); }
 
-test "export extern function is ExportDecl" { check(stmtKind("export extern function foo(): void;") === NodeKind.ExportDecl); }
+test "extern extends" { expect(programOk("extern class Derived extends Base {}")); }
+
+test "extern error" { expect(!programOk("extern 42")); }
+
+test "export extern function" { expect(programOk("export extern function foo(x: number): void;")); }
+
+test "export extern function is ExportDecl" { expect(stmtKind("export extern function foo(): void;") === NodeKind.ExportDecl); }
+
+test "extern function from" { expect(programOk("extern function floor(x: number): number from \"msFloor\";")); }
+
+test "extern function from nativeName" {
+	const d = stmtAt("extern function floor(x: number): number from \"msFloor\";", 0).data as FunctionDeclData;
+	expect(d.fnName === "floor");
+	expect(d.nativeName === "msFloor");
+	expect(d.fnFlags === "extern");
+}
+
+test "extern function without from" {
+	const d = stmtAt("extern function printf(fmt: string): void;", 0).data as FunctionDeclData;
+	expect(d.fnName === "printf");
+	expect(d.nativeName === "");
+}
+
 // Distinct type
-test "distinct type" { check(programOk("distinct type UserId = number;")); }
+test "distinct type" { expect(programOk("distinct type UserId = number;")); }
 
-test "distinct type string" { check(programOk("distinct type Email = string;")); }
+test "distinct type string" { expect(programOk("distinct type Email = string;")); }
 
-test "distinct is TypeAliasDecl" { check(stmtKind("distinct type X = number;") === NodeKind.TypeAliasDecl); }
+test "distinct is TypeAliasDecl" { expect(stmtKind("distinct type X = number;") === NodeKind.TypeAliasDecl); }
 
 test "distinct flag true" {
 	const d = stmtAt("distinct type UserId = number;", 0).data as TypeAliasDeclData;
-	check(d.aliasIsDistinct);
+	expect(d.aliasIsDistinct);
 }
 
 test "distinct name field" {
 	const d = stmtAt("distinct type Email = string;", 0).data as TypeAliasDeclData;
-	check(d.aliasName === "Email");
+	expect(d.aliasName === "Email");
 }
 
 test "type alias not distinct" {
 	const d = stmtAt("type ID = number;", 0).data as TypeAliasDeclData;
-	check(!d.aliasIsDistinct);
+	expect(!d.aliasIsDistinct);
 }
 // Macro declaration
-test "macro decl" { check(programOk("macro deriveEq(target) { return target; }")); }
+test "macro decl" { expect(programOk("macro deriveEq(target) { return target; }")); }
 
-test "macro is MacroDecl" { check(stmtKind("macro foo(x) { return x; }") === NodeKind.MacroDecl); }
+test "macro is MacroDecl" { expect(stmtKind("macro foo(x) { return x; }") === NodeKind.MacroDecl); }
 
 test "macro name field" {
 	const d = stmtAt("macro deriveEq(target) { return target; }", 0).data as MacroDeclData;
-	check(d.macroDeclName === "deriveEq");
+	expect(d.macroDeclName === "deriveEq");
 }
 
-test "macro multi param" { check(programOk("macro foo(a, b, c) { return a; }")); }
+test "macro multi param" { expect(programOk("macro foo(a, b, c) { return a; }")); }
 
 test "macro params field" {
 	const d = stmtAt("macro foo(a, b, c) { return a; }", 0).data as MacroDeclData;
-	check(d.macroDeclParams.length === 3);
+	expect(d.macroDeclParams.length === 3);
 }
 
 test "macro body is block" {
 	const d = stmtAt("macro foo(x) { return x; }", 0).data as MacroDeclData;
-	check(d.macroDeclBody.kind === NodeKind.BlockStmt);
+	expect(d.macroDeclBody.kind === NodeKind.BlockStmt);
 }
 
-test "macro return type" { check(programOk("macro foo(): Node { return x; }")); }
+test "macro return type" { expect(programOk("macro foo(): Node { return x; }")); }
 
-test "macro empty params" { check(programOk("macro noop() { }")); }
+test "macro empty params" { expect(programOk("macro noop() { }")); }
 
-test "async function" { check(programOk("async function f() {}")); }
+test "async function" { expect(programOk("async function f() {}")); }
 
-test "generator function" { check(programOk("function* gen() { yield 1; }")); }
+test "generator function" { expect(programOk("function* gen() { yield 1; }")); }
 
-test "async generator" { check(programOk("async function* both() { yield 1; }")); }
+test "async generator" { expect(programOk("async function* both() { yield 1; }")); }
 
-test "export async" { check(programOk("export async function f() {}")); }
+test "export async" { expect(programOk("export async function f() {}")); }
 
-test "extension parses" { check(programOk("function f(this s: string) { return 1; }")); }
+test "extension parses" { expect(programOk("function f(this s: string) { return 1; }")); }
 
 test "extension flags" {
 	const n = stmtAt("function f(this s: string) { return 1; }", 0);
 	const d = n.data as FunctionDeclData;
-	check(d.fnFlags === "ext:s:string");
+	expect(d.fnFlags === "ext:s:string");
 }
 
 test "extension keeps receiver in params" {
 	const n = stmtAt("function f(this s: string) { return 1; }", 0);
 	const d = n.data as FunctionDeclData;
-	check(d.params.length === 1);
-	check(d.params[0] === "s");
+	expect(d.params.length === 1);
+	expect(d.params[0] === "s");
 }
 
 test "extension with extra params" {
 	const n = stmtAt("function f(this s: string, n: number) { return 1; }", 0);
 	const d = n.data as FunctionDeclData;
-	check(d.params.length === 2);
-	check(d.params[0] === "s");
-	check(d.params[1] === "n");
+	expect(d.params.length === 2);
+	expect(d.params[0] === "s");
+	expect(d.params[1] === "n");
 }
 
 test "no receiver flags empty" {
 	const n = stmtAt("function f(x: number) { return 1; }", 0);
 	const d = n.data as FunctionDeclData;
-	check(d.fnFlags === "");
+	expect(d.fnFlags === "");
 }
 
-test "object destructure" { check(stmtKind("const {a, b} = obj;") === NodeKind.DestructuringDecl); }
+test "object destructure" { expect(stmtKind("const {a, b} = obj;") === NodeKind.DestructuringDecl); }
 
-test "array destructure" { check(programOk("const [x, y] = arr;")); }
+test "array destructure" { expect(programOk("const [x, y] = arr;")); }
 
-test "nested object" { check(programOk("const {a: {b, c}} = obj;")); }
+test "nested object" { expect(programOk("const {a: {b, c}} = obj;")); }
 
-test "object rest" { check(programOk("const {a, ...rest} = obj;")); }
+test "object rest" { expect(programOk("const {a, ...rest} = obj;")); }
 
-test "array rest" { check(programOk("const [first, ...rest] = arr;")); }
+test "array rest" { expect(programOk("const [first, ...rest] = arr;")); }
 
-test "let destructure" { check(programOk("let {x, y} = point;")); }
+test "let destructure" { expect(programOk("let {x, y} = point;")); }
 
-test "func destr param" { check(programOk("function f({x, y}) { return x; }")); }
+test "func destr param" { expect(programOk("function f({x, y}) { return x; }")); }
 
-test "func array param" { check(programOk("function f([a, b]) { return a; }")); }
+test "func array param" { expect(programOk("function f([a, b]) { return a; }")); }
 
-test "arrow destr param" { check(programOk("const f = ({x}) => x;")); }
+test "arrow destr param" { expect(programOk("const f = ({x}) => x;")); }
 // Distinct member types
-test "property" { check(programOk("class Foo { name: string; }")); }
+test "property" { expect(programOk("class Foo { name: string; }")); }
 
-test "method" { check(programOk("class Foo { greet() { return 1; } }")); }
+test "method" { expect(programOk("class Foo { greet() { return 1; } }")); }
 
-test "constructor" { check(programOk("class Foo { constructor(x: number) { this.x = x; } }")); }
+test "constructor" { expect(programOk("class Foo { constructor(x: number) { this.x = x; } }")); }
 // Modifiers — each tests a distinct parser path
-test "extends" { check(programOk("class Dog extends Animal { bark() { return 1; } }")); }
+test "extends" { expect(programOk("class Dog extends Animal { bark() { return 1; } }")); }
 
-test "static" { check(programOk("class Foo { static create() { return 1; } }")); }
+test "static" { expect(programOk("class Foo { static create() { return 1; } }")); }
 
-test "abstract" { check(programOk("abstract class Shape { abstract area(): number; }")); }
+test "abstract" { expect(programOk("abstract class Shape { abstract area(): number; }")); }
 
-test "getter setter" { check(programOk("class Foo { get name() { return 1; } set name(v: string) { this.x = v; } }")); }
+test "getter setter" { expect(programOk("class Foo { get name() { return 1; } set name(v: string) { this.x = v; } }")); }
 
-test "export class" { check(programOk("export class Foo { x: number; }")); }
+test "export class" { expect(programOk("export class Foo { x: number; }")); }
 
-test "async method" { check(programOk("class Foo { async fetch() {} }")); }
+test "async method" { expect(programOk("class Foo { async fetch() {} }")); }
 
-test "generator method" { check(programOk("class Foo { *items() { yield 1; } }")); }
+test "generator method" { expect(programOk("class Foo { *items() { yield 1; } }")); }
 // Complex
-test "multi members" { check(programOk("class Point { x: number; y: number; toString() { return 1; } }")); }
+test "multi members" { expect(programOk("class Point { x: number; y: number; toString() { return 1; } }")); }
 
-test "constructor public" { check(programOk("class Foo { constructor(public name: string) { } }")); }
+test "constructor public" { expect(programOk("class Foo { constructor(public name: string) { } }")); }
 // Generic classes — exercises skipGenericParams in context.ms
-test "generic class" { check(programOk("class Container<T> { value: T; }")); }
+test "generic class" { expect(programOk("class Container<T> { value: T; }")); }
 
-test "generic extends" { check(programOk("class List<T> extends Base<T> {}")); }
+test "generic extends" { expect(programOk("class List<T> extends Base<T> {}")); }
 
-test "multi generic" { check(programOk("class Map<K, V> { lookup(k: K): V {} }")); }
+test "multi generic" { expect(programOk("class Map<K, V> { lookup(k: K): V {} }")); }
 
-test "implements" { check(programOk("class Foo implements Bar {}")); }
+test "implements" { expect(programOk("class Foo implements Bar {}")); }

@@ -4,10 +4,10 @@
 import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, NodeData, createNode } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, consumeSemicolon } from "../context";
-import { skipOptionalType } from "../util";
+import { skipOptionalType, isIdentLike } from "../util";
 import { callBlockParser, callExprParser } from "./callbacks";
 import { programOk } from "./validation";
-import { check } from "std/testing";
+
 
 type NodeResult = Result<Node, string>;
 
@@ -37,7 +37,7 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 		// Optional catch parameter: catch (e)
 		if (!isAtEnd(state) && current(state).kind === TokenKind.LParen) {
 			advance(state);
-			if (current(state).kind === TokenKind.Ident) {
+			if (isIdentLike(current(state))) {
 				catchParam = current(state).value;
 				advance(state);
 				skipOptionalType(state);
@@ -82,16 +82,16 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 
 // ===== Tests =====
 // Throw
-test "throw string" { check(programOk("throw \"error\";")); }
+test "throw string" { expect(programOk("throw \"error\";")); }
 
-test "throw expr" { check(programOk("throw error;")); }
+test "throw expr" { expect(programOk("throw error;")); }
 // Try — distinct paths: catch, finally, both, no-param catch
-test "try-catch" { check(programOk("try { x; } catch (e) { y; }")); }
+test "try-catch" { expect(programOk("try { x; } catch (e) { y; }")); }
 
-test "try-finally" { check(programOk("try { x; } finally { y; }")); }
+test "try-finally" { expect(programOk("try { x; } finally { y; }")); }
 
-test "try-catch-finally" { check(programOk("try { x; } catch (e) { y; } finally { z; }")); }
+test "try-catch-finally" { expect(programOk("try { x; } catch (e) { y; } finally { z; }")); }
 
-test "catch no param" { check(programOk("try { x; } catch { y; }")); }
+test "catch no param" { expect(programOk("try { x; } catch { y; }")); }
 // Negative
-test "try alone rejects" { check(!programOk("try { x; }")); }
+test "try alone rejects" { expect(!programOk("try { x; }")); }

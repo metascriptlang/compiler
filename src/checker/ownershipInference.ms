@@ -6,7 +6,7 @@ import { Node, NodeKind, ProgramData, FunctionDeclData, VariableDeclData, Binary
 import { Type, TypeKind } from "./types";
 import { Symbol, SymbolKind, hasFlag, setFlag, SF_SINK, SF_LENT, SF_GLOBAL } from "./symbol";
 import { CheckerContext } from "./context";
-import { check } from "std/testing";
+
 
 export function inferOwnership(ctx: CheckerContext, program: Node): void {
 	if (program === null || program.kind !== NodeKind.Program) return;
