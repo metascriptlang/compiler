@@ -83,3 +83,8 @@ extern function append(this s: string, other: string): void from "&msStringAppen
 extern function setSlice(this s: string, start: number, end: number): void from "&msStringSetSlice";
 
 extern function stripInPlace(this s: string): void from "&msStringStripInPlace";
+
+// ===== Zero-Copy Bridge (string → uint8[]) =====
+
+@builtin("AsBytes")
+extern function asBytes(this s: string): uint8[] from "ms_asBytes";

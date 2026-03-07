@@ -17,7 +17,7 @@ import { forEachChild } from "../ast/visitor";
 import { Type, TypeKind, typeNameOf,
 	numberType, stringType, booleanType, voidType, nullType,
 	unknownType, neverType, errorType } from "./types";
-import { Symbol, SymbolKind, SymbolTable, Scope, lookupSymbol, makeSymbol, hasFlag, SF_EXPORTED, SF_MUTABLE } from "./symbol";
+import { Symbol, SymbolKind, SymbolTable, Scope, lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext } from "./context";
 import { sliceStr, charAt } from "../utils/string";
 import { checkProgram } from "./checkPass";
@@ -373,7 +373,7 @@ export function sgGetSymbolAtCursor(ctx: CheckerContext, program: Node, line: nu
 		const suggest: SgSuggest = {
 			name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
 			location: sym.location, prefixScore: 0, scopeDepth: 0, contextFit: false,
-			isExported: hasFlag(sym, SF_EXPORTED), isMutable: hasFlag(sym, SF_MUTABLE),
+			isExported: hasFlag(sym, SymbolFlag.Exported), isMutable: hasFlag(sym, SymbolFlag.Mutable),
 		};
 		return suggest;
 	}
@@ -385,7 +385,7 @@ export function sgGetSymbolAtCursor(ctx: CheckerContext, program: Node, line: nu
 		const suggest: SgSuggest = {
 			name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
 			location: sym.location, prefixScore: 0, scopeDepth: 0, contextFit: false,
-			isExported: hasFlag(sym, SF_EXPORTED), isMutable: hasFlag(sym, SF_MUTABLE),
+			isExported: hasFlag(sym, SymbolFlag.Exported), isMutable: hasFlag(sym, SymbolFlag.Mutable),
 		};
 		return suggest;
 	}
@@ -397,7 +397,7 @@ export function sgGetSymbolAtCursor(ctx: CheckerContext, program: Node, line: nu
 		const suggest: SgSuggest = {
 			name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
 			location: sym.location, prefixScore: 0, scopeDepth: 0, contextFit: false,
-			isExported: hasFlag(sym, SF_EXPORTED), isMutable: hasFlag(sym, SF_MUTABLE),
+			isExported: hasFlag(sym, SymbolFlag.Exported), isMutable: hasFlag(sym, SymbolFlag.Mutable),
 		};
 		return suggest;
 	}
@@ -937,7 +937,7 @@ export function sgGetCompletionCandidates(ctx: CheckerContext, kind: SgCompletio
 					const item: SgSuggest = {
 						name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
 						location: sym.location, prefixScore: ps, scopeDepth: depth, contextFit: cf,
-						isExported: hasFlag(sym, SF_EXPORTED), isMutable: hasFlag(sym, SF_MUTABLE),
+						isExported: hasFlag(sym, SymbolFlag.Exported), isMutable: hasFlag(sym, SymbolFlag.Mutable),
 					};
 					result.push(item);
 				}
@@ -1421,7 +1421,7 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 		if (sym !== null) {
 			const tt = sgSymbolToTokenType(sym.symbolKind);
 			let mods = 0;
-			if (!hasFlag(sym, SF_MUTABLE) && sym.symbolKind === SymbolKind.Variable) mods = 4; // readonly bit 2
+			if (!hasFlag(sym, SymbolFlag.Mutable) && sym.symbolKind === SymbolKind.Variable) mods = 4; // readonly bit 2
 			if (sym.builtinKind.length > 0) mods = mods | 16; // defaultLibrary bit 4
 			const tok: SgSemanticToken = { line: loc.line, col: loc.column, length: id.name.length, tokenType: tt, modifiers: mods };
 			tokens.push(tok);

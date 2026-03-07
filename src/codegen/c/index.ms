@@ -27,7 +27,7 @@ import { ccgIntroducedPtr } from "../../transform/native/pointerParam";
 import { mangle } from "./names";
 import { emitStringPoolDecls } from "./literals";
 import { emitTestHeader, emitTestTable, genTestDispatcher } from "./test";
-import { sliceStr, startsWith } from "../../utils/string";
+import { sliceStr } from "../../utils/string";
 
 // ===== generateC — single-module entry point (backwards compatible) =====
 
@@ -64,17 +64,11 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 	addLine(sec(g, CSection.Headers), "#include \"system.h\"");
 	nameSetAdd(g.declaredThings, "inc:system.h"); // prevent duplicate from @include
 	emitTestHeader(g);
-	// B2: core/string.h and core/array.h conditionally included after AST walk
+
 
 	// Emit additional @include directives from checker (user code @include pragmas)
 	if (ctx !== null && ctx.includeDirectives !== "") {
 		emitIncludeDirectives(g, ctx.includeDirectives);
-	}
-
-	// Emit raw C code from @emit directives (Nim {.emit.} parity)
-	// Top-level @emit goes to ProcHeaders by default, or section-specific via markers
-	if (ctx !== null && ctx.emitDirectives !== "") {
-		emitRawDirectives(g, ctx.emitDirectives);
 	}
 
 	// Per-module type emission (Standard reference implementation parity)
@@ -99,13 +93,7 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 	// Generate per-module init functions (non-static for cross-module visibility)
 	genModuleInitFns(g);
 
-	// B2: Conditional runtime injection — only include headers for used runtime features
-	// Each module includes only the runtime headers it actually needs.
-	// Each module includes only the runtime headers it actually needs.
-	// Duplicate includes are harmless (standard include guards).
-	if (g.stringPool.entries.length > 0) g.needsStringRT = true;
-	if (g.needsStringRT) addLine(sec(g, CSection.Headers), "#include \"core/string.h\"");
-	if (g.needsArrayRT) addLine(sec(g, CSection.Headers), "#include \"core/array.h\"");
+
 
 	// Emit string literal pool declarations
 	emitStringPoolDecls(g.stringPool, sec(g, CSection.StringPool));
@@ -234,7 +222,7 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 
 // ===== Register Cross-Module Types from ExportRegistry =====
 // Registers class/interface/enum names from all imported modules so
-// getTypeDesc resolves TypeReference correctly (Nim parity).
+// getTypeDesc resolves TypeReference correctly (reference parity).
 
 function registerCrossModuleTypesFromRegistry(g: CGen): void {
 	const reg = (g.checkerCtx !== null) ? g.checkerCtx.exportRegistry : null as unknown as ExportRegistry;
@@ -273,7 +261,7 @@ function buildTypeRegistry(g: CGen): void {
 }
 
 // Shallow-register named field types so getTypeDesc can resolve TypeReferences lazily.
-// Nim parity: no recursive pre-crawl. getTypeDesc resolves nested types on-demand
+// reference parity: no recursive pre-crawl. getTypeDesc resolves nested types on-demand
 // via typeRegistryLookup, with typeCache preventing infinite recursion on self-referential types.
 function registerFieldTypes(g: CGen, t: Type): void {
 	if (t === null) return;
@@ -306,7 +294,7 @@ function registerNamedType(g: CGen, t: Type): void {
 	}
 }
 
-// ===== Emit Cross-Module Function Prototypes (Nim parity) =====
+// ===== Emit Cross-Module Function Prototypes (reference parity) =====
 // Each module emits prototypes for all exported functions from other modules.
 
 function emitCrossModulePrototypes(g: CGen): void {
@@ -395,45 +383,7 @@ function emitIncludeDirectives(g: CGen, directives: string): void {
 	}
 }
 
-// ===== Emit @emit directives — raw C code injection (Nim {.emit.} parity) =====
-// Top-level @emit goes to ProcHeaders by default.
-// Section markers (Nim pattern): /*TYPESECTION*/ → Types, /*VARSECTION*/ → GlobalVars,
-// /*INCLUDESECTION*/ → Headers
-
-function emitRawDirectives(g: CGen, directives: string): void {
-	let start = 0;
-	for (let pos = 0; pos < directives.length; pos += 1) {
-		if (directives.charAt(pos) === "\n") {
-			const line = sliceStr(directives, start, pos);
-			if (line.length > 0) {
-				emitOneRawDirective(g, line);
-			}
-			start = pos + 1;
-		}
-	}
-	if (start < directives.length) {
-		const line = sliceStr(directives, start, directives.length);
-		if (line.length > 0) {
-			emitOneRawDirective(g, line);
-		}
-	}
-}
-
-function emitOneRawDirective(g: CGen, code: string): void {
-	// Detect section markers (Nim parity: determineSection)
-	let target = CSection.ProcHeaders;
-	if (startsWith(code, "/*TYPESECTION*/")) target = CSection.Types;
-	else if (startsWith(code, "/*VARSECTION*/")) target = CSection.GlobalVars;
-	else if (startsWith(code, "/*INCLUDESECTION*/")) target = CSection.Headers;
-	addLine(sec(g, target), code);
-}
-
-// B2: @include directives for runtime headers set flags instead of emitting directly.
-// This deduplicates with the B2 conditional include at end of generateCModule.
 function emitOneInclude(g: CGen, header: string): void {
-	if (header === "core/string.h") { g.needsStringRT = true; return; }
-	if (header === "core/array.h") { g.needsArrayRT = true; return; }
-	// Skip headers already emitted by generateCModule (system.h)
 	if (nameSetHas(g.declaredThings, "inc:" + header)) return;
 	nameSetAdd(g.declaredThings, "inc:" + header);
 	addLine(sec(g, CSection.Headers), "#include \"" + header + "\"");
@@ -521,15 +471,4 @@ test "generateCModule produces code without dispatcher" {
 	assert result.length > 0;
 }
 
-test "B2: math-only module excludes string and array headers" {
-	const result = cModuleOutput("function add(a: number, b: number): number { return a + b; }");
-	// Should NOT include core/string.h or core/array.h for pure numeric code
-	assert result.indexOf("core/string.h") < 0;
-	assert result.indexOf("core/array.h") < 0;
-}
-
-test "B2: string usage includes string header" {
-	const result = cModuleOutput("const name: string = \"hello\";");
-	assert result.indexOf("core/string") >= 0;
-}
 

@@ -16,20 +16,22 @@ export enum ScopeKind {
 
 // ===== Symbol Flags (Standard reference implementation parity) =====
 // Bitfield for Symbol.symFlags — tracks declaration properties.
-export const SF_NONE: number = 0;
-export const SF_USED: number = 1;          // symbol is referenced somewhere
-export const SF_EXPORTED: number = 2;      // symbol is exported
-export const SF_MUTABLE: number = 4;       // let/var/mutable
-export const SF_FORWARD: number = 8;       // forward declaration (body not yet seen)
-export const SF_NO_SIDE_EFFECT: number = 16; // @pure — no side effects
-export const SF_GLOBAL: number = 32;       // module-level variable
-export const SF_IMPORT_C: number = 64;     // extern declaration (extern ... from)
-export const SF_COMPILE_TIME: number = 128; // @comptime
-export const SF_GC_SAFE: number = 256;     // no GC-unsafe operations
-export const SF_WAS_FORWARDED: number = 512; // had forward decl, now has body
-export const SF_STATIC: number = 1024;     // static class member or static linkage
-export const SF_SINK: number = 2048;       // parameter takes ownership
-export const SF_LENT: number = 4096;       // parameter is a borrow (no RC)
+export enum SymbolFlag {
+	None = 0,
+	Used = 1,           // symbol is referenced somewhere
+	Exported = 2,       // symbol is exported
+	Mutable = 4,        // let/var/mutable
+	Forward = 8,        // forward declaration (body not yet seen)
+	NoSideEffect = 16,  // @pure — no side effects
+	Global = 32,        // module-level variable
+	ImportC = 64,       // extern declaration (extern ... from)
+	CompileTime = 128,  // @comptime
+	GcSafe = 256,       // no GC-unsafe operations
+	WasForwarded = 512, // had forward decl, now has body
+	Static = 1024,      // static class member or static linkage
+	Sink = 2048,        // parameter takes ownership
+	Lent = 4096,        // parameter is a borrow (no RC)
+}
 
 // Flag helpers
 export function hasFlag(sym: Symbol, flag: number): boolean {
@@ -137,7 +139,7 @@ export function makeSymbol(name: string, kind: SymbolKind, symType: Type, mutabl
 	sym.nativeName = "";
 	sym.builtinKind = "";
 	sym.defaultParamText = [];
-	sym.symFlags = mutable ? SF_MUTABLE : SF_NONE;
+	sym.symFlags = mutable ? SymbolFlag.Mutable : SymbolFlag.None;
 	sym.modulePath = "";
 	return sym;
 }
@@ -148,7 +150,7 @@ export function lookupExport(table: SymbolTable, name: string): Symbol {
 	while (scope !== null) {
 		if (scope.scopeKind === ScopeKind.Module || scope.scopeKind === ScopeKind.Global) {
 			for (const sym of scope.symbols) {
-				if (sym.name === name && hasFlag(sym, SF_EXPORTED)) return sym;
+				if (sym.name === name && hasFlag(sym, SymbolFlag.Exported)) return sym;
 			}
 		}
 		scope = scope.parent;
@@ -214,12 +216,12 @@ test "shadowing" {
 	// Inner lookup finds inner (mutable) shadow
 	const inner = lookupSymbol(table, "x");
 	assert inner !== null;
-	assert hasFlag(inner, SF_MUTABLE);
+	assert hasFlag(inner, SymbolFlag.Mutable);
 	closeScope(table);
 	// Outer lookup finds outer (immutable) original
 	const outer = lookupSymbol(table, "x");
 	assert outer !== null;
-	assert !hasFlag(outer, SF_MUTABLE);
+	assert !hasFlag(outer, SymbolFlag.Mutable);
 }
 
 test "lookupLocal" {
@@ -296,16 +298,16 @@ test "non-function duplicate still errors" {
 	assert !r.ok;
 }
 
-test "SF_EXPORTED default false" {
+test "SymbolFlag.Exported default false" {
 	const sym = makeSymbol("x", SymbolKind.Variable, unknownType(), false);
-	assert !hasFlag(sym, SF_EXPORTED);
+	assert !hasFlag(sym, SymbolFlag.Exported);
 }
 
 test "lookupExport finds exported" {
 	const table = createSymbolTable();
 	openScope(table, ScopeKind.Module);
 	const sym = makeSymbol("foo", SymbolKind.Function, unknownType(), false);
-	setFlag(sym, SF_EXPORTED);
+	setFlag(sym, SymbolFlag.Exported);
 	defineSymbol(table, sym);
 	const found = lookupExport(table, "foo");
 	assert found !== null;

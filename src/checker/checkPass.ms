@@ -22,9 +22,9 @@ import {
 import {
 	Symbol, SymbolKind, SymbolState, ScopeKind,
 	defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope,
-	setFlag, SF_MUTABLE, SF_LENT,
+	setFlag, hasFlag, SymbolFlag,
 } from "./symbol";
-import { CheckerContext, CancelCtx, createContext, createModuleContext, addError, addFatalError, hasErrors, hasFatalErrors, errorCount, createExtensionRegistry, ExportRegistry, isCancelled } from "./context";
+import { CheckerContext, CancelCtx, createContext, createModuleContext, addError, addFatalError, hasErrors, hasFatalErrors, errorCount, createExtensionRegistry, registerExtension, ExportRegistry, isCancelled } from "./context";
 import { Module, ModuleGraph } from "../module/graph";
 import { collectTopLevel, defineOrError } from "./collectPass";
 import { readFile } from "std/process";
@@ -121,7 +121,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	if (existing !== null) {
 		existing.symbolType = varType;
 		if (d.declKind !== DeclKind.Const) {
-			setFlag(existing, SF_MUTABLE);
+			setFlag(existing, SymbolFlag.Mutable);
 		}
 	} else {
 		defineOrError(ctx, makeSymbol(d.declName, SymbolKind.Variable, varType, d.declKind !== DeclKind.Const), node);
@@ -646,7 +646,7 @@ function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], b
 		const paramSym = makeSymbol(param, SymbolKind.Parameter, paramType, false);
 		// Receiver is implicitly LENT (borrowed)
 		if (param === "this" || (i === 0 && param === "self")) {
-			setFlag(paramSym, SF_LENT);
+			setFlag(paramSym, SymbolFlag.Lent);
 		}
 		defineSymbol(ctx.table, paramSym);
 		i += 1;
@@ -723,9 +723,6 @@ function collectDirectives(ctx: CheckerContext, program: Node): void {
 					} else if (name === "link" || name === "passC" || name === "passL") {
 						if (ctx.compilerFlags !== "") ctx.compilerFlags = ctx.compilerFlags + " ";
 						ctx.compilerFlags = ctx.compilerFlags + sd.value;
-					} else if (name === "emit") {
-						if (ctx.emitDirectives !== "") ctx.emitDirectives = ctx.emitDirectives + "\n";
-						ctx.emitDirectives = ctx.emitDirectives + sd.value;
 					}
 				}
 			}
@@ -744,110 +741,122 @@ function defineBuiltinConstants(ctx: CheckerContext): void {
 	defineSymbol(ctx.table, infSym);
 }
 
-export function checkProgram(program: Node): CheckerContext {
-	return checkProgramCancellable(program, null as unknown as CancelCtx, 0);
-}
+// ===== Unified Prelude Loading (Nim parity: single pipeline) =====
 
-// Cancellable variant: inject cancel context before running passes.
-// LSP uses this to abort long checks on keystroke.
-export function checkProgramCancellable(program: Node, cancelCtx: CancelCtx, cancelVersion: number): CheckerContext {
-	const ctx = createContext();
-	ctx.cancelCtx = cancelCtx;
-	ctx.cancelVersion = cancelVersion;
-	ctx.extensionRegistry = createExtensionRegistry();
-	// Parse + check global imports in Global scope (so user code in Module scope can shadow)
-	for (const imp of globalImports()) {
-		loadPreludeImport(ctx, imp);
-	}
-	// Demand-driven: ensure console is available as a global
-	const consoleClass = lookupSymbol(ctx.table, "console");
-	if (consoleClass !== null) {
-		const consoleGlobal = makeSymbol("console", SymbolKind.Variable, consoleClass.symbolType, false);
-		defineSymbol(ctx.table, consoleGlobal);
-		consoleGlobal.state = SymbolState.Shaped;
-	}
-	// Built-in numeric constants: NaN, Infinity
-	defineBuiltinConstants(ctx);
-	// Open Module scope for user code — prelude is in Global scope below
-	openScope(ctx.table, ScopeKind.Module);
-	runThreePasses(ctx, program);
-	collectDirectives(ctx, program);
-
-	// Phase 2.5: Ownership Inference (Standard reference implementation)
-	inferOwnership(ctx, program);
-
-	return ctx;
-}
-
-// Cross-module variant: uses ExportRegistry for proper import type resolution
-export function checkProgramWithRegistry(program: Node, registry: ExportRegistry, graph: ModuleGraph, mod: Module): CheckerContext {
-	const ctx = createModuleContext(graph, mod);
-	ctx.extensionRegistry = createExtensionRegistry();
-	ctx.exportRegistry = registry;
-	for (const imp of globalImports()) {
-		loadPreludeImport(ctx, imp);
-	}
-	const consoleClass = lookupSymbol(ctx.table, "console");
-	if (consoleClass !== null) {
-		const consoleGlobal = makeSymbol("console", SymbolKind.Variable, consoleClass.symbolType, false);
-		defineSymbol(ctx.table, consoleGlobal);
-		consoleGlobal.state = SymbolState.Shaped;
-	}
-	defineBuiltinConstants(ctx);
-	openScope(ctx.table, ScopeKind.Module);
-	runThreePasses(ctx, program);
-	collectDirectives(ctx, program);
-	inferOwnership(ctx, program);
-	return ctx;
-}
-
-// Cross-module variant with cancellation support (for LSP)
-export function checkProgramWithRegistryCancellable(
-	program: Node, registry: ExportRegistry,
-	graph: ModuleGraph, mod: Module,
-	cancelCtx: CancelCtx, cancelVersion: number
-): CheckerContext {
-	const ctx = createModuleContext(graph, mod);
-	ctx.extensionRegistry = createExtensionRegistry();
-	ctx.exportRegistry = registry;
-	ctx.cancelCtx = cancelCtx;
-	ctx.cancelVersion = cancelVersion;
-	for (const imp of globalImports()) {
-		loadPreludeImport(ctx, imp);
-	}
-	const consoleClass = lookupSymbol(ctx.table, "console");
-	if (consoleClass !== null) {
-		const consoleGlobal = makeSymbol("console", SymbolKind.Variable, consoleClass.symbolType, false);
-		defineSymbol(ctx.table, consoleGlobal);
-		consoleGlobal.state = SymbolState.Shaped;
-	}
-	defineBuiltinConstants(ctx);
-	openScope(ctx.table, ScopeKind.Module);
-	runThreePasses(ctx, program);
-	collectDirectives(ctx, program);
-	return ctx;
-}
-
-function loadPreludeImport(ctx: CheckerContext, specifier: string): void {
-	let src = readFile(specifier + ".ms");
+// Load a single prelude module into a context. Shared by all paths.
+function loadPreludeOne(ctx: CheckerContext, specifier: string, stdPath: string): void {
+	const base = stdPath.length > 0 ? stdPath + "/" + sliceStr(specifier, 4, specifier.length) : specifier;
+	let src = readFile(base + ".ms");
 	if (src.length === 0) {
-		src = readFile(specifier + "/index.cms");
+		src = readFile(base + "/index.cms");
 	}
 	if (src.length === 0) {
-		src = readFile(specifier + "/index.ms");
+		src = readFile(base + "/index.ms");
 	}
 	if (src.length > 0) {
 		const pr = parseSource(src);
 		if (pr.ok) {
 			runThreePasses(ctx, pr.value);
 			collectDirectives(ctx, pr.value);
-			// Demand-driven resolution: ensure all prelude symbols are shaped
 			const scope = ctx.table.current;
 			for (const sym of scope.symbols) {
 				ensureShaped(sym, ctx);
 			}
 		}
 	}
+}
+
+// Build a prelude context with all globalImports loaded.
+// Used by both standalone checkProgram and orchestrator.
+export function buildPreludeContext(stdPath: string): CheckerContext {
+	const ctx = createContext();
+	ctx.extensionRegistry = createExtensionRegistry();
+	for (const imp of globalImports()) {
+		loadPreludeOne(ctx, imp, stdPath);
+	}
+	return ctx;
+}
+
+// Inject exported prelude symbols, extensions, and directives into a module context.
+function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): void {
+	for (const sym of preludeCtx.table.current.symbols) {
+		if (hasFlag(sym, SymbolFlag.Exported)) {
+			ctx.table.current.symbols.push(sym);
+		}
+	}
+	if (preludeCtx.extensionRegistry !== null && ctx.extensionRegistry !== null) {
+		for (const ext of preludeCtx.extensionRegistry.methods) {
+			if (ext.sym !== null && hasFlag(ext.sym, SymbolFlag.Exported)) {
+				registerExtension(ctx.extensionRegistry, ext);
+			}
+		}
+	}
+	if (preludeCtx.includeDirectives !== "") {
+		if (ctx.includeDirectives !== "") ctx.includeDirectives = ctx.includeDirectives + "\n";
+		ctx.includeDirectives = ctx.includeDirectives + preludeCtx.includeDirectives;
+	}
+	if (preludeCtx.compileDirectives !== "") {
+		if (ctx.compileDirectives !== "") ctx.compileDirectives = ctx.compileDirectives + "\n";
+		ctx.compileDirectives = ctx.compileDirectives + preludeCtx.compileDirectives;
+	}
+	if (preludeCtx.compilerFlags !== "") {
+		if (ctx.compilerFlags !== "") ctx.compilerFlags = ctx.compilerFlags + " ";
+		ctx.compilerFlags = ctx.compilerFlags + preludeCtx.compilerFlags;
+	}
+}
+
+// Single internal entry point for all checkProgram variants.
+function checkProgramCore(
+	program: Node,
+	preludeCtx: CheckerContext,
+	registry: ExportRegistry,
+	graph: ModuleGraph,
+	mod: Module,
+	cancelCtx: CancelCtx,
+	cancelVersion: number,
+): CheckerContext {
+	const ctx = mod !== null ? createModuleContext(graph, mod) : createContext();
+	ctx.extensionRegistry = createExtensionRegistry();
+	if (registry !== null) ctx.exportRegistry = registry;
+	if (cancelCtx !== null) { ctx.cancelCtx = cancelCtx; ctx.cancelVersion = cancelVersion; }
+	injectPrelude(ctx, preludeCtx);
+	const consoleClass = lookupSymbol(ctx.table, "console");
+	if (consoleClass !== null) {
+		const consoleGlobal = makeSymbol("console", SymbolKind.Variable, consoleClass.symbolType, false);
+		defineSymbol(ctx.table, consoleGlobal);
+		consoleGlobal.state = SymbolState.Shaped;
+	}
+	defineBuiltinConstants(ctx);
+	openScope(ctx.table, ScopeKind.Module);
+	runThreePasses(ctx, program);
+	collectDirectives(ctx, program);
+	inferOwnership(ctx, program);
+	return ctx;
+}
+
+// ===== Public API (thin wrappers) =====
+
+export function checkProgram(program: Node): CheckerContext {
+	const preludeCtx = buildPreludeContext("");
+	return checkProgramCore(program, preludeCtx, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, null as unknown as CancelCtx, 0);
+}
+
+export function checkProgramCancellable(program: Node, cancelCtx: CancelCtx, cancelVersion: number): CheckerContext {
+	const preludeCtx = buildPreludeContext("");
+	return checkProgramCore(program, preludeCtx, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, cancelCtx, cancelVersion);
+}
+
+export function checkProgramWithRegistry(program: Node, registry: ExportRegistry, graph: ModuleGraph, mod: Module, preludeCtx: CheckerContext): CheckerContext {
+	return checkProgramCore(program, preludeCtx, registry, graph, mod, null as unknown as CancelCtx, 0);
+}
+
+export function checkProgramWithRegistryCancellable(
+	program: Node, registry: ExportRegistry,
+	graph: ModuleGraph, mod: Module,
+	preludeCtx: CheckerContext,
+	cancelCtx: CancelCtx, cancelVersion: number
+): CheckerContext {
+	return checkProgramCore(program, preludeCtx, registry, graph, mod, cancelCtx, cancelVersion);
 }
 
 // Register callback at module load time

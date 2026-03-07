@@ -147,6 +147,7 @@ export function annotationToC(annotation: string): string {
 		elem = trimStr(elem);
 		if (elem === "number") return "msNumberArray";
 		if (elem === "string") return "msStringArray";
+		if (elem === "uint8") return "msUint8Array";
 		// Per-type array typedef (Standard reference pattern)
 		return mangle(elem) + "Array";
 	}
@@ -364,7 +365,7 @@ export function isNrvoReturnType(t: Type): boolean {
 
 // ===== NRVO Call-Site Detection (Standard reference pattern) =====
 // Centralized two-source callee type lookup. Reference implementation uses a single isInvalidReturnType()
-// in ccgtypes.nim called from 10 locations across 4 files.
+// in reference types called from 10 locations across 4 files.
 
 export function getCalleeReturnType(callNode: Node): Type {
 	const cd = callNode.data as CallExprData;
@@ -429,8 +430,6 @@ export function getTypeDesc(g: CGen, t: Type): string {
 	// Check simple types first (no caching needed)
 	const simple = getSimpleTypeDesc(t);
 	if (simple !== "") {
-		// B2: track runtime dependencies
-		if (simple === "msString") g.needsStringRT = true;
 		return simple;
 	}
 
@@ -598,7 +597,7 @@ function genObjectType(g: CGen, t: Type): string {
 	}
 	structDef = structDef + "};\n#endif\n";
 
-	// Emit struct body directly (Nim parity: natural recursion gives correct order)
+	// Emit struct body directly (reference parity: natural recursion gives correct order)
 	const b = sec(g, CSection.Types);
 	add(b, structDef);
 	addNewline(b);
@@ -637,7 +636,7 @@ function genUnionType(g: CGen, t: Type): string {
 
 	const b = sec(g, CSection.Types);
 
-	// Nim parity: no struct body deferral during union resolution.
+	// reference parity: no struct body deferral during union resolution.
 	// Natural recursion ensures value-type field dependencies (e.g., Type in variant v29)
 	// are emitted BEFORE the variant structs. The typeCache (set above) prevents re-entry.
 
@@ -732,10 +731,10 @@ function genArrayType(g: CGen, t: Type): string {
 	const elemType = selfRef ? getTypeForward(g, t.typeReturn) : getTypeDesc(g, t.typeReturn);
 
 	// Built-in array types for primitives
-	g.needsArrayRT = true;  // B2: any array type needs array runtime
 	if (elemType === "double") { typeCacheSet(g.typeCache, key, "msNumberArray"); return "msNumberArray"; }
 	if (elemType === "msString") { typeCacheSet(g.typeCache, key, "msStringArray"); return "msStringArray"; }
 	if (elemType === "MS_BOOL") { typeCacheSet(g.typeCache, key, "msNumberArray"); return "msNumberArray"; }
+	if (elemType === "uint8_t") { typeCacheSet(g.typeCache, key, "msUint8Array"); return "msUint8Array"; }
 
 	// Pointer element types (classes, refs) → msRefArray (void* indirection is correct)
 	if (t.typeReturn !== null && isPointerType(t.typeReturn)) {
@@ -780,6 +779,7 @@ function genArrayType(g: CGen, t: Type): string {
 export function getArrayTypeName(elemType: string): string {
 	if (elemType === "double") return "msNumberArray";
 	if (elemType === "msString") return "msStringArray";
+	if (elemType === "uint8_t") return "msUint8Array";
 	return mangle(elemType) + "Array";
 }
 

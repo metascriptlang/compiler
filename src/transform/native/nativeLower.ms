@@ -143,6 +143,7 @@ function rewriteArrayAccess(node: Node): Node {
 // Determine macro name from array element type
 function getArrayMacroName(elemType: Type): string {
 	if (elemType === null) return "msRefArrayAccess";
+	if (elemType.kind === TypeKind.Uint8) return "msUint8ArrayAccess";
 	if (isNumeric(elemType)) return "msNumberArrayAccess";
 	if (elemType.kind === TypeKind.String) return "msStringArrayAccess";
 	return "msRefArrayAccess";

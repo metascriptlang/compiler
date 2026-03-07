@@ -479,8 +479,6 @@ export interface CGen {
 	labels: number;            // module-scope unique counter
 	initProc: CProc;           // shared CProc for Init000 (persistent temp counter)
 	aliveSet: AliveSet;        // global DCE reachability set (empty = no filtering)
-	needsStringRT: boolean;    // B2: conditional runtime — set when msString type is used
-	needsArrayRT: boolean;     // B2: conditional runtime — set when array type is used
 	isTestBuild: boolean;      // true when compiling via cmdTest (assert = non-fatal)
 	testEntries: TestEntry[];  // collected test wrapper functions (test builds only)
 	nextTestId: number;        // unique ID for test wrapper function names
@@ -514,8 +512,6 @@ export function createCGen(ctx: CheckerContext, modulePath: string): CGen {
 		labels: 0,
 		initProc: createProc("__init000", null as unknown as Type),
 		aliveSet: createAliveSet(),
-		needsStringRT: false,
-		needsArrayRT: false,
 		isTestBuild: false,
 		testEntries: [],
 		nextTestId: 0,

@@ -95,6 +95,12 @@ void msThrow(msString msg);
 #define msArrayStringWasMoved(arr)     do { (arr).len = 0; (arr).p = NULL; } while(0)
 #define msArrayStringSink(d, s)        do { msStringArrayDestroy(&(d)); (d) = (s); } while(0)
 
+/* --- Uint8 array lifecycle --- */
+#define msArrayUint8Destroy(arr)       msUint8ArrayDestroy(&(arr))
+#define msArrayUint8Copy(arr)          /* TODO: deep copy */
+#define msArrayUint8WasMoved(arr)      do { (arr).len = 0; (arr).p = NULL; } while(0)
+#define msArrayUint8Sink(d, s)         do { msUint8ArrayDestroy(&(d)); (d) = (s); } while(0)
+
 /* --- Ref array lifecycle --- */
 #define msArrayRefDestroy(arr)         msRefArrayDestroy(&(arr))
 #define msArrayRefCopy(arr)            /* TODO: deep copy with per-element msIncRef */
@@ -176,6 +182,12 @@ _Noreturn void msRaiseIndexError(int64_t idx, int64_t len);
 }))
 
 #define msRefArrayAccess(a, i) (*({ \
+	int32_t __idx = (i); \
+	if ((uint32_t)__idx >= (uint32_t)(a).len) msRaiseIndexError(__idx, (a).len); \
+	&((a).p->data[__idx]); \
+}))
+
+#define msUint8ArrayAccess(a, i) (*({ \
 	int32_t __idx = (i); \
 	if ((uint32_t)__idx >= (uint32_t)(a).len) msRaiseIndexError(__idx, (a).len); \
 	&((a).p->data[__idx]); \

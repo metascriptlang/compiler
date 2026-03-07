@@ -1,6 +1,6 @@
 @include("system.h");
 
-class console {
+export class console {
   extern log(value: string): void from "msPrintln";
 }
 

@@ -11,14 +11,16 @@ import {
 	TryCatchStmtData, ThrowStmtData,
 	SwitchStmtData, SwitchCaseData,
 	CallExprData, IdentifierData, AssertStmtData, UnreachableStmtData,
-	MacroInvocationData, StringLiteralData,
+	MacroInvocationData, StringLiteralData, IdentifierData,
 } from "../../ast/node";
 import { Type, TypeKind, isInterfaceType } from "../../checker/types";
+import { SymbolKind } from "../../checker/symbol";
 import {
-	CGen, CProc,
+	CGen, CProc, CSection,
 	emitStmts, emitStmtsLine, emitStmtsNl,
 	getStmtsIndent, setStmtsIndent,
 	pushBlock, popBlock, readProcStmts,
+	sec, addLine,
 } from "./context";
 import { genExpr } from "./expressions";
 import { safeName } from "./names";
@@ -88,14 +90,63 @@ export function genStmts(g: CGen, p: CProc, stmts: Node[]): void {
 
 // ===== Expression Statement =====
 
+// ===== @emit Argument Resolution (reference emit generation parity) =====
+// Iterates macroArgs — string literals emit raw text, identifiers emit their C name.
+// Supports backtick interpolation (checker splits string into string+identifier args)
+// and bracket form @emit(var1, " text ", var2).
+
+// resolveEmitArgs resolves @emit macro args to a C code string.
+// Optional CProc enables genExpr for arbitrary expressions (Reference initLocExpr parity).
+// Top-level calls pass null (no CProc available).
+export function resolveEmitArgs(g: CGen, mi: MacroInvocationData, p: CProc): string {
+	let result = "";
+	for (let i = 0; i < mi.macroArgs.length; i += 1) {
+		const arg = mi.macroArgs[i];
+		if (arg.kind === NodeKind.StringLiteral) {
+			const sd = arg.data as StringLiteralData;
+			result = result + sd.value;
+		} else if (arg.kind === NodeKind.Identifier) {
+			// reference parity: resolve symbol to C name based on kind
+			const sym = arg.resolvedSym;
+			if (sym !== null) {
+				if (sym.kind === SymbolKind.Function) {
+					// Function → C function name (nativeName if extern, else mangled)
+					if (sym.nativeName !== null && sym.nativeName.length > 0) {
+						result = result + sym.nativeName;
+					} else {
+						result = result + safeName(sym.name);
+					}
+				} else if (sym.kind === SymbolKind.Type) {
+					// Type → C type descriptor
+					if (sym.symType !== null) {
+						result = result + getTypeDesc(g, sym.symType);
+					} else {
+						result = result + safeName(sym.name);
+					}
+				} else {
+					// Variable/const → C variable name
+					result = result + safeName(sym.name);
+				}
+			} else {
+				// Unresolved — use raw name
+				const id = arg.data as IdentifierData;
+				result = result + id.name;
+			}
+		} else if (p !== null) {
+			// Arbitrary expression — Reference initLocExpr + rdLoc parity
+			result = result + genExpr(g, p, arg);
+		}
+	}
+	return result;
+}
+
 function genExprStmt(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as ExprStmtData;
 	if (d.expr.kind === NodeKind.MacroInvocation) {
-		// @emit inside function body: emit raw C inline (Nim {.emit.} parity)
+		// @emit inside function body: emit raw C inline (Reference {.emit.} parity)
 		const mi = d.expr.data as MacroInvocationData;
-		if (mi.macroName === "emit" && mi.macroArgs.length > 0 && mi.macroArgs[0].kind === NodeKind.StringLiteral) {
-			const sd = mi.macroArgs[0].data as StringLiteralData;
-			emitStmtsLine(p, sd.value);
+		if (mi.macroName === "emit" && mi.macroArgs.length > 0) {
+			emitStmtsLine(p, resolveEmitArgs(g, mi, p));
 		}
 		return;
 	}
@@ -294,7 +345,7 @@ function genThrowStmt(g: CGen, p: CProc, node: Node): void {
 
 // ===== Try/Catch (goto-based — standard reference pattern) =====
 // Goto-based exceptions: no setjmp overhead. Each try block gets unique labels.
-// After each potentially-raising call, check *nimErr_ and goto catch.
+// After each potentially-raising call, check msErr and goto catch.
 
 function genTryCatchStmt(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as TryCatchStmtData;

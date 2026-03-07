@@ -152,6 +152,25 @@ void msRefArraySetLen(msRefArray* arr, int64_t newLen);
 int64_t msRefArrayCapacity(msRefArray* arr);
 void msRefArraySetLenUninit(msRefArray* arr, int64_t newLen);
 
+/* ===== Uint8 Array (binary-compatible with msString for zero-copy bridge) ===== */
+
+typedef struct {
+	int64_t cap;
+	uint8_t data[];
+} msUint8Payload;
+
+typedef struct {
+	int64_t len;
+	msUint8Payload* p;
+} msUint8Array;
+
+#define MS_EMPTY_UINT8_ARRAY ((msUint8Array){0, NULL})
+
+void msUint8ArrayDestroy(msUint8Array* arr);
+void msUint8ArrayPush(msUint8Array* arr, uint8_t value);
+uint8_t msUint8ArrayAt(msUint8Array* arr, int64_t idx);
+msUint8Array msUint8ArrayNew(int64_t cap);
+
 /* ===== Generic Typed Array Macro (Standard reference sequence / reference MS_ARRAY pattern) ===== */
 /* Generates per-type array struct: { int64_t len; struct { int64_t cap; T data[]; }* p; }
  * Usage: typedef MS_ARRAY(struct Token) TokenArray;

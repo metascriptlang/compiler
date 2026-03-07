@@ -9,6 +9,7 @@ import {
 	ThrowStmtData, TryCatchStmtData,
 	ForStmtData, ForOfStmtData,
 	UnreachableStmtData,
+	MacroInvocationData, StringLiteralData,
 } from "../../ast/node";
 import { emit, emitNode, emitIndent, emitNewline, emitLine, JSGenerator, emitBlockInline, emitBlockOrStmt } from "./emit";
 
@@ -102,6 +103,24 @@ export function emitBlockStmt(gen: JSGenerator, node: Node): void {
 
 export function emitExprStmt(gen: JSGenerator, node: Node): void {
 	const d = node.data as ExprStmtData;
+	// @emit: raw JS injection (reference emit generation parity)
+	if (d.expr.kind === NodeKind.MacroInvocation) {
+		const mi = d.expr.data as MacroInvocationData;
+		if (mi.macroName === "emit" && mi.macroArgs.length > 0) {
+			emitIndent(gen);
+			for (let i = 0; i < mi.macroArgs.length; i += 1) {
+				const arg = mi.macroArgs[i];
+				if (arg.kind === NodeKind.StringLiteral) {
+					emit(gen, (arg.data as StringLiteralData).value);
+				} else {
+					// reference parity: gen(p, it, r) for symbols and expressions
+					emitNode(gen, arg);
+				}
+			}
+			emit(gen, "\n");
+		}
+		return;
+	}
 	emitIndent(gen);
 	emitNode(gen, d.expr);
 	emit(gen, ";\n");

@@ -1,10 +1,10 @@
-// Ownership Inference Pass — infers SF_SINK vs SF_LENT for parameters
+// Ownership Inference Pass — infers SymbolFlag.Sink vs SymbolFlag.Lent for parameters
 //
 // Follows the standard reference implementation pattern for ownership inference.
 
 import { Node, NodeKind, ProgramData, FunctionDeclData, VariableDeclData, BinaryExprData, CallExprData, IdentifierData, ReturnStmtData, MemberExprData, ExprStmtData, IfStmtData, WhileStmtData, BlockStmtData } from "../ast/node";
 import { Type, TypeKind } from "./types";
-import { Symbol, SymbolKind, hasFlag, setFlag, SF_SINK, SF_LENT, SF_GLOBAL } from "./symbol";
+import { Symbol, SymbolKind, hasFlag, setFlag, SymbolFlag } from "./symbol";
 import { CheckerContext } from "./context";
 
 
@@ -33,15 +33,15 @@ function inferFunctionOwnership(ctx: CheckerContext, node: Node): void {
 		
 		// DEFAULT: Borrow (LENT) for efficiency.
 		// Only promote to SINK if analysis proves ownership transfer.
-		let resultFlag = SF_LENT;
+		let resultFlag = SymbolFlag.Lent;
 
 		if (isParamConsumed(paramName, d.fnBody, ctx)) {
-			resultFlag = SF_SINK;
+			resultFlag = SymbolFlag.Sink;
 		}
 
 		// 'this' / 'self' receivers: always LENT (Implementation parity)
 		if (paramName === "this" || (i === 0 && paramName === "self")) {
-			resultFlag = SF_LENT;
+			resultFlag = SymbolFlag.Lent;
 		}
 
 		flags.push(resultFlag);
@@ -137,7 +137,7 @@ function isSinkLValue(node: Node): boolean {
 		const sym = node.resolvedSym;
 		if (sym !== null && sym.symbolKind === SymbolKind.Variable) {
 			// (Checking if global via flags)
-			return hasFlag(sym, SF_GLOBAL);
+			return hasFlag(sym, SymbolFlag.Global);
 		}
 		return false;
 	}

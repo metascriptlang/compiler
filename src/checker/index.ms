@@ -21,7 +21,7 @@ export {
 } from "./types";
 
 // Re-exports: symbol.ms
-export { SymbolKind, ScopeKind, Symbol, Scope, SymbolTable, SF_EXPORTED, SF_MUTABLE, SF_LENT, SF_SINK } from "./symbol";
+export { SymbolKind, ScopeKind, Symbol, Scope, SymbolTable, SymbolFlag } from "./symbol";
 // Explicit exports for helpers to avoid ambiguity
 export { createSymbolTable, openScope, closeScope, defineSymbol, lookupSymbol, lookupLocal, lookupExport, makeSymbol, hasOverloads, isPointerType } from "./symbol";
 
@@ -46,13 +46,13 @@ export { resolveAnnotation, resolveDeclarations } from "./resolvePass";
 export { isAssignable, TypeRelation, typeRelation, scoreCandidate } from "./compat";
 
 // Re-exports: checkPass.ms (Pass 3 — statements)
-export { checkStmt, checkProgramBody, checkProgram, checkProgramCancellable, checkProgramWithRegistry, checkProgramWithRegistryCancellable, checkSource, runThreePasses } from "./checkPass";
+export { checkStmt, checkProgramBody, checkProgram, checkProgramCancellable, checkProgramWithRegistry, checkProgramWithRegistryCancellable, checkSource, runThreePasses, buildPreludeContext } from "./checkPass";
 
 // Re-exports: checkExprPass.ms (Pass 3 — expressions)
 export { checkExpr } from "./checkExprPass";
 
 // Re-exports: orchestrator.ms (multi-module orchestration)
-export { checkModuleGraph } from "./orchestrator";
+export { checkModuleGraph, getPreludeContext } from "./orchestrator";
 
 // ===== Integration Tests =====
 

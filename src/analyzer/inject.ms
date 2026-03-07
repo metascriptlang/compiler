@@ -10,7 +10,7 @@
 // Follows the injectdestructors pattern (direct AST rewrite, scope-based).
 
 import {
-	Node, NodeKind, DeclKind, SourceLocation, ProgramData, NF_CURSOR,
+	Node, NodeKind, DeclKind, SourceLocation, ProgramData, NodeFlag,
 	FunctionDeclData, ArrowFunctionData, FunctionExprData,
 	MethodDeclData, ConstructorDeclData,
 	BlockStmtData, VariableDeclData, ExprStmtData,
@@ -23,12 +23,12 @@ import {
 	DoWhileStmtData, MoveExprData, Symbol,
 } from "../ast/node";
 import { Type, TypeKind } from "../checker/types";
-import { lookupSymbol, lookupLocal, SymbolKind, hasFlag, SF_SINK, SF_LENT } from "../checker/symbol";
+import { lookupSymbol, lookupLocal, SymbolKind, hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, freshTemp, createTransformContextWithChecker } from "../transform/context";
 import {
 	makeIdent, makeBlock, makeExprStmt, makeCall, makeVarDecl,
 	makeReturn, makeAssign, makeTryCatch, makeNull, makeBinary, makeMember,
-	makeUnary,
+	makeUnary, makeHiddenAddr,
 } from "../transform/util";
 import { RcInfo, RcKind, classifyType, isFreshExpr, noRcInfo } from "./classify";
 import {
@@ -199,7 +199,7 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const fnType = (sym !== null && sym.symbolType !== null && sym.symbolType.kind === TypeKind.Function) ? sym.symbolType : null;
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		let argMode = DrcMode.Normal;
-		if (fnType !== null && i < fnType.typeChildrenFlags.length && fnType.typeChildrenFlags[i] === SF_SINK) {
+		if (fnType !== null && i < fnType.typeChildrenFlags.length && fnType.typeChildrenFlags[i] === SymbolFlag.Sink) {
 			argMode = DrcMode.Consumed;
 		}
 		cd.arguments[i] = processNode(cd.arguments[i], dctx, argMode);
@@ -290,7 +290,7 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		} else {
 			// COPY: emit incref before the current statement
 			if (rcInfo.copyFn !== "") {
-				addPre(dctx, makeRcCallStmt(rcInfo.copyFn, d.name, loc));
+				addPre(dctx, makeCopyAfterInit(d.name, rcInfo, loc, ""));
 			}
 		}
 	}
@@ -300,6 +300,10 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 
 // ===== RC Call Builders =====
 
+// Reference parity: Nim's genOp wraps dest in nkHiddenAddr when param is tyVar (pointer).
+// Named-type hooks take pointer params (ccgIntroducedPtr), so we wrap in HiddenAddr.
+// Non-Named types (Ref/String/Closure/Map/Set) use runtime fns that take raw values.
+
 function makeRcCallStmt(fnName: string, varName: string, loc: SourceLocation): Node {
 	if (fnName === "") return makeExprStmt(makeNull(loc), loc);
 	return makeExprStmt(
@@ -307,19 +311,42 @@ function makeRcCallStmt(fnName: string, varName: string, loc: SourceLocation): N
 }
 
 function makeDestroyCall(varName: string, rcInfo: RcInfo, loc: SourceLocation): Node {
+	if (rcInfo.rcKind === RcKind.Named) {
+		return makeExprStmt(
+			makeCall(makeIdent(rcInfo.destroyFn, loc), [makeHiddenAddr(makeIdent(varName, loc), loc)], loc), loc);
+	}
 	return makeRcCallStmt(rcInfo.destroyFn, varName, loc);
 }
 
 function makeWasMovedCall(varName: string, rcInfo: RcInfo, loc: SourceLocation): Node {
+	if (rcInfo.rcKind === RcKind.Named) {
+		return makeExprStmt(
+			makeCall(makeIdent(rcInfo.wasMovedFn, loc), [makeHiddenAddr(makeIdent(varName, loc), loc)], loc), loc);
+	}
 	return makeRcCallStmt(rcInfo.wasMovedFn, varName, loc);
 }
 
-function makeCopyAfterInit(destName: string, rcInfo: RcInfo, loc: SourceLocation): Node {
+// Reference parity: Named-type copy hooks take 2 args (dest, src) with HiddenAddr.
+// Ref/String/Closure/Map/Set copy is unary (incref).
+function makeCopyAfterInit(destName: string, rcInfo: RcInfo, loc: SourceLocation, srcName: string): Node {
+	if (rcInfo.rcKind === RcKind.Named && srcName !== "") {
+		return makeExprStmt(
+			makeCall(makeIdent(rcInfo.copyFn, loc), [makeHiddenAddr(makeIdent(destName, loc), loc), makeHiddenAddr(makeIdent(srcName, loc), loc)], loc), loc);
+	}
+	if (rcInfo.rcKind === RcKind.Named) {
+		return makeExprStmt(
+			makeCall(makeIdent(rcInfo.copyFn, loc), [makeHiddenAddr(makeIdent(destName, loc), loc), makeHiddenAddr(makeIdent(destName, loc), loc)], loc), loc);
+	}
+	// Unary incref: msIncref(dest), msStringIncref(dest), etc.
 	return makeRcCallStmt(rcInfo.copyFn, destName, loc);
 }
 
 // Sink call: sinkFn(dest, src) — atomic destroy-old + assign-new
 function makeSinkCall(destName: string, srcExpr: Node, rcInfo: RcInfo, loc: SourceLocation): Node {
+	if (rcInfo.rcKind === RcKind.Named) {
+		return makeExprStmt(
+			makeCall(makeIdent(rcInfo.sinkFn, loc), [makeHiddenAddr(makeIdent(destName, loc), loc), makeHiddenAddr(srcExpr, loc)], loc), loc);
+	}
 	return makeExprStmt(
 		makeCall(makeIdent(rcInfo.sinkFn, loc), [makeIdent(destName, loc), srcExpr], loc), loc);
 }
@@ -332,6 +359,10 @@ function makeRcCallOnExpr(fnName: string, argExpr: Node, loc: SourceLocation): N
 }
 
 function makeWasMovedOnExpr(argExpr: Node, rcInfo: RcInfo, loc: SourceLocation): Node {
+	if (rcInfo.rcKind === RcKind.Named) {
+		return makeExprStmt(
+			makeCall(makeIdent(rcInfo.wasMovedFn, loc), [makeHiddenAddr(argExpr, loc)], loc), loc);
+	}
 	return makeRcCallOnExpr(rcInfo.wasMovedFn, argExpr, loc);
 }
 
@@ -668,7 +699,7 @@ function processConditionalInit(stmt: Node, condExpr: Node, destName: string, rc
 	// At least one branch is non-fresh (identifier, member access, etc.)
 	// Conservative: emit copy/incref on dest after assignment
 	if (rcInfo.copyFn !== "") {
-		addPending(dctx, makeCopyAfterInit(destName, rcInfo, loc));
+		addPending(dctx, makeCopyAfterInit(destName, rcInfo, loc, ""));
 	}
 	return stmt;
 }
@@ -697,7 +728,7 @@ function processCallArgs(callExpr: Node, idx: number, stmts: Node[], dctx: DrcCo
 
 		// Determine if this parameter is a borrow (LENT) or a transfer (SINK)
 		let isLent = true;
-		if (ai < fnType.typeChildrenFlags.length && fnType.typeChildrenFlags[ai] === SF_SINK) {
+		if (ai < fnType.typeChildrenFlags.length && fnType.typeChildrenFlags[ai] === SymbolFlag.Sink) {
 			isLent = false;
 		}
 		if (ai < fnType.typeNames.length) {
@@ -781,7 +812,7 @@ function emitLiteralFieldCopies(literal: Node, outerType: Type, idx: number, stm
 					}
 					recordMove(dctx, propName);
 				} else {
-					addPending(dctx, makeRcCallStmt(fieldRc.copyFn, propName, loc));
+					addPending(dctx, makeCopyAfterInit(propName, fieldRc, loc, ""));
 				}
 			}
 		}
@@ -819,7 +850,7 @@ function emitArrayElementCopies(literal: Node, outerType: Type, idx: number, stm
 				}
 				recordMove(dctx, elemName);
 			} else {
-				addPending(dctx, makeRcCallStmt(elemRc.copyFn, elemName, loc));
+				addPending(dctx, makeCopyAfterInit(elemName, elemRc, loc, ""));
 			}
 		}
 		// MoveExpr element: force move — wasMoved on source, no incref
@@ -968,14 +999,14 @@ function registerFuncParams(paramNames: string[], paramTypes: Type[], dctx: DrcC
 			const pRcInfo = classifyType(paramTypes[pi], dctx.ctx);
 			if (pRcInfo.needsCleanup) {
 				// Implementation parity: regular params are BORROWED (cursor=true, no cleanup).
-				// Only sink params (SF_SINK) take ownership and need cleanup at exit.
+				// Only sink params (SymbolFlag.Sink) take ownership and need cleanup at exit.
 				// The caller owns the value; if the function needs to keep it, the
 				// assignment point handles the copy (not the param registration).
 				let isCursor = true;
 
-				// Only non-cursor if explicitly SF_SINK (takes ownership)
+				// Only non-cursor if explicitly SymbolFlag.Sink (takes ownership)
 				const pSym = lookupLocal(dctx.ctx.checkerCtx.table, pName);
-				if (pSym !== null && hasFlag(pSym, SF_SINK)) {
+				if (pSym !== null && hasFlag(pSym, SymbolFlag.Sink)) {
 					isCursor = false;
 				}
 
@@ -1095,8 +1126,12 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	if (d.declName.startsWith("$") && d.initializer !== null && d.initializer.kind === NodeKind.Identifier) {
 		isCursor = true;
 	}
-	// NF_CURSOR: for-of bindings are borrows from the array (Nim: sfCursor on for-loop vars)
-	if ((stmt.flags & NF_CURSOR) !== 0) {
+	// NodeFlag.Cursor: for-of bindings are borrows from the array (reference: cursor flag on for-loop vars)
+	if ((stmt.flags & NodeFlag.Cursor) !== 0) {
+		isCursor = true;
+	}
+	// Cursor propagation from initializer: zero-copy bridge HiddenStdConv has NodeFlag.Cursor
+	if (d.initializer !== null && (d.initializer.flags & NodeFlag.Cursor) !== 0) {
 		isCursor = true;
 	}
 	// Phase B: check cursor inference results (borrow-only variables skip all RC)
@@ -1163,7 +1198,7 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 			return stmt;
 		}
 		// COPY: emit incref/copy after assignment
-		const copyNode = makeCopyAfterInit(d.declName, rcInfo, loc);
+		const copyNode = makeCopyAfterInit(d.declName, rcInfo, loc, initD.name);
 		addPending(dctx, copyNode);
 		return stmt;
 	}
@@ -1183,12 +1218,12 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 		}
 		// Pointer/string borrow: incref
 		if (rcInfo.rcKind === RcKind.Ref || rcInfo.rcKind === RcKind.String) {
-			const copyNode = makeCopyAfterInit(d.declName, rcInfo, loc);
+			const copyNode = makeCopyAfterInit(d.declName, rcInfo, loc, "");
 			addPending(dctx, copyNode);
 		}
 		// Named value type borrow: copy hook
 		if (rcInfo.rcKind === RcKind.Named && rcInfo.copyFn !== "") {
-			const copyNode = makeCopyAfterInit(d.declName, rcInfo, loc);
+			const copyNode = makeCopyAfterInit(d.declName, rcInfo, loc, "");
 			addPending(dctx, copyNode);
 		}
 		return stmt;
@@ -1314,7 +1349,7 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 				recordMove(dctx, rhsD.name);
 				return stmt;
 			}
-			const copyNode = makeCopyAfterInit(leftD.name, rcInfo, loc);
+			const copyNode = makeCopyAfterInit(leftD.name, rcInfo, loc, rhsD.name);
 			return makeBlock([stmt, copyNode], loc);
 		}
 		return stmt;
@@ -1427,7 +1462,7 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 			}
 			return makeBlock([destroyOld, stmt, wmCall], loc);
 		}
-		const copyNode = makeCopyAfterInit(leftD.name, rcInfo, loc);
+		const copyNode = makeCopyAfterInit(leftD.name, rcInfo, loc, rightD.name);
 		return makeBlock([destroyOld, stmt, copyNode], loc);
 	}
 
@@ -1457,7 +1492,7 @@ function emitSaveAssignDestroy(stmt: Node, lhsExpr: Node, rhs: Node, rcInfo: RcI
 	if (rcInfo.copyFn !== "") {
 		const tmpNew = freshTemp(dctx.ctx, "new" + prefix);
 		const saveNew = makeVarDecl(tmpNew, lhsExpr, DeclKind.Const, loc);
-		const copyNew = makeCopyAfterInit(tmpNew, rcInfo, loc);
+		const copyNew = makeCopyAfterInit(tmpNew, rcInfo, loc, "");
 		result.push(saveNew);
 		result.push(copyNew);
 	}
@@ -2266,13 +2301,13 @@ test "sink param: return-only param is cursor (skip cleanup)" {
 	}
 }
 
-test "lent param: SF_LENT in typeChildrenFlags skips RC at call site" {
-	// Verify that processCallArgs respects SF_LENT flag
+test "lent param: SymbolFlag.Lent in typeChildrenFlags skips RC at call site" {
+	// Verify that processCallArgs respects SymbolFlag.Lent flag
 	const dctx = testDrcContext("const x: string = \"\";");
-	// SF_LENT check is structural — verified by code reading
-	assert SF_LENT !== 0;
-	assert SF_SINK !== 0;
-	assert SF_LENT !== SF_SINK;
+	// SymbolFlag.Lent check is structural — verified by code reading
+	assert SymbolFlag.Lent !== 0;
+	assert SymbolFlag.Sink !== 0;
+	assert SymbolFlag.Lent !== SymbolFlag.Sink;
 }
 
 test "isGeneratorBody: detects $state pattern" {

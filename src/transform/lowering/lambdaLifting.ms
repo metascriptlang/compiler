@@ -15,7 +15,7 @@
 //   }
 
 import {
-	Node, NodeKind, SourceLocation, NF_CLOSURE, createNode,
+	Node, NodeKind, SourceLocation, NodeFlag, createNode,
 	ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData,
 	FunctionExprData, MethodDeclData, ConstructorDeclData,
 	ExportDeclData, ClassDeclData, DecoratedDeclData,
@@ -326,7 +326,7 @@ function makeClosurePair(liftedName: string, envTypeName: string, captures: Name
 	closureValues.push(makeIdent(liftedName, loc));
 	closureValues.push(envObj);
 	const pair = makeObjectLiteral(closureKeys, closureValues, loc);
-	pair.flags = pair.flags | NF_CLOSURE;
+	pair.flags = pair.flags | NodeFlag.Closure;
 	return pair;
 }
 

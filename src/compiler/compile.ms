@@ -5,7 +5,7 @@ import { parseSource } from "../parser/statements/validation";
 import { Node, NodeKind, ProgramData } from "../ast/node";
 import { CheckerContext, hasErrors, hasFatalErrors, errorCount } from "../checker/context";
 import { checkProgram, checkProgramWithRegistry } from "../checker/checkPass";
-import { checkModuleGraph } from "../checker/index";
+import { checkModuleGraph, getPreludeContext } from "../checker/index";
 import { ExportRegistry } from "../checker/context";
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
@@ -118,8 +118,9 @@ function exitOnModuleErrors(graph: ModuleGraph, prefix: string): void {
 // Load module graph, validate, and cross-module type check. Exits on errors.
 // Always config-aware — uses ResolverConfig for backend extensions, std/, search paths.
 // Commands without build.ms pass buildResolverConfig(target, defaultResolveSection()).
-// Module-level ExportRegistry — populated by loadAndCheckGraph, used by build loops
+// Module-level ExportRegistry + PreludeContext — populated by loadAndCheckGraph, used by build loops
 let graphRegistry: ExportRegistry = null as unknown as ExportRegistry;
+let graphPreludeCtx: CheckerContext = null as unknown as CheckerContext;
 
 function loadAndCheckGraph(entryPath: string, verbose: boolean, config: ResolverConfig): ModuleGraph {
 	if (verbose) verboseLog("loading module graph from " + entryPath);
@@ -133,6 +134,7 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 
 	if (verbose) verboseLog("cross-module type check");
 	graphRegistry = checkModuleGraph(graph, config.stdPath);
+	graphPreludeCtx = getPreludeContext();
 	// Report type errors but continue — allows codegen to proceed past non-fatal checker issues
 	reportModuleErrors(graph, "type error");
 	return graph;
@@ -142,7 +144,7 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 let protoAliveSet: AliveSet = createAliveSet();
 
 // Lightweight pass: parse + check + monomorphize all modules, then compute global DCE alive set.
-// No type emission or proto header — each module is self-contained (Nim parity).
+// No type emission or proto header — each module is self-contained (reference parity).
 function computeProjectAliveSet(graph: ModuleGraph, entryPath: string, isTest: boolean): AliveSet {
 	const monoed_programs: Node[] = [];
 	const monoed_paths: string[] = [];
@@ -152,7 +154,7 @@ function computeProjectAliveSet(graph: ModuleGraph, entryPath: string, isTest: b
 		if (mod.isCHeader) continue;
 		const pr = parseSource(mod.source);
 		if (!pr.ok) continue;
-		const ctx = graphRegistry !== null ? checkProgramWithRegistry(pr.value, graphRegistry, graph, mod) : checkProgram(pr.value);
+		const ctx = graphRegistry !== null ? checkProgramWithRegistry(pr.value, graphRegistry, graph, mod, graphPreludeCtx) : checkProgram(pr.value);
 		exitOnFatalCheckerErrors(ctx, modPath);
 		ctx.errors = [];
 		const monoed = monomorphizeProgram(pr.value, ctx);
@@ -274,7 +276,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		}
 
 		// Check (cross-module registry for proper import type resolution)
-		const ctx = graphRegistry !== null ? checkProgramWithRegistry(pr.value, graphRegistry, graph, mod) : checkProgram(pr.value);
+		const ctx = graphRegistry !== null ? checkProgramWithRegistry(pr.value, graphRegistry, graph, mod, graphPreludeCtx) : checkProgram(pr.value);
 		exitOnFatalCheckerErrors(ctx, modPath);
 		ctx.errors = [];
 
@@ -368,7 +370,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		}
 
 		// Check (cross-module registry for proper import type resolution)
-		const ctx = graphRegistry !== null ? checkProgramWithRegistry(pr.value, graphRegistry, graph, mod) : checkProgram(pr.value);
+		const ctx = graphRegistry !== null ? checkProgramWithRegistry(pr.value, graphRegistry, graph, mod, graphPreludeCtx) : checkProgram(pr.value);
 		exitOnFatalCheckerErrors(ctx, modPath);
 		ctx.errors = [];
 
@@ -397,9 +399,10 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 
 		// Analyze (DRC injection)
 		const analyzed = analyzeProgram(nativeTransformed, ctx);
+
 		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
 
-		// Codegen — each module is self-contained (Nim parity, no shared proto header)
+		// Codegen — each module is self-contained (reference parity, no shared proto header)
 		const cCode = generateCModule(nativeLowered, ctx, modPath, protoAliveSet, false);
 
 		// Accumulate compiler flags from @passC/@passL directives
@@ -525,7 +528,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 			exit(1);
 		}
 
-		const ctx = graphRegistry !== null ? checkProgramWithRegistry(pr.value, graphRegistry, graph, mod) : checkProgram(pr.value);
+		const ctx = graphRegistry !== null ? checkProgramWithRegistry(pr.value, graphRegistry, graph, mod, graphPreludeCtx) : checkProgram(pr.value);
 		exitOnFatalCheckerErrors(ctx, modPath);
 		ctx.errors = [];
 
@@ -618,7 +621,7 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 			exit(1);
 		}
 
-		const ctx = graphRegistry !== null ? checkProgramWithRegistry(pr.value, graphRegistry, graph, mod) : checkProgram(pr.value);
+		const ctx = graphRegistry !== null ? checkProgramWithRegistry(pr.value, graphRegistry, graph, mod, graphPreludeCtx) : checkProgram(pr.value);
 		exitOnFatalCheckerErrors(ctx, modPath);
 		ctx.errors = [];
 

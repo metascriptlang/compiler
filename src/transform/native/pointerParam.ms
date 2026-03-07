@@ -23,7 +23,7 @@ import {
 	HiddenDerefData, HiddenStdConvData,
 	SourceLocation,
 } from "../../ast/node";
-import { Type, TypeKind, createPtr, isInterfaceType } from "../../checker/types";
+import { Type, TypeKind, createPtr, isInterfaceType, getTypeSize } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeHiddenAddr, makeHiddenDeref } from "../util";
@@ -38,14 +38,23 @@ function safeLoc(node: Node): SourceLocation {
 
 // ===== Standard Reference: pointer parameter introduction =====
 // Determines if a param type should be passed by pointer in C.
-// Mirrors standard reference patterns — interface types always → pointer.
+// Nim parity (ccgutils.nim:79-107):
+//   tyObject: forwarded → true; size > floatSize*3 → true; final+no base → false; else → true
+//   tyTuple: size > floatSize*3 → true
+// We don't have inheritance or forwarded types, so all interfaces are "final + no base".
+// Threshold: 24 bytes (floatSize=8 * 3) on 64-bit.
+const PTR_THRESHOLD: number = 24;
+
 export function ccgIntroducedPtr(t: Type): boolean {
 	if (t === null) return false;
-	if (isInterfaceType(t)) return true;
-	if (t.kind === TypeKind.Span) return true;
+	// Nim: tyObject
+	if (isInterfaceType(t)) return getTypeSize(t) > PTR_THRESHOLD;
+	// Nim: tyTuple — same size threshold
+	if (t.kind === TypeKind.Tuple) return getTypeSize(t) > PTR_THRESHOLD;
+	// Result/Union/Span — always by pointer (compound types, no Nim equivalent for size check)
 	if (t.kind === TypeKind.Result) return true;
-	if (t.kind === TypeKind.Tuple) return true;
 	if (t.kind === TypeKind.Union) return true;
+	if (t.kind === TypeKind.Span) return true;
 	return false;
 }
 

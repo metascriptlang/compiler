@@ -81,3 +81,8 @@ extern function at<T>(this arr: T[], idx: number): T from "&msGenericArrayAt";
 extern function setLen<T>(this arr: T[], newLen: number): void from "&msGenericArraySetLen";
 
 extern function capacity<T>(this arr: T[]): number from "&msGenericArrayCapacity";
+
+// ===== Zero-Copy Bridge (uint8[] → string) =====
+
+@builtin("AsString")
+extern function asString(this arr: uint8[]): string from "ms_asString";

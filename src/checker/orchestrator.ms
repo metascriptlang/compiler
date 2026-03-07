@@ -3,22 +3,20 @@
 
 import { Node } from "../ast/node";
 import {
-	CheckerContext, createModuleContext, createContext,
+	CheckerContext, createModuleContext,
 	ExportedSymInfo, createExportRegistry, registerModuleExports, updateModuleExports,
 	findExtensionByName, findExtensionByType, registerExtension,
 } from "./context";
-import { SymbolKind, ScopeKind, openScope, hasFlag, SF_EXPORTED } from "./symbol";
+import { SymbolKind, ScopeKind, openScope, hasFlag, SymbolFlag } from "./symbol";
 import { Module, ModuleGraph, findModule } from "../module/graph";
 import { preprocessHeaders } from "../module/aro";
-import { runThreePasses } from "./checkPass";
+import { runThreePasses, buildPreludeContext } from "./checkPass";
 import { collectTopLevelLocal } from "./collectPass";
 import { inferOwnership } from "./ownershipInference";
-import { globalImports } from "./prelude";
 import { parseSource } from "../parser/statements/validation";
 import { lex } from "../lexer/lexer";
 import { ParserState, createState } from "../parser/context";
 import { callStateProgramParser } from "../parser/statements/callbacks";
-import { readFile } from "std/process";
 
 
 // Standard-aligned two-phase module checking.
@@ -36,23 +34,9 @@ import { readFile } from "std/process";
 //   Phase 2: B checked first — imports A → placeholder types. A checked second — imports B → resolved types.
 //   Matches standard partial visibility semantics for circular imports.
 
-// Load a prelude import by probing: .ms → /index.cms → /index.ms
-function loadPreludeInto(ctx: CheckerContext, specifier: string, stdPath: string): void {
-	const base = stdPath.length > 0 ? stdPath + "/" + specifier.slice(4, specifier.length) : specifier;
-	let src = readFile(base + ".ms");
-	if (src.length === 0) {
-		src = readFile(base + "/index.cms");
-	}
-	if (src.length === 0) {
-		src = readFile(base + "/index.ms");
-	}
-	if (src.length > 0) {
-		const pr = parseSource(src);
-		if (pr.ok) {
-			runThreePasses(ctx, pr.value);
-		}
-	}
-}
+// Cached prelude context — built once by checkModuleGraph, retrieved by callers.
+let lastPreludeCtx: CheckerContext = null as unknown as CheckerContext;
+export function getPreludeContext(): CheckerContext { return lastPreludeCtx; }
 
 // stdPath: when non-empty, resolves std/ imports against this path.
 // When empty, falls back to relative "std/" (resolved by reference compiler).
@@ -60,10 +44,8 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 	const registry = createExportRegistry();
 
 	// Load prelude into a base context — provides console, string methods, etc.
-	const baseCtx = createContext();
-	for (const imp of globalImports()) {
-		loadPreludeInto(baseCtx, imp, stdPath);
-	}
+	const baseCtx = buildPreludeContext(stdPath);
+	lastPreludeCtx = baseCtx;
 
 	// Pre-process C header modules (synthesis fallback for test/direct-call paths)
 	preprocessHeaders(graph, false);
@@ -87,11 +69,15 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 		const p1ctx = createModuleContext(graph, mod);
 		p1ctx.exportRegistry = registry;
 		for (const sym of baseCtx.table.current.symbols) {
-			p1ctx.table.current.symbols.push(sym);
+			if (hasFlag(sym, SymbolFlag.Exported)) {
+				p1ctx.table.current.symbols.push(sym);
+			}
 		}
 		if (baseCtx.extensionRegistry !== null && p1ctx.extensionRegistry !== null) {
 			for (const ext of baseCtx.extensionRegistry.methods) {
-				registerExtension(p1ctx.extensionRegistry, ext);
+				if (ext.sym !== null && hasFlag(ext.sym, SymbolFlag.Exported)) {
+					registerExtension(p1ctx.extensionRegistry, ext);
+				}
 			}
 		}
 		openScope(p1ctx.table, ScopeKind.Module);
@@ -102,7 +88,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 		// Register early exports (names + kinds, placeholder types)
 		const earlyExports: ExportedSymInfo[] = [];
 		for (const sym of p1ctx.table.current.symbols) {
-			if (hasFlag(sym, SF_EXPORTED)) {
+			if (hasFlag(sym, SymbolFlag.Exported)) {
 				const info: ExportedSymInfo = {
 					name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
 					overloadTypes: [],
@@ -146,15 +132,19 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 		const ctx = createModuleContext(graph, mod);
 		ctx.exportRegistry = registry;
 
-		// Inject prelude symbols into this module's Global scope
+		// Inject prelude symbols into this module's Global scope (exported only)
 		for (const sym of baseCtx.table.current.symbols) {
-			ctx.table.current.symbols.push(sym);
+			if (hasFlag(sym, SymbolFlag.Exported)) {
+				ctx.table.current.symbols.push(sym);
+			}
 		}
 
-		// Inject prelude extensions
+		// Inject prelude extensions (exported only)
 		if (baseCtx.extensionRegistry !== null && ctx.extensionRegistry !== null) {
 			for (const ext of baseCtx.extensionRegistry.methods) {
-				registerExtension(ctx.extensionRegistry, ext);
+				if (ext.sym !== null && hasFlag(ext.sym, SymbolFlag.Exported)) {
+					registerExtension(ctx.extensionRegistry, ext);
+				}
 			}
 		}
 
@@ -174,7 +164,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 		// Extract resolved exports and UPDATE registry (replaces Phase 1 placeholders)
 		const exports: ExportedSymInfo[] = [];
 		for (const sym of ctx.table.current.symbols) {
-			if (hasFlag(sym, SF_EXPORTED)) {
+			if (hasFlag(sym, SymbolFlag.Exported)) {
 				mod.exportNames.push(sym.name);
 				// Check if this exported function is an extension method
 				let extRecv = "";

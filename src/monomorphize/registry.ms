@@ -1,7 +1,7 @@
 // Monomorphization Registry — tracks generic instantiations, dedup, name mangling
 //
 // Reference implementation equivalent: generic instantiation cache.
-// sameInstantiation() + genericCacheGet() in seminst.nim.
+// sameInstantiation() + genericCacheGet() in reference instantiation.
 
 import { Type, TypeKind } from "../checker/types";
 

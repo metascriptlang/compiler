@@ -20,7 +20,7 @@ import {
 	createSizedArray, createSpan, createBorrow,
 	setMinArity, typeNameOf, assignType,
 } from "./types";
-import { Symbol, SymbolKind, SymbolTable, ScopeKind, lookupSymbol, lookupLocal, defineSymbol, makeSymbol, openScope, closeScope, SymbolState, hasFlag, setFlag, SF_EXPORTED, SF_MUTABLE } from "./symbol";
+import { Symbol, SymbolKind, SymbolTable, ScopeKind, lookupSymbol, lookupLocal, defineSymbol, makeSymbol, openScope, closeScope, SymbolState, hasFlag, setFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError } from "./context";
 import { trimStr, sliceStr, findChar, charAt, splitTopLevel, parseIntStr } from "../utils/string";
 import { getProperty } from "./types";
@@ -247,7 +247,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 				// Demand-driven: ensure shaped before using
 				ensureShaped(sym, ctx);
 				// Circular type reference: sym still Unknown → return the SAME object
-				// (Nim parity: forward type identity preservation). When the type is
+				// (reference parity: forward type identity preservation). When the type is
 				// fully resolved later, assignType upgrades this object in-place,
 				// and all references automatically see the resolved type.
 				return sym.symbolType;
@@ -567,7 +567,7 @@ function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 		return;
 	}
 	const resolved = resolveAnnotation(d.aliasType, ctx);
-	// Propagate alias name to Union types (NIM-GAP: string-based annotations don't carry names)
+	// Propagate alias name to Union types (Reference gap: string-based annotations don't carry names)
 	if (resolved.kind === TypeKind.Union && resolved.typeName === "") {
 		resolved.typeName = d.aliasName;
 	}

@@ -113,6 +113,7 @@ function buildCompileCommand(cFile: string, outBinary: string, extraFlags: strin
 		cmd = cmd + " " + join(rtDir, "system.c");
 		cmd = cmd + " " + join(rtDir, "core/string.c");
 		cmd = cmd + " " + join(rtDir, "core/array.c");
+		cmd = cmd + " " + join(rtDir, "core/map.c");
 		cmd = cmd + " " + join(rtDir, "mem/orc.c");
 	}
 
@@ -158,6 +159,7 @@ export function linkObjects(oFileList: string, outBinary: string, extraFlags: st
 		cmd = cmd + " " + join(rtDir, "system.c");
 		cmd = cmd + " " + join(rtDir, "core/string.c");
 		cmd = cmd + " " + join(rtDir, "core/array.c");
+		cmd = cmd + " " + join(rtDir, "core/map.c");
 		cmd = cmd + " " + join(rtDir, "mem/orc.c");
 	}
 

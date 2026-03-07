@@ -46,7 +46,7 @@ import {
 } from "./intern";
 
 import { parseSource } from "../../parser/statements/validation";
-import { checkProgram, checkProgramCancellable, checkProgramWithRegistryCancellable } from "../../checker/index";
+import { checkProgram, checkProgramCancellable, checkProgramWithRegistryCancellable, buildPreludeContext } from "../../checker/index";
 import { transformProgram } from "../../transform/index";
 import { analyzeProgram } from "../../analyzer/index";
 import {
@@ -54,7 +54,7 @@ import {
 	findModuleExports, registerModuleExports,
 } from "../../checker/context";
 import { collectTopLevelLocal } from "../../checker/collectPass";
-import { SF_EXPORTED, hasFlag, openScope, ScopeKind } from "../../checker/symbol";
+import { SymbolFlag, hasFlag, openScope, ScopeKind } from "../../checker/symbol";
 import {
 	ImportDeclData, ExportDeclData, ProgramData,
 } from "../../ast/node";
@@ -97,6 +97,7 @@ export interface TransAmDb {
 	interner: TaStringInterner;
 	exportRegistry: ExportRegistry;
 	stdPath: string;
+	preludeCtx: CheckerContext;
 }
 
 export function createTransAmDb(cacheCapacity: number): TransAmDb {
@@ -110,6 +111,7 @@ export function createTransAmDb(cacheCapacity: number): TransAmDb {
 		interner: createStringInterner(),
 		exportRegistry: createExportRegistry(),
 		stdPath: "",
+		preludeCtx: null as unknown as CheckerContext,
 	};
 }
 
@@ -243,7 +245,7 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: str
 
 		const earlyExports: ExportedSymInfo[] = [];
 		for (const sym of tmpCtx.table.current.symbols) {
-			if (hasFlag(sym, SF_EXPORTED)) {
+			if (hasFlag(sym, SymbolFlag.Exported)) {
 				const info: ExportedSymInfo = {
 					name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
 					overloadTypes: [],
@@ -361,9 +363,10 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	mod.imports = imports;
 	const graph = createModuleGraph();
 	addModule(graph, mod);
+	if (db.preludeCtx === null) db.preludeCtx = buildPreludeContext(db.stdPath);
 	const checkerCtx = checkProgramWithRegistryCancellable(
 		program, db.exportRegistry, graph, mod,
-		db.cancelCtx, startVersion
+		db.preludeCtx, db.cancelCtx, startVersion
 	);
 
 	// If cancelled, discard frame without caching — partial result not reliable

@@ -6,7 +6,7 @@
 
 import { sliceStr, charAt } from "../../utils/string";
 import { Symbol, SymbolKind } from "../../ast/node";
-import { hasFlag, SF_IMPORT_C } from "../../checker/symbol";
+import { hasFlag, SymbolFlag } from "../../checker/symbol";
 
 
 // ===== C Keywords — identifiers that need escaping =====
@@ -177,7 +177,7 @@ export function mangleProcName(name: string, moduleName: string, id: number): st
 export function mangledFunctionName(sym: Symbol, name: string, overloadIdx: number): string {
 	if (sym !== null && sym.nativeName !== "") return sym.nativeName;
 	if (name === "main") return safeName(name);
-	if (sym !== null && hasFlag(sym, SF_IMPORT_C)) return safeName(name);
+	if (sym !== null && hasFlag(sym, SymbolFlag.ImportC)) return safeName(name);
 	if (sym !== null && sym.modulePath !== "") {
 		return mangleProcName(name, mangleModuleName(sym.modulePath), overloadIdx);
 	}

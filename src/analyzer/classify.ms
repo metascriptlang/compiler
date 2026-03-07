@@ -6,7 +6,7 @@
 // The RcInfo result carries enough info to emit the correct AST calls.
 
 import { Type, TypeKind, isPrimitiveKind, hasDestructor, isInterfaceType, createPrimitive, createObject, createArray, createFunction, numberType, stringType, booleanType, voidType, nullType, unknownType } from "../checker/types";
-import { lookupSymbol, SymbolKind, isPointerType as isPointerTypeBase, Symbol, hasFlag, SF_SINK, SF_LENT } from "../checker/symbol";
+import { lookupSymbol, SymbolKind, isPointerType as isPointerTypeBase, Symbol, hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, createTransformContext } from "../transform/context";
 import { NodeKind } from "../ast/node";
 
@@ -66,6 +66,9 @@ function isPointerType(t: Type, ctx: TransformContext): boolean {
 
 function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 	const elem = t.typeReturn;  // Array element type stored in typeReturn
+	if (elem !== null && elem.kind === TypeKind.Uint8) {
+		return makeRcInfo(RcKind.Array, "", "msArrayUint8Destroy", "msArrayUint8Copy", "msArrayUint8WasMoved", "msArrayUint8Sink");
+	}
 	if (elem === null || isPrimitiveKind(elem.kind)) {
 		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink");
 	}
@@ -104,12 +107,12 @@ function classifyTypeRef(t: Type, ctx: TransformContext): RcInfo {
 
 export function isSinkParam(sym: Symbol): boolean {
 	if (sym === null) return false;
-	return hasFlag(sym, SF_SINK);
+	return hasFlag(sym, SymbolFlag.Sink);
 }
 
 export function isLentParam(sym: Symbol): boolean {
 	if (sym === null) return false;
-	return hasFlag(sym, SF_LENT);
+	return hasFlag(sym, SymbolFlag.Lent);
 }
 
 // ===== Main Classification Entry Point =====

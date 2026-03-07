@@ -26,8 +26,8 @@ import {
 	InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData,
 } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createTransformContextWithChecker } from "../context";
-import { makeIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeObjectLiteral } from "../util";
-import { Type, TypeKind, isPrimitiveKind, AttachedOp, setAttachedOp, tupleTypeName } from "../../checker/types";
+import { makeIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeObjectLiteral, makeHiddenAddr } from "../util";
+import { Type, TypeKind, isPrimitiveKind, AttachedOp, setAttachedOp } from "../../checker/types";
 import { lookupSymbol, SymbolKind, isPointerType as isPointerTypeBase } from "../../checker/symbol";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput } from "../testUtil";
@@ -212,13 +212,24 @@ function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: bo
 }
 
 // --- Standard value-type object hook generator ---
+// Reference parity: Named-type hooks take pointer params (ccgIntroducedPtr).
+// Wrap field accesses in HiddenAddr so codegen emits &(self.field).
 function namedObjOp(hook: string, typeName: string, xf: Node, yf: Node, buf: Node[], loc: SourceLocation): void {
 	if (hook === "sink") {
-		genInlineSink(typeName + "_destroy", xf, yf, buf, loc);
+		// Inline sink: destroy(&xf) + assign(xf = yf)
+		buf.push(makeExprStmt(makeCall(makeIdent(typeName + "_destroy", loc), [makeHiddenAddr(xf, loc)], loc), loc));
+		buf.push(makeExprStmt(makeAssign(xf, yf, loc), loc));
 		return;
 	}
 	const name = hook === "wasMoved" ? "msObjectWasMoved" : typeName + hookSuffix(hook);
-	genCall(name, hook, xf, yf, buf, loc);
+	// Named-type hooks expect pointers — wrap in HiddenAddr
+	const ax = makeHiddenAddr(xf, loc);
+	if (hook === "destroy" || hook === "wasMoved") {
+		buf.push(makeExprStmt(makeCall(makeIdent(name, loc), [ax], loc), loc));
+	} else {
+		const ay = makeHiddenAddr(yf, loc);
+		buf.push(makeExprStmt(makeCall(makeIdent(name, loc), [ax, ay], loc), loc));
+	}
 }
 
 // --- Parameterized runtime op (shared by closure, map) ---
@@ -375,21 +386,9 @@ function generateHook(hook: string, typeName: string, objType: Type, lctx: LiftC
 		_ => "src",
 	};
 
-	// Self-assignment check for copy/sink (Implementation parity)
-	// Set nodeType on operands so codegen can emit memcmp for struct equality (E1 fix)
-	if (hook === "copy" || hook === "sink") {
-		const destIdent = makeIdent(p1, loc);
-		destIdent.nodeType = objType;
-		const srcIdent = makeIdent(p2, loc);
-		srcIdent.nodeType = objType;
-		const selfCheck = makeIf(
-			makeBinary(destIdent, "===", srcIdent, loc),
-			makeBlock([makeReturn(makeNull(loc), loc)], loc),
-			makeNull(loc),
-			loc,
-		);
-		buf.push(selfCheck);
-	}
+	// reference parity: no self-assignment check for simple objects (reference destructor lifting:311).
+	// Reference only checks for case objects (which MetaScript doesn't have).
+	// Field-by-field copy is self-assignment safe because each field's =copy handles it.
 
 	// User-defined hook dispatch (Reference considerUserDefinedOp)
 	if (hasUserDefinedHook(typeName, hook, lctx)) {
@@ -488,7 +487,7 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 	// =dup: init + copy, return (standard pattern)
 	const dupStmts: Node[] = [];
 	dupStmts.push(makeVarDecl("$result", makeIdent("src", loc), DeclKind.Let, loc));
-	dupStmts.push(makeExprStmt(makeCall(makeIdent(typeName + "_copy", loc), [makeIdent("$result", loc), makeIdent("src", loc)], loc), loc));
+	dupStmts.push(makeExprStmt(makeCall(makeIdent(typeName + "_copy", loc), [makeHiddenAddr(makeIdent("$result", loc), loc), makeHiddenAddr(makeIdent("src", loc), loc)], loc), loc));
 	dupStmts.push(makeReturn(makeIdent("$result", loc), loc));
 	lctx.collector.push(makeFnDecl(typeName + "_dup", ["src"], [typeName], makeBlock(dupStmts, loc), "", typeName, loc));
 	setAttachedOp(objType, AttachedOp.AttachedDup, typeName + "_dup");
@@ -505,16 +504,16 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 	nameSetAdd(lctx.generated, typeName);
 }
 
-// ===== Auto-Generated == (Nim parity: generic proc `==`*[T: tuple|object]) =====
+// ===== Auto-Generated == (reference parity: generic proc `==`*[T: tuple|object]) =====
 // Generates TypeName_eq(a, b): boolean with field-by-field comparison.
-// Nim uses compile-time `fields()` magic iterator unrolling; we do the same here
+// Reference implementation uses compile-time `fields()` magic iterator unrolling; we do the same here
 // by iterating typeNames/typeChildren at transform time.
 
 function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx, loc: SourceLocation): Node {
 	// For nested value-type objects, call their _eq function
 	if (fieldType.kind === TypeKind.Object && fieldType.typeName !== "" && (fieldType.typeFlags & 1) !== 0) {
 		if (!isPointerType(fieldType, lctx.ctx)) {
-			return makeCall(makeIdent(fieldType.typeName + "_eq", loc), [aField, bField], loc);
+			return makeCall(makeIdent(fieldType.typeName + "_eq", loc), [makeHiddenAddr(aField, loc), makeHiddenAddr(bField, loc)], loc);
 		}
 	}
 	// For TypeReference, resolve and recurse
@@ -549,7 +548,6 @@ function generateEq(typeName: string, objType: Type, lctx: LiftCtx, loc: SourceL
 	}
 	buf.push(makeReturn(makeBool(true, loc), loc));
 	lctx.collector.push(makeFnDecl(typeName + "_eq", ["a", "b"], [typeName, typeName], makeBlock(buf, loc), "", "boolean", loc));
-	setAttachedOp(objType, AttachedOp.AttachedEq, typeName + "_eq");
 }
 
 // ===== Ensure Eq (called for ALL interface types, even primitive-only) =====
@@ -567,9 +565,9 @@ function ensureEq(typeName: string, lctx: LiftCtx, loc: SourceLocation): void {
 	generateEq(typeName, sym.symbolType, lctx, loc);
 }
 
-// ===== Tuple Comparison Operators (Nim parity: system.nim lines 1973-1996) =====
+// ===== Tuple Comparison Operators (reference parity: reference core lines 1973-1996) =====
 // Auto-generate ==, <, <= for tuples using positional field names (_0, _1, ...).
-// Nim uses `fields()` magic iterator; we unroll at transform time.
+// Reference implementation uses `fields()` magic iterator; we unroll at transform time.
 
 // Tuple field access helper: a._0, a._1, etc.
 function tupleField(obj: Node, idx: number, loc: SourceLocation): Node {
@@ -577,7 +575,7 @@ function tupleField(obj: Node, idx: number, loc: SourceLocation): Node {
 }
 
 // Generate element-by-element equality for tuples.
-// Nim: proc `==`*[T: tuple|object](x, y: T): bool =
+// Reference: proc `==`*[T: tuple|object](x, y: T): bool =
 //        for a, b in fields(x, y): if a != b: return false
 //        return true
 function generateTupleEq(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
@@ -592,11 +590,10 @@ function generateTupleEq(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 	}
 	buf.push(makeReturn(makeBool(true, loc), loc));
 	lctx.collector.push(makeFnDecl(tupleName + "_eq", ["a", "b"], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc));
-	setAttachedOp(t, AttachedOp.AttachedEq, tupleName + "_eq");
 }
 
 // Generate lexicographic < for tuples.
-// Nim: proc `<`*[T: tuple](x, y: T): bool =
+// Reference: proc `<`*[T: tuple](x, y: T): bool =
 //        for a, b in fields(x, y):
 //          var c = cmp(a, b)
 //          if c < 0: return true
@@ -620,11 +617,10 @@ function generateTupleLt(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 	}
 	buf.push(makeReturn(makeBool(false, loc), loc));
 	lctx.collector.push(makeFnDecl(tupleName + "_lt", ["a", "b"], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc));
-	setAttachedOp(t, AttachedOp.AttachedLt, tupleName + "_lt");
 }
 
 // Generate lexicographic <= for tuples.
-// Nim: proc `<=`*[T: tuple](x, y: T): bool =
+// Reference: proc `<=`*[T: tuple](x, y: T): bool =
 //        for a, b in fields(x, y):
 //          var c = cmp(a, b)
 //          if c < 0: return true
@@ -644,7 +640,6 @@ function generateTupleLe(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 	}
 	buf.push(makeReturn(makeBool(true, loc), loc));  // <= returns true when equal
 	lctx.collector.push(makeFnDecl(tupleName + "_le", ["a", "b"], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc));
-	setAttachedOp(t, AttachedOp.AttachedLe, tupleName + "_le");
 }
 
 // ===== Process Declarations =====
@@ -688,7 +683,7 @@ export function liftDestructors(program: Node, ctx: TransformContext): Node {
 	}
 
 	// Process pending tuple comparison ops (collected by operatorLower).
-	// Nim parity: system.nim:1973 (==), :1980 (<=), :1989 (<) for tuples.
+	// reference parity: reference core:1973 (==), :1980 (<=), :1989 (<) for tuples.
 	const defaultLoc: SourceLocation = { file: "", line: 0, column: 0 };
 	for (const pending of ctx.pendingTupleOps) {
 		for (const op of pending.ops) {
@@ -804,7 +799,7 @@ test "all core hooks generated" {
 	assert hasGeneratedFn(src, "_dup");
 }
 
-// Auto-generated == (Nim parity: generic proc `==`*[T: tuple|object])
+// Auto-generated == (reference parity: generic proc `==`*[T: tuple|object])
 test "eq generated for primitive-only interface" {
 	assert hasGeneratedFn("interface Point { x: number; y: number; }", "Point_eq");
 }

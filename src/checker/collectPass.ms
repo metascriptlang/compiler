@@ -1,7 +1,7 @@
 import { Node, NodeKind, SourceLocation, createNodeAt, ProgramData, FunctionDeclData, ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind } from "../ast/node";
 import { extractDecoratorInfo } from "./decoratorHelpers";
 import { Type, TypeKind, unknownType, emptyType, createObject, createEnum, createTypeRef, createFunction } from "./types";
-import { Symbol, SymbolKind, SymbolTable, ScopeKind, defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SF_EXPORTED, SF_MUTABLE, SF_IMPORT_C } from "./symbol";
+import { Symbol, SymbolKind, SymbolTable, ScopeKind, defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, addError, findExportedSymbol, findModuleExports, ExtensionMethod, registerExtension, isStaticExtensionFlag, getExtTypeName, findExtension } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
@@ -85,7 +85,7 @@ function collectExportLocal(ctx: CheckerContext, node: Node): void {
 	if (name !== "") {
 		const sym = lookupSymbol(ctx.table, name);
 		if (sym !== null) {
-			setFlag(sym, SF_EXPORTED);
+			setFlag(sym, SymbolFlag.Exported);
 		}
 	}
 }
@@ -138,8 +138,8 @@ function collectFunction(ctx: CheckerContext, node: Node): void {
 	const sym = makeSymbol(d.fnName, SymbolKind.Function, unknownType(), false);
 	// Extern functions are FFI bindings — implicitly exported for cross-module use
 	if (d.fnFlags === "extern" || d.fnFlags.indexOf("extern", 0) >= 0) {
-		setFlag(sym, SF_EXPORTED);
-		setFlag(sym, SF_IMPORT_C);
+		setFlag(sym, SymbolFlag.Exported);
+		setFlag(sym, SymbolFlag.ImportC);
 		// Wire nativeName from AST 'from "c_name"' clause
 		if (d.nativeName !== null && d.nativeName !== "") {
 			sym.nativeName = d.nativeName;
@@ -225,7 +225,7 @@ function collectEnumDecl(ctx: CheckerContext, node: Node): void {
 
 function collectTypeAlias(ctx: CheckerContext, node: Node): void {
 	const d = node.data as TypeAliasDeclData;
-	// Fresh type (not singleton unknownType) — resolvePass will assignType in-place (Nim: tyForward)
+	// Fresh type (not singleton unknownType) — resolvePass will assignType in-place (reference: tyForward)
 	defineOrError(ctx, makeSymbol(d.aliasName, SymbolKind.TypeAlias, emptyType(), false), node);
 }
 
@@ -241,8 +241,8 @@ function collectExtern(ctx: CheckerContext, node: Node): void {
 	};
 	const sym = makeSymbol(d.externName, kind, unknownType(), false);
 	// Extern declarations are FFI bindings — implicitly exported for cross-module use
-	setFlag(sym, SF_EXPORTED);
-	setFlag(sym, SF_IMPORT_C);
+	setFlag(sym, SymbolFlag.Exported);
+	setFlag(sym, SymbolFlag.ImportC);
 	// Wire nativeName from AST 'from "c_name"' clause
 	if (d.nativeName !== null && d.nativeName !== "") {
 		sym.nativeName = d.nativeName;
@@ -388,7 +388,7 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 			}
 		}
 
-		// Auto-propagate exported operator overloads from imported module (Nim parity).
+		// Auto-propagate exported operator overloads from imported module (reference parity).
 		// When you import anything from a module, all its exported operator functions
 		// become available automatically — no need to import them by name.
 		if (ctx.extensionRegistry !== null && sourcePath !== "") {
@@ -469,7 +469,7 @@ function collectExport(ctx: CheckerContext, node: Node): void {
 		for (const alias of imp.importAliases) {
 			const sym = lookupSymbol(ctx.table, alias);
 			if (sym !== null) {
-				setFlag(sym, SF_EXPORTED);
+				setFlag(sym, SymbolFlag.Exported);
 			}
 		}
 		return;
@@ -481,7 +481,7 @@ function collectExport(ctx: CheckerContext, node: Node): void {
 	if (name !== "") {
 		const sym = lookupSymbol(ctx.table, name);
 		if (sym !== null) {
-			setFlag(sym, SF_EXPORTED);
+			setFlag(sym, SymbolFlag.Exported);
 		}
 	}
 }
@@ -625,14 +625,14 @@ test "export marks isExported" {
 	const ctx = collectFromSource("export function foo() { return 1; }");
 	const sym = lookupSymbol(ctx.table, "foo");
 	assert sym !== null;
-	assert hasFlag(sym, SF_EXPORTED);
+	assert hasFlag(sym, SymbolFlag.Exported);
 }
 
 test "non-export not marked" {
 	const ctx = collectFromSource("function bar() { return 1; }");
 	const sym = lookupSymbol(ctx.table, "bar");
 	assert sym !== null;
-	assert !hasFlag(sym, SF_EXPORTED);
+	assert !hasFlag(sym, SymbolFlag.Exported);
 }
 
 test "getDeclName function" {
@@ -656,13 +656,13 @@ test "re-export marks isExported" {
 	const ctx = collectFromSource("export { foo, bar } from \"./other\";");
 	const fooSym = lookupSymbol(ctx.table, "foo");
 	if (fooSym !== null) {
-		assert hasFlag(fooSym, SF_EXPORTED);
+		assert hasFlag(fooSym, SymbolFlag.Exported);
 	} else {
 		assert false; // foo should exist
 	}
 	const barSym = lookupSymbol(ctx.table, "bar");
 	if (barSym !== null) {
-		assert hasFlag(barSym, SF_EXPORTED);
+		assert hasFlag(barSym, SymbolFlag.Exported);
 	} else {
 		assert false; // bar should exist
 	}
@@ -690,7 +690,7 @@ test "re-export with alias marks alias exported" {
 	const ctx = collectFromSource("export { foo as bar } from \"./other\";");
 	const sym = lookupSymbol(ctx.table, "bar");
 	if (sym !== null) {
-		assert hasFlag(sym, SF_EXPORTED);
+		assert hasFlag(sym, SymbolFlag.Exported);
 	} else {
 		assert false; // bar should exist
 	}
@@ -702,7 +702,7 @@ test "extern function from sets nativeName" {
 	assert sym !== null;
 	if (sym !== null) {
 		assert sym.nativeName === "msFloor";
-		assert hasFlag(sym, SF_IMPORT_C);
+		assert hasFlag(sym, SymbolFlag.ImportC);
 	}
 }
 
@@ -737,7 +737,7 @@ test "@builtin on extern function sets both builtinKind and nativeName" {
 	if (sym !== null) {
 		assert sym.builtinKind === "msResultOk";
 		assert sym.nativeName === "msResultOk";
-		assert hasFlag(sym, SF_IMPORT_C);
+		assert hasFlag(sym, SymbolFlag.ImportC);
 	}
 }
 
@@ -747,7 +747,7 @@ test "@builtin on generic extern function" {
 	assert sym !== null;
 	if (sym !== null) {
 		assert sym.builtinKind === "msResultOk";
-		assert hasFlag(sym, SF_IMPORT_C);
+		assert hasFlag(sym, SymbolFlag.ImportC);
 	}
 }
 
@@ -757,7 +757,7 @@ test "generic extern function with from clause" {
 	assert sym !== null;
 	if (sym !== null) {
 		assert sym.nativeName === "msSort";
-		assert hasFlag(sym, SF_IMPORT_C);
+		assert hasFlag(sym, SymbolFlag.ImportC);
 	}
 }
 
@@ -790,7 +790,7 @@ test "import + re-export dedup does not error" {
 	const sym = lookupSymbol(ctx.table, "foo");
 	assert sym !== null;
 	if (sym !== null) {
-		assert hasFlag(sym, SF_EXPORTED);
+		assert hasFlag(sym, SymbolFlag.Exported);
 	}
 }
 
@@ -799,6 +799,6 @@ test "VariableDecl collected in pass 1" {
 	const sym = lookupSymbol(ctx.table, "x");
 	assert sym !== null;
 	if (sym !== null) {
-		assert hasFlag(sym, SF_EXPORTED);
+		assert hasFlag(sym, SymbolFlag.Exported);
 	}
 }

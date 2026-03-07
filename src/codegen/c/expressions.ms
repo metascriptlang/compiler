@@ -7,7 +7,7 @@
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
 import {
-	Node, NodeKind, NF_CLOSURE,
+	Node, NodeKind, NodeFlag,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 	IdentifierData, BinaryExprData, UnaryExprData,
 	MemberExprData, ArrayAccessData,
@@ -30,6 +30,7 @@ import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, intToString, isPoin
 import { formatCNumber, cBoolLiteral, cNullLiteral, cStringLiteral, msStringPoolRef } from "./literals";
 import { charAt, sliceStr, findChar, startsWith } from "../../utils/string";
 import { ccgIntroducedPtr } from "../../transform/native/pointerParam";
+import { ensureDrcProto } from "./declarations";
 
 // ===== Union Variant Index Matching =====
 // Matches an `as` target type against a Union's typeChildren by comparing field names.
@@ -429,7 +430,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 				}
 			}
 		}
-		// Struct equality handled by operatorLower → TypeName_eq() (Nim parity).
+		// Struct equality handled by operatorLower → TypeName_eq() (reference parity).
 		// No memcmp fallback needed — codegen never sees interface === interface.
 		// Modulo on doubles requires fmod() in C (% is integer-only)
 		// Integer types (int32, int64 etc.) keep native %
@@ -577,7 +578,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 
 		// Standard reference implementation: generate typed function pointer cast
 		// from nodeType (the callee's Function type). Codegen-only concern.
-		// See ccgtypes.nim:getClosureType(m, typ, clHalf)
+		// See reference types:getClosureType(m, typ, clHalf)
 		let targetType = "";
 		if (d.asType === "__clFull__") {
 			targetType = genClFullCast(g, node.nodeType);
@@ -622,6 +623,11 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 		truncResults(results, cc);
 		const d = node.data as HiddenStdConvData;
 		const targetC = getTypeDesc(g, d.convType);
+		// Zero-copy string ↔ uint8[] bridge: pointer cast (same memory layout)
+		if ((node.flags & NodeFlag.Cursor) !== 0) {
+			results.push("*((" + targetC + "*)&(" + inner + "))");
+			return;
+		}
 		results.push("((" + targetC + ")(" + inner + "))");
 		return;
 	}
@@ -635,7 +641,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 	// ObjectLiteral
 	if (kind === NodeKind.ObjectLiteral) {
 		const d = node.data as ObjectLiteralData;
-		if ((node.flags & NF_CLOSURE) !== 0) {
+		if ((node.flags & NodeFlag.Closure) !== 0) {
 			// Closure literal: (msClosure){ .fn = ..., .env = ... }
 			// Standard reference pattern: env is heap-allocated via msAllocTyped, fields initialized,
 			// then closure pair references the pointer.
@@ -812,7 +818,9 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 	truncResults(results, cc);
 
 	if (tag === TAG_CALL_DIRECT) {
-		// TypeAssertion callee already emits ((Type)expr) — outer parens handle precedence.
+		// reference parity: genProcNoForward emits prototype in calling module for cross-module procs.
+		// For DRC hooks (Type_destroy, Type_copy, etc.), emit forward declaration on-demand.
+		ensureDrcProto(g, callee);
 		const calleeStr = callee;
 		// NRVO: call returns void, result via out-param
 		const nrvoRet = getCalleeReturnType(node);

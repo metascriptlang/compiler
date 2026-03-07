@@ -10,16 +10,16 @@
 // This is an AST-to-AST transform — codegen sees only plain calls.
 
 import {
-	Node, NodeKind,
+	Node, NodeKind, NodeFlag,
 	CallExprData, MemberExprData, IdentifierData,
 } from "../../ast/node";
-import { TypeKind, isNumeric, createResult, stringType, unknownType } from "../../checker/types";
+import { TypeKind, isNumeric, createResult, createArray, createPrimitive, stringType, unknownType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { walkNode } from "../walker";
 import {
 	makeIdent, makeCall, makeIdentResolved, makeCallResolved,
-	makeObjectLiteral, makeBool,
+	makeObjectLiteral, makeBool, makeHiddenStdConv,
 } from "../util";
 import { stmtCountAfter, firstStmtKindAfter, firstExprKindAfter } from "../testUtil";
 
@@ -111,6 +111,13 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 		return makeCall(makeIdent("msStringLength", loc), cd.arguments, loc);
 	}
 
+	if (builtinKind === "AsBytes") {
+		return rewriteZeroCopyBridge(node, true);
+	}
+	if (builtinKind === "AsString") {
+		return rewriteZeroCopyBridge(node, false);
+	}
+
 	if (builtinKind === "msResultOk") {
 		return rewriteResultToLiteral(node, true, ctx);
 	}
@@ -119,6 +126,23 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 	}
 
 	return node;
+}
+
+// Zero-copy string ↔ uint8[] bridge: rewrite call to HiddenStdConv with Cursor flag.
+// AsBytes: string → uint8[] (bit-cast, same memory layout)
+// AsString: uint8[] → string (bit-cast, same memory layout)
+// The Cursor flag tells DRC to skip destroy on the result (it's a borrow).
+function rewriteZeroCopyBridge(node: Node, toBytes: boolean): Node {
+	const cd = node.data as CallExprData;
+	if (cd.arguments.length < 1) return node;
+	const receiver = cd.arguments[0];
+	const loc = node.location;
+	const targetType = toBytes
+		? createArray(createPrimitive(TypeKind.Uint8))
+		: stringType();
+	const conv = makeHiddenStdConv(receiver, targetType, loc);
+	conv.flags = conv.flags | NodeFlag.Cursor;
+	return conv;
 }
 
 function rewriteResultToLiteral(node: Node, isOk: boolean, ctx: TransformContext): Node {

@@ -16,7 +16,7 @@
 
 import {
 	Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation,
-	ArrayPatternData, IdentifierData, NF_CURSOR,
+	ArrayPatternData, IdentifierData, NodeFlag,
 } from "../../ast/node";
 import { TransformContext, freshTemp } from "../context";
 import { Type, TypeKind, numberType, stringType } from "../../checker/types";
@@ -60,9 +60,9 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	const lenName = freshTemp(ctx, "len");
 	const iterType = d.forOfIterable.nodeType;
 
-	// const $iter = arr; — cursor (borrow), DRC must not destroy (Nim: sfCursor)
+	// const $iter = arr; — cursor (borrow), DRC must not destroy (reference: cursor flag)
 	const iterDecl = makeVarDecl(iterName, d.forOfIterable, DeclKind.Const, loc);
-	iterDecl.flags = iterDecl.flags | NF_CURSOR;
+	iterDecl.flags = iterDecl.flags | NodeFlag.Cursor;
 
 	// let $idx = 0;
 	const idxDecl = makeVarDecl(idxName, makeNumber(0, loc), DeclKind.Let, loc);
@@ -101,10 +101,10 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		}
 	} else {
 		// Simple binding: const item = $iter[$idx];
-		// NF_CURSOR: for-of binding is a borrow from the array — DRC must skip destroy (Nim: sfCursor)
+		// NodeFlag.Cursor: for-of binding is a borrow from the array — DRC must skip destroy (reference: cursor flag)
 		const itemAccess = makeArrayAccess(makeTypedIdent(iterName, iterType, loc), makeTypedIdent(idxName, numberType(), loc), loc);
 		const itemDecl = makeVarDecl(d.forOfBinding, itemAccess, itemDk, loc);
-		itemDecl.flags = itemDecl.flags | NF_CURSOR;
+		itemDecl.flags = itemDecl.flags | NodeFlag.Cursor;
 		whileStmts.push(itemDecl);
 	}
 
@@ -130,9 +130,9 @@ function lowerCollectionForOf(d: ForOfStmtData, iterType: Type, ctx: TransformCo
 	const slotName = freshTemp(ctx, "slot");
 	const capName = freshTemp(ctx, "cap");
 
-	// const $iter = iterable; — cursor (borrow), DRC must not destroy (Nim: sfCursor)
+	// const $iter = iterable; — cursor (borrow), DRC must not destroy (reference: cursor flag)
 	const iterDecl = makeVarDecl(iterName, d.forOfIterable, DeclKind.Const, loc);
-	iterDecl.flags = iterDecl.flags | NF_CURSOR;
+	iterDecl.flags = iterDecl.flags | NodeFlag.Cursor;
 
 	// let $slot = 0;
 	const slotDecl = makeVarDecl(slotName, makeNumber(0, loc), DeclKind.Let, loc);

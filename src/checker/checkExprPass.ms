@@ -2,13 +2,13 @@
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
 import {
-	Node, NodeKind, NodeData, createNode, NF_SEM,
+	Node, NodeKind, NodeData, createNode, NodeFlag,
 	IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData,
 	CallExprData, MemberExprData, ArrayAccessData,
 	ObjectLiteralData, ArrayLiteralData, ConditionalExprData,
 	TypeAssertionData, SpreadExprData, NewExprData, TryExprData,
 	AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData,
-	HiddenDerefData, HiddenStdConvData, MacroInvocationData,
+	HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData,
 	ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData,
 	FunctionDeclData, BlockStmtData, ExprStmtData,
 } from "../ast/node";
@@ -35,7 +35,7 @@ import {
 } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
 import { resolveAnnotation, ensureShaped } from "./resolvePass";
-import { parseNumberLiteral } from "../utils/string";
+import { parseNumberLiteral, sliceStr, findChar } from "../utils/string";
 
 // ===== Standard-Aligned Extension Receiver Matching =====
 // Standard reference pattern for extension matching compares nominal types by identity.
@@ -100,7 +100,7 @@ function filterExtsByReceiverType(exts: ExtensionMethod[], objType: Type): Exten
 
 export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): Type {
 	// Implementation parity: skip already-checked nodes (nfSem guard)
-	if ((node.flags & NF_SEM) !== 0 && node.nodeType !== null) return node.nodeType;
+	if ((node.flags & NodeFlag.Sem) !== 0 && node.nodeType !== null) return node.nodeType;
 	if (isCancelled(ctx.cancelCtx, ctx.cancelVersion)) return unknownType();
 
 	const result = match (node.kind) {
@@ -224,7 +224,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			const d = node.data as TypeAssertionData;
 			const srcType = checkExpr(ctx, d.asExpr, null as unknown as Type);
 			const targetType = (d.asType !== "") ? resolveAnnotation(d.asType, ctx) : unknownType();
-			// Nim parity: resolve as-cast target to actual union variant type.
+			// reference parity: resolve as-cast target to actual union variant type.
 			// If source is Union and target matches a variant by first field name,
 			// use the variant type (preserves identity for codegen variant access).
 			if (srcType !== null && srcType.kind === TypeKind.Union && targetType.kind === TypeKind.Object && srcType.typeChildren !== null && targetType.typeNames !== null && targetType.typeNames.length > 0) {
@@ -309,6 +309,10 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 		NodeKind.MacroInvocation => {
 			// Implementation parity: pragma/macro args are type-checked
 			const md = node.data as MacroInvocationData;
+			// reference parity: @emit backtick interpolation (reference emit processing)
+			if (md.macroName === "emit") {
+				processEmitInterpolation(ctx, md, node);
+			}
 			let ai = 0;
 			while (ai < md.macroArgs.length) {
 				checkExpr(ctx, md.macroArgs[ai], null as unknown as Type);
@@ -319,7 +323,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 		_ => unknownType(),
 	};
 	node.nodeType = result;
-	node.flags = node.flags | NF_SEM;
+	node.flags = node.flags | NodeFlag.Sem;
 	return result;
 }
 
@@ -585,7 +589,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 					const convTok = createToken(TokenKind.Ident, "", d.arguments[pi].location.line);
 					const convNode = createNode(NodeKind.HiddenStdConv, { convExpr: d.arguments[pi], convType: paramType }, convTok);
 					convNode.nodeType = paramType;
-					convNode.flags = convNode.flags | 1; // NF_SEM
+					convNode.flags = convNode.flags | NodeFlag.Sem;
 					d.arguments[pi] = convNode;
 				}
 			}
@@ -1167,6 +1171,85 @@ function checkArrowExpr(ctx: CheckerContext, node: Node): Type {
 function checkFuncExpr(ctx: CheckerContext, node: Node): Type {
 	const d = node.data as FunctionExprData;
 	return checkAnonymousFunction(ctx, "(anon)", d.funcExprParams, d.funcExprBody);
+}
+
+// ===== @emit Backtick Interpolation (reference emit processing parity) =====
+// Scans a single string arg for `identifier` patterns, splits into multiple args:
+// string literals for raw text, Identifier nodes for resolved symbols.
+
+function processEmitInterpolation(ctx: CheckerContext, md: MacroInvocationData, node: Node): void {
+	if (md.macroArgs.length !== 1) return;
+	const arg = md.macroArgs[0];
+	if (arg.kind !== NodeKind.StringLiteral) return;
+	const sd = arg.data as StringLiteralData;
+	const str = sd.value;
+
+	// Quick check: any backticks?
+	if (findChar(str, "`") < 0) return;
+
+	// Parse backtick-delimited identifiers (reference pattern: `identifier`)
+	const newArgs: Node[] = [];
+	const line = node.location.line;
+	let a = 0;
+	while (a < str.length) {
+		let b = a;
+		// Find next backtick
+		while (b < str.length && str.charAt(b) !== "`") {
+			b = b + 1;
+		}
+		// Emit raw text before backtick
+		if (b > a) {
+			const sub = sliceStr(str, a, b);
+			const strNode = createNode(NodeKind.StringLiteral, { value: sub },
+				createToken(TokenKind.StringLiteral, sub, line));
+			strNode.nodeType = stringType();
+			newArgs.push(strNode);
+		}
+		if (b >= str.length) break;
+		// Find closing backtick
+		let c = b + 1;
+		while (c < str.length && str.charAt(c) !== "`") {
+			c = c + 1;
+		}
+		if (c >= str.length) {
+			// Unterminated backtick — emit identifier text without the backtick (reference: substr(str, b+1))
+			const rest = sliceStr(str, b + 1, str.length);
+			if (rest.length > 0) {
+				const restNode = createNode(NodeKind.StringLiteral, { value: rest },
+					createToken(TokenKind.StringLiteral, rest, line));
+				restNode.nodeType = stringType();
+				newArgs.push(restNode);
+			}
+			break;
+		}
+		// Extract identifier between backticks
+		const ident = sliceStr(str, b + 1, c);
+		if (ident.length > 0) {
+			const sym = lookupSymbol(ctx.table, ident);
+			if (sym !== null) {
+				const idNode = createNode(NodeKind.Identifier, { name: ident },
+					createToken(TokenKind.Identifier, ident, line));
+				idNode.resolvedSym = sym;
+				idNode.nodeType = sym.symType;
+				newArgs.push(idNode);
+			} else {
+				// Unknown symbol — keep as string literal (reference behavior)
+				const strNode = createNode(NodeKind.StringLiteral, { value: ident },
+					createToken(TokenKind.StringLiteral, ident, line));
+				strNode.nodeType = stringType();
+				newArgs.push(strNode);
+			}
+		} else {
+			// Empty backticks `` — emit single backtick (reference parity: $marker)
+			const btNode = createNode(NodeKind.StringLiteral, { value: "`" },
+				createToken(TokenKind.StringLiteral, "`", line));
+			btNode.nodeType = stringType();
+			newArgs.push(btNode);
+		}
+		a = c + 1;
+	}
+	// Replace macroArgs with the interpolated args
+	md.macroArgs = newArgs;
 }
 
 // Register callback at module load time

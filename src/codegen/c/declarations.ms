@@ -15,7 +15,7 @@ import {
 	ObjectLiteralData,
 	ExprStmtData, MacroInvocationData,
 } from "../../ast/node";
-import { sliceStr } from "../../utils/string";
+import { sliceStr, startsWith } from "../../utils/string";
 import { Type, TypeKind } from "../../checker/types";
 import {
 	CGen, CProc, CSection, Builder,
@@ -26,14 +26,14 @@ import {
 	aliveSetHas,
 } from "./context";
 import { genExpr } from "./expressions";
-import { genStmt, genStmts } from "./statements";
+import { genStmt, genStmts, resolveEmitArgs } from "./statements";
 import { mangle, mangleTypeName, mangleFieldName, mangledFunctionName, safeName } from "./names";
 import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, annotationToC } from "./types";
 import { genTestDeclNode } from "./test";
 import { ccgIntroducedPtr } from "../../transform/native/pointerParam";
 import {
 	Symbol, SymbolKind, SymbolState,
-	hasFlag, SF_EXPORTED, SF_STATIC, SF_IMPORT_C,
+	hasFlag, SymbolFlag,
 } from "../../checker/symbol";
 // NOTE: parser/context imports are in index.ms (not here) to avoid DRC union member count issues.
 // genGenericTypeInsts lives in index.ms for the same reason.
@@ -63,6 +63,52 @@ function endsWith(s: string, suffix: string): boolean {
 	return s.slice(s.length - suffix.length, s.length) === suffix;
 }
 
+// DRC lifecycle hooks + operator eq need external linkage for cross-module access.
+// reference parity: these are regular procs emitted in defining module, prototyped in consumers.
+function isDrcLifecycleName(name: string): boolean {
+	return endsWith(name, "_destroy") || endsWith(name, "_copy") ||
+		endsWith(name, "_sink") || endsWith(name, "_wasMoved") ||
+		endsWith(name, "_dup") || endsWith(name, "_eq") ||
+		endsWith(name, "_trace") || endsWith(name, "_typeInfo");
+}
+
+// reference parity: genProcNoForward emits genProcPrototype(m, prc) in the calling module
+// for cross-module procs. We do the same for DRC hooks: if codegen encounters a call
+// to a DRC lifecycle function not yet declared, emit a forward prototype.
+// Signatures are known by convention (suffix determines parameter pattern).
+export function ensureDrcProto(g: CGen, callee: string): void {
+	if (!isDrcLifecycleName(callee)) return;
+	if (nameSetHas(g.declaredProcs, callee)) return;
+	nameSetAdd(g.declaredProcs, callee);
+
+	// Extract type name prefix: "TypeName_destroy" → "TypeName"
+	const lastUnderscore = callee.lastIndexOf("_");
+	if (lastUnderscore < 0) return;
+	const typeName = callee.slice(0, lastUnderscore);
+	const suffix = callee.slice(lastUnderscore, callee.length);
+
+	let proto = "";
+	if (suffix === "_destroy" || suffix === "_wasMoved") {
+		// void TypeName_destroy(TypeName* self)
+		proto = "void " + callee + "(" + typeName + "* self)";
+	} else if (suffix === "_copy" || suffix === "_sink") {
+		// void TypeName_copy(TypeName* dest, TypeName* src)
+		proto = "void " + callee + "(" + typeName + "* dest, " + typeName + "* src)";
+	} else if (suffix === "_dup") {
+		// TypeName TypeName_dup(TypeName* src)
+		proto = typeName + " " + callee + "(" + typeName + "* src)";
+	} else if (suffix === "_eq") {
+		// MS_BOOL TypeName_eq(TypeName* a, TypeName* b)
+		proto = "MS_BOOL " + callee + "(" + typeName + "* a, " + typeName + "* b)";
+	} else if (suffix === "_trace") {
+		// void TypeName_trace(TypeName* self, void* callback)
+		proto = "void " + callee + "(" + typeName + "* self, void* callback)";
+	} else {
+		return;
+	}
+	addLine(sec(g, CSection.ProcHeaders), proto + ";");
+}
+
 export function genDecl(g: CGen, node: Node, exported: boolean): void {
 	if (node === null) return;
 
@@ -78,7 +124,7 @@ export function genDecl(g: CGen, node: Node, exported: boolean): void {
 		const d = node.data as ExportDeclData;
 		genDecl(g, d.exportedDecl, true);
 	}
-	else if (k === NodeKind.ImportDecl) { /* imports handled at module level */ }
+	else if (k === NodeKind.ImportDecl) { /* handled by destructorLifting for types */ }
 	else if (k === NodeKind.DecoratedDecl) {
 		const d = node.data as DecoratedDeclData;
 		genDecl(g, d.decoratedNode, exported);
@@ -97,7 +143,7 @@ export function genDecl(g: CGen, node: Node, exported: boolean): void {
 // Standard reference pattern: extern header provides the declaration.
 // Only emit forward struct decl for opaque types without a providing header.
 // Variables/consts: always provided by @include headers — no codegen emission.
-// Functions: handled by FunctionDecl path (prototype only via SF_IMPORT_C).
+// Functions: handled by FunctionDecl path (prototype only via SymbolFlag.ImportC).
 
 function genExternDecl(g: CGen, node: Node): void {
 	const d = node.data as ExternDeclData;
@@ -118,7 +164,7 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 
 	// Module-qualified name (Standard reference implementation parity)
 	const isMain = d.fnName === "main";
-	const isExternFn = sym !== null && hasFlag(sym, SF_IMPORT_C);
+	const isExternFn = sym !== null && hasFlag(sym, SymbolFlag.ImportC);
 	let ovIdx = 0;
 	if (sym !== null && sym.overloads !== null && sym.overloads.length > 0) {
 		ovIdx = findOverloadIdx(sym, node.resolvedSym);
@@ -155,8 +201,10 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	// Non-exported functions get static prefix (Standard implementation parity)
 	// main() is never static — called from dispatcher
 	// Lifted functions (sym === null) are always static
-	const isExported = sym !== null && (exported || hasFlag(sym, SF_EXPORTED));
-	const prefix = (isExported || isExternFn || isMain) ? "" : "static ";
+	// DRC lifecycle hooks need external linkage for cross-module access (reference parity)
+	const isExported = sym !== null && (exported || hasFlag(sym, SymbolFlag.Exported));
+	const isDrcHook = isDrcLifecycleName(d.fnName);
+	const prefix = (isExported || isExternFn || isMain || isDrcHook) ? "" : "static ";
 
 	// Emit prototype to ProcHeaders — NRVO functions return void
 	const actualRetType = nrvo ? "void" : cRetType;
@@ -382,18 +430,56 @@ function genConstructor(g: CGen, node: Node, className: string): void {
 
 // ===== Top-level Statement =====
 
+// ===== Top-Level @emit (Reference genEmit + determineSection parity) =====
+// Resolves emit args (with backtick-interpolated symbols), then routes each line
+// to the appropriate CSection based on section markers.
+
+function genTopLevelEmit(g: CGen, mi: MacroInvocationData): void {
+	const code = resolveEmitArgs(g, mi, null as unknown as CProc);
+	// Split on newlines and route each line through section detection (reference pattern)
+	let start = 0;
+	let pos = 0;
+	while (pos < code.length) {
+		if (code.charAt(pos) === "\n") {
+			const line = sliceStr(code, start, pos);
+			if (line.length > 0) emitToSection(g, line);
+			start = pos + 1;
+		}
+		pos = pos + 1;
+	}
+	if (start < code.length) {
+		const line = sliceStr(code, start, code.length);
+		if (line.length > 0) emitToSection(g, line);
+	}
+}
+
+// Reference's determineSection: detect section markers in emit code
+function emitToSection(g: CGen, code: string): void {
+	let target = CSection.ProcHeaders;
+	if (startsWith(code, "/*TYPESECTION*/")) target = CSection.Types;
+	else if (startsWith(code, "/*VARSECTION*/")) target = CSection.GlobalVars;
+	else if (startsWith(code, "/*INCLUDESECTION*/")) target = CSection.Headers;
+	addLine(sec(g, target), code);
+}
+
 function genTopLevelStmt(g: CGen, node: Node): void {
 	// Global variable declarations go to GlobalVars section
 	if (node.kind === NodeKind.VariableDecl) {
 		genGlobalVar(g, node);
 		return;
 	}
-	// Skip top-level @emit/@include/@compile/@link/@passC/@passL — already handled by checker directives
+	// Handle top-level directives
 	if (node.kind === NodeKind.ExprStmt) {
 		const esd = node.data as ExprStmtData;
 		if (esd.expr.kind === NodeKind.MacroInvocation) {
 			const mi = esd.expr.data as MacroInvocationData;
-			if (mi.macroName === "emit" || mi.macroName === "include" || mi.macroName === "compile" || mi.macroName === "link" || mi.macroName === "passC" || mi.macroName === "passL") {
+			// @emit: codegen handles directly (Reference genEmit parity — p.prc == nil path)
+			if (mi.macroName === "emit" && mi.macroArgs.length > 0) {
+				genTopLevelEmit(g, mi);
+				return;
+			}
+			// @include/@compile/@link/@passC/@passL: already handled by checker directives
+			if (mi.macroName === "include" || mi.macroName === "compile" || mi.macroName === "link" || mi.macroName === "passC" || mi.macroName === "passL") {
 				return;
 			}
 		}

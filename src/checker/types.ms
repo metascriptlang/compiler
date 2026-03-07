@@ -85,9 +85,6 @@ export enum AttachedOp {
 	AttachedDup,         // =dup
 	AttachedSink,        // =sink
 	AttachedTrace,       // =trace (ORC)
-	AttachedEq,          // =eq (auto-generated field-by-field ==)
-	AttachedLt,          // =lt (auto-generated lexicographic < for tuples)
-	AttachedLe,          // =le (auto-generated lexicographic <= for tuples)
 }
 
 export interface Type {
@@ -100,14 +97,14 @@ export interface Type {
 	typeFlags: number;        // Bitfield: 1=isInterface, 2=optional, 4=readonly, 8=static; bits 8-15=minArity
 	callConv: CallingConvention; // Function calling convention (Standard parity)
 	attachedOps: string[];    // Lifecycle hook names indexed by AttachedOp (Standard parity)
-	typeChildrenFlags: number[]; // Parameter flags (SF_SINK / SF_LENT) for Function types
+	typeChildrenFlags: number[]; // Parameter flags (SymbolFlag.Sink / SymbolFlag.Lent) for Function types
 }
 
-// ===== In-Place Type Upgrade (Nim parity: assignType) =====
+// ===== In-Place Type Upgrade (reference parity: assignType) =====
 // Copies all fields from source into target, preserving target's object identity.
 // This is critical for circular type resolution: forward placeholder objects are
 // upgraded in-place so all existing references automatically see the resolved type.
-// Nim: semstmts.nim assignType(s.typ, t) — same pattern.
+// Reference: reference statement processing assignType(s.typ, t) — same pattern.
 
 export function assignType(target: Type, source: Type): void {
 	target.kind = source.kind;
@@ -332,7 +329,7 @@ export function hasDestructor(t: Type): boolean {
 	return getAttachedOp(t, AttachedOp.AttachedDestructor) !== "";
 }
 
-// ===== Tuple Type Name (Nim parity: deterministic name for structural types) =====
+// ===== Tuple Type Name (reference parity: deterministic name for structural types) =====
 // DJB2 hash of type structure → "msTuple_HASH". Same algorithm as C codegen
 // (types.ms:genTupleType) so generated comparison functions match struct names.
 
@@ -401,6 +398,77 @@ export function isClassType(t: Type): boolean {
 	if (t === null) return false;
 	if (t.kind !== TypeKind.Object) return false;
 	return (t.typeFlags & 1) === 0 && t.typeName !== "";
+}
+
+// ===== Type Size Estimation (Nim parity: getSize in ccgutils) =====
+// Returns estimated C struct size in bytes for ccgIntroducedPtr threshold.
+// Nim: floatSize * 3 = 24 bytes on 64-bit. Objects/tuples larger than this → pass by pointer.
+let _sizeDepth: number = 0;
+
+export function getTypeSize(t: Type): number {
+	if (t === null) return 0;
+	// Guard against recursive types (e.g. Type has Type[] fields)
+	if (_sizeDepth > 8) return 64; // assume large → pass by pointer
+	_sizeDepth = _sizeDepth + 1;
+	const result = getTypeSizeInner(t);
+	_sizeDepth = _sizeDepth - 1;
+	return result;
+}
+
+function getTypeSizeInner(t: Type): number {
+	return match (t.kind) {
+		TypeKind.Number | TypeKind.Float32 | TypeKind.Float64 => 8,
+		TypeKind.Int8 | TypeKind.Uint8 => 1,
+		TypeKind.Int16 | TypeKind.Uint16 => 2,
+		TypeKind.Int32 | TypeKind.Uint32 | TypeKind.Char => 4,
+		TypeKind.Int64 | TypeKind.Uint64 => 8,
+		TypeKind.Boolean => 1,
+		TypeKind.String => targetPtrSize + targetPtrSize, // msString: data ptr + length
+		TypeKind.CString => targetPtrSize,
+		TypeKind.Enum => 4, // C int
+		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow => targetPtrSize,
+		TypeKind.Array => targetPtrSize + targetPtrSize, // msArray: data ptr + length
+		TypeKind.Function => targetPtrSize + targetPtrSize, // msClosure: fn ptr + env ptr
+		TypeKind.Object => {
+			// Sum of field sizes
+			if (t.typeChildren === null) { targetPtrSize; } else {
+				let size = 0;
+				for (const field of t.typeChildren) {
+					size = size + getTypeSize(field);
+				}
+				size;
+			}
+		},
+		TypeKind.Tuple => {
+			if (t.typeChildren === null) { 0; } else {
+				let size = 0;
+				for (const elem of t.typeChildren) {
+					size = size + getTypeSize(elem);
+				}
+				size;
+			}
+		},
+		TypeKind.Result => {
+			// ok bool + max(okType, errType)
+			const okSize = getTypeSize(t.typeReturn);
+			const errSize = getTypeSize(t.typeExtra);
+			const payloadSize = okSize > errSize ? okSize : errSize;
+			1 + payloadSize;
+		},
+		TypeKind.Union => {
+			// tag + max(member sizes)
+			let maxSize = 0;
+			if (t.typeChildren !== null) {
+				for (const member of t.typeChildren) {
+					const ms = getTypeSize(member);
+					if (ms > maxSize) maxSize = ms;
+				}
+			}
+			4 + maxSize;
+		},
+		TypeKind.Span => targetPtrSize + targetPtrSize, // ptr + length
+		_ => targetPtrSize, // conservative fallback
+	};
 }
 
 // ===== Generic Instantiation =====

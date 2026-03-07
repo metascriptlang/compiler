@@ -324,7 +324,6 @@ export interface CheckerContext {
 	includeDirectives: string; // accumulated @include args, newline-separated
 	compileDirectives: string; // accumulated @compile args, newline-separated
 	compilerFlags: string;     // accumulated @link/@passC/@passL args, space-separated
-	emitDirectives: string;    // accumulated @emit args, newline-separated (raw C code)
 	cancelCtx: CancelCtx;       // null in batch mode, set for LSP
 	cancelVersion: number;       // version at check start
 	modulePath: string;          // Implementation parity: source path for name mangling
@@ -350,7 +349,6 @@ export function createContext(): CheckerContext {
 		includeDirectives: "",
 		compileDirectives: "",
 		compilerFlags: "",
-		emitDirectives: "",
 		cancelCtx: null as unknown as CancelCtx,
 		cancelVersion: 0,
 		hasFatalError: false,

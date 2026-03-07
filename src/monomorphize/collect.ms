@@ -1110,7 +1110,7 @@ function monoInstantiateEntry(program: Node, entry: MonoEntry): Node {
 	return cloned;
 }
 
-// Fixed-point instantiation loop (reference: seminst.nim:377, max 50 iterations).
+// Fixed-point instantiation loop (reference: reference instantiation:377, max 50 iterations).
 // After cloning each entry, re-scan its body for nested generic calls and register them.
 // Repeat until no new entries appear.
 function monoInstantiateAllFixedPoint(

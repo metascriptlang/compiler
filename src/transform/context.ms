@@ -16,7 +16,7 @@ export interface TransformContext {
 	fnDeclNames: string[];  // collected function declaration names (for closureCallMarker)
 	checkerCtx: CheckerContext;  // type info from Phase 2 (null in test mode)
 	jsBackend: boolean;  // true = skip C-specific transforms (lambda lifting, destructor lifting, etc.)
-	pendingTupleOps: PendingTupleOp[];  // tuple comparison ops to generate (Nim parity)
+	pendingTupleOps: PendingTupleOp[];  // tuple comparison ops to generate (reference parity)
 }
 
 export function createTransformContext(): TransformContext {

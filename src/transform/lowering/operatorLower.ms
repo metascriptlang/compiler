@@ -1,6 +1,6 @@
 // Operator Lowering — rewrite binary ops to function calls when operator overload exists
 //
-// Nim parity: system.nim defines `proc \`==\`*[T: tuple|object](x, y: T): bool`
+// reference parity: reference core defines `proc \`==\`*[T: tuple|object](x, y: T): bool`
 // and semantic analysis resolves `a == b` into `\`==\`(a, b)` as a normal call.
 // Codegen never sees struct == struct.
 //
@@ -8,13 +8,13 @@
 // operator function registered in ExtensionRegistry, rewrite to CallExpr.
 // Built-in types (number, string, boolean) are never rewritten.
 //
-// Nim parity coverage:
-//   system.nim:1973  — proc `==`*[T: tuple|object]  → auto-generated _eq
-//   system.nim:1980  — proc `<=`*[T: tuple]          → auto-generated _le
-//   system.nim:1989  — proc `<`*[T: tuple]           → auto-generated _lt
-//   comparisons.nim  — template `!=` = not(==)        → derived from ==
-//   comparisons.nim  — template `>` = y < x           → derived from <
-//   comparisons.nim  — template `>=` = y <= x         → derived from <=
+// reference parity coverage:
+//   reference core:1973  — proc `==`*[T: tuple|object]  → auto-generated _eq
+//   reference core:1980  — proc `<=`*[T: tuple]          → auto-generated _le
+//   reference core:1989  — proc `<`*[T: tuple]           → auto-generated _lt
+//   reference comparisons  — template `!=` = not(==)        → derived from ==
+//   reference comparisons  — template `>` = y < x           → derived from <
+//   reference comparisons  — template `>=` = y <= x         → derived from <=
 //
 // Reference compiler: parser.zig:7162 isOperatorName, lexer.zig:422 scanBacktick
 
@@ -23,7 +23,7 @@ import { TransformContext, PendingTupleOp } from "../context";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall, makeUnary } from "../util";
 import { lookupSymbol } from "../../checker/symbol";
-import { Type, TypeKind, typeNameOf, tupleTypeName } from "../../checker/types";
+import { Type, TypeKind, typeNameOf, tupleTypeName, createFunction, booleanType } from "../../checker/types";
 import { findExtension, ExtensionMethod } from "../../checker/context";
 
 // ===== Type Resolution =====
@@ -72,9 +72,9 @@ function binaryOpName(op: string): string {
 	};
 }
 
-// ===== Derived Operators (Nim parity: system/comparisons.nim) =====
+// ===== Derived Operators (reference parity: system/reference comparisons) =====
 //
-// Nim defines derived operators as templates — pure syntactic rewrites:
+// Reference implementation defines derived operators as templates — pure syntactic rewrites:
 //   template `!=`*(x, y: untyped): untyped = not (x == y)
 //   template `>`*(x, y: untyped): untyped  = y < x
 //   template `>=`*(x, y: untyped): untyped = y <= x
@@ -109,9 +109,9 @@ function hasOperator(ctx: TransformContext, typeName: string, opName: string, le
 	if (ctx.checkerCtx.extensionRegistry !== null) {
 		if (findExtension(ctx.checkerCtx.extensionRegistry, typeName, opName) !== null) return true;
 	}
-	// Auto-generated == exists for all value-type objects (Nim: proc `==`*[T: tuple|object])
+	// Auto-generated == exists for all value-type objects (reference: proc `==`*[T: tuple|object])
 	if (opName === "==" && isValueObject(leftType)) return true;
-	// Auto-generated ==, <, <= exist for all tuples (Nim: system.nim:1973-1996)
+	// Auto-generated ==, <, <= exist for all tuples (reference: reference core:1973-1996)
 	if (leftType.kind === TypeKind.Tuple) {
 		if (opName === "==" || opName === "<" || opName === "<=") return true;
 	}
@@ -149,11 +149,15 @@ function resolveOpCall(ctx: TransformContext, typeName: string, opName: string, 
 			return makeCall(makeIdent(opName, loc), [left, right], loc);
 		}
 	}
-	// Auto-generated == for interfaces
+	// Auto-generated == for interfaces — codegen handles & via ccgIntroducedPtr (Nim parity:
+	// system.nim:1973 `==`*[T: object](x, y: T) takes value params, codegen adds pointer)
 	if (opName === "==" && isValueObject(leftType)) {
-		return makeCall(makeIdent(typeName + "_eq", loc), [left, right], loc);
+		const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
+		const callee = makeIdent(typeName + "_eq", loc);
+		callee.nodeType = fnType;
+		return makeCall(callee, [left, right], loc);
 	}
-	// Auto-generated ==, <, <= for tuples (Nim: system.nim:1973-1996)
+	// Auto-generated ==, <, <= for tuples (reference: reference core:1973-1996)
 	if (leftType.kind === TypeKind.Tuple) {
 		const tName = tupleTypeName(leftType);
 		if (tName === "") return null as unknown as Node;
@@ -165,7 +169,10 @@ function resolveOpCall(ctx: TransformContext, typeName: string, opName: string, 
 		};
 		if (suffix !== "") {
 			registerTupleOp(ctx, leftType, tName, suffix);
-			return makeCall(makeIdent(tName + suffix, loc), [left, right], loc);
+			const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
+			const callee = makeIdent(tName + suffix, loc);
+			callee.nodeType = fnType;
+			return makeCall(callee, [left, right], loc);
 		}
 	}
 	return null as unknown as Node;
@@ -191,7 +198,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 
 	const loc = node.location;
 
-	// 1. Explicit user-defined operator overload takes priority (Nim parity:
+	// 1. Explicit user-defined operator overload takes priority (reference parity:
 	//    user overloads beat magic builtins). Checked BEFORE isBuiltinType
 	//    so that e.g. `==`(a: int32, b: int32) overrides native ==.
 	if (ctx.checkerCtx.extensionRegistry !== null) {
@@ -204,7 +211,10 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	// 2. Built-in types use native C operators — no rewrite needed.
 	if (isBuiltinType(typeName)) return node;
 
-	// 3. Derived operators (Nim: system/comparisons.nim templates).
+	// 3. Null comparisons — value types can't be nil (Nim: objects != nil is type error).
+	if (d.left.kind === NodeKind.NullLiteral || d.right.kind === NodeKind.NullLiteral) return node;
+
+	// 4. Derived operators (reference: system/reference comparisons templates).
 	//    != → not(==), > → swap(<), >= → swap(<=)
 	//    Generic — works for any type that has the base operator.
 	const baseOp = derivedBaseOp(opName);
@@ -221,13 +231,16 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 		}
 	}
 
-	// 4. Direct base operators for value-type objects (auto-generated ==).
+	// 5. Direct base operators for value-type objects (auto-generated ==).
 	if (opName === "==" && isValueObject(leftType)) {
-		return makeCall(makeIdent(typeName + "_eq", loc), [d.left, d.right], loc);
+		const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
+		const callee = makeIdent(typeName + "_eq", loc);
+		callee.nodeType = fnType;
+		return makeCall(callee, [d.left, d.right], loc);
 	}
 
-	// 5. Direct base operators for tuples (auto-generated ==, <, <=).
-	//    Nim: system.nim:1973 (==), :1989 (<), :1980 (<=)
+	// 6. Direct base operators for tuples (auto-generated ==, <, <=).
+	//    Reference: reference core:1973 (==), :1989 (<), :1980 (<=)
 	if (leftType.kind === TypeKind.Tuple) {
 		const resolved = resolveOpCall(ctx, typeName, opName, leftType, d.left, d.right, loc);
 		if (resolved !== null) return resolved;
@@ -322,7 +335,7 @@ test "operator lower rewrites builtin type with explicit override" {
 }
 
 test "operator lower auto-rewrites === on interface without explicit extension" {
-	// Nim parity: all value-type objects get auto-generated == (no explicit extension needed)
+	// reference parity: all value-type objects get auto-generated == (no explicit extension needed)
 	const checkerCtx = createContext();
 	checkerCtx.extensionRegistry = createExtensionRegistry();
 	const objType = createObject("Token", [], [], true);
@@ -352,10 +365,10 @@ test "operator lower does not rewrite non-interface objects" {
 	check(firstExprKind(result) === NodeKind.BinaryExpr);
 }
 
-// ===== Derived operator tests (Nim: system/comparisons.nim) =====
+// ===== Derived operator tests (reference: system/reference comparisons) =====
 
 test "!== derives from == on interface (auto-generated)" {
-	// Nim: template `!=`*(x, y) = not (x == y)
+	// Reference: template `!=`*(x, y) = not (x == y)
 	const checkerCtx = createContext();
 	checkerCtx.extensionRegistry = createExtensionRegistry();
 	const objType = createObject("Token", [], [], true);
@@ -380,7 +393,7 @@ test "!== derives from explicit == extension" {
 }
 
 test "> derives from < (swap operands)" {
-	// Nim: template `>`*(x, y) = y < x
+	// Reference: template `>`*(x, y) = y < x
 	const ctx = setupCtx("Vec", "<");
 	const pr = parseInput("a > b;");
 	if (!pr.ok) return;
@@ -390,7 +403,7 @@ test "> derives from < (swap operands)" {
 }
 
 test ">= derives from <= (swap operands)" {
-	// Nim: template `>=`*(x, y) = y <= x
+	// Reference: template `>=`*(x, y) = y <= x
 	const ctx = setupCtx("Vec", "<=");
 	const pr = parseInput("a >= b;");
 	if (!pr.ok) return;
@@ -431,7 +444,7 @@ test "explicit != overrides derivation from ==" {
 	check(firstExprKind(result) === NodeKind.CallExpr);
 }
 
-// ===== Tuple operator tests (Nim: system.nim:1973-1996) =====
+// ===== Tuple operator tests (reference: reference core:1973-1996) =====
 
 test "tuple === rewrites to _eq call" {
 	const ctx = setupTupleCtx();
@@ -460,7 +473,7 @@ test "tuple <= rewrites to _le call" {
 }
 
 test "tuple !== derives from == (auto-generated)" {
-	// Nim: template `!=` = not(==) — works for tuples too
+	// Reference: template `!=` = not(==) — works for tuples too
 	const ctx = setupTupleCtx();
 	const pr = parseInput("a !== b;");
 	if (!pr.ok) return;
@@ -469,7 +482,7 @@ test "tuple !== derives from == (auto-generated)" {
 }
 
 test "tuple > derives from < (swap)" {
-	// Nim: template `>` = y < x — works for tuples too
+	// Reference: template `>` = y < x — works for tuples too
 	const ctx = setupTupleCtx();
 	const pr = parseInput("a > b;");
 	if (!pr.ok) return;
@@ -478,7 +491,7 @@ test "tuple > derives from < (swap)" {
 }
 
 test "tuple >= derives from <= (swap)" {
-	// Nim: template `>=` = y <= x — works for tuples too
+	// Reference: template `>=` = y <= x — works for tuples too
 	const ctx = setupTupleCtx();
 	const pr = parseInput("a >= b;");
 	if (!pr.ok) return;

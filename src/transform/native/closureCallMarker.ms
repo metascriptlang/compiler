@@ -16,7 +16,7 @@
 
 import {
 	Node, NodeKind, SymbolKind, Symbol,
-	CallExprData, SourceLocation, NF_CLOSURE, createNodeAt,
+	CallExprData, SourceLocation, NodeFlag, createNodeAt,
 } from "../../ast/node";
 import { Type, TypeKind, CallingConvention, createFunction, voidType } from "../../checker/types";
 import { Token } from "../../lexer/token";
@@ -102,7 +102,7 @@ function wrapFuncArgsAsThunks(cd: CallExprData): void {
 		const loc = arg.location;
 		const nullNode = makeNull(loc);
 		const thunk = makeObjectLiteral(["fn", "env"], [arg, nullNode], loc);
-		thunk.flags = thunk.flags | NF_CLOSURE;
+		thunk.flags = thunk.flags | NodeFlag.Closure;
 		// Set closure type from the function's own symbol type
 		if (argSym.symbolType !== null) {
 			thunk.nodeType = argSym.symbolType;
