@@ -45,7 +45,7 @@ function markCall(node: Node): Node {
 		return node;
 	}
 
-	// Nim parity: generateThunk — wrap named functions passed as closure-typed args.
+	// Implementation parity: wrap named functions passed as closure-typed args.
 	// Must run before early returns — any call (direct or closure) can have function args.
 	wrapFuncArgsAsThunks(cd);
 
@@ -70,7 +70,7 @@ function markCall(node: Node): Node {
 	// Variable/Parameter with Function type → closure call
 	if (sym.symbolKind === SymbolKind.Variable || sym.symbolKind === SymbolKind.Parameter) {
 		cd.isDirectCall = false;
-		// Nim parity: set callConv on callee type (ccClosure)
+		// Implementation parity: set callConv on callee type (ccClosure)
 		if (cd.callee.nodeType !== null && cd.callee.nodeType.kind === TypeKind.Function) {
 			cd.callee.nodeType.callConv = CallingConvention.CcClosure;
 		}
@@ -79,7 +79,7 @@ function markCall(node: Node): Node {
 	return node;
 }
 
-// Wrap function-reference arguments into closure thunks (Nim: generateThunk).
+// Wrap function-reference arguments into closure thunks (standard pattern).
 // Scans CallExpr arguments: if arg is an Identifier → SymbolKind.Function
 // and the callee's corresponding parameter expects a Function/closure type,
 // wrap it in ObjectLiteral { fn, env } with closure nodeType.
@@ -167,7 +167,7 @@ test "Function symbol is direct call" {
 	const sym = makeSymbol("foo", SymbolKind.Function, fnType, false);
 	const t = makeTestCall("foo", sym, fnType);
 	markClosureCalls(t.prog, makeCtx());
-	expect(t.cd.isDirectCall === true);
+	assert t.cd.isDirectCall === true;
 }
 
 test "Variable symbol is closure call" {
@@ -175,7 +175,7 @@ test "Variable symbol is closure call" {
 	const sym = makeSymbol("cb", SymbolKind.Variable, fnType, false);
 	const t = makeTestCall("cb", sym, fnType);
 	markClosureCalls(t.prog, makeCtx());
-	expect(t.cd.isDirectCall === false);
+	assert t.cd.isDirectCall === false;
 }
 
 test "Parameter symbol is closure call" {
@@ -183,19 +183,19 @@ test "Parameter symbol is closure call" {
 	const sym = makeSymbol("handler", SymbolKind.Parameter, fnType, false);
 	const t = makeTestCall("handler", sym, fnType);
 	markClosureCalls(t.prog, makeCtx());
-	expect(t.cd.isDirectCall === false);
+	assert t.cd.isDirectCall === false;
 }
 
 test "no resolvedSym stays direct (conservative)" {
 	const t = makeTestCall("unknown", null as unknown as Symbol, null as unknown as Type);
 	markClosureCalls(t.prog, makeCtx());
-	expect(t.cd.isDirectCall === true);
+	assert t.cd.isDirectCall === true;
 }
 
 test "MemberExpr callee is always direct" {
 	const t = makeMemberTestCall();
 	markClosureCalls(t.prog, makeCtx());
-	expect(t.cd.isDirectCall === true);
+	assert t.cd.isDirectCall === true;
 }
 
 test "closure call sets CcClosure callConv" {
@@ -203,9 +203,9 @@ test "closure call sets CcClosure callConv" {
 	const sym = makeSymbol("cb", SymbolKind.Variable, fnType, false);
 	const t = makeTestCall("cb", sym, fnType);
 	markClosureCalls(t.prog, makeCtx());
-	expect(t.cd.isDirectCall === false);
-	expect(t.cd.callee.nodeType !== null);
-	expect(t.cd.callee.nodeType.callConv === CallingConvention.CcClosure);
+	assert t.cd.isDirectCall === false;
+	assert t.cd.callee.nodeType !== null;
+	assert t.cd.callee.nodeType.callConv === CallingConvention.CcClosure;
 }
 
 test "Method symbol is direct call" {
@@ -213,14 +213,14 @@ test "Method symbol is direct call" {
 	const sym = makeSymbol("doStuff", SymbolKind.Method, fnType, false);
 	const t = makeTestCall("doStuff", sym, fnType);
 	markClosureCalls(t.prog, makeCtx());
-	expect(t.cd.isDirectCall === true);
+	assert t.cd.isDirectCall === true;
 }
 
 test "Class symbol is direct call" {
 	const sym = makeSymbol("Foo", SymbolKind.Class, null as unknown as Type, false);
 	const t = makeTestCall("Foo", sym, null as unknown as Type);
 	markClosureCalls(t.prog, makeCtx());
-	expect(t.cd.isDirectCall === true);
+	assert t.cd.isDirectCall === true;
 }
 
 test "imported function remains direct call" {
@@ -235,5 +235,5 @@ test "imported function remains direct call" {
 	markClosureCalls(t.prog, makeCtx());
 	
 	// Should NOT be marked as closure call
-	expect(t.cd.isDirectCall === true);
+	assert t.cd.isDirectCall === true;
 }

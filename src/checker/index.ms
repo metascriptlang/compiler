@@ -62,76 +62,76 @@ import { checkSource } from "./checkPass";
 import { lookupSymbol } from "./symbol";
 test "full program" {
 	const ctx = checkSource("const x = 1; function foo(a) { return a; } const y = foo;");
-	expect(!hasErrors(ctx));
-	expect(lookupSymbol(ctx.table, "x") !== null);
-	expect(lookupSymbol(ctx.table, "foo") !== null);
-	expect(lookupSymbol(ctx.table, "y") !== null);
+	assert !hasErrors(ctx);
+	assert lookupSymbol(ctx.table, "x") !== null;
+	assert lookupSymbol(ctx.table, "foo") !== null;
+	assert lookupSymbol(ctx.table, "y") !== null;
 }
 
 test "class + method + variable" {
 	const ctx = checkSource("class Point { getX() { return 1; } } const p = 1;");
-	expect(!hasErrors(ctx));
-	expect(lookupSymbol(ctx.table, "Point") !== null);
-	expect(lookupSymbol(ctx.table, "p") !== null);
+	assert !hasErrors(ctx);
+	assert lookupSymbol(ctx.table, "Point") !== null;
+	assert lookupSymbol(ctx.table, "p") !== null;
 }
 
 test "enum + usage" {
 	const ctx = checkSource("enum Color { Red, Green } const c = Color;");
-	expect(!hasErrors(ctx));
-	expect(lookupSymbol(ctx.table, "Color") !== null);
-	expect(lookupSymbol(ctx.table, "c") !== null);
+	assert !hasErrors(ctx);
+	assert lookupSymbol(ctx.table, "Color") !== null;
+	assert lookupSymbol(ctx.table, "c") !== null;
 }
 
 test "error count" {
 	const ctx = checkSource("const x = y; const z = w;");
-	expect(errorCount(ctx) === 2);
+	assert errorCount(ctx) === 2;
 }
 
 test "complex program" {
 	const src = "import { Token } from \"lexer\"; function parse(tokens) { for (const t of tokens) { if (true) { const x = t; } } return 1; }";
 	const ctx = checkSource(src);
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 }
 
 test "function resolved as callable" {
 	const ctx = checkSource("function add(a, b) { return 1; }");
 	const sym = lookupSymbol(ctx.table, "add");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Function);
-	expect(sym.symbolType.typeNames.length === 2);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Function;
+	assert sym.symbolType.typeNames.length === 2;
 }
 
 test "class resolved with members" {
 	const ctx = checkSource("class Vec { getX() { return 1; } }");
 	const sym = lookupSymbol(ctx.table, "Vec");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Object);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Object;
 }
 
 test "arithmetic inference" {
 	const ctx = checkSource("const x = 2 * 3;");
 	const sym = lookupSymbol(ctx.table, "x");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Number);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Number;
 }
 
 test "comparison inference" {
 	const ctx = checkSource("const x = 1 >= 2;");
 	const sym = lookupSymbol(ctx.table, "x");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Boolean);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Boolean;
 }
 
 test "string concat inference" {
 	const ctx = checkSource("const x = \"hello\" + \" world\";");
 	const sym = lookupSymbol(ctx.table, "x");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.String);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.String;
 }
 
 test "export function resolved" {
 	const ctx = checkSource("export function greet(name) { return 1; }");
 	const sym = lookupSymbol(ctx.table, "greet");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Function);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Function;
 }

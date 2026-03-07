@@ -88,69 +88,69 @@ export function allowsRegexAfter(s: LexerState): boolean {
 // ===== Tests =====
 test "createLexerState" {
 	const s = createLexerState("abc");
-	expect(s.pos === 0);
-	expect(s.line === 1);
-	expect(s.column === 1);
-	expect(s.tokens.length === 0);
-	expect(s.comments.length === 0);
+	assert s.pos === 0;
+	assert s.line === 1;
+	assert s.column === 1;
+	assert s.tokens.length === 0;
+	assert s.comments.length === 0;
 }
 
 test "peek at start" {
 	const s = createLexerState("xy");
-	expect(peek(s) === "x".code);
+	assert peek(s) === "x".code;
 }
 
 test "peek at EOF returns 0" {
 	const s = createLexerState("");
-	expect(peek(s) === 0);
+	assert peek(s) === 0;
 }
 
 test "peekAt with offset" {
 	const s = createLexerState("abc");
-	expect(peekAt(s, 0) === "a".code);
-	expect(peekAt(s, 1) === "b".code);
-	expect(peekAt(s, 2) === "c".code);
-	expect(peekAt(s, 3) === 0);
+	assert peekAt(s, 0) === "a".code;
+	assert peekAt(s, 1) === "b".code;
+	assert peekAt(s, 2) === "c".code;
+	assert peekAt(s, 3) === 0;
 }
 
 test "advanceChar updates pos and column" {
 	const s = createLexerState("ab");
 	const ch = advanceChar(s);
-	expect(ch === "a".code);
-	expect(s.pos === 1);
-	expect(s.column === 2);
-	expect(s.line === 1);
+	assert ch === "a".code;
+	assert s.pos === 1;
+	assert s.column === 2;
+	assert s.line === 1;
 }
 
 test "advanceChar newline updates line" {
 	const s = createLexerState("\nx");
 	advanceChar(s);
-	expect(s.line === 2);
-	expect(s.column === 1);
+	assert s.line === 2;
+	assert s.column === 1;
 }
 
 test "skip advances N chars" {
 	const s = createLexerState("abcde");
 	skip(s, 3);
-	expect(s.pos === 3);
-	expect(peek(s) === "d".code);
+	assert s.pos === 3;
+	assert peek(s) === "d".code;
 }
 
 test "addToken appends to tokens" {
 	const s = createLexerState("");
 	addToken(s, TokenKind.Number, "42", 1, 1);
-	expect(s.tokens.length === 1);
-	expect(s.tokens[0].kind === TokenKind.Number);
-	expect(s.tokens[0].value === "42");
-	expect(s.tokens[0].line === 1);
-	expect(s.tokens[0].column === 1);
+	assert s.tokens.length === 1;
+	assert s.tokens[0].kind === TokenKind.Number;
+	assert s.tokens[0].value === "42";
+	assert s.tokens[0].line === 1;
+	assert s.tokens[0].column === 1;
 }
 
 test "line tracking across multiple newlines" {
 	const s = createLexerState("\n\n\nx");
 	skip(s, 3);
-	expect(s.line === 4);
-	expect(s.column === 1);
+	assert s.line === 4;
+	assert s.column === 1;
 	advanceChar(s);
-	expect(s.column === 2);
+	assert s.column === 2;
 }

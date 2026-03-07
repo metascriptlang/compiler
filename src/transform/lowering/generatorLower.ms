@@ -481,21 +481,21 @@ export function lowerGenerator(program: Node, ctx: TransformContext): Node {
 }
 
 // ===== Tests =====
-test "non-generator passthrough" { expect(firstStmtKindAfter("function foo() { return 1; }", lowerGenerator) === NodeKind.FunctionDecl); }
+test "non-generator passthrough" { assert firstStmtKindAfter("function foo() { return 1; }", lowerGenerator) === NodeKind.FunctionDecl; }
 
-test "stmt count passthrough" { expect(stmtCountAfter("const x = 1;", lowerGenerator) === 1); }
+test "stmt count passthrough" { assert stmtCountAfter("const x = 1;", lowerGenerator) === 1; }
 
 test "generator still one stmt" {
 	// function* gen() { yield 1; } → function gen() { ... } — still 1 top-level stmt
-	expect(stmtCountAfter("function* gen() { yield 1; }", lowerGenerator) === 1);
+	assert stmtCountAfter("function* gen() { yield 1; }", lowerGenerator) === 1;
 }
 
-test "generator flag removed" { expect(firstStmtKindAfter("function* gen() { yield 1; }", lowerGenerator) === NodeKind.FunctionDecl); }
+test "generator flag removed" { assert firstStmtKindAfter("function* gen() { yield 1; }", lowerGenerator) === NodeKind.FunctionDecl; }
 
-test "two yields" { expect(stmtCountAfter("function* gen() { yield 1; yield 2; }", lowerGenerator) === 1); }
+test "two yields" { assert stmtCountAfter("function* gen() { yield 1; yield 2; }", lowerGenerator) === 1; }
 
-test "yield with locals" { expect(stmtCountAfter("function* gen() { let x = 1; yield x; }", lowerGenerator) === 1); }
+test "yield with locals" { assert stmtCountAfter("function* gen() { let x = 1; yield x; }", lowerGenerator) === 1; }
 
-test "while yield loop" { expect(stmtCountAfter("function* gen() { let i = 0; while (i < 3) { yield i; i = i + 1; } }", lowerGenerator) === 1); }
+test "while yield loop" { assert stmtCountAfter("function* gen() { let i = 0; while (i < 3) { yield i; i = i + 1; } }", lowerGenerator) === 1; }
 
-test "regular function unchanged" { expect(stmtCountAfter("function f() { while (true) {} }", lowerGenerator) === 1); }
+test "regular function unchanged" { assert stmtCountAfter("function f() { while (true) {} }", lowerGenerator) === 1; }

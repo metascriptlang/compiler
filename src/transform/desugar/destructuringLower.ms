@@ -113,14 +113,14 @@ function expandDestructuring(stmt: Node, ctx: TransformContext): Node[] {
 }
 
 // ===== Tests =====
-test "array 2 elements" { expect(stmtCountAfter("const [a, b] = f();", lowerDestructuring) === 3); }
+test "array 2 elements" { assert stmtCountAfter("const [a, b] = f();", lowerDestructuring) === 3; }
 
-test "first stmt is temp VarDecl" { expect(firstStmtKindAfter("const [a, b] = f();", lowerDestructuring) === NodeKind.VariableDecl); }
+test "first stmt is temp VarDecl" { assert firstStmtKindAfter("const [a, b] = f();", lowerDestructuring) === NodeKind.VariableDecl; }
 
-test "object destructuring" { expect(stmtCountAfter("const { x, y } = f();", lowerDestructuring) === 3); }
+test "object destructuring" { assert stmtCountAfter("const { x, y } = f();", lowerDestructuring) === 3; }
 
-test "simple RHS skips temp" { expect(stmtCountAfter("const [a, b] = myVar;", lowerDestructuring) === 2); }
+test "simple RHS skips temp" { assert stmtCountAfter("const [a, b] = myVar;", lowerDestructuring) === 2; }
 
-test "non-destructuring passthrough" { expect(stmtCountAfter("const x = 1;", lowerDestructuring) === 1); }
+test "non-destructuring passthrough" { assert stmtCountAfter("const x = 1;", lowerDestructuring) === 1; }
 
-test "preserves surrounding stmts" { expect(stmtCountAfter("let z = 0; const [a, b] = f(); let w = 1;", lowerDestructuring) === 5); }
+test "preserves surrounding stmts" { assert stmtCountAfter("let z = 0; const [a, b] = f(); let w = 1;", lowerDestructuring) === 5; }

@@ -32,8 +32,8 @@ function lowerOptionalNode(node: Node): Node {
 }
 
 // ===== Tests =====
-test "regular member unchanged" { expect(firstExprKindAfter("a.b;", lowerOptionalChain) === NodeKind.MemberExpr); }
+test "regular member unchanged" { assert firstExprKindAfter("a.b;", lowerOptionalChain) === NodeKind.MemberExpr; }
 
-test "optional chain becomes conditional" { expect(firstExprKindAfter("a?.b;", lowerOptionalChain) === NodeKind.ConditionalExpr); }
+test "optional chain becomes conditional" { assert firstExprKindAfter("a?.b;", lowerOptionalChain) === NodeKind.ConditionalExpr; }
 
-test "call expr unchanged" { expect(firstExprKindAfter("f();", lowerOptionalChain) === NodeKind.CallExpr); }
+test "call expr unchanged" { assert firstExprKindAfter("f();", lowerOptionalChain) === NodeKind.CallExpr; }

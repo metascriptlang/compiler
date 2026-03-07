@@ -91,69 +91,69 @@ function skipsType(typeStr: string): boolean {
 	return skipsTo(typeStr + " = x", TokenKind.Assign);
 }
 
-test "identifier type" { expect(skipsType("number")); }
+test "identifier type" { assert skipsType("number"); }
 
-test "custom type" { expect(skipsType("Foo")); }
+test "custom type" { assert skipsType("Foo"); }
 
-test "string keyword" { expect(skipsType("string")); }
+test "string keyword" { assert skipsType("string"); }
 
-test "boolean keyword" { expect(skipsType("boolean")); }
+test "boolean keyword" { assert skipsType("boolean"); }
 
-test "void keyword" { expect(skipsType("void")); }
+test "void keyword" { assert skipsType("void"); }
 
-test "single generic" { expect(skipsType("Array<number>")); }
+test "single generic" { assert skipsType("Array<number>"); }
 
-test "two generics" { expect(skipsType("Map<string, number>")); }
+test "two generics" { assert skipsType("Map<string, number>"); }
 
-test "nested generics" { expect(skipsType("Result<Array<number>, string>")); }
+test "nested generics" { assert skipsType("Result<Array<number>, string>"); }
 
-test "nested generics no space" { expect(skipsType("Result<Array<number>>")); }
+test "nested generics no space" { assert skipsType("Result<Array<number>>"); }
 
-test "triple nested generics" { expect(skipsType("Map<string, Result<Array<number>>>")); }
+test "triple nested generics" { assert skipsType("Map<string, Result<Array<number>>>"); }
 
-test "array in generic arg" { expect(skipsType("Result<Node[], string>")); }
+test "array in generic arg" { assert skipsType("Result<Node[], string>"); }
 
-test "array in both generic args" { expect(skipsType("Map<string[], number[]>")); }
+test "array in both generic args" { assert skipsType("Map<string[], number[]>"); }
 
-test "single array" { expect(skipsType("number[]")); }
+test "single array" { assert skipsType("number[]"); }
 
-test "fixed array" { expect(skipsType("number[4]")); }
+test "fixed array" { assert skipsType("number[4]"); }
 
-test "fixed array multi-dimensional" { expect(skipsType("number[4][2]")); }
+test "fixed array multi-dimensional" { assert skipsType("number[4][2]"); }
 
-test "double array" { expect(skipsType("number[][]")); }
+test "double array" { assert skipsType("number[][]"); }
 
-test "generic array" { expect(skipsType("Array<string>[]")); }
+test "generic array" { assert skipsType("Array<string>[]"); }
 
-test "two types" { expect(skipsType("string | number")); }
+test "two types" { assert skipsType("string | number"); }
 
-test "three types" { expect(skipsType("string | number | boolean")); }
+test "three types" { assert skipsType("string | number | boolean"); }
 
-test "union with array" { expect(skipsType("string[] | number")); }
+test "union with array" { assert skipsType("string[] | number"); }
 
-test "simple optional" { expect(skipsType("string?")); }
+test "simple optional" { assert skipsType("string?"); }
 
-test "generic optional" { expect(skipsType("Array<number>?")); }
+test "generic optional" { assert skipsType("Array<number>?"); }
 
-test "array optional" { expect(skipsType("string[]?")); }
+test "array optional" { assert skipsType("string[]?"); }
 
-test "no params" { expect(skipsType("() => void")); }
+test "no params" { assert skipsType("() => void"); }
 
-test "one param" { expect(skipsType("(a: string) => number")); }
+test "one param" { assert skipsType("(a: string) => number"); }
 
-test "two params" { expect(skipsType("(a: string, b: number) => boolean")); }
+test "two params" { assert skipsType("(a: string, b: number) => boolean"); }
 
-test "single field" { expect(skipsType("{ x: number }")); }
+test "single field" { assert skipsType("{ x: number }"); }
 
-test "two fields" { expect(skipsType("{ x: number; y: string }")); }
+test "two fields" { assert skipsType("{ x: number; y: string }"); }
 
-test "nested object" { expect(skipsType("{ a: { b: number } }")); }
+test "nested object" { assert skipsType("{ a: { b: number } }"); }
 
-test "generic with array suffix" { expect(skipsType("Result<Node, string>[]")); }
+test "generic with array suffix" { assert skipsType("Result<Node, string>[]"); }
 
-test "union of generics" { expect(skipsType("Result<A, B> | Error")); }
+test "union of generics" { assert skipsType("Result<A, B> | Error"); }
 
-test "optional generic array" { expect(skipsType("Map<string, number>[]?")); }
+test "optional generic array" { assert skipsType("Map<string, number>[]?"); }
 
 // ===== TypeAnnotation Node Tests =====
 
@@ -176,10 +176,10 @@ function annotationText(typeStr: string): string {
 	return data.annotationType;
 }
 
-test "kind is TypeAnnotation" { expect(annotationKind("number") === NodeKind.TypeAnnotation); }
+test "kind is TypeAnnotation" { assert annotationKind("number") === NodeKind.TypeAnnotation; }
 
-test "simple type text" { expect(annotationText("number") === "number"); }
+test "simple type text" { assert annotationText("number") === "number"; }
 
-test "generic type text" { expect(annotationText("Result<Node, string>") !== ""); }
+test "generic type text" { assert annotationText("Result<Node, string>") !== ""; }
 
-test "union type text" { expect(annotationText("string | number") !== ""); }
+test "union type text" { assert annotationText("string | number") !== ""; }

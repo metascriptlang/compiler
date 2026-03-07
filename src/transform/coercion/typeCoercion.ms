@@ -32,10 +32,10 @@ function lowerCoercionNode(node: Node): Node {
 }
 
 // ===== Tests =====
-test "String(x) becomes call" { expect(firstExprKindAfter("String(x);", lowerTypeCoercion) === NodeKind.CallExpr); }
+test "String(x) becomes call" { assert firstExprKindAfter("String(x);", lowerTypeCoercion) === NodeKind.CallExpr; }
 
-test "Number(x) unchanged" { expect(firstExprKindAfter("Number(x);", lowerTypeCoercion) === NodeKind.CallExpr); }
+test "Number(x) unchanged" { assert firstExprKindAfter("Number(x);", lowerTypeCoercion) === NodeKind.CallExpr; }
 
-test "regular call unchanged" { expect(firstExprKindAfter("foo(x);", lowerTypeCoercion) === NodeKind.CallExpr); }
+test "regular call unchanged" { assert firstExprKindAfter("foo(x);", lowerTypeCoercion) === NodeKind.CallExpr; }
 
-test "String() no args unchanged" { expect(firstExprKindAfter("String();", lowerTypeCoercion) === NodeKind.CallExpr); }
+test "String() no args unchanged" { assert firstExprKindAfter("String();", lowerTypeCoercion) === NodeKind.CallExpr; }

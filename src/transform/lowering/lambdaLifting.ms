@@ -1,5 +1,5 @@
 // Lambda Lifting — converts closures with captures into lifted functions + env structs
-// Nim-aligned single-pass: detect captures + rewrite in one top-down recursive walk
+// Single-pass implementation: detect captures + rewrite in one top-down recursive walk
 //
 // function outer() {
 //   let x = 10;
@@ -219,7 +219,7 @@ function rewriteNode(node: Node, captures: NameSet, envTypeName: string): Node {
 	if (node.kind === NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
 		if (nameSetContains(captures, d.name)) {
-			// Nim parity: env param is void*, cast+deref to typed pointer for field access
+			// Implementation parity: env param is void*, cast+deref to typed pointer for field access
 			// Produces: (*((EnvType*)_envP)).field  in C
 			const envIdent = makeIdent("_envP", node.location);
 			const ptrType = createPtr(createTypeRef(envTypeName));
@@ -248,7 +248,7 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 	const envName = "$Env_" + state.currentFnName + "_" + counter.toString();
 	const liftedName = "$lifted_" + state.currentFnName + "_" + counter.toString();
 
-	// Env struct — resolve captured variable types (Nim: createEnvObj uses actual types)
+	// Env struct — resolve captured variable types (Standard reference pattern)
 	const envFields: string[] = [];
 	const envFieldTypes: string[] = [];
 	for (const name of captures) {
@@ -387,7 +387,7 @@ function walkLift(node: Node, state: LiftState): void {
 						paramTypeStr = "msClosure";
 					} else if (pt !== null && pt.kind === TypeKind.TypeReference) {
 						const tn = pt.typeName;
-						if (tn.length > 0 && (tn.indexOf("=>") >= 0 || tn.charAt(0) === "(")) {
+						if (tn.length > 0 && (tn.indexOf("=>", 0) >= 0 || tn.charAt(0) === "(")) {
 							paramTypeStr = "msClosure";
 						}
 					}
@@ -585,39 +585,39 @@ export function lowerLambda(program: Node, ctx: TransformContext): Node {
 }
 
 // ===== Tests =====
-test "no closures passthrough" { expect(stmtCountAfter("const x = 1;", lowerLambda) === 1); }
+test "no closures passthrough" { assert stmtCountAfter("const x = 1;", lowerLambda) === 1; }
 
-test "function without capture unchanged" { expect(firstStmtKindAfter("function foo(x) { return x; }", lowerLambda) === NodeKind.FunctionDecl); }
+test "function without capture unchanged" { assert firstStmtKindAfter("function foo(x) { return x; }", lowerLambda) === NodeKind.FunctionDecl; }
 
 test "non-capturing arrow lifted" {
 	// Arrow lifted to module-level FunctionDecl + original VariableDecl = 2 stmts
-	expect(stmtCountAfter("const f = (x) => x + 1;", lowerLambda) === 2);
-	expect(firstStmtKindAfter("const f = (x) => x + 1;", lowerLambda) === NodeKind.FunctionDecl);
+	assert stmtCountAfter("const f = (x) => x + 1;", lowerLambda) === 2;
+	assert firstStmtKindAfter("const f = (x) => x + 1;", lowerLambda) === NodeKind.FunctionDecl;
 }
 
 test "non-capturing arrow in function lifted" {
 	// Inner arrow lifted to program level: lifted fn + outer fn = 2 stmts
-	expect(stmtCountAfter("function f(x) { const g = (y) => y + 1; }", lowerLambda) === 2);
+	assert stmtCountAfter("function f(x) { const g = (y) => y + 1; }", lowerLambda) === 2;
 }
 
 test "arrow with capture generates 3 stmts" {
 	// function outer() { let x = 1; const f = () => x; }
 	// → env struct + lifted fn + original fn = 3 stmts
-	expect(stmtCountAfter("function outer() { let x = 1; const f = () => x; }", lowerLambda) === 3);
+	assert stmtCountAfter("function outer() { let x = 1; const f = () => x; }", lowerLambda) === 3;
 }
 
-test "env struct is first stmt" { expect(firstStmtKindAfter("function outer() { let x = 1; const f = () => x; }", lowerLambda) === NodeKind.InterfaceDecl); }
+test "env struct is first stmt" { assert firstStmtKindAfter("function outer() { let x = 1; const f = () => x; }", lowerLambda) === NodeKind.InterfaceDecl; }
 
 test "builtin name not captured" {
 	// Arrow referencing builtin is non-capturing, but still lifted: lifted fn + outer fn = 2
-	expect(stmtCountAfter("function f() { const g = () => console; }", lowerLambda) === 2);
+	assert stmtCountAfter("function f() { const g = () => console; }", lowerLambda) === 2;
 }
 
-test "multiple captures one env" { expect(stmtCountAfter("function f() { let a = 1; let b = 2; const g = () => a + b; }", lowerLambda) === 3); }
+test "multiple captures one env" { assert stmtCountAfter("function f() { let a = 1; let b = 2; const g = () => a + b; }", lowerLambda) === 3; }
 
 test "non-capturing function expr lifted" {
-	expect(stmtCountAfter("const f = function(x) { return x + 1; };", lowerLambda) === 2);
-	expect(firstStmtKindAfter("const f = function(x) { return x + 1; };", lowerLambda) === NodeKind.FunctionDecl);
+	assert stmtCountAfter("const f = function(x) { return x + 1; };", lowerLambda) === 2;
+	assert firstStmtKindAfter("const f = function(x) { return x + 1; };", lowerLambda) === NodeKind.FunctionDecl;
 }
 
 test "isCaptureLastUse: var not used after closure" {
@@ -629,7 +629,7 @@ test "isCaptureLastUse: var not used after closure" {
 		const fd = stmts[0].data as FunctionDeclData;
 		const bd = fd.fnBody.data as BlockStmtData;
 		// x captured at index 1, not used at index 2+ (no stmts after)
-		expect(isCaptureLastUse("x", 1, bd.statements));
+		assert isCaptureLastUse("x", 1, bd.statements);
 	}
 }
 
@@ -640,6 +640,6 @@ test "isCaptureLastUse: var used after closure" {
 		const fd = stmts[0].data as FunctionDeclData;
 		const bd = fd.fnBody.data as BlockStmtData;
 		// x captured at index 1, but used in return at index 2
-		expect(!isCaptureLastUse("x", 1, bd.statements));
+		assert !isCaptureLastUse("x", 1, bd.statements);
 	}
 }

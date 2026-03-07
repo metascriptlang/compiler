@@ -1,9 +1,7 @@
 // C Codegen — Entry Point
 //
-// generateC(program, checkerCtx, modulePath) → string  (single-module, backwards compatible)
-// generateCModule(program, checkerCtx, modulePath, externalTypes) → string  (module-only, no dispatcher)
+// generateCModule(program, checkerCtx, modulePath, aliveSet, isTestBuild) → string  (self-contained per-module)
 // genProjectDispatcher(modulePaths, entryPath, hasUserMain) → string  (global init dispatcher)
-// collectFunctionPrototypes(program) → string  (C function forward declarations)
 //
 // Module init follows two-phase pattern:
 //   DatInit000 (data/type init, runs first) + Init000 (user code, runs second)
@@ -11,36 +9,36 @@
 
 import {
 	Node, NodeKind, SymbolKind,
-	ProgramData, FunctionDeclData, BlockStmtData,
-	ExportDeclData, DecoratedDeclData, ImportDeclData,
-	EnumDeclData, InterfaceDeclData, ClassDeclData,
+	ProgramData,
 } from "../../ast/node";
 import { CheckerContext, ExportRegistry } from "../../checker/context";
 import { lookupSymbol } from "../../checker/symbol";
-// lookupSymbol removed — codegen uses node.resolvedSym (Nim parity)
 import {
-	CGen, CSection, TypeCache, AliveSet,
-	createCGen, createTypeCache, createAliveSet, createBuilder, sec, add, addLine, addNewline,
+	CGen, CSection, AliveSet, TestEntry,
+	createCGen, createAliveSet, createBuilder, sec, add, addLine, addNewline,
 	assembleOutput, extract, nameSetAdd, nameSetHas,
-	typeCacheSet,
+	typeRegistryAdd, typeRegistryLookup,
 } from "./context";
 import { genDecl } from "./declarations";
-import { mangleModuleName, safeName } from "./names";
-import { getSimpleTypeDesc, isNrvoReturnType, getTypeDesc, anonTypeName, isAnonTypeName, hashToBase36, buildAnonStructDef } from "./types";
+import { mangleModuleName, mangledFunctionName, safeName } from "./names";
+import { getSimpleTypeDesc, isNrvoReturnType, getTypeDesc } from "./types";
 import { Type, TypeKind, isInterfaceType } from "../../checker/types";
+import { ccgIntroducedPtr } from "../../transform/native/pointerParam";
 import { mangle } from "./names";
 import { emitStringPoolDecls } from "./literals";
-import { sliceStr, startsWith, findChar } from "../../utils/string";
+import { emitTestHeader, emitTestTable, genTestDispatcher } from "./test";
+import { sliceStr, startsWith } from "../../utils/string";
 
 // ===== generateC — single-module entry point (backwards compatible) =====
 
 export function generateC(program: Node, ctx: CheckerContext, modulePath: string): string {
-	const moduleCode = generateCModule(program, ctx, modulePath, createTypeCache(), createAliveSet(), false);
+	const moduleCode = generateCModule(program, ctx, modulePath, createAliveSet(), false);
 	const mainSym = (ctx !== null && ctx.table !== null) ? lookupSymbol(ctx.table, "main") : null;
 	const hasMain = mainSym !== null;
 	let mainRet = "void";
 	if (mainSym !== null && mainSym.symbolType !== null && mainSym.symbolType.typeReturn !== null) {
-		mainRet = typeDescForProto(mainSym.symbolType.typeReturn);
+		const ret = getSimpleTypeDesc(mainSym.symbolType.typeReturn);
+		if (ret !== "") mainRet = ret;
 	}
 	const paths: string[] = [modulePath];
 	const dispatcher = genProjectDispatcher(paths, modulePath, hasMain, mainRet);
@@ -53,35 +51,39 @@ export function generateC(program: Node, ctx: CheckerContext, modulePath: string
 // and per-module DatInit000/Init000 (non-static for cross-module visibility).
 // Does NOT generate the global dispatcher (MsPreMainInner/MsMainInner/MsMain/POSIX main).
 
-export function generateCModule(program: Node, ctx: CheckerContext, modulePath: string, externalTypes: TypeCache, aliveSet: AliveSet, isTestBuild: boolean): string {
+export function generateCModule(program: Node, ctx: CheckerContext, modulePath: string, aliveSet: AliveSet, isTestBuild: boolean): string {
 	const g = createCGen(ctx, modulePath);
-	g.externalTypes = externalTypes;
 	g.aliveSet = aliveSet;
 	g.isTestBuild = isTestBuild;
 
-	// Standard C headers (Nim pattern: nimbase.h is always included unconditionally)
+	// Standard C headers (Standard reference implementation pattern)
 	addLine(sec(g, CSection.Headers), "#include <stdint.h>");
 	addLine(sec(g, CSection.Headers), "#include <stdbool.h>");
 	addLine(sec(g, CSection.Headers), "#include <string.h>");
 	addLine(sec(g, CSection.Headers), "#include <math.h>");
 	addLine(sec(g, CSection.Headers), "#include \"system.h\"");
 	nameSetAdd(g.declaredThings, "inc:system.h"); // prevent duplicate from @include
+	emitTestHeader(g);
 	// B2: core/string.h and core/array.h conditionally included after AST walk
-
-	// Include shared proto header if we have external types (multi-module build)
-	if (externalTypes.entries.length > 0) {
-		addLine(sec(g, CSection.Headers), "#include \"msProto.h\"");
-	}
 
 	// Emit additional @include directives from checker (user code @include pragmas)
 	if (ctx !== null && ctx.includeDirectives !== "") {
 		emitIncludeDirectives(g, ctx.includeDirectives);
 	}
 
-	// Register cross-module type names from ExportRegistry (class/interface distinction)
-	if (externalTypes.entries.length > 0) {
-		registerCrossModuleTypesFromRegistry(g);
+	// Emit raw C code from @emit directives (Nim {.emit.} parity)
+	// Top-level @emit goes to ProcHeaders by default, or section-specific via markers
+	if (ctx !== null && ctx.emitDirectives !== "") {
+		emitRawDirectives(g, ctx.emitDirectives);
 	}
+
+	// Per-module type emission (Standard reference implementation parity)
+	// Register cross-module type names + build type registry from ExportRegistry
+	registerCrossModuleTypesFromRegistry(g);
+	buildTypeRegistry(g);
+
+	// Emit cross-module function prototypes (Standard reference implementation parity)
+	emitCrossModulePrototypes(g);
 
 	// Walk program statements
 	if (program !== null && program.kind === NodeKind.Program) {
@@ -91,12 +93,15 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 		}
 	}
 
+	// Emit test table (test builds only — after all TestDecl nodes processed)
+	emitTestTable(g);
+
 	// Generate per-module init functions (non-static for cross-module visibility)
 	genModuleInitFns(g);
 
 	// B2: Conditional runtime injection — only include headers for used runtime features
 	// Each module includes only the runtime headers it actually needs.
-	// msProto.h also conditionally includes them for proto-level types.
+	// Each module includes only the runtime headers it actually needs.
 	// Duplicate includes are harmless (standard include guards).
 	if (g.stringPool.entries.length > 0) g.needsStringRT = true;
 	if (g.needsStringRT) addLine(sec(g, CSection.Headers), "#include \"core/string.h\"");
@@ -173,6 +178,13 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 	}
 	addNewline(b);
 
+	// Global variables (must precede function bodies that reference them)
+	addLine(b, "int cmdCount;");
+	addLine(b, "char** cmdLine;");
+	addLine(b, "char** gEnv;");
+	addLine(b, "int msProgramResult;");
+	addNewline(b);
+
 	// MsPreMainInner — calls DatInit000 for all modules in topological order
 	addLine(b, "static void MsPreMainInner(void) {");
 	b.indent += 1;
@@ -203,16 +215,11 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 	addLine(b, "}");
 	addNewline(b);
 
-	// MsMain + globals + POSIX main
+	// MsMain + POSIX main
 	addLine(b, "void MsMain(void) {");
 	addLine(b, "  MsPreMainInner();");
 	addLine(b, "  MsMainInner();");
 	addLine(b, "}");
-	addNewline(b);
-	addLine(b, "int cmdCount;");
-	addLine(b, "char** cmdLine;");
-	addLine(b, "char** gEnv;");
-	addLine(b, "int msProgramResult;");
 	addNewline(b);
 	addLine(b, "int main(int argc, char** argv, char** env) {");
 	addLine(b, "  cmdLine = argv;");
@@ -225,485 +232,9 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 	return extract(b);
 }
 
-// ===== Collect Function Prototypes =====
-//
-// Walks the AST to collect C-level function forward declarations.
-// Used by multi-module builds to generate a shared proto header
-// so cross-module calls have proper declarations.
-
-export function collectFunctionPrototypes(program: Node, g: CGen): string {
-	let protos = "";
-	if (program === null || program.kind !== NodeKind.Program) return protos;
-	const pd = program.data as ProgramData;
-	const prevGen = _protoGen;
-	_protoGen = g;
-	for (let i = 0; i < pd.programStmts.length; i += 1) {
-		const proto = protoFromStmt(pd.programStmts[i]);
-		if (proto.length > 0) {
-			protos = protos + proto + "\n";
-		}
-	}
-	_protoGen = prevGen;
-	return protos;
-}
-
-function protoFromStmt(node: Node): string {
-	if (node === null) return "";
-	if (node.kind === NodeKind.FunctionDecl) {
-		return buildFnProto(node);
-	}
-	if (node.kind === NodeKind.ExportDecl) {
-		const d = node.data as ExportDeclData;
-		return protoFromStmt(d.exportedDecl);
-	}
-	if (node.kind === NodeKind.DecoratedDecl) {
-		const d = node.data as DecoratedDeclData;
-		return protoFromStmt(d.decoratedNode);
-	}
-	return "";
-}
-
-// ===== Type Description for Prototypes =====
-// Maps a Type to its C type string for use in cross-module function prototypes.
-// Nim pattern: when a CGen is available (production), delegates to getTypeDesc which
-// emits typedefs as side effects. Falls back to pure string mapping when no CGen (tests).
-
-// Collects Result types encountered during prototype building.
-// After collecting protos, call emitResultTypeDecls() to get struct definitions.
-let protoResultTypes: string[] = [];
-let protoResultTypeDefs: string[] = [];
-
-// Module-level CGen for prototype building (Nim pattern: getTypeDescAux always has BModule).
-// When set, typeDescForProto delegates compound types to getTypeDesc(g, t) which emits
-// typedefs as side effects. When null, falls back to pure string mapping (tests only).
-let _protoGen: CGen = null as unknown as CGen;
-
-function typeDescForProto(t: Type): string {
-	if (!t) return "void*";
-	if (!t.kind && t.kind !== 0) return "void*";
-	// Nim pattern: when a CGen is available, delegate to getTypeDesc which emits
-	// typedefs as side effects (like Nim's getTypeDescAux always taking BModule).
-	// This ensures array-of-struct typedefs, Result types, etc. are emitted properly.
-	if (_protoGen !== null) {
-		return getTypeDesc(_protoGen, t);
-	}
-	// Fallback: pure string mapping (tests only, no typedef emission)
-	// Try simple types first
-	const simple = getSimpleTypeDesc(t);
-	if (simple !== "") return simple;
-	// Handle compound types
-	if (t.kind === TypeKind.Enum) {
-		return mangle(t.typeName);
-	}
-	if (t.kind === TypeKind.Object) {
-		// Anonymous/structural types get hash-based names; named types get mangled names
-		const name = isAnonTypeName(t.typeName) ? anonTypeName(t) : mangle(t.typeName);
-		if (isInterfaceType(t)) return name;  // value type struct
-		return name + "*";  // class = pointer to struct
-	}
-	if (t.kind === TypeKind.Array) {
-		// Determine specific array type from element type
-		if (t.typeReturn !== null) {
-			const elemSimple = getSimpleTypeDesc(t.typeReturn);
-			if (elemSimple === "double") return "msNumberArray";
-			if (elemSimple === "msString") return "msStringArray";
-			// Per-type array typedef for value-type structs
-			const elemDesc = typeDescForProto(t.typeReturn);
-			return mangle(elemDesc) + "Array";
-		}
-		return "msRefArray";
-	}
-	if (t.kind === TypeKind.Function) {
-		return "msClosure";
-	}
-	if (t.kind === TypeKind.Result) {
-		const okType = typeDescForProto(t.typeReturn);
-		const errType = typeDescForProto(t.typeExtra);
-		const name = "msResult_" + mangle(okType) + "_" + mangle(errType);
-		// Record this Result type for later struct definition emission
-		let found = false;
-		for (let ri = 0; ri < protoResultTypes.length; ri += 1) {
-			if (protoResultTypes[ri] === name) { found = true; }
-		}
-		if (!found) {
-			protoResultTypes.push(name);
-			let def = "#ifndef " + name + "_DEFINED\n";
-			def = def + "#define " + name + "_DEFINED\n";
-			def = def + "typedef struct " + name + " " + name + ";\n";
-			def = def + "struct " + name + " {\n  MS_BOOL ok;\n";
-			if (okType !== "void") def = def + "  " + okType + " value;\n";
-			if (errType !== "void") def = def + "  " + errType + " error;\n";
-			def = def + "};\n";
-			def = def + "#endif\n";
-			protoResultTypeDefs.push(def);
-		}
-		return name;
-	}
-	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) {
-		const inner = typeDescForProto(t.typeReturn);
-		return inner + "*";
-	}
-	if (t.kind === TypeKind.SizedArray) {
-		return "void*"; // rare in prototypes, safe fallback
-	}
-	if (t.kind === TypeKind.Span) {
-		const elemType = typeDescForProto(t.typeReturn);
-		return "msSpan_" + mangle(elemType);
-	}
-	if (t.kind === TypeKind.TypeReference) {
-		// Function type annotation strings (e.g. "( ) => void") → msClosure
-		if (findChar(t.typeName, "=") >= 0 || (t.typeName.length > 0 && t.typeName.charAt(0) === "(")) {
-			return "msClosure";
-		}
-		if (t.typeName === "unknown" || t.typeName === "undefined" || t.typeName === "any" || t.typeName === "never") return "void*";
-		// Anonymous type aliases (discriminated union variants) → hash-based name
-		if (isAnonTypeName(t.typeName)) {
-			const anonName = "msAnon_" + hashToBase36(t.typeName);
-			emitProtoAnonStruct(anonName, t.typeName);
-			return anonName;
-		}
-		// Named type ref — use mangled name (forward decl should exist)
-		return mangle(t.typeName);
-	}
-	if (t.kind === TypeKind.Void || t.kind === TypeKind.Null) return "void";
-	// Fallback for Unknown, Any, Union, etc.
-	return "void*";
-}
-
-// Emit an anonymous struct definition into protoResultTypeDefs.
-// Delegates to buildAnonStructDef (types.ms) for parsing and C mapping.
-function emitProtoAnonStruct(structName: string, rawName: string): void {
-	let found = false;
-	for (let ri = 0; ri < protoResultTypes.length; ri += 1) {
-		if (protoResultTypes[ri] === structName) { found = true; }
-	}
-	if (found) return;
-	protoResultTypes.push(structName);
-	protoResultTypeDefs.push(buildAnonStructDef(structName, rawName));
-}
-
-// Returns collected Result type struct definitions. Call after ALL modules' prototypes collected.
-export function flushResultTypeDecls(): string {
-	let result = "";
-	for (let i = 0; i < protoResultTypeDefs.length; i += 1) {
-		result = result + protoResultTypeDefs[i] + "\n";
-	}
-	// Reset for next build
-	protoResultTypes = [];
-	protoResultTypeDefs = [];
-	return result;
-}
-
-function buildFnProto(node: Node): string {
-	const d = node.data as FunctionDeclData;
-	// Skip extern functions — they're FFI bindings provided by @include headers
-	if (d.fnFlags === "extern" || d.fnFlags.indexOf("extern") >= 0) return "";
-	const name = safeName(d.fnName);
-	const fnType = node.nodeType;
-	if (!fnType) return "";
-	const retType = typeDescForProto(fnType.typeReturn);
-	const nrvo = isNrvoReturnType(fnType.typeReturn);
-	let paramList = "";
-	if (nrvo) {
-		paramList = retType + "* __result";
-		if (d.params.length > 0) paramList = paramList + ", ";
-	}
-	for (let i = 0; i < d.params.length; i += 1) {
-		if (i > 0) paramList = paramList + ", ";
-		let pType = "void*";
-		if (i < fnType.typeChildren.length) { pType = typeDescForProto(fnType.typeChildren[i]); }
-		paramList = paramList + pType + " " + safeName(d.params[i]);
-	}
-	if (paramList === "") paramList = "void";
-	let cRetType = retType;
-	if (nrvo) { cRetType = "void"; }
-	return cRetType + " " + name + "(" + paramList + ");";
-}
-
-// ===== Collect Exported Function Prototypes =====
-//
-// Like collectFunctionPrototypes but only collects prototypes for
-// EXPORTED functions. Used for cross-module prototype headers in
-// separate compilation (non-exported functions are static, invisible).
-
-export function collectExportedPrototypes(program: Node, g: CGen): string {
-	let protos = "";
-	if (program === null || program.kind !== NodeKind.Program) return protos;
-	const pd = program.data as ProgramData;
-	const prevGen = _protoGen;
-	_protoGen = g;
-	for (let i = 0; i < pd.programStmts.length; i += 1) {
-		const proto = exportedProtoFromStmt(pd.programStmts[i]);
-		if (proto.length > 0) {
-			protos = protos + proto + "\n";
-		}
-	}
-	_protoGen = prevGen;
-	return protos;
-}
-
-function exportedProtoFromStmt(node: Node): string {
-	if (node === null) return "";
-	if (node.kind === NodeKind.ExportDecl) {
-		const d = node.data as ExportDeclData;
-		return protoFromStmt(d.exportedDecl);
-	}
-	if (node.kind === NodeKind.DecoratedDecl) {
-		const d = node.data as DecoratedDeclData;
-		return exportedProtoFromStmt(d.decoratedNode);
-	}
-	return "";
-}
-
-// ===== Collect Exported Type Forward Declarations =====
-//
-// Walks the AST to collect C-level type forward declarations for all
-// exported types (enums, interfaces, classes). Used by cross-module builds
-// so consuming modules can reference imported types without void* fallback.
-// Nim parity: magicsys.nim / modulegraphs.nim type registry.
-
-export function collectExportedTypeDecls(program: Node): string {
-	let decls = "";
-	if (program === null || program.kind !== NodeKind.Program) return decls;
-	const pd = program.data as ProgramData;
-	for (let i = 0; i < pd.programStmts.length; i += 1) {
-		const d = typeDeclFromStmt(pd.programStmts[i]);
-		if (d.length > 0) {
-			decls = decls + d + "\n";
-		}
-	}
-	return decls;
-}
-
-function typeDeclFromStmt(node: Node): string {
-	if (node === null) return "";
-	if (node.kind === NodeKind.ExportDecl) {
-		const d = node.data as ExportDeclData;
-		return typeDeclFromInner(d.exportedDecl);
-	}
-	if (node.kind === NodeKind.DecoratedDecl) {
-		const d = node.data as DecoratedDeclData;
-		return typeDeclFromStmt(d.decoratedNode);
-	}
-	return "";
-}
-
-function typeDeclFromInner(node: Node): string {
-	if (node === null) return "";
-	if (node.kind === NodeKind.EnumDecl) {
-		const d = node.data as EnumDeclData;
-		const name = safeName(d.enumName);
-		let result = "typedef int32_t " + name + ";\n";
-		for (let i = 0; i < d.enumMembers.length; i += 1) {
-			result = result + "#define " + name + "_" + d.enumMembers[i] + " (((" + name + ")" + i + "))\n";
-		}
-		return result;
-	}
-	if (node.kind === NodeKind.InterfaceDecl) {
-		const d = node.data as InterfaceDeclData;
-		const name = safeName(d.interfaceName);
-		// Emit full struct body if we have resolved Type info (needed for pass-by-value)
-		const t = node.nodeType;
-		if (t !== null && t.typeNames.length > 0) {
-			let result = "#ifndef " + name + "_DEFINED\n#define " + name + "_DEFINED\n";
-			result = result + "typedef struct " + name + " " + name + ";\n";
-			result = result + "struct " + name + " {\n";
-			for (let fi = 0; fi < t.typeNames.length; fi += 1) {
-				let fieldType = (fi < t.typeChildren.length) ? typeDescForProto(t.typeChildren[fi]) : "void*";
-				// Self-referential fields: same type as containing struct → must be pointer
-				const ft = (fi < t.typeChildren.length) ? t.typeChildren[fi] : null as unknown as Type;
-				if (ft !== null && ft.kind === TypeKind.Object && isInterfaceType(ft) && mangle(ft.typeName) === name) {
-					fieldType = name + "*";
-				}
-				result = result + "  " + fieldType + " " + safeName(t.typeNames[fi]) + ";\n";
-			}
-			result = result + "};\n#endif\n";
-			return result;
-		}
-		return "typedef struct " + name + " " + name + ";";
-	}
-	if (node.kind === NodeKind.ClassDecl) {
-		const d = node.data as ClassDeclData;
-		const name = safeName(d.className);
-		// Emit full struct body if we have resolved Type info (needed for cross-module member access)
-		const t = node.nodeType;
-		if (t !== null && t.typeNames.length > 0) {
-			let result = "#ifndef " + name + "_DEFINED\n#define " + name + "_DEFINED\n";
-			result = result + "typedef struct " + name + " " + name + ";\n";
-			result = result + "struct " + name + " {\n";
-			for (let fi = 0; fi < t.typeNames.length; fi += 1) {
-				let fieldType = (fi < t.typeChildren.length) ? typeDescForProto(t.typeChildren[fi]) : "void*";
-				// Self-referential fields: same type as containing struct → must be pointer
-				const ft = (fi < t.typeChildren.length) ? t.typeChildren[fi] : null as unknown as Type;
-				if (ft !== null && ft.kind === TypeKind.Object && !isInterfaceType(ft) && mangle(ft.typeName) === name) {
-					fieldType = name + "*";
-				}
-				result = result + "  " + fieldType + " " + safeName(t.typeNames[fi]) + ";\n";
-			}
-			result = result + "};\n#endif\n";
-			return result;
-		}
-		return "typedef struct " + name + " " + name + ";";
-	}
-	if (node.kind === NodeKind.DecoratedDecl) {
-		const d = node.data as DecoratedDeclData;
-		return typeDeclFromInner(d.decoratedNode);
-	}
-	return "";
-}
-
-// ===== CGen-Based Exported Type Collection =====
-// Uses getTypeDesc() for recursive topological ordering of struct bodies.
-// Forward decls go to CSection.ForwardDecls, struct bodies to CSection.Types.
-
-export function emitExportedTypesViaCGen(g: CGen, program: Node): void {
-	if (program === null || program.kind !== NodeKind.Program) return;
-	const pd = program.data as ProgramData;
-	for (let i = 0; i < pd.programStmts.length; i += 1) {
-		emitTypeDeclViaCGen(g, pd.programStmts[i]);
-	}
-}
-
-function emitTypeDeclViaCGen(g: CGen, node: Node): void {
-	if (node === null) return;
-	if (node.kind === NodeKind.ExportDecl) {
-		const d = node.data as ExportDeclData;
-		emitTypeDeclViaCGenInner(g, d.exportedDecl);
-	} else if (node.kind === NodeKind.DecoratedDecl) {
-		const d = node.data as DecoratedDeclData;
-		emitTypeDeclViaCGen(g, d.decoratedNode);
-	}
-}
-
-function emitTypeDeclViaCGenInner(g: CGen, node: Node): void {
-	if (node === null) return;
-	if (node.kind === NodeKind.EnumDecl || node.kind === NodeKind.InterfaceDecl || node.kind === NodeKind.ClassDecl) {
-		const t = node.nodeType;
-		if (t !== null) {
-			// getTypeDesc recursively emits field type struct bodies BEFORE this type
-			getTypeDesc(g, t);
-		} else {
-			// No Type info — fall back to forward declaration only
-			if (node.kind === NodeKind.EnumDecl) {
-				const d = node.data as EnumDeclData;
-				const name = safeName(d.enumName);
-				addLine(sec(g, CSection.Types), "typedef int32_t " + name + ";");
-				for (let i = 0; i < d.enumMembers.length; i += 1) {
-					addLine(sec(g, CSection.Types), "#define " + name + "_" + d.enumMembers[i] + " (((" + name + ")" + i + "))");
-				}
-			} else if (node.kind === NodeKind.InterfaceDecl) {
-				const d = node.data as InterfaceDeclData;
-				addLine(sec(g, CSection.ForwardDecls), "typedef struct " + safeName(d.interfaceName) + " " + safeName(d.interfaceName) + ";");
-			} else if (node.kind === NodeKind.ClassDecl) {
-				const d = node.data as ClassDeclData;
-				addLine(sec(g, CSection.ForwardDecls), "typedef struct " + safeName(d.className) + " " + safeName(d.className) + ";");
-			}
-		}
-	} else if (node.kind === NodeKind.DecoratedDecl) {
-		const d = node.data as DecoratedDeclData;
-		emitTypeDeclViaCGenInner(g, d.decoratedNode);
-	}
-}
-
-// ===== Register Exported Class Names =====
-// Pre-populates g.knownClassNames so getTypeDesc for TypeReference
-// correctly emits ClassName* for class fields.
-
-export function registerExportedClassNames(g: CGen, program: Node): void {
-	if (program === null || program.kind !== NodeKind.Program) return;
-	const pd = program.data as ProgramData;
-	for (let i = 0; i < pd.programStmts.length; i += 1) {
-		registerClassFromStmt(g, pd.programStmts[i]);
-	}
-}
-
-function registerClassFromStmt(g: CGen, node: Node): void {
-	if (node === null) return;
-	if (node.kind === NodeKind.ExportDecl) {
-		const d = node.data as ExportDeclData;
-		registerClassFromInner(g, d.exportedDecl);
-	} else if (node.kind === NodeKind.DecoratedDecl) {
-		const d = node.data as DecoratedDeclData;
-		registerClassFromStmt(g, d.decoratedNode);
-	}
-}
-
-function registerClassFromInner(g: CGen, node: Node): void {
-	if (node === null) return;
-	if (node.kind === NodeKind.ClassDecl) {
-		const d = node.data as ClassDeclData;
-		nameSetAdd(g.knownClassNames, safeName(d.className));
-	} else if (node.kind === NodeKind.DecoratedDecl) {
-		const d = node.data as DecoratedDeclData;
-		registerClassFromInner(g, d.decoratedNode);
-	}
-}
-
-// ===== Register Cross-Module Type Names =====
-// Two-phase registration:
-// 1. String-parsing: scans forward decl string for enum/struct names (existing)
-// 2. ExportRegistry: iterates checker exports to distinguish class (pointer) from interface (value)
-//
-// knownTypeNames  — all cross-module type names (enums + interfaces + classes)
-// knownClassNames — class names only (need pointer semantics: Name*)
-
-function registerCrossModuleTypes(g: CGen, protos: string): void {
-	// Phase 1: String-parsing for enum/struct names from forward decl string
-	const enumPrefix = "typedef int32_t ";
-	const structPrefix = "typedef struct ";
-	let start = 0;
-	for (let i = 0; i <= protos.length; i += 1) {
-		if (i === protos.length || protos.charAt(i) === "\n") {
-			const line = sliceStr(protos, start, i);
-			if (startsWith(line, enumPrefix)) {
-				// Extract enum name: strip prefix and trailing ";"
-				const rest = sliceStr(line, enumPrefix.length, line.length);
-				let nameEnd = rest.length;
-				if (nameEnd > 0 && rest.charAt(nameEnd - 1) === ";") {
-					nameEnd = nameEnd - 1;
-				}
-				const name = sliceStr(rest, 0, nameEnd);
-				if (name.length > 0) {
-					nameSetAdd(g.knownTypeNames, name);
-				}
-			} else if (startsWith(line, structPrefix)) {
-				// Extract struct name: "typedef struct NAME NAME;" → NAME
-				const rest = sliceStr(line, structPrefix.length, line.length);
-				// Find first space after the name
-				let spaceIdx = 0;
-				while (spaceIdx < rest.length && rest.charAt(spaceIdx) !== " ") {
-					spaceIdx = spaceIdx + 1;
-				}
-				const name = sliceStr(rest, 0, spaceIdx);
-				if (name.length > 0) {
-					nameSetAdd(g.knownTypeNames, name);
-				}
-			}
-			start = i + 1;
-		}
-	}
-
-	// Phase 2: ExportRegistry-based class/interface registration
-	// Distinguishes class (needs Name*) from interface (needs Name)
-	const reg = (g.checkerCtx !== null) ? g.checkerCtx.exportRegistry : null as unknown as ExportRegistry;
-	if (reg !== null) {
-		for (const entry of reg.entries) {
-			for (const sym of entry.symbols) {
-				const name = safeName(sym.name);
-				if (sym.kind === SymbolKind.Class) {
-					nameSetAdd(g.knownClassNames, name);
-					nameSetAdd(g.knownTypeNames, name);
-				} else if (sym.kind === SymbolKind.Interface) {
-					nameSetAdd(g.knownTypeNames, name);
-				}
-			}
-		}
-	}
-}
-
-// ===== Register Cross-Module Types from ExportRegistry Only =====
-// Used by the new proto header path — no string parsing needed since
-// types come from externalTypes cache, not inline proto text.
+// ===== Register Cross-Module Types from ExportRegistry =====
+// Registers class/interface/enum names from all imported modules so
+// getTypeDesc resolves TypeReference correctly (Nim parity).
 
 function registerCrossModuleTypesFromRegistry(g: CGen): void {
 	const reg = (g.checkerCtx !== null) ? g.checkerCtx.exportRegistry : null as unknown as ExportRegistry;
@@ -720,6 +251,127 @@ function registerCrossModuleTypesFromRegistry(g: CGen): void {
 			}
 		}
 	}
+}
+
+// ===== Build Type Registry from ExportRegistry =====
+// Implementation parity: types carry full structural info on every reference.
+// Our TypeReference only has typeName. This registry lets getTypeDesc
+// resolve TypeReference → full Type for cross-module types.
+
+function buildTypeRegistry(g: CGen): void {
+	const reg = (g.checkerCtx !== null) ? g.checkerCtx.exportRegistry : null as unknown as ExportRegistry;
+	if (reg === null) return;
+	for (const entry of reg.entries) {
+		for (const sym of entry.symbols) {
+			if (sym.symType === null) continue;
+			if (sym.kind === SymbolKind.Interface || sym.kind === SymbolKind.Class || sym.kind === SymbolKind.Enum || sym.kind === SymbolKind.TypeAlias) {
+				typeRegistryAdd(g.typeRegistry, sym.name, sym.symType);
+				registerFieldTypes(g, sym.symType);
+			}
+		}
+	}
+}
+
+// Shallow-register named field types so getTypeDesc can resolve TypeReferences lazily.
+// Nim parity: no recursive pre-crawl. getTypeDesc resolves nested types on-demand
+// via typeRegistryLookup, with typeCache preventing infinite recursion on self-referential types.
+function registerFieldTypes(g: CGen, t: Type): void {
+	if (t === null) return;
+	if (t.typeChildren !== null) {
+		let i = 0;
+		while (i < t.typeChildren.length) {
+			const child = t.typeChildren[i];
+			if (child !== null) {
+				registerNamedType(g, child);
+				// Array/Ref/Ptr element types
+				if (child.typeReturn !== null) {
+					registerNamedType(g, child.typeReturn);
+				}
+			}
+			i = i + 1;
+		}
+	}
+	if (t.typeReturn !== null) {
+		registerNamedType(g, t.typeReturn);
+	}
+}
+
+// Register a single named type into the registry if not already present.
+function registerNamedType(g: CGen, t: Type): void {
+	if (t === null) return;
+	if ((t.kind === TypeKind.Object || t.kind === TypeKind.Enum || t.kind === TypeKind.Union) && t.typeName.length > 0) {
+		if (typeRegistryLookup(g.typeRegistry, t.typeName) === null) {
+			typeRegistryAdd(g.typeRegistry, t.typeName, t);
+		}
+	}
+}
+
+// ===== Emit Cross-Module Function Prototypes (Nim parity) =====
+// Each module emits prototypes for all exported functions from other modules.
+
+function emitCrossModulePrototypes(g: CGen): void {
+	const reg = (g.checkerCtx !== null) ? g.checkerCtx.exportRegistry : null as unknown as ExportRegistry;
+	if (reg === null) return;
+	for (const entry of reg.entries) {
+		// Skip prototypes from own module — they're emitted by genDecl
+		if (entry.modulePath === g.modulePath) continue;
+		for (const sym of entry.symbols) {
+			if (sym.kind !== SymbolKind.Function) continue;
+			if (sym.symType === null) continue;
+			if (sym.symType.kind !== TypeKind.Function) continue;
+			// Emit prototype for primary function
+			emitProtoFromExport(g, sym.name, sym.symType, sym.nativeName, entry.modulePath, 0);
+			// Emit prototypes for overloads
+			if (sym.overloadTypes !== null) {
+				for (let oi = 0; oi < sym.overloadTypes.length; oi += 1) {
+					const ovNative = (sym.overloadNativeNames !== null && oi < sym.overloadNativeNames.length) ? sym.overloadNativeNames[oi] : "";
+					emitProtoFromExport(g, sym.name, sym.overloadTypes[oi], ovNative, entry.modulePath, oi + 1);
+				}
+			}
+		}
+	}
+}
+
+function emitProtoFromExport(g: CGen, name: string, fnType: Type, nativeName: string, modulePath: string, overloadIdx: number): void {
+	if (fnType === null || fnType.kind !== TypeKind.Function) return;
+	// Compute C function name
+	let cName = "";
+	if (nativeName !== "") {
+		cName = nativeName;
+	} else if (name === "main") {
+		cName = safeName(name);
+	} else if (modulePath !== "") {
+		cName = mangle(name) + "__" + mangleModuleName(modulePath);
+		if (overloadIdx > 0) cName = cName + "_u" + overloadIdx;
+		else cName = cName + "_u0";
+	} else {
+		cName = safeName(name);
+		if (overloadIdx > 0) cName = cName + "__" + overloadIdx;
+	}
+	// Dedup
+	const protoKey = "proto:" + cName;
+	if (nameSetHas(g.declaredProcs, protoKey)) return;
+	nameSetAdd(g.declaredProcs, protoKey);
+	// Build prototype string
+	const retType = getTypeDesc(g, fnType.typeReturn);
+	const nrvo = isNrvoReturnType(fnType.typeReturn);
+	let paramList = "";
+	if (nrvo) {
+		paramList = retType + "* __result";
+		if (fnType.typeChildren.length > 0) paramList = paramList + ", ";
+	}
+	for (let i = 0; i < fnType.typeChildren.length; i += 1) {
+		if (i > 0) paramList = paramList + ", ";
+		let pType = getTypeDesc(g, fnType.typeChildren[i]);
+		if (ccgIntroducedPtr(fnType.typeChildren[i]) && pType.length > 0 && pType.charAt(pType.length - 1) !== "*") {
+			pType = pType + "*";
+		}
+		paramList = paramList + pType;
+	}
+	if (paramList === "") paramList = "void";
+	let cRetType = retType;
+	if (nrvo) cRetType = "void";
+	addLine(sec(g, CSection.ProcHeaders), cRetType + " " + cName + "(" + paramList + ");");
 }
 
 // ===== Emit @include directives from checker context =====
@@ -743,6 +395,39 @@ function emitIncludeDirectives(g: CGen, directives: string): void {
 	}
 }
 
+// ===== Emit @emit directives — raw C code injection (Nim {.emit.} parity) =====
+// Top-level @emit goes to ProcHeaders by default.
+// Section markers (Nim pattern): /*TYPESECTION*/ → Types, /*VARSECTION*/ → GlobalVars,
+// /*INCLUDESECTION*/ → Headers
+
+function emitRawDirectives(g: CGen, directives: string): void {
+	let start = 0;
+	for (let pos = 0; pos < directives.length; pos += 1) {
+		if (directives.charAt(pos) === "\n") {
+			const line = sliceStr(directives, start, pos);
+			if (line.length > 0) {
+				emitOneRawDirective(g, line);
+			}
+			start = pos + 1;
+		}
+	}
+	if (start < directives.length) {
+		const line = sliceStr(directives, start, directives.length);
+		if (line.length > 0) {
+			emitOneRawDirective(g, line);
+		}
+	}
+}
+
+function emitOneRawDirective(g: CGen, code: string): void {
+	// Detect section markers (Nim parity: determineSection)
+	let target = CSection.ProcHeaders;
+	if (startsWith(code, "/*TYPESECTION*/")) target = CSection.Types;
+	else if (startsWith(code, "/*VARSECTION*/")) target = CSection.GlobalVars;
+	else if (startsWith(code, "/*INCLUDESECTION*/")) target = CSection.Headers;
+	addLine(sec(g, target), code);
+}
+
 // B2: @include directives for runtime headers set flags instead of emitting directly.
 // This deduplicates with the B2 conditional include at end of generateCModule.
 function emitOneInclude(g: CGen, header: string): void {
@@ -758,7 +443,7 @@ function emitOneInclude(g: CGen, header: string): void {
 
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
-import { createObject, numberType, stringType } from "../../checker/types";
+
 
 function cOutput(input: string): string {
 	const pr = parseSource(input);
@@ -769,166 +454,82 @@ function cOutput(input: string): string {
 function cModuleOutput(input: string): string {
 	const pr = parseSource(input);
 	if (!pr.ok) return "PARSE_ERROR: " + pr.error;
-	return generateCModule(pr.value, null as unknown as CheckerContext, "test/input", createTypeCache(), createAliveSet(), true);
+	return generateCModule(pr.value, null as unknown as CheckerContext, "test/input", createAliveSet(), true);
 }
 
 test "empty program has headers" {
 	const result = cOutput("");
-	expect(result.length > 0);
+	assert result.length > 0;
 }
 
 test "headers include stdint" {
 	const result = cOutput("");
 	// stdint.h should be present
-	expect(result.length > 10);
+	assert result.length > 10;
 }
 
 test "simple function" {
 	const result = cOutput("function foo(): void { return; }");
-	expect(result.length > 0);
+	assert result.length > 0;
 }
 
 test "enum output" {
 	const result = cOutput("enum Dir { North, South, East, West }");
-	expect(result.length > 0);
+	assert result.length > 0;
 }
 
 test "function + call" {
 	const result = cOutput("function add(a: number, b: number): number { return a + b; }");
-	expect(result.length > 0);
+	assert result.length > 0;
 }
 
 test "global var init in module Init000" {
 	const result = cOutput("function add(a: number, b: number): number { return a + b; }\nconst result: number = add(2, 3);");
-	expect(result.length > 0);
+	assert result.length > 0;
 }
 
 test "two-phase init + POSIX main" {
 	const result = cOutput("function add(a: number, b: number): number { return a + b; }\nconst result: number = add(2, 3);");
-	expect(result.length > 0);
+	assert result.length > 0;
 }
 
 test "MacroInvocation skipped in codegen" {
 	const result = cOutput("@passL(\"-lssl\");");
 	// Should not contain /* unsupported */
-	expect(result.length > 0);
+	assert result.length > 0;
 }
 
 test "@include from prelude emits header" {
 	// prelude has @include("system.h"), so generated C should contain it
 	const result = cOutput("");
-	expect(result.length > 0);
+	assert result.length > 0;
 }
 
 test "direct call detection" {
 	// closureCallMarker sets isDirectCall on CallExpr nodes — codegen reads the flag
 	const result = cOutput("function foo(): void {} function bar(): void { foo(); }");
-	expect(result.length > 0);
+	assert result.length > 0;
 }
 
 test "array literal" {
 	const result = cOutput("const arr: number = [1, 2, 3];");
-	expect(result.length > 0);
+	assert result.length > 0;
 }
 
 test "generateCModule produces code without dispatcher" {
 	const result = cModuleOutput("function foo(): void { return; }");
-	expect(result.length > 0);
+	assert result.length > 0;
 }
 
 test "B2: math-only module excludes string and array headers" {
 	const result = cModuleOutput("function add(a: number, b: number): number { return a + b; }");
 	// Should NOT include core/string.h or core/array.h for pure numeric code
-	expect(result.indexOf("core/string.h") < 0);
-	expect(result.indexOf("core/array.h") < 0);
+	assert result.indexOf("core/string.h") < 0;
+	assert result.indexOf("core/array.h") < 0;
 }
 
 test "B2: string usage includes string header" {
 	const result = cModuleOutput("const name: string = \"hello\";");
-	expect(result.indexOf("core/string") >= 0);
+	assert result.indexOf("core/string") >= 0;
 }
 
-test "collectFunctionPrototypes extracts protos" {
-	const pr = parseSource("function add(a: number, b: number): number { return a + b; }");
-	expect(pr.ok);
-	const protos = collectFunctionPrototypes(pr.value, null as unknown as CGen);
-	expect(protos.length > 0);
-}
-
-test "collectExportedPrototypes only exported" {
-	const pr = parseSource("function helper(): void {}\nexport function api(): void {}");
-	expect(pr.ok);
-	const exported = collectExportedPrototypes(pr.value, null as unknown as CGen);
-	const all = collectFunctionPrototypes(pr.value, null as unknown as CGen);
-	expect(exported.length > 0);
-	expect(all.length > exported.length);
-}
-
-// Helper: find inner decl node from "export class Foo { ... }" and set nodeType
-// Traverses through ExportDecl and DecoratedDecl wrappers to find the actual decl.
-function setExportedDeclType(program: Node, objType: Type): void {
-	const pd = program.data as ProgramData;
-	for (let i = 0; i < pd.programStmts.length; i += 1) {
-		let node = pd.programStmts[i];
-		if (node.kind === NodeKind.ExportDecl) {
-			const ed = node.data as ExportDeclData;
-			node = ed.exportedDecl;
-		}
-		if (node.kind === NodeKind.DecoratedDecl) {
-			const dd = node.data as DecoratedDeclData;
-			node = dd.decoratedNode;
-		}
-		if (node.kind === NodeKind.ClassDecl || node.kind === NodeKind.InterfaceDecl) {
-			node.nodeType = objType;
-		}
-	}
-}
-
-test "class type decl emits full struct body" {
-	const pr = parseSource("export class User { name: string; age: number; }");
-	expect(pr.ok);
-	const classType = createObject("User", ["name", "age"], [stringType(), numberType()], false);
-	setExportedDeclType(pr.value, classType);
-	const decls = collectExportedTypeDecls(pr.value);
-	// Full struct body: should contain "struct User {" and field definitions
-	expect(decls.length > 50);
-}
-
-test "class with no nodeType falls back to forward decl" {
-	const pr = parseSource("export class Empty {}");
-	expect(pr.ok);
-	const decls = collectExportedTypeDecls(pr.value);
-	expect(decls.length > 0);
-	// Without nodeType, just a forward decl (no struct body)
-	expect(decls.length < 50);
-}
-
-test "interface type decl emits full struct body" {
-	const pr = parseSource("export interface Token { kind: number; value: string; }");
-	expect(pr.ok);
-	const ifaceType = createObject("Token", ["kind", "value"], [numberType(), stringType()], true);
-	setExportedDeclType(pr.value, ifaceType);
-	const decls = collectExportedTypeDecls(pr.value);
-	// Full struct body: should contain "struct Token {" and field definitions
-	expect(decls.length > 50);
-}
-
-test "registerCrossModuleTypes parses enum and struct names" {
-	const g = createCGen(null as unknown as CheckerContext, "test");
-	const protos = "typedef int32_t Color;\ntypedef struct Token Token;\n";
-	registerCrossModuleTypes(g, protos);
-	expect(nameSetHas(g.knownTypeNames, "Color"));
-	expect(nameSetHas(g.knownTypeNames, "Token"));
-	expect(!nameSetHas(g.knownClassNames, "Token"));
-}
-
-test "knownClassNames enables pointer semantics in fallback" {
-	const g = createCGen(null as unknown as CheckerContext, "test");
-	nameSetAdd(g.knownClassNames, "User");
-	nameSetAdd(g.knownTypeNames, "User");
-	expect(nameSetHas(g.knownClassNames, "User"));
-	expect(nameSetHas(g.knownTypeNames, "User"));
-	// Interface not in knownClassNames
-	nameSetAdd(g.knownTypeNames, "Token");
-	expect(!nameSetHas(g.knownClassNames, "Token"));
-}

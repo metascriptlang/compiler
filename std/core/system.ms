@@ -20,12 +20,3 @@ export function err<T, E>(this typeof Result, e: E): Result<T, E> {
 	unreachable;
 }
 
-@builtin("Expect")
-export function expect(cond: boolean): void {
-	unreachable;
-}
-
-@builtin("Expect")
-export function expect(cond: boolean, msg: string): void {
-	unreachable;
-}

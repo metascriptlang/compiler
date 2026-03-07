@@ -1,8 +1,8 @@
 /*
- * MetaScript Future Runtime — Nim asyncfutures.nim parity
+ * MetaScript Future Runtime — Standard reference implementation parity
  *
  * Type-erased Future with callback chains and callSoon bridge.
- * Matches Nim's FutureBase/Future[T], CallbackList, callSoon.
+ * Matches standard reference Future patterns, CallbackList, callSoon.
  */
 #ifndef MS_FUTURE_H
 #define MS_FUTURE_H
@@ -11,7 +11,7 @@
 #include <stdlib.h>
 #include <assert.h>
 
-/* ===== Thread-Local Storage (Nim's {.threadvar.}) ===== */
+/* ===== Thread-Local Storage (Standard reference threadvar pattern) ===== */
 
 #ifndef MS_THREAD_LOCAL
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_THREADS__)
@@ -36,21 +36,21 @@ typedef struct {
 } msClosure;
 #endif
 
-/* ===== callSoon routing (Nim's callSoonProc threadvar) ===== */
+/* ===== callSoon routing (Standard reference threadvar pattern) ===== */
 
 typedef void (*msCallSoonFn)(msClosure cb);
 extern MS_THREAD_LOCAL msCallSoonFn msCallSoonProc; /* set by dispatcher init */
 
 static inline void msCallSoon(msClosure cb) {
 	if (msCallSoonProc == NULL) {
-		/* No dispatcher — call immediately (Nim's fallback) */
+		/* No dispatcher — call immediately (Standard reference fallback) */
 		((void(*)(void*))cb.fn)(cb.env);
 	} else {
 		msCallSoonProc(cb);
 	}
 }
 
-/* ===== Callback list (Nim's CallbackList — singly-linked) ===== */
+/* ===== Callback list (Standard reference CallbackList pattern — singly-linked) ===== */
 
 typedef struct msFutureCb {
 	void (*fn)(void*);
@@ -58,7 +58,7 @@ typedef struct msFutureCb {
 	struct msFutureCb* next;
 } msFutureCb;
 
-/* ===== Future (Nim's FutureBase + Future[T], type-erased) ===== */
+/* ===== Future (Standard reference implementation parity, type-erased) ===== */
 
 typedef struct msFuture {
 	bool finished;
@@ -72,14 +72,14 @@ typedef struct msFuture {
 
 /* ===== Operations ===== */
 
-/* Nim's newFuture[T]() */
+/* Standard reference newFuture[T]() parity */
 static inline msFuture* msFutureCreate(void) {
 	msFuture* f = (msFuture*)calloc(1, sizeof(msFuture));
 	return f;
 }
 
 /* Destroy future — free callback chain + the future itself.
- * Called by DRC at scope exit. Nim GC handles this automatically. */
+ * Called by DRC at scope exit. Standard reference GC handles this automatically. */
 static inline void msFutureDestroy(msFuture* f) {
 	if (f == NULL) return;
 	msFutureCb* cb = f->callbacks;
@@ -91,13 +91,13 @@ static inline void msFutureDestroy(msFuture* f) {
 	free(f);
 }
 
-/* Nim's future.finished */
+/* Standard reference future.finished parity */
 static inline bool msFutureFinished(msFuture* f) {
 	return f->finished;
 }
 
 /* Fire all registered callbacks via callSoon (shared by complete/fail).
- * Matches Nim: set finished BEFORE firing, clear list, route through callSoon. */
+ * Matches standard reference: set finished BEFORE firing, clear list, route through callSoon. */
 static inline void msFutureFireCallbacks(msFuture* f) {
 	msFutureCb* cb = f->callbacks;
 	f->callbacks = NULL;
@@ -110,7 +110,7 @@ static inline void msFutureFireCallbacks(msFuture* f) {
 	}
 }
 
-/* Nim's complete(fut, val) — sets value + fires callbacks.
+/* Standard reference complete(fut, val) parity — sets value + fires callbacks.
  * Double-complete is a safe no-op (replaces assert for release safety). */
 static inline void msFutureComplete(msFuture* f, void* val) {
 	if (f->finished) return;
@@ -119,7 +119,7 @@ static inline void msFutureComplete(msFuture* f, void* val) {
 	msFutureFireCallbacks(f);
 }
 
-/* Nim's fail(fut, err) — sets error + fires callbacks.
+/* Standard reference fail(fut, err) parity — sets error + fires callbacks.
  * Double-fail/complete is a safe no-op (replaces assert for release safety). */
 static inline void msFutureFail(msFuture* f, void* err) {
 	if (f->finished) return;
@@ -130,7 +130,7 @@ static inline void msFutureFail(msFuture* f, void* err) {
 }
 
 /* Cancel a pending future — clears callbacks without firing, marks finished+cancelled.
- * If already finished, this is a no-op. Matches Nim pattern: clearCallbacks() + fail(). */
+ * If already finished, this is a no-op. Matches standard reference pattern: clearCallbacks() + fail(). */
 static inline void msFutureCancel(msFuture* f) {
 	if (f->finished) return;
 	/* Free callback chain without firing them */
@@ -156,7 +156,7 @@ static inline bool msFutureCancelled(msFuture* f) {
 	return f->cancelled;
 }
 
-/* Nim's read(fut) — returns value or re-raises error via msErr flag.
+/* Standard reference read(fut) parity — returns value or re-raises error via msErr flag.
  * Caller must check msErr after calling this (codegen does it via goto).
  * Error payload is stored in msErrPayload for inspection. */
 extern bool msErr; /* from system.c */
@@ -177,8 +177,8 @@ static inline void* msFutureRead(msFuture* f) {
 	return f->value;
 }
 
-/* Nim's addCallback(fut, cb) — if finished, callSoon(cb); else append.
- * O(1) append via tail pointer (Nim uses intrusive list, same complexity). */
+/* Standard reference addCallback(fut, cb) parity — if finished, callSoon(cb); else append.
+ * O(1) append via tail pointer (Standard reference uses intrusive list, same complexity). */
 static inline void msFutureAddCallback(msFuture* f, msClosure cb) {
 	if (f->finished) {
 		msCallSoon(cb);

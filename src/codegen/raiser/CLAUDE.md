@@ -192,10 +192,10 @@ Compare-branch semantics: `BgtI64 A B C` — if R[A] > R[B], skip C instructions
 
 ```bash
 # Codegen-only tests (parse → codegen → VM, no checker/transforms)
-rm -rf out && msc test src/codegen/raiser/rgen.ms
+rm -rf out && bun run test-ms src/codegen/raiser/rgen.ms
 
 # Full-pipeline tests (parse → check → transform → codegen → VM)
-rm -rf out && msc test src/codegen/raiser/eval.ms
+rm -rf out && bun run test-ms src/codegen/raiser/eval.ms
 ```
 
 eval.ms uses `jsBackend=false` in `transformProgram` to enable all general transforms (lambdaLifting, tailCallLower, stringConcatFlatten, etc.). This means lifted arrows and other Phase 3 features are tested end-to-end.

@@ -13,8 +13,8 @@ import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall } from "../util";
 import { lookupSymbol } from "../../checker/symbol";
-import { TypeKind, getProperty, typeNameOf } from "../../checker/types";
-import { ExtensionRegistry, hasExtensionByName, findExtension } from "../../checker/context";
+import { TypeKind, Type, getProperty, typeNameOf } from "../../checker/types";
+import { ExtensionRegistry, hasExtensionByName, findExtension, findAllExtensions } from "../../checker/context";
 import { parseInput, getStmts, firstCalleeKind, firstCallArgCount } from "../testUtil";
 import { createTransformContext, createTransformContextWithChecker } from "../context";
 import { createContext, registerExtension, ExtensionMethod } from "../../checker/context";
@@ -61,9 +61,27 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 	// If receiver has a property with this name, it's a regular member call
 	if (receiverHasProperty(ctx, member.object, methodName)) return node;
 
-	// Look up the specific extension to determine instance vs static
+	// Look up the specific extension to determine instance vs static.
+	// For array methods, the registry uses raw type annotations ("number[]", "string[]", "T[]")
+	// but typeNameOf returns "Array" for all. Resolve by element type matching.
 	const receiverType = getReceiverTypeName(ctx, member.object);
-	const ext = findExtension(ctx.checkerCtx.extensionRegistry, receiverType, methodName);
+	let ext = findExtension(ctx.checkerCtx.extensionRegistry, receiverType, methodName);
+	const objType = member.object.nodeType;
+	if (ext === null && objType !== null && objType.kind === TypeKind.Array) {
+		// Array type: try raw type annotations ("number[]", "string[]", generic "T[]")
+		const elemKind = (objType.typeReturn !== null) ? objType.typeReturn.kind : TypeKind.Unknown;
+		if (elemKind === TypeKind.Number) {
+			ext = findExtension(ctx.checkerCtx.extensionRegistry, "number[]", methodName);
+			if (ext === null) ext = findExtension(ctx.checkerCtx.extensionRegistry, "number[ ]", methodName);
+		} else if (elemKind === TypeKind.String) {
+			ext = findExtension(ctx.checkerCtx.extensionRegistry, "string[]", methodName);
+			if (ext === null) ext = findExtension(ctx.checkerCtx.extensionRegistry, "string[ ]", methodName);
+		} else {
+			// Non-number, non-string arrays → use generic overload ("T[]" or "T[ ]")
+			ext = findExtension(ctx.checkerCtx.extensionRegistry, "T[]", methodName);
+			if (ext === null) ext = findExtension(ctx.checkerCtx.extensionRegistry, "T[ ]", methodName);
+		}
+	}
 
 	const loc = node.location;
 	// Static extension: Math.floor(x) → floor(x) — no receiver prepend
@@ -86,8 +104,10 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 		newArgs.push(call.arguments[ai]);
 	}
 	const newCall = makeCall(makeIdent(methodName, loc), newArgs, loc);
-	// Trust resolvedSym from checker; fallback to lookupSymbol for unchecked paths
-	if (node.resolvedSym !== null) {
+	// Resolve symbol: prefer matched extension's sym, then checker's resolvedSym, then lookupSymbol
+	if (ext !== null && ext.sym !== null) {
+		newCall.resolvedSym = ext.sym;
+	} else if (node.resolvedSym !== null) {
 		newCall.resolvedSym = node.resolvedSym;
 	} else {
 		const extSym = lookupSymbol(ctx.checkerCtx.table, methodName);
@@ -146,7 +166,7 @@ function makePushExt(): ExtensionMethod {
 
 test "extension call rewritten to direct call" {
 	const prog = setupExtensionCtx("s.trim();", makeTrimExt());
-	expect(firstCalleeKind(prog) === NodeKind.Identifier);
+	assert firstCalleeKind(prog) === NodeKind.Identifier;
 }
 
 test "non-extension call unchanged" {
@@ -155,7 +175,7 @@ test "non-extension call unchanged" {
 	const cc = createContext();
 	const ctx = createTransformContextWithChecker(cc);
 	const prog = lowerExtensionMethod(result.value, ctx);
-	expect(firstCalleeKind(prog) === NodeKind.MemberExpr);
+	assert firstCalleeKind(prog) === NodeKind.MemberExpr;
 }
 
 test "no checker context no rewrite" {
@@ -163,17 +183,17 @@ test "no checker context no rewrite" {
 	if (!result.ok) return;
 	const ctx = createTransformContext();
 	const prog = lowerExtensionMethod(result.value, ctx);
-	expect(firstCalleeKind(prog) === NodeKind.MemberExpr);
+	assert firstCalleeKind(prog) === NodeKind.MemberExpr;
 }
 
 test "extension with args prepends receiver" {
 	const prog = setupExtensionCtx("a.push(1);", makePushExt());
-	expect(firstCallArgCount(prog) === 2);
+	assert firstCallArgCount(prog) === 2;
 }
 
 test "extension no args gets receiver only" {
 	const prog = setupExtensionCtx("s.trim();", makeTrimExt());
-	expect(firstCallArgCount(prog) === 1);
+	assert firstCallArgCount(prog) === 1;
 }
 
 test "class member takes priority over extension" {
@@ -196,17 +216,17 @@ test "class member takes priority over extension" {
 	defineSymbol(cc.table, tSym);
 	const ctx = createTransformContextWithChecker(cc);
 	const prog = lowerExtensionMethod(result.value, ctx);
-	expect(firstCalleeKind(prog) === NodeKind.MemberExpr);
+	assert firstCalleeKind(prog) === NodeKind.MemberExpr;
 }
 
 test "regular function call unchanged" {
 	const prog = setupExtensionCtx("trim();", makeTrimExt());
-	expect(firstCalleeKind(prog) === NodeKind.Identifier);
+	assert firstCalleeKind(prog) === NodeKind.Identifier;
 }
 
 test "non-matching method unchanged" {
 	const prog = setupExtensionCtx("s.length();", makeTrimExt());
-	expect(firstCalleeKind(prog) === NodeKind.MemberExpr);
+	assert firstCalleeKind(prog) === NodeKind.MemberExpr;
 }
 
 test "static extension no receiver prepend" {
@@ -231,5 +251,5 @@ test "static extension no receiver prepend" {
 	const ctx = createTransformContextWithChecker(cc);
 	const prog = lowerExtensionMethod(result.value, ctx);
 	// Should rewrite to floor(3.7) — callee is Identifier, not MemberExpr
-	expect(firstCalleeKind(prog) === NodeKind.Identifier);
+	assert firstCalleeKind(prog) === NodeKind.Identifier;
 }

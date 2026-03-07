@@ -1,6 +1,6 @@
 // Enum ToString Lowering — inject FunctionDecl for each EnumDecl
 //
-// Nim generates enum-to-string procs in the semantic phase (enumtostr.nim:genEnumToStrProc).
+// Standard reference implementations generate enum-to-string procs in the semantic phase.
 // We inject a synthetic FunctionDecl with a SwitchStmt body into the program statements.
 // Codegen then sees a normal FunctionDecl and emits it.
 //
@@ -78,11 +78,11 @@ test "enum toString injects FunctionDecl" {
 	const enumNode = makeTestEnum("Color", ["Red", "Green", "Blue"]);
 	const prog = makeTestProgram([enumNode]);
 	const pd = prog.data as ProgramData;
-	expect(pd.programStmts.length === 1);
+	assert pd.programStmts.length === 1;
 	const result = lowerEnumToString(prog, null as unknown as TransformContext);
 	const rd = result.data as ProgramData;
-	expect(rd.programStmts.length === 2);
-	expect(rd.programStmts[1].kind === NodeKind.FunctionDecl);
+	assert rd.programStmts.length === 2;
+	assert rd.programStmts[1].kind === NodeKind.FunctionDecl;
 }
 
 test "enum toString body has switch" {
@@ -91,31 +91,31 @@ test "enum toString body has switch" {
 	const result = lowerEnumToString(prog, null as unknown as TransformContext);
 	const rd = result.data as ProgramData;
 	const fn = rd.programStmts[1];
-	expect(fn.kind === NodeKind.FunctionDecl);
-	expect(fn.nodeType !== null);
+	assert fn.kind === NodeKind.FunctionDecl;
+	assert fn.nodeType !== null;
 }
 
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
 import { generateCModule } from "../../codegen/c/index";
 import { CheckerContext } from "../../checker/context";
-import { createTypeCache } from "../../codegen/c/context";
+import { createAliveSet } from "../../codegen/c/context";
 import { FunctionDeclData } from "../../ast/node";
 
 test "enum toString E2E: parse → transform → codegen" {
 	const pr = parseSource("enum Color { Red, Green, Blue }");
-	expect(pr.ok);
+	assert pr.ok;
 	const transformed = lowerEnumToString(pr.value, null as unknown as TransformContext);
 	const td = transformed.data as ProgramData;
 	// Verify transform injected FunctionDecl
-	expect(td.programStmts.length === 2);
-	expect(td.programStmts[0].kind === NodeKind.EnumDecl);
-	expect(td.programStmts[1].kind === NodeKind.FunctionDecl);
+	assert td.programStmts.length === 2;
+	assert td.programStmts[0].kind === NodeKind.EnumDecl;
+	assert td.programStmts[1].kind === NodeKind.FunctionDecl;
 	const fd = td.programStmts[1].data as FunctionDeclData;
-	expect(fd.fnName === "Color_toString");
+	assert fd.fnName === "Color_toString";
 	// Generate C — should include the toString function
-	const cCode = generateCModule(transformed, null as unknown as CheckerContext, "test/input", createTypeCache(), { entries: [] }, true);
-	expect(cCode.length > 50);
+	const cCode = generateCModule(transformed, null as unknown as CheckerContext, "test/input", createAliveSet(), true);
+	assert cCode.length > 50;
 }
 
 export function lowerEnumToString(program: Node, ctx: TransformContext): Node {

@@ -80,10 +80,16 @@ export function tryMarkGreen(
 			continue;
 		}
 
-		// HIGH durability: skip verification (stdlib assumed stable)
 		const depEntry = cacheGet(cache, dep.depKey);
+
+		// HIGH durability: skip recursive verification (stdlib assumed stable)
+		// but still check if it was recomputed since we cached
 		if (depEntry !== null) {
 			if (depEntry.durability === TaDurability.High) {
+				if (depEntry.computedAt > entry.computedAt) {
+					entry.state = TaQueryState.Red;
+					return false;
+				}
 				i = i + 1;
 				continue;
 			}
@@ -95,7 +101,7 @@ export function tryMarkGreen(
 			return false;
 		}
 
-		// Phase 1: if dep was recomputed since we cached, mark RED
+		// If dep was recomputed since we cached, mark RED
 		if (depEntry !== null) {
 			if (depEntry.computedAt > entry.computedAt) {
 				entry.state = TaQueryState.Red;
@@ -180,7 +186,7 @@ test "empty cache returns false" {
 	const cache = createCacheStore(100);
 	const fileInput = createFileInputStore();
 	const key = createQueryKey(TaQueryKind.Parse, 0);
-	expect(!tryMarkGreen(cache, fileInput, key, 1));
+	assert !tryMarkGreen(cache, fileInput, key, 1);
 }
 
 test "green entry at current revision returns true" {
@@ -191,7 +197,7 @@ test "green entry at current revision returns true" {
 	entry.state = TaQueryState.Green;
 	entry.verifiedAt = 5;
 	cachePut(cache, entry);
-	expect(tryMarkGreen(cache, fileInput, key, 5));
+	assert tryMarkGreen(cache, fileInput, key, 5);
 }
 
 test "entry with no deps verifies green" {
@@ -203,7 +209,7 @@ test "entry with no deps verifies green" {
 	entry.verifiedAt = 0;
 	cachePut(cache, entry);
 	// No dependencies -> all deps verified trivially -> Green
-	expect(tryMarkGreen(cache, fileInput, key, 1));
+	assert tryMarkGreen(cache, fileInput, key, 1);
 }
 
 test "file dependency hash mismatch -> false" {
@@ -216,7 +222,7 @@ test "file dependency hash mismatch -> false" {
 	entry.verifiedAt = 0;
 	entry.dependencies = makeTestDeps(0, 999);
 	cachePut(cache, entry);
-	expect(!tryMarkGreen(cache, fileInput, parseKey, 1));
+	assert !tryMarkGreen(cache, fileInput, parseKey, 1);
 }
 
 test "file dependency hash match -> true" {
@@ -230,7 +236,7 @@ test "file dependency hash match -> true" {
 	entry.verifiedAt = 0;
 	entry.dependencies = makeTestDeps(0, actualHash);
 	cachePut(cache, entry);
-	expect(tryMarkGreen(cache, fileInput, parseKey, 1));
+	assert tryMarkGreen(cache, fileInput, parseKey, 1);
 }
 
 test "stores entry as Green" {
@@ -241,10 +247,10 @@ test "stores entry as Green" {
 	pushFrame(depStack, key);
 	executeQueryWith(cache, fileInput, depStack, key, 1, 42, true);
 	const entry = cacheGet(cache, key);
-	expect(entry !== null);
-	expect(entry.state === TaQueryState.Green);
-	expect(entry.computedAt === 1);
-	expect(entry.outputHash === 42);
+	assert entry !== null;
+	assert entry.state === TaQueryState.Green;
+	assert entry.computedAt === 1;
+	assert entry.outputHash === 42;
 }
 
 test "collects dependencies from frame" {
@@ -257,8 +263,8 @@ test "collects dependencies from frame" {
 	recordDependency(depStack, depKey, 100);
 	executeQueryWith(cache, fileInput, depStack, key, 1, 42, true);
 	const entry = cacheGet(cache, key);
-	expect(entry.dependencies.length === 1);
-	expect(queryKeysEqual(entry.dependencies[0].depKey, depKey));
+	assert entry.dependencies.length === 1;
+	assert queryKeysEqual(entry.dependencies[0].depKey, depKey);
 }
 
 test "not computed is no-op" {
@@ -267,7 +273,7 @@ test "not computed is no-op" {
 	const depStack = createDependencyStack();
 	const key = createQueryKey(TaQueryKind.Parse, 0);
 	executeQueryWith(cache, fileInput, depStack, key, 1, 0, false);
-	expect(!cacheContains(cache, key));
+	assert !cacheContains(cache, key);
 }
 
 test "marks file queries red" {
@@ -278,7 +284,7 @@ test "marks file queries red" {
 	entry.state = TaQueryState.Green;
 	cachePut(cache, entry);
 	invalidateFile(cache, moduleDeps, 0);
-	expect(cacheGet(cache, key).state === TaQueryState.Red);
+	assert cacheGet(cache, key).state === TaQueryState.Red;
 }
 
 test "marks transitive dependents red" {
@@ -294,6 +300,6 @@ test "marks transitive dependents red" {
 	cachePut(cache, e0);
 	cachePut(cache, e1);
 	invalidateFile(cache, moduleDeps, 1);
-	expect(cacheGet(cache, k1).state === TaQueryState.Red);
-	expect(cacheGet(cache, k0).state === TaQueryState.Red);
+	assert cacheGet(cache, k1).state === TaQueryState.Red;
+	assert cacheGet(cache, k0).state === TaQueryState.Red;
 }

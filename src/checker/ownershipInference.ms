@@ -1,6 +1,6 @@
 // Ownership Inference Pass — infers SF_SINK vs SF_LENT for parameters
 //
-// Follows Nim's sinkparameter_inference.nim pattern.
+// Follows the standard reference implementation pattern for ownership inference.
 
 import { Node, NodeKind, ProgramData, FunctionDeclData, VariableDeclData, BinaryExprData, CallExprData, IdentifierData, ReturnStmtData, MemberExprData, ExprStmtData, IfStmtData, WhileStmtData, BlockStmtData } from "../ast/node";
 import { Type, TypeKind } from "./types";
@@ -39,7 +39,7 @@ function inferFunctionOwnership(ctx: CheckerContext, node: Node): void {
 			resultFlag = SF_SINK;
 		}
 
-		// 'this' / 'self' receivers: always LENT (Nim parity)
+		// 'this' / 'self' receivers: always LENT (Implementation parity)
 		if (paramName === "this" || (i === 0 && paramName === "self")) {
 			resultFlag = SF_LENT;
 		}

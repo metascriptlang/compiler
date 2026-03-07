@@ -211,15 +211,15 @@ import { TypeKind as TK, createResult, numberType, stringType } from "../../chec
 
 // --- Structural tests (pipeline output shape) ---
 
-test "var decl try expands to 3 stmts" { expect(stmtCountAfter("const x = try f;", lowerTryExpr) === 3); }
+test "var decl try expands to 3 stmts" { assert stmtCountAfter("const x = try f;", lowerTryExpr) === 3; }
 
-test "var decl try first is VariableDecl" { expect(firstStmtKindAfter("const x = try f;", lowerTryExpr) === NodeKind.VariableDecl); }
+test "var decl try first is VariableDecl" { assert firstStmtKindAfter("const x = try f;", lowerTryExpr) === NodeKind.VariableDecl; }
 
-test "try catch expands to 2 stmts" { expect(stmtCountAfter("const x = try f catch \"default\";", lowerTryExpr) === 2); }
+test "try catch expands to 2 stmts" { assert stmtCountAfter("const x = try f catch \"default\";", lowerTryExpr) === 2; }
 
-test "no try passthrough" { expect(stmtCountAfter("const x = 1;", lowerTryExpr) === 1); }
+test "no try passthrough" { assert stmtCountAfter("const x = 1;", lowerTryExpr) === 1; }
 
-test "multiple stmts preserved" { expect(stmtCountAfter("let a = 1; const x = try f; let b = 2;", lowerTryExpr) === 5); }
+test "multiple stmts preserved" { assert stmtCountAfter("let a = 1; const x = try f; let b = 2;", lowerTryExpr) === 5; }
 
 // --- Direct helper tests (bypass pipeline, verify resolvedSym/nodeType) ---
 
@@ -227,45 +227,45 @@ test "makeResultMember sets resolvedSym for .ok" {
 	const resType = createResult(numberType(), stringType());
 	const loc: SourceLocation = { line: 0, column: 0 };
 	const mem = makeResultMember("$r", resType, "ok", loc);
-	expect(mem.kind === NodeKind.MemberExpr);
-	expect(mem.resolvedSym !== null);
-	expect(mem.nodeType !== null);
+	assert mem.kind === NodeKind.MemberExpr;
+	assert mem.resolvedSym !== null;
+	assert mem.nodeType !== null;
 }
 
 test "makeResultMember sets correct type for .value" {
 	const resType = createResult(numberType(), stringType());
 	const loc: SourceLocation = { line: 0, column: 0 };
 	const mem = makeResultMember("$r", resType, "value", loc);
-	expect(mem.nodeType !== null);
-	expect(mem.nodeType.kind === TK.Number);
-	expect(mem.resolvedSym !== null);
+	assert mem.nodeType !== null;
+	assert mem.nodeType.kind === TK.Number;
+	assert mem.resolvedSym !== null;
 }
 
 test "makeResultMember sets correct type for .error" {
 	const resType = createResult(numberType(), stringType());
 	const loc: SourceLocation = { line: 0, column: 0 };
 	const mem = makeResultMember("$r", resType, "error", loc);
-	expect(mem.nodeType !== null);
-	expect(mem.nodeType.kind === TK.String);
-	expect(mem.resolvedSym !== null);
+	assert mem.nodeType !== null;
+	assert mem.nodeType.kind === TK.String;
+	assert mem.resolvedSym !== null;
 }
 
 test "makeResultMember with null resType is graceful" {
 	const loc: SourceLocation = { line: 0, column: 0 };
 	const mem = makeResultMember("$r", null as unknown as Type, "ok", loc);
-	expect(mem.kind === NodeKind.MemberExpr);
+	assert mem.kind === NodeKind.MemberExpr;
 }
 
 test "makeErrorCheck produces IfStmt with return" {
 	const resType = createResult(numberType(), stringType());
 	const loc: SourceLocation = { line: 0, column: 0 };
 	const ifNode = makeErrorCheck("$r", resType, loc, makeCtx());
-	expect(ifNode.kind === NodeKind.IfStmt);
+	assert ifNode.kind === NodeKind.IfStmt;
 	const ifData = ifNode.data as IfStmtData;
-	expect(ifData.condition.kind === NodeKind.UnaryExpr);
+	assert ifData.condition.kind === NodeKind.UnaryExpr;
 	const thenBlock = ifData.consequent.data as BlockStmtData;
-	expect(thenBlock.statements.length === 1);
-	expect(thenBlock.statements[0].kind === NodeKind.ReturnStmt);
+	assert thenBlock.statements.length === 1;
+	assert thenBlock.statements[0].kind === NodeKind.ReturnStmt;
 }
 
 test "makeErrorCheck Result.err call has nodeType" {
@@ -275,6 +275,6 @@ test "makeErrorCheck Result.err call has nodeType" {
 	const ifData = ifNode.data as IfStmtData;
 	const thenBlock = ifData.consequent.data as BlockStmtData;
 	const retData = thenBlock.statements[0].data as RetData;
-	expect(retData.argument.nodeType !== null);
-	expect(retData.argument.nodeType.kind === TK.Result);
+	assert retData.argument.nodeType !== null;
+	assert retData.argument.nodeType.kind === TK.Result;
 }

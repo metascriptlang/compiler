@@ -10,7 +10,7 @@
 // Follows the injectdestructors pattern (direct AST rewrite, scope-based).
 
 import {
-	Node, NodeKind, DeclKind, SourceLocation, ProgramData,
+	Node, NodeKind, DeclKind, SourceLocation, ProgramData, NF_CURSOR,
 	FunctionDeclData, ArrowFunctionData, FunctionExprData,
 	MethodDeclData, ConstructorDeclData,
 	BlockStmtData, VariableDeclData, ExprStmtData,
@@ -46,7 +46,7 @@ import { isLastReadCfgCached, clearCfgCache, createCfgCache } from "./cfg";
 import { checkSource } from "../checker/checkPass";
 import { transformProgram } from "../transform/index";
 
-// ===== DRC Modes (Nim's ProcessMode parity) =====
+// ===== DRC Modes (standard ProcessMode parity) =====
 
 export enum DrcMode {
 	Normal,    // Just reading (borrow/lent)
@@ -169,7 +169,7 @@ function collectFinallyVars(body: Node): NameSet {
 	return result;
 }
 
-// ===== Core Recursive Walker (Nim's p() parity) =====
+// ===== Core Recursive Walker (reference p() parity) =====
 
 function processNode(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	if (node === null) return node;
@@ -193,7 +193,7 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const cd = node.data as CallExprData;
 	// Recurse on callee
 	cd.callee = processNode(cd.callee, dctx, DrcMode.Normal);
-	// Nim parity: only sink params get Consumed mode, borrowed params get Normal.
+	// Implementation parity: only sink params get Consumed mode, borrowed params get Normal.
 	// Use resolvedSym to find callee's function type signature.
 	const sym = node.resolvedSym;
 	const fnType = (sym !== null && sym.symbolType !== null && sym.symbolType.kind === TypeKind.Function) ? sym.symbolType : null;
@@ -270,7 +270,7 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const sym = node.resolvedSym;
 	if (sym === null) return node;
 
-	// Nim parity: function/method declarations are static — no RC needed.
+	// Implementation parity: function/method declarations are static — no RC needed.
 	// Bare function names inside closure thunks (e.g. { fn: isEven, env: null })
 	// have TypeKind.Function but are not heap-allocated closures.
 	if (sym.symbolKind === SymbolKind.Function || sym.symbolKind === SymbolKind.Method) return node;
@@ -278,7 +278,7 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const rcInfo = classifyType(sym.symbolType, dctx.ctx);
 	if (!rcInfo.needsCleanup) return node;
 
-	// Nim parity: if mode is Consumed, decide between MOVE and COPY
+	// Implementation parity: if mode is Consumed, decide between MOVE and COPY
 	if (mode === DrcMode.Consumed) {
 		const loc = node.location;
 		if (isLastReadSafe(sym, node, dctx.currentStmtIdx, dctx.currentStmtList, dctx)) {
@@ -358,7 +358,7 @@ function emitMoveSourceWasMoved(moveArg: Node, rcInfo: RcInfo, idx: number, stmt
 		// errFailedMove diagnostic: error when move can't actually move
 		if (checkLastRead && !isLastReadSafe(moveArg.resolvedSym, moveArg, idx, stmts, dctx)) {
 			if (dctx.ctx.checkerCtx !== null) {
-				dctx.ctx.checkerCtx.errors.push("cannot move '" + srcName + "': variable is still used after this point");
+				dctx.ctx.checkerCtx.errors.push({ message: "cannot move '" + srcName + "': variable is still used after this point", line: moveArg.location.line, column: moveArg.location.column, fatal: false });
 			}
 		}
 		if (rcInfo.wasMovedFn !== "") {
@@ -415,8 +415,8 @@ function generateCleanup(scope: DrcScope, excludeNames: NameSet, loc: SourceLoca
 
 // ===== Try/Finally Wrapping =====
 
-// Nim parity: hoist a single VariableDecl if it's an RC var tracked in scope.
-// Mirrors Nim's processScope which emits s.vars as declarations before the try body.
+// Implementation parity: hoist a single VariableDecl if it's an RC var tracked in scope.
+// Mirrors standard scope processing which emits variables as declarations before the try body.
 // Returns true if hoisted (caller emits assignment in try body instead).
 function tryHoistVar(stmt: Node, scope: DrcScope, hoisted: Node[], body: Node[], loc: SourceLocation): boolean {
 	if (stmt.kind !== NodeKind.VariableDecl) return false;
@@ -434,7 +434,7 @@ function tryHoistVar(stmt: Node, scope: DrcScope, hoisted: Node[], body: Node[],
 	return true;
 }
 
-// Nim parity: scan a statement list for hoistable RC vars.
+// Implementation parity: scan a statement list for hoistable RC vars.
 // Recurses one level into BlockStmt (created by emitSaveAssignDestroy)
 // to find temps that are registered in scope but declared in sub-blocks.
 function hoistScopeVars(stmts: Node[], scope: DrcScope, hoisted: Node[], tryBody: Node[], loc: SourceLocation): void {
@@ -457,7 +457,7 @@ function hoistScopeVars(stmts: Node[], scope: DrcScope, hoisted: Node[], tryBody
 
 function wrapWithTryFinally(bodyStmts: Node[], cleanupStmts: Node[], scope: DrcScope, loc: SourceLocation): Node {
 	// Hoist RC variable declarations before try (null init for setjmp safety)
-	// Nim: processScope emits all s.vars before try body. We do the same by
+	// Standard scope processing emits all tracked variables before try body. We do the same by
 	// scanning bodyStmts (and one level into sub-blocks) for registered RC vars.
 	const hoisted: Node[] = [];
 	const tryBody: Node[] = [];
@@ -692,10 +692,8 @@ function processCallArgs(callExpr: Node, idx: number, stmts: Node[], dctx: DrcCo
 	for (let ai = 0; ai < cd.arguments.length && ai < fnType.typeChildren.length; ai += 1) {
 		const arg = cd.arguments[ai];
 
-		// Nim parity: arguments are already processed by processCall (via processNode).
-		// processCallArgs only handles statement-level concerns (nested call extraction).
-		// Do NOT re-process arguments here — that would double-process and cause
-		// spurious wasMoved/incref. Nim's p() processes args once in the universal handler.
+		// Implementation parity: arguments are already processed by processCall (via processNode).
+// Reference walker processes args once in the universal handler.
 
 		// Determine if this parameter is a borrow (LENT) or a transfer (SINK)
 		let isLent = true;
@@ -969,7 +967,7 @@ function registerFuncParams(paramNames: string[], paramTypes: Type[], dctx: DrcC
 		if (!isEnvParam(pName)) {
 			const pRcInfo = classifyType(paramTypes[pi], dctx.ctx);
 			if (pRcInfo.needsCleanup) {
-				// Nim parity: regular params are BORROWED (cursor=true, no cleanup).
+				// Implementation parity: regular params are BORROWED (cursor=true, no cleanup).
 				// Only sink params (SF_SINK) take ownership and need cleanup at exit.
 				// The caller owns the value; if the function needs to keep it, the
 				// assignment point handles the copy (not the param registration).
@@ -1095,6 +1093,10 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	// This prevents unwanted cloning in for..of loops and intermediate assignments.
 	let isCursor = false;
 	if (d.declName.startsWith("$") && d.initializer !== null && d.initializer.kind === NodeKind.Identifier) {
+		isCursor = true;
+	}
+	// NF_CURSOR: for-of bindings are borrows from the array (Nim: sfCursor on for-loop vars)
+	if ((stmt.flags & NF_CURSOR) !== 0) {
 		isCursor = true;
 	}
 	// Phase B: check cursor inference results (borrow-only variables skip all RC)
@@ -1225,10 +1227,10 @@ function processExprStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContex
 	const d = stmt.data as ExprStmtData;
 	const expr = d.expr;
 
-	// Nim parity: assignments go through moveOrCopy (processAssignment), NOT through
-	// the generic processNode → processBinary path. Processing assignment LHS via
-	// processBinary would incorrectly treat it as Consumed (emitting wasMoved on the target).
-	// In Nim, nkAsgn is handled directly in p() before any generic expression processing.
+	// Implementation parity: assignments go through moveOrCopy (processAssignment), NOT through
+// the generic processNode → processBinary path. Processing assignment LHS via
+// processBinary would incorrectly treat it as Consumed.
+// In the reference implementation, assignment is handled directly before any generic expression processing.
 	if (expr.kind === NodeKind.BinaryExpr) {
 		const bd = expr.data as BinaryExprData;
 		if (bd.operator === "=") {
@@ -1291,7 +1293,7 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 	bd.right = processNode(bd.right, dctx, DrcMode.Consumed);
 	const rhs = bd.right;
 
-	// Phase D: first-write — no old value to destroy (Nim's nkFastAsgn)
+	// Optimized first-write — no old value to destroy (optimized assignment pattern)
 	if (isFirstWrite) {
 		if (rhs.kind === NodeKind.CallExpr) {
 			const preStmts = processCallArgs(rhs, idx, stmts, dctx, loc);
@@ -1439,7 +1441,6 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 function emitSaveAssignDestroy(stmt: Node, lhsExpr: Node, rhs: Node, rcInfo: RcInfo, prefix: string, dctx: DrcContext, loc: SourceLocation): Node {
 	const tmpName = freshTemp(dctx.ctx, "old" + prefix);
 	const saveTmp = makeVarDecl(tmpName, lhsExpr, DeclKind.Const, loc);
-	registerVar(dctx, tmpName, rcInfo, false);
 
 	// MoveExpr: SINK for dest + wasMoved on source
 	if (rhs.kind === NodeKind.MoveExpr) {
@@ -1793,12 +1794,12 @@ export function testLoc(): SourceLocation {
 test "injectProgram no-op on primitives" {
 	const dctx = testDrcContext("const x = 1; const y = 2;");
 	const prog = makeBlock([], testLoc());
-	expect(dctx.ctx.tempCounter === 0);
+	assert dctx.ctx.tempCounter === 0;
 }
 
 test "createDrcContext initializes" {
 	const dctx = testDrcContext("const x = 1;");
-	expect(scopeDepth(dctx) === 0);
+	assert scopeDepth(dctx) === 0;
 }
 
 test "generateCleanup LIFO order" {
@@ -1809,7 +1810,7 @@ test "generateCleanup LIFO order" {
 	registerVar(dctx, "b", rcStr, false);
 	const scope = popScope(dctx);
 	const cleanup = generateCleanup(scope, emptyNameSet(), testLoc());
-	expect(cleanup.length === 2);
+	assert cleanup.length === 2;
 }
 
 test "generateCleanup skips moved" {
@@ -1822,7 +1823,7 @@ test "generateCleanup skips moved" {
 	const scope = popScope(dctx);
 	const cleanup = generateCleanup(scope, emptyNameSet(), testLoc());
 	// wasMoved(b) + destroy(a) = 2 nodes
-	expect(cleanup.length === 2);
+	assert cleanup.length === 2;
 }
 
 test "generateCleanup skips excluded" {
@@ -1834,54 +1835,54 @@ test "generateCleanup skips excluded" {
 	const scope = popScope(dctx);
 	const exclude: NameSet = ["b"];
 	const cleanup = generateCleanup(scope, exclude, testLoc());
-	expect(cleanup.length === 1);
+	assert cleanup.length === 1;
 }
 
-test "call is fresh" { expect(isFreshExpr(NodeKind.CallExpr)); }
+test "call is fresh" { assert isFreshExpr(NodeKind.CallExpr); }
 
-test "identifier is not fresh" { expect(!isFreshExpr(NodeKind.Identifier)); }
+test "identifier is not fresh" { assert !isFreshExpr(NodeKind.Identifier); }
 
 test "isCompoundAssignOp detects +=" {
-	expect(isCompoundAssignOp("+="));
-	expect(isCompoundAssignOp("-="));
-	expect(isCompoundAssignOp("*="));
-	expect(isCompoundAssignOp("<<="));
+	assert isCompoundAssignOp("+=");
+	assert isCompoundAssignOp("-=");
+	assert isCompoundAssignOp("*=");
+	assert isCompoundAssignOp("<<=");
 }
 
 test "isCompoundAssignOp rejects =" {
-	expect(!isCompoundAssignOp("="));
-	expect(!isCompoundAssignOp("+"));
-	expect(!isCompoundAssignOp("=="));
+	assert !isCompoundAssignOp("=");
+	assert !isCompoundAssignOp("+");
+	assert !isCompoundAssignOp("==");
 }
 
 test "compoundToSimpleOp converts" {
-	expect(compoundToSimpleOp("+=") === "+");
-	expect(compoundToSimpleOp("-=") === "-");
-	expect(compoundToSimpleOp("<<=") === "<<");
+	assert compoundToSimpleOp("+=") === "+";
+	assert compoundToSimpleOp("-=") === "-";
+	assert compoundToSimpleOp("<<=") === "<<";
 }
 
 test "emptyNameSet creates empty" {
 	const ns = emptyNameSet();
-	expect(ns.length === 0);
+	assert ns.length === 0;
 }
 
 test "processBlockBody handles null" {
 	const dctx = testDrcContext("const x = 1;");
 	const result = processBlockBody(null as unknown as Node, dctx, false, false, testLoc());
-	expect(result === null);
+	assert result === null;
 }
 
 test "isEnvParam detects __envP" {
-	expect(isEnvParam("__envP"));
-	expect(isEnvParam("__envP_raw"));
-	expect(!isEnvParam("param"));
-	expect(!isEnvParam("env"));
+	assert isEnvParam("__envP");
+	assert isEnvParam("__envP_raw");
+	assert !isEnvParam("param");
+	assert !isEnvParam("env");
 }
 
 test "isParamSinkCandidate detects return-only" {
 	// Build: { return s; } — s only used as return arg → sink
 	const body = makeBlock([makeReturn(makeIdent("s", testLoc()), testLoc())], testLoc());
-	expect(isParamSinkCandidate("s", body));
+	assert isParamSinkCandidate("s", body);
 }
 
 test "isParamSinkCandidate rejects used param" {
@@ -1890,7 +1891,7 @@ test "isParamSinkCandidate rejects used param" {
 		makeVarDecl("x", makeIdent("s", testLoc()), DeclKind.Const, testLoc()),
 		makeReturn(makeIdent("x", testLoc()), testLoc()),
 	], testLoc());
-	expect(!isParamSinkCandidate("s", body));
+	assert !isParamSinkCandidate("s", body);
 }
 
 test "recordMoveInContext finds correct scope" {
@@ -1905,14 +1906,14 @@ test "recordMoveInContext finds correct scope" {
 	const innerScope = popScope(dctx);
 	const outerScope = popScope(dctx);
 	// "a" should be marked as moved in the outer scope
-	expect(wasMovedInScope(outerScope, "a"));
-	expect(!wasMovedInScope(innerScope, "a"));
+	assert wasMovedInScope(outerScope, "a");
+	assert !wasMovedInScope(innerScope, "a");
 }
 
 test "both fresh branches are SINK" {
 	// ConditionalExpr is in isFreshExpr, but processConditionalInit
 	// differentiates between all-fresh and mixed branches.
-	expect(isFreshExpr(NodeKind.ConditionalExpr));
+	assert isFreshExpr(NodeKind.ConditionalExpr);
 }
 
 test "wrapWithCallArgPre no-op on empty" {
@@ -1920,7 +1921,7 @@ test "wrapWithCallArgPre no-op on empty" {
 	const stmt = makeExprStmt(makeNull(loc), loc);
 	const result = wrapWithCallArgPre(stmt, [], loc);
 	// With empty pre, should return stmt unchanged
-	expect(result === stmt);
+	assert result === stmt;
 }
 
 test "string type needs cleanup with String rcKind" {
@@ -1928,8 +1929,8 @@ test "string type needs cleanup with String rcKind" {
 	const strType = lookupSymbol(dctx.ctx.checkerCtx.table, "x");
 	if (strType !== null && strType.symbolType !== null) {
 		const rc = classifyType(strType.symbolType, dctx.ctx);
-		expect(rc.needsCleanup);
-		expect(rc.rcKind === RcKind.String);
+		assert rc.needsCleanup;
+		assert rc.rcKind === RcKind.String;
 	}
 }
 
@@ -1938,7 +1939,7 @@ test "number type needs no cleanup" {
 	const numSym = lookupSymbol(dctx.ctx.checkerCtx.table, "n");
 	if (numSym !== null && numSym.symbolType !== null) {
 		const rc = classifyType(numSym.symbolType, dctx.ctx);
-		expect(!rc.needsCleanup);
+		assert !rc.needsCleanup;
 	}
 }
 
@@ -1948,7 +1949,7 @@ test "classifyNestedCallReturn non-identifier callee returns noRcInfo" {
 	const memberCallee = makeMember(makeIdent("obj", loc), "method", loc);
 	const call = makeCall(memberCallee, [], loc);
 	const rc = classifyNestedCallReturn(call, dctx);
-	expect(!rc.needsCleanup);
+	assert !rc.needsCleanup;
 }
 
 test "classifyNestedCallReturn known function returns rcInfo" {
@@ -1956,8 +1957,8 @@ test "classifyNestedCallReturn known function returns rcInfo" {
 	const loc = testLoc();
 	const call = makeCall(makeIdent("getString", loc), [], loc);
 	const rc = classifyNestedCallReturn(call, dctx);
-	expect(rc.needsCleanup);
-	expect(rc.rcKind === RcKind.String);
+	assert rc.needsCleanup;
+	assert rc.rcKind === RcKind.String;
 }
 
 test "classifyNestedCallReturn unknown function returns noRcInfo" {
@@ -1965,58 +1966,58 @@ test "classifyNestedCallReturn unknown function returns noRcInfo" {
 	const loc = testLoc();
 	const call = makeCall(makeIdent("unknownFn", loc), [], loc);
 	const rc = classifyNestedCallReturn(call, dctx);
-	expect(!rc.needsCleanup);
+	assert !rc.needsCleanup;
 }
 
 test "stmtCanThrow detects user call in ExprStmt" {
 	const loc = testLoc();
 	const call = makeExprStmt(makeCall(makeIdent("foo", loc), [], loc), loc);
-	expect(stmtCanThrow(call));
+	assert stmtCanThrow(call);
 }
 
 test "stmtCanThrow detects user call in VarDecl init" {
 	const loc = testLoc();
 	const decl = makeVarDecl("x", makeCall(makeIdent("foo", loc), [], loc), DeclKind.Const, loc);
-	expect(stmtCanThrow(decl));
+	assert stmtCanThrow(decl);
 }
 
 test "stmtCanThrow false for non-call" {
 	const loc = testLoc();
 	const stmt = makeExprStmt(makeIdent("x", loc), loc);
-	expect(!stmtCanThrow(stmt));
+	assert !stmtCanThrow(stmt);
 }
 
-test "stmtCanThrow false for null" { expect(!stmtCanThrow(null as unknown as Node)); }
+test "stmtCanThrow false for null" { assert !stmtCanThrow(null as unknown as Node); }
 
 test "callCanThrow false for ms-prefixed runtime calls" {
 	const loc = testLoc();
 	const call = makeCall(makeIdent("msStringDecref", loc), [], loc);
-	expect(!callCanThrow(call));
+	assert !callCanThrow(call);
 }
 
 test "callCanThrow true for user functions" {
 	const loc = testLoc();
 	const call = makeCall(makeIdent("parseExpr", loc), [], loc);
-	expect(callCanThrow(call));
+	assert callCanThrow(call);
 }
 
 test "stmtCanThrow true for ThrowStmt" {
 	const loc = testLoc();
 	const throwStmt: Node = { kind: NodeKind.ThrowStmt, data: { throwArg: makeNull(loc) }, location: loc, nodeType: null as unknown as Type, resolvedSym: null as unknown as Symbol, flags: 0 };
-	expect(stmtCanThrow(throwStmt));
+	assert stmtCanThrow(throwStmt);
 }
 
 test "stmtCanThrow false for ms-prefixed call in VarDecl" {
 	const loc = testLoc();
 	const decl = makeVarDecl("x", makeCall(makeIdent("msArrayCopy", loc), [], loc), DeclKind.Const, loc);
-	expect(!stmtCanThrow(decl));
+	assert !stmtCanThrow(decl);
 }
 
 test "needsReturnIncref false for call expr (fresh)" {
 	const dctx = testDrcContext("function getString(): string { return \"\"; }");
 	const loc = testLoc();
 	const call = makeCall(makeIdent("getString", loc), [], loc);
-	expect(!needsReturnIncref(call, dctx));
+	assert !needsReturnIncref(call, dctx);
 }
 
 test "needsReturnIncref false for local var (moved)" {
@@ -2026,7 +2027,7 @@ test "needsReturnIncref false for local var (moved)" {
 	registerVar(dctx, "s", rcStr, false);
 	const loc = testLoc();
 	const ident = makeIdent("s", loc);
-	expect(!needsReturnIncref(ident, dctx));
+	assert !needsReturnIncref(ident, dctx);
 	popScope(dctx);
 }
 
@@ -2034,7 +2035,7 @@ test "needsReturnIncref true for member expr with string field" {
 	const dctx = testDrcContext("interface Obj { name: string; } const o: Obj = { name: \"\" };");
 	const loc = testLoc();
 	const memberExpr = makeMember(makeIdent("o", loc), "name", loc);
-	expect(needsReturnIncref(memberExpr, dctx));
+	assert needsReturnIncref(memberExpr, dctx);
 }
 
 test "emitReturnWithIncref produces block with 3 stmts" {
@@ -2043,9 +2044,9 @@ test "emitReturnWithIncref produces block with 3 stmts" {
 	pushScope(dctx, false, true);
 	const arg = makeMember(makeIdent("o", loc), "name", loc);
 	const result = emitReturnWithIncref(arg, dctx, loc);
-	expect(result.kind === NodeKind.BlockStmt);
+	assert result.kind === NodeKind.BlockStmt;
 	const bd = result.data as BlockStmtData;
-	expect(bd.statements.length === 3);  // tmpDecl, incref, return
+	assert bd.statements.length === 3;  // tmpDecl, incref, return
 	popScope(dctx);
 }
 
@@ -2055,7 +2056,7 @@ test "isVarFromOuterLoopScope: var in function scope, inside loop" {
 	pushScope(dctx, false, true);    // function scope
 	registerVar(dctx, "x", rcStr, false);
 	pushScope(dctx, true, false);    // loop scope
-	expect(isVarFromOuterLoopScope("x", dctx));
+	assert isVarFromOuterLoopScope("x", dctx);
 	popScope(dctx);
 	popScope(dctx);
 }
@@ -2066,7 +2067,7 @@ test "isVarFromOuterLoopScope: var in loop scope, not outer" {
 	pushScope(dctx, false, true);    // function scope
 	pushScope(dctx, true, false);    // loop scope
 	registerVar(dctx, "s", rcStr, false);
-	expect(!isVarFromOuterLoopScope("s", dctx));
+	assert !isVarFromOuterLoopScope("s", dctx);
 	popScope(dctx);
 	popScope(dctx);
 }
@@ -2077,7 +2078,7 @@ test "isVarFromOuterLoopScope: no loop, returns false" {
 	pushScope(dctx, false, true);    // function scope
 	registerVar(dctx, "x", rcStr, false);
 	pushScope(dctx, false, false);   // block scope (not loop)
-	expect(!isVarFromOuterLoopScope("x", dctx));
+	assert !isVarFromOuterLoopScope("x", dctx);
 	popScope(dctx);
 	popScope(dctx);
 }
@@ -2089,7 +2090,7 @@ test "isVarFromOuterLoopScope: nested loops, var in outer loop" {
 	pushScope(dctx, true, false);    // outer loop
 	registerVar(dctx, "s", rcStr, false);
 	pushScope(dctx, true, false);    // inner loop
-	expect(isVarFromOuterLoopScope("s", dctx));
+	assert isVarFromOuterLoopScope("s", dctx);
 	popScope(dctx);
 	popScope(dctx);
 	popScope(dctx);
@@ -2102,7 +2103,7 @@ test "isVarFromOuterLoopScope: nested loops, var in function scope" {
 	registerVar(dctx, "x", rcStr, false);
 	pushScope(dctx, true, false);    // outer loop
 	pushScope(dctx, true, false);    // inner loop
-	expect(isVarFromOuterLoopScope("x", dctx));
+	assert isVarFromOuterLoopScope("x", dctx);
 	popScope(dctx);
 	popScope(dctx);
 	popScope(dctx);
@@ -2124,8 +2125,8 @@ test "collectFinallyVars finds vars in finally block" {
 	);
 	const body = makeBlock([tryStmt], loc);
 	const vars = collectFinallyVars(body);
-	expect(nameSetContains(vars, "s"));
-	expect(nameSetContains(vars, "cleanup"));
+	assert nameSetContains(vars, "s");
+	assert nameSetContains(vars, "cleanup");
 }
 
 test "collectFinallyVars empty when no finally" {
@@ -2134,7 +2135,7 @@ test "collectFinallyVars empty when no finally" {
 		makeExprStmt(makeIdent("x", loc), loc),
 	], loc);
 	const vars = collectFinallyVars(body);
-	expect(vars.length === 0);
+	assert vars.length === 0;
 }
 
 test "finally-protected var blocks move in isLastReadSafe" {
@@ -2142,7 +2143,7 @@ test "finally-protected var blocks move in isLastReadSafe" {
 	dctx.finallyProtectedVars = ["s"];
 	// Even with a null symbol, the name check fires first
 	const fakeSym: Symbol = { name: "s", symbolKind: 0, symbolType: null as unknown as Type, symFlags: 0 };
-	expect(!isLastReadSafe(fakeSym, null as unknown as Node, 0, [], dctx));
+	assert !isLastReadSafe(fakeSym, null as unknown as Node, 0, [], dctx);
 }
 
 test "isVarFromOuterLoopScope: block inside loop, var before loop" {
@@ -2152,7 +2153,7 @@ test "isVarFromOuterLoopScope: block inside loop, var before loop" {
 	registerVar(dctx, "x", rcStr, false);
 	pushScope(dctx, true, false);    // loop scope
 	pushScope(dctx, false, false);   // block inside loop
-	expect(isVarFromOuterLoopScope("x", dctx));
+	assert isVarFromOuterLoopScope("x", dctx);
 	popScope(dctx);
 	popScope(dctx);
 	popScope(dctx);
@@ -2166,8 +2167,8 @@ test "emitMoveSourceWasMoved on identifier emits pending wasMoved" {
 	registerVar(dctx, "x", rcStr, false);
 	const stmts: Node[] = [makeExprStmt(makeNull(loc), loc)];
 	const handled = emitMoveSourceWasMoved(makeIdent("x", loc), rcStr, 0, stmts, dctx, loc, false);
-	expect(handled);
-	expect(hasPending(dctx));
+	assert handled;
+	assert hasPending(dctx);
 	popScope(dctx);
 }
 
@@ -2178,20 +2179,20 @@ test "emitMoveSourceWasMoved on call expr returns false (fresh)" {
 	pushScope(dctx, false, true);
 	const call = makeCall(makeIdent("f", loc), [], loc);
 	const handled = emitMoveSourceWasMoved(call, rcStr, 0, [], dctx, loc, false);
-	expect(!handled);
-	expect(!hasPending(dctx));
+	assert !handled;
+	assert !hasPending(dctx);
 	popScope(dctx);
 }
 
-test "isFreshExpr includes MoveExpr" { expect(isFreshExpr(NodeKind.MoveExpr)); }
+test "isFreshExpr includes MoveExpr" { assert isFreshExpr(NodeKind.MoveExpr); }
 
 test "classifyMemberFieldRc returns RC info for string field" {
 	const dctx = testDrcContext("interface Obj { name: string; } const o: Obj = { name: \"\" };");
 	const loc = testLoc();
 	const memberExpr = makeMember(makeIdent("o", loc), "name", loc);
 	const rc = classifyMemberFieldRc(memberExpr, dctx);
-	expect(rc.needsCleanup);
-	expect(rc.rcKind === RcKind.String);
+	assert rc.needsCleanup;
+	assert rc.rcKind === RcKind.String;
 }
 
 test "classifyArrayElementRc returns RC info for string array" {
@@ -2199,8 +2200,8 @@ test "classifyArrayElementRc returns RC info for string array" {
 	const sym = lookupSymbol(dctx.ctx.checkerCtx.table, "arr");
 	if (sym !== null && sym.symbolType !== null && sym.symbolType.typeReturn !== null) {
 		const rc = classifyType(sym.symbolType.typeReturn, dctx.ctx);
-		expect(rc.needsCleanup);
-		expect(rc.rcKind === RcKind.String);
+		assert rc.needsCleanup;
+		assert rc.rcKind === RcKind.String;
 	}
 }
 
@@ -2210,12 +2211,12 @@ test "makeSinkCall emits sinkFn call node" {
 	const loc = testLoc();
 	const sink = makeSinkCall("x", makeIdent("y", loc), rcStr, loc);
 	// Should produce an ExprStmt containing a CallExpr with 2 args
-	expect(sink.kind === NodeKind.ExprStmt);
+	assert sink.kind === NodeKind.ExprStmt;
 	const sd = sink.data as ExprStmtData;
-	expect(sd.expr.kind === NodeKind.CallExpr);
+	assert sd.expr.kind === NodeKind.CallExpr;
 	const cd = sd.expr.data as CallExprData;
-	expect(cd.callee.kind === NodeKind.Identifier);
-	expect(cd.arguments.length === 2);
+	assert cd.callee.kind === NodeKind.Identifier;
+	assert cd.arguments.length === 2;
 }
 
 test "sinkFn field populated for string type" {
@@ -2223,7 +2224,7 @@ test "sinkFn field populated for string type" {
 	const sym = lookupSymbol(dctx.ctx.checkerCtx.table, "x");
 	if (sym !== null && sym.symbolType !== null) {
 		const rc = classifyType(sym.symbolType, dctx.ctx);
-		expect(rc.sinkFn !== "");
+		assert rc.sinkFn !== "";
 	}
 }
 
@@ -2234,11 +2235,11 @@ test "first-write: uninitialized var marked not initialized" {
 	registerVar(dctx, "x", rcStr, false);
 	// After register, isInitialized is true by default
 	const vi1 = findVarInfoInContext(dctx, "x");
-	expect(vi1 !== null);
-	expect(vi1.isInitialized);
+	assert vi1 !== null;
+	assert vi1.isInitialized;
 	// markUninitialized sets it to false
 	markUninitialized(dctx, "x");
-	expect(!vi1.isInitialized);
+	assert !vi1.isInitialized;
 	popScope(dctx);
 }
 
@@ -2249,10 +2250,10 @@ test "first-write: second assignment restores initialized" {
 	registerVar(dctx, "x", rcStr, false);
 	markUninitialized(dctx, "x");
 	const vi = findVarInfoInContext(dctx, "x");
-	expect(!vi.isInitialized);
+	assert !vi.isInitialized;
 	// Simulate first-write marking it initialized
 	vi.isInitialized = true;
-	expect(vi.isInitialized);
+	assert vi.isInitialized;
 	popScope(dctx);
 }
 
@@ -2261,7 +2262,7 @@ test "sink param: return-only param is cursor (skip cleanup)" {
 	const fnSym = lookupSymbol(dctx.ctx.checkerCtx.table, "f");
 	if (fnSym !== null && fnSym.symbolType !== null) {
 		// Verify function is recognized
-		expect(fnSym.symbolType.kind === TypeKind.Function);
+		assert fnSym.symbolType.kind === TypeKind.Function;
 	}
 }
 
@@ -2269,25 +2270,25 @@ test "lent param: SF_LENT in typeChildrenFlags skips RC at call site" {
 	// Verify that processCallArgs respects SF_LENT flag
 	const dctx = testDrcContext("const x: string = \"\";");
 	// SF_LENT check is structural — verified by code reading
-	expect(SF_LENT !== 0);
-	expect(SF_SINK !== 0);
-	expect(SF_LENT !== SF_SINK);
+	assert SF_LENT !== 0;
+	assert SF_SINK !== 0;
+	assert SF_LENT !== SF_SINK;
 }
 
 test "isGeneratorBody: detects $state pattern" {
 	const loc = testLoc();
 	const stateDecl = makeVarDecl("$state", makeNull(loc), DeclKind.Let, loc);
 	const body = makeBlock([stateDecl], loc);
-	expect(isGeneratorBody(body));
+	assert isGeneratorBody(body);
 }
 
 test "isGeneratorBody: normal function returns false" {
 	const loc = testLoc();
 	const xDecl = makeVarDecl("x", makeNull(loc), DeclKind.Let, loc);
 	const body = makeBlock([xDecl], loc);
-	expect(!isGeneratorBody(body));
+	assert !isGeneratorBody(body);
 }
 
 test "isGeneratorBody: null body returns false" {
-	expect(!isGeneratorBody(null as unknown as Node));
+	assert !isGeneratorBody(null as unknown as Node);
 }

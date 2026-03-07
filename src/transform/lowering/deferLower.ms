@@ -213,18 +213,18 @@ function lowerDeferInBlock(stmts: Node[], loc: SourceLocation): Node[] {
 }
 
 // ===== Tests =====
-test "no defer passthrough" { expect(firstStmtKindAfter("const x = 1;", lowerDefer) === NodeKind.VariableDecl); }
+test "no defer passthrough" { assert firstStmtKindAfter("const x = 1;", lowerDefer) === NodeKind.VariableDecl; }
 
-test "single defer becomes try-catch" { expect(firstStmtKindAfter("defer cleanup(); work();", lowerDefer) === NodeKind.TryCatchStmt); }
+test "single defer becomes try-catch" { assert firstStmtKindAfter("defer cleanup(); work();", lowerDefer) === NodeKind.TryCatchStmt; }
 
 test "defer at start" {
-	expect(stmtCountAfter("defer cleanup();", lowerDefer) === 1);
-	expect(firstStmtKindAfter("defer cleanup();", lowerDefer) === NodeKind.TryCatchStmt);
+	assert stmtCountAfter("defer cleanup();", lowerDefer) === 1;
+	assert firstStmtKindAfter("defer cleanup();", lowerDefer) === NodeKind.TryCatchStmt;
 }
 
-test "defer preserves before stmts" { expect(stmtCountAfter("setup(); defer cleanup(); work();", lowerDefer) === 2); }
+test "defer preserves before stmts" { assert stmtCountAfter("setup(); defer cleanup(); work();", lowerDefer) === 2; }
 
 test "multiple defers nest" {
-	expect(stmtCountAfter("defer a(); defer b(); work();", lowerDefer) === 1);
-	expect(firstStmtKindAfter("defer a(); defer b(); work();", lowerDefer) === NodeKind.TryCatchStmt);
+	assert stmtCountAfter("defer a(); defer b(); work();", lowerDefer) === 1;
+	assert firstStmtKindAfter("defer a(); defer b(); work();", lowerDefer) === NodeKind.TryCatchStmt;
 }

@@ -140,12 +140,12 @@ function setupSubscriptCtx(input: string, receiverName: string, receiverType: st
 // ===== Tests =====
 test "getter rewritten to call" {
 	const prog = setupSubscriptCtx("buf[0];", "buf", "Buffer", "get");
-	expect(firstExprKind(prog) === NodeKind.CallExpr);
+	assert firstExprKind(prog) === NodeKind.CallExpr;
 }
 
 test "setter rewritten to call" {
 	const prog = setupSubscriptCtx("buf[0] = 1;", "buf", "Buffer", "set");
-	expect(firstExprKind(prog) === NodeKind.CallExpr);
+	assert firstExprKind(prog) === NodeKind.CallExpr;
 }
 
 test "builtin array unchanged" {
@@ -159,7 +159,7 @@ test "builtin array unchanged" {
 	defineSymbol(cc.table, arrSym);
 	const ctx = createTransformContextWithChecker(cc);
 	const prog = lowerSubscript(result.value, ctx);
-	expect(firstExprKind(prog) === NodeKind.ArrayAccess);
+	assert firstExprKind(prog) === NodeKind.ArrayAccess;
 }
 
 test "no extension unchanged" {
@@ -171,7 +171,7 @@ test "no extension unchanged" {
 	defineSymbol(cc.table, objSym);
 	const ctx = createTransformContextWithChecker(cc);
 	const prog = lowerSubscript(result.value, ctx);
-	expect(firstExprKind(prog) === NodeKind.ArrayAccess);
+	assert firstExprKind(prog) === NodeKind.ArrayAccess;
 }
 
 test "no checker no rewrite" {
@@ -179,24 +179,24 @@ test "no checker no rewrite" {
 	if (!result.ok) return;
 	const ctx = createTransformContext();
 	const prog = lowerSubscript(result.value, ctx);
-	expect(firstExprKind(prog) === NodeKind.ArrayAccess);
+	assert firstExprKind(prog) === NodeKind.ArrayAccess;
 }
 
 test "getter has 2 args" {
 	const prog = setupSubscriptCtx("buf[i];", "buf", "Buffer", "get");
-	expect(firstCallArgCount(prog) === 2);
+	assert firstCallArgCount(prog) === 2;
 }
 
 test "setter has 3 args" {
 	const prog = setupSubscriptCtx("buf[i] = v;", "buf", "Buffer", "set");
-	expect(firstCallArgCount(prog) === 3);
+	assert firstCallArgCount(prog) === 3;
 }
 
 test "parser accepts backtick function name" {
 	const result = parseInput("function `[]`(this b: Buffer, i: number): number { return 0; }");
-	expect(result.ok);
+	assert result.ok;
 	if (!result.ok) return;
 	const stmts = getStmts(result.value);
-	expect(stmts.length > 0);
-	expect(stmts[0].kind === NodeKind.FunctionDecl);
+	assert stmts.length > 0;
+	assert stmts[0].kind === NodeKind.FunctionDecl;
 }

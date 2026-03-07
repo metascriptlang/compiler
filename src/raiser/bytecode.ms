@@ -143,62 +143,62 @@ export function getSignedAx(inst: RaiserInstruction): number {
 // --- Tests ---
 test "ABC round-trip" {
 	const inst = raiserABC(RaiserOpcode.AddI64, 2, 0, 1);
-	expect(inst.op === RaiserOpcode.AddI64);
-	expect(inst.a === 2);
-	expect(inst.b === 0);
-	expect(inst.c === 1);
+	assert inst.op === RaiserOpcode.AddI64;
+	assert inst.a === 2;
+	assert inst.b === 0;
+	assert inst.c === 1;
 }
 
 test "ABx round-trip small" {
 	const inst = raiserABx(RaiserOpcode.LoadConst, 3, 42);
-	expect(inst.op === RaiserOpcode.LoadConst);
-	expect(inst.a === 3);
-	expect(getBx(inst) === 42);
+	assert inst.op === RaiserOpcode.LoadConst;
+	assert inst.a === 3;
+	assert getBx(inst) === 42;
 }
 
 test "ABx round-trip large" {
 	const inst = raiserABx(RaiserOpcode.LoadConst, 0, 1000);
-	expect(getBx(inst) === 1000);
+	assert getBx(inst) === 1000;
 }
 
 test "ABx max value" {
 	const inst = raiserABx(RaiserOpcode.LoadConst, 0, 65535);
-	expect(getBx(inst) === 65535);
+	assert getBx(inst) === 65535;
 }
 
 test "Ax positive jump" {
 	const inst = raiserAx(RaiserOpcode.Jump, 10);
-	expect(inst.op === RaiserOpcode.Jump);
-	expect(getSignedAx(inst) === 10);
+	assert inst.op === RaiserOpcode.Jump;
+	assert getSignedAx(inst) === 10;
 }
 
 test "Ax negative jump" {
 	const inst = raiserAx(RaiserOpcode.Jump, -5);
-	expect(getSignedAx(inst) === -5);
+	assert getSignedAx(inst) === -5;
 }
 
 test "Ax zero" {
 	const inst = raiserAx(RaiserOpcode.Jump, 0);
-	expect(getSignedAx(inst) === 0);
+	assert getSignedAx(inst) === 0;
 }
 
 test "signed Bx negative" {
 	const inst = raiserABx(RaiserOpcode.LoadConst, 0, 65535);
-	expect(getSignedBx(inst) === -1);
+	assert getSignedBx(inst) === -1;
 }
 
 test "signed Bx positive" {
 	const inst = raiserABx(RaiserOpcode.LoadConst, 0, 100);
-	expect(getSignedBx(inst) === 100);
+	assert getSignedBx(inst) === 100;
 }
 
 test "first opcode is LoadConst" {
 	const inst = raiserABC(RaiserOpcode.LoadConst, 0, 0, 0);
-	expect(inst.op === RaiserOpcode.LoadConst);
+	assert inst.op === RaiserOpcode.LoadConst;
 }
 
 test "opcodes are distinct" {
-	expect(RaiserOpcode.AddI64 !== RaiserOpcode.SubI64);
-	expect(RaiserOpcode.Jump !== RaiserOpcode.Call);
-	expect(RaiserOpcode.Halt !== RaiserOpcode.Ret);
+	assert RaiserOpcode.AddI64 !== RaiserOpcode.SubI64;
+	assert RaiserOpcode.Jump !== RaiserOpcode.Call;
+	assert RaiserOpcode.Halt !== RaiserOpcode.Ret;
 }

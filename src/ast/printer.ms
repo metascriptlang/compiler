@@ -15,7 +15,7 @@ import { Node, NodeKind, DeclKind,
 	MacroInvocationData, ImportDeclData, ExportDeclData, TypeAliasDeclData, EnumDeclData,
 	InterfaceDeclData, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData,
 	ExternDeclData, ExternKind, MacroDeclData, DecoratedDeclData, ProgramData,
-	TestDeclData,
+	TestDeclData, AssertStmtData,
 	HiddenStdConvData, HiddenSubConvData,
 } from "./node";
 
@@ -579,6 +579,11 @@ export function printNode(node: Node, level: number): void {
 			const data = node.data as TestDeclData;
 			console.log(`${pad}TestDecl: "${data.testName}"`);
 			printNode(data.testBody, level + 1);
+		},
+		NodeKind.AssertStmt => {
+			const data = node.data as AssertStmtData;
+			console.log(`${pad}AssertStmt: "${data.assertSource}"`);
+			printNode(data.assertExpr, level + 1);
 		},
 		_ => {},
 	}

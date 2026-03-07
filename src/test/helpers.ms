@@ -14,70 +14,57 @@ import { transformForNative } from "../transform/native/index";
 import { createTransformContextWithChecker } from "../transform/context";
 import { analyzeProgram } from "../analyzer/index";
 import { generateCModule } from "../codegen/c/index";
+import { createAliveSet } from "../codegen/c/context";
 import { generateJS } from "../codegen/js/index";
 import { sliceStr } from "../utils/string";
 
+type CompileResult = Result<string, string>;
+
+function collectErrors(errors: any[], prefix: string): string {
+	let msg = prefix;
+	let i = 0;
+	while (i < errors.length) {
+		msg = msg + " " + errors[i].message;
+		i = i + 1;
+	}
+	return msg;
+}
+
 // Full C pipeline: parse → check → monomorphize → validate → transform → native → analyze → codegen
-export function compileToC(source: string): string {
+export function compileToC(source: string): CompileResult {
 	const pr = parseSource(source);
-	if (!pr.ok) return "ERROR: parse: " + pr.error;
+	if (!pr.ok) return Result.err("parse: " + pr.error);
 
 	const checkerCtx = checkProgram(pr.value);
-	if (hasErrors(checkerCtx)) {
-		let msg = "ERROR: check:";
-		let ei = 0;
-		while (ei < checkerCtx.errors.length) {
-			msg = msg + " " + checkerCtx.errors[ei];
-			ei = ei + 1;
-		}
-		console.log("C Compile Error (check): " + msg);
-		return msg;
-	}
+	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
 
 	const monoed = monomorphizeProgram(pr.value, checkerCtx);
 
 	validateTypedAST(checkerCtx, monoed);
-	if (hasErrors(checkerCtx)) {
-		let msg = "ERROR: validate:";
-		let ei = 0;
-		while (ei < checkerCtx.errors.length) {
-			msg = msg + " " + checkerCtx.errors[ei];
-			ei = ei + 1;
-		}
-		console.log("C Compile Error (validate): " + msg);
-		return msg;
-	}
+	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "validate:"));
 
 	const transformed = transformProgram(monoed, checkerCtx, false);
 	const nativeCtx = createTransformContextWithChecker(checkerCtx);
 	const nativeTransformed = transformForNative(transformed, nativeCtx);
 	const analyzed = analyzeProgram(nativeTransformed, checkerCtx);
-	return generateCModule(analyzed, checkerCtx, "test/e2e", "");
+	const aliveSet = createAliveSet();
+	return Result.ok(generateCModule(analyzed, checkerCtx, "test/e2e", aliveSet, false));
 }
 
 // Full JS pipeline: parse → check → transform(jsBackend=true) → codegen
-export function compileToJS(source: string): string {
+export function compileToJS(source: string): CompileResult {
 	const pr = parseSource(source);
-	if (!pr.ok) return "ERROR: parse: " + pr.error;
+	if (!pr.ok) return Result.err("parse: " + pr.error);
 
 	const checkerCtx = checkProgram(pr.value);
-	if (hasErrors(checkerCtx)) {
-		let msg = "ERROR: check:";
-		let ei = 0;
-		while (ei < checkerCtx.errors.length) {
-			msg = msg + " " + checkerCtx.errors[ei];
-			ei = ei + 1;
-		}
-		console.log("JS Compile Error (check): " + msg);
-		return msg;
-	}
+	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
 
 	const transformed = transformProgram(pr.value, checkerCtx, true);
-	return generateJS(transformed);
+	return Result.ok(generateJS(transformed));
 }
 
 // String contains check (MetaScript has no indexOf/includes)
-export function assertContains(haystack: string, needle: string): boolean {
+export function contains(haystack: string, needle: string): boolean {
 	if (needle.length === 0) return true;
 	if (haystack.length < needle.length) return false;
 	let i = 0;
@@ -89,23 +76,10 @@ export function assertContains(haystack: string, needle: string): boolean {
 	return false;
 }
 
-// Assert output is NOT an error
-export function assertNoError(output: string): boolean {
-	if (output.length >= 6 && sliceStr(output, 0, 6) === "ERROR:") return false;
-	return true;
-}
-
-
-
-test "assertContains basic" {
-	expect(assertContains("hello world", "world"));
-	expect(assertContains("hello world", "hello"));
-	expect(!assertContains("hello", "world"));
-	expect(assertContains("abc", ""));
-	expect(!assertContains("", "abc"));
-}
-
-test "assertNoError" {
-	expect(assertNoError("int32_t x = 42;"));
-	expect(!assertNoError("ERROR: parse: unexpected token"));
+test "contains basic" {
+	assert contains("hello world", "world");
+	assert contains("hello world", "hello");
+	assert !contains("hello", "world");
+	assert contains("abc", "");
+	assert !contains("", "abc");
 }

@@ -64,16 +64,16 @@ function listCount(input: string): number {
 	return result.value.length;
 }
 
-test "no args" { expect(callArgCount("()") === 0); }
+test "no args" { assert callArgCount("()") === 0; }
 
-test "two args" { expect(callArgCount("(a, b)") === 2); }
+test "two args" { assert callArgCount("(a, b)") === 2; }
 
-test "trailing comma" { expect(callArgCount("(a, b,)") === 2); }
+test "trailing comma" { assert callArgCount("(a, b,)") === 2; }
 
-test "empty list" { expect(listCount("") === 0); }
+test "empty list" { assert listCount("") === 0; }
 
-test "three items" { expect(listCount("a, b, c") === 3); }
+test "three items" { assert listCount("a, b, c") === 3; }
 
-test "nested call" { expect(parseOk("f(g(x))")); }
+test "nested call" { assert parseOk("f(g(x))"); }
 
-test "expr arg" { expect(parseOk("f(1 + 2)")); }
+test "expr arg" { assert parseOk("f(1 + 2)"); }

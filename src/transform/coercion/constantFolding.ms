@@ -1,5 +1,5 @@
 // Constant Folding — compile-time evaluation of constant expressions
-// Follows Nim's commonOptimizations + getConstExpr (transf.nim)
+// Follows the standard reference implementation (constant folding)
 //
 // Folds:
 //   2 + 3           → 5
@@ -151,18 +151,18 @@ function foldMember(node: Node): Node {
 }
 
 // ===== Tests =====
-test "number addition" { expect(firstExprKindAfter("2 + 3;", lowerConstFold) === NodeKind.NumberLiteral); }
+test "number addition" { assert firstExprKindAfter("2 + 3;", lowerConstFold) === NodeKind.NumberLiteral; }
 
-test "string concat" { expect(firstExprKindAfter("\"a\" + \"b\";", lowerConstFold) === NodeKind.StringLiteral); }
+test "string concat" { assert firstExprKindAfter("\"a\" + \"b\";", lowerConstFold) === NodeKind.StringLiteral; }
 
-test "boolean negation" { expect(firstExprKindAfter("!true;", lowerConstFold) === NodeKind.BooleanLiteral); }
+test "boolean negation" { assert firstExprKindAfter("!true;", lowerConstFold) === NodeKind.BooleanLiteral; }
 
-test "comparison" { expect(firstExprKindAfter("5 > 3;", lowerConstFold) === NodeKind.BooleanLiteral); }
+test "comparison" { assert firstExprKindAfter("5 > 3;", lowerConstFold) === NodeKind.BooleanLiteral; }
 
-test "non-constant unchanged" { expect(firstExprKindAfter("x + y;", lowerConstFold) === NodeKind.BinaryExpr); }
+test "non-constant unchanged" { assert firstExprKindAfter("x + y;", lowerConstFold) === NodeKind.BinaryExpr; }
 
-test "nested constant folds bottom-up" { expect(firstExprKindAfter("(2 + 3) * 4;", lowerConstFold) === NodeKind.NumberLiteral); }
+test "nested constant folds bottom-up" { assert firstExprKindAfter("(2 + 3) * 4;", lowerConstFold) === NodeKind.NumberLiteral; }
 
-test "mixed types unchanged" { expect(firstExprKindAfter("1 + x;", lowerConstFold) === NodeKind.BinaryExpr); }
+test "mixed types unchanged" { assert firstExprKindAfter("1 + x;", lowerConstFold) === NodeKind.BinaryExpr; }
 
-test "division by zero unchanged" { expect(firstExprKindAfter("1 / 0;", lowerConstFold) === NodeKind.BinaryExpr); }
+test "division by zero unchanged" { assert firstExprKindAfter("1 / 0;", lowerConstFold) === NodeKind.BinaryExpr; }

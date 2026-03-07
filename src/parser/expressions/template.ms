@@ -57,14 +57,14 @@ export function parseTemplateLiteral(state: ParserState, parsePrec: PrecParserFn
 }
 
 // ===== Tests =====
-test "no substitution" { expect(parseOk("`hello`")); }
+test "no substitution" { assert parseOk("`hello`"); }
 
-test "single interpolation" { expect(parseOk("`hello ${name}`")); }
+test "single interpolation" { assert parseOk("`hello ${name}`"); }
 
-test "two interpolations" { expect(parseOk("`${a} and ${b}`")); }
+test "two interpolations" { assert parseOk("`${a} and ${b}`"); }
 
-test "expr in interpolation" { expect(parseOk("`sum is ${a + b}`")); }
+test "expr in interpolation" { assert parseOk("`sum is ${a + b}`"); }
 
-test "method call" { expect(parseOk("`num ${x.toString()}`")); }
+test "method call" { assert parseOk("`num ${x.toString()}`"); }
 
-test "three adjacent" { expect(parseOk("`${a}${b}${c}`")); }
+test "three adjacent" { assert parseOk("`${a}${b}${c}`"); }

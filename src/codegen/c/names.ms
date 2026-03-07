@@ -5,6 +5,8 @@
 // module-qualified proc names, field/local manglers.
 
 import { sliceStr, charAt } from "../../utils/string";
+import { Symbol, SymbolKind } from "../../ast/node";
+import { hasFlag, SF_IMPORT_C } from "../../checker/symbol";
 
 
 // ===== C Keywords — identifiers that need escaping =====
@@ -168,6 +170,21 @@ export function mangleProcName(name: string, moduleName: string, id: number): st
 	return mangled + "__" + moduleName + "_u" + id;
 }
 
+// ===== Symbol → C Name (Standard reference parity) =====
+// Single source of truth for function C names. Reads sym.modulePath.
+// extern functions use nativeName. main() stays main_. Others get module-qualified.
+
+export function mangledFunctionName(sym: Symbol, name: string, overloadIdx: number): string {
+	if (sym !== null && sym.nativeName !== "") return sym.nativeName;
+	if (name === "main") return safeName(name);
+	if (sym !== null && hasFlag(sym, SF_IMPORT_C)) return safeName(name);
+	if (sym !== null && sym.modulePath !== "") {
+		return mangleProcName(name, mangleModuleName(sym.modulePath), overloadIdx);
+	}
+	if (overloadIdx > 0) return safeName(name) + "__" + overloadIdx;
+	return safeName(name);
+}
+
 // ===== Type Name Mangling =====
 
 export function mangleTypeName(name: string, moduleName: string): string {
@@ -221,80 +238,80 @@ export function safeName(name: string): string {
 
 // ===== Tests =====
 test "simple names pass through" {
-	expect(mangle("foo") === "foo");
-	expect(mangle("bar123") === "bar123");
-	expect(mangle("_private") === "_private");
+	assert mangle("foo") === "foo";
+	assert mangle("bar123") === "bar123";
+	assert mangle("_private") === "_private";
 }
 
-test "leading digit" { expect(mangle("3d") === "X3d"); }
+test "leading digit" { assert mangle("3d") === "X3d"; }
 
 test "special chars get word replacements" {
-	expect(mangle("a+b") === "aplusb_");
-	expect(mangle("x=y") === "xeqy_");
-	expect(mangle("<") === "lt_");
-	expect(mangle("a.b") === "adotb_");
+	assert mangle("a+b") === "aplusb_";
+	assert mangle("x=y") === "xeqy_";
+	assert mangle("<") === "lt_";
+	assert mangle("a.b") === "adotb_";
 }
 
-test "empty name" { expect(mangle("") === "empty_"); }
+test "empty name" { assert mangle("") === "empty_"; }
 
-test "multiple special chars" { expect(mangle("a+b*c") === "aplusbstarc_"); }
+test "multiple special chars" { assert mangle("a+b*c") === "aplusbstarc_"; }
 
 test "C keywords detected" {
-	expect(isCKeyword("int"));
-	expect(isCKeyword("void"));
-	expect(isCKeyword("return"));
-	expect(isCKeyword("struct"));
+	assert isCKeyword("int");
+	assert isCKeyword("void");
+	assert isCKeyword("return");
+	assert isCKeyword("struct");
 }
 
 test "non-keywords pass" {
-	expect(!isCKeyword("foo"));
-	expect(!isCKeyword("myVar"));
+	assert !isCKeyword("foo");
+	assert !isCKeyword("myVar");
 }
 
-test "mangleProcName" { expect(mangleProcName("myFunc", "mymod", 42) === "myFunc__mymod_u42"); }
+test "mangleProcName" { assert mangleProcName("myFunc", "mymod", 42) === "myFunc__mymod_u42"; }
 
-test "mangleProcName with special" { expect(mangleProcName("a+b", "ops", 1) === "aplusb___ops_u1"); }
+test "mangleProcName with special" { assert mangleProcName("a+b", "ops", 1) === "aplusb___ops_u1"; }
 
 test "normal field" {
-	expect(mangleFieldName("x") === "x");
-	expect(mangleFieldName("myField") === "myField");
+	assert mangleFieldName("x") === "x";
+	assert mangleFieldName("myField") === "myField";
 }
 
 test "keyword field" {
-	expect(mangleFieldName("int") === "int_0");
-	expect(mangleFieldName("return") === "return_0");
+	assert mangleFieldName("int") === "int_0";
+	assert mangleFieldName("return") === "return_0";
 }
 
 test "top scope" {
-	expect(mangleLocalName("x", 0) === "x");
-	expect(mangleLocalName("foo", 0) === "foo");
+	assert mangleLocalName("x", 0) === "x";
+	assert mangleLocalName("foo", 0) === "foo";
 }
 
 test "nested scope" {
-	expect(mangleLocalName("x", 1) === "x_1");
-	expect(mangleLocalName("x", 3) === "x_3");
+	assert mangleLocalName("x", 1) === "x_1";
+	assert mangleLocalName("x", 3) === "x_3";
 }
 
-test "keyword at top scope" { expect(mangleLocalName("int", 0) === "int_0"); }
+test "keyword at top scope" { assert mangleLocalName("int", 0) === "int_0"; }
 
-test "normal name" { expect(safeName("foo") === "foo"); }
+test "normal name" { assert safeName("foo") === "foo"; }
 
 test "keyword gets suffix" {
-	expect(safeName("int") === "int_");
-	expect(safeName("void") === "void_");
+	assert safeName("int") === "int_";
+	assert safeName("void") === "void_";
 }
 
-test "simple lowercase path" { expect(mangleModuleName("mymod") === "mymod"); }
+test "simple lowercase path" { assert mangleModuleName("mymod") === "mymod"; }
 
-test "path separators become Z" { expect(mangleModuleName("src/codegen/c") === "srcZcodegenZc"); }
+test "path separators become Z" { assert mangleModuleName("src/codegen/c") === "srcZcodegenZc"; }
 
-test "dots become O" { expect(mangleModuleName("foo.bar") === "fooObar"); }
+test "dots become O" { assert mangleModuleName("foo.bar") === "fooObar"; }
 
 test "uppercase becomes ordinal" {
-	expect(mangleModuleName("MyClass") === "77y67lass");
-	expect(mangleModuleName("AB") === "6566");
+	assert mangleModuleName("MyClass") === "77y67lass";
+	assert mangleModuleName("AB") === "6566";
 }
 
-test "underscore becomes ordinal" { expect(mangleModuleName("my_mod") === "my95mod"); }
+test "underscore becomes ordinal" { assert mangleModuleName("my_mod") === "my95mod"; }
 
-test "full path with mixed case" { expect(mangleModuleName("src/codegen/MyGen") === "srcZcodegenZ77y71en"); }
+test "full path with mixed case" { assert mangleModuleName("src/codegen/MyGen") === "srcZcodegenZ77y71en"; }

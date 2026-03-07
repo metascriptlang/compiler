@@ -19,7 +19,7 @@ test "2 + 2 = 4" {
 	load(ctx, mod);
 	execute(ctx);
 	console.log("  2 + 2 = " + raiserToString(ctx.lastResult));
-	expect(ctx.lastResult.intVal === 4);
+	assert ctx.lastResult.intVal === 4;
 }
 
 test "(2 + 3) * 4 = 20" {
@@ -38,7 +38,7 @@ test "(2 + 3) * 4 = 20" {
 	load(ctx, mod);
 	execute(ctx);
 	console.log("  (2 + 3) * 4 = " + raiserToString(ctx.lastResult));
-	expect(ctx.lastResult.intVal === 20);
+	assert ctx.lastResult.intVal === 20;
 }
 
 test "sum 1..5 = 15 (loop)" {
@@ -60,5 +60,5 @@ test "sum 1..5 = 15 (loop)" {
 	load(ctx, mod);
 	execute(ctx);
 	console.log("  sum 1..5 = " + raiserToString(ctx.lastResult));
-	expect(ctx.lastResult.intVal === 15);
+	assert ctx.lastResult.intVal === 15;
 }

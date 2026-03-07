@@ -8,6 +8,7 @@ import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, Expression, createNode, createNodeAt, BinaryExprData, UnaryExprData, UpdateExprData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd } from "../context";
 import { lex } from "../../lexer/lexer";
+import { parseNumberLiteral } from "../../utils/string";
 import { isIdentLike } from "../util";
 
 type ExprResult = Result<Expression, string>;
@@ -71,7 +72,7 @@ export function mockExpr(state: ParserState, minPrec: number): ExprResult {
 	const tok = current(state);
 	if (tok.kind === TokenKind.Number) {
 		advance(state);
-		return Result.ok(createNode(NodeKind.NumberLiteral, { value: parseFloat(tok.value) }, tok));
+		return Result.ok(createNode(NodeKind.NumberLiteral, { value: parseNumberLiteral(tok.value) }, tok));
 	}
 	if (isIdentLike(tok)) {
 		advance(state);

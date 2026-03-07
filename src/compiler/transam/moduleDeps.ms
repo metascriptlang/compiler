@@ -146,20 +146,20 @@ function numberListContains(list: number[], val: number): boolean {
 // ===== Tests =====
 test "empty graph" {
 	const deps = createModuleDepGraph();
-	expect(deps.edges.length === 0);
+	assert deps.edges.length === 0;
 }
 
 test "record import" {
 	const deps = createModuleDepGraph();
 	recordModuleImport(deps, 0, 1);
-	expect(deps.edges.length === 1);
+	assert deps.edges.length === 1;
 }
 
 test "no duplicate edges" {
 	const deps = createModuleDepGraph();
 	recordModuleImport(deps, 0, 1);
 	recordModuleImport(deps, 0, 1);
-	expect(deps.edges.length === 1);
+	assert deps.edges.length === 1;
 }
 
 test "direct importers" {
@@ -167,7 +167,7 @@ test "direct importers" {
 	recordModuleImport(deps, 0, 1);  // 0 imports 1
 	recordModuleImport(deps, 2, 1);  // 2 imports 1
 	const imps = getDirectImporters(deps, 1);
-	expect(imps.length === 2);
+	assert imps.length === 2;
 }
 
 test "transitive: A->B->C" {
@@ -175,10 +175,10 @@ test "transitive: A->B->C" {
 	recordModuleImport(deps, 0, 1);  // 0 imports 1
 	recordModuleImport(deps, 1, 2);  // 1 imports 2
 	const result = getTransitiveDependents(deps, 2);
-	expect(result.length === 2);
+	assert result.length === 2;
 	// Both 0 and 1 depend on 2
-	expect(numberListContains(result, 0));
-	expect(numberListContains(result, 1));
+	assert numberListContains(result, 0);
+	assert numberListContains(result, 1);
 }
 
 test "diamond: A->B, A->C, B->D, C->D" {
@@ -188,10 +188,10 @@ test "diamond: A->B, A->C, B->D, C->D" {
 	recordModuleImport(deps, 1, 3);  // B imports D
 	recordModuleImport(deps, 2, 3);  // C imports D
 	const result = getTransitiveDependents(deps, 3);
-	expect(result.length === 3);
-	expect(numberListContains(result, 0));
-	expect(numberListContains(result, 1));
-	expect(numberListContains(result, 2));
+	assert result.length === 3;
+	assert numberListContains(result, 0);
+	assert numberListContains(result, 1);
+	assert numberListContains(result, 2);
 }
 
 test "cycle: A->B->A does not infinite loop" {
@@ -199,15 +199,15 @@ test "cycle: A->B->A does not infinite loop" {
 	recordModuleImport(deps, 0, 1);  // A imports B
 	recordModuleImport(deps, 1, 0);  // B imports A
 	const result = getTransitiveDependents(deps, 0);
-	expect(result.length === 1);
-	expect(numberListContains(result, 1));
+	assert result.length === 1;
+	assert numberListContains(result, 1);
 }
 
 test "no dependents" {
 	const deps = createModuleDepGraph();
 	recordModuleImport(deps, 0, 1);
 	const result = getTransitiveDependents(deps, 0);
-	expect(result.length === 0);
+	assert result.length === 0;
 }
 
 test "clear removes edges for file" {
@@ -216,7 +216,7 @@ test "clear removes edges for file" {
 	recordModuleImport(deps, 0, 2);
 	recordModuleImport(deps, 1, 2);
 	clearImportsFor(deps, 0);
-	expect(deps.edges.length === 1);
+	assert deps.edges.length === 1;
 	// Only edge 1->2 remains
-	expect(deps.edges[0].importerFileId === 1);
+	assert deps.edges[0].importerFileId === 1;
 }

@@ -1,7 +1,7 @@
 // Parser Hub Module - Re-exports all parser submodules
 // Pattern: ~/projects/metascript/src/ast/ast.zig
 
-export { ParserState, createState, current, advance, isAtEnd, expect, peek } from "./context";
+export { ParserState, createState, current, advance, isAtEnd, peek } from "./context";
 export { parseExpression, parseExpressionFromState } from "./expressions/core";
 export { parseProgram } from "./statements/core";
 export { parseSource } from "./statements/validation";

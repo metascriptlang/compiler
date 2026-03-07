@@ -154,228 +154,226 @@ function genFromSource(src: string): string {
 // ===== Tests =====
 test "number literal" {
 	const js = genFromSource("42;");
-	expect(js === "42;\n");
+	assert js === "42;\n";
 }
 
 test "string literal" {
 	const js = genFromSource("\"hello\";");
-	expect(js === "\"hello\";\n");
+	assert js === "\"hello\";\n";
 }
 
 test "boolean literal" {
 	const js = genFromSource("true;");
-	expect(js === "true;\n");
+	assert js === "true;\n";
 }
 
 test "null literal" {
 	const js = genFromSource("null;");
-	expect(js === "null;\n");
+	assert js === "null;\n";
 }
 
 test "binary expression" {
 	const js = genFromSource("1 + 2;");
 	// After constant folding, 1 + 2 → 3
-	expect(js === "3;\n");
+	assert js === "3;\n";
 }
 
 test "identifier" {
 	const js = genFromSource("const x = 1; x;");
-	expect(js === "const x = 1;\nx;\n");
+	assert js === "const x = 1;\nx;\n";
 }
 
 test "call expression" {
 	const js = genFromSource("foo(1, 2);");
-	expect(js === "foo(1, 2);\n");
+	assert js === "foo(1, 2);\n";
 }
 
 test "member expression" {
 	const js = genFromSource("console.log(42);");
-	expect(js === "console.log(42);\n");
+	assert js === "console.log(42);\n";
 }
 
 test "array literal" {
 	const js = genFromSource("[1, 2, 3];");
-	expect(js === "[1, 2, 3];\n");
+	assert js === "[1, 2, 3];\n";
 }
 
 test "object literal" {
 	const js = genFromSource("const x = { a: 1, b: 2 };");
-	expect(js === "const x = { a: 1, b: 2 };\n");
+	assert js === "const x = { a: 1, b: 2 };\n";
 }
 
 test "variable declaration const" {
 	const js = genFromSource("const x = 42;");
-	expect(js === "const x = 42;\n");
+	assert js === "const x = 42;\n";
 }
 
 test "variable declaration let" {
 	const js = genFromSource("let x = 0;");
-	expect(js === "let x = 0;\n");
+	assert js === "let x = 0;\n";
 }
 
 test "if statement" {
 	const js = genFromSource("let x = 0; if (x > 0) { 1; }");
-	expect(js === "let x = 0;\nif ((x > 0)) {\n  1;\n}\n");
+	assert js === "let x = 0;\nif ((x > 0)) {\n  1;\n}\n";
 }
 
 test "while statement" {
 	const js = genFromSource("while (true) { break; }");
-	expect(js === "while (true) {\n  break;\n}\n");
+	assert js === "while (true) {\n  break;\n}\n";
 }
 
 test "return statement" {
 	// export to survive DCE
 	const js = genFromSource("export function f(): number { return 1; }");
-	expect(js === "export function f() {\n  return 1;\n}\n");
+	assert js === "export function f() {\n  return 1;\n}\n";
 }
 
 test "function declaration" {
 	// export to survive DCE
 	const js = genFromSource("export function add(a: number, b: number): number { return a + b; }");
-	expect(js === "export function add(a, b) {\n  return (a + b);\n}\n");
+	assert js === "export function add(a, b) {\n  return (a + b);\n}\n";
 }
 
 test "enum declaration" {
 	// export to survive DCE
 	const js = genFromSource("export enum Color { Red, Green, Blue }");
-	expect(js.length > 0);
+	assert js.length > 0;
 }
 
 test "interface skipped" {
 	const js = genFromSource("interface Point { x: number; y: number; }");
-	expect(js === "");
+	assert js === "";
 }
 
 test "type alias skipped" {
 	const js = genFromSource("type Num = number;");
-	expect(js === "");
+	assert js === "";
 }
 
 test "if-else" {
 	const js = genFromSource("let x = 0; if (x > 0) { 1; } else { 2; }");
-	expect(js === "let x = 0;\nif ((x > 0)) {\n  1;\n} else {\n  2;\n}\n");
+	assert js === "let x = 0;\nif ((x > 0)) {\n  1;\n} else {\n  2;\n}\n";
 }
 
 test "do-while" {
 	const js = genFromSource("do { break; } while (false);");
-	expect(js === "do {\n  break;\n} while (false);\n");
+	assert js === "do {\n  break;\n} while (false);\n";
 }
 
 test "try-catch" {
 	// Transform adds finally {} block
 	const js = genFromSource("try { 1; } catch (e) { 2; }");
-	expect(js === "try {\n  1;\n} catch (e) {\n  2;\n} finally {\n}\n");
+	assert js === "try {\n  1;\n} catch (e) {\n  2;\n} finally {\n}\n";
 }
 
 test "throw" {
 	const js = genFromSource("throw 42;");
-	expect(js === "throw 42;\n");
+	assert js === "throw 42;\n";
 }
 
 test "unreachable" {
 	const js = genFromSource("unreachable;");
-	expect(js === "throw new Error(\"unreachable\");\n");
+	assert js === "throw new Error(\"unreachable\");\n";
 }
 
 test "unary not" {
 	// Constant folding turns !true → false
 	const js = genFromSource("!true;");
-	expect(js === "false;\n");
+	assert js === "false;\n";
 }
 
 test "conditional expression" {
 	const js = genFromSource("const x = true ? 1 : 2;");
-	expect(js === "const x = (true ? 1 : 2);\n");
+	assert js === "const x = (true ? 1 : 2);\n";
 }
 
 test "new expression" {
 	const js = genFromSource("new Foo(1, 2);");
-	expect(js === "new Foo(1, 2);\n");
+	assert js === "new Foo(1, 2);\n";
 }
 
 test "array access" {
 	const js = genFromSource("const arr = [1]; arr[0];");
-	expect(js === "const arr = [1];\narr[0];\n");
+	assert js === "const arr = [1];\narr[0];\n";
 }
 
 test "std import skipped" {
 	const js = genFromSource("import { test } from \"std/testing\"; 42;");
-	expect(js === "42;\n");
+	assert js === "42;\n";
 }
-// "export const/let" tests removed — triggers ASan crash in checker (checkExportDecl → checkVariableDecl → makeSymbol)
+
 test "interface skipped in export" {
 	const js = genFromSource("export interface Foo { x: number; }");
-	expect(js === "");
+	assert js === "";
 }
 
 test "Result.ok" {
 	const js = genFromSource("Result.ok(42);");
-	expect(js === "{ ok: true, value: 42 };\n");
+	assert js === "{ ok: true, value: 42 };\n";
 }
 
 test "Result.err" {
 	const js = genFromSource("Result.err(\"fail\");");
-	expect(js === "{ ok: false, error: \"fail\" };\n");
+	assert js === "{ ok: false, error: \"fail\" };\n";
 }
 
 test "generateJS includes header" {
 	const parseResult = parseSource("42;");
-	if (!parseResult.ok) { expect(false); return; }
+	if (!parseResult.ok) { assert false; return; }
 	const program = parseResult.value;
 	const checkerCtx = checkProgram(program);
 	const transformed = transformProgram(program, checkerCtx, true);
 	const js = generateJS(transformed);
-	expect(js === "// Generated by MetaScript Compiler\n42;\n");
+	assert js === "// Generated by MetaScript Compiler\n42;\n";
 }
 
 test "full program" {
 	const js = genFromSource("const x = 1; const y = 2; const z = x + y;");
-	expect(js.length > 0);
+	assert js.length > 0;
 }
 
 test "function with body" {
 	const js = genFromSource("export function greet(name: string): void { console.log(name); }");
-	expect(js.length > 0);
+	assert js.length > 0;
 }
 
 test "empty program" {
 	const js = genFromSource("");
-	expect(js === "");
+	assert js === "";
 }
 
 test "export enum correct indent" {
 	const js = genFromSource("export enum Dir { Up, Down }");
-	expect(js.length > 0);
+	assert js.length > 0;
 }
 
 test "for-of preserved" {
 	const js = genFromSource("const arr = [1, 2]; for (const x of arr) { console.log(x); }");
-	expect(js.length > 0);
+	assert js.length > 0;
 }
 
 test "arrow function preserved" {
 	const js = genFromSource("const f = (x: number): number => x + 1;");
-	expect(js.length > 0);
+	assert js.length > 0;
 }
 
 test "string concat is native +" {
 	const js = genFromSource("const s = \"a\" + \"b\" + \"c\";");
-	expect(js.length > 0);
+	assert js.length > 0;
 }
 
 test "update expr preserved" {
 	const js = genFromSource("let x = 0; x++;");
-	expect(js.length > 0);
+	assert js.length > 0;
 }
 
 test "async function" {
 	const js = genFromSource("export async function f(): number { return 1; }");
-	expect(js.length > 0);
+	assert js.length > 0;
 }
 
 test "async arrow" {
 	const js = genFromSource("const f = async (x: number): number => x;");
-	expect(js.length > 0);
+	assert js.length > 0;
 }
-
-// REMAINING NEW TESTS — disabled to isolate ASan crash

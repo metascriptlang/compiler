@@ -1,6 +1,14 @@
 // Transform Context — shared state across all transforms
 
 import { CheckerContext } from "../checker/context";
+import { Type } from "../checker/types";
+
+// Pending tuple type entry — collected by operatorLower, consumed by destructorLifting.
+export interface PendingTupleOp {
+	tupleType: Type;
+	tupleName: string;
+	ops: string[];  // which ops needed: "eq", "lt", "le"
+}
 
 export interface TransformContext {
 	tempCounter: number;
@@ -8,10 +16,11 @@ export interface TransformContext {
 	fnDeclNames: string[];  // collected function declaration names (for closureCallMarker)
 	checkerCtx: CheckerContext;  // type info from Phase 2 (null in test mode)
 	jsBackend: boolean;  // true = skip C-specific transforms (lambda lifting, destructor lifting, etc.)
+	pendingTupleOps: PendingTupleOp[];  // tuple comparison ops to generate (Nim parity)
 }
 
 export function createTransformContext(): TransformContext {
-	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false };
+	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, pendingTupleOps: [] };
 }
 
 export function createTransformContextWithChecker(cc: CheckerContext): TransformContext {

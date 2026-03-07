@@ -12,7 +12,7 @@ import {
 	SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData,
 	DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ProgramData,
 	MacroInvocationData, StringLiteralData, CallExprData,
-	TestDeclData,
+	TestDeclData, AssertStmtData,
 } from "../ast/node";
 import {
 	Type, TypeKind,
@@ -24,7 +24,7 @@ import {
 	defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope,
 	setFlag, SF_MUTABLE, SF_LENT,
 } from "./symbol";
-import { CheckerContext, CancelCtx, createContext, createModuleContext, addError, hasErrors, errorCount, createExtensionRegistry, ExportRegistry, isCancelled } from "./context";
+import { CheckerContext, CancelCtx, createContext, createModuleContext, addError, addFatalError, hasErrors, hasFatalErrors, errorCount, createExtensionRegistry, ExportRegistry, isCancelled } from "./context";
 import { Module, ModuleGraph } from "../module/graph";
 import { collectTopLevel, defineOrError } from "./collectPass";
 import { readFile } from "std/process";
@@ -56,8 +56,8 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 		NodeKind.DoWhileStmt => checkDoWhileStmt(ctx, node),
 		NodeKind.BlockStmt => checkBlock(ctx, node),
 		NodeKind.ReturnStmt => checkReturnStmt(ctx, node),
-		NodeKind.BreakStmt => { if (!ctx.inLoop) { addError(ctx, "break outside of loop"); } },
-		NodeKind.ContinueStmt => { if (!ctx.inLoop) { addError(ctx, "continue outside of loop"); } },
+		NodeKind.BreakStmt => { if (!ctx.inLoop) { addError(ctx, "break outside of loop", node.location.line, node.location.column); } },
+		NodeKind.ContinueStmt => { if (!ctx.inLoop) { addError(ctx, "continue outside of loop", node.location.line, node.location.column); } },
 		NodeKind.ExprStmt => {
 			const d = node.data as ExprStmtData;
 			checkExpr(ctx, d.expr, null as unknown as Type);
@@ -82,9 +82,19 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 			const d = node.data as TestDeclData;
 			// Test blocks compile to functions — allow return statements inside
 			const savedFunction = ctx.currentFunction;
+			const savedInTest = ctx.inTestBlock;
 			ctx.currentFunction = makeSymbol("__test__", SymbolKind.Function, unknownType(), false);
+			ctx.inTestBlock = true;
 			checkBlock(ctx, d.testBody);
+			ctx.inTestBlock = savedInTest;
 			ctx.currentFunction = savedFunction;
+		},
+		NodeKind.AssertStmt => {
+			const d = node.data as AssertStmtData;
+			if (!ctx.inTestBlock) {
+				addFatalError(ctx, "'assert' can only be used inside test blocks", node.location.line, node.location.column);
+			}
+			checkExpr(ctx, d.assertExpr, null as unknown as Type);
 		},
 		_ => {},
 	};
@@ -94,7 +104,7 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 
 function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as VariableDeclData;
-	// Resolve declared type FIRST so it can flow as expectedType into initializer (Nim parity)
+	// Resolve declared type FIRST so it can flow as expectedType into initializer (Implementation parity)
 	let declType = null as unknown as Type;
 	if (d.declType !== "") {
 		declType = resolveAnnotation(d.declType, ctx);
@@ -294,12 +304,12 @@ function checkPurityViolations(ctx: CheckerContext, body: Node): void {
 			const callId = cd.callee.data as IdentifierData;
 			const calleeSym = lookupSymbol(ctx.table, callId.name);
 			if (calleeSym !== null && calleeSym.builtinKind !== "pure") {
-				addError(ctx, "@pure function calls impure function '" + callId.name + "'");
+				addError(ctx, "@pure function calls impure function '" + callId.name + "'", body.location.line, body.location.column);
 			}
 		} else if (cd.callee.kind === NodeKind.MemberExpr) {
 			// member calls (e.g. console.log) are impure by default
 			const me = cd.callee.data as MemberExprData;
-			addError(ctx, "@pure function calls impure method '" + me.property + "'");
+			addError(ctx, "@pure function calls impure method '" + me.property + "'", body.location.line, body.location.column);
 		}
 		// Also check arguments for nested impure calls
 		let j = 0;
@@ -540,10 +550,10 @@ function checkBlock(ctx: CheckerContext, node: Node): void {
 function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ReturnStmtData;
 	if (ctx.currentFunction === null) {
-		addError(ctx, "return outside of function");
+		addError(ctx, "return outside of function", node.location.line, node.location.column);
 	}
 	if (d.argument !== null && d.argument.kind !== NodeKind.NullLiteral) {
-		// Pass declared return type as expectedType (Nim parity)
+		// Pass declared return type as expectedType (Implementation parity)
 		let returnExpected = null as unknown as Type;
 		if (ctx.currentFunction !== null
 			&& ctx.currentFunction.symbolType.kind === TypeKind.Function
@@ -564,7 +574,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 			&& retType.kind !== TypeKind.Unknown
 			&& retType.kind !== TypeKind.Error) {
 			if (!isAssignable(retType, ctx.currentFunction.symbolType.typeReturn)) {
-				addError(ctx, "Return type mismatch: cannot assign to declared return type");
+				addError(ctx, "Return type mismatch: cannot assign to declared return type", node.location.line, node.location.column);
 			}
 		}
 	}
@@ -713,6 +723,9 @@ function collectDirectives(ctx: CheckerContext, program: Node): void {
 					} else if (name === "link" || name === "passC" || name === "passL") {
 						if (ctx.compilerFlags !== "") ctx.compilerFlags = ctx.compilerFlags + " ";
 						ctx.compilerFlags = ctx.compilerFlags + sd.value;
+					} else if (name === "emit") {
+						if (ctx.emitDirectives !== "") ctx.emitDirectives = ctx.emitDirectives + "\n";
+						ctx.emitDirectives = ctx.emitDirectives + sd.value;
 					}
 				}
 			}
@@ -760,7 +773,7 @@ export function checkProgramCancellable(program: Node, cancelCtx: CancelCtx, can
 	runThreePasses(ctx, program);
 	collectDirectives(ctx, program);
 
-	// Phase 2.5: Ownership Inference (Nim parity: sinkparameter_inference.nim)
+	// Phase 2.5: Ownership Inference (Standard reference implementation)
 	inferOwnership(ctx, program);
 
 	return ctx;
@@ -859,433 +872,433 @@ function checkErrors(input: string): number {
 }
 
 test "variable decl" {
-	expect(checkOk("const x = 1;"));
-	expect(checkOk("let y = 2;"));
-	expect(checkOk("var z = 3;"));
+	assert checkOk("const x = 1;");
+	assert checkOk("let y = 2;");
+	assert checkOk("var z = 3;");
 }
 
-test "variable use" { expect(checkOk("const x = 1; const y = x;")); }
+test "variable use" { assert checkOk("const x = 1; const y = x;"); }
 
 test "undefined variable" {
-	expect(!checkOk("const x = y;"));
-	expect(checkErrors("const x = y;") === 1);
+	assert !checkOk("const x = y;");
+	assert checkErrors("const x = y;") === 1;
 }
 
-test "function scope" { expect(checkOk("function foo(a, b) { const x = a; }")); }
+test "function scope" { assert checkOk("function foo(a, b) { const x = a; }"); }
 
-test "forward reference" { expect(checkOk("const x = foo; function foo() { return 1; }")); }
+test "forward reference" { assert checkOk("const x = foo; function foo() { return 1; }"); }
 
-test "block scope" { expect(checkOk("const x = 1; if (true) { const y = x; }")); }
+test "block scope" { assert checkOk("const x = 1; if (true) { const y = x; }"); }
 
-test "nested scope isolation" { expect(!checkOk("if (true) { const y = 1; } const z = y;")); }
+test "nested scope isolation" { assert !checkOk("if (true) { const y = 1; } const z = y;"); }
 
-test "break in loop" { expect(checkOk("while (true) { break; }")); }
+test "break in loop" { assert checkOk("while (true) { break; }"); }
 
-test "break outside loop" { expect(!checkOk("break;")); }
+test "break outside loop" { assert !checkOk("break;"); }
 
-test "continue in loop" { expect(checkOk("for (let i = 0; i < 10; i++) { continue; }")); }
+test "continue in loop" { assert checkOk("for (let i = 0; i < 10; i++) { continue; }"); }
 
-test "continue outside loop" { expect(!checkOk("continue;")); }
+test "continue outside loop" { assert !checkOk("continue;"); }
 
-test "for-of binding" { expect(checkOk("const items = 1; for (const item of items) { const x = item; }")); }
+test "for-of binding" { assert checkOk("const items = 1; for (const item of items) { const x = item; }"); }
 
-test "return in function" { expect(checkOk("function foo() { return 1; }")); }
+test "return in function" { assert checkOk("function foo() { return 1; }"); }
 
-test "return outside function" { expect(!checkOk("return 1;")); }
+test "return outside function" { assert !checkOk("return 1;"); }
 
-test "class method scope" { expect(checkOk("class Foo { bar(x) { return x; } }")); }
+test "class method scope" { assert checkOk("class Foo { bar(x) { return x; } }"); }
 
-test "try-catch param" { expect(checkOk("try { const x = 1; } catch (e) { const y = e; }")); }
+test "try-catch param" { assert checkOk("try { const x = 1; } catch (e) { const y = e; }"); }
 
-test "arrow function" { expect(checkOk("const f = (x) => x;")); }
+test "arrow function" { assert checkOk("const f = (x) => x;"); }
 
 test "number type" {
 	const ctx = checkSource("const x = 42;");
 	const sym = lookupSymbol(ctx.table, "x");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Number);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Number;
 }
 
 test "string type" {
 	const ctx = checkSource("const s = \"hello\";");
 	const sym = lookupSymbol(ctx.table, "s");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.String);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.String;
 }
 
 test "boolean type" {
 	const ctx = checkSource("const b = true;");
 	const sym = lookupSymbol(ctx.table, "b");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Boolean);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Boolean;
 }
 
 test "null type" {
 	const ctx = checkSource("const n = null;");
 	const sym = lookupSymbol(ctx.table, "n");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Null);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Null;
 }
 
 test "arithmetic returns number" {
 	const ctx = checkSource("const x = 1 + 2;");
 	const sym = lookupSymbol(ctx.table, "x");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Number);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Number;
 }
 
 test "string concat returns string" {
 	const ctx = checkSource("const x = \"a\" + \"b\";");
 	const sym = lookupSymbol(ctx.table, "x");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.String);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.String;
 }
 
 test "comparison returns boolean" {
 	const ctx = checkSource("const x = 1 < 2;");
 	const sym = lookupSymbol(ctx.table, "x");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Boolean);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Boolean;
 }
 
 test "equality returns boolean" {
 	const ctx = checkSource("const x = 1 === 2;");
 	const sym = lookupSymbol(ctx.table, "x");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Boolean);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Boolean;
 }
 
 test "negation returns boolean" {
 	const ctx = checkSource("const x = !true;");
 	const sym = lookupSymbol(ctx.table, "x");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Boolean);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Boolean;
 }
 
 test "unary minus returns number" {
 	const ctx = checkSource("const x = -5;");
 	const sym = lookupSymbol(ctx.table, "x");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Number);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Number;
 }
 
 test "function has Function type after resolve" {
 	const ctx = checkSource("function foo(a, b) { return 1; }");
 	const sym = lookupSymbol(ctx.table, "foo");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Function);
-	expect(sym.symbolType.typeChildren.length === 2);
-	expect(sym.symbolType.typeNames.length === 2);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Function;
+	assert sym.symbolType.typeChildren.length === 2;
+	assert sym.symbolType.typeNames.length === 2;
 }
 
 test "call returns function return type" {
 	const ctx = checkSource("function foo(a, b) { return 1; } const x = foo(1, 2);");
 	const sym = lookupSymbol(ctx.table, "x");
-	expect(sym !== null);
+	assert sym !== null;
 	// foo's return type inferred as number from body
-	expect(sym.symbolType.kind === TypeKind.Number);
+	assert sym.symbolType.kind === TypeKind.Number;
 }
 
 test "forward reference to function is callable" {
 	const ctx = checkSource("const x = foo(1); function foo(a) { return 1; }");
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 }
 
 test "typed function params resolved" {
 	const ctx = checkSource("function add(a: number, b: number): number { return a; }");
 	const sym = lookupSymbol(ctx.table, "add");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Function);
-	expect(sym.symbolType.typeChildren[0].kind === TypeKind.Number);
-	expect(sym.symbolType.typeChildren[1].kind === TypeKind.Number);
-	expect(sym.symbolType.typeReturn.kind === TypeKind.Number);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Function;
+	assert sym.symbolType.typeChildren[0].kind === TypeKind.Number;
+	assert sym.symbolType.typeChildren[1].kind === TypeKind.Number;
+	assert sym.symbolType.typeReturn.kind === TypeKind.Number;
 }
 
 test "typed function call returns annotated type" {
 	const ctx = checkSource("function greet(name: string): string { return name; } const x = greet(\"hi\");");
 	const sym = lookupSymbol(ctx.table, "x");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.String);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.String;
 }
 
 test "array literal infers element type" {
 	const ctx = checkSource("const arr = [1, 2, 3];");
 	const sym = lookupSymbol(ctx.table, "arr");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Array);
-	expect(sym.symbolType.typeReturn.kind === TypeKind.Number);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Array;
+	assert sym.symbolType.typeReturn.kind === TypeKind.Number;
 }
 
 test "arrow function has Function type" {
 	const ctx = checkSource("const f = (x) => x;");
 	const sym = lookupSymbol(ctx.table, "f");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Function);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Function;
 }
 
 test "inferred return type from body" {
 	const ctx = checkSource("function foo() { return 42; }");
 	const sym = lookupSymbol(ctx.table, "foo");
-	expect(sym !== null);
-	expect(sym.symbolType.typeReturn.kind === TypeKind.Number);
+	assert sym !== null;
+	assert sym.symbolType.typeReturn.kind === TypeKind.Number;
 }
 
 test "annotated return type preserved" {
 	const ctx = checkSource("function bar(): string { return \"hi\"; }");
 	const sym = lookupSymbol(ctx.table, "bar");
-	expect(sym !== null);
-	expect(sym.symbolType.typeReturn.kind === TypeKind.String);
+	assert sym !== null;
+	assert sym.symbolType.typeReturn.kind === TypeKind.String;
 }
 
 test "arrow infers return type" {
 	const ctx = checkSource("const f = (x) => 42;");
 	const sym = lookupSymbol(ctx.table, "f");
-	expect(sym !== null);
-	expect(sym.symbolType.typeReturn.kind === TypeKind.Number);
+	assert sym !== null;
+	assert sym.symbolType.typeReturn.kind === TypeKind.Number;
 }
 
 test "string return inferred" {
 	const ctx = checkSource("function greet() { return \"hello\"; }");
 	const sym = lookupSymbol(ctx.table, "greet");
-	expect(sym !== null);
-	expect(sym.symbolType.typeReturn.kind === TypeKind.String);
+	assert sym !== null;
+	assert sym.symbolType.typeReturn.kind === TypeKind.String;
 }
 
 test "boolean return inferred" {
 	const ctx = checkSource("function isOk() { return true; }");
 	const sym = lookupSymbol(ctx.table, "isOk");
-	expect(sym !== null);
-	expect(sym.symbolType.typeReturn.kind === TypeKind.Boolean);
+	assert sym !== null;
+	assert sym.symbolType.typeReturn.kind === TypeKind.Boolean;
 }
 
 test "no return stays unknown" {
 	const ctx = checkSource("function noop() { const x = 1; }");
 	const sym = lookupSymbol(ctx.table, "noop");
-	expect(sym !== null);
-	expect(sym.symbolType.typeReturn.kind === TypeKind.Unknown);
+	assert sym !== null;
+	assert sym.symbolType.typeReturn.kind === TypeKind.Unknown;
 }
 
-test "return type mismatch detected" { expect(!checkOk("function foo(): number { return \"hello\"; }")); }
+test "return type mismatch detected" { assert !checkOk("function foo(): number { return \"hello\"; }"); }
 
-test "return type match ok" { expect(checkOk("function foo(): number { return 42; }")); }
+test "return type match ok" { assert checkOk("function foo(): number { return 42; }"); }
 
-test "return string match ok" { expect(checkOk("function bar(): string { return \"hi\"; }")); }
+test "return string match ok" { assert checkOk("function bar(): string { return \"hi\"; }"); }
 
-test "arg type mismatch detected" { expect(!checkOk("function add(a: number, b: number): number { return a; } const x = add(\"hi\", 2);")); }
+test "arg type mismatch detected" { assert !checkOk("function add(a: number, b: number): number { return a; } const x = add(\"hi\", 2);"); }
 
-test "arg type match ok" { expect(checkOk("function add(a: number, b: number): number { return a; } const x = add(1, 2);")); }
+test "arg type match ok" { assert checkOk("function add(a: number, b: number): number { return a; } const x = add(1, 2);"); }
 
-test "numeric widening ok" { expect(checkOk("function f(n: number): number { return n; } const x = f(42);")); }
+test "numeric widening ok" { assert checkOk("function f(n: number): number { return n; } const x = f(42);"); }
 
-test "two overloads no error" { expect(checkOk("function add(a: number, b: number): number { return a; } function add(a: string, b: string): string { return a; }")); }
+test "two overloads no error" { assert checkOk("function add(a: number, b: number): number { return a; } function add(a: string, b: string): string { return a; }"); }
 
-test "overload different arity no error" { expect(checkOk("function f(a: number): number { return a; } function f(a: number, b: number): number { return a; }")); }
+test "overload different arity no error" { assert checkOk("function f(a: number): number { return a; } function f(a: number, b: number): number { return a; }"); }
 
 test "overload call resolves" {
 	const ctx = checkSource("function f(a: number): number { return a; } function f(a: string): string { return a; } const x = f(1);");
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 	const sym = lookupSymbol(ctx.table, "x");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Number);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Number;
 }
 
 test "overload call picks string version" {
 	const ctx = checkSource("function f(a: number): number { return a; } function f(a: string): string { return a; } const y = f(\"hi\");");
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 	const sym = lookupSymbol(ctx.table, "y");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.String);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.String;
 }
 
 test "no match reports error" {
 	const ctx = checkSource("function add(a: number, b: number): number { return a; } function add(a: string, b: string): string { return a; } const x = add(true);");
-	expect(hasErrors(ctx));
+	assert hasErrors(ctx);
 }
 
 test "ambiguous call reports error" {
 	// Same param types, different return types → ambiguous
 	const ctx = checkSource("function f(a: number): number { return a; } function f(a: number): string { return \"hi\"; } const x = f(1);");
-	expect(hasErrors(ctx));
+	assert hasErrors(ctx);
 }
 
 test "arity-based overload resolution" {
 	const ctx = checkSource("function f(a: number): number { return a; } function f(a: number, b: number): number { return a; } const x = f(1); const y = f(1, 2);");
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 }
 
-test "two extension overloads no error" { expect(checkOk("function trim(this s: string): string { return s; } function trim(this s: string, ch: string): string { return s; }")); }
+test "two extension overloads no error" { assert checkOk("function trim(this s: string): string { return s; } function trim(this s: string, ch: string): string { return s; }"); }
 
 test "extension overload call resolves by arity" {
 	const ctx = checkSource("function double(this n: number): number { return n; } function double(this n: number, scale: number): number { return n; } const x = double(1); const y = double(1, 2);");
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 }
 
 test "same-name extensions on different types filter by receiver" {
 	// Bug repro: indexOf on string vs number[] — must resolve by receiver type, not pick first match
 	const ctx = checkSource("function indexOf(this s: string, sub: string, start: number): number { return 0; } function indexOf(this arr: number[], value: number): number { return 0; } const msg: string = \"hello\"; const idx: number = msg.indexOf(\"world\", 0);");
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 }
 
 test "same-name extensions array receiver resolves correctly" {
 	const ctx = checkSource("function indexOf(this s: string, sub: string, start: number): number { return 0; } function indexOf(this arr: number[], value: number): number { return 0; } const a: number[] = [1, 2, 3]; const idx: number = a.indexOf(42);");
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 }
 
 test "generic extension matches compatible array receiver" {
 	// first<T>(this arr: T[]) called as a.first() — T unifies with number
 	const ctx = checkSource("function first<T>(this arr: T[]): T { return arr[0]; } const a: number[] = [1, 2]; const x: number = a.first();");
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 }
 
 test "extension method registered" {
 	const ctx = checkSource("function trim(this s: string): string { return s; }");
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 	const sym = lookupSymbol(ctx.table, "trim");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Function);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Function;
 }
 
 test "extension method callable as function" {
 	const ctx = checkSource("function double(this n: number): number { return n; } const x = double(1);");
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 }
 
-test "extension on builtin type no error" { expect(checkOk("function len(this s: string): number { return 0; }")); }
+test "extension on builtin type no error" { assert checkOk("function len(this s: string): number { return 0; }"); }
 
-test "generic function parses ok" { expect(checkOk("function wrap<T>(x: T): T { return x; }")); }
+test "generic function parses ok" { assert checkOk("function wrap<T>(x: T): T { return x; }"); }
 
 test "generic param resolved as GenericParam" {
 	const ctx = checkSource("function id<T>(x: T): T { return x; }");
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 	const sym = lookupSymbol(ctx.table, "id");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Function);
-	expect(sym.symbolType.typeChildren[0].kind === TypeKind.GenericParam);
-	expect(sym.symbolType.typeReturn.kind === TypeKind.GenericParam);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Function;
+	assert sym.symbolType.typeChildren[0].kind === TypeKind.GenericParam;
+	assert sym.symbolType.typeReturn.kind === TypeKind.GenericParam;
 }
 
 test "generic call infers return type" {
 	const ctx = checkSource("function id<T>(x: T): T { return x; } const n = id(42);");
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 	const sym = lookupSymbol(ctx.table, "n");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Number);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Number;
 }
 
 test "two generic params" {
 	const ctx = checkSource("function first<T, U>(a: T, b: U): T { return a; } const x = first(1, \"hi\");");
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 	const sym = lookupSymbol(ctx.table, "x");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Number);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Number;
 }
 
-test "generic with annotated return" { expect(checkOk("function identity<T>(x: T): T { return x; }")); }
+test "generic with annotated return" { assert checkOk("function identity<T>(x: T): T { return x; }"); }
 
-test "wildcard always exhaustive" { expect(checkOk("enum Color { Red, Green, Blue } function f(): number { const c = Color.Red; return match (c) { _ => 0 }; }")); }
+test "wildcard always exhaustive" { assert checkOk("enum Color { Red, Green, Blue } function f(): number { const c = Color.Red; return match (c) { _ => 0 }; }"); }
 
-test "all members covered" { expect(checkOk("enum Color { Red, Green, Blue } function f(): number { const c = Color.Red; return match (c) { Color.Red => 1, Color.Green => 2, Color.Blue => 3 }; }")); }
+test "all members covered" { assert checkOk("enum Color { Red, Green, Blue } function f(): number { const c = Color.Red; return match (c) { Color.Red => 1, Color.Green => 2, Color.Blue => 3 }; }"); }
 
-test "missing member errors" { expect(!checkOk("enum Color { Red, Green, Blue } function f(): number { const c = Color.Red; return match (c) { Color.Red => 1, Color.Green => 2 }; }")); }
+test "missing member errors" { assert !checkOk("enum Color { Red, Green, Blue } function f(): number { const c = Color.Red; return match (c) { Color.Red => 1, Color.Green => 2 }; }"); }
 
-test "binding acts as wildcard" { expect(checkOk("enum Color { Red, Green } function f(): number { const c = Color.Red; return match (c) { Color.Red => 1, other => 0 }; }")); }
+test "binding acts as wildcard" { assert checkOk("enum Color { Red, Green } function f(): number { const c = Color.Red; return match (c) { Color.Red => 1, other => 0 }; }"); }
 
-test "non-enum no exhaustiveness check" { expect(checkOk("const x = match (42) { 1 => \"one\", _ => \"other\" };")); }
+test "non-enum no exhaustiveness check" { assert checkOk("const x = match (42) { 1 => \"one\", _ => \"other\" };"); }
 
 test "match expr returns arm type" {
 	const ctx = checkSource("const x = match (1) { 1 => 42, _ => 0 };");
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 	const sym = lookupSymbol(ctx.table, "x");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Number);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Number;
 }
 
-test "basic not-null check" { expect(checkOk("const x = 1; if (x !== null) { const y = x; }")); }
+test "basic not-null check" { assert checkOk("const x = 1; if (x !== null) { const y = x; }"); }
 
-test "reversed null check" { expect(checkOk("const x = 1; if (null !== x) { const y = x; }")); }
+test "reversed null check" { assert checkOk("const x = 1; if (null !== x) { const y = x; }"); }
 
-test "equals null narrows" { expect(checkOk("const x = 1; if (x === null) { const y = x; }")); }
+test "equals null narrows" { assert checkOk("const x = 1; if (x === null) { const y = x; }"); }
 
-test "no narrowing without null check" { expect(checkOk("const x = 1; if (x === x) { const y = x; }")); }
+test "no narrowing without null check" { assert checkOk("const x = 1; if (x === x) { const y = x; }"); }
 
 test "removeNullFromType unit" {
 	const unionType = createUnion([stringType(), nullType()]);
 	const narrowed = removeNullFromType(unionType);
-	expect(narrowed.kind === TypeKind.String);
+	assert narrowed.kind === TypeKind.String;
 }
 
 test "guard clause narrows after early return" {
 	// if (x === null) return; → x should be non-null after
-	expect(checkOk("function f(x: string): string { if (x === null) return \"\"; const y = x; return y; }"));
+	assert checkOk("function f(x: string): string { if (x === null) return \"\"; const y = x; return y; }");
 }
 
-test "guard clause narrows after throw" { expect(checkOk("function f(x: string): string { if (x === null) throw \"err\"; return x; }")); }
+test "guard clause narrows after throw" { assert checkOk("function f(x: string): string { if (x === null) throw \"err\"; return x; }"); }
 
 test "logical AND null check" {
 	// x !== null && x > 0 → x is non-null in consequent
-	expect(checkOk("const x = 1; if (x !== null && x > 0) { const y = x; }"));
+	assert checkOk("const x = 1; if (x !== null && x > 0) { const y = x; }");
 }
 
-test "pure function with pure ops passes" { expect(checkOk("@pure function add(a: number, b: number): number { return a + b; }")); }
+test "pure function with pure ops passes" { assert checkOk("@pure function add(a: number, b: number): number { return a + b; }"); }
 
 test "pure function calling impure warns" {
 	const ctx = checkSource("function impure(): void {} @pure function bad(): void { impure(); }");
-	expect(hasErrors(ctx));
+	assert hasErrors(ctx);
 }
 
-test "pure calling pure is ok" { expect(checkOk("@pure function helper(x: number): number { return x; } @pure function main(a: number): number { return helper(a); }")); }
+test "pure calling pure is ok" { assert checkOk("@pure function helper(x: number): number { return x; } @pure function main(a: number): number { return helper(a); }"); }
 
 test "type alias resolves to type" {
 	const ctx = checkSource("type ID = number;");
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 	const sym = lookupSymbol(ctx.table, "ID");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Number);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Number;
 }
 
 test "type alias Result resolved" {
 	const ctx = checkSource("type MyResult = Result<number, string>;");
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 	const sym = lookupSymbol(ctx.table, "MyResult");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Result);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Result;
 }
 
 test "distinct type creates Distinct wrapper" {
 	const ctx = checkSource("distinct type UserId = number;");
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 	const sym = lookupSymbol(ctx.table, "UserId");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Distinct);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Distinct;
 }
 
 test "variable annotation overrides inference" {
 	const ctx = checkSource("const x: string = \"hello\";");
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 	const sym = lookupSymbol(ctx.table, "x");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.String);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.String;
 }
 
 test "class property type resolved" {
 	const ctx = checkSource("class Point { x: number; y: string; getX() { return 1; } }");
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 	const sym = lookupSymbol(ctx.table, "Point");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Object);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Object;
 }
 
-test "decl with default parses ok" { expect(checkOk("function f1(x: number, y: number = 5) { return x; }")); }
+test "decl with default parses ok" { assert checkOk("function f1(x: number, y: number = 5) { return x; }"); }
 
-test "call with all args" { expect(checkOk("function f2(x: number, y: number = 5) { return x; } f2(1, 2);")); }
+test "call with all args" { assert checkOk("function f2(x: number, y: number = 5) { return x; } f2(1, 2);"); }
 
-test "call with default fills missing arg" { expect(checkOk("function f3(x: number, y: number = 5) { return x; } f3(1);")); }
+test "call with default fills missing arg" { assert checkOk("function f3(x: number, y: number = 5) { return x; } f3(1);"); }
 
-test "multiple defaults partial fill" { expect(checkOk("function f4(a: number, b: number = 1, c: number = 2) { return a; } f4(0);")); }
+test "multiple defaults partial fill" { assert checkOk("function f4(a: number, b: number = 1, c: number = 2) { return a; } f4(0);"); }
 
-test "all defaults omitted" { expect(checkOk("function f5(x: number = 10) { return x; } f5();")); }
+test "all defaults omitted" { assert checkOk("function f5(x: number = 10) { return x; } f5();"); }
 
-test "string default" { expect(checkOk("function f6(x: string = \"hi\") { return x; } f6();")); }
+test "string default" { assert checkOk("function f6(x: string = \"hi\") { return x; } f6();"); }
 
-test "boolean default" { expect(checkOk("function f7(x: boolean = true) { return x; } f7();")); }
+test "boolean default" { assert checkOk("function f7(x: boolean = true) { return x; } f7();"); }
 

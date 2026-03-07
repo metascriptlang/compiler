@@ -85,17 +85,6 @@ export function peek(state: ParserState, offset: number): Token {
 	return state.tokens[state.tokens.length - 1]; // EOF
 }
 
-// ===== Expect Helper =====
-
-export function expect(state: ParserState, kind: TokenKind, msg: string): Result<Token, string> {
-	const token = current(state);
-	if (token.kind !== kind) {
-		return Result.err(`${msg} at line ${token.line.toString()}`);
-	}
-	advance(state);
-	return Result.ok(token);
-}
-
 // ===== Error Recovery =====
 // Pattern: ~/projects/metascript/src/parser/parser.zig reportError + synchronize
 

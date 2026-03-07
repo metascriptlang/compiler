@@ -155,7 +155,7 @@ test "StringBuf accumulation" {
 	emit(gen, "hello");
 	emit(gen, " ");
 	emit(gen, "world");
-	expect(finalize(gen) === "hello world");
+	assert finalize(gen) === "hello world";
 }
 
 test "indentation" {
@@ -163,22 +163,22 @@ test "indentation" {
 	gen.indentLevel = 2;
 	emitIndent(gen);
 	emit(gen, "x");
-	expect(finalize(gen) === "    x");
+	assert finalize(gen) === "    x";
 }
 
 test "emitLine" {
 	const gen = createJSGenerator();
 	emitLine(gen, "const x = 1;");
-	expect(finalize(gen) === "const x = 1;\n");
+	assert finalize(gen) === "const x = 1;\n";
 }
 
 test "escapeJSString basics" {
-	expect(escapeJSString("hello") === "hello");
-	expect(escapeJSString("a\\b") === "a\\\\b");
+	assert escapeJSString("hello") === "hello";
+	assert escapeJSString("a\\b") === "a\\\\b";
 }
 
 test "convertImportPath" {
-	expect(convertImportPath("./module.ms") === "./module.js");
-	expect(convertImportPath("./module") === "./module");
-	expect(convertImportPath("std/testing") === "std/testing");
+	assert convertImportPath("./module.ms") === "./module.js";
+	assert convertImportPath("./module") === "./module";
+	assert convertImportPath("std/testing") === "std/testing";
 }

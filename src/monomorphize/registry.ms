@@ -1,6 +1,6 @@
 // Monomorphization Registry — tracks generic instantiations, dedup, name mangling
 //
-// Nim equivalent: procInstCache/typeInstCache in modulegraphs.nim,
+// Reference implementation equivalent: generic instantiation cache.
 // sameInstantiation() + genericCacheGet() in seminst.nim.
 
 import { Type, TypeKind } from "../checker/types";
@@ -46,9 +46,14 @@ export function monoTypeKey(t: Type): string {
 	if (t.kind === TypeKind.Boolean) return "boolean";
 	if (t.kind === TypeKind.Void) return "void";
 	if (t.kind === TypeKind.Null) return "null";
+	if (t.kind === TypeKind.Int8) return "int8";
+	if (t.kind === TypeKind.Int16) return "int16";
 	if (t.kind === TypeKind.Int32) return "int32";
 	if (t.kind === TypeKind.Int64) return "int64";
+	if (t.kind === TypeKind.Uint8) return "uint8";
+	if (t.kind === TypeKind.Uint16) return "uint16";
 	if (t.kind === TypeKind.Uint32) return "uint32";
+	if (t.kind === TypeKind.Uint64) return "uint64";
 	if (t.kind === TypeKind.Float32) return "float32";
 	if (t.kind === TypeKind.Float64) return "float64";
 	if (t.kind === TypeKind.Array) return "arr_" + monoTypeKey(t.typeReturn);
@@ -95,7 +100,7 @@ export function mangleMonoName(baseName: string, concreteTypes: Type[]): string 
 
 // ===== Deduplication =====
 
-// Compare two type arg key arrays for exact match (Nim: sameInstantiation)
+// Compare two type arg key arrays for exact match (Standard reference pattern)
 function sameTypeArgKeys(a: string[], b: string[]): boolean {
 	if (a.length !== b.length) return false;
 	for (let i = 0; i < a.length; i += 1) {
@@ -116,7 +121,7 @@ export function buildTypeArgKeys(concreteTypes: Type[]): string[] {
 // ===== Registry Operations =====
 
 // Find an existing entry for this generic + type args combination.
-// Returns the entry or null (Nim: genericCacheGet)
+// Returns the entry or null (Standard reference pattern)
 export function monoFindEntry(registry: MonoRegistry, genericName: string, typeArgKeys: string[]): MonoEntry {
 	for (let i = 0; i < registry.entries.length; i += 1) {
 		const entry = registry.entries[i];
@@ -128,7 +133,7 @@ export function monoFindEntry(registry: MonoRegistry, genericName: string, typeA
 }
 
 // Register a new instantiation. Returns the entry (existing if duplicate, new if not).
-// Nim: addToGenericProcCache + TInstantiation creation
+// Standard reference pattern: generic cache addition.
 export function monoRegister(
 	registry: MonoRegistry,
 	genericName: string,
@@ -156,35 +161,35 @@ export function monoRegister(
 // ===== Tests =====
 test "monoTypeKey primitives" {
 	const num: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
-	expect(monoTypeKey(num) === "number");
+	assert monoTypeKey(num) === "number";
 	const str: Type = { kind: TypeKind.String, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
-	expect(monoTypeKey(str) === "string");
+	assert monoTypeKey(str) === "string";
 	const b: Type = { kind: TypeKind.Boolean, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
-	expect(monoTypeKey(b) === "boolean");
+	assert monoTypeKey(b) === "boolean";
 }
 
 test "monoTypeKey array" {
 	const numT: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
 	const arrT: Type = { kind: TypeKind.Array, typeName: "", typeNames: [], typeChildren: [], typeReturn: numT, typeExtra: null as unknown as Type, typeFlags: 0 };
-	expect(monoTypeKey(arrT) === "arr_number");
+	assert monoTypeKey(arrT) === "arr_number";
 }
 
 test "monoTypeKey object" {
 	const obj: Type = { kind: TypeKind.Object, typeName: "Box", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
-	expect(monoTypeKey(obj) === "Box");
+	assert monoTypeKey(obj) === "Box";
 }
 
 test "mangleMonoName single param" {
 	const num: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
 	const types: Type[] = [num];
-	expect(mangleMonoName("identity", types) === "identity__number");
+	assert mangleMonoName("identity", types) === "identity__number";
 }
 
 test "mangleMonoName two params" {
 	const num: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
 	const str: Type = { kind: TypeKind.String, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
 	const types: Type[] = [num, str];
-	expect(mangleMonoName("pair", types) === "pair__number_string");
+	assert mangleMonoName("pair", types) === "pair__number_string";
 }
 
 test "registry dedup" {
@@ -193,15 +198,15 @@ test "registry dedup" {
 	const params: string[] = ["T"];
 	const types1: Type[] = [num];
 	const entry1 = monoRegister(reg, "identity", params, types1);
-	expect(entry1.mangledName === "identity__number");
-	expect(reg.entries.length === 1);
+	assert entry1.mangledName === "identity__number";
+	assert reg.entries.length === 1;
 
 	// Same instantiation → dedup
 	const num2: Type = { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
 	const types2: Type[] = [num2];
 	const entry2 = monoRegister(reg, "identity", params, types2);
-	expect(entry2.mangledName === "identity__number");
-	expect(reg.entries.length === 1);
+	assert entry2.mangledName === "identity__number";
+	assert reg.entries.length === 1;
 }
 
 test "registry different types" {
@@ -213,12 +218,12 @@ test "registry different types" {
 	const types2: Type[] = [str];
 	monoRegister(reg, "identity", params, types1);
 	monoRegister(reg, "identity", params, types2);
-	expect(reg.entries.length === 2);
+	assert reg.entries.length === 2;
 }
 
 test "findEntry returns null for missing" {
 	const reg = createMonoRegistry();
 	const keys: string[] = ["number"];
 	const result = monoFindEntry(reg, "nonexistent", keys);
-	expect(result === null);
+	assert result === null;
 }

@@ -103,27 +103,27 @@ function getReturnArgKind(input: string): NodeKind {
 }
 
 // ===== Tests =====
-test "non-return unchanged" { expect(stmtCountAfter("const x = 1;", coerceOptionals) === 1); }
+test "non-return unchanged" { assert stmtCountAfter("const x = 1;", coerceOptionals) === 1; }
 
-test "call unchanged" { expect(firstStmtKindAfter("f();", coerceOptionals) === NodeKind.ExprStmt); }
+test "call unchanged" { assert firstStmtKindAfter("f();", coerceOptionals) === NodeKind.ExprStmt; }
 
-test "while unchanged" { expect(firstStmtKindAfter("while (true) {}", coerceOptionals) === NodeKind.WhileStmt); }
+test "while unchanged" { assert firstStmtKindAfter("while (true) {}", coerceOptionals) === NodeKind.WhileStmt; }
 
-test "if unchanged" { expect(firstStmtKindAfter("if (x) {}", coerceOptionals) === NodeKind.IfStmt); }
+test "if unchanged" { assert firstStmtKindAfter("if (x) {}", coerceOptionals) === NodeKind.IfStmt; }
 
-test "non-optional function unchanged" { expect(firstStmtKindAfter("function foo(): number { return 1; }", coerceOptionals) === NodeKind.FunctionDecl); }
+test "non-optional function unchanged" { assert firstStmtKindAfter("function foo(): number { return 1; }", coerceOptionals) === NodeKind.FunctionDecl; }
 
 test "return null in optional fn becomes call" {
 	const k = getReturnArgKind("function foo(): number | null { return null; }");
-	expect(k === NodeKind.CallExpr);
+	assert k === NodeKind.CallExpr;
 }
 
 test "return expr in optional fn becomes call" {
 	const k = getReturnArgKind("function foo(): number | null { return 42; }");
-	expect(k === NodeKind.CallExpr);
+	assert k === NodeKind.CallExpr;
 }
 
 test "return expr in plain fn unchanged" {
 	const k = getReturnArgKind("function foo(): number { return 42; }");
-	expect(k === NodeKind.NumberLiteral);
+	assert k === NodeKind.NumberLiteral;
 }

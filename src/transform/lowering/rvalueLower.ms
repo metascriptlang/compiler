@@ -1,5 +1,5 @@
 // Rvalue Lowering — materialize rvalue receivers into temps for C codegen
-// Follows reference rvalue_lower.zig + Nim's evalOnce pattern
+// Follows reference rvalue_lower.zig + standard evalOnce pattern
 //
 // In C, method calls on rvalue receivers need an lvalue (address):
 //   f().method(args)  → { const $tmp = f(); $tmp.method(args); }
@@ -82,31 +82,31 @@ export function lowerRvalue(program: Node, ctx: TransformContext): Node {
 // ===== Tests =====
 test "method on call becomes block" {
 	// f().method(); → { const $rval_0 = f(); $rval_0.method(); }
-	expect(firstStmtKindAfter("f().method();", lowerRvalue) === NodeKind.BlockStmt);
+	assert firstStmtKindAfter("f().method();", lowerRvalue) === NodeKind.BlockStmt;
 }
 
 test "method on identifier unchanged" {
 	// x.method(); → unchanged (x is lvalue)
-	expect(firstStmtKindAfter("x.method();", lowerRvalue) === NodeKind.ExprStmt);
+	assert firstStmtKindAfter("x.method();", lowerRvalue) === NodeKind.ExprStmt;
 }
 
 test "method on member unchanged" {
 	// a.b.method(); → unchanged (a.b is lvalue)
-	expect(firstStmtKindAfter("a.b.method();", lowerRvalue) === NodeKind.ExprStmt);
+	assert firstStmtKindAfter("a.b.method();", lowerRvalue) === NodeKind.ExprStmt;
 }
 
 test "method on literal becomes block" {
 	// [1,2].push(3); → block
-	expect(firstStmtKindAfter("[1,2].push(3);", lowerRvalue) === NodeKind.BlockStmt);
+	assert firstStmtKindAfter("[1,2].push(3);", lowerRvalue) === NodeKind.BlockStmt;
 }
 
 test "plain call unchanged" {
 	// f(); → unchanged (not a method call)
-	expect(firstStmtKindAfter("f();", lowerRvalue) === NodeKind.ExprStmt);
+	assert firstStmtKindAfter("f();", lowerRvalue) === NodeKind.ExprStmt;
 }
 
-test "non-call unchanged" { expect(firstStmtKindAfter("x + y;", lowerRvalue) === NodeKind.ExprStmt); }
+test "non-call unchanged" { assert firstStmtKindAfter("x + y;", lowerRvalue) === NodeKind.ExprStmt; }
 
-test "while unchanged" { expect(firstStmtKindAfter("while (true) {}", lowerRvalue) === NodeKind.WhileStmt); }
+test "while unchanged" { assert firstStmtKindAfter("while (true) {}", lowerRvalue) === NodeKind.WhileStmt; }
 
-test "stmt count preserved" { expect(stmtCountAfter("let a = 1; let b = 2;", lowerRvalue) === 2); }
+test "stmt count preserved" { assert stmtCountAfter("let a = 1; let b = 2;", lowerRvalue) === 2; }

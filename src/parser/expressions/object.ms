@@ -111,18 +111,18 @@ function objOk(input: string): boolean {
 	return result.ok;
 }
 
-test "empty" { expect(objKeyCount("{}") === 0); }
+test "empty" { assert objKeyCount("{}") === 0; }
 
-test "two props" { expect(objKeyCount("{ x: 1, y: 2 }") === 2); }
+test "two props" { assert objKeyCount("{ x: 1, y: 2 }") === 2; }
 
-test "shorthand" { expect(objKeyCount("{ x }") === 1); }
+test "shorthand" { assert objKeyCount("{ x }") === 1; }
 
-test "mixed" { expect(objKeyCount("{ x, y: 2 }") === 2); }
+test "mixed" { assert objKeyCount("{ x, y: 2 }") === 2; }
 
-test "trailing comma" { expect(objKeyCount("{ x: 1, }") === 1); }
+test "trailing comma" { assert objKeyCount("{ x: 1, }") === 1; }
 
-test "non-ident key fails" { expect(!objOk("{ 42: x }")); }
+test "non-ident key fails" { assert !objOk("{ 42: x }"); }
 // Integration
-test "nested" { expect(parseOk("f({ a: { b: 1 } })")); }
+test "nested" { assert parseOk("f({ a: { b: 1 } })"); }
 
-test "createNode pattern" { expect(parseOk("f({ kind, value, line: 1 })")); }
+test "createNode pattern" { assert parseOk("f({ kind, value, line: 1 })"); }

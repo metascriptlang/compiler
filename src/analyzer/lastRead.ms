@@ -333,8 +333,8 @@ test "identifier matches" {
 	const expr = getExpr("x;");
 	const symX = makeTestSym("x");
 	attachSymToNode(expr, "x", symX);
-	expect(nodeReferencesVar(expr, symX));
-	expect(!nodeReferencesVar(expr, makeTestSym("y")));
+	assert nodeReferencesVar(expr, symX);
+	assert !nodeReferencesVar(expr, makeTestSym("y"));
 }
 
 test "binary expr references" {
@@ -343,9 +343,9 @@ test "binary expr references" {
 	const symY = makeTestSym("y");
 	attachSymToNode(expr, "x", symX);
 	attachSymToNode(expr, "y", symY);
-	expect(nodeReferencesVar(expr, symX));
-	expect(nodeReferencesVar(expr, symY));
-	expect(!nodeReferencesVar(expr, makeTestSym("z")));
+	assert nodeReferencesVar(expr, symX);
+	assert nodeReferencesVar(expr, symY);
+	assert !nodeReferencesVar(expr, makeTestSym("z"));
 }
 
 test "call expr references" {
@@ -356,49 +356,49 @@ test "call expr references" {
 	attachSymToNode(expr, "foo", symFoo);
 	attachSymToNode(expr, "a", symA);
 	attachSymToNode(expr, "b", symB);
-	expect(nodeReferencesVar(expr, symFoo));
-	expect(nodeReferencesVar(expr, symA));
-	expect(nodeReferencesVar(expr, symB));
-	expect(!nodeReferencesVar(expr, makeTestSym("c")));
+	assert nodeReferencesVar(expr, symFoo);
+	assert nodeReferencesVar(expr, symA);
+	assert nodeReferencesVar(expr, symB);
+	assert !nodeReferencesVar(expr, makeTestSym("c"));
 }
 
 test "member expr references object" {
 	const expr = getExpr("obj.prop;");
 	const symObj = makeTestSym("obj");
 	attachSymToNode(expr, "obj", symObj);
-	expect(nodeReferencesVar(expr, symObj));
-	expect(!nodeReferencesVar(expr, makeTestSym("prop")));
+	assert nodeReferencesVar(expr, symObj);
+	assert !nodeReferencesVar(expr, makeTestSym("prop"));
 }
 
 test "function boundary stops scan" {
 	const stmts = getStmts("function f() { return x; }");
 	const symX = makeTestSym("x");
 	attachSym(stmts, "x", symX);
-	expect(stmts.length > 0);
-	expect(!nodeReferencesVar(stmts[0], symX));
+	assert stmts.length > 0;
+	assert !nodeReferencesVar(stmts[0], symX);
 }
 
-test "null node" { expect(!nodeReferencesVar(null as unknown as Node, makeTestSym("x"))); }
+test "null node" { assert !nodeReferencesVar(null as unknown as Node, makeTestSym("x")); }
 
 test "last stmt is last read" {
 	const stmts = getStmts("const a = 1; const b = a;");
 	const symA = makeTestSym("a");
 	attachSym(stmts, "a", symA);
-	expect(isLastReadInBlock(symA, 1, stmts));
+	assert isLastReadInBlock(symA, 1, stmts);
 }
 
 test "not last when used later" {
 	const stmts = getStmts("const a = 1; const b = a; const c = a;");
 	const symA = makeTestSym("a");
 	attachSym(stmts, "a", symA);
-	expect(!isLastReadInBlock(symA, 1, stmts));
+	assert !isLastReadInBlock(symA, 1, stmts);
 }
 
 test "different var is last read" {
 	const stmts = getStmts("const a = 1; const b = a; const c = b;");
 	const symA = makeTestSym("a");
 	attachSym(stmts, "a", symA);
-	expect(isLastReadInBlock(symA, 1, stmts));
+	assert isLastReadInBlock(symA, 1, stmts);
 }
 
 test "no outer context = same as isLastReadInBlock" {
@@ -406,7 +406,7 @@ test "no outer context = same as isLastReadInBlock" {
 	const symA = makeTestSym("a");
 	attachSym(stmts, "a", symA);
 	const emptyOuter: OuterEntry[] = [];
-	expect(isLastReadInContext(symA, 1, stmts, emptyOuter));
+	assert isLastReadInContext(symA, 1, stmts, emptyOuter);
 }
 
 test "not last when used in outer scope" {
@@ -418,7 +418,7 @@ test "not last when used in outer scope" {
 	const outer: OuterEntry[] = [
 		{ outerStmts, fromIndex: 1, isFunctionBoundary: false },
 	];
-	expect(!isLastReadInContext(symA, 0, innerStmts, outer));
+	assert !isLastReadInContext(symA, 0, innerStmts, outer);
 }
 
 test "function boundary stops outer search" {
@@ -431,22 +431,22 @@ test "function boundary stops outer search" {
 		{ outerStmts, fromIndex: 1, isFunctionBoundary: false },
 		{ outerStmts: [], fromIndex: 0, isFunctionBoundary: true },
 	];
-	expect(isLastReadInContext(symA, 0, innerStmts, outer));
+	assert isLastReadInContext(symA, 0, innerStmts, outer);
 }
 
 test "simple alias" {
 	const expr = getExpr("f(x);");
 	const symX = makeTestSym("x");
 	attachSymToNode(expr, "x", symX);
-	expect(deepAliases(symX, expr));
-	expect(!deepAliases(makeTestSym("y"), expr));
+	assert deepAliases(symX, expr);
+	assert !deepAliases(makeTestSym("y"), expr);
 }
 
 test "nested alias" {
 	const expr = getExpr("g(f(x));");
 	const symX = makeTestSym("x");
 	attachSymToNode(expr, "x", symX);
-	expect(deepAliases(symX, expr));
+	assert deepAliases(symX, expr);
 }
 
 test "return terminates block" {
@@ -458,7 +458,7 @@ test "return terminates block" {
 	const outer: OuterEntry[] = [
 		{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
 	];
-	expect(isLastReadInContext(symA, 0, innerStmts, outer));
+	assert isLastReadInContext(symA, 0, innerStmts, outer);
 }
 
 test "throw terminates block" {
@@ -470,7 +470,7 @@ test "throw terminates block" {
 	const outer: OuterEntry[] = [
 		{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
 	];
-	expect(isLastReadInContext(symA, 0, innerStmts, outer));
+	assert isLastReadInContext(symA, 0, innerStmts, outer);
 }
 
 test "no termination checks outer normally" {
@@ -482,7 +482,7 @@ test "no termination checks outer normally" {
 	const outer: OuterEntry[] = [
 		{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
 	];
-	expect(!isLastReadInContext(symA, 0, innerStmts, outer));
+	assert !isLastReadInContext(symA, 0, innerStmts, outer);
 }
 
 test "exhaustive if-else terminates" {
@@ -494,7 +494,7 @@ test "exhaustive if-else terminates" {
 	const outer: OuterEntry[] = [
 		{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
 	];
-	expect(isLastReadInContext(symA, 0, innerStmts, outer));
+	assert isLastReadInContext(symA, 0, innerStmts, outer);
 }
 
 test "non-exhaustive if does not terminate" {
@@ -506,5 +506,5 @@ test "non-exhaustive if does not terminate" {
 	const outer: OuterEntry[] = [
 		{ outerStmts, fromIndex: 0, isFunctionBoundary: false },
 	];
-	expect(!isLastReadInContext(symA, 0, innerStmts, outer));
+	assert !isLastReadInContext(symA, 0, innerStmts, outer);
 }

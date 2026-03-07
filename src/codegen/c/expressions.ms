@@ -3,7 +3,7 @@
 // genExpr returns a C code snippet string for any expression node.
 // genExprToLoc fills a CLoc dest (for statement-level assignment).
 //
-// Follows Nim's ccgexprs.nim dest carrier pattern, adapted for
+// Follows standard reference implementation pattern for destination carriers.
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
 import {
@@ -16,7 +16,7 @@ import {
 	UpdateExprData, NewExprData, MoveExprData, SpreadExprData,
 	ExprStmtData, HiddenStdConvData, HiddenDerefData,
 } from "../../ast/node";
-import { Type, TypeKind, getProperty, getMinArity } from "../../checker/types";
+import { Type, TypeKind, isIntegerType, getProperty, getMinArity } from "../../checker/types";
 import { SymbolKind } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, Builder, CSection,
@@ -25,10 +25,53 @@ import {
 	pStmts, getTemp, nameSetHas, emitStmtsLine, internString,
 	emitProcLocalsLine,
 } from "./context";
-import { mangle, mangleFieldName, safeName } from "./names";
+import { mangle, mangleFieldName, mangledFunctionName, safeName } from "./names";
 import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, intToString, isPointerType, annotationToC, genClHalfCast, genClFullCast } from "./types";
 import { formatCNumber, cBoolLiteral, cNullLiteral, cStringLiteral, msStringPoolRef } from "./literals";
 import { charAt, sliceStr, findChar, startsWith } from "../../utils/string";
+import { ccgIntroducedPtr } from "../../transform/native/pointerParam";
+
+// ===== Union Variant Index Matching =====
+// Matches an `as` target type against a Union's typeChildren by comparing field names.
+// Returns the variant index (0-based), or -1 if no match.
+
+function findUnionVariantIndex(unionType: Type, targetType: Type): number {
+	if (targetType === null || unionType.typeChildren === null) return -1;
+	// Match by comparing field names (typeNames) — unique first field is sufficient
+	const targetNames = targetType.typeNames;
+	if (targetNames === null || targetNames.length === 0) return -1;
+
+	let i = 0;
+	while (i < unionType.typeChildren.length) {
+		const variant = unionType.typeChildren[i];
+		if (variant !== null && variant.typeNames !== null && variant.typeNames.length > 0) {
+			// Compare first field name for fast matching
+			if (variant.typeNames[0] === targetNames[0]) {
+				return i;
+			}
+		}
+		i += 1;
+	}
+	return -1;
+}
+
+// Match a union variant by a single key name (from ObjectLiteral keys)
+function findUnionVariantByKey(unionType: Type, key: string): number {
+	if (unionType.typeChildren === null) return -1;
+	let i = 0;
+	while (i < unionType.typeChildren.length) {
+		const variant = unionType.typeChildren[i];
+		if (variant !== null && variant.typeNames !== null) {
+			let fi = 0;
+			while (fi < variant.typeNames.length) {
+				if (variant.typeNames[fi] === key) return i;
+				fi += 1;
+			}
+		}
+		i += 1;
+	}
+	return -1;
+}
 
 // ===== Iterative genExpr infrastructure =====
 // Post-order stack traversal: Discover pushes children, Emit combines results.
@@ -146,7 +189,13 @@ function discoverExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[],
 				emitProcLocalsLine(p, "  " + cType + " " + safeName(d.name) + " = {0};");
 			}
 		}
-		results.push(safeName(d.name));
+		// Module-qualified name for function references (Standard reference parity)
+		const idSym = node.resolvedSym;
+		if (idSym !== null && idSym.symbolKind === SymbolKind.Function) {
+			results.push(mangledFunctionName(idSym, d.name, 0));
+		} else {
+			results.push(safeName(d.name));
+		}
 		return;
 	}
 	if (kind === NodeKind.ArrowFunction) {
@@ -380,11 +429,13 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 				}
 			}
 		}
+		// Struct equality handled by operatorLower → TypeName_eq() (Nim parity).
+		// No memcmp fallback needed — codegen never sees interface === interface.
 		// Modulo on doubles requires fmod() in C (% is integer-only)
 		// Integer types (int32, int64 etc.) keep native %
 		if (d.operator === "%") {
 			const lt = d.left.nodeType;
-			const isInt = lt !== null && (lt.kind === TypeKind.Int32 || lt.kind === TypeKind.Int64 || lt.kind === TypeKind.Uint32);
+			const isInt = lt !== null && isIntegerType(lt);
 			if (!isInt) {
 				results.push("fmod(" + left + ", " + finalRight + ")");
 				return;
@@ -463,7 +514,68 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 		const expr = peekResult(results, cc, 0);
 		truncResults(results, cc);
 		const d = node.data as TypeAssertionData;
-		// Nim's clHalf pattern: "__clHalf__" marker → generate typed fn pointer cast
+
+		// Union handling — two directions:
+		// 1. Narrowing: `unionExpr as { field: T }` → `(expr).vN` (access variant)
+		// 2. Construction: `{ field: val } as UnionType` → `(Union){ .vN = (Union_vN)expr }` (wrap into variant)
+		const srcType = (d.asExpr !== null) ? d.asExpr.nodeType : null as unknown as Type;
+
+		// Case 1: Source is Union → access variant member
+		if (srcType !== null && srcType.kind === TypeKind.Union && node.nodeType !== null) {
+			const varIdx = findUnionVariantIndex(srcType, node.nodeType);
+			if (varIdx >= 0) {
+				results.push("(" + expr + ").v" + intToString(varIdx));
+				return;
+			}
+		}
+		// Case 1b: Source type unknown but target resolves to a union variant (UnionName_vN)
+		// This handles `obj.data as { field: T }` when obj.data nodeType isn't set
+		if (node.nodeType !== null && node.nodeType.kind === TypeKind.Object) {
+			const targetCType = getTypeDesc(g, node.nodeType);
+			// Look for "_v" + digit at end (e.g., "DocData_v1", "DocData_v12")
+			let vPos = targetCType.length - 1;
+			// Skip trailing digits
+			while (vPos > 0 && targetCType.charAt(vPos) >= "0" && targetCType.charAt(vPos) <= "9") {
+				vPos = vPos - 1;
+			}
+			// Check for "_v" pattern
+			if (vPos > 0 && targetCType.charAt(vPos) === "v" && targetCType.charAt(vPos - 1) === "_") {
+				const suffix = sliceStr(targetCType, vPos, targetCType.length);
+				results.push("(" + expr + ")." + suffix);
+				return;
+			}
+		}
+
+		// Case 2: Target is Union → wrap object literal into variant
+		// `{ field: val } as UnionType` → `(Union){ .vN = (Union_vN){ .field = val } }`
+		if (node.nodeType !== null && node.nodeType.kind === TypeKind.Union) {
+			const unionType = node.nodeType;
+			const unionName = getTypeDesc(g, unionType);
+			// Find variant by matching source Object type OR ObjectLiteral keys
+			let varIdx = -1;
+			if (srcType !== null && srcType.kind === TypeKind.Object) {
+				varIdx = findUnionVariantIndex(unionType, srcType);
+			}
+			if (varIdx < 0 && d.asExpr !== null && d.asExpr.kind === NodeKind.ObjectLiteral) {
+				// Match by ObjectLiteral keys against variant field names
+				const litData = d.asExpr.data as ObjectLiteralData;
+				if (litData.keys !== null && litData.keys.length > 0) {
+					varIdx = findUnionVariantByKey(unionType, litData.keys[0]);
+				}
+			}
+			if (varIdx >= 0) {
+				const varName = unionName + "_v" + intToString(varIdx);
+				results.push("(" + unionName + "){ .v" + intToString(varIdx) + " = (" + varName + ")" + expr + " }");
+				return;
+			}
+			// Empty object literal (e.g., {} as DocData for Nil/HardLine variants)
+			if (d.asExpr !== null && d.asExpr.kind === NodeKind.ObjectLiteral) {
+				results.push("(" + unionName + "){0}");
+				return;
+			}
+		}
+
+		// Standard reference implementation: generate typed function pointer cast
 		// from nodeType (the callee's Function type). Codegen-only concern.
 		// See ccgtypes.nim:getClosureType(m, typ, clHalf)
 		let targetType = "";
@@ -525,7 +637,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 		const d = node.data as ObjectLiteralData;
 		if ((node.flags & NF_CLOSURE) !== 0) {
 			// Closure literal: (msClosure){ .fn = ..., .env = ... }
-			// Nim pattern: env is heap-allocated via msAllocTyped, fields initialized,
+			// Standard reference pattern: env is heap-allocated via msAllocTyped, fields initialized,
 			// then closure pair references the pointer.
 			const fnExpr = peekResult(results, cc, 0);
 			const envExpr = peekResult(results, cc, 1);
@@ -533,7 +645,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 			if (envExpr === "MS_NIL" || envExpr === "NULL") {
 				results.push("(msClosure){ .fn = (void*)" + fnExpr + ", .env = NULL }");
 			} else {
-				// Nim pattern: heap-allocate env struct, init fields, use pointer.
+				// Standard reference pattern: heap-allocate env struct, init fields, use pointer.
 				const envNode = d.properties[1];
 				const envTypeName = (envNode !== null && envNode.nodeType !== null) ? getTypeDesc(g, envNode.nodeType) : "void";
 				g.labels += 1;
@@ -545,8 +657,9 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 			}
 		} else {
 			// General struct literal — ALL compound literals need (Type) prefix in C
+			// Exception: Union types are wrapped by the parent TypeAssertion handler
 			let prefix = "";
-			if (node.nodeType !== null) {
+			if (node.nodeType !== null && node.nodeType.kind !== TypeKind.Union) {
 				const td = getTypeDesc(g, node.nodeType);
 				if (td !== "void*" && td !== "double") {
 					prefix = "(" + td + ")";
@@ -556,7 +669,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 			let i = 0;
 			while (i < d.keys.length) {
 				if (i > 0) result = result + ", ";
-				result = result + "." + mangleFieldName(d.keys[i]) + " = " + peekResult(results, cc, i);
+				let val = peekResult(results, cc, i);
+				result = result + "." + mangleFieldName(d.keys[i]) + " = " + val;
 				i += 1;
 			}
 			result = result + " }";
@@ -566,18 +680,25 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 		return;
 	}
 
-	// NewExpr
+	// NewExpr — inline allocation (Standard reference pattern: inlined allocation, no generated function)
 	if (kind === NodeKind.NewExpr) {
 		const callee = peekResult(results, cc, 0);
-		let args = "";
-		let i = 1;
-		while (i < cc) {
-			if (i > 1) args = args + ", ";
-			args = args + peekResult(results, cc, i);
-			i += 1;
+		if (cc === 1) {
+			// No-arg new: inline heap allocation with RTTI
+			truncResults(results, cc);
+			results.push("(" + callee + "*)msAllocTyped(sizeof(" + callee + "), &" + callee + "_typeInfo)");
+		} else {
+			// Explicit constructor: call ClassName_new(args)
+			let args = "";
+			let i = 1;
+			while (i < cc) {
+				if (i > 1) args = args + ", ";
+				args = args + peekResult(results, cc, i);
+				i += 1;
+			}
+			truncResults(results, cc);
+			results.push(callee + "_new(" + args + ")");
 		}
-		truncResults(results, cc);
-		results.push(callee + "_new(" + args + ")");
 		return;
 	}
 
@@ -632,6 +753,10 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 					} else if (!paramIsPtr && argIsPtr) {
 						arg = "*(" + arg + ")";
 					}
+					// ccgIntroducedPtr: interface/union params → pointer (cross-module proto parity)
+					if (!paramIsPtr && !argIsPtr && ccgIntroducedPtr(paramType)) {
+						arg = "&(" + arg + ")";
+					}
 				}
 			}
 			argsStr = argsStr + arg;
@@ -642,11 +767,8 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 			results.push(stripAddrPrefix(ovNativeName) + "(" + argsStr + ")");
 			return;
 		}
-		if (idx >= 0) {
-			results.push(safeName(sym.name) + "__" + idx + "(" + argsStr + ")");
-		} else {
-			results.push(safeName(sym.name) + "__0(" + argsStr + ")");
-		}
+		const ovIdx = idx >= 0 ? idx : 0;
+		results.push(mangledFunctionName(sym, sym.name, ovIdx) + "(" + argsStr + ")");
 		return;
 	}
 
@@ -676,6 +798,10 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 						arg = "&(" + arg + ")";
 					} else if (!paramIsPtr && argIsPtr) {
 						arg = "*(" + arg + ")";
+					}
+					// ccgIntroducedPtr: interface/union params → pointer (cross-module proto parity)
+					if (!paramIsPtr && !argIsPtr && ccgIntroducedPtr(paramType)) {
+						arg = "&(" + arg + ")";
 					}
 				}
 			}
@@ -835,7 +961,7 @@ function genArrayLiteral(g: CGen, p: CProc, node: Node): string {
 
 // ===== Tests =====
 
-import { createCGen, createProc, extract, sec, CSection } from "./context";
+import { createCGen, createProc, extract, sec, CSection, typeCacheGet } from "./context";
 import { CheckerContext } from "../../checker/context";
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
@@ -855,78 +981,78 @@ function exprSnippet(input: string): string {
 	return genExpr(g, p, es.expr);
 }
 
-test "integer" { expect(exprSnippet("42;") === "42"); }
+test "integer" { assert exprSnippet("42;") === "42"; }
 
-test "float" { expect(exprSnippet("3.14;") === "3.14"); }
+test "float" { assert exprSnippet("3.14;") === "3.14"; }
 
-test "zero" { expect(exprSnippet("0;") === "0"); }
+test "zero" { assert exprSnippet("0;") === "0"; }
 
 test "simple string uses pool ref" {
 	const result = exprSnippet("\"hello\";");
-	expect(result === "MS_STRING_LIT(&TMP_STR_1, 5)");
+	assert result === "MS_STRING_LIT(&TMP_STR_1, 5)";
 }
 
-test "true" { expect(exprSnippet("true;") === "MS_TRUE"); }
+test "true" { assert exprSnippet("true;") === "MS_TRUE"; }
 
-test "false" { expect(exprSnippet("false;") === "MS_FALSE"); }
+test "false" { assert exprSnippet("false;") === "MS_FALSE"; }
 
-test "null literal" { expect(exprSnippet("null;") === "MS_NIL"); }
+test "null literal" { assert exprSnippet("null;") === "MS_NIL"; }
 
-test "simple name" { expect(exprSnippet("foo;") === "foo"); }
+test "simple name" { assert exprSnippet("foo;") === "foo"; }
 
-test "addition" { expect(exprSnippet("a + b;") === "(a + b)"); }
+test "addition" { assert exprSnippet("a + b;") === "(a + b)"; }
 
-test "equality" { expect(exprSnippet("x === y;") === "(x == y)"); }
+test "equality" { assert exprSnippet("x === y;") === "(x == y)"; }
 
-test "not equal" { expect(exprSnippet("x !== y;") === "(x != y)"); }
+test "not equal" { assert exprSnippet("x !== y;") === "(x != y)"; }
 
-test "nested" { expect(exprSnippet("a + b * c;") === "(a + (b * c))"); }
+test "nested" { assert exprSnippet("a + b * c;") === "(a + (b * c))"; }
 
-test "negation" { expect(exprSnippet("-x;") === "(-x)"); }
+test "negation" { assert exprSnippet("-x;") === "(-x)"; }
 
-test "logical not" { expect(exprSnippet("!flag;") === "(!flag)"); }
+test "logical not" { assert exprSnippet("!flag;") === "(!flag)"; }
 
-test "no args" { expect(exprSnippet("foo();") === "foo()"); }
+test "no args" { assert exprSnippet("foo();") === "foo()"; }
 
-test "with args" { expect(exprSnippet("foo(a, b);") === "foo(a, b)"); }
+test "with args" { assert exprSnippet("foo(a, b);") === "foo(a, b)"; }
 
-test "nested call" { expect(exprSnippet("foo(bar(x));") === "foo(bar(x))"); }
+test "nested call" { assert exprSnippet("foo(bar(x));") === "foo(bar(x))"; }
 
-test "dot access" { expect(exprSnippet("obj.x;") === "obj.x"); }
+test "dot access" { assert exprSnippet("obj.x;") === "obj.x"; }
 
-test "bracket access" { expect(exprSnippet("arr[0];") === "arr[0]"); }
+test "bracket access" { assert exprSnippet("arr[0];") === "arr[0]"; }
 
-test "expression index" { expect(exprSnippet("arr[i + 1];") === "arr[(i + 1)]"); }
+test "expression index" { assert exprSnippet("arr[i + 1];") === "arr[(i + 1)]"; }
 
-test "conditional" { expect(exprSnippet("a ? b : c;") === "(a ? b : c)"); }
+test "conditional" { assert exprSnippet("a ? b : c;") === "(a ? b : c)"; }
 
 test "empty array" {
 	// Without nodeType, falls back to generic msRefArray
-	expect(exprSnippet("[];") === "(msRefArray){0}");
+	assert exprSnippet("[];") === "(msRefArray){0}";
 }
 
 test "array with elements no type" {
 	// Without nodeType (no checker), falls back to temp + push
 	const result = exprSnippet("[1, 2, 3];");
 	// Returns temp name (setup emitted to proc stmts)
-	expect(result.length > 0);
+	assert result.length > 0;
 }
 
-test "postfix increment" { expect(exprSnippet("x++;") === "(x++)"); }
+test "postfix increment" { assert exprSnippet("x++;") === "(x++)"; }
 
-test "prefix increment" { expect(exprSnippet("++x;") === "(++x)"); }
+test "prefix increment" { assert exprSnippet("++x;") === "(++x)"; }
 
-test "postfix decrement" { expect(exprSnippet("x--;") === "(x--)"); }
+test "postfix decrement" { assert exprSnippet("x--;") === "(x--)"; }
 
-test "prefix decrement" { expect(exprSnippet("--x;") === "(--x)"); }
+test "prefix decrement" { assert exprSnippet("--x;") === "(--x)"; }
 
-test "simple new" { expect(exprSnippet("new Foo();") === "Foo_new()"); }
+test "simple new" { assert exprSnippet("new Foo();") === "(Foo*)msAllocTyped(sizeof(Foo), &Foo_typeInfo)"; }
 
-test "new with args" { expect(exprSnippet("new Bar(1, 2);") === "Bar_new(1, 2)"); }
+test "new with args" { assert exprSnippet("new Bar(1, 2);") === "Bar_new(1, 2)"; }
 
-test "move identifier" { expect(exprSnippet("move x;") === "x"); }
+test "move identifier" { assert exprSnippet("move x;") === "x"; }
 
-test "move call" { expect(exprSnippet("move f();") === "f()"); }
+test "move call" { assert exprSnippet("move f();") === "f()"; }
 
 test "deeply nested binary (100 levels)" {
 	// Build: a + a + a + ... (100 times) → deeply nested left-recursive BinaryExpr
@@ -939,7 +1065,7 @@ test "deeply nested binary (100 levels)" {
 	input = input + ";";
 	const result = exprSnippet(input);
 	// Should not stack overflow and should produce valid output
-	expect(result.length > 0);
+	assert result.length > 0;
 	// Innermost pair should be (a + a)
 	let hasInner = false;
 	let j = 0;
@@ -949,7 +1075,7 @@ test "deeply nested binary (100 levels)" {
 		}
 		j += 1;
 	}
-	expect(hasInner);
+	assert hasInner;
 }
 
 test "deeply nested calls (50 levels)" {
@@ -968,7 +1094,7 @@ test "deeply nested calls (50 levels)" {
 	}
 	input = input + ";";
 	const result = exprSnippet(input);
-	expect(result.length > 0);
+	assert result.length > 0;
 	// Should contain f(f( pattern
 	let hasNested = false;
 	let j = 0;
@@ -978,7 +1104,7 @@ test "deeply nested calls (50 levels)" {
 		}
 		j += 1;
 	}
-	expect(hasNested);
+	assert hasNested;
 }
 
 test "deeply nested ternary (30 levels)" {
@@ -991,5 +1117,5 @@ test "deeply nested ternary (30 levels)" {
 	}
 	input = input + "c;";
 	const result = exprSnippet(input);
-	expect(result.length > 0);
+	assert result.length > 0;
 }

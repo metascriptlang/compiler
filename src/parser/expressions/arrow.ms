@@ -125,18 +125,18 @@ function arrowParamCount(input: string): number {
 	return data.arrowParams.length;
 }
 // Detection
-test "detect arrow" { expect(checkArrow("() => 42")); }
+test "detect arrow" { assert checkArrow("() => 42"); }
 
-test "detect typed" { expect(checkArrow("(x: number) => x")); }
+test "detect typed" { assert checkArrow("(x: number) => x"); }
 
-test "reject paren expr" { expect(!checkArrow("(a + b)")); }
+test "reject paren expr" { assert !checkArrow("(a + b)"); }
 
-test "reject call" { expect(!checkArrow("f(a)")); }
+test "reject call" { assert !checkArrow("f(a)"); }
 // Param counts
-test "zero params" { expect(arrowParamCount("() => 42") === 0); }
+test "zero params" { assert arrowParamCount("() => 42") === 0; }
 
-test "two params" { expect(arrowParamCount("(a, b) => a") === 2); }
+test "two params" { assert arrowParamCount("(a, b) => a") === 2; }
 // Integration
-test "arrow as arg" { expect(parseOk("f((x) => x)")); }
+test "arrow as arg" { assert parseOk("f((x) => x)"); }
 
-test "paren expr still works" { expect(parseOk("(a + b) * c")); }
+test "paren expr still works" { assert parseOk("(a + b) * c"); }

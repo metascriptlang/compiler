@@ -1,5 +1,5 @@
 /*
- * MetaScript Async Dispatcher — Nim asyncdispatch.nim parity
+ * MetaScript Async Dispatcher — Standard reference implementation parity
  *
  * Event loop implementation: timer heap, ring buffer callback deque, runOnce/poll/waitFor.
  */
@@ -39,7 +39,7 @@ void msSleepMs(int ms) {
 }
 #endif
 
-/* ===== Ring Buffer Callback Deque (Nim's Deque[proc()]) ===== */
+/* ===== Ring Buffer Callback Deque (Standard reference pattern) ===== */
 
 static int msDequeLen(msCallbackDeque* d) {
 	if (d->cap == 0) return 0;
@@ -77,7 +77,7 @@ static msClosure msDequePop(msCallbackDeque* d) {
 	return cb;
 }
 
-/* ===== Global dispatcher (Nim's gDisp threadvar) ===== */
+/* ===== Global dispatcher (Standard reference threadvar pattern) ===== */
 
 static MS_THREAD_LOCAL msDispatcher* gDispatcher = NULL;
 
@@ -87,12 +87,12 @@ static void msDispatcherCallSoon(msClosure cb) {
 	msDequePush(&d->callbacks, cb);
 }
 
-/* Nim's getGlobalDispatcher — lazy init */
+/* Standard reference getGlobalDispatcher pattern — lazy init */
 msDispatcher* msGetDispatcher(void) {
 	if (gDispatcher == NULL) {
 		gDispatcher = (msDispatcher*)calloc(1, sizeof(msDispatcher));
 		gDispatcher->selector = msSelectorCreate();
-		/* Register callSoon with future system (Nim's initCallSoonProc) */
+		/* Register callSoon with future system (Standard reference pattern) */
 		msCallSoonProc = msDispatcherCallSoon;
 	}
 	return gDispatcher;
@@ -160,9 +160,9 @@ static msTimer msTimerPop(msTimerHeap* h) {
 
 /* ===== Event Loop Functions ===== */
 
-/* Nim's processTimers (lines 249-264)
+/* Standard reference processTimers pattern
  * Pop expired timers, complete their futures.
- * Returns ms until next timer (+1 margin like Nim), or -1 if no timers. */
+ * Returns ms until next timer (+1 margin like standard reference), or -1 if no timers. */
 int msProcessTimers(msDispatcher* d, bool* didWork) {
 	int64_t now = msMonoTimeMs();
 	while (d->timers.len > 0 && d->timers.data[0].finishAtMs <= now) {
@@ -172,12 +172,12 @@ int msProcessTimers(msDispatcher* d, bool* didWork) {
 	}
 	if (d->timers.len > 0) {
 		int64_t diff = d->timers.data[0].finishAtMs - now;
-		return (int)(diff > 0 ? diff + 1 : 1); /* +1 margin matches Nim */
+		return (int)(diff > 0 ? diff + 1 : 1); /* +1 margin matches standard reference implementation */
 	}
 	return -1; /* no timers */
 }
 
-/* Nim's processPendingCallbacks (lines 266-270)
+/* Standard reference processPendingCallbacks pattern
  * Drain ALL pending callbacks (enables eager resume of pre-resolved chains) */
 void msProcessCallbacks(msDispatcher* d, bool* didWork) {
 	while (msDequeLen(&d->callbacks) > 0) {
@@ -187,7 +187,7 @@ void msProcessCallbacks(msDispatcher* d, bool* didWork) {
 	}
 }
 
-/* Nim's adjustTimeout (lines 272-282) */
+/* Standard reference adjustTimeout pattern */
 int msAdjustTimeout(msDispatcher* d, int pollTimeout, int nextTimerMs) {
 	/* If callbacks pending, no wait */
 	if (msDequeLen(&d->callbacks) > 0) return 0;
@@ -198,7 +198,7 @@ int msAdjustTimeout(msDispatcher* d, int pollTimeout, int nextTimerMs) {
 	return nextTimerMs < pollTimeout ? nextTimerMs : pollTimeout;
 }
 
-/* Nim's runOnce POSIX (lines 1397-1453) */
+/* Standard reference runOnce pattern */
 bool msRunOnce(int timeoutMs) {
 	msDispatcher* d = msGetDispatcher();
 	bool didWork = false;
@@ -231,12 +231,12 @@ bool msRunOnce(int timeoutMs) {
 	return didWork;
 }
 
-/* Nim's poll (line 1708) */
+/* Standard reference poll pattern */
 void msPoll(int timeoutMs) {
 	(void)msRunOnce(timeoutMs);
 }
 
-/* Nim's waitFor (lines 2020-2025)
+/* Standard reference waitFor pattern
  * Block until future completes, then read (re-raising errors via msErr) */
 void* msWaitFor(msFuture* fut) {
 	while (!fut->finished) {
@@ -245,14 +245,14 @@ void* msWaitFor(msFuture* fut) {
 	return msFutureRead(fut);
 }
 
-/* Nim's runForever (lines 2015-2018) */
+/* Standard reference runForever pattern */
 void msRunForever(void) {
 	while (1) {
 		msPoll(500);
 	}
 }
 
-/* Nim's sleepAsync (lines 1920-1930)
+/* Standard reference sleepAsync pattern
  * Create timer future, push to heap, return future */
 msFuture* msSleepAsync(int ms) {
 	msDispatcher* d = msGetDispatcher();
@@ -264,7 +264,7 @@ msFuture* msSleepAsync(int ms) {
 }
 
 /* Destroy the global dispatcher — cancel timers, drain callbacks, free memory.
- * Matches Nim's closeDispatcher(). Resets msCallSoonProc to NULL. */
+ * Matches standard reference closeDispatcher pattern. Resets msCallSoonProc to NULL. */
 void msDestroyDispatcher(void) {
 	msDispatcher* d = gDispatcher;
 	if (d == NULL) return;

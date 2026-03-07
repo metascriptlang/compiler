@@ -96,7 +96,7 @@ export function isAssignable(source: Type, target: Type): boolean {
 	return false;
 }
 
-// ===== Standard Conversion Check (Nim parity: nkHiddenStdConv insertion) =====
+// ===== Standard Conversion Check (standard reference implementation parity) =====
 // Returns true when source needs an explicit cast to target in C codegen.
 // Used by checker to insert HiddenStdConv nodes at call argument positions.
 export function needsStdConv(source: Type, target: Type): boolean {
@@ -267,15 +267,15 @@ export function scoreCandidate(paramTypes: Type[], argTypes: Type[]): number {
 	return score;
 }
 
-// ===== Nim-Aligned Overload Resolution (Priority-Based) =====
+// ===== Standard-Aligned Overload Resolution (Priority-Based) =====
 
-// Candidate scoring with per-category counters (Nim's TCandidate pattern).
+// Candidate scoring with per-category counters (Standard reference pattern).
 // All 7 fields included upfront so struct never changes (DRC #32 safe).
 export interface CandidateScore {
 	exactMatches: number;       // isEqual matches
 	genericMatches: number;     // isGeneric / isInferred matches
 	subtypeMatches: number;     // isSubtype / isSubrange matches
-	intConvMatches: number;     // isIntConv + isFromIntLit (Nim: += 256)
+	intConvMatches: number;     // isIntConv + isFromIntLit (Standard weight: += 256)
 	convMatches: number;        // isConvertible (converters — always 0 for now)
 	inheritancePenalty: number; // class hierarchy depth (-1 = inactive)
 	calleeScope: number;        // scope depth where candidate found (higher = inner)
@@ -293,8 +293,8 @@ export function isNoMatch(score: CandidateScore): boolean {
 	return score.exactMatches === -1;
 }
 
-// Score a candidate function against actual arguments (Nim-aligned priority counters).
-// Maps TypeRelation → counter increments matching Nim's incMatches.
+// Score a candidate function against actual arguments (Standard-aligned priority counters).
+// Maps TypeRelation → counter increments matching standard reference implementation.
 // minArity: minimum required args (default = paramTypes.length, i.e. all required).
 export function scoreCandidatePriority(paramTypes: Type[], argTypes: Type[], minArity: number): CandidateScore {
 	const score = emptyCandidateScore();
@@ -335,7 +335,7 @@ function cmpInheritancePenalty(a: number, b: number): number {
 	return b - a; // lower penalty is better, so b - a > 0 means a < b means a wins
 }
 
-// Nim-aligned priority comparison (9-step chain from sigmatch.nim cmpCandidates).
+// Standard-aligned priority comparison (9-step chain from reference signature matching).
 // Returns >0 if a is better, <0 if b is better, 0 if ambiguous.
 // candidateTypeA/B are the Function types for generic specialization (Phase 5).
 // Pass null to skip steps 7-8.
@@ -403,7 +403,7 @@ function checkGenericSpecialization(typeA: Type, typeB: Type): number {
 	return 0; // contradiction or equal
 }
 
-// Count generic nesting depth of a type (Nim's sumGeneric).
+// Count generic nesting depth of a type (Standard reference implementation).
 // Higher depth = more specific overload.
 // GenericParam = 1, Container<T> = 1 + sumGeneric(T)
 function sumGeneric(t: Type): number {
@@ -507,211 +507,211 @@ export function findFirstMismatch(paramTypes: Type[], argTypes: Type[], minArity
 
 // ===== Tests =====
 test "same kind" {
-	expect(isAssignable(numberType(), numberType()));
-	expect(isAssignable(stringType(), stringType()));
-	expect(isAssignable(booleanType(), booleanType()));
+	assert isAssignable(numberType(), numberType());
+	assert isAssignable(stringType(), stringType());
+	assert isAssignable(booleanType(), booleanType());
 }
 
 test "different kind" {
-	expect(!isAssignable(numberType(), stringType()));
-	expect(!isAssignable(stringType(), booleanType()));
+	assert !isAssignable(numberType(), stringType());
+	assert !isAssignable(stringType(), booleanType());
 }
 
 test "unknown compatible" {
-	expect(isAssignable(unknownType(), numberType()));
-	expect(isAssignable(numberType(), unknownType()));
+	assert isAssignable(unknownType(), numberType());
+	assert isAssignable(numberType(), unknownType());
 }
 
 test "numeric widening" {
-	expect(isAssignable(createPrimitive(TypeKind.Int32), numberType()));
-	expect(isAssignable(createPrimitive(TypeKind.Float64), numberType()));
+	assert isAssignable(createPrimitive(TypeKind.Int32), numberType());
+	assert isAssignable(createPrimitive(TypeKind.Float64), numberType());
 }
 
 test "null to nullable" {
-	expect(isAssignable(nullType(), createObject("Foo", [], [], false)));
-	expect(isAssignable(nullType(), createArray(numberType())));
-	expect(!isAssignable(nullType(), numberType()));
+	assert isAssignable(nullType(), createObject("Foo", [], [], false));
+	assert isAssignable(nullType(), createArray(numberType()));
+	assert !isAssignable(nullType(), numberType());
 }
 
-test "same element" { expect(isAssignable(createArray(numberType()), createArray(numberType()))); }
+test "same element" { assert isAssignable(createArray(numberType()), createArray(numberType())); }
 
-test "different element" { expect(!isAssignable(createArray(numberType()), createArray(stringType()))); }
+test "different element" { assert !isAssignable(createArray(numberType()), createArray(stringType())); }
 
-test "unknown element" { expect(isAssignable(createArray(unknownType()), createArray(numberType()))); }
+test "unknown element" { assert isAssignable(createArray(unknownType()), createArray(numberType())); }
 
 test "same signature" {
 	const f1 = createFunction([numberType()], ["a"], stringType());
 	const f2 = createFunction([numberType()], ["b"], stringType());
-	expect(isAssignable(f1, f2));
+	assert isAssignable(f1, f2);
 }
 
 test "different param count" {
 	const f1 = createFunction([numberType()], ["a"], voidType());
 	const f2 = createFunction([], [], voidType());
-	expect(!isAssignable(f1, f2));
+	assert !isAssignable(f1, f2);
 }
 
 test "covariant return" {
 	const f1 = createFunction([], [], unknownType());
 	const f2 = createFunction([], [], numberType());
-	expect(isAssignable(f1, f2));
+	assert isAssignable(f1, f2);
 }
 
 test "nominal same name" {
 	const o1 = createObject("Type", ["kind"], [numberType()], false);
 	const o2 = createObject("Type", ["kind"], [unknownType()], false);
-	expect(isAssignable(o1, o2));
+	assert isAssignable(o1, o2);
 }
 
 test "exact match" {
 	const o1 = createObject("A", ["x"], [numberType()], false);
 	const o2 = createObject("B", ["x"], [numberType()], false);
-	expect(isAssignable(o1, o2));
+	assert isAssignable(o1, o2);
 }
 
 test "source has extra props" {
 	const o1 = createObject("A", ["x", "y"], [numberType(), stringType()], false);
 	const o2 = createObject("B", ["x"], [numberType()], false);
-	expect(isAssignable(o1, o2));
+	assert isAssignable(o1, o2);
 }
 
 test "source missing prop" {
 	const o1 = createObject("A", ["x"], [numberType()], false);
 	const o2 = createObject("B", ["x", "y"], [numberType(), stringType()], false);
-	expect(!isAssignable(o1, o2));
+	assert !isAssignable(o1, o2);
 }
 
 test "exact match" {
-	expect(typeRelation(numberType(), numberType()) === TypeRelation.Exact);
-	expect(typeRelation(stringType(), stringType()) === TypeRelation.Exact);
+	assert typeRelation(numberType(), numberType()) === TypeRelation.Exact;
+	assert typeRelation(stringType(), stringType()) === TypeRelation.Exact;
 }
 
-test "no match" { expect(typeRelation(numberType(), stringType()) === TypeRelation.None); }
+test "no match" { assert typeRelation(numberType(), stringType()) === TypeRelation.None; }
 
 test "unknown = generic" {
-	expect(typeRelation(numberType(), unknownType()) === TypeRelation.Generic);
-	expect(typeRelation(unknownType(), numberType()) === TypeRelation.Generic);
+	assert typeRelation(numberType(), unknownType()) === TypeRelation.Generic;
+	assert typeRelation(unknownType(), numberType()) === TypeRelation.Generic;
 }
 
-test "int conversion" { expect(typeRelation(numberType(), createPrimitive(TypeKind.Int32)) === TypeRelation.IntConv); }
+test "int conversion" { assert typeRelation(numberType(), createPrimitive(TypeKind.Int32)) === TypeRelation.IntConv; }
 
-test "null to object" { expect(typeRelation(createObject("Foo", [], [], false), nullType()) === TypeRelation.Subtype); }
+test "null to object" { assert typeRelation(createObject("Foo", [], [], false), nullType()) === TypeRelation.Subtype; }
 
 test "exact args" {
 	const score = scoreCandidate([numberType(), stringType()], [numberType(), stringType()]);
-	expect(score === 12); // 6 + 6
+	assert score === 12; // 6 + 6
 }
 
-test "arity mismatch" { expect(scoreCandidate([numberType()], []) === -1); }
+test "arity mismatch" { assert scoreCandidate([numberType()], []) === -1; }
 
-test "type mismatch" { expect(scoreCandidate([numberType()], [stringType()]) === -1); }
+test "type mismatch" { assert scoreCandidate([numberType()], [stringType()]) === -1; }
 
 test "mixed scoring" {
 	const score = scoreCandidate([numberType(), numberType()], [numberType(), createPrimitive(TypeKind.Int32)]);
-	expect(score === 8); // 6 (exact) + 2 (intconv)
+	assert score === 8; // 6 (exact) + 2 (intconv)
 }
 
 test "source union all match" {
 	const u = createUnion([numberType(), stringType()]);
-	expect(!isAssignable(u, numberType()));
+	assert !isAssignable(u, numberType());
 }
 
 test "target union has match" {
 	const u = createUnion([numberType(), stringType()]);
-	expect(isAssignable(numberType(), u));
-	expect(isAssignable(stringType(), u));
-	expect(!isAssignable(booleanType(), u));
+	assert isAssignable(numberType(), u);
+	assert isAssignable(stringType(), u);
+	assert !isAssignable(booleanType(), u);
 }
 
 test "same result types" {
 	const r1 = createResult(numberType(), stringType());
 	const r2 = createResult(numberType(), stringType());
-	expect(isAssignable(r1, r2));
+	assert isAssignable(r1, r2);
 }
 
 test "different ok type" {
 	const r1 = createResult(numberType(), stringType());
 	const r2 = createResult(stringType(), stringType());
-	expect(!isAssignable(r1, r2));
+	assert !isAssignable(r1, r2);
 }
 
 test "different err type" {
 	const r1 = createResult(numberType(), stringType());
 	const r2 = createResult(numberType(), numberType());
-	expect(!isAssignable(r1, r2));
+	assert !isAssignable(r1, r2);
 }
 
 test "unknown ok compatible" {
 	const r1 = createResult(unknownType(), stringType());
 	const r2 = createResult(numberType(), stringType());
-	expect(isAssignable(r1, r2));
+	assert isAssignable(r1, r2);
 }
 
 test "same enum name" {
 	const e1 = createEnum("Color", ["Red", "Green"]);
 	const e2 = createEnum("Color", ["Red", "Green"]);
-	expect(isAssignable(e1, e2));
+	assert isAssignable(e1, e2);
 }
 
 test "different enum name" {
 	const e1 = createEnum("Color", ["Red"]);
 	const e2 = createEnum("Shape", ["Circle"]);
-	expect(!isAssignable(e1, e2));
+	assert !isAssignable(e1, e2);
 }
 
 test "same ref inner" {
 	const r1 = createRef(numberType());
 	const r2 = createRef(numberType());
-	expect(isAssignable(r1, r2));
+	assert isAssignable(r1, r2);
 }
 
 test "different ref inner" {
 	const r1 = createRef(numberType());
 	const r2 = createRef(stringType());
-	expect(!isAssignable(r1, r2));
+	assert !isAssignable(r1, r2);
 }
 
 test "same ptr inner" {
 	const p1 = createPtr(numberType());
 	const p2 = createPtr(numberType());
-	expect(isAssignable(p1, p2));
+	assert isAssignable(p1, p2);
 }
 
-test "null to ref" { expect(isAssignable(nullType(), createRef(numberType()))); }
+test "null to ref" { assert isAssignable(nullType(), createRef(numberType())); }
 
-test "null to sized array" { expect(isAssignable(nullType(), createSizedArray(numberType(), 4))); }
+test "null to sized array" { assert isAssignable(nullType(), createSizedArray(numberType(), 4)); }
 
-test "null to span" { expect(isAssignable(nullType(), createSpan(numberType()))); }
+test "null to span" { assert isAssignable(nullType(), createSpan(numberType())); }
 
 test "array to span" {
 	const arr = createArray(numberType());
 	const span = createSpan(numberType());
-	expect(isAssignable(arr, span));
-	expect(typeRelation(span, arr) === TypeRelation.Subtype);
+	assert isAssignable(arr, span);
+	assert typeRelation(span, arr) === TypeRelation.Subtype;
 }
 
 test "sized array to span" {
 	const sarr = createSizedArray(numberType(), 4);
 	const span = createSpan(numberType());
-	expect(isAssignable(sarr, span));
-	expect(typeRelation(span, sarr) === TypeRelation.Subtype);
+	assert isAssignable(sarr, span);
+	assert typeRelation(span, sarr) === TypeRelation.Subtype;
 }
 
 test "mismatched element to span" {
 	const arr = createArray(stringType());
 	const span = createSpan(numberType());
-	expect(!isAssignable(arr, span));
-	expect(typeRelation(span, arr) === TypeRelation.None);
+	assert !isAssignable(arr, span);
+	assert typeRelation(span, arr) === TypeRelation.None;
 }
 
-test "null to ptr" { expect(isAssignable(nullType(), createPtr(numberType()))); }
+test "null to ptr" { assert isAssignable(nullType(), createPtr(numberType())); }
 
 test "same distinct name" {
 	const d1 = createDistinct(numberType());
 	d1.typeName = "UserId";
 	const d2 = createDistinct(numberType());
 	d2.typeName = "UserId";
-	expect(isAssignable(d1, d2));
+	assert isAssignable(d1, d2);
 }
 
 test "different distinct name" {
@@ -719,54 +719,54 @@ test "different distinct name" {
 	d1.typeName = "UserId";
 	const d2 = createDistinct(numberType());
 	d2.typeName = "GroupId";
-	expect(!isAssignable(d1, d2));
+	assert !isAssignable(d1, d2);
 }
 
 test "enum exact" {
 	const e1 = createEnum("Color", ["Red"]);
 	const e2 = createEnum("Color", ["Red"]);
-	expect(typeRelation(e1, e2) === TypeRelation.Exact);
+	assert typeRelation(e1, e2) === TypeRelation.Exact;
 }
 
 test "enum mismatch" {
 	const e1 = createEnum("Color", ["Red"]);
 	const e2 = createEnum("Shape", ["Circle"]);
-	expect(typeRelation(e1, e2) === TypeRelation.None);
+	assert typeRelation(e1, e2) === TypeRelation.None;
 }
 
 test "result exact" {
 	const r1 = createResult(numberType(), stringType());
 	const r2 = createResult(numberType(), stringType());
-	expect(typeRelation(r1, r2) === TypeRelation.Exact);
+	assert typeRelation(r1, r2) === TypeRelation.Exact;
 }
 
 test "result mismatch" {
 	const r1 = createResult(numberType(), stringType());
 	const r2 = createResult(stringType(), stringType());
-	expect(typeRelation(r1, r2) === TypeRelation.None);
+	assert typeRelation(r1, r2) === TypeRelation.None;
 }
 
-test "array same element exact" { expect(typeRelation(createArray(numberType()), createArray(numberType())) === TypeRelation.Exact); }
+test "array same element exact" { assert typeRelation(createArray(numberType()), createArray(numberType())) === TypeRelation.Exact; }
 
-test "array different element none" { expect(typeRelation(createArray(numberType()), createArray(stringType())) === TypeRelation.None); }
+test "array different element none" { assert typeRelation(createArray(numberType()), createArray(stringType())) === TypeRelation.None; }
 
-test "ref same inner exact" { expect(typeRelation(createRef(numberType()), createRef(numberType())) === TypeRelation.Exact); }
+test "ref same inner exact" { assert typeRelation(createRef(numberType()), createRef(numberType())) === TypeRelation.Exact; }
 
-test "ref different inner none" { expect(typeRelation(createRef(numberType()), createRef(stringType())) === TypeRelation.None); }
+test "ref different inner none" { assert typeRelation(createRef(numberType()), createRef(stringType())) === TypeRelation.None; }
 
-test "ptr same inner exact" { expect(typeRelation(createPtr(numberType()), createPtr(numberType())) === TypeRelation.Exact); }
+test "ptr same inner exact" { assert typeRelation(createPtr(numberType()), createPtr(numberType())) === TypeRelation.Exact; }
 
-test "ptr different inner none" { expect(typeRelation(createPtr(numberType()), createPtr(stringType())) === TypeRelation.None); }
+test "ptr different inner none" { assert typeRelation(createPtr(numberType()), createPtr(stringType())) === TypeRelation.None; }
 
 test "from literal" {
-	expect(typeRelation(createPrimitive(TypeKind.Int32), numberType()) === TypeRelation.FromLiteral);
-	expect(typeRelation(createPrimitive(TypeKind.Float64), numberType()) === TypeRelation.FromLiteral);
+	assert typeRelation(createPrimitive(TypeKind.Int32), numberType()) === TypeRelation.FromLiteral;
+	assert typeRelation(createPrimitive(TypeKind.Float64), numberType()) === TypeRelation.FromLiteral;
 }
 
 test "generic param" {
 	const gp = createGenericParam("T");
-	expect(typeRelation(gp, numberType()) === TypeRelation.Generic);
-	expect(typeRelation(numberType(), gp) === TypeRelation.Generic);
+	assert typeRelation(gp, numberType()) === TypeRelation.Generic;
+	assert typeRelation(numberType(), gp) === TypeRelation.Generic;
 }
 
 test "exact beats subtype-sum" {
@@ -777,7 +777,7 @@ test "exact beats subtype-sum" {
 	const b = emptyCandidateScore();
 	b.subtypeMatches = 3;
 	const nullT = null as unknown as Type;
-	expect(cmpCandidates(a, b, nullT, nullT) > 0);
+	assert cmpCandidates(a, b, nullT, nullT) > 0;
 }
 
 test "FromLiteral weight intConvMatches += 256" {
@@ -785,10 +785,10 @@ test "FromLiteral weight intConvMatches += 256" {
 	const params = [createPrimitive(TypeKind.Int32)];
 	const args = [numberType()];
 	const score = scoreCandidatePriority(params, args, params.length);
-	expect(!isNoMatch(score));
+	assert !isNoMatch(score);
 	// FromLiteral maps to intConvMatches += 256
-	expect(score.intConvMatches === 256);
-	expect(score.exactMatches === 0);
+	assert score.intConvMatches === 256;
+	assert score.exactMatches === 0;
 }
 
 test "ambiguity: equal scores" {
@@ -798,7 +798,7 @@ test "ambiguity: equal scores" {
 	const b = emptyCandidateScore();
 	b.exactMatches = 2;
 	const nullT = null as unknown as Type;
-	expect(cmpCandidates(a, b, nullT, nullT) === 0);
+	assert cmpCandidates(a, b, nullT, nullT) === 0;
 }
 
 test "inheritance penalty: lower wins" {
@@ -810,7 +810,7 @@ test "inheritance penalty: lower wins" {
 	b.inheritancePenalty = 3; // grandgrandparent
 	const nullT = null as unknown as Type;
 	// a has lower penalty → a is better → result > 0
-	expect(cmpCandidates(a, b, nullT, nullT) > 0);
+	assert cmpCandidates(a, b, nullT, nullT) > 0;
 }
 
 test "scope depth: inner wins" {
@@ -822,7 +822,7 @@ test "scope depth: inner wins" {
 	b.calleeScope = 0;
 	const nullT = null as unknown as Type;
 	// a is inner (higher scope) → a wins → result > 0
-	expect(cmpCandidates(a, b, nullT, nullT) > 0);
+	assert cmpCandidates(a, b, nullT, nullT) > 0;
 }
 
 test "single candidate matches" {
@@ -830,7 +830,7 @@ test "single candidate matches" {
 	const candidates = [fn1];
 	const argTypes = [numberType()];
 	const depths = [0];
-	expect(resolveOverloadIdx(candidates, argTypes, depths) === 0);
+	assert resolveOverloadIdx(candidates, argTypes, depths) === 0;
 }
 
 test "picks best of two" {
@@ -840,7 +840,7 @@ test "picks best of two" {
 	const candidates = [fn1, fn2];
 	const argTypes = [numberType()];
 	const depths = [0, 0];
-	expect(resolveOverloadIdx(candidates, argTypes, depths) === 0);
+	assert resolveOverloadIdx(candidates, argTypes, depths) === 0;
 }
 
 test "picks second overload" {
@@ -850,7 +850,7 @@ test "picks second overload" {
 	const candidates = [fn1, fn2];
 	const argTypes = [stringType()];
 	const depths = [0, 0];
-	expect(resolveOverloadIdx(candidates, argTypes, depths) === 1);
+	assert resolveOverloadIdx(candidates, argTypes, depths) === 1;
 }
 
 test "no match returns -1" {
@@ -858,7 +858,7 @@ test "no match returns -1" {
 	const candidates = [fn1];
 	const argTypes = [stringType()];
 	const depths = [0];
-	expect(resolveOverloadIdx(candidates, argTypes, depths) === -1);
+	assert resolveOverloadIdx(candidates, argTypes, depths) === -1;
 }
 
 test "ambiguous returns -2" {
@@ -868,18 +868,18 @@ test "ambiguous returns -2" {
 	const candidates = [fn1, fn2];
 	const argTypes = [numberType()];
 	const depths = [0, 0];
-	expect(resolveOverloadIdx(candidates, argTypes, depths) === -2);
+	assert resolveOverloadIdx(candidates, argTypes, depths) === -2;
 }
 
-test "all match" { expect(findFirstMismatch([numberType()], [numberType()], 1) === -1); }
+test "all match" { assert findFirstMismatch([numberType()], [numberType()], 1) === -1; }
 
-test "first param mismatch" { expect(findFirstMismatch([numberType()], [stringType()], 1) === 0); }
+test "first param mismatch" { assert findFirstMismatch([numberType()], [stringType()], 1) === 0; }
 
-test "second param mismatch" { expect(findFirstMismatch([numberType(), stringType()], [numberType(), numberType()], 2) === 1); }
+test "second param mismatch" { assert findFirstMismatch([numberType(), stringType()], [numberType(), numberType()], 2) === 1; }
 
-test "arity mismatch too many args" { expect(findFirstMismatch([numberType()], [numberType(), stringType()], 1) === 1); }
+test "arity mismatch too many args" { assert findFirstMismatch([numberType()], [numberType(), stringType()], 1) === 1; }
 
-test "arity mismatch too few args" { expect(findFirstMismatch([numberType(), stringType()], [numberType()], 2) === 1); }
+test "arity mismatch too few args" { assert findFirstMismatch([numberType(), stringType()], [numberType()], 2) === 1; }
 
 test "complexDisambiguation deeper type wins" {
 	// f(T[]) vs f(T) — array param has deeper generic nesting
@@ -895,7 +895,7 @@ test "complexDisambiguation deeper type wins" {
 	// step 7 (checkGenericSpecialization) + step 8 (complexDisambiguation) should
 	// prefer deeper nesting. With equal genericMatches, cmpCandidates goes to step 7+8.
 	const cmp = cmpCandidates(a, b, fnDeep, fnShallow);
-	expect(cmp > 0);
+	assert cmp > 0;
 }
 
 test "complexDisambiguation per-param contradiction returns 0" {
@@ -912,5 +912,5 @@ test "complexDisambiguation per-param contradiction returns 0" {
 	const b = emptyCandidateScore();
 	b.genericMatches = 2;
 	const cmp = cmpCandidates(a, b, fnA, fnB);
-	expect(cmp === 0);
+	assert cmp === 0;
 }

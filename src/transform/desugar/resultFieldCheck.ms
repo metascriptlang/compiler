@@ -1,5 +1,5 @@
 // Result Field Check — wraps $result_N.value/.error with discriminant safety checks
-// Follows reference result_field_check.zig (Nim's nkCheckedFieldExpr pattern)
+// Follows reference implementation pattern for checked field expressions
 //
 // $result_0.value  →  { msResultCheckValue($result_0); $result_0.value; }
 // $result_0.error  →  { msResultCheckError($result_0); $result_0.error; }
@@ -56,14 +56,14 @@ function wrapWithCheck(accessNode: Node, resultObj: Node, checkFnName: string): 
 }
 
 // ===== Tests =====
-test "non-member unchanged" { expect(firstExprKindAfter("x + y;", lowerResultFieldCheck) === NodeKind.BinaryExpr); }
+test "non-member unchanged" { assert firstExprKindAfter("x + y;", lowerResultFieldCheck) === NodeKind.BinaryExpr; }
 
-test "regular member unchanged" { expect(firstExprKindAfter("obj.name;", lowerResultFieldCheck) === NodeKind.MemberExpr); }
+test "regular member unchanged" { assert firstExprKindAfter("obj.name;", lowerResultFieldCheck) === NodeKind.MemberExpr; }
 
-test "non-result .value unchanged" { expect(firstExprKindAfter("obj.value;", lowerResultFieldCheck) === NodeKind.MemberExpr); }
+test "non-result .value unchanged" { assert firstExprKindAfter("obj.value;", lowerResultFieldCheck) === NodeKind.MemberExpr; }
 
-test "passthrough for non-expr" { expect(stmtCountAfter("const x = 1;", lowerResultFieldCheck) === 1); }
+test "passthrough for non-expr" { assert stmtCountAfter("const x = 1;", lowerResultFieldCheck) === 1; }
 
-test "call expr unchanged" { expect(firstExprKindAfter("f();", lowerResultFieldCheck) === NodeKind.CallExpr); }
+test "call expr unchanged" { assert firstExprKindAfter("f();", lowerResultFieldCheck) === NodeKind.CallExpr; }
 
-test "identifier unchanged" { expect(firstExprKindAfter("x;", lowerResultFieldCheck) === NodeKind.Identifier); }
+test "identifier unchanged" { assert firstExprKindAfter("x;", lowerResultFieldCheck) === NodeKind.Identifier; }

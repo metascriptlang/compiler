@@ -1,5 +1,5 @@
 // String Concat Flatten — flattens nested string + chains into single concat call
-// Follows reference string_concat_flatten.zig + Nim's transf pattern
+// Follows reference string_concat_flatten.zig + standard reference transform pattern
 //
 // "hello " + name + "!"   →   msStringConcat(msStringConcat("hello ", name), "!")
 // x + y                   →   x + y  (unchanged — can't prove string without type info)
@@ -12,7 +12,7 @@ import {
 	Node, NodeKind, SourceLocation,
 	BinaryExprData, StringLiteralData,
 } from "../../ast/node";
-import { TypeKind } from "../../checker/types";
+import { TypeKind, isNumeric } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent, makeNumber } from "../util";
@@ -64,8 +64,7 @@ function coerceToString(node: Node, loc: SourceLocation): Node {
 	if (node.kind === NodeKind.StringLiteral) return node;
 	// Check nodeType (set by checker) for numeric/boolean types
 	if (node.nodeType !== null) {
-		if (node.nodeType.kind === TypeKind.Number || node.nodeType.kind === TypeKind.Int32 ||
-			node.nodeType.kind === TypeKind.Float32 || node.nodeType.kind === TypeKind.Float64) {
+		if (isNumeric(node.nodeType)) {
 			return makeCall(makeIdent("msNumberToString", loc), [node], loc);
 		}
 		if (node.nodeType.kind === TypeKind.Boolean) {
@@ -94,17 +93,17 @@ function collectParts(node: Node, parts: Node[]): void {
 }
 
 // ===== Tests =====
-test "variable addition unchanged" { expect(firstExprKindAfter("x + y;", lowerStringConcatFlatten) === NodeKind.BinaryExpr); }
+test "variable addition unchanged" { assert firstExprKindAfter("x + y;", lowerStringConcatFlatten) === NodeKind.BinaryExpr; }
 
-test "non-binary unchanged" { expect(firstExprKindAfter("f();", lowerStringConcatFlatten) === NodeKind.CallExpr); }
+test "non-binary unchanged" { assert firstExprKindAfter("f();", lowerStringConcatFlatten) === NodeKind.CallExpr; }
 
-test "single stmt passthrough" { expect(stmtCountAfter("const x = 1;", lowerStringConcatFlatten) === 1); }
+test "single stmt passthrough" { assert stmtCountAfter("const x = 1;", lowerStringConcatFlatten) === 1; }
 
-test "non-string binary unchanged" { expect(firstExprKindAfter("x * y;", lowerStringConcatFlatten) === NodeKind.BinaryExpr); }
+test "non-string binary unchanged" { assert firstExprKindAfter("x * y;", lowerStringConcatFlatten) === NodeKind.BinaryExpr; }
 
-test "identifier unchanged" { expect(firstExprKindAfter("x;", lowerStringConcatFlatten) === NodeKind.Identifier); }
+test "identifier unchanged" { assert firstExprKindAfter("x;", lowerStringConcatFlatten) === NodeKind.Identifier; }
 
 test "two-part string stays binary" {
 	// "a" + x is only 2 parts — no benefit from flattening
-	expect(firstExprKindAfter("\"a\" + x;", lowerStringConcatFlatten) === NodeKind.BinaryExpr);
+	assert firstExprKindAfter("\"a\" + x;", lowerStringConcatFlatten) === NodeKind.BinaryExpr;
 }

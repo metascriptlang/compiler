@@ -223,7 +223,7 @@ export function makeFnDecl(name: string, fnParams: string[], paramTypes: string[
 		fnBody: body, fnFlags: flags, fnReturnType: returnType,
 		fnDefaults: emptyDefaults,
 	}, syntheticToken(loc));
-	// Build Type from string annotations for codegen (Nim parity: every decl has nodeType)
+	// Build Type from string annotations for codegen (Implementation parity)
 	const resolvedParams: Type[] = [];
 	for (let i = 0; i < paramTypes.length; i += 1) {
 		resolvedParams.push(resolveSimpleTypeStr(paramTypes[i]));
@@ -237,7 +237,7 @@ export function makeInterfaceDecl(name: string, fields: string[], fieldTypes: st
 	const n = createNode(NodeKind.InterfaceDecl, {
 		interfaceName: name, interfaceFields: fields, interfaceFieldTypes: fieldTypes,
 	}, syntheticToken(loc));
-	// Build Type for codegen (Nim parity)
+	// Build Type for codegen (Implementation parity)
 	const resolvedFieldTypes: Type[] = [];
 	for (let i = 0; i < fieldTypes.length; i += 1) {
 		resolvedFieldTypes.push(resolveSimpleTypeStr(fieldTypes[i]));
@@ -258,9 +258,14 @@ function resolveSimpleTypeStr(annotation: string): Type {
 		"boolean" => booleanType(),
 		"void" => voidType(),
 		"null" => nullType(),
+		"int8" => getSysType(TypeKind.Int8),
+		"int16" => getSysType(TypeKind.Int16),
 		"int32" => getSysType(TypeKind.Int32),
 		"int64" => getSysType(TypeKind.Int64),
+		"uint8" => getSysType(TypeKind.Uint8),
+		"uint16" => getSysType(TypeKind.Uint16),
 		"uint32" => getSysType(TypeKind.Uint32),
+		"uint64" => getSysType(TypeKind.Uint64),
 		"float32" => getSysType(TypeKind.Float32),
 		_ => createTypeRef(annotation),
 	};
@@ -270,7 +275,7 @@ export function makeObjectLiteral(keys: string[], values: Node[], loc: SourceLoc
 	return createNode(NodeKind.ObjectLiteral, { properties: values, keys }, syntheticToken(loc));
 }
 
-// Typed variant: creates an ObjectLiteral with a known Type (Nim parity: nkObjConstr + type)
+// Typed variant: creates an ObjectLiteral with a known Type (standard object construction parity)
 export function makeTypedObjectLiteral(keys: string[], values: Node[], t: Type, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.ObjectLiteral, { properties: values, keys }, syntheticToken(loc));
 	if (t !== null) { n.nodeType = t; }
@@ -381,7 +386,7 @@ export function boolToDeclKind(isConst: boolean): DeclKind {
 
 // Capture an expression into a temp variable to prevent double-evaluation.
 // Returns { decl: const $tmp_N = expr, ref: $tmp_N identifier }.
-// Follows Nim's lowerings.nim:evalOnce pattern.
+// Follows the reference evalOnce pattern.
 export function evalOnce(expr: Node, ctx: TransformContext, loc: SourceLocation): { decl: Node, ref: Node } {
 	const name = freshTemp(ctx, "tmp");
 	const decl = makeVarDecl(name, expr, DeclKind.Const, loc);

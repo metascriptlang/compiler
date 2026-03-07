@@ -198,24 +198,24 @@ function parseParams(input: string, fnName: string): string[] {
 
 test "capture number default via getLastParsedDefaults" {
 	const raw = parseParams("(x: number, y: number = 5)", "testFn1");
-	expect(raw.length === 4);
+	assert raw.length === 4;
 	const defs = getLastParsedDefaults();
-	expect(defs.length === 2);
-	expect(defs[0] === "");
-	expect(defs[1] === "5");
+	assert defs.length === 2;
+	assert defs[0] === "";
+	assert defs[1] === "5";
 }
 
 test "multiple defaults via getLastParsedDefaults" {
 	parseParams("(a: number, b: number = 1, c: number = 2)", "testFn2");
 	const defs = getLastParsedDefaults();
-	expect(defs.length === 3);
-	expect(defs[0] === "");
-	expect(defs[1] === "1");
-	expect(defs[2] === "2");
+	assert defs.length === 3;
+	assert defs[0] === "";
+	assert defs[1] === "1";
+	assert defs[2] === "2";
 }
 
 test "no default returns empty array" {
 	parseParams("(x: number, y: string)", "testFn3");
 	const defs = getLastParsedDefaults();
-	expect(defs.length === 0);
+	assert defs.length === 0;
 }

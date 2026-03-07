@@ -13,6 +13,7 @@ import { parseObjectLiteral } from "./object";
 import { parseExprList, parseCallExpr } from "./call";
 import { parseTemplateLiteral } from "./template";
 import { registerParseExpr, parseOk, exprKind, exprNode, exprOp, binLeftKind } from "./util";
+import { parseNumberLiteral } from "../../utils/string";
 
 
 type ExprResult = Result<Expression, string>;
@@ -219,7 +220,7 @@ function parsePrimary(state: ParserState): ExprResult {
 
 	if (token.kind === TokenKind.Number) {
 		advance(state);
-		return Result.ok(createNode(NodeKind.NumberLiteral, { value: parseFloat(token.value) }, token));
+		return Result.ok(createNode(NodeKind.NumberLiteral, { value: parseNumberLiteral(token.value) }, token));
 	}
 
 	if (token.kind === TokenKind.String) {
@@ -495,140 +496,140 @@ function parsePrimary(state: ParserState): ExprResult {
 
 // --- Structural: verify AST node kinds, operators, precedence tree shape ---
 // Kind verification
-test "number kind" { expect(exprKind("42") === NodeKind.NumberLiteral); }
+test "number kind" { assert exprKind("42") === NodeKind.NumberLiteral; }
 
-test "string kind" { expect(exprKind("\"hi\"") === NodeKind.StringLiteral); }
+test "string kind" { assert exprKind("\"hi\"") === NodeKind.StringLiteral; }
 
-test "ident kind" { expect(exprKind("x") === NodeKind.Identifier); }
+test "ident kind" { assert exprKind("x") === NodeKind.Identifier; }
 
-test "binary kind" { expect(exprKind("a + b") === NodeKind.BinaryExpr); }
+test "binary kind" { assert exprKind("a + b") === NodeKind.BinaryExpr; }
 
-test "unary kind" { expect(exprKind("-x") === NodeKind.UnaryExpr); }
+test "unary kind" { assert exprKind("-x") === NodeKind.UnaryExpr; }
 
-test "call kind" { expect(exprKind("f()") === NodeKind.CallExpr); }
+test "call kind" { assert exprKind("f()") === NodeKind.CallExpr; }
 
-test "member kind" { expect(exprKind("a.b") === NodeKind.MemberExpr); }
+test "member kind" { assert exprKind("a.b") === NodeKind.MemberExpr; }
 
-test "index kind" { expect(exprKind("a[0]") === NodeKind.ArrayAccess); }
+test "index kind" { assert exprKind("a[0]") === NodeKind.ArrayAccess; }
 
-test "array kind" { expect(exprKind("[1]") === NodeKind.ArrayLiteral); }
+test "array kind" { assert exprKind("[1]") === NodeKind.ArrayLiteral; }
 
-test "ternary kind" { expect(exprKind("a ? b : c") === NodeKind.ConditionalExpr); }
+test "ternary kind" { assert exprKind("a ? b : c") === NodeKind.ConditionalExpr; }
 
-test "new kind" { expect(exprKind("new X()") === NodeKind.NewExpr); }
+test "new kind" { assert exprKind("new X()") === NodeKind.NewExpr; }
 
-test "spread kind" { expect(exprKind("...x") === NodeKind.SpreadExpr); }
+test "spread kind" { assert exprKind("...x") === NodeKind.SpreadExpr; }
 
-test "try kind" { expect(exprKind("try x") === NodeKind.TryExpr); }
+test "try kind" { assert exprKind("try x") === NodeKind.TryExpr; }
 
-test "as kind" { expect(exprKind("x as number") === NodeKind.TypeAssertion); }
+test "as kind" { assert exprKind("x as number") === NodeKind.TypeAssertion; }
 
-test "true kind" { expect(exprKind("true") === NodeKind.BooleanLiteral); }
+test "true kind" { assert exprKind("true") === NodeKind.BooleanLiteral; }
 
-test "false kind" { expect(exprKind("false") === NodeKind.BooleanLiteral); }
+test "false kind" { assert exprKind("false") === NodeKind.BooleanLiteral; }
 
-test "null kind" { expect(exprKind("null") === NodeKind.NullLiteral); }
+test "null kind" { assert exprKind("null") === NodeKind.NullLiteral; }
 
-test "bigint kind" { expect(exprKind("123n") === NodeKind.BigIntLiteral); }
+test "bigint kind" { assert exprKind("123n") === NodeKind.BigIntLiteral; }
 
-test "regex kind" { expect(exprKind("/abc/g") === NodeKind.RegexLiteral); }
+test "regex kind" { assert exprKind("/abc/g") === NodeKind.RegexLiteral; }
 
-test "update kind" { expect(exprKind("x++") === NodeKind.UpdateExpr); }
+test "update kind" { assert exprKind("x++") === NodeKind.UpdateExpr; }
 
-test "await kind" { expect(exprKind("await p") === NodeKind.AwaitExpr); }
+test "await kind" { assert exprKind("await p") === NodeKind.AwaitExpr; }
 
-test "move kind" { expect(exprKind("move x") === NodeKind.MoveExpr); }
+test "move kind" { assert exprKind("move x") === NodeKind.MoveExpr; }
 
-test "yield kind" { expect(exprKind("yield x") === NodeKind.YieldExpr); }
+test "yield kind" { assert exprKind("yield x") === NodeKind.YieldExpr; }
 
-test "out kind" { expect(exprKind("out x") === NodeKind.OutExpr); }
+test "out kind" { assert exprKind("out x") === NodeKind.OutExpr; }
 
-test "sizeof kind" { expect(exprKind("sizeof int32") === NodeKind.SizeofExpr); }
+test "sizeof kind" { assert exprKind("sizeof int32") === NodeKind.SizeofExpr; }
 
-test "quote kind" { expect(exprKind("quote { const x = 1; }") === NodeKind.QuoteExpr); }
+test "quote kind" { assert exprKind("quote { const x = 1; }") === NodeKind.QuoteExpr; }
 
 test "quote body is block" {
 	const d = exprNode("quote { const x = 1; }").data as QuoteExprData;
-	expect(d.quoteBody.kind === NodeKind.BlockStmt);
+	assert d.quoteBody.kind === NodeKind.BlockStmt;
 }
 
-test "quote multi ok" { expect(parseOk("quote { const x = 1; const y = 2; }")); }
+test "quote multi ok" { assert parseOk("quote { const x = 1; const y = 2; }"); }
 
 test "quote multi stmt" {
 	const d = exprNode("quote { const x = 1; const y = 2; }").data as QuoteExprData;
 	const block = d.quoteBody.data as BlockStmtData;
-	expect(block.statements.length === 2);
+	assert block.statements.length === 2;
 }
 
-test "func expr kind" { expect(exprKind("function() {}") === NodeKind.FunctionExpr); }
+test "func expr kind" { assert exprKind("function() {}") === NodeKind.FunctionExpr; }
 
-test "generator func expr" { expect(exprKind("function*() {}") === NodeKind.FunctionExpr); }
+test "generator func expr" { assert exprKind("function*() {}") === NodeKind.FunctionExpr; }
 
-test "async func expr" { expect(exprKind("async function() {}") === NodeKind.FunctionExpr); }
+test "async func expr" { assert exprKind("async function() {}") === NodeKind.FunctionExpr; }
 
-test "async arrow kind" { expect(exprKind("async () => 42") === NodeKind.ArrowFunction); }
+test "async arrow kind" { assert exprKind("async () => 42") === NodeKind.ArrowFunction; }
 // Operator extraction
-test "+ op" { expect(exprOp("a + b") === "+"); }
+test "+ op" { assert exprOp("a + b") === "+"; }
 
-test "=== op" { expect(exprOp("a === b") === "==="); }
+test "=== op" { assert exprOp("a === b") === "==="; }
 
-test "&& op" { expect(exprOp("a && b") === "&&"); }
+test "&& op" { assert exprOp("a && b") === "&&"; }
 
-test "?? op" { expect(exprOp("a ?? b") === "??"); }
+test "?? op" { assert exprOp("a ?? b") === "??"; }
 
-test "unary - op" { expect(exprOp("-x") === "-"); }
+test "unary - op" { assert exprOp("-x") === "-"; }
 
-test "unary ! op" { expect(exprOp("!x") === "!"); }
+test "unary ! op" { assert exprOp("!x") === "!"; }
 
-test "pre++ op" { expect(exprOp("++x") === "++"); }
+test "pre++ op" { assert exprOp("++x") === "++"; }
 
-test "typeof op" { expect(exprOp("typeof x") === "typeof"); }
+test "typeof op" { assert exprOp("typeof x") === "typeof"; }
 // Precedence tree shape
-test "* tighter than +" { expect(binLeftKind("a + b * c") === NodeKind.Identifier); }
+test "* tighter than +" { assert binLeftKind("a + b * c") === NodeKind.Identifier; }
 
-test "+ left-assoc" { expect(binLeftKind("a + b + c") === NodeKind.BinaryExpr); }
+test "+ left-assoc" { assert binLeftKind("a + b + c") === NodeKind.BinaryExpr; }
 
-test "* in + left" { expect(binLeftKind("a * b + c") === NodeKind.BinaryExpr); }
+test "* in + left" { assert binLeftKind("a * b + c") === NodeKind.BinaryExpr; }
 
-test "&& tighter than ||" { expect(binLeftKind("a || b && c") === NodeKind.Identifier); }
+test "&& tighter than ||" { assert binLeftKind("a || b && c") === NodeKind.Identifier; }
 
 // --- Smoke: each tests a distinct parser path not covered by structural tests ---
 // Postfix combinations
-test "member call" { expect(parseOk("a.b(c)")); }
+test "member call" { assert parseOk("a.b(c)"); }
 
-test "call member" { expect(parseOk("a(b).c")); }
+test "call member" { assert parseOk("a(b).c"); }
 
-test "optional chain" { expect(parseOk("a?.b?.c")); }
+test "optional chain" { assert parseOk("a?.b?.c"); }
 // Parenthesized
-test "parens" { expect(parseOk("(a + b) * c")); }
+test "parens" { assert parseOk("(a + b) * c"); }
 // Right-associative
-test "** right assoc" { expect(parseOk("a ** b ** c")); }
+test "** right assoc" { assert parseOk("a ** b ** c"); }
 
-test "assign right assoc" { expect(parseOk("a = b = c")); }
+test "assign right assoc" { assert parseOk("a = b = c"); }
 // Compound expressions
-test "complex mixed" { expect(parseOk("f(a).b + g(c).d")); }
+test "complex mixed" { assert parseOk("f(a).b + g(c).d"); }
 
-test "nested arrays" { expect(parseOk("[[1], [2]][0]")); }
+test "nested arrays" { assert parseOk("[[1], [2]][0]"); }
 // Try
-test "try catch" { expect(parseOk("try f() catch 0")); }
+test "try catch" { assert parseOk("try f() catch 0"); }
 
-test "nested try" { expect(parseOk("try f(try g())")); }
+test "nested try" { assert parseOk("try f(try g())"); }
 // Type assertions
-test "as object type" { expect(parseOk("node.data as { name: string }")); }
+test "as object type" { assert parseOk("node.data as { name: string }"); }
 // Remaining operators
-test "in operator" { expect(parseOk("\"x\" in obj")); }
+test "in operator" { assert parseOk("\"x\" in obj"); }
 
-test "instanceof" { expect(parseOk("a instanceof Foo")); }
+test "instanceof" { assert parseOk("a instanceof Foo"); }
 
-test "pipe" { expect(parseOk("a |> b")); }
+test "pipe" { assert parseOk("a |> b"); }
 // New with member
-test "new member" { expect(parseOk("new A.B()")); }
+test "new member" { assert parseOk("new A.B()"); }
 // Delete/void
-test "delete" { expect(parseOk("delete obj.x")); }
+test "delete" { assert parseOk("delete obj.x"); }
 
-test "void" { expect(parseOk("void 0")); }
+test "void" { assert parseOk("void 0"); }
 
-test "lone operator" { expect(!parseOk("+")); }
+test "lone operator" { assert !parseOk("+"); }
 
-test "empty string" { expect(!parseOk("")); }
+test "empty string" { assert !parseOk(""); }
 

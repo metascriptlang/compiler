@@ -480,62 +480,131 @@ export function parseTestDecl(state: ParserState): NodeResult {
 	return Result.ok(createNode(NodeKind.TestDecl, { testName: name, testBody: body }, testToken));
 }
 
+// ===== Assert Statement =====
+// syntax: 'assert' expr ';'
+//       | 'assert' expr ':' stringLiteral ';'
+// Captures source text of the expression for power assert output.
+// Optional `: "message"` provides a custom failure message.
+
+export function parseAssertStmt(state: ParserState): NodeResult {
+	const assertToken = current(state);
+	advance(state); // consume 'assert'
+
+	// Record token range to reconstruct source text
+	const startPos = state.position;
+	const assertExpr = try callExprParser(state);
+	const endPos = state.position;
+
+	// Reconstruct source text from tokens
+	let source = "";
+	for (let i = startPos; i < endPos; i += 1) {
+		if (i > startPos) source = source + " ";
+		source = source + state.tokens[i].value;
+	}
+
+	// Optional message: assert expr : "message";
+	let message = "";
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
+		advance(state); // consume ':'
+		if (!isAtEnd(state) && current(state).kind === TokenKind.String) {
+			message = current(state).value;
+			advance(state);
+		}
+	}
+
+	consumeSemicolon(state);
+	return Result.ok(createNode(NodeKind.AssertStmt, { assertExpr, assertSource: source, assertMessage: message }, assertToken));
+}
+
 // ===== Tests =====
+
+import { ProgramData, AssertStmtData } from "../../ast/node";
+import { parseSource } from "./validation";
+
 // If — distinct paths: simple, else, else-if chain
-test "simple if" { expect(programOk("if (x) { y; }")); }
+test "simple if" { assert programOk("if (x) { y; }"); }
 
-test "if-else" { expect(programOk("if (x) { a; } else { b; }")); }
+test "if-else" { assert programOk("if (x) { a; } else { b; }"); }
 
-test "if-else-if-else" { expect(programOk("if (a) { x; } else if (b) { y; } else { z; }")); }
+test "if-else-if-else" { assert programOk("if (a) { x; } else if (b) { y; } else { z; }"); }
 // Braceless bodies
-test "if braceless" { expect(programOk("if (x) y;")); }
+test "if braceless" { assert programOk("if (x) y;"); }
 
-test "if-else braceless" { expect(programOk("if (x) a; else b;")); }
+test "if-else braceless" { assert programOk("if (x) a; else b;"); }
 
-test "while braceless" { expect(programOk("while (x) y;")); }
+test "while braceless" { assert programOk("while (x) y;"); }
 // While
-test "while" { expect(programOk("while (x) { y; }")); }
+test "while" { assert programOk("while (x) { y; }"); }
 // Return
-test "return expr" { expect(programOk("function f(x) { return x + 1; }")); }
+test "return expr" { assert programOk("function f(x) { return x + 1; }"); }
 // Do-while
-test "do-while" { expect(programOk("do { x; } while (y);")); }
+test "do-while" { assert programOk("do { x; } while (y);"); }
 
-test "do-while no semi" { expect(programOk("do { x; } while (y)")); }
+test "do-while no semi" { assert programOk("do { x; } while (y)"); }
 // Switch — distinct paths: case, default, multi-case, return-in-case
-test "switch case+default" { expect(programOk("switch (x) { case 1: a; break; default: b; }")); }
+test "switch case+default" { assert programOk("switch (x) { case 1: a; break; default: b; }"); }
 
-test "switch multi case" { expect(programOk("switch (x) { case 1: a; break; case 2: b; break; }")); }
+test "switch multi case" { assert programOk("switch (x) { case 1: a; break; case 2: b; break; }"); }
 
-test "switch return" { expect(programOk("function f(x) { switch (x) { case 1: return \"one\"; default: return \"other\"; } }")); }
+test "switch return" { assert programOk("function f(x) { switch (x) { case 1: return \"one\"; default: return \"other\"; } }"); }
 // For-in
-test "for-in const" { expect(stmtKind("for (const key in obj) {}") === NodeKind.ForInStmt); }
+test "for-in const" { assert stmtKind("for (const key in obj) {}") === NodeKind.ForInStmt; }
 
-test "for-in let" { expect(programOk("for (let k in obj) { console.log(k); }")); }
+test "for-in let" { assert programOk("for (let k in obj) { console.log(k); }"); }
 
-test "for-in body" { expect(programOk("for (const key in obj) { obj[key]; }")); }
+test "for-in body" { assert programOk("for (const key in obj) { obj[key]; }"); }
 // For-of with destructuring
-test "for-of destr obj" { expect(programOk("for (const {key, value} of entries) { key; }")); }
+test "for-of destr obj" { assert programOk("for (const {key, value} of entries) { key; }"); }
 
-test "for-of destr arr" { expect(programOk("for (const [k, v] of entries) { k; }")); }
+test "for-of destr arr" { assert programOk("for (const [k, v] of entries) { k; }"); }
 // Defer — expression vs block body
-test "defer call" { expect(programOk("function f() { defer cleanup(); }")); }
+test "defer call" { assert programOk("function f() { defer cleanup(); }"); }
 
-test "defer block" { expect(programOk("function f() { defer { close(fd); } }")); }
+test "defer block" { assert programOk("function f() { defer { close(fd); } }"); }
 // Unreachable
-test "unreachable bare" { expect(programOk("unreachable;")); }
+test "unreachable bare" { assert programOk("unreachable;"); }
 
-test "unreachable msg" { expect(programOk("unreachable(\"should not reach\");")); }
+test "unreachable msg" { assert programOk("unreachable(\"should not reach\");"); }
 // Test declaration
-test "test decl basic" { expect(programOk("test \"basic\" { const x = 1; }")); }
+test "test decl basic" { assert programOk("test \"basic\" { const x = 1; }"); }
 
-test "test decl with assert" { expect(programOk("test \"math\" { expect(1 === 1); }")); }
+test "test decl with assert" { assert programOk("test \"math\" { assert 1 === 1; }"); }
 
-test "test is TestDecl" { expect(stmtKind("test \"x\" { }") === NodeKind.TestDecl); }
+test "test is TestDecl" { assert stmtKind("test \"x\" { }") === NodeKind.TestDecl; }
 
-test "test no string rejects" { expect(!programOk("test { }")); }
+test "test no string rejects" { assert !programOk("test { }"); }
 
-test "test with code body" { expect(programOk("test \"loops\" { let x = 0; while (x < 3) { x = x + 1; } }")); }
+test "test with code body" { assert programOk("test \"loops\" { let x = 0; while (x < 3) { x = x + 1; } }"); }
 
-test "assert call" { expect(programOk("expect(!done);")); }
+test "assert unary" { assert programOk("assert !done;"); }
 
-test "assert binary" { expect(programOk("expect(a > b);")); }
+test "assert binary" { assert programOk("assert a > b;"); }
+
+// Assert keyword
+test "assert stmt basic" { assert programOk("assert x;"); }
+
+test "assert stmt binary" { assert programOk("assert a === b;"); }
+
+test "assert stmt kind" { assert stmtKind("assert x;") === NodeKind.AssertStmt; }
+
+test "assert stmt member" { assert programOk("assert obj.prop;"); }
+
+test "assert stmt call" { assert programOk("assert isValid(x);"); }
+
+test "assert stmt with message" { assert programOk("assert x > 0 : \"x must be positive\";"); }
+
+test "assert stmt message parsed" {
+	const pr = parseSource("assert x : \"hello\";");
+	assert pr.ok;
+	const pd = pr.value.data as ProgramData;
+	const d = pd.programStmts[0].data as AssertStmtData;
+	assert d.assertMessage === "hello";
+}
+
+test "assert stmt no message" {
+	const pr = parseSource("assert x;");
+	assert pr.ok;
+	const pd = pr.value.data as ProgramData;
+	const d = pd.programStmts[0].data as AssertStmtData;
+	assert d.assertMessage === "";
+}

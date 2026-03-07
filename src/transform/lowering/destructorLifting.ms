@@ -1,7 +1,7 @@
 // Destructor Lifting — generate per-type lifecycle hook function bodies
 //
-// Nim reference: liftdestructors.nim
-//   fillBody()             — pure routing table (TypeKind → type family helper)
+// Standard reference implementation for lifecycle hook generation
+// Routing table: TypeKind → type family helper
 //   fillStrOp()            — string lifecycle
 //   fillSeqOp()            — sequence/array lifecycle
 //   atomicRefOp()          — ref/ptr lifecycle
@@ -26,13 +26,13 @@ import {
 	InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData,
 } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createTransformContextWithChecker } from "../context";
-import { makeIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeNull, makeString, makeBool, makeObjectLiteral } from "../util";
-import { Type, TypeKind, isPrimitiveKind, AttachedOp, setAttachedOp } from "../../checker/types";
+import { makeIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeObjectLiteral } from "../util";
+import { Type, TypeKind, isPrimitiveKind, AttachedOp, setAttachedOp, tupleTypeName } from "../../checker/types";
 import { lookupSymbol, SymbolKind, isPointerType as isPointerTypeBase } from "../../checker/symbol";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput } from "../testUtil";
 
-// ===== Lift Context (Nim's TLiftCtx) =====
+// ===== Lift Context (reference TLiftCtx) =====
 
 interface LiftCtx {
 	ctx: TransformContext;
@@ -53,7 +53,7 @@ function namedTypeHasHooks(typeName: string, lctx: LiftCtx): boolean {
 	return nameSetContains(lctx.generated, typeName) || nameSetContains(lctx.generating, typeName);
 }
 
-// ===== Cycle Detection (Nim's cyclicType) =====
+// ===== Cycle Detection (reference cyclicType) =====
 // Determines if a type can form reference cycles (needed for =trace hook).
 
 function isCyclicType(t: Type, lctx: LiftCtx, visited: NameSet): boolean {
@@ -113,7 +113,7 @@ function hookSuffix(hook: string): string {
 	};
 }
 
-// ===== Nim's defaultOp =====
+// ===== Reference defaultOp =====
 // Primitives: copy/sink => assign, destroy/wasMoved => no-op
 
 function defaultOp(hook: string, x: Node, y: Node, buf: Node[], loc: SourceLocation): void {
@@ -148,10 +148,10 @@ function genInlineSink(destroyFn: string, xf: Node, yf: Node, buf: Node[], loc: 
 	buf.push(makeExprStmt(makeAssign(xf, yf, loc), loc));
 }
 
-// ===== Type Family Helpers (Nim's modular pattern) =====
+// ===== Type Family Helpers (Modular pattern) =====
 // Each helper owns all runtime names for its type family.
 
-// --- Nim's fillStrOp ---
+// --- Standard string hook generator ---
 function stringOp(hook: string, xf: Node, yf: Node, fieldName: string, buf: Node[], loc: SourceLocation): void {
 	match (hook) {
 		"destroy" => { genCall("msStringDecref", hook, xf, yf, buf, loc); },
@@ -162,7 +162,7 @@ function stringOp(hook: string, xf: Node, yf: Node, fieldName: string, buf: Node
 	};
 }
 
-// --- Nim's fillSeqOp (3 element specializations) ---
+// --- Standard sequence/array hook generator ---
 function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, buf: Node[], loc: SourceLocation): void {
 	if (elem === null || isPrimitiveKind(elem.kind)) {
 		match (hook) {
@@ -192,8 +192,8 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, buf: Node[], loc:
 	}
 }
 
-// --- Nim's atomicRefOp (shared by Ref, Ptr, Object-pointer) ---
-// isCyclic: true for types that can form reference cycles (Nim parity: atomicRefOp)
+// --- Standard atomic reference hook generator ---
+// isCyclic: true for types that can form reference cycles (reference parity: atomicRefOp)
 // Cyclic types use msDecrefCyclic/msIncrefCyclic (ORC-aware when MS_ORC defined)
 function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: boolean, buf: Node[], loc: SourceLocation): void {
 	const decrefFn = isCyclic ? "msDecrefCyclic" : "msDecref";
@@ -211,7 +211,7 @@ function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: bo
 	};
 }
 
-// --- Nim's fillBodyObjT for named value-type objects ---
+// --- Standard value-type object hook generator ---
 function namedObjOp(hook: string, typeName: string, xf: Node, yf: Node, buf: Node[], loc: SourceLocation): void {
 	if (hook === "sink") {
 		genInlineSink(typeName + "_destroy", xf, yf, buf, loc);
@@ -243,7 +243,7 @@ function setOp(hook: string, xf: Node, yf: Node, buf: Node[], loc: SourceLocatio
 	};
 }
 
-// ===== fillBody — pure routing table (Nim pattern) =====
+// ===== fillBody — pure routing table (Standard pattern) =====
 // Routes TypeKind to type family helper. No inline hook logic.
 
 function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: Type, lctx: LiftCtx, buf: Node[], visited: NameSet, loc: SourceLocation): void {
@@ -327,7 +327,7 @@ function typeNeedsHooks(objType: Type, lctx: LiftCtx, loc: SourceLocation): bool
 	return false;
 }
 
-// ===== Inheritance Helper (Nim's fillBodyObjTImpl) =====
+// ===== Inheritance Helper (Standard reference pattern) =====
 
 function getBaseClass(typeName: string, lctx: LiftCtx): string {
 	const sym = lookupSymbol(lctx.ctx.checkerCtx.table, typeName);
@@ -338,7 +338,7 @@ function getBaseClass(typeName: string, lctx: LiftCtx): string {
 	return sym.symbolType.typeExtra.typeName;
 }
 
-// ===== User-Defined Hook Dispatch (Nim's considerUserDefinedOp) =====
+// ===== User-Defined Hook Dispatch (Reference considerUserDefinedOp) =====
 // Maps lifecycle hooks to user extension method names.
 
 function userHookName(typeName: string, hook: string): string {
@@ -362,7 +362,7 @@ function hasUserDefinedHook(typeName: string, hook: string, lctx: LiftCtx): bool
 	return sym !== null;
 }
 
-// ===== Generate a single hook (Nim's produceSym per op) =====
+// ===== Generate a single hook (Reference produceSym per op) =====
 
 function generateHook(hook: string, typeName: string, objType: Type, lctx: LiftCtx, loc: SourceLocation): void {
 	const buf: Node[] = [];
@@ -375,10 +375,15 @@ function generateHook(hook: string, typeName: string, objType: Type, lctx: LiftC
 		_ => "src",
 	};
 
-	// Self-assignment check for copy/sink (Nim's checkSelfAssignment)
+	// Self-assignment check for copy/sink (Implementation parity)
+	// Set nodeType on operands so codegen can emit memcmp for struct equality (E1 fix)
 	if (hook === "copy" || hook === "sink") {
+		const destIdent = makeIdent(p1, loc);
+		destIdent.nodeType = objType;
+		const srcIdent = makeIdent(p2, loc);
+		srcIdent.nodeType = objType;
 		const selfCheck = makeIf(
-			makeBinary(makeIdent(p1, loc), "===", makeIdent(p2, loc), loc),
+			makeBinary(destIdent, "===", srcIdent, loc),
 			makeBlock([makeReturn(makeNull(loc), loc)], loc),
 			makeNull(loc),
 			loc,
@@ -386,7 +391,7 @@ function generateHook(hook: string, typeName: string, objType: Type, lctx: LiftC
 		buf.push(selfCheck);
 	}
 
-	// User-defined hook dispatch (Nim's considerUserDefinedOp)
+	// User-defined hook dispatch (Reference considerUserDefinedOp)
 	if (hasUserDefinedHook(typeName, hook, lctx)) {
 		const uName = userHookName(typeName, hook);
 		if (isUnary) {
@@ -395,14 +400,14 @@ function generateHook(hook: string, typeName: string, objType: Type, lctx: LiftC
 			buf.push(makeExprStmt(makeCall(makeIdent(uName, loc), [makeIdent(p1, loc), makeIdent(p2, loc)], loc), loc));
 		}
 	} else {
-		// Inheritance: ensure base class hooks exist (Nim's fillBodyObjTImpl)
+		// Inheritance: ensure base class hooks exist (Implementation parity)
 		const baseTypeName = getBaseClass(typeName, lctx);
 		if (baseTypeName !== "") {
 			ensureTypeHooks(baseTypeName, lctx, loc);
 		}
 
 		if (hook === "destroy") {
-			// Destroy: fields first (reverse), then base class (LIFO — Nim pattern)
+			// Destroy: fields first (reverse), then base class (LIFO — standard pattern)
 			for (let i = objType.typeNames.length - 1; i >= 0; i -= 1) {
 				const visited: NameSet = [];
 				fillBody(hook, makeIdent(p1, loc), makeIdent(p2, loc), objType.typeNames[i], objType.typeChildren[i], lctx, buf, visited, loc);
@@ -411,7 +416,7 @@ function generateHook(hook: string, typeName: string, objType: Type, lctx: LiftC
 				genCall(baseTypeName + "_destroy", hook, makeIdent(p1, loc), makeIdent(p2, loc), buf, loc);
 			}
 		} else {
-			// Copy/sink/trace/wasMoved: base class first, then fields (Nim pattern)
+			// Copy/sink/trace/wasMoved: base class first, then fields (standard pattern)
 			if (baseTypeName !== "" && namedTypeHasHooks(baseTypeName, lctx)) {
 				genCall(baseTypeName + hookSuffix(hook), hook, makeIdent(p1, loc), makeIdent(p2, loc), buf, loc);
 			}
@@ -434,7 +439,7 @@ function generateHook(hook: string, typeName: string, objType: Type, lctx: LiftC
 	}
 }
 
-// ===== Ensure Type Hooks (Nim's produceSym + fillBody) =====
+// ===== Ensure Type Hooks (Reference produceSym + fillBody) =====
 
 function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): void {
 	if (nameSetContains(lctx.generated, typeName)) return;
@@ -466,7 +471,7 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 	generateHook("sink", typeName, objType, lctx, loc);
 	generateHook("wasMoved", typeName, objType, lctx, loc);
 
-	// Register hooks on the type (Nim parity: TTypeAttachedOp)
+	// Register hooks on the type (Standard reference parity)
 	setAttachedOp(objType, AttachedOp.AttachedDestructor, typeName + "_destroy");
 	setAttachedOp(objType, AttachedOp.AttachedAsgn, typeName + "_copy");
 	setAttachedOp(objType, AttachedOp.AttachedSink, typeName + "_sink");
@@ -480,7 +485,7 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 		setAttachedOp(objType, AttachedOp.AttachedTrace, typeName + "_trace");
 	}
 
-	// =dup: init + copy, return (Nim pattern)
+	// =dup: init + copy, return (standard pattern)
 	const dupStmts: Node[] = [];
 	dupStmts.push(makeVarDecl("$result", makeIdent("src", loc), DeclKind.Let, loc));
 	dupStmts.push(makeExprStmt(makeCall(makeIdent(typeName + "_copy", loc), [makeIdent("$result", loc), makeIdent("src", loc)], loc), loc));
@@ -500,6 +505,148 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 	nameSetAdd(lctx.generated, typeName);
 }
 
+// ===== Auto-Generated == (Nim parity: generic proc `==`*[T: tuple|object]) =====
+// Generates TypeName_eq(a, b): boolean with field-by-field comparison.
+// Nim uses compile-time `fields()` magic iterator unrolling; we do the same here
+// by iterating typeNames/typeChildren at transform time.
+
+function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx, loc: SourceLocation): Node {
+	// For nested value-type objects, call their _eq function
+	if (fieldType.kind === TypeKind.Object && fieldType.typeName !== "" && (fieldType.typeFlags & 1) !== 0) {
+		if (!isPointerType(fieldType, lctx.ctx)) {
+			return makeCall(makeIdent(fieldType.typeName + "_eq", loc), [aField, bField], loc);
+		}
+	}
+	// For TypeReference, resolve and recurse
+	if (fieldType.kind === TypeKind.TypeReference && fieldType.typeName !== "") {
+		const sym = lookupSymbol(lctx.ctx.checkerCtx.table, fieldType.typeName);
+		if (sym !== null) {
+			return fieldEqExpr(aField, bField, sym.symbolType, lctx, loc);
+		}
+	}
+	// For all other types (primitives, strings, enums, etc): use === directly
+	return makeBinary(aField, "===", bField, loc);
+}
+
+function generateEq(typeName: string, objType: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	// Build: function TypeName_eq(a: TypeName, b: TypeName): boolean {
+	//   if (a.field1 !== b.field1) return false;
+	//   if (a.field2 !== b.field2) return false;
+	//   ...
+	//   return true;
+	// }
+	const buf: Node[] = [];
+	for (let i = 0; i < objType.typeNames.length; i += 1) {
+		const fieldName = objType.typeNames[i];
+		const fieldType = objType.typeChildren[i];
+		const aField = makeMember(makeIdent("a", loc), fieldName, loc);
+		const bField = makeMember(makeIdent("b", loc), fieldName, loc);
+
+		// Generate: if (!fieldEq) return false;
+		const eqExpr = fieldEqExpr(aField, bField, fieldType, lctx, loc);
+		const notEq = makeUnary("!", eqExpr, loc);
+		buf.push(makeIf(notEq, makeBlock([makeReturn(makeBool(false, loc), loc)], loc), makeNull(loc), loc));
+	}
+	buf.push(makeReturn(makeBool(true, loc), loc));
+	lctx.collector.push(makeFnDecl(typeName + "_eq", ["a", "b"], [typeName, typeName], makeBlock(buf, loc), "", "boolean", loc));
+	setAttachedOp(objType, AttachedOp.AttachedEq, typeName + "_eq");
+}
+
+// ===== Ensure Eq (called for ALL interface types, even primitive-only) =====
+
+function ensureEq(typeName: string, lctx: LiftCtx, loc: SourceLocation): void {
+	if (nameSetContains(lctx.generated, typeName + "_eq")) return;
+	nameSetAdd(lctx.generated, typeName + "_eq");
+
+	const sym = lookupSymbol(lctx.ctx.checkerCtx.table, typeName);
+	if (sym === null) return;
+	if (sym.symbolType.kind !== TypeKind.Object) return;
+	// Only for value-type objects (interfaces), not ref-type classes
+	if ((sym.symbolType.typeFlags & 1) === 0) return;
+
+	generateEq(typeName, sym.symbolType, lctx, loc);
+}
+
+// ===== Tuple Comparison Operators (Nim parity: system.nim lines 1973-1996) =====
+// Auto-generate ==, <, <= for tuples using positional field names (_0, _1, ...).
+// Nim uses `fields()` magic iterator; we unroll at transform time.
+
+// Tuple field access helper: a._0, a._1, etc.
+function tupleField(obj: Node, idx: number, loc: SourceLocation): Node {
+	return makeMember(obj, "_" + idx.toString(), loc);
+}
+
+// Generate element-by-element equality for tuples.
+// Nim: proc `==`*[T: tuple|object](x, y: T): bool =
+//        for a, b in fields(x, y): if a != b: return false
+//        return true
+function generateTupleEq(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	const buf: Node[] = [];
+	let i = 0;
+	while (i < t.typeChildren.length) {
+		const aField = tupleField(makeIdent("a", loc), i, loc);
+		const bField = tupleField(makeIdent("b", loc), i, loc);
+		const eqExpr = fieldEqExpr(aField, bField, t.typeChildren[i], lctx, loc);
+		buf.push(makeIf(makeUnary("!", eqExpr, loc), makeBlock([makeReturn(makeBool(false, loc), loc)], loc), makeNull(loc), loc));
+		i += 1;
+	}
+	buf.push(makeReturn(makeBool(true, loc), loc));
+	lctx.collector.push(makeFnDecl(tupleName + "_eq", ["a", "b"], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc));
+	setAttachedOp(t, AttachedOp.AttachedEq, tupleName + "_eq");
+}
+
+// Generate lexicographic < for tuples.
+// Nim: proc `<`*[T: tuple](x, y: T): bool =
+//        for a, b in fields(x, y):
+//          var c = cmp(a, b)
+//          if c < 0: return true
+//          if c > 0: return false
+//        return false
+//
+// We inline the cmp pattern: if (a < b) return true; if (a > b) return false;
+function generateTupleLt(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	const buf: Node[] = [];
+	let i = 0;
+	while (i < t.typeChildren.length) {
+		const aField = tupleField(makeIdent("a", loc), i, loc);
+		const bField = tupleField(makeIdent("b", loc), i, loc);
+		// if (a._i < b._i) return true;
+		buf.push(makeIf(makeBinary(aField, "<", bField, loc), makeBlock([makeReturn(makeBool(true, loc), loc)], loc), makeNull(loc), loc));
+		// if (a._i > b._i) return false;
+		const aField2 = tupleField(makeIdent("a", loc), i, loc);
+		const bField2 = tupleField(makeIdent("b", loc), i, loc);
+		buf.push(makeIf(makeBinary(aField2, ">", bField2, loc), makeBlock([makeReturn(makeBool(false, loc), loc)], loc), makeNull(loc), loc));
+		i += 1;
+	}
+	buf.push(makeReturn(makeBool(false, loc), loc));
+	lctx.collector.push(makeFnDecl(tupleName + "_lt", ["a", "b"], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc));
+	setAttachedOp(t, AttachedOp.AttachedLt, tupleName + "_lt");
+}
+
+// Generate lexicographic <= for tuples.
+// Nim: proc `<=`*[T: tuple](x, y: T): bool =
+//        for a, b in fields(x, y):
+//          var c = cmp(a, b)
+//          if c < 0: return true
+//          if c > 0: return false
+//        return true    <-- only difference from <
+function generateTupleLe(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	const buf: Node[] = [];
+	let i = 0;
+	while (i < t.typeChildren.length) {
+		const aField = tupleField(makeIdent("a", loc), i, loc);
+		const bField = tupleField(makeIdent("b", loc), i, loc);
+		buf.push(makeIf(makeBinary(aField, "<", bField, loc), makeBlock([makeReturn(makeBool(true, loc), loc)], loc), makeNull(loc), loc));
+		const aField2 = tupleField(makeIdent("a", loc), i, loc);
+		const bField2 = tupleField(makeIdent("b", loc), i, loc);
+		buf.push(makeIf(makeBinary(aField2, ">", bField2, loc), makeBlock([makeReturn(makeBool(false, loc), loc)], loc), makeNull(loc), loc));
+		i += 1;
+	}
+	buf.push(makeReturn(makeBool(true, loc), loc));  // <= returns true when equal
+	lctx.collector.push(makeFnDecl(tupleName + "_le", ["a", "b"], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc));
+	setAttachedOp(t, AttachedOp.AttachedLe, tupleName + "_le");
+}
+
 // ===== Process Declarations =====
 
 function processDecl(stmt: Node, lctx: LiftCtx): void {
@@ -507,6 +654,7 @@ function processDecl(stmt: Node, lctx: LiftCtx): void {
 		NodeKind.InterfaceDecl => {
 			const d = stmt.data as InterfaceDeclData;
 			ensureTypeHooks(d.interfaceName, lctx, stmt.location);
+			ensureEq(d.interfaceName, lctx, stmt.location);
 		},
 		NodeKind.ClassDecl => {
 			const d = stmt.data as ClassDeclData;
@@ -537,6 +685,24 @@ export function liftDestructors(program: Node, ctx: TransformContext): Node {
 
 	for (const stmt of pd.programStmts) {
 		processDecl(stmt, lctx);
+	}
+
+	// Process pending tuple comparison ops (collected by operatorLower).
+	// Nim parity: system.nim:1973 (==), :1980 (<=), :1989 (<) for tuples.
+	const defaultLoc: SourceLocation = { file: "", line: 0, column: 0 };
+	for (const pending of ctx.pendingTupleOps) {
+		for (const op of pending.ops) {
+			const key = pending.tupleName + op;
+			if (nameSetContains(lctx.generated, key)) continue;
+			nameSetAdd(lctx.generated, key);
+			if (op === "_eq") {
+				generateTupleEq(pending.tupleName, pending.tupleType, lctx, defaultLoc);
+			} else if (op === "_lt") {
+				generateTupleLt(pending.tupleName, pending.tupleType, lctx, defaultLoc);
+			} else if (op === "_le") {
+				generateTupleLe(pending.tupleName, pending.tupleType, lctx, defaultLoc);
+			}
+		}
 	}
 
 	for (const decl of lctx.collector) {
@@ -604,36 +770,53 @@ function hasTypeInfo(input: string, typeName: string): boolean {
 	return false;
 }
 
-test "primitive-only no hooks" { expect(generatedFnCount("interface Point { x: number; y: number; }") === 0); }
+test "primitive-only no hooks" { assert generatedFnCount("interface Point { x: number; y: number; }") === 0; }
 
-test "string field generates 5 hooks" { expect(generatedFnCount("interface Token { value: string; }") === 5); }
+test "string field generates 5 hooks" { assert generatedFnCount("interface Token { value: string; }") === 5; }
 
-test "array field generates 5 hooks" { expect(generatedFnCount("interface Data { items: number[]; }") === 5); }
+test "array field generates 5 hooks" { assert generatedFnCount("interface Data { items: number[]; }") === 5; }
 
-test "nested interface generates 10 hooks" { expect(generatedFnCount("interface A { name: string; } interface B { a: A; }") === 10); }
+test "nested interface generates 10 hooks" { assert generatedFnCount("interface A { name: string; } interface B { a: A; }") === 10; }
 
-test "no duplicates" { expect(generatedFnCount("interface A { name: string; } interface B { a1: A; a2: A; }") === 10); }
+test "no duplicates" { assert generatedFnCount("interface A { name: string; } interface B { a1: A; a2: A; }") === 10; }
 
-test "exported interface" { expect(generatedFnCount("export interface Token { value: string; }") === 5); }
+test "exported interface" { assert generatedFnCount("export interface Token { value: string; }") === 5; }
 
-test "no interfaces passthrough" { expect(generatedFnCount("const x = 1;") === 0); }
+test "no interfaces passthrough" { assert generatedFnCount("const x = 1;") === 0; }
 // =trace: Function fields are cyclic (closures capture refs)
-test "trace NOT generated for flat string" { expect(!hasGeneratedFn("interface Token { value: string; }", "Token_trace")); }
+test "trace NOT generated for flat string" { assert !hasGeneratedFn("interface Token { value: string; }", "Token_trace"); }
 // TypeInfo generated alongside hooks
-test "typeInfo generated" { expect(hasTypeInfo("interface Token { value: string; }", "Token")); }
+test "typeInfo generated" { assert hasTypeInfo("interface Token { value: string; }", "Token"); }
 
-test "typeInfo NOT generated for primitives" { expect(!hasTypeInfo("interface Point { x: number; y: number; }", "Point")); }
+test "typeInfo NOT generated for primitives" { assert !hasTypeInfo("interface Point { x: number; y: number; }", "Point"); }
 // Inheritance: child with own hookable field + base both generate hooks
 test "inheritance generates parent hooks" {
 	const src = "interface Base { name: string; } class Child extends Base { extra: string; }";
-	expect(hasGeneratedFn(src, "Base_destroy"));
+	assert hasGeneratedFn(src, "Base_destroy");
 }
 // All 5 core hooks present for a hookable type
 test "all core hooks generated" {
 	const src = "interface Wrap { data: string; }";
-	expect(hasGeneratedFn(src, "_destroy"));
-	expect(hasGeneratedFn(src, "_copy"));
-	expect(hasGeneratedFn(src, "_sink"));
-	expect(hasGeneratedFn(src, "_wasMoved"));
-	expect(hasGeneratedFn(src, "_dup"));
+	assert hasGeneratedFn(src, "_destroy");
+	assert hasGeneratedFn(src, "_copy");
+	assert hasGeneratedFn(src, "_sink");
+	assert hasGeneratedFn(src, "_wasMoved");
+	assert hasGeneratedFn(src, "_dup");
+}
+
+// Auto-generated == (Nim parity: generic proc `==`*[T: tuple|object])
+test "eq generated for primitive-only interface" {
+	assert hasGeneratedFn("interface Point { x: number; y: number; }", "Point_eq");
+}
+
+test "eq generated for string-field interface" {
+	assert hasGeneratedFn("interface Token { value: string; }", "Token_eq");
+}
+
+test "eq generated for exported interface" {
+	assert hasGeneratedFn("export interface Loc { line: number; col: number; }", "Loc_eq");
+}
+
+test "eq NOT generated for class" {
+	assert !hasGeneratedFn("class Obj { x: number; }", "Obj_eq");
 }

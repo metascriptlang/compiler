@@ -27,7 +27,7 @@ import {
 import {
 	printImportDecl, printExportDecl, printTypeAliasDecl, printEnumDecl,
 	printInterfaceDecl, printClassDecl, printExternDecl, printDecoratedDecl,
-	printTestDecl, printPropertyDecl, printMethodDecl,
+	printTestDecl, printAssertStmt, printPropertyDecl, printMethodDecl,
 } from "./declarations";
 
 export function printNode(node: Node, options: FormatOptions): Doc {
@@ -87,6 +87,7 @@ export function printNode(node: Node, options: FormatOptions): Doc {
 		NodeKind.ExternDecl => printExternDecl(node, options),
 		NodeKind.DecoratedDecl => printDecoratedDecl(node, options),
 		NodeKind.TestDecl => printTestDecl(node, options),
+		NodeKind.AssertStmt => printAssertStmt(node, options),
 		NodeKind.PropertyDecl => printPropertyDecl(node, options),
 		NodeKind.MethodDecl => printMethodDecl(node, options),
 

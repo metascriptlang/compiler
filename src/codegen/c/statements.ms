@@ -1,6 +1,6 @@
 // C Codegen — Statement Emission
 //
-// Follows Nim's ccgstmts.nim: if/while/do-while/block/break/continue/return.
+// Follows standard reference implementation patterns for statement emission.
 // Uses emitStmts/emitStmtsLine for direct write (avoids value-type Builder copy).
 
 import {
@@ -10,7 +10,8 @@ import {
 	BreakStmtData, ContinueStmtData, DeclKind,
 	TryCatchStmtData, ThrowStmtData,
 	SwitchStmtData, SwitchCaseData,
-	CallExprData, IdentifierData,
+	CallExprData, IdentifierData, AssertStmtData, UnreachableStmtData,
+	MacroInvocationData, StringLiteralData,
 } from "../../ast/node";
 import { Type, TypeKind, isInterfaceType } from "../../checker/types";
 import {
@@ -72,6 +73,8 @@ export function genStmt(g: CGen, p: CProc, node: Node): void {
 	else if (k === NodeKind.ThrowStmt) { genThrowStmt(g, p, node); }
 	else if (k === NodeKind.TryCatchStmt) { genTryCatchStmt(g, p, node); }
 	else if (k === NodeKind.SwitchStmt) { genSwitchStmt(g, p, node); }
+	else if (k === NodeKind.AssertStmt) { genAssertStmt(g, p, node); }
+	else if (k === NodeKind.UnreachableStmt) { genUnreachableStmt(g, p, node); }
 	else { emitStmtsLine(p, "/* unsupported stmt: " + k + " */"); }
 }
 
@@ -87,14 +90,14 @@ export function genStmts(g: CGen, p: CProc, stmts: Node[]): void {
 
 function genExprStmt(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as ExprStmtData;
-	if (d.expr.kind === NodeKind.MacroInvocation) return;
-	// Intercept expect() builtin — emit if/fail instead of function call
-	if (d.expr.kind === NodeKind.CallExpr && d.expr.resolvedSym !== null) {
-		const sym = d.expr.resolvedSym;
-		if (sym.builtinKind === "Expect") {
-			genExpectStmt(g, p, d.expr);
-			return;
+	if (d.expr.kind === NodeKind.MacroInvocation) {
+		// @emit inside function body: emit raw C inline (Nim {.emit.} parity)
+		const mi = d.expr.data as MacroInvocationData;
+		if (mi.macroName === "emit" && mi.macroArgs.length > 0 && mi.macroArgs[0].kind === NodeKind.StringLiteral) {
+			const sd = mi.macroArgs[0].data as StringLiteralData;
+			emitStmtsLine(p, sd.value);
 		}
+		return;
 	}
 	const snippet = genExpr(g, p, d.expr);
 	emitStmtsLine(p, snippet + ";");
@@ -163,7 +166,7 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 
 // Wrap a condition string in parens. Always wraps — the old "already wrapped" heuristic
 // broke on closure calls where first ( and last ) aren't matching parens.
-// Nim pattern: removeSinglePar (cbuilderexprs.nim) — expressions produce
+// Standard implementation pattern: expressions produce
 // "(a == b)" via cOp, if/while adds "if (...)", strip outer layer to avoid
 // double-wrap that triggers -Wparentheses-equality.
 function removeSinglePar(s: string): string {
@@ -289,7 +292,7 @@ function genThrowStmt(g: CGen, p: CProc, node: Node): void {
 	emitStmtsLine(p, "msThrow(" + snippet + ");");
 }
 
-// ===== Try/Catch (goto-based — Nim's genTryGoto) =====
+// ===== Try/Catch (goto-based — standard reference pattern) =====
 // Goto-based exceptions: no setjmp overhead. Each try block gets unique labels.
 // After each potentially-raising call, check *nimErr_ and goto catch.
 
@@ -440,20 +443,27 @@ function genBlockOrBraces(g: CGen, p: CProc, node: Node): void {
 	}
 }
 
-// ===== Expect Builtin =====
+// ===== Assert Statement =====
 
-function genExpectStmt(g: CGen, p: CProc, node: Node): void {
-	const cd = node.data as CallExprData;
-	if (cd.arguments.length < 1) return;
-	const cond = genExpr(g, p, cd.arguments[0]);
-	let msg = "\"assertion failed\"";
-	if (cd.arguments.length >= 2) {
-		msg = genExpr(g, p, cd.arguments[1]);
+function genUnreachableStmt(g: CGen, p: CProc, node: Node): void {
+	const d = node.data as UnreachableStmtData;
+	if (d.unreachableMsg.length > 0) {
+		const msg = "\"" + d.unreachableMsg.replace(/\\/g, "\\\\").replace(/"/g, "\\\"").replace(/\n/g, "\\n").replace(/\r/g, "\\r") + "\"";
+		emitStmtsLine(p, "fprintf(stderr, \"unreachable: %s\\n\", " + msg + ");");
 	}
+	emitStmtsLine(p, "__builtin_trap();");
+}
+
+function genAssertStmt(g: CGen, p: CProc, node: Node): void {
+	const d = node.data as AssertStmtData;
+	const cond = genExpr(g, p, d.assertExpr);
+	// Use custom message if provided, otherwise fall back to source text
+	const raw = (d.assertMessage.length > 0) ? d.assertMessage : d.assertSource;
+	const msg = "\"" + raw.replace(/\\/g, "\\\\").replace(/"/g, "\\\"").replace(/\n/g, "\\n").replace(/\r/g, "\\r") + "\"";
 	if (g.isTestBuild) {
 		emitStmtsLine(p, "if (!(" + cond + ")) { msTestCheckFail(" + msg + ", __FILE__, __LINE__); return; }");
 	} else {
-		emitStmtsLine(p, "if (!(" + cond + ")) { fprintf(stderr, \"assert: %s\\n\", " + msg + "); abort(); }");
+		emitStmtsLine(p, "if (!(" + cond + ")) { fprintf(stderr, \"assert failed: %s\\n\", " + msg + "); abort(); }");
 	}
 }
 
@@ -479,42 +489,42 @@ function stmtOutput(input: string): string {
 	return readProcStmts(p);
 }
 
-test "simple call" { expect(stmtOutput("foo();") === "foo();\n"); }
+test "simple call" { assert stmtOutput("foo();") === "foo();\n"; }
 
-test "const with init" { expect(stmtOutput("const x: number = 42;") === "double x = 42;\n"); }
+test "const with init" { assert stmtOutput("const x: number = 42;") === "double x = 42;\n"; }
 
-test "let with init" { expect(stmtOutput("let x: number = 0;") === "double x = 0;\n"); }
+test "let with init" { assert stmtOutput("let x: number = 0;") === "double x = 0;\n"; }
 
-test "int32 type" { expect(stmtOutput("const n: int32 = 0;") === "int32_t n = 0;\n"); }
+test "int32 type" { assert stmtOutput("const n: int32 = 0;") === "int32_t n = 0;\n"; }
 
-test "bool type" { expect(stmtOutput("const flag: boolean = true;") === "MS_BOOL flag = MS_TRUE;\n"); }
+test "bool type" { assert stmtOutput("const flag: boolean = true;") === "MS_BOOL flag = MS_TRUE;\n"; }
 
 test "simple if" {
 	const result = stmtOutput("if (x) { foo(); }");
-	expect(result === "if (x) {\n  foo();\n}\n");
+	assert result === "if (x) {\n  foo();\n}\n";
 }
 
 test "if-else" {
 	const result = stmtOutput("if (x) { a(); } else { b(); }");
-	expect(result === "if (x) {\n  a();\n}\n else {\n  b();\n}\n\n");
+	assert result === "if (x) {\n  a();\n}\n else {\n  b();\n}\n\n";
 }
 
 test "simple while" {
 	const result = stmtOutput("while (x) { foo(); }");
-	expect(result === "while (x) {\n  foo();\n}\n\n");
+	assert result === "while (x) {\n  foo();\n}\n\n";
 }
 
-test "return value" { expect(stmtOutput("return 42;") === "return 42;\n"); }
+test "return value" { assert stmtOutput("return 42;") === "return 42;\n"; }
 
-test "break" { expect(stmtOutput("break;") === "break;\n"); }
+test "break" { assert stmtOutput("break;") === "break;\n"; }
 
-test "continue" { expect(stmtOutput("continue;") === "continue;\n"); }
+test "continue" { assert stmtOutput("continue;") === "continue;\n"; }
 
 test "try-catch emits goto labels" {
 	const tc = stmtOutput("try { foo(); } catch (e) { bar(); }");
 	const len = tc.length;
 	// Should contain goto-based labels, not setjmp
-	expect(len > 20);
+	assert len > 20;
 	// Should NOT contain setjmp (we use goto-based now)
 	let hasSetjmp = false;
 	let i = 0;
@@ -524,7 +534,7 @@ test "try-catch emits goto labels" {
 		}
 		i = i + 1;
 	}
-	expect(!hasSetjmp);
+	assert !hasSetjmp;
 }
 
 test "try-catch has catch label" {
@@ -539,7 +549,7 @@ test "try-catch has catch label" {
 		}
 		i = i + 1;
 	}
-	expect(hasCatch);
+	assert hasCatch;
 }
 
 test "try-finally has finally label" {
@@ -553,7 +563,7 @@ test "try-finally has finally label" {
 		}
 		i = i + 1;
 	}
-	expect(hasFinally);
+	assert hasFinally;
 }
 
 test "long if-else chain (100 branches)" {
@@ -566,7 +576,7 @@ test "long if-else chain (100 branches)" {
 		i += 1;
 	}
 	const result = stmtOutput(input);
-	expect(result.length > 0);
+	assert result.length > 0;
 	// Should contain "else if" pattern (iterative, not recursive)
 	let elseIfCount = 0;
 	let j = 0;
@@ -576,5 +586,5 @@ test "long if-else chain (100 branches)" {
 		}
 		j += 1;
 	}
-	expect(elseIfCount === 99);
+	assert elseIfCount === 99;
 }

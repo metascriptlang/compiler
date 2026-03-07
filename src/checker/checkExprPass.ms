@@ -8,7 +8,7 @@ import {
 	ObjectLiteralData, ArrayLiteralData, ConditionalExprData,
 	TypeAssertionData, SpreadExprData, NewExprData, TryExprData,
 	AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData,
-	HiddenDerefData, HiddenStdConvData,
+	HiddenDerefData, HiddenStdConvData, MacroInvocationData,
 	ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData,
 	FunctionDeclData, BlockStmtData, ExprStmtData,
 } from "../ast/node";
@@ -35,9 +35,10 @@ import {
 } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
 import { resolveAnnotation, ensureShaped } from "./resolvePass";
+import { parseNumberLiteral } from "../utils/string";
 
-// ===== Nim-Aligned Extension Receiver Matching =====
-// Nim's isAttachableRoutineTo() compares nominal types by identity.
+// ===== Standard-Aligned Extension Receiver Matching =====
+// Standard reference pattern for extension matching compares nominal types by identity.
 // We use isAssignable on the extension's receiver param type (fnType.typeChildren[0])
 // instead of string-based receiverTypeName comparison, which breaks for parameterized
 // types like number[] (parser produces "number [ ]" but typeNameOf returns "Array").
@@ -53,7 +54,7 @@ function isReceiverMatch(ext: ExtensionMethod, objType: Type): boolean {
 	const receiverType = ext.fnType.typeChildren[0];
 	// Unknown receiver: match any (conservative — unresolved type)
 	if (receiverType.kind === TypeKind.Unknown) return true;
-	// Generic extensions: try unification on receiver param (Nim-aligned selective match).
+	// Generic extensions: try unification on receiver param (standard-aligned selective match).
 	// e.g. map<T>(this arr: T[]) should match number[] but NOT string.
 	if (hasGenericParams(receiverType)) {
 		const eb = createUnifyBindings();
@@ -98,7 +99,7 @@ function filterExtsByReceiverType(exts: ExtensionMethod[], objType: Type): Exten
 // ===== Expression Checker =====
 
 export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): Type {
-	// Nim parity: skip already-checked nodes (nfSem guard)
+	// Implementation parity: skip already-checked nodes (nfSem guard)
 	if ((node.flags & NF_SEM) !== 0 && node.nodeType !== null) return node.nodeType;
 	if (isCancelled(ctx.cancelCtx, ctx.cancelVersion)) return unknownType();
 
@@ -112,7 +113,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			const d = node.data as IdentifierData;
 			const sym = lookupSymbol(ctx.table, d.name);
 			if (sym === null) {
-				addError(ctx, `Undefined variable '${d.name}'`);
+				addError(ctx, `Undefined variable '${d.name}'`, node.location.line, node.location.column);
 				return errorType();
 			}
 			// Demand-driven: ensure the symbol's signature is resolved before using its type
@@ -145,23 +146,30 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			const arrType = checkExpr(ctx, d.array, null as unknown as Type);
 			checkExpr(ctx, d.index, null as unknown as Type);
 			// Range access: arr[start..end] returns Span<elemType>
+			let accessType: Type = unknownType();
 			if (d.index.kind === NodeKind.BinaryExpr) {
 				const bd = d.index.data as BinaryExprData;
 				if (bd.operator === ".." || bd.operator === "...") {
 					const elemType = (arrType.kind === TypeKind.String) ? charType() : getElementType(arrType);
-					createSpan(elemType);
+					accessType = createSpan(elemType);
+				} else if (arrType.kind === TypeKind.String) {
+					accessType = stringType();
 				} else {
-					getElementType(arrType);
+					accessType = getElementType(arrType);
 				}
+			} else if (arrType.kind === TypeKind.String) {
+				accessType = stringType();
 			} else {
-				getElementType(arrType);
+				accessType = getElementType(arrType);
 			}
+			node.nodeType = accessType;
+			accessType;
 		},
 		NodeKind.ObjectLiteral => {
 			const d = node.data as ObjectLiteralData;
 			if (expectedType !== null && expectedType.kind === TypeKind.Object
 				&& expectedType.typeChildren !== null) {
-				// Nim parity: stamp literal with expected type, propagate field types
+				// Implementation parity: stamp literal with expected type, propagate field types
 				node.nodeType = expectedType;
 				let fi = 0;
 				while (fi < d.properties.length) {
@@ -214,10 +222,27 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 		},
 		NodeKind.TypeAssertion => {
 			const d = node.data as TypeAssertionData;
-			checkExpr(ctx, d.asExpr, null as unknown as Type);
+			const srcType = checkExpr(ctx, d.asExpr, null as unknown as Type);
 			const targetType = (d.asType !== "") ? resolveAnnotation(d.asType, ctx) : unknownType();
-			node.nodeType = targetType;
-			targetType;
+			// Nim parity: resolve as-cast target to actual union variant type.
+			// If source is Union and target matches a variant by first field name,
+			// use the variant type (preserves identity for codegen variant access).
+			if (srcType !== null && srcType.kind === TypeKind.Union && targetType.kind === TypeKind.Object && srcType.typeChildren !== null && targetType.typeNames !== null && targetType.typeNames.length > 0) {
+				const firstField = targetType.typeNames[0];
+				let vi = 0;
+				while (vi < srcType.typeChildren.length) {
+					const variant = srcType.typeChildren[vi];
+					if (variant !== null && variant.typeNames !== null && variant.typeNames.length > 0 && variant.typeNames[0] === firstField) {
+						node.nodeType = variant;
+						break;
+					}
+					vi = vi + 1;
+				}
+				if (node.nodeType === null) node.nodeType = targetType;
+			} else {
+				node.nodeType = targetType;
+			}
+			node.nodeType;
 		},
 		NodeKind.SpreadExpr => {
 			const d = node.data as SpreadExprData;
@@ -255,7 +280,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 				&& d.moveArg.kind !== NodeKind.MemberExpr
 				&& d.moveArg.kind !== NodeKind.ArrayAccess
 				&& d.moveArg.kind !== NodeKind.CallExpr) {
-				addError(ctx, "invalid 'move' operand: expected identifier, field access, array access, or call expression");
+				addError(ctx, "invalid 'move' operand: expected identifier, field access, array access, or call expression", node.location.line, node.location.column);
 			}
 			checkExpr(ctx, d.moveArg, null as unknown as Type);
 		},
@@ -280,6 +305,16 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			const d = node.data as HiddenStdConvData;
 			checkExpr(ctx, d.convExpr, null as unknown as Type);
 			d.convType;
+		},
+		NodeKind.MacroInvocation => {
+			// Implementation parity: pragma/macro args are type-checked
+			const md = node.data as MacroInvocationData;
+			let ai = 0;
+			while (ai < md.macroArgs.length) {
+				checkExpr(ctx, md.macroArgs[ai], null as unknown as Type);
+				ai = ai + 1;
+			}
+			voidType();
 		},
 		_ => unknownType(),
 	};
@@ -368,7 +403,7 @@ function defaultTextToNode(text: string): Node {
 		return makeStringDefault(text.slice(1, text.length - 1));
 	}
 	// Try parsing as number (num !== num checks for NaN)
-	const num = parseFloat(text);
+	const num = parseNumberLiteral(text);
 	if (num === num) return makeNumberDefault(num);
 	// Empty array — use identifier fallback
 	// Identifier (enum member, variable, etc.)
@@ -424,7 +459,7 @@ function checkTryExpr(ctx: CheckerContext, node: Node): Type {
 
 function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Type {
 	const d = node.data as CallExprData;
-	// Check callee FIRST to get param types for expectedType propagation (Nim parity)
+	// Check callee FIRST to get param types for expectedType propagation (Implementation parity)
 	let calleeType = checkExpr(ctx, d.callee, null as unknown as Type);
 	// Detect overloaded paths early — these need argTypes for scoring
 	let needsOverloadScoring = false;
@@ -492,7 +527,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 		return resolveOverloadCall(ctx, overloadSym, argTypes, node);
 	}
 	// Extension method overloads: obj.method(args) where multiple extensions match
-	// Nim-aligned: collect all extensions by name, then filter by receiver type compatibility
+	// Standard-aligned: collect all extensions by name, then filter by receiver type compatibility
 	// Skip when objType is Unknown — can't meaningfully select an overload
 	if (d.callee.kind === NodeKind.MemberExpr && ctx.extensionRegistry !== null) {
 		const me = d.callee.data as MemberExprData;
@@ -525,9 +560,9 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 		// Fill default arguments if too few args provided
 		const minAr = getMinArity(calleeType);
 		if (argTypes.length < minAr) {
-			addError(ctx, "Too few arguments: expected at least " + intToString(minAr) + ", got " + intToString(argTypes.length));
+			addError(ctx, "Too few arguments: expected at least " + intToString(minAr) + ", got " + intToString(argTypes.length), node.location.line, node.location.column);
 		} else if (argTypes.length > calleeType.typeChildren.length) {
-			addError(ctx, "Too many arguments: expected at most " + intToString(calleeType.typeChildren.length) + ", got " + intToString(argTypes.length));
+			addError(ctx, "Too many arguments: expected at most " + intToString(calleeType.typeChildren.length) + ", got " + intToString(argTypes.length), node.location.line, node.location.column);
 		} else if (argTypes.length < calleeType.typeChildren.length) {
 			const calleeNameForDef = getCalleeNameForDefaults(node);
 			if (calleeNameForDef !== "") {
@@ -544,9 +579,9 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 				&& argTypes[pi].kind !== TypeKind.Function) {
 				if (!isAssignable(argTypes[pi], paramType)) {
 					const calleeName = getCalleeName(d.callee);
-					addError(ctx, "Argument type mismatch in '" + calleeName + "' arg " + intToString(pi) + ": got " + typeNameOf(argTypes[pi]) + ", expected " + typeNameOf(paramType));
+					addError(ctx, "Argument type mismatch in '" + calleeName + "' arg " + intToString(pi) + ": got " + typeNameOf(argTypes[pi]) + ", expected " + typeNameOf(paramType), node.location.line, node.location.column);
 				} else if (needsStdConv(argTypes[pi], paramType)) {
-					// Nim parity: insert HiddenStdConv for numeric widening/narrowing OR Span coercion
+					// Implementation parity: insert HiddenStdConv for numeric widening/narrowing OR Span coercion
 					const convTok = createToken(TokenKind.Ident, "", d.arguments[pi].location.line);
 					const convNode = createNode(NodeKind.HiddenStdConv, { convExpr: d.arguments[pi], convType: paramType }, convTok);
 					convNode.nodeType = paramType;
@@ -602,7 +637,7 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, argTypes: Type[],
 	const idx = resolveOverloadIdxWithInheritance(ctx, candidates, argTypes, scopeDepths);
 	if (idx === -2) {
 		// Ambiguous call — find the two matching candidates for error
-		addError(ctx, "Ambiguous call to overloaded function '" + sym.name + "'");
+		addError(ctx, "Ambiguous call to overloaded function '" + sym.name + "'", callNode.location.line, callNode.location.column);
 		return getReturnType(sym.symbolType);
 	}
 	if (idx === -1) {
@@ -621,7 +656,7 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, argTypes: Type[],
 			}
 			ci = ci + 1;
 		}
-		addError(ctx, msg);
+		addError(ctx, msg, callNode.location.line, callNode.location.column);
 		return getReturnType(sym.symbolType);
 	}
 	// Success — store resolved index + symbol on AST node, fill default args, infer return
@@ -684,7 +719,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 	}
 	let idx = resolveOverloadIdxWithInheritance(ctx, candidates, argTypes, scopeDepths);
 	if (idx === -2) {
-		// Tiebreaker: prefer concrete extension over generic (Nim: concrete always wins)
+		// Tiebreaker: prefer concrete extension over generic (Standard reference pattern)
 		let concreteIdx = -1;
 		let concreteCount = 0;
 		let ti = 0;
@@ -698,7 +733,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		if (concreteCount === 1) {
 			idx = concreteIdx;
 		} else {
-			addError(ctx, "Ambiguous call to overloaded extension method '" + methodName + "'");
+			addError(ctx, "Ambiguous call to overloaded extension method '" + methodName + "'", callNode.location.line, callNode.location.column);
 			return getReturnType(candidates[0]);
 		}
 	}
@@ -711,7 +746,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 			}
 			ci = ci + 1;
 		}
-		addError(ctx, msg);
+		addError(ctx, msg, callNode.location.line, callNode.location.column);
 		return getReturnType(candidates[0]);
 	}
 	// Set resolvedSym to the winning extension's symbol
@@ -848,7 +883,7 @@ function isPointerInC(t: Type, ctx: CheckerContext): boolean {
 function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 	const d = node.data as MemberExprData;
 	const objType = checkExpr(ctx, d.object, null as unknown as Type);
-	// Enum member access: Color.Red → rewrite to Identifier "Color_Red" (Nim parity: nkSym)
+	// Enum member access: Color.Red → rewrite to Identifier "Color_Red" (standard reference pattern)
 	// This rewrites the AST so codegen never sees enum-specific MemberExpr
 	if (objType.kind === TypeKind.Enum) {
 		const enumName = objType.typeName;
@@ -990,7 +1025,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 			return methodType;
 		}
 	}
-	// Fall back to extension registry — Nim-aligned type-based lookup
+	// Fall back to extension registry — standard-aligned type-based lookup
 	if (ctx.extensionRegistry !== null) {
 		const allByName = findAllExtensionsByName(ctx.extensionRegistry, d.property);
 		let ext = findFirstMatchingExt(allByName, objType);
@@ -1084,7 +1119,7 @@ export function checkEnumExhaustiveness(ctx: CheckerContext, enumType: Type, cov
 			if (c === member) { found = true; }
 		}
 		if (!found) {
-			addError(ctx, "Non-exhaustive match: missing '" + enumType.typeName + "." + member + "'");
+			addError(ctx, "Non-exhaustive match: missing '" + enumType.typeName + "." + member + "'", 0, 0);
 		}
 	}
 }

@@ -190,26 +190,26 @@ export function lowerVarHoist(program: Node, ctx: TransformContext): Node {
 }
 
 // ===== Tests =====
-test "const unchanged" { expect(stmtCountAfter("const x = 1;", lowerVarHoist) === 1); }
+test "const unchanged" { assert stmtCountAfter("const x = 1;", lowerVarHoist) === 1; }
 
-test "let unchanged" { expect(stmtCountAfter("let x = 1;", lowerVarHoist) === 1); }
+test "let unchanged" { assert stmtCountAfter("let x = 1;", lowerVarHoist) === 1; }
 
-test "module var stays" { expect(firstStmtKindAfter("var x = 1;", lowerVarHoist) === NodeKind.VariableDecl); }
+test "module var stays" { assert firstStmtKindAfter("var x = 1;", lowerVarHoist) === NodeKind.VariableDecl; }
 
-test "function with var" { expect(stmtCountAfter("function f() { var x = 1; }", lowerVarHoist) === 1); }
+test "function with var" { assert stmtCountAfter("function f() { var x = 1; }", lowerVarHoist) === 1; }
 
-test "function with var is FunctionDecl" { expect(firstStmtKindAfter("function f() { var x = 1; }", lowerVarHoist) === NodeKind.FunctionDecl); }
+test "function with var is FunctionDecl" { assert firstStmtKindAfter("function f() { var x = 1; }", lowerVarHoist) === NodeKind.FunctionDecl; }
 
-test "no var passthrough" { expect(stmtCountAfter("function f() { let x = 1; }", lowerVarHoist) === 1); }
+test "no var passthrough" { assert stmtCountAfter("function f() { let x = 1; }", lowerVarHoist) === 1; }
 
-test "stmt count preserved" { expect(stmtCountAfter("let a = 1; let b = 2;", lowerVarHoist) === 2); }
+test "stmt count preserved" { assert stmtCountAfter("let a = 1; let b = 2;", lowerVarHoist) === 2; }
 
 test "var hoisted adds let at top" {
 	// function f() { var x = 1; } → body has 2 stmts: let x = null; x = 1;
-	expect(fnBodyStmtCount("function f() { var x = 1; }", lowerVarHoist) === 2);
+	assert fnBodyStmtCount("function f() { var x = 1; }", lowerVarHoist) === 2;
 }
 
 test "nested fn var not hoisted to outer" {
 	// function f() { function g() { var x = 1; } } → outer body still 1 stmt (nested fn)
-	expect(fnBodyStmtCount("function f() { function g() { var x = 1; } }", lowerVarHoist) === 1);
+	assert fnBodyStmtCount("function f() { function g() { var x = 1; } }", lowerVarHoist) === 1;
 }

@@ -18,7 +18,7 @@ import {
 	AwaitExprData, YieldExprData, MoveExprData, OutExprData,
 	HiddenDerefData, HiddenStdConvData,
 	TypeAssertionData, DestructuringDeclData, QuoteExprData, ComptimeBlockData,
-	MacroInvocationData, TestDeclData,
+	MacroInvocationData, TestDeclData, AssertStmtData,
 } from "../ast/node";
 import { TransformContext } from "./context";
 
@@ -42,6 +42,7 @@ export function walkNode(node: Node, visitor: Visitor): Node {
 // Apply f to all child nodes of a given node (mutates in place).
 // Core dispatch used by walkChildren, and directly by bounded walkers
 // that stop at function boundaries.
+// SYNC: forEachChild in ast/visitor.ms must handle the same NodeKinds (read-only variant).
 export function mapChildren(node: Node, f: Visitor): void {
 	match (node.kind) {
 		// Program root
@@ -340,6 +341,10 @@ export function mapChildren(node: Node, f: Visitor): void {
 			const d = node.data as TestDeclData;
 			d.testBody = f(d.testBody);
 		},
+		NodeKind.AssertStmt => {
+			const d = node.data as AssertStmtData;
+			d.assertExpr = f(d.assertExpr);
+		},
 		// Leaf nodes (no children to walk)
 		_ => {},
 	};
@@ -416,6 +421,9 @@ export function walkExpandBlocks(node: Node, expander: StmtExpander, ctx: Transf
 		NodeKind.TestDecl => {
 			const d = node.data as TestDeclData;
 			walkExpandBlocks(d.testBody, expander, ctx);
+		},
+		NodeKind.AssertStmt => {
+			// AssertStmt has only an expression child — no block to expand
 		},
 		// Control flow — recurse into bodies so nested return-match gets expanded
 		NodeKind.IfStmt => {

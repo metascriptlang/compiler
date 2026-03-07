@@ -16,7 +16,7 @@
 
 import {
 	Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation,
-	ArrayPatternData, IdentifierData,
+	ArrayPatternData, IdentifierData, NF_CURSOR,
 } from "../../ast/node";
 import { TransformContext, freshTemp } from "../context";
 import { Type, TypeKind, numberType, stringType } from "../../checker/types";
@@ -60,8 +60,9 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	const lenName = freshTemp(ctx, "len");
 	const iterType = d.forOfIterable.nodeType;
 
-	// const $iter = arr;
+	// const $iter = arr; — cursor (borrow), DRC must not destroy (Nim: sfCursor)
 	const iterDecl = makeVarDecl(iterName, d.forOfIterable, DeclKind.Const, loc);
+	iterDecl.flags = iterDecl.flags | NF_CURSOR;
 
 	// let $idx = 0;
 	const idxDecl = makeVarDecl(idxName, makeNumber(0, loc), DeclKind.Let, loc);
@@ -100,8 +101,10 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		}
 	} else {
 		// Simple binding: const item = $iter[$idx];
+		// NF_CURSOR: for-of binding is a borrow from the array — DRC must skip destroy (Nim: sfCursor)
 		const itemAccess = makeArrayAccess(makeTypedIdent(iterName, iterType, loc), makeTypedIdent(idxName, numberType(), loc), loc);
 		const itemDecl = makeVarDecl(d.forOfBinding, itemAccess, itemDk, loc);
+		itemDecl.flags = itemDecl.flags | NF_CURSOR;
 		whileStmts.push(itemDecl);
 	}
 
@@ -127,8 +130,9 @@ function lowerCollectionForOf(d: ForOfStmtData, iterType: Type, ctx: TransformCo
 	const slotName = freshTemp(ctx, "slot");
 	const capName = freshTemp(ctx, "cap");
 
-	// const $iter = iterable;
+	// const $iter = iterable; — cursor (borrow), DRC must not destroy (Nim: sfCursor)
 	const iterDecl = makeVarDecl(iterName, d.forOfIterable, DeclKind.Const, loc);
+	iterDecl.flags = iterDecl.flags | NF_CURSOR;
 
 	// let $slot = 0;
 	const slotDecl = makeVarDecl(slotName, makeNumber(0, loc), DeclKind.Let, loc);
@@ -248,12 +252,12 @@ function expandArrayPattern(pattern: Node, baseExpr: Node, dk: DeclKind, loc: So
 }
 
 // ===== Tests =====
-test "for-of becomes block" { expect(firstStmtKindAfter("for (const x of arr) { use(x); }", lowerForOf) === NodeKind.BlockStmt); }
+test "for-of becomes block" { assert firstStmtKindAfter("for (const x of arr) { use(x); }", lowerForOf) === NodeKind.BlockStmt; }
 
-test "regular for unchanged" { expect(firstStmtKindAfter("for (let i = 0; i < 10; i++) {}", lowerForOf) === NodeKind.ForStmt); }
+test "regular for unchanged" { assert firstStmtKindAfter("for (let i = 0; i < 10; i++) {}", lowerForOf) === NodeKind.ForStmt; }
 
-test "for-of preserves surrounding stmts" { expect(stmtCountAfter("x(); for (const i of arr) {} y();", lowerForOf) === 3); }
+test "for-of preserves surrounding stmts" { assert stmtCountAfter("x(); for (const i of arr) {} y();", lowerForOf) === 3; }
 
-test "destructured for-of becomes block" { expect(firstStmtKindAfter("for (const [a, b] of arr) { use(a); }", lowerForOf) === NodeKind.BlockStmt); }
+test "destructured for-of becomes block" { assert firstStmtKindAfter("for (const [a, b] of arr) { use(a); }", lowerForOf) === NodeKind.BlockStmt; }
 
-test "destructured for-of preserves surrounding" { expect(stmtCountAfter("x(); for (const [a, b] of arr) {} y();", lowerForOf) === 3); }
+test "destructured for-of preserves surrounding" { assert stmtCountAfter("x(); for (const [a, b] of arr) {} y();", lowerForOf) === 3; }

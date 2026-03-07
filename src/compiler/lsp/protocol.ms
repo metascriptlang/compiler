@@ -281,137 +281,137 @@ export function lspResolveImport(basePath: string, importSpec: string): string {
 }
 
 // ===== Tests =====
-test "uri to path" { expect(lspUriToPath("file:///Users/foo/bar.ms") === "/Users/foo/bar.ms"); }
+test "uri to path" { assert lspUriToPath("file:///Users/foo/bar.ms") === "/Users/foo/bar.ms"; }
 
-test "path to uri" { expect(lspPathToUri("/a/b.ms") === "file:///a/b.ms"); }
+test "path to uri" { assert lspPathToUri("/a/b.ms") === "file:///a/b.ms"; }
 
-test "non-file uri unchanged" { expect(lspUriToPath("http://example.com") === "http://example.com"); }
+test "non-file uri unchanged" { assert lspUriToPath("http://example.com") === "http://example.com"; }
 
-test "simple string" { expect(lspJsonString("hello") === "\"hello\""); }
+test "simple string" { assert lspJsonString("hello") === "\"hello\""; }
 
-test "escapes backslash" { expect(lspJsonString("a\\b") === "\"a\\\\b\""); }
+test "escapes backslash" { assert lspJsonString("a\\b") === "\"a\\\\b\""; }
 
-test "escapes quote" { expect(lspJsonString("a\"b") === "\"a\\\"b\""); }
+test "escapes quote" { assert lspJsonString("a\"b") === "\"a\\\"b\""; }
 
-test "escapes newline" { expect(lspJsonString("a\nb") === "\"a\\nb\""); }
+test "escapes newline" { assert lspJsonString("a\nb") === "\"a\\nb\""; }
 
-test "empty string" { expect(lspJsonString("") === "\"\""); }
+test "empty string" { assert lspJsonString("") === "\"\""; }
 
 test "number" {
-	expect(lspJsonNumber(42) === "42");
-	expect(lspJsonNumber(0) === "0");
+	assert lspJsonNumber(42) === "42";
+	assert lspJsonNumber(0) === "0";
 }
 
-test "bool true" { expect(lspJsonBool(true) === "true"); }
+test "bool true" { assert lspJsonBool(true) === "true"; }
 
-test "bool false" { expect(lspJsonBool(false) === "false"); }
+test "bool false" { assert lspJsonBool(false) === "false"; }
 
-test "null" { expect(lspJsonNull() === "null"); }
+test "null" { assert lspJsonNull() === "null"; }
 
 test "extract method" {
 	const json = "{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"id\":1}";
-	expect(lspGetField(json, "method") === "initialize");
+	assert lspGetField(json, "method") === "initialize";
 }
 
 test "extract nested value" {
 	const json = "{\"uri\":\"file:///a.ms\",\"text\":\"const x = 1;\"}";
-	expect(lspGetField(json, "uri") === "file:///a.ms");
-	expect(lspGetField(json, "text") === "const x = 1;");
+	assert lspGetField(json, "uri") === "file:///a.ms";
+	assert lspGetField(json, "text") === "const x = 1;";
 }
 
 test "missing field" {
 	const json = "{\"a\":\"1\"}";
-	expect(lspGetField(json, "b") === "");
+	assert lspGetField(json, "b") === "";
 }
 
 test "escaped value" {
 	const json = "{\"msg\":\"hello\\nworld\"}";
-	expect(lspGetField(json, "msg") === "hello\nworld");
+	assert lspGetField(json, "msg") === "hello\nworld";
 }
 
 test "extract id" {
 	const json = "{\"jsonrpc\":\"2.0\",\"id\":42}";
-	expect(lspGetNumberField(json, "id") === 42);
+	assert lspGetNumberField(json, "id") === 42;
 }
 
 test "extract zero" {
 	const json = "{\"line\":0,\"character\":5}";
-	expect(lspGetNumberField(json, "line") === 0);
-	expect(lspGetNumberField(json, "character") === 5);
+	assert lspGetNumberField(json, "line") === 0;
+	assert lspGetNumberField(json, "character") === 5;
 }
 
 test "missing field" {
 	const json = "{\"a\":1}";
-	expect(lspGetNumberField(json, "b") === -1);
+	assert lspGetNumberField(json, "b") === -1;
 }
 
 test "extract params" {
 	const json = "{\"method\":\"hover\",\"params\":{\"line\":1,\"col\":5}}";
 	const params = lspGetObjectField(json, "params");
-	expect(params === "{\"line\":1,\"col\":5}");
+	assert params === "{\"line\":1,\"col\":5}";
 }
 
 test "nested object" {
 	const json = "{\"params\":{\"position\":{\"line\":0}}}";
 	const params = lspGetObjectField(json, "params");
-	expect(params === "{\"position\":{\"line\":0}}");
+	assert params === "{\"position\":{\"line\":0}}";
 }
 
 test "missing object" {
 	const json = "{\"a\":1}";
-	expect(lspGetObjectField(json, "b") === "");
+	assert lspGetObjectField(json, "b") === "";
 }
 
 test "response format" {
 	const r = lspResponse("1", "{\"capabilities\":{}}");
-	expect(lspGetField(r, "jsonrpc") === "2.0");
-	expect(lspGetNumberField(r, "id") === 1);
+	assert lspGetField(r, "jsonrpc") === "2.0";
+	assert lspGetNumberField(r, "id") === 1;
 }
 
 test "notification format" {
 	const n = lspNotification("textDocument/publishDiagnostics", "{\"uri\":\"file:///a.ms\"}");
-	expect(lspGetField(n, "method") === "textDocument/publishDiagnostics");
+	assert lspGetField(n, "method") === "textDocument/publishDiagnostics";
 }
 
 test "error response format" {
 	const e = lspErrorResponse("1", -32601, "Method not found");
-	expect(lspGetNumberField(e, "id") === 1);
+	assert lspGetNumberField(e, "id") === 1;
 }
 
 test "parse content length" {
-	expect(lspParseContentLength("Content-Length: 123") === 123);
-	expect(lspParseContentLength("Content-Length: 0") === 0);
+	assert lspParseContentLength("Content-Length: 123") === 123;
+	assert lspParseContentLength("Content-Length: 0") === 0;
 }
 
 test "not content length" {
-	expect(lspParseContentLength("Content-Type: json") === -1);
-	expect(lspParseContentLength("") === -1);
+	assert lspParseContentLength("Content-Type: json") === -1;
+	assert lspParseContentLength("") === -1;
 }
 
 test "format message" {
 	const msg = lspFormatMessage("{\"id\":1}");
 	// Should start with Content-Length header
 	const prefix = sliceStr(msg, 0, 16);
-	expect(prefix === "Content-Length: ");
+	assert prefix === "Content-Length: ";
 }
 
 test "dirname basic" {
-	expect(lspDirname("/a/b/c.ms") === "/a/b");
-	expect(lspDirname("/a/b.ms") === "/a");
-	expect(lspDirname("/a.ms") === "/");
+	assert lspDirname("/a/b/c.ms") === "/a/b";
+	assert lspDirname("/a/b.ms") === "/a";
+	assert lspDirname("/a.ms") === "/";
 }
 
 test "resolve import same dir" {
-	expect(lspResolveImport("/a/b/c.ms", "./utils") === "/a/b/utils.ms");
-	expect(lspResolveImport("/a/b/c.ms", "./utils.ms") === "/a/b/utils.ms");
+	assert lspResolveImport("/a/b/c.ms", "./utils") === "/a/b/utils.ms";
+	assert lspResolveImport("/a/b/c.ms", "./utils.ms") === "/a/b/utils.ms";
 }
 
 test "resolve import parent dir" {
-	expect(lspResolveImport("/a/b/c.ms", "../utils") === "/a/utils.ms");
-	expect(lspResolveImport("/a/b/c/d.ms", "../../utils") === "/a/utils.ms");
+	assert lspResolveImport("/a/b/c.ms", "../utils") === "/a/utils.ms";
+	assert lspResolveImport("/a/b/c/d.ms", "../../utils") === "/a/utils.ms";
 }
 
 test "resolve import non-relative returns empty" {
-	expect(lspResolveImport("/a/b.ms", "std/testing") === "");
-	expect(lspResolveImport("/a/b.ms", "lodash") === "");
+	assert lspResolveImport("/a/b.ms", "std/testing") === "";
+	assert lspResolveImport("/a/b.ms", "lodash") === "";
 }

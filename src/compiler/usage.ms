@@ -12,14 +12,15 @@ export function printUsage(): void {
 	console.log("  msc " + dim("[COMMAND]") + " <file.ms> " + dim("[OPTIONS]"));
 	console.log("");
 	console.log(yellow("COMMANDS:"));
-	console.log("  " + cyan("compile") + " <file>        Compile to target backend");
-	console.log("  " + cyan("run") + " <file>            Compile and run");
-	console.log("  " + cyan("test") + " <file>           Run tests");
-	console.log("  " + cyan("check") + " <file>          Type check only (no codegen)");
 	console.log("  " + cyan("build") + "                 Build project (reads build.ms)");
 	console.log("  " + cyan("build") + " <file>          Build from explicit entry point");
+	console.log("  " + cyan("run") + " <file>            Build and run");
+	console.log("  " + cyan("test") + " <file>           Run tests");
+	console.log("  " + cyan("check") + " <file>          Type check only (no codegen)");
+	console.log("  " + cyan("fmt") + " <file>            Format source file");
 	console.log("  " + cyan("init") + " [name]            Create new project");
 	console.log("  " + cyan("clean") + "                 Remove build artifacts");
+	console.log("  " + cyan("lsp") + "                   Start language server");
 	console.log("");
 	console.log(yellow("VISIBILITY/DEBUGGING:"));
 	console.log("  " + cyan("dump-tokens") + " <file>    Show tokenization output");
@@ -48,13 +49,12 @@ export function printUsage(): void {
 	console.log("  " + cyan("-f") + ", " + cyan("--force") + "           Force full rebuild");
 	console.log("");
 	console.log(yellow("EXAMPLES:"));
-	console.log("  msc compile hello.ms                    " + dim("# Compile to C (default)"));
-	console.log("  msc compile --target=js main.ms         " + dim("# Compile to JavaScript"));
+	console.log("  msc build hello.ms                      " + dim("# Build single file to C"));
+	console.log("  msc build                               " + dim("# Build project using build.ms"));
+	console.log("  msc build --target=js main.ms           " + dim("# Build to JavaScript"));
 	console.log("  msc run fibonacci.ms                    " + dim("# Build and run"));
 	console.log("  msc test src/index.ms                   " + dim("# Run tests"));
 	console.log("  msc check src/index.ms                  " + dim("# Type check only"));
 	console.log("  msc dump-ast hello.ms                   " + dim("# Show AST"));
-	console.log("  msc build                               " + dim("# Build using build.ms config"));
-	console.log("  msc pipeline hello.ms                   " + dim("# Show all pipeline stages"));
 	console.log("");
 }

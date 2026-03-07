@@ -107,28 +107,28 @@ function parsedAsType(input: string): string {
 }
 
 // ===== Tests =====
-test "non-cast unchanged" { expect(firstExprKindAfter("x + y;", injectRangeChecks) === NodeKind.BinaryExpr); }
+test "non-cast unchanged" { assert firstExprKindAfter("x + y;", injectRangeChecks) === NodeKind.BinaryExpr; }
 
-test "call unchanged" { expect(firstExprKindAfter("f();", injectRangeChecks) === NodeKind.CallExpr); }
+test "call unchanged" { assert firstExprKindAfter("f();", injectRangeChecks) === NodeKind.CallExpr; }
 
-test "passthrough" { expect(stmtCountAfter("const x = 1;", injectRangeChecks) === 1); }
+test "passthrough" { assert stmtCountAfter("const x = 1;", injectRangeChecks) === 1; }
 
-test "member access unchanged" { expect(firstExprKindAfter("obj.x;", injectRangeChecks) === NodeKind.MemberExpr); }
+test "member access unchanged" { assert firstExprKindAfter("obj.x;", injectRangeChecks) === NodeKind.MemberExpr; }
 
-test "identifier unchanged" { expect(firstExprKindAfter("x;", injectRangeChecks) === NodeKind.Identifier); }
+test "identifier unchanged" { assert firstExprKindAfter("x;", injectRangeChecks) === NodeKind.Identifier; }
 
-test "parser stores asType" { expect(parsedAsType("x as int8;") === "int8"); }
+test "parser stores asType" { assert parsedAsType("x as int8;") === "int8"; }
 
-test "parser stores asType number" { expect(parsedAsType("x as number;") === "number"); }
+test "parser stores asType number" { assert parsedAsType("x as number;") === "number"; }
 
-test "parser stores asType union" { expect(parsedAsType("x as string | null;") === "string | null"); }
+test "parser stores asType union" { assert parsedAsType("x as string | null;") === "string | null"; }
 
-test "cast to int8 becomes range check" { expect(castExprKind("x as int8;") === NodeKind.CallExpr); }
+test "cast to int8 becomes range check" { assert castExprKind("x as int8;") === NodeKind.CallExpr; }
 
-test "cast to uint16 becomes range check" { expect(castExprKind("x as uint16;") === NodeKind.CallExpr); }
+test "cast to uint16 becomes range check" { assert castExprKind("x as uint16;") === NodeKind.CallExpr; }
 
-test "cast to int32 becomes range check" { expect(castExprKind("x as int32;") === NodeKind.CallExpr); }
+test "cast to int32 becomes range check" { assert castExprKind("x as int32;") === NodeKind.CallExpr; }
 
-test "cast to number unchanged" { expect(castExprKind("x as number;") === NodeKind.TypeAssertion); }
+test "cast to number unchanged" { assert castExprKind("x as number;") === NodeKind.TypeAssertion; }
 
-test "cast to string unchanged" { expect(castExprKind("x as string;") === NodeKind.TypeAssertion); }
+test "cast to string unchanged" { assert castExprKind("x as string;") === NodeKind.TypeAssertion; }

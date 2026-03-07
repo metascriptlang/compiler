@@ -197,72 +197,72 @@ export function stripAnsi(text: string): string {
 // ===== Tests =====
 test "red wraps text" {
 	const result = red("hello");
-	expect(result.length > 5);
+	assert result.length > 5;
 }
 
 test "bold wraps text" {
 	const result = bold("hello");
-	expect(result.length > 5);
+	assert result.length > 5;
 }
 
 test "green wraps text" {
 	const result = green("ok");
-	expect(result.length > 2);
+	assert result.length > 2;
 }
 
 test "bold + red composes" {
 	const result = bold(red("error"));
-	expect(result.length > 10);
+	assert result.length > 10;
 }
 
 test "dim composes" {
 	const result = dim(gray("faded"));
-	expect(result.length > 5);
+	assert result.length > 5;
 }
 
 test "error is bold red" {
 	const e = error("fail");
-	expect(e.length > 4);
+	assert e.length > 4;
 }
 
 test "success is bold green" {
 	const s = success("pass");
-	expect(s.length > 4);
+	assert s.length > 4;
 }
 
 test "warning is bold yellow" {
 	const w = warning("warn");
-	expect(w.length > 4);
+	assert w.length > 4;
 }
 
 test "info is bold cyan" {
 	const inf = info("note");
-	expect(inf.length > 4);
+	assert inf.length > 4;
 }
 
 test "hint is dim" {
 	const h = hint("maybe");
-	expect(h.length > 5);
+	assert h.length > 5;
 }
 
 test "path is underline cyan" {
 	const p = path("/foo/bar");
-	expect(p.length > 8);
+	assert p.length > 8;
 }
 
 test "strip removes codes" {
 	const colored = red("hello");
 	const stripped = stripAnsi(colored);
-	expect(stripped === "hello");
+	assert stripped === "hello";
 }
 
 test "strip handles nested" {
 	const colored = bold(red("x"));
 	const stripped = stripAnsi(colored);
-	expect(stripped === "x");
+	assert stripped === "x";
 }
 
 test "strip preserves plain text" {
 	const stripped = stripAnsi("plain");
-	expect(stripped === "plain");
+	assert stripped === "plain";
 }

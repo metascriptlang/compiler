@@ -1,6 +1,6 @@
 // Module Graph — core data structures for multi-module compilation
 //
-// Nim reference: modulegraphs.nim (ModuleGraph, Iface, indexed by FileIndex)
+// Reference implementation equivalent: the module graph structures.
 // Zig reference: module/loader.zig (Module struct, ModuleState, dependency graph)
 //
 // Arrays passed by pointer — bare T[] types (wrappers removed).
@@ -43,7 +43,7 @@ export interface Module {
 }
 
 // ===== Circular Dependency Info =====
-// Nim parallel: c.recursiveDep in importer.nim — records cycle for warnings
+// Reference parallel implementation: records cycle for warnings.
 
 export interface CircularDep {
 	fromPath: string;    // module that triggered the circular import
@@ -167,66 +167,66 @@ export function hasExportName(mod: Module, name: string): boolean {
 // ===== Tests =====
 test "create empty graph" {
 	const g = createModuleGraph();
-	expect(g.modules.length === 0);
-	expect(g.modulePaths.length === 0);
-	expect(g.loadOrder.length === 0);
-	expect(g.importStack.length === 0);
+	assert g.modules.length === 0;
+	assert g.modulePaths.length === 0;
+	assert g.loadOrder.length === 0;
+	assert g.importStack.length === 0;
 }
 
 test "create module" {
 	const m = createModule("/a/b.ms");
-	expect(m.path === "/a/b.ms");
-	expect(m.state === ModuleState.Unloaded);
-	expect(m.exportNames.length === 0);
-	expect(m.imports.length === 0);
+	assert m.path === "/a/b.ms";
+	assert m.state === ModuleState.Unloaded;
+	assert m.exportNames.length === 0;
+	assert m.imports.length === 0;
 }
 
 test "add and find module" {
 	const g = createModuleGraph();
 	const m = createModule("/a/b.ms");
 	addModule(g, m);
-	expect(g.modules.length === 1);
+	assert g.modules.length === 1;
 	const found = findModule(g, "/a/b.ms");
-	expect(found !== null);
-	expect(found.path === "/a/b.ms");
+	assert found !== null;
+	assert found.path === "/a/b.ms";
 }
 
 test "find returns null for missing" {
 	const g = createModuleGraph();
 	const found = findModule(g, "/nope.ms");
-	expect(found === null);
+	assert found === null;
 }
 
 test "findModuleIndex" {
 	const g = createModuleGraph();
 	addModule(g, createModule("/a.ms"));
 	addModule(g, createModule("/b.ms"));
-	expect(findModuleIndex(g, "/a.ms") === 0);
-	expect(findModuleIndex(g, "/b.ms") === 1);
-	expect(findModuleIndex(g, "/c.ms") === -1);
+	assert findModuleIndex(g, "/a.ms") === 0;
+	assert findModuleIndex(g, "/b.ms") === 1;
+	assert findModuleIndex(g, "/c.ms") === -1;
 }
 
 test "hasModule" {
 	const g = createModuleGraph();
 	const m = createModule("/x.ms");
 	addModule(g, m);
-	expect(hasModule(g, "/x.ms"));
-	expect(!hasModule(g, "/y.ms"));
+	assert hasModule(g, "/x.ms");
+	assert !hasModule(g, "/y.ms");
 }
 
 test "import stack push/pop" {
 	const g = createModuleGraph();
-	expect(!isInImportStack(g, "/a.ms"));
+	assert !isInImportStack(g, "/a.ms");
 	pushImportStack(g, "/a.ms");
-	expect(isInImportStack(g, "/a.ms"));
-	expect(!isInImportStack(g, "/b.ms"));
+	assert isInImportStack(g, "/a.ms");
+	assert !isInImportStack(g, "/b.ms");
 	pushImportStack(g, "/b.ms");
-	expect(isInImportStack(g, "/b.ms"));
+	assert isInImportStack(g, "/b.ms");
 	popImportStack(g);
-	expect(!isInImportStack(g, "/b.ms"));
-	expect(isInImportStack(g, "/a.ms"));
+	assert !isInImportStack(g, "/b.ms");
+	assert isInImportStack(g, "/a.ms");
 	popImportStack(g);
-	expect(!isInImportStack(g, "/a.ms"));
+	assert !isInImportStack(g, "/a.ms");
 }
 
 test "multiple modules" {
@@ -237,27 +237,27 @@ test "multiple modules" {
 	addModule(g, m1);
 	addModule(g, m2);
 	addModule(g, m3);
-	expect(g.modules.length === 3);
-	expect(findModule(g, "/b.ms") !== null);
-	expect(findModule(g, "/d.ms") === null);
+	assert g.modules.length === 3;
+	assert findModule(g, "/b.ms") !== null;
+	assert findModule(g, "/d.ms") === null;
 }
 
 test "module state transitions" {
 	const m = createModule("/x.ms");
-	expect(m.state === ModuleState.Unloaded);
+	assert m.state === ModuleState.Unloaded;
 	m.state = ModuleState.Loading;
-	expect(m.state === ModuleState.Loading);
+	assert m.state === ModuleState.Loading;
 	m.state = ModuleState.Parsed;
-	expect(m.state === ModuleState.Parsed);
+	assert m.state === ModuleState.Parsed;
 	m.state = ModuleState.Ready;
-	expect(m.state === ModuleState.Ready);
+	assert m.state === ModuleState.Ready;
 }
 
 test "hasExportName" {
 	const m = createModule("/x.ms");
 	m.exportNames.push("foo");
 	m.exportNames.push("bar");
-	expect(hasExportName(m, "foo"));
-	expect(hasExportName(m, "bar"));
-	expect(!hasExportName(m, "baz"));
+	assert hasExportName(m, "foo");
+	assert hasExportName(m, "bar");
+	assert !hasExportName(m, "baz");
 }

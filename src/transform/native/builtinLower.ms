@@ -13,7 +13,7 @@ import {
 	Node, NodeKind,
 	CallExprData, MemberExprData, IdentifierData,
 } from "../../ast/node";
-import { TypeKind, createResult, stringType, unknownType } from "../../checker/types";
+import { TypeKind, isNumeric, createResult, stringType, unknownType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { walkNode } from "../walker";
@@ -60,6 +60,24 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 			node.resolvedSym = methodSym;
 			cd.isDirectCall = true;
 			return node;
+		}
+	}
+
+	// Primitive .toString() → msNumberToString(obj) / msBoolToString(obj)
+	if (cd.callee.kind === NodeKind.MemberExpr) {
+		const me2 = cd.callee.data as MemberExprData;
+		if (me2.property === "toString" && me2.object.nodeType !== null) {
+			const tk = me2.object.nodeType.kind;
+			if (isNumeric(me2.object.nodeType)) {
+				const call = makeCall(makeIdent("msNumberToString", loc), [me2.object], loc);
+				call.nodeType = node.nodeType;
+				return call;
+			}
+			if (tk === TypeKind.Boolean) {
+				const call = makeCall(makeIdent("msBoolToString", loc), [me2.object], loc);
+				call.nodeType = node.nodeType;
+				return call;
+			}
 		}
 	}
 
@@ -190,13 +208,13 @@ function preludeLowerCallee(preludeSrc: string, userSrc: string): string {
 	return "OTHER_KIND";
 }
 
-test "passthrough non-call" { expect(stmtCountAfter("const x = 1;", lowerBuiltins) === 1); }
+test "passthrough non-call" { assert stmtCountAfter("const x = 1;", lowerBuiltins) === 1; }
 
-test "passthrough plain call" { expect(firstExprKindAfter("foo();", lowerBuiltins) === NodeKind.CallExpr); }
+test "passthrough plain call" { assert firstExprKindAfter("foo();", lowerBuiltins) === NodeKind.CallExpr; }
 
-test "passthrough function decl" { expect(firstStmtKindAfter("function foo() {}", lowerBuiltins) === NodeKind.FunctionDecl); }
+test "passthrough function decl" { assert firstStmtKindAfter("function foo() {}", lowerBuiltins) === NodeKind.FunctionDecl; }
 
-test "passthrough if stmt" { expect(firstStmtKindAfter("if (x) {}", lowerBuiltins) === NodeKind.IfStmt); }
+test "passthrough if stmt" { assert firstStmtKindAfter("if (x) {}", lowerBuiltins) === NodeKind.IfStmt; }
 
 // Returns the NodeKind of the first ExprStmt's expression after lowering.
 function preludeLowerExprKind(preludeSrc: string, userSrc: string): NodeKind {
@@ -222,12 +240,12 @@ test "@builtin on extern function rewrites to object literal" {
 	const prelude = "@builtin(\"msResultOk\") extern function ok(val: number): number;";
 	const kind = preludeLowerExprKind(prelude, "ok(42);");
 	// @builtin("msResultOk") should rewrite call → ObjectLiteral via inline expansion
-	expect(kind === NodeKind.ObjectLiteral);
+	assert kind === NodeKind.ObjectLiteral;
 }
 
 test "extern from identifier callee left for codegen" {
 	const prelude = "extern function parseInt(s: string): number from \"msStringParseInt\";";
 	const result = preludeLowerCallee(prelude, "parseInt(\"42\");");
 	// extern from on identifier callee is NOT rewritten — genCallExpr handles it
-	expect(result === "parseInt");
+	assert result === "parseInt";
 }

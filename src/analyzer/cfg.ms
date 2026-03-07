@@ -1,6 +1,6 @@
 // CFG-Based Last-Read Analysis — Mohnen Graph-Free Approach
 //
-// Matches Nim's dfa.nim: linear instruction array with relative offsets.
+// Matches the standard data flow implementation: linear instruction array with relative offsets.
 // No graph data structure — control flow encoded via goto/fork/loop offsets.
 //
 // Used by DRC injection to determine if a variable use is the last read,
@@ -307,7 +307,7 @@ function walkStmt(node: Node, ctx: BuildCtx): void {
 		walkStmt(d.doBody, ctx);
 		// Condition
 		walkExpr(d.doCondition, ctx);
-		// Fork: if true, loop back (Nim pattern: fork can go either way)
+		// Fork: if true, loop back (standard pattern: fork can go either way)
 		const forkIdx = emitFork(ctx);
 		patchDest(ctx, forkIdx, loopStart);
 		// Patch break gotos
@@ -434,7 +434,7 @@ export function buildCfg(body: Node, vn: string): Cfg {
 	return { instrs: ctx.cfg };
 }
 
-// ===== Last-Read Query: BFS (Nim's isLastReadImpl) =====
+// ===== Last-Read Query: BFS (reference isLastRead implementation) =====
 
 export function isLastReadCfg(cfg: Cfg, line: number, col: number): boolean {
 	const instrs = cfg.instrs;
@@ -579,52 +579,52 @@ function countKind(code: string, vn: string, kind: CfgInstrKind): number {
 test "simple use" {
 	const vn = "a";
 	const ts = "const a = 1; foo(a);";
-	expect(countKind(ts, vn, CfgInstrKind.CfgUse) === 1);
-	expect(countKind(ts, vn, CfgInstrKind.CfgDef) === 1);
+	assert countKind(ts, vn, CfgInstrKind.CfgUse) === 1;
+	assert countKind(ts, vn, CfgInstrKind.CfgDef) === 1;
 }
 
 test "multiple uses" {
 	const vn = "a";
 	const ts = "const a = 1; foo(a); bar(a);";
-	expect(countKind(ts, vn, CfgInstrKind.CfgUse) === 2);
+	assert countKind(ts, vn, CfgInstrKind.CfgUse) === 2;
 }
 
 test "assignment is def" {
 	const vn = "a";
 	const ts = "let a = 1; a = 2;";
-	expect(countKind(ts, vn, CfgInstrKind.CfgDef) === 2);
+	assert countKind(ts, vn, CfgInstrKind.CfgDef) === 2;
 }
 
 test "if-else has fork" {
 	const vn = "x";
 	const ts = "if (c) { foo(x); } else { bar(x); }";
-	expect(countKind(ts, vn, CfgInstrKind.CfgFork) === 1);
+	assert countKind(ts, vn, CfgInstrKind.CfgFork) === 1;
 }
 
 test "while has fork and loop" {
 	const vn = "x";
 	const ts = "while (c) { foo(x); }";
-	expect(countKind(ts, vn, CfgInstrKind.CfgFork) === 1);
-	expect(countKind(ts, vn, CfgInstrKind.CfgLoop) === 1);
+	assert countKind(ts, vn, CfgInstrKind.CfgFork) === 1;
+	assert countKind(ts, vn, CfgInstrKind.CfgLoop) === 1;
 }
 
 test "return has goto" {
 	const vn = "x";
 	const ts = "foo(x); return x;";
-	expect(countKind(ts, vn, CfgInstrKind.CfgGoto) === 1);
+	assert countKind(ts, vn, CfgInstrKind.CfgGoto) === 1;
 }
 
 test "function boundary stops" {
 	const vn = "x";
 	const ts = "const x = 1; function f() { return x; }";
-	expect(countKind(ts, vn, CfgInstrKind.CfgUse) === 0);
-	expect(countKind(ts, vn, CfgInstrKind.CfgDef) === 1);
+	assert countKind(ts, vn, CfgInstrKind.CfgUse) === 0;
+	assert countKind(ts, vn, CfgInstrKind.CfgDef) === 1;
 }
 
 test "last stmt is last read" {
 	const ts = "const a = 1; const b = a;";
 	const body = getBody(ts);
-	if (body === null) { expect(false); return; }
+	if (body === null) { assert false; return; }
 	const vn = "a";
 	const cfg = buildCfg(body, vn);
 	// Find the use of a
@@ -636,13 +636,13 @@ test "last stmt is last read" {
 			useCol = instr.col;
 		}
 	}
-	expect(isLastReadCfg(cfg, useLine, useCol));
+	assert isLastReadCfg(cfg, useLine, useCol);
 }
 
 test "not last when used after" {
 	const ts = "const a = 1; const b = a; const c = a;";
 	const body = getBody(ts);
-	if (body === null) { expect(false); return; }
+	if (body === null) { assert false; return; }
 	const vn = "a";
 	const cfg = buildCfg(body, vn);
 	// Find first use of a
@@ -655,14 +655,14 @@ test "not last when used after" {
 			break;
 		}
 	}
-	expect(!isLastReadCfg(cfg, useLine, useCol));
+	assert !isLastReadCfg(cfg, useLine, useCol);
 }
 
 test "branch merge: both branches consume" {
 	// KEY TEST: x used in both branches, not after → last read before if
 	const ts = "const x = getValue(); if (c) { use(x); } else { other(x); }";
 	const body = getBody(ts);
-	if (body === null) { expect(false); return; }
+	if (body === null) { assert false; return; }
 	const vn = "x";
 	const cfg = buildCfg(body, vn);
 	// Find uses of x (getValue() init is a def, not use)
@@ -679,14 +679,14 @@ test "branch merge: both branches consume" {
 		}
 	}
 	// Both branches use x, but each branch's use is last on its path
-	expect(useCount === 2);
-	expect(isLastReadCfg(cfg, firstUseLine, firstUseCol));
+	assert useCount === 2;
+	assert isLastReadCfg(cfg, firstUseLine, firstUseCol);
 }
 
 test "branch merge: used after if is not last read" {
 	const ts = "const x = getValue(); if (c) { use(x); } else { other(x); } final(x);";
 	const body = getBody(ts);
-	if (body === null) { expect(false); return; }
+	if (body === null) { assert false; return; }
 	const vn = "x";
 	const cfg = buildCfg(body, vn);
 	// First use should not be last read (final(x) follows)
@@ -699,14 +699,14 @@ test "branch merge: used after if is not last read" {
 			break;
 		}
 	}
-	expect(!isLastReadCfg(cfg, firstUseLine, firstUseCol));
+	assert !isLastReadCfg(cfg, firstUseLine, firstUseCol);
 }
 
 test "def in one branch makes other last-read" {
 	// x is used in if-branch, then reassigned in else-branch
 	const ts = "let x = 1; if (c) { use(x); } else { x = 2; } foo(x);";
 	const body = getBody(ts);
-	if (body === null) { expect(false); return; }
+	if (body === null) { assert false; return; }
 	const vn = "x";
 	const cfg = buildCfg(body, vn);
 	// The use in use(x) in the if-branch: foo(x) follows on that path → not last read
@@ -719,14 +719,14 @@ test "def in one branch makes other last-read" {
 			break;
 		}
 	}
-	expect(!isLastReadCfg(cfg, firstUseLine, firstUseCol));
+	assert !isLastReadCfg(cfg, firstUseLine, firstUseCol);
 }
 
 test "return terminates path" {
 	// After return, outer scope is unreachable on this path
 	const ts = "const x = 1; if (c) { return x; } foo(x);";
 	const body = getBody(ts);
-	if (body === null) { expect(false); return; }
+	if (body === null) { assert false; return; }
 	const vn = "x";
 	const cfg = buildCfg(body, vn);
 	// Find the use in "return x"
@@ -743,14 +743,14 @@ test "return terminates path" {
 		}
 	}
 	// The first use (return x) is last read on its path because return terminates
-	expect(isLastReadCfg(cfg, returnUseLine, returnUseCol));
+	assert isLastReadCfg(cfg, returnUseLine, returnUseCol);
 }
 
 test "loop use is not last read" {
 	// x used in loop body — loop repeats → not last read
 	const ts = "const x = 1; while (c) { use(x); }";
 	const body = getBody(ts);
-	if (body === null) { expect(false); return; }
+	if (body === null) { assert false; return; }
 	const vn = "x";
 	const cfg = buildCfg(body, vn);
 	let useLine = 0;
@@ -762,5 +762,5 @@ test "loop use is not last read" {
 			break;
 		}
 	}
-	expect(!isLastReadCfg(cfg, useLine, useCol));
+	assert !isLastReadCfg(cfg, useLine, useCol);
 }

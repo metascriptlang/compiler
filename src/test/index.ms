@@ -1,11 +1,34 @@
-// E2E Cross-Phase Integration Tests
+// Unified Test Suite
 //
-// Tests full pipeline: MetaScript source → C/JS output.
-// Catches regressions spanning phase boundaries.
+// Run all: bun run test-ms src/test/index.ms
 //
-// Run: bun run test-ms src/test/index.ms
+// Structure:
+//   lang/    — Language feature tests (runtime behavior)
+//   c/       — E2E pipeline tests: MetaScript source → C output
+//   js/      — E2E pipeline tests: MetaScript source → JS output
 
+// -- helpers --
 import "./helpers";
+
+// -- language feature tests --
+import "./lang/basics";
+import "./lang/strings";
+import "./lang/types";
+import "./lang/match";
+import "./lang/controlFlow";
+import "./lang/closures";
+import "./lang/closuresAdv";
+import "./lang/interfaces";
+import "./lang/classes";
+import "./lang/result";
+import "./lang/trycatch";
+import "./lang/recursion";
+import "./lang/advanced";
+import "./lang/async";
+import "./lang/syntax";
+import "./lang/multimod/main";
+
+// -- E2E pipeline tests --
 import "./c/variables";
 import "./c/functions";
 import "./c/classes";

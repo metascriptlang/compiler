@@ -43,37 +43,37 @@ export function resetCancel(ctx: TaCancelContext): void {
 // ===== Tests =====
 test "initial state is not cancelled" {
 	const ctx = createCancelContext();
-	expect(ctx.version === 0);
-	expect(!ctx.cancelled);
+	assert ctx.version === 0;
+	assert !ctx.cancelled;
 }
 
 test "checkCancel false when version matches" {
 	const ctx = createCancelContext();
 	const ver = getCancelVersion(ctx);
-	expect(!checkCancel(ctx, ver));
+	assert !checkCancel(ctx, ver);
 }
 
 test "requestCancel increments version" {
 	const ctx = createCancelContext();
 	requestCancel(ctx);
-	expect(ctx.version === 1);
-	expect(ctx.cancelled);
+	assert ctx.version === 1;
+	assert ctx.cancelled;
 }
 
 test "checkCancel true after requestCancel" {
 	const ctx = createCancelContext();
 	const ver = getCancelVersion(ctx);
 	requestCancel(ctx);
-	expect(checkCancel(ctx, ver));
+	assert checkCancel(ctx, ver);
 }
 
 test "resetCancel clears flag but keeps version" {
 	const ctx = createCancelContext();
 	requestCancel(ctx);
-	expect(ctx.version === 1);
+	assert ctx.version === 1;
 	resetCancel(ctx);
-	expect(!ctx.cancelled);
-	expect(ctx.version === 1);
+	assert !ctx.cancelled;
+	assert ctx.version === 1;
 }
 
 test "multiple cancels increment version" {
@@ -81,5 +81,5 @@ test "multiple cancels increment version" {
 	requestCancel(ctx);
 	resetCancel(ctx);
 	requestCancel(ctx);
-	expect(ctx.version === 2);
+	assert ctx.version === 2;
 }

@@ -42,31 +42,31 @@ export function taHashKey(key: TaQueryKey): number {
 // ===== Tests =====
 test "empty string has known value" {
 	const h = taHashString("");
-	expect(h === 5381);
+	assert h === 5381;
 }
 
-test "same string same hash" { expect(taHashString("hello") === taHashString("hello")); }
+test "same string same hash" { assert taHashString("hello") === taHashString("hello"); }
 
-test "different strings different hashes" { expect(taHashString("abc") !== taHashString("xyz")); }
+test "different strings different hashes" { assert taHashString("abc") !== taHashString("xyz"); }
 
 test "single char" {
 	const h = taHashString("a");
-	expect(h !== 5381);  // different from empty
-	expect(h !== 0);
+	assert h !== 5381;  // different from empty
+	assert h !== 0;
 }
 
-test "combine is deterministic" { expect(taCombineHash(1, 2) === taCombineHash(1, 2)); }
+test "combine is deterministic" { assert taCombineHash(1, 2) === taCombineHash(1, 2); }
 
-test "order matters" { expect(taCombineHash(1, 2) !== taCombineHash(2, 1)); }
+test "order matters" { assert taCombineHash(1, 2) !== taCombineHash(2, 1); }
 
 test "different kinds produce different hashes" {
 	const a: TaQueryKey = { queryKind: 0, fileId: 1 };
 	const b: TaQueryKey = { queryKind: 1, fileId: 1 };
-	expect(taHashKey(a) !== taHashKey(b));
+	assert taHashKey(a) !== taHashKey(b);
 }
 
 test "different fileIds produce different hashes" {
 	const a: TaQueryKey = { queryKind: 0, fileId: 1 };
 	const b: TaQueryKey = { queryKind: 0, fileId: 2 };
-	expect(taHashKey(a) !== taHashKey(b));
+	assert taHashKey(a) !== taHashKey(b);
 }

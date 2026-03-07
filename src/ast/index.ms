@@ -3,3 +3,4 @@
 
 export { Node, NodeKind, NodeData, Expression, createNode } from "./node";
 export { printNode } from "./printer";
+export { forEachChild } from "./visitor";

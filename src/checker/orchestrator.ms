@@ -1,5 +1,5 @@
 // Multi-module orchestrator — coordinates checking across module graph
-// Nim parallel: pipelines.nim  |  Zig parallel: Compilation.zig
+// Reference parallel implementation
 
 import { Node } from "../ast/node";
 import {
@@ -21,7 +21,7 @@ import { callStateProgramParser } from "../parser/statements/callbacks";
 import { readFile } from "std/process";
 
 
-// Nim-aligned two-phase module checking (Nim: modulegraphs.nim ifaces pattern).
+// Standard-aligned two-phase module checking.
 //
 // Phase 1: Parse + collectTopLevelLocal (skip imports) for ALL modules.
 //          Register exported names+kinds with placeholder types in ExportRegistry.
@@ -34,7 +34,7 @@ import { readFile } from "std/process";
 // For circular deps (A→B→A, loadOrder=[B,A]):
 //   Phase 1: Both registered with placeholder types
 //   Phase 2: B checked first — imports A → placeholder types. A checked second — imports B → resolved types.
-//   Matches Nim's partial visibility semantics for circular imports.
+//   Matches standard partial visibility semantics for circular imports.
 
 // Load a prelude import by probing: .ms → /index.cms → /index.ms
 function loadPreludeInto(ctx: CheckerContext, specifier: string, stdPath: string): void {
@@ -69,7 +69,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 	preprocessHeaders(graph, false);
 
 	// ================================================================
-	// PHASE 1: Early export registration (Nim: registerModule + empty ifaces)
+	// PHASE 1: Early export registration (Standard reference implementation)
 	// Parse + collectTopLevelLocal for ALL modules, register names+kinds
 	// ================================================================
 	for (const path of graph.loadOrder) {
@@ -119,7 +119,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 	}
 
 	// ================================================================
-	// PHASE 2: Full checking (Nim: semantic pass with cross-module visibility)
+	// PHASE 2: Full checking (Reference semantic pass with cross-module visibility)
 	// All modules' names now in registry. Run full 3 passes per module.
 	// ================================================================
 	for (const path of graph.loadOrder) {
@@ -166,9 +166,9 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 		// Ownership Inference (for cross-module consumption)
 		inferOwnership(ctx, pr.value);
 
-		// Copy errors to module
+		// Copy errors to module (mod.errors is string[], extract message)
 		for (const err of ctx.errors) {
-			mod.errors.push(err);
+			mod.errors.push(err.message);
 		}
 
 		// Extract resolved exports and UPDATE registry (replaces Phase 1 placeholders)
@@ -259,10 +259,10 @@ test "single module checked" {
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	checkModuleGraph(graph, "");
-	expect(graph.errors.length === 0);
+	assert graph.errors.length === 0;
 	const mod = findModule(graph, "/src/a.ms");
-	expect(mod !== null);
-	expect(mod.errors.length === 0);
+	assert mod !== null;
+	assert mod.errors.length === 0;
 }
 
 test "errors collected per module" {
@@ -272,8 +272,8 @@ test "errors collected per module" {
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	checkModuleGraph(graph, "");
 	const mod = findModule(graph, "/src/a.ms");
-	expect(mod !== null);
-	expect(mod.errors.length > 0);
+	assert mod !== null;
+	assert mod.errors.length > 0;
 }
 
 test "export names recorded" {
@@ -283,9 +283,9 @@ test "export names recorded" {
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	checkModuleGraph(graph, "");
 	const mod = findModule(graph, "/src/a.ms");
-	expect(mod !== null);
-	expect(hasExportName(mod, "foo"));
-	expect(!hasExportName(mod, "bar"));
+	assert mod !== null;
+	assert hasExportName(mod, "foo");
+	assert !hasExportName(mod, "bar");
 }
 
 test "two module chain checked" {
@@ -298,9 +298,9 @@ test "two module chain checked" {
 	// Both modules should check without errors
 	const modA = findModule(graph, "/src/a.ms");
 	const modB = findModule(graph, "/src/b.ms");
-	expect(modA !== null);
-	expect(modB !== null);
-	expect(modB.errors.length === 0);
+	assert modA !== null;
+	assert modB !== null;
+	assert modB.errors.length === 0;
 }
 
 test "imported function has Function type" {
@@ -312,10 +312,10 @@ test "imported function has Function type" {
 	checkModuleGraph(graph, "");
 	const modA = findModule(graph, "/src/a.ms");
 	const modB = findModule(graph, "/src/b.ms");
-	expect(modA !== null);
-	expect(modB !== null);
-	expect(modA.errors.length === 0);
-	expect(modB.errors.length === 0);
+	assert modA !== null;
+	assert modB !== null;
+	assert modA.errors.length === 0;
+	assert modB.errors.length === 0;
 }
 
 test "imported enum available" {
@@ -326,8 +326,8 @@ test "imported enum available" {
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	checkModuleGraph(graph, "");
 	const modA = findModule(graph, "/src/a.ms");
-	expect(modA !== null);
-	expect(modA.errors.length === 0);
+	assert modA !== null;
+	assert modA.errors.length === 0;
 }
 
 test "imported interface as type annotation" {
@@ -338,8 +338,8 @@ test "imported interface as type annotation" {
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	checkModuleGraph(graph, "");
 	const modA = findModule(graph, "/src/a.ms");
-	expect(modA !== null);
-	expect(modA.errors.length === 0);
+	assert modA !== null;
+	assert modA.errors.length === 0;
 }
 
 test "non-exported name produces error" {
@@ -350,8 +350,8 @@ test "non-exported name produces error" {
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	checkModuleGraph(graph, "");
 	const modA = findModule(graph, "/src/a.ms");
-	expect(modA !== null);
-	expect(modA.errors.length > 0);
+	assert modA !== null;
+	assert modA.errors.length > 0;
 }
 
 test "3-module chain propagates types" {
@@ -363,8 +363,8 @@ test "3-module chain propagates types" {
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	checkModuleGraph(graph, "");
 	const modA = findModule(graph, "/src/a.ms");
-	expect(modA !== null);
-	expect(modA.errors.length === 0);
+	assert modA !== null;
+	assert modA.errors.length === 0;
 }
 
 test "inferred return type propagates across modules" {
@@ -377,10 +377,10 @@ test "inferred return type propagates across modules" {
 	checkModuleGraph(graph, "");
 	const modA = findModule(graph, "/src/a.ms");
 	const modB = findModule(graph, "/src/b.ms");
-	expect(modA !== null);
-	expect(modB !== null);
-	expect(modA.errors.length === 0);
-	expect(modB.errors.length === 0);
+	assert modA !== null;
+	assert modB !== null;
+	assert modA.errors.length === 0;
+	assert modB.errors.length === 0;
 }
 
 test "re-export forwards types" {
@@ -392,11 +392,11 @@ test "re-export forwards types" {
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	checkModuleGraph(graph, "");
 	const modB = findModule(graph, "/src/b.ms");
-	expect(modB !== null);
-	expect(hasExportName(modB, "helper"));
+	assert modB !== null;
+	assert hasExportName(modB, "helper");
 	const modA = findModule(graph, "/src/a.ms");
-	expect(modA !== null);
-	expect(modA.errors.length === 0);
+	assert modA !== null;
+	assert modA.errors.length === 0;
 }
 
 test "parse error recovery still extracts exports" {
@@ -406,9 +406,9 @@ test "parse error recovery still extracts exports" {
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	checkModuleGraph(graph, "");
 	const mod = findModule(graph, "/src/a.ms");
-	expect(mod !== null);
-	expect(mod.errors.length > 0);
-	expect(hasExportName(mod, "foo"));
+	assert mod !== null;
+	assert mod.errors.length > 0;
+	assert hasExportName(mod, "foo");
 }
 
 test "imported extension method available" {
@@ -419,8 +419,8 @@ test "imported extension method available" {
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	checkModuleGraph(graph, "");
 	const modA = findModule(graph, "/src/a.ms");
-	expect(modA !== null);
-	expect(modA.errors.length === 0);
+	assert modA !== null;
+	assert modA.errors.length === 0;
 }
 
 test "parse error in dependency doesn't block dependent" {
@@ -431,9 +431,9 @@ test "parse error in dependency doesn't block dependent" {
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	checkModuleGraph(graph, "");
 	const modA = findModule(graph, "/src/a.ms");
-	expect(modA !== null);
+	assert modA !== null;
 	// Module A can resolve 'bar' from B's partial exports
-	expect(modA.errors.length === 0);
+	assert modA.errors.length === 0;
 }
 
 test "C header import synthesizes exports" {
@@ -444,12 +444,12 @@ test "C header import synthesizes exports" {
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	checkModuleGraph(graph, "");
 	const hmod = findModule(graph, "/src/lib.h");
-	expect(hmod !== null);
-	expect(hmod.isCHeader);
-	expect(hasExportName(hmod, "foo"));
+	assert hmod !== null;
+	assert hmod.isCHeader;
+	assert hasExportName(hmod, "foo");
 	const modA = findModule(graph, "/src/a.ms");
-	expect(modA !== null);
-	expect(modA.errors.length === 0);
+	assert modA !== null;
+	assert modA.errors.length === 0;
 }
 
 // ===== Circular Import Tests =====
@@ -463,10 +463,10 @@ test "circular import no false 'not exported' error" {
 	checkModuleGraph(graph, "");
 	const modA = findModule(graph, "/src/a.ms");
 	const modB = findModule(graph, "/src/b.ms");
-	expect(modA !== null);
-	expect(modB !== null);
+	assert modA !== null;
+	assert modB !== null;
 	// Neither module should have "not exported" errors — Phase 1 registered both names
-	expect(graph.circularDeps.length > 0);
+	assert graph.circularDeps.length > 0;
 }
 
 test "circularDeps recorded for LSP" {
@@ -475,7 +475,7 @@ test "circularDeps recorded for LSP" {
 	entries.push({ entryPath: "/src/b.ms", entrySource: "import { a } from \"./a\";" });
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
-	expect(graph.circularDeps.length > 0);
+	assert graph.circularDeps.length > 0;
 }
 
 test "non-circular modules still resolve fully" {
@@ -487,8 +487,8 @@ test "non-circular modules still resolve fully" {
 	checkModuleGraph(graph, "");
 	const modA2 = findModule(graph, "/src/a.ms");
 	const modB2 = findModule(graph, "/src/b.ms");
-	expect(modA2 !== null);
-	expect(modB2 !== null);
-	expect(modA2.errors.length === 0);
-	expect(modB2.errors.length === 0);
+	assert modA2 !== null;
+	assert modB2 !== null;
+	assert modA2.errors.length === 0;
+	assert modB2.errors.length === 0;
 }

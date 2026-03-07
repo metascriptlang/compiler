@@ -1,6 +1,6 @@
 // C Codegen — Context & Core Data Structures
 //
-// Follows Nim's cgendata.nim: section-based output, TLoc carrier, block stack.
+// Follows standard reference patterns for section-based output and block stacking.
 // CGen = BModule, CProc = BProc, CBlock = TBlock, CLoc = TLoc.
 
 import { Node, NodeKind } from "../../ast/node";
@@ -9,7 +9,7 @@ import { CheckerContext } from "../../checker/context";
 import { sliceStr } from "../../utils/string";
 
 
-// ===== CSection — C file output sections (Nim's TCFileSection) =====
+// ===== CSection — C file output sections (standard reference parity) =====
 // Final output concatenates in enum order.
 
 export enum CSection {
@@ -25,7 +25,7 @@ export enum CSection {
 	ModuleInit,     // module code initialization (user top-level code — runs second)
 }
 
-// ===== CProcSection — per-proc sections (Nim's TCProcSection) =====
+// ===== CProcSection — per-proc sections (standard reference parity) =====
 
 export enum CProcSection {
 	Locals,  // cpsLocals: variable declarations
@@ -33,7 +33,7 @@ export enum CProcSection {
 	Stmts,   // cpsStmts: statement code (the actual body)
 }
 
-// ===== CLocKind — expression result kind (Nim's TLocKind) =====
+// ===== CLocKind — expression result kind (standard reference parity) =====
 
 export enum CLocKind {
 	None,      // free slot — callee fills it
@@ -47,7 +47,7 @@ export enum CLocKind {
 	Data,      // constant data
 }
 
-// ===== CStorageLoc — where the value lives (Nim's TStorageLoc) =====
+// ===== CStorageLoc — where the value lives (standard reference parity) =====
 
 export enum CStorageLoc {
 	Unknown,
@@ -56,7 +56,7 @@ export enum CStorageLoc {
 	Static,
 }
 
-// ===== Builder — string accumulator (Nim's Builder) =====
+// ===== Builder — string accumulator (standard reference parity) =====
 
 export interface Builder {
 	buf: string;
@@ -91,13 +91,13 @@ export function extract(b: Builder): string {
 	return b.buf;
 }
 
-// ===== CLoc — expression result carrier (Nim's TLoc) =====
+// ===== CLoc — expression result carrier (Standard reference parity) =====
 
 export interface CLoc {
 	kind: CLocKind;
 	storage: CStorageLoc;
 	snippet: string;       // C code fragment ("x", "a->b", "T1_")
-	isIndirect: boolean;   // Nim's lfIndirect — backend introduced a pointer
+	isIndirect: boolean;   // Implementation parity: backend introduced a pointer
 	locType: Type;         // MetaScript type (for RC decisions, type mapping)
 }
 
@@ -127,7 +127,7 @@ export function addrLoc(loc: CLoc): string {
 	return "(&" + loc.snippet + ")";
 }
 
-// ===== CBlock — nested scope (Nim's TBlock) =====
+// ===== CBlock — nested scope (standard reference parity) =====
 
 export interface CBlock {
 	id: number;            // block label ID
@@ -149,7 +149,7 @@ export function createBlock(id: number, isLoop: boolean): CBlock {
 	};
 }
 
-// ===== CProc — per-function state (Nim's BProc/TCProc) =====
+// ===== CProc — per-function state (standard reference parity) =====
 
 export interface CProc {
 	name: string;          // mangled C name
@@ -180,12 +180,12 @@ export function createProc(name: string, returnType: Type): CProc {
 	};
 }
 
-// Current block — top of the block stack (Nim's p.s(section))
+// Current block — top of the block stack (Implementation parity)
 export function currBlock(p: CProc): CBlock {
 	return p.blocks[p.blocks.length - 1];
 }
 
-// Top-level proc block — block[0] (Nim's p.procSec(section))
+// Top-level proc block — block[0] (Implementation parity)
 export function procBlock(p: CProc): CBlock {
 	return p.blocks[0];
 }
@@ -303,7 +303,7 @@ export function popBlock(p: CProc): CBlock {
 	return p.blocks[parentIdx];
 }
 
-// ===== getTemp — allocate a temporary (Nim's getTemp) =====
+// ===== getTemp — allocate a temporary (Implementation parity) =====
 // Declares in proc-level locals, returns a CLoc with the temp name.
 
 export function getTemp(p: CProc, cType: string): CLoc {
@@ -313,6 +313,40 @@ export function getTemp(p: CProc, cType: string): CLoc {
 	const loc = initLoc(CLocKind.Temp, CStorageLoc.Stack);
 	loc.snippet = name;
 	return loc;
+}
+
+// ===== TypeRegistry — cross-module type resolution (Standard reference parity) =====
+// Maps type names to full Type objects so getTypeDesc can emit struct bodies
+// for TypeReference nodes (which only carry typeName string).
+
+export interface TypeRegistryEntry {
+	name: string;
+	resolvedType: Type;
+}
+
+export interface TypeRegistry {
+	entries: TypeRegistryEntry[];
+}
+
+export function createTypeRegistry(): TypeRegistry {
+	return { entries: [] };
+}
+
+export function typeRegistryAdd(reg: TypeRegistry, name: string, t: Type): void {
+	for (let i = 0; i < reg.entries.length; i += 1) {
+		if (reg.entries[i].name === name) {
+			reg.entries[i].resolvedType = t;
+			return;
+		}
+	}
+	reg.entries.push({ name, resolvedType: t });
+}
+
+export function typeRegistryLookup(reg: TypeRegistry, name: string): Type {
+	for (let i = 0; i < reg.entries.length; i += 1) {
+		if (reg.entries[i].name === name) return reg.entries[i].resolvedType;
+	}
+	return null as unknown as Type;
 }
 
 // ===== TypeCacheEntry — cached type mappings =====
@@ -401,7 +435,7 @@ export function nameSetAdd(ns: NameSet, name: string): void {
 	}
 }
 
-// ===== AliveSet — global DCE reachability (Nim's alive: IntSet) =====
+// ===== AliveSet — global DCE reachability (Standard reference parity) =====
 
 export interface AliveSet {
 	entries: string[];   // "modulePath:symbolName" keys
@@ -427,14 +461,14 @@ export function aliveSetHas(aliveSet: AliveSet, modulePath: string, name: string
 	return false;
 }
 
-// ===== CGen — module-level state (Nim's BModule/TCGen) =====
+// ===== CGen — module-level state (Standard reference parity) =====
 
 export interface CGen {
 	sections: Builder[];       // CSection enum-indexed (10 sections)
 	currentProc: CProc;        // active proc being generated
 	typeCache: TypeCache;      // fully-emitted types
 	forwTypeCache: TypeCache;  // forward-declared types
-	externalTypes: TypeCache;  // types from shared proto header (suppression table)
+	typeRegistry: TypeRegistry; // cross-module type resolution (Standard implementation parity)
 	stringPool: StringPool;    // interned string literals
 	declaredProcs: NameSet;    // prevents duplicate prototypes
 	declaredThings: NameSet;   // prevents duplicate declarations
@@ -448,6 +482,13 @@ export interface CGen {
 	needsStringRT: boolean;    // B2: conditional runtime — set when msString type is used
 	needsArrayRT: boolean;     // B2: conditional runtime — set when array type is used
 	isTestBuild: boolean;      // true when compiling via cmdTest (assert = non-fatal)
+	testEntries: TestEntry[];  // collected test wrapper functions (test builds only)
+	nextTestId: number;        // unique ID for test wrapper function names
+}
+
+export interface TestEntry {
+	name: string;       // test display name (from test "name" { ... })
+	funcName: string;   // C function name (__ms_test_0, __ms_test_1, ...)
 }
 
 export function createCGen(ctx: CheckerContext, modulePath: string): CGen {
@@ -462,7 +503,7 @@ export function createCGen(ctx: CheckerContext, modulePath: string): CGen {
 		currentProc: null as unknown as CProc,
 		typeCache: createTypeCache(),
 		forwTypeCache: createTypeCache(),
-		externalTypes: createTypeCache(),
+		typeRegistry: createTypeRegistry(),
 		stringPool: createStringPool(),
 		declaredProcs: createNameSet(),
 		declaredThings: createNameSet(),
@@ -476,6 +517,8 @@ export function createCGen(ctx: CheckerContext, modulePath: string): CGen {
 		needsStringRT: false,
 		needsArrayRT: false,
 		isTestBuild: false,
+		testEntries: [],
+		nextTestId: 0,
 	};
 }
 
@@ -511,72 +554,72 @@ test "add and extract" {
 	const b = createBuilder();
 	add(b, "hello");
 	add(b, " world");
-	expect(extract(b) === "hello world");
+	assert extract(b) === "hello world";
 }
 
 test "addLine with indent" {
 	const b = createBuilder();
 	b.indent = 1;
 	addLine(b, "int x;");
-	expect(extract(b) === "  int x;\n");
+	assert extract(b) === "  int x;\n";
 }
 
 test "addLine no indent" {
 	const b = createBuilder();
 	addLine(b, "int x;");
-	expect(extract(b) === "int x;\n");
+	assert extract(b) === "int x;\n";
 }
 
 test "noLoc" {
 	const loc = noLoc();
-	expect(loc.kind === CLocKind.None);
-	expect(loc.snippet === "");
+	assert loc.kind === CLocKind.None;
+	assert loc.snippet === "";
 }
 
 test "initLoc" {
 	const loc = initLoc(CLocKind.Temp, CStorageLoc.Stack);
 	loc.snippet = "T1_";
-	expect(rdLoc(loc) === "T1_");
-	expect(addrLoc(loc) === "(&T1_)");
+	assert rdLoc(loc) === "T1_";
+	assert addrLoc(loc) === "(&T1_)";
 }
 
 test "rdLoc indirect" {
 	const loc = initLoc(CLocKind.Param, CStorageLoc.Stack);
 	loc.snippet = "p";
 	loc.isIndirect = true;
-	expect(rdLoc(loc) === "(*p)");
-	expect(addrLoc(loc) === "p");
+	assert rdLoc(loc) === "(*p)";
+	assert addrLoc(loc) === "p";
 }
 
 test "create proc" {
 	const p = createProc("test_fn", null as unknown as Type);
-	expect(p.name === "test_fn");
-	expect(p.labels === 0);
-	expect(p.blocks.length === 1);
+	assert p.name === "test_fn";
+	assert p.labels === 0;
+	assert p.blocks.length === 1;
 }
 
 test "getTemp" {
 	const p = createProc("test_fn", null as unknown as Type);
 	const t1 = getTemp(p, "int32_t");
-	expect(t1.snippet === "T1_");
-	expect(t1.kind === CLocKind.Temp);
+	assert t1.snippet === "T1_";
+	assert t1.kind === CLocKind.Temp;
 	const t2 = getTemp(p, "double");
-	expect(t2.snippet === "T2_");
+	assert t2.snippet === "T2_";
 	const locals = readProcLocals(p);
-	expect(locals === "int32_t T1_;\ndouble T2_;\n");
+	assert locals === "int32_t T1_;\ndouble T2_;\n";
 }
 
 test "push and pop block" {
 	const p = createProc("test_fn", null as unknown as Type);
 	pushBlock(p, true);
-	expect(p.blocks.length === 2);
-	expect(p.withinLoop === 1);
+	assert p.blocks.length === 2;
+	assert p.withinLoop === 1;
 	emitStmts(p, "x = 1;");
 	popBlock(p);
-	expect(p.blocks.length === 1);
-	expect(p.withinLoop === 0);
+	assert p.blocks.length === 1;
+	assert p.withinLoop === 0;
 	const stmts = readProcStmts(p);
-	expect(stmts === "x = 1;");
+	assert stmts === "x = 1;";
 }
 
 test "nested blocks" {
@@ -587,87 +630,87 @@ test "nested blocks" {
 	popBlock(p);
 	emitStmts(p, "after;\n");
 	const stmts = readProcStmts(p);
-	expect(stmts === "outer;\ninner;\nafter;\n");
+	assert stmts === "outer;\ninner;\nafter;\n";
 }
 
 test "get miss" {
 	const cache = createTypeCache();
-	expect(typeCacheGet(cache, "Foo") === "");
+	assert typeCacheGet(cache, "Foo") === "";
 }
 
 test "set and get" {
 	const cache = createTypeCache();
 	typeCacheSet(cache, "number", "double");
-	expect(typeCacheGet(cache, "number") === "double");
+	assert typeCacheGet(cache, "number") === "double";
 }
 
 test "overwrite" {
 	const cache = createTypeCache();
 	typeCacheSet(cache, "x", "int");
 	typeCacheSet(cache, "x", "int32_t");
-	expect(typeCacheGet(cache, "x") === "int32_t");
+	assert typeCacheGet(cache, "x") === "int32_t";
 }
 
 test "has" {
 	const cache = createTypeCache();
-	expect(!typeCacheHas(cache, "x"));
+	assert !typeCacheHas(cache, "x");
 	typeCacheSet(cache, "x", "int");
-	expect(typeCacheHas(cache, "x"));
+	assert typeCacheHas(cache, "x");
 }
 
 test "intern new string" {
 	const pool = createStringPool();
 	const name = internString(pool, "hello");
-	expect(name === "TMP_STR_1");
+	assert name === "TMP_STR_1";
 }
 
 test "deduplicate" {
 	const pool = createStringPool();
 	const n1 = internString(pool, "hello");
 	const n2 = internString(pool, "hello");
-	expect(n1 === n2);
-	expect(pool.entries.length === 1);
+	assert n1 === n2;
+	assert pool.entries.length === 1;
 }
 
 test "different strings get different names" {
 	const pool = createStringPool();
 	const n1 = internString(pool, "hello");
 	const n2 = internString(pool, "world");
-	expect(n1 === "TMP_STR_1");
-	expect(n2 === "TMP_STR_2");
-	expect(pool.entries.length === 2);
+	assert n1 === "TMP_STR_1";
+	assert n2 === "TMP_STR_2";
+	assert pool.entries.length === 2;
 }
 
 test "empty set" {
 	const ns = createNameSet();
-	expect(!nameSetHas(ns, "x"));
+	assert !nameSetHas(ns, "x");
 }
 
 test "add and check" {
 	const ns = createNameSet();
 	nameSetAdd(ns, "foo");
-	expect(nameSetHas(ns, "foo"));
-	expect(!nameSetHas(ns, "bar"));
+	assert nameSetHas(ns, "foo");
+	assert !nameSetHas(ns, "bar");
 }
 
 test "no duplicates" {
 	const ns = createNameSet();
 	nameSetAdd(ns, "foo");
 	nameSetAdd(ns, "foo");
-	expect(ns.length === 1);
+	assert ns.length === 1;
 }
 
 test "create with 10 sections" {
 	const g = createCGen(null as unknown as CheckerContext, "test");
-	expect(g.sections.length === 10);
+	assert g.sections.length === 10;
 }
 
 test "section accessor" {
 	const g = createCGen(null as unknown as CheckerContext, "test");
 	add(sec(g, CSection.Headers), "#include <stdint.h>\n");
 	add(sec(g, CSection.Procs), "void foo() {}\n");
-	expect(extract(sec(g, CSection.Headers)) === "#include <stdint.h>\n");
-	expect(extract(sec(g, CSection.Procs)) === "void foo() {}\n");
+	assert extract(sec(g, CSection.Headers)) === "#include <stdint.h>\n";
+	assert extract(sec(g, CSection.Procs)) === "void foo() {}\n";
 }
 
 test "assembleOutput" {
@@ -675,13 +718,13 @@ test "assembleOutput" {
 	add(sec(g, CSection.Headers), "#include <stdint.h>\n");
 	add(sec(g, CSection.Procs), "void foo() {}\n");
 	const output = assembleOutput(g);
-	expect(output === "#include <stdint.h>\n\nvoid foo() {}\n");
+	assert output === "#include <stdint.h>\n\nvoid foo() {}\n";
 }
 
 test "moduleTemp" {
 	const g = createCGen(null as unknown as CheckerContext, "test");
 	const t1 = moduleTemp(g);
 	const t2 = moduleTemp(g);
-	expect(t1 === "TM1_");
-	expect(t2 === "TM2_");
+	assert t1 === "TM1_";
+	assert t2 === "TM2_";
 }

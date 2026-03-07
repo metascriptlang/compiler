@@ -6,7 +6,7 @@
 
 
 
-// ===== Target Configuration (Nim parity: ConfigRef.target) =====
+// ===== Target Configuration (Implementation parity) =====
 // Module-level state set once at startup. Defaults to 64-bit.
 
 let targetPtrSize: number = 8;
@@ -26,7 +26,7 @@ export enum TypeKind {
 	// Primitives
 	Number, String, Boolean, Void, Char, Null, Unknown, Never,
 	// Sized integers/floats (C interop)
-	Int32, Int64, Uint32, Float32, Float64,
+	Int8, Int16, Int32, Int64, Uint8, Uint16, Uint32, Uint64, Float32, Float64,
 	// Compound
 	Object, Array, SizedArray, Span, Function, Tuple, Map, Set, CString,
 	// Generics
@@ -41,7 +41,7 @@ export enum TypeKind {
 	Error,
 }
 
-// ===== Type Interface (Tagged Union — Nim parity) =====
+// ===== Type Interface (Tagged Union — standard implementation parity) =====
 // Flat interface with fields reused per TypeKind. Only read documented fields per kind.
 // Under Bun: all fields allocated (JS objects). Under C backend: fixed struct layout.
 //
@@ -68,7 +68,7 @@ export enum TypeKind {
 // │ TypeReference  │ refName  │     —     │      —       │     —     │    —     │     —     │
 // └────────────────┴──────────┴───────────┴──────────────┴───────────┴──────────┴───────────┘
 
-// ===== Calling Convention (Nim parity: TCallingConvention) =====
+// ===== Calling Convention (Standard reference parity) =====
 export enum CallingConvention {
 	CcDefault,       // normal function call
 	CcClosure,       // closure call (fn + env pair)
@@ -76,7 +76,7 @@ export enum CallingConvention {
 	CcNoInline,      // no-inline hint
 }
 
-// ===== Attached Lifecycle Ops (Nim parity: TTypeAttachedOp) =====
+// ===== Attached Lifecycle Ops (Standard reference parity) =====
 // Index into Type.attachedOps[] — stores the symbol/name for each lifecycle hook.
 export enum AttachedOp {
 	AttachedWasMoved,    // =wasMoved
@@ -85,6 +85,9 @@ export enum AttachedOp {
 	AttachedDup,         // =dup
 	AttachedSink,        // =sink
 	AttachedTrace,       // =trace (ORC)
+	AttachedEq,          // =eq (auto-generated field-by-field ==)
+	AttachedLt,          // =lt (auto-generated lexicographic < for tuples)
+	AttachedLe,          // =le (auto-generated lexicographic <= for tuples)
 }
 
 export interface Type {
@@ -95,14 +98,33 @@ export interface Type {
 	typeReturn: Type;         // Function return, Array element, Ref/Ptr/Distinct inner, Result okType
 	typeExtra: Type;          // Result errType, Map value, GenericInstance base
 	typeFlags: number;        // Bitfield: 1=isInterface, 2=optional, 4=readonly, 8=static; bits 8-15=minArity
-	callConv: CallingConvention; // Function calling convention (Nim parity: ccClosure vs ccDefault)
-	attachedOps: string[];    // Lifecycle hook names indexed by AttachedOp (Nim parity: TTypeAttachedOp)
+	callConv: CallingConvention; // Function calling convention (Standard parity)
+	attachedOps: string[];    // Lifecycle hook names indexed by AttachedOp (Standard parity)
 	typeChildrenFlags: number[]; // Parameter flags (SF_SINK / SF_LENT) for Function types
+}
+
+// ===== In-Place Type Upgrade (Nim parity: assignType) =====
+// Copies all fields from source into target, preserving target's object identity.
+// This is critical for circular type resolution: forward placeholder objects are
+// upgraded in-place so all existing references automatically see the resolved type.
+// Nim: semstmts.nim assignType(s.typ, t) — same pattern.
+
+export function assignType(target: Type, source: Type): void {
+	target.kind = source.kind;
+	target.typeName = source.typeName;
+	target.typeNames = source.typeNames;
+	target.typeChildren = source.typeChildren;
+	target.typeReturn = source.typeReturn;
+	target.typeExtra = source.typeExtra;
+	target.typeFlags = source.typeFlags;
+	target.callConv = source.callConv;
+	target.attachedOps = source.attachedOps;
+	target.typeChildrenFlags = source.typeChildrenFlags;
 }
 
 // ===== Constructors =====
 
-function emptyType(): Type {
+export function emptyType(): Type {
 	return {
 		kind: TypeKind.Unknown,
 		typeName: "",
@@ -243,7 +265,7 @@ export function createGenericParam(name: string): Type {
 	return t;
 }
 
-// ===== System Types (Nim parity: ModuleGraph.sysTypes) =====
+// ===== System Types (Standard reference parity) =====
 // Pre-allocated primitive types indexed by TypeKind ordinal. O(1) lookup, no allocation.
 // Under Bun: module-level array initialized once. Replaces per-call createPrimitive.
 
@@ -290,7 +312,7 @@ export function getMinArity(t: Type): number {
 	return encoded - 1;
 }
 
-// ===== Attached Ops Helpers (Nim parity: getAttachedOp/setAttachedOp) =====
+// ===== Attached Ops Helpers (Implementation parity) =====
 
 export function getAttachedOp(t: Type, op: AttachedOp): string {
 	const idx = op as number;
@@ -308,6 +330,63 @@ export function setAttachedOp(t: Type, op: AttachedOp, name: string): void {
 
 export function hasDestructor(t: Type): boolean {
 	return getAttachedOp(t, AttachedOp.AttachedDestructor) !== "";
+}
+
+// ===== Tuple Type Name (Nim parity: deterministic name for structural types) =====
+// DJB2 hash of type structure → "msTuple_HASH". Same algorithm as C codegen
+// (types.ms:genTupleType) so generated comparison functions match struct names.
+
+export function tupleTypeName(t: Type): string {
+	if (t === null || t.kind !== TypeKind.Tuple) return "";
+	let key = "tuple:";
+	let i = 0;
+	while (i < t.typeChildren.length) {
+		if (i > 0) key = key + ",";
+		const child = t.typeChildren[i];
+		if (child !== null) {
+			key = key + typeKey(child);
+		}
+		i += 1;
+	}
+	// DJB2 hash → base36 (matches hashToBase36 in codegen)
+	let hash: number = 5381;
+	let j = 0;
+	while (j < key.length) {
+		hash = ((hash * 33) + key.charCodeAt(j)) & 0x7FFFFFFF;
+		j += 1;
+	}
+	return "msTuple_" + hash.toString(36);
+}
+
+// typeKey for tuples — matches codegen/c/types.ms:typeKey
+function typeKey(t: Type): string {
+	if (t === null) return "null";
+	if (t.typeName !== "" && t.kind !== TypeKind.Tuple) return t.typeName;
+	return match (t.kind) {
+		TypeKind.Number => "number",
+		TypeKind.String => "string",
+		TypeKind.Boolean => "boolean",
+		TypeKind.Void => "void",
+		TypeKind.Int32 => "int32",
+		TypeKind.Int64 => "int64",
+		TypeKind.Uint32 => "uint32",
+		TypeKind.Float32 => "float32",
+		TypeKind.Float64 => "float64",
+		TypeKind.Array => {
+			"Array(" + (t.typeReturn !== null ? typeKey(t.typeReturn) : "any") + ")";
+		},
+		TypeKind.Tuple => {
+			let k = "tuple:";
+			let i = 0;
+			while (i < t.typeChildren.length) {
+				if (i > 0) k = k + ",";
+				k = k + typeKey(t.typeChildren[i]);
+				i += 1;
+			}
+			k;
+		},
+		_ => t.kind.toString(),
+	};
 }
 
 // ===== Type Classification Helpers =====
@@ -402,6 +481,8 @@ export function createUnifyBindings(): UnifyBindings {
 
 export function unifyType(formal: Type, concrete: Type, bindings: UnifyBindings): void {
 	if (formal === null || concrete === null) return;
+	// Identity check — break circular type references (e.g., Doc → DocData → Doc)
+	if (formal === concrete) return;
 	// Direct generic param match
 	if (formal.kind === TypeKind.GenericParam) {
 		bindings.names.push(formal.typeName);
@@ -445,9 +526,12 @@ export function unifyType(formal: Type, concrete: Type, bindings: UnifyBindings)
 	}
 }
 
+// Cycle-safe: named Object/Union types don't contain GenericParams after resolution
 export function hasGenericParams(t: Type): boolean {
 	if (t === null) return false;
 	if (t.kind === TypeKind.GenericParam) return true;
+	// Named types can't contain GenericParams (they're resolved) — skip to avoid cycles
+	if ((t.kind === TypeKind.Object || t.kind === TypeKind.Union) && t.typeName !== "") return false;
 	if (t.typeReturn !== null && hasGenericParams(t.typeReturn)) return true;
 	if (t.typeExtra !== null && hasGenericParams(t.typeExtra)) return true;
 	for (let i = 0; i < t.typeChildren.length; i += 1) {
@@ -459,10 +543,19 @@ export function hasGenericParams(t: Type): boolean {
 // ===== Type Query Helpers =====
 
 export function isNumeric(t: Type): boolean {
-	return t.kind === TypeKind.Number || t.kind === TypeKind.Int32 ||
-		t.kind === TypeKind.Int64 || t.kind === TypeKind.Uint32 ||
-		t.kind === TypeKind.Float32 || t.kind === TypeKind.Float64 ||
-		t.kind === TypeKind.Char;
+	return t.kind === TypeKind.Number || t.kind === TypeKind.Int8 ||
+		t.kind === TypeKind.Int16 || t.kind === TypeKind.Int32 ||
+		t.kind === TypeKind.Int64 || t.kind === TypeKind.Uint8 ||
+		t.kind === TypeKind.Uint16 || t.kind === TypeKind.Uint32 ||
+		t.kind === TypeKind.Uint64 || t.kind === TypeKind.Float32 ||
+		t.kind === TypeKind.Float64 || t.kind === TypeKind.Char;
+}
+
+export function isIntegerType(t: Type): boolean {
+	return t.kind === TypeKind.Int8 || t.kind === TypeKind.Int16 ||
+		t.kind === TypeKind.Int32 || t.kind === TypeKind.Int64 ||
+		t.kind === TypeKind.Uint8 || t.kind === TypeKind.Uint16 ||
+		t.kind === TypeKind.Uint32 || t.kind === TypeKind.Uint64;
 }
 
 export function isStringType(t: Type): boolean {
@@ -519,9 +612,14 @@ export function isPrimitiveKind(kind: TypeKind): boolean {
 		|| kind === TypeKind.Boolean
 		|| kind === TypeKind.Void
 		|| kind === TypeKind.Null
+		|| kind === TypeKind.Int8
+		|| kind === TypeKind.Int16
 		|| kind === TypeKind.Int32
 		|| kind === TypeKind.Int64
+		|| kind === TypeKind.Uint8
+		|| kind === TypeKind.Uint16
 		|| kind === TypeKind.Uint32
+		|| kind === TypeKind.Uint64
 		|| kind === TypeKind.Float32
 		|| kind === TypeKind.Float64
 		|| kind === TypeKind.Enum
@@ -540,9 +638,14 @@ export function typeNameOf(t: Type): string {
 		TypeKind.Number => "number",
 		TypeKind.Boolean => "boolean",
 		TypeKind.Char => "char",
+		TypeKind.Int8 => "int8",
+		TypeKind.Int16 => "int16",
 		TypeKind.Int32 => "int32",
 		TypeKind.Int64 => "int64",
+		TypeKind.Uint8 => "uint8",
+		TypeKind.Uint16 => "uint16",
 		TypeKind.Uint32 => "uint32",
+		TypeKind.Uint64 => "uint64",
 		TypeKind.Float32 => "float32",
 		TypeKind.Float64 => "float64",
 		TypeKind.Array => "Array",
@@ -577,10 +680,11 @@ export function alignOfType(t: Type): number {
 		return alignOfType(t.typeReturn);
 	}
 	return match (t.kind) {
-		TypeKind.Boolean | TypeKind.Char => 1,
+		TypeKind.Boolean | TypeKind.Char | TypeKind.Int8 | TypeKind.Uint8 => 1,
+		TypeKind.Int16 | TypeKind.Uint16 => 2,
 		TypeKind.Int32 | TypeKind.Uint32 | TypeKind.Float32 | TypeKind.Enum => 4,
 		TypeKind.Number | TypeKind.Float64 => ps,
-		TypeKind.Int64 => ps,
+		TypeKind.Int64 | TypeKind.Uint64 => ps,
 		TypeKind.CString | TypeKind.Ref | TypeKind.Ptr | TypeKind.Function => ps,
 		TypeKind.String | TypeKind.Array | TypeKind.Span => ps,
 		_ => 0,
@@ -601,7 +705,7 @@ function alignOfStruct(t: Type): number {
 }
 
 // sizeOfType — compile-time sizeof for primitive and compound types (target-aware C ABI)
-// Mirrors Nim's computeSizeAlign: fields are aligned, struct is padded to maxAlign.
+// Mirrors standard reference implementation for size/alignment: fields are aligned, struct is padded to maxAlign.
 export function sizeOfType(t: Type): number {
 	const ps = targetPtrSize;
 	if (t.kind === TypeKind.Object || t.kind === TypeKind.Tuple) {
@@ -611,9 +715,10 @@ export function sizeOfType(t: Type): number {
 		return sizeOfType(t.typeReturn);
 	}
 	return match (t.kind) {
-		TypeKind.Boolean | TypeKind.Char => 1,
+		TypeKind.Boolean | TypeKind.Char | TypeKind.Int8 | TypeKind.Uint8 => 1,
+		TypeKind.Int16 | TypeKind.Uint16 => 2,
 		TypeKind.Int32 | TypeKind.Uint32 | TypeKind.Float32 | TypeKind.Enum => 4,
-		TypeKind.Number | TypeKind.Int64 | TypeKind.Float64 => ps,
+		TypeKind.Number | TypeKind.Int64 | TypeKind.Uint64 | TypeKind.Float64 => ps,
 		TypeKind.String => ps * 2,
 		TypeKind.CString | TypeKind.Ref | TypeKind.Ptr => ps,
 		TypeKind.Function => ps * 2,
@@ -642,188 +747,188 @@ function sizeOfStruct(t: Type): number {
 
 // ===== Tests =====
 test "primitive kinds" {
-	expect(numberType().kind === TypeKind.Number);
-	expect(stringType().kind === TypeKind.String);
-	expect(booleanType().kind === TypeKind.Boolean);
-	expect(voidType().kind === TypeKind.Void);
-	expect(nullType().kind === TypeKind.Null);
-	expect(unknownType().kind === TypeKind.Unknown);
-	expect(neverType().kind === TypeKind.Never);
-	expect(errorType().kind === TypeKind.Error);
+	assert numberType().kind === TypeKind.Number;
+	assert stringType().kind === TypeKind.String;
+	assert booleanType().kind === TypeKind.Boolean;
+	assert voidType().kind === TypeKind.Void;
+	assert nullType().kind === TypeKind.Null;
+	assert unknownType().kind === TypeKind.Unknown;
+	assert neverType().kind === TypeKind.Never;
+	assert errorType().kind === TypeKind.Error;
 }
 
 test "createArray" {
 	const arrType = createArray(numberType());
-	expect(arrType.kind === TypeKind.Array);
-	expect(arrType.typeReturn.kind === TypeKind.Number);
+	assert arrType.kind === TypeKind.Array;
+	assert arrType.typeReturn.kind === TypeKind.Number;
 }
 
 test "createSizedArray" {
 	const arrType = createSizedArray(numberType(), 4);
-	expect(arrType.kind === TypeKind.SizedArray);
-	expect(arrType.typeReturn.kind === TypeKind.Number);
-	expect(arrType.typeFlags === 4);
+	assert arrType.kind === TypeKind.SizedArray;
+	assert arrType.typeReturn.kind === TypeKind.Number;
+	assert arrType.typeFlags === 4;
 }
 
 test "createSpan" {
 	const spanType = createSpan(numberType());
-	expect(spanType.kind === TypeKind.Span);
-	expect(spanType.typeReturn.kind === TypeKind.Number);
+	assert spanType.kind === TypeKind.Span;
+	assert spanType.typeReturn.kind === TypeKind.Number;
 }
 
 test "createFunction" {
 	const fnType = createFunction([numberType(), stringType()], ["a", "b"], booleanType());
-	expect(fnType.kind === TypeKind.Function);
-	expect(fnType.typeChildren.length === 2);
-	expect(fnType.typeNames[0] === "a");
-	expect(fnType.typeReturn.kind === TypeKind.Boolean);
+	assert fnType.kind === TypeKind.Function;
+	assert fnType.typeChildren.length === 2;
+	assert fnType.typeNames[0] === "a";
+	assert fnType.typeReturn.kind === TypeKind.Boolean;
 }
 
 test "createObject" {
 	const obj = createObject("Point", ["x"], [numberType()], false);
-	expect(obj.kind === TypeKind.Object);
-	expect(obj.typeName === "Point");
-	expect(obj.typeNames.length === 1);
-	expect(obj.typeChildren.length === 1);
-	expect(obj.typeFlags === 0);
+	assert obj.kind === TypeKind.Object;
+	assert obj.typeName === "Point";
+	assert obj.typeNames.length === 1;
+	assert obj.typeChildren.length === 1;
+	assert obj.typeFlags === 0;
 }
 
 test "createEnum" {
 	const e = createEnum("Color", ["Red", "Green", "Blue"]);
-	expect(e.kind === TypeKind.Enum);
-	expect(e.typeName === "Color");
-	expect(e.typeNames.length === 3);
+	assert e.kind === TypeKind.Enum;
+	assert e.typeName === "Color";
+	assert e.typeNames.length === 3;
 }
 
 test "createResult" {
 	const r = createResult(numberType(), stringType());
-	expect(r.kind === TypeKind.Result);
-	expect(r.typeReturn.kind === TypeKind.Number);
-	expect(r.typeExtra.kind === TypeKind.String);
+	assert r.kind === TypeKind.Result;
+	assert r.typeReturn.kind === TypeKind.Number;
+	assert r.typeExtra.kind === TypeKind.String;
 }
 
 test "createTypeRef" {
 	const t = createTypeRef("MyType");
-	expect(t.kind === TypeKind.TypeReference);
-	expect(t.typeName === "MyType");
+	assert t.kind === TypeKind.TypeReference;
+	assert t.typeName === "MyType";
 }
 
 test "createRef and Ptr" {
 	const r = createRef(numberType());
-	expect(r.kind === TypeKind.Ref);
-	expect(r.typeReturn.kind === TypeKind.Number);
+	assert r.kind === TypeKind.Ref;
+	assert r.typeReturn.kind === TypeKind.Number;
 	const p = createPtr(stringType());
-	expect(p.kind === TypeKind.Ptr);
-	expect(p.typeReturn.kind === TypeKind.String);
+	assert p.kind === TypeKind.Ptr;
+	assert p.typeReturn.kind === TypeKind.String;
 }
 
 test "isNumeric" {
-	expect(isNumeric(numberType()));
-	expect(isNumeric(createPrimitive(TypeKind.Int32)));
-	expect(isNumeric(createPrimitive(TypeKind.Float64)));
-	expect(!isNumeric(stringType()));
-	expect(!isNumeric(booleanType()));
+	assert isNumeric(numberType());
+	assert isNumeric(createPrimitive(TypeKind.Int32));
+	assert isNumeric(createPrimitive(TypeKind.Float64));
+	assert !isNumeric(stringType());
+	assert !isNumeric(booleanType());
 }
 
 test "isStringType" {
-	expect(isStringType(stringType()));
-	expect(!isStringType(numberType()));
+	assert isStringType(stringType());
+	assert !isStringType(numberType());
 }
 
 test "isBoolType" {
-	expect(isBoolType(booleanType()));
-	expect(!isBoolType(numberType()));
+	assert isBoolType(booleanType());
+	assert !isBoolType(numberType());
 }
 
 test "isCallable" {
 	const fn = createFunction([], [], voidType());
-	expect(isCallable(fn));
-	expect(!isCallable(numberType()));
+	assert isCallable(fn);
+	assert !isCallable(numberType());
 }
 
 test "getReturnType" {
 	const fn = createFunction([], [], booleanType());
-	expect(getReturnType(fn).kind === TypeKind.Boolean);
-	expect(getReturnType(numberType()).kind === TypeKind.Unknown);
+	assert getReturnType(fn).kind === TypeKind.Boolean;
+	assert getReturnType(numberType()).kind === TypeKind.Unknown;
 }
 
 test "getElementType" {
 	const arr = createArray(stringType());
-	expect(getElementType(arr).kind === TypeKind.String);
-	expect(getElementType(numberType()).kind === TypeKind.Unknown);
+	assert getElementType(arr).kind === TypeKind.String;
+	assert getElementType(numberType()).kind === TypeKind.Unknown;
 }
 
 test "getProperty" {
 	const obj = createObject("Point", ["x", "y"], [numberType(), stringType()], false);
-	expect(getProperty(obj, "x").kind === TypeKind.Number);
-	expect(getProperty(obj, "y").kind === TypeKind.String);
-	expect(getProperty(obj, "z").kind === TypeKind.Unknown);
-	expect(getProperty(numberType(), "x").kind === TypeKind.Unknown);
+	assert getProperty(obj, "x").kind === TypeKind.Number;
+	assert getProperty(obj, "y").kind === TypeKind.String;
+	assert getProperty(obj, "z").kind === TypeKind.Unknown;
+	assert getProperty(numberType(), "x").kind === TypeKind.Unknown;
 }
 
 test "substitute generic param" {
 	const gp = createGenericParam("T");
 	const result = substituteType(gp, "T", numberType());
-	expect(result.kind === TypeKind.Number);
+	assert result.kind === TypeKind.Number;
 }
 
 test "substitute non-matching" {
 	const gp = createGenericParam("T");
 	const result = substituteType(gp, "U", numberType());
-	expect(result.kind === TypeKind.GenericParam);
+	assert result.kind === TypeKind.GenericParam;
 }
 
 test "substitute in array" {
 	const arr = createArray(createGenericParam("T"));
 	const result = substituteType(arr, "T", stringType());
-	expect(result.kind === TypeKind.Array);
-	expect(result.typeReturn.kind === TypeKind.String);
+	assert result.kind === TypeKind.Array;
+	assert result.typeReturn.kind === TypeKind.String;
 }
 
 test "substitute in function" {
 	const fn = createFunction([createGenericParam("T")], ["a"], createGenericParam("T"));
 	const result = substituteType(fn, "T", numberType());
-	expect(result.kind === TypeKind.Function);
-	expect(result.typeChildren[0].kind === TypeKind.Number);
-	expect(result.typeReturn.kind === TypeKind.Number);
+	assert result.kind === TypeKind.Function;
+	assert result.typeChildren[0].kind === TypeKind.Number;
+	assert result.typeReturn.kind === TypeKind.Number;
 }
 
 test "substitute in Result" {
 	const r = createResult(createGenericParam("T"), createGenericParam("E"));
 	const step1 = substituteType(r, "T", numberType());
 	const step2 = substituteType(step1, "E", stringType());
-	expect(step2.kind === TypeKind.Result);
-	expect(step2.typeReturn.kind === TypeKind.Number);
-	expect(step2.typeExtra.kind === TypeKind.String);
+	assert step2.kind === TypeKind.Result;
+	assert step2.typeReturn.kind === TypeKind.Number;
+	assert step2.typeExtra.kind === TypeKind.String;
 }
 
 test "instantiateGeneric multi-param" {
 	const r = createResult(createGenericParam("T"), createGenericParam("E"));
 	const result = instantiateGeneric(r, ["T", "E"], [numberType(), stringType()]);
-	expect(result.kind === TypeKind.Result);
-	expect(result.typeReturn.kind === TypeKind.Number);
-	expect(result.typeExtra.kind === TypeKind.String);
+	assert result.kind === TypeKind.Result;
+	assert result.typeReturn.kind === TypeKind.Number;
+	assert result.typeExtra.kind === TypeKind.String;
 }
 
 test "primitive unchanged" {
 	const result = substituteType(numberType(), "T", stringType());
-	expect(result.kind === TypeKind.Number);
+	assert result.kind === TypeKind.Number;
 }
 
 test "unify direct generic param" {
 	const b = createUnifyBindings();
 	unifyType(createGenericParam("T"), numberType(), b);
-	expect(b.names.length === 1);
-	expect(b.names[0] === "T");
-	expect(b.types[0].kind === TypeKind.Number);
+	assert b.names.length === 1;
+	assert b.names[0] === "T";
+	assert b.types[0].kind === TypeKind.Number;
 }
 
 test "unify Array<T> vs Array<string>" {
 	const b = createUnifyBindings();
 	unifyType(createArray(createGenericParam("T")), createArray(stringType()), b);
-	expect(b.names.length === 1);
-	expect(b.names[0] === "T");
-	expect(b.types[0].kind === TypeKind.String);
+	assert b.names.length === 1;
+	assert b.names[0] === "T";
+	assert b.types[0].kind === TypeKind.String;
 }
 
 test "unify Result<T, E> vs Result<number, string>" {
@@ -831,158 +936,158 @@ test "unify Result<T, E> vs Result<number, string>" {
 	const formal = createResult(createGenericParam("T"), createGenericParam("E"));
 	const concrete = createResult(numberType(), stringType());
 	unifyType(formal, concrete, b);
-	expect(b.names.length === 2);
-	expect(b.names[0] === "T");
-	expect(b.types[0].kind === TypeKind.Number);
-	expect(b.names[1] === "E");
-	expect(b.types[1].kind === TypeKind.String);
+	assert b.names.length === 2;
+	assert b.names[0] === "T";
+	assert b.types[0].kind === TypeKind.Number;
+	assert b.names[1] === "E";
+	assert b.types[1].kind === TypeKind.String;
 }
 
 test "unify mismatched kinds" {
 	const b = createUnifyBindings();
 	unifyType(createArray(createGenericParam("T")), numberType(), b);
-	expect(b.names.length === 0);
+	assert b.names.length === 0;
 }
 
 test "unify concrete no bindings" {
 	const b = createUnifyBindings();
 	unifyType(numberType(), numberType(), b);
-	expect(b.names.length === 0);
+	assert b.names.length === 0;
 }
 
 test "hasGenericParams true" {
-	expect(hasGenericParams(createGenericParam("T")));
-	expect(hasGenericParams(createArray(createGenericParam("T"))));
-	expect(hasGenericParams(createFunction([createGenericParam("T")], ["a"], numberType())));
+	assert hasGenericParams(createGenericParam("T"));
+	assert hasGenericParams(createArray(createGenericParam("T")));
+	assert hasGenericParams(createFunction([createGenericParam("T")], ["a"], numberType()));
 }
 
 test "hasGenericParams false" {
-	expect(!hasGenericParams(numberType()));
-	expect(!hasGenericParams(createArray(stringType())));
-	expect(!hasGenericParams(createFunction([numberType()], ["a"], stringType())));
+	assert !hasGenericParams(numberType());
+	assert !hasGenericParams(createArray(stringType()));
+	assert !hasGenericParams(createFunction([numberType()], ["a"], stringType()));
 }
 
 test "default returns param count" {
 	const fn1 = createFunction([numberType(), stringType()], ["a", "b"], voidType());
-	expect(getMinArity(fn1) === 2);
+	assert getMinArity(fn1) === 2;
 }
 
 test "setMinArity stores correctly" {
 	const fn2 = createFunction([numberType(), stringType()], ["a", "b"], voidType());
 	setMinArity(fn2, 1);
-	expect(getMinArity(fn2) === 1);
+	assert getMinArity(fn2) === 1;
 }
 
 test "setMinArity zero" {
 	const fn3 = createFunction([numberType()], ["a"], voidType());
 	setMinArity(fn3, 0);
-	expect(getMinArity(fn3) === 0);
+	assert getMinArity(fn3) === 0;
 }
 
 test "preserves low bits" {
 	const fn4 = createFunction([numberType()], ["a"], voidType());
 	fn4.typeFlags = 1;
 	setMinArity(fn4, 1);
-	expect(getMinArity(fn4) === 1);
-	expect((fn4.typeFlags & 0xFF) === 1);
+	assert getMinArity(fn4) === 1;
+	assert (fn4.typeFlags & 0xFF) === 1;
 }
 
 test "createTuple" {
 	const tup = createTuple([numberType(), stringType()]);
-	expect(tup.kind === TypeKind.Tuple);
-	expect(tup.typeChildren.length === 2);
-	expect(tup.typeChildren[0].kind === TypeKind.Number);
-	expect(tup.typeChildren[1].kind === TypeKind.String);
+	assert tup.kind === TypeKind.Tuple;
+	assert tup.typeChildren.length === 2;
+	assert tup.typeChildren[0].kind === TypeKind.Number;
+	assert tup.typeChildren[1].kind === TypeKind.String;
 }
 
 test "typeNameOf Tuple" {
 	const tup = createTuple([numberType()]);
-	expect(typeNameOf(tup) === "Tuple");
+	assert typeNameOf(tup) === "Tuple";
 }
 
 test "substituteType Tuple" {
 	const tup = createTuple([createGenericParam("T"), numberType()]);
 	const result = substituteType(tup, "T", stringType());
-	expect(result.kind === TypeKind.Tuple);
-	expect(result.typeChildren[0].kind === TypeKind.String);
-	expect(result.typeChildren[1].kind === TypeKind.Number);
+	assert result.kind === TypeKind.Tuple;
+	assert result.typeChildren[0].kind === TypeKind.String;
+	assert result.typeChildren[1].kind === TypeKind.Number;
 }
 
 test "createSet" {
 	const s = createSet(stringType());
-	expect(s.kind === TypeKind.Set);
-	expect(s.typeReturn.kind === TypeKind.String);
+	assert s.kind === TypeKind.Set;
+	assert s.typeReturn.kind === TypeKind.String;
 }
 
 test "typeNameOf Set" {
-	expect(typeNameOf(createSet(stringType())) === "Set");
+	assert typeNameOf(createSet(stringType())) === "Set";
 }
 
 test "substituteType Set" {
 	const s = createSet(createGenericParam("T"));
 	const result = substituteType(s, "T", stringType());
-	expect(result.kind === TypeKind.Set);
-	expect(result.typeReturn.kind === TypeKind.String);
+	assert result.kind === TypeKind.Set;
+	assert result.typeReturn.kind === TypeKind.String;
 }
 
 test "sizeOfType primitives 64-bit" {
 	setTargetSizes(8, 8);
-	expect(sizeOfType(createPrimitive(TypeKind.Boolean)) === 1);
-	expect(sizeOfType(createPrimitive(TypeKind.Char)) === 1);
-	expect(sizeOfType(createPrimitive(TypeKind.Int32)) === 4);
-	expect(sizeOfType(createPrimitive(TypeKind.Uint32)) === 4);
-	expect(sizeOfType(createPrimitive(TypeKind.Float32)) === 4);
-	expect(sizeOfType(numberType()) === 8);
-	expect(sizeOfType(createPrimitive(TypeKind.Int64)) === 8);
-	expect(sizeOfType(createPrimitive(TypeKind.Float64)) === 8);
-	expect(sizeOfType(stringType()) === 16);
-	expect(sizeOfType(createArray(numberType())) === 16);
-	expect(sizeOfType(createPrimitive(TypeKind.Enum)) === 4);
+	assert sizeOfType(createPrimitive(TypeKind.Boolean)) === 1;
+	assert sizeOfType(createPrimitive(TypeKind.Char)) === 1;
+	assert sizeOfType(createPrimitive(TypeKind.Int32)) === 4;
+	assert sizeOfType(createPrimitive(TypeKind.Uint32)) === 4;
+	assert sizeOfType(createPrimitive(TypeKind.Float32)) === 4;
+	assert sizeOfType(numberType()) === 8;
+	assert sizeOfType(createPrimitive(TypeKind.Int64)) === 8;
+	assert sizeOfType(createPrimitive(TypeKind.Float64)) === 8;
+	assert sizeOfType(stringType()) === 16;
+	assert sizeOfType(createArray(numberType())) === 16;
+	assert sizeOfType(createPrimitive(TypeKind.Enum)) === 4;
 }
 
 test "sizeOfType primitives 32-bit" {
 	setTargetSizes(4, 4);
-	expect(sizeOfType(numberType()) === 4);
-	expect(sizeOfType(stringType()) === 8);
-	expect(sizeOfType(createArray(numberType())) === 8);
-	expect(sizeOfType(createFunction([], [], numberType())) === 8);
-	expect(sizeOfType(createPrimitive(TypeKind.Ref)) === 4);
-	expect(sizeOfType(createPrimitive(TypeKind.Int32)) === 4);
-	expect(sizeOfType(createPrimitive(TypeKind.Int64)) === 4);
+	assert sizeOfType(numberType()) === 4;
+	assert sizeOfType(stringType()) === 8;
+	assert sizeOfType(createArray(numberType())) === 8;
+	assert sizeOfType(createFunction([], [], numberType())) === 8;
+	assert sizeOfType(createPrimitive(TypeKind.Ref)) === 4;
+	assert sizeOfType(createPrimitive(TypeKind.Int32)) === 4;
+	assert sizeOfType(createPrimitive(TypeKind.Int64)) === 4;
 	setTargetSizes(8, 8);
 }
 
 test "sizeOfType object no padding" {
 	const obj = createObject("Pair", ["x", "y"], [createPrimitive(TypeKind.Int32), createPrimitive(TypeKind.Int32)], true);
-	expect(sizeOfType(obj) === 8);
+	assert sizeOfType(obj) === 8;
 }
 
 test "sizeOfType object with padding" {
 	// { char (1 byte) + padding(3) + int32 (4 bytes) } = 8
 	const obj = createObject("Mixed", ["a", "b"], [createPrimitive(TypeKind.Char), createPrimitive(TypeKind.Int32)], true);
-	expect(sizeOfType(obj) === 8);
+	assert sizeOfType(obj) === 8;
 }
 
 test "sizeOfType object tail padding" {
 	// { int64 (8 bytes) + char (1 byte) + padding(7) } = 16 (aligned to maxAlign=8)
 	const obj = createObject("Tail", ["x", "y"], [createPrimitive(TypeKind.Int64), createPrimitive(TypeKind.Char)], true);
-	expect(sizeOfType(obj) === 16);
+	assert sizeOfType(obj) === 16;
 }
 
 test "sizeOfType function closure" {
-	expect(sizeOfType(createFunction([], [], numberType())) === 16);
+	assert sizeOfType(createFunction([], [], numberType())) === 16;
 }
 
 test "alignOfType" {
-	expect(alignOfType(createPrimitive(TypeKind.Char)) === 1);
-	expect(alignOfType(createPrimitive(TypeKind.Int32)) === 4);
-	expect(alignOfType(numberType()) === 8);
+	assert alignOfType(createPrimitive(TypeKind.Char)) === 1;
+	assert alignOfType(createPrimitive(TypeKind.Int32)) === 4;
+	assert alignOfType(numberType()) === 8;
 }
 
 test "alignOfType 32-bit" {
 	setTargetSizes(4, 4);
-	expect(alignOfType(numberType()) === 4);
-	expect(alignOfType(createPrimitive(TypeKind.Ref)) === 4);
-	expect(alignOfType(createPrimitive(TypeKind.Int32)) === 4);
+	assert alignOfType(numberType()) === 4;
+	assert alignOfType(createPrimitive(TypeKind.Ref)) === 4;
+	assert alignOfType(createPrimitive(TypeKind.Int32)) === 4;
 	setTargetSizes(8, 8);
 }

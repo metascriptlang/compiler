@@ -6,7 +6,7 @@ import { sliceStr, findChar, trimStr, splitTopLevel } from "../utils/string";
 
 // ===== Export Registry (cross-module type propagation) =====
 // Lives only during checkModuleGraph execution — NOT on Module/ModuleGraph (DRC constraint).
-// Nim parallel: g.ifaces[m.position].interf (per-module public symbol table)
+// Reference implementation equivalent: per-module public symbol table.
 
 export interface ExportedSymInfo {
 	name: string;
@@ -142,7 +142,7 @@ export function findAllExtensions(registry: ExtensionRegistry, receiverTypeName:
 }
 
 // findAllExtensionsByName — find ALL extensions with a given method name (any receiver).
-// Nim-aligned: candidates are collected by name, then filtered by type compatibility
+// Standard reference pattern: candidates are collected by name, then filtered by type compatibility
 // at the call site using isAssignable (not string comparison on receiverTypeName).
 export function findAllExtensionsByName(registry: ExtensionRegistry, methodName: string): ExtensionMethod[] {
 	const results: ExtensionMethod[] = [];
@@ -302,11 +302,20 @@ export function isCancelled(cancel: CancelCtx, startVersion: number): boolean {
 
 // ===== Checker Context =====
 
+// Structured error — standard reference messages always carry line info
+export interface CheckerError {
+	message: string;
+	line: number;    // 1-based, 0 = unknown
+	column: number;  // 0-based, 0 = unknown
+	fatal: boolean;  // true = globalError (abort), false = localError (continue)
+}
+
 export interface CheckerContext {
 	table: SymbolTable;
-	errors: string[];
+	errors: CheckerError[];
 	currentFunction: Symbol;   // innermost function (for return type validation)
 	inLoop: boolean;           // break/continue validation
+	inTestBlock: boolean;      // assert validation — only allowed inside test blocks
 	moduleGraph: ModuleGraph;  // null for single-module mode
 	currentModule: Module;     // null for single-module mode
 	exportRegistry: ExportRegistry;  // null for single-module mode
@@ -315,8 +324,10 @@ export interface CheckerContext {
 	includeDirectives: string; // accumulated @include args, newline-separated
 	compileDirectives: string; // accumulated @compile args, newline-separated
 	compilerFlags: string;     // accumulated @link/@passC/@passL args, space-separated
+	emitDirectives: string;    // accumulated @emit args, newline-separated (raw C code)
 	cancelCtx: CancelCtx;       // null in batch mode, set for LSP
 	cancelVersion: number;       // version at check start
+	modulePath: string;          // Implementation parity: source path for name mangling
 }
 
 // ===== Constructors =====
@@ -326,8 +337,11 @@ export function createContext(): CheckerContext {
 	return {
 		table,
 		errors: [],
+		errorLines: [],
+		errorColumns: [],
 		currentFunction: null as unknown as Symbol,
 		inLoop: false,
+		inTestBlock: false,
 		moduleGraph: null as unknown as ModuleGraph,
 		currentModule: null as unknown as Module,
 		exportRegistry: null as unknown as ExportRegistry,
@@ -336,8 +350,11 @@ export function createContext(): CheckerContext {
 		includeDirectives: "",
 		compileDirectives: "",
 		compilerFlags: "",
+		emitDirectives: "",
 		cancelCtx: null as unknown as CancelCtx,
 		cancelVersion: 0,
+		hasFatalError: false,
+		modulePath: "",
 	};
 }
 
@@ -345,21 +362,39 @@ export function createModuleContext(graph: ModuleGraph, mod: Module): CheckerCon
 	const ctx = createContext();
 	ctx.moduleGraph = graph;
 	ctx.currentModule = mod;
+	ctx.modulePath = mod.path;
 	return ctx;
 }
 
 // ===== Error Collection =====
 
-export function addError(ctx: CheckerContext, msg: string): void {
-	ctx.errors.push(msg);
+// localError — non-fatal, compilation continues
+export function addError(ctx: CheckerContext, msg: string, line: number, col: number): void {
+	ctx.errors.push({ message: msg, line, column: col, fatal: false });
+}
+
+// globalError — fatal, compilation should abort
+export function addFatalError(ctx: CheckerContext, msg: string, line: number, col: number): void {
+	ctx.errors.push({ message: msg, line, column: col, fatal: true });
 }
 
 export function hasErrors(ctx: CheckerContext): boolean {
 	return ctx.errors.length > 0;
 }
 
+export function hasFatalErrors(ctx: CheckerContext): boolean {
+	for (let i = 0; i < ctx.errors.length; i += 1) {
+		if (ctx.errors[i].fatal) return true;
+	}
+	return false;
+}
+
 export function errorCount(ctx: CheckerContext): number {
 	return ctx.errors.length;
+}
+
+export function errorMessage(err: CheckerError): string {
+	return err.message;
 }
 
 // ===== Context Cache (DRC-safe: CheckerContext in struct fields ONLY here) =====
@@ -401,38 +436,42 @@ export function ctxCacheClear(): void {
 // ===== Tests =====
 test "create context" {
 	const ctx = createContext();
-	expect(!hasErrors(ctx));
-	expect(ctx.table.current.scopeKind === ScopeKind.Global);
-	expect(ctx.currentFunction === null);
-	expect(!ctx.inLoop);
-	expect(ctx.moduleGraph === null);
-	expect(ctx.currentModule === null);
+	assert !hasErrors(ctx);
+	assert ctx.table.current.scopeKind === ScopeKind.Global;
+	assert ctx.currentFunction === null;
+	assert !ctx.inLoop;
+	assert ctx.moduleGraph === null;
+	assert ctx.currentModule === null;
 }
 
 test "create module context" {
 	const graph = createModuleGraph();
 	const mod = createModule("/a/b.ms");
 	const ctx = createModuleContext(graph, mod);
-	expect(!hasErrors(ctx));
-	expect(ctx.moduleGraph !== null);
-	expect(ctx.currentModule !== null);
-	expect(ctx.currentModule.path === "/a/b.ms");
-	expect(ctx.exportRegistry === null);
+	assert !hasErrors(ctx);
+	assert ctx.moduleGraph !== null;
+	assert ctx.currentModule !== null;
+	assert ctx.currentModule.path === "/a/b.ms";
+	assert ctx.exportRegistry === null;
 }
 
 test "error collection" {
 	const ctx = createContext();
-	expect(errorCount(ctx) === 0);
-	addError(ctx, "test error");
-	expect(hasErrors(ctx));
-	expect(errorCount(ctx) === 1);
-	addError(ctx, "another error");
-	expect(errorCount(ctx) === 2);
+	assert errorCount(ctx) === 0;
+	addError(ctx, "test error", 1, 0);
+	assert hasErrors(ctx);
+	assert errorCount(ctx) === 1;
+	addError(ctx, "another error", 2, 5);
+	assert errorCount(ctx) === 2;
+	assert ctx.errors[0].message === "test error";
+	assert ctx.errors[0].line === 1;
+	assert ctx.errors[1].message === "another error";
+	assert ctx.errors[1].line === 2;
 }
 
 test "create empty" {
 	const r = createExtensionRegistry();
-	expect(r.methods.length === 0);
+	assert r.methods.length === 0;
 }
 
 test "register and find" {
@@ -440,20 +479,20 @@ test "register and find" {
 	const m: ExtensionMethod = { methodName: "trim", receiverTypeName: "string", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false, sym: null as unknown as Symbol };
 	registerExtension(r, m);
 	const found = findExtension(r, "string", "trim");
-	expect(found !== null);
-	expect(found.methodName === "trim");
+	assert found !== null;
+	assert found.methodName === "trim";
 }
 
 test "not found" {
 	const r = createExtensionRegistry();
 	const found = findExtension(r, "string", "nope");
-	expect(found === null);
+	assert found === null;
 }
 
 test "no attached ops" {
 	const r = createExtensionRegistry();
 	const ops = findAttachedOps(r, "Foo");
-	expect(!hasAttachedOps(ops));
+	assert !hasAttachedOps(ops);
 }
 
 test "detect onDestroy" {
@@ -461,9 +500,9 @@ test "detect onDestroy" {
 	const m: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Foo", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false, sym: null as unknown as Symbol };
 	registerExtension(r, m);
 	const ops = findAttachedOps(r, "Foo");
-	expect(hasAttachedOps(ops));
-	expect(ops.onDestroy !== null);
-	expect(ops.onCopy === null);
+	assert hasAttachedOps(ops);
+	assert ops.onDestroy !== null;
+	assert ops.onCopy === null;
 }
 
 test "detect all lifecycle hooks" {
@@ -475,10 +514,10 @@ test "detect all lifecycle hooks" {
 	const mv: ExtensionMethod = { methodName: "onMove", receiverTypeName: "Bar", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false, sym: null as unknown as Symbol };
 	registerExtension(r, mv);
 	const ops = findAttachedOps(r, "Bar");
-	expect(hasAttachedOps(ops));
-	expect(ops.onDestroy !== null);
-	expect(ops.onCopy !== null);
-	expect(ops.onMove !== null);
+	assert hasAttachedOps(ops);
+	assert ops.onDestroy !== null;
+	assert ops.onCopy !== null;
+	assert ops.onMove !== null;
 }
 
 test "wrong type no match" {
@@ -486,12 +525,12 @@ test "wrong type no match" {
 	const m: ExtensionMethod = { methodName: "onDestroy", receiverTypeName: "Foo", sourcePath: "/a.ms", fnType: unknownType(), isStatic: false, sym: null as unknown as Symbol };
 	registerExtension(r, m);
 	const ops = findAttachedOps(r, "Bar");
-	expect(!hasAttachedOps(ops));
+	assert !hasAttachedOps(ops);
 }
 
 test "create empty registry" {
 	const r = createExportRegistry();
-	expect(r.entries.length === 0);
+	assert r.entries.length === 0;
 }
 
 test "register and find exports" {
@@ -501,15 +540,15 @@ test "register and find exports" {
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "foo");
-	expect(found !== null);
-	expect(found.name === "foo");
-	expect(found.kind === SymbolKind.Function);
+	assert found !== null;
+	assert found.name === "foo";
+	assert found.kind === SymbolKind.Function;
 }
 
 test "missing module returns null" {
 	const r = createExportRegistry();
 	const found = findExportedSymbol(r, "/nope.ms", "x");
-	expect(found === null);
+	assert found === null;
 }
 
 test "missing symbol returns null" {
@@ -519,79 +558,79 @@ test "missing symbol returns null" {
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "bar");
-	expect(found === null);
+	assert found === null;
 }
 
 test "extractGenericNames single" {
 	const names = extractGenericNames("gen:T");
-	expect(names.length === 1);
-	expect(names[0] === "T");
+	assert names.length === 1;
+	assert names[0] === "T";
 }
 
 test "extractGenericNames multiple" {
 	const names = extractGenericNames("gen:T,U,V");
-	expect(names.length === 3);
-	expect(names[0] === "T");
-	expect(names[1] === "U");
-	expect(names[2] === "V");
+	assert names.length === 3;
+	assert names[0] === "T";
+	assert names[1] === "U";
+	assert names[2] === "V";
 }
 
 test "extractGenericNames with async" {
 	const names = extractGenericNames("async|gen:T");
-	expect(names.length === 1);
-	expect(names[0] === "T");
+	assert names.length === 1;
+	assert names[0] === "T";
 }
 
 test "extractGenericNames empty" {
 	const names = extractGenericNames("");
-	expect(names.length === 0);
+	assert names.length === 0;
 }
 
 test "extractGenericNames no gen" {
 	const names = extractGenericNames("async");
-	expect(names.length === 0);
+	assert names.length === 0;
 }
 
-test "stripGenFlag simple" { expect(stripGenFlag("gen:T") === ""); }
+test "stripGenFlag simple" { assert stripGenFlag("gen:T") === ""; }
 
-test "stripGenFlag with async" { expect(stripGenFlag("async|gen:T") === "async"); }
+test "stripGenFlag with async" { assert stripGenFlag("async|gen:T") === "async"; }
 
-test "stripGenFlag no gen" { expect(stripGenFlag("async") === "async"); }
+test "stripGenFlag no gen" { assert stripGenFlag("async") === "async"; }
 
 test "isExtensionFlag prefix" {
-	expect(isExtensionFlag("ext:s:string"));
-	expect(!isExtensionFlag(""));
-	expect(!isExtensionFlag("async"));
+	assert isExtensionFlag("ext:s:string");
+	assert !isExtensionFlag("");
+	assert !isExtensionFlag("async");
 }
 
 test "isExtensionFlag pipe-delimited" {
-	expect(isExtensionFlag("async|ext:s:string"));
-	expect(isExtensionFlag("gen:T|ext:self:Array"));
+	assert isExtensionFlag("async|ext:s:string");
+	assert isExtensionFlag("gen:T|ext:self:Array");
 }
 
 test "getExtReceiverName" {
-	expect(getExtReceiverName("ext:s:string") === "s");
-	expect(getExtReceiverName("async|ext:self:Array") === "self");
-	expect(getExtReceiverName("") === "");
+	assert getExtReceiverName("ext:s:string") === "s";
+	assert getExtReceiverName("async|ext:self:Array") === "self";
+	assert getExtReceiverName("") === "";
 }
 
 test "getExtReceiverType" {
-	expect(getExtReceiverType("ext:s:string") === "string");
-	expect(getExtReceiverType("async|ext:self:Array") === "Array");
-	expect(getExtReceiverType("") === "");
+	assert getExtReceiverType("ext:s:string") === "string";
+	assert getExtReceiverType("async|ext:self:Array") === "Array";
+	assert getExtReceiverType("") === "";
 }
 
 test "isStaticExtensionFlag" {
-	expect(isStaticExtensionFlag("sext:Math"));
-	expect(isStaticExtensionFlag("async|sext:Promise"));
-	expect(!isStaticExtensionFlag("ext:s:string"));
-	expect(!isStaticExtensionFlag(""));
+	assert isStaticExtensionFlag("sext:Math");
+	assert isStaticExtensionFlag("async|sext:Promise");
+	assert !isStaticExtensionFlag("ext:s:string");
+	assert !isStaticExtensionFlag("");
 }
 
 test "getStaticExtTypeName" {
-	expect(getStaticExtTypeName("sext:Math") === "Math");
-	expect(getStaticExtTypeName("async|sext:Promise") === "Promise");
-	expect(getStaticExtTypeName("") === "");
+	assert getStaticExtTypeName("sext:Math") === "Math";
+	assert getStaticExtTypeName("async|sext:Promise") === "Promise";
+	assert getStaticExtTypeName("") === "";
 }
 
 test "static extension in registry" {
@@ -599,8 +638,8 @@ test "static extension in registry" {
 	const m: ExtensionMethod = { methodName: "floor", receiverTypeName: "Math", sourcePath: "", fnType: unknownType(), isStatic: true, sym: null as unknown as Symbol };
 	registerExtension(r, m);
 	const found = findExtension(r, "Math", "floor");
-	expect(found !== null);
-	expect(found.isStatic);
+	assert found !== null;
+	assert found.isStatic;
 }
 
 test "instance extension isStatic false" {
@@ -608,6 +647,6 @@ test "instance extension isStatic false" {
 	const m: ExtensionMethod = { methodName: "trim", receiverTypeName: "string", sourcePath: "", fnType: unknownType(), isStatic: false, sym: null as unknown as Symbol };
 	registerExtension(r, m);
 	const found = findExtension(r, "string", "trim");
-	expect(found !== null);
-	expect(!found.isStatic);
+	assert found !== null;
+	assert !found.isStatic;
 }

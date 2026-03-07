@@ -70,13 +70,13 @@ test "create + load + execute" {
 	);
 	load(ctx, mod);
 	execute(ctx);
-	expect(ctx.lastResult.intVal === 42);
+	assert ctx.lastResult.intVal === 42;
 }
 
 test "execute without load returns false" {
 	const ctx = createContext();
 	const ok = execute(ctx);
-	expect(!ok);
+	assert !ok;
 }
 
 test "load replaces module" {
@@ -91,11 +91,11 @@ test "load replaces module" {
 	);
 	load(ctx, mod1);
 	execute(ctx);
-	expect(ctx.lastResult.intVal === 10);
+	assert ctx.lastResult.intVal === 10;
 
 	load(ctx, mod2);
 	execute(ctx);
-	expect(ctx.lastResult.intVal === 20);
+	assert ctx.lastResult.intVal === 20;
 }
 
 test "output captured" {
@@ -110,7 +110,7 @@ test "output captured" {
 	);
 	load(ctx, mod);
 	execute(ctx);
-	expect(ctx.lastOutput === "99\n");
+	assert ctx.lastOutput === "99\n";
 }
 
 test "error propagates with stack trace" {
@@ -123,6 +123,6 @@ test "error propagates with stack trace" {
 	const mod = makeTestModule(code, consts);
 	load(ctx, mod);
 	const ok = execute(ctx);
-	expect(!ok);
-	expect(ctx.lastError.length > 0);
+	assert !ok;
+	assert ctx.lastError.length > 0;
 }

@@ -1,5 +1,5 @@
 // String Truthiness — normalizes string conditions to explicit length checks
-// Follows reference string_truthiness.zig + Nim's forceBool pattern
+// Follows reference string_truthiness.zig + standard reference patterns
 //
 // if (str) { ... }   →  if (str.length > 0) { ... }
 // while (str) { ... } →  while (str.length > 0) { ... }
@@ -78,14 +78,14 @@ function isAlreadyBoolean(node: Node): boolean {
 }
 
 // ===== Tests =====
-test "if with comparison unchanged" { expect(firstStmtKindAfter("if (x > 0) {}", lowerStringTruthiness) === NodeKind.IfStmt); }
+test "if with comparison unchanged" { assert firstStmtKindAfter("if (x > 0) {}", lowerStringTruthiness) === NodeKind.IfStmt; }
 
-test "while bool unchanged" { expect(firstStmtKindAfter("while (true) {}", lowerStringTruthiness) === NodeKind.WhileStmt); }
+test "while bool unchanged" { assert firstStmtKindAfter("while (true) {}", lowerStringTruthiness) === NodeKind.WhileStmt; }
 
-test "call condition unchanged" { expect(firstStmtKindAfter("if (f()) {}", lowerStringTruthiness) === NodeKind.IfStmt); }
+test "call condition unchanged" { assert firstStmtKindAfter("if (f()) {}", lowerStringTruthiness) === NodeKind.IfStmt; }
 
-test "binary expr unchanged" { expect(firstExprKindAfter("x + y;", lowerStringTruthiness) === NodeKind.BinaryExpr); }
+test "binary expr unchanged" { assert firstExprKindAfter("x + y;", lowerStringTruthiness) === NodeKind.BinaryExpr; }
 
-test "non-condition passthrough" { expect(stmtCountAfter("const x = 1;", lowerStringTruthiness) === 1); }
+test "non-condition passthrough" { assert stmtCountAfter("const x = 1;", lowerStringTruthiness) === 1; }
 
-test "already boolean passthrough" { expect(firstStmtKindAfter("if (x === y) {}", lowerStringTruthiness) === NodeKind.IfStmt); }
+test "already boolean passthrough" { assert firstStmtKindAfter("if (x === y) {}", lowerStringTruthiness) === NodeKind.IfStmt; }

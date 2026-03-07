@@ -6,7 +6,7 @@
 // fully expressed via DRC-injected calls.
 //
 // This transform strips the MoveExpr wrapper so codegen sees a plain expression.
-// Follows Nim's pattern: move is assignment + wasMoved hook (injected by liftdestructors).
+// Follows standard reference pattern: move is assignment + wasMoved hook.
 
 import { Node, NodeKind, MoveExprData } from "../../ast/node";
 import { TransformContext, createTransformContext } from "../context";
@@ -30,10 +30,10 @@ export function lowerMoveExpr(program: Node, ctx: TransformContext): Node {
 }
 
 // ===== Tests =====
-test "move x becomes Identifier" { expect(firstExprKindAfter("move x;", lowerMoveExpr) === NodeKind.Identifier); }
+test "move x becomes Identifier" { assert firstExprKindAfter("move x;", lowerMoveExpr) === NodeKind.Identifier; }
 
-test "move f() becomes CallExpr" { expect(firstExprKindAfter("move f();", lowerMoveExpr) === NodeKind.CallExpr); }
+test "move f() becomes CallExpr" { assert firstExprKindAfter("move f();", lowerMoveExpr) === NodeKind.CallExpr; }
 
-test "non-move unchanged" { expect(firstExprKindAfter("x;", lowerMoveExpr) === NodeKind.Identifier); }
+test "non-move unchanged" { assert firstExprKindAfter("x;", lowerMoveExpr) === NodeKind.Identifier; }
 
-test "stmt count preserved" { expect(stmtCountAfter("move a; move b;", lowerMoveExpr) === 2); }
+test "stmt count preserved" { assert stmtCountAfter("move a; move b;", lowerMoveExpr) === 2; }

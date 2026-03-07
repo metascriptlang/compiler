@@ -3,7 +3,7 @@
 // Expands Span<T> parameters into two C-level parameters: (T* name_data, int64_t name_len).
 // This keeps the C codegen "dumb" — it sees normal scalar params, not Span structs.
 //
-// Pattern: Nim's openArray expansion in ccgcalls.nim, moved to Transform per Dumb Codegen mandate.
+// Pattern: standard reference expansion pattern for view/span parameters.
 //
 // Two passes:
 //   Pass 1 (Declarations): For each FunctionDecl with Span<T> params:

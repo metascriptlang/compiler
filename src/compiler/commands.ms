@@ -101,7 +101,8 @@ export function cmdPipeline(filePath: string): void {
 		const count = errorCount(checkerCtx);
 		console.log("  " + red(count + " error(s)") + ":");
 		for (const err of checkerCtx.errors) {
-			console.log("    " + err);
+			const loc = err.line > 0 ? ":" + err.line + ":" + err.column + " " : " ";
+			console.log("    " + loc + err.message);
 		}
 	} else {
 		console.log("  " + green("OK") + " " + dim("no errors"));

@@ -5,7 +5,7 @@ import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, NodeData, createNode, MatchExprData } from "../../ast/node";
 import { ParserState, createState, current, advance, isAtEnd, consumeSemicolon, addError, synchronize } from "../context";
 import { parseExpressionFromState, registerBlockParser } from "../expressions/core";
-import { parseIfStmt, parseWhileStmt, parseForStmt, parseBreakStmt, parseContinueStmt, parseReturnStmt, parseDoWhileStmt, parseSwitchStmt, parseDeferStmt, parseUnreachableStmt, parseTestDecl } from "./control";
+import { parseIfStmt, parseWhileStmt, parseForStmt, parseBreakStmt, parseContinueStmt, parseReturnStmt, parseDoWhileStmt, parseSwitchStmt, parseDeferStmt, parseUnreachableStmt, parseTestDecl, parseAssertStmt } from "./control";
 import { parseVariableDecl, parseFunctionDecl, parseImportDecl, parseExportDecl, parseTypeAliasDecl, parseEnumDecl, parseInterfaceDecl, parseClassDecl, parseMacroInvocation, parseExternDecl, parseDistinctTypeDecl, parseMacroDecl } from "./declaration";
 import { parseThrowStmt, parseTryCatchStmt } from "./errorHandling";
 import { registerStmtBlockParser, registerStmtExprParser, registerStmtParser, registerStateProgramParser } from "./callbacks";
@@ -98,6 +98,7 @@ export function parseStatement(state: ParserState): NodeResult {
 		TokenKind.Macro => parseMacroDecl(state),
 		TokenKind.Match => parseExprStmt(state),
 		TokenKind.Test => parseTestDecl(state),
+		TokenKind.Assert => parseAssertStmt(state),
 		_ => parseExprStmt(state),
 	};
 
@@ -147,8 +148,13 @@ export function parseProgram(state: ParserState): NodeResult {
 	const token = current(state);
 	const stmts: Node[] = [];
 	while (!isAtEnd(state)) {
-		const s = try parseStatement(state);
-		stmts.push(s);
+		const result = parseStatement(state);
+		if (result.ok) {
+			stmts.push(result.value);
+		} else {
+			addError(state, result.error);
+			synchronize(state);
+		}
 	}
 	const node = createNode(NodeKind.Program, { programStmts: stmts }, token);
 	return Result.ok(attachComments(state, node));
@@ -162,3 +168,6 @@ export function registerCoreParsers(): void {
 	registerStateProgramParser(parseProgram);
 	registerBlockParser(parseBlockStmt);
 }
+
+// Auto-register at module load so parser tests work without explicit init
+registerCoreParsers();

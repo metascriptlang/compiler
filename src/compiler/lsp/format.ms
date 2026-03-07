@@ -149,93 +149,93 @@ export function lspFmtSignatureHelp(signaturesJson: string, activeSig: number, a
 }
 
 // ===== Tests =====
-test "basic" { expect(lspFmtPosition(0, 5) === "{\"line\":0,\"character\":5}"); }
+test "basic" { assert lspFmtPosition(0, 5) === "{\"line\":0,\"character\":5}"; }
 
-test "zero" { expect(lspFmtPosition(0, 0) === "{\"line\":0,\"character\":0}"); }
+test "zero" { assert lspFmtPosition(0, 0) === "{\"line\":0,\"character\":0}"; }
 
 test "single line" {
 	const r = lspFmtLineRange(3, 5, 10);
-	expect(r === "{\"start\":{\"line\":3,\"character\":5},\"end\":{\"line\":3,\"character\":10}}");
+	assert r === "{\"start\":{\"line\":3,\"character\":5},\"end\":{\"line\":3,\"character\":10}}";
 }
 
 test "multi line" {
 	const r = lspFmtRange(1, 0, 5, 10);
-	expect(r === "{\"start\":{\"line\":1,\"character\":0},\"end\":{\"line\":5,\"character\":10}}");
+	assert r === "{\"start\":{\"line\":1,\"character\":0},\"end\":{\"line\":5,\"character\":10}}";
 }
 
 test "basic" {
 	const loc = lspFmtLocation("file:///a.ms", 0, 5, 0, 10);
-	expect(loc.length > 30);
+	assert loc.length > 30;
 }
 
 test "basic" {
 	const e = lspFmtTextEdit(0, 5, 8, "newName");
-	expect(e.length > 30);
+	assert e.length > 30;
 }
 
 test "basic" {
 	const item = lspFmtCompletionItem("foo", 6, "number", "11", false, "");
-	expect(item.length > 20);
+	assert item.length > 20;
 }
 
 test "with sortText" {
 	const item = lspFmtCompletionItem("bar", 3, "()", "10", false, "");
-	expect(item.length > 20);
+	assert item.length > 20;
 }
 
 test "deprecated tag" {
 	const item = lspFmtCompletionItem("old", 6, "string", "z11", true, "");
-	expect(item.length > 30);
+	assert item.length > 30;
 }
 
 test "commit chars" {
 	const item = lspFmtCompletionItem("fn", 3, "()", "11", false, "(.");
-	expect(item.length > 40);
+	assert item.length > 40;
 }
 
 test "code only" {
 	const h = lspFmtHoverResult("```ms\n(variable) x: number\n```", "");
-	expect(h.length > 30);
+	assert h.length > 30;
 }
 
 test "with documentation" {
 	const h = lspFmtHoverResult("```ms\n(variable) x: number\n```", "(exported)");
-	expect(h.length > 50);
+	assert h.length > 50;
 }
 
 test "without code" {
 	const d = lspFmtDiagnostic(0, 5, 8, 1, "type error", "metascript", 0);
-	expect(d.length > 30);
+	assert d.length > 30;
 }
 
 test "with code" {
 	const d = lspFmtDiagnostic(0, 5, 8, 1, "type error", "metascript", 2304);
-	expect(d.length > 40);
+	assert d.length > 40;
 }
 
 test "without detail" {
 	const s = lspFmtDocumentSymbol("foo", 12, "", 0, 5, 8);
-	expect(s.length > 20);
+	assert s.length > 20;
 }
 
 test "with detail" {
 	const s = lspFmtDocumentSymbol("foo", 12, "(a: number) => void", 0, 5, 8);
-	expect(s.length > 40);
+	assert s.length > 40;
 }
 
 test "type hint" {
 	const h = lspFmtInlayHint(0, 5, ": number", 1, true, false);
-	expect(h.length > 30);
+	assert h.length > 30;
 }
 
 test "param hint" {
 	const h = lspFmtInlayHint(0, 3, "name:", 2, false, true);
-	expect(h.length > 30);
+	assert h.length > 30;
 }
 
 test "basic" {
 	const p = lspFmtSignatureParam("a: number");
 	const sig = lspFmtSignature("foo(a: number)", "[" + p + "]");
 	const help = lspFmtSignatureHelp("[" + sig + "]", 0, 0);
-	expect(help.length > 40);
+	assert help.length > 40;
 }

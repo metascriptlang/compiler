@@ -36,11 +36,11 @@ test "arithmetic: (2 + 3) * 4 = 20" {
 		[raiserInt(2), raiserInt(3), raiserInt(4)]
 	);
 	const entry = getModuleEntry(mod);
-	expect(getFuncCodeLen(entry) === 6);
-	expect(disasmInst(getFuncInst(entry, 0)) === "LoadConst R0 K0");
-	expect(disasmInst(getFuncInst(entry, 2)) === "AddI64 R2 R0 R1");
+	assert getFuncCodeLen(entry) === 6;
+	assert disasmInst(getFuncInst(entry, 0)) === "LoadConst R0 K0";
+	assert disasmInst(getFuncInst(entry, 2)) === "AddI64 R2 R0 R1";
 	const vm = execModule(mod);
-	expect(vm.exitValue.intVal === 20);
+	assert vm.exitValue.intVal === 20;
 }
 
 test "branch: if 10 > 5 then 1 else 0" {
@@ -58,7 +58,7 @@ test "branch: if 10 > 5 then 1 else 0" {
 		[raiserInt(10), raiserInt(5), raiserInt(1), raiserInt(0)]
 	);
 	const vm = execModule(mod);
-	expect(vm.exitValue.intVal === 1);
+	assert vm.exitValue.intVal === 1;
 }
 
 test "loop: sum 1..5 = 15" {
@@ -77,7 +77,7 @@ test "loop: sum 1..5 = 15" {
 		[raiserInt(0), raiserInt(1), raiserInt(5)]
 	);
 	const vm = execModule(mod);
-	expect(vm.exitValue.intVal === 15);
+	assert vm.exitValue.intVal === 15;
 }
 
 test "disassembly output" {
@@ -92,7 +92,7 @@ test "disassembly output" {
 	);
 	const entry = getModuleEntry(mod);
 	const s = disasmFunc(entry);
-	expect(s.length > 0);
+	assert s.length > 0;
 }
 
 test "load + execute" {
@@ -108,7 +108,7 @@ test "load + execute" {
 	);
 	load(ctx, mod);
 	execute(ctx);
-	expect(ctx.lastResult.intVal === 42);
+	assert ctx.lastResult.intVal === 42;
 }
 
 test "sequential modules" {
@@ -123,9 +123,9 @@ test "sequential modules" {
 	);
 	load(ctx, mod1);
 	execute(ctx);
-	expect(ctx.lastResult.intVal === 10);
+	assert ctx.lastResult.intVal === 10;
 
 	load(ctx, mod2);
 	execute(ctx);
-	expect(ctx.lastResult.intVal === 20);
+	assert ctx.lastResult.intVal === 20;
 }

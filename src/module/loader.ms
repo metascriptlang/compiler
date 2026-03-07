@@ -155,7 +155,7 @@ export function loadModule(graph: ModuleGraph, path: string, provider: SourcePro
 		const existing = findModule(graph, path);
 		if (existing !== null) {
 			if (existing.state === ModuleState.Loading) {
-				// Nim parity: record cycle info (like c.recursiveDep in importer.nim)
+				// Implementation parity: record cycle info
 				// Extract cycle path from importStack
 				const cycle: string[] = [];
 				let inCycle = false;
@@ -287,13 +287,13 @@ test "single module" {
 	entries.push(makeEntry("/src/a.ms", "const x = 1;"));
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
-	expect(graph.modules.length === 1);
-	expect(graph.loadOrder.length === 1);
-	expect(graph.loadOrder[0] === "/src/a.ms");
+	assert graph.modules.length === 1;
+	assert graph.loadOrder.length === 1;
+	assert graph.loadOrder[0] === "/src/a.ms";
 	const mod = findModule(graph, "/src/a.ms");
-	expect(mod !== null);
-	expect(mod.state === ModuleState.Ready);
-	expect(mod.source === "const x = 1;");
+	assert mod !== null;
+	assert mod.state === ModuleState.Ready;
+	assert mod.source === "const x = 1;";
 }
 
 test "A imports B chain" {
@@ -302,15 +302,15 @@ test "A imports B chain" {
 	entries.push(makeEntry("/src/b.ms", "export function foo() { return 1; }"));
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
-	expect(graph.modules.length === 2);
+	assert graph.modules.length === 2;
 	// Topological: B before A (dependency loaded first)
-	expect(graph.loadOrder[0] === "/src/b.ms");
-	expect(graph.loadOrder[1] === "/src/a.ms");
+	assert graph.loadOrder[0] === "/src/b.ms";
+	assert graph.loadOrder[1] === "/src/a.ms";
 	// A has import entry pointing to B
 	const modA = findModule(graph, "/src/a.ms");
-	expect(modA !== null);
-	expect(modA.imports.length === 1);
-	expect(modA.imports[0].sourcePath === "/src/b.ms");
+	assert modA !== null;
+	assert modA.imports.length === 1;
+	assert modA.imports[0].sourcePath === "/src/b.ms";
 }
 
 test "circular import handled" {
@@ -320,14 +320,14 @@ test "circular import handled" {
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	// Both modules loaded (circular doesn't crash)
-	expect(graph.modules.length === 2);
+	assert graph.modules.length === 2;
 	// Both end up in Ready state
 	const modA = findModule(graph, "/src/a.ms");
 	const modB = findModule(graph, "/src/b.ms");
-	expect(modA !== null);
-	expect(modB !== null);
-	expect(modA.state === ModuleState.Ready);
-	expect(modB.state === ModuleState.Ready);
+	assert modA !== null;
+	assert modB !== null;
+	assert modA.state === ModuleState.Ready;
+	assert modB.state === ModuleState.Ready;
 }
 
 test "diamond dependency" {
@@ -338,10 +338,10 @@ test "diamond dependency" {
 	entries.push(makeEntry("/src/d.ms", "export const d = 3;"));
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
-	expect(graph.modules.length === 4);
+	assert graph.modules.length === 4;
 	// D should be loaded once (not duplicated)
-	expect(graph.loadOrder[0] === "/src/d.ms");
-	expect(graph.errors.length === 0);
+	assert graph.loadOrder[0] === "/src/d.ms";
+	assert graph.errors.length === 0;
 }
 
 test "missing module error" {
@@ -350,8 +350,8 @@ test "missing module error" {
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	const mod = findModule(graph, "/src/a.ms");
-	expect(mod !== null);
-	expect(mod.errors.length > 0);
+	assert mod !== null;
+	assert mod.errors.length > 0;
 }
 
 test "std import skipped" {
@@ -359,10 +359,10 @@ test "std import skipped" {
 	entries.push(makeEntry("/src/a.ms", "import { test } from \"std/testing\"; const x = 1;"));
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
-	expect(graph.modules.length === 1);
+	assert graph.modules.length === 1;
 	const mod = findModule(graph, "/src/a.ms");
-	expect(mod !== null);
-	expect(mod.imports.length === 0);
+	assert mod !== null;
+	assert mod.imports.length === 0;
 }
 
 test "no duplicate loading" {
@@ -371,7 +371,7 @@ test "no duplicate loading" {
 	entries.push(makeEntry("/src/b.ms", "export const x = 1; export const y = 2;"));
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
-	expect(graph.modules.length === 2);
+	assert graph.modules.length === 2;
 }
 
 test "C header import creates module" {
@@ -380,15 +380,15 @@ test "C header import creates module" {
 	entries.push(makeEntry("/src/lib.h", "void foo(int x);"));
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/app.ms", provider);
-	expect(graph.modules.length === 2);
-	expect(graph.errors.length === 0);
+	assert graph.modules.length === 2;
+	assert graph.errors.length === 0;
 	const hmod = findModule(graph, "/src/lib.h");
-	expect(hmod !== null);
-	expect(hmod.isCHeader);
-	expect(hmod.state === ModuleState.Ready);
+	assert hmod !== null;
+	assert hmod.isCHeader;
+	assert hmod.state === ModuleState.Ready;
 	const appMod = findModule(graph, "/src/app.ms");
-	expect(appMod !== null);
-	expect(appMod.errors.length === 0);
+	assert appMod !== null;
+	assert appMod.errors.length === 0;
 }
 
 test "parse error recorded" {
@@ -397,9 +397,9 @@ test "parse error recorded" {
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	const mod = findModule(graph, "/src/a.ms");
-	expect(mod !== null);
-	expect(mod.errors.length > 0);
-	expect(mod.state === ModuleState.Ready);
+	assert mod !== null;
+	assert mod.errors.length > 0;
+	assert mod.state === ModuleState.Ready;
 }
 
 test "loadOrder is topological" {
@@ -409,9 +409,9 @@ test "loadOrder is topological" {
 	entries.push(makeEntry("/src/b.ms", "export const b = 2;"));
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/main.ms", provider);
-	expect(graph.loadOrder[0] === "/src/b.ms");
-	expect(graph.loadOrder[1] === "/src/a.ms");
-	expect(graph.loadOrder[2] === "/src/main.ms");
+	assert graph.loadOrder[0] === "/src/b.ms";
+	assert graph.loadOrder[1] === "/src/a.ms";
+	assert graph.loadOrder[2] === "/src/main.ms";
 }
 
 test "module source stored" {
@@ -420,6 +420,6 @@ test "module source stored" {
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph("/src/a.ms", provider);
 	const mod = findModule(graph, "/src/a.ms");
-	expect(mod !== null);
-	expect(mod.source === "const x = 42;");
+	assert mod !== null;
+	assert mod.source === "const x = 42;";
 }

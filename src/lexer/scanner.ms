@@ -135,6 +135,42 @@ function scanTemplateStringImpl(s: LexerState, isContinuation: boolean): void {
 	let val = "";
 	if (!isContinuation) advanceChar(s); // skip ` (} already consumed by caller)
 
+	// Detect operator identifiers: `==`, `[]`, `[]=`, `+`, `<>`, etc.
+	// Reference compiler: lexer.zig:422 scanBacktick — peek ahead for stropped identifiers
+	if (!isContinuation) {
+		let tempPos = s.pos;
+		let hasInterpolation = false;
+		let hasNewline = false;
+		while (tempPos < s.source.length && s.source.charCodeAt(tempPos) !== "`".code) {
+			const tc = s.source.charCodeAt(tempPos);
+			if (tc === "$".code && tempPos + 1 < s.source.length && s.source.charCodeAt(tempPos + 1) === "{".code) {
+				hasInterpolation = true;
+				break;
+			}
+			if (tc === "\n".code) { hasNewline = true; break; }
+			tempPos = tempPos + 1;
+		}
+		if (!hasInterpolation && !hasNewline && tempPos < s.source.length) {
+			const contentLen = tempPos - s.pos;
+			if (contentLen > 0) {
+				let content = "";
+				let ci = s.pos;
+				while (ci < tempPos) {
+					content = content + s.source.charAt(ci);
+					ci = ci + 1;
+				}
+				if (isOperatorName(content)) {
+					// Skip content and closing backtick
+					s.pos = tempPos;
+					s.column = s.column + contentLen;
+					advanceChar(s); // closing backtick
+					addToken(s, TokenKind.OperatorIdent, content, startLine, startCol);
+					return;
+				}
+			}
+		}
+	}
+
 	while (s.pos < s.source.length) {
 		const ch = peek(s);
 		if (ch === "`".code) {
@@ -157,6 +193,27 @@ function scanTemplateStringImpl(s: LexerState, isContinuation: boolean): void {
 			advanceChar(s);
 		}
 	}
+}
+
+// Check if a backtick-quoted string is an operator name.
+// Reference compiler: parser.zig:7162 isOperatorName
+function isOperatorChar(ch: number): boolean {
+	return ch === "|".code || ch === ">".code || ch === "<".code || ch === "=".code
+		|| ch === "+".code || ch === "-".code || ch === "*".code || ch === "/".code
+		|| ch === "%".code || ch === "&".code || ch === "^".code || ch === "~".code
+		|| ch === "!".code || ch === "?".code || ch === ".".code || ch === "\\".code;
+}
+
+function isOperatorName(name: string): boolean {
+	if (name.length === 0) return false;
+	// Special case: subscript operators `[]` and `[]=`
+	if (name === "[]" || name === "[]=") return true;
+	let i = 0;
+	while (i < name.length) {
+		if (!isOperatorChar(name.charCodeAt(i))) return false;
+		i = i + 1;
+	}
+	return true;
 }
 
 // ===== Identifier & Keyword Scanning =====

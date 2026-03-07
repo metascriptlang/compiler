@@ -10,13 +10,13 @@ Architecture: **direct AST rewrite** with **scope-based cleanup** and **conserva
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `classify.ms` | ~255 | Type -> RcInfo mapping (RcKind enum, destroy/copy/wasMoved/sink fn names, `isFreshExpr()`, `canFormCycle()`) |
+| `classify.ms` | ~255 | Type -> RcInfo mapping (RcKind enum, lifecycle hooks, `isFreshExpr()`, `canFormCycle()`) |
 | `scope.ms` | ~420 | DrcScope/DrcContext, push/pop, var registration, move tracking, needsTry, OuterStack, VarInfo.isInitialized |
 | `lastRead.ms` | ~281 | `isLastReadInBlock` + `isLastReadInContext` (cross-scope), `nodeReferencesVar`, `deepAliases` |
-| `cfg.ms` | ~630 | Mohnen graph-free CFG: `buildCfg`, `isLastReadCfg`, `isLastReadCfgCached`, per-variable CfgCache |
+| `cfg.ms` | ~630 | CFG implementation: `buildCfg`, `isLastReadCfg`, `isLastReadCfgCached`, per-variable CfgCache |
 | `cursors.ms` | ~420 | Cursor (borrow) inference: `inferCursors`, `isCursorVar`, escape analysis for local variables |
 | `inject.ms` | ~2190 | Main walker: all node kinds, CFG last-read, finally-protected vars, cursor check, first-write opt, generator detection |
-| `optimize.ms` | ~389 | Post-pass: set-based wasMoved tracking, branch-aware eliminate `wasMoved(x); destroy(x)` |
+| `optimize.ms` | ~389 | Post-pass: set-based wasMoved tracking, branch-aware eliminate redundant operations |
 | `index.ms` | ~89 | Hub: `analyzeProgram` entry point, re-exports |
 
 **Pipeline**: `analyzeProgram(program, checkerCtx)` -> `injectProgram(program, dctx)` -> `optimizeDrc(injected)`
@@ -29,7 +29,7 @@ Architecture: **direct AST rewrite** with **scope-based cleanup** and **conserva
 |-------|-------|------|----------|
 | **Hook Lifting** | `transform/lowering/destructorLifting.ms` | Generate per-type lifecycle hooks | Decide when/where to call them |
 | **Injection** | `inject.ms` + `classify.ms` + `scope.ms` + `lastRead.ms` | Insert calls at correct AST positions | Generate hook bodies or optimize |
-| **Optimization** | `optimize.ms` | Eliminate redundant `wasMoved(x); destroy(x)` | Restructure code or add operations |
+| **Optimization** | `optimize.ms` | Eliminate redundant operations | Restructure code or add operations |
 
 ---
 
@@ -49,8 +49,6 @@ By Phase 4, 22+ transforms have already executed. Many complex syntax forms are 
 | Destructuring | Multiple VariableDecl |
 | Arrow with captures | Lifted function + env struct |
 | Extension methods | Direct call |
-
-**Never seen**: DeferStmt, ForOfStmt, ForStmt, MatchExpr, DestructuringDecl, OptionalMemberExpr
 
 ---
 
@@ -74,7 +72,7 @@ By Phase 4, 22+ transforms have already executed. Many complex syntax forms are 
 | `const x = c ? a : b` | Copy dest if either branch non-fresh |
 | `return expr` | Mark returned vars moved; finally handles cleanup |
 | Scope exit | `=destroy` tracked vars in LIFO order |
-| `break`/`continue` | Set `needsTry` to loop boundary |
+| `break`/`continue` | Set boundary to loop boundary |
 | `throw` | Set `needsTry` on all scopes |
 | Discarded `f()` | Capture in temp, register for cleanup |
 | Sink params | Register RC-typed params for cleanup at scope exit |
@@ -111,7 +109,7 @@ On scope exit:
    - Wrap: try { body } finally { cleanup }
 ```
 
-### Post-Optimization: Set-Based wasMoved + destroy Elimination
+### Post-Optimization: Redundant Operation Elimination
 
 ```
 For each block:
@@ -142,51 +140,51 @@ For each block:
 
 ---
 
-## Parity Analysis vs Reference Compiler & Nim
+## Parity Analysis vs Reference Implementation
 
-### Overall Status: ~100% Nim parity (all 7 gaps closed)
+### Overall Status: ~100% implementation parity (all 7 gaps closed)
 
-### BETTER Than Both
+### BETTER Than Reference
 
-1. **Clean modular architecture** -- 6 focused files vs 4,771-line monolith (reference) or scattered across many files (Nim). Each file has inline tests.
-2. **Cross-scope last-read via OuterStack** -- Elegant forward-scan across nested blocks within a function. Neither reference (CFG per-function) nor Nim (CFG per-function) have this specific abstraction.
-3. **Branch-aware optimizer** -- `collectIfMoved()` + `nameSetIntersect()` is cleaner than Nim's equivalent while achieving the same result.
+1. **Clean modular architecture** -- 6 focused files vs multi-thousand line monoliths in other implementations. Each file has inline tests.
+2. **Cross-scope last-read via OuterStack** -- Elegant forward-scan across nested blocks within a function.
+3. **Branch-aware optimizer** -- `collectIfMoved()` + `nameSetIntersect()` is cleaner than standard equivalents while achieving the same result.
 4. **Clean data structures** -- Bare `T[]` types throughout (no wrapper interfaces). Strings still value types.
-5. **Compound assignment handling** -- Proper `x += y` desugaring for RC types, handled more cleanly than reference.
-6. **Per-module inline tests** -- Comprehensive test groups per file. Neither reference nor Nim have this for the DRC layer.
+5. **Compound assignment handling** -- Proper `x += y` desugaring for RC types, handled more cleanly than other references.
+6. **Per-module inline tests** -- Comprehensive test groups per file.
 
 ### ON PAR
 
 1. **Scope management** -- Push/pop stack, needsTry propagation, LIFO cleanup order. Architecturally equivalent.
-2. **Type classification** -- Same RC kinds (String, Array, Ref, Closure, Map, Set, Named). Named hooks match liftdestructors.
-3. **Fresh expression detection** -- `isFreshExpr()` matches Nim's `nkCallKinds`/`nkObjConstr` handling.
-4. **Self-assignment safety** -- `deepAliases()` matches Nim's `deepAliases()`.
-5. **try/finally wrapping** -- Hoist + null init + try + finally cleanup matches Nim's `processScope()`.
-6. **wasMoved+destroy elimination** -- Same patterns as Nim's optimizer including branch intersection.
+2. **Type classification** -- Standard RC kinds (String, Array, Ref, Closure, Map, Set, Named).
+3. **Fresh expression detection** -- `isFreshExpr()` matches standard call/constructor handling.
+4. **Self-assignment safety** -- `deepAliases()` matches standard aliasing safety rules.
+5. **try/finally wrapping** -- Hoist + null init + try + finally cleanup matches standard scoped management.
+6. **wasMoved+destroy elimination** -- Same patterns as standard optimizers including branch intersection.
 7. **Member/field & array element RC** -- `emitSaveAssignDestroy()` pattern.
 8. **Call argument processing** -- Last-read check per RC arg, move or copy.
 9. **Return value handling** -- Mark returned vars moved + borrowed return incref.
-10. **Result field extraction** -- Null-out of `$result_N.value` after extraction.
+10. **Result field extraction** -- Null-out of result values after extraction.
 
 ### CLOSED GAPS (All 7 gaps resolved — 2026-03-04)
 
 | Phase | Gap | Resolution | Files |
 |-------|-----|-----------|-------|
-| **A** | Finally-protected variables | `collectFinallyVars` scans try/catch finallyBody, blocks moves on protected vars in `isLastReadSafe` | inject.ms, scope.ms |
-| **B** | Cursor inference | `inferCursors(body)` from cursors.ms wired into `processFuncBodyWithParams`, `isCursorVar` check in `processVarDecl` | inject.ms, cursors.ms |
-| **C** | CFG-based last-read | `isLastReadCfgCached` uses Mohnen graph-free CFG from cfg.ms, with per-function cache. Falls back to conservative scan when unavailable | inject.ms, cfg.ms, scope.ms |
-| **D** | First-write optimization | `isInitialized` flag on VarInfo, `markUninitialized` for `let x;`, first assignment skips destroy (Nim's nkFastAsgn) | inject.ms, scope.ms |
-| **E** | Sink parameter forwarding | Already implemented: SF_LENT skip at call sites, sink-as-cursor for return-only params, CFG handles move detection | inject.ms (verified) |
-| **F** | Closure capture DRC | `computeLastUseCaptures` + `isCaptureLastUse` in lambdaLifting.ms; last-use captures wrapped in MoveExpr | lambdaLifting.ms, util.ms |
-| **G** | Generator/async awareness | `isGeneratorBody` detects `$state` pattern, forces `needsTry=false` to skip redundant try/finally | inject.ms |
+| **A** | Finally-protected variables | `collectFinallyVars` scans try/catch finallyBody, blocks moves on protected vars | inject.ms, scope.ms |
+| **B** | Cursor inference | `inferCursors(body)` wired into `processFuncBodyWithParams`, `isCursorVar` check in `processVarDecl` | inject.ms, cursors.ms |
+| **C** | CFG-based last-read | `isLastReadCfgCached` uses Mohnen graph-free CFG from cfg.ms, with per-function cache | inject.ms, cfg.ms, scope.ms |
+| **D** | First-write optimization | `isInitialized` flag on VarInfo, `markUninitialized` for `let x;`, first assignment skips destroy | inject.ms, scope.ms |
+| **E** | Sink parameter forwarding | SF_LENT skip at call sites, sink-as-cursor for return-only params, CFG handles move detection | inject.ms (verified) |
+| **F** | Closure capture DRC | Last-use captures wrapped in MoveExpr | lambdaLifting.ms, util.ms |
+| **G** | Generator/async awareness | `isGeneratorBody` detects state pattern, forces `needsTry=false` to skip redundant try/finally | inject.ms |
 
-ORC cycle detection was already implemented prior to this work (classify.ms `canFormCycle` + destructorLifting.ms trace hooks).
+Cycle detection was already implemented prior to this work (classify.ms `canFormCycle` + destructorLifting.ms trace hooks).
 
 ---
 
-## Remaining Non-Nim Items (by design)
+## Remaining Differences (by design)
 
 | Item | Status | Rationale |
 |------|--------|-----------|
-| `=dup` operator | Not needed | `=copy` + temp achieves same result; Nim's `=dup` is syntactic sugar |
+| `=dup` operator | Not needed | `=copy` + temp achieves same result |
 | Full Steensgaard union-find | Simplified | cursors.ms uses local escape analysis (sufficient for self-hosted compiler patterns) |

@@ -37,14 +37,14 @@ export function lowerConditionalExpr(program: Node, ctx: TransformContext): Node
 }
 
 // ===== Tests =====
-test "ternary in stmt becomes if" { expect(firstStmtKindAfter("a ? b : c;", lowerConditionalExpr) === NodeKind.IfStmt); }
+test "ternary in stmt becomes if" { assert firstStmtKindAfter("a ? b : c;", lowerConditionalExpr) === NodeKind.IfStmt; }
 
-test "non-ternary ExprStmt unchanged" { expect(firstStmtKindAfter("f();", lowerConditionalExpr) === NodeKind.ExprStmt); }
+test "non-ternary ExprStmt unchanged" { assert firstStmtKindAfter("f();", lowerConditionalExpr) === NodeKind.ExprStmt; }
 
-test "variable decl with ternary unchanged" { expect(firstStmtKindAfter("const x = a ? b : c;", lowerConditionalExpr) === NodeKind.VariableDecl); }
+test "variable decl with ternary unchanged" { assert firstStmtKindAfter("const x = a ? b : c;", lowerConditionalExpr) === NodeKind.VariableDecl; }
 
-test "while unchanged" { expect(firstStmtKindAfter("while (true) {}", lowerConditionalExpr) === NodeKind.WhileStmt); }
+test "while unchanged" { assert firstStmtKindAfter("while (true) {}", lowerConditionalExpr) === NodeKind.WhileStmt; }
 
-test "stmt count preserved" { expect(stmtCountAfter("let a = 1; let b = 2;", lowerConditionalExpr) === 2); }
+test "stmt count preserved" { assert stmtCountAfter("let a = 1; let b = 2;", lowerConditionalExpr) === 2; }
 
-test "binary expr unchanged" { expect(firstExprKindAfter("x + y;", lowerConditionalExpr) === NodeKind.BinaryExpr); }
+test "binary expr unchanged" { assert firstExprKindAfter("x + y;", lowerConditionalExpr) === NodeKind.BinaryExpr; }

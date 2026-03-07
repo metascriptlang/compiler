@@ -202,7 +202,7 @@ function buildIfChain(cases: Node[], tempName: string, discType: Type, loc: Sour
 }
 
 // ===== moveInto — Unified Result Destination Insertion =====
-// Nim pattern: jsgen.nim moveInto + semexprs.nim
+// Standard reference pattern: unified result destination insertion
 // Pushes the "result destination" (return or assignment) into terminal positions.
 // C has no expression-blocks — this makes each arm produce a statement-level result.
 
@@ -311,7 +311,7 @@ function makePatternTest(pattern: Node, tempName: string, discType: Type, loc: S
 // ===== String Hash Dispatch =====
 // When ALL non-wildcard/non-binding arms are string literals and count > 8,
 // emit switch(djb2(disc)) with equality guards instead of if-else chain.
-// Matches Nim's genStringCase optimization (ccgstmts.nim).
+// Matches standard string-case optimization pattern.
 
 const STRING_HASH_THRESHOLD: number = 8;
 
@@ -494,27 +494,27 @@ function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: S
 }
 
 // ===== Tests =====
-test "match stmt becomes if chain" { expect(stmtCountAfter("match (x) { 1 => foo(), _ => bar() }", lowerMatch) === 2); }
+test "match stmt becomes if chain" { assert stmtCountAfter("match (x) { 1 => foo(), _ => bar() }", lowerMatch) === 2; }
 
-test "match first stmt is VarDecl (discriminant temp)" { expect(firstStmtKindAfter("match (x) { 1 => a(), _ => b() }", lowerMatch) === NodeKind.VariableDecl); }
+test "match first stmt is VarDecl (discriminant temp)" { assert firstStmtKindAfter("match (x) { 1 => a(), _ => b() }", lowerMatch) === NodeKind.VariableDecl; }
 
-test "no match passthrough" { expect(stmtCountAfter("const x = 1;", lowerMatch) === 1); }
+test "no match passthrough" { assert stmtCountAfter("const x = 1;", lowerMatch) === 1; }
 
-test "match preserves surrounding stmts" { expect(stmtCountAfter("let a = 1; match (x) { _ => b() } let c = 2;", lowerMatch) === 4); }
+test "match preserves surrounding stmts" { assert stmtCountAfter("let a = 1; match (x) { _ => b() } let c = 2;", lowerMatch) === 4; }
 
 test "string hash dispatch for >8 arms" {
 	const src = "match (x) { \"a\" => 1, \"b\" => 2, \"c\" => 3, \"d\" => 4, \"e\" => 5, \"f\" => 6, \"g\" => 7, \"h\" => 8, \"i\" => 9, _ => 0 }";
 	// 9 string arms > threshold(8) → should produce SwitchStmt (2nd stmt after VarDecl temp)
-	expect(stmtCountAfter(src, lowerMatch) === 2);
+	assert stmtCountAfter(src, lowerMatch) === 2;
 }
 
 test "few string arms stay as if-else" {
 	const src = "match (x) { \"a\" => 1, \"b\" => 2, _ => 0 }";
 	// 2 string arms <= threshold → stays as if-else chain
-	expect(stmtCountAfter(src, lowerMatch) === 2);
+	assert stmtCountAfter(src, lowerMatch) === 2;
 }
 
 test "djb2 hash deterministic" {
-	expect(djb2Hash("hello") === djb2Hash("hello"));
-	expect(djb2Hash("a") !== djb2Hash("b"));
+	assert djb2Hash("hello") === djb2Hash("hello");
+	assert djb2Hash("a") !== djb2Hash("b");
 }

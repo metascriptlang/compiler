@@ -23,7 +23,7 @@ import {
 	ForOfStmtData, ArrowFunctionData,
 	ReturnStmtData,
 } from "../ast/node";
-import { Type, TypeKind, numberType, booleanType, stringType, charType, createArray } from "../checker/types";
+import { Type, TypeKind, isNumeric, numberType, booleanType, stringType, charType, createArray } from "../checker/types";
 import { ExportRegistry } from "../checker/context";
 import { TransformContext } from "./context";
 import { mapChildren } from "./walker";
@@ -337,13 +337,9 @@ function deriveBinaryExprType(node: Node): void {
 		op === "**" || op === "|" || op === "&" || op === "^" ||
 		op === "<<" || op === ">>" || op === ">>>") {
 		// Prefer left operand's type for sized integers, default to number
-		if (lt !== null && (lt.kind === TypeKind.Number || lt.kind === TypeKind.Int32 ||
-			lt.kind === TypeKind.Int64 || lt.kind === TypeKind.Uint32 ||
-			lt.kind === TypeKind.Float32 || lt.kind === TypeKind.Float64)) {
+		if (lt !== null && isNumeric(lt)) {
 			node.nodeType = lt;
-		} else if (rt !== null && (rt.kind === TypeKind.Number || rt.kind === TypeKind.Int32 ||
-			rt.kind === TypeKind.Int64 || rt.kind === TypeKind.Uint32 ||
-			rt.kind === TypeKind.Float32 || rt.kind === TypeKind.Float64)) {
+		} else if (rt !== null && isNumeric(rt)) {
 			node.nodeType = rt;
 		} else {
 			node.nodeType = numberType();
@@ -361,9 +357,7 @@ function deriveUnaryExprType(node: Node): void {
 		// Preserve operand's numeric type if available
 		if (d.operand !== null && d.operand.nodeType !== null) {
 			const ot = d.operand.nodeType;
-			if (ot.kind === TypeKind.Number || ot.kind === TypeKind.Int32 ||
-				ot.kind === TypeKind.Int64 || ot.kind === TypeKind.Float32 ||
-				ot.kind === TypeKind.Float64) {
+			if (isNumeric(ot)) {
 				node.nodeType = ot;
 				return;
 			}

@@ -133,25 +133,25 @@ export function processMessage(msg: string, state: LspServerState): string {
 // ===== Tests =====
 test "create state" {
 	const state = createServerState();
-	expect(!state.initialized);
-	expect(!state.shutdownRequested);
+	assert !state.initialized;
+	assert !state.shutdownRequested;
 }
 
 test "initialize sets flag" {
 	const state = createServerState();
 	const initMsg = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}";
 	const response = processMessage(initMsg, state);
-	expect(state.initialized);
-	expect(response.length > 0);
+	assert state.initialized;
+	assert response.length > 0;
 	// Response is wire-formatted (starts with Content-Length)
-	expect(lspParseContentLength(lspGetField(response, "")) >= 0 || response.length > 20);
+	assert lspParseContentLength(lspGetField(response, "")) >= 0 || response.length > 20;
 }
 
 test "shutdown sets flag" {
 	const state = createServerState();
 	const shutdownMsg = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\",\"params\":{}}";
 	processMessage(shutdownMsg, state);
-	expect(state.shutdownRequested);
+	assert state.shutdownRequested;
 }
 
 test "hover on unknown uri returns wire response" {
@@ -159,7 +159,7 @@ test "hover on unknown uri returns wire response" {
 	const hoverMsg = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":0}}}";
 	const response = processMessage(hoverMsg, state);
 	// Should return a wire-formatted response
-	expect(response.length > 0);
+	assert response.length > 0;
 }
 
 test "unknown notification returns empty" {
@@ -167,11 +167,11 @@ test "unknown notification returns empty" {
 	// No "id" field — pure notification
 	const notif = "{\"jsonrpc\":\"2.0\",\"method\":\"$/setTrace\",\"params\":{\"value\":\"off\"}}";
 	const response = processMessage(notif, state);
-	expect(response === "");
+	assert response === "";
 }
 
 test "content length parsing" {
-	expect(lspParseContentLength("Content-Length: 52") === 52);
-	expect(lspParseContentLength("Content-Length: 0") === 0);
-	expect(lspParseContentLength("Content-Type: text") === -1);
+	assert lspParseContentLength("Content-Length: 52") === 52;
+	assert lspParseContentLength("Content-Length: 0") === 0;
+	assert lspParseContentLength("Content-Type: text") === -1;
 }

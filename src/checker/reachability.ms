@@ -5,10 +5,10 @@
 // Cross-module references traced via ImportDecl source paths.
 
 import { Node, NodeKind, ProgramData, FunctionDeclData, ImportDeclData,
-	VariableDeclData, ExportDeclData, ExprStmtData, IdentifierData,
-	CallExprData, MemberExprData, ClassDeclData,
-	TestDeclData, DecoratedDeclData, ExternDeclData, BlockStmtData,
-	MethodDeclData, ConstructorDeclData } from "../ast/node";
+	ExportDeclData, IdentifierData,
+	CallExprData, MemberExprData,
+	TestDeclData, DecoratedDeclData, ExternDeclData } from "../ast/node";
+import { forEachChild } from "../ast/visitor";
 import { AliveSet, createAliveSet, aliveSetAdd, aliveSetHas } from "../codegen/c/context";
 
 // ===== Module Index =====
@@ -139,258 +139,12 @@ function walkBody(node: Node, modulePath: string, aliveSet: AliveSet,
 	walkChildrenGeneric(node, modulePath, aliveSet, modIdx, visited, importMap);
 }
 
-// Walk all children of a node generically
+// Walk all children of a node generically via shared forEachChild
 function walkChildrenGeneric(node: Node, modulePath: string, aliveSet: AliveSet,
 	modIdx: ModuleIndex, visited: string[], importMap: ImportMap): void {
-	const k = node.kind;
-
-	if (k === NodeKind.Program) {
-		const d = node.data as ProgramData;
-		for (const s of d.programStmts) walkBody(s, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.BlockStmt) {
-		const d = node.data as BlockStmtData;
-		for (const s of d.statements) walkBody(s, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.FunctionDecl) {
-		const d = node.data as FunctionDeclData;
-		walkBody(d.fnBody, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.VariableDecl) {
-		const d = node.data as VariableDeclData;
-		walkBody(d.initializer, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.ExprStmt) {
-		const d = node.data as ExprStmtData;
-		walkBody(d.expr, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.ExportDecl) {
-		const d = node.data as ExportDeclData;
-		walkBody(d.exportedDecl, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.DecoratedDecl) {
-		const d = node.data as DecoratedDeclData;
-		walkBody(d.decoratedNode, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.TestDecl) {
-		const d = node.data as TestDeclData;
-		walkBody(d.testBody, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.ReturnStmt) {
-		const d = node.data as { argument: Node };
-		walkBody(d.argument, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.IfStmt) {
-		const d = node.data as { condition: Node, consequent: Node, alternate: Node };
-		walkBody(d.condition, modulePath, aliveSet, modIdx, visited, importMap);
-		walkBody(d.consequent, modulePath, aliveSet, modIdx, visited, importMap);
-		walkBody(d.alternate, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.WhileStmt) {
-		const d = node.data as { whileCondition: Node, whileBody: Node };
-		walkBody(d.whileCondition, modulePath, aliveSet, modIdx, visited, importMap);
-		walkBody(d.whileBody, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.ForStmt) {
-		const d = node.data as { forInit: Node, forCondition: Node, forUpdate: Node, forBody: Node };
-		walkBody(d.forInit, modulePath, aliveSet, modIdx, visited, importMap);
-		walkBody(d.forCondition, modulePath, aliveSet, modIdx, visited, importMap);
-		walkBody(d.forUpdate, modulePath, aliveSet, modIdx, visited, importMap);
-		walkBody(d.forBody, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.ForOfStmt) {
-		const d = node.data as { forOfBinding: string, forOfIsConst: boolean, forOfIterable: Node, forOfBody: Node };
-		walkBody(d.forOfIterable, modulePath, aliveSet, modIdx, visited, importMap);
-		walkBody(d.forOfBody, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.DoWhileStmt) {
-		const d = node.data as { doBody: Node, doCondition: Node };
-		walkBody(d.doBody, modulePath, aliveSet, modIdx, visited, importMap);
-		walkBody(d.doCondition, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.TryCatchStmt) {
-		const d = node.data as { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node };
-		walkBody(d.tryBody, modulePath, aliveSet, modIdx, visited, importMap);
-		walkBody(d.catchBody, modulePath, aliveSet, modIdx, visited, importMap);
-		walkBody(d.finallyBody, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.ThrowStmt) {
-		const d = node.data as { throwArg: Node };
-		walkBody(d.throwArg, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.BinaryExpr) {
-		const d = node.data as { operator: string, left: Node, right: Node };
-		walkBody(d.left, modulePath, aliveSet, modIdx, visited, importMap);
-		walkBody(d.right, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.UnaryExpr) {
-		const d = node.data as { unaryOp: string, operand: Node };
-		walkBody(d.operand, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.ConditionalExpr) {
-		const d = node.data as { ternaryCondition: Node, ternaryConsequent: Node, ternaryAlternate: Node };
-		walkBody(d.ternaryCondition, modulePath, aliveSet, modIdx, visited, importMap);
-		walkBody(d.ternaryConsequent, modulePath, aliveSet, modIdx, visited, importMap);
-		walkBody(d.ternaryAlternate, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.ArrayLiteral) {
-		const d = node.data as { elements: Node[] };
-		for (const e of d.elements) walkBody(e, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.ObjectLiteral) {
-		const d = node.data as { properties: Node[], keys: string[] };
-		for (const p of d.properties) walkBody(p, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.ArrayAccess) {
-		const d = node.data as { array: Node, index: Node };
-		walkBody(d.array, modulePath, aliveSet, modIdx, visited, importMap);
-		walkBody(d.index, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.UpdateExpr) {
-		const d = node.data as { updateOp: string, updateArg: Node, isPrefix: boolean };
-		walkBody(d.updateArg, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.SpreadExpr) {
-		const d = node.data as { spreadArg: Node };
-		walkBody(d.spreadArg, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.NewExpr) {
-		const d = node.data as { newCallee: Node, newArguments: Node[] };
-		walkBody(d.newCallee, modulePath, aliveSet, modIdx, visited, importMap);
-		for (const a of d.newArguments) walkBody(a, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.TryExpr) {
-		const d = node.data as { tryArg: Node, hasCatch: boolean, catchVal: Node };
-		walkBody(d.tryArg, modulePath, aliveSet, modIdx, visited, importMap);
-		walkBody(d.catchVal, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.TypeAssertion) {
-		const d = node.data as { asExpr: Node, asType: string };
-		walkBody(d.asExpr, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.MatchExpr || k === NodeKind.MatchStmt) {
-		if (k === NodeKind.MatchExpr) {
-			const d = node.data as { matchDisc: Node, matchCases: Node[] };
-			walkBody(d.matchDisc, modulePath, aliveSet, modIdx, visited, importMap);
-			for (const c of d.matchCases) walkBody(c, modulePath, aliveSet, modIdx, visited, importMap);
-		} else {
-			const d = node.data as { matchStmtDisc: Node, matchStmtCases: Node[] };
-			walkBody(d.matchStmtDisc, modulePath, aliveSet, modIdx, visited, importMap);
-			for (const c of d.matchStmtCases) walkBody(c, modulePath, aliveSet, modIdx, visited, importMap);
-		}
-		return;
-	}
-	if (k === NodeKind.MatchCase) {
-		const d = node.data as { casePatterns: Node[], caseBody: Node };
-		for (const p of d.casePatterns) walkBody(p, modulePath, aliveSet, modIdx, visited, importMap);
-		walkBody(d.caseBody, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.SwitchStmt) {
-		const d = node.data as { switchDisc: Node, switchCases: Node[] };
-		walkBody(d.switchDisc, modulePath, aliveSet, modIdx, visited, importMap);
-		for (const c of d.switchCases) walkBody(c, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.SwitchCase) {
-		const d = node.data as { caseTests: Node[], caseStmts: Node[], isDefault: boolean };
-		for (const t of d.caseTests) walkBody(t, modulePath, aliveSet, modIdx, visited, importMap);
-		for (const s of d.caseStmts) walkBody(s, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.ClassDecl) {
-		const d = node.data as ClassDeclData;
-		for (const m of d.classBody) walkBody(m, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.MethodDecl) {
-		const d = node.data as MethodDeclData;
-		walkBody(d.methodBody, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.ConstructorDecl) {
-		const d = node.data as ConstructorDeclData;
-		walkBody(d.ctorBody, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.AwaitExpr) {
-		const d = node.data as { awaitArg: Node };
-		walkBody(d.awaitArg, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.YieldExpr) {
-		const d = node.data as { yieldArg: Node, isDelegate: boolean };
-		walkBody(d.yieldArg, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.MoveExpr) {
-		const d = node.data as { moveArg: Node };
-		walkBody(d.moveArg, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.OutExpr) {
-		const d = node.data as { outArg: Node };
-		walkBody(d.outArg, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.HiddenDeref || k === NodeKind.HiddenAddr) {
-		const d = node.data as { convExpr: Node, convType: Type };
-		walkBody(d.convExpr, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.HiddenStdConv || k === NodeKind.HiddenSubConv) {
-		const d = node.data as { convExpr: Node, convType: Type };
-		walkBody(d.convExpr, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.ArrowFunction) {
-		const d = node.data as { arrowParams: string[], arrowParamTypes: string[], arrowBody: Node, arrowFlags: string, arrowReturnType: string };
-		walkBody(d.arrowBody, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.FunctionExpr) {
-		const d = node.data as { funcExprParams: string[], funcExprParamTypes: string[], funcExprBody: Node, funcExprFlags: string, funcExprReturnType: string };
-		walkBody(d.funcExprBody, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.DeferStmt) {
-		const d = node.data as { deferExpr: Node };
-		walkBody(d.deferExpr, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	if (k === NodeKind.ComptimeBlock) {
-		const d = node.data as { comptimeBody: Node };
-		walkBody(d.comptimeBody, modulePath, aliveSet, modIdx, visited, importMap);
-		return;
-	}
-	// Leaves (literals, break, continue, import, type annotations, etc.) — no children to walk
+	forEachChild(node, (child: Node): void => {
+		walkBody(child, modulePath, aliveSet, modIdx, visited, importMap);
+	});
 }
 
 // Mark a symbol alive and walk its body if not already visited.
@@ -558,6 +312,7 @@ function isTopLevelStatement(node: Node): boolean {
 	if (k === NodeKind.TryCatchStmt) return true;
 	if (k === NodeKind.ThrowStmt) return true;
 	if (k === NodeKind.BlockStmt) return true;
+	if (k === NodeKind.AssertStmt) return true;
 	// VariableDecl with initializer is also side-effecting
 	if (k === NodeKind.VariableDecl) return true;
 	return false;
@@ -593,12 +348,12 @@ function getDeclName(node: Node): string {
 import { createNode } from "../ast/node";
 
 test "endsWith helper" {
-	expect(endsWith("foo/bar.ms", "bar.ms"));
-	expect(endsWith("foo/bar.ms", "foo/bar.ms"));
-	expect(!endsWith("foo/bar.ms", "baz.ms"));
+	assert endsWith("foo/bar.ms", "bar.ms");
+	assert endsWith("foo/bar.ms", "foo/bar.ms");
+	assert !endsWith("foo/bar.ms", "baz.ms");
 }
 
 test "empty programs produce empty alive set" {
 	const aliveSet = computeAliveSet([], [], "/entry.ms", false);
-	expect(aliveSet.entries.length === 0);
+	assert aliveSet.entries.length === 0;
 }

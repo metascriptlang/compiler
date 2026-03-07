@@ -44,7 +44,7 @@ function rewriteClosureCall(node: Node): Node {
 	const loc = node.location;
 	const callee = cd.callee;
 
-	// Reference compiler pattern (Nim parity):
+	// Reference compiler pattern (Implementation parity):
 	//   env ? fn(args..., env) : ((direct_cast)fn)(args...)
 	// - env LAST (not first) so named functions ignore the trailing env arg
 	// - Conditional: if env is NULL, call without env at all
@@ -62,7 +62,7 @@ function rewriteClosureCall(node: Node): Node {
 	// WITH env branch: ((cast)(callee.fn))(env, args...)
 	// env FIRST matches our lambda lifting convention (_envP is first param)
 	// Use __clFull__ marker for non-variadic typed cast (ARM64 ABI requires it).
-	// Nim parity: genProcParams with declareEnvironment=true builds a properly typed fn ptr.
+	// Implementation parity: build a properly typed function pointer.
 	const fnMemberWithEnv = makeMember(callee, "fn", loc);
 	const fnCastWithEnv = createNode(NodeKind.TypeAssertion, { asExpr: fnMemberWithEnv, asType: "__clFull__" }, syntheticToken(loc));
 	// Set nodeType for codegen's genClFullCast to read param/return types
@@ -83,7 +83,7 @@ function rewriteClosureCall(node: Node): Node {
 	(callWithEnv.data as CallExprData).isDirectCall = true;
 
 	// WITHOUT env branch: ((directCast)(callee.fn))(args...) — no env
-	// Nim's clHalf pattern: codegen generates per-call-site typed function pointer cast.
+	// Standard closure pattern: codegen generates per-call-site typed function pointer cast.
 	// We pass "__clHalf__" marker + callee's type so codegen can build the C cast.
 	const fnMemberNoEnv = makeMember(callee, "fn", loc);
 	const fnCastNoEnv = createNode(NodeKind.TypeAssertion, { asExpr: fnMemberNoEnv, asType: "__clHalf__" }, syntheticToken(loc));
@@ -275,8 +275,8 @@ function typeKindToRetStr(kind: number): string {
 	if (kind === TypeKind.Boolean) return "boolean";
 	if (kind === TypeKind.String) return "string";
 	if (kind === TypeKind.Void || kind === TypeKind.Null) return "void";
-	if (kind === TypeKind.Int32 || kind === TypeKind.Uint32) return "int32";
-	if (kind === TypeKind.Int64) return "int64";
+	if (kind === TypeKind.Int8 || kind === TypeKind.Int16 || kind === TypeKind.Int32 || kind === TypeKind.Uint8 || kind === TypeKind.Uint16 || kind === TypeKind.Uint32) return "int32";
+	if (kind === TypeKind.Int64 || kind === TypeKind.Uint64) return "int64";
 	return "ptr";
 }
 
@@ -289,7 +289,7 @@ function closureFnCastType(callType: Type): string {
 	if (rt.kind === TypeKind.Number || rt.kind === TypeKind.Float64) return "msClosureFnD";
 	if (rt.kind === TypeKind.Boolean) return "msClosureFnB";
 	if (rt.kind === TypeKind.String) return "msClosureFnS";
-	if (rt.kind === TypeKind.Int32 || rt.kind === TypeKind.Uint32) return "msClosureFnI";
+	if (rt.kind === TypeKind.Int8 || rt.kind === TypeKind.Int16 || rt.kind === TypeKind.Int32 || rt.kind === TypeKind.Uint8 || rt.kind === TypeKind.Uint16 || rt.kind === TypeKind.Uint32) return "msClosureFnI";
 	if (rt.kind === TypeKind.Int64 || rt.kind === TypeKind.Uint64) return "msClosureFnI64";
 	// Pointer types (class, ref, array, etc.) return void*
 	return "msClosureFnP";
@@ -323,9 +323,9 @@ test "closure call is rewritten to direct call" {
 	// After lowering, the ExprStmt should contain a direct call
 	const exprStmt = (t.prog.data as { programStmts: Node[] }).programStmts[0];
 	const newCall = (exprStmt.data as { expr: Node }).expr;
-	expect(newCall.kind === NodeKind.CallExpr);
+	assert newCall.kind === NodeKind.CallExpr;
 	const newCd = newCall.data as CallExprData;
-	expect(newCd.isDirectCall === true);
+	assert newCd.isDirectCall === true;
 }
 
 test "closure call has env prepended to args" {
@@ -337,9 +337,9 @@ test "closure call has env prepended to args" {
 	const newCall = (exprStmt.data as { expr: Node }).expr;
 	const newCd = newCall.data as CallExprData;
 	// Should have env + original arg = 2 args
-	expect(newCd.arguments.length === 2);
+	assert newCd.arguments.length === 2;
 	// First arg is env (MemberExpr .env)
-	expect(newCd.arguments[0].kind === NodeKind.MemberExpr);
+	assert newCd.arguments[0].kind === NodeKind.MemberExpr;
 }
 
 test "closure call callee is TypeAssertion with msClosureFn" {
@@ -349,11 +349,11 @@ test "closure call callee is TypeAssertion with msClosureFn" {
 	const newCall = (exprStmt.data as { expr: Node }).expr;
 	const newCd = newCall.data as CallExprData;
 	// Callee should be TypeAssertion
-	expect(newCd.callee.kind === NodeKind.TypeAssertion);
+	assert newCd.callee.kind === NodeKind.TypeAssertion;
 	const ta = newCd.callee.data as TypeAssertionData;
-	expect(ta.asType === "msClosureFn");
+	assert ta.asType === "msClosureFn";
 	// Inner should be MemberExpr .fn
-	expect(ta.asExpr.kind === NodeKind.MemberExpr);
+	assert ta.asExpr.kind === NodeKind.MemberExpr;
 }
 
 test "direct call is not rewritten" {
@@ -367,6 +367,6 @@ test "direct call is not rewritten" {
 	lowerClosureCalls(prog, makeCtx());
 	// Should remain unchanged
 	const newCd = ((prog.data as { programStmts: Node[] }).programStmts[0].data as { expr: Node }).expr.data as CallExprData;
-	expect(newCd.isDirectCall === true);
-	expect(newCd.callee.kind === NodeKind.Identifier);
+	assert newCd.isDirectCall === true;
+	assert newCd.callee.kind === NodeKind.Identifier;
 }

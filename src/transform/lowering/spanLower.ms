@@ -1,6 +1,6 @@
 // Span Lowering - Transforms HiddenStdConv (Array -> Span) into explicit struct initializers
 //
-// Pattern: Nim's lowerOpenArray in ccgexprs.nim (handled during emission, but we move to Transform)
+// Pattern: standard reference implementation (handled during emission, but moved to Transform)
 //
 // Array -> Span: ObjectLiteral(SpanType, { data: arr.p->data, len: arr.len })
 // SizedArray -> Span: ObjectLiteral(SpanType, { data: arr.data, len: N })

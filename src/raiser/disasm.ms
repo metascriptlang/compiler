@@ -120,22 +120,22 @@ export function printModule(mod: RaiserModule): void {
 // --- Tests ---
 test "ABC instruction format" {
 	const inst = raiserABC(RaiserOpcode.AddI64, 2, 0, 1);
-	expect(disasmInst(inst) === "AddI64 R2 R0 R1");
+	assert disasmInst(inst) === "AddI64 R2 R0 R1";
 }
 
 test "ABx instruction format" {
 	const inst = raiserABx(RaiserOpcode.LoadConst, 0, 3);
-	expect(disasmInst(inst) === "LoadConst R0 K3");
+	assert disasmInst(inst) === "LoadConst R0 K3";
 }
 
 test "Ax instruction format" {
 	const inst = raiserAx(RaiserOpcode.Jump, -4);
-	expect(disasmInst(inst) === "Jump -4");
+	assert disasmInst(inst) === "Jump -4";
 }
 
 test "Halt format" {
 	const inst = raiserABC(RaiserOpcode.Halt, 2, 0, 0);
-	expect(disasmInst(inst) === "Halt R2 R0 R0");
+	assert disasmInst(inst) === "Halt R2 R0 R0";
 }
 
 test "disasmFunc includes constant annotations" {
@@ -148,6 +148,6 @@ test "disasmFunc includes constant annotations" {
 	);
 	const entry = getModuleEntry(mod);
 	const s = disasmFunc(entry);
-	expect(s.length > 0);
+	assert s.length > 0;
 	// Should contain "LoadConst" and the constant value annotation
 }

@@ -30,8 +30,8 @@ function lowerNullishNode(node: Node): Node {
 }
 
 // ===== Tests =====
-test "nullish coalesce becomes conditional" { expect(firstExprKindAfter("x ?? 42;", lowerNullishCoalesce) === NodeKind.ConditionalExpr); }
+test "nullish coalesce becomes conditional" { assert firstExprKindAfter("x ?? 42;", lowerNullishCoalesce) === NodeKind.ConditionalExpr; }
 
-test "other binary unchanged" { expect(firstExprKindAfter("x + y;", lowerNullishCoalesce) === NodeKind.BinaryExpr); }
+test "other binary unchanged" { assert firstExprKindAfter("x + y;", lowerNullishCoalesce) === NodeKind.BinaryExpr; }
 
-test "logical or unchanged" { expect(firstExprKindAfter("x || y;", lowerNullishCoalesce) === NodeKind.BinaryExpr); }
+test "logical or unchanged" { assert firstExprKindAfter("x || y;", lowerNullishCoalesce) === NodeKind.BinaryExpr; }

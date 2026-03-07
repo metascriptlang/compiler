@@ -56,17 +56,20 @@ import { lowerRvalue } from "./lowering/rvalueLower";
 import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
 import { lowerBuiltins } from "./native/builtinLower";
 import { lowerSubscript } from "./lowering/subscriptLower";
+import { lowerOperators } from "./lowering/operatorLower";
 import { lowerConditionalExpr } from "./lowering/conditionalExprLower";
 import { lowerUpdateExpr } from "./lowering/updateExprLower";
 import { spanLower } from "./lowering/spanLower";
 import { spanParamExpand } from "./native/spanParamExpand";
 import { lowerDCE } from "./analysis/dce";
 import { liftDestructors } from "./lowering/destructorLifting";
+import { lowerPowerAssert } from "./powerAssert";
 
 export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	ctx.jsBackend = jsBackend;
-	let result = lowerDefer(program, ctx);
+	let result = jsBackend ? lowerPowerAssert(program, ctx) : program;
+	result = lowerDefer(result, ctx);
 	result = lowerConstFold(result, ctx);
 	if (!jsBackend) { result = lowerStringConcatFlatten(result, ctx); }
 	result = lowerOptionalChain(result, ctx);
@@ -90,6 +93,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerLambda(result, ctx); }
 	result = lowerExtensionMethod(result, ctx);
 	result = lowerBuiltins(result, ctx);
+	result = lowerOperators(result, ctx);
 	result = lowerSubscript(result, ctx);
 	if (!jsBackend) { result = spanLower(result, ctx); }
 	if (!jsBackend) { result = spanParamExpand(result, ctx); }

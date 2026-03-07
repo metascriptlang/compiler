@@ -152,7 +152,7 @@ void msRefArraySetLen(msRefArray* arr, int64_t newLen);
 int64_t msRefArrayCapacity(msRefArray* arr);
 void msRefArraySetLenUninit(msRefArray* arr, int64_t newLen);
 
-/* ===== Generic Typed Array Macro (Nim seqV2 / reference MS_ARRAY pattern) ===== */
+/* ===== Generic Typed Array Macro (Standard reference sequence / reference MS_ARRAY pattern) ===== */
 /* Generates per-type array struct: { int64_t len; struct { int64_t cap; T data[]; }* p; }
  * Usage: typedef MS_ARRAY(struct Token) TokenArray;
  * Each element type gets its own array with inline value storage (not void* indirection). */

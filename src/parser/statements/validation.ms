@@ -6,8 +6,12 @@ import { Node, NodeKind, ProgramData, createNodeAt } from "../../ast/node";
 import { ParserState, createState } from "../context";
 import { lex } from "../../lexer/lexer";
 import { callStateProgramParser } from "./callbacks";
+import { registerCoreParsers } from "./core";
 
 type NodeResult = Result<Node, string>;
+
+// Ensure parser callbacks are registered before any test helper is called
+registerCoreParsers();
 
 // ===== Convenience: lex + parse in one step =====
 

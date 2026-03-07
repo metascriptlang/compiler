@@ -1,6 +1,6 @@
 // C Codegen — Literal Emission
 //
-// String pool management (Nim's cfsStrData), C string escaping,
+// String pool management, C string escaping,
 // number formatting for C output.
 
 import { sliceStr, charAt } from "../../utils/string";
@@ -122,34 +122,34 @@ export function cNullLiteral(): string {
 }
 
 // ===== Tests =====
-test "plain string" { expect(escapeCString("hello") === "hello"); }
+test "plain string" { assert escapeCString("hello") === "hello"; }
 
-test "escape backslash" { expect(escapeCString("a\\b") === "a\\\\b"); }
+test "escape backslash" { assert escapeCString("a\\b") === "a\\\\b"; }
 
-test "escape quotes" { expect(escapeCString("a\"b") === "a\\\"b"); }
+test "escape quotes" { assert escapeCString("a\"b") === "a\\\"b"; }
 
-test "escape newline" { expect(escapeCString("a\nb") === "a\\nb"); }
+test "escape newline" { assert escapeCString("a\nb") === "a\\nb"; }
 
-test "escape tab" { expect(escapeCString("a\tb") === "a\\tb"); }
+test "escape tab" { assert escapeCString("a\tb") === "a\\tb"; }
 
 test "cStringLiteral wraps in quotes" {
-	expect(cStringLiteral("hello") === "\"hello\"");
-	expect(cStringLiteral("a\"b") === "\"a\\\"b\"");
+	assert cStringLiteral("hello") === "\"hello\"";
+	assert cStringLiteral("a\"b") === "\"a\\\"b\"";
 }
 
-test "zero" { expect(formatCNumber(0.0) === "0"); }
+test "zero" { assert formatCNumber(0.0) === "0"; }
 
-test "positive integer" { expect(formatCNumber(42.0) === "42"); }
+test "positive integer" { assert formatCNumber(42.0) === "42"; }
 
-test "negative integer" { expect(formatCNumber(-7.0) === "-7"); }
+test "negative integer" { assert formatCNumber(-7.0) === "-7"; }
 
-test "int32 suffix" { expect(formatCInt32(42) === "42"); }
+test "int32 suffix" { assert formatCInt32(42) === "42"; }
 
-test "int64 suffix" { expect(formatCInt64(42) === "42LL"); }
+test "int64 suffix" { assert formatCInt64(42) === "42LL"; }
 
-test "uint32 suffix" { expect(formatCUint32(42) === "42U"); }
+test "uint32 suffix" { assert formatCUint32(42) === "42U"; }
 
-test "float32 suffix" { expect(formatCFloat32(3.14) === "3.14f"); }
+test "float32 suffix" { assert formatCFloat32(3.14) === "3.14f"; }
 
 test "emit pool declarations as msStrPayload" {
 	const pool = createStringPool();
@@ -158,15 +158,15 @@ test "emit pool declarations as msStrPayload" {
 	const builder = createBuilder();
 	emitStringPoolDecls(pool, builder);
 	const result = extract(builder);
-	expect(result.length > 0);
+	assert result.length > 0;
 	// Should contain MS_STRLIT_FLAG, cap, and data
 }
 
-test "msStringPoolRef format" { expect(msStringPoolRef("TMP_STR_1", 5) === "MS_STRING_LIT(&TMP_STR_1, 5)"); }
+test "msStringPoolRef format" { assert msStringPoolRef("TMP_STR_1", 5) === "MS_STRING_LIT(&TMP_STR_1, 5)"; }
 
 test "true/false" {
-	expect(cBoolLiteral(true) === "MS_TRUE");
-	expect(cBoolLiteral(false) === "MS_FALSE");
+	assert cBoolLiteral(true) === "MS_TRUE";
+	assert cBoolLiteral(false) === "MS_FALSE";
 }
 
-test "null" { expect(cNullLiteral() === "MS_NIL"); }
+test "null" { assert cNullLiteral() === "MS_NIL"; }

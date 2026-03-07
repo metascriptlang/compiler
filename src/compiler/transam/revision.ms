@@ -65,54 +65,54 @@ export function queryKeysEqual(a: TaQueryKey, b: TaQueryKey): boolean {
 // ===== Tests =====
 test "init starts at zero" {
 	const rev = createRevision();
-	expect(rev.value === 0);
+	assert rev.value === 0;
 }
 
 test "increment advances" {
 	const rev = createRevision();
 	incrementRevision(rev);
-	expect(rev.value === 1);
+	assert rev.value === 1;
 	incrementRevision(rev);
-	expect(rev.value === 2);
+	assert rev.value === 2;
 }
 
 test "create stores kind and fileId" {
 	const key = createQueryKey(TaQueryKind.Parse, 42);
-	expect(key.queryKind === TaQueryKind.Parse);
-	expect(key.fileId === 42);
+	assert key.queryKind === TaQueryKind.Parse;
+	assert key.fileId === 42;
 }
 
 test "equal keys match" {
 	const a = createQueryKey(TaQueryKind.Parse, 1);
 	const b = createQueryKey(TaQueryKind.Parse, 1);
-	expect(queryKeysEqual(a, b));
+	assert queryKeysEqual(a, b);
 }
 
 test "different kind does not match" {
 	const a = createQueryKey(TaQueryKind.Parse, 1);
 	const b = createQueryKey(TaQueryKind.TypeCheck, 1);
-	expect(!queryKeysEqual(a, b));
+	assert !queryKeysEqual(a, b);
 }
 
 test "different fileId does not match" {
 	const a = createQueryKey(TaQueryKind.Parse, 1);
 	const b = createQueryKey(TaQueryKind.Parse, 2);
-	expect(!queryKeysEqual(a, b));
+	assert !queryKeysEqual(a, b);
 }
 
 test "query kinds are distinct" {
-	expect(TaQueryKind.FileText !== TaQueryKind.Parse);
-	expect(TaQueryKind.Parse !== TaQueryKind.TypeCheck);
-	expect(TaQueryKind.TypeCheck !== TaQueryKind.Transform);
-	expect(TaQueryKind.Transform !== TaQueryKind.Analyze);
+	assert TaQueryKind.FileText !== TaQueryKind.Parse;
+	assert TaQueryKind.Parse !== TaQueryKind.TypeCheck;
+	assert TaQueryKind.TypeCheck !== TaQueryKind.Transform;
+	assert TaQueryKind.Transform !== TaQueryKind.Analyze;
 }
 
 test "query states are distinct" {
-	expect(TaQueryState.Green !== TaQueryState.Red);
-	expect(TaQueryState.Red !== TaQueryState.Yellow);
+	assert TaQueryState.Green !== TaQueryState.Red;
+	assert TaQueryState.Red !== TaQueryState.Yellow;
 }
 
 test "durability levels are distinct" {
-	expect(TaDurability.Low !== TaDurability.Medium);
-	expect(TaDurability.Medium !== TaDurability.High);
+	assert TaDurability.Low !== TaDurability.Medium;
+	assert TaDurability.Medium !== TaDurability.High;
 }

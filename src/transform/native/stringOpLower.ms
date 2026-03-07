@@ -1,5 +1,5 @@
 // String Operation Lowering — rewrite string operators to runtime function calls
-// Moves business logic from codegen to transform phase (Nim parity: dumb codegen)
+// Moves business logic from codegen to transform phase (standard dumb codegen parity)
 //
 // Rewrites:
 //   s == t       →  msStringEquals(s, t)
@@ -15,7 +15,7 @@ import {
 	Node, NodeKind, SourceLocation,
 	BinaryExprData, ArrayAccessData, StringLiteralData,
 } from "../../ast/node";
-import { TypeKind } from "../../checker/types";
+import { TypeKind, isNumeric } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent, makeBinary, makeMember, makeUnary } from "../util";
@@ -128,8 +128,7 @@ function coercePartToString(node: Node, loc: SourceLocation): Node {
 	if (node.kind === NodeKind.StringLiteral) return node;
 	if (node.nodeType !== null && node.nodeType.kind === TypeKind.String) return node;
 	if (node.nodeType !== null) {
-		if (node.nodeType.kind === TypeKind.Number || node.nodeType.kind === TypeKind.Int32 ||
-			node.nodeType.kind === TypeKind.Float32 || node.nodeType.kind === TypeKind.Float64) {
+		if (isNumeric(node.nodeType)) {
 			return makeCall(makeIdent("msNumberToString", loc), [node], loc);
 		}
 		if (node.nodeType.kind === TypeKind.Boolean) {

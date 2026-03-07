@@ -1,8 +1,8 @@
 /*
- * MetaScript Async Dispatcher — Nim asyncdispatch.nim parity
+ * MetaScript Async Dispatcher — Standard reference implementation parity
  *
  * Event loop, timer heap, ring buffer callback deque.
- * Matches Nim's PDispatcherBase, processTimers, processPendingCallbacks,
+ * Matches standard reference dispatcher pattern,
  * runOnce, poll, waitFor, runForever, sleepAsync.
  */
 #ifndef MS_DISPATCH_H
@@ -13,7 +13,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-/* ===== Callback Ring Buffer (Nim's Deque[proc()]) ===== */
+/* ===== Callback Ring Buffer (Standard reference pattern) ===== */
 
 typedef struct msCallbackDeque {
 	msClosure* items;
@@ -22,7 +22,7 @@ typedef struct msCallbackDeque {
 	int cap;
 } msCallbackDeque;
 
-/* ===== Timer Heap (Nim's HeapQueue[tuple[finishAt, fut]]) ===== */
+/* ===== Timer Heap (Standard reference pattern) ===== */
 
 typedef struct msTimer {
 	int64_t finishAtMs;    /* monotonic milliseconds */
@@ -35,7 +35,7 @@ typedef struct msTimerHeap {
 	int cap;
 } msTimerHeap;
 
-/* ===== Dispatcher (Nim's PDispatcher) ===== */
+/* ===== Dispatcher (Standard reference pattern) ===== */
 
 typedef struct msDispatcher {
 	msTimerHeap timers;
@@ -45,39 +45,39 @@ typedef struct msDispatcher {
 
 /* ===== API ===== */
 
-/* Nim's getGlobalDispatcher — lazy init, thread-local */
+/* Standard reference getGlobalDispatcher pattern — lazy init, thread-local */
 msDispatcher* msGetDispatcher(void);
 
 /* Destroy the global dispatcher — cancel timers, drain callbacks, free memory.
- * Matches Nim's closeDispatcher(). Resets msCallSoonProc to NULL. */
+ * Matches standard reference closeDispatcher pattern. Resets msCallSoonProc to NULL. */
 void msDestroyDispatcher(void);
 
 /* Check if dispatcher exists (without creating one) */
 bool msHasDispatcher(void);
 
-/* Nim's processTimers — pop expired timers, complete futures.
+/* Standard reference processTimers pattern — pop expired timers, complete futures.
  * Returns ms until next timer (+1 margin), or -1 if no timers. */
 int msProcessTimers(msDispatcher* d, bool* didWork);
 
-/* Nim's processPendingCallbacks — drain callback deque */
+/* Standard reference processPendingCallbacks pattern — drain callback deque */
 void msProcessCallbacks(msDispatcher* d, bool* didWork);
 
-/* Nim's adjustTimeout */
+/* Standard reference adjustTimeout pattern */
 int msAdjustTimeout(msDispatcher* d, int pollTimeout, int nextTimerMs);
 
-/* Nim's runOnce — one event loop iteration */
+/* Standard reference runOnce pattern — one event loop iteration */
 bool msRunOnce(int timeoutMs);
 
-/* Nim's poll(timeout) — alias for runOnce */
+/* Standard reference poll(timeout) pattern — alias for runOnce */
 void msPoll(int timeoutMs);
 
-/* Nim's waitFor(fut) — block until future completes */
+/* Standard reference waitFor(fut) pattern — block until future completes */
 void* msWaitFor(msFuture* fut);
 
-/* Nim's runForever() — infinite poll loop */
+/* Standard reference runForever() pattern — infinite poll loop */
 void msRunForever(void);
 
-/* Nim's sleepAsync(ms) — push timer, return future */
+/* Standard reference sleepAsync(ms) pattern — push timer, return future */
 msFuture* msSleepAsync(int ms);
 
 /* Platform monotonic time in milliseconds */

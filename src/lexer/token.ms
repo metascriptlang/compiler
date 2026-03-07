@@ -5,6 +5,8 @@ export enum TokenKind {
 	Number, BigInt, String, Regex, TemplateHead, TemplateMiddle, TemplateTail, TemplateNoSub,
 	// Identifier
 	Ident,
+	// Operator identifier: backtick-quoted operator name like `==`, `[]`, `[]=`
+	OperatorIdent,
 	// Operators
 	Plus, Minus, Star, Slash, Percent, StarStar,
 	Assign, PlusEq, MinusEq, StarEq, SlashEq, PercentEq,
@@ -25,7 +27,7 @@ export enum TokenKind {
 	Abstract, As, Asserts, Async, Await, Constructor, Declare, From, Get,
 	Implements, Infer, Is, Keyof, Namespace, Never, Of,
 	Private, Protected, Public, Readonly, Require, Set, Static, Type, Unknown, Yield,
-	Match, When, Unreachable, Defer, Distinct, Move, Out, Test, Expect, Macro, Extern, Quote, Char, Sizeof,
+	Match, When, Unreachable, Defer, Distinct, Move, Out, Test, Assert, Macro, Extern, Quote, Char, Sizeof,
 	Int8, Int16, Int32, Int64, Uint8, Uint16, Uint32, Uint64,
 	Float32, Float64, Int, Float, Double, CString,
 	Comment,
@@ -130,6 +132,7 @@ export function identToKeyword(ident: string): TokenKind {
 		"move" => TokenKind.Move,
 		"out" => TokenKind.Out,
 		"test" => TokenKind.Test,
+		"assert" => TokenKind.Assert,
 		"macro" => TokenKind.Macro,
 		"extern" => TokenKind.Extern,
 		"quote" => TokenKind.Quote,
@@ -165,6 +168,7 @@ export function tokenKindToString(kind: TokenKind): string {
 		TokenKind.TemplateTail => "TEMPLATE_TAIL",
 		TokenKind.TemplateNoSub => "TEMPLATE_NOSUB",
 		TokenKind.Ident => "IDENT",
+		TokenKind.OperatorIdent => "OPERATOR_IDENT",
 		TokenKind.Plus => "PLUS",
 		TokenKind.Minus => "MINUS",
 		TokenKind.Star => "STAR",
@@ -287,7 +291,7 @@ export function tokenKindToString(kind: TokenKind): string {
 		TokenKind.Move => "MOVE",
 		TokenKind.Out => "OUT",
 		TokenKind.Test => "TEST",
-		TokenKind.Expect => "EXPECT",
+		TokenKind.Assert => "ASSERT",
 		TokenKind.Macro => "MACRO",
 		TokenKind.Extern => "EXTERN",
 		TokenKind.Quote => "QUOTE",
@@ -314,18 +318,18 @@ export function tokenKindToString(kind: TokenKind): string {
 }
 
 // ===== Token Tests =====
-test "identToKeyword const" { expect(identToKeyword("const") === TokenKind.Const); }
+test "identToKeyword const" { assert identToKeyword("const") === TokenKind.Const; }
 
-test "identToKeyword let" { expect(identToKeyword("let") === TokenKind.Let); }
+test "identToKeyword let" { assert identToKeyword("let") === TokenKind.Let; }
 
-test "identToKeyword ident" { expect(identToKeyword("foo") === TokenKind.Ident); }
+test "identToKeyword ident" { assert identToKeyword("foo") === TokenKind.Ident; }
 
-test "identToKeyword sizeof" { expect(identToKeyword("sizeof") === TokenKind.Sizeof); }
+test "identToKeyword sizeof" { assert identToKeyword("sizeof") === TokenKind.Sizeof; }
 
-test "identToKeyword underscore" { expect(identToKeyword("_") === TokenKind.Ident); }
+test "identToKeyword underscore" { assert identToKeyword("_") === TokenKind.Ident; }
 
-test "kindToString Plus" { expect(tokenKindToString(TokenKind.Plus) === "PLUS"); }
+test "kindToString Plus" { assert tokenKindToString(TokenKind.Plus) === "PLUS"; }
 
-test "kindToString Eof" { expect(tokenKindToString(TokenKind.Eof) === "EOF"); }
+test "kindToString Eof" { assert tokenKindToString(TokenKind.Eof) === "EOF"; }
 
-test "kindToString Const" { expect(tokenKindToString(TokenKind.Const) === "CONST"); }
+test "kindToString Const" { assert tokenKindToString(TokenKind.Const) === "CONST"; }

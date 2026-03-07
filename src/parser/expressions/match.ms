@@ -4,9 +4,10 @@
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, NodeData, Expression, createNode } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd, expect, peek } from "../context";
+import { ParserState, current, advance, isAtEnd, peek } from "../context";
 import { parseOk } from "./util";
 import { isIdentLike } from "../util";
+import { parseNumberLiteral } from "../../utils/string";
 
 
 type ExprResult = Result<Expression, string>;
@@ -132,7 +133,7 @@ function parseSinglePattern(state: ParserState): ExprResult {
 	// Number literal
 	if (token.kind === TokenKind.Number) {
 		advance(state);
-		return Result.ok(createNode(NodeKind.NumberLiteral, { value: parseFloat(token.value) }, token));
+		return Result.ok(createNode(NodeKind.NumberLiteral, { value: parseNumberLiteral(token.value) }, token));
 	}
 
 	// String literal — with optional .code suffix ("a".code → MemberExpr)
@@ -183,24 +184,24 @@ function parseSinglePattern(state: ParserState): ExprResult {
 }
 
 // ===== Tests =====
-test "number patterns" { expect(parseOk("match (x) { 1 => \"one\", _ => \"other\" }")); }
+test "number patterns" { assert parseOk("match (x) { 1 => \"one\", _ => \"other\" }"); }
 
-test "string patterns" { expect(parseOk("match (s) { \"a\" => 1, \"b\" => 2, _ => 0 }")); }
+test "string patterns" { assert parseOk("match (s) { \"a\" => 1, \"b\" => 2, _ => 0 }"); }
 
-test "bool patterns" { expect(parseOk("match (b) { true => \"yes\", _ => \"no\" }")); }
+test "bool patterns" { assert parseOk("match (b) { true => \"yes\", _ => \"no\" }"); }
 
-test "member patterns" { expect(parseOk("match (k) { Kind.A => 1, Kind.B => 2, _ => 0 }")); }
+test "member patterns" { assert parseOk("match (k) { Kind.A => 1, Kind.B => 2, _ => 0 }"); }
 
-test "or-patterns" { expect(parseOk("match (k) { Kind.A | Kind.B => 1, _ => 0 }")); }
+test "or-patterns" { assert parseOk("match (k) { Kind.A | Kind.B => 1, _ => 0 }"); }
 
-test "numeric or-patterns" { expect(parseOk("match (x) { 1 | 2 | 3 => \"few\", _ => \"many\" }")); }
+test "numeric or-patterns" { assert parseOk("match (x) { 1 | 2 | 3 => \"few\", _ => \"many\" }"); }
 
-test "single case" { expect(parseOk("match (x) { _ => 0 }")); }
+test "single case" { assert parseOk("match (x) { _ => 0 }"); }
 
-test "wildcard only" { expect(parseOk("match (x) { _ => x }")); }
+test "wildcard only" { assert parseOk("match (x) { _ => x }"); }
 
-test "string.code pattern" { expect(parseOk("match (ch) { \"n\".code => 1, _ => 0 }")); }
+test "string.code pattern" { assert parseOk("match (ch) { \"n\".code => 1, _ => 0 }"); }
 
-test "call in arm" { expect(parseOk("match (x) { 1 => foo(), _ => bar() }")); }
+test "call in arm" { assert parseOk("match (x) { 1 => foo(), _ => bar() }"); }
 
-test "binary in arm" { expect(parseOk("match (x) { 1 => a + b, _ => c }")); }
+test "binary in arm" { assert parseOk("match (x) { 1 => a + b, _ => c }"); }

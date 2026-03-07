@@ -3,7 +3,7 @@
 import { exit } from "std/process";
 import { CliOptions, Target, parseArgs, MODE_DEBUG, MODE_RELEASE, MODE_DANGER } from "./compiler/options";
 import { VERSION, printUsage } from "./compiler/usage";
-import { cmdCompile, cmdBuildJS, cmdBuildC, cmdRunJS, cmdRunRaiser, cmdTest } from "./compiler/compile";
+import { cmdBuildJS, cmdBuildC, cmdRunJS, cmdRunRaiser, cmdTest } from "./compiler/compile";
 import { cmdCheck, cmdDumpTokens, cmdDumpAst, cmdPipeline, cmdRun, cmdFmt, cmdInit, cmdClean } from "./compiler/commands";
 import { lspRunServer } from "./compiler/lsp/server";
 import { loadBuildConfig, BuildConfig } from "./compiler/buildConfig";
@@ -26,9 +26,6 @@ export function main(): number {
 		printUsage();
 	} else if (cmd === "version") {
 		console.log(bold("Metascript") + " " + green("v" + VERSION));
-	} else if (cmd === "compile") {
-		requireFile(opts);
-		cmdCompile(opts.inputFile, opts, opts.outputPath);
 	} else if (cmd === "run") {
 		if (opts.inputFile === "") {
 			const cfg = loadBuildConfig("build.ms", opts.showTime);

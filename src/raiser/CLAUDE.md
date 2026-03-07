@@ -29,7 +29,7 @@ The Raiser compiler consumes the **post-analyze AST** (same as C backend) and us
 |---------|----------------------|----------------|
 | **Bloat** | AOT native compilation, NaN-boxing, promises, async, event loop, peephole — all day-1 | Layered bring-up: switch dispatch first, each layer adds one concern |
 | **Monolithic ASM** | 2045-line `vm_arm64.s`, 728-line `vm_dispatch_x64.s` — all handlers in one file | One `.ms` file per opcode family (~100-200 lines), independently testable |
-| **Slow iteration** | External Zig test files, full rebuild required, 7 execution tests for 127 opcodes | Inline `testGroup` per file, hand-constructed bytecode tests, `msc test` in <1s |
+| **Slow iteration** | External Zig test files, full rebuild required, 7 execution tests for 127 opcodes | Inline `testGroup` per file, hand-constructed bytecode tests, `bun run test-ms` in <1s |
 
 ---
 
@@ -88,7 +88,7 @@ src/raiser/
 
 **19 files total.** Each ops file ~100-150 lines with inline tests. Run any file independently:
 ```bash
-rm -rf out && msc test src/raiser/vm/ops/arithmeticI64.ms
+rm -rf out && bun run test-ms src/raiser/vm/ops/arithmeticI64.ms
 ```
 
 ---
@@ -462,11 +462,11 @@ export function makeTestModule(code: RvInstruction[], constants: RvValue[]): RvM
 ### Test Hierarchy
 
 ```
-rm -rf out && msc test src/raiser/vm/ops/arithmeticI64.ms   # one family
-rm -rf out && msc test src/raiser/vm/index.ms                # all VM ops
-rm -rf out && msc test src/raiser/compiler/index.ms          # compiler only
-rm -rf out && msc test src/raiser/index.ms                   # full Raiser suite
-rm -rf out && msc test src/index.ms                          # everything
+rm -rf out && bun run test-ms src/raiser/vm/ops/arithmeticI64.ms   # one family
+rm -rf out && bun run test-ms src/raiser/vm/index.ms                # all VM ops
+rm -rf out && bun run test-ms src/raiser/compiler/index.ms          # compiler only
+rm -rf out && bun run test-ms src/raiser/index.ms                   # full Raiser suite
+rm -rf out && bun run test-ms src/index.ms                          # everything
 ```
 
 ---

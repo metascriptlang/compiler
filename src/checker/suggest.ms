@@ -13,6 +13,7 @@ import { Node, NodeKind, SourceLocation, ProgramData, DeclKind,
 	ArrowFunctionData, ArrayAccessData, MatchExprData, MatchCaseData,
 	TryCatchStmtData, TryExprData, ClassDeclData, InterfaceDeclData, EnumDeclData,
 	TypeAliasDeclData, ExportDeclData, ImportDeclData } from "../ast/node";
+import { forEachChild } from "../ast/visitor";
 import { Type, TypeKind, typeNameOf,
 	numberType, stringType, booleanType, voidType, nullType,
 	unknownType, neverType, errorType } from "./types";
@@ -74,9 +75,11 @@ export function sgTypeToString(t: Type): string {
 		TypeKind.Boolean => "boolean", TypeKind.Void => "void",
 		TypeKind.Null => "null", TypeKind.Unknown => "unknown",
 		TypeKind.Never => "never", TypeKind.Error => "error",
+		TypeKind.Int8 => "int8", TypeKind.Int16 => "int16",
 		TypeKind.Int32 => "int32", TypeKind.Int64 => "int64",
-		TypeKind.Uint32 => "uint32", TypeKind.Float32 => "float32",
-		TypeKind.Float64 => "float64",
+		TypeKind.Uint8 => "uint8", TypeKind.Uint16 => "uint16",
+		TypeKind.Uint32 => "uint32", TypeKind.Uint64 => "uint64",
+		TypeKind.Float32 => "float32", TypeKind.Float64 => "float64",
 		_ => "",
 	};
 	if (prim.length > 0) return prim;
@@ -582,7 +585,7 @@ export function sgExtractDocComment(source: string, declLine: number): string {
 			curLine = curLine - 1;
 			continue;
 		}
-		// Check for ## comment (Nim-style docstring)
+		// Check for ## comment (Standard reference style docstring)
 		if (trimmed.length >= 2 && sliceStr(trimmed, 0, 2) === "##") {
 			let content = sliceStr(trimmed, 2, trimmed.length);
 			if (content.length > 0 && charAt(content, 0) === " ") {
@@ -699,10 +702,11 @@ export function sgSymbolDetail(suggest: SgSuggest): string {
 export function sgCollectDiagnostics(ctx: CheckerContext): SgDiagnostic[] {
 	const result: SgDiagnostic[] = [];
 	for (let i = 0; i < ctx.errors.length; i = i + 1) {
+		const err = ctx.errors[i];
 		const diag: SgDiagnostic = {
-			message: ctx.errors[i],
-			line: 1,
-			column: 0,
+			message: err.message,
+			line: err.line > 0 ? err.line : 1,
+			column: err.column,
 			severity: 1,
 		};
 		result.push(diag);
@@ -1180,13 +1184,6 @@ function sgCollectHintsInNode(
 	// Skip nodes outside range
 	if (loc.line > endLine) return;
 
-	// Export declarations — unwrap
-	if (node.kind === NodeKind.ExportDecl) {
-		const ed = node.data as ExportDeclData;
-		sgCollectHintsInNode(ctx, ed.exportedDecl, startLine, endLine, hints);
-		return;
-	}
-
 	// Variable declarations: type hint if no annotation + walk initializer
 	if (node.kind === NodeKind.VariableDecl) {
 		sgCollectVarTypeHint(ctx, node, startLine, endLine, hints);
@@ -1213,49 +1210,16 @@ function sgCollectHintsInNode(
 		return;
 	}
 
-	// Block statements: walk children
-	if (node.kind === NodeKind.BlockStmt) {
-		const bd = node.data as BlockStmtData;
-		for (let j = 0; j < bd.statements.length; j = j + 1) {
-			sgCollectHintsInNode(ctx, bd.statements[j], startLine, endLine, hints);
-		}
-		return;
-	}
-
-	// Expression statements: check for call expressions
-	if (node.kind === NodeKind.ExprStmt) {
-		const es = node.data as ExprStmtData;
-		sgCollectHintsInNode(ctx, es.expr, startLine, endLine, hints);
-		return;
-	}
-
-	// Return statements: check expression
-	if (node.kind === NodeKind.ReturnStmt) {
-		const rs = node.data as ReturnStmtData;
-		sgCollectHintsInNode(ctx, rs.argument, startLine, endLine, hints);
-		return;
-	}
-
 	// Call expressions: parameter name hints
 	if (node.kind === NodeKind.CallExpr) {
 		sgCollectCallParamHints(ctx, node, startLine, endLine, hints);
 		return;
 	}
 
-	// If statements: walk both branches
-	if (node.kind === NodeKind.IfStmt) {
-		const ifd = node.data as IfStmtData;
-		sgCollectHintsInNode(ctx, ifd.consequent, startLine, endLine, hints);
-		sgCollectHintsInNode(ctx, ifd.alternate, startLine, endLine, hints);
-		return;
-	}
-
-	// While: walk body
-	if (node.kind === NodeKind.WhileStmt) {
-		const wd = node.data as WhileStmtData;
-		sgCollectHintsInNode(ctx, wd.whileBody, startLine, endLine, hints);
-		return;
-	}
+	// Generic fallback: recurse into all children
+	forEachChild(node, (child: Node): void => {
+		sgCollectHintsInNode(ctx, child, startLine, endLine, hints);
+	});
 }
 
 function sgCollectVarTypeHint(
@@ -1532,112 +1496,9 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 }
 
 function sgCollectTokensCompound(ctx: CheckerContext, node: Node, tokens: SgSemanticToken[]): void {
-	if (node.kind === NodeKind.Program) {
-		const pd = node.data as ProgramData;
-		for (let i = 0; i < pd.programStmts.length; i = i + 1) {
-			sgCollectTokensInNode(ctx, pd.programStmts[i], tokens);
-		}
-		return;
-	}
-	if (node.kind === NodeKind.BlockStmt) {
-		const bd = node.data as BlockStmtData;
-		for (let i = 0; i < bd.statements.length; i = i + 1) {
-			sgCollectTokensInNode(ctx, bd.statements[i], tokens);
-		}
-		return;
-	}
-	if (node.kind === NodeKind.ExprStmt) {
-		const es = node.data as ExprStmtData;
-		sgCollectTokensInNode(ctx, es.expr, tokens);
-		return;
-	}
-	if (node.kind === NodeKind.ReturnStmt) {
-		const rs = node.data as ReturnStmtData;
-		if (rs.argument !== null) sgCollectTokensInNode(ctx, rs.argument, tokens);
-		return;
-	}
-	if (node.kind === NodeKind.BinaryExpr) {
-		const be = node.data as BinaryExprData;
-		sgCollectTokensInNode(ctx, be.left, tokens);
-		sgCollectTokensInNode(ctx, be.right, tokens);
-		return;
-	}
-	if (node.kind === NodeKind.UnaryExpr) {
-		const ue = node.data as UnaryExprData;
-		sgCollectTokensInNode(ctx, ue.operand, tokens);
-		return;
-	}
-	if (node.kind === NodeKind.CallExpr) {
-		const ce = node.data as CallExprData;
-		sgCollectTokensInNode(ctx, ce.callee, tokens);
-		for (let i = 0; i < ce.arguments.length; i = i + 1) {
-			sgCollectTokensInNode(ctx, ce.arguments[i], tokens);
-		}
-		return;
-	}
-	if (node.kind === NodeKind.MemberExpr) {
-		const me = node.data as MemberExprData;
-		sgCollectTokensInNode(ctx, me.object, tokens);
-		// me.property is a string, not a node — would need location info
-		return;
-	}
-	if (node.kind === NodeKind.IfStmt) {
-		const ifd = node.data as IfStmtData;
-		sgCollectTokensInNode(ctx, ifd.condition, tokens);
-		sgCollectTokensInNode(ctx, ifd.consequent, tokens);
-		if (ifd.alternate !== null) sgCollectTokensInNode(ctx, ifd.alternate, tokens);
-		return;
-	}
-	if (node.kind === NodeKind.WhileStmt) {
-		const ws = node.data as WhileStmtData;
-		sgCollectTokensInNode(ctx, ws.whileCondition, tokens);
-		sgCollectTokensInNode(ctx, ws.whileBody, tokens);
-		return;
-	}
-	if (node.kind === NodeKind.ForStmt) {
-		const fs = node.data as ForStmtData;
-		sgCollectTokensInNode(ctx, fs.forInit, tokens);
-		sgCollectTokensInNode(ctx, fs.forCondition, tokens);
-		sgCollectTokensInNode(ctx, fs.forUpdate, tokens);
-		sgCollectTokensInNode(ctx, fs.forBody, tokens);
-		return;
-	}
-	if (node.kind === NodeKind.ForOfStmt) {
-		const fos = node.data as ForOfStmtData;
-		sgCollectTokensInNode(ctx, fos.forOfIterable, tokens);
-		sgCollectTokensInNode(ctx, fos.forOfBody, tokens);
-		return;
-	}
-	if (node.kind === NodeKind.ConditionalExpr) {
-		const cnd = node.data as ConditionalExprData;
-		sgCollectTokensInNode(ctx, cnd.ternaryCondition, tokens);
-		sgCollectTokensInNode(ctx, cnd.ternaryConsequent, tokens);
-		sgCollectTokensInNode(ctx, cnd.ternaryAlternate, tokens);
-		return;
-	}
-	if (node.kind === NodeKind.ExportDecl) {
-		const ed = node.data as ExportDeclData;
-		sgCollectTokensInNode(ctx, ed.exportedDecl, tokens);
-		return;
-	}
-	if (node.kind === NodeKind.ArrayLiteral) {
-		const al = node.data as ArrayLiteralData;
-		for (let i = 0; i < al.elements.length; i = i + 1) {
-			sgCollectTokensInNode(ctx, al.elements[i], tokens);
-		}
-		return;
-	}
-	if (node.kind === NodeKind.ArrayAccess) {
-		const aa = node.data as ArrayAccessData;
-		sgCollectTokensInNode(ctx, aa.array, tokens);
-		sgCollectTokensInNode(ctx, aa.index, tokens);
-		return;
-	}
-	if (node.kind === NodeKind.ArrowFunction) {
-		const af = node.data as ArrowFunctionData;
-		sgCollectTokensInNode(ctx, af.arrowBody, tokens);
-		return;
-	}
+	forEachChild(node, (child: Node): void => {
+		sgCollectTokensInNode(ctx, child, tokens);
+	});
 }
 
 // Sort tokens by (line, col) for delta encoding — insertion sort
@@ -1732,98 +1593,9 @@ function sgCollectRefsInNode(node: Node, refs: SgSymbolRef[]): void {
 
 // Split out compound node recursion to avoid codegen function-size limits
 function sgCollectRefsInCompound(node: Node, refs: SgSymbolRef[]): void {
-	if (node.kind === NodeKind.Program) {
-		const pd = node.data as ProgramData;
-		for (let i = 0; i < pd.programStmts.length; i = i + 1) {
-			sgCollectRefsInNode(pd.programStmts[i], refs);
-		}
-		return;
-	}
-
-	if (node.kind === NodeKind.BlockStmt) {
-		const bd = node.data as BlockStmtData;
-		for (let i = 0; i < bd.statements.length; i = i + 1) {
-			sgCollectRefsInNode(bd.statements[i], refs);
-		}
-		return;
-	}
-
-	if (node.kind === NodeKind.ExprStmt) {
-		const es = node.data as ExprStmtData;
-		sgCollectRefsInNode(es.expr, refs);
-		return;
-	}
-
-	if (node.kind === NodeKind.ReturnStmt) {
-		const rs = node.data as ReturnStmtData;
-		if (rs.argument !== null) sgCollectRefsInNode(rs.argument, refs);
-		return;
-	}
-
-	if (node.kind === NodeKind.BinaryExpr) {
-		const be = node.data as BinaryExprData;
-		sgCollectRefsInNode(be.left, refs);
-		sgCollectRefsInNode(be.right, refs);
-		return;
-	}
-
-	if (node.kind === NodeKind.UnaryExpr) {
-		const ue = node.data as UnaryExprData;
-		sgCollectRefsInNode(ue.operand, refs);
-		return;
-	}
-
-	if (node.kind === NodeKind.CallExpr) {
-		const ce = node.data as CallExprData;
-		sgCollectRefsInNode(ce.callee, refs);
-		for (let i = 0; i < ce.arguments.length; i = i + 1) {
-			sgCollectRefsInNode(ce.arguments[i], refs);
-		}
-		return;
-	}
-
-	if (node.kind === NodeKind.MemberExpr) {
-		const me = node.data as MemberExprData;
-		sgCollectRefsInNode(me.object, refs);
-		return;
-	}
-
-	if (node.kind === NodeKind.IfStmt) {
-		const ifd = node.data as IfStmtData;
-		sgCollectRefsInNode(ifd.condition, refs);
-		sgCollectRefsInNode(ifd.consequent, refs);
-		if (ifd.alternate !== null) sgCollectRefsInNode(ifd.alternate, refs);
-		return;
-	}
-
-	if (node.kind === NodeKind.WhileStmt) {
-		const ws = node.data as WhileStmtData;
-		sgCollectRefsInNode(ws.whileCondition, refs);
-		sgCollectRefsInNode(ws.whileBody, refs);
-		return;
-	}
-
-	if (node.kind === NodeKind.ConditionalExpr) {
-		const cnd = node.data as ConditionalExprData;
-		sgCollectRefsInNode(cnd.ternaryCondition, refs);
-		sgCollectRefsInNode(cnd.ternaryConsequent, refs);
-		sgCollectRefsInNode(cnd.ternaryAlternate, refs);
-		return;
-	}
-
-	if (node.kind === NodeKind.ExportDecl) {
-		const ed = node.data as ExportDeclData;
-		sgCollectRefsInNode(ed.exportedDecl, refs);
-		return;
-	}
-
-	if (node.kind === NodeKind.ArrayLiteral) {
-		const al = node.data as ArrayLiteralData;
-		for (let i = 0; i < al.elements.length; i = i + 1) {
-			sgCollectRefsInNode(al.elements[i], refs);
-		}
-		return;
-	}
+	forEachChild(node, (child: Node): void => {
+		sgCollectRefsInNode(child, refs);
+	});
 }
 
 export function sgFindUsagesByName(refs: SgSymbolRef[], name: string): SgSymbolRef[] {
@@ -1839,87 +1611,87 @@ export function sgFindUsagesByName(refs: SgSymbolRef[], name: string): SgSymbolR
 }
 
 // ===== Tests =====
-test "number" { expect(sgTypeToString(numberType()) === "number"); }
+test "number" { assert sgTypeToString(numberType()) === "number"; }
 
-test "string" { expect(sgTypeToString(stringType()) === "string"); }
+test "string" { assert sgTypeToString(stringType()) === "string"; }
 
-test "boolean" { expect(sgTypeToString(booleanType()) === "boolean"); }
+test "boolean" { assert sgTypeToString(booleanType()) === "boolean"; }
 
-test "void" { expect(sgTypeToString(voidType()) === "void"); }
+test "void" { assert sgTypeToString(voidType()) === "void"; }
 
-test "null" { expect(sgTypeToString(nullType()) === "null"); }
+test "null" { assert sgTypeToString(nullType()) === "null"; }
 
-test "unknown" { expect(sgTypeToString(unknownType()) === "unknown"); }
+test "unknown" { assert sgTypeToString(unknownType()) === "unknown"; }
 
-test "never" { expect(sgTypeToString(neverType()) === "never"); }
+test "never" { assert sgTypeToString(neverType()) === "never"; }
 
-test "error" { expect(sgTypeToString(errorType()) === "error"); }
+test "error" { assert sgTypeToString(errorType()) === "error"; }
 
 import { createArray, createFunction, createEnum, createObject, createResult } from "./types";
 test "array" {
 	const t = createArray(numberType());
-	expect(sgTypeToString(t) === "number[]");
+	assert sgTypeToString(t) === "number[]";
 }
 
 test "function no params" {
 	const params: Type[] = [];
 	const names: string[] = [];
 	const t = createFunction(params, names, voidType());
-	expect(sgTypeToString(t) === "() => void");
+	assert sgTypeToString(t) === "() => void";
 }
 
 test "function with params" {
 	const params: Type[] = [numberType(), stringType()];
 	const names: string[] = ["a", "b"];
 	const t = createFunction(params, names, booleanType());
-	expect(sgTypeToString(t) === "(a: number, b: string) => boolean");
+	assert sgTypeToString(t) === "(a: number, b: string) => boolean";
 }
 
 test "enum" {
 	const members: string[] = ["A", "B"];
 	const t = createEnum("Color", members);
-	expect(sgTypeToString(t) === "Color");
+	assert sgTypeToString(t) === "Color";
 }
 
 test "named object" {
 	const propNames: string[] = ["x", "y"];
 	const propTypes: Type[] = [numberType(), numberType()];
 	const t = createObject("Point", propNames, propTypes, true);
-	expect(sgTypeToString(t) === "Point");
+	assert sgTypeToString(t) === "Point";
 }
 
 test "result" {
 	const t = createResult(numberType(), stringType());
-	expect(sgTypeToString(t) === "Result<number, string>");
+	assert sgTypeToString(t) === "Result<number, string>";
 }
 
 test "find identifier in simple decl" {
 	const pr = parseSource("const x = 42;");
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	// "const x" - x is at col 6
 	const node = sgFindNodeAtPosition(pr.value, 1, 6);
-	expect(node !== null);
+	assert node !== null;
 }
 
 test "find in function body" {
 	const pr = parseSource("function foo() { return 1; }");
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const node = sgFindNodeAtPosition(pr.value, 1, 17);
-	expect(node !== null);
+	assert node !== null;
 }
 
 test "returns null for null node" {
 	const nullNode = null as unknown as Node;
 	const node = sgFindNodeAtPosition(nullNode, 1, 0);
-	expect(node === null);
+	assert node === null;
 }
 
 test "returns null for unknown position" {
 	const pr = parseSource("const x = 1;");
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
 	const sg = sgGetSymbolAtCursor(ctx, pr.value, 100, 0);
-	expect(sg === null);
+	assert sg === null;
 }
 
 test "format variable hover" {
@@ -1930,7 +1702,7 @@ test "format variable hover" {
 		isExported: false, isMutable: false,
 	};
 	const hover = sgFormatHover(suggest);
-	expect(hover === "```ms\nconst count: number\n```");
+	assert hover === "```ms\nconst count: number\n```";
 }
 
 test "format function hover" {
@@ -1944,7 +1716,7 @@ test "format function hover" {
 		isExported: false, isMutable: false,
 	};
 	const hover = sgFormatHover(suggest);
-	expect(hover === "```ms\nfunction greet(s: string): void\n```");
+	assert hover === "```ms\nfunction greet(s: string): void\n```";
 }
 
 test "format interface hover" {
@@ -1954,7 +1726,7 @@ test "format interface hover" {
 		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false,
 	};
-	expect(sgFormatHover(suggest) === "```ms\ninterface Point\n```");
+	assert sgFormatHover(suggest) === "```ms\ninterface Point\n```";
 }
 
 test "format class hover" {
@@ -1964,7 +1736,7 @@ test "format class hover" {
 		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false,
 	};
-	expect(sgFormatHover(suggest) === "```ms\nclass Vec\n```");
+	assert sgFormatHover(suggest) === "```ms\nclass Vec\n```";
 }
 
 test "format enum hover" {
@@ -1974,7 +1746,7 @@ test "format enum hover" {
 		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false,
 	};
-	expect(sgFormatHover(suggest) === "```ms\nenum Color\n```");
+	assert sgFormatHover(suggest) === "```ms\nenum Color\n```";
 }
 
 test "format type alias hover" {
@@ -1984,7 +1756,7 @@ test "format type alias hover" {
 		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false,
 	};
-	expect(sgFormatHover(suggest) === "```ms\ntype Id = number\n```");
+	assert sgFormatHover(suggest) === "```ms\ntype Id = number\n```";
 }
 
 test "format let variable hover" {
@@ -1994,7 +1766,7 @@ test "format let variable hover" {
 		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: true,
 	};
-	expect(sgFormatHover(suggest) === "```ms\nlet x: string\n```");
+	assert sgFormatHover(suggest) === "```ms\nlet x: string\n```";
 }
 
 test "format parameter hover" {
@@ -2004,7 +1776,7 @@ test "format parameter hover" {
 		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false,
 	};
-	expect(sgFormatHover(suggest) === "```ms\n(parameter) name: string\n```");
+	assert sgFormatHover(suggest) === "```ms\n(parameter) name: string\n```";
 }
 
 test "format property hover" {
@@ -2014,7 +1786,7 @@ test "format property hover" {
 		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false,
 	};
-	expect(sgFormatHover(suggest) === "```ms\n(property) x: number\n```");
+	assert sgFormatHover(suggest) === "```ms\n(property) x: number\n```";
 }
 
 test "format method hover" {
@@ -2027,83 +1799,83 @@ test "format method hover" {
 		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false,
 	};
-	expect(sgFormatHover(suggest) === "```ms\n(method) push(item: string): void\n```");
+	assert sgFormatHover(suggest) === "```ms\n(method) push(item: string): void\n```";
 }
 
 test "null suggest returns empty" {
 	const sg = null as unknown as SgSuggest;
-	expect(sgFormatHover(sg) === "");
+	assert sgFormatHover(sg) === "";
 }
 
 test "empty errors" {
 	const pr = parseSource("const x = 1;");
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
 	const diags = sgCollectDiagnostics(ctx);
-	expect(diags.length === 0);
+	assert diags.length === 0;
 }
 
 test "dot triggers MemberAccess" {
 	// "foo.b" — cursor at col 5 (after 'b')
-	expect(sgDetectCompletionContext("foo.b", 1, 5) === SgCompletionKind.MemberAccess);
+	assert sgDetectCompletionContext("foo.b", 1, 5) === SgCompletionKind.MemberAccess;
 }
 
 test "dot with no prefix" {
 	// "foo." — cursor at col 4 (right after '.')
-	expect(sgDetectCompletionContext("foo.", 1, 4) === SgCompletionKind.MemberAccess);
+	assert sgDetectCompletionContext("foo.", 1, 4) === SgCompletionKind.MemberAccess;
 }
 
 test "colon triggers TypeAnnotation" {
 	// "x: num" — cursor at col 6
-	expect(sgDetectCompletionContext("x: num", 1, 6) === SgCompletionKind.TypeAnnotation);
+	assert sgDetectCompletionContext("x: num", 1, 6) === SgCompletionKind.TypeAnnotation;
 }
 
 test "bare identifier" {
 	// "con" — cursor at col 3
-	expect(sgDetectCompletionContext("con", 1, 3) === SgCompletionKind.Identifier);
+	assert sgDetectCompletionContext("con", 1, 3) === SgCompletionKind.Identifier;
 }
 
-test "start of line" { expect(sgDetectCompletionContext("x", 1, 0) === SgCompletionKind.Identifier); }
+test "start of line" { assert sgDetectCompletionContext("x", 1, 0) === SgCompletionKind.Identifier; }
 
-test "extracts prefix" { expect(sgGetPrefix("foo.bar", 1, 7) === "bar"); }
+test "extracts prefix" { assert sgGetPrefix("foo.bar", 1, 7) === "bar"; }
 
-test "no prefix after dot" { expect(sgGetPrefix("foo.", 1, 4) === ""); }
+test "no prefix after dot" { assert sgGetPrefix("foo.", 1, 4) === ""; }
 
-test "whole word" { expect(sgGetPrefix("hello", 1, 5) === "hello"); }
+test "whole word" { assert sgGetPrefix("hello", 1, 5) === "hello"; }
 
-test "empty at start" { expect(sgGetPrefix("x", 1, 0) === ""); }
+test "empty at start" { assert sgGetPrefix("x", 1, 0) === ""; }
 
-test "prefix with underscore" { expect(sgGetPrefix("my_var", 1, 6) === "my_var"); }
+test "prefix with underscore" { assert sgGetPrefix("my_var", 1, 6) === "my_var"; }
 
-test "second line" { expect(sgGetPrefix("abc\ndef", 2, 3) === "def"); }
+test "second line" { assert sgGetPrefix("abc\ndef", 2, 3) === "def"; }
 
 test "finds top-level symbols" {
 	const pr = parseSource("const abc = 1;\nconst abd = 2;\nconst xyz = 3;");
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "ab", null as unknown as Type);
-	expect(candidates.length === 2);
+	assert candidates.length === 2;
 }
 
 test "empty prefix returns all" {
 	const pr = parseSource("const a = 1;\nconst b = 2;");
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "", null as unknown as Type);
-	expect(candidates.length >= 2);
+	assert candidates.length >= 2;
 }
 
 test "no match returns empty" {
 	const pr = parseSource("const abc = 1;");
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "zzz", null as unknown as Type);
-	expect(candidates.length === 0);
+	assert candidates.length === 0;
 }
 
 test "only returns types" {
 	const pr = parseSource("interface Foo { x: number; }\nconst y = 1;");
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.TypeAnnotation, "", null as unknown as Type);
 	// Should include Foo (interface) but not y (variable)
@@ -2113,8 +1885,8 @@ test "only returns types" {
 		if (candidates[i].name === "Foo") hasFoo = true;
 		if (candidates[i].name === "y") hasY = true;
 	}
-	expect(hasFoo);
-	expect(!hasY);
+	assert hasFoo;
+	assert !hasY;
 }
 
 test "object properties" {
@@ -2122,10 +1894,10 @@ test "object properties" {
 	const propTypes: Type[] = [numberType(), numberType(), stringType()];
 	const objType = createObject("Point", propNames, propTypes, true);
 	const pr = parseSource("const a = 1;");
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.MemberAccess, "", objType);
-	expect(candidates.length === 3);
+	assert candidates.length === 3;
 }
 
 test "object properties with prefix" {
@@ -2133,105 +1905,105 @@ test "object properties with prefix" {
 	const propTypes: Type[] = [numberType(), numberType(), stringType()];
 	const objType = createObject("Obj", propNames, propTypes, true);
 	const pr = parseSource("const a = 1;");
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.MemberAccess, "x", objType);
-	expect(candidates.length === 1);
-	expect(candidates[0].name === "xPos");
+	assert candidates.length === 1;
+	assert candidates[0].name === "xPos";
 }
 
 test "enum members" {
 	const members: string[] = ["Red", "Green", "Blue"];
 	const enumType = createEnum("Color", members);
 	const pr = parseSource("const a = 1;");
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.MemberAccess, "", enumType);
-	expect(candidates.length === 3);
+	assert candidates.length === 3;
 }
 
 test "null receiver returns empty" {
 	const pr = parseSource("const a = 1;");
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.MemberAccess, "", null as unknown as Type);
-	expect(candidates.length === 0);
+	assert candidates.length === 0;
 }
 
-test "exact prefix" { expect(sgPrefixMatch("ab", "abc") === 2); }
+test "exact prefix" { assert sgPrefixMatch("ab", "abc") === 2; }
 
-test "substring" { expect(sgPrefixMatch("bc", "abcd") === 1); }
+test "substring" { assert sgPrefixMatch("bc", "abcd") === 1; }
 
-test "no match" { expect(sgPrefixMatch("zz", "abc") === 0); }
+test "no match" { assert sgPrefixMatch("zz", "abc") === 0; }
 
-test "case insensitive prefix" { expect(sgPrefixMatch("AB", "abcde") === 2); }
+test "case insensitive prefix" { assert sgPrefixMatch("AB", "abcde") === 2; }
 
-test "empty prefix" { expect(sgPrefixMatch("", "anything") === 2); }
+test "empty prefix" { assert sgPrefixMatch("", "anything") === 2; }
 
 test "prefix before substr" {
 	const pr = parseSource("const abcdef = 1;\nconst xyzabc = 2;");
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "abc", null as unknown as Type);
-	expect(candidates.length === 2);
+	assert candidates.length === 2;
 	// abcdef (prefix match) should come before xyzabc (substr match)
-	expect(candidates[0].name === "abcdef");
-	expect(candidates[1].name === "xyzabc");
+	assert candidates[0].name === "abcdef";
+	assert candidates[1].name === "xyzabc";
 }
 
 test "inner scope before outer" {
 	const pr = parseSource("const outer = 1;\nfunction f() { const inner = 2; }");
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
 	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "", null as unknown as Type);
 	// inner scope (depth 0) should rank before outer scope (depth > 0)
 	// At least both should be present
-	expect(candidates.length >= 2);
+	assert candidates.length >= 2;
 	// First items should have lower scopeDepth
 	if (candidates.length >= 2) {
-		expect(candidates[0].scopeDepth <= candidates[1].scopeDepth);
+		assert candidates[0].scopeDepth <= candidates[1].scopeDepth;
 	}
 }
 
 test "collects function and variable" {
 	const pr = parseSource("function foo() { return 1; }\nconst x = 1;");
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
 	const symbols = sgCollectSymbolsInFile(ctx, pr.value);
-	expect(symbols.length === 2);
-	expect(symbols[0].name === "foo");
-	expect(symbols[0].kind === SymbolKind.Function);
-	expect(symbols[1].name === "x");
-	expect(symbols[1].kind === SymbolKind.Variable);
+	assert symbols.length === 2;
+	assert symbols[0].name === "foo";
+	assert symbols[0].kind === SymbolKind.Function;
+	assert symbols[1].name === "x";
+	assert symbols[1].kind === SymbolKind.Variable;
 }
 
 test "collects interface and enum" {
 	const pr = parseSource("interface Point { x: number; }\nenum Color { Red, Green }");
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
 	const symbols = sgCollectSymbolsInFile(ctx, pr.value);
-	expect(symbols.length === 2);
-	expect(symbols[0].name === "Point");
-	expect(symbols[0].kind === SymbolKind.Interface);
-	expect(symbols[1].name === "Color");
-	expect(symbols[1].kind === SymbolKind.Enum);
+	assert symbols.length === 2;
+	assert symbols[0].name === "Point";
+	assert symbols[0].kind === SymbolKind.Interface;
+	assert symbols[1].name === "Color";
+	assert symbols[1].kind === SymbolKind.Enum;
 }
 
 test "unwraps export decl" {
 	const pr = parseSource("export function bar() { return 1; }");
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
 	const symbols = sgCollectSymbolsInFile(ctx, pr.value);
-	expect(symbols.length === 1);
-	expect(symbols[0].name === "bar");
+	assert symbols.length === 1;
+	assert symbols[0].name === "bar";
 }
 
 test "empty program" {
 	const pr = parseSource("");
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
 	const symbols = sgCollectSymbolsInFile(ctx, pr.value);
-	expect(symbols.length === 0);
+	assert symbols.length === 0;
 }
 
 test "function with params" {
@@ -2240,9 +2012,9 @@ test "function with params" {
 	const fnType = createFunction(params, names, voidType());
 	const sym = makeSymbol("log", SymbolKind.Function, fnType, false);
 	const sigs = sgFormatSignature(sym);
-	expect(sigs.length === 1);
-	expect(sigs[0].label === "log(line: number, msg: string): void");
-	expect(sigs[0].paramLabels.length === 2);
+	assert sigs.length === 1;
+	assert sigs[0].label === "log(line: number, msg: string): void";
+	assert sigs[0].paramLabels.length === 2;
 }
 
 test "function no params" {
@@ -2251,74 +2023,74 @@ test "function no params" {
 	const fnType = createFunction(params, names, booleanType());
 	const sym = makeSymbol("check", SymbolKind.Function, fnType, false);
 	const sigs = sgFormatSignature(sym);
-	expect(sigs.length === 1);
-	expect(sigs[0].label === "check(): boolean");
-	expect(sigs[0].paramLabels.length === 0);
+	assert sigs.length === 1;
+	assert sigs[0].label === "check(): boolean";
+	assert sigs[0].paramLabels.length === 0;
 }
 
 test "null symbol returns empty" {
 	const nullSym = null as unknown as Symbol;
 	const sigs = sgFormatSignature(nullSym);
-	expect(sigs.length === 0);
+	assert sigs.length === 0;
 }
 
 test "non-function symbol returns empty" {
 	const sym = makeSymbol("x", SymbolKind.Variable, numberType(), false);
 	const sigs = sgFormatSignature(sym);
-	expect(sigs.length === 0);
+	assert sigs.length === 0;
 }
 
-test "simple call" { expect(sgGetCalleeAtCursor("foo(x", 1, 4) === "foo"); }
+test "simple call" { assert sgGetCalleeAtCursor("foo(x", 1, 4) === "foo"; }
 
-test "call with space before paren" { expect(sgGetCalleeAtCursor("foo (x", 1, 5) === "foo"); }
+test "call with space before paren" { assert sgGetCalleeAtCursor("foo (x", 1, 5) === "foo"; }
 
-test "nested call — inner" { expect(sgGetCalleeAtCursor("foo(bar(x", 1, 8) === "bar"); }
+test "nested call — inner" { assert sgGetCalleeAtCursor("foo(bar(x", 1, 8) === "bar"; }
 
-test "not inside call returns empty" { expect(sgGetCalleeAtCursor("hello", 1, 3) === ""); }
+test "not inside call returns empty" { assert sgGetCalleeAtCursor("hello", 1, 3) === ""; }
 
-test "after comma" { expect(sgGetCalleeAtCursor("add(1, 2", 1, 7) === "add"); }
+test "after comma" { assert sgGetCalleeAtCursor("add(1, 2", 1, 7) === "add"; }
 
 test "first param" {
 	// foo(| — cursor just after (
-	expect(sgCountActiveParam("foo(x", 1, 4) === 0);
+	assert sgCountActiveParam("foo(x", 1, 4) === 0;
 }
 
 test "second param" {
 	// foo(a, | — cursor after comma
-	expect(sgCountActiveParam("foo(a, b", 1, 7) === 1);
+	assert sgCountActiveParam("foo(a, b", 1, 7) === 1;
 }
 
-test "third param" { expect(sgCountActiveParam("foo(a, b, c", 1, 10) === 2); }
+test "third param" { assert sgCountActiveParam("foo(a, b, c", 1, 10) === 2; }
 
 test "nested parens ignored" {
 	// foo(bar(1, 2), | — inner commas don't count
-	expect(sgCountActiveParam("foo(bar(1, 2), x", 1, 15) === 1);
+	assert sgCountActiveParam("foo(bar(1, 2), x", 1, 15) === 1;
 }
 
 test "type hint for untyped variable" {
 	const src = "const x = 42;";
 	const pr = parseSource(src);
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
 	const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
-	expect(hints.length === 1);
-	expect(hints[0].label === ": number");
-	expect(hints[0].hintKind === SgInlayHintKind.Type);
+	assert hints.length === 1;
+	assert hints[0].label === ": number";
+	assert hints[0].hintKind === SgInlayHintKind.Type;
 }
 
 test "no hint for explicitly typed variable" {
 	const src = "const x: number = 42;";
 	const pr = parseSource(src);
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
 	const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
-	expect(hints.length === 0);
+	assert hints.length === 0;
 }
 
 test "parameter hints at call site" {
 	const src = "function add(a: number, b: number): number { return a + b; }\nconst r = add(1, 2);";
 	const pr = parseSource(src);
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
 	const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
 	// Should have: type hint for r + param hints a: and b:
@@ -2328,14 +2100,14 @@ test "parameter hints at call site" {
 		if (hints[j].hintKind === SgInlayHintKind.Type) { typeHints = typeHints + 1; }
 		if (hints[j].hintKind === SgInlayHintKind.Parameter) { paramHints = paramHints + 1; }
 	}
-	expect(typeHints >= 1);  // r: number
-	expect(paramHints === 2);  // a: 1, b: 2
+	assert typeHints >= 1;  // r: number
+	assert paramHints === 2;  // a: 1, b: 2
 }
 
 test "skip param hint when arg matches param name" {
 	const src = "function foo(x: number): void {}\nconst x = 5;\nfoo(x);";
 	const pr = parseSource(src);
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
 	const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
 	// x matches param name "x" — no param hint, just type hint for x
@@ -2343,48 +2115,48 @@ test "skip param hint when arg matches param name" {
 	for (let j = 0; j < hints.length; j = j + 1) {
 		if (hints[j].hintKind === SgInlayHintKind.Parameter) { paramHints = paramHints + 1; }
 	}
-	expect(paramHints === 0);
+	assert paramHints === 0;
 }
 
 test "collects declarations and usages" {
 	const src = "const x = 1;\nconst y = x;";
 	const pr = parseSource(src);
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const refs = sgCollectReferences(pr.value);
 	// x: 1 decl + 1 usage, y: 1 decl
-	expect(refs.length >= 3);
+	assert refs.length >= 3;
 }
 
 test "find usages by name" {
 	const src = "const x = 1;\nconst y = x;";
 	const pr = parseSource(src);
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const refs = sgCollectReferences(pr.value);
 	const xRefs = sgFindUsagesByName(refs, "x");
-	expect(xRefs.length === 2);
+	assert xRefs.length === 2;
 	// First should be decl, second should be usage
-	expect(xRefs[0].isDecl);
-	expect(!xRefs[1].isDecl);
+	assert xRefs[0].isDecl;
+	assert !xRefs[1].isDecl;
 }
 
 test "function decl and call" {
 	const src = "function greet(name: string): void {}\ngreet(\"hello\");";
 	const pr = parseSource(src);
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const refs = sgCollectReferences(pr.value);
 	const greetRefs = sgFindUsagesByName(refs, "greet");
-	expect(greetRefs.length === 2);
-	expect(greetRefs[0].isDecl);
-	expect(!greetRefs[1].isDecl);
+	assert greetRefs.length === 2;
+	assert greetRefs[0].isDecl;
+	assert !greetRefs[1].isDecl;
 }
 
 test "no references for unknown name" {
 	const src = "const x = 1;";
 	const pr = parseSource(src);
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const refs = sgCollectReferences(pr.value);
 	const noRefs = sgFindUsagesByName(refs, "nonexistent");
-	expect(noRefs.length === 0);
+	assert noRefs.length === 0;
 }
 
 // ===== Doc Comment Tests =====
@@ -2392,37 +2164,37 @@ test "no references for unknown name" {
 test "doc comment extraction" {
 	const src = "// Adds two numbers\nfunction add(x: number): number { return x; }";
 	const comment = sgExtractDocComment(src, 2);
-	expect(comment === "Adds two numbers");
+	assert comment === "Adds two numbers";
 }
 
 test "doc comment multi-line" {
 	const src = "// Line one\n// Line two\nfunction foo(): void {}";
 	const comment = sgExtractDocComment(src, 3);
-	expect(comment === "Line one\nLine two");
+	assert comment === "Line one\nLine two";
 }
 
 test "doc comment stops at blank line" {
 	const src = "// Orphaned\n\n// Real doc\nfunction bar(): void {}";
 	const comment = sgExtractDocComment(src, 4);
-	expect(comment === "Real doc");
+	assert comment === "Real doc";
 }
 
 test "doc comment none" {
 	const src = "const x = 1;\nfunction baz(): void {}";
 	const comment = sgExtractDocComment(src, 2);
-	expect(comment === "");
+	assert comment === "";
 }
 
 test "doc comment first line no crash" {
 	const src = "function first(): void {}";
 	const comment = sgExtractDocComment(src, 1);
-	expect(comment === "");
+	assert comment === "";
 }
 
 test "doc comment with ## style" {
-	const src = "## Nim-style doc\nfunction foo(): void {}";
+	const src = "## Standard reference style doc\nfunction foo(): void {}";
 	const comment = sgExtractDocComment(src, 2);
-	expect(comment === "Nim-style doc");
+	assert comment === "Standard reference style doc";
 }
 
 test "sgFormatHoverDoc with doc comment" {
@@ -2433,7 +2205,7 @@ test "sgFormatHoverDoc with doc comment" {
 		isExported: true, isMutable: false,
 	};
 	const doc = sgFormatHoverDoc(suggest, "A useful function");
-	expect(doc === "**exported**\n\n---\n\nA useful function");
+	assert doc === "**exported**\n\n---\n\nA useful function";
 }
 
 test "sgFormatHoverDoc no comment" {
@@ -2444,7 +2216,7 @@ test "sgFormatHoverDoc no comment" {
 		isExported: false, isMutable: false,
 	};
 	const doc = sgFormatHoverDoc(suggest, "");
-	expect(doc === "");
+	assert doc === "";
 }
 
 // ===== Import Source + Exported Decl Tests =====
@@ -2452,55 +2224,55 @@ test "sgFormatHoverDoc no comment" {
 test "find import source" {
 	const src = "import { add } from \"./math\";\nconst x = add(1);";
 	const pr = parseSource(src);
-	if (!pr.ok) { expect(false); return; }
-	expect(sgFindImportSource(pr.value, "add") === "./math");
+	if (!pr.ok) { assert false; return; }
+	assert sgFindImportSource(pr.value, "add") === "./math";
 }
 
 test "find import source not found" {
 	const src = "import { add } from \"./math\";";
 	const pr = parseSource(src);
-	if (!pr.ok) { expect(false); return; }
-	expect(sgFindImportSource(pr.value, "unknown") === "");
+	if (!pr.ok) { assert false; return; }
+	assert sgFindImportSource(pr.value, "unknown") === "";
 }
 
 test "find exported decl function" {
 	const src = "export function add(x: number): number { return x; }";
 	const pr = parseSource(src);
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const loc = sgFindExportedDecl(pr.value, "add");
-	expect(loc.line > 0);
+	assert loc.line > 0;
 }
 
 test "find exported decl not found" {
 	const src = "function add(x: number): number { return x; }";
 	const pr = parseSource(src);
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const loc = sgFindExportedDecl(pr.value, "unknown");
-	expect(loc.line === 0);
+	assert loc.line === 0;
 }
 
 test "exception hint for function returning Result" {
 	const src = "function parse(s: string): Result<number, string> { return Result.ok(1); }";
 	const pr = parseSource(src);
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
 	const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
 	let exceptionCount = 0;
 	for (let i = 0; i < hints.length; i = i + 1) {
 		if (hints[i].hintKind === SgInlayHintKind.Exception) exceptionCount = exceptionCount + 1;
 	}
-	expect(exceptionCount >= 1);
+	assert exceptionCount >= 1;
 }
 
 test "no exception hint for non-Result function" {
 	const src = "function add(a: number, b: number): number { return a + b; }";
 	const pr = parseSource(src);
-	if (!pr.ok) { expect(false); return; }
+	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
 	const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
 	let exceptionCount = 0;
 	for (let i = 0; i < hints.length; i = i + 1) {
 		if (hints[i].hintKind === SgInlayHintKind.Exception) exceptionCount = exceptionCount + 1;
 	}
-	expect(exceptionCount === 0);
+	assert exceptionCount === 0;
 }

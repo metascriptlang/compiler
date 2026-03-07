@@ -59,7 +59,7 @@ void msUnregisterCycle(void* p);
 
 /* ===== ORC-aware RC Operations ===== */
 
-/* rememberCycle — Nim parity (orc.nim:506)
+/* rememberCycle — Standard reference implementation parity */
  * isDestroy=true:  unregister from roots (about to be freed)
  * isDestroy=false: register as cycle candidate if cyclic + not registered */
 static inline void msRememberCycle(bool isDestroy, void* p, const msTypeInfo* desc) {
@@ -77,7 +77,7 @@ static inline void msRememberCycle(bool isDestroy, void* p, const msTypeInfo* de
 	}
 }
 
-/* Increment for cyclic types — sets maybeCycle bit (Nim's nimIncRefCyclic) */
+/* Increment for cyclic types — sets maybeCycle bit (Standard reference parity) */
 static inline void msOrcIncRef(void* p) {
 	if (p == NULL) return;
 	msRefHeader* h = msHeader(p);
@@ -85,7 +85,7 @@ static inline void msOrcIncRef(void* p) {
 	h->rc |= MS_MAYBE_CYCLE;
 }
 
-/* Decrement for cyclic types — Nim's nimDecRefIsLastCyclicStatic.
+/* Decrement for cyclic types — Standard reference implementation parity.
  * Returns true if last reference (caller handles destroy+free).
  * Calls rememberCycle to register/unregister from rootset. */
 static inline bool msOrcDecRefIsLast(void* p) {

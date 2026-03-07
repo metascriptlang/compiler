@@ -18,47 +18,54 @@ export type DocData =
 	| { isSoft: boolean }                           // Line (softLine vs line)
 	| { flat: Doc, broken: Doc };                   // IfBreak
 
-export interface Doc {
+export class Doc {
 	kind: DocKind;
 	data: DocData;
 }
 
 // ===== Factory Helpers =====
 
+function createDoc(kind: DocKind, data: DocData): Doc {
+	const d = new Doc();
+	d.kind = kind;
+	d.data = data;
+	return d;
+}
+
 export function docNil(): Doc {
-	return { kind: DocKind.Nil, data: {} as DocData };
+	return createDoc(DocKind.Nil, {} as DocData);
 }
 
 export function docText(text: string): Doc {
-	return { kind: DocKind.Text, data: { text } as DocData };
+	return createDoc(DocKind.Text, { text } as DocData);
 }
 
 export function docGroup(children: Doc[]): Doc {
-	return { kind: DocKind.Group, data: { children } as DocData };
+	return createDoc(DocKind.Group, { children } as DocData);
 }
 
 export function docIndent(children: Doc[]): Doc {
-	return { kind: DocKind.Indent, data: { children } as DocData };
+	return createDoc(DocKind.Indent, { children } as DocData);
 }
 
 export function docLine(): Doc {
-	return { kind: DocKind.Line, data: { isSoft: false } as DocData };
+	return createDoc(DocKind.Line, { isSoft: false } as DocData);
 }
 
 export function docSoftLine(): Doc {
-	return { kind: DocKind.Line, data: { isSoft: true } as DocData };
+	return createDoc(DocKind.Line, { isSoft: true } as DocData);
 }
 
 export function docHardLine(): Doc {
-	return { kind: DocKind.HardLine, data: {} as DocData };
+	return createDoc(DocKind.HardLine, {} as DocData);
 }
 
 export function docIfBreak(flat: Doc, broken: Doc): Doc {
-	return { kind: DocKind.IfBreak, data: { flat, broken } as DocData };
+	return createDoc(DocKind.IfBreak, { flat, broken } as DocData);
 }
 
 export function docLineSuffix(children: Doc[]): Doc {
-	return { kind: DocKind.LineSuffix, data: { children } as DocData };
+	return createDoc(DocKind.LineSuffix, { children } as DocData);
 }
 
 // Common shorthand: join(docs, docLine())

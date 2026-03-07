@@ -1,14 +1,13 @@
-// Pointer Parameter Transform — Nim's ccgIntroducedPtr pattern
+// Pointer Parameter Transform — standard reference introduction pattern
 //
-// Implements Nim's lfIndirect pattern: struct (interface) params are passed
+// Implements standard reference pattern: struct (interface) params are passed
 // by pointer in C. This transform rewrites the AST so codegen stays dumb:
 //
 //   1. Function prototype: param type T → Ptr<T> (codegen emits T*)
 //   2. Function body: param identifier uses → HiddenDeref(param) (codegen emits (*param))
 //   3. Call sites: arg for pointer param → HiddenAddr(arg) (codegen emits &(arg))
 //
-// Nim reference: ccgutils.nim:ccgIntroducedPtr, ccgtypes.nim:genProcParams,
-//                ccgcalls.nim:genArg, cgen.nim:rdLoc/addrLoc
+// Reference: standard optimized C codegen patterns for struct parameters
 
 import {
 	Node, NodeKind,
@@ -37,15 +36,16 @@ function safeLoc(node: Node): SourceLocation {
 	return defaultLoc;
 }
 
-// ===== Nim: ccgIntroducedPtr =====
+// ===== Standard Reference: pointer parameter introduction =====
 // Determines if a param type should be passed by pointer in C.
-// Mirrors Nim's ccgutils.nim — tyObject always → pointer.
-function ccgIntroducedPtr(t: Type): boolean {
+// Mirrors standard reference patterns — interface types always → pointer.
+export function ccgIntroducedPtr(t: Type): boolean {
 	if (t === null) return false;
 	if (isInterfaceType(t)) return true;
 	if (t.kind === TypeKind.Span) return true;
 	if (t.kind === TypeKind.Result) return true;
 	if (t.kind === TypeKind.Tuple) return true;
+	if (t.kind === TypeKind.Union) return true;
 	return false;
 }
 
@@ -334,28 +334,28 @@ export function isPrimitiveTypeName(typeName: string): boolean {
 }
 
 // ===== Tests =====
-test "non-function passthrough" { expect(stmtCountAfter("const x = 1;", markPointerParams) === 1); }
+test "non-function passthrough" { assert stmtCountAfter("const x = 1;", markPointerParams) === 1; }
 
-test "function stays FunctionDecl" { expect(firstStmtKindAfter("function foo() {}", markPointerParams) === NodeKind.FunctionDecl); }
+test "function stays FunctionDecl" { assert firstStmtKindAfter("function foo() {}", markPointerParams) === NodeKind.FunctionDecl; }
 
-test "stmt count preserved" { expect(stmtCountAfter("let a = 1; let b = 2;", markPointerParams) === 2); }
+test "stmt count preserved" { assert stmtCountAfter("let a = 1; let b = 2;", markPointerParams) === 2; }
 
-test "isPrimitive number" { expect(isPrimitiveTypeName("number")); }
+test "isPrimitive number" { assert isPrimitiveTypeName("number"); }
 
-test "isPrimitive string" { expect(isPrimitiveTypeName("string")); }
+test "isPrimitive string" { assert isPrimitiveTypeName("string"); }
 
-test "isPrimitive boolean" { expect(isPrimitiveTypeName("boolean")); }
+test "isPrimitive boolean" { assert isPrimitiveTypeName("boolean"); }
 
-test "isPrimitive void" { expect(isPrimitiveTypeName("void")); }
+test "isPrimitive void" { assert isPrimitiveTypeName("void"); }
 
-test "isPrimitive int32" { expect(isPrimitiveTypeName("int32")); }
+test "isPrimitive int32" { assert isPrimitiveTypeName("int32"); }
 
-test "isPrimitive float64" { expect(isPrimitiveTypeName("float64")); }
+test "isPrimitive float64" { assert isPrimitiveTypeName("float64"); }
 
-test "not primitive Node" { expect(!isPrimitiveTypeName("Node")); }
+test "not primitive Node" { assert !isPrimitiveTypeName("Node"); }
 
-test "not primitive Token" { expect(!isPrimitiveTypeName("Token")); }
+test "not primitive Token" { assert !isPrimitiveTypeName("Token"); }
 
-test "not primitive Array" { expect(!isPrimitiveTypeName("Array")); }
+test "not primitive Array" { assert !isPrimitiveTypeName("Array"); }
 
-test "not primitive empty" { expect(!isPrimitiveTypeName("")); }
+test "not primitive empty" { assert !isPrimitiveTypeName(""); }

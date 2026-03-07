@@ -1,6 +1,6 @@
 /*
  * MetaScript String Runtime — Implementation
- * Following Nim's strs_v2.nim patterns.
+ * Following the standard reference string patterns.
  */
 
 #include "string.h"
@@ -32,7 +32,7 @@ static msStrPayload* reallocPayload(msStrPayload* old, int64_t newCap) {
 }
 
 /* Zeroing realloc — zeros only [oldCap+1..newCap) region.
- * Nim: reallocPayload0(old, contentSize(oldLen), contentSize(newLen)) */
+ /* Standard reference implementation: reallocPayload0(old, contentSize(oldLen), contentSize(newLen)) */
 static msStrPayload* reallocPayload0(msStrPayload* old, int64_t oldCap, int64_t newCap) {
 	msStrPayload* p = (msStrPayload*)realloc(old, msStrContentSize(newCap));
 	if (p) {
@@ -124,7 +124,7 @@ void msStringPrepareAdd(msString* s, int64_t addLen) {
 			int64_t resized = msStringResizeCap(oldCap);
 			if (resized > newCap) newCap = resized;
 			s->p = reallocPayload(s->p, newCap);
-			/* Zero tail after growth — Nim strs_v2.nim L74-75 */
+			/* Zero tail after growth — standard reference patterns */
 			if (s->p && newCap > s->len) {
 				memset(s->p->data + s->len + 1, 0, newCap - s->len);
 			}
@@ -696,7 +696,7 @@ int64_t msStringCapacity(msString s) {
 	return s.p->cap & ~MS_STRLIT_FLAG;
 }
 
-/* ===== In-Place Operations (Nim strbasics.nim) ===== */
+/* ===== In-Place Operations (Standard reference patterns) ===== */
 
 void msStringSetSlice(msString* s, int64_t start, int64_t end) {
 	if (start < 0) start = 0;

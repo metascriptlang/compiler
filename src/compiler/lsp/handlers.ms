@@ -915,76 +915,76 @@ function testCache(): CompletionCache {
 
 test "returns capabilities" {
 	const r = handleInitialize("1");
-	expect(lspGetField(r, "jsonrpc") === "2.0");
-	expect(lspGetNumberField(r, "id") === 1);
+	assert lspGetField(r, "jsonrpc") === "2.0";
+	assert lspGetNumberField(r, "id") === 1;
 	const result = lspGetObjectField(r, "result");
-	expect(result.length > 0);
+	assert result.length > 0;
 }
 
 test "returns null result" {
 	const r = handleShutdown("2");
-	expect(lspGetNumberField(r, "id") === 2);
+	assert lspGetNumberField(r, "id") === 2;
 }
 
 test "clean source has no diagnostics" {
 	const db = testDb("file:///test.ms", "const x = 1;");
 	const diags = buildDiagnosticsJson("file:///test.ms", db, lspUriToPath("file:///test.ms"));
-	expect(lspGetField(diags, "uri") === "file:///test.ms");
+	assert lspGetField(diags, "uri") === "file:///test.ms";
 }
 
 test "initialize" {
 	const db = createTransAmDb(100);
 	const r = lspDispatch("initialize", "1", "{}", db, testCache());
-	expect(lspGetNumberField(r, "id") === 1);
+	assert lspGetNumberField(r, "id") === 1;
 }
 
 test "shutdown" {
 	const db = createTransAmDb(100);
 	const r = lspDispatch("shutdown", "2", "{}", db, testCache());
-	expect(lspGetNumberField(r, "id") === 2);
+	assert lspGetNumberField(r, "id") === 2;
 }
 
 test "unknown method with id" {
 	const db = createTransAmDb(100);
 	const r = lspDispatch("unknown/method", "3", "{}", db, testCache());
-	expect(r.length > 0);
+	assert r.length > 0;
 }
 
 test "unknown notification" {
 	const db = createTransAmDb(100);
 	const r = lspDispatch("$/unknownNotification", "", "{}", db, testCache());
-	expect(r === "");
+	assert r === "";
 }
 
 test "completion dispatch" {
 	const db = testDb("file:///test.ms", "const abc = 1;\nconst abd = 2;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":3}}";
 	const r = lspDispatch("textDocument/completion", "10", params, db, testCache());
-	expect(lspGetNumberField(r, "id") === 10);
-	expect(r.length > 0);
+	assert lspGetNumberField(r, "id") === 10;
+	assert r.length > 0;
 }
 
 test "definition dispatch" {
 	const db = testDb("file:///test.ms", "const myVar = 42;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
 	const r = lspDispatch("textDocument/definition", "11", params, db, testCache());
-	expect(lspGetNumberField(r, "id") === 11);
-	expect(r.length > 0);
+	assert lspGetNumberField(r, "id") === 11;
+	assert r.length > 0;
 }
 
 test "returns completion items" {
 	const db = testDb("file:///test.ms", "const abc = 1;\nconst abd = 2;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":0}}";
 	const r = handleCompletion("5", params, db, testCache());
-	expect(lspGetNumberField(r, "id") === 5);
-	expect(r.length > 50);
+	assert lspGetNumberField(r, "id") === 5;
+	assert r.length > 50;
 }
 
 test "unknown doc returns empty" {
 	const db = createTransAmDb(100);
 	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0}}";
 	const r = handleCompletion("6", params, db, testCache());
-	expect(lspGetNumberField(r, "id") === 6);
+	assert lspGetNumberField(r, "id") === 6;
 }
 
 test "completion cache hit on prefix extend" {
@@ -993,12 +993,12 @@ test "completion cache hit on prefix extend" {
 	// First completion: "ab" prefix — populates cache
 	const params1 = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":2}}";
 	const r1 = handleCompletion("10", params1, db, cache);
-	expect(cache.items.length > 0);
-	expect(cache.uri === "file:///test.ms");
+	assert cache.items.length > 0;
+	assert cache.uri === "file:///test.ms";
 	// Second completion: same line, prefix extends to "abd" — should hit cache
 	const params2 = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":3}}";
 	const r2 = handleCompletion("11", params2, db, cache);
-	expect(r2.length > 0);
+	assert r2.length > 0;
 }
 
 test "completion cache miss on different line" {
@@ -1011,147 +1011,147 @@ test "completion cache miss on different line" {
 	// Request on line 3 — different line, should miss cache and recompute
 	const params2 = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":2,\"character\":2}}";
 	handleCompletion("11", params2, db, cache);
-	expect(cache.line !== cachedLine);
+	assert cache.line !== cachedLine;
 }
 
 test "returns location for known symbol" {
 	const db = testDb("file:///test.ms", "const myVar = 42;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
 	const r = handleDefinition("7", params, db);
-	expect(lspGetNumberField(r, "id") === 7);
-	expect(r.length > 0);
+	assert lspGetNumberField(r, "id") === 7;
+	assert r.length > 0;
 }
 
 test "unknown doc returns null" {
 	const db = createTransAmDb(100);
 	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0}}";
 	const r = handleDefinition("8", params, db);
-	expect(lspGetNumberField(r, "id") === 8);
+	assert lspGetNumberField(r, "id") === 8;
 }
 
 test "unknown position returns null result" {
 	const db = testDb("file:///test.ms", "const x = 1;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":99,\"character\":0}}";
 	const r = handleDefinition("9", params, db);
-	expect(lspGetNumberField(r, "id") === 9);
+	assert lspGetNumberField(r, "id") === 9;
 }
 
 test "returns symbols for file" {
 	const db = testDb("file:///test.ms", "function foo() { return 1; }\nconst x = 1;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"}}";
 	const r = handleDocumentSymbol("20", params, db);
-	expect(lspGetNumberField(r, "id") === 20);
-	expect(r.length > 60);
+	assert lspGetNumberField(r, "id") === 20;
+	assert r.length > 60;
 }
 
 test "unknown doc returns empty array" {
 	const db = createTransAmDb(100);
 	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"}}";
 	const r = handleDocumentSymbol("21", params, db);
-	expect(lspGetNumberField(r, "id") === 21);
+	assert lspGetNumberField(r, "id") === 21;
 }
 
 test "dispatch routes correctly" {
 	const db = testDb("file:///test.ms", "const a = 1;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"}}";
 	const r = lspDispatch("textDocument/documentSymbol", "22", params, db, testCache());
-	expect(lspGetNumberField(r, "id") === 22);
-	expect(r.length > 0);
+	assert lspGetNumberField(r, "id") === 22;
+	assert r.length > 0;
 }
 
 test "returns signature for function" {
 	const db = testDb("file:///test.ms", "function greet(name: string): void { }\ngreet(");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":6}}";
 	const r = handleSignatureHelp("30", params, db);
-	expect(lspGetNumberField(r, "id") === 30);
-	expect(r.length > 0);
+	assert lspGetNumberField(r, "id") === 30;
+	assert r.length > 0;
 }
 
 test "unknown doc returns null" {
 	const db = createTransAmDb(100);
 	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0}}";
 	const r = handleSignatureHelp("31", params, db);
-	expect(lspGetNumberField(r, "id") === 31);
+	assert lspGetNumberField(r, "id") === 31;
 }
 
 test "dispatch routes correctly" {
 	const db = testDb("file:///test.ms", "const x = 1;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":0}}";
 	const r = lspDispatch("textDocument/signatureHelp", "32", params, db, testCache());
-	expect(lspGetNumberField(r, "id") === 32);
+	assert lspGetNumberField(r, "id") === 32;
 }
 
 test "type hint for untyped var" {
 	const db = testDb("file:///test.ms", "const x = 42;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":10,\"character\":0}}}";
 	const r = handleInlayHint("40", params, db);
-	expect(lspGetNumberField(r, "id") === 40);
-	expect(r.length > 50);
+	assert lspGetNumberField(r, "id") === 40;
+	assert r.length > 50;
 }
 
 test "empty for unknown doc" {
 	const db = createTransAmDb(100);
 	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":10,\"character\":0}}}";
 	const r = handleInlayHint("41", params, db);
-	expect(lspGetNumberField(r, "id") === 41);
+	assert lspGetNumberField(r, "id") === 41;
 }
 
 test "dispatch routes correctly" {
 	const db = testDb("file:///test.ms", "const y = true;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":10,\"character\":0}}}";
 	const r = lspDispatch("textDocument/inlayHint", "42", params, db, testCache());
-	expect(lspGetNumberField(r, "id") === 42);
+	assert lspGetNumberField(r, "id") === 42;
 }
 
 test "finds all references to a variable" {
 	const db = testDb("file:///test.ms", "const abc = 1;\nconst def = abc + 2;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
 	const r = handleReferences("50", params, db);
-	expect(lspGetNumberField(r, "id") === 50);
-	expect(r.length > 60);
+	assert lspGetNumberField(r, "id") === 50;
+	assert r.length > 60;
 }
 
 test "unknown doc returns empty" {
 	const db = createTransAmDb(100);
 	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0}}";
 	const r = handleReferences("51", params, db);
-	expect(lspGetNumberField(r, "id") === 51);
+	assert lspGetNumberField(r, "id") === 51;
 }
 
 test "dispatch routes correctly" {
 	const db = testDb("file:///test.ms", "const x = 1;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
 	const r = lspDispatch("textDocument/references", "52", params, db, testCache());
-	expect(lspGetNumberField(r, "id") === 52);
+	assert lspGetNumberField(r, "id") === 52;
 }
 
 test "renames variable occurrences" {
 	const db = testDb("file:///test.ms", "const abc = 1;\nconst def = abc + 2;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6},\"newName\":\"xyz\"}";
 	const r = handleRename("60", params, db);
-	expect(lspGetNumberField(r, "id") === 60);
-	expect(r.length > 60);
+	assert lspGetNumberField(r, "id") === 60;
+	assert r.length > 60;
 }
 
 test "unknown doc returns null" {
 	const db = createTransAmDb(100);
 	const params = "{\"textDocument\":{\"uri\":\"file:///nope.ms\"},\"position\":{\"line\":0,\"character\":0},\"newName\":\"xyz\"}";
 	const r = handleRename("61", params, db);
-	expect(lspGetNumberField(r, "id") === 61);
+	assert lspGetNumberField(r, "id") === 61;
 }
 
 test "empty newName returns null" {
 	const db = testDb("file:///test.ms", "const x = 1;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6}}";
 	const r = handleRename("62", params, db);
-	expect(lspGetNumberField(r, "id") === 62);
+	assert lspGetNumberField(r, "id") === 62;
 }
 
 test "dispatch routes correctly" {
 	const db = testDb("file:///test.ms", "const x = 1;");
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":0,\"character\":6},\"newName\":\"y\"}";
 	const r = lspDispatch("textDocument/rename", "63", params, db, testCache());
-	expect(lspGetNumberField(r, "id") === 63);
+	assert lspGetNumberField(r, "id") === 63;
 }
 
 test "Trans-Am cache hit on comment-only change" {
@@ -1160,12 +1160,12 @@ test "Trans-Am cache hit on comment-only change" {
 	dbSetFileText(db, path, "const x = 1;");
 	// First query — populates cache
 	const ctx1 = dbTypeCheck(db, path);
-	expect(ctx1 !== null);
-	expect(db.revision.value === 1);
+	assert ctx1 !== null;
+	assert db.revision.value === 1;
 	// Comment-only change — content hash changes but semantics identical
 	dbSetFileText(db, path, "const x = 1; // comment");
-	expect(db.revision.value === 2);
+	assert db.revision.value === 2;
 	// Second query — should re-execute (parse output differs) but Trans-Am handles it
 	const ctx2 = dbTypeCheck(db, path);
-	expect(ctx2 !== null);
+	assert ctx2 !== null;
 }

@@ -60,31 +60,31 @@ function getStmtCount(program: Node): number {
 
 test "primitives pass through unchanged" {
 	const result = analyzePipeline("const x = 1; const y = 2;");
-	expect(result !== null);
+	assert result !== null;
 	// Primitive-only code: no RC calls inserted
-	expect(getStmtCount(result) === 2);
+	assert getStmtCount(result) === 2;
 }
 
 test "null checker skips analysis" {
 	const parseResult = parseSource("const x = 1;");
 	if (!parseResult.ok) {
-		expect(false);
+		assert false;
 		return;
 	}
 	const program = parseResult.value;
 	const result = analyzeProgram(program, null as unknown as CheckerContext);
-	expect(result !== null);
+	assert result !== null;
 	// Should return program unchanged
-	expect(getStmtCount(result) === 1);
+	assert getStmtCount(result) === 1;
 }
 
 test "function with primitives" {
 	const result = analyzePipeline("function add(a: number, b: number): number { return a + b; }");
-	expect(result !== null);
+	assert result !== null;
 }
 
 test "empty program" {
 	const result = analyzePipeline("");
-	expect(result !== null);
-	expect(getStmtCount(result) === 0);
+	assert result !== null;
+	assert getStmtCount(result) === 0;
 }

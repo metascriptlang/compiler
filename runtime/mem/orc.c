@@ -79,7 +79,7 @@ void msRegisterCycle(void* p, const msTypeInfo* type) {
 	msCell cell = { p, type };
 	msCellSeqPush(&msRoots, cell);
 
-	/* Auto-trigger collection when threshold exceeded (Nim parity: orc.nim:454) */
+	/* Auto-trigger collection when threshold exceeded (Standard reference implementation parity) */
 	if (msRoots.len - 128 >= msRootsThreshold) {
 		msOrcCollect();
 	}
@@ -240,7 +240,7 @@ void msOrcCollect(void) {
 
 	/* Protect against re-entrancy: destructors may trigger registerCycle.
 	 * Set threshold to max so no collection is triggered during free.
-	 * (Nim parity: orc.nim:362) */
+	 /* Implementation parity: reference implementation tracing logic */
 	int32_t oldThreshold = msRootsThreshold;
 	msRootsThreshold = INT32_MAX;
 	msRoots.len = 0;
@@ -270,7 +270,7 @@ void msOrcCollect(void) {
 #endif
 
 	/* Adaptive threshold: increase if <50% freed, decrease otherwise
-	 * (Nim parity: orc.nim:423-434) */
+	 /* Implementation parity: reference implementation cycle collection logic */
 	if (rootCount > 0) {
 		if (freed * 2 < rootCount) {
 			/* Most objects survived — increase threshold */

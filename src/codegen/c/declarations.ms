@@ -13,6 +13,7 @@ import {
 	ProgramData, BlockStmtData,
 	PropertyDeclData, MethodDeclData, ConstructorDeclData,
 	ObjectLiteralData,
+	ExprStmtData, MacroInvocationData,
 } from "../../ast/node";
 import { sliceStr } from "../../utils/string";
 import { Type, TypeKind } from "../../checker/types";
@@ -26,8 +27,10 @@ import {
 } from "./context";
 import { genExpr } from "./expressions";
 import { genStmt, genStmts } from "./statements";
-import { mangle, mangleTypeName, mangleFieldName, safeName } from "./names";
+import { mangle, mangleTypeName, mangleFieldName, mangledFunctionName, safeName } from "./names";
 import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, annotationToC } from "./types";
+import { genTestDeclNode } from "./test";
+import { ccgIntroducedPtr } from "../../transform/native/pointerParam";
 import {
 	Symbol, SymbolKind, SymbolState,
 	hasFlag, SF_EXPORTED, SF_STATIC, SF_IMPORT_C,
@@ -82,7 +85,8 @@ export function genDecl(g: CGen, node: Node, exported: boolean): void {
 	}
 	else if (k === NodeKind.TypeAliasDecl) { /* type aliases are compile-time only */ }
 	else if (k === NodeKind.ExternDecl) { genExternDecl(g, node); }
-	else if (k === NodeKind.TestDecl) { /* stripped in non-test builds */ }
+	else if (k === NodeKind.TestDecl) { genTestDeclNode(g, node); }
+	else if (k === NodeKind.AssertStmt) { genTopLevelStmt(g, node); }
 	else {
 		// Statement or variable at top level
 		genTopLevelStmt(g, node);
@@ -90,7 +94,7 @@ export function genDecl(g: CGen, node: Node, exported: boolean): void {
 }
 
 // ===== Extern Declaration (non-function) =====
-// Nim pattern: importc + header → codegen emits nothing (header provides it).
+// Standard reference pattern: extern header provides the declaration.
 // Only emit forward struct decl for opaque types without a providing header.
 // Variables/consts: always provided by @include headers — no codegen emission.
 // Functions: handled by FunctionDecl path (prototype only via SF_IMPORT_C).
@@ -112,13 +116,14 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	const d = node.data as FunctionDeclData;
 	const sym = node.resolvedSym;
 
-	let name = safeName(d.fnName);
-
-	// Overload mangling: if function has overloads, suffix with __idx
+	// Module-qualified name (Standard reference implementation parity)
+	const isMain = d.fnName === "main";
+	const isExternFn = sym !== null && hasFlag(sym, SF_IMPORT_C);
+	let ovIdx = 0;
 	if (sym !== null && sym.overloads !== null && sym.overloads.length > 0) {
-		const idx = findOverloadIdx(sym, node.resolvedSym);
-		name = safeName(d.fnName) + "__" + idx;
+		ovIdx = findOverloadIdx(sym, node.resolvedSym);
 	}
+	let name = mangledFunctionName(sym, d.fnName, ovIdx);
 
 	// Skip if already declared
 	if (nameSetHas(g.declaredProcs, name)) return;
@@ -139,17 +144,19 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	for (let i = 0; i < d.params.length; i += 1) {
 		if (i > 0) paramList = paramList + ", ";
 		let pType = (i < fnType.typeChildren.length) ? getTypeDesc(g, fnType.typeChildren[i]) : "void*";
+		// Implementation parity: pointer parameter introduction — interface/union params → pointer (must match proto header)
+		if (i < fnType.typeChildren.length && ccgIntroducedPtr(fnType.typeChildren[i]) && pType.charAt(pType.length - 1) !== "*") {
+			pType = pType + "*";
+		}
 		paramList = paramList + pType + " " + safeName(d.params[i]);
 	}
 	if (paramList === "") paramList = "void";
 
-	// Non-exported functions get static prefix (Nim parity)
+	// Non-exported functions get static prefix (Standard implementation parity)
 	// main() is never static — called from dispatcher
 	// Lifted functions (sym === null) are always static
-	const isMain = d.fnName === "main";
 	const isExported = sym !== null && (exported || hasFlag(sym, SF_EXPORTED));
-	const isExtern = sym !== null && hasFlag(sym, SF_IMPORT_C);
-	const prefix = (isExported || isExtern || isMain) ? "" : "static ";
+	const prefix = (isExported || isExternFn || isMain) ? "" : "static ";
 
 	// Emit prototype to ProcHeaders — NRVO functions return void
 	const actualRetType = nrvo ? "void" : cRetType;
@@ -157,12 +164,16 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	addLine(sec(g, CSection.ProcHeaders), proto + ";");
 
 	// Extern functions: prototype only, no body
-	if (isExtern) return;
+	if (isExternFn) return;
 
 	// Emit function body to Procs
 	if (d.fnBody !== null) {
 		const p = createProc(name, fnType.typeReturn);
 		if (nrvo) p.isNrvo = true;
+		// Populate param names for pointer-param dereference detection in expressions
+		for (const paramName of d.params) {
+			p.params.push(paramName);
+		}
 		genStmt(g, p, d.fnBody);
 		const locals = readProcLocals(p);
 		const stmts = readProcStmts(p);
@@ -199,8 +210,6 @@ function genEnumDecl(g: CGen, node: Node): void {
 	// Skip if already declared (check both declaration set and type cache)
 	const key = "enum:" + d.enumName;
 	if (nameSetHas(g.declaredThings, name) || typeCacheHas(g.typeCache, key)) return;
-	// Skip if type is in shared proto header (externalTypes suppression)
-	if (typeCacheHas(g.externalTypes, key)) return;
 	nameSetAdd(g.declaredThings, name);
 
 	// Register in type cache to prevent genEnumType from re-emitting
@@ -225,8 +234,6 @@ function genInterfaceDecl(g: CGen, node: Node): void {
 	// Skip if already declared (check both declaration set and type cache)
 	const ifaceKey = "object:" + d.interfaceName;
 	if (nameSetHas(g.declaredThings, name) || typeCacheHas(g.typeCache, ifaceKey)) return;
-	// Skip if type is in shared proto header (externalTypes suppression)
-	if (typeCacheHas(g.externalTypes, ifaceKey)) return;
 	nameSetAdd(g.declaredThings, name);
 
 	// Register in type cache to prevent genObjectType from re-emitting
@@ -263,8 +270,6 @@ function genClassDecl(g: CGen, node: Node): void {
 	// Skip if already declared (check both declaration set and type cache)
 	const classKey = "object:" + d.className;
 	if (nameSetHas(g.declaredThings, name) || typeCacheHas(g.typeCache, classKey)) return;
-	// Skip if type is in shared proto header (externalTypes suppression)
-	if (typeCacheHas(g.externalTypes, classKey)) return;
 	nameSetAdd(g.declaredThings, name);
 
 	// Register in type cache to prevent genObjectType from re-emitting
@@ -382,6 +387,16 @@ function genTopLevelStmt(g: CGen, node: Node): void {
 	if (node.kind === NodeKind.VariableDecl) {
 		genGlobalVar(g, node);
 		return;
+	}
+	// Skip top-level @emit/@include/@compile/@link/@passC/@passL — already handled by checker directives
+	if (node.kind === NodeKind.ExprStmt) {
+		const esd = node.data as ExprStmtData;
+		if (esd.expr.kind === NodeKind.MacroInvocation) {
+			const mi = esd.expr.data as MacroInvocationData;
+			if (mi.macroName === "emit" || mi.macroName === "include" || mi.macroName === "compile" || mi.macroName === "link" || mi.macroName === "passC" || mi.macroName === "passL") {
+				return;
+			}
+		}
 	}
 	// Other statements go to ModuleInit — use shared initProc for consistent temp counter
 	const p = g.initProc;
@@ -502,38 +517,38 @@ function declOutput(input: string): string {
 
 test "simple function" {
 	const result = declOutput("function foo(): void { return; }");
-	expect(result.length > 0);
+	assert result.length > 0;
 	// Should have prototype and body
 }
 
 test "function with params" {
 	const result = declOutput("function add(a: number, b: number): number { return a + b; }");
-	expect(result.length > 0);
+	assert result.length > 0;
 }
 
 test "simple enum" {
 	const result = declOutput("enum Color { Red, Green, Blue }");
-	expect(result.length > 0);
+	assert result.length > 0;
 }
 
 test "simple interface" {
 	const result = declOutput("interface Point { x: number; y: number; }");
-	expect(result.length > 0);
+	assert result.length > 0;
 }
 
 test "exported function" {
 	const result = declOutput("export function bar(): void { return; }");
-	expect(result.length > 0);
+	assert result.length > 0;
 }
 
 test "const global" {
 	const result = declOutput("const x: number = 42;");
-	expect(result.length > 0);
+	assert result.length > 0;
 }
 
 test "NRVO function signature" {
 	const result = declOutput("interface Point { x: number; y: number; } function makePoint(): Point { return { x: 0, y: 0 }; }");
 	// Should have void return + __result param in the output
-	expect(result.length > 50);
+	assert result.length > 50;
 }
 

@@ -18,7 +18,7 @@ import {
 	createPrimitive, createArray, createFunction, createObject,
 	createResult, createTypeRef, createUnion, createGenericParam, createDistinct,
 	createSizedArray, createSpan, createBorrow,
-	setMinArity, typeNameOf,
+	setMinArity, typeNameOf, assignType,
 } from "./types";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, lookupSymbol, lookupLocal, defineSymbol, makeSymbol, openScope, closeScope, SymbolState, hasFlag, setFlag, SF_EXPORTED, SF_MUTABLE } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError } from "./context";
@@ -94,11 +94,41 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 
 	// Check for union types (split on top-level |)
 	const unionParts = splitTopLevel(trimmed, "|");
-	if (unionParts.length === 2) {
-		return createUnion([resolveAnnotation(unionParts[0], ctx), resolveAnnotation(unionParts[1], ctx)]);
+	if (unionParts.length >= 2) {
+		const members: Type[] = [];
+		let ui = 0;
+		while (ui < unionParts.length) {
+			const part = trimStr(unionParts[ui]);
+			if (part.length > 0) {
+				members.push(resolveAnnotation(part, ctx));
+			}
+			ui += 1;
+		}
+		if (members.length > 0) return createUnion(members);
 	}
-	if (unionParts.length >= 3) {
-		return createUnion([resolveAnnotation(unionParts[0], ctx), resolveAnnotation(unionParts[1], ctx), resolveAnnotation(unionParts[2], ctx)]);
+
+	// Object literal type: { field: Type, ... }
+	if (charAt(trimmed, 0) === "{" && trimmed.endsWith("}")) {
+		const inner = trimStr(sliceStr(trimmed, 1, trimmed.length - 1));
+		if (inner === "") return createObject("", [], [], false);
+		const fields = splitTopLevel(inner, ",");
+		const names: string[] = [];
+		const types: Type[] = [];
+		let fi = 0;
+		while (fi < fields.length) {
+			const field = trimStr(fields[fi]);
+			if (field !== "") {
+				const colonIdx = findChar(field, ":");
+				if (colonIdx > 0) {
+					const fname = trimStr(sliceStr(field, 0, colonIdx));
+					const ftypeStr = trimStr(sliceStr(field, colonIdx + 1, field.length));
+					names.push(fname);
+					types.push(resolveAnnotation(ftypeStr, ctx));
+				}
+			}
+			fi = fi + 1;
+		}
+		return createObject("", names, types, false);
 	}
 
 	// Check for array suffix [] or [ ] (token-joined form from captureOptionalType)
@@ -148,7 +178,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 			t.typeExtra = resolveAnnotation(args[1], ctx);
 			// String and number keys supported; others rejected
 			if (t.typeReturn.kind !== TypeKind.String && t.typeReturn.kind !== TypeKind.Number && t.typeReturn.kind !== TypeKind.Unknown) {
-				addError(ctx, "Only string or number keys are supported for Map in the C backend. Got: " + typeNameOf(t.typeReturn));
+				addError(ctx, "Only string or number keys are supported for Map in the C backend. Got: " + typeNameOf(t.typeReturn), 0, 0);
 			}
 			return t;
 		}
@@ -157,7 +187,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 			t.typeReturn = resolveAnnotation(args[0], ctx);
 			// String and number elements supported; others rejected
 			if (t.typeReturn.kind !== TypeKind.String && t.typeReturn.kind !== TypeKind.Number && t.typeReturn.kind !== TypeKind.Unknown) {
-				addError(ctx, "Only string or number elements are supported for Set in the C backend. Got: " + typeNameOf(t.typeReturn));
+				addError(ctx, "Only string or number elements are supported for Set in the C backend. Got: " + typeNameOf(t.typeReturn), 0, 0);
 			}
 			return t;
 		}
@@ -167,7 +197,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 			t.typeReturn = resolveAnnotation(args[0], ctx);
 			t.typeExtra = resolveAnnotation(args[1], ctx);
 			if (t.typeReturn.kind !== TypeKind.String && t.typeReturn.kind !== TypeKind.Number && t.typeReturn.kind !== TypeKind.Unknown) {
-				addError(ctx, "Only string or number keys are supported for Map in the C backend. Got: " + typeNameOf(t.typeReturn));
+				addError(ctx, "Only string or number keys are supported for Map in the C backend. Got: " + typeNameOf(t.typeReturn), 0, 0);
 			}
 			return t;
 		}
@@ -199,9 +229,14 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 		"void" => voidType(),
 		"null" => nullType(),
 		"never" => neverType(),
+		"int8" => createPrimitive(TypeKind.Int8),
+		"int16" => createPrimitive(TypeKind.Int16),
 		"int32" => createPrimitive(TypeKind.Int32),
 		"int64" => createPrimitive(TypeKind.Int64),
+		"uint8" => createPrimitive(TypeKind.Uint8),
+		"uint16" => createPrimitive(TypeKind.Uint16),
 		"uint32" => createPrimitive(TypeKind.Uint32),
+		"uint64" => createPrimitive(TypeKind.Uint64),
 		"float32" => createPrimitive(TypeKind.Float32),
 		"float64" => createPrimitive(TypeKind.Float64),
 		"char" => charType(),
@@ -211,6 +246,10 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 			if (sym !== null) {
 				// Demand-driven: ensure shaped before using
 				ensureShaped(sym, ctx);
+				// Circular type reference: sym still Unknown → return the SAME object
+				// (Nim parity: forward type identity preservation). When the type is
+				// fully resolved later, assignType upgrades this object in-place,
+				// and all references automatically see the resolved type.
 				return sym.symbolType;
 			}
 			createTypeRef(trimmed);
@@ -218,12 +257,17 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 	};
 }
 
-// ===== Demand-Driven Shaping (Nim parity) =====
+// ===== Demand-Driven Shaping (Implementation parity) =====
 
 export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
 	if (sym.state === SymbolState.Shaped || sym.state === SymbolState.Checked) return;
 	if (sym.state === SymbolState.Shaping) {
-		addError(ctx, `Circular dependency detected while resolving '${sym.name}'`);
+		// Type aliases allow circular references (e.g. DocData refs Doc, Doc refs DocData).
+		// Standard reference implementation handles this via multi-pass type sections. We silently return —
+		// callers must handle sym.symbolType still being Unknown.
+		if (sym.symbolKind !== SymbolKind.TypeAlias) {
+			addError(ctx, `Circular dependency detected while resolving '${sym.name}'`, sym.location.line, sym.location.column);
+		}
 		return;
 	}
 
@@ -509,8 +553,8 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 	}
 
 	const ifaceType = createObject(d.interfaceName, d.interfaceFields, fieldTypes, true);
-	sym.symbolType = ifaceType;
-	node.nodeType = ifaceType;
+	assignType(sym.symbolType, ifaceType);
+	node.nodeType = sym.symbolType;
 }
 
 function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
@@ -519,20 +563,21 @@ function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 	if (sym === null) return;
 	node.resolvedSym = sym;
 
-	// Set state to Shaped immediately to allow circular references
-	sym.state = SymbolState.Shaped;
-
 	if (d.aliasType === "") {
 		return;
 	}
 	const resolved = resolveAnnotation(d.aliasType, ctx);
+	// Propagate alias name to Union types (NIM-GAP: string-based annotations don't carry names)
+	if (resolved.kind === TypeKind.Union && resolved.typeName === "") {
+		resolved.typeName = d.aliasName;
+	}
 	if (d.aliasIsDistinct) {
 		const distType = createDistinct(resolved);
-		sym.symbolType = distType;
-		node.nodeType = distType;
+		assignType(sym.symbolType, distType);
+		node.nodeType = sym.symbolType;
 	} else {
-		sym.symbolType = resolved;
-		node.nodeType = resolved;
+		assignType(sym.symbolType, resolved);
+		node.nodeType = sym.symbolType;
 	}
 }
 
@@ -618,8 +663,12 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 	}
 
 	const classType = createObject(d.className, memberNames, memberTypes, false);
-	sym.symbolType = classType;
-	node.nodeType = classType;
+	// Preserve typeExtra (base class info set by collectPass)
+	if (sym.symbolType.typeExtra !== null) {
+		classType.typeExtra = sym.symbolType.typeExtra;
+	}
+	assignType(sym.symbolType, classType);
+	node.nodeType = sym.symbolType;
 }
 
 // ===== Tests =====
@@ -639,98 +688,98 @@ function resolveWith(text: string): Type {
 	return resolveAnnotation(text, ctx);
 }
 
-test "number" { expect(resolveWith("number").kind === TypeKind.Number); }
+test "number" { assert resolveWith("number").kind === TypeKind.Number; }
 
-test "string" { expect(resolveWith("string").kind === TypeKind.String); }
+test "string" { assert resolveWith("string").kind === TypeKind.String; }
 
-test "boolean" { expect(resolveWith("boolean").kind === TypeKind.Boolean); }
+test "boolean" { assert resolveWith("boolean").kind === TypeKind.Boolean; }
 
-test "void" { expect(resolveWith("void").kind === TypeKind.Void); }
+test "void" { assert resolveWith("void").kind === TypeKind.Void; }
 
-test "null" { expect(resolveWith("null").kind === TypeKind.Null); }
+test "null" { assert resolveWith("null").kind === TypeKind.Null; }
 
-test "never" { expect(resolveWith("never").kind === TypeKind.Never); }
+test "never" { assert resolveWith("never").kind === TypeKind.Never; }
 
-test "int32" { expect(resolveWith("int32").kind === TypeKind.Int32); }
+test "int32" { assert resolveWith("int32").kind === TypeKind.Int32; }
 
-test "float64" { expect(resolveWith("float64").kind === TypeKind.Float64); }
+test "float64" { assert resolveWith("float64").kind === TypeKind.Float64; }
 
-test "unknown name" { expect(resolveWith("Foo").kind === TypeKind.TypeReference); }
+test "unknown name" { assert resolveWith("Foo").kind === TypeKind.TypeReference; }
 
-test "empty" { expect(resolveWith("").kind === TypeKind.Unknown); }
+test "empty" { assert resolveWith("").kind === TypeKind.Unknown; }
 
 test "number[]" {
 	const t = resolveWith("number[]");
-	expect(t.kind === TypeKind.Array);
-	expect(t.typeReturn.kind === TypeKind.Number);
+	assert t.kind === TypeKind.Array;
+	assert t.typeReturn.kind === TypeKind.Number;
 }
 
 test "string[]" {
 	const t = resolveWith("string[]");
-	expect(t.kind === TypeKind.Array);
-	expect(t.typeReturn.kind === TypeKind.String);
+	assert t.kind === TypeKind.Array;
+	assert t.typeReturn.kind === TypeKind.String;
 }
 
 test "Result<number, string>" {
 	const t = resolveWith("Result<number, string>");
-	expect(t.kind === TypeKind.Result);
-	expect(t.typeReturn.kind === TypeKind.Number);
-	expect(t.typeExtra.kind === TypeKind.String);
+	assert t.kind === TypeKind.Result;
+	assert t.typeReturn.kind === TypeKind.Number;
+	assert t.typeExtra.kind === TypeKind.String;
 }
 
 test "Array<boolean>" {
 	const t = resolveWith("Array<boolean>");
-	expect(t.kind === TypeKind.Array);
-	expect(t.typeReturn.kind === TypeKind.Boolean);
+	assert t.kind === TypeKind.Array;
+	assert t.typeReturn.kind === TypeKind.Boolean;
 }
 
 test "number[4]" {
 	const t = resolveWith("number[4]");
-	expect(t.kind === TypeKind.SizedArray);
-	expect(t.typeReturn.kind === TypeKind.Number);
-	expect(t.typeFlags === 4);
+	assert t.kind === TypeKind.SizedArray;
+	assert t.typeReturn.kind === TypeKind.Number;
+	assert t.typeFlags === 4;
 }
 
 test "Span<boolean>" {
 	const t = resolveWith("Span<boolean>");
-	expect(t.kind === TypeKind.Span);
-	expect(t.typeReturn.kind === TypeKind.Boolean);
+	assert t.kind === TypeKind.Span;
+	assert t.typeReturn.kind === TypeKind.Boolean;
 }
 
 test "Map<string, number>" {
 	const t = resolveWith("Map<string, number>");
-	expect(t.kind === TypeKind.Map);
-	expect(t.typeReturn.kind === TypeKind.String);
-	expect(t.typeExtra.kind === TypeKind.Number);
+	assert t.kind === TypeKind.Map;
+	assert t.typeReturn.kind === TypeKind.String;
+	assert t.typeExtra.kind === TypeKind.Number;
 }
 
 test "Record<string, number> desugars to Map" {
 	const t = resolveWith("Record<string, number>");
-	expect(t.kind === TypeKind.Map);
-	expect(t.typeReturn.kind === TypeKind.String);
-	expect(t.typeExtra.kind === TypeKind.Number);
+	assert t.kind === TypeKind.Map;
+	assert t.typeReturn.kind === TypeKind.String;
+	assert t.typeExtra.kind === TypeKind.Number;
 }
 
 test "Record<string, boolean> value type" {
 	const t = resolveWith("Record<string, boolean>");
-	expect(t.kind === TypeKind.Map);
-	expect(t.typeExtra.kind === TypeKind.Boolean);
+	assert t.kind === TypeKind.Map;
+	assert t.typeExtra.kind === TypeKind.Boolean;
 }
 
 test "string | number" {
 	const t = resolveWith("string | number");
-	expect(t.kind === TypeKind.Union);
-	expect(t.typeChildren.length === 2);
-	expect(t.typeChildren[0].kind === TypeKind.String);
-	expect(t.typeChildren[1].kind === TypeKind.Number);
+	assert t.kind === TypeKind.Union;
+	assert t.typeChildren.length === 2;
+	assert t.typeChildren[0].kind === TypeKind.String;
+	assert t.typeChildren[1].kind === TypeKind.Number;
 }
 
 test "known symbol" {
 	const ctx = createContext();
 	defineSymbol(ctx.table, makeSymbol("MyType", SymbolKind.Interface, createObject("MyType", [], [], true), false));
 	const t = resolveAnnotation("MyType", ctx);
-	expect(t.kind === TypeKind.Object);
-	expect(t.typeName === "MyType");
+	assert t.kind === TypeKind.Object;
+	assert t.typeName === "MyType";
 }
 
 test "function gets Function type" {
@@ -744,11 +793,11 @@ test "function gets Function type" {
 	const node = createNodeAt(NodeKind.Program, { programStmts: [fnNode] }, zl);
 	resolveDeclarations(ctx, node);
 	const sym = lookupSymbol(ctx.table, "foo");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Function);
-	expect(sym.symbolType.typeChildren.length === 2);
-	expect(sym.symbolType.typeNames[0] === "a");
-	expect(sym.symbolType.typeNames[1] === "b");
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Function;
+	assert sym.symbolType.typeChildren.length === 2;
+	assert sym.symbolType.typeNames[0] === "a";
+	assert sym.symbolType.typeNames[1] === "b";
 }
 
 test "function with typed params" {
@@ -761,11 +810,11 @@ test "function with typed params" {
 	const node = createNodeAt(NodeKind.Program, { programStmts: [fnNode] }, zl);
 	resolveDeclarations(ctx, node);
 	const sym = lookupSymbol(ctx.table, "add");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Function);
-	expect(sym.symbolType.typeChildren[0].kind === TypeKind.Number);
-	expect(sym.symbolType.typeChildren[1].kind === TypeKind.Number);
-	expect(sym.symbolType.typeReturn.kind === TypeKind.Number);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Function;
+	assert sym.symbolType.typeChildren[0].kind === TypeKind.Number;
+	assert sym.symbolType.typeChildren[1].kind === TypeKind.Number;
+	assert sym.symbolType.typeReturn.kind === TypeKind.Number;
 }
 
 test "decorated function gets resolved" {
@@ -779,9 +828,9 @@ test "decorated function gets resolved" {
 	const node = createNodeAt(NodeKind.Program, { programStmts: [decoNode] }, zl);
 	resolveDeclarations(ctx, node);
 	const sym = lookupSymbol(ctx.table, "floor");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.Function);
-	expect(sym.symbolType.typeReturn.kind === TypeKind.Number);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Function;
+	assert sym.symbolType.typeReturn.kind === TypeKind.Number;
 }
 
 test "Box<number> records instantiation" {
@@ -793,15 +842,15 @@ test "Box<number> records instantiation" {
 	// Resolve Box<number> — should record instantiation
 	const ctx = createContext();
 	const t = resolveAnnotation("Box<number>", ctx);
-	expect(t.kind === TypeKind.TypeReference);
-	expect(t.typeName === "Box__number");
+	assert t.kind === TypeKind.TypeReference;
+	assert t.typeName === "Box__number";
 	// Check instantiation was recorded
-	expect(getGenericTypeInstCount() === 1);
-	expect(getGenericTypeInstBaseName(0) === "Box");
-	expect(getGenericTypeInstTypeArgKey(0) === "number");
-	expect(getGenericTypeInstMangledName(0) === "Box__number");
-	expect(getGenericTypeInstFieldNames(0) === "value");
-	expect(getGenericTypeInstFieldTypes(0) === "number");
+	assert getGenericTypeInstCount() === 1;
+	assert getGenericTypeInstBaseName(0) === "Box";
+	assert getGenericTypeInstTypeArgKey(0) === "number";
+	assert getGenericTypeInstMangledName(0) === "Box__number";
+	assert getGenericTypeInstFieldNames(0) === "value";
+	assert getGenericTypeInstFieldTypes(0) === "number";
 }
 
 test "Pair<string, number> records instantiation" {
@@ -811,12 +860,12 @@ test "Pair<string, number> records instantiation" {
 	updateGenericDeclFields("Pair", "first|second", "A|B");
 	const ctx = createContext();
 	const t = resolveAnnotation("Pair<string, number>", ctx);
-	expect(t.kind === TypeKind.TypeReference);
-	expect(t.typeName === "Pair__string,number");
+	assert t.kind === TypeKind.TypeReference;
+	assert t.typeName === "Pair__string,number";
 	const idx = findGenericTypeInstIdx("Pair", "string,number");
-	expect(idx >= 0);
-	expect(getGenericTypeInstFieldNames(idx) === "first|second");
-	expect(getGenericTypeInstFieldTypes(idx) === "string|number");
+	assert idx >= 0;
+	assert getGenericTypeInstFieldNames(idx) === "first|second";
+	assert getGenericTypeInstFieldTypes(idx) === "string|number";
 }
 
 test "dedup instantiation" {
@@ -827,7 +876,7 @@ test "dedup instantiation" {
 	const ctx = createContext();
 	resolveAnnotation("Box<number>", ctx);
 	resolveAnnotation("Box<number>", ctx);
-	expect(getGenericTypeInstCount() === 1);
+	assert getGenericTypeInstCount() === 1;
 }
 
 test "non-generic base falls through" {
@@ -838,8 +887,8 @@ test "non-generic base falls through" {
 	defineSymbol(ctx.table, makeSymbol("Foo", SymbolKind.Interface, createObject("Foo", [], [], true), false));
 	const t = resolveAnnotation("Foo<number>", ctx);
 	// Non-generic: returns base type (Foo)
-	expect(t.kind === TypeKind.Object);
-	expect(t.typeName === "Foo");
+	assert t.kind === TypeKind.Object;
+	assert t.typeName === "Foo";
 }
 
 test "generic class Container<T> records instantiation" {
@@ -850,11 +899,11 @@ test "generic class Container<T> records instantiation" {
 	updateGenericDeclFields("Container", "item|count", "T|number");
 	const ctx = createContext();
 	const t = resolveAnnotation("Container<string>", ctx);
-	expect(t.kind === TypeKind.TypeReference);
-	expect(t.typeName === "Container__string");
-	expect(getGenericTypeInstCount() === 1);
-	expect(getGenericTypeInstFieldNames(0) === "item|count");
-	expect(getGenericTypeInstFieldTypes(0) === "string|number");
+	assert t.kind === TypeKind.TypeReference;
+	assert t.typeName === "Container__string";
+	assert getGenericTypeInstCount() === 1;
+	assert getGenericTypeInstFieldNames(0) === "item|count";
+	assert getGenericTypeInstFieldTypes(0) === "string|number";
 }
 
 test "constraint stored on GenericParam typeExtra" {
@@ -863,11 +912,11 @@ test "constraint stored on GenericParam typeExtra" {
 	openScope(ctx.table, ScopeKind.Block);
 	defineGenericParam(ctx, "T:number");
 	const sym = lookupSymbol(ctx.table, "T");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.GenericParam);
-	expect(sym.symbolType.typeName === "T");
-	expect(sym.symbolType.typeExtra !== null);
-	expect(sym.symbolType.typeExtra.kind === TypeKind.Number);
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.GenericParam;
+	assert sym.symbolType.typeName === "T";
+	assert sym.symbolType.typeExtra !== null;
+	assert sym.symbolType.typeExtra.kind === TypeKind.Number;
 	closeScope(ctx.table);
 }
 
@@ -876,9 +925,9 @@ test "no constraint leaves typeExtra null" {
 	openScope(ctx.table, ScopeKind.Block);
 	defineGenericParam(ctx, "U");
 	const sym = lookupSymbol(ctx.table, "U");
-	expect(sym !== null);
-	expect(sym.symbolType.kind === TypeKind.GenericParam);
-	expect(sym.symbolType.typeName === "U");
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.GenericParam;
+	assert sym.symbolType.typeName === "U";
 	closeScope(ctx.table);
 }
 
@@ -890,15 +939,15 @@ test "constrained interface Box<T extends number>" {
 	updateGenericDeclFields("Box", "value", "T");
 	const ctx = createContext();
 	const t = resolveAnnotation("Box<number>", ctx);
-	expect(t.kind === TypeKind.TypeReference);
-	expect(t.typeName === "Box__number");
+	assert t.kind === TypeKind.TypeReference;
+	assert t.typeName === "Box__number";
 }
 
 test "fnDefaults on FunctionDeclData" {
 	const zl: SourceLocation = { line: 0, column: 0 };
 	const fnNode = createNodeAt(NodeKind.FunctionDecl, { fnName: "defTest", params: ["a", "b"], fnParamTypes: ["number", "number"], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "", fnDefaults: ["", "42"] }, zl);
 	const d = fnNode.data as FunctionDeclData;
-	expect(d.fnDefaults.length === 2);
-	expect(d.fnDefaults[0] === "");
-	expect(d.fnDefaults[1] === "42");
+	assert d.fnDefaults.length === 2;
+	assert d.fnDefaults[0] === "";
+	assert d.fnDefaults[1] === "42";
 }

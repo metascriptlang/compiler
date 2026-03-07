@@ -82,16 +82,16 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 
 // ===== Tests =====
 // Throw
-test "throw string" { expect(programOk("throw \"error\";")); }
+test "throw string" { assert programOk("throw \"error\";"); }
 
-test "throw expr" { expect(programOk("throw error;")); }
+test "throw expr" { assert programOk("throw error;"); }
 // Try — distinct paths: catch, finally, both, no-param catch
-test "try-catch" { expect(programOk("try { x; } catch (e) { y; }")); }
+test "try-catch" { assert programOk("try { x; } catch (e) { y; }"); }
 
-test "try-finally" { expect(programOk("try { x; } finally { y; }")); }
+test "try-finally" { assert programOk("try { x; } finally { y; }"); }
 
-test "try-catch-finally" { expect(programOk("try { x; } catch (e) { y; } finally { z; }")); }
+test "try-catch-finally" { assert programOk("try { x; } catch (e) { y; } finally { z; }"); }
 
-test "catch no param" { expect(programOk("try { x; } catch { y; }")); }
+test "catch no param" { assert programOk("try { x; } catch { y; }"); }
 // Negative
-test "try alone rejects" { expect(!programOk("try { x; }")); }
+test "try alone rejects" { assert !programOk("try { x; }"); }

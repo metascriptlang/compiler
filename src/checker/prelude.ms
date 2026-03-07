@@ -24,19 +24,19 @@ export function isGlobalImport(path: string): boolean {
 // ===== Tests =====
 test "globalImports has system, string, array" {
 	const imports = globalImports();
-	expect(imports.length === 3);
-	expect(imports[0] === "std/core/system");
-	expect(imports[1] === "std/core/string");
-	expect(imports[2] === "std/core/array");
+	assert imports.length === 3;
+	assert imports[0] === "std/core/system";
+	assert imports[1] === "std/core/string";
+	assert imports[2] === "std/core/array";
 }
 
 test "isGlobalImport matches" {
-	expect(isGlobalImport("std/core/system"));
-	expect(isGlobalImport("std/core/string"));
-	expect(isGlobalImport("std/core/array"));
+	assert isGlobalImport("std/core/system");
+	assert isGlobalImport("std/core/string");
+	assert isGlobalImport("std/core/array");
 }
 
 test "isGlobalImport rejects non-global" {
-	expect(!isGlobalImport("std/testing"));
-	expect(!isGlobalImport("./foo"));
+	assert !isGlobalImport("std/testing");
+	assert !isGlobalImport("./foo");
 }

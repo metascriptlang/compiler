@@ -4,7 +4,7 @@ import {
 	Node,
 	ImportDeclData, ExportDeclData,
 	ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData,
-	ExternDeclData, DecoratedDeclData, TestDeclData,
+	ExternDeclData, DecoratedDeclData, TestDeclData, AssertStmtData,
 	PropertyDeclData, MethodDeclData,
 } from "../../../ast/node";
 import { FormatOptions } from "../options";
@@ -138,6 +138,19 @@ export function printTestDecl(node: Node, options: FormatOptions): Doc {
 		docText("test " + q + d.testName + q + " "),
 		callPrintNode(d.testBody, options),
 	]);
+}
+
+export function printAssertStmt(node: Node, options: FormatOptions): Doc {
+	const d = node.data as AssertStmtData;
+	const parts: Doc[] = [
+		docText("assert "),
+		callPrintNode(d.assertExpr, options),
+	];
+	if (d.assertMessage.length > 0) {
+		parts.push(docText(" : \"" + d.assertMessage + "\""));
+	}
+	parts.push(docText(";"));
+	return docGroup(parts);
 }
 
 export function printPropertyDecl(node: Node, options: FormatOptions): Doc {

@@ -140,7 +140,9 @@ export function printErrorsAndExit(ctx: CheckerContext, prefix: string, maxError
 		limit = maxErrors;
 	}
 	for (let i = 0; i < limit; i += 1) {
-		console.log(red(prefix) + ctx.errors[i]);
+		const err = ctx.errors[i];
+		const loc = err.line > 0 ? ":" + err.line + ":" + err.column + " " : " ";
+		console.log(red(prefix) + loc + err.message);
 	}
 	if (limit < ctx.errors.length) {
 		const remaining = ctx.errors.length - limit;
@@ -157,26 +159,26 @@ export function emitOutput(code: string, filePath: string, outputPath: string, e
 }
 
 // ===== Tests =====
-test "replaceExt .ms to .js" { expect(replaceExt("foo.ms", ".js") === "foo.js"); }
+test "replaceExt .ms to .js" { assert replaceExt("foo.ms", ".js") === "foo.js"; }
 
-test "replaceExt .ms to empty" { expect(replaceExt("foo.ms", "") === "foo"); }
+test "replaceExt .ms to empty" { assert replaceExt("foo.ms", "") === "foo"; }
 
-test "replaceExt no .ms" { expect(replaceExt("foo", ".js") === "foo.js"); }
+test "replaceExt no .ms" { assert replaceExt("foo", ".js") === "foo.js"; }
 
-test "dirName with slashes" { expect(dirName("a/b/c.ms") === "a/b"); }
+test "dirName with slashes" { assert dirName("a/b/c.ms") === "a/b"; }
 
-test "dirName no slash" { expect(dirName("c.ms") === "."); }
+test "dirName no slash" { assert dirName("c.ms") === "."; }
 
-test "dirName deep path" { expect(dirName("src/compiler/io.ms") === "src/compiler"); }
+test "dirName deep path" { assert dirName("src/compiler/io.ms") === "src/compiler"; }
 
-test "baseName with slashes" { expect(baseName("a/b/c.ms") === "c.ms"); }
+test "baseName with slashes" { assert baseName("a/b/c.ms") === "c.ms"; }
 
-test "baseName no slash" { expect(baseName("c.ms") === "c.ms"); }
+test "baseName no slash" { assert baseName("c.ms") === "c.ms"; }
 
-test "stripBase removes prefix" { expect(stripBase("a/b/c.ms", "a/b") === "c.ms"); }
+test "stripBase removes prefix" { assert stripBase("a/b/c.ms", "a/b") === "c.ms"; }
 
-test "stripBase dot passthrough" { expect(stripBase("c.ms", ".") === "c.ms"); }
+test "stripBase dot passthrough" { assert stripBase("c.ms", ".") === "c.ms"; }
 
-test "stripBase no match" { expect(stripBase("x/y.ms", "a/b") === "x/y.ms"); }
+test "stripBase no match" { assert stripBase("x/y.ms", "a/b") === "x/y.ms"; }
 
-test "stripBase partial prefix no match" { expect(stripBase("a/bc/d.ms", "a/b") === "a/bc/d.ms"); }
+test "stripBase partial prefix no match" { assert stripBase("a/bc/d.ms", "a/b") === "a/bc/d.ms"; }

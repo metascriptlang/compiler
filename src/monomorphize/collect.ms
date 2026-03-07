@@ -1,6 +1,6 @@
 // Monomorphization Collect Pass — find generic definitions + call sites
 //
-// Nim equivalent: overload resolution in semcall.nim triggering generateInstance().
+// Reference implementation equivalent: overload resolution triggering instance generation.
 // Our approach: eager two-step scan (definitions, then call sites).
 
 import {
@@ -1157,7 +1157,7 @@ function monoApplySubstitutions(fnNode: Node, entry: MonoEntry): void {
 }
 
 // ===== Generic Type Instance → InterfaceDecl Nodes =====
-// Nim-aligned: monomorphize creates concrete InterfaceDecl nodes so codegen
+// Standard-aligned: monomorphize creates concrete InterfaceDecl nodes so codegen
 // is fully generic-unaware. Reads from GenericTypeInstStore (populated by checker).
 
 function monoEmitOneTypeInst(program: Node, idx: number): void {
@@ -1224,50 +1224,50 @@ export function monomorphizeProgram(program: Node, checkerCtx: CheckerContext): 
 // ===== Tests =====
 test "resolveTypeName number" {
 	const t = monoResolveTypeName("number");
-	expect(t.kind === TypeKind.Number);
+	assert t.kind === TypeKind.Number;
 }
 
 test "resolveTypeName string" {
 	const t = monoResolveTypeName("string");
-	expect(t.kind === TypeKind.String);
+	assert t.kind === TypeKind.String;
 }
 
 test "resolveTypeName named" {
 	const t = monoResolveTypeName("MyInterface");
-	expect(t.kind === TypeKind.Object);
-	expect(t.typeName === "MyInterface");
+	assert t.kind === TypeKind.Object;
+	assert t.typeName === "MyInterface";
 }
 
 test "resolveExplicitTypeArgs" {
 	const types = monoResolveExplicitTypeArgs("number,string");
-	expect(types.length === 2);
-	expect(types[0].kind === TypeKind.Number);
-	expect(types[1].kind === TypeKind.String);
+	assert types.length === 2;
+	assert types[0].kind === TypeKind.Number;
+	assert types[1].kind === TypeKind.String;
 }
 
 test "resolveAnnotation primitives" {
-	expect(monoResolveAnnotation("number").kind === TypeKind.Number);
-	expect(monoResolveAnnotation("string").kind === TypeKind.String);
-	expect(monoResolveAnnotation("boolean").kind === TypeKind.Boolean);
-	expect(monoResolveAnnotation("void").kind === TypeKind.Void);
+	assert monoResolveAnnotation("number").kind === TypeKind.Number;
+	assert monoResolveAnnotation("string").kind === TypeKind.String;
+	assert monoResolveAnnotation("boolean").kind === TypeKind.Boolean;
+	assert monoResolveAnnotation("void").kind === TypeKind.Void;
 }
 
 test "resolveAnnotation array suffix" {
 	const arrType = monoResolveAnnotation("number[]");
-	expect(arrType.kind === TypeKind.Array);
-	expect(arrType.typeReturn.kind === TypeKind.Number);
+	assert arrType.kind === TypeKind.Array;
+	assert arrType.typeReturn.kind === TypeKind.Number;
 }
 
 test "resolveAnnotation Array generic" {
 	const arrType = monoResolveAnnotation("Array<string>");
-	expect(arrType.kind === TypeKind.Array);
-	expect(arrType.typeReturn.kind === TypeKind.String);
+	assert arrType.kind === TypeKind.Array;
+	assert arrType.typeReturn.kind === TypeKind.String;
 }
 
 test "resolveAnnotation named type" {
 	const t = monoResolveAnnotation("MyInterface");
-	expect(t.kind === TypeKind.Object);
-	expect(t.typeName === "MyInterface");
+	assert t.kind === TypeKind.Object;
+	assert t.typeName === "MyInterface";
 }
 
-test "resolveAnnotation empty" { expect(monoResolveAnnotation("").kind === TypeKind.Unknown); }
+test "resolveAnnotation empty" { assert monoResolveAnnotation("").kind === TypeKind.Unknown; }

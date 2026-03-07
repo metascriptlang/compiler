@@ -3,7 +3,7 @@
 import { exit, exec } from "std/process";
 import { parseSource } from "../parser/statements/validation";
 import { Node, NodeKind, ProgramData } from "../ast/node";
-import { CheckerContext, hasErrors, errorCount } from "../checker/context";
+import { CheckerContext, hasErrors, hasFatalErrors, errorCount } from "../checker/context";
 import { checkProgram, checkProgramWithRegistry } from "../checker/checkPass";
 import { checkModuleGraph } from "../checker/index";
 import { ExportRegistry } from "../checker/context";
@@ -14,9 +14,10 @@ import { monomorphizeProgram } from "../monomorphize/collect";
 import { generateJS } from "../codegen/js/index";
 import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
 import { RaiserContext, createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
-import { generateC, generateCModule, genProjectDispatcher, collectExportedPrototypes, flushResultTypeDecls, emitExportedTypesViaCGen, registerExportedClassNames } from "../codegen/c/index";
+import { generateCModule, genProjectDispatcher } from "../codegen/c/index";
+import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
-import { createCGen, sec, extract, TypeCache, createTypeCache, typeCacheSet, AliveSet, createAliveSet, CSection } from "../codegen/c/context";
+import { AliveSet, createAliveSet } from "../codegen/c/context";
 import { computeAliveSet } from "../checker/reachability";
 import { getSimpleTypeDesc } from "../codegen/c/types";
 import { setTargetSizes } from "../checker/types";
@@ -31,66 +32,11 @@ import { ResolverConfig, createDefaultConfig, BACKEND_C, BACKEND_JS, BACKEND_RAI
 import { ResolveSection, defaultResolveSection } from "./buildConfig";
 import { evaluateComptimeBlocks } from "./comptime";
 import { CliOptions, Target, MODE_DEBUG, MODE_RELEASE } from "./options";
-import { readSource, writeOutput, printErrorsAndExit, emitOutput, printTiming, verboseLog, replaceExt, dirName, baseName, stripBase, ensureDir, getJSRuntime, exeSuffix, outDirForMode } from "./io";
+import { readSource, writeOutput, printErrorsAndExit, printTiming, verboseLog, replaceExt, dirName, baseName, stripBase, ensureDir, getJSRuntime, exeSuffix, outDirForMode } from "./io";
 import { compileC, compileCFile, linkObjects, appendFlag, cliCompileFlags, cliLinkFlags } from "./cc";
 import { preprocessHeaders } from "../module/aro";
 import { error, success, bold, dim, green, red, yellow, cyan } from "../utils/color";
 import { clockMs } from "std/process";
-
-export function cmdCompile(filePath: string, opts: CliOptions, outputPath: string): void {
-	registerCoreParsers();
-	setTargetSizes(8, 8);
-	const t0 = clockMs();
-	const source = readSource(filePath);
-
-	if (opts.verbose) verboseLog("parse " + filePath);
-	const parseResult = parseSource(source);
-	if (!parseResult.ok) {
-		console.log(error("parse error") + ": " + parseResult.error);
-		exit(1);
-	}
-	const program = parseResult.value;
-
-	if (opts.verbose) verboseLog("check");
-	const checkerCtx = checkProgram(program);
-	if (hasErrors(checkerCtx)) {
-		printErrorsAndExit(checkerCtx, "type error: ", opts.errorMax);
-	}
-
-	if (opts.verbose) verboseLog("monomorphize");
-	const monoed = monomorphizeProgram(program, checkerCtx);
-
-	if (opts.verbose) verboseLog("validate metadata");
-	validateTypedAST(checkerCtx, monoed);
-	if (hasErrors(checkerCtx)) {
-		printErrorsAndExit(checkerCtx, "compiler metadata error: ", opts.errorMax);
-	}
-
-	// Evaluate @comptime blocks (before transforms — results become literals)
-	const comptimeResolved = evaluateComptimeBlocks(monoed);
-
-	if (opts.verbose) verboseLog("transform");
-	const transformed = transformProgram(comptimeResolved, checkerCtx, opts.target === Target.JS);
-
-	if (opts.target === Target.JS) {
-		if (opts.verbose) verboseLog("codegen js");
-		const jsCode = generateJS(transformed);
-		emitOutput(jsCode, filePath, outputPath, ".js");
-	} else {
-		if (opts.verbose) verboseLog("transform (native)");
-		const nativeCtx = createTransformContextWithChecker(checkerCtx);
-		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
-		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
-		if (opts.verbose) verboseLog("analyze (DRC)");
-		const analyzed = analyzeProgram(nativeTransformed, checkerCtx);
-		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
-		if (opts.verbose) verboseLog("codegen c");
-		const cCode = generateC(nativeLowered, checkerCtx, filePath);
-		emitOutput(cCode, filePath, outputPath, ".c");
-	}
-
-	if (opts.showTime) printTiming("compiled", t0);
-}
 
 // ===== Multi-Module Helpers =====
 
@@ -141,6 +87,19 @@ function reportModuleErrors(graph: ModuleGraph, prefix: string): void {
 	}
 }
 
+// Abort build if checker found fatal errors (e.g. assert outside test block).
+// Standard reference equivalent: globalError raises recoverable error.
+function exitOnFatalCheckerErrors(ctx: CheckerContext, modPath: string): void {
+	if (!hasFatalErrors(ctx)) return;
+	for (const e of ctx.errors) {
+		if (e.fatal) {
+			const loc = e.line > 0 ? ":" + e.line + ":" + e.column : "";
+			console.log(red("fatal error") + " [" + modPath + loc + "]: " + e.message);
+		}
+	}
+	exit(1);
+}
+
 // Report per-module errors and exit if any found.
 function exitOnModuleErrors(graph: ModuleGraph, prefix: string): void {
 	let hasErr = false;
@@ -179,24 +138,12 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 	return graph;
 }
 
-// Shared type cache from proto header — populated by writeProtoHeader, passed to each module's CGen.
-let protoExternalTypes: TypeCache = createTypeCache();
-// Global alive set for DCE — populated by writeProtoHeader, passed to each module's CGen.
+// Global alive set for DCE — computed by computeProjectAliveSet, passed to each module's CGen.
 let protoAliveSet: AliveSet = createAliveSet();
 
-// Collect exported C prototypes and type declarations from each module.
-// Writes a physical msProto.h header to /tmp and populates protoExternalTypes
-// for type suppression in per-module codegen.
-function writeProtoHeader(graph: ModuleGraph, entryPath: string, isTest: boolean): void {
-	protoExternalTypes = createTypeCache();
-
-	// Create a temporary CGen shared across ALL modules for type collection.
-	// This gives us: forward decls in ForwardDecls section, struct bodies in Types section,
-	// with recursive getTypeDesc() ensuring topological ordering.
-	const protoGen = createCGen(null as unknown as CheckerContext, "__protos");
-
-	// Phase 1: Parse + check all modules, register class names in protoGen.
-	// This ensures getTypeDesc for TypeReference correctly emits ClassName* for class fields.
+// Lightweight pass: parse + check + monomorphize all modules, then compute global DCE alive set.
+// No type emission or proto header — each module is self-contained (Nim parity).
+function computeProjectAliveSet(graph: ModuleGraph, entryPath: string, isTest: boolean): AliveSet {
 	const monoed_programs: Node[] = [];
 	const monoed_paths: string[] = [];
 	for (const modPath of graph.loadOrder) {
@@ -206,51 +153,13 @@ function writeProtoHeader(graph: ModuleGraph, entryPath: string, isTest: boolean
 		const pr = parseSource(mod.source);
 		if (!pr.ok) continue;
 		const ctx = graphRegistry !== null ? checkProgramWithRegistry(pr.value, graphRegistry, graph, mod) : checkProgram(pr.value);
+		exitOnFatalCheckerErrors(ctx, modPath);
 		ctx.errors = [];
 		const monoed = monomorphizeProgram(pr.value, ctx);
-		registerExportedClassNames(protoGen, monoed);
 		monoed_programs.push(monoed);
 		monoed_paths.push(modPath);
 	}
-
-	// Phase 1.5: Compute global reachability for dead code elimination
-	protoAliveSet = computeAliveSet(monoed_programs, monoed_paths, entryPath, isTest);
-	// Phase 2: Emit all exported types via CGen (recursive topological ordering).
-	// Collect function prototypes per module.
-	let allFnProtos = "";
-	for (let i = 0; i < monoed_programs.length; i += 1) {
-		emitExportedTypesViaCGen(protoGen, monoed_programs[i]);
-		const protos = collectExportedPrototypes(monoed_programs[i], protoGen);
-		allFnProtos = allFnProtos + protos;
-	}
-
-	// Phase 3: Extract ForwardDecls FIRST (typedefs break pointer cycles),
-	// then Types (struct bodies in dependency order).
-	const forwardDecls = extract(sec(protoGen, CSection.ForwardDecls));
-	const typeBodies = extract(sec(protoGen, CSection.Types));
-	const resultDecls = flushResultTypeDecls();
-
-	// Write physical header file
-	// B2: conditionally include runtime headers based on proto's type usage
-	let header = "#ifndef MSC_PROTO_H\n#define MSC_PROTO_H\n\n";
-	if (protoGen.needsStringRT) header = header + "#include \"core/string.h\"\n";
-	if (protoGen.needsArrayRT) header = header + "#include \"core/array.h\"\n";
-	if (protoGen.needsStringRT || protoGen.needsArrayRT) header = header + "\n";
-	header = header + forwardDecls + typeBodies + resultDecls;
-	header = header + allFnProtos;
-	header = header + "\n#endif /* MSC_PROTO_H */\n";
-	writeOutput("/tmp/msProto.h", header);
-
-	// Copy protoGen's typeCache entries to protoExternalTypes for suppression
-	for (let i = 0; i < protoGen.typeCache.entries.length; i += 1) {
-		typeCacheSet(protoExternalTypes, protoGen.typeCache.entries[i].key, protoGen.typeCache.entries[i].cTypeName);
-	}
-	// Also copy forward decl cache entries for ensureForwardDecl suppression
-	for (let i = 0; i < protoGen.forwTypeCache.entries.length; i += 1) {
-		typeCacheSet(protoExternalTypes, protoGen.forwTypeCache.entries[i].key, protoGen.forwTypeCache.entries[i].cTypeName);
-	}
-	// Sentinel entry: signals multi-module mode so #include "msProto.h" is emitted
-	typeCacheSet(protoExternalTypes, "__msProto__", "1");
+	return computeAliveSet(monoed_programs, monoed_paths, entryPath, isTest);
 }
 
 // Counter for unique @compile .o filenames across modules.
@@ -366,6 +275,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 
 		// Check (cross-module registry for proper import type resolution)
 		const ctx = graphRegistry !== null ? checkProgramWithRegistry(pr.value, graphRegistry, graph, mod) : checkProgram(pr.value);
+		exitOnFatalCheckerErrors(ctx, modPath);
 		ctx.errors = [];
 
 		// Validate metadata before transform
@@ -426,9 +336,9 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		return;
 	}
 
-	// Pass 1: Collect per-module exported prototypes and write shared header
-	if (opts.verbose) verboseLog("writing shared proto header");
-	writeProtoHeader(graph, entryPath, false);
+	// Pass 1: Compute global DCE alive set (lightweight parse+check+mono pass)
+	if (opts.verbose) verboseLog("computing alive set for DCE");
+	protoAliveSet = computeProjectAliveSet(graph, entryPath, false);
 
 	// Pass 2: Full pipeline + codegen + per-module compile to .o
 	let hasUserMain = false;
@@ -459,6 +369,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 
 		// Check (cross-module registry for proper import type resolution)
 		const ctx = graphRegistry !== null ? checkProgramWithRegistry(pr.value, graphRegistry, graph, mod) : checkProgram(pr.value);
+		exitOnFatalCheckerErrors(ctx, modPath);
 		ctx.errors = [];
 
 		// Monomorphize
@@ -468,7 +379,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		validateTypedAST(ctx, monoed);
 		if (hasErrors(ctx)) {
 			for (const e of ctx.errors) {
-				console.log(dim("metadata warning [" + modPath + "]: " + e));
+				console.log(dim("metadata warning [" + modPath + "]: " + e.message));
 			}
 			ctx.errors = [];
 		}
@@ -488,8 +399,8 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		const analyzed = analyzeProgram(nativeTransformed, ctx);
 		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
 
-		// Codegen — module only, types suppressed by externalTypes from proto header
-		const cCode = generateCModule(nativeLowered, ctx, modPath, protoExternalTypes, protoAliveSet, false);
+		// Codegen — each module is self-contained (Nim parity, no shared proto header)
+		const cCode = generateCModule(nativeLowered, ctx, modPath, protoAliveSet, false);
 
 		// Accumulate compiler flags from @passC/@passL directives
 		allFlags = appendFlag(allFlags, ctx.compilerFlags);
@@ -586,9 +497,9 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	const config = buildResolverConfig(Target.C, defaultResolveSection());
 	const graph = loadAndCheckGraph(filePath, opts.verbose, config);
 
-	// Pass 1: Collect per-module exported prototypes and write shared header
-	if (opts.verbose) verboseLog("writing shared proto header");
-	writeProtoHeader(graph, filePath, true);
+	// Pass 1: Compute global DCE alive set (lightweight parse+check+mono pass)
+	if (opts.verbose) verboseLog("computing alive set for DCE");
+	protoAliveSet = computeProjectAliveSet(graph, filePath, true);
 
 	// Pass 2: Full pipeline + codegen + compile each module
 	let allFlags = cliCompileFlags(opts);
@@ -615,6 +526,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		}
 
 		const ctx = graphRegistry !== null ? checkProgramWithRegistry(pr.value, graphRegistry, graph, mod) : checkProgram(pr.value);
+		exitOnFatalCheckerErrors(ctx, modPath);
 		ctx.errors = [];
 
 		const monoed = monomorphizeProgram(pr.value, ctx);
@@ -630,7 +542,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 		const analyzed = analyzeProgram(nativeTransformed, ctx);
 		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
-		const cCode = generateCModule(nativeLowered, ctx, modPath, protoExternalTypes, protoAliveSet, true);
+		const cCode = generateCModule(nativeLowered, ctx, modPath, protoAliveSet, true);
 
 		allFlags = appendFlag(allFlags, ctx.compilerFlags);
 
@@ -651,9 +563,9 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		compiled = compiled + 1;
 	}
 
-	// Generate dispatcher with hasUserMain=false (suppress user's main)
+	// Generate test dispatcher (runs all module inits + test tables)
 	if (opts.verbose) verboseLog("generating test dispatcher");
-	const dispatcher = genProjectDispatcher(graph.loadOrder, filePath, false, "void");
+	const dispatcher = genTestDispatcher(graph.loadOrder, filePath);
 	const dispFile = "/tmp/_msc_test_dispatch.c";
 	const dispObj = "/tmp/_msc_test_dispatch.o";
 	writeOutput(dispFile, dispatcher);
@@ -707,6 +619,7 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 		}
 
 		const ctx = graphRegistry !== null ? checkProgramWithRegistry(pr.value, graphRegistry, graph, mod) : checkProgram(pr.value);
+		exitOnFatalCheckerErrors(ctx, modPath);
 		ctx.errors = [];
 
 		const comptimeResolved = evaluateComptimeBlocks(pr.value);

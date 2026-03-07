@@ -4,7 +4,7 @@
 // → function* f() { const x = yield p; return x; }
 // → (generatorLower then builds the state machine)
 //
-// Nim insight: "await is just yield." This pass rewrites, generator does heavy lifting.
+// Proven architectural insight: "await is just yield." This pass rewrites, generator does heavy lifting.
 // V1: No Promise wrapper (runtime/codegen concern, not AST transform).
 
 import {
@@ -154,14 +154,14 @@ export function lowerAsync(program: Node, ctx: TransformContext): Node {
 }
 
 // ===== Tests =====
-test "non-async passthrough" { expect(firstStmtKindAfter("function f() { return 1; }", lowerAsync) === NodeKind.FunctionDecl); }
+test "non-async passthrough" { assert firstStmtKindAfter("function f() { return 1; }", lowerAsync) === NodeKind.FunctionDecl; }
 
-test "stmt count passthrough" { expect(stmtCountAfter("const x = 1;", lowerAsync) === 1); }
+test "stmt count passthrough" { assert stmtCountAfter("const x = 1;", lowerAsync) === 1; }
 
-test "async function still one stmt" { expect(stmtCountAfter("async function f() { await x; }", lowerAsync) === 1); }
+test "async function still one stmt" { assert stmtCountAfter("async function f() { await x; }", lowerAsync) === 1; }
 
-test "async flag cleared" { expect(firstStmtKindAfter("async function f() { await x; }", lowerAsync) === NodeKind.FunctionDecl); }
+test "async flag cleared" { assert firstStmtKindAfter("async function f() { await x; }", lowerAsync) === NodeKind.FunctionDecl; }
 
-test "async arrow unchanged count" { expect(stmtCountAfter("const f = async () => await x;", lowerAsync) === 1); }
+test "async arrow unchanged count" { assert stmtCountAfter("const f = async () => await x;", lowerAsync) === 1; }
 
-test "non-async function preserved" { expect(stmtCountAfter("function f() { return 1; }", lowerAsync) === 1); }
+test "non-async function preserved" { assert stmtCountAfter("function f() { return 1; }", lowerAsync) === 1; }

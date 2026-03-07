@@ -1,6 +1,6 @@
 /*
  * MetaScript String Runtime
- * Following Nim's NimStringV2 layout from strs_v2.nim
+ * Following the standard reference string layout
  *
  * msString = { len, p } where p -> msStrPayload { cap, data[] }
  * String literals use strlitFlag in cap's high bit (COW).
@@ -20,13 +20,13 @@ typedef struct msStringArray msStringArray;
 
 /* ===== Core Types ===== */
 
-/* Nim: NimStrPayload { cap: int; data: UncheckedArray[char] } */
+/* Reference: msStrPayload { cap: int; data: UncheckedArray[char] } */
 typedef struct {
 	int64_t cap;
 	char data[];    /* flexible array member */
 } msStrPayload;
 
-/* Nim: NimStringV2 { len: int; p: ptr NimStrPayload } */
+/* Reference: msString { len: int; p: ptr msStrPayload } */
 typedef struct {
 	int64_t len;
 	msStrPayload* p;    /* NULL if len == 0 */
@@ -34,7 +34,7 @@ typedef struct {
 
 /* ===== Constants ===== */
 
-/* Nim's strlitFlag — high bit of cap marks string literals (COW) */
+/* High bit of cap marks string literals (COW) */
 #define MS_STRLIT_FLAG ((int64_t)1 << 62)
 
 /* Empty string */
@@ -66,7 +66,18 @@ static inline bool msStringIsEmpty(msString s) {
 	return s.len == 0;
 }
 
-/* Capacity growth — Nim: resize() in strs_v2.nim */
+/* DJB2 hash — used by match lowering for string switch optimization.
+ * Must match the compile-time djb2Hash in matchLower.ms. */
+static inline int32_t msStringHash(msString s) {
+	int32_t h = 5381;
+	const char* data = (s.p != NULL) ? s.p->data : "";
+	for (int64_t i = 0; i < s.len; i++) {
+		h = (h * 33 + (unsigned char)data[i]);
+	}
+	return h;
+}
+
+/* Capacity growth — Standard reference resize pattern */
 static inline int64_t msStringResizeCap(int64_t old) {
 	if (old <= 0) return 4;
 	if (old <= 32767) return old * 2;
@@ -80,34 +91,34 @@ static inline int64_t msStrContentSize(int64_t cap) {
 
 /* ===== Lifecycle Functions ===== */
 
-/* Allocate + copy from raw bytes — Nim: toNimStr */
+/* Allocate + copy from raw bytes */
 msString msStringNew(const char* data, int64_t len);
 
-/* From null-terminated C string — Nim: cstrToNimstr */
+/* From null-terminated C string */
 msString msStringFromCStr(const char* cstr);
 
-/* Preallocate with capacity — Nim: rawNewString */
+/* Preallocate with capacity */
 msString msStringNewCap(int64_t cap);
 
-/* Create zero-filled string of given length — Nim: mnewString */
+/* Create zero-filled string of given length */
 msString msStringNewLen(int64_t len);
 
-/* Free if not literal — Nim: nimDestroyStrV1 */
+/* Free if not literal */
 void msStringDestroy(msString s);
 
-/* Deep copy assignment — Nim: nimAsgnStrV2 */
+/* Deep copy assignment */
 void msStringAssign(msString* a, msString b);
 
-/* COW: copy literal before mutation — Nim: nimPrepareStrMutationV2 */
+/* COW: copy literal before mutation */
 void msStringPrepareMutation(msString* s);
 
-/* Grow buffer for appending — Nim: prepareAdd */
+/* Grow buffer for appending */
 void msStringPrepareAdd(msString* s, int64_t addLen);
 
-/* Append string — Nim: nimAddStrV1 */
+/* Append string */
 void msStringAppend(msString* dest, msString src);
 
-/* Append single char — Nim: nimAddCharV1 */
+/* Append single char */
 void msStringAppendChar(msString* dest, char c);
 
 /* ===== Comparison ===== */
@@ -208,20 +219,20 @@ int64_t msStringParseInt(msString s);
 
 /* ===== Set Length ===== */
 
-/* Resize string, zero-filling on growth — Nim: setLengthStrV2 */
+/* Resize string, zero-filling on growth */
 void msStringSetLength(msString* s, int64_t newLen);
 
 /* ===== Capacity ===== */
 
-/* Return allocated capacity, stripping literal flag — Nim: capacity(string) */
+/* Return allocated capacity, stripping literal flag */
 int64_t msStringCapacity(msString s);
 
-/* ===== In-Place Operations (Nim strbasics.nim) ===== */
+/* ===== In-Place Operations (Standard reference patterns) ===== */
 
-/* In-place substring via memmove — Nim: strbasics.setSlice */
+/* In-place substring via memmove */
 void msStringSetSlice(msString* s, int64_t start, int64_t end);
 
-/* In-place strip whitespace — Nim: strbasics.strip */
+/* In-place strip whitespace */
 void msStringStripInPlace(msString* s);
 
 #endif /* MS_STRING_H */

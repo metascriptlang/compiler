@@ -1,6 +1,6 @@
 # Trans-Am: Incremental Computation Engine
 
-Self-hosted incremental query engine for the MetaScript compiler. Inspired by the reference compiler's Trans-Am (`~/projects/metascript/src/transam/`, Zig, 15k lines, 19 files) and Salsa/rust-analyzer (`~/projects/rust/src/tools/rust-analyzer/`). Powers LSP responsiveness and incremental compilation.
+Self-hosted incremental query engine for the MetaScript compiler. Inspired by Salsa/rust-analyzer (`~/projects/rust/src/tools/rust-analyzer/`). Powers LSP responsiveness and incremental compilation.
 
 ## 1. Executive Summary
 
@@ -8,10 +8,10 @@ Trans-Am is a **demand-driven incremental computation framework** that caches co
 
 **Why it exists:**
 - **LSP latency**: Re-parsing/re-checking entire projects on every keystroke is too slow. Trans-Am makes per-file edits O(changed) instead of O(project).
-- **Batch compilation**: Even `msc build` benefits -- unchanged modules skip all phases.
+- **Batch compilation**: Even batch builds benefit -- unchanged modules skip all phases.
 - **Correctness**: The red-green algorithm guarantees results are always consistent with current file contents.
 
-**Core insight** (the "Salsa optimization"): When a dependency is recomputed, don't immediately invalidate all dependents. Instead, check if the dependency's **output actually changed** (content-addressed hash). If a comment-only edit produces identical parse output, all downstream queries stay GREEN. Reference: `red_green.zig:105-123`.
+**Core insight** (the "Salsa optimization"): When a dependency is recomputed, don't immediately invalidate all dependents. Instead, check if the dependency's **output actually changed** (content-addressed hash). If a comment-only edit produces identical parse output, all downstream queries stay GREEN.
 
 ## 2. Architecture Overview
 
@@ -154,7 +154,7 @@ function executeQuery(db: TransAmDb, key: QueryKey): QueryValue {
 
 ## 4. Query Types
 
-Adapted from reference's 9 query types (`types.zig:31-41`). We keep what the self-hosted compiler needs.
+Query types for the self-hosted compiler's incremental pipeline.
 
 ### Active Queries
 
@@ -340,7 +340,7 @@ src/transam/
 ### Batch vs LSP Mode
 
 ```ms
-// Batch (msc build): full pipeline, no cancellation
+// Batch build: full pipeline, no cancellation
 function compileBatch(db: TransAmDb, entryPath: string): Node {
     return executeQuery(db, makeKey(QueryKind.Analyze, entryPath));
 }
@@ -564,8 +564,8 @@ testGroup("Trans-Am Integration", () => {
 ### Test Execution
 
 ```bash
-rm -rf out && msc test src/transam/index.ms    # Trans-Am tests only
-rm -rf out && msc test src/index.ms             # Full compiler suite
+rm -rf out && bun run test-ms src/compiler/transam/index.ms    # Trans-Am tests only
+rm -rf out && bun run test-ms src/index.ms                     # Full compiler suite
 ```
 
 ---

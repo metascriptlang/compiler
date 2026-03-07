@@ -18,7 +18,7 @@ import {
 	VariableDeclData, BinaryExprData, CallExprData,
 	NumberLiteralData, HiddenStdConvData,
 } from "../../ast/node";
-import { Type, TypeKind } from "../../checker/types";
+import { Type, TypeKind, isNumeric } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent, makeNumber, makeHiddenAddr, makeMember } from "../util";
@@ -143,13 +143,7 @@ function rewriteArrayAccess(node: Node): Node {
 // Determine macro name from array element type
 function getArrayMacroName(elemType: Type): string {
 	if (elemType === null) return "msRefArrayAccess";
-	if (elemType.kind === TypeKind.Number) return "msNumberArrayAccess";
-	if (elemType.kind === TypeKind.Int32) return "msNumberArrayAccess";
-	if (elemType.kind === TypeKind.Int64) return "msNumberArrayAccess";
-	if (elemType.kind === TypeKind.Uint32) return "msNumberArrayAccess";
-	if (elemType.kind === TypeKind.Float32) return "msNumberArrayAccess";
-	if (elemType.kind === TypeKind.Float64) return "msNumberArrayAccess";
-	if (elemType.kind === TypeKind.Char) return "msNumberArrayAccess";
+	if (isNumeric(elemType)) return "msNumberArrayAccess";
 	if (elemType.kind === TypeKind.String) return "msStringArrayAccess";
 	return "msRefArrayAccess";
 }

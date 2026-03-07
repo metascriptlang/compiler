@@ -1,5 +1,5 @@
 // varpartitions.ms — Steensgaard-style alias analysis for readonly parameter mutation detection
-// Port of Nim's varpartitions.nim, simplified for MetaScript's type system.
+// Port of the standard reference implementation for alias analysis.
 //
 // Two-pass algorithm:
 //   Pass 1 (computeLiveRanges): Register variables, track lifetimes
@@ -409,7 +409,7 @@ function potentialMutationViaVar(p: Partitions, name: string, line: number): voi
 }
 
 // potentialMutationViaArg: conservative check — argument passed to non-out function
-// param might be mutated if the arg type contains a pointer (Nim parity: varpartitions.nim:691)
+// param might be mutated if the arg type contains a pointer (Implementation parity)
 function potentialMutationViaArg(p: Partitions, node: Node, line: number): void {
 	if (!nodeContainsPointer(node)) return;
 	const r = findRoot(node);
@@ -576,7 +576,7 @@ function liveRangesStmt(p: Partitions, node: Node): void {
 		const d = node.data as WhileStmtData;
 		liveRangesExpr(p, d.whileCondition);
 		liveRangesStmt(p, d.whileBody);
-		// Double-traverse loops (Nim pattern: catches mutation-before-connection in iteration 2)
+		// Double-traverse loops (standard reference pattern)
 		p.inLoop = p.inLoop + 1;
 		liveRangesExpr(p, d.whileCondition);
 		liveRangesStmt(p, d.whileBody);
@@ -986,9 +986,10 @@ function traverseStmt(p: Partitions, node: Node): void {
 		return;
 	}
 
-	// Skip nested function declarations, imports, types, tests
+	// Skip nested function declarations, imports, types, tests, asserts
 	if (node.kind === NodeKind.FunctionDecl) return;
 	if (node.kind === NodeKind.TestDecl) return;
+	if (node.kind === NodeKind.AssertStmt) return;
 }
 
 // ===== Post-Analysis =====
@@ -1048,7 +1049,7 @@ export function analyzeReadonlyParams(ctx: CheckerContext, sym: Symbol, params: 
 	// Check for violations
 	const violatedParam = hasSideEffect(p);
 	if (violatedParam !== "") {
-		addError(ctx, "An object reachable from readonly parameter '" + violatedParam + "' is potentially mutated");
+		addError(ctx, "An object reachable from readonly parameter '" + violatedParam + "' is potentially mutated", 0, 0);
 	}
 }
 
@@ -1061,15 +1062,15 @@ test "variableId finds registered vars" {
 	const p = createPartitions();
 	registerVariable(p, "x");
 	registerVariable(p, "y");
-	expect(variableId(p, "x") === 0);
-	expect(variableId(p, "y") === 1);
-	expect(variableId(p, "z") === -1);
+	assert variableId(p, "x") === 0;
+	assert variableId(p, "y") === 1;
+	assert variableId(p, "z") === -1;
 }
 
 test "root returns self for empty root" {
 	const p = createPartitions();
 	registerVariable(p, "x");
-	expect(ufRoot(p, 0) === 0);
+	assert ufRoot(p, 0) === 0;
 }
 
 test "connect merges two vars" {
@@ -1077,7 +1078,7 @@ test "connect merges two vars" {
 	registerVariable(p, "x");
 	registerVariable(p, "y");
 	connect(p, "x", "y", 1);
-	expect(ufRoot(p, 0) === ufRoot(p, 1));
+	assert ufRoot(p, 0) === ufRoot(p, 1);
 }
 
 test "path compression works" {
@@ -1089,114 +1090,114 @@ test "path compression works" {
 	connect(p, "b", "c", 2);
 	// After find, all should point to same root
 	const r = ufRoot(p, 2);
-	expect(ufRoot(p, 0) === r);
-	expect(ufRoot(p, 1) === r);
+	assert ufRoot(p, 0) === r;
+	assert ufRoot(p, 1) === r;
 }
 
 test "findRoot on simple identifier" {
 	const ctx = checkSource("const x = 1;");
 	// Just test findRoot logic: it needs a node, use checkSource to get one
-	expect(isMutatingMethod("push"));
-	expect(isMutatingMethod("pop"));
-	expect(isMutatingMethod("splice"));
-	expect(!isMutatingMethod("length"));
-	expect(!isMutatingMethod("slice"));
-	expect(!isMutatingMethod("map"));
+	assert isMutatingMethod("push");
+	assert isMutatingMethod("pop");
+	assert isMutatingMethod("splice");
+	assert !isMutatingMethod("length");
+	assert !isMutatingMethod("slice");
+	assert !isMutatingMethod("map");
 	// String mutating methods + setLen
-	expect(isMutatingMethod("append"));
-	expect(isMutatingMethod("setLen"));
-	expect(isMutatingMethod("setLength"));
-	expect(isMutatingMethod("setSlice"));
-	expect(isMutatingMethod("stripInPlace"));
-	expect(!isMutatingMethod("toLower"));
-	expect(!isMutatingMethod("trim"));
+	assert isMutatingMethod("append");
+	assert isMutatingMethod("setLen");
+	assert isMutatingMethod("setLength");
+	assert isMutatingMethod("setSlice");
+	assert isMutatingMethod("stripInPlace");
+	assert !isMutatingMethod("toLower");
+	assert !isMutatingMethod("trim");
 }
 
 test "isAssignment detects all assignment ops" {
-	expect(isAssignment("="));
-	expect(isAssignment("+="));
-	expect(isAssignment("-="));
-	expect(isAssignment("*="));
-	expect(isAssignment("/="));
-	expect(!isAssignment("+"));
-	expect(!isAssignment("==="));
-	expect(!isAssignment("<"));
+	assert isAssignment("=");
+	assert isAssignment("+=");
+	assert isAssignment("-=");
+	assert isAssignment("*=");
+	assert isAssignment("/=");
+	assert !isAssignment("+");
+	assert !isAssignment("===");
+	assert !isAssignment("<");
 }
 
 test "direct assignment to readonly param" {
 	const ctx = checkSource("function f(readonly arr: number[]): void { arr = []; }");
-	expect(hasErrors(ctx));
+	assert hasErrors(ctx);
 }
 
 test "compound assignment to readonly param" {
 	const ctx = checkSource("function f(readonly s: string): void { s += \"x\"; }");
-	expect(hasErrors(ctx));
+	assert hasErrors(ctx);
 }
 
 test "index assignment on readonly param" {
 	const ctx = checkSource("function f(readonly arr: number[]): void { arr[0] = 1; }");
-	expect(hasErrors(ctx));
+	assert hasErrors(ctx);
 }
 
 test "field assignment on readonly param" {
 	const ctx = checkSource("function f(readonly obj: SomeType): void { obj.x = 1; }");
-	expect(hasErrors(ctx));
+	assert hasErrors(ctx);
 }
 
 test "update expr on readonly param" {
 	const ctx = checkSource("function f(readonly x: number): void { x++; }");
-	expect(hasErrors(ctx));
+	assert hasErrors(ctx);
 }
 
 test "mutating method on readonly param" {
 	const ctx = checkSource("function f(readonly arr: number[]): void { arr.push(1); }");
-	expect(hasErrors(ctx));
+	assert hasErrors(ctx);
 }
 
 test "alias then push detected" {
 	const ctx = checkSource("function f(readonly arr: number[]): void { let a = arr; a.push(1); }");
-	expect(hasErrors(ctx));
+	assert hasErrors(ctx);
 }
 
 test "multi-hop alias detected" {
 	const ctx = checkSource("function f(readonly arr: number[]): void { let a = arr; let b = a; b.push(1); }");
-	expect(hasErrors(ctx));
+	assert hasErrors(ctx);
 }
 
 test "alias then direct assignment detected" {
 	const ctx = checkSource("function f(readonly arr: number[]): void { let a = arr; a[0] = 99; }");
-	expect(hasErrors(ctx));
+	assert hasErrors(ctx);
 }
 
 test "alias then update expr detected" {
 	const ctx = checkSource("function f(readonly x: number): void { let y = x; y++; }");
 	// number doesn't contain pointers, so alias is not connected
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 }
 
 test "mutable param assignment allowed" {
 	const ctx = checkSource("function f(arr: number[]): void { arr = []; }");
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 }
 
 test "mutable param push allowed" {
 	const ctx = checkSource("function f(arr: number[]): void { arr.push(1); }");
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 }
 
 test "local variable mutation allowed" {
 	const ctx = checkSource("function f(readonly arr: number[]): void { let x = 1; x = 2; }");
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 }
 
 test "reading readonly param allowed" {
 	const ctx = checkSource("function f(readonly arr: number[]): void { const x = arr.length; }");
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 }
 
 test "no readonly params skips analysis" {
 	const ctx = checkSource("function f(a: number, b: string): void { a = 1; }");
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 }
 
 test "mutation before connection not flagged" {
@@ -1209,30 +1210,30 @@ test "mutation before connection not flagged" {
 	// and the connection also happens at T2, so maxMutation=T2 == minConnection=T2 → not >
 	// So no error. However the Phase 2e inline check might flag x = arr differently...
 	// For this test, just check the basic flow works
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 }
 
 test "non-mutating method on alias allowed" {
 	const ctx = checkSource("function f(readonly arr: number[]): void { let a = arr; const x = a.length; }");
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 }
 
 test "out expr on readonly root detected" {
 	const ctx = checkSource("function g(x: number[]): void {} function f(readonly arr: number[]): void { g(out arr); }");
-	expect(hasErrors(ctx));
+	assert hasErrors(ctx);
 }
 
 test "readonly param passed to mutable function detected" {
 	const ctx = checkSource("function g(arr: number[]): void { arr.push(1); }\nfunction f(readonly arr: number[]): void { g(arr); }");
-	expect(hasErrors(ctx));
+	assert hasErrors(ctx);
 }
 
 test "readonly param passed to readonly function allowed" {
 	const ctx = checkSource("function g(readonly arr: number[]): void { const x = arr.length; }\nfunction f(readonly arr: number[]): void { g(arr); }");
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 }
 
 test "mutable param passed to mutable function allowed" {
 	const ctx = checkSource("function g(arr: number[]): void { arr.push(1); }\nfunction f(arr: number[]): void { g(arr); }");
-	expect(!hasErrors(ctx));
+	assert !hasErrors(ctx);
 }

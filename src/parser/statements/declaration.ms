@@ -133,8 +133,9 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 		advance(state); // consume '*'
 	}
 	const nameToken = current(state);
-	// Accept Ident, TemplateNoSub, or contextual keywords (test, expect, require, etc.)
-	if (!isIdentLike(nameToken) && nameToken.kind !== TokenKind.TemplateNoSub) {
+	// Accept Ident, OperatorIdent (backtick-quoted: `==`, `[]`), TemplateNoSub, or contextual keywords
+	// Reference compiler: parser.zig:864 — operator_identifier token accepted as function name
+	if (!isIdentLike(nameToken) && nameToken.kind !== TokenKind.TemplateNoSub && nameToken.kind !== TokenKind.OperatorIdent) {
 		return Result.err(`Expected function name at line ${nameToken.line.toString()}`);
 	}
 
@@ -1028,7 +1029,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 	// Capture optional generic params: extern function sort<T>(arr: T[]): void
 	const genericNames = captureGenericParams(state);
 
-	// Extern functions → FunctionDecl with "extern" in fnFlags (Nim-aligned: importc pragma on proc)
+	// Extern functions → FunctionDecl with "extern" in fnFlags (Standard reference: importc pragma)
 	if (externKind === ExternKind.Function) {
 		const raw = parseParamList(state, nameToken.value);
 		const params = extractParamNames(raw);
@@ -1168,285 +1169,285 @@ export function parseMacroDecl(state: ParserState): NodeResult {
 
 // ===== Tests =====
 // Variable — const vs let
-test "const decl" { expect(programOk("const x = 42;")); }
+test "const decl" { assert programOk("const x = 42;"); }
 
-test "let decl" { expect(programOk("let y = 0;")); }
+test "let decl" { assert programOk("let y = 0;"); }
 // Function — empty, with params, with body
-test "function empty" { expect(programOk("function f() { }")); }
+test "function empty" { assert programOk("function f() { }"); }
 
-test "function multi-stmt" { expect(programOk("function f() { const x = 1; return x; }")); }
+test "function multi-stmt" { assert programOk("function f() { const x = 1; return x; }"); }
 // Import — distinct paths: named, aliased, side-effect
-test "import named" { expect(programOk("import { Token, TokenKind } from \"./token\";")); }
+test "import named" { assert programOk("import { Token, TokenKind } from \"./token\";"); }
 
-test "import aliased" { expect(programOk("import { Token as T } from \"./token\";")); }
+test "import aliased" { assert programOk("import { Token as T } from \"./token\";"); }
 
-test "import side-effect" { expect(programOk("import \"./polyfill\";")); }
+test "import side-effect" { assert programOk("import \"./polyfill\";"); }
 // Export — distinct paths: decl, re-export, re-export aliased
-test "export function" { expect(programOk("export function f() { return 1; }")); }
+test "export function" { assert programOk("export function f() { return 1; }"); }
 
-test "export const" { expect(programOk("export const x = 42;")); }
+test "export const" { assert programOk("export const x = 42;"); }
 
-test "re-export" { expect(programOk("export { Node, NodeKind } from \"./node\";")); }
+test "re-export" { assert programOk("export { Node, NodeKind } from \"./node\";"); }
 
-test "re-export aliased" { expect(programOk("export { Token as T } from \"./token\";")); }
+test "re-export aliased" { assert programOk("export { Token as T } from \"./token\";"); }
 // Type alias — distinct paths: simple, generic, union, function type
-test "type simple" { expect(programOk("type ID = number;")); }
+test "type simple" { assert programOk("type ID = number;"); }
 
-test "type generic" { expect(programOk("type NodeResult = Result<Node, string>;")); }
+test "type generic" { assert programOk("type NodeResult = Result<Node, string>;"); }
 
-test "type leading pipe" { expect(programOk("type Data = | { x: number } | { y: string };")); }
+test "type leading pipe" { assert programOk("type Data = | { x: number } | { y: string };"); }
 
-test "type function" { expect(programOk("type Handler = (a: string) => void;")); }
+test "type function" { assert programOk("type Handler = (a: string) => void;"); }
 // Enum
-test "enum" { expect(programOk("enum Color { Red, Green, Blue }")); }
+test "enum" { assert programOk("enum Color { Red, Green, Blue }"); }
 
-test "enum with values" { expect(programOk("enum Status { Active = 1, Inactive = 0 }")); }
+test "enum with values" { assert programOk("enum Status { Active = 1, Inactive = 0 }"); }
 // Interface — distinct paths: simple, optional, extends
-test "interface" { expect(programOk("interface Point { x: number; y: number; }")); }
+test "interface" { assert programOk("interface Point { x: number; y: number; }"); }
 
-test "interface optional" { expect(programOk("interface Opt { value?: number; }")); }
+test "interface optional" { assert programOk("interface Opt { value?: number; }"); }
 
-test "interface extends" { expect(programOk("interface Dog extends Animal { breed: string; }")); }
+test "interface extends" { assert programOk("interface Dog extends Animal { breed: string; }"); }
 // Param features — exercises parseParamList + skipDefaultValue
-test "rest param" { expect(programOk("function f(...args) { return args; }")); }
+test "rest param" { assert programOk("function f(...args) { return args; }"); }
 
-test "default param" { expect(programOk("function f(x = 5) { return x; }")); }
+test "default param" { assert programOk("function f(x = 5) { return x; }"); }
 
-test "default param complex" { expect(programOk("function f(x = [1, 2], y = {a: 3}) {}")); }
+test "default param complex" { assert programOk("function f(x = [1, 2], y = {a: 3}) {}"); }
 
-test "typed param" { expect(programOk("function f(x: number, y: string) {}")); }
+test "typed param" { assert programOk("function f(x: number, y: string) {}"); }
 // Enum with complex values — exercises skipDefaultValue depth tracking
-test "enum complex value" { expect(programOk("enum E { A = fn(1, 2), B = arr[0] }")); }
+test "enum complex value" { assert programOk("enum E { A = fn(1, 2), B = arr[0] }"); }
 // Var declarations
-test "var decl" { expect(programOk("var x = 1;")); }
+test "var decl" { assert programOk("var x = 1;"); }
 
-test "var is VariableDecl" { expect(stmtKind("var x = 1;") === NodeKind.VariableDecl); }
+test "var is VariableDecl" { assert stmtKind("var x = 1;") === NodeKind.VariableDecl; }
 
 test "var declKind is Var" {
 	const d = stmtAt("var x = 1;", 0).data as VariableDeclData;
-	expect(d.declKind === DeclKind.Var);
+	assert d.declKind === DeclKind.Var;
 }
 
 test "var declName" {
 	const d = stmtAt("var x = 1;", 0).data as VariableDeclData;
-	expect(d.declName === "x");
+	assert d.declName === "x";
 }
 
-test "var typed" { expect(programOk("var x: number = 1;")); }
+test "var typed" { assert programOk("var x: number = 1;"); }
 // Extern declarations — all 9 kinds
-test "extern function" { expect(programOk("extern function printf(fmt: string): void;")); }
+test "extern function" { assert programOk("extern function printf(fmt: string): void;"); }
 
-test "extern class empty" { expect(programOk("extern class FILE {}")); }
+test "extern class empty" { assert programOk("extern class FILE {}"); }
 
-test "extern const" { expect(programOk("extern const STDIN: FILE;")); }
+test "extern const" { assert programOk("extern const STDIN: FILE;"); }
 
-test "extern enum" { expect(programOk("extern enum Color { Red, Green }")); }
+test "extern enum" { assert programOk("extern enum Color { Red, Green }"); }
 
-test "extern type" { expect(programOk("extern type Ptr;")); }
+test "extern type" { assert programOk("extern type Ptr;"); }
 
-test "extern var" { expect(programOk("extern var errno: number;")); }
+test "extern var" { assert programOk("extern var errno: number;"); }
 
-test "extern let" { expect(programOk("extern let counter: number;")); }
+test "extern let" { assert programOk("extern let counter: number;"); }
 
-test "extern interface" { expect(programOk("extern interface Stream { read(): number; }")); }
+test "extern interface" { assert programOk("extern interface Stream { read(): number; }"); }
 
-test "extern macro" { expect(programOk("extern macro @inject;")); }
+test "extern macro" { assert programOk("extern macro @inject;"); }
 
-test "extern function is FunctionDecl" { expect(stmtKind("extern function f(): void;") === NodeKind.FunctionDecl); }
+test "extern function is FunctionDecl" { assert stmtKind("extern function f(): void;") === NodeKind.FunctionDecl; }
 
 test "extern function has extern flag" {
 	const d = stmtAt("extern function printf(fmt: string): void;", 0).data as FunctionDeclData;
-	expect(d.fnFlags === "extern");
+	assert d.fnFlags === "extern";
 }
 
-test "extern const is ExternDecl" { expect(stmtKind("extern const STDIN: int32;") === NodeKind.ExternDecl); }
+test "extern const is ExternDecl" { assert stmtKind("extern const STDIN: int32;") === NodeKind.ExternDecl; }
 
 test "extern name field" {
 	const d = stmtAt("extern const STDIN: FILE;", 0).data as ExternDeclData;
-	expect(d.externName === "STDIN");
-	expect(d.externType === "FILE");
+	assert d.externName === "STDIN";
+	assert d.externType === "FILE";
 }
 
 test "extern class kind" {
 	const d = stmtAt("extern class FILE {}", 0).data as ExternDeclData;
-	expect(d.externKind === ExternKind.Class);
+	assert d.externKind === ExternKind.Class;
 }
 
 test "extern var with type and from" {
 	const d = stmtAt("extern var errno: int32 from \"ms_errno\";", 0).data as ExternDeclData;
-	expect(d.externKind === ExternKind.Var);
-	expect(d.externName === "errno");
-	expect(d.externType === "int32");
-	expect(d.nativeName === "ms_errno");
+	assert d.externKind === ExternKind.Var;
+	assert d.externName === "errno";
+	assert d.externType === "int32";
+	assert d.nativeName === "ms_errno";
 }
 
 test "extern const no from" {
 	const d = stmtAt("extern const STDIN: FILE;", 0).data as ExternDeclData;
-	expect(d.externKind === ExternKind.Const);
-	expect(d.nativeName === "");
+	assert d.externKind === ExternKind.Const;
+	assert d.nativeName === "";
 }
 
 test "extern class opaque" {
 	const d = stmtAt("extern class FILE;", 0).data as ExternDeclData;
-	expect(d.externKind === ExternKind.Class);
-	expect(d.externType === "");
+	assert d.externKind === ExternKind.Class;
+	assert d.externType === "";
 }
 
-test "extern generics" { expect(programOk("extern function sort<T>(arr: T[]): void;")); }
+test "extern generics" { assert programOk("extern function sort<T>(arr: T[]): void;"); }
 
-test "extern extends" { expect(programOk("extern class Derived extends Base {}")); }
+test "extern extends" { assert programOk("extern class Derived extends Base {}"); }
 
-test "extern error" { expect(!programOk("extern 42")); }
+test "extern error" { assert !programOk("extern 42"); }
 
-test "export extern function" { expect(programOk("export extern function foo(x: number): void;")); }
+test "export extern function" { assert programOk("export extern function foo(x: number): void;"); }
 
-test "export extern function is ExportDecl" { expect(stmtKind("export extern function foo(): void;") === NodeKind.ExportDecl); }
+test "export extern function is ExportDecl" { assert stmtKind("export extern function foo(): void;") === NodeKind.ExportDecl; }
 
-test "extern function from" { expect(programOk("extern function floor(x: number): number from \"msFloor\";")); }
+test "extern function from" { assert programOk("extern function floor(x: number): number from \"msFloor\";"); }
 
 test "extern function from nativeName" {
 	const d = stmtAt("extern function floor(x: number): number from \"msFloor\";", 0).data as FunctionDeclData;
-	expect(d.fnName === "floor");
-	expect(d.nativeName === "msFloor");
-	expect(d.fnFlags === "extern");
+	assert d.fnName === "floor";
+	assert d.nativeName === "msFloor";
+	assert d.fnFlags === "extern";
 }
 
 test "extern function without from" {
 	const d = stmtAt("extern function printf(fmt: string): void;", 0).data as FunctionDeclData;
-	expect(d.fnName === "printf");
-	expect(d.nativeName === "");
+	assert d.fnName === "printf";
+	assert d.nativeName === "";
 }
 
 // Distinct type
-test "distinct type" { expect(programOk("distinct type UserId = number;")); }
+test "distinct type" { assert programOk("distinct type UserId = number;"); }
 
-test "distinct type string" { expect(programOk("distinct type Email = string;")); }
+test "distinct type string" { assert programOk("distinct type Email = string;"); }
 
-test "distinct is TypeAliasDecl" { expect(stmtKind("distinct type X = number;") === NodeKind.TypeAliasDecl); }
+test "distinct is TypeAliasDecl" { assert stmtKind("distinct type X = number;") === NodeKind.TypeAliasDecl; }
 
 test "distinct flag true" {
 	const d = stmtAt("distinct type UserId = number;", 0).data as TypeAliasDeclData;
-	expect(d.aliasIsDistinct);
+	assert d.aliasIsDistinct;
 }
 
 test "distinct name field" {
 	const d = stmtAt("distinct type Email = string;", 0).data as TypeAliasDeclData;
-	expect(d.aliasName === "Email");
+	assert d.aliasName === "Email";
 }
 
 test "type alias not distinct" {
 	const d = stmtAt("type ID = number;", 0).data as TypeAliasDeclData;
-	expect(!d.aliasIsDistinct);
+	assert !d.aliasIsDistinct;
 }
 // Macro declaration
-test "macro decl" { expect(programOk("macro deriveEq(target) { return target; }")); }
+test "macro decl" { assert programOk("macro deriveEq(target) { return target; }"); }
 
-test "macro is MacroDecl" { expect(stmtKind("macro foo(x) { return x; }") === NodeKind.MacroDecl); }
+test "macro is MacroDecl" { assert stmtKind("macro foo(x) { return x; }") === NodeKind.MacroDecl; }
 
 test "macro name field" {
 	const d = stmtAt("macro deriveEq(target) { return target; }", 0).data as MacroDeclData;
-	expect(d.macroDeclName === "deriveEq");
+	assert d.macroDeclName === "deriveEq";
 }
 
-test "macro multi param" { expect(programOk("macro foo(a, b, c) { return a; }")); }
+test "macro multi param" { assert programOk("macro foo(a, b, c) { return a; }"); }
 
 test "macro params field" {
 	const d = stmtAt("macro foo(a, b, c) { return a; }", 0).data as MacroDeclData;
-	expect(d.macroDeclParams.length === 3);
+	assert d.macroDeclParams.length === 3;
 }
 
 test "macro body is block" {
 	const d = stmtAt("macro foo(x) { return x; }", 0).data as MacroDeclData;
-	expect(d.macroDeclBody.kind === NodeKind.BlockStmt);
+	assert d.macroDeclBody.kind === NodeKind.BlockStmt;
 }
 
-test "macro return type" { expect(programOk("macro foo(): Node { return x; }")); }
+test "macro return type" { assert programOk("macro foo(): Node { return x; }"); }
 
-test "macro empty params" { expect(programOk("macro noop() { }")); }
+test "macro empty params" { assert programOk("macro noop() { }"); }
 
-test "async function" { expect(programOk("async function f() {}")); }
+test "async function" { assert programOk("async function f() {}"); }
 
-test "generator function" { expect(programOk("function* gen() { yield 1; }")); }
+test "generator function" { assert programOk("function* gen() { yield 1; }"); }
 
-test "async generator" { expect(programOk("async function* both() { yield 1; }")); }
+test "async generator" { assert programOk("async function* both() { yield 1; }"); }
 
-test "export async" { expect(programOk("export async function f() {}")); }
+test "export async" { assert programOk("export async function f() {}"); }
 
-test "extension parses" { expect(programOk("function f(this s: string) { return 1; }")); }
+test "extension parses" { assert programOk("function f(this s: string) { return 1; }"); }
 
 test "extension flags" {
 	const n = stmtAt("function f(this s: string) { return 1; }", 0);
 	const d = n.data as FunctionDeclData;
-	expect(d.fnFlags === "ext:s:string");
+	assert d.fnFlags === "ext:s:string";
 }
 
 test "extension keeps receiver in params" {
 	const n = stmtAt("function f(this s: string) { return 1; }", 0);
 	const d = n.data as FunctionDeclData;
-	expect(d.params.length === 1);
-	expect(d.params[0] === "s");
+	assert d.params.length === 1;
+	assert d.params[0] === "s";
 }
 
 test "extension with extra params" {
 	const n = stmtAt("function f(this s: string, n: number) { return 1; }", 0);
 	const d = n.data as FunctionDeclData;
-	expect(d.params.length === 2);
-	expect(d.params[0] === "s");
-	expect(d.params[1] === "n");
+	assert d.params.length === 2;
+	assert d.params[0] === "s";
+	assert d.params[1] === "n";
 }
 
 test "no receiver flags empty" {
 	const n = stmtAt("function f(x: number) { return 1; }", 0);
 	const d = n.data as FunctionDeclData;
-	expect(d.fnFlags === "");
+	assert d.fnFlags === "";
 }
 
-test "object destructure" { expect(stmtKind("const {a, b} = obj;") === NodeKind.DestructuringDecl); }
+test "object destructure" { assert stmtKind("const {a, b} = obj;") === NodeKind.DestructuringDecl; }
 
-test "array destructure" { expect(programOk("const [x, y] = arr;")); }
+test "array destructure" { assert programOk("const [x, y] = arr;"); }
 
-test "nested object" { expect(programOk("const {a: {b, c}} = obj;")); }
+test "nested object" { assert programOk("const {a: {b, c}} = obj;"); }
 
-test "object rest" { expect(programOk("const {a, ...rest} = obj;")); }
+test "object rest" { assert programOk("const {a, ...rest} = obj;"); }
 
-test "array rest" { expect(programOk("const [first, ...rest] = arr;")); }
+test "array rest" { assert programOk("const [first, ...rest] = arr;"); }
 
-test "let destructure" { expect(programOk("let {x, y} = point;")); }
+test "let destructure" { assert programOk("let {x, y} = point;"); }
 
-test "func destr param" { expect(programOk("function f({x, y}) { return x; }")); }
+test "func destr param" { assert programOk("function f({x, y}) { return x; }"); }
 
-test "func array param" { expect(programOk("function f([a, b]) { return a; }")); }
+test "func array param" { assert programOk("function f([a, b]) { return a; }"); }
 
-test "arrow destr param" { expect(programOk("const f = ({x}) => x;")); }
+test "arrow destr param" { assert programOk("const f = ({x}) => x;"); }
 // Distinct member types
-test "property" { expect(programOk("class Foo { name: string; }")); }
+test "property" { assert programOk("class Foo { name: string; }"); }
 
-test "method" { expect(programOk("class Foo { greet() { return 1; } }")); }
+test "method" { assert programOk("class Foo { greet() { return 1; } }"); }
 
-test "constructor" { expect(programOk("class Foo { constructor(x: number) { this.x = x; } }")); }
+test "constructor" { assert programOk("class Foo { constructor(x: number) { this.x = x; } }"); }
 // Modifiers — each tests a distinct parser path
-test "extends" { expect(programOk("class Dog extends Animal { bark() { return 1; } }")); }
+test "extends" { assert programOk("class Dog extends Animal { bark() { return 1; } }"); }
 
-test "static" { expect(programOk("class Foo { static create() { return 1; } }")); }
+test "static" { assert programOk("class Foo { static create() { return 1; } }"); }
 
-test "abstract" { expect(programOk("abstract class Shape { abstract area(): number; }")); }
+test "abstract" { assert programOk("abstract class Shape { abstract area(): number; }"); }
 
-test "getter setter" { expect(programOk("class Foo { get name() { return 1; } set name(v: string) { this.x = v; } }")); }
+test "getter setter" { assert programOk("class Foo { get name() { return 1; } set name(v: string) { this.x = v; } }"); }
 
-test "export class" { expect(programOk("export class Foo { x: number; }")); }
+test "export class" { assert programOk("export class Foo { x: number; }"); }
 
-test "async method" { expect(programOk("class Foo { async fetch() {} }")); }
+test "async method" { assert programOk("class Foo { async fetch() {} }"); }
 
-test "generator method" { expect(programOk("class Foo { *items() { yield 1; } }")); }
+test "generator method" { assert programOk("class Foo { *items() { yield 1; } }"); }
 // Complex
-test "multi members" { expect(programOk("class Point { x: number; y: number; toString() { return 1; } }")); }
+test "multi members" { assert programOk("class Point { x: number; y: number; toString() { return 1; } }"); }
 
-test "constructor public" { expect(programOk("class Foo { constructor(public name: string) { } }")); }
+test "constructor public" { assert programOk("class Foo { constructor(public name: string) { } }"); }
 // Generic classes — exercises skipGenericParams in context.ms
-test "generic class" { expect(programOk("class Container<T> { value: T; }")); }
+test "generic class" { assert programOk("class Container<T> { value: T; }"); }
 
-test "generic extends" { expect(programOk("class List<T> extends Base<T> {}")); }
+test "generic extends" { assert programOk("class List<T> extends Base<T> {}"); }
 
-test "multi generic" { expect(programOk("class Map<K, V> { lookup(k: K): V {} }")); }
+test "multi generic" { assert programOk("class Map<K, V> { lookup(k: K): V {} }"); }
 
-test "implements" { expect(programOk("class Foo implements Bar {}")); }
+test "implements" { assert programOk("class Foo implements Bar {}"); }

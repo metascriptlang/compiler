@@ -114,7 +114,7 @@ function flushLineSuffixes(state: LayoutState): void {
 // Simple greedy measurement: does the flat version of this doc fit in 'rem' space?
 function fitsOnOneLine(doc: Doc, rem: number): boolean {
 	if (rem < 0) return false;
-	
+
 	return match (doc.kind) {
 		DocKind.Nil => true,
 		DocKind.Text => {

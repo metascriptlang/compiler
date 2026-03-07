@@ -757,18 +757,18 @@ test "halt returns constant" {
 		],
 		[raiserInt(42)]
 	));
-	expect(vm.exitValue.intVal === 42);
+	assert vm.exitValue.intVal === 42;
 }
 
-test "add: 10 + 20 = 30" { expect(execBinOp(RaiserOpcode.AddI64, 10, 20).exitValue.intVal === 30); }
+test "add: 10 + 20 = 30" { assert execBinOp(RaiserOpcode.AddI64, 10, 20).exitValue.intVal === 30; }
 
-test "sub: 100 - 42 = 58" { expect(execBinOp(RaiserOpcode.SubI64, 100, 42).exitValue.intVal === 58); }
+test "sub: 100 - 42 = 58" { assert execBinOp(RaiserOpcode.SubI64, 100, 42).exitValue.intVal === 58; }
 
-test "mul: 6 * 7 = 42" { expect(execBinOp(RaiserOpcode.MulI64, 6, 7).exitValue.intVal === 42); }
+test "mul: 6 * 7 = 42" { assert execBinOp(RaiserOpcode.MulI64, 6, 7).exitValue.intVal === 42; }
 
-test "div: 84 / 2 = 42" { expect(execBinOp(RaiserOpcode.DivI64, 84, 2).exitValue.intVal === 42); }
+test "div: 84 / 2 = 42" { assert execBinOp(RaiserOpcode.DivI64, 84, 2).exitValue.intVal === 42; }
 
-test "mod: 17 % 5 = 2" { expect(execBinOp(RaiserOpcode.ModI64, 17, 5).exitValue.intVal === 2); }
+test "mod: 17 % 5 = 2" { assert execBinOp(RaiserOpcode.ModI64, 17, 5).exitValue.intVal === 2; }
 
 test "neg: -(7) = -7" {
 	const vm = execModule(makeTestModule(
@@ -779,7 +779,7 @@ test "neg: -(7) = -7" {
 		],
 		[raiserInt(7)]
 	));
-	expect(vm.exitValue.intVal === -7);
+	assert vm.exitValue.intVal === -7;
 }
 
 test "chained: (2 + 3) * 4 = 20" {
@@ -794,7 +794,7 @@ test "chained: (2 + 3) * 4 = 20" {
 		],
 		[raiserInt(2), raiserInt(3), raiserInt(4)]
 	));
-	expect(vm.exitValue.intVal === 20);
+	assert vm.exitValue.intVal === 20;
 }
 
 test "print captures output" {
@@ -806,7 +806,7 @@ test "print captures output" {
 		],
 		[raiserInt(42)]
 	));
-	expect(vm.output === "42\n");
+	assert vm.output === "42\n";
 }
 
 test "bgt: 10 > 5 → true branch" {
@@ -823,7 +823,7 @@ test "bgt: 10 > 5 → true branch" {
 		],
 		[raiserInt(10), raiserInt(5), raiserInt(1), raiserInt(0)]
 	));
-	expect(vm.exitValue.intVal === 1);
+	assert vm.exitValue.intVal === 1;
 }
 
 test "bgt: 3 > 5 → false branch" {
@@ -840,7 +840,7 @@ test "bgt: 3 > 5 → false branch" {
 		],
 		[raiserInt(3), raiserInt(5), raiserInt(1), raiserInt(0)]
 	));
-	expect(vm.exitValue.intVal === 0);
+	assert vm.exitValue.intVal === 0;
 }
 
 test "loop: sum 1..5 = 15" {
@@ -858,7 +858,7 @@ test "loop: sum 1..5 = 15" {
 		],
 		[raiserInt(0), raiserInt(1), raiserInt(5)]
 	));
-	expect(vm.exitValue.intVal === 15);
+	assert vm.exitValue.intVal === 15;
 }
 
 test "beq: equal values" {
@@ -873,7 +873,7 @@ test "beq: equal values" {
 		],
 		[raiserInt(7), raiserInt(1)]
 	));
-	expect(vm.exitValue.intVal === 1);
+	assert vm.exitValue.intVal === 1;
 }
 
 test "NewArray empty" {
@@ -884,7 +884,7 @@ test "NewArray empty" {
 		],
 		[]
 	));
-	expect(vm.exitValue.kind === RaiserValueKind.Array);
+	assert vm.exitValue.kind === RaiserValueKind.Array;
 }
 
 test "NewArray with elements + LoadIndex" {
@@ -899,7 +899,7 @@ test "NewArray with elements + LoadIndex" {
 		],
 		[raiserInt(10), raiserInt(20), raiserInt(1)]
 	));
-	expect(vm.exitValue.intVal === 20);
+	assert vm.exitValue.intVal === 20;
 }
 
 test "ArrayLen" {
@@ -914,7 +914,7 @@ test "ArrayLen" {
 		],
 		[raiserInt(1), raiserInt(2), raiserInt(3)]
 	));
-	expect(vm.exitValue.intVal === 3);
+	assert vm.exitValue.intVal === 3;
 }
 
 test "ArrayPush + ArrayLen" {
@@ -928,7 +928,7 @@ test "ArrayPush + ArrayLen" {
 		],
 		[raiserInt(42)]
 	));
-	expect(vm.exitValue.intVal === 1);
+	assert vm.exitValue.intVal === 1;
 }
 
 test "StoreIndex" {
@@ -944,7 +944,7 @@ test "StoreIndex" {
 		],
 		[raiserInt(0), raiserInt(0), raiserInt(99)]
 	));
-	expect(vm.exitValue.intVal === 99);
+	assert vm.exitValue.intVal === 99;
 }
 
 test "NewObject + StoreField + LoadField" {
@@ -958,7 +958,7 @@ test "NewObject + StoreField + LoadField" {
 		],
 		[raiserInt(42), raiserString("x")]
 	));
-	expect(vm.exitValue.intVal === 42);
+	assert vm.exitValue.intVal === 42;
 }
 
 test "multiple fields" {
@@ -974,7 +974,7 @@ test "multiple fields" {
 		],
 		[raiserInt(10), raiserInt(20), raiserString("x"), raiserString("y")]
 	));
-	expect(vm.exitValue.intVal === 20);
+	assert vm.exitValue.intVal === 20;
 }
 
 test "field update" {
@@ -990,7 +990,7 @@ test "field update" {
 		],
 		[raiserInt(1), raiserInt(99), raiserString("x")]
 	));
-	expect(vm.exitValue.intVal === 99);
+	assert vm.exitValue.intVal === 99;
 }
 
 test "ConcatStr: two strings" {
@@ -1003,7 +1003,7 @@ test "ConcatStr: two strings" {
 		],
 		[raiserString("hello"), raiserString(" world")]
 	));
-	expect(vm.exitValue.strVal === "hello world");
+	assert vm.exitValue.strVal === "hello world";
 }
 
 test "ConcatStr: int + string coercion" {
@@ -1016,7 +1016,7 @@ test "ConcatStr: int + string coercion" {
 		],
 		[raiserString("val: "), raiserInt(42)]
 	));
-	expect(vm.exitValue.strVal === "val: 42");
+	assert vm.exitValue.strVal === "val: 42";
 }
 
 test "EqStr: equal strings skip" {
@@ -1031,7 +1031,7 @@ test "EqStr: equal strings skip" {
 		],
 		[raiserString("abc"), raiserInt(1), raiserInt(0)]
 	));
-	expect(vm.exitValue.intVal === 1);
+	assert vm.exitValue.intVal === 1;
 }
 
 test "EqStr: unequal strings no skip" {
@@ -1046,7 +1046,7 @@ test "EqStr: unequal strings no skip" {
 		],
 		[raiserString("abc"), raiserString("def"), raiserInt(1), raiserInt(0)]
 	));
-	expect(vm.exitValue.intVal === 0);
+	assert vm.exitValue.intVal === 0;
 }
 
 test "NeStr: unequal strings skip" {
@@ -1061,7 +1061,7 @@ test "NeStr: unequal strings skip" {
 		],
 		[raiserString("abc"), raiserString("def"), raiserInt(1), raiserInt(0)]
 	));
-	expect(vm.exitValue.intVal === 1);
+	assert vm.exitValue.intVal === 1;
 }
 
 test "StrLen: string length" {
@@ -1073,7 +1073,7 @@ test "StrLen: string length" {
 		],
 		[raiserString("hello")]
 	));
-	expect(vm.exitValue.intVal === 5);
+	assert vm.exitValue.intVal === 5;
 }
 
 test "StrCharAt: get character" {
@@ -1086,7 +1086,7 @@ test "StrCharAt: get character" {
 		],
 		[raiserString("hello"), raiserInt(1)]
 	));
-	expect(vm.exitValue.strVal === "e");
+	assert vm.exitValue.strVal === "e";
 }
 
 test "StrSlice: substring" {
@@ -1100,7 +1100,7 @@ test "StrSlice: substring" {
 		],
 		[raiserString("hello world"), raiserInt(0), raiserInt(5)]
 	));
-	expect(vm.exitValue.strVal === "hello");
+	assert vm.exitValue.strVal === "hello";
 }
 
 test "StrLen: empty string" {
@@ -1112,7 +1112,7 @@ test "StrLen: empty string" {
 		],
 		[raiserString("")]
 	));
-	expect(vm.exitValue.intVal === 0);
+	assert vm.exitValue.intVal === 0;
 }
 
 test "CallIndirect basic" {
@@ -1136,7 +1136,7 @@ test "CallIndirect basic" {
 	const funcs: RaiserFunction[] = [f0, entry];
 	const mod = createRaiserModule("test", funcs, 1);
 	const vm = execModule(mod);
-	expect(vm.exitValue.intVal === 42);
+	assert vm.exitValue.intVal === 42;
 }
 
 test "CallIndirect with args" {
@@ -1162,7 +1162,7 @@ test "CallIndirect with args" {
 	const funcs: RaiserFunction[] = [f0, entry];
 	const mod = createRaiserModule("test", funcs, 1);
 	const vm = execModule(mod);
-	expect(vm.exitValue.intVal === 30);
+	assert vm.exitValue.intVal === 30;
 }
 
 test "CallIndirect return value" {
@@ -1188,7 +1188,7 @@ test "CallIndirect return value" {
 	const funcs: RaiserFunction[] = [f0, entry];
 	const mod = createRaiserModule("test", funcs, 1);
 	const vm = execModule(mod);
-	expect(vm.exitValue.intVal === 42);
+	assert vm.exitValue.intVal === 42;
 }
 
 test "two objects bidirectional link in function" {
@@ -1218,7 +1218,7 @@ test "two objects bidirectional link in function" {
 	const funcs: RaiserFunction[] = [mk, entry];
 	const mod = createRaiserModule("test", funcs, 1);
 	const vm = execModule(mod);
-	expect(vm.exitValue.intVal === 5);
+	assert vm.exitValue.intVal === 5;
 }
 
 // --- Phase 5: Safety & Diagnostics tests ---
@@ -1254,8 +1254,8 @@ test "budget exceeded stops VM" {
 			vm.exitValue = getReg(vm, vm.baseReg + inst.a);
 		}
 	}
-	expect(vm.error !== "");
-	expect(vm.opCount === 101);
+	assert vm.error !== "";
+	assert vm.opCount === 101;
 }
 
 test "unknown opcode sets error" {
@@ -1266,7 +1266,7 @@ test "unknown opcode sets error" {
 	];
 	const consts: RaiserValue[] = [];
 	const vm = execModule(makeTestModule(code, consts));
-	expect(vm.error !== "");
+	assert vm.error !== "";
 }
 
 test "stack trace with function calls" {
@@ -1288,10 +1288,10 @@ test "stack trace with function calls" {
 	const funcs: RaiserFunction[] = [inner, main];
 	const mod = createRaiserModule("test", funcs, 1);
 	const vm = execModule(mod);
-	expect(vm.exitValue.intVal === 42);
+	assert vm.exitValue.intVal === 42;
 	// The VM halted inside inner — stack trace should show the call chain
 	const trace = vmDumpStack(vm);
-	expect(trace.length > 0);
+	assert trace.length > 0;
 }
 
 test "builtin readFile reads package.json" {
@@ -1303,9 +1303,9 @@ test "builtin readFile reads package.json" {
 	];
 	const consts: RaiserValue[] = [raiserString("package.json")];
 	const vm = execModule(makeTestModule(code, consts));
-	expect(vm.error === "");
-	expect(vm.exitValue.kind === RaiserValueKind.String);
-	expect(vm.exitValue.strVal.length > 0);
+	assert vm.error === "";
+	assert vm.exitValue.kind === RaiserValueKind.String;
+	assert vm.exitValue.strVal.length > 0;
 }
 
 test "builtin readFile missing file returns empty" {
@@ -1316,13 +1316,13 @@ test "builtin readFile missing file returns empty" {
 	];
 	const consts: RaiserValue[] = [raiserString("/tmp/__nonexistent_file_12345__")];
 	const vm = execModule(makeTestModule(code, consts));
-	expect(vm.error === "");
-	expect(vm.exitValue.strVal === "");
+	assert vm.error === "";
+	assert vm.exitValue.strVal === "";
 }
 
 test "instruction line field preserved" {
 	const inst = raiserABC(RaiserOpcode.AddI64, 0, 1, 2);
-	expect(inst.line === 0);
+	assert inst.line === 0;
 	inst.line = 42;
-	expect(inst.line === 42);
+	assert inst.line === 42;
 }

@@ -51,16 +51,16 @@ function innerExprKindAfterUpdate(input: string): NodeKind {
 }
 
 // ===== Tests =====
-test "x++ becomes assignment" { expect(innerExprKindAfterUpdate("x++;") === NodeKind.BinaryExpr); }
+test "x++ becomes assignment" { assert innerExprKindAfterUpdate("x++;") === NodeKind.BinaryExpr; }
 
-test "--x becomes assignment" { expect(innerExprKindAfterUpdate("--x;") === NodeKind.BinaryExpr); }
+test "--x becomes assignment" { assert innerExprKindAfterUpdate("--x;") === NodeKind.BinaryExpr; }
 
-test "x-- becomes assignment" { expect(innerExprKindAfterUpdate("x--;") === NodeKind.BinaryExpr); }
+test "x-- becomes assignment" { assert innerExprKindAfterUpdate("x--;") === NodeKind.BinaryExpr; }
 
-test "++x becomes assignment" { expect(innerExprKindAfterUpdate("++x;") === NodeKind.BinaryExpr); }
+test "++x becomes assignment" { assert innerExprKindAfterUpdate("++x;") === NodeKind.BinaryExpr; }
 
-test "non-update ExprStmt unchanged" { expect(firstExprKindAfter("f();", lowerUpdateExpr) === NodeKind.CallExpr); }
+test "non-update ExprStmt unchanged" { assert firstExprKindAfter("f();", lowerUpdateExpr) === NodeKind.CallExpr; }
 
-test "while unchanged" { expect(firstStmtKindAfter("while (true) {}", lowerUpdateExpr) === NodeKind.WhileStmt); }
+test "while unchanged" { assert firstStmtKindAfter("while (true) {}", lowerUpdateExpr) === NodeKind.WhileStmt; }
 
-test "stmt count preserved" { expect(stmtCountAfter("let a = 1; let b = 2;", lowerUpdateExpr) === 2); }
+test "stmt count preserved" { assert stmtCountAfter("let a = 1; let b = 2;", lowerUpdateExpr) === 2; }
