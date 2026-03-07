@@ -70,7 +70,7 @@ static inline void msRememberCycle(bool isDestroy, void* p, const msTypeInfo* de
 		}
 	} else {
 		/* Register if: not yet registered AND type is cyclic (has trace) */
-		if (h->rootIdx < 0 && desc != NULL && desc->trace != NULL) {
+		if (h->rootIdx < 0 && desc != NULL && desc->traceFn != NULL) {
 			h->rc = (h->rc & ~MS_COLOR_MASK) | MS_COL_BLACK;
 			msRegisterCycle(p, desc);
 		}
@@ -114,8 +114,15 @@ static inline void msMarkMaybeCycle(void* p) {
 /* Run full cycle collection (Bacon's 3-phase algorithm) */
 void msOrcCollect(void);
 
-/* Trace callback: called by type-specific trace functions.
- * Registers a child reference for cycle detection. */
+/* GcEnv — passed as env through all trace hooks (Nim parity: GcEnv in orc.nim).
+ * Trace hooks push child refs to traceStack; collector drains iteratively. */
+typedef struct {
+	msCellSeq traceStack;
+	msCellSeq toFree;
+} msGcEnv;
+
+/* Trace ref: called by generated trace hooks to register a child ref.
+ * Pushes (child, child->type) onto env->traceStack. No recursion. */
 void msOrcTraceRef(void* child, void* env);
 
 /* ===== ORC Diagnostics (behind MS_ORC_STATS) ===== */
@@ -126,6 +133,7 @@ extern int32_t msFreedCyclicObjects;
 #else /* !MS_ORC — plain ARC mode, no cycle collection */
 
 static inline void msOrcCollect(void) {}
+static inline void msOrcTraceRef(void* child, void* env) { (void)child; (void)env; }
 
 #endif /* MS_ORC */
 

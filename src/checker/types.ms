@@ -685,7 +685,7 @@ export function getReturnType(t: Type): Type {
 }
 
 export function getElementType(t: Type): Type {
-	if (t.kind === TypeKind.Array || t.kind === TypeKind.SizedArray || t.kind === TypeKind.Span) return t.typeReturn;
+	if (t.kind === TypeKind.Array || t.kind === TypeKind.SizedArray || t.kind === TypeKind.Span || t.kind === TypeKind.Ptr) return t.typeReturn;
 	return unknownType();
 }
 

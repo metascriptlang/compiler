@@ -120,7 +120,7 @@ function transformFunction(node: Node): void {
 // Walk the function body and wrap Identifier nodes that match pointer params
 // with HiddenDeref. Does NOT recurse into nested FunctionDecl/ArrowFunction
 // (those have their own scope).
-function wrapBodyIdentifiers(node: Node, ptrParams: string[]): void {
+export function wrapBodyIdentifiers(node: Node, ptrParams: string[]): void {
 	if (node === null) return;
 
 	match (node.kind) {

@@ -335,10 +335,17 @@ function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
 		"&&" | "||" => leftType,
 		"+" => {
 			if (isStringType(leftType) || isStringType(rightType)) return stringType();
+			if (leftType !== null && leftType.kind === TypeKind.Ptr) return leftType;
+			if (rightType !== null && rightType.kind === TypeKind.Ptr) return rightType;
 			if (isNumeric(leftType) && isNumeric(rightType)) return numberType();
 			unknownType();
 		},
-		"-" | "*" | "/" | "%" | "**" => numberType(),
+		"-" => {
+			if (leftType !== null && leftType.kind === TypeKind.Ptr && rightType !== null && rightType.kind === TypeKind.Ptr) return numberType();
+			if (leftType !== null && leftType.kind === TypeKind.Ptr) return leftType;
+			numberType();
+		},
+		"*" | "/" | "%" | "**" => numberType(),
 		"&" | "|" | "^" | "<<" | ">>" | ">>>" => numberType(),
 		"??" => leftType,
 		_ => unknownType(),
@@ -899,25 +906,32 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 		node.nodeType = objType;
 		return objType;
 	}
-	// Insert HiddenDeref for pointer types (class, ref, ptr) — generates (*obj).field in C
-	if (isPointerInC(objType, ctx)) {
-		const tok = createToken(TokenKind.Ident, "", node.location.line);
-		const derefNode = createNode(NodeKind.HiddenDeref, { expr: d.object }, tok);
-		derefNode.nodeType = objType ;
-		d.object = derefNode;
+	// Nim parity: strip Ref/Ptr BEFORE field resolution, insert deref AFTER
+	// Nim: skipTypes(ty, {tyRef, tyPtr, ...}) → lookup field → makeDeref
+	const needsDeref = isPointerInC(objType, ctx);
+	let resolvedObjType = objType;
+	if (needsDeref && objType.typeReturn !== null) {
+		resolvedObjType = objType.typeReturn;
 	}
-	const propType = getProperty(objType, d.property);
+	const propType = getProperty(resolvedObjType, d.property);
 	// Result fields: ok, value, error — synthetic symbol (no typeName on Result)
-	if (objType.kind === TypeKind.Result && propType.kind !== TypeKind.Unknown) {
+	if (resolvedObjType.kind === TypeKind.Result && propType.kind !== TypeKind.Unknown) {
 		const resultPropSym = makeSymbol(d.property, SymbolKind.Property, propType, false);
 		resultPropSym.state = SymbolState.Shaped;
 		node.resolvedSym = resultPropSym;
 		return propType;
 	}
 	if (propType.kind !== TypeKind.Unknown) {
+		// Nim parity: insert HiddenDeref AFTER field resolution succeeds
+		if (needsDeref) {
+			const tok = createToken(TokenKind.Ident, "", node.location.line);
+			const derefNode = createNode(NodeKind.HiddenDeref, { expr: d.object }, tok);
+			derefNode.nodeType = resolvedObjType;
+			d.object = derefNode;
+		}
 		// Resolve property symbol: search symbol table for ClassName_propName
-		if (objType.typeName !== "") {
-			const propSymName = objType.typeName + "_" + d.property;
+		if (resolvedObjType.typeName !== "") {
+			const propSymName = resolvedObjType.typeName + "_" + d.property;
 			const propSym = lookupSymbol(ctx.table, propSymName);
 			if (propSym !== null) {
 				ensureShaped(propSym, ctx);
@@ -926,15 +940,15 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 				// Search within the object type's own members if not found in top-level table
 				// (e.g. for members of classes defined in the same module)
 				let mi = 0;
-				for (const mName of objType.typeNames) {
+				for (const mName of resolvedObjType.typeNames) {
 					if (mName === d.property) {
 						// Create a synthetic symbol for this member to satisfy the validator
-						const synthSym = makeSymbol(mName, SymbolKind.Method, objType.typeChildren[mi], false);
+						const synthSym = makeSymbol(mName, SymbolKind.Method, resolvedObjType.typeChildren[mi], false);
 						synthSym.state = SymbolState.Shaped;
 						// Transfer nativeName metadata from Type to Symbol
 						// (collectPass stores nativeName in Type.typeName for class methods)
-						if (objType.typeChildren[mi].typeName !== "") {
-							synthSym.nativeName = objType.typeChildren[mi].typeName;
+						if (resolvedObjType.typeChildren[mi].typeName !== "") {
+							synthSym.nativeName = resolvedObjType.typeChildren[mi].typeName;
 						}
 						node.resolvedSym = synthSym;
 						break;
@@ -947,7 +961,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 	}
 
 	// Builtin properties: .length on array/string
-	if (d.property === "length" && (objType.kind === TypeKind.Array || objType.kind === TypeKind.String || objType.kind === TypeKind.CString)) {
+	if (d.property === "length" && (resolvedObjType.kind === TypeKind.Array || resolvedObjType.kind === TypeKind.String || resolvedObjType.kind === TypeKind.CString)) {
 		// Create a synthetic symbol for 'length' to satisfy the validator
 		const lengthSym = makeSymbol("length", SymbolKind.Property, numberType(), false);
 		lengthSym.state = SymbolState.Shaped;
@@ -955,21 +969,21 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 		return numberType();
 	}
 	// String .code — compile-time char code, folded by constantFolding transform
-	if (d.property === "code" && objType.kind === TypeKind.String) {
+	if (d.property === "code" && resolvedObjType.kind === TypeKind.String) {
 		const codeSym = makeSymbol("code", SymbolKind.Property, numberType(), false);
 		codeSym.state = SymbolState.Shaped;
 		node.resolvedSym = codeSym;
 		return numberType();
 	}
 	// String-specific properties: .byteLength, .unicodeLength
-	if ((d.property === "byteLength" || d.property === "unicodeLength") && objType.kind === TypeKind.String) {
+	if ((d.property === "byteLength" || d.property === "unicodeLength") && resolvedObjType.kind === TypeKind.String) {
 		const propSym = makeSymbol(d.property, SymbolKind.Property, numberType(), false);
 		propSym.state = SymbolState.Shaped;
 		node.resolvedSym = propSym;
 		return numberType();
 	}
 	// Map properties and methods
-	if (objType.kind === TypeKind.Map) {
+	if (resolvedObjType.kind === TypeKind.Map) {
 		if (d.property === "size") {
 			const sizeSym = makeSymbol("size", SymbolKind.Property, numberType(), false);
 			sizeSym.state = SymbolState.Shaped;
@@ -977,8 +991,8 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 			return numberType();
 		}
 		// Map methods: get, set, has, delete, clear → function types
-		const valType = objType.typeExtra !== null ? objType.typeExtra : unknownType();
-		const keyType = objType.typeReturn !== null ? objType.typeReturn : unknownType();
+		const valType = resolvedObjType.typeExtra !== null ? resolvedObjType.typeExtra : unknownType();
+		const keyType = resolvedObjType.typeReturn !== null ? resolvedObjType.typeReturn : unknownType();
 		let methodType: Type = null as unknown as Type;
 		if (d.property === "get") {
 			methodType = createFunction([keyType], ["key"], valType);
@@ -999,14 +1013,14 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 		}
 	}
 	// Set properties and methods
-	if (objType.kind === TypeKind.Set) {
+	if (resolvedObjType.kind === TypeKind.Set) {
 		if (d.property === "size") {
 			const sizeSym = makeSymbol("size", SymbolKind.Property, numberType(), false);
 			sizeSym.state = SymbolState.Shaped;
 			node.resolvedSym = sizeSym;
 			return numberType();
 		}
-		const elemType = objType.typeReturn !== null ? objType.typeReturn : unknownType();
+		const elemType = resolvedObjType.typeReturn !== null ? resolvedObjType.typeReturn : unknownType();
 		let methodType: Type = null as unknown as Type;
 		if (d.property === "has") {
 			methodType = createFunction([elemType], ["value"], booleanType());

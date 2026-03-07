@@ -83,29 +83,55 @@ void msThrow(msString msg);
 #define msStringWasMoved(s)   do { (s).len = 0; (s).p = NULL; } while(0)
 #define msStringSink(d, s)    do { msStringDestroy(d); (d) = (s); } while(0)
 
-/* --- Number array lifecycle --- */
-#define msArrayDestroy(arr)            msNumberArrayDestroy(&(arr))
-#define msArrayCopy(arr)               /* TODO: deep copy */
-#define msArrayNumberWasMoved(arr)     do { (arr).len = 0; (arr).p = NULL; } while(0)
-#define msArrayNumberSink(d, s)        do { msNumberArrayDestroy(&(d)); (d) = (s); } while(0)
+/* --- Array lifecycle (unified) --- */
+/* Payload-only free — inline loops handle per-element cleanup (Nim parity: fillSeqOp) */
+#define msArrayDestroy(arr)            do { if ((arr).p) { free((arr).p); (arr).p = NULL; } (arr).len = 0; } while(0)
+#define msArrayWasMoved(arr)           do { (arr).len = 0; (arr).p = NULL; } while(0)
+#define msArrayCopy(arr)               /* primitive: bitwise copy handled by assignment */
+#define msArraySetLen(d, s)            msArraySetLenGeneric(&(d), (s).len, sizeof((s).p->data[0]))
 
-/* --- String array lifecycle --- */
+/* --- Legacy aliases (used by classify.ms for DRC injection layer) --- */
+#define msArrayNumberWasMoved(arr)     msArrayWasMoved(arr)
+#define msArrayNumberSink(d, s)        do { msArrayDestroy(d); (d) = (s); } while(0)
 #define msArrayStringDestroy(arr)      msStringArrayDestroy(&(arr))
-#define msArrayStringCopy(arr)         /* TODO: deep copy with per-element string copy */
-#define msArrayStringWasMoved(arr)     do { (arr).len = 0; (arr).p = NULL; } while(0)
-#define msArrayStringSink(d, s)        do { msStringArrayDestroy(&(d)); (d) = (s); } while(0)
-
-/* --- Uint8 array lifecycle --- */
-#define msArrayUint8Destroy(arr)       msUint8ArrayDestroy(&(arr))
-#define msArrayUint8Copy(arr)          /* TODO: deep copy */
-#define msArrayUint8WasMoved(arr)      do { (arr).len = 0; (arr).p = NULL; } while(0)
-#define msArrayUint8Sink(d, s)         do { msUint8ArrayDestroy(&(d)); (d) = (s); } while(0)
-
-/* --- Ref array lifecycle --- */
+#define msArrayStringCopy(d, s)        do { \
+	msStringArrayDestroy(&(d)); \
+	(d).len = (s).len; \
+	if ((s).p) { \
+		size_t _asc_sz = sizeof(msStringPayload) + (size_t)(s).p->cap * sizeof(msString); \
+		(d).p = (msStringPayload*)malloc(_asc_sz); \
+		(d).p->cap = (s).p->cap; \
+		for (int64_t _asc_i = 0; _asc_i < (s).len; _asc_i++) { \
+			(d).p->data[_asc_i] = (s).p->data[_asc_i]; \
+			msStringIncref((d).p->data[_asc_i]); \
+		} \
+	} else { (d).p = NULL; } \
+} while(0)
+#define msArrayStringWasMoved(arr)     msArrayWasMoved(arr)
+#define msArrayStringSink(d, s)        do { msArrayDestroy(d); (d) = (s); } while(0)
 #define msArrayRefDestroy(arr)         msRefArrayDestroy(&(arr))
-#define msArrayRefCopy(arr)            /* TODO: deep copy with per-element msIncRef */
-#define msArrayRefWasMoved(arr)        do { (arr).len = 0; (arr).p = NULL; } while(0)
-#define msArrayRefTrace(arr)           /* TODO: ORC trace */
+#define msArrayRefCopy(d, s)           do { \
+	msRefArrayDestroy(&(d)); \
+	(d).len = (s).len; \
+	if ((s).p) { \
+		size_t _arc_sz = sizeof(msRefPayload) + (size_t)(s).p->cap * sizeof(void*); \
+		(d).p = (msRefPayload*)malloc(_arc_sz); \
+		(d).p->cap = (s).p->cap; \
+		for (int64_t _arc_i = 0; _arc_i < (s).len; _arc_i++) { \
+			(d).p->data[_arc_i] = (s).p->data[_arc_i]; \
+			if ((d).p->data[_arc_i]) msIncRef((d).p->data[_arc_i]); \
+		} \
+	} else { (d).p = NULL; } \
+} while(0)
+#define msArrayRefTrace(arr, cb)       do { \
+	for (int64_t _art_i = 0; _art_i < (arr).len && (arr).p; _art_i++) { \
+		if ((arr).p->data[_art_i]) ((void(*)(void*))(cb))((arr).p->data[_art_i]); \
+	} \
+} while(0)
+#define msArrayRefWasMoved(arr)        msArrayWasMoved(arr)
+#define msArrayUint8Destroy(arr)       msUint8ArrayDestroy(&(arr))
+#define msArrayUint8WasMoved(arr)      msArrayWasMoved(arr)
+#define msArrayUint8Sink(d, s)         do { msArrayDestroy(d); (d) = (s); } while(0)
 
 /* --- Ref/Ptr lifecycle (generic heap objects) --- */
 #define msIncref(p)           msIncRef(p)
@@ -138,7 +164,7 @@ void msThrow(msString msg);
 #define msClosureCopy(c)      do { if ((c).env != NULL) msIncRef((c).env); } while(0)
 #define msClosureWasMoved(c)  do { (c).fn = NULL; (c).env = NULL; } while(0)
 #define msClosureSink(d, s)   do { msClosureDestroy(d); (d) = (s); } while(0)
-#define msClosureTrace(c)     /* TODO: ORC trace */
+#define msClosureTrace(c, _env) do { if ((c).env != NULL) msOrcTraceRef((c).env, (_env)); } while(0)
 
 /* --- Map lifecycle --- */
 /* DRC emits these as fn(varName) — macros handle address-of */

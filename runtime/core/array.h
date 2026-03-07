@@ -88,6 +88,18 @@ void* msArrayPrepareAdd(int64_t len, void* p, int64_t addLen, int64_t elemSize);
 /* Grow without zeroing */
 void* msArrayPrepareAddUninit(int64_t len, void* p, int64_t addLen, int64_t elemSize);
 
+/* Allocate dest to match src length (Nim parity: setLen for copy) */
+static inline void msArraySetLenGeneric(void* dest, int64_t srcLen, int64_t elemSize) {
+	msRawArray* d = (msRawArray*)dest;
+	if (d->p) { free(d->p); }
+	if (srcLen > 0) {
+		d->p = msArrayPayloadNew(srcLen, elemSize);
+	} else {
+		d->p = NULL;
+	}
+	d->len = srcLen;
+}
+
 /* Raw pointer compare */
 bool msArraySamePayload(void* a, void* b);
 

@@ -66,9 +66,9 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink");
 	}
 	if (elem.kind === TypeKind.String) {
-		return makeRcInfo(RcKind.Array, "", "msArrayStringDestroy", "msArrayStringCopy", "msArrayStringWasMoved", "msArrayStringSink");
+		return makeRcInfo(RcKind.Named, "", "msSeqString_destroy", "msSeqString_copy", "msSeqString_wasMoved", "msSeqString_sink");
 	}
-	return makeRcInfo(RcKind.Array, "", "msArrayRefDestroy", "msArrayRefCopy", "msArrayRefWasMoved", "msArrayRefCopy");
+	return makeRcInfo(RcKind.Named, "", "msSeqRef_destroy", "msSeqRef_copy", "msSeqRef_wasMoved", "msSeqRef_sink");
 }
 
 // ===== Sub-classifiers for complex arms =====
@@ -236,11 +236,11 @@ test "array of number → Array" {
 	assert info.destroyFn === "msArrayDestroy";
 }
 
-test "array of string → Array (string variant)" {
+test "array of string → Named (standalone procs)" {
 	const ctx = createTransformContext();
 	const info = classifyType(createArray(stringType()), ctx);
-	assert info.rcKind === RcKind.Array;
-	assert info.destroyFn === "msArrayStringDestroy";
+	assert info.rcKind === RcKind.Named;
+	assert info.destroyFn === "msSeqString_destroy";
 }
 
 test "function → Closure" {

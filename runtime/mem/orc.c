@@ -115,99 +115,99 @@ static inline void incCount(msRefHeader* h) {
 	h->rc += MS_RC_INCREMENT;
 }
 
-/* ===== Phase 1: Mark Gray ===== */
-/* Tentatively decrement all children of gray suspects. */
+/* ===== Trace Ref (Nim parity: nimTraceRefDyn) ===== */
+/* Called by generated trace hooks. Pushes child to traceStack. No recursion. */
 
-static void markGrayCallback(void* child, void* env) {
-	(void)env;
-	if (child == NULL) return;
-	msRefHeader* h = msHeader(child);
-	decCount(h);
-	if (getColor(h) != MS_COL_GRAY) {
-		setColor(h, MS_COL_GRAY);
-		/* Recursively trace children */
-		if (h->type != NULL && h->type->traceFn != NULL) {
-			h->type->traceFn(child, NULL);
-		}
+void msOrcTraceRef(void* child, void* env) {
+	if (child == NULL || env == NULL) return;
+	msGcEnv* j = (msGcEnv*)env;
+	msCell cell = { child, msHeader(child)->type };
+	msCellSeqPush(&j->traceStack, cell);
+}
+
+/* ===== Helper: call type's trace hook ===== */
+
+static inline void msTrace(void* p, const msTypeInfo* type, msGcEnv* j) {
+	if (type != NULL && type->traceFn != NULL) {
+		type->traceFn(p, j);
 	}
 }
 
-static void markGray(void* p, const msTypeInfo* type) {
+/* ===== Phase 1: Mark Gray (Nim parity: orc.nim:183-216) ===== */
+/* Tentatively decrement all children of gray suspects. Iterative via traceStack. */
+
+static void markGray(msGcEnv* j, void* p, const msTypeInfo* type) {
 	if (p == NULL) return;
 	msRefHeader* h = msHeader(p);
+	if (getColor(h) == MS_COL_GRAY) return;
 	setColor(h, MS_COL_GRAY);
-	if (type != NULL && type->traceFn != NULL) {
-		type->traceFn(p, (void*)markGrayCallback);
-	}
-}
-
-/* ===== Phase 2: Scan ===== */
-/* If rc > 0 after tentative decrements, restore to black. */
-/* Otherwise, mark white (garbage). */
-
-static void scanBlackCallback(void* child, void* env) {
-	(void)env;
-	if (child == NULL) return;
-	msRefHeader* h = msHeader(child);
-	incCount(h);
-	if (getColor(h) != MS_COL_BLACK) {
-		setColor(h, MS_COL_BLACK);
-		if (h->type != NULL && h->type->traceFn != NULL) {
-			h->type->traceFn(child, (void*)scanBlackCallback);
+	msTrace(p, type, j);
+	while (j->traceStack.len > 0) {
+		msCell entry = j->traceStack.data[--j->traceStack.len];
+		msRefHeader* ch = msHeader(entry.ptr);
+		decCount(ch);
+		if (getColor(ch) != MS_COL_GRAY) {
+			setColor(ch, MS_COL_GRAY);
+			msTrace(entry.ptr, entry.type, j);
 		}
 	}
 }
 
-static void scan(void* p, const msTypeInfo* type) {
+/* ===== Phase 2: Scan (Nim parity: orc.nim:161-181, 218-278) ===== */
+
+static void scanBlack(msGcEnv* j, void* p, const msTypeInfo* type) {
+	setColor(msHeader(p), MS_COL_BLACK);
+	int32_t until = j->traceStack.len;
+	msTrace(p, type, j);
+	while (j->traceStack.len > until) {
+		msCell entry = j->traceStack.data[--j->traceStack.len];
+		msRefHeader* ch = msHeader(entry.ptr);
+		incCount(ch);
+		if (getColor(ch) != MS_COL_BLACK) {
+			setColor(ch, MS_COL_BLACK);
+			msTrace(entry.ptr, entry.type, j);
+		}
+	}
+}
+
+static void scan(msGcEnv* j, void* p, const msTypeInfo* type) {
 	if (p == NULL) return;
 	msRefHeader* h = msHeader(p);
 	if (getColor(h) != MS_COL_GRAY) return;
 
 	if (getCount(h) > 0) {
-		/* Still has external references — not garbage */
-		setColor(h, MS_COL_BLACK);
-		if (type != NULL && type->traceFn != NULL) {
-			type->traceFn(p, (void*)scanBlackCallback);
-		}
+		scanBlack(j, p, type);
 	} else {
-		/* Unreachable from outside the cycle — mark white */
 		setColor(h, MS_COL_WHITE);
-		if (type != NULL && type->traceFn != NULL) {
-			type->traceFn(p, NULL);
+		msTrace(p, type, j);
+		while (j->traceStack.len > 0) {
+			msCell entry = j->traceStack.data[--j->traceStack.len];
+			scan(j, entry.ptr, entry.type);
 		}
 	}
 }
 
-/* ===== Phase 3: Collect White ===== */
-/* Collect white objects into a free list, then destroy+dispose. */
+/* ===== Phase 3: Collect White (Nim parity: orc.nim:285-309) ===== */
 
-static msCellSeq toFree;
-
-static void collectWhiteCallback(void* child, void* env) {
-	(void)env;
-	if (child == NULL) return;
-	msRefHeader* h = msHeader(child);
-	if (getColor(h) == MS_COL_WHITE) {
-		setColor(h, MS_COL_BLACK);
-		if (h->type != NULL && h->type->traceFn != NULL) {
-			h->type->traceFn(child, (void*)collectWhiteCallback);
-		}
-		msCell cell = { child, h->type };
-		msCellSeqPush(&toFree, cell);
-	}
-}
-
-static void collectWhite(void* p, const msTypeInfo* type) {
+static void collectWhite(msGcEnv* j, void* p, const msTypeInfo* type) {
 	if (p == NULL) return;
 	msRefHeader* h = msHeader(p);
-	if (getColor(h) != MS_COL_WHITE) return;
+	if (getColor(h) != MS_COL_WHITE || h->rootIdx != 0) return;
 
 	setColor(h, MS_COL_BLACK);
-	if (type != NULL && type->traceFn != NULL) {
-		type->traceFn(p, (void*)collectWhiteCallback);
-	}
 	msCell cell = { p, type };
-	msCellSeqPush(&toFree, cell);
+	msCellSeqPush(&j->toFree, cell);
+	msTrace(p, type, j);
+	while (j->traceStack.len > 0) {
+		msCell entry = j->traceStack.data[--j->traceStack.len];
+		msRefHeader* ch = msHeader(entry.ptr);
+		if (getColor(ch) == MS_COL_WHITE && ch->rootIdx == 0) {
+			setColor(ch, MS_COL_BLACK);
+			msCell child = { entry.ptr, entry.type };
+			msCellSeqPush(&j->toFree, child);
+			msTrace(entry.ptr, entry.type, j);
+		}
+	}
 }
 
 /* ===== Main Collection Entry Point ===== */
@@ -215,20 +215,23 @@ static void collectWhite(void* p, const msTypeInfo* type) {
 void msOrcCollect(void) {
 	if (msRoots.len == 0) return;
 
+	msGcEnv j;
+	msCellSeqInit(&j.traceStack);
+	msCellSeqInit(&j.toFree);
+
 	/* Phase 1: Mark all roots gray, tentatively decrement children */
 	for (int32_t i = 0; i < msRoots.len; i++) {
-		markGray(msRoots.data[i].ptr, msRoots.data[i].type);
+		markGray(&j, msRoots.data[i].ptr, msRoots.data[i].type);
 	}
 
 	/* Phase 2: Scan — restore live objects to black, mark garbage white */
 	for (int32_t i = 0; i < msRoots.len; i++) {
-		scan(msRoots.data[i].ptr, msRoots.data[i].type);
+		scan(&j, msRoots.data[i].ptr, msRoots.data[i].type);
 	}
 
 	/* Phase 3: Collect white objects */
-	msCellSeqInit(&toFree);
 	for (int32_t i = 0; i < msRoots.len; i++) {
-		collectWhite(msRoots.data[i].ptr, msRoots.data[i].type);
+		collectWhite(&j, msRoots.data[i].ptr, msRoots.data[i].type);
 	}
 
 	/* Clear rootIdx on all root objects before freeing */
@@ -238,63 +241,45 @@ void msOrcCollect(void) {
 		h->rootIdx = -1;
 	}
 
-	/* Protect against re-entrancy: destructors may trigger registerCycle.
-	 * Set threshold to max so no collection is triggered during free.
-	 /* Implementation parity: reference implementation tracing logic */
+	/* Protect against re-entrancy: destructors may trigger registerCycle */
 	int32_t oldThreshold = msRootsThreshold;
 	msRootsThreshold = INT32_MAX;
 	msRoots.len = 0;
 
 	/* Destroy and free collected objects */
-	int32_t freed = toFree.len;
-	for (int32_t i = 0; i < toFree.len; i++) {
-		void* p = toFree.data[i].ptr;
-		const msTypeInfo* type = toFree.data[i].type;
-		/* Unregister from roots (if somehow still registered) */
+	int32_t freed = j.toFree.len;
+	for (int32_t i = 0; i < j.toFree.len; i++) {
+		void* p = j.toFree.data[i].ptr;
+		const msTypeInfo* type = j.toFree.data[i].type;
 		msRefHeader* h = msHeader(p);
 		h->rootIdx = -1;
-		/* Run destructor */
 		if (type != NULL && type->destroyFn != NULL) {
 			type->destroyFn(p);
 		}
-		/* Free memory */
 		msDestroyAndDispose(p);
 	}
 
 	/* Restore threshold */
 	msRootsThreshold = oldThreshold;
-	msCellSeqFree(&toFree);
+	msCellSeqFree(&j.traceStack);
+	msCellSeqFree(&j.toFree);
 
 #ifdef MS_ORC_STATS
 	msFreedCyclicObjects += freed;
 #endif
 
-	/* Adaptive threshold: increase if <50% freed, decrease otherwise
-	 /* Implementation parity: reference implementation cycle collection logic */
+	/* Adaptive threshold */
 	if (rootCount > 0) {
 		if (freed * 2 < rootCount) {
-			/* Most objects survived — increase threshold */
 			if (msRootsThreshold < 16384) {
 				msRootsThreshold = msRootsThreshold * 3 / 2;
 			}
 		} else {
-			/* Good collection ratio — decrease threshold towards default */
 			if (msRootsThreshold > 128) {
 				msRootsThreshold = msRootsThreshold * 2 / 3;
 				if (msRootsThreshold < 128) msRootsThreshold = 128;
 			}
 		}
-	}
-}
-
-/* ===== Trace Callback ===== */
-
-void msOrcTraceRef(void* child, void* env) {
-	if (child == NULL) return;
-	/* env is the actual trace callback function pointer */
-	if (env != NULL) {
-		typedef void (*traceFn)(void*, void*);
-		((traceFn)env)(child, env);
 	}
 }
 

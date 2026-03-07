@@ -327,6 +327,7 @@ function makeWasMovedCall(varName: string, rcInfo: RcInfo, loc: SourceLocation):
 }
 
 // Reference parity: Named-type copy hooks take 2 args (dest, src) with HiddenAddr.
+// Array copy hooks take 2 args (dest, src) by value (runtime macros handle &).
 // Ref/String/Closure/Map/Set copy is unary (incref).
 function makeCopyAfterInit(destName: string, rcInfo: RcInfo, loc: SourceLocation, srcName: string): Node {
 	if (rcInfo.rcKind === RcKind.Named && srcName !== "") {
