@@ -1146,7 +1146,7 @@ export function checkEnumExhaustiveness(ctx: CheckerContext, enumType: Type, cov
 
 // ===== Anonymous Functions =====
 
-export function checkAnonymousFunction(ctx: CheckerContext, name: string, params: string[], body: Node): Type {
+export function checkAnonymousFunction(ctx: CheckerContext, name: string, params: string[], paramTypes: string[], body: Node): Type {
 	const savedReturn = ctx.inferredReturn;
 	ctx.inferredReturn = unknownType();
 
@@ -1154,8 +1154,14 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	const sym = makeSymbol(name, SymbolKind.Function, unknownType(), false);
 	ctx.currentFunction = sym;
 	openScope(ctx.table, ScopeKind.Function);
+	let pi = 0;
 	for (const p of params) {
-		defineSymbol(ctx.table, makeSymbol(p, SymbolKind.Parameter, unknownType(), false));
+		let pType = unknownType();
+		if (pi < paramTypes.length && paramTypes[pi] !== "") {
+			pType = resolveAnnotation(paramTypes[pi], ctx);
+		}
+		defineSymbol(ctx.table, makeSymbol(p, SymbolKind.Parameter, pType, false));
+		pi += 1;
 	}
 	if (body.kind === NodeKind.BlockStmt) {
 		callCheckStmt(ctx, body);
@@ -1172,7 +1178,15 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	ctx.inferredReturn = savedReturn;
 
 	const types: Type[] = [];
-	for (const p of params) { types.push(unknownType()); }
+	let ti = 0;
+	for (const p of params) {
+		let pType = unknownType();
+		if (ti < paramTypes.length && paramTypes[ti] !== "") {
+			pType = resolveAnnotation(paramTypes[ti], ctx);
+		}
+		types.push(pType);
+		ti += 1;
+	}
 	if (inferredRet.kind !== TypeKind.Unknown) {
 		return createFunction(types, params, inferredRet);
 	}
@@ -1181,12 +1195,12 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 
 function checkArrowExpr(ctx: CheckerContext, node: Node): Type {
 	const d = node.data as ArrowFunctionData;
-	return checkAnonymousFunction(ctx, "<arrow>", d.arrowParams, d.arrowBody);
+	return checkAnonymousFunction(ctx, "<arrow>", d.arrowParams, d.arrowParamTypes, d.arrowBody);
 }
 
 function checkFuncExpr(ctx: CheckerContext, node: Node): Type {
 	const d = node.data as FunctionExprData;
-	return checkAnonymousFunction(ctx, "(anon)", d.funcExprParams, d.funcExprBody);
+	return checkAnonymousFunction(ctx, "(anon)", d.funcExprParams, d.funcExprParamTypes, d.funcExprBody);
 }
 
 // ===== @emit Backtick Interpolation (reference emit processing parity) =====

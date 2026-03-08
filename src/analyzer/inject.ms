@@ -18,7 +18,7 @@ import {
 	TryCatchStmtData, SwitchStmtData, SwitchCaseData,
 	BinaryExprData, CallExprData, IdentifierData, MemberExprData,
 	ArrayAccessData, ObjectLiteralData, ArrayLiteralData,
-	ConditionalExprData,
+	ConditionalExprData, NumberLiteralData,
 	ExportDeclData, ClassDeclData,
 	DoWhileStmtData, MoveExprData, Symbol,
 } from "../ast/node";
@@ -384,6 +384,41 @@ function makeWasMovedOnExpr(argExpr: Node, rcInfo: RcInfo, loc: SourceLocation):
 			makeCall(makeIdent(rcInfo.wasMovedFn, loc), [makeHiddenAddr(argExpr, loc)], loc), loc);
 	}
 	return makeRcCallOnExpr(rcInfo.wasMovedFn, argExpr, loc);
+}
+
+// ===== Self-Assignment Detection (Nim parity: sameLocation) =====
+// Checks if two AST nodes refer to the same memory location.
+// Used to elide `x = x` (self-assignment removal).
+// Reference: injectdestructors.nim:1101-1124
+
+function sameLocation(a: Node, b: Node): boolean {
+	if (a === null || b === null) return false;
+	// Strip transparent wrappers (HiddenAddr, HiddenDeref) and recurse
+	if (a.kind === NodeKind.HiddenAddr || a.kind === NodeKind.HiddenDeref) {
+		return sameLocation((a.data as ExprStmtData).expr, b);
+	}
+	if (b.kind === NodeKind.HiddenAddr || b.kind === NodeKind.HiddenDeref) {
+		return sameLocation(a, (b.data as ExprStmtData).expr);
+	}
+	if (a.kind !== b.kind) return false;
+	return match (a.kind) {
+		NodeKind.Identifier => {
+			if (a.resolvedSym !== null && b.resolvedSym !== null) { a.resolvedSym === b.resolvedSym }
+			else { (a.data as IdentifierData).name === (b.data as IdentifierData).name }
+		},
+		NodeKind.MemberExpr => {
+			const ad = a.data as MemberExprData;
+			const bd = b.data as MemberExprData;
+			ad.property === bd.property && sameLocation(ad.object, bd.object)
+		},
+		NodeKind.ArrayAccess => {
+			const ad = a.data as ArrayAccessData;
+			const bd = b.data as ArrayAccessData;
+			if (ad.index.kind !== NodeKind.NumberLiteral || bd.index.kind !== NodeKind.NumberLiteral) { false }
+			else { (ad.index.data as NumberLiteralData).value === (bd.index.data as NumberLiteralData).value && sameLocation(ad.array, bd.array) }
+		},
+		_ => false,
+	};
 }
 
 // ===== MoveExpr Source Classification =====
@@ -1312,19 +1347,22 @@ function processExprStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContex
 // ===== Assignment Processing =====
 
 function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation): Node {
+	// Nim parity (sameLocation): self-assignment removal — x = x is a no-op
+	if (sameLocation(bd.left, bd.right)) return stmt;
+
 	// Member assignment: obj.field = expr
 	if (bd.left.kind === NodeKind.MemberExpr) {
 		const leftMd = bd.left.data as MemberExprData;
 		const rcInfo = classifyMemberFieldRc(bd.left, dctx);
 		if (!rcInfo.needsCleanup) return stmt;
-		return emitSaveAssignDestroy(stmt, bd.left, bd.right, rcInfo, "Field", dctx, loc);
+		return emitSaveAssignDestroy(stmt, bd.left, bd.right, rcInfo, "Field", idx, stmts, dctx, loc);
 	}
 
 	// Array index assignment: arr[i] = expr
 	if (bd.left.kind === NodeKind.ArrayAccess) {
 		const rcInfo = classifyArrayElementRc(bd.left, dctx);
 		if (!rcInfo.needsCleanup) return stmt;
-		return emitSaveAssignDestroy(stmt, bd.left, bd.right, rcInfo, "Elem", dctx, loc);
+		return emitSaveAssignDestroy(stmt, bd.left, bd.right, rcInfo, "Elem", idx, stmts, dctx, loc);
 	}
 
 	if (bd.left.kind !== NodeKind.Identifier) return stmt;
@@ -1493,14 +1531,19 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 // Used by both obj.field = expr and arr[i] = expr.
 // lhsExpr is the left-hand side (bd.left) used to read old/new values.
 
-function emitSaveAssignDestroy(stmt: Node, lhsExpr: Node, rhs: Node, rcInfo: RcInfo, prefix: string, dctx: DrcContext, loc: SourceLocation): Node {
+function emitSaveAssignDestroy(stmt: Node, lhsExpr: Node, rhs: Node, rcInfo: RcInfo, prefix: string, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation): Node {
 	const tmpName = freshTemp(dctx.ctx, "old" + prefix);
 	const saveTmp = makeVarDecl(tmpName, lhsExpr, DeclKind.Const, loc);
 
 	// MoveExpr: SINK for dest + wasMoved on source
 	if (rhs.kind === NodeKind.MoveExpr) {
 		const md = rhs.data as MoveExprData;
-		emitMoveSourceWasMoved(md.moveArg, rcInfo, 0, [] as Node[], dctx, loc, false);
+		emitMoveSourceWasMoved(md.moveArg, rcInfo, idx, stmts, dctx, loc, false);
+		return makeBlock([saveTmp, stmt, makeDestroyCall(tmpName, rcInfo, loc)], loc);
+	}
+
+	// CallExpr RHS: fresh value, but check alias (GAP 4 — Nim parity: deepAliases safety)
+	if (rhs.kind === NodeKind.CallExpr) {
 		return makeBlock([saveTmp, stmt, makeDestroyCall(tmpName, rcInfo, loc)], loc);
 	}
 
@@ -1508,11 +1551,26 @@ function emitSaveAssignDestroy(stmt: Node, lhsExpr: Node, rhs: Node, rcInfo: RcI
 		return makeBlock([saveTmp, stmt, makeDestroyCall(tmpName, rcInfo, loc)], loc);
 	}
 
+	// Identifier RHS: check last-read for sink optimization (GAP 5 — Nim parity: moveOrCopy)
+	if (rhs.kind === NodeKind.Identifier) {
+		const rhsSym = rhs.resolvedSym;
+		if (rhsSym !== null && isLastReadSafe(rhsSym, rhs, idx, stmts, dctx)) {
+			// Last-read: sink (save old, assign, wasMoved(rhs), destroy old)
+			const rhsD = rhs.data as IdentifierData;
+			const result: Node[] = [saveTmp, stmt];
+			if (rcInfo.wasMovedFn !== "") {
+				result.push(makeWasMovedCall(rhsD.name, rcInfo, loc));
+			}
+			recordMove(dctx, rhsD.name);
+			result.push(makeDestroyCall(tmpName, rcInfo, loc));
+			return makeBlock(result, loc);
+		}
+	}
+
+	// Non-last-read / field-access / other: COPY
 	// Nim parity (moveOrCopy → genCopy): for Named types, call =copy(dest, src) directly.
 	// The copy hook handles old-value cleanup internally (setLen frees old payload,
 	// checkSelfAssignment prevents use-after-free on self-copy).
-	// Using save-assign-copy-temp would self-copy a local, breaking array types
-	// where msArraySetLen frees the payload that both dest and src point to.
 	if (rcInfo.rcKind === RcKind.Named && rcInfo.copyFn !== "") {
 		if (rcInfo.seqLike) {
 			// seq copy: dest by-pointer, src by-value
