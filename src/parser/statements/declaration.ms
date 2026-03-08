@@ -13,6 +13,35 @@ import { programOk, stmtKind, stmtAt } from "./validation";
 
 type NodeResult = Result<Node, string>;
 
+// Shared specifier list parser for import/export: { name as alias, ... }
+// Assumes opening '{' already consumed. Consumes up to but not including '}'.
+interface SpecifierList { names: string[]; aliases: string[]; }
+
+function parseSpecifierList(state: ParserState): SpecifierList {
+	const names: string[] = [];
+	const aliases: string[] = [];
+	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
+		const specifier = current(state);
+		if (!isIdentOrKeyword(specifier.kind)) { break; }
+		const specName = specifier.value;
+		advance(state);
+		if (!isAtEnd(state) && current(state).kind === TokenKind.As) {
+			advance(state);
+			aliases.push(current(state).value);
+			advance(state);
+		} else {
+			aliases.push(specName);
+		}
+		names.push(specName);
+		if (current(state).kind === TokenKind.Comma) {
+			advance(state);
+		} else {
+			break;
+		}
+	}
+	return { names, aliases };
+}
+
 // ===== Variable Declaration =====
 // syntax: ('const' | 'let') (ID | pattern) (':' type)? '=' expr ';'
 
@@ -195,27 +224,9 @@ export function parseImportDecl(state: ParserState): NodeResult {
 	}
 
 	advance(state);
-	const names: string[] = [];
-	const aliases: string[] = [];
-	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
-		const specifier = current(state);
-		if (!isIdentOrKeyword(specifier.kind)) { break; }
-		const specName = specifier.value;
-		advance(state);
-		if (!isAtEnd(state) && current(state).kind === TokenKind.As) {
-			advance(state);
-			aliases.push(current(state).value);
-			advance(state);
-		} else {
-			aliases.push(specName);
-		}
-		names.push(specName);
-		if (current(state).kind === TokenKind.Comma) {
-			advance(state);
-		} else {
-			break;
-		}
-	}
+	const specs = parseSpecifierList(state);
+	const names = specs.names;
+	const aliases = specs.aliases;
 
 	if (current(state).kind !== TokenKind.RBrace) {
 		return Result.err(`Expected '}' after import specifiers at line ${current(state).line.toString()}`);
@@ -254,27 +265,9 @@ export function parseExportDecl(state: ParserState): NodeResult {
 	// Re-export: export { X, Y } from "module";
 	if (nextKind === TokenKind.LBrace) {
 		advance(state); // skip '{'
-		const names: string[] = [];
-		const aliases: string[] = [];
-		while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
-			const specifier = current(state);
-			if (!isIdentOrKeyword(specifier.kind)) { break; }
-			const specName = specifier.value;
-			advance(state);
-			if (!isAtEnd(state) && current(state).kind === TokenKind.As) {
-				advance(state);
-				aliases.push(current(state).value);
-				advance(state);
-			} else {
-				aliases.push(specName);
-			}
-			names.push(specName);
-			if (current(state).kind === TokenKind.Comma) {
-				advance(state);
-			} else {
-				break;
-			}
-		}
+		const specs = parseSpecifierList(state);
+		const names = specs.names;
+		const aliases = specs.aliases;
 		if (current(state).kind === TokenKind.RBrace) { advance(state); }
 		if (current(state).kind !== TokenKind.From) {
 			return Result.err(`Expected 'from' after export specifiers at line ${current(state).line.toString()}`);

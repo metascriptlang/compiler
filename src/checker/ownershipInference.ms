@@ -1,9 +1,10 @@
-// Ownership Inference Pass — infers SymbolFlag.Sink vs SymbolFlag.Lent for parameters
+// Ownership Inference Pass — reference parity: sink parameter inference
 //
-// Follows the standard reference implementation pattern for ownership inference.
+// Only wraps params that need cleanup (non-primitive types needing RC).
+// Only infers sink modifiers. Default (no wrapper) = borrow.
 
 import { Node, NodeKind, ProgramData, FunctionDeclData, VariableDeclData, BinaryExprData, CallExprData, IdentifierData, ReturnStmtData, MemberExprData, ExprStmtData, IfStmtData, WhileStmtData, BlockStmtData } from "../ast/node";
-import { Type, TypeKind } from "./types";
+import { Type, TypeKind, wrapSink, isSinkType, isPrimitiveKind } from "./types";
 import { Symbol, SymbolKind, hasFlag, setFlag, SymbolFlag } from "./symbol";
 import { CheckerContext } from "./context";
 
@@ -26,28 +27,31 @@ function inferFunctionOwnership(ctx: CheckerContext, node: Node): void {
 	const fnType = sym.symbolType;
 	if (fnType.kind !== TypeKind.Function) return;
 
-	// Reset/initialize ownership flags for this function's parameters
-	const flags: number[] = [];
+	// Reference parity (sink parameter inference):
+	// 1. Only wrap params that need destruction (non-primitive, non-enum)
+	// 2. Only wrap to sink — never lent. Default = no wrapper = borrow.
+	// 3. Skip params already wrapped, 'this'/'self', and forwarded procs
 	for (let i = 0; i < d.params.length; i += 1) {
+		if (i >= fnType.typeChildren.length) break;
+		const paramType = fnType.typeChildren[i];
+		if (paramType === null) continue;
+		// Reference: parameter type kind must not be a modifier already
+		if (isSinkType(paramType)) continue;
+		// Reference: only RC types get wrapped.
+		// isPrimitiveKind covers: Number, Boolean, Void, Null, Int*, Uint*, Float*, Enum, Char, CString, Never, Unknown, Error
+		// Also skip GenericParam and Borrow — never real runtime param types
+		if (isPrimitiveKind(paramType.kind)) continue;
+		if (paramType.kind === TypeKind.GenericParam || paramType.kind === TypeKind.Borrow) continue;
+
 		const paramName = d.params[i];
-		
-		// DEFAULT: Borrow (LENT) for efficiency.
-		// Only promote to SINK if analysis proves ownership transfer.
-		let resultFlag = SymbolFlag.Lent;
+		// 'this' / 'self' receivers: never sink (reference parity)
+		if (paramName === "this" || (i === 0 && paramName === "self")) continue;
 
 		if (isParamConsumed(paramName, d.fnBody, ctx)) {
-			resultFlag = SymbolFlag.Sink;
+			fnType.typeChildren[i] = wrapSink(paramType);
 		}
-
-		// 'this' / 'self' receivers: always LENT (Implementation parity)
-		if (paramName === "this" || (i === 0 && paramName === "self")) {
-			resultFlag = SymbolFlag.Lent;
-		}
-
-		flags.push(resultFlag);
+		// Reference: no else — non-sink params stay unwrapped (implicit borrow)
 	}
-	
-	fnType.typeChildrenFlags = flags;
 }
 
 // AST Walker to find if a parameter is used in a "Sink" position.

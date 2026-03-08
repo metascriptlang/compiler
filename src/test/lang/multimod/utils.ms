@@ -1,4 +1,4 @@
-// Utility module for multi-module test
+// Utility module for cross-module test
 
 export enum Level { Debug, Info, Warn, Error }
 

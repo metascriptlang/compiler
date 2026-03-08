@@ -12,7 +12,6 @@ import {
 	ProgramData,
 } from "../../ast/node";
 import { CheckerContext, ExportRegistry } from "../../checker/context";
-import { lookupSymbol } from "../../checker/symbol";
 import {
 	CGen, CSection, AliveSet, TestEntry,
 	createCGen, createAliveSet, createBuilder, sec, add, addLine, addNewline,
@@ -21,28 +20,12 @@ import {
 } from "./context";
 import { genDecl } from "./declarations";
 import { mangleModuleName, mangledFunctionName, safeName } from "./names";
-import { getSimpleTypeDesc, isNrvoReturnType, getTypeDesc, ccgIntroducedPtr } from "./types";
+import { isNrvoReturnType, getTypeDesc, ccgIntroducedPtr } from "./types";
 import { Type, TypeKind, isInterfaceType } from "../../checker/types";
 import { mangle } from "./names";
 import { emitStringPoolDecls } from "./literals";
 import { emitTestHeader, emitTestTable, genTestDispatcher } from "./test";
 import { sliceStr } from "../../utils/string";
-
-// ===== generateC — single-module entry point (backwards compatible) =====
-
-export function generateC(program: Node, ctx: CheckerContext, modulePath: string): string {
-	const moduleCode = generateCModule(program, ctx, modulePath, createAliveSet(), false, false);
-	const mainSym = (ctx !== null && ctx.table !== null) ? lookupSymbol(ctx.table, "main") : null;
-	const hasMain = mainSym !== null;
-	let mainRet = "void";
-	if (mainSym !== null && mainSym.symbolType !== null && mainSym.symbolType.typeReturn !== null) {
-		const ret = getSimpleTypeDesc(mainSym.symbolType.typeReturn);
-		if (ret !== "") mainRet = ret;
-	}
-	const paths: string[] = [modulePath];
-	const dispatcher = genProjectDispatcher(paths, modulePath, hasMain, mainRet);
-	return moduleCode + "\n" + dispatcher;
-}
 
 // ===== generateCModule — one module's C code (no dispatcher) =====
 //
@@ -146,7 +129,7 @@ function genModuleInitFns(g: CGen): void {
 // ===== Global Init Dispatcher =====
 //
 // Generates the global init dispatcher: forward decls, MsPreMainInner, MsMainInner,
-// MsMain, global vars, and POSIX main. Used by both single-module and multi-module builds.
+// MsMain, global vars, and POSIX main.
 
 export function genProjectDispatcher(modulePaths: string[], entryPath: string, hasUserMain: boolean, mainRetType: string): string {
 	const b = createBuilder();
@@ -334,7 +317,10 @@ import "../../parser/statements/core";
 function cOutput(input: string): string {
 	const pr = parseSource(input);
 	if (!pr.ok) return "PARSE_ERROR: " + pr.error;
-	return generateC(pr.value, null as unknown as CheckerContext, "test/input");
+	const moduleCode = generateCModule(pr.value, null as unknown as CheckerContext, "test/input", createAliveSet(), false, false);
+	const paths: string[] = ["test/input"];
+	const dispatcher = genProjectDispatcher(paths, "test/input", false, "void");
+	return moduleCode + "\n" + dispatcher;
 }
 
 function cModuleOutput(input: string): string {

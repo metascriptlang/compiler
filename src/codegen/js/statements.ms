@@ -10,6 +10,7 @@ import {
 	ForStmtData, ForOfStmtData,
 	UnreachableStmtData,
 	MacroInvocationData, StringLiteralData,
+	isEmptyBlock,
 } from "../../ast/node";
 import { emit, emitNode, emitIndent, emitNewline, emitLine, JSGenerator, emitBlockInline, emitBlockOrStmt } from "./emit";
 
@@ -34,14 +35,6 @@ export function emitVariableDecl(gen: JSGenerator, node: Node): void {
 }
 
 // ===== If Statement =====
-
-// Check if a node is an empty block (null or BlockStmt with no statements)
-function isEmptyBlock(node: Node): boolean {
-	if (node === null) return true;
-	if (node.kind !== NodeKind.BlockStmt) return false;
-	const d = node.data as BlockStmtData;
-	return d.statements.length === 0;
-}
 
 function emitIfStmtInner(gen: JSGenerator, node: Node, withIndent: boolean): void {
 	const d = node.data as IfStmtData;

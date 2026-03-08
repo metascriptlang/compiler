@@ -33,6 +33,8 @@ export enum TypeKind {
 	GenericParam, GenericInstance,
 	// Memory
 	Ref, Ptr, Borrow,
+	// Ownership modifiers (standard reference parity — wrap inner type)
+	Sink, Lent,
 	// Special
 	TypeReference, Union, Enum, Result,
 	// Distinct
@@ -61,6 +63,7 @@ export enum TypeKind {
 // │ Enum           │ name     │ members   │      —       │     —     │    —     │     —     │
 // │ Union          │    —     │     —     │ memberTypes  │     —     │    —     │     —     │
 // │ Ref/Ptr        │    —     │     —     │      —       │ innerType │    —     │     —     │
+// │ Sink/Lent      │    —     │     —     │      —       │ innerType │    —     │     —     │
 // │ Distinct       │    —     │     —     │      —       │ innerType │    —     │     —     │
 // │ Result         │    —     │     —     │      —       │ okType    │ errType  │     —     │
 // │ GenericParam   │ paramName│     —     │      —       │     —     │ constraint│    —     │
@@ -97,7 +100,6 @@ export interface Type {
 	typeFlags: number;        // Bitfield: 1=isInterface, 2=optional, 4=readonly, 8=static; bits 8-15=minArity
 	callConv: CallingConvention; // Function calling convention (Standard parity)
 	attachedOps: string[];    // Lifecycle hook names indexed by AttachedOp (Standard parity)
-	typeChildrenFlags: number[]; // Parameter flags (SymbolFlag.Sink / SymbolFlag.Lent) for Function types
 }
 
 // ===== In-Place Type Upgrade (reference parity: assignType) =====
@@ -116,7 +118,6 @@ export function assignType(target: Type, source: Type): void {
 	target.typeFlags = source.typeFlags;
 	target.callConv = source.callConv;
 	target.attachedOps = source.attachedOps;
-	target.typeChildrenFlags = source.typeChildrenFlags;
 }
 
 // ===== Constructors =====
@@ -132,7 +133,6 @@ export function emptyType(): Type {
 		typeFlags: 0,
 		callConv: CallingConvention.CcDefault,
 		attachedOps: [],
-		typeChildrenFlags: [],
 	};
 }
 
@@ -211,6 +211,40 @@ export function createUnion(types: Type[]): Type {
 	t.kind = TypeKind.Union;
 	t.typeChildren = types;
 	return t;
+}
+
+// Find which union variant contains ALL the given field names.
+// Reference: lookupInRecordAndBuildCheck — searches variant branches by field name.
+// Returns the variant index, or -1 if no variant matches.
+export function findUnionVariant(unionType: Type, fieldNames: string[]): number {
+	if (unionType.typeChildren === null || fieldNames.length === 0) return -1;
+	let vi = 0;
+	while (vi < unionType.typeChildren.length) {
+		const variant = unionType.typeChildren[vi];
+		if (variant !== null && variant.typeNames !== null && variant.typeNames.length >= fieldNames.length) {
+			let allFound = true;
+			let ti = 0;
+			while (ti < fieldNames.length) {
+				let found = false;
+				let fi = 0;
+				while (fi < variant.typeNames.length) {
+					if (variant.typeNames[fi] === fieldNames[ti]) {
+						found = true;
+						fi = variant.typeNames.length;
+					}
+					fi = fi + 1;
+				}
+				if (!found) {
+					allFound = false;
+					ti = fieldNames.length;
+				}
+				ti = ti + 1;
+			}
+			if (allFound) return vi;
+		}
+		vi = vi + 1;
+	}
+	return -1;
 }
 
 // Maybe<T> — Reference: Maybe/Option parity. Wrapper struct { value: T, present: bool }.
@@ -433,6 +467,38 @@ export function unwrapMaybeType(t: Type): Type {
 export function unwrapRef(t: Type): Type {
 	if (t === null) return t;
 	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) return t.typeReturn;
+	return t;
+}
+
+// ===== Ownership Modifiers (Reference parity: sink and lent modifiers) =====
+// Sink/Lent wrap the inner param type. Standard reference: `proc foo(x: sink T)` → param type is a sink modifier wrapping T.
+// skipModifier unwraps one level, following standard reference patterns.
+
+export function wrapSink(inner: Type): Type {
+	const t = emptyType();
+	t.kind = TypeKind.Sink;
+	t.typeReturn = inner;
+	return t;
+}
+
+export function wrapLent(inner: Type): Type {
+	const t = emptyType();
+	t.kind = TypeKind.Lent;
+	t.typeReturn = inner;
+	return t;
+}
+
+export function isSinkType(t: Type): boolean {
+	return t !== null && t.kind === TypeKind.Sink;
+}
+
+export function isLentType(t: Type): boolean {
+	return t !== null && t.kind === TypeKind.Lent;
+}
+
+export function skipModifier(t: Type): Type {
+	if (t === null) return t;
+	if (t.kind === TypeKind.Sink || t.kind === TypeKind.Lent) return t.typeReturn;
 	return t;
 }
 

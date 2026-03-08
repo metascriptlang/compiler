@@ -15,7 +15,7 @@ import {
 	ObjectLiteralData,
 	ExprStmtData, MacroInvocationData,
 } from "../../ast/node";
-import { sliceStr, startsWith } from "../../utils/string";
+import { sliceStr, startsWith, endsWith } from "../../utils/string";
 import { Type, TypeKind } from "../../checker/types";
 import {
 	CGen, CProc, CSection, Builder,
@@ -40,7 +40,7 @@ import {
 // ===== genDecl — main declaration dispatcher =====
 
 // DCE: check if a function declaration is alive (reachable).
-// Empty aliveSet means no DCE filtering (single-module or DCE disabled).
+// Empty aliveSet means no DCE filtering (DCE disabled).
 function isDeclAlive(g: CGen, node: Node): boolean {
 	if (g.aliveSet.entries.length === 0) return true;
 	const d = node.data as FunctionDeclData;
@@ -57,29 +57,31 @@ function isDeclAlive(g: CGen, node: Node): boolean {
 	return aliveSetHas(g.aliveSet, g.modulePath, name);
 }
 
-function endsWith(s: string, suffix: string): boolean {
-	if (suffix.length > s.length) return false;
-	return s.slice(s.length - suffix.length, s.length) === suffix;
-}
 
 // Array sequence hooks are generated per-module (each module that uses sequence gets its own).
 // They need static linkage to avoid duplicate symbols at link time.
 // Reference parity: we use static linkage per-module instead of global deduplication.
+// DRC lifecycle suffixes — single source of truth for hook detection.
+// Reference parity: these are regular procs emitted in defining module, prototyped in consumers.
+const DRC_SUFFIXES: string[] = ["_destroy", "_copy", "_sink", "_wasMoved", "_dup", "_eq", "_trace", "_typeInfo"];
+
+function hasSuffix(name: string, suffixes: string[]): boolean {
+	let i = 0;
+	while (i < suffixes.length) {
+		if (endsWith(name, suffixes[i])) return true;
+		i = i + 1;
+	}
+	return false;
+}
+
 function isArraySeqHook(name: string): boolean {
-	// Fast path: known built-in array hooks
 	if (name.slice(0, 13) === "msStringArray" || name.slice(0, 10) === "msRefArray") return true;
-	// Per-type value struct array hooks: <ElemType>Array_<suffix>
 	return endsWith(name, "Array_destroy") || endsWith(name, "Array_copy") ||
 		endsWith(name, "Array_sink") || endsWith(name, "Array_wasMoved");
 }
 
-// DRC lifecycle hooks + operator eq need external linkage for cross-module access.
-// reference parity: these are regular procs emitted in defining module, prototyped in consumers.
 function isDrcLifecycleName(name: string): boolean {
-	return endsWith(name, "_destroy") || endsWith(name, "_copy") ||
-		endsWith(name, "_sink") || endsWith(name, "_wasMoved") ||
-		endsWith(name, "_dup") || endsWith(name, "_eq") ||
-		endsWith(name, "_trace") || endsWith(name, "_typeInfo");
+	return hasSuffix(name, DRC_SUFFIXES);
 }
 
 // reference parity: genProcNoForward emits genProcPrototype(m, prc) in the calling module

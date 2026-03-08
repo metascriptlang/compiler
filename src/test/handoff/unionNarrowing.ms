@@ -2,7 +2,7 @@
 //
 // After `const d = data as VariantType`, member access on d must resolve
 // a symbol (resolvedSym) so codegen can emit correct field access.
-// Nim parity: lookupInRecordAndBuildCheck searches the record field list directly.
+// Standard reference parity: lookupInRecordAndBuildCheck searches the record field list directly.
 
 import { checkSource } from "./helpers";
 import { hasErrors } from "../../checker/context";

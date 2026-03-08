@@ -25,7 +25,7 @@ src/codegen/raiser/
   expressions.ms     -- compileExpr: expression nodes → bytecode
   statements.ms      -- compileStmt: statement nodes → bytecode
   rgen.ms            -- generateRaiser(program), generateRaiserProject(modules), class compilation, tests
-  eval.ms            -- evalSourceFull/evalASTFull (full pipeline), multi-module + class integration tests
+  eval.ms            -- evalSourceFull/evalASTFull (full pipeline), project + class integration tests
 ```
 
 ## Handled NodeKinds
@@ -94,7 +94,7 @@ src/codegen/raiser/
 
 ## Architecture
 
-### Compilation Flow (multi-module)
+### Compilation Flow (project)
 
 ```
 generateRaiserProject(modules: RaiserModuleInput[]) → RaiserModule
@@ -188,7 +188,7 @@ Compare-branch semantics: `BgtI64 A B C` — if R[A] > R[B], skip C instructions
 
 ## Testing
 
-687 tests in rgen.ms across 27 test groups. 1272 tests in eval.ms (full pipeline + multi-module + Phase 3 transforms).
+687 tests in rgen.ms across 27 test groups. 1272 tests in eval.ms (full pipeline + project + Phase 3 transforms).
 
 ```bash
 # Codegen-only tests (parse → codegen → VM, no checker/transforms)
@@ -200,4 +200,4 @@ rm -rf out && bun run test-ms src/codegen/raiser/eval.ms
 
 eval.ms uses `jsBackend=false` in `transformProgram` to enable all general transforms (lambdaLifting, tailCallLower, stringConcatFlatten, etc.). This means lifted arrows and other Phase 3 features are tested end-to-end.
 
-Test groups: codegen basics, variables, comparisons, if-else, while, do-while, for-loops, functions, strings, string ops, string methods, logical, complex programs, ternary, update expressions, export unwrap, arrays, objects, compound assignments, compound assign targets, enums, closures, build.ms, bitwise, classes (31 tests), Phase 3 match/basics/tail-call/arrow (10 tests), multi-module (14 tests), multi-module classes (4 tests).
+Test groups: codegen basics, variables, comparisons, if-else, while, do-while, for-loops, functions, strings, string ops, string methods, logical, complex programs, ternary, update expressions, export unwrap, arrays, objects, compound assignments, compound assign targets, enums, closures, build.ms, bitwise, classes (31 tests), Phase 3 match/basics/tail-call/arrow (10 tests), project (14 tests), project classes (4 tests).

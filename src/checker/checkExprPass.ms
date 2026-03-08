@@ -18,8 +18,8 @@ import {
 	unknownType, numberType, stringType, booleanType, charType,
 	voidType, nullType, errorType,
 	createArray, createSpan, createFunction, createTypeRef, substituteType, instantiateGeneric,
-	isNumeric, isStringType, isCallable, getReturnType, getElementType, getProperty, sizeOfType,
-	typeNameOf, unwrapRef,
+	isNumeric, isIntegerType, isStringType, isCallable, getReturnType, getElementType, getProperty, sizeOfType,
+	typeNameOf, unwrapRef, findUnionVariant,
 	unifyType, createUnifyBindings, hasGenericParams,
 	getMinArity,
 } from "./types";
@@ -127,11 +127,20 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			// For assignment, pass LHS type as expectedType to RHS
 			const rightExpected = (d.operator === "=") ? leftType : null as unknown as Type;
 			const rightType = checkExpr(ctx, d.right, rightExpected);
+			// Bitwise ops require integer operands (reference parity: no float overloads)
+			if (isBitwiseBinaryOp(d.operator)) {
+				checkBitwiseOperands(ctx, d.operator, leftType, rightType, node);
+			}
 			inferBinaryOp(d.operator, leftType, rightType);
 		},
 		NodeKind.UnaryExpr => {
 			const d = node.data as UnaryExprData;
-			checkExpr(ctx, d.operand, null as unknown as Type);
+			const operandType = checkExpr(ctx, d.operand, null as unknown as Type);
+			// Bitwise NOT requires integer operand (reference parity)
+			if (d.unaryOp === "~" && (operandType === null || !isIntegerType(operandType))) {
+				const name = operandType !== null ? typeNameOf(operandType) : "unknown";
+				addError(ctx, "bitwise NOT '~' requires integer type, got '" + name + "'", node.location.line, node.location.column);
+			}
 			inferUnaryOp(d.unaryOp);
 		},
 		NodeKind.UpdateExpr => {
@@ -224,9 +233,16 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			const d = node.data as TypeAssertionData;
 			const srcType = checkExpr(ctx, d.asExpr, null as unknown as Type);
 			const targetType = (d.asType !== "") ? resolveAnnotation(d.asType, ctx) : unknownType();
-			// Nim parity: cast trusts the programmer. The target type is what they assert.
-			// No structural variant matching — just use the resolved target type directly.
-			node.nodeType = targetType;
+			// Union variant resolution — reference: lookupInRecordAndBuildCheck.
+			// When narrowing `unionExpr as { field: T }`, resolve to the full variant
+			// so the C backend emits the correct named struct (e.g., DocData_v3).
+			let resolved = targetType;
+			if (srcType.kind === TypeKind.Union && targetType.kind === TypeKind.Struct
+				&& targetType.typeNames !== null && targetType.typeNames.length > 0) {
+				const vi = findUnionVariant(srcType, targetType.typeNames);
+				if (vi >= 0) { resolved = srcType.typeChildren[vi]; }
+			}
+			node.nodeType = resolved;
 			node.nodeType;
 		},
 		NodeKind.SpreadExpr => {
@@ -331,7 +347,10 @@ function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
 			numberType();
 		},
 		"*" | "/" | "%" | "**" => numberType(),
-		"&" | "|" | "^" | "<<" | ">>" | ">>>" => numberType(),
+		"&" | "|" | "^" | "<<" | ">>" | ">>>" => {
+			if (isIntegerType(leftType)) return leftType;
+			numberType();
+		},
 		"??" => leftType,
 		_ => unknownType(),
 	};
@@ -344,6 +363,30 @@ function inferUnaryOp(op: string): Type {
 		"typeof" => stringType(),
 		_ => unknownType(),
 	};
+}
+
+// ===== Bitwise Operator Validation =====
+// Standard reference parity: bitwise ops only have integer overloads. No float/double variants.
+
+function isBitwiseBinaryOp(op: string): boolean {
+	return op === "&" || op === "|" || op === "^" || op === "<<" || op === ">>" || op === ">>>";
+}
+
+function checkBitwiseOperands(ctx: CheckerContext, op: string, leftType: Type, rightType: Type, node: Node): void {
+	const leftOk = leftType !== null && isIntegerType(leftType);
+	const rightOk = rightType !== null && isIntegerType(rightType);
+	if (!leftOk) {
+		const name = leftType !== null ? typeNameOf(leftType) : "unknown";
+		addError(ctx, "bitwise operator '" + op + "' requires integer type, got '" + name + "'", node.location.line, node.location.column);
+	}
+	if (!rightOk) {
+		const name = rightType !== null ? typeNameOf(rightType) : "unknown";
+		addError(ctx, "bitwise operator '" + op + "' requires integer type, got '" + name + "'", node.location.line, node.location.column);
+	}
+	// Nim parity: both operands must be the same integer size
+	if (leftOk && rightOk && leftType.kind !== rightType.kind) {
+		addError(ctx, "bitwise operator '" + op + "' requires same integer size, got '" + typeNameOf(leftType) + "' and '" + typeNameOf(rightType) + "'", node.location.line, node.location.column);
+	}
 }
 
 // ===== Callee Name Extraction =====
@@ -923,7 +966,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 				node.resolvedSym = propSym;
 			}
 		}
-		// Nim parity: fallback — search the type's field list directly
+		// Standard reference parity: fallback — search the type's field list directly
 		// (lookupInRecordAndBuildCheck pattern). Works for anonymous structs,
 		// type alias targets, and named types whose fields aren't in the symbol table.
 		if (node.resolvedSym === null && resolvedObjType.typeNames !== null) {

@@ -12,6 +12,7 @@ import {
 	SwitchStmtData, SwitchCaseData,
 	CallExprData, IdentifierData, AssertStmtData, UnreachableStmtData,
 	MacroInvocationData, StringLiteralData, IdentifierData,
+	isEmptyBlock,
 } from "../../ast/node";
 import { Type, TypeKind, isInterfaceType } from "../../checker/types";
 import { Symbol, SymbolKind } from "../../checker/symbol";
@@ -467,15 +468,6 @@ function genSwitchStmt(g: CGen, p: CProc, node: Node): void {
 
 	setStmtsIndent(p, oldIndent);
 	emitStmtsLine(p, "}");
-}
-
-// ===== Helper: check if node is empty block (no else clause) =====
-
-function isEmptyBlock(node: Node): boolean {
-	if (node === null) return true;
-	if (node.kind !== NodeKind.BlockStmt) return false;
-	const d = node.data as BlockStmtData;
-	return d.statements.length === 0;
 }
 
 // ===== Helper: emit block content or wrap in braces =====

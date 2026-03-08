@@ -22,6 +22,7 @@ import {
 } from "./context";
 import { genStmt } from "./statements";
 import { mangleModuleName } from "./names";
+import { escapeCString } from "./literals";
 
 // ===== Test Declaration → Wrapper Function =====
 // Emits: static void __ms_test_N(void) { body }
@@ -85,7 +86,7 @@ export function emitTestTable(g: CGen): void {
 	addLine(procs, "MsTestEntry " + tableName + "[] = {");
 	for (let i = 0; i < g.testEntries.length; i += 1) {
 		const entry = g.testEntries[i];
-		const escaped = escapeC(entry.name);
+		const escaped = escapeCString(entry.name);
 		addLine(procs, "  {\"" + escaped + "\", NULL, " + entry.funcName + "},");
 	}
 	addLine(procs, "  {NULL, NULL, NULL}");
@@ -148,7 +149,7 @@ export function genTestDispatcher(modulePaths: string[], entryPath: string): str
 	addLine(b, "  MsTestModule __ms_modules[] = {");
 	for (let i = 0; i < modulePaths.length; i += 1) {
 		const modName = mangleModuleName(modulePaths[i]);
-		const escaped = escapeC(modulePaths[i]);
+		const escaped = escapeCString(modulePaths[i]);
 		addLine(b, "    {\"" + escaped + "\", __ms_tests_" + modName + "},");
 	}
 	addLine(b, "    {NULL, NULL}");
@@ -159,16 +160,4 @@ export function genTestDispatcher(modulePaths: string[], entryPath: string): str
 	return extract(b);
 }
 
-// ===== Helpers =====
-
-function escapeC(s: string): string {
-	let result = "";
-	for (let i = 0; i < s.length; i += 1) {
-		const ch = s.charAt(i);
-		if (ch === "\"") { result = result + "\\\""; }
-		else if (ch === "\\") { result = result + "\\\\"; }
-		else if (ch === "\n") { result = result + "\\n"; }
-		else { result = result + ch; }
-	}
-	return result;
-}
+// escapeCString imported from literals.ms

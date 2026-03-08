@@ -1,7 +1,7 @@
 // Route 13: Type coercion at phase boundaries
 //
 // Tests implicit type coercions that the checker must support.
-// Each coercion is verified against Nim reference behavior.
+// Each coercion is verified against standard reference behavior.
 
 import {
 	Type, TypeKind, createStruct, createRef, createEnum,
@@ -10,7 +10,7 @@ import {
 import { isAssignable } from "../../checker/compat";
 
 // ===== Ref<T> → T auto-deref =====
-// Nim: ref T auto-derefs transparently. proc foo(x: T) accepts ref T.
+// Standard reference: managed references auto-dereference transparently.
 
 test "isAssignable: Ref<Struct> → Struct (auto-deref)" {
 	const inner = createStruct("Foo", ["x"], [numberType()], true);
@@ -24,7 +24,7 @@ test "isAssignable: Struct → Struct (same type)" {
 }
 
 // ===== Enum → number: NOT implicit =====
-// Nim: enum does NOT implicitly convert to int. Requires ord().
+// Standard reference: enums do NOT implicitly convert to integers.
 // Our hasFlag/setFlag should accept the enum type directly.
 
 test "isAssignable: Enum → number is NOT allowed" {

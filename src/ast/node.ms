@@ -366,3 +366,10 @@ export function nodeCacheGet(key: number): Node {
 export function nodeCacheStore(key: number, node: Node): void {
 	nodeCache.push({ key, node });
 }
+
+export function isEmptyBlock(node: Node): boolean {
+	if (node === null) return true;
+	if (node.kind !== NodeKind.BlockStmt) return false;
+	const d = node.data as BlockStmtData;
+	return d.statements.length === 0;
+}

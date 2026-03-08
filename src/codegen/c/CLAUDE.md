@@ -41,7 +41,7 @@ A C file is emitted in sections (`CSection` enum) to handle forward declarations
 - `Procs` (void bar() { ... })
 - `Init` (module initialization)
 
-- Multi-module: each module registers its initialization code into the appropriate dispatcher.
+- Each module registers its initialization code into the appropriate dispatcher.
 
 ### CLoc (expression result carrier)
 

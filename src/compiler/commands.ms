@@ -127,12 +127,12 @@ export function cmdPipeline(filePath: string): void {
 }
 
 // -- run --
-// Delegates to multi-module build (cmdBuildC) so imports resolve correctly,
+// Delegates to cmdBuildC so imports resolve correctly,
 // then executes the resulting binary.
 
 export function cmdRun(filePath: string, opts: CliOptions): void {
 	const t0 = clockMs();
-	// Build to out/debug/<name> via the full multi-module pipeline
+	// Build to out/debug/<name> via the full pipeline
 	ensureDir("out/debug");
 	const binName = replaceExt(baseName(filePath), "");
 	const tmpBin = "out/debug/" + binName;

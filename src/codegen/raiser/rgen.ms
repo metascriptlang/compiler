@@ -186,7 +186,7 @@ function compileClassConstructor(
 	return createRaiserFunction(className + "_new", s.code, s.constants, arity, 0, s.nextReg);
 }
 
-// --- Multi-module: Project-level compilation ---
+// --- Project-level compilation ---
 // Unity build: flatten all modules' functions into a single RaiserModule.
 // VM needs zero changes — Call opcode already indexes by position.
 

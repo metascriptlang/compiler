@@ -22,7 +22,7 @@ import {
 	ExportDeclData, ClassDeclData,
 	DoWhileStmtData, MoveExprData, Symbol,
 } from "../ast/node";
-import { Type, TypeKind } from "../checker/types";
+import { Type, TypeKind, isSinkType, skipModifier } from "../checker/types";
 import { lookupSymbol, lookupLocal, SymbolKind, hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, freshTemp, createTransformContextWithChecker } from "../transform/context";
 import {
@@ -199,7 +199,7 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const fnType = (sym !== null && sym.symbolType !== null && sym.symbolType.kind === TypeKind.Function) ? sym.symbolType : null;
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		let argMode = DrcMode.Normal;
-		if (fnType !== null && i < fnType.typeChildrenFlags.length && fnType.typeChildrenFlags[i] === SymbolFlag.Sink) {
+		if (fnType !== null && i < fnType.typeChildren.length && isSinkType(fnType.typeChildren[i])) {
 			argMode = DrcMode.Consumed;
 		}
 		cd.arguments[i] = processNode(cd.arguments[i], dctx, argMode);
@@ -781,9 +781,9 @@ function processCallArgs(callExpr: Node, idx: number, stmts: Node[], dctx: DrcCo
 		// Implementation parity: arguments are already processed by processCall (via processNode).
 // Reference walker processes args once in the universal handler.
 
-		// Determine if this parameter is a borrow (LENT) or a transfer (SINK)
+		// Reference parity: default = borrow (no wrapper). Only sink modifier means ownership transfer.
 		let isLent = true;
-		if (ai < fnType.typeChildrenFlags.length && fnType.typeChildrenFlags[ai] === SymbolFlag.Sink) {
+		if (ai < fnType.typeChildren.length && isSinkType(fnType.typeChildren[ai])) {
 			isLent = false;
 		}
 		if (ai < fnType.typeNames.length) {
@@ -1325,6 +1325,9 @@ function processExprStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContex
 		const bd = expr.data as BinaryExprData;
 		if (bd.operator === "=") {
 			return processAssignment(stmt, bd, idx, stmts, dctx, loc);
+		}
+		if (isCompoundAssignOp(bd.operator) && bd.left.kind === NodeKind.Identifier) {
+			return processCompoundAssignment(stmt, bd, idx, stmts, dctx, loc);
 		}
 	}
 
@@ -2398,13 +2401,12 @@ test "sink param: return-only param is cursor (skip cleanup)" {
 	}
 }
 
-test "lent param: SymbolFlag.Lent in typeChildrenFlags skips RC at call site" {
-	// Verify that processCallArgs respects SymbolFlag.Lent flag
-	const dctx = testDrcContext("const x: string = \"\";");
-	// SymbolFlag.Lent check is structural — verified by code reading
-	assert SymbolFlag.Lent !== 0;
-	assert SymbolFlag.Sink !== 0;
-	assert SymbolFlag.Lent !== SymbolFlag.Sink;
+test "Reference parity: Sink/Lent type wrappers replace typeChildrenFlags" {
+	// Standard reference: sink modifiers wrap param types for ownership transfer
+	// Standard reference: lent modifiers wrap param types for borrowing
+	// isSinkType checks TypeKind.Sink, skipModifier unwraps
+	assert TypeKind.Sink !== TypeKind.Lent;
+	assert isSinkType(null as unknown as Type) === false;
 }
 
 test "isGeneratorBody: detects $state pattern" {

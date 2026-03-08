@@ -5,7 +5,7 @@
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, NodeData, Expression, createNode } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, peek } from "../context";
-import { parseOk } from "./util";
+import { parseOk, parseMemberChain } from "./util";
 import { isIdentLike } from "../util";
 import { parseNumberLiteral } from "../../utils/string";
 
@@ -156,21 +156,8 @@ function parseSinglePattern(state: ParserState): ExprResult {
 		token.kind === TokenKind.True || token.kind === TokenKind.False ||
 		token.kind === TokenKind.Null) {
 		advance(state);
-		let node = createNode(NodeKind.Identifier, { name: token.value }, token);
-
-		// Handle member access: Enum.Member (e.g., TokenKind.Plus)
-		while (!isAtEnd(state) && current(state).kind === TokenKind.Dot) {
-			advance(state);
-			const prop = current(state);
-			if (isIdentOrKeyword(prop.kind)) {
-				advance(state);
-				node = createNode(NodeKind.MemberExpr, { object: node, property: prop.value, isOptional: false }, token);
-			} else {
-				break;
-			}
-		}
-
-		return Result.ok(node);
+		const base = createNode(NodeKind.Identifier, { name: token.value }, token);
+		return Result.ok(parseMemberChain(state, base));
 	}
 
 	// Prefix minus for negative numbers

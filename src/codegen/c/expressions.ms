@@ -16,7 +16,7 @@ import {
 	UpdateExprData, NewExprData, MoveExprData, SpreadExprData,
 	ExprStmtData, HiddenStdConvData, HiddenDerefData,
 } from "../../ast/node";
-import { Type, TypeKind, isIntegerType, getProperty, getMinArity, isInterfaceType } from "../../checker/types";
+import { Type, TypeKind, isIntegerType, getProperty, getMinArity, isInterfaceType, findUnionVariant } from "../../checker/types";
 import { Symbol, SymbolKind } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, Builder, CSection,
@@ -53,43 +53,7 @@ function genArgCcgPtr(arg: string, argNode: Node, p: CProc): string {
 // Matches an `as` target type against a Union's typeChildren by comparing field names.
 // Returns the variant index (0-based), or -1 if no match.
 
-function findUnionVariantIndex(unionType: Type, targetType: Type): number {
-	if (targetType === null || unionType.typeChildren === null) return -1;
-	// Match by comparing field names (typeNames) — unique first field is sufficient
-	const targetNames = targetType.typeNames;
-	if (targetNames === null || targetNames.length === 0) return -1;
-
-	let i = 0;
-	while (i < unionType.typeChildren.length) {
-		const variant = unionType.typeChildren[i];
-		if (variant !== null && variant.typeNames !== null && variant.typeNames.length > 0) {
-			// Compare first field name for fast matching
-			if (variant.typeNames[0] === targetNames[0]) {
-				return i;
-			}
-		}
-		i += 1;
-	}
-	return -1;
-}
-
-// Match a union variant by a single key name (from ObjectLiteral keys)
-function findUnionVariantByKey(unionType: Type, key: string): number {
-	if (unionType.typeChildren === null) return -1;
-	let i = 0;
-	while (i < unionType.typeChildren.length) {
-		const variant = unionType.typeChildren[i];
-		if (variant !== null && variant.typeNames !== null) {
-			let fi = 0;
-			while (fi < variant.typeNames.length) {
-				if (variant.typeNames[fi] === key) return i;
-				fi += 1;
-			}
-		}
-		i += 1;
-	}
-	return -1;
-}
+// findUnionVariant is imported from checker/types.ms (shared with checker)
 
 // ===== Iterative genExpr infrastructure =====
 // Post-order stack traversal: Discover pushes children, Emit combines results.
@@ -378,18 +342,32 @@ function discoverExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[],
 		return;
 	}
 
-	// NewExpr — 1 + N children (callee + args)
+	// NewExpr — inline allocation (Standard reference parity: inline object construction)
 	if (kind === NodeKind.NewExpr) {
 		const d = node.data as NewExprData;
-		const n = 1 + d.newArguments.length;
-		workStack.push({ node, phase: 1, childCount: n, tag: TAG_DEFAULT });
-		// Push in reverse: args then callee
-		let i = d.newArguments.length - 1;
-		while (i >= 0) {
-			workStack.push({ node: d.newArguments[i], phase: 0, childCount: 0, tag: 0 });
-			i -= 1;
+		const calleeName = genExpr(g, p, d.newCallee);
+		if (d.newArguments.length === 0) {
+			// No-arg new: allocate with zero-init
+			results.push("(" + calleeName + "*)msAllocTyped(sizeof(" + calleeName + "), &" + calleeName + "_typeInfo)");
+		} else {
+			// Positional args → field-by-field assignment using type info
+			g.labels += 1;
+			const tmp = "_new" + g.labels + "_";
+			emitProcLocalsLine(p, calleeName + "* " + tmp + ";");
+			emitStmtsLine(p, tmp + " = (" + calleeName + "*)msAllocTyped(sizeof(" + calleeName + "), &" + calleeName + "_typeInfo);");
+			// Get field names from the class type (Ref → unwrap to Struct → typeNames)
+			const classType = node.nodeType;
+			const innerType = (classType !== null && (classType.kind === TypeKind.Ref || classType.kind === TypeKind.Ptr)) ? classType.typeReturn : classType;
+			const fieldNames = (innerType !== null && innerType.typeNames !== null) ? innerType.typeNames : null as unknown as string[];
+			let fi = 0;
+			while (fi < d.newArguments.length) {
+				const fieldVal = genExpr(g, p, d.newArguments[fi]);
+				const fieldName = (fieldNames !== null && fi < fieldNames.length) ? mangleFieldName(fieldNames[fi]) : ("_f" + fi);
+				emitStmtsLine(p, "(*" + tmp + ")." + fieldName + " = " + fieldVal + ";");
+				fi += 1;
+			}
+			results.push(tmp);
 		}
-		workStack.push({ node: d.newCallee, phase: 0, childCount: 0, tag: 0 });
 		return;
 	}
 
@@ -459,6 +437,13 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 					finalRight = "((" + leftCType + ")(" + right + "))";
 				}
 			}
+		}
+		// String compound assignment: s += t → msStringAppend(&s, t)
+		// Nim: mAppendStrStr in ccgexprs.nim → genStrAppend (codegen, not transform)
+		// Kept in codegen so DRC analyzer can see += and apply fused append optimization
+		if (d.operator === "+=" && d.left.nodeType !== null && d.left.nodeType.kind === TypeKind.String) {
+			results.push("msStringAppend(&" + left + ", " + finalRight + ")");
+			return;
 		}
 		// Struct equality handled by operatorLower → TypeName_eq() (reference parity).
 		// No memcmp fallback needed — codegen never sees interface === interface.
@@ -553,26 +538,10 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 
 		// Case 1: Source is Union → access variant member
 		if (srcType !== null && srcType.kind === TypeKind.Union && node.nodeType !== null) {
-			const varIdx = findUnionVariantIndex(srcType, node.nodeType);
+			const targetNames = (node.nodeType.typeNames !== null) ? node.nodeType.typeNames : [] as string[];
+			const varIdx = (targetNames.length > 0) ? findUnionVariant(srcType, targetNames) : -1;
 			if (varIdx >= 0) {
 				results.push("(" + expr + ").v" + intToString(varIdx));
-				return;
-			}
-		}
-		// Case 1b: Source type unknown but target resolves to a union variant (UnionName_vN)
-		// This handles `obj.data as { field: T }` when obj.data nodeType isn't set
-		if (node.nodeType !== null && node.nodeType.kind === TypeKind.Struct) {
-			const targetCType = getTypeDesc(g, node.nodeType);
-			// Look for "_v" + digit at end (e.g., "DocData_v1", "DocData_v12")
-			let vPos = targetCType.length - 1;
-			// Skip trailing digits
-			while (vPos > 0 && targetCType.charAt(vPos) >= "0" && targetCType.charAt(vPos) <= "9") {
-				vPos = vPos - 1;
-			}
-			// Check for "_v" pattern
-			if (vPos > 0 && targetCType.charAt(vPos) === "v" && targetCType.charAt(vPos - 1) === "_") {
-				const suffix = sliceStr(targetCType, vPos, targetCType.length);
-				results.push("(" + expr + ")." + suffix);
 				return;
 			}
 		}
@@ -582,16 +551,15 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 		if (node.nodeType !== null && node.nodeType.kind === TypeKind.Union) {
 			const unionType = node.nodeType;
 			const unionName = getTypeDesc(g, unionType);
-			// Find variant by matching source Object type OR ObjectLiteral keys
 			let varIdx = -1;
-			if (srcType !== null && srcType.kind === TypeKind.Struct) {
-				varIdx = findUnionVariantIndex(unionType, srcType);
+			if (srcType !== null && srcType.kind === TypeKind.Struct && srcType.typeNames !== null) {
+				varIdx = findUnionVariant(unionType, srcType.typeNames);
 			}
 			if (varIdx < 0 && d.asExpr !== null && d.asExpr.kind === NodeKind.ObjectLiteral) {
-				// Match by ObjectLiteral keys against variant field names
 				const litData = d.asExpr.data as ObjectLiteralData;
 				if (litData.keys !== null && litData.keys.length > 0) {
-					varIdx = findUnionVariantByKey(unionType, litData.keys[0]);
+					const keyArr: string[] = [litData.keys[0]];
+					varIdx = findUnionVariant(unionType, keyArr);
 				}
 			}
 			if (varIdx >= 0) {
@@ -723,27 +691,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 		return;
 	}
 
-	// NewExpr — inline allocation (Standard reference pattern: inlined allocation, no generated function)
-	if (kind === NodeKind.NewExpr) {
-		const callee = peekResult(results, cc, 0);
-		if (cc === 1) {
-			// No-arg new: inline heap allocation with RTTI
-			truncResults(results, cc);
-			results.push("(" + callee + "*)msAllocTyped(sizeof(" + callee + "), &" + callee + "_typeInfo)");
-		} else {
-			// Explicit constructor: call ClassName_new(args)
-			let args = "";
-			let i = 1;
-			while (i < cc) {
-				if (i > 1) args = args + ", ";
-				args = args + peekResult(results, cc, i);
-				i += 1;
-			}
-			truncResults(results, cc);
-			results.push(callee + "_new(" + args + ")");
-		}
-		return;
-	}
+	// NewExpr handled entirely in discover phase (inline allocation)
 
 	// Fallback
 	truncResults(results, cc);
@@ -1100,7 +1048,7 @@ test "prefix decrement" { assert exprSnippet("--x;") === "(--x)"; }
 
 test "simple new" { assert exprSnippet("new Foo();") === "(Foo*)msAllocTyped(sizeof(Foo), &Foo_typeInfo)"; }
 
-test "new with args" { assert exprSnippet("new Bar(1, 2);") === "Bar_new(1, 2)"; }
+test "new with args" { assert exprSnippet("new Bar(1, 2);") === "_new1_"; }
 
 test "move identifier" { assert exprSnippet("move x;") === "x"; }
 

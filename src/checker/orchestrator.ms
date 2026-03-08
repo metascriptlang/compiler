@@ -1,4 +1,4 @@
-// Multi-module orchestrator — coordinates checking across module graph
+// Module orchestrator — coordinates checking across module graph
 // Reference parallel implementation
 
 import { Node } from "../ast/node";
@@ -235,7 +235,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 	return registry;
 }
 
-// ===== Multi-Module Tests =====
+// ===== Tests =====
 
 import {
 	createModuleGraph, createModule, hasExportName,
@@ -243,7 +243,7 @@ import {
 import {
 	MapEntry, SourceProvider, createMapProvider, loadModuleGraph,
 } from "../module/loader";
-test "single module checked" {
+test "single file checked" {
 	const entries: MapEntry[] = [];
 	entries.push({ entryPath: "/src/a.ms", entrySource: "const x = 1;" });
 	const provider = createMapProvider(entries);

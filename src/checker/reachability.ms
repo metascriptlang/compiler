@@ -10,6 +10,7 @@ import { Node, NodeKind, ProgramData, FunctionDeclData, ImportDeclData,
 	TestDeclData, DecoratedDeclData, ExternDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { AliveSet, createAliveSet, aliveSetAdd, aliveSetHas } from "../codegen/c/context";
+import { endsWith } from "../utils/string";
 
 // ===== Module Index =====
 // Maps module path to its program AST for cross-module tracing.
@@ -77,10 +78,7 @@ function resolveSpecifier(specifier: string, modIdx: ModuleIndex): string {
 	return "";
 }
 
-function endsWith(s: string, suffix: string): boolean {
-	if (suffix.length > s.length) return false;
-	return s.slice(s.length - suffix.length, s.length) === suffix;
-}
+
 
 // ===== Visited Set =====
 

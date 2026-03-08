@@ -15,4 +15,6 @@ import "./drcInject";
 import "./maybeCollapse";
 import "./typeCoercion";
 import "./unionNarrowing";
+import "./unionNarrow";
 import "./toStringResolve";
+import "./bitwiseCheck";

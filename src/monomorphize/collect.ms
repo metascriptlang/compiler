@@ -239,6 +239,276 @@ function monoCollectDefStmt(node: Node, declMap: MonoGenericDeclMap): void {
 	}
 }
 
+// ===== Shared AST Walker =====
+// Unified recursive walk using if-else (not match — DRC workaround #24).
+// CallExpr nodes are dispatched to the provided handler; all other nodes
+// are traversed structurally. Used by both collection and rewrite passes.
+
+type MonoCallHandler = (node: Node, declMap: MonoGenericDeclMap, registry: MonoRegistry, ctx: CheckerContext) => void;
+
+function monoWalkAST(
+	node: Node,
+	declMap: MonoGenericDeclMap,
+	registry: MonoRegistry,
+	ctx: CheckerContext,
+	handler: MonoCallHandler
+): void {
+	if (node === null) return;
+	const kind = node.kind;
+
+	if (kind === NodeKind.CallExpr) {
+		handler(node, declMap, registry, ctx);
+		const d = node.data as CallExprData;
+		monoWalkAST(d.callee, declMap, registry, ctx, handler);
+		for (const arg of d.arguments) {
+			monoWalkAST(arg, declMap, registry, ctx, handler);
+		}
+		return;
+	}
+	if (kind === NodeKind.Program) {
+		const d = node.data as ProgramData;
+		for (const s of d.programStmts) { monoWalkAST(s, declMap, registry, ctx, handler); }
+		return;
+	}
+	if (kind === NodeKind.BlockStmt) {
+		const d = node.data as BlockStmtData;
+		for (const s of d.statements) { monoWalkAST(s, declMap, registry, ctx, handler); }
+		return;
+	}
+	if (kind === NodeKind.FunctionDecl) {
+		const d = node.data as FunctionDeclData;
+		monoWalkAST(d.fnBody, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.ArrowFunction) {
+		const d = node.data as ArrowFunctionData;
+		monoWalkAST(d.arrowBody, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.FunctionExpr) {
+		const d = node.data as FunctionExprData;
+		monoWalkAST(d.funcExprBody, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.IfStmt) {
+		const d = node.data as IfStmtData;
+		monoWalkAST(d.condition, declMap, registry, ctx, handler);
+		monoWalkAST(d.consequent, declMap, registry, ctx, handler);
+		monoWalkAST(d.alternate, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.WhileStmt) {
+		const d = node.data as WhileStmtData;
+		monoWalkAST(d.whileCondition, declMap, registry, ctx, handler);
+		monoWalkAST(d.whileBody, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.ForStmt) {
+		const d = node.data as ForStmtData;
+		monoWalkAST(d.forInit, declMap, registry, ctx, handler);
+		monoWalkAST(d.forCondition, declMap, registry, ctx, handler);
+		monoWalkAST(d.forUpdate, declMap, registry, ctx, handler);
+		monoWalkAST(d.forBody, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.ForOfStmt) {
+		const d = node.data as ForOfStmtData;
+		monoWalkAST(d.forOfIterable, declMap, registry, ctx, handler);
+		monoWalkAST(d.forOfBody, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.ForInStmt) {
+		const d = node.data as ForInStmtData;
+		monoWalkAST(d.forInObject, declMap, registry, ctx, handler);
+		monoWalkAST(d.forInBody, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.DoWhileStmt) {
+		const d = node.data as DoWhileStmtData;
+		monoWalkAST(d.doBody, declMap, registry, ctx, handler);
+		monoWalkAST(d.doCondition, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.ReturnStmt) {
+		const d = node.data as ReturnStmtData;
+		monoWalkAST(d.argument, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.ExprStmt) {
+		const d = node.data as ExprStmtData;
+		monoWalkAST(d.expr, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.VariableDecl) {
+		const d = node.data as VariableDeclData;
+		monoWalkAST(d.initializer, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.BinaryExpr) {
+		const d = node.data as BinaryExprData;
+		monoWalkAST(d.left, declMap, registry, ctx, handler);
+		monoWalkAST(d.right, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.UnaryExpr) {
+		const d = node.data as UnaryExprData;
+		monoWalkAST(d.operand, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.ConditionalExpr) {
+		const d = node.data as ConditionalExprData;
+		monoWalkAST(d.ternaryCondition, declMap, registry, ctx, handler);
+		monoWalkAST(d.ternaryConsequent, declMap, registry, ctx, handler);
+		monoWalkAST(d.ternaryAlternate, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.MemberExpr) {
+		const d = node.data as MemberExprData;
+		monoWalkAST(d.object, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.ArrayAccess) {
+		const d = node.data as ArrayAccessData;
+		monoWalkAST(d.array, declMap, registry, ctx, handler);
+		monoWalkAST(d.index, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.ObjectLiteral) {
+		const d = node.data as ObjectLiteralData;
+		for (const p of d.properties) { monoWalkAST(p, declMap, registry, ctx, handler); }
+		return;
+	}
+	if (kind === NodeKind.ArrayLiteral) {
+		const d = node.data as ArrayLiteralData;
+		for (const e of d.elements) { monoWalkAST(e, declMap, registry, ctx, handler); }
+		return;
+	}
+	if (kind === NodeKind.TryCatchStmt) {
+		const d = node.data as TryCatchStmtData;
+		monoWalkAST(d.tryBody, declMap, registry, ctx, handler);
+		monoWalkAST(d.catchBody, declMap, registry, ctx, handler);
+		monoWalkAST(d.finallyBody, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.ThrowStmt) {
+		const d = node.data as ThrowStmtData;
+		monoWalkAST(d.throwArg, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.ExportDecl) {
+		const d = node.data as ExportDeclData;
+		monoWalkAST(d.exportedDecl, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.DecoratedDecl) {
+		const d = node.data as DecoratedDeclData;
+		monoWalkAST(d.decoratedNode, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.SwitchStmt) {
+		const d = node.data as SwitchStmtData;
+		monoWalkAST(d.switchDisc, declMap, registry, ctx, handler);
+		for (const c of d.switchCases) { monoWalkAST(c, declMap, registry, ctx, handler); }
+		return;
+	}
+	if (kind === NodeKind.SwitchCase) {
+		const d = node.data as SwitchCaseData;
+		for (const s of d.caseStmts) { monoWalkAST(s, declMap, registry, ctx, handler); }
+		return;
+	}
+	if (kind === NodeKind.MatchStmt) {
+		const d = node.data as MatchStmtData;
+		monoWalkAST(d.matchStmtDisc, declMap, registry, ctx, handler);
+		for (const c of d.matchStmtCases) { monoWalkAST(c, declMap, registry, ctx, handler); }
+		return;
+	}
+	if (kind === NodeKind.MatchExpr) {
+		const d = node.data as MatchExprData;
+		monoWalkAST(d.matchDisc, declMap, registry, ctx, handler);
+		for (const c of d.matchCases) { monoWalkAST(c, declMap, registry, ctx, handler); }
+		return;
+	}
+	if (kind === NodeKind.MatchCase) {
+		const d = node.data as MatchCaseData;
+		monoWalkAST(d.caseBody, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.SpreadExpr) {
+		const d = node.data as SpreadExprData;
+		monoWalkAST(d.spreadArg, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.NewExpr) {
+		const d = node.data as NewExprData;
+		monoWalkAST(d.newCallee, declMap, registry, ctx, handler);
+		for (const a of d.newArguments) { monoWalkAST(a, declMap, registry, ctx, handler); }
+		return;
+	}
+	if (kind === NodeKind.TryExpr) {
+		const d = node.data as TryExprData;
+		monoWalkAST(d.tryArg, declMap, registry, ctx, handler);
+		if (d.hasCatch) { monoWalkAST(d.catchVal, declMap, registry, ctx, handler); }
+		return;
+	}
+	if (kind === NodeKind.ClassDecl) {
+		const d = node.data as ClassDeclData;
+		for (const m of d.classBody) { monoWalkAST(m, declMap, registry, ctx, handler); }
+		return;
+	}
+	if (kind === NodeKind.MethodDecl) {
+		const d = node.data as MethodDeclData;
+		monoWalkAST(d.methodBody, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.ConstructorDecl) {
+		const d = node.data as ConstructorDeclData;
+		monoWalkAST(d.ctorBody, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.TypeAssertion) {
+		const d = node.data as TypeAssertionData;
+		monoWalkAST(d.asExpr, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.UpdateExpr) {
+		const d = node.data as UpdateExprData;
+		monoWalkAST(d.updateArg, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.DestructuringDecl) {
+		const d = node.data as DestructuringDeclData;
+		monoWalkAST(d.destrPattern, declMap, registry, ctx, handler);
+		monoWalkAST(d.destrInit, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.DeferStmt) {
+		const d = node.data as DeferStmtData;
+		monoWalkAST(d.deferExpr, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.AwaitExpr) {
+		const d = node.data as AwaitExprData;
+		monoWalkAST(d.awaitArg, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.YieldExpr) {
+		const d = node.data as YieldExprData;
+		monoWalkAST(d.yieldArg, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.HiddenDeref || kind === NodeKind.HiddenAddr) {
+		const d = node.data as ExprStmtData;
+		monoWalkAST(d.expr, declMap, registry, ctx, handler);
+		return;
+	}
+	if (kind === NodeKind.HiddenStdConv || kind === NodeKind.HiddenSubConv) {
+		const d = node.data as HiddenStdConvData;
+		monoWalkAST(d.convExpr, declMap, registry, ctx, handler);
+		return;
+	}
+	// Leaf nodes (Identifier, literals, break, continue, etc.): no children to walk
+}
+
 // ===== Pass 1b: Collect Call Sites =====
 // Walk entire AST to find CallExpr nodes that call generic functions.
 // For each, infer concrete type args from the checker's symbol table.
@@ -250,274 +520,7 @@ export function monoCollectCallSites(
 	checkerCtx: CheckerContext
 ): void {
 	if (program === null) return;
-	monoWalkForCalls(program, declMap, registry, checkerCtx);
-}
-
-// Recursive AST walk using if-else (not match — DRC workaround #24)
-function monoWalkForCalls(
-	node: Node,
-	declMap: MonoGenericDeclMap,
-	registry: MonoRegistry,
-	ctx: CheckerContext
-): void {
-	if (node === null) return;
-	const kind = node.kind;
-
-	// Check CallExpr first
-	if (kind === NodeKind.CallExpr) {
-		monoProcessCallExpr(node, declMap, registry, ctx);
-		// Also walk children of the call (callee and args may contain more calls)
-		const d = node.data as CallExprData;
-		monoWalkForCalls(d.callee, declMap, registry, ctx);
-		for (const arg of d.arguments) {
-			monoWalkForCalls(arg, declMap, registry, ctx);
-		}
-		return;
-	}
-
-	// Recurse into all children (if-else chain for DRC safety)
-	if (kind === NodeKind.Program) {
-		const d = node.data as ProgramData;
-		for (const s of d.programStmts) { monoWalkForCalls(s, declMap, registry, ctx); }
-		return;
-	}
-	if (kind === NodeKind.BlockStmt) {
-		const d = node.data as BlockStmtData;
-		for (const s of d.statements) { monoWalkForCalls(s, declMap, registry, ctx); }
-		return;
-	}
-	if (kind === NodeKind.FunctionDecl) {
-		const d = node.data as FunctionDeclData;
-		monoWalkForCalls(d.fnBody, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.ArrowFunction) {
-		const d = node.data as ArrowFunctionData;
-		monoWalkForCalls(d.arrowBody, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.FunctionExpr) {
-		const d = node.data as FunctionExprData;
-		monoWalkForCalls(d.funcExprBody, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.IfStmt) {
-		const d = node.data as IfStmtData;
-		monoWalkForCalls(d.condition, declMap, registry, ctx);
-		monoWalkForCalls(d.consequent, declMap, registry, ctx);
-		monoWalkForCalls(d.alternate, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.WhileStmt) {
-		const d = node.data as WhileStmtData;
-		monoWalkForCalls(d.whileCondition, declMap, registry, ctx);
-		monoWalkForCalls(d.whileBody, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.ForStmt) {
-		const d = node.data as ForStmtData;
-		monoWalkForCalls(d.forInit, declMap, registry, ctx);
-		monoWalkForCalls(d.forCondition, declMap, registry, ctx);
-		monoWalkForCalls(d.forUpdate, declMap, registry, ctx);
-		monoWalkForCalls(d.forBody, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.ForOfStmt) {
-		const d = node.data as ForOfStmtData;
-		monoWalkForCalls(d.forOfIterable, declMap, registry, ctx);
-		monoWalkForCalls(d.forOfBody, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.ForInStmt) {
-		const d = node.data as ForInStmtData;
-		monoWalkForCalls(d.forInObject, declMap, registry, ctx);
-		monoWalkForCalls(d.forInBody, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.DoWhileStmt) {
-		const d = node.data as DoWhileStmtData;
-		monoWalkForCalls(d.doBody, declMap, registry, ctx);
-		monoWalkForCalls(d.doCondition, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.ReturnStmt) {
-		const d = node.data as ReturnStmtData;
-		monoWalkForCalls(d.argument, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.ExprStmt) {
-		const d = node.data as ExprStmtData;
-		monoWalkForCalls(d.expr, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.VariableDecl) {
-		const d = node.data as VariableDeclData;
-		monoWalkForCalls(d.initializer, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.BinaryExpr) {
-		const d = node.data as BinaryExprData;
-		monoWalkForCalls(d.left, declMap, registry, ctx);
-		monoWalkForCalls(d.right, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.UnaryExpr) {
-		const d = node.data as UnaryExprData;
-		monoWalkForCalls(d.operand, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.ConditionalExpr) {
-		const d = node.data as ConditionalExprData;
-		monoWalkForCalls(d.ternaryCondition, declMap, registry, ctx);
-		monoWalkForCalls(d.ternaryConsequent, declMap, registry, ctx);
-		monoWalkForCalls(d.ternaryAlternate, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.MemberExpr) {
-		const d = node.data as MemberExprData;
-		monoWalkForCalls(d.object, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.ArrayAccess) {
-		const d = node.data as ArrayAccessData;
-		monoWalkForCalls(d.array, declMap, registry, ctx);
-		monoWalkForCalls(d.index, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.ObjectLiteral) {
-		const d = node.data as ObjectLiteralData;
-		for (const p of d.properties) { monoWalkForCalls(p, declMap, registry, ctx); }
-		return;
-	}
-	if (kind === NodeKind.ArrayLiteral) {
-		const d = node.data as ArrayLiteralData;
-		for (const e of d.elements) { monoWalkForCalls(e, declMap, registry, ctx); }
-		return;
-	}
-	if (kind === NodeKind.TryCatchStmt) {
-		const d = node.data as TryCatchStmtData;
-		monoWalkForCalls(d.tryBody, declMap, registry, ctx);
-		monoWalkForCalls(d.catchBody, declMap, registry, ctx);
-		monoWalkForCalls(d.finallyBody, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.ThrowStmt) {
-		const d = node.data as ThrowStmtData;
-		monoWalkForCalls(d.throwArg, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.ExportDecl) {
-		const d = node.data as ExportDeclData;
-		monoWalkForCalls(d.exportedDecl, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.DecoratedDecl) {
-		const d = node.data as DecoratedDeclData;
-		monoWalkForCalls(d.decoratedNode, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.SwitchStmt) {
-		const d = node.data as SwitchStmtData;
-		monoWalkForCalls(d.switchDisc, declMap, registry, ctx);
-		for (const c of d.switchCases) { monoWalkForCalls(c, declMap, registry, ctx); }
-		return;
-	}
-	if (kind === NodeKind.SwitchCase) {
-		const d = node.data as SwitchCaseData;
-		for (const s of d.caseStmts) { monoWalkForCalls(s, declMap, registry, ctx); }
-		return;
-	}
-	if (kind === NodeKind.MatchStmt) {
-		const d = node.data as MatchStmtData;
-		monoWalkForCalls(d.matchStmtDisc, declMap, registry, ctx);
-		for (const c of d.matchStmtCases) { monoWalkForCalls(c, declMap, registry, ctx); }
-		return;
-	}
-	if (kind === NodeKind.MatchExpr) {
-		const d = node.data as MatchExprData;
-		monoWalkForCalls(d.matchDisc, declMap, registry, ctx);
-		for (const c of d.matchCases) { monoWalkForCalls(c, declMap, registry, ctx); }
-		return;
-	}
-	if (kind === NodeKind.MatchCase) {
-		const d = node.data as MatchCaseData;
-		monoWalkForCalls(d.caseBody, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.SpreadExpr) {
-		const d = node.data as SpreadExprData;
-		monoWalkForCalls(d.spreadArg, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.NewExpr) {
-		const d = node.data as NewExprData;
-		monoWalkForCalls(d.newCallee, declMap, registry, ctx);
-		for (const a of d.newArguments) { monoWalkForCalls(a, declMap, registry, ctx); }
-		return;
-	}
-	if (kind === NodeKind.TryExpr) {
-		const d = node.data as TryExprData;
-		monoWalkForCalls(d.tryArg, declMap, registry, ctx);
-		if (d.hasCatch) { monoWalkForCalls(d.catchVal, declMap, registry, ctx); }
-		return;
-	}
-	if (kind === NodeKind.ClassDecl) {
-		const d = node.data as ClassDeclData;
-		for (const m of d.classBody) { monoWalkForCalls(m, declMap, registry, ctx); }
-		return;
-	}
-	if (kind === NodeKind.MethodDecl) {
-		const d = node.data as MethodDeclData;
-		monoWalkForCalls(d.methodBody, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.ConstructorDecl) {
-		const d = node.data as ConstructorDeclData;
-		monoWalkForCalls(d.ctorBody, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.TypeAssertion) {
-		const d = node.data as TypeAssertionData;
-		monoWalkForCalls(d.asExpr, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.UpdateExpr) {
-		const d = node.data as UpdateExprData;
-		monoWalkForCalls(d.updateArg, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.DestructuringDecl) {
-		const d = node.data as DestructuringDeclData;
-		monoWalkForCalls(d.destrPattern, declMap, registry, ctx);
-		monoWalkForCalls(d.destrInit, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.DeferStmt) {
-		const d = node.data as DeferStmtData;
-		monoWalkForCalls(d.deferExpr, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.AwaitExpr) {
-		const d = node.data as AwaitExprData;
-		monoWalkForCalls(d.awaitArg, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.YieldExpr) {
-		const d = node.data as YieldExprData;
-		monoWalkForCalls(d.yieldArg, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.HiddenDeref || kind === NodeKind.HiddenAddr) {
-		const d = node.data as ExprStmtData;
-		monoWalkForCalls(d.expr, declMap, registry, ctx);
-		return;
-	}
-	if (kind === NodeKind.HiddenStdConv || kind === NodeKind.HiddenSubConv) {
-		const d = node.data as HiddenStdConvData;
-		monoWalkForCalls(d.convExpr, declMap, registry, ctx);
-		return;
-	}
-	// Leaf nodes (Identifier, literals, break, continue, etc.): no children to walk
+	monoWalkAST(program, declMap, registry, checkerCtx, monoProcessCallExpr);
 }
 
 // ===== Process a CallExpr =====
@@ -634,276 +637,11 @@ function monoInferArgType(node: Node, ctx: CheckerContext): Type {
 	return null as unknown as Type;
 }
 
-// ===== Pass 3: Rewrite Walk =====
-// Recursive walk using if-else (DRC workaround #24).
-// Merged here to avoid separate rewrite.ms import (DRC workaround #27).
-
-export function monoRewriteNode(
-	node: Node,
-	registry: MonoRegistry,
-	declMap: MonoGenericDeclMap,
-	ctx: CheckerContext
-): void {
-	if (node === null) return;
-	const kind = node.kind;
-
-	if (kind === NodeKind.CallExpr) {
-		monoRewriteCallExpr(node, registry, declMap, ctx);
-		const d = node.data as CallExprData;
-		monoRewriteNode(d.callee, registry, declMap, ctx);
-		for (const arg of d.arguments) {
-			monoRewriteNode(arg, registry, declMap, ctx);
-		}
-		return;
-	}
-	if (kind === NodeKind.Program) {
-		const d = node.data as ProgramData;
-		for (const s of d.programStmts) { monoRewriteNode(s, registry, declMap, ctx); }
-		return;
-	}
-	if (kind === NodeKind.BlockStmt) {
-		const d = node.data as BlockStmtData;
-		for (const s of d.statements) { monoRewriteNode(s, registry, declMap, ctx); }
-		return;
-	}
-	if (kind === NodeKind.FunctionDecl) {
-		const d = node.data as FunctionDeclData;
-		monoRewriteNode(d.fnBody, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.ArrowFunction) {
-		const d = node.data as ArrowFunctionData;
-		monoRewriteNode(d.arrowBody, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.FunctionExpr) {
-		const d = node.data as FunctionExprData;
-		monoRewriteNode(d.funcExprBody, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.IfStmt) {
-		const d = node.data as IfStmtData;
-		monoRewriteNode(d.condition, registry, declMap, ctx);
-		monoRewriteNode(d.consequent, registry, declMap, ctx);
-		monoRewriteNode(d.alternate, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.WhileStmt) {
-		const d = node.data as WhileStmtData;
-		monoRewriteNode(d.whileCondition, registry, declMap, ctx);
-		monoRewriteNode(d.whileBody, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.ForStmt) {
-		const d = node.data as ForStmtData;
-		monoRewriteNode(d.forInit, registry, declMap, ctx);
-		monoRewriteNode(d.forCondition, registry, declMap, ctx);
-		monoRewriteNode(d.forUpdate, registry, declMap, ctx);
-		monoRewriteNode(d.forBody, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.ForOfStmt) {
-		const d = node.data as ForOfStmtData;
-		monoRewriteNode(d.forOfIterable, registry, declMap, ctx);
-		monoRewriteNode(d.forOfBody, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.ForInStmt) {
-		const d = node.data as ForInStmtData;
-		monoRewriteNode(d.forInObject, registry, declMap, ctx);
-		monoRewriteNode(d.forInBody, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.DoWhileStmt) {
-		const d = node.data as DoWhileStmtData;
-		monoRewriteNode(d.doBody, registry, declMap, ctx);
-		monoRewriteNode(d.doCondition, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.ReturnStmt) {
-		const d = node.data as ReturnStmtData;
-		monoRewriteNode(d.argument, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.ExprStmt) {
-		const d = node.data as ExprStmtData;
-		monoRewriteNode(d.expr, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.VariableDecl) {
-		const d = node.data as VariableDeclData;
-		monoRewriteNode(d.initializer, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.BinaryExpr) {
-		const d = node.data as BinaryExprData;
-		monoRewriteNode(d.left, registry, declMap, ctx);
-		monoRewriteNode(d.right, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.UnaryExpr) {
-		const d = node.data as UnaryExprData;
-		monoRewriteNode(d.operand, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.ConditionalExpr) {
-		const d = node.data as ConditionalExprData;
-		monoRewriteNode(d.ternaryCondition, registry, declMap, ctx);
-		monoRewriteNode(d.ternaryConsequent, registry, declMap, ctx);
-		monoRewriteNode(d.ternaryAlternate, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.MemberExpr) {
-		const d = node.data as MemberExprData;
-		monoRewriteNode(d.object, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.ArrayAccess) {
-		const d = node.data as ArrayAccessData;
-		monoRewriteNode(d.array, registry, declMap, ctx);
-		monoRewriteNode(d.index, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.ObjectLiteral) {
-		const d = node.data as ObjectLiteralData;
-		for (const p of d.properties) { monoRewriteNode(p, registry, declMap, ctx); }
-		return;
-	}
-	if (kind === NodeKind.ArrayLiteral) {
-		const d = node.data as ArrayLiteralData;
-		for (const e of d.elements) { monoRewriteNode(e, registry, declMap, ctx); }
-		return;
-	}
-	if (kind === NodeKind.TryCatchStmt) {
-		const d = node.data as TryCatchStmtData;
-		monoRewriteNode(d.tryBody, registry, declMap, ctx);
-		monoRewriteNode(d.catchBody, registry, declMap, ctx);
-		monoRewriteNode(d.finallyBody, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.ThrowStmt) {
-		const d = node.data as ThrowStmtData;
-		monoRewriteNode(d.throwArg, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.ExportDecl) {
-		const d = node.data as ExportDeclData;
-		monoRewriteNode(d.exportedDecl, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.DecoratedDecl) {
-		const d = node.data as DecoratedDeclData;
-		monoRewriteNode(d.decoratedNode, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.SwitchStmt) {
-		const d = node.data as SwitchStmtData;
-		monoRewriteNode(d.switchDisc, registry, declMap, ctx);
-		for (const c of d.switchCases) { monoRewriteNode(c, registry, declMap, ctx); }
-		return;
-	}
-	if (kind === NodeKind.SwitchCase) {
-		const d = node.data as SwitchCaseData;
-		for (const s of d.caseStmts) { monoRewriteNode(s, registry, declMap, ctx); }
-		return;
-	}
-	if (kind === NodeKind.MatchStmt) {
-		const d = node.data as MatchStmtData;
-		monoRewriteNode(d.matchStmtDisc, registry, declMap, ctx);
-		for (const c of d.matchStmtCases) { monoRewriteNode(c, registry, declMap, ctx); }
-		return;
-	}
-	if (kind === NodeKind.MatchExpr) {
-		const d = node.data as MatchExprData;
-		monoRewriteNode(d.matchDisc, registry, declMap, ctx);
-		for (const c of d.matchCases) { monoRewriteNode(c, registry, declMap, ctx); }
-		return;
-	}
-	if (kind === NodeKind.MatchCase) {
-		const d = node.data as MatchCaseData;
-		monoRewriteNode(d.caseBody, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.SpreadExpr) {
-		const d = node.data as SpreadExprData;
-		monoRewriteNode(d.spreadArg, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.NewExpr) {
-		const d = node.data as NewExprData;
-		monoRewriteNode(d.newCallee, registry, declMap, ctx);
-		for (const a of d.newArguments) { monoRewriteNode(a, registry, declMap, ctx); }
-		return;
-	}
-	if (kind === NodeKind.TryExpr) {
-		const d = node.data as TryExprData;
-		monoRewriteNode(d.tryArg, registry, declMap, ctx);
-		if (d.hasCatch) { monoRewriteNode(d.catchVal, registry, declMap, ctx); }
-		return;
-	}
-	if (kind === NodeKind.ClassDecl) {
-		const d = node.data as ClassDeclData;
-		for (const m of d.classBody) { monoRewriteNode(m, registry, declMap, ctx); }
-		return;
-	}
-	if (kind === NodeKind.MethodDecl) {
-		const d = node.data as MethodDeclData;
-		monoRewriteNode(d.methodBody, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.ConstructorDecl) {
-		const d = node.data as ConstructorDeclData;
-		monoRewriteNode(d.ctorBody, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.TypeAssertion) {
-		const d = node.data as TypeAssertionData;
-		monoRewriteNode(d.asExpr, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.UpdateExpr) {
-		const d = node.data as UpdateExprData;
-		monoRewriteNode(d.updateArg, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.DestructuringDecl) {
-		const d = node.data as DestructuringDeclData;
-		monoRewriteNode(d.destrPattern, registry, declMap, ctx);
-		monoRewriteNode(d.destrInit, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.DeferStmt) {
-		const d = node.data as DeferStmtData;
-		monoRewriteNode(d.deferExpr, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.AwaitExpr) {
-		const d = node.data as AwaitExprData;
-		monoRewriteNode(d.awaitArg, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.YieldExpr) {
-		const d = node.data as YieldExprData;
-		monoRewriteNode(d.yieldArg, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.HiddenDeref || kind === NodeKind.HiddenAddr) {
-		const d = node.data as ExprStmtData;
-		monoRewriteNode(d.expr, registry, declMap, ctx);
-		return;
-	}
-	if (kind === NodeKind.HiddenStdConv || kind === NodeKind.HiddenSubConv) {
-		const d = node.data as HiddenStdConvData;
-		monoRewriteNode(d.convExpr, registry, declMap, ctx);
-		return;
-	}
-}
-
 // Rewrite a single CallExpr — replace callee with monomorphized name
 function monoRewriteCallExpr(
 	node: Node,
-	registry: MonoRegistry,
 	declMap: MonoGenericDeclMap,
+	registry: MonoRegistry,
 	ctx: CheckerContext
 ): void {
 	const d = node.data as CallExprData;
@@ -1132,7 +870,7 @@ function monoInstantiateAllFixedPoint(
 				if (cloned !== null) {
 					generated.push(cloned);
 					// Scan cloned body for nested generic calls
-					monoWalkForCalls(cloned, declMap, registry, ctx);
+					monoWalkAST(cloned, declMap, registry, ctx, monoProcessCallExpr);
 				}
 			}
 		}
@@ -1212,9 +950,9 @@ export function monomorphizeProgram(program: Node, checkerCtx: CheckerContext): 
 	}
 
 	// Rewrite original program + generated nodes (mangle callee names)
-	monoRewriteNode(program, registry, declMap, checkerCtx);
+	monoWalkAST(program, declMap, registry, checkerCtx, monoRewriteCallExpr);
 	for (const gn of generatedNodes) {
-		monoRewriteNode(gn, registry, declMap, checkerCtx);
+		monoWalkAST(gn, declMap, registry, checkerCtx, monoRewriteCallExpr);
 	}
 
 	for (const gn of generatedNodes) { pd.programStmts.push(gn); }

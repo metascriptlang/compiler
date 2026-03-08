@@ -35,9 +35,9 @@ function isDigit(ch: number): boolean {
 }
 
 function hexDigit(ch: number): number {
-	if (ch >= "0".code && ch <= "9".code) return ch - "0".code;
-	if (ch >= "a".code && ch <= "f".code) return 10 + ch - "a".code;
-	if (ch >= "A".code && ch <= "F".code) return 10 + ch - "A".code;
+	if (ch >= 48 && ch <= 57) return ch - 48;       // '0'-'9'
+	if (ch >= 97 && ch <= 102) return 10 + ch - 97;  // 'a'-'f'
+	if (ch >= 65 && ch <= 70) return 10 + ch - 65;   // 'A'-'F'
 	return -1;
 }
 
@@ -47,7 +47,7 @@ function parseHex4(input: string, pos: number): number {
 	while (i < 4) {
 		const d = hexDigit(input.charCodeAt(pos + i));
 		if (d < 0) return -1;
-		result = (result << 4) | d;
+		result = result * 16 + d;
 		i = i + 1;
 	}
 	return result;
@@ -154,8 +154,8 @@ function parseString(input: string, pos: number): JsonResult {
 					if (p + 2 < len && input.charCodeAt(p + 1) === "\\".code && input.charCodeAt(p + 2) === "u".code) {
 						const low = parseHex4(input, p + 3);
 						if (low >= 0xDC00 && low <= 0xDFFF) {
-							const codepoint = 0x10000 + ((hex - 0xD800) << 10) + (low - 0xDC00);
-							result.append(fromCodePoint(codepoint));
+							const cp = 0x10000 + ((hex - 0xD800) * 1024) + (low - 0xDC00);
+							result.append(fromCodePoint(cp));
 							p = p + 6; // skip \uXXXX
 						} else {
 							result.append(fromCodePoint(hex));

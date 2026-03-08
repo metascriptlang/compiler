@@ -288,7 +288,7 @@ function makeEntry(path: string, source: string): MapEntry {
 	return { entryPath: path, entrySource: source };
 }
 
-test "single module" {
+test "single file graph" {
 	const entries: MapEntry[] = [];
 	entries.push(makeEntry("/src/a.ms", "const x = 1;"));
 	const provider = createMapProvider(entries);

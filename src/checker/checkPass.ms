@@ -843,8 +843,10 @@ function checkProgramCore(
 	return ctx;
 }
 
-// ===== Public API (thin wrappers) =====
+// ===== Public API =====
 
+// Convenience wrapper — creates empty registry. For inline tests and CLI tools
+// that don't need cross-module resolution.
 export function checkProgram(program: Node): CheckerContext {
 	const preludeCtx = buildPreludeContext("");
 	return checkProgramCore(program, preludeCtx, null as unknown as ExportRegistry, null as unknown as ModuleGraph, null as unknown as Module, null as unknown as CancelCtx, 0);

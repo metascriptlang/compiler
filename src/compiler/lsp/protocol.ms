@@ -46,6 +46,10 @@ export function lspJsonNull(): string {
 // Find a simple string value for a key in a JSON object.
 // Scans for "key":"value" pattern. Returns the unescaped value string.
 // Returns "" if not found.
+//
+// Uses segment-based extraction: bulk-copies non-escaped segments via sliceStr,
+// only splitting at escape sequences. O(n) for strings without escapes,
+// O(n * k/n) = O(k) concat ops where k = number of escape sequences.
 export function lspGetField(json: string, field: string): string {
 	// Build the search pattern: "field":
 	const pattern = "\"" + field + "\":";
@@ -60,31 +64,62 @@ export function lspGetField(json: string, field: string): string {
 			// Expect opening quote for string value
 			if (j >= json.length || charAt(json, j) !== "\"") continue;
 			j = j + 1;  // skip opening quote
-			let value = "";
-			while (j < json.length) {
-				const c = charAt(json, j);
+
+			// Fast path: scan for end quote, check if any escapes exist
+			let hasEscapes = false;
+			let endPos = j;
+			while (endPos < json.length) {
+				const c = charAt(json, endPos);
 				if (c === "\\") {
-					// Escaped character
-					if (j + 1 < json.length) {
-						const next = charAt(json, j + 1);
-						if (next === "\"") { value = value + "\""; }
-						else if (next === "\\") { value = value + "\\"; }
-						else if (next === "n") { value = value + "\n"; }
-						else if (next === "r") { value = value + "\r"; }
-						else if (next === "t") { value = value + "\t"; }
-						else { value = value + next; }
-						j = j + 2;
-					} else {
-						j = j + 1;
-					}
+					hasEscapes = true;
+					endPos = endPos + 2;  // skip escape pair
 				} else if (c === "\"") {
-					return value;
+					break;
 				} else {
-					value = value + c;
-					j = j + 1;
+					endPos = endPos + 1;
 				}
 			}
-			return value;
+
+			// No escapes: single sliceStr — O(1) concat
+			if (!hasEscapes) {
+				return sliceStr(json, j, endPos);
+			}
+
+			// Has escapes: segment-based extraction
+			// Concat non-escaped segments via sliceStr, only split at \ positions
+			let result = "";
+			let segStart = j;
+			let k = j;
+			while (k < endPos) {
+				const c = charAt(json, k);
+				if (c === "\\") {
+					// Flush segment before this escape
+					if (k > segStart) {
+						result = result + sliceStr(json, segStart, k);
+					}
+					// Decode escape
+					if (k + 1 < json.length) {
+						const next = charAt(json, k + 1);
+						if (next === "\"") { result = result + "\""; }
+						else if (next === "\\") { result = result + "\\"; }
+						else if (next === "n") { result = result + "\n"; }
+						else if (next === "r") { result = result + "\r"; }
+						else if (next === "t") { result = result + "\t"; }
+						else { result = result + next; }
+						k = k + 2;
+					} else {
+						k = k + 1;
+					}
+					segStart = k;
+				} else {
+					k = k + 1;
+				}
+			}
+			// Flush final segment
+			if (k > segStart) {
+				result = result + sliceStr(json, segStart, k);
+			}
+			return result;
 		}
 	}
 	return "";

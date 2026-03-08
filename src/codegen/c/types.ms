@@ -438,6 +438,11 @@ export function ensureForwardDecl(g: CGen, typeName: string): void {
 
 export function getTypeDesc(g: CGen, t: Type): string {
 	if (t === null) return "void*";
+	// Standard reference parity: strip ownership modifiers at entry.
+	// Ownership modifiers like sink and lent don't affect the C type descriptor.
+	if (t.kind === TypeKind.Sink || t.kind === TypeKind.Lent) {
+		return getTypeDesc(g, t.typeReturn);
+	}
 	const __k = t.kind;
 	if (__k === null) return "void*";
 	if (__k !== __k) return "void*";  // NaN check fallback
@@ -871,14 +876,17 @@ function closureRetTypeToC(g: CGen, t: Type): string {
 //   (n: number) => boolean  →  "MS_BOOL(*)(double)"
 // Reference implementation equivalent: get closure type cast string.
 
-export function genClHalfCast(g: CGen, t: Type): string {
+// Build closure function pointer cast: retType(*)(params...)
+// withEnv=true prepends void* for the env parameter (full closure call).
+// ARM64 requires non-variadic casts — variadic calling convention differs.
+function genClosureCast(g: CGen, t: Type, withEnv: boolean): string {
 	const retC = closureRetTypeToC(g, t);
-	let params = "void";
+	let params = withEnv ? "void*" : "void";
 	if (t !== null && t.kind === TypeKind.Function && t.typeChildren.length > 0) {
-		params = "";
+		if (!withEnv) { params = ""; }
 		let i = 0;
 		while (i < t.typeChildren.length) {
-			if (i > 0) params = params + ", ";
+			if (i > 0 || withEnv) params = params + ", ";
 			params = params + closureParamTypeToC(g, t.typeChildren[i]);
 			i = i + 1;
 		}
@@ -886,21 +894,8 @@ export function genClHalfCast(g: CGen, t: Type): string {
 	return retC + "(*)" + "(" + params + ")";
 }
 
-// Generate a typed function pointer cast for closure calls WITH env (void* first param).
-// Like genClHalfCast but prepends void* to the parameter list.
-// ARM64 requires non-variadic casts — variadic calling convention differs.
-export function genClFullCast(g: CGen, t: Type): string {
-	const retC = closureRetTypeToC(g, t);
-	let params = "void*";  // env param first
-	if (t !== null && t.kind === TypeKind.Function && t.typeChildren.length > 0) {
-		let i = 0;
-		while (i < t.typeChildren.length) {
-			params = params + ", " + closureParamTypeToC(g, t.typeChildren[i]);
-			i = i + 1;
-		}
-	}
-	return retC + "(*)" + "(" + params + ")";
-}
+export function genClHalfCast(g: CGen, t: Type): string { return genClosureCast(g, t, false); }
+export function genClFullCast(g: CGen, t: Type): string { return genClosureCast(g, t, true); }
 
 // ===== Result Type Generation =====
 

@@ -60,8 +60,8 @@ function escapeString(s: string): string {
 			} else {
 				// Control characters: \u00XX
 				result.append("\\u00");
-				result.append(hexChar((ch >> 4) & 0xF));
-				result.append(hexChar(ch & 0xF));
+				result.append(hexChar(ch / 16));
+				result.append(hexChar(ch % 16));
 			}
 			runStart = i + 1;
 		}

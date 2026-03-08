@@ -19,7 +19,8 @@ import {
 	WhileStmtData, ForStmtData, ForOfStmtData, BlockStmtData,
 	TryCatchStmtData, SwitchStmtData, SwitchCaseData,
 	ThrowStmtData, DoWhileStmtData, FunctionDeclData,
-	ExportDeclData, MoveExprData, Symbol
+	ExportDeclData, MoveExprData, Symbol,
+	isEmptyBlock,
 } from "../ast/node";
 import { SymbolKind, makeSymbol } from "../checker/symbol";
 import { unknownType } from "../checker/types";
@@ -175,7 +176,7 @@ function stmtsDefinitelyTerminate(stmts: Node[], fromIndex: number): boolean {
 		// If-else: terminates if BOTH branches terminate
 		if (stmt.kind === NodeKind.IfStmt) {
 			const d = stmt.data as IfStmtData;
-			if (d.alternate !== null && !isEmptyBlockNode(d.alternate)) {
+			if (d.alternate !== null && !isEmptyBlock(d.alternate)) {
 				if (blockDefinitelyTerminates(d.consequent)
 					&& blockDefinitelyTerminates(d.alternate)) {
 					return true;
@@ -187,13 +188,6 @@ function stmtsDefinitelyTerminate(stmts: Node[], fromIndex: number): boolean {
 	return false;
 }
 
-// Helper: check if a node is an empty block (no statements)
-function isEmptyBlockNode(node: Node): boolean {
-	if (node === null) return true;
-	if (node.kind !== NodeKind.BlockStmt) return false;
-	const stmts = (node.data as BlockStmtData).statements;
-	return stmts.length === 0;
-}
 
 // ===== isLastReadInContext — cross-scope forward scan with termination analysis =====
 // Like isLastReadInBlock, but also checks remaining statements in outer scopes.

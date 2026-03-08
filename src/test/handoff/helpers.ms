@@ -1,10 +1,12 @@
 // Phase Handoff Test Helpers
 //
 // Shared utilities for running the compiler pipeline up to specific phases.
+// Uses the same graph-based pipeline as compile.ms (1-module graph internally).
 
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
-import { checkProgram } from "../../checker/checkPass";
+import { checkProgramWithRegistry } from "../../checker/checkPass";
+import { checkModuleGraph, getPreludeContext } from "../../checker/orchestrator";
 import { CheckerContext } from "../../checker/context";
 import { monomorphizeProgram } from "../../monomorphize/collect";
 import { validateTypedAST } from "../../checker/validate";
@@ -12,17 +14,41 @@ import { transformProgram } from "../../transform/index";
 import { transformForNative } from "../../transform/native/index";
 import { createTransformContextWithChecker } from "../../transform/context";
 import { Node, NodeKind, ProgramData, FunctionDeclData } from "../../ast/node";
+import { createMapProvider, loadModuleGraph } from "../../module/loader";
+import { findModule } from "../../module/graph";
 
 export function checkSource(source: string): CheckerContext {
-	const pr = parseSource(source);
+	const modPath = "test/handoff.ms";
+	const entries = [{ entryPath: modPath, entrySource: source }];
+	const provider = createMapProvider(entries);
+	const graph = loadModuleGraph(modPath, provider);
+	const registry = checkModuleGraph(graph, "");
+	const preludeCtx = getPreludeContext();
+
+	const mod = findModule(graph, modPath);
+	if (mod === null) return null as unknown as CheckerContext;
+
+	const pr = parseSource(mod.source);
 	if (!pr.ok) return null as unknown as CheckerContext;
-	return checkProgram(pr.value);
+
+	return checkProgramWithRegistry(pr.value, registry, graph, mod, preludeCtx);
 }
 
 export function fullPipeline(source: string): Node {
-	const pr = parseSource(source);
+	const modPath = "test/handoff.ms";
+	const entries = [{ entryPath: modPath, entrySource: source }];
+	const provider = createMapProvider(entries);
+	const graph = loadModuleGraph(modPath, provider);
+	const registry = checkModuleGraph(graph, "");
+	const preludeCtx = getPreludeContext();
+
+	const mod = findModule(graph, modPath);
+	if (mod === null) return null as unknown as Node;
+
+	const pr = parseSource(mod.source);
 	if (!pr.ok) return null as unknown as Node;
-	const ctx = checkProgram(pr.value);
+
+	const ctx = checkProgramWithRegistry(pr.value, registry, graph, mod, preludeCtx);
 	const monoed = monomorphizeProgram(pr.value, ctx);
 	validateTypedAST(ctx, monoed);
 	const transformed = transformProgram(monoed, ctx, false);

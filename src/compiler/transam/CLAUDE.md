@@ -353,7 +353,7 @@ function handleHover(db: TransAmDb, filePath: string, pos: number): string {
 }
 ```
 
-### Multi-Module Integration
+### Cross-Module Integration
 
 Existing `ModuleGraph` (`src/module/graph.ms`) tracks static structure. Trans-Am's `module_deps.ms` tracks **runtime dependency edges** for incremental invalidation.
 

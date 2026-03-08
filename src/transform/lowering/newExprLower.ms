@@ -63,12 +63,9 @@ function lowerNewNode(node: Node): Node {
 			call.nodeType = node.nodeType;
 			return call;
 		}
-		// Only lower to ClassName_new() when arguments exist (explicit constructor).
-		// No-arg new: leave as NewExpr for backend-specific inline allocation (Standard reference pattern)
-		if (d.newArguments.length > 0) {
-			const ctorName = id.name + "_new";
-			return makeCall(makeIdent(ctorName, loc), d.newArguments, loc);
-		}
+		// With args: leave as NewExpr — codegen inlines allocation + positional field assignment
+		// (Standard reference parity: inline object construction — no separate _new function)
+		// No-arg new: also leave as NewExpr for inline allocation
 		return node;
 	}
 
@@ -77,10 +74,7 @@ function lowerNewNode(node: Node): Node {
 		const m = d.newCallee.data as MemberExprData;
 		if (m.object.kind === NodeKind.Identifier) {
 			const objId = m.object.data as IdentifierData;
-			if (d.newArguments.length > 0) {
-				const ctorName = objId.name + "_" + m.property + "_new";
-				return makeCall(makeIdent(ctorName, loc), d.newArguments, loc);
-			}
+			// Leave as NewExpr — codegen handles inline allocation
 			return node;
 		}
 	}
@@ -116,26 +110,24 @@ function getCallName(input: string): string {
 // ===== Tests =====
 test "new Foo() stays NewExpr (inline alloc)" { assert firstExprKindAfter("new Foo();", lowerNewExpr) === NodeKind.NewExpr; }
 
-test "new Bar(x, y) becomes Bar_new(x, y)" {
-	const name = getCallName("new Bar(x, y);");
-	assert name === "Bar_new";
+test "new Bar(x, y) stays NewExpr (inline alloc)" {
+	assert firstExprKindAfter("new Bar(x, y);", lowerNewExpr) === NodeKind.NewExpr;
 }
 
 test "new Map() becomes msMapNew()" { assert getCallName("new Map();") === "msMapNew"; }
 
-test "new with args is CallExpr" { assert firstExprKindAfter("new Foo(x);", lowerNewExpr) === NodeKind.CallExpr; }
+test "new with args stays NewExpr" { assert firstExprKindAfter("new Foo(x);", lowerNewExpr) === NodeKind.NewExpr; }
 
 test "non-new unchanged" { assert firstExprKindAfter("foo();", lowerNewExpr) === NodeKind.CallExpr; }
 
 test "stmt count preserved" { assert stmtCountAfter("new A(); new B();", lowerNewExpr) === 2; }
 
-test "new with args preserved count" {
+test "new with args preserved in NewExpr" {
 	const result = parseInput("new Foo(1, 2);");
 	if (!result.ok) { assert false; return; }
 	const ctx = createTransformContext();
 	const prog = lowerNewExpr(result.value, ctx);
 	const stmts = getStmts(prog);
 	const sd = stmts[0].data as ExprStmtData;
-	const cd = sd.expr.data as CallExprData;
-	assert cd.arguments.length === 2;
+	assert sd.expr.kind === NodeKind.NewExpr;
 }

@@ -72,7 +72,7 @@ test "function call through transform" {
 	assert ctx.lastResult.intVal === 30;
 }
 
-test "nested function call (single module, full pipeline)" {
+test "nested function call (full pipeline)" {
 	const ctx = evalFull("function dbl(x) { return x * 2; } return dbl(dbl(3));");
 	assert ctx.lastResult.intVal === 12;
 }
@@ -192,12 +192,9 @@ test "class and function in same module" {
 	assert ctx.lastResult.intVal === 55;
 }
 
-// --- Multi-module test helper ---
+// --- Project test helper ---
 // Uses parse-only (no checker/transforms) because:
-// - Per-module checkProgram doesn't know about cross-module symbols
-// - transformProgram restructures calls to unknown functions (crashes)
 // - Raiser VM is dynamically typed; checker/transforms aren't needed for correctness
-// For single-module, evalFull (with full pipeline) still works via the tests above.
 //
 // codes[0] = entry module, codes[1..n] = dependencies (deepest last).
 // Modules are pushed in reverse order so dependencies initialize before the entry.
@@ -221,8 +218,8 @@ function evalProject(codes: string[]): RaiserContext {
 	return ctx;
 }
 
-// --- Multi-module Tests ---
-test "single module via project API" {
+// --- Project Tests ---
+test "single file via project API" {
 	const ctx = evalProject(["return 2 + 3;"]);
 	assert ctx.lastResult.intVal === 5;
 }

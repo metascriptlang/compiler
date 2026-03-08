@@ -39,7 +39,7 @@ import { preprocessHeaders } from "../module/aro";
 import { error, success, bold, dim, green, red, yellow, cyan } from "../utils/color";
 import { clockMs } from "std/process";
 
-// ===== Multi-Module Helpers =====
+// ===== Build Helpers =====
 
 // Build ResolverConfig from CLI target + optional build.ms resolve section.
 export function buildResolverConfig(target: Target, resolve: ResolveSection): ResolverConfig {
@@ -250,7 +250,7 @@ function needsRebuild(graph: ModuleGraph, outputBinary: string): boolean {
 	return false;
 }
 
-// ===== Multi-Module JS Build =====
+// ===== JS Build =====
 
 export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOptions): void {
 	registerCoreParsers();
@@ -307,7 +307,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	console.log(success(compiled + " module(s) compiled to JS"));
 }
 
-// ===== Multi-Module C Build =====
+// ===== C Build =====
 // Loads module graph, two-pass separate compilation:
 //   Pass 1: Collect exported prototypes from all modules
 //   Pass 2: Full pipeline + codegen + per-module compile to .o
@@ -496,7 +496,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	if (opts.showTime) printTiming("built", t0);
 }
 
-// ===== Test (multi-module, C backend) =====
+// ===== Test (C backend) =====
 // Compiles all modules, suppresses user's main(), executes test binary.
 // Inline tests (testGroup/test/check) run during module initialization.
 
@@ -602,7 +602,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	exit(runCode);
 }
 
-// ===== Run JS (multi-module aware) =====
+// ===== Run JS =====
 
 export function cmdRunJS(filePath: string, opts: CliOptions): void {
 	setTargetSizes(8, 8);

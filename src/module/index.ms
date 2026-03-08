@@ -1,4 +1,4 @@
-// Module System Hub — re-exports for multi-module compilation
+// Module System Hub — re-exports for module compilation
 
 export {
 	ModuleState, ImportEntry, Module, ModuleGraph,
