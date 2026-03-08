@@ -108,6 +108,11 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 			current(state).kind === TokenKind.Protected || current(state).kind === TokenKind.Readonly) {
 			advance(state);
 		}
+		// Out parameter: out name: Type → stored as "out:name"
+		if (current(state).kind === TokenKind.Out) {
+			advance(state);
+			paramPrefix = paramPrefix + "out:";
+		}
 		// Extension method receiver (must be first param)
 		if (params.length === 0 && current(state).kind === TokenKind.This) {
 			advance(state);

@@ -135,6 +135,19 @@ function applyExtensionFlags(flags: string, params: string[], fnParamTypes: stri
 		if (flags === "") { flags = "sext:" + staticType; }
 		else { flags = flags + "|sext:" + staticType; }
 	}
+	// Out parameters: strip "out:" prefix, encode positions in flags
+	let outPositions = "";
+	for (let oi = 0; oi < params.length; oi += 1) {
+		if (params[oi].length > 4 && sliceStr(params[oi], 0, 4) === "out:") {
+			params[oi] = sliceStr(params[oi], 4, params[oi].length);
+			if (outPositions === "") { outPositions = oi.toString(); }
+			else { outPositions = outPositions + "," + oi.toString(); }
+		}
+	}
+	if (outPositions !== "") {
+		if (flags === "") { flags = "out:" + outPositions; }
+		else { flags = flags + "|out:" + outPositions; }
+	}
 	// Encode generic param names
 	if (genericNames !== "") {
 		if (flags === "") { flags = "gen:" + genericNames; }

@@ -17,7 +17,7 @@ import {
 	unknownType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType,
 	createPrimitive, createArray, createFunction, createClosureType, createStruct,
 	createResult, createTypeRef, createUnion, createGenericParam, createDistinct,
-	createSizedArray, createSpan, createBorrow, createPtr, createRef, createMaybeType,
+	createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType,
 	setMinArity, typeNameOf, assignType, isInterfaceType, unwrapRef,
 } from "./types";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, lookupSymbol, lookupLocal, defineSymbol, makeSymbol, openScope, closeScope, SymbolState, hasFlag, setFlag, SymbolFlag } from "./symbol";
@@ -197,6 +197,9 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 		}
 		if (baseName === "Ref" && args.length === 1) {
 			return createRef(resolveAnnotation(args[0], ctx));
+		}
+		if (baseName === "Var" && args.length === 1) {
+			return createVar(resolveAnnotation(args[0], ctx));
 		}
 		if (baseName === "Map" && args.length === 2) {
 			const t = createPrimitive(TypeKind.Map);
@@ -473,6 +476,25 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 	}
 
 	const paramTypes = resolveTypeStrings(d.fnParamTypes, d.params.length, ctx);
+
+	// Wrap out param types in TypeKind.Var (reference parity: tyVar)
+	if (d.fnFlags !== "" && d.fnFlags.indexOf("out:") >= 0) {
+		const flagParts = splitTopLevel(d.fnFlags, "|");
+		for (const fp of flagParts) {
+			const trimFp = trimStr(fp);
+			if (trimFp.length > 4 && sliceStr(trimFp, 0, 4) === "out:") {
+				const idxStr = sliceStr(trimFp, 4, trimFp.length);
+				const idxParts = splitTopLevel(idxStr, ",");
+				for (const ip of idxParts) {
+					const idx = parseIntStr(trimStr(ip));
+					if (idx >= 0 && idx < paramTypes.length) {
+						paramTypes[idx] = createVar(paramTypes[idx]);
+					}
+				}
+			}
+		}
+	}
+
 	const returnType = (d.fnReturnType !== "") ? resolveAnnotation(d.fnReturnType, ctx) : unknownType();
 	const fnType = createFunction(paramTypes, d.params, returnType);
 

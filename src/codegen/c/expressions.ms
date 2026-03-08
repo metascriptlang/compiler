@@ -49,6 +49,24 @@ function genArgCcgPtr(arg: string, argNode: Node, p: CProc): string {
 	return "(&" + arg + ")";
 }
 
+// Reference parity: Nim's addrLoc always operates on a TLoc (named variable),
+// never on a bare compound literal. When we need &(expr) and expr is a bare
+// compound literal (starts with '{'), hoist it to a temp variable first.
+function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node): string {
+	if (snippet.length > 0 && snippet.charCodeAt(0) === "{".code) {
+		let cType = "void";
+		if (exprNode !== null && exprNode.nodeType !== null) {
+			cType = getTypeDesc(g, exprNode.nodeType);
+		}
+		p.labels += 1;
+		const tmpName = "_clit" + p.labels + "_";
+		emitProcLocalsLine(p, cType + " " + tmpName + ";");
+		emitStmtsLine(p, tmpName + " = (" + cType + ")" + snippet + ";");
+		return "&" + tmpName;
+	}
+	return "&(" + snippet + ")";
+}
+
 // ===== Union Variant Index Matching =====
 // Matches an `as` target type against a Union's typeChildren by comparing field names.
 // Returns the variant index (0-based), or -1 if no match.
@@ -628,7 +646,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 			// Indirect param: already a pointer — reference pattern returns raw snippet
 			results.push(safeName((d.expr.data as IdentifierData).name));
 		} else {
-			results.push("&(" + inner + ")");
+			results.push(safeAddrOf(g, p, inner, d.expr));
 		}
 		return;
 	}
@@ -780,7 +798,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 			let arg = results[results.length - cc + ai];
 			// & prefix on nativeName: wrap first arg with &(...)
 			if (ovNeedsAddr && ai === 0) {
-				arg = "&(" + arg + ")";
+				arg = safeAddrOf(g, p, arg, cd.arguments[ai]);
 			} else if (hasOvParams && ai < ovType.typeChildren.length && ai < cd.arguments.length) {
 				const paramType = ovType.typeChildren[ai];
 				const argNode = cd.arguments[ai];
@@ -788,7 +806,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 					const paramIsPtr = isPointerType(paramType);
 					const argIsPtr = isPointerType(argNode.nodeType);
 					if (paramIsPtr && !argIsPtr) {
-						arg = "&(" + arg + ")";
+						arg = safeAddrOf(g, p, arg, argNode);
 					} else if (!paramIsPtr && argIsPtr) {
 						arg = "*(" + arg + ")";
 					}
@@ -837,7 +855,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 					const paramIsPtr = isPointerType(paramType);
 					const argIsPtr = isPointerType(argNode.nodeType);
 					if (paramIsPtr && !argIsPtr) {
-						arg = "&(" + arg + ")";
+						arg = safeAddrOf(g, p, arg, argNode);
 					} else if (!paramIsPtr && argIsPtr) {
 						arg = "*(" + arg + ")";
 					}

@@ -19,7 +19,7 @@ import {
 	voidType, nullType, errorType,
 	createArray, createSpan, createFunction, createTypeRef, createStruct, createRef, substituteType, instantiateGeneric,
 	isNumeric, isIntegerType, isStringType, isCallable, getReturnType, getElementType, getProperty, sizeOfType,
-	typeNameOf, unwrapRef, isDiscriminatedUnion, findVariantByDiscriminant, findFieldInVariant,
+	typeNameOf, unwrapRef, isDiscriminatedUnion, findVariantByDiscriminant, findFieldInVariant, findUnionVariant,
 	unifyType, createUnifyBindings, hasGenericParams,
 	getMinArity, isNarrowingIntConv, CallingConvention,
 } from "./types";
@@ -39,6 +39,39 @@ import { parseNumberLiteral, sliceStr, findChar, charAt, splitTopLevel, trimStr 
 import { findCallTypeArg, getExplicitTypeArg, getGenericDecl } from "../parser/context";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
+
+// ===== Generic NewExpr Resolution =====
+// Resolves `new Box<number>(42)` — captures type args from side-channel,
+// records instantiation, and builds concrete Ref<Struct> type.
+// Parity: Nim semobjconstr.nim:semObjConstr → semTypeNode captures type args.
+function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Type): Type {
+	if (callee.kind !== NodeKind.Identifier) return calleeType;
+	const calleeName = (callee.data as IdentifierData).name;
+	const ltCol = callee.location.column + calleeName.length;
+	const typeArgStr = getExplicitTypeArg(callee.location.line, ltCol);
+	if (typeArgStr === "") return calleeType;
+	const genericParams = getGenericDecl(calleeName);
+	if (genericParams === "") return calleeType;
+	const args = splitTopLevel(typeArgStr, ",");
+	recordGenericTypeInstantiation(calleeName, genericParams, args, ctx);
+	const typeArgKey = buildTypeArgKey(args, ctx);
+	const mangledName = calleeName + "__" + typeArgKey;
+	const baseSym = lookupSymbol(ctx.table, calleeName);
+	if (baseSym === null) return calleeType;
+	ensureShaped(baseSym, ctx);
+	const paramNames = splitTopLevel(genericParams, ",");
+	const trimmedParamNames: string[] = [];
+	const concreteTypes: Type[] = [];
+	for (let pi = 0; pi < paramNames.length; pi += 1) {
+		trimmedParamNames.push(trimStr(paramNames[pi]));
+		const argName = pi < args.length ? trimStr(args[pi]) : "";
+		concreteTypes.push(resolveAnnotation(argName, ctx));
+	}
+	const instType = instantiateGeneric(baseSym.symbolType, trimmedParamNames, concreteTypes);
+	const instInner = (instType.kind === TypeKind.Ref && instType.typeReturn !== null) ? instType.typeReturn : instType;
+	instInner.typeName = mangledName;
+	return instType;
+}
 
 // ===== Expression Checker =====
 
@@ -219,10 +252,20 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			const d = node.data as TypeAssertionData;
 			const srcType = checkExpr(ctx, d.asExpr, null as unknown as Type);
 			const targetType = (d.asType !== "") ? resolveAnnotation(d.asType, ctx) : unknownType();
-			// Standard reference parity: cast just sets result.typ = targetType, no variant resolution.
-			// Field type info is already in targetType (from type alias or inline struct).
-			// C codegen handles variant index resolution at emission time.
-			node.nodeType = targetType;
+			// Nim parity: when narrowing a Union, resolve to the actual variant type.
+			// User writes `as { flat: Doc }` but nodeType must be full variant
+			// `{ flat: Doc, broken: Doc }` so codegen uses DocData_v3, not msAnon_xyz.
+			if (srcType !== null && srcType.kind === TypeKind.Union
+				&& targetType.kind === TypeKind.Struct && targetType.typeNames !== null) {
+				const varIdx = findUnionVariant(srcType, targetType.typeNames, targetType.typeChildren);
+				if (varIdx >= 0 && varIdx < srcType.typeChildren.length) {
+					node.nodeType = srcType.typeChildren[varIdx];
+				} else {
+					node.nodeType = targetType;
+				}
+			} else {
+				node.nodeType = targetType;
+			}
 			node.nodeType;
 		},
 		NodeKind.SpreadExpr => {
@@ -233,42 +276,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 		NodeKind.NewExpr => {
 			const d = node.data as NewExprData;
 			const calleeType = checkExpr(ctx, d.newCallee, null as unknown as Type);
-			// Resolve generic type args: new Box<number>(42)
-			let resolvedType = calleeType;
-			if (d.newCallee.kind === NodeKind.Identifier) {
-				const calleeName = (d.newCallee.data as IdentifierData).name;
-				const ltCol = d.newCallee.location.column + calleeName.length;
-				const typeArgStr = getExplicitTypeArg(d.newCallee.location.line, ltCol);
-				if (typeArgStr !== "") {
-					const genericParams = getGenericDecl(calleeName);
-					if (genericParams !== "") {
-						const args = splitTopLevel(typeArgStr, ",");
-						recordGenericTypeInstantiation(calleeName, genericParams, args, ctx);
-						// Build instantiated Ref<Struct> type
-						const typeArgKey = buildTypeArgKey(args, ctx);
-						const mangledName = calleeName + "__" + typeArgKey;
-						const baseSym = lookupSymbol(ctx.table, calleeName);
-						if (baseSym !== null) {
-							ensureShaped(baseSym, ctx);
-							const baseType = baseSym.symbolType;
-							// Substitute generic params with concrete types
-							const paramNames = splitTopLevel(genericParams, ",");
-							const trimmedParamNames: string[] = [];
-							const concreteTypes: Type[] = [];
-							for (let pi = 0; pi < paramNames.length; pi += 1) {
-								trimmedParamNames.push(trimStr(paramNames[pi]));
-								const argName = pi < args.length ? trimStr(args[pi]) : "";
-								concreteTypes.push(resolveAnnotation(argName, ctx));
-							}
-							const instType = instantiateGeneric(baseType, trimmedParamNames, concreteTypes);
-							// Set mangled name on inner struct
-							const instInner = (instType.kind === TypeKind.Ref && instType.typeReturn !== null) ? instType.typeReturn : instType;
-							instInner.typeName = mangledName;
-							resolvedType = instType;
-						}
-					}
-				}
-			}
+			const resolvedType = resolveGenericNewExpr(ctx, d.newCallee, calleeType);
 			// Resolve inner struct type for field type propagation
 			const innerType = (resolvedType !== null && resolvedType.kind === TypeKind.Ref && resolvedType.typeReturn !== null)
 				? resolvedType.typeReturn : resolvedType;
@@ -754,7 +762,16 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 				if (!isAssignable(argTypes[pi], paramType)) {
 					const calleeName = getCalleeName(d.callee);
 					addError(ctx, "Argument type mismatch in '" + calleeName + "' arg " + intToString(pi) + ": got " + typeNameOf(argTypes[pi]) + ", expected " + typeNameOf(paramType), node.location.line, node.location.column);
-				} else if (needsStdConv(argTypes[pi], paramType)) {
+				}
+				// Reference parity (sigmatch.nim:2834): var/out params require lvalue argument
+				if (paramType.kind === TypeKind.Var && pi < d.arguments.length) {
+					const argKind = d.arguments[pi].kind;
+					if (argKind !== NodeKind.Identifier && argKind !== NodeKind.MemberExpr && argKind !== NodeKind.ArrayAccess) {
+						const calleeName = getCalleeName(d.callee);
+						addError(ctx, "'" + calleeName + "' arg " + intToString(pi) + ": out parameter requires a variable, not an expression", node.location.line, node.location.column);
+					}
+				}
+				if (needsStdConv(argTypes[pi], paramType)) {
 					// Implementation parity: insert HiddenStdConv for numeric widening/narrowing OR Span coercion
 					const convTok = createToken(TokenKind.Ident, "", d.arguments[pi].location.line);
 					const convNode = createNode(NodeKind.HiddenStdConv, { convExpr: d.arguments[pi], convType: paramType }, convTok);

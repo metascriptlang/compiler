@@ -36,7 +36,7 @@ export enum TypeKind {
 	// Memory
 	Ref, Ptr, Borrow,
 	// Ownership modifiers (standard reference parity — wrap inner type)
-	Sink, Lent,
+	Sink, Lent, Var,
 	// Special
 	TypeReference, Union, Enum, Result,
 	// Distinct
@@ -354,6 +354,13 @@ export function createBorrow(inner: Type): Type {
 	return t;
 }
 
+export function createVar(inner: Type): Type {
+	const t = emptyType();
+	t.kind = TypeKind.Var;
+	t.typeReturn = inner;
+	return t;
+}
+
 export function createTuple(elementTypes: Type[]): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Tuple;
@@ -656,7 +663,9 @@ function substituteStruct(t: Type, paramName: string, concrete: Type): Type {
 	return result;
 }
 
-// Visited set for cycle detection in self-referential types
+// Identity-based cycle detection for self-referential types (parity: semtypinst.nim recursionLimit)
+// Type has typeReturn/typeExtra/typeChildren that can reference back to itself.
+// Depth limit alone causes exponential branching; identity check prevents revisiting.
 let substituteVisited: Type[] = [];
 
 function substituteIsSeen(t: Type): boolean {
@@ -670,7 +679,7 @@ export function substituteType(t: Type, paramName: string, concrete: Type): Type
 	if (t === null) return t;
 	// Guard before match: GenericParam with matching name
 	if (t.kind === TypeKind.GenericParam && t.typeName === paramName) return concrete;
-	// Cycle detection for self-referential types (parity: semtypinst.nim recursionLimit)
+	// Cycle detection: identity-based visited set
 	if (substituteIsSeen(t)) return t;
 	substituteVisited.push(t);
 	const result = match (t.kind) {
@@ -966,6 +975,10 @@ export function typeNameOf(t: Type): string {
 	if (t.kind === TypeKind.Sink || t.kind === TypeKind.Lent) {
 		if (t.typeReturn !== null) return typeNameOf(t.typeReturn);
 		return "";
+	}
+	if (t.kind === TypeKind.Var) {
+		if (t.typeReturn !== null) return "out " + typeNameOf(t.typeReturn);
+		return "out";
 	}
 	if (t.kind === TypeKind.Struct) return t.typeName;
 	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) {

@@ -250,6 +250,7 @@ export function typeKey(t: Type): string {
 		},
 		TypeKind.Ref => { "ref:" + typeKey(t.typeReturn); },
 		TypeKind.Ptr => { "ptr:" + typeKey(t.typeReturn); },
+		TypeKind.Var => { "var:" + typeKey(t.typeReturn); },
 		TypeKind.Borrow => { "borrow:" + typeKey(t.typeReturn); },
 		TypeKind.Map => { "map:" + typeKey(t.typeReturn) + ":" + typeKey(t.typeExtra); },
 		TypeKind.Set => { "set:" + typeKey(t.typeReturn); },
@@ -337,6 +338,7 @@ const PTR_THRESHOLD: number = 24;
 
 export function ccgIntroducedPtr(t: Type): boolean {
 	if (t === null) return false;
+	if (t.kind === TypeKind.Var) return true;  // out params always by pointer
 	const inner = skipModifier(t);
 	if (inner === null) return false;
 	if (isInterfaceType(inner)) return getTypeSize(inner) > PTR_THRESHOLD;
@@ -529,6 +531,12 @@ export function getTypeDesc(g: CGen, t: Type): string {
 			const ptrType = inner + "*";
 			typeCacheSet(g.typeCache, key, ptrType);
 			ptrType;
+		},
+		TypeKind.Var => {
+			// Var returns inner type desc — the * is added by ccgIntroducedPtr at declaration/call level
+			const inner = getTypeDesc(g, t.typeReturn);
+			typeCacheSet(g.typeCache, key, inner);
+			inner;
 		},
 		TypeKind.Borrow => {
 			const inner = getTypeDesc(g, t.typeReturn);

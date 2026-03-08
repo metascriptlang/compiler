@@ -11,18 +11,14 @@
 
 extern function msFsReadFile(path: string): string;
 extern function msFsWriteFileMode(path: string, content: string, mode: string): number;
-extern function msFsStatMode(path: string): number;
+extern function msFsExists(path: string): number;
+extern function msFsIsFile(path: string): number;
+extern function msFsIsDir(path: string): number;
 extern function msFsFileSize(path: string): number;
 extern function msFsMkdir(path: string): number;
 extern function msFsRmdir(path: string): number;
 extern function msFsRemove(path: string): number;
 extern function msFsRename(oldPath: string, newPath: string): number;
-
-// ===== POSIX mode constants (decoded in pure MetaScript) =====
-
-const S_IFMT: number = 61440;    // 0xF000 — file type mask
-const S_IFREG: number = 32768;   // 0x8000 — regular file
-const S_IFDIR: number = 16384;   // 0x4000 — directory
 
 // ===== Path (pure MetaScript, re-exported) =====
 
@@ -47,19 +43,15 @@ export function appendFile(path: string, content: string): boolean {
 // ===== Stat (pure MetaScript — bitwise decode of POSIX mode bits) =====
 
 export function exists(path: string): boolean {
-	return msFsStatMode(path) >= 0;
+	return msFsExists(path) === 1;
 }
 
 export function isFile(path: string): boolean {
-	const mode = msFsStatMode(path);
-	if (mode < 0) return false;
-	return (mode - (mode % S_IFMT)) === S_IFREG;
+	return msFsIsFile(path) === 1;
 }
 
 export function isDir(path: string): boolean {
-	const mode = msFsStatMode(path);
-	if (mode < 0) return false;
-	return (mode - (mode % S_IFMT)) === S_IFDIR;
+	return msFsIsDir(path) === 1;
 }
 
 export function fileSize(path: string): number {
@@ -105,15 +97,14 @@ export function copyFile(src: string, dst: string): boolean {
 }
 
 export function ensureDir(path: string): boolean {
-	if (msFsStatMode(path) >= 0) return true;
+	if (msFsExists(path) === 1) return true;
 	// Walk segments, mkdir each prefix
 	let i = 0;
 	while (i < path.length) {
 		if (path.charCodeAt(i) === "/".code) {
 			if (i > 0) {
 				const prefix = path.slice(0, i);
-				const m = msFsStatMode(prefix);
-				if (m < 0) {
+				if (msFsExists(prefix) !== 1) {
 					if (msFsMkdir(prefix) !== 1) return false;
 				}
 			}
@@ -121,8 +112,7 @@ export function ensureDir(path: string): boolean {
 		i = i + 1;
 	}
 	// Final segment
-	const m = msFsStatMode(path);
-	if (m < 0) {
+	if (msFsExists(path) !== 1) {
 		return msFsMkdir(path) === 1;
 	}
 	return true;

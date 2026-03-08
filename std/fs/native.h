@@ -68,14 +68,21 @@ static inline double msFsWriteFileMode(msString path, msString content, msString
 
 /* ===== Stat ===== */
 
-/**
- * Single stat call. Returns raw st_mode bits as number, or -1.0 on error.
- * MetaScript decodes: S_IFMT = 0xF000, S_IFREG = 0x8000, S_IFDIR = 0x4000
- */
-static inline double msFsStatMode(msString path) {
+static inline double msFsExists(msString path) {
 	struct stat st;
-	if (stat(msCStr(path), &st) != 0) return -1.0;
-	return (double)st.st_mode;
+	return (stat(msCStr(path), &st) == 0) ? 1.0 : 0.0;
+}
+
+static inline double msFsIsFile(msString path) {
+	struct stat st;
+	if (stat(msCStr(path), &st) != 0) return 0.0;
+	return S_ISREG(st.st_mode) ? 1.0 : 0.0;
+}
+
+static inline double msFsIsDir(msString path) {
+	struct stat st;
+	if (stat(msCStr(path), &st) != 0) return 0.0;
+	return S_ISDIR(st.st_mode) ? 1.0 : 0.0;
 }
 
 /**

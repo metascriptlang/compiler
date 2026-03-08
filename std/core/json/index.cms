@@ -55,68 +55,6 @@ export function jsonObject(): JsonValue {
 	return new JsonValue(JsonKind.Object, false, 0, "", [], [], []);
 }
 
-// ===== Accessor Extension Methods =====
-
-export function get(this v: JsonValue, key: string): JsonValue {
-	if (v.kind !== JsonKind.Object) return jsonNull();
-	let i = 0;
-	while (i < v.objKeys.length) {
-		if (v.objKeys[i] === key) return v.objVals[i];
-		i = i + 1;
-	}
-	return jsonNull();
-}
-
-export function at(this v: JsonValue, idx: number): JsonValue {
-	if (v.kind !== JsonKind.Array) return jsonNull();
-	if (idx < 0 || idx >= v.arrVal.length) return jsonNull();
-	return v.arrVal[idx];
-}
-
-export function asString(this v: JsonValue): string {
-	return v.strVal;
-}
-
-export function asNumber(this v: JsonValue): number {
-	return v.numVal;
-}
-
-export function asBool(this v: JsonValue): boolean {
-	return v.boolVal;
-}
-
-export function isNull(this v: JsonValue): boolean {
-	return v.kind === JsonKind.Null;
-}
-
-export function len(this v: JsonValue): number {
-	if (v.kind === JsonKind.Array) return v.arrVal.length;
-	if (v.kind === JsonKind.Object) return v.objKeys.length;
-	if (v.kind === JsonKind.String) return v.strVal.length;
-	return 0;
-}
-
-// ===== Mutator Extension Methods =====
-
-export function set(this v: JsonValue, key: string, val: JsonValue): void {
-	if (v.kind !== JsonKind.Object) return;
-	let i = 0;
-	while (i < v.objKeys.length) {
-		if (v.objKeys[i] === key) {
-			v.objVals[i] = val;
-			return;
-		}
-		i = i + 1;
-	}
-	v.objKeys.push(key);
-	v.objVals.push(val);
-}
-
-export function push(this v: JsonValue, item: JsonValue): void {
-	if (v.kind !== JsonKind.Array) return;
-	v.arrVal.push(item);
-}
-
 // ===== Typed JSON API =====
 // Usage: const person = try JSON.parse<Person>(jsonStr);
 // @builtin monomorphizes at compile time via builtinLower.

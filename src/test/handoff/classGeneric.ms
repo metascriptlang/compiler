@@ -108,3 +108,33 @@ test "E2E C: trim keeps receiver" {
 	// Must have receiver: msStringTrim(s) — NOT msStringTrim()
 	assert result.value.indexOf("msStringTrim(s)") >= 0;
 }
+
+// ===== Multi-param generics =====
+
+test "checker: two-param generic class no errors" {
+	const n = errorCount("class KV<K, V> { key: K; val: V; }\nconst m = new KV<string, number>(\"a\", 1);");
+	assert n === 0;
+}
+
+test "checker: two-param generic field types substituted" {
+	const ctx = checkSource("class KV<K, V> { key: K; val: V; }\nconst m = new KV<string, number>(\"a\", 1);");
+	assert ctx !== null;
+	const sym = lookupSymbol(ctx.table, "m");
+	assert sym !== null;
+	assert sym.symbolType.kind === TypeKind.Ref;
+	const inner = sym.symbolType.typeReturn;
+	assert inner !== null;
+	// Mangled name uses buildTypeArgKey: "string,number"
+	assert inner.typeName === "KV__string,number";
+	assert inner.typeChildren.length === 2;
+	assert inner.typeChildren[0].kind === TypeKind.String;
+	assert inner.typeChildren[1].kind === TypeKind.Number;
+}
+
+test "E2E C: two-param generic compiles" {
+	const src = "class KV<K, V> { key: K; val: V; }\nconst m = new KV<string, number>(\"a\", 1);";
+	const result = compileToC(src);
+	assert result.ok;
+	// C mangler converts "," to "X" and adds trailing "_"
+	assert result.value.indexOf("KV__string") >= 0;
+}

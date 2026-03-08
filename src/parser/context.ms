@@ -497,6 +497,13 @@ export function resetGenericTypeInsts(): void {
 	_genericTypeInstStore = createGenericTypeInstStore();
 }
 
+// Centralized reset for all side-channel stores (prevents stale data across test runs)
+export function resetAllSideChannels(): void {
+	resetExplicitTypeArgs();
+	resetGenericDeclStore();
+	resetGenericTypeInsts();
+}
+
 export function addGenericTypeInst(baseName: string, typeArgKey: string, mangledName: string, fieldNamesJoined: string, fieldTypesJoined: string): void {
 	// Dedup: skip if same baseName + typeArgKey already exists
 	for (let i = 0; i < _genericTypeInstStore.keys.length; i += 1) {

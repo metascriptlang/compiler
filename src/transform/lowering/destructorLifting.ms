@@ -28,7 +28,7 @@ import {
 } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createTransformContextWithChecker, freshTemp } from "../context";
 import { makeIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
-import { Type, TypeKind, isPrimitiveKind, AttachedOp, setAttachedOp, unwrapRef, createArray, createPtr, createPrimitive, stringType } from "../../checker/types";
+import { Type, TypeKind, isPrimitiveKind, AttachedOp, setAttachedOp, unwrapRef, createArray, createPtr, createRef, createPrimitive, stringType } from "../../checker/types";
 import { lookupSymbol, SymbolKind } from "../../checker/symbol";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput } from "../testUtil";

@@ -44,6 +44,11 @@ export function isAssignable(source: Type, target: Type): boolean {
 		}
 	}
 
+	// Var (out param) unwrap: T -> Var<T> (caller passes T, callee gets T*)
+	if (target.kind === TypeKind.Var && target.typeReturn !== null) {
+		return isAssignable(source, target.typeReturn);
+	}
+
 	// Implicit borrow promotion: T -> Borrow<T> (zero-copy const pointer)
 	if (target.kind === TypeKind.Borrow && target.typeReturn !== null) {
 		return isAssignable(source, target.typeReturn);
@@ -112,6 +117,10 @@ export function isAssignable(source: Type, target: Type): boolean {
 // Used by checker to insert HiddenStdConv nodes at call argument positions.
 export function needsStdConv(source: Type, target: Type): boolean {
 	if (source === null || target === null) return false;
+	// Var (out param): unwrap to inner type for conversion check
+	if (target.kind === TypeKind.Var && target.typeReturn !== null) {
+		return needsStdConv(source, target.typeReturn);
+	}
 	if (source.kind === target.kind) return false;
 	// Numeric widening/narrowing: int32→number, float32→number, etc.
 	if (isNumeric(source) && isNumeric(target)) return true;
@@ -218,6 +227,11 @@ export function typeRelation(formal: Type, actual: Type): TypeRelation {
 			_ => TypeRelation.Exact,
 		};
 	}
+	// Var (out param) unwrap: formal is Var<T>, actual is T → match inner
+	if (formal.kind === TypeKind.Var && formal.typeReturn !== null) {
+		return typeRelation(formal.typeReturn, actual);
+	}
+
 	// Unknown = inference pending
 	if (formal.kind === TypeKind.Unknown || actual.kind === TypeKind.Unknown) {
 		return TypeRelation.Generic;
