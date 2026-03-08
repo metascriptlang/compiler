@@ -15,7 +15,7 @@ import {
 import {
 	Type, TypeKind,
 	unknownType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType,
-	createPrimitive, createArray, createFunction, createStruct,
+	createPrimitive, createArray, createFunction, createClosureType, createStruct,
 	createResult, createTypeRef, createUnion, createGenericParam, createDistinct,
 	createSizedArray, createSpan, createBorrow, createPtr, createRef, createMaybeType,
 	setMinArity, typeNameOf, assignType, isInterfaceType, unwrapRef,
@@ -50,7 +50,8 @@ function resolveFunctionType(text: string, ctx: CheckerContext): Type {
 
 	const returnType = (retStr !== "") ? resolveAnnotation(retStr, ctx) : voidType();
 
-	if (paramsStr === "") return createFunction([], [], returnType);
+	// Standard reference parity: procedure type literals default to closure calling convention
+	if (paramsStr === "") return createClosureType([], [], returnType);
 
 	const paramParts = splitTopLevel(paramsStr, ",");
 	const paramTypes: Type[] = [];
@@ -65,7 +66,7 @@ function resolveFunctionType(text: string, ctx: CheckerContext): Type {
 			paramTypes.push(resolveAnnotation(part, ctx));
 		}
 	}
-	return createFunction(paramTypes, paramNames, returnType);
+	return createClosureType(paramTypes, paramNames, returnType);
 }
 
 export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
@@ -724,18 +725,22 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 			member = dd.decoratedNode;
 		}
 		if (member.kind === NodeKind.MethodDecl) {
+			// Reference parity: methods are NOT struct fields — resolve their types
+			// and update the extension's fnType, but don't add to struct.
 			const md = member.data as MethodDeclData;
-			memberNames.push(md.methodName);
 			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx);
 			const returnType = (md.methodReturnType !== "") ? resolveAnnotation(md.methodReturnType, ctx) : unknownType();
 			const fnType = createFunction(paramTypes, md.methodParams, returnType);
-			// Carry over typeName from collectPass (stores @builtin metadata)
-			const prevMemberType = getProperty(oldType, md.methodName);
-			if (prevMemberType.typeName !== "") {
-				fnType.typeName = prevMemberType.typeName;
+			// Use resolvedSym set by collectClassMethod — avoids overload ambiguity with lookupSymbol
+			const methodSym = d.classBody[mi].resolvedSym;
+			if (methodSym !== null && methodSym.symbolType.typeName !== "") {
+				fnType.typeName = methodSym.symbolType.typeName;
 			}
 			member.nodeType = fnType;
-			memberTypes.push(fnType);
+			// Update the method symbol's type with resolved params/return
+			if (methodSym !== null) {
+				assignType(methodSym.symbolType, fnType);
+			}
 		} else if (member.kind === NodeKind.PropertyDecl) {
 			const pd = member.data as PropertyDeclData;
 			memberNames.push(pd.propName);
@@ -747,12 +752,11 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 				memberTypes.push(unknownType());
 			}
 		} else if (member.kind === NodeKind.ConstructorDecl) {
-			memberNames.push("constructor");
+			// Resolve constructor type but don't add to struct (data-only, like methods)
 			const cd = member.data as ConstructorDeclData;
 			const paramTypes = resolveTypeStrings(cd.ctorParamTypes, cd.ctorParams.length, ctx);
 			const ctorType = createFunction(paramTypes, cd.ctorParams, voidType());
 			member.nodeType = ctorType;
-			memberTypes.push(ctorType);
 		}
 	}
 

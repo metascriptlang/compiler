@@ -493,10 +493,27 @@ function genBlockOrBraces(g: CGen, p: CProc, node: Node): void {
 
 // ===== Assert Statement =====
 
+// Escape a string for embedding in a C string literal.
+// Replaces \, ", newline, carriage return with their C escape sequences.
+function escapeForC(s: string): string {
+	let result = "";
+	let i = 0;
+	while (i < s.length) {
+		const ch = charAt(s, i);
+		if (ch === "\\") { result = result + "\\\\"; }
+		else if (ch === "\"") { result = result + "\\\""; }
+		else if (ch === "\n") { result = result + "\\n"; }
+		else if (ch === "\r") { result = result + "\\r"; }
+		else { result = result + ch; }
+		i = i + 1;
+	}
+	return result;
+}
+
 function genUnreachableStmt(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as UnreachableStmtData;
 	if (d.unreachableMsg.length > 0) {
-		const msg = "\"" + d.unreachableMsg.replace(/\\/g, "\\\\").replace(/"/g, "\\\"").replace(/\n/g, "\\n").replace(/\r/g, "\\r") + "\"";
+		const msg = "\"" + escapeForC(d.unreachableMsg) + "\"";
 		emitStmtsLine(p, "fprintf(stderr, \"unreachable: %s\\n\", " + msg + ");");
 	}
 	emitStmtsLine(p, "__builtin_trap();");
@@ -507,7 +524,7 @@ function genAssertStmt(g: CGen, p: CProc, node: Node): void {
 	const cond = genExpr(g, p, d.assertExpr);
 	// Use custom message if provided, otherwise fall back to source text
 	const raw = (d.assertMessage.length > 0) ? d.assertMessage : d.assertSource;
-	const msg = "\"" + raw.replace(/\\/g, "\\\\").replace(/"/g, "\\\"").replace(/\n/g, "\\n").replace(/\r/g, "\\r") + "\"";
+	const msg = "\"" + escapeForC(raw) + "\"";
 	if (g.isTestBuild) {
 		emitStmtsLine(p, "if (!(" + cond + ")) { msTestCheckFail(" + msg + ", __FILE__, __LINE__); return; }");
 	} else {

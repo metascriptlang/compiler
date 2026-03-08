@@ -1,0 +1,130 @@
+// MetaScript JSON Prelude — C Backend
+// Single-file prelude loaded via globalImports(). Contains types, builders,
+// accessors, and the typed JSON API (JSON.parse<T>, JSON.stringify<T>).
+// Implementation files (parser.ms, stringify.ms) are loaded separately by the
+// module system when their symbols are referenced.
+
+// ===== Types =====
+
+export enum JsonKind {
+	Null,
+	Bool,
+	Number,
+	String,
+	Array,
+	Object,
+}
+
+export class JsonValue {
+	kind: JsonKind;
+	boolVal: boolean;
+	numVal: number;
+	strVal: string;
+	arrVal: JsonValue[];
+	objKeys: string[];
+	objVals: JsonValue[];
+}
+
+// ===== Constructors =====
+
+export function jsonNull(): JsonValue {
+	return new JsonValue(JsonKind.Null, false, 0, "", [], [], []);
+}
+
+export function jsonBool(b: boolean): JsonValue {
+	return new JsonValue(JsonKind.Bool, b, 0, "", [], [], []);
+}
+
+export function jsonNumber(n: number): JsonValue {
+	return new JsonValue(JsonKind.Number, false, n, "", [], [], []);
+}
+
+export function jsonString(s: string): JsonValue {
+	return new JsonValue(JsonKind.String, false, 0, s, [], [], []);
+}
+
+export function jsonArray(items: JsonValue[]): JsonValue {
+	return new JsonValue(JsonKind.Array, false, 0, "", items, [], []);
+}
+
+export function jsonObjectFromKV(keys: string[], vals: JsonValue[]): JsonValue {
+	return new JsonValue(JsonKind.Object, false, 0, "", [], keys, vals);
+}
+
+export function jsonObject(): JsonValue {
+	return new JsonValue(JsonKind.Object, false, 0, "", [], [], []);
+}
+
+// ===== Accessor Extension Methods =====
+
+export function get(this v: JsonValue, key: string): JsonValue {
+	if (v.kind !== JsonKind.Object) return jsonNull();
+	let i = 0;
+	while (i < v.objKeys.length) {
+		if (v.objKeys[i] === key) return v.objVals[i];
+		i = i + 1;
+	}
+	return jsonNull();
+}
+
+export function at(this v: JsonValue, idx: number): JsonValue {
+	if (v.kind !== JsonKind.Array) return jsonNull();
+	if (idx < 0 || idx >= v.arrVal.length) return jsonNull();
+	return v.arrVal[idx];
+}
+
+export function asString(this v: JsonValue): string {
+	return v.strVal;
+}
+
+export function asNumber(this v: JsonValue): number {
+	return v.numVal;
+}
+
+export function asBool(this v: JsonValue): boolean {
+	return v.boolVal;
+}
+
+export function isNull(this v: JsonValue): boolean {
+	return v.kind === JsonKind.Null;
+}
+
+export function len(this v: JsonValue): number {
+	if (v.kind === JsonKind.Array) return v.arrVal.length;
+	if (v.kind === JsonKind.Object) return v.objKeys.length;
+	if (v.kind === JsonKind.String) return v.strVal.length;
+	return 0;
+}
+
+// ===== Mutator Extension Methods =====
+
+export function set(this v: JsonValue, key: string, val: JsonValue): void {
+	if (v.kind !== JsonKind.Object) return;
+	let i = 0;
+	while (i < v.objKeys.length) {
+		if (v.objKeys[i] === key) {
+			v.objVals[i] = val;
+			return;
+		}
+		i = i + 1;
+	}
+	v.objKeys.push(key);
+	v.objVals.push(val);
+}
+
+export function push(this v: JsonValue, item: JsonValue): void {
+	if (v.kind !== JsonKind.Array) return;
+	v.arrVal.push(item);
+}
+
+// ===== Typed JSON API =====
+// Usage: const person = try JSON.parse<Person>(jsonStr);
+// @builtin monomorphizes at compile time via builtinLower.
+
+export class JSON {
+	@builtin("JsonParse")
+	static extern parse<T>(input: string): Result<T, string>;
+
+	@builtin("JsonStringify")
+	static extern stringify<T>(value: T): string;
+}

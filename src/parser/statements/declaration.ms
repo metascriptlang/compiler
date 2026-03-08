@@ -803,8 +803,8 @@ function parseClassMember(state: ParserState): NodeResult {
 		advance(state);
 	}
 
-	// Method — early return
-	if (!isAtEnd(state) && current(state).kind === TokenKind.LParen) {
+	// Method — early return (LParen for regular, Lt for generic like parse<T>(...))
+	if (!isAtEnd(state) && (current(state).kind === TokenKind.LParen || current(state).kind === TokenKind.Lt)) {
 		return parseClassMethodBody(state, nameToken, memberIsStatic, memberFlags);
 	}
 
@@ -863,6 +863,12 @@ function parseClassAccessor(state: ParserState, isStatic: boolean, flags: string
 }
 
 function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: boolean, flags: string): NodeResult {
+	// Capture optional generic params: method<T>(...) — same as regular function parser
+	const genericNames = captureGenericParams(state);
+	if (genericNames !== "") {
+		if (flags === "") { flags = "gen:" + genericNames; }
+		else { flags = flags + "|gen:" + genericNames; }
+	}
 	const raw = parseParamList(state, nameToken.value);
 	const methodParams = extractParamNames(raw);
 	const methodParamTypes = extractParamTypes(raw);
@@ -890,7 +896,7 @@ function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: bo
 		}, nameToken));
 	}
 
-	// Abstract methods have no body — just semicolon
+	// Abstract methods / extern without 'from' — just semicolon
 	if (current(state).kind === TokenKind.Semicolon) {
 		consumeSemicolon(state);
 		return Result.ok(createNode(NodeKind.MethodDecl, {

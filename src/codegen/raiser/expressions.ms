@@ -613,11 +613,11 @@ function compileClosureCall(s: RaiserCompState, node: Node): number {
 	emitInst(s, raiserABC(RaiserOpcode.BneI64, envReg, sentinelReg, 1));
 	const jumpToNoEnv = emitJumpPlaceholder(s);
 
-	// WITH ENV path: env as first arg, then real args
-	emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1, envReg, 0));
+	// WITH ENV path: real args first, then env LAST (Standard reference parity: closure calling convention)
 	for (let i = 0; i < argCount; i = i + 1) {
-		emitInst(s, raiserABC(RaiserOpcode.Move, dest + 2 + i, argRegs[i], 0));
+		emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1 + i, argRegs[i], 0));
 	}
+	emitInst(s, raiserABC(RaiserOpcode.Move, dest + 1 + argCount, envReg, 0));
 	emitInst(s, raiserABC(RaiserOpcode.CallIndirect, dest, fnIdxReg, totalArgs));
 	const jumpPastNoEnv = emitJumpPlaceholder(s);
 

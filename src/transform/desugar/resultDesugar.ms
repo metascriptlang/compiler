@@ -22,11 +22,13 @@
 import {
 	Node, NodeKind, DeclKind, SourceLocation, Symbol, SymbolKind, SymbolState,
 	VariableDeclData, ReturnStmtData, ExprStmtData, TryExprData,
+	CallExprData, MemberExprData, IdentifierData, HiddenDerefData,
+	IfStmtData,
 } from "../../ast/node";
 import { Type, TypeKind, booleanType, getProperty } from "../../checker/types";
 import { makeSymbol, lookupSymbol } from "../../checker/symbol";
 import { TransformContext, freshTemp } from "../context";
-import { walkExpandBlocks } from "../walker";
+import { walkExpandBlocks, walkNode, containsExprKind, replaceInExpr } from "../walker";
 import {
 	makeIdent, makeVarDecl, makeBlock, makeExprStmt,
 	makeReturn, makeIf, makeMember, makeCall, makeCallResolved, makeConditional,
@@ -65,28 +67,140 @@ function lookupResultErr(ctx: TransformContext): Symbol {
 
 export function lowerTryExpr(program: Node, ctx: TransformContext): Node {
 	walkExpandBlocks(program, expandStmt, ctx);
+	lowerResultConstructors(program);
 	return program;
 }
 
-// Expand a single statement. Returns [stmt] for passthrough, or multiple stmts for try expansion.
+// Lower Result.ok(val) / Result.err(e) → ObjectLiteral. Runs for all backends.
+export function lowerResultConstructors(program: Node): Node {
+	walkNode(program, rewriteResultCall);
+	return program;
+}
+
+// ===== Result.ok / Result.err → ObjectLiteral =====
+// Rewrites CallExpr where callee is MemberExpr(Identifier("Result"), "ok"|"err")
+// Result.ok(val) → { ok: true, value: val }
+// Result.err(e)  → { ok: false, error: e }
+// Result.ok()    → { ok: true }              (void value case)
+
+function rewriteResultCall(node: Node): Node {
+	if (node.kind !== NodeKind.CallExpr) return node;
+	const cd = node.data as CallExprData;
+	if (cd.callee.kind !== NodeKind.MemberExpr) return node;
+	const md = cd.callee.data as MemberExprData;
+	// Checker wraps class refs in HiddenDeref — unwrap to find Identifier
+	let callerObj = md.object;
+	if (callerObj.kind === NodeKind.HiddenDeref) {
+		callerObj = (callerObj.data as HiddenDerefData).expr;
+	}
+	if (callerObj.kind !== NodeKind.Identifier) return node;
+	const id = callerObj.data as IdentifierData;
+	if (id.name !== "Result") return node;
+
+	const loc = node.location;
+	const prop = md.property;
+
+	if (prop === "ok") {
+		return makeResultOk(cd.arguments, node.nodeType, loc);
+	}
+	if (prop === "err" && cd.arguments.length === 1) {
+		return makeResultErr(cd.arguments[0], node.nodeType, loc);
+	}
+	return node;
+}
+
+// Shared helpers for Result construction — used by both rewriteResultCall and makeErrorCheck.
+
+function makeResultOk(args: Node[], resType: Type, loc: SourceLocation): Node {
+	if (args.length === 1) {
+		const lit = makeObjectLiteral(["ok", "value"], [makeBool(true, loc), args[0]], loc);
+		lit.nodeType = resType;
+		return lit;
+	}
+	// Result.ok() — void value
+	const lit = makeObjectLiteral(["ok"], [makeBool(true, loc)], loc);
+	lit.nodeType = resType;
+	return lit;
+}
+
+function makeResultErr(errExpr: Node, resType: Type, loc: SourceLocation): Node {
+	const lit = makeObjectLiteral(["ok", "error"], [makeBool(false, loc), errExpr], loc);
+	lit.nodeType = resType;
+	return lit;
+}
+
+// ===== TryExpr Hoisting via shared walker =====
+// Uses replaceInExpr from walker.ms — single expression tree walker shared with matchLower.
+
+// Hoist all TryExpr from an expression tree into preceding statements.
+function hoistTryExpr(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
+	return replaceInExpr(expr, (node: Node): Node => {
+		if (node.kind !== NodeKind.TryExpr) return node;
+		const tryData = node.data as TryExprData;
+		const loc = node.location;
+		const tempName = freshTemp(ctx, "result");
+		const resType = tryData.tryArg.nodeType;
+
+		// const $result_N = tryArg;
+		const resDecl = makeVarDecl(tempName, tryData.tryArg, DeclKind.Const, loc);
+		resDecl.nodeType = resType;
+		hoisted.push(resDecl);
+
+		if (tryData.hasCatch) {
+			// $result.ok ? $result.value : catchVal
+			const okCheck = makeResultMember(tempName, resType, "ok", loc);
+			const valueAccess = makeResultMember(tempName, resType, "value", loc);
+			const condExpr = makeConditional(okCheck, valueAccess, tryData.catchVal, loc);
+			condExpr.nodeType = node.nodeType;
+			return condExpr;
+		}
+
+		// if (!$result.ok) { return { ok: false, error: $result.error }; }
+		hoisted.push(makeErrorCheck(tempName, resType, loc, ctx));
+
+		// Replace TryExpr with $result.value
+		return makeResultMember(tempName, resType, "value", loc);
+	});
+}
+
+// Expand a single statement — unified through hoistTryExpr.
+// Matches reference desugarStatement: all cases dispatch to desugarExpression.
 function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 	match (stmt.kind) {
 		NodeKind.VariableDecl => {
 			const d = stmt.data as VariableDeclData;
-			if (d.initializer !== null && d.initializer.kind === NodeKind.TryExpr) {
-				return expandVarDeclTry(stmt, ctx);
+			if (d.initializer !== null && containsExprKind(d.initializer, NodeKind.TryExpr)) {
+				const hoisted: Node[] = [];
+				d.initializer = hoistTryExpr(d.initializer, hoisted, ctx);
+				hoisted.push(stmt);
+				return hoisted;
 			}
 		},
 		NodeKind.ReturnStmt => {
 			const d = stmt.data as ReturnStmtData;
-			if (d.argument !== null && d.argument.kind === NodeKind.TryExpr) {
-				return expandReturnTry(stmt, ctx);
+			if (d.argument !== null && containsExprKind(d.argument, NodeKind.TryExpr)) {
+				const hoisted: Node[] = [];
+				d.argument = hoistTryExpr(d.argument, hoisted, ctx);
+				hoisted.push(stmt);
+				return hoisted;
 			}
 		},
 		NodeKind.ExprStmt => {
 			const d = stmt.data as ExprStmtData;
-			if (d.expr.kind === NodeKind.TryExpr) {
-				return expandExprStmtTry(stmt, ctx);
+			if (containsExprKind(d.expr, NodeKind.TryExpr)) {
+				const hoisted: Node[] = [];
+				d.expr = hoistTryExpr(d.expr, hoisted, ctx);
+				hoisted.push(stmt);
+				return hoisted;
+			}
+		},
+		NodeKind.IfStmt => {
+			const d = stmt.data as IfStmtData;
+			if (containsExprKind(d.condition, NodeKind.TryExpr)) {
+				const hoisted: Node[] = [];
+				d.condition = hoistTryExpr(d.condition, hoisted, ctx);
+				hoisted.push(stmt);
+				return hoisted;
 			}
 		},
 		_ => {},
@@ -94,106 +208,14 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 	return [stmt];
 }
 
-// Case 1: const x = try f();
-function expandVarDeclTry(stmt: Node, ctx: TransformContext): Node[] {
-	const d = stmt.data as VariableDeclData;
-	const tryExpr = d.initializer;
-	const tryData = tryExpr.data as TryExprData;
-	const loc = stmt.location;
-	const tempName = freshTemp(ctx, "result");
-	const result: Node[] = [];
-
-	// const $result_N = f();
-	// Read Result<T,E> from the tryArg (CallExpr), not TryExpr itself —
-	// checkExpr overwrites TryExpr.nodeType with T (the unwrapped value type).
-	const resType = tryData.tryArg.nodeType; // Result<T, E>
-	const resDecl = makeVarDecl(tempName, tryData.tryArg, DeclKind.Const, loc);
-	resDecl.nodeType = resType;
-	result.push(resDecl);
-
-	if (tryData.hasCatch) {
-		// Case 2: const x = $result.ok ? $result.value : catchVal;
-		const okCheck = makeResultMember(tempName, resType, "ok", loc);
-		const valueAccess = makeResultMember(tempName, resType, "value", loc);
-
-		const condExpr = makeConditional(okCheck, valueAccess, tryData.catchVal, loc);
-		condExpr.nodeType = stmt.nodeType;
-
-		const varDecl = makeVarDecl(d.declName, condExpr, d.declKind, loc);
-		varDecl.nodeType = stmt.nodeType;
-		result.push(varDecl);
-	} else {
-		// if (!$result.ok) { return Result.err($result.error); }
-		result.push(makeErrorCheck(tempName, resType, loc, ctx));
-		// const x = $result.value;
-		const valueAccess = makeResultMember(tempName, resType, "value", loc);
-
-		const varDecl = makeVarDecl(d.declName, valueAccess, d.declKind, loc);
-		varDecl.nodeType = stmt.nodeType;
-		result.push(varDecl);
-	}
-
-	return result;
-}
-
-// Case 3: return try f();
-function expandReturnTry(stmt: Node, ctx: TransformContext): Node[] {
-	const d = stmt.data as ReturnStmtData;
-	const tryExpr = d.argument;
-	const tryData = tryExpr.data as TryExprData;
-	const loc = stmt.location;
-	const tempName = freshTemp(ctx, "result");
-	const result: Node[] = [];
-
-	// const $result_N = f();
-	const resType = tryData.tryArg.nodeType; // Result<T, E>
-	const resDecl = makeVarDecl(tempName, tryData.tryArg, DeclKind.Const, loc);
-	resDecl.nodeType = resType;
-	result.push(resDecl);
-
-	// if (!$result.ok) { return Result.err($result.error); }
-	result.push(makeErrorCheck(tempName, resType, loc, ctx));
-
-	// return $result.value;
-	const valueAccess = makeResultMember(tempName, resType, "value", loc);
-	result.push(makeReturn(valueAccess, loc));
-
-	return result;
-}
-
-// Case 4: try f(); (standalone ExprStmt)
-function expandExprStmtTry(stmt: Node, ctx: TransformContext): Node[] {
-	const d = stmt.data as ExprStmtData;
-	const tryExpr = d.expr;
-	const tryData = tryExpr.data as TryExprData;
-	const loc = stmt.location;
-	const tempName = freshTemp(ctx, "result");
-	const result: Node[] = [];
-
-	// const $result_N = f();
-	const resType = tryData.tryArg.nodeType; // Result<T, E>
-	const resDecl = makeVarDecl(tempName, tryData.tryArg, DeclKind.Const, loc);
-	resDecl.nodeType = resType;
-	result.push(resDecl);
-
-	// if (!$result.ok) { return Result.err($result.error); }
-	result.push(makeErrorCheck(tempName, resType, loc, ctx));
-
-	return result;
-}
-
-// Build: if (!$result.ok) { return Result.err($result.error); }
+// Build: if (!$result.ok) { return { ok: false, error: $result.error }; }
 function makeErrorCheck(tempName: string, resType: Type, loc: SourceLocation, ctx: TransformContext): Node {
 	const okAccess = makeResultMember(tempName, resType, "ok", loc);
 	const notOk = makeUnary("!", okAccess, loc);
 	notOk.nodeType = booleanType();
 
 	const errorAccess = makeResultMember(tempName, resType, "error", loc);
-
-	// Build ObjectLiteral { ok: false, error: $result.error } directly
-	// (bypasses builtinLower — synthetic calls may lack resolvedSym.builtinKind)
-	const resultErr = makeObjectLiteral(["ok", "error"], [makeBool(false, loc), errorAccess], loc);
-	resultErr.nodeType = resType;
+	const resultErr = makeResultErr(errorAccess, resType, loc);
 
 	const returnStmt = makeReturn(resultErr, loc);
 	const thenBlock = makeBlock([returnStmt], loc);
@@ -203,7 +225,7 @@ function makeErrorCheck(tempName: string, resType: Type, loc: SourceLocation, ct
 
 // ===== Tests =====
 import {
-	ProgramData, IfStmtData, BlockStmtData, ReturnStmtData as RetData,
+	ProgramData, BlockStmtData, ReturnStmtData as RetData,
 	CallExprData as CData, MemberExprData as MData,
 } from "../../ast/node";
 import { parseInput, makeCtx, getStmts } from "../testUtil";

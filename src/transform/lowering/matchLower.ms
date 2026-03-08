@@ -21,7 +21,7 @@ import {
 	IdentifierData, NumberLiteralData, StringLiteralData,
 } from "../../ast/node";
 import { TransformContext, freshTemp } from "../context";
-import { walkExpandBlocks } from "../walker";
+import { walkExpandBlocks, containsExprKind, replaceInExpr } from "../walker";
 import {
 	makeIdent, makeTypedIdent, makeBlock, makeVarDecl, makeExprStmt,
 	makeReturn, makeIf, makeBinary, makeAssign,
@@ -30,6 +30,37 @@ import {
 import { Type } from "../../checker/types";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 import { charAt } from "../../utils/string";
+
+// ===== Nested MatchExpr Hoisting via shared walker =====
+// Uses replaceInExpr from walker.ms — same expression tree walker as resultDesugar.
+
+function hoistNestedMatch(expr: Node, hoisted: Node[], ctx: TransformContext): Node {
+	return replaceInExpr(expr, (node: Node): Node => {
+		if (node.kind !== NodeKind.MatchExpr) return node;
+		const matchData = node.data as MatchExprData;
+		const loc = node.location;
+		const tempMatch = freshTemp(ctx, "match");
+		const tempResult = freshTemp(ctx, "matchres");
+
+		// const $match_N = discriminant;
+		hoisted.push(makeVarDecl(tempMatch, matchData.matchDisc, DeclKind.Const, loc));
+		const discType = matchData.matchDisc.nodeType;
+
+		// let $matchres_N;
+		const placeholder = makeIdent("undefined", loc);
+		const letDecl = makeVarDecl(tempResult, placeholder, DeclKind.Let, loc);
+		if (node.nodeType !== null) { letDecl.nodeType = node.nodeType; }
+		hoisted.push(letDecl);
+
+		// if-chain assigning to $matchres_N
+		hoisted.push(buildIfChain(matchData.matchCases, tempMatch, discType, loc, "assign", tempResult));
+
+		// Replace MatchExpr with $matchres_N
+		const result = makeIdent(tempResult, loc);
+		result.nodeType = node.nodeType;
+		return result;
+	});
+}
 
 // ===== Main Entry Point =====
 
@@ -46,14 +77,26 @@ function expandMatchStmt(stmt: Node, ctx: TransformContext): Node[] {
 		},
 		NodeKind.VariableDecl => {
 			const d = stmt.data as VariableDeclData;
-			if (d.initializer.kind === NodeKind.MatchExpr) {
+			if (d.initializer !== null && d.initializer.kind === NodeKind.MatchExpr) {
 				return lowerMatchExprInVar(stmt, ctx);
+			}
+			if (d.initializer !== null && containsExprKind(d.initializer, NodeKind.MatchExpr)) {
+				const hoisted: Node[] = [];
+				d.initializer = hoistNestedMatch(d.initializer, hoisted, ctx);
+				hoisted.push(stmt);
+				return hoisted;
 			}
 		},
 		NodeKind.ReturnStmt => {
 			const d = stmt.data as ReturnStmtData;
 			if (d.argument !== null && d.argument.kind === NodeKind.MatchExpr) {
 				return lowerMatchExprInReturn(stmt, ctx);
+			}
+			if (d.argument !== null && containsExprKind(d.argument, NodeKind.MatchExpr)) {
+				const hoisted: Node[] = [];
+				d.argument = hoistNestedMatch(d.argument, hoisted, ctx);
+				hoisted.push(stmt);
+				return hoisted;
 			}
 		},
 		NodeKind.ExprStmt => {
@@ -62,8 +105,13 @@ function expandMatchStmt(stmt: Node, ctx: TransformContext): Node[] {
 				return lowerMatchStmt(d.expr, ctx);
 			}
 			if (d.expr.kind === NodeKind.MatchExpr) {
-				// MatchExpr at statement position (discards value) — lower as stmt
 				return lowerMatchExprAsStmt(d.expr, ctx);
+			}
+			if (containsExprKind(d.expr, NodeKind.MatchExpr)) {
+				const hoisted: Node[] = [];
+				d.expr = hoistNestedMatch(d.expr, hoisted, ctx);
+				hoisted.push(stmt);
+				return hoisted;
 			}
 		},
 		_ => {},
@@ -234,6 +282,11 @@ function moveInto(node: Node, mode: string, varName: string, loc: SourceLocation
 		if (d.alternate !== null) {
 			d.alternate = moveInto(d.alternate, mode, varName, loc);
 		}
+		return node;
+	}
+	// Control flow terminals: already have their own control flow — keep as-is
+	// ReturnStmt: don't double-wrap return. BreakStmt/ContinueStmt: don't assign.
+	if (node.kind === NodeKind.ReturnStmt || node.kind === NodeKind.BreakStmt || node.kind === NodeKind.ContinueStmt) {
 		return node;
 	}
 	// ExprStmt: unwrap and wrap in return/assign

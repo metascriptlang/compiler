@@ -1,7 +1,7 @@
 // Type Compatibility - table-driven assignability checking
 
 import {
-	Type, TypeKind, isNumeric,
+	Type, TypeKind, isNumeric, skipModifier,
 	numberType, stringType, booleanType, voidType, nullType, unknownType, errorType,
 	createPrimitive, createArray, createFunction, createStruct, createUnion,
 	createEnum, createResult, createRef, createPtr, createDistinct, createGenericParam,
@@ -13,6 +13,11 @@ import {
 // ===== Assignability =====
 
 export function isAssignable(source: Type, target: Type): boolean {
+	// Nim parity: Sink/Lent are transparent ownership modifiers — unwrap before comparing
+	// (Nim: sigmatch.nim skips tySink via skipModifier in typeRel)
+	source = skipModifier(source);
+	target = skipModifier(target);
+
 	// Same kind is always compatible
 	if (source.kind === target.kind) {
 		return match (source.kind) {

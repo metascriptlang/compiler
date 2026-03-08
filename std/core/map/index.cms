@@ -18,7 +18,7 @@ extern function get(this m: Map<string, string>, key: string): string from "msMa
 
 extern function has(this m: Map<string, string>, key: string): boolean from "msMapHas";
 
-extern function delete(this m: Map<string, string>, key: string): boolean from "&msMapDelete";
+extern function del(this m: Map<string, string>, key: string): boolean from "&msMapDelete";
 
 extern function size(this m: Map<string, string>): number from "msMapSize";
 

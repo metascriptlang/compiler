@@ -21,13 +21,13 @@ import {
 	isNumeric, isIntegerType, isStringType, isCallable, getReturnType, getElementType, getProperty, sizeOfType,
 	typeNameOf, unwrapRef, isDiscriminatedUnion, findVariantByDiscriminant, findFieldInVariant,
 	unifyType, createUnifyBindings, hasGenericParams,
-	getMinArity, isNarrowingIntConv,
+	getMinArity, isNarrowingIntConv, CallingConvention,
 } from "./types";
 import {
 	Symbol, SymbolKind, ScopeKind, SymbolState,
 	defineSymbol, lookupSymbol, makeSymbol, openScope, closeScope, hasOverloads,
 } from "./symbol";
-import { CheckerContext, addError, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled } from "./context";
+import { CheckerContext, addError, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled, isReceiverMatch, filterExtsByReceiverType, findFirstMatchingExt } from "./context";
 import {
 	scoreCandidate, isAssignable, needsStdConv, resolveOverloadIdx,
 	findFirstMismatch, typeRelation, TypeRelation,
@@ -36,65 +36,9 @@ import {
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
 import { resolveAnnotation, ensureShaped } from "./resolvePass";
 import { parseNumberLiteral, sliceStr, findChar, charAt } from "../utils/string";
+import { findCallTypeArg } from "../parser/context";
 
-// ===== Standard-Aligned Extension Receiver Matching =====
-// Standard reference pattern for extension matching compares nominal types by identity.
-// We use isAssignable on the extension's receiver param type (fnType.typeChildren[0])
-// instead of string-based receiverTypeName comparison, which breaks for parameterized
-// types like number[] (parser produces "number [ ]" but typeNameOf returns "Array").
-
-function isReceiverMatch(ext: ExtensionMethod, objType: Type): boolean {
-	// Static extensions: string-based matching (receiver not in typeChildren)
-	if (ext.isStatic) {
-		return ext.receiverTypeName === typeNameOf(objType);
-	}
-	// Instance extensions: type-based matching on first param
-	if (ext.fnType.kind !== TypeKind.Function) return false;
-	if (ext.fnType.typeChildren.length === 0) return false;
-	const receiverType = ext.fnType.typeChildren[0];
-	// Unknown receiver: match any (conservative — unresolved type)
-	if (receiverType.kind === TypeKind.Unknown) return true;
-	// Generic extensions: try unification on receiver param (standard-aligned selective match).
-	// e.g. map<T>(this arr: T[]) should match number[] but NOT string.
-	if (hasGenericParams(receiverType)) {
-		const eb = createUnifyBindings();
-		unifyType(receiverType, objType, eb);
-		return eb.names.length > 0;
-	}
-	// Concrete array extensions: match only when element types are directly compatible.
-	// Strict check prevents push(this arr: number[]) from falsely matching Node[] or Type[].
-	// Unknown elements fall through to isAssignable (preserves inference-pending behavior).
-	if (receiverType.kind === TypeKind.Array && objType.kind === TypeKind.Array) {
-		const recvElem = receiverType.typeReturn;
-		const objElem = objType.typeReturn;
-		if (recvElem === null || objElem === null) return false;
-		if (recvElem.kind !== TypeKind.Unknown && objElem.kind !== TypeKind.Unknown) {
-			return isAssignable(objElem, recvElem);
-		}
-	}
-	return isAssignable(objType, receiverType);
-}
-
-function findFirstMatchingExt(exts: ExtensionMethod[], objType: Type): ExtensionMethod {
-	let i = 0;
-	while (i < exts.length) {
-		if (isReceiverMatch(exts[i], objType)) return exts[i];
-		i = i + 1;
-	}
-	return null as unknown as ExtensionMethod;
-}
-
-function filterExtsByReceiverType(exts: ExtensionMethod[], objType: Type): ExtensionMethod[] {
-	const results: ExtensionMethod[] = [];
-	let i = 0;
-	while (i < exts.length) {
-		if (isReceiverMatch(exts[i], objType)) {
-			results.push(exts[i]);
-		}
-		i = i + 1;
-	}
-	return results;
-}
+// Extension receiver matching functions imported from context.ms (shared with LSP)
 
 // ===== Expression Checker =====
 
@@ -109,7 +53,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 				if (literalFitsInType(node, expectedType)) {
 					expectedType;
 				} else if (isNodeIntLit(node)) {
-					// Reference parity: Nim changeType emits compile-time error for out-of-range literals
+					// Reference parity: standard reference's type change diagnostic emits compile-time error for out-of-range literals
 					const v = (node.data as NumberLiteralData).value;
 					addError(ctx, "cannot convert " + v + " to " + typeNameOf(expectedType), node.location.line, node.location.column);
 					expectedType;
@@ -143,7 +87,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			// For assignment, pass LHS type as expectedType to RHS
 			const rightExpected = (d.operator === "=") ? leftType : null as unknown as Type;
 			let rightType = checkExpr(ctx, d.right, rightExpected);
-			// Parity: Nim fitNode — insert HiddenStdConv for narrowing assignment
+			// Parity: standard reference node fitting — insert HiddenStdConv for narrowing assignment
 			if (d.operator === "=" && leftType !== null) {
 				d.right = fitNode(ctx, d.right, leftType, rightType);
 			}
@@ -275,7 +219,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			const d = node.data as TypeAssertionData;
 			const srcType = checkExpr(ctx, d.asExpr, null as unknown as Type);
 			const targetType = (d.asType !== "") ? resolveAnnotation(d.asType, ctx) : unknownType();
-			// Nim parity: cast just sets result.typ = targetType, no variant resolution.
+			// Standard reference parity: cast just sets result.typ = targetType, no variant resolution.
 			// Field type info is already in targetType (from type alias or inline struct).
 			// C codegen handles variant index resolution at emission time.
 			node.nodeType = targetType;
@@ -289,8 +233,15 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 		NodeKind.NewExpr => {
 			const d = node.data as NewExprData;
 			const calleeType = checkExpr(ctx, d.newCallee, null as unknown as Type);
-			for (const arg of d.newArguments) {
-				checkExpr(ctx, arg, null as unknown as Type);
+			// Resolve inner struct type for field type propagation
+			const innerType = (calleeType !== null && calleeType.kind === TypeKind.Ref && calleeType.typeReturn !== null)
+				? calleeType.typeReturn : calleeType;
+			const fieldTypes = (innerType !== null && innerType.typeChildren !== null) ? innerType.typeChildren : null as unknown as Type[];
+			let ai = 0;
+			while (ai < d.newArguments.length) {
+				const argExpected = (fieldTypes !== null && ai < fieldTypes.length) ? fieldTypes[ai] : null as unknown as Type;
+				checkExpr(ctx, d.newArguments[ai], argExpected);
+				ai = ai + 1;
 			}
 			if (calleeType.kind === TypeKind.Struct || calleeType.kind === TypeKind.Ref) {
 				calleeType;
@@ -420,7 +371,7 @@ function inferUnaryOp(op: string, operandType: Type): Type {
 
 // ===== Bitwise Operator Validation =====
 // Reference parity: bitwise ops only have integer overloads. No float/double variants.
-// Enums are integer-backed → allowed (Nim: enum with {.size.} can use and/or).
+// Enums are integer-backed → allowed (Standard reference parity: enums can use bitwise ops).
 // number (float64) → warning + implicit int32 cast (TypeScript ergonomics).
 
 function isBitwiseBinaryOp(op: string): boolean {
@@ -460,7 +411,7 @@ function checkBitwiseOperands(ctx: CheckerContext, op: string, leftType: Type, r
 }
 
 // ===== Integer Literal Coercion =====
-// Reference parity: Nim's isIntLit + handleRange. When a number literal appears
+// Reference parity: standard reference's integer literal and range handling. When a number literal appears
 // where an integer type is expected and fits in range, coerce it automatically.
 
 function isNodeIntLit(node: Node): boolean {
@@ -487,7 +438,7 @@ function literalFitsInType(node: Node, target: Type): boolean {
 }
 
 // ===== fitNode — Central Implicit Conversion Insertion =====
-// Parity: Nim's fitNode in sem.nim → indexTypesMatch → paramTypesMatch → implicitConv
+// Parity: standard reference's node fitting, conversion matching, and implicit conversion patterns
 // Called at every "value flows into typed slot" point:
 //   - Variable declaration initializer → declType
 //   - Assignment RHS → LHS type
@@ -638,6 +589,12 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 				overloadSym = sym;
 			}
 		}
+		// Reference parity: detect closure calls by type,
+		// not symbol kind. If callee type has callConv == ccClosure, mark as indirect call.
+		if (calleeType !== null && calleeType.kind === TypeKind.Function
+			&& calleeType.callConv === CallingConvention.CcClosure) {
+			d.isDirectCall = false;
+		}
 	} else if (d.callee.kind === NodeKind.MemberExpr) {
 		// Method call: resolveMemberExpr already set resolvedSym on the callee node
 		if (d.callee.resolvedSym !== null) {
@@ -649,9 +606,15 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 		if (ctx.extensionRegistry !== null) {
 			const me = d.callee.data as MemberExprData;
 			const objType = me.object.nodeType;
-			if (objType !== null && objType.typeName !== "") {
-				const allByName = findAllExtensionsByName(ctx.extensionRegistry, me.property);
-				const staticType = createTypeRef("typeof " + objType.typeName);
+			// Use typeNameOf to unwrap Ref<Struct> → struct name (e.g. JSON class → "JSON")
+			const objName = objType !== null ? typeNameOf(objType) : "";
+			if (objName !== "") {
+				let allByName = findAllExtensionsByName(ctx.extensionRegistry, me.property);
+				// Also search by mangled name (className_methodName) for class static methods
+				if (allByName.length === 0) {
+					allByName = findAllExtensionsByName(ctx.extensionRegistry, objName + "_" + me.property);
+				}
+				const staticType = createTypeRef("typeof " + objName);
 				const ext = findFirstMatchingExt(allByName, staticType);
 				if (ext !== null) {
 					// Direct sym link — no name-based lookup
@@ -694,7 +657,14 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 		const me = d.callee.data as MemberExprData;
 		const objType = me.object.nodeType;
 		if (objType !== null && objType.kind !== TypeKind.Unknown) {
-			const allByName = findAllExtensionsByName(ctx.extensionRegistry, me.property);
+			let allByName = findAllExtensionsByName(ctx.extensionRegistry, me.property);
+			// Also search by mangled name for class methods
+			if (allByName.length === 0) {
+				const recvName = typeNameOf(objType);
+				if (recvName !== "") {
+					allByName = findAllExtensionsByName(ctx.extensionRegistry, recvName + "_" + me.property);
+				}
+			}
 			const filtered = filterExtsByReceiverType(allByName, objType);
 			if (filtered.length === 1) {
 				// Single match — use directly
@@ -709,6 +679,13 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 						if (eb.names.length > 0) srcType = instantiateGeneric(srcType, eb.names, eb.types);
 					}
 					return inferGenericReturn(srcType, argTypes, expectedType);
+				}
+				// Explicit type arg resolution for generic methods (e.g. JSON.parse<Person>)
+				if (hasGenericParams(srcType)) {
+					const explicitArg = findCallTypeArg(node);
+					if (explicitArg !== "") {
+						return inferGenericReturnWithExplicit(srcType, argTypes, expectedType, explicitArg, ctx);
+					}
 				}
 				return inferGenericReturn(srcType, argTypes, expectedType);
 			} else if (filtered.length > 1) {
@@ -751,9 +728,58 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 				}
 			}
 		}
+		// If explicit type args (<T>) and generic params, resolve type args at checker time
+		if (hasGenericParams(calleeType)) {
+			const explicitArg = findCallTypeArg(node);
+			if (explicitArg !== "") {
+				return inferGenericReturnWithExplicit(calleeType, argTypes, expectedType, explicitArg, ctx);
+			}
+		}
 		return inferGenericReturn(calleeType, argTypes, expectedType);
 	}
 	return getReturnType(calleeType);
+}
+
+// Resolve generic return type using explicit type arg (e.g. parse<Person>)
+function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expectedType: Type, explicitArg: string, ctx: CheckerContext): Type {
+	let returnType = fnType.typeReturn;
+	if (returnType === null) return unknownType();
+	// Resolve the explicit type arg to an actual type
+	const resolvedSym = lookupSymbol(ctx.table, explicitArg);
+	if (resolvedSym === null) return inferGenericReturn(fnType, argTypes, expectedType);
+	const concreteType = resolvedSym.symbolType;
+	// Find generic param names in the return type and substitute
+	const genericNames = collectGenericParamNames(returnType);
+	// Single type arg → bind to first generic param found
+	if (genericNames.length > 0) {
+		returnType = substituteType(returnType, genericNames[0], concreteType);
+	}
+	return returnType;
+}
+
+// Collect all unique GenericParam type names from a type tree
+function collectGenericParamNames(t: Type): string[] {
+	const names: string[] = [];
+	collectGenericNamesInner(t, names);
+	return names;
+}
+
+function collectGenericNamesInner(t: Type, names: string[]): void {
+	if (t === null) return;
+	if (t.kind === TypeKind.GenericParam) {
+		// Avoid duplicates
+		let found = false;
+		for (const n of names) {
+			if (n === t.typeName) { found = true; }
+		}
+		if (!found) names.push(t.typeName);
+		return;
+	}
+	if (t.typeReturn !== null) collectGenericNamesInner(t.typeReturn, names);
+	if (t.typeExtra !== null) collectGenericNamesInner(t.typeExtra, names);
+	for (let i = 0; i < t.typeChildren.length; i += 1) {
+		collectGenericNamesInner(t.typeChildren[i], names);
+	}
 }
 
 export function inferGenericReturn(fnType: Type, argTypes: Type[], expectedType: Type): Type {
@@ -1282,14 +1308,48 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 			return methodType;
 		}
 	}
+	// Class method lookup: ClassName_methodName in symbol table (methods are standalone procs)
+	if (resolvedObjType.typeName !== "") {
+		const classMethName = resolvedObjType.typeName + "_" + d.property;
+		const classMethSym = lookupSymbol(ctx.table, classMethName);
+		if (classMethSym !== null && classMethSym.symbolKind === SymbolKind.Function) {
+			ensureShaped(classMethSym, ctx);
+			node.resolvedSym = classMethSym;
+			if (needsDeref) {
+				const tok = createToken(TokenKind.Ident, "", node.location.line);
+				const derefNode = createNode(NodeKind.HiddenDeref, { expr: d.object }, tok);
+				derefNode.nodeType = resolvedObjType;
+				d.object = derefNode;
+			}
+			// Strip receiver param (index 0) for instance methods only — static methods have no "this"
+			const methType = classMethSym.symbolType;
+			if (methType.kind === TypeKind.Function && methType.typeChildren.length > 0 && methType.typeNames.length > 0 && methType.typeNames[0] === "this") {
+				const callParams: Type[] = [];
+				const callNames: string[] = [];
+				for (let ci = 1; ci < methType.typeChildren.length; ci += 1) {
+					callParams.push(methType.typeChildren[ci]);
+				}
+				for (let ci = 1; ci < methType.typeNames.length; ci += 1) {
+					callNames.push(methType.typeNames[ci]);
+				}
+				return createFunction(callParams, callNames, methType.typeReturn);
+			}
+			return methType;
+		}
+	}
 	// Fall back to extension registry — standard-aligned type-based lookup
 	if (ctx.extensionRegistry !== null) {
-		const allByName = findAllExtensionsByName(ctx.extensionRegistry, d.property);
+		let allByName = findAllExtensionsByName(ctx.extensionRegistry, d.property);
 		let ext = findFirstMatchingExt(allByName, objType);
 		// Static extension fallback: match 'typeof Type'
 		if (ext === null && objType.typeName !== "") {
 			const staticType = createTypeRef("typeof " + objType.typeName);
 			ext = findFirstMatchingExt(allByName, staticType);
+			// Also try mangled name (className_methodName) for class static methods
+			if (ext === null) {
+				const mangledByName = findAllExtensionsByName(ctx.extensionRegistry, objType.typeName + "_" + d.property);
+				ext = findFirstMatchingExt(mangledByName, staticType);
+			}
 		}
 		if (ext !== null) {
 			// Direct sym link — no name-based lookup needed
@@ -1322,6 +1382,11 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 			}
 			return ext.fnType;
 		}
+	}
+	// Unresolved member access — emit error if object type is known
+	if (propType.kind === TypeKind.Unknown && resolvedObjType.kind !== TypeKind.Unknown) {
+		const typeName = typeNameOf(resolvedObjType) !== "" ? typeNameOf(resolvedObjType) : "object";
+		addError(ctx, `Property '${d.property}' does not exist on type '${typeName}'`, node.location.line, node.location.column);
 	}
 	return propType;
 }

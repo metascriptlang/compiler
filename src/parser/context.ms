@@ -2,6 +2,7 @@
 // Pattern: ~/projects/metascript/src/parser/context.zig
 
 import { Token, TokenKind } from "../lexer/token";
+import { Node, NodeKind, CallExprData, IdentifierData, MemberExprData } from "../ast/node";
 import { isIdentLike } from "./util";
 
 // ===== Parser State =====
@@ -354,6 +355,44 @@ export function getExplicitTypeArg(line: number, col: number): string {
 	const key = line.toString() + ":" + col.toString();
 	for (let i = 0; i < _typeArgStore.items.length; i += 1) {
 		if (_typeArgStore.items[i].key === key) return _typeArgStore.items[i].val;
+	}
+	return "";
+}
+
+// Find explicit type arg for a call node. The parser stores type args at the '<' token position,
+// but CallExpr node location is at '('. Compute '<' position from callee name.
+export function findCallTypeArg(node: Node): string {
+	const cd = node.data as CallExprData;
+	// Try the call node's location first (might match for some parse layouts)
+	let result = getExplicitTypeArg(node.location.line, node.location.column);
+	if (result !== "") return result;
+	// The '<' token is stored at callee_start + callee_name_length.
+	// For Identifier callees, we know the name and can compute the exact position.
+	if (cd.callee !== null && cd.callee.kind === NodeKind.Identifier) {
+		const calleeName = (cd.callee.data as IdentifierData).name;
+		const ltCol = cd.callee.location.column + calleeName.length;
+		result = getExplicitTypeArg(cd.callee.location.line, ltCol);
+		if (result !== "") return result;
+	}
+	// For MemberExpr callees (e.g. JSON.parse<T>), the '<' is after the property name.
+	if (cd.callee !== null && cd.callee.kind === NodeKind.MemberExpr) {
+		const me = cd.callee.data as MemberExprData;
+		const propLen = me.property.length;
+		// Heuristic 1: callee location is at property start → '<' at callee.col + propLen
+		// Try both exact and +1 (location column indexing may differ from token column)
+		const ltCol1 = cd.callee.location.column + propLen;
+		result = getExplicitTypeArg(cd.callee.location.line, ltCol1);
+		if (result !== "") return result;
+		result = getExplicitTypeArg(cd.callee.location.line, ltCol1 + 1);
+		if (result !== "") return result;
+		// Heuristic 2: callee location is at object start → compute via object name
+		if (me.object !== null && me.object.kind === NodeKind.Identifier) {
+			const objName = (me.object.data as IdentifierData).name;
+			const propCol = me.object.location.column + objName.length + 1; // +1 for dot
+			const ltCol2 = propCol + propLen;
+			result = getExplicitTypeArg(cd.callee.location.line, ltCol2);
+			if (result !== "") return result;
+		}
 	}
 	return "";
 }

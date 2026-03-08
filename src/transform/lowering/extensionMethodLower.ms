@@ -8,18 +8,15 @@
 // Detection: checks ExtensionRegistry for method name, uses symbol table to
 // avoid false positives on regular class/interface member calls.
 
-import { Node, NodeKind, CallExprData, MemberExprData, IdentifierData } from "../../ast/node";
+import { Node, NodeKind, CallExprData, MemberExprData, ExprStmtData, ProgramData } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall } from "../util";
-import { lookupSymbol } from "../../checker/symbol";
-import { TypeKind, Type, getProperty, typeNameOf } from "../../checker/types";
-import { ExtensionRegistry, hasExtensionByName, findExtension, findAllExtensions } from "../../checker/context";
+import { lookupSymbol, SymbolKind, defineSymbol, makeSymbol, Symbol } from "../../checker/symbol";
+import { TypeKind, Type, getProperty, typeNameOf, unknownType, createStruct, createFunction } from "../../checker/types";
+import { ExtensionRegistry, hasExtensionByName, findExtension, createContext, registerExtension, ExtensionMethod } from "../../checker/context";
 import { parseInput, getStmts, firstCalleeKind, firstCallArgCount } from "../testUtil";
 import { createTransformContext, createTransformContextWithChecker } from "../context";
-import { createContext, registerExtension, ExtensionMethod } from "../../checker/context";
-import { defineSymbol, makeSymbol, SymbolKind } from "../../checker/symbol";
-import { unknownType, createStruct, createFunction } from "../../checker/types";
 
 // ===== Helpers =====
 
@@ -41,6 +38,13 @@ function getReceiverTypeName(ctx: TransformContext, obj: Node): string {
 	return typeNameOf(objType);
 }
 
+// Resolve the best symbol for a rewritten callee identifier
+function resolveCalleeSym(ext: ExtensionMethod, calleeSym: Symbol, ctx: TransformContext, methodName: string): Symbol {
+	if (ext !== null && ext.sym !== null) return ext.sym;
+	if (calleeSym !== null) return calleeSym;
+	return lookupSymbol(ctx.checkerCtx.table, methodName);
+}
+
 // ===== Visitor =====
 
 function lowerExtNode(node: Node, ctx: TransformContext): Node {
@@ -56,7 +60,14 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 	if (ctx.checkerCtx.extensionRegistry === null) return node;
 
 	const methodName = member.property;
-	if (!hasExtensionByName(ctx.checkerCtx.extensionRegistry, methodName)) return node;
+	// Checker may have resolved this as a class method (ClassName_methodName)
+	const calleeSym = call.callee.resolvedSym;
+
+	if (!hasExtensionByName(ctx.checkerCtx.extensionRegistry, methodName)) {
+		// Not by short name — check if calleeSym indicates a class method (mangled name in registry)
+		if (calleeSym === null) return node;
+		if (!hasExtensionByName(ctx.checkerCtx.extensionRegistry, calleeSym.name)) return node;
+	}
 
 	// If receiver has a property with this name, it's a regular member call
 	if (receiverHasProperty(ctx, member.object, methodName)) return node;
@@ -65,7 +76,10 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 	// For array methods, the registry uses raw type annotations ("number[]", "string[]", "T[]")
 	// but typeNameOf returns "Array" for all. Resolve by element type matching.
 	const receiverType = getReceiverTypeName(ctx, member.object);
-	let ext = findExtension(ctx.checkerCtx.extensionRegistry, receiverType, methodName);
+	// Class methods registered with mangled name (ClassName_methodName), standalone extensions with short name
+	const mangledMethodName = receiverType + "_" + methodName;
+	let ext = findExtension(ctx.checkerCtx.extensionRegistry, receiverType, mangledMethodName);
+	if (ext === null) ext = findExtension(ctx.checkerCtx.extensionRegistry, receiverType, methodName);
 	const objType = member.object.nodeType;
 	if (ext === null && objType !== null && objType.kind === TypeKind.Array) {
 		// Array type: try raw type annotations ("number[]", "string[]", generic "T[]")
@@ -86,14 +100,10 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 	const loc = node.location;
 	// Static extension: Math.floor(x) → floor(x) — no receiver prepend
 	if (ext !== null && ext.isStatic) {
-		const newCall = makeCall(makeIdent(methodName, loc), call.arguments, loc);
-		// Trust resolvedSym from checker; fallback to lookupSymbol for unchecked paths
-		if (node.resolvedSym !== null) {
-			newCall.resolvedSym = node.resolvedSym;
-		} else {
-			const extSym = lookupSymbol(ctx.checkerCtx.table, methodName);
-			if (extSym !== null) newCall.resolvedSym = extSym;
-		}
+		const staticName = (ext.sym !== null) ? ext.sym.name : methodName;
+		const staticIdent = makeIdent(staticName, loc);
+		staticIdent.resolvedSym = resolveCalleeSym(ext, calleeSym, ctx, methodName);
+		const newCall = makeCall(staticIdent, call.arguments, loc);
 		newCall.nodeType = node.nodeType;
 		return newCall;
 	}
@@ -103,16 +113,11 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 	for (let ai = 0; ai < call.arguments.length; ai += 1) {
 		newArgs.push(call.arguments[ai]);
 	}
-	const newCall = makeCall(makeIdent(methodName, loc), newArgs, loc);
-	// Resolve symbol: prefer matched extension's sym, then checker's resolvedSym, then lookupSymbol
-	if (ext !== null && ext.sym !== null) {
-		newCall.resolvedSym = ext.sym;
-	} else if (node.resolvedSym !== null) {
-		newCall.resolvedSym = node.resolvedSym;
-	} else {
-		const extSym = lookupSymbol(ctx.checkerCtx.table, methodName);
-		if (extSym !== null) newCall.resolvedSym = extSym;
-	}
+	// Use mangled name from extension sym (e.g. Greeter_greet) when available
+	const callName = (ext !== null && ext.sym !== null) ? ext.sym.name : methodName;
+	const calleeIdent = makeIdent(callName, loc);
+	calleeIdent.resolvedSym = resolveCalleeSym(ext, calleeSym, ctx, methodName);
+	const newCall = makeCall(calleeIdent, newArgs, loc);
 	newCall.nodeType = node.nodeType;
 	return newCall;
 }
@@ -214,6 +219,12 @@ test "class member takes priority over extension" {
 	const taskType = createStruct("Task", ["run"], [createFunction([], [], unknownType())], false);
 	const tSym = makeSymbol("t", SymbolKind.Variable, taskType, false);
 	defineSymbol(cc.table, tSym);
+	// Set nodeType on receiver so receiverHasProperty can find the struct field
+	const stmts = getStmts(result.value);
+	const callNode = (stmts[0].data as ExprStmtData).expr;
+	const callData = callNode.data as CallExprData;
+	const memberData = callData.callee.data as MemberExprData;
+	memberData.object.nodeType = taskType;
 	const ctx = createTransformContextWithChecker(cc);
 	const prog = lowerExtensionMethod(result.value, ctx);
 	assert firstCalleeKind(prog) === NodeKind.MemberExpr;

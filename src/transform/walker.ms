@@ -481,6 +481,113 @@ export function walkExpandBlocks(node: Node, expander: StmtExpander, ctx: Transf
 	};
 }
 
+// ===== Expression-Level Utilities =====
+// Shared by resultDesugar (TryExpr hoisting) and matchLower (MatchExpr hoisting).
+// Only walks expression-level children — does NOT recurse into function bodies,
+// block statements, or match case arms.
+
+export function mapExprChildren(node: Node, f: Visitor): void {
+	match (node.kind) {
+		NodeKind.CallExpr => {
+			const d = node.data as CallExprData;
+			d.callee = f(d.callee);
+			let i = 0;
+			while (i < d.arguments.length) { d.arguments[i] = f(d.arguments[i]); i += 1; }
+		},
+		NodeKind.BinaryExpr => {
+			const d = node.data as BinaryExprData;
+			d.left = f(d.left);
+			d.right = f(d.right);
+		},
+		NodeKind.UnaryExpr => {
+			const d = node.data as UnaryExprData;
+			d.operand = f(d.operand);
+		},
+		NodeKind.MemberExpr => {
+			const d = node.data as MemberExprData;
+			d.object = f(d.object);
+		},
+		NodeKind.ArrayAccess => {
+			const d = node.data as ArrayAccessData;
+			d.array = f(d.array);
+			d.index = f(d.index);
+		},
+		NodeKind.ConditionalExpr => {
+			const d = node.data as ConditionalExprData;
+			d.ternaryCondition = f(d.ternaryCondition);
+			d.ternaryConsequent = f(d.ternaryConsequent);
+			d.ternaryAlternate = f(d.ternaryAlternate);
+		},
+		NodeKind.ObjectLiteral => {
+			const d = node.data as ObjectLiteralData;
+			let i = 0;
+			while (i < d.properties.length) { d.properties[i] = f(d.properties[i]); i += 1; }
+		},
+		NodeKind.ArrayLiteral => {
+			const d = node.data as ArrayLiteralData;
+			let i = 0;
+			while (i < d.elements.length) { d.elements[i] = f(d.elements[i]); i += 1; }
+		},
+		NodeKind.SpreadExpr => {
+			const d = node.data as SpreadExprData;
+			d.spreadArg = f(d.spreadArg);
+		},
+		NodeKind.NewExpr => {
+			const d = node.data as NewExprData;
+			d.newCallee = f(d.newCallee);
+			let i = 0;
+			while (i < d.newArguments.length) { d.newArguments[i] = f(d.newArguments[i]); i += 1; }
+		},
+		NodeKind.TryExpr => {
+			const d = node.data as TryExprData;
+			d.tryArg = f(d.tryArg);
+			if (d.hasCatch) { d.catchVal = f(d.catchVal); }
+		},
+		NodeKind.MatchExpr => {
+			const d = node.data as MatchExprData;
+			d.matchDisc = f(d.matchDisc);
+			// Don't recurse into matchCases — they're statement-level
+		},
+		NodeKind.TypeAssertion => {
+			const d = node.data as TypeAssertionData;
+			d.asExpr = f(d.asExpr);
+		},
+		NodeKind.HiddenDeref | NodeKind.HiddenAddr => {
+			const d = node.data as HiddenDerefData;
+			d.expr = f(d.expr);
+		},
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
+			const d = node.data as HiddenStdConvData;
+			d.convExpr = f(d.convExpr);
+		},
+		NodeKind.UpdateExpr => {
+			const d = node.data as UpdateExprData;
+			d.updateArg = f(d.updateArg);
+		},
+		_ => {},
+	};
+}
+
+// Check if any node in an expression tree has the given NodeKind.
+export function containsExprKind(node: Node, kind: NodeKind): boolean {
+	if (node === null) return false;
+	if (node.kind === kind) return true;
+	let found = false;
+	mapExprChildren(node, (child: Node): Node => {
+		if (!found && containsExprKind(child, kind)) { found = true; }
+		return child;
+	});
+	return found;
+}
+
+// Bottom-up expression tree walk: recurse into children first, then apply replacer.
+// If replacer returns a different node, use it as the replacement.
+export function replaceInExpr(node: Node, replacer: Visitor): Node {
+	if (node === null) return node;
+	mapExprChildren(node, (child: Node): Node => replaceInExpr(child, replacer));
+	return replacer(node);
+}
+
 function expandAndRecurse(stmts: Node[], expander: StmtExpander, ctx: TransformContext): Node[] {
 	const result: Node[] = [];
 	for (const stmt of stmts) {

@@ -268,13 +268,15 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 		rewrittenBody = makeBlock([makeReturn(rewrittenBody, loc)], loc);
 	}
 
-	// Lifted function params: _envP (void*) first, then original params
-	// env-first matches closure call convention: callee.fn(callee.env, args...)
+	// Lifted function params: original params first, then _envP (void*) last
+	// Standard reference parity: environment parameter is the LAST parameter
 	// void* matches msClosure.env type — no cast needed at call site
-	const liftedParams: string[] = ["_envP"];
-	const liftedParamTypes: string[] = ["void*"];
+	const liftedParams: string[] = [];
+	const liftedParamTypes: string[] = [];
 	for (const p of params) { liftedParams.push(p); }
 	for (const t of paramTypes) { liftedParamTypes.push(t); }
+	liftedParams.push("_envP");
+	liftedParamTypes.push("void*");
 
 	state.liftedFunctions.push(makeFnDecl(liftedName, liftedParams, liftedParamTypes, rewrittenBody, flags, returnType, loc));
 

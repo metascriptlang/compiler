@@ -42,3 +42,29 @@ test "E2E C: class single pointer not double" {
 	assert c.value.contains("Doc*");
 	assert !c.value.contains("Doc**");
 }
+
+// ===== this.* injection tests =====
+
+test "checker: this in constructor body" {
+	const src = "class Dog { name: string; constructor(n: string) { this.name = n; } }\nconst d = new Dog(\"Rex\");";
+	const result = compileToC(src);
+	assert result.ok;
+}
+
+test "checker: this in instance method" {
+	const src = "class Dog { name: string; constructor(n: string) { this.name = n; } bark(): string { return this.name; } }\nconst d = new Dog(\"Rex\");";
+	const result = compileToC(src);
+	assert result.ok;
+}
+
+test "codegen: method call uses ClassName_methodName" {
+	const src = "class Dog { name: string; constructor(n: string) { this.name = n; } bark(): string { return this.name; } }\nconst d = new Dog(\"Rex\");\nconsole.log(d.bark());";
+	const result = compileToC(src);
+	assert result.ok;
+}
+
+test "codegen: constructor uses this not self" {
+	const src = "class Dog { name: string; constructor(n: string) { this.name = n; } }\nconst d = new Dog(\"Rex\");";
+	const result = compileToC(src);
+	assert result.ok;
+}

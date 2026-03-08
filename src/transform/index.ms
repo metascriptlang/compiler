@@ -44,7 +44,7 @@ import { lowerSpread } from "./desugar/spreadExpand";
 import { lowerArrayMethodInline } from "./desugar/arrayMethodInline";
 import { lowerForLoop } from "./lowering/forLoopLower";
 import { lowerForOf } from "./lowering/forOfLower";
-import { lowerTryExpr } from "./desugar/resultDesugar";
+import { lowerTryExpr, lowerResultConstructors } from "./desugar/resultDesugar";
 import { lowerResultFieldCheck } from "./desugar/resultFieldCheck";
 import { lowerMatch } from "./lowering/matchLower";
 import { lowerTailCall } from "./lowering/tailCallLower";
@@ -84,6 +84,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerForLoop(result, ctx); }
 	if (!jsBackend) { result = lowerForOf(result, ctx); }
 	if (!jsBackend) { result = lowerTryExpr(result, ctx); }
+	if (jsBackend) { result = lowerResultConstructors(result); }
 	// resultFieldCheck wraps .value/.error in BlockStmt — invalid in C expression position.
 	// Zig reference uses StmtExpr node (GNU statement expressions). Skip for C until StmtExpr added.
 	if (jsBackend) { result = lowerResultFieldCheck(result, ctx); }
@@ -93,8 +94,8 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerGenerator(result, ctx); }
 	if (!jsBackend) { result = lowerVarHoist(result, ctx); }
 	if (!jsBackend) { result = lowerLambda(result, ctx); }
-	result = lowerExtensionMethod(result, ctx);
 	result = lowerBuiltins(result, ctx);
+	result = lowerExtensionMethod(result, ctx);
 	result = lowerOperators(result, ctx);
 	if (!jsBackend) { result = lowerStringOps(result, ctx); }
 	result = lowerSubscript(result, ctx);

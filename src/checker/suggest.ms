@@ -18,7 +18,7 @@ import { Type, TypeKind, typeNameOf,
 	numberType, stringType, booleanType, voidType, nullType,
 	unknownType, neverType, errorType } from "./types";
 import { Symbol, SymbolKind, SymbolTable, Scope, lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
-import { CheckerContext } from "./context";
+import { CheckerContext, findAllExtensionsByName, filterExtsByReceiverType } from "./context";
 import { sliceStr, charAt } from "../utils/string";
 import { checkProgram } from "./checkPass";
 import { parseSource } from "../parser/statements/validation";
@@ -896,22 +896,46 @@ function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverTyp
 			}
 		}
 	}
-	// Extension methods
+	// Extension methods — type-based matching (shared with checker)
 	if (receiverType !== null && ctx.extensionRegistry !== null) {
-		const recTypeName = typeNameOf(receiverType);
-		if (recTypeName.length > 0) {
-			for (let j = 0; j < ctx.extensionRegistry.methods.length; j = j + 1) {
-				const ext = ctx.extensionRegistry.methods[j];
-				const ps = sgPrefixMatch(prefix, ext.methodName);
-				if (ext.receiverTypeName === recTypeName && ps > 0) {
-					const loc: SourceLocation = { line: 0, column: 0 };
-					const item: SgSuggest = {
-						name: ext.methodName, kind: SymbolKind.Method, symType: ext.fnType,
-						location: loc, prefixScore: ps, scopeDepth: 0, contextFit: false,
-					isExported: false, isMutable: false,
-					};
-					result.push(item);
+		// Collect unique method names first, then filter by receiver type
+		const seenMethods: string[] = [];
+		for (let j = 0; j < ctx.extensionRegistry.methods.length; j = j + 1) {
+			const ext = ctx.extensionRegistry.methods[j];
+			const ps = sgPrefixMatch(prefix, ext.methodName);
+			if (ps === 0) continue;
+			// Deduplicate: skip if we already added this method name
+			let seen = false;
+			for (let si = 0; si < seenMethods.length; si = si + 1) {
+				if (seenMethods[si] === ext.methodName) { seen = true; }
+			}
+			if (seen) continue;
+			// Type-based receiver matching (same algo as checker)
+			const allByName = findAllExtensionsByName(ctx.extensionRegistry, ext.methodName);
+			const matched = filterExtsByReceiverType(allByName, receiverType);
+			if (matched.length > 0) {
+				seenMethods.push(ext.methodName);
+				// Use first match's type; strip receiver param for instance extensions
+				const bestExt = matched[0];
+				let sigType = bestExt.fnType;
+				if (!bestExt.isStatic && sigType.typeChildren !== null && sigType.typeChildren.length > 0) {
+					const callParams: Type[] = [];
+					const callNames: string[] = [];
+					for (let ci = 1; ci < sigType.typeChildren.length; ci = ci + 1) {
+						callParams.push(sigType.typeChildren[ci]);
+					}
+					for (let ci = 1; ci < sigType.typeNames.length; ci = ci + 1) {
+						callNames.push(sigType.typeNames[ci]);
+					}
+					sigType = createFunction(callParams, callNames, sigType.typeReturn);
 				}
+				const loc: SourceLocation = { line: 0, column: 0 };
+				const item: SgSuggest = {
+					name: bestExt.methodName, kind: SymbolKind.Method, symType: sigType,
+					location: loc, prefixScore: ps, scopeDepth: 0, contextFit: false,
+					isExported: false, isMutable: false,
+				};
+				result.push(item);
 			}
 		}
 	}
@@ -1080,6 +1104,34 @@ export function sgFormatSignature(sym: Symbol): SgSignatureInfo[] {
 	return result;
 }
 
+// ===== sgFormatExtensionSignatures — build signatures filtered by receiver type =====
+
+export function sgFormatExtensionSignatures(ctx: CheckerContext, methodName: string, receiverType: Type): SgSignatureInfo[] {
+	if (ctx.extensionRegistry === null || receiverType === null) return [];
+	const allByName = findAllExtensionsByName(ctx.extensionRegistry, methodName);
+	const matched = filterExtsByReceiverType(allByName, receiverType);
+	const result: SgSignatureInfo[] = [];
+	for (let i = 0; i < matched.length; i = i + 1) {
+		const ext = matched[i];
+		let fnType = ext.fnType;
+		if (fnType === null || fnType.kind !== TypeKind.Function) continue;
+		// Strip receiver param for instance extensions
+		if (!ext.isStatic && fnType.typeChildren.length > 0) {
+			const callParams: Type[] = [];
+			const callNames: string[] = [];
+			for (let ci = 1; ci < fnType.typeChildren.length; ci = ci + 1) {
+				callParams.push(fnType.typeChildren[ci]);
+			}
+			for (let ci = 1; ci < fnType.typeNames.length; ci = ci + 1) {
+				callNames.push(fnType.typeNames[ci]);
+			}
+			fnType = createFunction(callParams, callNames, fnType.typeReturn);
+		}
+		result.push(sgBuildSignatureInfo(methodName, fnType));
+	}
+	return result;
+}
+
 // ===== sgGetCalleeAtCursor — find function name for signature help =====
 
 // Scans backwards from cursor to matching unclosed '(', then extracts
@@ -1117,6 +1169,48 @@ export function sgGetCalleeAtCursor(source: string, line: number, col: number): 
 						return sliceStr(source, 0, identEnd);
 					}
 					pos = pos - 1;
+				}
+				return "";
+			}
+			depth = depth - 1;
+		}
+		pos = pos - 1;
+	}
+	return "";
+}
+
+// ===== sgGetReceiverAtCursor — extract receiver for dot calls =====
+// For "console.log(x", returns "console". For "foo(x", returns "".
+// Scans backwards from the callee identifier to find "." + identifier pattern.
+
+export function sgGetReceiverAtCursor(source: string, line: number, col: number): string {
+	const lineOffset = sgGetLineOffset(source, line);
+	const cursorOffset = lineOffset + col;
+	let pos = cursorOffset - 1;
+	let depth = 0;
+	// Find matching unclosed '('
+	while (pos >= 0) {
+		const ch = charAt(source, pos);
+		if (ch === ")") { depth = depth + 1; }
+		if (ch === "(") {
+			if (depth === 0) {
+				// Skip backwards past callee identifier
+				pos = pos - 1;
+				while (pos >= 0 && (charAt(source, pos) === " " || charAt(source, pos) === "\t")) {
+					pos = pos - 1;
+				}
+				while (pos >= 0 && sgIsIdentChar(charAt(source, pos))) {
+					pos = pos - 1;
+				}
+				// Check for dot
+				if (pos >= 0 && charAt(source, pos) === ".") {
+					pos = pos - 1;
+					// Extract receiver identifier
+					const recEnd = pos + 1;
+					while (pos >= 0 && sgIsIdentChar(charAt(source, pos))) {
+						pos = pos - 1;
+					}
+					return sliceStr(source, pos + 1, recEnd);
 				}
 				return "";
 			}

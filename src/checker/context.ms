@@ -1,4 +1,5 @@
-import { Type, TypeKind, unknownType } from "./types";
+import { Type, TypeKind, unknownType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf } from "./types";
+import { isAssignable } from "./compat";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, createSymbolTable } from "./symbol";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
 import { sliceStr, findChar, trimStr, splitTopLevel } from "../utils/string";
@@ -155,6 +156,65 @@ export function findAllExtensionsByName(registry: ExtensionRegistry, methodName:
 		i = i + 1;
 	}
 	return results;
+}
+
+// ===== Receiver Matching (shared by checker + LSP) =====
+// Standard reference pattern: compare nominal types by identity using isAssignable,
+// not string-based receiverTypeName comparison.
+
+export function isReceiverMatch(ext: ExtensionMethod, objType: Type): boolean {
+	// Static extensions: string-based matching (receiver not in typeChildren)
+	if (ext.isStatic) {
+		return ext.receiverTypeName === typeNameOf(objType);
+	}
+	// Instance extensions: type-based matching on first param.
+	// Prefer sym.symbolType over ext.fnType — fnType may be stale unknownType()
+	// from collectPass, while sym.symbolType is updated by resolvePass/ensureShaped.
+	const fnType = (ext.sym !== null && ext.sym.symbolType !== null && ext.sym.symbolType.kind === TypeKind.Function)
+		? ext.sym.symbolType : ext.fnType;
+	if (fnType.kind !== TypeKind.Function) return false;
+	if (fnType.typeChildren.length === 0) return false;
+	const receiverType = fnType.typeChildren[0];
+	// Unknown receiver: match any (conservative — unresolved type)
+	if (receiverType.kind === TypeKind.Unknown) return true;
+	// Generic extensions: try unification on receiver param.
+	// e.g. map<T>(this arr: T[]) should match number[] but NOT string.
+	if (hasGenericParams(receiverType)) {
+		const eb = createUnifyBindings();
+		unifyType(receiverType, objType, eb);
+		return eb.names.length > 0;
+	}
+	// Concrete array extensions: match only when element types are directly compatible.
+	if (receiverType.kind === TypeKind.Array && objType.kind === TypeKind.Array) {
+		const recvElem = receiverType.typeReturn;
+		const objElem = objType.typeReturn;
+		if (recvElem === null || objElem === null) return false;
+		if (recvElem.kind !== TypeKind.Unknown && objElem.kind !== TypeKind.Unknown) {
+			return isAssignable(objElem, recvElem);
+		}
+	}
+	return isAssignable(objType, receiverType);
+}
+
+export function filterExtsByReceiverType(exts: ExtensionMethod[], objType: Type): ExtensionMethod[] {
+	const results: ExtensionMethod[] = [];
+	let i = 0;
+	while (i < exts.length) {
+		if (isReceiverMatch(exts[i], objType)) {
+			results.push(exts[i]);
+		}
+		i = i + 1;
+	}
+	return results;
+}
+
+export function findFirstMatchingExt(exts: ExtensionMethod[], objType: Type): ExtensionMethod {
+	let i = 0;
+	while (i < exts.length) {
+		if (isReceiverMatch(exts[i], objType)) return exts[i];
+		i = i + 1;
+	}
+	return null as unknown as ExtensionMethod;
 }
 
 // ===== Extension Flag Helpers =====

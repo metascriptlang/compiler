@@ -8,30 +8,46 @@
 // MemberExpr callee                 → Identifier callee (move receiver to first arg)
 //
 // This is an AST-to-AST transform — codegen sees only plain calls.
+//
+// Typed JSON (JsonParse/JsonStringify): generates per-type helper functions at
+// compile time. Equivalent to macro-based expansion in other compilers — uses
+// @builtin + struct field metadata instead since we lack a macro system.
 
 import {
-	Node, NodeKind, NodeFlag,
+	Node, NodeKind, NodeFlag, DeclKind, ProgramData, SourceLocation,
 	CallExprData, MemberExprData, IdentifierData,
 } from "../../ast/node";
-import { TypeKind, isNumeric, createResult, createArray, createPrimitive, stringType, unknownType } from "../../checker/types";
+import { Type, TypeKind, isNumeric, createResult, createArray, createPrimitive, stringType, booleanType, numberType, unknownType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { walkNode } from "../walker";
 import {
 	makeIdent, makeCall, makeIdentResolved, makeCallResolved,
-	makeObjectLiteral, makeBool, makeHiddenStdConv,
+	makeObjectLiteral, makeTypedObjectLiteral, makeBool, makeHiddenStdConv,
+	makeVarDecl, makeBlock, makeReturn, makeIf, makeBinary, makeUnary,
+	makeMember, makeString, makeNumber, makeFnDecl, makeExprStmt,
 } from "../util";
+import { findCallTypeArg } from "../../parser/context";
+import { JsonKind } from "../../../std/core/json/types";
 import { stmtCountAfter, firstStmtKindAfter, firstExprKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
 
 export function lowerBuiltins(program: Node, ctx: TransformContext): Node {
-	return walkNode(program, (node: Node): Node => {
+	const result = walkNode(program, (node: Node): Node => {
 		if (node.kind === NodeKind.CallExpr) {
 			return lowerCallExpr(node, ctx);
 		}
 		return node;
 	});
+	// Append generated helper functions (e.g. __jsonParse_Person)
+	if (ctx.pendingDecls.length > 0) {
+		const pd = result.data as ProgramData;
+		for (const decl of ctx.pendingDecls) {
+			pd.programStmts.push(decl);
+		}
+	}
+	return result;
 }
 
 // ===== Call Expression Lowering =====
@@ -40,7 +56,6 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 	const cd = node.data as CallExprData;
 	const loc = node.location;
 
-	// Check for @builtin or extern from resolution via pre-resolved symbol
 	const sym = node.resolvedSym;
 	if (sym !== null) {
 		// @builtin("Name") → inline expansion
@@ -48,52 +63,57 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 			return lowerBuiltinCall(node, sym.builtinKind, ctx);
 		}
 	}
-	// Resolve MemberExpr calls with nativeName (e.g. console.log → msPrintln).
-	// These reach here as MemberExpr callees with a resolvedSym pointing to the extern function.
-	if (cd.callee.kind === NodeKind.MemberExpr && cd.callee.resolvedSym !== null) {
-		const methodSym = cd.callee.resolvedSym;
-		if (methodSym.nativeName !== "") {
-			// Rewrite to a direct call using the nativeName as the C function name
-			const newCallee = makeIdent(methodSym.nativeName, loc);
-			newCallee.resolvedSym = methodSym;
-			cd.callee = newCallee;
-			node.resolvedSym = methodSym;
-			cd.isDirectCall = true;
-			return node;
-		}
+	// Check callee resolvedSym for builtins the call node missed
+	if (cd.callee.resolvedSym !== null && cd.callee.resolvedSym.builtinKind !== "") {
+		return lowerBuiltinCall(node, cd.callee.resolvedSym.builtinKind, ctx);
 	}
-
-	// Primitive .toString() → msNumberToString(obj) / msBoolToString(obj)
-	if (cd.callee.kind === NodeKind.MemberExpr) {
-		const me2 = cd.callee.data as MemberExprData;
-		if (me2.property === "toString" && me2.object.nodeType !== null) {
-			const tk = me2.object.nodeType.kind;
-			if (isNumeric(me2.object.nodeType)) {
-				const call = makeCall(makeIdent("msNumberToString", loc), [me2.object], loc);
-				call.nodeType = node.nodeType;
-				return call;
-			}
-			if (tk === TypeKind.Boolean) {
-				const call = makeCall(makeIdent("msBoolToString", loc), [me2.object], loc);
-				call.nodeType = node.nodeType;
-				return call;
+	// C-only: resolve nativeName and toString to C runtime functions
+	if (!ctx.jsBackend) {
+		// Resolve MemberExpr calls with nativeName (e.g. console.log → msPrintln).
+		if (cd.callee.kind === NodeKind.MemberExpr && cd.callee.resolvedSym !== null) {
+			const methodSym = cd.callee.resolvedSym;
+			if (methodSym.nativeName !== "") {
+				const newCallee = makeIdent(methodSym.nativeName, loc);
+				newCallee.resolvedSym = methodSym;
+				cd.callee = newCallee;
+				node.resolvedSym = methodSym;
+				cd.isDirectCall = true;
+				return node;
 			}
 		}
-	}
 
-	// Instance extension fallback: obj.method(args) → method(obj, args)
-	if (cd.callee.kind === NodeKind.MemberExpr && ctx.checkerCtx !== null) {
-		const me = cd.callee.data as MemberExprData;
-		const sym = lookupSymbol(ctx.checkerCtx.table, me.property);
-		if (sym !== null && sym.nativeName !== "") {
-			const newArgs: Node[] = [];
-			newArgs.push(me.object);
-			for (let j = 0; j < cd.arguments.length; j += 1) {
-				newArgs.push(cd.arguments[j]);
+		// Primitive .toString() → msNumberToString(obj) / msBoolToString(obj)
+		if (cd.callee.kind === NodeKind.MemberExpr) {
+			const me2 = cd.callee.data as MemberExprData;
+			if (me2.property === "toString" && me2.object.nodeType !== null) {
+				const tk = me2.object.nodeType.kind;
+				if (isNumeric(me2.object.nodeType)) {
+					const call = makeCall(makeIdent("msNumberToString", loc), [me2.object], loc);
+					call.nodeType = node.nodeType;
+					return call;
+				}
+				if (tk === TypeKind.Boolean) {
+					const call = makeCall(makeIdent("msBoolToString", loc), [me2.object], loc);
+					call.nodeType = node.nodeType;
+					return call;
+				}
 			}
-			const newCall = makeCallResolved(makeIdentResolved(sym, loc), newArgs, sym, loc);
-			newCall.nodeType = node.nodeType;
-			return newCall;
+		}
+
+		// Instance extension fallback: obj.method(args) → method(obj, args)
+		if (cd.callee.kind === NodeKind.MemberExpr && ctx.checkerCtx !== null) {
+			const me = cd.callee.data as MemberExprData;
+			const sym = lookupSymbol(ctx.checkerCtx.table, me.property);
+			if (sym !== null && sym.nativeName !== "") {
+				const newArgs: Node[] = [];
+				newArgs.push(me.object);
+				for (let j = 0; j < cd.arguments.length; j += 1) {
+					newArgs.push(cd.arguments[j]);
+				}
+				const newCall = makeCallResolved(makeIdentResolved(sym, loc), newArgs, sym, loc);
+				newCall.nodeType = node.nodeType;
+				return newCall;
+			}
 		}
 	}
 
@@ -123,6 +143,13 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 	}
 	if (builtinKind === "msResultErr") {
 		return rewriteResultToLiteral(node, false, ctx);
+	}
+
+	if (builtinKind === "JsonParse") {
+		return rewriteJsonParse(node, ctx);
+	}
+	if (builtinKind === "JsonStringify") {
+		return rewriteJsonStringify(node, ctx);
 	}
 
 	return node;
@@ -185,6 +212,293 @@ function rewriteResultToLiteral(node: Node, isOk: boolean, ctx: TransformContext
 	// V4: CRITICAL — preserve the monomorphized Result type from the call node
 	literal.nodeType = resType;
 	return literal;
+}
+
+// ===== Typed JSON — @builtin("JsonParse") / @builtin("JsonStringify") =====
+// Generates per-type deserializer/serializer functions at compile time.
+// Reads explicit type arg from parser side-channel, looks up struct fields from checker.
+
+// JsonKind enum imported from std/core/json/types.ms
+
+// Resolve the struct type for the explicit type arg (e.g., "Person" → struct type with fields).
+function resolveJsonTargetType(typeArgStr: string, ctx: TransformContext): Type {
+	if (ctx.checkerCtx === null) return null as unknown as Type;
+	const sym = lookupSymbol(ctx.checkerCtx.table, typeArgStr);
+	if (sym === null) return null as unknown as Type;
+	if (sym.symbolType === null) return null as unknown as Type;
+	// Must be a struct (interface) type
+	if (sym.symbolType.kind === TypeKind.Struct) return sym.symbolType;
+	// Could be Ref<Struct> (class) — unwrap
+	if (sym.symbolType.kind === TypeKind.Ref && sym.symbolType.typeReturn !== null) {
+		if (sym.symbolType.typeReturn.kind === TypeKind.Struct) return sym.symbolType.typeReturn;
+	}
+	return null as unknown as Type;
+}
+
+// Map a field type to JsonKind constant and accessor field name on JsonValue.
+// Returns [jsonKind, accessorName] or [-1, ""] if unsupported.
+function jsonFieldMapping(fieldType: Type): number {
+	if (fieldType === null) return -1;
+	return match (fieldType.kind) {
+		TypeKind.String => JsonKind.String,
+		TypeKind.Number | TypeKind.Float64 => JsonKind.Number,
+		TypeKind.Boolean => JsonKind.Bool,
+		_ => -1,
+	};
+}
+
+function jsonFieldAccessor(fieldType: Type): string {
+	if (fieldType === null) return "";
+	return match (fieldType.kind) {
+		TypeKind.String => "strVal",
+		TypeKind.Number | TypeKind.Float64 => "numVal",
+		TypeKind.Boolean => "boolVal",
+		_ => "",
+	};
+}
+
+// Build a Result error return: { ok: false, error: "msg" }
+function makeResultErr(msg: string, resultType: Type, loc: SourceLocation): Node {
+	const keys: string[] = ["ok", "error"];
+	const vals: Node[] = [makeBool(false, loc), makeString(msg, loc)];
+	const lit = makeTypedObjectLiteral(keys, vals, resultType, loc);
+	return makeReturn(lit, loc);
+}
+
+// Build a Result ok return: { ok: true, value: expr }
+function makeResultOkReturn(valueExpr: Node, resultType: Type, loc: SourceLocation): Node {
+	const keys: string[] = ["ok", "value"];
+	const vals: Node[] = [makeBool(true, loc), valueExpr];
+	const lit = makeTypedObjectLiteral(keys, vals, resultType, loc);
+	return makeReturn(lit, loc);
+}
+
+// Check if a helper function name already exists in pendingDecls.
+function hasPendingDecl(ctx: TransformContext, name: string): boolean {
+	let i = 0;
+	while (i < ctx.pendingDecls.length) {
+		const decl = ctx.pendingDecls[i];
+		if (decl.kind === NodeKind.FunctionDecl) {
+			const fd = decl.data as { fnName: string };
+			if (fd.fnName === name) return true;
+		}
+		i = i + 1;
+	}
+	return false;
+}
+
+function rewriteJsonParse(node: Node, ctx: TransformContext): Node {
+	const cd = node.data as CallExprData;
+	const loc = node.location;
+
+	// Read explicit type arg from parser side-channel
+	const typeArgStr = findCallTypeArg(node);
+	if (typeArgStr === "") return node;  // no explicit type arg, can't generate
+
+	// Resolve struct type
+	const structType = resolveJsonTargetType(typeArgStr, ctx);
+	if (structType === null) return node;  // unknown type, leave as-is
+
+	// Build helper function name
+	const helperName = "__jsonParse_" + typeArgStr;
+	const resultType = createResult(structType, stringType());
+
+	// Generate helper if not already generated
+	if (!hasPendingDecl(ctx, helperName)) {
+		const helperFn = generateJsonParseHelper(helperName, typeArgStr, structType, resultType, node);
+		if (helperFn !== null) {
+			ctx.pendingDecls.push(helperFn);
+		}
+	}
+
+	// Replace call: jsonParse<Person>(input) → __jsonParse_Person(input)
+	const newCallee = makeIdent(helperName, loc);
+	const result = makeCall(newCallee, cd.arguments, loc);
+	result.nodeType = resultType;
+	return result;
+}
+
+function generateJsonParseHelper(
+	helperName: string, typeName: string, structType: Type, resultType: Type, refNode: Node
+): Node {
+	const loc = refNode.location;
+	const stmts: Node[] = [];
+
+	// const $jr = parseJson(input);
+	const inputIdent = makeIdent("input", loc);
+	const parseCall = makeCall(makeIdent("parseJson", loc), [inputIdent], loc);
+	parseCall.nodeType = resultType;  // approximate — parseJson returns Result<JsonValue, string>
+	stmts.push(makeVarDecl("$jr", parseCall, DeclKind.Const, loc));
+
+	// if (!$jr.ok) { return { ok: false, error: $jr.error }; }
+	const jrOk = makeMember(makeIdent("$jr", loc), "ok", loc);
+	jrOk.nodeType = booleanType();
+	const notOk = makeUnary("!", jrOk, loc);
+	const jrError = makeMember(makeIdent("$jr", loc), "error", loc);
+	jrError.nodeType = stringType();
+	const errKeys1: string[] = ["ok", "error"];
+	const errVals1: Node[] = [makeBool(false, loc), jrError];
+	const errLit1 = makeTypedObjectLiteral(errKeys1, errVals1, resultType, loc);
+	const errReturn1 = makeReturn(errLit1, loc);
+	stmts.push(makeIf(notOk, makeBlock([errReturn1], loc), makeBlock([], loc), loc));
+
+	// const $jv = $jr.value;
+	const jrValue = makeMember(makeIdent("$jr", loc), "value", loc);
+	stmts.push(makeVarDecl("$jv", jrValue, DeclKind.Const, loc));
+
+	// if ($jv.kind !== JsonKind.Object) { return { ok: false, error: "expected object" }; }
+	const jvKind = makeMember(makeIdent("$jv", loc), "kind", loc);
+	jvKind.nodeType = numberType();
+	const kindCheck = makeBinary(jvKind, "!==", makeNumber(JsonKind.Object, loc), loc);
+	const errReturn2 = makeResultErr("expected object", resultType, refNode.location);
+	stmts.push(makeIf(kindCheck, makeBlock([errReturn2], loc), makeBlock([], loc), loc));
+
+	// Per-field extraction
+	const fieldNames = structType.typeNames;
+	const fieldTypes = structType.typeChildren;
+	if (fieldNames === null || fieldTypes === null) return null as unknown as Node;
+
+	const okKeys: string[] = [];
+	const okVals: Node[] = [];
+
+	let fi = 0;
+	while (fi < fieldNames.length) {
+		const fname = fieldNames[fi];
+		const ftype = fieldTypes[fi];
+		const jsonKind = jsonFieldMapping(ftype);
+		const accessor = jsonFieldAccessor(ftype);
+		if (jsonKind < 0 || accessor === "") {
+			return null as unknown as Node;  // unsupported field type — bail out entirely
+		}
+
+		const varName = "$f" + fi.toString();
+
+		// const $fN = get($jv, "fieldName");
+		const getCall = makeCall(makeIdent("get", loc), [makeIdent("$jv", loc), makeString(fname, loc)], loc);
+		stmts.push(makeVarDecl(varName, getCall, DeclKind.Const, loc));
+
+		// if ($fN.kind !== expectedKind) { return { ok: false, error: "field 'name': expected type" }; }
+		const fKind = makeMember(makeIdent(varName, loc), "kind", loc);
+		fKind.nodeType = numberType();
+		const expectedKindName = match (jsonKind) {
+			JsonKind.String => "string",
+			JsonKind.Number => "number",
+			JsonKind.Bool => "boolean",
+			_ => "unknown",
+		};
+		const fCheck = makeBinary(fKind, "!==", makeNumber(jsonKind, loc), loc);
+		const errMsg = "field '" + fname + "': expected " + expectedKindName;
+		const errReturnF = makeResultErr(errMsg, resultType, refNode.location);
+		stmts.push(makeIf(fCheck, makeBlock([errReturnF], loc), makeBlock([], loc), loc));
+
+		// Build value accessor: $fN.strVal / $fN.numVal / $fN.boolVal
+		const fVal = makeMember(makeIdent(varName, loc), accessor, loc);
+		fVal.nodeType = ftype;
+		okKeys.push(fname);
+		okVals.push(fVal);
+
+		fi = fi + 1;
+	}
+
+	// return { ok: true, value: { field1: $f0.strVal, field2: $f1.numVal, ... } };
+	const innerObj = makeTypedObjectLiteral(okKeys, okVals, structType, loc);
+	const okReturn = makeResultOkReturn(innerObj, resultType, refNode.location);
+	stmts.push(okReturn);
+
+	// Build function: function __jsonParse_Person(input: string): Result<Person, string> { ... }
+	const paramNames: string[] = ["input"];
+	const paramTypes: string[] = ["string"];
+	const body = makeBlock(stmts, loc);
+	const fn = makeFnDecl(helperName, paramNames, paramTypes, body, "", "Result", loc);
+	fn.nodeType = null as unknown as Type;  // let codegen infer from body
+	return fn;
+}
+
+function rewriteJsonStringify(node: Node, ctx: TransformContext): Node {
+	const cd = node.data as CallExprData;
+	const loc = node.location;
+
+	// Read explicit type arg from parser side-channel
+	const typeArgStr = findCallTypeArg(node);
+	if (typeArgStr === "") return node;
+
+	// Resolve struct type
+	const structType = resolveJsonTargetType(typeArgStr, ctx);
+	if (structType === null) return node;
+
+	// Build helper function name
+	const helperName = "__jsonStringify_" + typeArgStr;
+
+	// Generate helper if not already generated
+	if (!hasPendingDecl(ctx, helperName)) {
+		const helperFn = generateJsonStringifyHelper(helperName, typeArgStr, structType, node);
+		if (helperFn !== null) {
+			ctx.pendingDecls.push(helperFn);
+		}
+	}
+
+	// Replace call: jsonStringify<Person>(value) → __jsonStringify_Person(value)
+	const newCallee = makeIdent(helperName, loc);
+	const result = makeCall(newCallee, cd.arguments, loc);
+	result.nodeType = stringType();
+	return result;
+}
+
+function generateJsonStringifyHelper(
+	helperName: string, typeName: string, structType: Type, refNode: Node
+): Node {
+	const loc = refNode.location;
+	const stmts: Node[] = [];
+
+	// const $o = jsonObject();
+	const objCall = makeCall(makeIdent("jsonObject", loc), [], loc);
+	stmts.push(makeVarDecl("$o", objCall, DeclKind.Const, loc));
+
+	// Per-field: set($o, "fieldName", jsonString/jsonNumber/jsonBool(value.field))
+	const fieldNames = structType.typeNames;
+	const fieldTypes = structType.typeChildren;
+	if (fieldNames === null || fieldTypes === null) return null as unknown as Node;
+
+	let fi = 0;
+	while (fi < fieldNames.length) {
+		const fname = fieldNames[fi];
+		const ftype = fieldTypes[fi];
+
+		// Determine JSON constructor function name
+		const jsonCtorName = match (ftype.kind) {
+			TypeKind.String => "jsonString",
+			TypeKind.Number | TypeKind.Float64 => "jsonNumber",
+			TypeKind.Boolean => "jsonBool",
+			_ => "",
+		};
+		if (jsonCtorName === "") {
+			return null as unknown as Node;  // unsupported field type — bail out entirely
+		}
+
+		// value.fieldName
+		const fieldAccess = makeMember(makeIdent("value", loc), fname, loc);
+		fieldAccess.nodeType = ftype;
+
+		// jsonString(value.fieldName) / jsonNumber(...) / jsonBool(...)
+		const wrappedVal = makeCall(makeIdent(jsonCtorName, loc), [fieldAccess], loc);
+
+		// set($o, "fieldName", wrappedValue)
+		const setCall = makeCall(makeIdent("set", loc), [makeIdent("$o", loc), makeString(fname, loc), wrappedVal], loc);
+		stmts.push(makeExprStmt(setCall, loc));
+
+		fi = fi + 1;
+	}
+
+	// return stringify($o);
+	const stringifyCall = makeCall(makeIdent("stringify", loc), [makeIdent("$o", loc)], loc);
+	stringifyCall.nodeType = stringType();
+	stmts.push(makeReturn(stringifyCall, loc));
+
+	// Build function: function __jsonStringify_Person(value: Person): string { ... }
+	const paramNames: string[] = ["value"];
+	const paramTypes: string[] = [typeName];
+	const body = makeBlock(stmts, loc);
+	return makeFnDecl(helperName, paramNames, paramTypes, body, "", "string", loc);
 }
 
 // ===== Tests =====

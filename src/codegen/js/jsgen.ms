@@ -190,7 +190,8 @@ test "call expression" {
 
 test "member expression" {
 	const js = genFromSource("console.log(42);");
-	assert js === "console.log(42);\n";
+	// After UFCS: static extension console.log → log(42)
+	assert js === "log(42);\n";
 }
 
 test "array literal" {

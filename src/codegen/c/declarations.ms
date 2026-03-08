@@ -452,17 +452,18 @@ function genClassDecl(g: CGen, node: Node): void {
 
 function genMethodAsFunction(g: CGen, node: Node, className: string): void {
 	const d = node.data as MethodDeclData;
-	const methodName = className + "_" + safeName(d.methodName);
+	const methodName = mangledFunctionName(node.resolvedSym, className + "_" + safeName(d.methodName), 0);
 	const methodType = node.nodeType;
 	const cRetType = getTypeDesc(g, methodType.typeReturn);
 
-	// Build params: (ClassName* self, ...)
-	let paramList = className + "* self";
+	// Build params from d.methodParams — "this" is already at index 0 for instance methods
+	let paramList = "";
 	for (let i = 0; i < d.methodParams.length; i += 1) {
-		paramList = paramList + ", ";
+		if (i > 0) paramList = paramList + ", ";
 		const pType = getTypeDesc(g, methodType.typeChildren[i]);
 		paramList = paramList + pType + " " + safeName(d.methodParams[i]);
 	}
+	if (d.methodParams.length === 0) paramList = "void";
 
 	const proto = cRetType + " " + methodName + "(" + paramList + ")";
 	addLine(sec(g, CSection.ProcHeaders), proto + ";");
@@ -502,7 +503,7 @@ function genConstructor(g: CGen, node: Node, className: string): void {
 	const procs = sec(g, CSection.Procs);
 	addLine(procs, proto + " {");
 	// Allocate with RTTI: msAllocTyped(sizeof(Type), &Type_typeInfo)
-	addLine(procs, "  " + className + "* self = (" + className + "*)msAllocTyped(sizeof(" + className + "), &" + className + "_typeInfo);");
+	addLine(procs, "  " + className + "* this = (" + className + "*)msAllocTyped(sizeof(" + className + "), &" + className + "_typeInfo);");
 
 	if (d.ctorBody !== null) {
 		const p = createProc(ctorName, null as unknown as Type);
@@ -513,7 +514,7 @@ function genConstructor(g: CGen, node: Node, className: string): void {
 		add(procs, stmts);
 	}
 
-	addLine(procs, "  return self;");
+	addLine(procs, "  return this;");
 	addLine(procs, "}");
 	addNewline(procs);
 }
@@ -633,8 +634,8 @@ function genTypeInfoVar(g: CGen, d: VariableDeclData, varName: string): void {
 	// Extract base type name: strip "_typeInfo" suffix (9 chars)
 	const baseName = sliceStr(d.declName, 0, d.declName.length - 9);
 
-	// Emit declaration
-	addLine(sec(g, CSection.GlobalVars), "static msTypeInfo " + varName + ";");
+	// Emit declaration (non-static: other modules reference via extern for cross-module new)
+	addLine(sec(g, CSection.GlobalVars), "msTypeInfo " + varName + ";");
 
 	// Emit field assignments to DatInit (runs before user code)
 	if (d.initializer !== null && d.initializer.kind === NodeKind.ObjectLiteral) {

@@ -25,6 +25,7 @@ import { resolveImport, resolveImportWithConfig, isStdImport, ResolverConfig } f
 import { lex } from "../lexer/lexer";
 import { createState } from "../parser/context";
 import { callStateProgramParser } from "../parser/statements/callbacks";
+import "../parser/statements/core";
 import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../ast/node";
 import { readFile } from "std/process";
 import { sliceStr } from "../utils/string";
@@ -127,7 +128,8 @@ function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProv
 	for (const parseErr of parseState.errors) {
 		mod.errors.push("Parse: " + parseErr);
 	}
-	mod.state = ModuleState.Parsed;
+	// NOTE: keep state as Loading until imports are processed — cycle detection
+	// in loadModule checks for Loading state to detect circular imports.
 
 	// Walk AST for import declarations (works on partial ASTs)
 	if (!parseResult.ok) {
@@ -143,7 +145,7 @@ function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProv
 		} else if (stmt.kind === NodeKind.ExportDecl) {
 			// Re-export: export { ... } from "./module" wraps ImportDecl in ExportDecl
 			const ed = stmt.data as ExportDeclData;
-			if (ed.exportedDecl.kind === NodeKind.ImportDecl) {
+			if (ed.exportedDecl !== null && ed.exportedDecl.kind === NodeKind.ImportDecl) {
 				processImportDecl(graph, mod, ed.exportedDecl, provider, config, useConfig);
 			}
 		}

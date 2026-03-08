@@ -5,7 +5,7 @@
 //
 // TODO: Replace hand-rolled JSON helpers with JSON.parse()/JSON.stringify()
 // when the self-hosted compiler supports class codegen and object field access.
-// Currently std/json's JsonNode has opaque object/array access (MVP limitation).
+// Currently std/core/json's JsonNode has opaque object/array access (MVP limitation).
 
 import { sliceStr, charAt } from "../../utils/string";
 

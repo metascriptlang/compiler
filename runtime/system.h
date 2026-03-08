@@ -243,7 +243,7 @@ _Noreturn void msRaiseIndexError(int64_t idx, int64_t len);
 })
 
 /* ===== Range-Checked Integer Casts ===== */
-/* Parity: Nim's chcks.nim raiseRangeErrorI + genRangeChck in ccgexprs.nim.
+/* Parity: standard reference range checks and code generation patterns.
    Inline condition (fast path), helper call only on error (slow path). */
 
 _Noreturn void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi);

@@ -10,7 +10,7 @@
 
 import {
 	Node, NodeKind, SourceLocation,
-	BinaryExprData, StringLiteralData,
+	BinaryExprData, StringLiteralData, CallExprData, IdentifierData,
 } from "../../ast/node";
 import { TypeKind, isNumeric } from "../../checker/types";
 import { TransformContext } from "../context";
@@ -34,28 +34,53 @@ function flattenConcat(node: Node): Node {
 	const parts: Node[] = [];
 	collectParts(node, parts);
 
-	// Only flatten if at least one part is a string literal (syntactic proof)
+	// Only flatten if at least one part is a string literal or has string type
 	let hasString = false;
+	let hasNonString = false;
 	for (const p of parts) {
 		if (p.kind === NodeKind.StringLiteral) {
 			hasString = true;
+		} else if (p.nodeType !== null && p.nodeType.kind === TypeKind.String) {
+			hasString = true;
+		} else if (p.kind === NodeKind.CallExpr) {
+			// Already-flattened msStringConcatMany call is a string
+			const cd = p.data as CallExprData;
+			if (cd.callee.kind === NodeKind.Identifier) {
+				const cn = (cd.callee.data as IdentifierData).name;
+				if (cn === "msStringConcatMany" || cn === "msStringConcat") hasString = true;
+			}
 		}
+		if (needsCoercion(p)) hasNonString = true;
 	}
 	if (!hasString) return node;
 
-	// 2-part concat is fine as binary — no benefit from call
-	if (parts.length < 3) return node;
-
-	// Build single variadic call: msStringConcatMany(N, a, b, c, ...)
-	// One allocation, one pass — eliminates intermediate string allocations.
-	// Non-string parts get wrapped in msNumberToString/msBoolToString.
 	const loc = node.location;
+
+	// 2-part: use msStringConcat(a, b) — still need coercion for non-string parts
+	if (parts.length === 2) {
+		if (!hasNonString) return node; // both strings, binary + is fine
+		const args: Node[] = [coerceToString(parts[0], loc), coerceToString(parts[1], loc)];
+		return makeCall(makeIdent("msStringConcat", loc), args, loc);
+	}
+
+	// 3+ parts: msStringConcatMany(N, a, b, c, ...)
 	const countNode = makeNumber(parts.length, loc);
 	const allArgs: Node[] = [countNode];
 	for (const p of parts) {
 		allArgs.push(coerceToString(p, loc));
 	}
 	return makeCall(makeIdent("msStringConcatMany", loc), allArgs, loc);
+}
+
+// Check if a node needs string coercion (is non-string in a string concat context)
+function needsCoercion(node: Node): boolean {
+	if (node.kind === NodeKind.StringLiteral) return false;
+	if (node.kind === NodeKind.NumberLiteral) return true;
+	if (node.nodeType !== null) {
+		if (isNumeric(node.nodeType)) return true;
+		if (node.nodeType.kind === TypeKind.Boolean) return true;
+	}
+	return false;
 }
 
 // Wrap non-string parts in conversion calls for C backend

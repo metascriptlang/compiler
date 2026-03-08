@@ -21,3 +21,4 @@ import "./bitwiseCheck";
 import "./typeAliasStruct";
 import "./literalCoercion";
 import "./discriminatedUnion";
+import "./jsonTyped";

@@ -16,8 +16,10 @@ import { createTransformContextWithChecker } from "../../transform/context";
 import { Node, NodeKind, ProgramData, FunctionDeclData } from "../../ast/node";
 import { createMapProvider, loadModuleGraph } from "../../module/loader";
 import { findModule } from "../../module/graph";
+import { resetExplicitTypeArgs } from "../../parser/context";
 
 export function checkSource(source: string): CheckerContext {
+	resetExplicitTypeArgs();
 	const modPath = "test/handoff.ms";
 	const entries = [{ entryPath: modPath, entrySource: source }];
 	const provider = createMapProvider(entries);
@@ -35,6 +37,7 @@ export function checkSource(source: string): CheckerContext {
 }
 
 export function fullPipeline(source: string): Node {
+	resetExplicitTypeArgs();
 	const modPath = "test/handoff.ms";
 	const entries = [{ entryPath: modPath, entrySource: source }];
 	const provider = createMapProvider(entries);

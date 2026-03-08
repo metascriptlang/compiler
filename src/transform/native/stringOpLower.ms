@@ -106,7 +106,7 @@ function rewriteStringOp(node: Node): Node {
 	}
 
 	// String compound assignment: s += t → msStringAppend(&s, t)
-	// Nim parity: sem resolves &= to nkCall(mAppendStrStr, nkHiddenAddr(s), t).
+	// Reference parity: semantic analysis resolves &= to an append call with a hidden address.
 	// We do the same rewrite here so DRC sees a normal call (no special-casing)
 	// and codegen emits a normal call (no special-casing).
 	if (d.operator === "+=" && isStringTyped(d.left)) {

@@ -437,6 +437,16 @@ export function ensureForwardDecl(g: CGen, typeName: string): void {
 	addLine(sec(g, CSection.ForwardDecls), "typedef struct " + typeName + " " + typeName + ";");
 }
 
+// Ensure msTypeInfo extern declaration exists for cross-module new expressions.
+// The defining module emits `static msTypeInfo Foo_typeInfo;` via destructorLifting.
+// Consuming modules need `extern msTypeInfo Foo_typeInfo;` to reference it.
+export function ensureTypeInfo(g: CGen, className: string): void {
+	const key = "typeInfo:" + className;
+	if (typeCacheHas(g.forwTypeCache, key)) return;
+	typeCacheSet(g.forwTypeCache, key, className);
+	addLine(sec(g, CSection.ForwardDecls), "extern msTypeInfo " + className + "_typeInfo;");
+}
+
 // ===== Full Type Description =====
 // Main entry point: returns C type name string for a MetaScript Type.
 // Emits type definitions to CGen sections as side effect.
@@ -890,19 +900,24 @@ function closureRetTypeToC(g: CGen, t: Type): string {
 // Reference implementation equivalent: get closure type cast string.
 
 // Build closure function pointer cast: retType(*)(params...)
-// withEnv=true prepends void* for the env parameter (full closure call).
+// withEnv=true appends void* for the env parameter (full closure call).
+// Standard reference parity: environment is the LAST parameter in closure calls.
 // ARM64 requires non-variadic casts — variadic calling convention differs.
 function genClosureCast(g: CGen, t: Type, withEnv: boolean): string {
 	const retC = closureRetTypeToC(g, t);
-	let params = withEnv ? "void*" : "void";
+	let params = "";
 	if (t !== null && t.kind === TypeKind.Function && t.typeChildren.length > 0) {
-		if (!withEnv) { params = ""; }
 		let i = 0;
 		while (i < t.typeChildren.length) {
-			if (i > 0 || withEnv) params = params + ", ";
+			if (i > 0) params = params + ", ";
 			params = params + closureParamTypeToC(g, t.typeChildren[i]);
 			i = i + 1;
 		}
+		if (withEnv) params = params + ", void*";
+	} else if (withEnv) {
+		params = "void*";
+	} else {
+		params = "void";
 	}
 	return retC + "(*)" + "(" + params + ")";
 }

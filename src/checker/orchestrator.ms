@@ -17,6 +17,7 @@ import { parseSource } from "../parser/statements/validation";
 import { lex } from "../lexer/lexer";
 import { ParserState, createState } from "../parser/context";
 import { callStateProgramParser } from "../parser/statements/callbacks";
+import "../parser/statements/core";
 
 
 // Standard-aligned two-phase module checking.

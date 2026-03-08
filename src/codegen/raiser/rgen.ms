@@ -315,11 +315,8 @@ export function generateRaiserProject(modules: RaiserModuleInput[], checkerCtx: 
 					if (cd.classBody[ci].kind === NodeKind.MethodDecl) {
 						const md = cd.classBody[ci].data as MethodDeclData;
 						const methodName = cd.className + "_" + md.methodName;
-						const methodParams: string[] = ["this"];
-						for (let pi = 0; pi < md.methodParams.length; pi += 1) {
-							methodParams.push(md.methodParams[pi]);
-						}
-						const func = compileFuncBody(globalFuncMap, globalEnumMap, methodName, methodParams, md.methodBody, methodParams.length);
+						// md.methodParams already has "this" at index 0 (injected by collectPass)
+						const func = compileFuncBody(globalFuncMap, globalEnumMap, methodName, md.methodParams, md.methodBody, md.methodParams.length);
 						functions.push(func);
 					}
 				}
@@ -1017,13 +1014,14 @@ test "non-capturing closure" {
 	assert ctx.lastResult.intVal === 42;
 }
 
+// Reference parity: environment parameter is LAST
 test "closure with capture" {
-	const ctx = evalRaiser("function lifted(_e, y) { return _e.x + y; } const e = { x: 5 }; const f = { fn: lifted, env: e }; return f(3);");
+	const ctx = evalRaiser("function lifted(y, _e) { return _e.x + y; } const e = { x: 5 }; const f = { fn: lifted, env: e }; return f(3);");
 	assert ctx.lastResult.intVal === 8;
 }
 
 test "higher-order: makeAdder" {
-	const ctx = evalRaiser("function liftedAdd(_e, x) { return _e.n + x; } function makeAdder(n) { return { fn: liftedAdd, env: { n: n } }; } const add5 = makeAdder(5); return add5(3);");
+	const ctx = evalRaiser("function liftedAdd(x, _e) { return _e.n + x; } function makeAdder(n) { return { fn: liftedAdd, env: { n: n } }; } const add5 = makeAdder(5); return add5(3);");
 	assert ctx.lastResult.intVal === 8;
 }
 
@@ -1033,7 +1031,7 @@ test "multiple captures" {
 }
 
 test "chained call: makeAdder(5)(3)" {
-	const ctx = evalRaiser("function liftedAdd(_e, x) { return _e.n + x; } function makeAdder(n) { return { fn: liftedAdd, env: { n: n } }; } return makeAdder(5)(3);");
+	const ctx = evalRaiser("function liftedAdd(x, _e) { return _e.n + x; } function makeAdder(n) { return { fn: liftedAdd, env: { n: n } }; } return makeAdder(5)(3);");
 	assert ctx.lastResult.intVal === 8;
 }
 
@@ -1053,7 +1051,7 @@ test "lambda-lifted capture pattern" {
 }
 
 test "lambda-lifted capture with args" {
-	const ctx = evalRaiser("function lifted1(_envP, y) { return _envP.x + y; } const x = 10; const f = { fn: lifted1, env: { x: x } }; return f(32);");
+	const ctx = evalRaiser("function lifted1(y, _envP) { return _envP.x + y; } const x = 10; const f = { fn: lifted1, env: { x: x } }; return f(32);");
 	assert ctx.lastResult.intVal === 42;
 }
 

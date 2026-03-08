@@ -30,7 +30,7 @@ import {
 	sgTypeToString, sgFindNodeAtPosition, sgGetSymbolAtCursor,
 	sgFormatHover, sgCollectDiagnostics,
 	sgDetectCompletionContext, sgGetPrefix, sgGetCompletionCandidates,
-	sgCollectSymbolsInFile, sgFormatSignature, sgCountActiveParam, sgGetCalleeAtCursor,
+	sgCollectSymbolsInFile, sgFormatSignature, sgFormatExtensionSignatures, sgCountActiveParam, sgGetCalleeAtCursor, sgGetReceiverAtCursor,
 	sgCollectInlayHints,
 	sgCollectReferences, sgFindUsagesByName,
 	sgFormatHoverDoc, sgExtractDocComment,
@@ -45,7 +45,7 @@ import {
 } from "../../checker/suggest";
 import { CheckerContext, createContext } from "../../checker/context";
 import { SymbolKind, lookupSymbol } from "../../checker/symbol";
-import { Type, TypeKind, unknownType, getProperty } from "../../checker/types";
+import { Type, TypeKind, unknownType, getProperty, typeNameOf } from "../../checker/types";
 import { Node, IdentifierData, MemberExprData, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../../ast/node";
 import { defaultFormatOptions } from "../fmt/options";
 import { printNode as printFormattedNode } from "../fmt/printer";
@@ -598,10 +598,21 @@ export function handleSignatureHelp(id: string, params: string, db: TransAmDb): 
 	const ctx = dbTypeCheck(db, path);
 	if (ctx === null) return lspResponse(id, "null");
 
-	const sym = lookupSymbol(ctx.table, calleeName);
-	if (sym === null) return lspResponse(id, "null");
-
-	const sigs = sgFormatSignature(sym);
+	// For member calls (receiver.method()), try extension-based signatures first
+	let sigs: SgSignatureInfo[] = [];
+	const receiverName = sgGetReceiverAtCursor(source, pos.line, pos.col);
+	if (receiverName !== "") {
+		const recSym = lookupSymbol(ctx.table, receiverName);
+		if (recSym !== null && recSym.symbolType !== null) {
+			sigs = sgFormatExtensionSignatures(ctx, calleeName, recSym.symbolType);
+		}
+	}
+	// Fallback: standard symbol lookup (direct calls + non-extension methods)
+	if (sigs.length === 0) {
+		const sym = lookupSymbol(ctx.table, calleeName);
+		if (sym === null) return lspResponse(id, "null");
+		sigs = sgFormatSignature(sym);
+	}
 	if (sigs.length === 0) return lspResponse(id, "null");
 
 	const activeParam = sgCountActiveParam(source, pos.line, pos.col);

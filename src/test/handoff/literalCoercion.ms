@@ -2,7 +2,7 @@
 //
 // Verifies: number literals auto-coerce to sized integer types when context
 // demands it (var decl with type annotation, binary ops with integer operand).
-// Reference parity: Nim's isIntLit + handleRange in sigmatch.nim.
+// Reference parity: standard reference's integer literal and range handling.
 
 import { checkSource, strictErrorCount, warningCount, hasError } from "./helpers";
 import { lookupSymbol } from "../../checker/symbol";
@@ -164,7 +164,7 @@ test "int32 < literal no error" {
 }
 
 // ===== J: Out-of-range literal is compile-time error =====
-// Reference parity: Nim's changeType emits "cannot convert N to T"
+// Reference parity: standard reference's type change diagnostics
 
 test "uint8 out of range literal is error" {
 	const src = "const x: uint8 = 256;";
@@ -186,7 +186,7 @@ test "negative literal out of range for uint8 is error" {
 }
 
 // ===== K: fitNode — implicit narrowing HiddenStdConv insertion =====
-// Parity: Nim sem.nim fitNode → sigmatch implicitConv → transf.nim transformConv
+// Parity: standard reference's node fitting and transformation patterns
 
 test "narrowing int32 to int8 var decl inserts HiddenStdConv" {
 	// When declType is int8 and initializer is int32, fitNode wraps in HiddenStdConv

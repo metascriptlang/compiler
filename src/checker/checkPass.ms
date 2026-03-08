@@ -16,8 +16,8 @@ import {
 } from "../ast/node";
 import {
 	Type, TypeKind,
-	unknownType, nullType, stringType, charType, numberType,
-	createUnion, isMaybeType, unwrapMaybeType,
+	unknownType, nullType, stringType, charType, numberType, voidType,
+	createFunction, createUnion, isMaybeType, unwrapMaybeType,
 	isNarrowingIntConv,
 } from "./types";
 import {
@@ -111,7 +111,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		declType = resolveAnnotation(d.declType, ctx);
 	}
 	const initType = checkExpr(ctx, d.initializer, declType);
-	// Parity: Nim fitNode — insert HiddenStdConv for narrowing integer conversions
+	// Parity: standard reference node fitting — insert HiddenStdConv for narrowing integer conversions
 	if (declType !== null && d.initializer !== null) {
 		d.initializer = fitNode(ctx, d.initializer, declType, initType);
 	}
@@ -186,29 +186,45 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 
 	openScope(ctx.table, ScopeKind.Class);
 	for (const member of d.classBody) {
-		checkClassMember(ctx, member);
+		checkClassMember(ctx, member, d.className, sym.symbolType);
 	}
 	closeScope(ctx.table);
 
 	sym.state = SymbolState.Checked;
 }
 
-function checkClassMember(ctx: CheckerContext, node: Node): void {
+function checkClassMember(ctx: CheckerContext, node: Node, className: string, classType: Type): void {
 	// DecoratedDecl wrapping a class member — unwrap and check the inner node
 	if (node.kind === NodeKind.DecoratedDecl) {
 		const dd = node.data as DecoratedDeclData;
-		checkClassMember(ctx, dd.decoratedNode);
+		checkClassMember(ctx, dd.decoratedNode, className, classType);
 		return;
 	}
 	match (node.kind) {
 		NodeKind.PropertyDecl => {},
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
-			checkFunctionBody(ctx, makeSymbol(d.methodName, SymbolKind.Method, unknownType(), false), d.methodParams, d.methodBody);
+			const methodSym = node.resolvedSym;
+			checkFunctionBody(ctx, methodSym !== null ? methodSym : makeSymbol(d.methodName, SymbolKind.Method, unknownType(), false), d.methodParams, d.methodBody);
 		},
 		NodeKind.ConstructorDecl => {
 			const d = node.data as ConstructorDeclData;
-			checkFunctionBody(ctx, makeSymbol("constructor", SymbolKind.Method, unknownType(), false), d.ctorParams, d.ctorBody);
+			// Constructor allocates `this` — prepend to params for checking so this.* resolves,
+			// but don't modify AST (codegen handles `this` as a local, not a param).
+			const ctorParams: string[] = ["this"];
+			for (let cpi = 0; cpi < d.ctorParams.length; cpi += 1) {
+				ctorParams.push(d.ctorParams[cpi]);
+			}
+			// Build constructor type with `this` at index 0
+			const ctorType = node.nodeType;
+			const ctorChildren: Type[] = [classType];
+			if (ctorType !== null && ctorType.typeChildren !== null) {
+				for (let cpi = 0; cpi < ctorType.typeChildren.length; cpi += 1) {
+					ctorChildren.push(ctorType.typeChildren[cpi]);
+				}
+			}
+			const ctorFnType = createFunction(ctorChildren, ctorParams, voidType());
+			checkFunctionBody(ctx, makeSymbol("constructor", SymbolKind.Method, ctorFnType, false), ctorParams, d.ctorBody);
 		},
 		_ => {},
 	};
@@ -569,7 +585,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 			returnExpected = ctx.currentFunction.symbolType.typeReturn;
 		}
 		const retType = checkExpr(ctx, d.argument, returnExpected);
-		// Parity: Nim fitNode — insert HiddenStdConv for narrowing return
+		// Parity: standard reference node fitting — insert HiddenStdConv for narrowing return
 		if (returnExpected !== null) {
 			d.argument = fitNode(ctx, d.argument, returnExpected, retType);
 		}
@@ -779,8 +795,18 @@ function loadPreludeOne(ctx: CheckerContext, specifier: string, stdPath: string)
 			const scope = ctx.table.current;
 			for (const sym of scope.symbols) {
 				ensureShaped(sym, ctx);
+				// Also ensure newly added overloads are shaped — if the primary was
+				// already shaped by a previous prelude, ensureShaped skips it and
+				// its new overloads never get resolved.
+				for (const ov of sym.overloads) {
+					ensureShaped(ov, ctx);
+				}
 			}
+		} else {
+			console.log("[prelude] parse error for " + specifier + ": " + pr.error);
 		}
+	} else {
+		console.log("[prelude] no source found for " + specifier + " (tried " + base + ".ms, " + base + "/index.cms, " + base + "/index.ms)");
 	}
 }
 

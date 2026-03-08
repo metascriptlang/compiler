@@ -185,6 +185,14 @@ export function createFunction(paramTypes: Type[], paramNames: string[], returnT
 	return t;
 }
 
+// Standard reference parity: procedure type literals default to closure calling convention.
+// Named function declarations use createFunction which defaults to the default calling convention.
+export function createClosureType(paramTypes: Type[], paramNames: string[], returnType: Type): Type {
+	const t = createFunction(paramTypes, paramNames, returnType);
+	t.callConv = CallingConvention.CcClosure;
+	return t;
+}
+
 export function createEnum(name: string, members: string[]): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Enum;
@@ -701,10 +709,20 @@ export function createUnifyBindings(): UnifyBindings {
 	return { names: [], types: [] };
 }
 
+let unifyDepth = 0;
+
 export function unifyType(formal: Type, concrete: Type, bindings: UnifyBindings): void {
 	if (formal === null || concrete === null) return;
 	// Identity check — break circular type references (e.g., Doc → DocData → Doc)
 	if (formal === concrete) return;
+	// Depth guard — prevent infinite recursion on recursive types (e.g., JsonValue contains JsonValue[])
+	if (unifyDepth > 20) return;
+	unifyDepth = unifyDepth + 1;
+	unifyTypeInner(formal, concrete, bindings);
+	unifyDepth = unifyDepth - 1;
+}
+
+function unifyTypeInner(formal: Type, concrete: Type, bindings: UnifyBindings): void {
 	// Direct generic param match
 	if (formal.kind === TypeKind.GenericParam) {
 		bindings.names.push(formal.typeName);
@@ -781,7 +799,7 @@ export function isIntegerType(t: Type): boolean {
 }
 
 // Integer rank for narrowing detection (higher = wider range)
-// Parity: Nim's firstOrd/lastOrd comparison in transf.nim transformConv
+// Parity: standard reference's ordinal range comparison patterns
 export function integerRank(t: Type): number {
 	return match (t.kind) {
 		TypeKind.Int8   => 1,
@@ -798,7 +816,7 @@ export function integerRank(t: Type): number {
 }
 
 // Returns true when source → target is a narrowing integer conversion
-// Parity: Nim sigmatch.nim isIntConv — narrowing needs HiddenStdConv + range check
+// Parity: standard reference integer conversion matching — narrowing needs HiddenStdConv + range check
 export function isNarrowingIntConv(source: Type, target: Type): boolean {
 	if (!isIntegerType(target)) return false;
 	if (!isIntegerType(source) && source.kind !== TypeKind.Number) return false;
@@ -909,6 +927,11 @@ export function isPrimitiveKind(kind: TypeKind): boolean {
 
 // typeNameOf — maps Type to its canonical string name (used by checker + transforms)
 export function typeNameOf(t: Type): string {
+	// Nim parity: Sink/Lent are transparent — unwrap before naming
+	if (t.kind === TypeKind.Sink || t.kind === TypeKind.Lent) {
+		if (t.typeReturn !== null) return typeNameOf(t.typeReturn);
+		return "";
+	}
 	if (t.kind === TypeKind.Struct) return t.typeName;
 	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) {
 		if (t.typeReturn !== null) return typeNameOf(t.typeReturn);

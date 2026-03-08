@@ -64,8 +64,8 @@ export function injectRangeChecks(program: Node, ctx: TransformContext): Node {
 	return program;
 }
 
-// Parity: Nim transf.nim transformConv — convert HiddenStdConv with narrowing integer to range check.
-// Nim checks firstOrd(dest) <= firstOrd(source) && lastOrd(source) <= lastOrd(dest) to skip checks.
+// Parity: standard reference's conversion transformation — convert HiddenStdConv with narrowing integer to range check.
+// Standard reference checks if destination range covers source range to skip redundant checks.
 // We use getRangeCheckForTypeKind which returns "" for non-narrowing types.
 function getRangeCheckForTypeKind(kind: TypeKind): string {
 	return match (kind) {
@@ -109,7 +109,7 @@ function rangeCheckVisitor(node: Node): Node {
 		if (fnName === "") return node;
 		return makeRangeCheck(d.asExpr, fnName, getRangeMin(d.asType), getRangeMax(d.asType), node.location);
 	}
-	// Parity: Nim transformConv — implicit narrowing via HiddenStdConv
+	// Parity: standard reference's implicit narrowing transformation
 	if (node.kind === NodeKind.HiddenStdConv) {
 		const d = node.data as HiddenStdConvData;
 		if (d.convType === null) return node;

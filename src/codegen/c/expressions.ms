@@ -26,7 +26,7 @@ import {
 	emitProcLocalsLine,
 } from "./context";
 import { mangle, mangleFieldName, mangledFunctionName, safeName } from "./names";
-import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, intToString, isPointerType, annotationToC, genClHalfCast, genClFullCast, ccgIntroducedPtr } from "./types";
+import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, intToString, isPointerType, annotationToC, genClHalfCast, genClFullCast, ccgIntroducedPtr, ensureTypeInfo, ensureForwardDecl } from "./types";
 import { formatCNumber, cBoolLiteral, cNullLiteral, cStringLiteral, msStringPoolRef } from "./literals";
 import { charAt, sliceStr, findChar } from "../../utils/string";
 import { ensureDrcProto, ensureCrossModuleProto } from "./declarations";
@@ -66,7 +66,7 @@ interface ExprStackItem {
 const TAG_DEFAULT = 0;
 const TAG_CALL_OVERLOAD = 2;
 const TAG_CALL_DIRECT = 3;
-// TAG_CALL_CLOSURE removed — closure calls lowered to direct calls in closureCallLower.ms
+const TAG_CALL_CLOSURE = 4;  // Reference parity: closure calls — separate path, no forward declarations
 
 // Read i-th child from top N results on the stack.
 function peekResult(results: string[], childCount: number, idx: number): string {
@@ -344,6 +344,9 @@ function discoverExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[],
 	if (kind === NodeKind.NewExpr) {
 		const d = node.data as NewExprData;
 		const calleeName = genExpr(g, p, d.newCallee);
+		// Ensure cross-module typeInfo is declared
+		ensureTypeInfo(g, calleeName);
+		ensureForwardDecl(g, calleeName);
 		if (d.newArguments.length === 0) {
 			// No-arg new: allocate with zero-init
 			results.push("(" + calleeName + "*)msAllocTyped(sizeof(" + calleeName + "), &" + calleeName + "_typeInfo)");
@@ -370,7 +373,7 @@ function discoverExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[],
 	}
 
 	// Fallback
-	results.push("/* unsupported expression */");
+	results.push("/* unsupported expression: kind=" + kind.toString() + " */");
 }
 
 // ===== Discover CallExpr — split by call type =====
@@ -397,11 +400,26 @@ function discoverCallExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackIte
 		return;
 	}
 
-	// Direct call: callee + args
+	// Reference parity: closure call generation (standard reference patterns)
+	// routes closure calls to a separate handler, direct calls to prefix calls.
+	// Closure calls never generate forward declarations.
+	// closureCallMarker sets isDirectCall=false for closure-typed callees.
+	if (!cd.isDirectCall) {
+		// TAG_CALL_CLOSURE: callee + args, handled by genClosureCall inline
+		const n = 1 + cd.arguments.length;
+		workStack.push({ node, phase: 1, childCount: n, tag: TAG_CALL_CLOSURE });
+		let i = cd.arguments.length - 1;
+		while (i >= 0) {
+			workStack.push({ node: cd.arguments[i], phase: 0, childCount: 0, tag: 0 });
+			i -= 1;
+		}
+		workStack.push({ node: cd.callee, phase: 0, childCount: 0, tag: 0 });
+		return;
+	}
+
+	// TAG_CALL_DIRECT: callee + args
 	const n = 1 + cd.arguments.length;
-	const tag = TAG_CALL_DIRECT;
-	workStack.push({ node, phase: 1, childCount: n, tag });
-	// Push in reverse: args then callee
+	workStack.push({ node, phase: 1, childCount: n, tag: TAG_CALL_DIRECT });
 	let i = cd.arguments.length - 1;
 	while (i >= 0) {
 		workStack.push({ node: cd.arguments[i], phase: 0, childCount: 0, tag: 0 });
@@ -688,7 +706,44 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 
 	// Fallback
 	truncResults(results, cc);
-	results.push("/* unsupported expression */");
+	results.push("/* unsupported expression: resolve kind=" + kind.toString() + " */");
+}
+
+// ===== genClosureCall — Standard reference parity (closure calling convention) =====
+// Generates:  (cl.env) ? ((RetType(*)(Params, void*))cl.fn)(args, cl.env)
+//                       : ((RetType(*)(Params))cl.fn)(args)
+// env is LAST parameter (Standard reference pattern).
+// No forward declarations — closure struct is self-contained.
+
+function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, calleeType: Type, node: Node, results: string[]): void {
+	// Reference implementation pattern: extract environment and function pointers from closure pair
+	const envExpr = callee + ".env";
+	const fnExpr = callee + ".fn";
+
+	// Build typed casts from callee's function type
+	// clFull = with env param (last), clHalf = without env
+	const clFull = genClFullCast(g, calleeType);
+	const clHalf = genClHalfCast(g, calleeType);
+
+	// With env: fn(args..., env) — env LAST
+	let callWithEnv = "";
+	if (argsStr !== "") {
+		callWithEnv = "((" + clFull + ")" + fnExpr + ")(" + argsStr + ", " + envExpr + ")";
+	} else {
+		callWithEnv = "((" + clFull + ")" + fnExpr + ")(" + envExpr + ")";
+	}
+
+	// Without env: ((cast)fn)(args...)
+	let callNoEnv = "";
+	if (argsStr !== "") {
+		callNoEnv = "((" + clHalf + ")" + fnExpr + ")(" + argsStr + ")";
+	} else {
+		callNoEnv = "((" + clHalf + ")" + fnExpr + ")()";
+	}
+
+	// Reference parity: procedure call dispatch
+	// Closure calls generate inline if/else dispatch on env != NULL.
+	results.push("(" + envExpr + " ? " + callWithEnv + " : " + callNoEnv + ")");
 }
 
 // ===== Emit CallExpr =====
@@ -798,30 +853,37 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 	}
 	truncResults(results, cc);
 
-	if (tag === TAG_CALL_DIRECT) {
-		// On-demand cross-module prototype (reference parity: genProcPrototype)
-		// Resolve sym from callee identifier if CallExpr.resolvedSym is null
-		const protoSym = sym !== null ? sym : (cd.callee.resolvedSym !== null ? cd.callee.resolvedSym : null as unknown as Symbol);
-		const protoType = protoSym !== null && protoSym.symbolType !== null ? protoSym.symbolType : calleeType;
-		ensureCrossModuleProto(g, callee, protoType, protoSym);
-		// DRC hooks — emit forward declaration on-demand
-		ensureDrcProto(g, callee);
-		const calleeStr = callee;
-		// NRVO: call returns void, result via out-param
-		const nrvoRet = getCalleeReturnType(node);
-		const nrvoType = (nrvoRet !== null && isNrvoReturnType(nrvoRet)) ? nrvoRet : null as unknown as Type;
-		if (nrvoType !== null) {
-			const cType = getTypeDesc(g, nrvoType);
-			const tmp = getTemp(p, cType);
-			let nrvoArgs = "&" + tmp.snippet;
-			if (argsStr !== "") nrvoArgs = nrvoArgs + ", " + argsStr;
-			emitStmtsLine(p, calleeStr + "(" + nrvoArgs + ");");
-			results.push(tmp.snippet);
-		} else if (argsStr === "") {
-			results.push(calleeStr + "()");
-		} else {
-			results.push(calleeStr + "(" + argsStr + ")");
-		}
+	// ===== Reference parity: closure call (standard reference pattern) =====
+	// Closure calls generate inline if/else dispatch on env != NULL.
+	// No forward declarations — closure is a self-contained struct value.
+	if (tag === TAG_CALL_CLOSURE) {
+		genClosureCall(g, p, callee, argsStr, calleeType, node, results);
+		return;
+	}
+
+	// ===== genPrefixCall (TAG_CALL_DIRECT) =====
+	// On-demand cross-module prototype (reference parity: genProcPrototype)
+	const protoSym = sym !== null ? sym : (cd.callee.resolvedSym !== null ? cd.callee.resolvedSym : null as unknown as Symbol);
+	const protoType = protoSym !== null && protoSym.symbolType !== null ? protoSym.symbolType : calleeType;
+	ensureCrossModuleProto(g, callee, protoType, protoSym);
+	// DRC hooks — emit forward declaration on-demand
+	ensureDrcProto(g, callee);
+
+	const calleeStr = callee;
+	// NRVO: call returns void, result via out-param
+	const nrvoRet = getCalleeReturnType(node);
+	const nrvoType = (nrvoRet !== null && isNrvoReturnType(nrvoRet)) ? nrvoRet : null as unknown as Type;
+	if (nrvoType !== null) {
+		const cType = getTypeDesc(g, nrvoType);
+		const tmp = getTemp(p, cType);
+		let nrvoArgs = "&" + tmp.snippet;
+		if (argsStr !== "") nrvoArgs = nrvoArgs + ", " + argsStr;
+		emitStmtsLine(p, calleeStr + "(" + nrvoArgs + ");");
+		results.push(tmp.snippet);
+	} else if (argsStr === "") {
+		results.push(calleeStr + "()");
+	} else {
+		results.push(calleeStr + "(" + argsStr + ")");
 	}
 }
 // ===== genExprAssign — evaluate expression and assign to dest =====

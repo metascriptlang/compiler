@@ -2,6 +2,7 @@
 
 import { CheckerContext } from "../checker/context";
 import { Type } from "../checker/types";
+import { Node } from "../ast/node";
 
 // Pending tuple type entry — collected by operatorLower, consumed by destructorLifting.
 export interface PendingTupleOp {
@@ -17,10 +18,11 @@ export interface TransformContext {
 	checkerCtx: CheckerContext;  // type info from Phase 2 (null in test mode)
 	jsBackend: boolean;  // true = skip C-specific transforms (lambda lifting, destructor lifting, etc.)
 	pendingTupleOps: PendingTupleOp[];  // tuple comparison ops to generate (reference parity)
+	pendingDecls: Node[];  // generated helper functions (e.g. JSON.parse<T> → __jsonParse_T)
 }
 
 export function createTransformContext(): TransformContext {
-	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, pendingTupleOps: [] };
+	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, pendingTupleOps: [], pendingDecls: [] };
 }
 
 export function createTransformContextWithChecker(cc: CheckerContext): TransformContext {

@@ -125,10 +125,13 @@ function walkBody(node: Node, modulePath: string, aliveSet: AliveSet,
 		return;
 	}
 
-	// MemberExpr — walk object
+	// MemberExpr — walk object + mark resolved extension/class method
 	if (k === NodeKind.MemberExpr) {
 		const md = node.data as MemberExprData;
 		walkBody(md.object, modulePath, aliveSet, modIdx, visited, importMap);
+		if (node.resolvedSym !== null) {
+			markAndWalk(modulePath, node.resolvedSym.name, aliveSet, modIdx, visited);
+		}
 		return;
 	}
 

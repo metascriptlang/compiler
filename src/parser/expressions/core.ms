@@ -57,10 +57,10 @@ function parseExprWithPrec(state: ParserState, minPrec: number): ExprResult {
 	while (!isAtEnd(state)) {
 		const token = current(state);
 
-		// Explicit generic type args: foo<number>(args)
+		// Explicit generic type args: foo<number>(args) or obj.method<T>(args)
 		// Store type args in side-channel keyed by call site location.
 		// Callee name stays clean so checker can look it up normally.
-		if (token.kind === TokenKind.Lt && left.kind === NodeKind.Identifier) {
+		if (token.kind === TokenKind.Lt && (left.kind === NodeKind.Identifier || left.kind === NodeKind.MemberExpr)) {
 			if (isGenericCallAhead(state)) {
 				const typeArgs = captureGenericTypeArgs(state);
 				if (typeArgs !== "") {

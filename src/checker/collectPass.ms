@@ -75,6 +75,18 @@ function collectDeclLocal(ctx: CheckerContext, node: Node): void {
 	};
 }
 
+// Mark class method symbols as exported so they're injected cross-module via injectPrelude.
+function markClassMethodsExported(ctx: CheckerContext, classNode: Node): void {
+	const cd = classNode.data as ClassDeclData;
+	for (let ci = 0; ci < cd.classBody.length; ci += 1) {
+		// Use resolvedSym set by collectClassMethod — avoids overload ambiguity
+		const methodSym = cd.classBody[ci].resolvedSym;
+		if (methodSym !== null) {
+			setFlag(methodSym, SymbolFlag.Exported);
+		}
+	}
+}
+
 function collectExportLocal(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ExportDeclData;
 	// Re-export from import: skip in Phase 1 (registry not ready for cross-module)
@@ -86,7 +98,16 @@ function collectExportLocal(ctx: CheckerContext, node: Node): void {
 		const sym = lookupSymbol(ctx.table, name);
 		if (sym !== null) {
 			setFlag(sym, SymbolFlag.Exported);
+			// For overloaded functions (e.g. asString on uint8[] and JsonValue),
+			// the just-defined symbol may be in overloads[]. Mark the latest overload
+			// as exported — it's the one that was just defined by collectDeclLocal above.
+			if (sym.overloads.length > 0) {
+				setFlag(sym.overloads[sym.overloads.length - 1], SymbolFlag.Exported);
+			}
 		}
+	}
+	if (d.exportedDecl.kind === NodeKind.ClassDecl) {
+		markClassMethodsExported(ctx, d.exportedDecl);
 	}
 }
 
@@ -163,7 +184,8 @@ function collectFunction(ctx: CheckerContext, node: Node): void {
 
 function collectClass(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ClassDeclData;
-	// Collect member names and types inline, pass to createStruct.
+	// Reference parity: struct contains DATA fields only, never methods.
+	// Methods are standalone procs resolved via extension registry.
 	const memberNames: string[] = [];
 	const memberTypes: Type[] = [];
 	for (let i = 0; i < d.classBody.length; i += 1) {
@@ -172,36 +194,79 @@ function collectClass(ctx: CheckerContext, node: Node): void {
 			const pd = member.data as PropertyDeclData;
 			memberNames.push(pd.propName);
 			memberTypes.push(unknownType());
-		} else if (member.kind === NodeKind.MethodDecl) {
-			const md = member.data as MethodDeclData;
-			const fnType = createFunction([], [], unknownType());
-			if (md.nativeName !== null && md.nativeName !== "") {
-				fnType.typeName = md.nativeName;
-			}
-			memberNames.push(md.methodName);
-			memberTypes.push(fnType);
-		} else if (member.kind === NodeKind.DecoratedDecl) {
-			const dd = member.data as DecoratedDeclData;
-			if (dd.decoratedNode.kind === NodeKind.MethodDecl) {
-				const md = dd.decoratedNode.data as MethodDeclData;
-				const fnType = createFunction([], [], unknownType());
-				const info = extractDecoratorInfo(member);
-				if (info.builtinKind !== "") {
-					fnType.typeName = info.builtinKind;
-				}
-				memberNames.push(md.methodName);
-				memberTypes.push(fnType);
-			}
 		}
 	}
 	const innerType = createStruct(d.className, memberNames, memberTypes, true);
-	// Store base class info for inheritance (used by destructor lifting)
 	if (d.classExtends !== "") {
 		innerType.typeExtra = createTypeRef(d.classExtends);
 	}
 	const classType = createRef(innerType);
 	const sym = makeSymbol(d.className, SymbolKind.Class, classType, false);
 	defineOrError(ctx, sym, node);
+	// Register methods as extensions — reference parity: procedures are separate from object types.
+	// Static → static extension (typeof ClassName). Instance → instance extension.
+	if (ctx.extensionRegistry !== null) {
+		for (let si = 0; si < d.classBody.length; si += 1) {
+			collectClassMethod(ctx, d.className, d.classBody[si]);
+		}
+	}
+}
+
+function collectClassMethod(ctx: CheckerContext, className: string, member: Node): void {
+	let md: MethodDeclData = null as unknown as MethodDeclData;
+	let builtinKind = "";
+	if (member.kind === NodeKind.MethodDecl) {
+		md = member.data as MethodDeclData;
+	} else if (member.kind === NodeKind.DecoratedDecl) {
+		const dd = member.data as DecoratedDeclData;
+		if (dd.decoratedNode.kind === NodeKind.MethodDecl) {
+			md = dd.decoratedNode.data as MethodDeclData;
+			const info = extractDecoratorInfo(member);
+			builtinKind = info.builtinKind;
+		}
+	}
+	if (md === null) return;
+	// Instance methods: prepend receiver as first param — same as standalone extensions.
+	// After this, md.methodParams = ["this", ...userParams], md.methodParamTypes = [className, ...userTypes].
+	// All downstream phases (resolve, check, codegen) read the same data — zero special cases.
+	if (!md.methodIsStatic) {
+		const newParams: string[] = ["this"];
+		const newTypes: string[] = [className];
+		for (let pi = 0; pi < md.methodParams.length; pi += 1) {
+			newParams.push(md.methodParams[pi]);
+		}
+		for (let pi = 0; pi < md.methodParamTypes.length; pi += 1) {
+			newTypes.push(md.methodParamTypes[pi]);
+		}
+		md.methodParams = newParams;
+		md.methodParamTypes = newTypes;
+	}
+	const fnType = createFunction([], [], unknownType());
+	if (md.nativeName !== null && md.nativeName !== "") {
+		fnType.typeName = md.nativeName;
+	}
+	if (builtinKind !== "") {
+		fnType.typeName = builtinKind;
+	}
+	const mangledName = className + "_" + md.methodName;
+	const methodSym = makeSymbol(mangledName, SymbolKind.Function, fnType, false);
+	if (md.nativeName !== null && md.nativeName !== "") {
+		methodSym.nativeName = md.nativeName;
+	}
+	if (builtinKind !== "") {
+		methodSym.builtinKind = builtinKind;
+	}
+	defineOrError(ctx, methodSym, member);
+	// Link node → symbol so resolvePass finds the exact sym (not an overload)
+	member.resolvedSym = methodSym;
+	registerExtension(ctx.extensionRegistry, {
+		methodName: mangledName,
+		receiverTypeName: className,
+		sourcePath: "",
+		fnType: fnType,
+		isStatic: md.methodIsStatic,
+		sym: methodSym,
+	});
 }
 
 function collectInterface(ctx: CheckerContext, node: Node): void {
@@ -471,7 +536,15 @@ function collectExport(ctx: CheckerContext, node: Node): void {
 		const sym = lookupSymbol(ctx.table, name);
 		if (sym !== null) {
 			setFlag(sym, SymbolFlag.Exported);
+			// For overloaded functions, also mark the latest overload as exported.
+			// defineSymbol appends to overloads[], so last entry is the just-defined one.
+			if (sym.overloads.length > 0) {
+				setFlag(sym.overloads[sym.overloads.length - 1], SymbolFlag.Exported);
+			}
 		}
+	}
+	if (d.exportedDecl.kind === NodeKind.ClassDecl) {
+		markClassMethodsExported(ctx, d.exportedDecl);
 	}
 }
 

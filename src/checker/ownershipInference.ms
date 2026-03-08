@@ -13,7 +13,7 @@ export function inferOwnership(ctx: CheckerContext, program: Node): void {
 	if (program === null || program.kind !== NodeKind.Program) return;
 	const pd = program.data as ProgramData;
 	// Reference parity: sink inference applies to ALL procs regardless of visibility.
-	// Nim's sempass2 calls trackProc for every proc — no sfExported gate.
+	// The standard reference implementation processes every procedure — no exported flag gate.
 	for (const stmt of pd.programStmts) {
 		let inner = stmt;
 		if (inner.kind === NodeKind.ExportDecl) {
