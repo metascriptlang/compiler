@@ -8,6 +8,7 @@
 
 extern function msReadLine(): string;
 extern function msReadBytes(n: number): string;
+extern function msReadFile(path: string): string;
 extern function msWriteStdout(s: string): void;
 extern function msWriteStderr(s: string): void;
 
@@ -17,6 +18,10 @@ export function readLine(): string {
 
 export function readBytes(n: number): string {
 	return msReadBytes(n);
+}
+
+export function readFile(path: string): string {
+	return msReadFile(path);
 }
 
 export function writeStdout(s: string): void {

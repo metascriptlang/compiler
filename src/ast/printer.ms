@@ -16,7 +16,7 @@ import { Node, NodeKind, DeclKind,
 	InterfaceDeclData, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData,
 	ExternDeclData, ExternKind, MacroDeclData, DecoratedDeclData, ProgramData,
 	TestDeclData, AssertStmtData,
-	HiddenStdConvData, HiddenSubConvData,
+	HiddenStdConvData,
 } from "./node";
 
 // ===== Indentation Helper =====
@@ -445,7 +445,7 @@ export function printNode(node: Node, level: number): void {
 			printNode(data.convExpr, level + 1);
 		},
 		NodeKind.HiddenSubConv => {
-			const data = node.data as HiddenSubConvData;
+			const data = node.data as HiddenStdConvData;
 			console.log(`${pad}HiddenSubConv:`);
 			printNode(data.convExpr, level + 1);
 		},

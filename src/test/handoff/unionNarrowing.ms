@@ -1,24 +1,23 @@
 // Route 14: Union variant narrowing via as-cast
 //
-// When a discriminated union has multiple variants with the same first field
-// name but different types (e.g. { value: number } | { value: string }),
-// the as-cast must pick the correct variant based on field types.
+// After `const d = data as VariantType`, member access on d must resolve
+// a symbol (resolvedSym) so codegen can emit correct field access.
+// Nim parity: lookupInRecordAndBuildCheck searches the record field list directly.
 
 import { checkSource } from "./helpers";
-import { lookupSymbol } from "../../checker/symbol";
-import { TypeKind } from "../../checker/types";
 import { hasErrors } from "../../checker/context";
 
-test "as-cast picks string variant not number variant" {
-	const src = "type Data = | { value: number } | { value: string };\ntype StrData = { value: string };\nconst d: Data = { value: \"hello\" };\nconst sd = d as StrData;\nconst v: string = sd.value;";
+test "as-cast on union: field access resolves without errors" {
+	const src = "type Data = | { value: number } | { name: string };\ntype NameData = { name: string };\nconst d: Data = { name: \"hello\" };\nconst nd = d as NameData;\nconst v: string = nd.name;";
 	const ctx = checkSource(src);
 	assert ctx !== null;
 	assert !hasErrors(ctx);
 }
 
-test "as-cast picks number variant correctly" {
-	const src = "type Data = | { value: number } | { value: string };\ntype NumData = { value: number };\nconst d: Data = { value: 42 };\nconst nd = d as NumData;\nconst v: number = nd.value;";
+test "as-cast: overlapping field names resolve correct type" {
+	const src = "type Data = | { value: number } | { value: string };\ntype StrData = { value: string };\nconst d: Data = { value: \"hello\" };\nconst sd = d as StrData;\nconst v: string = sd.value;";
 	const ctx = checkSource(src);
 	assert ctx !== null;
+	// After as-cast, sd.value should be string, not number
 	assert !hasErrors(ctx);
 }

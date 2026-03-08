@@ -114,7 +114,7 @@ test "enum toString E2E: parse → transform → codegen" {
 	const fd = td.programStmts[1].data as FunctionDeclData;
 	assert fd.fnName === "Color_toString";
 	// Generate C — should include the toString function
-	const cCode = generateCModule(transformed, null as unknown as CheckerContext, "test/input", createAliveSet(), true);
+	const cCode = generateCModule(transformed, null as unknown as CheckerContext, "test/input", createAliveSet(), true, false);
 	assert cCode.length > 50;
 }
 

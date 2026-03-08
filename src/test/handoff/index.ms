@@ -13,3 +13,6 @@ import "./classLifecycle";
 import "./postTransform";
 import "./drcInject";
 import "./maybeCollapse";
+import "./typeCoercion";
+import "./unionNarrowing";
+import "./toStringResolve";

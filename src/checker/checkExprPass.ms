@@ -914,32 +914,31 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 			derefNode.nodeType = resolvedObjType;
 			d.object = derefNode;
 		}
-		// Resolve property symbol: search symbol table for ClassName_propName
+		// Resolve property symbol: search symbol table for TypeName_propName (named types)
 		if (resolvedObjType.typeName !== "") {
 			const propSymName = resolvedObjType.typeName + "_" + d.property;
 			const propSym = lookupSymbol(ctx.table, propSymName);
 			if (propSym !== null) {
 				ensureShaped(propSym, ctx);
 				node.resolvedSym = propSym;
-			} else {
-				// Search within the object type's own members if not found in top-level table
-				// (e.g. for members of classes defined in the same module)
-				let mi = 0;
-				for (const mName of resolvedObjType.typeNames) {
-					if (mName === d.property) {
-						// Create a synthetic symbol for this member to satisfy the validator
-						const synthSym = makeSymbol(mName, SymbolKind.Method, resolvedObjType.typeChildren[mi], false);
-						synthSym.state = SymbolState.Shaped;
-						// Transfer nativeName metadata from Type to Symbol
-						// (collectPass stores nativeName in Type.typeName for class methods)
-						if (resolvedObjType.typeChildren[mi].typeName !== "") {
-							synthSym.nativeName = resolvedObjType.typeChildren[mi].typeName;
-						}
-						node.resolvedSym = synthSym;
-						break;
+			}
+		}
+		// Nim parity: fallback — search the type's field list directly
+		// (lookupInRecordAndBuildCheck pattern). Works for anonymous structs,
+		// type alias targets, and named types whose fields aren't in the symbol table.
+		if (node.resolvedSym === null && resolvedObjType.typeNames !== null) {
+			let mi = 0;
+			for (const mName of resolvedObjType.typeNames) {
+				if (mName === d.property) {
+					const synthSym = makeSymbol(mName, SymbolKind.Property, resolvedObjType.typeChildren[mi], false);
+					synthSym.state = SymbolState.Shaped;
+					if (resolvedObjType.typeChildren[mi].typeName !== "") {
+						synthSym.nativeName = resolvedObjType.typeChildren[mi].typeName;
 					}
-					mi = mi + 1;
+					node.resolvedSym = synthSym;
+					break;
 				}
+				mi = mi + 1;
 			}
 		}
 		return propType;

@@ -57,6 +57,26 @@ static inline msString msReadBytes(double n) {
 }
 
 /**
+ * Read entire file contents. Returns empty string on error.
+ */
+static inline msString msReadFile(msString path) {
+	FILE* f = fopen(msCStr(path), "rb");
+	if (!f) return MS_EMPTY_STRING;
+	fseek(f, 0, SEEK_END);
+	long sz = ftell(f);
+	fseek(f, 0, SEEK_SET);
+	if (sz <= 0 || sz > 10485760) { fclose(f); return MS_EMPTY_STRING; }
+	char* buf = (char*)malloc(sz + 1);
+	if (!buf) { fclose(f); return MS_EMPTY_STRING; }
+	size_t nread = fread(buf, 1, sz, f);
+	fclose(f);
+	buf[nread] = '\0';
+	msString result = msStringNew(buf, (int64_t)nread);
+	free(buf);
+	return result;
+}
+
+/**
  * Write string to stdout, flushing immediately.
  */
 static inline void msWriteStdout(msString s) {

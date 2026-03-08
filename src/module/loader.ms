@@ -25,7 +25,7 @@ import { resolveImport, resolveImportWithConfig, isStdImport, ResolverConfig } f
 import { lex } from "../lexer/lexer";
 import { createState } from "../parser/context";
 import { callStateProgramParser } from "../parser/statements/callbacks";
-import { Node, NodeKind, ProgramData, ImportDeclData } from "../ast/node";
+import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../ast/node";
 import { readFile } from "std/process";
 import { sliceStr } from "../utils/string";
 
@@ -140,6 +140,12 @@ function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProv
 	for (const stmt of pd.programStmts) {
 		if (stmt.kind === NodeKind.ImportDecl) {
 			processImportDecl(graph, mod, stmt, provider, config, useConfig);
+		} else if (stmt.kind === NodeKind.ExportDecl) {
+			// Re-export: export { ... } from "./module" wraps ImportDecl in ExportDecl
+			const ed = stmt.data as ExportDeclData;
+			if (ed.exportedDecl.kind === NodeKind.ImportDecl) {
+				processImportDecl(graph, mod, ed.exportedDecl, provider, config, useConfig);
+			}
 		}
 	}
 

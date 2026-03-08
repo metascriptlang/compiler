@@ -270,7 +270,7 @@ function retStrToCastType(retStr: string): string {
 }
 
 // Map TypeKind to return type string
-function typeKindToRetStr(kind: number): string {
+function typeKindToRetStr(kind: TypeKind): string {
 	if (kind === TypeKind.Number || kind === TypeKind.Float64) return "number";
 	if (kind === TypeKind.Boolean) return "boolean";
 	if (kind === TypeKind.String) return "string";

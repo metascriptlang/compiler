@@ -31,7 +31,7 @@ import { sliceStr } from "../../utils/string";
 // ===== generateC — single-module entry point (backwards compatible) =====
 
 export function generateC(program: Node, ctx: CheckerContext, modulePath: string): string {
-	const moduleCode = generateCModule(program, ctx, modulePath, createAliveSet(), false);
+	const moduleCode = generateCModule(program, ctx, modulePath, createAliveSet(), false, false);
 	const mainSym = (ctx !== null && ctx.table !== null) ? lookupSymbol(ctx.table, "main") : null;
 	const hasMain = mainSym !== null;
 	let mainRet = "void";
@@ -340,7 +340,7 @@ function cOutput(input: string): string {
 function cModuleOutput(input: string): string {
 	const pr = parseSource(input);
 	if (!pr.ok) return "PARSE_ERROR: " + pr.error;
-	return generateCModule(pr.value, null as unknown as CheckerContext, "test/input", createAliveSet(), true);
+	return generateCModule(pr.value, null as unknown as CheckerContext, "test/input", createAliveSet(), true, false);
 }
 
 test "empty program has headers" {
