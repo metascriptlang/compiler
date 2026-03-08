@@ -72,6 +72,12 @@ export function isAssignable(source: Type, target: Type): boolean {
 		return true;
 	}
 
+	// Ref<T> → T auto-deref: self-referential fields are promoted to Ref<T>,
+	// but passing them to functions expecting T should work transparently
+	if (source.kind === TypeKind.Ref && source.typeReturn !== null) {
+		return isAssignable(source.typeReturn, target);
+	}
+
 	// String → CString implicit coercion (zero-copy pointer extraction)
 	if (source.kind === TypeKind.String && target.kind === TypeKind.CString) {
 		return true;

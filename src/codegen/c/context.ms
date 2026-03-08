@@ -161,6 +161,18 @@ export interface CProc {
 	withinLoop: number;    // > 0 means inside a loop
 	params: string[];      // parameter names (mangled)
 	seenSinks: string[];   // tracks declared $sink_N_ temps (prevents duplicates)
+	indirectParams: string[];  // reference pointer introduction params — auto-deref as (*name) (Reference: indirect location parity)
+}
+
+// reference parity: check if an identifier is a pointer introduction param (indirect location)
+export function isIndirectParam(p: CProc, name: string): boolean {
+	if (p === null) return false;
+	let i = 0;
+	while (i < p.indirectParams.length) {
+		if (p.indirectParams[i] === name) return true;
+		i += 1;
+	}
+	return false;
 }
 
 export function createProc(name: string, returnType: Type): CProc {
@@ -177,6 +189,7 @@ export function createProc(name: string, returnType: Type): CProc {
 		withinLoop: 0,
 		params: [],
 		seenSinks: [],
+		indirectParams: [],
 	};
 }
 

@@ -33,7 +33,7 @@ export interface RcInfo {
 	copyFn: string;          // runtime function name for =copy
 	wasMovedFn: string;      // runtime function name for =wasMoved
 	sinkFn: string;          // runtime function name for =sink (empty = raw assign)
-	seqLike: boolean;        // Nim parity: seq/string destroy by-value, copy src by-value
+	seqLike: boolean;        // reference parity: sequence/string destroy by-value, copy src by-value
 }
 
 // ===== Sentinel — no RC needed =====
@@ -67,9 +67,14 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 	if (elem === null || isPrimitiveKind(elem.kind)) {
 		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
 	}
-	// Nim parity: non-primitive element arrays use standalone generated hooks (fillSeqOp)
+	// reference parity: non-primitive element arrays use standalone generated hooks (reference sequence op)
 	if (elem.kind === TypeKind.String) {
 		return makeRcInfo(RcKind.Named, "", "msStringArray_destroy", "msStringArray_copy", "msStringArray_wasMoved", "msStringArray_sink", true);
+	}
+	// Value-type struct elements (interfaces with RC fields) → per-type array hooks
+	if (elem.kind === TypeKind.Struct && elem.typeName !== "" && hasDestructor(elem)) {
+		const n = elem.typeName + "Array";
+		return makeRcInfo(RcKind.Named, "", n + "_destroy", n + "_copy", n + "_wasMoved", n + "_sink", true);
 	}
 	return makeRcInfo(RcKind.Named, "", "msRefArray_destroy", "msRefArray_copy", "msRefArray_wasMoved", "msRefArray_sink", true);
 }

@@ -38,22 +38,22 @@ function safeLoc(node: Node): SourceLocation {
 
 // ===== Standard Reference: pointer parameter introduction =====
 // Determines if a param type should be passed by pointer in C.
-// Nim parity (ccgutils.nim:79-107):
-//   tyObject: forwarded → true; size > floatSize*3 → true; final+no base → false; else → true
-//   tyTuple: size > floatSize*3 → true
+// Reference parity (reference codegen utils):
+//   object: size > floatSize*3 → true; else → false
+//   tuple: size > floatSize*3 → true
 // We don't have inheritance or forwarded types, so all interfaces are "final + no base".
 // Threshold: 24 bytes (floatSize=8 * 3) on 64-bit.
 const PTR_THRESHOLD: number = 24;
-// typeFlags bit 5: marks Ptr<T> types introduced by ccgIntroducedPtr (not user-declared)
+// typeFlags bit 5: marks Ptr<T> types introduced by reference pointer introduction (not user-declared)
 const TF_CCG_INTRODUCED: number = 32;
 
 export function ccgIntroducedPtr(t: Type): boolean {
 	if (t === null) return false;
-	// Nim: tyObject
+	// Reference: object types
 	if (isInterfaceType(t)) return getTypeSize(t) > PTR_THRESHOLD;
-	// Nim: tyTuple — same size threshold
+	// Reference: tuple types — same size threshold
 	if (t.kind === TypeKind.Tuple) return getTypeSize(t) > PTR_THRESHOLD;
-	// Result/Union/Span — always by pointer (compound types, no Nim equivalent for size check)
+	// Result/Union/Span — always by pointer (compound types, no reference equivalent for size check)
 	if (t.kind === TypeKind.Result) return true;
 	if (t.kind === TypeKind.Union) return true;
 	if (t.kind === TypeKind.Span) return true;
@@ -118,9 +118,8 @@ function transformFunction(node: Node): void {
 			}
 		}
 	}
-
-	// Wrap identifier uses of pointer params with HiddenDeref in function body
-	wrapBodyIdentifiers(d.fnBody, ptrParams);
+	// NOTE: No body rewriting here — codegen handles pointer introduction params
+	// via indirect location (reference parity: automatic dereference of indirect locs)
 }
 
 // Walk the function body and wrap Identifier nodes that match pointer params

@@ -47,15 +47,19 @@ export function lspJsonNull(): string {
 // Scans for "key":"value" pattern. Returns the unescaped value string.
 // Returns "" if not found.
 export function lspGetField(json: string, field: string): string {
-	// Build the search pattern: "field":"
-	const pattern = "\"" + field + "\":\"";
+	// Build the search pattern: "field":
+	const pattern = "\"" + field + "\":";
 	const patLen = pattern.length;
 
 	for (let i = 0; i + patLen <= json.length; i = i + 1) {
 		const candidate = sliceStr(json, i, i + patLen);
 		if (candidate === pattern) {
-			// Found key. Extract value until closing unescaped quote.
+			// Skip whitespace after colon
 			let j = i + patLen;
+			while (j < json.length && (charAt(json, j) === " " || charAt(json, j) === "\t")) { j = j + 1; }
+			// Expect opening quote for string value
+			if (j >= json.length || charAt(json, j) !== "\"") continue;
+			j = j + 1;  // skip opening quote
 			let value = "";
 			while (j < json.length) {
 				const c = charAt(json, j);

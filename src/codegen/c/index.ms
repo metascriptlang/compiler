@@ -21,9 +21,8 @@ import {
 } from "./context";
 import { genDecl } from "./declarations";
 import { mangleModuleName, mangledFunctionName, safeName } from "./names";
-import { getSimpleTypeDesc, isNrvoReturnType, getTypeDesc } from "./types";
+import { getSimpleTypeDesc, isNrvoReturnType, getTypeDesc, ccgIntroducedPtr } from "./types";
 import { Type, TypeKind, isInterfaceType } from "../../checker/types";
-import { ccgIntroducedPtr } from "../../transform/native/pointerParam";
 import { mangle } from "./names";
 import { emitStringPoolDecls } from "./literals";
 import { emitTestHeader, emitTestTable, genTestDispatcher } from "./test";
@@ -76,9 +75,6 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 	// Register cross-module type names + build type registry from ExportRegistry
 	registerCrossModuleTypesFromRegistry(g);
 	buildTypeRegistry(g);
-
-	// Emit cross-module function prototypes (Standard reference implementation parity)
-	emitCrossModulePrototypes(g);
 
 	// Walk program statements
 	if (program !== null && program.kind === NodeKind.Program) {
@@ -254,7 +250,14 @@ function buildTypeRegistry(g: CGen): void {
 		for (const sym of entry.symbols) {
 			if (sym.symType === null) continue;
 			if (sym.kind === SymbolKind.Interface || sym.kind === SymbolKind.Class || sym.kind === SymbolKind.Enum || sym.kind === SymbolKind.TypeAlias) {
-				typeRegistryAdd(g.typeRegistry, sym.name, sym.symType);
+				// Reference parity: class types are reference-counted structs in the checker, but the registry stores the underlying value type.
+				// TypeRef("Doc") resolves to Struct("Doc"), then Ref wrapping adds the single *.
+				// Without unwrap: Ref<TypeRef("Doc")> → Ref.getTypeDesc(registry("Doc")=Ref<Struct>) → Doc** (double ptr)
+				let regType = sym.symType;
+				if (sym.kind === SymbolKind.Class && regType.kind === TypeKind.Ref && regType.typeReturn !== null) {
+					regType = regType.typeReturn;
+				}
+				typeRegistryAdd(g.typeRegistry, sym.name, regType);
 				registerFieldTypes(g, sym.symType);
 			}
 		}
@@ -293,74 +296,6 @@ function registerNamedType(g: CGen, t: Type): void {
 			typeRegistryAdd(g.typeRegistry, t.typeName, t);
 		}
 	}
-}
-
-// ===== Emit Cross-Module Function Prototypes (reference parity) =====
-// Each module emits prototypes for all exported functions from other modules.
-
-function emitCrossModulePrototypes(g: CGen): void {
-	const reg = (g.checkerCtx !== null) ? g.checkerCtx.exportRegistry : null as unknown as ExportRegistry;
-	if (reg === null) return;
-	for (const entry of reg.entries) {
-		// Skip prototypes from own module — they're emitted by genDecl
-		if (entry.modulePath === g.modulePath) continue;
-		for (const sym of entry.symbols) {
-			if (sym.kind !== SymbolKind.Function) continue;
-			if (sym.symType === null) continue;
-			if (sym.symType.kind !== TypeKind.Function) continue;
-			// Emit prototype for primary function
-			emitProtoFromExport(g, sym.name, sym.symType, sym.nativeName, entry.modulePath, 0);
-			// Emit prototypes for overloads
-			if (sym.overloadTypes !== null) {
-				for (let oi = 0; oi < sym.overloadTypes.length; oi += 1) {
-					const ovNative = (sym.overloadNativeNames !== null && oi < sym.overloadNativeNames.length) ? sym.overloadNativeNames[oi] : "";
-					emitProtoFromExport(g, sym.name, sym.overloadTypes[oi], ovNative, entry.modulePath, oi + 1);
-				}
-			}
-		}
-	}
-}
-
-function emitProtoFromExport(g: CGen, name: string, fnType: Type, nativeName: string, modulePath: string, overloadIdx: number): void {
-	if (fnType === null || fnType.kind !== TypeKind.Function) return;
-	// Compute C function name
-	let cName = "";
-	if (nativeName !== "") {
-		cName = nativeName;
-	} else if (name === "main") {
-		cName = safeName(name);
-	} else if (modulePath !== "") {
-		cName = mangle(name) + "__" + mangleModuleName(modulePath);
-		if (overloadIdx > 0) cName = cName + "_u" + overloadIdx;
-		else cName = cName + "_u0";
-	} else {
-		cName = safeName(name);
-		if (overloadIdx > 0) cName = cName + "__" + overloadIdx;
-	}
-	// Dedup
-	const protoKey = "proto:" + cName;
-	if (nameSetHas(g.declaredProcs, protoKey)) return;
-	nameSetAdd(g.declaredProcs, protoKey);
-	// Build prototype string
-	const retType = getTypeDesc(g, fnType.typeReturn);
-	const nrvo = isNrvoReturnType(fnType.typeReturn);
-	let paramList = "";
-	if (nrvo) {
-		paramList = retType + "* __result";
-		if (fnType.typeChildren.length > 0) paramList = paramList + ", ";
-	}
-	for (let i = 0; i < fnType.typeChildren.length; i += 1) {
-		if (i > 0) paramList = paramList + ", ";
-		let pType = getTypeDesc(g, fnType.typeChildren[i]);
-		if (ccgIntroducedPtr(fnType.typeChildren[i]) && pType.length > 0 && pType.charAt(pType.length - 1) !== "*") {
-			pType = pType + "*";
-		}
-		paramList = paramList + pType;
-	}
-	if (paramList === "") paramList = "void";
-	let cRetType = retType;
-	if (nrvo) cRetType = "void";
-	addLine(sec(g, CSection.ProcHeaders), cRetType + " " + cName + "(" + paramList + ");");
 }
 
 // ===== Emit @include directives from checker context =====

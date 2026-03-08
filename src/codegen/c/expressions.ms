@@ -17,20 +17,37 @@ import {
 	ExprStmtData, HiddenStdConvData, HiddenDerefData,
 } from "../../ast/node";
 import { Type, TypeKind, isIntegerType, getProperty, getMinArity, isInterfaceType } from "../../checker/types";
-import { SymbolKind } from "../../checker/symbol";
+import { Symbol, SymbolKind } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, Builder, CSection,
-	initLoc, noLoc, rdLoc,
+	initLoc, noLoc, rdLoc, addrLoc,
 	add, addLine, sec,
 	pStmts, getTemp, nameSetHas, emitStmtsLine, internString,
 	emitProcLocalsLine,
 } from "./context";
 import { mangle, mangleFieldName, mangledFunctionName, safeName } from "./names";
-import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, intToString, isPointerType, annotationToC, genClHalfCast, genClFullCast } from "./types";
+import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, intToString, isPointerType, annotationToC, genClHalfCast, genClFullCast, ccgIntroducedPtr } from "./types";
 import { formatCNumber, cBoolLiteral, cNullLiteral, cStringLiteral, msStringPoolRef } from "./literals";
 import { charAt, sliceStr, findChar, startsWith } from "../../utils/string";
-import { ccgIntroducedPtr } from "../../transform/native/pointerParam";
-import { ensureDrcProto } from "./declarations";
+import { ensureDrcProto, ensureCrossModuleProto } from "./declarations";
+
+// ===== Reference: argument passing for introduced pointers =====
+// Wraps arg for pointer introduction params at call sites.
+// Reference: initLocExpr → addAddrLoc patterns.
+//
+// addrLoc: if NOT indirect → &(snippet); if indirect → snippet (already a pointer)
+//
+// Our Identifier handler already applies rdLoc (pushes (*name) for indirect params).
+// So for indirect args: snippet on stack = (*name), but we need raw pointer = name.
+// We use the raw safeName directly (the reference implementation's snippet is always the raw name).
+function genArgCcgPtr(arg: string, argNode: Node, p: CProc): string {
+	if (argNode.kind === NodeKind.Identifier && isIndirectParam(p, (argNode.data as IdentifierData).name)) {
+		// Indirect param: already a pointer — pass raw (reference patterns return snippet as-is)
+		return safeName((argNode.data as IdentifierData).name);
+	}
+	// Not indirect: take address (reference patterns return &(snippet))
+	return "(&" + arg + ")";
+}
 
 // ===== Union Variant Index Matching =====
 // Matches an `as` target type against a Union's typeChildren by comparing field names.
@@ -200,7 +217,15 @@ function discoverExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[],
 		if (idSym !== null && idSym.symbolKind === SymbolKind.Function) {
 			results.push(mangledFunctionName(idSym, d.name, 0));
 		} else {
-			results.push(safeName(d.name));
+			// Reference parity: build CLoc for identifier, auto-dereference if indirect location
+			const loc: CLoc = {
+				kind: CLocKind.LocalVar,
+				storage: isIndirectParam(p, d.name) ? CStorageLoc.Unknown : CStorageLoc.Stack,
+				snippet: safeName(d.name),
+				isIndirect: isIndirectParam(p, d.name),
+				locType: node.nodeType,
+			};
+			results.push(rdLoc(loc));
 		}
 		return;
 	}
@@ -614,11 +639,18 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 		return;
 	}
 
-	// HiddenAddr
+	// HiddenAddr — Reference parity (standard address generation)
+	// Reference: if indirect location, return raw snippet (already a pointer); else &(snippet)
 	if (kind === NodeKind.HiddenAddr) {
 		const inner = peekResult(results, cc, 0);
 		truncResults(results, cc);
-		results.push("&(" + inner + ")");
+		const d = node.data as ExprStmtData;
+		if (d.expr.kind === NodeKind.Identifier && isIndirectParam(p, (d.expr.data as IdentifierData).name)) {
+			// Indirect param: already a pointer — reference pattern returns raw snippet
+			results.push(safeName((d.expr.data as IdentifierData).name));
+		} else {
+			results.push("&(" + inner + ")");
+		}
 		return;
 	}
 
@@ -764,9 +796,9 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 					} else if (!paramIsPtr && argIsPtr) {
 						arg = "*(" + arg + ")";
 					}
-					// ccgIntroducedPtr: interface/union params → pointer (cross-module proto parity)
+					// Reference parity: introduced pointer params use address location patterns
 					if (!paramIsPtr && !argIsPtr && ccgIntroducedPtr(paramType)) {
-						arg = "&(" + arg + ")";
+						arg = genArgCcgPtr(arg, argNode, p);
 					}
 				}
 			}
@@ -779,7 +811,10 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 			return;
 		}
 		const ovIdx = idx >= 0 ? idx : 0;
-		results.push(mangledFunctionName(sym, sym.name, ovIdx) + "(" + argsStr + ")");
+		const ovCalleeName = mangledFunctionName(sym, sym.name, ovIdx);
+		// On-demand cross-module prototype (reference parity: genProcPrototype)
+		ensureCrossModuleProto(g, ovCalleeName, ovType, sym);
+		results.push(ovCalleeName + "(" + argsStr + ")");
 		return;
 	}
 
@@ -810,9 +845,9 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 					} else if (!paramIsPtr && argIsPtr) {
 						arg = "*(" + arg + ")";
 					}
-					// ccgIntroducedPtr: interface/union params → pointer (cross-module proto parity)
+					// Reference parity: introduced pointer params use address location patterns
 					if (!paramIsPtr && !argIsPtr && ccgIntroducedPtr(paramType)) {
-						arg = "&(" + arg + ")";
+						arg = genArgCcgPtr(arg, argNode, p);
 					}
 				}
 			}
@@ -823,8 +858,12 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 	truncResults(results, cc);
 
 	if (tag === TAG_CALL_DIRECT) {
-		// reference parity: genProcNoForward emits prototype in calling module for cross-module procs.
-		// For DRC hooks (Type_destroy, Type_copy, etc.), emit forward declaration on-demand.
+		// On-demand cross-module prototype (reference parity: genProcPrototype)
+		// Resolve sym from callee identifier if CallExpr.resolvedSym is null
+		const protoSym = sym !== null ? sym : (cd.callee.resolvedSym !== null ? cd.callee.resolvedSym : null as unknown as Symbol);
+		const protoType = protoSym !== null && protoSym.symbolType !== null ? protoSym.symbolType : calleeType;
+		ensureCrossModuleProto(g, callee, protoType, protoSym);
+		// DRC hooks — emit forward declaration on-demand
 		ensureDrcProto(g, callee);
 		const calleeStr = callee;
 		// NRVO: call returns void, result via out-param
@@ -974,7 +1013,7 @@ function genArrayLiteral(g: CGen, p: CProc, node: Node): string {
 
 // ===== Tests =====
 
-import { createCGen, createProc, extract, sec, CSection, typeCacheGet } from "./context";
+import { createCGen, createProc, extract, sec, CSection, typeCacheGet, isIndirectParam } from "./context";
 import { CheckerContext } from "../../checker/context";
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";

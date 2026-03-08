@@ -291,7 +291,7 @@ export function makeHiddenAddr(inner: Node, loc: SourceLocation): Node {
 export function makeHiddenDeref(inner: Node, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.HiddenDeref, { expr: inner }, syntheticToken(loc));
 	if (inner !== null && inner.nodeType !== null) {
-		// Deref of Ref<T>/Ptr<T>/Borrow<T> → type is T (Nim: strips through all tyRef/tyPtr)
+		// Deref of Ref<T>/Ptr<T>/Borrow<T> → type is T (Reference: strips through all pointer types)
 		const k = inner.nodeType.kind;
 		if ((k === TypeKind.Ptr || k === TypeKind.Ref || k === TypeKind.Borrow) && inner.nodeType.typeReturn !== null) {
 			n.nodeType = inner.nodeType.typeReturn;

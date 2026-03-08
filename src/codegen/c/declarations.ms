@@ -28,9 +28,8 @@ import {
 import { genExpr } from "./expressions";
 import { genStmt, genStmts, resolveEmitArgs } from "./statements";
 import { mangle, mangleTypeName, mangleFieldName, mangledFunctionName, safeName } from "./names";
-import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, annotationToC } from "./types";
+import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, annotationToC, ccgIntroducedPtr } from "./types";
 import { genTestDeclNode } from "./test";
-import { ccgIntroducedPtr } from "../../transform/native/pointerParam";
 import {
 	Symbol, SymbolKind, SymbolState,
 	hasFlag, SymbolFlag,
@@ -63,6 +62,17 @@ function endsWith(s: string, suffix: string): boolean {
 	return s.slice(s.length - suffix.length, s.length) === suffix;
 }
 
+// Array sequence hooks are generated per-module (each module that uses sequence gets its own).
+// They need static linkage to avoid duplicate symbols at link time.
+// Reference parity: we use static linkage per-module instead of global deduplication.
+function isArraySeqHook(name: string): boolean {
+	// Fast path: known built-in array hooks
+	if (name.slice(0, 13) === "msStringArray" || name.slice(0, 10) === "msRefArray") return true;
+	// Per-type value struct array hooks: <ElemType>Array_<suffix>
+	return endsWith(name, "Array_destroy") || endsWith(name, "Array_copy") ||
+		endsWith(name, "Array_sink") || endsWith(name, "Array_wasMoved");
+}
+
 // DRC lifecycle hooks + operator eq need external linkage for cross-module access.
 // reference parity: these are regular procs emitted in defining module, prototyped in consumers.
 function isDrcLifecycleName(name: string): boolean {
@@ -87,24 +97,24 @@ export function ensureDrcProto(g: CGen, callee: string): void {
 	const typeName = callee.slice(0, lastUnderscore);
 	const suffix = callee.slice(lastUnderscore, callee.length);
 
-	// Nim parity (symPrototype): seq/array hooks have different param conventions
+	// reference parity (reference prototype): sequence/array hooks have different param conventions
 	// destroy: by-value; wasMoved: by-pointer; copy/sink: dest by-pointer, src by-value
-	const isSeqHook = typeName === "msStringArray" || typeName === "msRefArray";
+	const isSeqHook = endsWith(typeName, "Array");
 
 	let proto = "";
 	if (suffix === "_destroy") {
 		if (isSeqHook) {
-			// Nim parity: destroy(self: seq) — by-value
+			// reference parity: destroy(self: sequence) — by-value
 			proto = "void " + callee + "(" + typeName + " self)";
 		} else {
 			proto = "void " + callee + "(" + typeName + "* self)";
 		}
 	} else if (suffix === "_wasMoved") {
-		// Always by-pointer (var param in Nim)
+		// Always by-pointer (var param in reference implementation)
 		proto = "void " + callee + "(" + typeName + "* self)";
 	} else if (suffix === "_copy" || suffix === "_sink") {
 		if (isSeqHook) {
-			// Nim parity: copy/sink(dest: var seq, src: seq) — dest ptr, src value
+			// reference parity: copy/sink(dest: var sequence, src: sequence) — dest ptr, src value
 			proto = "void " + callee + "(" + typeName + "* dest, " + typeName + " src)";
 		} else {
 			proto = "void " + callee + "(" + typeName + "* dest, " + typeName + "* src)";
@@ -124,6 +134,45 @@ export function ensureDrcProto(g: CGen, callee: string): void {
 	// Per-module array/seq hooks need static linkage (generated in every module that uses them)
 	if (isSeqHook) proto = "static " + proto;
 	addLine(sec(g, CSection.ProcHeaders), proto + ";");
+}
+
+// On-demand cross-module function prototype emission (reference parity: genProcPrototype).
+// Called from genCallExpr when a cross-module function is referenced.
+// Emits prototype into ProcHeaders, deduped via declaredProcs.
+export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Type, sym: Symbol): void {
+	if (fnType === null || fnType.kind !== TypeKind.Function) return;
+	// Only for cross-module procs — same-module procs have their own forward decl
+	if (sym !== null && sym.modulePath !== "" && sym.modulePath === g.modulePath) return;
+	// Skip native/extern — already provided by headers
+	if (sym !== null && sym.nativeName !== "") return;
+	// Dedup
+	const protoKey = "proto:" + calleeName;
+	if (nameSetHas(g.declaredProcs, protoKey)) return;
+	nameSetAdd(g.declaredProcs, protoKey);
+	// Build prototype string
+	const retType = getTypeDesc(g, fnType.typeReturn);
+	const nrvo = isNrvoReturnType(fnType.typeReturn);
+	let paramList = "";
+	if (nrvo) {
+		paramList = retType + "* __result";
+		if (fnType.typeChildren !== null && fnType.typeChildren.length > 0) paramList = paramList + ", ";
+	}
+	if (fnType.typeChildren !== null) {
+		let i = 0;
+		while (i < fnType.typeChildren.length) {
+			if (i > 0) paramList = paramList + ", ";
+			let pType = getTypeDesc(g, fnType.typeChildren[i]);
+			if (ccgIntroducedPtr(fnType.typeChildren[i]) && pType.length > 0 && pType.charAt(pType.length - 1) !== "*") {
+				pType = pType + "*";
+			}
+			paramList = paramList + pType;
+			i += 1;
+		}
+	}
+	if (paramList === "") paramList = "void";
+	let cRetType = retType;
+	if (nrvo) cRetType = "void";
+	addLine(sec(g, CSection.ProcHeaders), cRetType + " " + calleeName + "(" + paramList + ");");
 }
 
 export function genDecl(g: CGen, node: Node, exported: boolean): void {
@@ -221,10 +270,10 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	// DRC lifecycle hooks need external linkage for cross-module access (reference parity)
 	const isExported = sym !== null && (exported || hasFlag(sym, SymbolFlag.Exported));
 	const isDrcHook = isDrcLifecycleName(d.fnName);
-	// Array/seq hooks (msStringArray_*, msRefArray_*) are generated per-module —
-	// they need static linkage to avoid duplicate symbols at link time.
-	// Named type hooks (Token_destroy etc.) are generated once in defining module → external.
-	const isPerModuleHook = isDrcHook && (d.fnName.slice(0, 13) === "msStringArray" || d.fnName.slice(0, 10) === "msRefArray");
+	// Array/sequence hooks are generated per-module — they need static linkage to avoid
+	// duplicate symbols at link time. Matches msStringArray_*, msRefArray_*, and
+	// per-type value array hooks like FileEntryArray_* (reference parity: each sequence gets its own hooks).
+	const isPerModuleHook = isDrcHook && isArraySeqHook(d.fnName);
 	const prefix = (isExported || isExternFn || isMain || (isDrcHook && !isPerModuleHook)) ? "" : "static ";
 
 	// Emit prototype to ProcHeaders — NRVO functions return void (skip if already forward-declared)
@@ -247,9 +296,12 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	if (d.fnBody !== null) {
 		const p = createProc(name, fnType.typeReturn);
 		if (nrvo) p.isNrvo = true;
-		// Populate param names for pointer-param dereference detection in expressions
-		for (const paramName of d.params) {
-			p.params.push(paramName);
+		// Populate param names + detect reference pointer introduction params (reference indirect location parity)
+		for (let pi = 0; pi < d.params.length; pi += 1) {
+			p.params.push(d.params[pi]);
+			if (pi < fnType.typeChildren.length && ccgIntroducedPtr(fnType.typeChildren[pi])) {
+				p.indirectParams.push(d.params[pi]);
+			}
 		}
 		genStmt(g, p, d.fnBody);
 		const locals = readProcLocals(p);
@@ -350,25 +402,34 @@ function genClassDecl(g: CGen, node: Node): void {
 	nameSetAdd(g.declaredThings, name);
 
 	// Register in type cache to prevent genObjectType from re-emitting
-	typeCacheSet(g.typeCache, classKey, name + "*");
+	// Value type only — Ref<Struct> wrapper adds the * via TypeKind.Ref path
+	typeCacheSet(g.typeCache, classKey, name);
 
 	// Forward declaration
 	addLine(sec(g, CSection.ForwardDecls), "typedef struct " + name + " " + name + ";");
 
-	// Struct — no refcount field; msRefHeader (16 bytes) is prepended by msAllocTyped
-	const types = sec(g, CSection.Types);
-	addLine(types, "struct " + name + " {");
-	// Emit properties from classBody
+	// Reference parity (standard struct generation): pre-resolve ALL field types in a local buffer,
+	// then emit the complete struct atomically. This prevents recursive getTypeDesc
+	// calls from interleaving other type definitions inside this struct body.
+	const fieldTypes: string[] = [];
+	const fieldNames: string[] = [];
 	for (let i = 0; i < d.classBody.length; i += 1) {
 		const member = d.classBody[i];
 		if (member.kind === NodeKind.PropertyDecl) {
 			const pd = member.data as PropertyDeclData;
-			const fieldType = getTypeDesc(g, member.nodeType);
-			const fieldName = mangleFieldName(pd.propName);
-			addLine(types, "  " + fieldType + " " + fieldName + ";");
+			fieldTypes.push(getTypeDesc(g, member.nodeType));
+			fieldNames.push(mangleFieldName(pd.propName));
 		}
 	}
-	addLine(types, "};");
+
+	// Struct — no refcount field; msRefHeader (16 bytes) is prepended by msAllocTyped
+	let structDef = "struct " + name + " {\n";
+	for (let i = 0; i < fieldTypes.length; i += 1) {
+		structDef = structDef + "  " + fieldTypes[i] + " " + fieldNames[i] + ";\n";
+	}
+	structDef = structDef + "};\n";
+	const types = sec(g, CSection.Types);
+	add(types, structDef);
 	addNewline(types);
 
 	// msTypeInfo is generated by destructorLifting (transform phase) as a _typeInfo VariableDecl.

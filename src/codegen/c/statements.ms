@@ -14,7 +14,7 @@ import {
 	MacroInvocationData, StringLiteralData, IdentifierData,
 } from "../../ast/node";
 import { Type, TypeKind, isInterfaceType } from "../../checker/types";
-import { SymbolKind } from "../../checker/symbol";
+import { Symbol, SymbolKind } from "../../checker/symbol";
 import {
 	CGen, CProc, CSection,
 	emitStmts, emitStmtsLine, emitStmtsNl,
@@ -23,6 +23,7 @@ import {
 	sec, addLine,
 } from "./context";
 import { genExpr } from "./expressions";
+import { ensureCrossModuleProto } from "./declarations";
 import { safeName } from "./names";
 import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, getCalleeReturnType } from "./types";
 
@@ -49,6 +50,10 @@ function isNumericCType(cType: string): boolean {
 function genNrvoCallExpr(g: CGen, p: CProc, callNode: Node, destVar: string): string {
 	const cd = callNode.data as CallExprData;
 	let callee = genExpr(g, p, cd.callee);
+	// On-demand cross-module prototype (reference parity: genProcPrototype)
+	const nrvoSym = callNode.resolvedSym !== null ? callNode.resolvedSym : (cd.callee.resolvedSym !== null ? cd.callee.resolvedSym : null as unknown as Symbol);
+	const nrvoFnType = nrvoSym !== null ? nrvoSym.symbolType : (cd.callee.nodeType !== null ? cd.callee.nodeType : null as unknown as Type);
+	ensureCrossModuleProto(g, callee, nrvoFnType, nrvoSym);
 	let args = "&" + destVar;
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		args = args + ", " + genExpr(g, p, cd.arguments[i]);
@@ -109,17 +114,17 @@ export function resolveEmitArgs(g: CGen, mi: MacroInvocationData, p: CProc): str
 			// reference parity: resolve symbol to C name based on kind
 			const sym = arg.resolvedSym;
 			if (sym !== null) {
-				if (sym.kind === SymbolKind.Function) {
+				if (sym.symbolKind === SymbolKind.Function) {
 					// Function → C function name (nativeName if extern, else mangled)
 					if (sym.nativeName !== null && sym.nativeName.length > 0) {
 						result = result + sym.nativeName;
 					} else {
 						result = result + safeName(sym.name);
 					}
-				} else if (sym.kind === SymbolKind.Type) {
+				} else if (sym.symbolKind === SymbolKind.Type) {
 					// Type → C type descriptor
-					if (sym.symType !== null) {
-						result = result + getTypeDesc(g, sym.symType);
+					if (sym.symbolType !== null) {
+						result = result + getTypeDesc(g, sym.symbolType);
 					} else {
 						result = result + safeName(sym.name);
 					}

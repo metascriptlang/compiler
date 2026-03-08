@@ -213,13 +213,13 @@ export function createUnion(types: Type[]): Type {
 	return t;
 }
 
-// Maybe<T> — Nim Option[T] parity. Wrapper struct { value: T, present: bool }.
+// Maybe<T> — Reference: Maybe/Option parity. Wrapper struct { value: T, present: bool }.
 // Only for interfaces. Cached by inner type name to avoid duplicates.
 const _maybeCache: Type[] = [];
 const _maybeCacheNames: string[] = [];
 
 export function createMaybeType(inner: Type): Type {
-	// Pointer types are inherently nullable — no wrapper needed (Nim parity: Option[ref T] = ref T)
+	// Pointer types are inherently nullable — no wrapper needed (reference parity: nullable pointers)
 	if (inner.kind === TypeKind.Ref || inner.kind === TypeKind.Ptr) return inner;
 	const name = inner.typeName;
 	let i = 0;
@@ -429,16 +429,16 @@ export function unwrapMaybeType(t: Type): Type {
 	return t.typeReturn;
 }
 
-// unwrapRef — unwrap Ref<T> or Ptr<T> to get inner type (like Nim's skipTypes)
+// unwrapRef — unwrap Ref<T> or Ptr<T> to get inner type (reference: skip pointer types)
 export function unwrapRef(t: Type): Type {
 	if (t === null) return t;
 	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) return t.typeReturn;
 	return t;
 }
 
-// ===== Type Size Estimation (Nim parity: getSize in ccgutils) =====
-// Returns estimated C struct size in bytes for ccgIntroducedPtr threshold.
-// Nim: floatSize * 3 = 24 bytes on 64-bit. Objects/tuples larger than this → pass by pointer.
+// ===== Type Size Estimation (Reference: reference codegen utils parity) =====
+// Returns estimated C struct size in bytes for reference pointer introduction threshold.
+// Reference: size threshold = 24 bytes on 64-bit. Objects/tuples larger than this → pass by pointer.
 let _sizeDepth: number = 0;
 
 export function getTypeSize(t: Type): number {

@@ -88,7 +88,7 @@ void* msArrayPrepareAdd(int64_t len, void* p, int64_t addLen, int64_t elemSize);
 /* Grow without zeroing */
 void* msArrayPrepareAddUninit(int64_t len, void* p, int64_t addLen, int64_t elemSize);
 
-/* Allocate dest to match src length (Nim parity: setLen for copy) */
+/* Allocate dest to match src length (Reference parity: setLen for copy) */
 static inline void msArraySetLenGeneric(void* dest, int64_t srcLen, int64_t elemSize) {
 	msRawArray* d = (msRawArray*)dest;
 	if (d->p) { free(d->p); }
@@ -183,7 +183,7 @@ void msUint8ArrayPush(msUint8Array* arr, uint8_t value);
 uint8_t msUint8ArrayAt(msUint8Array* arr, int64_t idx);
 msUint8Array msUint8ArrayNew(int64_t cap);
 
-/* ===== Generic Typed Array Macro (Standard reference sequence / reference MS_ARRAY pattern) ===== */
+/* ===== Generic Typed Array Macro (Standard reference sequence pattern) ===== */
 /* Generates per-type array struct: { int64_t len; struct { int64_t cap; T data[]; }* p; }
  * Usage: typedef MS_ARRAY(struct Token) TokenArray;
  * Each element type gets its own array with inline value storage (not void* indirection). */

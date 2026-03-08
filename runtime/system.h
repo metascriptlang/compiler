@@ -84,7 +84,7 @@ void msThrow(msString msg);
 #define msStringSink(d, s)    do { msStringDestroy(d); (d) = (s); } while(0)
 
 /* --- Array lifecycle (unified) --- */
-/* Payload-only free — inline loops handle per-element cleanup (Nim parity: fillSeqOp) */
+/* Payload-only free — inline loops handle per-element cleanup (Reference parity: sequence op) */
 #define msArrayDestroy(arr)            do { if ((arr).p) { free((arr).p); (arr).p = NULL; } (arr).len = 0; } while(0)
 #define msArrayWasMoved(arr)           do { (arr).len = 0; (arr).p = NULL; } while(0)
 #define msArrayCopy(arr)               /* primitive: bitwise copy handled by assignment */

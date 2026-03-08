@@ -296,6 +296,35 @@ int64_t msStringCharCodeAt(msString s, int64_t idx) {
 	return (int64_t)(unsigned char)s.p->data[idx];
 }
 
+msString msStringFromCodePoint(int64_t cp) {
+	uint8_t buf[4];
+	int len;
+	if (cp < 0x80) {
+		buf[0] = (uint8_t)cp;
+		len = 1;
+	} else if (cp < 0x800) {
+		buf[0] = 0xC0 | (uint8_t)(cp >> 6);
+		buf[1] = 0x80 | (uint8_t)(cp & 0x3F);
+		len = 2;
+	} else if (cp < 0x10000) {
+		buf[0] = 0xE0 | (uint8_t)(cp >> 12);
+		buf[1] = 0x80 | (uint8_t)((cp >> 6) & 0x3F);
+		buf[2] = 0x80 | (uint8_t)(cp & 0x3F);
+		len = 3;
+	} else if (cp < 0x110000) {
+		buf[0] = 0xF0 | (uint8_t)(cp >> 18);
+		buf[1] = 0x80 | (uint8_t)((cp >> 12) & 0x3F);
+		buf[2] = 0x80 | (uint8_t)((cp >> 6) & 0x3F);
+		buf[3] = 0x80 | (uint8_t)(cp & 0x3F);
+		len = 4;
+	} else {
+		/* Invalid codepoint — replacement character U+FFFD */
+		buf[0] = 0xEF; buf[1] = 0xBF; buf[2] = 0xBD;
+		len = 3;
+	}
+	return msStringNew((const char*)buf, len);
+}
+
 msString msStringSlice(msString s, int64_t start, int64_t end) {
 	/* Clamp to bounds */
 	if (start < 0) start = s.len + start;

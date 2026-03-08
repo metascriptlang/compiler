@@ -160,6 +160,9 @@ msString msStringCharAt(msString s, int64_t idx);
 /* Character code at index. Returns -1 if out of range. */
 int64_t msStringCharCodeAt(msString s, int64_t idx);
 
+/* Create a string from a Unicode codepoint (UTF-8 encoded). */
+msString msStringFromCodePoint(int64_t cp);
+
 /* Substring [start, end). Clamps to bounds. */
 msString msStringSlice(msString s, int64_t start, int64_t end);
 

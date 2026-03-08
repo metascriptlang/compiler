@@ -23,16 +23,20 @@ static inline msString msReadLine(void) {
 	if (fgets(buf, sizeof(buf), stdin) == NULL) {
 		return MS_EMPTY_STRING;
 	}
-	/* Strip trailing newline if present */
+	/* Strip trailing \r\n or \n (LSP uses \r\n framing) */
 	size_t len = strlen(buf);
 	if (len > 0 && buf[len - 1] == '\n') {
-		buf[len - 1] = '\0';
+		buf[--len] = '\0';
+	}
+	if (len > 0 && buf[len - 1] == '\r') {
+		buf[--len] = '\0';
 	}
 	return msStringFromCStr(buf);
 }
 
 /**
- * Read n bytes from stdin. Returns what was read (may be less than n).
+ * Read exactly n bytes from stdin, retrying on short reads (pipes).
+ * Returns what was read (fewer only on EOF/error).
  */
 static inline msString msReadBytes(double n) {
 	int64_t count = (int64_t)n;
@@ -40,9 +44,14 @@ static inline msString msReadBytes(double n) {
 	if (count > 1048576) count = 1048576; /* 1 MiB cap */
 	char* buf = (char*)malloc(count + 1);
 	if (!buf) return MS_EMPTY_STRING;
-	size_t nread = fread(buf, 1, count, stdin);
-	buf[nread] = '\0';
-	msString result = msStringNew(buf, (int64_t)nread);
+	size_t total = 0;
+	while (total < (size_t)count) {
+		size_t nread = fread(buf + total, 1, count - total, stdin);
+		if (nread == 0) break; /* EOF or error */
+		total += nread;
+	}
+	buf[total] = '\0';
+	msString result = msStringNew(buf, (int64_t)total);
 	free(buf);
 	return result;
 }

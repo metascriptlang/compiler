@@ -115,7 +115,7 @@ static inline void incCount(msRefHeader* h) {
 	h->rc += MS_RC_INCREMENT;
 }
 
-/* ===== Trace Ref (Nim parity: nimTraceRefDyn) ===== */
+/* ===== Trace Ref (Standard reference parity) ===== */
 /* Called by generated trace hooks. Pushes child to traceStack. No recursion. */
 
 void msOrcTraceRef(void* child, void* env) {
@@ -133,7 +133,7 @@ static inline void msTrace(void* p, const msTypeInfo* type, msGcEnv* j) {
 	}
 }
 
-/* ===== Phase 1: Mark Gray (Nim parity: orc.nim:183-216) ===== */
+/* ===== Phase 1: Mark Gray (Standard reference parity) ===== */
 /* Tentatively decrement all children of gray suspects. Iterative via traceStack. */
 
 static void markGray(msGcEnv* j, void* p, const msTypeInfo* type) {
@@ -153,7 +153,7 @@ static void markGray(msGcEnv* j, void* p, const msTypeInfo* type) {
 	}
 }
 
-/* ===== Phase 2: Scan (Nim parity: orc.nim:161-181, 218-278) ===== */
+/* ===== Phase 2: Scan (Standard reference parity) ===== */
 
 static void scanBlack(msGcEnv* j, void* p, const msTypeInfo* type) {
 	setColor(msHeader(p), MS_COL_BLACK);
@@ -187,7 +187,7 @@ static void scan(msGcEnv* j, void* p, const msTypeInfo* type) {
 	}
 }
 
-/* ===== Phase 3: Collect White (Nim parity: orc.nim:285-309) ===== */
+/* ===== Phase 3: Collect White (Standard reference parity) ===== */
 
 static void collectWhite(msGcEnv* j, void* p, const msTypeInfo* type) {
 	if (p == NULL) return;

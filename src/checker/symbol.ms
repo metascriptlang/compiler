@@ -34,11 +34,11 @@ export enum SymbolFlag {
 }
 
 // Flag helpers
-export function hasFlag(sym: Symbol, flag: number): boolean {
+export function hasFlag(sym: Symbol, flag: SymbolFlag): boolean {
 	return (sym.symFlags & flag) !== 0;
 }
 
-export function setFlag(sym: Symbol, flag: number): void {
+export function setFlag(sym: Symbol, flag: SymbolFlag): void {
 	sym.symFlags = sym.symFlags | flag;
 }
 

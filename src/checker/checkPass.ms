@@ -248,7 +248,7 @@ function analyzeNullCheck(condition: Node): string {
 
 // Remove Null from a type (for narrowing after null checks)
 function removeNullFromType(t: Type): Type {
-	// Maybe<T> → T (Nim: Option[T].get)
+	// Maybe<T> → T (Reference: Maybe/Option extraction)
 	if (isMaybeType(t)) return unwrapMaybeType(t);
 	if (t.kind === TypeKind.Union) {
 		const nonNull: Type[] = [];
@@ -617,7 +617,7 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 		const cd = c.data as MatchCaseData;
 		for (const p of cd.casePatterns) {
 			if (p.kind === NodeKind.Identifier) {
-				// Wildcard/binding — Nim's else has no pattern nodes at all.
+				// Wildcard/binding — Standard reference's else has no pattern nodes at all.
 				// We set nodeType for validator; no symbol needed (never referenced).
 				hasWildcard = true;
 				p.nodeType = discType;
@@ -627,7 +627,7 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 					const pmd = p.data as MemberExprData;
 					coveredMembers.push(pmd.property);
 				}
-				// All pattern expressions: semConstExpr + fitNode (Nim parity)
+				// All pattern expressions: semConstExpr + fitNode (reference parity)
 				checkExpr(ctx, p, discType);
 			}
 		}
@@ -750,7 +750,7 @@ function defineBuiltinConstants(ctx: CheckerContext): void {
 	defineSymbol(ctx.table, infSym);
 }
 
-// ===== Unified Prelude Loading (Nim parity: single pipeline) =====
+// ===== Unified Prelude Loading (reference parity: single pipeline) =====
 
 // Load a single prelude module into a context. Shared by all paths.
 function loadPreludeOne(ctx: CheckerContext, specifier: string, stdPath: string): void {

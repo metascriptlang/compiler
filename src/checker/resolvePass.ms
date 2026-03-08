@@ -104,7 +104,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 			}
 			ui += 1;
 		}
-		// T | null where T is interface → Maybe<T> (Nim Option[T] parity)
+		// T | null where T is interface → Maybe<T> (Reference: Maybe/Option parity)
 		if (members.length === 2) {
 			if (isInterfaceType(members[0]) && members[1] !== null && members[1].kind === TypeKind.Null) {
 				return createMaybeType(members[0]);
@@ -576,9 +576,9 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 		closeScope(ctx.table);
 	}
 
-	// Nim parity: self-referential value fields → auto-promote to Ref<T>
+	// reference parity: self-referential value fields → auto-promote to Ref<T>
 	// C cannot embed struct T by value inside itself (infinite size).
-	// Nim requires explicit `ref T` and errors otherwise. We auto-promote with a warning.
+	// Standard reference requires explicit pointer types and errors otherwise. We auto-promote with a warning.
 	let fi = 0;
 	while (fi < fieldTypes.length) {
 		const ft = fieldTypes[fi];

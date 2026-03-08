@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { Type, TypeKind, isInterfaceType } from "../../checker/types";
+import { Type, TypeKind, isInterfaceType, getTypeSize } from "../../checker/types";
 import { Node, NodeKind, CallExprData } from "../../ast/node";
 import { findChar, trimStr, splitTopLevel, endsWith } from "../../utils/string";
 import { CGen, CSection, Builder, TypeCache, add, addLine, addNewline, extract, sec, createBuilder, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas, typeRegistryLookup } from "./context";
@@ -325,6 +325,23 @@ export function isPointerType(t: Type): boolean {
 	};
 }
 
+// ===== ccgIntroducedPtr (Reference: reference codegen utils parity) =====
+// Determines if a param type should be passed by pointer in C.
+// Reference: object types with size > floatSize*3 (24 bytes), tuple same threshold,
+// Result/Union/Span always by pointer.
+// The flag represents an indirect location — purely a codegen concern, no AST mutation.
+const PTR_THRESHOLD: number = 24;
+
+export function ccgIntroducedPtr(t: Type): boolean {
+	if (t === null) return false;
+	if (isInterfaceType(t)) return getTypeSize(t) > PTR_THRESHOLD;
+	if (t.kind === TypeKind.Tuple) return getTypeSize(t) > PTR_THRESHOLD;
+	if (t.kind === TypeKind.Result) return true;
+	if (t.kind === TypeKind.Union) return true;
+	if (t.kind === TypeKind.Span) return true;
+	return false;
+}
+
 // ===== Needs RC =====
 // Types that need reference counting in C backend.
 
@@ -461,10 +478,9 @@ export function getTypeDesc(g: CGen, t: Type): string {
 		}
 		const name = mangle(t.typeName);
 		ensureForwardDecl(g, name);
-		// Class types need pointer semantics (Name* not Name)
-		if (nameSetHas(g.knownClassNames, name)) {
-			return name + "*";
-		}
+		// Class types: no extra * here — the Ref<T> wrapper from collectPass adds the pointer
+		// via TypeKind.Ref path (line 508-513). TypeReference("Doc") = struct Doc (value).
+		// Ref<TypeReference("Doc")> = Doc* (pointer). This matches standard reference patterns: objects are structs, managed references are pointers.
 		return name;
 	}
 

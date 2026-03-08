@@ -55,7 +55,7 @@ function truthifyNode(node: Node): Node {
 }
 
 // Wrap a condition for C boolean context.
-// Type-aware checks first (Nim parity), then syntactic fallback.
+// Type-aware checks first (reference parity), then syntactic fallback.
 function wrapTruthiness(cond: Node): Node {
 	// Type-aware: boolean-typed nodes need no wrapping
 	if (cond.nodeType !== null && cond.nodeType.kind === TypeKind.Boolean) return cond;
@@ -63,7 +63,7 @@ function wrapTruthiness(cond: Node): Node {
 	if (cond.nodeType !== null && isMaybeType(cond.nodeType)) {
 		return makeMember(cond, "present", cond.location);
 	}
-	// Non-nullable value types → always true (Nim: forceBool rejects objects in boolean context)
+	// Non-nullable value types → always true (Reference: rejects objects in boolean context)
 	if (cond.nodeType !== null && isInterfaceType(cond.nodeType)) return makeBool(true, cond.location);
 	// Arrays → len > 0
 	if (cond.nodeType !== null && cond.nodeType.kind === TypeKind.Array) {

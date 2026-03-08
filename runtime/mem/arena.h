@@ -2,7 +2,7 @@
  * MetaScript Arena Allocator — Bump Allocation with Linked Pages
  *
  * O(1) allocation, O(1) bulk free. No per-object free, no refcount headers.
- * Design reference: Nim's gc_regions.nim MemRegion, yyjson's alc pool.
+ * Design reference: standard reference memory regions, yyjson's alc pool.
  *
  * Usage:
  *   msArena* a = msArenaCreate(65536);   // 64KB initial page
@@ -81,7 +81,7 @@ static inline void* msArenaAlloc(msArena* a, size_t size) {
 	/* Slow path: new page with exponential growth */
 	size_t newSize = a->defaultPageSize;
 	if (newSize < aligned) newSize = aligned;
-	a->defaultPageSize *= 2;  /* exponential growth (like Nim) */
+	a->defaultPageSize *= 2;  /* exponential growth (standard pattern) */
 
 	msArenaPage* newPage = msArenaNewPage(newSize);
 	newPage->next = a->head;

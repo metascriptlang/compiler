@@ -159,8 +159,8 @@ function resolveOpCall(ctx: TransformContext, typeName: string, opName: string, 
 			return makeCall(makeIdent(opName, loc), [left, right], loc);
 		}
 	}
-	// Auto-generated == for interfaces — codegen handles & via ccgIntroducedPtr (Nim parity:
-	// system.nim:1973 `==`*[T: object](x, y: T) takes value params, codegen adds pointer)
+	// Auto-generated == for interfaces — codegen handles & via reference pointer introduction (reference parity:
+	// reference core:1973 `==`*[T: object](x, y: T) takes value params, codegen adds pointer)
 	if (opName === "==" && isValueObject(leftType)) {
 		const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
 		const callee = makeIdent(typeName + "_eq", loc);
@@ -222,7 +222,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	if (isBuiltinType(typeName)) return node;
 
 	// 3. Null comparisons on non-nullable value types → constant bool
-	// Nim parity: objects can't be nil (sigmatch.nim:typeRel, system.nim:1452-1457)
+	// reference parity: objects can't be nil (reference comparisons, reference core)
 	const hasNullLeft = isNullExpr(d.left);
 	const hasNullRight = isNullExpr(d.right);
 	if (hasNullLeft || hasNullRight) {

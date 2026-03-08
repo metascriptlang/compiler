@@ -84,6 +84,10 @@ extern function setSlice(this s: string, start: number, end: number): void from 
 
 extern function stripInPlace(this s: string): void from "&msStringStripInPlace";
 
+// ===== Character Construction =====
+
+extern function fromCodePoint(cp: number): string from "msStringFromCodePoint";
+
 // ===== Zero-Copy Bridge (string → uint8[]) =====
 
 @builtin("AsBytes")

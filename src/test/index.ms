@@ -39,3 +39,6 @@ import "./c/closures";
 import "./c/result";
 import "./js/basic";
 import "./js/result";
+
+// -- phase handoff tests --
+import "./handoff/index";

@@ -1,4 +1,4 @@
-// Nullable Lower — Maybe<T> structural rewrites (Nim Option[T] parity)
+// Nullable Lower — Maybe<T> structural rewrites (Reference parity)
 //
 // After checker resolves `T | null` → Maybe_T and operatorLower/stringTruthiness
 // handle null comparisons + truthiness, this late pass handles structural rewrites:

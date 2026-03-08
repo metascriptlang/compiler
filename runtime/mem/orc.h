@@ -114,7 +114,7 @@ static inline void msMarkMaybeCycle(void* p) {
 /* Run full cycle collection (Bacon's 3-phase algorithm) */
 void msOrcCollect(void);
 
-/* GcEnv — passed as env through all trace hooks (Nim parity: GcEnv in orc.nim).
+/* GcEnv — passed as env through all trace hooks (Standard reference parity).
  * Trace hooks push child refs to traceStack; collector drains iteratively. */
 typedef struct {
 	msCellSeq traceStack;

@@ -300,8 +300,8 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 
 // ===== RC Call Builders =====
 
-// Reference parity: Nim's genOp wraps dest in nkHiddenAddr when param is tyVar (pointer).
-// Named-type hooks take pointer params (ccgIntroducedPtr), so we wrap in HiddenAddr.
+// Reference parity: the reference implementation wraps dest in hidden address when param is a pointer.
+// Named-type hooks take pointer params (reference pointer introduction), so we wrap in HiddenAddr.
 // Non-Named types (Ref/String/Closure/Map/Set) use runtime fns that take raw values.
 
 function makeRcCallStmt(fnName: string, varName: string, loc: SourceLocation): Node {
@@ -312,7 +312,7 @@ function makeRcCallStmt(fnName: string, varName: string, loc: SourceLocation): N
 
 function makeDestroyCall(varName: string, rcInfo: RcInfo, loc: SourceLocation): Node {
 	if (rcInfo.rcKind === RcKind.Named) {
-		// Nim parity (symPrototype): seq/string destroy takes by-value (not var/pointer)
+		// reference parity (reference prototype): sequence/string destroy takes by-value (not pointer)
 		if (rcInfo.seqLike) {
 			return makeRcCallStmt(rcInfo.destroyFn, varName, loc);
 		}
@@ -335,7 +335,7 @@ function makeWasMovedCall(varName: string, rcInfo: RcInfo, loc: SourceLocation):
 // Ref/String/Closure/Map/Set copy is unary (incref).
 function makeCopyAfterInit(destName: string, rcInfo: RcInfo, loc: SourceLocation, srcName: string): Node {
 	if (rcInfo.rcKind === RcKind.Named && srcName !== "") {
-		// Nim parity (symPrototype): seq copy = dest var (HiddenAddr), src by-value
+		// reference parity (reference prototype): sequence copy = dest pointer, src by-value
 		if (rcInfo.seqLike) {
 			return makeExprStmt(
 				makeCall(makeIdent(rcInfo.copyFn, loc), [makeHiddenAddr(makeIdent(destName, loc), loc), makeIdent(srcName, loc)], loc), loc);
@@ -359,7 +359,7 @@ function makeCopyAfterInit(destName: string, rcInfo: RcInfo, loc: SourceLocation
 // Sink call: sinkFn(dest, src) — atomic destroy-old + assign-new
 function makeSinkCall(destName: string, srcExpr: Node, rcInfo: RcInfo, loc: SourceLocation): Node {
 	if (rcInfo.rcKind === RcKind.Named) {
-		// Nim parity: seq sink = dest var (HiddenAddr), src by-value
+		// reference parity: sequence sink = dest pointer, src by-value
 		if (rcInfo.seqLike) {
 			return makeExprStmt(
 				makeCall(makeIdent(rcInfo.sinkFn, loc), [makeHiddenAddr(makeIdent(destName, loc), loc), srcExpr], loc), loc);
@@ -386,10 +386,10 @@ function makeWasMovedOnExpr(argExpr: Node, rcInfo: RcInfo, loc: SourceLocation):
 	return makeRcCallOnExpr(rcInfo.wasMovedFn, argExpr, loc);
 }
 
-// ===== Self-Assignment Detection (Nim parity: sameLocation) =====
+// ===== Self-Assignment Detection (reference parity) =====
 // Checks if two AST nodes refer to the same memory location.
 // Used to elide `x = x` (self-assignment removal).
-// Reference: injectdestructors.nim:1101-1124
+// Reference: reference DRC injection
 
 function sameLocation(a: Node, b: Node): boolean {
 	if (a === null || b === null) return false;
@@ -1347,7 +1347,7 @@ function processExprStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContex
 // ===== Assignment Processing =====
 
 function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation): Node {
-	// Nim parity (sameLocation): self-assignment removal — x = x is a no-op
+	// reference parity (sameLocation): self-assignment removal — x = x is a no-op
 	if (sameLocation(bd.left, bd.right)) return stmt;
 
 	// Member assignment: obj.field = expr
@@ -1542,7 +1542,7 @@ function emitSaveAssignDestroy(stmt: Node, lhsExpr: Node, rhs: Node, rcInfo: RcI
 		return makeBlock([saveTmp, stmt, makeDestroyCall(tmpName, rcInfo, loc)], loc);
 	}
 
-	// CallExpr RHS: fresh value, but check alias (GAP 4 — Nim parity: deepAliases safety)
+	// CallExpr RHS: fresh value, but check alias (GAP 4 — reference parity safety)
 	if (rhs.kind === NodeKind.CallExpr) {
 		return makeBlock([saveTmp, stmt, makeDestroyCall(tmpName, rcInfo, loc)], loc);
 	}
@@ -1551,7 +1551,7 @@ function emitSaveAssignDestroy(stmt: Node, lhsExpr: Node, rhs: Node, rcInfo: RcI
 		return makeBlock([saveTmp, stmt, makeDestroyCall(tmpName, rcInfo, loc)], loc);
 	}
 
-	// Identifier RHS: check last-read for sink optimization (GAP 5 — Nim parity: moveOrCopy)
+	// Identifier RHS: check last-read for sink optimization (GAP 5 — reference parity: moveOrCopy)
 	if (rhs.kind === NodeKind.Identifier) {
 		const rhsSym = rhs.resolvedSym;
 		if (rhsSym !== null && isLastReadSafe(rhsSym, rhs, idx, stmts, dctx)) {
@@ -1568,7 +1568,7 @@ function emitSaveAssignDestroy(stmt: Node, lhsExpr: Node, rhs: Node, rcInfo: RcI
 	}
 
 	// Non-last-read / field-access / other: COPY
-	// Nim parity (moveOrCopy → genCopy): for Named types, call =copy(dest, src) directly.
+	// reference parity (moveOrCopy): for Named types, call =copy(dest, src) directly.
 	// The copy hook handles old-value cleanup internally (setLen frees old payload,
 	// checkSelfAssignment prevents use-after-free on self-copy).
 	if (rcInfo.rcKind === RcKind.Named && rcInfo.copyFn !== "") {

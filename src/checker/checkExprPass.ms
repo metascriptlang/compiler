@@ -224,24 +224,9 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			const d = node.data as TypeAssertionData;
 			const srcType = checkExpr(ctx, d.asExpr, null as unknown as Type);
 			const targetType = (d.asType !== "") ? resolveAnnotation(d.asType, ctx) : unknownType();
-			// reference parity: resolve as-cast target to actual union variant type.
-			// If source is Union and target matches a variant by first field name,
-			// use the variant type (preserves identity for codegen variant access).
-			if (srcType !== null && srcType.kind === TypeKind.Union && targetType.kind === TypeKind.Struct && srcType.typeChildren !== null && targetType.typeNames !== null && targetType.typeNames.length > 0) {
-				const firstField = targetType.typeNames[0];
-				let vi = 0;
-				while (vi < srcType.typeChildren.length) {
-					const variant = srcType.typeChildren[vi];
-					if (variant !== null && variant.typeNames !== null && variant.typeNames.length > 0 && variant.typeNames[0] === firstField) {
-						node.nodeType = variant;
-						break;
-					}
-					vi = vi + 1;
-				}
-				if (node.nodeType === null) node.nodeType = targetType;
-			} else {
-				node.nodeType = targetType;
-			}
+			// Nim parity: cast trusts the programmer. The target type is what they assert.
+			// No structural variant matching — just use the resolved target type directly.
+			node.nodeType = targetType;
 			node.nodeType;
 		},
 		NodeKind.SpreadExpr => {
@@ -906,8 +891,8 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 		node.nodeType = objType;
 		return objType;
 	}
-	// Nim parity: strip Ref/Ptr BEFORE field resolution, insert deref AFTER
-	// Nim: skipTypes(ty, {tyRef, tyPtr, ...}) → lookup field → makeDeref
+	// reference parity: strip Ref/Ptr BEFORE field resolution, insert deref AFTER
+	// reference: skip pointer types → lookup field → make dereference
 	const needsDeref = isPointerInC(objType, ctx);
 	let resolvedObjType = objType;
 	if (needsDeref && objType.typeReturn !== null) {
@@ -922,7 +907,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 		return propType;
 	}
 	if (propType.kind !== TypeKind.Unknown) {
-		// Nim parity: insert HiddenDeref AFTER field resolution succeeds
+		// reference parity: insert HiddenDeref AFTER field resolution succeeds
 		if (needsDeref) {
 			const tok = createToken(TokenKind.Ident, "", node.location.line);
 			const derefNode = createNode(NodeKind.HiddenDeref, { expr: d.object }, tok);
@@ -1094,7 +1079,7 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 		const cd = c.data as MatchCaseData;
 		for (const p of cd.casePatterns) {
 			if (p.kind === NodeKind.Identifier) {
-				// Wildcard/binding — Nim's else has no pattern nodes at all.
+				// Wildcard/binding — Standard reference's else has no pattern nodes at all.
 				// We set nodeType for validator; no symbol needed (never referenced).
 				hasWildcard = true;
 				p.nodeType = discType;
@@ -1104,7 +1089,7 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 					const pmd = p.data as MemberExprData;
 					coveredMembers.push(pmd.property);
 				}
-				// All pattern expressions: semConstExpr + fitNode (Nim parity)
+				// All pattern expressions: semConstExpr + fitNode (reference parity)
 				checkExpr(ctx, p, discType);
 			}
 		}
