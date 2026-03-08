@@ -10,7 +10,7 @@
 // Pure function — no filesystem access. The loader tries candidates in order.
 
 import { dirname, join } from "std/fs/path";
-import { sliceStr, endsWith } from "../utils/string";
+import { sliceStr } from "../utils/string";
 
 // ===== Backend Constants =====
 
@@ -211,15 +211,15 @@ function applyAlias(specifier: string, config: ResolverConfig): string {
 // ===== Extension Detection =====
 
 function hasKnownExtension(specifier: string): boolean {
-	return endsWith(specifier, ".ms")
-		|| endsWith(specifier, ".cms")
-		|| endsWith(specifier, ".jms")
-		|| endsWith(specifier, ".rms")
-		|| endsWith(specifier, ".ems")
-		|| endsWith(specifier, ".wms")
-		|| endsWith(specifier, ".ts")
-		|| endsWith(specifier, ".js")
-		|| endsWith(specifier, ".h");
+	return specifier.endsWith(".ms")
+		|| specifier.endsWith(".cms")
+		|| specifier.endsWith(".jms")
+		|| specifier.endsWith(".rms")
+		|| specifier.endsWith(".ems")
+		|| specifier.endsWith(".wms")
+		|| specifier.endsWith(".ts")
+		|| specifier.endsWith(".js")
+		|| specifier.endsWith(".h");
 }
 
 // ===== Helpers =====

@@ -1,16 +1,6 @@
 // String Utilities - DRC-safe string helpers (no indexOf/includes)
 
 
-export function endsWith(s: string, suffix: string): boolean {
-	if (s.length < suffix.length) return false;
-	return sliceStr(s, s.length - suffix.length, s.length) === suffix;
-}
-
-export function startsWith(s: string, prefix: string): boolean {
-	if (s.length < prefix.length) return false;
-	return sliceStr(s, 0, prefix.length) === prefix;
-}
-
 export function trimStr(s: string): string {
 	let start = 0;
 	let end = s.length;
@@ -25,6 +15,20 @@ export function charAt(s: string, i: number): string {
 
 export function sliceStr(s: string, start: number, end: number): string {
 	return s.slice(start, end);
+}
+
+// Extract the part after the last occurrence of a delimiter.
+// "Kind.A" with "." → "A". "A" with "." → "A" (unchanged).
+export function bareAfterDelim(s: string, delim: string): string {
+	let result = s;
+	let i = 0;
+	while (i < s.length) {
+		if (charAt(s, i) === delim) {
+			result = sliceStr(s, i + 1, s.length);
+		}
+		i = i + 1;
+	}
+	return result;
 }
 
 export function findChar(s: string, ch: string): number {
@@ -70,13 +74,13 @@ export function parseIntStr(s: string): number {
 	return result;
 }
 
-test "endsWith match" { assert endsWith("hello.ms", ".ms"); }
+test "endsWith match" { assert "hello.ms".endsWith(".ms"); }
 
-test "endsWith no match" { assert !endsWith("hello.ms", ".js"); }
+test "endsWith no match" { assert !"hello.ms".endsWith(".js"); }
 
-test "endsWith too short" { assert !endsWith("ab", "abc"); }
+test "endsWith too short" { assert !"ab".endsWith("abc"); }
 
-test "endsWith exact" { assert endsWith(".h", ".h"); }
+test "endsWith exact" { assert ".h".endsWith(".h"); }
 
 // Parse number literals including hex (0x), binary (0b), octal (0o) prefixes.
 // Falls back to parseFloat for plain decimal/float.
@@ -131,10 +135,10 @@ test "parseNumberLiteral octal" { assert parseNumberLiteral("0o17") === 15; }
 test "parseNumberLiteral decimal" { assert parseNumberLiteral("42") === 42; }
 test "parseNumberLiteral float" { assert parseNumberLiteral("3.14") === 3.14; }
 
-test "startsWith match" { assert startsWith("std/testing", "std/"); }
+test "startsWith match" { assert "std/testing".startsWith("std/"); }
 
-test "startsWith no match" { assert !startsWith("./foo", "std/"); }
+test "startsWith no match" { assert !"./foo".startsWith("std/"); }
 
-test "startsWith too short" { assert !startsWith("st", "std/"); }
+test "startsWith too short" { assert !"st".startsWith("std/"); }
 
-test "startsWith exact" { assert startsWith("abc", "abc"); }
+test "startsWith exact" { assert "abc".startsWith("abc"); }

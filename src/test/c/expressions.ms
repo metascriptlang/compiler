@@ -1,49 +1,49 @@
 // E2E: Expressions → C output
 // Tests operator codegen: ternary, unary, logical, comparison.
 
-import { compileToC, contains } from "../helpers";
+import { compileToC } from "../helpers";
 
 
 test "E2E C: ternary expression" {
 	const src = "function f(n: number): number { return (n > 0) ? 1 : -1; }\nconst r = f(5);";
 	const c = compileToC(src);
 	assert c.ok;
-	assert contains(c.value,"?");
-	assert contains(c.value,":");
+	assert c.value.contains("?");
+	assert c.value.contains(":");
 }
 
 test "E2E C: unary not" {
 	const src = "function f(b: boolean): boolean { return !b; }\nconst r = f(true);";
 	const c = compileToC(src);
 	assert c.ok;
-	assert contains(c.value,"!");
+	assert c.value.contains("!");
 }
 
 test "E2E C: unary negation" {
 	const src = "function f(x: number): number { return -x; }\nconst r = f(5);";
 	const c = compileToC(src);
 	assert c.ok;
-	assert contains(c.value,"-");
+	assert c.value.contains("-");
 }
 
 test "E2E C: logical AND" {
 	const src = "function f(a: boolean, b: boolean): boolean { return a && b; }\nconst r = f(true, false);";
 	const c = compileToC(src);
 	assert c.ok;
-	assert contains(c.value,"&&");
+	assert c.value.contains("&&");
 }
 
 test "E2E C: logical OR" {
 	const src = "function f(a: boolean, b: boolean): boolean { return a || b; }\nconst r = f(true, false);";
 	const c = compileToC(src);
 	assert c.ok;
-	assert contains(c.value,"||");
+	assert c.value.contains("||");
 }
 
 test "E2E C: comparison operators" {
 	const src = "function inRange(x: number): boolean { return x >= 0 && x <= 100; }\nconst r = inRange(50);";
 	const c = compileToC(src);
 	assert c.ok;
-	assert contains(c.value,">=");
-	assert contains(c.value,"<=");
+	assert c.value.contains(">=");
+	assert c.value.contains("<=");
 }

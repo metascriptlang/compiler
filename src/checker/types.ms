@@ -4,6 +4,8 @@
 // with self-referencing anonymous struct types (MsAnon collision).
 // Function accessors instead of const singletons to avoid closure capture bugs.
 
+import { bareAfterDelim } from "../utils/string";
+
 
 
 // ===== Target Configuration (Implementation parity) =====
@@ -61,7 +63,7 @@ export enum TypeKind {
 // │ Map            │    —     │     —     │      —       │ keyType   │ valType  │     —     │
 // │ Set            │    —     │     —     │      —       │ elemType  │    —     │     —     │
 // │ Enum           │ name     │ members   │      —       │     —     │    —     │     —     │
-// │ Union          │    —     │     —     │ memberTypes  │     —     │    —     │     —     │
+// │ Union          │ aliasNm  │ disc+keys│ variantTypes │     —     │ discEnum │     —     │
 // │ Ref/Ptr        │    —     │     —     │      —       │ innerType │    —     │     —     │
 // │ Sink/Lent      │    —     │     —     │      —       │ innerType │    —     │     —     │
 // │ Distinct       │    —     │     —     │      —       │ innerType │    —     │     —     │
@@ -97,7 +99,7 @@ export interface Type {
 	typeChildren: Type[];     // Function params, Union types, Tuple elements, Object prop types
 	typeReturn: Type;         // Function return, Array element, Ref/Ptr/Distinct inner, Result okType
 	typeExtra: Type;          // Result errType, Map value, GenericInstance base
-	typeFlags: number;        // Bitfield: 1=isInterface, 2=optional, 4=readonly, 8=static; bits 8-15=minArity
+	typeFlags: int32;         // Bitfield: 1=isInterface, 2=optional, 4=readonly, 8=static; bits 8-15=minArity
 	callConv: CallingConvention; // Function calling convention (Standard parity)
 	attachedOps: string[];    // Lifecycle hook names indexed by AttachedOp (Standard parity)
 }
@@ -213,10 +215,11 @@ export function createUnion(types: Type[]): Type {
 	return t;
 }
 
-// Find which union variant contains ALL the given field names.
-// Reference: lookupInRecordAndBuildCheck — searches variant branches by field name.
+// Find which union variant contains ALL the given field names (and optionally types).
+// When fieldTypes is non-empty, also checks type kind to disambiguate variants with
+// same field names but different types (e.g., { value: number } vs { value: string }).
 // Returns the variant index, or -1 if no variant matches.
-export function findUnionVariant(unionType: Type, fieldNames: string[]): number {
+export function findUnionVariant(unionType: Type, fieldNames: string[], fieldTypes: Type[]): number {
 	if (unionType.typeChildren === null || fieldNames.length === 0) return -1;
 	let vi = 0;
 	while (vi < unionType.typeChildren.length) {
@@ -229,7 +232,15 @@ export function findUnionVariant(unionType: Type, fieldNames: string[]): number 
 				let fi = 0;
 				while (fi < variant.typeNames.length) {
 					if (variant.typeNames[fi] === fieldNames[ti]) {
-						found = true;
+						// When fieldTypes provided, also match by type kind to disambiguate
+						// variants with same field names but different types
+						if (fieldTypes.length > ti && fi < variant.typeChildren.length) {
+							if (variant.typeChildren[fi].kind === fieldTypes[ti].kind) {
+								found = true;
+							}
+						} else {
+							found = true;
+						}
 						fi = variant.typeNames.length;
 					}
 					fi = fi + 1;
@@ -243,6 +254,47 @@ export function findUnionVariant(unionType: Type, fieldNames: string[]): number 
 			if (allFound) return vi;
 		}
 		vi = vi + 1;
+	}
+	return -1;
+}
+
+// Find a field's type within a single variant struct. Returns null if not found.
+export function findFieldInVariant(variant: Type, fieldName: string): Type {
+	if (variant === null || variant.typeNames === null) return null as unknown as Type;
+	let i = 0;
+	while (i < variant.typeNames.length) {
+		if (variant.typeNames[i] === fieldName && i < variant.typeChildren.length) {
+			return variant.typeChildren[i];
+		}
+		i = i + 1;
+	}
+	return null as unknown as Type;
+}
+
+// Check if a union type is a discriminated union (has discriminant metadata).
+// Discriminated unions have typeExtra (enum type) and typeNames[0] (discriminant field name).
+export function isDiscriminatedUnion(t: Type): boolean {
+	return t.kind === TypeKind.Union && t.typeExtra !== null && t.typeNames !== null && t.typeNames.length > 0;
+}
+
+// Get the discriminant field name from a discriminated union.
+export function getDiscriminantName(t: Type): string {
+	if (t.typeNames !== null && t.typeNames.length > 0) return t.typeNames[0];
+	return "";
+}
+
+// Find variant index by discriminant enum value name (e.g. "NumLit" or "NodeKind.NumLit").
+// typeNames layout: [discFieldName, key0, key1, ...] — keys start at index 1.
+// Matches both qualified ("Kind.A") and unqualified ("A") against stored keys.
+export function findVariantByDiscriminant(unionType: Type, enumValue: string): number {
+	if (unionType.typeNames === null || unionType.typeNames.length < 2) return -1;
+	const queryBare = bareAfterDelim(enumValue, ".");
+	let i = 1;
+	while (i < unionType.typeNames.length) {
+		const stored = unionType.typeNames[i];
+		if (stored === enumValue) return i - 1;
+		if (bareAfterDelim(stored, ".") === queryBare) return i - 1;
+		i = i + 1;
 	}
 	return -1;
 }
@@ -266,7 +318,7 @@ export function createMaybeType(inner: Type): Type {
 	t.typeName = "Maybe_" + name;
 	t.typeNames = ["value", "present"];
 	t.typeChildren = [inner, booleanType()];
-	t.typeFlags = 1 | 16;   // isInterface (bit 0) + isMaybe (bit 4)
+	t.typeFlags = 17;       // isInterface (bit 0) + isMaybe (bit 4)
 	t.typeReturn = inner;    // store inner type for unwrapping
 	_maybeCache.push(t);
 	_maybeCacheNames.push(name);
@@ -360,13 +412,13 @@ export function cstringType(): Type { return getSysType(TypeKind.CString); }
 // Stores minArity + 1 so that 0 means "not set" (backward compatible).
 
 export function setMinArity(t: Type, minArity: number): void {
-	t.typeFlags = (t.typeFlags & 0xFF) | ((minArity + 1) << 8);
+	t.typeFlags = (t.typeFlags & 0xFF) | (((minArity as int32) + 1) << 8);
 }
 
 export function getMinArity(t: Type): number {
-	const encoded = (t.typeFlags >> 8) & 0xFF;
+	const encoded: int32 = (t.typeFlags >> 8) & 0xFF;
 	if (encoded === 0) return t.typeChildren.length;
-	return encoded - 1;
+	return (encoded - 1) as number;
 }
 
 // ===== Attached Ops Helpers (Implementation parity) =====
@@ -406,13 +458,13 @@ export function tupleTypeName(t: Type): string {
 		i += 1;
 	}
 	// DJB2 hash → base36 (matches hashToBase36 in codegen)
-	let hash: number = 5381;
+	let hash: int32 = 5381;
 	let j = 0;
 	while (j < key.length) {
-		hash = ((hash * 33) + key.charCodeAt(j)) & 0x7FFFFFFF;
+		hash = ((hash * 33) + (key.charCodeAt(j) as int32)) & 0x7FFFFFFF;
 		j += 1;
 	}
-	return "msTuple_" + hash.toString(36);
+	return "msTuple_" + (hash as number).toString(36);
 }
 
 // typeKey for tuples — matches codegen/c/types.ms:typeKey
@@ -728,6 +780,31 @@ export function isIntegerType(t: Type): boolean {
 		t.kind === TypeKind.Uint32 || t.kind === TypeKind.Uint64;
 }
 
+// Integer rank for narrowing detection (higher = wider range)
+// Parity: Nim's firstOrd/lastOrd comparison in transf.nim transformConv
+export function integerRank(t: Type): number {
+	return match (t.kind) {
+		TypeKind.Int8   => 1,
+		TypeKind.Uint8  => 2,
+		TypeKind.Int16  => 3,
+		TypeKind.Uint16 => 4,
+		TypeKind.Int32  => 5,
+		TypeKind.Uint32 => 6,
+		TypeKind.Int64  => 7,
+		TypeKind.Uint64 => 8,
+		TypeKind.Number => 9,
+		_ => 0,
+	};
+}
+
+// Returns true when source → target is a narrowing integer conversion
+// Parity: Nim sigmatch.nim isIntConv — narrowing needs HiddenStdConv + range check
+export function isNarrowingIntConv(source: Type, target: Type): boolean {
+	if (!isIntegerType(target)) return false;
+	if (!isIntegerType(source) && source.kind !== TypeKind.Number) return false;
+	return integerRank(source) > integerRank(target);
+}
+
 export function isStringType(t: Type): boolean {
 	return t.kind === TypeKind.String;
 }
@@ -764,6 +841,32 @@ export function getProperty(t: Type, name: string): Type {
 			}
 			i += 1;
 		}
+	}
+	// Union field access: search all variants for the field.
+	// For discriminated unions, the discriminant field maps to _tag.
+	if (t.kind === TypeKind.Union && t.typeChildren !== null) {
+		// Check discriminant field first (e.g. "kind" on a discriminated union)
+		if (t.typeExtra !== null && t.typeNames !== null && t.typeNames.length > 0) {
+			if (t.typeNames[0] === name) {
+				return t.typeExtra; // discriminant field returns the enum type
+			}
+		}
+		// Search variants for the field — return type if unambiguous across variants
+		let foundType = null as unknown as Type;
+		let ambiguous = false;
+		for (const variant of t.typeChildren) {
+			const ft = findFieldInVariant(variant, name);
+			if (ft !== null) {
+				if (foundType === null) {
+					foundType = ft;
+				} else if (foundType.kind !== ft.kind) {
+					ambiguous = true;
+				}
+			}
+		}
+		if (foundType !== null && !ambiguous) return foundType;
+		// Ambiguous fields (same name, different types across variants) require `as` cast
+		if (foundType !== null) return foundType; // return first match — runtime guard needed
 	}
 	// Result fields: ok (boolean), value (T), error (E)
 	if (t.kind === TypeKind.Result) {

@@ -4,7 +4,7 @@
 // emits `void data` in C instead of the actual DocData struct.
 
 import { checkSource } from "./helpers";
-import { compileToC, contains } from "../helpers";
+import { compileToC } from "../helpers";
 import { TypeKind } from "../../checker/types";
 
 test "union type alias resolves to TypeKind.Union in checker" {
@@ -49,9 +49,9 @@ test "union type param emits struct, not void" {
 	console.log(cCode);
 	console.log("=== END ===");
 	// The union param should NOT be emitted as 'void'
-	assert !contains(cCode, "void data");
+	assert !cCode.contains("void data");
 	// It should contain the MyData type name
-	assert contains(cCode, "MyData");
+	assert cCode.contains("MyData");
 }
 
 test "union type param in class factory" {
@@ -79,6 +79,6 @@ test "union type param in class factory" {
 		assert false;
 	}
 	const cCode = r.value;
-	assert !contains(cCode, "void data");
-	assert contains(cCode, "DocData");
+	assert !cCode.contains("void data");
+	assert cCode.contains("DocData");
 }

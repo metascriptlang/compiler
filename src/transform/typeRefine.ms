@@ -27,7 +27,7 @@ import { Type, TypeKind, isNumeric, numberType, booleanType, stringType, charTyp
 import { ExportRegistry } from "../checker/context";
 import { TransformContext } from "./context";
 import { mapChildren } from "./walker";
-import { endsWith, startsWith, charAt, sliceStr, trimStr } from "../utils/string";
+import { charAt, sliceStr, trimStr } from "../utils/string";
 
 // ===== Scope Stack =====
 // Parallel arrays per scope level (MetaScript has no Map built-in).
@@ -160,7 +160,7 @@ function resolveFieldTypeName(rawType: string): Type {
 	if (rawType === "boolean") return booleanType();
 	if (rawType === "void") return null as unknown as Type;
 	// Array types: "T[]"
-	if (endsWith(rawType, "[]")) {
+	if (rawType.endsWith("[]")) {
 		const inner = sliceStr(rawType, 0, rawType.length - 2);
 		const innerType = resolveFieldTypeName(inner);
 		if (innerType !== null) return createArray(innerType);
@@ -233,7 +233,7 @@ function rederiveMemberType(node: Node): void {
 				pi = pi + 1;
 			}
 		}
-	} else if (ot.kind === TypeKind.TypeReference && ot.typeName !== null && startsWith(ot.typeName, "{")) {
+	} else if (ot.kind === TypeKind.TypeReference && ot.typeName !== null && ot.typeName.startsWith("{")) {
 		// Structural TypeReference: parse field type from typeName string
 		// Format: "{ name : type , name2 : type2 }"
 		const fieldType = extractFieldTypeFromStructural(ot.typeName, prop);
@@ -454,8 +454,8 @@ function registryTypeLookup(name: string): Type {
 // Last resort when resolvedSym, scope, and registry all fail.
 function desperationHeuristic(name: string): Type {
 	// Suffix-based: *Type/*type → Type, *Sym → Symbol
-	if (endsWith(name, "Type") || endsWith(name, "type")) return registryTypeLookup("Type");
-	if (endsWith(name, "Sym")) return registryTypeLookup("Symbol");
+	if (name.endsWith("Type") || name.endsWith("type")) return registryTypeLookup("Type");
+	if (name.endsWith("Sym")) return registryTypeLookup("Symbol");
 
 	// Exact match: common AST variable names → Node
 	if (name === "node" || name === "stmt" || name === "elem" || name === "arg" ||

@@ -7,7 +7,13 @@ import {
 	TypeKind, createStruct, createRef, createPtr,
 	numberType, stringType, createMaybeType,
 } from "../../checker/types";
-import { ccgIntroducedPtr } from "../../codegen/c/types";
+import { ccgIntroducedPtr, isPointerType } from "../../codegen/c/types";
+import { fullPipeline, findFnDecl } from "./helpers";
+import {
+	Node, NodeKind, ProgramData, ExportDeclData,
+	FunctionDeclData, CallExprData, BlockStmtData,
+	IfStmtData, ReturnStmtData, ExprStmtData,
+} from "../../ast/node";
 
 test "ccgIntroducedPtr: small struct = false" {
 	const t = createStruct("Small", ["x", "y"], [numberType(), numberType()], true);
@@ -57,4 +63,205 @@ test "ccgIntroducedPtr: collapsed Maybe<Ref<T>> = false" {
 	const ref = createRef(inner);
 	const maybe = createMaybeType(ref);
 	assert !ccgIntroducedPtr(maybe);
+}
+
+// ===== E2E: Verify call-site C output =====
+
+import { compileToC } from "../helpers";
+
+// When both caller and callee have ccgIntroducedPtr params (BigStruct*),
+// the call site must pass the pointer directly — not dereference *(param).
+test "E2E ccgPtr: direct call" {
+	const src = "interface BigS { a: number; b: number; c: number; d: number; e: string }\n" +
+		"export function process(item: BigS): number { return item.a; }\n" +
+		"export function caller(item: BigS): number { return process(item); }";
+	const c = compileToC(src);
+	console.log("=== DIRECT ===");
+	if (c.ok) { console.log(c.value); } else { console.log("ERR: " + c.error); }
+}
+
+test "E2E ccgPtr: match expression" {
+	const src = "interface BigS { kind: number; value: number; name: string; extra: string }\n" +
+		"export function handleA(d: BigS): number { return d.value; }\n" +
+		"export function handleB(d: BigS): number { return d.kind; }\n" +
+		"export function dispatch(d: BigS): number {\n" +
+		"  return match (d.kind) {\n" +
+		"    1 => handleA(d),\n" +
+		"    2 => handleB(d),\n" +
+		"    _ => 0,\n" +
+		"  };\n" +
+		"}";
+	const c = compileToC(src);
+	console.log("=== MATCH ===");
+	if (c.ok) { console.log(c.value); } else { console.log("ERR: " + c.error); }
+}
+
+test "E2E ccgPtr: static fns in match (real pattern)" {
+	const src = "interface BigS { kind: number; value: number; name: string; extra: string }\n" +
+		"function handleA(d: BigS): BigS { return d; }\n" +
+		"function handleB(d: BigS): BigS { return d; }\n" +
+		"export function dispatch(d: BigS): BigS {\n" +
+		"  return match (d.kind) {\n" +
+		"    1 => handleA(d),\n" +
+		"    2 => handleB(d),\n" +
+		"    _ => d,\n" +
+		"  };\n" +
+		"}";
+	const c = compileToC(src);
+	console.log("=== STATIC MATCH ===");
+	if (c.ok) { console.log(c.value); } else { console.log("ERR: " + c.error); }
+}
+
+test "E2E ccgPtr: walkNode callback pattern" {
+	const src = "interface BigS { kind: number; value: number; name: string; extra: string }\n" +
+		"type Walker = (node: BigS) => BigS;\n" +
+		"function walkNode(node: BigS, walker: Walker): BigS { return walker(node); }\n" +
+		"function foldBinary(node: BigS): BigS { return node; }\n" +
+		"function foldNode(node: BigS): BigS {\n" +
+		"  if (node.kind === 1) { return foldBinary(node); }\n" +
+		"  return node;\n" +
+		"}\n" +
+		"export function main(node: BigS): BigS { return walkNode(node, foldNode); }";
+	const c = compileToC(src);
+	console.log("=== WALKNODE ===");
+	if (c.ok) { console.log(c.value); } else { console.log("ERR: " + c.error); }
+}
+
+test "E2E ccgPtr: class type (Ref) call" {
+	const src = "class Foo { kind: number; value: number; name: string; extra: string }\n" +
+		"export function process(item: Foo): Foo { return item; }\n" +
+		"export function caller(item: Foo): Foo { return process(item); }";
+	const c = compileToC(src);
+	console.log("=== CLASS ===");
+	if (c.ok) { console.log(c.value); } else { console.log("ERR: " + c.error); }
+}
+
+test "E2E ccgPtr: class if/else — static callee" {
+	const src = "class Item { kind: number; value: number; name: string }\n" +
+		"function handleA(item: Item): Item { return item; }\n" +
+		"export function dispatch(item: Item): Item {\n" +
+		"  if (item.kind === 1) { return handleA(item); }\n" +
+		"  return item;\n" +
+		"}";
+	const c = compileToC(src);
+	console.log("=== STATIC CALLEE ===");
+	if (c.ok) { console.log(c.value); } else { console.log("ERR: " + c.error); }
+}
+
+test "E2E ccgPtr: class if/else — exported callee" {
+	const src = "class Item { kind: number; value: number; name: string }\n" +
+		"export function handleA(item: Item): Item { return item; }\n" +
+		"export function dispatch(item: Item): Item {\n" +
+		"  if (item.kind === 1) { return handleA(item); }\n" +
+		"  return item;\n" +
+		"}";
+	const c = compileToC(src);
+	console.log("=== EXPORTED CALLEE ===");
+	if (c.ok) { console.log(c.value); } else { console.log("ERR: " + c.error); }
+}
+
+test "AST: resolvedSym on call — static vs exported callee" {
+	// Use compileToC but also inspect the AST via fullPipeline
+	// The fullPipeline includes transforms but NOT DRC or codegen
+	const src = "class Item { kind: number; value: number; name: string }\n" +
+		"export function handleA(item: Item): Item { return item; }\n" +
+		"export function handleB(item: Item): Item { return item; }\n" +
+		"export function dispatch(item: Item): Item {\n" +
+		"  if (item.kind === 1) { return handleA(item); }\n" +
+		"  return handleB(item);\n" +
+		"}";
+	const ast = fullPipeline(src);
+	if (ast === null) { console.log("AST is null"); return; }
+	console.log("AST kind=" + ast.kind + " Program=" + NodeKind.Program);
+	const pd = ast.data as ProgramData;
+	console.log("stmts=" + pd.programStmts.length);
+	let i = 0;
+	while (i < pd.programStmts.length) {
+		const s = pd.programStmts[i];
+		let inner = s;
+		// Unwrap ExportDecl
+		if (inner.kind === NodeKind.ExportDecl) {
+			const ed = inner.data as ExportDeclData;
+			inner = ed.exportedDecl;
+		}
+		if (inner.kind === NodeKind.FunctionDecl) {
+			const fd = inner.data as FunctionDeclData;
+			console.log("  fn: " + fd.fnName);
+			if (fd.fnName === "dispatch") {
+				walkCalls(fd.fnBody);
+			}
+		}
+		i = i + 1;
+	}
+}
+
+function walkCalls(node: Node): void {
+	if (node === null) return;
+	console.log("  walk kind=" + node.kind);
+	if (node.kind === NodeKind.CallExpr) {
+		const cd = node.data as CallExprData;
+		const sym = node.resolvedSym;
+		const name = sym !== null ? sym.name : "null";
+		let info = "CALL " + name + ": resolvedSym=" + (sym !== null ? "Y" : "N");
+		if (sym !== null && sym.symbolType !== null) {
+			const st = sym.symbolType;
+			info = info + " symTypeKind=" + st.kind;
+			if (st.typeChildren !== null && st.typeChildren.length > 0) {
+				info = info + " param0Kind=" + st.typeChildren[0].kind + " param0IsPtr=" + isPointerType(st.typeChildren[0]);
+			}
+		}
+		if (cd.callee.nodeType !== null) {
+			const cnt = cd.callee.nodeType;
+			info = info + " calleeNTKind=" + cnt.kind;
+			if (cnt.typeChildren !== null && cnt.typeChildren.length > 0) {
+				info = info + " cParam0Kind=" + cnt.typeChildren[0].kind + " cParam0IsPtr=" + isPointerType(cnt.typeChildren[0]);
+			}
+		}
+		if (cd.arguments.length > 0) {
+			const a = cd.arguments[0];
+			info = info + " arg0Kind=" + a.kind + " arg0NTKind=" + (a.nodeType !== null ? a.nodeType.kind : -1);
+		}
+		console.log(info);
+		return;
+	}
+	if (node.kind === NodeKind.BlockStmt) {
+		const bd = node.data as BlockStmtData;
+		let j = 0;
+		while (j < bd.statements.length) { walkCalls(bd.statements[j]); j = j + 1; }
+	} else if (node.kind === NodeKind.IfStmt) {
+		const id = node.data as IfStmtData;
+		walkCalls(id.consequent);
+		if (id.alternate !== null) walkCalls(id.alternate);
+	} else if (node.kind === NodeKind.ReturnStmt) {
+		const rd = node.data as ReturnStmtData;
+		walkCalls(rd.argument);
+	} else if (node.kind === NodeKind.ExprStmt) {
+		const ed = node.data as ExprStmtData;
+		walkCalls(ed.expr);
+	}
+}
+
+test "E2E ccgPtr: class type in match arms" {
+	const src = "class Item { kind: number; value: number; name: string }\n" +
+		"function handleA(item: Item): Item { return item; }\n" +
+		"function handleB(item: Item): Item { return item; }\n" +
+		"export function dispatch(item: Item): Item {\n" +
+		"  return match (item.kind) {\n" +
+		"    1 => handleA(item),\n" +
+		"    2 => handleB(item),\n" +
+		"    _ => item,\n" +
+		"  };\n" +
+		"}";
+	const c = compileToC(src);
+	console.log("=== CLASS MATCH ===");
+	if (c.ok) { console.log(c.value); } else { console.log("ERR: " + c.error); }
+}
+
+test "E2E ccgPtr: closure call" {
+	const src = "interface BigS { kind: number; value: number; name: string; extra: string }\n" +
+		"type Handler = (d: BigS) => number;\n" +
+		"export function run(h: Handler, d: BigS): number { return h(d); }";
+	const c = compileToC(src);
+	console.log("=== CLOSURE ===");
+	if (c.ok) { console.log(c.value); } else { console.log("ERR: " + c.error); }
 }

@@ -3,7 +3,7 @@
 // Each handler: extract params → query Trans-Am → call suggest.ms → format JSON.
 // No I/O — returns JSON strings. server.ms handles stdin/stdout.
 
-import { sliceStr, charAt, startsWith } from "../../utils/string";
+import { sliceStr, charAt } from "../../utils/string";
 import {
 	TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck,
 	getFileText, getFileId, getFilePath,
@@ -387,7 +387,7 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 	const prefix = sgGetPrefix(source, pos.line, pos.col);
 
 	// Cache hit: same file, same line, prefix extends previous — filter instantly
-	if (cache.uri === pos.uri && cache.line === pos.line && prefix.length >= cache.prefix.length && startsWith(prefix, cache.prefix)) {
+	if (cache.uri === pos.uri && cache.line === pos.line && prefix.length >= cache.prefix.length && prefix.startsWith(cache.prefix)) {
 		const filtered = filterCompletionItems(cache.items, prefix);
 		cache.prefix = prefix;
 		cache.items = filtered;
@@ -477,7 +477,7 @@ function filterCompletionItems(items: string[], prefix: string): string[] {
 	const result: string[] = [];
 	for (let i = 0; i < items.length; i = i + 1) {
 		const label = lspGetField(items[i], "label");
-		if (startsWith(label, prefix)) {
+		if (label.startsWith(prefix)) {
 			result.push(items[i]);
 		}
 	}

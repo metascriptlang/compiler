@@ -8,7 +8,7 @@
 // get wrapped with a runtime range check call.
 
 import {
-	Node, NodeKind, SourceLocation, TypeAssertionData,
+	Node, NodeKind, SourceLocation, TypeAssertionData, HiddenStdConvData,
 } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -16,6 +16,7 @@ import { makeCall, makeIdent, makeNumber } from "../util";
 import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";
 import { ExprStmtData } from "../../ast/node";
 import { createTransformContext } from "../context";
+import { Type, TypeKind, typeNameOf } from "../../checker/types";
 
 // ===== Helpers =====
 
@@ -63,12 +64,60 @@ export function injectRangeChecks(program: Node, ctx: TransformContext): Node {
 	return program;
 }
 
+// Parity: Nim transf.nim transformConv — convert HiddenStdConv with narrowing integer to range check.
+// Nim checks firstOrd(dest) <= firstOrd(source) && lastOrd(source) <= lastOrd(dest) to skip checks.
+// We use getRangeCheckForTypeKind which returns "" for non-narrowing types.
+function getRangeCheckForTypeKind(kind: TypeKind): string {
+	return match (kind) {
+		TypeKind.Int8   => "msCheckRangeI8",
+		TypeKind.Uint8  => "msCheckRangeU8",
+		TypeKind.Int16  => "msCheckRangeI16",
+		TypeKind.Uint16 => "msCheckRangeU16",
+		TypeKind.Int32  => "msCheckRangeI32",
+		TypeKind.Uint32 => "msCheckRangeU32",
+		_ => "",
+	};
+}
+
+function getRangeMinForKind(kind: TypeKind): number {
+	return match (kind) {
+		TypeKind.Int8   => -128,
+		TypeKind.Int16  => -32768,
+		TypeKind.Int32  => -2147483648,
+		TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 => 0,
+		_ => 0,
+	};
+}
+
+function getRangeMaxForKind(kind: TypeKind): number {
+	return match (kind) {
+		TypeKind.Int8   => 127,
+		TypeKind.Uint8  => 255,
+		TypeKind.Int16  => 32767,
+		TypeKind.Uint16 => 65535,
+		TypeKind.Int32  => 2147483647,
+		TypeKind.Uint32 => 4294967295,
+		_ => 0,
+	};
+}
+
 function rangeCheckVisitor(node: Node): Node {
-	if (node.kind !== NodeKind.TypeAssertion) return node;
-	const d = node.data as TypeAssertionData;
-	const fnName = getRangeCheckFn(d.asType);
-	if (fnName === "") return node;
-	return makeRangeCheck(d.asExpr, fnName, getRangeMin(d.asType), getRangeMax(d.asType), node.location);
+	// Explicit casts: x as int8 → msCheckRangeI8(x, -128, 127)
+	if (node.kind === NodeKind.TypeAssertion) {
+		const d = node.data as TypeAssertionData;
+		const fnName = getRangeCheckFn(d.asType);
+		if (fnName === "") return node;
+		return makeRangeCheck(d.asExpr, fnName, getRangeMin(d.asType), getRangeMax(d.asType), node.location);
+	}
+	// Parity: Nim transformConv — implicit narrowing via HiddenStdConv
+	if (node.kind === NodeKind.HiddenStdConv) {
+		const d = node.data as HiddenStdConvData;
+		if (d.convType === null) return node;
+		const fnName = getRangeCheckForTypeKind(d.convType.kind);
+		if (fnName === "") return node;
+		return makeRangeCheck(d.convExpr, fnName, getRangeMinForKind(d.convType.kind), getRangeMaxForKind(d.convType.kind), node.location);
+	}
+	return node;
 }
 
 // Helper: build a range check call (exported for C codegen use)

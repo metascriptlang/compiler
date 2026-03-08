@@ -18,6 +18,7 @@ import {
 	Type, TypeKind,
 	unknownType, nullType, stringType, charType, numberType,
 	createUnion, isMaybeType, unwrapMaybeType,
+	isNarrowingIntConv,
 } from "./types";
 import {
 	Symbol, SymbolKind, SymbolState, ScopeKind,
@@ -34,7 +35,7 @@ import { resolveDeclarations, resolveAnnotation, ensureShaped } from "./resolveP
 import { inferOwnership } from "./ownershipInference";
 import { validateTypedAST } from "./validate";
 import { sliceStr } from "../utils/string";
-import { checkExpr, checkEnumExhaustiveness } from "./checkExprPass";
+import { checkExpr, checkEnumExhaustiveness, fitNode } from "./checkExprPass";
 import { registerCheckStmt } from "./checkerCallbacks";
 import { parseSource } from "../parser/statements/validation";
 
@@ -110,6 +111,10 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		declType = resolveAnnotation(d.declType, ctx);
 	}
 	const initType = checkExpr(ctx, d.initializer, declType);
+	// Parity: Nim fitNode — insert HiddenStdConv for narrowing integer conversions
+	if (declType !== null && d.initializer !== null) {
+		d.initializer = fitNode(ctx, d.initializer, declType, initType);
+	}
 	// Prefer explicit type annotation over inferred type
 	let varType = initType;
 	if (declType !== null) {
@@ -564,6 +569,10 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 			returnExpected = ctx.currentFunction.symbolType.typeReturn;
 		}
 		const retType = checkExpr(ctx, d.argument, returnExpected);
+		// Parity: Nim fitNode — insert HiddenStdConv for narrowing return
+		if (returnExpected !== null) {
+			d.argument = fitNode(ctx, d.argument, returnExpected, retType);
+		}
 		// Track inferred return type (first return wins)
 		if (ctx.inferredReturn.kind === TypeKind.Unknown) {
 			ctx.inferredReturn = retType;

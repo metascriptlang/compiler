@@ -3,7 +3,7 @@
 
 import {
 	Node, NodeKind, NodeData, createNode, NodeFlag,
-	IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData,
+	IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData,
 	CallExprData, MemberExprData, ArrayAccessData,
 	ObjectLiteralData, ArrayLiteralData, ConditionalExprData,
 	TypeAssertionData, SpreadExprData, NewExprData, TryExprData,
@@ -19,15 +19,15 @@ import {
 	voidType, nullType, errorType,
 	createArray, createSpan, createFunction, createTypeRef, substituteType, instantiateGeneric,
 	isNumeric, isIntegerType, isStringType, isCallable, getReturnType, getElementType, getProperty, sizeOfType,
-	typeNameOf, unwrapRef, findUnionVariant,
+	typeNameOf, unwrapRef, isDiscriminatedUnion, findVariantByDiscriminant, findFieldInVariant,
 	unifyType, createUnifyBindings, hasGenericParams,
-	getMinArity,
+	getMinArity, isNarrowingIntConv,
 } from "./types";
 import {
 	Symbol, SymbolKind, ScopeKind, SymbolState,
 	defineSymbol, lookupSymbol, makeSymbol, openScope, closeScope, hasOverloads,
 } from "./symbol";
-import { CheckerContext, addError, findAllExtensionsByName, ExtensionMethod, isCancelled } from "./context";
+import { CheckerContext, addError, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled } from "./context";
 import {
 	scoreCandidate, isAssignable, needsStdConv, resolveOverloadIdx,
 	findFirstMismatch, typeRelation, TypeRelation,
@@ -35,7 +35,7 @@ import {
 } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
 import { resolveAnnotation, ensureShaped } from "./resolvePass";
-import { parseNumberLiteral, sliceStr, findChar } from "../utils/string";
+import { parseNumberLiteral, sliceStr, findChar, charAt } from "../utils/string";
 
 // ===== Standard-Aligned Extension Receiver Matching =====
 // Standard reference pattern for extension matching compares nominal types by identity.
@@ -104,7 +104,23 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 	if (isCancelled(ctx.cancelCtx, ctx.cancelVersion)) return unknownType();
 
 	const result = match (node.kind) {
-		NodeKind.NumberLiteral | NodeKind.BigIntLiteral => numberType(),
+		NodeKind.NumberLiteral => {
+			if (expectedType !== null && isIntegerType(expectedType)) {
+				if (literalFitsInType(node, expectedType)) {
+					expectedType;
+				} else if (isNodeIntLit(node)) {
+					// Reference parity: Nim changeType emits compile-time error for out-of-range literals
+					const v = (node.data as NumberLiteralData).value;
+					addError(ctx, "cannot convert " + v + " to " + typeNameOf(expectedType), node.location.line, node.location.column);
+					expectedType;
+				} else {
+					numberType();
+				}
+			} else {
+				numberType();
+			}
+		},
+		NodeKind.BigIntLiteral => numberType(),
 		NodeKind.StringLiteral => stringType(),
 		NodeKind.BooleanLiteral => booleanType(),
 		NodeKind.NullLiteral => nullType(),
@@ -126,22 +142,44 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			const leftType = checkExpr(ctx, d.left, null as unknown as Type);
 			// For assignment, pass LHS type as expectedType to RHS
 			const rightExpected = (d.operator === "=") ? leftType : null as unknown as Type;
-			const rightType = checkExpr(ctx, d.right, rightExpected);
+			let rightType = checkExpr(ctx, d.right, rightExpected);
+			// Parity: Nim fitNode — insert HiddenStdConv for narrowing assignment
+			if (d.operator === "=" && leftType !== null) {
+				d.right = fitNode(ctx, d.right, leftType, rightType);
+			}
+			// Post-hoc literal coercion: if one side is integer and other is fitting literal, coerce
+			let effLeft = leftType;
+			let effRight = rightType;
+			if (isIntegerType(leftType) && rightType !== null && rightType.kind === TypeKind.Number
+				&& isNodeIntLit(d.right) && literalFitsInType(d.right, leftType)) {
+				effRight = leftType;
+				d.right.nodeType = leftType;
+			} else if (isIntegerType(rightType) && leftType !== null && leftType.kind === TypeKind.Number
+				&& isNodeIntLit(d.left) && literalFitsInType(d.left, rightType)) {
+				effLeft = rightType;
+				d.left.nodeType = rightType;
+			}
 			// Bitwise ops require integer operands (reference parity: no float overloads)
 			if (isBitwiseBinaryOp(d.operator)) {
-				checkBitwiseOperands(ctx, d.operator, leftType, rightType, node);
+				checkBitwiseOperands(ctx, d.operator, effLeft, effRight, node);
 			}
-			inferBinaryOp(d.operator, leftType, rightType);
+			inferBinaryOp(d.operator, effLeft, effRight);
 		},
 		NodeKind.UnaryExpr => {
 			const d = node.data as UnaryExprData;
-			const operandType = checkExpr(ctx, d.operand, null as unknown as Type);
-			// Bitwise NOT requires integer operand (reference parity)
-			if (d.unaryOp === "~" && (operandType === null || !isIntegerType(operandType))) {
-				const name = operandType !== null ? typeNameOf(operandType) : "unknown";
-				addError(ctx, "bitwise NOT '~' requires integer type, got '" + name + "'", node.location.line, node.location.column);
+			// Propagate expectedType through unary +/- for literal coercion (e.g., -128 → int8)
+			const unaryExpected = (d.unaryOp === "-" || d.unaryOp === "+") ? expectedType : null as unknown as Type;
+			const operandType = checkExpr(ctx, d.operand, unaryExpected);
+			// Bitwise NOT: integer/enum = ok, number = warn, other = error
+			if (d.unaryOp === "~") {
+				if (operandType !== null && operandType.kind === TypeKind.Number) {
+					addWarning(ctx, "bitwise NOT '~' on 'number' implicitly casts to int32; prefer explicit integer type", node.location.line, node.location.column);
+				} else if (!isBitwiseAllowed(operandType)) {
+					const name = operandType !== null ? typeNameOf(operandType) : "unknown";
+					addError(ctx, "bitwise NOT '~' requires integer type, got '" + name + "'", node.location.line, node.location.column);
+				}
 			}
-			inferUnaryOp(d.unaryOp);
+			inferUnaryOp(d.unaryOp, operandType);
 		},
 		NodeKind.UpdateExpr => {
 			const d = node.data as UpdateExprData;
@@ -189,6 +227,10 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 					fi = fi + 1;
 				}
 				expectedType;
+			} else if (expectedType !== null && expectedType.kind === TypeKind.Union
+				&& isDiscriminatedUnion(expectedType)) {
+				// Discriminated union construction validation
+				checkDiscriminatedConstruction(ctx, node, d, expectedType);
 			} else {
 				for (const prop of d.properties) {
 					checkExpr(ctx, prop, null as unknown as Type);
@@ -233,16 +275,10 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			const d = node.data as TypeAssertionData;
 			const srcType = checkExpr(ctx, d.asExpr, null as unknown as Type);
 			const targetType = (d.asType !== "") ? resolveAnnotation(d.asType, ctx) : unknownType();
-			// Union variant resolution — reference: lookupInRecordAndBuildCheck.
-			// When narrowing `unionExpr as { field: T }`, resolve to the full variant
-			// so the C backend emits the correct named struct (e.g., DocData_v3).
-			let resolved = targetType;
-			if (srcType.kind === TypeKind.Union && targetType.kind === TypeKind.Struct
-				&& targetType.typeNames !== null && targetType.typeNames.length > 0) {
-				const vi = findUnionVariant(srcType, targetType.typeNames);
-				if (vi >= 0) { resolved = srcType.typeChildren[vi]; }
-			}
-			node.nodeType = resolved;
+			// Nim parity: cast just sets result.typ = targetType, no variant resolution.
+			// Field type info is already in targetType (from type alias or inline struct).
+			// C codegen handles variant index resolution at emission time.
+			node.nodeType = targetType;
 			node.nodeType;
 		},
 		NodeKind.SpreadExpr => {
@@ -338,15 +374,23 @@ function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
 			if (isStringType(leftType) || isStringType(rightType)) return stringType();
 			if (leftType !== null && leftType.kind === TypeKind.Ptr) return leftType;
 			if (rightType !== null && rightType.kind === TypeKind.Ptr) return rightType;
+			// Reference parity: int32 + int32 → int32 (magic proc preserves type)
+			if (isIntegerType(leftType) && isIntegerType(rightType) && leftType.kind === rightType.kind) return leftType;
 			if (isNumeric(leftType) && isNumeric(rightType)) return numberType();
 			unknownType();
 		},
 		"-" => {
 			if (leftType !== null && leftType.kind === TypeKind.Ptr && rightType !== null && rightType.kind === TypeKind.Ptr) return numberType();
 			if (leftType !== null && leftType.kind === TypeKind.Ptr) return leftType;
+			// Reference parity: int32 - int32 → int32
+			if (isIntegerType(leftType) && isIntegerType(rightType) && leftType.kind === rightType.kind) return leftType;
 			numberType();
 		},
-		"*" | "/" | "%" | "**" => numberType(),
+		"*" | "/" | "%" | "**" => {
+			// Reference parity: int32 * int32 → int32
+			if (isIntegerType(leftType) && isIntegerType(rightType) && leftType.kind === rightType.kind) return leftType;
+			numberType();
+		},
 		"&" | "|" | "^" | "<<" | ">>" | ">>>" => {
 			if (isIntegerType(leftType)) return leftType;
 			numberType();
@@ -356,37 +400,115 @@ function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
 	};
 }
 
-function inferUnaryOp(op: string): Type {
+function inferUnaryOp(op: string, operandType: Type): Type {
 	return match (op) {
 		"!" => booleanType(),
-		"-" | "+" | "~" => numberType(),
+		"-" | "+" => {
+			// Reference parity: -int32 → int32, +int32 → int32
+			if (isIntegerType(operandType)) return operandType;
+			numberType();
+		},
+		"~" => {
+			// Reference parity: ~int32 → int32
+			if (isIntegerType(operandType)) return operandType;
+			numberType();
+		},
 		"typeof" => stringType(),
 		_ => unknownType(),
 	};
 }
 
 // ===== Bitwise Operator Validation =====
-// Standard reference parity: bitwise ops only have integer overloads. No float/double variants.
+// Reference parity: bitwise ops only have integer overloads. No float/double variants.
+// Enums are integer-backed → allowed (Nim: enum with {.size.} can use and/or).
+// number (float64) → warning + implicit int32 cast (TypeScript ergonomics).
 
 function isBitwiseBinaryOp(op: string): boolean {
 	return op === "&" || op === "|" || op === "^" || op === "<<" || op === ">>" || op === ">>>";
 }
 
+function isBitwiseAllowed(t: Type): boolean {
+	if (t === null) return false;
+	return isIntegerType(t) || t.kind === TypeKind.Enum;
+}
+
 function checkBitwiseOperands(ctx: CheckerContext, op: string, leftType: Type, rightType: Type, node: Node): void {
-	const leftOk = leftType !== null && isIntegerType(leftType);
-	const rightOk = rightType !== null && isIntegerType(rightType);
-	if (!leftOk) {
+	const leftInt = leftType !== null && isBitwiseAllowed(leftType);
+	const rightInt = rightType !== null && isBitwiseAllowed(rightType);
+	const leftNum = leftType !== null && leftType.kind === TypeKind.Number;
+	const rightNum = rightType !== null && rightType.kind === TypeKind.Number;
+	// number → warn (TypeScript users), allow with implicit int32 cast
+	if (leftNum) {
+		addWarning(ctx, "bitwise operator '" + op + "' on 'number' implicitly casts to int32; prefer explicit integer type", node.location.line, node.location.column);
+	}
+	if (rightNum) {
+		addWarning(ctx, "bitwise operator '" + op + "' on 'number' implicitly casts to int32; prefer explicit integer type", node.location.line, node.location.column);
+	}
+	// Reject non-integer, non-number, non-enum types (string, boolean, etc.)
+	if (!leftInt && !leftNum) {
 		const name = leftType !== null ? typeNameOf(leftType) : "unknown";
 		addError(ctx, "bitwise operator '" + op + "' requires integer type, got '" + name + "'", node.location.line, node.location.column);
 	}
-	if (!rightOk) {
+	if (!rightInt && !rightNum) {
 		const name = rightType !== null ? typeNameOf(rightType) : "unknown";
 		addError(ctx, "bitwise operator '" + op + "' requires integer type, got '" + name + "'", node.location.line, node.location.column);
 	}
-	// Nim parity: both operands must be the same integer size
-	if (leftOk && rightOk && leftType.kind !== rightType.kind) {
+	// Reference parity: both operands must be the same integer size (skip if either is number/enum)
+	if (leftInt && rightInt && isIntegerType(leftType) && isIntegerType(rightType) && leftType.kind !== rightType.kind) {
 		addError(ctx, "bitwise operator '" + op + "' requires same integer size, got '" + typeNameOf(leftType) + "' and '" + typeNameOf(rightType) + "'", node.location.line, node.location.column);
 	}
+}
+
+// ===== Integer Literal Coercion =====
+// Reference parity: Nim's isIntLit + handleRange. When a number literal appears
+// where an integer type is expected and fits in range, coerce it automatically.
+
+function isNodeIntLit(node: Node): boolean {
+	if (node.kind !== NodeKind.NumberLiteral) return false;
+	const d = node.data as NumberLiteralData;
+	const v = d.value;
+	return v % 1 === 0;
+}
+
+function literalFitsInType(node: Node, target: Type): boolean {
+	if (!isNodeIntLit(node)) return false;
+	const v = (node.data as NumberLiteralData).value;
+	return match (target.kind) {
+		TypeKind.Int8   => v >= -128 && v <= 127,
+		TypeKind.Int16  => v >= -32768 && v <= 32767,
+		TypeKind.Int32  => v >= -2147483648 && v <= 2147483647,
+		TypeKind.Int64  => true,
+		TypeKind.Uint8  => v >= 0 && v <= 255,
+		TypeKind.Uint16 => v >= 0 && v <= 65535,
+		TypeKind.Uint32 => v >= 0 && v <= 4294967295,
+		TypeKind.Uint64 => v >= 0,
+		_ => false,
+	};
+}
+
+// ===== fitNode — Central Implicit Conversion Insertion =====
+// Parity: Nim's fitNode in sem.nim → indexTypesMatch → paramTypesMatch → implicitConv
+// Called at every "value flows into typed slot" point:
+//   - Variable declaration initializer → declType
+//   - Assignment RHS → LHS type
+//   - Return argument → function return type
+//   - Call arguments (handled separately in checkCallExpr via needsStdConv)
+// Wraps expr in HiddenStdConv when narrowing integer conversion is needed.
+// Transform phase (rangeCheckInject.ms) later converts HiddenStdConv → range check call.
+
+export function fitNode(ctx: CheckerContext, expr: Node, formal: Type, exprType: Type): Node {
+	if (formal === null || exprType === null) return expr;
+	if (formal.kind === TypeKind.Unknown || exprType.kind === TypeKind.Unknown) return expr;
+	if (formal.kind === exprType.kind) return expr;
+	// Narrowing integer conversion: wrap in HiddenStdConv
+	if (isNarrowingIntConv(exprType, formal)) {
+		const convTok = createToken(TokenKind.Ident, "", expr.location.line);
+		const convNode = createNode(NodeKind.HiddenStdConv, { convExpr: expr, convType: formal }, convTok);
+		convNode.nodeType = formal;
+		convNode.flags = convNode.flags | NodeFlag.Sem;
+		return convNode;
+	}
+	return expr;
 }
 
 // ===== Callee Name Extraction =====
@@ -912,6 +1034,101 @@ function resolveOverloadIdxWithInheritance(ctx: CheckerContext, candidates: Type
 function isPointerInC(t: Type, ctx: CheckerContext): boolean {
 	if (t === null) return false;
 	return t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr || t.kind === TypeKind.Borrow;
+}
+
+// Validate object literal construction against a discriminated union type.
+// Finds the discriminant field in the literal, resolves the variant, and validates fields.
+function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, d: ObjectLiteralData, unionType: Type): Type {
+	const discName = unionType.typeNames[0]; // discriminant field name (e.g. "kind")
+
+	// Find the discriminant field in the object literal keys
+	let discIdx = -1;
+	let ki = 0;
+	while (ki < d.keys.length) {
+		if (d.keys[ki] === discName) {
+			discIdx = ki;
+			ki = d.keys.length; // break
+		}
+		ki = ki + 1;
+	}
+
+	if (discIdx < 0) {
+		// No discriminant field — fall back to checking all properties without validation
+		for (const prop of d.properties) {
+			checkExpr(ctx, prop, null as unknown as Type);
+		}
+		addError(ctx, "Object literal for discriminated union '" + unionType.typeName + "' missing discriminant field '" + discName + "'");
+		node.nodeType = unionType;
+		return unionType;
+	}
+
+	// Check the discriminant expression first to get its value
+	const discExpr = d.properties[discIdx];
+	const discType = checkExpr(ctx, discExpr, unionType.typeExtra);
+
+	// Try to extract the enum value name from the discriminant expression
+	// After checker rewrites: EnumType.Member → Identifier "EnumType_Member"
+	let discValue = "";
+	if (discExpr.kind === NodeKind.Identifier) {
+		const id = discExpr.data as IdentifierData;
+		discValue = id.name;
+	}
+
+	// Find matching variant
+	let variantIdx = -1;
+	if (discValue !== "") {
+		variantIdx = findVariantByDiscriminant(unionType, discValue);
+		// Also try with underscore → dot conversion: "Kind_A" → "Kind.A"
+		if (variantIdx < 0) {
+			let dotted = "";
+			let ci = 0;
+			while (ci < discValue.length) {
+				const ch = charAt(discValue, ci);
+				if (ch === "_") {
+					dotted = dotted + ".";
+				} else {
+					dotted = dotted + ch;
+				}
+				ci = ci + 1;
+			}
+			variantIdx = findVariantByDiscriminant(unionType, dotted);
+		}
+	}
+
+	if (variantIdx >= 0 && variantIdx < unionType.typeChildren.length) {
+		const variant = unionType.typeChildren[variantIdx];
+		// Validate remaining fields match this variant
+		node.nodeType = unionType;
+		let fi = 0;
+		while (fi < d.keys.length) {
+			if (fi === discIdx) {
+				// Discriminant already checked
+				fi = fi + 1;
+				continue;
+			}
+			const key = d.keys[fi];
+			const fieldType = findFieldInVariant(variant, key);
+			if (fieldType !== null) {
+				checkExpr(ctx, d.properties[fi], fieldType);
+			} else {
+				checkExpr(ctx, d.properties[fi], null as unknown as Type);
+				addError(ctx, "Field '" + key + "' does not exist on variant " + unionType.typeNames[variantIdx + 1] + " of '" + unionType.typeName + "'");
+			}
+			fi = fi + 1;
+		}
+		return unionType;
+	}
+
+	// Could not resolve variant — check properties without validation
+	let pi = 0;
+	while (pi < d.properties.length) {
+		if (pi !== discIdx) {
+			checkExpr(ctx, d.properties[pi], null as unknown as Type);
+		}
+		pi = pi + 1;
+	}
+	node.nodeType = unionType;
+	return unionType;
 }
 
 function checkMemberExpr(ctx: CheckerContext, node: Node): Type {

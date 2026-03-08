@@ -3,7 +3,7 @@
 
 import { Node } from "../ast/node";
 import {
-	CheckerContext, createModuleContext,
+	CheckerContext, createModuleContext, Severity,
 	ExportedSymInfo, createExportRegistry, registerModuleExports, updateModuleExports,
 	findExtensionByName, findExtensionByType, registerExtension,
 } from "./context";
@@ -156,9 +156,13 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 		// Ownership Inference (for cross-module consumption)
 		inferOwnership(ctx, pr.value);
 
-		// Copy errors to module (mod.errors is string[], extract message)
+		// Copy errors to module (mod.errors is string[], prefix warnings)
 		for (const err of ctx.errors) {
-			mod.errors.push(err.message);
+			if (err.severity === Severity.Warning) {
+				mod.errors.push("warn:" + err.message);
+			} else {
+				mod.errors.push(err.message);
+			}
 		}
 
 		// Extract resolved exports and UPDATE registry (replaces Phase 1 placeholders)

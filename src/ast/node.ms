@@ -39,7 +39,7 @@ export class Symbol {
 	overloads: Symbol[];
 	nativeName: string;
 	builtinKind: string;
-	symFlags: number;
+	symFlags: int32;
 	defaultParamText: string[];
 	modulePath: string;
 }
@@ -193,7 +193,7 @@ export type NodeData =
 	// Declaration variants
 	| { importNames: string[], importAliases: string[], importSource: string }  // ImportDecl
 	| { exportedDecl: Node }                                       // ExportDecl
-	| { aliasName: string, aliasType: string, aliasIsDistinct: boolean }               // TypeAliasDecl
+	| { aliasName: string, aliasType: string, aliasIsDistinct: boolean, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[] }               // TypeAliasDecl
 	| { enumName: string, enumMembers: string[] }                  // EnumDecl
 	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[] } // InterfaceDecl
 	| { className: string, classExtends: string, classBody: Node[] } // ClassDecl
@@ -226,7 +226,7 @@ export class Node {
 	data: NodeData;
 	nodeType: Type;
 	resolvedSym: Symbol;
-	flags: number;
+	flags: int32;
 	comments: Token[]; // Added for comment preservation
 }
 
@@ -297,7 +297,7 @@ export type MatchStmtData = { matchStmtDisc: Node, matchStmtCases: Node[] };
 // Declarations
 export type ImportDeclData = { importNames: string[], importAliases: string[], importSource: string };
 export type ExportDeclData = { exportedDecl: Node };
-export type TypeAliasDeclData = { aliasName: string, aliasType: string, aliasIsDistinct: boolean };
+export type TypeAliasDeclData = { aliasName: string, aliasType: string, aliasIsDistinct: boolean, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[] };
 export type EnumDeclData = { enumName: string, enumMembers: string[] };
 export type InterfaceDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[] };
 export type ClassDeclData = { className: string, classExtends: string, classBody: Node[] };

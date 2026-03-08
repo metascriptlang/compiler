@@ -1,25 +1,25 @@
 // E2E: JS Backend
 
-import { compileToJS, contains } from "../helpers";
+import { compileToJS } from "../helpers";
 
 
 test "E2E JS: const variable" {
 	const js = compileToJS("const x = 42;");
 	assert js.ok;
-	assert contains(js.value,"42");
+	assert js.value.contains("42");
 }
 
 test "E2E JS: function call" {
 	const js = compileToJS("function add(a: number, b: number): number { return a + b; }\nconst r = add(1, 2);");
 	assert js.ok;
-	assert contains(js.value,"function");
-	assert contains(js.value,"add");
+	assert js.value.contains("function");
+	assert js.value.contains("add");
 }
 
 test "E2E JS: enum" {
 	const js = compileToJS("enum Dir { North, South }\nconst d: Dir = Dir.North;");
 	assert js.ok;
-	assert contains(js.value,"Dir");
+	assert js.value.contains("Dir");
 }
 
 test "E2E JS: match expression" {

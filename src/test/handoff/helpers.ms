@@ -7,7 +7,7 @@ import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
 import { checkProgramWithRegistry } from "../../checker/checkPass";
 import { checkModuleGraph, getPreludeContext } from "../../checker/orchestrator";
-import { CheckerContext } from "../../checker/context";
+import { CheckerContext, Severity } from "../../checker/context";
 import { monomorphizeProgram } from "../../monomorphize/collect";
 import { validateTypedAST } from "../../checker/validate";
 import { transformProgram } from "../../transform/index";
@@ -70,4 +70,58 @@ export function findFnDecl(program: Node, name: string): Node {
 		i = i + 1;
 	}
 	return null as unknown as Node;
+}
+
+// ===== Diagnostic Helpers =====
+
+export function errorCount(src: string): number {
+	const ctx = checkSource(src);
+	if (ctx === null) return -1;
+	return ctx.errors.length;
+}
+
+export function strictErrorCount(src: string): number {
+	const ctx = checkSource(src);
+	if (ctx === null) return -1;
+	let count = 0;
+	let i = 0;
+	while (i < ctx.errors.length) {
+		if (ctx.errors[i].severity === Severity.Error) count = count + 1;
+		i = i + 1;
+	}
+	return count;
+}
+
+export function warningCount(src: string): number {
+	const ctx = checkSource(src);
+	if (ctx === null) return -1;
+	let count = 0;
+	let i = 0;
+	while (i < ctx.errors.length) {
+		if (ctx.errors[i].severity === Severity.Warning) count = count + 1;
+		i = i + 1;
+	}
+	return count;
+}
+
+export function hasError(src: string, needle: string): boolean {
+	const ctx = checkSource(src);
+	if (ctx === null) return false;
+	let i = 0;
+	while (i < ctx.errors.length) {
+		if (ctx.errors[i].message.indexOf(needle) >= 0) return true;
+		i = i + 1;
+	}
+	return false;
+}
+
+export function hasWarning(src: string, needle: string): boolean {
+	const ctx = checkSource(src);
+	if (ctx === null) return false;
+	let i = 0;
+	while (i < ctx.errors.length) {
+		if (ctx.errors[i].severity === Severity.Warning && ctx.errors[i].message.indexOf(needle) >= 0) return true;
+		i = i + 1;
+	}
+	return false;
 }

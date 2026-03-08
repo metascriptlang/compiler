@@ -703,11 +703,13 @@ export function sgCollectDiagnostics(ctx: CheckerContext): SgDiagnostic[] {
 	const result: SgDiagnostic[] = [];
 	for (let i = 0; i < ctx.errors.length; i = i + 1) {
 		const err = ctx.errors[i];
+		// Map Severity enum to LSP DiagnosticSeverity (1=Error, 2=Warning, 3=Info, 4=Hint)
+		const lspSeverity = (err.severity as number) + 1;
 		const diag: SgDiagnostic = {
 			message: err.message,
 			line: err.line > 0 ? err.line : 1,
 			column: err.column,
-			severity: 1,
+			severity: lspSeverity,
 		};
 		result.push(diag);
 	}
@@ -1420,7 +1422,7 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 		const sym = lookupSymbol(ctx.table, id.name);
 		if (sym !== null) {
 			const tt = sgSymbolToTokenType(sym.symbolKind);
-			let mods = 0;
+			let mods: int32 = 0;
 			if (!hasFlag(sym, SymbolFlag.Mutable) && sym.symbolKind === SymbolKind.Variable) mods = 4; // readonly bit 2
 			if (sym.builtinKind.length > 0) mods = mods | 16; // defaultLibrary bit 4
 			const tok: SgSemanticToken = { line: loc.line, col: loc.column, length: id.name.length, tokenType: tt, modifiers: mods };

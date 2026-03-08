@@ -363,6 +363,12 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 	}
 
 	advance(state);
+
+	// Discriminated union: type X = match (disc: EnumType) { EnumVal => { fields }, ... }
+	if (current(state).kind === TokenKind.Match) {
+		return parseDiscriminatedUnionDecl(state, nameToken.value, typeToken);
+	}
+
 	const typeStart = state.position;
 	skipTypeAnnotation(state);
 	const typeEnd = state.position;
@@ -373,6 +379,114 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 		aliasName: nameToken.value,
 		aliasType,
 		aliasIsDistinct: false,
+		discriminantName: "",
+		discriminantType: "",
+		variantKeys: [] as string[],
+		variantTypes: [] as string[],
+	}, typeToken));
+}
+
+// ===== Discriminated Union Declaration =====
+// syntax: type X = match (discName: EnumType) { EnumVal => { fields }, ... };
+
+function parseDiscriminatedUnionDecl(state: ParserState, aliasName: string, typeToken: Token): NodeResult {
+	advance(state); // consume 'match'
+
+	if (current(state).kind !== TokenKind.LParen) {
+		return Result.err(`Expected '(' after 'match' in discriminated union at line ${current(state).line.toString()}`);
+	}
+	advance(state); // consume '('
+
+	// Parse discriminant name
+	const discNameToken = current(state);
+	if (!isIdentLike(discNameToken)) {
+		return Result.err(`Expected discriminant name in discriminated union at line ${current(state).line.toString()}`);
+	}
+	advance(state);
+
+	if (current(state).kind !== TokenKind.Colon) {
+		return Result.err(`Expected ':' after discriminant name at line ${current(state).line.toString()}`);
+	}
+	advance(state); // consume ':'
+
+	// Parse discriminant type (e.g. NodeKind)
+	const discTypeStart = state.position;
+	skipTypeAnnotation(state);
+	const discTypeEnd = state.position;
+	const discriminantType = collectTokenText(state, discTypeStart, discTypeEnd);
+
+	if (current(state).kind !== TokenKind.RParen) {
+		return Result.err(`Expected ')' after discriminant type at line ${current(state).line.toString()}`);
+	}
+	advance(state); // consume ')'
+
+	if (current(state).kind !== TokenKind.LBrace) {
+		return Result.err(`Expected '{' to start variant list at line ${current(state).line.toString()}`);
+	}
+	advance(state); // consume '{'
+
+	const variantKeys: string[] = [];
+	const variantTypes: string[] = [];
+
+	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
+		// Parse variant key: EnumType.Member or just Member
+		if (!isIdentLike(current(state))) {
+			return Result.err(`Expected variant key at line ${current(state).line.toString()}`);
+		}
+		let key = current(state).value;
+		advance(state); // consume first ident
+		// Handle dotted names like NodeKind.NumLit
+		while (!isAtEnd(state) && current(state).kind === TokenKind.Dot) {
+			advance(state); // consume '.'
+			key = key + "." + current(state).value;
+			advance(state); // consume member name
+		}
+		variantKeys.push(key);
+
+		if (current(state).kind !== TokenKind.Arrow) {
+			return Result.err(`Expected '=>' after variant key at line ${current(state).line.toString()}`);
+		}
+		advance(state); // consume '=>'
+
+		// Parse variant type: { fields } or a type name
+		const vtStart = state.position;
+		skipTypeAnnotation(state);
+		const vtEnd = state.position;
+		const variantType = collectTokenText(state, vtStart, vtEnd);
+		variantTypes.push(variantType);
+
+		// Optional comma separator
+		if (current(state).kind === TokenKind.Comma) {
+			advance(state);
+		}
+	}
+
+	if (current(state).kind !== TokenKind.RBrace) {
+		return Result.err(`Expected '}' to end variant list at line ${current(state).line.toString()}`);
+	}
+	advance(state); // consume '}'
+
+	consumeSemicolon(state);
+
+	// Build aliasType as regular union text for backward compatibility
+	let aliasType = "";
+	for (let i = 0; i < variantTypes.length; i += 1) {
+		if (i > 0) {
+			aliasType = aliasType + " | ";
+		} else {
+			aliasType = "| ";
+		}
+		aliasType = aliasType + variantTypes[i];
+	}
+
+	return Result.ok(createNode(NodeKind.TypeAliasDecl, {
+		aliasName,
+		aliasType,
+		aliasIsDistinct: false,
+		discriminantName: discNameToken.value,
+		discriminantType,
+		variantKeys,
+		variantTypes,
 	}, typeToken));
 }
 
@@ -1129,6 +1243,10 @@ export function parseDistinctTypeDecl(state: ParserState): NodeResult {
 		aliasName: nameToken.value,
 		aliasType: distinctAliasType,
 		aliasIsDistinct: true,
+		discriminantName: "",
+		discriminantType: "",
+		variantKeys: [] as string[],
+		variantTypes: [] as string[],
 	}, distinctToken));
 }
 

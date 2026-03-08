@@ -33,3 +33,10 @@ _Noreturn void msRaiseIndexError(int64_t idx, int64_t len) {
 		(long long)idx, (long long)len);
 	exit(1);
 }
+
+/* Parity: Nim's raiseRangeErrorI in lib/system/chcks.nim */
+_Noreturn void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi) {
+	fprintf(stderr, "Error: value %lld not in range %lld .. %lld\n",
+		(long long)val, (long long)lo, (long long)hi);
+	exit(1);
+}

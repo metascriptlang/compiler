@@ -105,6 +105,18 @@ function rewriteStringOp(node: Node): Node {
 		return result;
 	}
 
+	// String compound assignment: s += t → msStringAppend(&s, t)
+	// Nim parity: sem resolves &= to nkCall(mAppendStrStr, nkHiddenAddr(s), t).
+	// We do the same rewrite here so DRC sees a normal call (no special-casing)
+	// and codegen emits a normal call (no special-casing).
+	if (d.operator === "+=" && isStringTyped(d.left)) {
+		const addrOf = makeUnary("&", d.left, loc);
+		const right = coercePartToString(d.right, loc);
+		const result = makeCall(makeIdent("msStringAppend", loc), [addrOf, right], loc);
+		result.nodeType = node.nodeType;
+		return result;
+	}
+
 	return node;
 }
 

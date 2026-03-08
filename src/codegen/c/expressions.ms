@@ -28,7 +28,7 @@ import {
 import { mangle, mangleFieldName, mangledFunctionName, safeName } from "./names";
 import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, intToString, isPointerType, annotationToC, genClHalfCast, genClFullCast, ccgIntroducedPtr } from "./types";
 import { formatCNumber, cBoolLiteral, cNullLiteral, cStringLiteral, msStringPoolRef } from "./literals";
-import { charAt, sliceStr, findChar, startsWith } from "../../utils/string";
+import { charAt, sliceStr, findChar } from "../../utils/string";
 import { ensureDrcProto, ensureCrossModuleProto } from "./declarations";
 
 // ===== Reference: argument passing for introduced pointers =====
@@ -52,8 +52,6 @@ function genArgCcgPtr(arg: string, argNode: Node, p: CProc): string {
 // ===== Union Variant Index Matching =====
 // Matches an `as` target type against a Union's typeChildren by comparing field names.
 // Returns the variant index (0-based), or -1 if no match.
-
-// findUnionVariant is imported from checker/types.ms (shared with checker)
 
 // ===== Iterative genExpr infrastructure =====
 // Post-order stack traversal: Discover pushes children, Emit combines results.
@@ -167,7 +165,7 @@ function discoverExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[],
 		if (d.name === "NaN") { results.push("NAN"); return; }
 		if (d.name === "Infinity") { results.push("INFINITY"); return; }
 		// Auto-declare DRC sink temps on first use (zero-init for goto safety)
-		if (startsWith(d.name, "$sink_") && p !== null) {
+		if (d.name.startsWith("$sink_") && p !== null) {
 			let alreadySeen = false;
 			for (const s of p.seenSinks) { if (s === d.name) alreadySeen = true; }
 			if (!alreadySeen) {
@@ -438,13 +436,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 				}
 			}
 		}
-		// String compound assignment: s += t → msStringAppend(&s, t)
-		// Nim: mAppendStrStr in ccgexprs.nim → genStrAppend (codegen, not transform)
-		// Kept in codegen so DRC analyzer can see += and apply fused append optimization
-		if (d.operator === "+=" && d.left.nodeType !== null && d.left.nodeType.kind === TypeKind.String) {
-			results.push("msStringAppend(&" + left + ", " + finalRight + ")");
-			return;
-		}
+		// String += rewritten by stringOpLower → msStringAppend(&s, t) before codegen.
 		// Struct equality handled by operatorLower → TypeName_eq() (reference parity).
 		// No memcmp fallback needed — codegen never sees interface === interface.
 		// Modulo on doubles requires fmod() in C (% is integer-only)
@@ -539,7 +531,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 		// Case 1: Source is Union → access variant member
 		if (srcType !== null && srcType.kind === TypeKind.Union && node.nodeType !== null) {
 			const targetNames = (node.nodeType.typeNames !== null) ? node.nodeType.typeNames : [] as string[];
-			const varIdx = (targetNames.length > 0) ? findUnionVariant(srcType, targetNames) : -1;
+			const targetTypes = (node.nodeType.typeChildren !== null) ? node.nodeType.typeChildren : [] as Type[];
+			const varIdx = (targetNames.length > 0) ? findUnionVariant(srcType, targetNames, targetTypes) : -1;
 			if (varIdx >= 0) {
 				results.push("(" + expr + ").v" + intToString(varIdx));
 				return;
@@ -553,13 +546,13 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 			const unionName = getTypeDesc(g, unionType);
 			let varIdx = -1;
 			if (srcType !== null && srcType.kind === TypeKind.Struct && srcType.typeNames !== null) {
-				varIdx = findUnionVariant(unionType, srcType.typeNames);
+				varIdx = findUnionVariant(unionType, srcType.typeNames, []);
 			}
 			if (varIdx < 0 && d.asExpr !== null && d.asExpr.kind === NodeKind.ObjectLiteral) {
 				const litData = d.asExpr.data as ObjectLiteralData;
 				if (litData.keys !== null && litData.keys.length > 0) {
 					const keyArr: string[] = [litData.keys[0]];
-					varIdx = findUnionVariant(unionType, keyArr);
+					varIdx = findUnionVariant(unionType, keyArr, []);
 				}
 			}
 			if (varIdx >= 0) {

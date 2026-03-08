@@ -302,12 +302,21 @@ export function isCancelled(cancel: CancelCtx, startVersion: number): boolean {
 
 // ===== Checker Context =====
 
+// LSP DiagnosticSeverity parity
+export enum Severity {
+	Error,    // 1 in LSP
+	Warning,  // 2 in LSP
+	Info,     // 3 in LSP
+	Hint,     // 4 in LSP
+}
+
 // Structured error — standard reference messages always carry line info
 export interface CheckerError {
 	message: string;
 	line: number;    // 1-based, 0 = unknown
 	column: number;  // 0-based, 0 = unknown
 	fatal: boolean;  // true = globalError (abort), false = localError (continue)
+	severity: Severity;
 }
 
 export interface CheckerContext {
@@ -368,12 +377,17 @@ export function createModuleContext(graph: ModuleGraph, mod: Module): CheckerCon
 
 // localError — non-fatal, compilation continues
 export function addError(ctx: CheckerContext, msg: string, line: number, col: number): void {
-	ctx.errors.push({ message: msg, line, column: col, fatal: false });
+	ctx.errors.push({ message: msg, line, column: col, fatal: false, severity: Severity.Error });
+}
+
+// warning — non-fatal, compilation continues, shown as warning in LSP
+export function addWarning(ctx: CheckerContext, msg: string, line: number, col: number): void {
+	ctx.errors.push({ message: msg, line, column: col, fatal: false, severity: Severity.Warning });
 }
 
 // globalError — fatal, compilation should abort
 export function addFatalError(ctx: CheckerContext, msg: string, line: number, col: number): void {
-	ctx.errors.push({ message: msg, line, column: col, fatal: true });
+	ctx.errors.push({ message: msg, line, column: col, fatal: true, severity: Severity.Error });
 }
 
 export function hasErrors(ctx: CheckerContext): boolean {

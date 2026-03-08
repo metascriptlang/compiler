@@ -47,6 +47,18 @@ export function printExportDecl(node: Node, options: FormatOptions): Doc {
 
 export function printTypeAliasDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as TypeAliasDeclData;
+	if (d.discriminantName !== "" && d.discriminantName !== null) {
+		// Discriminated union: type X = match (disc: Enum) { ... }
+		const parts: Doc[] = [docText("type " + d.aliasName + " = match (" + d.discriminantName + ": " + d.discriminantType + ") {")];
+		for (let i = 0; i < d.variantKeys.length; i += 1) {
+			parts.push(docLine());
+			parts.push(docText("\t" + d.variantKeys[i] + " => " + d.variantTypes[i] + ","));
+		}
+		parts.push(docLine());
+		parts.push(docText("}"));
+		if (options.semi) parts.push(docText(";"));
+		return docGroup(parts);
+	}
 	const parts: Doc[] = [docText("type " + d.aliasName + " = " + d.aliasType)];
 	if (options.semi) {
 		parts.push(docText(";"));

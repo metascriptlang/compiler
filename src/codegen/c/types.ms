@@ -4,9 +4,9 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { Type, TypeKind, isInterfaceType, getTypeSize } from "../../checker/types";
+import { Type, TypeKind, isInterfaceType, getTypeSize, skipModifier } from "../../checker/types";
 import { Node, NodeKind, CallExprData } from "../../ast/node";
-import { findChar, trimStr, splitTopLevel, endsWith } from "../../utils/string";
+import { findChar, trimStr, splitTopLevel } from "../../utils/string";
 import { CGen, CSection, Builder, TypeCache, add, addLine, addNewline, extract, sec, createBuilder, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas, typeRegistryLookup } from "./context";
 import { mangle, mangleTypeName, mangleFieldName, safeName } from "./names";
 
@@ -140,9 +140,9 @@ export function annotationToC(annotation: string): string {
 	if (s === "cstring") return "const char*";
 	if (s === "void" || s === "null") return "void*";
 	// Array types: "T[]", "T []", "T [ ]" (checker may include spaces)
-	if (endsWith(s, "[]") || endsWith(s, "[ ]")) {
+	if (s.endsWith("[]") || s.endsWith("[ ]")) {
 		let elem = s;
-		if (endsWith(elem, "[ ]")) elem = elem.slice(0, elem.length - 3);
+		if (elem.endsWith("[ ]")) elem = elem.slice(0, elem.length - 3);
 		else elem = elem.slice(0, elem.length - 2);
 		elem = trimStr(elem);
 		if (elem === "number") return "msNumberArray";
@@ -316,10 +316,13 @@ export function getSimpleTypeDesc(t: Type): string {
 
 // ===== Is Pointer Type =====
 // Types that are always represented as pointers in C.
+// Reference parity: skipTypes(abstractPtrs) strips Sink/Lent before kind checks.
 
 export function isPointerType(t: Type): boolean {
 	if (t === null) return false;
-	return match (t.kind) {
+	const inner = skipModifier(t);
+	if (inner === null) return false;
+	return match (inner.kind) {
 		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow => true,
 		_ => false,
 	};
@@ -327,18 +330,20 @@ export function isPointerType(t: Type): boolean {
 
 // ===== ccgIntroducedPtr (Reference: reference codegen utils parity) =====
 // Determines if a param type should be passed by pointer in C.
-// Reference: object types with size > floatSize*3 (24 bytes), tuple same threshold,
+// Reference: skipTypes(typedescInst) strips Sink/Lent before dispatch.
+// Object types with size > 24 bytes, tuple same threshold,
 // Result/Union/Span always by pointer.
-// The flag represents an indirect location — purely a codegen concern, no AST mutation.
 const PTR_THRESHOLD: number = 24;
 
 export function ccgIntroducedPtr(t: Type): boolean {
 	if (t === null) return false;
-	if (isInterfaceType(t)) return getTypeSize(t) > PTR_THRESHOLD;
-	if (t.kind === TypeKind.Tuple) return getTypeSize(t) > PTR_THRESHOLD;
-	if (t.kind === TypeKind.Result) return true;
-	if (t.kind === TypeKind.Union) return true;
-	if (t.kind === TypeKind.Span) return true;
+	const inner = skipModifier(t);
+	if (inner === null) return false;
+	if (isInterfaceType(inner)) return getTypeSize(inner) > PTR_THRESHOLD;
+	if (inner.kind === TypeKind.Tuple) return getTypeSize(inner) > PTR_THRESHOLD;
+	if (inner.kind === TypeKind.Result) return true;
+	if (inner.kind === TypeKind.Union) return true;
+	if (inner.kind === TypeKind.Span) return true;
 	return false;
 }
 
@@ -712,7 +717,12 @@ function genUnionType(g: CGen, t: Type): string {
 	addLine(b, "#define " + name + "_DEFINED");
 	addLine(b, "struct " + name + " {");
 	b.indent += 1;
-	addLine(b, "int32_t _tag;");
+	// Discriminated union: use enum type for _tag; undiscriminated: int32_t
+	if (t.typeExtra !== null && t.typeExtra.kind === TypeKind.Enum && t.typeExtra.typeName !== "") {
+		addLine(b, mangle(t.typeExtra.typeName) + " _tag;");
+	} else {
+		addLine(b, "int32_t _tag;");
+	}
 	addLine(b, "union {");
 	b.indent += 1;
 	vi = 0;
@@ -860,7 +870,10 @@ function closureParamTypeToC(g: CGen, pt: Type): string {
 	if (pt === null) return "void*";
 	const simple = getSimpleTypeDesc(pt);
 	if (simple !== "") return simple;
-	return getTypeDesc(g, pt);
+	const desc = getTypeDesc(g, pt);
+	// Reference parity: ccgIntroducedPtr params are passed by pointer in C
+	if (ccgIntroducedPtr(pt)) return desc + "*";
+	return desc;
 }
 
 function closureRetTypeToC(g: CGen, t: Type): string {

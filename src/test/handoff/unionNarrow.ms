@@ -3,7 +3,7 @@
 // Bug: `doc.data as { flat: Doc, broken: Doc }` where DocData is a union type
 // emits `msAnon_xxx d = ...` in C instead of `DocData_v3 d = ((*doc).data).v3`.
 
-import { compileToC, compileProjectToC, contains } from "../helpers";
+import { compileToC, compileProjectToC } from "../helpers";
 
 test "union narrowing as-cast emits variant accessor" {
 	const r = compileToC(`
@@ -30,9 +30,9 @@ test "union narrowing as-cast emits variant accessor" {
 		assert false;
 	}
 	const cCode = r.value;
-	assert !contains(cCode, "msAnon_");
-	assert contains(cCode, "DocData_v3");
-	assert contains(cCode, ".v3");
+	assert !cCode.contains("msAnon_");
+	assert cCode.contains("DocData_v3");
+	assert cCode.contains(".v3");
 }
 
 test "partial as-cast resolves to full variant" {
@@ -58,9 +58,9 @@ test "partial as-cast resolves to full variant" {
 		assert false;
 	}
 	const cCode = r.value;
-	assert !contains(cCode, "msAnon_");
-	assert contains(cCode, "DocData_v3");
-	assert contains(cCode, ".v3");
+	assert !cCode.contains("msAnon_");
+	assert cCode.contains("DocData_v3");
+	assert cCode.contains(".v3");
 }
 
 test "union narrowing as-cast works across files" {
@@ -89,11 +89,11 @@ test "union narrowing as-cast works across files" {
 		` },
 	];
 	const cCode = compileProjectToC(entries, "src/layout.ms");
-	if (contains(cCode, "ERROR:")) {
+	if (cCode.contains("ERROR:")) {
 		console.log("compileProjectToC failed: " + cCode);
 		assert false;
 	}
-	assert !contains(cCode, "msAnon_");
-	assert contains(cCode, "DocData_v3");
-	assert contains(cCode, ".v3");
+	assert !cCode.contains("msAnon_");
+	assert cCode.contains("DocData_v3");
+	assert cCode.contains(".v3");
 }

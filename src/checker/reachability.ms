@@ -10,7 +10,6 @@ import { Node, NodeKind, ProgramData, FunctionDeclData, ImportDeclData,
 	TestDeclData, DecoratedDeclData, ExternDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { AliveSet, createAliveSet, aliveSetAdd, aliveSetHas } from "../codegen/c/context";
-import { endsWith } from "../utils/string";
 
 // ===== Module Index =====
 // Maps module path to its program AST for cross-module tracing.
@@ -71,7 +70,7 @@ function resolveSpecifier(specifier: string, modIdx: ModuleIndex): string {
 	for (let i = 0; i < modIdx.paths.length; i += 1) {
 		const p = modIdx.paths[i];
 		// Check if path ends with the specifier (with or without extension)
-		if (endsWith(p, specifier) || endsWith(p, specifier + ".ms") || endsWith(p, specifier + ".cms") || endsWith(p, specifier + "/index.ms") || endsWith(p, specifier + "/index.cms")) {
+		if (p.endsWith(specifier) || p.endsWith(specifier + ".ms") || p.endsWith(specifier + ".cms") || p.endsWith(specifier + "/index.ms") || p.endsWith(specifier + "/index.cms")) {
 			return p;
 		}
 	}
@@ -346,9 +345,9 @@ function getDeclName(node: Node): string {
 import { createNode } from "../ast/node";
 
 test "endsWith helper" {
-	assert endsWith("foo/bar.ms", "bar.ms");
-	assert endsWith("foo/bar.ms", "foo/bar.ms");
-	assert !endsWith("foo/bar.ms", "baz.ms");
+	assert "foo/bar.ms".endsWith("bar.ms");
+	assert "foo/bar.ms".endsWith("foo/bar.ms");
+	assert !"foo/bar.ms".endsWith("baz.ms");
 }
 
 test "empty programs produce empty alive set" {

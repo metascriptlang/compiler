@@ -105,9 +105,9 @@ export function raiserABC(op: RaiserOpcode, a: number, b: number, c: number): Ra
 }
 
 export function raiserABx(op: RaiserOpcode, a: number, bx: number): RaiserInstruction {
-	const bHigh = (bx / 256) | 0;
-	const bLow = bx - bHigh * 256;
-	return { op, a, b: bHigh, c: bLow, cachedIdx: -1, line: 0 };
+	const bHigh: int32 = (bx as int32 / 256) | 0;
+	const bLow = bx - (bHigh as number) * 256;
+	return { op, a, b: bHigh as number, c: bLow, cachedIdx: -1, line: 0 };
 }
 
 export function raiserAx(op: RaiserOpcode, ax: number): RaiserInstruction {
@@ -115,11 +115,11 @@ export function raiserAx(op: RaiserOpcode, ax: number): RaiserInstruction {
 	// For negative values, add 2^24 to get unsigned representation
 	let raw = ax;
 	if (raw < 0) { raw = raw + 16777216; }
-	const aHigh = (raw / 65536) | 0;
-	const rem = raw - aHigh * 65536;
-	const bMid = (rem / 256) | 0;
-	const cLow = rem - bMid * 256;
-	return { op, a: aHigh, b: bMid, c: cLow, cachedIdx: -1, line: 0 };
+	const aHigh: int32 = (raw as int32 / 65536) | 0;
+	const rem = raw - (aHigh as number) * 65536;
+	const bMid: int32 = (rem as int32 / 256) | 0;
+	const cLow = rem - (bMid as number) * 256;
+	return { op, a: aHigh as number, b: bMid as number, c: cLow, cachedIdx: -1, line: 0 };
 }
 
 // --- Decoders ---

@@ -136,7 +136,8 @@ export function execModule(mod: RaiserModule): RaiserVM {
 		} else if (op === RaiserOpcode.DivI64) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
-			setReg(vm, base + inst.a, raiserInt((lhs.intVal / rhs.intVal) | 0));
+			const quot: int32 = (lhs.intVal as int32 / rhs.intVal as int32) | 0;
+			setReg(vm, base + inst.a, raiserInt(quot as number));
 		} else if (op === RaiserOpcode.ModI64) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
@@ -173,26 +174,37 @@ export function execModule(mod: RaiserModule): RaiserVM {
 		} else if (op === RaiserOpcode.BitAnd) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
-			setReg(vm, base + inst.a, raiserInt(lhs.intVal & rhs.intVal));
+			const la: int32 = lhs.intVal as int32;
+			const ra: int32 = rhs.intVal as int32;
+			setReg(vm, base + inst.a, raiserInt((la & ra) as number));
 		} else if (op === RaiserOpcode.BitOr) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
-			setReg(vm, base + inst.a, raiserInt(lhs.intVal | rhs.intVal));
+			const lo: int32 = lhs.intVal as int32;
+			const ro: int32 = rhs.intVal as int32;
+			setReg(vm, base + inst.a, raiserInt((lo | ro) as number));
 		} else if (op === RaiserOpcode.BitXor) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
-			setReg(vm, base + inst.a, raiserInt(lhs.intVal ^ rhs.intVal));
+			const lx: int32 = lhs.intVal as int32;
+			const rx: int32 = rhs.intVal as int32;
+			setReg(vm, base + inst.a, raiserInt((lx ^ rx) as number));
 		} else if (op === RaiserOpcode.BitNot) {
 			const val = getReg(vm, base + inst.b);
-			setReg(vm, base + inst.a, raiserInt(~val.intVal));
+			const vn: int32 = val.intVal as int32;
+			setReg(vm, base + inst.a, raiserInt((~vn) as number));
 		} else if (op === RaiserOpcode.ShiftLeft) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
-			setReg(vm, base + inst.a, raiserInt(lhs.intVal << rhs.intVal));
+			const lsl: int32 = lhs.intVal as int32;
+			const rsl: int32 = rhs.intVal as int32;
+			setReg(vm, base + inst.a, raiserInt((lsl << rsl) as number));
 		} else if (op === RaiserOpcode.ShiftRight) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
-			setReg(vm, base + inst.a, raiserInt(lhs.intVal >> rhs.intVal));
+			const lsr: int32 = lhs.intVal as int32;
+			const rsr: int32 = rhs.intVal as int32;
+			setReg(vm, base + inst.a, raiserInt((lsr >> rsr) as number));
 		// --- Complex ops (previously handled in MetaScript fallback) ---
 		} else if (op === RaiserOpcode.Print) {
 			const val = getReg(vm, base + inst.a);

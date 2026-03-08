@@ -21,7 +21,7 @@ import {
 	msAroTypedefCount, msAroTypedefName, msAroTypedefTarget,
 } from "../bindings/aro/index";
 import { ModuleGraph, findModule } from "./graph";
-import { sliceStr, trimStr, endsWith } from "../utils/string";
+import { sliceStr, trimStr } from "../utils/string";
 
 // ===== C Type → MetaScript Type Mapping =====
 
@@ -29,11 +29,11 @@ import { sliceStr, trimStr, endsWith } from "../utils/string";
 function stripQualifiers(t: string): string {
 	let s = t;
 	// Strip trailing qualifiers one at a time
-	if (endsWith(s, " restrict")) { s = sliceStr(s, 0, s.length - 9); }
-	if (endsWith(s, " volatile")) { s = sliceStr(s, 0, s.length - 9); }
-	if (endsWith(s, " _Nonnull")) { s = sliceStr(s, 0, s.length - 9); }
-	if (endsWith(s, " _Nullable")) { s = sliceStr(s, 0, s.length - 10); }
-	if (endsWith(s, " __restrict")) { s = sliceStr(s, 0, s.length - 11); }
+	if (s.endsWith(" restrict")) { s = sliceStr(s, 0, s.length - 9); }
+	if (s.endsWith(" volatile")) { s = sliceStr(s, 0, s.length - 9); }
+	if (s.endsWith(" _Nonnull")) { s = sliceStr(s, 0, s.length - 9); }
+	if (s.endsWith(" _Nullable")) { s = sliceStr(s, 0, s.length - 10); }
+	if (s.endsWith(" __restrict")) { s = sliceStr(s, 0, s.length - 11); }
 	return trimStr(s);
 }
 
@@ -42,7 +42,7 @@ export function mapCType(ctype: string): string {
 	const t = stripQualifiers(trimStr(ctype));
 
 	// Pointer types
-	if (endsWith(t, "*")) {
+	if (t.endsWith("*")) {
 		// Get base type (trim trailing * and spaces)
 		let baseEnd = t.length - 1;
 		const base = trimStr(sliceStr(t, 0, baseEnd));

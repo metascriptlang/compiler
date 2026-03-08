@@ -21,17 +21,6 @@ function repeatStr(s: string, n: number): string {
 	return result;
 }
 
-function contains(haystack: string, needle: string): boolean {
-	if (needle.length === 0) return true;
-	if (haystack.length < needle.length) return false;
-	let i = 0;
-	while (i <= haystack.length - needle.length) {
-		if (haystack.slice(i, i + needle.length) === needle) return true;
-		i += 1;
-	}
-	return false;
-}
-
 test "string length" {
 	assert "".length === 0;
 	assert "a".length === 1;
@@ -113,9 +102,9 @@ test "string repeat builder" {
 }
 
 test "manual string search" {
-	assert contains("hello world", "world");
-	assert contains("hello world", "hello");
-	assert contains("hello world", "lo wo");
-	assert !contains("hello", "xyz");
-	assert contains("abc", "");
+	assert "hello world".contains("world");
+	assert "hello world".contains("hello");
+	assert "hello world".contains("lo wo");
+	assert !"hello".contains("xyz");
+	assert "abc".contains("");
 }

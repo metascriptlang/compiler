@@ -1,7 +1,7 @@
 // E2E: Result<T, E> → C output
 // Tests Result type, try operator, Result.ok/Result.err constructors.
 
-import { compileToC, contains } from "../helpers";
+import { compileToC } from "../helpers";
 
 
 test "E2E C: Result.ok constructor" {

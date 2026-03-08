@@ -87,7 +87,11 @@ void msThrow(msString msg);
 /* Payload-only free — inline loops handle per-element cleanup (Reference parity: sequence op) */
 #define msArrayDestroy(arr)            do { if ((arr).p) { free((arr).p); (arr).p = NULL; } (arr).len = 0; } while(0)
 #define msArrayWasMoved(arr)           do { (arr).len = 0; (arr).p = NULL; } while(0)
-#define msArrayCopy(arr)               /* primitive: bitwise copy handled by assignment */
+/* msArrayCopy: 1-arg = in-place copy marker (no-op for primitives), 2-arg = shallow assign */
+#define msArrayCopy1(arr)              /* primitive: bitwise copy handled by assignment */
+#define msArrayCopy2(d, s)             do { (d) = (s); } while(0)
+#define msArrayCopy_GET(_1, _2, NAME, ...) NAME
+#define msArrayCopy(...) msArrayCopy_GET(__VA_ARGS__, msArrayCopy2, msArrayCopy1)(__VA_ARGS__)
 #define msArraySetLen(d, s)            msArraySetLenGeneric(&(d), (s).len, sizeof((s).p->data[0]))
 
 /* --- Legacy aliases (used by classify.ms for DRC injection layer) --- */
@@ -237,5 +241,47 @@ _Noreturn void msRaiseIndexError(int64_t idx, int64_t len);
 	if ((uint32_t)__idx >= (uint32_t)(s).len) msRaiseIndexError(__idx, (s).len); \
 	msStringCharAt((s), __idx); \
 })
+
+/* ===== Range-Checked Integer Casts ===== */
+/* Parity: Nim's chcks.nim raiseRangeErrorI + genRangeChck in ccgexprs.nim.
+   Inline condition (fast path), helper call only on error (slow path). */
+
+_Noreturn void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi);
+
+static inline int8_t msCheckRangeI8(double v, int64_t lo, int64_t hi) {
+	int64_t iv = (int64_t)v;
+	if (iv < lo || iv > hi) msRaiseRangeError(iv, lo, hi);
+	return (int8_t)iv;
+}
+
+static inline uint8_t msCheckRangeU8(double v, int64_t lo, int64_t hi) {
+	int64_t iv = (int64_t)v;
+	if (iv < lo || iv > hi) msRaiseRangeError(iv, lo, hi);
+	return (uint8_t)iv;
+}
+
+static inline int16_t msCheckRangeI16(double v, int64_t lo, int64_t hi) {
+	int64_t iv = (int64_t)v;
+	if (iv < lo || iv > hi) msRaiseRangeError(iv, lo, hi);
+	return (int16_t)iv;
+}
+
+static inline uint16_t msCheckRangeU16(double v, int64_t lo, int64_t hi) {
+	int64_t iv = (int64_t)v;
+	if (iv < lo || iv > hi) msRaiseRangeError(iv, lo, hi);
+	return (uint16_t)iv;
+}
+
+static inline int32_t msCheckRangeI32(double v, int64_t lo, int64_t hi) {
+	int64_t iv = (int64_t)v;
+	if (iv < lo || iv > hi) msRaiseRangeError(iv, lo, hi);
+	return (int32_t)iv;
+}
+
+static inline uint32_t msCheckRangeU32(double v, int64_t lo, int64_t hi) {
+	int64_t iv = (int64_t)v;
+	if (iv < lo || iv > hi) msRaiseRangeError(iv, lo, hi);
+	return (uint32_t)iv;
+}
 
 #endif /* SYSTEM_H */

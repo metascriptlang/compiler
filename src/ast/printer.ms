@@ -256,7 +256,9 @@ export function printNode(node: Node, level: number): void {
 		},
 		NodeKind.TypeAliasDecl => {
 			const data = node.data as TypeAliasDeclData;
-			if (data.aliasIsDistinct) {
+			if (data.discriminantName !== "" && data.discriminantName !== null) {
+				console.log(`${pad}TypeAliasDecl: ${data.aliasName} match(${data.discriminantName}: ${data.discriminantType})`);
+			} else if (data.aliasIsDistinct) {
 				console.log(`${pad}TypeAliasDecl: distinct ${data.aliasName}`);
 			} else {
 				console.log(`${pad}TypeAliasDecl: ${data.aliasName}`);

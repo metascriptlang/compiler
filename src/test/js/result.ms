@@ -1,7 +1,7 @@
 // E2E: Result<T, E> → JS output
 // Tests Result type through JS backend pipeline.
 
-import { compileToJS, contains } from "../helpers";
+import { compileToJS } from "../helpers";
 
 
 test "E2E JS: Result.ok constructor" {

@@ -1,6 +1,6 @@
 // Debug: trace NewExpr through full pipeline
 import { Node, NodeKind, NewExprData, ObjectLiteralData, ProgramData, VariableDeclData } from "../../ast/node";
-import { compileToC, contains } from "../helpers";
+import { compileToC } from "../helpers";
 import { fullPipeline } from "./helpers";
 
 test "Post-pipeline: new Item { value: 42 }" {

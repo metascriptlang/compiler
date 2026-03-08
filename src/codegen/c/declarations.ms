@@ -15,7 +15,7 @@ import {
 	ObjectLiteralData,
 	ExprStmtData, MacroInvocationData,
 } from "../../ast/node";
-import { sliceStr, startsWith, endsWith } from "../../utils/string";
+import { sliceStr } from "../../utils/string";
 import { Type, TypeKind } from "../../checker/types";
 import {
 	CGen, CProc, CSection, Builder,
@@ -51,9 +51,9 @@ function isDeclAlive(g: CGen, node: Node): boolean {
 	// Suffixes: _destroy, _trace, _copy, _sink, _wasMoved, _dup (destructorLifting)
 	if (name.length > 0 && name.slice(0, 1) === "$") return true;
 	if (name.length > 0 && name.slice(0, 1) === "=") return true;
-	if (endsWith(name, "_destroy") || endsWith(name, "_trace") ||
-		endsWith(name, "_copy") || endsWith(name, "_sink") ||
-		endsWith(name, "_wasMoved") || endsWith(name, "_dup")) return true;
+	if (name.endsWith("_destroy") || name.endsWith("_trace") ||
+		name.endsWith("_copy") || name.endsWith("_sink") ||
+		name.endsWith("_wasMoved") || name.endsWith("_dup")) return true;
 	return aliveSetHas(g.aliveSet, g.modulePath, name);
 }
 
@@ -68,7 +68,7 @@ const DRC_SUFFIXES: string[] = ["_destroy", "_copy", "_sink", "_wasMoved", "_dup
 function hasSuffix(name: string, suffixes: string[]): boolean {
 	let i = 0;
 	while (i < suffixes.length) {
-		if (endsWith(name, suffixes[i])) return true;
+		if (name.endsWith(suffixes[i])) return true;
 		i = i + 1;
 	}
 	return false;
@@ -76,8 +76,8 @@ function hasSuffix(name: string, suffixes: string[]): boolean {
 
 function isArraySeqHook(name: string): boolean {
 	if (name.slice(0, 13) === "msStringArray" || name.slice(0, 10) === "msRefArray") return true;
-	return endsWith(name, "Array_destroy") || endsWith(name, "Array_copy") ||
-		endsWith(name, "Array_sink") || endsWith(name, "Array_wasMoved");
+	return name.endsWith("Array_destroy") || name.endsWith("Array_copy") ||
+		name.endsWith("Array_sink") || name.endsWith("Array_wasMoved");
 }
 
 function isDrcLifecycleName(name: string): boolean {
@@ -101,7 +101,7 @@ export function ensureDrcProto(g: CGen, callee: string): void {
 
 	// reference parity (reference prototype): sequence/array hooks have different param conventions
 	// destroy: by-value; wasMoved: by-pointer; copy/sink: dest by-pointer, src by-value
-	const isSeqHook = endsWith(typeName, "Array");
+	const isSeqHook = typeName.endsWith("Array");
 
 	let proto = "";
 	if (suffix === "_destroy") {
@@ -548,9 +548,9 @@ function genTopLevelEmit(g: CGen, mi: MacroInvocationData): void {
 // Reference's determineSection: detect section markers in emit code
 function emitToSection(g: CGen, code: string): void {
 	let target = CSection.ProcHeaders;
-	if (startsWith(code, "/*TYPESECTION*/")) target = CSection.Types;
-	else if (startsWith(code, "/*VARSECTION*/")) target = CSection.GlobalVars;
-	else if (startsWith(code, "/*INCLUDESECTION*/")) target = CSection.Headers;
+	if (code.startsWith("/*TYPESECTION*/")) target = CSection.Types;
+	else if (code.startsWith("/*VARSECTION*/")) target = CSection.GlobalVars;
+	else if (code.startsWith("/*INCLUDESECTION*/")) target = CSection.Headers;
 	addLine(sec(g, target), code);
 }
 

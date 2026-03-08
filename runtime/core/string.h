@@ -206,6 +206,7 @@ void msStringSetChar(msString* s, int64_t idx, msString ch);
 /* Number to string */
 msString msIntToString(int64_t value);
 msString msNumberToString(double value);
+#define msIntToStr msIntToString
 
 /* ===== Splitting & Joining ===== */
 

@@ -22,7 +22,6 @@ import { generateJS } from "../codegen/js/index";
 import { MapEntry, createMapProvider, loadModuleGraph } from "../module/loader";
 import { Module, ModuleGraph, findModule } from "../module/graph";
 import { Node } from "../ast/node";
-import { sliceStr } from "../utils/string";
 
 export type { MapEntry } from "../module/loader";
 
@@ -36,19 +35,6 @@ function collectErrors(errors: any[], prefix: string): string {
 		i = i + 1;
 	}
 	return msg;
-}
-
-// String contains check (MetaScript has no indexOf/includes)
-export function contains(haystack: string, needle: string): boolean {
-	if (needle.length === 0) return true;
-	if (haystack.length < needle.length) return false;
-	let i = 0;
-	const limit = haystack.length - needle.length;
-	while (i <= limit) {
-		if (sliceStr(haystack, i, i + needle.length) === needle) return true;
-		i = i + 1;
-	}
-	return false;
 }
 
 // ===== Single-source compilation (1-module graph) =====
@@ -234,9 +220,9 @@ export function compileProjectToJS(entries: MapEntry[], entryPath: string): stri
 }
 
 test "contains basic" {
-	assert contains("hello world", "world");
-	assert contains("hello world", "hello");
-	assert !contains("hello", "world");
-	assert contains("abc", "");
-	assert !contains("", "abc");
+	assert "hello world".contains("world");
+	assert "hello world".contains("hello");
+	assert !"hello".contains("world");
+	assert "abc".contains("");
+	assert !"".contains("abc");
 }

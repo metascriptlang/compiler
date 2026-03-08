@@ -82,7 +82,11 @@ function reportModuleErrors(graph: ModuleGraph, prefix: string): void {
 		const mod = graph.modules[i];
 		if (mod.errors.length > 0) {
 			for (const e of mod.errors) {
-				console.log(red(prefix) + " [" + mod.path + "]: " + e);
+				if (e.length > 5 && e.slice(0, 5) === "warn:") {
+					console.log(yellow("warning") + " [" + mod.path + "]: " + e.slice(5, e.length));
+				} else {
+					console.log(red(prefix) + " [" + mod.path + "]: " + e);
+				}
 			}
 		}
 	}

@@ -18,3 +18,6 @@ import "./unionNarrowing";
 import "./unionNarrow";
 import "./toStringResolve";
 import "./bitwiseCheck";
+import "./typeAliasStruct";
+import "./literalCoercion";
+import "./discriminatedUnion";

@@ -22,7 +22,7 @@ import {
 } from "./types";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, lookupSymbol, lookupLocal, defineSymbol, makeSymbol, openScope, closeScope, SymbolState, hasFlag, setFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError } from "./context";
-import { trimStr, sliceStr, findChar, charAt, splitTopLevel, parseIntStr } from "../utils/string";
+import { trimStr, sliceStr, findChar, charAt, splitTopLevel, parseIntStr, bareAfterDelim } from "../utils/string";
 import { getProperty } from "./types";
 import { getGenericDecl, getGenericDeclFieldNames, getGenericDeclFieldTypes, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
 
@@ -601,9 +601,20 @@ function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 	if (sym === null) return;
 	node.resolvedSym = sym;
 
-	if (d.aliasType === "") {
+	if (d.aliasType === "" && d.discriminantName === "") {
 		return;
 	}
+
+	// Discriminated union: resolve structured variant data instead of aliasType text
+	if (d.discriminantName !== "") {
+		const resolved = resolveDiscriminatedUnion(ctx, d);
+		if (resolved !== null) {
+			assignType(sym.symbolType, resolved);
+			node.nodeType = sym.symbolType;
+		}
+		return;
+	}
+
 	const resolved = resolveAnnotation(d.aliasType, ctx);
 	// Propagate alias name to Union types (Reference gap: string-based annotations don't carry names)
 	if (resolved.kind === TypeKind.Union && resolved.typeName === "") {
@@ -617,6 +628,55 @@ function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 		assignType(sym.symbolType, resolved);
 		node.nodeType = sym.symbolType;
 	}
+}
+
+// Resolve discriminated union: type X = match (disc: EnumType) { EnumVal => { fields }, ... }
+// Produces a Union type with discriminant metadata:
+//   typeChildren = variant types, typeName = alias name,
+//   typeExtra = discriminant enum Type,
+//   typeNames = [discFieldName, variantKey0, variantKey1, ...]
+function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): Type {
+	// Resolve discriminant type — must be an enum
+	const discType = resolveAnnotation(d.discriminantType, ctx);
+	if (discType.kind !== TypeKind.Enum) {
+		addError(ctx, "Discriminant type '" + d.discriminantType + "' must be an enum");
+		return null as unknown as Type;
+	}
+
+	// Validate each variant key is a valid enum member
+	for (const key of d.variantKeys) {
+		const memberName = bareAfterDelim(key, ".");
+		let found = false;
+		if (discType.typeNames !== null) {
+			for (const m of discType.typeNames) {
+				if (m === memberName) {
+					found = true;
+				}
+			}
+		}
+		if (!found) {
+			addError(ctx, "'" + key + "' is not a member of enum '" + d.discriminantType + "'");
+		}
+	}
+
+	// Resolve each variant type
+	const variantTypes: Type[] = [];
+	for (const vt of d.variantTypes) {
+		const resolved = resolveAnnotation(vt, ctx);
+		variantTypes.push(resolved);
+	}
+
+	// Build Union type with discriminant metadata
+	const unionType = createUnion(variantTypes);
+	unionType.typeName = d.aliasName;
+	// Store discriminant metadata: typeExtra = enum type, typeNames = [discFieldName, key0, key1, ...]
+	unionType.typeExtra = discType;
+	const names: string[] = [d.discriminantName];
+	for (const key of d.variantKeys) {
+		names.push(key);
+	}
+	unionType.typeNames = names;
+	return unionType;
 }
 
 function resolveVariable(ctx: CheckerContext, node: Node): void {

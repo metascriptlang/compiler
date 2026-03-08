@@ -1,7 +1,7 @@
 // E2E: Closures and Arrow Functions → C output
 // Tests lambda lifting transform + closure codegen.
 
-import { compileToC, contains } from "../helpers";
+import { compileToC } from "../helpers";
 
 
 // KNOWN ISSUE: Arrow functions and closures fail in E2E pipeline.

@@ -317,11 +317,11 @@ const STRING_HASH_THRESHOLD: number = 8;
 
 // DJB2 hash — must match C runtime's msStringHash for correctness.
 // Note: .code only works on string literals (DRC #28), so we use charCodeAt helper.
-function djb2Hash(s: string): number {
-	let h: number = 5381;
+function djb2Hash(s: string): int32 {
+	let h: int32 = 5381;
 	let i = 0;
 	while (i < s.length) {
-		const cc = charCodeAt(s, i);
+		const cc: int32 = charCodeAt(s, i) as int32;
 		// h = h * 33 + charCode
 		h = ((h * 33) + cc) | 0;
 		i = i + 1;

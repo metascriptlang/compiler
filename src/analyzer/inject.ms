@@ -1289,30 +1289,6 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 
 // ===== Expression Statement (assignments + discarded calls) =====
 
-function isCompoundAssignOp(op: string): boolean {
-	return match (op) {
-		"+=" | "-=" | "*=" | "/=" | "%="
-		| "&=" | "|=" | "^=" | "<<=" | ">>=" => true,
-		_ => false,
-	};
-}
-
-function compoundToSimpleOp(op: string): string {
-	return match (op) {
-		"+=" => "+",
-		"-=" => "-",
-		"*=" => "*",
-		"/=" => "/",
-		"%=" => "%",
-		"&=" => "&",
-		"|=" => "|",
-		"^=" => "^",
-		"<<=" => "<<",
-		">>=" => ">>",
-		_ => "+",
-	};
-}
-
 function processExprStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation): Node {
 	const d = stmt.data as ExprStmtData;
 	const expr = d.expr;
@@ -1326,9 +1302,8 @@ function processExprStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContex
 		if (bd.operator === "=") {
 			return processAssignment(stmt, bd, idx, stmts, dctx, loc);
 		}
-		if (isCompoundAssignOp(bd.operator) && bd.left.kind === NodeKind.Identifier) {
-			return processCompoundAssignment(stmt, bd, idx, stmts, dctx, loc);
-		}
+		// String += is rewritten by stringOpLower → msStringAppend(&s, t) before DRC.
+		// Other compound assignments (number +=, etc.) use native C operators — no DRC needed.
 	}
 
 	// Use recursive processNode to handle RefCounting inside the expression.
@@ -1598,45 +1573,6 @@ function emitSaveAssignDestroy(stmt: Node, lhsExpr: Node, rhs: Node, rcInfo: RcI
 	}
 	result.push(makeDestroyCall(tmpName, rcInfo, loc));
 	return makeBlock(result, loc);
-}
-
-// ===== Compound Assignment: x += y =====
-
-function processCompoundAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation): Node {
-	if (dctx.ctx.checkerCtx === null) return stmt;
-	const leftD = bd.left.data as IdentifierData;
-
-	const sym = lookupSymbol(dctx.ctx.checkerCtx.table, leftD.name);
-	if (sym === null) return stmt;
-
-	const rcInfo = classifyType(sym.symbolType, dctx.ctx);
-	if (!rcInfo.needsCleanup) return stmt;
-
-	// Fused string append: s += rhs → msStringAppend(&s, rhs) (in-place, no alloc)
-	// Skip when rhs aliases s (self-append s += s needs save/concat/destroy)
-	if (rcInfo.rcKind === RcKind.String && bd.operator === "+=") {
-		if (!deepAliases(sym, bd.right)) {
-			const addrOf = makeUnary("&", makeIdent(leftD.name, loc), loc);
-			const appendCall = makeCall(
-				makeIdent("msStringAppend", loc),
-				[addrOf, bd.right],
-				loc
-			);
-			return makeExprStmt(appendCall, loc);
-		}
-	}
-
-	// Desugar: x += y  ->  { const $old = x; x = x op y; destroy($old); }
-	// The RHS (x op y) produces a fresh value, so no copy needed.
-	const simpleOp = compoundToSimpleOp(bd.operator);
-	const tmpName = freshTemp(dctx.ctx, "old");
-	const saveTmp = makeVarDecl(tmpName, makeIdent(leftD.name, loc), DeclKind.Const, loc);
-	saveTmp.nodeType = sym.symbolType;
-	const newVal = makeBinary(makeIdent(leftD.name, loc), simpleOp, bd.right, loc);
-	const assignNew = makeExprStmt(makeAssign(makeIdent(leftD.name, loc), newVal, loc), loc);
-	const destroyOld = makeDestroyCall(tmpName, rcInfo, loc);
-
-	return makeBlock([saveTmp, assignNew, destroyOld], loc);
 }
 
 // ===== Discarded Call Result =====
@@ -1976,25 +1912,6 @@ test "generateCleanup skips excluded" {
 test "call is fresh" { assert isFreshExpr(NodeKind.CallExpr); }
 
 test "identifier is not fresh" { assert !isFreshExpr(NodeKind.Identifier); }
-
-test "isCompoundAssignOp detects +=" {
-	assert isCompoundAssignOp("+=");
-	assert isCompoundAssignOp("-=");
-	assert isCompoundAssignOp("*=");
-	assert isCompoundAssignOp("<<=");
-}
-
-test "isCompoundAssignOp rejects =" {
-	assert !isCompoundAssignOp("=");
-	assert !isCompoundAssignOp("+");
-	assert !isCompoundAssignOp("==");
-}
-
-test "compoundToSimpleOp converts" {
-	assert compoundToSimpleOp("+=") === "+";
-	assert compoundToSimpleOp("-=") === "-";
-	assert compoundToSimpleOp("<<=") === "<<";
-}
 
 test "emptyNameSet creates empty" {
 	const ns = emptyNameSet();

@@ -1,28 +1,28 @@
 // E2E: Classes and Interfaces → C output
 // Classes are instantiated so DCE keeps them.
 
-import { compileToC, contains } from "../helpers";
+import { compileToC } from "../helpers";
 
 
 test "E2E C: class with new" {
 	const src = "class Foo { x: number }\nconst f = new Foo(42);";
 	const c = compileToC(src);
 	assert c.ok;
-	assert contains(c.value,"Foo");
+	assert c.value.contains("Foo");
 }
 
 test "E2E C: interface struct" {
 	const src = "interface Point { x: number; y: number }\nconst p: Point = { x: 1, y: 2 };";
 	const c = compileToC(src);
 	assert c.ok;
-	assert contains(c.value,"struct Point");
+	assert c.value.contains("struct Point");
 }
 
 test "E2E C: constructor emits Foo_new" {
 	const src = "class Foo { x: number }\nconst f = new Foo(42);";
 	const c = compileToC(src);
 	assert c.ok;
-	assert contains(c.value,"Foo_new");
+	assert c.value.contains("Foo_new");
 }
 
 // KNOWN ISSUE: class methods fail in E2E pipeline.

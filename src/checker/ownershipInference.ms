@@ -3,7 +3,7 @@
 // Only wraps params that need cleanup (non-primitive types needing RC).
 // Only infers sink modifiers. Default (no wrapper) = borrow.
 
-import { Node, NodeKind, ProgramData, FunctionDeclData, VariableDeclData, BinaryExprData, CallExprData, IdentifierData, ReturnStmtData, MemberExprData, ExprStmtData, IfStmtData, WhileStmtData, BlockStmtData } from "../ast/node";
+import { Node, NodeKind, ProgramData, FunctionDeclData, VariableDeclData, BinaryExprData, CallExprData, IdentifierData, ReturnStmtData, MemberExprData, ExprStmtData, IfStmtData, WhileStmtData, BlockStmtData, ExportDeclData } from "../ast/node";
 import { Type, TypeKind, wrapSink, isSinkType, isPrimitiveKind } from "./types";
 import { Symbol, SymbolKind, hasFlag, setFlag, SymbolFlag } from "./symbol";
 import { CheckerContext } from "./context";
@@ -12,9 +12,15 @@ import { CheckerContext } from "./context";
 export function inferOwnership(ctx: CheckerContext, program: Node): void {
 	if (program === null || program.kind !== NodeKind.Program) return;
 	const pd = program.data as ProgramData;
+	// Reference parity: sink inference applies to ALL procs regardless of visibility.
+	// Nim's sempass2 calls trackProc for every proc — no sfExported gate.
 	for (const stmt of pd.programStmts) {
-		if (stmt.kind === NodeKind.FunctionDecl) {
-			inferFunctionOwnership(ctx, stmt);
+		let inner = stmt;
+		if (inner.kind === NodeKind.ExportDecl) {
+			inner = (inner.data as ExportDeclData).exportedDecl;
+		}
+		if (inner.kind === NodeKind.FunctionDecl) {
+			inferFunctionOwnership(ctx, inner);
 		}
 	}
 }
