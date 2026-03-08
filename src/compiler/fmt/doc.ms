@@ -14,7 +14,7 @@ export enum DocKind {
 
 export type DocData =
 	| { text: string }                              // Text
-	| { children: Doc[] }                           // Group, Indent
+	| { children: Doc[] }                           // Group, Indent, LineSuffix
 	| { isSoft: boolean }                           // Line (softLine vs line)
 	| { flat: Doc, broken: Doc };                   // IfBreak
 

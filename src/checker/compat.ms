@@ -13,8 +13,8 @@ import {
 // ===== Assignability =====
 
 export function isAssignable(source: Type, target: Type): boolean {
-	// Nim parity: Sink/Lent are transparent ownership modifiers — unwrap before comparing
-	// (Nim: sigmatch.nim skips tySink via skipModifier in typeRel)
+	// Reference parity: sink and lent modifiers are transparent ownership modifiers — unwrap before comparing
+	// Standard reference implementation skips these modifiers during type relationship checks.
 	source = skipModifier(source);
 	target = skipModifier(target);
 

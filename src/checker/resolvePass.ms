@@ -25,6 +25,7 @@ import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, add
 import { trimStr, sliceStr, findChar, charAt, splitTopLevel, parseIntStr, bareAfterDelim } from "../utils/string";
 import { getProperty } from "./types";
 import { getGenericDecl, getGenericDeclFieldNames, getGenericDeclFieldTypes, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
+import { getDeclName } from "./collectPass";
 
 // ===== A. Resolve Annotation Strings =====
 
@@ -319,7 +320,7 @@ export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
 // ===== Generic Type Instantiation Helpers =====
 
 // Build a type arg key from resolved type arg strings (e.g., "number,string")
-function buildTypeArgKey(args: string[], ctx: CheckerContext): string {
+export function buildTypeArgKey(args: string[], ctx: CheckerContext): string {
 	let key = "";
 	for (let i = 0; i < args.length; i += 1) {
 		if (i > 0) key = key + ",";
@@ -341,7 +342,7 @@ function findGenericParamIdx(rawType: string, paramNames: string[]): number {
 // Looks up field names/types from parser side-channel, substitutes generic params -> concrete types
 // NOTE: Avoids all `let` string variables — only const strings + number let variables.
 // DRC generates msDecref instead of msStringDecref for let string locals in complex functions.
-function recordGenericTypeInstantiation(baseName: string, genericParams: string, args: string[], ctx: CheckerContext): void {
+export function recordGenericTypeInstantiation(baseName: string, genericParams: string, args: string[], ctx: CheckerContext): void {
 	const typeArgKey = buildTypeArgKey(args, ctx);
 	const mangledName = baseName + "__" + typeArgKey;
 
@@ -449,19 +450,7 @@ export function resolveDeclarations(ctx: CheckerContext, program: Node): void {
 	}
 }
 
-// Extract the name from any declaration node (parity with collectPass)
-function getDeclName(node: Node): string {
-	return match (node.kind) {
-		NodeKind.FunctionDecl => { const d = node.data as FunctionDeclData; d.fnName; },
-		NodeKind.ClassDecl => { const d = node.data as ClassDeclData; d.className; },
-		NodeKind.InterfaceDecl => { const d = node.data as InterfaceDeclData; d.interfaceName; },
-		NodeKind.EnumDecl => { const d = node.data as EnumDeclData; d.enumName; },
-		NodeKind.TypeAliasDecl => { const d = node.data as TypeAliasDeclData; d.aliasName; },
-		NodeKind.ExternDecl => { const d = node.data as ExternDeclData; d.externName; },
-		NodeKind.VariableDecl => { const d = node.data as VariableDeclData; d.declName; },
-		_ => "",
-	};
-}
+// getDeclName imported from collectPass (single canonical copy)
 
 function resolveFunction(ctx: CheckerContext, node: Node): void {
 	const d = node.data as FunctionDeclData;
@@ -640,7 +629,7 @@ function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): T
 	// Resolve discriminant type — must be an enum
 	const discType = resolveAnnotation(d.discriminantType, ctx);
 	if (discType.kind !== TypeKind.Enum) {
-		addError(ctx, "Discriminant type '" + d.discriminantType + "' must be an enum");
+		addError(ctx, "Discriminant type '" + d.discriminantType + "' must be an enum", 0, 0);
 		return null as unknown as Type;
 	}
 
@@ -656,7 +645,7 @@ function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): T
 			}
 		}
 		if (!found) {
-			addError(ctx, "'" + key + "' is not a member of enum '" + d.discriminantType + "'");
+			addError(ctx, "'" + key + "' is not a member of enum '" + d.discriminantType + "'", 0, 0);
 		}
 	}
 

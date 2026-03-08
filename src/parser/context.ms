@@ -3,7 +3,13 @@
 
 import { Token, TokenKind } from "../lexer/token";
 import { Node, NodeKind, CallExprData, IdentifierData, MemberExprData } from "../ast/node";
-import { isIdentLike } from "./util";
+// Local copy of util.ms:isIdentLike to avoid circular import with util.ms.
+// Must stay in sync with the canonical version in util.ms.
+function isIdentLikeToken(token: Token): boolean {
+	const k = token.kind;
+	if (k === TokenKind.Ident) { return true; }
+	return (k as number) >= (TokenKind.Abstract as number) && k !== TokenKind.Comment && k !== TokenKind.Eof;
+}
 
 // ===== Parser State =====
 
@@ -188,7 +194,7 @@ export function captureGenericParams(state: ParserState): string {
 	let names = "";
 	let depth = 1;
 	while (!isAtEnd(state) && depth > 0) {
-		if (isIdentLike(current(state)) && depth === 1) {
+		if (isIdentLikeToken(current(state)) && depth === 1) {
 			if (names !== "") { names = names + ","; }
 			names = names + current(state).value;
 			advance(state);
@@ -196,7 +202,7 @@ export function captureGenericParams(state: ParserState): string {
 			if (!isAtEnd(state) && current(state).kind === TokenKind.Extends && depth === 1) {
 				advance(state); // skip 'extends'
 				// Capture constraint type name
-				if (!isAtEnd(state) && isIdentLike(current(state))) {
+				if (!isAtEnd(state) && isIdentLikeToken(current(state))) {
 					names = names + ":" + current(state).value;
 					advance(state);
 				}

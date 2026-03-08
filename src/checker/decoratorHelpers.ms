@@ -1,9 +1,10 @@
 // Decorator accessor helpers — returns only primitives to avoid DRC cross-module Node lifecycle bugs.
 
-import { Node, NodeKind, DecoratedDeclData, MacroInvocationData, StringLiteralData } from "../ast/node";
+import { Node, NodeKind, DecoratedDeclData, MacroInvocationData, StringLiteralData, FunctionDeclData, ExternDeclData, MethodDeclData } from "../ast/node";
 
 export interface DecoratorInfo {
 	builtinKind: string;
+	nativeName: string;
 }
 
 // Extract all decorator metadata from a DecoratedDecl node as primitives.
@@ -24,5 +25,16 @@ export function extractDecoratorInfo(node: Node): DecoratorInfo {
 			}
 		}
 	}
-	return { builtinKind: btKind };
+	// Extract nativeName from inner decorated node (from "c_name" clause)
+	let natName = "";
+	const inner = dd.decoratedNode;
+	if (inner.kind === NodeKind.FunctionDecl) {
+		natName = (inner.data as FunctionDeclData).nativeName;
+	} else if (inner.kind === NodeKind.ExternDecl) {
+		natName = (inner.data as ExternDeclData).nativeName;
+	} else if (inner.kind === NodeKind.MethodDecl) {
+		natName = (inner.data as MethodDeclData).nativeName;
+	}
+	if (natName === null) natName = "";
+	return { builtinKind: btKind, nativeName: natName };
 }

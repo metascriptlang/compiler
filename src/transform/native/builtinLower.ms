@@ -67,22 +67,11 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 	if (cd.callee.resolvedSym !== null && cd.callee.resolvedSym.builtinKind !== "") {
 		return lowerBuiltinCall(node, cd.callee.resolvedSym.builtinKind, ctx);
 	}
-	// C-only: resolve nativeName and toString to C runtime functions
+	// C-only: primitive .toString() → msNumberToString(obj) / msBoolToString(obj)
+	// NOTE: All other MemberExpr UFCS rewrites (instance extensions, static class methods)
+	// are handled by extensionMethodLower — the single canonical UFCS converter.
+	// nativeName resolution happens at codegen (reads resolvedSym.nativeName).
 	if (!ctx.jsBackend) {
-		// Resolve MemberExpr calls with nativeName (e.g. console.log → msPrintln).
-		if (cd.callee.kind === NodeKind.MemberExpr && cd.callee.resolvedSym !== null) {
-			const methodSym = cd.callee.resolvedSym;
-			if (methodSym.nativeName !== "") {
-				const newCallee = makeIdent(methodSym.nativeName, loc);
-				newCallee.resolvedSym = methodSym;
-				cd.callee = newCallee;
-				node.resolvedSym = methodSym;
-				cd.isDirectCall = true;
-				return node;
-			}
-		}
-
-		// Primitive .toString() → msNumberToString(obj) / msBoolToString(obj)
 		if (cd.callee.kind === NodeKind.MemberExpr) {
 			const me2 = cd.callee.data as MemberExprData;
 			if (me2.property === "toString" && me2.object.nodeType !== null) {
@@ -97,22 +86,6 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 					call.nodeType = node.nodeType;
 					return call;
 				}
-			}
-		}
-
-		// Instance extension fallback: obj.method(args) → method(obj, args)
-		if (cd.callee.kind === NodeKind.MemberExpr && ctx.checkerCtx !== null) {
-			const me = cd.callee.data as MemberExprData;
-			const sym = lookupSymbol(ctx.checkerCtx.table, me.property);
-			if (sym !== null && sym.nativeName !== "") {
-				const newArgs: Node[] = [];
-				newArgs.push(me.object);
-				for (let j = 0; j < cd.arguments.length; j += 1) {
-					newArgs.push(cd.arguments[j]);
-				}
-				const newCall = makeCallResolved(makeIdentResolved(sym, loc), newArgs, sym, loc);
-				newCall.nodeType = node.nodeType;
-				return newCall;
 			}
 		}
 	}
@@ -349,7 +322,7 @@ function generateJsonParseHelper(
 	// if ($jv.kind !== JsonKind.Object) { return { ok: false, error: "expected object" }; }
 	const jvKind = makeMember(makeIdent("$jv", loc), "kind", loc);
 	jvKind.nodeType = numberType();
-	const kindCheck = makeBinary(jvKind, "!==", makeNumber(JsonKind.Object, loc), loc);
+	const kindCheck = makeBinary(jvKind, "!==", makeNumber(JsonKind.Object as number, loc), loc);
 	const errReturn2 = makeResultErr("expected object", resultType, refNode.location);
 	stmts.push(makeIf(kindCheck, makeBlock([errReturn2], loc), makeBlock([], loc), loc));
 

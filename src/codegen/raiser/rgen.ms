@@ -4,7 +4,7 @@
 
 import {
 	Node, NodeKind, ProgramData, FunctionDeclData,
-	ExportDeclData, DecoratedDeclData,
+	ExportDeclData, DecoratedDeclData, EnumDeclData,
 	ClassDeclData, MethodDeclData, ConstructorDeclData, PropertyDeclData
 } from "../../ast/node";
 import { parseSource } from "../../parser/index";

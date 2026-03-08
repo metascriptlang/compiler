@@ -22,3 +22,4 @@ import "./typeAliasStruct";
 import "./literalCoercion";
 import "./discriminatedUnion";
 import "./jsonTyped";
+import "./classGeneric";

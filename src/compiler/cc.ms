@@ -24,7 +24,7 @@ function getCcachePrefix(): string {
 
 // Find the compiler's runtime/ directory by walking up from argv[0].
 function resolveRuntime(): string {
-	const binDir = resolve(dirname(argv[0]));
+	const binDir = dirname(argv[0]);
 	let base = binDir;
 	for (let i = 0; i < 5; i += 1) {
 		const candidate = join(base, "runtime");

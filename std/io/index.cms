@@ -1,17 +1,15 @@
 /**
  * I/O — C/POSIX Backend
  *
- * Provides stdin reading and stdout/stderr writing.
+ * Standard streams only: stdin reading, stdout/stderr writing.
+ * File I/O: use std/fs (readFile, writeFile, etc.)
+ * JSON parsing: use std/core/json (parseJson, stringify, etc.)
  */
 
 @include("io/native.h");
 
 extern function msReadLine(): string;
 extern function msReadBytes(n: number): string;
-extern function msReadFile(path: string): string;
-extern function msJsonGetField(json: string, field: string): string;
-extern function msJsonGetNumberField(json: string, field: string): number;
-extern function msJsonGetObjectField(json: string, field: string): string;
 extern function msWriteStdout(s: string): void;
 extern function msWriteStderr(s: string): void;
 
@@ -21,22 +19,6 @@ export function readLine(): string {
 
 export function readBytes(n: number): string {
 	return msReadBytes(n);
-}
-
-export function readFile(path: string): string {
-	return msReadFile(path);
-}
-
-export function jsonGetField(json: string, field: string): string {
-	return msJsonGetField(json, field);
-}
-
-export function jsonGetNumberField(json: string, field: string): number {
-	return msJsonGetNumberField(json, field);
-}
-
-export function jsonGetObjectField(json: string, field: string): string {
-	return msJsonGetObjectField(json, field);
 }
 
 export function writeStdout(s: string): void {

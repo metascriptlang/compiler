@@ -18,7 +18,7 @@ import {
 	TryCatchStmtData, SwitchStmtData, SwitchCaseData,
 	BinaryExprData, CallExprData, IdentifierData, MemberExprData,
 	ArrayAccessData, ObjectLiteralData, ArrayLiteralData,
-	ConditionalExprData, NumberLiteralData,
+	ConditionalExprData, NumberLiteralData, NewExprData,
 	ExportDeclData, ClassDeclData,
 	DoWhileStmtData, MoveExprData, Symbol,
 } from "../ast/node";

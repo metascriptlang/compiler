@@ -1,0 +1,129 @@
+/**
+ * File System — C Backend
+ *
+ * Minimal C layer (7 POSIX wrappers) + pure MetaScript logic.
+ * Path utilities re-exported from fs/path.ms.
+ */
+
+@include("fs/native.h");
+
+// ===== C primitives (irreducible POSIX) =====
+
+extern function msFsReadFile(path: string): string;
+extern function msFsWriteFileMode(path: string, content: string, mode: string): number;
+extern function msFsStatMode(path: string): number;
+extern function msFsFileSize(path: string): number;
+extern function msFsMkdir(path: string): number;
+extern function msFsRmdir(path: string): number;
+extern function msFsRemove(path: string): number;
+extern function msFsRename(oldPath: string, newPath: string): number;
+
+// ===== POSIX mode constants (decoded in pure MetaScript) =====
+
+const S_IFMT: number = 61440;    // 0xF000 — file type mask
+const S_IFREG: number = 32768;   // 0x8000 — regular file
+const S_IFDIR: number = 16384;   // 0x4000 — directory
+
+// ===== Path (pure MetaScript, re-exported) =====
+
+export { dirname, basename, extname, join, resolve, isAbsolute, normalize } from "./path";
+
+// ===== Read =====
+
+export function readFile(path: string): string {
+	return msFsReadFile(path);
+}
+
+// ===== Write =====
+
+export function writeFile(path: string, content: string): boolean {
+	return msFsWriteFileMode(path, content, "wb") === 1;
+}
+
+export function appendFile(path: string, content: string): boolean {
+	return msFsWriteFileMode(path, content, "ab") === 1;
+}
+
+// ===== Stat (pure MetaScript — bitwise decode of POSIX mode bits) =====
+
+export function exists(path: string): boolean {
+	return msFsStatMode(path) >= 0;
+}
+
+export function isFile(path: string): boolean {
+	const mode = msFsStatMode(path);
+	if (mode < 0) return false;
+	return (mode - (mode % S_IFMT)) === S_IFREG;
+}
+
+export function isDir(path: string): boolean {
+	const mode = msFsStatMode(path);
+	if (mode < 0) return false;
+	return (mode - (mode % S_IFMT)) === S_IFDIR;
+}
+
+export function fileSize(path: string): number {
+	return msFsFileSize(path);
+}
+
+// ===== Directory =====
+
+export function mkdir(path: string): boolean {
+	return msFsMkdir(path) === 1;
+}
+
+export function rmdir(path: string): boolean {
+	return msFsRmdir(path) === 1;
+}
+
+// ===== Remove / Rename =====
+
+export function remove(path: string): boolean {
+	return msFsRemove(path) === 1;
+}
+
+export function rename(oldPath: string, newPath: string): boolean {
+	return msFsRename(oldPath, newPath) === 1;
+}
+
+// ===== Pure MetaScript utilities =====
+
+export function readLines(path: string): string[] {
+	const content = msFsReadFile(path);
+	if (content.length === 0) return [];
+	return content.split("\n");
+}
+
+export function writeLines(path: string, lines: string[]): boolean {
+	return msFsWriteFileMode(path, lines.join("\n"), "wb") === 1;
+}
+
+export function copyFile(src: string, dst: string): boolean {
+	const content = msFsReadFile(src);
+	if (content.length === 0) return false;
+	return msFsWriteFileMode(dst, content, "wb") === 1;
+}
+
+export function ensureDir(path: string): boolean {
+	if (msFsStatMode(path) >= 0) return true;
+	// Walk segments, mkdir each prefix
+	let i = 0;
+	while (i < path.length) {
+		if (path.charCodeAt(i) === "/".code) {
+			if (i > 0) {
+				const prefix = path.slice(0, i);
+				const m = msFsStatMode(prefix);
+				if (m < 0) {
+					if (msFsMkdir(prefix) !== 1) return false;
+				}
+			}
+		}
+		i = i + 1;
+	}
+	// Final segment
+	const m = msFsStatMode(path);
+	if (m < 0) {
+		return msFsMkdir(path) === 1;
+	}
+	return true;
+}

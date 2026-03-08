@@ -5,10 +5,11 @@
 // Cross-module references traced via ImportDecl source paths.
 
 import { Node, NodeKind, ProgramData, FunctionDeclData, ImportDeclData,
-	ExportDeclData, IdentifierData,
+	ExportDeclData, IdentifierData, VariableDeclData, ClassDeclData,
 	CallExprData, MemberExprData,
 	TestDeclData, DecoratedDeclData, ExternDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
+import { getDeclName } from "./collectPass";
 import { AliveSet, createAliveSet, aliveSetAdd, aliveSetHas } from "../codegen/c/context";
 
 // ===== Module Index =====
@@ -328,20 +329,7 @@ function isExportedDecl(node: Node): boolean {
 	return false;
 }
 
-function getDeclName(node: Node): string {
-	if (node === null) return "";
-	const k = node.kind;
-	if (k === NodeKind.FunctionDecl) { const d = node.data as FunctionDeclData; return d.fnName; }
-	if (k === NodeKind.VariableDecl) { const d = node.data as VariableDeclData; return d.declName; }
-	if (k === NodeKind.ClassDecl) { const d = node.data as ClassDeclData; return d.className; }
-	if (k === NodeKind.InterfaceDecl) { const d = node.data as { interfaceName: string }; return d.interfaceName; }
-	if (k === NodeKind.EnumDecl) { const d = node.data as { enumName: string }; return d.enumName; }
-	if (k === NodeKind.TypeAliasDecl) { const d = node.data as { aliasName: string }; return d.aliasName; }
-	if (k === NodeKind.ExternDecl) { const d = node.data as ExternDeclData; return d.externName; }
-	if (k === NodeKind.ExportDecl) { const d = node.data as ExportDeclData; return getDeclName(d.exportedDecl); }
-	if (k === NodeKind.DecoratedDecl) { const d = node.data as DecoratedDeclData; return getDeclName(d.decoratedNode); }
-	return "";
-}
+// getDeclName imported from collectPass (single canonical copy)
 
 // ===== Tests =====
 

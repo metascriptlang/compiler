@@ -330,6 +330,16 @@ function parsePrimary(state: ParserState): ExprResult {
 				callee = createNode(NodeKind.MemberExpr, { object: callee, property: prop.value, isOptional: false }, dotToken);
 			}
 		}
+		// Capture generic type args: new Box<number>(42)
+		if (!isAtEnd(state) && current(state).kind === TokenKind.Lt) {
+			if (isGenericCallAhead(state)) {
+				const ltToken = current(state);
+				const typeArgs = captureGenericTypeArgs(state);
+				if (typeArgs !== "") {
+					addExplicitTypeArg(ltToken.line, ltToken.column, typeArgs);
+				}
+			}
+		}
 		// Parse arguments if present
 		const args: Node[] = [];
 		if (!isAtEnd(state) && current(state).kind === TokenKind.LParen) {

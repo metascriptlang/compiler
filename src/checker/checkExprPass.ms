@@ -17,7 +17,7 @@ import {
 	Type, TypeKind,
 	unknownType, numberType, stringType, booleanType, charType,
 	voidType, nullType, errorType,
-	createArray, createSpan, createFunction, createTypeRef, substituteType, instantiateGeneric,
+	createArray, createSpan, createFunction, createTypeRef, createStruct, createRef, substituteType, instantiateGeneric,
 	isNumeric, isIntegerType, isStringType, isCallable, getReturnType, getElementType, getProperty, sizeOfType,
 	typeNameOf, unwrapRef, isDiscriminatedUnion, findVariantByDiscriminant, findFieldInVariant,
 	unifyType, createUnifyBindings, hasGenericParams,
@@ -34,9 +34,9 @@ import {
 	scoreCandidatePriority, isNoMatch, emptyCandidateScore, cmpCandidates,
 } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
-import { resolveAnnotation, ensureShaped } from "./resolvePass";
-import { parseNumberLiteral, sliceStr, findChar, charAt } from "../utils/string";
-import { findCallTypeArg } from "../parser/context";
+import { resolveAnnotation, ensureShaped, recordGenericTypeInstantiation, buildTypeArgKey } from "./resolvePass";
+import { parseNumberLiteral, sliceStr, findChar, charAt, splitTopLevel, trimStr } from "../utils/string";
+import { findCallTypeArg, getExplicitTypeArg, getGenericDecl } from "../parser/context";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -233,9 +233,45 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 		NodeKind.NewExpr => {
 			const d = node.data as NewExprData;
 			const calleeType = checkExpr(ctx, d.newCallee, null as unknown as Type);
+			// Resolve generic type args: new Box<number>(42)
+			let resolvedType = calleeType;
+			if (d.newCallee.kind === NodeKind.Identifier) {
+				const calleeName = (d.newCallee.data as IdentifierData).name;
+				const ltCol = d.newCallee.location.column + calleeName.length;
+				const typeArgStr = getExplicitTypeArg(d.newCallee.location.line, ltCol);
+				if (typeArgStr !== "") {
+					const genericParams = getGenericDecl(calleeName);
+					if (genericParams !== "") {
+						const args = splitTopLevel(typeArgStr, ",");
+						recordGenericTypeInstantiation(calleeName, genericParams, args, ctx);
+						// Build instantiated Ref<Struct> type
+						const typeArgKey = buildTypeArgKey(args, ctx);
+						const mangledName = calleeName + "__" + typeArgKey;
+						const baseSym = lookupSymbol(ctx.table, calleeName);
+						if (baseSym !== null) {
+							ensureShaped(baseSym, ctx);
+							const baseType = baseSym.symbolType;
+							// Substitute generic params with concrete types
+							const paramNames = splitTopLevel(genericParams, ",");
+							const trimmedParamNames: string[] = [];
+							const concreteTypes: Type[] = [];
+							for (let pi = 0; pi < paramNames.length; pi += 1) {
+								trimmedParamNames.push(trimStr(paramNames[pi]));
+								const argName = pi < args.length ? trimStr(args[pi]) : "";
+								concreteTypes.push(resolveAnnotation(argName, ctx));
+							}
+							const instType = instantiateGeneric(baseType, trimmedParamNames, concreteTypes);
+							// Set mangled name on inner struct
+							const instInner = (instType.kind === TypeKind.Ref && instType.typeReturn !== null) ? instType.typeReturn : instType;
+							instInner.typeName = mangledName;
+							resolvedType = instType;
+						}
+					}
+				}
+			}
 			// Resolve inner struct type for field type propagation
-			const innerType = (calleeType !== null && calleeType.kind === TypeKind.Ref && calleeType.typeReturn !== null)
-				? calleeType.typeReturn : calleeType;
+			const innerType = (resolvedType !== null && resolvedType.kind === TypeKind.Ref && resolvedType.typeReturn !== null)
+				? resolvedType.typeReturn : resolvedType;
 			const fieldTypes = (innerType !== null && innerType.typeChildren !== null) ? innerType.typeChildren : null as unknown as Type[];
 			let ai = 0;
 			while (ai < d.newArguments.length) {
@@ -243,8 +279,8 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 				checkExpr(ctx, d.newArguments[ai], argExpected);
 				ai = ai + 1;
 			}
-			if (calleeType.kind === TypeKind.Struct || calleeType.kind === TypeKind.Ref) {
-				calleeType;
+			if (resolvedType.kind === TypeKind.Struct || resolvedType.kind === TypeKind.Ref) {
+				resolvedType;
 			} else {
 				unknownType();
 			}
@@ -1083,7 +1119,7 @@ function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, d: Obje
 		for (const prop of d.properties) {
 			checkExpr(ctx, prop, null as unknown as Type);
 		}
-		addError(ctx, "Object literal for discriminated union '" + unionType.typeName + "' missing discriminant field '" + discName + "'");
+		addError(ctx, "Object literal for discriminated union '" + unionType.typeName + "' missing discriminant field '" + discName + "'", node.location.line, node.location.column);
 		node.nodeType = unionType;
 		return unionType;
 	}
@@ -1138,7 +1174,7 @@ function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, d: Obje
 				checkExpr(ctx, d.properties[fi], fieldType);
 			} else {
 				checkExpr(ctx, d.properties[fi], null as unknown as Type);
-				addError(ctx, "Field '" + key + "' does not exist on variant " + unionType.typeNames[variantIdx + 1] + " of '" + unionType.typeName + "'");
+				addError(ctx, "Field '" + key + "' does not exist on variant " + unionType.typeNames[variantIdx + 1] + " of '" + unionType.typeName + "'", node.location.line, node.location.column);
 			}
 			fi = fi + 1;
 		}
@@ -1533,7 +1569,7 @@ function processEmitInterpolation(ctx: CheckerContext, md: MacroInvocationData, 
 	while (a < str.length) {
 		let b = a;
 		// Find next backtick
-		while (b < str.length && str.charAt(b) !== "`") {
+		while (b < str.length && charAt(str, b) !== "`") {
 			b = b + 1;
 		}
 		// Emit raw text before backtick
@@ -1547,7 +1583,7 @@ function processEmitInterpolation(ctx: CheckerContext, md: MacroInvocationData, 
 		if (b >= str.length) break;
 		// Find closing backtick
 		let c = b + 1;
-		while (c < str.length && str.charAt(c) !== "`") {
+		while (c < str.length && charAt(str, c) !== "`") {
 			c = c + 1;
 		}
 		if (c >= str.length) {
@@ -1569,7 +1605,7 @@ function processEmitInterpolation(ctx: CheckerContext, md: MacroInvocationData, 
 				const idNode = createNode(NodeKind.Identifier, { name: ident },
 					createToken(TokenKind.Identifier, ident, line));
 				idNode.resolvedSym = sym;
-				idNode.nodeType = sym.symType;
+				idNode.nodeType = sym.symbolType;
 				newArgs.push(idNode);
 			} else {
 				// Unknown symbol — keep as string literal (reference behavior)

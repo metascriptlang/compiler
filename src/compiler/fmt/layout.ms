@@ -139,7 +139,7 @@ function fitsOnOneLine(doc: Doc, rem: number): boolean {
 		},
 		DocKind.HardLine => false, // HardLine ALWAYS forces a break
 		DocKind.IfBreak => {
-			const d = doc.data as { flat: Doc };
+			const d = doc.data as { flat: Doc, broken: Doc };
 			getFlatWidth(d.flat) <= rem
 		},
 		_ => true,
@@ -161,7 +161,7 @@ function getFlatWidth(doc: Doc): number {
 		},
 		DocKind.Line => (doc.data as { isSoft: boolean }).isSoft ? 0 : 1,
 		DocKind.HardLine => 1000, // Effectively infinite width to force break
-		DocKind.IfBreak => getFlatWidth((doc.data as { flat: Doc }).flat),
+		DocKind.IfBreak => getFlatWidth((doc.data as { flat: Doc, broken: Doc }).flat),
 		_ => 0,
 	};
 }

@@ -637,11 +637,43 @@ function getTypeSizeInner(t: Type): number {
 
 // Substitute a generic parameter name with a concrete type throughout a type tree.
 // Returns a new Type (does not mutate original).
+function substituteStruct(t: Type, paramName: string, concrete: Type): Type {
+	const newFieldTypes: Type[] = [];
+	let changed = false;
+	for (let ci = 0; ci < t.typeChildren.length; ci += 1) {
+		const sub = substituteType(t.typeChildren[ci], paramName, concrete);
+		newFieldTypes.push(sub);
+		if (sub !== t.typeChildren[ci]) changed = true;
+	}
+	if (!changed) return t;
+	const newNames: string[] = [];
+	for (let ni = 0; ni < t.typeNames.length; ni += 1) {
+		newNames.push(t.typeNames[ni]);
+	}
+	const result = createStruct(t.typeName, newNames, newFieldTypes, t.typeFlags === 1);
+	result.typeReturn = t.typeReturn;
+	result.typeExtra = t.typeExtra;
+	return result;
+}
+
+// Visited set for cycle detection in self-referential types
+let substituteVisited: Type[] = [];
+
+function substituteIsSeen(t: Type): boolean {
+	for (let i = 0; i < substituteVisited.length; i += 1) {
+		if (substituteVisited[i] === t) return true;
+	}
+	return false;
+}
+
 export function substituteType(t: Type, paramName: string, concrete: Type): Type {
 	if (t === null) return t;
 	// Guard before match: GenericParam with matching name
 	if (t.kind === TypeKind.GenericParam && t.typeName === paramName) return concrete;
-	return match (t.kind) {
+	// Cycle detection for self-referential types (parity: semtypinst.nim recursionLimit)
+	if (substituteIsSeen(t)) return t;
+	substituteVisited.push(t);
+	const result = match (t.kind) {
 		TypeKind.Number | TypeKind.String | TypeKind.Boolean |
 		TypeKind.Void | TypeKind.Null | TypeKind.Unknown |
 		TypeKind.Never | TypeKind.Error | TypeKind.GenericParam |
@@ -681,8 +713,11 @@ export function substituteType(t: Type, paramName: string, concrete: Type): Type
 			}
 			createTuple(newChildren)
 		},
+		TypeKind.Struct => substituteStruct(t, paramName, concrete),
 		_ => t,
 	};
+	substituteVisited.pop();
+	return result;
 }
 
 // Instantiate a generic type with concrete type arguments.
@@ -927,7 +962,7 @@ export function isPrimitiveKind(kind: TypeKind): boolean {
 
 // typeNameOf — maps Type to its canonical string name (used by checker + transforms)
 export function typeNameOf(t: Type): string {
-	// Nim parity: Sink/Lent are transparent — unwrap before naming
+	// Reference parity: ownership modifiers are transparent — unwrap before naming
 	if (t.kind === TypeKind.Sink || t.kind === TypeKind.Lent) {
 		if (t.typeReturn !== null) return typeNameOf(t.typeReturn);
 		return "";

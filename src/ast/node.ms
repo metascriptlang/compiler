@@ -166,6 +166,7 @@ export type NodeData =
 	| { outArg: Node }                                             // OutExpr
 	| { sizeofType: string }                                       // SizeofExpr
 	| { convExpr: Node, convType: Type }                           // HiddenStdConv, HiddenSubConv
+	| { expr: Node }                                               // HiddenDeref, HiddenAddr
 	| { annotationType: string }                                   // TypeAnnotation
 	// Pattern variants
 	| { patternElements: Node[], hasRestElement: boolean }         // ArrayPattern
@@ -312,7 +313,7 @@ export type DeferStmtData = { deferExpr: Node };
 export type ThrowStmtData = { throwArg: Node };
 export type TryCatchStmtData = { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node };
 export type MacroInvocationData = { macroName: string, macroArgs: Node[] };
-export type HiddenDerefData = { convExpr: Node, convType: Type };
+export type HiddenDerefData = { expr: Node };
 export type TestDeclData = { testName: string, testBody: Node };
 export type AssertStmtData = { assertExpr: Node, assertSource: string, assertMessage: string };
 export type QuoteExprData = { quoteBody: Node };
