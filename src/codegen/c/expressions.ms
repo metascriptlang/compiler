@@ -40,29 +40,87 @@ import { ensureDrcProto, ensureCrossModuleProto } from "./declarations";
 // Our Identifier handler already applies rdLoc (pushes (*name) for indirect params).
 // So for indirect args: snippet on stack = (*name), but we need raw pointer = name.
 // We use the raw safeName directly (the reference implementation's snippet is always the raw name).
-function genArgCcgPtr(arg: string, argNode: Node, p: CProc): string {
+// Check if a node is a CallExpr("msRefArrayAccess", ...) — used by MemberExpr and HiddenDeref
+// to handle void* results from ref array macros. Returns true if the node matches.
+function isRefArrayAccessCall(node: Node): boolean {
+	if (node.kind !== NodeKind.CallExpr) return false;
+	const callee = (node.data as CallExprData).callee;
+	return callee.kind === NodeKind.Identifier && (callee.data as IdentifierData).name === "msRefArrayAccess";
+}
+
+function genArgCcgPtr(g: CGen, arg: string, argNode: Node, p: CProc): string {
 	if (argNode.kind === NodeKind.Identifier && isIndirectParam(p, (argNode.data as IdentifierData).name)) {
 		// Indirect param: already a pointer — pass raw (reference patterns return snippet as-is)
 		return safeName((argNode.data as IdentifierData).name);
 	}
-	// Not indirect: take address (reference patterns return &(snippet))
-	return "(&" + arg + ")";
+	// Not indirect: take address — use safeAddrOf to handle bare compound literals
+	return safeAddrOf(g, p, arg, argNode, null as unknown as Type);
 }
 
 // Reference parity: Nim's addrLoc always operates on a TLoc (named variable),
 // never on a bare compound literal. When we need &(expr) and expr is a bare
 // compound literal (starts with '{'), hoist it to a temp variable first.
-function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node): string {
+// Nim-aligned address-of: always operates on named locations.
+// paramType: optional parameter type from call site for resolving untyped literals.
+function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, paramType: Type): string {
 	if (snippet.length > 0 && snippet.charCodeAt(0) === "{".code) {
-		let cType = "void";
+		// Bare compound literal — must hoist to temp (Nim: getTemp + field assignment)
+		let cType = "";
+		// Try 1: exprNode.nodeType
 		if (exprNode !== null && exprNode.nodeType !== null) {
-			cType = getTypeDesc(g, exprNode.nodeType);
+			if (exprNode.nodeType.kind === TypeKind.Union) {
+				const od = exprNode.data as ObjectLiteralData;
+				if (od.keys !== null && od.keys.length > 0) {
+					const unionName = getTypeDesc(g, exprNode.nodeType);
+					const keyArr: string[] = [od.keys[0]];
+					const varIdx = findUnionVariant(exprNode.nodeType, keyArr, []);
+					if (varIdx >= 0) {
+						cType = unionName + "_v" + intToString(varIdx);
+					}
+				}
+			} else {
+				cType = getTypeDesc(g, exprNode.nodeType);
+			}
 		}
-		p.labels += 1;
-		const tmpName = "_clit" + p.labels + "_";
-		emitProcLocalsLine(p, cType + " " + tmpName + ";");
-		emitStmtsLine(p, tmpName + " = (" + cType + ")" + snippet + ";");
-		return "&" + tmpName;
+		// Try 2: paramType (pointer type → strip * to get pointee)
+		if ((cType === "" || cType === "void" || cType === "void*") && paramType !== null) {
+			// Unwrap pointer to get inner type
+			let innerType = paramType;
+			if (paramType.kind === TypeKind.Ptr || paramType.kind === TypeKind.Ref) {
+				innerType = paramType.typeReturn;
+			}
+			if (innerType !== null && innerType.kind === TypeKind.Union && exprNode !== null && exprNode.kind === NodeKind.ObjectLiteral) {
+				// Union variant: determine variant type from ObjectLiteral keys
+				const od = exprNode.data as ObjectLiteralData;
+				if (od.keys !== null && od.keys.length > 0) {
+					const unionName = getTypeDesc(g, innerType);
+					const keyArr: string[] = [od.keys[0]];
+					const varIdx = findUnionVariant(innerType, keyArr, []);
+					if (varIdx >= 0) {
+						// Emit as full union with tag + variant
+						p.labels += 1;
+						const tmpName = "_clit" + p.labels + "_";
+						emitProcLocalsLine(p, unionName + " " + tmpName + ";");
+						emitStmtsLine(p, tmpName + "._tag = " + intToString(varIdx) + ";");
+						const varTypeName = unionName + "_v" + intToString(varIdx);
+						emitStmtsLine(p, tmpName + ".v" + intToString(varIdx) + " = (" + varTypeName + ")" + snippet + ";");
+						return "&" + tmpName;
+					}
+				}
+			} else if (innerType !== null) {
+				const ptDesc = getTypeDesc(g, innerType);
+				if (ptDesc !== "void" && ptDesc !== "void*") {
+					cType = ptDesc;
+				}
+			}
+		}
+		if (cType !== "" && cType !== "void" && cType !== "void*" && cType !== " ") {
+			p.labels += 1;
+			const tmpName = "_clit" + p.labels + "_";
+			emitProcLocalsLine(p, cType + " " + tmpName + ";");
+			emitStmtsLine(p, tmpName + " = (" + cType + ")" + snippet + ";");
+			return "&" + tmpName;
+		}
 	}
 	return "&(" + snippet + ")";
 }
@@ -182,6 +240,8 @@ function discoverExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[],
 		// Built-in numeric constants → C99 macros
 		if (d.name === "NaN") { results.push("NAN"); return; }
 		if (d.name === "Infinity") { results.push("INFINITY"); return; }
+		// MetaScript has no undefined — emit as NULL (Nim: no equivalent, undefined is a JS concept)
+		if (d.name === "undefined") { results.push(cNullLiteral()); return; }
 		// Auto-declare DRC sink temps on first use (zero-init for goto safety)
 		if (d.name.startsWith("$sink_") && p !== null) {
 			let alreadySeen = false;
@@ -514,9 +574,28 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 
 	// MemberExpr
 	if (kind === NodeKind.MemberExpr) {
-		const obj = peekResult(results, cc, 0);
+		let obj = peekResult(results, cc, 0);
 		truncResults(results, cc);
 		const d = node.data as MemberExprData;
+
+		// Ref array access returns void* — cast to element type for member access
+		// Nim parity: genRecordField uses dotField(data[idx], field) for values
+		if (d.object.nodeType !== null && isRefArrayAccessCall(d.object)) {
+			const elemTypeDesc = getTypeDesc(g, d.object.nodeType);
+			if (elemTypeDesc !== "void*" && elemTypeDesc !== "void") {
+				let prop = d.property;
+				if (prop === "length" || prop === "byteLength") prop = "len";
+				else prop = mangleFieldName(prop);
+				// Class/ref types: msRefArray stores void*, cast to typed ptr, use ->
+				// Value struct types: typed array macro returns struct value directly, use .
+				if (isPointerType(d.object.nodeType)) {
+					results.push("((" + elemTypeDesc + ")" + obj + ")->" + prop);
+				} else {
+					results.push(obj + "." + prop);
+				}
+				return;
+			}
+		}
 		// Pre-formatted property (e.g. "p->data" from nativeLower) — emit raw
 		if (findChar(d.property, ">") >= 0) {
 			results.push(obj + "." + d.property);
@@ -565,10 +644,25 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 		const srcType = (d.asExpr !== null) ? d.asExpr.nodeType : null as unknown as Type;
 
 		// Case 1: Source is Union → access variant member
-		if (srcType !== null && srcType.kind === TypeKind.Union && node.nodeType !== null) {
-			const targetNames = (node.nodeType.typeNames !== null) ? node.nodeType.typeNames : [] as string[];
-			const targetTypes = (node.nodeType.typeChildren !== null) ? node.nodeType.typeChildren : [] as Type[];
-			const varIdx = (targetNames.length > 0) ? findUnionVariant(srcType, targetNames, targetTypes) : -1;
+		// Use getTypeDesc consistency: the type cache (first-write-wins in genUnionType)
+		// ensures structurally identical variants share one C typedef. Find the first
+		// variant whose cached C type matches the target — guaranteed consistent with
+		// variable type declarations. Self-hosting safe (no reference identity on value types).
+		if (srcType !== null && srcType.kind === TypeKind.Union && node.nodeType !== null
+			&& srcType.typeChildren !== null) {
+			// Ensure union type is generated (populates variant type cache)
+			getTypeDesc(g, srcType);
+			const targetDesc = getTypeDesc(g, node.nodeType);
+			let varIdx = -1;
+			let vi = 0;
+			while (vi < srcType.typeChildren.length) {
+				const variant = srcType.typeChildren[vi];
+				if (variant !== null && getTypeDesc(g, variant) === targetDesc) {
+					varIdx = vi;
+					vi = srcType.typeChildren.length;
+				}
+				vi += 1;
+			}
 			if (varIdx >= 0) {
 				results.push("(" + expr + ").v" + intToString(varIdx));
 				return;
@@ -632,6 +726,22 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 	if (kind === NodeKind.HiddenDeref) {
 		const inner = peekResult(results, cc, 0);
 		truncResults(results, cc);
+		// Ref array access returns void* — cast to typed pointer before deref
+		// Nim parity: genDeref applies cDeref(rdLoc(a)) = (*typed_data[idx])
+		const hd = node.data as ExprStmtData;
+		if (isRefArrayAccessCall(hd.expr) && hd.expr.nodeType !== null) {
+			const elemDesc = getTypeDesc(g, hd.expr.nodeType);
+			if (elemDesc !== "void*" && elemDesc !== "void") {
+				if (isPointerType(hd.expr.nodeType)) {
+					// Ref element: cast void* to typed ptr, deref to struct value
+					results.push("(*(" + elemDesc + ")" + inner + ")");
+				} else {
+					// Value struct element: macro returns struct value, no deref needed
+					results.push(inner);
+				}
+				return;
+			}
+		}
 		results.push("(*" + inner + ")");
 		return;
 	}
@@ -646,7 +756,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 			// Indirect param: already a pointer — reference pattern returns raw snippet
 			results.push(safeName((d.expr.data as IdentifierData).name));
 		} else {
-			results.push(safeAddrOf(g, p, inner, d.expr));
+			results.push(safeAddrOf(g, p, inner, d.expr, node.nodeType));
 		}
 		return;
 	}
@@ -696,26 +806,70 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 				results.push("(msClosure){ .fn = (void*)" + fnExpr + ", .env = (void*)" + envTemp + " }");
 			}
 		} else {
-			// General struct literal — ALL compound literals need (Type) prefix in C
-			// Exception: Union types are wrapped by the parent TypeAssertion handler
-			let prefix = "";
-			if (node.nodeType !== null && node.nodeType.kind !== TypeKind.Union) {
-				const td = getTypeDesc(g, node.nodeType);
-				if (td !== "void*" && td !== "double") {
-					prefix = "(" + td + ")";
+			// Nim-aligned: hoist struct literal to temp variable + field-by-field assignment.
+			// Nim (genObjConstr): getTemp(p, t) → tmp.field = val → use tmp.
+			// Never emits inline compound literals — works with C89+ and avoids &({...}) issues.
+			let cType = "";
+			if (node.nodeType !== null) {
+				if (node.nodeType.kind === TypeKind.Union && d.keys.length > 0) {
+					// Union variant: determine variant type from field names
+					const unionName = getTypeDesc(g, node.nodeType);
+					const keyArr: string[] = [d.keys[0]];
+					const varIdx = findUnionVariant(node.nodeType, keyArr, []);
+					if (varIdx >= 0) {
+						cType = unionName + "_v" + intToString(varIdx);
+					}
+				} else {
+					const td = getTypeDesc(g, node.nodeType);
+					if (td !== "void*" && td !== "double" && td !== "void") {
+						cType = td;
+					}
 				}
 			}
-			let result = prefix + "{ ";
-			let i = 0;
-			while (i < d.keys.length) {
-				if (i > 0) result = result + ", ";
-				let val = peekResult(results, cc, i);
-				result = result + "." + mangleFieldName(d.keys[i]) + " = " + val;
-				i += 1;
+			if (cType !== "") {
+				// Nim pattern: allocate temp, zero-init, assign fields
+				p.labels += 1;
+				const tmpName = "_lit" + p.labels + "_";
+				emitProcLocalsLine(p, cType + " " + tmpName + ";");
+				emitStmtsLine(p, "memset(&" + tmpName + ", 0, sizeof(" + cType + "));");
+				let i = 0;
+				while (i < d.keys.length) {
+					const val = peekResult(results, cc, i);
+					emitStmtsLine(p, tmpName + "." + mangleFieldName(d.keys[i]) + " = " + val + ";");
+					i += 1;
+				}
+				truncResults(results, cc);
+				results.push(tmpName);
+			} else {
+				// Nim-aligned fallback: hoist to temp even without type info.
+				// Generate anonymous struct type from field names + inferred C types.
+				// Nim: genObjConstr always has e.typ. We approximate by using field values' types.
+				p.labels += 1;
+				const tmpName = "_lit" + p.labels + "_";
+				// Build anonymous struct definition from values
+				let structDef = "struct { ";
+				let i = 0;
+				while (i < d.keys.length) {
+					if (i > 0) structDef = structDef + " ";
+					const propNode = d.properties[i];
+					let fieldType = "double";  // default
+					if (propNode !== null && propNode.nodeType !== null) {
+						fieldType = getTypeDesc(g, propNode.nodeType);
+					}
+					structDef = structDef + fieldType + " " + mangleFieldName(d.keys[i]) + ";";
+					i += 1;
+				}
+				structDef = structDef + " }";
+				emitProcLocalsLine(p, structDef + " " + tmpName + ";");
+				i = 0;
+				while (i < d.keys.length) {
+					const val = peekResult(results, cc, i);
+					emitStmtsLine(p, tmpName + "." + mangleFieldName(d.keys[i]) + " = " + val + ";");
+					i += 1;
+				}
+				truncResults(results, cc);
+				results.push(tmpName);
 			}
-			result = result + " }";
-			truncResults(results, cc);
-			results.push(result);
 		}
 		return;
 	}
@@ -798,22 +952,29 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 			let arg = results[results.length - cc + ai];
 			// & prefix on nativeName: wrap first arg with &(...)
 			if (ovNeedsAddr && ai === 0) {
-				arg = safeAddrOf(g, p, arg, cd.arguments[ai]);
+				arg = safeAddrOf(g, p, arg, cd.arguments[ai], null as unknown as Type);
 			} else if (hasOvParams && ai < ovType.typeChildren.length && ai < cd.arguments.length) {
 				const paramType = ovType.typeChildren[ai];
 				const argNode = cd.arguments[ai];
 				if (paramType !== null && argNode.nodeType !== null && argNode.kind !== NodeKind.HiddenAddr) {
 					const paramIsPtr = isPointerType(paramType);
 					const argIsPtr = isPointerType(argNode.nodeType);
+					const paramCcgPtr = ccgIntroducedPtr(paramType);
 					if (paramIsPtr && !argIsPtr) {
-						arg = safeAddrOf(g, p, arg, argNode);
-					} else if (!paramIsPtr && argIsPtr) {
+						arg = safeAddrOf(g, p, arg, argNode, paramType);
+					} else if (!paramIsPtr && argIsPtr && !paramCcgPtr) {
+						// Only deref if param is NOT ccgIntroducedPtr'd
+						// Self-ref fields are auto-promoted to Ref<T> (argIsPtr=true)
+						// but ccgIntroducedPtr params expect T* — pass pointer directly
 						arg = "*(" + arg + ")";
 					}
 					// Reference parity: introduced pointer params use address location patterns
-					if (!paramIsPtr && !argIsPtr && ccgIntroducedPtr(paramType)) {
-						arg = genArgCcgPtr(arg, argNode, p);
+					if (!paramIsPtr && !argIsPtr && paramCcgPtr) {
+						arg = genArgCcgPtr(g, arg, argNode, p);
 					}
+				} else if (paramType !== null && argNode.nodeType === null && arg.length > 0 && arg.charCodeAt(0) === "{".code) {
+					// Untyped ObjectLiteral — use paramType to hoist properly
+					arg = safeAddrOf(g, p, arg, argNode, paramType);
 				}
 			}
 			argsStr = argsStr + arg;
@@ -854,15 +1015,22 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 				if (paramType !== null && argNode.nodeType !== null && argNode.kind !== NodeKind.HiddenAddr) {
 					const paramIsPtr = isPointerType(paramType);
 					const argIsPtr = isPointerType(argNode.nodeType);
+					const paramCcgPtr = ccgIntroducedPtr(paramType);
 					if (paramIsPtr && !argIsPtr) {
-						arg = safeAddrOf(g, p, arg, argNode);
-					} else if (!paramIsPtr && argIsPtr) {
+						arg = safeAddrOf(g, p, arg, argNode, paramType);
+					} else if (!paramIsPtr && argIsPtr && !paramCcgPtr) {
+						// Only deref if param is NOT ccgIntroducedPtr'd
+						// Self-ref fields are auto-promoted to Ref<T> (argIsPtr=true)
+						// but ccgIntroducedPtr params expect T* — pass pointer directly
 						arg = "*(" + arg + ")";
 					}
 					// Reference parity: introduced pointer params use address location patterns
-					if (!paramIsPtr && !argIsPtr && ccgIntroducedPtr(paramType)) {
-						arg = genArgCcgPtr(arg, argNode, p);
+					if (!paramIsPtr && !argIsPtr && paramCcgPtr) {
+						arg = genArgCcgPtr(g, arg, argNode, p);
 					}
+				} else if (paramType !== null && argNode.nodeType === null && arg.length > 0 && arg.charCodeAt(0) === "{".code) {
+					// Untyped ObjectLiteral — use paramType to hoist properly
+					arg = safeAddrOf(g, p, arg, argNode, paramType);
 				}
 			}
 		}
@@ -969,7 +1137,8 @@ function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Node[]): st
 
 	// Build call with & on first arg if mutating
 	if (needsAddr && args.length > 0) {
-		let result = cName + "(&(" + genExpr(g, p, args[0]) + ")";
+		const firstArg = genExpr(g, p, args[0]);
+		let result = cName + "(" + safeAddrOf(g, p, firstArg, args[0], null as unknown as Type);
 		let i = 1;
 		while (i < args.length) {
 			result = result + ", " + genExpr(g, p, args[i]);
@@ -1050,7 +1219,7 @@ function exprSnippet(input: string): string {
 	if (stmt.kind !== NodeKind.ExprStmt) return "NOT_EXPR_STMT";
 	const es = stmt.data as ExprStmtData;
 	const g = createCGen(null as unknown as CheckerContext, "");
-	const p = createProc("test", null as unknown as Type);
+	const p = createProc("test");
 	return genExpr(g, p, es.expr);
 }
 

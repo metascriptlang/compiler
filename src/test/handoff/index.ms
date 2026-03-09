@@ -23,3 +23,5 @@ import "./literalCoercion";
 import "./discriminatedUnion";
 import "./jsonTyped";
 import "./classGeneric";
+import "./tryResultPropagation";
+import "./nullCheckValueType";

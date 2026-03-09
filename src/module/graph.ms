@@ -20,6 +20,25 @@ export enum ModuleState {
 	Ready,      // fully loaded, imports resolved
 }
 
+// ===== Module Error (structured) =====
+// Preserves line/col/severity from checker for rich error formatting.
+
+export enum ErrorSeverity {
+	Error,
+	Warning,
+}
+
+export interface ModuleError {
+	message: string;
+	line: number;       // 1-based, 0 = unknown
+	column: number;     // 0-based, 0 = unknown
+	severity: ErrorSeverity;
+}
+
+export function createModuleError(message: string, line: number, column: number, severity: ErrorSeverity): ModuleError {
+	return { message, line, column, severity };
+}
+
 // ===== Import Entry =====
 
 export interface ImportEntry {
@@ -38,7 +57,7 @@ export interface Module {
 	state: ModuleState;        // loading state machine
 	exportNames: string[];     // names of exported symbols (for lookup)
 	imports: ImportEntry[];    // resolved import dependencies
-	errors: string[];          // per-module errors
+	errors: ModuleError[];     // per-module errors (structured)
 	isCHeader: boolean;        // true if loaded from .h file (C header module)
 }
 

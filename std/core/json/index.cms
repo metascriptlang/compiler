@@ -4,6 +4,18 @@
 // Implementation files (parser.ms, stringify.ms) are loaded separately by the
 // module system when their symbols are referenced.
 
+// ===== Typed JSON API =====
+// Usage: const person = try JSON.parse<Person>(jsonStr);
+// @builtin monomorphizes at compile time via builtinLower.
+
+export class JSON {
+	@builtin("JsonParse")
+	static extern parse<T>(input: string): Result<T, string>;
+
+	@builtin("JsonStringify")
+	static extern stringify<T>(value: T): string;
+}
+
 // ===== Types =====
 
 export enum JsonKind {
@@ -53,16 +65,4 @@ export function jsonObjectFromKV(keys: string[], vals: JsonValue[]): JsonValue {
 
 export function jsonObject(): JsonValue {
 	return new JsonValue(JsonKind.Object, false, 0, "", [], [], []);
-}
-
-// ===== Typed JSON API =====
-// Usage: const person = try JSON.parse<Person>(jsonStr);
-// @builtin monomorphizes at compile time via builtinLower.
-
-export class JSON {
-	@builtin("JsonParse")
-	static extern parse<T>(input: string): Result<T, string>;
-
-	@builtin("JsonStringify")
-	static extern stringify<T>(value: T): string;
 }

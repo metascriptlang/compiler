@@ -19,10 +19,11 @@ export interface TransformContext {
 	jsBackend: boolean;  // true = skip C-specific transforms (lambda lifting, destructor lifting, etc.)
 	pendingTupleOps: PendingTupleOp[];  // tuple comparison ops to generate (reference parity)
 	pendingDecls: Node[];  // generated helper functions (e.g. JSON.parse<T> → __jsonParse_T)
+	emittedHelpers: string[];  // dedup tracker for generated helpers (prevents double emission)
 }
 
 export function createTransformContext(): TransformContext {
-	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, pendingTupleOps: [], pendingDecls: [] };
+	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, pendingTupleOps: [], pendingDecls: [], emittedHelpers: [] };
 }
 
 export function createTransformContextWithChecker(cc: CheckerContext): TransformContext {

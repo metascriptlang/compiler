@@ -10,6 +10,11 @@ export {
 	get, at, asString, asNumber, asBool, isNull, len, set, push,
 } from "./builder";
 
+export class JSON {
+	static parse<T>(input: string): Result<T, string> { unreachable; };
+	static stringify<T>(value: T): string { unreachable };
+}
+
 // ===== Typed JSON API =====
 // Usage: const person = try jsonParse<Person>(input);
 // Monomorphize resolves <T>, builtinLower generates per-type deserializer.

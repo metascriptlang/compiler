@@ -27,7 +27,7 @@ import { refineTypes } from "../transform/typeRefine";
 import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { liftHcrState } from "../transform/native/hcrLift";
 import { createTransformContextWithChecker } from "../transform/context";
-import { findModule, ModuleGraph } from "../module/graph";
+import { findModule, ModuleGraph, ModuleError, ErrorSeverity } from "../module/graph";
 import { createFileSystemProvider, loadModuleGraphWithConfig } from "../module/loader";
 import { ResolverConfig, createDefaultConfig, BACKEND_C, BACKEND_JS, BACKEND_RAISER } from "../module/resolver";
 import { ResolveSection, defaultResolveSection } from "./buildConfig";
@@ -36,7 +36,7 @@ import { CliOptions, Target, MODE_DEBUG, MODE_RELEASE } from "./options";
 import { readSource, writeOutput, printErrorsAndExit, printTiming, verboseLog, replaceExt, dirName, baseName, stripBase, ensureDir, getJSRuntime, exeSuffix, soSuffix, outDirForMode } from "./io";
 import { compileC, compileCFile, linkObjects, appendFlag, cliCompileFlags, cliLinkFlags } from "./cc";
 import { preprocessHeaders } from "../module/aro";
-import { error, success, bold, dim, green, red, yellow, cyan } from "../utils/color";
+import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { clockMs } from "std/process";
 
 // ===== Build Helpers =====
@@ -76,17 +76,81 @@ function reportGraphErrors(graph: ModuleGraph): void {
 	}
 }
 
+// Get a specific line from source text (1-based line number)
+function getSourceLine(source: string, lineNum: number): string {
+	if (source.length === 0 || lineNum <= 0) return "";
+	let currentLine = 1;
+	let lineStart = 0;
+	let i = 0;
+	while (i < source.length) {
+		if (currentLine === lineNum) {
+			// Find end of this line
+			let lineEnd = i;
+			while (lineEnd < source.length && source.slice(lineEnd, lineEnd + 1) !== "\n") {
+				lineEnd = lineEnd + 1;
+			}
+			return source.slice(i, lineEnd);
+		}
+		if (source.slice(i, i + 1) === "\n") {
+			currentLine = currentLine + 1;
+		}
+		i = i + 1;
+	}
+	return "";
+}
+
+// Render a single structured error in Rust-style format
+function renderModuleError(modPath: string, source: string, e: ModuleError): void {
+	// Header: "error: message" or "warning: message"
+	const isWarn = e.severity === ErrorSeverity.Warning;
+	const levelStr = match (isWarn) {
+		true => bold(yellow("warning")),
+		false => bold(red("error")),
+	};
+	console.log(levelStr + ": " + bold(e.message));
+
+	// Location: "  --> file:line:col"
+	if (e.line > 0) {
+		let locStr = "  " + bold(cyan("-->")) + " " + modPath + ":" + e.line.toString();
+		if (e.column > 0) {
+			locStr = locStr + ":" + e.column.toString();
+		}
+		console.log(locStr);
+
+		// Source line + caret
+		const srcLine = getSourceLine(source, e.line);
+		if (srcLine.length > 0) {
+			const lineNumStr = e.line.toString();
+			const pad = "   ";
+			// Separator: "   |"
+			console.log(blue(pad + " |"));
+			// Source:    "42 | source code here"
+			console.log(blue(lineNumStr + " | ") + srcLine);
+			// Caret:    "   |     ^^^"
+			if (e.column > 0) {
+				let caretPad = "";
+				let ci = 0;
+				while (ci < e.column - 1) {
+					caretPad = caretPad + " ";
+					ci = ci + 1;
+				}
+				console.log(blue(pad + " | ") + caretPad + green("^"));
+			}
+		}
+	} else {
+		// No line info — show file only
+		console.log("  " + bold(cyan("-->")) + " " + modPath);
+	}
+	console.log("");
+}
+
 // Report per-module errors without exiting (for non-fatal type errors).
 function reportModuleErrors(graph: ModuleGraph, prefix: string): void {
 	for (let i = 0; i < graph.modules.length; i += 1) {
 		const mod = graph.modules[i];
 		if (mod.errors.length > 0) {
 			for (const e of mod.errors) {
-				if (e.length > 5 && e.slice(0, 5) === "warn:") {
-					console.log(yellow("warning") + " [" + mod.path + "]: " + e.slice(5, e.length));
-				} else {
-					console.log(red(prefix) + " [" + mod.path + "]: " + e);
-				}
+				renderModuleError(mod.path, mod.source, e);
 			}
 		}
 	}
@@ -94,12 +158,16 @@ function reportModuleErrors(graph: ModuleGraph, prefix: string): void {
 
 // Abort build if checker found fatal errors (e.g. assert outside test block).
 // Standard reference equivalent: globalError raises recoverable error.
-function exitOnFatalCheckerErrors(ctx: CheckerContext, modPath: string): void {
+function exitOnFatalCheckerErrors(ctx: CheckerContext, modPath: string, source: string): void {
 	if (!hasFatalErrors(ctx)) return;
 	for (const e of ctx.errors) {
 		if (e.fatal) {
-			const loc = e.line > 0 ? ":" + e.line + ":" + e.column : "";
-			console.log(red("fatal error") + " [" + modPath + loc + "]: " + e.message);
+			renderModuleError(modPath, source, {
+				message: e.message,
+				line: e.line,
+				column: e.column,
+				severity: ErrorSeverity.Error,
+			});
 		}
 	}
 	exit(1);
@@ -113,7 +181,7 @@ function exitOnModuleErrors(graph: ModuleGraph, prefix: string): void {
 		if (mod.errors.length > 0) {
 			hasErr = true;
 			for (const e of mod.errors) {
-				console.log(red(prefix) + " [" + mod.path + "]: " + e);
+				renderModuleError(mod.path, mod.source, e);
 			}
 		}
 	}
@@ -160,7 +228,7 @@ function computeProjectAliveSet(graph: ModuleGraph, entryPath: string, isTest: b
 		const pr = parseSource(mod.source);
 		if (!pr.ok) continue;
 		const ctx = checkProgramWithRegistry(pr.value, graphRegistry, graph, mod, graphPreludeCtx);
-		exitOnFatalCheckerErrors(ctx, modPath);
+		exitOnFatalCheckerErrors(ctx, modPath, mod.source);
 		ctx.errors = [];
 		const monoed = monomorphizeProgram(pr.value, ctx);
 		monoed_programs.push(monoed);
@@ -282,7 +350,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 
 		// Check (cross-module registry for proper import type resolution)
 		const ctx = checkProgramWithRegistry(pr.value, graphRegistry, graph, mod, graphPreludeCtx);
-		exitOnFatalCheckerErrors(ctx, modPath);
+		exitOnFatalCheckerErrors(ctx, modPath, mod.source);
 		ctx.errors = [];
 
 		// Validate metadata before transform
@@ -377,7 +445,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 
 		// Check (cross-module registry for proper import type resolution)
 		const ctx = checkProgramWithRegistry(pr.value, graphRegistry, graph, mod, graphPreludeCtx);
-		exitOnFatalCheckerErrors(ctx, modPath);
+		exitOnFatalCheckerErrors(ctx, modPath, mod.source);
 		ctx.errors = [];
 
 		// Monomorphize
@@ -387,7 +455,12 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		validateTypedAST(ctx, monoed);
 		if (hasErrors(ctx)) {
 			for (const e of ctx.errors) {
-				console.log(dim("metadata warning [" + modPath + "]: " + e.message));
+				renderModuleError(modPath, mod.source, {
+					message: e.message,
+					line: e.line,
+					column: e.column,
+					severity: ErrorSeverity.Warning,
+				});
 			}
 			ctx.errors = [];
 		}
@@ -540,7 +613,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		}
 
 		const ctx = checkProgramWithRegistry(pr.value, graphRegistry, graph, mod, graphPreludeCtx);
-		exitOnFatalCheckerErrors(ctx, modPath);
+		exitOnFatalCheckerErrors(ctx, modPath, mod.source);
 		ctx.errors = [];
 
 		const monoed = monomorphizeProgram(pr.value, ctx);
@@ -634,7 +707,7 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 		}
 
 		const ctx = checkProgramWithRegistry(pr.value, graphRegistry, graph, mod, graphPreludeCtx);
-		exitOnFatalCheckerErrors(ctx, modPath);
+		exitOnFatalCheckerErrors(ctx, modPath, mod.source);
 		ctx.errors = [];
 
 		const comptimeResolved = evaluateComptimeBlocks(pr.value);

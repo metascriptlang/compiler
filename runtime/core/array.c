@@ -485,6 +485,37 @@ void msStringArraySetLenUninit(msStringArray* arr, int64_t newLen) {
 	arr->len = newLen;
 }
 
+/* ===== Uint8 Array ===== */
+
+msUint8Array msUint8ArrayNew(int64_t cap) {
+	msUint8Array arr;
+	arr.len = 0;
+	arr.p = (msUint8Payload*)msArrayPayloadNew(cap, sizeof(uint8_t));
+	return arr;
+}
+
+void msUint8ArrayDestroy(msUint8Array* arr) {
+	if (arr->p != NULL) {
+		free(arr->p);
+		arr->p = NULL;
+	}
+	arr->len = 0;
+}
+
+void msUint8ArrayPush(msUint8Array* arr, uint8_t value) {
+	if (arr->p == NULL || arr->p->cap < arr->len + 1) {
+		arr->p = (msUint8Payload*)msArrayPrepareAdd(arr->len, arr->p, 1, sizeof(uint8_t));
+	}
+	arr->p->data[arr->len] = value;
+	arr->len++;
+}
+
+uint8_t msUint8ArrayAt(msUint8Array* arr, int64_t idx) {
+	if (idx < 0) idx = arr->len + idx;
+	if (idx < 0 || idx >= arr->len || arr->p == NULL) return 0;
+	return arr->p->data[idx];
+}
+
 /* ===== Ref Array ===== */
 
 msRefArray msRefArrayNew(int64_t cap) {

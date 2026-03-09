@@ -426,7 +426,31 @@ static inline msString msJsonStringify(MsJsonValue* v) {
     return result;
 }
 
-/* TypeInfo — no trace/destroy needed for now (simple allocations) */
+/* ===== Cleanup ===== */
+
+/* Recursively free a JSON value tree (entries/items arrays + child nodes). */
+static void msJsonFree(MsJsonValue* v) {
+    if (!v) return;
+    switch (v->kind) {
+    case MsJsonKind_Array:
+        for (int64_t i = 0; i < v->arr.len; i++) {
+            msJsonFree(v->arr.items[i]);
+        }
+        free(v->arr.items);
+        break;
+    case MsJsonKind_Object:
+        for (int64_t i = 0; i < v->obj.len; i++) {
+            msJsonFree(v->obj.entries[i].val);
+        }
+        free(v->obj.entries);
+        break;
+    default:
+        break;
+    }
+    /* Note: MsJsonValue itself is allocated via msAllocTyped (RC). */
+}
+
+/* TypeInfo — no trace/destroy needed (msJsonFree handles tree cleanup) */
 msTypeInfo MsJsonValue_typeInfo = { "MsJsonValue", MS_FALSE, NULL, NULL };
 
 #ifdef __cplusplus

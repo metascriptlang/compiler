@@ -32,7 +32,7 @@ import {
 	makeFnDecl, makeInterfaceDecl, makeObjectLiteral, makeHiddenDeref,
 	syntheticToken,
 } from "../util";
-import { TypeKind, createTypeRef, createPtr } from "../../checker/types";
+import { Type, TypeKind, createTypeRef, createPtr } from "../../checker/types";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts } from "../testUtil";
 
 // ===== Scope Stack =====
@@ -126,6 +126,35 @@ function lookupVarType(state: LiftState, name: string): string {
 		i -= 1;
 	}
 	return "unknown";
+}
+
+// Derive type string from resolved nodeType (Nim parity: s.typ → field.typ)
+// Used when string annotation is empty but checker has resolved the type.
+function typeToEnvStr(t: Type): string {
+	if (t === null) return "";
+	return match (t.kind) {
+		TypeKind.Number | TypeKind.Float64 => "number",
+		TypeKind.String => "string",
+		TypeKind.Boolean => "boolean",
+		TypeKind.Void => "void",
+		TypeKind.Int8 => "int8",
+		TypeKind.Int16 => "int16",
+		TypeKind.Int32 => "int32",
+		TypeKind.Int64 => "int64",
+		TypeKind.Uint8 => "uint8",
+		TypeKind.Uint16 => "uint16",
+		TypeKind.Uint32 => "uint32",
+		TypeKind.Uint64 => "uint64",
+		TypeKind.Float32 => "float32",
+		TypeKind.Function => "msClosure",
+		TypeKind.Struct => (t.typeName !== null && t.typeName !== "") ? t.typeName : "",
+		TypeKind.Ref => (t.typeName !== null && t.typeName !== "") ? t.typeName : "",
+		TypeKind.Enum => (t.typeName !== null && t.typeName !== "") ? t.typeName : "",
+		TypeKind.Array => (t.typeReturn !== null) ? t.typeReturn.typeName + "[]" : "unknown[]",
+		TypeKind.Result => "Result",
+		TypeKind.TypeReference => t.typeName,
+		_ => "",
+	};
 }
 
 function createLiftState(): LiftState {
@@ -372,6 +401,8 @@ function walkLift(node: Node, state: LiftState): void {
 			if (d.fnName !== "") {
 				state.currentFnName = d.fnName;
 				defineVar(state.ss, d.fnName);
+				// Nim parity: captured function refs → closure type (s.typ = tyProc)
+				registerVarType(state, d.fnName, "msClosure");
 			}
 			// Push function boundary, define params + register types for env field resolution
 			// Prefer resolved types from nodeType (handles type aliases like NumFn → Function)
@@ -381,16 +412,13 @@ function walkLift(node: Node, state: LiftState): void {
 			while (pi < d.params.length) {
 				defineVar(state.ss, d.params[pi]);
 				let paramTypeStr = (pi < d.fnParamTypes.length) ? d.fnParamTypes[pi] : "";
-				// If checker resolved Function type for this param, use "msClosure" directly.
-				// Also check TypeReference with "=>" annotation (unresolved type alias).
+				// Nim parity: use resolved type from checker (s.typ) for env field typing
 				if (fnType !== null && fnType.typeChildren !== null && pi < fnType.typeChildren.length) {
 					const pt = fnType.typeChildren[pi];
-					if (pt !== null && pt.kind === TypeKind.Function) {
-						paramTypeStr = "msClosure";
-					} else if (pt !== null && pt.kind === TypeKind.TypeReference) {
-						const tn = pt.typeName;
-						if (tn.length > 0 && (tn.indexOf("=>", 0) >= 0 || tn.charAt(0) === "(")) {
-							paramTypeStr = "msClosure";
+					if (pt !== null) {
+						const derived = typeToEnvStr(pt);
+						if (derived !== "") {
+							paramTypeStr = derived;
 						}
 					}
 				}
@@ -410,6 +438,12 @@ function walkLift(node: Node, state: LiftState): void {
 			defineVar(state.ss, d.declName);
 			if (d.declType !== "") {
 				registerVarType(state, d.declName, d.declType);
+			} else if (node.nodeType !== null) {
+				// Nim parity: use resolved type from checker (s.typ) when no annotation
+				const derived = typeToEnvStr(node.nodeType);
+				if (derived !== "") {
+					registerVarType(state, d.declName, derived);
+				}
 			}
 		},
 		NodeKind.ExprStmt => {

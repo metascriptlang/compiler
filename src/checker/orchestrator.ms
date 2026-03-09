@@ -8,7 +8,7 @@ import {
 	findExtensionByName, findExtensionByType, registerExtension,
 } from "./context";
 import { SymbolKind, ScopeKind, openScope, hasFlag, SymbolFlag } from "./symbol";
-import { Module, ModuleGraph, findModule } from "../module/graph";
+import { Module, ModuleGraph, findModule, createModuleError, ErrorSeverity } from "../module/graph";
 import { preprocessHeaders } from "../module/aro";
 import { runThreePasses, buildPreludeContext } from "./checkPass";
 import { collectTopLevelLocal } from "./collectPass";
@@ -120,14 +120,14 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 		// Parse with recovery — always get partial AST, errors in state.errors
 		const lr = lex(mod.source);
 		if (!lr.ok) {
-			mod.errors.push("Lex: " + lr.error);
+			mod.errors.push(createModuleError("Lex: " + lr.error, 0, 0, ErrorSeverity.Error));
 			continue;
 		}
 		const parseState = createState(lr.value);
 		const pr = callStateProgramParser(parseState);
 
 		for (const parseErr of parseState.errors) {
-			mod.errors.push("Parse: " + parseErr);
+			mod.errors.push(createModuleError("Parse: " + parseErr, 0, 0, ErrorSeverity.Error));
 		}
 
 		const ctx = createModuleContext(graph, mod);
@@ -157,13 +157,13 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 		// Ownership Inference (for cross-module consumption)
 		inferOwnership(ctx, pr.value);
 
-		// Copy errors to module (mod.errors is string[], prefix warnings)
+		// Copy structured errors to module (preserves line/col/severity)
 		for (const err of ctx.errors) {
-			if (err.severity === Severity.Warning) {
-				mod.errors.push("warn:" + err.message);
-			} else {
-				mod.errors.push(err.message);
-			}
+			const sev = match (err.severity) {
+				Severity.Warning => ErrorSeverity.Warning,
+				_ => ErrorSeverity.Error,
+			};
+			mod.errors.push(createModuleError(err.message, err.line, err.column, sev));
 		}
 
 		// Extract resolved exports and UPDATE registry (replaces Phase 1 placeholders)

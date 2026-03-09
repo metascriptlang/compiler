@@ -20,6 +20,7 @@ import {
 	createModuleGraph, createModule, createImportEntry,
 	findModule, hasModule, addModule,
 	isInImportStack, pushImportStack, popImportStack,
+	createModuleError, ErrorSeverity,
 } from "./graph";
 import { resolveImport, resolveImportWithConfig, isStdImport, ResolverConfig } from "./resolver";
 import { lex } from "../lexer/lexer";
@@ -110,7 +111,7 @@ function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProv
 	// Read source
 	const sourceResult = provideSource(provider, path);
 	if (!sourceResult.ok) {
-		mod.errors.push(sourceResult.error);
+		mod.errors.push(createModuleError(sourceResult.error, 0, 0, ErrorSeverity.Error));
 		finalizeModule(graph, mod, path);
 		return false;
 	}
@@ -119,21 +120,21 @@ function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProv
 	// Parse with recovery — always get partial AST, errors in state.errors
 	const lr = lex(mod.source);
 	if (!lr.ok) {
-		mod.errors.push("Lex: " + lr.error);
+		mod.errors.push(createModuleError("Lex: " + lr.error, 0, 0, ErrorSeverity.Error));
 		finalizeModule(graph, mod, path);
 		return false;
 	}
 	const parseState = createState(lr.value);
 	const parseResult = callStateProgramParser(parseState);
 	for (const parseErr of parseState.errors) {
-		mod.errors.push("Parse: " + parseErr);
+		mod.errors.push(createModuleError("Parse: " + parseErr, 0, 0, ErrorSeverity.Error));
 	}
 	// NOTE: keep state as Loading until imports are processed — cycle detection
 	// in loadModule checks for Loading state to detect circular imports.
 
 	// Walk AST for import declarations (works on partial ASTs)
 	if (!parseResult.ok) {
-		mod.errors.push("Parse: " + parseResult.error);
+		mod.errors.push(createModuleError("Parse: " + parseResult.error, 0, 0, ErrorSeverity.Error));
 		finalizeModule(graph, mod, path);
 		return false;
 	}
@@ -216,7 +217,7 @@ function processImportDecl(graph: ModuleGraph, mod: Module, node: Node, provider
 		}
 
 		if (resolved === "") {
-			mod.errors.push("Cannot resolve import '" + specifier + "' from " + mod.path);
+			mod.errors.push(createModuleError("Cannot resolve import '" + specifier + "'", 0, 0, ErrorSeverity.Error));
 			return;
 		}
 
@@ -249,7 +250,7 @@ function processImportDecl(graph: ModuleGraph, mod: Module, node: Node, provider
 		if (resolved === "") {
 			// std/ with empty stdPath: silently skip (handled externally)
 			if (isStdImport(specifier) && config.stdPath.length === 0) return;
-			mod.errors.push("Cannot resolve import '" + specifier + "' from " + mod.path);
+			mod.errors.push(createModuleError("Cannot resolve import '" + specifier + "'", 0, 0, ErrorSeverity.Error));
 			return;
 		}
 

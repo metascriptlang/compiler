@@ -21,7 +21,7 @@ type JsonResult = Result<ParseResult, string>;
 
 function skipWhitespace(input: string, pos: number): number {
 	let p = pos;
-	const len = input.length;
+	const len = input.byteLength();
 	while (p < len) {
 		const ch = input.charCodeAt(p);
 		if (ch !== " ".code && ch !== "\t".code && ch !== "\n".code && ch !== "\r".code) break;
@@ -56,7 +56,7 @@ function parseHex4(input: string, pos: number): number {
 // ===== Literal Parsing =====
 
 function parseLiteral(input: string, pos: number, expected: string, value: JsonValue): JsonResult {
-	if (pos + expected.length > input.length) {
+	if (pos + expected.length > input.byteLength()) {
 		return Result.err("expected '" + expected + "' at position " + pos);
 	}
 	let i = 0;
@@ -74,7 +74,7 @@ function parseLiteral(input: string, pos: number, expected: string, value: JsonV
 function parseString(input: string, pos: number): JsonResult {
 	// pos points at opening "
 	let p = pos + 1;
-	const len = input.length;
+	const len = input.byteLength();
 
 	// Fast scan: look for closing " without any escapes
 	let hasEscape = false;
@@ -183,7 +183,7 @@ function parseString(input: string, pos: number): JsonResult {
 
 function parseNumber(input: string, pos: number): JsonResult {
 	let p = pos;
-	const len = input.length;
+	const len = input.byteLength();
 
 	// Fast path: try to parse as integer directly
 	let negative = false;
@@ -255,17 +255,17 @@ function parseArray(input: string, pos: number): JsonResult {
 	p = skipWhitespace(input, p);
 
 	// Empty array
-	if (p < input.length && input.charCodeAt(p) === "]".code) {
+	if (p < input.byteLength() && input.charCodeAt(p) === "]".code) {
 		return Result.ok({ node: jsonArray([]), pos: p + 1 });
 	}
 
 	const items: JsonValue[] = [];
-	while (p < input.length) {
+	while (p < input.byteLength()) {
 		const elem = try parseValue(input, p);
 		items.push(elem.node);
 		p = skipWhitespace(input, elem.pos);
 
-		if (p >= input.length) {
+		if (p >= input.byteLength()) {
 			return Result.err("unterminated array at position " + pos);
 		}
 		if (input.charCodeAt(p) === ",".code) {
@@ -286,34 +286,34 @@ function parseObject(input: string, pos: number): JsonResult {
 	p = skipWhitespace(input, p);
 
 	// Empty object
-	if (p < input.length && input.charCodeAt(p) === "}".code) {
+	if (p < input.byteLength() && input.charCodeAt(p) === "}".code) {
 		return Result.ok({ node: jsonObject(), pos: p + 1 });
 	}
 
 	const keys: string[] = [];
 	const vals: JsonValue[] = [];
-	while (p < input.length) {
+	while (p < input.byteLength()) {
 		// Key must be a string
 		if (input.charCodeAt(p) !== "\"".code) {
 			return Result.err("expected string key at position " + p);
 		}
 		const keyResult = try parseString(input, p);
-		const keyStr = keyResult.node.strVal;
+		// Push key immediately — DRC may free keyResult.node on next iteration
+		keys.push(keyResult.node.strVal);
 		p = skipWhitespace(input, keyResult.pos);
 
 		// Expect colon
-		if (p >= input.length || input.charCodeAt(p) !== ":".code) {
+		if (p >= input.byteLength() || input.charCodeAt(p) !== ":".code) {
 			return Result.err("expected ':' at position " + p);
 		}
 		p = skipWhitespace(input, p + 1);
 
 		// Value
 		const valResult = try parseValue(input, p);
-		keys.push(keyStr);
 		vals.push(valResult.node);
 		p = skipWhitespace(input, valResult.pos);
 
-		if (p >= input.length) {
+		if (p >= input.byteLength()) {
 			return Result.err("unterminated object at position " + pos);
 		}
 		if (input.charCodeAt(p) === ",".code) {
@@ -331,7 +331,7 @@ function parseObject(input: string, pos: number): JsonResult {
 
 function parseValue(input: string, pos: number): JsonResult {
 	const p = skipWhitespace(input, pos);
-	if (p >= input.length) {
+	if (p >= input.byteLength()) {
 		return Result.err("unexpected end of input");
 	}
 
@@ -349,13 +349,13 @@ function parseValue(input: string, pos: number): JsonResult {
 // ===== Public API =====
 
 export function parseJson(input: string): Result<JsonValue, string> {
-	if (input.length === 0) {
+	if (input.byteLength() === 0) {
 		return Result.err("unexpected end of input");
 	}
 	const result = parseValue(input, 0);
 	if (!result.ok) return Result.err(result.error);
 	const endPos = skipWhitespace(input, result.value.pos);
-	if (endPos < input.length) {
+	if (endPos < input.byteLength()) {
 		return Result.err("unexpected content after value at position " + endPos);
 	}
 	return Result.ok(result.value.node);

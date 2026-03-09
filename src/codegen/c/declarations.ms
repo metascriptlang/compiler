@@ -47,10 +47,12 @@ function isDeclAlive(g: CGen, node: Node): boolean {
 	const name = d.fnName;
 	// Compiler-generated functions are always alive — produced by transforms
 	// after reachability analysis runs on pre-transform ASTs.
-	// Prefixes: $lifted_, $Env_ (lambda lifting), =copy/=dup (operators)
+	// Prefixes: $lifted_, $Env_ (lambda lifting), =copy/=dup (operators),
+	//           __ (builtinLower: __jsonParse_*, __jsonStringify_*)
 	// Suffixes: _destroy, _trace, _copy, _sink, _wasMoved, _dup (destructorLifting)
 	if (name.length > 0 && name.slice(0, 1) === "$") return true;
 	if (name.length > 0 && name.slice(0, 1) === "=") return true;
+	if (name.length > 1 && name.slice(0, 2) === "__") return true;
 	if (name.endsWith("_destroy") || name.endsWith("_trace") ||
 		name.endsWith("_copy") || name.endsWith("_sink") ||
 		name.endsWith("_wasMoved") || name.endsWith("_dup")) return true;

@@ -679,17 +679,28 @@ function genUnionType(g: CGen, t: Type): string {
 	// are emitted BEFORE the variant structs. The typeCache (set above) prevents re-entry.
 
 	// Phase 1a: Cache all variant Object types AND pre-resolve ALL field types.
+	// Track canonical names for structurally identical variants (e.g., { expr: Node }
+	// appears as both ExprStmtData and HiddenDerefData — they share one C typedef).
 	const allFieldTypes: string[][] = [];
+	const canonicalNames: string[] = [];
 	let vi = 0;
 	while (vi < t.typeChildren.length) {
 		const variant = t.typeChildren[vi];
 		const varName = name + "_v" + intToString(vi);
 
-		// Cache variant Object type so getTypeDesc returns the variant struct name
+		// Cache variant Object type so getTypeDesc returns the variant struct name.
+		// First variant with a given structural key wins — duplicates reuse it.
+		let canonical = varName;
 		if (variant !== null && variant.kind === TypeKind.Struct) {
 			const varKey = typeKey(variant);
-			typeCacheSet(g.typeCache, varKey, varName);
+			const existing = typeCacheGet(g.typeCache, varKey);
+			if (existing !== "") {
+				canonical = existing;
+			} else {
+				typeCacheSet(g.typeCache, varKey, varName);
+			}
 		}
+		canonicalNames.push(canonical);
 
 		// Pre-resolve field types
 		const fieldTypes: string[] = [];
@@ -707,12 +718,18 @@ function genUnionType(g: CGen, t: Type): string {
 		vi += 1;
 	}
 
-	// Phase 1b: Emit all named variant structs (after all recursive type emissions)
+	// Phase 1b: Emit named variant structs (skip duplicates that reuse a canonical name)
 	vi = 0;
 	while (vi < t.typeChildren.length) {
 		const variant = t.typeChildren[vi];
 		const varName = name + "_v" + intToString(vi);
 		const fieldTypes = allFieldTypes[vi];
+
+		// Skip duplicate: this variant reuses an earlier variant's typedef
+		if (canonicalNames[vi] !== varName) {
+			vi += 1;
+			continue;
+		}
 
 		addLine(b, "typedef struct {");
 		b.indent += 1;
@@ -745,8 +762,9 @@ function genUnionType(g: CGen, t: Type): string {
 	b.indent += 1;
 	vi = 0;
 	while (vi < t.typeChildren.length) {
-		const varName = name + "_v" + intToString(vi);
-		addLine(b, varName + " v" + intToString(vi) + ";");
+		// Use canonical name — duplicate variants share the same typedef
+		const memberType = canonicalNames[vi];
+		addLine(b, memberType + " v" + intToString(vi) + ";");
 		vi += 1;
 	}
 	b.indent -= 1;

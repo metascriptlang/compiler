@@ -739,8 +739,21 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 			// Reference parity: methods are NOT struct fields — resolve their types
 			// and update the extension's fnType, but don't add to struct.
 			const md = member.data as MethodDeclData;
+			// Method-level generic params (e.g. parse<T>) — define in temp scope
+			// so resolveAnnotation finds "T" → GenericParam("T"), same as resolveFunctionDecl.
+			const methodGenericNames = extractGenericNames(md.methodFlags);
+			const hasMethodGenerics = methodGenericNames.length > 0;
+			if (hasMethodGenerics) {
+				openScope(ctx.table, ScopeKind.Block);
+				for (const mgp of methodGenericNames) {
+					defineGenericParam(ctx, mgp);
+				}
+			}
 			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx);
 			const returnType = (md.methodReturnType !== "") ? resolveAnnotation(md.methodReturnType, ctx) : unknownType();
+			if (hasMethodGenerics) {
+				closeScope(ctx.table);
+			}
 			const fnType = createFunction(paramTypes, md.methodParams, returnType);
 			// Use resolvedSym set by collectClassMethod — avoids overload ambiguity with lookupSymbol
 			const methodSym = d.classBody[mi].resolvedSym;

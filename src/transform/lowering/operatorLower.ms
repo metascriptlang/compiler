@@ -202,26 +202,9 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 
 	// Resolve left operand type
 	const leftType = resolveType(ctx, d.left);
-	if (leftType === null) return node;
-	const typeName = typeNameOf(leftType);
-	if (typeName === "") return node;
-
 	const loc = node.location;
 
-	// 1. Explicit user-defined operator overload takes priority (reference parity:
-	//    user overloads beat magic builtins). Checked BEFORE isBuiltinType
-	//    so that e.g. `==`(a: int32, b: int32) overrides native ==.
-	if (ctx.checkerCtx.extensionRegistry !== null) {
-		const ext = findExtension(ctx.checkerCtx.extensionRegistry, typeName, opName);
-		if (ext !== null) {
-			return makeCall(makeIdent(opName, loc), [d.left, d.right], loc);
-		}
-	}
-
-	// 2. Built-in types use native C operators — no rewrite needed.
-	if (isBuiltinType(typeName)) return node;
-
-	// 3. Null comparisons on non-nullable value types → constant bool
+	// 3. Null comparisons — check BEFORE typeName guard since null has typeName=""
 	// reference parity: objects can't be nil (reference comparisons, reference core)
 	const hasNullLeft = isNullExpr(d.left);
 	const hasNullRight = isNullExpr(d.right);
@@ -237,7 +220,34 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 			if (opName === "!=") return member;
 			return makeUnary("!", member, loc);
 		}
+		// Array null check: arr !== null → arr.p !== null
+		// Reference parity: seq isNil checks payload pointer (seq.p == nil)
+		// Arrays are value-type structs { len, p } — can't compare whole struct to void*
+		if (valueType !== null && valueType.kind === TypeKind.Array) {
+			const nonNullSide = hasNullLeft ? d.right : d.left;
+			const pMember = makeMember(nonNullSide, "p", loc);
+			d.left = hasNullLeft ? d.left : pMember;
+			d.right = hasNullLeft ? pMember : d.right;
+			return node;
+		}
 	}
+
+	if (leftType === null) return node;
+	const typeName = typeNameOf(leftType);
+	if (typeName === "") return node;
+
+	// 1. Explicit user-defined operator overload takes priority (reference parity:
+	//    user overloads beat magic builtins). Checked BEFORE isBuiltinType
+	//    so that e.g. `==`(a: int32, b: int32) overrides native ==.
+	if (ctx.checkerCtx.extensionRegistry !== null) {
+		const ext = findExtension(ctx.checkerCtx.extensionRegistry, typeName, opName);
+		if (ext !== null) {
+			return makeCall(makeIdent(opName, loc), [d.left, d.right], loc);
+		}
+	}
+
+	// 2. Built-in types use native C operators — no rewrite needed.
+	if (isBuiltinType(typeName)) return node;
 
 	// 4. Derived operators (reference: system/reference comparisons templates).
 	//    != → not(==), > → swap(<), >= → swap(<=)

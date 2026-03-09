@@ -192,6 +192,11 @@ int64_t msStringLength(msString s);
 /* Count Unicode scalar values (codepoints) */
 int64_t msStringUnicodeLength(msString s);
 
+/* Byte length (for binary protocols like LSP Content-Length) */
+static inline int64_t msStringByteLength(msString s) {
+	return s.len;
+}
+
 /* ===== Building ===== */
 
 /* Concatenate two strings into a new one */

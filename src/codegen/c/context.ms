@@ -496,6 +496,8 @@ export interface CGen {
 	isHcr: boolean;            // true when --hcr (fixed Init000 names for dlsym)
 	testEntries: TestEntry[];  // collected test wrapper functions (test builds only)
 	nextTestId: number;        // unique ID for test wrapper function names
+	lastLineLine: number;      // #line dedup: last emitted line number
+	lastLineFile: string;      // #line dedup: last emitted file path
 }
 
 export interface TestEntry {
@@ -530,6 +532,8 @@ export function createCGen(ctx: CheckerContext, modulePath: string): CGen {
 		isHcr: false,
 		testEntries: [],
 		nextTestId: 0,
+		lastLineLine: 0,
+		lastLineFile: "",
 	};
 }
 
@@ -542,6 +546,18 @@ export function sec(g: CGen, s: CSection): Builder {
 export function moduleTemp(g: CGen): string {
 	g.labels += 1;
 	return "TM" + g.labels + "_";
+}
+
+// Emit #line directive for source mapping (Nim parity: genLineDir / freshLineInfo)
+// Only emits when line or file changes to avoid bloat.
+export function emitLineDir(g: CGen, p: CProc, node: Node): void {
+	if (node === null) return;
+	const loc = node.location;
+	if (loc.line <= 0) return;
+	if (loc.line === g.lastLineLine && g.modulePath === g.lastLineFile) return;
+	g.lastLineLine = loc.line;
+	g.lastLineFile = g.modulePath;
+	emitStmts(p, "\n#line " + loc.line + " \"" + g.modulePath + "\"\n");
 }
 
 // ===== Final Assembly — concatenate all sections =====

@@ -23,12 +23,16 @@ import {
 	Node, NodeKind, DeclKind, SourceLocation, Symbol, SymbolKind, SymbolState,
 	VariableDeclData, ReturnStmtData, ExprStmtData, TryExprData,
 	CallExprData, MemberExprData, IdentifierData, HiddenDerefData,
-	IfStmtData,
+	IfStmtData, ProgramData, BlockStmtData,
+	FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData,
+	ConstructorDeclData, ExportDeclData, TestDeclData, DecoratedDeclData,
+	ClassDeclData, WhileStmtData, ForStmtData, ForOfStmtData,
+	TryCatchStmtData, SwitchStmtData, SwitchCaseData,
 } from "../../ast/node";
 import { Type, TypeKind, booleanType, getProperty } from "../../checker/types";
 import { makeSymbol, lookupSymbol } from "../../checker/symbol";
 import { TransformContext, freshTemp } from "../context";
-import { walkExpandBlocks, walkNode, containsExprKind, replaceInExpr } from "../walker";
+import { walkNode, containsExprKind, replaceInExpr } from "../walker";
 import {
 	makeIdent, makeVarDecl, makeBlock, makeExprStmt,
 	makeReturn, makeIf, makeMember, makeCall, makeCallResolved, makeConditional,
@@ -63,12 +67,140 @@ function lookupResultErr(ctx: TransformContext): Symbol {
 	return lookupSymbol(ctx.checkerCtx.table, "err");
 }
 
+// ===== Enclosing Function Return Type Tracking =====
+// try error-path returns must be typed as the enclosing function's Result type,
+// not the inner expression's Result type (e.g. Result<void, string> vs Result<Person, string>).
+
+let enclosingFnRetType: Type = null as unknown as Type;
+
 // ===== Main Entry Point =====
 
 export function lowerTryExpr(program: Node, ctx: TransformContext): Node {
-	walkExpandBlocks(program, expandStmt, ctx);
+	enclosingFnRetType = null as unknown as Type;
+	walkTryExpand(program, ctx);
 	lowerResultConstructors(program);
 	return program;
+}
+
+// Custom walker that mirrors walkExpandBlocks but tracks enclosing function return types.
+function walkTryExpand(node: Node, ctx: TransformContext): void {
+	match (node.kind) {
+		NodeKind.Program => {
+			const d = node.data as ProgramData;
+			d.programStmts = expandAndRecurseTry(d.programStmts, ctx);
+		},
+		NodeKind.BlockStmt => {
+			const d = node.data as BlockStmtData;
+			d.statements = expandAndRecurseTry(d.statements, ctx);
+		},
+		NodeKind.FunctionDecl => {
+			const d = node.data as FunctionDeclData;
+			const saved = enclosingFnRetType;
+			enclosingFnRetType = node.nodeType !== null ? node.nodeType.typeReturn : null as unknown as Type;
+			walkTryExpand(d.fnBody, ctx);
+			enclosingFnRetType = saved;
+		},
+		NodeKind.ArrowFunction => {
+			const d = node.data as ArrowFunctionData;
+			const saved = enclosingFnRetType;
+			enclosingFnRetType = node.nodeType !== null ? node.nodeType.typeReturn : null as unknown as Type;
+			walkTryExpand(d.arrowBody, ctx);
+			enclosingFnRetType = saved;
+		},
+		NodeKind.FunctionExpr => {
+			const d = node.data as FunctionExprData;
+			const saved = enclosingFnRetType;
+			enclosingFnRetType = node.nodeType !== null ? node.nodeType.typeReturn : null as unknown as Type;
+			walkTryExpand(d.funcExprBody, ctx);
+			enclosingFnRetType = saved;
+		},
+		NodeKind.MethodDecl => {
+			const d = node.data as MethodDeclData;
+			const saved = enclosingFnRetType;
+			enclosingFnRetType = node.nodeType !== null ? node.nodeType.typeReturn : null as unknown as Type;
+			walkTryExpand(d.methodBody, ctx);
+			enclosingFnRetType = saved;
+		},
+		NodeKind.ConstructorDecl => {
+			const d = node.data as ConstructorDeclData;
+			walkTryExpand(d.ctorBody, ctx);
+		},
+		NodeKind.ExportDecl => {
+			const d = node.data as ExportDeclData;
+			walkTryExpand(d.exportedDecl, ctx);
+		},
+		NodeKind.TestDecl => {
+			const d = node.data as TestDeclData;
+			walkTryExpand(d.testBody, ctx);
+		},
+		NodeKind.AssertStmt => {},
+		NodeKind.IfStmt => {
+			const d = node.data as IfStmtData;
+			walkTryExpand(d.consequent, ctx);
+			walkTryExpand(d.alternate, ctx);
+		},
+		NodeKind.WhileStmt => {
+			const d = node.data as WhileStmtData;
+			walkTryExpand(d.whileBody, ctx);
+		},
+		NodeKind.ForStmt => {
+			const d = node.data as ForStmtData;
+			walkTryExpand(d.forBody, ctx);
+		},
+		NodeKind.ForOfStmt => {
+			const d = node.data as ForOfStmtData;
+			walkTryExpand(d.forOfBody, ctx);
+		},
+		NodeKind.TryCatchStmt => {
+			const d = node.data as TryCatchStmtData;
+			walkTryExpand(d.tryBody, ctx);
+			walkTryExpand(d.catchBody, ctx);
+			walkTryExpand(d.finallyBody, ctx);
+		},
+		NodeKind.SwitchStmt => {
+			const d = node.data as SwitchStmtData;
+			let i = 0;
+			while (i < d.switchCases.length) {
+				walkTryExpand(d.switchCases[i], ctx);
+				i = i + 1;
+			}
+		},
+		NodeKind.SwitchCase => {
+			const d = node.data as SwitchCaseData;
+			let j = 0;
+			while (j < d.caseStmts.length) {
+				walkTryExpand(d.caseStmts[j], ctx);
+				j = j + 1;
+			}
+		},
+		NodeKind.DecoratedDecl => {
+			const d = node.data as DecoratedDeclData;
+			walkTryExpand(d.decoratedNode, ctx);
+		},
+		NodeKind.ClassDecl => {
+			const d = node.data as ClassDeclData;
+			let i = 0;
+			while (i < d.classBody.length) {
+				walkTryExpand(d.classBody[i], ctx);
+				i = i + 1;
+			}
+		},
+		_ => {},
+	};
+}
+
+function expandAndRecurseTry(stmts: Node[], ctx: TransformContext): Node[] {
+	const result: Node[] = [];
+	for (const stmt of stmts) {
+		const expanded = expandStmt(stmt, ctx);
+		for (const node of expanded) {
+			result.push(node);
+		}
+	}
+	for (const node of result) {
+		walkTryExpand(node, ctx);
+	}
+	return result;
 }
 
 // Lower Result.ok(val) / Result.err(e) → ObjectLiteral. Runs for all backends.
@@ -113,6 +245,13 @@ function rewriteResultCall(node: Node): Node {
 
 function makeResultOk(args: Node[], resType: Type, loc: SourceLocation): Node {
 	if (args.length === 1) {
+		// Propagate T from Result<T, E> onto the value arg if untyped or weakly typed
+		// (e.g. ObjectLiteral { node: ..., pos: ... } for ParseResult)
+		if (resType !== null && resType.typeReturn !== null && resType.typeReturn.kind === TypeKind.Struct) {
+			if (args[0].nodeType === null || args[0].nodeType.kind === TypeKind.Unknown || args[0].nodeType.kind === TypeKind.GenericParam) {
+				args[0].nodeType = resType.typeReturn;
+			}
+		}
 		const lit = makeObjectLiteral(["ok", "value"], [makeBool(true, loc), args[0]], loc);
 		lit.nodeType = resType;
 		return lit;
@@ -150,6 +289,10 @@ function hoistTryExpr(expr: Node, hoisted: Node[], ctx: TransformContext): Node 
 			// $result.ok ? $result.value : catchVal
 			const okCheck = makeResultMember(tempName, resType, "ok", loc);
 			const valueAccess = makeResultMember(tempName, resType, "value", loc);
+			// Stamp catchVal with value type so ternary branches have matching C types
+			if (tryData.catchVal.nodeType === null && valueAccess.nodeType !== null) {
+				tryData.catchVal.nodeType = valueAccess.nodeType;
+			}
 			const condExpr = makeConditional(okCheck, valueAccess, tryData.catchVal, loc);
 			condExpr.nodeType = node.nodeType;
 			return condExpr;
@@ -209,13 +352,18 @@ function expandStmt(stmt: Node, ctx: TransformContext): Node[] {
 }
 
 // Build: if (!$result.ok) { return { ok: false, error: $result.error }; }
+// Uses enclosingFnRetType for the return literal's type (not resType) so the error-path
+// return matches the function's signature (e.g. Result<void, string>, not Result<Person, string>).
 function makeErrorCheck(tempName: string, resType: Type, loc: SourceLocation, ctx: TransformContext): Node {
 	const okAccess = makeResultMember(tempName, resType, "ok", loc);
 	const notOk = makeUnary("!", okAccess, loc);
 	notOk.nodeType = booleanType();
 
 	const errorAccess = makeResultMember(tempName, resType, "error", loc);
-	const resultErr = makeResultErr(errorAccess, resType, loc);
+	// Use enclosing function's return type for the error literal, falling back to resType
+	const errRetType = (enclosingFnRetType !== null && enclosingFnRetType.kind === TypeKind.Result)
+		? enclosingFnRetType : resType;
+	const resultErr = makeResultErr(errorAccess, errRetType, loc);
 
 	const returnStmt = makeReturn(resultErr, loc);
 	const thenBlock = makeBlock([returnStmt], loc);
@@ -225,7 +373,7 @@ function makeErrorCheck(tempName: string, resType: Type, loc: SourceLocation, ct
 
 // ===== Tests =====
 import {
-	ProgramData, BlockStmtData, ReturnStmtData as RetData,
+	ReturnStmtData as RetData,
 	CallExprData as CData, MemberExprData as MData,
 } from "../../ast/node";
 import { parseInput, makeCtx, getStmts } from "../testUtil";

@@ -30,6 +30,8 @@ extern function charAt(this s: string, idx: number): string from "msStringCharAt
 
 extern function charCodeAt(this s: string, idx: number): int32 from "msStringCharCodeAt";
 
+extern function byteLength(this s: string): int64 from "msStringByteLength";
+
 extern function slice(this s: string, start: number, end: number): string from "msStringSlice";
 
 extern function substring(this s: string, start: number, end: number): string from "msStringSubstring";

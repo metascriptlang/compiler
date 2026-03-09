@@ -193,7 +193,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			const d = node.data as ObjectLiteralData;
 			if (expectedType !== null && expectedType.kind === TypeKind.Struct
 				&& expectedType.typeChildren !== null) {
-				// Implementation parity: stamp literal with expected type, propagate field types
+				// Nim parity: stamp literal with expected type, propagate field types
 				node.nodeType = expectedType;
 				let fi = 0;
 				while (fi < d.properties.length) {
@@ -208,6 +208,16 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 				&& isDiscriminatedUnion(expectedType)) {
 				// Discriminated union construction validation
 				checkDiscriminatedConstruction(ctx, node, d, expectedType);
+			} else if (expectedType !== null && expectedType.kind === TypeKind.Union) {
+				// Non-discriminated union (e.g. NodeData): stamp with union type
+				// and check properties. Codegen resolves the variant from field names.
+				// Nim: semObjConstr always sets e.typ from explicit type name.
+				// We infer from expectedType since MS uses untyped object literals.
+				node.nodeType = expectedType;
+				for (const prop of d.properties) {
+					checkExpr(ctx, prop, null as unknown as Type);
+				}
+				expectedType;
 			} else {
 				for (const prop of d.properties) {
 					checkExpr(ctx, prop, null as unknown as Type);

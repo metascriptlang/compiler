@@ -21,7 +21,7 @@ import {
 	emitStmts, emitStmtsLine, emitStmtsNl,
 	getStmtsIndent, setStmtsIndent,
 	pushBlock, popBlock, readProcStmts,
-	sec, addLine,
+	sec, addLine, emitLineDir,
 } from "./context";
 import { genExpr } from "./expressions";
 import { ensureCrossModuleProto } from "./declarations";
@@ -67,6 +67,7 @@ import { sliceStr, charAt } from "../../utils/string";
 
 export function genStmt(g: CGen, p: CProc, node: Node): void {
 	if (node === null) return;
+	emitLineDir(g, p, node);
 
 	const k = node.kind;
 	if (k === NodeKind.ExprStmt) { genExprStmt(g, p, node); }

@@ -601,7 +601,11 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 			&& retType.kind !== TypeKind.Unknown
 			&& retType.kind !== TypeKind.Error) {
 			if (!isAssignable(retType, ctx.currentFunction.symbolType.typeReturn)) {
-				addError(ctx, "Return type mismatch: cannot assign to declared return type", node.location.line, node.location.column);
+				const retTR = retType.typeReturn !== null ? retType.typeReturn.kind.toString() : "null";
+				const declTR = ctx.currentFunction.symbolType.typeReturn.typeReturn !== null ? ctx.currentFunction.symbolType.typeReturn.typeReturn.kind.toString() : "null";
+				const retTE = retType.typeExtra !== null ? retType.typeExtra.kind.toString() : "null";
+				const declTE = ctx.currentFunction.symbolType.typeReturn.typeExtra !== null ? ctx.currentFunction.symbolType.typeReturn.typeExtra.kind.toString() : "null";
+				addError(ctx, "Return type mismatch: fn=" + ctx.currentFunction.name + " retT=" + retTR + " declT=" + declTR + " retE=" + retTE + " declE=" + declTE + " line=" + node.location.line.toString() + " col=" + node.location.column.toString(), node.location.line, node.location.column);
 			}
 		}
 	}
