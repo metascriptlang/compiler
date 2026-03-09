@@ -97,12 +97,12 @@ function walkBody(node: Node, modulePath: string, aliveSet: AliveSet,
 	if (node === null) return;
 	const k = node.kind;
 
-	// Identifier with resolvedSym — mark its declaration alive
+	// Identifier — mark its declaration alive
 	if (k === NodeKind.Identifier) {
+		const id = node.data as IdentifierData;
 		const sym = node.resolvedSym;
 		if (sym !== null) {
 			// Check if this identifier refers to an imported symbol
-			const id = node.data as IdentifierData;
 			const importIdx = findImport(importMap, id.name);
 			if (importIdx >= 0) {
 				// Cross-module reference — mark in source module and walk its body
@@ -112,6 +112,10 @@ function walkBody(node: Node, modulePath: string, aliveSet: AliveSet,
 				// Local reference
 				markAndWalk(modulePath, sym.name, aliveSet, modIdx, visited);
 			}
+		} else if (id.name.length > 0) {
+			// Transform-generated Identifiers (lambda lifting, builtinLower) lack resolvedSym.
+			// Trace by name within current module to ensure callees of lifted functions are alive.
+			markAndWalk(modulePath, id.name, aliveSet, modIdx, visited);
 		}
 		return;
 	}

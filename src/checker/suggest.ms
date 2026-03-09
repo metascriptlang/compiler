@@ -34,6 +34,7 @@ export interface SgSuggest {
 	symType: Type;
 	location: SourceLocation;
 	modulePath: string;    // source file path (for cross-file navigation)
+	containerName: string; // owning class/interface name (for display: "console.log")
 	prefixScore: number;   // 0=None, 1=Substr, 2=Prefix
 	scopeDepth: number;    // 0=innermost, higher=outer
 	contextFit: boolean;   // type-context match
@@ -444,7 +445,7 @@ function sgTypeName(t: Type): string {
 function sgSuggestFromSym(sym: Symbol): SgSuggest {
 	return {
 		name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
-		location: sym.location, modulePath: sym.modulePath,
+		location: sym.location, modulePath: sym.modulePath, containerName: "",
 		prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: hasFlag(sym, SymbolFlag.Exported), isMutable: hasFlag(sym, SymbolFlag.Mutable),
 	};
@@ -455,8 +456,8 @@ export function sgGetSymbolAtCursor(ctx: CheckerContext, program: Node, line: nu
 	if (node === null) return null as unknown as SgSuggest;
 
 	// Checker-stamped resolvedSym is authoritative — but only if it has a real location.
-	// Synthetic symbols (e.g. struct field access) have location {0,0} and need special handling.
-	if (node.resolvedSym !== null) {
+	// Skip MemberExpr: needs special name/container handling (mangled names like console_log).
+	if (node.resolvedSym !== null && node.kind !== NodeKind.MemberExpr) {
 		const _rsLoc = node.resolvedSym.location;
 		if (_rsLoc !== null && _rsLoc.line > 0) return sgSuggestFromSym(node.resolvedSym);
 	}
@@ -479,30 +480,46 @@ export function sgGetSymbolAtCursor(ctx: CheckerContext, program: Node, line: nu
 		if (sym !== null) return sgSuggestFromSym(sym);
 	}
 
-	// MemberExpr: cursor on property name (e.g. p.name, JSON.parse)
+	// MemberExpr: cursor on property name (e.g. p.name, JSON.parse, console.log)
 	if (node.kind === NodeKind.MemberExpr) {
-		// resolvedSym set by checker — use if it has a real location
-		if (node.resolvedSym !== null) {
-			const rsLoc = node.resolvedSym.location;
-			if (rsLoc !== null && rsLoc.line > 0) return sgSuggestFromSym(node.resolvedSym);
-		}
 		const md = node.data as MemberExprData;
 		// Unwrap HiddenDeref (checker inserts for class/ref access)
 		let objNode = md.object;
 		if (objNode !== null && objNode.kind === NodeKind.HiddenDeref) {
 			objNode = (objNode.data as HiddenDerefData).expr;
 		}
-		// Named type: find the property in the type's declaration (e.g. Person.name → interface Person)
+		// Determine container name from object type
 		const objType = objNode !== null ? objNode.nodeType : null as unknown as Type;
+		let container = objType !== null ? sgTypeName(objType) : "";
+		// Fallback: extract container from object identifier name (e.g. "console", "JSON")
+		if (container === "" && objNode !== null && objNode.kind === NodeKind.Identifier) {
+			container = (objNode.data as IdentifierData).name;
+		}
+		// resolvedSym set by checker — use if it has a real location
+		// Override name with md.property (sym.name may be mangled like "console_log")
+		if (node.resolvedSym !== null) {
+			const rsLoc = node.resolvedSym.location;
+			if (rsLoc !== null && rsLoc.line > 0) {
+				const sg = sgSuggestFromSym(node.resolvedSym);
+				sg.name = md.property;
+				sg.containerName = container;
+				// Method kind for functions on classes
+				if (sg.kind === SymbolKind.Function && container !== "") {
+					sg.kind = SymbolKind.Method;
+				}
+				return sg;
+			}
+		}
+		// Named type: find the property in the type's declaration (e.g. Person.name → interface Person)
 		if (objType !== null) {
-			const typeName = sgTypeName(objType);
-			if (typeName !== "") {
-				const typeSym = lookupSymbol(ctx.table, typeName);
+			if (container !== "") {
+				const typeSym = lookupSymbol(ctx.table, container);
 				if (typeSym !== null) {
 					return {
 						name: md.property, kind: SymbolKind.Property,
 						symType: typeSym.symbolType,
 						location: typeSym.location, modulePath: typeSym.modulePath,
+						containerName: container,
 						prefixScore: 0, scopeDepth: 0, contextFit: false,
 						isExported: false, isMutable: false,
 					};
@@ -514,6 +531,7 @@ export function sgGetSymbolAtCursor(ctx: CheckerContext, program: Node, line: nu
 					name: md.property, kind: SymbolKind.Property,
 					symType: objType,
 					location: objNode.resolvedSym.location, modulePath: objNode.resolvedSym.modulePath,
+					containerName: container,
 					prefixScore: 0, scopeDepth: 0, contextFit: false,
 					isExported: false, isMutable: false,
 				};
@@ -539,6 +557,24 @@ export function sgGetSymbolAtCursor(ctx: CheckerContext, program: Node, line: nu
 }
 
 // ===== sgFormatHover — markdown hover info =====
+
+// Find substring in string. Returns index or -1.
+function sgFindSubstring(haystack: string, needle: string): number {
+	if (needle.length === 0) return 0;
+	if (needle.length > haystack.length) return -1;
+	const limit = haystack.length - needle.length;
+	for (let i = 0; i <= limit; i = i + 1) {
+		let match = true;
+		for (let j = 0; j < needle.length; j = j + 1) {
+			if (charAt(haystack, i + j) !== charAt(needle, j)) {
+				match = false;
+				break;
+			}
+		}
+		if (match) return i;
+	}
+	return -1;
+}
 
 function sgSymbolKindName(kind: SymbolKind): string {
 	return match (kind) {
@@ -602,71 +638,154 @@ export function sgFormatHover(suggest: SgSuggest): string {
 		} else {
 			if (suggest.isMutable) { kw = "let"; } else { kw = "const"; }
 		}
-		return "```ms\n" + kw + " " + suggest.name + ": " + typeStr + "\n```";
+		return "```typescript\n" + kw + " " + suggest.name + ": " + typeStr + "\n```";
 	}
 	// Function: function name(params): returnType
 	if (suggest.kind === SymbolKind.Function) {
 		if (suggest.symType !== null && suggest.symType.kind === TypeKind.Function) {
-			return "```ms\n" + sgFormatFuncDecl(suggest.name, suggest.symType) + "\n```";
+			return "```typescript\n" + sgFormatFuncDecl(suggest.name, suggest.symType) + "\n```";
 		}
-		return "```ms\nfunction " + suggest.name + "\n```";
+		return "```typescript\nfunction " + suggest.name + "\n```";
 	}
-	// Method: (method) name(params): returnType
+	// Method: Container.name(params): returnType
 	if (suggest.kind === SymbolKind.Method) {
+		const prefix = suggest.containerName !== null && suggest.containerName !== ""
+			? suggest.containerName + "." : "";
 		if (suggest.symType !== null && suggest.symType.kind === TypeKind.Function) {
-			return "```ms\n(method) " + suggest.name + sgFormatParamList(suggest.symType) + ": " + sgTypeToString(suggest.symType.typeReturn) + "\n```";
+			return "```typescript\n" + prefix + suggest.name + sgFormatParamList(suggest.symType) + ": " + sgTypeToString(suggest.symType.typeReturn) + "\n```";
 		}
-		return "```ms\n(method) " + suggest.name + "\n```";
+		return "```typescript\n" + prefix + suggest.name + "\n```";
 	}
-	// Property: (property) name: type
+	// Property: (property) Container.name: type
 	if (suggest.kind === SymbolKind.Property) {
-		return "```ms\n(property) " + suggest.name + ": " + typeStr + "\n```";
+		let propPrefix = "";
+		if (suggest.containerName !== null && suggest.containerName !== "") {
+			// Hide internal anonymous type names (__anon*)
+			if (sgFindSubstring(suggest.containerName, "__anon") < 0) {
+				propPrefix = suggest.containerName + ".";
+			}
+		}
+		return "```typescript\n(property) " + propPrefix + suggest.name + ": " + typeStr + "\n```";
 	}
 	// Interface: interface Name { field1: T1; field2: T2 }
 	if (suggest.kind === SymbolKind.Interface) {
 		if (suggest.symType !== null && suggest.symType.kind === TypeKind.Struct && suggest.symType.typeNames.length > 0) {
 			const fields = sgFormatFieldList(suggest.symType);
-			return "```ms\ninterface " + suggest.name + " { " + fields + " }\n```";
+			return "```typescript\ninterface " + suggest.name + " { " + fields + " }\n```";
 		}
-		return "```ms\ninterface " + suggest.name + "\n```";
+		return "```typescript\ninterface " + suggest.name + "\n```";
 	}
 	// Class: class Name
 	if (suggest.kind === SymbolKind.Class) {
-		return "```ms\nclass " + suggest.name + "\n```";
+		return "```typescript\nclass " + suggest.name + "\n```";
 	}
 	// Enum: enum Name { A, B, C }
 	if (suggest.kind === SymbolKind.Enum) {
 		if (suggest.symType !== null && suggest.symType.kind === TypeKind.Enum && suggest.symType.typeNames.length > 0) {
 			const members = sgJoinFieldNames(suggest.symType.typeNames);
-			return "```ms\nenum " + suggest.name + " { " + members + " }\n```";
+			return "```typescript\nenum " + suggest.name + " { " + members + " }\n```";
 		}
-		return "```ms\nenum " + suggest.name + "\n```";
+		return "```typescript\nenum " + suggest.name + "\n```";
 	}
 	// TypeAlias: type T = underlying
 	if (suggest.kind === SymbolKind.TypeAlias) {
-		return "```ms\ntype " + suggest.name + " = " + typeStr + "\n```";
+		return "```typescript\ntype " + suggest.name + " = " + typeStr + "\n```";
 	}
 	// Fallback
 	const kindName = sgSymbolKindName(suggest.kind);
-	return "```ms\n(" + kindName + ") " + suggest.name + ": " + typeStr + "\n```";
+	return "```typescript\n(" + kindName + ") " + suggest.name + ": " + typeStr + "\n```";
 }
 
-// Hover documentation section — annotations below the code block
+// Hover documentation section — module source + doc comments
 export function sgFormatHoverDoc(suggest: SgSuggest, docComment: string): string {
 	if (suggest === null) return "";
-	let badges = "";
-	if (suggest.isExported) badges = "**exported**";
-	if (suggest.isMutable && suggest.kind === SymbolKind.Variable) {
-		if (badges.length > 0) badges = badges + " | ";
-		badges = badges + "**mutable**";
-	}
 	let doc = "";
-	if (badges.length > 0) doc = badges;
+	// Show module source for cross-file project imports (skip std/ prelude — auto-loaded)
+	if (suggest.modulePath !== null && suggest.modulePath !== "") {
+		const isStd = sgFindSubstring(suggest.modulePath, "std/") >= 0;
+		if (!isStd) {
+			let shortPath = suggest.modulePath;
+			let lastSlash = shortPath.length - 1;
+			while (lastSlash >= 0 && charAt(shortPath, lastSlash) !== "/") {
+				lastSlash = lastSlash - 1;
+			}
+			if (lastSlash >= 0) shortPath = sliceStr(shortPath, lastSlash + 1, shortPath.length);
+			doc = "*" + shortPath + "*";
+		}
+	}
 	if (docComment.length > 0) {
 		if (doc.length > 0) doc = doc + "\n\n---\n\n";
 		doc = doc + docComment;
 	}
 	return doc;
+}
+
+// Built-in documentation for well-known symbols (MDN-style descriptions)
+export function sgBuiltinDoc(name: string, containerName: string): string {
+	// console methods
+	if (containerName === "console") {
+		if (name === "log") return "Outputs a message to the console.";
+		if (name === "error") return "Outputs an error message to the console.";
+		if (name === "warn") return "Outputs a warning message to the console.";
+	}
+	// JSON methods
+	if (containerName === "JSON") {
+		if (name === "parse") return "Parses a JSON string, constructing the value described by the string.";
+		if (name === "stringify") return "Converts a value to a JSON string.";
+	}
+	// Math methods
+	if (containerName === "Math") {
+		if (name === "floor") return "Returns the largest integer less than or equal to x.";
+		if (name === "ceil") return "Returns the smallest integer greater than or equal to x.";
+		if (name === "round") return "Returns the value of x rounded to the nearest integer.";
+		if (name === "abs") return "Returns the absolute value of x.";
+		if (name === "sqrt") return "Returns the square root of x.";
+		if (name === "min") return "Returns the smallest of the given values.";
+		if (name === "max") return "Returns the largest of the given values.";
+		if (name === "pow") return "Returns base raised to the power of exponent.";
+		if (name === "random") return "Returns a pseudo-random number between 0 and 1.";
+		if (name === "trunc") return "Returns the integer part of x by removing any fractional digits.";
+		if (name === "sign") return "Returns the sign of x: -1, 0, or 1.";
+		if (name === "log") return "Returns the natural logarithm (base e) of x.";
+		if (name === "log2") return "Returns the base-2 logarithm of x.";
+		if (name === "log10") return "Returns the base-10 logarithm of x.";
+	}
+	// Result methods
+	if (containerName === "Result") {
+		if (name === "ok") return "Creates a successful Result wrapping the given value.";
+		if (name === "err") return "Creates an error Result wrapping the given error.";
+	}
+	// String extension methods
+	if (name === "length") return "Returns the number of characters in the string.";
+	if (name === "toString") return "Returns a string representation of the value.";
+	if (name === "push") return "Appends an element to the end of the array.";
+	if (name === "pop") return "Removes and returns the last element of the array.";
+	if (name === "slice") return "Returns a shallow copy of a portion of an array or string.";
+	if (name === "indexOf") return "Returns the first index at which a given element can be found, or -1.";
+	if (name === "map") return "Creates a new array populated with the results of calling a function on every element.";
+	if (name === "filter") return "Creates a new array with elements that pass a test.";
+	if (name === "join") return "Joins all elements of an array into a string.";
+	if (name === "split") return "Divides a string into an ordered list of substrings.";
+	if (name === "trim") return "Removes whitespace from both ends of a string.";
+	if (name === "startsWith") return "Determines whether a string begins with the specified characters.";
+	if (name === "endsWith") return "Determines whether a string ends with the specified characters.";
+	if (name === "includes") return "Determines whether one string may be found within another.";
+	if (name === "replace") return "Returns a new string with one or all matches of a pattern replaced.";
+	if (name === "charAt") return "Returns the character at the specified index.";
+	if (name === "charCodeAt") return "Returns the UTF-16 code unit at the specified index.";
+	if (name === "substring") return "Returns the part of the string between the start and end indexes.";
+	if (name === "toLowerCase") return "Returns the string converted to lowercase.";
+	if (name === "toUpperCase") return "Returns the string converted to uppercase.";
+	if (name === "repeat") return "Returns a string consisting of the given number of copies.";
+	if (name === "sort") return "Sorts the elements of an array in place and returns the array.";
+	if (name === "reverse") return "Reverses the elements of an array in place.";
+	if (name === "concat") return "Merges two or more arrays or strings.";
+	if (name === "find") return "Returns the first element that satisfies the provided testing function.";
+	if (name === "every") return "Tests whether all elements pass the provided function.";
+	if (name === "some") return "Tests whether at least one element passes the provided function.";
+	if (name === "reduce") return "Applies a function against an accumulator and each element to reduce to a single value.";
+	if (name === "forEach") return "Executes a provided function once for each array element.";
+	return "";
 }
 
 // ===== Doc Comment Extraction =====
@@ -1006,7 +1125,8 @@ function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverTyp
 				const loc: SourceLocation = { line: 0, column: 0 };
 				const item: SgSuggest = {
 					name: propName, kind: SymbolKind.Property, symType: propType,
-					location: loc, prefixScore: ps, scopeDepth: 0, contextFit: false,
+					location: loc, modulePath: "", containerName: "",
+					prefixScore: ps, scopeDepth: 0, contextFit: false,
 					isExported: false, isMutable: false,
 				};
 				result.push(item);
@@ -1022,7 +1142,8 @@ function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverTyp
 				const loc: SourceLocation = { line: 0, column: 0 };
 				const item: SgSuggest = {
 					name: memberName, kind: SymbolKind.Property, symType: receiverType,
-					location: loc, prefixScore: ps, scopeDepth: 0, contextFit: false,
+					location: loc, modulePath: "", containerName: "",
+					prefixScore: ps, scopeDepth: 0, contextFit: false,
 					isExported: false, isMutable: false,
 				};
 				result.push(item);
@@ -1057,7 +1178,8 @@ function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverTyp
 				const loc: SourceLocation = { line: 0, column: 0 };
 				const item: SgSuggest = {
 					name: bestExt.methodName, kind: SymbolKind.Method, symType: sigType,
-					location: loc, prefixScore: ps, scopeDepth: 0, contextFit: false,
+					location: loc, modulePath: "", containerName: "",
+					prefixScore: ps, scopeDepth: 0, contextFit: false,
 					isExported: false, isMutable: false,
 				};
 				result.push(item);
@@ -1087,7 +1209,7 @@ export function sgGetCompletionCandidates(ctx: CheckerContext, kind: SgCompletio
 				if (!inTypeCtx || sgIsTypeKind(sym.symbolKind)) {
 					const item: SgSuggest = {
 						name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
-						location: sym.location, modulePath: sym.modulePath,
+						location: sym.location, modulePath: sym.modulePath, containerName: "",
 						prefixScore: ps, scopeDepth: depth, contextFit: cf,
 						isExported: hasFlag(sym, SymbolFlag.Exported), isMutable: hasFlag(sym, SymbolFlag.Mutable),
 					};
@@ -1956,11 +2078,12 @@ test "format variable hover" {
 	const loc: SourceLocation = { line: 1, column: 0 };
 	const suggest: SgSuggest = {
 		name: "count", kind: SymbolKind.Variable, symType: numberType(),
-		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+		location: loc, modulePath: "", containerName: "",
+		prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false,
 	};
 	const hover = sgFormatHover(suggest);
-	assert hover === "```ms\nconst count: number\n```";
+	assert hover === "```typescript\nconst count: number\n```";
 }
 
 test "format function hover" {
@@ -1970,81 +2093,89 @@ test "format function hover" {
 	const fnType = createFunction(params, names, voidType());
 	const suggest: SgSuggest = {
 		name: "greet", kind: SymbolKind.Function, symType: fnType,
-		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+		location: loc, modulePath: "", containerName: "",
+		prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false,
 	};
 	const hover = sgFormatHover(suggest);
-	assert hover === "```ms\nfunction greet(s: string): void\n```";
+	assert hover === "```typescript\nfunction greet(s: string): void\n```";
 }
 
 test "format interface hover" {
 	const loc: SourceLocation = { line: 1, column: 0 };
 	const suggest: SgSuggest = {
 		name: "Point", kind: SymbolKind.Interface, symType: unknownType(),
-		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+		location: loc, modulePath: "", containerName: "",
+		prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false,
 	};
-	assert sgFormatHover(suggest) === "```ms\ninterface Point\n```";
+	assert sgFormatHover(suggest) === "```typescript\ninterface Point\n```";
 }
 
 test "format class hover" {
 	const loc: SourceLocation = { line: 1, column: 0 };
 	const suggest: SgSuggest = {
 		name: "Vec", kind: SymbolKind.Class, symType: unknownType(),
-		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+		location: loc, modulePath: "", containerName: "",
+		prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false,
 	};
-	assert sgFormatHover(suggest) === "```ms\nclass Vec\n```";
+	assert sgFormatHover(suggest) === "```typescript\nclass Vec\n```";
 }
 
 test "format enum hover" {
 	const loc: SourceLocation = { line: 1, column: 0 };
 	const suggest: SgSuggest = {
 		name: "Color", kind: SymbolKind.Enum, symType: unknownType(),
-		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+		location: loc, modulePath: "", containerName: "",
+		prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false,
 	};
-	assert sgFormatHover(suggest) === "```ms\nenum Color\n```";
+	assert sgFormatHover(suggest) === "```typescript\nenum Color\n```";
 }
 
 test "format type alias hover" {
 	const loc: SourceLocation = { line: 1, column: 0 };
 	const suggest: SgSuggest = {
 		name: "Id", kind: SymbolKind.TypeAlias, symType: numberType(),
-		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+		location: loc, modulePath: "", containerName: "",
+		prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false,
 	};
-	assert sgFormatHover(suggest) === "```ms\ntype Id = number\n```";
+	assert sgFormatHover(suggest) === "```typescript\ntype Id = number\n```";
 }
 
 test "format let variable hover" {
 	const loc: SourceLocation = { line: 1, column: 0 };
 	const suggest: SgSuggest = {
 		name: "x", kind: SymbolKind.Variable, symType: stringType(),
-		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+		location: loc, modulePath: "", containerName: "",
+		prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: true,
 	};
-	assert sgFormatHover(suggest) === "```ms\nlet x: string\n```";
+	assert sgFormatHover(suggest) === "```typescript\nlet x: string\n```";
 }
 
 test "format parameter hover" {
 	const loc: SourceLocation = { line: 1, column: 0 };
 	const suggest: SgSuggest = {
 		name: "name", kind: SymbolKind.Parameter, symType: stringType(),
-		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+		location: loc, modulePath: "", containerName: "",
+		prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false,
 	};
-	assert sgFormatHover(suggest) === "```ms\n(parameter) name: string\n```";
+	assert sgFormatHover(suggest) === "```typescript\n(parameter) name: string\n```";
 }
 
 test "format property hover" {
 	const loc: SourceLocation = { line: 1, column: 0 };
 	const suggest: SgSuggest = {
 		name: "x", kind: SymbolKind.Property, symType: numberType(),
-		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+		location: loc, modulePath: "", containerName: "",
+		prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false,
 	};
-	assert sgFormatHover(suggest) === "```ms\n(property) x: number\n```";
+	assert sgFormatHover(suggest) === "```typescript\n(property) x: number\n```";
 }
 
 test "format method hover" {
@@ -2054,10 +2185,25 @@ test "format method hover" {
 	const fnType = createFunction(params, names, voidType());
 	const suggest: SgSuggest = {
 		name: "push", kind: SymbolKind.Method, symType: fnType,
-		location: loc, prefixScore: 0, scopeDepth: 0, contextFit: false,
+		location: loc, modulePath: "", containerName: "",
+		prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false,
 	};
-	assert sgFormatHover(suggest) === "```ms\n(method) push(item: string): void\n```";
+	assert sgFormatHover(suggest) === "```typescript\npush(item: string): void\n```";
+}
+
+test "format method hover with container" {
+	const loc: SourceLocation = { line: 1, column: 0 };
+	const params: Type[] = [stringType()];
+	const names: string[] = ["value"];
+	const fnType = createFunction(params, names, voidType());
+	const suggest: SgSuggest = {
+		name: "log", kind: SymbolKind.Method, symType: fnType,
+		location: loc, modulePath: "", containerName: "console",
+		prefixScore: 0, scopeDepth: 0, contextFit: false,
+		isExported: false, isMutable: false,
+	};
+	assert sgFormatHover(suggest) === "```typescript\nconsole.log(value: string): void\n```";
 }
 
 test "null suggest returns empty" {
@@ -2459,17 +2605,19 @@ test "sgFormatHoverDoc with doc comment" {
 	const suggest: SgSuggest = {
 		name: "foo", kind: SymbolKind.Function,
 		symType: unknownType(), location: { line: 1, column: 0 },
+		modulePath: "", containerName: "",
 		prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: true, isMutable: false,
 	};
 	const doc = sgFormatHoverDoc(suggest, "A useful function");
-	assert doc === "**exported**\n\n---\n\nA useful function";
+	assert doc === "A useful function";
 }
 
 test "sgFormatHoverDoc no comment" {
 	const suggest: SgSuggest = {
 		name: "bar", kind: SymbolKind.Variable,
 		symType: unknownType(), location: { line: 1, column: 0 },
+		modulePath: "", containerName: "",
 		prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false,
 	};

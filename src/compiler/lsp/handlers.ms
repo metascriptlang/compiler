@@ -33,7 +33,7 @@ import {
 	sgCollectSymbolsInFile, sgFormatSignature, sgFormatExtensionSignatures, sgCountActiveParam, sgGetCalleeAtCursor, sgGetReceiverAtCursor,
 	sgCollectInlayHints,
 	sgCollectReferences, sgFindUsagesByName,
-	sgFormatHoverDoc, sgExtractDocComment,
+	sgFormatHoverDoc, sgExtractDocComment, sgBuiltinDoc,
 	sgFindImportSource, sgFindExportedDecl,
 	SgSuggest, SgCompletionKind,
 	SgSymbolRef,
@@ -441,8 +441,20 @@ export function handleHover(id: string, params: string, db: TransAmDb): string {
 	if (suggest === null) return lspResponse(id, "null");
 
 	const hoverText = sgFormatHover(suggest);
-	const source = dbGetSource(db, path);
-	const docComment = sgExtractDocComment(source, suggest.location.line);
+	// Extract doc comment from the symbol's source file (may differ for cross-file symbols)
+	let source = "";
+	const modPath = suggest.modulePath;
+	if (modPath !== null && modPath !== "" && modPath !== path) {
+		lspEnsureFileLoaded(db, modPath);
+		source = dbGetSource(db, modPath);
+	} else {
+		source = dbGetSource(db, path);
+	}
+	let docComment = sgExtractDocComment(source, suggest.location.line);
+	// Fallback to built-in docs for well-known symbols (MDN-style)
+	if (docComment === "") {
+		docComment = sgBuiltinDoc(suggest.name, suggest.containerName);
+	}
 	const hoverDoc = sgFormatHoverDoc(suggest, docComment);
 	return lspResponse(id, lspFmtHoverResult(hoverText, hoverDoc));
 }

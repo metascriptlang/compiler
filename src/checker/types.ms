@@ -184,6 +184,20 @@ export function anonStructName(fieldNames: string[], fieldTypes: Type[]): string
 				TypeKind.Boolean => "b",
 				TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 => "i",
 				TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => "u",
+				TypeKind.Array => {
+					// Distinguish array element types to avoid struct name collision
+					// (e.g., string[] field vs unknown[] field producing the same anon struct name)
+					if (ft.typeReturn !== null) {
+						match (ft.typeReturn.kind) {
+							TypeKind.String => "As",
+							TypeKind.Number | TypeKind.Float64 => "An",
+							TypeKind.Boolean => "Ab",
+							_ => "x",
+						};
+					} else {
+						"x";
+					}
+				},
 				_ => "x",
 			};
 		}
@@ -658,7 +672,7 @@ export function isLentType(t: Type): boolean {
 
 export function skipModifier(t: Type): Type {
 	if (t === null) return t;
-	if (t.kind === TypeKind.Sink || t.kind === TypeKind.Lent) return t.typeReturn;
+	if (t.kind === TypeKind.Sink || t.kind === TypeKind.Lent || t.kind === TypeKind.Var) return t.typeReturn;
 	return t;
 }
 

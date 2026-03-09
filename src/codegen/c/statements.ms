@@ -209,6 +209,9 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 		cType = getTypeDesc(g, d.initializer.nodeType);
 	}
 	if (cType === "") cType = "double";
+	// Null-typed variables (`let x = null`) resolve to "void" which is invalid in C.
+	// Null in C is a pointer (void*), not void. Parity: Nim maps tyNil to void*.
+	if (cType === "void") cType = "void*";
 
 	if (d.initializer !== null) {
 		// Propagate declared type to untyped initializer (e.g. let arr: string[] = [])

@@ -21,7 +21,7 @@ import {
 	isNumeric, isIntegerType, isStringType, isCallable, getReturnType, getElementType, getProperty, sizeOfType,
 	typeNameOf, unwrapRef, isDiscriminatedUnion, findVariantByDiscriminant, findFieldInVariant, findUnionVariant,
 	unifyType, createUnifyBindings, hasGenericParams,
-	getMinArity, isNarrowingIntConv, CallingConvention,
+	getMinArity, isNarrowingIntConv, CallingConvention, skipModifier,
 } from "./types";
 import {
 	Symbol, SymbolKind, ScopeKind, SymbolState,
@@ -205,9 +205,13 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 		},
 		NodeKind.ObjectLiteral => {
 			const d = node.data as ObjectLiteralData;
+			// Unwrap ownership modifiers (Sink/Lent/Var) and Ref — transparent wrappers.
+			// Reference parity: semobjconstr.nim:481 — skipTypes({tySink, tyOwned})
+			let objExpected = skipModifier(expectedType);
 			// Unwrap Ref for class types — ObjectLiteral constructs the inner struct
-			const objExpected = (expectedType !== null && expectedType.kind === TypeKind.Ref && expectedType.typeReturn !== null)
-				? expectedType.typeReturn : expectedType;
+			if (objExpected !== null && objExpected.kind === TypeKind.Ref && objExpected.typeReturn !== null) {
+				objExpected = objExpected.typeReturn;
+			}
 			if (objExpected !== null && objExpected.kind === TypeKind.Struct
 				&& objExpected.typeChildren !== null) {
 				// Reference parity: stamp literal with expected type, propagate field types
@@ -222,20 +226,33 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 					fi = fi + 1;
 				}
 				expectedType;
-			} else if (expectedType !== null && expectedType.kind === TypeKind.Union
-				&& isDiscriminatedUnion(expectedType)) {
+			} else if (objExpected !== null && objExpected.kind === TypeKind.Union
+				&& isDiscriminatedUnion(objExpected)) {
 				// Discriminated union construction validation
-				checkDiscriminatedConstruction(ctx, node, d, expectedType);
-			} else if (expectedType !== null && expectedType.kind === TypeKind.Union) {
-				// Non-discriminated union (e.g. NodeData): stamp with union type
-				// and check properties. Codegen resolves the variant from field names.
-				// Standard reference patterns: use expected type for untyped object literals.
-				// We infer from expectedType since MS uses untyped object literals.
-				node.nodeType = expectedType;
-				for (const prop of d.properties) {
-					checkExpr(ctx, prop, null);
+				checkDiscriminatedConstruction(ctx, node, d, objExpected);
+			} else if (objExpected !== null && objExpected.kind === TypeKind.Union) {
+				// Non-discriminated union (e.g. NodeData): find variant by field names
+				// and propagate field types to properties. Standard reference pattern:
+				// use variant type info for field-level type checking in union construction.
+				node.nodeType = objExpected;
+				// Try to find the matching variant to propagate field types
+				const varIdx = (d.keys.length > 0)
+					? findUnionVariant(objExpected, d.keys, [])
+					: -1;
+				const variant = (varIdx >= 0 && objExpected.typeChildren !== null
+					&& varIdx < objExpected.typeChildren.length)
+					? objExpected.typeChildren[varIdx]
+					: null;
+				let fi = 0;
+				while (fi < d.properties.length) {
+					const fieldExpected = (variant !== null && variant.typeChildren !== null
+						&& fi < variant.typeChildren.length)
+						? variant.typeChildren[fi]
+						: null;
+					checkExpr(ctx, d.properties[fi], fieldExpected);
+					fi = fi + 1;
 				}
-				expectedType;
+				objExpected;
 			} else {
 				// No expected type — synthesize anonymous struct from literal fields
 				const fieldNames: string[] = [];

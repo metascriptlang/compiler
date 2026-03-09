@@ -547,7 +547,14 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 		const d = node.data as BinaryExprData;
 		let finalRight = right;
 		if (d.operator === "=" && d.left.nodeType !== null && d.right.nodeType !== null) {
-			const leftCType = getTypeDesc(g, d.left.nodeType);
+			// For assignment LHS, prefer the variable's declared type over narrowed nodeType.
+			// Parity: Nim's genAsgn uses le.typ (declared type via PSym.typ, never narrowed).
+			// Our checker stores narrowed types on nodeType, so we read resolvedSym.symbolType.
+			let leftType = d.left.nodeType;
+			if (d.left.resolvedSym !== null && d.left.resolvedSym.symbolType !== null) {
+				leftType = d.left.resolvedSym.symbolType;
+			}
+			const leftCType = getTypeDesc(g, leftType);
 			const rightCType = getTypeDesc(g, d.right.nodeType);
 			if (leftCType !== rightCType && leftCType !== "void*" && rightCType !== "void") {
 				const destIsPtr = leftCType.indexOf("*") >= 0;

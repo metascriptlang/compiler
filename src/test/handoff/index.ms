@@ -34,3 +34,4 @@ import "./tryResultArray";
 import "./classMemberElseIf";
 import "./crossModuleGlobal";
 import "./closureCall";
+import "./nrvoReassign";
