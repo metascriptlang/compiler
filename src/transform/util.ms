@@ -9,7 +9,7 @@ import {
 	CallExprData, MemberExprData, IdentifierData,
 } from "../ast/node";
 import {
-	Type, TypeKind, createFunction, createStruct, createTypeRef,
+	Type, TypeKind, createFunction, createStruct, createTypeRef, createArray,
 	numberType, stringType, booleanType, voidType, nullType, unknownType, getSysType,
 } from "../checker/types";
 import { TransformContext, freshTemp, NameSet, nameSetAdd } from "./context";
@@ -252,6 +252,12 @@ export function makeInterfaceDecl(name: string, fields: string[], fieldTypes: st
 function resolveSimpleTypeStr(annotation: string): Type {
 	if (annotation === "") return unknownType();
 	if (annotation === "void*") return unknownType();  // void* → Unknown → "void*" in codegen
+	// Handle array annotations: "Foo[]", "Foo [ ]" (parser joins tokens with spaces)
+	// Strip trailing whitespace-surrounded brackets to get element type
+	const stripped = stripArraySuffix(annotation);
+	if (stripped !== "") {
+		return createArray(resolveSimpleTypeStr(stripped));
+	}
 	return match (annotation) {
 		"number" | "float64" => numberType(),
 		"string" => stringType(),
@@ -269,6 +275,23 @@ function resolveSimpleTypeStr(annotation: string): Type {
 		"float32" => getSysType(TypeKind.Float32),
 		_ => createTypeRef(annotation),
 	};
+}
+
+// Strip trailing "[]" or " [ ]" (parser collectTokenText joins tokens with spaces)
+// Returns element type string, or "" if not an array annotation.
+function stripArraySuffix(annotation: string): string {
+	const len = annotation.length;
+	if (len < 2) return "";
+	// Check for "[]" at end (from typeToEnvStr: "string[]")
+	if (annotation.charAt(len - 1) === "]" && annotation.charAt(len - 2) === "[") {
+		return annotation.slice(0, len - 2);
+	}
+	// Check for " [ ]" at end (from parser collectTokenText: "string [ ]")
+	if (len >= 5 && annotation.charAt(len - 1) === "]" && annotation.charAt(len - 2) === " "
+		&& annotation.charAt(len - 3) === "[" && annotation.charAt(len - 4) === " ") {
+		return annotation.slice(0, len - 4);
+	}
+	return "";
 }
 
 export function makeObjectLiteral(keys: string[], values: Node[], loc: SourceLocation): Node {

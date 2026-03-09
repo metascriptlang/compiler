@@ -19,7 +19,7 @@ import { Type, TypeKind, typeNameOf, getProperty,
 	numberType, stringType, booleanType, voidType, nullType,
 	unknownType, neverType, errorType } from "./types";
 import { Symbol, SymbolKind, SymbolTable, Scope, lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
-import { CheckerContext, findAllExtensionsByName, filterExtsByReceiverType, getExtFnType, stripReceiverParam } from "./context";
+import { CheckerContext, findAllExtensionsByName, filterExtsByReceiverType, getExtFnType, stripReceiverParam, SgSymRecord } from "./context";
 import { sliceStr, charAt } from "../utils/string";
 import { checkProgram } from "./checkPass";
 import { parseSource } from "../parser/statements/validation";
@@ -66,6 +66,54 @@ export interface SgDocumentSymbol {
 export interface SgSignatureInfo {
 	label: string;
 	paramLabels: string[];
+}
+
+// ===== sgQueryAtPosition — Nim-aligned binary search on check-time records =====
+// Replaces the fragile AST walker (sgFindNodeAtPosition + sgGetSymbolAtCursor).
+// Records are sorted by (line, col) after check completes.
+
+export function sgQueryAtPosition(ctx: CheckerContext, line: number, col: number): SgSuggest {
+	if (ctx.symRecords === null || ctx.symRecords.length === 0) return null as unknown as SgSuggest;
+	const records = ctx.symRecords;
+	// Binary search for first record on this line
+	let lo = 0;
+	let hi = records.length - 1;
+	while (lo <= hi) {
+		const mid = (lo + hi) >> 1;
+		if (records[mid].line < line) {
+			lo = mid + 1;
+		} else {
+			hi = mid - 1;
+		}
+	}
+	// Linear scan records on this line for col match
+	let i = lo;
+	while (i < records.length && records[i].line === line) {
+		const rec = records[i];
+		if (col >= rec.col && col < rec.colEnd) {
+			return sgSuggestFromRecord(rec);
+		}
+		i = i + 1;
+	}
+	return null as unknown as SgSuggest;
+}
+
+function sgSuggestFromRecord(rec: SgSymRecord): SgSuggest {
+	const loc = rec.sym !== null && rec.sym.location !== null ? rec.sym.location : { line: rec.line, column: rec.col, offset: 0 };
+	const modPath = rec.sym !== null && rec.sym.modulePath !== null ? rec.sym.modulePath : "";
+	return {
+		name: rec.name,
+		kind: rec.kind,
+		symType: rec.symType,
+		location: loc,
+		modulePath: modPath,
+		containerName: rec.containerName,
+		prefixScore: 0,
+		scopeDepth: 0,
+		contextFit: false,
+		isExported: rec.sym !== null ? rec.sym.isExported : false,
+		isMutable: rec.sym !== null ? rec.sym.isMutable : false,
+	};
 }
 
 // ===== sgTypeToString — full recursive type formatting =====

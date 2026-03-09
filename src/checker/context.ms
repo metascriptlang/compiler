@@ -390,6 +390,51 @@ export function isCancelled(cancel: CancelCtx, startVersion: number): boolean {
 
 // ===== Checker Context =====
 
+// ===== Sym Records (Nim-aligned check-time symbol recording for LSP) =====
+// During type-checking, every use/def site records its position + resolved symbol.
+// LSP queries binary-search this sorted array instead of walking the AST post-hoc.
+// Equivalent to Nim's suggest.nim SymInfoPair / suggestSym() / markUsed().
+
+export interface SgSymRecord {
+	line: number;          // 1-based (parser convention)
+	col: number;           // 1-based (parser convention)
+	colEnd: number;        // col + token length
+	sym: Symbol;           // resolved symbol
+	symType: Type;         // type at this use site
+	kind: SymbolKind;      // may override sym.symbolKind (e.g. Method for class functions)
+	name: string;          // display name (may differ from sym.name for mangled methods)
+	containerName: string; // owning type name ("console" for console.log)
+	isDecl: boolean;       // true = definition, false = usage
+}
+
+export function sgRecordSym(
+	ctx: CheckerContext, line: number, col: number, colEnd: number,
+	sym: Symbol, symType: Type, kind: SymbolKind,
+	name: string, containerName: string, isDecl: boolean
+): void {
+	if (ctx.symRecords === null) return;
+	const rec: SgSymRecord = { line, col, colEnd, sym, symType, kind, name, containerName, isDecl };
+	ctx.symRecords.push(rec);
+}
+
+// Insertion sort by (line, col) — called once after check completes.
+export function sgSortRecords(records: SgSymRecord[]): void {
+	let i = 1;
+	while (i < records.length) {
+		const rec = records[i];
+		let j = i - 1;
+		while (j >= 0) {
+			const other = records[j];
+			if (other.line < rec.line) break;
+			if (other.line === rec.line && other.col <= rec.col) break;
+			records[j + 1] = records[j];
+			j = j - 1;
+		}
+		records[j + 1] = rec;
+		i = i + 1;
+	}
+}
+
 // LSP DiagnosticSeverity parity
 export enum Severity {
 	Error,    // 1 in LSP
@@ -425,6 +470,7 @@ export interface CheckerContext {
 	cancelVersion: number;       // version at check start
 	modulePath: string;          // Implementation parity: source path for name mangling
 	narrowFacts: Node[];         // fact-based null narrowing knowledge base (standard reference equivalent)
+	symRecords: SgSymRecord[];   // check-time symbol recordings for LSP (Nim suggest.nim parity)
 }
 
 // ===== Constructors =====
@@ -449,6 +495,7 @@ export function createContext(): CheckerContext {
 		cancelVersion: 0,
 		modulePath: "",
 		narrowFacts: [],
+		symRecords: [],
 	};
 }
 
@@ -541,6 +588,20 @@ test "create context" {
 	assert !ctx.inLoop;
 	assert ctx.moduleGraph === null;
 	assert ctx.currentModule === null;
+	assert ctx.symRecords.length === 0;
+}
+
+test "sgSortRecords sorts by line then col" {
+	const records: SgSymRecord[] = [];
+	const dummySym = null as unknown as Symbol;
+	const dummyType = unknownType();
+	records.push({ line: 3, col: 5, colEnd: 8, sym: dummySym, symType: dummyType, kind: SymbolKind.Variable, name: "c", containerName: "", isDecl: false });
+	records.push({ line: 1, col: 10, colEnd: 13, sym: dummySym, symType: dummyType, kind: SymbolKind.Variable, name: "a", containerName: "", isDecl: false });
+	records.push({ line: 1, col: 1, colEnd: 4, sym: dummySym, symType: dummyType, kind: SymbolKind.Variable, name: "b", containerName: "", isDecl: false });
+	sgSortRecords(records);
+	assert records[0].name === "b";
+	assert records[1].name === "a";
+	assert records[2].name === "c";
 }
 
 test "create module context" {

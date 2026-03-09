@@ -113,6 +113,7 @@ interface LiftState {
 	currentStmts: Node[];      // Phase F: current statement list (for last-use scan)
 	currentStmtIdx: number;    // Phase F: current statement index in list
 	varTypes: VarTypeEntry[];  // Variable name → type string for env field typing
+	capturedIdents: Node[];    // Parallel to captures NameSet: original Identifier nodes with resolvedSym
 }
 
 function registerVarType(state: LiftState, name: string, typeStr: string): void {
@@ -150,7 +151,12 @@ function typeToEnvStr(t: Type): string {
 		TypeKind.Struct => (t.typeName !== null && t.typeName !== "") ? t.typeName : "",
 		TypeKind.Ref => (t.typeName !== null && t.typeName !== "") ? t.typeName : "",
 		TypeKind.Enum => (t.typeName !== null && t.typeName !== "") ? t.typeName : "",
-		TypeKind.Array => (t.typeReturn !== null) ? t.typeReturn.typeName + "[]" : "unknown[]",
+		TypeKind.Array => {
+			if (t.typeReturn !== null) {
+				const elem = typeToEnvStr(t.typeReturn);
+				if (elem !== "") { elem + "[]"; } else { "unknown[]"; }
+			} else { "unknown[]"; }
+		},
 		TypeKind.Result => "Result",
 		TypeKind.TypeReference => t.typeName,
 		_ => "",
@@ -168,6 +174,7 @@ function createLiftState(): LiftState {
 		currentStmts: [],
 		currentStmtIdx: 0,
 		varTypes: [],
+		capturedIdents: [],
 	};
 	return state;
 }
@@ -217,16 +224,19 @@ function computeLastUseCaptures(captures: NameSet, closureIdx: number, stmts: No
 // Walk the body recursively, collecting identifier names that are in outer scopes.
 // NOTE: string[] is VALUE TYPE in MetaScript — wrap in interface for mutation propagation.
 
-function detectCaptures(body: Node, ss: ScopeStack): NameSet {
+function detectCaptures(body: Node, ss: ScopeStack, identNodes: Node[]): NameSet {
 	const cc: NameSet = [];
-	collectCaptures(body, ss, cc);
+	collectCaptures(body, ss, cc, identNodes);
 	return cc;
 }
 
-function collectCaptures(node: Node, ss: ScopeStack, cc: NameSet): void {
+function collectCaptures(node: Node, ss: ScopeStack, cc: NameSet, identNodes: Node[]): void {
 	if (node.kind === NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
 		if (!isBuiltinName(d.name) && !isLocalVar(ss, d.name) && isOuterVar(ss, d.name)) {
+			if (!nameSetContains(cc, d.name)) {
+				identNodes.push(node);
+			}
 			nameSetAdd(cc, d.name);
 		}
 		return;
@@ -234,11 +244,11 @@ function collectCaptures(node: Node, ss: ScopeStack, cc: NameSet): void {
 	if (isFuncBoundary(node)) return;
 	if (node.kind === NodeKind.VariableDecl) {
 		const d = node.data as VariableDeclData;
-		collectCaptures(d.initializer, ss, cc);
+		collectCaptures(d.initializer, ss, cc, identNodes);
 		defineVar(ss, d.declName);
 		return;
 	}
-	mapChildren(node, (child: Node): Node => { collectCaptures(child, ss, cc); return child; });
+	mapChildren(node, (child: Node): Node => { collectCaptures(child, ss, cc, identNodes); return child; });
 }
 
 // ===== Body Rewriting =====
@@ -309,7 +319,7 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 
 	state.liftedFunctions.push(makeFnDecl(liftedName, liftedParams, liftedParamTypes, rewrittenBody, flags, returnType, loc));
 
-	return makeClosurePair(liftedName, envName, captures, state.lastUseCaptures, loc);
+	return makeClosurePair(liftedName, envName, captures, state.lastUseCaptures, state.capturedIdents, loc);
 }
 
 function liftArrow(node: Node, captures: NameSet, state: LiftState): Node {
@@ -334,16 +344,33 @@ function liftNonCapturing(body: Node, params: string[], paramTypes: string[], fl
 	return makeIdent(liftedName, loc);
 }
 
-function makeClosurePair(liftedName: string, envTypeName: string, captures: NameSet, lastUseCaptures: NameSet, loc: SourceLocation): Node {
+// Nim parity: newSymNode(local) — look up original Identifier node for a captured name
+// to preserve resolvedSym (needed for codegen name mangling).
+function findCapturedIdent(name: string, capturedIdents: Node[]): Node {
+	for (const n of capturedIdents) {
+		const d = n.data as IdentifierData;
+		if (d.name === name) return n;
+	}
+	return null as unknown as Node;
+}
+
+function makeClosurePair(liftedName: string, envTypeName: string, captures: NameSet, lastUseCaptures: NameSet, capturedIdents: Node[], loc: SourceLocation): Node {
 	const envKeys: string[] = [];
 	const envValues: Node[] = [];
 	for (const name of captures) {
 		envKeys.push(name);
+		// Create Identifier with resolvedSym from original node (Nim: newSymNode)
+		let ident = makeIdent(name, loc);
+		const orig = findCapturedIdent(name, capturedIdents);
+		if (orig !== null && orig.resolvedSym !== null) {
+			ident.resolvedSym = orig.resolvedSym;
+			ident.nodeType = orig.nodeType;
+		}
 		// Phase F: move last-use captures instead of copying
 		if (nameSetContains(lastUseCaptures, name)) {
-			envValues.push(makeMoveExpr(makeIdent(name, loc), loc));
+			envValues.push(makeMoveExpr(ident, loc));
 		} else {
-			envValues.push(makeIdent(name, loc));
+			envValues.push(ident);
 		}
 	}
 	const envObj = makeObjectLiteral(envKeys, envValues, loc);
@@ -564,7 +591,8 @@ function tryLiftClosure(node: Node, state: LiftState): Node {
 	if (node.kind === NodeKind.ArrowFunction) {
 		const d = node.data as ArrowFunctionData;
 		for (const p of d.arrowParams) { defineVar(state.ss, p); }
-		const captures = detectCaptures(d.arrowBody, state.ss);
+		state.capturedIdents = [];
+		const captures = detectCaptures(d.arrowBody, state.ss, state.capturedIdents);
 		popFuncBoundary(state.ss);
 		if (captures.length > 0) {
 			// Phase F: compute which captures are last-use in enclosing scope
@@ -576,7 +604,8 @@ function tryLiftClosure(node: Node, state: LiftState): Node {
 	} else if (node.kind === NodeKind.FunctionExpr) {
 		const d = node.data as FunctionExprData;
 		for (const p of d.funcExprParams) { defineVar(state.ss, p); }
-		const captures = detectCaptures(d.funcExprBody, state.ss);
+		state.capturedIdents = [];
+		const captures = detectCaptures(d.funcExprBody, state.ss, state.capturedIdents);
 		popFuncBoundary(state.ss);
 		if (captures.length > 0) {
 			// Phase F: compute which captures are last-use in enclosing scope

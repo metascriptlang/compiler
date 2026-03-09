@@ -35,6 +35,7 @@ import {
 	sgCollectReferences, sgFindUsagesByName,
 	sgFormatHoverDoc, sgExtractDocComment, sgBuiltinDoc,
 	sgFindImportSource, sgFindExportedDecl,
+	sgQueryAtPosition,
 	SgSuggest, SgCompletionKind,
 	SgSymbolRef,
 	SgDocumentSymbol,
@@ -437,7 +438,11 @@ export function handleHover(id: string, params: string, db: TransAmDb): string {
 	const ctx = dbTypeCheck(db, path);
 	if (ctx === null) return lspResponse(id, "null");
 
-	const suggest = sgGetSymbolAtCursor(ctx, program, pos.line, pos.col1);
+	// Nim-aligned: query check-time records first, fallback to AST walker
+	let suggest = sgQueryAtPosition(ctx, pos.line, pos.col1);
+	if (suggest === null) {
+		suggest = sgGetSymbolAtCursor(ctx, program, pos.line, pos.col1);
+	}
 	if (suggest === null) return lspResponse(id, "null");
 
 	const hoverText = sgFormatHover(suggest);
@@ -598,7 +603,11 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 	const ctx = dbTypeCheck(db, path);
 	if (ctx === null) return lspResponse(id, "null");
 
-	const suggest = sgGetSymbolAtCursor(ctx, program, pos.line, pos.col1);
+	// Nim-aligned: query check-time records first, fallback to AST walker
+	let suggest = sgQueryAtPosition(ctx, pos.line, pos.col1);
+	if (suggest === null) {
+		suggest = sgGetSymbolAtCursor(ctx, program, pos.line, pos.col1);
+	}
 	if (suggest !== null) {
 		let defLine = suggest.location.line - 1;
 		let defCol = suggest.location.column - 1;
@@ -818,7 +827,11 @@ export function handleReferences(id: string, params: string, db: TransAmDb): str
 	const ctx = dbTypeCheck(db, path);
 	if (ctx === null) return lspResponse(id, "[]");
 
-	const suggest = sgGetSymbolAtCursor(ctx, program, pos.line, pos.col1);
+	// Nim-aligned: query check-time records first, fallback to AST walker
+	let suggest = sgQueryAtPosition(ctx, pos.line, pos.col1);
+	if (suggest === null) {
+		suggest = sgGetSymbolAtCursor(ctx, program, pos.line, pos.col1);
+	}
 	if (suggest === null) return lspResponse(id, "[]");
 
 	let arr = "[";
@@ -895,7 +908,11 @@ export function handleRename(id: string, params: string, db: TransAmDb): string 
 	const ctx = dbTypeCheck(db, path);
 	if (ctx === null) return lspResponse(id, "null");
 
-	const suggest = sgGetSymbolAtCursor(ctx, program, pos.line, pos.col1);
+	// Nim-aligned: query check-time records first, fallback to AST walker
+	let suggest = sgQueryAtPosition(ctx, pos.line, pos.col1);
+	if (suggest === null) {
+		suggest = sgGetSymbolAtCursor(ctx, program, pos.line, pos.col1);
+	}
 	if (suggest === null) return lspResponse(id, "null");
 
 	// Collect edits across all files

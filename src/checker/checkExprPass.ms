@@ -27,7 +27,7 @@ import {
 	Symbol, SymbolKind, ScopeKind, SymbolState,
 	defineSymbol, lookupSymbol, makeSymbol, openScope, closeScope, hasOverloads,
 } from "./symbol";
-import { CheckerContext, addError, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled, isReceiverMatch, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam } from "./context";
+import { CheckerContext, addError, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled, isReceiverMatch, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym } from "./context";
 import {
 	scoreCandidate, isAssignable, needsStdConv, resolveOverloadIdx,
 	findFirstMismatch, typeRelation, TypeRelation,
@@ -112,6 +112,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			// Demand-driven: ensure the symbol's signature is resolved before using its type
 			ensureShaped(sym, ctx);
 			node.resolvedSym = sym;
+			sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.name.length, sym, sym.symbolType, sym.symbolKind, d.name, "", false);
 			sym.symbolType;
 		},
 		NodeKind.BinaryExpr => {
@@ -215,8 +216,10 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			if (objExpected !== null && objExpected.kind === TypeKind.Struct
 				&& objExpected.typeChildren !== null) {
 				// Reference parity: stamp literal with expected type, propagate field types
-				// For class types, stamp with Ref wrapper so codegen knows to heap-allocate
-				node.nodeType = expectedType;
+				// For class types, keep Ref wrapper so codegen knows to heap-allocate.
+				// Skip ownership modifiers (Sink/Lent/Var) — transparent for codegen.
+				const stampType = skipModifier(expectedType);
+				node.nodeType = (stampType !== null) ? stampType : objExpected;
 				let fi = 0;
 				while (fi < d.properties.length) {
 					const fieldExpected = (fi < objExpected.typeChildren.length)
@@ -225,7 +228,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 					checkExpr(ctx, d.properties[fi], fieldExpected);
 					fi = fi + 1;
 				}
-				expectedType;
+				node.nodeType;
 			} else if (objExpected !== null && objExpected.kind === TypeKind.Union
 				&& isDiscriminatedUnion(objExpected)) {
 				// Discriminated union construction validation
@@ -726,6 +729,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 			// Demand-driven: ensure callee signature is ready
 			ensureShaped(sym, ctx);
 			node.resolvedSym = sym;
+			sgRecordSym(ctx, d.callee.location.line, d.callee.location.column, d.callee.location.column + calleeName.length, sym, sym.symbolType, sym.symbolKind, calleeName, "", false);
 			if (hasOverloads(sym)) {
 				needsOverloadScoring = true;
 				overloadSym = sym;
@@ -811,7 +815,10 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 			if (filtered.length === 1) {
 				// Single match — use directly
 				const winner = filtered[0];
-				if (winner.sym !== null) node.resolvedSym = winner.sym;
+				if (winner.sym !== null) {
+					node.resolvedSym = winner.sym;
+					sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + me.property.length, winner.sym, getExtFnType(winner), SymbolKind.Method, me.property, winner.receiverTypeName, false);
+				}
 				// Strip receiver and return inferred type (sym.typ is authoritative)
 				let srcType = getExtFnType(winner);
 				if (!winner.isStatic && srcType.typeChildren.length > 0) {
@@ -1331,6 +1338,9 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 		if (enumSym !== null) {
 			const memberSym = lookupSymbol(ctx.table, mangledName);
 			node.resolvedSym = memberSym;
+			if (memberSym !== null) {
+				sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + mangledName.length, memberSym, objType, SymbolKind.EnumMember, d.property, enumName, false);
+			}
 		}
 		node.nodeType = objType;
 		return objType;
@@ -1348,6 +1358,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 		const resultPropSym = makeSymbol(d.property, SymbolKind.Property, propType, false);
 		resultPropSym.state = SymbolState.Shaped;
 		node.resolvedSym = resultPropSym;
+		sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.property.length, resultPropSym, propType, SymbolKind.Property, d.property, "Result", false);
 		return propType;
 	}
 	if (propType.kind !== TypeKind.Unknown) {
@@ -1365,6 +1376,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 			if (propSym !== null) {
 				ensureShaped(propSym, ctx);
 				node.resolvedSym = propSym;
+				sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.property.length, propSym, propType, SymbolKind.Property, d.property, resolvedObjType.typeName, false);
 			}
 		}
 		// Standard reference parity: fallback — search the type's field list directly
@@ -1380,6 +1392,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 						synthSym.nativeName = resolvedObjType.typeChildren[mi].typeName;
 					}
 					node.resolvedSym = synthSym;
+					sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + mName.length, synthSym, resolvedObjType.typeChildren[mi], SymbolKind.Property, mName, resolvedObjType.typeName, false);
 					break;
 				}
 				mi = mi + 1;
@@ -1473,6 +1486,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 		if (classMethSym !== null && classMethSym.symbolKind === SymbolKind.Function) {
 			ensureShaped(classMethSym, ctx);
 			node.resolvedSym = classMethSym;
+			sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.property.length, classMethSym, classMethSym.symbolType, SymbolKind.Method, d.property, resolvedObjType.typeName, false);
 			if (needsDeref) {
 				const tok = createToken(TokenKind.Ident, "", node.location.line);
 				const derefNode = createNode(NodeKind.HiddenDeref, { expr: d.object }, tok);
@@ -1514,6 +1528,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 			if (ext.sym !== null) {
 				ensureShaped(ext.sym, ctx);
 				node.resolvedSym = ext.sym;
+				sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.property.length, ext.sym, getExtFnType(ext), SymbolKind.Method, d.property, ext.receiverTypeName, false);
 			}
 			// Instance extension: strip receiver param (index 0) so checkCallExpr
 			// sees only user-visible params. The receiver is already in MemberExpr.object.

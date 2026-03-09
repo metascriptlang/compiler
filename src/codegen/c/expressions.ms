@@ -72,8 +72,15 @@ function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, paramTyp
 				const od = exprNode.data as ObjectLiteralData;
 				if (od.keys !== null && od.keys.length > 0) {
 					const unionName = getTypeDesc(g, exprNode.nodeType);
-					const keyArr: string[] = [od.keys[0]];
-					const varIdx = findUnionVariant(exprNode.nodeType, keyArr, []);
+					const keyArr: string[] = [];
+					const typeArr: Type[] = [];
+					for (let ki = 0; ki < od.keys.length; ki += 1) {
+						keyArr.push(od.keys[ki]);
+						if (ki < od.properties.length && od.properties[ki] !== null && od.properties[ki].nodeType !== null) {
+							typeArr.push(od.properties[ki].nodeType);
+						}
+					}
+					const varIdx = findUnionVariant(exprNode.nodeType, keyArr, typeArr);
 					if (varIdx >= 0) {
 						cType = unionName + "_v" + intToString(varIdx);
 					}
@@ -90,12 +97,19 @@ function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, paramTyp
 				innerType = paramType.typeReturn;
 			}
 			if (innerType !== null && innerType.kind === TypeKind.Union && exprNode !== null && exprNode.kind === NodeKind.ObjectLiteral) {
-				// Union variant: determine variant type from ObjectLiteral keys
+				// Union variant: determine variant type from ObjectLiteral keys + types
 				const od = exprNode.data as ObjectLiteralData;
 				if (od.keys !== null && od.keys.length > 0) {
 					const unionName = getTypeDesc(g, innerType);
-					const keyArr: string[] = [od.keys[0]];
-					const varIdx = findUnionVariant(innerType, keyArr, []);
+					const keyArr: string[] = [];
+					const typeArr: Type[] = [];
+					for (let ki = 0; ki < od.keys.length; ki += 1) {
+						keyArr.push(od.keys[ki]);
+						if (ki < od.properties.length && od.properties[ki] !== null && od.properties[ki].nodeType !== null) {
+							typeArr.push(od.properties[ki].nodeType);
+						}
+					}
+					const varIdx = findUnionVariant(innerType, keyArr, typeArr);
 					if (varIdx >= 0) {
 						// Emit as full union with tag + variant
 						p.labels += 1;
@@ -731,13 +745,20 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 			const unionName = getTypeDesc(g, unionType);
 			let varIdx = -1;
 			if (srcType !== null && srcType.kind === TypeKind.Struct && srcType.typeNames !== null) {
-				varIdx = findUnionVariant(unionType, srcType.typeNames, []);
+				varIdx = findUnionVariant(unionType, srcType.typeNames, srcType.typeChildren !== null ? srcType.typeChildren : []);
 			}
 			if (varIdx < 0 && d.asExpr !== null && d.asExpr.kind === NodeKind.ObjectLiteral) {
 				const litData = d.asExpr.data as ObjectLiteralData;
 				if (litData.keys !== null && litData.keys.length > 0) {
-					const keyArr: string[] = [litData.keys[0]];
-					varIdx = findUnionVariant(unionType, keyArr, []);
+					const keyArr: string[] = [];
+					const typeArr: Type[] = [];
+					for (let ki = 0; ki < litData.keys.length; ki += 1) {
+						keyArr.push(litData.keys[ki]);
+						if (ki < litData.properties.length && litData.properties[ki] !== null && litData.properties[ki].nodeType !== null) {
+							typeArr.push(litData.properties[ki].nodeType);
+						}
+					}
+					varIdx = findUnionVariant(unionType, keyArr, typeArr);
 				}
 			}
 			if (varIdx >= 0) {
@@ -765,6 +786,13 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 			targetType = getTypeDesc(g, node.nodeType);
 		} else {
 			targetType = mangle(d.asType);
+		}
+		// Reference parity (ccgexprs.nim:2521): value types (structs) can't be
+		// directly cast in C. Use pointer reinterpret: (*(DestType*)&(srcVal))
+		if (node.nodeType !== null && isNilableValueType(node.nodeType)
+			&& d.asExpr !== null && d.asExpr.nodeType !== null && isNilableValueType(d.asExpr.nodeType)) {
+			results.push("(*(" + targetType + "*)&(" + expr + "))");
+			return;
 		}
 		results.push("((" + targetType + ")" + expr + ")");
 		return;
@@ -871,10 +899,18 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 			let unionWrapIdx = -1;
 			if (node.nodeType !== null) {
 				if (node.nodeType.kind === TypeKind.Union && d.keys.length > 0) {
-					// Union variant: determine variant type from field names
+					// Union variant: determine variant type from field names + types
+					// Pass all keys and their types for disambiguation (e.g., { value: string } vs { value: number })
 					const unionName = getTypeDesc(g, node.nodeType);
-					const keyArr: string[] = [d.keys[0]];
-					const varIdx = findUnionVariant(node.nodeType, keyArr, []);
+					const keyArr: string[] = [];
+					const typeArr: Type[] = [];
+					for (let ki = 0; ki < d.keys.length; ki += 1) {
+						keyArr.push(d.keys[ki]);
+						if (ki < d.properties.length && d.properties[ki] !== null && d.properties[ki].nodeType !== null) {
+							typeArr.push(d.properties[ki].nodeType);
+						}
+					}
+					const varIdx = findUnionVariant(node.nodeType, keyArr, typeArr);
 					if (varIdx >= 0) {
 						cType = unionName + "_v" + intToString(varIdx);
 						unionWrapName = unionName;

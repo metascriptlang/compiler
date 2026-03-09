@@ -25,7 +25,7 @@ import {
 	defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope,
 	setFlag, hasFlag, SymbolFlag,
 } from "./symbol";
-import { CheckerContext, CancelCtx, createContext, createModuleContext, addError, addFatalError, hasErrors, hasFatalErrors, errorCount, createExtensionRegistry, registerExtension, ExportRegistry, isCancelled } from "./context";
+import { CheckerContext, CancelCtx, createContext, createModuleContext, addError, addFatalError, hasErrors, hasFatalErrors, errorCount, createExtensionRegistry, registerExtension, ExportRegistry, isCancelled, sgRecordSym, sgSortRecords } from "./context";
 import { Module, ModuleGraph } from "../module/graph";
 import { collectTopLevel, defineOrError } from "./collectPass";
 import { readFile } from "std/process";
@@ -140,8 +140,11 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		if (d.declKind !== DeclKind.Const) {
 			setFlag(existing, SymbolFlag.Mutable);
 		}
+		sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.declName.length, existing, varType, SymbolKind.Variable, d.declName, "", true);
 	} else {
-		defineOrError(ctx, makeSymbol(d.declName, SymbolKind.Variable, varType, d.declKind !== DeclKind.Const), node);
+		const newSym = makeSymbol(d.declName, SymbolKind.Variable, varType, d.declKind !== DeclKind.Const);
+		defineOrError(ctx, newSym, node);
+		sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.declName.length, newSym, varType, SymbolKind.Variable, d.declName, "", true);
 	}
 }
 
@@ -153,6 +156,7 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 
 	// Demand-driven: ensure signature is shaped before checking body
 	ensureShaped(sym, ctx);
+	sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.fnName.length, sym, sym.symbolType, SymbolKind.Function, d.fnName, "", true);
 
 	// Multi-pass parity: avoid re-checking body if already done
 	if (sym.state === SymbolState.Checked) return;
@@ -192,6 +196,7 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 
 	// Demand-driven: ensure class fields/methods are shaped
 	ensureShaped(sym, ctx);
+	sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.className.length, sym, sym.symbolType, SymbolKind.Class, d.className, "", true);
 
 	if (sym.state === SymbolState.Checked) return;
 	sym.state = SymbolState.Checking;
@@ -977,6 +982,7 @@ function checkProgramCore(
 	runThreePasses(ctx, program);
 	collectDirectives(ctx, program);
 	inferOwnership(ctx, program);
+	sgSortRecords(ctx.symRecords);
 	return ctx;
 }
 
