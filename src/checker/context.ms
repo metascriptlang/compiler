@@ -1,4 +1,4 @@
-import { Type, TypeKind, unknownType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf } from "./types";
+import { Type, TypeKind, unknownType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity } from "./types";
 import { isAssignable } from "./compat";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, createSymbolTable } from "./symbol";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
@@ -75,6 +75,8 @@ export function findExportedSymbol(registry: ExportRegistry, modulePath: string,
 // ===== Extension Registry (extension method tracking) =====
 // Tracks "function f(this self: Type)" declarations for method resolution.
 
+// fnType: registration-time cache — may be stale. Use getExtFnType() for reads.
+// sym: AUTHORITATIVE source of type info (sym.symbolType = Nim PSym.typ equivalent).
 export interface ExtensionMethod {
 	methodName: string;
 	receiverTypeName: string;
@@ -93,6 +95,15 @@ export function createExtensionRegistry(): ExtensionRegistry {
 }
 
 export function registerExtension(registry: ExtensionRegistry, method: ExtensionMethod): void {
+	// Dedup by sym identity at registration (Nim: dedup by sym.id in initCandidateSymbols).
+	// Prevents prelude + import from creating duplicate candidates.
+	if (method.sym !== null) {
+		let i = 0;
+		while (i < registry.methods.length) {
+			if (registry.methods[i].sym === method.sym) return;
+			i = i + 1;
+		}
+	}
 	registry.methods.push(method);
 }
 
@@ -127,21 +138,6 @@ export function findExtensionByType(registry: ExtensionRegistry, methodName: str
 	return null as unknown as ExtensionMethod;
 }
 
-// findAllExtensions — find ALL extensions matching receiver type + method name.
-// Returns array of matching ExtensionMethods for overload resolution.
-export function findAllExtensions(registry: ExtensionRegistry, receiverTypeName: string, methodName: string): ExtensionMethod[] {
-	const results: ExtensionMethod[] = [];
-	let i = 0;
-	while (i < registry.methods.length) {
-		const m = registry.methods[i];
-		if (m.receiverTypeName === receiverTypeName && m.methodName === methodName) {
-			results.push(m);
-		}
-		i = i + 1;
-	}
-	return results;
-}
-
 // findAllExtensionsByName — find ALL extensions with a given method name (any receiver).
 // Standard reference pattern: candidates are collected by name, then filtered by type compatibility
 // at the call site using isAssignable (not string comparison on receiverTypeName).
@@ -158,6 +154,40 @@ export function findAllExtensionsByName(registry: ExtensionRegistry, methodName:
 	return results;
 }
 
+// ===== Canonical Extension Type (Nim PSym.typ equivalent) =====
+// Standard reference: the symbol's type is the single source of truth.
+// ext.fnType is a registration-time snapshot that may be stale (unknownType from collectPass).
+// Always use this helper instead of reading ext.fnType directly.
+
+export function getExtFnType(ext: ExtensionMethod): Type {
+	if (ext.sym !== null && ext.sym.symbolType !== null && ext.sym.symbolType.kind === TypeKind.Function) {
+		return ext.sym.symbolType;
+	}
+	return ext.fnType;
+}
+
+// Strip receiver (param[0]) from an extension's function type for overload scoring.
+// Preserves minArity so scoreCandidatePriority handles default params correctly.
+export function stripReceiverParam(fnType: Type): Type {
+	if (fnType.typeChildren.length === 0) return fnType;
+	const params: Type[] = [];
+	const names: string[] = [];
+	let i = 1;
+	while (i < fnType.typeChildren.length) {
+		params.push(fnType.typeChildren[i]);
+		i = i + 1;
+	}
+	i = 1;
+	while (i < fnType.typeNames.length) {
+		names.push(fnType.typeNames[i]);
+		i = i + 1;
+	}
+	const stripped = createFunction(params, names, fnType.typeReturn);
+	const origMin = getMinArity(fnType);
+	if (origMin > 0) setMinArity(stripped, origMin - 1);
+	return stripped;
+}
+
 // ===== Receiver Matching (shared by checker + LSP) =====
 // Standard reference pattern: compare nominal types by identity using isAssignable,
 // not string-based receiverTypeName comparison.
@@ -167,11 +197,8 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type): boolean {
 	if (ext.isStatic) {
 		return ext.receiverTypeName === typeNameOf(objType);
 	}
-	// Instance extensions: type-based matching on first param.
-	// Prefer sym.symbolType over ext.fnType — fnType may be stale unknownType()
-	// from collectPass, while sym.symbolType is updated by resolvePass/ensureShaped.
-	const fnType = (ext.sym !== null && ext.sym.symbolType !== null && ext.sym.symbolType.kind === TypeKind.Function)
-		? ext.sym.symbolType : ext.fnType;
+	// Instance extensions: type-based matching on first param (sym.typ is authoritative).
+	const fnType = getExtFnType(ext);
 	if (fnType.kind !== TypeKind.Function) return false;
 	if (fnType.typeChildren.length === 0) return false;
 	const receiverType = fnType.typeChildren[0];

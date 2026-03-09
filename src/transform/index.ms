@@ -63,6 +63,7 @@ import { lowerUpdateExpr } from "./lowering/updateExprLower";
 import { spanLower } from "./lowering/spanLower";
 import { spanParamExpand } from "./native/spanParamExpand";
 import { lowerNullable } from "./native/nullableLower";
+import { lowerJsonDynAccess } from "./native/jsonDynAccessLower";
 import { lowerDCE } from "./analysis/dce";
 import { liftDestructors } from "./lowering/destructorLifting";
 import { lowerPowerAssert } from "./powerAssert";
@@ -95,6 +96,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerVarHoist(result, ctx); }
 	if (!jsBackend) { result = lowerLambda(result, ctx); }
 	result = lowerBuiltins(result, ctx);
+	if (!jsBackend) { result = lowerJsonDynAccess(result, ctx); }
 	result = lowerExtensionMethod(result, ctx);
 	result = lowerOperators(result, ctx);
 	if (!jsBackend) { result = lowerStringOps(result, ctx); }

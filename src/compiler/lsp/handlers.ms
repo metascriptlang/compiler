@@ -403,7 +403,7 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 	if (ctx === null) return lspResponse(id, "[]");
 
 	// For MemberAccess, try to resolve receiver type
-	let receiverType = null as unknown as Type;
+	let receiverType = null;
 	if (kind === SgCompletionKind.MemberAccess) {
 		const dotCol = pos.col - prefix.length - 1;
 		if (dotCol >= 0) {

@@ -7,7 +7,7 @@ export { parseJson } from "./parser";
 export { stringify } from "./stringify";
 export {
 	jsonNull, jsonBool, jsonNumber, jsonString, jsonArray, jsonObject, jsonObjectFromKV,
-	get, at, asString, asNumber, asBool, isNull, len, set, push,
+	get, isNull, set, push,
 } from "./builder";
 
 export class JSON {

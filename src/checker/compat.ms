@@ -487,7 +487,7 @@ export function resolveOverloadIdx(candidates: Type[], argTypes: Type[],
 	scopeDepths: number[]): number {
 	let bestIdx = -1;
 	let bestScore = emptyCandidateScore();
-	let bestType: Type = null as unknown as Type;
+	let bestType: Type = null;
 	let ambiguous = false;
 	for (let i = 0; i < candidates.length; i += 1) {
 		if (candidates[i].kind !== TypeKind.Function) continue;
@@ -801,7 +801,7 @@ test "exact beats subtype-sum" {
 	a.exactMatches = 1;
 	const b = emptyCandidateScore();
 	b.subtypeMatches = 3;
-	const nullT = null as unknown as Type;
+	const nullT = null;
 	assert cmpCandidates(a, b, nullT, nullT) > 0;
 }
 
@@ -822,7 +822,7 @@ test "ambiguity: equal scores" {
 	a.exactMatches = 2;
 	const b = emptyCandidateScore();
 	b.exactMatches = 2;
-	const nullT = null as unknown as Type;
+	const nullT = null;
 	assert cmpCandidates(a, b, nullT, nullT) === 0;
 }
 
@@ -833,7 +833,7 @@ test "inheritance penalty: lower wins" {
 	const b = emptyCandidateScore();
 	b.exactMatches = 1;
 	b.inheritancePenalty = 3; // grandgrandparent
-	const nullT = null as unknown as Type;
+	const nullT = null;
 	// a has lower penalty → a is better → result > 0
 	assert cmpCandidates(a, b, nullT, nullT) > 0;
 }
@@ -845,7 +845,7 @@ test "scope depth: inner wins" {
 	const b = emptyCandidateScore();
 	b.exactMatches = 1;
 	b.calleeScope = 0;
-	const nullT = null as unknown as Type;
+	const nullT = null;
 	// a is inner (higher scope) → a wins → result > 0
 	assert cmpCandidates(a, b, nullT, nullT) > 0;
 }
@@ -916,7 +916,7 @@ test "complexDisambiguation deeper type wins" {
 	a.genericMatches = 1;
 	const b = emptyCandidateScore();
 	b.genericMatches = 1;
-	const nullT = null as unknown as Type;
+	const nullT = null;
 	// step 7 (checkGenericSpecialization) + step 8 (complexDisambiguation) should
 	// prefer deeper nesting. With equal genericMatches, cmpCandidates goes to step 7+8.
 	const cmp = cmpCandidates(a, b, fnDeep, fnShallow);

@@ -28,7 +28,7 @@ import {
 } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createTransformContextWithChecker, freshTemp } from "../context";
 import { makeIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
-import { Type, TypeKind, isPrimitiveKind, AttachedOp, setAttachedOp, unwrapRef, createArray, createPtr, createRef, createPrimitive, stringType } from "../../checker/types";
+import { Type, TypeKind, isPrimitiveKind, AttachedOp, setAttachedOp, unwrapRef, createArray, createPtr, createRef, createPrimitive, stringType, getTypeSize } from "../../checker/types";
 import { lookupSymbol, SymbolKind } from "../../checker/symbol";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput } from "../testUtil";
@@ -736,7 +736,7 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 	}
 
 	// Class types: hooks receive Ref<Struct> (pointer) — see generateHook comment
-	const classType = sym.symbolKind === SymbolKind.Class ? sym.symbolType : null as unknown as Type;
+	const classType = sym.symbolKind === SymbolKind.Class ? sym.symbolType : null;
 
 	// 4 core hooks via fillBody dispatch
 	generateHook("destroy", typeName, objType, classType, lctx, loc);

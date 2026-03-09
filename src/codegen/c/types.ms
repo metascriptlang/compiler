@@ -329,6 +329,16 @@ export function isPointerType(t: Type): boolean {
 	};
 }
 
+// Reference parity: value types that can't be nil in C.
+// Used by codegen to emit {0} instead of MS_NIL, and memset instead of NULL assignment.
+export function isNilableValueType(t: Type): boolean {
+	if (t === null) return false;
+	const k = t.kind;
+	return k === TypeKind.Struct || k === TypeKind.Array || k === TypeKind.Result
+		|| k === TypeKind.Tuple || k === TypeKind.String || k === TypeKind.Function
+		|| k === TypeKind.Map || k === TypeKind.Set || k === TypeKind.Union;
+}
+
 // ===== ccgIntroducedPtr (Reference: reference codegen utils parity) =====
 // Determines if a param type should be passed by pointer in C.
 // Reference: skipTypes(typedescInst) strips Sink/Lent before dispatch.
@@ -398,7 +408,7 @@ export function getCalleeReturnType(callNode: Node): Type {
 		const st = callNode.resolvedSym.symbolType;
 		if (st.kind === TypeKind.Function) return st.typeReturn;
 	}
-	return null as unknown as Type;
+	return null;
 }
 
 // ===== Forward Declaration =====
@@ -434,9 +444,9 @@ export function ensureForwardDecl(g: CGen, typeName: string): void {
 	const key = "fwd:" + typeName;
 	if (typeCacheHas(g.forwTypeCache, key)) return;
 	typeCacheSet(g.forwTypeCache, key, typeName);
-	// Skip runtime types already defined in system.h
+	// Skip runtime types already defined in system.h or runtime headers
 	if (typeName === "msClosure") return;
-	addLine(sec(g, CSection.ForwardDecls), "typedef struct " + typeName + " " + typeName + ";");
+	addLine(sec(g, CSection.ForwardDecls), "#ifndef " + typeName + "_DEFINED\ntypedef struct " + typeName + " " + typeName + ";\n#endif");
 }
 
 // Ensure msTypeInfo extern declaration exists for cross-module new expressions.
@@ -496,13 +506,20 @@ export function getTypeDesc(g: CGen, t: Type): string {
 		// Try resolving via TypeRegistry (Standard implementation parity: type carries full structural info)
 		const resolved = typeRegistryLookup(g.typeRegistry, t.typeName);
 		if (resolved !== null) {
-			return getTypeDesc(g, resolved);
+			const desc = getTypeDesc(g, resolved);
+			// Class types: registry stores unwrapped Struct, but bare TypeReference("Node")
+			// from lambda lifting means it IS a pointer (class = Ref<Object>). Add * if missing.
+			if (nameSetHas(g.knownClassNames, mangle(t.typeName)) && desc.length > 0 && desc.charAt(desc.length - 1) !== "*") {
+				return desc + "*";
+			}
+			return desc;
 		}
 		const name = mangle(t.typeName);
 		ensureForwardDecl(g, name);
-		// Class types: no extra * here — the Ref<T> wrapper from collectPass adds the pointer
-		// via TypeKind.Ref path (line 508-513). TypeReference("Doc") = struct Doc (value).
-		// Ref<TypeReference("Doc")> = Doc* (pointer). This matches standard reference patterns: objects are structs, managed references are pointers.
+		// Class types: bare TypeReference from lambda lifting/transforms needs pointer
+		if (nameSetHas(g.knownClassNames, name)) {
+			return name + "*";
+		}
 		return name;
 	}
 
@@ -1031,7 +1048,7 @@ test "enum key" { assert typeKey(createEnum("Color", ["Red", "Green"])) === "enu
 
 test "object key" { assert typeKey(createStruct("Foo", [], [], true)) === "object:Foo"; }
 
-test "null type" { assert typeKey(null as unknown as Type) === "null"; }
+test "null type" { assert typeKey(null) === "null"; }
 
 test "primitives" {
 	assert getSimpleTypeDesc(createPrimitive(TypeKind.Number)) === "double";
@@ -1134,7 +1151,7 @@ test "forward decl emitted" {
 	const g = createCGen(null as unknown as CheckerContext, "");
 	getTypeDesc(g, createStruct("Widget", [], [], true));
 	const fwd = extract(sec(g, CSection.ForwardDecls));
-	assert fwd === "typedef struct Widget Widget;\n";
+	assert fwd === "#ifndef Widget_DEFINED\ntypedef struct Widget Widget;\n#endif\n";
 }
 
 test "cached second call" {

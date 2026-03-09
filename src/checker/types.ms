@@ -1,7 +1,7 @@
 // Type System - TypeKind, Type interface, constructors
 
-// Design: Flat interface (no discriminated union) to avoid DRC codegen issues
-// with self-referencing anonymous struct types (MsAnon collision).
+// Design: Class type (heap-allocated, pointer-accessed) matching standard reference
+// PType = ref TType pattern. All Type variables are pointers; null is natural.
 // Function accessors instead of const singletons to avoid closure capture bugs.
 
 import { bareAfterDelim } from "../utils/string";
@@ -92,7 +92,7 @@ export enum AttachedOp {
 	AttachedTrace,       // =trace (ORC)
 }
 
-export interface Type {
+export class Type {
 	kind: TypeKind;
 	typeName: string;         // Object name, Enum name, TypeRef name, GenericParam name
 	typeNames: string[];      // Function param names, Enum members, Object prop names
@@ -130,8 +130,8 @@ export function emptyType(): Type {
 		typeName: "",
 		typeNames: [],
 		typeChildren: [],
-		typeReturn: null as unknown as Type,
-		typeExtra: null as unknown as Type,
+		typeReturn: null,
+		typeExtra: null,
 		typeFlags: 0,
 		callConv: CallingConvention.CcDefault,
 		attachedOps: [],
@@ -268,7 +268,7 @@ export function findUnionVariant(unionType: Type, fieldNames: string[], fieldTyp
 
 // Find a field's type within a single variant struct. Returns null if not found.
 export function findFieldInVariant(variant: Type, fieldName: string): Type {
-	if (variant === null || variant.typeNames === null) return null as unknown as Type;
+	if (variant === null || variant.typeNames === null) return null;
 	let i = 0;
 	while (i < variant.typeNames.length) {
 		if (variant.typeNames[i] === fieldName && i < variant.typeChildren.length) {
@@ -276,7 +276,7 @@ export function findFieldInVariant(variant: Type, fieldName: string): Type {
 		}
 		i = i + 1;
 	}
-	return null as unknown as Type;
+	return null;
 }
 
 // Check if a union type is a discriminated union (has discriminant metadata).
@@ -836,6 +836,7 @@ export function isNumeric(t: Type): boolean {
 }
 
 export function isIntegerType(t: Type): boolean {
+	if (t === null) return false;
 	return t.kind === TypeKind.Int8 || t.kind === TypeKind.Int16 ||
 		t.kind === TypeKind.Int32 || t.kind === TypeKind.Int64 ||
 		t.kind === TypeKind.Uint8 || t.kind === TypeKind.Uint16 ||
@@ -914,7 +915,7 @@ export function getProperty(t: Type, name: string): Type {
 			}
 		}
 		// Search variants for the field — return type if unambiguous across variants
-		let foundType = null as unknown as Type;
+		let foundType = null;
 		let ambiguous = false;
 		for (const variant of t.typeChildren) {
 			const ft = findFieldInVariant(variant, name);

@@ -38,8 +38,12 @@ function getReceiverTypeName(ctx: TransformContext, obj: Node): string {
 	return typeNameOf(objType);
 }
 
-// Resolve the best symbol for a rewritten callee identifier
-function resolveCalleeSym(ext: ExtensionMethod, calleeSym: Symbol, ctx: TransformContext, methodName: string): Symbol {
+// Resolve the best symbol for a rewritten callee identifier.
+// callNodeSym = node.resolvedSym (set by checker overload resolution — preferred for overloads).
+// ext.sym = extension registry match (may be wrong overload for multi-arity extensions).
+function resolveCalleeSym(ext: ExtensionMethod, calleeSym: Symbol, ctx: TransformContext, methodName: string, callNodeSym: Symbol): Symbol {
+	// Prefer the call node's overload-resolved sym — it has the correct nativeName
+	if (callNodeSym !== null) return callNodeSym;
 	if (ext !== null && ext.sym !== null) return ext.sym;
 	if (calleeSym !== null) return calleeSym;
 	return lookupSymbol(ctx.checkerCtx.table, methodName);
@@ -102,7 +106,7 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 	if (ext !== null && ext.isStatic) {
 		const staticName = (ext.sym !== null) ? ext.sym.name : methodName;
 		const staticIdent = makeIdent(staticName, loc);
-		staticIdent.resolvedSym = resolveCalleeSym(ext, calleeSym, ctx, methodName);
+		staticIdent.resolvedSym = resolveCalleeSym(ext, calleeSym, ctx, methodName, node.resolvedSym);
 		const newCall = makeCall(staticIdent, call.arguments, loc);
 		newCall.nodeType = node.nodeType;
 		return newCall;
@@ -116,7 +120,7 @@ function lowerExtNode(node: Node, ctx: TransformContext): Node {
 	// Use mangled name from extension sym (e.g. Greeter_greet) when available
 	const callName = (ext !== null && ext.sym !== null) ? ext.sym.name : methodName;
 	const calleeIdent = makeIdent(callName, loc);
-	calleeIdent.resolvedSym = resolveCalleeSym(ext, calleeSym, ctx, methodName);
+	calleeIdent.resolvedSym = resolveCalleeSym(ext, calleeSym, ctx, methodName, node.resolvedSym);
 	const newCall = makeCall(calleeIdent, newArgs, loc);
 	newCall.nodeType = node.nodeType;
 	return newCall;

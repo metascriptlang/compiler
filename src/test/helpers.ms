@@ -23,7 +23,7 @@ import { MapEntry, createMapProvider, loadModuleGraph } from "../module/loader";
 import { Module, ModuleGraph, findModule } from "../module/graph";
 import { Node } from "../ast/node";
 
-export type { MapEntry } from "../module/loader";
+export { MapEntry } from "../module/loader";
 
 type CompileResult = Result<string, string>;
 

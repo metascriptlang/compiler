@@ -94,7 +94,7 @@ function fieldTypeToJsonCtor(ftype: Type): string {
 // ===== @emit Node Helper =====
 
 // Create an @emit ExprStmt node that injects raw C code into the output.
-function makeEmitNode(code: string, loc: SourceLocation): Node {
+export function makeEmitNode(code: string, loc: SourceLocation): Node {
 	const strNode = createNode(NodeKind.StringLiteral, { value: code }, syntheticToken(loc));
 	const macroNode = createNode(NodeKind.MacroInvocation, { macroName: "emit", macroArgs: [strNode] }, syntheticToken(loc));
 	return makeExprStmt(macroNode, loc);
@@ -223,36 +223,36 @@ export function generateJsonStringifyC(
 import { stmtCountAfter } from "../../transform/testUtil";
 
 test "fieldTypeToCType string" {
-	const t: Type = { kind: TypeKind.String, typeName: "", typeNames: null as unknown as string[], typeChildren: null as unknown as Type[], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
+	const t: Type = { kind: TypeKind.String, typeName: "", typeNames: null as unknown as string[], typeChildren: null as unknown as Type[], typeReturn: null, typeExtra: null, typeFlags: 0 };
 	assert fieldTypeToCType(t) === "msString";
 }
 
 test "fieldTypeToCType int32" {
-	const t: Type = { kind: TypeKind.Int32, typeName: "", typeNames: null as unknown as string[], typeChildren: null as unknown as Type[], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
+	const t: Type = { kind: TypeKind.Int32, typeName: "", typeNames: null as unknown as string[], typeChildren: null as unknown as Type[], typeReturn: null, typeExtra: null, typeFlags: 0 };
 	assert fieldTypeToCType(t) === "int32_t";
 }
 
 test "fieldTypeToJsonKind string" {
-	const t: Type = { kind: TypeKind.String, typeName: "", typeNames: null as unknown as string[], typeChildren: null as unknown as Type[], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
+	const t: Type = { kind: TypeKind.String, typeName: "", typeNames: null as unknown as string[], typeChildren: null as unknown as Type[], typeReturn: null, typeExtra: null, typeFlags: 0 };
 	assert fieldTypeToJsonKind(t) === 3;
 }
 
 test "fieldTypeToJsonKind number" {
-	const t: Type = { kind: TypeKind.Number, typeName: "", typeNames: null as unknown as string[], typeChildren: null as unknown as Type[], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
+	const t: Type = { kind: TypeKind.Number, typeName: "", typeNames: null as unknown as string[], typeChildren: null as unknown as Type[], typeReturn: null, typeExtra: null, typeFlags: 0 };
 	assert fieldTypeToJsonKind(t) === 2;
 }
 
 test "fieldTypeToJsonKind unsupported" {
-	const t: Type = { kind: TypeKind.Void, typeName: "", typeNames: null as unknown as string[], typeChildren: null as unknown as Type[], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
+	const t: Type = { kind: TypeKind.Void, typeName: "", typeNames: null as unknown as string[], typeChildren: null as unknown as Type[], typeReturn: null, typeExtra: null, typeFlags: 0 };
 	assert fieldTypeToJsonKind(t) === -1;
 }
 
 test "needsNumCast int32" {
-	const t: Type = { kind: TypeKind.Int32, typeName: "", typeNames: null as unknown as string[], typeChildren: null as unknown as Type[], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
+	const t: Type = { kind: TypeKind.Int32, typeName: "", typeNames: null as unknown as string[], typeChildren: null as unknown as Type[], typeReturn: null, typeExtra: null, typeFlags: 0 };
 	assert needsNumCast(t);
 }
 
 test "needsNumCast double" {
-	const t: Type = { kind: TypeKind.Number, typeName: "", typeNames: null as unknown as string[], typeChildren: null as unknown as Type[], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
+	const t: Type = { kind: TypeKind.Number, typeName: "", typeNames: null as unknown as string[], typeChildren: null as unknown as Type[], typeReturn: null, typeExtra: null, typeFlags: 0 };
 	assert !needsNumCast(t);
 }

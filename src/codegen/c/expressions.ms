@@ -26,7 +26,7 @@ import {
 	emitProcLocalsLine,
 } from "./context";
 import { mangle, mangleFieldName, mangledFunctionName, safeName } from "./names";
-import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, intToString, isPointerType, annotationToC, genClHalfCast, genClFullCast, ccgIntroducedPtr, ensureTypeInfo, ensureForwardDecl } from "./types";
+import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, intToString, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, ccgIntroducedPtr, ensureTypeInfo, ensureForwardDecl } from "./types";
 import { formatCNumber, cBoolLiteral, cNullLiteral, cStringLiteral, msStringPoolRef } from "./literals";
 import { charAt, sliceStr, findChar } from "../../utils/string";
 import { ensureDrcProto, ensureCrossModuleProto } from "./declarations";
@@ -54,7 +54,7 @@ function genArgCcgPtr(g: CGen, arg: string, argNode: Node, p: CProc): string {
 		return safeName((argNode.data as IdentifierData).name);
 	}
 	// Not indirect: take address — use safeAddrOf to handle bare compound literals
-	return safeAddrOf(g, p, arg, argNode, null as unknown as Type);
+	return safeAddrOf(g, p, arg, argNode, null);
 }
 
 // Reference parity: Nim's addrLoc always operates on a TLoc (named variable),
@@ -227,12 +227,13 @@ function discoverExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[],
 		return;
 	}
 	if (kind === NodeKind.NullLiteral) {
-		if (node.nodeType !== null && isInterfaceType(node.nodeType)) {
+		// Reference parity: value types can't be nil — emit zero-init instead of NULL.
+		if (node.nodeType !== null && isNilableValueType(node.nodeType)) {
 			const cType = getTypeDesc(g, node.nodeType);
 			results.push("(" + cType + "){0}");
-		} else {
-			results.push(cNullLiteral());
+			return;
 		}
+		results.push(cNullLiteral());
 		return;
 	}
 	if (kind === NodeKind.Identifier) {
@@ -240,8 +241,16 @@ function discoverExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[],
 		// Built-in numeric constants → C99 macros
 		if (d.name === "NaN") { results.push("NAN"); return; }
 		if (d.name === "Infinity") { results.push("INFINITY"); return; }
-		// MetaScript has no undefined — emit as NULL (Nim: no equivalent, undefined is a JS concept)
-		if (d.name === "undefined") { results.push(cNullLiteral()); return; }
+		// MetaScript has no undefined — emit as NULL or {0} for value types
+		if (d.name === "undefined") {
+			if (node.nodeType !== null && isNilableValueType(node.nodeType)) {
+				const cType = getTypeDesc(g, node.nodeType);
+				results.push("(" + cType + "){0}");
+				return;
+			}
+			results.push(cNullLiteral());
+			return;
+		}
 		// Auto-declare DRC sink temps on first use (zero-init for goto safety)
 		if (d.name.startsWith("$sink_") && p !== null) {
 			let alreadySeen = false;
@@ -532,6 +541,16 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 				}
 			}
 		}
+		// Null assignment to value type: x = MS_NIL → memset(&x, 0, sizeof(Type))
+		// Reference parity: value types can't be nil — zero-init instead.
+		if (d.operator === "=" && (finalRight === "MS_NIL" || finalRight === "NULL" || finalRight === "((void*)0)")) {
+			const lt = d.left.nodeType;
+			if (lt !== null && isNilableValueType(lt)) {
+				const cType = getTypeDesc(g, lt);
+				results.push("memset(&(" + left + "), 0, sizeof(" + cType + "))");
+				return;
+			}
+		}
 		// String += rewritten by stringOpLower → msStringAppend(&s, t) before codegen.
 		// Struct equality handled by operatorLower → TypeName_eq() (reference parity).
 		// No memcmp fallback needed — codegen never sees interface === interface.
@@ -609,7 +628,20 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 			return;
 		}
 		const field = mangleFieldName(d.property);
-		results.push(obj + "." + field);
+		// Class/ref types are pointers — use -> for member access
+		// Check nodeType first, then resolvedSym.symbolType for identifiers
+		let objIsPtr = (d.object.nodeType !== null && isPointerType(d.object.nodeType));
+		if (!objIsPtr && d.object.kind === NodeKind.Identifier) {
+			const idSym = d.object.resolvedSym;
+			if (idSym !== null && idSym.symbolType !== null && isPointerType(idSym.symbolType)) {
+				objIsPtr = true;
+			}
+		}
+		if (objIsPtr) {
+			results.push(obj + "->" + field);
+		} else {
+			results.push(obj + "." + field);
+		}
 		return;
 	}
 
@@ -641,7 +673,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 		// Union handling — two directions:
 		// 1. Narrowing: `unionExpr as { field: T }` → `(expr).vN` (access variant)
 		// 2. Construction: `{ field: val } as UnionType` → `(Union){ .vN = (Union_vN)expr }` (wrap into variant)
-		const srcType = (d.asExpr !== null) ? d.asExpr.nodeType : null as unknown as Type;
+		const srcType = (d.asExpr !== null) ? d.asExpr.nodeType : null;
 
 		// Case 1: Source is Union → access variant member
 		// Use getTypeDesc consistency: the type cache (first-write-wins in genUnionType)
@@ -810,6 +842,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 			// Nim (genObjConstr): getTemp(p, t) → tmp.field = val → use tmp.
 			// Never emits inline compound literals — works with C89+ and avoids &({...}) issues.
 			let cType = "";
+			let isClassObj = false;
 			if (node.nodeType !== null) {
 				if (node.nodeType.kind === TypeKind.Union && d.keys.length > 0) {
 					// Union variant: determine variant type from field names
@@ -819,6 +852,10 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 					if (varIdx >= 0) {
 						cType = unionName + "_v" + intToString(varIdx);
 					}
+				} else if (node.nodeType.kind === TypeKind.Ref && node.nodeType.typeReturn !== null) {
+					// Class type: ObjectLiteral constructs inner struct, heap-allocated
+					cType = getTypeDesc(g, node.nodeType.typeReturn);
+					isClassObj = true;
 				} else {
 					const td = getTypeDesc(g, node.nodeType);
 					if (td !== "void*" && td !== "double" && td !== "void") {
@@ -830,12 +867,26 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 				// Nim pattern: allocate temp, zero-init, assign fields
 				p.labels += 1;
 				const tmpName = "_lit" + p.labels + "_";
-				emitProcLocalsLine(p, cType + " " + tmpName + ";");
-				emitStmtsLine(p, "memset(&" + tmpName + ", 0, sizeof(" + cType + "));");
+				const access = isClassObj ? "->" : ".";
+				if (isClassObj) {
+					// Class: heap-allocate (Nim parity: ref object construction)
+					emitProcLocalsLine(p, cType + "* " + tmpName + ";");
+					emitStmtsLine(p, tmpName + " = (" + cType + "*)msAllocTyped(sizeof(" + cType + "), NULL);");
+					emitStmtsLine(p, "memset(" + tmpName + ", 0, sizeof(" + cType + "));");
+				} else {
+					// Value type: stack-allocate
+					emitProcLocalsLine(p, cType + " " + tmpName + ";");
+					emitStmtsLine(p, "memset(&" + tmpName + ", 0, sizeof(" + cType + "));");
+				}
 				let i = 0;
 				while (i < d.keys.length) {
 					const val = peekResult(results, cc, i);
-					emitStmtsLine(p, tmpName + "." + mangleFieldName(d.keys[i]) + " = " + val + ";");
+					// Skip NullLiteral fields — memset already zeroed them.
+					// This avoids void* → value-type errors for self-referential pointer fields
+					// where the C field is T* but the MS type is T (e.g. Type.typeReturn).
+					if (d.properties[i].kind !== NodeKind.NullLiteral) {
+						emitStmtsLine(p, tmpName + access + mangleFieldName(d.keys[i]) + " = " + val + ";");
+					}
 					i += 1;
 				}
 				truncResults(results, cc);
@@ -861,10 +912,13 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 				}
 				structDef = structDef + " }";
 				emitProcLocalsLine(p, structDef + " " + tmpName + ";");
+				emitStmtsLine(p, "memset(&" + tmpName + ", 0, sizeof(" + tmpName + "));");
 				i = 0;
 				while (i < d.keys.length) {
 					const val = peekResult(results, cc, i);
-					emitStmtsLine(p, tmpName + "." + mangleFieldName(d.keys[i]) + " = " + val + ";");
+					if (d.properties[i].kind !== NodeKind.NullLiteral) {
+						emitStmtsLine(p, tmpName + "." + mangleFieldName(d.keys[i]) + " = " + val + ";");
+					}
 					i += 1;
 				}
 				truncResults(results, cc);
@@ -952,7 +1006,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 			let arg = results[results.length - cc + ai];
 			// & prefix on nativeName: wrap first arg with &(...)
 			if (ovNeedsAddr && ai === 0) {
-				arg = safeAddrOf(g, p, arg, cd.arguments[ai], null as unknown as Type);
+				arg = safeAddrOf(g, p, arg, cd.arguments[ai], null);
 			} else if (hasOvParams && ai < ovType.typeChildren.length && ai < cd.arguments.length) {
 				const paramType = ovType.typeChildren[ai];
 				const argNode = cd.arguments[ai];
@@ -998,7 +1052,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 	// C varargs: msNumberArrayFrom(count, (double)(e1), ...) — va_arg reads 8 bytes for double
 	const isNumberArrayFrom = callee === "msNumberArrayFrom";
 	// Resolve callee's function type for parameter type checking
-	const calleeType = sym !== null && sym.symbolType !== null ? sym.symbolType : (cd.callee.nodeType !== null ? cd.callee.nodeType : null as unknown as Type);
+	const calleeType = sym !== null && sym.symbolType !== null ? sym.symbolType : (cd.callee.nodeType !== null ? cd.callee.nodeType : null);
 	const hasParamTypes = calleeType !== null && calleeType.kind === TypeKind.Function && calleeType.typeChildren !== null;
 	let argsStr = "";
 	let i = 1;
@@ -1058,7 +1112,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 	const calleeStr = callee;
 	// NRVO: call returns void, result via out-param
 	const nrvoRet = getCalleeReturnType(node);
-	const nrvoType = (nrvoRet !== null && isNrvoReturnType(nrvoRet)) ? nrvoRet : null as unknown as Type;
+	const nrvoType = (nrvoRet !== null && isNrvoReturnType(nrvoRet)) ? nrvoRet : null;
 	if (nrvoType !== null) {
 		const cType = getTypeDesc(g, nrvoType);
 		const tmp = getTemp(p, cType);
@@ -1138,7 +1192,7 @@ function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Node[]): st
 	// Build call with & on first arg if mutating
 	if (needsAddr && args.length > 0) {
 		const firstArg = genExpr(g, p, args[0]);
-		let result = cName + "(" + safeAddrOf(g, p, firstArg, args[0], null as unknown as Type);
+		let result = cName + "(" + safeAddrOf(g, p, firstArg, args[0], null);
 		let i = 1;
 		while (i < args.length) {
 			result = result + ", " + genExpr(g, p, args[i]);

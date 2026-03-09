@@ -23,16 +23,12 @@ import {
 	Node, NodeKind, DeclKind, SourceLocation, Symbol, SymbolKind, SymbolState,
 	VariableDeclData, ReturnStmtData, ExprStmtData, TryExprData,
 	CallExprData, MemberExprData, IdentifierData, HiddenDerefData,
-	IfStmtData, ProgramData, BlockStmtData,
-	FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData,
-	ConstructorDeclData, ExportDeclData, TestDeclData, DecoratedDeclData,
-	ClassDeclData, WhileStmtData, ForStmtData, ForOfStmtData,
-	TryCatchStmtData, SwitchStmtData, SwitchCaseData,
+	IfStmtData,
 } from "../../ast/node";
 import { Type, TypeKind, booleanType, getProperty } from "../../checker/types";
 import { makeSymbol, lookupSymbol } from "../../checker/symbol";
 import { TransformContext, freshTemp } from "../context";
-import { walkNode, containsExprKind, replaceInExpr } from "../walker";
+import { walkNode, walkExpandBlocksHooked, containsExprKind, replaceInExpr } from "../walker";
 import {
 	makeIdent, makeVarDecl, makeBlock, makeExprStmt,
 	makeReturn, makeIf, makeMember, makeCall, makeCallResolved, makeConditional,
@@ -70,137 +66,28 @@ function lookupResultErr(ctx: TransformContext): Symbol {
 // ===== Enclosing Function Return Type Tracking =====
 // try error-path returns must be typed as the enclosing function's Result type,
 // not the inner expression's Result type (e.g. Result<void, string> vs Result<Person, string>).
+// Uses walkExpandBlocksHooked's FnEntry/FnExit callbacks to save/restore on function boundaries.
 
-let enclosingFnRetType: Type = null as unknown as Type;
+let enclosingFnRetType: Type = null;
+let fnRetTypeStack: Type[] = [];
+
+function onFnEntry(node: Node): void {
+	fnRetTypeStack.push(enclosingFnRetType);
+	enclosingFnRetType = node.nodeType !== null ? node.nodeType.typeReturn : null;
+}
+
+function onFnExit(node: Node): void {
+	enclosingFnRetType = fnRetTypeStack.length > 0 ? fnRetTypeStack.pop() : null;
+}
 
 // ===== Main Entry Point =====
 
 export function lowerTryExpr(program: Node, ctx: TransformContext): Node {
-	enclosingFnRetType = null as unknown as Type;
-	walkTryExpand(program, ctx);
+	enclosingFnRetType = null;
+	fnRetTypeStack = [];
+	walkExpandBlocksHooked(program, expandStmt, ctx, onFnEntry, onFnExit);
 	lowerResultConstructors(program);
 	return program;
-}
-
-// Custom walker that mirrors walkExpandBlocks but tracks enclosing function return types.
-function walkTryExpand(node: Node, ctx: TransformContext): void {
-	match (node.kind) {
-		NodeKind.Program => {
-			const d = node.data as ProgramData;
-			d.programStmts = expandAndRecurseTry(d.programStmts, ctx);
-		},
-		NodeKind.BlockStmt => {
-			const d = node.data as BlockStmtData;
-			d.statements = expandAndRecurseTry(d.statements, ctx);
-		},
-		NodeKind.FunctionDecl => {
-			const d = node.data as FunctionDeclData;
-			const saved = enclosingFnRetType;
-			enclosingFnRetType = node.nodeType !== null ? node.nodeType.typeReturn : null as unknown as Type;
-			walkTryExpand(d.fnBody, ctx);
-			enclosingFnRetType = saved;
-		},
-		NodeKind.ArrowFunction => {
-			const d = node.data as ArrowFunctionData;
-			const saved = enclosingFnRetType;
-			enclosingFnRetType = node.nodeType !== null ? node.nodeType.typeReturn : null as unknown as Type;
-			walkTryExpand(d.arrowBody, ctx);
-			enclosingFnRetType = saved;
-		},
-		NodeKind.FunctionExpr => {
-			const d = node.data as FunctionExprData;
-			const saved = enclosingFnRetType;
-			enclosingFnRetType = node.nodeType !== null ? node.nodeType.typeReturn : null as unknown as Type;
-			walkTryExpand(d.funcExprBody, ctx);
-			enclosingFnRetType = saved;
-		},
-		NodeKind.MethodDecl => {
-			const d = node.data as MethodDeclData;
-			const saved = enclosingFnRetType;
-			enclosingFnRetType = node.nodeType !== null ? node.nodeType.typeReturn : null as unknown as Type;
-			walkTryExpand(d.methodBody, ctx);
-			enclosingFnRetType = saved;
-		},
-		NodeKind.ConstructorDecl => {
-			const d = node.data as ConstructorDeclData;
-			walkTryExpand(d.ctorBody, ctx);
-		},
-		NodeKind.ExportDecl => {
-			const d = node.data as ExportDeclData;
-			walkTryExpand(d.exportedDecl, ctx);
-		},
-		NodeKind.TestDecl => {
-			const d = node.data as TestDeclData;
-			walkTryExpand(d.testBody, ctx);
-		},
-		NodeKind.AssertStmt => {},
-		NodeKind.IfStmt => {
-			const d = node.data as IfStmtData;
-			walkTryExpand(d.consequent, ctx);
-			walkTryExpand(d.alternate, ctx);
-		},
-		NodeKind.WhileStmt => {
-			const d = node.data as WhileStmtData;
-			walkTryExpand(d.whileBody, ctx);
-		},
-		NodeKind.ForStmt => {
-			const d = node.data as ForStmtData;
-			walkTryExpand(d.forBody, ctx);
-		},
-		NodeKind.ForOfStmt => {
-			const d = node.data as ForOfStmtData;
-			walkTryExpand(d.forOfBody, ctx);
-		},
-		NodeKind.TryCatchStmt => {
-			const d = node.data as TryCatchStmtData;
-			walkTryExpand(d.tryBody, ctx);
-			walkTryExpand(d.catchBody, ctx);
-			walkTryExpand(d.finallyBody, ctx);
-		},
-		NodeKind.SwitchStmt => {
-			const d = node.data as SwitchStmtData;
-			let i = 0;
-			while (i < d.switchCases.length) {
-				walkTryExpand(d.switchCases[i], ctx);
-				i = i + 1;
-			}
-		},
-		NodeKind.SwitchCase => {
-			const d = node.data as SwitchCaseData;
-			let j = 0;
-			while (j < d.caseStmts.length) {
-				walkTryExpand(d.caseStmts[j], ctx);
-				j = j + 1;
-			}
-		},
-		NodeKind.DecoratedDecl => {
-			const d = node.data as DecoratedDeclData;
-			walkTryExpand(d.decoratedNode, ctx);
-		},
-		NodeKind.ClassDecl => {
-			const d = node.data as ClassDeclData;
-			let i = 0;
-			while (i < d.classBody.length) {
-				walkTryExpand(d.classBody[i], ctx);
-				i = i + 1;
-			}
-		},
-		_ => {},
-	};
-}
-
-function expandAndRecurseTry(stmts: Node[], ctx: TransformContext): Node[] {
-	const result: Node[] = [];
-	for (const stmt of stmts) {
-		const expanded = expandStmt(stmt, ctx);
-		for (const node of expanded) {
-			result.push(node);
-		}
-	}
-	for (const node of result) {
-		walkTryExpand(node, ctx);
-	}
-	return result;
 }
 
 // Lower Result.ok(val) / Result.err(e) → ObjectLiteral. Runs for all backends.
@@ -422,7 +309,7 @@ test "makeResultMember sets correct type for .error" {
 
 test "makeResultMember with null resType is graceful" {
 	const loc: SourceLocation = { line: 0, column: 0 };
-	const mem = makeResultMember("$r", null as unknown as Type, "ok", loc);
+	const mem = makeResultMember("$r", null, "ok", loc);
 	assert mem.kind === NodeKind.MemberExpr;
 }
 

@@ -36,11 +36,11 @@ function resolveType(ctx: TransformContext, node: Node): Type {
 		return node.nodeType;
 	}
 	// 2. Symbol table lookup for identifiers
-	if (ctx.checkerCtx === null) return null as unknown as Type;
-	if (node.kind !== NodeKind.Identifier) return null as unknown as Type;
+	if (ctx.checkerCtx === null) return null;
+	if (node.kind !== NodeKind.Identifier) return null;
 	const d = node.data as IdentifierData;
 	const sym = lookupSymbol(ctx.checkerCtx.table, d.name);
-	if (sym === null) return null as unknown as Type;
+	if (sym === null) return null;
 	return sym.symbolType;
 }
 
@@ -95,7 +95,7 @@ function derivedBaseOp(opName: string): string {
 // ===== Null Detection =====
 
 // Recursively unwrap TypeAssertion to detect null expressions.
-// `null as unknown as Type` → TypeAssertion(TypeAssertion(NullLiteral, "unknown"), "Type")
+// `null` → TypeAssertion(TypeAssertion(NullLiteral, "unknown"), "Type")
 export function isNullExpr(node: Node): boolean {
 	if (node.kind === NodeKind.NullLiteral) return true;
 	if (node.kind === NodeKind.TypeAssertion) return isNullExpr((node.data as TypeAssertionData).asExpr);
@@ -221,14 +221,32 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 			return makeUnary("!", member, loc);
 		}
 		// Array null check: arr !== null → arr.p !== null
-		// Reference parity: seq isNil checks payload pointer (seq.p == nil)
-		// Arrays are value-type structs { len, p } — can't compare whole struct to void*
+		// Our arrays are value-type structs { len, p } — can't compare whole struct to void*.
+		// Check the payload pointer instead (reference uses pointer-typed seqs, so no equivalent).
 		if (valueType !== null && valueType.kind === TypeKind.Array) {
 			const nonNullSide = hasNullLeft ? d.right : d.left;
 			const pMember = makeMember(nonNullSide, "p", loc);
 			d.left = hasNullLeft ? d.left : pMember;
 			d.right = hasNullLeft ? pMember : d.right;
 			return node;
+		}
+		// Closure null check: closure !== null → closure.fn !== null
+		// msClosure is a value struct { fn, env } — check the function pointer field.
+		if (valueType !== null && valueType.kind === TypeKind.Function) {
+			const nonNullSide = hasNullLeft ? d.right : d.left;
+			const fnMember = makeMember(nonNullSide, "fn", loc);
+			d.left = hasNullLeft ? d.left : fnMember;
+			d.right = hasNullLeft ? fnMember : d.right;
+			return node;
+		}
+		// Other value types (Result, Tuple, String, Union) can never be null —
+		// fold to constant true/false. Reference parity: value types can't be nil.
+		if (valueType !== null) {
+			const vk = valueType.kind;
+			if (vk === TypeKind.Result || vk === TypeKind.Tuple || vk === TypeKind.String
+				|| vk === TypeKind.Union) {
+				return makeBool(opName === "!=", loc);
+			}
 		}
 	}
 

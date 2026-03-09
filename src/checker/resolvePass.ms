@@ -528,7 +528,7 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 				if (d.fnDefaults !== null && d.fnDefaults.length > 0) {
 					overload.defaultParamText = d.fnDefaults;
 				}
-				// Update extension method type for overloads too
+				// Update extension fnType cache (secondary — getExtFnType reads sym.symbolType first)
 				const extTypeName2 = getExtTypeName(d.fnFlags);
 				if (extTypeName2 !== "" && ctx.extensionRegistry !== null) {
 					const ext2 = findExtension(ctx.extensionRegistry, extTypeName2, d.fnName);
@@ -548,7 +548,7 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 	if (d.fnDefaults !== null && d.fnDefaults.length > 0) {
 		sym.defaultParamText = d.fnDefaults;
 	}
-	// Update extension method type in registry (instance or static)
+	// Update extension fnType cache (secondary — getExtFnType reads sym.symbolType first)
 	const extTypeName = getExtTypeName(d.fnFlags);
 	if (extTypeName !== "" && ctx.extensionRegistry !== null) {
 		const ext = findExtension(ctx.extensionRegistry, extTypeName, d.fnName);
@@ -652,7 +652,7 @@ function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): T
 	const discType = resolveAnnotation(d.discriminantType, ctx);
 	if (discType.kind !== TypeKind.Enum) {
 		addError(ctx, "Discriminant type '" + d.discriminantType + "' must be an enum", 0, 0);
-		return null as unknown as Type;
+		return null;
 	}
 
 	// Validate each variant key is a valid enum member

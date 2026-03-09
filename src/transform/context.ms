@@ -26,6 +26,15 @@ export function createTransformContext(): TransformContext {
 	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, pendingTupleOps: [], pendingDecls: [], emittedHelpers: [] };
 }
 
+export function hasEmitted(ctx: TransformContext, name: string): boolean {
+	let i = 0;
+	while (i < ctx.emittedHelpers.length) {
+		if (ctx.emittedHelpers[i] === name) return true;
+		i = i + 1;
+	}
+	return false;
+}
+
 export function createTransformContextWithChecker(cc: CheckerContext): TransformContext {
 	const ctx = createTransformContext();
 	ctx.checkerCtx = cc;

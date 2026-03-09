@@ -471,7 +471,7 @@ function genMethodAsFunction(g: CGen, node: Node, className: string): void {
 	addLine(sec(g, CSection.ProcHeaders), proto + ";");
 
 	if (d.methodBody !== null) {
-		const p = createProc(methodName, null as unknown as Type);
+		const p = createProc(methodName, null);
 		genStmt(g, p, d.methodBody);
 		const locals = readProcLocals(p);
 		const stmts = readProcStmts(p);
@@ -508,7 +508,7 @@ function genConstructor(g: CGen, node: Node, className: string): void {
 	addLine(procs, "  " + className + "* this = (" + className + "*)msAllocTyped(sizeof(" + className + "), &" + className + "_typeInfo);");
 
 	if (d.ctorBody !== null) {
-		const p = createProc(ctorName, null as unknown as Type);
+		const p = createProc(ctorName, null);
 		genStmt(g, p, d.ctorBody);
 		const locals = readProcLocals(p);
 		const stmts = readProcStmts(p);
@@ -643,7 +643,7 @@ function genTypeInfoVar(g: CGen, d: VariableDeclData, varName: string): void {
 	if (d.initializer !== null && d.initializer.kind === NodeKind.ObjectLiteral) {
 		const od = d.initializer.data as ObjectLiteralData;
 		const datInit = sec(g, CSection.DatInit);
-		const p = createProc("__datinit", null as unknown as Type);
+		const p = createProc("__datinit", null);
 
 		for (let i = 0; i < od.keys.length; i += 1) {
 			const key = od.keys[i];

@@ -90,7 +90,7 @@ function getCalleeType(cd: CallExprData): Type {
 	if (cd.callee.resolvedSym !== null && cd.callee.resolvedSym.symbolType !== null) {
 		return cd.callee.resolvedSym.symbolType;
 	}
-	return null as unknown as Type;
+	return null;
 }
 
 // ===== Tests =====

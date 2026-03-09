@@ -53,3 +53,10 @@ test "try inside Result<number, string> fn compiles" {
 	const result = compileToC(src);
 	assert result.ok;
 }
+
+test "try in nested functions with different Result types" {
+	const src = "interface Person { name: string; value: number; }\nfunction inner(): Result<number, string> {\nconst p = try JSON.parse<Person>(\"{}\");\nreturn Result.ok(p.value);\n}\nfunction outer(): Result<void, string> {\nconst n = try inner();\nconsole.log(n);\nreturn Result.ok();\n}\nouter();";
+	const result = compileToC(src);
+	if (!result.ok) { console.log("ERROR-nested: " + result.error); }
+	assert result.ok;
+}

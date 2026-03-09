@@ -261,7 +261,7 @@ function registerVariable(p: Partitions, name: string): void {
 		graphIndex: 0,
 		name: name,
 		symKind: SymbolKind.Variable,
-		symType: null as unknown as Type,
+		symType: null,
 		aliveStart: p.abstractTime,
 		aliveEnd: p.abstractTime,
 	});

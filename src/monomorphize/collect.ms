@@ -86,12 +86,12 @@ function monoResolveExplicitTypeArgs(typeArgStr: string): Type[] {
 }
 
 function monoResolveTypeName(name: string): Type {
-	if (name === "number") return { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
-	if (name === "string") return { kind: TypeKind.String, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
-	if (name === "boolean") return { kind: TypeKind.Boolean, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
-	if (name === "void") return { kind: TypeKind.Void, typeName: "", typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
+	if (name === "number") return { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 };
+	if (name === "string") return { kind: TypeKind.String, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 };
+	if (name === "boolean") return { kind: TypeKind.Boolean, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 };
+	if (name === "void") return { kind: TypeKind.Void, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 };
 	// Named types (interfaces, classes, enums)
-	return { kind: TypeKind.Struct, typeName: name, typeNames: [], typeChildren: [], typeReturn: null as unknown as Type, typeExtra: null as unknown as Type, typeFlags: 0 };
+	return { kind: TypeKind.Struct, typeName: name, typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 };
 }
 
 // ===== Resolve Annotation String → Type =====
@@ -599,7 +599,7 @@ function monoInferTypeArgs(fnType: Type, argNodes: Node[], ctx: CheckerContext):
 // Infer the type of an argument expression from the checker's perspective.
 // Simple cases: number/string/boolean literals, identifiers with known types.
 function monoInferArgType(node: Node, ctx: CheckerContext): Type {
-	if (node === null) return null as unknown as Type;
+	if (node === null) return null;
 
 	if (node.kind === NodeKind.NumberLiteral) return numberType();
 	if (node.kind === NodeKind.StringLiteral) return stringType();
@@ -634,7 +634,7 @@ function monoInferArgType(node: Node, ctx: CheckerContext): Type {
 		}
 	}
 
-	return null as unknown as Type;
+	return null;
 }
 
 // Rewrite a single CallExpr — replace callee with monomorphized name

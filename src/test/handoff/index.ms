@@ -25,3 +25,4 @@ import "./jsonTyped";
 import "./classGeneric";
 import "./tryResultPropagation";
 import "./nullCheckValueType";
+import "./nullValueType";

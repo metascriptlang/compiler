@@ -831,13 +831,13 @@ function classifyNestedCallReturn(callExpr: Node, dctx: DrcContext): RcInfo {
 
 // Get the return Type of a nested call expression (Blocker 27: typed sinks)
 function getCallReturnType(callExpr: Node, dctx: DrcContext): Type {
-	if (dctx.ctx.checkerCtx === null) return null as unknown as Type;
+	if (dctx.ctx.checkerCtx === null) return null;
 	const cd = callExpr.data as CallExprData;
-	if (cd.callee.kind !== NodeKind.Identifier) return null as unknown as Type;
+	if (cd.callee.kind !== NodeKind.Identifier) return null;
 	const calleeName = (cd.callee.data as IdentifierData).name;
 	const sym = lookupSymbol(dctx.ctx.checkerCtx.table, calleeName);
-	if (sym === null || sym.symbolType === null) return null as unknown as Type;
-	if (sym.symbolType.kind !== TypeKind.Function) return null as unknown as Type;
+	if (sym === null || sym.symbolType === null) return null;
+	if (sym.symbolType.kind !== TypeKind.Function) return null;
 	return sym.symbolType.typeReturn;
 }
 
@@ -1157,7 +1157,7 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	// Prefer nodeType from checker (set on the VariableDecl during check pass)
 	// Fall back to symbol table lookup only if nodeType is absent
 	if (dctx.ctx.checkerCtx === null) return stmt;
-	let varType: Type = null as unknown as Type;
+	let varType: Type = null;
 	if (stmt.nodeType !== null) {
 		varType = stmt.nodeType;
 	} else {
@@ -2055,7 +2055,7 @@ test "callCanThrow true for user functions" {
 
 test "stmtCanThrow true for ThrowStmt" {
 	const loc = testLoc();
-	const throwStmt: Node = { kind: NodeKind.ThrowStmt, data: { throwArg: makeNull(loc) }, location: loc, nodeType: null as unknown as Type, resolvedSym: null as unknown as Symbol, flags: 0 };
+	const throwStmt: Node = { kind: NodeKind.ThrowStmt, data: { throwArg: makeNull(loc) }, location: loc, nodeType: null, resolvedSym: null as unknown as Symbol, flags: 0 };
 	assert stmtCanThrow(throwStmt);
 }
 
@@ -2194,7 +2194,7 @@ test "finally-protected var blocks move in isLastReadSafe" {
 	const dctx = testDrcContext("const x = 1;");
 	dctx.finallyProtectedVars = ["s"];
 	// Even with a null symbol, the name check fires first
-	const fakeSym: Symbol = { name: "s", symbolKind: 0, symbolType: null as unknown as Type, symFlags: 0 };
+	const fakeSym: Symbol = { name: "s", symbolKind: 0, symbolType: null, symFlags: 0 };
 	assert !isLastReadSafe(fakeSym, null as unknown as Node, 0, [], dctx);
 }
 
@@ -2323,7 +2323,7 @@ test "Reference parity: Sink/Lent type wrappers replace typeChildrenFlags" {
 	// Standard reference: lent modifiers wrap param types for borrowing
 	// isSinkType checks TypeKind.Sink, skipModifier unwraps
 	assert TypeKind.Sink !== TypeKind.Lent;
-	assert isSinkType(null as unknown as Type) === false;
+	assert isSinkType(null) === false;
 }
 
 test "isGeneratorBody: detects $state pattern" {

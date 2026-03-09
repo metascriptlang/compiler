@@ -18,7 +18,7 @@ import { Type, TypeKind, typeNameOf,
 	numberType, stringType, booleanType, voidType, nullType,
 	unknownType, neverType, errorType } from "./types";
 import { Symbol, SymbolKind, SymbolTable, Scope, lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
-import { CheckerContext, findAllExtensionsByName, filterExtsByReceiverType } from "./context";
+import { CheckerContext, findAllExtensionsByName, filterExtsByReceiverType, getExtFnType, stripReceiverParam } from "./context";
 import { sliceStr, charAt } from "../utils/string";
 import { checkProgram } from "./checkPass";
 import { parseSource } from "../parser/statements/validation";
@@ -917,17 +917,9 @@ function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverTyp
 				seenMethods.push(ext.methodName);
 				// Use first match's type; strip receiver param for instance extensions
 				const bestExt = matched[0];
-				let sigType = bestExt.fnType;
+				let sigType = getExtFnType(bestExt);
 				if (!bestExt.isStatic && sigType.typeChildren !== null && sigType.typeChildren.length > 0) {
-					const callParams: Type[] = [];
-					const callNames: string[] = [];
-					for (let ci = 1; ci < sigType.typeChildren.length; ci = ci + 1) {
-						callParams.push(sigType.typeChildren[ci]);
-					}
-					for (let ci = 1; ci < sigType.typeNames.length; ci = ci + 1) {
-						callNames.push(sigType.typeNames[ci]);
-					}
-					sigType = createFunction(callParams, callNames, sigType.typeReturn);
+					sigType = stripReceiverParam(sigType);
 				}
 				const loc: SourceLocation = { line: 0, column: 0 };
 				const item: SgSuggest = {
@@ -1113,19 +1105,10 @@ export function sgFormatExtensionSignatures(ctx: CheckerContext, methodName: str
 	const result: SgSignatureInfo[] = [];
 	for (let i = 0; i < matched.length; i = i + 1) {
 		const ext = matched[i];
-		let fnType = ext.fnType;
+		let fnType = getExtFnType(ext);
 		if (fnType === null || fnType.kind !== TypeKind.Function) continue;
-		// Strip receiver param for instance extensions
 		if (!ext.isStatic && fnType.typeChildren.length > 0) {
-			const callParams: Type[] = [];
-			const callNames: string[] = [];
-			for (let ci = 1; ci < fnType.typeChildren.length; ci = ci + 1) {
-				callParams.push(fnType.typeChildren[ci]);
-			}
-			for (let ci = 1; ci < fnType.typeNames.length; ci = ci + 1) {
-				callNames.push(fnType.typeNames[ci]);
-			}
-			fnType = createFunction(callParams, callNames, fnType.typeReturn);
+			fnType = stripReceiverParam(fnType);
 		}
 		result.push(sgBuildSignatureInfo(methodName, fnType));
 	}
@@ -1416,7 +1399,7 @@ function inferCalleeReturnType(ctx: CheckerContext, node: Node): Type {
 			return sym.symbolType.typeReturn;
 		}
 	}
-	return null as unknown as Type;
+	return null;
 }
 
 // Collect exception hints for try expressions and functions returning Result<T,E>.
@@ -1949,7 +1932,7 @@ test "finds top-level symbols" {
 	const pr = parseSource("const abc = 1;\nconst abd = 2;\nconst xyz = 3;");
 	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
-	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "ab", null as unknown as Type);
+	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "ab", null);
 	assert candidates.length === 2;
 }
 
@@ -1957,7 +1940,7 @@ test "empty prefix returns all" {
 	const pr = parseSource("const a = 1;\nconst b = 2;");
 	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
-	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "", null as unknown as Type);
+	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "", null);
 	assert candidates.length >= 2;
 }
 
@@ -1965,7 +1948,7 @@ test "no match returns empty" {
 	const pr = parseSource("const abc = 1;");
 	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
-	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "zzz", null as unknown as Type);
+	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "zzz", null);
 	assert candidates.length === 0;
 }
 
@@ -1973,7 +1956,7 @@ test "only returns types" {
 	const pr = parseSource("interface Foo { x: number; }\nconst y = 1;");
 	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
-	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.TypeAnnotation, "", null as unknown as Type);
+	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.TypeAnnotation, "", null);
 	// Should include Foo (interface) but not y (variable)
 	let hasFoo = false;
 	let hasY = false;
@@ -2022,7 +2005,7 @@ test "null receiver returns empty" {
 	const pr = parseSource("const a = 1;");
 	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
-	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.MemberAccess, "", null as unknown as Type);
+	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.MemberAccess, "", null);
 	assert candidates.length === 0;
 }
 
@@ -2040,7 +2023,7 @@ test "prefix before substr" {
 	const pr = parseSource("const abcdef = 1;\nconst xyzabc = 2;");
 	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
-	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "abc", null as unknown as Type);
+	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "abc", null);
 	assert candidates.length === 2;
 	// abcdef (prefix match) should come before xyzabc (substr match)
 	assert candidates[0].name === "abcdef";
@@ -2051,7 +2034,7 @@ test "inner scope before outer" {
 	const pr = parseSource("const outer = 1;\nfunction f() { const inner = 2; }");
 	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);
-	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "", null as unknown as Type);
+	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "", null);
 	// inner scope (depth 0) should rank before outer scope (depth > 0)
 	// At least both should be present
 	assert candidates.length >= 2;

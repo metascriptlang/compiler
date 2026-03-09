@@ -42,6 +42,20 @@ function isStructType(t: Type): boolean {
 	};
 }
 
+function isUndefinedIdent(node: Node): boolean {
+	return node.kind === NodeKind.Identifier && (node.data as IdentifierData).name === "undefined";
+}
+
+// Fallback: detect value-type structs by C type name when nodeType is null.
+// Any non-pointer, non-primitive C type is a struct that needs {0} init.
+function isStructCType(cType: string): boolean {
+	if (cType === "" || cType === "void" || cType === "void*") return false;
+	if (isNumericCType(cType)) return false;
+	// Pointer types end with *
+	if (cType.length > 0 && cType.charAt(cType.length - 1) === "*") return false;
+	return true;
+}
+
 function isNumericCType(cType: string): boolean {
 	return cType === "double" || cType === "float" || cType === "bool"
 		|| cType === "int32_t" || cType === "int64_t" || cType === "int16_t" || cType === "int8_t"
@@ -53,7 +67,7 @@ function genNrvoCallExpr(g: CGen, p: CProc, callNode: Node, destVar: string): st
 	let callee = genExpr(g, p, cd.callee);
 	// On-demand cross-module prototype (reference parity: genProcPrototype)
 	const nrvoSym = callNode.resolvedSym !== null ? callNode.resolvedSym : (cd.callee.resolvedSym !== null ? cd.callee.resolvedSym : null as unknown as Symbol);
-	const nrvoFnType = nrvoSym !== null ? nrvoSym.symbolType : (cd.callee.nodeType !== null ? cd.callee.nodeType : null as unknown as Type);
+	const nrvoFnType = nrvoSym !== null ? nrvoSym.symbolType : (cd.callee.nodeType !== null ? cd.callee.nodeType : null);
 	ensureCrossModuleProto(g, callee, nrvoFnType, nrvoSym);
 	let args = "&" + destVar;
 	for (let i = 0; i < cd.arguments.length; i += 1) {
@@ -183,7 +197,7 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 		}
 		// G3 fix: NRVO call sites — when initializer is a call returning a struct,
 		// emit "Type var; fn(&var, args);" instead of "Type var = fn(args);"
-		const nrvoRet = (d.initializer.kind === NodeKind.CallExpr) ? getCalleeReturnType(d.initializer) : null as unknown as Type;
+		const nrvoRet = (d.initializer.kind === NodeKind.CallExpr) ? getCalleeReturnType(d.initializer) : null;
 		if (nrvoRet !== null && isNrvoReturnType(nrvoRet)) {
 			// Derive type from callee return type if cType is unresolved
 			if (cType === "void*" || cType === "double") {
@@ -192,11 +206,12 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 			emitStmtsLine(p, cType + " " + varName + ";");
 			const nrvoCall = genNrvoCallExpr(g, p, d.initializer, varName);
 			emitStmtsLine(p, nrvoCall + ";");
-		} else if (d.initializer.kind === NodeKind.NullLiteral && isStructType(node.nodeType)) {
-			// D2 fix: struct-type null init → {0} instead of MS_NIL
+		} else if ((d.initializer.kind === NodeKind.NullLiteral || isUndefinedIdent(d.initializer))
+			&& (isStructType(node.nodeType) || isStructCType(cType))) {
+			// Value-type null/undefined init → {0} instead of MS_NIL
 			emitStmtsLine(p, cType + " " + varName + " = {0};");
-		} else if (d.initializer.kind === NodeKind.NullLiteral && isNumericCType(cType)) {
-			// Numeric-type null init → 0 instead of MS_NIL (DRC-hoisted primitives)
+		} else if ((d.initializer.kind === NodeKind.NullLiteral || isUndefinedIdent(d.initializer)) && isNumericCType(cType)) {
+			// Numeric-type null/undefined init → 0 instead of MS_NIL
 			emitStmtsLine(p, cType + " " + varName + " = 0;");
 		} else if (d.initializer.kind === NodeKind.ArrayLiteral && (d.initializer.data as ArrayLiteralData).elements.length === 0) {
 			// Empty array: use declared type for zero-init (avoids msRefArray default)
@@ -547,7 +562,7 @@ function stmtOutput(input: string): string {
 	const prog = pr.value;
 	const pd = prog.data as ProgramData;
 	const g = createCGen(null as unknown as CheckerContext, "");
-	const p = createProc("test", null as unknown as Type);
+	const p = createProc("test", null);
 	// Inline loop instead of genStmts to reduce call depth
 	for (let i = 0; i < pd.programStmts.length; i += 1) {
 		genStmt(g, p, pd.programStmts[i]);

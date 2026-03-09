@@ -17,7 +17,7 @@ import {
 	CallExprData, MemberExprData, IdentifierData,
 } from "../../ast/node";
 import { Type, TypeKind, isNumeric, createResult, createArray, createPrimitive, stringType, booleanType, numberType, unknownType, unwrapRef } from "../../checker/types";
-import { TransformContext } from "../context";
+import { TransformContext, hasEmitted } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { walkNode } from "../walker";
 import {
@@ -26,7 +26,7 @@ import {
 	makeExprStmt,
 } from "../util";
 import { findCallTypeArg } from "../../parser/context";
-import { generateJsonParseC, generateJsonStringifyC } from "../../codegen/c/jsonEmit";
+import { generateJsonParseC, generateJsonStringifyC, makeEmitNode } from "../../codegen/c/jsonEmit";
 import { stmtCountAfter, firstStmtKindAfter, firstExprKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -190,32 +190,27 @@ function rewriteResultToLiteral(node: Node, isOk: boolean, ctx: TransformContext
 
 // Resolve the struct type for the explicit type arg (e.g., "Person" → struct type with fields).
 function resolveJsonTargetType(typeArgStr: string, ctx: TransformContext): Type {
-	if (ctx.checkerCtx === null) return null as unknown as Type;
+	if (ctx.checkerCtx === null) return null;
 	const sym = lookupSymbol(ctx.checkerCtx.table, typeArgStr);
-	if (sym === null) return null as unknown as Type;
-	if (sym.symbolType === null) return null as unknown as Type;
+	if (sym === null) return null;
+	if (sym.symbolType === null) return null;
 	const unwrapped = unwrapRef(sym.symbolType);
 	if (unwrapped.kind === TypeKind.Struct) return unwrapped;
-	return null as unknown as Type;
+	return null;
 }
 
 // Dedup check — prevents generating the same helper twice.
 // Uses ctx.emittedHelpers (per-compilation) instead of module-level state.
-function hasEmitted(ctx: TransformContext, name: string): boolean {
-	let i = 0;
-	while (i < ctx.emittedHelpers.length) {
-		if (ctx.emittedHelpers[i] === name) return true;
-		i = i + 1;
-	}
-	return false;
-}
 
 function rewriteJsonParse(node: Node, ctx: TransformContext): Node {
 	const cd = node.data as CallExprData;
 	const loc = node.location;
 
 	const typeArgStr = findCallTypeArg(node);
-	if (typeArgStr === "") return node;
+	// No explicit type arg → untyped JSON.parse(str) returning JsonValue
+	if (typeArgStr === "") {
+		return rewriteUntypedJsonParse(node, ctx);
+	}
 
 	const structType = resolveJsonTargetType(typeArgStr, ctx);
 	if (structType === null) return node;
@@ -234,6 +229,29 @@ function rewriteJsonParse(node: Node, ctx: TransformContext): Node {
 	const result = makeCall(newCallee, cd.arguments, loc);
 	result.nodeType = resultType;
 	return result;
+}
+
+// Untyped JSON.parse(str) — returns MsJsonValue* (JsonValue class type)
+function rewriteUntypedJsonParse(node: Node, ctx: TransformContext): Node {
+	const cd = node.data as CallExprData;
+	const loc = node.location;
+	if (cd.arguments.length < 1) return node;
+
+	// Look up JsonValue type from checker
+	if (ctx.checkerCtx === null) return node;
+	const jvSym = lookupSymbol(ctx.checkerCtx.table, "JsonValue");
+	if (jvSym === null || jvSym.symbolType === null) return node;
+	const jvType = jvSym.symbolType;  // Ref<Struct("JsonValue", ...)>
+
+	// Emit #include "core/json.h" (dedup'd)
+	if (!hasEmitted(ctx, "__jsonInclude")) {
+		ctx.emittedHelpers.push("__jsonInclude");
+		ctx.pendingDecls.push(makeEmitNode("/*INCLUDESECTION*/#include \"core/json.h\"\n", loc));
+	}
+
+	const call = makeCall(makeIdent("msJsonParse", loc), cd.arguments, loc);
+	call.nodeType = jvType;
+	return call;
 }
 
 function rewriteJsonStringify(node: Node, ctx: TransformContext): Node {

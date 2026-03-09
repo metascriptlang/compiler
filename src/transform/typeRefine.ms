@@ -52,7 +52,7 @@ function scopeLookup(scopes: TypeScope[], name: string): Type {
 		}
 		i = i - 1;
 	}
-	return null as unknown as Type;
+	return null;
 }
 
 function scopeRecord(scopes: TypeScope[], name: string, t: Type): void {
@@ -150,7 +150,7 @@ function extractFieldTypeFromStructural(typeName: string, fieldName: string): Ty
 		}
 		pos = pos + 1;
 	}
-	return null as unknown as Type;
+	return null;
 }
 
 // Resolve a type name string to a Type. Handles primitives and registry types.
@@ -158,7 +158,7 @@ function resolveFieldTypeName(rawType: string): Type {
 	if (rawType === "string") return stringType();
 	if (rawType === "number" || rawType === "float64") return numberType();
 	if (rawType === "boolean") return booleanType();
-	if (rawType === "void") return null as unknown as Type;
+	if (rawType === "void") return null;
 	// Array types: "T[]"
 	if (rawType.endsWith("[]")) {
 		const inner = sliceStr(rawType, 0, rawType.length - 2);
@@ -170,7 +170,7 @@ function resolveFieldTypeName(rawType: string): Type {
 	if (reg !== null) return reg;
 	const reg2 = registryLookup(rawType);
 	if (reg2 !== null) return reg2;
-	return null as unknown as Type;
+	return null;
 }
 
 function rederiveMemberType(node: Node): void {
@@ -313,8 +313,8 @@ function deriveCallReturnType(node: Node): void {
 function deriveBinaryExprType(node: Node): void {
 	const d = node.data as BinaryExprData;
 	const op = d.operator;
-	const lt = d.left !== null ? d.left.nodeType : null as unknown as Type;
-	const rt = d.right !== null ? d.right.nodeType : null as unknown as Type;
+	const lt = d.left !== null ? d.left.nodeType : null;
+	const rt = d.right !== null ? d.right.nodeType : null;
 
 	// Comparison and logical operators → boolean
 	if (op === "===" || op === "!==" || op === "==" || op === "!=" ||
@@ -410,7 +410,7 @@ export function refineTypes(program: Node, ctx: TransformContext, registry: Expo
 
 // Registry Bridge: look up cross-module symbol by name
 function registryLookup(name: string): Type {
-	if (_registryEntries === null) return null as unknown as Type;
+	if (_registryEntries === null) return null;
 	let ei = 0;
 	while (ei < _registryEntries.length) {
 		const entry = _registryEntries[ei];
@@ -422,13 +422,13 @@ function registryLookup(name: string): Type {
 		}
 		ei = ei + 1;
 	}
-	return null as unknown as Type;
+	return null;
 }
 
 // Registry Bridge: look up type by name (for TypeAssertion "x as Foo" and enum member access)
 // Searches registry symbols for types (interfaces, classes, enums, type aliases)
 function registryTypeLookup(name: string): Type {
-	if (_registryEntries === null) return null as unknown as Type;
+	if (_registryEntries === null) return null;
 	let ei = 0;
 	while (ei < _registryEntries.length) {
 		const entry = _registryEntries[ei];
@@ -447,7 +447,7 @@ function registryTypeLookup(name: string): Type {
 		}
 		ei = ei + 1;
 	}
-	return null as unknown as Type;
+	return null;
 }
 
 // Desperation heuristic: map common compiler variable names to known types.
@@ -468,7 +468,7 @@ function desperationHeuristic(name: string): Type {
 	if (name === "tok" || name === "token") return registryTypeLookup("Token");
 	if (name === "ot" || name === "st") return registryTypeLookup("Type");
 
-	return null as unknown as Type;
+	return null;
 }
 
 function refineNode(node: Node, scopes: TypeScope[]): void {

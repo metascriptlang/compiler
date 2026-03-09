@@ -311,7 +311,7 @@ function transformCallSite(node: Node): void {
 	const cd = node.data as CallExprData;
 
 	// Resolve the callee's function type — prefer resolvedSym.symbolType
-	let fnType: Type = null as unknown as Type;
+	let fnType: Type = null;
 	if (cd.callee.resolvedSym !== null && cd.callee.resolvedSym.symbolType !== null) {
 		fnType = cd.callee.resolvedSym.symbolType;
 	}

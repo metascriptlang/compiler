@@ -35,7 +35,9 @@ export function jsonObject(): JsonValue {
 	return new JsonValue(JsonKind.Object, false, 0, "", [], [], []);
 }
 
-// ===== Accessor Extension Methods =====
+// ===== Extension Methods (unique to builder — not in prelude) =====
+// NOTE: asString, asNumber, asBool, asInt, at, len are declared as externs
+// in the prelude (index.cms → C runtime). Only methods with no C extern go here.
 
 export function get(this v: JsonValue, key: string): JsonValue {
 	if (v.kind !== JsonKind.Object) return jsonNull();
@@ -47,33 +49,8 @@ export function get(this v: JsonValue, key: string): JsonValue {
 	return jsonNull();
 }
 
-export function at(this v: JsonValue, idx: number): JsonValue {
-	if (v.kind !== JsonKind.Array) return jsonNull();
-	if (idx < 0 || idx >= v.arrVal.length) return jsonNull();
-	return v.arrVal[idx];
-}
-
-export function asString(this v: JsonValue): string {
-	return v.strVal;
-}
-
-export function asNumber(this v: JsonValue): number {
-	return v.numVal;
-}
-
-export function asBool(this v: JsonValue): boolean {
-	return v.boolVal;
-}
-
 export function isNull(this v: JsonValue): boolean {
 	return v.kind === JsonKind.Null;
-}
-
-export function len(this v: JsonValue): number {
-	if (v.kind === JsonKind.Array) return v.arrVal.length;
-	if (v.kind === JsonKind.Object) return v.objKeys.length;
-	if (v.kind === JsonKind.String) return v.strVal.length;
-	return 0;
 }
 
 // ===== Mutator Extension Methods =====

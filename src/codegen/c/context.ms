@@ -107,7 +107,7 @@ export function initLoc(kind: CLocKind, storage: CStorageLoc): CLoc {
 		storage,
 		snippet: "",
 		isIndirect: false,
-		locType: null as unknown as Type,
+		locType: null,
 	};
 }
 
@@ -359,7 +359,7 @@ export function typeRegistryLookup(reg: TypeRegistry, name: string): Type {
 	for (let i = 0; i < reg.entries.length; i += 1) {
 		if (reg.entries[i].name === name) return reg.entries[i].resolvedType;
 	}
-	return null as unknown as Type;
+	return null;
 }
 
 // ===== TypeCacheEntry — cached type mappings =====
@@ -526,7 +526,7 @@ export function createCGen(ctx: CheckerContext, modulePath: string): CGen {
 		checkerCtx: ctx,
 		modulePath,
 		labels: 0,
-		initProc: createProc("__init000", null as unknown as Type),
+		initProc: createProc("__init000", null),
 		aliveSet: createAliveSet(),
 		isTestBuild: false,
 		isHcr: false,
@@ -619,14 +619,14 @@ test "rdLoc indirect" {
 }
 
 test "create proc" {
-	const p = createProc("test_fn", null as unknown as Type);
+	const p = createProc("test_fn", null);
 	assert p.name === "test_fn";
 	assert p.labels === 0;
 	assert p.blocks.length === 1;
 }
 
 test "getTemp" {
-	const p = createProc("test_fn", null as unknown as Type);
+	const p = createProc("test_fn", null);
 	const t1 = getTemp(p, "int32_t");
 	assert t1.snippet === "T1_";
 	assert t1.kind === CLocKind.Temp;
@@ -637,7 +637,7 @@ test "getTemp" {
 }
 
 test "push and pop block" {
-	const p = createProc("test_fn", null as unknown as Type);
+	const p = createProc("test_fn", null);
 	pushBlock(p, true);
 	assert p.blocks.length === 2;
 	assert p.withinLoop === 1;
@@ -650,7 +650,7 @@ test "push and pop block" {
 }
 
 test "nested blocks" {
-	const p = createProc("test_fn", null as unknown as Type);
+	const p = createProc("test_fn", null);
 	emitStmts(p, "outer;\n");
 	pushBlock(p, false);
 	emitStmts(p, "inner;\n");

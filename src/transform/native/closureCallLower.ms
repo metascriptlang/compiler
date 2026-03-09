@@ -151,7 +151,7 @@ function parseAnnotationToFnType(ann: string): Type {
 		}
 		idx = idx + 1;
 	}
-	if (arrowIdx < 0) return null as unknown as Type;
+	if (arrowIdx < 0) return null;
 
 	const retStr = ann.slice(arrowIdx + 3, ann.length).trim();
 	const retType = retStrToType(retStr);
@@ -215,7 +215,7 @@ function buildCallSiteFnType(cd: CallExprData, returnType: Type): Type {
 	let i = 0;
 	while (i < cd.arguments.length) {
 		const argType = cd.arguments[i].nodeType;
-		paramTypes.push(argType !== null ? argType : null as unknown as Type);
+		paramTypes.push(argType !== null ? argType : null);
 		i = i + 1;
 	}
 	return createFunction(paramTypes, [], returnType !== null ? returnType : voidType());

@@ -222,7 +222,7 @@ test "enum → None" {
 
 test "null type input → None" {
 	const ctx = createTransformContext();
-	const info = classifyType(null as unknown as Type, ctx);
+	const info = classifyType(null, ctx);
 	assert info.rcKind === RcKind.None;
 }
 

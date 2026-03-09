@@ -278,6 +278,31 @@ static inline MS_BOOL msJsonAsBool(MsJsonValue* v) {
     return v->boolVal;
 }
 
+static inline int32_t msJsonAsInt(MsJsonValue* v) {
+    return (int32_t)msJsonAsNumber(v);
+}
+
+/* Accessors with default fallback */
+static inline msString msJsonAsStringDef(MsJsonValue* v, msString def) {
+    if (!v || v->kind != MsJsonKind_String) return def;
+    return v->strVal;
+}
+
+static inline double msJsonAsNumberDef(MsJsonValue* v, double def) {
+    if (!v || v->kind != MsJsonKind_Number) return def;
+    return v->numVal;
+}
+
+static inline MS_BOOL msJsonAsBoolDef(MsJsonValue* v, MS_BOOL def) {
+    if (!v || v->kind != MsJsonKind_Bool) return def;
+    return v->boolVal;
+}
+
+static inline int32_t msJsonAsIntDef(MsJsonValue* v, int32_t def) {
+    if (!v || v->kind != MsJsonKind_Number) return def;
+    return (int32_t)v->numVal;
+}
+
 static inline double msJsonLen(MsJsonValue* v) {
     if (!v) return 0;
     if (v->kind == MsJsonKind_Array) return (double)v->arr.len;
@@ -452,6 +477,11 @@ static void msJsonFree(MsJsonValue* v) {
 
 /* TypeInfo — no trace/destroy needed (msJsonFree handles tree cleanup) */
 msTypeInfo MsJsonValue_typeInfo = { "MsJsonValue", MS_FALSE, NULL, NULL };
+
+/* Alias: codegen emits "JsonValue" from the class name, runtime uses "MsJsonValue".
+   The _DEFINED guard suppresses the codegen's struct emission (codegen wraps in #ifndef). */
+typedef MsJsonValue JsonValue;
+#define JsonValue_DEFINED
 
 #ifdef __cplusplus
 }

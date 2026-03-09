@@ -326,7 +326,7 @@ export function createNode(kind: NodeKind, data: NodeData, token: Token): Node {
 	n.kind = kind;
 	n.data = data;
 	n.location = { line: token.line, column: token.column };
-	n.nodeType = null as unknown as Type;
+	n.nodeType = null;
 	n.resolvedSym = null as unknown as Symbol;
 	n.flags = 0;
 	n.comments = [];
@@ -338,7 +338,7 @@ export function createNodeAt(kind: NodeKind, data: NodeData, loc: SourceLocation
 	n.kind = kind;
 	n.data = data;
 	n.location = loc;
-	n.nodeType = null as unknown as Type;
+	n.nodeType = null;
 	n.resolvedSym = null as unknown as Symbol;
 	n.flags = 0;
 	n.comments = [];

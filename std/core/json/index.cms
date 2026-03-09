@@ -66,3 +66,16 @@ export function jsonObjectFromKV(keys: string[], vals: JsonValue[]): JsonValue {
 export function jsonObject(): JsonValue {
 	return new JsonValue(JsonKind.Object, false, 0, "", [], [], []);
 }
+
+// ===== JsonValue Accessors (extension methods → C runtime) =====
+
+extern function asString(this v: JsonValue): string from "msJsonAsString";
+extern function asNumber(this v: JsonValue): number from "msJsonAsNumber";
+extern function asBool(this v: JsonValue): boolean from "msJsonAsBool";
+extern function asInt(this v: JsonValue): int32 from "msJsonAsInt";
+extern function asString(this v: JsonValue, def: string): string from "msJsonAsStringDef";
+extern function asNumber(this v: JsonValue, def: number): number from "msJsonAsNumberDef";
+extern function asBool(this v: JsonValue, def: boolean): boolean from "msJsonAsBoolDef";
+extern function asInt(this v: JsonValue, def: int32): int32 from "msJsonAsIntDef";
+extern function at(this v: JsonValue, idx: number): JsonValue from "msJsonAt";
+extern function len(this v: JsonValue): number from "msJsonLen";
