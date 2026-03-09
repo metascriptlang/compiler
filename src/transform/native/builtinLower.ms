@@ -19,14 +19,15 @@ import {
 import { Type, TypeKind, isNumeric, createResult, createArray, createPrimitive, stringType, booleanType, numberType, unknownType, unwrapRef } from "../../checker/types";
 import { TransformContext, hasEmitted } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
+import { findExtension } from "../../checker/context";
 import { walkNode } from "../walker";
 import {
-	makeIdent, makeCall,
+	makeIdent, makeCall, makeString, makeBinary, makeMember,
 	makeObjectLiteral, makeBool, makeHiddenStdConv,
 	makeExprStmt,
 } from "../util";
 import { findCallTypeArg } from "../../parser/context";
-import { generateJsonParseC, generateJsonStringifyC, makeEmitNode } from "../../codegen/c/jsonEmit";
+import { generateJsonParseC, generateJsonStringifyC, generateJsonStringifyColoredC, makeEmitNode } from "../../codegen/c/jsonEmit";
 import { stmtCountAfter, firstStmtKindAfter, firstExprKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -123,6 +124,10 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 		return rewriteJsonStringify(node, ctx);
 	}
 
+	if (builtinKind === "Echo") {
+		return rewriteEcho(node, ctx);
+	}
+
 	return node;
 }
 
@@ -183,6 +188,124 @@ function rewriteResultToLiteral(node: Node, isOk: boolean, ctx: TransformContext
 	// V4: CRITICAL — preserve the monomorphized Result type from the call node
 	literal.nodeType = resType;
 	return literal;
+}
+
+// ===== Echo — @builtin("Echo") (Nim echo parity) =====
+// Rewrites console.log(arg1, arg2, ...) → msPrintln(toString(arg1) + " " + toString(arg2) + ...)
+// Each arg is coerced to string here. Primitives use direct calls, structs use JSON.stringify,
+// and stringOpLower handles any remaining coercion for + operators.
+
+function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): Node {
+	if (arg.nodeType === null) return arg;
+	const t = arg.nodeType;
+	// String: as-is
+	if (t.kind === TypeKind.String || arg.kind === NodeKind.StringLiteral) return arg;
+	// Number/int → msNumberToString
+	if (isNumeric(t)) {
+		const call = makeCall(makeIdent("msNumberToString", loc), [arg], loc);
+		call.nodeType = stringType();
+		return call;
+	}
+	// Boolean → msBoolToString
+	if (t.kind === TypeKind.Boolean) {
+		const call = makeCall(makeIdent("msBoolToString", loc), [arg], loc);
+		call.nodeType = stringType();
+		return call;
+	}
+	// Struct/Class → check toString() extension first, then fall back to JSON debug format
+	const inner = unwrapRef(t);
+	if (inner.kind === TypeKind.Struct && inner.typeName !== "") {
+		const typeName = inner.typeName;
+		// Priority 1: user-defined toString() extension method
+		if (ctx.checkerCtx !== null && typeName !== "JsonValue") {
+			const ext = findExtension(ctx.checkerCtx.extensionRegistry, typeName, "toString");
+			if (ext !== null && ext.sym !== null) {
+				if (ext.sym.nativeName !== "") {
+					// Extern toString → call native C function directly
+					const ident = makeIdent(ext.sym.nativeName, loc);
+					ident.resolvedSym = ext.sym;
+					const call = makeCall(ident, [arg], loc);
+					call.nodeType = stringType();
+					return call;
+				}
+				// Pure-MS toString → emit as method call, extensionMethodLower resolves it
+				const memberCall = makeCall(makeMember(arg, "toString", loc), [], loc);
+				memberCall.nodeType = stringType();
+				return memberCall;
+			}
+		}
+		// JsonValue → msJsonStringifyColored (no prefix, just colored fields)
+		if (typeName === "JsonValue") {
+			if (!hasEmitted(ctx, "__jsonInclude")) {
+				ctx.emittedHelpers.push("__jsonInclude");
+				ctx.pendingDecls.push(makeEmitNode("/*INCLUDESECTION*/#include \"core/json.h\"\n", loc));
+			}
+			const call = makeCall(makeIdent("msJsonStringifyColored", loc), [arg], loc);
+			call.nodeType = stringType();
+			return call;
+		}
+		// Named struct → __jsonDbg_T (colored debug format for console.log)
+		const structType = resolveJsonTargetType(typeName, ctx);
+		if (structType !== null) {
+			const isClass = t.kind === TypeKind.Ref;
+			const helperName = "__jsonDbg_" + typeName;
+			if (!hasEmitted(ctx, helperName)) {
+				const emitNode = generateJsonStringifyColoredC(helperName, typeName, structType, isClass, loc);
+				if (emitNode !== null) {
+					ctx.emittedHelpers.push(helperName);
+					ctx.pendingDecls.push(emitNode);
+				}
+			}
+			const call = makeCall(makeIdent(helperName, loc), [arg], loc);
+			call.nodeType = stringType();
+			return call;
+		}
+	}
+	// Enum → msIntToString (enums are integers in C)
+	if (t.kind === TypeKind.Enum) {
+		const call = makeCall(makeIdent("msIntToString", loc), [arg], loc);
+		call.nodeType = stringType();
+		return call;
+	}
+	// Fallback: emit type name as placeholder string (safe — no C compile error)
+	const typeName = t.typeName !== null && t.typeName !== "" ? t.typeName : "object";
+	const placeholder = makeString("<" + typeName + ">", loc);
+	placeholder.nodeType = stringType();
+	return placeholder;
+}
+
+function rewriteEcho(node: Node, ctx: TransformContext): Node {
+	const cd = node.data as CallExprData;
+	const loc = node.location;
+	// No args → msPrintln("")
+	if (cd.arguments.length === 0) {
+		return makeCall(makeIdent("msPrintln", loc), [makeString("", loc)], loc);
+	}
+	// Coerce all args to string
+	const coerced: Node[] = [];
+	let ci = 0;
+	while (ci < cd.arguments.length) {
+		coerced.push(echoCoerceArg(cd.arguments[ci], loc, ctx));
+		ci = ci + 1;
+	}
+	// Single arg → msPrintln(coerced)
+	if (coerced.length === 1) {
+		return makeCall(makeIdent("msPrintln", loc), [coerced[0]], loc);
+	}
+	// Multi-arg: build "coerced[0] + " " + coerced[1] + ..." chain
+	let result = coerced[0];
+	let i = 1;
+	while (i < coerced.length) {
+		const space = makeString(" ", loc);
+		space.nodeType = stringType();
+		result = makeBinary(result, "+", space, loc);
+		result.nodeType = stringType();
+		result = makeBinary(result, "+", coerced[i], loc);
+		result.nodeType = stringType();
+		i = i + 1;
+	}
+	result.nodeType = stringType();
+	return makeCall(makeIdent("msPrintln", loc), [result], loc);
 }
 
 // ===== Typed JSON — @builtin("JsonParse") / @builtin("JsonStringify") =====

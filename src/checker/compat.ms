@@ -673,14 +673,14 @@ test "unknown ok compatible" {
 }
 
 test "same enum name" {
-	const e1 = createEnum("Color", ["Red", "Green"]);
-	const e2 = createEnum("Color", ["Red", "Green"]);
+	const e1 = createEnum("Color", ["Red", "Green"], null as unknown as number[]);
+	const e2 = createEnum("Color", ["Red", "Green"], null as unknown as number[]);
 	assert isAssignable(e1, e2);
 }
 
 test "different enum name" {
-	const e1 = createEnum("Color", ["Red"]);
-	const e2 = createEnum("Shape", ["Circle"]);
+	const e1 = createEnum("Color", ["Red"], null as unknown as number[]);
+	const e2 = createEnum("Shape", ["Circle"], null as unknown as number[]);
 	assert !isAssignable(e1, e2);
 }
 
@@ -748,14 +748,14 @@ test "different distinct name" {
 }
 
 test "enum exact" {
-	const e1 = createEnum("Color", ["Red"]);
-	const e2 = createEnum("Color", ["Red"]);
+	const e1 = createEnum("Color", ["Red"], null as unknown as number[]);
+	const e2 = createEnum("Color", ["Red"], null as unknown as number[]);
 	assert typeRelation(e1, e2) === TypeRelation.Exact;
 }
 
 test "enum mismatch" {
-	const e1 = createEnum("Color", ["Red"]);
-	const e2 = createEnum("Shape", ["Circle"]);
+	const e1 = createEnum("Color", ["Red"], null as unknown as number[]);
+	const e2 = createEnum("Shape", ["Circle"], null as unknown as number[]);
 	assert typeRelation(e1, e2) === TypeRelation.None;
 }
 

@@ -195,33 +195,21 @@ typedef msMap msSet;
 /* Bounds check failure — prints error and exits */
 _Noreturn void msRaiseIndexError(int64_t idx, int64_t len);
 
-/* ===== Bounds-Checked Array Access Macros ===== */
-/* GCC statement expressions returning lvalues via dereferenced-pointer trick.
-   Both reads (x = msNumberArrayAccess(a, i)) and writes (msNumberArrayAccess(a, i) = x) work. */
+/* ===== Bounds-Checked Array Access ===== */
+/* GCC statement expression returning lvalue via dereferenced-pointer trick.
+   Works with any MS_ARRAY(T) typedef. Supports both reads and writes. */
 
-#define msNumberArrayAccess(a, i) (*({ \
+#define msArrayAccess(a, i) (*({ \
 	int32_t __idx = (i); \
 	if ((uint32_t)__idx >= (uint32_t)(a).len) msRaiseIndexError(__idx, (a).len); \
 	&((a).p->data[__idx]); \
 }))
 
-#define msStringArrayAccess(a, i) (*({ \
-	int32_t __idx = (i); \
-	if ((uint32_t)__idx >= (uint32_t)(a).len) msRaiseIndexError(__idx, (a).len); \
-	&((a).p->data[__idx]); \
-}))
-
-#define msRefArrayAccess(a, i) (*({ \
-	int32_t __idx = (i); \
-	if ((uint32_t)__idx >= (uint32_t)(a).len) msRaiseIndexError(__idx, (a).len); \
-	&((a).p->data[__idx]); \
-}))
-
-#define msUint8ArrayAccess(a, i) (*({ \
-	int32_t __idx = (i); \
-	if ((uint32_t)__idx >= (uint32_t)(a).len) msRaiseIndexError(__idx, (a).len); \
-	&((a).p->data[__idx]); \
-}))
+/* Aliases for backward compatibility — all identical to msArrayAccess */
+#define msNumberArrayAccess msArrayAccess
+#define msStringArrayAccess msArrayAccess
+#define msRefArrayAccess    msArrayAccess
+#define msUint8ArrayAccess  msArrayAccess
 
 #define msSizedArrayAccess(a, i, n) (*({ \
 	int32_t __idx = (i); \

@@ -26,3 +26,5 @@ import "./classGeneric";
 import "./tryResultPropagation";
 import "./nullCheckValueType";
 import "./nullValueType";
+import "./enumValues";
+import "./matchValueType";

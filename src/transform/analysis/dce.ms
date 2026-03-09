@@ -109,7 +109,9 @@ function collectIdentifiers(node: Node, refs: NameSet): void {
 function isEliminable(node: Node): boolean {
 	return match (node.kind) {
 		NodeKind.FunctionDecl | NodeKind.ClassDecl | NodeKind.EnumDecl
-			| NodeKind.InterfaceDecl | NodeKind.TypeAliasDecl => true,
+			| NodeKind.TypeAliasDecl => true,
+		// InterfaceDecl excluded: destructorLifting needs them to generate lifecycle hooks.
+		// Interfaces with managed fields (string, array, etc.) require _destroy/_copy hooks.
 		_ => false,
 	};
 }

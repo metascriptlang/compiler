@@ -17,7 +17,7 @@ import {
 	unknownType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType,
 	createPrimitive, createArray, createFunction, createClosureType, createStruct,
 	createResult, createTypeRef, createUnion, createGenericParam, createDistinct,
-	createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType,
+	createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, createMap, createSet,
 	setMinArity, typeNameOf, assignType, isInterfaceType, unwrapRef,
 } from "./types";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, lookupSymbol, lookupLocal, defineSymbol, makeSymbol, openScope, closeScope, SymbolState, hasFlag, setFlag, SymbolFlag } from "./symbol";
@@ -202,33 +202,27 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 			return createVar(resolveAnnotation(args[0], ctx));
 		}
 		if (baseName === "Map" && args.length === 2) {
-			const t = createPrimitive(TypeKind.Map);
-			t.typeReturn = resolveAnnotation(args[0], ctx);
-			t.typeExtra = resolveAnnotation(args[1], ctx);
-			// String and number keys supported; others rejected
-			if (t.typeReturn.kind !== TypeKind.String && t.typeReturn.kind !== TypeKind.Number && t.typeReturn.kind !== TypeKind.Unknown) {
-				addError(ctx, "Only string or number keys are supported for Map in the C backend. Got: " + typeNameOf(t.typeReturn), 0, 0);
+			const keyType = resolveAnnotation(args[0], ctx);
+			const valType = resolveAnnotation(args[1], ctx);
+			if (keyType.kind !== TypeKind.String && keyType.kind !== TypeKind.Number && keyType.kind !== TypeKind.Unknown) {
+				addError(ctx, "Only string or number keys are supported for Map in the C backend. Got: " + typeNameOf(keyType), 0, 0);
 			}
-			return t;
+			return createMap(keyType, valType);
 		}
 		if (baseName === "Set" && args.length === 1) {
-			const t = createPrimitive(TypeKind.Set);
-			t.typeReturn = resolveAnnotation(args[0], ctx);
-			// String and number elements supported; others rejected
-			if (t.typeReturn.kind !== TypeKind.String && t.typeReturn.kind !== TypeKind.Number && t.typeReturn.kind !== TypeKind.Unknown) {
-				addError(ctx, "Only string or number elements are supported for Set in the C backend. Got: " + typeNameOf(t.typeReturn), 0, 0);
+			const elemType = resolveAnnotation(args[0], ctx);
+			if (elemType.kind !== TypeKind.String && elemType.kind !== TypeKind.Number && elemType.kind !== TypeKind.Unknown) {
+				addError(ctx, "Only string or number elements are supported for Set in the C backend. Got: " + typeNameOf(elemType), 0, 0);
 			}
-			return t;
+			return createSet(elemType);
 		}
 		if (baseName === "Record" && args.length === 2) {
-			// Record<K,V> is TypeScript utility type — desugar to Map<K,V>
-			const t = createPrimitive(TypeKind.Map);
-			t.typeReturn = resolveAnnotation(args[0], ctx);
-			t.typeExtra = resolveAnnotation(args[1], ctx);
-			if (t.typeReturn.kind !== TypeKind.String && t.typeReturn.kind !== TypeKind.Number && t.typeReturn.kind !== TypeKind.Unknown) {
-				addError(ctx, "Only string or number keys are supported for Map in the C backend. Got: " + typeNameOf(t.typeReturn), 0, 0);
+			const keyType = resolveAnnotation(args[0], ctx);
+			const valType = resolveAnnotation(args[1], ctx);
+			if (keyType.kind !== TypeKind.String && keyType.kind !== TypeKind.Number && keyType.kind !== TypeKind.Unknown) {
+				addError(ctx, "Only string or number keys are supported for Map in the C backend. Got: " + typeNameOf(keyType), 0, 0);
 			}
-			return t;
+			return createMap(keyType, valType);
 		}
 		// Generic instance: check if this is a generic interface/class
 		const genericParams = getGenericDecl(baseName);

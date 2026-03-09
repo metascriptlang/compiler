@@ -17,7 +17,7 @@ import { RaiserContext, createContext as createRaiserContext, load as raiserLoad
 import { generateCModule, genProjectDispatcher } from "../codegen/c/index";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
-import { AliveSet, createAliveSet } from "../codegen/c/context";
+import { AliveSet } from "../codegen/c/context";
 import { computeAliveSet } from "../checker/reachability";
 import { getSimpleTypeDesc } from "../codegen/c/types";
 import { setTargetSizes } from "../checker/types";
@@ -213,28 +213,11 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 	return graph;
 }
 
-// Global alive set for DCE — computed by computeProjectAliveSet, passed to each module's CGen.
-let protoAliveSet: AliveSet = createAliveSet();
-
-// Lightweight pass: parse + check + monomorphize all modules, then compute global DCE alive set.
-// No type emission or proto header — each module is self-contained (reference parity).
-function computeProjectAliveSet(graph: ModuleGraph, entryPath: string, isTest: boolean): AliveSet {
-	const monoed_programs: Node[] = [];
-	const monoed_paths: string[] = [];
-	for (const modPath of graph.loadOrder) {
-		const mod = findModule(graph, modPath);
-		if (mod === null) continue;
-		if (mod.isCHeader) continue;
-		const pr = parseSource(mod.source);
-		if (!pr.ok) continue;
-		const ctx = checkProgramWithRegistry(pr.value, graphRegistry, graph, mod, graphPreludeCtx);
-		exitOnFatalCheckerErrors(ctx, modPath, mod.source);
-		ctx.errors = [];
-		const monoed = monomorphizeProgram(pr.value, ctx);
-		monoed_programs.push(monoed);
-		monoed_paths.push(modPath);
-	}
-	return computeAliveSet(monoed_programs, monoed_paths, entryPath, isTest);
+// Stored result of Phase A (transform all modules) for Phase B (DCE) and Phase C (codegen).
+interface ProcessedModule {
+	program: Node;
+	ctx: CheckerContext;
+	modPath: string;
 }
 
 // Counter for unique @compile .o filenames across modules.
@@ -412,16 +395,14 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		return;
 	}
 
-	// Pass 1: Compute global DCE alive set (lightweight parse+check+mono pass)
-	if (opts.verbose) verboseLog("computing alive set for DCE");
-	protoAliveSet = computeProjectAliveSet(graph, entryPath, false);
-
-	// Pass 2: Full pipeline + codegen + per-module compile to .o
+	// Phase A: Parse → Check → Mono → Transform → Analyze all modules, store results
+	const processed: ProcessedModule[] = [];
+	const transformedPrograms: Node[] = [];
+	const transformedPaths: string[] = [];
 	let hasUserMain = false;
 	let mainRetType = "void";
 	let allFlags = cliCompileFlags(opts);
 	let oFiles = "";
-	let compiled = 0;
 
 	// Auto-compile companion .c files for .h imports
 	const companionObjs = compileHeaderCompanions(graph, allFlags, opts.mode, opts.ccCompiler, opts.verbose);
@@ -431,27 +412,22 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		const modPath = graph.loadOrder[i];
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
-		// Skip C header modules — prototypes come from @include, symbols from @link
 		if (mod.isCHeader) continue;
 
-		if (opts.verbose) verboseLog("compiling " + modPath);
+		if (opts.verbose) verboseLog("transforming " + modPath);
 
-		// Parse
 		const pr = parseSource(mod.source);
 		if (!pr.ok) {
 			console.log(error("parse error") + " [" + modPath + "]: " + pr.error);
 			exit(1);
 		}
 
-		// Check (cross-module registry for proper import type resolution)
 		const ctx = checkProgramWithRegistry(pr.value, graphRegistry, graph, mod, graphPreludeCtx);
 		exitOnFatalCheckerErrors(ctx, modPath, mod.source);
 		ctx.errors = [];
 
-		// Monomorphize
 		const monoed = monomorphizeProgram(pr.value, ctx);
 
-		// Validate metadata (warn but continue — some builtins lack resolvedSym)
 		validateTypedAST(ctx, monoed);
 		if (hasErrors(ctx)) {
 			for (const e of ctx.errors) {
@@ -465,34 +441,21 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 			ctx.errors = [];
 		}
 
-		// Evaluate @comptime blocks before transforms
 		const comptimeResolved = evaluateComptimeBlocks(monoed);
-
-		// Transform (C target)
 		const transformed = transformProgram(comptimeResolved, ctx, false);
-
-		// Type refinement + native transform (C-specific lowering)
 		const nativeCtx = createTransformContextWithChecker(ctx);
 		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
-
-		// HCR state lifting (--hcr only)
 		const hcrResult = opts.isHcr ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
-
-		// Analyze (DRC injection)
 		const analyzed = analyzeProgram(hcrResult, ctx);
-
 		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
 
-		// Codegen — each module is self-contained (reference parity, no shared proto header)
-		const cCode = generateCModule(nativeLowered, ctx, modPath, protoAliveSet, false, opts.isHcr);
+		processed.push({ program: nativeLowered, ctx, modPath });
+		transformedPrograms.push(nativeLowered);
+		transformedPaths.push(modPath);
 
 		// Accumulate compiler flags from @passC/@passL directives
 		allFlags = appendFlag(allFlags, ctx.compilerFlags);
-
-		// Process @compile("foo.c") directives — compile extra C sources
-		const compileObjs = processCompileDirectives(ctx.compileDirectives, dirName(modPath), allFlags, opts.mode, opts.ccCompiler, opts.verbose);
-		oFiles = appendFlag(oFiles, compileObjs);
 
 		// Check for user main() in entry module
 		if (modPath === entryPath && ctx !== null && ctx.table !== null) {
@@ -503,30 +466,43 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 				if (ret !== "") mainRetType = ret;
 			}
 		}
+	}
+
+	// Phase B: Compute DCE alive set on post-transform ASTs (Nim-aligned)
+	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
+	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false);
+
+	// Phase C: Codegen + compile each module
+	let compiled = 0;
+	for (let i = 0; i < processed.length; i += 1) {
+		const p = processed[i];
+		if (opts.verbose) verboseLog("codegen " + p.modPath);
+
+		const cCode = generateCModule(p.program, p.ctx, p.modPath, aliveSet, false, opts.isHcr);
+
+		// Process @compile("foo.c") directives
+		const compileObjs = processCompileDirectives(p.ctx.compileDirectives, dirName(p.modPath), allFlags, opts.mode, opts.ccCompiler, opts.verbose);
+		oFiles = appendFlag(oFiles, compileObjs);
 
 		if (opts.emitC) {
-			// --emit=c: write .c files to output dir, skip compilation
 			const emitDir = outDirForMode(opts.mode);
 			ensureDir(emitDir);
-			const relPath = stripBase(modPath, dirName(entryPath));
+			const relPath = stripBase(p.modPath, dirName(entryPath));
 			const emitPath = emitDir + "/" + replaceExt(relPath, ".c");
 			ensureDir(dirName(emitPath));
 			writeOutput(emitPath, cCode);
 			console.log(green("  Wrote") + " " + bold(emitPath));
 		} else {
-			// Normal: write to /tmp and compile to .o
 			const cFile = "/tmp/_msc_mod_" + compiled + ".c";
 			const oFile = "/tmp/_msc_mod_" + compiled + ".o";
 			writeOutput(cFile, cCode);
 			if (opts.verbose) verboseLog("  cc " + cFile + " → " + oFile);
-			// Add module's source directory + std/ + /tmp as include paths
-			let modFlags = appendFlag(allFlags, "-iquote" + dirName(modPath));
+			let modFlags = appendFlag(allFlags, "-iquote" + dirName(p.modPath));
 			modFlags = appendFlag(modFlags, "-iquotestd");
 			modFlags = appendFlag(modFlags, "-iquote/tmp");
 			const ccCode = compileCFile(cFile, oFile, modFlags, opts.mode, opts.ccCompiler);
 			if (ccCode !== 0) {
-				console.log(error("error") + ": compile failed for " + modPath + " " + dim("(exit " + ccCode + ")"));
-				// Continue to next module — collect all errors
+				console.log(error("error") + ": compile failed for " + p.modPath + " " + dim("(exit " + ccCode + ")"));
 			} else {
 				oFiles = appendFlag(oFiles, oFile);
 			}
@@ -584,14 +560,12 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	const config = buildResolverConfig(Target.C, defaultResolveSection());
 	const graph = loadAndCheckGraph(filePath, opts.verbose, config);
 
-	// Pass 1: Compute global DCE alive set (lightweight parse+check+mono pass)
-	if (opts.verbose) verboseLog("computing alive set for DCE");
-	protoAliveSet = computeProjectAliveSet(graph, filePath, true);
-
-	// Pass 2: Full pipeline + codegen + compile each module
+	// Phase A: Parse → Check → Mono → Transform → Analyze all modules
+	const processed: ProcessedModule[] = [];
+	const transformedPrograms: Node[] = [];
+	const transformedPaths: string[] = [];
 	let allFlags = cliCompileFlags(opts);
 	let oFiles = "";
-	let compiled = 0;
 
 	// Auto-compile companion .c files for .h imports
 	const companionObjs = compileHeaderCompanions(graph, allFlags, opts.mode, opts.ccCompiler, opts.verbose);
@@ -601,10 +575,9 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const modPath = graph.loadOrder[i];
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
-		// Skip C header modules — prototypes come from @include, symbols from @link
 		if (mod.isCHeader) continue;
 
-		if (opts.verbose) verboseLog("compiling " + modPath);
+		if (opts.verbose) verboseLog("transforming " + modPath);
 
 		const pr = parseSource(mod.source);
 		if (!pr.ok) {
@@ -617,8 +590,6 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		ctx.errors = [];
 
 		const monoed = monomorphizeProgram(pr.value, ctx);
-
-		// Validate metadata
 		validateTypedAST(ctx, monoed);
 		ctx.errors = [];
 
@@ -630,12 +601,27 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const hcrResult = opts.isHcr ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
 		const analyzed = analyzeProgram(hcrResult, ctx);
 		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
-		const cCode = generateCModule(nativeLowered, ctx, modPath, protoAliveSet, true, opts.isHcr);
+
+		processed.push({ program: nativeLowered, ctx, modPath });
+		transformedPrograms.push(nativeLowered);
+		transformedPaths.push(modPath);
 
 		allFlags = appendFlag(allFlags, ctx.compilerFlags);
+	}
 
-		// Process @compile("foo.c") directives
-		const compileObjs = processCompileDirectives(ctx.compileDirectives, dirName(modPath), allFlags, opts.mode, opts.ccCompiler, opts.verbose);
+	// Phase B: Compute DCE alive set on post-transform ASTs (Nim-aligned)
+	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
+	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, filePath, true);
+
+	// Phase C: Codegen + compile each module
+	let compiled = 0;
+	for (let i = 0; i < processed.length; i += 1) {
+		const p = processed[i];
+		if (opts.verbose) verboseLog("codegen " + p.modPath);
+
+		const cCode = generateCModule(p.program, p.ctx, p.modPath, aliveSet, true, opts.isHcr);
+
+		const compileObjs = processCompileDirectives(p.ctx.compileDirectives, dirName(p.modPath), allFlags, opts.mode, opts.ccCompiler, opts.verbose);
 		oFiles = appendFlag(oFiles, compileObjs);
 
 		const cFile = "/tmp/_msc_test_" + compiled + ".c";
@@ -644,7 +630,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		let testModFlags = appendFlag(allFlags, "-iquote/tmp");
 		const ccCode = compileCFile(cFile, oFile, testModFlags, opts.mode, opts.ccCompiler);
 		if (ccCode !== 0) {
-			console.log(error("error") + ": compile failed for " + modPath + " " + dim("(exit " + ccCode + ")"));
+			console.log(error("error") + ": compile failed for " + p.modPath + " " + dim("(exit " + ccCode + ")"));
 			exit(1);
 		}
 		oFiles = appendFlag(oFiles, oFile);

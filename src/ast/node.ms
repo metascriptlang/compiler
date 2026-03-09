@@ -195,7 +195,7 @@ export type NodeData =
 	| { importNames: string[], importAliases: string[], importSource: string }  // ImportDecl
 	| { exportedDecl: Node }                                       // ExportDecl
 	| { aliasName: string, aliasType: string, aliasIsDistinct: boolean, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[] }               // TypeAliasDecl
-	| { enumName: string, enumMembers: string[] }                  // EnumDecl
+	| { enumName: string, enumMembers: string[], enumValues: number[] } // EnumDecl
 	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[] } // InterfaceDecl
 	| { className: string, classExtends: string, classBody: Node[] } // ClassDecl
 	| { propName: string, propType: string, propIsStatic: boolean }                 // PropertyDecl
@@ -299,7 +299,7 @@ export type MatchStmtData = { matchStmtDisc: Node, matchStmtCases: Node[] };
 export type ImportDeclData = { importNames: string[], importAliases: string[], importSource: string };
 export type ExportDeclData = { exportedDecl: Node };
 export type TypeAliasDeclData = { aliasName: string, aliasType: string, aliasIsDistinct: boolean, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[] };
-export type EnumDeclData = { enumName: string, enumMembers: string[] };
+export type EnumDeclData = { enumName: string, enumMembers: string[], enumValues: number[] };
 export type InterfaceDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[] };
 export type ClassDeclData = { className: string, classExtends: string, classBody: Node[] };
 export type PropertyDeclData = { propName: string, propType: string, propIsStatic: boolean };
@@ -365,6 +365,14 @@ export function nodeCacheGet(key: number): Node {
 }
 
 export function nodeCacheStore(key: number, node: Node): void {
+	let i = 0;
+	while (i < nodeCache.length) {
+		if (nodeCache[i].key === key) {
+			nodeCache[i].node = node;
+			return;
+		}
+		i = i + 1;
+	}
 	nodeCache.push({ key, node });
 }
 

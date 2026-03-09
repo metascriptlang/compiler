@@ -144,7 +144,7 @@ function coercePartToString(node: Node, loc: SourceLocation): Node {
 			return makeCall(makeIdent("msNumberToString", loc), [node], loc);
 		}
 		if (node.nodeType.kind === TypeKind.Boolean) {
-			return makeCall(makeIdent("msNumberToString", loc), [node], loc);
+			return makeCall(makeIdent("msBoolToString", loc), [node], loc);
 		}
 	}
 	if (node.kind === NodeKind.NumberLiteral) {

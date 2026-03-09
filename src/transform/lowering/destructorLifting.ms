@@ -28,7 +28,7 @@ import {
 } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createTransformContextWithChecker, freshTemp } from "../context";
 import { makeIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
-import { Type, TypeKind, isPrimitiveKind, AttachedOp, setAttachedOp, unwrapRef, createArray, createPtr, createRef, createPrimitive, stringType, getTypeSize } from "../../checker/types";
+import { Type, TypeKind, isPrimitiveKind, AttachedOp, setAttachedOp, unwrapRef, createArray, createPtr, createRef, createVar, createPrimitive, stringType, getTypeSize } from "../../checker/types";
 import { lookupSymbol, SymbolKind } from "../../checker/symbol";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput } from "../testUtil";
@@ -633,9 +633,19 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 		_ => "src",
 	};
 
-	// reference parity: no self-assignment check for simple objects (reference destructor lifting:311).
-	// Reference only checks for case objects (which MetaScript doesn't have).
-	// Field-by-field copy is self-assignment safe because each field's =copy handles it.
+	// Self-assignment guard for binary hooks (copy, sink).
+	// Required because msStringIncref is a copy macro that modifies (*src).field in place —
+	// field-by-field copy is NOT self-assignment safe. Without this, Person_copy(&p, &p) corrupts strings.
+	// Reference: liftdestructors.nim:278-284 (guards case objects; we guard all — justified by destructive incref).
+	// HiddenAddr cancels codegen auto-deref: &(*dest) == &(*src) → pointer comparison in C.
+	if (!isUnary && !isTrace) {
+		buf.push(makeIf(
+			makeBinary(makeHiddenAddr(makeIdent(p1, loc), loc), "===", makeHiddenAddr(makeIdent(p2, loc), loc), loc),
+			makeBlock([makeReturn(null as unknown as Node, loc)], loc),
+			null as unknown as Node,
+			loc
+		));
+	}
 
 	// User-defined hook dispatch (Reference considerUserDefinedOp)
 	if (hasUserDefinedHook(typeName, hook, lctx)) {
@@ -696,10 +706,11 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 	} else {
 		fnNode = makeFnDecl(typeName + suffix, [p1, p2], [typeName, typeName], makeBlock(buf, loc), "", "void", loc);
 	}
-	// Replace TypeReference params with actual type so markPointerParams sees Union/Object correctly.
-	// For class types, use classType (Ref<Struct>) so params are always pointers (Doc*).
-	// For value types, use objType (Struct) — ccgIntroducedPtr decides pointer based on size.
-	const paramType = classType !== null ? classType : objType;
+	// Replace TypeReference params with actual type.
+	// For class types, use classType (Ref<Struct>) — already a pointer.
+	// For value types, wrap in Var (= pointer) — Nim parity: =destroy(x: var T).
+	// DRC hooks always take pointer params, regardless of ccgIntroducedPtr size threshold.
+	const paramType = classType !== null ? classType : createVar(objType);
 	if (fnNode.nodeType !== null && fnNode.nodeType.typeChildren !== null) {
 		for (let pi = 0; pi < fnNode.nodeType.typeChildren.length; pi += 1) {
 			if (fnNode.nodeType.typeChildren[pi].kind === TypeKind.TypeReference) {

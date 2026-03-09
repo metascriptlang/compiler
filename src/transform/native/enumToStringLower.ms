@@ -42,7 +42,7 @@ function makeEnumToString(enumName: string, members: string[], loc: SourceLocati
 	const body = makeBlock([switchStmt], loc);
 	const fn = makeFnDecl(enumName + "_toString", ["v"], ["int32"], body, "", "string", loc);
 	// Override nodeType with proper enum param type
-	fn.nodeType = createFunction([createEnum(enumName, members)], ["v"], stringType());
+	fn.nodeType = createFunction([createEnum(enumName, members, null as unknown as number[])], ["v"], stringType());
 	return fn;
 }
 

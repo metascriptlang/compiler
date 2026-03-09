@@ -208,10 +208,12 @@ msString msStringConcatMany(int64_t count, ...);
 /* Set character at index (mutating) — requires prior msStringPrepareMutation */
 void msStringSetChar(msString* s, int64_t idx, msString ch);
 
-/* Number to string */
+/* Number/bool to string */
 msString msIntToString(int64_t value);
 msString msNumberToString(double value);
+msString msBoolToString(int value);
 #define msIntToStr msIntToString
+#define msBoolToStr msBoolToString
 
 /* ===== Splitting & Joining ===== */
 

@@ -143,10 +143,13 @@ function rewriteArrayAccess(node: Node): Node {
 // Determine macro name from array element type
 function getArrayMacroName(elemType: Type): string {
 	if (elemType === null) return "msRefArrayAccess";
-	if (elemType.kind === TypeKind.Uint8) return "msUint8ArrayAccess";
-	if (isNumeric(elemType)) return "msNumberArrayAccess";
-	if (elemType.kind === TypeKind.String) return "msStringArrayAccess";
-	return "msRefArrayAccess";
+	if (elemType.kind === TypeKind.Uint8) return "msArrayAccess";
+	if (isNumeric(elemType)) return "msArrayAccess";
+	if (elemType.kind === TypeKind.String) return "msArrayAccess";
+	// Pointer element types (classes, refs) use msRefArray — void* indirection
+	if (elemType.kind === TypeKind.Ref || elemType.kind === TypeKind.Ptr) return "msRefArrayAccess";
+	// Value-type struct elements use per-type array typedefs
+	return "msArrayAccess";
 }
 
 // ===== Property Remapping =====

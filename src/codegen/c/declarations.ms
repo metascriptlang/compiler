@@ -45,8 +45,8 @@ function isDeclAlive(g: CGen, node: Node): boolean {
 	if (g.aliveSet.entries.length === 0) return true;
 	const d = node.data as FunctionDeclData;
 	const name = d.fnName;
-	// Compiler-generated functions are always alive — produced by transforms
-	// after reachability analysis runs on pre-transform ASTs.
+	// Compiler-generated functions: always alive.
+	// These use synthetic identifiers without resolvedSym, so the reachability walker can't trace them.
 	// Prefixes: $lifted_, $Env_ (lambda lifting), =copy/=dup (operators),
 	//           __ (builtinLower: __jsonParse_*, __jsonStringify_*)
 	// Suffixes: _destroy, _trace, _copy, _sink, _wasMoved, _dup (destructorLifting)
@@ -348,11 +348,12 @@ function genEnumDecl(g: CGen, node: Node): void {
 	// Register in type cache to prevent genEnumType from re-emitting
 	typeCacheSet(g.typeCache, key, name);
 
-	// Emit as typedef + #define constants
+	// Emit as typedef + #define constants (use explicit values if available)
 	const types = sec(g, CSection.Types);
 	addLine(types, "typedef int32_t " + name + ";");
 	for (let i = 0; i < d.enumMembers.length; i += 1) {
-		addLine(types, "#define " + name + "_" + d.enumMembers[i] + " (((" + name + ")" + i + "))");
+		const val = (d.enumValues !== null && i < d.enumValues.length) ? d.enumValues[i] : i;
+		addLine(types, "#define " + name + "_" + d.enumMembers[i] + " (((" + name + ")" + val.toString() + "))");
 	}
 	addNewline(types);
 }

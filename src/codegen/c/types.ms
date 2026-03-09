@@ -599,10 +599,14 @@ function genEnumType(g: CGen, t: Type): string {
 	// Emit: typedef int32_t EnumName;
 	addLine(sec(g, CSection.Types), "typedef int32_t " + name + ";");
 
-	// Emit enum constants
+	// Emit enum constants (use explicit values from typeChildren if available)
 	for (let i = 0; i < t.typeNames.length; i += 1) {
 		const memberName = name + "_" + mangle(t.typeNames[i]);
-		addLine(sec(g, CSection.Types), "#define " + memberName + " " + i);
+		let val = i;
+		if (t.typeChildren !== null && i < t.typeChildren.length && t.typeChildren[i] !== null) {
+			val = t.typeChildren[i].typeFlags as number;
+		}
+		addLine(sec(g, CSection.Types), "#define " + memberName + " (((" + name + ")" + val.toString() + "))");
 	}
 	addNewline(sec(g, CSection.Types));
 
@@ -946,27 +950,40 @@ function closureRetTypeToC(g: CGen, t: Type): string {
 // withEnv=true appends void* for the env parameter (full closure call).
 // Standard reference parity: environment is the LAST parameter in closure calls.
 // ARM64 requires non-variadic casts — variadic calling convention differs.
-function genClosureCast(g: CGen, t: Type, withEnv: boolean): string {
-	const retC = closureRetTypeToC(g, t);
+// nrvoType: if non-empty, return type becomes void and nrvoType* is prepended as first param.
+function genClosureCast(g: CGen, t: Type, withEnv: boolean, nrvoType: string): string {
+	let retC = "";
+	if (nrvoType !== "") {
+		retC = "void";
+	} else {
+		retC = closureRetTypeToC(g, t);
+	}
 	let params = "";
+	// NRVO: first param is the hidden result pointer
+	if (nrvoType !== "") {
+		params = nrvoType + "*";
+	}
 	if (t !== null && t.kind === TypeKind.Function && t.typeChildren.length > 0) {
 		let i = 0;
 		while (i < t.typeChildren.length) {
-			if (i > 0) params = params + ", ";
+			if (params !== "") params = params + ", ";
 			params = params + closureParamTypeToC(g, t.typeChildren[i]);
 			i = i + 1;
 		}
 		if (withEnv) params = params + ", void*";
 	} else if (withEnv) {
-		params = "void*";
-	} else {
+		if (params !== "") params = params + ", ";
+		params = params + "void*";
+	} else if (params === "") {
 		params = "void";
 	}
 	return retC + "(*)" + "(" + params + ")";
 }
 
-export function genClHalfCast(g: CGen, t: Type): string { return genClosureCast(g, t, false); }
-export function genClFullCast(g: CGen, t: Type): string { return genClosureCast(g, t, true); }
+export function genClHalfCast(g: CGen, t: Type): string { return genClosureCast(g, t, false, ""); }
+export function genClFullCast(g: CGen, t: Type): string { return genClosureCast(g, t, true, ""); }
+export function genClHalfCastNrvo(g: CGen, t: Type, nrvoType: string): string { return genClosureCast(g, t, false, nrvoType); }
+export function genClFullCastNrvo(g: CGen, t: Type, nrvoType: string): string { return genClosureCast(g, t, true, nrvoType); }
 
 // ===== Result Type Generation =====
 
@@ -1044,7 +1061,7 @@ test "primitive keys" {
 	assert typeKey(createPrimitive(TypeKind.Void)) === "void";
 }
 
-test "enum key" { assert typeKey(createEnum("Color", ["Red", "Green"])) === "enum:Color"; }
+test "enum key" { assert typeKey(createEnum("Color", ["Red", "Green"], null as unknown as number[])) === "enum:Color"; }
 
 test "object key" { assert typeKey(createStruct("Foo", [], [], true)) === "object:Foo"; }
 
@@ -1059,7 +1076,7 @@ test "primitives" {
 }
 
 test "non-primitive returns empty" {
-	assert getSimpleTypeDesc(createEnum("X", [])) === "";
+	assert getSimpleTypeDesc(createEnum("X", [], null as unknown as number[])) === "";
 	assert getSimpleTypeDesc(createStruct("Y", [], [], true)) === "";
 }
 
@@ -1109,7 +1126,7 @@ test "primitive type desc" {
 
 test "enum emits typedef and defines" {
 	const g = createCGen(null as unknown as CheckerContext, "");
-	const result = getTypeDesc(g, createEnum("Color", ["Red", "Green", "Blue"]));
+	const result = getTypeDesc(g, createEnum("Color", ["Red", "Green", "Blue"], null as unknown as number[]));
 	assert result === "Color";
 	const types = extract(sec(g, CSection.Types));
 	assert types === "typedef int32_t Color;\n#define Color_Red 0\n#define Color_Green 1\n#define Color_Blue 2\n\n";
@@ -1156,7 +1173,7 @@ test "forward decl emitted" {
 
 test "cached second call" {
 	const g = createCGen(null as unknown as CheckerContext, "");
-	const t = createEnum("Dir", ["Up", "Down"]);
+	const t = createEnum("Dir", ["Up", "Down"], null as unknown as number[]);
 	const r1 = getTypeDesc(g, t);
 	const r2 = getTypeDesc(g, t);
 	assert r1 === r2;

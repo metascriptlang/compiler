@@ -522,6 +522,8 @@ export function parseEnumDecl(state: ParserState): NodeResult {
 
 	advance(state);
 	const members: string[] = [];
+	const values: number[] = [];
+	let nextValue: number = 0;
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
 		const member = current(state);
 		if (!isIdentLike(member)) {
@@ -530,11 +532,19 @@ export function parseEnumDecl(state: ParserState): NodeResult {
 
 		members.push(member.value);
 		advance(state);
-		// Optional value: A = 1 — skip balanced value expression
+		// Optional value: A = 1 — parse number literal
 		if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
 			advance(state);
-			skipDefaultValue(state);
+			const valTok = current(state);
+			if (valTok.kind === TokenKind.Number) {
+				nextValue = parseFloat(valTok.value);
+				advance(state);
+			} else {
+				skipDefaultValue(state);
+			}
 		}
+		values.push(nextValue);
+		nextValue = nextValue + 1;
 
 		if (current(state).kind === TokenKind.Comma) {
 			advance(state);
@@ -549,6 +559,7 @@ export function parseEnumDecl(state: ParserState): NodeResult {
 	return Result.ok(createNode(NodeKind.EnumDecl, {
 		enumName: nameToken.value,
 		enumMembers: members,
+		enumValues: values,
 	}, enumToken));
 }
 

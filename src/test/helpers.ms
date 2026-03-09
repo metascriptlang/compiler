@@ -6,6 +6,7 @@
 
 import { parseSource } from "../parser/statements/validation";
 import "../parser/statements/core";
+import { resetAllSideChannels } from "../parser/context";
 import { checkProgramWithRegistry } from "../checker/checkPass";
 import { checkModuleGraph, getPreludeContext } from "../checker/orchestrator";
 import { computeAliveSet } from "../checker/reachability";
@@ -41,6 +42,7 @@ function collectErrors(errors: any[], prefix: string): string {
 
 // Full C pipeline: parse → check → monomorphize → validate → transform → native → analyze → codegen
 export function compileToC(source: string): CompileResult {
+	resetAllSideChannels();
 	const modPath = "test/e2e.ms";
 	const entries = [{ entryPath: modPath, entrySource: source }];
 	const provider = createMapProvider(entries);
@@ -73,6 +75,7 @@ export function compileToC(source: string): CompileResult {
 
 // Full JS pipeline: parse → check → transform(jsBackend=true) → codegen
 export function compileToJS(source: string): CompileResult {
+	resetAllSideChannels();
 	const modPath = "test/e2e.ms";
 	const entries = [{ entryPath: modPath, entrySource: source }];
 	const provider = createMapProvider(entries);
@@ -99,6 +102,7 @@ export function compileToJS(source: string): CompileResult {
 // Compile project to C — same pipeline as compile.ms:
 // checkModuleGraph (2-phase) → computeAliveSet (global DCE) → per-module codegen
 export function compileProjectToC(entries: MapEntry[], entryPath: string): string {
+	resetAllSideChannels();
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph(entryPath, provider);
 	if (graph.errors.length > 0) {
@@ -175,6 +179,7 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 
 // Compile project to JS
 export function compileProjectToJS(entries: MapEntry[], entryPath: string): string {
+	resetAllSideChannels();
 	const provider = createMapProvider(entries);
 	const graph = loadModuleGraph(entryPath, provider);
 	if (graph.errors.length > 0) {

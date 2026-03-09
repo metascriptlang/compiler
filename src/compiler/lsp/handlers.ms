@@ -73,15 +73,17 @@ export function createCompletionCache(): CompletionCache {
 
 interface LspCursorParams {
 	uri: string;
-	line: number;
-	col: number;
+	line: number;   // 1-based (parser convention)
+	col: number;    // 0-based (for text offset scanning)
+	col1: number;   // 1-based (for AST node position matching)
 }
 
 function lspExtractPosition(params: string): LspCursorParams {
 	const textDoc = lspGetObjectField(params, "textDocument");
 	const uri = lspGetField(textDoc, "uri");
 	const position = lspGetObjectField(params, "position");
-	return { uri, line: lspGetNumberField(position, "line") + 1, col: lspGetNumberField(position, "character") };
+	const col0 = lspGetNumberField(position, "character");
+	return { uri, line: lspGetNumberField(position, "line") + 1, col: col0, col1: col0 + 1 };
 }
 
 // Get raw source text from Trans-Am DB for a given path.
@@ -347,7 +349,7 @@ export function handleHover(id: string, params: string, db: TransAmDb): string {
 	const ctx = dbTypeCheck(db, path);
 	if (ctx === null) return lspResponse(id, "null");
 
-	const suggest = sgGetSymbolAtCursor(ctx, program, pos.line, pos.col);
+	const suggest = sgGetSymbolAtCursor(ctx, program, pos.line, pos.col1);
 	if (suggest === null) return lspResponse(id, "null");
 
 	const hoverText = sgFormatHover(suggest);
@@ -496,16 +498,16 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 	const ctx = dbTypeCheck(db, path);
 	if (ctx === null) return lspResponse(id, "null");
 
-	const suggest = sgGetSymbolAtCursor(ctx, program, pos.line, pos.col);
+	const suggest = sgGetSymbolAtCursor(ctx, program, pos.line, pos.col1);
 	if (suggest !== null) {
 		const defLine = suggest.location.line - 1;
-		const defCol = suggest.location.column;
+		const defCol = suggest.location.column - 1;
 		const location = lspFmtLocation(pos.uri, defLine, defCol, defLine, defCol + suggest.name.length);
-		return lspResponse(id, location);
+		return lspResponse(id, "[" + location + "]");
 	}
 
 	// Cross-module fallback: check if cursor is on an imported name
-	const node = sgFindNodeAtPosition(program, pos.line, pos.col);
+	const node = sgFindNodeAtPosition(program, pos.line, pos.col1);
 	if (node === null) return lspResponse(id, "null");
 	if (node.kind !== NodeKind.Identifier) return lspResponse(id, "null");
 
@@ -534,7 +536,7 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 	const targetUri = lspPathToUri(targetPath);
 	const tLine = declLoc.line - 1;
 	const tCol = declLoc.column;
-	return lspResponse(id, lspFmtLocation(targetUri, tLine, tCol, tLine, tCol + identName.length));
+	return lspResponse(id, "[" + lspFmtLocation(targetUri, tLine, tCol, tLine, tCol + identName.length) + "]");
 }
 
 // ===== Document Symbol =====
@@ -688,7 +690,7 @@ export function handleReferences(id: string, params: string, db: TransAmDb): str
 	const ctx = dbTypeCheck(db, path);
 	if (ctx === null) return lspResponse(id, "[]");
 
-	const suggest = sgGetSymbolAtCursor(ctx, program, pos.line, pos.col);
+	const suggest = sgGetSymbolAtCursor(ctx, program, pos.line, pos.col1);
 	if (suggest === null) return lspResponse(id, "[]");
 
 	let arr = "[";
@@ -765,7 +767,7 @@ export function handleRename(id: string, params: string, db: TransAmDb): string 
 	const ctx = dbTypeCheck(db, path);
 	if (ctx === null) return lspResponse(id, "null");
 
-	const suggest = sgGetSymbolAtCursor(ctx, program, pos.line, pos.col);
+	const suggest = sgGetSymbolAtCursor(ctx, program, pos.line, pos.col1);
 	if (suggest === null) return lspResponse(id, "null");
 
 	// Collect edits across all files
@@ -815,16 +817,17 @@ function encodeSemanticTokenDeltas(tokens: SgSemanticToken[]): string {
 	while (i < tokens.length) {
 		const t = tokens[i];
 		const line = t.line - 1; // to 0-indexed
+		const col = t.col - 1;   // to 0-indexed
 		const deltaLine = line - prevLine;
-		let deltaStart = t.col;
-		if (deltaLine === 0) deltaStart = t.col - prevCol;
+		let deltaStart = col;
+		if (deltaLine === 0) deltaStart = col - prevCol;
 		if (i > 0) arr = arr + ",";
 		arr = arr + lspJsonNumber(deltaLine) + "," + lspJsonNumber(deltaStart)
 			+ "," + lspJsonNumber(t.length)
 			+ "," + lspJsonNumber(t.tokenType)
 			+ "," + lspJsonNumber(t.modifiers);
 		prevLine = line;
-		prevCol = t.col;
+		prevCol = col;
 		i = i + 1;
 	}
 	arr = arr + "]";

@@ -807,7 +807,9 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 		}
 	}
 	// Check argument types + infer generic return
-	if (calleeType.kind === TypeKind.Function) {
+	// @builtin("Echo"): accept any number of args of any type (Nim echo parity)
+	const isEchoBuiltin = node.resolvedSym !== null && node.resolvedSym.builtinKind === "Echo";
+	if (calleeType.kind === TypeKind.Function && !isEchoBuiltin) {
 		// Fill default arguments if too few args provided
 		const minAr = getMinArity(calleeType);
 		if (argTypes.length < minAr) {

@@ -162,8 +162,8 @@ export function lspGetNumberField(json: string, field: string): number {
 	return -1;
 }
 
-// Extract a nested JSON object value for a key.
-// Scans for "key":{...} and returns the {...} substring.
+// Extract a nested JSON object or array value for a key.
+// Scans for "key":{...} or "key":[...] and returns the matched substring.
 export function lspGetObjectField(json: string, field: string): string {
 	const pattern = "\"" + field + "\":";
 	const patLen = pattern.length;
@@ -174,14 +174,16 @@ export function lspGetObjectField(json: string, field: string): string {
 			let j = i + patLen;
 			// Skip whitespace
 			while (j < json.length && charAt(json, j) === " ") { j = j + 1; }
-			if (j < json.length && charAt(json, j) === "{") {
-				// Find matching closing brace
+			const opener = j < json.length ? charAt(json, j) : "";
+			if (opener === "{" || opener === "[") {
+				const closer = opener === "{" ? "}" : "]";
+				// Find matching closing delimiter
 				let depth = 0;
 				let start = j;
 				while (j < json.length) {
 					const c = charAt(json, j);
-					if (c === "{") { depth = depth + 1; }
-					else if (c === "}") {
+					if (c === opener) { depth = depth + 1; }
+					else if (c === closer) {
 						depth = depth - 1;
 						if (depth === 0) {
 							return sliceStr(json, start, j + 1);

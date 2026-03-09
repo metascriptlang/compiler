@@ -642,6 +642,11 @@ msString msNumberToString(double value) {
 	return msStringNew(buf, len);
 }
 
+msString msBoolToString(int value) {
+	if (value) return msStringNew("true", 4);
+	return msStringNew("false", 5);
+}
+
 /* ===== Splitting & Joining ===== */
 
 msStringArray msStringSplit(msString s, msString delimiter) {

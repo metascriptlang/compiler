@@ -26,7 +26,7 @@ import {
 	emitProcLocalsLine,
 } from "./context";
 import { mangle, mangleFieldName, mangledFunctionName, safeName } from "./names";
-import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, intToString, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, ccgIntroducedPtr, ensureTypeInfo, ensureForwardDecl } from "./types";
+import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, intToString, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, ccgIntroducedPtr, ensureTypeInfo, ensureForwardDecl } from "./types";
 import { formatCNumber, cBoolLiteral, cNullLiteral, cStringLiteral, msStringPoolRef } from "./literals";
 import { charAt, sliceStr, findChar } from "../../utils/string";
 import { ensureDrcProto, ensureCrossModuleProto } from "./declarations";
@@ -260,6 +260,10 @@ function discoverExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[],
 				const cType = node.nodeType !== null ? getTypeDesc(g, node.nodeType) : "void*";
 				emitProcLocalsLine(p, "  " + cType + " " + safeName(d.name) + " = {0};");
 			}
+		}
+		// Ensure cross-module enum constants are emitted (Nim: enum #defines per module)
+		if (node.nodeType !== null && node.nodeType.kind === TypeKind.Enum) {
+			getTypeDesc(g, node.nodeType);
 		}
 		// Module-qualified name for function references (Standard reference parity)
 		const idSym = node.resolvedSym;
@@ -719,7 +723,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 			}
 			if (varIdx >= 0) {
 				const varName = unionName + "_v" + intToString(varIdx);
-				results.push("(" + unionName + "){ ._tag = " + intToString(varIdx) + ", .v" + intToString(varIdx) + " = (" + varName + ")" + expr + " }");
+				// Use pointer-based reinterpret for struct-to-struct (C can't cast between struct types)
+				results.push("(" + unionName + "){ ._tag = " + intToString(varIdx) + ", .v" + intToString(varIdx) + " = *(" + varName + "*)&(" + expr + ") }");
 				return;
 			}
 			// Empty object literal (e.g., {} as DocData for Nil/HardLine variants)
@@ -843,6 +848,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 			// Never emits inline compound literals — works with C89+ and avoids &({...}) issues.
 			let cType = "";
 			let isClassObj = false;
+			let unionWrapName = "";
+			let unionWrapIdx = -1;
 			if (node.nodeType !== null) {
 				if (node.nodeType.kind === TypeKind.Union && d.keys.length > 0) {
 					// Union variant: determine variant type from field names
@@ -851,6 +858,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 					const varIdx = findUnionVariant(node.nodeType, keyArr, []);
 					if (varIdx >= 0) {
 						cType = unionName + "_v" + intToString(varIdx);
+						unionWrapName = unionName;
+						unionWrapIdx = varIdx;
 					}
 				} else if (node.nodeType.kind === TypeKind.Ref && node.nodeType.typeReturn !== null) {
 					// Class type: ObjectLiteral constructs inner struct, heap-allocated
@@ -890,7 +899,12 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 					i += 1;
 				}
 				truncResults(results, cc);
-				results.push(tmpName);
+				if (unionWrapIdx >= 0) {
+					// Wrap variant struct in parent union compound literal
+					results.push("(" + unionWrapName + "){ ._tag = " + intToString(unionWrapIdx) + ", .v" + intToString(unionWrapIdx) + " = " + tmpName + " }");
+				} else {
+					results.push(tmpName);
+				}
 			} else {
 				// Nim-aligned fallback: hoist to temp even without type info.
 				// Generate anonymous struct type from field names + inferred C types.
@@ -946,8 +960,32 @@ function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, call
 	const envExpr = callee + ".env";
 	const fnExpr = callee + ".fn";
 
-	// Build typed casts from callee's function type
-	// clFull = with env param (last), clHalf = without env
+	// NRVO for closures: pass &dest as first param (our convention; reference uses last param)
+	const nrvoRet = getCalleeReturnType(node);
+	const nrvoType = (nrvoRet !== null && isNrvoReturnType(nrvoRet)) ? nrvoRet : null;
+
+	if (nrvoType !== null) {
+		// NRVO: allocate temp, pass &tmp as first arg, read tmp after call
+		const cType = getTypeDesc(g, nrvoType);
+		const tmp = getTemp(p, cType);
+		const nrvoArg = "&" + tmp.snippet;
+		let fullArgs = "";
+		if (argsStr !== "") {
+			fullArgs = nrvoArg + ", " + argsStr;
+		} else {
+			fullArgs = nrvoArg;
+		}
+		// Cast with NRVO-aware signature (void return, ResultType* first param)
+		const clFull = genClFullCastNrvo(g, calleeType, cType);
+		const clHalf = genClHalfCastNrvo(g, calleeType, cType);
+		const callWithEnv = "((" + clFull + ")" + fnExpr + ")(" + fullArgs + ", " + envExpr + ")";
+		const callNoEnv = "((" + clHalf + ")" + fnExpr + ")(" + fullArgs + ")";
+		emitStmtsLine(p, "(" + envExpr + " ? " + callWithEnv + " : " + callNoEnv + ");");
+		results.push(tmp.snippet);
+		return;
+	}
+
+	// Non-NRVO: inline expression form
 	const clFull = genClFullCast(g, calleeType);
 	const clHalf = genClHalfCast(g, calleeType);
 
@@ -1014,7 +1052,8 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 					const paramIsPtr = isPointerType(paramType);
 					const argIsPtr = isPointerType(argNode.nodeType);
 					const paramCcgPtr = ccgIntroducedPtr(paramType);
-					if (paramIsPtr && !argIsPtr) {
+					// Nim parity: nil passed to ref/ptr param is already a valid pointer — no &
+					if (paramIsPtr && !argIsPtr && argNode.kind !== NodeKind.NullLiteral) {
 						arg = safeAddrOf(g, p, arg, argNode, paramType);
 					} else if (!paramIsPtr && argIsPtr && !paramCcgPtr) {
 						// Only deref if param is NOT ccgIntroducedPtr'd
@@ -1070,7 +1109,8 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 					const paramIsPtr = isPointerType(paramType);
 					const argIsPtr = isPointerType(argNode.nodeType);
 					const paramCcgPtr = ccgIntroducedPtr(paramType);
-					if (paramIsPtr && !argIsPtr) {
+					// Nim parity: nil passed to ref/ptr param is already a valid pointer — no &
+					if (paramIsPtr && !argIsPtr && argNode.kind !== NodeKind.NullLiteral) {
 						arg = safeAddrOf(g, p, arg, argNode, paramType);
 					} else if (!paramIsPtr && argIsPtr && !paramCcgPtr) {
 						// Only deref if param is NOT ccgIntroducedPtr'd

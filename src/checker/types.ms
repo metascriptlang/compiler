@@ -81,6 +81,14 @@ export enum CallingConvention {
 	CcNoInline,      // no-inline hint
 }
 
+// ===== Type Flags (Nim parity: TTypeFlag) =====
+// Bitfield stored in Type.typeFlags. Propagated bottom-up from children to parents.
+export enum TypeFlag {
+	IsInterface = 1,    // bit 0: struct is an interface (value type)
+	IsMaybe = 16,       // bit 4: Maybe<T> wrapper struct
+	HasAsgn = 32,       // bit 5: type or child needs lifecycle management (Nim: tfHasAsgn)
+}
+
 // ===== Attached Lifecycle Ops (Standard reference parity) =====
 // Index into Type.attachedOps[] — stores the symbol/name for each lifecycle hook.
 export enum AttachedOp {
@@ -99,7 +107,7 @@ export class Type {
 	typeChildren: Type[];     // Function params, Union types, Tuple elements, Object prop types
 	typeReturn: Type;         // Function return, Array element, Ref/Ptr/Distinct inner, Result okType
 	typeExtra: Type;          // Result errType, Map value, GenericInstance base
-	typeFlags: int32;         // Bitfield: 1=isInterface, 2=optional, 4=readonly, 8=static; bits 8-15=minArity
+	typeFlags: int32;         // Bitfield: 1=isInterface, 16=isMaybe, 32=tfHasAsgn; bits 8-15=minArity
 	callConv: CallingConvention; // Function calling convention (Standard parity)
 	attachedOps: string[];    // Lifecycle hook names indexed by AttachedOp (Standard parity)
 }
@@ -150,15 +158,18 @@ export function createStruct(name: string, propNames: string[], propTypes: Type[
 	t.typeName = name;
 	t.typeNames = propNames;
 	t.typeChildren = propTypes;
-	if (isInterface) { t.typeFlags = 1; }
+	if (isInterface) { t.typeFlags = TypeFlag.IsInterface as int32; }
+	// Propagate HasAsgn from any managed field (Nim: propagateToOwner for tyObject)
+	for (const pt of propTypes) { propagateHasAsgn(t, pt); }
 	return t;
 }
 
 export function createArray(element: Type): Type {
-	const t = emptyType();
-	t.kind = TypeKind.Array;
-	t.typeReturn = element;
-	return t;
+	return {
+		kind: TypeKind.Array, typeName: "", typeNames: [], typeChildren: [],
+		typeReturn: element, typeExtra: null, typeFlags: TypeFlag.HasAsgn as int32,
+		callConv: CallingConvention.CcDefault, attachedOps: [],
+	};
 }
 
 export function createSizedArray(element: Type, size: number): Type {
@@ -177,12 +188,11 @@ export function createSpan(element: Type): Type {
 }
 
 export function createFunction(paramTypes: Type[], paramNames: string[], returnType: Type): Type {
-	const t = emptyType();
-	t.kind = TypeKind.Function;
-	t.typeChildren = paramTypes;
-	t.typeNames = paramNames;
-	t.typeReturn = returnType;
-	return t;
+	return {
+		kind: TypeKind.Function, typeName: "", typeNames: paramNames, typeChildren: paramTypes,
+		typeReturn: returnType, typeExtra: null, typeFlags: TypeFlag.HasAsgn as int32,
+		callConv: CallingConvention.CcDefault, attachedOps: [],
+	};
 }
 
 // Standard reference parity: procedure type literals default to closure calling convention.
@@ -193,19 +203,35 @@ export function createClosureType(paramTypes: Type[], paramNames: string[], retu
 	return t;
 }
 
-export function createEnum(name: string, members: string[]): Type {
+export function createEnum(name: string, members: string[], values: number[]): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Enum;
 	t.typeName = name;
 	t.typeNames = members;
+	// Store enum member values as Type objects with typeFlags holding the integer value
+	if (values !== null && values.length > 0) {
+		const valTypes: Type[] = [];
+		let i = 0;
+		while (i < values.length) {
+			const vt = emptyType();
+			vt.kind = TypeKind.Number;
+			vt.typeFlags = values[i] as int32;
+			valTypes.push(vt);
+			i = i + 1;
+		}
+		t.typeChildren = valTypes;
+	}
 	return t;
 }
+
 
 export function createResult(okType: Type, errType: Type): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Result;
 	t.typeReturn = okType;
 	t.typeExtra = errType;
+	propagateHasAsgn(t, okType);
+	propagateHasAsgn(t, errType);
 	return t;
 }
 
@@ -220,6 +246,7 @@ export function createUnion(types: Type[]): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Union;
 	t.typeChildren = types;
+	for (const ut of types) { propagateHasAsgn(t, ut); }
 	return t;
 }
 
@@ -326,25 +353,28 @@ export function createMaybeType(inner: Type): Type {
 	t.typeName = "Maybe_" + name;
 	t.typeNames = ["value", "present"];
 	t.typeChildren = [inner, booleanType()];
-	t.typeFlags = 17;       // isInterface (bit 0) + isMaybe (bit 4)
+	t.typeFlags = (TypeFlag.IsInterface | TypeFlag.IsMaybe) as int32;
 	t.typeReturn = inner;    // store inner type for unwrapping
+	propagateHasAsgn(t, inner);
 	_maybeCache.push(t);
 	_maybeCacheNames.push(name);
 	return t;
 }
 
 export function createRef(inner: Type): Type {
-	const t = emptyType();
-	t.kind = TypeKind.Ref;
-	t.typeReturn = inner;
-	return t;
+	return {
+		kind: TypeKind.Ref, typeName: "", typeNames: [], typeChildren: [],
+		typeReturn: inner, typeExtra: null, typeFlags: TypeFlag.HasAsgn as int32,
+		callConv: CallingConvention.CcDefault, attachedOps: [],
+	};
 }
 
 export function createPtr(inner: Type): Type {
-	const t = emptyType();
-	t.kind = TypeKind.Ptr;
-	t.typeReturn = inner;
-	return t;
+	return {
+		kind: TypeKind.Ptr, typeName: "", typeNames: [], typeChildren: [],
+		typeReturn: inner, typeExtra: null, typeFlags: TypeFlag.HasAsgn as int32,
+		callConv: CallingConvention.CcDefault, attachedOps: [],
+	};
 }
 
 export function createBorrow(inner: Type): Type {
@@ -365,20 +395,37 @@ export function createTuple(elementTypes: Type[]): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Tuple;
 	t.typeChildren = elementTypes;
+	for (const et of elementTypes) { propagateHasAsgn(t, et); }
 	return t;
 }
 
 export function createSet(elemType: Type): Type {
-	const t = emptyType();
-	t.kind = TypeKind.Set;
-	t.typeReturn = elemType;
-	return t;
+	return {
+		kind: TypeKind.Set, typeName: "", typeNames: [], typeChildren: [],
+		typeReturn: elemType, typeExtra: null, typeFlags: TypeFlag.HasAsgn as int32,
+		callConv: CallingConvention.CcDefault, attachedOps: [],
+	};
+}
+
+export function createMap(keyType: Type, valueType: Type): Type {
+	return {
+		kind: TypeKind.Map,
+		typeName: "",
+		typeNames: [],
+		typeChildren: [],
+		typeReturn: keyType,
+		typeExtra: valueType,
+		typeFlags: TypeFlag.HasAsgn as int32,
+		callConv: CallingConvention.CcDefault,
+		attachedOps: [],
+	};
 }
 
 export function createDistinct(inner: Type): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Distinct;
 	t.typeReturn = inner;
+	propagateHasAsgn(t, inner);
 	return t;
 }
 
@@ -399,6 +446,8 @@ function initSysTypes(): void {
 	for (let i = 0; i <= (TypeKind.Error as number); i += 1) {
 		_sysTypes.push(createPrimitive(i as TypeKind));
 	}
+	// Managed primitives get TypeFlag.HasAsgn (Nim: string, ref, closure get tfHasAsgn in semtypes)
+	_sysTypes[TypeKind.String as number].typeFlags = TypeFlag.HasAsgn;
 }
 initSysTypes();
 
@@ -518,12 +567,12 @@ function typeKey(t: Type): string {
 export function isInterfaceType(t: Type): boolean {
 	if (t === null) return false;
 	if (t.kind !== TypeKind.Struct) return false;
-	return (t.typeFlags & 1) !== 0;
+	return (t.typeFlags & TypeFlag.IsInterface) !== 0;
 }
 
 export function isMaybeType(t: Type): boolean {
 	if (t === null) return false;
-	return (t.typeFlags & 16) !== 0;
+	return (t.typeFlags & TypeFlag.IsMaybe) !== 0;
 }
 
 export function unwrapMaybeType(t: Type): Type {
@@ -535,6 +584,21 @@ export function unwrapRef(t: Type): Type {
 	if (t === null) return t;
 	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) return t.typeReturn;
 	return t;
+}
+
+// ===== tfHasAsgn Flag — Nim parity: propagated lifecycle management flag =====
+// Set on types that need lifecycle management (destroy/copy/sink).
+// Propagated bottom-up from children to parents at type construction time.
+
+export function hasAsgnFlag(t: Type): boolean {
+	if (t === null) return false;
+	return (t.typeFlags & TypeFlag.HasAsgn) !== 0;
+}
+
+function propagateHasAsgn(parent: Type, child: Type): void {
+	if (child !== null && (child.typeFlags & TypeFlag.HasAsgn) !== 0) {
+		parent.typeFlags = parent.typeFlags | TypeFlag.HasAsgn;
+	}
 }
 
 // ===== Ownership Modifiers (Reference parity: sink and lent modifiers) =====
@@ -657,7 +721,7 @@ function substituteStruct(t: Type, paramName: string, concrete: Type): Type {
 	for (let ni = 0; ni < t.typeNames.length; ni += 1) {
 		newNames.push(t.typeNames[ni]);
 	}
-	const result = createStruct(t.typeName, newNames, newFieldTypes, t.typeFlags === 1);
+	const result = createStruct(t.typeName, newNames, newFieldTypes, isInterfaceType(t));
 	result.typeReturn = t.typeReturn;
 	result.typeExtra = t.typeExtra;
 	return result;
@@ -705,12 +769,10 @@ export function substituteType(t: Type, paramName: string, concrete: Type): Type
 			}
 			createUnion(newMembers)
 		},
-		TypeKind.Map => {
-			const mt = createPrimitive(TypeKind.Map);
-			mt.typeReturn = substituteType(t.typeReturn, paramName, concrete);
-			mt.typeExtra = substituteType(t.typeExtra, paramName, concrete);
-			mt
-		},
+		TypeKind.Map => createMap(
+			substituteType(t.typeReturn, paramName, concrete),
+			substituteType(t.typeExtra, paramName, concrete),
+		),
 		TypeKind.Ref => createRef(substituteType(t.typeReturn, paramName, concrete)),
 		TypeKind.Ptr => createPtr(substituteType(t.typeReturn, paramName, concrete)),
 		TypeKind.Borrow => createBorrow(substituteType(t.typeReturn, paramName, concrete)),
@@ -1147,7 +1209,7 @@ test "createStruct" {
 }
 
 test "createEnum" {
-	const e = createEnum("Color", ["Red", "Green", "Blue"]);
+	const e = createEnum("Color", ["Red", "Green", "Blue"], null as unknown as number[]);
 	assert e.kind === TypeKind.Enum;
 	assert e.typeName === "Color";
 	assert e.typeNames.length === 3;
@@ -1339,10 +1401,10 @@ test "setMinArity zero" {
 
 test "preserves low bits" {
 	const fn4 = createFunction([numberType()], ["a"], voidType());
-	fn4.typeFlags = 1;
+	fn4.typeFlags = TypeFlag.IsInterface as int32;
 	setMinArity(fn4, 1);
 	assert getMinArity(fn4) === 1;
-	assert (fn4.typeFlags & 0xFF) === 1;
+	assert (fn4.typeFlags & TypeFlag.IsInterface) !== 0;
 }
 
 test "createTuple" {

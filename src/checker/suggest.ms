@@ -14,7 +14,7 @@ import { Node, NodeKind, SourceLocation, ProgramData, DeclKind,
 	TryCatchStmtData, TryExprData, ClassDeclData, InterfaceDeclData, EnumDeclData,
 	TypeAliasDeclData, ExportDeclData, ImportDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { Type, TypeKind, typeNameOf,
+import { Type, TypeKind, typeNameOf, getProperty,
 	numberType, stringType, booleanType, voidType, nullType,
 	unknownType, neverType, errorType } from "./types";
 import { Symbol, SymbolKind, SymbolTable, Scope, lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
@@ -362,44 +362,71 @@ export function sgFindNodeAtPosition(program: Node, line: number, col: number): 
 
 // ===== sgGetSymbolAtCursor — resolve symbol at cursor position =====
 
+// Build SgSuggest from a Symbol.
+function sgSuggestFromSym(sym: Symbol): SgSuggest {
+	return {
+		name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
+		location: sym.location, prefixScore: 0, scopeDepth: 0, contextFit: false,
+		isExported: hasFlag(sym, SymbolFlag.Exported), isMutable: hasFlag(sym, SymbolFlag.Mutable),
+	};
+}
+
 export function sgGetSymbolAtCursor(ctx: CheckerContext, program: Node, line: number, col: number): SgSuggest {
 	const node = sgFindNodeAtPosition(program, line, col);
 	if (node === null) return null as unknown as SgSuggest;
 
+	// Checker-stamped resolvedSym is always authoritative
+	if (node.resolvedSym !== null) return sgSuggestFromSym(node.resolvedSym);
+
 	if (node.kind === NodeKind.Identifier) {
 		const id = node.data as IdentifierData;
 		const sym = lookupSymbol(ctx.table, id.name);
-		if (sym === null) return null as unknown as SgSuggest;
-		const suggest: SgSuggest = {
-			name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
-			location: sym.location, prefixScore: 0, scopeDepth: 0, contextFit: false,
-			isExported: hasFlag(sym, SymbolFlag.Exported), isMutable: hasFlag(sym, SymbolFlag.Mutable),
-		};
-		return suggest;
+		if (sym !== null) return sgSuggestFromSym(sym);
 	}
 
 	if (node.kind === NodeKind.VariableDecl) {
 		const vd = node.data as VariableDeclData;
 		const sym = lookupSymbol(ctx.table, vd.declName);
-		if (sym === null) return null as unknown as SgSuggest;
-		const suggest: SgSuggest = {
-			name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
-			location: sym.location, prefixScore: 0, scopeDepth: 0, contextFit: false,
-			isExported: hasFlag(sym, SymbolFlag.Exported), isMutable: hasFlag(sym, SymbolFlag.Mutable),
-		};
-		return suggest;
+		if (sym !== null) return sgSuggestFromSym(sym);
 	}
 
 	if (node.kind === NodeKind.FunctionDecl) {
 		const fd = node.data as FunctionDeclData;
 		const sym = lookupSymbol(ctx.table, fd.fnName);
-		if (sym === null) return null as unknown as SgSuggest;
-		const suggest: SgSuggest = {
-			name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
-			location: sym.location, prefixScore: 0, scopeDepth: 0, contextFit: false,
-			isExported: hasFlag(sym, SymbolFlag.Exported), isMutable: hasFlag(sym, SymbolFlag.Mutable),
-		};
-		return suggest;
+		if (sym !== null) return sgSuggestFromSym(sym);
+	}
+
+	// MemberExpr: cursor on property name (e.g. p.name, JSON.parse)
+	// The walker returns MemberExpr when cursor is past the object — check resolvedSym on CallExpr parent too
+	if (node.kind === NodeKind.MemberExpr) {
+		if (node.resolvedSym !== null) return sgSuggestFromSym(node.resolvedSym);
+		const md = node.data as MemberExprData;
+		// Try looking up the property as a type member
+		const objType = md.object.nodeType;
+		if (objType !== null) {
+			const prop = getProperty(objType, md.property);
+			if (prop !== null) {
+				return {
+					name: md.property, kind: SymbolKind.Property, symType: prop,
+					location: node.location, prefixScore: 0, scopeDepth: 0, contextFit: false,
+					isExported: false, isMutable: false,
+				};
+			}
+		}
+		// Static member: try looking up the object as a class/enum
+		const objSym = lookupSymbol(ctx.table, md.property);
+		if (objSym !== null) return sgSuggestFromSym(objSym);
+	}
+
+	// CallExpr: cursor on the call — delegate to callee
+	if (node.kind === NodeKind.CallExpr) {
+		const cd = node.data as CallExprData;
+		if (cd.callee.resolvedSym !== null) return sgSuggestFromSym(cd.callee.resolvedSym);
+		if (cd.callee.kind === NodeKind.Identifier) {
+			const id = cd.callee.data as IdentifierData;
+			const sym = lookupSymbol(ctx.table, id.name);
+			if (sym !== null) return sgSuggestFromSym(sym);
+		}
 	}
 
 	return null as unknown as SgSuggest;
@@ -1461,7 +1488,7 @@ function sgCollectExceptionHints(
 
 export interface SgSemanticToken {
 	line: number;       // 1-indexed (converted to 0-indexed by handler)
-	col: number;        // 0-indexed
+	col: number;        // 1-indexed (converted to 0-indexed by handler)
 	length: number;
 	tokenType: number;  // index into legend
 	modifiers: number;  // bitmask
@@ -1512,7 +1539,8 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 	if (node.kind === NodeKind.FunctionDecl) {
 		const fd = node.data as FunctionDeclData;
 		if (fd.fnName.length > 0) {
-			const tok: SgSemanticToken = { line: loc.line, col: loc.column, length: fd.fnName.length, tokenType: 12, modifiers: 1 };
+			// "function " = 9 chars offset to name
+			const tok: SgSemanticToken = { line: loc.line, col: loc.column + 9, length: fd.fnName.length, tokenType: 12, modifiers: 1 };
 			tokens.push(tok);
 		}
 		if (fd.fnBody !== null) sgCollectTokensInNode(ctx, fd.fnBody, tokens);
@@ -1523,8 +1551,13 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 		const vd = node.data as VariableDeclData;
 		if (vd.declName.length > 0) {
 			let mods = 1; // declaration
-			if (vd.declKind === DeclKind.Const) mods = 5; // declaration + readonly (1 + 4)
-			const tok: SgSemanticToken = { line: loc.line, col: loc.column, length: vd.declName.length, tokenType: 8, modifiers: mods };
+			// "const " = 6, "let " = 4, "var " = 4
+			let kwLen = 4;
+			if (vd.declKind === DeclKind.Const) {
+				mods = 5; // declaration + readonly (1 + 4)
+				kwLen = 6;
+			}
+			const tok: SgSemanticToken = { line: loc.line, col: loc.column + kwLen, length: vd.declName.length, tokenType: 8, modifiers: mods };
 			tokens.push(tok);
 		}
 		if (vd.initializer !== null) sgCollectTokensInNode(ctx, vd.initializer, tokens);
@@ -1534,7 +1567,8 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 	if (node.kind === NodeKind.InterfaceDecl) {
 		const ifd = node.data as InterfaceDeclData;
 		if (ifd.interfaceName.length > 0) {
-			const tok: SgSemanticToken = { line: loc.line, col: loc.column, length: ifd.interfaceName.length, tokenType: 4, modifiers: 1 };
+			// "interface " = 10 chars offset to name
+			const tok: SgSemanticToken = { line: loc.line, col: loc.column + 10, length: ifd.interfaceName.length, tokenType: 4, modifiers: 1 };
 			tokens.push(tok);
 		}
 		return;
@@ -1543,7 +1577,8 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 	if (node.kind === NodeKind.EnumDecl) {
 		const ed = node.data as EnumDeclData;
 		if (ed.enumName.length > 0) {
-			const tok: SgSemanticToken = { line: loc.line, col: loc.column, length: ed.enumName.length, tokenType: 3, modifiers: 1 };
+			// "enum " = 5 chars offset to name
+			const tok: SgSemanticToken = { line: loc.line, col: loc.column + 5, length: ed.enumName.length, tokenType: 3, modifiers: 1 };
 			tokens.push(tok);
 		}
 		return;
@@ -1552,7 +1587,8 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 	if (node.kind === NodeKind.ClassDecl) {
 		const cd = node.data as ClassDeclData;
 		if (cd.className.length > 0) {
-			const tok: SgSemanticToken = { line: loc.line, col: loc.column, length: cd.className.length, tokenType: 2, modifiers: 1 };
+			// "class " = 6 chars offset to name
+			const tok: SgSemanticToken = { line: loc.line, col: loc.column + 6, length: cd.className.length, tokenType: 2, modifiers: 1 };
 			tokens.push(tok);
 		}
 		for (let ci = 0; ci < cd.classBody.length; ci = ci + 1) {
@@ -1564,7 +1600,43 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 	if (node.kind === NodeKind.TypeAliasDecl) {
 		const td = node.data as TypeAliasDeclData;
 		if (td.aliasName.length > 0) {
-			const tok: SgSemanticToken = { line: loc.line, col: loc.column, length: td.aliasName.length, tokenType: 1, modifiers: 1 };
+			// "type " = 5 chars offset to name
+			const tok: SgSemanticToken = { line: loc.line, col: loc.column + 5, length: td.aliasName.length, tokenType: 1, modifiers: 1 };
+			tokens.push(tok);
+		}
+		return;
+	}
+
+	// CallExpr: if callee is MemberExpr, emit method (not property) for the property name
+	if (node.kind === NodeKind.CallExpr) {
+		const ce = node.data as CallExprData;
+		if (ce.callee !== null && ce.callee.kind === NodeKind.MemberExpr) {
+			const me = ce.callee.data as MemberExprData;
+			sgCollectTokensInNode(ctx, me.object, tokens);
+			if (me.property.length > 0) {
+				const ceLoc = ce.callee.location;
+				const tok: SgSemanticToken = { line: ceLoc.line, col: ceLoc.column + 1, length: me.property.length, tokenType: 13, modifiers: 0 };
+				tokens.push(tok);
+			}
+		} else {
+			sgCollectTokensInNode(ctx, ce.callee, tokens);
+		}
+		// Recurse into arguments
+		let ai = 0;
+		while (ai < ce.arguments.length) {
+			sgCollectTokensInNode(ctx, ce.arguments[ai], tokens);
+			ai = ai + 1;
+		}
+		return;
+	}
+
+	// MemberExpr: recurse into object, emit token for property name
+	if (node.kind === NodeKind.MemberExpr) {
+		const me = node.data as MemberExprData;
+		sgCollectTokensInNode(ctx, me.object, tokens);
+		if (me.property.length > 0) {
+			// loc is at the ".", property starts right after
+			const tok: SgSemanticToken = { line: loc.line, col: loc.column + 1, length: me.property.length, tokenType: 9, modifiers: 0 };
 			tokens.push(tok);
 		}
 		return;
@@ -1728,7 +1800,7 @@ test "function with params" {
 
 test "enum" {
 	const members: string[] = ["A", "B"];
-	const t = createEnum("Color", members);
+	const t = createEnum("Color", members, null as unknown as number[]);
 	assert sgTypeToString(t) === "Color";
 }
 
@@ -1993,7 +2065,7 @@ test "object properties with prefix" {
 
 test "enum members" {
 	const members: string[] = ["Red", "Green", "Blue"];
-	const enumType = createEnum("Color", members);
+	const enumType = createEnum("Color", members, null as unknown as number[]);
 	const pr = parseSource("const a = 1;");
 	if (!pr.ok) { assert false; return; }
 	const ctx = checkProgram(pr.value);

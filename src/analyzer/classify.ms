@@ -5,7 +5,7 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { Type, TypeKind, isPrimitiveKind, hasDestructor, isInterfaceType, createPrimitive, createStruct, createArray, createFunction, numberType, stringType, booleanType, voidType, nullType, unknownType } from "../checker/types";
+import { Type, TypeKind, isPrimitiveKind, hasDestructor, hasAsgnFlag, isInterfaceType, createPrimitive, createStruct, createArray, createFunction, numberType, stringType, booleanType, voidType, nullType, unknownType } from "../checker/types";
 import { lookupSymbol, SymbolKind, Symbol, hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, createTransformContext } from "../transform/context";
 import { NodeKind } from "../ast/node";
@@ -58,24 +58,28 @@ function makeRcInfo(kind: RcKind, typeName: string, destroy: string, copy: strin
 }
 
 // ===== Array Subclassification =====
+// Nim parity: uses hasAsgnFlag (propagated at type creation) instead of runtime element inspection.
 
 function classifyArray(t: Type, ctx: TransformContext): RcInfo {
-	const elem = t.typeReturn;  // Array element type stored in typeReturn
+	const elem = t.typeReturn;
 	if (elem !== null && elem.kind === TypeKind.Uint8) {
 		return makeRcInfo(RcKind.Array, "", "msArrayUint8Destroy", "msArrayUint8Copy", "msArrayUint8WasMoved", "msArrayUint8Sink", false);
 	}
 	if (elem === null || isPrimitiveKind(elem.kind)) {
 		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
 	}
-	// reference parity: non-primitive element arrays use standalone generated hooks (reference sequence op)
 	if (elem.kind === TypeKind.String) {
 		return makeRcInfo(RcKind.Named, "", "msStringArray_destroy", "msStringArray_copy", "msStringArray_wasMoved", "msStringArray_sink", true);
 	}
-	// Value-type struct elements (interfaces with RC fields) → per-type array hooks
-	if (elem.kind === TypeKind.Struct && elem.typeName !== "" && hasDestructor(elem)) {
-		const n = elem.typeName + "Array";
-		return makeRcInfo(RcKind.Named, "", n + "_destroy", n + "_copy", n + "_wasMoved", n + "_sink", true);
+	// Named struct elements — use hasAsgnFlag to decide if per-type hooks are needed
+	if (elem.kind === TypeKind.Struct && elem.typeName !== "") {
+		if (hasAsgnFlag(elem)) {
+			const n = elem.typeName + "Array";
+			return makeRcInfo(RcKind.Named, "", n + "_destroy", n + "_copy", n + "_wasMoved", n + "_sink", true);
+		}
+		return noRcInfo();
 	}
+	// Ref/Ptr elements (class arrays) — msRefArray (all pointers are void*)
 	return makeRcInfo(RcKind.Named, "", "msRefArray_destroy", "msRefArray_copy", "msRefArray_wasMoved", "msRefArray_sink", true);
 }
 
@@ -84,12 +88,10 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 function classifyObject(t: Type, ctx: TransformContext): RcInfo {
 	// Objects are always value types now — Ref<Object> is handled by TypeKind.Ref arm
 	if (t.typeName !== "") {
-		// Implementation parity: only generate RC hooks if type has a destructor
-		// Value-type interfaces without managed fields get noRcInfo (no cleanup needed)
-		if (hasDestructor(t)) {
+		// Nim parity: hasAsgnFlag checks propagated flag (set at type creation)
+		if (hasAsgnFlag(t)) {
 			return makeRcInfo(RcKind.Named, t.typeName, t.typeName + "_destroy", t.typeName + "_copy", t.typeName + "_wasMoved", t.typeName + "_sink", false);
 		}
-		// destructorLifting has already run — if no hooks, type is plain value (no cleanup)
 		return noRcInfo();
 	}
 	return noRcInfo();
@@ -140,7 +142,7 @@ export function classifyType(t: Type, ctx: TransformContext): RcInfo {
 		TypeKind.TypeReference => classifyTypeRef(t, ctx),
 		TypeKind.Distinct => { if (t.typeReturn !== null) { classifyType(t.typeReturn, ctx) } else { noRcInfo() } },
 		TypeKind.Union => {
-			if (t.typeName !== "" && hasDestructor(t)) {
+			if (t.typeName !== "" && hasAsgnFlag(t)) {
 				makeRcInfo(RcKind.Named, t.typeName, t.typeName + "_destroy", t.typeName + "_copy", t.typeName + "_wasMoved", t.typeName + "_sink", false)
 			} else { noRcInfo() }
 		},
@@ -260,14 +262,20 @@ test "function → Closure" {
 	assert info.destroyFn === "msClosureDestroy";
 }
 
-test "named object → Named" {
+test "named object with managed field → Named" {
 	const ctx = createTransformContext();
-	const info = classifyType(createStruct("Token", ["kind"], [numberType()], false), ctx);
+	const info = classifyType(createStruct("Token", ["value"], [stringType()], false), ctx);
 	assert info.rcKind === RcKind.Named;
 	assert info.needsCleanup;
 	assert info.destroyFn === "Token_destroy";
 	assert info.copyFn === "Token_copy";
 	assert info.wasMovedFn === "Token_wasMoved";
+}
+
+test "named object without managed field → noRcInfo" {
+	const ctx = createTransformContext();
+	const info = classifyType(createStruct("Point", ["x", "y"], [numberType(), numberType()], false), ctx);
+	assert !info.needsCleanup;
 }
 
 test "anonymous object → None" {

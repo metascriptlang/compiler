@@ -11,8 +11,10 @@ import { TaQueryKey, TaQueryKind } from "./revision";
 export function taHashString(s: string): number {
 	let hash = 5381;
 	for (let i = 0; i < s.length; i = i + 1) {
-		hash = hash * 33 + s.charCodeAt(i);
+		hash = ((hash << 5) + hash + s.charCodeAt(i)) | 0;
 	}
+	// Ensure positive
+	if (hash < 0) hash = hash + 2147483648 + 2147483648;
 	return hash;
 }
 

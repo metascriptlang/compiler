@@ -504,6 +504,12 @@ function generateCleanup(scope: DrcScope, excludeNames: NameSet, loc: SourceLoca
 // Implementation parity: hoist a single VariableDecl if it's an RC var tracked in scope.
 // Mirrors standard scope processing which emits variables as declarations before the try body.
 // Returns true if hoisted (caller emits assignment in try body instead).
+// Nim parity: hoisted null/undefined inits should NOT generate a redundant assignment.
+// Nim's constructLoc handles zero-init once. Our hoisted {0} decl does the same.
+function isUndefinedInit(node: Node): boolean {
+	return node.kind === NodeKind.Identifier && (node.data as IdentifierData).name === "undefined";
+}
+
 function tryHoistVar(stmt: Node, scope: DrcScope, hoisted: Node[], body: Node[], loc: SourceLocation): boolean {
 	if (stmt.kind !== NodeKind.VariableDecl) return false;
 	const d = stmt.data as VariableDeclData;
@@ -514,8 +520,10 @@ function tryHoistVar(stmt: Node, scope: DrcScope, hoisted: Node[], body: Node[],
 		hoistDecl.nodeType = stmt.nodeType;
 	}
 	hoisted.push(hoistDecl);
-	if (d.initializer !== null) {
-		body.push(makeExprStmt(makeAssign(makeIdent(d.declName, loc), d.initializer, loc), loc));
+	if (d.initializer !== null && d.initializer.kind !== NodeKind.NullLiteral && !isUndefinedInit(d.initializer)) {
+		const lhs = makeIdent(d.declName, loc);
+		if (stmt.nodeType !== null) { lhs.nodeType = stmt.nodeType; }
+		body.push(makeExprStmt(makeAssign(lhs, d.initializer, loc), loc));
 	}
 	return true;
 }

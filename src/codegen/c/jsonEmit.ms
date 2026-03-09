@@ -154,6 +154,10 @@ export function generateJsonParseC(
 			c = c + "  __r.value." + fname + " = (" + cFieldType + ")" + fVar + "->numVal;\n";
 		} else {
 			c = c + "  __r.value." + fname + " = " + fVar + jsonCAccessor(ftype) + ";\n";
+			// String fields: incref before msJsonFree releases the JSON tree
+			if (ftype.kind === TypeKind.String) {
+				c = c + "  msStringIncref(__r.value." + fname + ");\n";
+			}
 		}
 
 		fi = fi + 1;
@@ -212,6 +216,68 @@ export function generateJsonStringifyC(
 
 	c = c + "  msString __result = msJsonStringify(__o);\n";
 	c = c + "  msJsonFree(__o);\n";
+	c = c + "  return __result;\n";
+	c = c + "}\n";
+
+	return makeEmitNode(c, loc);
+}
+
+// ===== JSON.stringify<T> (Colored) — for console.log debug format =====
+
+// Same as generateJsonStringifyC but uses msJsonStringifyColored (Go-style, ANSI colors).
+// Prefixes output with type name: "Person { ... }" or "class Person { ... }".
+// Used by echoCoerceArg for console.log(structValue).
+export function generateJsonStringifyColoredC(
+	helperName: string, typeName: string, structType: Type, isClass: boolean, loc: SourceLocation
+): Node {
+	const fieldNames = structType.typeNames;
+	const fieldTypes = structType.typeChildren;
+	if (fieldNames === null || fieldTypes === null) return null as unknown as Node;
+
+	let fi = 0;
+	while (fi < fieldNames.length) {
+		if (fieldTypeToJsonCtor(fieldTypes[fi]) === "") return null as unknown as Node;
+		fi = fi + 1;
+	}
+
+	// Build type prefix with ANSI color: blue for interface, green for class
+	// "class Person " or "Person " — colored at runtime via msColorsEnabled()
+	const plainPrefix = isClass ? "class " + typeName + " " : typeName + " ";
+	const plainLen = plainPrefix.length.toString();
+	// ANSI: \x1b[34m = blue (interface), \x1b[32m = green (class), \x1b[0m = reset
+	const colorCode = isClass ? "\\x1b[32m" : "\\x1b[34m";
+
+	let c = "/*INCLUDESECTION*/#include \"core/json.h\"\n";
+	c = c + "static msString " + helperName + "(" + typeName + " value) {\n";
+	c = c + "  MsJsonValue* __o = msJsonNewObject();\n";
+
+	fi = 0;
+	while (fi < fieldNames.length) {
+		const fname = fieldNames[fi];
+		const ftype = fieldTypes[fi];
+		const ctorName = fieldTypeToJsonCtor(ftype);
+
+		let valueExpr = "value." + fname;
+		if (needsNumCast(ftype)) {
+			valueExpr = "(double)" + valueExpr;
+		}
+
+		c = c + "  msJsonSet(__o, msStringNew(\"" + fname + "\", " + fname.length.toString() + "), " + ctorName + "(" + valueExpr + "));\n";
+		fi = fi + 1;
+	}
+
+	c = c + "  msString __body = msJsonStringifyColored(__o);\n";
+	c = c + "  msJsonFree(__o);\n";
+	// Build colored prefix at runtime: color + "class TypeName " + reset + body
+	c = c + "  char __pbuf[256];\n";
+	c = c + "  int __plen;\n";
+	c = c + "  if (msColorsEnabled()) {\n";
+	c = c + "    __plen = snprintf(__pbuf, sizeof(__pbuf), \"" + colorCode + "" + plainPrefix + "\\x1b[0m\");\n";
+	c = c + "  } else {\n";
+	c = c + "    __plen = snprintf(__pbuf, sizeof(__pbuf), \"" + plainPrefix + "\");\n";
+	c = c + "  }\n";
+	c = c + "  msString __prefix = msStringNew(__pbuf, __plen);\n";
+	c = c + "  msString __result = msStringConcat(__prefix, __body);\n";
 	c = c + "  return __result;\n";
 	c = c + "}\n";
 

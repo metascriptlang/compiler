@@ -451,6 +451,132 @@ static inline msString msJsonStringify(MsJsonValue* v) {
     return result;
 }
 
+/* ===== Colored Stringify (for console.log — Go-style debug format) ===== */
+
+/* ANSI color detection — respects NO_COLOR env var + TTY check */
+#ifdef _WIN32
+    #include <io.h>
+    #define _MS_ISATTY(fd) _isatty(fd)
+#else
+    #include <unistd.h>
+    #define _MS_ISATTY(fd) isatty(fd)
+#endif
+
+static int _msColorsEnabled = -1; /* -1 = uninitialized */
+
+static inline int msColorsEnabled(void) {
+    if (_msColorsEnabled < 0) {
+        const char* nc = getenv("NO_COLOR");
+        if (nc && nc[0] != '\0') { _msColorsEnabled = 0; }
+        else { _msColorsEnabled = _MS_ISATTY(fileno(stdout)) ? 1 : 0; }
+    }
+    return _msColorsEnabled;
+}
+
+#define _C(code) (msColorsEnabled() ? code : "")
+#define C_RESET  _C("\x1b[0m")
+#define C_CYAN   _C("\x1b[36m")
+#define C_GREEN  _C("\x1b[32m")
+#define C_YELLOW _C("\x1b[33m")
+#define C_MAGENTA _C("\x1b[35m")
+#define C_GRAY   _C("\x1b[90m")
+
+/* Forward decl */
+static void msJsonColorInto(MsJsonValue* v, char** buf, int64_t* len, int64_t* cap);
+
+static void msJsonColorString(char** buf, int64_t* len, int64_t* cap, msString s) {
+    msJsonBufAppend(buf, len, cap, C_GREEN, strlen(C_GREEN));
+    msJsonBufAppendChar(buf, len, cap, '"');
+    const char* data = msCStr(s);
+    for (int64_t i = 0; i < s.len; i++) {
+        char c = data[i];
+        switch (c) {
+            case '"': msJsonBufAppend(buf, len, cap, "\\\"", 2); break;
+            case '\\': msJsonBufAppend(buf, len, cap, "\\\\", 2); break;
+            case '\n': msJsonBufAppend(buf, len, cap, "\\n", 2); break;
+            case '\r': msJsonBufAppend(buf, len, cap, "\\r", 2); break;
+            case '\t': msJsonBufAppend(buf, len, cap, "\\t", 2); break;
+            default: msJsonBufAppendChar(buf, len, cap, c); break;
+        }
+    }
+    msJsonBufAppendChar(buf, len, cap, '"');
+    msJsonBufAppend(buf, len, cap, C_RESET, strlen(C_RESET));
+}
+
+static void msJsonColorInto(MsJsonValue* v, char** buf, int64_t* len, int64_t* cap) {
+    if (!v) { msJsonBufAppend(buf, len, cap, C_GRAY, strlen(C_GRAY)); msJsonBufAppend(buf, len, cap, "null", 4); msJsonBufAppend(buf, len, cap, C_RESET, strlen(C_RESET)); return; }
+    switch (v->kind) {
+    case MsJsonKind_Null:
+        msJsonBufAppend(buf, len, cap, C_GRAY, strlen(C_GRAY));
+        msJsonBufAppend(buf, len, cap, "null", 4);
+        msJsonBufAppend(buf, len, cap, C_RESET, strlen(C_RESET));
+        break;
+    case MsJsonKind_Bool:
+        msJsonBufAppend(buf, len, cap, C_MAGENTA, strlen(C_MAGENTA));
+        if (v->boolVal) msJsonBufAppend(buf, len, cap, "true", 4);
+        else msJsonBufAppend(buf, len, cap, "false", 5);
+        msJsonBufAppend(buf, len, cap, C_RESET, strlen(C_RESET));
+        break;
+    case MsJsonKind_Number: {
+        msJsonBufAppend(buf, len, cap, C_YELLOW, strlen(C_YELLOW));
+        char tmp[64];
+        int n = snprintf(tmp, sizeof(tmp), "%.17g", v->numVal);
+        msJsonBufAppend(buf, len, cap, tmp, n);
+        msJsonBufAppend(buf, len, cap, C_RESET, strlen(C_RESET));
+        break;
+    }
+    case MsJsonKind_String:
+        msJsonColorString(buf, len, cap, v->strVal);
+        break;
+    case MsJsonKind_Array:
+        msJsonBufAppendChar(buf, len, cap, '[');
+        for (int64_t i = 0; i < v->arr.len; i++) {
+            if (i > 0) msJsonBufAppend(buf, len, cap, ", ", 2);
+            msJsonColorInto(v->arr.items[i], buf, len, cap);
+        }
+        msJsonBufAppendChar(buf, len, cap, ']');
+        break;
+    case MsJsonKind_Object:
+        msJsonBufAppend(buf, len, cap, "{ ", 2);
+        for (int64_t i = 0; i < v->obj.len; i++) {
+            if (i > 0) msJsonBufAppend(buf, len, cap, ", ", 2);
+            /* Key: cyan, no quotes */
+            msJsonBufAppend(buf, len, cap, C_CYAN, strlen(C_CYAN));
+            const char* kd = msCStr(v->obj.entries[i].key);
+            msJsonBufAppend(buf, len, cap, kd, v->obj.entries[i].key.len);
+            msJsonBufAppend(buf, len, cap, C_RESET, strlen(C_RESET));
+            msJsonBufAppend(buf, len, cap, ": ", 2);
+            msJsonColorInto(v->obj.entries[i].val, buf, len, cap);
+        }
+        msJsonBufAppend(buf, len, cap, " }", 2);
+        break;
+    }
+}
+
+static inline msString msJsonStringifyColored(MsJsonValue* v) {
+    char* buf = NULL;
+    int64_t len = 0, cap = 0;
+    msJsonColorInto(v, &buf, &len, &cap);
+    if (!buf) return MS_EMPTY_STRING;
+    msString result = msStringNew(buf, len);
+    free(buf);
+    return result;
+}
+
+static inline msString msJsonStringifyColoredLabeled(MsJsonValue* v) {
+    char* buf = NULL;
+    int64_t len = 0, cap = 0;
+    /* Prefix: cyan "Json " */
+    msJsonBufAppend(&buf, &len, &cap, C_CYAN, strlen(C_CYAN));
+    msJsonBufAppend(&buf, &len, &cap, "Json ", 5);
+    msJsonBufAppend(&buf, &len, &cap, C_RESET, strlen(C_RESET));
+    msJsonColorInto(v, &buf, &len, &cap);
+    if (!buf) return MS_EMPTY_STRING;
+    msString result = msStringNew(buf, len);
+    free(buf);
+    return result;
+}
+
 /* ===== Cleanup ===== */
 
 /* Recursively free a JSON value tree (entries/items arrays + child nodes). */

@@ -5,7 +5,7 @@
  * File I/O lives in std/fs/native.h.
  * JSON parsing lives in runtime/core/json.h.
  *
- * Follows Nim's syncio pattern: thin C wrappers, binary mode,
+ * Follows the standard reference's synchronous I/O pattern: thin C wrappers, binary mode,
  * platform macros for stdin/stdout/stderr on macOS.
  */
 

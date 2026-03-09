@@ -69,6 +69,8 @@ Tracks function-local state:
 Large value-types (interfaces, tuples, results) are returned via an implicit out-parameter `Result*` rather than on the stack.
 - `getTypeDesc` determines if a type needs NRVO
 - `genCallExpr` injects the destination address as the first argument
+- **Convention**: Result pointer is the FIRST parameter (Nim puts it LAST). Internally consistent — both direct calls and closure calls use first-param position.
+- `genClosureCall` handles NRVO via `genClHalfCastNrvo`/`genClFullCastNrvo` — changes return type to `void` and prepends `Type*` first param in the cast
 
 ---
 

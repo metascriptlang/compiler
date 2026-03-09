@@ -1,6 +1,7 @@
 @include("system.h");
 
 export class console {
+  @builtin("Echo")
   static extern log(value: string): void from "msPrintln";
 }
 

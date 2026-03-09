@@ -276,7 +276,8 @@ function collectInterface(ctx: CheckerContext, node: Node): void {
 
 function collectEnumDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as EnumDeclData;
-	const enumType = createEnum(d.enumName, d.enumMembers);
+	const enumValues = d.enumValues !== null ? d.enumValues : [] as number[];
+	const enumType = createEnum(d.enumName, d.enumMembers, enumValues);
 	defineOrError(ctx, makeSymbol(d.enumName, SymbolKind.Enum, enumType, false), node);
 	// Register each enum member as EnumName_MemberName (standard implementation parity)
 	// Needed because checkMemberExpr rewrites Color.Red → Identifier "Color_Red"
