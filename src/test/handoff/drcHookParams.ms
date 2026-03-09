@@ -1,4 +1,4 @@
-// DRC Hook Param Convention — verify lifecycle hooks use pointer params (Nim: var T)
+// DRC Hook Param Convention — verify lifecycle hooks use pointer params (standard reference parity)
 //
 // Root cause: destructorLifting creates hooks with value-typed params,
 // but inject.ms always wraps args in HiddenAddr (pointer). The forward decls

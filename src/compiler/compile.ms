@@ -468,7 +468,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		}
 	}
 
-	// Phase B: Compute DCE alive set on post-transform ASTs (Nim-aligned)
+	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
 	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false);
 
@@ -609,7 +609,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		allFlags = appendFlag(allFlags, ctx.compilerFlags);
 	}
 
-	// Phase B: Compute DCE alive set on post-transform ASTs (Nim-aligned)
+	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
 	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, filePath, true);
 

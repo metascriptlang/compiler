@@ -7,7 +7,7 @@
 // Architecture: builtinLower resolves the struct type + field metadata from the checker,
 // then delegates to this module for C code generation. Clean separation:
 //   builtinLower.ms — AST rewriting (@builtin dispatch, call site replacement)
-//   jsonEmit.ms     — C code generation (string building, type mapping)
+//   json.ms         — C code generation (string building, type mapping)
 
 import {
 	Node, NodeKind, SourceLocation, createNode,
@@ -66,7 +66,7 @@ function jsonCAccessor(ftype: Type): string {
 }
 
 // Whether a numeric field needs a cast from double (JSON numbers are always double).
-function needsNumCast(ftype: Type): boolean {
+export function needsNumCast(ftype: Type): boolean {
 	if (ftype === null) return false;
 	return match (ftype.kind) {
 		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
@@ -77,7 +77,7 @@ function needsNumCast(ftype: Type): boolean {
 }
 
 // C builder function name for constructing MsJsonValue* from a field value.
-function fieldTypeToJsonCtor(ftype: Type): string {
+export function fieldTypeToJsonCtor(ftype: Type): string {
 	if (ftype === null) return "";
 	return match (ftype.kind) {
 		TypeKind.String => "msJsonNewString",
@@ -222,13 +222,16 @@ export function generateJsonStringifyC(
 	return makeEmitNode(c, loc);
 }
 
-// ===== JSON.stringify<T> (Colored) — for console.log debug format =====
+// ===== Debug Stringify (colored console.log output) =====
 
-// Same as generateJsonStringifyC but uses msJsonStringifyColored (Go-style, ANSI colors).
-// Prefixes output with type name: "Person { ... }" or "class Person { ... }".
+// Generate a C function: static msString __jsonDbg_T(T value) { ... }
+// Same as JSON.stringify<T> but uses msJsonStringifyColored (Go-style, ANSI colors).
 // Used by echoCoerceArg for console.log(structValue).
+//
+// displayName: prefix shown before { ... } (e.g., "Person ", "class Person ", "Anon ")
+// colorCode: ANSI escape for the prefix (e.g., "\\x1b[34m" blue, "\\x1b[32m" green, "\\x1b[36m" cyan)
 export function generateJsonStringifyColoredC(
-	helperName: string, typeName: string, structType: Type, isClass: boolean, loc: SourceLocation
+	helperName: string, typeName: string, structType: Type, displayName: string, colorCode: string, loc: SourceLocation
 ): Node {
 	const fieldNames = structType.typeNames;
 	const fieldTypes = structType.typeChildren;
@@ -240,12 +243,7 @@ export function generateJsonStringifyColoredC(
 		fi = fi + 1;
 	}
 
-	// Build type prefix with ANSI color: blue for interface, green for class
-	// "class Person " or "Person " — colored at runtime via msColorsEnabled()
-	const plainPrefix = isClass ? "class " + typeName + " " : typeName + " ";
-	const plainLen = plainPrefix.length.toString();
-	// ANSI: \x1b[34m = blue (interface), \x1b[32m = green (class), \x1b[0m = reset
-	const colorCode = isClass ? "\\x1b[32m" : "\\x1b[34m";
+	const plainPrefix = displayName;
 
 	let c = "/*INCLUDESECTION*/#include \"core/json.h\"\n";
 	c = c + "static msString " + helperName + "(" + typeName + " value) {\n";

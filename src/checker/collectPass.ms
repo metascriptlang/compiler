@@ -391,7 +391,7 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 				if (primarySym !== null) {
 					if (exportInfo.nativeName !== "") primarySym.nativeName = exportInfo.nativeName;
 					if (exportInfo.builtinKind !== "") primarySym.builtinKind = exportInfo.builtinKind;
-					if (exportInfo.defaultTexts !== null && exportInfo.defaultTexts.length > 0) primarySym.defaultParamText = exportInfo.defaultTexts;
+					if (exportInfo.defaultParams !== null && exportInfo.defaultParams.length > 0) primarySym.defaultParams = exportInfo.defaultParams;
 				}
 				// Register overloads from source module
 				if (exportInfo.overloadTypes.length > 0 && primarySym !== null) {
@@ -406,8 +406,8 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 						if (exportInfo.overloadBuiltinKinds !== null && ovIdx < exportInfo.overloadBuiltinKinds.length && exportInfo.overloadBuiltinKinds[ovIdx] !== "") {
 							ovSym.builtinKind = exportInfo.overloadBuiltinKinds[ovIdx];
 						}
-						if (exportInfo.overloadDefaultTexts !== null && ovIdx < exportInfo.overloadDefaultTexts.length && exportInfo.overloadDefaultTexts[ovIdx] !== null && exportInfo.overloadDefaultTexts[ovIdx].length > 0) {
-							ovSym.defaultParamText = exportInfo.overloadDefaultTexts[ovIdx];
+						if (exportInfo.overloadDefaultParams !== null && ovIdx < exportInfo.overloadDefaultParams.length && exportInfo.overloadDefaultParams[ovIdx] !== null && exportInfo.overloadDefaultParams[ovIdx].length > 0) {
+							ovSym.defaultParams = exportInfo.overloadDefaultParams[ovIdx];
 						}
 						primarySym.overloads.push(ovSym);
 						// Register per-overload extension if it has one

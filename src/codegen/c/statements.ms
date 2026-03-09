@@ -26,7 +26,7 @@ import {
 import { genExpr } from "./expressions";
 import { ensureCrossModuleProto } from "./declarations";
 import { safeName } from "./names";
-import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, getCalleeReturnType } from "./types";
+import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, getCalleeReturnType, intToString } from "./types";
 
 // ===== NRVO Call Site Helpers =====
 // G3 fix: detect calls to NRVO functions and emit fn(&dest, args) instead of dest = fn(args)
@@ -261,30 +261,64 @@ function wrapCond(s: string): string {
 
 // ===== If Statement =====
 
+// Standard reference parity: goto-based dispatch for conditionals.
+// Each branch is in its own scope. NRVO calls for conditions happen inside
+// the scope, never between branches. No if/else if chains.
+//
+// Pattern:
+//   { if (!cond1) goto L1; body1; } goto Lend;
+//   L1: { if (!cond2) goto L2; body2; } goto Lend;
+//   L2: { elseBody; }
+//   Lend: ;
 function genIfStmt(g: CGen, p: CProc, node: Node): void {
+	// Collect all branches: [{cond, body}, ...] + optional elseBody
+	const branches: Node[] = [];
+	const bodies: Node[] = [];
+	let elseBody: Node = null;
 	let current = node;
-	let isFirst = true;
 	while (current !== null && current.kind === NodeKind.IfStmt) {
 		const d = current.data as IfStmtData;
-		const condSnippet = genExpr(g, p, d.condition);
-		if (isFirst) {
-			emitStmts(p, "if " + wrapCond(condSnippet) + " ");
-			isFirst = false;
-		} else {
-			emitStmts(p, " else if " + wrapCond(condSnippet) + " ");
-		}
-		genBlockOrBraces(g, p, d.consequent);
+		branches.push(d.condition);
+		bodies.push(d.consequent);
 		if (isEmptyBlock(d.alternate)) {
 			current = null;
 		} else if (d.alternate.kind === NodeKind.IfStmt) {
 			current = d.alternate;
 		} else {
-			emitStmts(p, " else ");
-			genBlockOrBraces(g, p, d.alternate);
-			emitStmtsNl(p);
+			elseBody = d.alternate;
 			current = null;
 		}
 	}
+	const hasManyBranches = branches.length > 1 || elseBody !== null;
+	// Single if with no else: use simple if pattern (no gotos needed)
+	if (!hasManyBranches) {
+		const condSnippet = genExpr(g, p, branches[0]);
+		emitStmts(p, "if " + wrapCond(condSnippet) + " ");
+		genBlockOrBraces(g, p, bodies[0]);
+		emitStmtsNl(p);
+		return;
+	}
+	// Multi-branch: goto-based dispatch (Reference parity)
+	p.labels += 1;
+	const labelBase = p.labels;
+	const lend = "__L" + intToString(labelBase) + "_end";
+	let i = 0;
+	while (i < branches.length) {
+		p.labels += 1;
+		const lnext = "__L" + intToString(p.labels);
+		emitStmtsLine(p, "{");
+		const condSnippet = genExpr(g, p, branches[i]);
+		emitStmtsLine(p, "if (!(" + condSnippet + ")) goto " + lnext + ";");
+		genBlockOrBraces(g, p, bodies[i]);
+		emitStmtsLine(p, "} goto " + lend + ";");
+		emitStmtsLine(p, lnext + ":;");
+		i += 1;
+	}
+	if (elseBody !== null) {
+		genBlockOrBraces(g, p, elseBody);
+		emitStmtsNl(p);
+	}
+	emitStmtsLine(p, lend + ":;");
 }
 
 // ===== While Statement =====

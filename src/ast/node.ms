@@ -40,7 +40,7 @@ export class Symbol {
 	nativeName: string;
 	builtinKind: string;
 	symFlags: int32;
-	defaultParamText: string[];
+	defaultParams: Node[];
 	modulePath: string;
 }
 
@@ -185,7 +185,7 @@ export type NodeData =
 	| { argument: Node }                                           // ReturnStmt
 	| { breakLabel: string }                                       // BreakStmt
 	| { continueLabel: string }                                    // ContinueStmt
-	| { fnName: string, params: string[], fnParamTypes: string[], fnBody: Node, fnFlags: string, fnReturnType: string, fnDefaults: string[], nativeName: string } // FunctionDecl
+	| { fnName: string, params: string[], fnParamTypes: string[], fnBody: Node, fnFlags: string, fnReturnType: string, fnDefaults: Node[], nativeName: string } // FunctionDecl
 	| { doBody: Node, doCondition: Node }                          // DoWhileStmt
 	| { switchDisc: Node, switchCases: Node[] }                    // SwitchStmt
 	| { caseTests: Node[], caseStmts: Node[], isDefault: boolean } // SwitchCase
@@ -288,7 +288,7 @@ export type ExprStmtData = { expr: Node };
 export type ReturnStmtData = { argument: Node };
 export type BreakStmtData = { breakLabel: string };
 export type ContinueStmtData = { continueLabel: string };
-export type FunctionDeclData = { fnName: string, params: string[], fnParamTypes: string[], fnBody: Node, fnFlags: string, fnReturnType: string, fnDefaults: string[], nativeName: string };
+export type FunctionDeclData = { fnName: string, params: string[], fnParamTypes: string[], fnBody: Node, fnFlags: string, fnReturnType: string, fnDefaults: Node[], nativeName: string };
 export type DoWhileStmtData = { doBody: Node, doCondition: Node };
 export type SwitchStmtData = { switchDisc: Node, switchCases: Node[] };
 export type SwitchCaseData = { caseTests: Node[], caseStmts: Node[], isDefault: boolean };

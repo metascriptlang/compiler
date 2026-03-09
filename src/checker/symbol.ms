@@ -138,7 +138,7 @@ export function makeSymbol(name: string, kind: SymbolKind, symType: Type, mutabl
 	sym.overloads = [];
 	sym.nativeName = "";
 	sym.builtinKind = "";
-	sym.defaultParamText = [];
+	sym.defaultParams = [];
 	sym.symFlags = mutable ? SymbolFlag.Mutable : SymbolFlag.None;
 	sym.modulePath = "";
 	return sym;

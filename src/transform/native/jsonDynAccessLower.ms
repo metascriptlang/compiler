@@ -11,7 +11,7 @@ import { TypeKind, unwrapRef } from "../../checker/types";
 import { TransformContext, hasEmitted } from "../context";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall, makeString } from "../util";
-import { makeEmitNode } from "../../codegen/c/jsonEmit";
+import { makeEmitNode } from "../../codegen/c/json";
 
 // Map target TypeKind → C runtime accessor function name
 function jsonAccessorName(kind: TypeKind): string {

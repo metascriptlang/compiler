@@ -2,6 +2,7 @@ import { Type, TypeKind, unknownType, hasGenericParams, unifyType, createUnifyBi
 import { isAssignable } from "./compat";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, createSymbolTable } from "./symbol";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
+import { Node } from "../ast/node";
 import { sliceStr, findChar, trimStr, splitTopLevel } from "../utils/string";
 
 
@@ -22,8 +23,8 @@ export interface ExportedSymInfo {
 	builtinKind: string;
 	overloadNativeNames: string[];
 	overloadBuiltinKinds: string[];
-	defaultTexts: string[];
-	overloadDefaultTexts: string[][];
+	defaultParams: Node[];
+	overloadDefaultParams: Node[][];
 }
 
 export interface ModuleExports {
@@ -76,7 +77,7 @@ export function findExportedSymbol(registry: ExportRegistry, modulePath: string,
 // Tracks "function f(this self: Type)" declarations for method resolution.
 
 // fnType: registration-time cache — may be stale. Use getExtFnType() for reads.
-// sym: AUTHORITATIVE source of type info (sym.symbolType = Nim PSym.typ equivalent).
+// sym: AUTHORITATIVE source of type info (sym.symbolType = standard reference symbol type equivalent).
 export interface ExtensionMethod {
 	methodName: string;
 	receiverTypeName: string;
@@ -95,7 +96,7 @@ export function createExtensionRegistry(): ExtensionRegistry {
 }
 
 export function registerExtension(registry: ExtensionRegistry, method: ExtensionMethod): void {
-	// Dedup by sym identity at registration (Nim: dedup by sym.id in initCandidateSymbols).
+	// Dedup by sym identity at registration (Reference parity: deduplicate candidates by identity).
 	// Prevents prelude + import from creating duplicate candidates.
 	if (method.sym !== null) {
 		let i = 0;
@@ -154,7 +155,7 @@ export function findAllExtensionsByName(registry: ExtensionRegistry, methodName:
 	return results;
 }
 
-// ===== Canonical Extension Type (Nim PSym.typ equivalent) =====
+// ===== Canonical Extension Type (Standard reference symbol type equivalent) =====
 // Standard reference: the symbol's type is the single source of truth.
 // ext.fnType is a registration-time snapshot that may be stale (unknownType from collectPass).
 // Always use this helper instead of reading ext.fnType directly.

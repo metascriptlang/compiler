@@ -18,7 +18,7 @@ extern function contains(this s: string, sub: string): boolean from "msStringCon
 
 // ===== Search =====
 
-extern function indexOf(this s: string, sub: string, start: number): number from "msStringIndexOf";
+extern function indexOf(this s: string, sub: string, start: number = 0): number from "msStringIndexOf";
 
 extern function lastIndexOf(this s: string, sub: string): number from "msStringLastIndexOf";
 

@@ -185,21 +185,44 @@ export function sgTypeToString(t: Type): string {
 }
 
 // ===== sgFindNodeAtPosition — walk AST to find node at cursor =====
+//
+// Reference pattern: check exact column span for node tracking.
+// We can't use forEachChild (causes hangs on large files), so manual walk.
+// Key insight from standard reference patterns: don't prune by column on container nodes — child nodes
+// (e.g. MemberExpr condition in IfStmt) can have column > parent's column.
 
 function nodeContains(node: Node, line: number, col: number): boolean {
 	if (node === null) return false;
 	const loc = node.location;
-	// Node starts at or before cursor position
+	if (loc === null) return false;
 	if (loc.line > line) return false;
 	if (loc.line === line && loc.column > col) return false;
 	return true;
 }
 
+function sgTokenLen(node: Node): number {
+	if (node.kind === NodeKind.Identifier) return (node.data as IdentifierData).name.length;
+	if (node.kind === NodeKind.NumberLiteral) return 1;
+	if (node.kind === NodeKind.StringLiteral) return 1;
+	if (node.kind === NodeKind.BooleanLiteral) return 4;
+	if (node.kind === NodeKind.NullLiteral) return 4;
+	return 0;
+}
+
+// Reference: leaf node at exact cursor position
+function isTracked(node: Node, line: number, col: number): boolean {
+	if (node === null) return false;
+	const loc = node.location;
+	if (loc.line !== line) return false;
+	const len = sgTokenLen(node);
+	if (len > 0) return col >= loc.column && col < loc.column + len;
+	return false;
+}
+
 function sgFindInChildren(children: Node[], line: number, col: number): Node {
-	// Walk children in reverse to find innermost (last matching wins)
 	for (let i = children.length - 1; i >= 0; i = i - 1) {
 		const child = children[i];
-		if (child !== null && nodeContains(child, line, col)) {
+		if (child !== null && child.location.line <= line) {
 			const deeper = sgFindNodeAtPosition(child, line, col);
 			if (deeper !== null) return deeper;
 		}
@@ -207,157 +230,193 @@ function sgFindInChildren(children: Node[], line: number, col: number): Node {
 	return null as unknown as Node;
 }
 
+// Try child with standard containment (start position check)
+function sgTryChildLine(child: Node, line: number, col: number): Node {
+	if (child === null) return null as unknown as Node;
+	if (!nodeContains(child, line, col)) return null as unknown as Node;
+	return sgFindNodeAtPosition(child, line, col);
+}
+
+// Try child of a statement node — line-only containment (no column check).
+// Statement children (IfStmt condition, etc.) can start at any column.
+function sgTryStmtChild(child: Node, line: number, col: number): Node {
+	if (child === null) return null as unknown as Node;
+	const loc = child.location;
+	if (loc === null) return null as unknown as Node;
+	if (loc.line > line) return null as unknown as Node;
+	return sgFindNodeAtPosition(child, line, col);
+}
+
 export function sgFindNodeAtPosition(program: Node, line: number, col: number): Node {
 	if (program === null) return null as unknown as Node;
-	if (!nodeContains(program, line, col)) return null as unknown as Node;
+	// Line-only guard: don't reject by column here — child nodes may start
+	// at different columns (MemberExpr loc is at dot, not at object).
+	// Leaf isTracked handles exact column matching.
+	const pLoc = program.location;
+	if (pLoc === null) return null as unknown as Node;
+	if (pLoc.line > line) return null as unknown as Node;
 
-	// Leaf nodes
+	// Leaf nodes — use isTracked (exact column span)
+	if (isTracked(program, line, col)) return program;
+	// Leaf nodes that didn't match — reject
 	if (program.kind === NodeKind.Identifier
 		|| program.kind === NodeKind.NumberLiteral
 		|| program.kind === NodeKind.StringLiteral
 		|| program.kind === NodeKind.BooleanLiteral
-		|| program.kind === NodeKind.NullLiteral) return program;
+		|| program.kind === NodeKind.NullLiteral) return null as unknown as Node;
 
-	// Program
+	// Container nodes — recurse into children
 	if (program.kind === NodeKind.Program) {
-		const pd = program.data as ProgramData;
-		return sgFindInChildren(pd.programStmts, line, col);
+		return sgFindInChildren((program.data as ProgramData).programStmts, line, col);
 	}
-
-	// Block
 	if (program.kind === NodeKind.BlockStmt) {
-		const bd = program.data as BlockStmtData;
-		return sgFindInChildren(bd.statements, line, col);
+		return sgFindInChildren((program.data as BlockStmtData).statements, line, col);
 	}
-
-	// Variable declaration
 	if (program.kind === NodeKind.VariableDecl) {
 		const vd = program.data as VariableDeclData;
-		if (vd.initializer !== null) {
-			const found = sgFindNodeAtPosition(vd.initializer, line, col);
-			if (found !== null) return found;
-		}
-		return program;
+		const f = sgTryStmtChild(vd.initializer, line, col);
+		if (f !== null) return f;
+		// No child matched — cursor is on declaration name or type annotation
+		if (pLoc.line === line) return program;
+		return null as unknown as Node;
 	}
-
-	// Binary expression
+	if (program.kind === NodeKind.ExprStmt) {
+		return sgTryStmtChild((program.data as ExprStmtData).expr, line, col);
+	}
+	if (program.kind === NodeKind.ReturnStmt) {
+		return sgTryStmtChild((program.data as ReturnStmtData).argument, line, col);
+	}
 	if (program.kind === NodeKind.BinaryExpr) {
 		const bd = program.data as BinaryExprData;
-		const r = sgFindNodeAtPosition(bd.right, line, col);
+		const r = sgTryStmtChild(bd.right, line, col);
 		if (r !== null) return r;
-		const l = sgFindNodeAtPosition(bd.left, line, col);
-		if (l !== null) return l;
-		return program;
+		return sgTryStmtChild(bd.left, line, col);
 	}
-
-	// Call expression
 	if (program.kind === NodeKind.CallExpr) {
 		const cd = program.data as CallExprData;
 		for (let i = cd.arguments.length - 1; i >= 0; i = i - 1) {
-			const found = sgFindNodeAtPosition(cd.arguments[i], line, col);
-			if (found !== null) return found;
+			const f = sgTryStmtChild(cd.arguments[i], line, col);
+			if (f !== null) return f;
 		}
-		const calFound = sgFindNodeAtPosition(cd.callee, line, col);
-		if (calFound !== null) return calFound;
-		return program;
+		return sgTryStmtChild(cd.callee, line, col);
 	}
-
-	// Member expression
 	if (program.kind === NodeKind.MemberExpr) {
 		const md = program.data as MemberExprData;
-		const objFound = sgFindNodeAtPosition(md.object, line, col);
-		if (objFound !== null) return objFound;
-		return program;
-	}
-
-	// Expression statement
-	if (program.kind === NodeKind.ExprStmt) {
-		const ed = program.data as ExprStmtData;
-		const found = sgFindNodeAtPosition(ed.expr, line, col);
-		if (found !== null) return found;
-		return program;
-	}
-
-	// Return statement
-	if (program.kind === NodeKind.ReturnStmt) {
-		const rd = program.data as ReturnStmtData;
-		if (rd.argument !== null) {
-			const found = sgFindNodeAtPosition(rd.argument, line, col);
-			if (found !== null) return found;
+		// Object child can start before the dot — use line-only
+		const f = sgTryStmtChild(md.object, line, col);
+		if (f !== null) return f;
+		// Property name: not a child node, synthesize match
+		if (program.location.line === line) {
+			// MemberExpr location is at the dot. Property starts at dot+1.
+			const propCol = program.location.column + 1;
+			if (col >= propCol && col < propCol + md.property.length) return program;
 		}
-		return program;
+		return null as unknown as Node;
 	}
-
-	// If statement
 	if (program.kind === NodeKind.IfStmt) {
 		const id = program.data as IfStmtData;
-		if (id.alternate !== null) {
-			const found = sgFindNodeAtPosition(id.alternate, line, col);
-			if (found !== null) return found;
-		}
-		const consFound = sgFindNodeAtPosition(id.consequent, line, col);
-		if (consFound !== null) return consFound;
-		const condFound = sgFindNodeAtPosition(id.condition, line, col);
-		if (condFound !== null) return condFound;
-		return program;
+		// Statement children — use line-only containment (condition column may differ)
+		const c = sgTryStmtChild(id.condition, line, col);
+		if (c !== null) return c;
+		const t = sgTryStmtChild(id.consequent, line, col);
+		if (t !== null) return t;
+		return sgTryStmtChild(id.alternate, line, col);
 	}
-
-	// While statement
 	if (program.kind === NodeKind.WhileStmt) {
 		const wd = program.data as WhileStmtData;
-		const bodyFound = sgFindNodeAtPosition(wd.whileBody, line, col);
-		if (bodyFound !== null) return bodyFound;
-		const condFound = sgFindNodeAtPosition(wd.whileCondition, line, col);
-		if (condFound !== null) return condFound;
-		return program;
+		const c = sgTryStmtChild(wd.whileCondition, line, col);
+		if (c !== null) return c;
+		return sgTryStmtChild(wd.whileBody, line, col);
 	}
-
-	// Function declaration
 	if (program.kind === NodeKind.FunctionDecl) {
 		const fd = program.data as FunctionDeclData;
-		const bodyFound = sgFindNodeAtPosition(fd.fnBody, line, col);
-		if (bodyFound !== null) return bodyFound;
-		return program;
+		for (let i = 0; i < fd.params.length; i = i + 1) {
+			const f = sgTryStmtChild(fd.params[i], line, col);
+			if (f !== null) return f;
+		}
+		const fnB = sgTryStmtChild(fd.fnBody, line, col);
+		if (fnB !== null) return fnB;
+		// Cursor on function name
+		if (pLoc.line === line) return program;
+		return null as unknown as Node;
 	}
-
-	// Array literal
-	if (program.kind === NodeKind.ArrayLiteral) {
-		const ad = program.data as ArrayLiteralData;
-		return sgFindInChildren(ad.elements, line, col);
+	if (program.kind === NodeKind.ArrowFunction) {
+		const af = program.data as ArrowFunctionData;
+		return sgTryStmtChild(af.arrowBody, line, col);
 	}
-
-	// Conditional expression
 	if (program.kind === NodeKind.ConditionalExpr) {
 		const cd = program.data as ConditionalExprData;
-		const altFound = sgFindNodeAtPosition(cd.ternaryAlternate, line, col);
-		if (altFound !== null) return altFound;
-		const consFound = sgFindNodeAtPosition(cd.ternaryConsequent, line, col);
-		if (consFound !== null) return consFound;
-		const condFound = sgFindNodeAtPosition(cd.ternaryCondition, line, col);
-		if (condFound !== null) return condFound;
-		return program;
+		const c = sgTryStmtChild(cd.ternaryCondition, line, col);
+		if (c !== null) return c;
+		const t = sgTryStmtChild(cd.ternaryConsequent, line, col);
+		if (t !== null) return t;
+		return sgTryStmtChild(cd.ternaryAlternate, line, col);
 	}
-
-	// Unary expression
 	if (program.kind === NodeKind.UnaryExpr) {
-		const ud = program.data as UnaryExprData;
-		const found = sgFindNodeAtPosition(ud.operand, line, col);
-		if (found !== null) return found;
-		return program;
+		return sgTryStmtChild((program.data as UnaryExprData).operand, line, col);
 	}
-
-	// Array access
 	if (program.kind === NodeKind.ArrayAccess) {
 		const ad = program.data as ArrayAccessData;
-		const idxFound = sgFindNodeAtPosition(ad.index, line, col);
-		if (idxFound !== null) return idxFound;
-		const arrFound = sgFindNodeAtPosition(ad.array, line, col);
-		if (arrFound !== null) return arrFound;
-		return program;
+		const i = sgTryStmtChild(ad.index, line, col);
+		if (i !== null) return i;
+		return sgTryStmtChild(ad.array, line, col);
+	}
+	if (program.kind === NodeKind.ArrayLiteral) {
+		return sgFindInChildren((program.data as ArrayLiteralData).elements, line, col);
+	}
+	if (program.kind === NodeKind.ObjectLiteral) {
+		return sgFindInChildren((program.data as ObjectLiteralData).properties, line, col);
+	}
+	if (program.kind === NodeKind.ForOfStmt) {
+		const fod = program.data as ForOfStmtData;
+		const b = sgTryStmtChild(fod.forOfBody, line, col);
+		if (b !== null) return b;
+		return sgTryStmtChild(fod.forOfIterable, line, col);
+	}
+	if (program.kind === NodeKind.ForStmt) {
+		const fs = program.data as ForStmtData;
+		const b = sgTryStmtChild(fs.forBody, line, col);
+		if (b !== null) return b;
+		const u = sgTryStmtChild(fs.forUpdate, line, col);
+		if (u !== null) return u;
+		const t = sgTryStmtChild(fs.forTest, line, col);
+		if (t !== null) return t;
+		return sgTryStmtChild(fs.forInit, line, col);
+	}
+	if (program.kind === NodeKind.TryCatchStmt) {
+		const tc = program.data as TryCatchStmtData;
+		const t = sgTryStmtChild(tc.tryBlock, line, col);
+		if (t !== null) return t;
+		const c = sgTryStmtChild(tc.catchBlock, line, col);
+		if (c !== null) return c;
+		return sgTryStmtChild(tc.finallyBlock, line, col);
+	}
+	if (program.kind === NodeKind.MatchExpr) {
+		const me = program.data as MatchExprData;
+		const d = sgTryStmtChild(me.matchDiscriminant, line, col);
+		if (d !== null) return d;
+		return sgFindInChildren(me.matchCases, line, col);
+	}
+	if (program.kind === NodeKind.MatchCase) {
+		const mc = program.data as MatchCaseData;
+		const b = sgTryStmtChild(mc.caseBody, line, col);
+		if (b !== null) return b;
+		return sgFindInChildren(mc.casePatterns, line, col);
+	}
+	if (program.kind === NodeKind.ClassDecl) {
+		const cd = program.data as ClassDeclData;
+		return sgFindInChildren(cd.classBody, line, col);
+	}
+	if (program.kind === NodeKind.TryExpr) {
+		const te = program.data as TryExprData;
+		return sgTryStmtChild(te.tryExpr, line, col);
+	}
+	if (program.kind === NodeKind.ExportDecl) {
+		return sgTryStmtChild((program.data as ExportDeclData).exportedDecl, line, col);
 	}
 
-	// Fallback: return self if position matches
-	return program;
+	// Fallback: no children found
+	return null as unknown as Node;
 }
 
 // ===== sgGetSymbolAtCursor — resolve symbol at cursor position =====

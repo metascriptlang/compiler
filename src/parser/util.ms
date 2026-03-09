@@ -2,10 +2,11 @@
 // Lives at parser/ level to avoid circular imports between expressions/ and statements/
 
 import { Token, TokenKind } from "../lexer/token";
-import { Node } from "../ast/node";
+import { Node, NodeKind, NumberLiteralData } from "../ast/node";
 import { ParserState, createState, current, advance, isAtEnd, skipDestructurePattern, takePendingComments, collectTokenText } from "./context";
 import { skipTypeAnnotation } from "./typeAnnotation";
 import { lex } from "../lexer/lexer";
+import { callExprParser } from "./statements/callbacks";
 
 
 // ===== Comment Preservation =====
@@ -86,12 +87,13 @@ export function skipDefaultValue(state: ParserState): void {
 // constructor modifiers (public/private/protected/readonly)
 
 // Module-level: defaults from the last parseParamList call.
-// Indexed by param position (0-based). Empty string = no default.
-let _lastDefaults: string[] = [];
+// Indexed by param position (0-based). null = no default.
+// Reference parity: defaults stored as AST nodes, not text.
+let _lastDefaults: Node[] = [];
 
 // Get defaults from the most recent parseParamList call.
-// Returns array parallel to params: "" for no default, text otherwise.
-export function getLastParsedDefaults(): string[] {
+// Returns array parallel to params: null for no default, Node otherwise.
+export function getLastParsedDefaults(): Node[] {
 	return _lastDefaults;
 }
 
@@ -143,14 +145,10 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 			params.push(captureOptionalType(state));
 			if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
 				advance(state);
-				const dStartIdx = state.position;
-				skipDefaultValue(state);
-				if (fnName !== "") {
-					const dText = collectTokenText(state, dStartIdx, state.position);
-					const dIdx = (params.length - 2) / 2;
-					while (_lastDefaults.length < dIdx) { _lastDefaults.push(""); }
-					_lastDefaults.push(dText);
-				}
+				const dIdx = (params.length - 2) / 2;
+				while (_lastDefaults.length < dIdx) { _lastDefaults.push(null); }
+				const dResult = callExprParser(state);
+				_lastDefaults.push(dResult.ok ? dResult.value : null);
 			}
 			if (current(state).kind === TokenKind.Comma) { advance(state); } else { break; }
 			continue;
@@ -160,17 +158,13 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 		params.push(paramPrefix + param.value);
 		advance(state);
 		params.push(captureOptionalType(state));
-		// Capture default value
+		// Capture default value as AST node (Nim parity: formal.ast)
 		if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
 			advance(state);
-			const startIdx = state.position;
-			skipDefaultValue(state);
-			if (fnName !== "") {
-				const defaultText = collectTokenText(state, startIdx, state.position);
-				const paramIdx = (params.length - 2) / 2;
-				while (_lastDefaults.length < paramIdx) { _lastDefaults.push(""); }
-				_lastDefaults.push(defaultText);
-			}
+			const paramIdx = (params.length - 2) / 2;
+			while (_lastDefaults.length < paramIdx) { _lastDefaults.push(null); }
+			const defResult = callExprParser(state);
+			_lastDefaults.push(defResult.ok ? defResult.value : null);
 		}
 		if (current(state).kind === TokenKind.Comma) { advance(state); } else { break; }
 	}
@@ -206,17 +200,21 @@ test "capture number default via getLastParsedDefaults" {
 	assert raw.length === 4;
 	const defs = getLastParsedDefaults();
 	assert defs.length === 2;
-	assert defs[0] === "";
-	assert defs[1] === "5";
+	assert defs[0] === null;
+	assert defs[1] !== null;
+	assert defs[1].kind === NodeKind.NumberLiteral;
+	assert (defs[1].data as NumberLiteralData).value === 5;
 }
 
 test "multiple defaults via getLastParsedDefaults" {
 	parseParams("(a: number, b: number = 1, c: number = 2)", "testFn2");
 	const defs = getLastParsedDefaults();
 	assert defs.length === 3;
-	assert defs[0] === "";
-	assert defs[1] === "1";
-	assert defs[2] === "2";
+	assert defs[0] === null;
+	assert defs[1] !== null;
+	assert (defs[1].data as NumberLiteralData).value === 1;
+	assert defs[2] !== null;
+	assert (defs[2].data as NumberLiteralData).value === 2;
 }
 
 test "no default returns empty array" {

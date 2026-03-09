@@ -10,24 +10,24 @@
 // This is an AST-to-AST transform — codegen sees only plain calls.
 //
 // Typed JSON (JsonParse/JsonStringify): delegates C code generation to
-// codegen/c/jsonEmit.ms for clean separation of concerns.
+// codegen/c/json.ms for clean separation of concerns.
 
 import {
 	Node, NodeKind, NodeFlag, DeclKind, ProgramData, SourceLocation,
-	CallExprData, MemberExprData, IdentifierData,
+	CallExprData, MemberExprData, IdentifierData, ObjectLiteralData,
 } from "../../ast/node";
-import { Type, TypeKind, isNumeric, createResult, createArray, createPrimitive, stringType, booleanType, numberType, unknownType, unwrapRef } from "../../checker/types";
+import { Type, TypeKind, isNumeric, createResult, createArray, createPrimitive, createStruct, stringType, booleanType, numberType, unknownType, unwrapRef } from "../../checker/types";
 import { TransformContext, hasEmitted } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
-import { findExtension } from "../../checker/context";
 import { walkNode } from "../walker";
 import {
-	makeIdent, makeCall, makeString, makeBinary, makeMember,
+	makeIdent, makeCall, makeString,
 	makeObjectLiteral, makeBool, makeHiddenStdConv,
 	makeExprStmt,
 } from "../util";
 import { findCallTypeArg } from "../../parser/context";
-import { generateJsonParseC, generateJsonStringifyC, generateJsonStringifyColoredC, makeEmitNode } from "../../codegen/c/jsonEmit";
+import { generateJsonParseC, generateJsonStringifyC, makeEmitNode } from "../../codegen/c/json";
+import { rewriteEcho, resolveJsonTargetType } from "./debugLower";
 import { stmtCountAfter, firstStmtKindAfter, firstExprKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -190,136 +190,57 @@ function rewriteResultToLiteral(node: Node, isOk: boolean, ctx: TransformContext
 	return literal;
 }
 
-// ===== Echo — @builtin("Echo") (Nim echo parity) =====
-// Rewrites console.log(arg1, arg2, ...) → msPrintln(toString(arg1) + " " + toString(arg2) + ...)
-// Each arg is coerced to string here. Primitives use direct calls, structs use JSON.stringify,
-// and stringOpLower handles any remaining coercion for + operators.
+// ===== Typed JSON — @builtin("JsonParse") / @builtin("JsonStringify") =====
+// AST rewriting only — C code generation delegated to codegen/c/json.ms
 
-function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): Node {
-	if (arg.nodeType === null) return arg;
-	const t = arg.nodeType;
-	// String: as-is
-	if (t.kind === TypeKind.String || arg.kind === NodeKind.StringLiteral) return arg;
-	// Number/int → msNumberToString
-	if (isNumeric(t)) {
-		const call = makeCall(makeIdent("msNumberToString", loc), [arg], loc);
-		call.nodeType = stringType();
-		return call;
-	}
-	// Boolean → msBoolToString
-	if (t.kind === TypeKind.Boolean) {
-		const call = makeCall(makeIdent("msBoolToString", loc), [arg], loc);
-		call.nodeType = stringType();
-		return call;
-	}
-	// Struct/Class → check toString() extension first, then fall back to JSON debug format
-	const inner = unwrapRef(t);
-	if (inner.kind === TypeKind.Struct && inner.typeName !== "") {
-		const typeName = inner.typeName;
-		// Priority 1: user-defined toString() extension method
-		if (ctx.checkerCtx !== null && typeName !== "JsonValue") {
-			const ext = findExtension(ctx.checkerCtx.extensionRegistry, typeName, "toString");
-			if (ext !== null && ext.sym !== null) {
-				if (ext.sym.nativeName !== "") {
-					// Extern toString → call native C function directly
-					const ident = makeIdent(ext.sym.nativeName, loc);
-					ident.resolvedSym = ext.sym;
-					const call = makeCall(ident, [arg], loc);
-					call.nodeType = stringType();
-					return call;
-				}
-				// Pure-MS toString → emit as method call, extensionMethodLower resolves it
-				const memberCall = makeCall(makeMember(arg, "toString", loc), [], loc);
-				memberCall.nodeType = stringType();
-				return memberCall;
-			}
-		}
-		// JsonValue → msJsonStringifyColored (no prefix, just colored fields)
-		if (typeName === "JsonValue") {
-			if (!hasEmitted(ctx, "__jsonInclude")) {
-				ctx.emittedHelpers.push("__jsonInclude");
-				ctx.pendingDecls.push(makeEmitNode("/*INCLUDESECTION*/#include \"core/json.h\"\n", loc));
-			}
-			const call = makeCall(makeIdent("msJsonStringifyColored", loc), [arg], loc);
-			call.nodeType = stringType();
-			return call;
-		}
-		// Named struct → __jsonDbg_T (colored debug format for console.log)
-		const structType = resolveJsonTargetType(typeName, ctx);
-		if (structType !== null) {
-			const isClass = t.kind === TypeKind.Ref;
-			const helperName = "__jsonDbg_" + typeName;
-			if (!hasEmitted(ctx, helperName)) {
-				const emitNode = generateJsonStringifyColoredC(helperName, typeName, structType, isClass, loc);
-				if (emitNode !== null) {
-					ctx.emittedHelpers.push(helperName);
-					ctx.pendingDecls.push(emitNode);
-				}
-			}
-			const call = makeCall(makeIdent(helperName, loc), [arg], loc);
-			call.nodeType = stringType();
-			return call;
-		}
-	}
-	// Enum → msIntToString (enums are integers in C)
-	if (t.kind === TypeKind.Enum) {
-		const call = makeCall(makeIdent("msIntToString", loc), [arg], loc);
-		call.nodeType = stringType();
-		return call;
-	}
-	// Fallback: emit type name as placeholder string (safe — no C compile error)
-	const typeName = t.typeName !== null && t.typeName !== "" ? t.typeName : "object";
-	const placeholder = makeString("<" + typeName + ">", loc);
-	placeholder.nodeType = stringType();
-	return placeholder;
+// Single-char type suffix for anonymous struct name disambiguation.
+// Same field names with different types get different helper names.
+function typeKindSuffix(t: Type): string {
+	if (t === null) return "u";
+	return match (t.kind) {
+		TypeKind.Number | TypeKind.Float64 => "n",
+		TypeKind.Float32 => "f",
+		TypeKind.String => "s",
+		TypeKind.Boolean => "b",
+		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 => "i",
+		TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => "u",
+		_ => "x",
+	};
 }
 
-function rewriteEcho(node: Node, ctx: TransformContext): Node {
-	const cd = node.data as CallExprData;
-	const loc = node.location;
-	// No args → msPrintln("")
-	if (cd.arguments.length === 0) {
-		return makeCall(makeIdent("msPrintln", loc), [makeString("", loc)], loc);
-	}
-	// Coerce all args to string
-	const coerced: Node[] = [];
-	let ci = 0;
-	while (ci < cd.arguments.length) {
-		coerced.push(echoCoerceArg(cd.arguments[ci], loc, ctx));
-		ci = ci + 1;
-	}
-	// Single arg → msPrintln(coerced)
-	if (coerced.length === 1) {
-		return makeCall(makeIdent("msPrintln", loc), [coerced[0]], loc);
-	}
-	// Multi-arg: build "coerced[0] + " " + coerced[1] + ..." chain
-	let result = coerced[0];
-	let i = 1;
-	while (i < coerced.length) {
-		const space = makeString(" ", loc);
-		space.nodeType = stringType();
-		result = makeBinary(result, "+", space, loc);
-		result.nodeType = stringType();
-		result = makeBinary(result, "+", coerced[i], loc);
-		result.nodeType = stringType();
+// Build an anonymous struct type from an ObjectLiteral's keys and property types.
+// Returns null if any property type is null/Unknown or has no fields.
+//
+// Name format: __anon<count>__<field1><typeSuffix>__<field2><typeSuffix>
+// Count prefix + double-underscore separator prevents collisions:
+//   { x_y: 1 }     → __anon1__x_yn    (1 field)
+//   { x: 1, y: 2 } → __anon2__xn__yn  (2 fields)
+// Type suffix prevents same-name different-type collisions:
+//   { x: 1 }       → __anon1__xn      (number)
+//   { x: "hi" }    → __anon1__xs      (string)
+export function buildAnonStructType(argNode: Node): Type {
+	const d = argNode.data as ObjectLiteralData;
+	const keys = d.keys;
+	if (keys.length === 0) return null;
+	const propTypes: Type[] = [];
+	let i = 0;
+	while (i < d.properties.length) {
+		const pt = d.properties[i].nodeType;
+		if (pt === null || pt.kind === TypeKind.Unknown) return null;
+		propTypes.push(pt);
 		i = i + 1;
 	}
-	result.nodeType = stringType();
-	return makeCall(makeIdent("msPrintln", loc), [result], loc);
-}
-
-// ===== Typed JSON — @builtin("JsonParse") / @builtin("JsonStringify") =====
-// AST rewriting only — C code generation delegated to codegen/c/jsonEmit.ms
-
-// Resolve the struct type for the explicit type arg (e.g., "Person" → struct type with fields).
-function resolveJsonTargetType(typeArgStr: string, ctx: TransformContext): Type {
-	if (ctx.checkerCtx === null) return null;
-	const sym = lookupSymbol(ctx.checkerCtx.table, typeArgStr);
-	if (sym === null) return null;
-	if (sym.symbolType === null) return null;
-	const unwrapped = unwrapRef(sym.symbolType);
-	if (unwrapped.kind === TypeKind.Struct) return unwrapped;
-	return null;
+	// Synthesize deterministic name: count + fields with type suffixes
+	let anonName = "__anon" + keys.length;
+	let ni = 0;
+	while (ni < keys.length) {
+		anonName = anonName + "__" + keys[ni] + typeKindSuffix(propTypes[ni]);
+		ni = ni + 1;
+	}
+	const structType = createStruct(anonName, keys, propTypes, false);
+	// Stamp on ObjectLiteral so codegen emits correct C type
+	argNode.nodeType = structType;
+	return structType;
 }
 
 // Dedup check — prevents generating the same helper twice.
@@ -389,6 +310,26 @@ function rewriteJsonStringify(node: Node, ctx: TransformContext): Node {
 			typeArgStr = argType.typeName;
 		}
 	}
+	// Anonymous object literal: infer struct from keys + property types
+	if (typeArgStr === "" && cd.arguments.length > 0
+		&& cd.arguments[0].kind === NodeKind.ObjectLiteral) {
+		const anonType = buildAnonStructType(cd.arguments[0]);
+		if (anonType !== null) {
+			const aHelperName = "__jsonStringify_" + anonType.typeName;
+			if (!hasEmitted(ctx, aHelperName)) {
+				const emitNode = generateJsonStringifyC(aHelperName, anonType.typeName, anonType, loc);
+				if (emitNode !== null) {
+					ctx.emittedHelpers.push(aHelperName);
+					ctx.pendingDecls.push(emitNode);
+				}
+			}
+			const newCallee = makeIdent(aHelperName, loc);
+			const aResult = makeCall(newCallee, cd.arguments, loc);
+			aResult.nodeType = stringType();
+			return aResult;
+		}
+	}
+
 	if (typeArgStr === "") return node;
 
 	const structType = resolveJsonTargetType(typeArgStr, ctx);
@@ -488,4 +429,22 @@ test "extern from identifier callee left for codegen" {
 	const prelude = "extern function parseInt(s: string): number from \"msStringParseInt\";";
 	const result = preludeLowerCallee(prelude, "parseInt(\"42\");");
 	assert result === "parseInt";
+}
+
+test "anonymous object stringify basic" {
+	const prelude = "@builtin(\"JsonStringify\") extern function jsonStringify(value: number): string;";
+	const result = preludeLowerCallee(prelude, "jsonStringify({ x: 1, y: 2 });");
+	assert result === "__jsonStringify___anon2__xn__yn";
+}
+
+test "anonymous object stringify string field" {
+	const prelude = "@builtin(\"JsonStringify\") extern function jsonStringify(value: number): string;";
+	const result = preludeLowerCallee(prelude, "jsonStringify({ name: \"hi\" });");
+	assert result === "__jsonStringify___anon1__names";
+}
+
+test "anonymous object stringify mixed types" {
+	const prelude = "@builtin(\"JsonStringify\") extern function jsonStringify(value: number): string;";
+	const result = preludeLowerCallee(prelude, "jsonStringify({ a: 1, b: \"x\" });");
+	assert result === "__jsonStringify___anon2__an__bs";
 }

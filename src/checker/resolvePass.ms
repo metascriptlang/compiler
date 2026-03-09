@@ -492,12 +492,12 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 	const returnType = (d.fnReturnType !== "") ? resolveAnnotation(d.fnReturnType, ctx) : unknownType();
 	const fnType = createFunction(paramTypes, d.params, returnType);
 
-	// Set minArity for functions with default parameters
+	// Set minArity for functions with default parameters (Nim parity: count non-null formal.ast)
 	let defCount = 0;
 	if (d.fnDefaults !== null) {
 		let di = 0;
 		while (di < d.fnDefaults.length) {
-			if (d.fnDefaults[di] !== "") defCount = defCount + 1;
+			if (d.fnDefaults[di] !== null) defCount = defCount + 1;
 			di = di + 1;
 		}
 	}
@@ -520,7 +520,7 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 				overload.state = SymbolState.Shaped;
 				// Copy defaults to overload sym for cross-module availability
 				if (d.fnDefaults !== null && d.fnDefaults.length > 0) {
-					overload.defaultParamText = d.fnDefaults;
+					overload.defaultParams = d.fnDefaults;
 				}
 				// Update extension fnType cache (secondary — getExtFnType reads sym.symbolType first)
 				const extTypeName2 = getExtTypeName(d.fnFlags);
@@ -540,7 +540,7 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 	node.nodeType = fnType;
 	// Copy defaults to primary sym for cross-module availability
 	if (d.fnDefaults !== null && d.fnDefaults.length > 0) {
-		sym.defaultParamText = d.fnDefaults;
+		sym.defaultParams = d.fnDefaults;
 	}
 	// Update extension fnType cache (secondary — getExtFnType reads sym.symbolType first)
 	const extTypeName = getExtTypeName(d.fnFlags);
@@ -1067,11 +1067,13 @@ test "constrained interface Box<T extends number>" {
 
 test "fnDefaults on FunctionDeclData" {
 	const zl: SourceLocation = { line: 0, column: 0 };
-	const fnNode = createNodeAt(NodeKind.FunctionDecl, { fnName: "defTest", params: ["a", "b"], fnParamTypes: ["number", "number"], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "", fnDefaults: ["", "42"] }, zl);
+	const defNode = createNodeAt(NodeKind.NumberLiteral, { value: 42 }, zl);
+	const fnNode = createNodeAt(NodeKind.FunctionDecl, { fnName: "defTest", params: ["a", "b"], fnParamTypes: ["number", "number"], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "", fnDefaults: [null, defNode] }, zl);
 	const d = fnNode.data as FunctionDeclData;
 	assert d.fnDefaults.length === 2;
-	assert d.fnDefaults[0] === "";
-	assert d.fnDefaults[1] === "42";
+	assert d.fnDefaults[0] === null;
+	assert d.fnDefaults[1] !== null;
+	assert d.fnDefaults[1].kind === NodeKind.NumberLiteral;
 }
 
 // ===== Nullable Pointer Resolution Tests =====

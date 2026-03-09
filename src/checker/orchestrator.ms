@@ -222,16 +222,16 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 						ovi2 = ovi2 + 1;
 					}
 				}
-				// Collect per-overload defaultParamText
-				const ovDefTexts: string[][] = [];
+				// Collect per-overload defaultParams (Nim parity: formal.ast nodes)
+				const ovDefParams: Node[][] = [];
 				if (sym.overloads.length > 0) {
 					let ovi3 = 0;
 					while (ovi3 < sym.overloads.length) {
-						ovDefTexts.push(sym.overloads[ovi3].defaultParamText);
+						ovDefParams.push(sym.overloads[ovi3].defaultParams);
 						ovi3 = ovi3 + 1;
 					}
 				}
-				const info: ExportedSymInfo = { name: sym.name, kind: sym.symbolKind, symType: sym.symbolType, overloadTypes: ovTypes, extReceiverType: extRecv, extIsStatic: extStatic, overloadExtReceiverTypes: ovExtRecvs, overloadExtIsStatic: ovExtStatics, nativeName: sym.nativeName, builtinKind: sym.builtinKind, overloadNativeNames: ovRtNames, overloadBuiltinKinds: ovBiKinds, defaultTexts: sym.defaultParamText, overloadDefaultTexts: ovDefTexts };
+				const info: ExportedSymInfo = { name: sym.name, kind: sym.symbolKind, symType: sym.symbolType, overloadTypes: ovTypes, extReceiverType: extRecv, extIsStatic: extStatic, overloadExtReceiverTypes: ovExtRecvs, overloadExtIsStatic: ovExtStatics, nativeName: sym.nativeName, builtinKind: sym.builtinKind, overloadNativeNames: ovRtNames, overloadBuiltinKinds: ovBiKinds, defaultParams: sym.defaultParams, overloadDefaultParams: ovDefParams };
 				exports.push(info);
 			}
 		}

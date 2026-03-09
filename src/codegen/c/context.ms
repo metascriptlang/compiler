@@ -548,7 +548,7 @@ export function moduleTemp(g: CGen): string {
 	return "TM" + g.labels + "_";
 }
 
-// Emit #line directive for source mapping (Nim parity: genLineDir / freshLineInfo)
+// Emit #line directive for source mapping (Standard reference parity: line instrumentation)
 // Only emits when line or file changes to avoid bloat.
 export function emitLineDir(g: CGen, p: CProc, node: Node): void {
 	if (node === null) return;

@@ -636,7 +636,7 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 	// Self-assignment guard for binary hooks (copy, sink).
 	// Required because msStringIncref is a copy macro that modifies (*src).field in place —
 	// field-by-field copy is NOT self-assignment safe. Without this, Person_copy(&p, &p) corrupts strings.
-	// Reference: liftdestructors.nim:278-284 (guards case objects; we guard all — justified by destructive incref).
+	// Reference parity: standard self-assignment guard for lifecycle hooks
 	// HiddenAddr cancels codegen auto-deref: &(*dest) == &(*src) → pointer comparison in C.
 	if (!isUnary && !isTrace) {
 		buf.push(makeIf(
@@ -708,7 +708,7 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 	}
 	// Replace TypeReference params with actual type.
 	// For class types, use classType (Ref<Struct>) — already a pointer.
-	// For value types, wrap in Var (= pointer) — Nim parity: =destroy(x: var T).
+	// For value types, wrap in Var (= pointer) — Standard reference parity: =destroy(x: var T).
 	// DRC hooks always take pointer params, regardless of ccgIntroducedPtr size threshold.
 	const paramType = classType !== null ? classType : createVar(objType);
 	if (fnNode.nodeType !== null && fnNode.nodeType.typeChildren !== null) {

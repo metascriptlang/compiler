@@ -81,12 +81,12 @@ export enum CallingConvention {
 	CcNoInline,      // no-inline hint
 }
 
-// ===== Type Flags (Nim parity: TTypeFlag) =====
+// ===== Type Flags (Reference parity: type flags bitfield) =====
 // Bitfield stored in Type.typeFlags. Propagated bottom-up from children to parents.
 export enum TypeFlag {
 	IsInterface = 1,    // bit 0: struct is an interface (value type)
 	IsMaybe = 16,       // bit 4: Maybe<T> wrapper struct
-	HasAsgn = 32,       // bit 5: type or child needs lifecycle management (Nim: tfHasAsgn)
+	HasAsgn = 32,       // bit 5: type or child needs lifecycle management (Reference parity: tfHasAsgn)
 }
 
 // ===== Attached Lifecycle Ops (Standard reference parity) =====
@@ -159,7 +159,7 @@ export function createStruct(name: string, propNames: string[], propTypes: Type[
 	t.typeNames = propNames;
 	t.typeChildren = propTypes;
 	if (isInterface) { t.typeFlags = TypeFlag.IsInterface as int32; }
-	// Propagate HasAsgn from any managed field (Nim: propagateToOwner for tyObject)
+	// Propagate HasAsgn from any managed field (Reference parity: bottom-up flag propagation)
 	for (const pt of propTypes) { propagateHasAsgn(t, pt); }
 	return t;
 }
@@ -446,7 +446,7 @@ function initSysTypes(): void {
 	for (let i = 0; i <= (TypeKind.Error as number); i += 1) {
 		_sysTypes.push(createPrimitive(i as TypeKind));
 	}
-	// Managed primitives get TypeFlag.HasAsgn (Nim: string, ref, closure get tfHasAsgn in semtypes)
+	// Managed primitives get TypeFlag.HasAsgn (Reference parity: managed types have tfHasAsgn)
 	_sysTypes[TypeKind.String as number].typeFlags = TypeFlag.HasAsgn;
 }
 initSysTypes();
@@ -586,7 +586,7 @@ export function unwrapRef(t: Type): Type {
 	return t;
 }
 
-// ===== tfHasAsgn Flag — Nim parity: propagated lifecycle management flag =====
+// ===== tfHasAsgn Flag — Reference parity: propagated lifecycle management flag =====
 // Set on types that need lifecycle management (destroy/copy/sink).
 // Propagated bottom-up from children to parents at type construction time.
 
@@ -727,7 +727,7 @@ function substituteStruct(t: Type, paramName: string, concrete: Type): Type {
 	return result;
 }
 
-// Identity-based cycle detection for self-referential types (parity: semtypinst.nim recursionLimit)
+// Identity-based cycle detection for self-referential types (Reference parity: recursion limit and identity check)
 // Type has typeReturn/typeExtra/typeChildren that can reference back to itself.
 // Depth limit alone causes exponential branching; identity check prevents revisiting.
 let substituteVisited: Type[] = [];

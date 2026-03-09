@@ -43,7 +43,7 @@ import { findCallTypeArg, getExplicitTypeArg, getGenericDecl } from "../parser/c
 // ===== Generic NewExpr Resolution =====
 // Resolves `new Box<number>(42)` — captures type args from side-channel,
 // records instantiation, and builds concrete Ref<Struct> type.
-// Parity: Nim semobjconstr.nim:semObjConstr → semTypeNode captures type args.
+// Parity: standard reference object construction → type node captures type args.
 function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Type): Type {
 	if (callee.kind !== NodeKind.Identifier) return calleeType;
 	const calleeName = (callee.data as IdentifierData).name;
@@ -196,7 +196,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 				? expectedType.typeReturn : expectedType;
 			if (objExpected !== null && objExpected.kind === TypeKind.Struct
 				&& objExpected.typeChildren !== null) {
-				// Nim parity: stamp literal with expected type, propagate field types
+				// Reference parity: stamp literal with expected type, propagate field types
 				// For class types, stamp with Ref wrapper so codegen knows to heap-allocate
 				node.nodeType = expectedType;
 				let fi = 0;
@@ -215,7 +215,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			} else if (expectedType !== null && expectedType.kind === TypeKind.Union) {
 				// Non-discriminated union (e.g. NodeData): stamp with union type
 				// and check properties. Codegen resolves the variant from field names.
-				// Nim: semObjConstr always sets e.typ from explicit type name.
+				// Standard reference patterns: use expected type for untyped object literals.
 				// We infer from expectedType since MS uses untyped object literals.
 				node.nodeType = expectedType;
 				for (const prop of d.properties) {
@@ -284,7 +284,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 				node.data = { convExpr: d.asExpr, convType: targetType };
 				node.flags = node.flags | NodeFlag.Sem;
 			}
-			// Nim parity: when narrowing a Union, resolve to the actual variant type.
+			// Reference parity: when narrowing a Union, resolve to the actual variant type.
 			else if (srcType !== null && srcType.kind === TypeKind.Union
 				&& targetType.kind === TypeKind.Struct && targetType.typeNames !== null) {
 				const varIdx = findUnionVariant(srcType, targetType.typeNames, targetType.typeChildren);
@@ -589,68 +589,43 @@ function getCalleeNameForDefaults(callNode: Node): string {
 	return "";
 }
 
-function makeNumberDefault(val: number): Node {
-	const tok = createToken(TokenKind.Number, "", 0);
-	return createNode(NodeKind.NumberLiteral, { value: val }, tok);
-}
-function makeStringDefault(val: string): Node {
-	const tok = createToken(TokenKind.String, "", 0);
-	return createNode(NodeKind.StringLiteral, { value: val }, tok);
-}
-function makeBoolDefault(val: boolean): Node {
-	const tok = createToken(TokenKind.Ident, "", 0);
-	return createNode(NodeKind.BooleanLiteral, { boolValue: val }, tok);
-}
-function makeNullDefault(): Node {
-	const tok = createToken(TokenKind.Ident, "", 0);
-	return createNode(NodeKind.NullLiteral, { nullPlaceholder: true }, tok);
-}
-function makeIdentDefault(name: string): Node {
-	const tok = createToken(TokenKind.Ident, "", 0);
-	return createNode(NodeKind.Identifier, { name }, tok);
+// Nim parity: copyTree(formal.ast) — clone a default expression node for insertion into call.
+// Shallow clone suffices for literals; deep clone would be needed for complex exprs.
+function cloneDefaultNode(node: Node): Node {
+	const clone = createNodeAt(node.kind, node.data, node.location);
+	clone.nodeType = node.nodeType;
+	clone.resolvedSym = node.resolvedSym;
+	return clone;
 }
 
-function defaultTextToNode(text: string): Node {
-	if (text === "true") return makeBoolDefault(true);
-	if (text === "false") return makeBoolDefault(false);
-	if (text === "null") return makeNullDefault();
-	if (text === "\"\"") return makeStringDefault("");
-	// String literal: starts with "
-	if (text.length > 1 && text[0] === "\"") {
-		return makeStringDefault(text.slice(1, text.length - 1));
-	}
-	// Try parsing as number (num !== num checks for NaN)
-	const num = parseNumberLiteral(text);
-	if (num === num) return makeNumberDefault(num);
-	// Empty array — use identifier fallback
-	// Identifier (enum member, variable, etc.)
-	return makeIdentDefault(text);
-}
-
+// Nim parity (sigmatch.nim:3054-3096): fill missing call arguments from formal.ast defaults.
+// defaultOffset accounts for receiver param in extension methods:
+// fnDefaults[0] = receiver (no default), so call arg index N maps to fnDefaults[N + offset].
 function fillDefaultArgsForNode(ctx: CheckerContext, callNode: Node, fnName: string,
-	totalParams: number): void {
+	totalParams: number, defaultOffset: number): void {
 	const cd = callNode.data as CallExprData;
-	// Get defaults from Symbol (works for both same-module and cross-module)
-	let fnDefaults: string[] = null as unknown as string[];
-	if (cd.callee.resolvedSym !== null) {
-		// Prefer Symbol.defaultParamText (set by resolvePass + collectPass cross-module)
-		if (cd.callee.resolvedSym.defaultParamText !== null && cd.callee.resolvedSym.defaultParamText.length > 0) {
-			fnDefaults = cd.callee.resolvedSym.defaultParamText;
-		} else if (cd.callee.resolvedSym.declNode !== null && cd.callee.resolvedSym.declNode.kind === NodeKind.FunctionDecl) {
-			// Fallback: read from FunctionDeclData.fnDefaults (same-module, declNode is the actual FunctionDecl)
-			const declData = cd.callee.resolvedSym.declNode.data as FunctionDeclData;
+	// Get defaults from Symbol (Nim: formal.ast on param sym)
+	let fnDefaults: Node[] = null as unknown as Node[];
+	// Check callee.resolvedSym first, then callNode.resolvedSym (extension methods set sym on CallExpr)
+	const defSym = cd.callee.resolvedSym !== null ? cd.callee.resolvedSym : callNode.resolvedSym;
+	if (defSym !== null) {
+		if (defSym.defaultParams !== null && defSym.defaultParams.length > 0) {
+			fnDefaults = defSym.defaultParams;
+		} else if (defSym.declNode !== null && defSym.declNode.kind === NodeKind.FunctionDecl) {
+			const declData = defSym.declNode.data as FunctionDeclData;
 			if (declData.fnDefaults !== null) fnDefaults = declData.fnDefaults;
 		}
 	}
 	let argIdx = cd.arguments.length;
 	while (argIdx < totalParams) {
-		let text = "";
-		if (fnDefaults !== null && argIdx < fnDefaults.length) {
-			text = fnDefaults[argIdx];
+		const defIdx = argIdx + defaultOffset;
+		let defNode: Node = null;
+		if (fnDefaults !== null && defIdx < fnDefaults.length) {
+			defNode = fnDefaults[defIdx];
 		}
-		if (text === "") { argIdx = argIdx + 1; continue; }
-		const defNode = defaultTextToNode(text);
-		cd.arguments.push(defNode);
+		if (defNode === null) { argIdx = argIdx + 1; continue; }
+		// Nim: copyTree(formal.ast) — fresh copy per call site
+		cd.arguments.push(cloneDefaultNode(defNode));
 		argIdx = argIdx + 1;
 	}
 }
@@ -783,6 +758,11 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 						unifyType(srcType.typeChildren[0], objType, eb);
 						if (eb.names.length > 0) srcType = instantiateGeneric(srcType, eb.names, eb.types);
 					}
+					// Fill default args for extension methods (receiver excluded from arg count)
+					const extParamCount = srcType.typeChildren.length - 1;
+					if (argTypes.length < extParamCount) {
+						fillDefaultArgsForNode(ctx, node, me.property, extParamCount, 1);
+					}
 					return inferGenericReturn(srcType, argTypes, expectedType);
 				}
 				// Explicit type arg resolution for generic methods (e.g. JSON.parse<Person>)
@@ -807,7 +787,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 		}
 	}
 	// Check argument types + infer generic return
-	// @builtin("Echo"): accept any number of args of any type (Nim echo parity)
+	// @builtin("Echo"): accept any number of args of any type (reference echo parity)
 	const isEchoBuiltin = node.resolvedSym !== null && node.resolvedSym.builtinKind === "Echo";
 	if (calleeType.kind === TypeKind.Function && !isEchoBuiltin) {
 		// Fill default arguments if too few args provided
@@ -819,7 +799,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 		} else if (argTypes.length < calleeType.typeChildren.length) {
 			const calleeNameForDef = getCalleeNameForDefaults(node);
 			if (calleeNameForDef !== "") {
-				fillDefaultArgsForNode(ctx, node, calleeNameForDef, calleeType.typeChildren.length);
+				fillDefaultArgsForNode(ctx, node, calleeNameForDef, calleeType.typeChildren.length, 0);
 			}
 		}
 		// Type-check only provided args (defaults are trusted)
@@ -834,7 +814,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 					const calleeName = getCalleeName(d.callee);
 					addError(ctx, "Argument type mismatch in '" + calleeName + "' arg " + intToString(pi) + ": got " + typeNameOf(argTypes[pi]) + ", expected " + typeNameOf(paramType), node.location.line, node.location.column);
 				}
-				// Reference parity (sigmatch.nim:2834): var/out params require lvalue argument
+				// Reference parity: var/out params require lvalue argument
 				if (paramType.kind === TypeKind.Var && pi < d.arguments.length) {
 					const argKind = d.arguments[pi].kind;
 					if (argKind !== NodeKind.Identifier && argKind !== NodeKind.MemberExpr && argKind !== NodeKind.ArrayAccess) {
@@ -980,7 +960,7 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, argTypes: Type[],
 	}
 	const winner = candidates[idx];
 	if (winner.kind === TypeKind.Function && argTypes.length < winner.typeChildren.length) {
-		fillDefaultArgsForNode(ctx, callNode, sym.name, winner.typeChildren.length);
+		fillDefaultArgsForNode(ctx, callNode, sym.name, winner.typeChildren.length, 0);
 	}
 	return inferGenericReturn(winner, argTypes, null);
 }
@@ -1051,7 +1031,12 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 	if (idx >= 0 && idx < exts.length && exts[idx].sym !== null) {
 		callNode.resolvedSym = exts[idx].sym;
 	}
-	return inferGenericReturn(candidates[idx], argTypes, null);
+	// Fill default args for extension overloads (candidates already have receiver stripped)
+	const winnerType = candidates[idx];
+	if (winnerType.kind === TypeKind.Function && argTypes.length < winnerType.typeChildren.length) {
+		fillDefaultArgsForNode(ctx, callNode, methodName, winnerType.typeChildren.length, 1);
+	}
+	return inferGenericReturn(winnerType, argTypes, null);
 }
 
 function formatCandidateSig(name: string, fnType: Type): string {

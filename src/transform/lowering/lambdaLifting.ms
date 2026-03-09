@@ -128,7 +128,7 @@ function lookupVarType(state: LiftState, name: string): string {
 	return "unknown";
 }
 
-// Derive type string from resolved nodeType (Nim parity: s.typ → field.typ)
+// Derive type string from resolved nodeType (Reference parity: use resolved symbol types for field typing)
 // Used when string annotation is empty but checker has resolved the type.
 function typeToEnvStr(t: Type): string {
 	if (t === null) return "";
@@ -401,7 +401,7 @@ function walkLift(node: Node, state: LiftState): void {
 			if (d.fnName !== "") {
 				state.currentFnName = d.fnName;
 				defineVar(state.ss, d.fnName);
-				// Nim parity: captured function refs → closure type (s.typ = tyProc)
+				// Reference parity: captured function refs → closure type
 				registerVarType(state, d.fnName, "msClosure");
 			}
 			// Push function boundary, define params + register types for env field resolution
@@ -412,7 +412,7 @@ function walkLift(node: Node, state: LiftState): void {
 			while (pi < d.params.length) {
 				defineVar(state.ss, d.params[pi]);
 				let paramTypeStr = (pi < d.fnParamTypes.length) ? d.fnParamTypes[pi] : "";
-				// Nim parity: use resolved type from checker (s.typ) for env field typing
+				// Reference parity: use resolved type from checker for env field typing
 				if (fnType !== null && fnType.typeChildren !== null && pi < fnType.typeChildren.length) {
 					const pt = fnType.typeChildren[pi];
 					if (pt !== null) {
@@ -439,7 +439,7 @@ function walkLift(node: Node, state: LiftState): void {
 			if (d.declType !== "") {
 				registerVarType(state, d.declName, d.declType);
 			} else if (node.nodeType !== null) {
-				// Nim parity: use resolved type from checker (s.typ) when no annotation
+				// Reference parity: use resolved type from checker when no annotation
 				const derived = typeToEnvStr(node.nodeType);
 				if (derived !== "") {
 					registerVarType(state, d.declName, derived);

@@ -58,7 +58,7 @@ function makeRcInfo(kind: RcKind, typeName: string, destroy: string, copy: strin
 }
 
 // ===== Array Subclassification =====
-// Nim parity: uses hasAsgnFlag (propagated at type creation) instead of runtime element inspection.
+// Reference parity: use hasAsgnFlag (propagated at type creation) instead of runtime element inspection.
 
 function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 	const elem = t.typeReturn;
@@ -88,7 +88,7 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 function classifyObject(t: Type, ctx: TransformContext): RcInfo {
 	// Objects are always value types now — Ref<Object> is handled by TypeKind.Ref arm
 	if (t.typeName !== "") {
-		// Nim parity: hasAsgnFlag checks propagated flag (set at type creation)
+		// Reference parity: hasAsgnFlag checks propagated flag (set at type creation)
 		if (hasAsgnFlag(t)) {
 			return makeRcInfo(RcKind.Named, t.typeName, t.typeName + "_destroy", t.typeName + "_copy", t.typeName + "_wasMoved", t.typeName + "_sink", false);
 		}

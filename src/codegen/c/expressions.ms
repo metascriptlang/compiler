@@ -57,14 +57,14 @@ function genArgCcgPtr(g: CGen, arg: string, argNode: Node, p: CProc): string {
 	return safeAddrOf(g, p, arg, argNode, null);
 }
 
-// Reference parity: Nim's addrLoc always operates on a TLoc (named variable),
+// Reference parity: standard address generation always operates on a named variable,
 // never on a bare compound literal. When we need &(expr) and expr is a bare
 // compound literal (starts with '{'), hoist it to a temp variable first.
-// Nim-aligned address-of: always operates on named locations.
+// Reference-aligned address-of: always operates on named locations.
 // paramType: optional parameter type from call site for resolving untyped literals.
 function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, paramType: Type): string {
 	if (snippet.length > 0 && snippet.charCodeAt(0) === "{".code) {
-		// Bare compound literal — must hoist to temp (Nim: getTemp + field assignment)
+		// Bare compound literal — must hoist to temp (Reference: generate temporary + field assignment)
 		let cType = "";
 		// Try 1: exprNode.nodeType
 		if (exprNode !== null && exprNode.nodeType !== null) {
@@ -261,7 +261,7 @@ function discoverExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[],
 				emitProcLocalsLine(p, "  " + cType + " " + safeName(d.name) + " = {0};");
 			}
 		}
-		// Ensure cross-module enum constants are emitted (Nim: enum #defines per module)
+		// Ensure cross-module enum constants are emitted (Reference parity: enum definitions per module)
 		if (node.nodeType !== null && node.nodeType.kind === TypeKind.Enum) {
 			getTypeDesc(g, node.nodeType);
 		}
@@ -602,7 +602,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 		const d = node.data as MemberExprData;
 
 		// Ref array access returns void* — cast to element type for member access
-		// Nim parity: genRecordField uses dotField(data[idx], field) for values
+		// Reference parity: record field access via dot notation
 		if (d.object.nodeType !== null && isRefArrayAccessCall(d.object)) {
 			const elemTypeDesc = getTypeDesc(g, d.object.nodeType);
 			if (elemTypeDesc !== "void*" && elemTypeDesc !== "void") {
@@ -764,7 +764,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 		const inner = peekResult(results, cc, 0);
 		truncResults(results, cc);
 		// Ref array access returns void* — cast to typed pointer before deref
-		// Nim parity: genDeref applies cDeref(rdLoc(a)) = (*typed_data[idx])
+		// Reference parity: explicit dereference of a typed location
 		const hd = node.data as ExprStmtData;
 		if (isRefArrayAccessCall(hd.expr) && hd.expr.nodeType !== null) {
 			const elemDesc = getTypeDesc(g, hd.expr.nodeType);
@@ -843,8 +843,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 				results.push("(msClosure){ .fn = (void*)" + fnExpr + ", .env = (void*)" + envTemp + " }");
 			}
 		} else {
-			// Nim-aligned: hoist struct literal to temp variable + field-by-field assignment.
-			// Nim (genObjConstr): getTemp(p, t) → tmp.field = val → use tmp.
+			// Reference-aligned: hoist struct literal to temp variable + field-by-field assignment.
+			// Reference implementation (object construction): generate temporary → assign fields → use temporary.
 			// Never emits inline compound literals — works with C89+ and avoids &({...}) issues.
 			let cType = "";
 			let isClassObj = false;
@@ -873,12 +873,12 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 				}
 			}
 			if (cType !== "") {
-				// Nim pattern: allocate temp, zero-init, assign fields
+				// Reference pattern: allocate temp, zero-init, assign fields
 				p.labels += 1;
 				const tmpName = "_lit" + p.labels + "_";
 				const access = isClassObj ? "->" : ".";
 				if (isClassObj) {
-					// Class: heap-allocate (Nim parity: ref object construction)
+					// Class: heap-allocate (Reference parity: managed object construction)
 					emitProcLocalsLine(p, cType + "* " + tmpName + ";");
 					emitStmtsLine(p, tmpName + " = (" + cType + "*)msAllocTyped(sizeof(" + cType + "), NULL);");
 					emitStmtsLine(p, "memset(" + tmpName + ", 0, sizeof(" + cType + "));");
@@ -906,9 +906,9 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 					results.push(tmpName);
 				}
 			} else {
-				// Nim-aligned fallback: hoist to temp even without type info.
+				// Reference-aligned fallback: hoist to temp even without type info.
 				// Generate anonymous struct type from field names + inferred C types.
-				// Nim: genObjConstr always has e.typ. We approximate by using field values' types.
+				// Reference implementation: object construction always has type info. We approximate by using field values' types.
 				p.labels += 1;
 				const tmpName = "_lit" + p.labels + "_";
 				// Build anonymous struct definition from values
@@ -1052,7 +1052,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 					const paramIsPtr = isPointerType(paramType);
 					const argIsPtr = isPointerType(argNode.nodeType);
 					const paramCcgPtr = ccgIntroducedPtr(paramType);
-					// Nim parity: nil passed to ref/ptr param is already a valid pointer — no &
+					// Reference parity: nil passed to ref/ptr param is already a valid pointer — no &
 					if (paramIsPtr && !argIsPtr && argNode.kind !== NodeKind.NullLiteral) {
 						arg = safeAddrOf(g, p, arg, argNode, paramType);
 					} else if (!paramIsPtr && argIsPtr && !paramCcgPtr) {
@@ -1109,7 +1109,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 					const paramIsPtr = isPointerType(paramType);
 					const argIsPtr = isPointerType(argNode.nodeType);
 					const paramCcgPtr = ccgIntroducedPtr(paramType);
-					// Nim parity: nil passed to ref/ptr param is already a valid pointer — no &
+					// Reference parity: nil passed to ref/ptr param is already a valid pointer — no &
 					if (paramIsPtr && !argIsPtr && argNode.kind !== NodeKind.NullLiteral) {
 						arg = safeAddrOf(g, p, arg, argNode, paramType);
 					} else if (!paramIsPtr && argIsPtr && !paramCcgPtr) {
