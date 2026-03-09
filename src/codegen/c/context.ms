@@ -498,6 +498,7 @@ export interface CGen {
 	nextTestId: number;        // unique ID for test wrapper function names
 	lastLineLine: number;      // #line dedup: last emitted line number
 	lastLineFile: string;      // #line dedup: last emitted file path
+	declaredGlobals: NameSet;  // module-local globals (for extern detection)
 }
 
 export interface TestEntry {
@@ -534,6 +535,7 @@ export function createCGen(ctx: CheckerContext, modulePath: string): CGen {
 		nextTestId: 0,
 		lastLineLine: 0,
 		lastLineFile: "",
+		declaredGlobals: createNameSet(),
 	};
 }
 

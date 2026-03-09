@@ -8,15 +8,14 @@
 
 import {
 	Node, NodeKind, SourceLocation,
-	CallExprData, ObjectLiteralData,
+	CallExprData,
 } from "../../ast/node";
 import { Type, TypeKind, isNumeric, stringType, unwrapRef } from "../../checker/types";
 import { TransformContext, hasEmitted } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { findExtension } from "../../checker/context";
 import { makeIdent, makeCall, makeString, makeBinary, makeMember } from "../util";
-import { makeEmitNode, generateJsonStringifyColoredC } from "../../codegen/c/json";
-import { buildAnonStructType } from "./builtinLower";
+import { makeEmitNode, generateJsonStringifyColoredC, registerHelper } from "../../codegen/c/json";
 
 // Resolve the struct type for a type name string (e.g., "Person" → struct type with fields).
 // Shared by echo coercion and JSON builtin rewriting.
@@ -73,7 +72,6 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 		if (typeName === "JsonValue") {
 			const jHelperName = "__jsonDbg_JsonValue";
 			if (!hasEmitted(ctx, jHelperName)) {
-				ctx.emittedHelpers.push(jHelperName);
 				// Emit a small wrapper: prefix "Json " in magenta + msJsonStringifyColored(value)
 				let jc = "/*INCLUDESECTION*/#include \"core/json.h\"\n";
 				jc = jc + "static msString " + jHelperName + "(JsonValue* value) {\n";
@@ -88,42 +86,29 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 				jc = jc + "  msString __prefix = msStringNew(__pbuf, __plen);\n";
 				jc = jc + "  return msStringConcat(__prefix, __body);\n";
 				jc = jc + "}\n";
-				ctx.pendingDecls.push(makeEmitNode(jc, loc));
+				registerHelper(jHelperName, makeEmitNode(jc, loc), ctx);
 			}
 			const call = makeCall(makeIdent(jHelperName, loc), [arg], loc);
 			call.nodeType = stringType();
 			return call;
 		}
 		// Named struct → __jsonDbg_T (colored debug format for console.log)
-		const structType = resolveJsonTargetType(typeName, ctx);
+		// Try symbol table first; fall back to type directly if it has field metadata
+		// (synthesized anonymous types like __anon... have no symbol table entry)
+		let structType = resolveJsonTargetType(typeName, ctx);
+		if (structType === null && inner.typeNames !== null && inner.typeChildren !== null) {
+			structType = inner;
+		}
 		if (structType !== null) {
 			const isClass = t.kind === TypeKind.Ref;
-			const displayName = isClass ? "class " + typeName + " " : typeName + " ";
-			const dbgColor = isClass ? "\\x1b[32m" : "\\x1b[34m";
+			const isAnon = typeName.length > 6 && typeName.slice(0, 6) === "__anon";
+			const displayName = isAnon ? "Object " : isClass ? "class " + typeName + " " : typeName + " ";
+			const dbgColor = isAnon ? "\\x1b[36m" : isClass ? "\\x1b[32m" : "\\x1b[34m";
 			const helperName = "__jsonDbg_" + typeName;
 			if (!hasEmitted(ctx, helperName)) {
 				const emitNode = generateJsonStringifyColoredC(helperName, typeName, structType, displayName, dbgColor, loc);
-				if (emitNode !== null) {
-					ctx.emittedHelpers.push(helperName);
-					ctx.pendingDecls.push(emitNode);
-				}
-			}
-			const call = makeCall(makeIdent(helperName, loc), [arg], loc);
-			call.nodeType = stringType();
-			return call;
-		}
-	}
-	// Anonymous ObjectLiteral → colored "Object { ... }" debug format (cyan prefix)
-	if (arg.kind === NodeKind.ObjectLiteral) {
-		const anonType = buildAnonStructType(arg);
-		if (anonType !== null) {
-			const helperName = "__jsonDbg_" + anonType.typeName;
-			if (!hasEmitted(ctx, helperName)) {
-				const emitNode = generateJsonStringifyColoredC(helperName, anonType.typeName, anonType, "Object ", "\\x1b[36m", loc);
-				if (emitNode !== null) {
-					ctx.emittedHelpers.push(helperName);
-					ctx.pendingDecls.push(emitNode);
-				}
+				if (emitNode === null) return arg;  // unsupported field type — pass through
+				registerHelper(helperName, emitNode, ctx);
 			}
 			const call = makeCall(makeIdent(helperName, loc), [arg], loc);
 			call.nodeType = stringType();

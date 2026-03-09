@@ -97,7 +97,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 					overloadExtReceiverTypes: [], overloadExtIsStatic: [],
 					nativeName: sym.nativeName, builtinKind: sym.builtinKind,
 					overloadNativeNames: [], overloadBuiltinKinds: [],
-					defaultTexts: [], overloadDefaultTexts: [],
+					defaultParams: [], overloadDefaultParams: [],
 				};
 				earlyExports.push(info);
 			}
@@ -222,7 +222,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 						ovi2 = ovi2 + 1;
 					}
 				}
-				// Collect per-overload defaultParams (Nim parity: formal.ast nodes)
+				// Collect per-overload defaultParams (Reference parity: default expression nodes)
 				const ovDefParams: Node[][] = [];
 				if (sym.overloads.length > 0) {
 					let ovi3 = 0;

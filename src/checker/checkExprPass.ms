@@ -2,7 +2,7 @@
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
 import {
-	Node, NodeKind, NodeData, createNode, NodeFlag,
+	Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag,
 	IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData,
 	CallExprData, MemberExprData, ArrayAccessData,
 	ObjectLiteralData, ArrayLiteralData, ConditionalExprData,
@@ -17,7 +17,7 @@ import {
 	Type, TypeKind,
 	unknownType, numberType, stringType, booleanType, charType,
 	voidType, nullType, errorType,
-	createArray, createSpan, createFunction, createTypeRef, createStruct, createRef, substituteType, instantiateGeneric,
+	createArray, createSpan, createFunction, createTypeRef, createStruct, createRef, createPrimitive, substituteType, instantiateGeneric, anonStructName,
 	isNumeric, isIntegerType, isStringType, isCallable, getReturnType, getElementType, getProperty, sizeOfType,
 	typeNameOf, unwrapRef, isDiscriminatedUnion, findVariantByDiscriminant, findFieldInVariant, findUnionVariant,
 	unifyType, createUnifyBindings, hasGenericParams,
@@ -137,8 +137,17 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 				d.left.nodeType = rightType;
 			}
 			// Bitwise ops require integer operands (reference parity: no float overloads)
+			// Insert implicit number → int32 cast for C backend
 			if (isBitwiseBinaryOp(d.operator)) {
 				checkBitwiseOperands(ctx, d.operator, effLeft, effRight, node);
+				if (effLeft !== null && effLeft.kind === TypeKind.Number) {
+					d.left = wrapInConv(d.left, createPrimitive(TypeKind.Int32));
+					effLeft = createPrimitive(TypeKind.Int32);
+				}
+				if (effRight !== null && effRight.kind === TypeKind.Number) {
+					d.right = wrapInConv(d.right, createPrimitive(TypeKind.Int32));
+					effRight = createPrimitive(TypeKind.Int32);
+				}
 			}
 			inferBinaryOp(d.operator, effLeft, effRight);
 		},
@@ -151,6 +160,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			if (d.unaryOp === "~") {
 				if (operandType !== null && operandType.kind === TypeKind.Number) {
 					addWarning(ctx, "bitwise NOT '~' on 'number' implicitly casts to int32; prefer explicit integer type", node.location.line, node.location.column);
+					d.operand = wrapInConv(d.operand, createPrimitive(TypeKind.Int32));
 				} else if (!isBitwiseAllowed(operandType)) {
 					const name = operandType !== null ? typeNameOf(operandType) : "unknown";
 					addError(ctx, "bitwise NOT '~' requires integer type, got '" + name + "'", node.location.line, node.location.column);
@@ -168,7 +178,11 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 		NodeKind.ArrayAccess => {
 			const d = node.data as ArrayAccessData;
 			const arrType = checkExpr(ctx, d.array, null);
-			checkExpr(ctx, d.index, null);
+			const idxType = checkExpr(ctx, d.index, null);
+			// Implicit number → int64 cast for array index (C requires integer subscript)
+			if (idxType !== null && idxType.kind === TypeKind.Number && d.index.kind !== NodeKind.BinaryExpr) {
+				d.index = wrapInConv(d.index, createPrimitive(TypeKind.Int64));
+			}
 			// Range access: arr[start..end] returns Span<elemType>
 			let accessType: Type = unknownType();
 			if (d.index.kind === NodeKind.BinaryExpr) {
@@ -223,10 +237,20 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 				}
 				expectedType;
 			} else {
-				for (const prop of d.properties) {
-					checkExpr(ctx, prop, null);
+				// No expected type — synthesize anonymous struct from literal fields
+				const fieldNames: string[] = [];
+				const fieldTypes: Type[] = [];
+				let pi = 0;
+				while (pi < d.properties.length) {
+					const ft = checkExpr(ctx, d.properties[pi], null);
+					if (pi < d.keys.length) { fieldNames.push(d.keys[pi]); }
+					fieldTypes.push(ft);
+					pi = pi + 1;
 				}
-				unknownType();
+				const anonName = anonStructName(fieldNames, fieldTypes);
+				const anonType = createStruct(anonName, fieldNames, fieldTypes, false);
+				node.nodeType = anonType;
+				anonType;
 			}
 		},
 		NodeKind.ArrayLiteral => {
@@ -443,6 +467,15 @@ function inferUnaryOp(op: string, operandType: Type): Type {
 	};
 }
 
+// Wrap an expression in HiddenStdConv to a target type. Used for implicit numeric casts.
+function wrapInConv(expr: Node, targetType: Type): Node {
+	const convTok = createToken(TokenKind.Ident, "", expr.location.line);
+	const convNode = createNode(NodeKind.HiddenStdConv, { convExpr: expr, convType: targetType }, convTok);
+	convNode.nodeType = targetType;
+	convNode.flags = convNode.flags | NodeFlag.Sem;
+	return convNode;
+}
+
 // ===== Bitwise Operator Validation =====
 // Reference parity: bitwise ops only have integer overloads. No float/double variants.
 // Enums are integer-backed → allowed (Standard reference parity: enums can use bitwise ops).
@@ -589,22 +622,33 @@ function getCalleeNameForDefaults(callNode: Node): string {
 	return "";
 }
 
-// Nim parity: copyTree(formal.ast) — clone a default expression node for insertion into call.
+// Reference parity: clone a default expression node for insertion into call.
 // Shallow clone suffices for literals; deep clone would be needed for complex exprs.
 function cloneDefaultNode(node: Node): Node {
 	const clone = createNodeAt(node.kind, node.data, node.location);
-	clone.nodeType = node.nodeType;
 	clone.resolvedSym = node.resolvedSym;
+	// Prelude defaults are parsed but not semchecked — infer type from kind
+	if (node.nodeType !== null) {
+		clone.nodeType = node.nodeType;
+	} else {
+		match (node.kind) {
+			NodeKind.NumberLiteral | NodeKind.BigIntLiteral => { clone.nodeType = numberType(); },
+			NodeKind.StringLiteral => { clone.nodeType = stringType(); },
+			NodeKind.BooleanLiteral => { clone.nodeType = booleanType(); },
+			NodeKind.NullLiteral => { clone.nodeType = nullType(); },
+			_ => {},
+		};
+	}
 	return clone;
 }
 
-// Nim parity (sigmatch.nim:3054-3096): fill missing call arguments from formal.ast defaults.
+// Reference parity: fill missing call arguments from parameter defaults.
 // defaultOffset accounts for receiver param in extension methods:
 // fnDefaults[0] = receiver (no default), so call arg index N maps to fnDefaults[N + offset].
 function fillDefaultArgsForNode(ctx: CheckerContext, callNode: Node, fnName: string,
 	totalParams: number, defaultOffset: number): void {
 	const cd = callNode.data as CallExprData;
-	// Get defaults from Symbol (Nim: formal.ast on param sym)
+	// Get defaults from Symbol (Reference: defaults stored on symbol)
 	let fnDefaults: Node[] = null as unknown as Node[];
 	// Check callee.resolvedSym first, then callNode.resolvedSym (extension methods set sym on CallExpr)
 	const defSym = cd.callee.resolvedSym !== null ? cd.callee.resolvedSym : callNode.resolvedSym;
@@ -623,8 +667,9 @@ function fillDefaultArgsForNode(ctx: CheckerContext, callNode: Node, fnName: str
 		if (fnDefaults !== null && defIdx < fnDefaults.length) {
 			defNode = fnDefaults[defIdx];
 		}
-		if (defNode === null) { argIdx = argIdx + 1; continue; }
-		// Nim: copyTree(formal.ast) — fresh copy per call site
+		// No default for this param — stop filling (defaults must be trailing)
+		if (defNode === null) break;
+		// Reference parity: fresh copy of default node per call site (copyTree)
 		cd.arguments.push(cloneDefaultNode(defNode));
 		argIdx = argIdx + 1;
 	}
@@ -1637,7 +1682,7 @@ function processEmitInterpolation(ctx: CheckerContext, md: MacroInvocationData, 
 		if (b > a) {
 			const sub = sliceStr(str, a, b);
 			const strNode = createNode(NodeKind.StringLiteral, { value: sub },
-				createToken(TokenKind.StringLiteral, sub, line));
+				createToken(TokenKind.String, sub, line));
 			strNode.nodeType = stringType();
 			newArgs.push(strNode);
 		}
@@ -1652,7 +1697,7 @@ function processEmitInterpolation(ctx: CheckerContext, md: MacroInvocationData, 
 			const rest = sliceStr(str, b + 1, str.length);
 			if (rest.length > 0) {
 				const restNode = createNode(NodeKind.StringLiteral, { value: rest },
-					createToken(TokenKind.StringLiteral, rest, line));
+					createToken(TokenKind.String, rest, line));
 				restNode.nodeType = stringType();
 				newArgs.push(restNode);
 			}
@@ -1664,21 +1709,21 @@ function processEmitInterpolation(ctx: CheckerContext, md: MacroInvocationData, 
 			const sym = lookupSymbol(ctx.table, ident);
 			if (sym !== null) {
 				const idNode = createNode(NodeKind.Identifier, { name: ident },
-					createToken(TokenKind.Identifier, ident, line));
+					createToken(TokenKind.Ident, ident, line));
 				idNode.resolvedSym = sym;
 				idNode.nodeType = sym.symbolType;
 				newArgs.push(idNode);
 			} else {
 				// Unknown symbol — keep as string literal (reference behavior)
 				const strNode = createNode(NodeKind.StringLiteral, { value: ident },
-					createToken(TokenKind.StringLiteral, ident, line));
+					createToken(TokenKind.String, ident, line));
 				strNode.nodeType = stringType();
 				newArgs.push(strNode);
 			}
 		} else {
 			// Empty backticks `` — emit single backtick (reference parity: $marker)
 			const btNode = createNode(NodeKind.StringLiteral, { value: "`" },
-				createToken(TokenKind.StringLiteral, "`", line));
+				createToken(TokenKind.String, "`", line));
 			btNode.nodeType = stringType();
 			newArgs.push(btNode);
 		}

@@ -46,7 +46,7 @@ import {
 import { CheckerContext, createContext } from "../../checker/context";
 import { SymbolKind, lookupSymbol } from "../../checker/symbol";
 import { Type, TypeKind, unknownType, getProperty, typeNameOf } from "../../checker/types";
-import { Node, IdentifierData, MemberExprData, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../../ast/node";
+import { Node, IdentifierData, MemberExprData, NodeKind, ProgramData, ImportDeclData, ExportDeclData, SourceLocation } from "../../ast/node";
 import { defaultFormatOptions } from "../fmt/options";
 import { printNode as printFormattedNode } from "../fmt/printer";
 import { formatDoc } from "../fmt/layout";
@@ -94,6 +94,16 @@ function dbGetSource(db: TransAmDb, path: string): string {
 	return getFileText(db.fileInput, fileId);
 }
 
+// Load a file into the TransAm DB if not already present.
+function lspEnsureFileLoaded(db: TransAmDb, filePath: string): void {
+	if (getFileId(db.fileInput, filePath) < 0) {
+		const source = readFile(filePath);
+		if (source.length > 0) {
+			dbSetFileText(db, filePath, source);
+		}
+	}
+}
+
 // ===== Format Violation Check =====
 
 // Returns a single LSP diagnostic JSON string if the file is unformatted, empty string otherwise.
@@ -129,6 +139,90 @@ function lspBasename(path: string): string {
 	}
 	if (lastSlash >= 0) return path.slice(lastSlash + 1, path.length);
 	return path;
+}
+
+// Find the 0-based column of `name` as a whole word on 0-based `targetLine`.
+function lspFindNameCol(src: string, targetLine: number, name: string): number {
+	// Navigate to target line
+	let lineNum = 0;
+	let lineStart = 0;
+	let i = 0;
+	while (i < src.length && lineNum < targetLine) {
+		if (src[i] === "\n") {
+			lineNum = lineNum + 1;
+			lineStart = i + 1;
+		}
+		i = i + 1;
+	}
+	if (lineNum !== targetLine) return -1;
+	// Scan line for word-boundary match
+	let j = lineStart;
+	while (j < src.length && src[j] !== "\n") {
+		if (src.slice(j, j + name.length) === name) {
+			const before = j === lineStart || !lspIsWordChar(src[j - 1]);
+			const endIdx = j + name.length;
+			const after = endIdx >= src.length || src[endIdx] === "\n" || !lspIsWordChar(src[endIdx]);
+			if (before && after) return j - lineStart;
+		}
+		j = j + 1;
+	}
+	return -1;
+}
+
+function lspIsWordChar(ch: string): boolean {
+	return (ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") || (ch >= "0" && ch <= "9") || ch === "_";
+}
+
+// Find field declaration within an interface/struct body.
+// Scans from startLine+1 looking for `fieldName` followed by `:` (field declaration pattern).
+// Returns 0-based {line, col} or {-1, -1} if not found.
+function lspFindFieldLine(src: string, startLine: number, fieldName: string): SourceLocation {
+	let lineNum = 0;
+	let lineStart = 0;
+	let i = 0;
+	// Skip to startLine + 1 (body starts after declaration line)
+	const bodyStart = startLine + 1;
+	while (i < src.length && lineNum < bodyStart) {
+		if (src[i] === "\n") {
+			lineNum = lineNum + 1;
+			lineStart = i + 1;
+		}
+		i = i + 1;
+	}
+	// Scan lines looking for field declaration
+	while (i < src.length) {
+		// Check if this line contains fieldName as a word followed by : or ?:
+		let j = lineStart;
+		while (j < src.length && src[j] !== "\n") {
+			if (src.slice(j, j + fieldName.length) === fieldName) {
+				const before = j === lineStart || !lspIsWordChar(src[j - 1]);
+				const endIdx = j + fieldName.length;
+				const after = endIdx < src.length && !lspIsWordChar(src[endIdx]);
+				if (before && after) {
+					// Check for ':' or '?:' after the field name (skip whitespace)
+					let k = endIdx;
+					while (k < src.length && (src[k] === " " || src[k] === "\t")) {
+						k = k + 1;
+					}
+					if (k < src.length && (src[k] === ":" || src[k] === "?")) {
+						return { line: lineNum, column: j - lineStart } as SourceLocation;
+					}
+				}
+			}
+			j = j + 1;
+		}
+		// Hit closing brace — stop searching
+		let b = lineStart;
+		while (b < src.length && b <= j) {
+			if (src[b] === "}") return { line: -1, column: -1 } as SourceLocation;
+			b = b + 1;
+		}
+		// Advance to next line
+		i = j + 1;
+		lineNum = lineNum + 1;
+		lineStart = i;
+	}
+	return { line: -1, column: -1 } as SourceLocation;
 }
 
 // ===== Diagnostics =====
@@ -226,13 +320,7 @@ export function recordImportsForFile(db: TransAmDb, path: string, program: Node)
 			const imp = stmt.data as ImportDeclData;
 			const targetPath = lspResolveImport(path, imp.importSource);
 			if (targetPath === "") continue;
-			// Load target from disk if not in DB
-			if (getFileId(db.fileInput, targetPath) < 0) {
-				const targetSource = readFile(targetPath);
-				if (targetSource.length > 0) {
-					dbSetFileText(db, targetPath, targetSource);
-				}
-			}
+			lspEnsureFileLoaded(db, targetPath);
 			const targetId = getFileId(db.fileInput, targetPath);
 			if (targetId >= 0) {
 				recordModuleImport(db.moduleDeps, fileId, targetId);
@@ -500,9 +588,38 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 
 	const suggest = sgGetSymbolAtCursor(ctx, program, pos.line, pos.col1);
 	if (suggest !== null) {
-		const defLine = suggest.location.line - 1;
-		const defCol = suggest.location.column - 1;
-		const location = lspFmtLocation(pos.uri, defLine, defCol, defLine, defCol + suggest.name.length);
+		let defLine = suggest.location.line - 1;
+		let defCol = suggest.location.column - 1;
+		let defUri = pos.uri;
+		let defSrc = "";
+
+		// Cross-file: symbol defined in another module (import or prelude)
+		const modPath = suggest.modulePath;
+		if (modPath !== null && modPath !== "" && modPath !== path) {
+			lspEnsureFileLoaded(db, modPath);
+			defUri = lspPathToUri(modPath);
+			defSrc = dbGetSource(db, modPath);
+		} else {
+			defSrc = dbGetSource(db, path);
+		}
+
+		// Refine line/col using source text
+		if (defSrc !== "") {
+			if (suggest.kind === SymbolKind.Property) {
+				const fieldLoc = lspFindFieldLine(defSrc, defLine, suggest.name);
+				if (fieldLoc.line >= 0) {
+					defLine = fieldLoc.line;
+					defCol = fieldLoc.column;
+				} else {
+					const nameCol = lspFindNameCol(defSrc, defLine, suggest.name);
+					if (nameCol >= 0) defCol = nameCol;
+				}
+			} else {
+				const nameCol = lspFindNameCol(defSrc, defLine, suggest.name);
+				if (nameCol >= 0) defCol = nameCol;
+			}
+		}
+		const location = lspFmtLocation(defUri, defLine, defCol, defLine, defCol + suggest.name.length);
 		return lspResponse(id, "[" + location + "]");
 	}
 
@@ -519,13 +636,7 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 	const targetPath = lspResolveImport(path, importSpec);
 	if (targetPath === "") return lspResponse(id, "null");
 
-	// Load target file into DB if not present
-	if (getFileId(db.fileInput, targetPath) < 0) {
-		const targetSource = readFile(targetPath);
-		if (targetSource.length > 0) {
-			dbSetFileText(db, targetPath, targetSource);
-		}
-	}
+	lspEnsureFileLoaded(db, targetPath);
 
 	const targetProgram = dbParse(db, targetPath);
 	if (targetProgram === null) return lspResponse(id, "null");
@@ -535,7 +646,12 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 
 	const targetUri = lspPathToUri(targetPath);
 	const tLine = declLoc.line - 1;
-	const tCol = declLoc.column;
+	let tCol = declLoc.column;
+	const targetSrc = dbGetSource(db, targetPath);
+	if (targetSrc !== "") {
+		const tNameCol = lspFindNameCol(targetSrc, tLine, identName);
+		if (tNameCol >= 0) tCol = tNameCol;
+	}
 	return lspResponse(id, "[" + lspFmtLocation(targetUri, tLine, tCol, tLine, tCol + identName.length) + "]");
 }
 

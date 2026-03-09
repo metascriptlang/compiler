@@ -819,8 +819,8 @@ function genArrayType(g: CGen, t: Type): string {
 	if (elemType === "MS_BOOL") { typeCacheSet(g.typeCache, key, "msNumberArray"); return "msNumberArray"; }
 	if (elemType === "uint8_t") { typeCacheSet(g.typeCache, key, "msUint8Array"); return "msUint8Array"; }
 
-	// Pointer element types (classes, refs) → msRefArray (void* indirection is correct)
-	if (t.typeReturn !== null && isPointerType(t.typeReturn)) {
+	// Pointer element types (classes, refs, void*) → msRefArray (void* indirection is correct)
+	if (elemType === "void*" || (t.typeReturn !== null && isPointerType(t.typeReturn))) {
 		typeCacheSet(g.typeCache, key, "msRefArray");
 		return "msRefArray";
 	}
@@ -850,7 +850,13 @@ function genArrayType(g: CGen, t: Type): string {
 				"struct " + contentName + " { int64_t cap; " + mangle(elemType) + " data[]; };"
 			);
 		} else {
-			const line = "typedef MS_ARRAY(struct " + mangle(elemType) + ") " + arrTypeName + ";";
+			// Only use 'struct X' prefix for codegen-emitted structs.
+			// Runtime typedefs (msRefArray etc.), pointers (void*), and primitives are bare names.
+			const mangledElem = mangle(elemType);
+			const needsStructPrefix = t.typeReturn !== null
+				&& (t.typeReturn.kind === TypeKind.Struct || t.typeReturn.kind === TypeKind.Enum);
+			const elemRef = needsStructPrefix ? ("struct " + mangledElem) : mangledElem;
+			const line = "typedef MS_ARRAY(" + elemRef + ") " + arrTypeName + ";";
 			addLine(sec(g, CSection.Types), line);
 		}
 	}

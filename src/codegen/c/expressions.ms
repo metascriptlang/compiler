@@ -17,12 +17,12 @@ import {
 	ExprStmtData, HiddenStdConvData, HiddenDerefData,
 } from "../../ast/node";
 import { Type, TypeKind, isIntegerType, getProperty, getMinArity, isInterfaceType, findUnionVariant } from "../../checker/types";
-import { Symbol, SymbolKind } from "../../checker/symbol";
+import { Symbol, SymbolKind, SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, Builder, CSection,
 	initLoc, noLoc, rdLoc, addrLoc,
 	add, addLine, sec,
-	pStmts, getTemp, nameSetHas, emitStmtsLine, internString,
+	pStmts, getTemp, nameSetHas, nameSetAdd, emitStmtsLine, internString,
 	emitProcLocalsLine,
 } from "./context";
 import { mangle, mangleFieldName, mangledFunctionName, safeName } from "./names";
@@ -265,8 +265,20 @@ function discoverExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[],
 		if (node.nodeType !== null && node.nodeType.kind === TypeKind.Enum) {
 			getTypeDesc(g, node.nodeType);
 		}
-		// Module-qualified name for function references (Standard reference parity)
+		// Cross-module global variable: emit extern declaration (Reference: standard reference global variable emission)
+		// Standard reference implementation checks symbol ownership — we check modulePath (set on imported symbols)
 		const idSym = node.resolvedSym;
+		if (idSym !== null && idSym.symbolKind === SymbolKind.Variable
+			&& idSym.modulePath !== null && idSym.modulePath !== ""
+			&& idSym.modulePath !== g.modulePath
+			&& !nameSetHas(g.declaredGlobals, d.name)
+			&& node.nodeType !== null) {
+			const cType = getTypeDesc(g, node.nodeType);
+			const sName = safeName(d.name);
+			addLine(sec(g, CSection.GlobalVars), "extern " + cType + " " + sName + ";");
+			nameSetAdd(g.declaredGlobals, d.name);
+		}
+		// Module-qualified name for function references (Standard reference parity)
 		if (idSym !== null && idSym.symbolKind === SymbolKind.Function) {
 			results.push(mangledFunctionName(idSym, d.name, 0));
 		} else {

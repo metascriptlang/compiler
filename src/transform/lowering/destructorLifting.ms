@@ -29,6 +29,7 @@ import {
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createTransformContextWithChecker, freshTemp } from "../context";
 import { makeIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
 import { Type, TypeKind, isPrimitiveKind, AttachedOp, setAttachedOp, unwrapRef, createArray, createPtr, createRef, createVar, createPrimitive, stringType, getTypeSize } from "../../checker/types";
+import { walkNode } from "../walker";
 import { lookupSymbol, SymbolKind } from "../../checker/symbol";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput } from "../testUtil";
@@ -729,7 +730,10 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 	nameSetAdd(lctx.generating, typeName);
 
 	const sym = lookupSymbol(lctx.ctx.checkerCtx.table, typeName);
-	if (sym === null) return;
+	if (sym === null) {
+		// No symbol — may be an anonymous struct type. Skip (handled by ensureTypeHooksForType).
+		return;
+	}
 	const objType = unwrapRef(sym.symbolType);
 	if (objType.kind !== TypeKind.Struct && objType.kind !== TypeKind.Union) return;
 	if (!typeNeedsHooks(objType, lctx, loc)) {
@@ -810,6 +814,42 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 	);
 	lctx.collector.push(makeVarDecl(typeName + "_typeInfo", typeInfoObj, DeclKind.Const, loc));
 
+	nameSetAdd(lctx.generated, typeName);
+}
+
+// Generate hooks for a type directly (no symbol table lookup needed).
+// Used for anonymous struct types that have no InterfaceDecl/ClassDecl.
+function ensureTypeHooksForType(objType: Type, lctx: LiftCtx, loc: SourceLocation): void {
+	const typeName = objType.typeName;
+	if (typeName === "") return;
+	if (nameSetContains(lctx.generated, typeName)) return;
+	if (nameSetContains(lctx.generating, typeName)) return;
+	nameSetAdd(lctx.generating, typeName);
+
+	if (objType.kind !== TypeKind.Struct) return;
+	if (!typeNeedsHooks(objType, lctx, loc)) return;
+
+	// Anonymous structs are always value types (no classType)
+	generateHook("destroy", typeName, objType, null, lctx, loc);
+	generateHook("copy", typeName, objType, null, lctx, loc);
+	generateHook("sink", typeName, objType, null, lctx, loc);
+	generateHook("wasMoved", typeName, objType, null, lctx, loc);
+
+	setAttachedOp(objType, AttachedOp.AttachedDestructor, typeName + "_destroy");
+	setAttachedOp(objType, AttachedOp.AttachedAsgn, typeName + "_copy");
+	setAttachedOp(objType, AttachedOp.AttachedSink, typeName + "_sink");
+	setAttachedOp(objType, AttachedOp.AttachedWasMoved, typeName + "_wasMoved");
+
+	// Value type _dup: result = src; TypeName_copy(&result, &src); return result.
+	const dupStmts: Node[] = [];
+	dupStmts.push(makeVarDecl("$result", makeIdent("src", loc), DeclKind.Let, loc));
+	dupStmts.push(makeExprStmt(makeCall(makeIdent(typeName + "_copy", loc), [makeHiddenAddr(makeIdent("$result", loc), loc), makeHiddenAddr(makeIdent("src", loc), loc)], loc), loc));
+	dupStmts.push(makeReturn(makeIdent("$result", loc), loc));
+	const dupNode = makeFnDecl(typeName + "_dup", ["src"], [typeName], makeBlock(dupStmts, loc), "", typeName, loc);
+	lctx.collector.push(dupNode);
+	setAttachedOp(objType, AttachedOp.AttachedDup, typeName + "_dup");
+
+	// No ORC typeInfo needed for anonymous value types (can't be cyclic)
 	nameSetAdd(lctx.generated, typeName);
 }
 
@@ -1142,6 +1182,23 @@ function scanStmtForArrayTypes(stmt: Node, lctx: LiftCtx): void {
 	};
 }
 
+// ===== Anonymous Struct Type Scanning =====
+
+// Walk the AST to find anonymous struct types (typeName starts with "__anon").
+// These have no InterfaceDecl so processDecl doesn't see them.
+// Ensures lifecycle hooks are generated so DRC destroy calls link correctly.
+function scanForAnonStructTypes(program: Node, lctx: LiftCtx, loc: SourceLocation): void {
+	// Walk entire AST; check every node's type for anonymous structs
+	walkNode(program, (node: Node): Node => {
+		if (node.nodeType !== null && node.nodeType.kind === TypeKind.Struct
+			&& node.nodeType.typeName !== "" && node.nodeType.typeName.length > 6
+			&& node.nodeType.typeName.slice(0, 6) === "__anon") {
+			ensureTypeHooksForType(node.nodeType, lctx, node.location);
+		}
+		return node;
+	});
+}
+
 // ===== Process Declarations =====
 
 function processDecl(stmt: Node, lctx: LiftCtx): void {
@@ -1188,13 +1245,18 @@ export function liftDestructors(program: Node, ctx: TransformContext): Node {
 		processDecl(stmt, lctx);
 	}
 
+	// Scan for anonymous struct types (from ObjectLiterals with no declaration).
+	// These have typeName like "__anon..." set by the checker but no InterfaceDecl.
+	const defaultLoc2: SourceLocation = { line: 0, column: 0 };
+	scanForAnonStructTypes(program, lctx, defaultLoc2);
+
 	// Scan for standalone array type usage
 	for (const stmt of pd.programStmts) {
 		scanStmtForArrayTypes(stmt, lctx);
 	}
 
 	// Generate standalone array lifecycle hooks
-	const defaultLoc: SourceLocation = { file: "", line: 0, column: 0 };
+	const defaultLoc: SourceLocation = { line: 0, column: 0 };
 	generateArrayHooks(lctx, defaultLoc);
 
 	// Process pending tuple comparison ops (collected by operatorLower).

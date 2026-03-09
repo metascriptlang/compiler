@@ -158,7 +158,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 		params.push(paramPrefix + param.value);
 		advance(state);
 		params.push(captureOptionalType(state));
-		// Capture default value as AST node (Nim parity: formal.ast)
+		// Capture default value as AST node (Reference parity: store default expression)
 		if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
 			advance(state);
 			const paramIdx = (params.length - 2) / 2;

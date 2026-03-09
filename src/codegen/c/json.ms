@@ -14,6 +14,23 @@ import {
 } from "../../ast/node";
 import { Type, TypeKind } from "../../checker/types";
 import { syntheticToken, makeExprStmt } from "../../transform/util";
+import { TransformContext, hasEmitted } from "../../transform/context";
+
+// ===== Shared Helpers =====
+
+// Register a helper function (dedup + emit). Returns true if newly registered.
+export function registerHelper(name: string, emitNode: Node, ctx: TransformContext): void {
+	ctx.emittedHelpers.push(name);
+	ctx.pendingDecls.push(emitNode);
+}
+
+// Ensure json.h is included exactly once.
+export function ensureJsonInclude(ctx: TransformContext, loc: SourceLocation): void {
+	if (!hasEmitted(ctx, "__jsonInclude")) {
+		ctx.emittedHelpers.push("__jsonInclude");
+		ctx.pendingDecls.push(makeEmitNode("/*INCLUDESECTION*/#include \"core/json.h\"\n", loc));
+	}
+}
 
 // ===== Type Mapping =====
 
@@ -89,6 +106,35 @@ export function fieldTypeToJsonCtor(ftype: Type): string {
 			=> "msJsonNewNumber",
 		_ => "",
 	};
+}
+
+// Validate all struct fields are supported for JSON stringify/colored emission.
+function allFieldsSupported(fieldTypes: Type[]): boolean {
+	let i = 0;
+	while (i < fieldTypes.length) {
+		if (fieldTypeToJsonCtor(fieldTypes[i]) === "") return false;
+		i = i + 1;
+	}
+	return true;
+}
+
+// Emit per-field msJsonSet calls for a struct value → MsJsonValue* object.
+// Shared by generateJsonStringifyC and generateJsonStringifyColoredC.
+function emitJsonSetFields(fieldNames: string[], fieldTypes: Type[]): string {
+	let c = "";
+	let fi = 0;
+	while (fi < fieldNames.length) {
+		const fname = fieldNames[fi];
+		const ftype = fieldTypes[fi];
+		const ctorName = fieldTypeToJsonCtor(ftype);
+		let valueExpr = "value." + fname;
+		if (needsNumCast(ftype)) {
+			valueExpr = "(double)" + valueExpr;
+		}
+		c = c + "  msJsonSet(__o, msStringNew(\"" + fname + "\", " + fname.length.toString() + "), " + ctorName + "(" + valueExpr + "));\n";
+		fi = fi + 1;
+	}
+	return c;
 }
 
 // ===== @emit Node Helper =====
@@ -183,37 +229,12 @@ export function generateJsonStringifyC(
 	const fieldTypes = structType.typeChildren;
 	if (fieldNames === null || fieldTypes === null) return null as unknown as Node;
 
-	// Validate all fields are supported
-	let fi = 0;
-	while (fi < fieldNames.length) {
-		if (fieldTypeToJsonCtor(fieldTypes[fi]) === "") return null as unknown as Node;
-		fi = fi + 1;
-	}
+	if (!allFieldsSupported(fieldTypes)) return null as unknown as Node;
 
-	// Include json runtime header
 	let c = "/*INCLUDESECTION*/#include \"core/json.h\"\n";
 	c = c + "static msString " + helperName + "(" + typeName + " value) {\n";
 	c = c + "  MsJsonValue* __o = msJsonNewObject();\n";
-
-	// Per-field: msJsonSet(__o, "fieldName", msJsonNewString/Number/Bool(value.field))
-	fi = 0;
-	while (fi < fieldNames.length) {
-		const fname = fieldNames[fi];
-		const ftype = fieldTypes[fi];
-		const ctorName = fieldTypeToJsonCtor(ftype);
-		const cFieldType = fieldTypeToCType(ftype);
-
-		// Integer/float fields need cast to double for msJsonNewNumber
-		let valueExpr = "value." + fname;
-		if (needsNumCast(ftype)) {
-			valueExpr = "(double)" + valueExpr;
-		}
-
-		c = c + "  msJsonSet(__o, msStringNew(\"" + fname + "\", " + fname.length.toString() + "), " + ctorName + "(" + valueExpr + "));\n";
-
-		fi = fi + 1;
-	}
-
+	c = c + emitJsonSetFields(fieldNames, fieldTypes);
 	c = c + "  msString __result = msJsonStringify(__o);\n";
 	c = c + "  msJsonFree(__o);\n";
 	c = c + "  return __result;\n";
@@ -237,42 +258,21 @@ export function generateJsonStringifyColoredC(
 	const fieldTypes = structType.typeChildren;
 	if (fieldNames === null || fieldTypes === null) return null as unknown as Node;
 
-	let fi = 0;
-	while (fi < fieldNames.length) {
-		if (fieldTypeToJsonCtor(fieldTypes[fi]) === "") return null as unknown as Node;
-		fi = fi + 1;
-	}
-
-	const plainPrefix = displayName;
+	if (!allFieldsSupported(fieldTypes)) return null as unknown as Node;
 
 	let c = "/*INCLUDESECTION*/#include \"core/json.h\"\n";
 	c = c + "static msString " + helperName + "(" + typeName + " value) {\n";
 	c = c + "  MsJsonValue* __o = msJsonNewObject();\n";
-
-	fi = 0;
-	while (fi < fieldNames.length) {
-		const fname = fieldNames[fi];
-		const ftype = fieldTypes[fi];
-		const ctorName = fieldTypeToJsonCtor(ftype);
-
-		let valueExpr = "value." + fname;
-		if (needsNumCast(ftype)) {
-			valueExpr = "(double)" + valueExpr;
-		}
-
-		c = c + "  msJsonSet(__o, msStringNew(\"" + fname + "\", " + fname.length.toString() + "), " + ctorName + "(" + valueExpr + "));\n";
-		fi = fi + 1;
-	}
-
+	c = c + emitJsonSetFields(fieldNames, fieldTypes);
 	c = c + "  msString __body = msJsonStringifyColored(__o);\n";
 	c = c + "  msJsonFree(__o);\n";
 	// Build colored prefix at runtime: color + "class TypeName " + reset + body
 	c = c + "  char __pbuf[256];\n";
 	c = c + "  int __plen;\n";
 	c = c + "  if (msColorsEnabled()) {\n";
-	c = c + "    __plen = snprintf(__pbuf, sizeof(__pbuf), \"" + colorCode + "" + plainPrefix + "\\x1b[0m\");\n";
+	c = c + "    __plen = snprintf(__pbuf, sizeof(__pbuf), \"" + colorCode + "" + displayName + "\\x1b[0m\");\n";
 	c = c + "  } else {\n";
-	c = c + "    __plen = snprintf(__pbuf, sizeof(__pbuf), \"" + plainPrefix + "\");\n";
+	c = c + "    __plen = snprintf(__pbuf, sizeof(__pbuf), \"" + displayName + "\");\n";
 	c = c + "  }\n";
 	c = c + "  msString __prefix = msStringNew(__pbuf, __plen);\n";
 	c = c + "  msString __result = msStringConcat(__prefix, __body);\n";

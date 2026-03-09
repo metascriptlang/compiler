@@ -28,7 +28,12 @@ function collectDecl(ctx: CheckerContext, node: Node): void {
 		NodeKind.ImportDecl => collectImport(ctx, node),
 		NodeKind.ExportDecl => collectExport(ctx, node),
 		NodeKind.DecoratedDecl => collectDecorated(ctx, node),
-		NodeKind.VariableDecl => collectVariable(ctx, node),
+		NodeKind.VariableDecl => {
+			collectVariable(ctx, node);
+			// Reference parity: global flag on module-level variables
+			const gSym = lookupLocal(ctx.table, (node.data as VariableDeclData).declName);
+			if (gSym !== null) setFlag(gSym, SymbolFlag.Global);
+		},
 		NodeKind.TestDecl => {},
 		_ => {},
 	};
@@ -69,7 +74,11 @@ function collectDeclLocal(ctx: CheckerContext, node: Node): void {
 				}
 			}
 		},
-		NodeKind.VariableDecl => collectVariable(ctx, node),
+		NodeKind.VariableDecl => {
+			collectVariable(ctx, node);
+			const gSym2 = lookupLocal(ctx.table, (node.data as VariableDeclData).declName);
+			if (gSym2 !== null) setFlag(gSym2, SymbolFlag.Global);
+		},
 		NodeKind.TestDecl => {},
 		_ => {},
 	};

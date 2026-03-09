@@ -75,9 +75,13 @@ export function lspRunServer(): void {
 		}
 
 		// 4. Process and respond (processMessage returns wire-formatted string)
-		const response = processMessage(body, state);
-		if (response.length > 0) {
-			writeStdout(response);
+		try {
+			const response = processMessage(body, state);
+			if (response.length > 0) {
+				writeStdout(response);
+			}
+		} catch (e) {
+			lspLog("Handler error: " + e);
 		}
 	}
 
@@ -98,6 +102,19 @@ export function processMessage(msg: string, state: LspServerState): string {
 	// Track lifecycle
 	if (method === "initialize") {
 		state.initialized = true;
+		// Extract rootUri/rootPath → set stdPath for prelude file resolution
+		const rootUri = lspGetField(params, "rootUri");
+		if (rootUri.length > 0) {
+			const rp = lspUriToPath(rootUri);
+			if (rp.length > 0) {
+				state.db.stdPath = rp + "/std";
+			}
+		} else {
+			const rootPath = lspGetField(params, "rootPath");
+			if (rootPath.length > 0) {
+				state.db.stdPath = rootPath + "/std";
+			}
+		}
 	}
 	if (method === "shutdown") {
 		state.shutdownRequested = true;

@@ -12,7 +12,8 @@ import { Node, NodeKind, SourceLocation, ProgramData, DeclKind,
 	ArrayLiteralData, ObjectLiteralData, ConditionalExprData,
 	ArrowFunctionData, ArrayAccessData, MatchExprData, MatchCaseData,
 	TryCatchStmtData, TryExprData, ClassDeclData, InterfaceDeclData, EnumDeclData,
-	TypeAliasDeclData, ExportDeclData, ImportDeclData } from "../ast/node";
+	TypeAliasDeclData, ExportDeclData, ImportDeclData, HiddenDerefData,
+	HiddenStdConvData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { Type, TypeKind, typeNameOf, getProperty,
 	numberType, stringType, booleanType, voidType, nullType,
@@ -32,6 +33,7 @@ export interface SgSuggest {
 	kind: SymbolKind;
 	symType: Type;
 	location: SourceLocation;
+	modulePath: string;    // source file path (for cross-file navigation)
 	prefixScore: number;   // 0=None, 1=Substr, 2=Prefix
 	scopeDepth: number;    // 0=innermost, higher=outer
 	contextFit: boolean;   // type-context match
@@ -313,6 +315,13 @@ export function sgFindNodeAtPosition(program: Node, line: number, col: number): 
 		}
 		return null as unknown as Node;
 	}
+	// Hidden wrapper nodes inserted by checker — recurse through to inner expression
+	if (program.kind === NodeKind.HiddenDeref || program.kind === NodeKind.HiddenAddr) {
+		return sgTryStmtChild((program.data as HiddenDerefData).expr, line, col);
+	}
+	if (program.kind === NodeKind.HiddenStdConv || program.kind === NodeKind.HiddenSubConv) {
+		return sgTryStmtChild((program.data as HiddenStdConvData).convExpr, line, col);
+	}
 	if (program.kind === NodeKind.IfStmt) {
 		const id = program.data as IfStmtData;
 		// Statement children — use line-only containment (condition column may differ)
@@ -379,21 +388,21 @@ export function sgFindNodeAtPosition(program: Node, line: number, col: number): 
 		if (b !== null) return b;
 		const u = sgTryStmtChild(fs.forUpdate, line, col);
 		if (u !== null) return u;
-		const t = sgTryStmtChild(fs.forTest, line, col);
+		const t = sgTryStmtChild(fs.forCondition, line, col);
 		if (t !== null) return t;
 		return sgTryStmtChild(fs.forInit, line, col);
 	}
 	if (program.kind === NodeKind.TryCatchStmt) {
 		const tc = program.data as TryCatchStmtData;
-		const t = sgTryStmtChild(tc.tryBlock, line, col);
+		const t = sgTryStmtChild(tc.tryBody, line, col);
 		if (t !== null) return t;
-		const c = sgTryStmtChild(tc.catchBlock, line, col);
+		const c = sgTryStmtChild(tc.catchBody, line, col);
 		if (c !== null) return c;
-		return sgTryStmtChild(tc.finallyBlock, line, col);
+		return sgTryStmtChild(tc.finallyBody, line, col);
 	}
 	if (program.kind === NodeKind.MatchExpr) {
 		const me = program.data as MatchExprData;
-		const d = sgTryStmtChild(me.matchDiscriminant, line, col);
+		const d = sgTryStmtChild(me.matchDisc, line, col);
 		if (d !== null) return d;
 		return sgFindInChildren(me.matchCases, line, col);
 	}
@@ -409,7 +418,7 @@ export function sgFindNodeAtPosition(program: Node, line: number, col: number): 
 	}
 	if (program.kind === NodeKind.TryExpr) {
 		const te = program.data as TryExprData;
-		return sgTryStmtChild(te.tryExpr, line, col);
+		return sgTryStmtChild(te.tryArg, line, col);
 	}
 	if (program.kind === NodeKind.ExportDecl) {
 		return sgTryStmtChild((program.data as ExportDeclData).exportedDecl, line, col);
@@ -421,11 +430,22 @@ export function sgFindNodeAtPosition(program: Node, line: number, col: number): 
 
 // ===== sgGetSymbolAtCursor — resolve symbol at cursor position =====
 
+// Get the type name, unwrapping Ref/Ptr
+function sgTypeName(t: Type): string {
+	if (t === null) return "";
+	if (t.typeName !== "") return t.typeName;
+	if ((t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) && t.typeChildren !== null && t.typeChildren.length > 0) {
+		return t.typeChildren[0].typeName;
+	}
+	return "";
+}
+
 // Build SgSuggest from a Symbol.
 function sgSuggestFromSym(sym: Symbol): SgSuggest {
 	return {
 		name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
-		location: sym.location, prefixScore: 0, scopeDepth: 0, contextFit: false,
+		location: sym.location, modulePath: sym.modulePath,
+		prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: hasFlag(sym, SymbolFlag.Exported), isMutable: hasFlag(sym, SymbolFlag.Mutable),
 	};
 }
@@ -434,8 +454,12 @@ export function sgGetSymbolAtCursor(ctx: CheckerContext, program: Node, line: nu
 	const node = sgFindNodeAtPosition(program, line, col);
 	if (node === null) return null as unknown as SgSuggest;
 
-	// Checker-stamped resolvedSym is always authoritative
-	if (node.resolvedSym !== null) return sgSuggestFromSym(node.resolvedSym);
+	// Checker-stamped resolvedSym is authoritative — but only if it has a real location.
+	// Synthetic symbols (e.g. struct field access) have location {0,0} and need special handling.
+	if (node.resolvedSym !== null) {
+		const _rsLoc = node.resolvedSym.location;
+		if (_rsLoc !== null && _rsLoc.line > 0) return sgSuggestFromSym(node.resolvedSym);
+	}
 
 	if (node.kind === NodeKind.Identifier) {
 		const id = node.data as IdentifierData;
@@ -456,18 +480,41 @@ export function sgGetSymbolAtCursor(ctx: CheckerContext, program: Node, line: nu
 	}
 
 	// MemberExpr: cursor on property name (e.g. p.name, JSON.parse)
-	// The walker returns MemberExpr when cursor is past the object — check resolvedSym on CallExpr parent too
 	if (node.kind === NodeKind.MemberExpr) {
-		if (node.resolvedSym !== null) return sgSuggestFromSym(node.resolvedSym);
+		// resolvedSym set by checker — use if it has a real location
+		if (node.resolvedSym !== null) {
+			const rsLoc = node.resolvedSym.location;
+			if (rsLoc !== null && rsLoc.line > 0) return sgSuggestFromSym(node.resolvedSym);
+		}
 		const md = node.data as MemberExprData;
-		// Try looking up the property as a type member
-		const objType = md.object.nodeType;
+		// Unwrap HiddenDeref (checker inserts for class/ref access)
+		let objNode = md.object;
+		if (objNode !== null && objNode.kind === NodeKind.HiddenDeref) {
+			objNode = (objNode.data as HiddenDerefData).expr;
+		}
+		// Named type: find the property in the type's declaration (e.g. Person.name → interface Person)
+		const objType = objNode !== null ? objNode.nodeType : null as unknown as Type;
 		if (objType !== null) {
-			const prop = getProperty(objType, md.property);
-			if (prop !== null) {
+			const typeName = sgTypeName(objType);
+			if (typeName !== "") {
+				const typeSym = lookupSymbol(ctx.table, typeName);
+				if (typeSym !== null) {
+					return {
+						name: md.property, kind: SymbolKind.Property,
+						symType: typeSym.symbolType,
+						location: typeSym.location, modulePath: typeSym.modulePath,
+						prefixScore: 0, scopeDepth: 0, contextFit: false,
+						isExported: false, isMutable: false,
+					};
+				}
+			}
+			// Anonymous struct: go to the object variable's declaration
+			if (objNode.resolvedSym !== null) {
 				return {
-					name: md.property, kind: SymbolKind.Property, symType: prop,
-					location: node.location, prefixScore: 0, scopeDepth: 0, contextFit: false,
+					name: md.property, kind: SymbolKind.Property,
+					symType: objType,
+					location: objNode.resolvedSym.location, modulePath: objNode.resolvedSym.modulePath,
+					prefixScore: 0, scopeDepth: 0, contextFit: false,
 					isExported: false, isMutable: false,
 				};
 			}
@@ -1040,7 +1087,8 @@ export function sgGetCompletionCandidates(ctx: CheckerContext, kind: SgCompletio
 				if (!inTypeCtx || sgIsTypeKind(sym.symbolKind)) {
 					const item: SgSuggest = {
 						name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
-						location: sym.location, prefixScore: ps, scopeDepth: depth, contextFit: cf,
+						location: sym.location, modulePath: sym.modulePath,
+						prefixScore: ps, scopeDepth: depth, contextFit: cf,
 						isExported: hasFlag(sym, SymbolFlag.Exported), isMutable: hasFlag(sym, SymbolFlag.Mutable),
 					};
 					result.push(item);

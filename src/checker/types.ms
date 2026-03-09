@@ -164,6 +164,35 @@ export function createStruct(name: string, propNames: string[], propTypes: Type[
 	return t;
 }
 
+// Generate a deterministic name for an anonymous struct from its field names and types.
+// Format: __anon<count>__<field1><suffix>__<field2><suffix>
+// Count prefix + double-underscore separators prevent collisions between
+// { x_y: 1 } (__anon1__x_yn) and { x: 1, y: 2 } (__anon2__xn__yn).
+// Type suffix prevents same-name different-type collisions.
+export function anonStructName(fieldNames: string[], fieldTypes: Type[]): string {
+	if (fieldNames.length === 0) return "";
+	let name = "__anon" + fieldNames.length;
+	let i = 0;
+	while (i < fieldNames.length) {
+		const ft = i < fieldTypes.length ? fieldTypes[i] : null;
+		let suffix = "x";
+		if (ft !== null) {
+			suffix = match (ft.kind) {
+				TypeKind.Number | TypeKind.Float64 => "n",
+				TypeKind.Float32 => "f",
+				TypeKind.String => "s",
+				TypeKind.Boolean => "b",
+				TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 => "i",
+				TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => "u",
+				_ => "x",
+			};
+		}
+		name = name + "__" + fieldNames[i] + suffix;
+		i = i + 1;
+	}
+	return name;
+}
+
 export function createArray(element: Type): Type {
 	return {
 		kind: TypeKind.Array, typeName: "", typeNames: [], typeChildren: [],

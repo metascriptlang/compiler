@@ -269,7 +269,7 @@ export function taHashNode(node: Node): number {
 		// === Statements ===
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
-			h = hS(h, d.declName); h = hS(h, d.declType); h = hN(h, d.initializer); h = hI(h, d.declKind);
+			h = hS(h, d.declName); h = hS(h, d.declType); h = hN(h, d.initializer); h = hI(h, d.declKind as number);
 		},
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
@@ -312,7 +312,7 @@ export function taHashNode(node: Node): number {
 			const d = node.data as FunctionDeclData;
 			h = hS(h, d.fnName); h = hStrings(h, d.params); h = hStrings(h, d.fnParamTypes);
 			h = hN(h, d.fnBody); h = hS(h, d.fnFlags); h = hS(h, d.fnReturnType);
-			h = hStrings(h, d.fnDefaults); h = hS(h, d.nativeName);
+			h = hNodes(h, d.fnDefaults); h = hS(h, d.nativeName);
 		},
 		NodeKind.DoWhileStmt => {
 			const d = node.data as DoWhileStmtData;
@@ -376,7 +376,7 @@ export function taHashNode(node: Node): number {
 		},
 		NodeKind.ExternDecl => {
 			const d = node.data as ExternDeclData;
-			h = hI(h, d.externKind); h = hS(h, d.externName); h = hS(h, d.nativeName); h = hS(h, d.externType);
+			h = hI(h, d.externKind as number); h = hS(h, d.externName); h = hS(h, d.nativeName); h = hS(h, d.externType);
 		},
 
 		// === Error Handling ===

@@ -14,9 +14,9 @@
 
 import {
 	Node, NodeKind, NodeFlag, DeclKind, ProgramData, SourceLocation,
-	CallExprData, MemberExprData, IdentifierData, ObjectLiteralData,
+	CallExprData, MemberExprData, IdentifierData,
 } from "../../ast/node";
-import { Type, TypeKind, isNumeric, createResult, createArray, createPrimitive, createStruct, stringType, booleanType, numberType, unknownType, unwrapRef } from "../../checker/types";
+import { Type, TypeKind, isNumeric, createResult, createArray, createPrimitive, stringType, booleanType, numberType, unknownType, unwrapRef } from "../../checker/types";
 import { TransformContext, hasEmitted } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { walkNode } from "../walker";
@@ -26,7 +26,7 @@ import {
 	makeExprStmt,
 } from "../util";
 import { findCallTypeArg } from "../../parser/context";
-import { generateJsonParseC, generateJsonStringifyC, makeEmitNode } from "../../codegen/c/json";
+import { generateJsonParseC, generateJsonStringifyC, makeEmitNode, ensureJsonInclude, registerHelper } from "../../codegen/c/json";
 import { rewriteEcho, resolveJsonTargetType } from "./debugLower";
 import { stmtCountAfter, firstStmtKindAfter, firstExprKindAfter } from "../testUtil";
 
@@ -193,56 +193,6 @@ function rewriteResultToLiteral(node: Node, isOk: boolean, ctx: TransformContext
 // ===== Typed JSON — @builtin("JsonParse") / @builtin("JsonStringify") =====
 // AST rewriting only — C code generation delegated to codegen/c/json.ms
 
-// Single-char type suffix for anonymous struct name disambiguation.
-// Same field names with different types get different helper names.
-function typeKindSuffix(t: Type): string {
-	if (t === null) return "u";
-	return match (t.kind) {
-		TypeKind.Number | TypeKind.Float64 => "n",
-		TypeKind.Float32 => "f",
-		TypeKind.String => "s",
-		TypeKind.Boolean => "b",
-		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 => "i",
-		TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => "u",
-		_ => "x",
-	};
-}
-
-// Build an anonymous struct type from an ObjectLiteral's keys and property types.
-// Returns null if any property type is null/Unknown or has no fields.
-//
-// Name format: __anon<count>__<field1><typeSuffix>__<field2><typeSuffix>
-// Count prefix + double-underscore separator prevents collisions:
-//   { x_y: 1 }     → __anon1__x_yn    (1 field)
-//   { x: 1, y: 2 } → __anon2__xn__yn  (2 fields)
-// Type suffix prevents same-name different-type collisions:
-//   { x: 1 }       → __anon1__xn      (number)
-//   { x: "hi" }    → __anon1__xs      (string)
-export function buildAnonStructType(argNode: Node): Type {
-	const d = argNode.data as ObjectLiteralData;
-	const keys = d.keys;
-	if (keys.length === 0) return null;
-	const propTypes: Type[] = [];
-	let i = 0;
-	while (i < d.properties.length) {
-		const pt = d.properties[i].nodeType;
-		if (pt === null || pt.kind === TypeKind.Unknown) return null;
-		propTypes.push(pt);
-		i = i + 1;
-	}
-	// Synthesize deterministic name: count + fields with type suffixes
-	let anonName = "__anon" + keys.length;
-	let ni = 0;
-	while (ni < keys.length) {
-		anonName = anonName + "__" + keys[ni] + typeKindSuffix(propTypes[ni]);
-		ni = ni + 1;
-	}
-	const structType = createStruct(anonName, keys, propTypes, false);
-	// Stamp on ObjectLiteral so codegen emits correct C type
-	argNode.nodeType = structType;
-	return structType;
-}
-
 // Dedup check — prevents generating the same helper twice.
 // Uses ctx.emittedHelpers (per-compilation) instead of module-level state.
 
@@ -265,8 +215,7 @@ function rewriteJsonParse(node: Node, ctx: TransformContext): Node {
 	if (!hasEmitted(ctx, helperName)) {
 		const emitNode = generateJsonParseC(helperName, typeArgStr, structType, loc);
 		if (emitNode === null) return node;
-		ctx.emittedHelpers.push(helperName);
-		ctx.pendingDecls.push(emitNode);
+		registerHelper(helperName, emitNode, ctx);
 	}
 
 	const newCallee = makeIdent(helperName, loc);
@@ -287,11 +236,7 @@ function rewriteUntypedJsonParse(node: Node, ctx: TransformContext): Node {
 	if (jvSym === null || jvSym.symbolType === null) return node;
 	const jvType = jvSym.symbolType;  // Ref<Struct("JsonValue", ...)>
 
-	// Emit #include "core/json.h" (dedup'd)
-	if (!hasEmitted(ctx, "__jsonInclude")) {
-		ctx.emittedHelpers.push("__jsonInclude");
-		ctx.pendingDecls.push(makeEmitNode("/*INCLUDESECTION*/#include \"core/json.h\"\n", loc));
-	}
+	ensureJsonInclude(ctx, loc);
 
 	const call = makeCall(makeIdent("msJsonParse", loc), cd.arguments, loc);
 	call.nodeType = jvType;
@@ -310,29 +255,16 @@ function rewriteJsonStringify(node: Node, ctx: TransformContext): Node {
 			typeArgStr = argType.typeName;
 		}
 	}
-	// Anonymous object literal: infer struct from keys + property types
-	if (typeArgStr === "" && cd.arguments.length > 0
-		&& cd.arguments[0].kind === NodeKind.ObjectLiteral) {
-		const anonType = buildAnonStructType(cd.arguments[0]);
-		if (anonType !== null) {
-			const aHelperName = "__jsonStringify_" + anonType.typeName;
-			if (!hasEmitted(ctx, aHelperName)) {
-				const emitNode = generateJsonStringifyC(aHelperName, anonType.typeName, anonType, loc);
-				if (emitNode !== null) {
-					ctx.emittedHelpers.push(aHelperName);
-					ctx.pendingDecls.push(emitNode);
-				}
-			}
-			const newCallee = makeIdent(aHelperName, loc);
-			const aResult = makeCall(newCallee, cd.arguments, loc);
-			aResult.nodeType = stringType();
-			return aResult;
-		}
-	}
-
 	if (typeArgStr === "") return node;
 
-	const structType = resolveJsonTargetType(typeArgStr, ctx);
+	let structType = resolveJsonTargetType(typeArgStr, ctx);
+	// Anonymous struct types have no symbol — use argument's type directly
+	if (structType === null && cd.arguments.length > 0 && cd.arguments[0].nodeType !== null) {
+		const argInner = unwrapRef(cd.arguments[0].nodeType);
+		if (argInner.kind === TypeKind.Struct && argInner.typeName === typeArgStr) {
+			structType = argInner;
+		}
+	}
 	if (structType === null) return node;
 
 	const helperName = "__jsonStringify_" + typeArgStr;
@@ -340,8 +272,7 @@ function rewriteJsonStringify(node: Node, ctx: TransformContext): Node {
 	if (!hasEmitted(ctx, helperName)) {
 		const emitNode = generateJsonStringifyC(helperName, typeArgStr, structType, loc);
 		if (emitNode === null) return node;
-		ctx.emittedHelpers.push(helperName);
-		ctx.pendingDecls.push(emitNode);
+		registerHelper(helperName, emitNode, ctx);
 	}
 
 	const newCallee = makeIdent(helperName, loc);

@@ -29,3 +29,8 @@ import "./nullValueType";
 import "./enumValues";
 import "./matchValueType";
 import "./defaultArgs";
+import "./anonStructResolve";
+import "./tryResultArray";
+import "./classMemberElseIf";
+import "./crossModuleGlobal";
+import "./closureCall";

@@ -610,6 +610,8 @@ function genGlobalVar(g: CGen, node: Node): void {
 	const cType = getTypeDesc(g, node.nodeType);
 	// Always emit uninitialized declaration to GlobalVars
 	addLine(sec(g, CSection.GlobalVars), cType + " " + varName + ";");
+	// Track as module-local global (for cross-module extern detection)
+	nameSetAdd(g.declaredGlobals, d.declName);
 
 	// Non-trivial initializers go to ModuleInit (not valid as C global initializers)
 	if (d.initializer !== null) {

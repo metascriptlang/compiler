@@ -217,11 +217,11 @@ export function makeSwitchCase(tests: Node[], stmts: Node[], isDefault: boolean,
 // ===== Declaration Builders =====
 
 export function makeFnDecl(name: string, fnParams: string[], paramTypes: string[], body: Node, flags: string, returnType: string, loc: SourceLocation): Node {
-	const emptyDefaults: string[] = [];
+	const emptyDefaults: Node[] = [];
 	const n = createNode(NodeKind.FunctionDecl, {
 		fnName: name, params: fnParams, fnParamTypes: paramTypes,
 		fnBody: body, fnFlags: flags, fnReturnType: returnType,
-		fnDefaults: emptyDefaults,
+		fnDefaults: emptyDefaults, nativeName: "",
 	}, syntheticToken(loc));
 	// Build Type from string annotations for codegen (Implementation parity)
 	const resolvedParams: Type[] = [];

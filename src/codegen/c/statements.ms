@@ -26,7 +26,7 @@ import {
 import { genExpr } from "./expressions";
 import { ensureCrossModuleProto } from "./declarations";
 import { safeName } from "./names";
-import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, getCalleeReturnType, intToString } from "./types";
+import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, getCalleeReturnType, intToString, genClFullCastNrvo, genClHalfCastNrvo } from "./types";
 
 // ===== NRVO Call Site Helpers =====
 // G3 fix: detect calls to NRVO functions and emit fn(&dest, args) instead of dest = fn(args)
@@ -65,14 +65,34 @@ function isNumericCType(cType: string): boolean {
 function genNrvoCallExpr(g: CGen, p: CProc, callNode: Node, destVar: string): string {
 	const cd = callNode.data as CallExprData;
 	let callee = genExpr(g, p, cd.callee);
-	// On-demand cross-module prototype (reference parity: genProcPrototype)
+	let argsStr = "";
+	for (let i = 0; i < cd.arguments.length; i += 1) {
+		if (argsStr !== "") argsStr = argsStr + ", ";
+		argsStr = argsStr + genExpr(g, p, cd.arguments[i]);
+	}
+
+	// Closure NRVO call: dispatch through fn pointer with env (Reference: ccgcalls.nim genClosureCall)
+	if (!cd.isDirectCall) {
+		const calleeType = cd.callee.nodeType !== null ? cd.callee.nodeType :
+			(cd.callee.resolvedSym !== null && cd.callee.resolvedSym.symbolType !== null ? cd.callee.resolvedSym.symbolType : null);
+		const nrvoType = getTypeDesc(g, getCalleeReturnType(callNode));
+		const clFull = genClFullCastNrvo(g, calleeType, nrvoType);
+		const clHalf = genClHalfCastNrvo(g, calleeType, nrvoType);
+		const envExpr = callee + ".env";
+		const fnExpr = callee + ".fn";
+		let fullArgs = "&" + destVar;
+		if (argsStr !== "") fullArgs = fullArgs + ", " + argsStr;
+		const callWithEnv = "((" + clFull + ")" + fnExpr + ")(" + fullArgs + ", " + envExpr + ")";
+		const callNoEnv = "((" + clHalf + ")" + fnExpr + ")(" + fullArgs + ")";
+		return "(" + envExpr + " ? " + callWithEnv + " : " + callNoEnv + ")";
+	}
+
+	// Direct NRVO call: on-demand cross-module prototype
 	const nrvoSym = callNode.resolvedSym !== null ? callNode.resolvedSym : (cd.callee.resolvedSym !== null ? cd.callee.resolvedSym : null as unknown as Symbol);
 	const nrvoFnType = nrvoSym !== null ? nrvoSym.symbolType : (cd.callee.nodeType !== null ? cd.callee.nodeType : null);
 	ensureCrossModuleProto(g, callee, nrvoFnType, nrvoSym);
 	let args = "&" + destVar;
-	for (let i = 0; i < cd.arguments.length; i += 1) {
-		args = args + ", " + genExpr(g, p, cd.arguments[i]);
-	}
+	if (argsStr !== "") args = args + ", " + argsStr;
 	return callee + "(" + args + ")";
 }
 import { sliceStr, charAt } from "../../utils/string";
@@ -137,7 +157,7 @@ export function resolveEmitArgs(g: CGen, mi: MacroInvocationData, p: CProc): str
 					} else {
 						result = result + safeName(sym.name);
 					}
-				} else if (sym.symbolKind === SymbolKind.Type) {
+				} else if (sym.symbolKind === SymbolKind.TypeAlias) {
 					// Type → C type descriptor
 					if (sym.symbolType !== null) {
 						result = result + getTypeDesc(g, sym.symbolType);

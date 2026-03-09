@@ -504,8 +504,8 @@ function generateCleanup(scope: DrcScope, excludeNames: NameSet, loc: SourceLoca
 // Implementation parity: hoist a single VariableDecl if it's an RC var tracked in scope.
 // Mirrors standard scope processing which emits variables as declarations before the try body.
 // Returns true if hoisted (caller emits assignment in try body instead).
-// Nim parity: hoisted null/undefined inits should NOT generate a redundant assignment.
-// Nim's constructLoc handles zero-init once. Our hoisted {0} decl does the same.
+// Reference parity: hoisted null/undefined inits should NOT generate a redundant assignment.
+// Standard reference patterns handle zero-init once. Our hoisted {0} decl does the same.
 function isUndefinedInit(node: Node): boolean {
 	return node.kind === NodeKind.Identifier && (node.data as IdentifierData).name === "undefined";
 }
@@ -1269,13 +1269,18 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	// Member access: borrowed — needs incref/copy or null-out for Result extraction
 	if (init.kind === NodeKind.MemberExpr) {
 		const md = init.data as MemberExprData;
-		// Result field extraction: $result_N.value → null-out source to prevent double-free
+		// Result field extraction: $result_N.value → wasMoved on source to prevent double-free
+		// Reference parity: reset logic dispatches per-type (field-level zero, not nil assignment).
+		// Using wasMoved instead of null assignment handles value types (msRefArray, structs)
+		// that can't accept void* assignment.
 		if (md.object.kind === NodeKind.Identifier && md.property === "value") {
 			const objName = (md.object.data as IdentifierData).name;
 			if (objName.startsWith("$result")) {
-				const nullAssign = makeExprStmt(
-					makeAssign(makeMember(makeIdent(objName, loc), "value", loc), makeNull(loc), loc), loc);
-				addPending(dctx, nullAssign);
+				if (rcInfo.wasMovedFn !== "") {
+					const valueMember = makeMember(makeIdent(objName, loc), "value", loc);
+					valueMember.nodeType = init.nodeType;
+					addPending(dctx, makeWasMovedOnExpr(valueMember, rcInfo, loc));
+				}
 				return stmt;
 			}
 		}

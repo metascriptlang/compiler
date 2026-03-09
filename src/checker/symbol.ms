@@ -44,7 +44,7 @@ export function setFlag(sym: Symbol, flag: SymbolFlag): void {
 
 // ===== Scope =====
 
-export interface Scope {
+export class Scope {
 	symbols: Symbol[];
 	scopeKind: ScopeKind;
 	parent: Scope;   // null for global scope

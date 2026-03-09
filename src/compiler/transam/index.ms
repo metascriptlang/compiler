@@ -255,7 +255,7 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: str
 					overloadExtReceiverTypes: [], overloadExtIsStatic: [],
 					nativeName: sym.nativeName, builtinKind: sym.builtinKind,
 					overloadNativeNames: [], overloadBuiltinKinds: [],
-					defaultTexts: [], overloadDefaultTexts: [],
+					defaultParams: [], overloadDefaultParams: [],
 				};
 				earlyExports.push(info);
 			}

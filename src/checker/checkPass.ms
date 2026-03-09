@@ -2,7 +2,7 @@
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
 import {
-	Node, NodeKind, DeclKind,
+	Node, NodeKind, DeclKind, createNodeAt,
 	ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData,
 	IdentifierData, BinaryExprData, MemberExprData,
 	VariableDeclData, FunctionDeclData, ClassDeclData,
@@ -251,32 +251,158 @@ function checkExportDecl(ctx: CheckerContext, node: Node): void {
 	checkStmt(ctx, d.exportedDecl);
 }
 
-// ===== Null Narrowing =====
+// ===== Null Narrowing (Fact-Based Model) =====
+//
+// Reference-aligned design: a Node[] knowledge base tracks known conditions.
+// addFact decomposes && into separate facts. addFactNeg negates conditions.
+// impliesNotNull queries the fact list. Save/restore via array length truncation.
+// sym.symbolType mutation still applies narrowing (single-pass checker requirement).
 
-// Analyze condition for null check: returns "+varName" for !== null, "-varName" for === null, "" for no match
-// Also handles: x !== null && expr → "+varName" (logical AND with null check on left)
-function analyzeNullCheck(condition: Node): string {
-	if (condition.kind !== NodeKind.BinaryExpr) return "";
-	const d = condition.data as BinaryExprData;
+function saveFacts(ctx: CheckerContext): number {
+	return ctx.narrowFacts.length;
+}
 
-	// Logical AND: x !== null && ...  → null check on left side
-	if (d.operator === "&&") {
-		return analyzeNullCheck(d.left);
+function restoreFacts(ctx: CheckerContext, snapshot: number): void {
+	ctx.narrowFacts.length = snapshot;
+}
+
+// Decompose && into separate facts (both sides true). Other conditions pushed as-is.
+function addFact(ctx: CheckerContext, condition: Node): void {
+	if (condition.kind === NodeKind.BinaryExpr) {
+		const d = condition.data as BinaryExprData;
+		if (d.operator === "&&") {
+			addFact(ctx, d.left);
+			addFact(ctx, d.right);
+			return;
+		}
 	}
+	ctx.narrowFacts.push(condition);
+}
 
-	// x !== null or x === null
+function negateOp(op: string): string {
+	if (op === "===") return "!==";
+	if (op === "!==") return "===";
+	if (op === "==") return "!=";
+	if (op === "!=") return "==";
+	return op;
+}
+
+// Negate and add. NOT(a||b) = !a && !b (decompose). NOT(a&&b) = !a || !b (opaque).
+// Simple comparisons: flip operator. Fallback: push as opaque (impliesNotNull returns unknown).
+function addFactNeg(ctx: CheckerContext, condition: Node): void {
+	if (condition.kind === NodeKind.BinaryExpr) {
+		const d = condition.data as BinaryExprData;
+		// NOT(a || b) = !a && !b — CAN decompose
+		if (d.operator === "||") {
+			addFactNeg(ctx, d.left);
+			addFactNeg(ctx, d.right);
+			return;
+		}
+		// Simple comparisons: flip operator
+		if (d.operator === "!==" || d.operator === "===" ||
+			d.operator === "!=" || d.operator === "==") {
+			const flipped = negateOp(d.operator);
+			const neg = createNodeAt(NodeKind.BinaryExpr,
+				{ operator: flipped, left: d.left, right: d.right }, condition.location);
+			ctx.narrowFacts.push(neg);
+			return;
+		}
+		// NOT(a && b) = !a || !b — CANNOT decompose, push as opaque
+	}
+	// Fallback: opaque fact (impliesNotNull won't match → returns unknown → no narrowing)
+	ctx.narrowFacts.push(condition);
+}
+
+// Check if a BinaryExprData is a null comparison for a specific variable
+function isNullCompareFor(d: BinaryExprData, varName: string): boolean {
 	if (d.left.kind === NodeKind.Identifier && d.right.kind === NodeKind.NullLiteral) {
-		const id = d.left.data as IdentifierData;
-		if (d.operator === "!==") return "+" + id.name;
-		if (d.operator === "===") return "-" + id.name;
+		return (d.left.data as IdentifierData).name === varName;
 	}
-	// null !== x or null === x
 	if (d.right.kind === NodeKind.Identifier && d.left.kind === NodeKind.NullLiteral) {
-		const id = d.right.data as IdentifierData;
-		if (d.operator === "!==") return "+" + id.name;
-		if (d.operator === "===") return "-" + id.name;
+		return (d.right.data as IdentifierData).name === varName;
 	}
-	return "";
+	return false;
+}
+
+// Query: do facts prove varName is not null?
+// Returns: 1 = yes (not null), -1 = no (is null), 0 = unknown
+function impliesNotNull(ctx: CheckerContext, varName: string): number {
+	let i = 0;
+	while (i < ctx.narrowFacts.length) {
+		const fact = ctx.narrowFacts[i];
+		if (fact.kind === NodeKind.BinaryExpr) {
+			const d = fact.data as BinaryExprData;
+			if (isNullCompareFor(d, varName)) {
+				if (d.operator === "!==") return 1;
+				if (d.operator === "===") return -1;
+			}
+		}
+		i = i + 1;
+	}
+	return 0;
+}
+
+// Extract variable names involved in null comparisons from a condition
+function collectNullVars(node: Node, dest: string[]): void {
+	if (node.kind !== NodeKind.BinaryExpr) return;
+	const d = node.data as BinaryExprData;
+	if (d.operator === "&&" || d.operator === "||") {
+		collectNullVars(d.left, dest);
+		collectNullVars(d.right, dest);
+		return;
+	}
+	if (d.operator === "!==" || d.operator === "===") {
+		if (d.left.kind === NodeKind.Identifier && d.right.kind === NodeKind.NullLiteral) {
+			dest.push((d.left.data as IdentifierData).name);
+		} else if (d.right.kind === NodeKind.Identifier && d.left.kind === NodeKind.NullLiteral) {
+			dest.push((d.right.data as IdentifierData).name);
+		}
+	}
+}
+
+function extractNullCheckedVars(condition: Node): string[] {
+	const result: string[] = [];
+	collectNullVars(condition, result);
+	return result;
+}
+
+// Apply narrowing to symbols based on current facts. Returns arrays for later restore.
+// Deduplicates by symbol identity — prevents double-narrow corruption on (x !== null && x !== null).
+function applyNarrowing(ctx: CheckerContext, vars: string[], narrowedSyms: Symbol[], savedTypes: Type[]): void {
+	let i = 0;
+	while (i < vars.length) {
+		const sym = lookupSymbol(ctx.table, vars[i]);
+		if (sym !== null && sym.symbolType !== null && sym.symbolType.kind !== TypeKind.Unknown) {
+			// Skip if already narrowed in this batch
+			let already = false;
+			let k = 0;
+			while (k < narrowedSyms.length) {
+				if (narrowedSyms[k] === sym) { already = true; }
+				k = k + 1;
+			}
+			if (already) { i = i + 1; continue; }
+			const verdict = impliesNotNull(ctx, vars[i]);
+			if (verdict === 1) {
+				savedTypes.push(sym.symbolType);
+				narrowedSyms.push(sym);
+				sym.symbolType = removeNullFromType(sym.symbolType);
+			} else if (verdict === -1) {
+				savedTypes.push(sym.symbolType);
+				narrowedSyms.push(sym);
+				sym.symbolType = nullType();
+			}
+		}
+		i = i + 1;
+	}
+}
+
+// Restore narrowed symbols to their original types
+function restoreNarrowing(narrowedSyms: Symbol[], savedTypes: Type[]): void {
+	let i = 0;
+	while (i < narrowedSyms.length) {
+		narrowedSyms[i].symbolType = savedTypes[i];
+		i = i + 1;
+	}
 }
 
 // Remove Null from a type (for narrowing after null checks)
@@ -362,24 +488,6 @@ function checkPurityViolations(ctx: CheckerContext, body: Node): void {
 	}
 }
 
-// Guard clause detection: if (x === null) { return/throw/break/continue } → narrow x for rest of block
-// Returns "+varName" if guard narrows to non-null, "" if not a guard clause.
-function tryGuardClauseNarrow(ctx: CheckerContext, node: Node): string {
-	const d = node.data as IfStmtData;
-	const narrowResult = analyzeNullCheck(d.condition);
-	if (narrowResult === "") return "";
-
-	const isNotNull = sliceStr(narrowResult, 0, 1) === "+";
-	// Guard clause: if (x === null) return; → x is non-null after
-	// Guard clause: if (x !== null) { ... } else return; → x is non-null after (but this is handled by if-else narrowing)
-	// We only handle: condition is === null AND consequent is definite exit
-	if (!isNotNull && isDefiniteExit(d.consequent)) {
-		const varName = sliceStr(narrowResult, 1, narrowResult.length);
-		return "+" + varName;
-	}
-	return "";
-}
-
 // Check if a block/statement always exits (return, throw, break, continue, unreachable)
 function isDefiniteExit(node: Node): boolean {
 	if (node === null) return false;
@@ -390,50 +498,30 @@ function isDefiniteExit(node: Node): boolean {
 	if (node.kind === NodeKind.BlockStmt) {
 		const bd = node.data as BlockStmtData;
 		if (bd.statements.length === 0) return false;
-		// Last statement determines exit
 		return isDefiniteExit(bd.statements[bd.statements.length - 1]);
 	}
 	return false;
 }
 
+// Check a branch body under narrowed facts. Saves/restores facts and symbol types.
+function checkNarrowedBranch(ctx: CheckerContext, vars: string[], body: Node, addFacts: (ctx: CheckerContext, cond: Node) => void, condition: Node): void {
+	const snap = saveFacts(ctx);
+	addFacts(ctx, condition);
+	const narrowedSyms: Symbol[] = [];
+	const savedTypes: Type[] = [];
+	applyNarrowing(ctx, vars, narrowedSyms, savedTypes);
+	checkStmt(ctx, body);
+	restoreNarrowing(narrowedSyms, savedTypes);
+	restoreFacts(ctx, snap);
+}
+
 function checkIfStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as IfStmtData;
 	checkExpr(ctx, d.condition, null);
-
-	// Analyze condition for null narrowing
-	const narrowResult = analyzeNullCheck(d.condition);
-	if (narrowResult !== "") {
-		const isNotNull = sliceStr(narrowResult, 0, 1) === "+";
-		const varName = sliceStr(narrowResult, 1, narrowResult.length);
-		const sym = lookupSymbol(ctx.table, varName);
-		if (sym !== null && sym.symbolType.kind !== TypeKind.Unknown) {
-			const saved = sym.symbolType;
-			// Consequent: narrow appropriately
-			if (isNotNull) {
-				sym.symbolType = removeNullFromType(saved);
-			} else {
-				sym.symbolType = nullType();
-			}
-			checkStmt(ctx, d.consequent);
-			sym.symbolType = saved;
-			// Alternate: opposite narrowing
-			if (d.alternate !== null && d.alternate.kind !== NodeKind.NullLiteral) {
-				if (isNotNull) {
-					sym.symbolType = nullType();
-				} else {
-					sym.symbolType = removeNullFromType(saved);
-				}
-				checkStmt(ctx, d.alternate);
-				sym.symbolType = saved;
-			}
-			return;
-		}
-	}
-
-	// Fallback: no narrowing
-	checkStmt(ctx, d.consequent);
+	const vars = extractNullCheckedVars(d.condition);
+	checkNarrowedBranch(ctx, vars, d.consequent, addFact, d.condition);
 	if (d.alternate !== null && d.alternate.kind !== NodeKind.NullLiteral) {
-		checkStmt(ctx, d.alternate);
+		checkNarrowedBranch(ctx, vars, d.alternate, addFactNeg, d.condition);
 	}
 }
 
@@ -550,35 +638,28 @@ function checkDoWhileStmt(ctx: CheckerContext, node: Node): void {
 function checkBlock(ctx: CheckerContext, node: Node): void {
 	const d = node.data as BlockStmtData;
 	openScope(ctx.table, ScopeKind.Block);
+	const snap = saveFacts(ctx);
+	const guardSyms: Symbol[] = [];
+	const guardSaved: Type[] = [];
 	let i = 0;
 	while (i < d.statements.length) {
-		if (isCancelled(ctx.cancelCtx, ctx.cancelVersion)) { closeScope(ctx.table); return; }
+		if (isCancelled(ctx.cancelCtx, ctx.cancelVersion)) { break; }
 		const stmt = d.statements[i];
 		checkStmt(ctx, stmt);
 
-		// Guard clause narrowing: if (x === null) return; → x is non-null for rest of block
+		// Guard clause: if (x === null) return; → NOT(condition) holds for rest of block
 		if (stmt.kind === NodeKind.IfStmt) {
-			const guardNarrow = tryGuardClauseNarrow(ctx, stmt);
-			if (guardNarrow !== "") {
-				const varName = sliceStr(guardNarrow, 1, guardNarrow.length);
-				const sym = lookupSymbol(ctx.table, varName);
-				if (sym !== null) {
-					const saved = sym.symbolType;
-					sym.symbolType = removeNullFromType(saved);
-					// Check remaining statements with narrowed type
-					let j = i + 1;
-					while (j < d.statements.length) {
-						checkStmt(ctx, d.statements[j]);
-						j = j + 1;
-					}
-					sym.symbolType = saved;
-					closeScope(ctx.table);
-					return;
-				}
+			const guardD = stmt.data as IfStmtData;
+			if (guardD.alternate === null && isDefiniteExit(guardD.consequent)) {
+				addFactNeg(ctx, guardD.condition);
+				const vars = extractNullCheckedVars(guardD.condition);
+				applyNarrowing(ctx, vars, guardSyms, guardSaved);
 			}
 		}
 		i = i + 1;
 	}
+	restoreNarrowing(guardSyms, guardSaved);
+	restoreFacts(ctx, snap);
 	closeScope(ctx.table);
 }
 
@@ -795,16 +876,23 @@ function defineBuiltinConstants(ctx: CheckerContext): void {
 function loadPreludeOne(ctx: CheckerContext, specifier: string, stdPath: string): void {
 	const base = stdPath.length > 0 ? stdPath + "/" + sliceStr(specifier, 4, specifier.length) : specifier;
 	let src = readFile(base + ".ms");
+	let resolvedPath = base + ".ms";
 	if (src.length === 0) {
 		src = readFile(base + "/index.cms");
+		resolvedPath = base + "/index.cms";
 	}
 	if (src.length === 0) {
 		src = readFile(base + "/index.ms");
+		resolvedPath = base + "/index.ms";
 	}
 	if (src.length > 0) {
 		const pr = parseSource(src);
 		if (pr.ok) {
+			// Set modulePath so prelude symbols know their source file
+			const savedPath = ctx.modulePath;
+			ctx.modulePath = resolvedPath;
 			runThreePasses(ctx, pr.value);
+			ctx.modulePath = savedPath;
 			collectDirectives(ctx, pr.value);
 			const scope = ctx.table.current;
 			for (const sym of scope.symbols) {

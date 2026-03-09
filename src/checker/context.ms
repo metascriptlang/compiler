@@ -424,6 +424,7 @@ export interface CheckerContext {
 	cancelCtx: CancelCtx;       // null in batch mode, set for LSP
 	cancelVersion: number;       // version at check start
 	modulePath: string;          // Implementation parity: source path for name mangling
+	narrowFacts: Node[];         // fact-based null narrowing knowledge base (standard reference equivalent)
 }
 
 // ===== Constructors =====
@@ -433,8 +434,6 @@ export function createContext(): CheckerContext {
 	return {
 		table,
 		errors: [],
-		errorLines: [],
-		errorColumns: [],
 		currentFunction: null as unknown as Symbol,
 		inLoop: false,
 		inTestBlock: false,
@@ -448,8 +447,8 @@ export function createContext(): CheckerContext {
 		compilerFlags: "",
 		cancelCtx: null as unknown as CancelCtx,
 		cancelVersion: 0,
-		hasFatalError: false,
 		modulePath: "",
+		narrowFacts: [],
 	};
 }
 
@@ -636,7 +635,7 @@ test "create empty registry" {
 test "register and find exports" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultTexts: [], overloadDefaultTexts: [] };
+	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParams: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "foo");
@@ -654,7 +653,7 @@ test "missing module returns null" {
 test "missing symbol returns null" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultTexts: [], overloadDefaultTexts: [] };
+	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParams: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "bar");

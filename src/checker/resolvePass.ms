@@ -492,7 +492,7 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 	const returnType = (d.fnReturnType !== "") ? resolveAnnotation(d.fnReturnType, ctx) : unknownType();
 	const fnType = createFunction(paramTypes, d.params, returnType);
 
-	// Set minArity for functions with default parameters (Nim parity: count non-null formal.ast)
+	// Set minArity for functions with default parameters (Reference parity: count non-null defaults)
 	let defCount = 0;
 	if (d.fnDefaults !== null) {
 		let di = 0;
