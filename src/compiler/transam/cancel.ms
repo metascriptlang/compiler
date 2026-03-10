@@ -3,40 +3,38 @@
 // LSP calls requestCancel() on user keystroke. Long-running queries
 // periodically call checkCancel() to self-abort. Version only increments,
 // never resets (Salsa pattern). No atomics needed (single-threaded).
+//
+// CancelCtx type lives in checker/context.ms (single source of truth).
+// transam→checker dependency is already established (CheckerContext, etc.).
 
-
+import { CancelCtx } from "../../checker/context";
 
 // ===== Cancellation Context =====
 
-export interface TaCancelContext {
-	version: number;
-	cancelled: boolean;
-}
-
-export function createCancelContext(): TaCancelContext {
+export function createCancelContext(): CancelCtx {
 	return { version: 0, cancelled: false };
 }
 
 // ===== Cancellation API =====
 
 // Capture version at query start
-export function getCancelVersion(ctx: TaCancelContext): number {
+export function getCancelVersion(ctx: CancelCtx): number {
 	return ctx.version;
 }
 
 // Check if query should abort (version changed since start)
-export function checkCancel(ctx: TaCancelContext, startingVersion: number): boolean {
+export function checkCancel(ctx: CancelCtx, startingVersion: number): boolean {
 	return ctx.version !== startingVersion || ctx.cancelled;
 }
 
 // Request cancellation (called by LSP on keystroke)
-export function requestCancel(ctx: TaCancelContext): void {
+export function requestCancel(ctx: CancelCtx): void {
 	ctx.version = ctx.version + 1;
 	ctx.cancelled = true;
 }
 
 // Reset after handling cancellation
-export function resetCancel(ctx: TaCancelContext): void {
+export function resetCancel(ctx: CancelCtx): void {
 	ctx.cancelled = false;
 }
 

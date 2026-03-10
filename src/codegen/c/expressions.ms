@@ -48,7 +48,28 @@ function isRefArrayAccessCall(node: Node): boolean {
 	return callee.kind === NodeKind.Identifier && (callee.data as IdentifierData).name === "msRefArrayAccess";
 }
 
-function genArgCcgPtr(g: CGen, arg: string, argNode: Node, p: CProc): string {
+// Shared ABI shim for call arguments — Nim parity: genArg (ccgcalls.nim:350-363)
+// Single point for ccgIntroducedPtr, pointer/value conversion, and untyped literal handling.
+export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Type, argNode: Node): string {
+	if (paramType !== null && argNode.nodeType !== null && argNode.kind !== NodeKind.HiddenAddr) {
+		const paramIsPtr = isPointerType(paramType);
+		const argIsPtr = isPointerType(argNode.nodeType);
+		const paramCcgPtr = ccgIntroducedPtr(paramType);
+		if (paramIsPtr && !argIsPtr && argNode.kind !== NodeKind.NullLiteral) {
+			return safeAddrOf(g, p, arg, argNode, paramType);
+		} else if (!paramIsPtr && argIsPtr && !paramCcgPtr) {
+			return "*(" + arg + ")";
+		}
+		if (!paramIsPtr && !argIsPtr && paramCcgPtr) {
+			return genArgCcgPtr(g, arg, argNode, p);
+		}
+	} else if (paramType !== null && argNode.nodeType === null && arg.length > 0 && arg.charCodeAt(0) === "{".code) {
+		return safeAddrOf(g, p, arg, argNode, paramType);
+	}
+	return arg;
+}
+
+export function genArgCcgPtr(g: CGen, arg: string, argNode: Node, p: CProc): string {
 	if (argNode.kind === NodeKind.Identifier && isIndirectParam(p, (argNode.data as IdentifierData).name)) {
 		// Indirect param: already a pointer — pass raw (reference patterns return snippet as-is)
 		return safeName((argNode.data as IdentifierData).name);
@@ -62,7 +83,7 @@ function genArgCcgPtr(g: CGen, arg: string, argNode: Node, p: CProc): string {
 // compound literal (starts with '{'), hoist it to a temp variable first.
 // Reference-aligned address-of: always operates on named locations.
 // paramType: optional parameter type from call site for resolving untyped literals.
-function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, paramType: Type): string {
+export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, paramType: Type): string {
 	if (snippet.length > 0 && snippet.charCodeAt(0) === "{".code) {
 		// Bare compound literal — must hoist to temp (Reference: generate temporary + field assignment)
 		let cType = "";
@@ -657,12 +678,16 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 			results.push(obj + "." + d.property);
 			return;
 		}
-		// Universal .length/.byteLength → .len fallback
-		// No C struct in our system has .length — all arrays/strings/maps use .len
-		// nativeLower remaps when objType is available; this catches null-objType cases
+		// .length/.byteLength → .len for runtime types (arrays, strings, maps)
+		// User-defined structs keep their original field names
 		if (d.property === "length" || d.property === "byteLength") {
-			results.push(obj + ".len");
-			return;
+			const objType = d.object.nodeType;
+			const isUserStruct = objType !== null && (objType.kind === TypeKind.Struct
+				|| (objType.kind === TypeKind.Ref && objType.typeReturn !== null && objType.typeReturn.kind === TypeKind.Struct));
+			if (!isUserStruct) {
+				results.push(obj + ".len");
+				return;
+			}
 		}
 		const field = mangleFieldName(d.property);
 		// Class/ref types are pointers — use -> for member access
@@ -1091,7 +1116,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 			ovNativeName = sym.overloads[idx - 1].nativeName;
 		}
 		const ovNeedsAddr = hasAddrPrefix(ovNativeName);
-		// Build args with pointer/value ABI shim
+		// Build args with pointer/value ABI shim (Nim: genArg via shimCallArg)
 		let argsStr = "";
 		let ai = 0;
 		while (ai < cc) {
@@ -1101,29 +1126,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 			if (ovNeedsAddr && ai === 0) {
 				arg = safeAddrOf(g, p, arg, cd.arguments[ai], null);
 			} else if (hasOvParams && ai < ovType.typeChildren.length && ai < cd.arguments.length) {
-				const paramType = ovType.typeChildren[ai];
-				const argNode = cd.arguments[ai];
-				if (paramType !== null && argNode.nodeType !== null && argNode.kind !== NodeKind.HiddenAddr) {
-					const paramIsPtr = isPointerType(paramType);
-					const argIsPtr = isPointerType(argNode.nodeType);
-					const paramCcgPtr = ccgIntroducedPtr(paramType);
-					// Reference parity: nil passed to ref/ptr param is already a valid pointer — no &
-					if (paramIsPtr && !argIsPtr && argNode.kind !== NodeKind.NullLiteral) {
-						arg = safeAddrOf(g, p, arg, argNode, paramType);
-					} else if (!paramIsPtr && argIsPtr && !paramCcgPtr) {
-						// Only deref if param is NOT ccgIntroducedPtr'd
-						// Self-ref fields are auto-promoted to Ref<T> (argIsPtr=true)
-						// but ccgIntroducedPtr params expect T* — pass pointer directly
-						arg = "*(" + arg + ")";
-					}
-					// Reference parity: introduced pointer params use address location patterns
-					if (!paramIsPtr && !argIsPtr && paramCcgPtr) {
-						arg = genArgCcgPtr(g, arg, argNode, p);
-					}
-				} else if (paramType !== null && argNode.nodeType === null && arg.length > 0 && arg.charCodeAt(0) === "{".code) {
-					// Untyped ObjectLiteral — use paramType to hoist properly
-					arg = safeAddrOf(g, p, arg, argNode, paramType);
-				}
+				arg = shimCallArg(g, p, arg, ovType.typeChildren[ai], cd.arguments[ai]);
 			}
 			argsStr = argsStr + arg;
 			ai += 1;
@@ -1158,29 +1161,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 		} else if (hasParamTypes) {
 			const argIdx = i - 1;
 			if (argIdx < calleeType.typeChildren.length && argIdx < cd.arguments.length) {
-				const paramType = calleeType.typeChildren[argIdx];
-				const argNode = cd.arguments[argIdx];
-				if (paramType !== null && argNode.nodeType !== null && argNode.kind !== NodeKind.HiddenAddr) {
-					const paramIsPtr = isPointerType(paramType);
-					const argIsPtr = isPointerType(argNode.nodeType);
-					const paramCcgPtr = ccgIntroducedPtr(paramType);
-					// Reference parity: nil passed to ref/ptr param is already a valid pointer — no &
-					if (paramIsPtr && !argIsPtr && argNode.kind !== NodeKind.NullLiteral) {
-						arg = safeAddrOf(g, p, arg, argNode, paramType);
-					} else if (!paramIsPtr && argIsPtr && !paramCcgPtr) {
-						// Only deref if param is NOT ccgIntroducedPtr'd
-						// Self-ref fields are auto-promoted to Ref<T> (argIsPtr=true)
-						// but ccgIntroducedPtr params expect T* — pass pointer directly
-						arg = "*(" + arg + ")";
-					}
-					// Reference parity: introduced pointer params use address location patterns
-					if (!paramIsPtr && !argIsPtr && paramCcgPtr) {
-						arg = genArgCcgPtr(g, arg, argNode, p);
-					}
-				} else if (paramType !== null && argNode.nodeType === null && arg.length > 0 && arg.charCodeAt(0) === "{".code) {
-					// Untyped ObjectLiteral — use paramType to hoist properly
-					arg = safeAddrOf(g, p, arg, argNode, paramType);
-				}
+				arg = shimCallArg(g, p, arg, calleeType.typeChildren[argIdx], cd.arguments[argIdx]);
 			}
 		}
 		argsStr = argsStr + arg;

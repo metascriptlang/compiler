@@ -16,12 +16,10 @@ import {
 	CGen, CSection, AliveSet, TestEntry,
 	createCGen, createAliveSet, createBuilder, sec, add, addLine, addNewline,
 	assembleOutput, extract, nameSetAdd, nameSetHas,
-	typeRegistryAdd, typeRegistryLookup,
 } from "./context";
 import { genDecl } from "./declarations";
 import { mangleModuleName, mangledFunctionName, safeName } from "./names";
 import { isNrvoReturnType, getTypeDesc, ccgIntroducedPtr } from "./types";
-import { Type, TypeKind, isInterfaceType } from "../../checker/types";
 import { mangle } from "./names";
 import { emitStringPoolDecls } from "./literals";
 import { emitTestHeader, emitTestTable, genTestDispatcher } from "./test";
@@ -54,10 +52,8 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 		emitIncludeDirectives(g, ctx.includeDirectives);
 	}
 
-	// Per-module type emission (Standard reference implementation parity)
-	// Register cross-module type names + build type registry from ExportRegistry
-	registerCrossModuleTypesFromRegistry(g);
-	buildTypeRegistry(g);
+	// Register cross-module class/interface names for pointer detection
+	registerCrossModuleTypeNames(g);
 
 	// Walk program statements
 	if (program !== null && program.kind === NodeKind.Program) {
@@ -200,11 +196,11 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 	return extract(b);
 }
 
-// ===== Register Cross-Module Types from ExportRegistry =====
-// Registers class/interface/enum names from all imported modules so
-// getTypeDesc resolves TypeReference correctly (reference parity).
+// ===== Register Cross-Module Type Names =====
+// Registers class/interface names from imported modules for pointer detection.
+// Type resolution itself is handled lazily via symbol table lookup in getTypeDesc.
 
-function registerCrossModuleTypesFromRegistry(g: CGen): void {
+function registerCrossModuleTypeNames(g: CGen): void {
 	const reg = (g.checkerCtx !== null) ? g.checkerCtx.exportRegistry : null as unknown as ExportRegistry;
 	if (reg !== null) {
 		for (const entry of reg.entries) {
@@ -217,66 +213,6 @@ function registerCrossModuleTypesFromRegistry(g: CGen): void {
 					nameSetAdd(g.knownTypeNames, name);
 				}
 			}
-		}
-	}
-}
-
-// ===== Build Type Registry from ExportRegistry =====
-// Implementation parity: types carry full structural info on every reference.
-// Our TypeReference only has typeName. This registry lets getTypeDesc
-// resolve TypeReference → full Type for cross-module types.
-
-function buildTypeRegistry(g: CGen): void {
-	const reg = (g.checkerCtx !== null) ? g.checkerCtx.exportRegistry : null as unknown as ExportRegistry;
-	if (reg === null) return;
-	for (const entry of reg.entries) {
-		for (const sym of entry.symbols) {
-			if (sym.symType === null) continue;
-			if (sym.kind === SymbolKind.Interface || sym.kind === SymbolKind.Class || sym.kind === SymbolKind.Enum || sym.kind === SymbolKind.TypeAlias) {
-				// Reference parity: class types are reference-counted structs in the checker, but the registry stores the underlying value type.
-				// TypeRef("Doc") resolves to Struct("Doc"), then Ref wrapping adds the single *.
-				// Without unwrap: Ref<TypeRef("Doc")> → Ref.getTypeDesc(registry("Doc")=Ref<Struct>) → Doc** (double ptr)
-				let regType = sym.symType;
-				if (sym.kind === SymbolKind.Class && regType.kind === TypeKind.Ref && regType.typeReturn !== null) {
-					regType = regType.typeReturn;
-				}
-				typeRegistryAdd(g.typeRegistry, sym.name, regType);
-				registerFieldTypes(g, sym.symType);
-			}
-		}
-	}
-}
-
-// Shallow-register named field types so getTypeDesc can resolve TypeReferences lazily.
-// reference parity: no recursive pre-crawl. getTypeDesc resolves nested types on-demand
-// via typeRegistryLookup, with typeCache preventing infinite recursion on self-referential types.
-function registerFieldTypes(g: CGen, t: Type): void {
-	if (t === null) return;
-	if (t.typeChildren !== null) {
-		let i = 0;
-		while (i < t.typeChildren.length) {
-			const child = t.typeChildren[i];
-			if (child !== null) {
-				registerNamedType(g, child);
-				// Array/Ref/Ptr element types
-				if (child.typeReturn !== null) {
-					registerNamedType(g, child.typeReturn);
-				}
-			}
-			i = i + 1;
-		}
-	}
-	if (t.typeReturn !== null) {
-		registerNamedType(g, t.typeReturn);
-	}
-}
-
-// Register a single named type into the registry if not already present.
-function registerNamedType(g: CGen, t: Type): void {
-	if (t === null) return;
-	if ((t.kind === TypeKind.Struct || t.kind === TypeKind.Enum || t.kind === TypeKind.Union) && t.typeName.length > 0) {
-		if (typeRegistryLookup(g.typeRegistry, t.typeName) === null) {
-			typeRegistryAdd(g.typeRegistry, t.typeName, t);
 		}
 	}
 }

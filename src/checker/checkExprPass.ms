@@ -275,14 +275,17 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 		},
 		NodeKind.ArrayLiteral => {
 			const d = node.data as ArrayLiteralData;
-			const elemExpected = (expectedType !== null
-				&& (expectedType.kind === TypeKind.Array || expectedType.kind === TypeKind.SizedArray)
-				&& expectedType.typeReturn !== null)
-				? expectedType.typeReturn
+			// Reference parity: semArrayConstr does expectedType.skipTypes(abstractRange)
+			// which strips Sink/Lent/Var wrappers before checking Array kind
+			const arrExpected = skipModifier(expectedType);
+			const elemExpected = (arrExpected !== null
+				&& (arrExpected.kind === TypeKind.Array || arrExpected.kind === TypeKind.SizedArray)
+				&& arrExpected.typeReturn !== null)
+				? arrExpected.typeReturn
 				: null;
 			if (d.elements.length === 0) {
-				if (expectedType !== null && (expectedType.kind === TypeKind.Array || expectedType.kind === TypeKind.SizedArray)) {
-					expectedType;
+				if (arrExpected !== null && (arrExpected.kind === TypeKind.Array || arrExpected.kind === TypeKind.SizedArray)) {
+					arrExpected;
 				} else {
 					createArray(unknownType());
 				}
@@ -290,8 +293,8 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 				const elemType = checkExpr(ctx, d.elements[0], elemExpected);
 				let i = 1;
 				while (i < d.elements.length) { checkExpr(ctx, d.elements[i], elemExpected); i += 1; }
-				if (expectedType !== null && (expectedType.kind === TypeKind.Array || expectedType.kind === TypeKind.SizedArray)) {
-					expectedType;
+				if (arrExpected !== null && (arrExpected.kind === TypeKind.Array || arrExpected.kind === TypeKind.SizedArray)) {
+					arrExpected;
 				} else {
 					createArray(elemType);
 				}
@@ -307,14 +310,23 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			consequentType;
 		},
 		NodeKind.TypeAssertion => {
-			const d = node.data as TypeAssertionData;
-			const srcType = checkExpr(ctx, d.asExpr, null);
+			let d = node.data as TypeAssertionData;
+			let srcType = checkExpr(ctx, d.asExpr, null);
 			const targetType = (d.asType !== "") ? resolveAnnotation(d.asType, ctx) : unknownType();
-			// Nil typing: collapse `null as unknown as T` into typed NullLiteral.
-			// Walks through TypeAssertion chain to find NullLiteral at core.
-			// Codegen then sees NullLiteral with nodeType=T and emits (T){0}.
+			// General rule: `expr as unknown as T` → collapse to `expr as T`.
+			// `as unknown` is a TS type-system escape hatch with zero runtime meaning.
+			// Unwrap it so downstream handlers see the real source expression/type.
+			if (targetType.kind !== TypeKind.Unknown) {
+				const innerExpr = unwrapAsUnknown(d.asExpr);
+				if (innerExpr !== null) {
+					d = { asExpr: innerExpr, asType: d.asType } as unknown as TypeAssertionData;
+					node.data = d;
+					srcType = innerExpr.nodeType;
+				}
+			}
+			// Nil typing: collapse `null as T` into typed NullLiteral.
 			if (targetType.kind !== TypeKind.Unknown && targetType.kind !== TypeKind.Null
-				&& isNullAssertion(d.asExpr)) {
+				&& d.asExpr !== null && d.asExpr.kind === NodeKind.NullLiteral) {
 				node.kind = NodeKind.NullLiteral;
 				node.data = { nullPlaceholder: true };
 				node.nodeType = targetType;
@@ -606,6 +618,19 @@ function isNullAssertion(node: Node): boolean {
 		return isNullAssertion((node.data as TypeAssertionData).asExpr);
 	}
 	return false;
+}
+
+// Unwrap `expr as unknown` chains — returns inner expr if found, null otherwise.
+// General: collapses TS-specific double-cast before downstream handlers run.
+function unwrapAsUnknown(node: Node): Node {
+	if (node === null) return null;
+	if (node.kind === NodeKind.TypeAssertion) {
+		const d = node.data as TypeAssertionData;
+		if (d.asType === "unknown") return d.asExpr;
+		// Nested: `expr as unknown as unknown` (unlikely but safe)
+		return unwrapAsUnknown(d.asExpr);
+	}
+	return null;
 }
 
 function isJsonValueType(t: Type): boolean {
@@ -1326,8 +1351,10 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 	const d = node.data as MemberExprData;
 	const objType = checkExpr(ctx, d.object, null);
 	// Enum member access: Color.Red → rewrite to Identifier "Color_Red" (standard reference pattern)
-	// This rewrites the AST so codegen never sees enum-specific MemberExpr
-	if (objType.kind === TypeKind.Enum) {
+	// This rewrites the AST so codegen never sees enum-specific MemberExpr.
+	// Skip "toString" — that's a method call, not a member access.
+	// builtinLower handles enum .toString() → EnumName_toString(value).
+	if (objType.kind === TypeKind.Enum && d.property !== "toString") {
 		const enumName = objType.typeName;
 		const mangledName = enumName + "_" + d.property;
 		// Rewrite entire node to Identifier
@@ -1339,7 +1366,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 			const memberSym = lookupSymbol(ctx.table, mangledName);
 			node.resolvedSym = memberSym;
 			if (memberSym !== null) {
-				sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + mangledName.length, memberSym, objType, SymbolKind.EnumMember, d.property, enumName, false);
+				sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + mangledName.length, memberSym, objType, SymbolKind.Variable, d.property, enumName, false);
 			}
 		}
 		node.nodeType = objType;
@@ -1556,6 +1583,14 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 		dynSym.nativeName = "__jsonDynAccess";
 		node.resolvedSym = dynSym;
 		return objType;
+	}
+	// Universal .toString() — every type has a compiler-provided default.
+	// builtinLower resolves to the correct C function per type.
+	if (d.property === "toString" && propType.kind === TypeKind.Unknown) {
+		const toStrSym = makeSymbol("toString", SymbolKind.Function, createFunction([], [], stringType()), false);
+		toStrSym.state = SymbolState.Shaped;
+		node.resolvedSym = toStrSym;
+		return stringType();
 	}
 	// Unresolved member access — emit error if object type is known
 	if (propType.kind === TypeKind.Unknown && resolvedObjType.kind !== TypeKind.Unknown) {

@@ -8,7 +8,7 @@
 // dbExecute runs the full pipeline through the red-green engine.
 
 import { Node, NodeKind, nodeCacheStore, nodeCacheGet } from "../../ast/node";
-import { CheckerContext, ctxCacheStore, ctxCacheGet, createContext } from "../../checker/context";
+import { CheckerContext, CancelCtx, ctxCacheStore, ctxCacheGet, createContext } from "../../checker/context";
 import {
 	TaQueryKey, TaQueryKind, TaQueryState, TaDurability,
 	TaRevision, createRevision, incrementRevision,
@@ -38,7 +38,7 @@ import {
 import { tryMarkGreen, executeQueryWith, invalidateFile } from "./redGreen";
 import { taHashNode } from "./hash";
 import {
-	TaCancelContext, createCancelContext,
+	createCancelContext,
 	getCancelVersion, checkCancel, requestCancel, resetCancel
 } from "./cancel";
 import {
@@ -94,7 +94,7 @@ export interface TransAmDb {
 	depStack: TaDependencyStack;
 	cache: TaCacheStore;
 	moduleDeps: TaModuleDepGraph;
-	cancelCtx: TaCancelContext;
+	cancelCtx: CancelCtx;
 	interner: TaStringInterner;
 	exportRegistry: ExportRegistry;
 	stdPath: string;
@@ -480,7 +480,7 @@ export {
 } from "./moduleDeps";
 export { tryMarkGreen, executeQueryWith, invalidateFile } from "./redGreen";
 export {
-	TaCancelContext, createCancelContext,
+	createCancelContext,
 	getCancelVersion, checkCancel, requestCancel, resetCancel
 } from "./cancel";
 export {

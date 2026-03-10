@@ -9,7 +9,7 @@ import {
 	InterfaceDeclData, ClassDeclData,
 	ExportDeclData, ImportDeclData,
 	VariableDeclData, DecoratedDeclData,
-	ExternDeclData,
+	ExternDeclData, TypeAliasDeclData,
 	ProgramData, BlockStmtData,
 	PropertyDeclData, MethodDeclData, ConstructorDeclData,
 	ObjectLiteralData,
@@ -199,7 +199,9 @@ export function genDecl(g: CGen, node: Node, exported: boolean): void {
 		const d = node.data as DecoratedDeclData;
 		genDecl(g, d.decoratedNode, exported);
 	}
-	else if (k === NodeKind.TypeAliasDecl) { /* type aliases are compile-time only */ }
+	else if (k === NodeKind.TypeAliasDecl) {
+		// Type aliases resolved lazily via symbol table lookup in getTypeDesc
+	}
 	else if (k === NodeKind.ExternDecl) { genExternDecl(g, node); }
 	else if (k === NodeKind.TestDecl) { genTestDeclNode(g, node); }
 	else if (k === NodeKind.AssertStmt) { genTopLevelStmt(g, node); }

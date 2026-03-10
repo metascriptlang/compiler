@@ -14,7 +14,7 @@ import {
 import { TransformContext } from "../context";
 import {
 	makeSwitch, makeSwitchCase, makeReturn, makeString, makeNumber,
-	makeIdent, makeBlock, makeFnDecl, syntheticToken,
+	makeIdent, makeBlock, makeFnDecl, syntheticToken, enumToStringName,
 } from "../util";
 import {
 	createEnum, stringType, createFunction, TypeKind,
@@ -40,7 +40,7 @@ function makeEnumToString(enumName: string, members: string[], loc: SourceLocati
 
 	const switchStmt = makeSwitch(makeIdent("v", loc), cases, loc);
 	const body = makeBlock([switchStmt], loc);
-	const fn = makeFnDecl(enumName + "_toString", ["v"], ["int32"], body, "", "string", loc);
+	const fn = makeFnDecl(enumToStringName(enumName), ["v"], ["int32"], body, "", "string", loc);
 	// Override nodeType with proper enum param type
 	fn.nodeType = createFunction([createEnum(enumName, members, null as unknown as number[])], ["v"], stringType());
 	return fn;

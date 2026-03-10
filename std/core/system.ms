@@ -10,6 +10,4 @@ export class Result<T, E> {
 	static extern err(e: E): Result<T, E>;
 }
 
-extern function toString(this val: number): string from "msIntToStr";
-extern function toString(this val: bool): string from "msBoolToStr";
 

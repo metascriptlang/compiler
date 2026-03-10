@@ -19,6 +19,14 @@ export function syntheticToken(loc: SourceLocation): Token {
 	return createToken(TokenKind.Ident, "", loc.line);
 }
 
+// ===== Naming Conventions =====
+
+// Canonical name for auto-generated enum-to-string function (e.g., "Color_toString").
+// Used by enumToStringLower (generation), builtinLower + debugLower (call site rewriting).
+export function enumToStringName(enumName: string): string {
+	return enumName + "_toString";
+}
+
 // ===== Literal Builders =====
 
 export function makeIdent(identName: string, loc: SourceLocation): Node {
@@ -247,8 +255,8 @@ export function makeInterfaceDecl(name: string, fields: string[], fieldTypes: st
 }
 
 // Resolve simple type annotation strings to Type objects for transform-generated nodes.
-// Handles primitives and named types (Object/interface names). Complex types (Array<T>,
-// Result<T,E>) remain as TypeReference — codegen uses getTypeDesc for those.
+// Handles primitives, named types, and array annotations ("Foo[]", "Foo [ ]").
+// Complex types (Result<T,E>, Map<K,V>) remain as TypeReference — codegen resolves those.
 function resolveSimpleTypeStr(annotation: string): Type {
 	if (annotation === "") return unknownType();
 	if (annotation === "void*") return unknownType();  // void* → Unknown → "void*" in codegen

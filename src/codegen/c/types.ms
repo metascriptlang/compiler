@@ -7,8 +7,21 @@
 import { Type, TypeKind, isInterfaceType, getTypeSize, skipModifier } from "../../checker/types";
 import { Node, NodeKind, CallExprData } from "../../ast/node";
 import { findChar, trimStr, splitTopLevel } from "../../utils/string";
-import { CGen, CSection, Builder, TypeCache, add, addLine, addNewline, extract, sec, createBuilder, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas, typeRegistryLookup } from "./context";
+import { CGen, CSection, Builder, TypeCache, add, addLine, addNewline, extract, sec, createBuilder, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas } from "./context";
+import { lookupSymbol } from "../../checker/symbol";
 import { mangle, mangleTypeName, mangleFieldName, safeName } from "./names";
+
+// ===== Resolve TypeReference via Symbol Table (Nim PType parity) =====
+// Nim's PType is always a pointer to full type info. Our TypeReference is name-only.
+// Instead of a pre-built registry, resolve lazily via the checker's symbol table.
+// After 3 checker passes, all types (local + imported) are in scope.
+
+function resolveTypeName(g: CGen, name: string): Type {
+	if (g.checkerCtx === null) return null;
+	const sym = lookupSymbol(g.checkerCtx.table, name);
+	if (sym !== null && sym.symbolType !== null) return sym.symbolType;
+	return null;
+}
 
 // ===== Deferred Struct Body Emission (Union types only) =====
 // When resolving a union type's field types, nested getTypeDesc calls may trigger
@@ -503,23 +516,14 @@ export function getTypeDesc(g: CGen, t: Type): string {
 			emitAnonStructFromTypeName(g, anonName, t.typeName);
 			return anonName;
 		}
-		// Try resolving via TypeRegistry (Standard implementation parity: type carries full structural info)
-		const resolved = typeRegistryLookup(g.typeRegistry, t.typeName);
+		// Resolve via symbol table (Nim PType parity: full type info via pointer)
+		const resolved = resolveTypeName(g, t.typeName);
 		if (resolved !== null) {
-			const desc = getTypeDesc(g, resolved);
-			// Class types: registry stores unwrapped Struct, but bare TypeReference("Node")
-			// from lambda lifting means it IS a pointer (class = Ref<Object>). Add * if missing.
-			if (nameSetHas(g.knownClassNames, mangle(t.typeName)) && desc.length > 0 && desc.charAt(desc.length - 1) !== "*") {
-				return desc + "*";
-			}
-			return desc;
+			return getTypeDesc(g, resolved);
 		}
+		// Fallback for C runtime types defined in headers (not in symbol table)
 		const name = mangle(t.typeName);
 		ensureForwardDecl(g, name);
-		// Class types: bare TypeReference from lambda lifting/transforms needs pointer
-		if (nameSetHas(g.knownClassNames, name)) {
-			return name + "*";
-		}
 		return name;
 	}
 
@@ -820,7 +824,17 @@ function genArrayType(g: CGen, t: Type): string {
 	if (elemType === "uint8_t") { typeCacheSet(g.typeCache, key, "msUint8Array"); return "msUint8Array"; }
 
 	// Pointer element types (classes, refs, void*) → msRefArray (void* indirection is correct)
-	if (elemType === "void*" || (t.typeReturn !== null && isPointerType(t.typeReturn))) {
+	// Resolve TypeReference via symbol table (Nim PType parity)
+	let resolvedElem = t.typeReturn;
+	if (resolvedElem !== null && resolvedElem.kind === TypeKind.TypeReference && resolvedElem.typeName !== null) {
+		const looked = resolveTypeName(g, resolvedElem.typeName);
+		if (looked !== null) resolvedElem = looked;
+	}
+	// Class types: symbol table returns Ref<Struct>, resolvedElem.kind === Ref → isPointerType catches it.
+	// Fallback for unresolved TypeReference: check knownClassNames.
+	const elemIsClass = t.typeReturn !== null && t.typeReturn.kind === TypeKind.TypeReference &&
+		t.typeReturn.typeName !== null && nameSetHas(g.knownClassNames, mangle(t.typeReturn.typeName));
+	if (elemType === "void*" || elemIsClass || (resolvedElem !== null && isPointerType(resolvedElem))) {
 		typeCacheSet(g.typeCache, key, "msRefArray");
 		return "msRefArray";
 	}

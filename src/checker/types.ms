@@ -1020,7 +1020,7 @@ export function getProperty(t: Type, name: string): Type {
 			}
 		}
 		// Search variants for the field — return type if unambiguous across variants
-		let foundType = null;
+		let foundType: Type = null;
 		let ambiguous = false;
 		for (const variant of t.typeChildren) {
 			const ft = findFieldInVariant(variant, name);

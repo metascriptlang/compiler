@@ -16,14 +16,15 @@ import {
 	Node, NodeKind, NodeFlag, DeclKind, ProgramData, SourceLocation,
 	CallExprData, MemberExprData, IdentifierData,
 } from "../../ast/node";
-import { Type, TypeKind, isNumeric, createResult, createArray, createPrimitive, stringType, booleanType, numberType, unknownType, unwrapRef } from "../../checker/types";
+import { Type, TypeKind, isNumeric, createResult, createArray, createPrimitive, stringType, booleanType, numberType, unknownType, unwrapRef, typeNameOf } from "../../checker/types";
+import { findExtension } from "../../checker/context";
 import { TransformContext, hasEmitted } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { walkNode } from "../walker";
 import {
 	makeIdent, makeCall, makeString,
 	makeObjectLiteral, makeBool, makeHiddenStdConv,
-	makeExprStmt,
+	makeExprStmt, enumToStringName,
 } from "../util";
 import { findCallTypeArg } from "../../parser/context";
 import { generateJsonParseC, generateJsonStringifyC, makeEmitNode, ensureJsonInclude, registerHelper } from "../../codegen/c/json";
@@ -66,30 +67,136 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 	if (cd.callee.resolvedSym !== null && cd.callee.resolvedSym.builtinKind !== "") {
 		return lowerBuiltinCall(node, cd.callee.resolvedSym.builtinKind, ctx);
 	}
-	// C-only: primitive .toString() → msNumberToString(obj) / msBoolToString(obj)
-	// NOTE: All other MemberExpr UFCS rewrites (instance extensions, static class methods)
-	// are handled by extensionMethodLower — the single canonical UFCS converter.
-	// nativeName resolution happens at codegen (reads resolvedSym.nativeName).
+	// C-only: universal .toString() resolution
+	// Every type has a compiler-provided default. User extensions take priority.
 	if (!ctx.jsBackend) {
 		if (cd.callee.kind === NodeKind.MemberExpr) {
 			const me2 = cd.callee.data as MemberExprData;
 			if (me2.property === "toString" && me2.object.nodeType !== null) {
-				const tk = me2.object.nodeType.kind;
-				if (isNumeric(me2.object.nodeType)) {
-					const call = makeCall(makeIdent("msNumberToString", loc), [me2.object], loc);
-					call.nodeType = node.nodeType;
-					return call;
-				}
-				if (tk === TypeKind.Boolean) {
-					const call = makeCall(makeIdent("msBoolToString", loc), [me2.object], loc);
-					call.nodeType = node.nodeType;
-					return call;
-				}
+				return lowerToString(node, me2.object, me2.object.nodeType, loc, ctx);
 			}
 		}
 	}
 
 	return node;
+}
+
+// ===== Universal .toString() =====
+// Every type has a compiler-provided default. User extensions take priority.
+// Resolution: user extension > number > boolean > enum > string > struct/class > array > fallback
+
+function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLocation, ctx: TransformContext): Node {
+	// Priority 1: user-defined toString extension → leave for extensionMethodLower
+	if (ctx.checkerCtx !== null) {
+		const tn = typeNameOf(objType);
+		if (tn !== "") {
+			const ext = findExtension(ctx.checkerCtx.extensionRegistry, tn, "toString");
+			if (ext !== null) return callNode;
+		}
+	}
+	// Priority 2: compiler defaults
+	const tk = objType.kind;
+	// Number/int/float → msNumberToString
+	if (isNumeric(objType)) {
+		const call = makeCall(makeIdent("msNumberToString", loc), [obj], loc);
+		call.nodeType = stringType();
+		return call;
+	}
+	// Boolean → msBoolToString
+	if (tk === TypeKind.Boolean) {
+		const call = makeCall(makeIdent("msBoolToString", loc), [obj], loc);
+		call.nodeType = stringType();
+		return call;
+	}
+	// Enum → EnumName_toString
+	if (tk === TypeKind.Enum && objType.typeName !== "") {
+		const call = makeCall(makeIdent(enumToStringName(objType.typeName), loc), [obj], loc);
+		call.nodeType = stringType();
+		return call;
+	}
+	// String → identity (return self)
+	if (tk === TypeKind.String) {
+		return obj;
+	}
+	// Struct/Class → JSON debug format (same as console.log default)
+	const inner = unwrapRef(objType);
+	if (inner.kind === TypeKind.Struct && inner.typeName !== "") {
+		let structType = resolveJsonTargetType(inner.typeName, ctx);
+		if (structType === null && inner.typeNames !== null && inner.typeChildren !== null) {
+			structType = inner;
+		}
+		if (structType !== null) {
+			const helperName = "__toString_" + inner.typeName;
+			if (!hasEmitted(ctx, helperName)) {
+				const emitNode = generateToStringC(helperName, inner.typeName, structType, loc);
+				if (emitNode !== null) {
+					registerHelper(helperName, emitNode, ctx);
+				}
+			}
+			const call = makeCall(makeIdent(helperName, loc), [obj], loc);
+			call.nodeType = stringType();
+			return call;
+		}
+	}
+	// Array → msArrayToString (runtime helper)
+	if (tk === TypeKind.Array) {
+		const call = makeCall(makeIdent("msArrayToString", loc), [obj], loc);
+		call.nodeType = stringType();
+		return call;
+	}
+	// Null → "null"
+	if (tk === TypeKind.Null) {
+		const s = makeString("null", loc);
+		s.nodeType = stringType();
+		return s;
+	}
+	// Function/Closure → "<function>"
+	if (tk === TypeKind.Function) {
+		const s = makeString("<function>", loc);
+		s.nodeType = stringType();
+		return s;
+	}
+	// Fallback: "<TypeName>" or "<object>"
+	const fallbackName = objType.typeName !== "" ? objType.typeName : "object";
+	const s = makeString("<" + fallbackName + ">", loc);
+	s.nodeType = stringType();
+	return s;
+}
+
+// Generate a plain (non-colored) struct toString C helper via @emit
+function generateToStringC(helperName: string, typeName: string, structType: Type, loc: SourceLocation): Node {
+	if (structType.typeNames === null || structType.typeChildren === null) return null as unknown as Node;
+	const isAnon = typeName.length > 6 && typeName.slice(0, 6) === "__anon";
+	let c = "static msString " + helperName + "(" + typeName + "* self) {\n";
+	c = c + "  char __buf[4096];\n";
+	c = c + "  int __pos = 0;\n";
+	// Opening: "{ " or "TypeName { "
+	if (isAnon) {
+		c = c + "  __pos += snprintf(__buf + __pos, sizeof(__buf) - __pos, \"{ \");\n";
+	} else {
+		c = c + "  __pos += snprintf(__buf + __pos, sizeof(__buf) - __pos, \"" + typeName + " { \");\n";
+	}
+	let fi = 0;
+	while (fi < structType.typeNames.length) {
+		const fname = structType.typeNames[fi];
+		const ftype = structType.typeChildren[fi];
+		const sep = fi > 0 ? ", " : "";
+		if (ftype.kind === TypeKind.String) {
+			c = c + "  __pos += snprintf(__buf + __pos, sizeof(__buf) - __pos, \"" + sep + fname + ": \\\"%.*s\\\"\", (int)self->" + fname + ".len, self->" + fname + ".data);\n";
+		} else if (isNumeric(ftype)) {
+			c = c + "  __pos += snprintf(__buf + __pos, sizeof(__buf) - __pos, \"" + sep + fname + ": %g\", self->" + fname + ");\n";
+		} else if (ftype.kind === TypeKind.Boolean) {
+			c = c + "  __pos += snprintf(__buf + __pos, sizeof(__buf) - __pos, \"" + sep + fname + ": %s\", self->" + fname + " ? \"true\" : \"false\");\n";
+		} else {
+			// Unknown field type — print as placeholder
+			c = c + "  __pos += snprintf(__buf + __pos, sizeof(__buf) - __pos, \"" + sep + fname + ": <...>\");\n";
+		}
+		fi = fi + 1;
+	}
+	c = c + "  __pos += snprintf(__buf + __pos, sizeof(__buf) - __pos, \" }\");\n";
+	c = c + "  return msStringNew(__buf, __pos);\n";
+	c = c + "}\n";
+	return makeEmitNode(c, loc);
 }
 
 // ===== Builtin Inline Expansion =====

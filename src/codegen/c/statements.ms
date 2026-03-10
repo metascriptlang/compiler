@@ -23,7 +23,7 @@ import {
 	pushBlock, popBlock, readProcStmts,
 	sec, addLine, emitLineDir,
 } from "./context";
-import { genExpr } from "./expressions";
+import { genExpr, shimCallArg } from "./expressions";
 import { ensureCrossModuleProto } from "./declarations";
 import { safeName } from "./names";
 import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, getCalleeReturnType, intToString, genClFullCastNrvo, genClHalfCastNrvo } from "./types";
@@ -65,19 +65,28 @@ function isNumericCType(cType: string): boolean {
 function genNrvoCallExpr(g: CGen, p: CProc, callNode: Node, destVar: string): string {
 	const cd = callNode.data as CallExprData;
 	let callee = genExpr(g, p, cd.callee);
+	// Resolve callee symbol + function type once (used for ABI shim + proto)
+	const nrvoSym = callNode.resolvedSym !== null ? callNode.resolvedSym : (cd.callee.resolvedSym !== null ? cd.callee.resolvedSym : null as unknown as Symbol);
+	const nrvoFnType = nrvoSym !== null && nrvoSym.symbolType !== null ? nrvoSym.symbolType : (cd.callee.nodeType !== null ? cd.callee.nodeType : null);
+	const hasParamTypes = nrvoFnType !== null && nrvoFnType.kind === TypeKind.Function && nrvoFnType.typeChildren !== null;
 	let argsStr = "";
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		if (argsStr !== "") argsStr = argsStr + ", ";
-		argsStr = argsStr + genExpr(g, p, cd.arguments[i]);
+		let arg = genExpr(g, p, cd.arguments[i]);
+		// ABI shim — Nim: genArg (ccgcalls.nim:357) always checks ccgIntroducedPtr
+		if (hasParamTypes && i < nrvoFnType.typeChildren.length) {
+			arg = shimCallArg(g, p, arg, nrvoFnType.typeChildren[i], cd.arguments[i]);
+		}
+		argsStr = argsStr + arg;
 	}
 
-	// Closure NRVO call: dispatch through fn pointer with env (Reference: ccgcalls.nim genClosureCall)
+	// Closure NRVO call: dispatch through fn pointer with env (Nim: ccgcalls.nim genClosureCall)
 	if (!cd.isDirectCall) {
-		const calleeType = cd.callee.nodeType !== null ? cd.callee.nodeType :
+		const clCalleeType = cd.callee.nodeType !== null ? cd.callee.nodeType :
 			(cd.callee.resolvedSym !== null && cd.callee.resolvedSym.symbolType !== null ? cd.callee.resolvedSym.symbolType : null);
 		const nrvoType = getTypeDesc(g, getCalleeReturnType(callNode));
-		const clFull = genClFullCastNrvo(g, calleeType, nrvoType);
-		const clHalf = genClHalfCastNrvo(g, calleeType, nrvoType);
+		const clFull = genClFullCastNrvo(g, clCalleeType, nrvoType);
+		const clHalf = genClHalfCastNrvo(g, clCalleeType, nrvoType);
 		const envExpr = callee + ".env";
 		const fnExpr = callee + ".fn";
 		let fullArgs = "&" + destVar;
@@ -88,8 +97,6 @@ function genNrvoCallExpr(g: CGen, p: CProc, callNode: Node, destVar: string): st
 	}
 
 	// Direct NRVO call: on-demand cross-module prototype
-	const nrvoSym = callNode.resolvedSym !== null ? callNode.resolvedSym : (cd.callee.resolvedSym !== null ? cd.callee.resolvedSym : null as unknown as Symbol);
-	const nrvoFnType = nrvoSym !== null ? nrvoSym.symbolType : (cd.callee.nodeType !== null ? cd.callee.nodeType : null);
 	ensureCrossModuleProto(g, callee, nrvoFnType, nrvoSym);
 	let args = "&" + destVar;
 	if (argsStr !== "") args = args + ", " + argsStr;

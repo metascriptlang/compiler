@@ -328,40 +328,6 @@ export function getTemp(p: CProc, cType: string): CLoc {
 	return loc;
 }
 
-// ===== TypeRegistry — cross-module type resolution (Standard reference parity) =====
-// Maps type names to full Type objects so getTypeDesc can emit struct bodies
-// for TypeReference nodes (which only carry typeName string).
-
-export interface TypeRegistryEntry {
-	name: string;
-	resolvedType: Type;
-}
-
-export interface TypeRegistry {
-	entries: TypeRegistryEntry[];
-}
-
-export function createTypeRegistry(): TypeRegistry {
-	return { entries: [] };
-}
-
-export function typeRegistryAdd(reg: TypeRegistry, name: string, t: Type): void {
-	for (let i = 0; i < reg.entries.length; i += 1) {
-		if (reg.entries[i].name === name) {
-			reg.entries[i].resolvedType = t;
-			return;
-		}
-	}
-	reg.entries.push({ name, resolvedType: t });
-}
-
-export function typeRegistryLookup(reg: TypeRegistry, name: string): Type {
-	for (let i = 0; i < reg.entries.length; i += 1) {
-		if (reg.entries[i].name === name) return reg.entries[i].resolvedType;
-	}
-	return null;
-}
-
 // ===== TypeCacheEntry — cached type mappings =====
 
 export interface TypeCacheEntry {
@@ -481,7 +447,6 @@ export interface CGen {
 	currentProc: CProc;        // active proc being generated
 	typeCache: TypeCache;      // fully-emitted types
 	forwTypeCache: TypeCache;  // forward-declared types
-	typeRegistry: TypeRegistry; // cross-module type resolution (Standard implementation parity)
 	stringPool: StringPool;    // interned string literals
 	declaredProcs: NameSet;    // prevents duplicate prototypes
 	declaredThings: NameSet;   // prevents duplicate declarations
@@ -518,7 +483,6 @@ export function createCGen(ctx: CheckerContext, modulePath: string): CGen {
 		currentProc: null as unknown as CProc,
 		typeCache: createTypeCache(),
 		forwTypeCache: createTypeCache(),
-		typeRegistry: createTypeRegistry(),
 		stringPool: createStringPool(),
 		declaredProcs: createNameSet(),
 		declaredThings: createNameSet(),

@@ -99,7 +99,7 @@ export function sgQueryAtPosition(ctx: CheckerContext, line: number, col: number
 }
 
 function sgSuggestFromRecord(rec: SgSymRecord): SgSuggest {
-	const loc = rec.sym !== null && rec.sym.location !== null ? rec.sym.location : { line: rec.line, column: rec.col, offset: 0 };
+	const loc: SourceLocation = rec.sym !== null && rec.sym.location !== null ? rec.sym.location : { line: rec.line, column: rec.col };
 	const modPath = rec.sym !== null && rec.sym.modulePath !== null ? rec.sym.modulePath : "";
 	return {
 		name: rec.name,
@@ -111,8 +111,8 @@ function sgSuggestFromRecord(rec: SgSymRecord): SgSuggest {
 		prefixScore: 0,
 		scopeDepth: 0,
 		contextFit: false,
-		isExported: rec.sym !== null ? rec.sym.isExported : false,
-		isMutable: rec.sym !== null ? rec.sym.isMutable : false,
+		isExported: rec.sym !== null ? hasFlag(rec.sym, SymbolFlag.Exported) : false,
+		isMutable: rec.sym !== null ? hasFlag(rec.sym, SymbolFlag.Mutable) : false,
 	};
 }
 

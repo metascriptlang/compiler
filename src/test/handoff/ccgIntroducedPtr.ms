@@ -265,3 +265,109 @@ test "E2E ccgPtr: closure call" {
 	console.log("=== CLOSURE ===");
 	if (c.ok) { console.log(c.value); } else { console.log("ERR: " + c.error); }
 }
+
+test "E2E: empty string[] arg type" {
+	const src = "function takesNames(names: string[]): number { return names.length; }\n" +
+		"export function main(): number { return takesNames([]); }";
+	const c = compileToC(src);
+	console.log("=== EMPTY STR ARR ===");
+	if (c.ok) { console.log(c.value); } else { console.log("ERR: " + c.error); }
+}
+
+test "E2E: nested call with empty string[] arg" {
+	// Reproduce the real pattern: createStruct(name, [], [], true) inside makeSymbol inside defineOrError
+	const src = "interface Pair { names: string[]; values: number[] }\n" +
+		"function makePair(names: string[], values: number[]): Pair { return { names, values }; }\n" +
+		"function wrap(p: Pair): Pair { return p; }\n" +
+		"export function main(): Pair { return wrap(makePair([], [])); }";
+	const c = compileToC(src);
+	console.log("=== NESTED EMPTY ARR ===");
+	if (c.ok) { console.log(c.value); } else { console.log("ERR: " + c.error); }
+}
+
+test "E2E ccgPtr: try + ccgIntroducedPtr param" {
+	const src = "interface BigS { kind: number; value: number; name: string; extra: string }\n" +
+		"type BigResult = Result<BigS, string>;\n" +
+		"function parse(d: BigS): BigResult { return Result.ok(d); }\n" +
+		"export function caller(d: BigS): BigResult {\n" +
+		"  const inner = try parse(d);\n" +
+		"  return Result.ok(inner);\n" +
+		"}";
+	const c = compileToC(src);
+	console.log("=== TRY CCGPTR ===");
+	if (c.ok) { console.log(c.value); } else { console.log("ERR: " + c.error); }
+}
+
+test "E2E ccgPtr: direct call same function (no try)" {
+	const src = "interface BigS { kind: number; value: number; name: string; extra: string }\n" +
+		"type BigResult = Result<BigS, string>;\n" +
+		"function parse(d: BigS): BigResult { return Result.ok(d); }\n" +
+		"export function caller(d: BigS): BigResult {\n" +
+		"  return parse(d);\n" +
+		"}";
+	const c = compileToC(src);
+	console.log("=== DIRECT NO TRY ===");
+	if (c.ok) { console.log(c.value); } else { console.log("ERR: " + c.error); }
+}
+
+test "E2E ccgPtr: try desugar - arg nodeType check" {
+	// Reproduce the real pattern: try + cross-module call to function with big struct param
+	// After try desugar, the call's arg should still have nodeType
+	const src = "interface BigS { kind: number; value: number; name: string; extra: string }\n" +
+		"type BigResult = Result<BigS, string>;\n" +
+		"function parse(d: BigS): BigResult { return Result.ok(d); }\n" +
+		"export function caller(d: BigS): BigResult {\n" +
+		"  const inner = try parse(d);\n" +
+		"  return Result.ok(inner);\n" +
+		"}";
+	const ast = fullPipeline(src);
+	if (ast === null) { console.log("AST null"); return; }
+	const pd = ast.data as ProgramData;
+	let i = 0;
+	while (i < pd.programStmts.length) {
+		let s = pd.programStmts[i];
+		if (s.kind === NodeKind.ExportDecl) {
+			s = (s.data as ExportDeclData).exportedDecl;
+		}
+		if (s.kind === NodeKind.FunctionDecl) {
+			const fd = s.data as FunctionDeclData;
+			if (fd.fnName === "caller") {
+				console.log("=== CALLER AST ===");
+				walkCalls(fd.fnBody);
+			}
+		}
+		i = i + 1;
+	}
+}
+
+// ===== Empty array param typing (Nim: semArrayConstr expectedType) =====
+
+test "E2E: empty [] arg typed as string[] param" {
+	const src = "function foo(names: string[]): number { return names.length; }\nconst x = foo([]);";
+	const result = compileToC(src);
+	assert result.ok;
+	assert result.value.contains("msStringArray");
+}
+
+test "E2E: empty [] arg typed as Type[] param" {
+	const src = "interface Foo { x: number; }\nfunction bar(items: Foo[]): number { return items.length; }\nconst y = bar([]);";
+	const result = compileToC(src);
+	assert result.ok;
+	// Value-type struct array should NOT be msRefArray
+	assert !result.value.contains("(msRefArray){0}");
+}
+
+import { compileProjectToC, MapEntry } from "../helpers";
+
+test "MULTI: empty [] arg typed as string[] cross-module" {
+	const libSrc = "export function makeStruct(name: string, fields: string[]): number { return fields.length; }";
+	const mainSrc = "import { makeStruct } from \"./lib\";\nconst x = makeStruct(\"Foo\", []);";
+	const entries: MapEntry[] = [
+		{ entryPath: "test/main.ms", entrySource: mainSrc },
+		{ entryPath: "test/lib.ms", entrySource: libSrc },
+	];
+	const result = compileProjectToC(entries, "test/main.ms");
+	assert !result.contains("ERROR:");
+	// The empty [] for string[] param must emit msStringArray, not msRefArray
+	assert !result.contains("(msRefArray){0}");
+}

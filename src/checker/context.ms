@@ -78,7 +78,9 @@ export function findExportedSymbol(registry: ExportRegistry, modulePath: string,
 
 // fnType: registration-time cache — may be stale. Use getExtFnType() for reads.
 // sym: AUTHORITATIVE source of type info (sym.symbolType = standard reference symbol type equivalent).
-export interface ExtensionMethod {
+// class (not interface) — Nim parity: PSym = ref TSym. Lookup results must be
+// nullable (nil = not found), which requires pointer semantics.
+export class ExtensionMethod {
 	methodName: string;
 	receiverTypeName: string;
 	sourcePath: string;
@@ -375,8 +377,8 @@ export function hasAttachedOps(ops: AttachedOps): boolean {
 }
 
 // ===== Cancel Context =====
-// Matches TaCancelContext shape — avoids checker→transam circular dependency.
-// LSP assigns db.cancelCtx to ctx.cancelCtx (structural compatibility under Bun).
+// Single source of truth for cancellation context type.
+// transam/cancel.ms imports this (transam→checker dependency already established).
 
 export interface CancelCtx {
 	version: number;

@@ -10,12 +10,12 @@
 
 import {
 	Node, NodeKind, SourceLocation,
-	BinaryExprData, StringLiteralData, CallExprData, IdentifierData,
+	BinaryExprData, CallExprData, IdentifierData,
 } from "../../ast/node";
-import { TypeKind, isNumeric } from "../../checker/types";
+import { TypeKind, isNumeric, stringType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, makeIdent, makeNumber } from "../util";
+import { makeCall, makeIdent, makeNumber, makeMember } from "../util";
 import { firstExprKindAfter, stmtCountAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -77,30 +77,30 @@ function needsCoercion(node: Node): boolean {
 	if (node.kind === NodeKind.StringLiteral) return false;
 	if (node.kind === NodeKind.NumberLiteral) return true;
 	if (node.nodeType !== null) {
-		if (isNumeric(node.nodeType)) return true;
-		if (node.nodeType.kind === TypeKind.Boolean) return true;
+		if (node.nodeType.kind === TypeKind.String) return false;
+		// Any non-string typed value needs coercion
+		return true;
 	}
 	return false;
 }
 
-// Wrap non-string parts in conversion calls for C backend
+// Wrap non-string parts in .toString() calls — builtinLower/extensionMethodLower resolve later
 function coerceToString(node: Node, loc: SourceLocation): Node {
-	// Already a string literal — no conversion needed
 	if (node.kind === NodeKind.StringLiteral) return node;
-	// Check nodeType (set by checker) for numeric/boolean types
-	if (node.nodeType !== null) {
-		if (isNumeric(node.nodeType)) {
-			return makeCall(makeIdent("msNumberToString", loc), [node], loc);
-		}
-		if (node.nodeType.kind === TypeKind.Boolean) {
-			return makeCall(makeIdent("msNumberToString", loc), [node], loc);
+	if (node.nodeType !== null && node.nodeType.kind === TypeKind.String) return node;
+	// Already-coerced string concat calls — no double-wrapping
+	if (node.kind === NodeKind.CallExpr) {
+		const cd = node.data as CallExprData;
+		if (cd.callee.kind === NodeKind.Identifier) {
+			const cn = (cd.callee.data as IdentifierData).name;
+			if (cn === "msStringConcatMany" || cn === "msStringConcat") return node;
 		}
 	}
-	// Syntactic fallback: NumberLiteral → always numeric
-	if (node.kind === NodeKind.NumberLiteral) {
-		return makeCall(makeIdent("msNumberToString", loc), [node], loc);
-	}
-	return node;
+	// Emit obj.toString() — pipeline resolves: builtinLower(primitives/enum) → extensionMethodLower(user ext)
+	const member = makeMember(node, "toString", loc);
+	const call = makeCall(member, [], loc);
+	call.nodeType = stringType();
+	return call;
 }
 
 // Recursively collect parts from a left-associative + chain

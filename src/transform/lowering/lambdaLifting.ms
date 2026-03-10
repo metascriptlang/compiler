@@ -15,7 +15,7 @@
 //   }
 
 import {
-	Node, NodeKind, SourceLocation, NodeFlag, createNode,
+	Node, NodeKind, SourceLocation, NodeFlag, SymbolKind, createNode,
 	ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData,
 	FunctionExprData, MethodDeclData, ConstructorDeclData,
 	ExportDeclData, ClassDeclData, DecoratedDeclData,
@@ -30,7 +30,7 @@ import { mapChildren, isFuncBoundary } from "../walker";
 import {
 	makeIdent, makeMember, makeMoveExpr, makeReturn, makeBlock,
 	makeFnDecl, makeInterfaceDecl, makeObjectLiteral, makeHiddenDeref,
-	syntheticToken,
+	makeNull, syntheticToken,
 } from "../util";
 import { Type, TypeKind, createTypeRef, createPtr } from "../../checker/types";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts } from "../testUtil";
@@ -280,7 +280,8 @@ function rewriteNode(node: Node, captures: NameSet, envTypeName: string): Node {
 // Create env struct + lifted function, return closure pair ObjectLiteral.
 
 // Shared logic for lifting arrow functions and function expressions
-function liftClosure(body: Node, params: string[], paramTypes: string[], flags: string, returnType: string, captures: NameSet, state: LiftState, loc: SourceLocation): Node {
+// originalNodeType: resolved Type from checker (Nim parity: PSym.typ preserved through lifting)
+function liftClosure(body: Node, params: string[], paramTypes: string[], flags: string, returnType: string, captures: NameSet, state: LiftState, loc: SourceLocation, originalNodeType: Type): Node {
 	state.closureCounter += 1;
 	const counter = state.closureCounter;
 
@@ -317,31 +318,48 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 	liftedParams.push("_envP");
 	liftedParamTypes.push("void*");
 
-	state.liftedFunctions.push(makeFnDecl(liftedName, liftedParams, liftedParamTypes, rewrittenBody, flags, returnType, loc));
+	const fnNode = makeFnDecl(liftedName, liftedParams, liftedParamTypes, rewrittenBody, flags, returnType, loc);
+	// Nim parity: preserve resolved return type from original lambda (PSym.typ.returnType).
+	// makeFnDecl uses resolveSimpleTypeStr which can't resolve type aliases like NodeResult.
+	// The checker already resolved the alias → concrete type on the original node.
+	if (originalNodeType !== null && originalNodeType.typeReturn !== null && fnNode.nodeType !== null) {
+		fnNode.nodeType.typeReturn = originalNodeType.typeReturn;
+	}
+	state.liftedFunctions.push(fnNode);
 
 	return makeClosurePair(liftedName, envName, captures, state.lastUseCaptures, state.capturedIdents, loc);
 }
 
 function liftArrow(node: Node, captures: NameSet, state: LiftState): Node {
 	const d = node.data as ArrowFunctionData;
-	return liftClosure(d.arrowBody, d.arrowParams, d.arrowParamTypes, d.arrowFlags, d.arrowReturnType, captures, state, node.location);
+	return liftClosure(d.arrowBody, d.arrowParams, d.arrowParamTypes, d.arrowFlags, d.arrowReturnType, captures, state, node.location, node.nodeType);
 }
 
 function liftFuncExpr(node: Node, captures: NameSet, state: LiftState): Node {
 	const d = node.data as FunctionExprData;
-	return liftClosure(d.funcExprBody, d.funcExprParams, d.funcExprParamTypes, d.funcExprFlags, d.funcExprReturnType, captures, state, node.location);
+	return liftClosure(d.funcExprBody, d.funcExprParams, d.funcExprParamTypes, d.funcExprFlags, d.funcExprReturnType, captures, state, node.location, node.nodeType);
 }
 
-// Non-capturing lift: no env struct, no closure pair — just a module-level FunctionDecl + Identifier ref.
-function liftNonCapturing(body: Node, params: string[], paramTypes: string[], flags: string, returnType: string, state: LiftState, loc: SourceLocation): Node {
+// Non-capturing lift: module-level FunctionDecl + closure pair with env=null.
+// Reference parity (ccgexprs.nim:4011): nimcall->closure conversion wraps fn ptr
+// in { .ClP_0 = fn, .ClE_0 = NIM_NIL }. We emit the same via NF_CLOSURE ObjectLiteral.
+// originalNodeType: resolved Type from checker (Nim parity: PSym.typ preserved)
+function liftNonCapturing(body: Node, params: string[], paramTypes: string[], flags: string, returnType: string, state: LiftState, loc: SourceLocation, originalNodeType: Type): Node {
 	state.closureCounter += 1;
 	const liftedName = "$fn_" + state.currentFnName + "_" + state.closureCounter.toString();
 	let liftedBody = body;
 	if (liftedBody.kind !== NodeKind.BlockStmt) {
 		liftedBody = makeBlock([makeReturn(liftedBody, loc)], loc);
 	}
-	state.liftedFunctions.push(makeFnDecl(liftedName, params, paramTypes, liftedBody, flags, returnType, loc));
-	return makeIdent(liftedName, loc);
+	const fnNode = makeFnDecl(liftedName, params, paramTypes, liftedBody, flags, returnType, loc);
+	// Nim parity: preserve resolved return type (PSym.typ.returnType untouched through lifting)
+	if (originalNodeType !== null && originalNodeType.typeReturn !== null && fnNode.nodeType !== null) {
+		fnNode.nodeType.typeReturn = originalNodeType.typeReturn;
+	}
+	state.liftedFunctions.push(fnNode);
+	// Wrap in closure pair { fn: liftedName, env: null } so codegen emits
+	// (msClosure){ .fn = (void*)ptr, .env = NULL } instead of raw function pointer.
+	return wrapFnAsClosure(makeIdent(liftedName, loc), loc);
 }
 
 // Nim parity: newSymNode(local) — look up original Identifier node for a captured name
@@ -352,6 +370,20 @@ function findCapturedIdent(name: string, capturedIdents: Node[]): Node {
 		if (d.name === name) return n;
 	}
 	return null as unknown as Node;
+}
+
+// Wrap a raw function Identifier in a closure pair { fn: ident, env: null }.
+// Reference parity (ccgexprs.nim:4011): nimcall->closure wraps fn ptr in { ClP_0, ClE_0=NIM_NIL }.
+function wrapFnAsClosure(ident: Node, loc: SourceLocation): Node {
+	const wrapKeys: string[] = [];
+	wrapKeys.push("fn");
+	wrapKeys.push("env");
+	const wrapVals: Node[] = [];
+	wrapVals.push(ident);
+	wrapVals.push(makeNull(loc));
+	const pair = makeObjectLiteral(wrapKeys, wrapVals, loc);
+	pair.flags = pair.flags | NodeFlag.Closure;
+	return pair;
 }
 
 function makeClosurePair(liftedName: string, envTypeName: string, captures: NameSet, lastUseCaptures: NameSet, capturedIdents: Node[], loc: SourceLocation): Node {
@@ -366,11 +398,21 @@ function makeClosurePair(liftedName: string, envTypeName: string, captures: Name
 			ident.resolvedSym = orig.resolvedSym;
 			ident.nodeType = orig.nodeType;
 		}
+		// Captured function declarations: wrap in closure pair so codegen emits
+		// (msClosure){ .fn = ..., .env = NULL } instead of raw function pointer.
+		// Only wrap SymbolKind.Function (raw fn ptrs), NOT SymbolKind.Variable
+		// (closure variables are already msClosure — wrapping them double-wraps).
+		const isFnCapture = orig !== null && orig.resolvedSym !== null
+			&& orig.resolvedSym.symbolKind === SymbolKind.Function;
+		let envVal: Node = ident;
+		if (isFnCapture) {
+			envVal = wrapFnAsClosure(ident, loc);
+		}
 		// Phase F: move last-use captures instead of copying
 		if (nameSetContains(lastUseCaptures, name)) {
-			envValues.push(makeMoveExpr(ident, loc));
+			envValues.push(makeMoveExpr(envVal, loc));
 		} else {
-			envValues.push(ident);
+			envValues.push(envVal);
 		}
 	}
 	const envObj = makeObjectLiteral(envKeys, envValues, loc);
@@ -600,7 +642,7 @@ function tryLiftClosure(node: Node, state: LiftState): Node {
 			return liftArrow(node, captures, state);
 		}
 		// Non-capturing: lift to module-level FunctionDecl, return Identifier
-		return liftNonCapturing(d.arrowBody, d.arrowParams, d.arrowParamTypes, d.arrowFlags, d.arrowReturnType, state, node.location);
+		return liftNonCapturing(d.arrowBody, d.arrowParams, d.arrowParamTypes, d.arrowFlags, d.arrowReturnType, state, node.location, node.nodeType);
 	} else if (node.kind === NodeKind.FunctionExpr) {
 		const d = node.data as FunctionExprData;
 		for (const p of d.funcExprParams) { defineVar(state.ss, p); }
@@ -613,7 +655,7 @@ function tryLiftClosure(node: Node, state: LiftState): Node {
 			return liftFuncExpr(node, captures, state);
 		}
 		// Non-capturing: lift to module-level FunctionDecl, return Identifier
-		return liftNonCapturing(d.funcExprBody, d.funcExprParams, d.funcExprParamTypes, d.funcExprFlags, d.funcExprReturnType, state, node.location);
+		return liftNonCapturing(d.funcExprBody, d.funcExprParams, d.funcExprParamTypes, d.funcExprFlags, d.funcExprReturnType, state, node.location, node.nodeType);
 	} else {
 		popFuncBoundary(state.ss);
 	}

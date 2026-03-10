@@ -36,3 +36,7 @@ import "./crossModuleGlobal";
 import "./closureCall";
 import "./nrvoReassign";
 import "./closureEnvArrayType";
+import "./toStringUnified";
+import "./incompleteStruct";
+import "./anonStructCast";
+import "./nullVarType";
