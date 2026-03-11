@@ -33,22 +33,22 @@ function truthifyNode(node: Node): Node {
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
 			d.condition = wrapTruthiness(d.condition);
-			node
+			return node;
 		},
 		NodeKind.WhileStmt => {
 			const d = node.data as WhileStmtData;
 			d.whileCondition = wrapTruthiness(d.whileCondition);
-			node
+			return node;
 		},
 		NodeKind.DoWhileStmt => {
 			const d = node.data as DoWhileStmtData;
 			d.doCondition = wrapTruthiness(d.doCondition);
-			node
+			return node;
 		},
 		NodeKind.ConditionalExpr => {
 			const d = node.data as ConditionalExprData;
 			d.ternaryCondition = wrapTruthiness(d.ternaryCondition);
-			node
+			return node;
 		},
 		_ => node,
 	};

@@ -52,17 +52,17 @@ function foldBinary(node: Node): Node {
 		NodeKind.NumberLiteral => {
 			const lv = (d.left.data as NumberLiteralData).value;
 			const rv = (d.right.data as NumberLiteralData).value;
-			foldNumberBinary(op, lv, rv, loc, node)
+			return foldNumberBinary(op, lv, rv, loc, node);
 		},
 		NodeKind.StringLiteral => {
 			const lv = (d.left.data as StringLiteralData).value;
 			const rv = (d.right.data as StringLiteralData).value;
-			foldStringBinary(op, lv, rv, loc, node)
+			return foldStringBinary(op, lv, rv, loc, node);
 		},
 		NodeKind.BooleanLiteral => {
 			const lb = (d.left.data as BooleanLiteralData).boolValue;
 			const rb = (d.right.data as BooleanLiteralData).boolValue;
-			foldBoolBinary(op, lb, rb, loc, node)
+			return foldBoolBinary(op, lb, rb, loc, node);
 		},
 		_ => node,
 	};

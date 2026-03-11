@@ -119,7 +119,7 @@ function fitsOnOneLine(doc: Doc, rem: number): boolean {
 		DocKind.Nil => true,
 		DocKind.Text => {
 			const d = doc.data as { text: string };
-			d.text.length <= rem
+			return d.text.length <= rem;
 		},
 		DocKind.Group | DocKind.Indent => {
 			const d = doc.data as { children: Doc[] };
@@ -131,16 +131,16 @@ function fitsOnOneLine(doc: Doc, rem: number): boolean {
 				if (totalWidth > rem) { fits = false; }
 				i = i + 1;
 			}
-			fits
+			return fits;
 		},
 		DocKind.Line => {
 			const d = doc.data as { isSoft: boolean };
-			d.isSoft ? true : 1 <= rem
+			return d.isSoft ? true : 1 <= rem;
 		},
 		DocKind.HardLine => false, // HardLine ALWAYS forces a break
 		DocKind.IfBreak => {
 			const d = doc.data as { flat: Doc, broken: Doc };
-			getFlatWidth(d.flat) <= rem
+			return getFlatWidth(d.flat) <= rem;
 		},
 		_ => true,
 	};
@@ -157,7 +157,7 @@ function getFlatWidth(doc: Doc): number {
 			for (const child of d.children) {
 				w = w + getFlatWidth(child);
 			}
-			w
+			return w;
 		},
 		DocKind.Line => (doc.data as { isSoft: boolean }).isSoft ? 0 : 1,
 		DocKind.HardLine => 1000, // Effectively infinite width to force break

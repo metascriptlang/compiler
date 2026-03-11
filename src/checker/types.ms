@@ -188,14 +188,14 @@ export function anonStructName(fieldNames: string[], fieldTypes: Type[]): string
 					// Distinguish array element types to avoid struct name collision
 					// (e.g., string[] field vs unknown[] field producing the same anon struct name)
 					if (ft.typeReturn !== null) {
-						match (ft.typeReturn.kind) {
+						return match (ft.typeReturn.kind) {
 							TypeKind.String => "As",
 							TypeKind.Number | TypeKind.Float64 => "An",
 							TypeKind.Boolean => "Ab",
 							_ => "x",
 						};
 					} else {
-						"x";
+						return "x";
 					}
 				},
 				_ => "x",

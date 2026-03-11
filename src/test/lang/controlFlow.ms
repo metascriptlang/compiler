@@ -15,10 +15,10 @@ function classify(n: number): string {
 
 function grade(score: number): string {
 	return match (score) {
-		5 => { const g = "A"; g },
-		4 => { const g = "B"; g },
-		3 => { const g = "C"; g },
-		_ => { const g = "F"; g },
+		5 => { const g = "A"; return g; },
+		4 => { const g = "B"; return g; },
+		3 => { const g = "C"; return g; },
+		_ => { const g = "F"; return g; },
 	};
 }
 

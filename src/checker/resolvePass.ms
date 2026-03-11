@@ -328,6 +328,15 @@ export function resolveTypeExpr(node: Node, ctx: CheckerContext): void {
 	};
 }
 
+// Resolve all TypeExpr nodes in a type annotation array (params, fields).
+// Null-safe: skips null arrays and null entries.
+export function resolveTypeExprs(exprs: Node[], ctx: CheckerContext): void {
+	if (exprs === null) return;
+	for (const te of exprs) {
+		resolveTypeExpr(te, ctx);
+	}
+}
+
 // ===== Demand-Driven Shaping (Implementation parity) =====
 
 export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
@@ -518,12 +527,7 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 	}
 
 	const paramTypes = resolveTypeStrings(d.fnParamTypes, d.params.length, ctx);
-	// Record param type annotation positions for LSP
-	if (node.typeExprs !== null) {
-		for (const te of node.typeExprs) {
-			resolveTypeExpr(te, ctx);
-		}
-	}
+	resolveTypeExprs(node.typeExprs, ctx);
 
 	// Wrap out param types in TypeKind.Var (reference parity: tyVar)
 	if (d.fnFlags !== "" && d.fnFlags.indexOf("out:") >= 0) {
@@ -632,12 +636,7 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 	}
 
 	const fieldTypes = resolveTypeStrings(d.interfaceFieldTypes, d.interfaceFields.length, ctx);
-	// Record type annotation positions for LSP (per-field TypeExpr nodes)
-	if (node.typeExprs !== null) {
-		for (const te of node.typeExprs) {
-			resolveTypeExpr(te, ctx);
-		}
-	}
+	resolveTypeExprs(node.typeExprs, ctx);
 
 	if (hasGenerics) {
 		closeScope(ctx.table);
@@ -689,6 +688,7 @@ function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 	}
 
 	const resolved = resolveAnnotation(d.aliasType, ctx);
+	resolveTypeExpr(node.typeExpr, ctx);
 	// Propagate alias name to Union types (Reference gap: string-based annotations don't carry names)
 	if (resolved.kind === TypeKind.Union && resolved.typeName === "") {
 		resolved.typeName = d.aliasName;
@@ -811,12 +811,7 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 				}
 			}
 			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx);
-			// Record param type annotation positions for LSP
-			if (member.typeExprs !== null) {
-				for (const te of member.typeExprs) {
-					resolveTypeExpr(te, ctx);
-				}
-			}
+			resolveTypeExprs(member.typeExprs, ctx);
 			const returnType = (md.methodReturnType !== "") ? resolveAnnotation(md.methodReturnType, ctx) : unknownType();
 			resolveTypeExpr(member.typeExpr, ctx);
 			if (hasMethodGenerics) {
@@ -848,14 +843,7 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 			// Resolve constructor type but don't add to struct (data-only, like methods)
 			const cd = member.data as ConstructorDeclData;
 			const paramTypes = resolveTypeStrings(cd.ctorParamTypes, cd.ctorParams.length, ctx);
-			// Record param type annotation positions for LSP
-			if (member.typeExprs !== null) {
-				let cpti = 0;
-				while (cpti < member.typeExprs.length) {
-					resolveTypeExpr(member.typeExprs[cpti], ctx);
-					cpti += 1;
-				}
-			}
+			resolveTypeExprs(member.typeExprs, ctx);
 			const ctorType = createFunction(paramTypes, cd.ctorParams, voidType());
 			member.nodeType = ctorType;
 		}

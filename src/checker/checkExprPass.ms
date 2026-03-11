@@ -2,7 +2,7 @@
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
 import {
-	Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag,
+	Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation,
 	IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData,
 	CallExprData, MemberExprData, ArrayAccessData,
 	ObjectLiteralData, ArrayLiteralData, ConditionalExprData,
@@ -34,7 +34,7 @@ import {
 	scoreCandidatePriority, isNoMatch, emptyCandidateScore, cmpCandidates,
 } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
-import { resolveAnnotation, resolveTypeExpr, ensureShaped, recordGenericTypeInstantiation, buildTypeArgKey } from "./resolvePass";
+import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation, buildTypeArgKey } from "./resolvePass";
 import { parseNumberLiteral, sliceStr, findChar, charAt, splitTopLevel, trimStr } from "../utils/string";
 import { findCallTypeArg, getExplicitTypeArg, getGenericDecl } from "../parser/context";
 
@@ -1635,7 +1635,9 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 		let bodyType = unknownType();
 		if (cd.caseBody.kind === NodeKind.BlockStmt) {
 			// Block arm: check statements inside, infer type from return statement
+			ctx.matchExprDepth = ctx.matchExprDepth + 1;
 			callCheckStmt(ctx, cd.caseBody);
+			ctx.matchExprDepth = ctx.matchExprDepth - 1;
 			const bd = cd.caseBody.data as BlockStmtData;
 			if (bd.statements.length > 0) {
 				const last = bd.statements[bd.statements.length - 1];
@@ -1644,9 +1646,9 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 					if (rd.argument !== null) {
 						bodyType = checkExpr(ctx, rd.argument, null);
 					}
-				} else {
-					addError(ctx, "Match expression block arm requires explicit 'return' statement", cd.caseBody.location.line, cd.caseBody.location.column);
 				}
+				// No error for missing return — block arm may be void (side-effect only).
+				// Match expressions used as statements (ExprStmt > MatchExpr) don't need values.
 			}
 		} else {
 			bodyType = checkExpr(ctx, cd.caseBody, null);
@@ -1675,9 +1677,11 @@ export function checkEnumExhaustiveness(ctx: CheckerContext, enumType: Type, cov
 
 // ===== Anonymous Functions =====
 
-export function checkAnonymousFunction(ctx: CheckerContext, name: string, params: string[], paramTypes: string[], body: Node): Type {
+export function checkAnonymousFunction(ctx: CheckerContext, name: string, params: string[], paramTypes: string[], body: Node, paramLocs: SourceLocation[]): Type {
 	const savedReturn = ctx.inferredReturn;
 	ctx.inferredReturn = unknownType();
+	const savedMatchDepth = ctx.matchExprDepth;
+	ctx.matchExprDepth = 0;
 
 	const savedFunction = ctx.currentFunction;
 	const sym = makeSymbol(name, SymbolKind.Function, unknownType(), false);
@@ -1689,7 +1693,13 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		if (pi < paramTypes.length && paramTypes[pi] !== "") {
 			pType = resolveAnnotation(paramTypes[pi], ctx);
 		}
-		defineSymbol(ctx.table, makeSymbol(p, SymbolKind.Parameter, pType, false));
+		const paramSym = makeSymbol(p, SymbolKind.Parameter, pType, false);
+		defineSymbol(ctx.table, paramSym);
+		if (paramLocs !== null && pi < paramLocs.length && paramLocs[pi] !== null) {
+			sgRecordSym(ctx, paramLocs[pi].line, paramLocs[pi].column,
+				paramLocs[pi].column + p.length,
+				paramSym, pType, SymbolKind.Parameter, p, "", true);
+		}
 		pi += 1;
 	}
 	if (body.kind === NodeKind.BlockStmt) {
@@ -1702,6 +1712,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	}
 	closeScope(ctx.table);
 	ctx.currentFunction = savedFunction;
+	ctx.matchExprDepth = savedMatchDepth;
 
 	const inferredRet = ctx.inferredReturn;
 	ctx.inferredReturn = savedReturn;
@@ -1725,27 +1736,15 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 function checkArrowExpr(ctx: CheckerContext, node: Node): Type {
 	const d = node.data as ArrowFunctionData;
 	resolveTypeExpr(node.typeExpr, ctx);
-	if (node.typeExprs !== null) {
-		let ati = 0;
-		while (ati < node.typeExprs.length) {
-			resolveTypeExpr(node.typeExprs[ati], ctx);
-			ati += 1;
-		}
-	}
-	return checkAnonymousFunction(ctx, "<arrow>", d.arrowParams, d.arrowParamTypes, d.arrowBody);
+	resolveTypeExprs(node.typeExprs, ctx);
+	return checkAnonymousFunction(ctx, "<arrow>", d.arrowParams, d.arrowParamTypes, d.arrowBody, node.paramLocations);
 }
 
 function checkFuncExpr(ctx: CheckerContext, node: Node): Type {
 	const d = node.data as FunctionExprData;
 	resolveTypeExpr(node.typeExpr, ctx);
-	if (node.typeExprs !== null) {
-		let feti = 0;
-		while (feti < node.typeExprs.length) {
-			resolveTypeExpr(node.typeExprs[feti], ctx);
-			feti += 1;
-		}
-	}
-	return checkAnonymousFunction(ctx, "(anon)", d.funcExprParams, d.funcExprParamTypes, d.funcExprBody);
+	resolveTypeExprs(node.typeExprs, ctx);
+	return checkAnonymousFunction(ctx, "(anon)", d.funcExprParams, d.funcExprParamTypes, d.funcExprBody, node.paramLocations);
 }
 
 // ===== @emit Backtick Interpolation (reference emit processing parity) =====

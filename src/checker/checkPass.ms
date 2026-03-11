@@ -2,7 +2,7 @@
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
 import {
-	Node, NodeKind, DeclKind, createNodeAt,
+	Node, NodeKind, DeclKind, SourceLocation, createNodeAt,
 	ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData,
 	IdentifierData, BinaryExprData, MemberExprData,
 	VariableDeclData, FunctionDeclData, ClassDeclData,
@@ -31,7 +31,7 @@ import { collectTopLevel, defineOrError } from "./collectPass";
 import { readFile } from "std/process";
 import { globalImports } from "./prelude";
 import { isAssignable } from "./compat";
-import { resolveDeclarations, resolveAnnotation, resolveTypeExpr, ensureShaped } from "./resolvePass";
+import { resolveDeclarations, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped } from "./resolvePass";
 import { inferOwnership } from "./ownershipInference";
 import { validateTypedAST } from "./validate";
 import { sliceStr, getModuleDir, appendFlag } from "../utils/string";
@@ -172,7 +172,7 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 	const savedReturn = ctx.inferredReturn;
 	ctx.inferredReturn = fnType.typeReturn;
 
-	checkFunctionBody(ctx, sym, d.params, d.fnBody);
+	checkFunctionBody(ctx, sym, d.params, d.fnBody, node.paramLocations);
 
 	// If return type was unknown (no annotation), use inferred type
 	if (sym.symbolType.kind === TypeKind.Function
@@ -227,10 +227,15 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 			const methodSym = node.resolvedSym;
 			const sym = methodSym !== null ? methodSym : makeSymbol(d.methodName, SymbolKind.Method, unknownType(), false);
 			sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.methodName.length, sym, sym.symbolType, SymbolKind.Method, d.methodName, className, true);
-			checkFunctionBody(ctx, sym, d.methodParams, d.methodBody);
+			checkFunctionBody(ctx, sym, d.methodParams, d.methodBody, node.paramLocations);
 		},
 		NodeKind.ConstructorDecl => {
 			const d = node.data as ConstructorDeclData;
+			// Record constructor DEF (Nim parity: semIdentDef on proc sym)
+			const ctorSym = node.resolvedSym;
+			if (ctorSym !== null) {
+				sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + 11, ctorSym, ctorSym.symbolType, SymbolKind.Method, "constructor", className, true);
+			}
 			// Constructor allocates `this` — prepend to params for checking so this.* resolves,
 			// but don't modify AST (codegen handles `this` as a local, not a param).
 			const ctorParams: string[] = ["this"];
@@ -246,7 +251,12 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 				}
 			}
 			const ctorFnType = createFunction(ctorChildren, ctorParams, voidType());
-			checkFunctionBody(ctx, makeSymbol("constructor", SymbolKind.Method, ctorFnType, false), ctorParams, d.ctorBody);
+			// Prepend null location for synthetic "this" param
+			const ctorLocs: SourceLocation[] = [null as unknown as SourceLocation];
+			if (node.paramLocations !== null) {
+				for (const loc of node.paramLocations) { ctorLocs.push(loc); }
+			}
+			checkFunctionBody(ctx, makeSymbol("constructor", SymbolKind.Method, ctorFnType, false), ctorParams, d.ctorBody, ctorLocs);
 		},
 		_ => {},
 	};
@@ -682,8 +692,10 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	}
 	if (d.argument !== null && d.argument.kind !== NodeKind.NullLiteral) {
 		// Pass declared return type as expectedType (Implementation parity)
+		// Inside match expression block arms, return targets the match — not the function
 		let returnExpected = null;
-		if (ctx.currentFunction !== null
+		if (ctx.matchExprDepth === 0
+			&& ctx.currentFunction !== null
 			&& ctx.currentFunction.symbolType.kind === TypeKind.Function
 			&& ctx.currentFunction.symbolType.typeReturn !== null
 			&& ctx.currentFunction.symbolType.typeReturn.kind !== TypeKind.Unknown) {
@@ -695,11 +707,13 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 			d.argument = fitNode(ctx, d.argument, returnExpected, retType);
 		}
 		// Track inferred return type (first return wins)
-		if (ctx.inferredReturn.kind === TypeKind.Unknown) {
+		if (ctx.matchExprDepth === 0 && ctx.inferredReturn.kind === TypeKind.Unknown) {
 			ctx.inferredReturn = retType;
 		}
-		// Check against declared return type
-		if (ctx.currentFunction !== null
+		// Check against declared return type (skip inside match expression block arms —
+		// return targets the match result, not the enclosing function)
+		if (ctx.matchExprDepth === 0
+			&& ctx.currentFunction !== null
 			&& ctx.currentFunction.symbolType.kind === TypeKind.Function
 			&& ctx.currentFunction.symbolType.typeReturn !== null
 			&& ctx.currentFunction.symbolType.typeReturn.kind !== TypeKind.Unknown
@@ -776,9 +790,12 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 
 // Unified function body checker — works for FunctionDecl (resolved param types),
 // MethodDecl, ConstructorDecl.
-function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], body: Node): void {
+// paramLocs: per-param source locations for DEF recording (standard parity: semIdentDef → suggestSym)
+function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[]): void {
 	const savedFunction = ctx.currentFunction;
+	const savedMatchDepth = ctx.matchExprDepth;
 	ctx.currentFunction = sym;
+	ctx.matchExprDepth = 0;
 	openScope(ctx.table, ScopeKind.Function);
 	let i = 0;
 	for (const param of params) {
@@ -792,6 +809,12 @@ function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], b
 			setFlag(paramSym, SymbolFlag.Lent);
 		}
 		defineSymbol(ctx.table, paramSym);
+		// Record param DEF for LSP (standard parity: semIdentDef → suggestSym)
+		if (paramLocs !== null && i < paramLocs.length && paramLocs[i] !== null) {
+			sgRecordSym(ctx, paramLocs[i].line, paramLocs[i].column,
+				paramLocs[i].column + param.length,
+				paramSym, paramType, SymbolKind.Parameter, param, "", true);
+		}
 		i += 1;
 	}
 	if (body.kind === NodeKind.BlockStmt) {
@@ -805,6 +828,7 @@ function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], b
 	}
 	closeScope(ctx.table);
 	ctx.currentFunction = savedFunction;
+	ctx.matchExprDepth = savedMatchDepth;
 }
 
 function enterLoopScope(ctx: CheckerContext): boolean {

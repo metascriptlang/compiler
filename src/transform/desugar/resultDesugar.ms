@@ -260,7 +260,7 @@ function makeErrorCheck(tempName: string, resType: Type, loc: SourceLocation, ct
 
 // ===== Tests =====
 import {
-	ReturnStmtData as RetData,
+	ReturnStmtData as RetData, BlockStmtData,
 	CallExprData as CData, MemberExprData as MData,
 } from "../../ast/node";
 import { parseInput, makeCtx, getStmts } from "../testUtil";

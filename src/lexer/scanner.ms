@@ -335,79 +335,79 @@ export function scanOperator(s: LexerState): boolean {
 			else if (next === "=".code) { skip(s, 2); addToken(s, TokenKind.SlashEq, "/=", startLine, startCol); }
 			else if (allowsRegexAfter(s)) { scanRegex(s); }
 			else { advanceChar(s); addToken(s, TokenKind.Slash, "/", startLine, startCol); }
-			true
+			return true;
 		},
 		"=".code => {
 			if (next === "=".code && peekAt(s, 2) === "=".code) { skip(s, 3); addToken(s, TokenKind.EqEqEq, "===", startLine, startCol); }
 			else if (next === "=".code) { skip(s, 2); addToken(s, TokenKind.EqEq, "==", startLine, startCol); }
 			else if (next === ">".code) { skip(s, 2); addToken(s, TokenKind.Arrow, "=>", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Assign, "=", startLine, startCol); }
-			true
+			return true;
 		},
 		"!".code => {
 			if (next === "=".code && peekAt(s, 2) === "=".code) { skip(s, 3); addToken(s, TokenKind.BangEqEq, "!==", startLine, startCol); }
 			else if (next === "=".code) { skip(s, 2); addToken(s, TokenKind.BangEq, "!=", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Bang, "!", startLine, startCol); }
-			true
+			return true;
 		},
 		"<".code => {
 			if (next === "=".code) { skip(s, 2); addToken(s, TokenKind.LtEq, "<=", startLine, startCol); }
 			else if (next === "<".code) { skip(s, 2); addToken(s, TokenKind.LtLt, "<<", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Lt, "<", startLine, startCol); }
-			true
+			return true;
 		},
 		">".code => {
 			if (next === "=".code) { skip(s, 2); addToken(s, TokenKind.GtEq, ">=", startLine, startCol); }
 			else if (next === ">".code && peekAt(s, 2) === ">".code) { skip(s, 3); addToken(s, TokenKind.GtGtGt, ">>>", startLine, startCol); }
 			else if (next === ">".code) { skip(s, 2); addToken(s, TokenKind.GtGt, ">>", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Gt, ">", startLine, startCol); }
-			true
+			return true;
 		},
 		"+".code => {
 			if (next === "+".code) { skip(s, 2); addToken(s, TokenKind.PlusPlus, "++", startLine, startCol); }
 			else if (next === "=".code) { skip(s, 2); addToken(s, TokenKind.PlusEq, "+=", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Plus, "+", startLine, startCol); }
-			true
+			return true;
 		},
 		"-".code => {
 			if (next === "-".code) { skip(s, 2); addToken(s, TokenKind.MinusMinus, "--", startLine, startCol); }
 			else if (next === "=".code) { skip(s, 2); addToken(s, TokenKind.MinusEq, "-=", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Minus, "-", startLine, startCol); }
-			true
+			return true;
 		},
 		"*".code => {
 			if (next === "*".code) { skip(s, 2); addToken(s, TokenKind.StarStar, "**", startLine, startCol); }
 			else if (next === "=".code) { skip(s, 2); addToken(s, TokenKind.StarEq, "*=", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Star, "*", startLine, startCol); }
-			true
+			return true;
 		},
 		"%".code => {
 			if (next === "=".code) { skip(s, 2); addToken(s, TokenKind.PercentEq, "%=", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Percent, "%", startLine, startCol); }
-			true
+			return true;
 		},
 		"&".code => {
 			if (next === "&".code) { skip(s, 2); addToken(s, TokenKind.AmpAmp, "&&", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Amp, "&", startLine, startCol); }
-			true
+			return true;
 		},
 		"|".code => {
 			if (next === "|".code) { skip(s, 2); addToken(s, TokenKind.PipePipe, "||", startLine, startCol); }
 			else if (next === ">".code) { skip(s, 2); addToken(s, TokenKind.PipeGt, "|>", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Pipe, "|", startLine, startCol); }
-			true
+			return true;
 		},
 		"?".code => {
 			if (next === ".".code && !isDigit(peekAt(s, 2))) { skip(s, 2); addToken(s, TokenKind.QuestionDot, "?.", startLine, startCol); }
 			else if (next === "?".code) { skip(s, 2); addToken(s, TokenKind.QuestionQuestion, "??", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Question, "?", startLine, startCol); }
-			true
+			return true;
 		},
 		".".code => {
 			if (next === ".".code && peekAt(s, 2) === ".".code) { skip(s, 3); addToken(s, TokenKind.DotDotDot, "...", startLine, startCol); }
 			else if (next === ".".code) { skip(s, 2); addToken(s, TokenKind.DotDot, "..", startLine, startCol); }
 			else { advanceChar(s); addToken(s, TokenKind.Dot, ".", startLine, startCol); }
-			true
+			return true;
 		},
 		_ => false,
 	};
@@ -419,9 +419,9 @@ export function scanPunctuation(s: LexerState): boolean {
 	const startCol = s.column;
 
 	return match (ch) {
-		"(".code => { advanceChar(s); addToken(s, TokenKind.LParen, "(", startLine, startCol); true },
-		")".code => { advanceChar(s); addToken(s, TokenKind.RParen, ")", startLine, startCol); true },
-		"{".code => { advanceChar(s); addToken(s, TokenKind.LBrace, "{", startLine, startCol); true },
+		"(".code => { advanceChar(s); addToken(s, TokenKind.LParen, "(", startLine, startCol); return true; },
+		")".code => { advanceChar(s); addToken(s, TokenKind.RParen, ")", startLine, startCol); return true; },
+		"{".code => { advanceChar(s); addToken(s, TokenKind.LBrace, "{", startLine, startCol); return true; },
 		"}".code => {
 			advanceChar(s);
 			if (s.templateDepth > 0) {
@@ -430,16 +430,16 @@ export function scanPunctuation(s: LexerState): boolean {
 			} else {
 				addToken(s, TokenKind.RBrace, "}", startLine, startCol);
 			}
-			true
+			return true;
 		},
-		"[".code => { advanceChar(s); addToken(s, TokenKind.LBracket, "[", startLine, startCol); true },
-		"]".code => { advanceChar(s); addToken(s, TokenKind.RBracket, "]", startLine, startCol); true },
-		";".code => { advanceChar(s); addToken(s, TokenKind.Semicolon, ";", startLine, startCol); true },
-		":".code => { advanceChar(s); addToken(s, TokenKind.Colon, ":", startLine, startCol); true },
-		",".code => { advanceChar(s); addToken(s, TokenKind.Comma, ",", startLine, startCol); true },
-		"@".code => { advanceChar(s); addToken(s, TokenKind.At, "@", startLine, startCol); true },
-		"~".code => { advanceChar(s); addToken(s, TokenKind.Tilde, "~", startLine, startCol); true },
-		"^".code => { advanceChar(s); addToken(s, TokenKind.Caret, "^", startLine, startCol); true },
+		"[".code => { advanceChar(s); addToken(s, TokenKind.LBracket, "[", startLine, startCol); return true; },
+		"]".code => { advanceChar(s); addToken(s, TokenKind.RBracket, "]", startLine, startCol); return true; },
+		";".code => { advanceChar(s); addToken(s, TokenKind.Semicolon, ";", startLine, startCol); return true; },
+		":".code => { advanceChar(s); addToken(s, TokenKind.Colon, ":", startLine, startCol); return true; },
+		",".code => { advanceChar(s); addToken(s, TokenKind.Comma, ",", startLine, startCol); return true; },
+		"@".code => { advanceChar(s); addToken(s, TokenKind.At, "@", startLine, startCol); return true; },
+		"~".code => { advanceChar(s); addToken(s, TokenKind.Tilde, "~", startLine, startCol); return true; },
+		"^".code => { advanceChar(s); addToken(s, TokenKind.Caret, "^", startLine, startCol); return true; },
 		_ => false,
 	};
 }

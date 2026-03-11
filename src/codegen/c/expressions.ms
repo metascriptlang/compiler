@@ -16,7 +16,7 @@ import {
 	UpdateExprData, NewExprData, MoveExprData, SpreadExprData,
 	ExprStmtData, HiddenStdConvData, HiddenDerefData,
 } from "../../ast/node";
-import { Type, TypeKind, isIntegerType, getProperty, getMinArity, isInterfaceType, findUnionVariant } from "../../checker/types";
+import { Type, TypeKind, isIntegerType, getProperty, getMinArity, isInterfaceType, findUnionVariant, voidType } from "../../checker/types";
 import { Symbol, SymbolKind, SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, Builder, CSection,
@@ -1353,7 +1353,7 @@ function exprSnippet(input: string): string {
 	if (stmt.kind !== NodeKind.ExprStmt) return "NOT_EXPR_STMT";
 	const es = stmt.data as ExprStmtData;
 	const g = createCGen(null as unknown as CheckerContext, "");
-	const p = createProc("test");
+	const p = createProc("test", voidType());
 	return genExpr(g, p, es.expr);
 }
 

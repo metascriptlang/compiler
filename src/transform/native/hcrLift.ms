@@ -232,28 +232,28 @@ function typeToCStr(t: Type): string {
 		TypeKind.Float32 => "float",
 		TypeKind.Struct => {
 			if (t.typeName !== null && t.typeName.length > 0) {
-				t.typeName
+				return t.typeName;
 			} else {
-				"void*"
+				return "void*";
 			}
 		},
 		TypeKind.Array => {
 			if (t.typeReturn !== null) {
-				match (t.typeReturn.kind) {
+				return match (t.typeReturn.kind) {
 					TypeKind.Number | TypeKind.Float64 => "msNumberArray",
 					TypeKind.String => "msStringArray",
 					TypeKind.Uint8 => "msUint8Array",
 					_ => "msRefArray",
-				}
+				};
 			} else {
-				"msRefArray"
+				return "msRefArray";
 			}
 		},
 		TypeKind.Class => {
 			if (t.typeName !== null && t.typeName.length > 0) {
-				t.typeName + "*"
+				return t.typeName + "*";
 			} else {
-				"void*"
+				return "void*";
 			}
 		},
 		TypeKind.Function => "msClosure",

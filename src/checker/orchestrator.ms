@@ -4,7 +4,7 @@
 import { Node } from "../ast/node";
 import {
 	CheckerContext, createModuleContext, Severity,
-	ExportedSymInfo, createExportRegistry, registerModuleExports, updateModuleExports,
+	ExportRegistry, ExportedSymInfo, createExportRegistry, registerModuleExports, updateModuleExports,
 	findExtensionByName, findExtensionByType, registerExtension,
 } from "./context";
 import { SymbolKind, ScopeKind, openScope, hasFlag, SymbolFlag } from "./symbol";

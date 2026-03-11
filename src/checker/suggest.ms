@@ -388,13 +388,10 @@ export function sgFindNodeAtPosition(program: Node, line: number, col: number): 
 	}
 	if (program.kind === NodeKind.FunctionDecl) {
 		const fd = program.data as FunctionDeclData;
-		for (let i = 0; i < fd.params.length; i = i + 1) {
-			const f = sgTryStmtChild(fd.params[i], line, col);
-			if (f !== null) return f;
-		}
+		// Params are string names, not nodes — param hover handled via sgRecordSym
 		const fnB = sgTryStmtChild(fd.fnBody, line, col);
 		if (fnB !== null) return fnB;
-		// Cursor on function name
+		// Cursor on function name or params
 		if (pLoc.line === line) return program;
 		return null as unknown as Node;
 	}

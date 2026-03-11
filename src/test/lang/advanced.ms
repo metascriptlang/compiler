@@ -55,8 +55,8 @@ function findInArray(arr: number[], target: number): FindResult {
 
 function tokenLabel(k: TokenKind): string {
 	return match (k) {
-		TokenKind.Num => { const p = "number"; p + "_literal" },
-		TokenKind.Str => { const p = "string"; p + "_literal" },
+		TokenKind.Num => { const p = "number"; return p + "_literal"; },
+		TokenKind.Str => { const p = "string"; return p + "_literal"; },
 		TokenKind.Bool => "bool_literal",
 		TokenKind.Null => "null_literal",
 	};

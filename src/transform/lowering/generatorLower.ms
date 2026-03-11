@@ -98,36 +98,36 @@ function containsYield(node: Node): boolean {
 			for (const s of d.statements) {
 				if (containsYield(s)) return true;
 			}
-			false
+			return false;
 		},
-		NodeKind.ExprStmt => { const d = node.data as ExprStmtData; containsYield(d.expr) },
-		NodeKind.ReturnStmt => { const d = node.data as ReturnStmtData; containsYield(d.argument) },
-		NodeKind.VariableDecl => { const d = node.data as VariableDeclData; containsYield(d.initializer) },
+		NodeKind.ExprStmt => { const d = node.data as ExprStmtData; return containsYield(d.expr); },
+		NodeKind.ReturnStmt => { const d = node.data as ReturnStmtData; return containsYield(d.argument); },
+		NodeKind.VariableDecl => { const d = node.data as VariableDeclData; return containsYield(d.initializer); },
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
-			containsYield(d.condition) || containsYield(d.consequent) || containsYield(d.alternate)
+			return containsYield(d.condition) || containsYield(d.consequent) || containsYield(d.alternate);
 		},
 		NodeKind.WhileStmt => {
 			const d = node.data as WhileStmtData;
-			containsYield(d.whileCondition) || containsYield(d.whileBody)
+			return containsYield(d.whileCondition) || containsYield(d.whileBody);
 		},
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
-			containsYield(d.tryBody) || containsYield(d.catchBody) || containsYield(d.finallyBody)
+			return containsYield(d.tryBody) || containsYield(d.catchBody) || containsYield(d.finallyBody);
 		},
-		NodeKind.BinaryExpr => { const d = node.data as BinaryExprData; containsYield(d.left) || containsYield(d.right) },
-		NodeKind.UnaryExpr => { const d = node.data as UnaryExprData; containsYield(d.operand) },
+		NodeKind.BinaryExpr => { const d = node.data as BinaryExprData; return containsYield(d.left) || containsYield(d.right); },
+		NodeKind.UnaryExpr => { const d = node.data as UnaryExprData; return containsYield(d.operand); },
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
 			if (containsYield(d.callee)) return true;
 			for (const a of d.arguments) {
 				if (containsYield(a)) return true;
 			}
-			false
+			return false;
 		},
 		NodeKind.ConditionalExpr => {
 			const d = node.data as ConditionalExprData;
-			containsYield(d.ternaryCondition) || containsYield(d.ternaryConsequent) || containsYield(d.ternaryAlternate)
+			return containsYield(d.ternaryCondition) || containsYield(d.ternaryConsequent) || containsYield(d.ternaryAlternate);
 		},
 		_ => false,
 	};

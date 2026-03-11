@@ -222,19 +222,19 @@ export function endsInNoReturn(node: Node, ctx: TransformContext): boolean {
 		// ExprStmt: unwrap and check inner expression (e.g. fail() call)
 		NodeKind.ExprStmt => {
 			const ed = node.data as ExprStmtData;
-			endsInNoReturn(ed.expr, ctx)
+			return endsInNoReturn(ed.expr, ctx);
 		},
 
 		// CallExpr: check if callee returns never (standard pattern)
 		NodeKind.CallExpr => {
-			isNeverCall(node, ctx)
+			return isNeverCall(node, ctx);
 		},
 
 		// Block: check last statement
 		NodeKind.BlockStmt => {
 			const d = node.data as BlockStmtData;
-			if (d.statements.length === 0) { false }
-			else { endsInNoReturn(d.statements[d.statements.length - 1], ctx) }
+			if (d.statements.length === 0) { return false; }
+			else { return endsInNoReturn(d.statements[d.statements.length - 1], ctx); }
 		},
 
 		// If/else: ALL branches must terminate AND must have else
@@ -242,26 +242,26 @@ export function endsInNoReturn(node: Node, ctx: TransformContext): boolean {
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
 			// Must have a non-empty alternate (else branch)
-			if (d.alternate === null) { false }
+			if (d.alternate === null) { return false; }
 			else if (d.alternate.kind === NodeKind.BlockStmt) {
 				const altBlock = d.alternate.data as BlockStmtData;
-				if (altBlock.statements.length === 0) { false }
+				if (altBlock.statements.length === 0) { return false; }
 				else {
 					// Both branches must terminate
-					endsInNoReturn(d.consequent, ctx) && endsInNoReturn(d.alternate, ctx)
+					return endsInNoReturn(d.consequent, ctx) && endsInNoReturn(d.alternate, ctx);
 				}
 			}
 			else {
 				// alternate is another IfStmt (else-if chain)
-				endsInNoReturn(d.consequent, ctx) && endsInNoReturn(d.alternate, ctx)
+				return endsInNoReturn(d.consequent, ctx) && endsInNoReturn(d.alternate, ctx);
 			}
 		},
 
 		// Switch: ALL cases must terminate AND must have default
 		NodeKind.SwitchStmt => {
 			const d = node.data as SwitchStmtData;
-			if (d.switchCases.length === 0) { false }
-			else { switchEndsInNoReturn(d.switchCases, ctx) }
+			if (d.switchCases.length === 0) { return false; }
+			else { return switchEndsInNoReturn(d.switchCases, ctx); }
 		},
 
 		// Try/catch/finally:
@@ -270,14 +270,14 @@ export function endsInNoReturn(node: Node, ctx: TransformContext): boolean {
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
 			// Finally override: if finally always terminates, entire try is noReturn
-			if (d.finallyBody !== null && endsInNoReturn(d.finallyBody, ctx)) { true }
+			if (d.finallyBody !== null && endsInNoReturn(d.finallyBody, ctx)) { return true; }
 			else {
 				// Try body must terminate
-				if (!endsInNoReturn(d.tryBody, ctx)) { false }
+				if (!endsInNoReturn(d.tryBody, ctx)) { return false; }
 				// Catch body must terminate (if present)
-				else if (d.catchBody !== null) { endsInNoReturn(d.catchBody, ctx) }
+				else if (d.catchBody !== null) { return endsInNoReturn(d.catchBody, ctx); }
 				// No catch: try body terminates but exceptions could escape
-				else { false }
+				else { return false; }
 			}
 		},
 

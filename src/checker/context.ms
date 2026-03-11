@@ -478,6 +478,7 @@ export interface CheckerContext {
 	modulePath: string;          // Implementation parity: source path for name mangling
 	narrowFacts: Node[];         // fact-based null narrowing knowledge base (standard reference equivalent)
 	symRecords: SgSymRecord[];   // check-time symbol recordings for LSP (reference suggest parity)
+	matchExprDepth: number;      // >0 when inside match expression block arm (return targets match, not function)
 }
 
 // ===== Constructors =====
@@ -504,6 +505,7 @@ export function createContext(): CheckerContext {
 		modulePath: "",
 		narrowFacts: [],
 		symRecords: [],
+		matchExprDepth: 0,
 	};
 }
 

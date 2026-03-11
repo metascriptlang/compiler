@@ -4,7 +4,7 @@
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, ExternKind, NodeData, createNode, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, skipDestructurePattern, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, addGenericDecl, updateGenericDeclFields, collectTokenText } from "../context";
-import { skipTypeAnnotation } from "../typeAnnotation";
+import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipDefaultValue, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, isIdentLike } from "../util";
 import { callBlockParser, callExprParser } from "./callbacks";
 import { sliceStr } from "../../utils/string";
@@ -396,9 +396,14 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 	skipTypeAnnotation(state);
 	const typeEnd = state.position;
 	const aliasType = collectTokenText(state, typeStart, typeEnd);
+	// Build positioned TypeExpr by re-parsing the same range
+	const savedPos = state.position;
+	state.position = typeStart;
+	const aliasTypeExpr = parseTypeExpr(state);
+	state.position = savedPos;
 	consumeSemicolon(state);
 
-	return Result.ok(createNode(NodeKind.TypeAliasDecl, {
+	const aliasNode = createNode(NodeKind.TypeAliasDecl, {
 		aliasName: nameToken.value,
 		aliasType,
 		aliasIsDistinct: false,
@@ -406,7 +411,9 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 		discriminantType: "",
 		variantKeys: [] as string[],
 		variantTypes: [] as string[],
-	}, typeToken));
+	}, typeToken);
+	aliasNode.typeExpr = aliasTypeExpr;
+	return Result.ok(aliasNode);
 }
 
 // ===== Discriminated Union Declaration =====
@@ -1319,9 +1326,14 @@ export function parseDistinctTypeDecl(state: ParserState): NodeResult {
 	skipTypeAnnotation(state);
 	const dTypeEnd = state.position;
 	const distinctAliasType = collectTokenText(state, dTypeStart, dTypeEnd);
+	// Build positioned TypeExpr by re-parsing
+	const dSavedPos = state.position;
+	state.position = dTypeStart;
+	const distinctTypeExpr = parseTypeExpr(state);
+	state.position = dSavedPos;
 	consumeSemicolon(state);
 
-	return Result.ok(createNode(NodeKind.TypeAliasDecl, {
+	const distinctNode = createNode(NodeKind.TypeAliasDecl, {
 		aliasName: nameToken.value,
 		aliasType: distinctAliasType,
 		aliasIsDistinct: true,
@@ -1329,7 +1341,9 @@ export function parseDistinctTypeDecl(state: ParserState): NodeResult {
 		discriminantType: "",
 		variantKeys: [] as string[],
 		variantTypes: [] as string[],
-	}, distinctToken));
+	}, distinctToken);
+	distinctNode.typeExpr = distinctTypeExpr;
+	return Result.ok(distinctNode);
 }
 
 // ===== Macro Declaration =====

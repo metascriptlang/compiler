@@ -96,12 +96,12 @@ function describe(n: number): string {
 		0 => "nothing",
 		1 => {
 			let s = "single";
-			s + " item"
+			return s + " item";
 		},
 		2 => {
 			let a = "tw";
 			let b = "o items";
-			a + b
+			return a + b;
 		},
 		_ => "many",
 	};

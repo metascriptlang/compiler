@@ -73,17 +73,17 @@ function hasTailCall(body: Node, fnName: string): boolean {
 				if (hasTailCall(bd.statements[i], fnName)) return true;
 				i += 1;
 			}
-			false
+			return false;
 		},
 		NodeKind.ReturnStmt => {
 			const rd = body.data as ReturnStmtData;
-			isTailCallExpr(rd.argument, fnName)
+			return isTailCallExpr(rd.argument, fnName);
 		},
 		NodeKind.IfStmt => {
 			const id = body.data as IfStmtData;
 			if (hasTailCall(id.consequent, fnName)) return true;
 			if (id.alternate !== null) return hasTailCall(id.alternate, fnName);
-			false
+			return false;
 		},
 		_ => false,
 	};
@@ -107,7 +107,7 @@ function transformStmt(stmt: Node, fnName: string, params: string[], ctx: Transf
 			if (isTailCallExpr(rd.argument, fnName)) {
 				return buildTailCallReplacement(rd.argument, params, stmt.location, ctx);
 			}
-			stmt
+			return stmt;
 		},
 		NodeKind.IfStmt => {
 			const id = stmt.data as IfStmtData;
@@ -115,7 +115,7 @@ function transformStmt(stmt: Node, fnName: string, params: string[], ctx: Transf
 			if (id.alternate !== null) {
 				id.alternate = transformBody(id.alternate, fnName, params, ctx);
 			}
-			stmt
+			return stmt;
 		},
 		_ => stmt,
 	};
@@ -131,7 +131,7 @@ function transformBody(body: Node, fnName: string, params: string[], ctx: Transf
 				bd.statements[i] = transformStmt(bd.statements[i], fnName, params, ctx);
 				i += 1;
 			}
-			body
+			return body;
 		},
 		_ => transformStmt(body, fnName, params, ctx),
 	};

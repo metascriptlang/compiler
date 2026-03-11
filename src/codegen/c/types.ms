@@ -232,26 +232,26 @@ export function typeKey(t: Type): string {
 		TypeKind.CString => "cstring",
 		TypeKind.Void => "void",
 		TypeKind.Null => "null",
-		TypeKind.Enum => { "enum:" + t.typeName; },
+		TypeKind.Enum => { return "enum:" + t.typeName; },
 		TypeKind.Struct => {
 			// Anonymous/structural types: use structural key to distinguish
 			if (isAnonTypeName(t.typeName)) {
-				`anon(${anonStructuralKey(t)})`;
+				return `anon(${anonStructuralKey(t)})`;
 			} else {
-				"object:" + t.typeName;
+				return "object:" + t.typeName;
 			}
 		},
 		TypeKind.Array => {
 			const elemKey = typeKey(t.typeReturn);
-			"array:" + elemKey;
+			return "array:" + elemKey;
 		},
 		TypeKind.SizedArray => {
 			const elemKey = typeKey(t.typeReturn);
-			`sizedArray:${elemKey}[${intToString(t.typeFlags)}]`;
+			return `sizedArray:${elemKey}[${intToString(t.typeFlags)}]`;
 		},
 		TypeKind.Span => {
 			const elemKey = typeKey(t.typeReturn);
-			"span:" + elemKey;
+			return "span:" + elemKey;
 		},
 		TypeKind.Function => {
 			let key = "func(";
@@ -262,22 +262,22 @@ export function typeKey(t: Type): string {
 				i += 1;
 			}
 			key = key + "):" + typeKey(t.typeReturn);
-			key;
+			return key;
 		},
-		TypeKind.Ref => { "ref:" + typeKey(t.typeReturn); },
-		TypeKind.Ptr => { "ptr:" + typeKey(t.typeReturn); },
-		TypeKind.Var => { "var:" + typeKey(t.typeReturn); },
-		TypeKind.Borrow => { "borrow:" + typeKey(t.typeReturn); },
-		TypeKind.Map => { `map:${typeKey(t.typeReturn)}:${typeKey(t.typeExtra)}`; },
-		TypeKind.Set => { "set:" + typeKey(t.typeReturn); },
+		TypeKind.Ref => { return "ref:" + typeKey(t.typeReturn); },
+		TypeKind.Ptr => { return "ptr:" + typeKey(t.typeReturn); },
+		TypeKind.Var => { return "var:" + typeKey(t.typeReturn); },
+		TypeKind.Borrow => { return "borrow:" + typeKey(t.typeReturn); },
+		TypeKind.Map => { return `map:${typeKey(t.typeReturn)}:${typeKey(t.typeExtra)}`; },
+		TypeKind.Set => { return "set:" + typeKey(t.typeReturn); },
 		TypeKind.Result => {
-			`result:${typeKey(t.typeReturn)},${typeKey(t.typeExtra)}`;
+			return `result:${typeKey(t.typeReturn)},${typeKey(t.typeExtra)}`;
 		},
-		TypeKind.TypeReference => { "typeref:" + t.typeName; },
-		TypeKind.Distinct => { "distinct:" + t.typeName; },
+		TypeKind.TypeReference => { return "typeref:" + t.typeName; },
+		TypeKind.Distinct => { return "distinct:" + t.typeName; },
 		TypeKind.Union => {
 			if (t.typeName.length > 0) {
-				"union:" + t.typeName;
+				return "union:" + t.typeName;
 			} else {
 				let key = "union(";
 				let ui = 0;
@@ -286,7 +286,7 @@ export function typeKey(t: Type): string {
 					key = key + typeKey(t.typeChildren[ui]);
 					ui += 1;
 				}
-				key + ")";
+				return key + ")";
 			}
 		},
 		TypeKind.Tuple => {
@@ -297,7 +297,7 @@ export function typeKey(t: Type): string {
 				key = key + typeKey(t.typeChildren[i]);
 				i += 1;
 			}
-			key;
+			return key;
 		},
 		_ => "unknown",
 	};
@@ -393,7 +393,7 @@ export function needsRC(t: Type): boolean {
 				if (needsRC(t.typeChildren[i])) return true;
 				i += 1;
 			}
-			false;
+			return false;
 		},
 		_ => false,
 	};
@@ -486,10 +486,6 @@ export function getTypeDesc(g: CGen, t: Type): string {
 	if (t.kind === TypeKind.Sink || t.kind === TypeKind.Lent) {
 		return getTypeDesc(g, t.typeReturn);
 	}
-	const __k = t.kind;
-	if (__k === null) return "void*";
-	if (__k !== __k) return "void*";  // NaN check fallback
-
 	// Check simple types first (no caching needed)
 	const simple = getSimpleTypeDesc(t);
 	if (simple !== "") {
@@ -533,22 +529,22 @@ export function getTypeDesc(g: CGen, t: Type): string {
 	// Generate based on kind
 	const result = match (t.kind) {
 		TypeKind.Enum => {
-			genEnumType(g, t);
+			return genEnumType(g, t);
 		},
 		TypeKind.Struct => {
-			genObjectType(g, t);
+			return genObjectType(g, t);
 		},
 		TypeKind.Array => {
-			genArrayType(g, t);
+			return genArrayType(g, t);
 		},
 		TypeKind.SizedArray => {
-			genSizedArrayType(g, t);
+			return genSizedArrayType(g, t);
 		},
 		TypeKind.Span => {
-			genSpanType(g, t);
+			return genSpanType(g, t);
 		},
 		TypeKind.Function => {
-			genFunctionType(g, t);
+			return genFunctionType(g, t);
 		},
 		TypeKind.Ref | TypeKind.Ptr => {
 			const inner = getTypeDesc(g, t.typeReturn);
