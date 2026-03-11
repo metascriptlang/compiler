@@ -60,107 +60,93 @@ export enum DrcMode {
 
 function collectIdentsInNode(node: Node, result: NameSet): void {
 	if (node === null) return;
-	if (node.kind === NodeKind.Identifier) {
-		nameSetAdd(result, (node.data as IdentifierData).name);
-	}
-	if (node.kind === NodeKind.CallExpr) {
-		const cd = node.data as CallExprData;
-		collectIdentsInNode(cd.callee, result);
-		for (const arg of cd.arguments) { collectIdentsInNode(arg, result); }
-		return;
-	}
-	if (node.kind === NodeKind.BinaryExpr) {
-		const bd = node.data as BinaryExprData;
-		collectIdentsInNode(bd.left, result);
-		collectIdentsInNode(bd.right, result);
-		return;
-	}
-	if (node.kind === NodeKind.MemberExpr) {
-		collectIdentsInNode((node.data as MemberExprData).object, result);
-		return;
-	}
-	if (node.kind === NodeKind.ArrayAccess) {
-		const ad = node.data as ArrayAccessData;
-		collectIdentsInNode(ad.array, result);
-		collectIdentsInNode(ad.index, result);
-		return;
-	}
-	if (node.kind === NodeKind.ExprStmt) {
-		collectIdentsInNode((node.data as ExprStmtData).expr, result);
-		return;
-	}
-	if (node.kind === NodeKind.ReturnStmt) {
-		collectIdentsInNode((node.data as ReturnStmtData).argument, result);
-		return;
-	}
-	if (node.kind === NodeKind.BlockStmt) {
-		const stmts = (node.data as BlockStmtData).statements;
-		for (const s of stmts) { collectIdentsInNode(s, result); }
-		return;
-	}
-	if (node.kind === NodeKind.IfStmt) {
-		const id = node.data as IfStmtData;
-		collectIdentsInNode(id.condition, result);
-		collectIdentsInNode(id.consequent, result);
-		collectIdentsInNode(id.alternate, result);
-		return;
-	}
-	if (node.kind === NodeKind.WhileStmt) {
-		const wd = node.data as WhileStmtData;
-		collectIdentsInNode(wd.whileCondition, result);
-		collectIdentsInNode(wd.whileBody, result);
-		return;
-	}
-	if (node.kind === NodeKind.VariableDecl) {
-		const vd = node.data as VariableDeclData;
-		collectIdentsInNode(vd.initializer, result);
-		return;
-	}
-	if (node.kind === NodeKind.ConditionalExpr) {
-		const cd = node.data as ConditionalExprData;
-		collectIdentsInNode(cd.ternaryCondition, result);
-		collectIdentsInNode(cd.ternaryConsequent, result);
-		collectIdentsInNode(cd.ternaryAlternate, result);
-		return;
-	}
-	if (node.kind === NodeKind.ObjectLiteral) {
-		const od = node.data as ObjectLiteralData;
-		for (const prop of od.properties) { collectIdentsInNode(prop, result); }
-		return;
-	}
-	if (node.kind === NodeKind.ArrayLiteral) {
-		const ad = node.data as ArrayLiteralData;
-		for (const elem of ad.elements) { collectIdentsInNode(elem, result); }
-		return;
-	}
+
+	match (node.kind) {
+		NodeKind.Identifier => {
+			nameSetAdd(result, (node.data as IdentifierData).name);
+		},
+		NodeKind.CallExpr => {
+			const cd = node.data as CallExprData;
+			collectIdentsInNode(cd.callee, result);
+			for (const arg of cd.arguments) { collectIdentsInNode(arg, result); }
+		},
+		NodeKind.BinaryExpr => {
+			const bd = node.data as BinaryExprData;
+			collectIdentsInNode(bd.left, result);
+			collectIdentsInNode(bd.right, result);
+		},
+		NodeKind.MemberExpr => {
+			collectIdentsInNode((node.data as MemberExprData).object, result);
+		},
+		NodeKind.ArrayAccess => {
+			const ad = node.data as ArrayAccessData;
+			collectIdentsInNode(ad.array, result);
+			collectIdentsInNode(ad.index, result);
+		},
+		NodeKind.ExprStmt => {
+			collectIdentsInNode((node.data as ExprStmtData).expr, result);
+		},
+		NodeKind.ReturnStmt => {
+			collectIdentsInNode((node.data as ReturnStmtData).argument, result);
+		},
+		NodeKind.BlockStmt => {
+			for (const s of (node.data as BlockStmtData).statements) { collectIdentsInNode(s, result); }
+		},
+		NodeKind.IfStmt => {
+			const id = node.data as IfStmtData;
+			collectIdentsInNode(id.condition, result);
+			collectIdentsInNode(id.consequent, result);
+			collectIdentsInNode(id.alternate, result);
+		},
+		NodeKind.WhileStmt => {
+			const wd = node.data as WhileStmtData;
+			collectIdentsInNode(wd.whileCondition, result);
+			collectIdentsInNode(wd.whileBody, result);
+		},
+		NodeKind.VariableDecl => {
+			collectIdentsInNode((node.data as VariableDeclData).initializer, result);
+		},
+		NodeKind.ConditionalExpr => {
+			const cd = node.data as ConditionalExprData;
+			collectIdentsInNode(cd.ternaryCondition, result);
+			collectIdentsInNode(cd.ternaryConsequent, result);
+			collectIdentsInNode(cd.ternaryAlternate, result);
+		},
+		NodeKind.ObjectLiteral => {
+			for (const prop of (node.data as ObjectLiteralData).properties) { collectIdentsInNode(prop, result); }
+		},
+		NodeKind.ArrayLiteral => {
+			for (const elem of (node.data as ArrayLiteralData).elements) { collectIdentsInNode(elem, result); }
+		},
+		_ => {},
+	};
 }
 
 function scanFinallyBlocks(node: Node, result: NameSet): void {
 	if (node === null) return;
-	if (node.kind === NodeKind.TryCatchStmt) {
-		const td = node.data as TryCatchStmtData;
-		if (td.finallyBody !== null) {
-			collectIdentsInNode(td.finallyBody, result);
-		}
-		scanFinallyBlocks(td.tryBody, result);
-		scanFinallyBlocks(td.catchBody, result);
-		return;
-	}
-	if (node.kind === NodeKind.BlockStmt) {
-		const stmts = (node.data as BlockStmtData).statements;
-		for (const s of stmts) { scanFinallyBlocks(s, result); }
-		return;
-	}
-	if (node.kind === NodeKind.IfStmt) {
-		const id = node.data as IfStmtData;
-		scanFinallyBlocks(id.consequent, result);
-		scanFinallyBlocks(id.alternate, result);
-		return;
-	}
-	if (node.kind === NodeKind.WhileStmt) {
-		scanFinallyBlocks((node.data as WhileStmtData).whileBody, result);
-		return;
-	}
+
+	match (node.kind) {
+		NodeKind.TryCatchStmt => {
+			const td = node.data as TryCatchStmtData;
+			if (td.finallyBody !== null) {
+				collectIdentsInNode(td.finallyBody, result);
+			}
+			scanFinallyBlocks(td.tryBody, result);
+			scanFinallyBlocks(td.catchBody, result);
+		},
+		NodeKind.BlockStmt => {
+			for (const s of (node.data as BlockStmtData).statements) { scanFinallyBlocks(s, result); }
+		},
+		NodeKind.IfStmt => {
+			const id = node.data as IfStmtData;
+			scanFinallyBlocks(id.consequent, result);
+			scanFinallyBlocks(id.alternate, result);
+		},
+		NodeKind.WhileStmt => {
+			scanFinallyBlocks((node.data as WhileStmtData).whileBody, result);
+		},
+		_ => {},
+	};
 }
 
 function collectFinallyVars(body: Node): NameSet {
@@ -197,12 +183,37 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	// Use resolvedSym to find callee's function type signature.
 	const sym = node.resolvedSym;
 	const fnType = (sym !== null && sym.symbolType !== null && sym.symbolType.kind === TypeKind.Function) ? sym.symbolType : null;
+
+	// Nim parity: seq.add(y: sink T) — push takes ownership of its argument.
+	// After extension method lowering, push is a direct call with nativeName containing "ArrayPush".
+	// The value argument (last param, after the array receiver) must be treated as consumed (sink).
+	let isArrayPush = false;
+	if (sym !== null && sym.nativeName !== "") {
+		const nn = sym.nativeName;
+		if (nn === "&msGenericArrayPush" || nn === "&msStringArrayPush" || nn === "&msNumberArrayPush" || nn === "&msRefArrayPush") {
+			isArrayPush = true;
+		}
+	}
+
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		let argMode = DrcMode.Normal;
 		if (fnType !== null && i < fnType.typeChildren.length && isSinkType(fnType.typeChildren[i])) {
 			argMode = DrcMode.Consumed;
 		}
+		// Push value arg (index 1, after receiver) is sink
+		if (isArrayPush && i === 1) argMode = DrcMode.Consumed;
 		cd.arguments[i] = processNode(cd.arguments[i], dctx, argMode);
+
+		// Nim parity (passCopyToSink): when a borrow expression (ArrayAccess/MemberExpr)
+		// is passed to a sink param, extract to temp with deep copy.
+		// This is done here (not in processArrayAccess/processMember) to avoid double-handling
+		// with processVarDecl which also passes Consumed mode but handles borrows explicitly.
+		if (argMode === DrcMode.Consumed) {
+			const arg = cd.arguments[i];
+			if (arg.kind === NodeKind.ArrayAccess || arg.kind === NodeKind.MemberExpr) {
+				cd.arguments[i] = passCopyToSink(arg, dctx);
+			}
+		}
 	}
 	return node;
 }
@@ -212,6 +223,60 @@ function processBinary(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	bd.left = processNode(bd.left, dctx, bd.operator === "=" ? DrcMode.Consumed : DrcMode.Normal);
 	bd.right = processNode(bd.right, dctx, DrcMode.Normal);
 	return node;
+}
+
+// Nim parity: passCopyToSink — when a non-identifier expression (ArrayAccess, MemberExpr)
+// is consumed (sink param, push arg), create an independent deep copy in a temp.
+// Pattern: genWasMoved(tmp) → =copy(tmp, src) → use tmp → wasMoved(tmp) after consumption.
+// For simple refcounted types (String, Ref, Closure): shallow copy + incref is sufficient.
+// For Named types (structs with managed fields): null-init + 2-arg copy avoids aliased-field destruction.
+function passCopyToSink(srcExpr: Node, dctx: DrcContext): Node {
+	const rcInfo = classifyType(srcExpr.nodeType, dctx.ctx);
+	if (!rcInfo.needsCleanup) return srcExpr;
+
+	const loc = srcExpr.location;
+	const tmpName = freshTemp(dctx.ctx, "borrow");
+
+	if (rcInfo.rcKind === RcKind.Named) {
+		// Named value types (e.g. Token with string fields): null-init, then 2-arg copy from source.
+		// This avoids the aliased-field bug where shallow-copy + self-copy destroys shared pointers.
+		const tmpDecl = makeVarDecl(tmpName, makeNull(loc), DeclKind.Let, loc);
+		if (srcExpr.nodeType !== null) tmpDecl.nodeType = srcExpr.nodeType;
+		addPre(dctx, tmpDecl);
+		registerVar(dctx, tmpName, rcInfo, false);
+		// Zero-init (Nim: genWasMoved) — ensures destroy of "old dest" in copy is a no-op
+		addPre(dctx, makeWasMovedCall(tmpName, rcInfo, loc));
+		// Deep copy from source (Nim: genCopyNoCheck(tmp, src))
+		if (rcInfo.copyFn !== "") {
+			if (rcInfo.seqLike) {
+				addPre(dctx, makeExprStmt(
+					makeCall(makeIdent(rcInfo.copyFn, loc), [makeHiddenAddr(makeIdent(tmpName, loc), loc), srcExpr], loc), loc));
+			} else {
+				addPre(dctx, makeExprStmt(
+					makeCall(makeIdent(rcInfo.copyFn, loc), [makeHiddenAddr(makeIdent(tmpName, loc), loc), makeHiddenAddr(srcExpr, loc)], loc), loc));
+			}
+		}
+	} else {
+		// Simple refcounted (String, Ref, Closure, Map, Set): shallow copy + incref.
+		// Incref is a simple refcount bump, no destruction of old fields — aliasing is safe.
+		const tmpDecl = makeVarDecl(tmpName, srcExpr, DeclKind.Const, loc);
+		if (srcExpr.nodeType !== null) tmpDecl.nodeType = srcExpr.nodeType;
+		addPre(dctx, tmpDecl);
+		registerVar(dctx, tmpName, rcInfo, false);
+		if (rcInfo.copyFn !== "") {
+			addPre(dctx, makeCopyAfterInit(tmpName, rcInfo, loc, ""));
+		}
+	}
+
+	// After consumption: wasMoved so scope-exit destroy is a no-op (consumer owns the data)
+	if (rcInfo.wasMovedFn !== "") {
+		addPending(dctx, makeWasMovedCall(tmpName, rcInfo, loc));
+	}
+	recordMove(dctx, tmpName);
+
+	const ident = makeIdent(tmpName, loc);
+	if (srcExpr.nodeType !== null) ident.nodeType = srcExpr.nodeType;
+	return ident;
 }
 
 function processMember(node: Node, dctx: DrcContext, mode: DrcMode): Node {
@@ -407,19 +472,19 @@ function sameLocation(a: Node, b: Node): boolean {
 	if (a.kind !== b.kind) return false;
 	return match (a.kind) {
 		NodeKind.Identifier => {
-			if (a.resolvedSym !== null && b.resolvedSym !== null) { a.resolvedSym === b.resolvedSym }
-			else { (a.data as IdentifierData).name === (b.data as IdentifierData).name }
+			if (a.resolvedSym !== null && b.resolvedSym !== null) { return a.resolvedSym === b.resolvedSym; }
+			else { return (a.data as IdentifierData).name === (b.data as IdentifierData).name; }
 		},
 		NodeKind.MemberExpr => {
 			const ad = a.data as MemberExprData;
 			const bd = b.data as MemberExprData;
-			ad.property === bd.property && sameLocation(ad.object, bd.object)
+			return ad.property === bd.property && sameLocation(ad.object, bd.object);
 		},
 		NodeKind.ArrayAccess => {
 			const ad = a.data as ArrayAccessData;
 			const bd = b.data as ArrayAccessData;
-			if (ad.index.kind !== NodeKind.NumberLiteral || bd.index.kind !== NodeKind.NumberLiteral) { false }
-			else { (ad.index.data as NumberLiteralData).value === (bd.index.data as NumberLiteralData).value && sameLocation(ad.array, bd.array) }
+			if (ad.index.kind !== NodeKind.NumberLiteral || bd.index.kind !== NodeKind.NumberLiteral) { return false; }
+			else { return (ad.index.data as NumberLiteralData).value === (bd.index.data as NumberLiteralData).value && sameLocation(ad.array, bd.array); }
 		},
 		_ => false,
 	};
@@ -657,8 +722,8 @@ function processStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext, l
 		NodeKind.BlockStmt => processBlockBody(stmt, dctx, false, false, sloc),
 		NodeKind.TryCatchStmt => processTryCatch(stmt, dctx, sloc),
 		NodeKind.SwitchStmt => processSwitch(stmt, dctx, sloc),
-		NodeKind.BreakStmt | NodeKind.ContinueStmt => { setNeedsTryToLoop(dctx); stmt },
-		NodeKind.ThrowStmt => { setNeedsTryAll(dctx); stmt },
+		NodeKind.BreakStmt | NodeKind.ContinueStmt => { setNeedsTryToLoop(dctx); return stmt; },
+		NodeKind.ThrowStmt => { setNeedsTryAll(dctx); return stmt; },
 		NodeKind.ExportDecl => processExport(stmt, dctx, sloc),
 		NodeKind.ClassDecl => processClass(stmt, dctx, sloc),
 		NodeKind.ArrowFunction => processArrow(stmt, dctx, sloc),
@@ -736,6 +801,10 @@ function isVarFromOuterLoopScope(varName: string, dctx: DrcContext): boolean {
 
 function isLastReadSafe(sym: Symbol, node: Node, idx: number, stmts: Node[], dctx: DrcContext): boolean {
 	if (sym === null) return false;
+	// Borrowed params (non-sink) must never be moved — caller owns the value.
+	// Moving a by-value param only zeroes the local copy while the caller still
+	// holds (and will decref) its own copy, causing use-after-free.
+	if (sym.symbolKind === SymbolKind.Parameter && !hasFlag(sym, SymbolFlag.Sink)) return false;
 	// Phase A: variables in finally blocks must never be moved (use-after-free prevention)
 	if (nameSetContains(dctx.finallyProtectedVars, sym.name)) return false;
 	// Phase C: use CFG-based analysis when function body is available
@@ -999,55 +1068,45 @@ function countParamUsageInline(paramName: string, stmts: Node[]): UsageCounts {
 
 function countRefsInNode(node: Node, paramName: string): number {
 	if (node === null) return 0;
-	if (node.kind === NodeKind.Identifier) {
-		const id = node.data as IdentifierData;
-		if (id.name === paramName) return 1;
-		return 0;
-	}
-	if (node.kind === NodeKind.BinaryExpr) {
-		const bd = node.data as BinaryExprData;
-		return countRefsInNode(bd.left, paramName) + countRefsInNode(bd.right, paramName);
-	}
-	if (node.kind === NodeKind.CallExpr) {
-		const cd = node.data as CallExprData;
-		let count = countRefsInNode(cd.callee, paramName);
-		let j = 0;
-		while (j < cd.arguments.length) {
-			count = count + countRefsInNode(cd.arguments[j], paramName);
-			j = j + 1;
-		}
-		return count;
-	}
-	if (node.kind === NodeKind.ExprStmt) {
-		const ed = node.data as ExprStmtData;
-		return countRefsInNode(ed.expr, paramName);
-	}
-	if (node.kind === NodeKind.VariableDecl) {
-		const vd = node.data as VariableDeclData;
-		if (vd.initializer !== null) return countRefsInNode(vd.initializer, paramName);
-		return 0;
-	}
-	if (node.kind === NodeKind.IfStmt) {
-		const id = node.data as IfStmtData;
-		return countRefsInNode(id.condition, paramName)
-			+ countRefsInNode(id.consequent, paramName)
-			+ countRefsInNode(id.alternate, paramName);
-	}
-	if (node.kind === NodeKind.BlockStmt) {
-		const bd = node.data as BlockStmtData;
-		let count = 0;
-		let k = 0;
-		while (k < bd.statements.length) {
-			count = count + countRefsInNode(bd.statements[k], paramName);
-			k = k + 1;
-		}
-		return count;
-	}
-	if (node.kind === NodeKind.MemberExpr) {
-		const md = node.data as MemberExprData;
-		return countRefsInNode(md.object, paramName);
-	}
-	return 0;
+
+	return match (node.kind) {
+		NodeKind.Identifier => {
+			const id = node.data as IdentifierData;
+			if (id.name === paramName) { return 1; } else { return 0; }
+		},
+		NodeKind.BinaryExpr => {
+			const bd = node.data as BinaryExprData;
+			return countRefsInNode(bd.left, paramName) + countRefsInNode(bd.right, paramName);
+		},
+		NodeKind.CallExpr => {
+			const cd = node.data as CallExprData;
+			let count = countRefsInNode(cd.callee, paramName);
+			for (const arg of cd.arguments) {
+				count = count + countRefsInNode(arg, paramName);
+			}
+			return count;
+		},
+		NodeKind.ExprStmt => countRefsInNode((node.data as ExprStmtData).expr, paramName),
+		NodeKind.VariableDecl => {
+			const vd = node.data as VariableDeclData;
+			if (vd.initializer !== null) { return countRefsInNode(vd.initializer, paramName); } else { return 0; }
+		},
+		NodeKind.IfStmt => {
+			const id = node.data as IfStmtData;
+			return countRefsInNode(id.condition, paramName)
+				+ countRefsInNode(id.consequent, paramName)
+				+ countRefsInNode(id.alternate, paramName);
+		},
+		NodeKind.BlockStmt => {
+			let count = 0;
+			for (const s of (node.data as BlockStmtData).statements) {
+				count = count + countRefsInNode(s, paramName);
+			}
+			return count;
+		},
+		NodeKind.MemberExpr => countRefsInNode((node.data as MemberExprData).object, paramName),
+		_ => 0,
+	};
 }
 
 function nodeRefsParam(node: Node, paramName: string): boolean {
@@ -1113,6 +1172,7 @@ function processFuncBodyWithParams(body: Node, fnName: string, paramNames: strin
 
 	// Phase C: set function body for CFG-based last-read analysis
 	dctx.currentFuncBody = body;
+	dctx.currentFuncName = fnName;
 	clearCfgCache(dctx.cfgCache);
 
 	// Register RC-typed params for cleanup (sink semantics)
@@ -1159,6 +1219,28 @@ function processFuncBodyWithParams(body: Node, fnName: string, paramNames: strin
 		processed.push(cs);
 	}
 	return makeBlock(processed, loc);
+}
+
+// ===== Borrow Copy Helper =====
+
+// Emit RC operations for a borrowed value (ArrayAccess or MemberExpr assigned to a local).
+// Simple RC types (String, Ref, Closure, Map): shallow copy + incref.
+// Named value types (structs with managed fields): wasMoved(dest) + copy(dest, src)
+// to avoid aliased-field destruction from self-copy.
+function emitBorrowCopy(destName: string, srcExpr: Node, rcInfo: RcInfo, dctx: DrcContext, loc: SourceLocation): void {
+	if (rcInfo.rcKind === RcKind.Ref || rcInfo.rcKind === RcKind.String || rcInfo.rcKind === RcKind.Closure || rcInfo.rcKind === RcKind.Map) {
+		addPending(dctx, makeCopyAfterInit(destName, rcInfo, loc, ""));
+	}
+	if (rcInfo.rcKind === RcKind.Named && rcInfo.copyFn !== "") {
+		addPending(dctx, makeWasMovedCall(destName, rcInfo, loc));
+		if (rcInfo.seqLike) {
+			addPending(dctx, makeExprStmt(
+				makeCall(makeIdent(rcInfo.copyFn, loc), [makeHiddenAddr(makeIdent(destName, loc), loc), srcExpr], loc), loc));
+		} else {
+			addPending(dctx, makeExprStmt(
+				makeCall(makeIdent(rcInfo.copyFn, loc), [makeHiddenAddr(makeIdent(destName, loc), loc), makeHiddenAddr(srcExpr, loc)], loc), loc));
+		}
+	}
 }
 
 // ===== Variable Declaration =====
@@ -1294,16 +1376,13 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 				return stmt;
 			}
 		}
-		// Pointer/string borrow: incref
-		if (rcInfo.rcKind === RcKind.Ref || rcInfo.rcKind === RcKind.String) {
-			const copyNode = makeCopyAfterInit(d.declName, rcInfo, loc, "");
-			addPending(dctx, copyNode);
-		}
-		// Named value type borrow: copy hook
-		if (rcInfo.rcKind === RcKind.Named && rcInfo.copyFn !== "") {
-			const copyNode = makeCopyAfterInit(d.declName, rcInfo, loc, "");
-			addPending(dctx, copyNode);
-		}
+		emitBorrowCopy(d.declName, init, rcInfo, dctx, loc);
+		return stmt;
+	}
+
+	// Array access: borrowed — same borrow-copy as MemberExpr
+	if (init.kind === NodeKind.ArrayAccess) {
+		emitBorrowCopy(d.declName, init, rcInfo, dctx, loc);
 		return stmt;
 	}
 
@@ -1347,6 +1426,17 @@ function processExprStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContex
 
 // ===== Assignment Processing =====
 
+// Nim parity: DRC lifecycle hooks (_copy, _sink, _destroy, _wasMoved) are generated by
+// destructorLifting with their own RC operations. The DRC analyzer must NOT wrap field
+// assignments inside hooks with save-assign-destroy — that would double-count references.
+function isDrcHookFunction(dctx: DrcContext): boolean {
+	const name = dctx.currentFuncName;
+	if (name === "") return false;
+	if (name.endsWith("_copy") || name.endsWith("_sink") || name.endsWith("_destroy") || name.endsWith("_wasMoved")) return true;
+	if (name.endsWith("_dup") || name.endsWith("_trace") || name.endsWith("_eq")) return true;
+	return false;
+}
+
 function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation): Node {
 	// reference parity (sameLocation): self-assignment removal — x = x is a no-op
 	if (sameLocation(bd.left, bd.right)) return stmt;
@@ -1356,6 +1446,8 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 		const leftMd = bd.left.data as MemberExprData;
 		const rcInfo = classifyMemberFieldRc(bd.left, dctx);
 		if (!rcInfo.needsCleanup) return stmt;
+		// Skip save-assign-destroy inside DRC hooks — they manage RC manually
+		if (isDrcHookFunction(dctx)) return stmt;
 		return emitSaveAssignDestroy(stmt, bd.left, bd.right, rcInfo, "Field", idx, stmts, dctx, loc);
 	}
 
@@ -1363,6 +1455,8 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 	if (bd.left.kind === NodeKind.ArrayAccess) {
 		const rcInfo = classifyArrayElementRc(bd.left, dctx);
 		if (!rcInfo.needsCleanup) return stmt;
+		// Skip save-assign-destroy inside DRC hooks — they manage RC manually
+		if (isDrcHookFunction(dctx)) return stmt;
 		return emitSaveAssignDestroy(stmt, bd.left, bd.right, rcInfo, "Elem", idx, stmts, dctx, loc);
 	}
 
@@ -1522,6 +1616,11 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 			return makeBlock([destroyOld, stmt, wmCall], loc);
 		}
 		const copyNode = makeCopyAfterInit(leftD.name, rcInfo, loc, rightD.name);
+		// Named types: _copy handles field-level cleanup (decref old + assign + incref new).
+		// Raw stmt between destroy and copy creates aliasing → use-after-free.
+		if (rcInfo.rcKind === RcKind.Named) {
+			return makeBlock([copyNode], loc);
+		}
 		return makeBlock([destroyOld, stmt, copyNode], loc);
 	}
 
@@ -1699,10 +1798,18 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 	if (d.argument !== null) {
 		// Process return argument recursively with Consumed mode
 		d.argument = processNode(d.argument, dctx, DrcMode.Consumed);
-		
+
 		// Borrowed RC pointer return: wrap in temp + incref to prevent use-after-free
 		if (needsReturnIncref(d.argument, dctx)) {
 			return emitReturnWithIncref(d.argument, dctx, loc);
+		}
+		// Named value type borrow return: ArrayAccess/MemberExpr needs full copy
+		// (e.g., return state.tokens[pos] where Token has string field)
+		if (d.argument.kind === NodeKind.ArrayAccess || d.argument.kind === NodeKind.MemberExpr) {
+			const retRc = classifyType(d.argument.nodeType, dctx.ctx);
+			if (retRc.needsCleanup && retRc.rcKind === RcKind.Named) {
+				d.argument = passCopyToSink(d.argument, dctx);
+			}
 		}
 		// Mark returned identifiers as moved in their owning scopes.
 		// This prevents double-free: the finally block will emit wasMoved instead of destroy.
@@ -1716,33 +1823,33 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 // so the scope's finally block emits wasMoved (zero) instead of destroy.
 function markReturnedVarsMoved(node: Node, dctx: DrcContext): void {
 	if (node === null) return;
-	if (node.kind === NodeKind.Identifier) {
-		const name = (node.data as IdentifierData).name;
-		const vi = findVarInfoInContext(dctx, name);
-		if (vi !== null && vi.rcInfo.needsCleanup) {
-			recordMoveInContext(dctx, name);
-		}
-		return;
-	}
-	// MoveExpr: unwrap and recurse on inner expression
-	if (node.kind === NodeKind.MoveExpr) {
-		markReturnedVarsMoved((node.data as MoveExprData).moveArg, dctx);
-		return;
-	}
-	// For complex return expressions like `return a + b`, mark all identifiers
-	if (node.kind === NodeKind.BinaryExpr) {
-		const bd = node.data as BinaryExprData;
-		markReturnedVarsMoved(bd.left, dctx);
-		markReturnedVarsMoved(bd.right, dctx);
-	}
-	if (node.kind === NodeKind.MemberExpr) {
-		markReturnedVarsMoved((node.data as MemberExprData).object, dctx);
-	}
-	if (node.kind === NodeKind.CallExpr) {
-		const cd = node.data as CallExprData;
-		markReturnedVarsMoved(cd.callee, dctx);
-		for (const arg of cd.arguments) { markReturnedVarsMoved(arg, dctx); }
-	}
+
+	match (node.kind) {
+		NodeKind.Identifier => {
+			const name = (node.data as IdentifierData).name;
+			const vi = findVarInfoInContext(dctx, name);
+			if (vi !== null && vi.rcInfo.needsCleanup) {
+				recordMoveInContext(dctx, name);
+			}
+		},
+		NodeKind.MoveExpr => {
+			markReturnedVarsMoved((node.data as MoveExprData).moveArg, dctx);
+		},
+		NodeKind.BinaryExpr => {
+			const bd = node.data as BinaryExprData;
+			markReturnedVarsMoved(bd.left, dctx);
+			markReturnedVarsMoved(bd.right, dctx);
+		},
+		NodeKind.MemberExpr => {
+			markReturnedVarsMoved((node.data as MemberExprData).object, dctx);
+		},
+		NodeKind.CallExpr => {
+			const cd = node.data as CallExprData;
+			markReturnedVarsMoved(cd.callee, dctx);
+			for (const arg of cd.arguments) { markReturnedVarsMoved(arg, dctx); }
+		},
+		_ => {},
+	};
 }
 
 // ===== Function Declaration =====
@@ -1868,7 +1975,13 @@ export function injectProgram(program: Node, dctx: DrcContext): Node {
 	if (program.kind !== NodeKind.Program) return program;
 	const d = program.data as ProgramData;
 
-	d.programStmts = processStmtListScoped(d.programStmts, dctx, program.location);
+	// Module-level scope: process statements but skip cleanup.
+	// Nim parity (injectdestructors.nim:579): globals with sfGlobal at top scope
+	// (s.parent == nil) go to graph.globalDestructors, NOT scope.final.
+	// Module globals persist for the program's lifetime — Init000 must not destroy them.
+	pushScope(dctx, false, false);
+	d.programStmts = processStmtList(d.programStmts, dctx, program.location);
+	popScope(dctx); // discard cleanup — module globals outlive Init000
 
 	return program;
 }

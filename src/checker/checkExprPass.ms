@@ -10,7 +10,7 @@ import {
 	AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData,
 	HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData,
 	ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData,
-	FunctionDeclData, BlockStmtData, ExprStmtData,
+	FunctionDeclData, BlockStmtData, ExprStmtData, ReturnStmtData,
 } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import {
@@ -84,17 +84,17 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 		NodeKind.NumberLiteral => {
 			if (expectedType !== null && isIntegerType(expectedType)) {
 				if (literalFitsInType(node, expectedType)) {
-					expectedType;
+					return expectedType;
 				} else if (isNodeIntLit(node)) {
 					// Reference parity: standard reference's type change diagnostic emits compile-time error for out-of-range literals
 					const v = (node.data as NumberLiteralData).value;
 					addError(ctx, "cannot convert " + v + " to " + typeNameOf(expectedType), node.location.line, node.location.column);
-					expectedType;
+					return expectedType;
 				} else {
-					numberType();
+					return numberType();
 				}
 			} else {
-				numberType();
+				return numberType();
 			}
 		},
 		NodeKind.BigIntLiteral => numberType(),
@@ -113,7 +113,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			ensureShaped(sym, ctx);
 			node.resolvedSym = sym;
 			sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.name.length, sym, sym.symbolType, sym.symbolKind, d.name, "", false);
-			sym.symbolType;
+			return sym.symbolType;
 		},
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
@@ -150,7 +150,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 					effRight = createPrimitive(TypeKind.Int32);
 				}
 			}
-			inferBinaryOp(d.operator, effLeft, effRight);
+			return inferBinaryOp(d.operator, effLeft, effRight);
 		},
 		NodeKind.UnaryExpr => {
 			const d = node.data as UnaryExprData;
@@ -167,12 +167,12 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 					addError(ctx, "bitwise NOT '~' requires integer type, got '" + name + "'", node.location.line, node.location.column);
 				}
 			}
-			inferUnaryOp(d.unaryOp, operandType);
+			return inferUnaryOp(d.unaryOp, operandType);
 		},
 		NodeKind.UpdateExpr => {
 			const d = node.data as UpdateExprData;
 			checkExpr(ctx, d.updateArg, null);
-			numberType();
+			return numberType();
 		},
 		NodeKind.CallExpr => checkCallExpr(ctx, node, expectedType),
 		NodeKind.MemberExpr => checkMemberExpr(ctx, node),
@@ -202,7 +202,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 				accessType = getElementType(arrType);
 			}
 			node.nodeType = accessType;
-			accessType;
+			return accessType;
 		},
 		NodeKind.ObjectLiteral => {
 			const d = node.data as ObjectLiteralData;
@@ -228,7 +228,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 					checkExpr(ctx, d.properties[fi], fieldExpected);
 					fi = fi + 1;
 				}
-				node.nodeType;
+				return node.nodeType;
 			} else if (objExpected !== null && objExpected.kind === TypeKind.Union
 				&& isDiscriminatedUnion(objExpected)) {
 				// Discriminated union construction validation
@@ -255,7 +255,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 					checkExpr(ctx, d.properties[fi], fieldExpected);
 					fi = fi + 1;
 				}
-				objExpected;
+				return objExpected;
 			} else {
 				// No expected type — synthesize anonymous struct from literal fields
 				const fieldNames: string[] = [];
@@ -270,7 +270,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 				const anonName = anonStructName(fieldNames, fieldTypes);
 				const anonType = createStruct(anonName, fieldNames, fieldTypes, false);
 				node.nodeType = anonType;
-				anonType;
+				return anonType;
 			}
 		},
 		NodeKind.ArrayLiteral => {
@@ -285,18 +285,18 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 				: null;
 			if (d.elements.length === 0) {
 				if (arrExpected !== null && (arrExpected.kind === TypeKind.Array || arrExpected.kind === TypeKind.SizedArray)) {
-					arrExpected;
+					return arrExpected;
 				} else {
-					createArray(unknownType());
+					return createArray(unknownType());
 				}
 			} else {
 				const elemType = checkExpr(ctx, d.elements[0], elemExpected);
 				let i = 1;
 				while (i < d.elements.length) { checkExpr(ctx, d.elements[i], elemExpected); i += 1; }
 				if (arrExpected !== null && (arrExpected.kind === TypeKind.Array || arrExpected.kind === TypeKind.SizedArray)) {
-					arrExpected;
+					return arrExpected;
 				} else {
-					createArray(elemType);
+					return createArray(elemType);
 				}
 			}
 		},
@@ -307,7 +307,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			checkExpr(ctx, d.ternaryCondition, null);
 			const consequentType = checkExpr(ctx, d.ternaryConsequent, expectedType);
 			checkExpr(ctx, d.ternaryAlternate, expectedType);
-			consequentType;
+			return consequentType;
 		},
 		NodeKind.TypeAssertion => {
 			let d = node.data as TypeAssertionData;
@@ -331,7 +331,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 				node.data = { nullPlaceholder: true };
 				node.nodeType = targetType;
 				node.flags = node.flags | NodeFlag.Sem;
-				targetType;
+				return targetType;
 			}
 			// JsonValue as string/number/boolean/int32 → HiddenStdConv (lowered by jsonDynAccessLower)
 			else if (isJsonValueType(srcType) && isJsonConvertibleTarget(targetType)) {
@@ -352,12 +352,12 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			} else {
 				node.nodeType = targetType;
 			}
-			node.nodeType;
+			return node.nodeType;
 		},
 		NodeKind.SpreadExpr => {
 			const d = node.data as SpreadExprData;
 			checkExpr(ctx, d.spreadArg, null);
-			unknownType();
+			return unknownType();
 		},
 		NodeKind.NewExpr => {
 			const d = node.data as NewExprData;
@@ -374,9 +374,9 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 				ai = ai + 1;
 			}
 			if (resolvedType.kind === TypeKind.Struct || resolvedType.kind === TypeKind.Ref) {
-				resolvedType;
+				return resolvedType;
 			} else {
-				unknownType();
+				return unknownType();
 			}
 		},
 		NodeKind.TryExpr => checkTryExpr(ctx, node),
@@ -384,12 +384,12 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 		NodeKind.AwaitExpr => {
 			const d = node.data as AwaitExprData;
 			checkExpr(ctx, d.awaitArg, null);
-			unknownType();
+			return unknownType();
 		},
 		NodeKind.YieldExpr => {
 			const d = node.data as YieldExprData;
 			checkExpr(ctx, d.yieldArg, null);
-			unknownType();
+			return unknownType();
 		},
 		NodeKind.MoveExpr => {
 			const d = node.data as MoveExprData;
@@ -400,12 +400,12 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 				&& d.moveArg.kind !== NodeKind.CallExpr) {
 				addError(ctx, "invalid 'move' operand: expected identifier, field access, array access, or call expression", node.location.line, node.location.column);
 			}
-			checkExpr(ctx, d.moveArg, null);
+			return checkExpr(ctx, d.moveArg, null);
 		},
 		NodeKind.OutExpr => {
 			const d = node.data as OutExprData;
 			checkExpr(ctx, d.outArg, null);
-			unknownType();
+			return unknownType();
 		},
 		NodeKind.SizeofExpr => {
 			const d = node.data as SizeofExprData;
@@ -413,16 +413,16 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			const size = sizeOfType(resolved);
 			node.kind = NodeKind.NumberLiteral;
 			node.data = { value: size } as unknown as NodeData;
-			numberType();
+			return numberType();
 		},
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => {
 			const d = node.data as HiddenDerefData;
-			checkExpr(ctx, d.expr, null);
+			return checkExpr(ctx, d.expr, null);
 		},
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
 			const d = node.data as HiddenStdConvData;
 			checkExpr(ctx, d.convExpr, null);
-			d.convType;
+			return d.convType;
 		},
 		NodeKind.MacroInvocation => {
 			// Implementation parity: pragma/macro args are type-checked
@@ -436,7 +436,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 				checkExpr(ctx, md.macroArgs[ai], null);
 				ai = ai + 1;
 			}
-			voidType();
+			return voidType();
 		},
 		_ => unknownType(),
 	};
@@ -458,23 +458,23 @@ function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
 			// Reference parity: int32 + int32 → int32 (magic proc preserves type)
 			if (isIntegerType(leftType) && isIntegerType(rightType) && leftType.kind === rightType.kind) return leftType;
 			if (isNumeric(leftType) && isNumeric(rightType)) return numberType();
-			unknownType();
+			return unknownType();
 		},
 		"-" => {
 			if (leftType !== null && leftType.kind === TypeKind.Ptr && rightType !== null && rightType.kind === TypeKind.Ptr) return numberType();
 			if (leftType !== null && leftType.kind === TypeKind.Ptr) return leftType;
 			// Reference parity: int32 - int32 → int32
 			if (isIntegerType(leftType) && isIntegerType(rightType) && leftType.kind === rightType.kind) return leftType;
-			numberType();
+			return numberType();
 		},
 		"*" | "/" | "%" | "**" => {
 			// Reference parity: int32 * int32 → int32
 			if (isIntegerType(leftType) && isIntegerType(rightType) && leftType.kind === rightType.kind) return leftType;
-			numberType();
+			return numberType();
 		},
 		"&" | "|" | "^" | "<<" | ">>" | ">>>" => {
 			if (isIntegerType(leftType)) return leftType;
-			numberType();
+			return numberType();
 		},
 		"??" => leftType,
 		_ => unknownType(),
@@ -487,12 +487,12 @@ function inferUnaryOp(op: string, operandType: Type): Type {
 		"-" | "+" => {
 			// Reference parity: -int32 → int32, +int32 → int32
 			if (isIntegerType(operandType)) return operandType;
-			numberType();
+			return numberType();
 		},
 		"~" => {
 			// Reference parity: ~int32 → int32
 			if (isIntegerType(operandType)) return operandType;
-			numberType();
+			return numberType();
 		},
 		"typeof" => stringType(),
 		_ => unknownType(),
@@ -1631,13 +1631,18 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 		}
 		let bodyType = unknownType();
 		if (cd.caseBody.kind === NodeKind.BlockStmt) {
-			// Block arm: check statements inside, infer type from last expression
+			// Block arm: check statements inside, infer type from return statement
 			callCheckStmt(ctx, cd.caseBody);
 			const bd = cd.caseBody.data as BlockStmtData;
 			if (bd.statements.length > 0) {
 				const last = bd.statements[bd.statements.length - 1];
-				if (last.kind === NodeKind.ExprStmt) {
-					bodyType = checkExpr(ctx, (last.data as ExprStmtData).expr, null);
+				if (last.kind === NodeKind.ReturnStmt) {
+					const rd = last.data as ReturnStmtData;
+					if (rd.argument !== null) {
+						bodyType = checkExpr(ctx, rd.argument, null);
+					}
+				} else {
+					addError(ctx, "Match expression block arm requires explicit 'return' statement", cd.caseBody.location.line, cd.caseBody.location.column);
 				}
 			}
 		} else {

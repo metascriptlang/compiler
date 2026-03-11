@@ -551,40 +551,40 @@ export function getTypeDesc(g: CGen, t: Type): string {
 			const inner = getTypeDesc(g, t.typeReturn);
 			const ptrType = inner + "*";
 			typeCacheSet(g.typeCache, key, ptrType);
-			ptrType;
+			return ptrType;
 		},
 		TypeKind.Var => {
 			// Var returns inner type desc — the * is added by ccgIntroducedPtr at declaration/call level
 			const inner = getTypeDesc(g, t.typeReturn);
 			typeCacheSet(g.typeCache, key, inner);
-			inner;
+			return inner;
 		},
 		TypeKind.Borrow => {
 			const inner = getTypeDesc(g, t.typeReturn);
 			const ptrType = "const " + inner + "*";
 			typeCacheSet(g.typeCache, key, ptrType);
-			ptrType;
+			return ptrType;
 		},
 		TypeKind.Result => {
-			genResultType(g, t);
+			return genResultType(g, t);
 		},
 		TypeKind.Map => {
 			typeCacheSet(g.typeCache, key, "msMap");
-			"msMap";
+			return "msMap";
 		},
 		TypeKind.Set => {
 			typeCacheSet(g.typeCache, key, "msSet");
-			"msSet";
+			return "msSet";
 		},
 		TypeKind.TypeReference => "void*", // handled above, shouldn't reach here
 		TypeKind.Unknown => "void*",
 		TypeKind.Any => "void*",
 		TypeKind.Union => {
-			genUnionType(g, t);
+			return genUnionType(g, t);
 		},
 		TypeKind.Intersection => "void*",
 		TypeKind.Tuple => {
-			genTupleType(g, t);
+			return genTupleType(g, t);
 		},
 		TypeKind.Generic | TypeKind.GenericParam => "void*",
 		_ => "void",

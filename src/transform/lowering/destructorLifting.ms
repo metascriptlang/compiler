@@ -211,10 +211,22 @@ function genCall(name: string, hook: string, x: Node, y: Node, buf: Node[], loc:
 	}
 }
 
-// Copy-ref pattern: incref source, then assign (reference parity: incref source before assignment)
+// Copy-ref pattern: decref old dest, assign from src, incref new dest.
+// Must handle old value destruction here since DRC skips save-assign-destroy inside hooks.
 function genCopyRef(increfFn: string, x: Node, y: Node, fieldName: string, buf: Node[], loc: SourceLocation): void {
-	buf.push(makeExprStmt(makeCall(makeIdent(increfFn, loc), [y], loc), loc));
-	buf.push(makeExprStmt(makeAssign(x, clonePath(y, loc), loc), loc));
+	// Decref old dest value before overwriting
+	const decrefFn = increfFn === "msStringIncref" ? "msStringDecref"
+		: increfFn === "msIncref" ? "msDecref"
+		: increfFn === "msClosureIncref" ? "msClosureDecref"
+		: increfFn === "msMapIncref" ? "msMapDecref"
+		: "";
+	if (decrefFn !== "") {
+		buf.push(makeExprStmt(makeCall(makeIdent(decrefFn, loc), [clonePath(x, loc)], loc), loc));
+	}
+	// Assign: dest.field = src.field
+	buf.push(makeExprStmt(makeAssign(clonePath(x, loc), clonePath(y, loc), loc), loc));
+	// Incref new value (both dest and src now reference it)
+	buf.push(makeExprStmt(makeCall(makeIdent(increfFn, loc), [clonePath(x, loc)], loc), loc));
 }
 
 // Inline sink: destroy old value + raw assign (eliminates per-field function call)

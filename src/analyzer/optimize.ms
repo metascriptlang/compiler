@@ -55,14 +55,14 @@ function collectBlockMoved(block: Node): NameSet {
 	if (block === null) return result;
 	if (block.kind !== NodeKind.BlockStmt) return result;
 	const bd = block.data as BlockStmtData;
-	for (let i = 0; i < bd.statements.length; i += 1) {
-		const wm = getWasMovedVar(bd.statements[i]);
+	for (const stmt of bd.statements) {
+		const wm = getWasMovedVar(stmt);
 		if (wm !== "") {
 			nameSetAdd(result, wm);
 		}
 		// Also collect from nested if/else branches
-		if (bd.statements[i].kind === NodeKind.IfStmt) {
-			const nested = collectIfMoved(bd.statements[i]);
+		if (stmt.kind === NodeKind.IfStmt) {
+			const nested = collectIfMoved(stmt);
 			for (const v of nested) {
 				nameSetAdd(result, v);
 			}
@@ -179,20 +179,12 @@ function walkOptimize(node: Node): void {
 		NodeKind.Program => {
 			const d = node.data as ProgramData;
 			d.programStmts = optimizeBlock(d.programStmts);
-			let i = 0;
-			while (i < d.programStmts.length) {
-				walkOptimize(d.programStmts[i]);
-				i += 1;
-			}
+			for (const s of d.programStmts) { walkOptimize(s); }
 		},
 		NodeKind.BlockStmt => {
 			const d = node.data as BlockStmtData;
 			d.statements = optimizeBlock(d.statements);
-			let i = 0;
-			while (i < d.statements.length) {
-				walkOptimize(d.statements[i]);
-				i += 1;
-			}
+			for (const s of d.statements) { walkOptimize(s); }
 		},
 		NodeKind.FunctionDecl => { walkOptimize((node.data as FunctionDeclData).fnBody); },
 		NodeKind.IfStmt => {
@@ -216,8 +208,7 @@ function walkOptimize(node: Node): void {
 		NodeKind.SwitchCase => {
 			const d = node.data as SwitchCaseData;
 			d.caseStmts = optimizeBlock(d.caseStmts);
-			let i = 0;
-			while (i < d.caseStmts.length) { walkOptimize(d.caseStmts[i]); i += 1; }
+			for (const s of d.caseStmts) { walkOptimize(s); }
 		},
 		NodeKind.ExportDecl => { walkOptimize((node.data as ExportDeclData).exportedDecl); },
 		NodeKind.ClassDecl => {

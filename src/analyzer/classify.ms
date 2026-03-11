@@ -130,9 +130,9 @@ export function classifyType(t: Type, ctx: TransformContext): RcInfo {
 			// Ptr<T> where T is interface/span/result/tuple = borrowed (ccgIntroducedPtr), no RC
 			const inner = t.typeReturn;
 			if (inner !== null && (isInterfaceType(inner) || inner.kind === TypeKind.Span || inner.kind === TypeKind.Result || inner.kind === TypeKind.Tuple)) {
-				noRcInfo()
+				return noRcInfo();
 			} else {
-				makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false)
+				return makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false);
 			}
 		},
 		TypeKind.Function => makeRcInfo(RcKind.Closure, "", "msClosureDestroy", "msClosureCopy", "msClosureWasMoved", "msClosureSink", false),
@@ -140,11 +140,11 @@ export function classifyType(t: Type, ctx: TransformContext): RcInfo {
 		TypeKind.Set => makeRcInfo(RcKind.Set, "", "msSetFree", "msSetCopy", "msSetWasMoved", "msSetSink", false),
 		TypeKind.Struct => classifyObject(t, ctx),
 		TypeKind.TypeReference => classifyTypeRef(t, ctx),
-		TypeKind.Distinct => { if (t.typeReturn !== null) { classifyType(t.typeReturn, ctx) } else { noRcInfo() } },
+		TypeKind.Distinct => { if (t.typeReturn !== null) { return classifyType(t.typeReturn, ctx); } else { return noRcInfo(); } },
 		TypeKind.Union => {
 			if (t.typeName !== "" && hasAsgnFlag(t)) {
-				makeRcInfo(RcKind.Named, t.typeName, t.typeName + "_destroy", t.typeName + "_copy", t.typeName + "_wasMoved", t.typeName + "_sink", false)
-			} else { noRcInfo() }
+				return makeRcInfo(RcKind.Named, t.typeName, t.typeName + "_destroy", t.typeName + "_copy", t.typeName + "_wasMoved", t.typeName + "_sink", false);
+			} else { return noRcInfo(); }
 		},
 		TypeKind.Result => makeRcInfo(RcKind.Named, "", "", "", "", "", false),
 		TypeKind.Tuple => {
@@ -157,7 +157,7 @@ export function classifyType(t: Type, ctx: TransformContext): RcInfo {
 			}
 			// TODO: Tuples with RC elements need per-field hooks from destructorLifting.
 			// For now, emit Named with empty hooks — helper functions guard against empty fnName.
-			if (hasRc) { makeRcInfo(RcKind.Named, "", "", "", "", "", false) } else { noRcInfo() }
+			if (hasRc) { return makeRcInfo(RcKind.Named, "", "", "", "", "", false); } else { return noRcInfo(); }
 		},
 		_ => noRcInfo(),
 	};

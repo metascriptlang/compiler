@@ -45,31 +45,31 @@ export function nodeReferencesVar(node: Node, targetSym: Symbol): boolean {
 		NodeKind.Identifier => node.resolvedSym === targetSym,
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
-			nodeReferencesVar(d.left, targetSym) || nodeReferencesVar(d.right, targetSym)
+			return nodeReferencesVar(d.left, targetSym) || nodeReferencesVar(d.right, targetSym);
 		},
 		NodeKind.UnaryExpr => nodeReferencesVar((node.data as UnaryExprData).operand, targetSym),
 		NodeKind.UpdateExpr => nodeReferencesVar((node.data as UpdateExprData).updateArg, targetSym),
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
-			nodeReferencesVar(d.callee, targetSym) || anyChildReferences(d.arguments, targetSym)
+			return nodeReferencesVar(d.callee, targetSym) || anyChildReferences(d.arguments, targetSym);
 		},
 		NodeKind.MemberExpr => nodeReferencesVar((node.data as MemberExprData).object, targetSym),
 		NodeKind.ArrayAccess => {
 			const d = node.data as ArrayAccessData;
-			nodeReferencesVar(d.array, targetSym) || nodeReferencesVar(d.index, targetSym)
+			return nodeReferencesVar(d.array, targetSym) || nodeReferencesVar(d.index, targetSym);
 		},
 		NodeKind.ObjectLiteral => anyChildReferences((node.data as ObjectLiteralData).properties, targetSym),
 		NodeKind.ArrayLiteral => anyChildReferences((node.data as ArrayLiteralData).elements, targetSym),
 		NodeKind.ConditionalExpr => {
 			const d = node.data as ConditionalExprData;
-			nodeReferencesVar(d.ternaryCondition, targetSym)
+			return nodeReferencesVar(d.ternaryCondition, targetSym)
 				|| nodeReferencesVar(d.ternaryConsequent, targetSym)
-				|| nodeReferencesVar(d.ternaryAlternate, targetSym)
+				|| nodeReferencesVar(d.ternaryAlternate, targetSym);
 		},
 		NodeKind.SpreadExpr => nodeReferencesVar((node.data as SpreadExprData).spreadArg, targetSym),
 		NodeKind.NewExpr => {
 			const d = node.data as NewExprData;
-			nodeReferencesVar(d.newCallee, targetSym) || anyChildReferences(d.newArguments, targetSym)
+			return nodeReferencesVar(d.newCallee, targetSym) || anyChildReferences(d.newArguments, targetSym);
 		},
 		NodeKind.TypeAssertion => nodeReferencesVar((node.data as TypeAssertionData).asExpr, targetSym),
 		NodeKind.MoveExpr => nodeReferencesVar((node.data as MoveExprData).moveArg, targetSym),
@@ -81,41 +81,41 @@ export function nodeReferencesVar(node: Node, targetSym: Symbol): boolean {
 		NodeKind.ThrowStmt => nodeReferencesVar((node.data as ThrowStmtData).throwArg, targetSym),
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
-			nodeReferencesVar(d.condition, targetSym)
+			return nodeReferencesVar(d.condition, targetSym)
 				|| nodeReferencesVar(d.consequent, targetSym)
-				|| nodeReferencesVar(d.alternate, targetSym)
+				|| nodeReferencesVar(d.alternate, targetSym);
 		},
 		NodeKind.WhileStmt => {
 			const d = node.data as WhileStmtData;
-			nodeReferencesVar(d.whileCondition, targetSym) || nodeReferencesVar(d.whileBody, targetSym)
+			return nodeReferencesVar(d.whileCondition, targetSym) || nodeReferencesVar(d.whileBody, targetSym);
 		},
 		NodeKind.ForStmt => {
 			const d = node.data as ForStmtData;
-			nodeReferencesVar(d.forInit, targetSym) || nodeReferencesVar(d.forCondition, targetSym)
-				|| nodeReferencesVar(d.forUpdate, targetSym) || nodeReferencesVar(d.forBody, targetSym)
+			return nodeReferencesVar(d.forInit, targetSym) || nodeReferencesVar(d.forCondition, targetSym)
+				|| nodeReferencesVar(d.forUpdate, targetSym) || nodeReferencesVar(d.forBody, targetSym);
 		},
 		NodeKind.ForOfStmt => {
 			const d = node.data as ForOfStmtData;
-			nodeReferencesVar(d.forOfIterable, targetSym) || nodeReferencesVar(d.forOfBody, targetSym)
+			return nodeReferencesVar(d.forOfIterable, targetSym) || nodeReferencesVar(d.forOfBody, targetSym);
 		},
 		NodeKind.DoWhileStmt => {
 			const d = node.data as DoWhileStmtData;
-			nodeReferencesVar(d.doBody, targetSym) || nodeReferencesVar(d.doCondition, targetSym)
+			return nodeReferencesVar(d.doBody, targetSym) || nodeReferencesVar(d.doCondition, targetSym);
 		},
 		NodeKind.BlockStmt => anyChildReferences((node.data as BlockStmtData).statements, targetSym),
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
-			nodeReferencesVar(d.tryBody, targetSym)
+			return nodeReferencesVar(d.tryBody, targetSym)
 				|| nodeReferencesVar(d.catchBody, targetSym)
-				|| nodeReferencesVar(d.finallyBody, targetSym)
+				|| nodeReferencesVar(d.finallyBody, targetSym);
 		},
 		NodeKind.SwitchStmt => {
 			const d = node.data as SwitchStmtData;
-			nodeReferencesVar(d.switchDisc, targetSym) || anyChildReferences(d.switchCases, targetSym)
+			return nodeReferencesVar(d.switchDisc, targetSym) || anyChildReferences(d.switchCases, targetSym);
 		},
 		NodeKind.SwitchCase => {
 			const d = node.data as SwitchCaseData;
-			anyChildReferences(d.caseTests, targetSym) || anyChildReferences(d.caseStmts, targetSym)
+			return anyChildReferences(d.caseTests, targetSym) || anyChildReferences(d.caseStmts, targetSym);
 		},
 		NodeKind.ExportDecl => nodeReferencesVar((node.data as ExportDeclData).exportedDecl, targetSym),
 

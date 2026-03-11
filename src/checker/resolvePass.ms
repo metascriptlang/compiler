@@ -275,7 +275,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 				// and all references automatically see the resolved type.
 				return sym.symbolType;
 			}
-			createTypeRef(trimmed);
+			return createTypeRef(trimmed);
 		},
 	};
 }

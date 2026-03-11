@@ -35,16 +35,11 @@ export function setColorEnabled(enabled: boolean): void {
 	state.initialized = true;
 }
 
-// ===== ANSI escape sequences =====
-
-const ESC = "\x1b[";
-const RESET = "\x1b[0m";
-
 // ===== Core wrap function =====
 
 function wrap(code: string, text: string): string {
 	if (!isEnabled()) return text;
-	return ESC + code + "m" + text + RESET;
+	return "\x1b[" + code + "m" + text + "\x1b[0m";
 }
 
 // ===== Style modifiers =====

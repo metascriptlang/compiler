@@ -98,80 +98,67 @@ function patchDest(ctx: BuildCtx, instrIdx: number, targetIdx: number): void {
 function walkExpr(node: Node, ctx: BuildCtx): void {
 	if (node === null) return;
 
-	if (node.kind === NodeKind.Identifier) {
-		const d = node.data as IdentifierData;
-		if (d.name === ctx.vn) {
-			emitUse(ctx, node.location.line, node.location.column);
-		}
-		return;
-	}
-
-	// Don't enter inner functions
-	if (node.kind === NodeKind.FunctionDecl || node.kind === NodeKind.ArrowFunction || node.kind === NodeKind.FunctionExpr) return;
-
-	if (node.kind === NodeKind.BinaryExpr) {
-		const d = node.data as BinaryExprData;
-		walkExpr(d.left, ctx);
-		walkExpr(d.right, ctx);
-		return;
-	}
-	if (node.kind === NodeKind.UnaryExpr) {
-		walkExpr((node.data as UnaryExprData).operand, ctx);
-		return;
-	}
-	if (node.kind === NodeKind.UpdateExpr) {
-		walkExpr((node.data as UpdateExprData).updateArg, ctx);
-		return;
-	}
-	if (node.kind === NodeKind.CallExpr) {
-		const d = node.data as CallExprData;
-		walkExpr(d.callee, ctx);
-		for (const arg of d.arguments) { walkExpr(arg, ctx); }
-		return;
-	}
-	if (node.kind === NodeKind.MemberExpr) {
-		walkExpr((node.data as MemberExprData).object, ctx);
-		return;
-	}
-	if (node.kind === NodeKind.ArrayAccess) {
-		const d = node.data as ArrayAccessData;
-		walkExpr(d.array, ctx);
-		walkExpr(d.index, ctx);
-		return;
-	}
-	if (node.kind === NodeKind.ObjectLiteral) {
-		for (const p of (node.data as ObjectLiteralData).properties) { walkExpr(p, ctx); }
-		return;
-	}
-	if (node.kind === NodeKind.ArrayLiteral) {
-		for (const e of (node.data as ArrayLiteralData).elements) { walkExpr(e, ctx); }
-		return;
-	}
-	if (node.kind === NodeKind.ConditionalExpr) {
-		const d = node.data as ConditionalExprData;
-		walkExpr(d.ternaryCondition, ctx);
-		walkExpr(d.ternaryConsequent, ctx);
-		walkExpr(d.ternaryAlternate, ctx);
-		return;
-	}
-	if (node.kind === NodeKind.SpreadExpr) {
-		walkExpr((node.data as SpreadExprData).spreadArg, ctx);
-		return;
-	}
-	if (node.kind === NodeKind.NewExpr) {
-		const d = node.data as NewExprData;
-		walkExpr(d.newCallee, ctx);
-		for (const a of d.newArguments) { walkExpr(a, ctx); }
-		return;
-	}
-	if (node.kind === NodeKind.TypeAssertion) {
-		walkExpr((node.data as TypeAssertionData).asExpr, ctx);
-		return;
-	}
-	if (node.kind === NodeKind.MoveExpr) {
-		walkExpr((node.data as MoveExprData).moveArg, ctx);
-		return;
-	}
+	match (node.kind) {
+		NodeKind.Identifier => {
+			const d = node.data as IdentifierData;
+			if (d.name === ctx.vn) {
+				emitUse(ctx, node.location.line, node.location.column);
+			}
+		},
+		// Don't enter inner functions
+		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {},
+		NodeKind.BinaryExpr => {
+			const d = node.data as BinaryExprData;
+			walkExpr(d.left, ctx);
+			walkExpr(d.right, ctx);
+		},
+		NodeKind.UnaryExpr => {
+			walkExpr((node.data as UnaryExprData).operand, ctx);
+		},
+		NodeKind.UpdateExpr => {
+			walkExpr((node.data as UpdateExprData).updateArg, ctx);
+		},
+		NodeKind.CallExpr => {
+			const d = node.data as CallExprData;
+			walkExpr(d.callee, ctx);
+			for (const arg of d.arguments) { walkExpr(arg, ctx); }
+		},
+		NodeKind.MemberExpr => {
+			walkExpr((node.data as MemberExprData).object, ctx);
+		},
+		NodeKind.ArrayAccess => {
+			const d = node.data as ArrayAccessData;
+			walkExpr(d.array, ctx);
+			walkExpr(d.index, ctx);
+		},
+		NodeKind.ObjectLiteral => {
+			for (const p of (node.data as ObjectLiteralData).properties) { walkExpr(p, ctx); }
+		},
+		NodeKind.ArrayLiteral => {
+			for (const e of (node.data as ArrayLiteralData).elements) { walkExpr(e, ctx); }
+		},
+		NodeKind.ConditionalExpr => {
+			const d = node.data as ConditionalExprData;
+			walkExpr(d.ternaryCondition, ctx);
+			walkExpr(d.ternaryConsequent, ctx);
+			walkExpr(d.ternaryAlternate, ctx);
+		},
+		NodeKind.SpreadExpr => {
+			walkExpr((node.data as SpreadExprData).spreadArg, ctx);
+		},
+		NodeKind.NewExpr => {
+			const d = node.data as NewExprData;
+			walkExpr(d.newCallee, ctx);
+			for (const a of d.newArguments) { walkExpr(a, ctx); }
+		},
+		NodeKind.TypeAssertion => {
+			walkExpr((node.data as TypeAssertionData).asExpr, ctx);
+		},
+		NodeKind.MoveExpr => {
+			walkExpr((node.data as MoveExprData).moveArg, ctx);
+		},
+		_ => {},
+	};
 }
 
 // ===== Statement Walker =====
@@ -180,236 +167,177 @@ function walkExpr(node: Node, ctx: BuildCtx): void {
 function walkStmt(node: Node, ctx: BuildCtx): void {
 	if (node === null) return;
 
-	// Don't enter inner functions
-	if (node.kind === NodeKind.FunctionDecl || node.kind === NodeKind.ArrowFunction || node.kind === NodeKind.FunctionExpr) return;
-
-	if (node.kind === NodeKind.Program) {
-		const d = node.data as ProgramData;
-		for (const s of d.programStmts) { walkStmt(s, ctx); }
-		return;
-	}
-
-	if (node.kind === NodeKind.BlockStmt) {
-		const d = node.data as BlockStmtData;
-		for (const s of d.statements) { walkStmt(s, ctx); }
-		return;
-	}
-
-	if (node.kind === NodeKind.ExprStmt) {
-		const d = node.data as ExprStmtData;
-		// Check for assignment: x = expr (def on LHS, use on RHS)
-		if (d.expr !== null && d.expr.kind === NodeKind.BinaryExpr) {
-			const bd = d.expr.data as BinaryExprData;
-			if (bd.operator === "=" || bd.operator === "+=" || bd.operator === "-=" || bd.operator === "*=" || bd.operator === "/=") {
-				// RHS first (uses before def)
-				walkExpr(bd.right, ctx);
-				// LHS: if direct assignment to varName, emit def
-				if (bd.left !== null && bd.left.kind === NodeKind.Identifier) {
-					const ld = bd.left.data as IdentifierData;
-					if (ld.name === ctx.vn) {
-						if (bd.operator === "=") {
-							emitDef(ctx, bd.left.location.line, bd.left.location.column);
-						} else {
-							// Compound: read + write
-							emitUse(ctx, bd.left.location.line, bd.left.location.column);
-							emitDef(ctx, bd.left.location.line, bd.left.location.column);
+	match (node.kind) {
+		// Don't enter inner functions
+		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {},
+		NodeKind.Program => {
+			const d = node.data as ProgramData;
+			for (const s of d.programStmts) { walkStmt(s, ctx); }
+		},
+		NodeKind.BlockStmt => {
+			const d = node.data as BlockStmtData;
+			for (const s of d.statements) { walkStmt(s, ctx); }
+		},
+		NodeKind.ExprStmt => {
+			const d = node.data as ExprStmtData;
+			// Check for assignment: x = expr (def on LHS, use on RHS)
+			if (d.expr !== null && d.expr.kind === NodeKind.BinaryExpr) {
+				const bd = d.expr.data as BinaryExprData;
+				if (bd.operator === "=" || bd.operator === "+=" || bd.operator === "-=" || bd.operator === "*=" || bd.operator === "/=") {
+					// RHS first (uses before def)
+					walkExpr(bd.right, ctx);
+					// LHS: if direct assignment to varName, emit def
+					if (bd.left !== null && bd.left.kind === NodeKind.Identifier) {
+						const ld = bd.left.data as IdentifierData;
+						if (ld.name === ctx.vn) {
+							if (bd.operator === "=") {
+								emitDef(ctx, bd.left.location.line, bd.left.location.column);
+							} else {
+								// Compound: read + write
+								emitUse(ctx, bd.left.location.line, bd.left.location.column);
+								emitDef(ctx, bd.left.location.line, bd.left.location.column);
+							}
+							return;
 						}
-						return;
 					}
+					// LHS is not our var — walk both sides for uses
+					walkExpr(bd.left, ctx);
+					return;
 				}
-				// LHS is not our var — walk both sides for uses
-				walkExpr(bd.left, ctx);
-				return;
 			}
-		}
-		walkExpr(d.expr, ctx);
-		return;
-	}
-
-	if (node.kind === NodeKind.VariableDecl) {
-		const d = node.data as VariableDeclData;
-		// Initializer first (RHS uses before def)
-		walkExpr(d.initializer, ctx);
-		if (d.declName === ctx.vn) {
-			emitDef(ctx, node.location.line, node.location.column);
-		}
-		return;
-	}
-
-	if (node.kind === NodeKind.ReturnStmt) {
-		walkExpr((node.data as ReturnStmtData).argument, ctx);
-		// goto end of CFG (patched to jump past all instructions)
-		const gotoIdx = emitGoto(ctx);
-		patchDest(ctx, gotoIdx, 99999);  // sentinel: end of CFG
-		return;
-	}
-
-	if (node.kind === NodeKind.ThrowStmt) {
-		walkExpr((node.data as ThrowStmtData).throwArg, ctx);
-		const gotoIdx = emitGoto(ctx);
-		patchDest(ctx, gotoIdx, 99999);
-		return;
-	}
-
-	if (node.kind === NodeKind.IfStmt) {
-		const d = node.data as IfStmtData;
-		// Condition
-		walkExpr(d.condition, ctx);
-		// Fork: if false, jump to else
-		const forkIdx = emitFork(ctx);
-		// Then branch
-		walkStmt(d.consequent, ctx);
-		if (d.alternate !== null) {
-			// Goto: skip else branch
+			walkExpr(d.expr, ctx);
+		},
+		NodeKind.VariableDecl => {
+			const d = node.data as VariableDeclData;
+			// Initializer first (RHS uses before def)
+			walkExpr(d.initializer, ctx);
+			if (d.declName === ctx.vn) {
+				emitDef(ctx, node.location.line, node.location.column);
+			}
+		},
+		NodeKind.ReturnStmt => {
+			walkExpr((node.data as ReturnStmtData).argument, ctx);
+			// goto end of CFG (patched to jump past all instructions)
 			const gotoIdx = emitGoto(ctx);
-			// Patch fork to else start
+			patchDest(ctx, gotoIdx, 99999);  // sentinel: end of CFG
+		},
+		NodeKind.ThrowStmt => {
+			walkExpr((node.data as ThrowStmtData).throwArg, ctx);
+			const gotoIdx = emitGoto(ctx);
+			patchDest(ctx, gotoIdx, 99999);
+		},
+		NodeKind.IfStmt => {
+			const d = node.data as IfStmtData;
+			walkExpr(d.condition, ctx);
+			const forkIdx = emitFork(ctx);
+			walkStmt(d.consequent, ctx);
+			if (d.alternate !== null) {
+				const gotoIdx = emitGoto(ctx);
+				patchDest(ctx, forkIdx, ctx.cfg.length);
+				walkStmt(d.alternate, ctx);
+				patchDest(ctx, gotoIdx, ctx.cfg.length);
+			} else {
+				patchDest(ctx, forkIdx, ctx.cfg.length);
+			}
+		},
+		NodeKind.WhileStmt => {
+			const d = node.data as WhileStmtData;
+			const loopInfo: LoopInfo = { conditionIdx: ctx.cfg.length, breakPatches: [] };
+			ctx.loops.push(loopInfo);
+			walkExpr(d.whileCondition, ctx);
+			const forkIdx = emitFork(ctx);
+			walkStmt(d.whileBody, ctx);
+			emitLoop(ctx, loopInfo.conditionIdx);
 			patchDest(ctx, forkIdx, ctx.cfg.length);
-			// Else branch
-			walkStmt(d.alternate, ctx);
-			// Patch goto to after else
+			for (const bIdx of loopInfo.breakPatches) {
+				patchDest(ctx, bIdx, ctx.cfg.length);
+			}
+			ctx.loops.pop();
+		},
+		NodeKind.DoWhileStmt => {
+			const d = node.data as DoWhileStmtData;
+			const loopStart = ctx.cfg.length;
+			const loopInfo: LoopInfo = { conditionIdx: loopStart, breakPatches: [] };
+			ctx.loops.push(loopInfo);
+			walkStmt(d.doBody, ctx);
+			walkExpr(d.doCondition, ctx);
+			const forkIdx = emitFork(ctx);
+			patchDest(ctx, forkIdx, loopStart);
+			for (const bIdx of loopInfo.breakPatches) {
+				patchDest(ctx, bIdx, ctx.cfg.length);
+			}
+			ctx.loops.pop();
+		},
+		NodeKind.BreakStmt => {
+			if (ctx.loops.length > 0) {
+				const gotoIdx = emitGoto(ctx);
+				const loop = ctx.loops[ctx.loops.length - 1];
+				loop.breakPatches.push(gotoIdx);
+			}
+		},
+		NodeKind.ContinueStmt => {
+			if (ctx.loops.length > 0) {
+				const loop = ctx.loops[ctx.loops.length - 1];
+				emitLoop(ctx, loop.conditionIdx);
+			}
+		},
+		NodeKind.TryCatchStmt => {
+			const d = node.data as TryCatchStmtData;
+			walkStmt(d.tryBody, ctx);
+			const forkIdx = emitFork(ctx);
+			const gotoIdx = emitGoto(ctx);
+			patchDest(ctx, forkIdx, ctx.cfg.length);
+			walkStmt(d.catchBody, ctx);
 			patchDest(ctx, gotoIdx, ctx.cfg.length);
-		} else {
-			// No else: fork jumps to after then
+			walkStmt(d.finallyBody, ctx);
+		},
+		NodeKind.SwitchStmt => {
+			const d = node.data as SwitchStmtData;
+			walkExpr(d.switchDisc, ctx);
+			for (const c of d.switchCases) { walkStmt(c, ctx); }
+		},
+		NodeKind.SwitchCase => {
+			const d = node.data as SwitchCaseData;
+			for (const t of d.caseTests) { walkExpr(t, ctx); }
+			for (const s of d.caseStmts) { walkStmt(s, ctx); }
+		},
+		NodeKind.ExportDecl => {
+			walkStmt((node.data as ExportDeclData).exportedDecl, ctx);
+		},
+		NodeKind.ForStmt => {
+			const d = node.data as ForStmtData;
+			walkStmt(d.forInit, ctx);
+			const condIdx = ctx.cfg.length;
+			const loopInfo: LoopInfo = { conditionIdx: condIdx, breakPatches: [] };
+			ctx.loops.push(loopInfo);
+			walkExpr(d.forCondition, ctx);
+			const forkIdx = emitFork(ctx);
+			walkStmt(d.forBody, ctx);
+			walkStmt(d.forUpdate, ctx);
+			emitLoop(ctx, condIdx);
 			patchDest(ctx, forkIdx, ctx.cfg.length);
-		}
-		return;
-	}
-
-	if (node.kind === NodeKind.WhileStmt) {
-		const d = node.data as WhileStmtData;
-		// Loop info for break/continue
-		const loopInfo: LoopInfo = { conditionIdx: ctx.cfg.length, breakPatches: [] };
-		ctx.loops.push(loopInfo);
-		// Condition
-		walkExpr(d.whileCondition, ctx);
-		// Fork: if false, exit loop
-		const forkIdx = emitFork(ctx);
-		// Body
-		walkStmt(d.whileBody, ctx);
-		// Loop back to condition
-		emitLoop(ctx, loopInfo.conditionIdx);
-		// Patch fork to after loop
-		patchDest(ctx, forkIdx, ctx.cfg.length);
-		// Patch all break gotos
-		for (const bIdx of loopInfo.breakPatches) {
-			patchDest(ctx, bIdx, ctx.cfg.length);
-		}
-		ctx.loops.pop();
-		return;
-	}
-
-	if (node.kind === NodeKind.DoWhileStmt) {
-		const d = node.data as DoWhileStmtData;
-		const loopStart = ctx.cfg.length;
-		const loopInfo: LoopInfo = { conditionIdx: loopStart, breakPatches: [] };
-		ctx.loops.push(loopInfo);
-		// Body
-		walkStmt(d.doBody, ctx);
-		// Condition
-		walkExpr(d.doCondition, ctx);
-		// Fork: if true, loop back (standard pattern: fork can go either way)
-		const forkIdx = emitFork(ctx);
-		patchDest(ctx, forkIdx, loopStart);
-		// Patch break gotos
-		for (const bIdx of loopInfo.breakPatches) {
-			patchDest(ctx, bIdx, ctx.cfg.length);
-		}
-		ctx.loops.pop();
-		return;
-	}
-
-	if (node.kind === NodeKind.BreakStmt) {
-		if (ctx.loops.length > 0) {
-			const gotoIdx = emitGoto(ctx);
-			const loop = ctx.loops[ctx.loops.length - 1];
-			loop.breakPatches.push(gotoIdx);
-		}
-		return;
-	}
-
-	if (node.kind === NodeKind.ContinueStmt) {
-		if (ctx.loops.length > 0) {
-			const loop = ctx.loops[ctx.loops.length - 1];
-			emitLoop(ctx, loop.conditionIdx);
-		}
-		return;
-	}
-
-	if (node.kind === NodeKind.TryCatchStmt) {
-		const d = node.data as TryCatchStmtData;
-		// Try body
-		walkStmt(d.tryBody, ctx);
-		// Fork: try might throw → jump to catch
-		const forkIdx = emitFork(ctx);
-		// Goto past catch (try succeeded)
-		const gotoIdx = emitGoto(ctx);
-		// Catch
-		patchDest(ctx, forkIdx, ctx.cfg.length);
-		walkStmt(d.catchBody, ctx);
-		// Patch goto to after catch
-		patchDest(ctx, gotoIdx, ctx.cfg.length);
-		// Finally (always executes — walk on both paths)
-		walkStmt(d.finallyBody, ctx);
-		return;
-	}
-
-	if (node.kind === NodeKind.SwitchStmt) {
-		const d = node.data as SwitchStmtData;
-		walkExpr(d.switchDisc, ctx);
-		// Each case as fork-chain (simplified)
-		for (const c of d.switchCases) {
-			walkStmt(c, ctx);
-		}
-		return;
-	}
-
-	if (node.kind === NodeKind.SwitchCase) {
-		const d = node.data as SwitchCaseData;
-		for (const t of d.caseTests) { walkExpr(t, ctx); }
-		for (const s of d.caseStmts) { walkStmt(s, ctx); }
-		return;
-	}
-
-	if (node.kind === NodeKind.ExportDecl) {
-		walkStmt((node.data as ExportDeclData).exportedDecl, ctx);
-		return;
-	}
-
-	if (node.kind === NodeKind.ForStmt) {
-		const d = node.data as ForStmtData;
-		walkStmt(d.forInit, ctx);
-		const condIdx = ctx.cfg.length;
-		const loopInfo: LoopInfo = { conditionIdx: condIdx, breakPatches: [] };
-		ctx.loops.push(loopInfo);
-		walkExpr(d.forCondition, ctx);
-		const forkIdx = emitFork(ctx);
-		walkStmt(d.forBody, ctx);
-		walkStmt(d.forUpdate, ctx);
-		emitLoop(ctx, condIdx);
-		patchDest(ctx, forkIdx, ctx.cfg.length);
-		for (const bIdx of loopInfo.breakPatches) {
-			patchDest(ctx, bIdx, ctx.cfg.length);
-		}
-		ctx.loops.pop();
-		return;
-	}
-
-	if (node.kind === NodeKind.ForOfStmt) {
-		const d = node.data as ForOfStmtData;
-		walkExpr(d.forOfIterable, ctx);
-		const condIdx = ctx.cfg.length;
-		const loopInfo: LoopInfo = { conditionIdx: condIdx, breakPatches: [] };
-		ctx.loops.push(loopInfo);
-		const forkIdx = emitFork(ctx);
-		walkStmt(d.forOfBody, ctx);
-		emitLoop(ctx, condIdx);
-		patchDest(ctx, forkIdx, ctx.cfg.length);
-		for (const bIdx of loopInfo.breakPatches) {
-			patchDest(ctx, bIdx, ctx.cfg.length);
-		}
-		ctx.loops.pop();
-		return;
-	}
+			for (const bIdx of loopInfo.breakPatches) {
+				patchDest(ctx, bIdx, ctx.cfg.length);
+			}
+			ctx.loops.pop();
+		},
+		NodeKind.ForOfStmt => {
+			const d = node.data as ForOfStmtData;
+			walkExpr(d.forOfIterable, ctx);
+			const condIdx = ctx.cfg.length;
+			const loopInfo: LoopInfo = { conditionIdx: condIdx, breakPatches: [] };
+			ctx.loops.push(loopInfo);
+			const forkIdx = emitFork(ctx);
+			walkStmt(d.forOfBody, ctx);
+			emitLoop(ctx, condIdx);
+			patchDest(ctx, forkIdx, ctx.cfg.length);
+			for (const bIdx of loopInfo.breakPatches) {
+				patchDest(ctx, bIdx, ctx.cfg.length);
+			}
+			ctx.loops.pop();
+		},
+		_ => {},
+	};
 }
 
 // ===== Public API =====
@@ -575,6 +503,21 @@ function countKind(code: string, vn: string, kind: CfgInstrKind): number {
 	return count;
 }
 
+function findFirstUse(cfg: Cfg): CfgInstr {
+	for (const instr of cfg.instrs) {
+		if (instr.kind === CfgInstrKind.CfgUse) return instr;
+	}
+	return null as unknown as CfgInstr;
+}
+
+function findLastUse(cfg: Cfg): CfgInstr {
+	let last: CfgInstr = null as unknown as CfgInstr;
+	for (const instr of cfg.instrs) {
+		if (instr.kind === CfgInstrKind.CfgUse) last = instr;
+	}
+	return last;
+}
+
 // ===== Tests =====
 test "simple use" {
 	const vn = "a";
@@ -625,37 +568,18 @@ test "last stmt is last read" {
 	const ts = "const a = 1; const b = a;";
 	const body = getBody(ts);
 	if (body === null) { assert false; return; }
-	const vn = "a";
-	const cfg = buildCfg(body, vn);
-	// Find the use of a
-	let useLine = 0;
-	let useCol = 0;
-	for (const instr of cfg.instrs) {
-		if (instr.kind === CfgInstrKind.CfgUse) {
-			useLine = instr.line;
-			useCol = instr.col;
-		}
-	}
-	assert isLastReadCfg(cfg, useLine, useCol);
+	const cfg = buildCfg(body, "a");
+	const use = findLastUse(cfg);
+	assert isLastReadCfg(cfg, use.line, use.col);
 }
 
 test "not last when used after" {
 	const ts = "const a = 1; const b = a; const c = a;";
 	const body = getBody(ts);
 	if (body === null) { assert false; return; }
-	const vn = "a";
-	const cfg = buildCfg(body, vn);
-	// Find first use of a
-	let useLine = 0;
-	let useCol = 0;
-	for (const instr of cfg.instrs) {
-		if (instr.kind === CfgInstrKind.CfgUse) {
-			useLine = instr.line;
-			useCol = instr.col;
-			break;
-		}
-	}
-	assert !isLastReadCfg(cfg, useLine, useCol);
+	const cfg = buildCfg(body, "a");
+	const use = findFirstUse(cfg);
+	assert !isLastReadCfg(cfg, use.line, use.col);
 }
 
 test "branch merge: both branches consume" {
@@ -663,43 +587,19 @@ test "branch merge: both branches consume" {
 	const ts = "const x = getValue(); if (c) { use(x); } else { other(x); }";
 	const body = getBody(ts);
 	if (body === null) { assert false; return; }
-	const vn = "x";
-	const cfg = buildCfg(body, vn);
-	// Find uses of x (getValue() init is a def, not use)
-	let firstUseLine = 0;
-	let firstUseCol = 0;
-	let useCount = 0;
-	for (const instr of cfg.instrs) {
-		if (instr.kind === CfgInstrKind.CfgUse) {
-			if (useCount === 0) {
-				firstUseLine = instr.line;
-				firstUseCol = instr.col;
-			}
-			useCount = useCount + 1;
-		}
-	}
-	// Both branches use x, but each branch's use is last on its path
-	assert useCount === 2;
-	assert isLastReadCfg(cfg, firstUseLine, firstUseCol);
+	const cfg = buildCfg(body, "x");
+	assert countKind(ts, "x", CfgInstrKind.CfgUse) === 2;
+	const use = findFirstUse(cfg);
+	assert isLastReadCfg(cfg, use.line, use.col);
 }
 
 test "branch merge: used after if is not last read" {
 	const ts = "const x = getValue(); if (c) { use(x); } else { other(x); } final(x);";
 	const body = getBody(ts);
 	if (body === null) { assert false; return; }
-	const vn = "x";
-	const cfg = buildCfg(body, vn);
-	// First use should not be last read (final(x) follows)
-	let firstUseLine = 0;
-	let firstUseCol = 0;
-	for (const instr of cfg.instrs) {
-		if (instr.kind === CfgInstrKind.CfgUse) {
-			firstUseLine = instr.line;
-			firstUseCol = instr.col;
-			break;
-		}
-	}
-	assert !isLastReadCfg(cfg, firstUseLine, firstUseCol);
+	const cfg = buildCfg(body, "x");
+	const use = findFirstUse(cfg);
+	assert !isLastReadCfg(cfg, use.line, use.col);
 }
 
 test "def in one branch makes other last-read" {
@@ -707,19 +607,10 @@ test "def in one branch makes other last-read" {
 	const ts = "let x = 1; if (c) { use(x); } else { x = 2; } foo(x);";
 	const body = getBody(ts);
 	if (body === null) { assert false; return; }
-	const vn = "x";
-	const cfg = buildCfg(body, vn);
+	const cfg = buildCfg(body, "x");
 	// The use in use(x) in the if-branch: foo(x) follows on that path → not last read
-	let firstUseLine = 0;
-	let firstUseCol = 0;
-	for (const instr of cfg.instrs) {
-		if (instr.kind === CfgInstrKind.CfgUse) {
-			firstUseLine = instr.line;
-			firstUseCol = instr.col;
-			break;
-		}
-	}
-	assert !isLastReadCfg(cfg, firstUseLine, firstUseCol);
+	const use = findFirstUse(cfg);
+	assert !isLastReadCfg(cfg, use.line, use.col);
 }
 
 test "return terminates path" {
@@ -727,23 +618,10 @@ test "return terminates path" {
 	const ts = "const x = 1; if (c) { return x; } foo(x);";
 	const body = getBody(ts);
 	if (body === null) { assert false; return; }
-	const vn = "x";
-	const cfg = buildCfg(body, vn);
-	// Find the use in "return x"
-	let returnUseLine = 0;
-	let returnUseCol = 0;
-	let useCount = 0;
-	for (const instr of cfg.instrs) {
-		if (instr.kind === CfgInstrKind.CfgUse) {
-			if (useCount === 0) {
-				returnUseLine = instr.line;
-				returnUseCol = instr.col;
-			}
-			useCount = useCount + 1;
-		}
-	}
+	const cfg = buildCfg(body, "x");
 	// The first use (return x) is last read on its path because return terminates
-	assert isLastReadCfg(cfg, returnUseLine, returnUseCol);
+	const use = findFirstUse(cfg);
+	assert isLastReadCfg(cfg, use.line, use.col);
 }
 
 test "loop use is not last read" {
@@ -751,16 +629,7 @@ test "loop use is not last read" {
 	const ts = "const x = 1; while (c) { use(x); }";
 	const body = getBody(ts);
 	if (body === null) { assert false; return; }
-	const vn = "x";
-	const cfg = buildCfg(body, vn);
-	let useLine = 0;
-	let useCol = 0;
-	for (const instr of cfg.instrs) {
-		if (instr.kind === CfgInstrKind.CfgUse) {
-			useLine = instr.line;
-			useCol = instr.col;
-			break;
-		}
-	}
-	assert !isLastReadCfg(cfg, useLine, useCol);
+	const cfg = buildCfg(body, "x");
+	const use = findFirstUse(cfg);
+	assert !isLastReadCfg(cfg, use.line, use.col);
 }

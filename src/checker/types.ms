@@ -589,7 +589,7 @@ function typeKey(t: Type): string {
 		TypeKind.Float32 => "float32",
 		TypeKind.Float64 => "float64",
 		TypeKind.Array => {
-			"Array(" + (t.typeReturn !== null ? typeKey(t.typeReturn) : "any") + ")";
+			return "Array(" + (t.typeReturn !== null ? typeKey(t.typeReturn) : "any") + ")";
 		},
 		TypeKind.Tuple => {
 			let k = "tuple:";
@@ -599,7 +599,7 @@ function typeKey(t: Type): string {
 				k = k + typeKey(t.typeChildren[i]);
 				i += 1;
 			}
-			k;
+			return k;
 		},
 		_ => t.kind.toString(),
 	};
@@ -707,21 +707,21 @@ function getTypeSizeInner(t: Type): number {
 		TypeKind.Function => targetPtrSize + targetPtrSize, // msClosure: fn ptr + env ptr
 		TypeKind.Struct => {
 			// Sum of field sizes
-			if (t.typeChildren === null) { targetPtrSize; } else {
+			if (t.typeChildren === null) { return targetPtrSize; } else {
 				let size = 0;
 				for (const field of t.typeChildren) {
 					size = size + getTypeSize(field);
 				}
-				size;
+				return size;
 			}
 		},
 		TypeKind.Tuple => {
-			if (t.typeChildren === null) { 0; } else {
+			if (t.typeChildren === null) { return 0; } else {
 				let size = 0;
 				for (const elem of t.typeChildren) {
 					size = size + getTypeSize(elem);
 				}
-				size;
+				return size;
 			}
 		},
 		TypeKind.Result => {
@@ -729,7 +729,7 @@ function getTypeSizeInner(t: Type): number {
 			const okSize = getTypeSize(t.typeReturn);
 			const errSize = getTypeSize(t.typeExtra);
 			const payloadSize = okSize > errSize ? okSize : errSize;
-			1 + payloadSize;
+			return 1 + payloadSize;
 		},
 		TypeKind.Union => {
 			// tag + max(member sizes)
@@ -740,7 +740,7 @@ function getTypeSizeInner(t: Type): number {
 					if (ms > maxSize) maxSize = ms;
 				}
 			}
-			4 + maxSize;
+			return 4 + maxSize;
 		},
 		TypeKind.Span => targetPtrSize + targetPtrSize, // ptr + length
 		_ => targetPtrSize, // conservative fallback
@@ -802,7 +802,7 @@ export function substituteType(t: Type, paramName: string, concrete: Type): Type
 			for (const param of t.typeChildren) {
 				newParams.push(substituteType(param, paramName, concrete));
 			}
-			createFunction(newParams, t.typeNames, substituteType(t.typeReturn, paramName, concrete))
+			return createFunction(newParams, t.typeNames, substituteType(t.typeReturn, paramName, concrete));
 		},
 		TypeKind.Result => createResult(substituteType(t.typeReturn, paramName, concrete), substituteType(t.typeExtra, paramName, concrete)),
 		TypeKind.Union => {
@@ -810,7 +810,7 @@ export function substituteType(t: Type, paramName: string, concrete: Type): Type
 			for (const member of t.typeChildren) {
 				newMembers.push(substituteType(member, paramName, concrete));
 			}
-			createUnion(newMembers)
+			return createUnion(newMembers);
 		},
 		TypeKind.Map => createMap(
 			substituteType(t.typeReturn, paramName, concrete),
@@ -825,7 +825,7 @@ export function substituteType(t: Type, paramName: string, concrete: Type): Type
 			for (const child of t.typeChildren) {
 				newChildren.push(substituteType(child, paramName, concrete));
 			}
-			createTuple(newChildren)
+			return createTuple(newChildren);
 		},
 		TypeKind.Struct => substituteStruct(t, paramName, concrete),
 		_ => t,

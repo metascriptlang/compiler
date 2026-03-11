@@ -9,7 +9,7 @@
 
 import {
 	Node, NodeKind,
-	ForStmtData,
+	ForStmtData, BlockStmtData, IfStmtData, TryCatchStmtData,
 } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -42,12 +42,14 @@ function lowerForNode(node: Node): Node {
 		cond = makeBool(true, loc);
 	}
 
-	// 3. Extract body statements
+	// 3. Extract body statements and rewrite continue to include update
 	const bodyStmts: Node[] = extractBodyStmts(d.forBody);
 
-	// 4. Append update as last statement in while body
+	// 4. Append update as last statement, and insert before each continue
 	if (d.forUpdate !== null) {
-		bodyStmts.push(makeExprStmt(d.forUpdate, loc));
+		const updateStmt = makeExprStmt(d.forUpdate, loc);
+		rewriteContinues(bodyStmts, updateStmt);
+		bodyStmts.push(updateStmt);
 	}
 
 	// 5. Build while loop
@@ -56,6 +58,52 @@ function lowerForNode(node: Node): Node {
 	outerStmts.push(whileNode);
 
 	return makeBlock(outerStmts, loc);
+}
+
+// Rewrite continue → { update; continue; } at current loop level.
+// Does NOT descend into nested loops (their continues target inner loops).
+function rewriteContinues(stmts: Node[], updateStmt: Node): void {
+	let i = 0;
+	while (i < stmts.length) {
+		const s = stmts[i];
+		if (s.kind === NodeKind.ContinueStmt) {
+			// Replace continue with block { update; continue; }
+			stmts[i] = makeBlock([cloneStmt(updateStmt), s], s.location);
+		} else if (s.kind === NodeKind.BlockStmt) {
+			const bd = s.data as BlockStmtData;
+			rewriteContinues(bd.statements, updateStmt);
+		} else if (s.kind === NodeKind.IfStmt) {
+			const ifd = s.data as IfStmtData;
+			if (ifd.consequent !== null) rewriteContinuesInNode(ifd.consequent, updateStmt);
+			if (ifd.alternate !== null) rewriteContinuesInNode(ifd.alternate, updateStmt);
+		} else if (s.kind === NodeKind.TryCatchStmt) {
+			const td = s.data as TryCatchStmtData;
+			if (td.tryBody !== null) rewriteContinuesInNode(td.tryBody, updateStmt);
+			if (td.catchBody !== null) rewriteContinuesInNode(td.catchBody, updateStmt);
+			if (td.finallyBody !== null) rewriteContinuesInNode(td.finallyBody, updateStmt);
+		}
+		// Skip WhileStmt, ForStmt, ForOfStmt — nested loops own their continues
+		i += 1;
+	}
+}
+
+function rewriteContinuesInNode(node: Node, updateStmt: Node): void {
+	if (node.kind === NodeKind.BlockStmt) {
+		const bd = node.data as BlockStmtData;
+		rewriteContinues(bd.statements, updateStmt);
+	}
+}
+
+// Shallow clone of statement node (for duplicating updateStmt)
+function cloneStmt(node: Node): Node {
+	return {
+		kind: node.kind,
+		data: node.data,
+		location: node.location,
+		nodeType: node.nodeType,
+		flags: node.flags,
+		resolvedSym: node.resolvedSym,
+	};
 }
 
 // ===== Tests =====

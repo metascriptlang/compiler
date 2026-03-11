@@ -67,23 +67,23 @@ function isParamConsumed(paramName: string, node: Node, ctx: CheckerContext): bo
 	return match (node.kind) {
 		NodeKind.Identifier => {
 			// Bare identifier access is NOT a consumption (it's just a read)
-			false;
+			return false;
 		},
 		NodeKind.ReturnStmt => {
 			const d = node.data as ReturnStmtData;
-			isExpressionParam(d.argument, paramName);
+			return isExpressionParam(d.argument, paramName);
 		},
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
 			if (d.operator === "=") {
 				// Assignment RHS: if param is assigned to a field or global, it's consumed.
 				if (isExpressionParam(d.right, paramName)) {
-					isSinkLValue(d.left);
+					return isSinkLValue(d.left);
 				} else {
-					isParamConsumed(paramName, d.left, ctx) || isParamConsumed(paramName, d.right, ctx);
+					return isParamConsumed(paramName, d.left, ctx) || isParamConsumed(paramName, d.right, ctx);
 				}
 			} else {
-				isParamConsumed(paramName, d.left, ctx) || isParamConsumed(paramName, d.right, ctx);
+				return isParamConsumed(paramName, d.left, ctx) || isParamConsumed(paramName, d.right, ctx);
 			}
 		},
 		NodeKind.CallExpr => {
@@ -99,29 +99,29 @@ function isParamConsumed(paramName: string, node: Node, ctx: CheckerContext): bo
 				if (isParamConsumed(paramName, d.arguments[i], ctx)) return true;
 				i += 1;
 			}
-			false;
+			return false;
 		},
 		NodeKind.BlockStmt => {
 			const d = node.data as BlockStmtData;
 			for (const s of d.statements) {
 				if (isParamConsumed(paramName, s, ctx)) return true;
 			}
-			false;
+			return false;
 		},
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
-			isParamConsumed(paramName, d.condition, ctx) ||
+			return isParamConsumed(paramName, d.condition, ctx) ||
 			isParamConsumed(paramName, d.consequent, ctx) ||
 			isParamConsumed(paramName, d.alternate, ctx);
 		},
 		NodeKind.WhileStmt => {
 			const d = node.data as WhileStmtData;
-			isParamConsumed(paramName, d.whileCondition, ctx) ||
+			return isParamConsumed(paramName, d.whileCondition, ctx) ||
 			isParamConsumed(paramName, d.whileBody, ctx);
 		},
 		NodeKind.ExprStmt => {
 			const d = node.data as ExprStmtData;
-			isParamConsumed(paramName, d.expr, ctx);
+			return isParamConsumed(paramName, d.expr, ctx);
 		},
 		_ => false,
 	};

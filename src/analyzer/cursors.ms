@@ -73,7 +73,7 @@ function varEscapesInExpr(node: Node, varName: string): boolean {
 			if (varEscapesInExpr(d.callee, varName)) {
 				escapes = true;
 			}
-			escapes
+			return escapes;
 		},
 		NodeKind.NewExpr => {
 			const d = node.data as NewExprData;
@@ -88,7 +88,7 @@ function varEscapesInExpr(node: Node, varName: string): boolean {
 					escapes = true;
 				}
 			}
-			escapes
+			return escapes;
 		},
 		NodeKind.ObjectLiteral => {
 			const d = node.data as ObjectLiteralData;
@@ -98,7 +98,7 @@ function varEscapesInExpr(node: Node, varName: string): boolean {
 				}
 				if (varEscapesInExpr(prop, varName)) return true;
 			}
-			false
+			return false;
 		},
 		NodeKind.ArrayLiteral => {
 			const d = node.data as ArrayLiteralData;
@@ -108,22 +108,22 @@ function varEscapesInExpr(node: Node, varName: string): boolean {
 				}
 				if (varEscapesInExpr(elem, varName)) return true;
 			}
-			false
+			return false;
 		},
 		NodeKind.SpreadExpr => {
 			const d = node.data as SpreadExprData;
 			if (d.spreadArg.kind === NodeKind.Identifier) {
-				(d.spreadArg.data as IdentifierData).name === varName
+				return (d.spreadArg.data as IdentifierData).name === varName;
 			} else {
-				varEscapesInExpr(d.spreadArg, varName)
+				return varEscapesInExpr(d.spreadArg, varName);
 			}
 		},
 		NodeKind.MoveExpr => {
 			const d = node.data as MoveExprData;
 			if (d.moveArg.kind === NodeKind.Identifier) {
-				(d.moveArg.data as IdentifierData).name === varName
+				return (d.moveArg.data as IdentifierData).name === varName;
 			} else {
-				varEscapesInExpr(d.moveArg, varName)
+				return varEscapesInExpr(d.moveArg, varName);
 			}
 		},
 		NodeKind.BinaryExpr => {
@@ -135,18 +135,18 @@ function varEscapesInExpr(node: Node, varName: string): boolean {
 				}
 				return varEscapesInExpr(d.right, varName);
 			}
-			varEscapesInExpr(d.left, varName) || varEscapesInExpr(d.right, varName)
+			return varEscapesInExpr(d.left, varName) || varEscapesInExpr(d.right, varName);
 		},
 		NodeKind.ConditionalExpr => {
 			const d = node.data as ConditionalExprData;
-			varEscapesInExpr(d.ternaryCondition, varName)
+			return varEscapesInExpr(d.ternaryCondition, varName)
 				|| varEscapesInExpr(d.ternaryConsequent, varName)
-				|| varEscapesInExpr(d.ternaryAlternate, varName)
+				|| varEscapesInExpr(d.ternaryAlternate, varName);
 		},
 		NodeKind.MemberExpr => varEscapesInExpr((node.data as MemberExprData).object, varName),
 		NodeKind.ArrayAccess => {
 			const d = node.data as ArrayAccessData;
-			varEscapesInExpr(d.array, varName) || varEscapesInExpr(d.index, varName)
+			return varEscapesInExpr(d.array, varName) || varEscapesInExpr(d.index, varName);
 		},
 		// Don't look inside inner functions (they capture, but that's different scope)
 		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => false,
@@ -160,60 +160,60 @@ function varEscapesInStmt(node: Node, varName: string): boolean {
 	return match (node.kind) {
 		NodeKind.ReturnStmt => {
 			const d = node.data as ReturnStmtData;
-			if (d.argument === null) false
+			if (d.argument === null) return false;
 			else if (d.argument.kind === NodeKind.Identifier) {
-				(d.argument.data as IdentifierData).name === varName
+				return (d.argument.data as IdentifierData).name === varName;
 			} else {
-				varEscapesInExpr(d.argument, varName)
+				return varEscapesInExpr(d.argument, varName);
 			}
 		},
 		NodeKind.ThrowStmt => {
 			const d = node.data as ThrowStmtData;
-			if (d.throwArg === null) false
+			if (d.throwArg === null) return false;
 			else if (d.throwArg.kind === NodeKind.Identifier) {
-				(d.throwArg.data as IdentifierData).name === varName
+				return (d.throwArg.data as IdentifierData).name === varName;
 			} else {
-				varEscapesInExpr(d.throwArg, varName)
+				return varEscapesInExpr(d.throwArg, varName);
 			}
 		},
 		NodeKind.ExprStmt => varEscapesInExpr((node.data as ExprStmtData).expr, varName),
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
-			if (d.initializer === null) false
+			if (d.initializer === null) return false;
 			else {
 				// Assigning cursor to another variable: escape
 				if (d.initializer.kind === NodeKind.Identifier) {
-					(d.initializer.data as IdentifierData).name === varName
+					return (d.initializer.data as IdentifierData).name === varName;
 				} else {
-					varEscapesInExpr(d.initializer, varName)
+					return varEscapesInExpr(d.initializer, varName);
 				}
 			}
 		},
 		NodeKind.BlockStmt => varEscapesInStmts((node.data as BlockStmtData).statements, varName),
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
-			varEscapesInExpr(d.condition, varName)
+			return varEscapesInExpr(d.condition, varName)
 				|| varEscapesInStmt(d.consequent, varName)
-				|| varEscapesInStmt(d.alternate, varName)
+				|| varEscapesInStmt(d.alternate, varName);
 		},
 		NodeKind.WhileStmt => {
 			const d = node.data as WhileStmtData;
-			varEscapesInExpr(d.whileCondition, varName) || varEscapesInStmt(d.whileBody, varName)
+			return varEscapesInExpr(d.whileCondition, varName) || varEscapesInStmt(d.whileBody, varName);
 		},
 		NodeKind.ForStmt => {
 			const d = node.data as ForStmtData;
-			varEscapesInStmt(d.forInit, varName) || varEscapesInExpr(d.forCondition, varName)
-				|| varEscapesInStmt(d.forUpdate, varName) || varEscapesInStmt(d.forBody, varName)
+			return varEscapesInStmt(d.forInit, varName) || varEscapesInExpr(d.forCondition, varName)
+				|| varEscapesInStmt(d.forUpdate, varName) || varEscapesInStmt(d.forBody, varName);
 		},
 		NodeKind.DoWhileStmt => {
 			const d = node.data as DoWhileStmtData;
-			varEscapesInStmt(d.doBody, varName) || varEscapesInExpr(d.doCondition, varName)
+			return varEscapesInStmt(d.doBody, varName) || varEscapesInExpr(d.doCondition, varName);
 		},
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
-			varEscapesInStmt(d.tryBody, varName)
+			return varEscapesInStmt(d.tryBody, varName)
 				|| varEscapesInStmt(d.catchBody, varName)
-				|| varEscapesInStmt(d.finallyBody, varName)
+				|| varEscapesInStmt(d.finallyBody, varName);
 		},
 		NodeKind.SwitchStmt => {
 			const d = node.data as SwitchStmtData;
@@ -224,14 +224,14 @@ function varEscapesInStmt(node: Node, varName: string): boolean {
 					if (varEscapesInStmts(cd.caseStmts, varName)) return true;
 				}
 			}
-			false
+			return false;
 		},
 		// Function declarations: don't look inside (different scope)
 		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => false,
 		NodeKind.ExportDecl => {
 			const d = node.data as ExportDeclData;
-			if (d.exportedDecl !== null) varEscapesInStmt(d.exportedDecl, varName)
-			else false
+			if (d.exportedDecl !== null) return varEscapesInStmt(d.exportedDecl, varName);
+			else return false;
 		},
 		_ => false,
 	};
@@ -250,10 +250,10 @@ function varEscapesInStmts(stmts: Node[], varName: string): boolean {
 
 function isBorrowInit(init: Node): boolean {
 	if (init === null) return false;
-	if (init.kind === NodeKind.MemberExpr) return true;
-	if (init.kind === NodeKind.ArrayAccess) return true;
-	if (init.kind === NodeKind.Identifier) return true;
-	return false;
+	return match (init.kind) {
+		NodeKind.MemberExpr | NodeKind.ArrayAccess | NodeKind.Identifier => true,
+		_ => false,
+	};
 }
 
 // ===== Main Entry Point =====
@@ -280,54 +280,49 @@ function collectCursorsInStmts(stmts: Node[], funcStmts: Node[], cs: CursorSet):
 function collectCursorsInStmt(stmt: Node, funcStmts: Node[], cs: CursorSet): void {
 	if (stmt === null) return;
 
-	if (stmt.kind === NodeKind.VariableDecl) {
-		const d = stmt.data as VariableDeclData;
-		// Only const declarations can be cursors (not reassigned)
-		if (d.declKind !== DeclKind.Const) return;
-		if (d.initializer === null) return;
-		// Skip DRC-generated temps ($result, $old, etc.)
-		if (d.declName.startsWith("$")) return;
-		// Only borrow-style initializers
-		if (!isBorrowInit(d.initializer)) return;
-		// Check if variable escapes anywhere in the function body
-		if (!varEscapesInStmts(funcStmts, d.declName)) {
-			addCursor(cs, d.declName);
-		}
-		return;
-	}
-
-	// Recurse into compound statements to find nested declarations
-	if (stmt.kind === NodeKind.BlockStmt) {
-		collectCursorsInStmts((stmt.data as BlockStmtData).statements, funcStmts, cs);
-		return;
-	}
-	if (stmt.kind === NodeKind.IfStmt) {
-		const d = stmt.data as IfStmtData;
-		collectCursorsInStmt(d.consequent, funcStmts, cs);
-		collectCursorsInStmt(d.alternate, funcStmts, cs);
-		return;
-	}
-	if (stmt.kind === NodeKind.WhileStmt) {
-		collectCursorsInStmt((stmt.data as WhileStmtData).whileBody, funcStmts, cs);
-		return;
-	}
-	if (stmt.kind === NodeKind.ForStmt) {
-		const d = stmt.data as ForStmtData;
-		collectCursorsInStmt(d.forInit, funcStmts, cs);
-		collectCursorsInStmt(d.forBody, funcStmts, cs);
-		return;
-	}
-	if (stmt.kind === NodeKind.DoWhileStmt) {
-		collectCursorsInStmt((stmt.data as DoWhileStmtData).doBody, funcStmts, cs);
-		return;
-	}
-	if (stmt.kind === NodeKind.TryCatchStmt) {
-		const d = stmt.data as TryCatchStmtData;
-		collectCursorsInStmt(d.tryBody, funcStmts, cs);
-		collectCursorsInStmt(d.catchBody, funcStmts, cs);
-		collectCursorsInStmt(d.finallyBody, funcStmts, cs);
-		return;
-	}
+	match (stmt.kind) {
+		NodeKind.VariableDecl => {
+			const d = stmt.data as VariableDeclData;
+			// Only const declarations can be cursors (not reassigned)
+			if (d.declKind !== DeclKind.Const) return;
+			if (d.initializer === null) return;
+			// Skip DRC-generated temps ($result, $old, etc.)
+			if (d.declName.startsWith("$")) return;
+			// Only borrow-style initializers
+			if (!isBorrowInit(d.initializer)) return;
+			// Check if variable escapes anywhere in the function body
+			if (!varEscapesInStmts(funcStmts, d.declName)) {
+				addCursor(cs, d.declName);
+			}
+		},
+		// Recurse into compound statements to find nested declarations
+		NodeKind.BlockStmt => {
+			collectCursorsInStmts((stmt.data as BlockStmtData).statements, funcStmts, cs);
+		},
+		NodeKind.IfStmt => {
+			const d = stmt.data as IfStmtData;
+			collectCursorsInStmt(d.consequent, funcStmts, cs);
+			collectCursorsInStmt(d.alternate, funcStmts, cs);
+		},
+		NodeKind.WhileStmt => {
+			collectCursorsInStmt((stmt.data as WhileStmtData).whileBody, funcStmts, cs);
+		},
+		NodeKind.ForStmt => {
+			const d = stmt.data as ForStmtData;
+			collectCursorsInStmt(d.forInit, funcStmts, cs);
+			collectCursorsInStmt(d.forBody, funcStmts, cs);
+		},
+		NodeKind.DoWhileStmt => {
+			collectCursorsInStmt((stmt.data as DoWhileStmtData).doBody, funcStmts, cs);
+		},
+		NodeKind.TryCatchStmt => {
+			const d = stmt.data as TryCatchStmtData;
+			collectCursorsInStmt(d.tryBody, funcStmts, cs);
+			collectCursorsInStmt(d.catchBody, funcStmts, cs);
+			collectCursorsInStmt(d.finallyBody, funcStmts, cs);
+		},
+		_ => {},
+	};
 }
 
 // ===== Tests =====

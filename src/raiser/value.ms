@@ -98,7 +98,7 @@ export function raiserEqual(a: RaiserValue, b: RaiserValue): boolean {
 export function raiserToString(v: RaiserValue): string {
 	return match (v.kind) {
 		RaiserValueKind.Nil => "nil",
-		RaiserValueKind.Bool => { if (v.intVal !== 0) { "true" } else { "false" } },
+		RaiserValueKind.Bool => { if (v.intVal !== 0) { return "true"; } else { return "false"; } },
 		RaiserValueKind.Int => "" + v.intVal,
 		RaiserValueKind.Float => "" + v.floatVal,
 		RaiserValueKind.String => v.strVal,

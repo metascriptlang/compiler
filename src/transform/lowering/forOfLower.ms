@@ -108,13 +108,16 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		whileStmts.push(itemDecl);
 	}
 
+	// Increment BEFORE body: continue in user code must not skip $idx++
+	// (while-loop continue jumps to condition, skipping trailing statements)
+	whileStmts.push(incStmt);
+
 	const bodyStmts = extractBodyStmts(d.forOfBody);
 	let bi = 0;
 	while (bi < bodyStmts.length) {
 		whileStmts.push(bodyStmts[bi]);
 		bi += 1;
 	}
-	whileStmts.push(incStmt);
 
 	const whileCond = makeBinary(makeTypedIdent(idxName, numberType(), loc), "<", makeTypedIdent(lenName, numberType(), loc), loc);
 	const whileBody = makeBlock(whileStmts, loc);
@@ -129,6 +132,7 @@ function lowerCollectionForOf(d: ForOfStmtData, iterType: Type, ctx: TransformCo
 	const iterName = freshTemp(ctx, "iter");
 	const slotName = freshTemp(ctx, "slot");
 	const capName = freshTemp(ctx, "cap");
+	const curSlotName = freshTemp(ctx, "curSlot");
 
 	// const $iter = iterable; — cursor (borrow), DRC must not destroy (reference: cursor flag)
 	const iterDecl = makeVarDecl(iterName, d.forOfIterable, DeclKind.Const, loc);
@@ -155,7 +159,7 @@ function lowerCollectionForOf(d: ForOfStmtData, iterType: Type, ctx: TransformCo
 			if (keyId.name !== "_") {
 				let keyExpr: Node = makeCall(makeIdent("msMapSlotKey", loc), [
 					makeTypedIdent(iterName, iterType, loc),
-					makeTypedIdent(slotName, numberType(), loc),
+					makeTypedIdent(curSlotName, numberType(), loc),
 				], loc);
 				if (isNumericKey) {
 					keyExpr = makeCall(makeIdent("msKeyToNum", loc), [keyExpr], loc);
@@ -172,7 +176,7 @@ function lowerCollectionForOf(d: ForOfStmtData, iterType: Type, ctx: TransformCo
 			if (valId.name !== "_") {
 				const valExpr = makeCall(makeIdent("msMapSlotValue", loc), [
 					makeTypedIdent(iterName, iterType, loc),
-					makeTypedIdent(slotName, numberType(), loc),
+					makeTypedIdent(curSlotName, numberType(), loc),
 				], loc);
 				// Critical: set nodeType for C-level casting (void* → value type)
 				if (iterType.typeExtra !== null) {
@@ -185,7 +189,7 @@ function lowerCollectionForOf(d: ForOfStmtData, iterType: Type, ctx: TransformCo
 		// Non-destructured: yields keys
 		let keyExpr: Node = makeCall(makeIdent("msMapSlotKey", loc), [
 			makeTypedIdent(iterName, iterType, loc),
-			makeTypedIdent(slotName, numberType(), loc),
+			makeTypedIdent(curSlotName, numberType(), loc),
 		], loc);
 		// Unwrap numeric keys
 		if (iterType.typeReturn !== null && iterType.typeReturn.kind === TypeKind.Number) {
@@ -204,15 +208,17 @@ function lowerCollectionForOf(d: ForOfStmtData, iterType: Type, ctx: TransformCo
 	}
 	const innerBlock = makeBlock(innerStmts, loc);
 
-	// if (msMapSlotState($iter, $slot) == 2) { innerBlock }
+	// if (msMapSlotState($iter, $curSlot) == 2) { innerBlock }
 	const stateExpr = makeCall(makeIdent("msMapSlotState", loc), [
 		makeTypedIdent(iterName, iterType, loc),
-		makeTypedIdent(slotName, numberType(), loc),
+		makeTypedIdent(curSlotName, numberType(), loc),
 	], loc);
 	const ifCond = makeBinary(stateExpr, "===", makeNumber(2, loc), loc);
 	const ifNode = makeIf(ifCond, innerBlock, null as unknown as Node, loc);
 
-	// $slot = $slot + 1;
+	// Snapshot + increment at top of while body (continue-safe):
+	// const $curSlot = $slot; $slot += 1; if (...) { bindings; body; }
+	const snapshotDecl = makeVarDecl(curSlotName, makeTypedIdent(slotName, numberType(), loc), DeclKind.Const, loc);
 	const increment = makeAssign(
 		makeTypedIdent(slotName, numberType(), loc),
 		makeBinary(makeTypedIdent(slotName, numberType(), loc), "+", makeNumber(1, loc), loc),
@@ -220,10 +226,11 @@ function lowerCollectionForOf(d: ForOfStmtData, iterType: Type, ctx: TransformCo
 	);
 	const incStmt = makeExprStmt(increment, loc);
 
-	// while ($slot < $cap) { if (...) { ... }; $slot++; }
+	// while ($slot < $cap) { const $curSlot = $slot; $slot++; if (...) { ... } }
 	const whileStmts: Node[] = [];
-	whileStmts.push(ifNode);
+	whileStmts.push(snapshotDecl);
 	whileStmts.push(incStmt);
+	whileStmts.push(ifNode);
 	const whileCond = makeBinary(makeTypedIdent(slotName, numberType(), loc), "<", makeTypedIdent(capName, numberType(), loc), loc);
 	const whileBody = makeBlock(whileStmts, loc);
 	const whileNode = makeWhile(whileCond, whileBody, loc);

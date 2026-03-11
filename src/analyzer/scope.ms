@@ -59,6 +59,7 @@ export interface DrcContext {
 	cursors: CursorSet;             // cursor variables — skip all RC ops (Phase B)
 	cfgCache: CfgCache;             // CFG cache per variable — Phase C
 	currentFuncBody: Node;          // current function body for CFG building — Phase C
+	currentFuncName: string;        // current function name — for DRC hook detection
 }
 
 // ===== Constructors =====
@@ -76,6 +77,7 @@ export function createDrcContext(ctx: TransformContext): DrcContext {
 		cursors: createCursorSet(),
 		cfgCache: createCfgCache(),
 		currentFuncBody: null as unknown as Node,
+		currentFuncName: "",
 	};
 }
 

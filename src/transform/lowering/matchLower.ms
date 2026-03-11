@@ -284,9 +284,19 @@ function moveInto(node: Node, mode: string, varName: string, loc: SourceLocation
 		}
 		return node;
 	}
-	// Control flow terminals: already have their own control flow — keep as-is
-	// ReturnStmt: don't double-wrap return. BreakStmt/ContinueStmt: don't assign.
-	if (node.kind === NodeKind.ReturnStmt || node.kind === NodeKind.BreakStmt || node.kind === NodeKind.ContinueStmt) {
+	// Control flow terminals: BreakStmt/ContinueStmt keep as-is
+	if (node.kind === NodeKind.BreakStmt || node.kind === NodeKind.ContinueStmt) {
+		return node;
+	}
+	// ReturnStmt in "return" mode: keep as-is (already correct).
+	// ReturnStmt in "assign" mode: strip return, convert to assignment.
+	// This supports `const x = match { arm => { return expr; } }` syntax.
+	if (node.kind === NodeKind.ReturnStmt) {
+		if (mode === "return") return node;
+		const rd = node.data as ReturnStmtData;
+		if (rd.argument !== null) {
+			return emitResult(rd.argument, mode, varName, loc);
+		}
 		return node;
 	}
 	// ExprStmt: unwrap and wrap in return/assign

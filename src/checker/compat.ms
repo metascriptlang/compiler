@@ -199,11 +199,11 @@ export function typeRelation(formal: Type, actual: Type): TypeRelation {
 			TypeKind.Struct => {
 				if (formal.typeName === actual.typeName) return TypeRelation.Exact;
 				if (isObjectAssignable(actual, formal)) return TypeRelation.Subtype;
-				TypeRelation.None
+				return TypeRelation.None;
 			},
 			TypeKind.Enum | TypeKind.Distinct => {
 				if (formal.typeName === actual.typeName) return TypeRelation.Exact;
-				TypeRelation.None
+				return TypeRelation.None;
 			},
 			TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Ref | TypeKind.Ptr => {
 				if (formal.typeReturn !== null && actual.typeReturn !== null) {
@@ -211,7 +211,7 @@ export function typeRelation(formal: Type, actual: Type): TypeRelation {
 					if (elemRel === TypeRelation.None) return TypeRelation.None;
 					return elemRel;
 				}
-				TypeRelation.Exact
+				return TypeRelation.Exact;
 			},
 			TypeKind.Result => {
 				if (formal.typeReturn !== null && actual.typeReturn !== null) {
@@ -222,7 +222,7 @@ export function typeRelation(formal: Type, actual: Type): TypeRelation {
 					const errRel = typeRelation(formal.typeExtra, actual.typeExtra);
 					if (errRel === TypeRelation.None) return TypeRelation.None;
 				}
-				TypeRelation.Exact
+				return TypeRelation.Exact;
 			},
 			_ => TypeRelation.Exact,
 		};
@@ -334,19 +334,15 @@ export function scoreCandidatePriority(paramTypes: Type[], argTypes: Type[], min
 			score.exactMatches = -1;
 			return score;
 		}
-		if (rel === TypeRelation.Exact) {
-			score.exactMatches = score.exactMatches + 1;
-		} else if (rel === TypeRelation.FromLiteral) {
-			score.intConvMatches = score.intConvMatches + 256;
-		} else if (rel === TypeRelation.Generic) {
-			score.genericMatches = score.genericMatches + 1;
-		} else if (rel === TypeRelation.Subtype) {
-			score.subtypeMatches = score.subtypeMatches + 1;
-		} else if (rel === TypeRelation.IntConv) {
-			score.intConvMatches = score.intConvMatches + 1;
-		} else if (rel === TypeRelation.Convertible) {
-			score.convMatches = score.convMatches + 1;
-		}
+		match (rel) {
+			TypeRelation.Exact => { score.exactMatches = score.exactMatches + 1; },
+			TypeRelation.FromLiteral => { score.intConvMatches = score.intConvMatches + 256; },
+			TypeRelation.Generic => { score.genericMatches = score.genericMatches + 1; },
+			TypeRelation.Subtype => { score.subtypeMatches = score.subtypeMatches + 1; },
+			TypeRelation.IntConv => { score.intConvMatches = score.intConvMatches + 1; },
+			TypeRelation.Convertible => { score.convMatches = score.convMatches + 1; },
+			_ => {},
+		};
 	}
 	return score;
 }

@@ -616,14 +616,14 @@ export function getDeclName(node: Node): string {
 		return getDeclName(d.exportedDecl);
 	}
 	return match (node.kind) {
-		NodeKind.FunctionDecl => { const d = node.data as FunctionDeclData; d.fnName; },
-		NodeKind.ClassDecl => { const d = node.data as ClassDeclData; d.className; },
-		NodeKind.InterfaceDecl => { const d = node.data as InterfaceDeclData; d.interfaceName; },
-		NodeKind.EnumDecl => { const d = node.data as EnumDeclData; d.enumName; },
-		NodeKind.TypeAliasDecl => { const d = node.data as TypeAliasDeclData; d.aliasName; },
-		NodeKind.ExternDecl => { const d = node.data as ExternDeclData; d.externName; },
-		NodeKind.MacroDecl => { const d = node.data as MacroDeclData; d.macroDeclName; },
-		NodeKind.VariableDecl => { const d = node.data as VariableDeclData; d.declName; },
+		NodeKind.FunctionDecl => { const d = node.data as FunctionDeclData; return d.fnName; },
+		NodeKind.ClassDecl => { const d = node.data as ClassDeclData; return d.className; },
+		NodeKind.InterfaceDecl => { const d = node.data as InterfaceDeclData; return d.interfaceName; },
+		NodeKind.EnumDecl => { const d = node.data as EnumDeclData; return d.enumName; },
+		NodeKind.TypeAliasDecl => { const d = node.data as TypeAliasDeclData; return d.aliasName; },
+		NodeKind.ExternDecl => { const d = node.data as ExternDeclData; return d.externName; },
+		NodeKind.MacroDecl => { const d = node.data as MacroDeclData; return d.macroDeclName; },
+		NodeKind.VariableDecl => { const d = node.data as VariableDeclData; return d.declName; },
 		_ => "",
 	};
 }

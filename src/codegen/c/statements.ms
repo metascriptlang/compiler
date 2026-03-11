@@ -11,7 +11,7 @@ import {
 	TryCatchStmtData, ThrowStmtData,
 	SwitchStmtData, SwitchCaseData,
 	CallExprData, IdentifierData, AssertStmtData, UnreachableStmtData,
-	MacroInvocationData, StringLiteralData, IdentifierData,
+	MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData,
 	isEmptyBlock,
 } from "../../ast/node";
 import { Type, TypeKind, isInterfaceType } from "../../checker/types";
@@ -35,7 +35,7 @@ function isStructType(t: Type): boolean {
 	if (t === null) return false;
 	return match (t.kind) {
 		TypeKind.String | TypeKind.Array | TypeKind.Map | TypeKind.Set => true,
-		TypeKind.Struct => { isInterfaceType(t) },
+		TypeKind.Struct => { return isInterfaceType(t); },
 		TypeKind.Result | TypeKind.Tuple => true,
 		TypeKind.Function => true,  // msClosure is a struct
 		_ => false,
@@ -355,11 +355,29 @@ function genIfStmt(g: CGen, p: CProc, node: Node): void {
 
 function genWhileStmt(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as WhileStmtData;
-	const condSnippet = genExpr(g, p, d.whileCondition);
 
-	emitStmts(p, "while " + wrapCond(condSnippet) + " ");
-	genBlockOrBraces(g, p, d.whileBody);
-	emitStmtsNl(p);
+	// Nim parity (ccgstmts.nim:genWhileStmt): while(1) { cond-eval; if (!cond) break; body; }
+	// Ensures NRVO calls in conditions are re-evaluated each iteration.
+	emitStmts(p, "while (1) {\n");
+	const oldIndent = getStmtsIndent(p);
+	setStmtsIndent(p, oldIndent + 1);
+
+	// Nim parity (ccgstmts.nim:713): skip condition check for while(true) literals
+	const cond = d.whileCondition;
+	if (cond.kind !== NodeKind.BooleanLiteral || !(cond.data as BooleanLiteralData).boolValue) {
+		const condSnippet = genExpr(g, p, cond);
+		emitStmtsLine(p, "if (!" + wrapCond(condSnippet) + ") break;");
+	}
+
+	if (d.whileBody.kind === NodeKind.BlockStmt) {
+		const bd = d.whileBody.data as BlockStmtData;
+		genStmts(g, p, bd.statements);
+	} else {
+		genStmt(g, p, d.whileBody);
+	}
+
+	setStmtsIndent(p, oldIndent);
+	emitStmtsLine(p, "}");
 }
 
 // ===== Do-While Statement =====
@@ -367,10 +385,23 @@ function genWhileStmt(g: CGen, p: CProc, node: Node): void {
 function genDoWhileStmt(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as DoWhileStmtData;
 
-	emitStmts(p, "do ");
-	genBlockOrBraces(g, p, d.doBody);
+	// Nim parity: NRVO-safe do-while. Condition must be evaluated inside the loop
+	// to prevent NRVO call hoisting outside the loop scope.
+	// Emit: do { body; cond-eval; } while(cond);
+	emitStmts(p, "do {\n");
+	const oldIndent = getStmtsIndent(p);
+	setStmtsIndent(p, oldIndent + 1);
+
+	if (d.doBody.kind === NodeKind.BlockStmt) {
+		const bd = d.doBody.data as BlockStmtData;
+		genStmts(g, p, bd.statements);
+	} else {
+		genStmt(g, p, d.doBody);
+	}
+
 	const condSnippet = genExpr(g, p, d.doCondition);
-	emitStmtsLine(p, " while " + wrapCond(condSnippet) + ";");
+	setStmtsIndent(p, oldIndent);
+	emitStmtsLine(p, "} while " + wrapCond(condSnippet) + ";");
 }
 
 // ===== Block Statement =====
