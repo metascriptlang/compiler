@@ -20,7 +20,7 @@ import {
 	createEnum, stringType, createFunction, TypeKind,
 } from "../../checker/types";
 import { SymbolKind } from "../../checker/symbol";
-import { SourceLocation } from "../../ast/node";
+import { SourceLocation, makeLoc } from "../../ast/node";
 
 // Build a toString FunctionDecl for an enum:
 //   function EnumName_toString(v: int32): string {
@@ -66,7 +66,7 @@ import { createToken, TokenKind } from "../../lexer/token";
 
 function makeTestEnum(name: string, members: string[]): Node {
 	const tok = createToken(TokenKind.Ident, name, 1);
-	return createNode(NodeKind.EnumDecl, { enumName: name, enumMembers: members, nameLocation: { line: 1, column: 1 } }, tok);
+	return createNode(NodeKind.EnumDecl, { enumName: name, enumMembers: members, nameLocation: makeLoc(1, 1) }, tok);
 }
 
 function makeTestProgram(stmts: Node[]): Node {

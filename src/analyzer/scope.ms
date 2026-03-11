@@ -7,7 +7,7 @@
 //
 // Arrays passed by pointer — bare T[] types (wrappers removed).
 
-import { Node, NodeKind, SourceLocation, ExprStmtData, CallExprData, IdentifierData } from "../ast/node";
+import { Node, NodeKind, SourceLocation, makeLoc, ExprStmtData, CallExprData, IdentifierData } from "../ast/node";
 import { RcInfo, RcKind, noRcInfo } from "./classify";
 import { CursorSet, createCursorSet } from "./cursors";
 import { CfgCache, createCfgCache } from "./cfg";
@@ -437,7 +437,7 @@ test "initially empty" {
 
 test "add and flush cycle" {
 	const dctx = testDrcCtx();
-	const loc: SourceLocation = { line: 0, column: 0 };
+	const loc = makeLoc(0, 0);
 	addPending(dctx, makeExprStmt(makeNull(loc), loc));
 	assert hasPending(dctx);
 	const target: Node[] = [];

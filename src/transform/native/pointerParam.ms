@@ -21,7 +21,7 @@ import {
 	UpdateExprData, SpreadExprData,
 	ArrayLiteralData, MoveExprData,
 	HiddenDerefData, HiddenStdConvData,
-	SourceLocation,
+	SourceLocation, makeLoc,
 } from "../../ast/node";
 import { Type, TypeKind, createPtr, isInterfaceType, getTypeSize } from "../../checker/types";
 import { TransformContext } from "../context";
@@ -29,7 +29,7 @@ import { walkNode } from "../walker";
 import { makeHiddenAddr, makeHiddenDeref } from "../util";
 import { firstStmtKindAfter, stmtCountAfter, parseInput } from "../testUtil";
 
-const defaultLoc: SourceLocation = { line: 0, column: 0 };
+const defaultLoc = makeLoc(0, 0);
 
 function safeLoc(node: Node): SourceLocation {
 	if (node !== null && node.location !== null) return node.location;

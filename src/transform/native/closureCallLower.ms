@@ -13,7 +13,7 @@
 // and mangle("msClosureFn") passes through unchanged since it's all alphanumeric.
 
 import {
-	Node, NodeKind, SourceLocation, DeclKind,
+	Node, NodeKind, SourceLocation, makeLoc, DeclKind,
 	CallExprData, TypeAssertionData, ConditionalExprData,
 	BinaryExprData,
 } from "../../ast/node";
@@ -305,7 +305,7 @@ function wrapProgram(stmts: Node[]): Node {
 }
 
 function makeClosureCall(calleeName: string, args: Node[]): { prog: Node, cd: CallExprData } {
-	const loc: SourceLocation = { line: 1, column: 0 };
+	const loc = makeLoc(1, 0);
 	const callee = makeIdent(calleeName, loc);
 	const fnType = createFunction([numberType()], [], voidType());
 	callee.nodeType = fnType;
@@ -329,7 +329,7 @@ test "closure call is rewritten to direct call" {
 }
 
 test "closure call has env prepended to args" {
-	const loc: SourceLocation = { line: 1, column: 0 };
+	const loc = makeLoc(1, 0);
 	const arg1 = makeIdent("x", loc);
 	const t = makeClosureCall("cb", [arg1]);
 	lowerClosureCalls(t.prog, makeCtx());
@@ -357,7 +357,7 @@ test "closure call callee is TypeAssertion with msClosureFn" {
 }
 
 test "direct call is not rewritten" {
-	const loc: SourceLocation = { line: 1, column: 0 };
+	const loc = makeLoc(1, 0);
 	const callee = makeIdent("directFn", loc);
 	const callNode = makeCall(callee, [], loc);
 	const cd = callNode.data as CallExprData;

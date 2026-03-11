@@ -10,7 +10,7 @@
 // Follows the injectdestructors pattern (direct AST rewrite, scope-based).
 
 import {
-	Node, NodeKind, DeclKind, SourceLocation, ProgramData, NodeFlag,
+	Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag,
 	FunctionDeclData, ArrowFunctionData, FunctionExprData,
 	MethodDeclData, ConstructorDeclData,
 	BlockStmtData, VariableDeclData, ExprStmtData,
@@ -319,6 +319,16 @@ function processNew(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 function processMove(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const md = node.data as MoveExprData;
 	md.moveArg = processNode(md.moveArg, dctx, DrcMode.Consumed);
+	// Emit wasMoved on the source so scope cleanup skips it (prevents double-free).
+	// This handles move in any context (call args, return, etc.).
+	const moveType = md.moveArg.nodeType;
+	if (moveType !== null) {
+		const rcInfo = classifyType(moveType, dctx.ctx);
+		if (rcInfo.needsCleanup) {
+			const emptyStmts: Node[] = [];
+			emitMoveSourceWasMoved(md.moveArg, rcInfo, 0, emptyStmts, dctx, node.location, false);
+		}
+	}
 	return node;
 }
 
@@ -2034,7 +2044,7 @@ function testDrcContext(input: string): DrcContext {
 }
 
 export function testLoc(): SourceLocation {
-	return { line: 0, column: 0 };
+	return makeLoc(0, 0);
 }
 
 test "injectProgram no-op on primitives" {

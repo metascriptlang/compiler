@@ -2,7 +2,7 @@
 
 
 import {
-	Node, NodeKind, DeclKind, SourceLocation, createNode,
+	Node, NodeKind, DeclKind, SourceLocation, makeLoc, createNode,
 	// Literals
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 	BigIntLiteralData, RegexLiteralData,
@@ -757,7 +757,7 @@ test "int value" {
 			}, createToken(TokenKind.Return, "return", 1)),
 		],
 	}, createToken(TokenKind.Ident, "", 1)));
-	const loc: SourceLocation = { line: 1, column: 0 };
+	const loc = makeLoc(1, 0);
 	const result = valueToNode(ctx.lastResult, ctx.objectHeap, ctx.arrayHeap, loc);
 	assert result.kind === NodeKind.NumberLiteral;
 }
@@ -765,7 +765,7 @@ test "int value" {
 test "NumberLiteral serialization" {
 	const objHeap = createStructHeap();
 	const arrHeap = createArrayHeap();
-	const loc: SourceLocation = { line: 5, column: 10 };
+	const loc = makeLoc(5, 10);
 	const node = mkNumber(42, loc);
 	const val = nodeToValue(node, objHeap, arrHeap);
 	assert val.kind === RaiserValueKind.Object;
@@ -783,7 +783,7 @@ test "NumberLiteral serialization" {
 test "StringLiteral serialization" {
 	const objHeap = createStructHeap();
 	const arrHeap = createArrayHeap();
-	const loc: SourceLocation = { line: 1, column: 0 };
+	const loc = makeLoc(1, 0);
 	const node = mkString("hello", loc);
 	const val = nodeToValue(node, objHeap, arrHeap);
 	assert val.kind === RaiserValueKind.Object;
@@ -796,7 +796,7 @@ test "StringLiteral serialization" {
 test "BooleanLiteral serialization" {
 	const objHeap = createStructHeap();
 	const arrHeap = createArrayHeap();
-	const loc: SourceLocation = { line: 1, column: 0 };
+	const loc = makeLoc(1, 0);
 	const node = mkBool(true, loc);
 	const val = nodeToValue(node, objHeap, arrHeap);
 	assert val.kind === RaiserValueKind.Object;
@@ -809,7 +809,7 @@ test "BooleanLiteral serialization" {
 test "Identifier serialization" {
 	const objHeap = createStructHeap();
 	const arrHeap = createArrayHeap();
-	const loc: SourceLocation = { line: 1, column: 0 };
+	const loc = makeLoc(1, 0);
 	const node = createNode(NodeKind.Identifier, { name: "foo" }, synthToken(loc));
 	const val = nodeToValue(node, objHeap, arrHeap);
 	assert val.kind === RaiserValueKind.Object;
@@ -822,7 +822,7 @@ test "Identifier serialization" {
 test "BinaryExpr serialization" {
 	const objHeap = createStructHeap();
 	const arrHeap = createArrayHeap();
-	const loc: SourceLocation = { line: 1, column: 0 };
+	const loc = makeLoc(1, 0);
 	const left = mkNumber(2, loc);
 	const right = mkNumber(3, loc);
 	const binNode = createNode(NodeKind.BinaryExpr, {

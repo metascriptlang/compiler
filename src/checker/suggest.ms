@@ -1659,7 +1659,7 @@ test "result" {
 }
 
 test "format variable hover" {
-	const loc: SourceLocation = { line: 1, column: 0 };
+	const loc = makeLoc(1, 0);
 	const suggest: SgSuggest = {
 		name: "count", kind: SymbolKind.Variable, symType: numberType(),
 		location: loc, modulePath: "", containerName: "",
@@ -1671,7 +1671,7 @@ test "format variable hover" {
 }
 
 test "format function hover" {
-	const loc: SourceLocation = { line: 1, column: 0 };
+	const loc = makeLoc(1, 0);
 	const params: Type[] = [stringType()];
 	const names: string[] = ["s"];
 	const fnType = createFunction(params, names, voidType());
@@ -1686,7 +1686,7 @@ test "format function hover" {
 }
 
 test "format interface hover" {
-	const loc: SourceLocation = { line: 1, column: 0 };
+	const loc = makeLoc(1, 0);
 	const suggest: SgSuggest = {
 		name: "Point", kind: SymbolKind.Interface, symType: unknownType(),
 		location: loc, modulePath: "", containerName: "",
@@ -1697,7 +1697,7 @@ test "format interface hover" {
 }
 
 test "format class hover" {
-	const loc: SourceLocation = { line: 1, column: 0 };
+	const loc = makeLoc(1, 0);
 	const suggest: SgSuggest = {
 		name: "Vec", kind: SymbolKind.Class, symType: unknownType(),
 		location: loc, modulePath: "", containerName: "",
@@ -1708,7 +1708,7 @@ test "format class hover" {
 }
 
 test "format enum hover" {
-	const loc: SourceLocation = { line: 1, column: 0 };
+	const loc = makeLoc(1, 0);
 	const suggest: SgSuggest = {
 		name: "Color", kind: SymbolKind.Enum, symType: unknownType(),
 		location: loc, modulePath: "", containerName: "",
@@ -1719,7 +1719,7 @@ test "format enum hover" {
 }
 
 test "format type alias hover" {
-	const loc: SourceLocation = { line: 1, column: 0 };
+	const loc = makeLoc(1, 0);
 	const suggest: SgSuggest = {
 		name: "Id", kind: SymbolKind.TypeAlias, symType: numberType(),
 		location: loc, modulePath: "", containerName: "",
@@ -1730,7 +1730,7 @@ test "format type alias hover" {
 }
 
 test "format let variable hover" {
-	const loc: SourceLocation = { line: 1, column: 0 };
+	const loc = makeLoc(1, 0);
 	const suggest: SgSuggest = {
 		name: "x", kind: SymbolKind.Variable, symType: stringType(),
 		location: loc, modulePath: "", containerName: "",
@@ -1741,7 +1741,7 @@ test "format let variable hover" {
 }
 
 test "format parameter hover" {
-	const loc: SourceLocation = { line: 1, column: 0 };
+	const loc = makeLoc(1, 0);
 	const suggest: SgSuggest = {
 		name: "name", kind: SymbolKind.Parameter, symType: stringType(),
 		location: loc, modulePath: "", containerName: "",
@@ -1752,7 +1752,7 @@ test "format parameter hover" {
 }
 
 test "format property hover" {
-	const loc: SourceLocation = { line: 1, column: 0 };
+	const loc = makeLoc(1, 0);
 	const suggest: SgSuggest = {
 		name: "x", kind: SymbolKind.Property, symType: numberType(),
 		location: loc, modulePath: "", containerName: "",
@@ -1763,7 +1763,7 @@ test "format property hover" {
 }
 
 test "format method hover" {
-	const loc: SourceLocation = { line: 1, column: 0 };
+	const loc = makeLoc(1, 0);
 	const params: Type[] = [stringType()];
 	const names: string[] = ["item"];
 	const fnType = createFunction(params, names, voidType());
@@ -1777,7 +1777,7 @@ test "format method hover" {
 }
 
 test "format method hover with container" {
-	const loc: SourceLocation = { line: 1, column: 0 };
+	const loc = makeLoc(1, 0);
 	const params: Type[] = [stringType()];
 	const names: string[] = ["value"];
 	const fnType = createFunction(params, names, voidType());

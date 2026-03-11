@@ -47,7 +47,7 @@ export function lex(source: string): Result<Token[], string> {
 
 	// Add EOF token
 	addToken(s, TokenKind.Eof, "", s.line, s.column);
-	return Result.ok(s.tokens);
+	return Result.ok(move s.tokens);
 }
 
 // ===== Test Helpers =====

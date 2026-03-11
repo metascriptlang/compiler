@@ -6,7 +6,7 @@
 // Checker inserts HiddenStdConv for JsonValue → string/number/boolean/int32.
 // This transform rewrites both to direct C runtime calls.
 
-import { Node, NodeKind, MemberExprData, ProgramData, HiddenStdConvData, NodeFlag } from "../../ast/node";
+import { Node, NodeKind, MemberExprData, ProgramData, HiddenStdConvData, NodeFlag, makeLoc } from "../../ast/node";
 import { TypeKind, unwrapRef } from "../../checker/types";
 import { TransformContext, hasEmitted } from "../context";
 import { walkNode } from "../walker";
@@ -64,7 +64,7 @@ export function lowerJsonDynAccess(program: Node, ctx: TransformContext): Node {
 	if (needsInclude && !hasEmitted(ctx, "__jsonInclude")) {
 		ctx.emittedHelpers.push("__jsonInclude");
 		const pd = result.data as ProgramData;
-		pd.programStmts.push(makeEmitNode("/*INCLUDESECTION*/#include \"core/json.h\"\n", { line: 0, column: 0 }));
+		pd.programStmts.push(makeEmitNode("/*INCLUDESECTION*/#include \"core/json.h\"\n", makeLoc(0, 0)));
 	}
 	return result;
 }

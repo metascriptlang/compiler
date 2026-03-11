@@ -785,7 +785,7 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 	}
 	// Type alias to a class (Ref type): skip hook generation.
 	// The canonical class type's RC ops (incref/decref) handle it.
-	// Nim parity: `type Alias = ref T` shares the same ref semantics, no separate =destroy.
+	// Reference parity: `type Alias = ref T` shares the same ref semantics, no separate =destroy.
 	if (sym.symbolKind === SymbolKind.TypeAlias && sym.symbolType !== null && sym.symbolType.kind === TypeKind.Ref) {
 		nameSetAdd(lctx.generated, typeName);
 		return;

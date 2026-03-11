@@ -381,10 +381,10 @@ function parsePrimary(state: ParserState): ExprResult {
 		return Result.ok(createNode(NodeKind.YieldExpr, { yieldArg: yieldOperand, isDelegate: delegate }, token));
 	}
 
-	// Move expression: move x
+	// Move expression: move x, move x.field, move arr[i]
 	if (token.kind === TokenKind.Move) {
 		advance(state);
-		const moveOperand = try parsePrimary(state);
+		const moveOperand = try parseExprWithPrec(state, 0);
 		return Result.ok(createNode(NodeKind.MoveExpr, { moveArg: moveOperand }, token));
 	}
 

@@ -4,7 +4,7 @@
 // Our approach: eager two-step scan (definitions, then call sites).
 
 import {
-	Node, NodeKind, NodeData, DeclKind, SourceLocation,
+	Node, NodeKind, NodeData, DeclKind, SourceLocation, makeLoc,
 	ProgramData, BlockStmtData, IfStmtData, WhileStmtData, ForStmtData,
 	ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData,
 	FunctionDeclData, ArrowFunctionData, FunctionExprData,
@@ -701,7 +701,7 @@ function cloneStringArray(strs: string[]): string[] {
 
 function monoCloneNode(node: Node): Node {
 	if (node === null) return null as unknown as Node;
-	const loc: SourceLocation = { line: node.location.line, column: node.location.column };
+	const loc = makeLoc(node.location.line, node.location.column);
 	const kind = node.kind;
 
 	if (kind === NodeKind.NumberLiteral) { const d = node.data as NumberLiteralData; const data: NodeData = { value: d.value }; return createNodeAt(kind, data, loc); }
@@ -910,7 +910,7 @@ function monoEmitOneTypeInst(program: Node, idx: number): void {
 		fieldNames.push(getGenericTypeInstFieldNameAt(idx, fi));
 		fieldTypes.push(getGenericTypeInstFieldTypeAt(idx, fi));
 	}
-	const loc: SourceLocation = { line: 0, column: 0 };
+	const loc = makeLoc(0, 0);
 	const data: NodeData = { interfaceName: mangledName, interfaceFields: fieldNames, interfaceFieldTypes: fieldTypes, nameLocation: loc };
 	const declNode = createNodeAt(NodeKind.InterfaceDecl, data, loc);
 	const pd = program.data as ProgramData;

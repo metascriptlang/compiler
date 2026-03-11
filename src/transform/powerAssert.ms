@@ -20,7 +20,7 @@ import {
 	ProgramData, TestDeclData, BlockStmtData, AssertStmtData,
 	BinaryExprData, UnaryExprData, CallExprData, MemberExprData,
 	IdentifierData, NumberLiteralData, StringLiteralData, BooleanLiteralData,
-	SourceLocation,
+	SourceLocation, makeLoc,
 } from "../ast/node";
 import { Type, TypeKind, isIntegerType } from "../checker/types";
 import { TransformContext } from "./context";
@@ -321,47 +321,47 @@ import { parseSource } from "../parser/statements/validation";
 import { AssertStmtData as ASD } from "../ast/node";
 
 test "exprLabel identifier" {
-	assert exprLabel(makeIdent("foo", { line: 1, column: 0 })) === "foo";
+	assert exprLabel(makeIdent("foo", makeLoc(1, 0))) === "foo";
 }
 
 test "exprLabel binary" {
-	const left = makeIdent("a", { line: 1, column: 0 });
-	const right = makeIdent("b", { line: 1, column: 5 });
+	const left = makeIdent("a", makeLoc(1, 0));
+	const right = makeIdent("b", makeLoc(1, 5));
 	const bin = createNode(NodeKind.BinaryExpr, {
 		operator: "===", left, right,
-	}, syntheticToken({ line: 1, column: 2 }));
+	}, syntheticToken(makeLoc(1, 2)));
 	assert exprLabel(bin) === "a === b";
 }
 
 test "exprLabel member" {
-	const obj = makeIdent("obj", { line: 1, column: 0 });
+	const obj = makeIdent("obj", makeLoc(1, 0));
 	const mem = createNode(NodeKind.MemberExpr, {
 		object: obj, property: "x", isOptional: false,
-	}, syntheticToken({ line: 1, column: 0 }));
+	}, syntheticToken(makeLoc(1, 0)));
 	assert exprLabel(mem) === "obj.x";
 }
 
 test "isDecomposable binary" {
-	const left = makeIdent("a", { line: 1, column: 0 });
-	const right = makeIdent("b", { line: 1, column: 5 });
+	const left = makeIdent("a", makeLoc(1, 0));
+	const right = makeIdent("b", makeLoc(1, 5));
 	const bin = createNode(NodeKind.BinaryExpr, {
 		operator: "===", left, right,
-	}, syntheticToken({ line: 1, column: 2 }));
+	}, syntheticToken(makeLoc(1, 2)));
 	assert isDecomposable(bin);
 }
 
 test "isDecomposable literal" {
-	const lit = createNode(NodeKind.NumberLiteral, { value: 42 }, syntheticToken({ line: 1, column: 0 }));
+	const lit = createNode(NodeKind.NumberLiteral, { value: 42 }, syntheticToken(makeLoc(1, 0)));
 	assert !isDecomposable(lit);
 }
 
 test "decompose simple binary" {
-	const loc: SourceLocation = { line: 1, column: 0 };
+	const loc = makeLoc(1, 0);
 	const left = makeIdent("a", loc);
-	const right = makeIdent("b", { line: 1, column: 6 });
+	const right = makeIdent("b", makeLoc(1, 6));
 	const bin = createNode(NodeKind.BinaryExpr, {
 		operator: "===", left, right,
-	}, syntheticToken({ line: 1, column: 2 }));
+	}, syntheticToken(makeLoc(1, 2)));
 	paCounter = 0;
 	const captures: CaptureEntry[] = [];
 	const result = decomposeExpr(bin, captures, 0, loc);
@@ -373,15 +373,15 @@ test "decompose simple binary" {
 }
 
 test "decompose member access" {
-	const loc: SourceLocation = { line: 1, column: 0 };
+	const loc = makeLoc(1, 0);
 	const obj = makeIdent("obj", loc);
 	const mem = createNode(NodeKind.MemberExpr, {
 		object: obj, property: "x", isOptional: false,
 	}, syntheticToken(loc));
-	const right = makeIdent("y", { line: 1, column: 10 });
+	const right = makeIdent("y", makeLoc(1, 10));
 	const bin = createNode(NodeKind.BinaryExpr, {
 		operator: "===", left: mem, right,
-	}, syntheticToken({ line: 1, column: 6 }));
+	}, syntheticToken(makeLoc(1, 6)));
 	paCounter = 0;
 	const captures: CaptureEntry[] = [];
 	decomposeExpr(bin, captures, 0, loc);

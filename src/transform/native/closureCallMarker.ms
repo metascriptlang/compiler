@@ -16,7 +16,7 @@
 
 import {
 	Node, NodeKind, SymbolKind, Symbol,
-	CallExprData, SourceLocation, NodeFlag, createNodeAt,
+	CallExprData, SourceLocation, makeLoc, NodeFlag, createNodeAt,
 } from "../../ast/node";
 import { Type, TypeKind, CallingConvention, createFunction, voidType } from "../../checker/types";
 import { Token } from "../../lexer/token";
@@ -107,7 +107,7 @@ function wrapProgram(stmts: Node[]): Node {
 
 // Helper: create an ExprStmt wrapping a CallExpr, return the CallExpr's data
 function makeTestCall(calleeName: string, sym: Symbol, calleeType: Type): { prog: Node, cd: CallExprData } {
-	const loc: SourceLocation = { line: 0, column: 0 };
+	const loc = makeLoc(0, 0);
 	const callee = makeIdent(calleeName, loc);
 	if (sym !== null) {
 		callee.resolvedSym = sym;
@@ -124,7 +124,7 @@ function makeTestCall(calleeName: string, sym: Symbol, calleeType: Type): { prog
 
 // Helper: create a MemberExpr-based call (obj.method())
 function makeMemberTestCall(): { prog: Node, cd: CallExprData } {
-	const loc: SourceLocation = { line: 0, column: 0 };
+	const loc = makeLoc(0, 0);
 	const obj = makeIdent("obj", loc);
 	const mem = makeMember(obj, "method", loc);
 	const callNode = makeCall(mem, [], loc);
@@ -140,7 +140,7 @@ function makeMemberTestCall(): { prog: Node, cd: CallExprData } {
 
 test "MemberExpr with Function type is closure call" {
 	// Simulates _envP.f from lambda lifting — MemberExpr callee with Function type
-	const loc: SourceLocation = { line: 0, column: 0 };
+	const loc = makeLoc(0, 0);
 	const obj = makeIdent("_envP", loc);
 	const mem = makeMember(obj, "handler", loc);
 	const fnType = createFunction([numberType()], [], voidType());
