@@ -21,7 +21,7 @@ import {
 	isNumeric, isIntegerType, isStringType, isCallable, getReturnType, getElementType, getProperty, sizeOfType,
 	typeNameOf, unwrapRef, isDiscriminatedUnion, findVariantByDiscriminant, findFieldInVariant, findUnionVariant,
 	unifyType, createUnifyBindings, hasGenericParams,
-	getMinArity, isNarrowingIntConv, CallingConvention, skipModifier,
+	getMinArity, setMinArity, isNarrowingIntConv, CallingConvention, skipModifier,
 } from "./types";
 import {
 	Symbol, SymbolKind, ScopeKind, SymbolState,
@@ -248,9 +248,8 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 					: null;
 				let fi = 0;
 				while (fi < d.properties.length) {
-					const fieldExpected = (variant !== null && variant.typeChildren !== null
-						&& fi < variant.typeChildren.length)
-						? variant.typeChildren[fi]
+					const fieldExpected = (variant !== null && fi < d.keys.length)
+						? findFieldInVariant(variant, d.keys[fi])
 						: null;
 					checkExpr(ctx, d.properties[fi], fieldExpected);
 					fi = fi + 1;
@@ -321,8 +320,8 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			if (targetType.kind !== TypeKind.Unknown) {
 				const innerExpr = unwrapAsUnknown(d.asExpr);
 				if (innerExpr !== null) {
-					d = { asExpr: innerExpr, asType: d.asType } as unknown as TypeAssertionData;
-					node.data = d;
+					node.data = { asExpr: innerExpr, asType: d.asType };
+					d = node.data as TypeAssertionData;
 					srcType = innerExpr.nodeType;
 				}
 			}
@@ -810,7 +809,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 	const argTypes: Type[] = [];
 	let ai = 0;
 	while (ai < d.arguments.length) {
-		let paramExpected = null;
+		let paramExpected: Type = null;
 		if (!needsOverloadScoring && calleeType.kind === TypeKind.Function
 			&& calleeType.typeChildren !== null
 			&& ai < calleeType.typeChildren.length) {
@@ -1591,8 +1590,15 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 	// Universal .toString() — every type has a compiler-provided default.
 	// builtinLower resolves to the correct C function per type.
 	// Return the function type (not string) so CallExpr extracts the return type.
+	// Numeric types accept optional radix: .toString() or .toString(36)
 	if (d.property === "toString" && propType.kind === TypeKind.Unknown) {
-		const toStrFnType = createFunction([], [], stringType());
+		let toStrFnType: Type = null;
+		if (isNumeric(resolvedObjType)) {
+			toStrFnType = createFunction([numberType()], ["radix"], stringType());
+			setMinArity(toStrFnType, 0);
+		} else {
+			toStrFnType = createFunction([], [], stringType());
+		}
 		const toStrSym = makeSymbol("toString", SymbolKind.Function, toStrFnType, false);
 		toStrSym.state = SymbolState.Shaped;
 		node.resolvedSym = toStrSym;

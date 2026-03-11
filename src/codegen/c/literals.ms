@@ -45,7 +45,12 @@ export function cStringByteLen(s: string): number {
 			len += 1;
 			i += 4;
 		} else {
-			len += 1;
+			// UTF-8 byte count: code points determine encoded byte length
+			const cp = s.charCodeAt(i);
+			if (cp < 0x80) { len += 1; }
+			else if (cp < 0x800) { len += 2; }
+			else if (cp < 0x10000) { len += 3; }
+			else { len += 4; }
 			i += 1;
 		}
 	}

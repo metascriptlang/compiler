@@ -684,6 +684,7 @@ function walkNode(node: Node): Node {
 		return createNode(NodeKind.VariableDecl, {
 			declName: d.declName, declType: d.declType,
 			initializer: newInit, declKind: d.declKind,
+			nameLocation: d.nameLocation,
 		}, synthToken(node.location));
 	} else if (node.kind === NodeKind.ExprStmt) {
 		const d = node.data as ExprStmtData;
@@ -708,7 +709,7 @@ function walkNode(node: Node): Node {
 		return createNode(NodeKind.FunctionDecl, {
 			fnName: d.fnName, params: d.params, fnParamTypes: d.fnParamTypes,
 			fnBody: newBody, fnFlags: d.fnFlags, fnReturnType: d.fnReturnType,
-			fnDefaults: d.fnDefaults,
+			fnDefaults: d.fnDefaults, nameLocation: d.nameLocation,
 		}, synthToken(node.location));
 	} else if (node.kind === NodeKind.IfStmt) {
 		const d = node.data as IfStmtData;

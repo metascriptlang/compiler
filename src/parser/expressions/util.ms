@@ -5,7 +5,7 @@
 // parseFn is always set by the time tests actually run.
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, Expression, createNode, createNodeAt, BinaryExprData, UnaryExprData, UpdateExprData } from "../../ast/node";
+import { Node, NodeKind, Expression, createNode, createNodeAt, makeLoc, BinaryExprData, UnaryExprData, UpdateExprData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd } from "../context";
 import { lex } from "../../lexer/lexer";
 import { parseNumberLiteral } from "../../utils/string";
@@ -39,9 +39,9 @@ export function exprKind(input: string): NodeKind {
 
 export function exprNode(input: string): Node {
 	const lr = lex(input);
-	if (!lr.ok) return createNodeAt(NodeKind.NullLiteral, { nullPlaceholder: true }, { line: 0, column: 0 });
+	if (!lr.ok) return createNodeAt(NodeKind.NullLiteral, { nullPlaceholder: true }, makeLoc(0, 0));
 	const pr = parseFn(lr.value);
-	if (!pr.ok) return createNodeAt(NodeKind.NullLiteral, { nullPlaceholder: true }, { line: 0, column: 0 });
+	if (!pr.ok) return createNodeAt(NodeKind.NullLiteral, { nullPlaceholder: true }, makeLoc(0, 0));
 	return pr.value;
 }
 

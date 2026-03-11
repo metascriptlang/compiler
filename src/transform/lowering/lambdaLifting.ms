@@ -322,7 +322,10 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 	// Preserve resolved return type from original lambda (symbol type's returnType).
 	// makeFnDecl uses resolveSimpleTypeStr which can't resolve type aliases like NodeResult.
 	// The checker already resolved the alias → concrete type on the original node.
-	if (originalNodeType !== null && originalNodeType.typeReturn !== null && fnNode.nodeType !== null) {
+	// Skip overwrite when checker inferred Unknown — makeFnDecl's annotation-based type is more precise
+	// (e.g., void closures: checker infers Unknown because empty body has no returns, but annotation says "void").
+	if (originalNodeType !== null && originalNodeType.typeReturn !== null && fnNode.nodeType !== null
+		&& originalNodeType.typeReturn.kind !== TypeKind.Unknown) {
 		fnNode.nodeType.typeReturn = originalNodeType.typeReturn;
 	}
 	state.liftedFunctions.push(fnNode);
@@ -352,8 +355,11 @@ function liftNonCapturing(body: Node, params: string[], paramTypes: string[], fl
 		liftedBody = makeBlock([makeReturn(liftedBody, loc)], loc);
 	}
 	const fnNode = makeFnDecl(liftedName, params, paramTypes, liftedBody, flags, returnType, loc);
-	// Preserve resolved return type (symbol type's returnType untouched through lifting)
-	if (originalNodeType !== null && originalNodeType.typeReturn !== null && fnNode.nodeType !== null) {
+	// Preserve resolved return type (symbol type's returnType untouched through lifting).
+	// Skip overwrite when checker inferred Unknown — annotation-based type is more precise
+	// (e.g., void closures: checker infers Unknown, but annotation says "void").
+	if (originalNodeType !== null && originalNodeType.typeReturn !== null && fnNode.nodeType !== null
+		&& originalNodeType.typeReturn.kind !== TypeKind.Unknown) {
 		fnNode.nodeType.typeReturn = originalNodeType.typeReturn;
 	}
 	state.liftedFunctions.push(fnNode);

@@ -2,16 +2,12 @@
 // Uses registered callbacks via callProgramParser/callStateProgramParser.
 
 import { Token, TokenKind } from "../../lexer/token";
-import { Node, NodeKind, ProgramData, createNodeAt } from "../../ast/node";
+import { Node, NodeKind, ProgramData, createNodeAt, makeLoc } from "../../ast/node";
 import { ParserState, createState } from "../context";
 import { lex } from "../../lexer/lexer";
 import { callStateProgramParser } from "./callbacks";
-import { registerCoreParsers } from "./core";
 
 type NodeResult = Result<Node, string>;
-
-// Ensure parser callbacks are registered before any test helper is called
-registerCoreParsers();
 
 // ===== Convenience: lex + parse in one step =====
 
@@ -42,7 +38,7 @@ export function stmtKind(input: string): NodeKind {
 
 export function stmtAt(input: string, index: number): Node {
 	const pr = parseSource(input);
-	if (!pr.ok) return createNodeAt(NodeKind.ExprStmt, { expr: createNodeAt(NodeKind.NullLiteral, { nullPlaceholder: true }, { line: 0, column: 0 }) }, { line: 0, column: 0 });
+	if (!pr.ok) return createNodeAt(NodeKind.ExprStmt, { expr: createNodeAt(NodeKind.NullLiteral, { nullPlaceholder: true }, makeLoc(0, 0)) }, makeLoc(0, 0));
 	const stmts = pr.value.data as ProgramData;
 	return stmts.programStmts[index];
 }

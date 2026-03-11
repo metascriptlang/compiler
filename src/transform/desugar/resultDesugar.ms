@@ -20,7 +20,7 @@
 //     if (!$result_0.ok) { return Result.err($result_0.error); }
 
 import {
-	Node, NodeKind, DeclKind, SourceLocation, Symbol, SymbolKind, SymbolState,
+	Node, NodeKind, DeclKind, SourceLocation, makeLoc, Symbol, SymbolKind, SymbolState,
 	VariableDeclData, ReturnStmtData, ExprStmtData, TryExprData,
 	CallExprData, MemberExprData, IdentifierData, HiddenDerefData,
 	IfStmtData,
@@ -282,7 +282,7 @@ test "multiple stmts preserved" { assert stmtCountAfter("let a = 1; const x = tr
 
 test "makeResultMember sets resolvedSym for .ok" {
 	const resType = createResult(numberType(), stringType());
-	const loc: SourceLocation = { line: 0, column: 0 };
+	const loc = makeLoc(0, 0);
 	const mem = makeResultMember("$r", resType, "ok", loc);
 	assert mem.kind === NodeKind.MemberExpr;
 	assert mem.resolvedSym !== null;
@@ -291,7 +291,7 @@ test "makeResultMember sets resolvedSym for .ok" {
 
 test "makeResultMember sets correct type for .value" {
 	const resType = createResult(numberType(), stringType());
-	const loc: SourceLocation = { line: 0, column: 0 };
+	const loc = makeLoc(0, 0);
 	const mem = makeResultMember("$r", resType, "value", loc);
 	assert mem.nodeType !== null;
 	assert mem.nodeType.kind === TK.Number;
@@ -300,7 +300,7 @@ test "makeResultMember sets correct type for .value" {
 
 test "makeResultMember sets correct type for .error" {
 	const resType = createResult(numberType(), stringType());
-	const loc: SourceLocation = { line: 0, column: 0 };
+	const loc = makeLoc(0, 0);
 	const mem = makeResultMember("$r", resType, "error", loc);
 	assert mem.nodeType !== null;
 	assert mem.nodeType.kind === TK.String;
@@ -308,14 +308,14 @@ test "makeResultMember sets correct type for .error" {
 }
 
 test "makeResultMember with null resType is graceful" {
-	const loc: SourceLocation = { line: 0, column: 0 };
+	const loc = makeLoc(0, 0);
 	const mem = makeResultMember("$r", null, "ok", loc);
 	assert mem.kind === NodeKind.MemberExpr;
 }
 
 test "makeErrorCheck produces IfStmt with return" {
 	const resType = createResult(numberType(), stringType());
-	const loc: SourceLocation = { line: 0, column: 0 };
+	const loc = makeLoc(0, 0);
 	const ifNode = makeErrorCheck("$r", resType, loc, makeCtx());
 	assert ifNode.kind === NodeKind.IfStmt;
 	const ifData = ifNode.data as IfStmtData;
@@ -327,7 +327,7 @@ test "makeErrorCheck produces IfStmt with return" {
 
 test "makeErrorCheck Result.err call has nodeType" {
 	const resType = createResult(numberType(), stringType());
-	const loc: SourceLocation = { line: 0, column: 0 };
+	const loc = makeLoc(0, 0);
 	const ifNode = makeErrorCheck("$r", resType, loc, makeCtx());
 	const ifData = ifNode.data as IfStmtData;
 	const thenBlock = ifData.consequent.data as BlockStmtData;

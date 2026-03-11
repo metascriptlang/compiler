@@ -22,7 +22,7 @@
 //   TypeInfo   TypeName_typeInfo                  — msTypeInfo for ORC runtime
 
 import {
-	Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation,
+	Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc,
 	InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData,
 	IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData,
 } from "../../ast/node";
@@ -783,6 +783,13 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 		// No symbol — may be an anonymous struct type. Skip (handled by ensureTypeHooksForType).
 		return;
 	}
+	// Type alias to a class (Ref type): skip hook generation.
+	// The canonical class type's RC ops (incref/decref) handle it.
+	// Nim parity: `type Alias = ref T` shares the same ref semantics, no separate =destroy.
+	if (sym.symbolKind === SymbolKind.TypeAlias && sym.symbolType !== null && sym.symbolType.kind === TypeKind.Ref) {
+		nameSetAdd(lctx.generated, typeName);
+		return;
+	}
 	const objType = unwrapRef(sym.symbolType);
 	if (objType.kind !== TypeKind.Struct && objType.kind !== TypeKind.Union) return;
 	if (!typeNeedsHooks(objType, lctx, loc)) {
@@ -914,7 +921,7 @@ function ensureTypeHooksForType(objType: Type, lctx: LiftCtx, loc: SourceLocatio
 function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx, loc: SourceLocation): Node {
 	// For nested value-type objects, call their _eq function
 	if (fieldType.kind === TypeKind.Struct && fieldType.typeName !== "") {
-		return makeCall(makeIdent(fieldType.typeName + "_eq", loc), [makeHiddenAddr(aField, loc), makeHiddenAddr(bField, loc)], loc);
+		return makeCall(makeIdent(fieldType.typeName + "_eq", loc), [aField, bField], loc);
 	}
 	// For TypeReference, resolve and recurse
 	if (fieldType.kind === TypeKind.TypeReference && fieldType.typeName !== "") {
@@ -923,7 +930,21 @@ function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx,
 			return fieldEqExpr(aField, bField, sym.symbolType, lctx, loc);
 		}
 	}
-	// For all other types (primitives, strings, enums, etc): use === directly
+	// String fields — reference parity: genStrEquals → eqStrings().
+	// msString is a C struct, so === doesn't work. Call msStringEquals(a, b).
+	if (fieldType.kind === TypeKind.String) {
+		return makeCall(makeIdent("msStringEquals", loc), [aField, bField], loc);
+	}
+	// Array fields — arrays are C structs, can't use ==.
+	// JavaScript semantics: === is reference equality (same object).
+	// Compare data pointers — same backing store = same array.
+	// Deep comparison belongs in stdlib (e.g. deepEqual).
+	if (fieldType.kind === TypeKind.Array) {
+		const pA = makeMember(aField, "p", loc);
+		const pB = makeMember(bField, "p", loc);
+		return makeBinary(pA, "===", pB, loc);
+	}
+	// For all other types (primitives, enums, etc): use === directly
 	return makeBinary(aField, "===", bField, loc);
 }
 
@@ -1330,7 +1351,7 @@ export function liftDestructors(program: Node, ctx: TransformContext): Node {
 
 	// Scan for anonymous struct types (from ObjectLiterals with no declaration).
 	// These have typeName like "__anon..." set by the checker but no InterfaceDecl.
-	const defaultLoc2: SourceLocation = { line: 0, column: 0 };
+	const defaultLoc2 = makeLoc(0, 0);
 	scanForAnonStructTypes(program, lctx, defaultLoc2);
 
 	// Scan for standalone array type usage
@@ -1339,7 +1360,7 @@ export function liftDestructors(program: Node, ctx: TransformContext): Node {
 	}
 
 	// Generate standalone array lifecycle hooks
-	const defaultLoc: SourceLocation = { line: 0, column: 0 };
+	const defaultLoc = makeLoc(0, 0);
 	generateArrayHooks(lctx, defaultLoc);
 
 	// Process pending tuple comparison ops (collected by operatorLower).

@@ -30,6 +30,7 @@ import { genStmt, genStmts, resolveEmitArgs } from "./statements";
 import { mangle, mangleTypeName, mangleFieldName, mangledFunctionName, safeName } from "./names";
 import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, annotationToC, ccgIntroducedPtr } from "./types";
 import { genTestDeclNode } from "./test";
+import { isDrcLifecycleName } from "./forward";
 import {
 	Symbol, SymbolKind, SymbolState,
 	hasFlag, SymbolFlag,
@@ -53,119 +54,19 @@ function isDeclAlive(g: CGen, node: Node): boolean {
 	if (name.length > 0 && name.slice(0, 1) === "$") return true;
 	if (name.length > 0 && name.slice(0, 1) === "=") return true;
 	if (name.length > 1 && name.slice(0, 2) === "__") return true;
-	if (name.endsWith("_destroy") || name.endsWith("_trace") ||
-		name.endsWith("_copy") || name.endsWith("_sink") ||
-		name.endsWith("_wasMoved") || name.endsWith("_dup")) return true;
+	if (isDrcLifecycleName(name)) return true;
 	return aliveSetHas(g.aliveSet, g.modulePath, name);
 }
 
 
 // Array sequence hooks are generated per-module (each module that uses sequence gets its own).
 // They need static linkage to avoid duplicate symbols at link time.
-// Reference parity: we use static linkage per-module instead of global deduplication.
-// DRC lifecycle suffixes — single source of truth for hook detection.
-// Reference parity: these are regular procs emitted in defining module, prototyped in consumers.
-const DRC_SUFFIXES: string[] = ["_destroy", "_copy", "_sink", "_wasMoved", "_dup", "_eq", "_trace", "_typeInfo"];
-
-function hasSuffix(name: string, suffixes: string[]): boolean {
-	for (const suffix of suffixes) {
-		if (name.endsWith(suffix)) return true;
-	}
-	return false;
-}
-
 function isArraySeqHook(name: string): boolean {
 	if (name.slice(0, 13) === "msStringArray" || name.slice(0, 10) === "msRefArray") return true;
 	return name.endsWith("Array_destroy") || name.endsWith("Array_copy") ||
 		name.endsWith("Array_sink") || name.endsWith("Array_wasMoved");
 }
 
-function isDrcLifecycleName(name: string): boolean {
-	return hasSuffix(name, DRC_SUFFIXES);
-}
-
-// reference parity: genProcNoForward emits genProcPrototype(m, prc) in the calling module
-// for cross-module procs. We do the same for DRC hooks: if codegen encounters a call
-// to a DRC lifecycle function not yet declared, emit a forward prototype.
-// Signatures are known by convention (suffix determines parameter pattern).
-export function ensureDrcProto(g: CGen, callee: string): void {
-	if (!isDrcLifecycleName(callee)) return;
-	if (nameSetHas(g.declaredProcs, callee)) return;
-	nameSetAdd(g.declaredProcs, callee);
-
-	// Extract type name prefix: "TypeName_destroy" → "TypeName"
-	const lastUnderscore = callee.lastIndexOf("_");
-	if (lastUnderscore < 0) return;
-	const typeName = callee.slice(0, lastUnderscore);
-	const suffix = callee.slice(lastUnderscore, callee.length);
-
-	// reference parity (reference prototype): sequence/array hooks have different param conventions
-	// destroy: by-value; wasMoved: by-pointer; copy/sink: dest by-pointer, src by-value
-	const isSeqHook = typeName.endsWith("Array");
-
-	const proto = match (suffix) {
-		"_destroy" => {
-			if (isSeqHook) {
-				return `void ${callee}(${typeName} self)`;
-			} else {
-				return `void ${callee}(${typeName}* self)`;
-			}
-		},
-		"_wasMoved" => `void ${callee}(${typeName}* self)`,
-		"_copy" | "_sink" => {
-			if (isSeqHook) {
-				return `void ${callee}(${typeName}* dest, ${typeName} src)`;
-			} else {
-				return `void ${callee}(${typeName}* dest, ${typeName}* src)`;
-			}
-		},
-		"_dup" => `${typeName} ${callee}(${typeName}* src)`,
-		"_eq" => `MS_BOOL ${callee}(${typeName}* a, ${typeName}* b)`,
-		"_trace" => `void ${callee}(${typeName}* self, void* callback)`,
-		_ => { return; },
-	};
-	// Array/seq hooks use weak linkage at definition site — forward declarations are plain extern
-	addLine(sec(g, CSection.ProcHeaders), proto + ";");
-}
-
-// On-demand cross-module function prototype emission (reference parity: genProcPrototype).
-// Called from genCallExpr when a cross-module function is referenced.
-// Emits prototype into ProcHeaders, deduped via declaredProcs.
-export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Type, sym: Symbol): void {
-	if (fnType === null || fnType.kind !== TypeKind.Function) return;
-	// Only for cross-module procs — same-module procs have their own forward decl
-	if (sym !== null && sym.modulePath !== "" && sym.modulePath === g.modulePath) return;
-	// Native/extern functions from other modules still need forward declarations
-	// (the @include header is only in the defining module's C file, not ours)
-	// Dedup
-	const protoKey = "proto:" + calleeName;
-	if (nameSetHas(g.declaredProcs, protoKey)) return;
-	nameSetAdd(g.declaredProcs, protoKey);
-	// Build prototype string
-	const retType = getTypeDesc(g, fnType.typeReturn);
-	const nrvo = isNrvoReturnType(fnType.typeReturn);
-	let paramList = "";
-	if (nrvo) {
-		paramList = retType + "* __result";
-		if (fnType.typeChildren !== null && fnType.typeChildren.length > 0) paramList = paramList + ", ";
-	}
-	if (fnType.typeChildren !== null) {
-		let i = 0;
-		while (i < fnType.typeChildren.length) {
-			if (i > 0) paramList = paramList + ", ";
-			let pType = getTypeDesc(g, fnType.typeChildren[i]);
-			if (ccgIntroducedPtr(fnType.typeChildren[i]) && pType.length > 0 && pType.charAt(pType.length - 1) !== "*") {
-				pType = pType + "*";
-			}
-			paramList = paramList + pType;
-			i += 1;
-		}
-	}
-	if (paramList === "") paramList = "void";
-	let cRetType = retType;
-	if (nrvo) cRetType = "void";
-	addLine(sec(g, CSection.ProcHeaders), `${cRetType} ${calleeName}(${paramList});`);
-}
 
 export function genDecl(g: CGen, node: Node, exported: boolean): void {
 	if (node === null) return;
@@ -235,6 +136,8 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	const fnType = node.nodeType;
 	if (fnType === null) return;
 	let cRetType = getTypeDesc(g, fnType.typeReturn);
+	// Null return type means void (not void*) — closures typed as `: void` may have null typeReturn
+	if (fnType.typeReturn === null) cRetType = "void";
 	const nrvo = isNrvoReturnType(fnType.typeReturn);
 
 	// Build parameter list — NRVO adds out-param as first parameter

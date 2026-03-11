@@ -29,8 +29,7 @@ import { mangle, mangleFieldName, mangledFunctionName, safeName } from "./names"
 import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, intToString, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, ccgIntroducedPtr, ensureTypeInfo, ensureForwardDecl } from "./types";
 import { formatCNumber, cBoolLiteral, cNullLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { charAt, sliceStr, findChar } from "../../utils/string";
-import { ensureDrcProto, ensureCrossModuleProto } from "./declarations";
-import { useHeader } from "./index";
+import { ensureDrcProto, ensureCrossModuleProto, useHeader } from "./forward";
 
 // ===== Reference: argument passing for introduced pointers =====
 // Wraps arg for pointer introduction params at call sites.
@@ -62,7 +61,7 @@ export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Type, arg
 			return `*(${arg})`;
 		}
 		if (!paramIsPtr && !argIsPtr && paramCcgPtr) {
-			return genArgCcgPtr(g, arg, argNode, p);
+			return genArgCcgPtr(g, arg, argNode, p, paramType);
 		}
 	} else if (paramType !== null && argNode.nodeType === null && arg.length > 0 && arg.charCodeAt(0) === "{".code) {
 		return safeAddrOf(g, p, arg, argNode, paramType);
@@ -70,13 +69,13 @@ export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Type, arg
 	return arg;
 }
 
-export function genArgCcgPtr(g: CGen, arg: string, argNode: Node, p: CProc): string {
+export function genArgCcgPtr(g: CGen, arg: string, argNode: Node, p: CProc, paramType: Type): string {
 	if (argNode.kind === NodeKind.Identifier && isIndirectParam(p, (argNode.data as IdentifierData).name)) {
 		// Indirect param: already a pointer — pass raw (reference patterns return snippet as-is)
 		return safeName((argNode.data as IdentifierData).name);
 	}
 	// Not indirect: take address — use safeAddrOf to handle bare compound literals
-	return safeAddrOf(g, p, arg, argNode, null);
+	return safeAddrOf(g, p, arg, argNode, paramType);
 }
 
 // Reference parity: standard address generation always operates on a named variable,
@@ -104,7 +103,14 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, p
 					}
 					const varIdx = findUnionVariant(exprNode.nodeType, keyArr, typeArr);
 					if (varIdx >= 0) {
-						cType = `${unionName}_v${intToString(varIdx)}`;
+						// Wrap in full union type so &temp is NodeData*, not variant*
+						p.labels += 1;
+						const tmpName = `_clit${p.labels}_`;
+						const varTypeName = `${unionName}_v${intToString(varIdx)}`;
+						emitProcLocalsLine(p, `${unionName} ${tmpName};`);
+						emitStmtsLine(p, `${tmpName}._tag = ${intToString(varIdx)};`);
+						emitStmtsLine(p, `${tmpName}.v${intToString(varIdx)} = (${varTypeName})${snippet};`);
+						return "&" + tmpName;
 					}
 				}
 			} else {
@@ -156,6 +162,32 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, p
 			emitProcLocalsLine(p, `${cType} ${tmpName};`);
 			emitStmtsLine(p, `${tmpName} = (${cType})${snippet};`);
 			return "&" + tmpName;
+		}
+	}
+	// Union variant wrapping: when passing a variant-typed temp where a union* is expected,
+	// wrap in a full union with tag. This handles _litN_ temps from ObjectLiteral emission.
+	if (paramType !== null && paramType.kind === TypeKind.Union && exprNode !== null && exprNode.nodeType !== null && exprNode.kind === NodeKind.ObjectLiteral) {
+		const od = exprNode.data as ObjectLiteralData;
+		if (od.keys !== null && od.keys.length > 0) {
+			const unionName = getTypeDesc(g, paramType);
+			const keyArr: string[] = [];
+			const typeArr: Type[] = [];
+			for (let ki = 0; ki < od.keys.length; ki += 1) {
+				keyArr.push(od.keys[ki]);
+				if (ki < od.properties.length && od.properties[ki] !== null && od.properties[ki].nodeType !== null) {
+					typeArr.push(od.properties[ki].nodeType);
+				}
+			}
+			const varIdx = findUnionVariant(paramType, keyArr, typeArr);
+			if (varIdx >= 0) {
+				p.labels += 1;
+				const tmpName = `_clit${p.labels}_`;
+				const varTypeName = `${unionName}_v${intToString(varIdx)}`;
+				emitProcLocalsLine(p, `${unionName} ${tmpName};`);
+				emitStmtsLine(p, `${tmpName}._tag = ${intToString(varIdx)};`);
+				emitStmtsLine(p, `${tmpName}.v${intToString(varIdx)} = (${varTypeName})${snippet};`);
+				return "&" + tmpName;
+			}
 		}
 	}
 	return `&(${snippet})`;
@@ -686,9 +718,9 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 		// User-defined structs keep their original field names
 		if (d.property === "length" || d.property === "byteLength") {
 			const objType = d.object.nodeType;
-			const isUserStruct = objType !== null && (objType.kind === TypeKind.Struct
-				|| (objType.kind === TypeKind.Ref && objType.typeReturn !== null && objType.typeReturn.kind === TypeKind.Struct));
-			if (!isUserStruct) {
+			const isRuntimeType = objType !== null && (objType.kind === TypeKind.Array
+				|| objType.kind === TypeKind.String || objType.kind === TypeKind.Map);
+			if (isRuntimeType) {
 				results.push(obj + ".len");
 				return;
 			}

@@ -2,7 +2,7 @@
 // Uses callback injection via util.ms to avoid circular imports
 
 import { Token, TokenKind } from "../../lexer/token";
-import { Node, NodeKind, DeclKind, NodeData, createNode } from "../../ast/node";
+import { Node, NodeKind, DeclKind, NodeData, createNode, makeLoc } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, skipDestructurePattern, consumeSemicolon } from "../context";
 import { skipOptionalType, isIdentLike } from "../util";
 import { callBlockParser, callExprParser, callStmtParser } from "./callbacks";
@@ -131,7 +131,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 					forOfIterable: iterable,
 					forOfBody: try parseBodyOrStmt(state),
 					forOfPattern: pattern,
-					bindingLocation: { line: forToken.line, column: forToken.column },
+					bindingLocation: makeLoc(forToken.line, forToken.column),
 				}, forToken));
 			}
 			if (!isAtEnd(state) && current(state).kind === TokenKind.In) {
@@ -171,7 +171,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 					forOfIterable: iterable,
 					forOfBody: try parseBodyOrStmt(state),
 					forOfPattern: null as unknown as Node,
-					bindingLocation: { line: nameToken.line, column: nameToken.column },
+					bindingLocation: makeLoc(nameToken.line, nameToken.column),
 				}, forToken));
 			}
 			if (afterName < state.tokens.length && state.tokens[afterName].kind === TokenKind.In) {
@@ -213,6 +213,7 @@ export function parseForStmt(state: ParserState): NodeResult {
 			declType: "",
 			initializer: try callExprParser(state),
 			declKind: match (bindingToken.kind) { TokenKind.Const => DeclKind.Const, TokenKind.Var => DeclKind.Var, _ => DeclKind.Let },
+			nameLocation: makeLoc(varName.line, varName.column),
 		}, bindingToken);
 		if (current(state).kind !== TokenKind.Semicolon) {
 			return Result.err(`Expected ';' after for init at line ${current(state).line}`);

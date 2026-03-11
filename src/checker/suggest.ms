@@ -4,7 +4,7 @@
 // formatHover, collectDiagnostics. No I/O, no protocol knowledge.
 // Called by src/lsp/handlers.ms.
 
-import { Node, NodeKind, SourceLocation, ProgramData, DeclKind,
+import { Node, NodeKind, SourceLocation, makeLoc, ProgramData, DeclKind,
 	IdentifierData, MemberExprData, CallExprData,
 	BinaryExprData, UnaryExprData, VariableDeclData,
 	FunctionDeclData, IfStmtData, WhileStmtData, ForStmtData,
@@ -79,7 +79,7 @@ export function sgQueryAtPosition(ctx: CheckerContext, line: number, col: number
 	let lo = 0;
 	let hi = records.length - 1;
 	while (lo <= hi) {
-		const mid = (lo + hi) >> 1;
+		const mid: int32 = (lo + hi) / 2;
 		if (records[mid].line < line) {
 			lo = mid + 1;
 		} else {
@@ -99,7 +99,7 @@ export function sgQueryAtPosition(ctx: CheckerContext, line: number, col: number
 }
 
 function sgSuggestFromRecord(rec: SgSymRecord): SgSuggest {
-	const loc: SourceLocation = rec.sym !== null && rec.sym.location !== null ? rec.sym.location : { line: rec.line, column: rec.col };
+	const loc: SourceLocation = rec.sym !== null && rec.sym.location !== null ? rec.sym.location : makeLoc(rec.line, rec.col);
 	const modPath = rec.sym !== null && rec.sym.modulePath !== null ? rec.sym.modulePath : "";
 	return {
 		name: rec.name,
@@ -114,6 +114,25 @@ function sgSuggestFromRecord(rec: SgSymRecord): SgSuggest {
 		isExported: rec.sym !== null ? hasFlag(rec.sym, SymbolFlag.Exported) : false,
 		isMutable: rec.sym !== null ? hasFlag(rec.sym, SymbolFlag.Mutable) : false,
 	};
+}
+
+// ===== sgQueryByName — find all records matching a name =====
+// Replaces sgCollectReferences + sgFindUsagesByName (AST walker).
+// Scans pre-recorded checker records — O(n) on records, not AST.
+
+export function sgQueryByName(ctx: CheckerContext, name: string): SgSymbolRef[] {
+	const result: SgSymbolRef[] = [];
+	if (ctx.symRecords === null) return result;
+	const records = ctx.symRecords;
+	let i = 0;
+	while (i < records.length) {
+		const rec = records[i];
+		if (rec.name === name) {
+			result.push({ name: rec.name, line: rec.line, col: rec.col, nameLen: rec.colEnd - rec.col, isDecl: rec.isDecl });
+		}
+		i = i + 1;
+	}
+	return result;
 }
 
 // ===== sgTypeToString — full recursive type formatting =====
@@ -235,372 +254,6 @@ export function sgTypeToString(t: Type): string {
 	return "unknown";
 }
 
-// ===== sgFindNodeAtPosition — walk AST to find node at cursor =====
-//
-// Reference pattern: check exact column span for node tracking.
-// We can't use forEachChild (causes hangs on large files), so manual walk.
-// Key insight from standard reference patterns: don't prune by column on container nodes — child nodes
-// (e.g. MemberExpr condition in IfStmt) can have column > parent's column.
-
-function nodeContains(node: Node, line: number, col: number): boolean {
-	if (node === null) return false;
-	const loc = node.location;
-	if (loc === null) return false;
-	if (loc.line > line) return false;
-	if (loc.line === line && loc.column > col) return false;
-	return true;
-}
-
-function sgTokenLen(node: Node): number {
-	if (node.kind === NodeKind.Identifier) return (node.data as IdentifierData).name.length;
-	if (node.kind === NodeKind.NumberLiteral) return 1;
-	if (node.kind === NodeKind.StringLiteral) return 1;
-	if (node.kind === NodeKind.BooleanLiteral) return 4;
-	if (node.kind === NodeKind.NullLiteral) return 4;
-	return 0;
-}
-
-// Reference: leaf node at exact cursor position
-function isTracked(node: Node, line: number, col: number): boolean {
-	if (node === null) return false;
-	const loc = node.location;
-	if (loc.line !== line) return false;
-	const len = sgTokenLen(node);
-	if (len > 0) return col >= loc.column && col < loc.column + len;
-	return false;
-}
-
-function sgFindInChildren(children: Node[], line: number, col: number): Node {
-	for (let i = children.length - 1; i >= 0; i = i - 1) {
-		const child = children[i];
-		if (child !== null && child.location.line <= line) {
-			const deeper = sgFindNodeAtPosition(child, line, col);
-			if (deeper !== null) return deeper;
-		}
-	}
-	return null as unknown as Node;
-}
-
-// Try child with standard containment (start position check)
-function sgTryChildLine(child: Node, line: number, col: number): Node {
-	if (child === null) return null as unknown as Node;
-	if (!nodeContains(child, line, col)) return null as unknown as Node;
-	return sgFindNodeAtPosition(child, line, col);
-}
-
-// Try child of a statement node — line-only containment (no column check).
-// Statement children (IfStmt condition, etc.) can start at any column.
-function sgTryStmtChild(child: Node, line: number, col: number): Node {
-	if (child === null) return null as unknown as Node;
-	const loc = child.location;
-	if (loc === null) return null as unknown as Node;
-	if (loc.line > line) return null as unknown as Node;
-	return sgFindNodeAtPosition(child, line, col);
-}
-
-export function sgFindNodeAtPosition(program: Node, line: number, col: number): Node {
-	if (program === null) return null as unknown as Node;
-	// Line-only guard: don't reject by column here — child nodes may start
-	// at different columns (MemberExpr loc is at dot, not at object).
-	// Leaf isTracked handles exact column matching.
-	const pLoc = program.location;
-	if (pLoc === null) return null as unknown as Node;
-	if (pLoc.line > line) return null as unknown as Node;
-
-	// Leaf nodes — use isTracked (exact column span)
-	if (isTracked(program, line, col)) return program;
-	// Leaf nodes that didn't match — reject
-	if (program.kind === NodeKind.Identifier
-		|| program.kind === NodeKind.NumberLiteral
-		|| program.kind === NodeKind.StringLiteral
-		|| program.kind === NodeKind.BooleanLiteral
-		|| program.kind === NodeKind.NullLiteral) return null as unknown as Node;
-
-	// Container nodes — recurse into children
-	if (program.kind === NodeKind.Program) {
-		return sgFindInChildren((program.data as ProgramData).programStmts, line, col);
-	}
-	if (program.kind === NodeKind.BlockStmt) {
-		return sgFindInChildren((program.data as BlockStmtData).statements, line, col);
-	}
-	if (program.kind === NodeKind.VariableDecl) {
-		const vd = program.data as VariableDeclData;
-		const f = sgTryStmtChild(vd.initializer, line, col);
-		if (f !== null) return f;
-		// No child matched — cursor is on declaration name or type annotation
-		if (pLoc.line === line) return program;
-		return null as unknown as Node;
-	}
-	if (program.kind === NodeKind.ExprStmt) {
-		return sgTryStmtChild((program.data as ExprStmtData).expr, line, col);
-	}
-	if (program.kind === NodeKind.ReturnStmt) {
-		return sgTryStmtChild((program.data as ReturnStmtData).argument, line, col);
-	}
-	if (program.kind === NodeKind.BinaryExpr) {
-		const bd = program.data as BinaryExprData;
-		const r = sgTryStmtChild(bd.right, line, col);
-		if (r !== null) return r;
-		return sgTryStmtChild(bd.left, line, col);
-	}
-	if (program.kind === NodeKind.CallExpr) {
-		const cd = program.data as CallExprData;
-		for (let i = cd.arguments.length - 1; i >= 0; i = i - 1) {
-			const f = sgTryStmtChild(cd.arguments[i], line, col);
-			if (f !== null) return f;
-		}
-		return sgTryStmtChild(cd.callee, line, col);
-	}
-	if (program.kind === NodeKind.MemberExpr) {
-		const md = program.data as MemberExprData;
-		// Object child can start before the dot — use line-only
-		const f = sgTryStmtChild(md.object, line, col);
-		if (f !== null) return f;
-		// Property name: not a child node, synthesize match
-		if (program.location.line === line) {
-			// MemberExpr location is at the dot. Property starts at dot+1.
-			const propCol = program.location.column + 1;
-			if (col >= propCol && col < propCol + md.property.length) return program;
-		}
-		return null as unknown as Node;
-	}
-	// Hidden wrapper nodes inserted by checker — recurse through to inner expression
-	if (program.kind === NodeKind.HiddenDeref || program.kind === NodeKind.HiddenAddr) {
-		return sgTryStmtChild((program.data as HiddenDerefData).expr, line, col);
-	}
-	if (program.kind === NodeKind.HiddenStdConv || program.kind === NodeKind.HiddenSubConv) {
-		return sgTryStmtChild((program.data as HiddenStdConvData).convExpr, line, col);
-	}
-	if (program.kind === NodeKind.IfStmt) {
-		const id = program.data as IfStmtData;
-		// Statement children — use line-only containment (condition column may differ)
-		const c = sgTryStmtChild(id.condition, line, col);
-		if (c !== null) return c;
-		const t = sgTryStmtChild(id.consequent, line, col);
-		if (t !== null) return t;
-		return sgTryStmtChild(id.alternate, line, col);
-	}
-	if (program.kind === NodeKind.WhileStmt) {
-		const wd = program.data as WhileStmtData;
-		const c = sgTryStmtChild(wd.whileCondition, line, col);
-		if (c !== null) return c;
-		return sgTryStmtChild(wd.whileBody, line, col);
-	}
-	if (program.kind === NodeKind.FunctionDecl) {
-		const fd = program.data as FunctionDeclData;
-		// Params are string names, not nodes — param hover handled via sgRecordSym
-		const fnB = sgTryStmtChild(fd.fnBody, line, col);
-		if (fnB !== null) return fnB;
-		// Cursor on function name or params
-		if (pLoc.line === line) return program;
-		return null as unknown as Node;
-	}
-	if (program.kind === NodeKind.ArrowFunction) {
-		const af = program.data as ArrowFunctionData;
-		return sgTryStmtChild(af.arrowBody, line, col);
-	}
-	if (program.kind === NodeKind.ConditionalExpr) {
-		const cd = program.data as ConditionalExprData;
-		const c = sgTryStmtChild(cd.ternaryCondition, line, col);
-		if (c !== null) return c;
-		const t = sgTryStmtChild(cd.ternaryConsequent, line, col);
-		if (t !== null) return t;
-		return sgTryStmtChild(cd.ternaryAlternate, line, col);
-	}
-	if (program.kind === NodeKind.UnaryExpr) {
-		return sgTryStmtChild((program.data as UnaryExprData).operand, line, col);
-	}
-	if (program.kind === NodeKind.ArrayAccess) {
-		const ad = program.data as ArrayAccessData;
-		const i = sgTryStmtChild(ad.index, line, col);
-		if (i !== null) return i;
-		return sgTryStmtChild(ad.array, line, col);
-	}
-	if (program.kind === NodeKind.ArrayLiteral) {
-		return sgFindInChildren((program.data as ArrayLiteralData).elements, line, col);
-	}
-	if (program.kind === NodeKind.ObjectLiteral) {
-		return sgFindInChildren((program.data as ObjectLiteralData).properties, line, col);
-	}
-	if (program.kind === NodeKind.ForOfStmt) {
-		const fod = program.data as ForOfStmtData;
-		const b = sgTryStmtChild(fod.forOfBody, line, col);
-		if (b !== null) return b;
-		return sgTryStmtChild(fod.forOfIterable, line, col);
-	}
-	if (program.kind === NodeKind.ForStmt) {
-		const fs = program.data as ForStmtData;
-		const b = sgTryStmtChild(fs.forBody, line, col);
-		if (b !== null) return b;
-		const u = sgTryStmtChild(fs.forUpdate, line, col);
-		if (u !== null) return u;
-		const t = sgTryStmtChild(fs.forCondition, line, col);
-		if (t !== null) return t;
-		return sgTryStmtChild(fs.forInit, line, col);
-	}
-	if (program.kind === NodeKind.TryCatchStmt) {
-		const tc = program.data as TryCatchStmtData;
-		const t = sgTryStmtChild(tc.tryBody, line, col);
-		if (t !== null) return t;
-		const c = sgTryStmtChild(tc.catchBody, line, col);
-		if (c !== null) return c;
-		return sgTryStmtChild(tc.finallyBody, line, col);
-	}
-	if (program.kind === NodeKind.MatchExpr) {
-		const me = program.data as MatchExprData;
-		const d = sgTryStmtChild(me.matchDisc, line, col);
-		if (d !== null) return d;
-		return sgFindInChildren(me.matchCases, line, col);
-	}
-	if (program.kind === NodeKind.MatchCase) {
-		const mc = program.data as MatchCaseData;
-		const b = sgTryStmtChild(mc.caseBody, line, col);
-		if (b !== null) return b;
-		return sgFindInChildren(mc.casePatterns, line, col);
-	}
-	if (program.kind === NodeKind.ClassDecl) {
-		const cd = program.data as ClassDeclData;
-		return sgFindInChildren(cd.classBody, line, col);
-	}
-	if (program.kind === NodeKind.TryExpr) {
-		const te = program.data as TryExprData;
-		return sgTryStmtChild(te.tryArg, line, col);
-	}
-	if (program.kind === NodeKind.ExportDecl) {
-		return sgTryStmtChild((program.data as ExportDeclData).exportedDecl, line, col);
-	}
-
-	// Fallback: no children found
-	return null as unknown as Node;
-}
-
-// ===== sgGetSymbolAtCursor — resolve symbol at cursor position =====
-
-// Get the type name, unwrapping Ref/Ptr
-function sgTypeName(t: Type): string {
-	if (t === null) return "";
-	if (t.typeName !== "") return t.typeName;
-	if ((t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) && t.typeChildren !== null && t.typeChildren.length > 0) {
-		return t.typeChildren[0].typeName;
-	}
-	return "";
-}
-
-// Build SgSuggest from a Symbol.
-function sgSuggestFromSym(sym: Symbol): SgSuggest {
-	return {
-		name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
-		location: sym.location, modulePath: sym.modulePath, containerName: "",
-		prefixScore: 0, scopeDepth: 0, contextFit: false,
-		isExported: hasFlag(sym, SymbolFlag.Exported), isMutable: hasFlag(sym, SymbolFlag.Mutable),
-	};
-}
-
-export function sgGetSymbolAtCursor(ctx: CheckerContext, program: Node, line: number, col: number): SgSuggest {
-	const node = sgFindNodeAtPosition(program, line, col);
-	if (node === null) return null as unknown as SgSuggest;
-
-	// Checker-stamped resolvedSym is authoritative — but only if it has a real location.
-	// Skip MemberExpr: needs special name/container handling (mangled names like console_log).
-	if (node.resolvedSym !== null && node.kind !== NodeKind.MemberExpr) {
-		const _rsLoc = node.resolvedSym.location;
-		if (_rsLoc !== null && _rsLoc.line > 0) return sgSuggestFromSym(node.resolvedSym);
-	}
-
-	if (node.kind === NodeKind.Identifier) {
-		const id = node.data as IdentifierData;
-		const sym = lookupSymbol(ctx.table, id.name);
-		if (sym !== null) return sgSuggestFromSym(sym);
-	}
-
-	if (node.kind === NodeKind.VariableDecl) {
-		const vd = node.data as VariableDeclData;
-		const sym = lookupSymbol(ctx.table, vd.declName);
-		if (sym !== null) return sgSuggestFromSym(sym);
-	}
-
-	if (node.kind === NodeKind.FunctionDecl) {
-		const fd = node.data as FunctionDeclData;
-		const sym = lookupSymbol(ctx.table, fd.fnName);
-		if (sym !== null) return sgSuggestFromSym(sym);
-	}
-
-	// MemberExpr: cursor on property name (e.g. p.name, JSON.parse, console.log)
-	if (node.kind === NodeKind.MemberExpr) {
-		const md = node.data as MemberExprData;
-		// Unwrap HiddenDeref (checker inserts for class/ref access)
-		let objNode = md.object;
-		if (objNode !== null && objNode.kind === NodeKind.HiddenDeref) {
-			objNode = (objNode.data as HiddenDerefData).expr;
-		}
-		// Determine container name from object type
-		const objType = objNode !== null ? objNode.nodeType : null as unknown as Type;
-		let container = objType !== null ? sgTypeName(objType) : "";
-		// Fallback: extract container from object identifier name (e.g. "console", "JSON")
-		if (container === "" && objNode !== null && objNode.kind === NodeKind.Identifier) {
-			container = (objNode.data as IdentifierData).name;
-		}
-		// resolvedSym set by checker — use if it has a real location
-		// Override name with md.property (sym.name may be mangled like "console_log")
-		if (node.resolvedSym !== null) {
-			const rsLoc = node.resolvedSym.location;
-			if (rsLoc !== null && rsLoc.line > 0) {
-				const sg = sgSuggestFromSym(node.resolvedSym);
-				sg.name = md.property;
-				sg.containerName = container;
-				// Method kind for functions on classes
-				if (sg.kind === SymbolKind.Function && container !== "") {
-					sg.kind = SymbolKind.Method;
-				}
-				return sg;
-			}
-		}
-		// Named type: find the property in the type's declaration (e.g. Person.name → interface Person)
-		if (objType !== null) {
-			if (container !== "") {
-				const typeSym = lookupSymbol(ctx.table, container);
-				if (typeSym !== null) {
-					return {
-						name: md.property, kind: SymbolKind.Property,
-						symType: typeSym.symbolType,
-						location: typeSym.location, modulePath: typeSym.modulePath,
-						containerName: container,
-						prefixScore: 0, scopeDepth: 0, contextFit: false,
-						isExported: false, isMutable: false,
-					};
-				}
-			}
-			// Anonymous struct: go to the object variable's declaration
-			if (objNode.resolvedSym !== null) {
-				return {
-					name: md.property, kind: SymbolKind.Property,
-					symType: objType,
-					location: objNode.resolvedSym.location, modulePath: objNode.resolvedSym.modulePath,
-					containerName: container,
-					prefixScore: 0, scopeDepth: 0, contextFit: false,
-					isExported: false, isMutable: false,
-				};
-			}
-		}
-		// Static member: try looking up the object as a class/enum
-		const objSym = lookupSymbol(ctx.table, md.property);
-		if (objSym !== null) return sgSuggestFromSym(objSym);
-	}
-
-	// CallExpr: cursor on the call — delegate to callee
-	if (node.kind === NodeKind.CallExpr) {
-		const cd = node.data as CallExprData;
-		if (cd.callee.resolvedSym !== null) return sgSuggestFromSym(cd.callee.resolvedSym);
-		if (cd.callee.kind === NodeKind.Identifier) {
-			const id = cd.callee.data as IdentifierData;
-			const sym = lookupSymbol(ctx.table, id.name);
-			if (sym !== null) return sgSuggestFromSym(sym);
-		}
-	}
-
-	return null as unknown as SgSuggest;
-}
-
 // ===== sgFormatHover — markdown hover info =====
 
 // Find substring in string. Returns index or -1.
@@ -632,6 +285,7 @@ function sgSymbolKindName(kind: SymbolKind): string {
 		SymbolKind.Parameter => "parameter",
 		SymbolKind.Property => "property",
 		SymbolKind.Method => "method",
+		SymbolKind.EnumMember => "enum member",
 	};
 }
 
@@ -968,7 +622,7 @@ function sgGetDeclName(node: Node): string {
 // Walks top-level stmts (including inside ExportDecl) for matching declarations.
 // Returns { line: 0, column: 0 } if not found.
 export function sgFindExportedDecl(program: Node, name: string): SourceLocation {
-	const notFound: SourceLocation = { line: 0, column: 0 };
+	const notFound = makeLoc(0, 0);
 	if (program === null) return notFound;
 	if (program.kind !== NodeKind.Program) return notFound;
 	const data = program.data as ProgramData;
@@ -988,11 +642,6 @@ export function sgFindExportedDecl(program: Node, name: string): SourceLocation 
 	return notFound;
 }
 
-// Document symbol detail — type signature for outline view
-export function sgSymbolDetail(suggest: SgSuggest): string {
-	if (suggest === null) return "";
-	return sgTypeToString(suggest.symType);
-}
 
 // ===== sgCollectDiagnostics — wrap checker errors =====
 
@@ -1167,7 +816,7 @@ function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverTyp
 			if (ps > 0) {
 				const propType = i < receiverType.typeChildren.length
 					? receiverType.typeChildren[i] : unknownType();
-				const loc: SourceLocation = { line: 0, column: 0 };
+				const loc = makeLoc(0, 0);
 				const item: SgSuggest = {
 					name: propName, kind: SymbolKind.Property, symType: propType,
 					location: loc, modulePath: "", containerName: "",
@@ -1184,7 +833,7 @@ function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverTyp
 			const memberName = receiverType.typeNames[i];
 			const ps = sgPrefixMatch(prefix, memberName);
 			if (ps > 0) {
-				const loc: SourceLocation = { line: 0, column: 0 };
+				const loc = makeLoc(0, 0);
 				const item: SgSuggest = {
 					name: memberName, kind: SymbolKind.Property, symType: receiverType,
 					location: loc, modulePath: "", containerName: "",
@@ -1220,7 +869,7 @@ function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverTyp
 				if (!bestExt.isStatic && sigType.typeChildren !== null && sigType.typeChildren.length > 0) {
 					sigType = stripReceiverParam(sigType);
 				}
-				const loc: SourceLocation = { line: 0, column: 0 };
+				const loc = makeLoc(0, 0);
 				const item: SgSuggest = {
 					name: bestExt.methodName, kind: SymbolKind.Method, symType: sigType,
 					location: loc, modulePath: "", containerName: "",
@@ -1954,87 +1603,6 @@ export interface SgSymbolRef {
 	isDecl: boolean;
 }
 
-export function sgCollectReferences(program: Node): SgSymbolRef[] {
-	const result: SgSymbolRef[] = [];
-	if (program === null) return result;
-	sgCollectRefsInNode(program, result);
-	return result;
-}
-
-function sgCollectRefsInNode(node: Node, refs: SgSymbolRef[]): void {
-	if (node === null) return;
-	const loc = node.location;
-
-	if (node.kind === NodeKind.Identifier) {
-		const id = node.data as IdentifierData;
-		const ref: SgSymbolRef = { name: id.name, line: loc.line, col: loc.column, nameLen: id.name.length, isDecl: false };
-		refs.push(ref);
-		return;
-	}
-
-	if (node.kind === NodeKind.VariableDecl) {
-		const vd = node.data as VariableDeclData;
-		const ref: SgSymbolRef = { name: vd.declName, line: loc.line, col: loc.column, nameLen: vd.declName.length, isDecl: true };
-		refs.push(ref);
-		if (vd.initializer !== null) sgCollectRefsInNode(vd.initializer, refs);
-		return;
-	}
-
-	if (node.kind === NodeKind.FunctionDecl) {
-		const fd = node.data as FunctionDeclData;
-		const ref: SgSymbolRef = { name: fd.fnName, line: loc.line, col: loc.column, nameLen: fd.fnName.length, isDecl: true };
-		refs.push(ref);
-		if (fd.fnBody !== null) sgCollectRefsInNode(fd.fnBody, refs);
-		return;
-	}
-
-	if (node.kind === NodeKind.InterfaceDecl) {
-		const id = node.data as InterfaceDeclData;
-		const ref: SgSymbolRef = { name: id.interfaceName, line: loc.line, col: loc.column, nameLen: id.interfaceName.length, isDecl: true };
-		refs.push(ref);
-		return;
-	}
-
-	if (node.kind === NodeKind.EnumDecl) {
-		const ed = node.data as EnumDeclData;
-		const ref: SgSymbolRef = { name: ed.enumName, line: loc.line, col: loc.column, nameLen: ed.enumName.length, isDecl: true };
-		refs.push(ref);
-		return;
-	}
-
-	if (node.kind === NodeKind.ClassDecl) {
-		const cd = node.data as ClassDeclData;
-		const ref: SgSymbolRef = { name: cd.className, line: loc.line, col: loc.column, nameLen: cd.className.length, isDecl: true };
-		refs.push(ref);
-		for (let ci = 0; ci < cd.classBody.length; ci = ci + 1) {
-			sgCollectRefsInNode(cd.classBody[ci], refs);
-		}
-		return;
-	}
-
-	// Compound nodes — recurse into children
-	sgCollectRefsInCompound(node, refs);
-}
-
-// Split out compound node recursion to avoid codegen function-size limits
-function sgCollectRefsInCompound(node: Node, refs: SgSymbolRef[]): void {
-	forEachChild(node, (child: Node): void => {
-		sgCollectRefsInNode(child, refs);
-	});
-}
-
-export function sgFindUsagesByName(refs: SgSymbolRef[], name: string): SgSymbolRef[] {
-	const result: SgSymbolRef[] = [];
-	for (let i = 0; i < refs.length; i = i + 1) {
-		if (refs[i].name === name) {
-			const r = refs[i];
-			const ref: SgSymbolRef = { name: r.name, line: r.line, col: r.col, nameLen: r.nameLen, isDecl: r.isDecl };
-			result.push(ref);
-		}
-	}
-	return result;
-}
-
 // ===== Tests =====
 test "number" { assert sgTypeToString(numberType()) === "number"; }
 
@@ -2088,35 +1656,6 @@ test "named object" {
 test "result" {
 	const t = createResult(numberType(), stringType());
 	assert sgTypeToString(t) === "Result<number, string>";
-}
-
-test "find identifier in simple decl" {
-	const pr = parseSource("const x = 42;");
-	if (!pr.ok) { assert false; return; }
-	// "const x" - x is at col 6
-	const node = sgFindNodeAtPosition(pr.value, 1, 6);
-	assert node !== null;
-}
-
-test "find in function body" {
-	const pr = parseSource("function foo() { return 1; }");
-	if (!pr.ok) { assert false; return; }
-	const node = sgFindNodeAtPosition(pr.value, 1, 17);
-	assert node !== null;
-}
-
-test "returns null for null node" {
-	const nullNode = null as unknown as Node;
-	const node = sgFindNodeAtPosition(nullNode, 1, 0);
-	assert node === null;
-}
-
-test "returns null for unknown position" {
-	const pr = parseSource("const x = 1;");
-	if (!pr.ok) { assert false; return; }
-	const ctx = checkProgram(pr.value);
-	const sg = sgGetSymbolAtCursor(ctx, pr.value, 100, 0);
-	assert sg === null;
 }
 
 test "format variable hover" {
@@ -2567,47 +2106,6 @@ test "skip param hint when arg matches param name" {
 	assert paramHints === 0;
 }
 
-test "collects declarations and usages" {
-	const src = "const x = 1;\nconst y = x;";
-	const pr = parseSource(src);
-	if (!pr.ok) { assert false; return; }
-	const refs = sgCollectReferences(pr.value);
-	// x: 1 decl + 1 usage, y: 1 decl
-	assert refs.length >= 3;
-}
-
-test "find usages by name" {
-	const src = "const x = 1;\nconst y = x;";
-	const pr = parseSource(src);
-	if (!pr.ok) { assert false; return; }
-	const refs = sgCollectReferences(pr.value);
-	const xRefs = sgFindUsagesByName(refs, "x");
-	assert xRefs.length === 2;
-	// First should be decl, second should be usage
-	assert xRefs[0].isDecl;
-	assert !xRefs[1].isDecl;
-}
-
-test "function decl and call" {
-	const src = "function greet(name: string): void {}\ngreet(\"hello\");";
-	const pr = parseSource(src);
-	if (!pr.ok) { assert false; return; }
-	const refs = sgCollectReferences(pr.value);
-	const greetRefs = sgFindUsagesByName(refs, "greet");
-	assert greetRefs.length === 2;
-	assert greetRefs[0].isDecl;
-	assert !greetRefs[1].isDecl;
-}
-
-test "no references for unknown name" {
-	const src = "const x = 1;";
-	const pr = parseSource(src);
-	if (!pr.ok) { assert false; return; }
-	const refs = sgCollectReferences(pr.value);
-	const noRefs = sgFindUsagesByName(refs, "nonexistent");
-	assert noRefs.length === 0;
-}
-
 // ===== Doc Comment Tests =====
 
 test "doc comment extraction" {
@@ -2649,7 +2147,7 @@ test "doc comment with ## style" {
 test "sgFormatHoverDoc with doc comment" {
 	const suggest: SgSuggest = {
 		name: "foo", kind: SymbolKind.Function,
-		symType: unknownType(), location: { line: 1, column: 0 },
+		symType: unknownType(), location: makeLoc(1, 0),
 		modulePath: "", containerName: "",
 		prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: true, isMutable: false,
@@ -2661,7 +2159,7 @@ test "sgFormatHoverDoc with doc comment" {
 test "sgFormatHoverDoc no comment" {
 	const suggest: SgSuggest = {
 		name: "bar", kind: SymbolKind.Variable,
-		symType: unknownType(), location: { line: 1, column: 0 },
+		symType: unknownType(), location: makeLoc(1, 0),
 		modulePath: "", containerName: "",
 		prefixScore: 0, scopeDepth: 0, contextFit: false,
 		isExported: false, isMutable: false,

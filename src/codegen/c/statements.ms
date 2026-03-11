@@ -24,7 +24,7 @@ import {
 	sec, addLine, emitLineDir, getTemp,
 } from "./context";
 import { genExpr, shimCallArg } from "./expressions";
-import { ensureCrossModuleProto } from "./declarations";
+import { ensureCrossModuleProto } from "./forward";
 import { safeName } from "./names";
 import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, getCalleeReturnType, intToString, genClFullCastNrvo, genClHalfCastNrvo } from "./types";
 
@@ -35,7 +35,7 @@ import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, getCalleeReturnType, 
 
 function blockLeaveActions(g: CGen, p: CProc, howManyFinallys: number): void {
 	if (howManyFinallys <= 0) return;
-	// Reference parity (ccgstmts.nim:229-263): pop entries before generating
+	// Reference parity: pop entries before generating
 	// finally bodies, then restore. Prevents infinite recursion if a finally
 	// body contains return/break which would re-trigger blockLeaveActions.
 	const stack: Node[] = [];

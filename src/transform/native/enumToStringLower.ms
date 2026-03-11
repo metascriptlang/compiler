@@ -66,7 +66,7 @@ import { createToken, TokenKind } from "../../lexer/token";
 
 function makeTestEnum(name: string, members: string[]): Node {
 	const tok = createToken(TokenKind.Ident, name, 1);
-	return createNode(NodeKind.EnumDecl, { enumName: name, enumMembers: members }, tok);
+	return createNode(NodeKind.EnumDecl, { enumName: name, enumMembers: members, nameLocation: { line: 1, column: 1 } }, tok);
 }
 
 function makeTestProgram(stmts: Node[]): Node {

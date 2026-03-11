@@ -1,4 +1,4 @@
-import { Node, NodeKind, SourceLocation, createNodeAt, ProgramData, FunctionDeclData, ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind } from "../ast/node";
+import { Node, NodeKind, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind } from "../ast/node";
 import { extractDecoratorInfo } from "./decoratorHelpers";
 import { Type, TypeKind, unknownType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
@@ -296,7 +296,7 @@ function collectEnumDecl(ctx: CheckerContext, node: Node): void {
 	const enumSym = makeSymbol(d.enumName, SymbolKind.Enum, enumType, false);
 	defineOrError(ctx, enumSym, node);
 	// Record enum type DEF for symbol graph
-	sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.enumName.length, enumSym, enumType, SymbolKind.Enum, d.enumName, "", true);
+	sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.enumName.length, enumSym, enumType, SymbolKind.Enum, d.enumName, "", true);
 	// Register each enum member as EnumName_MemberName (standard implementation parity)
 	// Needed because checkMemberExpr rewrites Color.Red → Identifier "Color_Red"
 	let mi = 0;
@@ -764,8 +764,8 @@ test "non-export not marked" {
 }
 
 test "getDeclName function" {
-	const zl: SourceLocation = { line: 0, column: 0 };
-	assert getDeclName(createNodeAt(NodeKind.FunctionDecl, { fnName: "test", params: [], fnParamTypes: [], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "", fnDefaults: [] }, zl)) === "test";
+	const zl = makeLoc(0, 0);
+	assert getDeclName(createNodeAt(NodeKind.FunctionDecl, { fnName: "test", params: [], fnParamTypes: [], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "", fnDefaults: [], nameLocation: zl }, zl)) === "test";
 }
 
 test "collect variables in pass 1" {

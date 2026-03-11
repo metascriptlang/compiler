@@ -119,7 +119,7 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as VariableDeclData;
 	// Resolve declared type FIRST so it can flow as expectedType into initializer (Implementation parity)
-	let declType = null;
+	let declType: Type = null;
 	if (d.declType !== "") {
 		declType = resolveAnnotation(d.declType, ctx);
 		// Record type annotation positions for LSP (standard parity: markUsed in semTypeNode)
@@ -143,11 +143,11 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		if (d.declKind !== DeclKind.Const) {
 			setFlag(existing, SymbolFlag.Mutable);
 		}
-		sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.declName.length, existing, varType, SymbolKind.Variable, d.declName, "", true);
+		sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.declName.length, existing, varType, SymbolKind.Variable, d.declName, "", true);
 	} else {
 		const newSym = makeSymbol(d.declName, SymbolKind.Variable, varType, d.declKind !== DeclKind.Const);
 		defineOrError(ctx, newSym, node);
-		sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.declName.length, newSym, varType, SymbolKind.Variable, d.declName, "", true);
+		sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.declName.length, newSym, varType, SymbolKind.Variable, d.declName, "", true);
 	}
 }
 
@@ -159,7 +159,7 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 
 	// Demand-driven: ensure signature is shaped before checking body
 	ensureShaped(sym, ctx);
-	sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.fnName.length, sym, sym.symbolType, SymbolKind.Function, d.fnName, "", true);
+	sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.fnName.length, sym, sym.symbolType, SymbolKind.Function, d.fnName, "", true);
 
 	// Multi-pass parity: avoid re-checking body if already done
 	if (sym.state === SymbolState.Checked) return;
@@ -199,7 +199,7 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 
 	// Demand-driven: ensure class fields/methods are shaped
 	ensureShaped(sym, ctx);
-	sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.className.length, sym, sym.symbolType, SymbolKind.Class, d.className, "", true);
+	sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.className.length, sym, sym.symbolType, SymbolKind.Class, d.className, "", true);
 
 	if (sym.state === SymbolState.Checked) return;
 	sym.state = SymbolState.Checking;
@@ -226,12 +226,12 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 			const d = node.data as MethodDeclData;
 			const methodSym = node.resolvedSym;
 			const sym = methodSym !== null ? methodSym : makeSymbol(d.methodName, SymbolKind.Method, unknownType(), false);
-			sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.methodName.length, sym, sym.symbolType, SymbolKind.Method, d.methodName, className, true);
+			sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.methodName.length, sym, sym.symbolType, SymbolKind.Method, d.methodName, className, true);
 			checkFunctionBody(ctx, sym, d.methodParams, d.methodBody, node.paramLocations);
 		},
 		NodeKind.ConstructorDecl => {
 			const d = node.data as ConstructorDeclData;
-			// Record constructor DEF (Nim parity: semIdentDef on proc sym)
+			// Record constructor DEF for symbol graph
 			const ctorSym = node.resolvedSym;
 			if (ctorSym !== null) {
 				sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + 11, ctorSym, ctorSym.symbolType, SymbolKind.Method, "constructor", className, true);
@@ -690,40 +690,50 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 	if (ctx.currentFunction === null) {
 		addError(ctx, "return outside of function", node.location.line, node.location.column);
 	}
-	if (d.argument !== null && d.argument.kind !== NodeKind.NullLiteral) {
-		// Pass declared return type as expectedType (Implementation parity)
-		// Inside match expression block arms, return targets the match — not the function
-		let returnExpected = null;
-		if (ctx.matchExprDepth === 0
-			&& ctx.currentFunction !== null
+	if (d.argument === null) return;
+
+	// Stamp `return null` with the function's declared return type so codegen knows the type.
+	if (d.argument.kind === NodeKind.NullLiteral) {
+		if (ctx.currentFunction !== null
 			&& ctx.currentFunction.symbolType.kind === TypeKind.Function
-			&& ctx.currentFunction.symbolType.typeReturn !== null
-			&& ctx.currentFunction.symbolType.typeReturn.kind !== TypeKind.Unknown) {
-			returnExpected = ctx.currentFunction.symbolType.typeReturn;
+			&& ctx.currentFunction.symbolType.typeReturn !== null) {
+			d.argument.nodeType = ctx.currentFunction.symbolType.typeReturn;
 		}
-		const retType = checkExpr(ctx, d.argument, returnExpected);
-		// Parity: standard reference node fitting — insert HiddenStdConv for narrowing return
-		if (returnExpected !== null) {
-			d.argument = fitNode(ctx, d.argument, returnExpected, retType);
-		}
-		// Track inferred return type (first return wins)
-		if (ctx.matchExprDepth === 0 && ctx.inferredReturn.kind === TypeKind.Unknown) {
-			ctx.inferredReturn = retType;
-		}
-		// Check against declared return type (skip inside match expression block arms —
-		// return targets the match result, not the enclosing function)
-		if (ctx.matchExprDepth === 0
-			&& ctx.currentFunction !== null
-			&& ctx.currentFunction.symbolType.kind === TypeKind.Function
-			&& ctx.currentFunction.symbolType.typeReturn !== null
-			&& ctx.currentFunction.symbolType.typeReturn.kind !== TypeKind.Unknown
-			&& retType.kind !== TypeKind.Unknown
-			&& retType.kind !== TypeKind.Error) {
-			if (!isAssignable(retType, ctx.currentFunction.symbolType.typeReturn)) {
-				const got = formatTypeBrief(retType);
-				const expected = formatTypeBrief(ctx.currentFunction.symbolType.typeReturn);
-				addError(ctx, "Return type mismatch in '" + ctx.currentFunction.name + "': expected " + expected + ", got " + got, node.location.line, node.location.column);
-			}
+		return;
+	}
+
+	// Pass declared return type as expectedType (Implementation parity)
+	// Inside match expression block arms, return targets the match — not the function
+	let returnExpected: Type = null;
+	if (ctx.matchExprDepth === 0
+		&& ctx.currentFunction !== null
+		&& ctx.currentFunction.symbolType.kind === TypeKind.Function
+		&& ctx.currentFunction.symbolType.typeReturn !== null
+		&& ctx.currentFunction.symbolType.typeReturn.kind !== TypeKind.Unknown) {
+		returnExpected = ctx.currentFunction.symbolType.typeReturn;
+	}
+	const retType = checkExpr(ctx, d.argument, returnExpected);
+	// Parity: standard reference node fitting — insert HiddenStdConv for narrowing return
+	if (returnExpected !== null) {
+		d.argument = fitNode(ctx, d.argument, returnExpected, retType);
+	}
+	// Track inferred return type (first return wins)
+	if (ctx.matchExprDepth === 0 && ctx.inferredReturn.kind === TypeKind.Unknown) {
+		ctx.inferredReturn = retType;
+	}
+	// Check against declared return type (skip inside match expression block arms —
+	// return targets the match result, not the enclosing function)
+	if (ctx.matchExprDepth === 0
+		&& ctx.currentFunction !== null
+		&& ctx.currentFunction.symbolType.kind === TypeKind.Function
+		&& ctx.currentFunction.symbolType.typeReturn !== null
+		&& ctx.currentFunction.symbolType.typeReturn.kind !== TypeKind.Unknown
+		&& retType.kind !== TypeKind.Unknown
+		&& retType.kind !== TypeKind.Error) {
+		if (!isAssignable(retType, ctx.currentFunction.symbolType.typeReturn)) {
+			const got = formatTypeBrief(retType);
+			const expected = formatTypeBrief(ctx.currentFunction.symbolType.typeReturn);
+			addError(ctx, "Return type mismatch in '" + ctx.currentFunction.name + "': expected " + expected + ", got " + got, node.location.line, node.location.column);
 		}
 	}
 }

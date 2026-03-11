@@ -134,6 +134,10 @@ export interface SourceLocation {
 	column: number;
 }
 
+export function makeLoc(line: number, column: number): SourceLocation {
+	return { line, column };
+}
+
 // ===== Node Data (Discriminated Union) =====
 // Each variant has structurally unique field names for distinct anonymous structs
 
@@ -179,7 +183,7 @@ export type NodeData =
 	| { propKey: string, propAlias: Node }                         // ObjectPatternProp
 	| { destrPattern: Node, destrInit: Node, destrIsConst: boolean } // DestructuringDecl
 	// Statement variants
-	| { declName: string, declType: string, initializer: Node, declKind: DeclKind }  // VariableDecl
+	| { declName: string, declType: string, initializer: Node, declKind: DeclKind, nameLocation: SourceLocation }  // VariableDecl
 	| { condition: Node, consequent: Node, alternate: Node }       // IfStmt
 	| { whileCondition: Node, whileBody: Node }                    // WhileStmt
 	| { forInit: Node, forCondition: Node, forUpdate: Node, forBody: Node } // ForStmt
@@ -190,7 +194,7 @@ export type NodeData =
 	| { argument: Node }                                           // ReturnStmt
 	| { breakLabel: string }                                       // BreakStmt
 	| { continueLabel: string }                                    // ContinueStmt
-	| { fnName: string, params: string[], fnParamTypes: string[], fnBody: Node, fnFlags: string, fnReturnType: string, fnDefaults: Node[], nativeName: string } // FunctionDecl
+	| { fnName: string, params: string[], fnParamTypes: string[], fnBody: Node, fnFlags: string, fnReturnType: string, fnDefaults: Node[], nativeName: string, nameLocation: SourceLocation } // FunctionDecl
 	| { doBody: Node, doCondition: Node }                          // DoWhileStmt
 	| { switchDisc: Node, switchCases: Node[] }                    // SwitchStmt
 	| { caseTests: Node[], caseStmts: Node[], isDefault: boolean } // SwitchCase
@@ -199,12 +203,12 @@ export type NodeData =
 	// Declaration variants
 	| { importNames: string[], importAliases: string[], importSource: string }  // ImportDecl
 	| { exportedDecl: Node }                                       // ExportDecl
-	| { aliasName: string, aliasType: string, aliasIsDistinct: boolean, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[] }               // TypeAliasDecl
-	| { enumName: string, enumMembers: string[], enumValues: number[] } // EnumDecl
-	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[] } // InterfaceDecl
-	| { className: string, classExtends: string, classBody: Node[] } // ClassDecl
+	| { aliasName: string, aliasType: string, aliasIsDistinct: boolean, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[], nameLocation: SourceLocation } // TypeAliasDecl
+	| { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation } // EnumDecl
+	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], nameLocation: SourceLocation } // InterfaceDecl
+	| { className: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation } // ClassDecl
 	| { propName: string, propType: string, propIsStatic: boolean }                 // PropertyDecl
-	| { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodReturnType: string, nativeName: string } // MethodDecl
+	| { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodReturnType: string, nativeName: string, nameLocation: SourceLocation } // MethodDecl
 	| { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node } // ConstructorDecl
 	// Error handling variants
 	| { throwArg: Node }                                           // ThrowStmt
@@ -292,7 +296,7 @@ export type ObjectPatternPropData = { propKey: string, propAlias: Node };
 export type DestructuringDeclData = { destrPattern: Node, destrInit: Node, destrIsConst: boolean };
 
 // Statements
-export type VariableDeclData = { declName: string, declType: string, initializer: Node, declKind: DeclKind };
+export type VariableDeclData = { declName: string, declType: string, initializer: Node, declKind: DeclKind, nameLocation: SourceLocation };
 export type IfStmtData = { condition: Node, consequent: Node, alternate: Node };
 export type WhileStmtData = { whileCondition: Node, whileBody: Node };
 export type ForStmtData = { forInit: Node, forCondition: Node, forUpdate: Node, forBody: Node };
@@ -303,7 +307,7 @@ export type ExprStmtData = { expr: Node };
 export type ReturnStmtData = { argument: Node };
 export type BreakStmtData = { breakLabel: string };
 export type ContinueStmtData = { continueLabel: string };
-export type FunctionDeclData = { fnName: string, params: string[], fnParamTypes: string[], fnBody: Node, fnFlags: string, fnReturnType: string, fnDefaults: Node[], nativeName: string };
+export type FunctionDeclData = { fnName: string, params: string[], fnParamTypes: string[], fnBody: Node, fnFlags: string, fnReturnType: string, fnDefaults: Node[], nativeName: string, nameLocation: SourceLocation };
 export type DoWhileStmtData = { doBody: Node, doCondition: Node };
 export type SwitchStmtData = { switchDisc: Node, switchCases: Node[] };
 export type SwitchCaseData = { caseTests: Node[], caseStmts: Node[], isDefault: boolean };
@@ -313,12 +317,12 @@ export type MatchStmtData = { matchStmtDisc: Node, matchStmtCases: Node[] };
 // Declarations
 export type ImportDeclData = { importNames: string[], importAliases: string[], importSource: string };
 export type ExportDeclData = { exportedDecl: Node };
-export type TypeAliasDeclData = { aliasName: string, aliasType: string, aliasIsDistinct: boolean, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[] };
-export type EnumDeclData = { enumName: string, enumMembers: string[], enumValues: number[] };
-export type InterfaceDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[] };
-export type ClassDeclData = { className: string, classExtends: string, classBody: Node[] };
+export type TypeAliasDeclData = { aliasName: string, aliasType: string, aliasIsDistinct: boolean, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[], nameLocation: SourceLocation };
+export type EnumDeclData = { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation };
+export type InterfaceDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], nameLocation: SourceLocation };
+export type ClassDeclData = { className: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation };
 export type PropertyDeclData = { propName: string, propType: string, propIsStatic: boolean };
-export type MethodDeclData = { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodReturnType: string, nativeName: string };
+export type MethodDeclData = { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodReturnType: string, nativeName: string, nameLocation: SourceLocation };
 export type ConstructorDeclData = { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node };
 export type ExternDeclData = { externKind: ExternKind, externName: string, nativeName: string, externType: string };
 export type MacroDeclData = { macroDeclName: string, macroDeclParams: string[], macroDeclBody: Node };
@@ -348,7 +352,7 @@ export function createNode(kind: NodeKind, data: NodeData, token: Token): Node {
 	const n = new Node();
 	n.kind = kind;
 	n.data = data;
-	n.location = { line: token.line, column: token.column };
+	n.location = makeLoc(token.line, token.column);
 	n.nodeType = null;
 	n.resolvedSym = null as unknown as Symbol;
 	n.flags = 0;

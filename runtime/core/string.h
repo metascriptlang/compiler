@@ -211,6 +211,8 @@ void msStringSetChar(msString* s, int64_t idx, msString ch);
 /* Number/bool to string */
 msString msIntToString(int64_t value);
 msString msNumberToString(double value);
+msString msNumberToStringRadix(double value, double radix);
+/* msNumberToString is the no-radix fast path; msNumberToStringRadix handles arbitrary base */
 msString msBoolToString(int value);
 #define msIntToStr msIntToString
 #define msBoolToStr msBoolToString

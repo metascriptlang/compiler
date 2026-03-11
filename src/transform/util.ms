@@ -3,7 +3,7 @@
 
 import { Token, TokenKind, createToken } from "../lexer/token";
 import {
-	Node, NodeKind, DeclKind, SourceLocation, createNode, Symbol,
+	Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol,
 	BlockStmtData, VariableDeclData, IfStmtData, WhileStmtData,
 	TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData,
 	CallExprData, MemberExprData, IdentifierData,
@@ -79,7 +79,7 @@ export function makeBlock(stmts: Node[], loc: SourceLocation): Node {
 }
 
 export function makeVarDecl(varName: string, init: Node, declKind: DeclKind, loc: SourceLocation): Node {
-	const n = createNode(NodeKind.VariableDecl, { declName: varName, declType: "", initializer: init, declKind }, syntheticToken(loc));
+	const n = createNode(NodeKind.VariableDecl, { declName: varName, declType: "", initializer: init, declKind, nameLocation: loc }, syntheticToken(loc));
 	if (init !== null && init.nodeType !== null) {
 		n.nodeType = init.nodeType;
 	}
@@ -103,7 +103,7 @@ export function makeWhile(cond: Node, body: Node, loc: SourceLocation): Node {
 }
 
 export function makeTryCatch(tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node, loc: SourceLocation): Node {
-	return createNode(NodeKind.TryCatchStmt, { tryBody, catchName, catchBody, finallyBody, catchBindingLocation: { line: 0, column: 0 } }, syntheticToken(loc));
+	return createNode(NodeKind.TryCatchStmt, { tryBody, catchName, catchBody, finallyBody, catchBindingLocation: makeLoc(0, 0) }, syntheticToken(loc));
 }
 
 export function makeContinue(loc: SourceLocation): Node {
@@ -229,7 +229,7 @@ export function makeFnDecl(name: string, fnParams: string[], paramTypes: string[
 	const n = createNode(NodeKind.FunctionDecl, {
 		fnName: name, params: fnParams, fnParamTypes: paramTypes,
 		fnBody: body, fnFlags: flags, fnReturnType: returnType,
-		fnDefaults: emptyDefaults, nativeName: "",
+		fnDefaults: emptyDefaults, nativeName: "", nameLocation: loc,
 	}, syntheticToken(loc));
 	// Build Type from string annotations for codegen (Implementation parity)
 	const resolvedParams: Type[] = [];
@@ -244,6 +244,7 @@ export function makeFnDecl(name: string, fnParams: string[], paramTypes: string[
 export function makeInterfaceDecl(name: string, fields: string[], fieldTypes: string[], loc: SourceLocation): Node {
 	const n = createNode(NodeKind.InterfaceDecl, {
 		interfaceName: name, interfaceFields: fields, interfaceFieldTypes: fieldTypes,
+		nameLocation: loc,
 	}, syntheticToken(loc));
 	// Build Type for codegen (Implementation parity)
 	const resolvedFieldTypes: Type[] = [];

@@ -2,7 +2,7 @@
 // Uses callback injection via util.ms to avoid circular imports
 
 import { Token, TokenKind } from "../../lexer/token";
-import { Node, NodeKind, NodeData, createNode } from "../../ast/node";
+import { Node, NodeKind, NodeData, createNode, makeLoc } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, consumeSemicolon } from "../context";
 import { skipOptionalType, isIdentLike } from "../util";
 import { callBlockParser, callExprParser } from "./callbacks";
@@ -61,7 +61,7 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 			return Result.ok(createNode(NodeKind.TryCatchStmt, {
 				tryBody: tryBlock, catchName: catchParam,
 				catchBody: catchBlock, finallyBody: finallyBlock,
-				catchBindingLocation: { line: catchParamLine, column: catchParamCol },
+				catchBindingLocation: makeLoc(catchParamLine, catchParamCol),
 			}, tryToken));
 		}
 		// try-catch only
@@ -69,7 +69,7 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 			tryBody: tryBlock, catchName: catchParam,
 			catchBody: catchBlock,
 			finallyBody: createNode(NodeKind.BlockStmt, { statements: [] }, tryToken),
-			catchBindingLocation: { line: catchParamLine, column: catchParamCol },
+			catchBindingLocation: makeLoc(catchParamLine, catchParamCol),
 		}, tryToken));
 	}
 
@@ -81,7 +81,7 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 			tryBody: tryBlock, catchName: "",
 			catchBody: createNode(NodeKind.BlockStmt, { statements: [] }, tryToken),
 			finallyBody: finallyBlock,
-			catchBindingLocation: { line: 0, column: 0 },
+			catchBindingLocation: makeLoc(0, 0),
 		}, tryToken));
 	}
 

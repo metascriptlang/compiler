@@ -642,6 +642,26 @@ msString msNumberToString(double value) {
 	return msStringNew(buf, len);
 }
 
+msString msNumberToStringRadix(double value, double radix) {
+	int r = (int)radix;
+	if (r < 2 || r > 36) r = 10;
+	if (r == 10) return msNumberToString(value);
+	int64_t iv = (int64_t)value;
+	if ((double)iv != value) return msNumberToString(value); /* non-integer: fallback to base 10 */
+	char buf[66]; /* enough for 64-bit binary + sign + null */
+	int neg = iv < 0;
+	uint64_t uv = neg ? (uint64_t)(-(iv + 1)) + 1 : (uint64_t)iv;
+	static const char digits[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+	int pos = 65;
+	buf[pos] = '\0';
+	do {
+		buf[--pos] = digits[uv % r];
+		uv /= r;
+	} while (uv > 0);
+	if (neg) buf[--pos] = '-';
+	return msStringNew(buf + pos, 65 - pos);
+}
+
 msString msBoolToString(int value) {
 	if (value) return msStringNew("true", 4);
 	return msStringNew("false", 5);

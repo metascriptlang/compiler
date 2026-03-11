@@ -13,7 +13,7 @@ function isIdentLikeToken(token: Token): boolean {
 
 // ===== Parser State =====
 
-export interface ParserState {
+export class ParserState {
 	tokens: Token[];
 	position: number;
 	errors: string[];

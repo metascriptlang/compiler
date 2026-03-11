@@ -27,15 +27,14 @@ import {
 	lspFmtSignatureParam, lspFmtSignature, lspFmtSignatureHelp
 } from "./format";
 import {
-	sgTypeToString, sgFindNodeAtPosition, sgGetSymbolAtCursor,
+	sgTypeToString,
 	sgFormatHover, sgCollectDiagnostics,
 	sgDetectCompletionContext, sgGetPrefix, sgGetCompletionCandidates,
 	sgCollectSymbolsInFile, sgFormatSignature, sgFormatExtensionSignatures, sgCountActiveParam, sgGetCalleeAtCursor, sgGetReceiverAtCursor,
 	sgCollectInlayHints,
-	sgCollectReferences, sgFindUsagesByName,
 	sgFormatHoverDoc, sgExtractDocComment, sgBuiltinDoc,
 	sgFindImportSource, sgFindExportedDecl,
-	sgQueryAtPosition,
+	sgQueryAtPosition, sgQueryByName,
 	SgSuggest, SgCompletionKind,
 	SgSymbolRef,
 	SgDocumentSymbol,
@@ -47,7 +46,7 @@ import {
 import { CheckerContext, createContext } from "../../checker/context";
 import { SymbolKind, lookupSymbol } from "../../checker/symbol";
 import { Type, TypeKind, unknownType, getProperty, typeNameOf } from "../../checker/types";
-import { Node, IdentifierData, MemberExprData, NodeKind, ProgramData, ImportDeclData, ExportDeclData, SourceLocation } from "../../ast/node";
+import { Node, IdentifierData, MemberExprData, NodeKind, ProgramData, ImportDeclData, ExportDeclData, SourceLocation, makeLoc } from "../../ast/node";
 import { defaultFormatOptions } from "../fmt/options";
 import { printNode as printFormattedNode } from "../fmt/printer";
 import { formatDoc } from "../fmt/layout";
@@ -206,7 +205,7 @@ function lspFindFieldLine(src: string, startLine: number, fieldName: string): So
 						k = k + 1;
 					}
 					if (k < src.length && (src[k] === ":" || src[k] === "?")) {
-						return { line: lineNum, column: j - lineStart } as SourceLocation;
+						return makeLoc(lineNum, j - lineStart);
 					}
 				}
 			}
@@ -215,7 +214,7 @@ function lspFindFieldLine(src: string, startLine: number, fieldName: string): So
 		// Hit closing brace — stop searching
 		let b = lineStart;
 		while (b < src.length && b <= j) {
-			if (src[b] === "}") return { line: -1, column: -1 } as SourceLocation;
+			if (src[b] === "}") return makeLoc(-1, -1);
 			b = b + 1;
 		}
 		// Advance to next line
@@ -223,7 +222,7 @@ function lspFindFieldLine(src: string, startLine: number, fieldName: string): So
 		lineNum = lineNum + 1;
 		lineStart = i;
 	}
-	return { line: -1, column: -1 } as SourceLocation;
+	return makeLoc(-1, -1);
 }
 
 // ===== Diagnostics =====
@@ -438,11 +437,7 @@ export function handleHover(id: string, params: string, db: TransAmDb): string {
 	const ctx = dbTypeCheck(db, path);
 	if (ctx === null) return lspResponse(id, "null");
 
-	// Reference-aligned: query check-time records first, fallback to AST walker
-	let suggest = sgQueryAtPosition(ctx, pos.line, pos.col1);
-	if (suggest === null) {
-		suggest = sgGetSymbolAtCursor(ctx, program, pos.line, pos.col1);
-	}
+	const suggest = sgQueryAtPosition(ctx, pos.line, pos.col1);
 	if (suggest === null) return lspResponse(id, "null");
 
 	const hoverText = sgFormatHover(suggest);
@@ -510,16 +505,13 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 	if (ctx === null) return lspResponse(id, "[]");
 
 	// For MemberAccess, try to resolve receiver type
-	let receiverType = null;
+	let receiverType: Type = null;
 	if (kind === SgCompletionKind.MemberAccess) {
 		const dotCol = pos.col - prefix.length - 1;
 		if (dotCol >= 0) {
-			const node = sgFindNodeAtPosition(program, pos.line, dotCol);
-			if (node !== null) {
-				const suggest = sgGetSymbolAtCursor(ctx, program, pos.line, dotCol);
-				if (suggest !== null) {
-					receiverType = suggest.symType;
-				}
+			const suggest = sgQueryAtPosition(ctx, pos.line, dotCol);
+			if (suggest !== null) {
+				receiverType = suggest.symType;
 			}
 		}
 	}
@@ -603,11 +595,7 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 	const ctx = dbTypeCheck(db, path);
 	if (ctx === null) return lspResponse(id, "null");
 
-	// Reference-aligned: query check-time records first, fallback to AST walker
-	let suggest = sgQueryAtPosition(ctx, pos.line, pos.col1);
-	if (suggest === null) {
-		suggest = sgGetSymbolAtCursor(ctx, program, pos.line, pos.col1);
-	}
+	const suggest = sgQueryAtPosition(ctx, pos.line, pos.col1);
 	if (suggest !== null) {
 		let defLine = suggest.location.line - 1;
 		let defCol = suggest.location.column - 1;
@@ -645,12 +633,9 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 	}
 
 	// Cross-module fallback: check if cursor is on an imported name
-	const node = sgFindNodeAtPosition(program, pos.line, pos.col1);
-	if (node === null) return lspResponse(id, "null");
-	if (node.kind !== NodeKind.Identifier) return lspResponse(id, "null");
-
-	const identData = node.data as IdentifierData;
-	const identName = identData.name;
+	const src = dbGetSource(db, path);
+	const identName = sgGetPrefix(src, pos.line, pos.col);
+	if (identName === "") return lspResponse(id, "null");
 	const importSpec = sgFindImportSource(program, identName);
 	if (importSpec === "") return lspResponse(id, "null");
 
@@ -667,7 +652,7 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 
 	const targetUri = lspPathToUri(targetPath);
 	const tLine = declLoc.line - 1;
-	let tCol = declLoc.column;
+	let tCol = declLoc.column - 1;
 	const targetSrc = dbGetSource(db, targetPath);
 	if (targetSrc !== "") {
 		const tNameCol = lspFindNameCol(targetSrc, tLine, identName);
@@ -821,30 +806,22 @@ export function handleReferences(id: string, params: string, db: TransAmDb): str
 	const pos = lspExtractPosition(params);
 	const path = lspUriToPath(pos.uri);
 
-	const program = dbParse(db, path);
-	if (program === null) return lspResponse(id, "[]");
-
 	const ctx = dbTypeCheck(db, path);
 	if (ctx === null) return lspResponse(id, "[]");
 
-	// Reference-aligned: query check-time records first, fallback to AST walker
-	let suggest = sgQueryAtPosition(ctx, pos.line, pos.col1);
-	if (suggest === null) {
-		suggest = sgGetSymbolAtCursor(ctx, program, pos.line, pos.col1);
-	}
+	const suggest = sgQueryAtPosition(ctx, pos.line, pos.col1);
 	if (suggest === null) return lspResponse(id, "[]");
 
 	let arr = "[";
 	let count = 0;
 
-	// Search current file
-	const allRefs = sgCollectReferences(program);
-	const refs = sgFindUsagesByName(allRefs, suggest.name);
+	// Search current file via checker records
+	const refs = sgQueryByName(ctx, suggest.name);
 	for (let i = 0; i < refs.length; i = i + 1) {
 		if (count > 0) arr = arr + ",";
 		const ref = refs[i];
 		const refLine = ref.line - 1;
-		arr = arr + lspFmtLocation(pos.uri, refLine, ref.col, refLine, ref.col + ref.nameLen);
+		arr = arr + lspFmtLocation(pos.uri, refLine, ref.col - 1, refLine, ref.col - 1 + ref.nameLen);
 		count = count + 1;
 	}
 
@@ -855,17 +832,16 @@ export function handleReferences(id: string, params: string, db: TransAmDb): str
 		const otherPath = dbGetFilePathByIndex(db, fi);
 		fi = fi + 1;
 		if (otherPath === path) continue;
-		const otherProgram = dbParse(db, otherPath);
-		if (otherProgram === null) continue;
+		const otherCtx = dbTypeCheck(db, otherPath);
+		if (otherCtx === null) continue;
 		const otherUri = lspPathToUri(otherPath);
-		const otherRefs = sgCollectReferences(otherProgram);
-		const matched = sgFindUsagesByName(otherRefs, suggest.name);
+		const matched = sgQueryByName(otherCtx, suggest.name);
 		let mi = 0;
 		while (mi < matched.length) {
 			if (count > 0) arr = arr + ",";
 			const mr = matched[mi];
 			const mrLine = mr.line - 1;
-			arr = arr + lspFmtLocation(otherUri, mrLine, mr.col, mrLine, mr.col + mr.nameLen);
+			arr = arr + lspFmtLocation(otherUri, mrLine, mr.col - 1, mrLine, mr.col - 1 + mr.nameLen);
 			count = count + 1;
 			mi = mi + 1;
 		}
@@ -878,9 +854,8 @@ export function handleReferences(id: string, params: string, db: TransAmDb): str
 // ===== Rename =====
 
 // Build TextEdit array for refs in a single file
-function buildFileEdits(program: Node, name: string, newName: string): string {
-	const allRefs = sgCollectReferences(program);
-	const refs = sgFindUsagesByName(allRefs, name);
+function buildFileEdits(ctx: CheckerContext, name: string, newName: string): string {
+	const refs = sgQueryByName(ctx, name);
 	if (refs.length === 0) return "";
 	let edits = "[";
 	let i = 0;
@@ -888,7 +863,7 @@ function buildFileEdits(program: Node, name: string, newName: string): string {
 		if (i > 0) edits = edits + ",";
 		const ref = refs[i];
 		const refLine = ref.line - 1;
-		edits = edits + lspFmtTextEdit(refLine, ref.col, ref.col + ref.nameLen, newName);
+		edits = edits + lspFmtTextEdit(refLine, ref.col - 1, ref.col - 1 + ref.nameLen, newName);
 		i = i + 1;
 	}
 	edits = edits + "]";
@@ -902,17 +877,10 @@ export function handleRename(id: string, params: string, db: TransAmDb): string 
 	const newName = lspGetField(params, "newName");
 	if (newName === "") return lspResponse(id, "null");
 
-	const program = dbParse(db, path);
-	if (program === null) return lspResponse(id, "null");
-
 	const ctx = dbTypeCheck(db, path);
 	if (ctx === null) return lspResponse(id, "null");
 
-	// Reference-aligned: query check-time records first, fallback to AST walker
-	let suggest = sgQueryAtPosition(ctx, pos.line, pos.col1);
-	if (suggest === null) {
-		suggest = sgGetSymbolAtCursor(ctx, program, pos.line, pos.col1);
-	}
+	const suggest = sgQueryAtPosition(ctx, pos.line, pos.col1);
 	if (suggest === null) return lspResponse(id, "null");
 
 	// Collect edits across all files
@@ -920,7 +888,7 @@ export function handleRename(id: string, params: string, db: TransAmDb): string 
 	let changeCount = 0;
 
 	// Current file
-	const curEdits = buildFileEdits(program, suggest.name, newName);
+	const curEdits = buildFileEdits(ctx, suggest.name, newName);
 	if (curEdits.length > 0) {
 		changes = lspJsonString(pos.uri) + ":" + curEdits;
 		changeCount = changeCount + 1;
@@ -933,9 +901,9 @@ export function handleRename(id: string, params: string, db: TransAmDb): string 
 		const otherPath = dbGetFilePathByIndex(db, fi);
 		fi = fi + 1;
 		if (otherPath === path) continue;
-		const otherProgram = dbParse(db, otherPath);
-		if (otherProgram === null) continue;
-		const otherEdits = buildFileEdits(otherProgram, suggest.name, newName);
+		const otherCtx = dbTypeCheck(db, otherPath);
+		if (otherCtx === null) continue;
+		const otherEdits = buildFileEdits(otherCtx, suggest.name, newName);
 		if (otherEdits.length > 0) {
 			const otherUri = lspPathToUri(otherPath);
 			if (changeCount > 0) changes = changes + ",";

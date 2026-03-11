@@ -2,7 +2,7 @@
 // Uses callback injection via util.ms to avoid circular imports
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, DeclKind, ExternKind, NodeData, createNode, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData } from "../../ast/node";
+import { Node, NodeKind, DeclKind, ExternKind, NodeData, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, skipDestructurePattern, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, addGenericDecl, updateGenericDeclFields, collectTokenText } from "../context";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipDefaultValue, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, isIdentLike } from "../util";
@@ -12,6 +12,10 @@ import { programOk, stmtKind, stmtAt } from "./validation";
 
 
 type NodeResult = Result<Node, string>;
+
+function makeLocFromToken(token: Token): SourceLocation {
+	return makeLoc(token.line, token.column);
+}
 
 // Shared specifier list parser for import/export: { name as alias, ... }
 // Assumes opening '{' already consumed. Consumes up to but not including '}'.
@@ -105,6 +109,7 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 		declType,
 		initializer: init,
 		declKind: match (keyword.kind) { TokenKind.Const => DeclKind.Const, TokenKind.Var => DeclKind.Var, _ => DeclKind.Let },
+		nameLocation: makeLocFromToken(nameToken),
 	}, keyword);
 	varNode.typeExpr = declTypeExpr;
 	return Result.ok(varNode);
@@ -216,6 +221,7 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 		fnFlags: flags,
 		fnReturnType,
 		fnDefaults,
+		nameLocation: makeLocFromToken(nameToken),
 	}, fnToken);
 	fnNode.typeExpr = fnReturnTypeExpr;
 	fnNode.typeExprs = fnParamTypeExprs;
@@ -389,7 +395,7 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 
 	// Discriminated union: type X = match (disc: EnumType) { EnumVal => { fields }, ... }
 	if (current(state).kind === TokenKind.Match) {
-		return parseDiscriminatedUnionDecl(state, nameToken.value, typeToken);
+		return parseDiscriminatedUnionDecl(state, nameToken.value, typeToken, nameToken);
 	}
 
 	const typeStart = state.position;
@@ -411,6 +417,7 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 		discriminantType: "",
 		variantKeys: [] as string[],
 		variantTypes: [] as string[],
+		nameLocation: makeLocFromToken(nameToken),
 	}, typeToken);
 	aliasNode.typeExpr = aliasTypeExpr;
 	return Result.ok(aliasNode);
@@ -419,7 +426,7 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 // ===== Discriminated Union Declaration =====
 // syntax: type X = match (discName: EnumType) { EnumVal => { fields }, ... };
 
-function parseDiscriminatedUnionDecl(state: ParserState, aliasName: string, typeToken: Token): NodeResult {
+function parseDiscriminatedUnionDecl(state: ParserState, aliasName: string, typeToken: Token, aliasNameToken: Token): NodeResult {
 	advance(state); // consume 'match'
 
 	if (current(state).kind !== TokenKind.LParen) {
@@ -516,6 +523,7 @@ function parseDiscriminatedUnionDecl(state: ParserState, aliasName: string, type
 		discriminantType,
 		variantKeys,
 		variantTypes,
+		nameLocation: makeLocFromToken(aliasNameToken),
 	}, typeToken));
 }
 
@@ -576,6 +584,7 @@ export function parseEnumDecl(state: ParserState): NodeResult {
 		enumName: nameToken.value,
 		enumMembers: members,
 		enumValues: values,
+		nameLocation: makeLocFromToken(nameToken),
 	}, enumToken));
 }
 
@@ -664,6 +673,7 @@ export function parseInterfaceDecl(state: ParserState): NodeResult {
 		interfaceName: nameToken.value,
 		interfaceFields: fields,
 		interfaceFieldTypes: fieldTypes,
+		nameLocation: makeLocFromToken(nameToken),
 	}, ifaceToken);
 	ifaceNode.typeExprs = fieldTypeExprs;
 	return Result.ok(ifaceNode);
@@ -757,6 +767,7 @@ export function parseClassDecl(state: ParserState): NodeResult {
 		className: nameToken.value,
 		classExtends: extendsName,
 		classBody: members,
+		nameLocation: makeLocFromToken(nameToken),
 	}, classToken));
 }
 
@@ -911,6 +922,7 @@ function parseClassAccessor(state: ParserState, isStatic: boolean, flags: string
 		methodParamTypes,
 		methodBody: body,
 		methodIsStatic: isStatic,
+		nameLocation: makeLocFromToken(accToken),
 		methodFlags: flags,
 		methodReturnType,
 	}, accToken);
@@ -954,6 +966,7 @@ function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: bo
 			methodFlags: flags,
 			methodReturnType,
 			nativeName: methodNativeName,
+			nameLocation: makeLocFromToken(nameToken),
 		}, nameToken);
 		mNode1.typeExpr = methodRetTypeExpr;
 		mNode1.typeExprs = methodParamTypeExprs;
@@ -973,6 +986,7 @@ function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: bo
 			methodFlags: flags,
 			methodReturnType,
 			nativeName: "",
+			nameLocation: makeLocFromToken(nameToken),
 		}, nameToken);
 		mNode2.typeExpr = methodRetTypeExpr;
 		mNode2.typeExprs = methodParamTypeExprs;
@@ -989,6 +1003,7 @@ function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: bo
 		methodFlags: flags,
 		methodReturnType,
 		nativeName: "",
+		nameLocation: makeLocFromToken(nameToken),
 	}, nameToken);
 	mNode3.typeExpr = methodRetTypeExpr;
 	mNode3.typeExprs = methodParamTypeExprs;
@@ -1257,6 +1272,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 			fnReturnType,
 			fnDefaults: getLastParsedDefaults(),
 			nativeName,
+			nameLocation: makeLocFromToken(nameToken),
 		}, externToken);
 		externFnNode.typeExpr = externRetTypeExpr;
 		externFnNode.typeExprs = externParamTypeExprs;
@@ -1341,6 +1357,7 @@ export function parseDistinctTypeDecl(state: ParserState): NodeResult {
 		discriminantType: "",
 		variantKeys: [] as string[],
 		variantTypes: [] as string[],
+		nameLocation: makeLocFromToken(nameToken),
 	}, distinctToken);
 	distinctNode.typeExpr = distinctTypeExpr;
 	return Result.ok(distinctNode);

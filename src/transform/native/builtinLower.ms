@@ -22,7 +22,7 @@ import { TransformContext, hasEmitted } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { walkNode } from "../walker";
 import {
-	makeIdent, makeCall, makeString,
+	makeIdent, makeCall, makeString, makeNumber,
 	makeObjectLiteral, makeBool, makeHiddenStdConv,
 	makeExprStmt, enumToStringName,
 } from "../util";
@@ -96,9 +96,11 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 	}
 	// Priority 2: compiler defaults
 	const tk = objType.kind;
-	// Number/int/float → msNumberToString
+	// Number/int/float → msNumberToStringRadix(value, radix) — radix defaults to 10
 	if (isNumeric(objType)) {
-		const call = makeCall(makeIdent("msNumberToString", loc), [obj], loc);
+		const cd2 = callNode.data as CallExprData;
+		const radixArg = cd2.arguments.length > 0 ? cd2.arguments[0] : makeNumber(10, loc);
+		const call = makeCall(makeIdent("msNumberToStringRadix", loc), [obj, radixArg], loc);
 		call.nodeType = stringType();
 		return call;
 	}

@@ -23,7 +23,7 @@ import { isNrvoReturnType, getTypeDesc, ccgIntroducedPtr } from "./types";
 import { mangle } from "./names";
 import { emitStringPoolDecls } from "./literals";
 import { emitTestHeader, emitTestTable, genTestDispatcher } from "./test";
-import { sliceStr } from "../../utils/string";
+import { emitIncludeDirectives } from "./forward";
 
 // ===== generateCModule — one module's C code (no dispatcher) =====
 //
@@ -215,40 +215,6 @@ function registerCrossModuleTypeNames(g: CGen): void {
 			}
 		}
 	}
-}
-
-// ===== useHeader — propagate @include to consuming module =====
-
-export function useHeader(g: CGen, sym: Symbol): void {
-	if (sym === null || sym.headerPath === "") return;
-	emitIncludeDirectives(g, sym.headerPath);
-}
-
-// ===== Emit @include directives from checker context =====
-
-function emitIncludeDirectives(g: CGen, directives: string): void {
-	let start = 0;
-	for (let pos = 0; pos < directives.length; pos += 1) {
-		if (directives.charAt(pos) === "\n") {
-			const header = sliceStr(directives, start, pos);
-			if (header.length > 0) {
-				emitOneInclude(g, header);
-			}
-			start = pos + 1;
-		}
-	}
-	if (start < directives.length) {
-		const header = sliceStr(directives, start, directives.length);
-		if (header.length > 0) {
-			emitOneInclude(g, header);
-		}
-	}
-}
-
-function emitOneInclude(g: CGen, header: string): void {
-	if (nameSetHas(g.declaredThings, "inc:" + header)) return;
-	nameSetAdd(g.declaredThings, "inc:" + header);
-	addLine(sec(g, CSection.Headers), `#include "${header}"`);
 }
 
 // ===== Tests =====

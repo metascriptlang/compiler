@@ -7,7 +7,7 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import {
-	Node, NodeKind, SourceLocation, createNodeAt,
+	Node, NodeKind, SourceLocation, createNodeAt, makeLoc,
 	ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData,
 	ClassDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData,
 	TypeAliasDeclData, VariableDeclData, DecoratedDeclData,
@@ -483,9 +483,7 @@ export function resolveDeclarations(ctx: CheckerContext, program: Node): void {
 		const name = getDeclName(stmt);
 		if (name !== "") {
 			const sym = lookupSymbol(ctx.table, name);
-			if (sym !== null) {
-				ensureShaped(sym, ctx);
-			}
+			if (sym !== null) ensureShaped(sym, ctx);
 		} else if (stmt.kind === NodeKind.ExportDecl) {
 			const d = stmt.data as ExportDeclData;
 			const innerName = getDeclName(d.exportedDecl);
@@ -619,7 +617,7 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 
 	// Set state to Shaped immediately to allow circular references in fields
 	sym.state = SymbolState.Shaped;
-	sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.interfaceName.length, sym, sym.symbolType, SymbolKind.Interface, d.interfaceName, "", true);
+	sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.interfaceName.length, sym, sym.symbolType, SymbolKind.Interface, d.interfaceName, "", true);
 
 	// Check for generic params (e.g., interface Box<T> — parser stores in side-channel)
 	const genericStr = getGenericDecl(d.interfaceName);
@@ -671,7 +669,7 @@ function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 	const sym = lookupSymbol(ctx.table, d.aliasName);
 	if (sym === null) return;
 	node.resolvedSym = sym;
-	sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.aliasName.length, sym, sym.symbolType, SymbolKind.TypeAlias, d.aliasName, "", true);
+	sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.aliasName.length, sym, sym.symbolType, SymbolKind.TypeAlias, d.aliasName, "", true);
 
 	if (d.aliasType === "" && d.discriminantName === "") {
 		return;
@@ -980,8 +978,8 @@ test "function gets Function type" {
 	const symStub = makeSymbol("foo", SymbolKind.Function, unknownType(), false);
 	defineSymbol(ctx.table, symStub);
 	// Simulate a FunctionDecl node
-	const zl: SourceLocation = { line: 0, column: 0 };
-	const fnNode = createNodeAt(NodeKind.FunctionDecl, { fnName: "foo", params: ["a", "b"], fnParamTypes: ["", ""], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "", fnDefaults: [] }, zl);
+	const zl = makeLoc(0, 0);
+	const fnNode = createNodeAt(NodeKind.FunctionDecl, { fnName: "foo", params: ["a", "b"], fnParamTypes: ["", ""], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "", fnDefaults: [], nameLocation: zl }, zl);
 	symStub.declNode = fnNode;
 	const node = createNodeAt(NodeKind.Program, { programStmts: [fnNode] }, zl);
 	resolveDeclarations(ctx, node);
@@ -997,8 +995,8 @@ test "function with typed params" {
 	const ctx = createContext();
 	const symStub = makeSymbol("add", SymbolKind.Function, unknownType(), false);
 	defineSymbol(ctx.table, symStub);
-	const zl: SourceLocation = { line: 0, column: 0 };
-	const fnNode = createNodeAt(NodeKind.FunctionDecl, { fnName: "add", params: ["a", "b"], fnParamTypes: ["number", "number"], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "number", fnDefaults: [] }, zl);
+	const zl = makeLoc(0, 0);
+	const fnNode = createNodeAt(NodeKind.FunctionDecl, { fnName: "add", params: ["a", "b"], fnParamTypes: ["number", "number"], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "number", fnDefaults: [], nameLocation: zl }, zl);
 	symStub.declNode = fnNode;
 	const node = createNodeAt(NodeKind.Program, { programStmts: [fnNode] }, zl);
 	resolveDeclarations(ctx, node);
@@ -1014,8 +1012,8 @@ test "decorated function gets resolved" {
 	const ctx = createContext();
 	const symStub = makeSymbol("floor", SymbolKind.Function, unknownType(), false);
 	defineSymbol(ctx.table, symStub);
-	const zl: SourceLocation = { line: 0, column: 0 };
-	const fnNode = createNodeAt(NodeKind.FunctionDecl, { fnName: "floor", params: ["x"], fnParamTypes: ["number"], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "number", fnDefaults: [] }, zl);
+	const zl = makeLoc(0, 0);
+	const fnNode = createNodeAt(NodeKind.FunctionDecl, { fnName: "floor", params: ["x"], fnParamTypes: ["number"], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "number", fnDefaults: [], nameLocation: zl }, zl);
 	symStub.declNode = fnNode;
 	const decoNode = createNodeAt(NodeKind.DecoratedDecl, { decorators: [], decoratedNode: fnNode }, zl);
 	const node = createNodeAt(NodeKind.Program, { programStmts: [decoNode] }, zl);
@@ -1137,9 +1135,9 @@ test "constrained interface Box<T extends number>" {
 }
 
 test "fnDefaults on FunctionDeclData" {
-	const zl: SourceLocation = { line: 0, column: 0 };
+	const zl = makeLoc(0, 0);
 	const defNode = createNodeAt(NodeKind.NumberLiteral, { value: 42 }, zl);
-	const fnNode = createNodeAt(NodeKind.FunctionDecl, { fnName: "defTest", params: ["a", "b"], fnParamTypes: ["number", "number"], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "", fnDefaults: [null, defNode] }, zl);
+	const fnNode = createNodeAt(NodeKind.FunctionDecl, { fnName: "defTest", params: ["a", "b"], fnParamTypes: ["number", "number"], fnBody: createNodeAt(NodeKind.BlockStmt, { statements: [] }, zl), fnFlags: "", fnReturnType: "", fnDefaults: [null, defNode], nameLocation: zl }, zl);
 	const d = fnNode.data as FunctionDeclData;
 	assert d.fnDefaults.length === 2;
 	assert d.fnDefaults[0] === null;

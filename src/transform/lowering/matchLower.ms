@@ -554,16 +554,20 @@ function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: S
 		}
 	}
 
-	// Default case
-	const defaultStmts: Node[] = [];
-	defaultStmts.push(defaultBody);
-	switchCases.push(makeSwitchCase([], defaultStmts, true, loc));
-
 	// switch (msStringHash(temp))
 	const hashCallArgs: Node[] = [];
 	hashCallArgs.push(makeTypedIdent(tempName, discType, loc));
 	const hashCall = makeCall(makeIdent("msStringHash", loc), hashCallArgs, loc);
-	return makeSwitch(hashCall, switchCases, loc);
+	const switchNode = makeSwitch(hashCall, switchCases, loc);
+
+	// Hash collision fallback: when a case hash matches but the string equality
+	// guard fails, control breaks out of the switch with no return. Place the
+	// default/wildcard body AFTER the switch so both hash collisions and
+	// unmatched hashes fall through to the wildcard arm.
+	const stmts: Node[] = [];
+	stmts.push(switchNode);
+	stmts.push(defaultBody);
+	return makeBlock(stmts, loc);
 }
 
 // ===== Tests =====

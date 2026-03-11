@@ -1,4 +1,4 @@
-import { SourceLocation, Node, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { SourceLocation, Node, Symbol, SymbolKind, SymbolState, makeLoc } from "../ast/node";
 import { Type, TypeKind, unknownType } from "./types";
 
 
@@ -133,7 +133,7 @@ export function makeSymbol(name: string, kind: SymbolKind, symType: Type, mutabl
 	sym.symbolKind = kind;
 	sym.symbolType = symType;
 	sym.state = SymbolState.Hollow;
-	sym.location = { line: 0, column: 0 };
+	sym.location = makeLoc(0, 0);
 	sym.declNode = null as unknown as Node;
 	sym.overloads = [];
 	sym.nativeName = "";
