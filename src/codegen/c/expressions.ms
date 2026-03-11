@@ -27,9 +27,10 @@ import {
 } from "./context";
 import { mangle, mangleFieldName, mangledFunctionName, safeName } from "./names";
 import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, intToString, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, ccgIntroducedPtr, ensureTypeInfo, ensureForwardDecl } from "./types";
-import { formatCNumber, cBoolLiteral, cNullLiteral, cStringLiteral, msStringPoolRef } from "./literals";
+import { formatCNumber, cBoolLiteral, cNullLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { charAt, sliceStr, findChar } from "../../utils/string";
 import { ensureDrcProto, ensureCrossModuleProto } from "./declarations";
+import { useHeader } from "./index";
 
 // ===== Reference: argument passing for introduced pointers =====
 // Wraps arg for pointer introduction params at call sites.
@@ -48,7 +49,7 @@ function isRefArrayAccessCall(node: Node): boolean {
 	return callee.kind === NodeKind.Identifier && (callee.data as IdentifierData).name === "msRefArrayAccess";
 }
 
-// Shared ABI shim for call arguments — Nim parity: genArg (ccgcalls.nim:350-363)
+// Shared ABI shim for call arguments — reference parity: genArg
 // Single point for ccgIntroducedPtr, pointer/value conversion, and untyped literal handling.
 export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Type, argNode: Node): string {
 	if (paramType !== null && argNode.nodeType !== null && argNode.kind !== NodeKind.HiddenAddr) {
@@ -253,7 +254,7 @@ function discoverExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[],
 	if (kind === NodeKind.StringLiteral) {
 		const d = node.data as StringLiteralData;
 		const poolName = internString(g.stringPool, d.value);
-		results.push(msStringPoolRef(poolName, d.value.length));
+		results.push(msStringPoolRef(poolName, cStringByteLen(d.value)));
 		return;
 	}
 	if (kind === NodeKind.BooleanLiteral) {
@@ -520,8 +521,11 @@ function discoverCallExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackIte
 	const cd = node.data as CallExprData;
 	const sym = node.resolvedSym;
 
-	// extern from "c_name" — keep recursive (emitNativeCall has side effects)
+	// extern from "c_name" — useHeader propagates #include to consuming module.
+	// Runtime externs (no headerPath) already have headers always included (system.h, core/*.h).
+	// User externs (with headerPath) get their @include propagated to this module.
 	if (sym !== null && sym.nativeName !== "") {
+		useHeader(g, sym);
 		results.push(emitNativeCall(g, p, sym.nativeName, cd.arguments));
 		return;
 	}
@@ -583,7 +587,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 		let finalRight = right;
 		if (d.operator === "=" && d.left.nodeType !== null && d.right.nodeType !== null) {
 			// For assignment LHS, prefer the variable's declared type over narrowed nodeType.
-			// Parity: Nim's genAsgn uses le.typ (declared type via PSym.typ, never narrowed).
+			// Parity: genAsgn uses the declared type (symbol type, never narrowed).
 			// Our checker stores narrowed types on nodeType, so we read resolvedSym.symbolType.
 			let leftType = d.left.nodeType;
 			if (d.left.resolvedSym !== null && d.left.resolvedSym.symbolType !== null) {
@@ -1116,7 +1120,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 			ovNativeName = sym.overloads[idx - 1].nativeName;
 		}
 		const ovNeedsAddr = hasAddrPrefix(ovNativeName);
-		// Build args with pointer/value ABI shim (Nim: genArg via shimCallArg)
+		// Build args with pointer/value ABI shim (genArg via shimCallArg)
 		let argsStr = "";
 		let ai = 0;
 		while (ai < cc) {

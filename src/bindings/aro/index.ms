@@ -8,11 +8,13 @@
 //   (bridge.c is auto-compiled by @include("bridge.h") — no manual step needed)
 
 // Emit #include for the bridge header (so C compiler finds prototypes)
-@include("bridge.h")
+@include("bridge.h");
 
-// Link the ARO static library (bridge.c is auto-compiled via @include("bridge.h"))
-// NOTE: @link paths resolve relative to the declaring module's directory
-@link("zig-out/lib/libaro_ffi.a")
+// Compile the bridge C wrapper (converts msString <-> char* for ARO FFI)
+@compile("bridge.c");
+
+// Link the ARO static library
+@link("zig-out/lib/libaro_ffi.a");
 
 // ===== Parse =====
 

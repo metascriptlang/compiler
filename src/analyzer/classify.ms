@@ -156,7 +156,7 @@ export function classifyType(t: Type, ctx: TransformContext): RcInfo {
 				i += 1;
 			}
 			// TODO: Tuples with RC elements need per-field hooks from destructorLifting.
-			// For now, emit Named with empty hooks (no-op cleanup).
+			// For now, emit Named with empty hooks — helper functions guard against empty fnName.
 			if (hasRc) { makeRcInfo(RcKind.Named, "", "", "", "", "", false) } else { noRcInfo() }
 		},
 		_ => noRcInfo(),

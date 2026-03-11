@@ -135,6 +135,37 @@ test "parseNumberLiteral octal" { assert parseNumberLiteral("0o17") === 15; }
 test "parseNumberLiteral decimal" { assert parseNumberLiteral("42") === 42; }
 test "parseNumberLiteral float" { assert parseNumberLiteral("3.14") === 3.14; }
 
+// Extract directory from a file path (everything before last '/').
+export function getModuleDir(path: string): string {
+	let lastSlash = -1;
+	let i = 0;
+	while (i < path.length) {
+		if (path.charAt(i) === "/") lastSlash = i;
+		i = i + 1;
+	}
+	if (lastSlash <= 0) return "";
+	return sliceStr(path, 0, lastSlash);
+}
+
+// Substring search. Returns true if needle is found in haystack.
+export function containsStr(haystack: string, needle: string): boolean {
+	if (needle.length > haystack.length) return false;
+	const limit = haystack.length - needle.length;
+	let i = 0;
+	while (i <= limit) {
+		if (sliceStr(haystack, i, i + needle.length) === needle) return true;
+		i = i + 1;
+	}
+	return false;
+}
+
+// Append a space-separated flag, deduplicating.
+export function appendFlag(flags: string, flag: string): string {
+	if (flags !== "" && containsStr(flags, flag)) return flags;
+	if (flags !== "") return flags + " " + flag;
+	return flag;
+}
+
 test "startsWith match" { assert "std/testing".startsWith("std/"); }
 
 test "startsWith no match" { assert !"./foo".startsWith("std/"); }

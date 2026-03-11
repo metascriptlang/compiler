@@ -23,7 +23,7 @@ import {
 import { TransformContext, freshTemp } from "../context";
 import { walkExpandBlocks, containsExprKind, replaceInExpr } from "../walker";
 import {
-	makeIdent, makeTypedIdent, makeBlock, makeVarDecl, makeExprStmt,
+	makeIdent, makeTypedIdent, makeBlock, makeVarDecl, makeExprStmt, makeNull,
 	makeReturn, makeIf, makeBinary, makeAssign,
 	makeCall, makeNumber, makeSwitch, makeSwitchCase,
 } from "../util";
@@ -47,7 +47,7 @@ function hoistNestedMatch(expr: Node, hoisted: Node[], ctx: TransformContext): N
 		const discType = matchData.matchDisc.nodeType;
 
 		// let $matchres_N;
-		const placeholder = makeIdent("undefined", loc);
+		const placeholder = makeNull(loc);
 		const letDecl = makeVarDecl(tempResult, placeholder, DeclKind.Let, loc);
 		if (node.nodeType !== null) { letDecl.nodeType = node.nodeType; }
 		hoisted.push(letDecl);
@@ -165,7 +165,7 @@ function lowerMatchExprInVar(stmt: Node, ctx: TransformContext): Node[] {
 	result.push(makeVarDecl(tempName, matchData.matchDisc, DeclKind.Const, loc));
 	const discType = matchData.matchDisc.nodeType;
 	// let x; (uninitialized, to be assigned in each branch)
-	const placeholder = makeIdent("undefined", loc);
+	const placeholder = makeNull(loc);
 	const letDecl = makeVarDecl(varData.declName, placeholder, DeclKind.Let, loc);
 	if (stmt.nodeType !== null) {
 		letDecl.nodeType = stmt.nodeType;

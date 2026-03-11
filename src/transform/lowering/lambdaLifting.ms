@@ -280,7 +280,7 @@ function rewriteNode(node: Node, captures: NameSet, envTypeName: string): Node {
 // Create env struct + lifted function, return closure pair ObjectLiteral.
 
 // Shared logic for lifting arrow functions and function expressions
-// originalNodeType: resolved Type from checker (Nim parity: PSym.typ preserved through lifting)
+// originalNodeType: resolved Type from checker (preserved through lifting)
 function liftClosure(body: Node, params: string[], paramTypes: string[], flags: string, returnType: string, captures: NameSet, state: LiftState, loc: SourceLocation, originalNodeType: Type): Node {
 	state.closureCounter += 1;
 	const counter = state.closureCounter;
@@ -319,7 +319,7 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 	liftedParamTypes.push("void*");
 
 	const fnNode = makeFnDecl(liftedName, liftedParams, liftedParamTypes, rewrittenBody, flags, returnType, loc);
-	// Nim parity: preserve resolved return type from original lambda (PSym.typ.returnType).
+	// Preserve resolved return type from original lambda (symbol type's returnType).
 	// makeFnDecl uses resolveSimpleTypeStr which can't resolve type aliases like NodeResult.
 	// The checker already resolved the alias → concrete type on the original node.
 	if (originalNodeType !== null && originalNodeType.typeReturn !== null && fnNode.nodeType !== null) {
@@ -341,9 +341,9 @@ function liftFuncExpr(node: Node, captures: NameSet, state: LiftState): Node {
 }
 
 // Non-capturing lift: module-level FunctionDecl + closure pair with env=null.
-// Reference parity (ccgexprs.nim:4011): nimcall->closure conversion wraps fn ptr
-// in { .ClP_0 = fn, .ClE_0 = NIM_NIL }. We emit the same via NF_CLOSURE ObjectLiteral.
-// originalNodeType: resolved Type from checker (Nim parity: PSym.typ preserved)
+// Reference parity: nimcall->closure conversion wraps fn ptr
+// in { .ClP_0 = fn, .ClE_0 = NULL }. We emit the same via NF_CLOSURE ObjectLiteral.
+// originalNodeType: resolved Type from checker (symbol type preserved)
 function liftNonCapturing(body: Node, params: string[], paramTypes: string[], flags: string, returnType: string, state: LiftState, loc: SourceLocation, originalNodeType: Type): Node {
 	state.closureCounter += 1;
 	const liftedName = "$fn_" + state.currentFnName + "_" + state.closureCounter.toString();
@@ -352,7 +352,7 @@ function liftNonCapturing(body: Node, params: string[], paramTypes: string[], fl
 		liftedBody = makeBlock([makeReturn(liftedBody, loc)], loc);
 	}
 	const fnNode = makeFnDecl(liftedName, params, paramTypes, liftedBody, flags, returnType, loc);
-	// Nim parity: preserve resolved return type (PSym.typ.returnType untouched through lifting)
+	// Preserve resolved return type (symbol type's returnType untouched through lifting)
 	if (originalNodeType !== null && originalNodeType.typeReturn !== null && fnNode.nodeType !== null) {
 		fnNode.nodeType.typeReturn = originalNodeType.typeReturn;
 	}
@@ -362,7 +362,7 @@ function liftNonCapturing(body: Node, params: string[], paramTypes: string[], fl
 	return wrapFnAsClosure(makeIdent(liftedName, loc), loc);
 }
 
-// Nim parity: newSymNode(local) — look up original Identifier node for a captured name
+// Reference parity: look up original Identifier node for a captured name
 // to preserve resolvedSym (needed for codegen name mangling).
 function findCapturedIdent(name: string, capturedIdents: Node[]): Node {
 	for (const n of capturedIdents) {
@@ -391,7 +391,7 @@ function makeClosurePair(liftedName: string, envTypeName: string, captures: Name
 	const envValues: Node[] = [];
 	for (const name of captures) {
 		envKeys.push(name);
-		// Create Identifier with resolvedSym from original node (Nim: newSymNode)
+		// Create Identifier with resolvedSym from original node
 		let ident = makeIdent(name, loc);
 		const orig = findCapturedIdent(name, capturedIdents);
 		if (orig !== null && orig.resolvedSym !== null) {

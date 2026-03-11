@@ -23,3 +23,16 @@ test "Result alias as callback return type" {
 	const c = compileToC(src);
 	assert c.ok;
 }
+
+test "Result-returning closure cast includes NRVO out-param" {
+	// The lambda returns Result (NRVO type), so its C signature is:
+	//   void fn(ResultType* __result, msString s)
+	// The closure cast for the function type must match:
+	//   void(*)(ResultType*, msString)
+	// NOT: ResultType(*)(msString) — which is what happens without NRVO in closure casts
+	const src = "type MyResult = Result<number, string>;\ntype Callback = (x: number) => MyResult;\nfunction run(cb: Callback): void {\n  const r = cb(42);\n}\nrun((x: number): MyResult => { return Result.ok(x); });";
+	const c = compileToC(src);
+	assert c.ok;
+	// The closure call must cast with void return + Result* first param
+	assert c.value.contains("void(*)");
+}

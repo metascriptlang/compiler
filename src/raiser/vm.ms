@@ -109,9 +109,25 @@ export function execModule(mod: RaiserModule): RaiserVM {
 		if (op === RaiserOpcode.LoadConst) {
 			const bx = getBx(inst);
 			const val = getFuncConst(func, bx);
-			setReg(vm, base + inst.a, val);
+			// Copy to avoid aliasing — constant pool objects are shared,
+			// and in-place mutations (LoadField, Ret, etc.) would corrupt them.
+			const copy = raiserNil();
+			copy.kind = val.kind;
+			copy.intVal = val.intVal;
+			copy.floatVal = val.floatVal;
+			copy.strVal = val.strVal;
+			setReg(vm, base + inst.a, copy);
 		} else if (op === RaiserOpcode.Move) {
-			setReg(vm, base + inst.a, getReg(vm, base + inst.b));
+			// Copy to avoid aliasing — sharing a RaiserValue object between
+			// two registers causes corruption when in-place mutations
+			// (LoadField, Ret, AddI64, etc.) write to either slot.
+			const src = getReg(vm, base + inst.b);
+			const copy = raiserNil();
+			copy.kind = src.kind;
+			copy.intVal = src.intVal;
+			copy.floatVal = src.floatVal;
+			copy.strVal = src.strVal;
+			setReg(vm, base + inst.a, copy);
 		} else if (op === RaiserOpcode.LoadNil) {
 			setReg(vm, base + inst.a, raiserNil());
 		} else if (op === RaiserOpcode.Halt) {
@@ -318,14 +334,16 @@ function vmHandleRet(vm: RaiserVM, inst: RaiserInstruction): void {
 	const frame = vm.callStack.items[len - 1];
 	vm.callStack.items.length = len - 1;
 
-	// Deep-copy return value to caller's dest register
-	// (pointer alias via setReg would let subsequent calls corrupt the value)
+	// Copy return value to caller's dest register using a fresh value object
+	// to avoid aliasing (in-place mutation of dstVal could corrupt other
+	// registers that share the same RaiserValue object via Move/LoadConst).
 	const srcVal = getReg(vm, vm.baseReg + inst.a);
-	const dstVal = getReg(vm, frame.returnReg);
-	dstVal.kind = srcVal.kind;
-	dstVal.intVal = srcVal.intVal;
-	dstVal.floatVal = srcVal.floatVal;
-	dstVal.strVal = srcVal.strVal;
+	const retCopy = raiserNil();
+	retCopy.kind = srcVal.kind;
+	retCopy.intVal = srcVal.intVal;
+	retCopy.floatVal = srcVal.floatVal;
+	retCopy.strVal = srcVal.strVal;
+	setReg(vm, frame.returnReg, retCopy);
 
 	// Restore caller state
 	vm.funcIdx = frame.funcIdx;

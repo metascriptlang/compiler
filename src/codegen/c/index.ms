@@ -8,7 +8,7 @@
 //   main(argc, argv) → MsMain → MsPreMainInner (DatInit) → MsMainInner (Init)
 
 import {
-	Node, NodeKind, SymbolKind,
+	Node, NodeKind, SymbolKind, Symbol,
 	ProgramData,
 } from "../../ast/node";
 import { CheckerContext, ExportRegistry } from "../../checker/context";
@@ -215,6 +215,13 @@ function registerCrossModuleTypeNames(g: CGen): void {
 			}
 		}
 	}
+}
+
+// ===== useHeader — propagate @include to consuming module =====
+
+export function useHeader(g: CGen, sym: Symbol): void {
+	if (sym === null || sym.headerPath === "") return;
+	emitIncludeDirectives(g, sym.headerPath);
 }
 
 // ===== Emit @include directives from checker context =====

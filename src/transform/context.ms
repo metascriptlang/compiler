@@ -41,6 +41,8 @@ export function createTransformContextWithChecker(cc: CheckerContext): Transform
 	return ctx;
 }
 
+
+
 // ===== NameSet =====
 // Reusable string-name collector with contains/addUnique ops.
 export type NameSet = string[];

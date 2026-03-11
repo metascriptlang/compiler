@@ -24,7 +24,11 @@ export interface ExportedSymInfo {
 	overloadNativeNames: string[];
 	overloadBuiltinKinds: string[];
 	defaultParams: Node[];
-	overloadDefaultParams: Node[][];
+	overloadDefaultParamsFlat: Node[];
+	overloadDefaultParamsCounts: number[];
+	definingModule: string;  // Original defining module path (preserved through re-exports)
+	originalName: string;    // Original declared name (used for C mangling, not import alias)
+	headerPath: string;      // @include header path for this extern symbol
 }
 
 export interface ModuleExports {
@@ -78,8 +82,8 @@ export function findExportedSymbol(registry: ExportRegistry, modulePath: string,
 
 // fnType: registration-time cache — may be stale. Use getExtFnType() for reads.
 // sym: AUTHORITATIVE source of type info (sym.symbolType = standard reference symbol type equivalent).
-// class (not interface) — Nim parity: PSym = ref TSym. Lookup results must be
-// nullable (nil = not found), which requires pointer semantics.
+// class (not interface) — reference parity: symbol is a ref type. Lookup results must be
+// nullable (null = not found), which requires pointer semantics.
 export class ExtensionMethod {
 	methodName: string;
 	receiverTypeName: string;
@@ -87,6 +91,7 @@ export class ExtensionMethod {
 	fnType: Type;
 	isStatic: boolean;
 	sym: Symbol;
+	scopeDepth: number;  // 0 = imported/prelude, 1 = current module (for overload resolution)
 }
 
 export interface ExtensionRegistry {
@@ -98,8 +103,7 @@ export function createExtensionRegistry(): ExtensionRegistry {
 }
 
 export function registerExtension(registry: ExtensionRegistry, method: ExtensionMethod): void {
-	// Dedup by sym identity at registration (Reference parity: deduplicate candidates by identity).
-	// Prevents prelude + import from creating duplicate candidates.
+	// Dedup by sym identity only (keeps all candidates, resolves via scoring + scope depth).
 	if (method.sym !== null) {
 		let i = 0;
 		while (i < registry.methods.length) {
@@ -392,10 +396,10 @@ export function isCancelled(cancel: CancelCtx, startVersion: number): boolean {
 
 // ===== Checker Context =====
 
-// ===== Sym Records (Nim-aligned check-time symbol recording for LSP) =====
+// ===== Sym Records (check-time symbol recording for LSP) =====
 // During type-checking, every use/def site records its position + resolved symbol.
 // LSP queries binary-search this sorted array instead of walking the AST post-hoc.
-// Equivalent to Nim's suggest.nim SymInfoPair / suggestSym() / markUsed().
+// Reference-aligned: equivalent to SymInfoPair / suggestSym() / markUsed().
 
 export interface SgSymRecord {
 	line: number;          // 1-based (parser convention)
@@ -467,12 +471,13 @@ export interface CheckerContext {
 	inferredReturn: Type;  // tracks inferred return type during function body checking
 	includeDirectives: string; // accumulated @include args, newline-separated
 	compileDirectives: string; // accumulated @compile args, newline-separated
-	compilerFlags: string;     // accumulated @link/@passC/@passL args, space-separated
+	compilerFlags: string;     // accumulated @passC/-iquote args, space-separated (compile-time)
+	linkFlags: string;         // accumulated @link/@passL args, space-separated (link-time only)
 	cancelCtx: CancelCtx;       // null in batch mode, set for LSP
 	cancelVersion: number;       // version at check start
 	modulePath: string;          // Implementation parity: source path for name mangling
 	narrowFacts: Node[];         // fact-based null narrowing knowledge base (standard reference equivalent)
-	symRecords: SgSymRecord[];   // check-time symbol recordings for LSP (Nim suggest.nim parity)
+	symRecords: SgSymRecord[];   // check-time symbol recordings for LSP (reference suggest parity)
 }
 
 // ===== Constructors =====
@@ -493,6 +498,7 @@ export function createContext(): CheckerContext {
 		includeDirectives: "",
 		compileDirectives: "",
 		compilerFlags: "",
+		linkFlags: "",
 		cancelCtx: null as unknown as CancelCtx,
 		cancelVersion: 0,
 		modulePath: "",
@@ -698,7 +704,7 @@ test "create empty registry" {
 test "register and find exports" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParams: [] };
+	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "foo");
@@ -716,7 +722,7 @@ test "missing module returns null" {
 test "missing symbol returns null" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParams: [] };
+	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "bar");

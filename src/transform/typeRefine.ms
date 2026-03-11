@@ -394,7 +394,7 @@ interface RegistryWrapper {
 let _registryEntries: RegistryEntry[] = null as unknown as RegistryEntry[];
 
 export function refineTypes(program: Node, ctx: TransformContext, registry: ExportRegistry): Node {
-	if (registry.entries !== null) {
+	if (registry !== null && registry.entries !== null) {
 		const r = registry as unknown as RegistryWrapper;
 		_registryEntries = r.entries;
 	} else {

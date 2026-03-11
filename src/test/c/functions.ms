@@ -9,7 +9,7 @@ test "E2E C: function with call" {
 	const c = compileToC(src);
 	assert c.ok;
 	assert c.value.contains("double");
-	assert c.value.contains("add(");
+	assert c.value.contains("add__");
 	assert c.value.contains("return");
 }
 
@@ -18,21 +18,21 @@ test "E2E C: recursive function" {
 	const c = compileToC(src);
 	assert c.ok;
 	assert c.value.contains("double");
-	assert c.value.contains("fib(");
+	assert c.value.contains("fib__");
 }
 
 test "E2E C: void function" {
 	const src = "function noop(): void { }\nnoop();";
 	const c = compileToC(src);
 	assert c.ok;
-	assert c.value.contains("void noop(");
+	assert c.value.contains("void noop__");
 }
 
 test "E2E C: function returns expression" {
 	const src = "function square(x: number): number { return x * x; }\nconst r = square(5);";
 	const c = compileToC(src);
 	assert c.ok;
-	assert c.value.contains("square(");
+	assert c.value.contains("square__");
 	assert c.value.contains("x * x");
 }
 
@@ -42,12 +42,3 @@ test "E2E C: string param function" {
 	assert c.ok;
 	assert c.value.contains("msString");
 }
-
-// KNOWN ISSUE: int32 params fail — numeric literals (1, 2) are type `number`, not int32.
-// Checker rejects: "Argument type mismatch: got number, expected int32"
-// test "E2E C: int32 params" {
-// 	const src = "function pick(a: int32, b: int32): int32 { return a; }\nconst r = pick(1, 2);";
-// 	const c = compileToC(src);
-// 	check(c.ok);
-// 	check(c.value.contains("int32_t"));
-// }

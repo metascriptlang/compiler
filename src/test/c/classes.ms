@@ -18,17 +18,11 @@ test "E2E C: interface struct" {
 	assert c.value.contains("struct Point");
 }
 
-test "E2E C: constructor emits Foo_new" {
+test "E2E C: constructor allocates with msAllocTyped" {
 	const src = "class Foo { x: number }\nconst f = new Foo(42);";
 	const c = compileToC(src);
 	assert c.ok;
-	assert c.value.contains("Foo_new");
+	// Constructor uses heap allocation for class types
+	assert c.value.contains("msAllocTyped");
+	assert c.value.contains("Foo_typeInfo");
 }
-
-// KNOWN ISSUE: class methods fail in E2E pipeline.
-// test "E2E C: class method" {
-// 	const src = "class Vec {\n  x: number;\n  getX(): number { return this.x; }\n}\nconst v = new Vec(5);\nconst r = v.getX();";
-// 	const c = compileToC(src);
-// 	check(c.ok);
-// 	check(contains(c.value,"Vec_getX"));
-// }

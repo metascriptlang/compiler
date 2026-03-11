@@ -438,7 +438,7 @@ export function handleHover(id: string, params: string, db: TransAmDb): string {
 	const ctx = dbTypeCheck(db, path);
 	if (ctx === null) return lspResponse(id, "null");
 
-	// Nim-aligned: query check-time records first, fallback to AST walker
+	// Reference-aligned: query check-time records first, fallback to AST walker
 	let suggest = sgQueryAtPosition(ctx, pos.line, pos.col1);
 	if (suggest === null) {
 		suggest = sgGetSymbolAtCursor(ctx, program, pos.line, pos.col1);
@@ -603,7 +603,7 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 	const ctx = dbTypeCheck(db, path);
 	if (ctx === null) return lspResponse(id, "null");
 
-	// Nim-aligned: query check-time records first, fallback to AST walker
+	// Reference-aligned: query check-time records first, fallback to AST walker
 	let suggest = sgQueryAtPosition(ctx, pos.line, pos.col1);
 	if (suggest === null) {
 		suggest = sgGetSymbolAtCursor(ctx, program, pos.line, pos.col1);
@@ -827,7 +827,7 @@ export function handleReferences(id: string, params: string, db: TransAmDb): str
 	const ctx = dbTypeCheck(db, path);
 	if (ctx === null) return lspResponse(id, "[]");
 
-	// Nim-aligned: query check-time records first, fallback to AST walker
+	// Reference-aligned: query check-time records first, fallback to AST walker
 	let suggest = sgQueryAtPosition(ctx, pos.line, pos.col1);
 	if (suggest === null) {
 		suggest = sgGetSymbolAtCursor(ctx, program, pos.line, pos.col1);
@@ -908,7 +908,7 @@ export function handleRename(id: string, params: string, db: TransAmDb): string 
 	const ctx = dbTypeCheck(db, path);
 	if (ctx === null) return lspResponse(id, "null");
 
-	// Nim-aligned: query check-time records first, fallback to AST walker
+	// Reference-aligned: query check-time records first, fallback to AST walker
 	let suggest = sgQueryAtPosition(ctx, pos.line, pos.col1);
 	if (suggest === null) {
 		suggest = sgGetSymbolAtCursor(ctx, program, pos.line, pos.col1);

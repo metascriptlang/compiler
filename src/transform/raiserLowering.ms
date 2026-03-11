@@ -19,6 +19,7 @@ import { lowerSpread } from "./desugar/spreadExpand";
 import { lowerTryExpr } from "./desugar/resultDesugar";
 import { lowerResultFieldCheck } from "./desugar/resultFieldCheck";
 import { lowerMatch } from "./lowering/matchLower";
+import { lowerLambda } from "./lowering/lambdaLifting";
 
 export function transformForRaiser(program: Node, checkerCtx: CheckerContext): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
@@ -32,5 +33,6 @@ export function transformForRaiser(program: Node, checkerCtx: CheckerContext): N
 	result = lowerTryExpr(result, ctx);
 	result = lowerResultFieldCheck(result, ctx);
 	result = lowerMatch(result, ctx);
+	result = lowerLambda(result, ctx);
 	return result;
 }

@@ -1083,11 +1083,12 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		}
 		ei = ei + 1;
 	}
-	// Score and resolve
+	// Score and resolve — ext.scopeDepth as calleeScope
+	// (0 = imported/prelude, 1 = current module; higher wins in cmpCandidates)
 	const scopeDepths: number[] = [];
 	let di = 0;
 	while (di < candidates.length) {
-		scopeDepths.push(0);
+		scopeDepths.push(exts[di].scopeDepth);
 		di = di + 1;
 	}
 	let idx = resolveOverloadIdxWithInheritance(ctx, candidates, argTypes, scopeDepths);
@@ -1586,11 +1587,13 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 	}
 	// Universal .toString() — every type has a compiler-provided default.
 	// builtinLower resolves to the correct C function per type.
+	// Return the function type (not string) so CallExpr extracts the return type.
 	if (d.property === "toString" && propType.kind === TypeKind.Unknown) {
-		const toStrSym = makeSymbol("toString", SymbolKind.Function, createFunction([], [], stringType()), false);
+		const toStrFnType = createFunction([], [], stringType());
+		const toStrSym = makeSymbol("toString", SymbolKind.Function, toStrFnType, false);
 		toStrSym.state = SymbolState.Shaped;
 		node.resolvedSym = toStrSym;
-		return stringType();
+		return toStrFnType;
 	}
 	// Unresolved member access — emit error if object type is known
 	if (propType.kind === TypeKind.Unknown && resolvedObjType.kind !== TypeKind.Unknown) {

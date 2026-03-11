@@ -25,7 +25,7 @@ import {
 	defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope,
 	setFlag, hasFlag, SymbolFlag,
 } from "./symbol";
-import { CheckerContext, CancelCtx, createContext, createModuleContext, addError, addFatalError, hasErrors, hasFatalErrors, errorCount, createExtensionRegistry, registerExtension, ExportRegistry, isCancelled, sgRecordSym, sgSortRecords } from "./context";
+import { CheckerContext, CancelCtx, createContext, createModuleContext, addError, addFatalError, hasErrors, hasFatalErrors, errorCount, createExtensionRegistry, registerExtension, ExtensionMethod, ExportRegistry, isCancelled, sgRecordSym, sgSortRecords } from "./context";
 import { Module, ModuleGraph } from "../module/graph";
 import { collectTopLevel, defineOrError } from "./collectPass";
 import { readFile } from "std/process";
@@ -34,11 +34,12 @@ import { isAssignable } from "./compat";
 import { resolveDeclarations, resolveAnnotation, ensureShaped } from "./resolvePass";
 import { inferOwnership } from "./ownershipInference";
 import { validateTypedAST } from "./validate";
-import { sliceStr } from "../utils/string";
+import { sliceStr, getModuleDir, appendFlag } from "../utils/string";
 import { checkExpr, checkEnumExhaustiveness, fitNode } from "./checkExprPass";
 import { registerCheckStmt } from "./checkerCallbacks";
 import { parseSource } from "../parser/statements/validation";
 
+// Extract directory from module path (e.g. "src/foo/bar.ms" → "src/foo")
 // Brief type description for error messages
 function formatTypeBrief(t: Type): string {
 	if (t === null) return "unknown";
@@ -834,8 +835,36 @@ export function runThreePasses(ctx: CheckerContext, program: Node): void {
 	checkProgramBody(ctx, program);       // Pass 3: infer + check
 }
 
+// Process a single MacroInvocation node as a directive (@include/@link/@passC/@passL).
+function collectOneDirective(ctx: CheckerContext, mi: Node): void {
+	if (mi.kind !== NodeKind.MacroInvocation) return;
+	const md = mi.data as MacroInvocationData;
+	if (md.macroArgs.length === 0 || md.macroArgs[0].kind !== NodeKind.StringLiteral) return;
+	const sd = md.macroArgs[0].data as StringLiteralData;
+	const name = md.macroName;
+	if (name === "include") {
+		if (ctx.includeDirectives !== "") ctx.includeDirectives = ctx.includeDirectives + "\n";
+		ctx.includeDirectives = ctx.includeDirectives + sd.value;
+		const modDir = getModuleDir(ctx.modulePath);
+		if (modDir !== "") ctx.compilerFlags = appendFlag(ctx.compilerFlags, "-iquote" + modDir);
+	} else if (name === "compile") {
+		if (ctx.compileDirectives !== "") ctx.compileDirectives = ctx.compileDirectives + "\n";
+		ctx.compileDirectives = ctx.compileDirectives + sd.value;
+	} else if (name === "passC") {
+		ctx.compilerFlags = appendFlag(ctx.compilerFlags, sd.value);
+	} else if (name === "link") {
+		// Resolve @link paths relative to declaring module's directory (like @compile)
+		const modDir = getModuleDir(ctx.modulePath);
+		const resolved = modDir !== "" ? modDir + "/" + sd.value : sd.value;
+		ctx.linkFlags = appendFlag(ctx.linkFlags, resolved);
+	} else if (name === "passL") {
+		ctx.linkFlags = appendFlag(ctx.linkFlags, sd.value);
+	}
+}
+
 // Extract @include/@link/@passC/@passL directives from program AST into context.
-function collectDirectives(ctx: CheckerContext, program: Node): void {
+// Handles both standalone directives (@name("x");) and decorators (@name("x") decl).
+export function collectDirectives(ctx: CheckerContext, program: Node): void {
 	if (program === null) return;
 	if (program.kind !== NodeKind.Program) return;
 	const pd = program.data as ProgramData;
@@ -843,23 +872,24 @@ function collectDirectives(ctx: CheckerContext, program: Node): void {
 		const stmt = pd.programStmts[i];
 		if (stmt.kind === NodeKind.ExprStmt) {
 			const d = stmt.data as ExprStmtData;
-			if (d.expr.kind === NodeKind.MacroInvocation) {
-				const mi = d.expr.data as MacroInvocationData;
-				if (mi.macroArgs.length > 0 && mi.macroArgs[0].kind === NodeKind.StringLiteral) {
-					const sd = mi.macroArgs[0].data as StringLiteralData;
-					const name = mi.macroName;
-					if (name === "include") {
-						if (ctx.includeDirectives !== "") ctx.includeDirectives = ctx.includeDirectives + "\n";
-						ctx.includeDirectives = ctx.includeDirectives + sd.value;
-					} else if (name === "compile") {
-						if (ctx.compileDirectives !== "") ctx.compileDirectives = ctx.compileDirectives + "\n";
-						ctx.compileDirectives = ctx.compileDirectives + sd.value;
-					} else if (name === "link" || name === "passC" || name === "passL") {
-						if (ctx.compilerFlags !== "") ctx.compilerFlags = ctx.compilerFlags + " ";
-						ctx.compilerFlags = ctx.compilerFlags + sd.value;
-					}
-				}
+			collectOneDirective(ctx, d.expr);
+		} else if (stmt.kind === NodeKind.DecoratedDecl) {
+			const dd = stmt.data as DecoratedDeclData;
+			for (const dec of dd.decorators) {
+				collectOneDirective(ctx, dec);
 			}
+		}
+	}
+}
+
+// Stamp @include headers on all ImportC symbols in current scope.
+// Called after collectDirectives so ctx.includeDirectives is populated.
+export function stampHeaderPaths(ctx: CheckerContext): void {
+	if (ctx.includeDirectives === "") return;
+	const scope = ctx.table.current;
+	for (const sym of scope.symbols) {
+		if (hasFlag(sym, SymbolFlag.ImportC) && sym.headerPath === "") {
+			sym.headerPath = ctx.includeDirectives;
 		}
 	}
 }
@@ -899,6 +929,7 @@ function loadPreludeOne(ctx: CheckerContext, specifier: string, stdPath: string)
 			runThreePasses(ctx, pr.value);
 			ctx.modulePath = savedPath;
 			collectDirectives(ctx, pr.value);
+			stampHeaderPaths(ctx);
 			const scope = ctx.table.current;
 			for (const sym of scope.symbols) {
 				ensureShaped(sym, ctx);
@@ -929,7 +960,7 @@ export function buildPreludeContext(stdPath: string): CheckerContext {
 }
 
 // Inject exported prelude symbols, extensions, and directives into a module context.
-function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): void {
+export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): void {
 	for (const sym of preludeCtx.table.current.symbols) {
 		if (hasFlag(sym, SymbolFlag.Exported)) {
 			ctx.table.current.symbols.push(sym);
@@ -938,7 +969,18 @@ function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): void {
 	if (preludeCtx.extensionRegistry !== null && ctx.extensionRegistry !== null) {
 		for (const ext of preludeCtx.extensionRegistry.methods) {
 			if (ext.sym !== null && hasFlag(ext.sym, SymbolFlag.Exported)) {
-				registerExtension(ctx.extensionRegistry, ext);
+				// Imported extensions get scope depth 0 (other module).
+				// Don't mutate ext — preludeCtx may be cached across modules (LSP TransAmDb).
+				const imported: ExtensionMethod = {
+					methodName: ext.methodName,
+					receiverTypeName: ext.receiverTypeName,
+					sourcePath: ext.sourcePath,
+					fnType: ext.fnType,
+					isStatic: ext.isStatic,
+					sym: ext.sym,
+					scopeDepth: 0,
+				};
+				registerExtension(ctx.extensionRegistry, imported);
 			}
 		}
 	}
@@ -951,8 +993,10 @@ function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): void {
 		ctx.compileDirectives = ctx.compileDirectives + preludeCtx.compileDirectives;
 	}
 	if (preludeCtx.compilerFlags !== "") {
-		if (ctx.compilerFlags !== "") ctx.compilerFlags = ctx.compilerFlags + " ";
-		ctx.compilerFlags = ctx.compilerFlags + preludeCtx.compilerFlags;
+		ctx.compilerFlags = appendFlag(ctx.compilerFlags, preludeCtx.compilerFlags);
+	}
+	if (preludeCtx.linkFlags !== "") {
+		ctx.linkFlags = appendFlag(ctx.linkFlags, preludeCtx.linkFlags);
 	}
 }
 
@@ -981,6 +1025,7 @@ function checkProgramCore(
 	openScope(ctx.table, ScopeKind.Module);
 	runThreePasses(ctx, program);
 	collectDirectives(ctx, program);
+	stampHeaderPaths(ctx);
 	inferOwnership(ctx, program);
 	sgSortRecords(ctx.symRecords);
 	return ctx;

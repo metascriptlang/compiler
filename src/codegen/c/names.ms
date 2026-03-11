@@ -178,11 +178,13 @@ export function mangledFunctionName(sym: Symbol, name: string, overloadIdx: numb
 	if (sym !== null && sym.nativeName !== "") return sym.nativeName;
 	if (name === "main") return safeName(name);
 	if (sym !== null && hasFlag(sym, SymbolFlag.ImportC)) return safeName(name);
+	// Use original declared name for mangling, not import alias
+	const mangledName = (sym !== null && sym.originalName !== "") ? sym.originalName : name;
 	if (sym !== null && sym.modulePath !== "") {
-		return mangleProcName(name, mangleModuleName(sym.modulePath), overloadIdx);
+		return mangleProcName(mangledName, mangleModuleName(sym.modulePath), overloadIdx);
 	}
-	if (overloadIdx > 0) return safeName(name) + "__" + overloadIdx;
-	return safeName(name);
+	if (overloadIdx > 0) return safeName(mangledName) + "__" + overloadIdx;
+	return safeName(mangledName);
 }
 
 // ===== Type Name Mangling =====

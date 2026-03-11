@@ -22,7 +22,7 @@ import {
 	ExportDeclData, ClassDeclData,
 	DoWhileStmtData, MoveExprData, Symbol,
 } from "../ast/node";
-import { Type, TypeKind, isSinkType, skipModifier } from "../checker/types";
+import { Type, TypeKind, isSinkType, skipModifier, createPrimitive } from "../checker/types";
 import { lookupSymbol, lookupLocal, SymbolKind, hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, freshTemp, createTransformContextWithChecker } from "../transform/context";
 import {
@@ -311,8 +311,8 @@ function makeRcCallStmt(fnName: string, varName: string, loc: SourceLocation): N
 }
 
 function makeDestroyCall(varName: string, rcInfo: RcInfo, loc: SourceLocation): Node {
+	if (rcInfo.destroyFn === "") return makeExprStmt(makeNull(loc), loc);
 	if (rcInfo.rcKind === RcKind.Named) {
-		// reference parity (reference prototype): sequence/string destroy takes by-value (not pointer)
 		if (rcInfo.seqLike) {
 			return makeRcCallStmt(rcInfo.destroyFn, varName, loc);
 		}
@@ -323,6 +323,7 @@ function makeDestroyCall(varName: string, rcInfo: RcInfo, loc: SourceLocation): 
 }
 
 function makeWasMovedCall(varName: string, rcInfo: RcInfo, loc: SourceLocation): Node {
+	if (rcInfo.wasMovedFn === "") return makeExprStmt(makeNull(loc), loc);
 	if (rcInfo.rcKind === RcKind.Named) {
 		return makeExprStmt(
 			makeCall(makeIdent(rcInfo.wasMovedFn, loc), [makeHiddenAddr(makeIdent(varName, loc), loc)], loc), loc);
@@ -334,6 +335,7 @@ function makeWasMovedCall(varName: string, rcInfo: RcInfo, loc: SourceLocation):
 // Array copy hooks take 2 args (dest, src) by value (runtime macros handle &).
 // Ref/String/Closure/Map/Set copy is unary (incref).
 function makeCopyAfterInit(destName: string, rcInfo: RcInfo, loc: SourceLocation, srcName: string): Node {
+	if (rcInfo.copyFn === "") return makeExprStmt(makeNull(loc), loc);
 	if (rcInfo.rcKind === RcKind.Named && srcName !== "") {
 		// reference parity (reference prototype): sequence copy = dest pointer, src by-value
 		if (rcInfo.seqLike) {
@@ -358,6 +360,7 @@ function makeCopyAfterInit(destName: string, rcInfo: RcInfo, loc: SourceLocation
 
 // Sink call: sinkFn(dest, src) — atomic destroy-old + assign-new
 function makeSinkCall(destName: string, srcExpr: Node, rcInfo: RcInfo, loc: SourceLocation): Node {
+	if (rcInfo.sinkFn === "") return makeExprStmt(makeNull(loc), loc);
 	if (rcInfo.rcKind === RcKind.Named) {
 		// reference parity: sequence sink = dest pointer, src by-value
 		if (rcInfo.seqLike) {
@@ -379,6 +382,7 @@ function makeRcCallOnExpr(fnName: string, argExpr: Node, loc: SourceLocation): N
 }
 
 function makeWasMovedOnExpr(argExpr: Node, rcInfo: RcInfo, loc: SourceLocation): Node {
+	if (rcInfo.wasMovedFn === "") return makeExprStmt(makeNull(loc), loc);
 	if (rcInfo.rcKind === RcKind.Named) {
 		return makeExprStmt(
 			makeCall(makeIdent(rcInfo.wasMovedFn, loc), [makeHiddenAddr(argExpr, loc)], loc), loc);
@@ -1217,8 +1221,12 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	const init = d.initializer;
 
 	// Object literal: fresh as whole, but RC fields need incref
+	// Closure pairs (NF_CLOSURE) are fresh aggregates — no per-field RC.
+	// Reference parity: closure construction is a sink, RC on env handled by =copy/=destroy at value level.
 	if (init.kind === NodeKind.ObjectLiteral) {
-		emitLiteralFieldCopies(init, varType, idx, stmts, dctx, loc);
+		if ((init.flags & NodeFlag.Closure) === 0) {
+			emitLiteralFieldCopies(init, varType, idx, stmts, dctx, loc);
+		}
 		return stmt;
 	}
 
@@ -1260,9 +1268,11 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 			recordMove(dctx, initD.name);
 			return stmt;
 		}
-		// COPY: emit incref/copy after assignment
-		const copyNode = makeCopyAfterInit(d.declName, rcInfo, loc, initD.name);
-		addPending(dctx, copyNode);
+		// COPY: emit incref/copy after assignment (guard: skip if no copy hook)
+		if (rcInfo.copyFn !== "") {
+			const copyNode = makeCopyAfterInit(d.declName, rcInfo, loc, initD.name);
+			addPending(dctx, copyNode);
+		}
 		return stmt;
 	}
 
@@ -2255,6 +2265,8 @@ test "classifyMemberFieldRc returns RC info for string field" {
 	const dctx = testDrcContext("interface Obj { name: string; } const o: Obj = { name: \"\" };");
 	const loc = testLoc();
 	const memberExpr = makeMember(makeIdent("o", loc), "name", loc);
+	// classifyMemberFieldRc checks nodeType — must set it for the test to work
+	memberExpr.nodeType = createPrimitive(TypeKind.String);
 	const rc = classifyMemberFieldRc(memberExpr, dctx);
 	assert rc.needsCleanup;
 	assert rc.rcKind === RcKind.String;

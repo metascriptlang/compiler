@@ -141,6 +141,8 @@ export function makeSymbol(name: string, kind: SymbolKind, symType: Type, mutabl
 	sym.defaultParams = [];
 	sym.symFlags = mutable ? SymbolFlag.Mutable : SymbolFlag.None;
 	sym.modulePath = "";
+	sym.originalName = "";
+	sym.headerPath = "";
 	return sym;
 }
 

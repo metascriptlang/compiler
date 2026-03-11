@@ -24,7 +24,7 @@
 import {
 	Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation,
 	InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData,
-	IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData,
+	IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData,
 } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createTransformContextWithChecker, freshTemp } from "../context";
 import { makeIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
@@ -33,6 +33,24 @@ import { walkNode } from "../walker";
 import { lookupSymbol, SymbolKind } from "../../checker/symbol";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput } from "../testUtil";
+
+// ===== Global Hook Ownership Registry =====
+// Reference parity: attachedOps[] is global — hooks generated once per canonical type.
+// First module to need a type's hooks generates the bodies; other modules skip.
+// Consuming modules get extern forward declarations via ensureDrcProto in codegen.
+let _globalHookOwners: NameSet = [];
+
+export function setGlobalHookOwners(owners: NameSet): void {
+	_globalHookOwners = owners;
+}
+
+function isGloballyOwned(typeName: string): boolean {
+	return nameSetContains(_globalHookOwners, typeName);
+}
+
+function claimGlobal(typeName: string): void {
+	nameSetAdd(_globalHookOwners, typeName);
+}
 
 // ===== Lift Context (reference TLiftCtx) =====
 
@@ -52,8 +70,12 @@ interface LiftCtx {
 	seqElemTypes: SeqElemEntry[];  // per-type array elem types (for generating per-type hooks)
 }
 
+// Reference parity: only types that completed hook generation have hooks.
+// Check both local (this module) and global (any module) registries.
+// Struct/Union fields can't form direct cycles (infinite size), so cycles always go through
+// Ref/Ptr which has its own handler in fillBody. Safe to check only `generated`.
 function namedTypeHasHooks(typeName: string, lctx: LiftCtx): boolean {
-	return nameSetContains(lctx.generated, typeName) || nameSetContains(lctx.generating, typeName);
+	return nameSetContains(lctx.generated, typeName) || isGloballyOwned(typeName);
 }
 
 // ===== Cycle Detection (reference cyclicType) =====
@@ -300,7 +322,13 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 		},
 		"wasMoved" => { genCall("msArrayWasMoved", hook, xf, yf, buf, loc); },
 		"trace" => {
-			if (needsElemLoop) { genArrayLoop("trace", elem, xf, yf, lctx, buf, loc); }
+			// Reference parity: only trace array elements if element type can form cycles
+			if (needsElemLoop && elem !== null) {
+				const av: NameSet = [];
+				if (isCyclicType(elem, lctx, av)) {
+					genArrayLoop("trace", elem, xf, yf, lctx, buf, loc);
+				}
+			}
 		},
 		_ => {},
 	};
@@ -407,11 +435,14 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 		TypeKind.Array => { arrayOp(hook, fieldType.typeReturn, xf, yf, lctx, buf, loc); },
 		TypeKind.Struct => {
 			if (fieldType.typeName !== "") {
-				ensureTypeHooks(fieldType.typeName, lctx, loc);
-				if (namedTypeHasHooks(fieldType.typeName, lctx)) {
-					namedObjOp(hook, fieldType.typeName, xf, yf, buf, loc);
-				} else {
-					defaultOp(hook, xf, yf, buf, loc);
+				// Reference parity: trace only emits for cyclic field types (defaultOp is no-op for trace)
+				if (hook !== "trace" || isCyclicType(fieldType, lctx, visited)) {
+					ensureTypeHooks(fieldType.typeName, lctx, loc);
+					if (namedTypeHasHooks(fieldType.typeName, lctx)) {
+						namedObjOp(hook, fieldType.typeName, xf, yf, buf, loc);
+					} else {
+						defaultOp(hook, xf, yf, buf, loc);
+					}
 				}
 			} else {
 				defaultOp(hook, xf, yf, buf, loc);
@@ -427,9 +458,12 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 		TypeKind.Result => {},
 		TypeKind.Union => {
 			if (fieldType.typeName !== "") {
-				ensureTypeHooks(fieldType.typeName, lctx, loc);
-				if (namedTypeHasHooks(fieldType.typeName, lctx)) {
-					namedObjOp(hook, fieldType.typeName, xf, yf, buf, loc);
+				// Reference parity: trace only emits for cyclic field types
+				if (hook !== "trace" || isCyclicType(fieldType, lctx, visited)) {
+					ensureTypeHooks(fieldType.typeName, lctx, loc);
+					if (namedTypeHasHooks(fieldType.typeName, lctx)) {
+						namedObjOp(hook, fieldType.typeName, xf, yf, buf, loc);
+					}
 				}
 			}
 		},
@@ -726,6 +760,9 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 
 function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): void {
 	if (nameSetContains(lctx.generated, typeName)) return;
+	// Reference parity: global dedup — another module already generated these hooks.
+	// Consuming module gets extern forward declarations via ensureDrcProto in codegen.
+	if (isGloballyOwned(typeName)) return;
 	if (nameSetContains(lctx.generating, typeName)) return;
 	nameSetAdd(lctx.generating, typeName);
 
@@ -746,6 +783,7 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 			);
 			lctx.collector.push(makeVarDecl(typeName + "_typeInfo", typeInfoObj, DeclKind.Const, loc));
 			nameSetAdd(lctx.generated, typeName);
+			claimGlobal(typeName);
 		}
 		return;
 	}
@@ -815,6 +853,7 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 	lctx.collector.push(makeVarDecl(typeName + "_typeInfo", typeInfoObj, DeclKind.Const, loc));
 
 	nameSetAdd(lctx.generated, typeName);
+	claimGlobal(typeName);
 }
 
 // Generate hooks for a type directly (no symbol table lookup needed).
@@ -823,6 +862,7 @@ function ensureTypeHooksForType(objType: Type, lctx: LiftCtx, loc: SourceLocatio
 	const typeName = objType.typeName;
 	if (typeName === "") return;
 	if (nameSetContains(lctx.generated, typeName)) return;
+	if (isGloballyOwned(typeName)) return;
 	if (nameSetContains(lctx.generating, typeName)) return;
 	nameSetAdd(lctx.generating, typeName);
 
@@ -851,6 +891,7 @@ function ensureTypeHooksForType(objType: Type, lctx: LiftCtx, loc: SourceLocatio
 
 	// No ORC typeInfo needed for anonymous value types (can't be cyclic)
 	nameSetAdd(lctx.generated, typeName);
+	claimGlobal(typeName);
 }
 
 // ===== Auto-Generated == (reference parity: generic proc `==`*[T: tuple|object]) =====
@@ -901,7 +942,9 @@ function generateEq(typeName: string, objType: Type, lctx: LiftCtx, loc: SourceL
 
 function ensureEq(typeName: string, lctx: LiftCtx, loc: SourceLocation): void {
 	if (nameSetContains(lctx.generated, typeName + "_eq")) return;
+	if (isGloballyOwned(typeName + "_eq")) return;
 	nameSetAdd(lctx.generated, typeName + "_eq");
+	claimGlobal(typeName + "_eq");
 
 	const sym = lookupSymbol(lctx.ctx.checkerCtx.table, typeName);
 	if (sym === null) return;
@@ -1100,8 +1143,9 @@ function generateArrayHook(hook: string, seqName: string, elemType: Type, arrayT
 }
 
 function generateArrayHooks(lctx: LiftCtx, loc: SourceLocation): void {
-	if (nameSetContains(lctx.neededSeqHooks, "msStringArray") && !nameSetContains(lctx.generated, "msStringArray")) {
+	if (nameSetContains(lctx.neededSeqHooks, "msStringArray") && !nameSetContains(lctx.generated, "msStringArray") && !isGloballyOwned("msStringArray")) {
 		nameSetAdd(lctx.generated, "msStringArray");
+		claimGlobal("msStringArray");
 		const strElemType = stringType();
 		const strArrayType = createArray(strElemType);
 		generateArrayHook("destroy", "msStringArray", strElemType, strArrayType, lctx, loc);
@@ -1110,8 +1154,9 @@ function generateArrayHooks(lctx: LiftCtx, loc: SourceLocation): void {
 		generateArrayHook("wasMoved", "msStringArray", strElemType, strArrayType, lctx, loc);
 	}
 
-	if (nameSetContains(lctx.neededSeqHooks, "msRefArray") && !nameSetContains(lctx.generated, "msRefArray")) {
+	if (nameSetContains(lctx.neededSeqHooks, "msRefArray") && !nameSetContains(lctx.generated, "msRefArray") && !isGloballyOwned("msRefArray")) {
 		nameSetAdd(lctx.generated, "msRefArray");
+		claimGlobal("msRefArray");
 		const refElemType = createPrimitive(TypeKind.Ref);
 		const refArrayType = createArray(refElemType);
 		generateArrayHook("destroy", "msRefArray", refElemType, refArrayType, lctx, loc);
@@ -1122,8 +1167,9 @@ function generateArrayHooks(lctx: LiftCtx, loc: SourceLocation): void {
 
 	// Per-type value struct element arrays (reference parity: each sequence gets its own hooks)
 	for (const entry of lctx.seqElemTypes) {
-		if (!nameSetContains(lctx.generated, entry.name)) {
+		if (!nameSetContains(lctx.generated, entry.name) && !isGloballyOwned(entry.name)) {
 			nameSetAdd(lctx.generated, entry.name);
+			claimGlobal(entry.name);
 			const arrType = createArray(entry.elemType);
 			generateArrayHook("destroy", entry.name, entry.elemType, arrType, lctx, loc);
 			generateArrayHook("copy", entry.name, entry.elemType, arrType, lctx, loc);
@@ -1173,6 +1219,9 @@ function scanStmtForArrayTypes(stmt: Node, lctx: LiftCtx): void {
 		},
 		NodeKind.FunctionDecl => {
 			if (stmt.nodeType !== null) scanTypeForArrays(stmt.nodeType, lctx, visited);
+			// Recurse into function body to find local array types
+			const fd = stmt.data as FunctionDeclData;
+			if (fd.fnBody !== null) scanBlockForArrayTypes(fd.fnBody, lctx);
 		},
 		NodeKind.ExportDecl => {
 			const ed = stmt.data as ExportDeclData;
@@ -1180,6 +1229,28 @@ function scanStmtForArrayTypes(stmt: Node, lctx: LiftCtx): void {
 		},
 		_ => {},
 	};
+}
+
+// Recurse into blocks to find local variable declarations with array types.
+// Intentional divergence from reference (which is demand-driven).
+// Our architecture requires pre-registration of array hooks before codegen.
+function scanBlockForArrayTypes(block: Node, lctx: LiftCtx): void {
+	if (block === null || block.kind !== NodeKind.BlockStmt) return;
+	const bd = block.data as BlockStmtData;
+	for (const s of bd.statements) {
+		if (s === null) continue;
+		const visited: NameSet = [];
+		if (s.kind === NodeKind.VariableDecl) {
+			if (s.nodeType !== null) scanTypeForArrays(s.nodeType, lctx, visited);
+		} else if (s.kind === NodeKind.FunctionDecl) {
+			scanStmtForArrayTypes(s, lctx);
+		} else if (s.kind === NodeKind.BlockStmt) {
+			scanBlockForArrayTypes(s, lctx);
+		}
+		// After transforms, if/while/try bodies are BlockStmt nodes.
+		// We handle those via the BlockStmt branch above. Variable declarations
+		// inside conditionals are always wrapped in blocks by lowering passes.
+	}
 }
 
 // ===== Anonymous Struct Type Scanning =====
@@ -1265,7 +1336,9 @@ export function liftDestructors(program: Node, ctx: TransformContext): Node {
 		for (const op of pending.ops) {
 			const key = pending.tupleName + op;
 			if (nameSetContains(lctx.generated, key)) continue;
+			if (isGloballyOwned(key)) continue;
 			nameSetAdd(lctx.generated, key);
+			claimGlobal(key);
 			if (op === "_eq") {
 				generateTupleEq(pending.tupleName, pending.tupleType, lctx, defaultLoc);
 			} else if (op === "_lt") {
@@ -1286,6 +1359,8 @@ export function liftDestructors(program: Node, ctx: TransformContext): Node {
 // ===== Tests =====
 
 function liftWithChecker(input: string): Node {
+	// Reset global registry for isolated test runs
+	_globalHookOwners = [];
 	const pr = parseInput(input);
 	if (!pr.ok) return pr.value;
 	const checkerCtx = checkProgram(pr.value);

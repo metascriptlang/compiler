@@ -68,7 +68,7 @@ export interface SgSignatureInfo {
 	paramLabels: string[];
 }
 
-// ===== sgQueryAtPosition — Nim-aligned binary search on check-time records =====
+// ===== sgQueryAtPosition — binary search on check-time records =====
 // Replaces the fragile AST walker (sgFindNodeAtPosition + sgGetSymbolAtCursor).
 // Records are sorted by (line, col) after check completes.
 

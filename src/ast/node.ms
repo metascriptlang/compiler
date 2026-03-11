@@ -42,6 +42,8 @@ export class Symbol {
 	symFlags: int32;
 	defaultParams: Node[];
 	modulePath: string;
+	originalName: string;  // Original declared name, used for C mangling when imported with alias
+	headerPath: string;    // @include header for this extern symbol
 }
 
 // ===== Node Flags (Standard parity: TNodeFlags) =====

@@ -340,7 +340,7 @@ test "E2E ccgPtr: try desugar - arg nodeType check" {
 	}
 }
 
-// ===== Empty array param typing (Nim: semArrayConstr expectedType) =====
+// ===== Empty array param typing (reference: semArrayConstr expectedType) =====
 
 test "E2E: empty [] arg typed as string[] param" {
 	const src = "function foo(names: string[]): number { return names.length; }\nconst x = foo([]);";

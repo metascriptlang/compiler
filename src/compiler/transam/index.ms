@@ -255,7 +255,10 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: str
 					overloadExtReceiverTypes: [], overloadExtIsStatic: [],
 					nativeName: sym.nativeName, builtinKind: sym.builtinKind,
 					overloadNativeNames: [], overloadBuiltinKinds: [],
-					defaultParams: [], overloadDefaultParams: [],
+					defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [],
+				definingModule: sym.modulePath !== "" ? sym.modulePath : depPath,
+				originalName: sym.originalName,
+				headerPath: sym.headerPath,
 				};
 				earlyExports.push(info);
 			}

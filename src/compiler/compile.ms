@@ -27,6 +27,7 @@ import { refineTypes } from "../transform/typeRefine";
 import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { liftHcrState } from "../transform/native/hcrLift";
 import { createTransformContextWithChecker } from "../transform/context";
+import { setGlobalHookOwners } from "../transform/lowering/destructorLifting";
 import { findModule, ModuleGraph, ModuleError, ErrorSeverity } from "../module/graph";
 import { createFileSystemProvider, loadModuleGraphWithConfig } from "../module/loader";
 import { ResolverConfig, createDefaultConfig, BACKEND_C, BACKEND_JS, BACKEND_RAISER } from "../module/resolver";
@@ -402,7 +403,13 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	let hasUserMain = false;
 	let mainRetType = "void";
 	let allFlags = cliCompileFlags(opts);
+	let allLinkFlags = "";  // @link/@passL — only passed at link step, not per-module compile
 	let oFiles = "";
+
+	// Reference parity: global hook ownership registry shared across all modules.
+	// First module to need a type's DRC hooks generates them; others get extern protos.
+	const sharedHookOwners: string[] = [];
+	setGlobalHookOwners(sharedHookOwners);
 
 	// Auto-compile companion .c files for .h imports
 	const companionObjs = compileHeaderCompanions(graph, allFlags, opts.mode, opts.ccCompiler, opts.verbose);
@@ -454,8 +461,9 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		transformedPrograms.push(nativeLowered);
 		transformedPaths.push(modPath);
 
-		// Accumulate compiler flags from @passC/@passL directives
+		// Accumulate compiler flags (@passC) and link flags (@link/@passL) separately
 		allFlags = appendFlag(allFlags, ctx.compilerFlags);
+		allLinkFlags = appendFlag(allLinkFlags, ctx.linkFlags);
 
 		// Check for user main() in entry module
 		if (modPath === entryPath && ctx !== null && ctx.table !== null) {
@@ -533,7 +541,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	}
 
 	// Link all .o files into final binary (or shared library for HCR)
-	const linkFlags = cliLinkFlags(allFlags, opts);
+	const linkFlags = appendFlag(cliLinkFlags(allFlags, opts), allLinkFlags);
 	if (opts.verbose) verboseLog("linking → " + outBinary);
 	const linkCode = linkObjects(oFiles, outBinary, linkFlags, opts.mode, opts.ccCompiler);
 	if (linkCode !== 0) {
@@ -565,7 +573,12 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	const transformedPrograms: Node[] = [];
 	const transformedPaths: string[] = [];
 	let allFlags = cliCompileFlags(opts);
+	let allLinkFlags = "";  // @link/@passL — only passed at link step
 	let oFiles = "";
+
+	// Reference parity: global hook ownership registry shared across all modules.
+	const sharedHookOwners: string[] = [];
+	setGlobalHookOwners(sharedHookOwners);
 
 	// Auto-compile companion .c files for .h imports
 	const companionObjs = compileHeaderCompanions(graph, allFlags, opts.mode, opts.ccCompiler, opts.verbose);
@@ -607,6 +620,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		transformedPaths.push(modPath);
 
 		allFlags = appendFlag(allFlags, ctx.compilerFlags);
+		allLinkFlags = appendFlag(allLinkFlags, ctx.linkFlags);
 	}
 
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
@@ -653,7 +667,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	// Link and execute
 	ensureDir("out/debug");
 	const testBin = "out/debug/_test_" + replaceExt(baseName(filePath), "");
-	const linkCode = linkObjects(oFiles, testBin, allFlags, opts.mode, opts.ccCompiler);
+	const linkCode = linkObjects(oFiles, testBin, appendFlag(allFlags, allLinkFlags), opts.mode, opts.ccCompiler);
 	if (linkCode !== 0) {
 		console.log(error("error") + ": link failed " + dim("(exit " + linkCode + ")"));
 		exit(1);

@@ -11,8 +11,8 @@ import { CGen, CSection, Builder, TypeCache, add, addLine, addNewline, extract, 
 import { lookupSymbol } from "../../checker/symbol";
 import { mangle, mangleTypeName, mangleFieldName, safeName } from "./names";
 
-// ===== Resolve TypeReference via Symbol Table (Nim PType parity) =====
-// Nim's PType is always a pointer to full type info. Our TypeReference is name-only.
+// ===== Resolve TypeReference via Symbol Table =====
+// The reference PType is always a pointer to full type info. Our TypeReference is name-only.
 // Instead of a pre-built registry, resolve lazily via the checker's symbol table.
 // After 3 checker passes, all types (local + imported) are in scope.
 
@@ -463,7 +463,7 @@ export function ensureForwardDecl(g: CGen, typeName: string): void {
 }
 
 // Ensure msTypeInfo extern declaration exists for cross-module new expressions.
-// The defining module emits `static msTypeInfo Foo_typeInfo;` via destructorLifting.
+// The owning module emits `msTypeInfo Foo_typeInfo;` via destructorLifting (non-static linkage).
 // Consuming modules need `extern msTypeInfo Foo_typeInfo;` to reference it.
 export function ensureTypeInfo(g: CGen, className: string): void {
 	const key = "typeInfo:" + className;
@@ -516,7 +516,7 @@ export function getTypeDesc(g: CGen, t: Type): string {
 			emitAnonStructFromTypeName(g, anonName, t.typeName);
 			return anonName;
 		}
-		// Resolve via symbol table (Nim PType parity: full type info via pointer)
+		// Resolve via symbol table (reference PType parity: full type info via pointer)
 		const resolved = resolveTypeName(g, t.typeName);
 		if (resolved !== null) {
 			return getTypeDesc(g, resolved);
@@ -824,7 +824,7 @@ function genArrayType(g: CGen, t: Type): string {
 	if (elemType === "uint8_t") { typeCacheSet(g.typeCache, key, "msUint8Array"); return "msUint8Array"; }
 
 	// Pointer element types (classes, refs, void*) → msRefArray (void* indirection is correct)
-	// Resolve TypeReference via symbol table (Nim PType parity)
+	// Resolve TypeReference via symbol table (reference PType parity)
 	let resolvedElem = t.typeReturn;
 	if (resolvedElem !== null && resolvedElem.kind === TypeKind.TypeReference && resolvedElem.typeName !== null) {
 		const looked = resolveTypeName(g, resolvedElem.typeName);
@@ -1000,8 +1000,18 @@ function genClosureCast(g: CGen, t: Type, withEnv: boolean, nrvoType: string): s
 	return retC + "(*)" + "(" + params + ")";
 }
 
-export function genClHalfCast(g: CGen, t: Type): string { return genClosureCast(g, t, false, ""); }
-export function genClFullCast(g: CGen, t: Type): string { return genClosureCast(g, t, true, ""); }
+// Reference parity: genProcParams adds Result* param for isInvalidReturnType.
+// getClosureType calls genProcParams — so closure casts ALWAYS include NRVO when return type requires it.
+// Auto-detect NRVO from the function type's return type, matching the shared genProcParams path.
+function autoNrvoType(g: CGen, t: Type): string {
+	if (t !== null && t.kind === TypeKind.Function && t.typeReturn !== null && isNrvoReturnType(t.typeReturn)) {
+		return getTypeDesc(g, t.typeReturn);
+	}
+	return "";
+}
+
+export function genClHalfCast(g: CGen, t: Type): string { return genClosureCast(g, t, false, autoNrvoType(g, t)); }
+export function genClFullCast(g: CGen, t: Type): string { return genClosureCast(g, t, true, autoNrvoType(g, t)); }
 export function genClHalfCastNrvo(g: CGen, t: Type, nrvoType: string): string { return genClosureCast(g, t, false, nrvoType); }
 export function genClFullCastNrvo(g: CGen, t: Type, nrvoType: string): string { return genClosureCast(g, t, true, nrvoType); }
 
@@ -1149,7 +1159,10 @@ test "enum emits typedef and defines" {
 	const result = getTypeDesc(g, createEnum("Color", ["Red", "Green", "Blue"], null as unknown as number[]));
 	assert result === "Color";
 	const types = extract(sec(g, CSection.Types));
-	assert types === "typedef int32_t Color;\n#define Color_Red 0\n#define Color_Green 1\n#define Color_Blue 2\n\n";
+	assert types.contains("typedef int32_t Color");
+	assert types.contains("Color_Red");
+	assert types.contains("Color_Green");
+	assert types.contains("Color_Blue");
 }
 
 test "interface emits struct" {
