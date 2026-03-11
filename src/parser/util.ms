@@ -2,9 +2,9 @@
 // Lives at parser/ level to avoid circular imports between expressions/ and statements/
 
 import { Token, TokenKind } from "../lexer/token";
-import { Node, NodeKind, NumberLiteralData } from "../ast/node";
+import { Node, NodeKind, NumberLiteralData, IdentifierData } from "../ast/node";
 import { ParserState, createState, current, advance, isAtEnd, skipDestructurePattern, takePendingComments, collectTokenText } from "./context";
-import { skipTypeAnnotation } from "./typeAnnotation";
+import { skipTypeAnnotation, parseTypeExpr } from "./typeAnnotation";
 import { lex } from "../lexer/lexer";
 import { callExprParser } from "./statements/callbacks";
 
@@ -33,14 +33,31 @@ export function skipOptionalType(state: ParserState): void {
 
 // ===== Capture Optional Type Annotation =====
 // Like skipOptionalType but returns the type text string ("" if no annotation).
+// Also builds a positioned TypeExpr AST (standard parity: PNode type tree).
+// Retrieve via getLastTypeExpr() after calling captureOptionalType().
+
+let _lastTypeExpr: Node = null;
+
+export function getLastTypeExpr(): Node {
+	return _lastTypeExpr;
+}
 
 export function captureOptionalType(state: ParserState): string {
+	_lastTypeExpr = null;
 	if (!isAtEnd(state) && current(state).kind === TokenKind.Colon) {
 		advance(state);
 		const typeStart = state.position;
+		// Skip using the battle-tested skip path (never changes parser behavior)
 		skipTypeAnnotation(state);
 		const typeEnd = state.position;
-		return collectTokenText(state, typeStart, typeEnd);
+		const text = collectTokenText(state, typeStart, typeEnd);
+		// Build positioned TypeExpr tree by re-parsing the same token range
+		// This is safe: parseTypeExpr only reads tokens[typeStart..typeEnd], no side effects
+		const savedPos = state.position;
+		state.position = typeStart;
+		_lastTypeExpr = parseTypeExpr(state);
+		state.position = savedPos; // Restore to skip endpoint (authoritative)
+		return text;
 	}
 	return "";
 }
@@ -95,9 +112,18 @@ export function getLastParsedDefaults(): Node[] {
 	return _lastDefaults;
 }
 
+// Module-level: TypeExpr nodes for each param's type annotation from last parseParamList.
+// Indexed by param position (0-based). null = no type annotation.
+let _lastParamTypeExprs: Node[] = [];
+
+export function getLastParamTypeExprs(): Node[] {
+	return _lastParamTypeExprs;
+}
+
 export function parseParamList(state: ParserState, fnName: string): string[] {
 	const params: string[] = [];
 	_lastDefaults = [];
+	_lastParamTypeExprs = [];
 	if (current(state).kind !== TokenKind.LParen) { return params; }
 	advance(state);
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RParen) {
@@ -124,6 +150,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 				params.push(`typeof:${typeName.value}`);
 				advance(state);
 				params.push("");
+				_lastParamTypeExprs.push(null);
 				if (current(state).kind === TokenKind.Comma) { advance(state); } else { break; }
 				continue;
 			}
@@ -133,6 +160,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 			params.push(`this:${receiverName.value}`);
 			advance(state);
 			params.push(captureOptionalType(state));
+			_lastParamTypeExprs.push(_lastTypeExpr);
 			if (current(state).kind === TokenKind.Comma) { advance(state); } else { break; }
 			continue;
 		}
@@ -141,6 +169,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 			skipDestructurePattern(state);
 			params.push(`${paramPrefix}_destructure`);
 			params.push(captureOptionalType(state));
+			_lastParamTypeExprs.push(_lastTypeExpr);
 			if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
 				advance(state);
 				const dIdx = (params.length - 2) / 2;
@@ -156,6 +185,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 		params.push(`${paramPrefix}${param.value}`);
 		advance(state);
 		params.push(captureOptionalType(state));
+		_lastParamTypeExprs.push(_lastTypeExpr);
 		// Capture default value as AST node (Reference parity: store default expression)
 		if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
 			advance(state);

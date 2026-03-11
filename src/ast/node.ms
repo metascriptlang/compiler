@@ -100,6 +100,8 @@ export enum NodeKind {
 	ExternDecl, MacroDecl, QuoteExpr, ComptimeBlock,
 	// Self-hosting primitives
 	SizeofExpr,
+	// Type expression nodes (reuse Identifier for leaf types — standard parity: nkIdent, nkBracketExpr, nkProcTy)
+	TypeGeneric, TypeArray, TypeUnion, TypeFunction, TypeObject,
 	// Program root
 	Program,
 }
@@ -219,6 +221,13 @@ export type NodeData =
 	| { macroDeclName: string, macroDeclParams: string[], macroDeclBody: Node } // MacroDecl
 	| { quoteBody: Node }                                          // QuoteExpr
 	| { comptimeBody: Node }                                       // ComptimeBlock
+	// Type expression variants (positioned type AST — standard parity)
+	// TypeName uses NodeKind.Identifier with { name: string } — reuses expression kind like standard nkIdent
+	| { typExprBase: Node, typExprArgs: Node[] }                   // TypeGeneric
+	| { typExprElement: Node, typExprSize: number }                // TypeArray (-1 = unsized)
+	| { typExprMembers: Node[] }                                   // TypeUnion
+	| { typExprParams: Node[], typExprReturn: Node, typExprParamNames: string[] } // TypeFunction
+	| { typExprFieldNames: string[], typExprFieldTypes: Node[] }   // TypeObject
 	// Program root
 	| { programStmts: Node[] }                                     // Program
 
@@ -232,6 +241,8 @@ export class Node {
 	resolvedSym: Symbol;
 	flags: int32;
 	comments: Token[]; // Added for comment preservation
+	typeExpr: Node;    // Positioned type annotation AST (standard parity: PNode type tree alongside string fields)
+	typeExprs: Node[]; // Per-param/per-field type annotation ASTs (parallel to string[] type fields)
 }
 
 export type Expression = Node;
@@ -322,6 +333,14 @@ export type AssertStmtData = { assertExpr: Node, assertSource: string, assertMes
 export type QuoteExprData = { quoteBody: Node };
 export type ComptimeBlockData = { comptimeBody: Node };
 
+// Type expression data types (positioned type AST — standard parity)
+// Leaf type names use IdentifierData (NodeKind.Identifier) — same as standard nkIdent
+export type TypeGenericData = { typExprBase: Node, typExprArgs: Node[] };
+export type TypeArrayData = { typExprElement: Node, typExprSize: number };
+export type TypeUnionData = { typExprMembers: Node[] };
+export type TypeFunctionData = { typExprParams: Node[], typExprReturn: Node, typExprParamNames: string[] };
+export type TypeObjectData = { typExprFieldNames: string[], typExprFieldTypes: Node[] };
+
 // ===== Constructors =====
 
 export function createNode(kind: NodeKind, data: NodeData, token: Token): Node {
@@ -333,6 +352,8 @@ export function createNode(kind: NodeKind, data: NodeData, token: Token): Node {
 	n.resolvedSym = null as unknown as Symbol;
 	n.flags = 0;
 	n.comments = [];
+	n.typeExpr = null;
+	n.typeExprs = null;
 	return n;
 }
 
@@ -345,6 +366,8 @@ export function createNodeAt(kind: NodeKind, data: NodeData, loc: SourceLocation
 	n.resolvedSym = null as unknown as Symbol;
 	n.flags = 0;
 	n.comments = [];
+	n.typeExpr = null;
+	n.typeExprs = null;
 	return n;
 }
 

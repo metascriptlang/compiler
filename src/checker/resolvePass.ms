@@ -11,6 +11,7 @@ import {
 	ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData,
 	ClassDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData,
 	TypeAliasDeclData, VariableDeclData, DecoratedDeclData,
+	IdentifierData, TypeGenericData, TypeArrayData, TypeUnionData, TypeFunctionData, TypeObjectData,
 } from "../ast/node";
 import {
 	Type, TypeKind,
@@ -98,13 +99,11 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 	const unionParts = splitTopLevel(trimmed, "|");
 	if (unionParts.length >= 2) {
 		const members: Type[] = [];
-		let ui = 0;
-		while (ui < unionParts.length) {
-			const part = trimStr(unionParts[ui]);
+		for (const up of unionParts) {
+			const part = trimStr(up);
 			if (part.length > 0) {
 				members.push(resolveAnnotation(part, ctx));
 			}
-			ui += 1;
 		}
 		// T | null where T is interface → Maybe<T> (Reference: Maybe/Option parity)
 		if (members.length === 2) {
@@ -134,9 +133,8 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 		const fields = splitTopLevel(inner, ",");
 		const names: string[] = [];
 		const types: Type[] = [];
-		let fi = 0;
-		while (fi < fields.length) {
-			const field = trimStr(fields[fi]);
+		for (const f of fields) {
+			const field = trimStr(f);
 			if (field !== "") {
 				const colonIdx = findChar(field, ":");
 				if (colonIdx > 0) {
@@ -146,7 +144,6 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 					types.push(resolveAnnotation(ftypeStr, ctx));
 				}
 			}
-			fi = fi + 1;
 		}
 		return createStruct("", names, types, true);
 	}
@@ -277,6 +274,57 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 			}
 			return createTypeRef(trimmed);
 		},
+	};
+}
+
+// ===== TypeExpr Recording (standard parity: markUsed in semTypeNode) =====
+// Walks a positioned TypeExpr AST tree and records USE for every type identifier.
+// Does NOT resolve types — resolveAnnotation still handles that via string path.
+// This is purely additive: records symbol positions for LSP hover/goto-def.
+
+export function resolveTypeExpr(node: Node, ctx: CheckerContext): void {
+	if (node === null) return;
+	match (node.kind) {
+		NodeKind.Identifier => {
+			const d = node.data as IdentifierData;
+			const sym = lookupSymbol(ctx.table, d.name);
+			if (sym !== null) {
+				sgRecordSym(ctx, node.location.line, node.location.column,
+					node.location.column + d.name.length,
+					sym, sym.symbolType, sym.symbolKind, d.name, "", false);
+			}
+		},
+		NodeKind.TypeGeneric => {
+			const d = node.data as TypeGenericData;
+			resolveTypeExpr(d.typExprBase, ctx);
+			for (const arg of d.typExprArgs) {
+				resolveTypeExpr(arg, ctx);
+			}
+		},
+		NodeKind.TypeArray => {
+			const d = node.data as TypeArrayData;
+			resolveTypeExpr(d.typExprElement, ctx);
+		},
+		NodeKind.TypeUnion => {
+			const d = node.data as TypeUnionData;
+			for (const member of d.typExprMembers) {
+				resolveTypeExpr(member, ctx);
+			}
+		},
+		NodeKind.TypeFunction => {
+			const d = node.data as TypeFunctionData;
+			for (const param of d.typExprParams) {
+				resolveTypeExpr(param, ctx);
+			}
+			resolveTypeExpr(d.typExprReturn, ctx);
+		},
+		NodeKind.TypeObject => {
+			const d = node.data as TypeObjectData;
+			for (const ft of d.typExprFieldTypes) {
+				resolveTypeExpr(ft, ctx);
+			}
+		},
+		_ => {},
 	};
 }
 
@@ -470,6 +518,12 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 	}
 
 	const paramTypes = resolveTypeStrings(d.fnParamTypes, d.params.length, ctx);
+	// Record param type annotation positions for LSP
+	if (node.typeExprs !== null) {
+		for (const te of node.typeExprs) {
+			resolveTypeExpr(te, ctx);
+		}
+	}
 
 	// Wrap out param types in TypeKind.Var (reference parity: tyVar)
 	if (d.fnFlags !== "" && d.fnFlags.indexOf("out:") >= 0) {
@@ -490,15 +544,15 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 	}
 
 	const returnType = (d.fnReturnType !== "") ? resolveAnnotation(d.fnReturnType, ctx) : unknownType();
+	// Record return type annotation positions for LSP
+	resolveTypeExpr(node.typeExpr, ctx);
 	const fnType = createFunction(paramTypes, d.params, returnType);
 
 	// Set minArity for functions with default parameters (Reference parity: count non-null defaults)
 	let defCount = 0;
 	if (d.fnDefaults !== null) {
-		let di = 0;
-		while (di < d.fnDefaults.length) {
-			if (d.fnDefaults[di] !== null) defCount = defCount + 1;
-			di = di + 1;
+		for (const def of d.fnDefaults) {
+			if (def !== null) defCount = defCount + 1;
 		}
 	}
 	if (defCount > 0) {
@@ -578,6 +632,12 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 	}
 
 	const fieldTypes = resolveTypeStrings(d.interfaceFieldTypes, d.interfaceFields.length, ctx);
+	// Record type annotation positions for LSP (per-field TypeExpr nodes)
+	if (node.typeExprs !== null) {
+		for (const te of node.typeExprs) {
+			resolveTypeExpr(te, ctx);
+		}
+	}
 
 	if (hasGenerics) {
 		closeScope(ctx.table);
@@ -586,15 +646,13 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 	// reference parity: self-referential value fields → auto-promote to Ref<T>
 	// C cannot embed struct T by value inside itself (infinite size).
 	// Standard reference requires explicit pointer types and errors otherwise. We auto-promote with a warning.
-	let fi = 0;
-	while (fi < fieldTypes.length) {
+	for (let fi = 0; fi < fieldTypes.length; fi += 1) {
 		const ft = fieldTypes[fi];
 		if (ft !== null && isInterfaceType(ft) && ft.typeName === d.interfaceName) {
 			fieldTypes[fi] = createRef(ft);
 			const fieldName = fi < d.interfaceFields.length ? d.interfaceFields[fi] : "?";
 			addError(ctx, "warning: self-referential field '" + fieldName + "' in '" + d.interfaceName + "' auto-promoted to Ref<" + d.interfaceName + ">", node.location.line, 0);
 		}
-		fi += 1;
 	}
 
 	const ifaceType = createStruct(d.interfaceName, d.interfaceFields, fieldTypes, true);
@@ -602,12 +660,10 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 	node.nodeType = sym.symbolType;
 	// Record each interface field DEF for symbol graph
 	// (no per-field location available; use interface node location as fallback)
-	let ri = 0;
-	while (ri < d.interfaceFields.length) {
+	for (let ri = 0; ri < d.interfaceFields.length; ri += 1) {
 		const fieldSym = makeSymbol(d.interfaceFields[ri], SymbolKind.Property, fieldTypes[ri], false);
 		fieldSym.state = SymbolState.Shaped;
 		sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.interfaceFields[ri].length, fieldSym, fieldTypes[ri], SymbolKind.Property, d.interfaceFields[ri], d.interfaceName, true);
-		ri = ri + 1;
 	}
 }
 
@@ -755,7 +811,14 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 				}
 			}
 			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx);
+			// Record param type annotation positions for LSP
+			if (member.typeExprs !== null) {
+				for (const te of member.typeExprs) {
+					resolveTypeExpr(te, ctx);
+				}
+			}
 			const returnType = (md.methodReturnType !== "") ? resolveAnnotation(md.methodReturnType, ctx) : unknownType();
+			resolveTypeExpr(member.typeExpr, ctx);
 			if (hasMethodGenerics) {
 				closeScope(ctx.table);
 			}
@@ -775,6 +838,7 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 			memberNames.push(pd.propName);
 			if (pd.propType !== "") {
 				const propType = resolveAnnotation(pd.propType, ctx);
+				resolveTypeExpr(member.typeExpr, ctx);
 				member.nodeType = propType;
 				memberTypes.push(propType);
 			} else {
@@ -784,6 +848,14 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 			// Resolve constructor type but don't add to struct (data-only, like methods)
 			const cd = member.data as ConstructorDeclData;
 			const paramTypes = resolveTypeStrings(cd.ctorParamTypes, cd.ctorParams.length, ctx);
+			// Record param type annotation positions for LSP
+			if (member.typeExprs !== null) {
+				let cpti = 0;
+				while (cpti < member.typeExprs.length) {
+					resolveTypeExpr(member.typeExprs[cpti], ctx);
+					cpti += 1;
+				}
+			}
 			const ctorType = createFunction(paramTypes, cd.ctorParams, voidType());
 			member.nodeType = ctorType;
 		}

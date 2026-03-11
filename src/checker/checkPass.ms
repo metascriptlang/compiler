@@ -31,7 +31,7 @@ import { collectTopLevel, defineOrError } from "./collectPass";
 import { readFile } from "std/process";
 import { globalImports } from "./prelude";
 import { isAssignable } from "./compat";
-import { resolveDeclarations, resolveAnnotation, ensureShaped } from "./resolvePass";
+import { resolveDeclarations, resolveAnnotation, resolveTypeExpr, ensureShaped } from "./resolvePass";
 import { inferOwnership } from "./ownershipInference";
 import { validateTypedAST } from "./validate";
 import { sliceStr, getModuleDir, appendFlag } from "../utils/string";
@@ -122,6 +122,8 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	let declType = null;
 	if (d.declType !== "") {
 		declType = resolveAnnotation(d.declType, ctx);
+		// Record type annotation positions for LSP (standard parity: markUsed in semTypeNode)
+		resolveTypeExpr(node.typeExpr, ctx);
 	}
 	const initType = checkExpr(ctx, d.initializer, declType);
 	// Parity: standard reference node fitting — insert HiddenStdConv for narrowing integer conversions

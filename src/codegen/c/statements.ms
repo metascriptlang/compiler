@@ -35,13 +35,20 @@ import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, getCalleeReturnType, 
 
 function blockLeaveActions(g: CGen, p: CProc, howManyFinallys: number): void {
 	if (howManyFinallys <= 0) return;
-	// Emit finally bodies from innermost outward (reference: pop then restore)
-	const startIdx = p.nestedFinally.length - howManyFinallys;
-	for (let i = p.nestedFinally.length - 1; i >= startIdx; i -= 1) {
-		const fin = p.nestedFinally[i];
+	// Reference parity (ccgstmts.nim:229-263): pop entries before generating
+	// finally bodies, then restore. Prevents infinite recursion if a finally
+	// body contains return/break which would re-trigger blockLeaveActions.
+	const stack: Node[] = [];
+	for (let i = 0; i < howManyFinallys; i += 1) {
+		const fin = p.nestedFinally.pop();
+		stack.push(fin);
 		if (fin !== null) {
 			genStmt(g, p, fin);
 		}
+	}
+	// Restore in reverse order (innermost last)
+	for (let j = stack.length - 1; j >= 0; j -= 1) {
+		p.nestedFinally.push(stack[j]);
 	}
 }
 
@@ -149,8 +156,8 @@ export function genStmt(g: CGen, p: CProc, node: Node): void {
 // ===== genStmts — emit a list of statements =====
 
 export function genStmts(g: CGen, p: CProc, stmts: Node[]): void {
-	for (let i = 0; i < stmts.length; i += 1) {
-		genStmt(g, p, stmts[i]);
+	for (const stmt of stmts) {
+		genStmt(g, p, stmt);
 	}
 }
 
@@ -166,42 +173,51 @@ export function genStmts(g: CGen, p: CProc, stmts: Node[]): void {
 // Top-level calls pass null (no CProc available).
 export function resolveEmitArgs(g: CGen, mi: MacroInvocationData, p: CProc): string {
 	let result = "";
-	for (let i = 0; i < mi.macroArgs.length; i += 1) {
-		const arg = mi.macroArgs[i];
-		if (arg.kind === NodeKind.StringLiteral) {
-			const sd = arg.data as StringLiteralData;
-			result = result + sd.value;
-		} else if (arg.kind === NodeKind.Identifier) {
-			// reference parity: resolve symbol to C name based on kind
-			const sym = arg.resolvedSym;
-			if (sym !== null) {
-				if (sym.symbolKind === SymbolKind.Function) {
-					// Function → C function name (nativeName if extern, else mangled)
-					if (sym.nativeName !== null && sym.nativeName.length > 0) {
-						result = result + sym.nativeName;
-					} else {
-						result = result + safeName(sym.name);
-					}
-				} else if (sym.symbolKind === SymbolKind.TypeAlias) {
-					// Type → C type descriptor
-					if (sym.symbolType !== null) {
-						result = result + getTypeDesc(g, sym.symbolType);
-					} else {
-						result = result + safeName(sym.name);
-					}
+	for (const arg of mi.macroArgs) {
+		match (arg.kind) {
+			NodeKind.StringLiteral => {
+				const sd = arg.data as StringLiteralData;
+				result = result + sd.value;
+			},
+			NodeKind.Identifier => {
+				// reference parity: resolve symbol to C name based on kind
+				const sym = arg.resolvedSym;
+				if (sym !== null) {
+					match (sym.symbolKind) {
+						SymbolKind.Function => {
+							// Function → C function name (nativeName if extern, else mangled)
+							if (sym.nativeName !== null && sym.nativeName.length > 0) {
+								result = result + sym.nativeName;
+							} else {
+								result = result + safeName(sym.name);
+							}
+						},
+						SymbolKind.TypeAlias => {
+							// Type → C type descriptor
+							if (sym.symbolType !== null) {
+								result = result + getTypeDesc(g, sym.symbolType);
+							} else {
+								result = result + safeName(sym.name);
+							}
+						},
+						_ => {
+							// Variable/const → C variable name
+							result = result + safeName(sym.name);
+						},
+					};
 				} else {
-					// Variable/const → C variable name
-					result = result + safeName(sym.name);
+					// Unresolved — use raw name
+					const id = arg.data as IdentifierData;
+					result = result + id.name;
 				}
-			} else {
-				// Unresolved — use raw name
-				const id = arg.data as IdentifierData;
-				result = result + id.name;
-			}
-		} else if (p !== null) {
-			// Arbitrary expression — Reference initLocExpr + rdLoc parity
-			result = result + genExpr(g, p, arg);
-		}
+			},
+			_ => {
+				// Arbitrary expression — Reference initLocExpr + rdLoc parity
+				if (p !== null) {
+					result = result + genExpr(g, p, arg);
+				}
+			},
+		};
 	}
 	return result;
 }
@@ -350,8 +366,7 @@ function genIfStmt(g: CGen, p: CProc, node: Node): void {
 	p.labels += 1;
 	const labelBase = p.labels;
 	const lend = `__L${intToString(labelBase)}_end`;
-	let i = 0;
-	while (i < branches.length) {
+	for (let i = 0; i < branches.length; i += 1) {
 		p.labels += 1;
 		const lnext = "__L" + intToString(p.labels);
 		emitStmtsLine(p, "{");
@@ -360,7 +375,6 @@ function genIfStmt(g: CGen, p: CProc, node: Node): void {
 		genBlockOrBraces(g, p, bodies[i]);
 		emitStmtsLine(p, `} goto ${lend};`);
 		emitStmtsLine(p, lnext + ":;");
-		i += 1;
 	}
 	if (elseBody !== null) {
 		genBlockOrBraces(g, p, elseBody);
@@ -452,17 +466,21 @@ function genReturnStmt(g: CGen, p: CProc, node: Node): void {
 				emitStmtsLine(p, `*__result = ${snippet};`);
 			}
 		} else {
-			if (p.nestedFinally.length > 0 && d.argument.nodeType !== null && d.argument.nodeType.kind !== TypeKind.Void) {
+			if (p.nestedFinally.length > 0) {
 				// Reference parity: save return value to temp before finally cleanup.
 				// blockLeaveActions may emit wasMoved that zeros the returned local.
-				// Nim stores in `result` first, then runs cleanup, then `goto BeforeRet_`.
-				const retType = getTypeDesc(g, d.argument.nodeType);
-				const tmp = getTemp(p, retType);
-				emitStmtsLine(p, `${tmp.snippet} = ${snippet};`);
-				blockLeaveActions(g, p, p.nestedFinally.length);
-				emitStmtsLine(p, `return ${tmp.snippet};`);
+				// Store in temp first, then run cleanup, then return temp.
+				const retType = p.returnType !== null ? getTypeDesc(g, p.returnType) : (d.argument.nodeType !== null ? getTypeDesc(g, d.argument.nodeType) : "");
+				if (retType !== "" && retType !== "void") {
+					const tmp = getTemp(p, retType);
+					emitStmtsLine(p, `${tmp.snippet} = ${snippet};`);
+					blockLeaveActions(g, p, p.nestedFinally.length);
+					emitStmtsLine(p, `return ${tmp.snippet};`);
+				} else {
+					blockLeaveActions(g, p, p.nestedFinally.length);
+					emitStmtsLine(p, `return ${snippet};`);
+				}
 			} else {
-				blockLeaveActions(g, p, p.nestedFinally.length);
 				emitStmtsLine(p, `return ${snippet};`);
 			}
 			return;
@@ -609,15 +627,14 @@ function genSwitchStmt(g: CGen, p: CProc, node: Node): void {
 	const oldIndent = getStmtsIndent(p);
 	setStmtsIndent(p, oldIndent + 1);
 
-	for (let i = 0; i < d.switchCases.length; i += 1) {
-		const caseNode = d.switchCases[i];
+	for (const caseNode of d.switchCases) {
 		const cd = caseNode.data as SwitchCaseData;
 
 		if (cd.isDefault) {
 			emitStmtsLine(p, "default: {");
 		} else {
-			for (let j = 0; j < cd.caseTests.length; j += 1) {
-				const testSnippet = genExpr(g, p, cd.caseTests[j]);
+			for (const test of cd.caseTests) {
+				const testSnippet = genExpr(g, p, test);
 				emitStmtsLine(p, `case ${testSnippet}:`);
 			}
 			emitStmts(p, "{");
@@ -665,11 +682,13 @@ function escapeForC(s: string): string {
 	let i = 0;
 	while (i < s.length) {
 		const ch = charAt(s, i);
-		if (ch === "\\") { result = result + "\\\\"; }
-		else if (ch === "\"") { result = result + "\\\""; }
-		else if (ch === "\n") { result = result + "\\n"; }
-		else if (ch === "\r") { result = result + "\\r"; }
-		else { result = result + ch; }
+		result = result + match (ch) {
+			"\\" => "\\\\",
+			"\"" => "\\\"",
+			"\n" => "\\n",
+			"\r" => "\\r",
+			_ => ch,
+		};
 		i = i + 1;
 	}
 	return result;

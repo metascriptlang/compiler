@@ -39,8 +39,8 @@ function resolveTypeName(g: CGen, name: string): Type {
 let typesBeingDefined: string[] = [];
 
 function isBeingDefined(key: string): boolean {
-	for (let i = 0; i < typesBeingDefined.length; i += 1) {
-		if (typesBeingDefined[i] === key) return true;
+	for (const k of typesBeingDefined) {
+		if (k === key) return true;
 	}
 	return false;
 }
@@ -57,22 +57,23 @@ let deferredArrayContentStructs: string[] = [];
 
 function anonFieldKey(t: Type): string {
 	if (t === null) return "null";
-	// For anonymous nested objects, recurse
-	if (t.kind === TypeKind.Struct && t.typeName.length === 0) {
-		return `anon(${anonStructuralKey(t)})`;
-	}
-	// Named objects use their name
-	if (t.kind === TypeKind.Struct) return t.typeName;
-	// Everything else uses the standard typeKey
-	const simple = getSimpleTypeDesc(t);
-	if (simple !== "") return simple;
-	if (t.kind === TypeKind.Enum) return "enum:" + t.typeName;
-	if (t.kind === TypeKind.Array) return "arr:" + anonFieldKey(t.typeReturn);
-	if (t.kind === TypeKind.Function) return "fn";
-	if (t.kind === TypeKind.Result) return "result";
-	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) return "ptr:" + anonFieldKey(t.typeReturn);
-	if (t.kind === TypeKind.TypeReference) return "ref:" + t.typeName;
-	return "unknown";
+	return match (t.kind) {
+		TypeKind.Struct => {
+			if (t.typeName.length === 0) return `anon(${anonStructuralKey(t)})`;
+			return t.typeName;
+		},
+		TypeKind.Enum => "enum:" + t.typeName,
+		TypeKind.Array => "arr:" + anonFieldKey(t.typeReturn),
+		TypeKind.Function => "fn",
+		TypeKind.Result => "result",
+		TypeKind.Ref | TypeKind.Ptr => "ptr:" + anonFieldKey(t.typeReturn),
+		TypeKind.TypeReference => "ref:" + t.typeName,
+		_ => {
+			const simple = getSimpleTypeDesc(t);
+			if (simple !== "") return simple;
+			return "unknown";
+		},
+	};
 }
 
 function anonStructuralKey(t: Type): string {
@@ -138,20 +139,24 @@ export function anonTypeName(t: Type): string {
 
 export function annotationToC(annotation: string): string {
 	const s = trimStr(annotation);
-	if (s === "number" || s === "float64") return "double";
-	if (s === "float32") return "float";
-	if (s === "int8") return "int8_t";
-	if (s === "int16") return "int16_t";
-	if (s === "int32") return "int32_t";
-	if (s === "int64") return "int64_t";
-	if (s === "uint8") return "uint8_t";
-	if (s === "uint16") return "uint16_t";
-	if (s === "uint32") return "uint32_t";
-	if (s === "uint64") return "uint64_t";
-	if (s === "boolean") return "MS_BOOL";
-	if (s === "string") return "msString";
-	if (s === "cstring") return "const char*";
-	if (s === "void" || s === "null") return "void*";
+	const mapped = match (s) {
+		"number" | "float64" => "double",
+		"float32" => "float",
+		"int8" => "int8_t",
+		"int16" => "int16_t",
+		"int32" => "int32_t",
+		"int64" => "int64_t",
+		"uint8" => "uint8_t",
+		"uint16" => "uint16_t",
+		"uint32" => "uint32_t",
+		"uint64" => "uint64_t",
+		"boolean" => "MS_BOOL",
+		"string" => "msString",
+		"cstring" => "const char*",
+		"void" | "null" => "void*",
+		_ => "",
+	};
+	if (mapped !== "") return mapped;
 	// Array types: "T[]", "T []", "T [ ]" (checker may include spaces)
 	if (s.endsWith("[]") || s.endsWith("[ ]")) {
 		let elem = s;
@@ -186,11 +191,11 @@ export function buildAnonStructDef(structName: string, rawName: string): string 
 	def = def + `typedef struct ${structName} ${structName};\n`;
 	def = def + `struct ${structName} {\n`;
 
-	for (let fi = 0; fi < fields.length; fi += 1) {
-		const colonPos = findChar(fields[fi], ":");
+	for (const field of fields) {
+		const colonPos = findChar(field, ":");
 		if (colonPos < 0) continue;
-		const fname = trimStr(fields[fi].slice(0, colonPos));
-		const ftype = trimStr(fields[fi].slice(colonPos + 1, fields[fi].length));
+		const fname = trimStr(field.slice(0, colonPos));
+		const ftype = trimStr(field.slice(colonPos + 1, field.length));
 		def = def + `  ${annotationToC(ftype)} ${safeName(fname)};\n`;
 	}
 
@@ -365,11 +370,11 @@ export function ccgIntroducedPtr(t: Type): boolean {
 	const inner = skipModifier(t);
 	if (inner === null) return false;
 	if (isInterfaceType(inner)) return getTypeSize(inner) > PTR_THRESHOLD;
-	if (inner.kind === TypeKind.Tuple) return getTypeSize(inner) > PTR_THRESHOLD;
-	if (inner.kind === TypeKind.Result) return true;
-	if (inner.kind === TypeKind.Union) return true;
-	if (inner.kind === TypeKind.Span) return true;
-	return false;
+	return match (inner.kind) {
+		TypeKind.Tuple => getTypeSize(inner) > PTR_THRESHOLD,
+		TypeKind.Result | TypeKind.Union | TypeKind.Span => true,
+		_ => false,
+	};
 }
 
 // ===== Needs RC =====
@@ -652,9 +657,7 @@ function genObjectType(g: CGen, t: Type): string {
 	}
 
 	// Build struct definition string
-	let structDef = `#ifndef ${name}_DEFINED\n`;
-	structDef = structDef + `#define ${name}_DEFINED\n`;
-	structDef = structDef + `struct ${name} {\n`;
+	let structDef = `#ifndef ${name}_DEFINED\n#define ${name}_DEFINED\nstruct ${name} {\n`;
 	for (let i = 0; i < t.typeNames.length; i += 1) {
 		structDef = structDef + `  ${fieldTypes[i]} ${mangleFieldName(t.typeNames[i])};\n`;
 	}

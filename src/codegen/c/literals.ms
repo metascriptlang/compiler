@@ -120,8 +120,7 @@ export function formatCFloat32(value: number): string {
 // with MS_STRLIT_FLAG set in cap. Usage: MS_STRING_LIT(&name, len)
 
 export function emitStringPoolDecls(pool: StringPool, dest: Builder): void {
-	for (let i = 0; i < pool.entries.length; i += 1) {
-		const entry = pool.entries[i];
+	for (const entry of pool.entries) {
 		const escaped = escapeCString(entry.value);
 		const len = cStringByteLen(entry.value);
 		// static struct { int64_t cap; char data[N+1]; } TMP_STR_1 = { MS_STRLIT_FLAG | N, "..." };

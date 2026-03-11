@@ -5,7 +5,7 @@ import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, ExternKind, NodeData, createNode, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, skipDestructurePattern, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, addGenericDecl, updateGenericDeclFields, collectTokenText } from "../context";
 import { skipTypeAnnotation } from "../typeAnnotation";
-import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, skipDefaultValue, skipOptionalType, getLastParsedDefaults, isIdentLike } from "../util";
+import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipDefaultValue, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, isIdentLike } from "../util";
 import { callBlockParser, callExprParser } from "./callbacks";
 import { sliceStr } from "../../utils/string";
 import { programOk, stmtKind, stmtAt } from "./validation";
@@ -90,6 +90,7 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 	advance(state);
 	// Optional type annotation: const x: number = ...
 	const declType = captureOptionalType(state);
+	const declTypeExpr = getLastTypeExpr();
 
 	if (current(state).kind !== TokenKind.Assign) {
 		return Result.err(`Expected '=' in variable declaration at line ${current(state).line}`);
@@ -99,12 +100,14 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 	const init = try callExprParser(state);
 	consumeSemicolon(state);
 
-	return Result.ok(createNode(NodeKind.VariableDecl, {
+	const varNode = createNode(NodeKind.VariableDecl, {
 		declName: nameToken.value,
 		declType,
 		initializer: init,
 		declKind: match (keyword.kind) { TokenKind.Const => DeclKind.Const, TokenKind.Var => DeclKind.Var, _ => DeclKind.Let },
-	}, keyword));
+	}, keyword);
+	varNode.typeExpr = declTypeExpr;
+	return Result.ok(varNode);
 }
 
 // ===== Specifier List Helper =====
@@ -190,6 +193,7 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 
 	const raw = parseParamList(state, nameToken.value);
 	const fnDefaults = getLastParsedDefaults();
+	const fnParamTypeExprs = getLastParamTypeExprs();
 	const params = extractParamNames(raw);
 	const fnParamTypes = extractParamTypes(raw);
 
@@ -201,8 +205,9 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 
 	// Optional return type annotation: function f(): string { ... }
 	const fnReturnType = captureOptionalType(state);
+	const fnReturnTypeExpr = getLastTypeExpr();
 
-	return Result.ok(createNode(NodeKind.FunctionDecl, {
+	const fnNode = createNode(NodeKind.FunctionDecl, {
 		fnName: nameToken.value,
 		params: isStatic ? stripFirstParam(params) : params,
 		fnParamTypes: isStatic ? stripFirstParam(fnParamTypes) : fnParamTypes,
@@ -210,7 +215,10 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 		fnFlags: flags,
 		fnReturnType,
 		fnDefaults,
-	}, fnToken));
+	}, fnToken);
+	fnNode.typeExpr = fnReturnTypeExpr;
+	fnNode.typeExprs = fnParamTypeExprs;
+	return Result.ok(fnNode);
 }
 
 // ===== Import Declaration =====
@@ -601,6 +609,7 @@ export function parseInterfaceDecl(state: ParserState): NodeResult {
 	advance(state);
 	const fields: string[] = [];
 	const fieldTypes: string[] = [];
+	const fieldTypeExprs: Node[] = [];
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
 		const field = current(state);
 		if (!isIdentLike(field)) {
@@ -616,6 +625,7 @@ export function parseInterfaceDecl(state: ParserState): NodeResult {
 
 		// Colon + type annotation — capture it
 		fieldTypes.push(captureOptionalType(state));
+		fieldTypeExprs.push(getLastTypeExpr());
 
 		// Skip semicolons and commas between members
 		if (!isAtEnd(state) && (current(state).kind === TokenKind.Semicolon || current(state).kind === TokenKind.Comma)) {
@@ -641,11 +651,13 @@ export function parseInterfaceDecl(state: ParserState): NodeResult {
 		updateGenericDeclFields(nameToken.value, fnJoined, ftJoined);
 	}
 
-	return Result.ok(createNode(NodeKind.InterfaceDecl, {
+	const ifaceNode = createNode(NodeKind.InterfaceDecl, {
 		interfaceName: nameToken.value,
 		interfaceFields: fields,
 		interfaceFieldTypes: fieldTypes,
-	}, ifaceToken));
+	}, ifaceToken);
+	ifaceNode.typeExprs = fieldTypeExprs;
+	return Result.ok(ifaceNode);
 }
 
 // ===== Class Declaration =====
@@ -832,17 +844,20 @@ function parseClassMember(state: ParserState): NodeResult {
 
 	// Property — capture type, skip initializer tokens manually
 	const propType = captureOptionalType(state);
+	const propTypeExpr = getLastTypeExpr();
 	if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
 		advance(state);
 		skipDefaultValue(state);
 	}
 	consumeSemicolon(state);
 
-	return Result.ok(createNode(NodeKind.PropertyDecl, {
+	const propNode = createNode(NodeKind.PropertyDecl, {
 		propName: nameToken.value,
 		propType,
 		propIsStatic: memberIsStatic,
-	}, nameToken));
+	}, nameToken);
+	propNode.typeExpr = propTypeExpr;
+	return Result.ok(propNode);
 }
 
 // parseParamList and skipDefaultValue imported from ../util
@@ -852,14 +867,17 @@ function parseClassConstructor(state: ParserState): NodeResult {
 	const ctorToken = current(state);
 	advance(state);
 	const raw = parseParamList(state, "constructor");
+	const ctorParamTypeExprs = getLastParamTypeExprs();
 	const ctorParams = extractParamNames(raw);
 	const ctorParamTypes = extractParamTypes(raw);
 	const body = try callBlockParser(state);
-	return Result.ok(createNode(NodeKind.ConstructorDecl, {
+	const ctorNode = createNode(NodeKind.ConstructorDecl, {
 		ctorParams,
 		ctorParamTypes,
 		ctorBody: body,
-	}, ctorToken));
+	}, ctorToken);
+	ctorNode.typeExprs = ctorParamTypeExprs;
+	return Result.ok(ctorNode);
 }
 
 function parseClassAccessor(state: ParserState, isStatic: boolean, flags: string): NodeResult {
@@ -869,11 +887,13 @@ function parseClassAccessor(state: ParserState, isStatic: boolean, flags: string
 	const accName = current(state).value;
 	advance(state);
 	const raw = parseParamList(state, `${accKind}_${accName}`);
+	const accParamTypeExprs = getLastParamTypeExprs();
 	const methodParams = extractParamNames(raw);
 	const methodParamTypes = extractParamTypes(raw);
 	const methodReturnType = captureOptionalType(state);
+	const methodReturnTypeExpr = getLastTypeExpr();
 	const body = try callBlockParser(state);
-	return Result.ok(createNode(NodeKind.MethodDecl, {
+	const accNode = createNode(NodeKind.MethodDecl, {
 		methodName: `${accKind}_${accName}`,
 		methodParams,
 		methodParamTypes,
@@ -881,7 +901,10 @@ function parseClassAccessor(state: ParserState, isStatic: boolean, flags: string
 		methodIsStatic: isStatic,
 		methodFlags: flags,
 		methodReturnType,
-	}, accToken));
+	}, accToken);
+	accNode.typeExpr = methodReturnTypeExpr;
+	accNode.typeExprs = accParamTypeExprs;
+	return Result.ok(accNode);
 }
 
 function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: boolean, flags: string): NodeResult {
@@ -892,10 +915,12 @@ function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: bo
 		else { flags = `${flags}|gen:${genericNames}`; }
 	}
 	const raw = parseParamList(state, nameToken.value);
+	const methodParamTypeExprs = getLastParamTypeExprs();
 	const methodParams = extractParamNames(raw);
 	const methodParamTypes = extractParamTypes(raw);
 	// Optional return type
 	const methodReturnType = captureOptionalType(state);
+	const methodRetTypeExpr = getLastTypeExpr();
 
 	// Extern methods: 'from "c_name";' instead of body
 	let methodNativeName = "";
@@ -906,7 +931,7 @@ function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: bo
 			advance(state);
 		}
 		consumeSemicolon(state);
-		return Result.ok(createNode(NodeKind.MethodDecl, {
+		const mNode1 = createNode(NodeKind.MethodDecl, {
 			methodName: nameToken.value,
 			methodParams,
 			methodParamTypes,
@@ -915,13 +940,16 @@ function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: bo
 			methodFlags: flags,
 			methodReturnType,
 			nativeName: methodNativeName,
-		}, nameToken));
+		}, nameToken);
+		mNode1.typeExpr = methodRetTypeExpr;
+		mNode1.typeExprs = methodParamTypeExprs;
+		return Result.ok(mNode1);
 	}
 
 	// Abstract methods / extern without 'from' — just semicolon
 	if (current(state).kind === TokenKind.Semicolon) {
 		consumeSemicolon(state);
-		return Result.ok(createNode(NodeKind.MethodDecl, {
+		const mNode2 = createNode(NodeKind.MethodDecl, {
 			methodName: nameToken.value,
 			methodParams,
 			methodParamTypes,
@@ -930,10 +958,13 @@ function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: bo
 			methodFlags: flags,
 			methodReturnType,
 			nativeName: "",
-		}, nameToken));
+		}, nameToken);
+		mNode2.typeExpr = methodRetTypeExpr;
+		mNode2.typeExprs = methodParamTypeExprs;
+		return Result.ok(mNode2);
 	}
 	const body = try callBlockParser(state);
-	return Result.ok(createNode(NodeKind.MethodDecl, {
+	const mNode3 = createNode(NodeKind.MethodDecl, {
 		methodName: nameToken.value,
 		methodParams,
 		methodParamTypes,
@@ -942,7 +973,10 @@ function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: bo
 		methodFlags: flags,
 		methodReturnType,
 		nativeName: "",
-	}, nameToken));
+	}, nameToken);
+	mNode3.typeExpr = methodRetTypeExpr;
+	mNode3.typeExprs = methodParamTypeExprs;
+	return Result.ok(mNode3);
 }
 
 // ===== Destructuring Patterns =====
@@ -1167,6 +1201,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 	// Extern functions → FunctionDecl with "extern" in fnFlags (Standard reference: importc pragma)
 	if (externKind === ExternKind.Function) {
 		const raw = parseParamList(state, nameToken.value);
+		const externParamTypeExprs = getLastParamTypeExprs();
 		const params = extractParamNames(raw);
 		const fnParamTypes = extractParamTypes(raw);
 
@@ -1174,6 +1209,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 		let flags = applyExtensionFlags("extern", params, fnParamTypes, genericNames);
 
 		const fnReturnType = captureOptionalType(state);
+		const externRetTypeExpr = getLastTypeExpr();
 
 		// Parse optional 'from "c_name"' clause or body/semicolon
 		let nativeName = "";
@@ -1194,7 +1230,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 		// Static extensions strip the synthetic typeof param (not a runtime param)
 		const isStatic = params.length > 0 && params[0].length > 7 && sliceStr(params[0], 0, 7) === "typeof:";
 
-		return Result.ok(createNode(NodeKind.FunctionDecl, {
+		const externFnNode = createNode(NodeKind.FunctionDecl, {
 			fnName: nameToken.value,
 			params: isStatic ? stripFirstParam(params) : params,
 			fnParamTypes: isStatic ? stripFirstParam(fnParamTypes) : fnParamTypes,
@@ -1203,12 +1239,16 @@ export function parseExternDecl(state: ParserState): NodeResult {
 			fnReturnType,
 			fnDefaults: getLastParsedDefaults(),
 			nativeName,
-		}, externToken));
+		}, externToken);
+		externFnNode.typeExpr = externRetTypeExpr;
+		externFnNode.typeExprs = externParamTypeExprs;
+		return Result.ok(externFnNode);
 	}
 
 	// Non-function externs: keep ExternDecl node
 	skipBalanced(state, TokenKind.LParen, TokenKind.RParen);
 	const externType = captureOptionalType(state);
+	const externTypeExpr = getLastTypeExpr();
 
 	// Skip optional 'extends' clause
 	if (!isAtEnd(state) && current(state).kind === TokenKind.Extends) {
@@ -1231,12 +1271,14 @@ export function parseExternDecl(state: ParserState): NodeResult {
 		consumeSemicolon(state);
 	}
 
-	return Result.ok(createNode(NodeKind.ExternDecl, {
+	const externNode = createNode(NodeKind.ExternDecl, {
 		externKind,
 		externName: nameToken.value,
 		nativeName: externNativeName,
 		externType,
-	}, externToken));
+	}, externToken);
+	externNode.typeExpr = externTypeExpr;
+	return Result.ok(externNode);
 }
 
 // ===== Distinct Type Declaration =====

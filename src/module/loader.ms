@@ -38,7 +38,7 @@ export interface MapEntry {
 	entrySource: string;
 }
 
-export interface SourceProvider {
+export class SourceProvider {
 	entries: MapEntry[];
 	useFileSystem: boolean;
 }

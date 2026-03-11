@@ -58,8 +58,8 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 	// Walk program statements
 	if (program !== null && program.kind === NodeKind.Program) {
 		const pd = program.data as ProgramData;
-		for (let i = 0; i < pd.programStmts.length; i += 1) {
-			genDecl(g, pd.programStmts[i], false);
+		for (const stmt of pd.programStmts) {
+			genDecl(g, stmt, false);
 		}
 	}
 
@@ -132,8 +132,8 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 	const retType = (mainRetType.length > 0) ? mainRetType : "void";
 
 	// Forward declarations for all module init functions
-	for (let i = 0; i < modulePaths.length; i += 1) {
-		const modName = mangleModuleName(modulePaths[i]);
+	for (const mp of modulePaths) {
+		const modName = mangleModuleName(mp);
 		addLine(b, `void ${modName}__DatInit000(void);`);
 		addLine(b, `void ${modName}__Init000(void);`);
 	}
@@ -152,8 +152,8 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 	// MsPreMainInner — calls DatInit000 for all modules in topological order
 	addLine(b, "static void MsPreMainInner(void) {");
 	b.indent += 1;
-	for (let i = 0; i < modulePaths.length; i += 1) {
-		addLine(b, `${mangleModuleName(modulePaths[i])}__DatInit000();`);
+	for (const mp of modulePaths) {
+		addLine(b, `${mangleModuleName(mp)}__DatInit000();`);
 	}
 	b.indent -= 1;
 	addLine(b, "}");
@@ -162,9 +162,9 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 	// MsMainInner — dependency Init000, then entry Init000, then user main
 	addLine(b, "static void MsMainInner(void) {");
 	b.indent += 1;
-	for (let i = 0; i < modulePaths.length; i += 1) {
-		if (modulePaths[i] !== entryPath) {
-			addLine(b, `${mangleModuleName(modulePaths[i])}__Init000();`);
+	for (const mp of modulePaths) {
+		if (mp !== entryPath) {
+			addLine(b, `${mangleModuleName(mp)}__Init000();`);
 		}
 	}
 	addLine(b, `${mangleModuleName(entryPath)}__Init000();`);

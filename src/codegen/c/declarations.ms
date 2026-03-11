@@ -402,8 +402,7 @@ function genClassDecl(g: CGen, node: Node): void {
 	// calls from interleaving other type definitions inside this struct body.
 	const fieldTypes: string[] = [];
 	const fieldNames: string[] = [];
-	for (let i = 0; i < d.classBody.length; i += 1) {
-		const member = d.classBody[i];
+	for (const member of d.classBody) {
 		if (member.kind === NodeKind.PropertyDecl) {
 			const pd = member.data as PropertyDeclData;
 			fieldTypes.push(getTypeDesc(g, member.nodeType));
@@ -425,8 +424,7 @@ function genClassDecl(g: CGen, node: Node): void {
 	// genTypeInfoVar handles it via genGlobalVar → DatInit patching.
 
 	// Emit methods as free functions with first param being the class pointer
-	for (let i = 0; i < d.classBody.length; i += 1) {
-		const member = d.classBody[i];
+	for (const member of d.classBody) {
 		if (member.kind === NodeKind.MethodDecl) {
 			genMethodAsFunction(g, member, name);
 		} else if (member.kind === NodeKind.ConstructorDecl) {

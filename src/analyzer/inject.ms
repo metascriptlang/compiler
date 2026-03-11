@@ -296,6 +296,11 @@ function processObjectLiteral(node: Node, dctx: DrcContext, mode: DrcMode): Node
 	const od = node.data as ObjectLiteralData;
 	for (let i = 0; i < od.properties.length; i += 1) {
 		od.properties[i] = processNode(od.properties[i], dctx, DrcMode.Consumed);
+		// Borrow-to-sink: MemberExpr/ArrayAccess in object literal need deep copy
+		const prop = od.properties[i];
+		if (prop.kind === NodeKind.ArrayAccess || prop.kind === NodeKind.MemberExpr) {
+			od.properties[i] = passCopyToSink(prop, dctx);
+		}
 	}
 	return node;
 }
@@ -304,6 +309,10 @@ function processArrayLiteral(node: Node, dctx: DrcContext, mode: DrcMode): Node 
 	const ad = node.data as ArrayLiteralData;
 	for (let i = 0; i < ad.elements.length; i += 1) {
 		ad.elements[i] = processNode(ad.elements[i], dctx, DrcMode.Consumed);
+		const elem = ad.elements[i];
+		if (elem.kind === NodeKind.ArrayAccess || elem.kind === NodeKind.MemberExpr) {
+			ad.elements[i] = passCopyToSink(elem, dctx);
+		}
 	}
 	return node;
 }
@@ -351,7 +360,7 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 			if (rcInfo.wasMovedFn !== "") {
 				addPending(dctx, makeWasMovedCall(d.name, rcInfo, loc));
 			}
-			recordMove(dctx, d.name);
+			recordMoveInContext(dctx, d.name);
 		} else {
 			// COPY: emit incref before the current statement
 			if (rcInfo.copyFn !== "") {
@@ -1291,6 +1300,9 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	// Register for scope cleanup
 	registerVar(dctx, d.declName, rcInfo, isCursor);
 
+	// Cursor variables borrow — no move/copy on initializer (source stays alive)
+	if (isCursor) return stmt;
+
 	// Phase D: first-write optimization — `let x;` without initializer is uninitialized
 	if (d.initializer === null) {
 		markUninitialized(dctx, d.declName);
@@ -1878,6 +1890,34 @@ function clearPendingForReturnedVars(node: Node, dctx: DrcContext): void {
 		},
 		NodeKind.MoveExpr => {
 			clearPendingForReturnedVars((node.data as MoveExprData).moveArg, dctx);
+		},
+		NodeKind.ObjectLiteral => {
+			const od = node.data as ObjectLiteralData;
+			for (const prop of od.properties) {
+				clearPendingForReturnedVars(prop, dctx);
+			}
+		},
+		NodeKind.ArrayLiteral => {
+			const ad = node.data as ArrayLiteralData;
+			for (const elem of ad.elements) {
+				clearPendingForReturnedVars(elem, dctx);
+			}
+		},
+		NodeKind.CallExpr => {
+			const cd = node.data as CallExprData;
+			for (const arg of cd.arguments) {
+				clearPendingForReturnedVars(arg, dctx);
+			}
+		},
+		NodeKind.ConditionalExpr => {
+			const cd = node.data as ConditionalExprData;
+			clearPendingForReturnedVars(cd.ternaryConsequent, dctx);
+			clearPendingForReturnedVars(cd.ternaryAlternate, dctx);
+		},
+		NodeKind.BinaryExpr => {
+			const bd = node.data as BinaryExprData;
+			clearPendingForReturnedVars(bd.left, dctx);
+			clearPendingForReturnedVars(bd.right, dctx);
 		},
 		_ => {},
 	};

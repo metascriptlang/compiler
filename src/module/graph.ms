@@ -51,7 +51,7 @@ export interface ImportEntry {
 // ===== Module =====
 // Lightweight — no ast/checker types. Complex data stored in parallel arrays.
 
-export interface Module {
+export class Module {
 	path: string;              // absolute file path (canonical key)
 	source: string;            // raw source text
 	state: ModuleState;        // loading state machine
@@ -64,7 +64,7 @@ export interface Module {
 // ===== Circular Dependency Info =====
 // Reference parallel implementation: records cycle for warnings.
 
-export interface CircularDep {
+export class CircularDep {
 	fromPath: string;    // module that triggered the circular import
 	toPath: string;      // module being imported (already on import stack)
 	cycle: string[];     // full cycle path (for diagnostics)
@@ -74,7 +74,7 @@ export interface CircularDep {
 
 // ===== Module Graph =====
 
-export interface ModuleGraph {
+export class ModuleGraph {
 	modules: Module[];         // all loaded modules
 	modulePaths: string[];     // parallel: absolute paths (for lookup)
 	loadOrder: string[];       // topological order for checking

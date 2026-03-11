@@ -4,8 +4,8 @@
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, NodeData, Expression, createNode, QuoteExprData, BlockStmtData } from "../../ast/node";
 import { ParserState, createState, current, advance, isAtEnd, isGenericCallAhead, captureGenericTypeArgs, addExplicitTypeArg, collectTokenText } from "../context";
-import { skipTypeAnnotation } from "../typeAnnotation";
-import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, skipOptionalType, isIdentLike } from "../util";
+import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
+import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, skipOptionalType, isIdentLike } from "../util";
 import { getPrecedence, isBinaryOperator, isRightAssociative } from "./precedence";
 import { parseMatchExpr } from "./match";
 import { isArrowFunction, parseArrowFunction } from "./arrow";
@@ -136,7 +136,14 @@ function parseExprWithPrec(state: ParserState, minPrec: number): ExprResult {
 			skipTypeAnnotation(state);
 			const asEnd = state.position;
 			const asType = collectTokenText(state, asStart, asEnd);
-			left = createNode(NodeKind.TypeAssertion, { asExpr: left, asType }, token);
+			// Build positioned TypeExpr by re-parsing the same range
+			const asSavedPos = state.position;
+			state.position = asStart;
+			const asTypeExpr = parseTypeExpr(state);
+			state.position = asSavedPos;
+			const asNode = createNode(NodeKind.TypeAssertion, { asExpr: left, asType }, token);
+			asNode.typeExpr = asTypeExpr;
+			left = asNode;
 			continue;
 		}
 
@@ -199,12 +206,17 @@ function parseFuncExprBody(state: ParserState, token: Token, feFlags: string): E
 	}
 	// Parse params
 	const raw = parseParamList(state, "");
+	const feParamTypeExprs = getLastParamTypeExprs();
 	const funcExprParams = extractParamNames(raw);
 	const funcExprParamTypes = extractParamTypes(raw);
 	// Optional return type
 	const funcExprReturnType = captureOptionalType(state);
+	const funcExprRetTypeExpr = getLastTypeExpr();
 	const feBody = try blockParser(state);
-	return Result.ok(createNode(NodeKind.FunctionExpr, { funcExprParams, funcExprParamTypes, funcExprBody: feBody, funcExprFlags: feFlags, funcExprReturnType }, token));
+	const feNode = createNode(NodeKind.FunctionExpr, { funcExprParams, funcExprParamTypes, funcExprBody: feBody, funcExprFlags: feFlags, funcExprReturnType }, token);
+	feNode.typeExpr = funcExprRetTypeExpr;
+	feNode.typeExprs = feParamTypeExprs;
+	return Result.ok(feNode);
 }
 
 // ===== Primary Expressions =====

@@ -43,8 +43,8 @@ export function genTestDeclNode(g: CGen, node: Node): void {
 		const bd = d.testBody.data as BlockStmtData;
 		const p = createProc(funcName, null);
 		g.currentProc = p;
-		for (let i = 0; i < bd.statements.length; i += 1) {
-			genStmt(g, p, bd.statements[i]);
+		for (const stmt of bd.statements) {
+			genStmt(g, p, stmt);
 		}
 		const locals = readProcLocals(p);
 		if (locals.length > 0) add(procs, locals);
@@ -84,8 +84,7 @@ export function emitTestTable(g: CGen): void {
 	const hdrs = sec(g, CSection.ProcHeaders);
 	addLine(hdrs, `MsTestEntry ${tableName}[];`);
 	addLine(procs, `MsTestEntry ${tableName}[] = {`);
-	for (let i = 0; i < g.testEntries.length; i += 1) {
-		const entry = g.testEntries[i];
+	for (const entry of g.testEntries) {
 		const escaped = escapeCString(entry.name);
 		addLine(procs, `  {"${escaped}", NULL, ${entry.funcName}},`);
 	}
@@ -105,8 +104,8 @@ export function genTestDispatcher(modulePaths: string[], entryPath: string): str
 	addNewline(b);
 
 	// Forward declarations: init functions + test entry tables
-	for (let i = 0; i < modulePaths.length; i += 1) {
-		const modName = mangleModuleName(modulePaths[i]);
+	for (const mp of modulePaths) {
+		const modName = mangleModuleName(mp);
 		addLine(b, `void ${modName}__DatInit000(void);`);
 		addLine(b, `void ${modName}__Init000(void);`);
 		addLine(b, `extern MsTestEntry __ms_tests_${modName}[];`);
@@ -137,19 +136,19 @@ export function genTestDispatcher(modulePaths: string[], entryPath: string): str
 	addNewline(b);
 
 	// Init all modules
-	for (let i = 0; i < modulePaths.length; i += 1) {
-		addLine(b, `  ${mangleModuleName(modulePaths[i])}__DatInit000();`);
+	for (const mp of modulePaths) {
+		addLine(b, `  ${mangleModuleName(mp)}__DatInit000();`);
 	}
-	for (let i = 0; i < modulePaths.length; i += 1) {
-		addLine(b, `  ${mangleModuleName(modulePaths[i])}__Init000();`);
+	for (const mp of modulePaths) {
+		addLine(b, `  ${mangleModuleName(mp)}__Init000();`);
 	}
 	addNewline(b);
 
 	// Build module descriptor table and call runtime
 	addLine(b, "  MsTestModule __ms_modules[] = {");
-	for (let i = 0; i < modulePaths.length; i += 1) {
-		const modName = mangleModuleName(modulePaths[i]);
-		const escaped = escapeCString(modulePaths[i]);
+	for (const mp of modulePaths) {
+		const modName = mangleModuleName(mp);
+		const escaped = escapeCString(mp);
 		addLine(b, `    {"${escaped}", __ms_tests_${modName}},`);
 	}
 	addLine(b, "    {NULL, NULL}");

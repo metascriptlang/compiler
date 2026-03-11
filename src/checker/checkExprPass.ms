@@ -34,7 +34,7 @@ import {
 	scoreCandidatePriority, isNoMatch, emptyCandidateScore, cmpCandidates,
 } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
-import { resolveAnnotation, ensureShaped, recordGenericTypeInstantiation, buildTypeArgKey } from "./resolvePass";
+import { resolveAnnotation, resolveTypeExpr, ensureShaped, recordGenericTypeInstantiation, buildTypeArgKey } from "./resolvePass";
 import { parseNumberLiteral, sliceStr, findChar, charAt, splitTopLevel, trimStr } from "../utils/string";
 import { findCallTypeArg, getExplicitTypeArg, getGenericDecl } from "../parser/context";
 
@@ -313,6 +313,8 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			let d = node.data as TypeAssertionData;
 			let srcType = checkExpr(ctx, d.asExpr, null);
 			const targetType = (d.asType !== "") ? resolveAnnotation(d.asType, ctx) : unknownType();
+			// Record type annotation position for LSP
+			resolveTypeExpr(node.typeExpr, ctx);
 			// General rule: `expr as unknown as T` → collapse to `expr as T`.
 			// `as unknown` is a TS type-system escape hatch with zero runtime meaning.
 			// Unwrap it so downstream handlers see the real source expression/type.
@@ -410,6 +412,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 		NodeKind.SizeofExpr => {
 			const d = node.data as SizeofExprData;
 			const resolved = resolveAnnotation(d.sizeofType, ctx);
+			resolveTypeExpr(node.typeExpr, ctx);
 			const size = sizeOfType(resolved);
 			node.kind = NodeKind.NumberLiteral;
 			node.data = { value: size } as unknown as NodeData;
@@ -1721,11 +1724,27 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 
 function checkArrowExpr(ctx: CheckerContext, node: Node): Type {
 	const d = node.data as ArrowFunctionData;
+	resolveTypeExpr(node.typeExpr, ctx);
+	if (node.typeExprs !== null) {
+		let ati = 0;
+		while (ati < node.typeExprs.length) {
+			resolveTypeExpr(node.typeExprs[ati], ctx);
+			ati += 1;
+		}
+	}
 	return checkAnonymousFunction(ctx, "<arrow>", d.arrowParams, d.arrowParamTypes, d.arrowBody);
 }
 
 function checkFuncExpr(ctx: CheckerContext, node: Node): Type {
 	const d = node.data as FunctionExprData;
+	resolveTypeExpr(node.typeExpr, ctx);
+	if (node.typeExprs !== null) {
+		let feti = 0;
+		while (feti < node.typeExprs.length) {
+			resolveTypeExpr(node.typeExprs[feti], ctx);
+			feti += 1;
+		}
+	}
 	return checkAnonymousFunction(ctx, "(anon)", d.funcExprParams, d.funcExprParamTypes, d.funcExprBody);
 }
 

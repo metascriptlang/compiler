@@ -37,17 +37,15 @@ import { parseSource } from "../../parser/statements/validation";
 export function taHashString(s: string): number {
 	let hash = 5381;
 	for (let i = 0; i < s.length; i = i + 1) {
-		hash = ((hash << 5) + hash + s.charCodeAt(i)) | 0;
+		hash = (hash * 33 + s.charCodeAt(i)) % 2147483647;
 	}
-	// Ensure positive
-	if (hash < 0) hash = hash + 2147483648 + 2147483648;
 	return hash;
 }
 
 // ===== Hash Combinators =====
 
 export function taCombineHash(a: number, b: number): number {
-	return ((a * 31) + b) | 0;
+	return ((a * 31) + b) % 2147483647;
 }
 
 function enumToNum(kind: TaQueryKind): number {
@@ -75,7 +73,8 @@ function hS(h: number, s: string): number {
 }
 
 function hI(h: number, n: number): number {
-	return taCombineHash(h, n | 0);
+	const v = (n < 0) ? (0 - n) : n;
+	return taCombineHash(h, v % 2147483647);
 }
 
 function hB(h: number, b: boolean): number {
@@ -126,7 +125,7 @@ function hNumbers(h: number, nums: number[]): number {
 
 export function taHashNode(node: Node): number {
 	if (node === null) return 0;
-	let h: number = (node.kind * 2654435761) | 0;
+	let h: number = (node.kind * 2654435761) % 2147483647;
 
 	match (node.kind) {
 		// === Literals ===
@@ -429,8 +428,6 @@ export function taHashNode(node: Node): number {
 		_ => {},
 	};
 
-	// Ensure positive (match taHashString convention)
-	if (h < 0) h = h + 2147483648 + 2147483648;
 	return h;
 }
 

@@ -4,7 +4,7 @@
 import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, NodeData, Expression, createNode, ArrowFunctionData } from "../../ast/node";
 import { ParserState, createState, current, advance, isAtEnd, peek } from "../context";
-import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, skipOptionalType, isIdentLike } from "../util";
+import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, skipOptionalType, isIdentLike } from "../util";
 import { lex } from "../../lexer/lexer";
 import { parseOk, mockExpr } from "./util";
 
@@ -61,11 +61,13 @@ export function parseArrowFunction(
 ): ExprResult {
 	const arrowToken = current(state);
 	const raw = parseParamList(state, "");
+	const arrowParamTypeExprs = getLastParamTypeExprs();
 	const arrowParams = extractParamNames(raw);
 	const arrowParamTypes = extractParamTypes(raw);
 
 	// Optional return type annotation: (): string => ...
 	const arrowReturnType = captureOptionalType(state);
+	const arrowRetTypeExpr = getLastTypeExpr();
 
 	if (isAtEnd(state) || current(state).kind !== TokenKind.Arrow) {
 		return Result.err(`Expected '=>' in arrow function at line ${current(state).line}`);
@@ -75,23 +77,29 @@ export function parseArrowFunction(
 	// Body: block { ... } or expression
 	if (!isAtEnd(state) && current(state).kind === TokenKind.LBrace) {
 		const body = try blockParser(state);
-		return Result.ok(createNode(NodeKind.ArrowFunction, {
+		const arrowNode1 = createNode(NodeKind.ArrowFunction, {
 			arrowParams,
 			arrowParamTypes,
 			arrowBody: body,
 			arrowFlags: flags,
 			arrowReturnType,
-		}, arrowToken));
+		}, arrowToken);
+		arrowNode1.typeExpr = arrowRetTypeExpr;
+		arrowNode1.typeExprs = arrowParamTypeExprs;
+		return Result.ok(arrowNode1);
 	}
 
 	const body = try exprParser(state, 0);
-	return Result.ok(createNode(NodeKind.ArrowFunction, {
+	const arrowNode2 = createNode(NodeKind.ArrowFunction, {
 		arrowParams,
 		arrowParamTypes,
 		arrowBody: body,
 		arrowFlags: flags,
 		arrowReturnType,
-	}, arrowToken));
+	}, arrowToken);
+	arrowNode2.typeExpr = arrowRetTypeExpr;
+	arrowNode2.typeExprs = arrowParamTypeExprs;
+	return Result.ok(arrowNode2);
 }
 
 // ===== Tests =====

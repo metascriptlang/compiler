@@ -255,7 +255,17 @@ function buildIfChain(cases: Node[], tempName: string, discType: Type, loc: Sour
 // C has no expression-blocks — this makes each arm produce a statement-level result.
 
 function wrapArmBody(armBody: Node, mode: string, varName: string, loc: SourceLocation): Node {
-	if (mode === "stmt") return armBody;
+	if (mode === "stmt") {
+		// Expression-form arms (=> expr) need wrapping in ExprStmt for codegen.
+		// Block-form arms (=> { ... }) are already BlockStmt — pass through.
+		if (armBody.kind !== NodeKind.BlockStmt && armBody.kind !== NodeKind.ExprStmt
+			&& armBody.kind !== NodeKind.IfStmt && armBody.kind !== NodeKind.ReturnStmt
+			&& armBody.kind !== NodeKind.BreakStmt && armBody.kind !== NodeKind.ContinueStmt
+			&& armBody.kind !== NodeKind.ThrowStmt && armBody.kind !== NodeKind.VariableDecl) {
+			return makeExprStmt(armBody, loc);
+		}
+		return armBody;
+	}
 	return moveInto(armBody, mode, varName, loc);
 }
 

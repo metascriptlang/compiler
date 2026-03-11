@@ -87,6 +87,32 @@ export function scanNumber(s: LexerState): void {
 
 // ===== String Scanning =====
 
+function scanEscape(s: LexerState): string {
+	advanceChar(s); // skip backslash
+	// Hex escape: \xHH — read 2 hex digits, preserve as \xHH for C codegen
+	if (peek(s) === "x".code && s.pos + 2 < s.source.length) {
+		advanceChar(s); // skip 'x'
+		const d1 = s.source.charAt(s.pos);
+		advanceChar(s);
+		const d2 = s.source.charAt(s.pos);
+		advanceChar(s);
+		return "\\" + "x" + d1 + d2;
+	}
+	const esc = advanceChar(s);
+	return match (esc) {
+		"n".code => "\n",
+		"t".code => "\t",
+		"r".code => "\r",
+		"0".code => "\\" + "0",
+		"\\".code => "\\",
+		"\"".code => "\"",
+		"'".code => "'",
+		"`".code => "`",
+		"$".code => "$",
+		_ => s.source.charAt(s.pos - 1),
+	};
+}
+
 export function scanString(s: LexerState, quote: number): void {
 	const startLine = s.line;
 	const startCol = s.column;
@@ -101,28 +127,7 @@ export function scanString(s: LexerState, quote: number): void {
 			return;
 		}
 		if (ch === "\\".code) {
-			advanceChar(s);
-			// Hex escape: \xHH — read 2 hex digits, preserve as \xHH for C codegen
-			if (peek(s) === "x".code && s.pos + 2 < s.source.length) {
-				advanceChar(s); // skip 'x'
-				const d1 = s.source.charAt(s.pos);
-				advanceChar(s);
-				const d2 = s.source.charAt(s.pos);
-				advanceChar(s);
-				val = val + "\\" + "x" + d1 + d2;
-			} else {
-			const esc = advanceChar(s);
-			val += match (esc) {
-				"n".code => "\n",
-				"t".code => "\t",
-				"r".code => "\r",
-				"0".code => "\\" + "0",
-				"\\".code => "\\",
-				"\"".code => "\"",
-				"'".code => "'",
-				_ => s.source.charAt(s.pos - 1),
-			};
-			}
+			val += scanEscape(s);
 		} else {
 			val += s.source.charAt(s.pos);
 			advanceChar(s);
@@ -196,9 +201,7 @@ function scanTemplateStringImpl(s: LexerState, isContinuation: boolean): void {
 			return;
 		}
 		if (ch === "\\".code) {
-			advanceChar(s);
-			val += s.source.charAt(s.pos);
-			advanceChar(s);
+			val += scanEscape(s);
 		} else {
 			val += s.source.charAt(s.pos);
 			advanceChar(s);
