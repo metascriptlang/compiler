@@ -243,6 +243,7 @@ export class Node {
 	comments: Token[]; // Added for comment preservation
 	typeExpr: Node;    // Positioned type annotation AST (standard parity: PNode type tree alongside string fields)
 	typeExprs: Node[]; // Per-param/per-field type annotation ASTs (parallel to string[] type fields)
+	paramLocations: SourceLocation[]; // Per-param source locations for DEF recording
 }
 
 export type Expression = Node;
@@ -354,6 +355,7 @@ export function createNode(kind: NodeKind, data: NodeData, token: Token): Node {
 	n.comments = [];
 	n.typeExpr = null;
 	n.typeExprs = null;
+	n.paramLocations = null;
 	return n;
 }
 
@@ -368,6 +370,7 @@ export function createNodeAt(kind: NodeKind, data: NodeData, loc: SourceLocation
 	n.comments = [];
 	n.typeExpr = null;
 	n.typeExprs = null;
+	n.paramLocations = null;
 	return n;
 }
 

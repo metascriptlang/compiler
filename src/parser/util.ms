@@ -2,7 +2,7 @@
 // Lives at parser/ level to avoid circular imports between expressions/ and statements/
 
 import { Token, TokenKind } from "../lexer/token";
-import { Node, NodeKind, NumberLiteralData, IdentifierData } from "../ast/node";
+import { Node, NodeKind, SourceLocation, NumberLiteralData, IdentifierData } from "../ast/node";
 import { ParserState, createState, current, advance, isAtEnd, skipDestructurePattern, takePendingComments, collectTokenText } from "./context";
 import { skipTypeAnnotation, parseTypeExpr } from "./typeAnnotation";
 import { lex } from "../lexer/lexer";
@@ -120,10 +120,19 @@ export function getLastParamTypeExprs(): Node[] {
 	return _lastParamTypeExprs;
 }
 
+// Module-level: per-param source locations from last parseParamList.
+// Standard parity: Nim stores nkIdentDefs positions — we capture per-param token positions.
+let _lastParamLocations: SourceLocation[] = [];
+
+export function getLastParamLocations(): SourceLocation[] {
+	return _lastParamLocations;
+}
+
 export function parseParamList(state: ParserState, fnName: string): string[] {
 	const params: string[] = [];
 	_lastDefaults = [];
 	_lastParamTypeExprs = [];
+	_lastParamLocations = [];
 	if (current(state).kind !== TokenKind.LParen) { return params; }
 	advance(state);
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RParen) {
@@ -148,6 +157,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 				const typeName = current(state);
 				if (!isIdentLike(typeName)) { break; }
 				params.push(`typeof:${typeName.value}`);
+				_lastParamLocations.push({ line: typeName.line, column: typeName.column });
 				advance(state);
 				params.push("");
 				_lastParamTypeExprs.push(null);
@@ -158,6 +168,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 			const receiverName = current(state);
 			if (!isIdentLike(receiverName)) { break; }
 			params.push(`this:${receiverName.value}`);
+			_lastParamLocations.push({ line: receiverName.line, column: receiverName.column });
 			advance(state);
 			params.push(captureOptionalType(state));
 			_lastParamTypeExprs.push(_lastTypeExpr);
@@ -166,6 +177,8 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 		}
 		// Destructured param: { a, b } or [ a, b ]
 		if (current(state).kind === TokenKind.LBrace || current(state).kind === TokenKind.LBracket) {
+			const destToken = current(state);
+			_lastParamLocations.push({ line: destToken.line, column: destToken.column });
 			skipDestructurePattern(state);
 			params.push(`${paramPrefix}_destructure`);
 			params.push(captureOptionalType(state));
@@ -182,6 +195,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 		}
 		const param = current(state);
 		if (!isIdentLike(param)) { break; }
+		_lastParamLocations.push({ line: param.line, column: param.column });
 		params.push(`${paramPrefix}${param.value}`);
 		advance(state);
 		params.push(captureOptionalType(state));

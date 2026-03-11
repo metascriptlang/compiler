@@ -4,7 +4,7 @@
 import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, NodeData, Expression, createNode, ArrowFunctionData } from "../../ast/node";
 import { ParserState, createState, current, advance, isAtEnd, peek } from "../context";
-import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, skipOptionalType, isIdentLike } from "../util";
+import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, skipOptionalType, isIdentLike } from "../util";
 import { lex } from "../../lexer/lexer";
 import { parseOk, mockExpr } from "./util";
 
@@ -62,6 +62,7 @@ export function parseArrowFunction(
 	const arrowToken = current(state);
 	const raw = parseParamList(state, "");
 	const arrowParamTypeExprs = getLastParamTypeExprs();
+	const arrowParamLocs = getLastParamLocations();
 	const arrowParams = extractParamNames(raw);
 	const arrowParamTypes = extractParamTypes(raw);
 
@@ -86,6 +87,7 @@ export function parseArrowFunction(
 		}, arrowToken);
 		arrowNode1.typeExpr = arrowRetTypeExpr;
 		arrowNode1.typeExprs = arrowParamTypeExprs;
+		arrowNode1.paramLocations = arrowParamLocs;
 		return Result.ok(arrowNode1);
 	}
 

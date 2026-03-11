@@ -97,11 +97,9 @@ export function hashToBase36(s: string): string {
 	let h = 5381;
 	let i = 0;
 	while (i < s.length) {
-		h = h * 33 + s.charCodeAt(i);
+		h = (h * 33 + s.charCodeAt(i)) % 2147483647;
 		i += 1;
 	}
-	// Keep positive (mask to 31 bits via modulo)
-	if (h < 0) h = 0 - h;
 	// Convert to base-36 alphanumeric string
 	const digits = "0123456789abcdefghijklmnopqrstuvwxyz";
 	let result = "";

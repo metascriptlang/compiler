@@ -5,7 +5,7 @@ import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, ExternKind, NodeData, createNode, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, skipDestructurePattern, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, addGenericDecl, updateGenericDeclFields, collectTokenText } from "../context";
 import { skipTypeAnnotation } from "../typeAnnotation";
-import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipDefaultValue, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, isIdentLike } from "../util";
+import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipDefaultValue, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, isIdentLike } from "../util";
 import { callBlockParser, callExprParser } from "./callbacks";
 import { sliceStr } from "../../utils/string";
 import { programOk, stmtKind, stmtAt } from "./validation";
@@ -194,6 +194,7 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 	const raw = parseParamList(state, nameToken.value);
 	const fnDefaults = getLastParsedDefaults();
 	const fnParamTypeExprs = getLastParamTypeExprs();
+	const fnParamLocs = getLastParamLocations();
 	const params = extractParamNames(raw);
 	const fnParamTypes = extractParamTypes(raw);
 
@@ -218,6 +219,7 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 	}, fnToken);
 	fnNode.typeExpr = fnReturnTypeExpr;
 	fnNode.typeExprs = fnParamTypeExprs;
+	fnNode.paramLocations = fnParamLocs;
 	return Result.ok(fnNode);
 }
 
@@ -868,6 +870,7 @@ function parseClassConstructor(state: ParserState): NodeResult {
 	advance(state);
 	const raw = parseParamList(state, "constructor");
 	const ctorParamTypeExprs = getLastParamTypeExprs();
+	const ctorParamLocs = getLastParamLocations();
 	const ctorParams = extractParamNames(raw);
 	const ctorParamTypes = extractParamTypes(raw);
 	const body = try callBlockParser(state);
@@ -877,6 +880,7 @@ function parseClassConstructor(state: ParserState): NodeResult {
 		ctorBody: body,
 	}, ctorToken);
 	ctorNode.typeExprs = ctorParamTypeExprs;
+	ctorNode.paramLocations = ctorParamLocs;
 	return Result.ok(ctorNode);
 }
 
@@ -888,6 +892,7 @@ function parseClassAccessor(state: ParserState, isStatic: boolean, flags: string
 	advance(state);
 	const raw = parseParamList(state, `${accKind}_${accName}`);
 	const accParamTypeExprs = getLastParamTypeExprs();
+	const accParamLocs = getLastParamLocations();
 	const methodParams = extractParamNames(raw);
 	const methodParamTypes = extractParamTypes(raw);
 	const methodReturnType = captureOptionalType(state);
@@ -904,6 +909,7 @@ function parseClassAccessor(state: ParserState, isStatic: boolean, flags: string
 	}, accToken);
 	accNode.typeExpr = methodReturnTypeExpr;
 	accNode.typeExprs = accParamTypeExprs;
+	accNode.paramLocations = accParamLocs;
 	return Result.ok(accNode);
 }
 
@@ -916,6 +922,7 @@ function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: bo
 	}
 	const raw = parseParamList(state, nameToken.value);
 	const methodParamTypeExprs = getLastParamTypeExprs();
+	const methodParamLocs = getLastParamLocations();
 	const methodParams = extractParamNames(raw);
 	const methodParamTypes = extractParamTypes(raw);
 	// Optional return type
@@ -943,6 +950,7 @@ function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: bo
 		}, nameToken);
 		mNode1.typeExpr = methodRetTypeExpr;
 		mNode1.typeExprs = methodParamTypeExprs;
+		mNode1.paramLocations = methodParamLocs;
 		return Result.ok(mNode1);
 	}
 
@@ -961,6 +969,7 @@ function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: bo
 		}, nameToken);
 		mNode2.typeExpr = methodRetTypeExpr;
 		mNode2.typeExprs = methodParamTypeExprs;
+		mNode2.paramLocations = methodParamLocs;
 		return Result.ok(mNode2);
 	}
 	const body = try callBlockParser(state);
@@ -976,6 +985,7 @@ function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: bo
 	}, nameToken);
 	mNode3.typeExpr = methodRetTypeExpr;
 	mNode3.typeExprs = methodParamTypeExprs;
+	mNode3.paramLocations = methodParamLocs;
 	return Result.ok(mNode3);
 }
 
@@ -1202,6 +1212,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 	if (externKind === ExternKind.Function) {
 		const raw = parseParamList(state, nameToken.value);
 		const externParamTypeExprs = getLastParamTypeExprs();
+		const externParamLocs = getLastParamLocations();
 		const params = extractParamNames(raw);
 		const fnParamTypes = extractParamTypes(raw);
 
@@ -1242,6 +1253,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 		}, externToken);
 		externFnNode.typeExpr = externRetTypeExpr;
 		externFnNode.typeExprs = externParamTypeExprs;
+		externFnNode.paramLocations = externParamLocs;
 		return Result.ok(externFnNode);
 	}
 
