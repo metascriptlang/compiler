@@ -12,13 +12,11 @@
 import { dirname, join } from "std/fs/path";
 import { sliceStr } from "../utils/string";
 
-// ===== Backend Constants =====
+// ===== Backend Enum =====
 
-export const BACKEND_C = 0;
-export const BACKEND_JS = 1;
-export const BACKEND_RAISER = 2;
-export const BACKEND_ERLANG = 3;
-export const BACKEND_WASM = 4;
+export enum Backend {
+	C, JS, Raiser, Erlang, Wasm,
+}
 
 // ===== Resolution Result =====
 
@@ -28,7 +26,7 @@ export type ResolveCandidates = string[];
 // Pure data — no FS access, no caching. Passed through from CLI/build.ms.
 
 export interface ResolverConfig {
-	backend: number;           // BACKEND_C, BACKEND_JS, etc.
+	backend: Backend;
 	stdPath: string;           // absolute path to std library root (e.g., "/usr/lib/msc/std")
 	searchPaths: string[];     // extra root dirs for bare imports
 	extensions: string[];      // ordered extension list [".cms", ".ms", ".ts", ".js"]
@@ -38,18 +36,20 @@ export interface ResolverConfig {
 
 // ===== Backend Extension Mapping =====
 
-export function backendExtension(backend: number): string {
-	if (backend === BACKEND_C) return ".cms";
-	if (backend === BACKEND_JS) return ".jms";
-	if (backend === BACKEND_RAISER) return ".rms";
-	if (backend === BACKEND_ERLANG) return ".ems";
-	if (backend === BACKEND_WASM) return ".wms";
-	return ".ms";
+export function backendExtension(backend: Backend): string {
+	return match (backend) {
+		Backend.C => ".cms",
+		Backend.JS => ".jms",
+		Backend.Raiser => ".rms",
+		Backend.Erlang => ".ems",
+		Backend.Wasm => ".wms",
+		_ => ".ms",
+	};
 }
 
 // ===== Default Config Constructor =====
 
-export function createDefaultConfig(backend: number, stdPath: string): ResolverConfig {
+export function createDefaultConfig(backend: Backend, stdPath: string): ResolverConfig {
 	const ext = backendExtension(backend);
 	const extensions: string[] = [];
 	extensions.push(ext);
@@ -72,7 +72,7 @@ function bareConfig(): ResolverConfig {
 	const extensions: string[] = [];
 	extensions.push(".ms");
 	return {
-		backend: BACKEND_C,
+		backend: Backend.C,
 		stdPath: "",
 		searchPaths: [],
 		extensions,
@@ -111,11 +111,9 @@ export function resolveImportWithConfig(specifier: string, fromFile: string, con
 		// If no stdPath configured, return empty (handled externally)
 	} else {
 		// Bare import: try each search path
-		let i = 0;
-		while (i < config.searchPaths.length) {
-			const base = join(config.searchPaths[i], spec);
+		for (const sp of config.searchPaths) {
+			const base = join(sp, spec);
 			addExtensionCandidates(result, base, config.extensions);
-			i = i + 1;
 		}
 	}
 
@@ -155,16 +153,12 @@ export function resolveImport(specifier: string, fromFile: string): ResolveCandi
 // For a base path (without extension), add direct + index candidates for each extension.
 function addExtensionCandidates(result: ResolveCandidates, base: string, extensions: string[]): void {
 	// Direct file candidates: base + ext
-	let i = 0;
-	while (i < extensions.length) {
-		result.push(base + extensions[i]);
-		i = i + 1;
+	for (const ext of extensions) {
+		result.push(base + ext);
 	}
 	// Index file candidates: base/index + ext
-	i = 0;
-	while (i < extensions.length) {
-		result.push(join(base, "index" + extensions[i]));
-		i = i + 1;
+	for (const ext of extensions) {
+		result.push(join(base, "index" + ext));
 	}
 }
 
@@ -180,10 +174,8 @@ function addDirectCandidates(result: ResolveCandidates, spec: string, fromFile: 
 		}
 	} else {
 		// Bare with extension — try search paths
-		let i = 0;
-		while (i < config.searchPaths.length) {
-			result.push(join(config.searchPaths[i], spec));
-			i = i + 1;
+		for (const sp of config.searchPaths) {
+			result.push(join(sp, spec));
 		}
 	}
 }
@@ -293,18 +285,18 @@ test "buildFilePath" { assert buildFilePath("./foo", "/a/b.ms") === "/a/foo.ms";
 
 test "buildIndexPath" { assert buildIndexPath("./sub", "/a/b.ms") === "/a/sub/index.ms"; }
 // -- Backend extension mapping --
-test "backendExtension C" { assert backendExtension(0) === ".cms"; }
+test "backendExtension C" { assert backendExtension(Backend.C) === ".cms"; }
 
-test "backendExtension JS" { assert backendExtension(1) === ".jms"; }
+test "backendExtension JS" { assert backendExtension(Backend.JS) === ".jms"; }
 
-test "backendExtension Raiser" { assert backendExtension(2) === ".rms"; }
+test "backendExtension Raiser" { assert backendExtension(Backend.Raiser) === ".rms"; }
 
-test "backendExtension Erlang" { assert backendExtension(3) === ".ems"; }
+test "backendExtension Erlang" { assert backendExtension(Backend.Erlang) === ".ems"; }
 
-test "backendExtension Wasm" { assert backendExtension(4) === ".wms"; }
+test "backendExtension Wasm" { assert backendExtension(Backend.Wasm) === ".wms"; }
 // -- Default config --
 test "createDefaultConfig C has 4 extensions" {
-	const cfg = createDefaultConfig(0, "/usr/lib/msc/std");
+	const cfg = createDefaultConfig(Backend.C, "/usr/lib/msc/std");
 	assert cfg.extensions.length === 4;
 	assert cfg.extensions[0] === ".cms";
 	assert cfg.extensions[1] === ".ms";
@@ -314,12 +306,12 @@ test "createDefaultConfig C has 4 extensions" {
 }
 
 test "createDefaultConfig JS has .jms first" {
-	const cfg = createDefaultConfig(1, "/std");
+	const cfg = createDefaultConfig(Backend.JS, "/std");
 	assert cfg.extensions[0] === ".jms";
 }
 // -- Full resolution with config --
 test "relative with C backend generates 8 candidates" {
-	const cfg = createDefaultConfig(0, "");
+	const cfg = createDefaultConfig(Backend.C,"");
 	const r = resolveImportWithConfig("./foo", "/a/b.ms", cfg);
 	assert r.length === 8;
 	assert r[0] === "/a/foo.cms";
@@ -333,7 +325,7 @@ test "relative with C backend generates 8 candidates" {
 }
 
 test "std/ with config resolves against stdPath" {
-	const cfg = createDefaultConfig(0, "/lib/std");
+	const cfg = createDefaultConfig(Backend.C,"/lib/std");
 	const r = resolveImportWithConfig("std/testing", "/a/b.ms", cfg);
 	assert r.length === 8;
 	assert r[0] === "/lib/std/testing.cms";
@@ -343,13 +335,13 @@ test "std/ with config resolves against stdPath" {
 }
 
 test "std/ without stdPath returns empty" {
-	const cfg = createDefaultConfig(0, "");
+	const cfg = createDefaultConfig(Backend.C,"");
 	const r = resolveImportWithConfig("std/testing", "/a/b.ms", cfg);
 	assert r.length === 0;
 }
 
 test "bare import with search paths" {
-	const cfg = createDefaultConfig(0, "");
+	const cfg = createDefaultConfig(Backend.C,"");
 	cfg.searchPaths.push("/proj/lib");
 	cfg.searchPaths.push("/proj/vendor");
 	const r = resolveImportWithConfig("ui/grid", "/a/b.ms", cfg);
@@ -361,13 +353,13 @@ test "bare import with search paths" {
 }
 
 test "bare import without search paths returns empty" {
-	const cfg = createDefaultConfig(0, "");
+	const cfg = createDefaultConfig(Backend.C,"");
 	const r = resolveImportWithConfig("lodash", "/a/b.ms", cfg);
 	assert r.length === 0;
 }
 
 test "alias rewriting" {
-	const cfg = createDefaultConfig(0, "");
+	const cfg = createDefaultConfig(Backend.C,"");
 	cfg.aliasKeys.push("@app");
 	cfg.aliasValues.push("./src");
 	const r = resolveImportWithConfig("@app/utils", "/proj/index.ms", cfg);
@@ -378,7 +370,7 @@ test "alias rewriting" {
 }
 
 test "alias exact match" {
-	const cfg = createDefaultConfig(1, "");
+	const cfg = createDefaultConfig(Backend.JS,"");
 	cfg.aliasKeys.push("@root");
 	cfg.aliasValues.push("./src/index");
 	const r = resolveImportWithConfig("@root", "/proj/main.ms", cfg);
@@ -388,7 +380,7 @@ test "alias exact match" {
 }
 
 test "alias does not match partial prefix" {
-	const cfg = createDefaultConfig(0, "");
+	const cfg = createDefaultConfig(Backend.C,"");
 	cfg.aliasKeys.push("@app");
 	cfg.aliasValues.push("./src");
 	// "@application" should NOT match "@app" alias
@@ -397,55 +389,55 @@ test "alias does not match partial prefix" {
 }
 
 test "explicit extension skips probing" {
-	const cfg = createDefaultConfig(0, "");
+	const cfg = createDefaultConfig(Backend.C,"");
 	const r = resolveImportWithConfig("./foo.ms", "/a/b.ms", cfg);
 	assert r.length === 1;
 	assert r[0] === "/a/foo.ms";
 }
 
 test "explicit .ts extension" {
-	const cfg = createDefaultConfig(0, "");
+	const cfg = createDefaultConfig(Backend.C,"");
 	const r = resolveImportWithConfig("./lib.ts", "/a/b.ms", cfg);
 	assert r.length === 1;
 	assert r[0] === "/a/lib.ts";
 }
 
 test "explicit .cms extension" {
-	const cfg = createDefaultConfig(0, "/std");
+	const cfg = createDefaultConfig(Backend.C,"/std");
 	const r = resolveImportWithConfig("std/core.cms", "/a/b.ms", cfg);
 	assert r.length === 1;
 	assert r[0] === "/std/core.cms";
 }
 
 test "explicit .h extension resolves directly" {
-	const cfg = createDefaultConfig(0, "");
+	const cfg = createDefaultConfig(Backend.C,"");
 	const r = resolveImportWithConfig("./dawn.h", "/a/b.ms", cfg);
 	assert r.length === 1;
 	assert r[0] === "/a/dawn.h";
 }
 
 test "JS backend uses .jms first" {
-	const cfg = createDefaultConfig(1, "");
+	const cfg = createDefaultConfig(Backend.JS,"");
 	const r = resolveImportWithConfig("./parser", "/a/b.ms", cfg);
 	assert r[0] === "/a/parser.jms";
 	assert r[1] === "/a/parser.ms";
 }
 
 test "Raiser backend uses .rms first" {
-	const cfg = createDefaultConfig(2, "");
+	const cfg = createDefaultConfig(Backend.Raiser,"");
 	const r = resolveImportWithConfig("./vm", "/a/b.ms", cfg);
 	assert r[0] === "/a/vm.rms";
 }
 
 test "parent dir with config" {
-	const cfg = createDefaultConfig(0, "");
+	const cfg = createDefaultConfig(Backend.C,"");
 	const r = resolveImportWithConfig("../bar", "/a/b/c.ms", cfg);
 	assert r[0] === "/a/bar.cms";
 	assert r[1] === "/a/bar.ms";
 }
 
 test "std nested path" {
-	const cfg = createDefaultConfig(0, "/lib/std");
+	const cfg = createDefaultConfig(Backend.C,"/lib/std");
 	const r = resolveImportWithConfig("std/fs/path", "/a/b.ms", cfg);
 	assert r[0] === "/lib/std/fs/path.cms";
 	assert r[1] === "/lib/std/fs/path.ms";

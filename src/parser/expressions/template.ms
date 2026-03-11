@@ -49,6 +49,13 @@ export function parseTemplateLiteral(state: ParserState, parsePrec: PrecParserFn
 		return Result.ok(createNode(NodeKind.StringLiteral, { value: "" }, headToken));
 	}
 
+	// Single non-string interpolation (`${expr}`) — prepend "" so concat flatten
+	// generates toString coercion. Without this, `${num}` collapses to just `num`.
+	if (parts.length === 1 && parts[0].kind !== NodeKind.StringLiteral) {
+		const empty = createNode(NodeKind.StringLiteral, { value: "" }, headToken);
+		return Result.ok(createNode(NodeKind.BinaryExpr, { operator: "+", left: empty, right: parts[0] }, headToken));
+	}
+
 	let result = parts[0];
 	for (let i = 1; i < parts.length; i++) {
 		result = createNode(NodeKind.BinaryExpr, { operator: "+", left: result, right: parts[i] }, headToken);

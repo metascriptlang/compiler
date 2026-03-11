@@ -60,9 +60,9 @@ export function clearImportsFor(deps: TaModuleDepGraph, fileId: number): void {
 
 export function getDirectImporters(deps: TaModuleDepGraph, fileId: number): number[] {
 	const result: number[] = [];
-	for (let i = 0; i < deps.edges.length; i = i + 1) {
-		if (deps.edges[i].importedFileId === fileId) {
-			result.push(deps.edges[i].importerFileId);
+	for (const edge of deps.edges) {
+		if (edge.importedFileId === fileId) {
+			result.push(edge.importerFileId);
 		}
 	}
 	return result;
@@ -77,8 +77,7 @@ export function getTransitiveDependents(deps: TaModuleDepGraph, fileId: number):
 	while (queue.length > 0) {
 		const current = queue.shift();
 		const importers = getDirectImporters(deps, current);
-		for (let i = 0; i < importers.length; i = i + 1) {
-			const imp = importers[i];
+		for (const imp of importers) {
 			if (imp !== fileId && !numberListContains(result, imp)) {
 				result.push(imp);
 				queue.push(imp);
@@ -93,9 +92,9 @@ export function getTransitiveDependents(deps: TaModuleDepGraph, fileId: number):
 // Get all fileIds that `fileId` imports (forward edges)
 export function getDirectImports(deps: TaModuleDepGraph, fileId: number): number[] {
 	const result: number[] = [];
-	for (let i = 0; i < deps.edges.length; i = i + 1) {
-		if (deps.edges[i].importerFileId === fileId) {
-			result.push(deps.edges[i].importedFileId);
+	for (const edge of deps.edges) {
+		if (edge.importerFileId === fileId) {
+			result.push(edge.importedFileId);
 		}
 	}
 	return result;

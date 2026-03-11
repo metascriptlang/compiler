@@ -19,13 +19,11 @@ import { emit, emitNode, emitIndent, emitNewline, emitLine, JSGenerator, emitBlo
 export function emitVariableDecl(gen: JSGenerator, node: Node): void {
 	const d = node.data as VariableDeclData;
 	emitIndent(gen);
-	if (d.declKind === DeclKind.Const) {
-		emit(gen, "const ");
-	} else if (d.declKind === DeclKind.Var) {
-		emit(gen, "var ");
-	} else {
-		emit(gen, "let ");
-	}
+	match (d.declKind) {
+		DeclKind.Const => { emit(gen, "const "); },
+		DeclKind.Var => { emit(gen, "var "); },
+		_ => { emit(gen, "let "); },
+	};
 	emit(gen, d.declName);
 	if (d.initializer !== null) {
 		emit(gen, " = ");
@@ -101,8 +99,7 @@ export function emitExprStmt(gen: JSGenerator, node: Node): void {
 		const mi = d.expr.data as MacroInvocationData;
 		if (mi.macroName === "emit" && mi.macroArgs.length > 0) {
 			emitIndent(gen);
-			for (let i = 0; i < mi.macroArgs.length; i += 1) {
-				const arg = mi.macroArgs[i];
+			for (const arg of mi.macroArgs) {
 				if (arg.kind === NodeKind.StringLiteral) {
 					emit(gen, (arg.data as StringLiteralData).value);
 				} else {
@@ -169,8 +166,8 @@ export function emitSwitchStmt(gen: JSGenerator, node: Node): void {
 	emit(gen, "switch (");
 	emitNode(gen, d.switchDisc);
 	emit(gen, ") {\n");
-	for (let i = 0; i < d.switchCases.length; i += 1) {
-		emitSwitchCase(gen, d.switchCases[i]);
+	for (const sc of d.switchCases) {
+		emitSwitchCase(gen, sc);
 	}
 	emitIndent(gen);
 	emit(gen, "}\n");
@@ -182,16 +179,16 @@ export function emitSwitchCase(gen: JSGenerator, node: Node): void {
 		emitIndent(gen);
 		emit(gen, "  default:\n");
 	} else {
-		for (let ti = 0; ti < d.caseTests.length; ti += 1) {
+		for (const test of d.caseTests) {
 			emitIndent(gen);
 			emit(gen, "  case ");
-			emitNode(gen, d.caseTests[ti]);
+			emitNode(gen, test);
 			emit(gen, ":\n");
 		}
 	}
 	gen.indentLevel = gen.indentLevel + 2;
-	for (let si = 0; si < d.caseStmts.length; si += 1) {
-		emitNode(gen, d.caseStmts[si]);
+	for (const stmt of d.caseStmts) {
+		emitNode(gen, stmt);
 	}
 	gen.indentLevel = gen.indentLevel - 2;
 }

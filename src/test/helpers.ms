@@ -30,10 +30,8 @@ type CompileResult = Result<string, string>;
 
 function collectErrors(errors: any[], prefix: string): string {
 	let msg = prefix;
-	let i = 0;
-	while (i < errors.length) {
-		msg = msg + " " + errors[i].message;
-		i = i + 1;
+	for (const err of errors) {
+		msg = `${msg} ${err.message}`;
 	}
 	return msg;
 }
@@ -55,7 +53,7 @@ export function compileToC(source: string): CompileResult {
 	if (mod === null) return Result.err("module not found");
 
 	const pr = parseSource(mod.source);
-	if (!pr.ok) return Result.err("parse: " + pr.error);
+	if (!pr.ok) return Result.err(`parse: ${pr.error}`);
 
 	const checkerCtx = checkProgramWithRegistry(pr.value, registry, graph, mod, preludeCtx);
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
@@ -88,7 +86,7 @@ export function compileToJS(source: string): CompileResult {
 	if (mod === null) return Result.err("module not found");
 
 	const pr = parseSource(mod.source);
-	if (!pr.ok) return Result.err("parse: " + pr.error);
+	if (!pr.ok) return Result.err(`parse: ${pr.error}`);
 
 	const checkerCtx = checkProgramWithRegistry(pr.value, registry, graph, mod, preludeCtx);
 	if (hasErrors(checkerCtx)) return Result.err(collectErrors(checkerCtx.errors, "check:"));
@@ -107,10 +105,8 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 	const graph = loadModuleGraph(entryPath, provider);
 	if (graph.errors.length > 0) {
 		let msg = "ERROR: graph:";
-		let i = 0;
-		while (i < graph.errors.length) {
-			msg = msg + " " + graph.errors[i];
-			i = i + 1;
+		for (const e of graph.errors) {
+			msg = `${msg} ${e}`;
 		}
 		return msg;
 	}
@@ -121,40 +117,33 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 	// Compute global alive set for DCE (same as compile.ms:345)
 	const monoed_programs: Node[] = [];
 	const monoed_paths: string[] = [];
-	let ai = 0;
-	while (ai < graph.loadOrder.length) {
-		const modPath = graph.loadOrder[ai];
+	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
-		if (mod === null || mod.isCHeader) { ai = ai + 1; continue; }
+		if (mod === null || mod.isCHeader) continue;
 		const pr = parseSource(mod.source);
-		if (!pr.ok) { ai = ai + 1; continue; }
+		if (!pr.ok) continue;
 		const ctx = checkProgramWithRegistry(pr.value, registry, graph, mod, preludeCtx);
 		ctx.errors = [];
 		const monoed = monomorphizeProgram(pr.value, ctx);
 		monoed_programs.push(monoed);
 		monoed_paths.push(modPath);
-		ai = ai + 1;
 	}
 	const aliveSet = computeAliveSet(monoed_programs, monoed_paths, entryPath, false);
 
 	// Full pipeline per module (same as compile.ms:358-411)
 	let combined = "";
-	let ci = 0;
-	while (ci < graph.loadOrder.length) {
-		const modPath = graph.loadOrder[ci];
+	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
-		if (mod === null || mod.isCHeader) { ci = ci + 1; continue; }
+		if (mod === null || mod.isCHeader) continue;
 
 		const pr = parseSource(mod.source);
-		if (!pr.ok) return "ERROR: parse [" + modPath + "]: " + pr.error;
+		if (!pr.ok) return `ERROR: parse [${modPath}]: ${pr.error}`;
 
 		const ctx = checkProgramWithRegistry(pr.value, registry, graph, mod, preludeCtx);
 		if (hasErrors(ctx)) {
-			let msg = "ERROR: check [" + modPath + "]:";
-			let ei = 0;
-			while (ei < ctx.errors.length) {
-				msg = msg + " " + ctx.errors[ei].message;
-				ei = ei + 1;
+			let msg = `ERROR: check [${modPath}]:`;
+			for (const err of ctx.errors) {
+				msg = `${msg} ${err.message}`;
 			}
 			return msg;
 		}
@@ -170,11 +159,10 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 		const nativeTransformed = transformForNative(transformed, nativeCtx);
 		const analyzed = analyzeProgram(nativeTransformed, ctx);
 		combined = combined + generateCModule(analyzed, ctx, modPath, aliveSet, false, false);
-		ci = ci + 1;
 	}
 
 	const dispatcher = genProjectDispatcher(graph.loadOrder, entryPath, false, "void");
-	return combined + "\n" + dispatcher;
+	return `${combined}\n${dispatcher}`;
 }
 
 // Compile project to JS
@@ -184,10 +172,8 @@ export function compileProjectToJS(entries: MapEntry[], entryPath: string): stri
 	const graph = loadModuleGraph(entryPath, provider);
 	if (graph.errors.length > 0) {
 		let msg = "ERROR: graph:";
-		let i = 0;
-		while (i < graph.errors.length) {
-			msg = msg + " " + graph.errors[i];
-			i = i + 1;
+		for (const e of graph.errors) {
+			msg = `${msg} ${e}`;
 		}
 		return msg;
 	}
@@ -196,29 +182,24 @@ export function compileProjectToJS(entries: MapEntry[], entryPath: string): stri
 	const preludeCtx = getPreludeContext();
 
 	let combined = "";
-	let ci = 0;
-	while (ci < graph.loadOrder.length) {
-		const modPath = graph.loadOrder[ci];
+	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
-		if (mod === null || mod.isCHeader) { ci = ci + 1; continue; }
+		if (mod === null || mod.isCHeader) continue;
 
 		const pr = parseSource(mod.source);
-		if (!pr.ok) return "ERROR: parse [" + modPath + "]: " + pr.error;
+		if (!pr.ok) return `ERROR: parse [${modPath}]: ${pr.error}`;
 
 		const ctx = checkProgramWithRegistry(pr.value, registry, graph, mod, preludeCtx);
 		if (hasErrors(ctx)) {
-			let msg = "ERROR: check [" + modPath + "]:";
-			let ei = 0;
-			while (ei < ctx.errors.length) {
-				msg = msg + " " + ctx.errors[ei].message;
-				ei = ei + 1;
+			let msg = `ERROR: check [${modPath}]:`;
+			for (const err of ctx.errors) {
+				msg = `${msg} ${err.message}`;
 			}
 			return msg;
 		}
 
 		const transformed = transformProgram(pr.value, ctx, true);
 		combined = combined + generateJS(transformed);
-		ci = ci + 1;
 	}
 
 	return combined;

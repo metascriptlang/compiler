@@ -37,15 +37,17 @@ import { createTransformContextWithChecker } from "../../transform/context";
 
 function unwrapToKind(node: Node, targetKind: NodeKind): Node {
 	if (node.kind === targetKind) return node;
-	if (node.kind === NodeKind.ExportDecl) {
-		const d = node.data as ExportDeclData;
-		return unwrapToKind(d.exportedDecl, targetKind);
-	}
-	if (node.kind === NodeKind.DecoratedDecl) {
-		const d = node.data as DecoratedDeclData;
-		return unwrapToKind(d.decoratedNode, targetKind);
-	}
-	return null as unknown as Node;
+	return match (node.kind) {
+		NodeKind.ExportDecl => {
+			const d = node.data as ExportDeclData;
+			return unwrapToKind(d.exportedDecl, targetKind);
+		},
+		NodeKind.DecoratedDecl => {
+			const d = node.data as DecoratedDeclData;
+			return unwrapToKind(d.decoratedNode, targetKind);
+		},
+		_ => null as unknown as Node,
+	};
 }
 
 export function unwrapToFuncDecl(node: Node): Node {
@@ -165,7 +167,7 @@ function compileClassConstructor(
 	for (let ci = 0; ci < classBody.length; ci += 1) {
 		if (classBody[ci].kind === NodeKind.MethodDecl) {
 			const md = classBody[ci].data as MethodDeclData;
-			const methodKey = className + "_" + md.methodName;
+			const methodKey = `${className}_${md.methodName}`;
 			const methodIdx = resolveFunc(s, methodKey);
 			if (methodIdx >= 0) {
 				const closureReg = emitClosurePair(s, methodIdx, thisReg);
@@ -229,7 +231,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], checkerCtx: 
 			if (enumNode !== null) {
 				const ed = enumNode.data as EnumDeclData;
 				for (let ei = 0; ei < ed.enumMembers.length; ei += 1) {
-					const key = ed.enumName + "." + ed.enumMembers[ei];
+					const key = `${ed.enumName}.${ed.enumMembers[ei]}`;
 					const me: RaiserFuncEntry = { name: key, index: ei };
 					globalEnumMap.items.push(me);
 				}
@@ -249,7 +251,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], checkerCtx: 
 				for (let ci = 0; ci < cd.classBody.length; ci += 1) {
 					if (cd.classBody[ci].kind === NodeKind.MethodDecl) {
 						const md = cd.classBody[ci].data as MethodDeclData;
-						const methodKey = cd.className + "_" + md.methodName;
+						const methodKey = `${cd.className}_${md.methodName}`;
 						const mEntry: RaiserFuncEntry = { name: methodKey, index: funcIdx };
 						globalFuncMap.items.push(mEntry);
 						funcIdx += 1;
@@ -314,7 +316,7 @@ export function generateRaiserProject(modules: RaiserModuleInput[], checkerCtx: 
 				for (let ci = 0; ci < cd.classBody.length; ci += 1) {
 					if (cd.classBody[ci].kind === NodeKind.MethodDecl) {
 						const md = cd.classBody[ci].data as MethodDeclData;
-						const methodName = cd.className + "_" + md.methodName;
+						const methodName = `${cd.className}_${md.methodName}`;
 						// md.methodParams already has "this" at index 0 (injected by collectPass)
 						const func = compileFuncBody(globalFuncMap, globalEnumMap, methodName, md.methodParams, md.methodBody, md.methodParams.length);
 						functions.push(func);

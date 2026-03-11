@@ -41,81 +41,50 @@ function stripQualifiers(t: string): string {
 export function mapCType(ctype: string): string {
 	const t = stripQualifiers(trimStr(ctype));
 
-	// Pointer types
+	// Pointer types — can't be in match (endsWith check)
 	if (t.endsWith("*")) {
-		// Get base type (trim trailing * and spaces)
-		let baseEnd = t.length - 1;
-		const base = trimStr(sliceStr(t, 0, baseEnd));
-
-		// char* / const char* → string
+		const base = trimStr(sliceStr(t, 0, t.length - 1));
 		if (base === "char" || base === "const char") return "string";
-		// void* / const void* → int64 (opaque pointer)
-		if (base === "void" || base === "const void") return "int64";
-		// All other pointers → int64 (opaque)
 		return "int64";
 	}
 
-	// void
-	if (t === "void") return "void";
-
-	// Boolean types
-	if (t === "_Bool" || t === "bool" || t === "msBool") return "boolean";
-
-	// MS runtime types
-	if (t === "msString") return "string";
-
-	// stdint fixed-width types
-	if (t === "int8_t") return "int8";
-	if (t === "int16_t") return "int16";
-	if (t === "int32_t") return "int32";
-	if (t === "int64_t") return "int64";
-	if (t === "uint8_t") return "uint8";
-	if (t === "uint16_t") return "uint16";
-	if (t === "uint32_t") return "uint32";
-	if (t === "uint64_t") return "uint64";
-
-	// C primitive types
-	if (t === "int") return "int32";
-	if (t === "unsigned int" || t === "unsigned") return "uint32";
-	if (t === "short" || t === "short int") return "int16";
-	if (t === "unsigned short" || t === "unsigned short int") return "uint16";
-	if (t === "long" || t === "long int") return "int64";
-	if (t === "unsigned long" || t === "unsigned long int") return "uint64";
-	if (t === "long long" || t === "long long int") return "int64";
-	if (t === "unsigned long long" || t === "unsigned long long int") return "uint64";
-	if (t === "float") return "float32";
-	if (t === "double") return "float64";
-	if (t === "char") return "int8";
-	if (t === "signed char") return "int8";
-	if (t === "unsigned char") return "uint8";
-
-	// Size types
-	if (t === "size_t") return "uint64";
-	if (t === "ssize_t") return "int64";
-	if (t === "intptr_t") return "int64";
-	if (t === "uintptr_t") return "uint64";
-
-	// Unknown/opaque type → int64 as fallback
-	return "int64";
+	return match (t) {
+		"void" => "void",
+		"_Bool" | "bool" | "msBool" => "boolean",
+		"msString" => "string",
+		"int8_t" | "char" | "signed char" => "int8",
+		"int16_t" | "short" | "short int" => "int16",
+		"int32_t" | "int" => "int32",
+		"int64_t" | "long" | "long int" | "long long" | "long long int" | "ssize_t" | "intptr_t" => "int64",
+		"uint8_t" | "unsigned char" => "uint8",
+		"uint16_t" | "unsigned short" | "unsigned short int" => "uint16",
+		"uint32_t" | "unsigned int" | "unsigned" => "uint32",
+		"uint64_t" | "unsigned long" | "unsigned long int" | "unsigned long long" | "unsigned long long int" | "size_t" | "uintptr_t" => "uint64",
+		"float" => "float32",
+		"double" => "float64",
+		_ => "int64",
+	};
 }
 
 // ===== Synthetic Source Generator =====
 
 // Generate a valid MetaScript parameter name (avoid reserved words)
 function safeParamName(name: string): string {
-	if (name === "" ) return "p";
-	if (name === "type") return "argType";
-	if (name === "function") return "fn";
-	if (name === "class") return "cls";
-	if (name === "interface") return "iface";
-	if (name === "import") return "imp";
-	if (name === "export") return "exp";
-	if (name === "const") return "cnst";
-	if (name === "let") return "letVal";
-	if (name === "var") return "varVal";
-	if (name === "return") return "ret";
-	if (name === "enum") return "enumVal";
-	return name;
+	return match (name) {
+		"" => "p",
+		"type" => "argType",
+		"function" => "fn",
+		"class" => "cls",
+		"interface" => "iface",
+		"import" => "imp",
+		"export" => "exp",
+		"const" => "cnst",
+		"let" => "letVal",
+		"var" => "varVal",
+		"return" => "ret",
+		"enum" => "enumVal",
+		_ => name,
+	};
 }
 
 // Parse a C header file and return synthetic MetaScript source.
@@ -125,10 +94,10 @@ export function parseCHeader(headerPath: string): string {
 	if (rc !== 0) {
 		const errMsg = msAroError();
 		msAroFree();
-		return "// ARO parse error: " + errMsg + "\n";
+		return `// ARO parse error: ${errMsg}\n`;
 	}
 
-	let source = "// Auto-generated from C header: " + headerPath + "\n";
+	let source = `// Auto-generated from C header: ${headerPath}\n`;
 
 	// === Enums ===
 	let ei = 0;
@@ -136,12 +105,12 @@ export function parseCHeader(headerPath: string): string {
 	while (ei < enumCount) {
 		const ename = msAroEnumName(ei as int32);
 		if (ename.length > 0) {
-			source = source + "\nexport enum " + ename + " {\n";
+			source = source + `\nexport enum ${ename} {\n`;
 			let mi = 0;
 			const memberCount = msAroEnumMemberCount(ei as int32);
 			while (mi < memberCount) {
 				const mname = msAroEnumMemberName(ei as int32, mi as int32);
-				source = source + "\t" + mname + ",\n";
+				source = source + `\t${mname},\n`;
 				mi = mi + 1;
 			}
 			source = source + "}\n";
@@ -156,7 +125,7 @@ export function parseCHeader(headerPath: string): string {
 		const tname = msAroTypedefName(ti as int32);
 		const ttarget = mapCType(msAroTypedefTarget(ti as int32));
 		if (tname.length > 0) {
-			source = source + "export type " + tname + " = " + ttarget + ";\n";
+			source = source + `export type ${tname} = ${ttarget};\n`;
 		}
 		ti = ti + 1;
 	}
@@ -167,7 +136,7 @@ export function parseCHeader(headerPath: string): string {
 	while (fi < funcCount) {
 		const fname = msAroFuncName(fi as int32);
 		const retType = mapCType(msAroFuncReturnType(fi as int32));
-		source = source + "export extern function " + fname + "(";
+		source = source + `export extern function ${fname}(`;
 
 		let pi = 0;
 		const paramCount = msAroFuncParamCount(fi as int32);
@@ -175,11 +144,11 @@ export function parseCHeader(headerPath: string): string {
 			if (pi > 0) { source = source + ", "; }
 			const pname = safeParamName(msAroFuncParamName(fi as int32, pi as int32));
 			const ptype = mapCType(msAroFuncParamType(fi as int32, pi as int32));
-			source = source + pname + ": " + ptype;
+			source = source + `${pname}: ${ptype}`;
 			pi = pi + 1;
 		}
 
-		source = source + "): " + retType + ";\n";
+		source = source + `): ${retType};\n`;
 		fi = fi + 1;
 	}
 
@@ -194,7 +163,7 @@ export function parseCHeader(headerPath: string): string {
 // and generates `export extern function NAME(): int64;` for each.
 // Actual C prototypes come from @include — this just satisfies the checker.
 export function synthesizeHeaderSource(graph: ModuleGraph, headerPath: string): string {
-	let source = "// Synthetic module for C header: " + headerPath + "\n";
+	let source = `// Synthetic module for C header: ${headerPath}\n`;
 	const emitted: string[] = [];
 
 	for (const gmod of graph.modules) {
@@ -206,7 +175,7 @@ export function synthesizeHeaderSource(graph: ModuleGraph, headerPath: string): 
 						if (e === name) { found = true; }
 					}
 					if (!found) {
-						source = source + "export extern function " + name + "(): int64;\n";
+						source = source + `export extern function ${name}(): int64;\n`;
 						emitted.push(name);
 					}
 				}

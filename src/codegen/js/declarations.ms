@@ -14,10 +14,12 @@ import { sliceStr } from "../../utils/string";
 
 function emitFunctionDeclInner(gen: JSGenerator, node: Node): void {
 	const d = node.data as FunctionDeclData;
-	if (d.fnFlags === "async") { emit(gen, "async function "); }
-	else if (d.fnFlags === "generator") { emit(gen, "function* "); }
-	else if (d.fnFlags === "async_generator") { emit(gen, "async function* "); }
-	else { emit(gen, "function "); }
+	match (d.fnFlags) {
+		"async" => { emit(gen, "async function "); },
+		"generator" => { emit(gen, "function* "); },
+		"async_generator" => { emit(gen, "async function* "); },
+		_ => { emit(gen, "function "); },
+	};
 	emit(gen, d.fnName);
 	emit(gen, "(");
 	emitJoinedStrings(gen, d.params, ", ");
@@ -83,17 +85,13 @@ function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 	}
 	emit(gen, " {\n");
 	gen.indentLevel = gen.indentLevel + 1;
-	for (let i = 0; i < d.classBody.length; i += 1) {
-		const member = d.classBody[i];
-		if (member.kind === NodeKind.MethodDecl) {
-			emitMethodDecl(gen, member);
-		} else if (member.kind === NodeKind.ConstructorDecl) {
-			emitConstructorDecl(gen, member);
-		} else if (member.kind === NodeKind.PropertyDecl) {
-			// Skip type-only property declarations in JS
-		} else {
-			emitNode(gen, member);
-		}
+	for (const member of d.classBody) {
+		match (member.kind) {
+			NodeKind.MethodDecl => { emitMethodDecl(gen, member); },
+			NodeKind.ConstructorDecl => { emitConstructorDecl(gen, member); },
+			NodeKind.PropertyDecl => {},
+			_ => { emitNode(gen, member); },
+		};
 	}
 	gen.indentLevel = gen.indentLevel - 1;
 	emitIndent(gen);
@@ -111,9 +109,12 @@ export function emitMethodDecl(gen: JSGenerator, node: Node): void {
 	const d = node.data as MethodDeclData;
 	emitIndent(gen);
 	if (d.methodIsStatic) { emit(gen, "static "); }
-	if (d.methodFlags === "async") { emit(gen, "async "); }
-	else if (d.methodFlags === "generator") { emit(gen, "*"); }
-	else if (d.methodFlags === "async_generator") { emit(gen, "async *"); }
+	match (d.methodFlags) {
+		"async" => { emit(gen, "async "); },
+		"generator" => { emit(gen, "*"); },
+		"async_generator" => { emit(gen, "async *"); },
+		_ => {},
+	};
 	emit(gen, d.methodName);
 	emit(gen, "(");
 	emitJoinedStrings(gen, d.methodParams, ", ");
@@ -177,30 +178,26 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 	if (inner.kind === NodeKind.ExternDecl) return;
 	emitIndent(gen);
 	emit(gen, "export ");
-	if (inner.kind === NodeKind.FunctionDecl) {
-		emitFunctionDeclInner(gen, inner);
-	} else if (inner.kind === NodeKind.VariableDecl) {
-		const vd = inner.data as VariableDeclData;
-		if (vd.declKind === DeclKind.Const) {
-			emit(gen, "const ");
-		} else if (vd.declKind === DeclKind.Var) {
-			emit(gen, "var ");
-		} else {
-			emit(gen, "let ");
-		}
-		emit(gen, vd.declName);
-		if (vd.initializer !== null) {
-			emit(gen, " = ");
-			emitNode(gen, vd.initializer);
-		}
-		emit(gen, ";\n");
-	} else if (inner.kind === NodeKind.EnumDecl) {
-		emitEnumDeclInner(gen, inner);
-	} else if (inner.kind === NodeKind.ClassDecl) {
-		emitClassDeclInner(gen, inner);
-	} else {
-		emitNode(gen, inner);
-	}
+	match (inner.kind) {
+		NodeKind.FunctionDecl => { emitFunctionDeclInner(gen, inner); },
+		NodeKind.VariableDecl => {
+			const vd = inner.data as VariableDeclData;
+			match (vd.declKind) {
+				DeclKind.Const => { emit(gen, "const "); },
+				DeclKind.Var => { emit(gen, "var "); },
+				_ => { emit(gen, "let "); },
+			};
+			emit(gen, vd.declName);
+			if (vd.initializer !== null) {
+				emit(gen, " = ");
+				emitNode(gen, vd.initializer);
+			}
+			emit(gen, ";\n");
+		},
+		NodeKind.EnumDecl => { emitEnumDeclInner(gen, inner); },
+		NodeKind.ClassDecl => { emitClassDeclInner(gen, inner); },
+		_ => { emitNode(gen, inner); },
+	};
 }
 
 // ===== Decorated Declaration =====

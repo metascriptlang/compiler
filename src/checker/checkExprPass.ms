@@ -207,7 +207,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 		NodeKind.ObjectLiteral => {
 			const d = node.data as ObjectLiteralData;
 			// Unwrap ownership modifiers (Sink/Lent/Var) and Ref — transparent wrappers.
-			// Reference parity: semobjconstr.nim:481 — skipTypes({tySink, tyOwned})
+			// Reference parity: skipTypes({tySink, tyOwned})
 			let objExpected = skipModifier(expectedType);
 			// Unwrap Ref for class types — ObjectLiteral constructs the inner struct
 			if (objExpected !== null && objExpected.kind === TypeKind.Ref && objExpected.typeReturn !== null) {
@@ -842,7 +842,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 				const winner = filtered[0];
 				if (winner.sym !== null) {
 					node.resolvedSym = winner.sym;
-					sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + me.property.length, winner.sym, getExtFnType(winner), SymbolKind.Method, me.property, winner.receiverTypeName, false);
+					sgRecordSym(ctx, d.callee.location.line, d.callee.location.column + 1, d.callee.location.column + 1 + me.property.length, winner.sym, getExtFnType(winner), SymbolKind.Method, me.property, winner.receiverTypeName, false);
 				}
 				// Strip receiver and return inferred type (sym.typ is authoritative)
 				let srcType = getExtFnType(winner);
@@ -1367,7 +1367,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 			const memberSym = lookupSymbol(ctx.table, mangledName);
 			node.resolvedSym = memberSym;
 			if (memberSym !== null) {
-				sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + mangledName.length, memberSym, objType, SymbolKind.Variable, d.property, enumName, false);
+				sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + d.property.length, memberSym, objType, SymbolKind.EnumMember, d.property, enumName, false);
 			}
 		}
 		node.nodeType = objType;
@@ -1386,7 +1386,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 		const resultPropSym = makeSymbol(d.property, SymbolKind.Property, propType, false);
 		resultPropSym.state = SymbolState.Shaped;
 		node.resolvedSym = resultPropSym;
-		sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.property.length, resultPropSym, propType, SymbolKind.Property, d.property, "Result", false);
+		sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + d.property.length, resultPropSym, propType, SymbolKind.Property, d.property, "Result", false);
 		return propType;
 	}
 	if (propType.kind !== TypeKind.Unknown) {
@@ -1404,7 +1404,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 			if (propSym !== null) {
 				ensureShaped(propSym, ctx);
 				node.resolvedSym = propSym;
-				sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.property.length, propSym, propType, SymbolKind.Property, d.property, resolvedObjType.typeName, false);
+				sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + d.property.length, propSym, propType, SymbolKind.Property, d.property, resolvedObjType.typeName, false);
 			}
 		}
 		// Standard reference parity: fallback — search the type's field list directly
@@ -1420,7 +1420,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 						synthSym.nativeName = resolvedObjType.typeChildren[mi].typeName;
 					}
 					node.resolvedSym = synthSym;
-					sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + mName.length, synthSym, resolvedObjType.typeChildren[mi], SymbolKind.Property, mName, resolvedObjType.typeName, false);
+					sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + mName.length, synthSym, resolvedObjType.typeChildren[mi], SymbolKind.Property, mName, resolvedObjType.typeName, false);
 					break;
 				}
 				mi = mi + 1;
@@ -1514,7 +1514,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 		if (classMethSym !== null && classMethSym.symbolKind === SymbolKind.Function) {
 			ensureShaped(classMethSym, ctx);
 			node.resolvedSym = classMethSym;
-			sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.property.length, classMethSym, classMethSym.symbolType, SymbolKind.Method, d.property, resolvedObjType.typeName, false);
+			sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + d.property.length, classMethSym, classMethSym.symbolType, SymbolKind.Method, d.property, resolvedObjType.typeName, false);
 			if (needsDeref) {
 				const tok = createToken(TokenKind.Ident, "", node.location.line);
 				const derefNode = createNode(NodeKind.HiddenDeref, { expr: d.object }, tok);
@@ -1556,7 +1556,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 			if (ext.sym !== null) {
 				ensureShaped(ext.sym, ctx);
 				node.resolvedSym = ext.sym;
-				sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.property.length, ext.sym, getExtFnType(ext), SymbolKind.Method, d.property, ext.receiverTypeName, false);
+				sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + d.property.length, ext.sym, getExtFnType(ext), SymbolKind.Method, d.property, ext.receiverTypeName, false);
 			}
 			// Instance extension: strip receiver param (index 0) so checkCallExpr
 			// sees only user-visible params. The receiver is already in MemberExpr.object.

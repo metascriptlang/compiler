@@ -84,8 +84,8 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 
 function genModuleInitFns(g: CGen): void {
 	const modName = mangleModuleName(g.modulePath);
-	const datInitName = g.isHcr ? "DatInit000" : modName + "__DatInit000";
-	const initName = g.isHcr ? "Init000" : modName + "__Init000";
+	const datInitName = g.isHcr ? "DatInit000" : `${modName}__DatInit000`;
+	const initName = g.isHcr ? "Init000" : `${modName}__Init000`;
 
 	const datContent = extract(sec(g, CSection.DatInit));
 	const initContent = extract(sec(g, CSection.ModuleInit));
@@ -98,11 +98,11 @@ function genModuleInitFns(g: CGen): void {
 	const procs = sec(g, CSection.Procs);
 
 	// DatInit000: data/type initialization (non-static for cross-module visibility)
-	addLine(hdrs, "void " + datInitName + "(void);");
-	addLine(procs, "void " + datInitName + "(void) {");
-	addLine(procs, "  static MS_BOOL " + datInitName + "_guard_ = 0;");
-	addLine(procs, "  if (" + datInitName + "_guard_) return;");
-	addLine(procs, "  " + datInitName + "_guard_ = 1;");
+	addLine(hdrs, `void ${datInitName}(void);`);
+	addLine(procs, `void ${datInitName}(void) {`);
+	addLine(procs, `  static MS_BOOL ${datInitName}_guard_ = 0;`);
+	addLine(procs, `  if (${datInitName}_guard_) return;`);
+	addLine(procs, `  ${datInitName}_guard_ = 1;`);
 	if (datContent.length > 0) {
 		add(procs, datContent);
 	}
@@ -110,11 +110,11 @@ function genModuleInitFns(g: CGen): void {
 	addNewline(procs);
 
 	// Init000: user top-level code (non-static for cross-module visibility)
-	addLine(hdrs, "void " + initName + "(void);");
-	addLine(procs, "void " + initName + "(void) {");
-	addLine(procs, "  static MS_BOOL " + initName + "_guard_ = 0;");
-	addLine(procs, "  if (" + initName + "_guard_) return;");
-	addLine(procs, "  " + initName + "_guard_ = 1;");
+	addLine(hdrs, `void ${initName}(void);`);
+	addLine(procs, `void ${initName}(void) {`);
+	addLine(procs, `  static MS_BOOL ${initName}_guard_ = 0;`);
+	addLine(procs, `  if (${initName}_guard_) return;`);
+	addLine(procs, `  ${initName}_guard_ = 1;`);
 	if (initContent.length > 0) {
 		add(procs, initContent);
 	}
@@ -134,11 +134,11 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 	// Forward declarations for all module init functions
 	for (let i = 0; i < modulePaths.length; i += 1) {
 		const modName = mangleModuleName(modulePaths[i]);
-		addLine(b, "void " + modName + "__DatInit000(void);");
-		addLine(b, "void " + modName + "__Init000(void);");
+		addLine(b, `void ${modName}__DatInit000(void);`);
+		addLine(b, `void ${modName}__Init000(void);`);
 	}
 	if (hasUserMain) {
-		addLine(b, retType + " main_(void);");
+		addLine(b, `${retType} main_(void);`);
 	}
 	addNewline(b);
 
@@ -153,7 +153,7 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 	addLine(b, "static void MsPreMainInner(void) {");
 	b.indent += 1;
 	for (let i = 0; i < modulePaths.length; i += 1) {
-		addLine(b, mangleModuleName(modulePaths[i]) + "__DatInit000();");
+		addLine(b, `${mangleModuleName(modulePaths[i])}__DatInit000();`);
 	}
 	b.indent -= 1;
 	addLine(b, "}");
@@ -164,10 +164,10 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 	b.indent += 1;
 	for (let i = 0; i < modulePaths.length; i += 1) {
 		if (modulePaths[i] !== entryPath) {
-			addLine(b, mangleModuleName(modulePaths[i]) + "__Init000();");
+			addLine(b, `${mangleModuleName(modulePaths[i])}__Init000();`);
 		}
 	}
-	addLine(b, mangleModuleName(entryPath) + "__Init000();");
+	addLine(b, `${mangleModuleName(entryPath)}__Init000();`);
 	if (hasUserMain) {
 		if (retType !== "void") {
 			addLine(b, "msProgramResult = (int)main_();");
@@ -248,7 +248,7 @@ function emitIncludeDirectives(g: CGen, directives: string): void {
 function emitOneInclude(g: CGen, header: string): void {
 	if (nameSetHas(g.declaredThings, "inc:" + header)) return;
 	nameSetAdd(g.declaredThings, "inc:" + header);
-	addLine(sec(g, CSection.Headers), "#include \"" + header + "\"");
+	addLine(sec(g, CSection.Headers), `#include "${header}"`);
 }
 
 // ===== Tests =====

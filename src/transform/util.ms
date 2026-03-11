@@ -103,7 +103,7 @@ export function makeWhile(cond: Node, body: Node, loc: SourceLocation): Node {
 }
 
 export function makeTryCatch(tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node, loc: SourceLocation): Node {
-	return createNode(NodeKind.TryCatchStmt, { tryBody, catchName, catchBody, finallyBody }, syntheticToken(loc));
+	return createNode(NodeKind.TryCatchStmt, { tryBody, catchName, catchBody, finallyBody, catchBindingLocation: { line: 0, column: 0 } }, syntheticToken(loc));
 }
 
 export function makeContinue(loc: SourceLocation): Node {

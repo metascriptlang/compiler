@@ -1039,23 +1039,27 @@ export function handleFormatting(id: string, params: string, db: TransAmDb): str
 // ===== Dispatch =====
 
 export function lspDispatch(method: string, id: string, params: string, db: TransAmDb, cache: CompletionCache): string {
-	if (method === "initialize") return handleInitialize(id);
-	if (method === "shutdown") return handleShutdown(id);
-	if (method === "textDocument/didOpen") return handleDidOpen(params, db);
-	if (method === "textDocument/didChange") return handleDidChange(params, db);
-	if (method === "textDocument/didClose") return handleDidClose(params, db);
-	if (method === "textDocument/hover") return handleHover(id, params, db);
-	if (method === "textDocument/completion") return handleCompletion(id, params, db, cache);
-	if (method === "textDocument/definition") return handleDefinition(id, params, db);
-	if (method === "textDocument/documentSymbol") return handleDocumentSymbol(id, params, db);
-	if (method === "textDocument/signatureHelp") return handleSignatureHelp(id, params, db);
-	if (method === "textDocument/inlayHint") return handleInlayHint(id, params, db);
-	if (method === "textDocument/references") return handleReferences(id, params, db);
-	if (method === "textDocument/rename") return handleRename(id, params, db);
-	if (method === "textDocument/semanticTokens/full") return handleSemanticTokensFull(id, params, db);
-	if (method === "textDocument/formatting") return handleFormatting(id, params, db);
-	if (id.length > 0) return lspErrorResponse(id, -32601, "Method not found");
-	return "";
+	return match (method) {
+		"initialize" => handleInitialize(id),
+		"shutdown" => handleShutdown(id),
+		"textDocument/didOpen" => handleDidOpen(params, db),
+		"textDocument/didChange" => handleDidChange(params, db),
+		"textDocument/didClose" => handleDidClose(params, db),
+		"textDocument/hover" => handleHover(id, params, db),
+		"textDocument/completion" => handleCompletion(id, params, db, cache),
+		"textDocument/definition" => handleDefinition(id, params, db),
+		"textDocument/documentSymbol" => handleDocumentSymbol(id, params, db),
+		"textDocument/signatureHelp" => handleSignatureHelp(id, params, db),
+		"textDocument/inlayHint" => handleInlayHint(id, params, db),
+		"textDocument/references" => handleReferences(id, params, db),
+		"textDocument/rename" => handleRename(id, params, db),
+		"textDocument/semanticTokens/full" => handleSemanticTokensFull(id, params, db),
+		"textDocument/formatting" => handleFormatting(id, params, db),
+		_ => {
+			if (id.length > 0) return lspErrorResponse(id, -32601, "Method not found");
+			return "";
+		},
+	};
 }
 
 // ===== Tests =====

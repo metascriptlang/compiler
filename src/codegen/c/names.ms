@@ -167,7 +167,7 @@ export function mangleModuleName(modulePath: string): string {
 
 export function mangleProcName(name: string, moduleName: string, id: number): string {
 	const mangled = mangle(name);
-	return mangled + "__" + moduleName + "_u" + id;
+	return `${mangled}__${moduleName}_u${id}`;
 }
 
 // ===== Symbol → C Name (Standard reference parity) =====
@@ -183,14 +183,14 @@ export function mangledFunctionName(sym: Symbol, name: string, overloadIdx: numb
 	if (sym !== null && sym.modulePath !== "") {
 		return mangleProcName(mangledName, mangleModuleName(sym.modulePath), overloadIdx);
 	}
-	if (overloadIdx > 0) return safeName(mangledName) + "__" + overloadIdx;
+	if (overloadIdx > 0) return `${safeName(mangledName)}__${overloadIdx}`;
 	return safeName(mangledName);
 }
 
 // ===== Type Name Mangling =====
 
 export function mangleTypeName(name: string, moduleName: string): string {
-	return mangle(name) + "__" + moduleName;
+	return `${mangle(name)}__${moduleName}`;
 }
 
 // ===== Field Name — minimal mangling (no module prefix) =====
@@ -206,7 +206,7 @@ export function mangleFieldName(name: string): string {
 export function mangleLocalName(name: string, scopeDepth: number): string {
 	const mangled = mangle(name);
 	if (scopeDepth > 0 || isCKeyword(mangled)) {
-		return mangled + "_" + scopeDepth;
+		return `${mangled}_${scopeDepth}`;
 	}
 	return mangled;
 }

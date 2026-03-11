@@ -79,8 +79,8 @@ export function emitBlockInline(gen: JSGenerator, node: Node): void {
 	const d = node.data as BlockStmtData;
 	emit(gen, "{\n");
 	gen.indentLevel = gen.indentLevel + 1;
-	for (let i = 0; i < d.statements.length; i += 1) {
-		emitNode(gen, d.statements[i]);
+	for (const stmt of d.statements) {
+		emitNode(gen, stmt);
 	}
 	gen.indentLevel = gen.indentLevel - 1;
 	emitIndent(gen);
@@ -114,8 +114,8 @@ export function emitBodyOrEmpty(gen: JSGenerator, body: Node): void {
 
 export function finalize(gen: JSGenerator): string {
 	let result = "";
-	for (let i = 0; i < gen.buf.length; i += 1) {
-		result = result + gen.buf[i];
+	for (const chunk of gen.buf) {
+		result = result + chunk;
 	}
 	return result;
 }
@@ -126,13 +126,15 @@ export function escapeJSString(s: string): string {
 	let result = "";
 	for (let i = 0; i < s.length; i += 1) {
 		const ch = sliceStr(s, i, i + 1);
-		if (ch === "\\") { result = result + "\\\\"; }
-		else if (ch === "\"") { result = result + "\\\""; }
-		else if (ch === "\n") { result = result + "\\n"; }
-		else if (ch === "\r") { result = result + "\\r"; }
-		else if (ch === "\t") { result = result + "\\t"; }
-		else if (ch === "\0") { result = result + "\\0"; }
-		else { result = result + ch; }
+		result = result + match (ch) {
+			"\\" => "\\\\",
+			"\"" => "\\\"",
+			"\n" => "\\n",
+			"\r" => "\\r",
+			"\t" => "\\t",
+			"\0" => "\\0",
+			_ => ch,
+		};
 	}
 	return result;
 }

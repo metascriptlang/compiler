@@ -27,18 +27,18 @@ export function parseMatchExpr(
 
 	// Expect ( discriminant )
 	if (current(state).kind !== TokenKind.LParen) {
-		return Result.err(`Expected '(' after 'match' at line ${current(state).line.toString()}`);
+		return Result.err(`Expected '(' after 'match' at line ${current(state).line}`);
 	}
 	advance(state);
 	let disc = try exprParser(state, 0);
 	if (current(state).kind !== TokenKind.RParen) {
-		return Result.err(`Expected ')' after match discriminant at line ${current(state).line.toString()}`);
+		return Result.err(`Expected ')' after match discriminant at line ${current(state).line}`);
 	}
 	advance(state);
 
 	// Expect { cases }
 	if (current(state).kind !== TokenKind.LBrace) {
-		return Result.err(`Expected '{' to start match body at line ${current(state).line.toString()}`);
+		return Result.err(`Expected '{' to start match body at line ${current(state).line}`);
 	}
 	advance(state);
 
@@ -77,7 +77,7 @@ function parseMatchCase(
 
 	// Expect =>
 	if (current(state).kind !== TokenKind.Arrow) {
-		return Result.err(`Expected '=>' after match pattern at line ${current(state).line.toString()}`);
+		return Result.err(`Expected '=>' after match pattern at line ${current(state).line}`);
 	}
 	const arrowToken = current(state);
 	advance(state);
@@ -167,7 +167,7 @@ function parseSinglePattern(state: ParserState): ExprResult {
 		return Result.ok(createNode(NodeKind.UnaryExpr, { unaryOp: "-", operand }, token));
 	}
 
-	return Result.err(`Unexpected token in match pattern: ${token.value} at line ${token.line.toString()}`);
+	return Result.err(`Unexpected token in match pattern: ${token.value} at line ${token.line}`);
 }
 
 // ===== Tests =====

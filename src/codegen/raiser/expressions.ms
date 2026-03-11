@@ -165,106 +165,72 @@ export function exprIsString(s: RaiserCompState, node: Node): boolean {
 // Returns the register holding the result.
 
 export function compileExpr(s: RaiserCompState, node: Node): number {
-	const k = node.kind;
-
-	if (k === NodeKind.NumberLiteral) {
-		const d = node.data as NumberLiteralData;
-		const reg = allocReg(s);
-		if (numberIsFloat(d.value)) {
-			emitLoadConst(s, reg, raiserFloat(d.value));
-			markRegFloat(s, reg);
-		} else {
-			emitLoadConst(s, reg, raiserInt(d.value));
-		}
-		return reg;
-	}
-
-	if (k === NodeKind.StringLiteral) {
-		const d = node.data as StringLiteralData;
-		const reg = allocReg(s);
-		emitLoadConst(s, reg, raiserString(d.value));
-		return reg;
-	}
-
-	if (k === NodeKind.BooleanLiteral) {
-		const d = node.data as BooleanLiteralData;
-		const reg = allocReg(s);
-		emitLoadConst(s, reg, raiserBool(d.boolValue));
-		return reg;
-	}
-
-	if (k === NodeKind.NullLiteral) {
-		const reg = allocReg(s);
-		emitLoadConst(s, reg, raiserNil());
-		return reg;
-	}
-
-	if (k === NodeKind.Identifier) {
-		const d = node.data as IdentifierData;
-		const reg = resolveLocal(s, d.name);
-		if (reg >= 0) return reg;
-		// Function reference as value (e.g., { fn: myFunc, env: {} })
-		const funcIdx = resolveFunc(s, d.name);
-		if (funcIdx >= 0) {
-			const r = allocReg(s);
-			emitLoadConst(s, r, raiserInt(funcIdx));
-			return r;
-		}
-		const fallback = allocReg(s);
-		emitLoadConst(s, fallback, raiserNil());
-		return fallback;
-	}
-
-	if (k === NodeKind.BinaryExpr) {
-		return compileBinaryExpr(s, node);
-	}
-
-	if (k === NodeKind.UnaryExpr) {
-		return compileUnaryExpr(s, node);
-	}
-
-	if (k === NodeKind.CallExpr) {
-		return compileCallExpr(s, node);
-	}
-
-	if (k === NodeKind.ConditionalExpr) {
-		return compileConditionalExpr(s, node);
-	}
-
-	if (k === NodeKind.TypeAssertion) {
-		const d = node.data as TypeAssertionData;
-		return compileExpr(s, d.asExpr);
-	}
-
-	if (k === NodeKind.UpdateExpr) {
-		return compileUpdateExpr(s, node);
-	}
-
-	if (k === NodeKind.ArrayLiteral) {
-		return compileArrayLiteral(s, node);
-	}
-
-	if (k === NodeKind.ArrayAccess) {
-		return compileArrayAccess(s, node);
-	}
-
-	if (k === NodeKind.MemberExpr) {
-		return compileMemberExpr(s, node);
-	}
-
-	if (k === NodeKind.ObjectLiteral) {
-		return compileObjectLiteral(s, node);
-	}
-
-	if (k === NodeKind.MoveExpr) {
-		const d = node.data as MoveExprData;
-		return compileExpr(s, d.moveArg);
-	}
-
-	// Fallback: load nil
-	const reg = allocReg(s);
-	emitLoadConst(s, reg, raiserNil());
-	return reg;
+	return match (node.kind) {
+		NodeKind.NumberLiteral => {
+			const d = node.data as NumberLiteralData;
+			const reg = allocReg(s);
+			if (numberIsFloat(d.value)) {
+				emitLoadConst(s, reg, raiserFloat(d.value));
+				markRegFloat(s, reg);
+			} else {
+				emitLoadConst(s, reg, raiserInt(d.value));
+			}
+			return reg;
+		},
+		NodeKind.StringLiteral => {
+			const d = node.data as StringLiteralData;
+			const reg = allocReg(s);
+			emitLoadConst(s, reg, raiserString(d.value));
+			return reg;
+		},
+		NodeKind.BooleanLiteral => {
+			const d = node.data as BooleanLiteralData;
+			const reg = allocReg(s);
+			emitLoadConst(s, reg, raiserBool(d.boolValue));
+			return reg;
+		},
+		NodeKind.NullLiteral => {
+			const reg = allocReg(s);
+			emitLoadConst(s, reg, raiserNil());
+			return reg;
+		},
+		NodeKind.Identifier => {
+			const d = node.data as IdentifierData;
+			const reg = resolveLocal(s, d.name);
+			if (reg >= 0) return reg;
+			const funcIdx = resolveFunc(s, d.name);
+			if (funcIdx >= 0) {
+				const r = allocReg(s);
+				emitLoadConst(s, r, raiserInt(funcIdx));
+				return r;
+			}
+			const fallback = allocReg(s);
+			emitLoadConst(s, fallback, raiserNil());
+			return fallback;
+		},
+		NodeKind.BinaryExpr => { return compileBinaryExpr(s, node); },
+		NodeKind.UnaryExpr => { return compileUnaryExpr(s, node); },
+		NodeKind.CallExpr => { return compileCallExpr(s, node); },
+		NodeKind.ConditionalExpr => { return compileConditionalExpr(s, node); },
+		NodeKind.TypeAssertion => {
+			const d = node.data as TypeAssertionData;
+			return compileExpr(s, d.asExpr);
+		},
+		NodeKind.UpdateExpr => { return compileUpdateExpr(s, node); },
+		NodeKind.ArrayLiteral => { return compileArrayLiteral(s, node); },
+		NodeKind.ArrayAccess => { return compileArrayAccess(s, node); },
+		NodeKind.MemberExpr => { return compileMemberExpr(s, node); },
+		NodeKind.ObjectLiteral => { return compileObjectLiteral(s, node); },
+		NodeKind.MoveExpr => {
+			const d = node.data as MoveExprData;
+			return compileExpr(s, d.moveArg);
+		},
+		_ => {
+			const reg = allocReg(s);
+			emitLoadConst(s, reg, raiserNil());
+			return reg;
+		},
+	};
 }
 
 // --- Binary ---

@@ -12,7 +12,7 @@ import {
 } from "./bytecode";
 import {
 	RaiserValue, RaiserValueKind,
-	raiserNil, raiserInt, raiserFloat, raiserString, raiserArray, raiserToInt, raiserToBool, raiserToString, raiserIsNil,
+	raiserNil, raiserInt, raiserFloat, raiserString, raiserArray, raiserToInt, raiserToBool, raiserToString, raiserIsNil, copyValueInto,
 	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapArrayGet, heapArraySet, heapArrayPush, heapArrayLen,
 	RaiserObjectHeap, RaiserObjectField, createStructHeap, heapAllocObject, heapObjectGetField, heapObjectSetField,
 	raiserObject
@@ -95,7 +95,7 @@ export function execModule(mod: RaiserModule): RaiserVM {
 		vm.opCount = vm.opCount + 1;
 		if (vm.opCount > vm.opLimit) {
 			vm.halted = true;
-			vm.error = "Instruction budget exceeded (" + vm.opLimit + " ops)";
+			vm.error = `Instruction budget exceeded (${vm.opLimit} ops)`;
 			break;
 		}
 
@@ -109,24 +109,15 @@ export function execModule(mod: RaiserModule): RaiserVM {
 		if (op === RaiserOpcode.LoadConst) {
 			const bx = getBx(inst);
 			const val = getFuncConst(func, bx);
-			// Copy to avoid aliasing — constant pool objects are shared,
-			// and in-place mutations (LoadField, Ret, etc.) would corrupt them.
+			// Copy to avoid aliasing — constant pool objects are shared
 			const copy = raiserNil();
-			copy.kind = val.kind;
-			copy.intVal = val.intVal;
-			copy.floatVal = val.floatVal;
-			copy.strVal = val.strVal;
+			copyValueInto(copy, val);
 			setReg(vm, base + inst.a, copy);
 		} else if (op === RaiserOpcode.Move) {
-			// Copy to avoid aliasing — sharing a RaiserValue object between
-			// two registers causes corruption when in-place mutations
-			// (LoadField, Ret, AddI64, etc.) write to either slot.
+			// Copy to avoid aliasing between registers
 			const src = getReg(vm, base + inst.b);
 			const copy = raiserNil();
-			copy.kind = src.kind;
-			copy.intVal = src.intVal;
-			copy.floatVal = src.floatVal;
-			copy.strVal = src.strVal;
+			copyValueInto(copy, src);
 			setReg(vm, base + inst.a, copy);
 		} else if (op === RaiserOpcode.LoadNil) {
 			setReg(vm, base + inst.a, raiserNil());
@@ -225,7 +216,7 @@ export function execModule(mod: RaiserModule): RaiserVM {
 		} else if (op === RaiserOpcode.Print) {
 			const val = getReg(vm, base + inst.a);
 			const s = raiserToString(val);
-			vm.output = vm.output + s + "\n";
+			vm.output = `${vm.output}${s}\n`;
 		} else if (op === RaiserOpcode.Call) {
 			vmHandleCall(vm, inst);
 		} else if (op === RaiserOpcode.CallIndirect) {
@@ -286,7 +277,7 @@ export function execModule(mod: RaiserModule): RaiserVM {
 			vmHandleBuiltin(vm, inst);
 		} else {
 			vm.halted = true;
-			vm.error = "Unknown opcode: " + op;
+			vm.error = `Unknown opcode: ${op}`;
 		}
 	}
 
@@ -320,11 +311,7 @@ function vmHandleCall(vm: RaiserVM, inst: RaiserInstruction): void {
 function vmHandleRet(vm: RaiserVM, inst: RaiserInstruction): void {
 	if (vm.callStack.items.length === 0) {
 		// Top-level return — halt
-		const retVal = getReg(vm, vm.baseReg + inst.a);
-		vm.exitValue.kind = retVal.kind;
-		vm.exitValue.intVal = retVal.intVal;
-		vm.exitValue.floatVal = retVal.floatVal;
-		vm.exitValue.strVal = retVal.strVal;
+		copyValueInto(vm.exitValue, getReg(vm, vm.baseReg + inst.a));
 		vm.halted = true;
 		return;
 	}
@@ -334,15 +321,9 @@ function vmHandleRet(vm: RaiserVM, inst: RaiserInstruction): void {
 	const frame = vm.callStack.items[len - 1];
 	vm.callStack.items.length = len - 1;
 
-	// Copy return value to caller's dest register using a fresh value object
-	// to avoid aliasing (in-place mutation of dstVal could corrupt other
-	// registers that share the same RaiserValue object via Move/LoadConst).
-	const srcVal = getReg(vm, vm.baseReg + inst.a);
+	// Copy return value to caller's dest register (fresh object avoids aliasing)
 	const retCopy = raiserNil();
-	retCopy.kind = srcVal.kind;
-	retCopy.intVal = srcVal.intVal;
-	retCopy.floatVal = srcVal.floatVal;
-	retCopy.strVal = srcVal.strVal;
+	copyValueInto(retCopy, getReg(vm, vm.baseReg + inst.a));
 	setReg(vm, frame.returnReg, retCopy);
 
 	// Restore caller state
@@ -393,12 +374,8 @@ function vmHandleLoadIndex(vm: RaiserVM, inst: RaiserInstruction): void {
 	const handle = arrVal.intVal;
 	const idx = idxVal.intVal;
 	const elem = heapArrayGet(vm.arrayHeap, handle, idx);
-	// Deep copy to avoid aliasing (same pattern as vmHandleRet)
-	const dst = getReg(vm, vm.baseReg + inst.a);
-	dst.kind = elem.kind;
-	dst.intVal = elem.intVal;
-	dst.floatVal = elem.floatVal;
-	dst.strVal = elem.strVal;
+	// Deep copy to avoid aliasing
+	copyValueInto(getReg(vm, vm.baseReg + inst.a), elem);
 }
 
 function vmHandleStoreIndex(vm: RaiserVM, inst: RaiserInstruction): void {
@@ -442,12 +419,7 @@ function vmHandleLoadField(vm: RaiserVM, mod: RaiserModule, inst: RaiserInstruct
 		const nameVal = getFuncConst(func, inst.c);
 		if (fields[idx].name === nameVal.strVal) {
 			// Cache hit — O(1) access
-			const elem = fields[idx].value;
-			const dst = getReg(vm, vm.baseReg + inst.a);
-			dst.kind = elem.kind;
-			dst.intVal = elem.intVal;
-			dst.floatVal = elem.floatVal;
-			dst.strVal = elem.strVal;
+			copyValueInto(getReg(vm, vm.baseReg + inst.a), fields[idx].value);
 			return;
 		}
 	}
@@ -460,12 +432,7 @@ function vmHandleLoadField(vm: RaiserVM, mod: RaiserModule, inst: RaiserInstruct
 	while (fi < fields.length) {
 		if (fields[fi].name === fieldName) {
 			inst.cachedIdx = fi;
-			const elem = fields[fi].value;
-			const dst = getReg(vm, vm.baseReg + inst.a);
-			dst.kind = elem.kind;
-			dst.intVal = elem.intVal;
-			dst.floatVal = elem.floatVal;
-			dst.strVal = elem.strVal;
+			copyValueInto(getReg(vm, vm.baseReg + inst.a), fields[fi].value);
 			return;
 		}
 		fi = fi + 1;
@@ -492,10 +459,7 @@ function vmHandleStoreField(vm: RaiserVM, mod: RaiserModule, inst: RaiserInstruc
 		const nameVal = getFuncConst(func, inst.b);
 		if (fields[idx].name === nameVal.strVal) {
 			// Cache hit — O(1) update
-			fields[idx].value.kind = val.kind;
-			fields[idx].value.intVal = val.intVal;
-			fields[idx].value.floatVal = val.floatVal;
-			fields[idx].value.strVal = val.strVal;
+			copyValueInto(fields[idx].value, val);
 			return;
 		}
 	}
@@ -508,10 +472,7 @@ function vmHandleStoreField(vm: RaiserVM, mod: RaiserModule, inst: RaiserInstruc
 	while (fi < fields.length) {
 		if (fields[fi].name === fieldName) {
 			inst.cachedIdx = fi;
-			fields[fi].value.kind = val.kind;
-			fields[fi].value.intVal = val.intVal;
-			fields[fi].value.floatVal = val.floatVal;
-			fields[fi].value.strVal = val.strVal;
+			copyValueInto(fields[fi].value, val);
 			return;
 		}
 		fi = fi + 1;
@@ -724,7 +685,7 @@ function vmHandleBuiltin(vm: RaiserVM, inst: RaiserInstruction): void {
 		dst.floatVal = 0.0;
 		dst.strVal = "";
 	} else {
-		vm.error = "Unknown builtin ID: " + builtinId;
+		vm.error = `Unknown builtin ID: ${builtinId}`;
 		vm.halted = true;
 	}
 }
@@ -741,9 +702,9 @@ export function vmDumpStack(vm: RaiserVM): string {
 		const inst = getFuncInst(func, frame.returnIp > 0 ? frame.returnIp - 1 : 0);
 		const ln = inst.line;
 		if (ln > 0) {
-			trace = trace + "\n  line " + ln + " in " + frame.funcName;
+			trace = `${trace}\n  line ${ln} in ${frame.funcName}`;
 		} else {
-			trace = trace + "\n  " + frame.funcName;
+			trace = `${trace}\n  ${frame.funcName}`;
 		}
 		i = i + 1;
 	}
@@ -754,12 +715,12 @@ export function vmDumpStack(vm: RaiserVM): string {
 		const curInst = getFuncInst(curFunc, curIp);
 		const curLn = curInst.line;
 		if (curLn > 0) {
-			trace = trace + "\n  line " + curLn + " in " + curFunc.name + " (current)";
+			trace = `${trace}\n  line ${curLn} in ${curFunc.name} (current)`;
 		} else {
-			trace = trace + "\n  " + curFunc.name + " (current)";
+			trace = `${trace}\n  ${curFunc.name} (current)`;
 		}
 	} else {
-		trace = trace + "\n  " + curFunc.name + " (current)";
+		trace = `${trace}\n  ${curFunc.name} (current)`;
 	}
 	return trace;
 }
@@ -1270,7 +1231,7 @@ test "budget exceeded stops VM" {
 		vm.opCount = vm.opCount + 1;
 		if (vm.opCount > vm.opLimit) {
 			vm.halted = true;
-			vm.error = "Instruction budget exceeded (" + vm.opLimit + " ops)";
+			vm.error = `Instruction budget exceeded (${vm.opLimit} ops)`;
 			break;
 		}
 		const f = getModuleFunc(mod, vm.funcIdx);

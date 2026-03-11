@@ -61,9 +61,11 @@ function getCompilerName(ccOption: number): string {
 // mode: 0=debug, 1=release, 2=danger
 
 function modeFlags(mode: number): string {
-	if (mode === 2) return " -O3 -flto -w -DNDEBUG";
-	if (mode === 1) return " -O2 -w -DNDEBUG";
-	return " -O0 -g";
+	return match (mode) {
+		2 => " -O3 -flto -w -DNDEBUG",
+		1 => " -O2 -w -DNDEBUG",
+		_ => " -O0 -g",
+	};
 }
 
 // -- Flag accumulation helpers --

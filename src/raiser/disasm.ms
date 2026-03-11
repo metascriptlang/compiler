@@ -86,26 +86,26 @@ function isAxOp(op: RaiserOpcode): boolean {
 }
 
 export function disasmInst(inst: RaiserInstruction): string {
-	if (isAxOp(inst.op)) return opName(inst.op) + " " + getSignedAx(inst);
-	if (isABxOp(inst.op)) return opName(inst.op) + " R" + inst.a + " K" + getBx(inst);
-	return opName(inst.op) + " R" + inst.a + " R" + inst.b + " R" + inst.c;
+	if (isAxOp(inst.op)) return `${opName(inst.op)} ${getSignedAx(inst)}`;
+	if (isABxOp(inst.op)) return `${opName(inst.op)} R${inst.a} K${getBx(inst)}`;
+	return `${opName(inst.op)} R${inst.a} R${inst.b} R${inst.c}`;
 }
 
 // Disassemble a function to a single string (for test assertions)
 export function disasmFunc(func: RaiserFunction): string {
-	let result = "; " + getFuncName(func) + "\n";
+	let result = `; ${getFuncName(func)}\n`;
 	const len = getFuncCodeLen(func);
 	for (let i = 0; i < len; i = i + 1) {
 		const inst = getFuncInst(func, i);
-		let line = "  " + i + ": " + disasmInst(inst);
+		let line = `  ${i}: ${disasmInst(inst)}`;
 		if (inst.op === RaiserOpcode.LoadConst) {
 			const cIdx = getBx(inst);
 			if (cIdx < getFuncConstLen(func)) {
 				const cVal = getFuncConst(func, cIdx);
-				line = line + "  ; " + raiserToString(cVal);
+				line = `${line}  ; ${raiserToString(cVal)}`;
 			}
 		}
-		result = result + line + "\n";
+		result = `${result}${line}\n`;
 	}
 	return result;
 }

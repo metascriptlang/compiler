@@ -105,17 +105,17 @@ export function cacheRemove(cache: TaCacheStore, key: TaQueryKey): boolean {
 // ===== Bulk State Mutation =====
 
 export function markAllRed(cache: TaCacheStore): void {
-	for (let i = 0; i < cache.entries.length; i = i + 1) {
-		if (cache.entries[i].state === TaQueryState.Green) {
-			cache.entries[i].state = TaQueryState.Red;
+	for (const entry of cache.entries) {
+		if (entry.state === TaQueryState.Green) {
+			entry.state = TaQueryState.Red;
 		}
 	}
 }
 
 export function markQueriesRedForFile(cache: TaCacheStore, fileId: number): void {
-	for (let i = 0; i < cache.entries.length; i = i + 1) {
-		if (cache.entries[i].key.fileId === fileId) {
-			cache.entries[i].state = TaQueryState.Red;
+	for (const entry of cache.entries) {
+		if (entry.key.fileId === fileId) {
+			entry.state = TaQueryState.Red;
 		}
 	}
 }

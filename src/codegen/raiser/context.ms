@@ -237,14 +237,14 @@ export function resolveFunc(s: RaiserCompState, name: string): number {
 
 export function declareEnum(s: RaiserCompState, enumName: string, members: string[]): void {
 	for (let i = 0; i < members.length; i = i + 1) {
-		const key = enumName + "." + members[i];
+		const key = `${enumName}.${members[i]}`;
 		const entry: RaiserFuncEntry = { name: key, index: i };
 		s.enumMap.items.push(entry);
 	}
 }
 
 export function resolveEnumMember(s: RaiserCompState, enumName: string, memberName: string): number {
-	const key = enumName + "." + memberName;
+	const key = `${enumName}.${memberName}`;
 	for (let i = 0; i < s.enumMap.items.length; i = i + 1) {
 		if (s.enumMap.items[i].name === key) {
 			return s.enumMap.items[i].index;
@@ -323,7 +323,7 @@ export function emitClosurePair(s: RaiserCompState, funcIdx: number, envReg: num
 export function patchLoopBreaks(s: RaiserCompState): void {
 	const loop = popLoop(s);
 	const target = codeLen(s);
-	for (let i = 0; i < loop.breakPatches.items.length; i = i + 1) {
-		patchJumpTo(s, loop.breakPatches.items[i], target);
+	for (const patchIdx of loop.breakPatches.items) {
+		patchJumpTo(s, patchIdx, target);
 	}
 }

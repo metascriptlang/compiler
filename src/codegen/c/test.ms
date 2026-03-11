@@ -33,11 +33,11 @@ export function genTestDeclNode(g: CGen, node: Node): void {
 	const d = node.data as TestDeclData;
 	if (d.testBody === null) return;
 
-	const funcName = "__ms_test_" + g.nextTestId.toString();
+	const funcName = `__ms_test_${g.nextTestId.toString()}`;
 	g.nextTestId = g.nextTestId + 1;
 
 	const procs = sec(g, CSection.Procs);
-	addLine(procs, "static void " + funcName + "(void) {");
+	addLine(procs, `static void ${funcName}(void) {`);
 
 	if (d.testBody.kind === NodeKind.BlockStmt) {
 		const bd = d.testBody.data as BlockStmtData;
@@ -78,16 +78,16 @@ export function emitTestTable(g: CGen): void {
 
 	const procs = sec(g, CSection.Procs);
 	const modName = mangleModuleName(g.modulePath);
-	const tableName = "__ms_tests_" + modName;
+	const tableName = `__ms_tests_${modName}`;
 
 	// Test entry table (non-static, referenced by dispatcher)
 	const hdrs = sec(g, CSection.ProcHeaders);
-	addLine(hdrs, "MsTestEntry " + tableName + "[];");
-	addLine(procs, "MsTestEntry " + tableName + "[] = {");
+	addLine(hdrs, `MsTestEntry ${tableName}[];`);
+	addLine(procs, `MsTestEntry ${tableName}[] = {`);
 	for (let i = 0; i < g.testEntries.length; i += 1) {
 		const entry = g.testEntries[i];
 		const escaped = escapeCString(entry.name);
-		addLine(procs, "  {\"" + escaped + "\", NULL, " + entry.funcName + "},");
+		addLine(procs, `  {"${escaped}", NULL, ${entry.funcName}},`);
 	}
 	addLine(procs, "  {NULL, NULL, NULL}");
 	addLine(procs, "};");
@@ -107,9 +107,9 @@ export function genTestDispatcher(modulePaths: string[], entryPath: string): str
 	// Forward declarations: init functions + test entry tables
 	for (let i = 0; i < modulePaths.length; i += 1) {
 		const modName = mangleModuleName(modulePaths[i]);
-		addLine(b, "void " + modName + "__DatInit000(void);");
-		addLine(b, "void " + modName + "__Init000(void);");
-		addLine(b, "extern MsTestEntry __ms_tests_" + modName + "[];");
+		addLine(b, `void ${modName}__DatInit000(void);`);
+		addLine(b, `void ${modName}__Init000(void);`);
+		addLine(b, `extern MsTestEntry __ms_tests_${modName}[];`);
 	}
 	addNewline(b);
 
@@ -138,10 +138,10 @@ export function genTestDispatcher(modulePaths: string[], entryPath: string): str
 
 	// Init all modules
 	for (let i = 0; i < modulePaths.length; i += 1) {
-		addLine(b, "  " + mangleModuleName(modulePaths[i]) + "__DatInit000();");
+		addLine(b, `  ${mangleModuleName(modulePaths[i])}__DatInit000();`);
 	}
 	for (let i = 0; i < modulePaths.length; i += 1) {
-		addLine(b, "  " + mangleModuleName(modulePaths[i]) + "__Init000();");
+		addLine(b, `  ${mangleModuleName(modulePaths[i])}__Init000();`);
 	}
 	addNewline(b);
 
@@ -150,7 +150,7 @@ export function genTestDispatcher(modulePaths: string[], entryPath: string): str
 	for (let i = 0; i < modulePaths.length; i += 1) {
 		const modName = mangleModuleName(modulePaths[i]);
 		const escaped = escapeCString(modulePaths[i]);
-		addLine(b, "    {\"" + escaped + "\", __ms_tests_" + modName + "},");
+		addLine(b, `    {"${escaped}", __ms_tests_${modName}},`);
 	}
 	addLine(b, "    {NULL, NULL}");
 	addLine(b, "  };");

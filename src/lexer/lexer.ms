@@ -42,7 +42,7 @@ export function lex(source: string): Result<Token[], string> {
 		if (scanPunctuation(s)) { continue; }
 
 		// Unknown character - error
-		return Result.err(`Unknown character at line ${s.line.toString()}, column ${s.column.toString()}`);
+		return Result.err(`Unknown character at line ${s.line}, column ${s.column}`);
 	}
 
 	// Add EOF token

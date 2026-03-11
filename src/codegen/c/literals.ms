@@ -54,7 +54,7 @@ export function cStringByteLen(s: string): number {
 
 // Wrap in C string literal quotes
 export function cStringLiteral(s: string): string {
-	return "\"" + escapeCString(s) + "\"";
+	return `"${escapeCString(s)}"`;
 }
 
 // ===== Number Formatting =====
@@ -96,22 +96,22 @@ export function formatCInt32(value: number): string {
 
 // Format as int64
 export function formatCInt64(value: number): string {
-	return "" + value + "LL";
+	return `${value}LL`;
 }
 
 // Format as uint32
 export function formatCUint32(value: number): string {
-	return "" + value + "U";
+	return `${value}U`;
 }
 
 // Format as uint64
 export function formatCUint64(value: number): string {
-	return "" + value + "ULL";
+	return `${value}ULL`;
 }
 
 // Format as float32
 export function formatCFloat32(value: number): string {
-	return "" + value + "f";
+	return `${value}f`;
 }
 
 // ===== String Pool Emission =====
@@ -125,14 +125,14 @@ export function emitStringPoolDecls(pool: StringPool, dest: Builder): void {
 		const escaped = escapeCString(entry.value);
 		const len = cStringByteLen(entry.value);
 		// static struct { int64_t cap; char data[N+1]; } TMP_STR_1 = { MS_STRLIT_FLAG | N, "..." };
-		addLine(dest, "static struct { int64_t cap; char data[" + (len + 1) + "]; } " + entry.cName + " = { MS_STRLIT_FLAG | " + len + ", \"" + escaped + "\" };");
+		addLine(dest, `static struct { int64_t cap; char data[${len + 1}]; } ${entry.cName} = { MS_STRLIT_FLAG | ${len}, "${escaped}" };`);
 	}
 }
 
 // Emit an msString expression from a pool entry name and string length.
 // Returns: MS_STRING_LIT(&name, len)
 export function msStringPoolRef(cName: string, len: number): string {
-	return "MS_STRING_LIT(&" + cName + ", " + len + ")";
+	return `MS_STRING_LIT(&${cName}, ${len})`;
 }
 
 // ===== Boolean Literal =====

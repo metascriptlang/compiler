@@ -14,10 +14,8 @@ import { callExprParser } from "./statements/callbacks";
 export function attachComments(state: ParserState, node: Node): Node {
 	if (node !== null) {
 		const comments = takePendingComments(state);
-		let i = 0;
-		while (i < comments.length) {
-			node.comments.push(comments[i]);
-			i = i + 1;
+		for (const comment of comments) {
+			node.comments.push(comment);
 		}
 	}
 	return node;
@@ -113,7 +111,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 		// Out parameter: out name: Type → stored as "out:name"
 		if (current(state).kind === TokenKind.Out) {
 			advance(state);
-			paramPrefix = paramPrefix + "out:";
+			paramPrefix = `${paramPrefix}out:`;
 		}
 		// Extension method receiver (must be first param)
 		if (params.length === 0 && current(state).kind === TokenKind.This) {
@@ -123,7 +121,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 				advance(state);
 				const typeName = current(state);
 				if (!isIdentLike(typeName)) { break; }
-				params.push("typeof:" + typeName.value);
+				params.push(`typeof:${typeName.value}`);
 				advance(state);
 				params.push("");
 				if (current(state).kind === TokenKind.Comma) { advance(state); } else { break; }
@@ -132,7 +130,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 			// Instance extension: this name: Type
 			const receiverName = current(state);
 			if (!isIdentLike(receiverName)) { break; }
-			params.push("this:" + receiverName.value);
+			params.push(`this:${receiverName.value}`);
 			advance(state);
 			params.push(captureOptionalType(state));
 			if (current(state).kind === TokenKind.Comma) { advance(state); } else { break; }
@@ -141,7 +139,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 		// Destructured param: { a, b } or [ a, b ]
 		if (current(state).kind === TokenKind.LBrace || current(state).kind === TokenKind.LBracket) {
 			skipDestructurePattern(state);
-			params.push(paramPrefix + "_destructure");
+			params.push(`${paramPrefix}_destructure`);
 			params.push(captureOptionalType(state));
 			if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
 				advance(state);
@@ -155,7 +153,7 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 		}
 		const param = current(state);
 		if (!isIdentLike(param)) { break; }
-		params.push(paramPrefix + param.value);
+		params.push(`${paramPrefix}${param.value}`);
 		advance(state);
 		params.push(captureOptionalType(state));
 		// Capture default value as AST node (Reference parity: store default expression)

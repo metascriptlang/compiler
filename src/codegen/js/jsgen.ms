@@ -39,86 +39,79 @@ import { transformProgram } from "../../transform/index";
 
 function emitNodeDispatch(gen: JSGenerator, node: Node): void {
 	if (node === null) return;
-	const k = node.kind;
+	match (node.kind) {
+		// Literals
+		NodeKind.NumberLiteral => { emitNumberLiteral(gen, node); },
+		NodeKind.StringLiteral => { emitStringLiteral(gen, node); },
+		NodeKind.BooleanLiteral => { emitBooleanLiteral(gen, node); },
+		NodeKind.NullLiteral => { emitNullLiteral(gen, node); },
+		NodeKind.BigIntLiteral => { emitBigIntLiteral(gen, node); },
+		NodeKind.RegexLiteral => { emitRegexLiteral(gen, node); },
 
-	// Literals
-	if (k === NodeKind.NumberLiteral) { emitNumberLiteral(gen, node); return; }
-	if (k === NodeKind.StringLiteral) { emitStringLiteral(gen, node); return; }
-	if (k === NodeKind.BooleanLiteral) { emitBooleanLiteral(gen, node); return; }
-	if (k === NodeKind.NullLiteral) { emitNullLiteral(gen, node); return; }
-	if (k === NodeKind.BigIntLiteral) { emitBigIntLiteral(gen, node); return; }
-	if (k === NodeKind.RegexLiteral) { emitRegexLiteral(gen, node); return; }
+		// Identifier
+		NodeKind.Identifier => { emitIdentifier(gen, node); },
 
-	// Identifier
-	if (k === NodeKind.Identifier) { emitIdentifier(gen, node); return; }
+		// Expressions
+		NodeKind.BinaryExpr => { emitBinaryExpr(gen, node); },
+		NodeKind.UnaryExpr => { emitUnaryExpr(gen, node); },
+		NodeKind.UpdateExpr => { emitUpdateExpr(gen, node); },
+		NodeKind.CallExpr => { emitCallExpr(gen, node); },
+		NodeKind.MemberExpr => { emitMemberExpr(gen, node); },
+		NodeKind.ArrayAccess => { emitArrayAccess(gen, node); },
+		NodeKind.ObjectLiteral => { emitObjectLiteral(gen, node); },
+		NodeKind.ArrayLiteral => { emitArrayLiteral(gen, node); },
+		NodeKind.ArrowFunction => { emitArrowFunction(gen, node); },
+		NodeKind.FunctionExpr => { emitFunctionExpr(gen, node); },
+		NodeKind.TypeAssertion => { emitTypeAssertion(gen, node); },
+		NodeKind.ConditionalExpr => { emitConditionalExpr(gen, node); },
+		NodeKind.SpreadExpr => { emitSpreadExpr(gen, node); },
+		NodeKind.NewExpr => { emitNewExpr(gen, node); },
+		NodeKind.MoveExpr => { emitMoveExpr(gen, node); },
+		NodeKind.HiddenDeref | NodeKind.HiddenAddr => { const hd = node.data as HiddenDerefData; emitNodeDispatch(gen, hd.expr); },
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => { const hd = node.data as HiddenStdConvData; emitNodeDispatch(gen, hd.convExpr); },
+		NodeKind.AwaitExpr => { emitAwaitExpr(gen, node); },
+		NodeKind.YieldExpr => { emitYieldExpr(gen, node); },
 
-	// Expressions
-	if (k === NodeKind.BinaryExpr) { emitBinaryExpr(gen, node); return; }
-	if (k === NodeKind.UnaryExpr) { emitUnaryExpr(gen, node); return; }
-	if (k === NodeKind.UpdateExpr) { emitUpdateExpr(gen, node); return; }
-	if (k === NodeKind.CallExpr) { emitCallExpr(gen, node); return; }
-	if (k === NodeKind.MemberExpr) { emitMemberExpr(gen, node); return; }
-	if (k === NodeKind.ArrayAccess) { emitArrayAccess(gen, node); return; }
-	if (k === NodeKind.ObjectLiteral) { emitObjectLiteral(gen, node); return; }
-	if (k === NodeKind.ArrayLiteral) { emitArrayLiteral(gen, node); return; }
-	if (k === NodeKind.ArrowFunction) { emitArrowFunction(gen, node); return; }
-	if (k === NodeKind.FunctionExpr) { emitFunctionExpr(gen, node); return; }
-	if (k === NodeKind.TypeAssertion) { emitTypeAssertion(gen, node); return; }
-	if (k === NodeKind.ConditionalExpr) { emitConditionalExpr(gen, node); return; }
-	if (k === NodeKind.SpreadExpr) { emitSpreadExpr(gen, node); return; }
-	if (k === NodeKind.NewExpr) { emitNewExpr(gen, node); return; }
-	if (k === NodeKind.MoveExpr) { emitMoveExpr(gen, node); return; }
-	if (k === NodeKind.HiddenDeref || k === NodeKind.HiddenAddr) { const hd = node.data as HiddenDerefData; emitNodeDispatch(gen, hd.expr); return; }
-	if (k === NodeKind.HiddenStdConv || k === NodeKind.HiddenSubConv) { const hd = node.data as HiddenStdConvData; emitNodeDispatch(gen, hd.convExpr); return; }
-	if (k === NodeKind.AwaitExpr) { emitAwaitExpr(gen, node); return; }
-	if (k === NodeKind.YieldExpr) { emitYieldExpr(gen, node); return; }
+		// Statements
+		NodeKind.VariableDecl => { emitVariableDecl(gen, node); },
+		NodeKind.IfStmt => { emitIfStmt(gen, node); },
+		NodeKind.WhileStmt => { emitWhileStmt(gen, node); },
+		NodeKind.DoWhileStmt => { emitDoWhileStmt(gen, node); },
+		NodeKind.BlockStmt => { emitBlockStmt(gen, node); },
+		NodeKind.ExprStmt => { emitExprStmt(gen, node); },
+		NodeKind.ReturnStmt => { emitReturnStmt(gen, node); },
+		NodeKind.BreakStmt => { emitBreakStmt(gen, node); },
+		NodeKind.ContinueStmt => { emitContinueStmt(gen, node); },
+		NodeKind.SwitchStmt => { emitSwitchStmt(gen, node); },
+		NodeKind.ThrowStmt => { emitThrowStmt(gen, node); },
+		NodeKind.TryCatchStmt => { emitTryCatchStmt(gen, node); },
+		NodeKind.ForStmt => { emitForStmt(gen, node); },
+		NodeKind.ForOfStmt => { emitForOfStmt(gen, node); },
+		NodeKind.UnreachableStmt => { emitUnreachableStmt(gen, node); },
 
-	// Statements
-	if (k === NodeKind.VariableDecl) { emitVariableDecl(gen, node); return; }
-	if (k === NodeKind.IfStmt) { emitIfStmt(gen, node); return; }
-	if (k === NodeKind.WhileStmt) { emitWhileStmt(gen, node); return; }
-	if (k === NodeKind.DoWhileStmt) { emitDoWhileStmt(gen, node); return; }
-	if (k === NodeKind.BlockStmt) { emitBlockStmt(gen, node); return; }
-	if (k === NodeKind.ExprStmt) { emitExprStmt(gen, node); return; }
-	if (k === NodeKind.ReturnStmt) { emitReturnStmt(gen, node); return; }
-	if (k === NodeKind.BreakStmt) { emitBreakStmt(gen, node); return; }
-	if (k === NodeKind.ContinueStmt) { emitContinueStmt(gen, node); return; }
-	if (k === NodeKind.SwitchStmt) { emitSwitchStmt(gen, node); return; }
-	if (k === NodeKind.ThrowStmt) { emitThrowStmt(gen, node); return; }
-	if (k === NodeKind.TryCatchStmt) { emitTryCatchStmt(gen, node); return; }
-	if (k === NodeKind.ForStmt) { emitForStmt(gen, node); return; }
-	if (k === NodeKind.ForOfStmt) { emitForOfStmt(gen, node); return; }
-	if (k === NodeKind.UnreachableStmt) { emitUnreachableStmt(gen, node); return; }
+		// Declarations
+		NodeKind.FunctionDecl => { emitFunctionDecl(gen, node); },
+		NodeKind.EnumDecl => { emitEnumDecl(gen, node); },
+		NodeKind.ClassDecl => { emitClassDecl(gen, node); },
+		NodeKind.ImportDecl => { emitImportDecl(gen, node); },
+		NodeKind.ExportDecl => { emitExportDecl(gen, node); },
+		NodeKind.DecoratedDecl => { emitDecoratedDecl(gen, node); },
 
-	// Declarations
-	if (k === NodeKind.FunctionDecl) { emitFunctionDecl(gen, node); return; }
-	if (k === NodeKind.EnumDecl) { emitEnumDecl(gen, node); return; }
-	if (k === NodeKind.ClassDecl) { emitClassDecl(gen, node); return; }
-	if (k === NodeKind.ImportDecl) { emitImportDecl(gen, node); return; }
-	if (k === NodeKind.ExportDecl) { emitExportDecl(gen, node); return; }
-	if (k === NodeKind.DecoratedDecl) { emitDecoratedDecl(gen, node); return; }
+		// Type-only declarations — no JS output
+		NodeKind.InterfaceDecl | NodeKind.TypeAliasDecl | NodeKind.ExternDecl
+			| NodeKind.MacroDecl | NodeKind.ComptimeBlock | NodeKind.TypeAnnotation => {},
 
-	// Type-only declarations — no JS output
-	if (k === NodeKind.InterfaceDecl) return;
-	if (k === NodeKind.TypeAliasDecl) return;
-	if (k === NodeKind.ExternDecl) return;
-	if (k === NodeKind.MacroDecl) return;
-	if (k === NodeKind.ComptimeBlock) return; // should be evaluated before codegen
-	if (k === NodeKind.TypeAnnotation) return;
+		// Program — emit all statements
+		NodeKind.Program => {
+			const pd = node.data as ProgramData;
+			for (const stmt of pd.programStmts) {
+				emitNodeDispatch(gen, stmt);
+			}
+		},
 
-	// Program — emit all statements
-	if (k === NodeKind.Program) {
-		const pd = node.data as ProgramData;
-		for (const stmt of pd.programStmts) {
-			emitNodeDispatch(gen, stmt);
-		}
-		return;
-	}
-
-	// Fallback for unsupported nodes
-	emit(gen, "/* unsupported: ");
-	emit(gen, "" + k);
-	emit(gen, " */");
+		// Fallback
+		_ => { emit(gen, `/* unsupported: ${node.kind} */`); },
+	};
 }
 
 // Register the dispatcher (lambda wrapper required — top-level fn is generic msClosure, typed var needs msClosureN)

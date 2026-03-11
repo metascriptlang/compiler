@@ -195,15 +195,15 @@ export function captureGenericParams(state: ParserState): string {
 	let depth = 1;
 	while (!isAtEnd(state) && depth > 0) {
 		if (isIdentLikeToken(current(state)) && depth === 1) {
-			if (names !== "") { names = names + ","; }
-			names = names + current(state).value;
+			if (names !== "") { names = `${names},`; }
+			names = `${names}${current(state).value}`;
 			advance(state);
 			// Check for constraint: T extends Type
 			if (!isAtEnd(state) && current(state).kind === TokenKind.Extends && depth === 1) {
 				advance(state); // skip 'extends'
 				// Capture constraint type name
 				if (!isAtEnd(state) && isIdentLikeToken(current(state))) {
-					names = names + ":" + current(state).value;
+					names = `${names}:${current(state).value}`;
 					advance(state);
 				}
 			}
@@ -352,15 +352,15 @@ export function resetExplicitTypeArgs(): void {
 }
 
 export function addExplicitTypeArg(line: number, col: number, typeArgStr: string): void {
-	const key = line.toString() + ":" + col.toString();
+	const key = `${line}:${col}`;
 	const entry: TypeArgEntry = { key, val: typeArgStr };
 	_typeArgStore.items.push(entry);
 }
 
 export function getExplicitTypeArg(line: number, col: number): string {
-	const key = line.toString() + ":" + col.toString();
-	for (let i = 0; i < _typeArgStore.items.length; i += 1) {
-		if (_typeArgStore.items[i].key === key) return _typeArgStore.items[i].val;
+	const key = `${line}:${col}`;
+	for (const item of _typeArgStore.items) {
+		if (item.key === key) return item.val;
 	}
 	return "";
 }
@@ -437,34 +437,34 @@ export function addGenericDecl(name: string, genericParams: string): void {
 
 // Update an existing GenericDeclEntry with field info (called after parsing interface body)
 export function updateGenericDeclFields(name: string, fieldNames: string, fieldTypes: string): void {
-	for (let i = 0; i < _genericDeclStore.items.length; i += 1) {
-		if (_genericDeclStore.items[i].key === name) {
-			_genericDeclStore.items[i].fieldNames = fieldNames;
-			_genericDeclStore.items[i].fieldTypes = fieldTypes;
+	for (const item of _genericDeclStore.items) {
+		if (item.key === name) {
+			item.fieldNames = fieldNames;
+			item.fieldTypes = fieldTypes;
 			return;
 		}
 	}
 }
 
 export function getGenericDecl(name: string): string {
-	for (let i = 0; i < _genericDeclStore.items.length; i += 1) {
-		if (_genericDeclStore.items[i].key === name) return _genericDeclStore.items[i].val;
+	for (const item of _genericDeclStore.items) {
+		if (item.key === name) return item.val;
 	}
 	return "";
 }
 
 // Get "|"-joined field names for a generic interface/class
 export function getGenericDeclFieldNames(name: string): string {
-	for (let i = 0; i < _genericDeclStore.items.length; i += 1) {
-		if (_genericDeclStore.items[i].key === name) return _genericDeclStore.items[i].fieldNames;
+	for (const item of _genericDeclStore.items) {
+		if (item.key === name) return item.fieldNames;
 	}
 	return "";
 }
 
 // Get "|"-joined field type annotations for a generic interface/class
 export function getGenericDeclFieldTypes(name: string): string {
-	for (let i = 0; i < _genericDeclStore.items.length; i += 1) {
-		if (_genericDeclStore.items[i].key === name) return _genericDeclStore.items[i].fieldTypes;
+	for (const item of _genericDeclStore.items) {
+		if (item.key === name) return item.fieldTypes;
 	}
 	return "";
 }

@@ -63,7 +63,7 @@ export function provideSource(provider: SourceProvider, path: string): Result<st
 			return Result.ok(content);
 		}
 	}
-	return Result.err("File not found: " + path);
+	return Result.err(`File not found: ${path}`);
 }
 
 // ===== C Header Detection =====
@@ -95,7 +95,7 @@ function markCHeader(graph: ModuleGraph, path: string): void {
 	const mod = findModule(graph, path);
 	if (mod === null) return;
 	mod.isCHeader = true;
-	mod.source = "// C header: " + path;
+	mod.source = `// C header: ${path}`;
 	popImportStack(graph);
 	mod.state = ModuleState.Ready;
 	graph.loadOrder.push(path);
@@ -120,21 +120,21 @@ function loadSourceModule(graph: ModuleGraph, path: string, provider: SourceProv
 	// Parse with recovery — always get partial AST, errors in state.errors
 	const lr = lex(mod.source);
 	if (!lr.ok) {
-		mod.errors.push(createModuleError("Lex: " + lr.error, 0, 0, ErrorSeverity.Error));
+		mod.errors.push(createModuleError(`Lex: ${lr.error}`, 0, 0, ErrorSeverity.Error));
 		finalizeModule(graph, mod, path);
 		return false;
 	}
 	const parseState = createState(lr.value);
 	const parseResult = callStateProgramParser(parseState);
 	for (const parseErr of parseState.errors) {
-		mod.errors.push(createModuleError("Parse: " + parseErr, 0, 0, ErrorSeverity.Error));
+		mod.errors.push(createModuleError(`Parse: ${parseErr}`, 0, 0, ErrorSeverity.Error));
 	}
 	// NOTE: keep state as Loading until imports are processed — cycle detection
 	// in loadModule checks for Loading state to detect circular imports.
 
 	// Walk AST for import declarations (works on partial ASTs)
 	if (!parseResult.ok) {
-		mod.errors.push(createModuleError("Parse: " + parseResult.error, 0, 0, ErrorSeverity.Error));
+		mod.errors.push(createModuleError(`Parse: ${parseResult.error}`, 0, 0, ErrorSeverity.Error));
 		finalizeModule(graph, mod, path);
 		return false;
 	}
@@ -217,7 +217,7 @@ function processImportDecl(graph: ModuleGraph, mod: Module, node: Node, provider
 		}
 
 		if (resolved === "") {
-			mod.errors.push(createModuleError("Cannot resolve import '" + specifier + "'", 0, 0, ErrorSeverity.Error));
+			mod.errors.push(createModuleError(`Cannot resolve import '${specifier}'`, 0, 0, ErrorSeverity.Error));
 			return;
 		}
 
@@ -236,21 +236,19 @@ function processImportDecl(graph: ModuleGraph, mod: Module, node: Node, provider
 		const candidates = resolveImportWithConfig(specifier, mod.path, config);
 
 		let resolved = "";
-		let i = 0;
-		while (i < candidates.length) {
+		for (const candidate of candidates) {
 			if (resolved === "") {
-				const trySource = provideSource(provider, candidates[i]);
+				const trySource = provideSource(provider, candidate);
 				if (trySource.ok) {
-					resolved = candidates[i];
+					resolved = candidate;
 				}
 			}
-			i = i + 1;
 		}
 
 		if (resolved === "") {
 			// std/ with empty stdPath: silently skip (handled externally)
 			if (isStdImport(specifier) && config.stdPath.length === 0) return;
-			mod.errors.push(createModuleError("Cannot resolve import '" + specifier + "'", 0, 0, ErrorSeverity.Error));
+			mod.errors.push(createModuleError(`Cannot resolve import '${specifier}'`, 0, 0, ErrorSeverity.Error));
 			return;
 		}
 

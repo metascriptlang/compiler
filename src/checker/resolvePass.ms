@@ -21,7 +21,7 @@ import {
 	setMinArity, typeNameOf, assignType, isInterfaceType, unwrapRef,
 } from "./types";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, lookupSymbol, lookupLocal, defineSymbol, makeSymbol, openScope, closeScope, SymbolState, hasFlag, setFlag, SymbolFlag } from "./symbol";
-import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError } from "./context";
+import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, sgRecordSym } from "./context";
 import { trimStr, sliceStr, findChar, charAt, splitTopLevel, parseIntStr, bareAfterDelim } from "../utils/string";
 import { getProperty } from "./types";
 import { getGenericDecl, getGenericDeclFieldNames, getGenericDeclFieldTypes, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
@@ -561,6 +561,7 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 
 	// Set state to Shaped immediately to allow circular references in fields
 	sym.state = SymbolState.Shaped;
+	sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.interfaceName.length, sym, sym.symbolType, SymbolKind.Interface, d.interfaceName, "", true);
 
 	// Check for generic params (e.g., interface Box<T> — parser stores in side-channel)
 	const genericStr = getGenericDecl(d.interfaceName);
@@ -599,6 +600,15 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 	const ifaceType = createStruct(d.interfaceName, d.interfaceFields, fieldTypes, true);
 	assignType(sym.symbolType, ifaceType);
 	node.nodeType = sym.symbolType;
+	// Record each interface field DEF for symbol graph
+	// (no per-field location available; use interface node location as fallback)
+	let ri = 0;
+	while (ri < d.interfaceFields.length) {
+		const fieldSym = makeSymbol(d.interfaceFields[ri], SymbolKind.Property, fieldTypes[ri], false);
+		fieldSym.state = SymbolState.Shaped;
+		sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.interfaceFields[ri].length, fieldSym, fieldTypes[ri], SymbolKind.Property, d.interfaceFields[ri], d.interfaceName, true);
+		ri = ri + 1;
+	}
 }
 
 function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
@@ -606,6 +616,7 @@ function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 	const sym = lookupSymbol(ctx.table, d.aliasName);
 	if (sym === null) return;
 	node.resolvedSym = sym;
+	sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.aliasName.length, sym, sym.symbolType, SymbolKind.TypeAlias, d.aliasName, "", true);
 
 	if (d.aliasType === "" && d.discriminantName === "") {
 		return;

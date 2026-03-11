@@ -54,7 +54,7 @@ export function execute(ctx: RaiserContext): boolean {
 	ctx.arrayHeap = vm.arrayHeap;
 	ctx.objectHeap = vm.objectHeap;
 	if (vm.error !== "") {
-		ctx.lastError = vm.error + "\n" + vmDumpStack(vm);
+		ctx.lastError = `${vm.error}\n${vmDumpStack(vm)}`;
 		return false;
 	}
 	ctx.lastError = "";

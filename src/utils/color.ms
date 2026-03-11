@@ -39,7 +39,7 @@ export function setColorEnabled(enabled: boolean): void {
 
 function wrap(code: string, text: string): string {
 	if (!isEnabled()) return text;
-	return "\x1b[" + code + "m" + text + "\x1b[0m";
+	return `\x1b[${code}m${text}\x1b[0m`;
 }
 
 // ===== Style modifiers =====

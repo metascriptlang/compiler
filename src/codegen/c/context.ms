@@ -117,14 +117,14 @@ export function noLoc(): CLoc {
 
 // Read a CLoc — dereference if indirect
 export function rdLoc(loc: CLoc): string {
-	if (loc.isIndirect) return "(*" + loc.snippet + ")";
+	if (loc.isIndirect) return `(*${loc.snippet})`;
 	return loc.snippet;
 }
 
 // Address of a CLoc
 export function addrLoc(loc: CLoc): string {
 	if (loc.isIndirect) return loc.snippet;
-	return "(&" + loc.snippet + ")";
+	return `(&${loc.snippet})`;
 }
 
 // ===== CBlock — nested scope (standard reference parity) =====
@@ -136,6 +136,7 @@ export interface CBlock {
 	init: Builder;         // cpsInit for this block
 	stmts: Builder;        // cpsStmts for this block
 	isLoop: boolean;
+	nestedFinallyDepth: number;  // snapshot of nestedFinally.length at block entry (reference: TBlock.nestedTryStmts)
 }
 
 export function createBlock(id: number, isLoop: boolean): CBlock {
@@ -146,6 +147,7 @@ export function createBlock(id: number, isLoop: boolean): CBlock {
 		init: createBuilder(),
 		stmts: createBuilder(),
 		isLoop,
+		nestedFinallyDepth: 0,
 	};
 }
 
@@ -162,15 +164,14 @@ export interface CProc {
 	params: string[];      // parameter names (mangled)
 	seenSinks: string[];   // tracks declared $sink_N_ temps (prevents duplicates)
 	indirectParams: string[];  // reference pointer introduction params — auto-deref as (*name) (Reference: indirect location parity)
+	nestedFinally: Node[];     // stack of finally body nodes (reference: p.nestedTryStmts[].fin)
 }
 
 // reference parity: check if an identifier is a pointer introduction param (indirect location)
 export function isIndirectParam(p: CProc, name: string): boolean {
 	if (p === null) return false;
-	let i = 0;
-	while (i < p.indirectParams.length) {
-		if (p.indirectParams[i] === name) return true;
-		i += 1;
+	for (const param of p.indirectParams) {
+		if (param === name) return true;
 	}
 	return false;
 }
@@ -190,6 +191,7 @@ export function createProc(name: string, returnType: Type): CProc {
 		params: [],
 		seenSinks: [],
 		indirectParams: [],
+		nestedFinally: [],
 	};
 }
 
@@ -220,7 +222,7 @@ export function emitStmtsLine(p: CProc, s: string): void {
 	for (let i = 0; i < p.blocks[idx].stmts.indent; i += 1) {
 		indent = indent + "  ";
 	}
-	p.blocks[idx].stmts.buf = p.blocks[idx].stmts.buf + indent + s + "\n";
+	p.blocks[idx].stmts.buf = `${p.blocks[idx].stmts.buf}${indent}${s}\n`;
 }
 
 // Emit newline to current block's stmts
@@ -244,7 +246,7 @@ export function emitProcLocals(p: CProc, s: string): void {
 }
 
 export function emitProcLocalsLine(p: CProc, s: string): void {
-	p.blocks[0].locals.buf = p.blocks[0].locals.buf + s + "\n";
+	p.blocks[0].locals.buf = `${p.blocks[0].locals.buf}${s}\n`;
 }
 
 // Read current block's stmts content
@@ -297,6 +299,7 @@ export function pProcStmts(p: CProc): Builder {
 export function pushBlock(p: CProc, isLoop: boolean): void {
 	p.labels += 1;
 	const block = createBlock(p.labels, isLoop);
+	block.nestedFinallyDepth = p.nestedFinally.length;  // reference: TBlock.nestedTryStmts snapshot
 	p.blocks.push(block);
 	if (isLoop) p.withinLoop += 1;
 }
@@ -311,7 +314,7 @@ export function popBlock(p: CProc): CBlock {
 	if (isLoop) p.withinLoop -= 1;
 	// Merge block's sections into parent's stmts
 	const parentIdx = p.blocks.length - 1;
-	p.blocks[parentIdx].stmts.buf = p.blocks[parentIdx].stmts.buf + blockLocals + blockInit + blockStmts;
+	p.blocks[parentIdx].stmts.buf = `${p.blocks[parentIdx].stmts.buf}${blockLocals}${blockInit}${blockStmts}`;
 	// Return a placeholder (callers rarely use the return value)
 	return p.blocks[parentIdx];
 }
@@ -321,8 +324,8 @@ export function popBlock(p: CProc): CBlock {
 
 export function getTemp(p: CProc, cType: string): CLoc {
 	p.labels += 1;
-	const name = "T" + p.labels + "_";
-	emitProcLocalsLine(p, cType + " " + name + ";");
+	const name = `T${p.labels}_`;
+	emitProcLocalsLine(p, `${cType} ${name};`);
 	const loc = initLoc(CLocKind.Temp, CStorageLoc.Stack);
 	loc.snippet = name;
 	return loc;
@@ -511,7 +514,7 @@ export function sec(g: CGen, s: CSection): Builder {
 // Module-level temp name
 export function moduleTemp(g: CGen): string {
 	g.labels += 1;
-	return "TM" + g.labels + "_";
+	return `TM${g.labels}_`;
 }
 
 // Emit #line directive for source mapping (Standard reference parity: line instrumentation)
@@ -523,7 +526,7 @@ export function emitLineDir(g: CGen, p: CProc, node: Node): void {
 	if (loc.line === g.lastLineLine && g.modulePath === g.lastLineFile) return;
 	g.lastLineLine = loc.line;
 	g.lastLineFile = g.modulePath;
-	emitStmts(p, "\n#line " + loc.line + " \"" + g.modulePath + "\"\n");
+	emitStmts(p, `\n#line ${loc.line} "${g.modulePath}"\n`);
 }
 
 // ===== Final Assembly — concatenate all sections =====

@@ -384,7 +384,7 @@ function parsePrimary(state: ParserState): ExprResult {
 		const sEnd = state.position;
 		const sizeofType = collectTokenText(state, sStart, sEnd);
 		if (sizeofType === "") {
-			return Result.err(`Expected type after sizeof at line ${token.line.toString()}`);
+			return Result.err(`Expected type after sizeof at line ${token.line}`);
 		}
 		return Result.ok(createNode(NodeKind.SizeofExpr, { sizeofType }, token));
 	}
@@ -498,7 +498,7 @@ function parsePrimary(state: ParserState): ExprResult {
 		return Result.ok(createNode(NodeKind.Identifier, { name: token.value }, token));
 	}
 
-	return Result.err(`Unexpected token: ${token.value} at line ${token.line.toString()}`);
+	return Result.err(`Unexpected token: ${token.value} at line ${token.line}`);
 }
 
 // ===== Core Expression Tests =====

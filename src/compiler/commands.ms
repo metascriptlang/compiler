@@ -48,10 +48,8 @@ export function cmdDumpAst(filePath: string): void {
 	}
 	const program = result.value;
 	const pd = program.data as ProgramData;
-	let i = 0;
-	while (i < pd.programStmts.length) {
-		printAstNode(pd.programStmts[i], 0);
-		i += 1;
+	for (const stmt of pd.programStmts) {
+		printAstNode(stmt, 0);
 	}
 }
 

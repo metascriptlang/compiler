@@ -59,7 +59,7 @@ function anonFieldKey(t: Type): string {
 	if (t === null) return "null";
 	// For anonymous nested objects, recurse
 	if (t.kind === TypeKind.Struct && t.typeName.length === 0) {
-		return "anon(" + anonStructuralKey(t) + ")";
+		return `anon(${anonStructuralKey(t)})`;
 	}
 	// Named objects use their name
 	if (t.kind === TypeKind.Struct) return t.typeName;
@@ -181,17 +181,17 @@ export function buildAnonStructDef(structName: string, rawName: string): string 
 	// splitTopLevel handles nested brackets/generics and auto-trims
 	const fields = splitTopLevel(body, ",");
 
-	let def = "#ifndef " + structName + "_DEFINED\n";
-	def = def + "#define " + structName + "_DEFINED\n";
-	def = def + "typedef struct " + structName + " " + structName + ";\n";
-	def = def + "struct " + structName + " {\n";
+	let def = `#ifndef ${structName}_DEFINED\n`;
+	def = def + `#define ${structName}_DEFINED\n`;
+	def = def + `typedef struct ${structName} ${structName};\n`;
+	def = def + `struct ${structName} {\n`;
 
 	for (let fi = 0; fi < fields.length; fi += 1) {
 		const colonPos = findChar(fields[fi], ":");
 		if (colonPos < 0) continue;
 		const fname = trimStr(fields[fi].slice(0, colonPos));
 		const ftype = trimStr(fields[fi].slice(colonPos + 1, fields[fi].length));
-		def = def + "  " + annotationToC(ftype) + " " + safeName(fname) + ";\n";
+		def = def + `  ${annotationToC(ftype)} ${safeName(fname)};\n`;
 	}
 
 	def = def + "};\n#endif\n";
@@ -233,7 +233,7 @@ export function typeKey(t: Type): string {
 		TypeKind.Struct => {
 			// Anonymous/structural types: use structural key to distinguish
 			if (isAnonTypeName(t.typeName)) {
-				"anon(" + anonStructuralKey(t) + ")";
+				`anon(${anonStructuralKey(t)})`;
 			} else {
 				"object:" + t.typeName;
 			}
@@ -244,7 +244,7 @@ export function typeKey(t: Type): string {
 		},
 		TypeKind.SizedArray => {
 			const elemKey = typeKey(t.typeReturn);
-			"sizedArray:" + elemKey + "[" + intToString(t.typeFlags) + "]";
+			`sizedArray:${elemKey}[${intToString(t.typeFlags)}]`;
 		},
 		TypeKind.Span => {
 			const elemKey = typeKey(t.typeReturn);
@@ -265,10 +265,10 @@ export function typeKey(t: Type): string {
 		TypeKind.Ptr => { "ptr:" + typeKey(t.typeReturn); },
 		TypeKind.Var => { "var:" + typeKey(t.typeReturn); },
 		TypeKind.Borrow => { "borrow:" + typeKey(t.typeReturn); },
-		TypeKind.Map => { "map:" + typeKey(t.typeReturn) + ":" + typeKey(t.typeExtra); },
+		TypeKind.Map => { `map:${typeKey(t.typeReturn)}:${typeKey(t.typeExtra)}`; },
 		TypeKind.Set => { "set:" + typeKey(t.typeReturn); },
 		TypeKind.Result => {
-			"result:" + typeKey(t.typeReturn) + "," + typeKey(t.typeExtra);
+			`result:${typeKey(t.typeReturn)},${typeKey(t.typeExtra)}`;
 		},
 		TypeKind.TypeReference => { "typeref:" + t.typeName; },
 		TypeKind.Distinct => { "distinct:" + t.typeName; },
@@ -459,7 +459,7 @@ export function ensureForwardDecl(g: CGen, typeName: string): void {
 	typeCacheSet(g.forwTypeCache, key, typeName);
 	// Skip runtime types already defined in system.h or runtime headers
 	if (typeName === "msClosure") return;
-	addLine(sec(g, CSection.ForwardDecls), "#ifndef " + typeName + "_DEFINED\ntypedef struct " + typeName + " " + typeName + ";\n#endif");
+	addLine(sec(g, CSection.ForwardDecls), `#ifndef ${typeName}_DEFINED\ntypedef struct ${typeName} ${typeName};\n#endif`);
 }
 
 // Ensure msTypeInfo extern declaration exists for cross-module new expressions.
@@ -469,7 +469,7 @@ export function ensureTypeInfo(g: CGen, className: string): void {
 	const key = "typeInfo:" + className;
 	if (typeCacheHas(g.forwTypeCache, key)) return;
 	typeCacheSet(g.forwTypeCache, key, className);
-	addLine(sec(g, CSection.ForwardDecls), "extern msTypeInfo " + className + "_typeInfo;");
+	addLine(sec(g, CSection.ForwardDecls), `extern msTypeInfo ${className}_typeInfo;`);
 }
 
 // ===== Full Type Description =====
@@ -601,16 +601,16 @@ function genEnumType(g: CGen, t: Type): string {
 	typeCacheSet(g.typeCache, key, name);
 
 	// Emit: typedef int32_t EnumName;
-	addLine(sec(g, CSection.Types), "typedef int32_t " + name + ";");
+	addLine(sec(g, CSection.Types), `typedef int32_t ${name};`);
 
 	// Emit enum constants (use explicit values from typeChildren if available)
 	for (let i = 0; i < t.typeNames.length; i += 1) {
-		const memberName = name + "_" + mangle(t.typeNames[i]);
+		const memberName = `${name}_${mangle(t.typeNames[i])}`;
 		let val = i;
 		if (t.typeChildren !== null && i < t.typeChildren.length && t.typeChildren[i] !== null) {
 			val = t.typeChildren[i].typeFlags as number;
 		}
-		addLine(sec(g, CSection.Types), "#define " + memberName + " (((" + name + ")" + val.toString() + "))");
+		addLine(sec(g, CSection.Types), `#define ${memberName} (((${name})${val.toString()}))`);
 	}
 	addNewline(sec(g, CSection.Types));
 
@@ -652,11 +652,11 @@ function genObjectType(g: CGen, t: Type): string {
 	}
 
 	// Build struct definition string
-	let structDef = "#ifndef " + name + "_DEFINED\n";
-	structDef = structDef + "#define " + name + "_DEFINED\n";
-	structDef = structDef + "struct " + name + " {\n";
+	let structDef = `#ifndef ${name}_DEFINED\n`;
+	structDef = structDef + `#define ${name}_DEFINED\n`;
+	structDef = structDef + `struct ${name} {\n`;
 	for (let i = 0; i < t.typeNames.length; i += 1) {
-		structDef = structDef + "  " + fieldTypes[i] + " " + mangleFieldName(t.typeNames[i]) + ";\n";
+		structDef = structDef + `  ${fieldTypes[i]} ${mangleFieldName(t.typeNames[i])};\n`;
 	}
 	structDef = structDef + "};\n#endif\n";
 
@@ -711,7 +711,7 @@ function genUnionType(g: CGen, t: Type): string {
 	let vi = 0;
 	while (vi < t.typeChildren.length) {
 		const variant = t.typeChildren[vi];
-		const varName = name + "_v" + intToString(vi);
+		const varName = `${name}_v${intToString(vi)}`;
 
 		// Cache variant Object type so getTypeDesc returns the variant struct name.
 		// First variant with a given structural key wins — duplicates reuse it.
@@ -747,7 +747,7 @@ function genUnionType(g: CGen, t: Type): string {
 	vi = 0;
 	while (vi < t.typeChildren.length) {
 		const variant = t.typeChildren[vi];
-		const varName = name + "_v" + intToString(vi);
+		const varName = `${name}_v${intToString(vi)}`;
 		const fieldTypes = allFieldTypes[vi];
 
 		// Skip duplicate: this variant reuses an earlier variant's typedef
@@ -761,7 +761,7 @@ function genUnionType(g: CGen, t: Type): string {
 		if (variant !== null && variant.typeNames !== null) {
 			let fi = 0;
 			while (fi < variant.typeNames.length) {
-				addLine(b, fieldTypes[fi] + " " + mangleFieldName(variant.typeNames[fi]) + ";");
+				addLine(b, `${fieldTypes[fi]} ${mangleFieldName(variant.typeNames[fi])};`);
 				fi += 1;
 			}
 		}
@@ -773,9 +773,9 @@ function genUnionType(g: CGen, t: Type): string {
 	addNewline(b);
 
 	// Phase 2: Emit wrapper struct with anonymous union
-	addLine(b, "#ifndef " + name + "_DEFINED");
-	addLine(b, "#define " + name + "_DEFINED");
-	addLine(b, "struct " + name + " {");
+	addLine(b, `#ifndef ${name}_DEFINED`);
+	addLine(b, `#define ${name}_DEFINED`);
+	addLine(b, `struct ${name} {`);
 	b.indent += 1;
 	// Discriminated union: use enum type for _tag; undiscriminated: int32_t
 	if (t.typeExtra !== null && t.typeExtra.kind === TypeKind.Enum && t.typeExtra.typeName !== "") {
@@ -789,7 +789,7 @@ function genUnionType(g: CGen, t: Type): string {
 	while (vi < t.typeChildren.length) {
 		// Use canonical name — duplicate variants share the same typedef
 		const memberType = canonicalNames[vi];
-		addLine(b, memberType + " v" + intToString(vi) + ";");
+		addLine(b, `${memberType} v${intToString(vi)};`);
 		vi += 1;
 	}
 	b.indent -= 1;
@@ -855,13 +855,13 @@ function genArrayType(g: CGen, t: Type): string {
 			const contentName = arrTypeName + "__Content";
 			const b = sec(g, CSection.Types);
 			// Forward-declare both
-			addLine(sec(g, CSection.ForwardDecls), "typedef struct " + arrTypeName + " " + arrTypeName + ";");
-			addLine(sec(g, CSection.ForwardDecls), "typedef struct " + contentName + " " + contentName + ";");
+			addLine(sec(g, CSection.ForwardDecls), `typedef struct ${arrTypeName} ${arrTypeName};`);
+			addLine(sec(g, CSection.ForwardDecls), `typedef struct ${contentName} ${contentName};`);
 			// Emit slim struct immediately (no dependency on element type)
-			addLine(b, "struct " + arrTypeName + " { int64_t len; " + contentName + "* p; };");
+			addLine(b, `struct ${arrTypeName} { int64_t len; ${contentName}* p; };`);
 			// Defer content struct until element type is complete
 			deferredArrayContentStructs.push(
-				"struct " + contentName + " { int64_t cap; " + mangle(elemType) + " data[]; };"
+				`struct ${contentName} { int64_t cap; ${mangle(elemType)} data[]; };`
 			);
 		} else {
 			// Only use 'struct X' prefix for codegen-emitted structs.
@@ -870,7 +870,7 @@ function genArrayType(g: CGen, t: Type): string {
 			const needsStructPrefix = t.typeReturn !== null
 				&& (t.typeReturn.kind === TypeKind.Struct || t.typeReturn.kind === TypeKind.Enum);
 			const elemRef = needsStructPrefix ? ("struct " + mangledElem) : mangledElem;
-			const line = "typedef MS_ARRAY(" + elemRef + ") " + arrTypeName + ";";
+			const line = `typedef MS_ARRAY(${elemRef}) ${arrTypeName};`;
 			addLine(sec(g, CSection.Types), line);
 		}
 	}
@@ -892,15 +892,15 @@ function genSizedArrayType(g: CGen, t: Type): string {
 	const elemType = getTypeDesc(g, t.typeReturn);
 	const size = t.typeFlags;
 	const key = typeKey(t);
-	const name = "msSizedArray_" + mangle(elemType) + "_" + intToString(size);
+	const name = `msSizedArray_${mangle(elemType)}_${intToString(size)}`;
 
 	if (typeCacheHas(g.typeCache, key)) return typeCacheGet(g.typeCache, key);
 	typeCacheSet(g.typeCache, key, name);
 
 	ensureForwardDecl(g, name);
 	const b = sec(g, CSection.Types);
-	addLine(b, "struct " + name + " {");
-	addLine(b, "    " + elemType + " data[" + intToString(size) + "];");
+	addLine(b, `struct ${name} {`);
+	addLine(b, `    ${elemType} data[${intToString(size)}];`);
 	addLine(b, "};");
 	addNewline(b);
 
@@ -919,8 +919,8 @@ function genSpanType(g: CGen, t: Type): string {
 
 	ensureForwardDecl(g, name);
 	const b = sec(g, CSection.Types);
-	addLine(b, "struct " + name + " {");
-	addLine(b, "    " + elemType + "* data;");
+	addLine(b, `struct ${name} {`);
+	addLine(b, `    ${elemType}* data;`);
 	addLine(b, "    int64_t len;");
 	addLine(b, "};");
 	addNewline(b);
@@ -997,7 +997,7 @@ function genClosureCast(g: CGen, t: Type, withEnv: boolean, nrvoType: string): s
 	} else if (params === "") {
 		params = "void";
 	}
-	return retC + "(*)" + "(" + params + ")";
+	return `${retC}(*)(${params})`;
 }
 
 // Reference parity: genProcParams adds Result* param for isInvalidReturnType.
@@ -1023,15 +1023,15 @@ export function genResultType(g: CGen, t: Type): string {
 	const key = typeKey(t);
 
 	// Generate unique struct name
-	const name = "msResult_" + mangle(okType) + "_" + mangle(errType);
+	const name = `msResult_${mangle(okType)}_${mangle(errType)}`;
 	typeCacheSet(g.typeCache, key, name);
 
 	// Emit struct (guarded to avoid redefinition when cross-module protos exist)
 	ensureForwardDecl(g, name);
 	const b = sec(g, CSection.Types);
-	addLine(b, "#ifndef " + name + "_DEFINED");
-	addLine(b, "#define " + name + "_DEFINED");
-	addLine(b, "struct " + name + " {");
+	addLine(b, `#ifndef ${name}_DEFINED`);
+	addLine(b, `#define ${name}_DEFINED`);
+	addLine(b, `struct ${name} {`);
 	b.indent += 1;
 	addLine(b, "MS_BOOL ok;");
 	if (okType !== "void") {
@@ -1061,14 +1061,14 @@ function genTupleType(g: CGen, t: Type): string {
 
 	// Emit struct: fields named _0, _1, ...
 	const b = sec(g, CSection.Types);
-	addLine(b, "#ifndef " + name + "_DEFINED");
-	addLine(b, "#define " + name + "_DEFINED");
-	addLine(b, "struct " + name + " {");
+	addLine(b, `#ifndef ${name}_DEFINED`);
+	addLine(b, `#define ${name}_DEFINED`);
+	addLine(b, `struct ${name} {`);
 	b.indent += 1;
 	let i = 0;
 	while (i < t.typeChildren.length) {
 		const ft = getTypeDesc(g, t.typeChildren[i]);
-		addLine(b, ft + " _" + intToString(i) + ";");
+		addLine(b, `${ft} _${intToString(i)};`);
 		i += 1;
 	}
 	b.indent -= 1;

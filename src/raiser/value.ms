@@ -54,6 +54,15 @@ export function raiserObject(handle: number): RaiserValue {
 	return { kind: RaiserValueKind.Object, intVal: handle, floatVal: 0.0, strVal: "" };
 }
 
+// --- Deep copy (avoids pointer aliasing) ---
+
+export function copyValueInto(dst: RaiserValue, src: RaiserValue): void {
+	dst.kind = src.kind;
+	dst.intVal = src.intVal;
+	dst.floatVal = src.floatVal;
+	dst.strVal = src.strVal;
+}
+
 // --- Accessors ---
 
 export function raiserToInt(v: RaiserValue): number {
@@ -99,8 +108,8 @@ export function raiserToString(v: RaiserValue): string {
 	return match (v.kind) {
 		RaiserValueKind.Nil => "nil",
 		RaiserValueKind.Bool => { if (v.intVal !== 0) { return "true"; } else { return "false"; } },
-		RaiserValueKind.Int => "" + v.intVal,
-		RaiserValueKind.Float => "" + v.floatVal,
+		RaiserValueKind.Int => `${v.intVal}`,
+		RaiserValueKind.Float => `${v.floatVal}`,
 		RaiserValueKind.String => v.strVal,
 		RaiserValueKind.Array => "[array]",
 		RaiserValueKind.Object => "[object]",
@@ -214,11 +223,7 @@ export function heapArrayGet(heap: RaiserArrayHeap, handle: number, index: numbe
 
 export function heapArraySet(heap: RaiserArrayHeap, handle: number, index: number, val: RaiserValue): void {
 	// Deep copy to avoid pointer aliasing
-	const target = heap.arrays[handle].items[index];
-	target.kind = val.kind;
-	target.intVal = val.intVal;
-	target.floatVal = val.floatVal;
-	target.strVal = val.strVal;
+	copyValueInto(heap.arrays[handle].items[index], val);
 }
 
 export function heapArrayPush(heap: RaiserArrayHeap, handle: number, val: RaiserValue): void {
@@ -313,9 +318,9 @@ export function heapObjectFieldCount(heap: RaiserObjectHeap, handle: number): nu
 
 export function heapObjectGetField(heap: RaiserObjectHeap, handle: number, name: string): RaiserValue {
 	const obj = heap.objects[handle];
-	for (let i = 0; i < obj.fields.length; i = i + 1) {
-		if (obj.fields[i].name === name) {
-			return obj.fields[i].value;
+	for (const field of obj.fields) {
+		if (field.name === name) {
+			return field.value;
 		}
 	}
 	// Field not found — return nil
@@ -325,13 +330,10 @@ export function heapObjectGetField(heap: RaiserObjectHeap, handle: number, name:
 export function heapObjectSetField(heap: RaiserObjectHeap, handle: number, name: string, val: RaiserValue): void {
 	const obj = heap.objects[handle];
 	// Check if field already exists
-	for (let i = 0; i < obj.fields.length; i = i + 1) {
-		if (obj.fields[i].name === name) {
+	for (const field of obj.fields) {
+		if (field.name === name) {
 			// Update existing field (deep copy)
-			obj.fields[i].value.kind = val.kind;
-			obj.fields[i].value.intVal = val.intVal;
-			obj.fields[i].value.floatVal = val.floatVal;
-			obj.fields[i].value.strVal = val.strVal;
+			copyValueInto(field.value, val);
 			return;
 		}
 	}

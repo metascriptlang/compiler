@@ -23,113 +23,62 @@ import { compileExpr, exprIsString } from "./expressions";
 // --- Statement compilation ---
 
 export function compileStmt(s: RaiserCompState, node: Node): void {
-	const k = node.kind;
-
-	if (k === NodeKind.ReturnStmt) {
-		const d = node.data as ReturnStmtData;
-		if (d.argument !== null) {
-			const reg = compileExpr(s, d.argument);
-			emitRet(s, reg);
-		} else {
-			const reg = allocReg(s);
-			emitLoadConst(s, reg, raiserNil());
-			emitRet(s, reg);
-		}
-		return;
-	}
-
-	if (k === NodeKind.ExprStmt) {
-		const d = node.data as ExprStmtData;
-		compileExpr(s, d.expr);
-		return;
-	}
-
-	if (k === NodeKind.BlockStmt) {
-		compileBlock(s, node);
-		return;
-	}
-
-	if (k === NodeKind.VariableDecl) {
-		compileVariableDecl(s, node);
-		return;
-	}
-
-	if (k === NodeKind.IfStmt) {
-		compileIfStmt(s, node);
-		return;
-	}
-
-	if (k === NodeKind.WhileStmt) {
-		compileWhileStmt(s, node);
-		return;
-	}
-
-	if (k === NodeKind.BreakStmt) {
-		if (!hasLoop(s)) return;
-		const loop = currentLoop(s);
-		const jumpIdx = emitJumpPlaceholder(s);
-		loop.breakPatches.items.push(jumpIdx);
-		return;
-	}
-
-	if (k === NodeKind.ContinueStmt) {
-		if (!hasLoop(s)) return;
-		const loop = currentLoop(s);
-		const offset = loop.startIp - codeLen(s) - 1;
-		emitInst(s, raiserAx(RaiserOpcode.Jump, offset));
-		return;
-	}
-
-	if (k === NodeKind.FunctionDecl) {
-		// Handled at top-level by rgen.ms two-phase compilation
-		return;
-	}
-
-	if (k === NodeKind.DoWhileStmt) {
-		compileDoWhileStmt(s, node);
-		return;
-	}
-
-	if (k === NodeKind.ForStmt) {
-		compileForStmt(s, node);
-		return;
-	}
-
-	if (k === NodeKind.ForOfStmt) {
-		compileForOfStmt(s, node);
-		return;
-	}
-
-	if (k === NodeKind.ImportDecl) {
-		compileImportDecl(s, node);
-		return;
-	}
-
-	if (k === NodeKind.ExportDecl) {
-		const d = node.data as ExportDeclData;
-		// export default expr → compile as expression and halt with result
-		if (d.exportedDecl.kind === NodeKind.ExprStmt) {
-			const ed = d.exportedDecl.data as ExprStmtData;
-			const reg = compileExpr(s, ed.expr);
-			emitInst(s, raiserABC(RaiserOpcode.Halt, reg, 0, 0));
-			return;
-		}
-		compileStmt(s, d.exportedDecl);
-		return;
-	}
-
-	if (k === NodeKind.DecoratedDecl) {
-		const d = node.data as DecoratedDeclData;
-		compileStmt(s, d.decoratedNode);
-		return;
-	}
-
-	if (k === NodeKind.EnumDecl || k === NodeKind.InterfaceDecl || k === NodeKind.TypeAliasDecl || k === NodeKind.ClassDecl) {
-		// Enums/classes are collected in Phase 1 by rgen.ms; interfaces/types are compile-time only
-		return;
-	}
-
-	// Unsupported statement — skip
+	match (node.kind) {
+		NodeKind.ReturnStmt => {
+			const d = node.data as ReturnStmtData;
+			if (d.argument !== null) {
+				const reg = compileExpr(s, d.argument);
+				emitRet(s, reg);
+			} else {
+				const reg = allocReg(s);
+				emitLoadConst(s, reg, raiserNil());
+				emitRet(s, reg);
+			}
+		},
+		NodeKind.ExprStmt => {
+			const d = node.data as ExprStmtData;
+			compileExpr(s, d.expr);
+		},
+		NodeKind.BlockStmt => { compileBlock(s, node); },
+		NodeKind.VariableDecl => { compileVariableDecl(s, node); },
+		NodeKind.IfStmt => { compileIfStmt(s, node); },
+		NodeKind.WhileStmt => { compileWhileStmt(s, node); },
+		NodeKind.BreakStmt => {
+			if (hasLoop(s)) {
+				const loop = currentLoop(s);
+				const jumpIdx = emitJumpPlaceholder(s);
+				loop.breakPatches.items.push(jumpIdx);
+			}
+		},
+		NodeKind.ContinueStmt => {
+			if (hasLoop(s)) {
+				const loop = currentLoop(s);
+				const offset = loop.startIp - codeLen(s) - 1;
+				emitInst(s, raiserAx(RaiserOpcode.Jump, offset));
+			}
+		},
+		NodeKind.FunctionDecl => {},
+		NodeKind.DoWhileStmt => { compileDoWhileStmt(s, node); },
+		NodeKind.ForStmt => { compileForStmt(s, node); },
+		NodeKind.ForOfStmt => { compileForOfStmt(s, node); },
+		NodeKind.ImportDecl => { compileImportDecl(s, node); },
+		NodeKind.ExportDecl => {
+			const d = node.data as ExportDeclData;
+			if (d.exportedDecl.kind === NodeKind.ExprStmt) {
+				const ed = d.exportedDecl.data as ExprStmtData;
+				const reg = compileExpr(s, ed.expr);
+				emitInst(s, raiserABC(RaiserOpcode.Halt, reg, 0, 0));
+			} else {
+				compileStmt(s, d.exportedDecl);
+			}
+		},
+		NodeKind.DecoratedDecl => {
+			const d = node.data as DecoratedDeclData;
+			compileStmt(s, d.decoratedNode);
+		},
+		NodeKind.EnumDecl | NodeKind.InterfaceDecl | NodeKind.TypeAliasDecl | NodeKind.ClassDecl => {},
+		_ => {},
+	};
 }
 
 // --- Block ---
@@ -137,8 +86,8 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 function compileBlock(s: RaiserCompState, node: Node): void {
 	const d = node.data as BlockStmtData;
 	const savedLocals = s.locals.items.length;
-	for (let i = 0; i < d.statements.length; i = i + 1) {
-		compileStmt(s, d.statements[i]);
+	for (const stmt of d.statements) {
+		compileStmt(s, stmt);
 	}
 	// Restore locals scope — drop block-scoped vars
 	s.locals.items.length = savedLocals;
@@ -325,8 +274,7 @@ function compileForOfStmt(s: RaiserCompState, node: Node): void {
 function compileImportDecl(s: RaiserCompState, node: Node): void {
 	const d = node.data as ImportDeclData;
 	// Bind each imported name — check if it's a registered builtin
-	for (let i = 0; i < d.importNames.length; i = i + 1) {
-		const name = d.importNames[i];
+	for (const name of d.importNames) {
 		const funcIdx = resolveBuiltin(s, name);
 		if (funcIdx >= 0) {
 			// Builtin found — register as a named function for direct calls

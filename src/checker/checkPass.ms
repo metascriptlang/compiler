@@ -223,7 +223,9 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
 			const methodSym = node.resolvedSym;
-			checkFunctionBody(ctx, methodSym !== null ? methodSym : makeSymbol(d.methodName, SymbolKind.Method, unknownType(), false), d.methodParams, d.methodBody);
+			const sym = methodSym !== null ? methodSym : makeSymbol(d.methodName, SymbolKind.Method, unknownType(), false);
+			sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.methodName.length, sym, sym.symbolType, SymbolKind.Method, d.methodName, className, true);
+			checkFunctionBody(ctx, sym, d.methodParams, d.methodBody);
 		},
 		NodeKind.ConstructorDecl => {
 			const d = node.data as ConstructorDeclData;
@@ -574,7 +576,9 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 		// Destructured for-of: define symbols for each pattern element
 		defineForOfPatternBindings(ctx, d.forOfPattern, iterType, d.forOfIsConst);
 	} else {
-		defineSymbol(ctx.table, makeSymbol(d.forOfBinding, SymbolKind.Variable, elemType, !d.forOfIsConst));
+		const forSym = makeSymbol(d.forOfBinding, SymbolKind.Variable, elemType, !d.forOfIsConst);
+		defineSymbol(ctx.table, forSym);
+		sgRecordSym(ctx, d.bindingLocation.line, d.bindingLocation.column, d.bindingLocation.column + d.forOfBinding.length, forSym, elemType, SymbolKind.Variable, d.forOfBinding, "", true);
 	}
 	checkStmt(ctx, d.forOfBody);
 	exitLoopScope(ctx, saved);
@@ -714,7 +718,9 @@ function checkTryCatch(ctx: CheckerContext, node: Node): void {
 	if (d.catchBody !== null) {
 		openScope(ctx.table, ScopeKind.Block);
 		if (d.catchName !== "") {
-			defineSymbol(ctx.table, makeSymbol(d.catchName, SymbolKind.Variable, unknownType(), false));
+			const catchSym = makeSymbol(d.catchName, SymbolKind.Variable, unknownType(), false);
+			defineSymbol(ctx.table, catchSym);
+			sgRecordSym(ctx, d.catchBindingLocation.line, d.catchBindingLocation.column, d.catchBindingLocation.column + d.catchName.length, catchSym, unknownType(), SymbolKind.Variable, d.catchName, "", true);
 		}
 		checkStmt(ctx, d.catchBody);
 		closeScope(ctx.table);

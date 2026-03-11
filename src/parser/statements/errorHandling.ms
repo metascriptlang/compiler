@@ -34,16 +34,21 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 	if (!isAtEnd(state) && current(state).kind === TokenKind.Catch) {
 		advance(state);
 		let catchParam = "";
+		let catchParamLine = 0;
+		let catchParamCol = 0;
 		// Optional catch parameter: catch (e)
 		if (!isAtEnd(state) && current(state).kind === TokenKind.LParen) {
 			advance(state);
 			if (isIdentLike(current(state))) {
-				catchParam = current(state).value;
+				const catchToken = current(state);
+				catchParam = catchToken.value;
+				catchParamLine = catchToken.line;
+				catchParamCol = catchToken.column;
 				advance(state);
 				skipOptionalType(state);
 			}
 			if (current(state).kind !== TokenKind.RParen) {
-				return Result.err(`Expected ')' after catch parameter at line ${current(state).line.toString()}`);
+				return Result.err(`Expected ')' after catch parameter at line ${current(state).line}`);
 			}
 			advance(state);
 		}
@@ -56,6 +61,7 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 			return Result.ok(createNode(NodeKind.TryCatchStmt, {
 				tryBody: tryBlock, catchName: catchParam,
 				catchBody: catchBlock, finallyBody: finallyBlock,
+				catchBindingLocation: { line: catchParamLine, column: catchParamCol },
 			}, tryToken));
 		}
 		// try-catch only
@@ -63,6 +69,7 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 			tryBody: tryBlock, catchName: catchParam,
 			catchBody: catchBlock,
 			finallyBody: createNode(NodeKind.BlockStmt, { statements: [] }, tryToken),
+			catchBindingLocation: { line: catchParamLine, column: catchParamCol },
 		}, tryToken));
 	}
 
@@ -74,10 +81,11 @@ export function parseTryCatchStmt(state: ParserState): NodeResult {
 			tryBody: tryBlock, catchName: "",
 			catchBody: createNode(NodeKind.BlockStmt, { statements: [] }, tryToken),
 			finallyBody: finallyBlock,
+			catchBindingLocation: { line: 0, column: 0 },
 		}, tryToken));
 	}
 
-	return Result.err(`Expected 'catch' or 'finally' after try block at line ${current(state).line.toString()}`);
+	return Result.err(`Expected 'catch' or 'finally' after try block at line ${current(state).line}`);
 }
 
 // ===== Tests =====

@@ -63,14 +63,11 @@ export function fullPipeline(source: string): Node {
 export function findFnDecl(program: Node, name: string): Node {
 	if (program === null || program.kind !== NodeKind.Program) return null as unknown as Node;
 	const pd = program.data as ProgramData;
-	let i = 0;
-	while (i < pd.programStmts.length) {
-		const stmt = pd.programStmts[i];
+	for (const stmt of pd.programStmts) {
 		if (stmt.kind === NodeKind.FunctionDecl) {
 			const fd = stmt.data as FunctionDeclData;
 			if (fd.fnName === name) return stmt;
 		}
-		i = i + 1;
 	}
 	return null as unknown as Node;
 }
@@ -87,10 +84,8 @@ export function strictErrorCount(src: string): number {
 	const ctx = checkSource(src);
 	if (ctx === null) return -1;
 	let count = 0;
-	let i = 0;
-	while (i < ctx.errors.length) {
-		if (ctx.errors[i].severity === Severity.Error) count = count + 1;
-		i = i + 1;
+	for (const err of ctx.errors) {
+		if (err.severity === Severity.Error) count = count + 1;
 	}
 	return count;
 }
@@ -99,10 +94,8 @@ export function warningCount(src: string): number {
 	const ctx = checkSource(src);
 	if (ctx === null) return -1;
 	let count = 0;
-	let i = 0;
-	while (i < ctx.errors.length) {
-		if (ctx.errors[i].severity === Severity.Warning) count = count + 1;
-		i = i + 1;
+	for (const err of ctx.errors) {
+		if (err.severity === Severity.Warning) count = count + 1;
 	}
 	return count;
 }
@@ -110,10 +103,8 @@ export function warningCount(src: string): number {
 export function hasError(src: string, needle: string): boolean {
 	const ctx = checkSource(src);
 	if (ctx === null) return false;
-	let i = 0;
-	while (i < ctx.errors.length) {
-		if (ctx.errors[i].message.indexOf(needle) >= 0) return true;
-		i = i + 1;
+	for (const err of ctx.errors) {
+		if (err.message.indexOf(needle) >= 0) return true;
 	}
 	return false;
 }
@@ -121,10 +112,8 @@ export function hasError(src: string, needle: string): boolean {
 export function hasWarning(src: string, needle: string): boolean {
 	const ctx = checkSource(src);
 	if (ctx === null) return false;
-	let i = 0;
-	while (i < ctx.errors.length) {
-		if (ctx.errors[i].severity === Severity.Warning && ctx.errors[i].message.indexOf(needle) >= 0) return true;
-		i = i + 1;
+	for (const err of ctx.errors) {
+		if (err.severity === Severity.Warning && err.message.indexOf(needle) >= 0) return true;
 	}
 	return false;
 }

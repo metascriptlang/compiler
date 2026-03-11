@@ -60,7 +60,7 @@ export function parseObjectLiteral(state: ParserState, exprParser: ExprParser): 
 
 		const keyToken = current(state);
 		if (!isIdentLike(keyToken)) {
-			return Result.err(`Expected property name at line ${keyToken.line.toString()}`);
+			return Result.err(`Expected property name at line ${keyToken.line}`);
 		}
 		advance(state);
 

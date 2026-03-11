@@ -208,10 +208,12 @@ export function emitArrowFunction(gen: JSGenerator, node: Node): void {
 
 export function emitFunctionExpr(gen: JSGenerator, node: Node): void {
 	const d = node.data as FunctionExprData;
-	if (d.funcExprFlags === "async") { emit(gen, "async function("); }
-	else if (d.funcExprFlags === "generator") { emit(gen, "function*("); }
-	else if (d.funcExprFlags === "async_generator") { emit(gen, "async function*("); }
-	else { emit(gen, "function("); }
+	match (d.funcExprFlags) {
+		"async" => { emit(gen, "async function("); },
+		"generator" => { emit(gen, "function*("); },
+		"async_generator" => { emit(gen, "async function*("); },
+		_ => { emit(gen, "function("); },
+	};
 	emitJoinedStrings(gen, d.funcExprParams, ", ");
 	emit(gen, ") ");
 	emitNode(gen, d.funcExprBody);

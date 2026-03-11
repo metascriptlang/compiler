@@ -373,7 +373,7 @@ function findCapturedIdent(name: string, capturedIdents: Node[]): Node {
 }
 
 // Wrap a raw function Identifier in a closure pair { fn: ident, env: null }.
-// Reference parity (ccgexprs.nim:4011): nimcall->closure wraps fn ptr in { ClP_0, ClE_0=NIM_NIL }.
+// Reference parity: nimcall->closure wraps fn ptr in { ClP_0, ClE_0=NULL }.
 function wrapFnAsClosure(ident: Node, loc: SourceLocation): Node {
 	const wrapKeys: string[] = [];
 	wrapKeys.push("fn");

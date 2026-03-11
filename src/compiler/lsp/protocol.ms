@@ -17,12 +17,14 @@ export function lspJsonString(val: string): string {
 	let result = "\"";
 	for (let i = 0; i < val.length; i = i + 1) {
 		const ch = sliceStr(val, i, i + 1);
-		if (ch === "\\") { result = result + "\\\\"; }
-		else if (ch === "\"") { result = result + "\\\""; }
-		else if (ch === "\n") { result = result + "\\n"; }
-		else if (ch === "\r") { result = result + "\\r"; }
-		else if (ch === "\t") { result = result + "\\t"; }
-		else { result = result + ch; }
+		result = result + match (ch) {
+			"\\" => "\\\\",
+			"\"" => "\\\"",
+			"\n" => "\\n",
+			"\r" => "\\r",
+			"\t" => "\\t",
+			_ => ch,
+		};
 	}
 	result = result + "\"";
 	return result;
@@ -100,12 +102,14 @@ export function lspGetField(json: string, field: string): string {
 					// Decode escape
 					if (k + 1 < json.length) {
 						const next = charAt(json, k + 1);
-						if (next === "\"") { result = result + "\""; }
-						else if (next === "\\") { result = result + "\\"; }
-						else if (next === "n") { result = result + "\n"; }
-						else if (next === "r") { result = result + "\r"; }
-						else if (next === "t") { result = result + "\t"; }
-						else { result = result + next; }
+						result = result + match (next) {
+							"\"" => "\"",
+							"\\" => "\\",
+							"n" => "\n",
+							"r" => "\r",
+							"t" => "\t",
+							_ => next,
+						};
 						k = k + 2;
 					} else {
 						k = k + 1;

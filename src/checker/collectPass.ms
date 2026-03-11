@@ -2,7 +2,7 @@ import { Node, NodeKind, SourceLocation, createNodeAt, ProgramData, FunctionDecl
 import { extractDecoratorInfo } from "./decoratorHelpers";
 import { Type, TypeKind, unknownType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
-import { CheckerContext, addError, findExportedSymbol, findModuleExports, ExtensionMethod, registerExtension, isStaticExtensionFlag, getExtTypeName, findExtension } from "./context";
+import { CheckerContext, addError, findExportedSymbol, findModuleExports, ExtensionMethod, registerExtension, isStaticExtensionFlag, getExtTypeName, findExtension, sgRecordSym } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { sliceStr, findChar, getModuleDir, appendFlag } from "../utils/string";
@@ -293,13 +293,20 @@ function collectEnumDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as EnumDeclData;
 	const enumValues = d.enumValues !== null ? d.enumValues : [] as number[];
 	const enumType = createEnum(d.enumName, d.enumMembers, enumValues);
-	defineOrError(ctx, makeSymbol(d.enumName, SymbolKind.Enum, enumType, false), node);
+	const enumSym = makeSymbol(d.enumName, SymbolKind.Enum, enumType, false);
+	defineOrError(ctx, enumSym, node);
+	// Record enum type DEF for symbol graph
+	sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.enumName.length, enumSym, enumType, SymbolKind.Enum, d.enumName, "", true);
 	// Register each enum member as EnumName_MemberName (standard implementation parity)
 	// Needed because checkMemberExpr rewrites Color.Red → Identifier "Color_Red"
 	let mi = 0;
 	while (mi < d.enumMembers.length) {
 		const mangledName = d.enumName + "_" + d.enumMembers[mi];
-		defineOrError(ctx, makeSymbol(mangledName, SymbolKind.Variable, enumType, false), node);
+		const memberSym = makeSymbol(mangledName, SymbolKind.Variable, enumType, false);
+		defineOrError(ctx, memberSym, node);
+		// Record each enum member DEF for symbol graph
+		// (no per-member location available; use enum node location as fallback)
+		sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.enumMembers[mi].length, memberSym, enumType, SymbolKind.EnumMember, d.enumMembers[mi], d.enumName, true);
 		mi = mi + 1;
 	}
 	node.nodeType = enumType;
@@ -404,6 +411,8 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 				const origName = resolveOriginalName(exportInfo, importName);
 				if (origName !== localAlias) importedSym.originalName = origName;
 				defineOrError(ctx, importedSym, node);
+				// Record imported symbol as usage (isDecl=false)
+				sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + localAlias.length, importedSym, exportInfo.symType, exportInfo.kind, localAlias, "", false);
 				// Implementation parity: import enum members alongside enum type
 				// (rawImportSymbol registers each skEnumField in the importing scope)
 				if (exportInfo.kind === SymbolKind.Enum && exportInfo.symType.typeNames !== null) {

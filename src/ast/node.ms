@@ -15,6 +15,7 @@ export enum SymbolKind {
 	Parameter,
 	Property,
 	Method,
+	EnumMember,
 }
 
 // ===== Symbol State (Lifecycle) =====
@@ -180,7 +181,7 @@ export type NodeData =
 	| { condition: Node, consequent: Node, alternate: Node }       // IfStmt
 	| { whileCondition: Node, whileBody: Node }                    // WhileStmt
 	| { forInit: Node, forCondition: Node, forUpdate: Node, forBody: Node } // ForStmt
-	| { forOfBinding: string, forOfIsConst: boolean, forOfIterable: Node, forOfBody: Node, forOfPattern: Node } // ForOfStmt
+	| { forOfBinding: string, forOfIsConst: boolean, forOfIterable: Node, forOfBody: Node, forOfPattern: Node, bindingLocation: SourceLocation } // ForOfStmt
 	| { forInBinding: string, forInIsConst: boolean, forInObject: Node, forInBody: Node } // ForInStmt
 	| { statements: Node[] }                                       // BlockStmt
 	| { expr: Node }                                               // ExprStmt
@@ -205,7 +206,7 @@ export type NodeData =
 	| { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node } // ConstructorDecl
 	// Error handling variants
 	| { throwArg: Node }                                           // ThrowStmt
-	| { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node } // TryCatchStmt
+	| { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node, catchBindingLocation: SourceLocation } // TryCatchStmt
 	// Decorator variants
 	| { macroName: string, macroArgs: Node[] }                     // MacroInvocation
 	| { decorators: Node[], decoratedNode: Node }                  // DecoratedDecl
@@ -283,7 +284,7 @@ export type VariableDeclData = { declName: string, declType: string, initializer
 export type IfStmtData = { condition: Node, consequent: Node, alternate: Node };
 export type WhileStmtData = { whileCondition: Node, whileBody: Node };
 export type ForStmtData = { forInit: Node, forCondition: Node, forUpdate: Node, forBody: Node };
-export type ForOfStmtData = { forOfBinding: string, forOfIsConst: boolean, forOfIterable: Node, forOfBody: Node, forOfPattern: Node };
+export type ForOfStmtData = { forOfBinding: string, forOfIsConst: boolean, forOfIterable: Node, forOfBody: Node, forOfPattern: Node, bindingLocation: SourceLocation };
 export type ForInStmtData = { forInBinding: string, forInIsConst: boolean, forInObject: Node, forInBody: Node };
 export type BlockStmtData = { statements: Node[] };
 export type ExprStmtData = { expr: Node };
@@ -313,7 +314,7 @@ export type DecoratedDeclData = { decorators: Node[], decoratedNode: Node };
 export type ProgramData = { programStmts: Node[] };
 export type DeferStmtData = { deferExpr: Node };
 export type ThrowStmtData = { throwArg: Node };
-export type TryCatchStmtData = { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node };
+export type TryCatchStmtData = { tryBody: Node, catchName: string, catchBody: Node, finallyBody: Node, catchBindingLocation: SourceLocation };
 export type MacroInvocationData = { macroName: string, macroArgs: Node[] };
 export type HiddenDerefData = { expr: Node };
 export type TestDeclData = { testName: string, testBody: Node };

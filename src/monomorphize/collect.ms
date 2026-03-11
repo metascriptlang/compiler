@@ -77,8 +77,8 @@ function monoGetParamNames(declMap: MonoGenericDeclMap, idx: number): string[] {
 function monoResolveExplicitTypeArgs(typeArgStr: string): Type[] {
 	const result: Type[] = [];
 	const parts = splitTopLevel(typeArgStr, ",");
-	for (let i = 0; i < parts.length; i += 1) {
-		const name = trimStr(parts[i]);
+	for (const part of parts) {
+		const name = trimStr(part);
 		const resolved = monoResolveTypeName(name);
 		if (resolved !== null) result.push(resolved);
 	}
@@ -86,12 +86,15 @@ function monoResolveExplicitTypeArgs(typeArgStr: string): Type[] {
 }
 
 function monoResolveTypeName(name: string): Type {
-	if (name === "number") return { kind: TypeKind.Number, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 };
-	if (name === "string") return { kind: TypeKind.String, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 };
-	if (name === "boolean") return { kind: TypeKind.Boolean, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 };
-	if (name === "void") return { kind: TypeKind.Void, typeName: "", typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 };
-	// Named types (interfaces, classes, enums)
-	return { kind: TypeKind.Struct, typeName: name, typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 };
+	const kind = match (name) {
+		"number" => TypeKind.Number,
+		"string" => TypeKind.String,
+		"boolean" => TypeKind.Boolean,
+		"void" => TypeKind.Void,
+		_ => TypeKind.Struct,
+	};
+	const tname = kind === TypeKind.Struct ? name : "";
+	return { kind, typeName: tname, typeNames: [], typeChildren: [], typeReturn: null, typeExtra: null, typeFlags: 0 };
 }
 
 // ===== Resolve Annotation String → Type =====
@@ -203,8 +206,8 @@ export function monoCollectDefinitions(program: Node, declMap: MonoGenericDeclMa
 	if (program === null) return;
 	if (program.kind !== NodeKind.Program) return;
 	const pd = program.data as ProgramData;
-	for (let i = 0; i < pd.programStmts.length; i += 1) {
-		monoCollectDefStmt(pd.programStmts[i], declMap);
+	for (const stmt of pd.programStmts) {
+		monoCollectDefStmt(stmt, declMap);
 	}
 }
 
@@ -738,7 +741,7 @@ function monoCloneNode(node: Node): Node {
 	if (kind === NodeKind.IfStmt) { const d = node.data as IfStmtData; const data: NodeData = { condition: monoCloneNode(d.condition), consequent: monoCloneNode(d.consequent), alternate: monoCloneNode(d.alternate) }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.WhileStmt) { const d = node.data as WhileStmtData; const data: NodeData = { whileCondition: monoCloneNode(d.whileCondition), whileBody: monoCloneNode(d.whileBody) }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.ForStmt) { const d = node.data as ForStmtData; const data: NodeData = { forInit: monoCloneNode(d.forInit), forCondition: monoCloneNode(d.forCondition), forUpdate: monoCloneNode(d.forUpdate), forBody: monoCloneNode(d.forBody) }; return createNodeAt(kind, data, loc); }
-	if (kind === NodeKind.ForOfStmt) { const d = node.data as ForOfStmtData; const data: NodeData = { forOfBinding: d.forOfBinding, forOfIsConst: d.forOfIsConst, forOfIterable: monoCloneNode(d.forOfIterable), forOfBody: monoCloneNode(d.forOfBody), forOfPattern: d.forOfPattern !== null ? monoCloneNode(d.forOfPattern) : null as unknown as Node }; return createNodeAt(kind, data, loc); }
+	if (kind === NodeKind.ForOfStmt) { const d = node.data as ForOfStmtData; const data: NodeData = { forOfBinding: d.forOfBinding, forOfIsConst: d.forOfIsConst, forOfIterable: monoCloneNode(d.forOfIterable), forOfBody: monoCloneNode(d.forOfBody), forOfPattern: d.forOfPattern !== null ? monoCloneNode(d.forOfPattern) : null as unknown as Node, bindingLocation: d.bindingLocation }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.ForInStmt) { const d = node.data as ForInStmtData; const data: NodeData = { forInBinding: d.forInBinding, forInIsConst: d.forInIsConst, forInObject: monoCloneNode(d.forInObject), forInBody: monoCloneNode(d.forInBody) }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.DoWhileStmt) { const d = node.data as DoWhileStmtData; const data: NodeData = { doBody: monoCloneNode(d.doBody), doCondition: monoCloneNode(d.doCondition) }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.BlockStmt) { const d = node.data as BlockStmtData; const data: NodeData = { statements: cloneNodeArray(d.statements) }; return createNodeAt(kind, data, loc); }
@@ -761,7 +764,7 @@ function monoCloneNode(node: Node): Node {
 	if (kind === NodeKind.MethodDecl) { const d = node.data as MethodDeclData; const data: NodeData = { methodName: d.methodName, methodParams: cloneStringArray(d.methodParams), methodParamTypes: cloneStringArray(d.methodParamTypes), methodBody: monoCloneNode(d.methodBody), methodIsStatic: d.methodIsStatic, methodFlags: d.methodFlags, methodReturnType: d.methodReturnType }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.ConstructorDecl) { const d = node.data as ConstructorDeclData; const data: NodeData = { ctorParams: cloneStringArray(d.ctorParams), ctorParamTypes: cloneStringArray(d.ctorParamTypes), ctorBody: monoCloneNode(d.ctorBody) }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.ThrowStmt) { const d = node.data as ThrowStmtData; const data: NodeData = { throwArg: monoCloneNode(d.throwArg) }; return createNodeAt(kind, data, loc); }
-	if (kind === NodeKind.TryCatchStmt) { const d = node.data as TryCatchStmtData; const data: NodeData = { tryBody: monoCloneNode(d.tryBody), catchName: d.catchName, catchBody: monoCloneNode(d.catchBody), finallyBody: monoCloneNode(d.finallyBody) }; return createNodeAt(kind, data, loc); }
+	if (kind === NodeKind.TryCatchStmt) { const d = node.data as TryCatchStmtData; const data: NodeData = { tryBody: monoCloneNode(d.tryBody), catchName: d.catchName, catchBody: monoCloneNode(d.catchBody), finallyBody: monoCloneNode(d.finallyBody), catchBindingLocation: d.catchBindingLocation }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.MacroInvocation) { const d = node.data as MacroInvocationData; const data: NodeData = { macroName: d.macroName, macroArgs: cloneNodeArray(d.macroArgs) }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.DecoratedDecl) { const d = node.data as DecoratedDeclData; const data: NodeData = { decorators: cloneNodeArray(d.decorators), decoratedNode: monoCloneNode(d.decoratedNode) }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.DeferStmt) { const d = node.data as DeferStmtData; const data: NodeData = { deferExpr: monoCloneNode(d.deferExpr) }; return createNodeAt(kind, data, loc); }

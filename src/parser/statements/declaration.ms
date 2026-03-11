@@ -54,7 +54,7 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 		const pattern = try parseObjectPattern(state);
 		skipOptionalType(state);
 		if (current(state).kind !== TokenKind.Assign) {
-			return Result.err(`Expected '=' after destructuring pattern at line ${current(state).line.toString()}`);
+			return Result.err(`Expected '=' after destructuring pattern at line ${current(state).line}`);
 		}
 		advance(state);
 		const init = try callExprParser(state);
@@ -70,7 +70,7 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 		const pattern = try parseArrayPattern(state);
 		skipOptionalType(state);
 		if (current(state).kind !== TokenKind.Assign) {
-			return Result.err(`Expected '=' after destructuring pattern at line ${current(state).line.toString()}`);
+			return Result.err(`Expected '=' after destructuring pattern at line ${current(state).line}`);
 		}
 		advance(state);
 		const init = try callExprParser(state);
@@ -84,7 +84,7 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 
 	const nameToken = current(state);
 	if (!isIdentLike(nameToken)) {
-		return Result.err(`Expected identifier after ${keyword.value} at line ${nameToken.line.toString()}`);
+		return Result.err(`Expected identifier after ${keyword.value} at line ${nameToken.line}`);
 	}
 
 	advance(state);
@@ -92,7 +92,7 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 	const declType = captureOptionalType(state);
 
 	if (current(state).kind !== TokenKind.Assign) {
-		return Result.err(`Expected '=' in variable declaration at line ${current(state).line.toString()}`);
+		return Result.err(`Expected '=' in variable declaration at line ${current(state).line}`);
 	}
 
 	advance(state);
@@ -125,33 +125,33 @@ function applyExtensionFlags(flags: string, params: string[], fnParamTypes: stri
 	if (params.length > 0 && params[0].length > 5 && sliceStr(params[0], 0, 5) === "this:") {
 		const receiverName = sliceStr(params[0], 5, params[0].length);
 		const receiverType = fnParamTypes[0];
-		if (flags === "") { flags = "ext:" + receiverName + ":" + receiverType; }
-		else { flags = flags + "|ext:" + receiverName + ":" + receiverType; }
+		if (flags === "") { flags = `ext:${receiverName}:${receiverType}`; }
+		else { flags = `${flags}|ext:${receiverName}:${receiverType}`; }
 		params[0] = receiverName;
 	}
 	// Static extension: first param has "typeof:" prefix
 	if (params.length > 0 && params[0].length > 7 && sliceStr(params[0], 0, 7) === "typeof:") {
 		const staticType = sliceStr(params[0], 7, params[0].length);
-		if (flags === "") { flags = "sext:" + staticType; }
-		else { flags = flags + "|sext:" + staticType; }
+		if (flags === "") { flags = `sext:${staticType}`; }
+		else { flags = `${flags}|sext:${staticType}`; }
 	}
 	// Out parameters: strip "out:" prefix, encode positions in flags
 	let outPositions = "";
 	for (let oi = 0; oi < params.length; oi += 1) {
 		if (params[oi].length > 4 && sliceStr(params[oi], 0, 4) === "out:") {
 			params[oi] = sliceStr(params[oi], 4, params[oi].length);
-			if (outPositions === "") { outPositions = oi.toString(); }
-			else { outPositions = outPositions + "," + oi.toString(); }
+			if (outPositions === "") { outPositions = `${oi}`; }
+			else { outPositions = `${outPositions},${oi}`; }
 		}
 	}
 	if (outPositions !== "") {
-		if (flags === "") { flags = "out:" + outPositions; }
-		else { flags = flags + "|out:" + outPositions; }
+		if (flags === "") { flags = `out:${outPositions}`; }
+		else { flags = `${flags}|out:${outPositions}`; }
 	}
 	// Encode generic param names
 	if (genericNames !== "") {
-		if (flags === "") { flags = "gen:" + genericNames; }
-		else { flags = flags + "|gen:" + genericNames; }
+		if (flags === "") { flags = `gen:${genericNames}`; }
+		else { flags = `${flags}|gen:${genericNames}`; }
 	}
 	return flags;
 }
@@ -178,14 +178,14 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 	// Accept Ident, OperatorIdent (backtick-quoted: `==`, `[]`), TemplateNoSub, or contextual keywords
 	// Reference compiler: parser.zig:864 — operator_identifier token accepted as function name
 	if (!isIdentLike(nameToken) && nameToken.kind !== TokenKind.TemplateNoSub && nameToken.kind !== TokenKind.OperatorIdent) {
-		return Result.err(`Expected function name at line ${nameToken.line.toString()}`);
+		return Result.err(`Expected function name at line ${nameToken.line}`);
 	}
 
 	advance(state);
 	// Capture optional generic params: function id<T>(x: T): T
 	const genericNames = captureGenericParams(state);
 	if (current(state).kind !== TokenKind.LParen) {
-		return Result.err(`Expected '(' after function name at line ${current(state).line.toString()}`);
+		return Result.err(`Expected '(' after function name at line ${current(state).line}`);
 	}
 
 	const raw = parseParamList(state, nameToken.value);
@@ -233,7 +233,7 @@ export function parseImportDecl(state: ParserState): NodeResult {
 	}
 
 	if (current(state).kind !== TokenKind.LBrace) {
-		return Result.err(`Expected '{' or string after 'import' at line ${current(state).line.toString()}`);
+		return Result.err(`Expected '{' or string after 'import' at line ${current(state).line}`);
 	}
 
 	advance(state);
@@ -242,17 +242,17 @@ export function parseImportDecl(state: ParserState): NodeResult {
 	const aliases = specs.aliases;
 
 	if (current(state).kind !== TokenKind.RBrace) {
-		return Result.err(`Expected '}' after import specifiers at line ${current(state).line.toString()}`);
+		return Result.err(`Expected '}' after import specifiers at line ${current(state).line}`);
 	}
 
 	advance(state);
 	if (current(state).kind !== TokenKind.From) {
-		return Result.err(`Expected 'from' after import specifiers at line ${current(state).line.toString()}`);
+		return Result.err(`Expected 'from' after import specifiers at line ${current(state).line}`);
 	}
 
 	advance(state);
 	if (current(state).kind !== TokenKind.String) {
-		return Result.err(`Expected module path string at line ${current(state).line.toString()}`);
+		return Result.err(`Expected module path string at line ${current(state).line}`);
 	}
 
 	const source = current(state).value;
@@ -283,11 +283,11 @@ export function parseExportDecl(state: ParserState): NodeResult {
 		const aliases = specs.aliases;
 		if (current(state).kind === TokenKind.RBrace) { advance(state); }
 		if (current(state).kind !== TokenKind.From) {
-			return Result.err(`Expected 'from' after export specifiers at line ${current(state).line.toString()}`);
+			return Result.err(`Expected 'from' after export specifiers at line ${current(state).line}`);
 		}
 		advance(state);
 		if (current(state).kind !== TokenKind.String) {
-			return Result.err(`Expected module path string at line ${current(state).line.toString()}`);
+			return Result.err(`Expected module path string at line ${current(state).line}`);
 		}
 		const source = current(state).value;
 		advance(state);
@@ -356,7 +356,7 @@ export function parseExportDecl(state: ParserState): NodeResult {
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: exprStmt }, exportToken));
 	}
 
-	return Result.err(`Expected declaration after 'export' at line ${current(state).line.toString()}`);
+	return Result.err(`Expected declaration after 'export' at line ${current(state).line}`);
 }
 
 // ===== Type Alias Declaration =====
@@ -368,11 +368,11 @@ export function parseTypeAliasDecl(state: ParserState): NodeResult {
 	advance(state);
 	const nameToken = current(state);
 	if (!isIdentLike(nameToken)) {
-		return Result.err(`Expected identifier after 'type' at line ${nameToken.line.toString()}`);
+		return Result.err(`Expected identifier after 'type' at line ${nameToken.line}`);
 	}
 	advance(state);
 	if (current(state).kind !== TokenKind.Assign) {
-		return Result.err(`Expected '=' in type alias at line ${current(state).line.toString()}`);
+		return Result.err(`Expected '=' in type alias at line ${current(state).line}`);
 	}
 
 	advance(state);
@@ -406,19 +406,19 @@ function parseDiscriminatedUnionDecl(state: ParserState, aliasName: string, type
 	advance(state); // consume 'match'
 
 	if (current(state).kind !== TokenKind.LParen) {
-		return Result.err(`Expected '(' after 'match' in discriminated union at line ${current(state).line.toString()}`);
+		return Result.err(`Expected '(' after 'match' in discriminated union at line ${current(state).line}`);
 	}
 	advance(state); // consume '('
 
 	// Parse discriminant name
 	const discNameToken = current(state);
 	if (!isIdentLike(discNameToken)) {
-		return Result.err(`Expected discriminant name in discriminated union at line ${current(state).line.toString()}`);
+		return Result.err(`Expected discriminant name in discriminated union at line ${current(state).line}`);
 	}
 	advance(state);
 
 	if (current(state).kind !== TokenKind.Colon) {
-		return Result.err(`Expected ':' after discriminant name at line ${current(state).line.toString()}`);
+		return Result.err(`Expected ':' after discriminant name at line ${current(state).line}`);
 	}
 	advance(state); // consume ':'
 
@@ -429,12 +429,12 @@ function parseDiscriminatedUnionDecl(state: ParserState, aliasName: string, type
 	const discriminantType = collectTokenText(state, discTypeStart, discTypeEnd);
 
 	if (current(state).kind !== TokenKind.RParen) {
-		return Result.err(`Expected ')' after discriminant type at line ${current(state).line.toString()}`);
+		return Result.err(`Expected ')' after discriminant type at line ${current(state).line}`);
 	}
 	advance(state); // consume ')'
 
 	if (current(state).kind !== TokenKind.LBrace) {
-		return Result.err(`Expected '{' to start variant list at line ${current(state).line.toString()}`);
+		return Result.err(`Expected '{' to start variant list at line ${current(state).line}`);
 	}
 	advance(state); // consume '{'
 
@@ -444,20 +444,20 @@ function parseDiscriminatedUnionDecl(state: ParserState, aliasName: string, type
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
 		// Parse variant key: EnumType.Member or just Member
 		if (!isIdentLike(current(state))) {
-			return Result.err(`Expected variant key at line ${current(state).line.toString()}`);
+			return Result.err(`Expected variant key at line ${current(state).line}`);
 		}
 		let key = current(state).value;
 		advance(state); // consume first ident
 		// Handle dotted names like NodeKind.NumLit
 		while (!isAtEnd(state) && current(state).kind === TokenKind.Dot) {
 			advance(state); // consume '.'
-			key = key + "." + current(state).value;
+			key = `${key}.${current(state).value}`;
 			advance(state); // consume member name
 		}
 		variantKeys.push(key);
 
 		if (current(state).kind !== TokenKind.Arrow) {
-			return Result.err(`Expected '=>' after variant key at line ${current(state).line.toString()}`);
+			return Result.err(`Expected '=>' after variant key at line ${current(state).line}`);
 		}
 		advance(state); // consume '=>'
 
@@ -475,7 +475,7 @@ function parseDiscriminatedUnionDecl(state: ParserState, aliasName: string, type
 	}
 
 	if (current(state).kind !== TokenKind.RBrace) {
-		return Result.err(`Expected '}' to end variant list at line ${current(state).line.toString()}`);
+		return Result.err(`Expected '}' to end variant list at line ${current(state).line}`);
 	}
 	advance(state); // consume '}'
 
@@ -485,11 +485,10 @@ function parseDiscriminatedUnionDecl(state: ParserState, aliasName: string, type
 	let aliasType = "";
 	for (let i = 0; i < variantTypes.length; i += 1) {
 		if (i > 0) {
-			aliasType = aliasType + " | ";
+			aliasType = `${aliasType} | ${variantTypes[i]}`;
 		} else {
-			aliasType = "| ";
+			aliasType = `| ${variantTypes[i]}`;
 		}
-		aliasType = aliasType + variantTypes[i];
 	}
 
 	return Result.ok(createNode(NodeKind.TypeAliasDecl, {
@@ -512,12 +511,12 @@ export function parseEnumDecl(state: ParserState): NodeResult {
 	advance(state);
 	const nameToken = current(state);
 	if (!isIdentLike(nameToken)) {
-		return Result.err(`Expected identifier after 'enum' at line ${nameToken.line.toString()}`);
+		return Result.err(`Expected identifier after 'enum' at line ${nameToken.line}`);
 	}
 
 	advance(state);
 	if (current(state).kind !== TokenKind.LBrace) {
-		return Result.err(`Expected '{' after enum name at line ${current(state).line.toString()}`);
+		return Result.err(`Expected '{' after enum name at line ${current(state).line}`);
 	}
 
 	advance(state);
@@ -527,7 +526,7 @@ export function parseEnumDecl(state: ParserState): NodeResult {
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
 		const member = current(state);
 		if (!isIdentLike(member)) {
-			return Result.err(`Expected enum member name at line ${member.line.toString()}`);
+			return Result.err(`Expected enum member name at line ${member.line}`);
 		}
 
 		members.push(member.value);
@@ -552,7 +551,7 @@ export function parseEnumDecl(state: ParserState): NodeResult {
 	}
 
 	if (current(state).kind !== TokenKind.RBrace) {
-		return Result.err(`Expected '}' after enum members at line ${current(state).line.toString()}`);
+		return Result.err(`Expected '}' after enum members at line ${current(state).line}`);
 	}
 
 	advance(state);
@@ -572,7 +571,7 @@ export function parseInterfaceDecl(state: ParserState): NodeResult {
 	advance(state);
 	const nameToken = current(state);
 	if (!isIdentLike(nameToken)) {
-		return Result.err(`Expected identifier after 'interface' at line ${nameToken.line.toString()}`);
+		return Result.err(`Expected identifier after 'interface' at line ${nameToken.line}`);
 	}
 
 	advance(state);
@@ -596,7 +595,7 @@ export function parseInterfaceDecl(state: ParserState): NodeResult {
 	}
 
 	if (current(state).kind !== TokenKind.LBrace) {
-		return Result.err(`Expected '{' after interface name at line ${current(state).line.toString()}`);
+		return Result.err(`Expected '{' after interface name at line ${current(state).line}`);
 	}
 
 	advance(state);
@@ -605,7 +604,7 @@ export function parseInterfaceDecl(state: ParserState): NodeResult {
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
 		const field = current(state);
 		if (!isIdentLike(field)) {
-			return Result.err(`Expected field name in interface at line ${field.line.toString()}`);
+			return Result.err(`Expected field name in interface at line ${field.line}`);
 		}
 
 		fields.push(field.value);
@@ -625,7 +624,7 @@ export function parseInterfaceDecl(state: ParserState): NodeResult {
 	}
 
 	if (current(state).kind !== TokenKind.RBrace) {
-		return Result.err(`Expected '}' after interface body at line ${current(state).line.toString()}`);
+		return Result.err(`Expected '}' after interface body at line ${current(state).line}`);
 	}
 
 	advance(state);
@@ -635,9 +634,9 @@ export function parseInterfaceDecl(state: ParserState): NodeResult {
 		let fnJoined = "";
 		let ftJoined = "";
 		for (let fi = 0; fi < fields.length; fi += 1) {
-			if (fi > 0) { fnJoined = fnJoined + "|"; ftJoined = ftJoined + "|"; }
-			fnJoined = fnJoined + fields[fi];
-			if (fi < fieldTypes.length) { ftJoined = ftJoined + fieldTypes[fi]; }
+			if (fi > 0) { fnJoined = `${fnJoined}|`; ftJoined = `${ftJoined}|`; }
+			fnJoined = `${fnJoined}${fields[fi]}`;
+			if (fi < fieldTypes.length) { ftJoined = `${ftJoined}${fieldTypes[fi]}`; }
 		}
 		updateGenericDeclFields(nameToken.value, fnJoined, ftJoined);
 	}
@@ -659,13 +658,13 @@ export function parseClassDecl(state: ParserState): NodeResult {
 		advance(state);
 	}
 	if (current(state).kind !== TokenKind.Class) {
-		return Result.err(`Expected 'class' at line ${current(state).line.toString()}`);
+		return Result.err(`Expected 'class' at line ${current(state).line}`);
 	}
 	advance(state);
 
 	const nameToken = current(state);
 	if (!isIdentLike(nameToken)) {
-		return Result.err(`Expected class name at line ${nameToken.line.toString()}`);
+		return Result.err(`Expected class name at line ${nameToken.line}`);
 	}
 	advance(state);
 
@@ -700,7 +699,7 @@ export function parseClassDecl(state: ParserState): NodeResult {
 	}
 
 	if (current(state).kind !== TokenKind.LBrace) {
-		return Result.err(`Expected '{' after class declaration at line ${current(state).line.toString()}`);
+		return Result.err(`Expected '{' after class declaration at line ${current(state).line}`);
 	}
 	advance(state);
 
@@ -722,13 +721,12 @@ export function parseClassDecl(state: ParserState): NodeResult {
 	if (classIsGeneric) {
 		let fnJoined = "";
 		let ftJoined = "";
-		for (let mi = 0; mi < members.length; mi += 1) {
-			const mk = members[mi].kind;
-			if (mk === NodeKind.PropertyDecl) {
-				const pd = members[mi].data as PropertyDeclData;
-				if (fnJoined !== "") { fnJoined = fnJoined + "|"; ftJoined = ftJoined + "|"; }
-				fnJoined = fnJoined + pd.propName;
-				ftJoined = ftJoined + pd.propType;
+		for (const member of members) {
+			if (member.kind === NodeKind.PropertyDecl) {
+				const pd = member.data as PropertyDeclData;
+				if (fnJoined !== "") { fnJoined = `${fnJoined}|`; ftJoined = `${ftJoined}|`; }
+				fnJoined = `${fnJoined}${pd.propName}`;
+				ftJoined = `${ftJoined}${pd.propType}`;
 			}
 		}
 		updateGenericDeclFields(nameToken.value, fnJoined, ftJoined);
@@ -791,7 +789,7 @@ function parseClassMember(state: ParserState): NodeResult {
 
 	// Check for async modifier on methods
 	if (current(state).kind === TokenKind.Async) {
-		if (memberFlags !== "") { memberFlags = memberFlags + "_async"; }
+		if (memberFlags !== "") { memberFlags = `${memberFlags}_async`; }
 		else { memberFlags = "async"; }
 		advance(state);
 	}
@@ -818,7 +816,7 @@ function parseClassMember(state: ParserState): NodeResult {
 	// Regular member: name followed by ( for method, or : / = / ; for property
 	const nameToken = current(state);
 	if (!isIdentLike(nameToken)) {
-		return Result.err(`Expected member name in class at line ${nameToken.line.toString()}`);
+		return Result.err(`Expected member name in class at line ${nameToken.line}`);
 	}
 	advance(state);
 
@@ -870,13 +868,13 @@ function parseClassAccessor(state: ParserState, isStatic: boolean, flags: string
 	advance(state);
 	const accName = current(state).value;
 	advance(state);
-	const raw = parseParamList(state, accKind + "_" + accName);
+	const raw = parseParamList(state, `${accKind}_${accName}`);
 	const methodParams = extractParamNames(raw);
 	const methodParamTypes = extractParamTypes(raw);
 	const methodReturnType = captureOptionalType(state);
 	const body = try callBlockParser(state);
 	return Result.ok(createNode(NodeKind.MethodDecl, {
-		methodName: accKind + "_" + accName,
+		methodName: `${accKind}_${accName}`,
 		methodParams,
 		methodParamTypes,
 		methodBody: body,
@@ -890,8 +888,8 @@ function parseClassMethodBody(state: ParserState, nameToken: Token, isStatic: bo
 	// Capture optional generic params: method<T>(...) — same as regular function parser
 	const genericNames = captureGenericParams(state);
 	if (genericNames !== "") {
-		if (flags === "") { flags = "gen:" + genericNames; }
-		else { flags = flags + "|gen:" + genericNames; }
+		if (flags === "") { flags = `gen:${genericNames}`; }
+		else { flags = `${flags}|gen:${genericNames}`; }
 	}
 	const raw = parseParamList(state, nameToken.value);
 	const methodParams = extractParamNames(raw);
@@ -1147,7 +1145,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 		_ => ExternKind.Invalid,
 	};
 	if (externKind === ExternKind.Invalid) {
-		return Result.err(`Expected declaration keyword after 'extern' at line ${kindToken.line.toString()}`);
+		return Result.err(`Expected declaration keyword after 'extern' at line ${kindToken.line}`);
 	}
 	advance(state); // consume the keyword
 
@@ -1159,7 +1157,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 	// Parse name
 	const nameToken = current(state);
 	if (!isIdentLike(nameToken)) {
-		return Result.err(`Expected identifier in extern declaration at line ${nameToken.line.toString()}`);
+		return Result.err(`Expected identifier in extern declaration at line ${nameToken.line}`);
 	}
 	advance(state);
 
@@ -1249,18 +1247,18 @@ export function parseDistinctTypeDecl(state: ParserState): NodeResult {
 	advance(state); // consume 'distinct'
 
 	if (current(state).kind !== TokenKind.Type) {
-		return Result.err(`Expected 'type' after 'distinct' at line ${current(state).line.toString()}`);
+		return Result.err(`Expected 'type' after 'distinct' at line ${current(state).line}`);
 	}
 	advance(state); // consume 'type'
 
 	const nameToken = current(state);
 	if (!isIdentLike(nameToken)) {
-		return Result.err(`Expected identifier after 'distinct type' at line ${nameToken.line.toString()}`);
+		return Result.err(`Expected identifier after 'distinct type' at line ${nameToken.line}`);
 	}
 	advance(state);
 
 	if (current(state).kind !== TokenKind.Assign) {
-		return Result.err(`Expected '=' in distinct type declaration at line ${current(state).line.toString()}`);
+		return Result.err(`Expected '=' in distinct type declaration at line ${current(state).line}`);
 	}
 	advance(state);
 	const dTypeStart = state.position;
@@ -1289,7 +1287,7 @@ export function parseMacroDecl(state: ParserState): NodeResult {
 
 	const nameToken = current(state);
 	if (!isIdentLike(nameToken)) {
-		return Result.err(`Expected identifier after 'macro' at line ${nameToken.line.toString()}`);
+		return Result.err(`Expected identifier after 'macro' at line ${nameToken.line}`);
 	}
 	advance(state);
 

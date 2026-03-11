@@ -41,46 +41,44 @@ export function createMonoRegistry(): MonoRegistry {
 // Used for name mangling: identity<number> → "identity__number"
 export function monoTypeKey(t: Type): string {
 	if (t === null) return "null";
-	if (t.kind === TypeKind.Number) return "number";
-	if (t.kind === TypeKind.String) return "string";
-	if (t.kind === TypeKind.Boolean) return "boolean";
-	if (t.kind === TypeKind.Void) return "void";
-	if (t.kind === TypeKind.Null) return "null";
-	if (t.kind === TypeKind.Int8) return "int8";
-	if (t.kind === TypeKind.Int16) return "int16";
-	if (t.kind === TypeKind.Int32) return "int32";
-	if (t.kind === TypeKind.Int64) return "int64";
-	if (t.kind === TypeKind.Uint8) return "uint8";
-	if (t.kind === TypeKind.Uint16) return "uint16";
-	if (t.kind === TypeKind.Uint32) return "uint32";
-	if (t.kind === TypeKind.Uint64) return "uint64";
-	if (t.kind === TypeKind.Float32) return "float32";
-	if (t.kind === TypeKind.Float64) return "float64";
-	if (t.kind === TypeKind.Array) return "arr_" + monoTypeKey(t.typeReturn);
-	if (t.kind === TypeKind.Ref) return "ref_" + monoTypeKey(t.typeReturn);
-	if (t.kind === TypeKind.Ptr) return "ptr_" + monoTypeKey(t.typeReturn);
-	if (t.kind === TypeKind.Struct) return t.typeName;
-	if (t.kind === TypeKind.Enum) return t.typeName;
-	if (t.kind === TypeKind.Result) {
-		return "result_" + monoTypeKey(t.typeReturn) + "_" + monoTypeKey(t.typeExtra);
-	}
-	if (t.kind === TypeKind.Function) {
-		let key = "fn";
-		for (let i = 0; i < t.typeChildren.length; i += 1) {
-			key = key + "_" + monoTypeKey(t.typeChildren[i]);
-		}
-		key = key + "_ret_" + monoTypeKey(t.typeReturn);
-		return key;
-	}
-	if (t.kind === TypeKind.Union) {
-		let key = "union";
-		for (let i = 0; i < t.typeChildren.length; i += 1) {
-			key = key + "_" + monoTypeKey(t.typeChildren[i]);
-		}
-		return key;
-	}
-	if (t.kind === TypeKind.Distinct) return "distinct_" + monoTypeKey(t.typeReturn);
-	return "unknown";
+	return match (t.kind) {
+		TypeKind.Number => "number",
+		TypeKind.String => "string",
+		TypeKind.Boolean => "boolean",
+		TypeKind.Void => "void",
+		TypeKind.Null => "null",
+		TypeKind.Int8 => "int8",
+		TypeKind.Int16 => "int16",
+		TypeKind.Int32 => "int32",
+		TypeKind.Int64 => "int64",
+		TypeKind.Uint8 => "uint8",
+		TypeKind.Uint16 => "uint16",
+		TypeKind.Uint32 => "uint32",
+		TypeKind.Uint64 => "uint64",
+		TypeKind.Float32 => "float32",
+		TypeKind.Float64 => "float64",
+		TypeKind.Array => `arr_${monoTypeKey(t.typeReturn)}`,
+		TypeKind.Ref => `ref_${monoTypeKey(t.typeReturn)}`,
+		TypeKind.Ptr => `ptr_${monoTypeKey(t.typeReturn)}`,
+		TypeKind.Struct | TypeKind.Enum => t.typeName,
+		TypeKind.Result => `result_${monoTypeKey(t.typeReturn)}_${monoTypeKey(t.typeExtra)}`,
+		TypeKind.Distinct => `distinct_${monoTypeKey(t.typeReturn)}`,
+		TypeKind.Function => {
+			let key = "fn";
+			for (const child of t.typeChildren) {
+				key = `${key}_${monoTypeKey(child)}`;
+			}
+			return `${key}_ret_${monoTypeKey(t.typeReturn)}`;
+		},
+		TypeKind.Union => {
+			let key = "union";
+			for (const child of t.typeChildren) {
+				key = `${key}_${monoTypeKey(child)}`;
+			}
+			return key;
+		},
+		_ => "unknown",
+	};
 }
 
 // ===== Name Mangling =====

@@ -11,7 +11,7 @@ export {
 export {
 	ResolveCandidates, ResolverConfig, resolveImport, resolveImportWithConfig,
 	backendExtension, createDefaultConfig, isStdImport,
-	BACKEND_C, BACKEND_JS, BACKEND_RAISER, BACKEND_ERLANG, BACKEND_WASM,
+	Backend,
 } from "./resolver";
 
 export {

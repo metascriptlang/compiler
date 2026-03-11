@@ -68,10 +68,8 @@ function isDeclAlive(g: CGen, node: Node): boolean {
 const DRC_SUFFIXES: string[] = ["_destroy", "_copy", "_sink", "_wasMoved", "_dup", "_eq", "_trace", "_typeInfo"];
 
 function hasSuffix(name: string, suffixes: string[]): boolean {
-	let i = 0;
-	while (i < suffixes.length) {
-		if (name.endsWith(suffixes[i])) return true;
-		i = i + 1;
+	for (const suffix of suffixes) {
+		if (name.endsWith(suffix)) return true;
 	}
 	return false;
 }
@@ -105,36 +103,27 @@ export function ensureDrcProto(g: CGen, callee: string): void {
 	// destroy: by-value; wasMoved: by-pointer; copy/sink: dest by-pointer, src by-value
 	const isSeqHook = typeName.endsWith("Array");
 
-	let proto = "";
-	if (suffix === "_destroy") {
-		if (isSeqHook) {
-			// reference parity: destroy(self: sequence) — by-value
-			proto = "void " + callee + "(" + typeName + " self)";
-		} else {
-			proto = "void " + callee + "(" + typeName + "* self)";
-		}
-	} else if (suffix === "_wasMoved") {
-		// Always by-pointer (var param in reference implementation)
-		proto = "void " + callee + "(" + typeName + "* self)";
-	} else if (suffix === "_copy" || suffix === "_sink") {
-		if (isSeqHook) {
-			// reference parity: copy/sink(dest: var sequence, src: sequence) — dest ptr, src value
-			proto = "void " + callee + "(" + typeName + "* dest, " + typeName + " src)";
-		} else {
-			proto = "void " + callee + "(" + typeName + "* dest, " + typeName + "* src)";
-		}
-	} else if (suffix === "_dup") {
-		// TypeName TypeName_dup(TypeName* src)
-		proto = typeName + " " + callee + "(" + typeName + "* src)";
-	} else if (suffix === "_eq") {
-		// MS_BOOL TypeName_eq(TypeName* a, TypeName* b)
-		proto = "MS_BOOL " + callee + "(" + typeName + "* a, " + typeName + "* b)";
-	} else if (suffix === "_trace") {
-		// void TypeName_trace(TypeName* self, void* callback)
-		proto = "void " + callee + "(" + typeName + "* self, void* callback)";
-	} else {
-		return;
-	}
+	const proto = match (suffix) {
+		"_destroy" => {
+			if (isSeqHook) {
+				return `void ${callee}(${typeName} self)`;
+			} else {
+				return `void ${callee}(${typeName}* self)`;
+			}
+		},
+		"_wasMoved" => `void ${callee}(${typeName}* self)`,
+		"_copy" | "_sink" => {
+			if (isSeqHook) {
+				return `void ${callee}(${typeName}* dest, ${typeName} src)`;
+			} else {
+				return `void ${callee}(${typeName}* dest, ${typeName}* src)`;
+			}
+		},
+		"_dup" => `${typeName} ${callee}(${typeName}* src)`,
+		"_eq" => `MS_BOOL ${callee}(${typeName}* a, ${typeName}* b)`,
+		"_trace" => `void ${callee}(${typeName}* self, void* callback)`,
+		_ => { return; },
+	};
 	// Array/seq hooks use weak linkage at definition site — forward declarations are plain extern
 	addLine(sec(g, CSection.ProcHeaders), proto + ";");
 }
@@ -175,39 +164,35 @@ export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Type
 	if (paramList === "") paramList = "void";
 	let cRetType = retType;
 	if (nrvo) cRetType = "void";
-	addLine(sec(g, CSection.ProcHeaders), cRetType + " " + calleeName + "(" + paramList + ");");
+	addLine(sec(g, CSection.ProcHeaders), `${cRetType} ${calleeName}(${paramList});`);
 }
 
 export function genDecl(g: CGen, node: Node, exported: boolean): void {
 	if (node === null) return;
 
-	const k = node.kind;
-	if (k === NodeKind.FunctionDecl) {
-		if (!isDeclAlive(g, node)) return;
-		genFunctionDecl(g, node, exported);
-	}
-	else if (k === NodeKind.EnumDecl) { genEnumDecl(g, node); }
-	else if (k === NodeKind.InterfaceDecl) { genInterfaceDecl(g, node); }
-	else if (k === NodeKind.ClassDecl) { genClassDecl(g, node); }
-	else if (k === NodeKind.ExportDecl) {
-		const d = node.data as ExportDeclData;
-		genDecl(g, d.exportedDecl, true);
-	}
-	else if (k === NodeKind.ImportDecl) { /* handled by destructorLifting for types */ }
-	else if (k === NodeKind.DecoratedDecl) {
-		const d = node.data as DecoratedDeclData;
-		genDecl(g, d.decoratedNode, exported);
-	}
-	else if (k === NodeKind.TypeAliasDecl) {
-		// Type aliases resolved lazily via symbol table lookup in getTypeDesc
-	}
-	else if (k === NodeKind.ExternDecl) { genExternDecl(g, node); }
-	else if (k === NodeKind.TestDecl) { genTestDeclNode(g, node); }
-	else if (k === NodeKind.AssertStmt) { genTopLevelStmt(g, node); }
-	else {
-		// Statement or variable at top level
-		genTopLevelStmt(g, node);
-	}
+	match (node.kind) {
+		NodeKind.FunctionDecl => {
+			if (!isDeclAlive(g, node)) return;
+			genFunctionDecl(g, node, exported);
+		},
+		NodeKind.EnumDecl => { genEnumDecl(g, node); },
+		NodeKind.InterfaceDecl => { genInterfaceDecl(g, node); },
+		NodeKind.ClassDecl => { genClassDecl(g, node); },
+		NodeKind.ExportDecl => {
+			const d = node.data as ExportDeclData;
+			genDecl(g, d.exportedDecl, true);
+		},
+		NodeKind.ImportDecl => {},
+		NodeKind.DecoratedDecl => {
+			const d = node.data as DecoratedDeclData;
+			genDecl(g, d.decoratedNode, exported);
+		},
+		NodeKind.TypeAliasDecl => {},
+		NodeKind.ExternDecl => { genExternDecl(g, node); },
+		NodeKind.TestDecl => { genTestDeclNode(g, node); },
+		NodeKind.AssertStmt => { genTopLevelStmt(g, node); },
+		_ => { genTopLevelStmt(g, node); },
+	};
 }
 
 // ===== Extern Declaration (non-function) =====
@@ -222,7 +207,7 @@ function genExternDecl(g: CGen, node: Node): void {
 	if (d.externKind === ExternKind.Class || d.externKind === ExternKind.Interface || d.externKind === ExternKind.Type) {
 		// Opaque type forward decl: typedef struct Name Name;
 		// If @include provides full definition, this is harmless (forward decl before full def is valid C).
-		addLine(sec(g, CSection.ForwardDecls), "typedef struct " + d.externName + " " + d.externName + ";");
+		addLine(sec(g, CSection.ForwardDecls), `typedef struct ${d.externName} ${d.externName};`);
 	}
 	// Vars/consts/enums/macros: provided by @include headers, no emission needed.
 }
@@ -265,7 +250,7 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 		if (i < fnType.typeChildren.length && ccgIntroducedPtr(fnType.typeChildren[i]) && pType.charAt(pType.length - 1) !== "*") {
 			pType = pType + "*";
 		}
-		paramList = paramList + pType + " " + safeName(d.params[i]);
+		paramList = paramList + `${pType} ${safeName(d.params[i])}`;
 	}
 	if (paramList === "") paramList = "void";
 
@@ -281,7 +266,7 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 
 	// Emit prototype to ProcHeaders — NRVO functions return void (skip if already forward-declared)
 	const actualRetType = nrvo ? "void" : cRetType;
-	const proto = prefix + actualRetType + " " + name + "(" + paramList + ")";
+	const proto = `${prefix}${actualRetType} ${name}(${paramList})`;
 
 	// Extern functions with 'from' clause bind to existing C functions — header provides declaration.
 	// Extern functions without 'from' use mangled name and need our prototype.
@@ -352,7 +337,7 @@ function genEnumDecl(g: CGen, node: Node): void {
 	addLine(types, "typedef int32_t " + name + ";");
 	for (let i = 0; i < d.enumMembers.length; i += 1) {
 		const val = (d.enumValues !== null && i < d.enumValues.length) ? d.enumValues[i] : i;
-		addLine(types, "#define " + name + "_" + d.enumMembers[i] + " (((" + name + ")" + val.toString() + "))");
+		addLine(types, `#define ${name}_${d.enumMembers[i]} (((${name})${val}))`);
 	}
 	addNewline(types);
 }
@@ -373,7 +358,7 @@ function genInterfaceDecl(g: CGen, node: Node): void {
 	typeCacheSet(g.typeCache, ifaceKey, name);
 
 	// Forward declaration
-	addLine(sec(g, CSection.ForwardDecls), "typedef struct " + name + " " + name + ";");
+	addLine(sec(g, CSection.ForwardDecls), `typedef struct ${name} ${name};`);
 
 	// Pre-resolve field types (ensures nested type definitions are emitted before struct body)
 	const ifaceType = node.nodeType;
@@ -385,9 +370,9 @@ function genInterfaceDecl(g: CGen, node: Node): void {
 
 	// Full struct definition (all referenced types already emitted above)
 	const types = sec(g, CSection.Types);
-	addLine(types, "struct " + name + " {");
+	addLine(types, `struct ${name} {`);
 	for (let i = 0; i < d.interfaceFields.length; i += 1) {
-		addLine(types, "  " + fieldTypes[i] + " " + mangleFieldName(d.interfaceFields[i]) + ";");
+		addLine(types, `  ${fieldTypes[i]} ${mangleFieldName(d.interfaceFields[i])};`);
 	}
 	addLine(types, "};");
 	addNewline(types);
@@ -410,7 +395,7 @@ function genClassDecl(g: CGen, node: Node): void {
 	typeCacheSet(g.typeCache, classKey, name);
 
 	// Forward declaration
-	addLine(sec(g, CSection.ForwardDecls), "typedef struct " + name + " " + name + ";");
+	addLine(sec(g, CSection.ForwardDecls), `typedef struct ${name} ${name};`);
 
 	// Reference parity (standard struct generation): pre-resolve ALL field types in a local buffer,
 	// then emit the complete struct atomically. This prevents recursive getTypeDesc
@@ -427,9 +412,9 @@ function genClassDecl(g: CGen, node: Node): void {
 	}
 
 	// Struct — no refcount field; msRefHeader (16 bytes) is prepended by msAllocTyped
-	let structDef = "struct " + name + " {\n";
+	let structDef = `struct ${name} {\n`;
 	for (let i = 0; i < fieldTypes.length; i += 1) {
-		structDef = structDef + "  " + fieldTypes[i] + " " + fieldNames[i] + ";\n";
+		structDef = structDef + `  ${fieldTypes[i]} ${fieldNames[i]};\n`;
 	}
 	structDef = structDef + "};\n";
 	const types = sec(g, CSection.Types);
@@ -454,7 +439,7 @@ function genClassDecl(g: CGen, node: Node): void {
 
 function genMethodAsFunction(g: CGen, node: Node, className: string): void {
 	const d = node.data as MethodDeclData;
-	const methodName = mangledFunctionName(node.resolvedSym, className + "_" + safeName(d.methodName), 0);
+	const methodName = mangledFunctionName(node.resolvedSym, `${className}_${safeName(d.methodName)}`, 0);
 	const methodType = node.nodeType;
 	const cRetType = getTypeDesc(g, methodType.typeReturn);
 
@@ -463,11 +448,11 @@ function genMethodAsFunction(g: CGen, node: Node, className: string): void {
 	for (let i = 0; i < d.methodParams.length; i += 1) {
 		if (i > 0) paramList = paramList + ", ";
 		const pType = getTypeDesc(g, methodType.typeChildren[i]);
-		paramList = paramList + pType + " " + safeName(d.methodParams[i]);
+		paramList = paramList + `${pType} ${safeName(d.methodParams[i])}`;
 	}
 	if (d.methodParams.length === 0) paramList = "void";
 
-	const proto = cRetType + " " + methodName + "(" + paramList + ")";
+	const proto = `${cRetType} ${methodName}(${paramList})`;
 	addLine(sec(g, CSection.ProcHeaders), proto + ";");
 
 	if (d.methodBody !== null) {
@@ -495,17 +480,17 @@ function genConstructor(g: CGen, node: Node, className: string): void {
 	for (let i = 0; i < d.ctorParams.length; i += 1) {
 		if (i > 0) paramList = paramList + ", ";
 		const pType = getTypeDesc(g, ctorType.typeChildren[i]);
-		paramList = paramList + pType + " " + safeName(d.ctorParams[i]);
+		paramList = paramList + `${pType} ${safeName(d.ctorParams[i])}`;
 	}
 	if (d.ctorParams.length === 0) paramList = "void";
 
-	const proto = className + "* " + ctorName + "(" + paramList + ")";
+	const proto = `${className}* ${ctorName}(${paramList})`;
 	addLine(sec(g, CSection.ProcHeaders), proto + ";");
 
 	const procs = sec(g, CSection.Procs);
 	addLine(procs, proto + " {");
 	// Allocate with RTTI: msAllocTyped(sizeof(Type), &Type_typeInfo)
-	addLine(procs, "  " + className + "* this = (" + className + "*)msAllocTyped(sizeof(" + className + "), &" + className + "_typeInfo);");
+	addLine(procs, `  ${className}* this = (${className}*)msAllocTyped(sizeof(${className}), &${className}_typeInfo);`);
 
 	if (d.ctorBody !== null) {
 		const p = createProc(ctorName, null);
@@ -608,7 +593,7 @@ function genGlobalVar(g: CGen, node: Node): void {
 
 	const cType = getTypeDesc(g, node.nodeType);
 	// Always emit uninitialized declaration to GlobalVars
-	addLine(sec(g, CSection.GlobalVars), cType + " " + varName + ";");
+	addLine(sec(g, CSection.GlobalVars), `${cType} ${varName};`);
 	// Track as module-local global (for cross-module extern detection)
 	nameSetAdd(g.declaredGlobals, d.declName);
 
@@ -626,7 +611,7 @@ function genGlobalVar(g: CGen, node: Node): void {
 		if (stmts.length > 0) {
 			add(sec(g, CSection.ModuleInit), stmts);
 		}
-		addLine(sec(g, CSection.ModuleInit), "  " + varName + " = " + initSnippet + ";");
+		addLine(sec(g, CSection.ModuleInit), `  ${varName} = ${initSnippet};`);
 	}
 }
 
@@ -651,27 +636,27 @@ function genTypeInfoVar(g: CGen, d: VariableDeclData, varName: string): void {
 			const key = od.keys[i];
 			if (key === "name") {
 				// name field: emit C string literal (const char*), not msString
-				addLine(datInit, "  " + varName + ".name = \"" + baseName + "\";");
+				addLine(datInit, `  ${varName}.name = "${baseName}";`);
 			} else if (key === "destroyFn") {
 				// destroyFn: cast to msDestroyProc (void(*)(void*)) for C type safety
 				const val = genExpr(g, p, od.properties[i]);
 				if (val === "MS_NIL" || val === "NULL") {
-					addLine(datInit, "  " + varName + ".destroyFn = NULL;");
+					addLine(datInit, `  ${varName}.destroyFn = NULL;`);
 				} else {
-					addLine(datInit, "  " + varName + ".destroyFn = (msDestroyProc)" + val + ";");
+					addLine(datInit, `  ${varName}.destroyFn = (msDestroyProc)${val};`);
 				}
 			} else if (key === "traceFn") {
 				// traceFn: cast to msTraceProc (void(*)(void*, void*)) for C type safety
 				const val = genExpr(g, p, od.properties[i]);
 				if (val === "MS_NIL" || val === "NULL") {
-					addLine(datInit, "  " + varName + ".traceFn = NULL;");
+					addLine(datInit, `  ${varName}.traceFn = NULL;`);
 				} else {
-					addLine(datInit, "  " + varName + ".traceFn = (msTraceProc)" + val + ";");
+					addLine(datInit, `  ${varName}.traceFn = (msTraceProc)${val};`);
 				}
 			} else {
 				// isCyclic: use genExpr directly
 				const val = genExpr(g, p, od.properties[i]);
-				addLine(datInit, "  " + varName + "." + key + " = " + val + ";");
+				addLine(datInit, `  ${varName}.${key} = ${val};`);
 			}
 		}
 	}

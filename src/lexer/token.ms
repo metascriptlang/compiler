@@ -47,7 +47,7 @@ export function createToken(kind: TokenKind, tokenValue: string, lineNum: number
 }
 
 export function formatToken(token: Token): string {
-	return `[${tokenKindToString(token.kind)}: '${token.value}' at line ${token.line.toString()}]`;
+	return `[${tokenKindToString(token.kind)}: '${token.value}' at line ${token.line}]`;
 }
 
 // Returns true for Ident and all keyword tokens.

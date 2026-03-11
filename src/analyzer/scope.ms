@@ -7,7 +7,7 @@
 //
 // Arrays passed by pointer — bare T[] types (wrappers removed).
 
-import { Node, SourceLocation } from "../ast/node";
+import { Node, NodeKind, SourceLocation, ExprStmtData, CallExprData, IdentifierData } from "../ast/node";
 import { RcInfo, RcKind, noRcInfo } from "./classify";
 import { CursorSet, createCursorSet } from "./cursors";
 import { CfgCache, createCfgCache } from "./cfg";
@@ -132,6 +132,7 @@ export function markUninitialized(dctx: DrcContext, varName: string): void {
 
 export function recordMove(dctx: DrcContext, varName: string): void {
 	const scope = currentScope(dctx);
+	if (wasMovedInScope(scope, varName)) return;
 	const mv: MovedVar = { varName };
 	scope.wasMoved.push(mv);
 }
@@ -150,8 +151,10 @@ export function recordMoveInContext(dctx: DrcContext, varName: string): void {
 		i -= 1;
 		const vi = findVarInfo(dctx.scopes[i], varName);
 		if (vi !== null) {
-			const mv: MovedVar = { varName };
-			dctx.scopes[i].wasMoved.push(mv);
+			if (!wasMovedInScope(dctx.scopes[i], varName)) {
+				const mv: MovedVar = { varName };
+				dctx.scopes[i].wasMoved.push(mv);
+			}
 			return;
 		}
 	}
@@ -226,6 +229,39 @@ export function flushPre(dctx: DrcContext, target: Node[]): void {
 
 export function hasPending(dctx: DrcContext): boolean {
 	return dctx.pendingStmts.length > 0;
+}
+
+// Remove pending wasMoved stmts for a variable that was prematurely marked as last-read.
+// Used when `x = f(x)` — the RHS arg `x` gets wasMoved but the assignment overwrites `x`.
+export function clearPendingForVar(dctx: DrcContext, varName: string): void {
+	const filtered: Node[] = [];
+	for (const s of dctx.pendingStmts) {
+		if (!isPendingWasMovedFor(s, varName)) {
+			filtered.push(s);
+		}
+	}
+	dctx.pendingStmts = filtered;
+}
+
+function isPendingWasMovedFor(s: Node, varName: string): boolean {
+	if (s.kind !== NodeKind.ExprStmt) return false;
+	const ed = s.data as ExprStmtData;
+	if (ed.expr.kind !== NodeKind.CallExpr) return false;
+	const cd = ed.expr.data as CallExprData;
+	if (cd.arguments.length === 0) return false;
+	const arg = cd.arguments[0];
+	// Ref types: msPtrWasMoved(varName) — direct Identifier arg
+	if (arg.kind === NodeKind.Identifier) {
+		return (arg.data as IdentifierData).name === varName;
+	}
+	// Named types: T_wasMoved(&varName) — HiddenAddr wrapping Identifier
+	if (arg.kind === NodeKind.HiddenAddr) {
+		const hd = arg.data as { expr: Node };
+		if (hd.expr.kind === NodeKind.Identifier) {
+			return (hd.expr.data as IdentifierData).name === varName;
+		}
+	}
+	return false;
 }
 
 export function hasPre(dctx: DrcContext): boolean {

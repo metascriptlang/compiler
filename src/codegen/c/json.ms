@@ -110,10 +110,8 @@ export function fieldTypeToJsonCtor(ftype: Type): string {
 
 // Validate all struct fields are supported for JSON stringify/colored emission.
 function allFieldsSupported(fieldTypes: Type[]): boolean {
-	let i = 0;
-	while (i < fieldTypes.length) {
-		if (fieldTypeToJsonCtor(fieldTypes[i]) === "") return false;
-		i = i + 1;
+	for (const ft of fieldTypes) {
+		if (fieldTypeToJsonCtor(ft) === "") return false;
 	}
 	return true;
 }
@@ -127,11 +125,11 @@ function emitJsonSetFields(fieldNames: string[], fieldTypes: Type[]): string {
 		const fname = fieldNames[fi];
 		const ftype = fieldTypes[fi];
 		const ctorName = fieldTypeToJsonCtor(ftype);
-		let valueExpr = "value." + fname;
+		let valueExpr = `value.${fname}`;
 		if (needsNumCast(ftype)) {
-			valueExpr = "(double)" + valueExpr;
+			valueExpr = `(double)${valueExpr}`;
 		}
-		c = c + "  msJsonSet(__o, msStringNew(\"" + fname + "\", " + fname.length.toString() + "), " + ctorName + "(" + valueExpr + "));\n";
+		c = c + `  msJsonSet(__o, msStringNew("${fname}", ${fname.length.toString()}), ${ctorName}(${valueExpr}));\n`;
 		fi = fi + 1;
 	}
 	return c;
@@ -165,12 +163,12 @@ export function generateJsonParseC(
 		fi = fi + 1;
 	}
 
-	const resultCType = "msResult_" + typeName + "_msString";
+	const resultCType = `msResult_${typeName}_msString`;
 
 	// Include json runtime header (INCLUDESECTION routes it to #include area)
 	let c = "/*INCLUDESECTION*/#include \"core/json.h\"\n";
-	c = c + "static " + resultCType + " " + helperName + "(msString input) {\n";
-	c = c + "  " + resultCType + " __r; memset(&__r, 0, sizeof(__r));\n";
+	c = c + `static ${resultCType} ${helperName}(msString input) {\n`;
+	c = c + `  ${resultCType} __r; memset(&__r, 0, sizeof(__r));\n`;
 	c = c + "  MsJsonValue* __jv = msJsonParse(input);\n";
 	c = c + "  if (!__jv || __jv->kind != MsJsonKind_Object) {\n";
 	c = c + "    msJsonFree(__jv);\n";
@@ -185,24 +183,24 @@ export function generateJsonParseC(
 		const ftype = fieldTypes[fi];
 		const jsonKind = fieldTypeToJsonKind(ftype);
 		const cFieldType = fieldTypeToCType(ftype);
-		const fVar = "__f" + fi.toString();
+		const fVar = `__f${fi.toString()}`;
 
-		c = c + "  MsJsonValue* " + fVar + " = msJsonGet(__jv, msStringNew(\"" + fname + "\", " + fname.length.toString() + "));\n";
-		c = c + "  if (!" + fVar + " || " + fVar + "->kind != " + jsonKind.toString() + ") {\n";
+		c = c + `  MsJsonValue* ${fVar} = msJsonGet(__jv, msStringNew("${fname}", ${fname.length.toString()}));\n`;
+		c = c + `  if (!${fVar} || ${fVar}->kind != ${jsonKind.toString()}) {\n`;
 
-		const errMsg = "field '" + fname + "': type mismatch";
+		const errMsg = `field '${fname}': type mismatch`;
 		c = c + "    msJsonFree(__jv);\n";
-		c = c + "    __r.ok = MS_FALSE; __r.error = msStringNew(\"" + errMsg + "\", " + errMsg.length.toString() + ");\n";
+		c = c + `    __r.ok = MS_FALSE; __r.error = msStringNew("${errMsg}", ${errMsg.length.toString()});\n`;
 		c = c + "    return __r;\n";
 		c = c + "  }\n";
 
 		if (needsNumCast(ftype)) {
-			c = c + "  __r.value." + fname + " = (" + cFieldType + ")" + fVar + "->numVal;\n";
+			c = c + `  __r.value.${fname} = (${cFieldType})${fVar}->numVal;\n`;
 		} else {
-			c = c + "  __r.value." + fname + " = " + fVar + jsonCAccessor(ftype) + ";\n";
+			c = c + `  __r.value.${fname} = ${fVar}${jsonCAccessor(ftype)};\n`;
 			// String fields: incref before msJsonFree releases the JSON tree
 			if (ftype.kind === TypeKind.String) {
-				c = c + "  msStringIncref(__r.value." + fname + ");\n";
+				c = c + `  msStringIncref(__r.value.${fname});\n`;
 			}
 		}
 
@@ -232,7 +230,7 @@ export function generateJsonStringifyC(
 	if (!allFieldsSupported(fieldTypes)) return null as unknown as Node;
 
 	let c = "/*INCLUDESECTION*/#include \"core/json.h\"\n";
-	c = c + "static msString " + helperName + "(" + typeName + " value) {\n";
+	c = c + `static msString ${helperName}(${typeName} value) {\n`;
 	c = c + "  MsJsonValue* __o = msJsonNewObject();\n";
 	c = c + emitJsonSetFields(fieldNames, fieldTypes);
 	c = c + "  msString __result = msJsonStringify(__o);\n";
@@ -261,7 +259,7 @@ export function generateJsonStringifyColoredC(
 	if (!allFieldsSupported(fieldTypes)) return null as unknown as Node;
 
 	let c = "/*INCLUDESECTION*/#include \"core/json.h\"\n";
-	c = c + "static msString " + helperName + "(" + typeName + " value) {\n";
+	c = c + `static msString ${helperName}(${typeName} value) {\n`;
 	c = c + "  MsJsonValue* __o = msJsonNewObject();\n";
 	c = c + emitJsonSetFields(fieldNames, fieldTypes);
 	c = c + "  msString __body = msJsonStringifyColored(__o);\n";
@@ -270,9 +268,9 @@ export function generateJsonStringifyColoredC(
 	c = c + "  char __pbuf[256];\n";
 	c = c + "  int __plen;\n";
 	c = c + "  if (msColorsEnabled()) {\n";
-	c = c + "    __plen = snprintf(__pbuf, sizeof(__pbuf), \"" + colorCode + "" + displayName + "\\x1b[0m\");\n";
+	c = c + `    __plen = snprintf(__pbuf, sizeof(__pbuf), "${colorCode}${displayName}\\x1b[0m");\n`;
 	c = c + "  } else {\n";
-	c = c + "    __plen = snprintf(__pbuf, sizeof(__pbuf), \"" + displayName + "\");\n";
+	c = c + `    __plen = snprintf(__pbuf, sizeof(__pbuf), "${displayName}");\n`;
 	c = c + "  }\n";
 	c = c + "  msString __prefix = msStringNew(__pbuf, __plen);\n";
 	c = c + "  msString __result = msStringConcat(__prefix, __body);\n";

@@ -68,7 +68,7 @@ export function parseArrowFunction(
 	const arrowReturnType = captureOptionalType(state);
 
 	if (isAtEnd(state) || current(state).kind !== TokenKind.Arrow) {
-		return Result.err(`Expected '=>' in arrow function at line ${current(state).line.toString()}`);
+		return Result.err(`Expected '=>' in arrow function at line ${current(state).line}`);
 	}
 
 	advance(state); // consume =>

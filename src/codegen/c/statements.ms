@@ -21,12 +21,29 @@ import {
 	emitStmts, emitStmtsLine, emitStmtsNl,
 	getStmtsIndent, setStmtsIndent,
 	pushBlock, popBlock, readProcStmts,
-	sec, addLine, emitLineDir,
+	sec, addLine, emitLineDir, getTemp,
 } from "./context";
 import { genExpr, shimCallArg } from "./expressions";
 import { ensureCrossModuleProto } from "./declarations";
 import { safeName } from "./names";
 import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, getCalleeReturnType, intToString, genClFullCastNrvo, genClHalfCastNrvo } from "./types";
+
+// ===== blockLeaveActions — emit finally cleanup on break/continue/return =====
+// Reference parity: when control flow exits through
+// try/finally blocks (break, continue, return), inline the finally body
+// before the jump. Delta = current nesting minus snapshot at target block.
+
+function blockLeaveActions(g: CGen, p: CProc, howManyFinallys: number): void {
+	if (howManyFinallys <= 0) return;
+	// Emit finally bodies from innermost outward (reference: pop then restore)
+	const startIdx = p.nestedFinally.length - howManyFinallys;
+	for (let i = p.nestedFinally.length - 1; i >= startIdx; i -= 1) {
+		const fin = p.nestedFinally[i];
+		if (fin !== null) {
+			genStmt(g, p, fin);
+		}
+	}
+}
 
 // ===== NRVO Call Site Helpers =====
 // G3 fix: detect calls to NRVO functions and emit fn(&dest, args) instead of dest = fn(args)
@@ -89,18 +106,18 @@ function genNrvoCallExpr(g: CGen, p: CProc, callNode: Node, destVar: string): st
 		const clHalf = genClHalfCastNrvo(g, clCalleeType, nrvoType);
 		const envExpr = callee + ".env";
 		const fnExpr = callee + ".fn";
-		let fullArgs = "&" + destVar;
-		if (argsStr !== "") fullArgs = fullArgs + ", " + argsStr;
-		const callWithEnv = "((" + clFull + ")" + fnExpr + ")(" + fullArgs + ", " + envExpr + ")";
-		const callNoEnv = "((" + clHalf + ")" + fnExpr + ")(" + fullArgs + ")";
-		return "(" + envExpr + " ? " + callWithEnv + " : " + callNoEnv + ")";
+		let fullArgs = `&${destVar}`;
+		if (argsStr !== "") fullArgs = `${fullArgs}, ${argsStr}`;
+		const callWithEnv = `((${clFull})${fnExpr})(${fullArgs}, ${envExpr})`;
+		const callNoEnv = `((${clHalf})${fnExpr})(${fullArgs})`;
+		return `(${envExpr} ? ${callWithEnv} : ${callNoEnv})`;
 	}
 
 	// Direct NRVO call: on-demand cross-module prototype
 	ensureCrossModuleProto(g, callee, nrvoFnType, nrvoSym);
-	let args = "&" + destVar;
-	if (argsStr !== "") args = args + ", " + argsStr;
-	return callee + "(" + args + ")";
+	let args = `&${destVar}`;
+	if (argsStr !== "") args = `${args}, ${argsStr}`;
+	return `${callee}(${args})`;
 }
 import { sliceStr, charAt } from "../../utils/string";
 
@@ -110,22 +127,23 @@ export function genStmt(g: CGen, p: CProc, node: Node): void {
 	if (node === null) return;
 	emitLineDir(g, p, node);
 
-	const k = node.kind;
-	if (k === NodeKind.ExprStmt) { genExprStmt(g, p, node); }
-	else if (k === NodeKind.VariableDecl) { genVarDecl(g, p, node); }
-	else if (k === NodeKind.IfStmt) { genIfStmt(g, p, node); }
-	else if (k === NodeKind.WhileStmt) { genWhileStmt(g, p, node); }
-	else if (k === NodeKind.DoWhileStmt) { genDoWhileStmt(g, p, node); }
-	else if (k === NodeKind.BlockStmt) { genBlockStmt(g, p, node); }
-	else if (k === NodeKind.ReturnStmt) { genReturnStmt(g, p, node); }
-	else if (k === NodeKind.BreakStmt) { genBreakStmt(g, p, node); }
-	else if (k === NodeKind.ContinueStmt) { genContinueStmt(g, p, node); }
-	else if (k === NodeKind.ThrowStmt) { genThrowStmt(g, p, node); }
-	else if (k === NodeKind.TryCatchStmt) { genTryCatchStmt(g, p, node); }
-	else if (k === NodeKind.SwitchStmt) { genSwitchStmt(g, p, node); }
-	else if (k === NodeKind.AssertStmt) { genAssertStmt(g, p, node); }
-	else if (k === NodeKind.UnreachableStmt) { genUnreachableStmt(g, p, node); }
-	else { emitStmtsLine(p, "/* unsupported stmt: " + k + " */"); }
+	match (node.kind) {
+		NodeKind.ExprStmt => { genExprStmt(g, p, node); },
+		NodeKind.VariableDecl => { genVarDecl(g, p, node); },
+		NodeKind.IfStmt => { genIfStmt(g, p, node); },
+		NodeKind.WhileStmt => { genWhileStmt(g, p, node); },
+		NodeKind.DoWhileStmt => { genDoWhileStmt(g, p, node); },
+		NodeKind.BlockStmt => { genBlockStmt(g, p, node); },
+		NodeKind.ReturnStmt => { genReturnStmt(g, p, node); },
+		NodeKind.BreakStmt => { genBreakStmt(g, p, node); },
+		NodeKind.ContinueStmt => { genContinueStmt(g, p, node); },
+		NodeKind.ThrowStmt => { genThrowStmt(g, p, node); },
+		NodeKind.TryCatchStmt => { genTryCatchStmt(g, p, node); },
+		NodeKind.SwitchStmt => { genSwitchStmt(g, p, node); },
+		NodeKind.AssertStmt => { genAssertStmt(g, p, node); },
+		NodeKind.UnreachableStmt => { genUnreachableStmt(g, p, node); },
+		_ => { emitStmtsLine(p, `/* unsupported stmt: ${node.kind} */`); },
+	};
 }
 
 // ===== genStmts — emit a list of statements =====
@@ -233,19 +251,19 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 			if (cType === "void*" || cType === "double") {
 				cType = getTypeDesc(g, nrvoRet);
 			}
-			emitStmtsLine(p, cType + " " + varName + ";");
+			emitStmtsLine(p, `${cType} ${varName};`);
 			const nrvoCall = genNrvoCallExpr(g, p, d.initializer, varName);
-			emitStmtsLine(p, nrvoCall + ";");
+			emitStmtsLine(p, `${nrvoCall};`);
 		} else if ((d.initializer.kind === NodeKind.NullLiteral || isUndefinedIdent(d.initializer))
 			&& (isStructType(node.nodeType) || isStructCType(cType))) {
 			// Value-type null/undefined init → {0} instead of MS_NIL
-			emitStmtsLine(p, cType + " " + varName + " = {0};");
+			emitStmtsLine(p, `${cType} ${varName} = {0};`);
 		} else if ((d.initializer.kind === NodeKind.NullLiteral || isUndefinedIdent(d.initializer)) && isNumericCType(cType)) {
 			// Numeric-type null/undefined init → 0 instead of MS_NIL
-			emitStmtsLine(p, cType + " " + varName + " = 0;");
+			emitStmtsLine(p, `${cType} ${varName} = 0;`);
 		} else if (d.initializer.kind === NodeKind.ArrayLiteral && (d.initializer.data as ArrayLiteralData).elements.length === 0) {
 			// Empty array: use declared type for zero-init (avoids msRefArray default)
-			emitStmtsLine(p, cType + " " + varName + " = (" + cType + "){0};");
+			emitStmtsLine(p, `${cType} ${varName} = (${cType}){0};`);
 		} else {
 			const initSnippet = genExpr(g, p, d.initializer);
 			let finalInit = initSnippet;
@@ -256,14 +274,14 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 					const destIsPtr = cType.indexOf("*") >= 0;
 					const srcIsPtr = sourceCType.indexOf("*") >= 0;
 					if (destIsPtr === srcIsPtr) {
-						finalInit = "((" + cType + ")(" + initSnippet + "))";
+						finalInit = `((${cType})(${initSnippet}))`;
 					}
 				}
 			}
-			emitStmtsLine(p, cType + " " + varName + " = " + finalInit + ";");
+			emitStmtsLine(p, `${cType} ${varName} = ${finalInit};`);
 		}
 	} else {
-		emitStmtsLine(p, cType + " " + varName + ";");
+		emitStmtsLine(p, `${cType} ${varName};`);
 	}
 }
 
@@ -323,7 +341,7 @@ function genIfStmt(g: CGen, p: CProc, node: Node): void {
 	// Single if with no else: use simple if pattern (no gotos needed)
 	if (!hasManyBranches) {
 		const condSnippet = genExpr(g, p, branches[0]);
-		emitStmts(p, "if " + wrapCond(condSnippet) + " ");
+		emitStmts(p, `if ${wrapCond(condSnippet)} `);
 		genBlockOrBraces(g, p, bodies[0]);
 		emitStmtsNl(p);
 		return;
@@ -331,16 +349,16 @@ function genIfStmt(g: CGen, p: CProc, node: Node): void {
 	// Multi-branch: goto-based dispatch (Reference parity)
 	p.labels += 1;
 	const labelBase = p.labels;
-	const lend = "__L" + intToString(labelBase) + "_end";
+	const lend = `__L${intToString(labelBase)}_end`;
 	let i = 0;
 	while (i < branches.length) {
 		p.labels += 1;
 		const lnext = "__L" + intToString(p.labels);
 		emitStmtsLine(p, "{");
 		const condSnippet = genExpr(g, p, branches[i]);
-		emitStmtsLine(p, "if (!(" + condSnippet + ")) goto " + lnext + ";");
+		emitStmtsLine(p, `if (!(${condSnippet})) goto ${lnext};`);
 		genBlockOrBraces(g, p, bodies[i]);
-		emitStmtsLine(p, "} goto " + lend + ";");
+		emitStmtsLine(p, `} goto ${lend};`);
 		emitStmtsLine(p, lnext + ":;");
 		i += 1;
 	}
@@ -356,17 +374,17 @@ function genIfStmt(g: CGen, p: CProc, node: Node): void {
 function genWhileStmt(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as WhileStmtData;
 
-	// Nim parity (ccgstmts.nim:genWhileStmt): while(1) { cond-eval; if (!cond) break; body; }
+	// Reference parity: while(1) { cond-eval; if (!cond) break; body; }
 	// Ensures NRVO calls in conditions are re-evaluated each iteration.
 	emitStmts(p, "while (1) {\n");
 	const oldIndent = getStmtsIndent(p);
 	setStmtsIndent(p, oldIndent + 1);
 
-	// Nim parity (ccgstmts.nim:713): skip condition check for while(true) literals
+	// Reference parity: skip condition check for while(true) literals
 	const cond = d.whileCondition;
 	if (cond.kind !== NodeKind.BooleanLiteral || !(cond.data as BooleanLiteralData).boolValue) {
 		const condSnippet = genExpr(g, p, cond);
-		emitStmtsLine(p, "if (!" + wrapCond(condSnippet) + ") break;");
+		emitStmtsLine(p, `if (!${wrapCond(condSnippet)}) break;`);
 	}
 
 	if (d.whileBody.kind === NodeKind.BlockStmt) {
@@ -385,7 +403,7 @@ function genWhileStmt(g: CGen, p: CProc, node: Node): void {
 function genDoWhileStmt(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as DoWhileStmtData;
 
-	// Nim parity: NRVO-safe do-while. Condition must be evaluated inside the loop
+	// Reference parity: NRVO-safe do-while. Condition must be evaluated inside the loop
 	// to prevent NRVO call hoisting outside the loop scope.
 	// Emit: do { body; cond-eval; } while(cond);
 	emitStmts(p, "do {\n");
@@ -401,7 +419,7 @@ function genDoWhileStmt(g: CGen, p: CProc, node: Node): void {
 
 	const condSnippet = genExpr(g, p, d.doCondition);
 	setStmtsIndent(p, oldIndent);
-	emitStmtsLine(p, "} while " + wrapCond(condSnippet) + ";");
+	emitStmtsLine(p, `} while ${wrapCond(condSnippet)};`);
 }
 
 // ===== Block Statement =====
@@ -429,26 +447,54 @@ function genReturnStmt(g: CGen, p: CProc, node: Node): void {
 			// If genObjectLiteral didn't add the cast (nodeType was null), add it here
 			const needsCast = d.argument.kind === NodeKind.ObjectLiteral && snippet.length > 0 && charAt(snippet, 0) !== "(";
 			if (needsCast && p.returnType !== null && p.returnType.typeName !== "") {
-				emitStmtsLine(p, "*__result = (" + safeName(p.returnType.typeName) + ")" + snippet + ";");
+				emitStmtsLine(p, `*__result = (${safeName(p.returnType.typeName)})${snippet};`);
 			} else {
-				emitStmtsLine(p, "*__result = " + snippet + ";");
+				emitStmtsLine(p, `*__result = ${snippet};`);
 			}
-			emitStmtsLine(p, "return;");
 		} else {
-			emitStmtsLine(p, "return " + snippet + ";");
+			if (p.nestedFinally.length > 0 && d.argument.nodeType !== null && d.argument.nodeType.kind !== TypeKind.Void) {
+				// Reference parity: save return value to temp before finally cleanup.
+				// blockLeaveActions may emit wasMoved that zeros the returned local.
+				// Nim stores in `result` first, then runs cleanup, then `goto BeforeRet_`.
+				const retType = getTypeDesc(g, d.argument.nodeType);
+				const tmp = getTemp(p, retType);
+				emitStmtsLine(p, `${tmp.snippet} = ${snippet};`);
+				blockLeaveActions(g, p, p.nestedFinally.length);
+				emitStmtsLine(p, `return ${tmp.snippet};`);
+			} else {
+				blockLeaveActions(g, p, p.nestedFinally.length);
+				emitStmtsLine(p, `return ${snippet};`);
+			}
+			return;
 		}
-	} else {
-		emitStmtsLine(p, "return;");
 	}
+	// Reference parity: return must run all enclosing finally blocks
+	blockLeaveActions(g, p, p.nestedFinally.length);
+	emitStmtsLine(p, "return;");
 }
 
 // ===== Break / Continue =====
 
 function genBreakStmt(g: CGen, p: CProc, node: Node): void {
+	// Reference parity: find enclosing loop block,
+	// compute delta of nested finally blocks, emit cleanup before break.
+	let idx = p.blocks.length - 1;
+	while (idx >= 0 && !p.blocks[idx].isLoop) { idx -= 1; }
+	if (idx >= 0) {
+		const delta = p.nestedFinally.length - p.blocks[idx].nestedFinallyDepth;
+		blockLeaveActions(g, p, delta);
+	}
 	emitStmtsLine(p, "break;");
 }
 
 function genContinueStmt(g: CGen, p: CProc, node: Node): void {
+	// Same as break — continue must also run finally cleanup
+	let idx = p.blocks.length - 1;
+	while (idx >= 0 && !p.blocks[idx].isLoop) { idx -= 1; }
+	if (idx >= 0) {
+		const delta = p.nestedFinally.length - p.blocks[idx].nestedFinallyDepth;
+		blockLeaveActions(g, p, delta);
+	}
 	emitStmtsLine(p, "continue;");
 }
 
@@ -472,6 +518,11 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Node): void {
 	const finallyLabel = "__finally_" + labelId;
 	const endLabel = "__end_" + labelId;
 
+	// Reference parity: push finally body onto stack
+	// so that break/continue/return inside the try body can emit cleanup.
+	const fin = d.finallyBody;
+	p.nestedFinally.push(fin);
+
 	emitStmtsLine(p, "{");
 	const oldIndent = getStmtsIndent(p);
 	setStmtsIndent(p, oldIndent + 1);
@@ -483,14 +534,14 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Node): void {
 
 	if (hasCatch) {
 		// After try body, check error flag
-		emitStmtsLine(p, "if (msErr) goto " + catchLabel + ";");
-		emitStmtsLine(p, "goto " + finallyLabel + ";");
+		emitStmtsLine(p, `if (msErr) goto ${catchLabel};`);
+		emitStmtsLine(p, `goto ${finallyLabel};`);
 
 		// Catch label
 		emitStmtsLine(p, catchLabel + ": {");
 		setStmtsIndent(p, oldIndent + 2);
 		if (d.catchName !== "") {
-			emitStmtsLine(p, "msException* " + safeName(d.catchName) + " = msCurrException;");
+			emitStmtsLine(p, `msException* ${safeName(d.catchName)} = msCurrException;`);
 		}
 		emitStmtsLine(p, "msErr = MS_FALSE;");
 		emitStmtsLine(p, "msClearException();");
@@ -500,11 +551,14 @@ function genTryCatchStmt(g: CGen, p: CProc, node: Node): void {
 	}
 
 	// Finally label
-	emitStmtsLine(p, finallyLabel + ":");
+	emitStmtsLine(p, `${finallyLabel}:`);
 
 	if (d.finallyBody !== null) {
 		genStmt(g, p, d.finallyBody);
 	}
+
+	// Pop the finally entry — cleanup is now handled by the label above
+	p.nestedFinally.pop();
 
 	setStmtsIndent(p, oldIndent);
 	emitStmtsLine(p, "}");
@@ -528,7 +582,7 @@ function genTryCatchSetjmp(g: CGen, p: CProc, node: Node): void {
 	emitStmtsLine(p, "} else {");
 	setStmtsIndent(p, oldIndent + 2);
 	if (d.catchName !== "") {
-		emitStmtsLine(p, "msException* " + safeName(d.catchName) + " = msCurrException;");
+		emitStmtsLine(p, `msException* ${safeName(d.catchName)} = msCurrException;`);
 	}
 	emitStmtsLine(p, "msClearException();");
 	if (d.catchBody !== null) {
@@ -551,7 +605,7 @@ function genTryCatchSetjmp(g: CGen, p: CProc, node: Node): void {
 function genSwitchStmt(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as SwitchStmtData;
 	const discSnippet = genExpr(g, p, d.switchDisc);
-	emitStmtsLine(p, "switch (" + discSnippet + ") {");
+	emitStmtsLine(p, `switch (${discSnippet}) {`);
 	const oldIndent = getStmtsIndent(p);
 	setStmtsIndent(p, oldIndent + 1);
 
@@ -564,7 +618,7 @@ function genSwitchStmt(g: CGen, p: CProc, node: Node): void {
 		} else {
 			for (let j = 0; j < cd.caseTests.length; j += 1) {
 				const testSnippet = genExpr(g, p, cd.caseTests[j]);
-				emitStmtsLine(p, "case " + testSnippet + ":");
+				emitStmtsLine(p, `case ${testSnippet}:`);
 			}
 			emitStmts(p, "{");
 			emitStmtsNl(p);
@@ -624,8 +678,8 @@ function escapeForC(s: string): string {
 function genUnreachableStmt(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as UnreachableStmtData;
 	if (d.unreachableMsg.length > 0) {
-		const msg = "\"" + escapeForC(d.unreachableMsg) + "\"";
-		emitStmtsLine(p, "fprintf(stderr, \"unreachable: %s\\n\", " + msg + ");");
+		const msg = `"${escapeForC(d.unreachableMsg)}"`;
+		emitStmtsLine(p, `fprintf(stderr, "unreachable: %s\\n", ${msg});`);
 	}
 	emitStmtsLine(p, "__builtin_trap();");
 }
@@ -635,11 +689,12 @@ function genAssertStmt(g: CGen, p: CProc, node: Node): void {
 	const cond = genExpr(g, p, d.assertExpr);
 	// Use custom message if provided, otherwise fall back to source text
 	const raw = (d.assertMessage.length > 0) ? d.assertMessage : d.assertSource;
-	const msg = "\"" + escapeForC(raw) + "\"";
+	const msg = `"${escapeForC(raw)}"`;
+
 	if (g.isTestBuild) {
-		emitStmtsLine(p, "if (!(" + cond + ")) { msTestCheckFail(" + msg + ", __FILE__, __LINE__); return; }");
+		emitStmtsLine(p, `if (!(${cond})) { msTestCheckFail(${msg}, __FILE__, __LINE__); return; }`);
 	} else {
-		emitStmtsLine(p, "if (!(" + cond + ")) { fprintf(stderr, \"assert failed: %s\\n\", " + msg + "); abort(); }");
+		emitStmtsLine(p, `if (!(${cond})) { fprintf(stderr, "assert failed: %s\\n", ${msg}); abort(); }`);
 	}
 }
 

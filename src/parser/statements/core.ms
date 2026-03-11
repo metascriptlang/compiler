@@ -112,7 +112,7 @@ export function parseStatement(state: ParserState): NodeResult {
 export function parseBlockStmt(state: ParserState): NodeResult {
 	const token = current(state);
 	if (token.kind !== TokenKind.LBrace) {
-		return Result.err(`Expected '{' at line ${token.line.toString()}`);
+		return Result.err(`Expected '{' at line ${token.line}`);
 	}
 	advance(state); // consume '{'
 
@@ -124,7 +124,7 @@ export function parseBlockStmt(state: ParserState): NodeResult {
 
 	const closeToken = current(state);
 	if (closeToken.kind !== TokenKind.RBrace) {
-		return Result.err(`Expected '}' at line ${closeToken.line.toString()}`);
+		return Result.err(`Expected '}' at line ${closeToken.line}`);
 	}
 	advance(state); // consume '}'
 
