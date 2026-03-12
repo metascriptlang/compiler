@@ -837,13 +837,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 
 		// Standard reference implementation: generate typed function pointer cast
 		// from nodeType (the callee's Function type). Codegen-only concern.
-		// See reference types:getClosureType(m, typ, clHalf)
 		let targetType = "";
-		if (d.asType === "__clFull__") {
-			targetType = genClFullCast(g, node.nodeType);
-		} else if (d.asType === "__clHalf__") {
-			targetType = genClHalfCast(g, node.nodeType);
-		} else if (node.nodeType !== null) {
+		if (node.nodeType !== null) {
 			targetType = getTypeDesc(g, node.nodeType);
 		} else {
 			targetType = mangle(d.asType);

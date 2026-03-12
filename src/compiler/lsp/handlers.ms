@@ -23,7 +23,7 @@ import {
 	lspFmtLocation, lspFmtTextEdit,
 	lspFmtCompletionItem, lspFmtHoverResult,
 	lspFmtDiagnostic, lspFmtPublishDiagnostics,
-	lspFmtDocumentSymbol, lspFmtInlayHint,
+	lspFmtDocumentSymbol, lspFmtDocumentHighlight, lspFmtInlayHint,
 	lspFmtSignatureParam, lspFmtSignature, lspFmtSignatureHelp
 } from "./format";
 import {
@@ -34,7 +34,7 @@ import {
 	sgCollectInlayHints,
 	sgFormatHoverDoc, sgExtractDocComment, sgBuiltinDoc,
 	sgFindImportSource, sgFindExportedDecl,
-	sgQueryAtPosition, sgQueryByName,
+	sgQueryAtPosition, sgQueryBySym, sgQueryByName, sgQueryByDefiningModule,
 	SgSuggest, SgCompletionKind,
 	SgSymbolRef,
 	SgDocumentSymbol,
@@ -44,7 +44,7 @@ import {
 	SgSemanticToken, sgCollectSemanticTokens, sgSortTokens
 } from "../../checker/suggest";
 import { CheckerContext, createContext } from "../../checker/context";
-import { SymbolKind, lookupSymbol } from "../../checker/symbol";
+import { Symbol, SymbolKind, lookupSymbol } from "../../checker/symbol";
 import { Type, TypeKind, unknownType, getProperty, typeNameOf } from "../../checker/types";
 import { Node, IdentifierData, MemberExprData, NodeKind, ProgramData, ImportDeclData, ExportDeclData, SourceLocation, makeLoc } from "../../ast/node";
 import { defaultFormatOptions } from "../fmt/options";
@@ -84,6 +84,14 @@ function lspExtractPosition(params: string): LspCursorParams {
 	const position = lspGetObjectField(params, "position");
 	const col0 = lspGetNumberField(position, "character");
 	return { uri, line: lspGetNumberField(position, "line") + 1, col: col0, col1: col0 + 1 };
+}
+
+// Simple linear search for dedup (O(n^2) acceptable for typical reference counts).
+function lspArrayContains(arr: string[], value: string): boolean {
+	for (let i = 0; i < arr.length; i = i + 1) {
+		if (arr[i] === value) return true;
+	}
+	return false;
 }
 
 // Get raw source text from Trans-Am DB for a given path.
@@ -363,6 +371,7 @@ export function handleInitialize(id: string): string {
 		+ ",\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]}"
 		+ ",\"inlayHintProvider\":true"
 		+ ",\"referencesProvider\":true"
+		+ ",\"documentHighlightProvider\":true"
 		+ ",\"renameProvider\":true"
 		+ ",\"documentFormattingProvider\":true"
 		+ ",\"semanticTokensProvider\":{\"legend\":{\"tokenTypes\":"
@@ -456,7 +465,11 @@ export function handleHover(id: string, params: string, db: TransAmDb): string {
 		docComment = sgBuiltinDoc(suggest.name, suggest.containerName);
 	}
 	const hoverDoc = sgFormatHoverDoc(suggest, docComment);
-	return lspResponse(id, lspFmtHoverResult(hoverText, hoverDoc));
+	// Hover range: highlight the hovered token (0-based line/col for LSP)
+	const hoverLine = pos.line - 1;
+	const hoverCol = pos.col1 - 1;
+	const hoverEndCol = hoverCol + suggest.name.length;
+	return lspResponse(id, lspFmtHoverResult(hoverText, hoverDoc, hoverLine, hoverCol, hoverEndCol));
 }
 
 // ===== Completion =====
@@ -519,7 +532,7 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 	const candidates = sgGetCompletionCandidates(ctx, kind, prefix, receiverType);
 
 	// Cache the individual formatted items for future prefix filtering
-	const cachedItems = formatCompletionItemsArray(candidates);
+	const cachedItems = formatCompletionItemsArray(candidates, db, path);
 	cache.uri = pos.uri;
 	cache.line = pos.line;
 	cache.prefix = prefix;
@@ -547,15 +560,30 @@ function lspCommitCharsForKind(kind: SymbolKind): string {
 }
 
 // Format each candidate as an individual JSON item string for caching.
-function formatCompletionItemsArray(candidates: SgSuggest[]): string[] {
+function formatCompletionItemsArray(candidates: SgSuggest[], db: TransAmDb, path: string): string[] {
 	const result: string[] = [];
+	// Pre-fetch current file source for doc comment extraction
+	const currentSource = dbGetSource(db, path);
 	for (let i = 0; i < candidates.length; i = i + 1) {
 		const item = candidates[i];
 		const typeStr = sgTypeToString(item.symType);
 		const kindNum = lspCompletionItemKind(item.kind, item.isMutable);
 		const sortText = lspCompletionSortText(item);
 		const commitChars = lspCommitCharsForKind(item.kind);
-		result.push(lspFmtCompletionItem(item.name, kindNum, typeStr, sortText, false, commitChars));
+		// Extract doc comment from declaration site
+		let doc = "";
+		const modPath = item.modulePath;
+		if (modPath !== null && modPath !== "" && modPath !== path) {
+			lspEnsureFileLoaded(db, modPath);
+			const modSource = dbGetSource(db, modPath);
+			doc = sgExtractDocComment(modSource, item.location.line);
+		} else {
+			doc = sgExtractDocComment(currentSource, item.location.line);
+		}
+		if (doc === "") {
+			doc = sgBuiltinDoc(item.name, item.containerName);
+		}
+		result.push(lspFmtCompletionItem(item.name, kindNum, typeStr, sortText, false, commitChars, doc));
 	}
 	return result;
 }
@@ -681,6 +709,25 @@ function lspDocumentSymbolKind(kind: SymbolKind, isMutable: boolean): number {
 	};
 }
 
+function formatDocumentSymbolArray(symbols: SgDocumentSymbol[]): string {
+	let items = "[";
+	for (let i = 0; i < symbols.length; i = i + 1) {
+		if (i > 0) items = items + ",";
+		const sym = symbols[i];
+		const kindNum = lspDocumentSymbolKind(sym.kind, sym.isMutable);
+		const symLine = sym.location.line - 1;
+		const symCol = sym.location.column;
+		const endCol = symCol + sym.name.length;
+		let childrenJson = "";
+		if (sym.children.length > 0) {
+			childrenJson = formatDocumentSymbolArray(sym.children);
+		}
+		items = items + lspFmtDocumentSymbol(sym.name, kindNum, sym.detail, symLine, symCol, endCol, childrenJson);
+	}
+	items = items + "]";
+	return items;
+}
+
 export function handleDocumentSymbol(id: string, params: string, db: TransAmDb): string {
 	const textDoc = lspGetObjectField(params, "textDocument");
 	const uri = lspGetField(textDoc, "uri");
@@ -693,19 +740,7 @@ export function handleDocumentSymbol(id: string, params: string, db: TransAmDb):
 	if (ctx === null) return lspResponse(id, "[]");
 
 	const symbols = sgCollectSymbolsInFile(ctx, program);
-
-	let items = "[";
-	for (let i = 0; i < symbols.length; i = i + 1) {
-		if (i > 0) items = items + ",";
-		const sym = symbols[i];
-		const kindNum = lspDocumentSymbolKind(sym.kind, sym.isMutable);
-		const symLine = sym.location.line - 1;
-		const symCol = sym.location.column;
-		const endCol = symCol + sym.name.length;
-		items = items + lspFmtDocumentSymbol(sym.name, kindNum, sym.detail, symLine, symCol, endCol);
-	}
-	items = items + "]";
-	return lspResponse(id, items);
+	return lspResponse(id, formatDocumentSymbolArray(symbols));
 }
 
 // ===== Signature Help =====
@@ -814,36 +849,49 @@ export function handleReferences(id: string, params: string, db: TransAmDb): str
 
 	let arr = "[";
 	let count = 0;
+	const seen: string[] = [];
 
-	// Search current file via checker records
-	const refs = sgQueryByName(ctx, suggest.name);
+	// Search current file via symbol identity (no false positives from shadowing)
+	const refs = sgQueryBySym(ctx, suggest.sym);
 	for (let i = 0; i < refs.length; i = i + 1) {
-		if (count > 0) arr = arr + ",";
 		const ref = refs[i];
+		const key = pos.uri + ":" + ref.line + ":" + ref.col;
+		if (lspArrayContains(seen, key)) continue;
+		seen.push(key);
+		if (count > 0) arr = arr + ",";
 		const refLine = ref.line - 1;
 		arr = arr + lspFmtLocation(pos.uri, refLine, ref.col - 1, refLine, ref.col - 1 + ref.nameLen);
 		count = count + 1;
 	}
 
-	// Search all other open files in the workspace
-	const fileCount = dbGetFileCount(db);
+	// Search transitive dependents only (files that could import this symbol)
+	const defModule = suggest.modulePath !== null && suggest.modulePath !== "" ? suggest.modulePath : path;
+	const targetFileId = getFileId(db.fileInput, path);
+	let depIds: number[] = [];
+	if (targetFileId >= 0) {
+		depIds = getTransitiveDependents(db.moduleDeps, targetFileId);
+	}
 	let fi = 0;
-	while (fi < fileCount) {
-		const otherPath = dbGetFilePathByIndex(db, fi);
+	while (fi < depIds.length) {
+		const depId = depIds[fi];
 		fi = fi + 1;
-		if (otherPath === path) continue;
+		const otherPath = getFilePath(db.fileInput, depId);
+		if (otherPath === "" || otherPath === path) continue;
 		const otherCtx = dbTypeCheck(db, otherPath);
 		if (otherCtx === null) continue;
 		const otherUri = lspPathToUri(otherPath);
-		const matched = sgQueryByName(otherCtx, suggest.name);
+		const matched = sgQueryByDefiningModule(otherCtx, suggest.name, defModule);
 		let mi = 0;
 		while (mi < matched.length) {
-			if (count > 0) arr = arr + ",";
 			const mr = matched[mi];
+			mi = mi + 1;
+			const key = otherUri + ":" + mr.line + ":" + mr.col;
+			if (lspArrayContains(seen, key)) continue;
+			seen.push(key);
+			if (count > 0) arr = arr + ",";
 			const mrLine = mr.line - 1;
 			arr = arr + lspFmtLocation(otherUri, mrLine, mr.col - 1, mrLine, mr.col - 1 + mr.nameLen);
 			count = count + 1;
-			mi = mi + 1;
 		}
 	}
 
@@ -851,11 +899,52 @@ export function handleReferences(id: string, params: string, db: TransAmDb): str
 	return lspResponse(id, arr);
 }
 
+// ===== Document Highlight =====
+
+export function handleDocumentHighlight(id: string, params: string, db: TransAmDb): string {
+	const pos = lspExtractPosition(params);
+	const path = lspUriToPath(pos.uri);
+
+	const ctx = dbTypeCheck(db, path);
+	if (ctx === null) return lspResponse(id, "[]");
+
+	const suggest = sgQueryAtPosition(ctx, pos.line, pos.col1);
+	if (suggest === null) return lspResponse(id, "[]");
+
+	const refs = sgQueryBySym(ctx, suggest.sym);
+	let arr = "[";
+	for (let i = 0; i < refs.length; i = i + 1) {
+		if (i > 0) arr = arr + ",";
+		const ref = refs[i];
+		const refLine = ref.line - 1;
+		arr = arr + lspFmtDocumentHighlight(refLine, ref.col - 1, ref.col - 1 + ref.nameLen, 1);
+	}
+	arr = arr + "]";
+	return lspResponse(id, arr);
+}
+
 // ===== Rename =====
 
-// Build TextEdit array for refs in a single file
-function buildFileEdits(ctx: CheckerContext, name: string, newName: string): string {
-	const refs = sgQueryByName(ctx, name);
+// Build TextEdit array for refs in a single file (sym identity for current file)
+function buildFileEditsBySym(ctx: CheckerContext, sym: Symbol, newName: string): string {
+	const refs = sgQueryBySym(ctx, sym);
+	if (refs.length === 0) return "";
+	let edits = "[";
+	let i = 0;
+	while (i < refs.length) {
+		if (i > 0) edits = edits + ",";
+		const ref = refs[i];
+		const refLine = ref.line - 1;
+		edits = edits + lspFmtTextEdit(refLine, ref.col - 1, ref.col - 1 + ref.nameLen, newName);
+		i = i + 1;
+	}
+	edits = edits + "]";
+	return edits;
+}
+
+// Build TextEdit array for refs in a cross-module file (name + modulePath fallback)
+function buildFileEdits(ctx: CheckerContext, name: string, modulePath: string, newName: string): string {
+	const refs = sgQueryByName(ctx, name, modulePath);
 	if (refs.length === 0) return "";
 	let edits = "[";
 	let i = 0;
@@ -887,8 +976,8 @@ export function handleRename(id: string, params: string, db: TransAmDb): string 
 	let changes = "";
 	let changeCount = 0;
 
-	// Current file
-	const curEdits = buildFileEdits(ctx, suggest.name, newName);
+	// Current file — use sym identity
+	const curEdits = buildFileEditsBySym(ctx, suggest.sym, newName);
 	if (curEdits.length > 0) {
 		changes = lspJsonString(pos.uri) + ":" + curEdits;
 		changeCount = changeCount + 1;
@@ -903,7 +992,7 @@ export function handleRename(id: string, params: string, db: TransAmDb): string 
 		if (otherPath === path) continue;
 		const otherCtx = dbTypeCheck(db, otherPath);
 		if (otherCtx === null) continue;
-		const otherEdits = buildFileEdits(otherCtx, suggest.name, newName);
+		const otherEdits = buildFileEdits(otherCtx, suggest.name, suggest.modulePath, newName);
 		if (otherEdits.length > 0) {
 			const otherUri = lspPathToUri(otherPath);
 			if (changeCount > 0) changes = changes + ",";
@@ -1020,6 +1109,7 @@ export function lspDispatch(method: string, id: string, params: string, db: Tran
 		"textDocument/signatureHelp" => handleSignatureHelp(id, params, db),
 		"textDocument/inlayHint" => handleInlayHint(id, params, db),
 		"textDocument/references" => handleReferences(id, params, db),
+		"textDocument/documentHighlight" => handleDocumentHighlight(id, params, db),
 		"textDocument/rename" => handleRename(id, params, db),
 		"textDocument/semanticTokens/full" => handleSemanticTokensFull(id, params, db),
 		"textDocument/formatting" => handleFormatting(id, params, db),

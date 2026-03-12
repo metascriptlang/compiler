@@ -33,7 +33,8 @@ import {
 } from "./fileInput";
 import {
 	TaModuleDepGraph, createModuleDepGraph,
-	recordModuleImport, clearImportsFor, getTransitiveDependents
+	recordModuleImport, clearImportsFor, getTransitiveDependents,
+	getRegisteredAt, setRegisteredAt, resetRegisteredAt
 } from "./moduleDeps";
 import { tryMarkGreen, executeQueryWith, invalidateFile } from "./redGreen";
 import { taHashNode } from "./hash";
@@ -55,6 +56,7 @@ import {
 	findModuleExports, registerModuleExports,
 } from "../../checker/context";
 import { collectTopLevelLocal } from "../../checker/collectPass";
+import { resolveDeclarations } from "../../checker/resolvePass";
 import { SymbolFlag, hasFlag, openScope, ScopeKind } from "../../checker/symbol";
 import {
 	ImportDeclData, ExportDeclData, ProgramData,
@@ -145,10 +147,12 @@ export function dbSetFileText(db: TransAmDb, filePath: string, source: string): 
 function dbInvalidateExports(db: TransAmDb, fileId: number): void {
 	const path = getFilePath(db.fileInput, fileId);
 	if (path !== "" && !isStdPathFor(db, path)) removeExportEntry(db.exportRegistry, path);
+	resetRegisteredAt(db.moduleDeps, fileId);
 	const deps = getTransitiveDependents(db.moduleDeps, fileId);
 	for (let i = 0; i < deps.length; i = i + 1) {
 		const depPath = getFilePath(db.fileInput, deps[i]);
 		if (depPath !== "" && !isStdPathFor(db, depPath)) removeExportEntry(db.exportRegistry, depPath);
+		resetRegisteredAt(db.moduleDeps, deps[i]);
 	}
 }
 
@@ -231,9 +235,11 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: str
 		const depPath = getFilePath(db.fileInput, depId);
 		if (depPath === "") continue;
 
-		// Skip if already registered
+		// Skip if registered at current revision (Nim: rod file cache hit)
+		if (getRegisteredAt(db.moduleDeps, depId) >= db.revision.value) continue;
+
+		// Skip if already registered (but still recurse for transitive deps)
 		if (findModuleExports(db.exportRegistry, depPath) !== null) {
-			// Still recurse for transitive deps
 			dbEnsureExportsRegistered(db, depPath, visited, startVersion);
 			continue;
 		}
@@ -244,6 +250,7 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: str
 
 		const tmpCtx = createTempCollectContext();
 		collectTopLevelLocal(tmpCtx, depProgram);
+		resolveDeclarations(tmpCtx, depProgram);
 
 		const earlyExports: ExportedSymInfo[] = [];
 		for (const sym of tmpCtx.table.current.symbols) {
@@ -264,6 +271,7 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: str
 			}
 		}
 		registerModuleExports(db.exportRegistry, depPath, earlyExports);
+		setRegisteredAt(db.moduleDeps, depId, db.revision.value);
 
 		// Recurse for transitive deps
 		dbEnsureExportsRegistered(db, depPath, visited, startVersion);

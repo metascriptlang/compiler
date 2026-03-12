@@ -14,7 +14,7 @@ import { NodeKind } from "../ast/node";
 
 export enum RcKind {
 	None,       // primitive/enum/void — no RC
-	String,     // msStringIncref / msStringDecref
+	String,     // msStringCopy / msStringDecref
 	Array,      // msArray* (variant depends on element type)
 	Ref,        // msIncref / msDecref (pointers, interfaces, classes)
 	Closure,    // msClosure*
@@ -69,18 +69,27 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
 	}
 	if (elem.kind === TypeKind.String) {
-		return makeRcInfo(RcKind.Named, "", "msStringArray_destroy", "msStringArray_copy", "msStringArray_wasMoved", "msStringArray_sink", true);
+		return makeRcInfo(RcKind.Named, "", "msArrayStringDestroy", "msArrayStringCopy", "msArrayStringWasMoved", "msArrayStringSink", true);
+	}
+	// Nested array elements (e.g. string[][]) — inner arrays are value-type structs.
+	// Nim: forallElements recursively calls fillBody per element. We use generic array ops
+	// as safe default (frees outer payload). Follow-up: per-type hooks in destructorLifting.
+	if (elem.kind === TypeKind.Array) {
+		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
 	}
 	// Named struct elements — use hasAsgnFlag to decide if per-type hooks are needed
+	// seqLike = true: destroy by-value, copy/sink src by-value (matching generated hook conventions)
+	// Note: generated hooks have dest by-pointer for copy/sink/wasMoved — handled via
+	// non-empty typeName check in inject.ms
 	if (elem.kind === TypeKind.Struct && elem.typeName !== "") {
 		if (hasAsgnFlag(elem)) {
 			const n = elem.typeName + "Array";
-			return makeRcInfo(RcKind.Named, "", n + "_destroy", n + "_copy", n + "_wasMoved", n + "_sink", true);
+			return makeRcInfo(RcKind.Named, n, n + "_destroy", n + "_copy", n + "_wasMoved", n + "_sink", true);
 		}
 		return noRcInfo();
 	}
 	// Ref/Ptr elements (class arrays) — msRefArray (all pointers are void*)
-	return makeRcInfo(RcKind.Named, "", "msRefArray_destroy", "msRefArray_copy", "msRefArray_wasMoved", "msRefArray_sink", true);
+	return makeRcInfo(RcKind.Named, "", "msArrayRefDestroy", "msArrayRefCopy", "msArrayRefWasMoved", "msArrayRefCopy", true);
 }
 
 // ===== Sub-classifiers for complex arms =====
@@ -123,7 +132,7 @@ export function classifyType(t: Type, ctx: TransformContext): RcInfo {
 	if (isPrimitiveKind(t.kind)) return noRcInfo();
 
 	return match (t.kind) {
-		TypeKind.String => makeRcInfo(RcKind.String, "", "msStringDecref", "msStringIncref", "msStringWasMoved", "msStringSink", false),
+		TypeKind.String => makeRcInfo(RcKind.String, "", "msStringDecref", "msStringCopy", "msStringWasMoved", "msStringSink", false),
 		TypeKind.Array => classifyArray(t, ctx),
 		TypeKind.Ref => makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false),
 		TypeKind.Ptr => {
@@ -234,7 +243,7 @@ test "string → String" {
 	assert info.rcKind === RcKind.String;
 	assert info.needsCleanup;
 	assert info.destroyFn === "msStringDecref";
-	assert info.copyFn === "msStringIncref";
+	assert info.copyFn === "msStringCopy";
 	assert info.wasMovedFn === "msStringWasMoved";
 }
 
@@ -251,7 +260,7 @@ test "array of string → Named (standalone procs)" {
 	const info = classifyType(createArray(stringType()), ctx);
 	assert info.rcKind === RcKind.Named;
 	assert info.seqLike;
-	assert info.destroyFn === "msStringArray_destroy";
+	assert info.destroyFn === "msArrayStringDestroy";
 }
 
 test "function → Closure" {

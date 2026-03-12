@@ -34,7 +34,7 @@ import { RcInfo, RcKind, classifyType, isFreshExpr, noRcInfo } from "./classify"
 import {
 	DrcContext, DrcScope, VarInfo,
 	createDrcContext, pushScope, popScope, currentScope, scopeDepth,
-	registerVar, markUninitialized, recordMove, recordMoveInContext, wasMovedInScope, findVarInfo, findVarInfoInContext,
+	registerVar, markUninitialized, recordMove, recordMoveInContext, recordMoveExpr, wasMovedInScope, findVarInfo, findVarInfoInContext,
 	setNeedsTryToLoop, setNeedsTryAll, addPending, flushPending, hasPending, clearPendingForVar,
 	addPre, flushPre,
 	pushOuterStmts, popOuterStmts,
@@ -237,28 +237,24 @@ function passCopyToSink(srcExpr: Node, dctx: DrcContext): Node {
 	const loc = srcExpr.location;
 	const tmpName = freshTemp(dctx.ctx, "borrow");
 
-	if (rcInfo.rcKind === RcKind.Named) {
-		// Named value types (e.g. Token with string fields): null-init, then 2-arg copy from source.
-		// This avoids the aliased-field bug where shallow-copy + self-copy destroys shared pointers.
+	if (isBinaryCopy(rcInfo)) {
+		// Named/String: null-init, then 2-arg copy from source.
+		// Nim parity: =copy(&dest, src) handles old-value cleanup internally.
 		const tmpDecl = makeVarDecl(tmpName, makeNull(loc), DeclKind.Let, loc);
 		if (srcExpr.nodeType !== null) tmpDecl.nodeType = srcExpr.nodeType;
 		addPre(dctx, tmpDecl);
 		registerVar(dctx, tmpName, rcInfo, false);
-		// Zero-init (genWasMoved) — ensures destroy of "old dest" in copy is a no-op
 		addPre(dctx, makeWasMovedCall(tmpName, rcInfo, loc));
-		// Deep copy from source (genCopyNoCheck(tmp, src))
 		if (rcInfo.copyFn !== "") {
-			if (rcInfo.seqLike) {
-				addPre(dctx, makeExprStmt(
-					makeCall(makeIdent(rcInfo.copyFn, loc), [makeHiddenAddr(makeIdent(tmpName, loc), loc), srcExpr], loc), loc));
-			} else {
-				addPre(dctx, makeExprStmt(
-					makeCall(makeIdent(rcInfo.copyFn, loc), [makeHiddenAddr(makeIdent(tmpName, loc), loc), makeHiddenAddr(srcExpr, loc)], loc), loc));
-			}
+			const destArg = needsDestAddr(rcInfo)
+				? makeHiddenAddr(makeIdent(tmpName, loc), loc)
+				: makeIdent(tmpName, loc);
+			const srcArg = isCopySrcByValue(rcInfo) ? srcExpr : makeHiddenAddr(srcExpr, loc);
+			addPre(dctx, makeExprStmt(
+				makeCall(makeIdent(rcInfo.copyFn, loc), [destArg, srcArg], loc), loc));
 		}
 	} else {
-		// Simple refcounted (String, Ref, Closure, Map, Set): shallow copy + incref.
-		// Incref is a simple refcount bump, no destruction of old fields — aliasing is safe.
+		// Simple refcounted (Ref, Closure, Map, Set): shallow copy + unary incref.
 		const tmpDecl = makeVarDecl(tmpName, srcExpr, DeclKind.Const, loc);
 		if (srcExpr.nodeType !== null) tmpDecl.nodeType = srcExpr.nodeType;
 		addPre(dctx, tmpDecl);
@@ -319,14 +315,27 @@ function processNew(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 function processMove(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const md = node.data as MoveExprData;
 	md.moveArg = processNode(md.moveArg, dctx, DrcMode.Consumed);
-	// Emit wasMoved on the source so scope cleanup skips it (prevents double-free).
-	// This handles move in any context (call args, return, etc.).
+	// Emit wasMoved on the source so scope cleanup zeros it before destroy.
+	// For identifiers: recordMoveInContext marks the var as moved (skip destroy, emit wasMoved in finally).
+	// For member/array: recordMoveExpr stores wasMoved call node in scope (emitted in finally before destroy).
 	const moveType = md.moveArg.nodeType;
 	if (moveType !== null) {
 		const rcInfo = classifyType(moveType, dctx.ctx);
 		if (rcInfo.needsCleanup) {
-			const emptyStmts: Node[] = [];
-			emitMoveSourceWasMoved(md.moveArg, rcInfo, 0, emptyStmts, dctx, node.location, false);
+			if (md.moveArg.kind === NodeKind.Identifier) {
+				const srcName = (md.moveArg.data as IdentifierData).name;
+				recordMoveInContext(dctx, srcName);
+			} else if (md.moveArg.kind === NodeKind.MemberExpr) {
+				const fieldRc = classifyMemberFieldRc(md.moveArg, dctx);
+				if (fieldRc.needsCleanup && fieldRc.wasMovedFn !== "") {
+					recordMoveExpr(dctx, makeWasMovedOnExpr(md.moveArg, fieldRc, node.location));
+				}
+			} else if (md.moveArg.kind === NodeKind.ArrayAccess) {
+				const elemRc = classifyArrayElementRc(md.moveArg, dctx);
+				if (elemRc.needsCleanup && elemRc.wasMovedFn !== "") {
+					recordMoveExpr(dctx, makeWasMovedOnExpr(md.moveArg, elemRc, node.location));
+				}
+			}
 		}
 	}
 	return node;
@@ -375,9 +384,25 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 
 // ===== RC Call Builders =====
 
-// Reference parity: the reference implementation wraps dest in hidden address when param is a pointer.
+// Nim parity: =copy(var dest, src) takes 2 args for Named and String types.
 // Named-type hooks take pointer params (reference pointer introduction), so we wrap in HiddenAddr.
-// Non-Named types (Ref/String/Closure/Map/Set) use runtime fns that take raw values.
+// String: msStringCopy(dest*, src) — dest by pointer, src by value (like seqLike Named).
+// Ref/Closure/Map/Set: still unary incref (simple refcount bump, no reassignment issue).
+
+function isBinaryCopy(rcInfo: RcInfo): boolean {
+	return rcInfo.rcKind === RcKind.Named || rcInfo.rcKind === RcKind.String;
+}
+
+function isCopySrcByValue(rcInfo: RcInfo): boolean {
+	return rcInfo.seqLike || rcInfo.rcKind === RcKind.String;
+}
+
+// Whether dest needs HiddenAddr for wasMoved/copy/sink.
+// Named structs: always pointer. seqLike runtime macros: value. seqLike generated hooks: pointer.
+function needsDestAddr(rcInfo: RcInfo): boolean {
+	if (rcInfo.seqLike && rcInfo.typeName === "") return false;
+	return true;
+}
 
 function makeRcCallStmt(fnName: string, varName: string, loc: SourceLocation): Node {
 	if (fnName === "") return makeExprStmt(makeNull(loc), loc);
@@ -385,6 +410,8 @@ function makeRcCallStmt(fnName: string, varName: string, loc: SourceLocation): N
 		makeCall(makeIdent(fnName, loc), [makeIdent(varName, loc)], loc), loc);
 }
 
+// Destroy: seqLike types (both runtime macros AND generated hooks) take dest by value.
+// This differs from copy/sink/wasMoved where generated hooks take dest by pointer.
 function makeDestroyCall(varName: string, rcInfo: RcInfo, loc: SourceLocation): Node {
 	if (rcInfo.destroyFn === "") return makeExprStmt(makeNull(loc), loc);
 	if (rcInfo.rcKind === RcKind.Named) {
@@ -400,36 +427,34 @@ function makeDestroyCall(varName: string, rcInfo: RcInfo, loc: SourceLocation): 
 function makeWasMovedCall(varName: string, rcInfo: RcInfo, loc: SourceLocation): Node {
 	if (rcInfo.wasMovedFn === "") return makeExprStmt(makeNull(loc), loc);
 	if (rcInfo.rcKind === RcKind.Named) {
+		// Runtime macros (msArrayStringWasMoved etc.): value args
+		if (!needsDestAddr(rcInfo)) {
+			return makeRcCallStmt(rcInfo.wasMovedFn, varName, loc);
+		}
+		// Named structs + generated array hooks: pointer arg
 		return makeExprStmt(
 			makeCall(makeIdent(rcInfo.wasMovedFn, loc), [makeHiddenAddr(makeIdent(varName, loc), loc)], loc), loc);
 	}
 	return makeRcCallStmt(rcInfo.wasMovedFn, varName, loc);
 }
 
-// Reference parity: Named-type copy hooks take 2 args (dest, src) with HiddenAddr.
-// Array copy hooks take 2 args (dest, src) by value (runtime macros handle &).
-// Ref/String/Closure/Map/Set copy is unary (incref).
+// Nim parity: =copy(&dest, src) for Named and String types; unary incref for Ref/Closure/Map/Set.
 function makeCopyAfterInit(destName: string, rcInfo: RcInfo, loc: SourceLocation, srcName: string): Node {
 	if (rcInfo.copyFn === "") return makeExprStmt(makeNull(loc), loc);
-	if (rcInfo.rcKind === RcKind.Named && srcName !== "") {
-		// reference parity (reference prototype): sequence copy = dest pointer, src by-value
-		if (rcInfo.seqLike) {
-			return makeExprStmt(
-				makeCall(makeIdent(rcInfo.copyFn, loc), [makeHiddenAddr(makeIdent(destName, loc), loc), makeIdent(srcName, loc)], loc), loc);
-		}
-		return makeExprStmt(
-			makeCall(makeIdent(rcInfo.copyFn, loc), [makeHiddenAddr(makeIdent(destName, loc), loc), makeHiddenAddr(makeIdent(srcName, loc), loc)], loc), loc);
+	// 2-arg copy: Named types and String (=copy(&dest, src))
+	if (isBinaryCopy(rcInfo)) {
+		const actualSrc = srcName !== "" ? srcName : destName;
+		// dest: pointer unless runtime macro (seqLike + empty typeName)
+		const destArg = needsDestAddr(rcInfo)
+			? makeHiddenAddr(makeIdent(destName, loc), loc)
+			: makeIdent(destName, loc);
+		// src: value for seqLike/String, pointer for non-seqLike Named
+		const srcArg = isCopySrcByValue(rcInfo)
+			? makeIdent(actualSrc, loc)
+			: makeHiddenAddr(makeIdent(actualSrc, loc), loc);
+		return makeExprStmt(makeCall(makeIdent(rcInfo.copyFn, loc), [destArg, srcArg], loc), loc);
 	}
-	if (rcInfo.rcKind === RcKind.Named) {
-		// Self-copy (no separate src): dest for both args
-		if (rcInfo.seqLike) {
-			return makeExprStmt(
-				makeCall(makeIdent(rcInfo.copyFn, loc), [makeHiddenAddr(makeIdent(destName, loc), loc), makeIdent(destName, loc)], loc), loc);
-		}
-		return makeExprStmt(
-			makeCall(makeIdent(rcInfo.copyFn, loc), [makeHiddenAddr(makeIdent(destName, loc), loc), makeHiddenAddr(makeIdent(destName, loc), loc)], loc), loc);
-	}
-	// Unary incref: msIncref(dest), msStringIncref(dest), etc.
+	// Unary incref: msIncref(dest), msClosureCopy(dest), etc.
 	return makeRcCallStmt(rcInfo.copyFn, destName, loc);
 }
 
@@ -437,13 +462,13 @@ function makeCopyAfterInit(destName: string, rcInfo: RcInfo, loc: SourceLocation
 function makeSinkCall(destName: string, srcExpr: Node, rcInfo: RcInfo, loc: SourceLocation): Node {
 	if (rcInfo.sinkFn === "") return makeExprStmt(makeNull(loc), loc);
 	if (rcInfo.rcKind === RcKind.Named) {
-		// reference parity: sequence sink = dest pointer, src by-value
-		if (rcInfo.seqLike) {
-			return makeExprStmt(
-				makeCall(makeIdent(rcInfo.sinkFn, loc), [makeHiddenAddr(makeIdent(destName, loc), loc), srcExpr], loc), loc);
-		}
+		const destArg = needsDestAddr(rcInfo)
+			? makeHiddenAddr(makeIdent(destName, loc), loc)
+			: makeIdent(destName, loc);
+		// src: value for seqLike, pointer for non-seqLike Named
+		const srcArg = rcInfo.seqLike ? srcExpr : makeHiddenAddr(srcExpr, loc);
 		return makeExprStmt(
-			makeCall(makeIdent(rcInfo.sinkFn, loc), [makeHiddenAddr(makeIdent(destName, loc), loc), makeHiddenAddr(srcExpr, loc)], loc), loc);
+			makeCall(makeIdent(rcInfo.sinkFn, loc), [destArg, srcArg], loc), loc);
 	}
 	return makeExprStmt(
 		makeCall(makeIdent(rcInfo.sinkFn, loc), [makeIdent(destName, loc), srcExpr], loc), loc);
@@ -459,6 +484,10 @@ function makeRcCallOnExpr(fnName: string, argExpr: Node, loc: SourceLocation): N
 function makeWasMovedOnExpr(argExpr: Node, rcInfo: RcInfo, loc: SourceLocation): Node {
 	if (rcInfo.wasMovedFn === "") return makeExprStmt(makeNull(loc), loc);
 	if (rcInfo.rcKind === RcKind.Named) {
+		// Runtime macros: value args. Named structs + generated hooks: pointer.
+		if (!needsDestAddr(rcInfo)) {
+			return makeRcCallOnExpr(rcInfo.wasMovedFn, argExpr, loc);
+		}
 		return makeExprStmt(
 			makeCall(makeIdent(rcInfo.wasMovedFn, loc), [makeHiddenAddr(argExpr, loc)], loc), loc);
 	}
@@ -555,11 +584,17 @@ function emitMoveSourceWasMoved(moveArg: Node, rcInfo: RcInfo, idx: number, stmt
 function generateCleanup(scope: DrcScope, excludeNames: NameSet, loc: SourceLocation): Node[] {
 	const result: Node[] = [];
 
-	// Step 1: wasMoved calls for moved variables
+	// Step 1: wasMoved calls for moved variables and expressions
 	for (const mv of scope.wasMoved) {
-		const vi = findVarInfo(scope, mv.varName);
-		if (vi !== null && vi.rcInfo.wasMovedFn !== "") {
-			result.push(makeWasMovedCall(mv.varName, vi.rcInfo, loc));
+		if (mv.varName !== "" ) {
+			// Variable-level: move x
+			const vi = findVarInfo(scope, mv.varName);
+			if (vi !== null && vi.rcInfo.wasMovedFn !== "") {
+				result.push(makeWasMovedCall(mv.varName, vi.rcInfo, loc));
+			}
+		} else if (mv.exprNode !== null) {
+			// Expression-level: move obj.field, move arr[i]
+			result.push(mv.exprNode);
 		}
 	}
 
@@ -1239,22 +1274,21 @@ function processFuncBodyWithParams(body: Node, fnName: string, paramNames: strin
 // ===== Borrow Copy Helper =====
 
 // Emit RC operations for a borrowed value (ArrayAccess or MemberExpr assigned to a local).
-// Simple RC types (String, Ref, Closure, Map): shallow copy + incref.
-// Named value types (structs with managed fields): wasMoved(dest) + copy(dest, src)
-// to avoid aliased-field destruction from self-copy.
+// Named/String: wasMoved(dest) + =copy(&dest, src) — 2-arg Nim parity.
+// Simple RC types (Ref, Closure, Map, Set): shallow copy + unary incref.
 function emitBorrowCopy(destName: string, srcExpr: Node, rcInfo: RcInfo, dctx: DrcContext, loc: SourceLocation): void {
-	if (rcInfo.rcKind === RcKind.Ref || rcInfo.rcKind === RcKind.String || rcInfo.rcKind === RcKind.Closure || rcInfo.rcKind === RcKind.Map) {
-		addPending(dctx, makeCopyAfterInit(destName, rcInfo, loc, ""));
-	}
-	if (rcInfo.rcKind === RcKind.Named && rcInfo.copyFn !== "") {
+	if (isBinaryCopy(rcInfo) && rcInfo.copyFn !== "") {
+		// Named/String: wasMoved(dest) + =copy(&dest, src) — Nim parity
 		addPending(dctx, makeWasMovedCall(destName, rcInfo, loc));
-		if (rcInfo.seqLike) {
-			addPending(dctx, makeExprStmt(
-				makeCall(makeIdent(rcInfo.copyFn, loc), [makeHiddenAddr(makeIdent(destName, loc), loc), srcExpr], loc), loc));
-		} else {
-			addPending(dctx, makeExprStmt(
-				makeCall(makeIdent(rcInfo.copyFn, loc), [makeHiddenAddr(makeIdent(destName, loc), loc), makeHiddenAddr(srcExpr, loc)], loc), loc));
-		}
+		const destArg = needsDestAddr(rcInfo)
+			? makeHiddenAddr(makeIdent(destName, loc), loc)
+			: makeIdent(destName, loc);
+		const srcArg = isCopySrcByValue(rcInfo) ? srcExpr : makeHiddenAddr(srcExpr, loc);
+		addPending(dctx, makeExprStmt(
+			makeCall(makeIdent(rcInfo.copyFn, loc), [destArg, srcArg], loc), loc));
+	} else if (rcInfo.rcKind === RcKind.Ref || rcInfo.rcKind === RcKind.Closure || rcInfo.rcKind === RcKind.Map) {
+		// Simple unary incref
+		addPending(dctx, makeCopyAfterInit(destName, rcInfo, loc, ""));
 	}
 }
 
@@ -1523,6 +1557,12 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 			const copyNode = makeCopyAfterInit(leftD.name, rcInfo, loc, rhsD.name);
 			return makeBlock([stmt, copyNode], loc);
 		}
+		// MemberExpr/ArrayAccess RHS: borrow from field — must copy (source may be destroyed before dest).
+		// Reference parity: preventCursor when source has shorter lifetime.
+		if (rhs.kind === NodeKind.MemberExpr || rhs.kind === NodeKind.ArrayAccess) {
+			const copyNode = makeCopyAfterInit(leftD.name, rcInfo, loc, "");
+			return makeBlock([stmt, copyNode], loc);
+		}
 		return stmt;
 	}
 
@@ -1650,6 +1690,14 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 		return makeBlock([destroyOld, stmt, copyNode], loc);
 	}
 
+	// MemberExpr/ArrayAccess RHS: borrow from field — must copy.
+	// Reference parity: preventCursor when source has shorter lifetime.
+	if (rhs.kind === NodeKind.MemberExpr || rhs.kind === NodeKind.ArrayAccess) {
+		const destroyOld = makeDestroyCall(leftD.name, rcInfo, loc);
+		const copyNode = makeCopyAfterInit(leftD.name, rcInfo, loc, "");
+		return makeBlock([destroyOld, stmt, copyNode], loc);
+	}
+
 	return stmt;
 }
 
@@ -1694,30 +1742,23 @@ function emitSaveAssignDestroy(stmt: Node, lhsExpr: Node, rhs: Node, rcInfo: RcI
 	}
 
 	// Non-last-read / field-access / other: COPY
-	// reference parity (moveOrCopy): for Named types, call =copy(dest, src) directly.
-	// The copy hook handles old-value cleanup internally (setLen frees old payload,
-	// checkSelfAssignment prevents use-after-free on self-copy).
-	if (rcInfo.rcKind === RcKind.Named && rcInfo.copyFn !== "") {
-		if (rcInfo.seqLike) {
-			// seq copy: dest by-pointer, src by-value
-			const copyCall = makeExprStmt(
-				makeCall(makeIdent(rcInfo.copyFn, loc), [makeHiddenAddr(lhsExpr, loc), rhs], loc), loc);
-			return copyCall;
-		}
+	// Nim parity (moveOrCopy): for Named/String types, call =copy(&dest, src) directly.
+	// The copy function handles old-value cleanup internally — no save-assign-incref-destroy needed.
+	// msStringCopy takes src by value: safe even for self-assignment (captured before destroy).
+	if (isBinaryCopy(rcInfo) && rcInfo.copyFn !== "") {
+		const destArg = needsDestAddr(rcInfo) ? makeHiddenAddr(lhsExpr, loc) : lhsExpr;
+		const srcArg = isCopySrcByValue(rcInfo) ? rhs : makeHiddenAddr(rhs, loc);
 		const copyCall = makeExprStmt(
-			makeCall(makeIdent(rcInfo.copyFn, loc), [makeHiddenAddr(lhsExpr, loc), makeHiddenAddr(rhs, loc)], loc), loc);
+			makeCall(makeIdent(rcInfo.copyFn, loc), [destArg, srcArg], loc), loc);
 		return copyCall;
 	}
 
-	// Ref/String/Closure: save old → assign → incref(new) → destroy(old)
-	// Unary incref has no self-copy issue.
+	// Ref/Closure: save old → assign → incref(field) → destroy(old)
 	const result: Node[] = [saveTmp, stmt];
 	if (rcInfo.copyFn !== "") {
-		const tmpNew = freshTemp(dctx.ctx, "new" + prefix);
-		const saveNew = makeVarDecl(tmpNew, lhsExpr, DeclKind.Const, loc);
-		const copyNew = makeCopyAfterInit(tmpNew, rcInfo, loc, "");
-		result.push(saveNew);
-		result.push(copyNew);
+		const increfCall = makeExprStmt(
+			makeCall(makeIdent(rcInfo.copyFn, loc), [lhsExpr], loc), loc);
+		result.push(increfCall);
 	}
 	result.push(makeDestroyCall(tmpName, rcInfo, loc));
 	return makeBlock(result, loc);

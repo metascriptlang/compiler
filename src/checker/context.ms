@@ -4,6 +4,7 @@ import { Symbol, SymbolKind, SymbolTable, ScopeKind, createSymbolTable } from ".
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
 import { Node } from "../ast/node";
 import { sliceStr, findChar, trimStr, splitTopLevel } from "../utils/string";
+import { InitTracker, createInitTracker } from "./initTracker";
 
 
 // ===== Export Registry (cross-module type propagation) =====
@@ -479,6 +480,9 @@ export interface CheckerContext {
 	narrowFacts: Node[];         // fact-based null narrowing knowledge base (standard reference equivalent)
 	symRecords: SgSymRecord[];   // check-time symbol recordings for LSP (reference suggest parity)
 	matchExprDepth: number;      // >0 when inside match expression block arm (return targets match, not function)
+	initTracker: InitTracker;    // ref parity: TEffects.init — definite assignment tracking
+	strictDefs: boolean;         // ref parity: strictDefs — warn on all uninit var use
+	strictNullChecks: boolean;   // ref parity: strictNotNil — warn on unguarded class deref
 }
 
 // ===== Constructors =====
@@ -506,6 +510,9 @@ export function createContext(): CheckerContext {
 		narrowFacts: [],
 		symRecords: [],
 		matchExprDepth: 0,
+		initTracker: createInitTracker(),
+		strictDefs: false,
+		strictNullChecks: false,
 	};
 }
 

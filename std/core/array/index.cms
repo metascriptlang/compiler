@@ -6,83 +6,187 @@
 
 // ===== Number Array =====
 
+/**
+ * Appends new elements to the end of an array, and returns the new length of the array.
+ * @param value New element to add to the array.
+ */
 extern function push(this arr: number[], value: number): void from "&msNumberArrayPush";
 
+/**
+ * Removes the last element from an array and returns it.
+ * If the array is empty, undefined is returned and the array is not modified.
+ */
 extern function pop(this arr: number[]): number from "&msNumberArrayPop";
 
+/**
+ * Removes the first element from an array and returns it.
+ * If the array is empty, undefined is returned and the array is not modified.
+ */
 extern function shift(this arr: number[]): number from "&msNumberArrayShift";
 
+/** Returns the element at the specified index. */
 extern function at(this arr: number[], idx: number): number from "&msNumberArrayAt";
 
+/**
+ * Returns the index of the first occurrence of a value in an array, or -1 if it is not present.
+ * @param value The value to locate in the array.
+ */
 extern function indexOf(this arr: number[], value: number): number from "&msNumberArrayIndexOf";
 
+/**
+ * Determines whether an array includes a certain element, returning true or false as appropriate.
+ * @param value The element to search for.
+ */
 extern function includes(this arr: number[], value: number): boolean from "&msNumberArrayIncludes";
 
+/**
+ * Returns a copy of a section of an array.
+ * @param start The beginning index of the specified portion of the array.
+ * @param end The end index of the specified portion of the array. This is exclusive of the element at the index 'end'.
+ */
 extern function slice(this arr: number[], start: number, end: number): number[] from "&msNumberArraySlice";
 
+/**
+ * Combines two or more arrays.
+ * This method returns a new array without modifying any existing arrays.
+ */
 extern function concat(this arr: number[], other: number[]): number[] from "&msNumberArrayConcat";
 
+/**
+ * Reverses the elements in an array in place.
+ * This method mutates the array and returns a reference to the same array.
+ */
 extern function reverse(this arr: number[]): void from "&msNumberArrayReverse";
 
+/**
+ * Sorts an array in place.
+ * This method mutates the array and returns a reference to the same array.
+ */
 extern function sort(this arr: number[]): void from "&msNumberArraySort";
 
+/** Changes all array elements to a static value, from a start index to an end index. */
 extern function fill(this arr: number[], value: number): void from "&msNumberArrayFill";
 
+/** Returns the number of occurrences of a value in an array. */
 extern function count(this arr: number[], value: number): number from "&msNumberArrayCount";
 
+/**
+ * Adds all the elements of an array into a string, separated by the specified separator string.
+ * @param sep A string used to separate one element of the array from the next in the resulting string.
+ */
 extern function join(this arr: number[], sep: string): string from "&msNumberArrayJoin";
 
+/** Sets the length of the array. */
 extern function setLen(this arr: number[], newLen: number): void from "&msNumberArraySetLen";
 
+/** Returns the allocated capacity of the array buffer. */
 extern function capacity(this arr: number[]): number from "&msNumberArrayCapacity";
 
 // ===== String Array =====
 
+/**
+ * Appends new elements to the end of an array, and returns the new length of the array.
+ * @param value New element to add to the array.
+ */
 extern function push(this arr: string[], value: string): void from "&msStringArrayPush";
 
+/**
+ * Removes the last element from an array and returns it.
+ * If the array is empty, undefined is returned and the array is not modified.
+ */
 extern function pop(this arr: string[]): string from "&msStringArrayPop";
 
+/**
+ * Removes the first element from an array and returns it.
+ * If the array is empty, undefined is returned and the array is not modified.
+ */
 extern function shift(this arr: string[]): string from "&msStringArrayShift";
 
+/** Returns the element at the specified index. */
 extern function at(this arr: string[], idx: number): string from "&msStringArrayAt";
 
+/**
+ * Returns the index of the first occurrence of a value in an array, or -1 if it is not present.
+ * @param value The value to locate in the array.
+ */
 extern function indexOf(this arr: string[], value: string): number from "&msStringArrayIndexOf";
 
+/**
+ * Determines whether an array includes a certain element, returning true or false as appropriate.
+ * @param value The element to search for.
+ */
 extern function includes(this arr: string[], value: string): boolean from "&msStringArrayIncludes";
 
+/**
+ * Returns a copy of a section of an array.
+ * @param start The beginning index of the specified portion of the array.
+ * @param end The end index of the specified portion of the array. This is exclusive of the element at the index 'end'.
+ */
 extern function slice(this arr: string[], start: number, end: number): string[] from "&msStringArraySlice";
 
+/**
+ * Combines two or more arrays.
+ * This method returns a new array without modifying any existing arrays.
+ */
 extern function concat(this arr: string[], other: string[]): string[] from "&msStringArrayConcat";
 
+/**
+ * Reverses the elements in an array in place.
+ * This method mutates the array and returns a reference to the same array.
+ */
 extern function reverse(this arr: string[]): void from "&msStringArrayReverse";
 
+/**
+ * Sorts an array in place.
+ * This method mutates the array and returns a reference to the same array.
+ */
 extern function sort(this arr: string[]): void from "&msStringArraySort";
 
+/** Changes all array elements to a static value. */
 extern function fill(this arr: string[], value: string): void from "&msStringArrayFill";
 
+/** Returns the number of occurrences of a value in an array. */
 extern function count(this arr: string[], value: string): number from "&msStringArrayCount";
 
+/**
+ * Adds all the elements of an array into a string, separated by the specified separator string.
+ * @param sep A string used to separate one element of the array from the next in the resulting string.
+ */
 extern function join(this arr: string[], sep: string): string from "&msStringArrayJoin";
 
+/** Sets the length of the array. */
 extern function setLen(this arr: string[], newLen: number): void from "&msStringArraySetLen";
 
+/** Returns the allocated capacity of the array buffer. */
 extern function capacity(this arr: string[]): number from "&msStringArrayCapacity";
 
 // ===== Generic Array (matches any T[] not covered by number[]/string[]) =====
 // Uses msGenericArray* macros which work with any MS_ARRAY(T) typedef.
 // These are C macros (not functions) that use sizeof(arr->p->data[0]) for type safety.
 
+/**
+ * Appends new elements to the end of an array, and returns the new length of the array.
+ * @param value New element to add to the array.
+ */
 extern function push<T>(this arr: T[], value: T): void from "&msGenericArrayPush";
 
+/**
+ * Removes the last element from an array and returns it.
+ * If the array is empty, undefined is returned and the array is not modified.
+ */
 extern function pop<T>(this arr: T[]): T from "&msGenericArrayPop";
 
+/** Returns the element at the specified index. */
 extern function at<T>(this arr: T[], idx: number): T from "&msGenericArrayAt";
 
+/** Sets the length of the array. */
 extern function setLen<T>(this arr: T[], newLen: number): void from "&msGenericArraySetLen";
 
+/** Returns the allocated capacity of the array buffer. */
 extern function capacity<T>(this arr: T[]): number from "&msGenericArrayCapacity";
 
 // ===== Zero-Copy Bridge (uint8[] → string) =====
 
+/** Returns the byte array as a string (zero-copy). */
 @builtin("AsString")
 extern function asString(this arr: uint8[]): string from "ms_asString";

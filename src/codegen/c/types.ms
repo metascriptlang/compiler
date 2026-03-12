@@ -45,12 +45,6 @@ function isBeingDefined(key: string): boolean {
 	return false;
 }
 
-// ===== Deferred Array Content Structs =====
-// For self-referential arrays (Standard reference two-struct split), the content struct
-// (with flexible array member T data[]) must be emitted after T is complete.
-
-let deferredArrayContentStructs: string[] = [];
-
 // ===== Anonymous Type Naming =====
 // Generates deterministic C struct names for anonymous interfaces (typeName === "").
 // Uses a structural key (field names + types) hashed to a short hex-like string.
@@ -665,16 +659,6 @@ function genObjectType(g: CGen, t: Type): string {
 	// Remove from cycle tracking
 	typesBeingDefined.pop();
 
-	// Flush deferred array content structs — this struct is now complete,
-	// so any self-referential array content structs can be emitted
-	if (deferredArrayContentStructs.length > 0 && typesBeingDefined.length === 0) {
-		const b2 = sec(g, CSection.Types);
-		for (const def of deferredArrayContentStructs) {
-			addLine(b2, def);
-		}
-		deferredArrayContentStructs = [];
-	}
-
 	return cTypeName;
 }
 
@@ -807,9 +791,15 @@ function genUnionType(g: CGen, t: Type): string {
 function genArrayType(g: CGen, t: Type): string {
 	const key = typeKey(t);
 
-	// Check element type key for self-referentiality BEFORE resolving
-	// (Standard implementation parity: cycle detection)
-	const elemKey = (t.typeReturn !== null) ? typeKey(t.typeReturn) : "";
+	// Resolve TypeReference to concrete type for cycle detection and pointer classification.
+	// (Nim parity: skipTypes(irrelevantForBackend) resolves wrappers before containsOrIncl(check, t.id))
+	// TypeReference key ("typeref:X") won't match Struct key ("object:X") in typesBeingDefined.
+	let resolvedElem = t.typeReturn;
+	if (resolvedElem !== null && resolvedElem.kind === TypeKind.TypeReference) {
+		const looked = resolveTypeName(g, resolvedElem.typeName);
+		if (looked !== null) resolvedElem = looked;
+	}
+	const elemKey = (resolvedElem !== null) ? typeKey(resolvedElem) : "";
 	const selfRef = elemKey !== "" && isBeingDefined(elemKey);
 
 	const elemType = selfRef ? getTypeForward(g, t.typeReturn) : getTypeDesc(g, t.typeReturn);
@@ -821,12 +811,6 @@ function genArrayType(g: CGen, t: Type): string {
 	if (elemType === "uint8_t") { typeCacheSet(g.typeCache, key, "msUint8Array"); return "msUint8Array"; }
 
 	// Pointer element types (classes, refs, void*) → msRefArray (void* indirection is correct)
-	// Resolve TypeReference via symbol table (reference PType parity)
-	let resolvedElem = t.typeReturn;
-	if (resolvedElem !== null && resolvedElem.kind === TypeKind.TypeReference && resolvedElem.typeName !== null) {
-		const looked = resolveTypeName(g, resolvedElem.typeName);
-		if (looked !== null) resolvedElem = looked;
-	}
 	// Class types: symbol table returns Ref<Struct>, resolvedElem.kind === Ref → isPointerType catches it.
 	// Fallback for unresolved TypeReference: check knownClassNames.
 	const elemIsClass = t.typeReturn !== null && t.typeReturn.kind === TypeKind.TypeReference &&
@@ -845,31 +829,14 @@ function genArrayType(g: CGen, t: Type): string {
 	if (!typeCacheHas(g.forwTypeCache, fwdKey)) {
 		typeCacheSet(g.forwTypeCache, fwdKey, arrTypeName);
 
-		if (selfRef) {
-			// Standard reference two-struct split: Array[T] = { len, p* } + Content = { cap, T data[] }
-			// The slim struct has no dependency on T being complete (just a pointer).
-			// The content struct needs T complete — deferred until parent struct is done.
-			const contentName = arrTypeName + "__Content";
-			const b = sec(g, CSection.Types);
-			// Forward-declare both
-			addLine(sec(g, CSection.ForwardDecls), `typedef struct ${arrTypeName} ${arrTypeName};`);
-			addLine(sec(g, CSection.ForwardDecls), `typedef struct ${contentName} ${contentName};`);
-			// Emit slim struct immediately (no dependency on element type)
-			addLine(b, `struct ${arrTypeName} { int64_t len; ${contentName}* p; };`);
-			// Defer content struct until element type is complete
-			deferredArrayContentStructs.push(
-				`struct ${contentName} { int64_t cap; ${mangle(elemType)} data[]; };`
-			);
-		} else {
-			// Only use 'struct X' prefix for codegen-emitted structs.
-			// Runtime typedefs (msRefArray etc.), pointers (void*), and primitives are bare names.
-			const mangledElem = mangle(elemType);
-			const needsStructPrefix = t.typeReturn !== null
-				&& (t.typeReturn.kind === TypeKind.Struct || t.typeReturn.kind === TypeKind.Enum);
-			const elemRef = needsStructPrefix ? ("struct " + mangledElem) : mangledElem;
-			const line = `typedef MS_ARRAY(${elemRef}) ${arrTypeName};`;
-			addLine(sec(g, CSection.Types), line);
-		}
+		// Nim parity: two-struct split { len, p* } + __Content { cap, T data[] }.
+		// Forward decls in ForwardDecls, slim struct in Types, content in SeqTypes.
+		// SeqTypes is emitted after Types — element type is always complete by then.
+		const contentName = arrTypeName + "__Content";
+		addLine(sec(g, CSection.ForwardDecls), `typedef struct ${arrTypeName} ${arrTypeName};`);
+		addLine(sec(g, CSection.ForwardDecls), `typedef struct ${contentName} ${contentName};`);
+		addLine(sec(g, CSection.Types), `struct ${arrTypeName} { int64_t len; ${contentName}* p; };`);
+		addLine(sec(g, CSection.SeqTypes), `struct ${contentName} { int64_t cap; ${elemType} data[]; };`);
 	}
 
 	return arrTypeName;

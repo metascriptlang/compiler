@@ -36,6 +36,8 @@ export interface CliOptions {
 	emitC: boolean;
 	fmtCheck: boolean;
 	isHcr: boolean;
+	strictDefs: boolean;       // --strict-defs: warn on all uninit var use
+	strictNullChecks: boolean; // --strict-nil: warn on unguarded class deref
 }
 
 // -- Argument parsing --
@@ -66,6 +68,8 @@ export function parseArgs(): CliOptions {
 		emitC: false,
 		fmtCheck: false,
 		isHcr: false,
+		strictDefs: false,
+		strictNullChecks: false,
 	};
 
 	if (argv.length < 2) return opts;
@@ -135,6 +139,10 @@ export function parseArgs(): CliOptions {
 			opts.fmtCheck = true;
 		} else if (arg === "--hcr") {
 			opts.isHcr = true;
+		} else if (arg === "--strict-defs") {
+			opts.strictDefs = true;
+		} else if (arg === "--strict-nil") {
+			opts.strictNullChecks = true;
 		} else if (arg === "--emit=c") {
 			opts.emitC = true;
 		} else if (arg === "--colors=on") {

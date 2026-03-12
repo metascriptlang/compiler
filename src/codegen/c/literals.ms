@@ -29,6 +29,7 @@ export function escapeCString(s: string): string {
 		else if (ch === "\r") { result = result + "\\r"; i += 1; }
 		else if (ch === "\t") { result = result + "\\t"; i += 1; }
 		else if (ch === "\0") { result = result + "\\0"; i += 1; }
+		else if (ch === "?") { result = result + "\\?"; i += 1; }
 		else { result = result + ch; i += 1; }
 	}
 	return result;
@@ -162,6 +163,8 @@ test "escape quotes" { assert escapeCString("a\"b") === "a\\\"b"; }
 test "escape newline" { assert escapeCString("a\nb") === "a\\nb"; }
 
 test "escape tab" { assert escapeCString("a\tb") === "a\\tb"; }
+
+test "escape question mark prevents trigraphs" { assert escapeCString("??=") === "\\?\\?="; }
 
 test "cStringLiteral wraps in quotes" {
 	assert cStringLiteral("hello") === "\"hello\"";

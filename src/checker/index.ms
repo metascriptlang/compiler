@@ -51,6 +51,9 @@ export { checkStmt, checkProgramBody, checkProgram, checkProgramWithRegistry, ch
 // Re-exports: checkExprPass.ms (Pass 3 — expressions)
 export { checkExpr } from "./checkExprPass";
 
+// Re-exports: initTracker.ms (definite assignment)
+export { InitTracker, BreakState, createInitTracker, markInitialized, isInitialized, impliesNotNull } from "./initTracker";
+
 // Re-exports: orchestrator.ms (module graph orchestration)
 export { checkModuleGraph, getPreludeContext } from "./orchestrator";
 

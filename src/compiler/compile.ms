@@ -337,6 +337,8 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		// Parse + Check (cross-module registry for proper import type resolution)
 		const program = parseOrExit(mod.source, modPath);
 		const ctx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
+		ctx.strictDefs = opts.strictDefs;
+		ctx.strictNullChecks = opts.strictNullChecks;
 		exitOnFatalCheckerErrors(ctx, modPath, mod.source);
 		ctx.errors = [];
 
@@ -427,6 +429,8 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 
 		const program = parseOrExit(mod.source, modPath);
 		const ctx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
+		ctx.strictDefs = opts.strictDefs;
+		ctx.strictNullChecks = opts.strictNullChecks;
 		exitOnFatalCheckerErrors(ctx, modPath, mod.source);
 		ctx.errors = [];
 
@@ -558,7 +562,6 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 
 // ===== Test (C backend) =====
 // Compiles all modules, suppresses user's main(), executes test binary.
-// Inline tests (testGroup/test/check) run during module initialization.
 
 export function cmdTest(filePath: string, opts: CliOptions): void {
 	registerCoreParsers();
@@ -592,6 +595,8 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 
 		const program = parseOrExit(mod.source, modPath);
 		const ctx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
+		ctx.strictDefs = opts.strictDefs;
+		ctx.strictNullChecks = opts.strictNullChecks;
 		exitOnFatalCheckerErrors(ctx, modPath, mod.source);
 		ctx.errors = [];
 

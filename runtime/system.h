@@ -80,6 +80,28 @@ void msThrow(msString msg);
 		(s) = __c; \
 	} \
 } while(0)
+/* =copy(var dest, src) — 2-arg copy, dest by pointer, src by value.
+   Shared-payload check: if dest and src point to the same buffer (from shallow copy),
+   skip destroy — the source still owns it. Just allocate a fresh independent copy.
+   Without payload refcounting, this check is essential for correctness. */
+static inline void msStringCopy(msString* dest, msString src) {
+	if (dest->p == src.p) {
+		/* Shared payload (e.g., after bitwise copy): don't free — source still owns it */
+		if (src.p != NULL && !msIsLiteral(src)) {
+			*dest = msStringNew(src.p->data, src.len);
+		}
+		return;
+	}
+	/* Different payloads: destroy old dest, copy from src */
+	msString newStr;
+	if (src.p != NULL && !msIsLiteral(src)) {
+		newStr = msStringNew(src.p->data, src.len);
+	} else {
+		newStr = src;
+	}
+	msStringDestroy(*dest);
+	*dest = newStr;
+}
 #define msStringWasMoved(s)   do { (s).len = 0; (s).p = NULL; } while(0)
 #define msStringSink(d, s)    do { msStringDestroy(d); (d) = (s); } while(0)
 

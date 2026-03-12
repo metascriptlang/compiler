@@ -211,21 +211,24 @@ function genCall(name: string, hook: string, x: Node, y: Node, buf: Node[], loc:
 	}
 }
 
-// Copy-ref pattern: decref old dest, assign from src, incref new dest.
-// Must handle old value destruction here since DRC skips save-assign-destroy inside hooks.
+// Copy-ref pattern: for 2-arg copy functions (msStringCopy), emit =copy(&dest, src) directly.
+// For unary incref (msIncref, msClosureCopy), emit decref-old + assign + incref-new.
 function genCopyRef(increfFn: string, x: Node, y: Node, fieldName: string, buf: Node[], loc: SourceLocation): void {
-	// Decref old dest value before overwriting
-	const decrefFn = increfFn === "msStringIncref" ? "msStringDecref"
-		: increfFn === "msIncref" ? "msDecref"
+	// Nim parity: msStringCopy is 2-arg =copy(&dest, src) — handles destroy-old internally
+	if (increfFn === "msStringCopy") {
+		buf.push(makeExprStmt(makeCall(makeIdent("msStringCopy", loc),
+			[makeHiddenAddr(clonePath(x, loc), loc), clonePath(y, loc)], loc), loc));
+		return;
+	}
+	// Unary incref types: decref old, assign, incref new
+	const decrefFn = increfFn === "msIncref" ? "msDecref"
 		: increfFn === "msClosureIncref" ? "msClosureDecref"
 		: increfFn === "msMapIncref" ? "msMapDecref"
 		: "";
 	if (decrefFn !== "") {
 		buf.push(makeExprStmt(makeCall(makeIdent(decrefFn, loc), [clonePath(x, loc)], loc), loc));
 	}
-	// Assign: dest.field = src.field
 	buf.push(makeExprStmt(makeAssign(clonePath(x, loc), clonePath(y, loc), loc), loc));
-	// Incref new value (both dest and src now reference it)
 	buf.push(makeExprStmt(makeCall(makeIdent(increfFn, loc), [clonePath(x, loc)], loc), loc));
 }
 
@@ -243,7 +246,7 @@ function genInlineSink(destroyFn: string, xf: Node, yf: Node, buf: Node[], loc: 
 function stringOp(hook: string, xf: Node, yf: Node, fieldName: string, buf: Node[], loc: SourceLocation): void {
 	match (hook) {
 		"destroy" => { genCall("msStringDecref", hook, xf, yf, buf, loc); },
-		"copy" => { genCopyRef("msStringIncref", xf, yf, fieldName, buf, loc); },
+		"copy" => { genCopyRef("msStringCopy", xf, yf, fieldName, buf, loc); },
 		"sink" => { genInlineSink("msStringDecref", xf, yf, buf, loc); },
 		"wasMoved" => { genCall("msStringWasMoved", hook, xf, yf, buf, loc); },
 		_ => {},
@@ -681,8 +684,7 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 	};
 
 	// Self-assignment guard for binary hooks (copy, sink).
-	// Required because msStringIncref is a copy macro that modifies (*src).field in place —
-	// field-by-field copy is NOT self-assignment safe. Without this, Person_copy(&p, &p) corrupts strings.
+	// Field-by-field copy is NOT self-assignment safe — without this, Person_copy(&p, &p) corrupts fields.
 	// Reference parity: standard self-assignment guard for lifecycle hooks
 	// HiddenAddr cancels codegen auto-deref: &(*dest) == &(*src) → pointer comparison in C.
 	if (!isUnary && !isTrace) {
@@ -1128,21 +1130,19 @@ function generateArrayHook(hook: string, seqName: string, elemType: Type, arrayT
 		fnNode = makeFnDecl(seqName + suffix, [p1, p2], [seqName, seqName], makeBlock(buf, loc), "", "void", loc);
 	}
 
-	// reference parity (reference prototype): set param types based on hook kind.
-	// Arrays are 16 bytes < reference pointer introduction threshold, so markPointerParams won't handle them.
+	// Set param types based on hook kind.
+	// Arrays are 16 bytes < pointer introduction threshold, so markPointerParams won't handle them.
 	// destroy: by-value (no Ptr wrap)
 	// wasMoved: by-pointer (Ptr wrap)
 	// copy/sink: dest by-pointer, src by-value
 	if (fnNode.nodeType !== null && fnNode.nodeType.typeChildren !== null) {
 		if (hook === "destroy") {
-			// All params stay as arrayType (by-value)
 			let pi = 0;
 			while (pi < fnNode.nodeType.typeChildren.length) {
 				fnNode.nodeType.typeChildren[pi] = arrayType;
 				pi += 1;
 			}
 		} else if (hook === "wasMoved") {
-			// self → Ptr<Array>
 			fnNode.nodeType.typeChildren[0] = createPtr(arrayType);
 		} else {
 			// copy/sink: dest → Ptr<Array>, src stays arrayType

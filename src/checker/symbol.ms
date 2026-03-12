@@ -31,6 +31,7 @@ export enum SymbolFlag {
 	Static = 1024,      // static class member or static linkage
 	Sink = 2048,        // parameter takes ownership
 	Lent = 4096,        // parameter is a borrow (no RC)
+	NoReturn = 8192,    // function never returns (exit, abort, infinite loop)
 }
 
 // Flag helpers

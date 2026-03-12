@@ -2,7 +2,7 @@
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
 import {
-	Node, NodeKind, DeclKind, SourceLocation, createNodeAt,
+	Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt,
 	ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData,
 	IdentifierData, BinaryExprData, MemberExprData,
 	VariableDeclData, FunctionDeclData, ClassDeclData,
@@ -38,6 +38,11 @@ import { sliceStr, getModuleDir, appendFlag } from "../utils/string";
 import { checkExpr, checkEnumExhaustiveness, fitNode } from "./checkExprPass";
 import { registerCheckStmt } from "./checkerCallbacks";
 import { parseSource } from "../parser/statements/validation";
+import {
+	InitTracker, BreakState, createInitTracker,
+	markInitialized, isInitialized, saveInitState, restoreInitState,
+	breaksBlock, mergeInitBranches, collectNewInits, isAlwaysTrue, impliesNotNull, varDecl,
+} from "./initTracker";
 
 // Extract directory from module path (e.g. "src/foo/bar.ms" → "src/foo")
 // Brief type description for error messages
@@ -137,18 +142,30 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	}
 	node.nodeType = varType;
 	// If already collected in pass 1 (e.g. export const), update type
+	let declSym: Symbol = null;
 	const existing = lookupLocal(ctx.table, d.declName);
 	if (existing !== null) {
 		existing.symbolType = varType;
 		if (d.declKind !== DeclKind.Const) {
 			setFlag(existing, SymbolFlag.Mutable);
 		}
+		declSym = existing;
 		sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.declName.length, existing, varType, SymbolKind.Variable, d.declName, "", true);
 	} else {
 		const newSym = makeSymbol(d.declName, SymbolKind.Variable, varType, d.declKind !== DeclKind.Const);
 		defineOrError(ctx, newSym, node);
+		declSym = newSym;
 		sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.declName.length, newSym, varType, SymbolKind.Variable, d.declName, "", true);
 	}
+	// Ref parity: varDecl — record declaration block for nfFirstWrite logic
+	varDecl(ctx.initTracker, declSym);
+	// Ref parity: initVar if initializer present (sempass2 lines 1317-1318)
+	// Any initializer counts — even `null as unknown as T` (initialized, just null-valued)
+	if (d.initializer !== null) {
+		node.flags = node.flags | NodeFlag.FirstWrite;
+		markInitialized(ctx.initTracker, declSym);
+	}
+	// `let x;` with no initializer → NOT marked → will warn on use
 }
 
 function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
@@ -333,34 +350,7 @@ function addFactNeg(ctx: CheckerContext, condition: Node): void {
 	ctx.narrowFacts.push(condition);
 }
 
-// Check if a BinaryExprData is a null comparison for a specific variable
-function isNullCompareFor(d: BinaryExprData, varName: string): boolean {
-	if (d.left.kind === NodeKind.Identifier && d.right.kind === NodeKind.NullLiteral) {
-		return (d.left.data as IdentifierData).name === varName;
-	}
-	if (d.right.kind === NodeKind.Identifier && d.left.kind === NodeKind.NullLiteral) {
-		return (d.right.data as IdentifierData).name === varName;
-	}
-	return false;
-}
-
-// Query: do facts prove varName is not null?
-// Returns: 1 = yes (not null), -1 = no (is null), 0 = unknown
-function impliesNotNull(ctx: CheckerContext, varName: string): number {
-	let i = 0;
-	while (i < ctx.narrowFacts.length) {
-		const fact = ctx.narrowFacts[i];
-		if (fact.kind === NodeKind.BinaryExpr) {
-			const d = fact.data as BinaryExprData;
-			if (isNullCompareFor(d, varName)) {
-				if (d.operator === "!==") return 1;
-				if (d.operator === "===") return -1;
-			}
-		}
-		i = i + 1;
-	}
-	return 0;
-}
+// impliesNotNull is now imported from initTracker.ms (shared with checkExprPass.ms)
 
 // Extract variable names involved in null comparisons from a condition
 function collectNullVars(node: Node, dest: string[]): void {
@@ -401,7 +391,7 @@ function applyNarrowing(ctx: CheckerContext, vars: string[], narrowedSyms: Symbo
 				k = k + 1;
 			}
 			if (already) { i = i + 1; continue; }
-			const verdict = impliesNotNull(ctx, vars[i]);
+			const verdict = impliesNotNull(ctx.narrowFacts, vars[i]);
 			if (verdict === 1) {
 				savedTypes.push(sym.symbolType);
 				narrowedSyms.push(sym);
@@ -539,10 +529,28 @@ function checkIfStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as IfStmtData;
 	checkExpr(ctx, d.condition, null);
 	const vars = extractNullCheckedVars(d.condition);
+
+	// Ref parity: trackIf (sempass2 lines 847-889) — count table + exhaustiveness
+	const oldState = saveInitState(ctx.initTracker);
+	const branchInits: Symbol[][] = [];
+	const branchBreaks: BreakState[] = [];
+
+	// Track consequent
 	checkNarrowedBranch(ctx, vars, d.consequent, addFact, d.condition);
-	if (d.alternate !== null && d.alternate.kind !== NodeKind.NullLiteral) {
+	branchInits.push(collectNewInits(ctx.initTracker, oldState));
+	branchBreaks.push(breaksBlock(d.consequent));
+
+	// Track alternate (if present)
+	const hasElse = d.alternate !== null && d.alternate.kind !== NodeKind.NullLiteral;
+	if (hasElse) {
+		restoreInitState(ctx.initTracker, oldState);
 		checkNarrowedBranch(ctx, vars, d.alternate, addFactNeg, d.condition);
+		branchInits.push(collectNewInits(ctx.initTracker, oldState));
+		branchBreaks.push(breaksBlock(d.alternate));
 	}
+
+	// Ref parity: merge with exhaustiveness check
+	mergeInitBranches(ctx.initTracker, oldState, branchInits, branchBreaks, hasElse);
 }
 
 // ===== Loop Statements =====
@@ -550,19 +558,35 @@ function checkIfStmt(ctx: CheckerContext, node: Node): void {
 function checkWhileStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as WhileStmtData;
 	checkExpr(ctx, d.whileCondition, null);
-	const saved = enterLoopScope(ctx);
-	checkStmt(ctx, d.whileBody);
-	exitLoopScope(ctx, saved);
+	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock + 1;
+	// Ref parity (sempass2 lines 1346-1360): while(true) propagates, others conservative
+	if (isAlwaysTrue(d.whileCondition)) {
+		const saved = enterLoopScope(ctx);
+		checkStmt(ctx, d.whileBody);
+		exitLoopScope(ctx, saved);
+	} else {
+		const oldState = saveInitState(ctx.initTracker);
+		const saved = enterLoopScope(ctx);
+		checkStmt(ctx, d.whileBody);
+		exitLoopScope(ctx, saved);
+		restoreInitState(ctx.initTracker, oldState);
+	}
+	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock - 1;
 }
 
 function checkForStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ForStmtData;
+	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock + 1;
 	const saved = enterLoopScope(ctx);
 	checkStmt(ctx, d.forInit);
 	checkExpr(ctx, d.forCondition, null);
+	// Ref parity: for loops — conservative, loop may not execute
+	const oldState = saveInitState(ctx.initTracker);
 	checkExpr(ctx, d.forUpdate, null);
 	checkStmt(ctx, d.forBody);
 	exitLoopScope(ctx, saved);
+	restoreInitState(ctx.initTracker, oldState);
+	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock - 1;
 }
 
 function checkForOfStmt(ctx: CheckerContext, node: Node): void {
@@ -583,6 +607,8 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 			elemType = iterType.typeReturn;
 		}
 	}
+	// Ref parity: for loops — conservative, loop may not execute
+	const oldInitState = saveInitState(ctx.initTracker);
 	const saved = enterLoopScope(ctx);
 	if (d.forOfPattern !== null) {
 		// Destructured for-of: define symbols for each pattern element
@@ -590,10 +616,13 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 	} else {
 		const forSym = makeSymbol(d.forOfBinding, SymbolKind.Variable, elemType, !d.forOfIsConst);
 		defineSymbol(ctx.table, forSym);
+		// Loop binding is always initialized (iterator provides the value)
+		markInitialized(ctx.initTracker, forSym);
 		sgRecordSym(ctx, d.bindingLocation.line, d.bindingLocation.column, d.bindingLocation.column + d.forOfBinding.length, forSym, elemType, SymbolKind.Variable, d.forOfBinding, "", true);
 	}
 	checkStmt(ctx, d.forOfBody);
 	exitLoopScope(ctx, saved);
+	restoreInitState(ctx.initTracker, oldInitState);
 }
 
 function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType: Type, isConst: boolean): void {
@@ -622,7 +651,9 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 							elemType = tupleType.typeChildren[i];
 						}
 					}
-					defineSymbol(ctx.table, makeSymbol(id.name, SymbolKind.Variable, elemType, !isConst));
+					const patSym = makeSymbol(id.name, SymbolKind.Variable, elemType, !isConst);
+					defineSymbol(ctx.table, patSym);
+					markInitialized(ctx.initTracker, patSym);
 				}
 			}
 			i += 1;
@@ -634,7 +665,9 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 			const p = prop.data as ObjectPatternPropData;
 			if (p.propAlias.kind === NodeKind.Identifier) {
 				const id = p.propAlias.data as IdentifierData;
-				defineSymbol(ctx.table, makeSymbol(id.name, SymbolKind.Variable, unknownType(), !isConst));
+				const propSym = makeSymbol(id.name, SymbolKind.Variable, unknownType(), !isConst);
+				defineSymbol(ctx.table, propSym);
+				markInitialized(ctx.initTracker, propSym);
 			}
 		}
 	}
@@ -643,17 +676,24 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 function checkForInStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ForInStmtData;
 	checkExpr(ctx, d.forInObject, null);
+	const oldInitState = saveInitState(ctx.initTracker);
 	const saved = enterLoopScope(ctx);
-	defineSymbol(ctx.table, makeSymbol(d.forInBinding, SymbolKind.Variable, unknownType(), !d.forInIsConst));
+	const forInSym = makeSymbol(d.forInBinding, SymbolKind.Variable, unknownType(), !d.forInIsConst);
+	defineSymbol(ctx.table, forInSym);
+	markInitialized(ctx.initTracker, forInSym);
 	checkStmt(ctx, d.forInBody);
 	exitLoopScope(ctx, saved);
+	restoreInitState(ctx.initTracker, oldInitState);
 }
 
 function checkDoWhileStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as DoWhileStmtData;
+	// Ref parity: do-while body always executes once — propagate inits (no conservative restore)
+	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock + 1;
 	const saved = enterLoopScope(ctx);
 	checkStmt(ctx, d.doBody);
 	exitLoopScope(ctx, saved);
+	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock - 1;
 	checkExpr(ctx, d.doCondition, null);
 }
 
@@ -740,17 +780,31 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 
 function checkTryCatch(ctx: CheckerContext, node: Node): void {
 	const d = node.data as TryCatchStmtData;
+	// Ref parity: trackTryStmt (sempass2 lines 524-597) — merge try + except
+	const oldState = saveInitState(ctx.initTracker);
 	checkStmt(ctx, d.tryBody);
+	const branchInits: Symbol[][] = [collectNewInits(ctx.initTracker, oldState)];
+	const branchBreaks: BreakState[] = [breaksBlock(d.tryBody)];
+
 	if (d.catchBody !== null) {
+		restoreInitState(ctx.initTracker, oldState);
 		openScope(ctx.table, ScopeKind.Block);
 		if (d.catchName !== "") {
 			const catchSym = makeSymbol(d.catchName, SymbolKind.Variable, unknownType(), false);
 			defineSymbol(ctx.table, catchSym);
+			// Catch param is always initialized (exception runtime provides it)
+			markInitialized(ctx.initTracker, catchSym);
 			sgRecordSym(ctx, d.catchBindingLocation.line, d.catchBindingLocation.column, d.catchBindingLocation.column + d.catchName.length, catchSym, unknownType(), SymbolKind.Variable, d.catchName, "", true);
 		}
 		checkStmt(ctx, d.catchBody);
+		branchInits.push(collectNewInits(ctx.initTracker, oldState));
+		branchBreaks.push(breaksBlock(d.catchBody));
 		closeScope(ctx.table);
 	}
+
+	// Merge: intersection of try + catch
+	mergeInitBranches(ctx.initTracker, oldState, branchInits, branchBreaks, d.catchBody !== null);
+
 	if (d.finallyBody !== null) {
 		checkStmt(ctx, d.finallyBody);
 	}
@@ -759,11 +813,26 @@ function checkTryCatch(ctx: CheckerContext, node: Node): void {
 function checkSwitchStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as SwitchStmtData;
 	checkExpr(ctx, d.switchDisc, null);
+	// Ref parity: trackCase (sempass2 lines 809-845)
+	const oldState = saveInitState(ctx.initTracker);
+	const branchInits: Symbol[][] = [];
+	const branchBreaks: BreakState[] = [];
+	let hasDefault = false;
 	for (const c of d.switchCases) {
 		const cd = c.data as SwitchCaseData;
+		if (cd.caseTests.length === 0) hasDefault = true;
+		restoreInitState(ctx.initTracker, oldState);
 		for (const t of cd.caseTests) { checkExpr(ctx, t, null); }
 		for (const s of cd.caseStmts) { checkStmt(ctx, s); }
+		branchInits.push(collectNewInits(ctx.initTracker, oldState));
+		// Build a block from case stmts to check break state
+		if (cd.caseStmts.length > 0) {
+			branchBreaks.push(breaksBlock(cd.caseStmts[cd.caseStmts.length - 1]));
+		} else {
+			branchBreaks.push(BreakState.BsNone);
+		}
 	}
+	mergeInitBranches(ctx.initTracker, oldState, branchInits, branchBreaks, hasDefault);
 }
 
 function checkMatchStmt(ctx: CheckerContext, node: Node): void {
@@ -771,8 +840,13 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 	const discType = checkExpr(ctx, d.matchStmtDisc, null);
 	let hasWildcard = false;
 	const coveredMembers: string[] = [];
+	// Ref parity: trackCase — same count-table pattern for match
+	const oldState = saveInitState(ctx.initTracker);
+	const branchInits: Symbol[][] = [];
+	const branchBreaks: BreakState[] = [];
 	for (const c of d.matchStmtCases) {
 		const cd = c.data as MatchCaseData;
+		restoreInitState(ctx.initTracker, oldState);
 		for (const p of cd.casePatterns) {
 			if (p.kind === NodeKind.Identifier) {
 				// Wildcard/binding — Standard reference's else has no pattern nodes at all.
@@ -790,7 +864,24 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 			}
 		}
 		checkStmt(ctx, cd.caseBody);
+		branchInits.push(collectNewInits(ctx.initTracker, oldState));
+		branchBreaks.push(breaksBlock(cd.caseBody));
 	}
+	// Match is exhaustive if has wildcard (_) or covers all enum members
+	let isExhaustive = hasWildcard;
+	if (!isExhaustive && discType.kind === TypeKind.Enum) {
+		// Check if all enum members are covered
+		let allCovered = true;
+		for (const member of discType.typeNames) {
+			let found = false;
+			for (const c of coveredMembers) {
+				if (c === member) { found = true; }
+			}
+			if (!found) { allCovered = false; }
+		}
+		if (allCovered && discType.typeNames.length > 0) isExhaustive = true;
+	}
+	mergeInitBranches(ctx.initTracker, oldState, branchInits, branchBreaks, isExhaustive);
 	if (discType.kind === TypeKind.Enum && !hasWildcard) {
 		checkEnumExhaustiveness(ctx, discType, coveredMembers);
 	}
@@ -806,6 +897,10 @@ function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], b
 	const savedMatchDepth = ctx.matchExprDepth;
 	ctx.currentFunction = sym;
 	ctx.matchExprDepth = 0;
+	// Ref parity: trackProc (sempass2 lines 1662-1698) — scope + param init
+	const savedBlock = ctx.initTracker.currentBlock;
+	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock + 1;
+	const initSnap = saveInitState(ctx.initTracker);
 	openScope(ctx.table, ScopeKind.Function);
 	let i = 0;
 	for (const param of params) {
@@ -819,6 +914,8 @@ function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], b
 			setFlag(paramSym, SymbolFlag.Lent);
 		}
 		defineSymbol(ctx.table, paramSym);
+		// Ref parity: params are implicitly initialized
+		markInitialized(ctx.initTracker, paramSym);
 		// Record param DEF for LSP (standard parity: semIdentDef → suggestSym)
 		if (paramLocs !== null && i < paramLocs.length && paramLocs[i] !== null) {
 			sgRecordSym(ctx, paramLocs[i].line, paramLocs[i].column,
@@ -837,6 +934,9 @@ function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], b
 		}
 	}
 	closeScope(ctx.table);
+	// Restore init tracking state
+	restoreInitState(ctx.initTracker, initSnap);
+	ctx.initTracker.currentBlock = savedBlock;
 	ctx.currentFunction = savedFunction;
 	ctx.matchExprDepth = savedMatchDepth;
 }

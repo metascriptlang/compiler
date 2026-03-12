@@ -50,7 +50,8 @@ function lspBuildCommitCharsArray(chars: string): string {
 
 export function lspFmtCompletionItem(
 	label: string, kind: number, detail: string,
-	sortText: string, isDeprecated: boolean, commitChars: string
+	sortText: string, isDeprecated: boolean, commitChars: string,
+	documentation: string
 ): string {
 	let result = "{\"label\":" + lspJsonString(label)
 		+ ",\"kind\":" + lspJsonNumber(kind)
@@ -65,18 +66,29 @@ export function lspFmtCompletionItem(
 	if (commitArr.length > 0) {
 		result = result + ",\"commitCharacters\":" + commitArr;
 	}
+	if (documentation.length > 0) {
+		result = result + ",\"documentation\":{\"kind\":\"markdown\",\"value\":" + lspJsonString(documentation) + "}";
+	}
 	result = result + "}";
 	return result;
 }
 
 // ===== Hover =====
 
-export function lspFmtHoverResult(codeBlock: string, documentation: string): string {
+export function lspFmtHoverResult(
+	codeBlock: string, documentation: string,
+	line: number, col: number, endCol: number
+): string {
 	let content = codeBlock;
 	if (documentation.length > 0) {
 		content = content + "\n\n---\n\n" + documentation;
 	}
-	return "{\"contents\":{\"kind\":\"markdown\",\"value\":" + lspJsonString(content) + "}}";
+	let result = "{\"contents\":{\"kind\":\"markdown\",\"value\":" + lspJsonString(content) + "}";
+	if (line >= 0) {
+		result = result + ",\"range\":" + lspFmtLineRange(line, col, endCol);
+	}
+	result = result + "}";
+	return result;
 }
 
 // ===== Diagnostics =====
@@ -104,7 +116,8 @@ export function lspFmtPublishDiagnostics(uri: string, diagnosticsArray: string):
 
 export function lspFmtDocumentSymbol(
 	name: string, kind: number, detail: string,
-	line: number, col: number, endCol: number
+	line: number, col: number, endCol: number,
+	childrenJson: string
 ): string {
 	const range = lspFmtLineRange(line, col, endCol);
 	let result = "{\"name\":" + lspJsonString(name)
@@ -113,7 +126,11 @@ export function lspFmtDocumentSymbol(
 		result = result + ",\"detail\":" + lspJsonString(detail);
 	}
 	result = result + ",\"range\":" + range
-		+ ",\"selectionRange\":" + range + "}";
+		+ ",\"selectionRange\":" + range;
+	if (childrenJson.length > 0) {
+		result = result + ",\"children\":" + childrenJson;
+	}
+	result = result + "}";
 	return result;
 }
 
@@ -129,6 +146,12 @@ export function lspFmtInlayHint(
 		+ ",\"paddingLeft\":" + lspJsonBool(paddingLeft)
 		+ ",\"paddingRight\":" + lspJsonBool(paddingRight)
 		+ "}";
+}
+
+// ===== Document Highlight =====
+
+export function lspFmtDocumentHighlight(line: number, col: number, endCol: number, kind: number): string {
+	return "{\"range\":" + lspFmtLineRange(line, col, endCol) + ",\"kind\":" + lspJsonNumber(kind) + "}";
 }
 
 // ===== Signature Help =====
@@ -174,32 +197,37 @@ test "basic" {
 }
 
 test "basic" {
-	const item = lspFmtCompletionItem("foo", 6, "number", "11", false, "");
+	const item = lspFmtCompletionItem("foo", 6, "number", "11", false, "", "");
 	assert item.length > 20;
 }
 
 test "with sortText" {
-	const item = lspFmtCompletionItem("bar", 3, "()", "10", false, "");
+	const item = lspFmtCompletionItem("bar", 3, "()", "10", false, "", "");
 	assert item.length > 20;
 }
 
 test "deprecated tag" {
-	const item = lspFmtCompletionItem("old", 6, "string", "z11", true, "");
+	const item = lspFmtCompletionItem("old", 6, "string", "z11", true, "", "");
 	assert item.length > 30;
 }
 
 test "commit chars" {
-	const item = lspFmtCompletionItem("fn", 3, "()", "11", false, "(.");
+	const item = lspFmtCompletionItem("fn", 3, "()", "11", false, "(.", "");
 	assert item.length > 40;
 }
 
+test "with documentation" {
+	const item = lspFmtCompletionItem("log", 2, "(message: string) => void", "10", false, "(.", "Logs a message to the console.");
+	assert item.length > 60;
+}
+
 test "code only" {
-	const h = lspFmtHoverResult("```ms\n(variable) x: number\n```", "");
+	const h = lspFmtHoverResult("```ms\n(variable) x: number\n```", "", 0, 5, 6);
 	assert h.length > 30;
 }
 
 test "with documentation" {
-	const h = lspFmtHoverResult("```ms\n(variable) x: number\n```", "(exported)");
+	const h = lspFmtHoverResult("```ms\n(variable) x: number\n```", "(exported)", 3, 0, 4);
 	assert h.length > 50;
 }
 
@@ -214,13 +242,19 @@ test "with code" {
 }
 
 test "without detail" {
-	const s = lspFmtDocumentSymbol("foo", 12, "", 0, 5, 8);
+	const s = lspFmtDocumentSymbol("foo", 12, "", 0, 5, 8, "");
 	assert s.length > 20;
 }
 
 test "with detail" {
-	const s = lspFmtDocumentSymbol("foo", 12, "(a: number) => void", 0, 5, 8);
+	const s = lspFmtDocumentSymbol("foo", 12, "(a: number) => void", 0, 5, 8, "");
 	assert s.length > 40;
+}
+
+test "with children" {
+	const child = lspFmtDocumentSymbol("bar", 6, "() => void", 1, 2, 5, "");
+	const s = lspFmtDocumentSymbol("MyClass", 5, "", 0, 0, 7, "[" + child + "]");
+	assert s.length > 60;
 }
 
 test "type hint" {

@@ -24,8 +24,8 @@ import {
 	getMinArity, setMinArity, isNarrowingIntConv, CallingConvention, skipModifier,
 } from "./types";
 import {
-	Symbol, SymbolKind, ScopeKind, SymbolState,
-	defineSymbol, lookupSymbol, makeSymbol, openScope, closeScope, hasOverloads,
+	Symbol, SymbolKind, ScopeKind, SymbolState, SymbolFlag,
+	defineSymbol, lookupSymbol, makeSymbol, openScope, closeScope, hasOverloads, hasFlag,
 } from "./symbol";
 import { CheckerContext, addError, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled, isReceiverMatch, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym } from "./context";
 import {
@@ -37,8 +37,38 @@ import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
 import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation, buildTypeArgKey } from "./resolvePass";
 import { parseNumberLiteral, sliceStr, findChar, charAt, splitTopLevel, trimStr } from "../utils/string";
 import { findCallTypeArg, getExplicitTypeArg, getGenericDecl } from "../parser/context";
+import {
+	markInitialized, isInitialized, impliesNotNull, getDeclBlock,
+	saveInitState, restoreInitState, collectNewInits, mergeInitBranches, breaksBlock, BreakState,
+} from "./initTracker";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
+
+// ===== Definite Assignment Helpers (sempass2 parity) =====
+
+// Reference parity: invalidateFacts — when a variable is reassigned, remove
+// any narrowing facts about it (e.g., `x !== null` becomes stale after `x = ...`).
+function invalidateFacts(ctx: CheckerContext, name: string): void {
+	let i = ctx.narrowFacts.length - 1;
+	while (i >= 0) {
+		if (factReferencesVar(ctx.narrowFacts[i], name)) {
+			ctx.narrowFacts[i] = ctx.narrowFacts[ctx.narrowFacts.length - 1];
+			ctx.narrowFacts.length = ctx.narrowFacts.length - 1;
+		}
+		i = i - 1;
+	}
+}
+
+function factReferencesVar(fact: Node, name: string): boolean {
+	if (fact.kind === NodeKind.BinaryExpr) {
+		const d = fact.data as BinaryExprData;
+		if (d.left !== null && d.left.kind === NodeKind.Identifier &&
+			(d.left.data as IdentifierData).name === name) return true;
+		if (d.right !== null && d.right.kind === NodeKind.Identifier &&
+			(d.right.data as IdentifierData).name === name) return true;
+	}
+	return false;
+}
 
 // ===== Generic NewExpr Resolution =====
 // Resolves `new Box<number>(42)` — captures type args from side-channel,
@@ -112,18 +142,54 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			// Demand-driven: ensure the symbol's signature is resolved before using its type
 			ensureShaped(sym, ctx);
 			node.resolvedSym = sym;
+			// Ref parity: useVar — only check vars declared in current scope (getDeclBlock >= 0).
+			// Imports/globals never varDecl'd → naturally skipped. Matches Nim's s.owner == a.owner.
+			if (sym.symbolKind === SymbolKind.Variable && getDeclBlock(ctx.initTracker, sym) >= 0 &&
+				ctx.strictDefs && ctx.initTracker.leftPartOfAsgn <= 0 && ctx.currentFunction !== null) {
+				if (!isInitialized(ctx.initTracker, sym)) {
+					addWarning(ctx, "variable '" + d.name + "' may be used before initialization", node.location.line, node.location.column);
+					// Suppress repeated warnings (ref: a.init.add s.id)
+					markInitialized(ctx.initTracker, sym);
+				}
+			}
 			sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.name.length, sym, sym.symbolType, sym.symbolKind, d.name, "", false);
 			return sym.symbolType;
 		},
 		NodeKind.BinaryExpr => {
 			const d = node.data as BinaryExprData;
+			// Ref parity: leftPartOfAsgn (sempass2 lines 1286-1288)
+			const isAsgn = d.operator === "=" || d.operator === "+=" || d.operator === "-=" ||
+				d.operator === "*=" || d.operator === "/=" || d.operator === "%=" ||
+				d.operator === "&&=" || d.operator === "||=" || d.operator === "??=";
+			if (isAsgn) {
+				ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn + 1;
+			}
 			const leftType = checkExpr(ctx, d.left, null);
+			if (isAsgn) {
+				ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn - 1;
+			}
 			// For assignment, pass LHS type as expectedType to RHS
 			const rightExpected = (d.operator === "=") ? leftType : null;
 			let rightType = checkExpr(ctx, d.right, rightExpected);
 			// Parity: standard reference node fitting — insert HiddenStdConv for narrowing assignment
 			if (d.operator === "=" && leftType !== null) {
 				d.right = fitNode(ctx, d.right, leftType, rightType);
+			}
+			// Ref parity: initVar on assignment LHS (sempass2 line 1284)
+			if (isAsgn && d.left.kind === NodeKind.Identifier) {
+				const lhsId = d.left.data as IdentifierData;
+				const lhsSym = d.left.resolvedSym;
+				if (lhsSym !== null) {
+					// Ref parity: nfFirstWrite — set when first assignment is in same block as declaration
+					if (!isInitialized(ctx.initTracker, lhsSym)) {
+						if (getDeclBlock(ctx.initTracker, lhsSym) === ctx.initTracker.currentBlock) {
+							node.flags = node.flags | NodeFlag.FirstWrite;
+						}
+					}
+					markInitialized(ctx.initTracker, lhsSym);
+				}
+				// Ref parity: invalidate narrowing facts about reassigned variable
+				invalidateFacts(ctx, lhsId.name);
 			}
 			// Post-hoc literal coercion: if one side is integer and other is fitting literal, coerce
 			let effLeft = leftType;
@@ -845,6 +911,9 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 				if (winner.sym !== null) {
 					node.resolvedSym = winner.sym;
 					sgRecordSym(ctx, d.callee.location.line, d.callee.location.column + 1, d.callee.location.column + 1 + me.property.length, winner.sym, getExtFnType(winner), SymbolKind.Method, me.property, winner.receiverTypeName, false);
+					// Mark for transform: skip registry re-lookup (Nim resolves UFCS in sem)
+					node.flags = node.flags | NodeFlag.ExtCall;
+					if (winner.isStatic) node.flags = node.flags | NodeFlag.ExtStatic;
 				}
 				// Strip receiver and return inferred type (sym.typ is authoritative)
 				let srcType = getExtFnType(winner);
@@ -1127,6 +1196,9 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 	}
 	if (idx >= 0 && idx < exts.length && exts[idx].sym !== null) {
 		callNode.resolvedSym = exts[idx].sym;
+		// Mark for transform: skip registry re-lookup (Nim resolves UFCS in sem)
+		callNode.flags = callNode.flags | NodeFlag.ExtCall;
+		if (exts[idx].isStatic) callNode.flags = callNode.flags | NodeFlag.ExtStatic;
 	}
 	// Fill default args for extension overloads (candidates already have receiver stripped)
 	const winnerType = candidates[idx];
@@ -1353,6 +1425,14 @@ function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, d: Obje
 function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 	const d = node.data as MemberExprData;
 	const objType = checkExpr(ctx, d.object, null);
+	// Ref parity: strictNotNil — warn on unguarded class (heap pointer) member access
+	if (ctx.strictNullChecks && objType.kind === TypeKind.Ref && d.object.kind === NodeKind.Identifier) {
+		const objName = (d.object.data as IdentifierData).name;
+		if (impliesNotNull(ctx.narrowFacts, objName) === 0) {
+			addWarning(ctx, "accessing member '" + d.property + "' on potentially null class '" + objName + "'",
+				node.location.line, node.location.column);
+		}
+	}
 	// Enum member access: Color.Red → rewrite to Identifier "Color_Red" (standard reference pattern)
 	// This rewrites the AST so codegen never sees enum-specific MemberExpr.
 	// Skip "toString" — that's a method call, not a member access.
@@ -1384,9 +1464,21 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 	}
 	const propType = getProperty(resolvedObjType, d.property);
 	// Result fields: ok, value, error — synthetic symbol (no typeName on Result)
+	// Nim parity: field symbols share location from the base type's field declaration.
+	// Since Result is built-in (no .ms source), point to the resolved type's declaration
+	// so gd on `result.value` navigates to `Person` when value: Person.
 	if (resolvedObjType.kind === TypeKind.Result && propType.kind !== TypeKind.Unknown) {
 		const resultPropSym = makeSymbol(d.property, SymbolKind.Property, propType, false);
 		resultPropSym.state = SymbolState.Shaped;
+		// Resolve property type's declaration for location (e.g. value: Person → Person's decl)
+		const propTypeName = typeNameOf(propType);
+		if (propTypeName !== "") {
+			const typeSym = lookupSymbol(ctx.table, propTypeName);
+			if (typeSym !== null && typeSym.location !== null && typeSym.location.line > 0) {
+				resultPropSym.location = typeSym.location;
+				resultPropSym.modulePath = typeSym.modulePath;
+			}
+		}
 		node.resolvedSym = resultPropSym;
 		sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + d.property.length, resultPropSym, propType, SymbolKind.Property, d.property, "Result", false);
 		return propType;
@@ -1620,8 +1712,13 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 	let returnType = unknownType();
 	let hasWildcard = false;
 	const coveredMembers: string[] = [];
+	// Ref parity: trackCase — init tracking for match expression arms
+	const oldState = saveInitState(ctx.initTracker);
+	const branchInits: Symbol[][] = [];
+	const branchBreaks: BreakState[] = [];
 	for (const c of d.matchCases) {
 		const cd = c.data as MatchCaseData;
+		restoreInitState(ctx.initTracker, oldState);
 		for (const p of cd.casePatterns) {
 			if (p.kind === NodeKind.Identifier) {
 				// Wildcard/binding — Standard reference's else has no pattern nodes at all.
@@ -1659,10 +1756,26 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 		} else {
 			bodyType = checkExpr(ctx, cd.caseBody, null);
 		}
+		branchInits.push(collectNewInits(ctx.initTracker, oldState));
+		branchBreaks.push(breaksBlock(cd.caseBody));
 		if (returnType.kind === TypeKind.Unknown && bodyType.kind !== TypeKind.Unknown) {
 			returnType = bodyType;
 		}
 	}
+	// Match is exhaustive if has wildcard (_) or covers all enum members
+	let isExhaustive = hasWildcard;
+	if (!isExhaustive && discType.kind === TypeKind.Enum) {
+		let allCovered = true;
+		for (const member of discType.typeNames) {
+			let found = false;
+			for (const c of coveredMembers) {
+				if (c === member) { found = true; }
+			}
+			if (!found) { allCovered = false; }
+		}
+		if (allCovered && discType.typeNames.length > 0) isExhaustive = true;
+	}
+	mergeInitBranches(ctx.initTracker, oldState, branchInits, branchBreaks, isExhaustive);
 	if (discType.kind === TypeKind.Enum && !hasWildcard) {
 		checkEnumExhaustiveness(ctx, discType, coveredMembers);
 	}

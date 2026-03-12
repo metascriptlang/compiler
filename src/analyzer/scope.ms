@@ -24,14 +24,15 @@ export interface VarInfo {
 }
 
 export interface MovedVar {
-	varName: string;
+	varName: string;       // variable name (empty for expression-level moves)
+	exprNode: Node;        // pre-built wasMoved call node (null for variable-level moves)
 }
 
 // ===== DRC Scope =====
 
 export interface DrcScope {
 	varsToCleanup: VarInfo[];     // variables needing cleanup at scope exit
-	wasMoved: MovedVar[];         // variables that were moved (skip destroy)
+	wasMoved: MovedVar[];         // moved vars + expr-level wasMoved calls
 	needsTry: boolean;            // does this scope need try/finally wrapping?
 	isLoop: boolean;              // is this a loop body scope?
 	isFunction: boolean;          // is this a function scope?
@@ -133,7 +134,7 @@ export function markUninitialized(dctx: DrcContext, varName: string): void {
 export function recordMove(dctx: DrcContext, varName: string): void {
 	const scope = currentScope(dctx);
 	if (wasMovedInScope(scope, varName)) return;
-	const mv: MovedVar = { varName };
+	const mv: MovedVar = { varName, exprNode: null as unknown as Node };
 	scope.wasMoved.push(mv);
 }
 
@@ -152,7 +153,7 @@ export function recordMoveInContext(dctx: DrcContext, varName: string): void {
 		const vi = findVarInfo(dctx.scopes[i], varName);
 		if (vi !== null) {
 			if (!wasMovedInScope(dctx.scopes[i], varName)) {
-				const mv: MovedVar = { varName };
+				const mv: MovedVar = { varName, exprNode: null as unknown as Node };
 				dctx.scopes[i].wasMoved.push(mv);
 			}
 			return;
@@ -160,6 +161,14 @@ export function recordMoveInContext(dctx: DrcContext, varName: string): void {
 	}
 	// Fallback: record on current scope
 	recordMove(dctx, varName);
+}
+
+// Record an expression-level wasMoved call (for move obj.field / move arr[i]).
+// Stored in wasMoved with empty varName — emitted in finally before destructors.
+export function recordMoveExpr(dctx: DrcContext, wasMovedCall: Node): void {
+	const scope = currentScope(dctx);
+	const mv: MovedVar = { varName: "", exprNode: wasMovedCall };
+	scope.wasMoved.push(mv);
 }
 
 // ===== needsTry Propagation =====
@@ -289,7 +298,7 @@ function testDrcCtx(): DrcContext {
 export function testStringRc(): RcInfo {
 	return {
 		rcKind: RcKind.String, typeName: "", needsCleanup: true,
-		destroyFn: "msStringDecref", copyFn: "msStringIncref",
+		destroyFn: "msStringDecref", copyFn: "msStringCopy",
 		wasMovedFn: "msStringWasMoved", sinkFn: "msStringSink",
 	};
 }

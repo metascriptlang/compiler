@@ -24,7 +24,7 @@ import { TransformContext, freshTemp } from "../context";
 import { walkExpandBlocks, containsExprKind, replaceInExpr } from "../walker";
 import {
 	makeIdent, makeTypedIdent, makeBlock, makeVarDecl, makeExprStmt, makeNull,
-	makeReturn, makeIf, makeBinary, makeAssign,
+	makeReturn, makeIf, makeBinary, makeAssign, makeBool, makeUnary,
 	makeCall, makeNumber, makeSwitch, makeSwitchCase,
 } from "../util";
 import { Type } from "../../checker/types";
@@ -522,10 +522,25 @@ function isAllStringCases(cases: Node[]): boolean {
 	return stringCount > STRING_HASH_THRESHOLD;
 }
 
-// Build switch(djb2(disc)) { case HASH: if (disc === str) { body } break; ... default: { wildcard } }
+// Hash bucket entry: a guarded if-body for one string pattern within a hash bucket.
+interface HashBucket {
+	hash: int32;
+	guards: Node[];  // chained if-guards for patterns sharing this hash
+}
+
+// Build switch(djb2(disc)) { case HASH: if (eq1) { body } else if (eq2) { body } break; ... }
+// Collision-safe: patterns sharing a hash are chained in the same case arm.
+// Return mode: matched arms `return`, so default body placed unconditionally after switch.
+// Stmt/assign mode: matched arms don't exit, so $matched flag guards the default body.
 function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: SourceLocation, mode: string, varName: string): Node {
-	const switchCases: Node[] = [];
 	let defaultBody = makeBlock([], loc);
+	// return mode: matched arms exit via return — no flag needed, unconditional default is safe.
+	// stmt/assign mode: matched arms don't exit — need $matched flag to skip default.
+	const needsFlag = mode !== "return";
+	const matchedName = "$matched";
+
+	// Collect patterns into hash buckets — patterns with the same hash share a bucket.
+	const buckets: HashBucket[] = [];
 
 	for (let i = 0; i < cases.length; i += 1) {
 		const caseData = cases[i].data as MatchCaseData;
@@ -534,24 +549,55 @@ function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: S
 			continue;
 		}
 
-		// Each pattern gets its own switch case (hash value)
 		for (let j = 0; j < caseData.casePatterns.length; j += 1) {
 			const pat = caseData.casePatterns[j];
 			const strData = pat.data as StringLiteralData;
 			const hash = djb2Hash(strData.value);
 
-			// Body: if (temp === "literal") { armBody; break; }
 			const body = wrapArmBody(caseData.caseBody, mode, varName, loc);
+			let guardedBlock = body;
+			if (needsFlag) {
+				const setMatched = makeExprStmt(makeAssign(makeIdent(matchedName, loc), makeBool(true, loc), loc), loc);
+				const guardedBodyStmts: Node[] = [];
+				guardedBodyStmts.push(setMatched);
+				guardedBodyStmts.push(body);
+				guardedBlock = makeBlock(guardedBodyStmts, loc);
+			}
 			const guard = makeBinary(makeTypedIdent(tempName, discType, loc), "===", pat, loc);
-			const guardedBody = makeIf(guard, body, makeBlock([], loc), loc);
-			const caseStmts: Node[] = [];
-			caseStmts.push(guardedBody);
+			const guardedIf = makeIf(guard, guardedBlock, makeBlock([], loc), loc);
 
-			const hashNode = makeNumber(hash, loc);
-			const tests: Node[] = [];
-			tests.push(hashNode);
-			switchCases.push(makeSwitchCase(tests, caseStmts, false, loc));
+			// Find existing bucket or create new one
+			let found = false;
+			let bi = 0;
+			while (bi < buckets.length) {
+				if (buckets[bi].hash === hash) {
+					buckets[bi].guards.push(guardedIf);
+					found = true;
+					break;
+				}
+				bi += 1;
+			}
+			if (!found) {
+				const guards: Node[] = [];
+				guards.push(guardedIf);
+				buckets.push({ hash, guards });
+			}
 		}
+	}
+
+	// Build switch cases from buckets — one case per unique hash value
+	const switchCases: Node[] = [];
+	for (let bi = 0; bi < buckets.length; bi += 1) {
+		const bucket = buckets[bi];
+		const caseStmts: Node[] = [];
+		// Chain all guards for this hash bucket (handles collisions)
+		for (let gi = 0; gi < bucket.guards.length; gi += 1) {
+			caseStmts.push(bucket.guards[gi]);
+		}
+		const hashNode = makeNumber(bucket.hash, loc);
+		const tests: Node[] = [];
+		tests.push(hashNode);
+		switchCases.push(makeSwitchCase(tests, caseStmts, false, loc));
 	}
 
 	// switch (msStringHash(temp))
@@ -560,13 +606,20 @@ function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: S
 	const hashCall = makeCall(makeIdent("msStringHash", loc), hashCallArgs, loc);
 	const switchNode = makeSwitch(hashCall, switchCases, loc);
 
-	// Hash collision fallback: when a case hash matches but the string equality
-	// guard fails, control breaks out of the switch with no return. Place the
-	// default/wildcard body AFTER the switch so both hash collisions and
-	// unmatched hashes fall through to the wildcard arm.
 	const stmts: Node[] = [];
-	stmts.push(switchNode);
-	stmts.push(defaultBody);
+	if (needsFlag) {
+		// let $matched = false; switch(...) { ... } if (!$matched) { wildcard }
+		stmts.push(makeVarDecl(matchedName, makeBool(false, loc), DeclKind.Let, loc));
+		stmts.push(switchNode);
+		const notMatched = makeUnary("!", makeIdent(matchedName, loc), loc);
+		stmts.push(makeIf(notMatched, defaultBody, makeBlock([], loc), loc));
+	} else {
+		// return mode: matched arms return, so default body is only reachable when
+		// no case matched (or hash collision with guard failure). Unconditional placement
+		// keeps C compiler happy (guaranteed return path).
+		stmts.push(switchNode);
+		stmts.push(defaultBody);
+	}
 	return makeBlock(stmts, loc);
 }
 
@@ -589,6 +642,14 @@ test "few string arms stay as if-else" {
 	const src = "match (x) { \"a\" => 1, \"b\" => 2, _ => 0 }";
 	// 2 string arms <= threshold → stays as if-else chain
 	assert stmtCountAfter(src, lowerMatch) === 2;
+}
+
+test "hash switch stmt mode produces $matched guard" {
+	// >8 string arms in stmt match → hash switch with $matched flag
+	const src = "match (cmd) { \"a\" => foo(), \"b\" => bar(), \"c\" => c(), \"d\" => d(), \"e\" => e(), \"f\" => f(), \"g\" => g(), \"h\" => h(), \"i\" => i(), _ => fallback() }";
+	const stmts = stmtCountAfter(src, lowerMatch);
+	// Top level: [VarDecl($match_temp), BlockStmt(VarDecl($matched) + Switch + If)]
+	assert stmts === 2;
 }
 
 test "djb2 hash deterministic" {

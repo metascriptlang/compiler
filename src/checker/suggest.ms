@@ -13,7 +13,7 @@ import { Node, NodeKind, SourceLocation, makeLoc, ProgramData, DeclKind,
 	ArrowFunctionData, ArrayAccessData, MatchExprData, MatchCaseData,
 	TryCatchStmtData, TryExprData, ClassDeclData, InterfaceDeclData, EnumDeclData,
 	TypeAliasDeclData, ExportDeclData, ImportDeclData, HiddenDerefData,
-	HiddenStdConvData } from "../ast/node";
+	HiddenStdConvData, MethodDeclData, PropertyDeclData, ConstructorDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { Type, TypeKind, typeNameOf, getProperty,
 	numberType, stringType, booleanType, voidType, nullType,
@@ -29,6 +29,7 @@ import { parseProgram } from "../parser/statements/core";
 // ===== Data Types =====
 
 export interface SgSuggest {
+	sym: Symbol;           // symbol pointer for identity-based matching
 	name: string;
 	kind: SymbolKind;
 	symType: Type;
@@ -40,6 +41,7 @@ export interface SgSuggest {
 	contextFit: boolean;   // type-context match
 	isExported: boolean;   // from sym.isExported
 	isMutable: boolean;    // from sym.isMutable (let vs const)
+	usageCount: number;    // number of usages in current file (for completion ranking)
 }
 
 export interface SgDiagnostic {
@@ -61,6 +63,7 @@ export interface SgDocumentSymbol {
 	location: SourceLocation;
 	detail: string;    // type signature for outline view
 	isMutable: boolean; // let/var vs const — for Constant(14) vs Variable(13) icon
+	children: SgDocumentSymbol[];
 }
 
 export interface SgSignatureInfo {
@@ -79,7 +82,7 @@ export function sgQueryAtPosition(ctx: CheckerContext, line: number, col: number
 	let lo = 0;
 	let hi = records.length - 1;
 	while (lo <= hi) {
-		const mid: int32 = (lo + hi) / 2;
+		const mid = (lo + hi) as int32 >> 1;
 		if (records[mid].line < line) {
 			lo = mid + 1;
 		} else {
@@ -102,6 +105,7 @@ function sgSuggestFromRecord(rec: SgSymRecord): SgSuggest {
 	const loc: SourceLocation = rec.sym !== null && rec.sym.location !== null ? rec.sym.location : makeLoc(rec.line, rec.col);
 	const modPath = rec.sym !== null && rec.sym.modulePath !== null ? rec.sym.modulePath : "";
 	return {
+		sym: rec.sym,
 		name: rec.name,
 		kind: rec.kind,
 		symType: rec.symType,
@@ -113,14 +117,31 @@ function sgSuggestFromRecord(rec: SgSymRecord): SgSuggest {
 		contextFit: false,
 		isExported: rec.sym !== null ? hasFlag(rec.sym, SymbolFlag.Exported) : false,
 		isMutable: rec.sym !== null ? hasFlag(rec.sym, SymbolFlag.Mutable) : false,
+		usageCount: 0,
 	};
 }
 
-// ===== sgQueryByName — find all records matching a name =====
-// Replaces sgCollectReferences + sgFindUsagesByName (AST walker).
-// Scans pre-recorded checker records — O(n) on records, not AST.
+// ===== sgQueryBySym — find all records matching a symbol by pointer identity =====
+// Nim-aligned: uses sym pointer identity (not name string) to avoid false positives
+// with shadowed or aliased symbols. Falls back to name+modulePath for cross-module.
 
-export function sgQueryByName(ctx: CheckerContext, name: string): SgSymbolRef[] {
+export function sgQueryBySym(ctx: CheckerContext, targetSym: Symbol): SgSymbolRef[] {
+	const result: SgSymbolRef[] = [];
+	if (ctx.symRecords === null || targetSym === null) return result;
+	const records = ctx.symRecords;
+	let i = 0;
+	while (i < records.length) {
+		const rec = records[i];
+		if (rec.sym === targetSym) {
+			result.push({ name: rec.name, line: rec.line, col: rec.col, nameLen: rec.colEnd - rec.col, isDecl: rec.isDecl });
+		}
+		i = i + 1;
+	}
+	return result;
+}
+
+// Cross-module fallback: match by (name, modulePath) when sym pointers differ across checker contexts.
+export function sgQueryByName(ctx: CheckerContext, name: string, modulePath: string): SgSymbolRef[] {
 	const result: SgSymbolRef[] = [];
 	if (ctx.symRecords === null) return result;
 	const records = ctx.symRecords;
@@ -128,6 +149,25 @@ export function sgQueryByName(ctx: CheckerContext, name: string): SgSymbolRef[] 
 	while (i < records.length) {
 		const rec = records[i];
 		if (rec.name === name) {
+			if (modulePath === "" || rec.sym === null || rec.sym.modulePath === null || rec.sym.modulePath === "" || rec.sym.modulePath === modulePath) {
+				result.push({ name: rec.name, line: rec.line, col: rec.col, nameLen: rec.colEnd - rec.col, isDecl: rec.isDecl });
+			}
+		}
+		i = i + 1;
+	}
+	return result;
+}
+
+// Strict cross-module match: name AND defining module must match exactly.
+// Rust-analyzer two-pass: fast text match + precise semantic confirmation.
+export function sgQueryByDefiningModule(ctx: CheckerContext, name: string, defModule: string): SgSymbolRef[] {
+	const result: SgSymbolRef[] = [];
+	if (ctx.symRecords === null) return result;
+	const records = ctx.symRecords;
+	let i = 0;
+	while (i < records.length) {
+		const rec = records[i];
+		if (rec.name === name && rec.sym !== null && rec.sym.modulePath !== null && rec.sym.modulePath === defModule) {
 			result.push({ name: rec.name, line: rec.line, col: rec.col, nameLen: rec.colEnd - rec.col, isDecl: rec.isDecl });
 		}
 		i = i + 1;
@@ -326,9 +366,16 @@ function sgFormatFieldList(t: Type): string {
 	return result;
 }
 
+function sgIsAlias(suggest: SgSuggest): boolean {
+	if (suggest.sym === null) return false;
+	const orig = suggest.sym.originalName;
+	return orig !== null && orig !== "" && orig !== suggest.name;
+}
+
 export function sgFormatHover(suggest: SgSuggest): string {
 	if (suggest === null) return "";
 	const typeStr = sgTypeToString(suggest.symType);
+	const aliasPrefix = sgIsAlias(suggest) ? "(alias) " : "";
 	// Variable/Parameter: const x: number / let x: number / parameter x: string
 	if (suggest.kind === SymbolKind.Variable || suggest.kind === SymbolKind.Parameter) {
 		let kw = "";
@@ -337,153 +384,145 @@ export function sgFormatHover(suggest: SgSuggest): string {
 		} else {
 			if (suggest.isMutable) { kw = "let"; } else { kw = "const"; }
 		}
-		return "```typescript\n" + kw + " " + suggest.name + ": " + typeStr + "\n```";
+		return "```metascript\n" + aliasPrefix + kw + " " + suggest.name + ": " + typeStr + "\n```";
 	}
 	// Function: function name(params): returnType
 	if (suggest.kind === SymbolKind.Function) {
 		if (suggest.symType !== null && suggest.symType.kind === TypeKind.Function) {
-			return "```typescript\n" + sgFormatFuncDecl(suggest.name, suggest.symType) + "\n```";
+			return "```metascript\n" + aliasPrefix + sgFormatFuncDecl(suggest.name, suggest.symType) + "\n```";
 		}
-		return "```typescript\nfunction " + suggest.name + "\n```";
+		return "```metascript\n" + aliasPrefix + "function " + suggest.name + "\n```";
 	}
-	// Method: Container.name(params): returnType
+	// Method: (method) Container.name(params): returnType — TS-Go: "(method) " prefix
 	if (suggest.kind === SymbolKind.Method) {
-		const prefix = suggest.containerName !== null && suggest.containerName !== ""
+		const container = suggest.containerName !== null && suggest.containerName !== ""
 			? suggest.containerName + "." : "";
 		if (suggest.symType !== null && suggest.symType.kind === TypeKind.Function) {
-			return "```typescript\n" + prefix + suggest.name + sgFormatParamList(suggest.symType) + ": " + sgTypeToString(suggest.symType.typeReturn) + "\n```";
+			return "```metascript\n" + aliasPrefix + "(method) " + container + suggest.name + sgFormatParamList(suggest.symType) + ": " + sgTypeToString(suggest.symType.typeReturn) + "\n```";
 		}
-		return "```typescript\n" + prefix + suggest.name + "\n```";
+		return "```metascript\n" + aliasPrefix + "(method) " + container + suggest.name + "\n```";
 	}
-	// Property: (property) Container.name: type
+	// EnumMember: (enum member) Name = value — TS-Go: "(enum member) " prefix with literal value
+	if (suggest.kind === SymbolKind.EnumMember) {
+		return "```metascript\n" + aliasPrefix + "(enum member) " + suggest.name + " = " + typeStr + "\n```";
+	}
+	// Property: (property) Container.name: type — TS-Go: "(property) " prefix
 	if (suggest.kind === SymbolKind.Property) {
-		let propPrefix = "";
+		let propContainer = "";
 		if (suggest.containerName !== null && suggest.containerName !== "") {
-			// Hide internal anonymous type names (__anon*)
 			if (sgFindSubstring(suggest.containerName, "__anon") < 0) {
-				propPrefix = suggest.containerName + ".";
+				propContainer = suggest.containerName + ".";
 			}
 		}
-		return "```typescript\n(property) " + propPrefix + suggest.name + ": " + typeStr + "\n```";
+		return "```metascript\n" + aliasPrefix + "(property) " + propContainer + suggest.name + ": " + typeStr + "\n```";
 	}
-	// Interface: interface Name { field1: T1; field2: T2 }
+	// Interface: interface Name — TS-Go: no fields, shows type params if generic
 	if (suggest.kind === SymbolKind.Interface) {
-		if (suggest.symType !== null && suggest.symType.kind === TypeKind.Struct && suggest.symType.typeNames.length > 0) {
-			const fields = sgFormatFieldList(suggest.symType);
-			return "```typescript\ninterface " + suggest.name + " { " + fields + " }\n```";
-		}
-		return "```typescript\ninterface " + suggest.name + "\n```";
+		return "```metascript\n" + aliasPrefix + "interface " + suggest.name + "\n```";
 	}
-	// Class: class Name
+	// Class: class Name — TS-Go: no fields, shows type params if generic
 	if (suggest.kind === SymbolKind.Class) {
-		return "```typescript\nclass " + suggest.name + "\n```";
+		return "```metascript\n" + aliasPrefix + "class " + suggest.name + "\n```";
 	}
-	// Enum: enum Name { A, B, C }
+	// Enum: enum Name — TS-Go: just the name, no members
 	if (suggest.kind === SymbolKind.Enum) {
-		if (suggest.symType !== null && suggest.symType.kind === TypeKind.Enum && suggest.symType.typeNames.length > 0) {
-			const members = sgJoinFieldNames(suggest.symType.typeNames);
-			return "```typescript\nenum " + suggest.name + " { " + members + " }\n```";
-		}
-		return "```typescript\nenum " + suggest.name + "\n```";
+		return "```metascript\n" + aliasPrefix + "enum " + suggest.name + "\n```";
 	}
 	// TypeAlias: type T = underlying
 	if (suggest.kind === SymbolKind.TypeAlias) {
-		return "```typescript\ntype " + suggest.name + " = " + typeStr + "\n```";
+		return "```metascript\n" + aliasPrefix + "type " + suggest.name + " = " + typeStr + "\n```";
 	}
 	// Fallback
 	const kindName = sgSymbolKindName(suggest.kind);
-	return "```typescript\n(" + kindName + ") " + suggest.name + ": " + typeStr + "\n```";
+	return "```metascript\n" + aliasPrefix + "(" + kindName + ") " + suggest.name + ": " + typeStr + "\n```";
 }
 
-// Hover documentation section — module source + doc comments
+// Hover documentation section — doc comments only (TS-Go: no file paths in hover)
 export function sgFormatHoverDoc(suggest: SgSuggest, docComment: string): string {
 	if (suggest === null) return "";
-	let doc = "";
-	// Show module source for cross-file project imports (skip std/ prelude — auto-loaded)
-	if (suggest.modulePath !== null && suggest.modulePath !== "") {
-		const isStd = sgFindSubstring(suggest.modulePath, "std/") >= 0;
-		if (!isStd) {
-			let shortPath = suggest.modulePath;
-			let lastSlash = shortPath.length - 1;
-			while (lastSlash >= 0 && charAt(shortPath, lastSlash) !== "/") {
-				lastSlash = lastSlash - 1;
-			}
-			if (lastSlash >= 0) shortPath = sliceStr(shortPath, lastSlash + 1, shortPath.length);
-			doc = "*" + shortPath + "*";
-		}
-	}
-	if (docComment.length > 0) {
-		if (doc.length > 0) doc = doc + "\n\n---\n\n";
-		doc = doc + docComment;
-	}
-	return doc;
+	return docComment;
 }
 
-// Built-in documentation for well-known symbols (MDN-style descriptions)
+// Built-in documentation for well-known symbols — sourced from TypeScript lib.es5.d.ts / lib.dom.d.ts JSDoc
 export function sgBuiltinDoc(name: string, containerName: string): string {
-	// console methods
+	// console methods (lib.dom.d.ts Console interface)
 	if (containerName === "console") {
-		if (name === "log") return "Outputs a message to the console.";
-		if (name === "error") return "Outputs an error message to the console.";
-		if (name === "warn") return "Outputs a warning message to the console.";
+		if (name === "log") return "The **`console.log()`** static method outputs a message to the console.\n\n[MDN Reference](https://developer.mozilla.org/docs/Web/API/console/log_static)";
+		if (name === "error") return "The **`console.error()`** static method outputs a message to the console at the 'error' log level.\n\n[MDN Reference](https://developer.mozilla.org/docs/Web/API/console/error_static)";
+		if (name === "warn") return "The **`console.warn()`** static method outputs a message to the console at the 'warning' log level.\n\n[MDN Reference](https://developer.mozilla.org/docs/Web/API/console/warn_static)";
+		if (name === "info") return "The **`console.info()`** static method outputs a message to the console at the 'info' log level.\n\n[MDN Reference](https://developer.mozilla.org/docs/Web/API/console/info_static)";
+		if (name === "debug") return "The **`console.debug()`** static method outputs a message to the console at the 'debug' log level.\n\n[MDN Reference](https://developer.mozilla.org/docs/Web/API/console/debug_static)";
+		if (name === "assert") return "The **`console.assert()`** static method writes an error message to the console if the assertion is false.\n\n[MDN Reference](https://developer.mozilla.org/docs/Web/API/console/assert_static)";
+		if (name === "clear") return "The **`console.clear()`** static method clears the console if possible.\n\n[MDN Reference](https://developer.mozilla.org/docs/Web/API/console/clear_static)";
+		if (name === "time") return "The **`console.time()`** static method starts a timer you can use to track how long an operation takes.\n\n[MDN Reference](https://developer.mozilla.org/docs/Web/API/console/time_static)";
+		if (name === "timeEnd") return "The **`console.timeEnd()`** static method stops a timer that was previously started.\n\n[MDN Reference](https://developer.mozilla.org/docs/Web/API/console/timeEnd_static)";
+		return "";
 	}
-	// JSON methods
+	// JSON methods (lib.es5.d.ts JSON interface)
 	if (containerName === "JSON") {
-		if (name === "parse") return "Parses a JSON string, constructing the value described by the string.";
-		if (name === "stringify") return "Converts a value to a JSON string.";
+		if (name === "parse") return "Converts a JavaScript Object Notation (JSON) string into an object.\n\n@param `text` \u2014 A valid JSON string.\n\n@param `reviver` \u2014 A function that transforms the results. This function is called for each member of the object. If a member contains nested objects, the nested objects are transformed before the parent object is.\n\n@throws {SyntaxError} If `text` is not valid JSON.";
+		if (name === "stringify") return "Converts a JavaScript value to a JavaScript Object Notation (JSON) string.\n\n@param `value` \u2014 A JavaScript value, usually an object or array, to be converted.\n\n@param `replacer` \u2014 A function that transforms the results.\n\n@param `space` \u2014 Adds indentation, white space, and line break characters to the return-value JSON text to make it easier to read.\n\n@throws {TypeError} If a circular reference or a BigInt value is found.";
+		return "";
 	}
-	// Math methods
+	// JSON variable hover (lib.es5.d.ts)
+	if (name === "JSON" && containerName === "") return "An intrinsic object that provides functions to convert JavaScript values to and from the JavaScript Object Notation (JSON) format.";
+	// Math methods (lib.es5.d.ts Math interface)
 	if (containerName === "Math") {
-		if (name === "floor") return "Returns the largest integer less than or equal to x.";
-		if (name === "ceil") return "Returns the smallest integer greater than or equal to x.";
-		if (name === "round") return "Returns the value of x rounded to the nearest integer.";
-		if (name === "abs") return "Returns the absolute value of x.";
-		if (name === "sqrt") return "Returns the square root of x.";
-		if (name === "min") return "Returns the smallest of the given values.";
-		if (name === "max") return "Returns the largest of the given values.";
-		if (name === "pow") return "Returns base raised to the power of exponent.";
-		if (name === "random") return "Returns a pseudo-random number between 0 and 1.";
-		if (name === "trunc") return "Returns the integer part of x by removing any fractional digits.";
-		if (name === "sign") return "Returns the sign of x: -1, 0, or 1.";
-		if (name === "log") return "Returns the natural logarithm (base e) of x.";
-		if (name === "log2") return "Returns the base-2 logarithm of x.";
-		if (name === "log10") return "Returns the base-10 logarithm of x.";
+		if (name === "floor") return "Returns the greatest integer value less than or equal to its numeric argument.";
+		if (name === "ceil") return "Returns the smallest integer greater than or equal to its numeric argument.";
+		if (name === "round") return "Returns a supplied numeric expression rounded to the nearest integer.";
+		if (name === "abs") return "Returns the absolute value of a number (the value without regard to whether it is positive or negative).";
+		if (name === "sqrt") return "Returns the square root of a number.";
+		if (name === "min") return "Returns the smaller of a set of supplied numeric expressions.";
+		if (name === "max") return "Returns the larger of a set of supplied numeric expressions.";
+		if (name === "pow") return "Returns the value of a base expression taken to a specified power.\n\n@param `x` \u2014 The base value of the expression.\n\n@param `y` \u2014 The exponent value of the expression.";
+		if (name === "random") return "Returns a pseudorandom number between 0 and 1.";
+		if (name === "trunc") return "Returns the integral part of a numeric expression, `x`, removing any fractional digits. If `x` is already an integer, the result is `x`.";
+		if (name === "sign") return "Returns the sign of the `x`, indicating whether `x` is positive, negative, or zero.\n\n@param `x` \u2014 The numeric expression to test.";
+		if (name === "log") return "Returns the natural logarithm (base e) of a number.";
+		if (name === "log2") return "Returns the base 2 logarithm of a number.";
+		if (name === "log10") return "Returns the base 10 logarithm of a number.";
+		if (name === "PI") return "The mathematical constant e. This is Euler's number, the base of natural logarithms.";
+		if (name === "E") return "The number whose value is the ratio of the circumference of a circle to its diameter.";
+		return "";
 	}
 	// Result methods
 	if (containerName === "Result") {
 		if (name === "ok") return "Creates a successful Result wrapping the given value.";
 		if (name === "err") return "Creates an error Result wrapping the given error.";
+		return "";
 	}
-	// String extension methods
-	if (name === "length") return "Returns the number of characters in the string.";
-	if (name === "toString") return "Returns a string representation of the value.";
-	if (name === "push") return "Appends an element to the end of the array.";
-	if (name === "pop") return "Removes and returns the last element of the array.";
-	if (name === "slice") return "Returns a shallow copy of a portion of an array or string.";
-	if (name === "indexOf") return "Returns the first index at which a given element can be found, or -1.";
-	if (name === "map") return "Creates a new array populated with the results of calling a function on every element.";
-	if (name === "filter") return "Creates a new array with elements that pass a test.";
-	if (name === "join") return "Joins all elements of an array into a string.";
-	if (name === "split") return "Divides a string into an ordered list of substrings.";
-	if (name === "trim") return "Removes whitespace from both ends of a string.";
-	if (name === "startsWith") return "Determines whether a string begins with the specified characters.";
-	if (name === "endsWith") return "Determines whether a string ends with the specified characters.";
-	if (name === "includes") return "Determines whether one string may be found within another.";
-	if (name === "replace") return "Returns a new string with one or all matches of a pattern replaced.";
-	if (name === "charAt") return "Returns the character at the specified index.";
-	if (name === "charCodeAt") return "Returns the UTF-16 code unit at the specified index.";
-	if (name === "substring") return "Returns the part of the string between the start and end indexes.";
-	if (name === "toLowerCase") return "Returns the string converted to lowercase.";
-	if (name === "toUpperCase") return "Returns the string converted to uppercase.";
-	if (name === "repeat") return "Returns a string consisting of the given number of copies.";
-	if (name === "sort") return "Sorts the elements of an array in place and returns the array.";
-	if (name === "reverse") return "Reverses the elements of an array in place.";
-	if (name === "concat") return "Merges two or more arrays or strings.";
-	if (name === "find") return "Returns the first element that satisfies the provided testing function.";
-	if (name === "every") return "Tests whether all elements pass the provided function.";
-	if (name === "some") return "Tests whether at least one element passes the provided function.";
-	if (name === "reduce") return "Applies a function against an accumulator and each element to reduce to a single value.";
-	if (name === "forEach") return "Executes a provided function once for each array element.";
+	// String methods (lib.es5.d.ts String interface)
+	if (name === "length") return "Returns the length of a String object.";
+	if (name === "toString") return "Returns a string representation of an object.";
+	if (name === "charAt") return "Returns the character at the specified index.\n\n@param `pos` \u2014 The zero-based index of the desired character.";
+	if (name === "charCodeAt") return "Returns the Unicode value of the character at the specified location.\n\n@param `index` \u2014 The zero-based index of the desired character.";
+	if (name === "indexOf") return "Returns the position of the first occurrence of a substring.\n\n@param `searchString` \u2014 The substring to search for in the string.";
+	if (name === "slice") return "Returns a section of a string or array.\n\n@param `start` \u2014 The index to the beginning of the specified portion.\n\n@param `end` \u2014 The index to the end of the specified portion (exclusive).";
+	if (name === "substring") return "Returns the substring at the specified location within a String object.";
+	if (name === "toLowerCase") return "Converts all the alphabetic characters in a string to lowercase.";
+	if (name === "toUpperCase") return "Converts all the alphabetic characters in a string to uppercase.";
+	if (name === "trim") return "Removes the leading and trailing white space and line terminator characters from a string.";
+	if (name === "split") return "Split a string into substrings using the specified separator and return them as an array.\n\n@param `separator` \u2014 A string that identifies character or characters to use in separating the string.";
+	if (name === "replace") return "Replaces text in a string, using a regular expression or search string.\n\n@param `searchValue` \u2014 A string or pattern to search for.\n\n@param `replaceValue` \u2014 A string containing the text to replace.";
+	if (name === "includes") return "Returns true if searchString appears as a substring of the result of converting this object to a String, at one or more positions that are greater than or equal to position; otherwise, returns false.";
+	if (name === "startsWith") return "Returns true if the sequence of elements of searchString converted to a String is the same as the corresponding elements of this object (converted to a String) starting at position. Otherwise returns false.";
+	if (name === "endsWith") return "Returns true if the sequence of elements of searchString converted to a String is the same as the corresponding elements of this object (converted to a String) starting at endPosition - length(this). Otherwise returns false.";
+	if (name === "repeat") return "Returns a String value that is made from count copies appended together. If count is 0, the empty string is returned.\n\n@param `count` \u2014 Number of copies to append.";
+	if (name === "concat") return "Returns a string that contains the concatenation of two or more strings.";
+	// Array methods (lib.es5.d.ts Array interface)
+	if (name === "push") return "Appends new elements to the end of an array, and returns the new length of the array.\n\n@param `items` \u2014 New elements to add to the array.";
+	if (name === "pop") return "Removes the last element from an array and returns it. If the array is empty, undefined is returned and the array is not modified.";
+	if (name === "join") return "Adds all the elements of an array into a string, separated by the specified separator string.\n\n@param `separator` \u2014 A string used to separate one element of the array from the next.";
+	if (name === "sort") return "Sorts an array in place. This method mutates the array and returns a reference to the same array.\n\n@param `compareFn` \u2014 Function used to determine the order of the elements.";
+	if (name === "reverse") return "Reverses the elements in an array in place. This method mutates the array and returns a reference to the same array.";
+	if (name === "map") return "Calls a defined callback function on each element of an array, and returns an array that contains the results.\n\n@param `callbackfn` \u2014 A function that accepts up to three arguments.";
+	if (name === "filter") return "Returns the elements of an array that meet the condition specified in a callback function.\n\n@param `predicate` \u2014 A function that accepts up to three arguments.";
+	if (name === "find") return "Returns the value of the first element in the array where predicate is true, and undefined otherwise.\n\n@param `predicate` \u2014 find calls predicate once for each element of the array.";
+	if (name === "every") return "Determines whether all the members of an array satisfy the specified test.\n\n@param `predicate` \u2014 A function that accepts up to three arguments.";
+	if (name === "some") return "Determines whether the specified callback function returns true for any element of an array.\n\n@param `predicate` \u2014 A function that accepts up to three arguments.";
+	if (name === "reduce") return "Calls the specified callback function for all the elements in an array. The return value of the callback function is the accumulated result.\n\n@param `callbackfn` \u2014 A function that accepts up to four arguments.";
+	if (name === "forEach") return "Performs the specified action for each element in an array.\n\n@param `callbackfn` \u2014 A function that accepts up to three arguments.";
 	return "";
 }
 
@@ -514,51 +553,101 @@ function sgTrimLeft(s: string): string {
 	return sliceStr(s, i, s.length);
 }
 
-// Extract doc comment above a declaration at the given line (1-indexed).
-// Scans backwards through source for consecutive // or ## comment lines.
-// Stops at blank lines or non-comment lines.
+// Extract /** JSDoc */ doc comment above a declaration at the given line (1-indexed).
+// TypeScript convention only: /** ... */ block comments.
 export function sgExtractDocComment(source: string, declLine: number): string {
 	if (declLine <= 1) return "";
-	// Collect comment lines backwards
-	const lines: string[] = [];
-	let curLine = declLine - 1;
-	while (curLine >= 1) {
-		const raw = sgExtractLine(source, curLine);
-		const trimmed = sgTrimLeft(raw);
-		// Check for // comment
-		if (trimmed.length >= 2 && sliceStr(trimmed, 0, 2) === "//") {
-			// Extract comment content after "// " or "//"
-			let content = sliceStr(trimmed, 2, trimmed.length);
-			if (content.length > 0 && charAt(content, 0) === " ") {
-				content = sliceStr(content, 1, content.length);
-			}
-			lines.push(content);
-			curLine = curLine - 1;
-			continue;
-		}
-		// Check for ## comment (Standard reference style docstring)
-		if (trimmed.length >= 2 && sliceStr(trimmed, 0, 2) === "##") {
-			let content = sliceStr(trimmed, 2, trimmed.length);
-			if (content.length > 0 && charAt(content, 0) === " ") {
-				content = sliceStr(content, 1, content.length);
-			}
-			lines.push(content);
-			curLine = curLine - 1;
-			continue;
-		}
-		// Not a comment line — stop
-		break;
+	const lastCommentLine = declLine - 1;
+	const lastRaw = sgExtractLine(source, lastCommentLine);
+	const lastTrimmed = sgTrimLeft(lastRaw);
+	if (sgFindSubstring(lastTrimmed, "*/") >= 0) {
+		return sgExtractJsDocBlock(source, lastCommentLine);
 	}
-	if (lines.length === 0) return "";
-	// Reverse and join (we collected bottom-up)
+	return "";
+}
+
+// Extract a /** ... */ JSDoc block comment ending at `endLine` (1-indexed).
+// Scans upward to find the opening /**, collects lines, strips * prefixes.
+function sgExtractJsDocBlock(source: string, endLine: number): string {
+	// Scan upward to find the line with /**
+	let startLine = endLine;
+	while (startLine >= 1) {
+		const raw = sgExtractLine(source, startLine);
+		if (sgFindSubstring(raw, "/**") >= 0) break;
+		startLine = startLine - 1;
+	}
+	if (startLine < 1) return "";
+	// Single-line: /** Some doc */
+	if (startLine === endLine) {
+		const raw = sgTrimLeft(sgExtractLine(source, startLine));
+		// Strip /** and */
+		let s = raw;
+		const openIdx = sgFindSubstring(s, "/**");
+		if (openIdx >= 0) s = sliceStr(s, openIdx + 3, s.length);
+		const closeIdx = sgFindSubstring(s, "*/");
+		if (closeIdx >= 0) s = sliceStr(s, 0, closeIdx);
+		return sgTrimLeft(sgTrimRight(s));
+	}
+	// Multi-line: collect from startLine+1 to endLine-1, plus partial first/last
+	const lines: string[] = [];
+	// First line: everything after /**
+	const firstRaw = sgExtractLine(source, startLine);
+	const openIdx = sgFindSubstring(firstRaw, "/**");
+	if (openIdx >= 0) {
+		const after = sliceStr(firstRaw, openIdx + 3, firstRaw.length);
+		const trimAfter = sgTrimLeft(sgTrimRight(after));
+		if (trimAfter.length > 0) lines.push(trimAfter);
+	}
+	// Middle lines: strip leading * prefix
+	let ln = startLine + 1;
+	while (ln < endLine) {
+		const raw = sgTrimLeft(sgExtractLine(source, ln));
+		let content = raw;
+		// Strip leading * (with optional space)
+		if (content.length > 0 && charAt(content, 0) === "*") {
+			content = sliceStr(content, 1, content.length);
+			if (content.length > 0 && charAt(content, 0) === " ") {
+				content = sliceStr(content, 1, content.length);
+			}
+		}
+		lines.push(sgTrimRight(content));
+		ln = ln + 1;
+	}
+	// Last line: everything before */
+	const lastRaw = sgTrimLeft(sgExtractLine(source, endLine));
+	// Strip */ first, then strip leading * prefix
+	let lastContent = lastRaw;
+	const closeIdx2 = sgFindSubstring(lastContent, "*/");
+	if (closeIdx2 >= 0) lastContent = sliceStr(lastContent, 0, closeIdx2);
+	lastContent = sgTrimLeft(lastContent);
+	if (lastContent.length > 0 && charAt(lastContent, 0) === "*") {
+		lastContent = sliceStr(lastContent, 1, lastContent.length);
+		if (lastContent.length > 0 && charAt(lastContent, 0) === " ") {
+			lastContent = sliceStr(lastContent, 1, lastContent.length);
+		}
+	}
+	lastContent = sgTrimRight(lastContent);
+	if (lastContent.length > 0) lines.push(lastContent);
+	// Join lines
 	let result = "";
-	let i = lines.length - 1;
-	while (i >= 0) {
-		if (result.length > 0) result = result + "\n";
+	let i = 0;
+	while (i < lines.length) {
+		if (i > 0) result = result + "\n";
 		result = result + lines[i];
-		i = i - 1;
+		i = i + 1;
 	}
 	return result;
+}
+
+// Trim trailing whitespace
+function sgTrimRight(s: string): string {
+	let i = s.length - 1;
+	while (i >= 0) {
+		const ch = charAt(s, i);
+		if (ch !== " " && ch !== "\t" && ch !== "\r") break;
+		i = i - 1;
+	}
+	return sliceStr(s, 0, i + 1);
 }
 
 // ===== Cross-Module Helpers =====
@@ -742,6 +831,17 @@ function sgPrefixMatch(prefix: string, name: string): number {
 	return 0;
 }
 
+// Count how many times a symbol appears in the current file's sym records.
+function sgCountSymUsages(ctx: CheckerContext, targetSym: Symbol): number {
+	if (ctx.symRecords === null || targetSym === null) return 0;
+	let count = 0;
+	const records = ctx.symRecords;
+	for (let i = 0; i < records.length; i = i + 1) {
+		if (records[i].sym === targetSym) count = count + 1;
+	}
+	return count;
+}
+
 function sgCompareSuggestions(a: SgSuggest, b: SgSuggest): number {
 	// Higher prefixScore first
 	if (a.prefixScore !== b.prefixScore) return b.prefixScore - a.prefixScore;
@@ -749,6 +849,8 @@ function sgCompareSuggestions(a: SgSuggest, b: SgSuggest): number {
 	const aFit = a.contextFit ? 1 : 0;
 	const bFit = b.contextFit ? 1 : 0;
 	if (aFit !== bFit) return bFit - aFit;
+	// Higher usage count first (more used = more relevant)
+	if (a.usageCount !== b.usageCount) return b.usageCount - a.usageCount;
 	// Lower scopeDepth first (closer scope)
 	if (a.scopeDepth !== b.scopeDepth) return a.scopeDepth - b.scopeDepth;
 	// Shorter name tiebreaker (more concise = likely more relevant)
@@ -818,10 +920,10 @@ function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverTyp
 					? receiverType.typeChildren[i] : unknownType();
 				const loc = makeLoc(0, 0);
 				const item: SgSuggest = {
-					name: propName, kind: SymbolKind.Property, symType: propType,
+					sym: null, name: propName, kind: SymbolKind.Property, symType: propType,
 					location: loc, modulePath: "", containerName: "",
 					prefixScore: ps, scopeDepth: 0, contextFit: false,
-					isExported: false, isMutable: false,
+					isExported: false, isMutable: false, usageCount: 0,
 				};
 				result.push(item);
 			}
@@ -835,10 +937,10 @@ function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverTyp
 			if (ps > 0) {
 				const loc = makeLoc(0, 0);
 				const item: SgSuggest = {
-					name: memberName, kind: SymbolKind.Property, symType: receiverType,
+					sym: null, name: memberName, kind: SymbolKind.Property, symType: receiverType,
 					location: loc, modulePath: "", containerName: "",
 					prefixScore: ps, scopeDepth: 0, contextFit: false,
-					isExported: false, isMutable: false,
+					isExported: false, isMutable: false, usageCount: 0,
 				};
 				result.push(item);
 			}
@@ -871,10 +973,10 @@ function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverTyp
 				}
 				const loc = makeLoc(0, 0);
 				const item: SgSuggest = {
-					name: bestExt.methodName, kind: SymbolKind.Method, symType: sigType,
+					sym: bestExt.sym, name: bestExt.methodName, kind: SymbolKind.Method, symType: sigType,
 					location: loc, modulePath: "", containerName: "",
 					prefixScore: ps, scopeDepth: 0, contextFit: false,
-					isExported: false, isMutable: false,
+					isExported: false, isMutable: false, usageCount: 0,
 				};
 				result.push(item);
 			}
@@ -902,10 +1004,11 @@ export function sgGetCompletionCandidates(ctx: CheckerContext, kind: SgCompletio
 				const cf = inTypeCtx === sgIsTypeKind(sym.symbolKind);
 				if (!inTypeCtx || sgIsTypeKind(sym.symbolKind)) {
 					const item: SgSuggest = {
-						name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
+						sym: sym, name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
 						location: sym.location, modulePath: sym.modulePath, containerName: "",
 						prefixScore: ps, scopeDepth: depth, contextFit: cf,
 						isExported: hasFlag(sym, SymbolFlag.Exported), isMutable: hasFlag(sym, SymbolFlag.Mutable),
+						usageCount: sgCountSymUsages(ctx, sym),
 					};
 					result.push(item);
 				}
@@ -942,13 +1045,55 @@ function sgGetSymbolDetail(ctx: CheckerContext, name: string): string {
 	return sgTypeToString(sym.symbolType);
 }
 
+function sgCollectClassChildren(cd: ClassDeclData): SgDocumentSymbol[] {
+	const children: SgDocumentSymbol[] = [];
+	for (let i = 0; i < cd.classBody.length; i = i + 1) {
+		const member = cd.classBody[i];
+		if (member === null) continue;
+		if (member.kind === NodeKind.MethodDecl) {
+			const md = member.data as MethodDeclData;
+			const params = sgJoinFieldNames(md.methodParamTypes);
+			const dt = "(" + params + ")" + (md.methodReturnType !== "" ? " => " + md.methodReturnType : "");
+			children.push({ name: md.methodName, kind: SymbolKind.Method, location: member.location, detail: dt, isMutable: false, children: [] });
+		}
+		if (member.kind === NodeKind.PropertyDecl) {
+			const pd = member.data as PropertyDeclData;
+			children.push({ name: pd.propName, kind: SymbolKind.Property, location: member.location, detail: pd.propType, isMutable: false, children: [] });
+		}
+		if (member.kind === NodeKind.ConstructorDecl) {
+			const ct = member.data as ConstructorDeclData;
+			const params = sgJoinFieldNames(ct.ctorParamTypes);
+			children.push({ name: "constructor", kind: SymbolKind.Method, location: member.location, detail: "(" + params + ")", isMutable: false, children: [] });
+		}
+	}
+	return children;
+}
+
+function sgCollectInterfaceChildren(ifd: InterfaceDeclData, loc: SourceLocation): SgDocumentSymbol[] {
+	const children: SgDocumentSymbol[] = [];
+	for (let i = 0; i < ifd.interfaceFields.length; i = i + 1) {
+		const fieldType = i < ifd.interfaceFieldTypes.length ? ifd.interfaceFieldTypes[i] : "";
+		children.push({ name: ifd.interfaceFields[i], kind: SymbolKind.Property, location: loc, detail: fieldType, isMutable: false, children: [] });
+	}
+	return children;
+}
+
+function sgCollectEnumChildren(ed: EnumDeclData, loc: SourceLocation): SgDocumentSymbol[] {
+	const children: SgDocumentSymbol[] = [];
+	for (let i = 0; i < ed.enumMembers.length; i = i + 1) {
+		const val = i < ed.enumValues.length ? "" + ed.enumValues[i] : "";
+		children.push({ name: ed.enumMembers[i], kind: SymbolKind.Property, location: loc, detail: val, isMutable: false, children: [] });
+	}
+	return children;
+}
+
 function sgCollectOneSymbol(node: Node, ctx: CheckerContext, result: SgDocumentSymbol[]): void {
 	if (node === null) return;
 
 	if (node.kind === NodeKind.FunctionDecl) {
 		const fd = node.data as FunctionDeclData;
 		const dt = sgGetSymbolDetail(ctx, fd.fnName);
-		const item: SgDocumentSymbol = { name: fd.fnName, kind: SymbolKind.Function, location: node.location, detail: dt, isMutable: false };
+		const item: SgDocumentSymbol = { name: fd.fnName, kind: SymbolKind.Function, location: node.location, detail: dt, isMutable: false, children: [] };
 		result.push(item);
 		return;
 	}
@@ -956,34 +1101,37 @@ function sgCollectOneSymbol(node: Node, ctx: CheckerContext, result: SgDocumentS
 		const vd = node.data as VariableDeclData;
 		const dt = sgGetSymbolDetail(ctx, vd.declName);
 		const mut = vd.declKind !== DeclKind.Const;
-		const item: SgDocumentSymbol = { name: vd.declName, kind: SymbolKind.Variable, location: node.location, detail: dt, isMutable: mut };
+		const item: SgDocumentSymbol = { name: vd.declName, kind: SymbolKind.Variable, location: node.location, detail: dt, isMutable: mut, children: [] };
 		result.push(item);
 		return;
 	}
 	if (node.kind === NodeKind.InterfaceDecl) {
 		const ifd = node.data as InterfaceDeclData;
 		const dt = sgJoinFieldNames(ifd.interfaceFields);
-		const item: SgDocumentSymbol = { name: ifd.interfaceName, kind: SymbolKind.Interface, location: node.location, detail: dt, isMutable: false };
+		const children = sgCollectInterfaceChildren(ifd, node.location);
+		const item: SgDocumentSymbol = { name: ifd.interfaceName, kind: SymbolKind.Interface, location: node.location, detail: dt, isMutable: false, children };
 		result.push(item);
 		return;
 	}
 	if (node.kind === NodeKind.EnumDecl) {
 		const ed = node.data as EnumDeclData;
 		const dt = sgJoinFieldNames(ed.enumMembers);
-		const item: SgDocumentSymbol = { name: ed.enumName, kind: SymbolKind.Enum, location: node.location, detail: dt, isMutable: false };
+		const children = sgCollectEnumChildren(ed, node.location);
+		const item: SgDocumentSymbol = { name: ed.enumName, kind: SymbolKind.Enum, location: node.location, detail: dt, isMutable: false, children };
 		result.push(item);
 		return;
 	}
 	if (node.kind === NodeKind.ClassDecl) {
 		const cd = node.data as ClassDeclData;
-		const item: SgDocumentSymbol = { name: cd.className, kind: SymbolKind.Class, location: node.location, detail: cd.classExtends, isMutable: false };
+		const children = sgCollectClassChildren(cd);
+		const item: SgDocumentSymbol = { name: cd.className, kind: SymbolKind.Class, location: node.location, detail: cd.classExtends, isMutable: false, children };
 		result.push(item);
 		return;
 	}
 	if (node.kind === NodeKind.TypeAliasDecl) {
 		const td = node.data as TypeAliasDeclData;
 		const dt = sgGetSymbolDetail(ctx, td.aliasName);
-		const item: SgDocumentSymbol = { name: td.aliasName, kind: SymbolKind.TypeAlias, location: node.location, detail: dt, isMutable: false };
+		const item: SgDocumentSymbol = { name: td.aliasName, kind: SymbolKind.TypeAlias, location: node.location, detail: dt, isMutable: false, children: [] };
 		result.push(item);
 		return;
 	}
@@ -1223,8 +1371,9 @@ function sgCollectHintsInNode(
 		return;
 	}
 
-	// Function declarations: exception hint + walk body for call sites + nested vars
+	// Function declarations: return type hint + exception hint + walk body
 	if (node.kind === NodeKind.FunctionDecl) {
+		sgCollectReturnTypeHint(ctx, node, startLine, endLine, hints);
 		sgCollectExceptionHints(ctx, node, startLine, endLine, hints);
 		const fd = node.data as FunctionDeclData;
 		if (fd.fnBody !== null) {
@@ -1268,10 +1417,47 @@ function sgCollectVarTypeHint(
 	if (sym.symbolType.kind === TypeKind.Error) return;
 
 	const typeStr = sgTypeToString(sym.symbolType);
+	// Skip hint when variable name matches type name (e.g. const token: Token)
+	if (sgCaseEqual(vd.declName, typeStr)) return;
 	const hint: SgInlayHint = {
 		label: ": " + typeStr,
 		line: node.location.line,
 		col: node.location.column + vd.declName.length,
+		hintKind: SgInlayHintKind.Type,
+	};
+	hints.push(hint);
+}
+
+function sgCollectReturnTypeHint(
+	ctx: CheckerContext, node: Node, startLine: number, endLine: number, hints: SgInlayHint[]
+): void {
+	if (node.location.line < startLine) return;
+	if (node.location.line > endLine) return;
+
+	const fd = node.data as FunctionDeclData;
+	// Only show hint if no explicit return type annotation
+	if (fd.fnReturnType.length > 0) return;
+
+	const sym = lookupSymbol(ctx.table, fd.fnName);
+	if (sym === null) return;
+	if (sym.symbolType === null) return;
+	const retType = sym.symbolType.typeReturn;
+	if (retType === null) return;
+	if (retType.kind === TypeKind.Unknown) return;
+	if (retType.kind === TypeKind.Error) return;
+	if (retType.kind === TypeKind.Void) return;
+
+	const typeStr = sgTypeToString(retType);
+	// Position: after closing paren, before body. Use fnBody location - 2 as approximation.
+	// Better: after the last param type or param name + closing paren
+	let hintCol = node.location.column + fd.fnName.length;
+	if (fd.fnBody !== null) {
+		hintCol = fd.fnBody.location.column - 1;
+	}
+	const hint: SgInlayHint = {
+		label: ": " + typeStr,
+		line: node.location.line,
+		col: hintCol,
 		hintKind: SgInlayHintKind.Type,
 	};
 	hints.push(hint);
@@ -1661,13 +1847,13 @@ test "result" {
 test "format variable hover" {
 	const loc = makeLoc(1, 0);
 	const suggest: SgSuggest = {
-		name: "count", kind: SymbolKind.Variable, symType: numberType(),
+		sym: null, name: "count", kind: SymbolKind.Variable, symType: numberType(),
 		location: loc, modulePath: "", containerName: "",
 		prefixScore: 0, scopeDepth: 0, contextFit: false,
-		isExported: false, isMutable: false,
+		isExported: false, isMutable: false, usageCount: 0,
 	};
 	const hover = sgFormatHover(suggest);
-	assert hover === "```typescript\nconst count: number\n```";
+	assert hover === "```metascript\nconst count: number\n```";
 }
 
 test "format function hover" {
@@ -1676,90 +1862,90 @@ test "format function hover" {
 	const names: string[] = ["s"];
 	const fnType = createFunction(params, names, voidType());
 	const suggest: SgSuggest = {
-		name: "greet", kind: SymbolKind.Function, symType: fnType,
+		sym: null, name: "greet", kind: SymbolKind.Function, symType: fnType,
 		location: loc, modulePath: "", containerName: "",
 		prefixScore: 0, scopeDepth: 0, contextFit: false,
-		isExported: false, isMutable: false,
+		isExported: false, isMutable: false, usageCount: 0,
 	};
 	const hover = sgFormatHover(suggest);
-	assert hover === "```typescript\nfunction greet(s: string): void\n```";
+	assert hover === "```metascript\nfunction greet(s: string): void\n```";
 }
 
 test "format interface hover" {
 	const loc = makeLoc(1, 0);
 	const suggest: SgSuggest = {
-		name: "Point", kind: SymbolKind.Interface, symType: unknownType(),
+		sym: null, name: "Point", kind: SymbolKind.Interface, symType: unknownType(),
 		location: loc, modulePath: "", containerName: "",
 		prefixScore: 0, scopeDepth: 0, contextFit: false,
-		isExported: false, isMutable: false,
+		isExported: false, isMutable: false, usageCount: 0,
 	};
-	assert sgFormatHover(suggest) === "```typescript\ninterface Point\n```";
+	assert sgFormatHover(suggest) === "```metascript\ninterface Point\n```";
 }
 
 test "format class hover" {
 	const loc = makeLoc(1, 0);
 	const suggest: SgSuggest = {
-		name: "Vec", kind: SymbolKind.Class, symType: unknownType(),
+		sym: null, name: "Vec", kind: SymbolKind.Class, symType: unknownType(),
 		location: loc, modulePath: "", containerName: "",
 		prefixScore: 0, scopeDepth: 0, contextFit: false,
-		isExported: false, isMutable: false,
+		isExported: false, isMutable: false, usageCount: 0,
 	};
-	assert sgFormatHover(suggest) === "```typescript\nclass Vec\n```";
+	assert sgFormatHover(suggest) === "```metascript\nclass Vec\n```";
 }
 
 test "format enum hover" {
 	const loc = makeLoc(1, 0);
 	const suggest: SgSuggest = {
-		name: "Color", kind: SymbolKind.Enum, symType: unknownType(),
+		sym: null, name: "Color", kind: SymbolKind.Enum, symType: unknownType(),
 		location: loc, modulePath: "", containerName: "",
 		prefixScore: 0, scopeDepth: 0, contextFit: false,
-		isExported: false, isMutable: false,
+		isExported: false, isMutable: false, usageCount: 0,
 	};
-	assert sgFormatHover(suggest) === "```typescript\nenum Color\n```";
+	assert sgFormatHover(suggest) === "```metascript\nenum Color\n```";
 }
 
 test "format type alias hover" {
 	const loc = makeLoc(1, 0);
 	const suggest: SgSuggest = {
-		name: "Id", kind: SymbolKind.TypeAlias, symType: numberType(),
+		sym: null, name: "Id", kind: SymbolKind.TypeAlias, symType: numberType(),
 		location: loc, modulePath: "", containerName: "",
 		prefixScore: 0, scopeDepth: 0, contextFit: false,
-		isExported: false, isMutable: false,
+		isExported: false, isMutable: false, usageCount: 0,
 	};
-	assert sgFormatHover(suggest) === "```typescript\ntype Id = number\n```";
+	assert sgFormatHover(suggest) === "```metascript\ntype Id = number\n```";
 }
 
 test "format let variable hover" {
 	const loc = makeLoc(1, 0);
 	const suggest: SgSuggest = {
-		name: "x", kind: SymbolKind.Variable, symType: stringType(),
+		sym: null, name: "x", kind: SymbolKind.Variable, symType: stringType(),
 		location: loc, modulePath: "", containerName: "",
 		prefixScore: 0, scopeDepth: 0, contextFit: false,
-		isExported: false, isMutable: true,
+		isExported: false, isMutable: true, usageCount: 0,
 	};
-	assert sgFormatHover(suggest) === "```typescript\nlet x: string\n```";
+	assert sgFormatHover(suggest) === "```metascript\nlet x: string\n```";
 }
 
 test "format parameter hover" {
 	const loc = makeLoc(1, 0);
 	const suggest: SgSuggest = {
-		name: "name", kind: SymbolKind.Parameter, symType: stringType(),
+		sym: null, name: "name", kind: SymbolKind.Parameter, symType: stringType(),
 		location: loc, modulePath: "", containerName: "",
 		prefixScore: 0, scopeDepth: 0, contextFit: false,
-		isExported: false, isMutable: false,
+		isExported: false, isMutable: false, usageCount: 0,
 	};
-	assert sgFormatHover(suggest) === "```typescript\n(parameter) name: string\n```";
+	assert sgFormatHover(suggest) === "```metascript\n(parameter) name: string\n```";
 }
 
 test "format property hover" {
 	const loc = makeLoc(1, 0);
 	const suggest: SgSuggest = {
-		name: "x", kind: SymbolKind.Property, symType: numberType(),
+		sym: null, name: "x", kind: SymbolKind.Property, symType: numberType(),
 		location: loc, modulePath: "", containerName: "",
 		prefixScore: 0, scopeDepth: 0, contextFit: false,
-		isExported: false, isMutable: false,
+		isExported: false, isMutable: false, usageCount: 0,
 	};
-	assert sgFormatHover(suggest) === "```typescript\n(property) x: number\n```";
+	assert sgFormatHover(suggest) === "```metascript\n(property) x: number\n```";
 }
 
 test "format method hover" {
@@ -1768,12 +1954,12 @@ test "format method hover" {
 	const names: string[] = ["item"];
 	const fnType = createFunction(params, names, voidType());
 	const suggest: SgSuggest = {
-		name: "push", kind: SymbolKind.Method, symType: fnType,
+		sym: null, name: "push", kind: SymbolKind.Method, symType: fnType,
 		location: loc, modulePath: "", containerName: "",
 		prefixScore: 0, scopeDepth: 0, contextFit: false,
-		isExported: false, isMutable: false,
+		isExported: false, isMutable: false, usageCount: 0,
 	};
-	assert sgFormatHover(suggest) === "```typescript\npush(item: string): void\n```";
+	assert sgFormatHover(suggest) === "```metascript\n(method) push(item: string): void\n```";
 }
 
 test "format method hover with container" {
@@ -1782,12 +1968,12 @@ test "format method hover with container" {
 	const names: string[] = ["value"];
 	const fnType = createFunction(params, names, voidType());
 	const suggest: SgSuggest = {
-		name: "log", kind: SymbolKind.Method, symType: fnType,
+		sym: null, name: "log", kind: SymbolKind.Method, symType: fnType,
 		location: loc, modulePath: "", containerName: "console",
 		prefixScore: 0, scopeDepth: 0, contextFit: false,
-		isExported: false, isMutable: false,
+		isExported: false, isMutable: false, usageCount: 0,
 	};
-	assert sgFormatHover(suggest) === "```typescript\nconsole.log(value: string): void\n```";
+	assert sgFormatHover(suggest) === "```metascript\n(method) console.log(value: string): void\n```";
 }
 
 test "null suggest returns empty" {
@@ -2108,22 +2294,10 @@ test "skip param hint when arg matches param name" {
 
 // ===== Doc Comment Tests =====
 
-test "doc comment extraction" {
-	const src = "// Adds two numbers\nfunction add(x: number): number { return x; }";
+test "doc comment JSDoc single-line" {
+	const src = "/** Adds two numbers. */\nfunction add(x: number): number { return x; }";
 	const comment = sgExtractDocComment(src, 2);
-	assert comment === "Adds two numbers";
-}
-
-test "doc comment multi-line" {
-	const src = "// Line one\n// Line two\nfunction foo(): void {}";
-	const comment = sgExtractDocComment(src, 3);
-	assert comment === "Line one\nLine two";
-}
-
-test "doc comment stops at blank line" {
-	const src = "// Orphaned\n\n// Real doc\nfunction bar(): void {}";
-	const comment = sgExtractDocComment(src, 4);
-	assert comment === "Real doc";
+	assert comment === "Adds two numbers.";
 }
 
 test "doc comment none" {
@@ -2138,19 +2312,37 @@ test "doc comment first line no crash" {
 	assert comment === "";
 }
 
-test "doc comment with ## style" {
-	const src = "## Standard reference style doc\nfunction foo(): void {}";
+test "doc comment // not supported" {
+	const src = "// Not a doc comment\nfunction foo(): void {}";
 	const comment = sgExtractDocComment(src, 2);
-	assert comment === "Standard reference style doc";
+	assert comment === "";
+}
+
+test "doc comment JSDoc single-line" {
+	const src = "/** Adds two numbers. */\nfunction add(x: number): number { return x; }";
+	const comment = sgExtractDocComment(src, 2);
+	assert comment === "Adds two numbers.";
+}
+
+test "doc comment JSDoc multi-line" {
+	const src = "/**\n * Parses the input string.\n * @param text A valid string.\n * @returns The parsed value.\n */\nfunction parse(text: string): number { return 0; }";
+	const comment = sgExtractDocComment(src, 6);
+	assert comment === "Parses the input string.\n@param text A valid string.\n@returns The parsed value.";
+}
+
+test "doc comment JSDoc empty body" {
+	const src = "/** */\nfunction noop(): void {}";
+	const comment = sgExtractDocComment(src, 2);
+	assert comment === "";
 }
 
 test "sgFormatHoverDoc with doc comment" {
 	const suggest: SgSuggest = {
-		name: "foo", kind: SymbolKind.Function,
+		sym: null, name: "foo", kind: SymbolKind.Function,
 		symType: unknownType(), location: makeLoc(1, 0),
 		modulePath: "", containerName: "",
 		prefixScore: 0, scopeDepth: 0, contextFit: false,
-		isExported: true, isMutable: false,
+		isExported: true, isMutable: false, usageCount: 0,
 	};
 	const doc = sgFormatHoverDoc(suggest, "A useful function");
 	assert doc === "A useful function";
@@ -2158,11 +2350,11 @@ test "sgFormatHoverDoc with doc comment" {
 
 test "sgFormatHoverDoc no comment" {
 	const suggest: SgSuggest = {
-		name: "bar", kind: SymbolKind.Variable,
+		sym: null, name: "bar", kind: SymbolKind.Variable,
 		symType: unknownType(), location: makeLoc(1, 0),
 		modulePath: "", containerName: "",
 		prefixScore: 0, scopeDepth: 0, contextFit: false,
-		isExported: false, isMutable: false,
+		isExported: false, isMutable: false, usageCount: 0,
 	};
 	const doc = sgFormatHoverDoc(suggest, "");
 	assert doc === "";

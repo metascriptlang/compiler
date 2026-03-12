@@ -28,7 +28,7 @@ std/
 │   ├── index.cms              -- argv, exit, cwd, exec, getEnv, clockMs
 │   └── native.h               -- C runtime (POSIX process ops)
 └── testing/                   -- test framework
-    └── index.ms               -- test, check, require, testGroup (intrinsics)
+    └── index.ms               -- test "name" { assert statement; }
 ```
 
 ## File Types
@@ -96,22 +96,6 @@ When no C calls are needed, write pure `.ms` with inline tests:
 export function dirname(p: string): string {
     // ... pure string scanning ...
 }
-
-import { test, check, testGroup } from "std/testing";
-
-testGroup("dirname", () => {
-    test("basic", () => {
-        check(dirname("/a/b/c") === "/a/b");
-    });
-});
-```
-
-### Testing
-
-- Every `.ms` file includes inline tests at the bottom
-- `.cms` files cannot have inline tests (no test runner in prelude mode)
-- Use `testGroup` + `test` + `check` from `std/testing`
-- `check()` = non-fatal, `require()` = fatal
 
 ## Module Boundaries
 

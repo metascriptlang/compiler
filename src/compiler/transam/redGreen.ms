@@ -102,6 +102,11 @@ export function tryMarkGreen(
 			return false;
 		}
 
+		// Stamp verified dep so shared subtrees don't re-walk
+		if (depEntry !== null && depEntry.verifiedAt < currentRevision) {
+			depEntry.verifiedAt = currentRevision;
+		}
+
 		// Salsa early cutoff: dep recomputed, but did output actually change?
 		if (depEntry !== null) {
 			if (depEntry.computedAt > entry.computedAt) {
