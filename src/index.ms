@@ -6,7 +6,7 @@ import { VERSION, printUsage } from "./compiler/usage";
 import { cmdBuildJS, cmdBuildC, cmdRunJS, cmdRunRaiser, cmdTest } from "./compiler/compile";
 import { cmdCheck, cmdDumpTokens, cmdDumpAst, cmdPipeline, cmdRun, cmdFmt, cmdInit, cmdClean } from "./compiler/commands";
 import { lspRunServer } from "./compiler/lsp/server";
-import { loadBuildConfig, BuildConfig } from "./compiler/buildConfig";
+import { loadBuildConfig, loadFmtSection, BuildConfig } from "./compiler/buildConfig";
 import { verboseLog } from "./compiler/io";
 import { error, bold, green, cyan } from "./utils/color";
 
@@ -32,11 +32,12 @@ export function main(): number {
 		"dump-tokens" => { requireFile(opts); cmdDumpTokens(opts.inputFile); },
 		"dump-ast" => { requireFile(opts); cmdDumpAst(opts.inputFile); },
 		"pipeline" => { requireFile(opts); cmdPipeline(opts.inputFile); },
-		"fmt" => { requireFile(opts); cmdFmt(opts.inputFile, opts); },
+		"fmt" => { requireFile(opts); cmdFmt(opts.inputFile, opts, loadFmtSection(".")); },
 		"run" => {
+			// argv path overrides build.ms root; fallback to build.ms when no argv
 			if (opts.inputFile === "") {
 				const cfg = loadBuildConfig("build.ms", opts.showTime);
-				if (cfg.valid) { opts.inputFile = cfg.root; }
+				if (cfg.valid && cfg.root.length > 0) { opts.inputFile = cfg.root; }
 			}
 			requireFile(opts);
 			if (opts.target === Target.JS) {
@@ -56,34 +57,30 @@ export function main(): number {
 			}
 		},
 		"build" => {
-			if (opts.inputFile !== "") {
-				if (opts.target === Target.JS) {
-					cmdBuildJS(opts.inputFile, opts.outputPath, opts);
-				} else {
-					cmdBuildC(opts.inputFile, opts);
-				}
-			} else {
-				const cfg = loadBuildConfig("build.ms", opts.showTime);
-				if (!cfg.valid) {
-					console.log(error("error") + ": no build.ms found or missing 'root' field");
-					printUsage();
-					exit(1);
-				}
+			// Load build.ms for config (target, optimize, outDir, etc.)
+			const cfg = loadBuildConfig("build.ms", opts.showTime);
+			// argv path overrides build.ms root
+			if (opts.inputFile === "" && cfg.valid && cfg.root.length > 0) {
+				opts.inputFile = cfg.root;
+			}
+			requireFile(opts);
+			// Apply build section settings from build.ms
+			if (cfg.valid) {
 				if (opts.verbose) {
 					verboseLog(`build.ms: root=${cfg.root} target=${cfg.build.target}`);
 				}
 				if (opts.mode === MODE_DEBUG && cfg.build.optimize === "release") {
 					opts.mode = MODE_RELEASE;
 				}
-				if (cfg.build.target === "js" || opts.target === Target.JS) {
-					const outDir = cfg.build.outDir !== "" ? cfg.build.outDir : opts.outputPath;
-					cmdBuildJS(cfg.root, outDir, opts);
-				} else {
-					if (opts.outputPath === "" && cfg.build.outFile !== "") {
-						opts.outputPath = cfg.build.outFile;
-					}
-					cmdBuildC(cfg.root, opts);
+			}
+			if ((cfg.valid && cfg.build.target === "js") || opts.target === Target.JS) {
+				const outDir = (cfg.valid && cfg.build.outDir !== "") ? cfg.build.outDir : opts.outputPath;
+				cmdBuildJS(opts.inputFile, outDir, opts);
+			} else {
+				if (cfg.valid && opts.outputPath === "" && cfg.build.outFile !== "") {
+					opts.outputPath = cfg.build.outFile;
 				}
+				cmdBuildC(opts.inputFile, opts);
 			}
 		},
 		_ => {

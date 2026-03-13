@@ -10,7 +10,7 @@
 // Pure function — no filesystem access. The loader tries candidates in order.
 
 import { dirname, join } from "std/fs/path";
-import { sliceStr } from "../utils/string";
+// (utils/string imports removed — using native .slice)
 
 // ===== Backend Enum =====
 
@@ -104,7 +104,7 @@ export function resolveImportWithConfig(specifier: string, fromFile: string, con
 	} else if (isStdImport(spec)) {
 		// Std library: std/testing → stdPath + "/testing"
 		if (config.stdPath.length > 0) {
-			const subpath = sliceStr(spec, 4, spec.length);
+			const subpath = spec.slice(4, spec.length);
 			const base = join(config.stdPath, subpath);
 			addExtensionCandidates(result, base, config.extensions);
 		}
@@ -169,7 +169,7 @@ function addDirectCandidates(result: ResolveCandidates, spec: string, fromFile: 
 		result.push(join(baseDir, spec));
 	} else if (isStdImport(spec)) {
 		if (config.stdPath.length > 0) {
-			const subpath = sliceStr(spec, 4, spec.length);
+			const subpath = spec.slice(4, spec.length);
 			result.push(join(config.stdPath, subpath));
 		}
 	} else {
@@ -186,13 +186,13 @@ function applyAlias(specifier: string, config: ResolverConfig): string {
 	let i = 0;
 	while (i < config.aliasKeys.length) {
 		const key = config.aliasKeys[i];
-		if (specifier.length >= key.length && sliceStr(specifier, 0, key.length) === key) {
+		if (specifier.length >= key.length && specifier.slice(0, key.length) === key) {
 			// Check that alias matches at word boundary: exact match or followed by /
 			if (specifier.length === key.length) {
 				return config.aliasValues[i];
 			}
 			if (specifier.charCodeAt(key.length) === "/".code) {
-				return config.aliasValues[i] + sliceStr(specifier, key.length, specifier.length);
+				return config.aliasValues[i] + specifier.slice(key.length, specifier.length);
 			}
 		}
 		i = i + 1;
@@ -218,12 +218,12 @@ function hasKnownExtension(specifier: string): boolean {
 
 export function isStdImport(specifier: string): boolean {
 	if (specifier.length < 4) return false;
-	return sliceStr(specifier, 0, 4) === "std/";
+	return specifier.slice(0, 4) === "std/";
 }
 
 function isRelative(specifier: string): boolean {
 	if (specifier.length < 2) return false;
-	const prefix = sliceStr(specifier, 0, 2);
+	const prefix = specifier.slice(0, 2);
 	return prefix === "./" || prefix === "..";
 }
 

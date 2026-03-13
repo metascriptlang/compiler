@@ -22,6 +22,14 @@ import {
 import { SymbolKind } from "../../checker/symbol";
 import { SourceLocation, makeLoc } from "../../ast/node";
 
+// Helper: concat two Node arrays — returns new array (moved, not destroyed)
+function concatStmts(a: Node[], b: Node[]): Node[] {
+	const result: Node[] = [];
+	for (const s of a) { result.push(s); }
+	for (const s of b) { result.push(s); }
+	return result;
+}
+
 // Build a toString FunctionDecl for an enum:
 //   function EnumName_toString(v: int32): string {
 //     switch (v) { case 0: return "Member0"; ... default: return "<unknown>"; }
@@ -66,7 +74,7 @@ import { createToken, TokenKind } from "../../lexer/token";
 
 function makeTestEnum(name: string, members: string[]): Node {
 	const tok = createToken(TokenKind.Ident, name, 1);
-	return createNode(NodeKind.EnumDecl, { enumName: name, enumMembers: members, nameLocation: makeLoc(1, 1) }, tok);
+	return createNode(NodeKind.EnumDecl, { enumName: name, enumMembers: members, nameLocation: makeLoc(1, 1), memberLocations: [] }, tok);
 }
 
 function makeTestProgram(stmts: Node[]): Node {
@@ -126,17 +134,19 @@ export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
 	// Walk all scopes from current up to global — user enums are typically
 	// in the module scope (table.current), not the root global scope.
 	if (ctx !== null && ctx.checkerCtx !== null && ctx.checkerCtx.table !== null) {
+		const toStringFns: Node[] = [];
 		let scope = ctx.checkerCtx.table.current;
 		while (scope !== null) {
 			for (const sym of scope.symbols) {
 				if (sym.symbolKind === SymbolKind.Enum && sym.symbolType !== null && sym.symbolType.kind === TypeKind.Enum) {
 					const t = sym.symbolType;
-					const toStringFn = makeEnumToString(t.typeName, t.typeNames, sym.location);
-					pd.programStmts.push(toStringFn);
+					toStringFns.push(makeEnumToString(t.typeName, t.typeNames, sym.location));
 				}
 			}
 			scope = scope.parent;
 		}
+		// Append to program stmts via return-value move (avoids local array aliasing)
+		program.data = { programStmts: concatStmts(pd.programStmts, toStringFns) };
 		return program;
 	}
 
@@ -157,6 +167,6 @@ export function lowerEnumToString(program: Node, ctx: TransformContext): Node {
 		i = i + 1;
 	}
 
-	pd.programStmts = newStmts;
+	program.data = { programStmts: newStmts };
 	return program;
 }

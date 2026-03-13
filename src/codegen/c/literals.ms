@@ -3,7 +3,6 @@
 // String pool management, C string escaping,
 // number formatting for C output.
 
-import { sliceStr, charAt } from "../../utils/string";
 import { Builder, add, addLine, addNewline, createBuilder, extract, StringPool, createStringPool, internString } from "./context";
 
 
@@ -17,11 +16,11 @@ function isHexCh(ch: string): boolean {
 export function escapeCString(s: string): string {
 	let result = "";
 	let i = 0;
-	while (i < s.length) {
-		const ch = charAt(s, i);
-		if (ch === "\\" && i + 3 < s.length && charAt(s, i + 1) === "x" && isHexCh(charAt(s, i + 2)) && isHexCh(charAt(s, i + 3))) {
+	while (i < s.byteLength) {
+		const ch = s.charAt(i);
+		if (ch === "\\" && i + 3 < s.byteLength && s.charAt(i + 1) === "x" && isHexCh(s.charAt(i + 2)) && isHexCh(s.charAt(i + 3))) {
 			// Hex escape \xHH — pass through as-is for C
-			result = result + sliceStr(s, i, i + 4);
+			result = result + s.slice(i, i + 4);
 			i += 4;
 		} else if (ch === "\\") { result = result + "\\\\"; i += 1; }
 		else if (ch === "\"") { result = result + "\\\""; i += 1; }
@@ -40,14 +39,14 @@ export function escapeCString(s: string): string {
 export function cStringByteLen(s: string): number {
 	let len = 0;
 	let i = 0;
-	while (i < s.length) {
-		const ch = charAt(s, i);
-		if (ch === "\\" && i + 3 < s.length && charAt(s, i + 1) === "x" && isHexCh(charAt(s, i + 2)) && isHexCh(charAt(s, i + 3))) {
+	while (i < s.byteLength) {
+		const ch = s.charAt(i);
+		if (ch === "\\" && i + 3 < s.byteLength && s.charAt(i + 1) === "x" && isHexCh(s.charAt(i + 2)) && isHexCh(s.charAt(i + 3))) {
 			len += 1;
 			i += 4;
 		} else {
 			// UTF-8 byte count: code points determine encoded byte length
-			const cp = s.charCodeAt(i);
+			const cp = s.byteAt(i);
 			if (cp < 0x80) { len += 1; }
 			else if (cp < 0x800) { len += 2; }
 			else if (cp < 0x10000) { len += 3; }

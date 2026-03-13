@@ -18,6 +18,8 @@
 
 /* ===== Payload Types ===== */
 
+/* Reference parity: payloads are uniquely owned (no refcount).
+   DRC ensures copies are deep and moves zero the source. */
 typedef struct {
 	int64_t cap;
 } msArrayPayloadBase;

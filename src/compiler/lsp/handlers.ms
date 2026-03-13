@@ -3,7 +3,6 @@
 // Each handler: extract params → query Trans-Am → call suggest.ms → format JSON.
 // No I/O — returns JSON strings. server.ms handles stdin/stdout.
 
-import { sliceStr, charAt } from "../../utils/string";
 import {
 	TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck,
 	getFileText, getFileId, getFilePath,
@@ -11,7 +10,8 @@ import {
 	dbGetFileCount, dbGetFilePathByIndex
 } from "../transam/index";
 import { detectCycle } from "../transam/moduleDeps";
-import { readFile } from "std/process";
+import { readFile, clockMs } from "std/process";
+import { writeStderr } from "std/io";
 import {
 	lspJsonString, lspJsonNumber, lspJsonBool, lspJsonNull,
 	lspGetField, lspGetNumberField, lspGetObjectField,
@@ -47,11 +47,12 @@ import { CheckerContext, createContext } from "../../checker/context";
 import { Symbol, SymbolKind, lookupSymbol } from "../../checker/symbol";
 import { Type, TypeKind, unknownType, getProperty, typeNameOf } from "../../checker/types";
 import { Node, IdentifierData, MemberExprData, NodeKind, ProgramData, ImportDeclData, ExportDeclData, SourceLocation, makeLoc } from "../../ast/node";
-import { defaultFormatOptions } from "../fmt/options";
+import { FormatOptions, defaultFormatOptions, applyFmtSection } from "../fmt/options";
 import { printNode as printFormattedNode } from "../fmt/printer";
 import { formatDoc } from "../fmt/layout";
 import { registerCoreParsers } from "../../parser/statements/core";
 import { parseSource } from "../../parser/statements/validation";
+import { FmtSection, defaultFmtSection, loadFmtSection } from "../buildConfig";
 
 
 // ===== Completion Cache =====
@@ -105,47 +106,197 @@ function dbGetSource(db: TransAmDb, path: string): string {
 // Load a file into the TransAm DB if not already present.
 function lspEnsureFileLoaded(db: TransAmDb, filePath: string): void {
 	if (getFileId(db.fileInput, filePath) < 0) {
+		const t0 = clockMs();
 		const source = readFile(filePath);
-		if (source.length > 0) {
+		if (source.byteLength > 0) {
 			dbSetFileText(db, filePath, source);
 		}
+		const t1 = clockMs();
+		writeStderr("[LSP] loadFile " + filePath + " " + (t1 - t0) + "ms\n");
 	}
+}
+
+// Resolve import specifier to absolute path. Handles relative (./foo) and std/ imports.
+// For std/ imports, tries candidates in order: .ms, .cms, /index.ms, /index.cms.
+// Loads from disk if not already in the db.
+function resolveImportForLsp(db: TransAmDb, basePath: string, importSpec: string): string {
+	// Relative imports — handled by existing resolver
+	const rel = lspResolveImport(basePath, importSpec);
+	if (rel !== "") return rel;
+
+	// std/ imports — resolve against db.stdPath
+	if (db.stdPath.length > 0 && importSpec.length > 4 && importSpec.slice(0, 4) === "std/") {
+		const rest = importSpec.slice(4, importSpec.length);
+		const base = db.stdPath + "/" + rest;
+		// Try candidates: check db first (no disk I/O), then load from disk.
+		const candidates: string[] = [];
+		candidates.push(base + ".ms");
+		candidates.push(base + ".cms");
+		candidates.push(base + "/index.ms");
+		candidates.push(base + "/index.cms");
+		// Fast path: check if already loaded in db (no disk I/O)
+		for (const c of candidates) {
+			if (getFileId(db.fileInput, c) >= 0) return c;
+		}
+		// Slow path: try loading from disk
+		for (const c of candidates) {
+			lspEnsureFileLoaded(db, c);
+			if (getFileId(db.fileInput, c) >= 0) return c;
+		}
+	}
+
+	return "";
+}
+
+// ===== Format Options from build.ms =====
+
+// Cached format options loaded from workspace build.ms on first use.
+let _fmtOptions: FormatOptions = null as unknown as FormatOptions;
+let _fmtOptionsLoaded = false;
+
+// Get format options, loading from workspace build.ms if available.
+// The workspace root is derived from db.stdPath (set on LSP initialize to rootUri + "/std").
+function getFormatOptions(db: TransAmDb): FormatOptions {
+	if (_fmtOptionsLoaded) return _fmtOptions;
+	_fmtOptionsLoaded = true;
+	const opts = defaultFormatOptions();
+	// Derive workspace root from stdPath: "/path/to/project/std" → "/path/to/project"
+	const stdPath = db.stdPath;
+	writeStderr("[LSP] getFormatOptions stdPath=" + stdPath + " len=" + stdPath.length + "\n");
+	if (stdPath.length > 4) {
+		const wsRoot = stdPath.slice(0, stdPath.length - 4);
+		writeStderr("[LSP] loading fmt from wsRoot=" + wsRoot + "\n");
+		const fmtCfg = loadFmtSection(wsRoot);
+		writeStderr("[LSP] fmtCfg.useTabs=" + fmtCfg.useTabs + "\n");
+		applyFmtSection(opts, fmtCfg);
+		writeStderr("[LSP] opts.useTabs=" + opts.useTabs + "\n");
+	}
+	_fmtOptions = opts;
+	return opts;
+}
+
+// Reset cached format options (call when workspace changes).
+export function resetFormatOptions(): void {
+	_fmtOptionsLoaded = false;
+	_fmtOptions = null as unknown as FormatOptions;
 }
 
 // ===== Format Violation Check =====
 
-// Returns a single LSP diagnostic JSON string if the file is unformatted, empty string otherwise.
-// Severity 4 = Hint (renders as faint underline / info squiggle in editors).
-function checkFormatViolation(db: TransAmDb, path: string): string {
-	const source = dbGetSource(db, path);
-	if (source === "") return "";
+// Split a string into lines (preserving empty trailing line if present).
+function splitLines(s: string): string[] {
+	const lines: string[] = [];
+	let start = 0;
+	for (let i = 0; i < s.byteLength; i = i + 1) {
+		if (s[i] === "\n") {
+			lines.push(s.slice(start, i));
+			start = i + 1;
+		}
+	}
+	if (start <= s.byteLength) {
+		lines.push(s.slice(start, s.byteLength));
+	}
+	return lines;
+}
 
-	if (!_fmtParsersRegistered) {
-		registerCoreParsers();
-		_fmtParsersRegistered = true;
+// Describe the formatting difference between an original and formatted line.
+function describeFmtDiff(orig: string, fmt: string): string {
+	// Both empty — no difference worth reporting
+	if (orig.byteLength === 0 && fmt.byteLength === 0) return "";
+	// Blank original, non-blank formatted — missing content
+	if (orig.byteLength === 0) return "Unexpected blank line";
+	// Deleted line (formatted version removed it entirely)
+	if (fmt.byteLength === 0) return "Delete this line";
+	// Check indentation difference
+	let origIndent = 0;
+	while (origIndent < orig.byteLength && (orig[origIndent] === " " || orig[origIndent] === "\t")) {
+		origIndent = origIndent + 1;
+	}
+	let fmtIndent = 0;
+	while (fmtIndent < fmt.byteLength && (fmt[fmtIndent] === " " || fmt[fmtIndent] === "\t")) {
+		fmtIndent = fmtIndent + 1;
+	}
+	if (origIndent !== fmtIndent) {
+		if (fmtIndent > origIndent) return "Indent this line";
+		return "Unindent this line";
+	}
+	// Check trailing whitespace
+	let origEnd = orig.byteLength;
+	while (origEnd > 0 && (orig[origEnd - 1] === " " || orig[origEnd - 1] === "\t")) {
+		origEnd = origEnd - 1;
+	}
+	if (origEnd < orig.byteLength) return "Remove trailing whitespace";
+	// Generic
+	return "Reformat this line";
+}
+
+// Lint-style per-line format checks. Runs independently of the full formatter —
+// detects specific issues (wrong indent char, trailing whitespace) on each line.
+function checkFormatViolations(db: TransAmDb, path: string): string[] {
+	const result: string[] = [];
+	const source = dbGetSource(db, path);
+	if (source === "") return result;
+
+	const options = getFormatOptions(db);
+	const useTabs = options.useTabs;
+	const lines = splitLines(source);
+
+	// Strip trailing empty line from split (artifact of trailing newline)
+	let lineCount = lines.length;
+	while (lineCount > 0 && lines[lineCount - 1] === "") {
+		lineCount = lineCount - 1;
 	}
 
-	const parseResult = parseSource(source);
-	if (!parseResult.ok) return "";
+	for (let i = 0; i < lineCount; i = i + 1) {
+		const line = lines[i];
+		if (line.length === 0) continue;
 
-	const options = defaultFormatOptions();
-	const doc = printFormattedNode(parseResult.value, options);
-	const formatted = formatDoc(doc, options);
+		// Check indentation character mismatch
+		let indentEnd = 0;
+		let hasSpace = false;
+		let hasTab = false;
+		while (indentEnd < line.length) {
+			if (line[indentEnd] === " ") { hasSpace = true; }
+			else if (line[indentEnd] === "\t") { hasTab = true; }
+			else { break; }
+			indentEnd = indentEnd + 1;
+		}
+		if (indentEnd > 0 && indentEnd < line.length) {
+			if (useTabs && hasSpace && !hasTab) {
+				result.push(lspFmtDiagnostic(i, 0, indentEnd, 4, "Use tabs for indentation", "metascript-fmt", 0));
+				continue;
+			}
+			if (!useTabs && hasTab && !hasSpace) {
+				result.push(lspFmtDiagnostic(i, 0, indentEnd, 4, "Use spaces for indentation", "metascript-fmt", 0));
+				continue;
+			}
+			if (hasSpace && hasTab) {
+				result.push(lspFmtDiagnostic(i, 0, indentEnd, 4, "Mixed tabs and spaces", "metascript-fmt", 0));
+				continue;
+			}
+		}
 
-	if (formatted === source) return "";
+		// Check trailing whitespace
+		let trailStart = line.length;
+		while (trailStart > 0 && (line[trailStart - 1] === " " || line[trailStart - 1] === "\t")) {
+			trailStart = trailStart - 1;
+		}
+		if (trailStart < line.length && trailStart > 0) {
+			result.push(lspFmtDiagnostic(i, trailStart, line.length, 4, "Remove trailing whitespace", "metascript-fmt", 0));
+		}
+	}
 
-	// Place diagnostic at line 0, col 0 with hint severity
-	return lspFmtDiagnostic(0, 0, 1, 2, "File is not formatted. Run 'msc fmt' or use format document.", "metascript-fmt", 0);
+	return result;
 }
 
 // Extract filename from absolute path (for diagnostic messages)
 function lspBasename(path: string): string {
 	if (path === "") return "";
 	let lastSlash = -1;
-	for (let i = path.length - 1; i >= 0; i = i - 1) {
+	for (let i = path.byteLength - 1; i >= 0; i = i - 1) {
 		if (path[i] === "/") { lastSlash = i; break; }
 	}
-	if (lastSlash >= 0) return path.slice(lastSlash + 1, path.length);
+	if (lastSlash >= 0) return path.slice(lastSlash + 1, path.byteLength);
 	return path;
 }
 
@@ -155,7 +306,7 @@ function lspFindNameCol(src: string, targetLine: number, name: string): number {
 	let lineNum = 0;
 	let lineStart = 0;
 	let i = 0;
-	while (i < src.length && lineNum < targetLine) {
+	while (i < src.byteLength && lineNum < targetLine) {
 		if (src[i] === "\n") {
 			lineNum = lineNum + 1;
 			lineStart = i + 1;
@@ -165,11 +316,11 @@ function lspFindNameCol(src: string, targetLine: number, name: string): number {
 	if (lineNum !== targetLine) return -1;
 	// Scan line for word-boundary match
 	let j = lineStart;
-	while (j < src.length && src[j] !== "\n") {
-		if (src.slice(j, j + name.length) === name) {
+	while (j < src.byteLength && src[j] !== "\n") {
+		if (src.slice(j, j + name.byteLength) === name) {
 			const before = j === lineStart || !lspIsWordChar(src[j - 1]);
-			const endIdx = j + name.length;
-			const after = endIdx >= src.length || src[endIdx] === "\n" || !lspIsWordChar(src[endIdx]);
+			const endIdx = j + name.byteLength;
+			const after = endIdx >= src.byteLength || src[endIdx] === "\n" || !lspIsWordChar(src[endIdx]);
 			if (before && after) return j - lineStart;
 		}
 		j = j + 1;
@@ -190,7 +341,7 @@ function lspFindFieldLine(src: string, startLine: number, fieldName: string): So
 	let i = 0;
 	// Skip to startLine + 1 (body starts after declaration line)
 	const bodyStart = startLine + 1;
-	while (i < src.length && lineNum < bodyStart) {
+	while (i < src.byteLength && lineNum < bodyStart) {
 		if (src[i] === "\n") {
 			lineNum = lineNum + 1;
 			lineStart = i + 1;
@@ -198,21 +349,21 @@ function lspFindFieldLine(src: string, startLine: number, fieldName: string): So
 		i = i + 1;
 	}
 	// Scan lines looking for field declaration
-	while (i < src.length) {
+	while (i < src.byteLength) {
 		// Check if this line contains fieldName as a word followed by : or ?:
 		let j = lineStart;
-		while (j < src.length && src[j] !== "\n") {
-			if (src.slice(j, j + fieldName.length) === fieldName) {
+		while (j < src.byteLength && src[j] !== "\n") {
+			if (src.slice(j, j + fieldName.byteLength) === fieldName) {
 				const before = j === lineStart || !lspIsWordChar(src[j - 1]);
-				const endIdx = j + fieldName.length;
-				const after = endIdx < src.length && !lspIsWordChar(src[endIdx]);
+				const endIdx = j + fieldName.byteLength;
+				const after = endIdx < src.byteLength && !lspIsWordChar(src[endIdx]);
 				if (before && after) {
 					// Check for ':' or '?:' after the field name (skip whitespace)
 					let k = endIdx;
-					while (k < src.length && (src[k] === " " || src[k] === "\t")) {
+					while (k < src.byteLength && (src[k] === " " || src[k] === "\t")) {
 						k = k + 1;
 					}
-					if (k < src.length && (src[k] === ":" || src[k] === "?")) {
+					if (k < src.byteLength && (src[k] === ":" || src[k] === "?")) {
 						return makeLoc(lineNum, j - lineStart);
 					}
 				}
@@ -221,7 +372,7 @@ function lspFindFieldLine(src: string, startLine: number, fieldName: string): So
 		}
 		// Hit closing brace — stop searching
 		let b = lineStart;
-		while (b < src.length && b <= j) {
+		while (b < src.byteLength && b <= j) {
 			if (src[b] === "}") return makeLoc(-1, -1);
 			b = b + 1;
 		}
@@ -229,6 +380,57 @@ function lspFindFieldLine(src: string, startLine: number, fieldName: string): So
 		i = j + 1;
 		lineNum = lineNum + 1;
 		lineStart = i;
+	}
+	return makeLoc(-1, -1);
+}
+
+// Find an enum member declaration: search for "enum ContainerName" then the member within the block.
+function lspFindEnumMemberLine(src: string, containerName: string, memberName: string): SourceLocation {
+	// First find the line containing "enum ContainerName"
+	const enumPattern = "enum " + containerName;
+	let lineNum = 0;
+	let lineStart = 0;
+	let enumLine = -1;
+	let i = 0;
+	while (i < src.byteLength) {
+		if (src[i] === "\n") {
+			lineNum = lineNum + 1;
+			lineStart = i + 1;
+		} else {
+			// Check if this position starts the pattern
+			if (i >= lineStart && i + enumPattern.byteLength <= src.byteLength) {
+				if (src.slice(i, i + enumPattern.byteLength) === enumPattern) {
+					const endIdx = i + enumPattern.byteLength;
+					const before = i === lineStart || !lspIsWordChar(src[i - 1]);
+					const after = endIdx >= src.byteLength || !lspIsWordChar(src[endIdx]);
+					if (before && after) {
+						enumLine = lineNum;
+						// Now search for member within the enum block
+						let j = endIdx;
+						let memberLineNum = lineNum;
+						let memberLineStart = lineStart;
+						while (j < src.byteLength) {
+							if (src[j] === "\n") {
+								memberLineNum = memberLineNum + 1;
+								memberLineStart = j + 1;
+							} else if (src[j] === "}") {
+								// End of enum block — member not found
+								return makeLoc(enumLine, i - lineStart);
+							} else if (j + memberName.byteLength <= src.byteLength && src.slice(j, j + memberName.byteLength) === memberName) {
+								const mb = j === memberLineStart || !lspIsWordChar(src[j - 1]);
+								const me = j + memberName.byteLength >= src.byteLength || !lspIsWordChar(src[j + memberName.byteLength]);
+								if (mb && me) {
+									return makeLoc(memberLineNum, j - memberLineStart);
+								}
+							}
+							j = j + 1;
+						}
+						return makeLoc(enumLine, i - lineStart);
+					}
+				}
+			}
+		}
+		i = i + 1;
 	}
 	return makeLoc(-1, -1);
 }
@@ -247,8 +449,11 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 			if (diagCount > 0) diagArray = diagArray + ",";
 			const d = diags[i];
 			const line = d.line - 1;
+			// Convert 1-based checker columns to 0-based LSP columns
+			const col = d.column > 0 ? d.column - 1 : 0;
+			const endCol = d.endColumn > d.column ? d.endColumn - 1 : col + 1;
 			diagArray = diagArray + lspFmtDiagnostic(
-				line, d.column, d.column + 1, d.severity, d.message, "metascript", 0
+				line, col, endCol, d.severity, d.message, "metascript", 0
 			);
 			diagCount = diagCount + 1;
 		}
@@ -267,7 +472,7 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 			}
 			if (circStmt.kind === NodeKind.ImportDecl) {
 				const circImp = circStmt.data as ImportDeclData;
-				const circTarget = lspResolveImport(path, circImp.importSource);
+				const circTarget = resolveImportForLsp(db, path, circImp.importSource);
 				if (circTarget !== "") {
 					const circTargetId = getFileId(db.fileInput, circTarget);
 					if (circTargetId >= 0 && circFileId >= 0) {
@@ -294,11 +499,12 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 		}
 	}
 
-	// Format violation diagnostic — warning severity (2)
-	const fmtDiag = checkFormatViolation(db, path);
-	if (fmtDiag !== "") {
+	// Per-line format violation diagnostics — hint severity (4)
+	const fmtDiags = checkFormatViolations(db, path);
+	for (let fi = 0; fi < fmtDiags.length; fi = fi + 1) {
 		if (diagCount > 0) diagArray = diagArray + ",";
-		diagArray = diagArray + fmtDiag;
+		diagArray = diagArray + fmtDiags[fi];
+		diagCount = diagCount + 1;
 	}
 
 	diagArray = diagArray + "]";
@@ -317,6 +523,7 @@ export function recordImportsForFile(db: TransAmDb, path: string, program: Node)
 	if (program === null) return;
 	if (program.kind !== NodeKind.Program) return;
 	const data = program.data as ProgramData;
+	let loadCount = 0;
 	for (let i = 0; i < data.programStmts.length; i = i + 1) {
 		let stmt = data.programStmts[i];
 		// Unwrap ExportDecl (re-exports)
@@ -326,14 +533,19 @@ export function recordImportsForFile(db: TransAmDb, path: string, program: Node)
 		}
 		if (stmt.kind === NodeKind.ImportDecl) {
 			const imp = stmt.data as ImportDeclData;
-			const targetPath = lspResolveImport(path, imp.importSource);
+			const targetPath = resolveImportForLsp(db, path, imp.importSource);
 			if (targetPath === "") continue;
+			const alreadyLoaded = getFileId(db.fileInput, targetPath) >= 0;
 			lspEnsureFileLoaded(db, targetPath);
+			if (!alreadyLoaded) loadCount = loadCount + 1;
 			const targetId = getFileId(db.fileInput, targetPath);
 			if (targetId >= 0) {
 				recordModuleImport(db.moduleDeps, fileId, targetId);
 			}
 		}
+	}
+	if (loadCount > 0) {
+		writeStderr("[LSP] recordImports " + path + " loaded " + loadCount + " new files\n");
 	}
 }
 
@@ -395,14 +607,24 @@ export function handleShutdown(id: string): string {
 // ===== Did Open =====
 
 export function handleDidOpen(params: string, db: TransAmDb): string {
+	const t0 = clockMs();
 	const textDoc = lspGetObjectField(params, "textDocument");
 	const uri = lspGetField(textDoc, "uri");
 	const text = lspGetField(textDoc, "text");
 	const path = lspUriToPath(uri);
 	dbSetFileText(db, path, text);
-	// Record import edges for dependency tracking
 	const program = dbParse(db, path);
 	recordImportsForFile(db, path, program);
+	// Eager type-check: warms cache so auto-fired requests (inlayHint,
+	// semanticTokens, documentHighlight) return correct results immediately.
+	// Cost: ~1s on cold files, but didOpen is a notification (no response needed)
+	// so the client doesn't time out — requests just queue in stdin.
+	dbTypeCheck(db, path);
+	const elapsed = clockMs() - t0;
+	if (elapsed > 50) {
+		writeStderr("[LSP] didOpen " + path + " " + elapsed + "ms\n");
+	}
+	// Publish diagnostics immediately on open (not just on change)
 	const diagParams = buildDiagnosticsJson(uri, db, path);
 	return lspNotification("textDocument/publishDiagnostics", diagParams);
 }
@@ -468,7 +690,7 @@ export function handleHover(id: string, params: string, db: TransAmDb): string {
 	// Hover range: highlight the hovered token (0-based line/col for LSP)
 	const hoverLine = pos.line - 1;
 	const hoverCol = pos.col1 - 1;
-	const hoverEndCol = hoverCol + suggest.name.length;
+	const hoverEndCol = hoverCol + suggest.name.byteLength;
 	return lspResponse(id, lspFmtHoverResult(hoverText, hoverDoc, hoverLine, hoverCol, hoverEndCol));
 }
 
@@ -618,12 +840,21 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 	const path = lspUriToPath(pos.uri);
 
 	const program = dbParse(db, path);
-	if (program === null) return lspResponse(id, "null");
+	if (program === null) {
+		writeStderr("[LSP-DEF] id=" + id + " null: no parse for " + path + "\n");
+		return lspResponse(id, "null");
+	}
 
 	const ctx = dbTypeCheck(db, path);
-	if (ctx === null) return lspResponse(id, "null");
+	if (ctx === null) {
+		writeStderr("[LSP-DEF] id=" + id + " null: no ctx for " + path + "\n");
+		return lspResponse(id, "null");
+	}
 
 	const suggest = sgQueryAtPosition(ctx, pos.line, pos.col1);
+	if (suggest === null) {
+		writeStderr("[LSP-DEF] id=" + id + " null: no sgQuery at " + pos.line + ":" + pos.col1 + " in " + path + "\n");
+	}
 	if (suggest !== null) {
 		let defLine = suggest.location.line - 1;
 		let defCol = suggest.location.column - 1;
@@ -642,7 +873,14 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 
 		// Refine line/col using source text
 		if (defSrc !== "") {
-			if (suggest.kind === SymbolKind.Property) {
+			if (suggest.kind === SymbolKind.EnumMember && suggest.containerName !== "") {
+				// Enum member: search for "enum ContainerName" then member within block
+				const enumLoc = lspFindEnumMemberLine(defSrc, suggest.containerName, suggest.name);
+				if (enumLoc.line >= 0) {
+					defLine = enumLoc.line;
+					defCol = enumLoc.column;
+				}
+			} else if (suggest.kind === SymbolKind.Property) {
 				const fieldLoc = lspFindFieldLine(defSrc, defLine, suggest.name);
 				if (fieldLoc.line >= 0) {
 					defLine = fieldLoc.line;
@@ -656,7 +894,7 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 				if (nameCol >= 0) defCol = nameCol;
 			}
 		}
-		const location = lspFmtLocation(defUri, defLine, defCol, defLine, defCol + suggest.name.length);
+		const location = lspFmtLocation(defUri, defLine, defCol, defLine, defCol + suggest.name.byteLength);
 		return lspResponse(id, "[" + location + "]");
 	}
 
@@ -667,7 +905,7 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 	const importSpec = sgFindImportSource(program, identName);
 	if (importSpec === "") return lspResponse(id, "null");
 
-	const targetPath = lspResolveImport(path, importSpec);
+	const targetPath = resolveImportForLsp(db, path, importSpec);
 	if (targetPath === "") return lspResponse(id, "null");
 
 	lspEnsureFileLoaded(db, targetPath);
@@ -717,7 +955,7 @@ function formatDocumentSymbolArray(symbols: SgDocumentSymbol[]): string {
 		const kindNum = lspDocumentSymbolKind(sym.kind, sym.isMutable);
 		const symLine = sym.location.line - 1;
 		const symCol = sym.location.column;
-		const endCol = symCol + sym.name.length;
+		const endCol = symCol + sym.name.byteLength;
 		let childrenJson = "";
 		if (sym.children.length > 0) {
 			childrenJson = formatDocumentSymbolArray(sym.children);
@@ -799,6 +1037,7 @@ export function handleInlayHint(id: string, params: string, db: TransAmDb): stri
 	const textDoc = lspGetObjectField(params, "textDocument");
 	const uri = lspGetField(textDoc, "uri");
 	const path = lspUriToPath(uri);
+
 	const range = lspGetObjectField(params, "range");
 	const rangeStart = lspGetObjectField(range, "start");
 	const rangeEnd = lspGetObjectField(range, "end");
@@ -978,7 +1217,7 @@ export function handleRename(id: string, params: string, db: TransAmDb): string 
 
 	// Current file — use sym identity
 	const curEdits = buildFileEditsBySym(ctx, suggest.sym, newName);
-	if (curEdits.length > 0) {
+	if (curEdits.byteLength > 0) {
 		changes = lspJsonString(pos.uri) + ":" + curEdits;
 		changeCount = changeCount + 1;
 	}
@@ -993,7 +1232,7 @@ export function handleRename(id: string, params: string, db: TransAmDb): string 
 		const otherCtx = dbTypeCheck(db, otherPath);
 		if (otherCtx === null) continue;
 		const otherEdits = buildFileEdits(otherCtx, suggest.name, suggest.modulePath, newName);
-		if (otherEdits.length > 0) {
+		if (otherEdits.byteLength > 0) {
 			const otherUri = lspPathToUri(otherPath);
 			if (changeCount > 0) changes = changes + ",";
 			changes = changes + lspJsonString(otherUri) + ":" + otherEdits;
@@ -1071,7 +1310,7 @@ export function handleFormatting(id: string, params: string, db: TransAmDb): str
 	const parseResult = parseSource(source);
 	if (!parseResult.ok) return lspResponse(id, "[]");
 
-	const options = defaultFormatOptions();
+	const options = getFormatOptions(db);
 	const doc = printFormattedNode(parseResult.value, options);
 	const formatted = formatDoc(doc, options);
 
@@ -1079,15 +1318,15 @@ export function handleFormatting(id: string, params: string, db: TransAmDb): str
 
 	// Single TextEdit replacing entire document
 	let lineCount = 0;
-	for (let i = 0; i < source.length; i = i + 1) {
-		if (source[i] === "\n") lineCount = lineCount + 1;
+	for (let i = 0; i < source.byteLength; i = i + 1) {
+		if (source.byteAt(i) === "\n".code) lineCount = lineCount + 1;
 	}
 	let lastLineLen = 0;
 	let lastNl = -1;
-	for (let j = source.length - 1; j >= 0; j = j - 1) {
-		if (source[j] === "\n") { lastNl = j; break; }
+	for (let j = source.byteLength - 1; j >= 0; j = j - 1) {
+		if (source.byteAt(j) === "\n".code) { lastNl = j; break; }
 	}
-	lastLineLen = source.length - lastNl - 1;
+	lastLineLen = source.byteLength - lastNl - 1;
 	const range = lspFmtRange(0, 0, lineCount, lastLineLen);
 	const edit = "{\"range\":" + range + ",\"newText\":" + lspJsonString(formatted) + "}";
 	return lspResponse(id, "[" + edit + "]");
@@ -1113,8 +1352,11 @@ export function lspDispatch(method: string, id: string, params: string, db: Tran
 		"textDocument/rename" => handleRename(id, params, db),
 		"textDocument/semanticTokens/full" => handleSemanticTokensFull(id, params, db),
 		"textDocument/formatting" => handleFormatting(id, params, db),
+		"$/cancelRequest" => {
+			// Single-threaded: requests complete before we read this.
+			return "";
+		},
 		_ => {
-			if (id.length > 0) return lspErrorResponse(id, -32601, "Method not found");
 			return "";
 		},
 	};
@@ -1168,7 +1410,8 @@ test "shutdown" {
 test "unknown method with id" {
 	const db = createTransAmDb(100);
 	const r = lspDispatch("unknown/method", "3", "{}", db, testCache());
-	assert r.length > 0;
+	// Unknown methods are silently ignored (no response) to avoid client-side noise
+	assert r === "";
 }
 
 test "unknown notification" {

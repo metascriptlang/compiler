@@ -10,12 +10,13 @@ Architecture: **direct AST rewrite** with **scope-based cleanup** and **conserva
 
 | File | Lines | Purpose |
 |------|-------|---------|
+| `alias.ms` | ~140 | `AliasKind` (yes/no/maybe), `aliases()` path-level comparison, `isAnalysableFieldAccess()` ownership gate, `deepAliases()`, `skipConvDfa()`, `getRootSym()` |
 | `classify.ms` | ~255 | Type -> RcInfo mapping (RcKind enum, lifecycle hooks, `isFreshExpr()`, `canFormCycle()`) |
 | `scope.ms` | ~420 | DrcScope/DrcContext, push/pop, var registration, move tracking, needsTry, OuterStack, VarInfo.isInitialized |
-| `lastRead.ms` | ~281 | `isLastReadInBlock` + `isLastReadInContext` (cross-scope), `nodeReferencesVar`, `deepAliases` |
-| `cfg.ms` | ~630 | CFG implementation: `buildCfg`, `isLastReadCfg`, `isLastReadCfgCached`, per-variable CfgCache |
-| `cursors.ms` | ~420 | Cursor (borrow) inference: `inferCursors`, `isCursorVar`, escape analysis for local variables |
-| `inject.ms` | ~2190 | Main walker: all node kinds, CFG last-read, finally-protected vars, cursor check, first-write opt, generator detection |
+| `lastRead.ms` | ~270 | `isLastReadInBlock` + `isLastReadInContext` (cross-scope), `nodeReferencesVar` |
+| `cfg.ms` | ~730 | CFG implementation: `buildCfg`/`buildCfgForSym`, `isLastReadCfg`/`isLastReadCfgNode` (alias-aware BFS), `isLastReadCfgNodeCached`, separate name/sym CfgCache |
+| `cursors.ms` | ~550 | Cursor (borrow) inference: Steensgaard union-find algorithm with live ranges, mutation tracking, dangerousMutation safety check |
+| `inject.ms` | ~2220 | Main walker: all node kinds, CFG last-read, field-level moves (alias-aware), finally-protected vars, cursor check, first-write opt, generator detection |
 | `optimize.ms` | ~389 | Post-pass: set-based wasMoved tracking, branch-aware eliminate redundant operations |
 | `index.ms` | ~89 | Hub: `analyzeProgram` entry point, re-exports |
 
@@ -146,7 +147,7 @@ For each block:
 
 ### BETTER Than Reference
 
-1. **Clean modular architecture** -- 6 focused files vs multi-thousand line monoliths in other implementations. Each file has inline tests.
+1. **Clean modular architecture** -- 7 focused files vs multi-thousand line monoliths in other implementations. Each file has inline tests.
 2. **Cross-scope last-read via OuterStack** -- Elegant forward-scan across nested blocks within a function.
 3. **Branch-aware optimizer** -- `collectIfMoved()` + `nameSetIntersect()` is cleaner than standard equivalents while achieving the same result.
 4. **Clean data structures** -- Bare `T[]` types throughout (no wrapper interfaces). Strings still value types.
@@ -158,7 +159,7 @@ For each block:
 1. **Scope management** -- Push/pop stack, needsTry propagation, LIFO cleanup order. Architecturally equivalent.
 2. **Type classification** -- Standard RC kinds (String, Array, Ref, Closure, Map, Set, Named).
 3. **Fresh expression detection** -- `isFreshExpr()` matches standard call/constructor handling.
-4. **Self-assignment safety** -- `deepAliases()` matches standard aliasing safety rules.
+4. **Alias analysis** -- `alias.ms`: `AliasKind` (yes/no/maybe), `aliases()` path decomposition, `isAnalysableFieldAccess()` ownership gate, `deepAliases()` recursive self-alias check. Full parity with reference alias analysis.
 5. **try/finally wrapping** -- Hoist + null init + try + finally cleanup matches standard scoped management.
 6. **wasMoved+destroy elimination** -- Same patterns as standard optimizers including branch intersection.
 7. **Member/field & array element RC** -- `emitSaveAssignDestroy()` pattern.
@@ -187,4 +188,4 @@ Cycle detection was already implemented prior to this work (classify.ms `canForm
 | Item | Status | Rationale |
 |------|--------|-----------|
 | `=dup` operator | Not needed | `=copy` + temp achieves same result |
-| Full Steensgaard union-find | Simplified | cursors.ms uses local escape analysis (sufficient for self-hosted compiler patterns) |
+| Steensgaard union-find | Full parity | Two-pass algorithm with live ranges, union-find graphs, mutation tracking, dangerousMutation safety check |

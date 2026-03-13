@@ -79,15 +79,15 @@ function reportGraphErrors(graph: ModuleGraph): void {
 
 // Get a specific line from source text (1-based line number)
 function getSourceLine(source: string, lineNum: number): string {
-	if (source.length === 0 || lineNum <= 0) return "";
+	if (source.byteLength === 0 || lineNum <= 0) return "";
 	let currentLine = 1;
 	let lineStart = 0;
 	let i = 0;
-	while (i < source.length) {
+	while (i < source.byteLength) {
 		if (currentLine === lineNum) {
 			// Find end of this line
 			let lineEnd = i;
-			while (lineEnd < source.length && source.slice(lineEnd, lineEnd + 1) !== "\n") {
+			while (lineEnd < source.byteLength && source.slice(lineEnd, lineEnd + 1) !== "\n") {
 				lineEnd = lineEnd + 1;
 			}
 			return source.slice(i, lineEnd);
@@ -120,7 +120,7 @@ function renderModuleError(modPath: string, source: string, e: ModuleError): voi
 
 		// Source line + caret
 		const srcLine = getSourceLine(source, e.line);
-		if (srcLine.length > 0) {
+		if (srcLine.byteLength > 0) {
 			const lineNumStr = e.line.toString();
 			const pad = "   ";
 			// Separator: "   |"
@@ -278,7 +278,7 @@ function compileHeaderCompanions(graph: ModuleGraph, allFlags: string, mode: num
 		const mod = findModule(graph, modPath);
 		if (mod === null || !mod.isCHeader) continue;
 		// lib.h → lib.c
-		const cPath = `${mod.path.slice(0, mod.path.length - 2)}.c`;
+		const cPath = `${mod.path.slice(0, mod.path.byteLength - 2)}.c`;
 		if (exec(`test -f ${cPath}`) === 0) {
 			const oFile = `/tmp/_msc_hcompanion_${i}.o`;
 			if (verbose) verboseLog(`  companion ${cPath} → ${oFile}`);
@@ -759,8 +759,8 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 	if (ctx.lastOutput.length > 0) {
 		// Print captured output (strip trailing newline for clean display)
 		const lastOut = ctx.lastOutput;
-		if (lastOut.length > 0 && lastOut.slice(lastOut.length - 1, lastOut.length) === "\n") {
-			console.log(lastOut.slice(0, lastOut.length - 1));
+		if (lastOut.byteLength > 0 && lastOut.slice(lastOut.byteLength - 1, lastOut.byteLength) === "\n") {
+			console.log(lastOut.slice(0, lastOut.byteLength - 1));
 		} else {
 			console.log(lastOut);
 		}

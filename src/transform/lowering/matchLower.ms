@@ -29,7 +29,6 @@ import {
 } from "../util";
 import { Type } from "../../checker/types";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
-import { charAt } from "../../utils/string";
 
 // ===== Nested MatchExpr Hoisting via shared walker =====
 // Uses replaceInExpr from walker.ms — same expression tree walker as resultDesugar.
@@ -389,121 +388,15 @@ function makePatternTest(pattern: Node, tempName: string, discType: Type, loc: S
 const STRING_HASH_THRESHOLD: number = 8;
 
 // DJB2 hash — must match C runtime's msStringHash for correctness.
-// Note: .code only works on string literals (DRC #28), so we use charCodeAt helper.
 function djb2Hash(s: string): int32 {
 	let h: int32 = 5381;
 	let i = 0;
-	while (i < s.length) {
-		const cc: int32 = charCodeAt(s, i) as int32;
-		// h = h * 33 + charCode
+	while (i < s.byteLength) {
+		const cc: int32 = s.byteAt(i) as int32;
 		h = ((h * 33) + cc) | 0;
 		i = i + 1;
 	}
 	return h;
-}
-
-// Get char code at position — workaround for .code only working on literals.
-function charCodeAt(s: string, idx: number): number {
-	const ch = charAt(s, idx);
-	// Map ASCII printable range. For hash dispatch, we only need string literal chars.
-	if (ch === " ") return 32;
-	if (ch === "!") return 33;
-	if (ch === "\"") return 34;
-	if (ch === "#") return 35;
-	if (ch === "$") return 36;
-	if (ch === "%") return 37;
-	if (ch === "&") return 38;
-	if (ch === "'") return 39;
-	if (ch === "(") return 40;
-	if (ch === ")") return 41;
-	if (ch === "*") return 42;
-	if (ch === "+") return 43;
-	if (ch === ",") return 44;
-	if (ch === "-") return 45;
-	if (ch === ".") return 46;
-	if (ch === "/") return 47;
-	if (ch === "0") return 48;
-	if (ch === "1") return 49;
-	if (ch === "2") return 50;
-	if (ch === "3") return 51;
-	if (ch === "4") return 52;
-	if (ch === "5") return 53;
-	if (ch === "6") return 54;
-	if (ch === "7") return 55;
-	if (ch === "8") return 56;
-	if (ch === "9") return 57;
-	if (ch === ":") return 58;
-	if (ch === ";") return 59;
-	if (ch === "<") return 60;
-	if (ch === "=") return 61;
-	if (ch === ">") return 62;
-	if (ch === "?") return 63;
-	if (ch === "@") return 64;
-	// Uppercase A-Z
-	if (ch === "A") return 65;
-	if (ch === "B") return 66;
-	if (ch === "C") return 67;
-	if (ch === "D") return 68;
-	if (ch === "E") return 69;
-	if (ch === "F") return 70;
-	if (ch === "G") return 71;
-	if (ch === "H") return 72;
-	if (ch === "I") return 73;
-	if (ch === "J") return 74;
-	if (ch === "K") return 75;
-	if (ch === "L") return 76;
-	if (ch === "M") return 77;
-	if (ch === "N") return 78;
-	if (ch === "O") return 79;
-	if (ch === "P") return 80;
-	if (ch === "Q") return 81;
-	if (ch === "R") return 82;
-	if (ch === "S") return 83;
-	if (ch === "T") return 84;
-	if (ch === "U") return 85;
-	if (ch === "V") return 86;
-	if (ch === "W") return 87;
-	if (ch === "X") return 88;
-	if (ch === "Y") return 89;
-	if (ch === "Z") return 90;
-	if (ch === "[") return 91;
-	if (ch === "\\") return 92;
-	if (ch === "]") return 93;
-	if (ch === "^") return 94;
-	if (ch === "_") return 95;
-	if (ch === "`") return 96;
-	// Lowercase a-z
-	if (ch === "a") return 97;
-	if (ch === "b") return 98;
-	if (ch === "c") return 99;
-	if (ch === "d") return 100;
-	if (ch === "e") return 101;
-	if (ch === "f") return 102;
-	if (ch === "g") return 103;
-	if (ch === "h") return 104;
-	if (ch === "i") return 105;
-	if (ch === "j") return 106;
-	if (ch === "k") return 107;
-	if (ch === "l") return 108;
-	if (ch === "m") return 109;
-	if (ch === "n") return 110;
-	if (ch === "o") return 111;
-	if (ch === "p") return 112;
-	if (ch === "q") return 113;
-	if (ch === "r") return 114;
-	if (ch === "s") return 115;
-	if (ch === "t") return 116;
-	if (ch === "u") return 117;
-	if (ch === "v") return 118;
-	if (ch === "w") return 119;
-	if (ch === "x") return 120;
-	if (ch === "y") return 121;
-	if (ch === "z") return 122;
-	if (ch === "{") return 123;
-	if (ch === "|") return 124;
-	if (ch === "}") return 125;
-	if (ch === "~") return 126;
-	return 0;
 }
 
 // Check if all non-wildcard/non-binding patterns are string literals.

@@ -5,7 +5,7 @@ import { Symbol, SymbolKind, SymbolTable, ScopeKind, defineSymbol, makeSymbol, l
 import { CheckerContext, ExportedSymInfo, addError, findExportedSymbol, findModuleExports, ExtensionMethod, registerExtension, isStaticExtensionFlag, getExtTypeName, findExtension, sgRecordSym } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
-import { sliceStr, findChar, getModuleDir, appendFlag } from "../utils/string";
+import { findChar, getModuleDir, appendFlag } from "../utils/string";
 
 // ===== Top-Level Collector =====
 
@@ -150,7 +150,8 @@ function collectDecorated(ctx: CheckerContext, node: Node): void {
 // ===== Define + Error Helper =====
 
 export function defineOrError(ctx: CheckerContext, sym: Symbol, node: Node): void {
-	sym.location = node.location;
+	// Only set location if not already preserved from defining module (import parity)
+	if (sym.location === null || sym.location.line === 0) sym.location = node.location;
 	sym.declNode = node; // Discovery Commitment: link symbol to its declaration node
 	// Implementation parity: stamp module ownership — set once at creation
 	if (sym.modulePath === "") sym.modulePath = ctx.modulePath;
@@ -273,7 +274,7 @@ function collectClassMethod(ctx: CheckerContext, className: string, member: Node
 	defineOrError(ctx, methodSym, member);
 	// Link node → symbol so resolvePass finds the exact sym (not an overload)
 	member.resolvedSym = methodSym;
-	registerExtension(ctx.extensionRegistry, {
+	const classExt: ExtensionMethod = {
 		methodName: mangledName,
 		receiverTypeName: className,
 		sourcePath: "",
@@ -281,7 +282,8 @@ function collectClassMethod(ctx: CheckerContext, className: string, member: Node
 		isStatic: md.methodIsStatic,
 		sym: methodSym,
 		scopeDepth: 1,
-	});
+	};
+	registerExtension(ctx.extensionRegistry, classExt);
 }
 
 function collectInterface(ctx: CheckerContext, node: Node): void {
@@ -303,10 +305,12 @@ function collectEnumDecl(ctx: CheckerContext, node: Node): void {
 	while (mi < d.enumMembers.length) {
 		const mangledName = d.enumName + "_" + d.enumMembers[mi];
 		const memberSym = makeSymbol(mangledName, SymbolKind.Variable, enumType, false);
+		// Use per-member location from parser (Reference parity: each enum member has its own location)
+		const memberLoc = d.memberLocations !== null && mi < d.memberLocations.length ? d.memberLocations[mi] : node.location;
+		memberSym.location = memberLoc;
 		defineOrError(ctx, memberSym, node);
 		// Record each enum member DEF for symbol graph
-		// (no per-member location available; use enum node location as fallback)
-		sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.enumMembers[mi].length, memberSym, enumType, SymbolKind.EnumMember, d.enumMembers[mi], d.enumName, true);
+		sgRecordSym(ctx, memberLoc.line, memberLoc.column, memberLoc.column + d.enumMembers[mi].length, memberSym, enumType, SymbolKind.EnumMember, d.enumMembers[mi], d.enumName, true);
 		mi = mi + 1;
 	}
 	node.nodeType = enumType;
@@ -358,11 +362,11 @@ function resolveImportSourcePath(ctx: CheckerContext, specifier: string): string
 // Check if a symbol name is an operator (all operator chars, or [] / []=).
 // Used for auto-propagation of exported operator overloads.
 function isOperatorSymName(name: string): boolean {
-	if (name.length === 0) return false;
+	if (name.byteLength === 0) return false;
 	if (name === "[]" || name === "[]=") return true;
 	let i = 0;
-	while (i < name.length) {
-		const ch = name.charCodeAt(i);
+	while (i < name.byteLength) {
+		const ch = name.byteAt(i);
 		if (ch !== "|".code && ch !== ">".code && ch !== "<".code && ch !== "=".code
 			&& ch !== "+".code && ch !== "-".code && ch !== "*".code && ch !== "/".code
 			&& ch !== "%".code && ch !== "&".code && ch !== "^".code && ch !== "~".code
@@ -410,18 +414,30 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 				// Preserve original declared name for C mangling (chain re-exports handled)
 				const origName = resolveOriginalName(exportInfo, importName);
 				if (origName !== localAlias) importedSym.originalName = origName;
+				// Preserve original declaration location from defining module (Reference parity)
+				if (exportInfo.location !== null && exportInfo.location.line > 0) {
+					importedSym.location = exportInfo.location;
+				}
 				defineOrError(ctx, importedSym, node);
-				// Record imported symbol as usage (isDecl=false)
-				sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + localAlias.length, importedSym, exportInfo.symType, exportInfo.kind, localAlias, "", false);
+				// Record imported symbol as usage (isDecl=false) — use per-name location if available
+				const nameLoc = d.nameLocations !== null && i < d.nameLocations.length ? d.nameLocations[i] : node.location;
+				sgRecordSym(ctx, nameLoc.line, nameLoc.column, nameLoc.column + localAlias.length, importedSym, exportInfo.symType, exportInfo.kind, localAlias, "", false);
 				// Implementation parity: import enum members alongside enum type
 				// (rawImportSymbol registers each skEnumField in the importing scope)
 				if (exportInfo.kind === SymbolKind.Enum && exportInfo.symType.typeNames !== null) {
 					const enumTypeName = exportInfo.symType.typeName;
+					const enumDefModule = resolveDefiningModule(exportInfo, sourcePath);
 					let mi = 0;
 					while (mi < exportInfo.symType.typeNames.length) {
 						const mangledName = enumTypeName + "_" + exportInfo.symType.typeNames[mi];
 						if (lookupLocal(ctx.table, mangledName) === null) {
-							defineOrError(ctx, makeSymbol(mangledName, SymbolKind.Variable, exportInfo.symType, false), node);
+							const memberSym = makeSymbol(mangledName, SymbolKind.Variable, exportInfo.symType, false);
+							memberSym.modulePath = enumDefModule;
+							// Preserve per-member declaration location (Reference parity)
+							if (exportInfo.memberLocations !== null && mi < exportInfo.memberLocations.length) {
+								memberSym.location = exportInfo.memberLocations[mi];
+							}
+							defineOrError(ctx, memberSym, node);
 						}
 						mi = mi + 1;
 					}

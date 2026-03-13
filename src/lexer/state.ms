@@ -21,14 +21,14 @@ export function createLexerState(source: string): LexerState {
 }
 
 export function peek(s: LexerState): number {
-	if (s.pos >= s.source.length) return 0;
-	return s.source.charCodeAt(s.pos);
+	if (s.pos >= s.source.byteLength) return 0;
+	return s.source.byteAt(s.pos);
 }
 
 export function peekAt(s: LexerState, offset: number): number {
 	const idx = s.pos + offset;
-	if (idx >= s.source.length) return 0;
-	return s.source.charCodeAt(idx);
+	if (idx >= s.source.byteLength) return 0;
+	return s.source.byteAt(idx);
 }
 
 export function advanceChar(s: LexerState): number {
@@ -54,11 +54,13 @@ export function addToken(s: LexerState, kind: TokenKind, value: string, line: nu
 	s.lastToken = kind;
 }
 
-// Comment preservation: push to both tokens (for parser) and comments (for direct access)
+// Comment preservation: push to tokens array (parser skips via TokenKind.Comment check).
+// Note: do NOT also push to s.comments — that creates shared string ownership between
+// two arrays. When lex() moves s.tokens out, LexerState_destroy frees s.comments,
+// which frees the shared string buffers still referenced by the moved tokens (UAF).
 export function addComment(s: LexerState, value: string, line: number, column: number): void {
 	const tok: Token = { kind: TokenKind.Comment, value, line, column };
 	s.tokens.push(tok);
-	s.comments.push(tok);
 }
 
 export function allowsRegexAfter(s: LexerState): boolean {

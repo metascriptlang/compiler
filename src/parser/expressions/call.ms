@@ -36,7 +36,13 @@ export function parseCallExpr(state: ParserState, callee: Expression, exprParser
 	const lparen = current(state);
 	advance(state);
 	const args = try parseExprList(state, TokenKind.RParen, exprParser);
-	return Result.ok(createNode(NodeKind.CallExpr, { callee, arguments: args, isDirectCall: true, resolvedOverloadIdx: -1 }, lparen));
+	const callNode = createNode(NodeKind.CallExpr, { callee, arguments: args, isDirectCall: true, resolvedOverloadIdx: -1 }, lparen);
+	// Consume pending type arg (set by generic call parsing: foo<T>(...))
+	if (state.pendingTypeArg !== "") {
+		callNode.typeArg = state.pendingTypeArg;
+		state.pendingTypeArg = "";
+	}
+	return Result.ok(callNode);
 }
 
 // ===== Tests =====

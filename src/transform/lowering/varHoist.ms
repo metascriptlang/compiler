@@ -110,7 +110,7 @@ function hoistVarsInBody(body: Node, loc: SourceLocation): void {
 	for (let oi = 0; oi < bd.statements.length; oi += 1) {
 		newStmts.push(bd.statements[oi]);
 	}
-	bd.statements = newStmts;
+	body.data = { statements: newStmts };
 }
 
 // ===== Top-Down Walk =====

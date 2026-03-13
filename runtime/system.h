@@ -105,13 +105,24 @@ static inline void msStringCopy(msString* dest, msString src) {
 #define msStringWasMoved(s)   do { (s).len = 0; (s).p = NULL; } while(0)
 #define msStringSink(d, s)    do { msStringDestroy(d); (d) = (s); } while(0)
 
-/* --- Array lifecycle (unified) --- */
-/* Payload-only free — inline loops handle per-element cleanup (Reference parity: sequence op) */
-#define msArrayDestroy(arr)            do { if ((arr).p) { free((arr).p); (arr).p = NULL; } (arr).len = 0; } while(0)
+/* --- Array lifecycle (unified) — uniquely owned payloads --- */
+/* Reference parity: payloads are never shared. DRC emits deep copy or move. */
+#define msArrayDestroy(arr)            do { if ((arr).p) { free((arr).p); } (arr).p = NULL; (arr).len = 0; } while(0)
 #define msArrayWasMoved(arr)           do { (arr).len = 0; (arr).p = NULL; } while(0)
-/* msArrayCopy: 1-arg = in-place copy marker (no-op for primitives), 2-arg = shallow assign */
+/* msArrayCopy: 1-arg = in-place copy marker (no-op for primitives), 2-arg = deep copy (allocate + memcpy) */
 #define msArrayCopy1(arr)              /* primitive: bitwise copy handled by assignment */
-#define msArrayCopy2(d, s)             do { (d) = (s); } while(0)
+#define msArrayCopy2(d, s)             do { \
+	if ((s).p != NULL) { \
+		size_t _ac_esz = sizeof((s).p->data[0]); \
+		size_t _ac_sz = sizeof(msArrayPayloadBase) + (size_t)(s).p->cap * _ac_esz; \
+		(d).p = (__typeof__((s).p))malloc(_ac_sz); \
+		(d).p->cap = (s).p->cap; \
+		memcpy((d).p->data, (s).p->data, (size_t)(s).len * _ac_esz); \
+	} else { \
+		(d).p = NULL; \
+	} \
+	(d).len = (s).len; \
+} while(0)
 #define msArrayCopy_GET(_1, _2, NAME, ...) NAME
 #define msArrayCopy(...) msArrayCopy_GET(__VA_ARGS__, msArrayCopy2, msArrayCopy1)(__VA_ARGS__)
 #define msArraySetLen(d, s)            msArraySetLenGeneric(&(d), (s).len, sizeof((s).p->data[0]))
@@ -120,34 +131,44 @@ static inline void msStringCopy(msString* dest, msString src) {
 #define msArrayNumberWasMoved(arr)     msArrayWasMoved(arr)
 #define msArrayNumberSink(d, s)        do { msArrayDestroy(d); (d) = (s); } while(0)
 #define msArrayStringDestroy(arr)      msStringArrayDestroy(&(arr))
+/* Deep copy: allocate new payload, copy each string element */
 #define msArrayStringCopy(d, s)        do { \
-	msStringArrayDestroy(&(d)); \
-	(d).len = (s).len; \
-	if ((s).p) { \
-		size_t _asc_sz = sizeof(msStringPayload) + (size_t)(s).p->cap * sizeof(msString); \
-		(d).p = (msStringPayload*)malloc(_asc_sz); \
-		(d).p->cap = (s).p->cap; \
-		for (int64_t _asc_i = 0; _asc_i < (s).len; _asc_i++) { \
-			(d).p->data[_asc_i] = (s).p->data[_asc_i]; \
-			msStringIncref((d).p->data[_asc_i]); \
+	int64_t _asc_len = (s).len; \
+	msStringPayload* _asc_sp = (s).p; \
+	msStringPayload* _asc_newp = NULL; \
+	if (_asc_sp) { \
+		size_t _asc_sz = sizeof(msStringPayload) + (size_t)_asc_sp->cap * sizeof(msString); \
+		_asc_newp = (msStringPayload*)calloc(1, _asc_sz); \
+		_asc_newp->cap = _asc_sp->cap; \
+		for (int64_t _asc_i = 0; _asc_i < _asc_len; _asc_i++) { \
+			_asc_newp->data[_asc_i] = _asc_sp->data[_asc_i]; \
+			msStringIncref(_asc_newp->data[_asc_i]); \
 		} \
-	} else { (d).p = NULL; } \
+	} \
+	msStringArrayDestroy(&(d)); \
+	(d).len = _asc_len; \
+	(d).p = _asc_newp; \
 } while(0)
 #define msArrayStringWasMoved(arr)     msArrayWasMoved(arr)
 #define msArrayStringSink(d, s)        do { msArrayDestroy(d); (d) = (s); } while(0)
 #define msArrayRefDestroy(arr)         msRefArrayDestroy(&(arr))
+/* Deep copy: allocate new payload, copy each ref element with incref */
 #define msArrayRefCopy(d, s)           do { \
-	msRefArrayDestroy(&(d)); \
-	(d).len = (s).len; \
-	if ((s).p) { \
-		size_t _arc_sz = sizeof(msRefPayload) + (size_t)(s).p->cap * sizeof(void*); \
-		(d).p = (msRefPayload*)malloc(_arc_sz); \
-		(d).p->cap = (s).p->cap; \
-		for (int64_t _arc_i = 0; _arc_i < (s).len; _arc_i++) { \
-			(d).p->data[_arc_i] = (s).p->data[_arc_i]; \
-			if ((d).p->data[_arc_i]) msIncRef((d).p->data[_arc_i]); \
+	int64_t _arc_len = (s).len; \
+	msRefPayload* _arc_sp = (s).p; \
+	msRefPayload* _arc_newp = NULL; \
+	if (_arc_sp) { \
+		size_t _arc_sz = sizeof(msRefPayload) + (size_t)_arc_sp->cap * sizeof(void*); \
+		_arc_newp = (msRefPayload*)calloc(1, _arc_sz); \
+		_arc_newp->cap = _arc_sp->cap; \
+		for (int64_t _arc_i = 0; _arc_i < _arc_len; _arc_i++) { \
+			_arc_newp->data[_arc_i] = _arc_sp->data[_arc_i]; \
+			if (_arc_newp->data[_arc_i]) msIncRef(_arc_newp->data[_arc_i]); \
 		} \
-	} else { (d).p = NULL; } \
+	} \
+	msRefArrayDestroy(&(d)); \
+	(d).len = _arc_len; \
+	(d).p = _arc_newp; \
 } while(0)
 #define msArrayRefTrace(arr, cb)       do { \
 	for (int64_t _art_i = 0; _art_i < (arr).len && (arr).p; _art_i++) { \
@@ -245,12 +266,8 @@ _Noreturn void msRaiseIndexError(int64_t idx, int64_t len);
 	&((a).data[__idx]); \
 }))
 
-/* String char access is read-only — no lvalue trick needed */
-#define msStringCharAccess(s, i) ({ \
-	int32_t __idx = (i); \
-	if ((uint32_t)__idx >= (uint32_t)(s).len) msRaiseIndexError(__idx, (s).len); \
-	msStringCharAt((s), __idx); \
-})
+/* String char access — TypeScript s[i] parity (character-indexed) */
+#define msStringCharAccess(s, i) msStringCharAt((s), (i))
 
 /* ===== Range-Checked Integer Casts ===== */
 /* Parity: standard reference range checks and code generation patterns.

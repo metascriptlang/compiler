@@ -62,10 +62,12 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 					call.nodeType = stringType();
 					return call;
 				}
-				// Pure-MS toString → emit as method call, extensionMethodLower resolves it
-				const memberCall = makeCall(makeMember(arg, "toString", loc), [], loc);
-				memberCall.nodeType = stringType();
-				return memberCall;
+				// Pure-MS toString → call the function directly with receiver as first arg
+				const ident = makeIdent(ext.sym.name, loc);
+				ident.resolvedSym = ext.sym;
+				const call = makeCall(ident, [arg], loc);
+				call.nodeType = stringType();
+				return call;
 			}
 		}
 		// JsonValue → "Json { ... }" with magenta prefix

@@ -142,7 +142,7 @@ function foldMember(node: Node): Node {
 	const d = node.data as MemberExprData;
 	if (d.property === "code" && d.object.kind === NodeKind.StringLiteral) {
 		const sd = d.object.data as StringLiteralData;
-		if (sd.value.length > 0) {
+		if (sd.value.byteLength > 0) {
 			const cc = sd.value.charCodeAt(0);
 			return makeNumber(cc, node.location);
 		}

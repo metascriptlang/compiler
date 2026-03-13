@@ -36,8 +36,8 @@ import { parseSource } from "../../parser/statements/validation";
 
 export function taHashString(s: string): number {
 	let hash = 5381;
-	for (let i = 0; i < s.length; i = i + 1) {
-		hash = (hash * 33 + s.charCodeAt(i)) % 2147483647;
+	for (let i = 0; i < s.byteLength; i = i + 1) {
+		hash = (hash * 33 + s.byteAt(i)) % 2147483647;
 	}
 	return hash;
 }

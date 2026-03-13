@@ -6,7 +6,6 @@
 import { Node, NodeKind } from "../../ast/node";
 import { Type, TypeKind } from "../../checker/types";
 import { CheckerContext } from "../../checker/context";
-import { sliceStr } from "../../utils/string";
 
 
 // ===== CSection — C file output sections (standard reference parity) =====
@@ -58,7 +57,7 @@ export enum CStorageLoc {
 
 // ===== Builder — string accumulator (standard reference parity) =====
 
-export interface Builder {
+export class Builder {
 	buf: string;
 	indent: number;
 }
@@ -164,6 +163,7 @@ export interface CProc {
 	params: string[];      // parameter names (mangled)
 	seenSinks: string[];   // tracks declared $sink_N_ temps (prevents duplicates)
 	indirectParams: string[];  // reference pointer introduction params — auto-deref as (*name) (Reference: indirect location parity)
+	indirectLocals: string[];  // locals pointing into union variant data — auto-deref as (*name)
 	nestedFinally: Node[];     // stack of finally body nodes (reference: p.nestedTryStmts[].fin)
 }
 
@@ -172,6 +172,15 @@ export function isIndirectParam(p: CProc, name: string): boolean {
 	if (p === null) return false;
 	for (const param of p.indirectParams) {
 		if (param === name) return true;
+	}
+	return false;
+}
+
+// Check if a local variable is an indirect union variant pointer — auto-deref as (*name)
+export function isIndirectLocal(p: CProc, name: string): boolean {
+	if (p === null) return false;
+	for (const local of p.indirectLocals) {
+		if (local === name) return true;
 	}
 	return false;
 }
@@ -191,6 +200,7 @@ export function createProc(name: string, returnType: Type): CProc {
 		params: [],
 		seenSinks: [],
 		indirectParams: [],
+		indirectLocals: [],
 		nestedFinally: [],
 	};
 }
@@ -370,12 +380,12 @@ export function typeCacheHas(cache: TypeCache, key: string): boolean {
 
 // ===== StringPoolEntry — interned string literals =====
 
-export interface StringPoolEntry {
+export class StringPoolEntry {
 	value: string;
 	cName: string;    // e.g., "TMP_STR_1"
 }
 
-export interface StringPool {
+export class StringPool {
 	entries: StringPoolEntry[];
 	counter: number;
 }
@@ -419,7 +429,7 @@ export function nameSetAdd(ns: NameSet, name: string): void {
 
 // ===== AliveSet — global DCE reachability (Standard reference parity) =====
 
-export interface AliveSet {
+export class AliveSet {
 	entries: string[];   // "modulePath:symbolName" keys
 }
 

@@ -21,7 +21,7 @@ import {
 	msAroTypedefCount, msAroTypedefName, msAroTypedefTarget,
 } from "../bindings/aro/index";
 import { ModuleGraph, findModule } from "./graph";
-import { sliceStr, trimStr } from "../utils/string";
+// (utils/string imports removed — using native .slice/.trim)
 
 // ===== C Type → MetaScript Type Mapping =====
 
@@ -29,21 +29,21 @@ import { sliceStr, trimStr } from "../utils/string";
 function stripQualifiers(t: string): string {
 	let s = t;
 	// Strip trailing qualifiers one at a time
-	if (s.endsWith(" restrict")) { s = sliceStr(s, 0, s.length - 9); }
-	if (s.endsWith(" volatile")) { s = sliceStr(s, 0, s.length - 9); }
-	if (s.endsWith(" _Nonnull")) { s = sliceStr(s, 0, s.length - 9); }
-	if (s.endsWith(" _Nullable")) { s = sliceStr(s, 0, s.length - 10); }
-	if (s.endsWith(" __restrict")) { s = sliceStr(s, 0, s.length - 11); }
-	return trimStr(s);
+	if (s.endsWith(" restrict")) { s = s.slice(0, s.length - 9); }
+	if (s.endsWith(" volatile")) { s = s.slice(0, s.length - 9); }
+	if (s.endsWith(" _Nonnull")) { s = s.slice(0, s.length - 9); }
+	if (s.endsWith(" _Nullable")) { s = s.slice(0, s.length - 10); }
+	if (s.endsWith(" __restrict")) { s = s.slice(0, s.length - 11); }
+	return s.trim();
 }
 
 // Map a C type string to a MetaScript type annotation string.
 export function mapCType(ctype: string): string {
-	const t = stripQualifiers(trimStr(ctype));
+	const t = stripQualifiers(ctype.trim());
 
 	// Pointer types — can't be in match (endsWith check)
 	if (t.endsWith("*")) {
-		const base = trimStr(sliceStr(t, 0, t.length - 1));
+		const base = t.slice(0, t.length - 1).trim();
 		if (base === "char" || base === "const char") return "string";
 		return "int64";
 	}

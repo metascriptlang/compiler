@@ -106,7 +106,7 @@ function valueToNode(val: RaiserValue, objHeap: RaiserObjectHeap, arrHeap: Raise
 				values.push(valNode);
 				i = i + 1;
 			}
-			return createNode(NodeKind.ObjectLiteral, { properties: values, keys }, synthToken(loc));
+			return createNode(NodeKind.ObjectLiteral, { properties: values, keys, keyLocations: [] }, synthToken(loc));
 		},
 		_ => mkNull(loc),
 	};

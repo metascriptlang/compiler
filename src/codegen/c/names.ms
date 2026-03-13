@@ -4,7 +4,6 @@
 // Character classification, core mangling, C keyword avoidance,
 // module-qualified proc names, field/local manglers.
 
-import { sliceStr, charAt } from "../../utils/string";
 import { Symbol, SymbolKind } from "../../ast/node";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 
@@ -91,14 +90,14 @@ export function mangle(name: string): string {
 	let requiresUnderscore = false;
 
 	// Leading digit: prefix with X
-	const first = charAt(name, 0);
+	const first = name.charAt(0);
 	if (isDigitChar(first)) {
 		result = "X" + first;
 		start = 1;
 	}
 
-	for (let i = start; i < name.length; i += 1) {
-		const ch = charAt(name, i);
+	for (let i = start; i < name.byteLength; i += 1) {
+		const ch = name.charAt(i);
 		if (isAlnumChar(ch)) {
 			result = result + ch;
 		} else if (ch === "_") {
@@ -147,8 +146,8 @@ function isLowerOrDigit(ch: string): boolean {
 
 export function mangleModuleName(modulePath: string): string {
 	let result = "";
-	for (let i = 0; i < modulePath.length; i += 1) {
-		const ch = charAt(modulePath, i);
+	for (let i = 0; i < modulePath.byteLength; i += 1) {
+		const ch = modulePath.charAt(i);
 		if (isLowerOrDigit(ch)) {
 			result = result + ch;
 		} else if (ch === "/" || ch === "\\") {

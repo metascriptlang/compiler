@@ -19,7 +19,7 @@ import {
 	WhileStmtData, ForStmtData, ForOfStmtData, BlockStmtData,
 	TryCatchStmtData, SwitchStmtData, SwitchCaseData,
 	ThrowStmtData, DoWhileStmtData, FunctionDeclData,
-	ExportDeclData, MoveExprData, Symbol,
+	ExportDeclData, MoveExprData, HiddenDerefData, HiddenStdConvData, Symbol,
 	isEmptyBlock,
 } from "../ast/node";
 import { SymbolKind, makeSymbol } from "../checker/symbol";
@@ -73,6 +73,8 @@ export function nodeReferencesVar(node: Node, targetSym: Symbol): boolean {
 		},
 		NodeKind.TypeAssertion => nodeReferencesVar((node.data as TypeAssertionData).asExpr, targetSym),
 		NodeKind.MoveExpr => nodeReferencesVar((node.data as MoveExprData).moveArg, targetSym),
+		NodeKind.HiddenDeref | NodeKind.HiddenAddr => nodeReferencesVar((node.data as HiddenDerefData).expr, targetSym),
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => nodeReferencesVar((node.data as HiddenStdConvData).convExpr, targetSym),
 
 		// Statement nodes
 		NodeKind.ExprStmt => nodeReferencesVar((node.data as ExprStmtData).expr, targetSym),
@@ -229,13 +231,9 @@ export function isLastReadInContext(targetSym: Symbol, stmtIndex: number, stmts:
 	return true;
 }
 
-// ===== deepAliases — self-assignment detection =====
-// Returns true if `expr` references `varName` anywhere in its tree.
-// Used for: `x = f(x)` → must save old x before destroy.
-
-export function deepAliases(targetSym: Symbol, expr: Node): boolean {
-	return nodeReferencesVar(expr, targetSym);
-}
+// ===== deepAliases — MOVED to alias.ms =====
+// Path-level alias analysis now lives in src/analyzer/alias.ms.
+// nodeReferencesVar is still used by isLastReadInBlock/isLastReadInContext.
 
 // ===== Test Helpers =====
 
@@ -426,21 +424,6 @@ test "function boundary stops outer search" {
 		{ outerStmts: [], fromIndex: 0, isFunctionBoundary: true },
 	];
 	assert isLastReadInContext(symA, 0, innerStmts, outer);
-}
-
-test "simple alias" {
-	const expr = getExpr("f(x);");
-	const symX = makeTestSym("x");
-	attachSymToNode(expr, "x", symX);
-	assert deepAliases(symX, expr);
-	assert !deepAliases(makeTestSym("y"), expr);
-}
-
-test "nested alias" {
-	const expr = getExpr("g(f(x));");
-	const symX = makeTestSym("x");
-	attachSymToNode(expr, "x", symX);
-	assert deepAliases(symX, expr);
 }
 
 test "return terminates block" {

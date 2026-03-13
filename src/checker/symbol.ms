@@ -48,26 +48,28 @@ export function setFlag(sym: Symbol, flag: SymbolFlag): void {
 export class Scope {
 	symbols: Symbol[];
 	scopeKind: ScopeKind;
-	parent: Scope;   // null for global scope
+	parent: Ptr<Scope>;   // borrowed — allScopes owns all scopes
 }
 
 // ===== Symbol Table =====
 
-export interface SymbolTable {
-	current: Scope;
+export class SymbolTable {
+	current: Ptr<Scope>;  // borrowed — allScopes owns all scopes
+	allScopes: Scope[];
 }
 
 // ===== Constructors =====
 
 export function createSymbolTable(): SymbolTable {
 	const global: Scope = { symbols: [], scopeKind: ScopeKind.Global, parent: null as unknown as Scope };
-	return { current: global };
+	return { current: global, allScopes: [global] };
 }
 
 // ===== Scope Operations =====
 
 export function openScope(table: SymbolTable, kind: ScopeKind): void {
 	const scope: Scope = { symbols: [], scopeKind: kind, parent: table.current };
+	table.allScopes.push(scope);
 	table.current = scope;
 }
 
@@ -129,11 +131,15 @@ export function hasOverloads(sym: Symbol): boolean {
 // ===== Helper: Create Symbol Shorthand =====
 
 export function makeSymbol(name: string, kind: SymbolKind, symType: Type, mutable: boolean): Symbol {
+	return makeSymbolState(name, kind, symType, mutable, SymbolState.Hollow);
+}
+
+export function makeSymbolState(name: string, kind: SymbolKind, symType: Type, mutable: boolean, state: SymbolState): Symbol {
 	const sym = new Symbol();
 	sym.name = name;
 	sym.symbolKind = kind;
 	sym.symbolType = symType;
-	sym.state = SymbolState.Hollow;
+	sym.state = state;
 	sym.location = makeLoc(0, 0);
 	sym.declNode = null as unknown as Node;
 	sym.overloads = [];

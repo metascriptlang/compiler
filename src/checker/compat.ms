@@ -1,7 +1,7 @@
 // Type Compatibility - table-driven assignability checking
 
 import {
-	Type, TypeKind, isNumeric, skipModifier,
+	Type, TypeKind, isNumeric, skipModifier, typeNameOf,
 	numberType, stringType, booleanType, voidType, nullType, unknownType, errorType,
 	createPrimitive, createArray, createFunction, createStruct, createUnion,
 	createEnum, createResult, createRef, createPtr, createDistinct, createGenericParam,
@@ -24,7 +24,7 @@ export function isAssignable(source: Type, target: Type): boolean {
 			TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Ref | TypeKind.Ptr => isAssignable(source.typeReturn, target.typeReturn),
 			TypeKind.Function => isFunctionAssignable(source, target),
 			TypeKind.Struct => isObjectAssignable(source, target),
-			TypeKind.Enum | TypeKind.Distinct => source.typeName === target.typeName,
+			TypeKind.Enum | TypeKind.Distinct | TypeKind.TypeReference => source.typeName === target.typeName,
 			TypeKind.Result => {
 				const okCompat = isAssignable(source.typeReturn, target.typeReturn);
 				const errCompat = isAssignable(source.typeExtra, target.typeExtra);
@@ -67,6 +67,17 @@ export function isAssignable(source: Type, target: Type): boolean {
 	// Error type is compatible with everything (suppress cascading errors)
 	if (source.kind === TypeKind.Error || target.kind === TypeKind.Error) {
 		return true;
+	}
+
+	// TypeReference: unresolved forward/cross-module type — compare by canonical name.
+	// TransAm exports resolve annotations to TypeRef when imported types aren't in tmpCtx scope.
+	// The reference avoids this via pointer identity; we use name-based comparison as fallback.
+	// Must use typeNameOf() to unwrap Ref/Ptr (class types are Ref<Struct("Name")>).
+	if (source.kind === TypeKind.TypeReference || target.kind === TypeKind.TypeReference) {
+		const sName = typeNameOf(source);
+		const tName = typeNameOf(target);
+		if (sName !== "" && sName === tName) return true;
+		return false;
 	}
 
 	// null assignable to nullable targets (Object, Array, SizedArray, Span, Function, Ref, Ptr)
@@ -201,7 +212,7 @@ export function typeRelation(formal: Type, actual: Type): TypeRelation {
 				if (isObjectAssignable(actual, formal)) return TypeRelation.Subtype;
 				return TypeRelation.None;
 			},
-			TypeKind.Enum | TypeKind.Distinct => {
+			TypeKind.Enum | TypeKind.Distinct | TypeKind.TypeReference => {
 				if (formal.typeName === actual.typeName) return TypeRelation.Exact;
 				return TypeRelation.None;
 			},
@@ -250,6 +261,13 @@ export function typeRelation(formal: Type, actual: Type): TypeRelation {
 	// Error type = suppress cascading
 	if (formal.kind === TypeKind.Error || actual.kind === TypeKind.Error) {
 		return TypeRelation.Exact;
+	}
+	// TypeReference: unresolved cross-module type — compare by canonical name
+	if (formal.kind === TypeKind.TypeReference || actual.kind === TypeKind.TypeReference) {
+		const fName = typeNameOf(formal);
+		const aName = typeNameOf(actual);
+		if (fName !== "" && fName === aName) return TypeRelation.Exact;
+		return TypeRelation.None;
 	}
 	// Numeric widening: sized → Number
 	if (isNumeric(actual) && formal.kind === TypeKind.Number) {

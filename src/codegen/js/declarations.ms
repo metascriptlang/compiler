@@ -8,7 +8,6 @@ import {
 	DecoratedDeclData,
 } from "../../ast/node";
 import { emit, emitNode, emitIndent, emitNewline, emitLine, JSGenerator, convertImportPath, emitJoinedStrings, emitBodyOrEmpty } from "./emit";
-import { sliceStr } from "../../utils/string";
 
 // ===== Function Declaration =====
 
@@ -141,7 +140,7 @@ export function emitImportDecl(gen: JSGenerator, node: Node): void {
 	const d = node.data as ImportDeclData;
 	// Skip std/ imports (compiler-provided, not available in JS)
 	if (d.importSource.length >= 4) {
-		const prefix = sliceStr(d.importSource, 0, 4);
+		const prefix = d.importSource.slice(0, 4);
 		if (prefix === "std/") return;
 	}
 	emitIndent(gen);

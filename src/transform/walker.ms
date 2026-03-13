@@ -390,6 +390,21 @@ type StmtExpander = (stmt: Node, ctx: TransformContext) => Node[];
 export type FnEntryHook = (node: Node) => void;
 export type FnExitHook = (node: Node) => void;
 
+// Helpers to replace statement arrays in-place without value-copy aliasing.
+// In C backend, `const d = node.data as X; d.field = y;` modifies a VALUE COPY,
+// not the original node. These helpers take the node, extract old stmts, compute
+// new stmts, and write back via node.data = {...} in a single scope where the
+// return value is directly consumed (no local for DRC to destroy).
+function replaceProgStmts(node: Node, expander: StmtExpander, ctx: TransformContext, onFnEntry: FnEntryHook, onFnExit: FnExitHook): void {
+	const pd = node.data as ProgramData;
+	node.data = { programStmts: expandAndRecurseHooked(pd.programStmts, expander, ctx, onFnEntry, onFnExit) };
+}
+
+function replaceBlockStmts(node: Node, expander: StmtExpander, ctx: TransformContext, onFnEntry: FnEntryHook, onFnExit: FnExitHook): void {
+	const bd = node.data as BlockStmtData;
+	node.data = { statements: expandAndRecurseHooked(bd.statements, expander, ctx, onFnEntry, onFnExit) };
+}
+
 export function walkExpandBlocks(node: Node, expander: StmtExpander, ctx: TransformContext): void {
 	walkExpandBlocksHooked(node, expander, ctx, null as unknown as FnEntryHook, null as unknown as FnExitHook);
 }
@@ -397,12 +412,10 @@ export function walkExpandBlocks(node: Node, expander: StmtExpander, ctx: Transf
 export function walkExpandBlocksHooked(node: Node, expander: StmtExpander, ctx: TransformContext, onFnEntry: FnEntryHook, onFnExit: FnExitHook): void {
 	match (node.kind) {
 		NodeKind.Program => {
-			const d = node.data as ProgramData;
-			d.programStmts = expandAndRecurseHooked(d.programStmts, expander, ctx, onFnEntry, onFnExit);
+			replaceProgStmts(node, expander, ctx, onFnEntry, onFnExit);
 		},
 		NodeKind.BlockStmt => {
-			const d = node.data as BlockStmtData;
-			d.statements = expandAndRecurseHooked(d.statements, expander, ctx, onFnEntry, onFnExit);
+			replaceBlockStmts(node, expander, ctx, onFnEntry, onFnExit);
 		},
 		NodeKind.FunctionDecl => {
 			const d = node.data as FunctionDeclData;

@@ -3,7 +3,7 @@
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, NodeData, Expression, createNode, QuoteExprData, BlockStmtData } from "../../ast/node";
-import { ParserState, createState, current, advance, isAtEnd, isGenericCallAhead, captureGenericTypeArgs, addExplicitTypeArg, collectTokenText } from "../context";
+import { ParserState, createState, current, advance, isAtEnd, isGenericCallAhead, captureGenericTypeArgs, addExplicitTypeArg, collectTokenText, consumePendingTypeArg } from "../context";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, skipOptionalType, isIdentLike } from "../util";
 import { getPrecedence, isBinaryOperator, isRightAssociative } from "./precedence";
@@ -65,6 +65,7 @@ function parseExprWithPrec(state: ParserState, minPrec: number): ExprResult {
 				const typeArgs = captureGenericTypeArgs(state);
 				if (typeArgs !== "") {
 					addExplicitTypeArg(token.line, token.column, typeArgs);
+					state.pendingTypeArg = typeArgs;
 				}
 				continue;
 			}
@@ -343,12 +344,14 @@ function parsePrimary(state: ParserState): ExprResult {
 			}
 		}
 		// Capture generic type args: new Box<number>(42)
+		let newTypeArg = "";
 		if (!isAtEnd(state) && current(state).kind === TokenKind.Lt) {
 			if (isGenericCallAhead(state)) {
 				const ltToken = current(state);
 				const typeArgs = captureGenericTypeArgs(state);
 				if (typeArgs !== "") {
 					addExplicitTypeArg(ltToken.line, ltToken.column, typeArgs);
+					newTypeArg = typeArgs;
 				}
 			}
 		}
@@ -357,9 +360,13 @@ function parsePrimary(state: ParserState): ExprResult {
 		if (!isAtEnd(state) && current(state).kind === TokenKind.LParen) {
 			advance(state);
 			const argList = try parseExprList(state, TokenKind.RParen, parseExprWithPrec);
-			return Result.ok(createNode(NodeKind.NewExpr, { newCallee: callee, newArguments: argList }, token));
+			const newNode = createNode(NodeKind.NewExpr, { newCallee: callee, newArguments: argList }, token);
+			if (newTypeArg !== "") newNode.typeArg = newTypeArg;
+			return Result.ok(newNode);
 		}
-		return Result.ok(createNode(NodeKind.NewExpr, { newCallee: callee, newArguments: args }, token));
+		const newNode2 = createNode(NodeKind.NewExpr, { newCallee: callee, newArguments: args }, token);
+		if (newTypeArg !== "") newNode2.typeArg = newTypeArg;
+		return Result.ok(newNode2);
 	}
 
 	// Await expression: await expr

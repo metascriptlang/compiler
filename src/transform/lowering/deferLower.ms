@@ -53,7 +53,7 @@ function lowerDeferInNode(node: Node): void {
 			if (hasDefer(d.programStmts)) {
 				const newStmts = lowerDeferInBlock(d.programStmts, node.location);
 				walkStmtList(newStmts);
-				d.programStmts = newStmts;
+				node.data = { programStmts: newStmts };
 			} else {
 				walkStmtList(d.programStmts);
 			}
@@ -63,7 +63,7 @@ function lowerDeferInNode(node: Node): void {
 			if (hasDefer(d.statements)) {
 				const newStmts = lowerDeferInBlock(d.statements, node.location);
 				walkStmtList(newStmts);
-				d.statements = newStmts;
+				node.data = { statements: newStmts };
 			} else {
 				walkStmtList(d.statements);
 			}

@@ -27,12 +27,11 @@ import { Type, TypeKind, isNumeric, numberType, booleanType, stringType, charTyp
 import { ExportRegistry } from "../checker/context";
 import { TransformContext } from "./context";
 import { mapChildren } from "./walker";
-import { charAt, sliceStr, trimStr } from "../utils/string";
 
 // ===== Scope Stack =====
 // Parallel arrays per scope level (MetaScript has no Map built-in).
 
-interface TypeScope {
+class TypeScope {
 	names: string[];
 	types: Type[];
 }
@@ -111,7 +110,7 @@ function extractFieldTypeFromStructural(typeName: string, fieldName: string): Ty
 		if (pos + needle.length <= typeName.length) {
 			found = true;
 			while (ni < needle.length) {
-				if (charAt(typeName, pos + ni) !== charAt(needle, ni)) {
+				if (typeName.charAt(pos + ni) !== needle.charAt(ni)) {
 					found = false;
 					ni = needle.length; // break
 				}
@@ -124,7 +123,7 @@ function extractFieldTypeFromStructural(typeName: string, fieldName: string): Ty
 			let typeEnd = typeStart;
 			let depth = 0;
 			while (typeEnd < typeName.length) {
-				const ch = charAt(typeName, typeEnd);
+				const ch = typeName.charAt(typeEnd);
 				if (ch === "<" || ch === "(" || ch === "{" || ch === "[") { depth = depth + 1; }
 				if (ch === ">" || ch === ")" || ch === "}" || ch === "]") { depth = depth - 1; }
 				if (depth === 0 && (ch === "," || ch === "}")) {
@@ -138,11 +137,11 @@ function extractFieldTypeFromStructural(typeName: string, fieldName: string): Ty
 			let actualEnd = typeStart;
 			depth = 0;
 			while (actualEnd < typeName.length) {
-				const ch = charAt(typeName, actualEnd);
+				const ch = typeName.charAt(actualEnd);
 				if (ch === "<" || ch === "(" || ch === "{" || ch === "[") { depth = depth + 1; }
 				if (ch === ">" || ch === ")" || ch === "}" || ch === "]") { depth = depth - 1; }
 				if (depth === 0 && (ch === "," || ch === "}")) {
-					const rawType = trimStr(sliceStr(typeName, typeStart, actualEnd));
+					const rawType = typeName.slice(typeStart, actualEnd).trim();
 					return resolveFieldTypeName(rawType);
 				}
 				actualEnd = actualEnd + 1;
@@ -161,7 +160,7 @@ function resolveFieldTypeName(rawType: string): Type {
 	if (rawType === "void") return null;
 	// Array types: "T[]"
 	if (rawType.endsWith("[]")) {
-		const inner = sliceStr(rawType, 0, rawType.length - 2);
+		const inner = rawType.slice(0, rawType.length - 2);
 		const innerType = resolveFieldTypeName(inner);
 		if (innerType !== null) return createArray(innerType);
 	}
@@ -393,6 +392,12 @@ interface RegistryWrapper {
 }
 let _registryEntries: RegistryEntry[] = null as unknown as RegistryEntry[];
 
+// Module-level scopes — avoids closure capture of value-type array.
+// Under C, closures copy value types into env structs. Array push/pop inside
+// recursive calls would modify a COPY, causing use-after-free when realloc
+// frees old data that the outer closure's copy still references.
+let _scopes: TypeScope[] = [];
+
 export function refineTypes(program: Node, ctx: TransformContext, registry: ExportRegistry): Node {
 	if (registry !== null && registry.entries !== null) {
 		const r = registry as unknown as RegistryWrapper;
@@ -400,10 +405,10 @@ export function refineTypes(program: Node, ctx: TransformContext, registry: Expo
 	} else {
 		_registryEntries = null as unknown as RegistryEntry[];
 	}
-	const scopes: TypeScope[] = [];
-	scopes.push(createScope());
+	_scopes = [];
+	_scopes.push(createScope());
 
-	refineNode(program, scopes);
+	refineNode(program);
 	_registryEntries = null as unknown as RegistryEntry[];
 	return program;
 }
@@ -471,7 +476,7 @@ function desperationHeuristic(name: string): Type {
 	return null;
 }
 
-function refineNode(node: Node, scopes: TypeScope[]): void {
+function refineNode(node: Node): void {
 	if (node === null) return;
 
 	// Pre-order: handle scope-creating nodes before recursing children
@@ -479,25 +484,25 @@ function refineNode(node: Node, scopes: TypeScope[]): void {
 		const fd = node.data as FunctionDeclData;
 		// Record function name in enclosing scope (for recursive calls and references)
 		if (node.nodeType !== null && fd.fnName.length > 0) {
-			scopeRecord(scopes, fd.fnName, node.nodeType);
+			scopeRecord(_scopes, fd.fnName, node.nodeType);
 		}
-		scopes.push(createScope());
-		seedFunctionParams(node, scopes);
+		_scopes.push(createScope());
+		seedFunctionParams(node, _scopes);
 		mapChildren(node, (child: Node): Node => {
-			refineNode(child, scopes);
+			refineNode(child);
 			return child;
 		});
-		scopes.pop();
+		_scopes.pop();
 		return;
 	}
 
 	if (node.kind === NodeKind.BlockStmt) {
-		scopes.push(createScope());
+		_scopes.push(createScope());
 		mapChildren(node, (child: Node): Node => {
-			refineNode(child, scopes);
+			refineNode(child);
 			return child;
 		});
-		scopes.pop();
+		_scopes.pop();
 		return;
 	}
 
@@ -505,27 +510,27 @@ function refineNode(node: Node, scopes: TypeScope[]): void {
 	if (node.kind === NodeKind.ForOfStmt) {
 		const fod = node.data as ForOfStmtData;
 		// Recurse iterable first to type it
-		refineNode(fod.forOfIterable, scopes);
+		refineNode(fod.forOfIterable);
 		// Seed binding with element type
-		scopes.push(createScope());
+		_scopes.push(createScope());
 		if (fod.forOfIterable !== null && fod.forOfIterable.nodeType !== null) {
 			const iterType = fod.forOfIterable.nodeType;
 			if ((iterType.kind === TypeKind.Array || iterType.kind === TypeKind.SizedArray ||
 				iterType.kind === TypeKind.Span) && iterType.typeReturn !== null) {
-				scopeRecord(scopes, fod.forOfBinding, iterType.typeReturn);
+				scopeRecord(_scopes, fod.forOfBinding, iterType.typeReturn);
 			} else if (iterType.kind === TypeKind.String) {
-				scopeRecord(scopes, fod.forOfBinding, charType());
+				scopeRecord(_scopes, fod.forOfBinding, charType());
 			}
 		}
-		refineNode(fod.forOfBody, scopes);
-		scopes.pop();
+		refineNode(fod.forOfBody);
+		_scopes.pop();
 		return;
 	}
 
 	// ArrowFunction: push scope, seed params if nodeType available, recurse body
 	if (node.kind === NodeKind.ArrowFunction) {
 		const ad = node.data as ArrowFunctionData;
-		scopes.push(createScope());
+		_scopes.push(createScope());
 		// Seed params from arrow's nodeType if available
 		if (node.nodeType !== null && node.nodeType.kind === TypeKind.Function) {
 			const paramTypes = node.nodeType.typeChildren;
@@ -533,20 +538,20 @@ function refineNode(node: Node, scopes: TypeScope[]): void {
 				let ai = 0;
 				while (ai < ad.arrowParams.length && ai < paramTypes.length) {
 					if (paramTypes[ai] !== null) {
-						scopeRecord(scopes, ad.arrowParams[ai], paramTypes[ai]);
+						scopeRecord(_scopes, ad.arrowParams[ai], paramTypes[ai]);
 					}
 					ai = ai + 1;
 				}
 			}
 		}
-		refineNode(ad.arrowBody, scopes);
-		scopes.pop();
+		refineNode(ad.arrowBody);
+		_scopes.pop();
 		return;
 	}
 
 	// Recurse children first (bottom-up for type propagation)
 	mapChildren(node, (child: Node): Node => {
-		refineNode(child, scopes);
+		refineNode(child);
 		return child;
 	});
 
@@ -555,11 +560,11 @@ function refineNode(node: Node, scopes: TypeScope[]): void {
 	if (node.kind === NodeKind.VariableDecl) {
 		const d = node.data as VariableDeclData;
 		if (node.nodeType !== null) {
-			scopeRecord(scopes, d.declName, node.nodeType);
+			scopeRecord(_scopes, d.declName, node.nodeType);
 		} else if (d.initializer !== null && d.initializer.nodeType !== null) {
 			// Propagate initializer type up to the declaration
 			node.nodeType = d.initializer.nodeType;
-			scopeRecord(scopes, d.declName, d.initializer.nodeType);
+			scopeRecord(_scopes, d.declName, d.initializer.nodeType);
 		}
 	} else if (node.kind === NodeKind.Identifier) {
 		if (node.nodeType === null) {
@@ -568,7 +573,7 @@ function refineNode(node: Node, scopes: TypeScope[]): void {
 				node.nodeType = node.resolvedSym.symbolType;
 			} else {
 				const id = node.data as IdentifierData;
-				const found = scopeLookup(scopes, id.name);
+				const found = scopeLookup(_scopes, id.name);
 				if (found !== null) {
 					node.nodeType = found;
 				} else {
@@ -615,7 +620,7 @@ function refineNode(node: Node, scopes: TypeScope[]): void {
 			const ta = node.data as TypeAssertionData;
 			// Look up the target type name in scope stack then registry
 			if (ta.asType.length > 0) {
-				const found = scopeLookup(scopes, ta.asType);
+				const found = scopeLookup(_scopes, ta.asType);
 				if (found !== null) {
 					node.nodeType = found;
 				} else {

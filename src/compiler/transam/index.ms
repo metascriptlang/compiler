@@ -59,7 +59,7 @@ import { collectTopLevelLocal } from "../../checker/collectPass";
 import { resolveDeclarations } from "../../checker/resolvePass";
 import { SymbolFlag, hasFlag, openScope, ScopeKind } from "../../checker/symbol";
 import {
-	ImportDeclData, ExportDeclData, ProgramData,
+	ImportDeclData, ExportDeclData, ProgramData, EnumDeclData, makeLoc,
 } from "../../ast/node";
 import {
 	Module, ModuleGraph, createModule, createModuleGraph, addModule,
@@ -235,7 +235,7 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: str
 		const depPath = getFilePath(db.fileInput, depId);
 		if (depPath === "") continue;
 
-		// Skip if registered at current revision (Nim: rod file cache hit)
+		// Skip if registered at current revision (reference: incremental cache hit)
 		if (getRegisteredAt(db.moduleDeps, depId) >= db.revision.value) continue;
 
 		// Skip if already registered (but still recurse for transitive deps)
@@ -266,6 +266,8 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: str
 				definingModule: sym.modulePath !== "" ? sym.modulePath : depPath,
 				originalName: sym.originalName,
 				headerPath: sym.headerPath,
+				location: sym.location !== null ? sym.location : makeLoc(0, 0),
+				memberLocations: sym.declNode !== null && sym.declNode.kind === NodeKind.EnumDecl ? (sym.declNode.data as EnumDeclData).memberLocations : [],
 				};
 				earlyExports.push(info);
 			}
@@ -356,8 +358,17 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 		return ctxCacheGet(checkCtxKey(fileId));
 	}
 
-	// Ensure parse is up-to-date (records Parse as dependency)
-	const program = dbParse(db, filePath);
+	// Ensure parse cache is up-to-date (needed for dependency hash tracking)
+	const _cachedProgram = dbParse(db, filePath);
+	if (_cachedProgram === null) return null as unknown as CheckerContext;
+
+	// Always parse fresh for type checking — the checker mutates the AST
+	// (e.g., enum MemberExpr → Identifier rewrite in checkMemberExpr).
+	// Reusing the cached parse tree causes stale/missing sgRecords on recheck,
+	// leading to unstable goto-definition on enum members.
+	const freshSource = getFileText(db.fileInput, fileId);
+	const freshParse = parseSource(freshSource);
+	const program = freshParse.ok ? freshParse.value : null as unknown as Node;
 	if (program === null) return null as unknown as CheckerContext;
 
 	const startVersion = getCancelVersion(db.cancelCtx);
@@ -372,6 +383,17 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const parseEntry = cacheGet(db.cache, pKey);
 	const parseHash = parseEntry !== null ? parseEntry.outputHash : 0;
 	recordDependency(db.depStack, pKey, parseHash);
+
+	// Record cross-module deps: TypeCheck(A) depends on Parse(B) for each import B.
+	// Without this, tryMarkGreen would verify TypeCheck(A) as GREEN even when B changed,
+	// because Parse(A) is unchanged. Reference: module depends on imports' interface tables.
+	const importDepIds = getDirectImports(db.moduleDeps, fileId);
+	for (let di = 0; di < importDepIds.length; di = di + 1) {
+		const depParseKey = createQueryKey(TaQueryKind.Parse, importDepIds[di]);
+		const depParseEntry = cacheGet(db.cache, depParseKey);
+		const depParseHash = depParseEntry !== null ? depParseEntry.outputHash : 0;
+		recordDependency(db.depStack, depParseKey, depParseHash);
+	}
 
 	// Cross-module: build synthetic Module + ModuleGraph, use ExportRegistry
 	const imports = buildImportEntries(db, filePath, program);
@@ -407,9 +429,16 @@ export function dbAnalyze(db: TransAmDb, filePath: string): Node {
 	}
 
 	// Ensure upstream queries are computed
-	const program = dbParse(db, filePath);
-	if (program === null) return null as unknown as Node;
+	const _cachedProg = dbParse(db, filePath);
+	if (_cachedProg === null) return null as unknown as Node;
 	const checkerCtx = dbTypeCheck(db, filePath);
+
+	// Fresh parse for transform — checker already mutated its own copy
+	// (enum MemberExpr → Identifier), and transforms also mutate the AST.
+	const analyzeSrc = getFileText(db.fileInput, fileId);
+	const analyzeParse = parseSource(analyzeSrc);
+	const program = analyzeParse.ok ? analyzeParse.value : null as unknown as Node;
+	if (program === null) return null as unknown as Node;
 
 	pushFrame(db.depStack, key);
 	const ckKey = createQueryKey(TaQueryKind.TypeCheck, fileId);
@@ -434,9 +463,15 @@ export function dbTransform(db: TransAmDb, filePath: string): Node {
 		return nodeCacheGet(transformNodeKey(fileId));
 	}
 
-	const program = dbParse(db, filePath);
-	if (program === null) return null as unknown as Node;
+	const _cachedProg2 = dbParse(db, filePath);
+	if (_cachedProg2 === null) return null as unknown as Node;
 	const checkerCtx = dbTypeCheck(db, filePath);
+
+	// Fresh parse — checker mutates AST, transforms also mutate
+	const txSrc = getFileText(db.fileInput, fileId);
+	const txParse = parseSource(txSrc);
+	const program = txParse.ok ? txParse.value : null as unknown as Node;
+	if (program === null) return null as unknown as Node;
 
 	pushFrame(db.depStack, key);
 	const tckKey = createQueryKey(TaQueryKind.TypeCheck, fileId);

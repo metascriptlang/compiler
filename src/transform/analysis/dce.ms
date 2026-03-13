@@ -108,10 +108,11 @@ function collectIdentifiers(node: Node, refs: NameSet): void {
 // Everything else (statements, imports, exports, variables) has side effects.
 function isEliminable(node: Node): boolean {
 	return match (node.kind) {
-		NodeKind.FunctionDecl | NodeKind.ClassDecl | NodeKind.EnumDecl
+		NodeKind.FunctionDecl | NodeKind.EnumDecl
 			| NodeKind.TypeAliasDecl => true,
-		// InterfaceDecl excluded: destructorLifting needs them to generate lifecycle hooks.
-		// Interfaces with managed fields (string, array, etc.) require _destroy/_copy hooks.
+		// InterfaceDecl & ClassDecl excluded: destructorLifting needs them to generate
+		// lifecycle hooks (_destroy/_copy/_typeInfo). The reference runs destructor lifting during sem
+		// (before DCE), so type declarations are always available for hook generation.
 		_ => false,
 	};
 }
@@ -372,12 +373,12 @@ function dceInNode(node: Node, ctx: TransformContext): void {
 		NodeKind.Program => {
 			const d = node.data as ProgramData;
 			walkStmtList(d.programStmts, ctx);
-			d.programStmts = stripDead(d.programStmts, ctx);
+			node.data = { programStmts: stripDead(d.programStmts, ctx) };
 		},
 		NodeKind.BlockStmt => {
 			const d = node.data as BlockStmtData;
 			walkStmtList(d.statements, ctx);
-			d.statements = stripDead(d.statements, ctx);
+			node.data = { statements: stripDead(d.statements, ctx) };
 		},
 		NodeKind.FunctionDecl => {
 			const d = node.data as FunctionDeclData;
@@ -433,7 +434,7 @@ function dceInNode(node: Node, ctx: TransformContext): void {
 		NodeKind.SwitchCase => {
 			const d = node.data as SwitchCaseData;
 			walkStmtList(d.caseStmts, ctx);
-			d.caseStmts = stripDead(d.caseStmts, ctx);
+			node.data = { caseTests: d.caseTests, caseStmts: stripDead(d.caseStmts, ctx), isDefault: d.isDefault };
 		},
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;

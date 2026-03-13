@@ -8,8 +8,10 @@
 
 @include("io/native.h");
 
+extern function msStdinDisableBuffering(): void;
 extern function msReadLine(): string;
 extern function msReadBytes(n: number): string;
+extern function msStdinHasData(): number;
 extern function msWriteStdout(s: string): void;
 extern function msWriteStderr(s: string): void;
 
@@ -27,4 +29,12 @@ export function writeStdout(s: string): void {
 
 export function writeStderr(s: string): void {
 	msWriteStderr(s);
+}
+
+export function stdinDisableBuffering(): void {
+	msStdinDisableBuffering();
+}
+
+export function stdinHasData(): boolean {
+	return msStdinHasData() === 1;
 }

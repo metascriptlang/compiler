@@ -7,17 +7,21 @@
 // enabling MOVE instead of COPY. Handles branches, loops, returns.
 
 import {
-	Node, NodeKind, SourceLocation, ProgramData,
+	Node, NodeKind, SourceLocation, ProgramData, Symbol,
 	IdentifierData, BinaryExprData, UnaryExprData, CallExprData,
 	MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData,
 	ConditionalExprData, SpreadExprData, NewExprData,
 	UpdateExprData, TypeAssertionData, MoveExprData,
+	HiddenDerefData, HiddenStdConvData,
 	VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData,
 	WhileStmtData, BlockStmtData, TryCatchStmtData,
 	SwitchStmtData, SwitchCaseData,
 	ThrowStmtData, DoWhileStmtData, FunctionDeclData,
 	ExportDeclData, ForStmtData, ForOfStmtData,
 } from "../ast/node";
+import { AliasKind, aliases, getRootSym } from "./alias";
+import { SymbolKind, makeSymbol } from "../checker/symbol";
+import { unknownType } from "../checker/types";
 
 import { parseInput } from "../transform/testUtil";
 
@@ -36,6 +40,7 @@ export interface CfgInstr {
 	dest: number;      // relative offset for goto/fork/loop
 	line: number;      // source location for use/def (matching)
 	col: number;
+	n: Node;           // original AST node for alias-aware comparison (Phase B)
 }
 
 export interface Cfg {
@@ -51,32 +56,35 @@ interface LoopInfo {
 
 interface BuildCtx {
 	cfg: CfgInstr[];
-	vn: string;
+	vn: string;              // variable name for name-based matching (backwards compat)
+	rootSym: Symbol;         // root symbol for identity-based matching (field-level tracking)
 	loops: LoopInfo[];
 }
 
 // ===== Instruction Emitters =====
 
-function emitUse(ctx: BuildCtx, line: number, col: number): void {
-	const instr: CfgInstr = { kind: CfgInstrKind.CfgUse, dest: 0, line, col };
+const nullNode = null as unknown as Node;
+
+function emitUse(ctx: BuildCtx, line: number, col: number, node: Node): void {
+	const instr: CfgInstr = { kind: CfgInstrKind.CfgUse, dest: 0, line, col, n: node };
 	ctx.cfg.push(instr);
 }
 
-function emitDef(ctx: BuildCtx, line: number, col: number): void {
-	const instr: CfgInstr = { kind: CfgInstrKind.CfgDef, dest: 0, line, col };
+function emitDef(ctx: BuildCtx, line: number, col: number, node: Node): void {
+	const instr: CfgInstr = { kind: CfgInstrKind.CfgDef, dest: 0, line, col, n: node };
 	ctx.cfg.push(instr);
 }
 
 function emitGoto(ctx: BuildCtx): number {
 	const idx = ctx.cfg.length;
-	const instr: CfgInstr = { kind: CfgInstrKind.CfgGoto, dest: 0, line: 0, col: 0 };
+	const instr: CfgInstr = { kind: CfgInstrKind.CfgGoto, dest: 0, line: 0, col: 0, n: nullNode };
 	ctx.cfg.push(instr);
 	return idx;
 }
 
 function emitFork(ctx: BuildCtx): number {
 	const idx = ctx.cfg.length;
-	const instr: CfgInstr = { kind: CfgInstrKind.CfgFork, dest: 0, line: 0, col: 0 };
+	const instr: CfgInstr = { kind: CfgInstrKind.CfgFork, dest: 0, line: 0, col: 0, n: nullNode };
 	ctx.cfg.push(instr);
 	return idx;
 }
@@ -84,7 +92,7 @@ function emitFork(ctx: BuildCtx): number {
 function emitLoop(ctx: BuildCtx, targetIdx: number): void {
 	const idx = ctx.cfg.length;
 	const offset = targetIdx - idx;
-	const instr: CfgInstr = { kind: CfgInstrKind.CfgLoop, dest: offset, line: 0, col: 0 };
+	const instr: CfgInstr = { kind: CfgInstrKind.CfgLoop, dest: offset, line: 0, col: 0, n: nullNode };
 	ctx.cfg.push(instr);
 }
 
@@ -92,17 +100,42 @@ function patchDest(ctx: BuildCtx, instrIdx: number, targetIdx: number): void {
 	ctx.cfg[instrIdx].dest = targetIdx - instrIdx;
 }
 
+// ===== Root matching helper =====
+// Returns true if the node's root matches the tracked variable (by symbol or name).
+
+function matchesRoot(node: Node, ctx: BuildCtx): boolean {
+	if (ctx.rootSym !== null) {
+		const root = getRootSym(node);
+		return root !== null && root === ctx.rootSym;
+	}
+	// Name-based fallback (backwards compat for buildCfg)
+	const root = getRootSym(node);
+	if (root !== null) return root.name === ctx.vn;
+	// No resolvedSym — fall back to identifier name check
+	return false;
+}
+
+function matchesName(node: Node, ctx: BuildCtx): boolean {
+	if (node.kind !== NodeKind.Identifier) return false;
+	const d = node.data as IdentifierData;
+	if (ctx.rootSym !== null) {
+		return node.resolvedSym !== null && node.resolvedSym === ctx.rootSym;
+	}
+	return d.name === ctx.vn;
+}
+
 // ===== Expression Walker =====
-// Walks expressions looking for uses of varName.
+// Walks expressions looking for uses of the tracked variable.
+// When rootSym is set, emits full path nodes (x.f, x[i]) for alias-aware BFS.
+// When rootSym is null (name-based), behaves like the original name-only tracking.
 
 function walkExpr(node: Node, ctx: BuildCtx): void {
 	if (node === null) return;
 
 	match (node.kind) {
 		NodeKind.Identifier => {
-			const d = node.data as IdentifierData;
-			if (d.name === ctx.vn) {
-				emitUse(ctx, node.location.line, node.location.column);
+			if (matchesName(node, ctx)) {
+				emitUse(ctx, node.location.line, node.location.column, node);
 			}
 		},
 		// Don't enter inner functions
@@ -124,12 +157,25 @@ function walkExpr(node: Node, ctx: BuildCtx): void {
 			for (const arg of d.arguments) { walkExpr(arg, ctx); }
 		},
 		NodeKind.MemberExpr => {
-			walkExpr((node.data as MemberExprData).object, ctx);
+			// Field-level: if root matches, emit use for full path and don't descend
+			// (avoids double-counting bare x when we already recorded x.f)
+			if (ctx.rootSym !== null && matchesRoot(node, ctx)) {
+				emitUse(ctx, node.location.line, node.location.column, node);
+			} else {
+				walkExpr((node.data as MemberExprData).object, ctx);
+			}
 		},
 		NodeKind.ArrayAccess => {
 			const d = node.data as ArrayAccessData;
-			walkExpr(d.array, ctx);
-			walkExpr(d.index, ctx);
+			// Field-level: if root matches, emit use for full path
+			if (ctx.rootSym !== null && matchesRoot(node, ctx)) {
+				emitUse(ctx, node.location.line, node.location.column, node);
+				// Still walk index for sub-expression uses (e.g. x[x] edge case)
+				walkExpr(d.index, ctx);
+			} else {
+				walkExpr(d.array, ctx);
+				walkExpr(d.index, ctx);
+			}
 		},
 		NodeKind.ObjectLiteral => {
 			for (const p of (node.data as ObjectLiteralData).properties) { walkExpr(p, ctx); }
@@ -156,6 +202,17 @@ function walkExpr(node: Node, ctx: BuildCtx): void {
 		},
 		NodeKind.MoveExpr => {
 			walkExpr((node.data as MoveExprData).moveArg, ctx);
+		},
+		NodeKind.HiddenDeref | NodeKind.HiddenAddr => {
+			// Field-level: if root matches, emit use for full path (reference: genUse stores orig node)
+			if (ctx.rootSym !== null && matchesRoot(node, ctx)) {
+				emitUse(ctx, node.location.line, node.location.column, node);
+			} else {
+				walkExpr((node.data as HiddenDerefData).expr, ctx);
+			}
+		},
+		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => {
+			walkExpr((node.data as HiddenStdConvData).convExpr, ctx);
 		},
 		_ => {},
 	};
@@ -186,16 +243,27 @@ function walkStmt(node: Node, ctx: BuildCtx): void {
 				if (bd.operator === "=" || bd.operator === "+=" || bd.operator === "-=" || bd.operator === "*=" || bd.operator === "/=") {
 					// RHS first (uses before def)
 					walkExpr(bd.right, ctx);
-					// LHS: if direct assignment to varName, emit def
+					// LHS: check if it's a direct identifier or field path to our var
 					if (bd.left !== null && bd.left.kind === NodeKind.Identifier) {
-						const ld = bd.left.data as IdentifierData;
-						if (ld.name === ctx.vn) {
+						if (matchesName(bd.left, ctx)) {
 							if (bd.operator === "=") {
-								emitDef(ctx, bd.left.location.line, bd.left.location.column);
+								emitDef(ctx, bd.left.location.line, bd.left.location.column, bd.left);
 							} else {
 								// Compound: read + write
-								emitUse(ctx, bd.left.location.line, bd.left.location.column);
-								emitDef(ctx, bd.left.location.line, bd.left.location.column);
+								emitUse(ctx, bd.left.location.line, bd.left.location.column, bd.left);
+								emitDef(ctx, bd.left.location.line, bd.left.location.column, bd.left);
+							}
+							return;
+						}
+					} else if (bd.left !== null && ctx.rootSym !== null &&
+							(bd.left.kind === NodeKind.MemberExpr || bd.left.kind === NodeKind.ArrayAccess)) {
+						// Field-level: x.f = expr or x[i] = expr → def on the field path
+						if (matchesRoot(bd.left, ctx)) {
+							if (bd.operator === "=") {
+								emitDef(ctx, bd.left.location.line, bd.left.location.column, bd.left);
+							} else {
+								emitUse(ctx, bd.left.location.line, bd.left.location.column, bd.left);
+								emitDef(ctx, bd.left.location.line, bd.left.location.column, bd.left);
 							}
 							return;
 						}
@@ -211,8 +279,11 @@ function walkStmt(node: Node, ctx: BuildCtx): void {
 			const d = node.data as VariableDeclData;
 			// Initializer first (RHS uses before def)
 			walkExpr(d.initializer, ctx);
-			if (d.declName === ctx.vn) {
-				emitDef(ctx, node.location.line, node.location.column);
+			// Match by symbol on the decl node, or by name fallback
+			if (ctx.rootSym !== null && node.resolvedSym !== null && node.resolvedSym === ctx.rootSym) {
+				emitDef(ctx, node.location.line, node.location.column, node);
+			} else if (d.declName === ctx.vn) {
+				emitDef(ctx, node.location.line, node.location.column, node);
 			}
 		},
 		NodeKind.ReturnStmt => {
@@ -342,13 +413,7 @@ function walkStmt(node: Node, ctx: BuildCtx): void {
 
 // ===== Public API =====
 
-export function buildCfg(body: Node, vn: string): Cfg {
-	const ctx: BuildCtx = {
-		cfg: [],
-		vn,
-		loops: [],
-	};
-	walkStmt(body, ctx);
+function finalizeCfg(ctx: BuildCtx): Cfg {
 	// Patch sentinel gotos (99999) to actual end
 	const endIdx = ctx.cfg.length;
 	for (let i = 0; i < ctx.cfg.length; i += 1) {
@@ -360,6 +425,28 @@ export function buildCfg(body: Node, vn: string): Cfg {
 		}
 	}
 	return { instrs: ctx.cfg };
+}
+
+export function buildCfg(body: Node, vn: string): Cfg {
+	const ctx: BuildCtx = {
+		cfg: [],
+		vn,
+		rootSym: null as unknown as Symbol,
+		loops: [],
+	};
+	walkStmt(body, ctx);
+	return finalizeCfg(ctx);
+}
+
+export function buildCfgForSym(body: Node, rootSym: Symbol): Cfg {
+	const ctx: BuildCtx = {
+		cfg: [],
+		vn: rootSym !== null ? rootSym.name : "",
+		rootSym,
+		loops: [],
+	};
+	walkStmt(body, ctx);
+	return finalizeCfg(ctx);
 }
 
 // ===== Last-Read Query: BFS (reference isLastRead implementation) =====
@@ -375,7 +462,7 @@ export function isLastReadCfg(cfg: Cfg, line: number, col: number): boolean {
 		if (instr.kind === CfgInstrKind.CfgUse && instr.line === line && instr.col === col) break;
 		j = j + 1;
 	}
-	if (j >= len) return true;  // use not found in CFG — conservatively say last read
+	if (j >= len) return false;  // use not found in CFG — conservative: assume NOT last read (don't move)
 
 	// BFS from j+1: explore all forward paths
 	// If any path finds another use before a def → not last read
@@ -432,10 +519,85 @@ export function isLastReadCfg(cfg: Cfg, line: number, col: number): boolean {
 	return true;
 }
 
-// ===== Convenience Wrapper =====
+// ===== Alias-Aware Last-Read Query (Phase B) =====
+// Uses aliases() for field-level comparison instead of line:col matching.
+// Reference: isLastReadImpl with bidirectional alias checks.
 
-export function isLastReadViaCfg(cfg: Cfg, node: Node): boolean {
-	return isLastReadCfg(cfg, node.location.line, node.location.column);
+export function isLastReadCfgNode(cfg: Cfg, queryNode: Node): boolean {
+	if (queryNode === null) return false;
+	const instrs = cfg.instrs;
+	const len = instrs.length;
+
+	// Find the use instruction matching this exact node (by identity)
+	let j = 0;
+	while (j < len) {
+		const instr = instrs[j];
+		if (instr.kind === CfgInstrKind.CfgUse && instr.n === queryNode) break;
+		j = j + 1;
+	}
+	if (j >= len) return false;  // use not found — conservative
+
+	// BFS from j+1: explore all forward paths
+	const pcs: number[] = [];
+	pcs.push(j + 1);
+	const visited: number[] = [];
+	let vi = 0;
+	while (vi < len + 1) {
+		visited.push(0);
+		vi = vi + 1;
+	}
+
+	while (pcs.length > 0) {
+		let pc = pcs.pop();
+
+		while (pc >= 0 && pc < len) {
+			if (visited[pc] === 1) break;
+			visited[pc] = 1;
+
+			const instr = instrs[pc];
+
+			if (instr.kind === CfgInstrKind.CfgLoop) {
+				const target = pc + instr.dest;
+				if (target >= 0 && target < len && visited[target] === 0) {
+					pc = target;
+				} else {
+					break;
+				}
+			} else if (instr.kind === CfgInstrKind.CfgGoto) {
+				pc = pc + instr.dest;
+			} else if (instr.kind === CfgInstrKind.CfgFork) {
+				const fallthrough = pc + 1;
+				if (fallthrough < len && visited[fallthrough] === 0) {
+					pcs.push(fallthrough);
+				}
+				pc = pc + instr.dest;
+			} else if (instr.kind === CfgInstrKind.CfgUse) {
+				// Bidirectional alias check: does this other use alias our query?
+				if (instr.n !== null) {
+					if (aliases(instr.n, queryNode) !== AliasKind.No || aliases(queryNode, instr.n) !== AliasKind.No) {
+						return false;  // another aliasing use reachable
+					}
+				}
+				// Non-aliasing use (different field) → safe, continue
+				pc = pc + 1;
+			} else if (instr.kind === CfgInstrKind.CfgDef) {
+				// Check if this def fully overwrites our query location
+				if (instr.n !== null) {
+					if (aliases(instr.n, queryNode) === AliasKind.Yes) {
+						break;  // full overwrite → path safe
+					} else if (aliases(queryNode, instr.n) !== AliasKind.No) {
+						return false;  // partial write reads from variable → not safe
+					}
+				}
+				// Def on unrelated path → continue
+				pc = pc + 1;
+			} else {
+				pc = pc + 1;
+			}
+		}
+	}
+
+	return true;
 }
 
 // ===== CFG Cache =====
@@ -446,11 +608,12 @@ export interface CfgCacheEntry {
 }
 
 export interface CfgCache {
-	entries: CfgCacheEntry[];
+	entries: CfgCacheEntry[];      // name-based CFGs (buildCfg)
+	symEntries: CfgCacheEntry[];   // symbol-based CFGs (buildCfgForSym) — separate to avoid collision
 }
 
 export function createCfgCache(): CfgCache {
-	return { entries: [] };
+	return { entries: [], symEntries: [] };
 }
 
 export function getCachedCfg(cache: CfgCache, vn: string): Cfg {
@@ -469,6 +632,9 @@ export function clearCfgCache(cache: CfgCache): void {
 	while (cache.entries.length > 0) {
 		cache.entries.pop();
 	}
+	while (cache.symEntries.length > 0) {
+		cache.symEntries.pop();
+	}
 }
 
 // ===== Cached Last-Read Query (Phase C) =====
@@ -482,6 +648,28 @@ export function isLastReadCfgCached(varName: string, node: Node, funcBody: Node,
 		cacheCfg(cache, varName, cfg);
 	}
 	return isLastReadCfg(cfg, node.location.line, node.location.column);
+}
+
+// ===== Alias-Aware Cached Last-Read Query (Phase B) =====
+// Builds CFG once per root symbol per function, caches for reuse.
+// Uses isLastReadCfgNode for field-level alias comparison.
+
+function getCachedCfgBySym(cache: CfgCache, rootSym: Symbol): Cfg {
+	for (const entry of cache.symEntries) {
+		if (entry.varName === rootSym.name) return entry.cfg;
+	}
+	return null as unknown as Cfg;
+}
+
+export function isLastReadCfgNodeCached(rootSym: Symbol, queryNode: Node, funcBody: Node, cache: CfgCache): boolean {
+	if (rootSym === null || queryNode === null || funcBody === null) return false;
+	let cfg = getCachedCfgBySym(cache, rootSym);
+	if (cfg === null) {
+		cfg = buildCfgForSym(funcBody, rootSym);
+		const entry: CfgCacheEntry = { varName: rootSym.name, cfg };
+		cache.symEntries.push(entry);
+	}
+	return isLastReadCfgNode(cfg, queryNode);
 }
 
 // ===== Test Helpers =====
@@ -632,4 +820,129 @@ test "loop use is not last read" {
 	const cfg = buildCfg(body, "x");
 	const use = findFirstUse(cfg);
 	assert !isLastReadCfg(cfg, use.line, use.col);
+}
+
+// ===== Field-Level Tests (Phase B: alias-aware BFS) =====
+
+function makeTestSym(name: string): Symbol {
+	return makeSymbol(name, SymbolKind.Variable, unknownType(), false);
+}
+
+function attachSymAll(node: Node, name: string, sym: Symbol): void {
+	if (node === null) return;
+	if (node.kind === NodeKind.Identifier) {
+		if ((node.data as IdentifierData).name === name) node.resolvedSym = sym;
+		return;
+	}
+	if (node.kind === NodeKind.MemberExpr) {
+		attachSymAll((node.data as MemberExprData).object, name, sym);
+		return;
+	}
+	if (node.kind === NodeKind.ArrayAccess) {
+		const d = node.data as ArrayAccessData;
+		attachSymAll(d.array, name, sym);
+		attachSymAll(d.index, name, sym);
+		return;
+	}
+	if (node.kind === NodeKind.CallExpr) {
+		const d = node.data as CallExprData;
+		for (const a of d.arguments) { attachSymAll(a, name, sym); }
+		return;
+	}
+	if (node.kind === NodeKind.BinaryExpr) {
+		const d = node.data as BinaryExprData;
+		attachSymAll(d.left, name, sym);
+		attachSymAll(d.right, name, sym);
+		return;
+	}
+}
+
+function attachSymToStmts(body: Node, name: string, sym: Symbol): void {
+	if (body === null) return;
+	if (body.kind === NodeKind.Program) {
+		const d = body.data as ProgramData;
+		for (const s of d.programStmts) { attachSymToStmts(s, name, sym); }
+		return;
+	}
+	if (body.kind === NodeKind.BlockStmt) {
+		const d = body.data as BlockStmtData;
+		for (const s of d.statements) { attachSymToStmts(s, name, sym); }
+		return;
+	}
+	if (body.kind === NodeKind.ExprStmt) {
+		attachSymAll((body.data as ExprStmtData).expr, name, sym);
+		return;
+	}
+	if (body.kind === NodeKind.VariableDecl) {
+		const d = body.data as VariableDeclData;
+		if (d.declName === name) body.resolvedSym = sym;
+		attachSymAll(d.initializer, name, sym);
+		return;
+	}
+	if (body.kind === NodeKind.ReturnStmt) {
+		attachSymAll((body.data as ReturnStmtData).argument, name, sym);
+		return;
+	}
+	if (body.kind === NodeKind.IfStmt) {
+		const d = body.data as IfStmtData;
+		attachSymAll(d.condition, name, sym);
+		attachSymToStmts(d.consequent, name, sym);
+		attachSymToStmts(d.alternate, name, sym);
+		return;
+	}
+	if (body.kind === NodeKind.WhileStmt) {
+		const d = body.data as WhileStmtData;
+		attachSymAll(d.whileCondition, name, sym);
+		attachSymToStmts(d.whileBody, name, sym);
+		return;
+	}
+}
+
+test "field-level: x.b last-read when only x.a used later" {
+	const ts = "foo(x.b); bar(x.a);";
+	const body = getBody(ts);
+	if (body === null) { assert false; return; }
+	const symX = makeTestSym("x");
+	attachSymToStmts(body, "x", symX);
+	const cfg = buildCfgForSym(body, symX);
+	// Find the x.b use node (first arg of first call)
+	const d = (body.data as ProgramData).programStmts;
+	const firstArg = ((d[0].data as ExprStmtData).expr.data as CallExprData).arguments[0];
+	assert isLastReadCfgNode(cfg, firstArg);  // x.b IS last-read (x.a is different field)
+}
+
+test "field-level: x.a not last-read when x.a used again" {
+	const ts = "foo(x.a); bar(x.a);";
+	const body = getBody(ts);
+	if (body === null) { assert false; return; }
+	const symX = makeTestSym("x");
+	attachSymToStmts(body, "x", symX);
+	const cfg = buildCfgForSym(body, symX);
+	const d = (body.data as ProgramData).programStmts;
+	const firstArg = ((d[0].data as ExprStmtData).expr.data as CallExprData).arguments[0];
+	assert !isLastReadCfgNode(cfg, firstArg);  // x.a NOT last-read (used again)
+}
+
+test "field-level: x.a not last-read when whole x used later" {
+	const ts = "foo(x.a); bar(x);";
+	const body = getBody(ts);
+	if (body === null) { assert false; return; }
+	const symX = makeTestSym("x");
+	attachSymToStmts(body, "x", symX);
+	const cfg = buildCfgForSym(body, symX);
+	const d = (body.data as ProgramData).programStmts;
+	const firstArg = ((d[0].data as ExprStmtData).expr.data as CallExprData).arguments[0];
+	assert !isLastReadCfgNode(cfg, firstArg);  // x.a NOT last-read (x contains x.a)
+}
+
+test "field-level: x.f last-read when x.g assigned later" {
+	const ts = "foo(x.f); x.g = 1;";
+	const body = getBody(ts);
+	if (body === null) { assert false; return; }
+	const symX = makeTestSym("x");
+	attachSymToStmts(body, "x", symX);
+	const cfg = buildCfgForSym(body, symX);
+	const d = (body.data as ProgramData).programStmts;
+	const firstArg = ((d[0].data as ExprStmtData).expr.data as CallExprData).arguments[0];
+	assert isLastReadCfgNode(cfg, firstArg);  // x.f IS last-read (x.g def doesn't alias x.f)
 }

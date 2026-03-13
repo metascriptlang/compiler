@@ -15,7 +15,6 @@ import {
 	ObjectLiteralData,
 	ExprStmtData, MacroInvocationData,
 } from "../../ast/node";
-import { sliceStr } from "../../utils/string";
 import { Type, TypeKind } from "../../checker/types";
 import {
 	CGen, CProc, CSection, Builder,
@@ -150,7 +149,7 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 		if (i > 0) paramList = paramList + ", ";
 		let pType = (i < fnType.typeChildren.length) ? getTypeDesc(g, fnType.typeChildren[i]) : "void*";
 		// Implementation parity: pointer parameter introduction — interface/union params → pointer (must match proto header)
-		if (i < fnType.typeChildren.length && ccgIntroducedPtr(fnType.typeChildren[i]) && pType.charAt(pType.length - 1) !== "*") {
+		if (i < fnType.typeChildren.length && ccgIntroducedPtr(fnType.typeChildren[i]) && pType.charAt(pType.byteLength - 1) !== "*") {
 			pType = pType + "*";
 		}
 		paramList = paramList + `${pType} ${safeName(d.params[i])}`;
@@ -422,14 +421,14 @@ function genTopLevelEmit(g: CGen, mi: MacroInvocationData): void {
 	let pos = 0;
 	while (pos < code.length) {
 		if (code.charAt(pos) === "\n") {
-			const line = sliceStr(code, start, pos);
+			const line = code.slice(start, pos);
 			if (line.length > 0) emitToSection(g, line);
 			start = pos + 1;
 		}
 		pos = pos + 1;
 	}
 	if (start < code.length) {
-		const line = sliceStr(code, start, code.length);
+		const line = code.slice(start, code.length);
 		if (line.length > 0) emitToSection(g, line);
 	}
 }
@@ -487,7 +486,7 @@ function genGlobalVar(g: CGen, node: Node): void {
 
 	// Detect _typeInfo vars from destructorLifting (ORC runtime RTTI)
 	const nameLen = d.declName.length;
-	if (nameLen > 9 && sliceStr(d.declName, nameLen - 9, nameLen) === "_typeInfo") {
+	if (nameLen > 9 && d.declName.slice(nameLen - 9, nameLen) === "_typeInfo") {
 		genTypeInfoVar(g, d, varName);
 		return;
 	}
@@ -522,7 +521,9 @@ function genGlobalVar(g: CGen, node: Node): void {
 
 function genTypeInfoVar(g: CGen, d: VariableDeclData, varName: string): void {
 	// Extract base type name: strip "_typeInfo" suffix (9 chars)
-	const baseName = sliceStr(d.declName, 0, d.declName.length - 9);
+	const baseName = d.declName.slice(0, d.declName.length - 9);
+	// Mark as defined so ensureTypeInfoDef doesn't duplicate
+	typeCacheSet(g.forwTypeCache, "typeInfoDef:" + baseName, baseName);
 
 	// Emit declaration (non-static: other modules reference via extern for cross-module new)
 	addLine(sec(g, CSection.GlobalVars), "msTypeInfo " + varName + ";");

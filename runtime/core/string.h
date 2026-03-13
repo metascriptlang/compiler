@@ -157,14 +157,23 @@ int64_t msStringCount(msString s, msString sub);
 /* Single character as new string */
 msString msStringCharAt(msString s, int64_t idx);
 
-/* Character code at index. Returns -1 if out of range. */
+/* Character code at index (UTF-16 code unit, TypeScript parity). Returns -1 if out of range. */
 int64_t msStringCharCodeAt(msString s, int64_t idx);
+
+/* Raw byte at byte offset. Returns -1 if out of range. */
+int64_t msStringByteAt(msString s, int64_t idx);
+
+/* Single byte as new string (byte-level, for lexer/scanner). */
+msString msStringByteCharAt(msString s, int64_t idx);
 
 /* Create a string from a Unicode codepoint (UTF-8 encoded). */
 msString msStringFromCodePoint(int64_t cp);
 
-/* Substring [start, end). Clamps to bounds. */
+/* Substring [start, end) by character position. TypeScript parity. */
 msString msStringSlice(msString s, int64_t start, int64_t end);
+
+/* Substring [start, end) by byte offset. For lexer/binary protocols. */
+msString msStringByteSlice(msString s, int64_t start, int64_t end);
 
 /* Alias for slice */
 msString msStringSubstring(msString s, int64_t start, int64_t end);

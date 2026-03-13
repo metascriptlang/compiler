@@ -2,8 +2,8 @@ import { Type, TypeKind, unknownType, hasGenericParams, unifyType, createUnifyBi
 import { isAssignable } from "./compat";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, createSymbolTable } from "./symbol";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
-import { Node } from "../ast/node";
-import { sliceStr, findChar, trimStr, splitTopLevel } from "../utils/string";
+import { Node, SourceLocation, makeLoc } from "../ast/node";
+import { findChar, splitTopLevel } from "../utils/string";
 import { InitTracker, createInitTracker } from "./initTracker";
 
 
@@ -30,6 +30,8 @@ export interface ExportedSymInfo {
 	definingModule: string;  // Original defining module path (preserved through re-exports)
 	originalName: string;    // Original declared name (used for C mangling, not import alias)
 	headerPath: string;      // @include header path for this extern symbol
+	location: SourceLocation; // Original declaration location (line/col in defining module)
+	memberLocations: SourceLocation[]; // Per-enum-member declaration locations (parallel to symType.typeNames)
 }
 
 export interface ModuleExports {
@@ -95,7 +97,7 @@ export class ExtensionMethod {
 	scopeDepth: number;  // 0 = imported/prelude, 1 = current module (for overload resolution)
 }
 
-export interface ExtensionRegistry {
+export class ExtensionRegistry {
 	methods: ExtensionMethod[];
 }
 
@@ -260,8 +262,8 @@ function findFlagSegment(flags: string, prefix: string): string {
 	if (flags === "") return "";
 	const parts = splitTopLevel(flags, "|");
 	for (let i = 0; i < parts.length; i += 1) {
-		const p = trimStr(parts[i]);
-		if (p.length >= prefix.length && sliceStr(p, 0, prefix.length) === prefix) return p;
+		const p = parts[i].trim();
+		if (p.length >= prefix.length && p.slice(0, prefix.length) === prefix) return p;
 	}
 	return "";
 }
@@ -277,25 +279,25 @@ export function isStaticExtensionFlag(flags: string): boolean {
 export function getExtReceiverName(flags: string): string {
 	const seg = findFlagSegment(flags, "ext:");
 	if (seg === "") return "";
-	const rest = sliceStr(seg, 4, seg.length);
+	const rest = seg.slice(4, seg.length);
 	const colonPos = findChar(rest, ":");
 	if (colonPos <= 0) return "";
-	return sliceStr(rest, 0, colonPos);
+	return rest.slice(0, colonPos);
 }
 
 export function getExtReceiverType(flags: string): string {
 	const seg = findFlagSegment(flags, "ext:");
 	if (seg === "") return "";
-	const rest = sliceStr(seg, 4, seg.length);
+	const rest = seg.slice(4, seg.length);
 	const colonPos = findChar(rest, ":");
 	if (colonPos <= 0) return "";
-	return sliceStr(rest, colonPos + 1, rest.length);
+	return rest.slice(colonPos + 1, rest.length);
 }
 
 export function getStaticExtTypeName(flags: string): string {
 	const seg = findFlagSegment(flags, "sext:");
 	if (seg === "") return "";
-	return sliceStr(seg, 5, seg.length);
+	return seg.slice(5, seg.length);
 }
 
 // Unified: returns receiver type name for either instance or static extensions, "" if not an extension.
@@ -313,14 +315,14 @@ export function extractGenericNames(flags: string): string[] {
 	if (flags === "") return result;
 	const parts = splitTopLevel(flags, "|");
 	for (let pi = 0; pi < parts.length; pi += 1) {
-		const trimPart = trimStr(parts[pi]);
+		const trimPart = parts[pi].trim();
 		if (trimPart.length > 4) {
-			const prefix = sliceStr(trimPart, 0, 4);
+			const prefix = trimPart.slice(0, 4);
 			if (prefix === "gen:") {
-				const nameStr = sliceStr(trimPart, 4, trimPart.length);
+				const nameStr = trimPart.slice(4, trimPart.length);
 				const names = splitTopLevel(nameStr, ",");
 				for (let ni = 0; ni < names.length; ni += 1) {
-					const trimName = trimStr(names[ni]);
+					const trimName = names[ni].trim();
 					if (trimName !== "") result.push(trimName);
 				}
 			}
@@ -334,9 +336,9 @@ export function stripGenFlag(flags: string): string {
 	const parts = splitTopLevel(flags, "|");
 	const kept: string[] = [];
 	for (let i = 0; i < parts.length; i += 1) {
-		const trimPart = trimStr(parts[i]);
+		const trimPart = parts[i].trim();
 		if (trimPart.length > 4) {
-			const prefix = sliceStr(trimPart, 0, 4);
+			const prefix = trimPart.slice(0, 4);
 			if (prefix !== "gen:") kept.push(trimPart);
 		} else {
 			if (trimPart !== "") kept.push(trimPart);
@@ -454,12 +456,13 @@ export enum Severity {
 export interface CheckerError {
 	message: string;
 	line: number;    // 1-based, 0 = unknown
-	column: number;  // 0-based, 0 = unknown
+	column: number;  // 1-based (parser convention), 0 = unknown
+	endColumn: number; // 1-based, 0 = use column+1 (single char)
 	fatal: boolean;  // true = globalError (abort), false = localError (continue)
 	severity: Severity;
 }
 
-export interface CheckerContext {
+export class CheckerContext {
 	table: SymbolTable;
 	errors: CheckerError[];
 	currentFunction: Symbol;   // innermost function (for return type validation)
@@ -528,17 +531,22 @@ export function createModuleContext(graph: ModuleGraph, mod: Module): CheckerCon
 
 // localError — non-fatal, compilation continues
 export function addError(ctx: CheckerContext, msg: string, line: number, col: number): void {
-	ctx.errors.push({ message: msg, line, column: col, fatal: false, severity: Severity.Error });
+	ctx.errors.push({ message: msg, line, column: col, endColumn: 0, fatal: false, severity: Severity.Error });
+}
+
+// error with explicit end column — underlines a range (e.g., full identifier)
+export function addErrorRange(ctx: CheckerContext, msg: string, line: number, col: number, endCol: number): void {
+	ctx.errors.push({ message: msg, line, column: col, endColumn: endCol, fatal: false, severity: Severity.Error });
 }
 
 // warning — non-fatal, compilation continues, shown as warning in LSP
 export function addWarning(ctx: CheckerContext, msg: string, line: number, col: number): void {
-	ctx.errors.push({ message: msg, line, column: col, fatal: false, severity: Severity.Warning });
+	ctx.errors.push({ message: msg, line, column: col, endColumn: 0, fatal: false, severity: Severity.Warning });
 }
 
 // globalError — fatal, compilation should abort
 export function addFatalError(ctx: CheckerContext, msg: string, line: number, col: number): void {
-	ctx.errors.push({ message: msg, line, column: col, fatal: true, severity: Severity.Error });
+	ctx.errors.push({ message: msg, line, column: col, endColumn: 0, fatal: true, severity: Severity.Error });
 }
 
 export function hasErrors(ctx: CheckerContext): boolean {
@@ -713,7 +721,7 @@ test "create empty registry" {
 test "register and find exports" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [] };
+	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [], location: makeLoc(0, 0), memberLocations: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "foo");
@@ -731,7 +739,7 @@ test "missing module returns null" {
 test "missing symbol returns null" {
 	const r = createExportRegistry();
 	const syms: ExportedSymInfo[] = [];
-	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [] };
+	const info: ExportedSymInfo = { name: "foo", kind: SymbolKind.Function, symType: unknownType(), overloadTypes: [], extReceiverType: "", extIsStatic: false, overloadExtReceiverTypes: [], overloadExtIsStatic: [], nativeName: "", builtinKind: "", overloadNativeNames: [], overloadBuiltinKinds: [], defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [], location: makeLoc(0, 0), memberLocations: [] };
 	syms.push(info);
 	registerModuleExports(r, "/src/b.ms", syms);
 	const found = findExportedSymbol(r, "/src/b.ms", "bar");

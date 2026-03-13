@@ -10,30 +10,34 @@
 
 /* ===== Type-Erased Core ===== */
 
+/* Reference parity: payloads are uniquely owned — no refcount field.
+   DRC handles ownership (move vs deep copy) at compile time. */
+
 void* msArrayPayloadNew(int64_t cap, int64_t elemSize) {
 	if (cap <= 0) return NULL;
-	int64_t headerSize = sizeof(int64_t); /* cap field */
+	int64_t headerSize = sizeof(msArrayPayloadBase);
 	int64_t totalSize = headerSize + cap * elemSize;
 	msArrayPayloadBase* p = (msArrayPayloadBase*)calloc(1, totalSize);
-	if (p) p->cap = cap;
+	if (p) { p->cap = cap; }
 	return p;
 }
 
 void* msArrayPayloadNewUninit(int64_t cap, int64_t elemSize) {
 	if (cap <= 0) return NULL;
-	int64_t headerSize = sizeof(int64_t);
+	int64_t headerSize = sizeof(msArrayPayloadBase);
 	int64_t totalSize = headerSize + cap * elemSize;
 	msArrayPayloadBase* p = (msArrayPayloadBase*)malloc(totalSize);
-	if (p) p->cap = cap;
+	if (p) { p->cap = cap; }
 	return p;
 }
 
 void* msArrayPrepareAdd(int64_t len, void* p, int64_t addLen, int64_t elemSize) {
-	int64_t headerSize = sizeof(int64_t);
+	int64_t headerSize = sizeof(msArrayPayloadBase);
 	if (addLen <= 0) return p;
 	if (p == NULL) {
 		return msArrayPayloadNew(len + addLen, elemSize);
 	}
+	/* Payload is uniquely owned — safe to realloc in place */
 	msArrayPayloadBase* base = (msArrayPayloadBase*)p;
 	int64_t oldCap = base->cap;
 	int64_t needed = len + addLen;
@@ -46,7 +50,6 @@ void* msArrayPrepareAdd(int64_t len, void* p, int64_t addLen, int64_t elemSize) 
 	int64_t newSize = headerSize + newCap * elemSize;
 	msArrayPayloadBase* q = (msArrayPayloadBase*)realloc(p, newSize);
 	if (q) {
-		/* Zero new memory */
 		if (newSize > oldSize) {
 			memset((char*)q + oldSize, 0, newSize - oldSize);
 		}
@@ -208,16 +211,16 @@ msString msNumberArrayJoin(msNumberArray* arr, msString sep) {
 /* ===== Type-Erased Core: Uninit + SamePayload ===== */
 
 void* msArrayPrepareAddUninit(int64_t len, void* p, int64_t addLen, int64_t elemSize) {
-	int64_t headerSize = sizeof(int64_t);
+	int64_t headerSize = sizeof(msArrayPayloadBase);
 	if (addLen <= 0) return p;
 	if (p == NULL) {
-		/* Use malloc instead of calloc — no zeroing */
 		int64_t cap = len + addLen;
 		int64_t totalSize = headerSize + cap * elemSize;
 		msArrayPayloadBase* q = (msArrayPayloadBase*)malloc(totalSize);
 		if (q) q->cap = cap;
 		return q;
 	}
+	/* Payload is uniquely owned — safe to realloc in place */
 	msArrayPayloadBase* base = (msArrayPayloadBase*)p;
 	int64_t oldCap = base->cap;
 	int64_t needed = len + addLen;
@@ -229,7 +232,6 @@ void* msArrayPrepareAddUninit(int64_t len, void* p, int64_t addLen, int64_t elem
 	int64_t newSize = headerSize + newCap * elemSize;
 	msArrayPayloadBase* q = (msArrayPayloadBase*)realloc(p, newSize);
 	if (q) q->cap = newCap;
-	/* No zeroing — caller is responsible */
 	return q;
 }
 

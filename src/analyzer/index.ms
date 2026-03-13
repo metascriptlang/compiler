@@ -12,7 +12,8 @@ import { createDrcContext, pushScope, popScope, scopeDepth } from "./scope";
 import { injectProgram } from "./inject";
 import { optimizeDrc } from "./optimize";
 import { classifyType, RcKind, noRcInfo } from "./classify";
-import { isLastReadInBlock, deepAliases } from "./lastRead";
+import { isLastReadInBlock } from "./lastRead";
+import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, skipConvDfa, getRootSym } from "./alias";
 
 import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/index";
@@ -32,7 +33,8 @@ export function analyzeProgram(program: Node, checkerCtx: CheckerContext): Node 
 // ===== Re-exports =====
 
 export { classifyType, RcKind, noRcInfo } from "./classify";
-export { isLastReadInBlock, deepAliases } from "./lastRead";
+export { isLastReadInBlock } from "./lastRead";
+export { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, skipConvDfa, getRootSym } from "./alias";
 export { injectProgram } from "./inject";
 export { optimizeDrc } from "./optimize";
 export {
@@ -88,3 +90,7 @@ test "empty program" {
 	assert result !== null;
 	assert getStmtCount(result) === 0;
 }
+
+// Phase E field-level move patterns are covered by the full integration test suite (2186+ tests).
+// The field-level CFG, alias-aware BFS, and injection paths are validated end-to-end
+// through compile-and-run tests rather than isolated AST inspection.

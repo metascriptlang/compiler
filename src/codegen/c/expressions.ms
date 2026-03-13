@@ -26,9 +26,9 @@ import {
 	emitProcLocalsLine,
 } from "./context";
 import { mangle, mangleFieldName, mangledFunctionName, safeName } from "./names";
-import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, intToString, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, ccgIntroducedPtr, ensureTypeInfo, ensureForwardDecl } from "./types";
+import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl } from "./types";
 import { formatCNumber, cBoolLiteral, cNullLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
-import { charAt, sliceStr, findChar } from "../../utils/string";
+import { findChar } from "../../utils/string";
 import { ensureDrcProto, ensureCrossModuleProto, useHeader } from "./forward";
 
 // ===== Reference: argument passing for introduced pointers =====
@@ -63,7 +63,7 @@ export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Type, arg
 		if (!paramIsPtr && !argIsPtr && paramCcgPtr) {
 			return genArgCcgPtr(g, arg, argNode, p, paramType);
 		}
-	} else if (paramType !== null && argNode.nodeType === null && arg.length > 0 && arg.charCodeAt(0) === "{".code) {
+	} else if (paramType !== null && argNode.nodeType === null && arg.byteLength > 0 && arg.byteAt(0) === "{".code) {
 		return safeAddrOf(g, p, arg, argNode, paramType);
 	}
 	return arg;
@@ -84,7 +84,7 @@ export function genArgCcgPtr(g: CGen, arg: string, argNode: Node, p: CProc, para
 // Reference-aligned address-of: always operates on named locations.
 // paramType: optional parameter type from call site for resolving untyped literals.
 export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, paramType: Type): string {
-	if (snippet.length > 0 && snippet.charCodeAt(0) === "{".code) {
+	if (snippet.byteLength > 0 && snippet.byteAt(0) === "{".code) {
 		// Bare compound literal — must hoist to temp (Reference: generate temporary + field assignment)
 		let cType = "";
 		// Try 1: exprNode.nodeType
@@ -106,10 +106,10 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, p
 						// Wrap in full union type so &temp is NodeData*, not variant*
 						p.labels += 1;
 						const tmpName = `_clit${p.labels}_`;
-						const varTypeName = `${unionName}_v${intToString(varIdx)}`;
+						const varTypeName = `${unionName}_v${varIdx}`;
 						emitProcLocalsLine(p, `${unionName} ${tmpName};`);
-						emitStmtsLine(p, `${tmpName}._tag = ${intToString(varIdx)};`);
-						emitStmtsLine(p, `${tmpName}.v${intToString(varIdx)} = (${varTypeName})${snippet};`);
+						emitStmtsLine(p, `${tmpName}._tag = ${varIdx};`);
+						emitStmtsLine(p, `${tmpName}.v${varIdx} = (${varTypeName})${snippet};`);
 						return "&" + tmpName;
 					}
 				}
@@ -143,9 +143,9 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, p
 						p.labels += 1;
 						const tmpName = `_clit${p.labels}_`;
 						emitProcLocalsLine(p, `${unionName} ${tmpName};`);
-						emitStmtsLine(p, `${tmpName}._tag = ${intToString(varIdx)};`);
-						const varTypeName = `${unionName}_v${intToString(varIdx)}`;
-						emitStmtsLine(p, `${tmpName}.v${intToString(varIdx)} = (${varTypeName})${snippet};`);
+						emitStmtsLine(p, `${tmpName}._tag = ${varIdx};`);
+						const varTypeName = `${unionName}_v${varIdx}`;
+						emitStmtsLine(p, `${tmpName}.v${varIdx} = (${varTypeName})${snippet};`);
 						return "&" + tmpName;
 					}
 				}
@@ -182,10 +182,10 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, p
 			if (varIdx >= 0) {
 				p.labels += 1;
 				const tmpName = `_clit${p.labels}_`;
-				const varTypeName = `${unionName}_v${intToString(varIdx)}`;
+				const varTypeName = `${unionName}_v${varIdx}`;
 				emitProcLocalsLine(p, `${unionName} ${tmpName};`);
-				emitStmtsLine(p, `${tmpName}._tag = ${intToString(varIdx)};`);
-				emitStmtsLine(p, `${tmpName}.v${intToString(varIdx)} = (${varTypeName})${snippet};`);
+				emitStmtsLine(p, `${tmpName}._tag = ${varIdx};`);
+				emitStmtsLine(p, `${tmpName}.v${varIdx} = (${varTypeName})${snippet};`);
 				return "&" + tmpName;
 			}
 		}
@@ -207,35 +207,42 @@ interface ExprStackItem {
 	tag: number;         // sub-case dispatch (0 = default)
 }
 
+// Evaluation context for iterative genExpr — class ensures reference semantics
+// so helper functions share the same arrays instead of getting value copies.
+class ExprEvalCtx {
+	workStack: ExprStackItem[];
+	results: string[];
+}
+
 const TAG_DEFAULT = 0;
 const TAG_CALL_OVERLOAD = 2;
 const TAG_CALL_DIRECT = 3;
 const TAG_CALL_CLOSURE = 4;  // Reference parity: closure calls — separate path, no forward declarations
 
 // Read i-th child from top N results on the stack.
-function peekResult(results: string[], childCount: number, idx: number): string {
-	return results[results.length - childCount + idx];
+function peekResult(ctx: ExprEvalCtx, childCount: number, idx: number): string {
+	return ctx.results[ctx.results.length - childCount + idx];
 }
 
 // Remove top N results from the stack.
-function truncResults(results: string[], count: number): void {
+function truncResults(ctx: ExprEvalCtx, count: number): void {
 	let i = 0;
 	while (i < count) {
-		results.pop();
+		ctx.results.pop();
 		i += 1;
 	}
 }
 
 // Comma-join top N results from the stack, then remove them.
-function joinChildResults(results: string[], count: number): string {
+function joinChildResults(ctx: ExprEvalCtx, count: number): string {
 	let s = "";
 	let i = 0;
 	while (i < count) {
 		if (i > 0) s = s + ", ";
-		s = s + results[results.length - count + i];
+		s = s + ctx.results[ctx.results.length - count + i];
 		i += 1;
 	}
-	truncResults(results, count);
+	truncResults(ctx, count);
 	return s;
 }
 
@@ -252,27 +259,26 @@ function joinArgs(g: CGen, p: CProc, args: Node[]): string {
 
 export function genExpr(g: CGen, p: CProc, node: Node): string {
 	if (node === null) return "MS_NIL";
-	const workStack: ExprStackItem[] = [];
-	const results: string[] = [];
-	workStack.push({ node, phase: 0, childCount: 0, tag: 0 });
-	while (workStack.length > 0) {
-		const item = workStack[workStack.length - 1];
-		workStack.pop();
+	const ctx: ExprEvalCtx = { workStack: [], results: [] };
+	ctx.workStack.push({ node, phase: 0, childCount: 0, tag: 0 });
+	while (ctx.workStack.length > 0) {
+		const item = ctx.workStack[ctx.workStack.length - 1];
+		ctx.workStack.pop();
 		if (item.phase === 0) {
-			discoverExpr(g, p, item.node, workStack, results);
+			discoverExpr(g, p, item.node, ctx);
 		} else {
-			emitExpr(g, p, item, results);
+			emitExpr(g, p, item, ctx);
 		}
 	}
-	if (results.length === 0) return "MS_NIL";
-	return results[results.length - 1];
+	if (ctx.results.length === 0) return "MS_NIL";
+	return ctx.results[ctx.results.length - 1];
 }
 
 // ===== Discover phase: push leaf results or Emit + children =====
 
-function discoverExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[], results: string[]): void {
+function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 	if (node === null) {
-		results.push("MS_NIL");
+		ctx.results.push("MS_NIL");
 		return;
 	}
 	const kind = node.kind;
@@ -280,43 +286,43 @@ function discoverExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[],
 	// Leaf nodes — push result directly, no Emit needed
 	if (kind === NodeKind.NumberLiteral) {
 		const d = node.data as NumberLiteralData;
-		results.push(formatCNumber(d.value));
+		ctx.results.push(formatCNumber(d.value));
 		return;
 	}
 	if (kind === NodeKind.StringLiteral) {
 		const d = node.data as StringLiteralData;
 		const poolName = internString(g.stringPool, d.value);
-		results.push(msStringPoolRef(poolName, cStringByteLen(d.value)));
+		ctx.results.push(msStringPoolRef(poolName, cStringByteLen(d.value)));
 		return;
 	}
 	if (kind === NodeKind.BooleanLiteral) {
 		const d = node.data as BooleanLiteralData;
-		results.push(cBoolLiteral(d.boolValue));
+		ctx.results.push(cBoolLiteral(d.boolValue));
 		return;
 	}
 	if (kind === NodeKind.NullLiteral) {
 		// Reference parity: value types can't be nil — emit zero-init instead of NULL.
 		if (node.nodeType !== null && isNilableValueType(node.nodeType)) {
 			const cType = getTypeDesc(g, node.nodeType);
-			results.push(`(${cType}){0}`);
+			ctx.results.push(`(${cType}){0}`);
 			return;
 		}
-		results.push(cNullLiteral());
+		ctx.results.push(cNullLiteral());
 		return;
 	}
 	if (kind === NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
 		// Built-in numeric constants → C99 macros
-		if (d.name === "NaN") { results.push("NAN"); return; }
-		if (d.name === "Infinity") { results.push("INFINITY"); return; }
+		if (d.name === "NaN") { ctx.results.push("NAN"); return; }
+		if (d.name === "Infinity") { ctx.results.push("INFINITY"); return; }
 		// MetaScript has no undefined — emit as NULL or {0} for value types
 		if (d.name === "undefined") {
 			if (node.nodeType !== null && isNilableValueType(node.nodeType)) {
 				const cType = getTypeDesc(g, node.nodeType);
-				results.push(`(${cType}){0}`);
+				ctx.results.push(`(${cType}){0}`);
 				return;
 			}
-			results.push(cNullLiteral());
+			ctx.results.push(cNullLiteral());
 			return;
 		}
 		// Auto-declare DRC sink temps on first use (zero-init for goto safety)
@@ -335,12 +341,15 @@ function discoverExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[],
 		}
 		// Cross-module global variable: emit extern declaration (Reference: standard reference global variable emission)
 		// Standard reference implementation checks symbol ownership — we check modulePath (set on imported symbols)
+		// Reference parity: enum fields are folded to int constants (#define), never get extern.
+		// Our enum members are SymbolKind.Variable with TypeKind.Enum — skip them.
 		const idSym = node.resolvedSym;
 		if (idSym !== null && idSym.symbolKind === SymbolKind.Variable
 			&& idSym.modulePath !== null && idSym.modulePath !== ""
 			&& idSym.modulePath !== g.modulePath
 			&& !nameSetHas(g.declaredGlobals, d.name)
-			&& node.nodeType !== null) {
+			&& node.nodeType !== null
+			&& node.nodeType.kind !== TypeKind.Enum) {
 			const cType = getTypeDesc(g, node.nodeType);
 			const sName = safeName(d.name);
 			addLine(sec(g, CSection.GlobalVars), `extern ${cType} ${sName};`);
@@ -348,58 +357,59 @@ function discoverExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[],
 		}
 		// Module-qualified name for function references (Standard reference parity)
 		if (idSym !== null && idSym.symbolKind === SymbolKind.Function) {
-			results.push(mangledFunctionName(idSym, d.name, 0));
+			ctx.results.push(mangledFunctionName(idSym, d.name, 0));
 		} else {
 			// Reference parity: build CLoc for identifier, auto-dereference if indirect location
+			const isIndirect = isIndirectParam(p, d.name) || isIndirectLocal(p, d.name);
 			const loc: CLoc = {
 				kind: CLocKind.LocalVar,
-				storage: isIndirectParam(p, d.name) ? CStorageLoc.Unknown : CStorageLoc.Stack,
+				storage: isIndirect ? CStorageLoc.Unknown : CStorageLoc.Stack,
 				snippet: safeName(d.name),
-				isIndirect: isIndirectParam(p, d.name),
+				isIndirect,
 				locType: node.nodeType,
 			};
-			results.push(rdLoc(loc));
+			ctx.results.push(rdLoc(loc));
 		}
 		return;
 	}
 	if (kind === NodeKind.ArrowFunction) {
-		results.push("0 /* unlowered ArrowFunction */");
+		ctx.results.push("0 /* unlowered ArrowFunction */");
 		return;
 	}
 	if (kind === NodeKind.FunctionExpr) {
-		results.push("0 /* unlowered FunctionExpr */");
+		ctx.results.push("0 /* unlowered FunctionExpr */");
 		return;
 	}
 
 	// MoveExpr — passthrough, just redirect to inner node
 	if (kind === NodeKind.MoveExpr) {
 		const d = node.data as MoveExprData;
-		workStack.push({ node: d.moveArg, phase: 0, childCount: 0, tag: 0 });
+		ctx.workStack.push({ node: d.moveArg, phase: 0, childCount: 0, tag: 0 });
 		return;
 	}
 
 	// BinaryExpr — 2 children
 	if (kind === NodeKind.BinaryExpr) {
 		const d = node.data as BinaryExprData;
-		workStack.push({ node, phase: 1, childCount: 2, tag: TAG_DEFAULT });
-		workStack.push({ node: d.right, phase: 0, childCount: 0, tag: 0 });
-		workStack.push({ node: d.left, phase: 0, childCount: 0, tag: 0 });
+		ctx.workStack.push({ node, phase: 1, childCount: 2, tag: TAG_DEFAULT });
+		ctx.workStack.push({ node: d.right, phase: 0, childCount: 0, tag: 0 });
+		ctx.workStack.push({ node: d.left, phase: 0, childCount: 0, tag: 0 });
 		return;
 	}
 
 	// UnaryExpr — 1 child
 	if (kind === NodeKind.UnaryExpr) {
 		const d = node.data as UnaryExprData;
-		workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
-		workStack.push({ node: d.operand, phase: 0, childCount: 0, tag: 0 });
+		ctx.workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
+		ctx.workStack.push({ node: d.operand, phase: 0, childCount: 0, tag: 0 });
 		return;
 	}
 
 	// UpdateExpr — 1 child
 	if (kind === NodeKind.UpdateExpr) {
 		const d = node.data as UpdateExprData;
-		workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
-		workStack.push({ node: d.updateArg, phase: 0, childCount: 0, tag: 0 });
+		ctx.workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
+		ctx.workStack.push({ node: d.updateArg, phase: 0, childCount: 0, tag: 0 });
 		return;
 	}
 
@@ -408,79 +418,79 @@ function discoverExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[],
 	// by the checker (checkMemberExpr), so MemberExpr with enum objects never reaches codegen.
 	if (kind === NodeKind.MemberExpr) {
 		const d = node.data as MemberExprData;
-		workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
-		workStack.push({ node: d.object, phase: 0, childCount: 0, tag: 0 });
+		ctx.workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
+		ctx.workStack.push({ node: d.object, phase: 0, childCount: 0, tag: 0 });
 		return;
 	}
 
 	// ArrayAccess — 2 children
 	if (kind === NodeKind.ArrayAccess) {
 		const d = node.data as ArrayAccessData;
-		workStack.push({ node, phase: 1, childCount: 2, tag: TAG_DEFAULT });
-		workStack.push({ node: d.index, phase: 0, childCount: 0, tag: 0 });
-		workStack.push({ node: d.array, phase: 0, childCount: 0, tag: 0 });
+		ctx.workStack.push({ node, phase: 1, childCount: 2, tag: TAG_DEFAULT });
+		ctx.workStack.push({ node: d.index, phase: 0, childCount: 0, tag: 0 });
+		ctx.workStack.push({ node: d.array, phase: 0, childCount: 0, tag: 0 });
 		return;
 	}
 
 	// ConditionalExpr — 3 children
 	if (kind === NodeKind.ConditionalExpr) {
 		const d = node.data as ConditionalExprData;
-		workStack.push({ node, phase: 1, childCount: 3, tag: TAG_DEFAULT });
-		workStack.push({ node: d.ternaryAlternate, phase: 0, childCount: 0, tag: 0 });
-		workStack.push({ node: d.ternaryConsequent, phase: 0, childCount: 0, tag: 0 });
-		workStack.push({ node: d.ternaryCondition, phase: 0, childCount: 0, tag: 0 });
+		ctx.workStack.push({ node, phase: 1, childCount: 3, tag: TAG_DEFAULT });
+		ctx.workStack.push({ node: d.ternaryAlternate, phase: 0, childCount: 0, tag: 0 });
+		ctx.workStack.push({ node: d.ternaryConsequent, phase: 0, childCount: 0, tag: 0 });
+		ctx.workStack.push({ node: d.ternaryCondition, phase: 0, childCount: 0, tag: 0 });
 		return;
 	}
 
 	// TypeAssertion — 1 child
 	if (kind === NodeKind.TypeAssertion) {
 		const d = node.data as TypeAssertionData;
-		workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
-		workStack.push({ node: d.asExpr, phase: 0, childCount: 0, tag: 0 });
+		ctx.workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
+		ctx.workStack.push({ node: d.asExpr, phase: 0, childCount: 0, tag: 0 });
 		return;
 	}
 
 	// SpreadExpr — 1 child
 	if (kind === NodeKind.SpreadExpr) {
 		const d = node.data as SpreadExprData;
-		workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
-		workStack.push({ node: d.spreadArg, phase: 0, childCount: 0, tag: 0 });
+		ctx.workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
+		ctx.workStack.push({ node: d.spreadArg, phase: 0, childCount: 0, tag: 0 });
 		return;
 	}
 
 	// HiddenDeref — 1 child
 	if (kind === NodeKind.HiddenDeref) {
 		const d = node.data as ExprStmtData;
-		workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
-		workStack.push({ node: d.expr, phase: 0, childCount: 0, tag: 0 });
+		ctx.workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
+		ctx.workStack.push({ node: d.expr, phase: 0, childCount: 0, tag: 0 });
 		return;
 	}
 
 	// HiddenAddr — 1 child
 	if (kind === NodeKind.HiddenAddr) {
 		const d = node.data as ExprStmtData;
-		workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
-		workStack.push({ node: d.expr, phase: 0, childCount: 0, tag: 0 });
+		ctx.workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
+		ctx.workStack.push({ node: d.expr, phase: 0, childCount: 0, tag: 0 });
 		return;
 	}
 
 	// HiddenStdConv / HiddenSubConv — 1 child
 	if (kind === NodeKind.HiddenStdConv || kind === NodeKind.HiddenSubConv) {
 		const d = node.data as HiddenStdConvData;
-		workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
-		workStack.push({ node: d.convExpr, phase: 0, childCount: 0, tag: 0 });
+		ctx.workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
+		ctx.workStack.push({ node: d.convExpr, phase: 0, childCount: 0, tag: 0 });
 		return;
 	}
 
 	// ArrayLiteral — keep recursive (side effects: getTemp, emitStmtsLine)
 	if (kind === NodeKind.ArrayLiteral) {
-		results.push(genArrayLiteral(g, p, node));
+		ctx.results.push(genArrayLiteral(g, p, node));
 		return;
 	}
 
 	// CallExpr — dispatch by call type
 	if (kind === NodeKind.CallExpr) {
-		discoverCallExpr(g, p, node, workStack, results);
+		discoverCallExpr(g, p, node, ctx);
 		return;
 	}
 
@@ -501,11 +511,11 @@ function discoverExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[],
 				fi += 1;
 			}
 		}
-		workStack.push({ node, phase: 1, childCount: n, tag: TAG_DEFAULT });
+		ctx.workStack.push({ node, phase: 1, childCount: n, tag: TAG_DEFAULT });
 		// Push children in reverse order
 		let i = n - 1;
 		while (i >= 0) {
-			workStack.push({ node: d.properties[i], phase: 0, childCount: 0, tag: 0 });
+			ctx.workStack.push({ node: d.properties[i], phase: 0, childCount: 0, tag: 0 });
 			i -= 1;
 		}
 		return;
@@ -520,7 +530,7 @@ function discoverExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[],
 		ensureForwardDecl(g, calleeName);
 		if (d.newArguments.length === 0) {
 			// No-arg new: allocate with zero-init
-			results.push(`(${calleeName}*)msAllocTyped(sizeof(${calleeName}), &${calleeName}_typeInfo)`);
+			ctx.results.push(`(${calleeName}*)msAllocTyped(sizeof(${calleeName}), &${calleeName}_typeInfo)`);
 		} else {
 			// Positional args → field-by-field assignment using type info
 			g.labels += 1;
@@ -538,18 +548,18 @@ function discoverExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[],
 				emitStmtsLine(p, `(*${tmp}).${fieldName} = ${fieldVal};`);
 				fi += 1;
 			}
-			results.push(tmp);
+			ctx.results.push(tmp);
 		}
 		return;
 	}
 
 	// Fallback
-	results.push(`/* unsupported expression: kind=${kind.toString()} */`);
+	ctx.results.push(`/* unsupported expression: kind=${kind.toString()} */`);
 }
 
 // ===== Discover CallExpr — split by call type =====
 
-function discoverCallExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackItem[], results: string[]): void {
+function discoverCallExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 	const cd = node.data as CallExprData;
 	const sym = node.resolvedSym;
 
@@ -558,17 +568,17 @@ function discoverCallExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackIte
 	// User externs (with headerPath) get their @include propagated to this module.
 	if (sym !== null && sym.nativeName !== "") {
 		useHeader(g, sym);
-		results.push(emitNativeCall(g, p, sym.nativeName, cd.arguments));
+		ctx.results.push(emitNativeCall(g, p, sym.nativeName, cd.arguments));
 		return;
 	}
 
 	// Overloaded call — args only, name resolved during Emit
 	if (sym !== null && sym.overloads !== null && sym.overloads.length > 0) {
 		const n = cd.arguments.length;
-		workStack.push({ node, phase: 1, childCount: n, tag: TAG_CALL_OVERLOAD });
+		ctx.workStack.push({ node, phase: 1, childCount: n, tag: TAG_CALL_OVERLOAD });
 		let i = n - 1;
 		while (i >= 0) {
-			workStack.push({ node: cd.arguments[i], phase: 0, childCount: 0, tag: 0 });
+			ctx.workStack.push({ node: cd.arguments[i], phase: 0, childCount: 0, tag: 0 });
 			i -= 1;
 		}
 		return;
@@ -581,30 +591,30 @@ function discoverCallExpr(g: CGen, p: CProc, node: Node, workStack: ExprStackIte
 	if (!cd.isDirectCall) {
 		// TAG_CALL_CLOSURE: callee + args, handled by genClosureCall inline
 		const n = 1 + cd.arguments.length;
-		workStack.push({ node, phase: 1, childCount: n, tag: TAG_CALL_CLOSURE });
+		ctx.workStack.push({ node, phase: 1, childCount: n, tag: TAG_CALL_CLOSURE });
 		let i = cd.arguments.length - 1;
 		while (i >= 0) {
-			workStack.push({ node: cd.arguments[i], phase: 0, childCount: 0, tag: 0 });
+			ctx.workStack.push({ node: cd.arguments[i], phase: 0, childCount: 0, tag: 0 });
 			i -= 1;
 		}
-		workStack.push({ node: cd.callee, phase: 0, childCount: 0, tag: 0 });
+		ctx.workStack.push({ node: cd.callee, phase: 0, childCount: 0, tag: 0 });
 		return;
 	}
 
 	// TAG_CALL_DIRECT: callee + args
 	const n = 1 + cd.arguments.length;
-	workStack.push({ node, phase: 1, childCount: n, tag: TAG_CALL_DIRECT });
+	ctx.workStack.push({ node, phase: 1, childCount: n, tag: TAG_CALL_DIRECT });
 	let i = cd.arguments.length - 1;
 	while (i >= 0) {
-		workStack.push({ node: cd.arguments[i], phase: 0, childCount: 0, tag: 0 });
+		ctx.workStack.push({ node: cd.arguments[i], phase: 0, childCount: 0, tag: 0 });
 		i -= 1;
 	}
-	workStack.push({ node: cd.callee, phase: 0, childCount: 0, tag: 0 });
+	ctx.workStack.push({ node: cd.callee, phase: 0, childCount: 0, tag: 0 });
 }
 
 // ===== Emit phase: combine child results =====
 
-function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): void {
+function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): void {
 	const node = item.node;
 	const kind = node.kind;
 	const cc = item.childCount;
@@ -612,9 +622,9 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 
 	// BinaryExpr
 	if (kind === NodeKind.BinaryExpr) {
-		const left = peekResult(results, cc, 0);
-		const right = peekResult(results, cc, 1);
-		truncResults(results, cc);
+		const left = peekResult(ctx, cc, 0);
+		const right = peekResult(ctx, cc, 1);
+		truncResults(ctx, cc);
 		const d = node.data as BinaryExprData;
 		let finalRight = right;
 		if (d.operator === "=" && d.left.nodeType !== null && d.right.nodeType !== null) {
@@ -641,7 +651,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 			const lt = d.left.nodeType;
 			if (lt !== null && isNilableValueType(lt)) {
 				const cType = getTypeDesc(g, lt);
-				results.push(`memset(&(${left}), 0, sizeof(${cType}))`);
+				ctx.results.push(`memset(&(${left}), 0, sizeof(${cType}))`);
 				return;
 			}
 		}
@@ -654,41 +664,41 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 			const lt = d.left.nodeType;
 			const isInt = lt !== null && isIntegerType(lt);
 			if (!isInt) {
-				results.push(`fmod(${left}, ${finalRight})`);
+				ctx.results.push(`fmod(${left}, ${finalRight})`);
 				return;
 			}
 		}
 		const cOp = mapBinaryOp(d.operator);
-		results.push(`(${left} ${cOp} ${finalRight})`);
+		ctx.results.push(`(${left} ${cOp} ${finalRight})`);
 		return;
 	}
 
 	// UnaryExpr
 	if (kind === NodeKind.UnaryExpr) {
-		const operand = peekResult(results, cc, 0);
-		truncResults(results, cc);
+		const operand = peekResult(ctx, cc, 0);
+		truncResults(ctx, cc);
 		const d = node.data as UnaryExprData;
-		results.push(`(${d.unaryOp}${operand})`);
+		ctx.results.push(`(${d.unaryOp}${operand})`);
 		return;
 	}
 
 	// UpdateExpr
 	if (kind === NodeKind.UpdateExpr) {
-		const operand = peekResult(results, cc, 0);
-		truncResults(results, cc);
+		const operand = peekResult(ctx, cc, 0);
+		truncResults(ctx, cc);
 		const d = node.data as UpdateExprData;
 		if (d.isPrefix) {
-			results.push(`(${d.updateOp}${operand})`);
+			ctx.results.push(`(${d.updateOp}${operand})`);
 		} else {
-			results.push(`(${operand}${d.updateOp})`);
+			ctx.results.push(`(${operand}${d.updateOp})`);
 		}
 		return;
 	}
 
 	// MemberExpr
 	if (kind === NodeKind.MemberExpr) {
-		let obj = peekResult(results, cc, 0);
-		truncResults(results, cc);
+		let obj = peekResult(ctx, cc, 0);
+		truncResults(ctx, cc);
 		const d = node.data as MemberExprData;
 
 		// Ref array access returns void* — cast to element type for member access
@@ -702,16 +712,16 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 				// Class/ref types: msRefArray stores void*, cast to typed ptr, use ->
 				// Value struct types: typed array macro returns struct value directly, use .
 				if (isPointerType(d.object.nodeType)) {
-					results.push(`((${elemTypeDesc})${obj})->${prop}`);
+					ctx.results.push(`((${elemTypeDesc})${obj})->${prop}`);
 				} else {
-					results.push(`${obj}.${prop}`);
+					ctx.results.push(`${obj}.${prop}`);
 				}
 				return;
 			}
 		}
 		// Pre-formatted property (e.g. "p->data" from nativeLower) — emit raw
 		if (findChar(d.property, ">") >= 0) {
-			results.push(`${obj}.${d.property}`);
+			ctx.results.push(`${obj}.${d.property}`);
 			return;
 		}
 		// .length/.byteLength → .len for runtime types (arrays, strings, maps)
@@ -721,7 +731,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 			const isRuntimeType = objType !== null && (objType.kind === TypeKind.Array
 				|| objType.kind === TypeKind.String || objType.kind === TypeKind.Map);
 			if (isRuntimeType) {
-				results.push(obj + ".len");
+				ctx.results.push(obj + ".len");
 				return;
 			}
 		}
@@ -736,36 +746,36 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 			}
 		}
 		if (objIsPtr) {
-			results.push(`${obj}->${field}`);
+			ctx.results.push(`${obj}->${field}`);
 		} else {
-			results.push(`${obj}.${field}`);
+			ctx.results.push(`${obj}.${field}`);
 		}
 		return;
 	}
 
 	// ArrayAccess — after nativeLower, only untyped/raw accesses reach here
 	if (kind === NodeKind.ArrayAccess) {
-		const arr = peekResult(results, cc, 0);
-		const idx = peekResult(results, cc, 1);
-		truncResults(results, cc);
-		results.push(`${arr}[${idx}]`);
+		const arr = peekResult(ctx, cc, 0);
+		const idx = peekResult(ctx, cc, 1);
+		truncResults(ctx, cc);
+		ctx.results.push(`${arr}[${idx}]`);
 		return;
 	}
 
 	// ConditionalExpr
 	if (kind === NodeKind.ConditionalExpr) {
-		const cond = peekResult(results, cc, 0);
-		const cons = peekResult(results, cc, 1);
-		const alt = peekResult(results, cc, 2);
-		truncResults(results, cc);
-		results.push(`(${cond} ? ${cons} : ${alt})`);
+		const cond = peekResult(ctx, cc, 0);
+		const cons = peekResult(ctx, cc, 1);
+		const alt = peekResult(ctx, cc, 2);
+		truncResults(ctx, cc);
+		ctx.results.push(`(${cond} ? ${cons} : ${alt})`);
 		return;
 	}
 
 	// TypeAssertion
 	if (kind === NodeKind.TypeAssertion) {
-		const expr = peekResult(results, cc, 0);
-		truncResults(results, cc);
+		const expr = peekResult(ctx, cc, 0);
+		truncResults(ctx, cc);
 		const d = node.data as TypeAssertionData;
 
 		// Union handling — two directions:
@@ -794,7 +804,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 				vi += 1;
 			}
 			if (varIdx >= 0) {
-				results.push(`(${expr}).v${intToString(varIdx)}`);
+				ctx.results.push(`(${expr}).v${varIdx}`);
 				return;
 			}
 		}
@@ -823,14 +833,14 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 				}
 			}
 			if (varIdx >= 0) {
-				const varName = `${unionName}_v${intToString(varIdx)}`;
+				const varName = `${unionName}_v${varIdx}`;
 				// Use pointer-based reinterpret for struct-to-struct (C can't cast between struct types)
-				results.push(`(${unionName}){ ._tag = ${intToString(varIdx)}, .v${intToString(varIdx)} = *(${varName}*)&(${expr}) }`);
+				ctx.results.push(`(${unionName}){ ._tag = ${varIdx}, .v${varIdx} = *(${varName}*)&(${expr}) }`);
 				return;
 			}
 			// Empty object literal (e.g., {} as DocData for Nil/HardLine variants)
 			if (d.asExpr !== null && d.asExpr.kind === NodeKind.ObjectLiteral) {
-				results.push(`(${unionName}){ ._tag = -1 }`);
+				ctx.results.push(`(${unionName}){ ._tag = -1 }`);
 				return;
 			}
 		}
@@ -847,25 +857,25 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 		// directly cast in C. Use pointer reinterpret: (*(DestType*)&(srcVal))
 		if (node.nodeType !== null && isNilableValueType(node.nodeType)
 			&& d.asExpr !== null && d.asExpr.nodeType !== null && isNilableValueType(d.asExpr.nodeType)) {
-			results.push(`(*(${targetType}*)&(${expr}))`);
+			ctx.results.push(`(*(${targetType}*)&(${expr}))`);
 			return;
 		}
-		results.push(`((${targetType})${expr})`);
+		ctx.results.push(`((${targetType})${expr})`);
 		return;
 	}
 
 	// SpreadExpr
 	if (kind === NodeKind.SpreadExpr) {
-		const inner = peekResult(results, cc, 0);
-		truncResults(results, cc);
-		results.push("/* spread */ " + inner);
+		const inner = peekResult(ctx, cc, 0);
+		truncResults(ctx, cc);
+		ctx.results.push("/* spread */ " + inner);
 		return;
 	}
 
 	// HiddenDeref
 	if (kind === NodeKind.HiddenDeref) {
-		const inner = peekResult(results, cc, 0);
-		truncResults(results, cc);
+		const inner = peekResult(ctx, cc, 0);
+		truncResults(ctx, cc);
 		// Ref array access returns void* — cast to typed pointer before deref
 		// Reference parity: explicit dereference of a typed location
 		const hd = node.data as ExprStmtData;
@@ -874,51 +884,51 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 			if (elemDesc !== "void*" && elemDesc !== "void") {
 				if (isPointerType(hd.expr.nodeType)) {
 					// Ref element: cast void* to typed ptr, deref to struct value
-					results.push(`(*(${elemDesc})${inner})`);
+					ctx.results.push(`(*(${elemDesc})${inner})`);
 				} else {
 					// Value struct element: macro returns struct value, no deref needed
-					results.push(inner);
+					ctx.results.push(inner);
 				}
 				return;
 			}
 		}
-		results.push(`(*${inner})`);
+		ctx.results.push(`(*${inner})`);
 		return;
 	}
 
 	// HiddenAddr — Reference parity (standard address generation)
 	// Reference: if indirect location, return raw snippet (already a pointer); else &(snippet)
 	if (kind === NodeKind.HiddenAddr) {
-		const inner = peekResult(results, cc, 0);
-		truncResults(results, cc);
+		const inner = peekResult(ctx, cc, 0);
+		truncResults(ctx, cc);
 		const d = node.data as ExprStmtData;
 		if (d.expr.kind === NodeKind.Identifier && isIndirectParam(p, (d.expr.data as IdentifierData).name)) {
 			// Indirect param: already a pointer — reference pattern returns raw snippet
-			results.push(safeName((d.expr.data as IdentifierData).name));
+			ctx.results.push(safeName((d.expr.data as IdentifierData).name));
 		} else {
-			results.push(safeAddrOf(g, p, inner, d.expr, node.nodeType));
+			ctx.results.push(safeAddrOf(g, p, inner, d.expr, node.nodeType));
 		}
 		return;
 	}
 
 	// HiddenStdConv / HiddenSubConv
 	if (kind === NodeKind.HiddenStdConv || kind === NodeKind.HiddenSubConv) {
-		const inner = peekResult(results, cc, 0);
-		truncResults(results, cc);
+		const inner = peekResult(ctx, cc, 0);
+		truncResults(ctx, cc);
 		const d = node.data as HiddenStdConvData;
 		const targetC = getTypeDesc(g, d.convType);
 		// Zero-copy string ↔ uint8[] bridge: pointer cast (same memory layout)
 		if ((node.flags & NodeFlag.Cursor) !== 0) {
-			results.push(`*((${targetC}*)&(${inner}))`);
+			ctx.results.push(`*((${targetC}*)&(${inner}))`);
 			return;
 		}
-		results.push(`((${targetC})(${inner}))`);
+		ctx.results.push(`((${targetC})(${inner}))`);
 		return;
 	}
 
 	// CallExpr
 	if (kind === NodeKind.CallExpr) {
-		emitCallExpr(g, p, item, results);
+		emitCallExpr(g, p, item, ctx);
 		return;
 	}
 
@@ -929,11 +939,11 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 			// Closure literal: (msClosure){ .fn = ..., .env = ... }
 			// Standard reference pattern: env is heap-allocated via msAllocTyped, fields initialized,
 			// then closure pair references the pointer.
-			const fnExpr = peekResult(results, cc, 0);
-			const envExpr = peekResult(results, cc, 1);
-			truncResults(results, cc);
+			const fnExpr = peekResult(ctx, cc, 0);
+			const envExpr = peekResult(ctx, cc, 1);
+			truncResults(ctx, cc);
 			if (envExpr === "MS_NIL" || envExpr === "NULL") {
-				results.push(`(msClosure){ .fn = (void*)${fnExpr}, .env = NULL }`);
+				ctx.results.push(`(msClosure){ .fn = (void*)${fnExpr}, .env = NULL }`);
 			} else {
 				// Standard reference pattern: heap-allocate env struct, init fields, use pointer.
 				const envNode = d.properties[1];
@@ -943,7 +953,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 				emitProcLocalsLine(p, `${envTypeName}* ${envTemp};`);
 				emitStmtsLine(p, `${envTemp} = (${envTypeName}*)msAllocTyped(sizeof(${envTypeName}), NULL);`);
 				emitStmtsLine(p, `*${envTemp} = ${envExpr};`);
-				results.push(`(msClosure){ .fn = (void*)${fnExpr}, .env = (void*)${envTemp} }`);
+				ctx.results.push(`(msClosure){ .fn = (void*)${fnExpr}, .env = (void*)${envTemp} }`);
 			}
 		} else {
 			// Reference-aligned: hoist struct literal to temp variable + field-by-field assignment.
@@ -968,7 +978,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 					}
 					const varIdx = findUnionVariant(node.nodeType, keyArr, typeArr);
 					if (varIdx >= 0) {
-						cType = `${unionName}_v${intToString(varIdx)}`;
+						cType = `${unionName}_v${varIdx}`;
 						unionWrapName = unionName;
 						unionWrapIdx = varIdx;
 					}
@@ -991,7 +1001,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 				if (isClassObj) {
 					// Class: heap-allocate (Reference parity: managed object construction)
 					emitProcLocalsLine(p, `${cType}* ${tmpName};`);
-					emitStmtsLine(p, `${tmpName} = (${cType}*)msAllocTyped(sizeof(${cType}), NULL);`);
+					ensureTypeInfoDef(g, cType);
+					emitStmtsLine(p, `${tmpName} = (${cType}*)msAllocTyped(sizeof(${cType}), &${cType}_typeInfo);`);
 					emitStmtsLine(p, `memset(${tmpName}, 0, sizeof(${cType}));`);
 				} else {
 					// Value type: stack-allocate
@@ -1000,7 +1011,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 				}
 				let i = 0;
 				while (i < d.keys.length) {
-					const val = peekResult(results, cc, i);
+					const val = peekResult(ctx, cc, i);
 					// Skip NullLiteral fields — memset already zeroed them.
 					// This avoids void* → value-type errors for self-referential pointer fields
 					// where the C field is T* but the MS type is T (e.g. Type.typeReturn).
@@ -1009,12 +1020,12 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 					}
 					i += 1;
 				}
-				truncResults(results, cc);
+				truncResults(ctx, cc);
 				if (unionWrapIdx >= 0) {
 					// Wrap variant struct in parent union compound literal
-					results.push(`(${unionWrapName}){ ._tag = ${intToString(unionWrapIdx)}, .v${intToString(unionWrapIdx)} = ${tmpName} }`);
+					ctx.results.push(`(${unionWrapName}){ ._tag = ${unionWrapIdx}, .v${unionWrapIdx} = ${tmpName} }`);
 				} else {
-					results.push(tmpName);
+					ctx.results.push(tmpName);
 				}
 			} else {
 				// Reference-aligned fallback: hoist to temp even without type info.
@@ -1040,14 +1051,14 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 				emitStmtsLine(p, `memset(&${tmpName}, 0, sizeof(${tmpName}));`);
 				i = 0;
 				while (i < d.keys.length) {
-					const val = peekResult(results, cc, i);
+					const val = peekResult(ctx, cc, i);
 					if (d.properties[i].kind !== NodeKind.NullLiteral) {
 						emitStmtsLine(p, `${tmpName}.${mangleFieldName(d.keys[i])} = ${val};`);
 					}
 					i += 1;
 				}
-				truncResults(results, cc);
-				results.push(tmpName);
+				truncResults(ctx, cc);
+				ctx.results.push(tmpName);
 			}
 		}
 		return;
@@ -1056,8 +1067,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 	// NewExpr handled entirely in discover phase (inline allocation)
 
 	// Fallback
-	truncResults(results, cc);
-	results.push(`/* unsupported expression: resolve kind=${kind.toString()} */`);
+	truncResults(ctx, cc);
+	ctx.results.push(`/* unsupported expression: resolve kind=${kind.toString()} */`);
 }
 
 // ===== genClosureCall — Standard reference parity (closure calling convention) =====
@@ -1066,7 +1077,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): vo
 // env is LAST parameter (Standard reference pattern).
 // No forward declarations — closure struct is self-contained.
 
-function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, calleeType: Type, node: Node, results: string[]): void {
+function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, calleeType: Type, node: Node, ctx: ExprEvalCtx): void {
 	// Reference implementation pattern: extract environment and function pointers from closure pair
 	const envExpr = callee + ".env";
 	const fnExpr = callee + ".fn";
@@ -1092,7 +1103,7 @@ function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, call
 		const callWithEnv = `((${clFull})${fnExpr})(${fullArgs}, ${envExpr})`;
 		const callNoEnv = `((${clHalf})${fnExpr})(${fullArgs})`;
 		emitStmtsLine(p, `(${envExpr} ? ${callWithEnv} : ${callNoEnv});`);
-		results.push(tmp.snippet);
+		ctx.results.push(tmp.snippet);
 		return;
 	}
 
@@ -1118,12 +1129,12 @@ function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, call
 
 	// Reference parity: procedure call dispatch
 	// Closure calls generate inline if/else dispatch on env != NULL.
-	results.push(`(${envExpr} ? ${callWithEnv} : ${callNoEnv})`);
+	ctx.results.push(`(${envExpr} ? ${callWithEnv} : ${callNoEnv})`);
 }
 
 // ===== Emit CallExpr =====
 
-function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[]): void {
+function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): void {
 	const node = item.node;
 	const cd = node.data as CallExprData;
 	const cc = item.childCount;
@@ -1152,7 +1163,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 		let ai = 0;
 		while (ai < cc) {
 			if (ai > 0) argsStr = argsStr + ", ";
-			let arg = results[results.length - cc + ai];
+			let arg = ctx.results[ctx.results.length - cc + ai];
 			// & prefix on nativeName: wrap first arg with &(...)
 			if (ovNeedsAddr && ai === 0) {
 				arg = safeAddrOf(g, p, arg, cd.arguments[ai], null);
@@ -1162,21 +1173,21 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 			argsStr = argsStr + arg;
 			ai += 1;
 		}
-		truncResults(results, cc);
+		truncResults(ctx, cc);
 		if (ovNativeName !== "") {
-			results.push(`${stripAddrPrefix(ovNativeName)}(${argsStr})`);
+			ctx.results.push(`${stripAddrPrefix(ovNativeName)}(${argsStr})`);
 			return;
 		}
 		const ovIdx = idx >= 0 ? idx : 0;
 		const ovCalleeName = mangledFunctionName(sym, sym.name, ovIdx);
 		// On-demand cross-module prototype (reference parity: genProcPrototype)
 		ensureCrossModuleProto(g, ovCalleeName, ovType, sym);
-		results.push(`${ovCalleeName}(${argsStr})`);
+		ctx.results.push(`${ovCalleeName}(${argsStr})`);
 		return;
 	}
 
 	// Direct or closure: first child is callee, rest are args
-	const callee = peekResult(results, cc, 0);
+	const callee = peekResult(ctx, cc, 0);
 	// C varargs: msNumberArrayFrom(count, (double)(e1), ...) — va_arg reads 8 bytes for double
 	const isNumberArrayFrom = callee === "msNumberArrayFrom";
 	// Resolve callee's function type for parameter type checking
@@ -1186,7 +1197,7 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 	let i = 1;
 	while (i < cc) {
 		if (i > 1) argsStr = argsStr + ", ";
-		let arg = peekResult(results, cc, i);
+		let arg = peekResult(ctx, cc, i);
 		if (isNumberArrayFrom && i > 1) {
 			arg = `(double)(${arg})`;
 		} else if (hasParamTypes) {
@@ -1198,13 +1209,13 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 		argsStr = argsStr + arg;
 		i += 1;
 	}
-	truncResults(results, cc);
+	truncResults(ctx, cc);
 
 	// ===== Reference parity: closure call (standard reference pattern) =====
 	// Closure calls generate inline if/else dispatch on env != NULL.
 	// No forward declarations — closure is a self-contained struct value.
 	if (tag === TAG_CALL_CLOSURE) {
-		genClosureCall(g, p, callee, argsStr, calleeType, node, results);
+		genClosureCall(g, p, callee, argsStr, calleeType, node, ctx);
 		return;
 	}
 
@@ -1226,11 +1237,11 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, results: string[])
 		let nrvoArgs = "&" + tmp.snippet;
 		if (argsStr !== "") nrvoArgs = `${nrvoArgs}, ${argsStr}`;
 		emitStmtsLine(p, `${calleeStr}(${nrvoArgs});`);
-		results.push(tmp.snippet);
+		ctx.results.push(tmp.snippet);
 	} else if (argsStr === "") {
-		results.push(calleeStr + "()");
+		ctx.results.push(calleeStr + "()");
 	} else {
-		results.push(`${calleeStr}(${argsStr})`);
+		ctx.results.push(`${calleeStr}(${argsStr})`);
 	}
 }
 // ===== genExprAssign — evaluate expression and assign to dest =====
@@ -1263,14 +1274,14 @@ function mapBinaryOp(op: string): string {
 // Emit an extern native call: strip & prefix → &first_arg, add array type suffix.
 // Strip & prefix from nativeName. Returns [cleanName, needsAddr].
 function stripAddrPrefix(nativeName: string): string {
-	if (nativeName.length > 0 && charAt(nativeName, 0) === "&") {
-		return sliceStr(nativeName, 1, nativeName.length);
+	if (nativeName.length > 0 && nativeName.charAt(0) === "&") {
+		return nativeName.slice(1, nativeName.length);
 	}
 	return nativeName;
 }
 
 function hasAddrPrefix(nativeName: string): boolean {
-	return nativeName.length > 0 && charAt(nativeName, 0) === "&";
+	return nativeName.length > 0 && nativeName.charAt(0) === "&";
 }
 
 function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Node[]): string {
@@ -1281,7 +1292,7 @@ function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Node[]): st
 	if (args.length > 0 && args[0].nodeType !== null) {
 		const recvType = args[0].nodeType;
 		if (recvType.kind === TypeKind.Array) {
-			if (cName.length >= 9 && sliceStr(cName, 0, 9) === "ms_array_") {
+			if (cName.length >= 9 && cName.slice(0, 9) === "ms_array_") {
 				if (recvType.typeReturn !== null) {
 					const ek = recvType.typeReturn.kind;
 					if (ek === TypeKind.Number || ek === TypeKind.Float64) {
@@ -1326,7 +1337,7 @@ function genArrayLiteral(g: CGen, p: CProc, node: Node): string {
 		let i = 0;
 		while (i < d.elements.length) {
 			if (i > 0) result = result + ", ";
-			result = result + `._${intToString(i)} = ${genExpr(g, p, d.elements[i])}`;
+			result = result + `._${i} = ${genExpr(g, p, d.elements[i])}`;
 			i += 1;
 		}
 		result = result + " }";
@@ -1364,7 +1375,7 @@ function genArrayLiteral(g: CGen, p: CProc, node: Node): string {
 
 // ===== Tests =====
 
-import { createCGen, createProc, extract, sec, CSection, typeCacheGet, isIndirectParam } from "./context";
+import { createCGen, createProc, extract, sec, CSection, typeCacheGet, isIndirectParam, isIndirectLocal } from "./context";
 import { CheckerContext } from "../../checker/context";
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";
@@ -1473,7 +1484,7 @@ test "deeply nested binary (100 levels)" {
 	let hasInner = false;
 	let j = 0;
 	while (j < result.length - 7) {
-		if (sliceStr(result, j, j + 7) === "(a + a)") {
+		if (result.slice(j, j + 7) === "(a + a)") {
 			hasInner = true;
 		}
 		j += 1;
@@ -1502,7 +1513,7 @@ test "deeply nested calls (50 levels)" {
 	let hasNested = false;
 	let j = 0;
 	while (j < result.length - 4) {
-		if (sliceStr(result, j, j + 4) === "f(f(") {
+		if (result.slice(j, j + 4) === "f(f(") {
 			hasNested = true;
 		}
 		j += 1;

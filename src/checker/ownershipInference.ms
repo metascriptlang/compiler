@@ -146,7 +146,6 @@ function isSinkLValue(node: Node): boolean {
 	if (node.kind === NodeKind.Identifier) {
 		const sym = node.resolvedSym;
 		if (sym !== null && sym.symbolKind === SymbolKind.Variable) {
-			// (Checking if global via flags)
 			return hasFlag(sym, SymbolFlag.Global);
 		}
 		return false;
@@ -155,18 +154,28 @@ function isSinkLValue(node: Node): boolean {
 }
 
 // Helper: is argument index `i` of this call a SINK position?
+// Reference parity: check callee's actual type signature for sink modifiers.
+// Only return true if the callee's param at that index is ALREADY wrapped in Sink.
+// Conservative default: assume borrow (return false), not sink.
+// Rationale: assuming sink causes the caller's param to be wrapped in Sink too,
+// which cascades through all call chains and causes incorrect DRC (premature wasMoved).
 function isSinkPosition(callNode: Node, argIdx: number): boolean {
 	const sym = callNode.resolvedSym;
-	if (sym === null) return true; // Conservative default: assume Sink
+	if (sym === null) return false;
 
 	const fnType = sym.symbolType;
-	if (fnType === null || fnType.typeNames === null) return true;
+	if (fnType === null || fnType.kind !== TypeKind.Function) return false;
 
+	// Check if param name is 'this'/'self' — always lent
 	if (argIdx < fnType.typeNames.length) {
 		const pName = fnType.typeNames[argIdx];
-		// 'this' / 'self' receivers are LENT
 		if (pName === "this" || (argIdx === 0 && pName === "self")) return false;
 	}
-	
-	return true;
+
+	// Check if the callee's param type is already marked sink
+	if (argIdx < fnType.typeChildren.length) {
+		return isSinkType(fnType.typeChildren[argIdx]);
+	}
+
+	return false;
 }

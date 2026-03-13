@@ -87,7 +87,7 @@ function instrumentTestBody(testNode: Node): void {
 			newStmts.push(stmt);
 		}
 	}
-	bd.statements = newStmts;
+	d.testBody.data = { statements: newStmts };
 }
 
 // ===== Instrument a single AssertStmt =====

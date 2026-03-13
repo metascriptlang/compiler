@@ -1,5 +1,7 @@
 // Format Options — configuration for msc fmt
-// Matches the "format" section in msc.json
+// Reads from build.ms `fmt` section via FmtSection.
+
+import { FmtSection } from "../buildConfig";
 
 export enum TrailingComma {
 	All,
@@ -34,4 +36,14 @@ export function defaultFormatOptions(): FormatOptions {
 		bracketSpacing: true,
 		arrowParens: ArrowParens.Always,
 	};
+}
+
+// Apply build.ms fmt overrides to default options.
+// FmtSection uses -1 as "unset" sentinel for numbers and booleans.
+export function applyFmtSection(opts: FormatOptions, fmt: FmtSection): FormatOptions {
+	if (fmt.printWidth >= 0) { opts.printWidth = fmt.printWidth; }
+	if (fmt.tabWidth >= 0) { opts.tabWidth = fmt.tabWidth; }
+	if (fmt.useTabs >= 0) { opts.useTabs = fmt.useTabs === 1; }
+	if (fmt.singleQuote >= 0) { opts.singleQuote = fmt.singleQuote === 1; }
+	return opts;
 }

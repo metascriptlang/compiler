@@ -20,7 +20,7 @@ import {
 	ArrayAccessData, ObjectLiteralData, ArrayLiteralData,
 	ConditionalExprData, NumberLiteralData, NewExprData,
 	ExportDeclData, ClassDeclData,
-	DoWhileStmtData, MoveExprData, Symbol,
+	DoWhileStmtData, MoveExprData, TypeAssertionData, Symbol,
 } from "../ast/node";
 import { Type, TypeKind, isSinkType, skipModifier, createPrimitive } from "../checker/types";
 import { lookupSymbol, lookupLocal, SymbolKind, hasFlag, SymbolFlag } from "../checker/symbol";
@@ -34,23 +34,25 @@ import { RcInfo, RcKind, classifyType, isFreshExpr, noRcInfo } from "./classify"
 import {
 	DrcContext, DrcScope, VarInfo,
 	createDrcContext, pushScope, popScope, currentScope, scopeDepth,
-	registerVar, markUninitialized, recordMove, recordMoveInContext, recordMoveExpr, wasMovedInScope, findVarInfo, findVarInfoInContext,
+	registerVar, markUninitialized, recordMove, recordMoveInContext, recordMoveExpr, wasMovedInScope, findVarInfo, findVarInfoInContext, findVarInfoInFunction,
 	setNeedsTryToLoop, setNeedsTryAll, addPending, flushPending, hasPending, clearPendingForVar,
 	addPre, flushPre,
 	pushOuterStmts, popOuterStmts,
 	testStringRc,
 } from "./scope";
-import { isLastReadInBlock, isLastReadInContext, deepAliases, nodeReferencesVar } from "./lastRead";
+import { isLastReadInBlock, isLastReadInContext, nodeReferencesVar } from "./lastRead";
+import { AliasKind, aliases, deepAliases, isAnalysableFieldAccess, getRootSym } from "./alias";
 import { inferCursors, isCursorVar, createCursorSet } from "./cursors";
-import { isLastReadCfgCached, clearCfgCache, createCfgCache } from "./cfg";
+import { isLastReadCfgCached, isLastReadCfgNodeCached, clearCfgCache, createCfgCache } from "./cfg";
 import { checkSource } from "../checker/checkPass";
 import { transformProgram } from "../transform/index";
 
 // ===== DRC Modes (standard ProcessMode parity) =====
 
 export enum DrcMode {
-	Normal,    // Just reading (borrow/lent)
-	Consumed,  // Ownership transfer (sink/move)
+	Normal,
+	Consumed,
+	SinkArg,
 }
 
 // ===== Finally-Protected Variables (Phase A — correctness fix) =====
@@ -175,6 +177,33 @@ function processNode(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	};
 }
 
+// Reference parity (ensureDestruction): when a fresh expression (call, constructor) produces an
+// RC-typed value in Normal mode, capture it in a temp registered for scope cleanup.
+// Without this, the temporary leaks (no destructor called).
+// Reference: ensureDestruction + call site pattern.
+function ensureDestructionIfNeeded(node: Node, dctx: DrcContext): Node {
+	if (node === null) return node;
+	// Only dynamically-produced values need ensureDestruction — NOT literals.
+	// Reference: ensureDestruction for call/constructor nodes, NOT literals.
+	// Literals are compile-time constants (no heap allocation in C).
+	const k = node.kind;
+	if (k !== NodeKind.CallExpr && k !== NodeKind.ObjectLiteral && k !== NodeKind.ArrayLiteral && k !== NodeKind.NewExpr) return node;
+	const exprType = node.nodeType;
+	if (exprType === null) return node;
+	const rcInfo = classifyType(exprType, dctx.ctx);
+	if (!rcInfo.needsCleanup) return node;
+	// Capture in temp, register for scope-exit destroy
+	const loc = node.location;
+	const tmpName = freshTemp(dctx.ctx, "tmp");
+	const tmpDecl = makeVarDecl(tmpName, node, DeclKind.Const, loc);
+	tmpDecl.nodeType = exprType;
+	addPre(dctx, tmpDecl);
+	registerVar(dctx, tmpName, rcInfo, false);
+	const tmpIdent = makeIdent(tmpName, loc);
+	tmpIdent.nodeType = exprType;
+	return tmpIdent;
+}
+
 function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const cd = node.data as CallExprData;
 	// Recurse on callee
@@ -203,6 +232,12 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		// Push value arg (index 1, after receiver) is sink
 		if (isArrayPush && i === 1) argMode = DrcMode.Consumed;
 		cd.arguments[i] = processNode(cd.arguments[i], dctx, argMode);
+
+		// Reference parity (ensureDestruction): Normal-mode fresh results need temp for cleanup.
+		// Without this, call results passed as non-sink args leak (never destroyed).
+		if (argMode === DrcMode.Normal) {
+			cd.arguments[i] = ensureDestructionIfNeeded(cd.arguments[i], dctx);
+		}
 
 		// Reference parity (passCopyToSink): when a borrow expression (ArrayAccess/MemberExpr)
 		// is passed to a sink param, extract to temp with deep copy.
@@ -239,11 +274,12 @@ function passCopyToSink(srcExpr: Node, dctx: DrcContext): Node {
 
 	if (isBinaryCopy(rcInfo)) {
 		// Named/String: null-init, then 2-arg copy from source.
-		// Nim parity: =copy(&dest, src) handles old-value cleanup internally.
+		// Reference parity: =copy(&dest, src) handles old-value cleanup internally.
 		const tmpDecl = makeVarDecl(tmpName, makeNull(loc), DeclKind.Let, loc);
 		if (srcExpr.nodeType !== null) tmpDecl.nodeType = srcExpr.nodeType;
 		addPre(dctx, tmpDecl);
-		registerVar(dctx, tmpName, rcInfo, false);
+		// Reference parity: passCopyToSink temps are NOT in s.final or s.wasMoved —
+		// the sink callee takes ownership, no cleanup at scope exit.
 		addPre(dctx, makeWasMovedCall(tmpName, rcInfo, loc));
 		if (rcInfo.copyFn !== "") {
 			const destArg = needsDestAddr(rcInfo)
@@ -255,20 +291,14 @@ function passCopyToSink(srcExpr: Node, dctx: DrcContext): Node {
 		}
 	} else {
 		// Simple refcounted (Ref, Closure, Map, Set): shallow copy + unary incref.
+		// Reference parity: no registerVar — sink consumes ownership, no scope cleanup.
 		const tmpDecl = makeVarDecl(tmpName, srcExpr, DeclKind.Const, loc);
 		if (srcExpr.nodeType !== null) tmpDecl.nodeType = srcExpr.nodeType;
 		addPre(dctx, tmpDecl);
-		registerVar(dctx, tmpName, rcInfo, false);
 		if (rcInfo.copyFn !== "") {
 			addPre(dctx, makeCopyAfterInit(tmpName, rcInfo, loc, ""));
 		}
 	}
-
-	// After consumption: wasMoved so scope-exit destroy is a no-op (consumer owns the data)
-	if (rcInfo.wasMovedFn !== "") {
-		addPending(dctx, makeWasMovedCall(tmpName, rcInfo, loc));
-	}
-	recordMove(dctx, tmpName);
 
 	const ident = makeIdent(tmpName, loc);
 	if (srcExpr.nodeType !== null) ident.nodeType = srcExpr.nodeType;
@@ -278,6 +308,21 @@ function passCopyToSink(srcExpr: Node, dctx: DrcContext): Node {
 function processMember(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const md = node.data as MemberExprData;
 	md.object = processNode(md.object, dctx, DrcMode.Normal);
+	// Reference parity (nkDotExpr sinkArg): field access is a borrow —
+	// must copy for ownership transfer UNLESS field is last-read (Phase B).
+	if (mode === DrcMode.SinkArg && node.nodeType !== null) {
+		const rcInfo = classifyType(node.nodeType, dctx.ctx);
+		if (rcInfo.needsCleanup) {
+			// Phase B: field-level move when analysable and last-read
+			if (isLastReadFieldSafe(node, dctx.currentStmtIdx, dctx.currentStmtList, dctx)) {
+				if (rcInfo.wasMovedFn !== "") {
+					addPending(dctx, makeWasMovedOnExpr(node, rcInfo, node.location));
+				}
+				return node;
+			}
+			return passCopyToSink(node, dctx);
+		}
+	}
 	return node;
 }
 
@@ -285,21 +330,58 @@ function processArrayAccess(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const ad = node.data as ArrayAccessData;
 	ad.array = processNode(ad.array, dctx, DrcMode.Normal);
 	ad.index = processNode(ad.index, dctx, DrcMode.Normal);
+	// Reference parity (nkBracketExpr sinkArg): element access is a borrow —
+	// must copy for ownership transfer UNLESS element is last-read (Phase B).
+	if (mode === DrcMode.SinkArg && node.nodeType !== null) {
+		const rcInfo = classifyType(node.nodeType, dctx.ctx);
+		if (rcInfo.needsCleanup) {
+			// Phase B: element-level move when analysable and last-read
+			if (isLastReadFieldSafe(node, dctx.currentStmtIdx, dctx.currentStmtList, dctx)) {
+				if (rcInfo.wasMovedFn !== "") {
+					addPending(dctx, makeWasMovedOnExpr(node, rcInfo, node.location));
+				}
+				return node;
+			}
+			return passCopyToSink(node, dctx);
+		}
+	}
 	return node;
 }
 
+function isPtrField(objType: Type, fieldIdx: number): boolean {
+	if (objType === null) return false;
+	let t = objType;
+	if (t.kind === TypeKind.Ref && t.typeReturn !== null) {
+		t = t.typeReturn;
+	}
+	if (t.typeChildren === null) return false;
+	if (fieldIdx >= t.typeChildren.length) return false;
+	const ft = t.typeChildren[fieldIdx];
+	if (ft === null) return false;
+	return ft.kind === TypeKind.Ptr;
+}
+
 function processObjectLiteral(node: Node, dctx: DrcContext, mode: DrcMode): Node {
+	// Reference parity (object constructor): mode==Normal → fields in Normal; else → SinkArg.
+	// In variable init (Consumed mode), fieldDefault = SinkArg — same as before.
+	// In Normal context (e.g., non-sink function arg), fieldDefault = Normal.
+	// Exception: Ptr<T> fields are always Normal (unmanaged, no RC).
 	const od = node.data as ObjectLiteralData;
+	const fieldDefault = (mode === DrcMode.Normal) ? DrcMode.Normal : DrcMode.SinkArg;
 	for (let i = 0; i < od.properties.length; i += 1) {
-		od.properties[i] = processNode(od.properties[i], dctx, DrcMode.Consumed);
+		const fieldMode = isPtrField(node.nodeType, i) ? DrcMode.Normal : fieldDefault;
+		od.properties[i] = processNode(od.properties[i], dctx, fieldMode);
 	}
 	return node;
 }
 
 function processArrayLiteral(node: Node, dctx: DrcContext, mode: DrcMode): Node {
+	// Reference parity (array literal): mode==Normal → elements in Normal; else → SinkArg.
+	// Same logic as processObjectLiteral mode sensitivity.
 	const ad = node.data as ArrayLiteralData;
+	const elemMode = (mode === DrcMode.Normal) ? DrcMode.Normal : DrcMode.SinkArg;
 	for (let i = 0; i < ad.elements.length; i += 1) {
-		ad.elements[i] = processNode(ad.elements[i], dctx, DrcMode.Consumed);
+		ad.elements[i] = processNode(ad.elements[i], dctx, elemMode);
 	}
 	return node;
 }
@@ -362,20 +444,37 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const rcInfo = classifyType(sym.symbolType, dctx.ctx);
 	if (!rcInfo.needsCleanup) return node;
 
-	// Implementation parity: if mode is Consumed, decide between MOVE and COPY
+	// Reference parity: SinkArg mode — passCopyToSink or destructive move
+	// Used for object literal fields, array literal elements (reference: nkObjConstr sinkArg)
+	if (mode === DrcMode.SinkArg) {
+		const loc = node.location;
+		if (isLastReadSafe(sym, node, dctx.currentStmtIdx, dctx.currentStmtList, dctx)) {
+			// Last read: destructiveMoveVar — blit + wasMoved
+			if (rcInfo.wasMovedFn !== "") {
+				addPending(dctx, makeWasMovedCall(d.name, rcInfo, loc));
+			}
+			recordMoveInContext(dctx, d.name);
+			return node;
+		} else {
+			// Not last read: passCopyToSink — copy into fresh temp, return temp.
+			// Reference never generates self-copy (=copy(x, x)).
+			return passCopyToSink(node, dctx);
+		}
+	}
+
+	// Consumed mode: in-place move or copy (for call args, assignment RHS)
 	if (mode === DrcMode.Consumed) {
 		const loc = node.location;
 		if (isLastReadSafe(sym, node, dctx.currentStmtIdx, dctx.currentStmtList, dctx)) {
-			// MOVE: emit wasMoved after the current statement
 			if (rcInfo.wasMovedFn !== "") {
 				addPending(dctx, makeWasMovedCall(d.name, rcInfo, loc));
 			}
 			recordMoveInContext(dctx, d.name);
 		} else {
-			// COPY: emit incref before the current statement
-			if (rcInfo.copyFn !== "") {
-				addPre(dctx, makeCopyAfterInit(d.name, rcInfo, loc, ""));
-			}
+			// Reference parity: passCopyToSink — copy into fresh temp, return temp.
+			// Self-copy (=copy(x, x)) is wrong for sink params: the sink takes ownership
+			// of the value, then scope-exit destroys x, double-freeing the shared data.
+			return passCopyToSink(node, dctx);
 		}
 	}
 
@@ -384,7 +483,7 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 
 // ===== RC Call Builders =====
 
-// Nim parity: =copy(var dest, src) takes 2 args for Named and String types.
+// Reference parity: =copy(var dest, src) takes 2 args for Named and String types.
 // Named-type hooks take pointer params (reference pointer introduction), so we wrap in HiddenAddr.
 // String: msStringCopy(dest*, src) — dest by pointer, src by value (like seqLike Named).
 // Ref/Closure/Map/Set: still unary incref (simple refcount bump, no reassignment issue).
@@ -438,7 +537,7 @@ function makeWasMovedCall(varName: string, rcInfo: RcInfo, loc: SourceLocation):
 	return makeRcCallStmt(rcInfo.wasMovedFn, varName, loc);
 }
 
-// Nim parity: =copy(&dest, src) for Named and String types; unary incref for Ref/Closure/Map/Set.
+// Reference parity: =copy(&dest, src) for Named and String types; unary incref for Ref/Closure/Map/Set.
 function makeCopyAfterInit(destName: string, rcInfo: RcInfo, loc: SourceLocation, srcName: string): Node {
 	if (rcInfo.copyFn === "") return makeExprStmt(makeNull(loc), loc);
 	// 2-arg copy: Named types and String (=copy(&dest, src))
@@ -497,36 +596,11 @@ function makeWasMovedOnExpr(argExpr: Node, rcInfo: RcInfo, loc: SourceLocation):
 // ===== Self-Assignment Detection (reference parity) =====
 // Checks if two AST nodes refer to the same memory location.
 // Used to elide `x = x` (self-assignment removal).
-// Reference: reference DRC injection
+// Implemented via bidirectional aliases() — exact match means both contain each other.
 
 function sameLocation(a: Node, b: Node): boolean {
 	if (a === null || b === null) return false;
-	// Strip transparent wrappers (HiddenAddr, HiddenDeref) and recurse
-	if (a.kind === NodeKind.HiddenAddr || a.kind === NodeKind.HiddenDeref) {
-		return sameLocation((a.data as ExprStmtData).expr, b);
-	}
-	if (b.kind === NodeKind.HiddenAddr || b.kind === NodeKind.HiddenDeref) {
-		return sameLocation(a, (b.data as ExprStmtData).expr);
-	}
-	if (a.kind !== b.kind) return false;
-	return match (a.kind) {
-		NodeKind.Identifier => {
-			if (a.resolvedSym !== null && b.resolvedSym !== null) { return a.resolvedSym === b.resolvedSym; }
-			else { return (a.data as IdentifierData).name === (b.data as IdentifierData).name; }
-		},
-		NodeKind.MemberExpr => {
-			const ad = a.data as MemberExprData;
-			const bd = b.data as MemberExprData;
-			return ad.property === bd.property && sameLocation(ad.object, bd.object);
-		},
-		NodeKind.ArrayAccess => {
-			const ad = a.data as ArrayAccessData;
-			const bd = b.data as ArrayAccessData;
-			if (ad.index.kind !== NodeKind.NumberLiteral || bd.index.kind !== NodeKind.NumberLiteral) { return false; }
-			else { return (ad.index.data as NumberLiteralData).value === (bd.index.data as NumberLiteralData).value && sameLocation(ad.array, bd.array); }
-		},
-		_ => false,
-	};
+	return aliases(a, b) === AliasKind.Yes && aliases(b, a) === AliasKind.Yes;
 }
 
 // ===== MoveExpr Source Classification =====
@@ -855,6 +929,13 @@ function isLastReadSafe(sym: Symbol, node: Node, idx: number, stmts: Node[], dct
 	// Moving a by-value param only zeroes the local copy while the caller still
 	// holds (and will decref) its own copy, causing use-after-free.
 	if (sym.symbolKind === SymbolKind.Parameter && !hasFlag(sym, SymbolFlag.Sink)) return false;
+	// Reference parity: cursor variables are borrows — never move them.
+	// isLastRead(n, c, s) and not (n.kind == nkSym and isCursor(n))
+	// Cursor vars (for-of bindings, $-prefixed temps) don't own the data;
+	// the source array/container still holds its own reference.
+	// Moving a cursor would leave the source with a dangling pointer.
+	const vi = findVarInfoInContext(dctx, sym.name);
+	if (vi !== null && vi.isCursor) return false;
 	// Phase A: variables in finally blocks must never be moved (use-after-free prevention)
 	if (nameSetContains(dctx.finallyProtectedVars, sym.name)) return false;
 	// Phase C: use CFG-based analysis when function body is available
@@ -867,6 +948,32 @@ function isLastReadSafe(sym: Symbol, node: Node, idx: number, stmts: Node[], dct
 	// inside the loop body (the loop will repeat and use it again).
 	if (isVarFromOuterLoopScope(sym.name, dctx)) return false;
 	return true;
+}
+
+// ===== Field-Level Last-Read Safety (Phase B) =====
+// For MemberExpr/ArrayAccess nodes: checks if the field path is last-read.
+// Uses alias-aware CFG analysis (isLastReadCfgNodeCached).
+// Reference: isAnalysableFieldAccess + isLastRead pattern.
+
+function isLastReadFieldSafe(node: Node, idx: number, stmts: Node[], dctx: DrcContext): boolean {
+	if (node === null) return false;
+	// Gate: must be analysable field access (local, not global, not cursor, sink if param)
+	if (!isAnalysableFieldAccess(node, (name: string): boolean => {
+		const vi = findVarInfoInContext(dctx, name);
+		return vi !== null && vi.isCursor;
+	})) return false;
+	const rootSym = getRootSym(node);
+	if (rootSym === null) return false;
+	// Standard safety checks (same as isLastReadSafe)
+	if (rootSym.symbolKind === SymbolKind.Parameter && !hasFlag(rootSym, SymbolFlag.Sink)) return false;
+	const vi = findVarInfoInContext(dctx, rootSym.name);
+	if (vi !== null && vi.isCursor) return false;
+	if (nameSetContains(dctx.finallyProtectedVars, rootSym.name)) return false;
+	// Field-level CFG query with alias-aware BFS
+	if (dctx.currentFuncBody !== null) {
+		return isLastReadCfgNodeCached(rootSym, node, dctx.currentFuncBody, dctx.cfgCache);
+	}
+	return false;  // no CFG available → conservative
 }
 
 // ===== Conditional Expression Init =====
@@ -979,81 +1086,10 @@ function wrapWithCallArgPre(stmt: Node, preStmts: Node[], loc: SourceLocation): 
 	return makeBlock(preStmts, loc);
 }
 
-// ===== Literal Field RC Processing =====
-
-// For { field: someVar } — incref RC identifier fields (they alias the source)
-function emitLiteralFieldCopies(literal: Node, outerType: Type, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation): void {
-	if (outerType === null) return;
-	const ld = literal.data as ObjectLiteralData;
-	const fieldTypes = outerType.typeChildren;
-	for (let fi = 0; fi < ld.properties.length && fi < fieldTypes.length; fi += 1) {
-		const prop = ld.properties[fi];
-		if (prop !== null && prop.kind === NodeKind.Identifier) {
-			const propName = (prop.data as IdentifierData).name;
-			const fieldRc = classifyType(fieldTypes[fi], dctx.ctx);
-			if (fieldRc.needsCleanup) {
-				if (isLastReadSafe(prop.resolvedSym, prop, idx, stmts, dctx)) {
-					if (fieldRc.wasMovedFn !== "") {
-						addPending(dctx, makeWasMovedCall(propName, fieldRc, loc));
-					}
-					recordMove(dctx, propName);
-				} else {
-					addPending(dctx, makeCopyAfterInit(propName, fieldRc, loc, ""));
-				}
-			}
-		}
-		// MoveExpr field: force move — wasMoved on source, no incref
-		if (prop !== null && prop.kind === NodeKind.MoveExpr) {
-			const md = prop.data as MoveExprData;
-			if (md.moveArg.kind === NodeKind.Identifier) {
-				const srcName = (md.moveArg.data as IdentifierData).name;
-				const fieldRc = classifyType(fieldTypes[fi], dctx.ctx);
-				if (fieldRc.needsCleanup) {
-					if (fieldRc.wasMovedFn !== "") {
-						addPending(dctx, makeWasMovedCall(srcName, fieldRc, loc));
-					}
-					recordMove(dctx, srcName);
-				}
-			}
-		}
-	}
-}
-
-// For [a, b, c] — incref RC identifier elements
-function emitArrayElementCopies(literal: Node, outerType: Type, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation): void {
-	if (outerType === null || outerType.typeReturn === null) return;
-	const elemRc = classifyType(outerType.typeReturn, dctx.ctx);
-	if (!elemRc.needsCleanup) return;
-
-	const ald = literal.data as ArrayLiteralData;
-	for (let ei = 0; ei < ald.elements.length; ei += 1) {
-		const elem = ald.elements[ei];
-		if (elem !== null && elem.kind === NodeKind.Identifier) {
-			const elemName = (elem.data as IdentifierData).name;
-			if (isLastReadSafe(elem.resolvedSym, elem, idx, stmts, dctx)) {
-				if (elemRc.wasMovedFn !== "") {
-					addPending(dctx, makeWasMovedCall(elemName, elemRc, loc));
-				}
-				recordMove(dctx, elemName);
-			} else {
-				addPending(dctx, makeCopyAfterInit(elemName, elemRc, loc, ""));
-			}
-		}
-		// MoveExpr element: force move — wasMoved on source, no incref
-		if (elem !== null && elem.kind === NodeKind.MoveExpr) {
-			const md = elem.data as MoveExprData;
-			if (md.moveArg.kind === NodeKind.Identifier) {
-				const srcName = (md.moveArg.data as IdentifierData).name;
-				if (elemRc.needsCleanup) {
-					if (elemRc.wasMovedFn !== "") {
-						addPending(dctx, makeWasMovedCall(srcName, elemRc, loc));
-					}
-					recordMove(dctx, srcName);
-				}
-			}
-		}
-	}
-}
+// ===== Literal Field/Element RC Processing =====
+// NOTE: emitLiteralFieldCopies / emitArrayElementCopies removed.
+// Reference parity (nkObjConstr/nkBracket): processObjectLiteral and processArrayLiteral
+// handle field/element RC inline via SinkArg mode. No separate post-construction copy step.
 
 // ===== Sink Parameter Registration =====
 // Register RC-typed function parameters for scope cleanup.
@@ -1274,11 +1310,11 @@ function processFuncBodyWithParams(body: Node, fnName: string, paramNames: strin
 // ===== Borrow Copy Helper =====
 
 // Emit RC operations for a borrowed value (ArrayAccess or MemberExpr assigned to a local).
-// Named/String: wasMoved(dest) + =copy(&dest, src) — 2-arg Nim parity.
+// Named/String: wasMoved(dest) + =copy(&dest, src) — 2-arg reference parity.
 // Simple RC types (Ref, Closure, Map, Set): shallow copy + unary incref.
 function emitBorrowCopy(destName: string, srcExpr: Node, rcInfo: RcInfo, dctx: DrcContext, loc: SourceLocation): void {
 	if (isBinaryCopy(rcInfo) && rcInfo.copyFn !== "") {
-		// Named/String: wasMoved(dest) + =copy(&dest, src) — Nim parity
+		// Named/String: wasMoved(dest) + =copy(&dest, src) — Reference parity
 		addPending(dctx, makeWasMovedCall(destName, rcInfo, loc));
 		const destArg = needsDestAddr(rcInfo)
 			? makeHiddenAddr(makeIdent(destName, loc), loc)
@@ -1332,6 +1368,14 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	if (d.initializer !== null && (d.initializer.flags & NodeFlag.Cursor) !== 0) {
 		isCursor = true;
 	}
+	// Union variant narrowing: `const d = node.data as Variant` borrows from parent node.
+	// In C, codegen emits a pointer into the union — DRC must not destroy the alias.
+	if (d.initializer !== null && d.initializer.kind === NodeKind.TypeAssertion) {
+		const tad = d.initializer.data as TypeAssertionData;
+		if (tad.asExpr !== null && tad.asExpr.nodeType !== null && tad.asExpr.nodeType.kind === TypeKind.Union) {
+			isCursor = true;
+		}
+	}
 	// Phase B: check cursor inference results (borrow-only variables skip all RC)
 	if (isCursorVar(dctx.cursors, d.declName)) {
 		isCursor = true;
@@ -1354,19 +1398,15 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	
 	const init = d.initializer;
 
-	// Object literal: fresh as whole, but RC fields need incref
-	// Closure pairs (NF_CLOSURE) are fresh aggregates — no per-field RC.
-	// Reference parity: closure construction is a sink, RC on env handled by =copy/=destroy at value level.
+	// Object literal: processObjectLiteral already handled field RC via SinkArg mode.
+	// Reference parity (nkObjConstr): sinkArg on fields inline, no separate copy step.
 	if (init.kind === NodeKind.ObjectLiteral) {
-		if ((init.flags & NodeFlag.Closure) === 0) {
-			emitLiteralFieldCopies(init, varType, idx, stmts, dctx, loc);
-		}
 		return stmt;
 	}
 
-	// Array literal: fresh as whole, but RC elements need incref
+	// Array literal: processArrayLiteral already handled element RC via SinkArg mode.
+	// Reference parity (nkBracket): sinkArg on elements inline, no separate copy step.
 	if (init.kind === NodeKind.ArrayLiteral) {
-		emitArrayElementCopies(init, varType, idx, stmts, dctx, loc);
 		return stmt;
 	}
 
@@ -1410,13 +1450,11 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 		return stmt;
 	}
 
-	// Member access: borrowed — needs incref/copy or null-out for Result extraction
+	// Member access: field-level move when analysable + last-read, else borrow-copy
+	// Reference: moveOrCopy nkBracketExpr branch (lines 1195-1204)
 	if (init.kind === NodeKind.MemberExpr) {
 		const md = init.data as MemberExprData;
 		// Result field extraction: $result_N.value → wasMoved on source to prevent double-free
-		// Reference parity: reset logic dispatches per-type (field-level zero, not nil assignment).
-		// Using wasMoved instead of null assignment handles value types (msRefArray, structs)
-		// that can't accept void* assignment.
 		if (md.object.kind === NodeKind.Identifier && md.property === "value") {
 			const objName = (md.object.data as IdentifierData).name;
 			if (objName.startsWith("$result")) {
@@ -1428,12 +1466,25 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 				return stmt;
 			}
 		}
+		// Field-level move: analysable + last-read → SINK (move) instead of copy
+		if (isLastReadFieldSafe(init, idx, stmts, dctx)) {
+			if (rcInfo.wasMovedFn !== "") {
+				addPending(dctx, makeWasMovedOnExpr(init, rcInfo, loc));
+			}
+			return stmt;
+		}
 		emitBorrowCopy(d.declName, init, rcInfo, dctx, loc);
 		return stmt;
 	}
 
-	// Array access: borrowed — same borrow-copy as MemberExpr
-	if (init.kind === NodeKind.ArrayAccess) {
+	// Array access / HiddenDeref: field-level move when analysable + last-read, else borrow-copy
+	if (init.kind === NodeKind.ArrayAccess || init.kind === NodeKind.HiddenDeref) {
+		if (isLastReadFieldSafe(init, idx, stmts, dctx)) {
+			if (rcInfo.wasMovedFn !== "") {
+				addPending(dctx, makeWasMovedOnExpr(init, rcInfo, loc));
+			}
+			return stmt;
+		}
 		emitBorrowCopy(d.declName, init, rcInfo, dctx, loc);
 		return stmt;
 	}
@@ -1557,9 +1608,15 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 			const copyNode = makeCopyAfterInit(leftD.name, rcInfo, loc, rhsD.name);
 			return makeBlock([stmt, copyNode], loc);
 		}
-		// MemberExpr/ArrayAccess RHS: borrow from field — must copy (source may be destroyed before dest).
-		// Reference parity: preventCursor when source has shorter lifetime.
-		if (rhs.kind === NodeKind.MemberExpr || rhs.kind === NodeKind.ArrayAccess) {
+		// MemberExpr/ArrayAccess/HiddenDeref RHS: field-level move when analysable + last-read, else copy.
+		// Reference: moveOrCopy nkBracketExpr (lines 1195-1204) + else-branch (lines 1256-1260)
+		if (rhs.kind === NodeKind.MemberExpr || rhs.kind === NodeKind.ArrayAccess || rhs.kind === NodeKind.HiddenDeref) {
+			if (isLastReadFieldSafe(rhs, idx, stmts, dctx)) {
+				if (rcInfo.wasMovedFn !== "") {
+					addPending(dctx, makeWasMovedOnExpr(rhs, rcInfo, loc));
+				}
+				return stmt;
+			}
 			const copyNode = makeCopyAfterInit(leftD.name, rcInfo, loc, "");
 			return makeBlock([stmt, copyNode], loc);
 		}
@@ -1569,7 +1626,7 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 	// Call RHS: fresh for dest, but also process call arguments
 	if (rhs.kind === NodeKind.CallExpr) {
 		const preStmts = processCallArgs(rhs, idx, stmts, dctx, loc);
-		if (deepAliases(sym, rhs)) {
+		if (deepAliases(bd.left, rhs)) {
 			// Reference parity: self-aliased call `x = f(x)`.
 			// processIdentifier may have added wasMoved(x) to pending (last-read in Consumed mode).
 			// Clear it — the assignment overwrites x, so wasMoved would zero the NEW value.
@@ -1603,7 +1660,7 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 		}
 
 		// Aliased move: x = move x.field → destructiveMoveVar pattern
-		if (deepAliases(sym, md.moveArg)) {
+		if (deepAliases(bd.left, md.moveArg)) {
 			const tmpName = freshTemp(dctx.ctx, "moveTmp");
 			const captureDecl = makeVarDecl(tmpName, md.moveArg, DeclKind.Const, loc);
 			captureDecl.nodeType = sym.symbolType;
@@ -1646,7 +1703,7 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 
 	// Fresh RHS: destroy old, then assign
 	if (isFreshExpr(rhs.kind)) {
-		if (deepAliases(sym, rhs)) {
+		if (deepAliases(bd.left, rhs)) {
 			// Reference parity: self-aliased assignment uses temp.
 			// Clear any pending wasMoved for LHS — processIdentifier may have marked
 			// the RHS arg as last-read, but the assignment overwrites the variable.
@@ -1690,9 +1747,9 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 		return makeBlock([destroyOld, stmt, copyNode], loc);
 	}
 
-	// MemberExpr/ArrayAccess RHS: borrow from field — must copy.
+	// MemberExpr/ArrayAccess/HiddenDeref RHS: borrow from field — must copy.
 	// Reference parity: preventCursor when source has shorter lifetime.
-	if (rhs.kind === NodeKind.MemberExpr || rhs.kind === NodeKind.ArrayAccess) {
+	if (rhs.kind === NodeKind.MemberExpr || rhs.kind === NodeKind.ArrayAccess || rhs.kind === NodeKind.HiddenDeref) {
 		const destroyOld = makeDestroyCall(leftD.name, rcInfo, loc);
 		const copyNode = makeCopyAfterInit(leftD.name, rcInfo, loc, "");
 		return makeBlock([destroyOld, stmt, copyNode], loc);
@@ -1725,7 +1782,10 @@ function emitSaveAssignDestroy(stmt: Node, lhsExpr: Node, rhs: Node, rcInfo: RcI
 		return makeBlock([saveTmp, stmt, makeDestroyCall(tmpName, rcInfo, loc)], loc);
 	}
 
-	// Identifier RHS: check last-read for sink optimization (GAP 5 — reference parity: moveOrCopy)
+	// Identifier RHS: check last-read for sink optimization (reference: moveOrCopy nkSym)
+	// Reference lines 1223-1233: nkSym branch allows move into any dest (including fields)
+	// when isAnalysableFieldAccess + isLastRead. No alias check needed for nkSym —
+	// a plain identifier can never alias a MemberExpr/ArrayAccess dest.
 	if (rhs.kind === NodeKind.Identifier) {
 		const rhsSym = rhs.resolvedSym;
 		if (rhsSym !== null && isLastReadSafe(rhsSym, rhs, idx, stmts, dctx)) {
@@ -1741,8 +1801,44 @@ function emitSaveAssignDestroy(stmt: Node, lhsExpr: Node, rhs: Node, rcInfo: RcI
 		}
 	}
 
+	// MemberExpr/ArrayAccess/HiddenDeref RHS: field-level move into fields (reference: moveOrCopy nkBracketExpr + else-branch)
+	// Reference: lines 1195-1204 (nkBracketExpr) + lines 1256-1260 (else catch-all with isAnalysableFieldAccess).
+	if ((rhs.kind === NodeKind.MemberExpr || rhs.kind === NodeKind.ArrayAccess || rhs.kind === NodeKind.HiddenDeref)
+		&& isLastReadFieldSafe(rhs, idx, stmts, dctx)) {
+		if (aliases(lhsExpr, rhs) === AliasKind.No) {
+			// No alias: direct move — save old, assign, wasMoved(rhs), destroy old
+			const result: Node[] = [saveTmp, stmt];
+			if (rcInfo.wasMovedFn !== "") {
+				result.push(makeWasMovedOnExpr(rhs, rcInfo, loc));
+			}
+			result.push(makeDestroyCall(tmpName, rcInfo, loc));
+			return makeBlock(result, loc);
+		}
+		// Alias Maybe/Yes (e.g. x[i] = x[j] with runtime indices): destructiveMoveVar pattern
+		// Reference line 1204: genSink(dest, destructiveMoveVar(ri, c, s))
+		// destructiveMoveVar extracts to temp FIRST, zeros source, then we handle dest.
+		// Safe even when dest == source: value captured before zeroing.
+		const blitName = freshTemp(dctx.ctx, "blit");
+		const blitDecl = makeVarDecl(blitName, rhs, DeclKind.Const, loc);
+		blitDecl.nodeType = rhs.nodeType;
+		const result: Node[] = [];
+		result.push(blitDecl);                                          // 1. capture rhs to temp
+		if (rcInfo.wasMovedFn !== "") {
+			result.push(makeWasMovedOnExpr(rhs, rcInfo, loc));          // 2. zero source
+		}
+		result.push(saveTmp);                                           // 3. save old dest
+		const assignBlit = makeExprStmt(
+			makeAssign(lhsExpr, makeIdent(blitName, loc), loc), loc);
+		result.push(assignBlit);                                        // 4. dest = captured temp
+		if (rcInfo.wasMovedFn !== "") {
+			result.push(makeWasMovedCall(blitName, rcInfo, loc));       // 5. zero temp (consumed by dest)
+		}
+		result.push(makeDestroyCall(tmpName, rcInfo, loc));             // 6. destroy old dest
+		return makeBlock(result, loc);
+	}
+
 	// Non-last-read / field-access / other: COPY
-	// Nim parity (moveOrCopy): for Named/String types, call =copy(&dest, src) directly.
+	// Reference parity (moveOrCopy): for Named/String types, call =copy(&dest, src) directly.
 	// The copy function handles old-value cleanup internally — no save-assign-incref-destroy needed.
 	// msStringCopy takes src by value: safe even for self-assignment (captured before destroy).
 	if (isBinaryCopy(rcInfo) && rcInfo.copyFn !== "") {
@@ -1767,13 +1863,8 @@ function emitSaveAssignDestroy(stmt: Node, lhsExpr: Node, rhs: Node, rcInfo: RcI
 // ===== Discarded Call Result =====
 
 function processDiscardedCall(stmt: Node, callExpr: Node, dctx: DrcContext, loc: SourceLocation): Node {
-	if (dctx.ctx.checkerCtx === null) return stmt;
-
-	// Look up callee to determine return type
-	const cd = callExpr.data as CallExprData;
-	if (cd.callee.kind !== NodeKind.Identifier) return stmt;
-	const calleeD = cd.callee.data as IdentifierData;
-	const sym = lookupSymbol(dctx.ctx.checkerCtx.table, calleeD.name);
+	// Use resolvedSym (set by checker) — works for all callee kinds (Identifier, MemberExpr, etc.)
+	const sym = callExpr.resolvedSym;
 	if (sym === null) return stmt;
 
 	// Check return type of function
@@ -1796,6 +1887,8 @@ function processDiscardedCall(stmt: Node, callExpr: Node, dctx: DrcContext, loc:
 
 // Check if a return expression is a borrowed RC pointer that needs incref.
 // Borrowed = not fresh, not owned local. E.g., obj.field, arr[i], parameter.
+// ONLY returns true for RcKind.Ref — strings/arrays/named types need passCopyToSink
+// (deep copy), not msIncref (pointer refcount bump). See processReturn for those.
 function needsReturnIncref(expr: Node, dctx: DrcContext): boolean {
 	if (dctx.ctx.checkerCtx === null) return false;
 	// Fresh expressions produce owned values — no incref needed
@@ -1803,20 +1896,41 @@ function needsReturnIncref(expr: Node, dctx: DrcContext): boolean {
 	if (expr.kind === NodeKind.CallExpr) return false;
 	if (expr.kind === NodeKind.MoveExpr) return false;
 
-	// Identifier: local RC vars are moved (not borrowed) — no incref
+	// Identifier: function-local RC vars are moved (not borrowed) — no incref
 	if (expr.kind === NodeKind.Identifier) {
 		const name = (expr.data as IdentifierData).name;
-		const vi = findVarInfoInContext(dctx, name);
-		if (vi !== null) return false;  // local var — ownership transferred via markReturnedVarsMoved
+		// Cursor variables (for-of bindings, $-prefix borrows): borrowed references.
+		// Returning a cursor creates a new reference — must incref.
+		// Reference parity: the reference incref's at the assignment site inside the function;
+		// we skip DRC on cursor init, so we incref at the return instead.
+		if (isCursorVar(dctx.cursors, name) || (name.startsWith("$") && name !== "$result")) {
+			if (expr.nodeType !== null) {
+				const rc = classifyType(expr.nodeType, dctx.ctx);
+				return rc.needsCleanup && rc.rcKind === RcKind.Ref;
+			}
+		}
+		const vi = findVarInfoInFunction(dctx, name);
+		if (vi !== null) return false;  // function-local var — ownership transferred via markReturnedVarsMoved
 		// Not a local var (parameter or global) — check if RC pointer type
+		if (expr.nodeType !== null) {
+			const rc = classifyType(expr.nodeType, dctx.ctx);
+			return rc.needsCleanup && rc.rcKind === RcKind.Ref;
+		}
 		const sym = lookupSymbol(dctx.ctx.checkerCtx.table, name);
 		if (sym === null || sym.symbolType === null) return false;
 		const rc = classifyType(sym.symbolType, dctx.ctx);
-		return rc.needsCleanup && (rc.rcKind === RcKind.Ref || rc.rcKind === RcKind.String);
+		// Only Ref types use msIncref. Strings/arrays use deep copy (handled by processReturn).
+		return rc.needsCleanup && rc.rcKind === RcKind.Ref;
 	}
 
-	// MemberExpr: look up object type, find field by name in typeNames/typeChildren
+	// MemberExpr: use nodeType (stamped by checker) — scope lookups fail for function params.
+	// Reference parity: the reference reads n.typ on the node, never re-does scope lookup in DRC.
 	if (expr.kind === NodeKind.MemberExpr) {
+		if (expr.nodeType !== null) {
+			const rc = classifyType(expr.nodeType, dctx.ctx);
+			return rc.needsCleanup && rc.rcKind === RcKind.Ref;
+		}
+		// Fallback: look up object type via symbol table (module-scope symbols only)
 		const md = expr.data as MemberExprData;
 		if (md.object.kind !== NodeKind.Identifier) return false;
 		const objName = (md.object.data as IdentifierData).name;
@@ -1826,13 +1940,17 @@ function needsReturnIncref(expr: Node, dctx: DrcContext): boolean {
 		for (let fi = 0; fi < objType.typeNames.length && fi < objType.typeChildren.length; fi += 1) {
 			if (objType.typeNames[fi] === md.property) {
 				const rc = classifyType(objType.typeChildren[fi], dctx.ctx);
-				return rc.needsCleanup && (rc.rcKind === RcKind.Ref || rc.rcKind === RcKind.String);
+				return rc.needsCleanup && rc.rcKind === RcKind.Ref;
 			}
 		}
 		return false;
 	}
-	// ArrayAccess: look up array element type via typeReturn
+	// ArrayAccess: use nodeType first, fallback to symbol lookup
 	if (expr.kind === NodeKind.ArrayAccess) {
+		if (expr.nodeType !== null) {
+			const rc = classifyType(expr.nodeType, dctx.ctx);
+			return rc.needsCleanup && rc.rcKind === RcKind.Ref;
+		}
 		const ad = expr.data as ArrayAccessData;
 		if (ad.array.kind !== NodeKind.Identifier) return false;
 		const arrName = (ad.array.data as IdentifierData).name;
@@ -1840,7 +1958,7 @@ function needsReturnIncref(expr: Node, dctx: DrcContext): boolean {
 		if (sym === null || sym.symbolType === null) return false;
 		if (sym.symbolType.typeReturn === null) return false;
 		const elemRc = classifyType(sym.symbolType.typeReturn, dctx.ctx);
-		return elemRc.needsCleanup && (elemRc.rcKind === RcKind.Ref || elemRc.rcKind === RcKind.String);
+		return elemRc.needsCleanup && elemRc.rcKind === RcKind.Ref;
 	}
 
 	return false;
@@ -1870,12 +1988,32 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 		if (needsReturnIncref(d.argument, dctx)) {
 			return emitReturnWithIncref(d.argument, dctx, loc);
 		}
-		// Named value type borrow return: ArrayAccess/MemberExpr needs full copy
-		// (e.g., return state.tokens[pos] where Token has string field)
+		// Borrowed value return: non-Ref RC types need deep copy via passCopyToSink.
+		// Ref types handled above by needsReturnIncref+emitReturnWithIncref (msIncref).
+		// All others (String, Named, Array, Closure, Map, Set) need passCopyToSink.
+		// Covers: return d.className (string field from union variant extraction),
+		//         return state.tokens[pos] (struct with string field),
+		//         return _globalArray (module-level variable), etc.
 		if (d.argument.kind === NodeKind.ArrayAccess || d.argument.kind === NodeKind.MemberExpr) {
 			const retRc = classifyType(d.argument.nodeType, dctx.ctx);
-			if (retRc.needsCleanup && retRc.rcKind === RcKind.Named) {
+			if (retRc.needsCleanup && retRc.rcKind !== RcKind.Ref) {
 				d.argument = passCopyToSink(d.argument, dctx);
+			}
+		}
+		// Non-local identifier return: globals/module vars need deep copy too.
+		// Function-local vars are handled by markReturnedVarsMoved (ownership transfer).
+		// Non-local variables (globals, module-level, outer function) are borrowed —
+		// caller's destroy would free the shared data, causing double-free.
+		if (d.argument.kind === NodeKind.Identifier) {
+			const retName = (d.argument.data as IdentifierData).name;
+			const vi = findVarInfoInFunction(dctx, retName);
+			if (vi === null) {
+				// Not a function-local var (cursor, param, or global) — check if RC type needs copy
+				const retRc = classifyType(d.argument.nodeType, dctx.ctx);
+				if (retRc.needsCleanup && retRc.rcKind !== RcKind.Ref) {
+					d.argument = passCopyToSink(d.argument, dctx);
+				}
+				// Ref types handled by needsReturnIncref above
 			}
 		}
 		// Mark returned identifiers as moved in their owning scopes.
@@ -2012,7 +2150,14 @@ function processTryCatch(stmt: Node, dctx: DrcContext, loc: SourceLocation): Nod
 
 function processSwitchCase(caseNode: Node, dctx: DrcContext, loc: SourceLocation): void {
 	const cd = caseNode.data as SwitchCaseData;
-	cd.caseStmts = processStmtListScoped(cd.caseStmts, dctx, loc);
+	// Inline processStmtListScoped to avoid passing field array by value
+	// (by-value param creates shared payload; DRC copy inside callee frees shared payload → double-free)
+	pushScope(dctx, false, false);
+	const processed = processStmtList(cd.caseStmts, dctx, loc);
+	const scope = popScope(dctx);
+	const cleanup = generateCleanup(scope, emptyNameSet(), loc);
+	for (const cs of cleanup) { processed.push(cs); }
+	cd.caseStmts = processed;
 }
 
 function processSwitch(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
@@ -2309,11 +2454,12 @@ test "needsReturnIncref false for local var (moved)" {
 	popScope(dctx);
 }
 
-test "needsReturnIncref true for member expr with string field" {
+test "needsReturnIncref false for member expr with string field (strings use passCopyToSink)" {
 	const dctx = testDrcContext("interface Obj { name: string; } const o: Obj = { name: \"\" };");
 	const loc = testLoc();
 	const memberExpr = makeMember(makeIdent("o", loc), "name", loc);
-	assert needsReturnIncref(memberExpr, dctx);
+	// String fields use passCopyToSink (deep copy), not msIncref (pointer refcount)
+	assert !needsReturnIncref(memberExpr, dctx);
 }
 
 test "emitReturnWithIncref produces block with 3 stmts" {

@@ -1,7 +1,7 @@
 // Module orchestrator — coordinates checking across module graph
 // Reference parallel implementation
 
-import { Node } from "../ast/node";
+import { Node, NodeKind, EnumDeclData, makeLoc } from "../ast/node";
 import {
 	CheckerContext, createModuleContext, Severity,
 	ExportRegistry, ExportedSymInfo, createExportRegistry, registerModuleExports, updateModuleExports,
@@ -69,16 +69,25 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 		// Temporary context for Phase 1 (discarded after)
 		const p1ctx = createModuleContext(graph, mod);
 		p1ctx.exportRegistry = registry;
-		for (const sym of baseCtx.table.current.symbols) {
+		// NOTE: while loops (not for-of) so DRC properly increfs shared symbols.
+		const baseSyms = baseCtx.table.current.symbols;
+		let bsi = 0;
+		while (bsi < baseSyms.length) {
+			const sym = baseSyms[bsi];
 			if (hasFlag(sym, SymbolFlag.Exported)) {
 				p1ctx.table.current.symbols.push(sym);
 			}
+			bsi = bsi + 1;
 		}
 		if (baseCtx.extensionRegistry !== null && p1ctx.extensionRegistry !== null) {
-			for (const ext of baseCtx.extensionRegistry.methods) {
+			const baseExts = baseCtx.extensionRegistry.methods;
+			let bei = 0;
+			while (bei < baseExts.length) {
+				const ext = baseExts[bei];
 				if (ext.sym !== null && hasFlag(ext.sym, SymbolFlag.Exported)) {
 					registerExtension(p1ctx.extensionRegistry, ext);
 				}
+				bei = bei + 1;
 			}
 		}
 		openScope(p1ctx.table, ScopeKind.Module);
@@ -101,6 +110,8 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 				definingModule: sym.modulePath !== "" ? sym.modulePath : path,
 				originalName: sym.originalName,
 				headerPath: sym.headerPath,
+				location: sym.location !== null ? sym.location : makeLoc(0, 0),
+				memberLocations: sym.declNode !== null && sym.declNode.kind === NodeKind.EnumDecl ? (sym.declNode.data as EnumDeclData).memberLocations : [],
 				};
 				earlyExports.push(info);
 			}
@@ -232,7 +243,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 						ovi3 = ovi3 + 1;
 					}
 				}
-				const info: ExportedSymInfo = { name: sym.name, kind: sym.symbolKind, symType: sym.symbolType, overloadTypes: ovTypes, extReceiverType: extRecv, extIsStatic: extStatic, overloadExtReceiverTypes: ovExtRecvs, overloadExtIsStatic: ovExtStatics, nativeName: sym.nativeName, builtinKind: sym.builtinKind, overloadNativeNames: ovRtNames, overloadBuiltinKinds: ovBiKinds, defaultParams: sym.defaultParams, overloadDefaultParamsFlat: ovDefParamsFlat, overloadDefaultParamsCounts: ovDefParamsCounts, definingModule: sym.modulePath !== "" ? sym.modulePath : path, originalName: sym.originalName, headerPath: sym.headerPath };
+				const info: ExportedSymInfo = { name: sym.name, kind: sym.symbolKind, symType: sym.symbolType, overloadTypes: ovTypes, extReceiverType: extRecv, extIsStatic: extStatic, overloadExtReceiverTypes: ovExtRecvs, overloadExtIsStatic: ovExtStatics, nativeName: sym.nativeName, builtinKind: sym.builtinKind, overloadNativeNames: ovRtNames, overloadBuiltinKinds: ovBiKinds, defaultParams: sym.defaultParams, overloadDefaultParamsFlat: ovDefParamsFlat, overloadDefaultParamsCounts: ovDefParamsCounts, definingModule: sym.modulePath !== "" ? sym.modulePath : path, originalName: sym.originalName, headerPath: sym.headerPath, location: sym.location !== null ? sym.location : makeLoc(0, 0), memberLocations: sym.declNode !== null && sym.declNode.kind === NodeKind.EnumDecl ? (sym.declNode.data as EnumDeclData).memberLocations : [] };
 				exports.push(info);
 			}
 		}

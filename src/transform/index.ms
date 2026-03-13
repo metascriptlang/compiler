@@ -6,8 +6,7 @@
 //  3. stringConcatFlatten   — flatten known-string + chains into concat call (after constFold)
 //  4. optionalChain         — must run BEFORE nullishCoalesce
 //  5. nullishCoalesce       — sees already-lowered optional chains
-//  6. typeCoercion          — simple 1:1 replacement
-//  7. stringTruthiness      — normalize bare conditions after coercions
+//  6. stringTruthiness      — normalize bare conditions after coercions
 //  8. destructuringLower    — unpack array/object patterns before forOf/result
 //  9. spreadExpand          — inline array literal spreads after destructuring
 // 10. arrayMethodInline     — arr.map/filter/reduce → inline while loops (before forLoop/extensionMethod)
@@ -37,7 +36,6 @@ import { lowerConstFold } from "./coercion/constantFolding";
 import { lowerStringConcatFlatten } from "./coercion/stringConcatFlatten";
 import { lowerOptionalChain } from "./coercion/optionalChain";
 import { lowerNullishCoalesce } from "./coercion/nullishCoalesce";
-import { lowerTypeCoercion } from "./coercion/typeCoercion";
 import { lowerStringTruthiness } from "./coercion/stringTruthiness";
 import { lowerDestructuring } from "./desugar/destructuringLower";
 import { lowerSpread } from "./desugar/spreadExpand";
@@ -77,7 +75,6 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerStringConcatFlatten(result, ctx); }
 	result = lowerOptionalChain(result, ctx);
 	result = lowerNullishCoalesce(result, ctx);
-	result = lowerTypeCoercion(result, ctx);
 	if (!jsBackend) { result = lowerStringTruthiness(result, ctx); }
 	result = lowerDestructuring(result, ctx);
 	result = lowerSpread(result, ctx);

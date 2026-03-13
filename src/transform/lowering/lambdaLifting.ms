@@ -22,7 +22,7 @@ import {
 	VariableDeclData, IfStmtData, WhileStmtData, TryCatchStmtData,
 	SwitchStmtData, SwitchCaseData,
 	ExprStmtData, ReturnStmtData,
-	BinaryExprData, CallExprData,
+	BinaryExprData, CallExprData, UnaryExprData,
 	IdentifierData,
 } from "../../ast/node";
 import { TransformContext, NameSet, nameSetAdd, nameSetContains } from "../context";
@@ -222,33 +222,42 @@ function computeLastUseCaptures(captures: NameSet, closureIdx: number, stmts: No
 // ===== Capture Detection =====
 // Detect which outer variables a function body references.
 // Walk the body recursively, collecting identifier names that are in outer scopes.
-// NOTE: string[] is VALUE TYPE in MetaScript — wrap in interface for mutation propagation.
+// Module-level state avoids closure capture of value-type arrays (use-after-free in C backend).
+
+let _captureCC: NameSet = [];
+let _captureIdents: Node[] = [];
+let _captureSS: ScopeStack = { names: [], funcMarkers: [] };
 
 function detectCaptures(body: Node, ss: ScopeStack, identNodes: Node[]): NameSet {
-	const cc: NameSet = [];
-	collectCaptures(body, ss, cc, identNodes);
-	return cc;
+	_captureCC = [];
+	_captureIdents = identNodes;
+	_captureSS = ss;
+	collectCaptures(body);
+	const result = _captureCC;
+	_captureCC = [];
+	_captureIdents = [];
+	return result;
 }
 
-function collectCaptures(node: Node, ss: ScopeStack, cc: NameSet, identNodes: Node[]): void {
+function collectCaptures(node: Node): void {
 	if (node.kind === NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
-		if (!isBuiltinName(d.name) && !isLocalVar(ss, d.name) && isOuterVar(ss, d.name)) {
-			if (!nameSetContains(cc, d.name)) {
-				identNodes.push(node);
+		if (!isBuiltinName(d.name) && !isLocalVar(_captureSS, d.name) && isOuterVar(_captureSS, d.name)) {
+			if (!nameSetContains(_captureCC, d.name)) {
+				_captureIdents.push(node);
 			}
-			nameSetAdd(cc, d.name);
+			nameSetAdd(_captureCC, d.name);
 		}
 		return;
 	}
 	if (isFuncBoundary(node)) return;
 	if (node.kind === NodeKind.VariableDecl) {
 		const d = node.data as VariableDeclData;
-		collectCaptures(d.initializer, ss, cc, identNodes);
-		defineVar(ss, d.declName);
+		collectCaptures(d.initializer);
+		defineVar(_captureSS, d.declName);
 		return;
 	}
-	mapChildren(node, (child: Node): Node => { collectCaptures(child, ss, cc, identNodes); return child; });
+	mapChildren(node, (child: Node): Node => { collectCaptures(child); return child; });
 }
 
 // ===== Body Rewriting =====
@@ -531,11 +540,13 @@ function walkLift(node: Node, state: LiftState): void {
 		},
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
+			d.condition = walkOrLift(d.condition, state);
 			walkLift(d.consequent, state);
 			walkLift(d.alternate, state);
 		},
 		NodeKind.WhileStmt => {
 			const d = node.data as WhileStmtData;
+			d.whileCondition = walkOrLift(d.whileCondition, state);
 			walkLift(d.whileBody, state);
 		},
 		NodeKind.TryCatchStmt => {
@@ -611,6 +622,10 @@ function walkLift(node: Node, state: LiftState): void {
 			const d = node.data as BinaryExprData;
 			d.right = walkOrLift(d.right, state);
 			walkLift(d.left, state);
+		},
+		NodeKind.UnaryExpr => {
+			const d = node.data as UnaryExprData;
+			d.operand = walkOrLift(d.operand, state);
 		},
 		_ => {},
 	};
@@ -691,7 +706,7 @@ export function lowerLambda(program: Node, ctx: TransformContext): Node {
 		for (const s of d.programStmts) {
 			newStmts.push(s);
 		}
-		d.programStmts = newStmts;
+		program.data = { programStmts: newStmts };
 	}
 
 	return program;

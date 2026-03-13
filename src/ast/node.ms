@@ -62,6 +62,7 @@ export enum NodeFlag {
 	Cursor = 256,       // VariableDecl is a borrow (for-of binding) — skip RC destroy (reference: cursor flag)
 	ExtCall = 512,      // checker: this CallExpr is an extension method call (UFCS)
 	ExtStatic = 1024,   // checker: this extension call is static (no receiver prepend)
+	ExportDefault = 2048, // parser: export default declaration
 }
 
 // ===== Node Kind Enum =====
@@ -160,7 +161,7 @@ export type NodeData =
 	| { callee: Node, arguments: Node[], isDirectCall: boolean, resolvedOverloadIdx: number }  // CallExpr
 	| { object: Node, property: string, isOptional: boolean }      // MemberExpr
 	| { array: Node, index: Node }                                 // ArrayAccess
-	| { properties: Node[], keys: string[] }                       // ObjectLiteral
+	| { properties: Node[], keys: string[], keyLocations: SourceLocation[] } // ObjectLiteral
 	| { elements: Node[] }                                         // ArrayLiteral
 	| { arrowParams: string[], arrowParamTypes: string[], arrowBody: Node, arrowFlags: string, arrowReturnType: string } // ArrowFunction
 	| { funcExprParams: string[], funcExprParamTypes: string[], funcExprBody: Node, funcExprFlags: string, funcExprReturnType: string } // FunctionExpr
@@ -203,10 +204,10 @@ export type NodeData =
 	| { unreachableMsg: string }                                   // UnreachableStmt
 	| { matchStmtDisc: Node, matchStmtCases: Node[] }              // MatchStmt
 	// Declaration variants
-	| { importNames: string[], importAliases: string[], importSource: string }  // ImportDecl
+	| { importNames: string[], importAliases: string[], importSource: string, nameLocations: SourceLocation[] }  // ImportDecl
 	| { exportedDecl: Node }                                       // ExportDecl
 	| { aliasName: string, aliasType: string, aliasIsDistinct: boolean, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[], nameLocation: SourceLocation } // TypeAliasDecl
-	| { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation } // EnumDecl
+	| { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[] } // EnumDecl
 	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], nameLocation: SourceLocation } // InterfaceDecl
 	| { className: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation } // ClassDecl
 	| { propName: string, propType: string, propIsStatic: boolean }                 // PropertyDecl
@@ -250,6 +251,7 @@ export class Node {
 	typeExpr: Node;    // Positioned type annotation AST (standard parity: PNode type tree alongside string fields)
 	typeExprs: Node[]; // Per-param/per-field type annotation ASTs (parallel to string[] type fields)
 	paramLocations: SourceLocation[]; // Per-param source locations for DEF recording
+	typeArg: string; // Explicit generic type arg string (e.g. "Person" from parse<Person>()) — stored on AST, not side-channel
 }
 
 export type Expression = Node;
@@ -272,7 +274,7 @@ export type UpdateExprData = { updateOp: string, updateArg: Node, isPrefix: bool
 export type CallExprData = { callee: Node, arguments: Node[], isDirectCall: boolean, resolvedOverloadIdx: number };
 export type MemberExprData = { object: Node, property: string, isOptional: boolean };
 export type ArrayAccessData = { array: Node, index: Node };
-export type ObjectLiteralData = { properties: Node[], keys: string[] };
+export type ObjectLiteralData = { properties: Node[], keys: string[], keyLocations: SourceLocation[] };
 export type ArrayLiteralData = { elements: Node[] };
 export type ArrowFunctionData = { arrowParams: string[], arrowParamTypes: string[], arrowBody: Node, arrowFlags: string, arrowReturnType: string };
 export type FunctionExprData = { funcExprParams: string[], funcExprParamTypes: string[], funcExprBody: Node, funcExprFlags: string, funcExprReturnType: string };
@@ -317,10 +319,10 @@ export type UnreachableStmtData = { unreachableMsg: string };
 export type MatchStmtData = { matchStmtDisc: Node, matchStmtCases: Node[] };
 
 // Declarations
-export type ImportDeclData = { importNames: string[], importAliases: string[], importSource: string };
+export type ImportDeclData = { importNames: string[], importAliases: string[], importSource: string, nameLocations: SourceLocation[] };
 export type ExportDeclData = { exportedDecl: Node };
 export type TypeAliasDeclData = { aliasName: string, aliasType: string, aliasIsDistinct: boolean, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[], nameLocation: SourceLocation };
-export type EnumDeclData = { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation };
+export type EnumDeclData = { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[] };
 export type InterfaceDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], nameLocation: SourceLocation };
 export type ClassDeclData = { className: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation };
 export type PropertyDeclData = { propName: string, propType: string, propIsStatic: boolean };
@@ -362,6 +364,7 @@ export function createNode(kind: NodeKind, data: NodeData, token: Token): Node {
 	n.typeExpr = null;
 	n.typeExprs = null;
 	n.paramLocations = null;
+	n.typeArg = "";
 	return n;
 }
 
@@ -377,6 +380,7 @@ export function createNodeAt(kind: NodeKind, data: NodeData, loc: SourceLocation
 	n.typeExpr = null;
 	n.typeExprs = null;
 	n.paramLocations = null;
+	n.typeArg = "";
 	return n;
 }
 

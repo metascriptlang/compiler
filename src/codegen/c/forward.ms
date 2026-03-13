@@ -11,7 +11,6 @@ import {
 	addLine, sec, nameSetHas, nameSetAdd,
 } from "./context";
 import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr } from "./types";
-import { sliceStr } from "../../utils/string";
 
 // ===== DRC forward prototypes =====
 
@@ -90,7 +89,7 @@ export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Type
 		while (i < fnType.typeChildren.length) {
 			if (i > 0) paramList = paramList + ", ";
 			let pType = getTypeDesc(g, fnType.typeChildren[i]);
-			if (ccgIntroducedPtr(fnType.typeChildren[i]) && pType.length > 0 && pType.charAt(pType.length - 1) !== "*") {
+			if (ccgIntroducedPtr(fnType.typeChildren[i]) && pType.byteLength > 0 && pType.charAt(pType.byteLength - 1) !== "*") {
 				pType = pType + "*";
 			}
 			paramList = paramList + pType;
@@ -114,7 +113,7 @@ export function emitIncludeDirectives(g: CGen, directives: string): void {
 	let start = 0;
 	for (let pos = 0; pos < directives.length; pos += 1) {
 		if (directives.charAt(pos) === "\n") {
-			const header = sliceStr(directives, start, pos);
+			const header = directives.slice(start, pos);
 			if (header.length > 0) {
 				emitOneInclude(g, header);
 			}
@@ -122,7 +121,7 @@ export function emitIncludeDirectives(g: CGen, directives: string): void {
 		}
 	}
 	if (start < directives.length) {
-		const header = sliceStr(directives, start, directives.length);
+		const header = directives.slice(start, directives.length);
 		if (header.length > 0) {
 			emitOneInclude(g, header);
 		}

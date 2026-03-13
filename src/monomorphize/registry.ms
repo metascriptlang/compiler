@@ -9,7 +9,7 @@ import { Type, TypeKind } from "../checker/types";
 
 // Represents one concrete instantiation key
 // Example: identity<number> → { genericName: "identity", typeArgKeys: ["number"] }
-export interface MonoKey {
+export class MonoKey {
 	genericName: string;
 	typeArgKeys: string[];
 }

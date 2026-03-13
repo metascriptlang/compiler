@@ -11,7 +11,7 @@ export interface PendingTupleOp {
 	ops: string[];  // which ops needed: "eq", "lt", "le"
 }
 
-export interface TransformContext {
+export class TransformContext {
 	tempCounter: number;
 	errors: string[];
 	fnDeclNames: string[];  // collected function declaration names (for closureCallMarker)

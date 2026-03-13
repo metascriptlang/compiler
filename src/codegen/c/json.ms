@@ -59,10 +59,17 @@ export function fieldTypeToJsonKind(ftype: Type): number {
 	if (ftype === null) return -1;
 	return match (ftype.kind) {
 		TypeKind.String => 3,           // MsJsonKind_String
-		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32
-			| TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
-			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64
-			=> 2,                       // MsJsonKind_Number
+		TypeKind.Number
+			| TypeKind.Float64
+			| TypeKind.Float32
+			| TypeKind.Int8
+			| TypeKind.Int16
+			| TypeKind.Int32
+			| TypeKind.Int64
+			| TypeKind.Uint8
+			| TypeKind.Uint16
+			| TypeKind.Uint32
+			| TypeKind.Uint64 => 2,       // MsJsonKind_Number
 		TypeKind.Boolean => 1,          // MsJsonKind_Bool
 		_ => -1,
 	};
@@ -75,8 +82,14 @@ function jsonCAccessor(ftype: Type): string {
 		TypeKind.String => "->strVal",
 		TypeKind.Number | TypeKind.Float64 => "->numVal",
 		TypeKind.Boolean => "->boolVal",
-		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
-			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64
+		TypeKind.Int8
+			| TypeKind.Int16
+			| TypeKind.Int32
+			| TypeKind.Int64
+			| TypeKind.Uint8
+			| TypeKind.Uint16
+			| TypeKind.Uint32
+			| TypeKind.Uint64
 			| TypeKind.Float32 => "->numVal",
 		_ => "",
 	};
@@ -86,8 +99,14 @@ function jsonCAccessor(ftype: Type): string {
 export function needsNumCast(ftype: Type): boolean {
 	if (ftype === null) return false;
 	return match (ftype.kind) {
-		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
-			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64
+		TypeKind.Int8
+			| TypeKind.Int16
+			| TypeKind.Int32
+			| TypeKind.Int64
+			| TypeKind.Uint8
+			| TypeKind.Uint16
+			| TypeKind.Uint32
+			| TypeKind.Uint64
 			| TypeKind.Float32 => true,
 		_ => false,
 	};
@@ -101,9 +120,14 @@ export function fieldTypeToJsonCtor(ftype: Type): string {
 		TypeKind.Number | TypeKind.Float64 => "msJsonNewNumber",
 		TypeKind.Float32 => "msJsonNewNumber",
 		TypeKind.Boolean => "msJsonNewBool",
-		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
-			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64
-			=> "msJsonNewNumber",
+		TypeKind.Int8
+			| TypeKind.Int16
+			| TypeKind.Int32
+			| TypeKind.Int64
+			| TypeKind.Uint8
+			| TypeKind.Uint16
+			| TypeKind.Uint32
+			| TypeKind.Uint64 => "msJsonNewNumber",
 		_ => "",
 	};
 }
@@ -149,9 +173,7 @@ export function makeEmitNode(code: string, loc: SourceLocation): Node {
 // Generate a C function: static msResult_T_msString __jsonParse_T(msString input) { ... }
 // Calls msJsonParse + msJsonGet from runtime/core/json.h.
 // Returns null if any field type is unsupported.
-export function generateJsonParseC(
-	helperName: string, typeName: string, structType: Type, loc: SourceLocation
-): Node {
+export function generateJsonParseC(helperName: string, typeName: string, structType: Type, loc: SourceLocation): Node {
 	const fieldNames = structType.typeNames;
 	const fieldTypes = structType.typeChildren;
 	if (fieldNames === null || fieldTypes === null) return null as unknown as Node;

@@ -51,8 +51,6 @@ function buildImportMap(program: Node, modIdx: ModuleIndex): ImportMap {
 		}
 		if (importNode.kind === NodeKind.ImportDecl) {
 			const id = importNode.data as ImportDeclData;
-			// Resolve the import specifier to a module path
-			// The specifier might be relative or std/ — we match against known module paths
 			const resolvedPath = resolveSpecifier(id.importSource, modIdx);
 			if (resolvedPath !== "") {
 				for (let i = 0; i < id.importNames.length; i += 1) {
@@ -80,20 +78,26 @@ function resolveSpecifier(specifier: string, modIdx: ModuleIndex): string {
 
 
 
-// ===== Visited Set =====
+// ===== Visited Set (module-level to avoid closure capture of value-type array) =====
 
-function visitedHas(visited: string[], key: string): boolean {
-	for (let i = 0; i < visited.length; i += 1) {
-		if (visited[i] === key) return true;
+let _visited: string[] = [];
+
+function visitedHas(key: string): boolean {
+	for (let i = 0; i < _visited.length; i += 1) {
+		if (_visited[i] === key) return true;
 	}
 	return false;
 }
 
+// ===== Module-level state (avoids closure capture of value-type arrays/structs) =====
+
+let _aliveSet: AliveSet = createAliveSet();
+let _modIdx: ModuleIndex = { paths: [], programs: [] };
+
 // ===== Core Walker =====
 
 // Walk a node recursively, marking any referenced declarations alive.
-function walkBody(node: Node, modulePath: string, aliveSet: AliveSet,
-	modIdx: ModuleIndex, visited: string[], importMap: ImportMap): void {
+function walkBody(node: Node, modulePath: string, importMap: ImportMap): void {
 	if (node === null) return;
 	const k = node.kind;
 
@@ -107,15 +111,15 @@ function walkBody(node: Node, modulePath: string, aliveSet: AliveSet,
 			if (importIdx >= 0) {
 				// Cross-module reference — mark in source module and walk its body
 				const srcPath = importMap.sourcePaths[importIdx];
-				markAndWalk(srcPath, id.name, aliveSet, modIdx, visited);
+				markAndWalk(srcPath, id.name);
 			} else {
 				// Local reference
-				markAndWalk(modulePath, sym.name, aliveSet, modIdx, visited);
+				markAndWalk(modulePath, sym.name);
 			}
 		} else if (id.name.length > 0) {
 			// Transform-generated Identifiers (lambda lifting, builtinLower) lack resolvedSym.
 			// Trace by name within current module to ensure callees of lifted functions are alive.
-			markAndWalk(modulePath, id.name, aliveSet, modIdx, visited);
+			markAndWalk(modulePath, id.name);
 		}
 		return;
 	}
@@ -123,9 +127,9 @@ function walkBody(node: Node, modulePath: string, aliveSet: AliveSet,
 	// CallExpr — walk callee and arguments
 	if (k === NodeKind.CallExpr) {
 		const cd = node.data as CallExprData;
-		walkBody(cd.callee, modulePath, aliveSet, modIdx, visited, importMap);
+		walkBody(cd.callee, modulePath, importMap);
 		for (const arg of cd.arguments) {
-			walkBody(arg, modulePath, aliveSet, modIdx, visited, importMap);
+			walkBody(arg, modulePath, importMap);
 		}
 		return;
 	}
@@ -133,42 +137,42 @@ function walkBody(node: Node, modulePath: string, aliveSet: AliveSet,
 	// MemberExpr — walk object + mark resolved extension/class method
 	if (k === NodeKind.MemberExpr) {
 		const md = node.data as MemberExprData;
-		walkBody(md.object, modulePath, aliveSet, modIdx, visited, importMap);
+		walkBody(md.object, modulePath, importMap);
 		if (node.resolvedSym !== null) {
-			markAndWalk(modulePath, node.resolvedSym.name, aliveSet, modIdx, visited);
+			markAndWalk(modulePath, node.resolvedSym.name);
 		}
 		return;
 	}
 
-	// For all other nodes: walk children generically via known data shapes
-	walkChildrenGeneric(node, modulePath, aliveSet, modIdx, visited, importMap);
+	// For all other nodes: walk children generically via forEachChild
+	// NOTE: forEachChild uses a callback — we pass module-level state
+	// instead of closure-captured value-type arrays to avoid use-after-free
+	walkChildrenGeneric(node, modulePath, importMap);
 }
 
 // Walk all children of a node generically via shared forEachChild
-function walkChildrenGeneric(node: Node, modulePath: string, aliveSet: AliveSet,
-	modIdx: ModuleIndex, visited: string[], importMap: ImportMap): void {
+function walkChildrenGeneric(node: Node, modulePath: string, importMap: ImportMap): void {
 	forEachChild(node, (child: Node): void => {
-		walkBody(child, modulePath, aliveSet, modIdx, visited, importMap);
+		walkBody(child, modulePath, importMap);
 	});
 }
 
 // Mark a symbol alive and walk its body if not already visited.
-function markAndWalk(modulePath: string, name: string, aliveSet: AliveSet,
-	modIdx: ModuleIndex, visited: string[]): void {
+function markAndWalk(modulePath: string, name: string): void {
 	const key = modulePath + ":" + name;
-	if (visitedHas(visited, key)) return;
-	visited.push(key);
-	aliveSetAdd(aliveSet, modulePath, name);
+	if (visitedHas(key)) return;
+	_visited.push(key);
+	aliveSetAdd(_aliveSet, modulePath, name);
 
 	// Find the declaration in the module's AST and walk its body
-	const program = findProgram(modIdx, modulePath);
+	const program = findProgram(_modIdx, modulePath);
 	if (program === null) return;
 	const decl = findDecl(program, name);
 	if (decl === null) return;
 
 	// Build import map for cross-module tracing
-	const importMap = buildImportMap(program, modIdx);
-	walkBody(decl, modulePath, aliveSet, modIdx, visited, importMap);
+	const importMap = buildImportMap(program, _modIdx);
+	walkBody(decl, modulePath, importMap);
 }
 
 // Find a top-level declaration by name in a program AST.
@@ -245,8 +249,10 @@ function findImport(importMap: ImportMap, name: string): number {
 // ===== Public API =====
 
 export function computeAliveSet(programs: Node[], paths: string[], entryPath: string, isTest: boolean): AliveSet {
-	const aliveSet = createAliveSet();
-	const modIdx: ModuleIndex = { paths, programs };
+	// Initialize module-level state
+	_aliveSet = createAliveSet();
+	_modIdx = { paths, programs };
+	_visited = [];
 
 	// For each module, find roots and mark them alive
 	for (let m = 0; m < programs.length; m += 1) {
@@ -254,8 +260,7 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 		const program = programs[m];
 		if (program === null) continue;
 		const d = program.data as ProgramData;
-		const importMap = buildImportMap(program, modIdx);
-		const visited: string[] = [];
+		const importMap = buildImportMap(program, _modIdx);
 
 		for (const stmt of d.programStmts) {
 			if (stmt === null) continue;
@@ -264,7 +269,7 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 			if (modulePath === entryPath && stmt.kind === NodeKind.FunctionDecl) {
 				const fd = stmt.data as FunctionDeclData;
 				if (fd.fnName === "main") {
-					markAndWalk(modulePath, "main", aliveSet, modIdx, visited);
+					markAndWalk(modulePath, "main");
 					continue;
 				}
 			}
@@ -274,7 +279,7 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 				if (ed.exportedDecl !== null && ed.exportedDecl.kind === NodeKind.FunctionDecl) {
 					const fd = ed.exportedDecl.data as FunctionDeclData;
 					if (fd.fnName === "main") {
-						markAndWalk(modulePath, "main", aliveSet, modIdx, visited);
+						markAndWalk(modulePath, "main");
 						continue;
 					}
 				}
@@ -282,14 +287,13 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 
 			// Root 2: TestDecl nodes (test mode only)
 			if (isTest && stmt.kind === NodeKind.TestDecl) {
-				walkBody(stmt, modulePath, aliveSet, modIdx, visited, importMap);
+				walkBody(stmt, modulePath, importMap);
 				continue;
 			}
 
 			// Root 3: Top-level statements (side-effecting init code in Init000)
-			// Excludes declarations — only expression statements, variable inits, etc.
 			if (isTopLevelStatement(stmt)) {
-				walkBody(stmt, modulePath, aliveSet, modIdx, visited, importMap);
+				walkBody(stmt, modulePath, importMap);
 				continue;
 			}
 
@@ -297,13 +301,18 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 			if (isExportedDecl(stmt)) {
 				const name = getDeclName(stmt);
 				if (name !== "") {
-					markAndWalk(modulePath, name, aliveSet, modIdx, visited);
+					markAndWalk(modulePath, name);
 				}
 			}
 		}
 	}
 
-	return aliveSet;
+	const result = _aliveSet;
+	// Clear module-level state
+	_aliveSet = createAliveSet();
+	_modIdx = { paths: [], programs: [] };
+	_visited = [];
+	return result;
 }
 
 // Check if a statement is a side-effecting top-level statement (not a declaration)

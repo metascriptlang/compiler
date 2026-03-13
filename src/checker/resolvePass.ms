@@ -14,16 +14,16 @@ import {
 	IdentifierData, TypeGenericData, TypeArrayData, TypeUnionData, TypeFunctionData, TypeObjectData,
 } from "../ast/node";
 import {
-	Type, TypeKind,
+	Type, TypeKind, TypeFlag,
 	unknownType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType,
 	createPrimitive, createArray, createFunction, createClosureType, createStruct,
 	createResult, createTypeRef, createUnion, createGenericParam, createDistinct,
 	createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, createMap, createSet,
-	setMinArity, typeNameOf, assignType, isInterfaceType, unwrapRef,
+	setMinArity, typeNameOf, assignType, isInterfaceType, unwrapRef, propagateHasAsgn,
 } from "./types";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, lookupSymbol, lookupLocal, defineSymbol, makeSymbol, openScope, closeScope, SymbolState, hasFlag, setFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, sgRecordSym } from "./context";
-import { trimStr, sliceStr, findChar, charAt, splitTopLevel, parseIntStr, bareAfterDelim } from "../utils/string";
+import { findChar, splitTopLevel, parseIntStr, bareAfterDelim } from "../utils/string";
 import { getProperty } from "./types";
 import { getGenericDecl, getGenericDeclFieldNames, getGenericDeclFieldTypes, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
 import { getDeclName } from "./collectPass";
@@ -35,7 +35,7 @@ function resolveFunctionType(text: string, ctx: CheckerContext): Type {
 	let depth = 0;
 	let closeIdx = -1;
 	for (let i = 0; i < text.length; i += 1) {
-		const c = charAt(text, i);
+		const c = text.charAt(i);
 		if (c === "(") depth += 1;
 		if (c === ")") {
 			depth -= 1;
@@ -44,11 +44,11 @@ function resolveFunctionType(text: string, ctx: CheckerContext): Type {
 	}
 	if (closeIdx < 0) return createTypeRef(text);
 
-	const paramsStr = trimStr(sliceStr(text, 1, closeIdx));
-	const afterParen = trimStr(sliceStr(text, closeIdx + 1, text.length));
+	const paramsStr = text.slice(1, closeIdx).trim();
+	const afterParen = text.slice(closeIdx + 1, text.length).trim();
 	if (afterParen.length < 2) return createTypeRef(text);
-	if (charAt(afterParen, 0) !== "=" || charAt(afterParen, 1) !== ">") return createTypeRef(text);
-	const retStr = trimStr(sliceStr(afterParen, 2, afterParen.length));
+	if (afterParen.charAt(0) !== "=" || afterParen.charAt(1) !== ">") return createTypeRef(text);
+	const retStr = afterParen.slice(2, afterParen.length).trim();
 
 	const returnType = (retStr !== "") ? resolveAnnotation(retStr, ctx) : voidType();
 
@@ -61,8 +61,8 @@ function resolveFunctionType(text: string, ctx: CheckerContext): Type {
 	for (const part of paramParts) {
 		const colonIdx = findChar(part, ":");
 		if (colonIdx > 0) {
-			paramNames.push(trimStr(sliceStr(part, 0, colonIdx)));
-			paramTypes.push(resolveAnnotation(trimStr(sliceStr(part, colonIdx + 1, part.length)), ctx));
+			paramNames.push(part.slice(0, colonIdx).trim());
+			paramTypes.push(resolveAnnotation(part.slice(colonIdx + 1, part.length).trim(), ctx));
 		} else {
 			paramNames.push("");
 			paramTypes.push(resolveAnnotation(part, ctx));
@@ -72,15 +72,15 @@ function resolveFunctionType(text: string, ctx: CheckerContext): Type {
 }
 
 export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
-	const trimmed = trimStr(text);
+	const trimmed = text.trim();
 	if (trimmed === "") return unknownType();
 
 	// Function type: (params) => returnType
-	if (trimmed.length > 0 && charAt(trimmed, 0) === "(") {
+	if (trimmed.length > 0 && trimmed.charAt(0) === "(") {
 		let fnDepth = 0;
 		let fnCloseIdx = -1;
 		for (let i = 0; i < trimmed.length; i += 1) {
-			const c = charAt(trimmed, i);
+			const c = trimmed.charAt(i);
 			if (c === "(") fnDepth += 1;
 			if (c === ")") {
 				fnDepth -= 1;
@@ -88,8 +88,8 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 			}
 		}
 		if (fnCloseIdx >= 0) {
-			const afterClose = trimStr(sliceStr(trimmed, fnCloseIdx + 1, trimmed.length));
-			if (afterClose.length >= 2 && charAt(afterClose, 0) === "=" && charAt(afterClose, 1) === ">") {
+			const afterClose = trimmed.slice(fnCloseIdx + 1, trimmed.length).trim();
+			if (afterClose.length >= 2 && afterClose.charAt(0) === "=" && afterClose.charAt(1) === ">") {
 				return resolveFunctionType(trimmed, ctx);
 			}
 		}
@@ -100,7 +100,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 	if (unionParts.length >= 2) {
 		const members: Type[] = [];
 		for (const up of unionParts) {
-			const part = trimStr(up);
+			const part = up.trim();
 			if (part.length > 0) {
 				members.push(resolveAnnotation(part, ctx));
 			}
@@ -127,19 +127,19 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 	}
 
 	// Object literal type: { field: Type, ... }
-	if (charAt(trimmed, 0) === "{" && trimmed.endsWith("}")) {
-		const inner = trimStr(sliceStr(trimmed, 1, trimmed.length - 1));
+	if (trimmed.charAt(0) === "{" && trimmed.endsWith("}")) {
+		const inner = trimmed.slice(1, trimmed.length - 1).trim();
 		if (inner === "") return createStruct("", [], [], true);
 		const fields = splitTopLevel(inner, ",");
 		const names: string[] = [];
 		const types: Type[] = [];
 		for (const f of fields) {
-			const field = trimStr(f);
+			const field = f.trim();
 			if (field !== "") {
 				const colonIdx = findChar(field, ":");
 				if (colonIdx > 0) {
-					const fname = trimStr(sliceStr(field, 0, colonIdx));
-					const ftypeStr = trimStr(sliceStr(field, colonIdx + 1, field.length));
+					const fname = field.slice(0, colonIdx).trim();
+					const ftypeStr = field.slice(colonIdx + 1, field.length).trim();
 					names.push(fname);
 					types.push(resolveAnnotation(ftypeStr, ctx));
 				}
@@ -150,18 +150,18 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 
 	// Check for array suffix [] or [ ] (token-joined form from captureOptionalType)
 	if (trimmed.endsWith("[ ]")) {
-		const inner = trimStr(sliceStr(trimmed, 0, trimmed.length - 3));
+		const inner = trimmed.slice(0, trimmed.length - 3).trim();
 		return createArray(resolveAnnotation(inner, ctx));
 	}
 	if (trimmed.endsWith("[]")) {
-		const inner = sliceStr(trimmed, 0, trimmed.length - 2);
+		const inner = trimmed.slice(0, trimmed.length - 2);
 		return createArray(resolveAnnotation(inner, ctx));
 	}
 	if (trimmed.endsWith("]")) {
 		const openBracket = findChar(trimmed, "[");
 		if (openBracket > 0) {
-			const inner = trimStr(sliceStr(trimmed, 0, openBracket));
-			const sizeStr = trimStr(sliceStr(trimmed, openBracket + 1, trimmed.length - 1));
+			const inner = trimmed.slice(0, openBracket).trim();
+			const sizeStr = trimmed.slice(openBracket + 1, trimmed.length - 1).trim();
 			if (sizeStr === "" || sizeStr === " ") {
 				return createArray(resolveAnnotation(inner, ctx));
 			}
@@ -173,8 +173,8 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 	// Check for generic types: Name<A, B> or Name < A , B > (token-joined form)
 	const angleBracket = findChar(trimmed, "<");
 	if (angleBracket > 0 && trimmed.endsWith(">")) {
-		const baseName = trimStr(sliceStr(trimmed, 0, angleBracket));
-		const argsText = trimStr(sliceStr(trimmed, angleBracket + 1, trimmed.length - 1));
+		const baseName = trimmed.slice(0, angleBracket).trim();
+		const argsText = trimmed.slice(angleBracket + 1, trimmed.length - 1).trim();
 		const args = splitTopLevel(argsText, ",");
 
 		if (baseName === "Result" && args.length === 2) {
@@ -378,7 +378,7 @@ export function buildTypeArgKey(args: string[], ctx: CheckerContext): string {
 	let key = "";
 	for (let i = 0; i < args.length; i += 1) {
 		if (i > 0) key = key + ",";
-		key = key + trimStr(args[i]);
+		key = key + args[i].trim();
 	}
 	return key;
 }
@@ -387,7 +387,7 @@ export function buildTypeArgKey(args: string[], ctx: CheckerContext): string {
 // Returns the param index, or -1 if no match. Uses only number locals (DRC-safe).
 function findGenericParamIdx(rawType: string, paramNames: string[]): number {
 	for (let i = 0; i < paramNames.length; i += 1) {
-		if (trimStr(paramNames[i]) === rawType) return i;
+		if (paramNames[i].trim() === rawType) return i;
 	}
 	return -1;
 }
@@ -420,20 +420,20 @@ export function recordGenericTypeInstantiation(baseName: string, genericParams: 
 	}
 
 	// Handle first field separately to initialize result strings from non-empty values
-	const firstRaw = ftParts.length > 0 ? trimStr(ftParts[0]) : "";
+	const firstRaw = ftParts.length > 0 ? ftParts[0].trim() : "";
 	const firstIdx = findGenericParamIdx(firstRaw, paramNames);
-	const firstSub = firstIdx >= 0 && firstIdx < args.length ? trimStr(args[firstIdx]) : firstRaw;
+	const firstSub = firstIdx >= 0 && firstIdx < args.length ? args[firstIdx].trim() : firstRaw;
 
 	// Only use `let` for result strings initialized from computed values (never from "")
-	let resultFieldNames = trimStr(fnParts[0]);
+	let resultFieldNames = fnParts[0].trim();
 	let resultFieldTypes = firstSub;
 
 	// Append remaining fields with "|" separator
 	for (let fi = 1; fi < fnParts.length; fi += 1) {
-		const rawType = fi < ftParts.length ? trimStr(ftParts[fi]) : "";
+		const rawType = fi < ftParts.length ? ftParts[fi].trim() : "";
 		const paramIdx = findGenericParamIdx(rawType, paramNames);
-		const subType = paramIdx >= 0 && paramIdx < args.length ? trimStr(args[paramIdx]) : rawType;
-		resultFieldNames = resultFieldNames + "|" + trimStr(fnParts[fi]);
+		const subType = paramIdx >= 0 && paramIdx < args.length ? args[paramIdx].trim() : rawType;
+		resultFieldNames = resultFieldNames + "|" + fnParts[fi].trim();
 		resultFieldTypes = resultFieldTypes + "|" + subType;
 	}
 
@@ -463,8 +463,8 @@ function defineGenericParam(ctx: CheckerContext, paramStr: string): void {
 	const colonPos = findChar(paramStr, ":");
 	if (colonPos > 0) {
 		// Has constraint: "T:Comparable" -> name="T", constraint="Comparable"
-		const paramName = sliceStr(paramStr, 0, colonPos);
-		const constraintStr = sliceStr(paramStr, colonPos + 1, paramStr.length);
+		const paramName = paramStr.slice(0, colonPos);
+		const constraintStr = paramStr.slice(colonPos + 1, paramStr.length);
 		const gp = createGenericParam(paramName);
 		// Store constraint type in typeExtra
 		gp.typeExtra = resolveAnnotation(constraintStr, ctx);
@@ -531,12 +531,12 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 	if (d.fnFlags !== "" && d.fnFlags.indexOf("out:") >= 0) {
 		const flagParts = splitTopLevel(d.fnFlags, "|");
 		for (const fp of flagParts) {
-			const trimFp = trimStr(fp);
-			if (trimFp.length > 4 && sliceStr(trimFp, 0, 4) === "out:") {
-				const idxStr = sliceStr(trimFp, 4, trimFp.length);
+			const trimFp = fp.trim();
+			if (trimFp.length > 4 && trimFp.slice(0, 4) === "out:") {
+				const idxStr = trimFp.slice(4, trimFp.length);
 				const idxParts = splitTopLevel(idxStr, ",");
 				for (const ip of idxParts) {
-					const idx = parseIntStr(trimStr(ip));
+					const idx = parseIntStr(ip.trim());
 					if (idx >= 0 && idx < paramTypes.length) {
 						paramTypes[idx] = createVar(paramTypes[idx]);
 					}
@@ -626,7 +626,7 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 		openScope(ctx.table, ScopeKind.Block);
 		const genericNames = splitTopLevel(genericStr, ",");
 		for (const gp of genericNames) {
-			const trimGp = trimStr(gp);
+			const trimGp = gp.trim();
 			if (trimGp !== "") {
 				defineGenericParam(ctx, trimGp);
 			}
@@ -652,8 +652,14 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 		}
 	}
 
-	const ifaceType = createStruct(d.interfaceName, d.interfaceFields, fieldTypes, true);
-	assignType(sym.symbolType, ifaceType);
+	// Update sym type in-place — avoid temporary Type that shares typeChildren
+	// (temporary's destructor would decref elements while sym still references them)
+	sym.symbolType.kind = TypeKind.Struct;
+	sym.symbolType.typeName = d.interfaceName;
+	sym.symbolType.typeNames = d.interfaceFields;
+	sym.symbolType.typeChildren = fieldTypes;
+	sym.symbolType.typeFlags = TypeFlag.IsInterface as int32;
+	for (const pt of fieldTypes) { propagateHasAsgn(sym.symbolType, pt); }
 	node.nodeType = sym.symbolType;
 	// Record each interface field DEF for symbol graph
 	// (no per-field location available; use interface node location as fallback)
@@ -774,7 +780,7 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 		openScope(ctx.table, ScopeKind.Block);
 		const genericNames = splitTopLevel(genericStr, ",");
 		for (const gp of genericNames) {
-			const trimGp = trimStr(gp);
+			const trimGp = gp.trim();
 			if (trimGp !== "") {
 				defineGenericParam(ctx, trimGp);
 			}
@@ -851,14 +857,17 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 		closeScope(ctx.table);
 	}
 
-	const classType = createStruct(d.className, memberNames, memberTypes, true);
-	// Preserve typeExtra (base class info set by collectPass)
-	// sym.symbolType is Ref(Object) from collectPass — update the inner Object, not the Ref
+	// Update inner struct in-place — avoid temporary Type that shares typeChildren
+	// (temporary's destructor would decref elements while inner still references them)
 	const inner = unwrapRef(sym.symbolType);
-	if (inner.typeExtra !== null) {
-		classType.typeExtra = inner.typeExtra;
-	}
-	assignType(inner, classType);
+	inner.kind = TypeKind.Struct;
+	inner.typeName = d.className;
+	inner.typeNames = memberNames;
+	inner.typeChildren = memberTypes;
+	inner.typeFlags = TypeFlag.IsInterface as int32;
+	// Preserve typeExtra (base class info set by collectPass)
+	// Propagate HasAsgn from any managed field
+	for (const pt of memberTypes) { propagateHasAsgn(inner, pt); }
 	node.nodeType = sym.symbolType;
 }
 

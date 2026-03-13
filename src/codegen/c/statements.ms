@@ -12,6 +12,7 @@ import {
 	SwitchStmtData, SwitchCaseData,
 	CallExprData, IdentifierData, AssertStmtData, UnreachableStmtData,
 	MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData,
+	TypeAssertionData,
 	isEmptyBlock,
 } from "../../ast/node";
 import { Type, TypeKind, isInterfaceType } from "../../checker/types";
@@ -26,7 +27,7 @@ import {
 import { genExpr, shimCallArg } from "./expressions";
 import { ensureCrossModuleProto } from "./forward";
 import { safeName } from "./names";
-import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, getCalleeReturnType, intToString, genClFullCastNrvo, genClHalfCastNrvo } from "./types";
+import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, getCalleeReturnType, genClFullCastNrvo, genClHalfCastNrvo } from "./types";
 
 // ===== blockLeaveActions — emit finally cleanup on break/continue/return =====
 // Reference parity: when control flow exits through
@@ -76,7 +77,7 @@ function isStructCType(cType: string): boolean {
 	if (cType === "" || cType === "void" || cType === "void*") return false;
 	if (isNumericCType(cType)) return false;
 	// Pointer types end with *
-	if (cType.length > 0 && cType.charAt(cType.length - 1) === "*") return false;
+	if (cType.byteLength > 0 && cType.charAt(cType.byteLength - 1) === "*") return false;
 	return true;
 }
 
@@ -126,7 +127,6 @@ function genNrvoCallExpr(g: CGen, p: CProc, callNode: Node, destVar: string): st
 	if (argsStr !== "") args = `${args}, ${argsStr}`;
 	return `${callee}(${args})`;
 }
-import { sliceStr, charAt } from "../../utils/string";
 
 // ===== genStmt — main statement dispatcher =====
 
@@ -238,6 +238,15 @@ function genExprStmt(g: CGen, p: CProc, node: Node): void {
 
 // ===== Variable Declaration =====
 
+// Detect union narrowing: `expr as VariantType` where expr has Union nodeType
+function isUnionNarrowing(node: Node): boolean {
+	if (node.kind !== NodeKind.TypeAssertion) return false;
+	const d = node.data as TypeAssertionData;
+	if (d.asExpr === null) return false;
+	const srcType = d.asExpr.nodeType;
+	return srcType !== null && srcType.kind === TypeKind.Union;
+}
+
 function genVarDecl(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as VariableDeclData;
 	const varName = safeName(d.declName);
@@ -280,6 +289,13 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 		} else if (d.initializer.kind === NodeKind.ArrayLiteral && (d.initializer.data as ArrayLiteralData).elements.length === 0) {
 			// Empty array: use declared type for zero-init (avoids msRefArray default)
 			emitStmtsLine(p, `${cType} ${varName} = (${cType}){0};`);
+		} else if (d.initializer.kind === NodeKind.TypeAssertion && isUnionNarrowing(d.initializer)) {
+			// Union variant narrowing: emit pointer to avoid value copy.
+			// `const d = node.data as BlockStmtData` → `BlockStmtData* d = &(expr).vN`
+			// Mutations via `d.field = x` propagate back to the original node.
+			const initSnippet = genExpr(g, p, d.initializer);
+			emitStmtsLine(p, `${cType}* ${varName} = &(${initSnippet});`);
+			p.indirectLocals.push(d.declName);
 		} else {
 			const initSnippet = genExpr(g, p, d.initializer);
 			let finalInit = initSnippet;
@@ -365,10 +381,10 @@ function genIfStmt(g: CGen, p: CProc, node: Node): void {
 	// Multi-branch: goto-based dispatch (Reference parity)
 	p.labels += 1;
 	const labelBase = p.labels;
-	const lend = `__L${intToString(labelBase)}_end`;
+	const lend = `__L${labelBase}_end`;
 	for (let i = 0; i < branches.length; i += 1) {
 		p.labels += 1;
-		const lnext = "__L" + intToString(p.labels);
+		const lnext = `__L${p.labels}`;
 		emitStmtsLine(p, "{");
 		const condSnippet = genExpr(g, p, branches[i]);
 		emitStmtsLine(p, `if (!(${condSnippet})) goto ${lnext};`);
@@ -459,7 +475,7 @@ function genReturnStmt(g: CGen, p: CProc, node: Node): void {
 		if (isNrvo) {
 			// G4 fix: compound literals need (StructType) cast for C99
 			// If genObjectLiteral didn't add the cast (nodeType was null), add it here
-			const needsCast = d.argument.kind === NodeKind.ObjectLiteral && snippet.length > 0 && charAt(snippet, 0) !== "(";
+			const needsCast = d.argument.kind === NodeKind.ObjectLiteral && snippet.length > 0 && snippet.charAt(0) !== "(";
 			if (needsCast && p.returnType !== null && p.returnType.typeName !== "") {
 				emitStmtsLine(p, `*__result = (${safeName(p.returnType.typeName)})${snippet};`);
 			} else {
@@ -681,7 +697,7 @@ function escapeForC(s: string): string {
 	let result = "";
 	let i = 0;
 	while (i < s.length) {
-		const ch = charAt(s, i);
+		const ch = s.charAt(i);
 		result = result + match (ch) {
 			"\\" => "\\\\",
 			"\"" => "\\\"",
@@ -783,7 +799,7 @@ test "try-catch emits goto labels" {
 	let hasSetjmp = false;
 	let i = 0;
 	while (i < len - 6) {
-		if (sliceStr(tc, i, i + 6) === "setjmp") {
+		if (tc.slice(i, i + 6) === "setjmp") {
 			hasSetjmp = true;
 		}
 		i = i + 1;
@@ -798,7 +814,7 @@ test "try-catch has catch label" {
 	let hasCatch = false;
 	let i = 0;
 	while (i < len - 8) {
-		if (sliceStr(tc, i, i + 8) === "__catch_") {
+		if (tc.slice(i, i + 8) === "__catch_") {
 			hasCatch = true;
 		}
 		i = i + 1;
@@ -812,7 +828,7 @@ test "try-finally has finally label" {
 	let hasFinally = false;
 	let i = 0;
 	while (i < len - 10) {
-		if (sliceStr(tf, i, i + 10) === "__finally_") {
+		if (tf.slice(i, i + 10) === "__finally_") {
 			hasFinally = true;
 		}
 		i = i + 1;
@@ -835,7 +851,7 @@ test "long if-else chain (100 branches)" {
 	let elseIfCount = 0;
 	let j = 0;
 	while (j < result.length - 7) {
-		if (sliceStr(result, j, j + 7) === "else if") {
+		if (result.slice(j, j + 7) === "else if") {
 			elseIfCount = elseIfCount + 1;
 		}
 		j += 1;

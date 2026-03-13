@@ -69,6 +69,12 @@ extern function charCodeAt(this s: string, idx: number): int32 from "msStringCha
 /** Returns the byte length of the string in its underlying encoding. */
 extern function byteLength(this s: string): int64 from "msStringByteLength";
 
+/** Returns the raw byte value at the given byte offset. Returns -1 if out of range. */
+extern function byteAt(this s: string, idx: number): number from "msStringByteAt";
+
+/** Returns a substring by byte offsets [start, end). For lexer/binary protocols. */
+extern function byteSlice(this s: string, start: number, end: number): string from "msStringByteSlice";
+
 /**
  * Returns a section of a string.
  * @param start The index to the beginning of the specified portion of stringObj.
@@ -182,8 +188,13 @@ extern function stripInPlace(this s: string): void from "&msStringStripInPlace";
 /** Returns a string created from the specified Unicode code point. */
 extern function fromCodePoint(cp: number): string from "msStringFromCodePoint";
 
+// ===== Type Coercion =====
+
+/** Converts any value to its string representation. Delegates to .toString(). */
+@builtin("ToString")
+export extern function String<T>(val: T): string;
 // ===== Zero-Copy Bridge (string → uint8[]) =====
 
 /** Returns the string's underlying bytes as a uint8 array (zero-copy). */
 @builtin("AsBytes")
-extern function asBytes(this s: string): uint8[] from "ms_asBytes";
+extern function asBytes(this s: string): uint8[] from "msAsBytes";

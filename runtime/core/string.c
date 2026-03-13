@@ -286,14 +286,107 @@ int64_t msStringCount(msString s, msString sub) {
 
 /* ===== Extraction ===== */
 
-msString msStringCharAt(msString s, int64_t idx) {
+/* ---- Byte-level access (for lexer, hashing, protocol parsing) ---- */
+
+int64_t msStringByteAt(msString s, int64_t idx) {
+	if (idx < 0 || idx >= s.len || s.p == NULL) return -1;
+	return (int64_t)(unsigned char)s.p->data[idx];
+}
+
+msString msStringByteCharAt(msString s, int64_t idx) {
 	if (idx < 0 || idx >= s.len || s.p == NULL) return MS_EMPTY_STRING;
 	return msStringNew(s.p->data + idx, 1);
 }
 
+/* ---- Character-level access (TypeScript parity, UTF-16 code unit indexed) ---- */
+
+/* Helper: decode UTF-8 codepoint starting at p, return codepoint and advance p */
+static uint32_t msUtf8Decode(const unsigned char* p, const unsigned char* end, int* seqlen) {
+	unsigned char b = *p;
+	if (b < 0x80) { *seqlen = 1; return b; }
+	if (b < 0xE0 && p + 1 < end) {
+		*seqlen = 2;
+		return ((uint32_t)(b & 0x1F) << 6) | (p[1] & 0x3F);
+	}
+	if (b < 0xF0 && p + 2 < end) {
+		*seqlen = 3;
+		return ((uint32_t)(b & 0x0F) << 12) | ((uint32_t)(p[1] & 0x3F) << 6) | (p[2] & 0x3F);
+	}
+	if (p + 3 < end) {
+		*seqlen = 4;
+		return ((uint32_t)(b & 0x07) << 18) | ((uint32_t)(p[1] & 0x3F) << 12) |
+		       ((uint32_t)(p[2] & 0x3F) << 6) | (p[3] & 0x3F);
+	}
+	*seqlen = 1; /* invalid sequence, skip 1 byte */
+	return 0xFFFD; /* replacement character */
+}
+
+msString msStringCharAt(msString s, int64_t idx) {
+	if (idx < 0 || s.p == NULL) return MS_EMPTY_STRING;
+	const unsigned char* p = (const unsigned char*)s.p->data;
+	const unsigned char* end = p + s.len;
+	/* ASCII fast path: if byte at idx is ASCII and all preceding bytes are ASCII */
+	if (idx < s.len && p[idx] < 0x80) {
+		int ascii = 1;
+		for (int64_t i = 0; i < idx; i++) {
+			if (p[i] >= 0x80) { ascii = 0; break; }
+		}
+		if (ascii) return msStringNew((const char*)p + idx, 1);
+	}
+	/* Full scan: find the idx-th UTF-16 code unit */
+	int64_t charPos = 0;
+	while (p < end) {
+		int seqlen;
+		uint32_t cp = msUtf8Decode(p, end, &seqlen);
+		if (cp >= 0x10000) {
+			/* Surrogate pair: 2 UTF-16 code units */
+			if (charPos == idx || charPos + 1 == idx) {
+				/* Return the full codepoint as UTF-8 for both surrogate positions */
+				return msStringNew((const char*)(p), seqlen);
+			}
+			charPos += 2;
+		} else {
+			if (charPos == idx) {
+				return msStringNew((const char*)(p), seqlen);
+			}
+			charPos++;
+		}
+		p += seqlen;
+	}
+	return MS_EMPTY_STRING;
+}
+
 int64_t msStringCharCodeAt(msString s, int64_t idx) {
-	if (idx < 0 || idx >= s.len || s.p == NULL) return -1;
-	return (int64_t)(unsigned char)s.p->data[idx];
+	if (idx < 0 || s.p == NULL) return -1;
+	const unsigned char* p = (const unsigned char*)s.p->data;
+	/* ASCII fast path: if byte at idx is ASCII and all preceding bytes are ASCII */
+	if (idx < s.len && p[idx] < 0x80) {
+		int ascii = 1;
+		for (int64_t i = 0; i < idx; i++) {
+			if (p[i] >= 0x80) { ascii = 0; break; }
+		}
+		if (ascii) return (int64_t)p[idx];
+	}
+	/* Full scan: find the idx-th UTF-16 code unit */
+	const unsigned char* end = p + s.len;
+	int64_t charPos = 0;
+	while (p < end) {
+		int seqlen;
+		uint32_t cp = msUtf8Decode(p, end, &seqlen);
+		if (cp >= 0x10000) {
+			/* Surrogate pair */
+			uint32_t hi = 0xD800 + ((cp - 0x10000) >> 10);
+			uint32_t lo = 0xDC00 + ((cp - 0x10000) & 0x3FF);
+			if (charPos == idx) return (int64_t)hi;
+			if (charPos + 1 == idx) return (int64_t)lo;
+			charPos += 2;
+		} else {
+			if (charPos == idx) return (int64_t)cp;
+			charPos++;
+		}
+		p += seqlen;
+	}
+	return -1;
 }
 
 msString msStringFromCodePoint(int64_t cp) {
@@ -325,15 +418,62 @@ msString msStringFromCodePoint(int64_t cp) {
 	return msStringNew((const char*)buf, len);
 }
 
-msString msStringSlice(msString s, int64_t start, int64_t end) {
-	/* Clamp to bounds */
+/* Byte-level slice: direct byte offsets into the underlying buffer.
+ * Used by lexer, hashing, protocol parsing via .byteSlice() extension. */
+msString msStringByteSlice(msString s, int64_t start, int64_t end) {
 	if (start < 0) start = s.len + start;
 	if (end < 0) end = s.len + end;
 	if (start < 0) start = 0;
 	if (end > s.len) end = s.len;
 	if (start >= end || s.p == NULL) return MS_EMPTY_STRING;
-
 	return msStringNew(s.p->data + start, end - start);
+}
+
+/* Character-level slice: TypeScript String.prototype.slice() parity.
+ * Positions are UTF-16 code unit indices. ASCII fast path for O(1). */
+msString msStringSlice(msString s, int64_t start, int64_t end) {
+	if (s.p == NULL || s.len == 0) return MS_EMPTY_STRING;
+
+	int64_t charLen = msStringLength(s);
+
+	/* Handle negative indices (from end) */
+	if (start < 0) start = charLen + start;
+	if (end < 0) end = charLen + end;
+	if (start < 0) start = 0;
+	if (end > charLen) end = charLen;
+	if (start >= end) return MS_EMPTY_STRING;
+
+	/* ASCII fast path: all bytes < 0x80 → char pos == byte pos */
+	const unsigned char* data = (const unsigned char*)s.p->data;
+	if (charLen == s.len) {
+		/* Pure ASCII: char positions equal byte positions */
+		return msStringNew(s.p->data + start, end - start);
+	}
+
+	/* Full path: walk UTF-8 to find byte offsets for char positions */
+	const unsigned char* p = data;
+	const unsigned char* pend = data + s.len;
+	int64_t charPos = 0;
+	int64_t byteStart = -1, byteEnd = -1;
+
+	while (p < pend && charPos <= end) {
+		if (charPos == start) byteStart = (int64_t)(p - data);
+		if (charPos == end) { byteEnd = (int64_t)(p - data); break; }
+
+		unsigned char b = *p;
+		int seqlen;
+		if (b < 0x80) { seqlen = 1; }
+		else if (b < 0xE0) { seqlen = 2; }
+		else if (b < 0xF0) { seqlen = 3; }
+		else { seqlen = 4; charPos++; } /* supplementary = 2 UTF-16 units */
+		charPos++;
+		p += seqlen;
+	}
+
+	if (byteStart < 0) return MS_EMPTY_STRING;
+	if (byteEnd < 0) byteEnd = s.len; /* end beyond string → clamp to end */
+
+	return msStringNew(s.p->data + byteStart, byteEnd - byteStart);
 }
 
 msString msStringSubstring(msString s, int64_t start, int64_t end) {

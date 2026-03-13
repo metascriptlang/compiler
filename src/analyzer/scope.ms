@@ -23,7 +23,7 @@ export interface VarInfo {
 	isInitialized: boolean; // first-write optimization: skip destroy on first assignment
 }
 
-export interface MovedVar {
+export class MovedVar {
 	varName: string;       // variable name (empty for expression-level moves)
 	exprNode: Node;        // pre-built wasMoved call node (null for variable-level moves)
 }
@@ -40,7 +40,7 @@ export interface DrcScope {
 
 // ===== Outer Statement Context (for cross-scope last-read analysis) =====
 
-export interface OuterEntry {
+export class OuterEntry {
 	outerStmts: Node[];
 	fromIndex: number;
 	isFunctionBoundary: boolean;  // function boundary — stop cross-scope search
@@ -206,6 +206,22 @@ export function findVarInfoInContext(dctx: DrcContext, varName: string): VarInfo
 		i -= 1;
 		const vi = findVarInfo(dctx.scopes[i], varName);
 		if (vi !== null) return vi;
+	}
+	return null as unknown as VarInfo;
+}
+
+// Search scopes only within the current function boundary.
+// Stops at function scope boundaries — won't find module-level variables.
+// Use this when determining if a variable is "local owned" vs "borrowed from outer scope".
+export function findVarInfoInFunction(dctx: DrcContext, varName: string): VarInfo {
+	let i = dctx.scopes.length;
+	while (i > 0) {
+		i -= 1;
+		const scope = dctx.scopes[i];
+		const vi = findVarInfo(scope, varName);
+		if (vi !== null) return vi;
+		// Once we pass through a function scope, everything below is outer/module scope
+		if (scope.isFunction) return null as unknown as VarInfo;
 	}
 	return null as unknown as VarInfo;
 }

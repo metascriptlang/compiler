@@ -1,18 +1,13 @@
 // MetaScript Compiler CLI — build.ms config loader
-// TEMPORARY: Raiser VM detached for C-backend bootstrap.
-// Hardcoded defaults — build.ms is not evaluated.
+// Uses AST parsing to extract config from build.ms (no Raiser VM needed).
 
-/* RAISER VM DETACHED — uncomment to re-attach:
-import { readFile, fileExists, clockMs } from "std/process";
-import { evalSourceFull } from "../codegen/raiser/eval";
+import { readFile, fileExists } from "std/process";
+import { registerCoreParsers } from "../parser/statements/core";
+import { parseSource } from "../parser/statements/validation";
 import {
-	RaiserValueKind, RaiserValue,
-	heapObjectGetString, heapObjectGetObjectHandle, heapObjectGetField,
-	heapArrayLen, heapArrayGet,
-	RaiserObjectHeap, RaiserArrayHeap,
-} from "../raiser/value";
-import { error, dim } from "../utils/color";
-END RAISER VM DETACHED */
+	Node, NodeKind, ProgramData, VariableDeclData, ExportDeclData,
+	ObjectLiteralData, NumberLiteralData, StringLiteralData, BooleanLiteralData,
+} from "../ast/node";
 
 // --- Interfaces ---
 
@@ -30,10 +25,22 @@ export interface ResolveSection {
 	aliasValues: string[];
 }
 
+export interface FmtSection {
+	printWidth: number;
+	tabWidth: number;
+	useTabs: number;        // -1 = unset, 0 = false, 1 = true
+	singleQuote: number;    // -1 = unset, 0 = false, 1 = true
+}
+
+export function defaultFmtSection(): FmtSection {
+	return { printWidth: -1, tabWidth: -1, useTabs: -1, singleQuote: -1 };
+}
+
 export interface BuildConfig {
 	root: string;
 	build: BuildSection;
 	resolve: ResolveSection;
+	fmt: FmtSection;
 	valid: boolean;
 }
 
@@ -47,94 +54,137 @@ export function defaultResolveSection(): ResolveSection {
 	return { searchPaths: sp, extensions: ext, aliasKeys: ak, aliasValues: av };
 }
 
-export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfig {
-	// TEMPORARY: Hardcode config for C-Backend bootstrap — bypasses Raiser VM
-	const defBs: BuildSection = { target: "c", outDir: "out", outFile: "", optimize: "debug" };
-	const defRs = defaultResolveSection();
-	return { root: "src/index.ms", build: defBs, resolve: defRs, valid: true };
-	/* Original implementation (uncomment to re-attach):
+// --- AST-based config extraction ---
 
-	// --- Helpers ---
-	function extractStringArray(objHeap: RaiserObjectHeap, arrHeap: RaiserArrayHeap, objHandle: number, fieldName: string): string[] {
-		const result: string[] = [];
-		const val = heapObjectGetField(objHeap, objHandle, fieldName);
-		if (val.kind !== RaiserValueKind.Array) return result;
-		const arrHandle = val.intVal;
-		const len = heapArrayLen(arrHeap, arrHandle);
-		let i = 0;
-		while (i < len) {
-			const elem = heapArrayGet(arrHeap, arrHandle, i);
-			if (elem.kind === RaiserValueKind.String) {
-				result.push(elem.strVal);
-			}
-			i = i + 1;
-		}
-		return result;
+// Find a named field in an ObjectLiteral by key name. Returns null if not found.
+function findObjField(node: Node, key: string): Node {
+	if (node === null || node.kind !== NodeKind.ObjectLiteral) return null as unknown as Node;
+	const od = node.data as ObjectLiteralData;
+	for (let i = 0; i < od.keys.length; i = i + 1) {
+		if (od.keys[i] === key && i < od.properties.length) return od.properties[i];
 	}
+	return null as unknown as Node;
+}
 
+// Extract a string value from a node (StringLiteral only).
+function nodeString(node: Node): string {
+	if (node === null || node.kind !== NodeKind.StringLiteral) return "";
+	return (node.data as StringLiteralData).value;
+}
+
+// Extract a number value from a node (NumberLiteral only).
+function nodeNumber(node: Node): number {
+	if (node === null || node.kind !== NodeKind.NumberLiteral) return -1;
+	return (node.data as NumberLiteralData).value;
+}
+
+// Extract a boolean value from a node. Returns -1 if not bool, 0 for false, 1 for true.
+function nodeBool(node: Node): number {
+	if (node === null || node.kind !== NodeKind.BooleanLiteral) return -1;
+	return (node.data as BooleanLiteralData).boolValue ? 1 : 0;
+}
+
+// Find the root config ObjectLiteral from parsed build.ms AST.
+// Handles: `const config = { ... }; export default config;`
+// and:     `export default { ... };`
+// and:     `export default defineConfig({ ... });`
+function findConfigObject(program: Node): Node {
+	if (program === null || program.kind !== NodeKind.Program) return null as unknown as Node;
+	const pd = program.data as ProgramData;
+	let configObj: Node = null as unknown as Node;
+
+	// First pass: find top-level VariableDecl with ObjectLiteral init
+	for (let i = 0; i < pd.programStmts.length; i = i + 1) {
+		let stmt = pd.programStmts[i];
+		// Unwrap export
+		if (stmt.kind === NodeKind.ExportDecl) {
+			const ed = stmt.data as ExportDeclData;
+			stmt = ed.exportedDecl;
+		}
+		if (stmt.kind === NodeKind.VariableDecl) {
+			const vd = stmt.data as VariableDeclData;
+			if (vd.initializer !== null && vd.initializer.kind === NodeKind.ObjectLiteral) {
+				configObj = vd.initializer;
+			}
+		}
+	}
+	return configObj;
+}
+
+// Extract FmtSection from an ObjectLiteral node.
+function extractFmt(fmtNode: Node): FmtSection {
+	const fmt = defaultFmtSection();
+	if (fmtNode === null || fmtNode.kind !== NodeKind.ObjectLiteral) return fmt;
+	const pw = findObjField(fmtNode, "printWidth");
+	if (pw !== null) { const v = nodeNumber(pw); if (v >= 0) { fmt.printWidth = v; } }
+	const tw = findObjField(fmtNode, "tabWidth");
+	if (tw !== null) { const v = nodeNumber(tw); if (v >= 0) { fmt.tabWidth = v; } }
+	const ut = findObjField(fmtNode, "useTabs");
+	if (ut !== null) { fmt.useTabs = nodeBool(ut); }
+	const sq = findObjField(fmtNode, "singleQuote");
+	if (sq !== null) { fmt.singleQuote = nodeBool(sq); }
+	return fmt;
+}
+
+// Extract BuildSection from an ObjectLiteral node.
+function extractBuild(buildNode: Node): BuildSection {
+	const bs: BuildSection = { target: "c", outDir: "out", outFile: "", optimize: "debug" };
+	if (buildNode === null || buildNode.kind !== NodeKind.ObjectLiteral) return bs;
+	const t = nodeString(findObjField(buildNode, "target"));
+	if (t.length > 0) { bs.target = (t === "native") ? "c" : t; }
+	const od = nodeString(findObjField(buildNode, "outDir"));
+	if (od.length > 0) { bs.outDir = od; }
+	const of_ = nodeString(findObjField(buildNode, "outFile"));
+	if (of_.length > 0) { bs.outFile = of_; }
+	const opt = nodeString(findObjField(buildNode, "optimize"));
+	if (opt.length > 0) { bs.optimize = opt; }
+	return bs;
+}
+
+let _parsersRegistered = false;
+
+export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfig {
 	const defBs: BuildSection = { target: "c", outDir: "out", outFile: "", optimize: "debug" };
 	const defRs = defaultResolveSection();
-	const defCfg: BuildConfig = { root: "", build: defBs, resolve: defRs, valid: false };
+	const defFmt = defaultFmtSection();
+	const defCfg: BuildConfig = { root: "", build: defBs, resolve: defRs, fmt: defFmt, valid: false };
 
 	if (!fileExists(filePath)) return defCfg;
 
-	const t0 = clockMs();
 	const source = readFile(filePath);
 	if (source.length === 0) return defCfg;
 
-	const ctx = evalSourceFull(source);
-	if (showTime) {
-		const elapsed = clockMs() - t0;
-		const ms = "" + elapsed;
-		const display = ms.slice(0, ms.length < 6 ? ms.length : 6);
-		console.log(dim("  raiser eval in " + display + "ms"));
+	if (!_parsersRegistered) {
+		registerCoreParsers();
+		_parsersRegistered = true;
 	}
-	if (ctx.lastResult.kind !== RaiserValueKind.Object) {
-		console.log(error("error") + ": build.ms did not export a config object");
-		return defCfg;
+	const parseResult = parseSource(source);
+	if (!parseResult.ok) return defCfg;
+
+	const configObj = findConfigObject(parseResult.value);
+	if (configObj === null) return defCfg;
+
+	const root = nodeString(findObjField(configObj, "root"));
+	const bs = extractBuild(findObjField(configObj, "build"));
+	const fmt = extractFmt(findObjField(configObj, "fmt"));
+
+	return { root, build: bs, resolve: defRs, fmt, valid: true };
+}
+
+// Load only the fmt section from build.ms at the given directory.
+// Returns default if build.ms not found or has no fmt section.
+export function loadFmtSection(dir: string): FmtSection {
+	const buildPath = dir + "/build.ms";
+	if (!fileExists(buildPath)) return defaultFmtSection();
+	const source = readFile(buildPath);
+	if (source.length === 0) return defaultFmtSection();
+	if (!_parsersRegistered) {
+		registerCoreParsers();
+		_parsersRegistered = true;
 	}
-
-	const handle = ctx.lastResult.intVal;
-	const heap = ctx.objectHeap;
-	const root = heapObjectGetString(heap, handle, "root");
-	if (root.length === 0) return defCfg;
-
-	// Extract build section
-	let bsTarget = "c";
-	let bsOutDir = "out";
-	let bsOutFile = "";
-	let bsOptimize = "debug";
-
-	const buildHandle = heapObjectGetObjectHandle(heap, handle, "build");
-	if (buildHandle >= 0) {
-		const t = heapObjectGetString(heap, buildHandle, "target");
-		if (t.length > 0) {
-			if (t === "native") {
-				bsTarget = "c";
-			} else {
-				bsTarget = t;
-			}
-		}
-		const od = heapObjectGetString(heap, buildHandle, "outDir");
-		if (od.length > 0) { bsOutDir = od; }
-		const outF = heapObjectGetString(heap, buildHandle, "outFile");
-		if (outF.length > 0) { bsOutFile = outF; }
-		const opt = heapObjectGetString(heap, buildHandle, "optimize");
-		if (opt.length > 0) { bsOptimize = opt; }
-	}
-
-	// Extract resolve section
-	let rs = defaultResolveSection();
-	const resolveHandle = heapObjectGetObjectHandle(heap, handle, "resolve");
-	if (resolveHandle >= 0) {
-		const sp = extractStringArray(heap, ctx.arrayHeap, resolveHandle, "searchPaths");
-		if (sp.length > 0) { rs.searchPaths = sp; }
-		const ext = extractStringArray(heap, ctx.arrayHeap, resolveHandle, "extensions");
-		if (ext.length > 0) { rs.extensions = ext; }
-		// Alias extraction deferred — requires field iteration API
-	}
-
-	const bs: BuildSection = { target: bsTarget, outDir: bsOutDir, outFile: bsOutFile, optimize: bsOptimize };
-	return { root, build: bs, resolve: rs, valid: true };
-	*/
+	const parseResult = parseSource(source);
+	if (!parseResult.ok) return defaultFmtSection();
+	const configObj = findConfigObject(parseResult.value);
+	if (configObj === null) return defaultFmtSection();
+	return extractFmt(findObjField(configObj, "fmt"));
 }

@@ -2,12 +2,11 @@
 // Uses callback injection via util.ms to avoid circular imports
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, DeclKind, ExternKind, NodeData, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData } from "../../ast/node";
+import { Node, NodeKind, DeclKind, ExternKind, NodeData, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, skipDestructurePattern, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, addGenericDecl, updateGenericDeclFields, collectTokenText } from "../context";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipDefaultValue, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, isIdentLike } from "../util";
 import { callBlockParser, callExprParser } from "./callbacks";
-import { sliceStr } from "../../utils/string";
 import { programOk, stmtKind, stmtAt } from "./validation";
 
 
@@ -19,15 +18,17 @@ function makeLocFromToken(token: Token): SourceLocation {
 
 // Shared specifier list parser for import/export: { name as alias, ... }
 // Assumes opening '{' already consumed. Consumes up to but not including '}'.
-interface SpecifierList { names: string[]; aliases: string[]; }
+interface SpecifierList { names: string[]; aliases: string[]; locations: SourceLocation[]; }
 
 function parseSpecifierList(state: ParserState): SpecifierList {
 	const names: string[] = [];
 	const aliases: string[] = [];
+	const locations: SourceLocation[] = [];
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
 		const specifier = current(state);
 		if (!isIdentOrKeyword(specifier.kind)) { break; }
 		const specName = specifier.value;
+		locations.push(makeLoc(specifier.line, specifier.column));
 		advance(state);
 		if (!isAtEnd(state) && current(state).kind === TokenKind.As) {
 			advance(state);
@@ -43,7 +44,7 @@ function parseSpecifierList(state: ParserState): SpecifierList {
 			break;
 		}
 	}
-	return { names, aliases };
+	return { names, aliases, locations };
 }
 
 // ===== Variable Declaration =====
@@ -130,24 +131,24 @@ function stripFirstParam(arr: string[]): string[] {
 // Appends generic names. Used by both regular and extern function parsers.
 function applyExtensionFlags(flags: string, params: string[], fnParamTypes: string[], genericNames: string): string {
 	// Instance extension: first param has "this:" prefix
-	if (params.length > 0 && params[0].length > 5 && sliceStr(params[0], 0, 5) === "this:") {
-		const receiverName = sliceStr(params[0], 5, params[0].length);
+	if (params.length > 0 && params[0].length > 5 && params[0].slice(0, 5) === "this:") {
+		const receiverName = params[0].slice(5, params[0].length);
 		const receiverType = fnParamTypes[0];
 		if (flags === "") { flags = `ext:${receiverName}:${receiverType}`; }
 		else { flags = `${flags}|ext:${receiverName}:${receiverType}`; }
 		params[0] = receiverName;
 	}
 	// Static extension: first param has "typeof:" prefix
-	if (params.length > 0 && params[0].length > 7 && sliceStr(params[0], 0, 7) === "typeof:") {
-		const staticType = sliceStr(params[0], 7, params[0].length);
+	if (params.length > 0 && params[0].length > 7 && params[0].slice(0, 7) === "typeof:") {
+		const staticType = params[0].slice(7, params[0].length);
 		if (flags === "") { flags = `sext:${staticType}`; }
 		else { flags = `${flags}|sext:${staticType}`; }
 	}
 	// Out parameters: strip "out:" prefix, encode positions in flags
 	let outPositions = "";
 	for (let oi = 0; oi < params.length; oi += 1) {
-		if (params[oi].length > 4 && sliceStr(params[oi], 0, 4) === "out:") {
-			params[oi] = sliceStr(params[oi], 4, params[oi].length);
+		if (params[oi].length > 4 && params[oi].slice(0, 4) === "out:") {
+			params[oi] = params[oi].slice(4, params[oi].length);
 			if (outPositions === "") { outPositions = `${oi}`; }
 			else { outPositions = `${outPositions},${oi}`; }
 		}
@@ -207,7 +208,7 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 	flags = applyExtensionFlags(flags, params, fnParamTypes, genericNames);
 
 	// Static extensions strip the synthetic typeof param (not a runtime param)
-	const isStatic = params.length > 0 && params[0].length > 7 && sliceStr(params[0], 0, 7) === "typeof:";
+	const isStatic = params.length > 0 && params[0].length > 7 && params[0].slice(0, 7) === "typeof:";
 
 	// Optional return type annotation: function f(): string { ... }
 	const fnReturnType = captureOptionalType(state);
@@ -245,6 +246,7 @@ export function parseImportDecl(state: ParserState): NodeResult {
 			importNames: [],
 			importAliases: [],
 			importSource: source,
+			nameLocations: [],
 		}, importToken));
 	}
 
@@ -279,6 +281,7 @@ export function parseImportDecl(state: ParserState): NodeResult {
 		importNames: names,
 		importAliases: aliases,
 		importSource: source,
+		nameLocations: specs.locations,
 	}, importToken));
 }
 
@@ -309,7 +312,7 @@ export function parseExportDecl(state: ParserState): NodeResult {
 		advance(state);
 		consumeSemicolon(state);
 		const importNode = createNode(NodeKind.ImportDecl, {
-			importNames: names, importAliases: aliases, importSource: source,
+			importNames: names, importAliases: aliases, importSource: source, nameLocations: specs.locations,
 		}, exportToken);
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: importNode }, exportToken));
 	}
@@ -363,13 +366,17 @@ export function parseExportDecl(state: ParserState): NodeResult {
 		const afterDefault = current(state).kind;
 		if (afterDefault === TokenKind.Function) {
 			const decl = try parseFunctionDecl(state);
-			return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
+			const exportNode = createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken);
+			exportNode.flags = exportNode.flags | NodeFlag.ExportDefault;
+			return Result.ok(exportNode);
 		}
 		// Otherwise treat as expression
 		const expr = try callExprParser(state);
 		consumeSemicolon(state);
 		const exprStmt = createNode(NodeKind.ExprStmt, { expr }, exportToken);
-		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: exprStmt }, exportToken));
+		const exportNode = createNode(NodeKind.ExportDecl, { exportedDecl: exprStmt }, exportToken);
+		exportNode.flags = exportNode.flags | NodeFlag.ExportDefault;
+		return Result.ok(exportNode);
 	}
 
 	return Result.err(`Expected declaration after 'export' at line ${current(state).line}`);
@@ -546,6 +553,7 @@ export function parseEnumDecl(state: ParserState): NodeResult {
 
 	advance(state);
 	const members: string[] = [];
+	const memberLocs: SourceLocation[] = [];
 	const values: number[] = [];
 	let nextValue: number = 0;
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
@@ -555,6 +563,7 @@ export function parseEnumDecl(state: ParserState): NodeResult {
 		}
 
 		members.push(member.value);
+		memberLocs.push(makeLocFromToken(member));
 		advance(state);
 		// Optional value: A = 1 — parse number literal
 		if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
@@ -585,6 +594,7 @@ export function parseEnumDecl(state: ParserState): NodeResult {
 		enumMembers: members,
 		enumValues: values,
 		nameLocation: makeLocFromToken(nameToken),
+		memberLocations: memberLocs,
 	}, enumToken));
 }
 
@@ -1261,7 +1271,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 		}
 
 		// Static extensions strip the synthetic typeof param (not a runtime param)
-		const isStatic = params.length > 0 && params[0].length > 7 && sliceStr(params[0], 0, 7) === "typeof:";
+		const isStatic = params.length > 0 && params[0].length > 7 && params[0].slice(0, 7) === "typeof:";
 
 		const externFnNode = createNode(NodeKind.FunctionDecl, {
 			fnName: nameToken.value,

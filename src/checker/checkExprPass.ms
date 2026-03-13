@@ -17,7 +17,7 @@ import {
 	Type, TypeKind,
 	unknownType, numberType, stringType, booleanType, charType,
 	voidType, nullType, errorType,
-	createArray, createSpan, createFunction, createTypeRef, createStruct, createRef, createPrimitive, substituteType, instantiateGeneric, anonStructName,
+	createArray, createSpan, createFunction, createTypeRef, createStruct, createRef, createResult, createPrimitive, substituteType, instantiateGeneric, anonStructName,
 	isNumeric, isIntegerType, isStringType, isCallable, getReturnType, getElementType, getProperty, sizeOfType,
 	typeNameOf, unwrapRef, isDiscriminatedUnion, findVariantByDiscriminant, findFieldInVariant, findUnionVariant,
 	unifyType, createUnifyBindings, hasGenericParams,
@@ -25,9 +25,9 @@ import {
 } from "./types";
 import {
 	Symbol, SymbolKind, ScopeKind, SymbolState, SymbolFlag,
-	defineSymbol, lookupSymbol, makeSymbol, openScope, closeScope, hasOverloads, hasFlag,
+	defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag,
 } from "./symbol";
-import { CheckerContext, addError, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled, isReceiverMatch, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym } from "./context";
+import { CheckerContext, addError, addErrorRange, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled, isReceiverMatch, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym } from "./context";
 import {
 	scoreCandidate, isAssignable, needsStdConv, resolveOverloadIdx,
 	findFirstMismatch, typeRelation, TypeRelation,
@@ -35,7 +35,7 @@ import {
 } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
 import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation, buildTypeArgKey } from "./resolvePass";
-import { parseNumberLiteral, sliceStr, findChar, charAt, splitTopLevel, trimStr } from "../utils/string";
+import { parseNumberLiteral, findChar, splitTopLevel } from "../utils/string";
 import { findCallTypeArg, getExplicitTypeArg, getGenericDecl } from "../parser/context";
 import {
 	markInitialized, isInitialized, impliesNotNull, getDeclBlock,
@@ -93,8 +93,8 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 	const trimmedParamNames: string[] = [];
 	const concreteTypes: Type[] = [];
 	for (let pi = 0; pi < paramNames.length; pi += 1) {
-		trimmedParamNames.push(trimStr(paramNames[pi]));
-		const argName = pi < args.length ? trimStr(args[pi]) : "";
+		trimmedParamNames.push(paramNames[pi].trim());
+		const argName = pi < args.length ? args[pi].trim() : "";
 		concreteTypes.push(resolveAnnotation(argName, ctx));
 	}
 	const instType = instantiateGeneric(baseSym.symbolType, trimmedParamNames, concreteTypes);
@@ -143,13 +143,13 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			ensureShaped(sym, ctx);
 			node.resolvedSym = sym;
 			// Ref parity: useVar — only check vars declared in current scope (getDeclBlock >= 0).
-			// Imports/globals never varDecl'd → naturally skipped. Matches Nim's s.owner == a.owner.
-			if (sym.symbolKind === SymbolKind.Variable && getDeclBlock(ctx.initTracker, sym) >= 0 &&
+			// Imports/globals never varDecl'd → naturally skipped. Matches reference's owner-based scoping.
+			if (sym.symbolKind === SymbolKind.Variable && getDeclBlock(ctx.initTracker, d.name) >= 0 &&
 				ctx.strictDefs && ctx.initTracker.leftPartOfAsgn <= 0 && ctx.currentFunction !== null) {
-				if (!isInitialized(ctx.initTracker, sym)) {
+				if (!isInitialized(ctx.initTracker, d.name)) {
 					addWarning(ctx, "variable '" + d.name + "' may be used before initialization", node.location.line, node.location.column);
 					// Suppress repeated warnings (ref: a.init.add s.id)
-					markInitialized(ctx.initTracker, sym);
+					markInitialized(ctx.initTracker, d.name);
 				}
 			}
 			sgRecordSym(ctx, node.location.line, node.location.column, node.location.column + d.name.length, sym, sym.symbolType, sym.symbolKind, d.name, "", false);
@@ -178,16 +178,13 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			// Ref parity: initVar on assignment LHS (sempass2 line 1284)
 			if (isAsgn && d.left.kind === NodeKind.Identifier) {
 				const lhsId = d.left.data as IdentifierData;
-				const lhsSym = d.left.resolvedSym;
-				if (lhsSym !== null) {
-					// Ref parity: nfFirstWrite — set when first assignment is in same block as declaration
-					if (!isInitialized(ctx.initTracker, lhsSym)) {
-						if (getDeclBlock(ctx.initTracker, lhsSym) === ctx.initTracker.currentBlock) {
-							node.flags = node.flags | NodeFlag.FirstWrite;
-						}
+				// Ref parity: nfFirstWrite — set when first assignment is in same block as declaration
+				if (!isInitialized(ctx.initTracker, lhsId.name)) {
+					if (getDeclBlock(ctx.initTracker, lhsId.name) === ctx.initTracker.currentBlock) {
+						node.flags = node.flags | NodeFlag.FirstWrite;
 					}
-					markInitialized(ctx.initTracker, lhsSym);
 				}
+				markInitialized(ctx.initTracker, lhsId.name);
 				// Ref parity: invalidate narrowing facts about reassigned variable
 				invalidateFacts(ctx, lhsId.name);
 			}
@@ -286,13 +283,51 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 				// Skip ownership modifiers (Sink/Lent/Var) — transparent for codegen.
 				const stampType = skipModifier(expectedType);
 				node.nodeType = (stampType !== null) ? stampType : objExpected;
+				const containerName = objExpected.typeName !== null ? objExpected.typeName : "";
 				let fi = 0;
 				while (fi < d.properties.length) {
 					const fieldExpected = (fi < objExpected.typeChildren.length)
 						? objExpected.typeChildren[fi]
 						: null;
 					checkExpr(ctx, d.properties[fi], fieldExpected);
+					// Record property key as reference to struct field (TypeScript: "(property) Person.name: string")
+					if (fi < d.keys.length && d.keyLocations !== null && fi < d.keyLocations.length && fieldExpected !== null) {
+						const keyName = d.keys[fi];
+						const keyLoc = d.keyLocations[fi];
+						if (keyName !== "..." && keyName !== "__computed__" && keyLoc.line > 0) {
+							// Look up field symbol: TypeName_fieldName convention
+							let fieldSym: Symbol = null;
+							if (containerName !== "") {
+								fieldSym = lookupSymbol(ctx.table, containerName + "_" + keyName);
+								if (fieldSym !== null) ensureShaped(fieldSym, ctx);
+							}
+							if (fieldSym === null) {
+								fieldSym = makeSymbolState(keyName, SymbolKind.Property, fieldExpected, false, SymbolState.Shaped);
+							}
+							sgRecordSym(ctx, keyLoc.line, keyLoc.column, keyLoc.column + keyName.length, fieldSym, fieldExpected, SymbolKind.Property, keyName, containerName, false);
+						}
+					}
 					fi = fi + 1;
+				}
+				// Excess property check: flag keys not in the expected struct
+				if (objExpected.typeNames !== null) {
+					let ki = 0;
+					while (ki < d.keys.length) {
+						const key = d.keys[ki];
+						if (key !== "..." && key !== "__computed__") {
+							let found = false;
+							let ni = 0;
+							while (ni < objExpected.typeNames.length) {
+								if (objExpected.typeNames[ni] === key) { found = true; break; }
+								ni = ni + 1;
+							}
+							if (!found && d.keyLocations !== null && ki < d.keyLocations.length) {
+								const kl = d.keyLocations[ki];
+								addErrorRange(ctx, "'" + key + "' does not exist in type '" + containerName + "'", kl.line, kl.column, kl.column + key.length);
+							}
+						}
+						ki = ki + 1;
+					}
 				}
 				return node.nodeType;
 			} else if (objExpected !== null && objExpected.kind === TypeKind.Union
@@ -426,26 +461,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			checkExpr(ctx, d.spreadArg, null);
 			return unknownType();
 		},
-		NodeKind.NewExpr => {
-			const d = node.data as NewExprData;
-			const calleeType = checkExpr(ctx, d.newCallee, null);
-			const resolvedType = resolveGenericNewExpr(ctx, d.newCallee, calleeType);
-			// Resolve inner struct type for field type propagation
-			const innerType = (resolvedType !== null && resolvedType.kind === TypeKind.Ref && resolvedType.typeReturn !== null)
-				? resolvedType.typeReturn : resolvedType;
-			const fieldTypes = (innerType !== null && innerType.typeChildren !== null) ? innerType.typeChildren : null as unknown as Type[];
-			let ai = 0;
-			while (ai < d.newArguments.length) {
-				const argExpected = (fieldTypes !== null && ai < fieldTypes.length) ? fieldTypes[ai] : null;
-				checkExpr(ctx, d.newArguments[ai], argExpected);
-				ai = ai + 1;
-			}
-			if (resolvedType.kind === TypeKind.Struct || resolvedType.kind === TypeKind.Ref) {
-				return resolvedType;
-			} else {
-				return unknownType();
-			}
-		},
+		NodeKind.NewExpr => checkNewExpr(ctx, node),
 		NodeKind.TryExpr => checkTryExpr(ctx, node),
 		NodeKind.MatchExpr => checkMatchExpr(ctx, node),
 		NodeKind.AwaitExpr => {
@@ -788,6 +804,32 @@ function fillDefaultArgsForNode(ctx: CheckerContext, callNode: Node, fnName: str
 	}
 }
 
+// ===== NewExpr =====
+
+function checkNewExpr(ctx: CheckerContext, node: Node): Type {
+	const d = node.data as NewExprData;
+	const calleeType = checkExpr(ctx, d.newCallee, null);
+	const resolvedType = resolveGenericNewExpr(ctx, d.newCallee, calleeType);
+	// Resolve inner struct type for field type propagation
+	const innerType = (resolvedType !== null && resolvedType.kind === TypeKind.Ref && resolvedType.typeReturn !== null)
+		? resolvedType.typeReturn : resolvedType;
+	// Access typeChildren directly in loop — avoid local Type[] alias
+	// (local array cleanup would free the shared payload)
+	let ai = 0;
+	while (ai < d.newArguments.length) {
+		let argExpected: Type = null;
+		if (innerType !== null && innerType.typeChildren !== null && ai < innerType.typeChildren.length) {
+			argExpected = innerType.typeChildren[ai];
+		}
+		checkExpr(ctx, d.newArguments[ai], argExpected);
+		ai = ai + 1;
+	}
+	if (resolvedType.kind === TypeKind.Struct || resolvedType.kind === TypeKind.Ref) {
+		return resolvedType;
+	}
+	return unknownType();
+}
+
 // ===== TryExpr =====
 
 function checkTryExpr(ctx: CheckerContext, node: Node): Type {
@@ -814,6 +856,11 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 	// Detect overloaded paths early — these need argTypes for scoring
 	let needsOverloadScoring = false;
 	let overloadSym: Symbol = null as unknown as Symbol;
+	// Extension pre-resolution state (set in MemberExpr branch, used after arg checking)
+	let extPreResolved = false;
+	let extMultiFiltered: ExtensionMethod[] = [];
+	let extMultiObjType: Type = null;
+	let extMultiMethodName = "";
 	// Check for overloads + set resolvedSym for direct calls
 	if (d.callee.kind === NodeKind.Identifier) {
 		const calleeName = (d.callee.data as IdentifierData).name;
@@ -839,117 +886,98 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 		if (d.callee.resolvedSym !== null) {
 			node.resolvedSym = d.callee.resolvedSym;
 		}
-		// Static extension override: when MemberExpr resolved to a property (e.g. Result.ok field)
-		// but a static extension function exists with @builtin (e.g. Result.ok() constructor),
-		// prefer the extension function for call expressions.
+		// Reference parity: pre-resolve extension methods BEFORE arg checking.
+		// sigmatch types args WITH formal param type from the resolved candidate.
+		// Without this, ObjectLiteral args get anonymous struct types instead of
+		// the named parameter type (e.g. __anon2__ instead of NodeCacheEntry).
 		if (ctx.extensionRegistry !== null) {
 			const me = d.callee.data as MemberExprData;
 			const objType = me.object.nodeType;
-			// Use typeNameOf to unwrap Ref<Struct> → struct name (e.g. JSON class → "JSON")
-			const objName = objType !== null ? typeNameOf(objType) : "";
-			if (objName !== "") {
+			if (objType !== null && objType.kind !== TypeKind.Unknown) {
+				const objName = typeNameOf(objType);
 				let allByName = findAllExtensionsByName(ctx.extensionRegistry, me.property);
-				// Also search by mangled name (className_methodName) for class static methods
-				if (allByName.length === 0) {
+				if (allByName.length === 0 && objName !== "") {
 					allByName = findAllExtensionsByName(ctx.extensionRegistry, objName + "_" + me.property);
 				}
-				const staticType = createTypeRef("typeof " + objName);
-				const ext = findFirstMatchingExt(allByName, staticType);
-				if (ext !== null) {
-					// Direct sym link — no name-based lookup
-					const extSym = ext.sym !== null ? ext.sym : lookupSymbol(ctx.table, ext.methodName);
-					if (extSym !== null) {
-						ensureShaped(extSym, ctx);
-						node.resolvedSym = extSym;
-						d.callee.resolvedSym = extSym;
-						// Update calleeType so generic return inference works below
-						if (extSym.symbolType.kind === TypeKind.Function) {
-							calleeType = extSym.symbolType;
-						}
+				const filtered = filterExtsByReceiverType(allByName, objType);
+				if (filtered.length === 1) {
+					const winner = filtered[0];
+					if (winner.sym !== null) {
+						ensureShaped(winner.sym, ctx);
+						node.resolvedSym = winner.sym;
+						d.callee.resolvedSym = winner.sym;
+						sgRecordSym(ctx, d.callee.location.line, d.callee.location.column + 1, d.callee.location.column + 1 + me.property.length, winner.sym, getExtFnType(winner), SymbolKind.Method, me.property, winner.receiverTypeName, false);
+						node.flags = node.flags | NodeFlag.ExtCall;
+						if (winner.isStatic) node.flags = node.flags | NodeFlag.ExtStatic;
 					}
+					// Get extension type, instantiate generics, strip receiver → calleeType
+					let extType = getExtFnType(winner);
+					if (!winner.isStatic && extType.typeChildren.length > 0) {
+						if (hasGenericParams(extType)) {
+							const eb = createUnifyBindings();
+							unifyType(extType.typeChildren[0], objType, eb);
+							if (eb.names.length > 0) extType = instantiateGeneric(extType, eb.names, eb.types);
+						}
+						calleeType = stripReceiverParam(extType);
+					} else {
+						calleeType = extType;
+					}
+					extPreResolved = true;
+				} else if (filtered.length > 1) {
+					// Multi-overload: defer to post-arg scoring (needs argTypes)
+					extMultiFiltered = filtered;
+					extMultiObjType = objType;
+					extMultiMethodName = me.property;
 				}
 			}
 		}
 	}
-	// Check args — with expectedType from callee params for non-overloaded calls
+	// Check args — with expectedType from callee params (Reference parity: signature match formal type)
 	const argTypes: Type[] = [];
-	let ai = 0;
-	while (ai < d.arguments.length) {
+	for (let ai = 0; ai < d.arguments.length; ai += 1) {
 		let paramExpected: Type = null;
-		if (!needsOverloadScoring && calleeType.kind === TypeKind.Function
+		if (!needsOverloadScoring && calleeType !== null && calleeType.kind === TypeKind.Function
 			&& calleeType.typeChildren !== null
 			&& ai < calleeType.typeChildren.length) {
 			paramExpected = calleeType.typeChildren[ai];
 		}
 		const argType = checkExpr(ctx, d.arguments[ai], paramExpected);
 		argTypes.push(argType);
-		ai = ai + 1;
 	}
 	// Overloaded direct calls — use argTypes for scoring
 	if (needsOverloadScoring) {
 		return resolveOverloadCall(ctx, overloadSym, argTypes, node);
 	}
-	// Extension method overloads: obj.method(args) where multiple extensions match
-	// Standard-aligned: collect all extensions by name, then filter by receiver type compatibility
-	// Skip when objType is Unknown — can't meaningfully select an overload
-	if (d.callee.kind === NodeKind.MemberExpr && ctx.extensionRegistry !== null) {
-		const me = d.callee.data as MemberExprData;
-		const objType = me.object.nodeType;
-		if (objType !== null && objType.kind !== TypeKind.Unknown) {
-			let allByName = findAllExtensionsByName(ctx.extensionRegistry, me.property);
-			// Also search by mangled name for class methods
-			if (allByName.length === 0) {
-				const recvName = typeNameOf(objType);
-				if (recvName !== "") {
-					allByName = findAllExtensionsByName(ctx.extensionRegistry, recvName + "_" + me.property);
-				}
+	// Pre-resolved single extension — return type inference (needs argTypes)
+	if (extPreResolved) {
+		// Fill default args (calleeType already has receiver stripped for non-static)
+		// defaultOffset = 1 for non-static (fnDefaults[0] is receiver slot), 0 for static
+		const extDefaultOffset = (node.flags & NodeFlag.ExtStatic) !== 0 ? 0 : 1;
+		if (argTypes.length < calleeType.typeChildren.length) {
+			const me = d.callee.data as MemberExprData;
+			fillDefaultArgsForNode(ctx, node, me.property, calleeType.typeChildren.length, extDefaultOffset);
+		}
+		// Explicit type arg resolution for generic methods (e.g. JSON.parse<Person>)
+		if (hasGenericParams(calleeType)) {
+			const explicitArg = findCallTypeArg(node);
+			if (explicitArg !== "") {
+				return inferGenericReturnWithExplicit(calleeType, argTypes, expectedType, explicitArg, ctx, node);
 			}
-			const filtered = filterExtsByReceiverType(allByName, objType);
-			if (filtered.length === 1) {
-				// Single match — use directly
-				const winner = filtered[0];
-				if (winner.sym !== null) {
-					node.resolvedSym = winner.sym;
-					sgRecordSym(ctx, d.callee.location.line, d.callee.location.column + 1, d.callee.location.column + 1 + me.property.length, winner.sym, getExtFnType(winner), SymbolKind.Method, me.property, winner.receiverTypeName, false);
-					// Mark for transform: skip registry re-lookup (Nim resolves UFCS in sem)
-					node.flags = node.flags | NodeFlag.ExtCall;
-					if (winner.isStatic) node.flags = node.flags | NodeFlag.ExtStatic;
+			// JSON.parse() without <T> → returns Result<JsonValue, string> (untyped)
+			if (node.resolvedSym !== null && node.resolvedSym.builtinKind === "JsonParse") {
+				const jvSym = lookupSymbol(ctx.table, "JsonValue");
+				if (jvSym !== null && jvSym.symbolType !== null) {
+					const resultType = createResult(jvSym.symbolType, stringType());
+					node.nodeType = resultType;
+					return resultType;
 				}
-				// Strip receiver and return inferred type (sym.typ is authoritative)
-				let srcType = getExtFnType(winner);
-				if (!winner.isStatic && srcType.typeChildren.length > 0) {
-					if (hasGenericParams(srcType)) {
-						const eb = createUnifyBindings();
-						unifyType(srcType.typeChildren[0], objType, eb);
-						if (eb.names.length > 0) srcType = instantiateGeneric(srcType, eb.names, eb.types);
-					}
-					// Fill default args for extension methods (receiver excluded from arg count)
-					const extParamCount = srcType.typeChildren.length - 1;
-					if (argTypes.length < extParamCount) {
-						fillDefaultArgsForNode(ctx, node, me.property, extParamCount, 1);
-					}
-					return inferGenericReturn(srcType, argTypes, expectedType);
-				}
-				// Explicit type arg resolution for generic methods (e.g. JSON.parse<Person>)
-				if (hasGenericParams(srcType)) {
-					const explicitArg = findCallTypeArg(node);
-					if (explicitArg !== "") {
-						return inferGenericReturnWithExplicit(srcType, argTypes, expectedType, explicitArg, ctx);
-					}
-					// JSON.parse() without <T> → returns JsonValue (untyped)
-					if (node.resolvedSym !== null && node.resolvedSym.builtinKind === "JsonParse") {
-						const jvSym = lookupSymbol(ctx.table, "JsonValue");
-						if (jvSym !== null && jvSym.symbolType !== null) {
-							node.nodeType = jvSym.symbolType;
-							return jvSym.symbolType;
-						}
-					}
-				}
-				return inferGenericReturn(srcType, argTypes, expectedType);
-			} else if (filtered.length > 1) {
-				return resolveExtensionOverloadCall(ctx, filtered, argTypes, objType, me.property, node);
 			}
 		}
+		return inferGenericReturn(calleeType, argTypes, expectedType);
+	}
+	// Multi-overload extension — needs argTypes for scoring
+	if (extMultiFiltered.length > 1) {
+		return resolveExtensionOverloadCall(ctx, extMultiFiltered, argTypes, extMultiObjType, extMultiMethodName, node);
 	}
 	// Check argument types + infer generic return
 	// @builtin("Echo"): accept any number of args of any type (reference echo parity)
@@ -958,9 +986,9 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 		// Fill default arguments if too few args provided
 		const minAr = getMinArity(calleeType);
 		if (argTypes.length < minAr) {
-			addError(ctx, "Too few arguments: expected at least " + intToString(minAr) + ", got " + intToString(argTypes.length), node.location.line, node.location.column);
+			addError(ctx, "Too few arguments: expected at least " + String(minAr) + ", got " + String(argTypes.length), node.location.line, node.location.column);
 		} else if (argTypes.length > calleeType.typeChildren.length) {
-			addError(ctx, "Too many arguments: expected at most " + intToString(calleeType.typeChildren.length) + ", got " + intToString(argTypes.length), node.location.line, node.location.column);
+			addError(ctx, "Too many arguments: expected at most " + String(calleeType.typeChildren.length) + ", got " + String(argTypes.length), node.location.line, node.location.column);
 		} else if (argTypes.length < calleeType.typeChildren.length) {
 			const calleeNameForDef = getCalleeNameForDefaults(node);
 			if (calleeNameForDef !== "") {
@@ -977,14 +1005,14 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 				&& argTypes[pi].kind !== TypeKind.Function) {
 				if (!isAssignable(argTypes[pi], paramType)) {
 					const calleeName = getCalleeName(d.callee);
-					addError(ctx, "Argument type mismatch in '" + calleeName + "' arg " + intToString(pi) + ": got " + typeNameOf(argTypes[pi]) + ", expected " + typeNameOf(paramType), node.location.line, node.location.column);
+					addError(ctx, "Argument type mismatch in '" + calleeName + "' arg " + String(pi) + ": got " + typeNameOf(argTypes[pi]) + ", expected " + typeNameOf(paramType), node.location.line, node.location.column);
 				}
 				// Reference parity: var/out params require lvalue argument
 				if (paramType.kind === TypeKind.Var && pi < d.arguments.length) {
 					const argKind = d.arguments[pi].kind;
 					if (argKind !== NodeKind.Identifier && argKind !== NodeKind.MemberExpr && argKind !== NodeKind.ArrayAccess) {
 						const calleeName = getCalleeName(d.callee);
-						addError(ctx, "'" + calleeName + "' arg " + intToString(pi) + ": out parameter requires a variable, not an expression", node.location.line, node.location.column);
+						addError(ctx, "'" + calleeName + "' arg " + String(pi) + ": out parameter requires a variable, not an expression", node.location.line, node.location.column);
 					}
 				}
 				if (needsStdConv(argTypes[pi], paramType)) {
@@ -1001,7 +1029,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 		if (hasGenericParams(calleeType)) {
 			const explicitArg = findCallTypeArg(node);
 			if (explicitArg !== "") {
-				return inferGenericReturnWithExplicit(calleeType, argTypes, expectedType, explicitArg, ctx);
+				return inferGenericReturnWithExplicit(calleeType, argTypes, expectedType, explicitArg, ctx, node);
 			}
 		}
 		return inferGenericReturn(calleeType, argTypes, expectedType);
@@ -1010,45 +1038,72 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 }
 
 // Resolve generic return type using explicit type arg (e.g. parse<Person>)
-function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expectedType: Type, explicitArg: string, ctx: CheckerContext): Type {
+function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expectedType: Type, explicitArg: string, ctx: CheckerContext, node: Node): Type {
 	let returnType = fnType.typeReturn;
 	if (returnType === null) return unknownType();
 	// Resolve the explicit type arg to an actual type
 	const resolvedSym = lookupSymbol(ctx.table, explicitArg);
 	if (resolvedSym === null) return inferGenericReturn(fnType, argTypes, expectedType);
+	ensureShaped(resolvedSym, ctx);
 	const concreteType = resolvedSym.symbolType;
-	// Find generic param names in the return type and substitute
-	const genericNames = collectGenericParamNames(returnType);
+	// Record the type arg as a symbol reference for LSP hover/goto-def
+	if (node !== null) {
+		const typeArgCol = computeTypeArgCol(node);
+		if (typeArgCol > 0) {
+			const symKind = resolvedSym.symbolKind === SymbolKind.Interface ? SymbolKind.Interface
+				: resolvedSym.symbolKind === SymbolKind.Class ? SymbolKind.Class
+				: resolvedSym.symbolKind === SymbolKind.TypeAlias ? SymbolKind.TypeAlias
+				: SymbolKind.Interface;
+			sgRecordSym(ctx, node.location.line, typeArgCol, typeArgCol + explicitArg.length, resolvedSym, concreteType, symKind, explicitArg, "", false);
+		}
+	}
+	// Find first generic param name in the return type and substitute
+	const genericParamName = findFirstGenericParamName(returnType);
 	// Single type arg → bind to first generic param found
-	if (genericNames.length > 0) {
-		returnType = substituteType(returnType, genericNames[0], concreteType);
+	if (genericParamName !== "") {
+		returnType = substituteType(returnType, genericParamName, concreteType);
 	}
 	return returnType;
 }
 
-// Collect all unique GenericParam type names from a type tree
-function collectGenericParamNames(t: Type): string[] {
-	const names: string[] = [];
-	collectGenericNamesInner(t, names);
-	return names;
+// Compute the column where the type arg name starts (after '<') in a call expression.
+// For `foo<T>(...)`: callee.col + "foo".length + 1 (skip '<')
+// For `obj.method<T>(...)`: callee.col + 1 + "method".length + 1 (skip '.' and '<')
+function computeTypeArgCol(node: Node): number {
+	const cd = node.data as CallExprData;
+	if (cd.callee === null) return 0;
+	if (cd.callee.kind === NodeKind.Identifier) {
+		const name = (cd.callee.data as IdentifierData).name;
+		return cd.callee.location.column + name.length + 1;  // +1 for '<'
+	}
+	if (cd.callee.kind === NodeKind.MemberExpr) {
+		const me = cd.callee.data as MemberExprData;
+		// callee location points to property start (after dot)
+		return cd.callee.location.column + 1 + me.property.length + 1;  // +1 col offset, +propLen, +1 for '<'
+	}
+	return 0;
 }
 
-function collectGenericNamesInner(t: Type, names: string[]): void {
-	if (t === null) return;
-	if (t.kind === TypeKind.GenericParam) {
-		// Avoid duplicates
-		let found = false;
-		for (const n of names) {
-			if (n === t.typeName) { found = true; }
-		}
-		if (!found) names.push(t.typeName);
-		return;
+// Find the first GenericParam name in a type tree (non-recursive to avoid array-by-value bug)
+function findFirstGenericParamName(t: Type): string {
+	if (t === null) return "";
+	if (t.kind === TypeKind.GenericParam) return t.typeName;
+	// Check typeReturn (Result.okType, Array.elemType, Function.returnType, etc.)
+	if (t.typeReturn !== null) {
+		const name = findFirstGenericParamName(t.typeReturn);
+		if (name !== "") return name;
 	}
-	if (t.typeReturn !== null) collectGenericNamesInner(t.typeReturn, names);
-	if (t.typeExtra !== null) collectGenericNamesInner(t.typeExtra, names);
+	// Check typeExtra (Result.errType, Map.valueType, etc.)
+	if (t.typeExtra !== null) {
+		const name = findFirstGenericParamName(t.typeExtra);
+		if (name !== "") return name;
+	}
+	// Check typeChildren (Function params, Union members, etc.)
 	for (let i = 0; i < t.typeChildren.length; i += 1) {
-		collectGenericNamesInner(t.typeChildren[i], names);
+		const name = findFirstGenericParamName(t.typeChildren[i]);
+		if (name !== "") return name;
 	}
+	return "";
 }
 
 export function inferGenericReturn(fnType: Type, argTypes: Type[], expectedType: Type): Type {
@@ -1105,9 +1160,9 @@ function resolveOverloadCall(ctx: CheckerContext, sym: Symbol, argTypes: Type[],
 				msg = msg + "\n    " + formatCandidateSig(sym.name, candidates[ci]);
 				const mpos = findFirstMismatch(candidates[ci].typeChildren, argTypes, getMinArity(candidates[ci]));
 				if (mpos >= 0 && mpos < argTypes.length && mpos < candidates[ci].typeChildren.length) {
-					msg = msg + "\n      first mismatch at position " + intToString(mpos + 1) + ": expected '" + typeNameOf(candidates[ci].typeChildren[mpos]) + "', got '" + typeNameOf(argTypes[mpos]) + "'";
+					msg = msg + "\n      first mismatch at position " + String(mpos + 1) + ": expected '" + typeNameOf(candidates[ci].typeChildren[mpos]) + "', got '" + typeNameOf(argTypes[mpos]) + "'";
 				} else if (candidates[ci].typeChildren.length !== argTypes.length) {
-					msg = msg + "\n      expected " + intToString(candidates[ci].typeChildren.length) + " argument(s), got " + intToString(argTypes.length);
+					msg = msg + "\n      expected " + String(candidates[ci].typeChildren.length) + " argument(s), got " + String(argTypes.length);
 				}
 			}
 			ci = ci + 1;
@@ -1196,7 +1251,7 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 	}
 	if (idx >= 0 && idx < exts.length && exts[idx].sym !== null) {
 		callNode.resolvedSym = exts[idx].sym;
-		// Mark for transform: skip registry re-lookup (Nim resolves UFCS in sem)
+		// Mark for transform: skip registry re-lookup (reference resolves UFCS in sem)
 		callNode.flags = callNode.flags | NodeFlag.ExtCall;
 		if (exts[idx].isStatic) callNode.flags = callNode.flags | NodeFlag.ExtStatic;
 	}
@@ -1224,17 +1279,6 @@ function formatCandidateSig(name: string, fnType: Type): string {
 		sig = sig + ": " + typeNameOf(fnType.typeReturn);
 	}
 	return sig;
-}
-
-function intToString(n: number): string {
-	return match (n) {
-		0 => "0", 1 => "1", 2 => "2", 3 => "3", 4 => "4",
-		5 => "5", 6 => "6", 7 => "7", 8 => "8", 9 => "9",
-		10 => "10", 11 => "11", 12 => "12", 13 => "13", 14 => "14",
-		15 => "15", 16 => "16", 17 => "17", 18 => "18", 19 => "19",
-		20 => "20",
-		_ => "?",
-	};
 }
 
 // ===== Inheritance Depth (inline — avoids importing symbol.ms in compat.ms) =====
@@ -1374,7 +1418,7 @@ function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, d: Obje
 			let dotted = "";
 			let ci = 0;
 			while (ci < discValue.length) {
-				const ch = charAt(discValue, ci);
+				const ch = discValue.charAt(ci);
 				if (ch === "_") {
 					dotted = dotted + ".";
 				} else {
@@ -1439,18 +1483,23 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 	// builtinLower handles enum .toString() → EnumName_toString(value).
 	if (objType.kind === TypeKind.Enum && d.property !== "toString") {
 		const enumName = objType.typeName;
-		const mangledName = enumName + "_" + d.property;
-		// Rewrite entire node to Identifier
-		node.kind = NodeKind.Identifier;
-		node.data = { name: mangledName };
-		// Find and set the resolved enum member symbol
+		const propName = d.property;
+		const mangledName = enumName + "_" + propName;
+		// Find and set the resolved enum member symbol (before node rewrite frees d)
 		const enumSym = lookupSymbol(ctx.table, enumName);
 		if (enumSym !== null) {
 			const memberSym = lookupSymbol(ctx.table, mangledName);
-			node.resolvedSym = memberSym;
 			if (memberSym !== null) {
-				sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + d.property.length, memberSym, objType, SymbolKind.EnumMember, d.property, enumName, false);
+				sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + propName.length, memberSym, objType, SymbolKind.EnumMember, propName, enumName, false);
 			}
+			// Rewrite entire node to Identifier (frees old MemberExprData)
+			node.kind = NodeKind.Identifier;
+			node.data = { name: mangledName };
+			node.resolvedSym = memberSym;
+		} else {
+			// Rewrite entire node to Identifier
+			node.kind = NodeKind.Identifier;
+			node.data = { name: mangledName };
 		}
 		node.nodeType = objType;
 		return objType;
@@ -1461,10 +1510,15 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 	let resolvedObjType = objType;
 	if (needsDeref && objType.typeReturn !== null) {
 		resolvedObjType = objType.typeReturn;
+		// Ptr<Ref<T>>: unwrap both layers to reach the underlying Struct.
+		// Ptr wraps Ref for class pointer fields — a single HiddenDeref dereferences both.
+		if (resolvedObjType.kind === TypeKind.Ref && resolvedObjType.typeReturn !== null) {
+			resolvedObjType = resolvedObjType.typeReturn;
+		}
 	}
 	const propType = getProperty(resolvedObjType, d.property);
 	// Result fields: ok, value, error — synthetic symbol (no typeName on Result)
-	// Nim parity: field symbols share location from the base type's field declaration.
+	// Reference parity: field symbols share location from the base type's field declaration.
 	// Since Result is built-in (no .ms source), point to the resolved type's declaration
 	// so gd on `result.value` navigates to `Person` when value: Person.
 	if (resolvedObjType.kind === TypeKind.Result && propType.kind !== TypeKind.Unknown) {
@@ -1714,7 +1768,7 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 	const coveredMembers: string[] = [];
 	// Ref parity: trackCase — init tracking for match expression arms
 	const oldState = saveInitState(ctx.initTracker);
-	const branchInits: Symbol[][] = [];
+	const branchInits: string[][] = [];
 	const branchBreaks: BreakState[] = [];
 	for (const c of d.matchCases) {
 		const cd = c.data as MatchCaseData;
@@ -1884,30 +1938,30 @@ function processEmitInterpolation(ctx: CheckerContext, md: MacroInvocationData, 
 	const newArgs: Node[] = [];
 	const line = node.location.line;
 	let a = 0;
-	while (a < str.length) {
+	while (a < str.byteLength) {
 		let b = a;
 		// Find next backtick
-		while (b < str.length && charAt(str, b) !== "`") {
+		while (b < str.byteLength && str.charAt(b) !== "`") {
 			b = b + 1;
 		}
 		// Emit raw text before backtick
 		if (b > a) {
-			const sub = sliceStr(str, a, b);
+			const sub = str.slice(a, b);
 			const strNode = createNode(NodeKind.StringLiteral, { value: sub },
 				createToken(TokenKind.String, sub, line));
 			strNode.nodeType = stringType();
 			newArgs.push(strNode);
 		}
-		if (b >= str.length) break;
+		if (b >= str.byteLength) break;
 		// Find closing backtick
 		let c = b + 1;
-		while (c < str.length && charAt(str, c) !== "`") {
+		while (c < str.byteLength && str.charAt(c) !== "`") {
 			c = c + 1;
 		}
-		if (c >= str.length) {
+		if (c >= str.byteLength) {
 			// Unterminated backtick — emit identifier text without the backtick (reference: substr(str, b+1))
-			const rest = sliceStr(str, b + 1, str.length);
-			if (rest.length > 0) {
+			const rest = str.slice(b + 1, str.byteLength);
+			if (rest.byteLength > 0) {
 				const restNode = createNode(NodeKind.StringLiteral, { value: rest },
 					createToken(TokenKind.String, rest, line));
 				restNode.nodeType = stringType();
@@ -1916,7 +1970,7 @@ function processEmitInterpolation(ctx: CheckerContext, md: MacroInvocationData, 
 			break;
 		}
 		// Extract identifier between backticks
-		const ident = sliceStr(str, b + 1, c);
+		const ident = str.slice(b + 1, c);
 		if (ident.length > 0) {
 			const sym = lookupSymbol(ctx.table, ident);
 			if (sym !== null) {

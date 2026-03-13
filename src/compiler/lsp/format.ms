@@ -6,7 +6,7 @@
 // Follows TypeScript-Go LSP patterns for a familiar developer experience.
 
 import { lspJsonString, lspJsonNumber, lspJsonBool } from "./protocol";
-import { sliceStr, charAt } from "../../utils/string";
+
 
 
 // ===== Position + Range =====
@@ -38,11 +38,11 @@ export function lspFmtTextEdit(line: number, col: number, endCol: number, newTex
 // commitChars: single string like ".,;" — each char becomes a JSON array element.
 // Empty string = no commitCharacters field.
 function lspBuildCommitCharsArray(chars: string): string {
-	if (chars.length === 0) return "";
+	if (chars.byteLength === 0) return "";
 	let arr = "[";
-	for (let i = 0; i < chars.length; i = i + 1) {
+	for (let i = 0; i < chars.byteLength; i = i + 1) {
 		if (i > 0) arr = arr + ",";
-		arr = arr + lspJsonString(sliceStr(chars, i, i + 1));
+		arr = arr + lspJsonString(chars.slice(i, i + 1));
 	}
 	arr = arr + "]";
 	return arr;

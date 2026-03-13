@@ -2,7 +2,7 @@
 // Extracted from expression.ms with callback injection
 
 import { Token, TokenKind } from "../../lexer/token";
-import { Node, NodeKind, NodeData, Expression, createNode, ObjectLiteralData } from "../../ast/node";
+import { Node, NodeKind, NodeData, Expression, createNode, ObjectLiteralData, SourceLocation, makeLoc } from "../../ast/node";
 import { ParserState, createState, current, advance, isAtEnd } from "../context";
 import { lex } from "../../lexer/lexer";
 import { parseOk, mockExpr } from "./util";
@@ -19,6 +19,7 @@ export function parseObjectLiteral(state: ParserState, exprParser: ExprParser): 
 	const lbrace = current(state);
 	const keys: string[] = [];
 	const values: Expression[] = [];
+	const keyLocs: SourceLocation[] = [];
 
 	advance(state);
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
@@ -28,6 +29,7 @@ export function parseObjectLiteral(state: ParserState, exprParser: ExprParser): 
 			advance(state);
 			const spreadVal = try exprParser(state, 0);
 			keys.push("...");
+			keyLocs.push(makeLoc(spreadToken.line, spreadToken.column));
 			values.push(createNode(NodeKind.SpreadExpr, { spreadArg: spreadVal }, spreadToken));
 			if (current(state).kind === TokenKind.Comma) { advance(state); } else { break; }
 			continue;
@@ -35,12 +37,14 @@ export function parseObjectLiteral(state: ParserState, exprParser: ExprParser): 
 
 		// Computed property: { [expr]: value }
 		if (current(state).kind === TokenKind.LBracket) {
+			const compToken = current(state);
 			advance(state);
 			const keyExpr = try exprParser(state, 0);
 			if (current(state).kind === TokenKind.RBracket) { advance(state); }
 			if (current(state).kind === TokenKind.Colon) { advance(state); }
 			const compVal = try exprParser(state, 0);
 			keys.push("__computed__");
+			keyLocs.push(makeLoc(compToken.line, compToken.column));
 			values.push(compVal);
 			if (current(state).kind === TokenKind.Comma) { advance(state); } else { break; }
 			continue;
@@ -52,6 +56,7 @@ export function parseObjectLiteral(state: ParserState, exprParser: ExprParser): 
 			advance(state);
 			if (current(state).kind === TokenKind.Colon) { advance(state); }
 			keys.push(strKeyToken.value);
+			keyLocs.push(makeLoc(strKeyToken.line, strKeyToken.column));
 			const strVal = try exprParser(state, 0);
 			values.push(strVal);
 			if (current(state).kind === TokenKind.Comma) { advance(state); } else { break; }
@@ -64,15 +69,18 @@ export function parseObjectLiteral(state: ParserState, exprParser: ExprParser): 
 		}
 		advance(state);
 
+		const keyLoc = makeLoc(keyToken.line, keyToken.column);
 		if (current(state).kind === TokenKind.Colon) {
 			// Full property: { key: value }
 			advance(state);
 			keys.push(keyToken.value);
+			keyLocs.push(keyLoc);
 			const val = try exprParser(state, 0);
 			values.push(val);
 		} else {
 			// Shorthand property: { key } means { key: key }
 			keys.push(keyToken.value);
+			keyLocs.push(keyLoc);
 			values.push(createNode(NodeKind.Identifier, { name: keyToken.value }, keyToken));
 		}
 
@@ -88,6 +96,7 @@ export function parseObjectLiteral(state: ParserState, exprParser: ExprParser): 
 	return Result.ok(createNode(NodeKind.ObjectLiteral, {
 		properties: values,
 		keys,
+		keyLocations: keyLocs,
 	}, lbrace));
 }
 

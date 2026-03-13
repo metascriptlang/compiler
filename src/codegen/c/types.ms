@@ -6,7 +6,7 @@
 
 import { Type, TypeKind, isInterfaceType, getTypeSize, skipModifier } from "../../checker/types";
 import { Node, NodeKind, CallExprData } from "../../ast/node";
-import { findChar, trimStr, splitTopLevel } from "../../utils/string";
+import { findChar, splitTopLevel } from "../../utils/string";
 import { CGen, CSection, Builder, TypeCache, add, addLine, addNewline, extract, sec, createBuilder, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas } from "./context";
 import { lookupSymbol } from "../../checker/symbol";
 import { mangle, mangleTypeName, mangleFieldName, safeName } from "./names";
@@ -90,8 +90,8 @@ function anonStructuralKey(t: Type): string {
 export function hashToBase36(s: string): string {
 	let h = 5381;
 	let i = 0;
-	while (i < s.length) {
-		h = (h * 33 + s.charCodeAt(i)) % 2147483647;
+	while (i < s.byteLength) {
+		h = (h * 33 + s.byteAt(i)) % 2147483647;
 		i += 1;
 	}
 	// Convert to base-36 alphanumeric string
@@ -130,7 +130,7 @@ export function anonTypeName(t: Type): string {
 // Mirrors getSimpleTypeDesc but works from annotation strings (no Type object).
 
 export function annotationToC(annotation: string): string {
-	const s = trimStr(annotation);
+	const s = annotation.trim();
 	const mapped = match (s) {
 		"number" | "float64" => "double",
 		"float32" => "float",
@@ -152,9 +152,9 @@ export function annotationToC(annotation: string): string {
 	// Array types: "T[]", "T []", "T [ ]" (checker may include spaces)
 	if (s.endsWith("[]") || s.endsWith("[ ]")) {
 		let elem = s;
-		if (elem.endsWith("[ ]")) elem = elem.slice(0, elem.length - 3);
-		else elem = elem.slice(0, elem.length - 2);
-		elem = trimStr(elem);
+		if (elem.endsWith("[ ]")) elem = elem.slice(0, elem.byteLength - 3);
+		else elem = elem.slice(0, elem.byteLength - 2);
+		elem = elem.trim();
 		if (elem === "number") return "msNumberArray";
 		if (elem === "string") return "msStringArray";
 		if (elem === "uint8") return "msUint8Array";
@@ -171,9 +171,9 @@ export function annotationToC(annotation: string): string {
 
 export function buildAnonStructDef(structName: string, rawName: string): string {
 	// Strip outer braces
-	let body = trimStr(rawName);
-	if (body.length > 0 && body.charAt(0) === "{") body = body.slice(1, body.length);
-	if (body.length > 0 && body.charAt(body.length - 1) === "}") body = body.slice(0, body.length - 1);
+	let body = rawName.trim();
+	if (body.byteLength > 0 && body.charAt(0) === "{") body = body.slice(1, body.byteLength);
+	if (body.byteLength > 0 && body.charAt(body.byteLength - 1) === "}") body = body.slice(0, body.byteLength - 1);
 
 	// splitTopLevel handles nested brackets/generics and auto-trims
 	const fields = splitTopLevel(body, ",");
@@ -186,8 +186,8 @@ export function buildAnonStructDef(structName: string, rawName: string): string 
 	for (const field of fields) {
 		const colonPos = findChar(field, ":");
 		if (colonPos < 0) continue;
-		const fname = trimStr(field.slice(0, colonPos));
-		const ftype = trimStr(field.slice(colonPos + 1, field.length));
+		const fname = field.slice(0, colonPos).trim();
+		const ftype = field.slice(colonPos + 1, field.length).trim();
 		def = def + `  ${annotationToC(ftype)} ${safeName(fname)};\n`;
 	}
 
@@ -241,7 +241,7 @@ export function typeKey(t: Type): string {
 		},
 		TypeKind.SizedArray => {
 			const elemKey = typeKey(t.typeReturn);
-			return `sizedArray:${elemKey}[${intToString(t.typeFlags)}]`;
+			return `sizedArray:${elemKey}[${t.typeFlags}]`;
 		},
 		TypeKind.Span => {
 			const elemKey = typeKey(t.typeReturn);
@@ -297,9 +297,6 @@ export function typeKey(t: Type): string {
 	};
 }
 
-export function intToString(n: number): string {
-	return "" + n;
-}
 
 // ===== Primitive Type Mapping =====
 
@@ -469,6 +466,21 @@ export function ensureTypeInfo(g: CGen, className: string): void {
 	addLine(sec(g, CSection.ForwardDecls), `extern msTypeInfo ${className}_typeInfo;`);
 }
 
+// Ensure msTypeInfo DEFINITION exists for class object literals in the owning module.
+// If destructorLifting already generated it, the GlobalVars section will have it.
+// Otherwise, emit a minimal definition (name only, no destroy/trace).
+export function ensureTypeInfoDef(g: CGen, className: string): void {
+	const defKey = "typeInfoDef:" + className;
+	if (typeCacheHas(g.forwTypeCache, defKey)) return;
+	typeCacheSet(g.forwTypeCache, defKey, className);
+	// Check if destructorLifting already generated it (via genTypeInfoVar)
+	const key = "typeInfo:" + className;
+	if (typeCacheHas(g.typeCache, key)) return;
+	// Emit minimal typeInfo definition + DatInit assignment
+	addLine(sec(g, CSection.GlobalVars), `msTypeInfo ${className}_typeInfo;`);
+	addLine(sec(g, CSection.DatInit), `  ${className}_typeInfo.name = "${className}";`);
+}
+
 // ===== Full Type Description =====
 // Main entry point: returns C type name string for a MetaScript Type.
 // Emits type definitions to CGen sections as side effect.
@@ -540,8 +552,24 @@ export function getTypeDesc(g: CGen, t: Type): string {
 		TypeKind.Function => {
 			return genFunctionType(g, t);
 		},
-		TypeKind.Ref | TypeKind.Ptr => {
+		TypeKind.Ref => {
 			const inner = getTypeDesc(g, t.typeReturn);
+			const ptrType = inner + "*";
+			typeCacheSet(g.typeCache, key, ptrType);
+			return ptrType;
+		},
+		TypeKind.Ptr => {
+			// Ptr<T> is unmanaged (no RC) but same C representation as a regular pointer.
+			// Ptr<Ref<Struct>> (Ptr of class) → same as Ref<Struct> = "ClassName*" (not "ClassName**")
+			// Ptr<Struct> (Ptr of value) → "StructName*"
+			const innerType = t.typeReturn;
+			if (innerType !== null && (innerType.kind === TypeKind.Ref || innerType.kind === TypeKind.Ptr)) {
+				// Inner is already a pointer type — use its descriptor directly
+				const ptrType = getTypeDesc(g, innerType);
+				typeCacheSet(g.typeCache, key, ptrType);
+				return ptrType;
+			}
+			const inner = getTypeDesc(g, innerType);
 			const ptrType = inner + "*";
 			typeCacheSet(g.typeCache, key, ptrType);
 			return ptrType;
@@ -692,7 +720,7 @@ function genUnionType(g: CGen, t: Type): string {
 	let vi = 0;
 	while (vi < t.typeChildren.length) {
 		const variant = t.typeChildren[vi];
-		const varName = `${name}_v${intToString(vi)}`;
+		const varName = `${name}_v${vi}`;
 
 		// Cache variant Object type so getTypeDesc returns the variant struct name.
 		// First variant with a given structural key wins — duplicates reuse it.
@@ -728,7 +756,7 @@ function genUnionType(g: CGen, t: Type): string {
 	vi = 0;
 	while (vi < t.typeChildren.length) {
 		const variant = t.typeChildren[vi];
-		const varName = `${name}_v${intToString(vi)}`;
+		const varName = `${name}_v${vi}`;
 		const fieldTypes = allFieldTypes[vi];
 
 		// Skip duplicate: this variant reuses an earlier variant's typedef
@@ -770,7 +798,7 @@ function genUnionType(g: CGen, t: Type): string {
 	while (vi < t.typeChildren.length) {
 		// Use canonical name — duplicate variants share the same typedef
 		const memberType = canonicalNames[vi];
-		addLine(b, `${memberType} v${intToString(vi)};`);
+		addLine(b, `${memberType} v${vi};`);
 		vi += 1;
 	}
 	b.indent -= 1;
@@ -792,7 +820,7 @@ function genArrayType(g: CGen, t: Type): string {
 	const key = typeKey(t);
 
 	// Resolve TypeReference to concrete type for cycle detection and pointer classification.
-	// (Nim parity: skipTypes(irrelevantForBackend) resolves wrappers before containsOrIncl(check, t.id))
+	// (Reference parity: skip irrelevant wrapper types before containsOrIncl cycle check)
 	// TypeReference key ("typeref:X") won't match Struct key ("object:X") in typesBeingDefined.
 	let resolvedElem = t.typeReturn;
 	if (resolvedElem !== null && resolvedElem.kind === TypeKind.TypeReference) {
@@ -829,7 +857,7 @@ function genArrayType(g: CGen, t: Type): string {
 	if (!typeCacheHas(g.forwTypeCache, fwdKey)) {
 		typeCacheSet(g.forwTypeCache, fwdKey, arrTypeName);
 
-		// Nim parity: two-struct split { len, p* } + __Content { cap, T data[] }.
+		// Reference parity: two-struct split { len, p* } + __Content { cap, T data[] }.
 		// Forward decls in ForwardDecls, slim struct in Types, content in SeqTypes.
 		// SeqTypes is emitted after Types — element type is always complete by then.
 		const contentName = arrTypeName + "__Content";
@@ -856,7 +884,7 @@ function genSizedArrayType(g: CGen, t: Type): string {
 	const elemType = getTypeDesc(g, t.typeReturn);
 	const size = t.typeFlags;
 	const key = typeKey(t);
-	const name = `msSizedArray_${mangle(elemType)}_${intToString(size)}`;
+	const name = `msSizedArray_${mangle(elemType)}_${size}`;
 
 	if (typeCacheHas(g.typeCache, key)) return typeCacheGet(g.typeCache, key);
 	typeCacheSet(g.typeCache, key, name);
@@ -864,7 +892,7 @@ function genSizedArrayType(g: CGen, t: Type): string {
 	ensureForwardDecl(g, name);
 	const b = sec(g, CSection.Types);
 	addLine(b, `struct ${name} {`);
-	addLine(b, `    ${elemType} data[${intToString(size)}];`);
+	addLine(b, `    ${elemType} data[${size}];`);
 	addLine(b, "};");
 	addNewline(b);
 
@@ -1032,7 +1060,7 @@ function genTupleType(g: CGen, t: Type): string {
 	let i = 0;
 	while (i < t.typeChildren.length) {
 		const ft = getTypeDesc(g, t.typeChildren[i]);
-		addLine(b, `${ft} _${intToString(i)};`);
+		addLine(b, `${ft} _${i};`);
 		i += 1;
 	}
 	b.indent -= 1;

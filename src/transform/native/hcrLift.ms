@@ -269,8 +269,8 @@ function computeStructHash(globals: HcrGlobal[]): number {
 	let hash = 5381;
 	for (let i = 0; i < globals.length; i += 1) {
 		const s = globals[i].name + ":" + typeToCStr(globals[i].declType) + ";";
-		for (let j = 0; j < s.length; j += 1) {
-			hash = (hash * 33 + s.charCodeAt(j)) % 4294967296;
+		for (let j = 0; j < s.byteLength; j += 1) {
+			hash = (hash * 33 + s.byteAt(j)) % 4294967296;
 		}
 	}
 	return hash;

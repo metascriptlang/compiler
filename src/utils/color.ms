@@ -173,11 +173,11 @@ export function path(text: string): string {
 export function stripAnsi(text: string): string {
 	let result = "";
 	let i = 0;
-	while (i < text.length) {
+	while (i < text.byteLength) {
 		if (text.slice(i, i + 2) === "\x1b[") {
 			// Skip until 'm'
 			i += 2;
-			while (i < text.length && text.slice(i, i + 1) !== "m") {
+			while (i < text.byteLength && text.slice(i, i + 1) !== "m") {
 				i += 1;
 			}
 			i += 1;

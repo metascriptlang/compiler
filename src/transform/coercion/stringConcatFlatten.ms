@@ -31,8 +31,7 @@ function flattenConcat(node: Node): Node {
 	if (d.operator !== "+") return node;
 
 	// Collect all parts of the + chain
-	const parts: Node[] = [];
-	collectParts(node, parts);
+	const parts = collectParts(node);
 
 	// Only flatten if at least one part is a string literal or has string type
 	let hasString = false;
@@ -103,18 +102,25 @@ function coerceToString(node: Node, loc: SourceLocation): Node {
 	return call;
 }
 
-// Recursively collect parts from a left-associative + chain
-function collectParts(node: Node, parts: Node[]): void {
-	if (node.kind === NodeKind.BinaryExpr) {
-		const d = node.data as BinaryExprData;
-		if (d.operator === "+") {
-			collectParts(d.left, parts);
-			collectParts(d.right, parts);
-			return;
+// Iteratively collect parts from a left-associative + chain
+// Uses a stack instead of mutable array parameter (array-by-value in C)
+function collectParts(node: Node): Node[] {
+	const result: Node[] = [];
+	const stack: Node[] = [node];
+	while (stack.length > 0) {
+		const cur = stack.pop();
+		if (cur.kind === NodeKind.BinaryExpr) {
+			const d = cur.data as BinaryExprData;
+			if (d.operator === "+") {
+				// Push right first so left is processed first (stack = LIFO)
+				stack.push(d.right);
+				stack.push(d.left);
+				continue;
+			}
 		}
+		result.push(cur);
 	}
-	// Leaf node — add to parts
-	parts.push(node);
+	return result;
 }
 
 // ===== Tests =====

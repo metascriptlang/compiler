@@ -5,7 +5,7 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { Type, TypeKind, isPrimitiveKind, hasDestructor, hasAsgnFlag, isInterfaceType, createPrimitive, createStruct, createArray, createFunction, numberType, stringType, booleanType, voidType, nullType, unknownType } from "../checker/types";
+import { Type, TypeKind, isPrimitiveKind, hasDestructor, hasAsgnFlag, isInterfaceType, createPrimitive, createStruct, createArray, createFunction, createPtr, numberType, stringType, booleanType, voidType, nullType, unknownType } from "../checker/types";
 import { lookupSymbol, SymbolKind, Symbol, hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, createTransformContext } from "../transform/context";
 import { NodeKind } from "../ast/node";
@@ -72,7 +72,7 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 		return makeRcInfo(RcKind.Named, "", "msArrayStringDestroy", "msArrayStringCopy", "msArrayStringWasMoved", "msArrayStringSink", true);
 	}
 	// Nested array elements (e.g. string[][]) — inner arrays are value-type structs.
-	// Nim: forallElements recursively calls fillBody per element. We use generic array ops
+	// Reference: forallElements recursively calls fillBody per element. We use generic array ops
 	// as safe default (frees outer payload). Follow-up: per-type hooks in destructorLifting.
 	if (elem.kind === TypeKind.Array) {
 		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
@@ -136,13 +136,9 @@ export function classifyType(t: Type, ctx: TransformContext): RcInfo {
 		TypeKind.Array => classifyArray(t, ctx),
 		TypeKind.Ref => makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false),
 		TypeKind.Ptr => {
-			// Ptr<T> where T is interface/span/result/tuple = borrowed (ccgIntroducedPtr), no RC
-			const inner = t.typeReturn;
-			if (inner !== null && (isInterfaceType(inner) || inner.kind === TypeKind.Span || inner.kind === TypeKind.Result || inner.kind === TypeKind.Tuple)) {
-				return noRcInfo();
-			} else {
-				return makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false);
-			}
+			// Ptr<T> is always unmanaged — no RC, no lifecycle hooks.
+			// Reference parity: cursor fields skip all RC operations.
+			return noRcInfo();
 		},
 		TypeKind.Function => makeRcInfo(RcKind.Closure, "", "msClosureDestroy", "msClosureCopy", "msClosureWasMoved", "msClosureSink", false),
 		TypeKind.Map => makeRcInfo(RcKind.Map, "", "msMapFree", "msMapCopy", "msMapWasMoved", "msMapSink", false),
@@ -299,6 +295,13 @@ test "ref → Ref" {
 	const info = classifyType(t, ctx);
 	assert info.rcKind === RcKind.Ref;
 	assert info.destroyFn === "msDecref";
+}
+
+test "ptr → None (unmanaged)" {
+	const ctx = createTransformContext();
+	const info = classifyType(createPtr(stringType()), ctx);
+	assert info.rcKind === RcKind.None;
+	assert !info.needsCleanup;
 }
 
 test "call is fresh" { assert isFreshExpr(NodeKind.CallExpr); }

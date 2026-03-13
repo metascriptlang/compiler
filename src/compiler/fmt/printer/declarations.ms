@@ -1,7 +1,7 @@
 // Declaration Printers — class, interface, enum, import, export, etc.
 
 import {
-	Node,
+	Node, NodeFlag,
 	ImportDeclData, ExportDeclData,
 	ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData,
 	ExternDeclData, DecoratedDeclData, TestDeclData, AssertStmtData,
@@ -42,7 +42,8 @@ export function printImportDecl(node: Node, options: FormatOptions): Doc {
 
 export function printExportDecl(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ExportDeclData;
-	return docGroup([docText("export "), callPrintNode(d.exportedDecl, options)]);
+	const prefix = ((node.flags & NodeFlag.ExportDefault) !== 0) ? "export default " : "export ";
+	return docGroup([docText(prefix), callPrintNode(d.exportedDecl, options)]);
 }
 
 export function printTypeAliasDecl(node: Node, options: FormatOptions): Doc {

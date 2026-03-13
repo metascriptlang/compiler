@@ -12,7 +12,7 @@ import { scanNumber, scanString, scanTemplateString, scanIdentifier, scanOperato
 export function lex(source: string): Result<Token[], string> {
 	const s = createLexerState(source);
 
-	while (s.pos < s.source.length) {
+	while (s.pos < s.source.byteLength) {
 		const ch = peek(s);
 
 		// Skip whitespace and newlines

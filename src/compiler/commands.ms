@@ -17,9 +17,10 @@ import { cmdBuildC } from "./compile";
 import { error, success, bold, cyan, dim, green, red, yellow, path } from "../utils/color";
 
 // Formatter imports
-import { defaultFormatOptions } from "./fmt/options";
+import { defaultFormatOptions, applyFmtSection } from "./fmt/options";
 import { formatDoc } from "./fmt/layout";
 import { printNode as printFormattedNode } from "./fmt/printer/index";
+import { FmtSection, defaultFmtSection } from "./buildConfig";
 
 // -- dump-tokens --
 
@@ -145,7 +146,7 @@ export function cmdRun(filePath: string, opts: CliOptions): void {
 
 // -- fmt --
 
-export function cmdFmt(filePath: string, opts: CliOptions): void {
+export function cmdFmt(filePath: string, opts: CliOptions, fmtCfg: FmtSection): void {
 	registerCoreParsers();
 	const source = readSource(filePath);
 	const result = parseSource(source);
@@ -154,7 +155,7 @@ export function cmdFmt(filePath: string, opts: CliOptions): void {
 		exit(1);
 	}
 	const program = result.value;
-	const options = defaultFormatOptions();
+	const options = applyFmtSection(defaultFormatOptions(), fmtCfg);
 
 	const doc = printFormattedNode(program, options);
 	const formatted = formatDoc(doc, options);
@@ -182,7 +183,7 @@ export function cmdInit(name: string): void {
 	}
 	const buildPath = name + "/build.ms";
 	const srcPath = name + "/src/index.ms";
-	const buildContent = "export const root = \"src/index.ms\";\nexport const build = {\n\ttarget: \"c\",\n\toptimize: \"debug\",\n};\n";
+	const buildContent = "import { BuildConfig } from \"std/build\";\n\nconst config: BuildConfig = {\n\troot: \"src/index.ms\",\n\tfmt: {\n\t\tuseTabs: true,\n\t},\n};\n\nexport default config;\n";
 	const srcContent = "function main(): number {\n\tconsole.log(\"hello, metascript!\");\n\treturn 0;\n}\n";
 	writeOutput(buildPath, buildContent);
 	writeOutput(srcPath, srcContent);

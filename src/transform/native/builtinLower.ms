@@ -22,7 +22,7 @@ import { TransformContext, hasEmitted } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { walkNode } from "../walker";
 import {
-	makeIdent, makeCall, makeString, makeNumber,
+	makeIdent, makeCall, makeString, makeNumber, makeMember,
 	makeObjectLiteral, makeBool, makeHiddenStdConv,
 	makeExprStmt, enumToStringName,
 } from "../util";
@@ -237,6 +237,21 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 		return rewriteEcho(node, ctx);
 	}
 
+	// String(x) → x.toString() → leverages existing .toString() infrastructure
+	if (builtinKind === "ToString" && cd.arguments.length === 1) {
+		const arg = cd.arguments[0];
+		const argType = arg.nodeType;
+		// String identity: String("hello") → "hello"
+		if (argType !== null && argType.kind === TypeKind.String) return arg;
+		// Delegate to .toString() which handles number, boolean, enum, struct, array
+		const toStringCall = makeCall(makeMember(arg, "toString", loc), [], loc);
+		toStringCall.nodeType = stringType();
+		if (argType !== null) {
+			return lowerToString(toStringCall, arg, argType, loc, ctx);
+		}
+		return toStringCall;
+	}
+
 	return node;
 }
 
@@ -333,7 +348,8 @@ function rewriteJsonParse(node: Node, ctx: TransformContext): Node {
 	return result;
 }
 
-// Untyped JSON.parse(str) — returns MsJsonValue* (JsonValue class type)
+// Untyped JSON.parse(str) — returns Result<JsonValue, string>
+// C runtime msJsonParse returns MsJsonValue*, wrap in Result.ok literal.
 function rewriteUntypedJsonParse(node: Node, ctx: TransformContext): Node {
 	const cd = node.data as CallExprData;
 	const loc = node.location;
@@ -349,7 +365,14 @@ function rewriteUntypedJsonParse(node: Node, ctx: TransformContext): Node {
 
 	const call = makeCall(makeIdent("msJsonParse", loc), cd.arguments, loc);
 	call.nodeType = jvType;
-	return call;
+
+	// Wrap in Result.ok literal: { ok: true, value: msJsonParse(...), error: "" }
+	const resultType = createResult(jvType, stringType());
+	const keys: string[] = ["ok", "value", "error"];
+	const values: Node[] = [makeBool(true, loc), call, makeString("", loc)];
+	const literal = makeObjectLiteral(keys, values, loc);
+	literal.nodeType = resultType;
+	return literal;
 }
 
 function rewriteJsonStringify(node: Node, ctx: TransformContext): Node {

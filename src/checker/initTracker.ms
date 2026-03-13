@@ -3,10 +3,12 @@
 // Clones the reference's init + intersection + BreakState model.
 // Tracks which variables have been initialized, with branch merging via
 // count tables and exhaustiveness checks.
-// Uses Symbol identity (not name strings) to handle shadowing correctly.
+//
+// Uses name strings (not Symbol identity) for tracking. This avoids DRC
+// refcount issues with the save/restore pattern (truncating Symbol[] leaks refs).
 
 import {
-	Node, NodeKind, Symbol, BlockStmtData, CallExprData, ExprStmtData, IdentifierData, BooleanLiteralData, BinaryExprData,
+	Node, NodeKind, BlockStmtData, CallExprData, ExprStmtData, IdentifierData, BooleanLiteralData, BinaryExprData,
 } from "../ast/node";
 import { TypeKind } from "./types";
 import { hasFlag, SymbolFlag } from "./symbol";
@@ -18,18 +20,18 @@ export enum BreakState {
 	BsNoReturn,       // raise/noreturn — never reaches merge point
 }
 
-// Reference parity: intersection count table (uses Symbol identity)
-interface InitCount {
-	sym: Symbol;
+// Reference parity: intersection count table
+class InitCount {
+	name: string;
 	count: number;
 }
 
 // Reference parity: effects.init + currentBlock + leftPartOfAsgn + scopes
 export interface InitTracker {
-	initialized: Symbol[];     // append-only list of initialized symbols (identity-based)
+	initialized: string[];     // append-only list of initialized var names
 	currentBlock: number;      // scope depth counter
 	leftPartOfAsgn: number;    // >0 when processing LHS of assignment
-	declScopes: Symbol[];      // parallel with declBlocks: symbol at declaration
+	declScopes: string[];      // parallel with declBlocks: var name at declaration
 	declBlocks: number[];      // block depth where each variable was declared
 }
 
@@ -47,21 +49,21 @@ export function createInitTracker(): InitTracker {
 
 // ===== Core Operations =====
 
-// Reference parity: initVar — marks variable initialized (by symbol identity)
-export function markInitialized(t: InitTracker, sym: Symbol): void {
+// Reference parity: initVar — marks variable initialized
+export function markInitialized(t: InitTracker, name: string): void {
 	let i = 0;
 	while (i < t.initialized.length) {
-		if (t.initialized[i] === sym) return;
+		if (t.initialized[i] === name) return;
 		i = i + 1;
 	}
-	t.initialized.push(sym);
+	t.initialized.push(name);
 }
 
-// Reference parity: check if variable is initialized (by symbol identity)
-export function isInitialized(t: InitTracker, sym: Symbol): boolean {
+// Reference parity: check if variable is initialized
+export function isInitialized(t: InitTracker, name: string): boolean {
 	let i = 0;
 	while (i < t.initialized.length) {
-		if (t.initialized[i] === sym) return true;
+		if (t.initialized[i] === name) return true;
 		i = i + 1;
 	}
 	return false;
@@ -81,17 +83,17 @@ export function restoreInitState(t: InitTracker, state: number): void {
 
 // Reference parity: varDecl — records the block where a variable was declared.
 // Used by initVar to set nfFirstWrite only when assignment is in the same block.
-export function varDecl(t: InitTracker, sym: Symbol): void {
-	t.declScopes.push(sym);
+export function varDecl(t: InitTracker, name: string): void {
+	t.declScopes.push(name);
 	t.declBlocks.push(t.currentBlock);
 }
 
 // Reference parity: lookup the block where a variable was declared.
 // Returns -1 if not found (import/global — never declared locally).
-export function getDeclBlock(t: InitTracker, sym: Symbol): number {
+export function getDeclBlock(t: InitTracker, name: string): number {
 	let i = t.declScopes.length - 1;
 	while (i >= 0) {
-		if (t.declScopes[i] === sym) return t.declBlocks[i];
+		if (t.declScopes[i] === name) return t.declBlocks[i];
 		i = i - 1;
 	}
 	return -1;
@@ -136,12 +138,12 @@ export function breaksBlock(node: Node): BreakState {
 
 // ===== Branch Merging =====
 
-// Reference parity: addToIntersection (uses Symbol identity)
-function addToIntersection(counts: InitCount[], sym: Symbol, breakState: BreakState): void {
-	// Look for existing entry (identity comparison)
+// Reference parity: addToIntersection
+function addToIntersection(counts: InitCount[], name: string, breakState: BreakState): void {
+	// Look for existing entry
 	let j = 0;
 	while (j < counts.length) {
-		if (counts[j].sym === sym) {
+		if (counts[j].name === name) {
 			if (breakState === BreakState.BsNone) {
 				counts[j].count = counts[j].count + 1;
 			}
@@ -151,9 +153,9 @@ function addToIntersection(counts: InitCount[], sym: Symbol, breakState: BreakSt
 	}
 	// New entry
 	if (breakState === BreakState.BsNone) {
-		counts.push({ sym, count: 1 });
+		counts.push({ name, count: 1 });
 	} else {
-		counts.push({ sym, count: 0 });
+		counts.push({ name, count: 0 });
 	}
 }
 
@@ -163,7 +165,7 @@ function addToIntersection(counts: InitCount[], sym: Symbol, breakState: BreakSt
 export function mergeInitBranches(
 	t: InitTracker,
 	oldState: number,
-	branchInits: Symbol[][],
+	branchInits: string[][],
 	branchBreaks: BreakState[],
 	isExhaustive: boolean,
 ): void {
@@ -203,16 +205,16 @@ export function mergeInitBranches(
 		let i = 0;
 		while (i < counts.length) {
 			if (counts[i].count >= toCover) {
-				markInitialized(t, counts[i].sym);
+				markInitialized(t, counts[i].name);
 			}
 			i = i + 1;
 		}
 	}
 }
 
-// Collect symbols initialized between oldState and current state
-export function collectNewInits(t: InitTracker, oldState: number): Symbol[] {
-	const result: Symbol[] = [];
+// Collect names initialized between oldState and current state
+export function collectNewInits(t: InitTracker, oldState: number): string[] {
+	const result: string[] = [];
 	let i = oldState;
 	while (i < t.initialized.length) {
 		result.push(t.initialized[i]);
@@ -266,139 +268,108 @@ export function impliesNotNull(facts: Node[], varName: string): number {
 
 // ===== Tests =====
 
-// Helper: create a minimal Symbol for testing (identity-based)
-function testSym(name: string): Symbol {
-	const s = new Symbol();
-	s.name = name;
-	return s;
-}
-
 test "basic init and check" {
 	const t = createInitTracker();
-	const x = testSym("x");
-	assert !isInitialized(t, x);
-	markInitialized(t, x);
-	assert isInitialized(t, x);
-	assert !isInitialized(t, testSym("y"));
+	assert !isInitialized(t, "x");
+	markInitialized(t, "x");
+	assert isInitialized(t, "x");
+	assert !isInitialized(t, "y");
 }
 
 test "save and restore" {
 	const t = createInitTracker();
-	const a = testSym("a");
-	const b = testSym("b");
-	markInitialized(t, a);
+	markInitialized(t, "a");
 	const snap = saveInitState(t);
-	markInitialized(t, b);
-	assert isInitialized(t, b);
+	markInitialized(t, "b");
+	assert isInitialized(t, "b");
 	restoreInitState(t, snap);
-	assert isInitialized(t, a);
-	assert !isInitialized(t, b);
+	assert isInitialized(t, "a");
+	assert !isInitialized(t, "b");
 }
 
 test "no duplicate init" {
 	const t = createInitTracker();
-	const x = testSym("x");
-	markInitialized(t, x);
-	markInitialized(t, x);
+	markInitialized(t, "x");
+	markInitialized(t, "x");
 	assert t.initialized.length === 1;
-}
-
-test "name shadowing handled correctly" {
-	const t = createInitTracker();
-	const outer = testSym("x");
-	const inner = testSym("x");
-	markInitialized(t, inner);
-	assert isInitialized(t, inner);
-	assert !isInitialized(t, outer);
 }
 
 test "merge exhaustive both init" {
 	const t = createInitTracker();
-	const x = testSym("x");
 	const old = saveInitState(t);
-	const b1: Symbol[] = [x];
-	const b2: Symbol[] = [x];
+	const b1: string[] = ["x"];
+	const b2: string[] = ["x"];
 	mergeInitBranches(t, old, [b1, b2],
 		[BreakState.BsNone, BreakState.BsNone], true);
-	assert isInitialized(t, x);
+	assert isInitialized(t, "x");
 }
 
 test "merge exhaustive only one inits" {
 	const t = createInitTracker();
-	const x = testSym("x");
 	const old = saveInitState(t);
-	const b1: Symbol[] = [x];
-	const b2: Symbol[] = [];
+	const b1: string[] = ["x"];
+	const b2: string[] = [];
 	mergeInitBranches(t, old, [b1, b2], [BreakState.BsNone, BreakState.BsNone], true);
-	assert !isInitialized(t, x);
+	assert !isInitialized(t, "x");
 }
 
 test "merge non-exhaustive" {
 	const t = createInitTracker();
-	const x = testSym("x");
 	const old = saveInitState(t);
-	const b1: Symbol[] = [x];
+	const b1: string[] = ["x"];
 	mergeInitBranches(t, old, [b1], [BreakState.BsNone], false);
-	assert !isInitialized(t, x);
+	assert !isInitialized(t, "x");
 }
 
 test "merge with exiting branch" {
 	const t = createInitTracker();
-	const x = testSym("x");
 	const old = saveInitState(t);
-	const b1: Symbol[] = [];
-	const b2: Symbol[] = [x];
+	const b1: string[] = [];
+	const b2: string[] = ["x"];
 	mergeInitBranches(t, old, [b1, b2],
 		[BreakState.BsBreakOrReturn, BreakState.BsNone], true);
-	assert isInitialized(t, x);
+	assert isInitialized(t, "x");
 }
 
 test "merge with noreturn branch" {
 	const t = createInitTracker();
-	const x = testSym("x");
 	const old = saveInitState(t);
-	const b1: Symbol[] = [];
-	const b2: Symbol[] = [x];
+	const b1: string[] = [];
+	const b2: string[] = ["x"];
 	mergeInitBranches(t, old, [b1, b2],
 		[BreakState.BsNoReturn, BreakState.BsNone], true);
-	assert isInitialized(t, x);
+	assert isInitialized(t, "x");
 }
 
 test "collectNewInits" {
 	const t = createInitTracker();
-	const a = testSym("a");
-	const b = testSym("b");
-	const c = testSym("c");
-	markInitialized(t, a);
+	markInitialized(t, "a");
 	const snap = saveInitState(t);
-	markInitialized(t, b);
-	markInitialized(t, c);
+	markInitialized(t, "b");
+	markInitialized(t, "c");
 	const newInits = collectNewInits(t, snap);
 	assert newInits.length === 2;
 }
 
 test "varDecl records block" {
 	const t = createInitTracker();
-	const x = testSym("x");
-	const y = testSym("y");
-	varDecl(t, x);
-	assert getDeclBlock(t, x) === 0;
+	varDecl(t, "x");
+	assert getDeclBlock(t, "x") === 0;
 	t.currentBlock = t.currentBlock + 1;
-	varDecl(t, y);
-	assert getDeclBlock(t, y) === 1;
-	assert getDeclBlock(t, x) === 0;
+	varDecl(t, "y");
+	assert getDeclBlock(t, "y") === 1;
+	assert getDeclBlock(t, "x") === 0;
 }
 
 test "getDeclBlock returns -1 for unknown" {
 	const t = createInitTracker();
-	assert getDeclBlock(t, testSym("nonexistent")) === -1;
+	assert getDeclBlock(t, "nonexistent") === -1;
 }
 
 test "varDecl same block as currentBlock enables firstWrite" {
 	const t = createInitTracker();
-	const x = testSym("x");
-	varDecl(t, x);
-	assert getDeclBlock(t, x) === t.currentBlock;
+	varDecl(t, "x");
+	assert getDeclBlock(t, "x") === t.currentBlock;
 	t.currentBlock = t.currentBlock + 1;
-	assert getDeclBlock(t, x) !== t.currentBlock;
+	assert getDeclBlock(t, "x") !== t.currentBlock;
 }

@@ -18,8 +18,8 @@ export function scanNumber(s: LexerState): void {
 		if (next === "x".code || next === "X".code) {
 			val = "0x";
 			skip(s, 2);
-			while (s.pos < s.source.length && (isHexDigit(peek(s)) || peek(s) === "_".code)) {
-				if (peek(s) !== "_".code) val += s.source.charAt(s.pos);
+			while (s.pos < s.source.byteLength && (isHexDigit(peek(s)) || peek(s) === "_".code)) {
+				if (peek(s) !== "_".code) val += s.source.byteSlice(s.pos, s.pos + 1);
 				advanceChar(s);
 			}
 			addToken(s, TokenKind.Number, val, startLine, startCol);
@@ -28,8 +28,8 @@ export function scanNumber(s: LexerState): void {
 		if (next === "b".code || next === "B".code) {
 			val = "0b";
 			skip(s, 2);
-			while (s.pos < s.source.length && (isBinaryDigit(peek(s)) || peek(s) === "_".code)) {
-				if (peek(s) !== "_".code) val += s.source.charAt(s.pos);
+			while (s.pos < s.source.byteLength && (isBinaryDigit(peek(s)) || peek(s) === "_".code)) {
+				if (peek(s) !== "_".code) val += s.source.byteSlice(s.pos, s.pos + 1);
 				advanceChar(s);
 			}
 			addToken(s, TokenKind.Number, val, startLine, startCol);
@@ -38,8 +38,8 @@ export function scanNumber(s: LexerState): void {
 		if (next === "o".code || next === "O".code) {
 			val = "0o";
 			skip(s, 2);
-			while (s.pos < s.source.length && (isOctalDigit(peek(s)) || peek(s) === "_".code)) {
-				if (peek(s) !== "_".code) val += s.source.charAt(s.pos);
+			while (s.pos < s.source.byteLength && (isOctalDigit(peek(s)) || peek(s) === "_".code)) {
+				if (peek(s) !== "_".code) val += s.source.byteSlice(s.pos, s.pos + 1);
 				advanceChar(s);
 			}
 			addToken(s, TokenKind.Number, val, startLine, startCol);
@@ -51,10 +51,10 @@ export function scanNumber(s: LexerState): void {
 	let hasDecimal = false;
 	let hasExponent = false;
 
-	while (s.pos < s.source.length) {
+	while (s.pos < s.source.byteLength) {
 		const ch = peek(s);
 		if (isDigit(ch)) {
-			val += s.source.charAt(s.pos);
+			val += s.source.byteSlice(s.pos, s.pos + 1);
 			advanceChar(s);
 		} else if (ch === ".".code && !hasDecimal && isDigit(peekAt(s, 1))) {
 			val += ".";
@@ -66,7 +66,7 @@ export function scanNumber(s: LexerState): void {
 			advanceChar(s);
 			const next = peek(s);
 			if (next === "+".code || next === "-".code) {
-				val += s.source.charAt(s.pos);
+				val += s.source.byteSlice(s.pos, s.pos + 1);
 				advanceChar(s);
 			}
 		} else if (ch === "_".code) {
@@ -90,11 +90,11 @@ export function scanNumber(s: LexerState): void {
 function scanEscape(s: LexerState): string {
 	advanceChar(s); // skip backslash
 	// Hex escape: \xHH — read 2 hex digits, preserve as \xHH for C codegen
-	if (peek(s) === "x".code && s.pos + 2 < s.source.length) {
+	if (peek(s) === "x".code && s.pos + 2 < s.source.byteLength) {
 		advanceChar(s); // skip 'x'
-		const d1 = s.source.charAt(s.pos);
+		const d1 = s.source.byteSlice(s.pos, s.pos + 1);
 		advanceChar(s);
-		const d2 = s.source.charAt(s.pos);
+		const d2 = s.source.byteSlice(s.pos, s.pos + 1);
 		advanceChar(s);
 		return "\\" + "x" + d1 + d2;
 	}
@@ -109,7 +109,7 @@ function scanEscape(s: LexerState): string {
 		"'".code => "'",
 		"`".code => "`",
 		"$".code => "$",
-		_ => s.source.charAt(s.pos - 1),
+		_ => s.source.byteSlice(s.pos - 1, s.pos),
 	};
 }
 
@@ -119,7 +119,7 @@ export function scanString(s: LexerState, quote: number): void {
 	let val = "";
 	advanceChar(s); // skip opening quote
 
-	while (s.pos < s.source.length) {
+	while (s.pos < s.source.byteLength) {
 		const ch = peek(s);
 		if (ch === quote) {
 			advanceChar(s);
@@ -129,7 +129,7 @@ export function scanString(s: LexerState, quote: number): void {
 		if (ch === "\\".code) {
 			val += scanEscape(s);
 		} else {
-			val += s.source.charAt(s.pos);
+			val += s.source.byteSlice(s.pos, s.pos + 1);
 			advanceChar(s);
 		}
 	}
@@ -157,22 +157,22 @@ function scanTemplateStringImpl(s: LexerState, isContinuation: boolean): void {
 		let tempPos = s.pos;
 		let hasInterpolation = false;
 		let hasNewline = false;
-		while (tempPos < s.source.length && s.source.charCodeAt(tempPos) !== "`".code) {
-			const tc = s.source.charCodeAt(tempPos);
-			if (tc === "$".code && tempPos + 1 < s.source.length && s.source.charCodeAt(tempPos + 1) === "{".code) {
+		while (tempPos < s.source.byteLength && s.source.byteAt(tempPos) !== "`".code) {
+			const tc = s.source.byteAt(tempPos);
+			if (tc === "$".code && tempPos + 1 < s.source.byteLength && s.source.byteAt(tempPos + 1) === "{".code) {
 				hasInterpolation = true;
 				break;
 			}
 			if (tc === "\n".code) { hasNewline = true; break; }
 			tempPos = tempPos + 1;
 		}
-		if (!hasInterpolation && !hasNewline && tempPos < s.source.length) {
+		if (!hasInterpolation && !hasNewline && tempPos < s.source.byteLength) {
 			const contentLen = tempPos - s.pos;
 			if (contentLen > 0) {
 				let content = "";
 				let ci = s.pos;
 				while (ci < tempPos) {
-					content = content + s.source.charAt(ci);
+					content = content + s.source.byteSlice(ci, ci + 1);
 					ci = ci + 1;
 				}
 				if (isOperatorName(content)) {
@@ -187,7 +187,7 @@ function scanTemplateStringImpl(s: LexerState, isContinuation: boolean): void {
 		}
 	}
 
-	while (s.pos < s.source.length) {
+	while (s.pos < s.source.byteLength) {
 		const ch = peek(s);
 		if (ch === "`".code) {
 			advanceChar(s);
@@ -203,7 +203,7 @@ function scanTemplateStringImpl(s: LexerState, isContinuation: boolean): void {
 		if (ch === "\\".code) {
 			val += scanEscape(s);
 		} else {
-			val += s.source.charAt(s.pos);
+			val += s.source.byteSlice(s.pos, s.pos + 1);
 			advanceChar(s);
 		}
 	}
@@ -224,7 +224,7 @@ function isOperatorName(name: string): boolean {
 	if (name === "[]" || name === "[]=") return true;
 	let i = 0;
 	while (i < name.length) {
-		if (!isOperatorChar(name.charCodeAt(i))) return false;
+		if (!isOperatorChar(name.byteAt(i))) return false;
 		i = i + 1;
 	}
 	return true;
@@ -237,10 +237,10 @@ export function scanIdentifier(s: LexerState): void {
 	const startCol = s.column;
 	let ident = "";
 
-	while (s.pos < s.source.length) {
+	while (s.pos < s.source.byteLength) {
 		const ch = peek(s);
 		if (isLetter(ch) || isDigit(ch) || ch === "_".code || ch === "$".code) {
-			ident += s.source.charAt(s.pos);
+			ident += s.source.byteSlice(s.pos, s.pos + 1);
 			advanceChar(s);
 		} else {
 			break;
@@ -257,8 +257,8 @@ export function scanLineComment(s: LexerState): void {
 	const startLine = s.line;
 	const startCol = s.column - 2; // includes //
 	let content = "//";
-	while (s.pos < s.source.length && peek(s) !== "\n".code && peek(s) !== "\r".code) {
-		content += s.source.charAt(s.pos);
+	while (s.pos < s.source.byteLength && peek(s) !== "\n".code && peek(s) !== "\r".code) {
+		content += s.source.byteSlice(s.pos, s.pos + 1);
 		advanceChar(s);
 	}
 	addComment(s, content, startLine, startCol);
@@ -268,7 +268,7 @@ export function scanBlockComment(s: LexerState): void {
 	const startLine = s.line;
 	const startCol = s.column - 2; // includes /*
 	let content = "/*";
-	while (s.pos < s.source.length) {
+	while (s.pos < s.source.byteLength) {
 		const ch = peek(s);
 		if (ch === "*".code && peekAt(s, 1) === "/".code) {
 			content += "*/";
@@ -276,7 +276,7 @@ export function scanBlockComment(s: LexerState): void {
 			addComment(s, content, startLine, startCol);
 			return;
 		}
-		content += s.source.charAt(s.pos);
+		content += s.source.byteSlice(s.pos, s.pos + 1);
 		advanceChar(s);
 	}
 }
@@ -289,7 +289,7 @@ function scanRegex(s: LexerState): void {
 	let pattern = "/";
 	advanceChar(s); // skip opening /
 
-	while (s.pos < s.source.length) {
+	while (s.pos < s.source.byteLength) {
 		const ch = peek(s);
 		if (ch === "/".code) {
 			pattern += "/";
@@ -299,7 +299,7 @@ function scanRegex(s: LexerState): void {
 		if (ch === "\\".code) {
 			pattern += "\\";
 			advanceChar(s);
-			pattern += s.source.charAt(s.pos);
+			pattern += s.source.byteSlice(s.pos, s.pos + 1);
 			advanceChar(s);
 			continue;
 		}
@@ -307,13 +307,13 @@ function scanRegex(s: LexerState): void {
 			// Regex cannot span lines
 			break;
 		}
-		pattern += s.source.charAt(s.pos);
+		pattern += s.source.byteSlice(s.pos, s.pos + 1);
 		advanceChar(s);
 	}
 
 	// Scan flags (g, i, m, s, u, y, d)
-	while (s.pos < s.source.length && isLetter(peek(s))) {
-		pattern += s.source.charAt(s.pos);
+	while (s.pos < s.source.byteLength && isLetter(peek(s))) {
+		pattern += s.source.byteSlice(s.pos, s.pos + 1);
 		advanceChar(s);
 	}
 

@@ -29,7 +29,7 @@ import { callStateProgramParser } from "../parser/statements/callbacks";
 import "../parser/statements/core";
 import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../ast/node";
 import { readFile } from "std/process";
-import { sliceStr } from "../utils/string";
+// (utils/string imports removed — using native .slice)
 
 // ===== Source Provider =====
 
@@ -70,7 +70,7 @@ export function provideSource(provider: SourceProvider, path: string): Result<st
 
 function isCHeaderPath(path: string): boolean {
 	if (path.length < 3) return false;
-	return sliceStr(path, path.length - 2, path.length) === ".h";
+	return path.slice(path.length - 2, path.length) === ".h";
 }
 
 // ===== Module Loading =====

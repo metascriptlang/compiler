@@ -415,7 +415,7 @@ export function createRef(inner: Type): Type {
 export function createPtr(inner: Type): Type {
 	return {
 		kind: TypeKind.Ptr, typeName: "", typeNames: [], typeChildren: [],
-		typeReturn: inner, typeExtra: null, typeFlags: TypeFlag.HasAsgn as int32,
+		typeReturn: inner, typeExtra: null, typeFlags: 0 as int32,
 		callConv: CallingConvention.CcDefault, attachedOps: [],
 	};
 }
@@ -567,8 +567,8 @@ export function tupleTypeName(t: Type): string {
 	// DJB2 hash → base36 (matches hashToBase36 in codegen)
 	let hash: int32 = 5381;
 	let j = 0;
-	while (j < key.length) {
-		hash = ((hash * 33) + (key.charCodeAt(j) as int32)) & 0x7FFFFFFF;
+	while (j < key.byteLength) {
+		hash = ((hash * 33) + (key.byteAt(j) as int32)) & 0x7FFFFFFF;
 		j += 1;
 	}
 	return "msTuple_" + (hash as number).toString(36);
@@ -638,7 +638,7 @@ export function hasAsgnFlag(t: Type): boolean {
 	return (t.typeFlags & TypeFlag.HasAsgn) !== 0;
 }
 
-function propagateHasAsgn(parent: Type, child: Type): void {
+export function propagateHasAsgn(parent: Type, child: Type): void {
 	if (child !== null && (child.typeFlags & TypeFlag.HasAsgn) !== 0) {
 		parent.typeFlags = parent.typeFlags | TypeFlag.HasAsgn;
 	}
@@ -1116,6 +1116,8 @@ export function typeNameOf(t: Type): string {
 		TypeKind.CString => "cstring",
 		TypeKind.Result => "Result",
 		TypeKind.Enum => t.typeName,
+		TypeKind.TypeReference => t.typeName,
+		TypeKind.Distinct => t.typeName,
 		_ => "",
 	};
 }

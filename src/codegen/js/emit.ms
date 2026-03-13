@@ -4,12 +4,11 @@
 // emitNode delegates to registered callback (set by jsgen.ms) to break circular imports.
 
 import { Node, NodeKind, BlockStmtData } from "../../ast/node";
-import { sliceStr } from "../../utils/string";
 
 
 // ===== JS Generator =====
 
-export interface JSGenerator {
+export class JSGenerator {
 	buf: string[];
 	indentLevel: number;
 }
@@ -125,7 +124,7 @@ export function finalize(gen: JSGenerator): string {
 export function escapeJSString(s: string): string {
 	let result = "";
 	for (let i = 0; i < s.length; i += 1) {
-		const ch = sliceStr(s, i, i + 1);
+		const ch = s.slice(i, i + 1);
 		result = result + match (ch) {
 			"\\" => "\\\\",
 			"\"" => "\\\"",
@@ -143,9 +142,9 @@ export function escapeJSString(s: string): string {
 
 export function convertImportPath(path: string): string {
 	if (path.length >= 3) {
-		const suffix = sliceStr(path, path.length - 3, path.length);
+		const suffix = path.slice(path.length - 3, path.length);
 		if (suffix === ".ms") {
-			return sliceStr(path, 0, path.length - 3) + ".js";
+			return path.slice(0, path.length - 3) + ".js";
 		}
 	}
 	return path;

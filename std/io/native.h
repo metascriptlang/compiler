@@ -14,11 +14,25 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
+#include <sys/select.h>
 #include "system.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* ===== Stdin Init ===== */
+
+/**
+ * Disable stdio buffering on stdin so select() accurately reflects
+ * available data. Without this, fgets/fread may pull data into stdio's
+ * internal buffer, making select() return false even though data exists.
+ * Call once at server startup.
+ */
+static inline void msStdinDisableBuffering(void) {
+	setvbuf(stdin, NULL, _IONBF, 0);
+}
 
 /* ===== Stdin ===== */
 
@@ -59,6 +73,20 @@ static inline msString msReadBytes(double n) {
 	msString result = msStringNew(buf, (int64_t)total);
 	free(buf);
 	return result;
+}
+
+/**
+ * Non-blocking check: is data available on stdin?
+ * Uses select() with zero timeout — probes without changing fd state.
+ * Returns 1.0 if data available, 0.0 otherwise.
+ */
+static inline double msStdinHasData(void) {
+	fd_set fds;
+	struct timeval tv = {0, 0};
+	FD_ZERO(&fds);
+	FD_SET(STDIN_FILENO, &fds);
+	int r = select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv);
+	return (r > 0 && FD_ISSET(STDIN_FILENO, &fds)) ? 1.0 : 0.0;
 }
 
 /* ===== Stdout / Stderr ===== */

@@ -20,7 +20,7 @@ import { Type, TypeKind, typeNameOf, getProperty,
 	unknownType, neverType, errorType } from "./types";
 import { Symbol, SymbolKind, SymbolTable, Scope, lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, findAllExtensionsByName, filterExtsByReceiverType, getExtFnType, stripReceiverParam, SgSymRecord } from "./context";
-import { sliceStr, charAt } from "../utils/string";
+// (utils/string imports removed — using native .slice/.charAt)
 import { checkProgram } from "./checkPass";
 import { parseSource } from "../parser/statements/validation";
 // Import parseProgram to trigger callback registration (side-effect import)
@@ -48,6 +48,7 @@ export interface SgDiagnostic {
 	message: string;
 	line: number;
 	column: number;
+	endColumn: number; // 0 = use column+1
 	severity: number;  // 1=Error, 2=Warning
 }
 
@@ -122,7 +123,7 @@ function sgSuggestFromRecord(rec: SgSymRecord): SgSuggest {
 }
 
 // ===== sgQueryBySym — find all records matching a symbol by pointer identity =====
-// Nim-aligned: uses sym pointer identity (not name string) to avoid false positives
+// Reference-aligned: uses sym pointer identity (not name string) to avoid false positives
 // with shadowed or aliased symbols. Falls back to name+modulePath for cross-module.
 
 export function sgQueryBySym(ctx: CheckerContext, targetSym: Symbol): SgSymbolRef[] {
@@ -200,18 +201,22 @@ export function sgTypeToString(t: Type): string {
 	}
 
 	if (t.kind === TypeKind.Struct) {
-		if (t.typeName.length > 0) return t.typeName;
-		// Anonymous object: { key: type, ... }
-		let result = "{ ";
-		for (let i = 0; i < t.typeNames.length; i = i + 1) {
-			if (i > 0) result = result + ", ";
-			result = result + t.typeNames[i] + ": ";
-			if (i < t.typeChildren.length) {
-				result = result + sgTypeToString(t.typeChildren[i]);
+		// Named struct with a real name (not internal __anon*)
+		if (t.typeName.length > 0 && sgFindSubstring(t.typeName, "__anon") < 0) return t.typeName;
+		// Anonymous/inline struct: { key: type, ... } — TypeScript style
+		if (t.typeNames !== null && t.typeNames.length > 0) {
+			let result = "{ ";
+			for (let i = 0; i < t.typeNames.length; i = i + 1) {
+				if (i > 0) result = result + "; ";
+				result = result + t.typeNames[i] + ": ";
+				if (i < t.typeChildren.length) {
+					result = result + sgTypeToString(t.typeChildren[i]);
+				}
 			}
+			result = result + " }";
+			return result;
 		}
-		result = result + " }";
-		return result;
+		return "{}";
 	}
 
 	if (t.kind === TypeKind.Function) {
@@ -265,11 +270,14 @@ export function sgTypeToString(t: Type): string {
 	}
 
 	if (t.kind === TypeKind.Ref) {
-		return "ref " + sgTypeToString(t.typeReturn);
+		// Ref<T> is an implementation detail (class = heap pointer + RC).
+		// Show just the inner type name — TypeScript doesn't expose ref/ptr.
+		return sgTypeToString(t.typeReturn);
 	}
 
 	if (t.kind === TypeKind.Ptr) {
-		return "ptr " + sgTypeToString(t.typeReturn);
+		// Ptr<T> is also an implementation detail — show inner type.
+		return sgTypeToString(t.typeReturn);
 	}
 
 	if (t.kind === TypeKind.Distinct) {
@@ -304,7 +312,7 @@ function sgFindSubstring(haystack: string, needle: string): number {
 	for (let i = 0; i <= limit; i = i + 1) {
 		let match = true;
 		for (let j = 0; j < needle.length; j = j + 1) {
-			if (charAt(haystack, i + j) !== charAt(needle, j)) {
+			if (haystack.charAt(i + j) !== needle.charAt(j)) {
 				match = false;
 				break;
 			}
@@ -533,24 +541,24 @@ export function sgBuiltinDoc(name: string, containerName: string): string {
 function sgExtractLine(source: string, line: number): string {
 	if (line < 1) return "";
 	const start = sgGetLineOffset(source, line);
-	if (start >= source.length) return "";
+	if (start >= source.byteLength) return "";
 	let end = start;
-	while (end < source.length && charAt(source, end) !== "\n") {
+	while (end < source.byteLength && source.charAt(end) !== "\n") {
 		end = end + 1;
 	}
-	return sliceStr(source, start, end);
+	return source.slice(start, end);
 }
 
 // Strip leading whitespace from a string.
 function sgTrimLeft(s: string): string {
 	let i = 0;
 	while (i < s.length) {
-		const ch = charAt(s, i);
+		const ch = s.charAt(i);
 		if (ch !== " " && ch !== "\t") break;
 		i = i + 1;
 	}
 	if (i === 0) return s;
-	return sliceStr(s, i, s.length);
+	return s.slice(i, s.length);
 }
 
 // Extract /** JSDoc */ doc comment above a declaration at the given line (1-indexed).
@@ -583,9 +591,9 @@ function sgExtractJsDocBlock(source: string, endLine: number): string {
 		// Strip /** and */
 		let s = raw;
 		const openIdx = sgFindSubstring(s, "/**");
-		if (openIdx >= 0) s = sliceStr(s, openIdx + 3, s.length);
+		if (openIdx >= 0) s = s.slice(openIdx + 3, s.length);
 		const closeIdx = sgFindSubstring(s, "*/");
-		if (closeIdx >= 0) s = sliceStr(s, 0, closeIdx);
+		if (closeIdx >= 0) s = s.slice(0, closeIdx);
 		return sgTrimLeft(sgTrimRight(s));
 	}
 	// Multi-line: collect from startLine+1 to endLine-1, plus partial first/last
@@ -594,7 +602,7 @@ function sgExtractJsDocBlock(source: string, endLine: number): string {
 	const firstRaw = sgExtractLine(source, startLine);
 	const openIdx = sgFindSubstring(firstRaw, "/**");
 	if (openIdx >= 0) {
-		const after = sliceStr(firstRaw, openIdx + 3, firstRaw.length);
+		const after = firstRaw.slice(openIdx + 3, firstRaw.length);
 		const trimAfter = sgTrimLeft(sgTrimRight(after));
 		if (trimAfter.length > 0) lines.push(trimAfter);
 	}
@@ -604,10 +612,10 @@ function sgExtractJsDocBlock(source: string, endLine: number): string {
 		const raw = sgTrimLeft(sgExtractLine(source, ln));
 		let content = raw;
 		// Strip leading * (with optional space)
-		if (content.length > 0 && charAt(content, 0) === "*") {
-			content = sliceStr(content, 1, content.length);
-			if (content.length > 0 && charAt(content, 0) === " ") {
-				content = sliceStr(content, 1, content.length);
+		if (content.length > 0 && content.charAt(0) === "*") {
+			content = content.slice(1, content.length);
+			if (content.length > 0 && content.charAt(0) === " ") {
+				content = content.slice(1, content.length);
 			}
 		}
 		lines.push(sgTrimRight(content));
@@ -618,12 +626,12 @@ function sgExtractJsDocBlock(source: string, endLine: number): string {
 	// Strip */ first, then strip leading * prefix
 	let lastContent = lastRaw;
 	const closeIdx2 = sgFindSubstring(lastContent, "*/");
-	if (closeIdx2 >= 0) lastContent = sliceStr(lastContent, 0, closeIdx2);
+	if (closeIdx2 >= 0) lastContent = lastContent.slice(0, closeIdx2);
 	lastContent = sgTrimLeft(lastContent);
-	if (lastContent.length > 0 && charAt(lastContent, 0) === "*") {
-		lastContent = sliceStr(lastContent, 1, lastContent.length);
-		if (lastContent.length > 0 && charAt(lastContent, 0) === " ") {
-			lastContent = sliceStr(lastContent, 1, lastContent.length);
+	if (lastContent.length > 0 && lastContent.charAt(0) === "*") {
+		lastContent = lastContent.slice(1, lastContent.length);
+		if (lastContent.length > 0 && lastContent.charAt(0) === " ") {
+			lastContent = lastContent.slice(1, lastContent.length);
 		}
 	}
 	lastContent = sgTrimRight(lastContent);
@@ -643,11 +651,11 @@ function sgExtractJsDocBlock(source: string, endLine: number): string {
 function sgTrimRight(s: string): string {
 	let i = s.length - 1;
 	while (i >= 0) {
-		const ch = charAt(s, i);
+		const ch = s.charAt(i);
 		if (ch !== " " && ch !== "\t" && ch !== "\r") break;
 		i = i - 1;
 	}
-	return sliceStr(s, 0, i + 1);
+	return s.slice(0, i + 1);
 }
 
 // ===== Cross-Module Helpers =====
@@ -744,6 +752,7 @@ export function sgCollectDiagnostics(ctx: CheckerContext): SgDiagnostic[] {
 			message: err.message,
 			line: err.line > 0 ? err.line : 1,
 			column: err.column,
+			endColumn: err.endColumn,
 			severity: lspSeverity,
 		};
 		result.push(diag);
@@ -756,8 +765,8 @@ export function sgCollectDiagnostics(ctx: CheckerContext): SgDiagnostic[] {
 function sgIsIdentChar(ch: string): boolean {
 	if (ch === "_") return true;
 	const identChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-	for (let i = 0; i < identChars.length; i = i + 1) {
-		if (charAt(identChars, i) === ch) return true;
+	for (let i = 0; i < identChars.byteLength; i = i + 1) {
+		if (identChars.charAt(i) === ch) return true;
 	}
 	return false;
 }
@@ -766,8 +775,8 @@ function sgGetLineOffset(source: string, line: number): number {
 	// line is 1-indexed. Returns offset of the first char on that line.
 	let offset = 0;
 	let currentLine = 1;
-	while (offset < source.length && currentLine < line) {
-		if (charAt(source, offset) === "\n") {
+	while (offset < source.byteLength && currentLine < line) {
+		if (source.charAt(offset) === "\n") {
 			currentLine = currentLine + 1;
 		}
 		offset = offset + 1;
@@ -778,7 +787,7 @@ function sgGetLineOffset(source: string, line: number): number {
 function sgStartsWith(s: string, prefix: string): boolean {
 	if (prefix.length === 0) return true;
 	if (prefix.length > s.length) return false;
-	return sliceStr(s, 0, prefix.length) === prefix;
+	return s.slice(0, prefix.length) === prefix;
 }
 
 function sgIsTypeKind(kind: SymbolKind): boolean {
@@ -811,7 +820,7 @@ function sgPrefixMatch(prefix: string, name: string): number {
 	// Check prefix match (case-insensitive)
 	let isPrefix = true;
 	for (let k = 0; k < prefix.length; k = k + 1) {
-		if (!sgCaseEqual(charAt(prefix, k), charAt(name, k))) {
+		if (!sgCaseEqual(prefix.charAt(k), name.charAt(k))) {
 			isPrefix = false;
 			break;
 		}
@@ -821,7 +830,7 @@ function sgPrefixMatch(prefix: string, name: string): number {
 	for (let start = 1; start + prefix.length <= name.length; start = start + 1) {
 		let matched = true;
 		for (let m = 0; m < prefix.length; m = m + 1) {
-			if (!sgCaseEqual(charAt(prefix, m), charAt(name, start + m))) {
+			if (!sgCaseEqual(prefix.charAt(m), name.charAt(start + m))) {
 				matched = false;
 				break;
 			}
@@ -877,16 +886,16 @@ export function sgDetectCompletionContext(source: string, line: number, col: num
 	const cursorOffset = lineOffset + col;
 	// Scan backwards past any identifier chars (the prefix being typed)
 	let pos = cursorOffset - 1;
-	while (pos >= 0 && sgIsIdentChar(charAt(source, pos))) {
+	while (pos >= 0 && sgIsIdentChar(source.charAt(pos))) {
 		pos = pos - 1;
 	}
 	// Skip whitespace
-	while (pos >= 0 && charAt(source, pos) === " ") {
+	while (pos >= 0 && source.charAt(pos) === " ") {
 		pos = pos - 1;
 	}
 	// Check the character just before the identifier
 	if (pos >= 0) {
-		const ch = charAt(source, pos);
+		const ch = source.charAt(pos);
 		if (ch === ".") return SgCompletionKind.MemberAccess;
 		if (ch === ":") return SgCompletionKind.TypeAnnotation;
 	}
@@ -899,11 +908,11 @@ export function sgGetPrefix(source: string, line: number, col: number): string {
 	const lineOffset = sgGetLineOffset(source, line);
 	const cursorOffset = lineOffset + col;
 	let start = cursorOffset;
-	while (start > 0 && sgIsIdentChar(charAt(source, start - 1))) {
+	while (start > 0 && sgIsIdentChar(source.charAt(start - 1))) {
 		start = start - 1;
 	}
 	if (start >= cursorOffset) return "";
-	return sliceStr(source, start, cursorOffset);
+	return source.slice(start, cursorOffset);
 }
 
 // ===== sgGetCompletionCandidates — collect matching symbols =====
@@ -1226,7 +1235,7 @@ export function sgGetCalleeAtCursor(source: string, line: number, col: number): 
 
 	// Find the matching unclosed '('
 	while (pos >= 0) {
-		const ch = charAt(source, pos);
+		const ch = source.charAt(pos);
 		if (ch === ")") { depth = depth + 1; }
 		if (ch === "(") {
 			if (depth === 0) {
@@ -1235,19 +1244,19 @@ export function sgGetCalleeAtCursor(source: string, line: number, col: number): 
 				pos = pos - 1;
 				// Skip whitespace
 				while (pos >= 0) {
-					const ws = charAt(source, pos);
+					const ws = source.charAt(pos);
 					if (ws !== " " && ws !== "\t") {
 						let identEnd = pos + 1;
 						// Scan backwards through identifier chars
 						while (pos >= 0) {
-							const ic = charAt(source, pos);
+							const ic = source.charAt(pos);
 							if (sgIsIdentChar(ic)) {
 								pos = pos - 1;
 							} else {
-								return sliceStr(source, pos + 1, identEnd);
+								return source.slice(pos + 1, identEnd);
 							}
 						}
-						return sliceStr(source, 0, identEnd);
+						return source.slice(0, identEnd);
 					}
 					pos = pos - 1;
 				}
@@ -1271,27 +1280,27 @@ export function sgGetReceiverAtCursor(source: string, line: number, col: number)
 	let depth = 0;
 	// Find matching unclosed '('
 	while (pos >= 0) {
-		const ch = charAt(source, pos);
+		const ch = source.charAt(pos);
 		if (ch === ")") { depth = depth + 1; }
 		if (ch === "(") {
 			if (depth === 0) {
 				// Skip backwards past callee identifier
 				pos = pos - 1;
-				while (pos >= 0 && (charAt(source, pos) === " " || charAt(source, pos) === "\t")) {
+				while (pos >= 0 && (source.charAt(pos) === " " || source.charAt(pos) === "\t")) {
 					pos = pos - 1;
 				}
-				while (pos >= 0 && sgIsIdentChar(charAt(source, pos))) {
+				while (pos >= 0 && sgIsIdentChar(source.charAt(pos))) {
 					pos = pos - 1;
 				}
 				// Check for dot
-				if (pos >= 0 && charAt(source, pos) === ".") {
+				if (pos >= 0 && source.charAt(pos) === ".") {
 					pos = pos - 1;
 					// Extract receiver identifier
 					const recEnd = pos + 1;
-					while (pos >= 0 && sgIsIdentChar(charAt(source, pos))) {
+					while (pos >= 0 && sgIsIdentChar(source.charAt(pos))) {
 						pos = pos - 1;
 					}
-					return sliceStr(source, pos + 1, recEnd);
+					return source.slice(pos + 1, recEnd);
 				}
 				return "";
 			}
@@ -1311,7 +1320,7 @@ export function sgCountActiveParam(source: string, line: number, col: number): n
 	let depth = 0;
 	let commas = 0;
 	while (pos >= 0) {
-		const ch = charAt(source, pos);
+		const ch = source.charAt(pos);
 		if (ch === ")") { depth = depth + 1; }
 		if (ch === "(") {
 			if (depth === 0) return commas;
@@ -1948,6 +1957,17 @@ test "format property hover" {
 	assert sgFormatHover(suggest) === "```metascript\n(property) x: number\n```";
 }
 
+test "format property hover with container" {
+	const loc = makeLoc(1, 0);
+	const suggest: SgSuggest = {
+		sym: null, name: "name", kind: SymbolKind.Property, symType: stringType(),
+		location: loc, modulePath: "", containerName: "Person",
+		prefixScore: 0, scopeDepth: 0, contextFit: false,
+		isExported: false, isMutable: false, usageCount: 0,
+	};
+	assert sgFormatHover(suggest) === "```metascript\n(property) Person.name: string\n```";
+}
+
 test "format method hover" {
 	const loc = makeLoc(1, 0);
 	const params: Type[] = [stringType()];
@@ -2416,4 +2436,63 @@ test "no exception hint for non-Result function" {
 		if (hints[i].hintKind === SgInlayHintKind.Exception) exceptionCount = exceptionCount + 1;
 	}
 	assert exceptionCount === 0;
+}
+
+test "enum member access records symbol" {
+	const src = "enum Color { Red, Green, Blue }\nconst c = Color.Green;";
+	const pr = parseSource(src);
+	if (!pr.ok) { assert false; return; }
+	const ctx = checkProgram(pr.value);
+	// Line 2 (1-based), cursor on "Green" — the dot is at col after "Color"
+	// Color starts at col 10 on line 2, dot at col 15, Green at col 16
+	const suggest = sgQueryAtPosition(ctx, 2, 17);
+	assert suggest !== null;
+	assert suggest.name === "Green";
+	assert suggest.kind === SymbolKind.EnumMember;
+	assert suggest.containerName === "Color";
+}
+
+test "enum type in member access records symbol" {
+	const src = "enum Color { Red, Green, Blue }\nconst c = Color.Green;";
+	const pr = parseSource(src);
+	if (!pr.ok) { assert false; return; }
+	const ctx = checkProgram(pr.value);
+	// Cursor on "Color" in "Color.Green" (col 11 = C, within [11, 16))
+	const suggest = sgQueryAtPosition(ctx, 2, 11);
+	assert suggest !== null;
+	assert suggest.name === "Color";
+	assert suggest.kind === SymbolKind.Enum;
+}
+
+test "enum member in match all recorded and queryable" {
+	// Tab-indented like real code. Tab = 1 column in our lexer.
+	const src = "enum K { A, B, C, D }\nfunction f(k: K): number { return match (k) {\n\tK.A => 1,\n\tK.B | K.C => 2,\n\tK.D => 3,\n\t_ => 0,\n}; }";
+	const pr = parseSource(src);
+	if (!pr.ok) { assert false; return; }
+	const ctx = checkProgram(pr.value);
+	// Verify all 4 members recorded as EnumMember
+	let countEnum = 0;
+	if (ctx.symRecords !== null) {
+		for (let i = 0; i < ctx.symRecords.length; i = i + 1) {
+			if (ctx.symRecords[i].kind === SymbolKind.EnumMember && !ctx.symRecords[i].isDecl) countEnum = countEnum + 1;
+		}
+	}
+	assert countEnum === 4;
+	// Line 3: \tK.A — tab(1) K(2) .(3) A(4)
+	// MemberExpr at dot col=3, property A recorded at [4, 5)
+	const sA = sgQueryAtPosition(ctx, 3, 4);
+	assert sA !== null;
+	assert sA.name === "A";
+	assert sA.kind === SymbolKind.EnumMember;
+	// Line 4: \tK.B | K.C — tab(1) K(2) .(3) B(4) space(5) |(6) space(7) K(8) .(9) C(10)
+	const sB = sgQueryAtPosition(ctx, 4, 4);
+	assert sB !== null;
+	assert sB.name === "B";
+	const sC = sgQueryAtPosition(ctx, 4, 10);
+	assert sC !== null;
+	assert sC.name === "C";
+	// Line 5: \tK.D — D at col 4
+	const sD = sgQueryAtPosition(ctx, 5, 4);
+	assert sD !== null;
+	assert sD.name === "D";
 }

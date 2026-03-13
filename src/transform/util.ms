@@ -304,12 +304,12 @@ function stripArraySuffix(annotation: string): string {
 }
 
 export function makeObjectLiteral(keys: string[], values: Node[], loc: SourceLocation): Node {
-	return createNode(NodeKind.ObjectLiteral, { properties: values, keys }, syntheticToken(loc));
+	return createNode(NodeKind.ObjectLiteral, { properties: values, keys, keyLocations: [] }, syntheticToken(loc));
 }
 
 // Typed variant: creates an ObjectLiteral with a known Type (standard object construction parity)
 export function makeTypedObjectLiteral(keys: string[], values: Node[], t: Type, loc: SourceLocation): Node {
-	const n = createNode(NodeKind.ObjectLiteral, { properties: values, keys }, syntheticToken(loc));
+	const n = createNode(NodeKind.ObjectLiteral, { properties: values, keys, keyLocations: [] }, syntheticToken(loc));
 	if (t !== null) { n.nodeType = t; }
 	return n;
 }

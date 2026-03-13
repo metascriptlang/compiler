@@ -32,7 +32,7 @@ import { Type, TypeKind, unknownType, numberType, stringType, booleanType, nullT
 import { CheckerContext, extractGenericNames, stripGenFlag } from "../checker/context";
 import { SymbolTable, Symbol, SymbolKind, ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope } from "../checker/symbol";
 import { MonoRegistry, MonoEntry, monoRegister, monoFindEntry, buildTypeArgKeys, monoTypeKey, createMonoRegistry } from "./registry";
-import { sliceStr, trimStr, splitTopLevel, findChar, charAt } from "../utils/string";
+import { splitTopLevel, findChar } from "../utils/string";
 import {
 	getExplicitTypeArg,
 	getGenericTypeInstCount, getGenericTypeInstMangledName,
@@ -78,7 +78,7 @@ function monoResolveExplicitTypeArgs(typeArgStr: string): Type[] {
 	const result: Type[] = [];
 	const parts = splitTopLevel(typeArgStr, ",");
 	for (const part of parts) {
-		const name = trimStr(part);
+		const name = part.trim();
 		const resolved = monoResolveTypeName(name);
 		if (resolved !== null) result.push(resolved);
 	}
@@ -102,31 +102,31 @@ function monoResolveTypeName(name: string): Type {
 // (DRC safety). Handles primitives, arrays, and named types.
 
 function monoResolveAnnotation(annotation: string): Type {
-	const trimmed = trimStr(annotation);
+	const trimmed = annotation.trim();
 	if (trimmed === "") return unknownType();
 	// Array suffix: number[]
 	if (trimmed.length > 2) {
-		const suffix = sliceStr(trimmed, trimmed.length - 2, trimmed.length);
+		const suffix = trimmed.slice(trimmed.length - 2, trimmed.length);
 		if (suffix === "[]") {
-			const inner = sliceStr(trimmed, 0, trimmed.length - 2);
+			const inner = trimmed.slice(0, trimmed.length - 2);
 			return createArray(monoResolveAnnotation(inner));
 		}
 	}
 	// Token-joined form: number [ ]
 	if (trimmed.length > 4) {
-		const suffix3 = sliceStr(trimmed, trimmed.length - 3, trimmed.length);
+		const suffix3 = trimmed.slice(trimmed.length - 3, trimmed.length);
 		if (suffix3 === "[ ]") {
-			const inner = trimStr(sliceStr(trimmed, 0, trimmed.length - 3));
+			const inner = trimmed.slice(0, trimmed.length - 3).trim();
 			return createArray(monoResolveAnnotation(inner));
 		}
 	}
 	// Generic types: Array<X>
 	const angleBracket = findChar(trimmed, "<");
 	if (angleBracket > 0) {
-		const lastChar = charAt(trimmed, trimmed.length - 1);
+		const lastChar = trimmed.charAt(trimmed.length - 1);
 		if (lastChar === ">") {
-			const baseName = trimStr(sliceStr(trimmed, 0, angleBracket));
-			const argsText = trimStr(sliceStr(trimmed, angleBracket + 1, trimmed.length - 1));
+			const baseName = trimmed.slice(0, angleBracket).trim();
+			const argsText = trimmed.slice(angleBracket + 1, trimmed.length - 1).trim();
 			if (baseName === "Array") {
 				return createArray(monoResolveAnnotation(argsText));
 			}
@@ -717,7 +717,7 @@ function monoCloneNode(node: Node): Node {
 	if (kind === NodeKind.CallExpr) { const d = node.data as CallExprData; const data: NodeData = { callee: monoCloneNode(d.callee), arguments: cloneNodeArray(d.arguments), isDirectCall: d.isDirectCall, resolvedOverloadIdx: d.resolvedOverloadIdx }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.MemberExpr) { const d = node.data as MemberExprData; const data: NodeData = { object: monoCloneNode(d.object), property: d.property, isOptional: d.isOptional }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.ArrayAccess) { const d = node.data as ArrayAccessData; const data: NodeData = { array: monoCloneNode(d.array), index: monoCloneNode(d.index) }; return createNodeAt(kind, data, loc); }
-	if (kind === NodeKind.ObjectLiteral) { const d = node.data as ObjectLiteralData; const data: NodeData = { properties: cloneNodeArray(d.properties), keys: cloneStringArray(d.keys) }; return createNodeAt(kind, data, loc); }
+	if (kind === NodeKind.ObjectLiteral) { const d = node.data as ObjectLiteralData; const data: NodeData = { properties: cloneNodeArray(d.properties), keys: cloneStringArray(d.keys), keyLocations: d.keyLocations !== null ? d.keyLocations : [] }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.ArrayLiteral) { const d = node.data as ArrayLiteralData; const data: NodeData = { elements: cloneNodeArray(d.elements) }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.ArrowFunction) { const d = node.data as ArrowFunctionData; const data: NodeData = { arrowParams: cloneStringArray(d.arrowParams), arrowParamTypes: cloneStringArray(d.arrowParamTypes), arrowBody: monoCloneNode(d.arrowBody), arrowFlags: d.arrowFlags, arrowReturnType: d.arrowReturnType }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.FunctionExpr) { const d = node.data as FunctionExprData; const data: NodeData = { funcExprParams: cloneStringArray(d.funcExprParams), funcExprParamTypes: cloneStringArray(d.funcExprParamTypes), funcExprBody: monoCloneNode(d.funcExprBody), funcExprFlags: d.funcExprFlags, funcExprReturnType: d.funcExprReturnType }; return createNodeAt(kind, data, loc); }
@@ -754,10 +754,10 @@ function monoCloneNode(node: Node): Node {
 	if (kind === NodeKind.SwitchStmt) { const d = node.data as SwitchStmtData; const data: NodeData = { switchDisc: monoCloneNode(d.switchDisc), switchCases: cloneNodeArray(d.switchCases) }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.SwitchCase) { const d = node.data as SwitchCaseData; const data: NodeData = { caseTests: cloneNodeArray(d.caseTests), caseStmts: cloneNodeArray(d.caseStmts), isDefault: d.isDefault }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.MatchStmt) { const d = node.data as MatchStmtData; const data: NodeData = { matchStmtDisc: monoCloneNode(d.matchStmtDisc), matchStmtCases: cloneNodeArray(d.matchStmtCases) }; return createNodeAt(kind, data, loc); }
-	if (kind === NodeKind.ImportDecl) { const d = node.data as ImportDeclData; const data: NodeData = { importNames: cloneStringArray(d.importNames), importAliases: cloneStringArray(d.importAliases), importSource: d.importSource }; return createNodeAt(kind, data, loc); }
+	if (kind === NodeKind.ImportDecl) { const d = node.data as ImportDeclData; const data: NodeData = { importNames: cloneStringArray(d.importNames), importAliases: cloneStringArray(d.importAliases), importSource: d.importSource, nameLocations: d.nameLocations !== null ? d.nameLocations : [] }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.ExportDecl) { const d = node.data as ExportDeclData; const data: NodeData = { exportedDecl: monoCloneNode(d.exportedDecl) }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.TypeAliasDecl) { const d = node.data as TypeAliasDeclData; const data: NodeData = { aliasName: d.aliasName, aliasType: d.aliasType, aliasIsDistinct: d.aliasIsDistinct, discriminantName: d.discriminantName, discriminantType: d.discriminantType, variantKeys: cloneStringArray(d.variantKeys), variantTypes: cloneStringArray(d.variantTypes), nameLocation: d.nameLocation }; return createNodeAt(kind, data, loc); }
-	if (kind === NodeKind.EnumDecl) { const d = node.data as EnumDeclData; const data: NodeData = { enumName: d.enumName, enumMembers: cloneStringArray(d.enumMembers), nameLocation: d.nameLocation }; return createNodeAt(kind, data, loc); }
+	if (kind === NodeKind.EnumDecl) { const d = node.data as EnumDeclData; const data: NodeData = { enumName: d.enumName, enumMembers: cloneStringArray(d.enumMembers), nameLocation: d.nameLocation, memberLocations: d.memberLocations !== null ? d.memberLocations : [] }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.InterfaceDecl) { const d = node.data as InterfaceDeclData; const data: NodeData = { interfaceName: d.interfaceName, interfaceFields: cloneStringArray(d.interfaceFields), interfaceFieldTypes: cloneStringArray(d.interfaceFieldTypes), nameLocation: d.nameLocation }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.ClassDecl) { const d = node.data as ClassDeclData; const data: NodeData = { className: d.className, classExtends: d.classExtends, classBody: cloneNodeArray(d.classBody), nameLocation: d.nameLocation }; return createNodeAt(kind, data, loc); }
 	if (kind === NodeKind.PropertyDecl) { const d = node.data as PropertyDeclData; const data: NodeData = { propName: d.propName, propType: d.propType, propIsStatic: d.propIsStatic }; return createNodeAt(kind, data, loc); }
@@ -790,19 +790,19 @@ function monoSubstAnnotation(annotation: string, paramName: string, concreteType
 	if (annotation === paramName) return concreteTypeName;
 	let result = "";
 	let i = 0;
-	while (i < annotation.length) {
+	while (i < annotation.byteLength) {
 		let isMatch = true;
-		if (i + paramName.length > annotation.length) { isMatch = false; } else {
-			for (let pi = 0; pi < paramName.length; pi += 1) { if (charAt(annotation, i + pi) !== charAt(paramName, pi)) { isMatch = false; } }
+		if (i + paramName.byteLength > annotation.byteLength) { isMatch = false; } else {
+			for (let pi = 0; pi < paramName.byteLength; pi += 1) { if (annotation.charAt(i + pi) !== paramName.charAt(pi)) { isMatch = false; } }
 		}
 		if (isMatch) {
 			let prevOk = true;
 			let nextOk = true;
-			if (i > 0) { prevOk = !monoIsAlphaNumOrUnderscore(charAt(annotation, i - 1)); }
-			const nextPos = i + paramName.length;
-			if (nextPos < annotation.length) { nextOk = !monoIsAlphaNumOrUnderscore(charAt(annotation, nextPos)); }
-			if (prevOk && nextOk) { result = result + concreteTypeName; i = i + paramName.length; } else { result = result + charAt(annotation, i); i += 1; }
-		} else { result = result + charAt(annotation, i); i += 1; }
+			if (i > 0) { prevOk = !monoIsAlphaNumOrUnderscore(annotation.charAt(i - 1)); }
+			const nextPos = i + paramName.byteLength;
+			if (nextPos < annotation.byteLength) { nextOk = !monoIsAlphaNumOrUnderscore(annotation.charAt(nextPos)); }
+			if (prevOk && nextOk) { result = result + concreteTypeName; i = i + paramName.byteLength; } else { result = result + annotation.charAt(i); i += 1; }
+		} else { result = result + annotation.charAt(i); i += 1; }
 	}
 	return result;
 }

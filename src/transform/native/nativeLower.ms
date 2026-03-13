@@ -160,8 +160,8 @@ function rewriteMemberExpr(node: Node): Node {
 	if (objType === null) return node;
 
 	// .length on CString → strlen(s) (C standard library)
-	// .length on String → msStringLength(s) (UTF-16 code units, TS parity)
-	// .length on arrays → .len (direct field access)
+	// .length on String → msStringLength(s) (UTF-16 code units, TypeScript parity)
+	// .length on arrays → .len (element count)
 	if (d.property === "length") {
 		if (objType.kind === TypeKind.CString) {
 			const loc = node.location;

@@ -26,11 +26,12 @@ import {
 	InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData,
 	IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData,
 } from "../../ast/node";
-import { TransformContext, NameSet, nameSetContains, nameSetAdd, createTransformContextWithChecker, freshTemp } from "../context";
+import { TransformContext, NameSet, nameSetContains, nameSetAdd, createTransformContextWithChecker } from "../context";
 import { makeIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
 import { Type, TypeKind, isPrimitiveKind, AttachedOp, setAttachedOp, unwrapRef, createArray, createPtr, createRef, createVar, createPrimitive, stringType, getTypeSize } from "../../checker/types";
 import { walkNode } from "../walker";
 import { lookupSymbol, SymbolKind } from "../../checker/symbol";
+import { CheckerContext } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput } from "../testUtil";
 
@@ -60,7 +61,8 @@ interface SeqElemEntry {
 }
 
 interface LiftCtx {
-	ctx: TransformContext;
+	checkerCtx: CheckerContext;  // borrowed — do NOT store full TransformContext (causes double-free)
+	tempCounter: number;
 	generated: NameSet;    // fully generated types (dedup)
 	generating: NameSet;   // currently generating (cycle guard)
 	collector: Node[];
@@ -86,7 +88,8 @@ function isCyclicType(t: Type, lctx: LiftCtx, visited: NameSet): boolean {
 	if (isPrimitiveKind(t.kind) || t.kind === TypeKind.String) return false;
 
 	match (t.kind) {
-		TypeKind.Ref | TypeKind.Ptr | TypeKind.Function => { return true; },
+		TypeKind.Ref | TypeKind.Function => { return true; },
+		TypeKind.Ptr => { return false; },
 		TypeKind.Array | TypeKind.Distinct => {
 			if (t.typeReturn === null) return false;
 			return isCyclicType(t.typeReturn, lctx, visited);
@@ -137,7 +140,7 @@ function isCyclicType(t: Type, lctx: LiftCtx, visited: NameSet): boolean {
 			if (t.typeName === "") return false;
 			if (nameSetContains(visited, t.typeName)) return false;
 			nameSetAdd(visited, t.typeName);
-			const sym = lookupSymbol(lctx.ctx.checkerCtx.table, t.typeName);
+			const sym = lookupSymbol(lctx.checkerCtx.table, t.typeName);
 			if (sym === null) return false;
 			return isCyclicType(sym.symbolType, lctx, visited);
 		},
@@ -214,7 +217,7 @@ function genCall(name: string, hook: string, x: Node, y: Node, buf: Node[], loc:
 // Copy-ref pattern: for 2-arg copy functions (msStringCopy), emit =copy(&dest, src) directly.
 // For unary incref (msIncref, msClosureCopy), emit decref-old + assign + incref-new.
 function genCopyRef(increfFn: string, x: Node, y: Node, fieldName: string, buf: Node[], loc: SourceLocation): void {
-	// Nim parity: msStringCopy is 2-arg =copy(&dest, src) — handles destroy-old internally
+	// Reference parity: msStringCopy is 2-arg =copy(&dest, src) — handles destroy-old internally
 	if (increfFn === "msStringCopy") {
 		buf.push(makeExprStmt(makeCall(makeIdent("msStringCopy", loc),
 			[makeHiddenAddr(clonePath(x, loc), loc), clonePath(y, loc)], loc), loc));
@@ -256,7 +259,9 @@ function stringOp(hook: string, xf: Node, yf: Node, fieldName: string, buf: Node
 // --- Inline element loop (reference parity: unrolled loops for elements) ---
 // Generates: var $i = 0; while ($i < arr.length) { fillBody(elem, arr[$i], ...); $i = $i + 1; }
 function genArrayLoop(hook: string, elemType: Type, xf: Node, yf: Node, lctx: LiftCtx, buf: Node[], loc: SourceLocation): void {
-	const counterName = freshTemp(lctx.ctx, "i");
+	const ctr = lctx.tempCounter;
+	lctx.tempCounter = ctr + 1;
+	const counterName = "$i_" + ctr.toString();
 	buf.push(makeVarDecl(counterName, makeNumber(0, loc), DeclKind.Let, loc));
 
 	// reference parity: set nodeType on result.
@@ -463,9 +468,15 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 				defaultOp(hook, xf, yf, buf, loc);
 			}
 		},
-		TypeKind.Ref | TypeKind.Ptr => {
+		TypeKind.Ref => {
 			const cyclic = isCyclicType(fieldType, lctx, visited);
 			refOp(hook, xf, yf, fieldName, cyclic, buf, loc);
+		},
+		TypeKind.Ptr => {
+			// Ptr is unmanaged — no RC, no destroy, no trace
+			// Reference parity: cursor fields skip lifecycle hooks
+			// But copy/sink still need raw pointer assignment
+			defaultOp(hook, xf, yf, buf, loc);
 		},
 		TypeKind.Function => { runtimeOp("msClosure", "msClosureDestroy", "Copy", "WasMoved", "Trace", true, hook, xf, yf, buf, loc); },
 		TypeKind.Map => { runtimeOp("msMap", "msMapFree", "Copy", "WasMoved", "Trace", false, hook, xf, yf, buf, loc); },
@@ -491,7 +502,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			if (fieldType.typeName === "") return;
 			if (nameSetContains(visited, fieldType.typeName)) return;
 			nameSetAdd(visited, fieldType.typeName);
-			const sym = lookupSymbol(lctx.ctx.checkerCtx.table, fieldType.typeName);
+			const sym = lookupSymbol(lctx.checkerCtx.table, fieldType.typeName);
 			if (sym === null) return;
 			fillBody(hook, x, y, fieldName, sym.symbolType, lctx, buf, visited, loc);
 		},
@@ -530,7 +541,7 @@ function typeNeedsHooks(objType: Type, lctx: LiftCtx, loc: SourceLocation): bool
 // ===== Inheritance Helper (Standard reference pattern) =====
 
 function getBaseClass(typeName: string, lctx: LiftCtx): string {
-	const sym = lookupSymbol(lctx.ctx.checkerCtx.table, typeName);
+	const sym = lookupSymbol(lctx.checkerCtx.table, typeName);
 	if (sym === null) return "";
 	if (sym.symbolKind !== SymbolKind.Class) return "";
 	const inner = unwrapRef(sym.symbolType);
@@ -559,7 +570,7 @@ function userHookName(typeName: string, hook: string): string {
 function hasUserDefinedHook(typeName: string, hook: string, lctx: LiftCtx): boolean {
 	const name = userHookName(typeName, hook);
 	if (name === "") return false;
-	const sym = lookupSymbol(lctx.ctx.checkerCtx.table, name);
+	const sym = lookupSymbol(lctx.checkerCtx.table, name);
 	return sym !== null;
 }
 
@@ -780,7 +791,7 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 	if (nameSetContains(lctx.generating, typeName)) return;
 	nameSetAdd(lctx.generating, typeName);
 
-	const sym = lookupSymbol(lctx.ctx.checkerCtx.table, typeName);
+	const sym = lookupSymbol(lctx.checkerCtx.table, typeName);
 	if (sym === null) {
 		// No symbol — may be an anonymous struct type. Skip (handled by ensureTypeHooksForType).
 		return;
@@ -927,7 +938,7 @@ function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx,
 	}
 	// For TypeReference, resolve and recurse
 	if (fieldType.kind === TypeKind.TypeReference && fieldType.typeName !== "") {
-		const sym = lookupSymbol(lctx.ctx.checkerCtx.table, fieldType.typeName);
+		const sym = lookupSymbol(lctx.checkerCtx.table, fieldType.typeName);
 		if (sym !== null) {
 			return fieldEqExpr(aField, bField, sym.symbolType, lctx, loc);
 		}
@@ -981,7 +992,7 @@ function ensureEq(typeName: string, lctx: LiftCtx, loc: SourceLocation): void {
 	nameSetAdd(lctx.generated, typeName + "_eq");
 	claimGlobal(typeName + "_eq");
 
-	const sym = lookupSymbol(lctx.ctx.checkerCtx.table, typeName);
+	const sym = lookupSymbol(lctx.checkerCtx.table, typeName);
 	if (sym === null) return;
 	// Only for value-type objects (interfaces), not ref-type classes (Ref<Object>)
 	if (sym.symbolType.kind !== TypeKind.Struct) return;
@@ -1335,7 +1346,8 @@ export function liftDestructors(program: Node, ctx: TransformContext): Node {
 
 	const pd = program.data as ProgramData;
 	const lctx: LiftCtx = {
-		ctx,
+		checkerCtx: ctx.checkerCtx,
+		tempCounter: ctx.tempCounter,
 		generated: [],
 		generating: [],
 		collector: [],
