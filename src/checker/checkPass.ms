@@ -94,7 +94,7 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 		},
 		NodeKind.DecoratedDecl => {
 			const d = node.data as DecoratedDeclData;
-			checkStmt(ctx, d.decoratedNode);
+			if (d.decoratedNode !== null) checkStmt(ctx, d.decoratedNode);
 		},
 		NodeKind.DestructuringDecl => checkDestructuringDecl(ctx, node),
 		NodeKind.TestDecl => {
@@ -229,9 +229,10 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 
 function checkClassMember(ctx: CheckerContext, node: Node, className: string, classType: Type): void {
 	// DecoratedDecl wrapping a class member — unwrap and check the inner node
+	if (node === null) return;
 	if (node.kind === NodeKind.DecoratedDecl) {
 		const dd = node.data as DecoratedDeclData;
-		checkClassMember(ctx, dd.decoratedNode, className, classType);
+		if (dd.decoratedNode !== null) checkClassMember(ctx, dd.decoratedNode, className, classType);
 		return;
 	}
 	match (node.kind) {
@@ -752,7 +753,7 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 		d.argument = fitNode(ctx, d.argument, returnExpected, retType);
 	}
 	// Track inferred return type (first return wins)
-	if (ctx.matchExprDepth === 0 && ctx.inferredReturn.kind === TypeKind.Unknown) {
+	if (ctx.matchExprDepth === 0 && ctx.inferredReturn !== null && ctx.inferredReturn.kind === TypeKind.Unknown) {
 		ctx.inferredReturn = retType;
 	}
 	// Check against declared return type (skip inside match expression block arms —

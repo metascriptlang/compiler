@@ -149,7 +149,11 @@ function typeToEnvStr(t: Type): string {
 		TypeKind.Float32 => "float32",
 		TypeKind.Function => "msClosure",
 		TypeKind.Struct => (t.typeName !== null && t.typeName !== "") ? t.typeName : "",
-		TypeKind.Ref => (t.typeName !== null && t.typeName !== "") ? t.typeName : "",
+		TypeKind.Ref | TypeKind.Ptr => {
+			// Ref<T>/Ptr<T> store inner type in typeReturn, not typeName
+			if (t.typeReturn !== null) return typeToEnvStr(t.typeReturn);
+			return "";
+		},
 		TypeKind.Enum => (t.typeName !== null && t.typeName !== "") ? t.typeName : "",
 		TypeKind.Array => {
 			if (t.typeReturn !== null) {

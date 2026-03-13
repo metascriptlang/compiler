@@ -35,7 +35,9 @@ import {
 	sgFormatHoverDoc, sgExtractDocComment, sgBuiltinDoc,
 	sgFindImportSource, sgFindExportedDecl,
 	sgQueryAtPosition, sgQueryBySym, sgQueryByName, sgQueryByDefiningModule,
-	SgSuggest, SgCompletionKind,
+	SgSuggest, SgCompletionKind, sgObjectFieldPathAST, sgCompleteObjectFields,
+	findEnclosingObjectLiteral, findNodeAtPosition,
+	sgGetLineOffset, sgIsIdentChar,
 	SgSymbolRef,
 	SgDocumentSymbol,
 	SgSignatureInfo,
@@ -46,7 +48,8 @@ import {
 import { CheckerContext, createContext } from "../../checker/context";
 import { Symbol, SymbolKind, lookupSymbol } from "../../checker/symbol";
 import { Type, TypeKind, unknownType, getProperty, typeNameOf } from "../../checker/types";
-import { Node, IdentifierData, MemberExprData, NodeKind, ProgramData, ImportDeclData, ExportDeclData, SourceLocation, makeLoc } from "../../ast/node";
+import { Node, IdentifierData, MemberExprData, ObjectLiteralData, VariableDeclData, NodeKind, ProgramData, ImportDeclData, ExportDeclData, SourceLocation, makeLoc } from "../../ast/node";
+import { forEachChild } from "../../ast/visitor";
 import { FormatOptions, defaultFormatOptions, applyFmtSection } from "../fmt/options";
 import { printNode as printFormattedNode } from "../fmt/printer";
 import { formatDoc } from "../fmt/layout";
@@ -146,6 +149,100 @@ function resolveImportForLsp(db: TransAmDb, basePath: string, importSpec: string
 	}
 
 	return "";
+}
+
+// ===== Object Literal Type Resolution (AST-Based) =====
+
+// Find the root struct type for an object literal by walking the AST.
+// Finds the outermost ObjectLiteral ancestor, then looks for the VariableDecl
+// that contains it to get the declared type via sgRecords.
+function lspFindObjectLiteralTypeAST(program: Node, line: number, col: number, ctx: CheckerContext): Type {
+	// Find the outermost ObjectLiteral ancestor at cursor position
+	const rootObj = lspFindRootObjectLiteral(program, line, col);
+	if (rootObj === null) return null;
+	// Find the VariableDecl that contains this ObjectLiteral
+	const varDecl = lspFindParentVarDecl(program, rootObj);
+	if (varDecl === null) return null;
+	// Query sgRecords for the variable's type
+	const sg = sgQueryAtPosition(ctx, varDecl.location.line, varDecl.location.column);
+	if (sg !== null) {
+		return sg.symType;
+	}
+	return null;
+}
+
+// Find the outermost ObjectLiteral containing the cursor.
+// If nested `{ fmt: { | } }`, returns the outer `{ }`.
+// Uses findEnclosingObjectLiteral (from suggest.ms) which has subtree-touch validation,
+// then walks up to find the outermost ancestor ObjectLiteral.
+function lspFindRootObjectLiteral(root: Node, line: number, col: number): Node {
+	// Find the innermost ObjectLiteral first (validated by subtree check)
+	const innermost = findEnclosingObjectLiteral(root, line, col);
+	if (innermost === null) return null as unknown as Node;
+	// Walk from root to find the outermost ObjectLiteral that is an ancestor of innermost
+	const outermost = lspFindOutermostObjLitAncestor(root, innermost);
+	return outermost !== null ? outermost : innermost;
+}
+
+// Find the outermost ObjectLiteral node that is an ancestor of target.
+function lspFindOutermostObjLitAncestor(root: Node, target: Node): Node {
+	if (root === null) return null as unknown as Node;
+	if (root === target) return null as unknown as Node;
+	let isAncestor = false;
+	let childResult = null as unknown as Node;
+	forEachChild(root, (child: Node): void => {
+		if (!isAncestor) {
+			if (child === target) {
+				isAncestor = true;
+			} else {
+				const r = lspFindOutermostObjLitAncestor(child, target);
+				if (r !== null) {
+					childResult = r;
+					isAncestor = true;
+				} else if (sgNodeContains(child, target)) {
+					isAncestor = true;
+				}
+			}
+		}
+	});
+	if (isAncestor && root.kind === NodeKind.ObjectLiteral) {
+		return root;
+	}
+	return childResult;
+}
+
+// Check if node contains target anywhere in its subtree.
+function sgNodeContains(node: Node, target: Node): boolean {
+	if (node === null) return false;
+	if (node === target) return true;
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found && sgNodeContains(child, target)) {
+			found = true;
+		}
+	});
+	return found;
+}
+
+// Find the VariableDecl AST node that contains a given ObjectLiteral node.
+function lspFindParentVarDecl(root: Node, target: Node): Node {
+	if (root === null) return null as unknown as Node;
+	if (root.kind === NodeKind.VariableDecl) {
+		const vd = root.data as VariableDeclData;
+		if (vd.initializer === target) {
+			return root;
+		}
+	}
+	let found = null as unknown as Node;
+	forEachChild(root, (child: Node): void => {
+		if (found === null) {
+			const r = lspFindParentVarDecl(child, target);
+			if (r !== null) {
+				found = r;
+			}
+		}
+	});
+	return found;
 }
 
 // ===== Format Options from build.ms =====
@@ -731,23 +828,51 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 		return lspResponse(id, joinJsonItems(filtered));
 	}
 
-	const kind = sgDetectCompletionContext(source, pos.line, pos.col);
-
 	const program = dbParse(db, path);
 	if (program === null) return lspResponse(id, "[]");
+
+	// AST-based context detection (1-based line, 1-based col for AST)
+	const kind = sgDetectCompletionContext(program, source, pos.line, pos.col + 1);
 
 	const ctx = dbTypeCheck(db, path);
 	if (ctx === null) return lspResponse(id, "[]");
 
-	// For MemberAccess, try to resolve receiver type
+	// For MemberAccess, resolve receiver type via AST MemberExpr node
 	let receiverType: Type = null;
 	if (kind === SgCompletionKind.MemberAccess) {
-		const dotCol = pos.col - prefix.length - 1;
-		if (dotCol >= 0) {
-			const suggest = sgQueryAtPosition(ctx, pos.line, dotCol);
-			if (suggest !== null) {
-				receiverType = suggest.symType;
+		// findNodeAtPosition returns the MemberExpr for both `config.` and `config.x|`
+		const node = findNodeAtPosition(program, pos.line, pos.col + 1);
+		if (node !== null && node.kind === NodeKind.MemberExpr) {
+			const md = node.data as MemberExprData;
+			if (md.object !== null) {
+				const objLoc = md.object.location;
+				const sg = sgQueryAtPosition(ctx, objLoc.line, objLoc.column);
+				if (sg !== null) {
+					receiverType = sg.symType;
+				}
 			}
+		}
+	}
+
+	// For ObjectField, use AST to find nesting path and root type
+	if (kind === SgCompletionKind.ObjectField) {
+		const fieldPath = sgObjectFieldPathAST(program, pos.line, pos.col + 1);
+		// Get existing keys from the enclosing ObjectLiteral AST node
+		const enclosingObj = findEnclosingObjectLiteral(program, pos.line, pos.col + 1);
+		let existingKeys: string[] = [];
+		if (enclosingObj !== null) {
+			existingKeys = (enclosingObj.data as ObjectLiteralData).keys;
+		}
+		// Find root type via lspFindObjectLiteralTypeAST
+		const rootType = lspFindObjectLiteralTypeAST(program, pos.line, pos.col + 1, ctx);
+		if (rootType !== null) {
+			const objCandidates = sgCompleteObjectFields(ctx, prefix, rootType, fieldPath, existingKeys);
+			const objItems = formatCompletionItemsArray(objCandidates, db, path);
+			cache.uri = pos.uri;
+			cache.line = pos.line;
+			cache.prefix = prefix;
+			cache.items = objItems;
+			return lspResponse(id, joinJsonItems(objItems));
 		}
 	}
 
@@ -1476,6 +1601,20 @@ test "completion cache miss on different line" {
 	const params2 = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":2,\"character\":2}}";
 	handleCompletion("11", params2, db, cache);
 	assert cache.line !== cachedLine;
+}
+
+test "member access completion returns struct fields" {
+	const src = "interface Foo {\n\tx: number;\n\ty: string;\n}\nconst f: Foo = { x: 1, y: \"hi\" };\nf.";
+	const db = testDb("file:///test.ms", src);
+	// line 5 (0-based), character 2 (right after "f.")
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":5,\"character\":2}}";
+	const r = handleCompletion("20", params, db, testCache());
+	assert lspGetNumberField(r, "id") === 20;
+	// Result contains x and y field completions
+	assert r.indexOf("\"label\":\"x\"") >= 0;
+	assert r.indexOf("\"label\":\"y\"") >= 0;
+	assert r.indexOf("\"detail\":\"number\"") >= 0;
+	assert r.indexOf("\"detail\":\"string\"") >= 0;
 }
 
 test "returns location for known symbol" {

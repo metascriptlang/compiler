@@ -798,6 +798,9 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 		// Unwrap DecoratedDecl to get the inner declaration
 		if (member.kind === NodeKind.DecoratedDecl) {
 			const dd = member.data as DecoratedDeclData;
+			if (dd.decoratedNode === null) {
+				continue;
+			}
 			member = dd.decoratedNode;
 		}
 		if (member.kind === NodeKind.MethodDecl) {
@@ -824,12 +827,12 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 			const fnType = createFunction(paramTypes, md.methodParams, returnType);
 			// Use resolvedSym set by collectClassMethod — avoids overload ambiguity with lookupSymbol
 			const methodSym = d.classBody[mi].resolvedSym;
-			if (methodSym !== null && methodSym.symbolType.typeName !== "") {
+			if (methodSym !== null && methodSym.symbolType !== null && methodSym.symbolType.typeName !== "") {
 				fnType.typeName = methodSym.symbolType.typeName;
 			}
 			member.nodeType = fnType;
 			// Update the method symbol's type with resolved params/return
-			if (methodSym !== null) {
+			if (methodSym !== null && methodSym.symbolType !== null) {
 				assignType(methodSym.symbolType, fnType);
 			}
 		} else if (member.kind === NodeKind.PropertyDecl) {

@@ -47,7 +47,7 @@ import {
 	internString, lookupInterned, internedCount
 } from "./intern";
 
-import { parseSource } from "../../parser/statements/validation";
+import { parseSource, parseSourceLenient } from "../../parser/statements/validation";
 import { checkProgram, checkProgramWithRegistryCancellable, buildPreludeContext } from "../../checker/index";
 import { transformProgram } from "../../transform/index";
 import { analyzeProgram } from "../../analyzer/index";
@@ -201,7 +201,8 @@ export function dbParse(db: TransAmDb, filePath: string): Node {
 	recordDurability(db.depStack, fileDur);
 
 	const source = getFileText(db.fileInput, fileId);
-	const parseResult = parseSource(source);
+	// Use lenient parse: LSP needs partial ASTs from incomplete code (e.g. "config.")
+	const parseResult = parseSourceLenient(source);
 	let program = null as unknown as Node;
 	if (parseResult.ok) {
 		program = parseResult.value;
@@ -367,7 +368,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	// Reusing the cached parse tree causes stale/missing sgRecords on recheck,
 	// leading to unstable goto-definition on enum members.
 	const freshSource = getFileText(db.fileInput, fileId);
-	const freshParse = parseSource(freshSource);
+	const freshParse = parseSourceLenient(freshSource);
 	const program = freshParse.ok ? freshParse.value : null as unknown as Node;
 	if (program === null) return null as unknown as CheckerContext;
 

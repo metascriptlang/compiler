@@ -233,7 +233,7 @@ function collectClassMethod(ctx: CheckerContext, className: string, member: Node
 		methodNode = member;
 	} else if (member.kind === NodeKind.DecoratedDecl) {
 		const dd = member.data as DecoratedDeclData;
-		if (dd.decoratedNode.kind === NodeKind.MethodDecl) {
+		if (dd.decoratedNode !== null && dd.decoratedNode.kind === NodeKind.MethodDecl) {
 			methodNode = dd.decoratedNode;
 			const info = extractDecoratorInfo(member);
 			builtinKind = info.builtinKind;
@@ -632,6 +632,7 @@ function collectExport(ctx: CheckerContext, node: Node): void {
 
 // Extract the name from any declaration node
 export function getDeclName(node: Node): string {
+	if (node === null) return "";
 	if (node.kind === NodeKind.DecoratedDecl) {
 		const dd = node.data as DecoratedDeclData;
 		return getDeclName(dd.decoratedNode);

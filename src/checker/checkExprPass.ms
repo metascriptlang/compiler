@@ -325,12 +325,13 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 					}
 					fi = fi + 1;
 				}
-				// Excess property check: flag keys not in the expected struct
+				// Excess property + duplicate field check
 				if (objExpected.typeNames !== null) {
 					let ki = 0;
 					while (ki < d.keys.length) {
 						const key = d.keys[ki];
 						if (key !== "..." && key !== "__computed__") {
+							// Check field exists in type
 							let found = false;
 							let ni = 0;
 							while (ni < objExpected.typeNames.length) {
@@ -340,6 +341,16 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 							if (!found && d.keyLocations !== null && ki < d.keyLocations.length) {
 								const kl = d.keyLocations[ki];
 								addErrorRange(ctx, "'" + key + "' does not exist in type '" + containerName + "'", kl.line, kl.column, kl.column + key.length);
+							}
+							// Check duplicate: same key appeared earlier
+							let di = 0;
+							while (di < ki) {
+								if (d.keys[di] === key && d.keyLocations !== null && ki < d.keyLocations.length) {
+									const kl = d.keyLocations[ki];
+									addErrorRange(ctx, "field initialized twice: '" + key + "'", kl.line, kl.column, kl.column + key.length);
+									break;
+								}
+								di = di + 1;
 							}
 						}
 						ki = ki + 1;
@@ -840,7 +851,7 @@ function checkNewExpr(ctx: CheckerContext, node: Node): Type {
 		checkExpr(ctx, d.newArguments[ai], argExpected);
 		ai = ai + 1;
 	}
-	if (resolvedType.kind === TypeKind.Struct || resolvedType.kind === TypeKind.Ref) {
+	if (resolvedType !== null && (resolvedType.kind === TypeKind.Struct || resolvedType.kind === TypeKind.Ref)) {
 		return resolvedType;
 	}
 	return unknownType();
@@ -1485,6 +1496,7 @@ function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, d: Obje
 function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 	const d = node.data as MemberExprData;
 	const objType = checkExpr(ctx, d.object, null);
+	if (objType === null) return unknownType();
 	// Ref parity: strictNotNil — warn on unguarded class (heap pointer) member access
 	if (ctx.strictNullChecks && objType.kind === TypeKind.Ref && d.object.kind === NodeKind.Identifier) {
 		const objName = (d.object.data as IdentifierData).name;

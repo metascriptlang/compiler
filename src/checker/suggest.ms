@@ -15,14 +15,14 @@ import { Node, NodeKind, SourceLocation, makeLoc, ProgramData, DeclKind,
 	TypeAliasDeclData, ExportDeclData, ImportDeclData, HiddenDerefData,
 	HiddenStdConvData, MethodDeclData, PropertyDeclData, ConstructorDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { Type, TypeKind, typeNameOf, getProperty,
+import { Type, TypeKind, typeNameOf, getProperty, unwrapRef,
 	numberType, stringType, booleanType, voidType, nullType,
 	unknownType, neverType, errorType } from "./types";
 import { Symbol, SymbolKind, SymbolTable, Scope, lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, findAllExtensionsByName, filterExtsByReceiverType, getExtFnType, stripReceiverParam, SgSymRecord } from "./context";
 // (utils/string imports removed — using native .slice/.charAt)
 import { checkProgram } from "./checkPass";
-import { parseSource } from "../parser/statements/validation";
+import { parseSource, parseSourceLenient } from "../parser/statements/validation";
 // Import parseProgram to trigger callback registration (side-effect import)
 import { parseProgram } from "../parser/statements/core";
 
@@ -56,6 +56,7 @@ export enum SgCompletionKind {
 	Identifier,
 	MemberAccess,
 	TypeAnnotation,
+	ObjectField,
 }
 
 export interface SgDocumentSymbol {
@@ -762,7 +763,7 @@ export function sgCollectDiagnostics(ctx: CheckerContext): SgDiagnostic[] {
 
 // ===== Completion Helpers =====
 
-function sgIsIdentChar(ch: string): boolean {
+export function sgIsIdentChar(ch: string): boolean {
 	if (ch === "_") return true;
 	const identChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 	for (let i = 0; i < identChars.byteLength; i = i + 1) {
@@ -771,7 +772,7 @@ function sgIsIdentChar(ch: string): boolean {
 	return false;
 }
 
-function sgGetLineOffset(source: string, line: number): number {
+export function sgGetLineOffset(source: string, line: number): number {
 	// line is 1-indexed. Returns offset of the first char on that line.
 	let offset = 0;
 	let currentLine = 1;
@@ -879,27 +880,255 @@ function sgSortSuggestions(list: SgSuggest[]): void {
 	}
 }
 
-// ===== sgDetectCompletionContext — scan backwards from cursor =====
+// ===== AST-Based Completion Context Detection =====
+// Walks the parsed AST to determine completion context by node kind.
+// Aligned with Nim (nkDotExpr/nkObjConstr) and rust-analyzer (classify_name_ref).
 
-export function sgDetectCompletionContext(source: string, line: number, col: number): SgCompletionKind {
+// Find the innermost AST node at or before the given 1-based line:col.
+// Walks depth-first; among matches, prefers the one with largest column (closest to cursor).
+export function findNodeAtPosition(root: Node, line: number, col: number): Node {
+	if (root === null) return null as unknown as Node;
+	let best = null as unknown as Node;
+	if (root.location.line === line && root.location.column <= col) {
+		best = root;
+	}
+	forEachChild(root, (child: Node): void => {
+		const found = findNodeAtPosition(child, line, col);
+		if (found !== null) {
+			if (best === null || found.location.column >= best.location.column) {
+				best = found;
+			}
+		}
+	});
+	return best;
+}
+
+// Find a MemberExpr with empty property on the given line where cursor >= dot column.
+// Targeted search for incomplete dot access: `config.|`
+function findIncompleteMemberExpr(root: Node, line: number, col: number): Node {
+	if (root === null) return null as unknown as Node;
+	if (root.kind === NodeKind.MemberExpr) {
+		const d = root.data as MemberExprData;
+		if (d.property === "" && root.location.line === line && root.location.column <= col) {
+			return root;
+		}
+	}
+	let found = null as unknown as Node;
+	forEachChild(root, (child: Node): void => {
+		if (found === null) {
+			const r = findIncompleteMemberExpr(child, line, col);
+			if (r !== null) {
+				found = r;
+			}
+		}
+	});
+	return found;
+}
+
+// Find the innermost ObjectLiteral node containing the cursor position.
+// Returns null if cursor is not inside any ObjectLiteral.
+// Uses subtree check: an ObjectLiteral "contains" the cursor only if the cursor's
+// deepest node is inside that ObjectLiteral's subtree (prevents false positives
+// on closed ObjectLiterals from earlier lines).
+export function findEnclosingObjectLiteral(root: Node, line: number, col: number): Node {
+	if (root === null) return null as unknown as Node;
+	let result = null as unknown as Node;
+	if (root.kind === NodeKind.ObjectLiteral) {
+		// Same-line check: cursor is on ObjectLiteral's opening line
+		if (root.location.line === line && root.location.column <= col) {
+			result = root;
+		}
+		// Multi-line check: ObjectLiteral starts before cursor line.
+		// Only match if a descendant of this ObjectLiteral touches cursor line.
+		if (root.location.line < line && sgSubtreeTouchesLine(root, line)) {
+			result = root;
+		}
+	}
+	// Check children — a deeper ObjectLiteral wins
+	forEachChild(root, (child: Node): void => {
+		const found = findEnclosingObjectLiteral(child, line, col);
+		if (found !== null) {
+			result = found;
+		}
+	});
+	return result;
+}
+
+// Check if any descendant of node has location.line === targetLine.
+// Used to verify a multi-line ObjectLiteral actually spans to the cursor line.
+function sgSubtreeTouchesLine(node: Node, targetLine: number): boolean {
+	if (node === null) return false;
+	let touches = false;
+	forEachChild(node, (child: Node): void => {
+		if (!touches) {
+			if (child.location.line === targetLine) {
+				touches = true;
+			} else if (child.location.line < targetLine) {
+				// Child is before target — check its subtree
+				if (sgSubtreeTouchesLine(child, targetLine)) {
+					touches = true;
+				}
+			}
+		}
+	});
+	return touches;
+}
+
+// Find the ObjectLiteral nesting path from cursor to root.
+// For `{ fmt: { | } }`, returns ["fmt"] (the key whose value is the inner ObjectLiteral).
+// Walks from cursor's enclosing ObjectLiteral outward through parent ObjectLiterals.
+export function sgObjectFieldPathAST(root: Node, line: number, col: number): string[] {
+	const path: string[] = [];
+	// Collect all ObjectLiteral ancestors containing cursor, deepest first
+	sgCollectObjLiteralChain(root, line, col, path);
+	return path;
+}
+
+// Recursively find ObjectLiteral nesting chain. For each nested ObjectLiteral
+// that is a property value of an outer ObjectLiteral, record the parent's key name.
+function sgCollectObjLiteralChain(node: Node, line: number, col: number, path: string[]): boolean {
+	if (node === null) return false;
+	if (node.kind === NodeKind.ObjectLiteral) {
+		const d = node.data as ObjectLiteralData;
+		// Check each property value — if cursor is inside a nested ObjectLiteral value,
+		// record the key name for this level
+		for (let i = 0; i < d.properties.length; i = i + 1) {
+			const propVal = d.properties[i];
+			if (propVal !== null && propVal.kind === NodeKind.ObjectLiteral) {
+				if (sgCollectObjLiteralChain(propVal, line, col, path)) {
+					// Cursor is inside this nested ObjectLiteral — add parent key
+					if (i < d.keys.length) {
+						path.push(d.keys[i]);
+					}
+					return true;
+				}
+			} else if (propVal !== null) {
+				// Non-ObjectLiteral property — recurse for deeper nesting
+				if (sgCollectObjLiteralChain(propVal, line, col, path)) {
+					return true;
+				}
+			}
+		}
+		// Cursor is directly inside this ObjectLiteral (not in a nested one)
+		if (node.location.line < line || (node.location.line === line && node.location.column <= col)) {
+			return true;
+		}
+	}
+	// Recurse into non-ObjectLiteral children
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found && sgCollectObjLiteralChain(child, line, col, path)) {
+			found = true;
+		}
+	});
+	return found;
+}
+
+// Detect completion context by walking the AST.
+// All context detection is AST-based except TypeAnnotation (type annotations are
+// strings in our AST, not positioned nodes — the `:` token has no AST representation).
+export function sgDetectCompletionContext(program: Node, source: string, line: number, col: number): SgCompletionKind {
+	// AST-based: find the deepest node at cursor position.
+	// MemberExpr at cursor → member access. Handles both:
+	//   - Incomplete dot: `config.|` (property === "")
+	//   - Partial typing: `config.x|` (MemberExpr is deepest node, property === "x")
+	// findNodeAtPosition returns MemberExpr because its location (at the dot)
+	// has the largest column among matching nodes — the property string is not a child node.
+	const node = findNodeAtPosition(program, line, col);
+	if (node !== null && node.kind === NodeKind.MemberExpr) {
+		return SgCompletionKind.MemberAccess;
+	}
+
+	// AST-based: cursor inside an ObjectLiteral → field completion.
+	// Uses subtree-touch validation to reject closed ObjectLiterals on earlier lines.
+	const objNode = findEnclosingObjectLiteral(program, line, col);
+	if (objNode !== null) {
+		return SgCompletionKind.ObjectField;
+	}
+
+	// TypeAnnotation: type annotations are stored as strings (declType, fnReturnType),
+	// not positioned AST nodes. The `:` token position is absent from our AST.
+	// Token-level scan for `:` — same technique as rust-analyzer's token analysis.
 	const lineOffset = sgGetLineOffset(source, line);
 	const cursorOffset = lineOffset + col;
-	// Scan backwards past any identifier chars (the prefix being typed)
 	let pos = cursorOffset - 1;
 	while (pos >= 0 && sgIsIdentChar(source.charAt(pos))) {
 		pos = pos - 1;
 	}
-	// Skip whitespace
-	while (pos >= 0 && source.charAt(pos) === " ") {
+	while (pos >= 0 && (source.charAt(pos) === " " || source.charAt(pos) === "\t")) {
 		pos = pos - 1;
 	}
-	// Check the character just before the identifier
-	if (pos >= 0) {
-		const ch = source.charAt(pos);
-		if (ch === ".") return SgCompletionKind.MemberAccess;
-		if (ch === ":") return SgCompletionKind.TypeAnnotation;
+	if (pos >= 0 && source.charAt(pos) === ":") {
+		return SgCompletionKind.TypeAnnotation;
 	}
+
 	return SgCompletionKind.Identifier;
+}
+
+// Get existing field keys from the ObjectLiteral node at cursor position.
+// Reads keys directly from ObjectLiteralData — no text scanning needed.
+function sgExistingFieldKeysAST(program: Node, line: number, col: number): string[] {
+	const objNode = findEnclosingObjectLiteral(program, line, col);
+	if (objNode === null) return [];
+	const d = objNode.data as ObjectLiteralData;
+	return d.keys;
+}
+
+// Complete object literal fields: given a struct type and nesting path,
+// walk to the nested type and suggest its fields.
+export function sgCompleteObjectFields(ctx: CheckerContext, prefix: string, rootType: Type, fieldPath: string[], existingKeys: string[]): SgSuggest[] {
+	const result: SgSuggest[] = [];
+	// Walk the nesting path to find the target struct type
+	let t = rootType;
+	if (t !== null && (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr)) {
+		t = unwrapRef(t);
+	}
+	for (let pi = 0; pi < fieldPath.length; pi = pi + 1) {
+		if (t === null || t.kind !== TypeKind.Struct) return result;
+		const fieldName = fieldPath[pi];
+		let found = false;
+		if (t.typeNames !== null) {
+			let ni = 0;
+			while (ni < t.typeNames.length) {
+				if (t.typeNames[ni] === fieldName) {
+					if (ni < t.typeChildren.length) {
+						t = t.typeChildren[ni];
+						if (t !== null && (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr)) {
+							t = unwrapRef(t);
+						}
+						found = true;
+					}
+					break;
+				}
+				ni = ni + 1;
+			}
+		}
+		if (!found) return result;
+	}
+	if (t === null || t.kind !== TypeKind.Struct || t.typeNames === null) return result;
+	// Suggest fields from the struct type, excluding already-specified keys
+	for (let fi = 0; fi < t.typeNames.length; fi = fi + 1) {
+		const fname = t.typeNames[fi];
+		// Skip already-specified fields
+		let already = false;
+		for (let ei = 0; ei < existingKeys.length; ei = ei + 1) {
+			if (existingKeys[ei] === fname) { already = true; }
+		}
+		if (already) continue;
+		const ps = sgPrefixMatch(prefix, fname);
+		if (ps > 0) {
+			const ft = fi < t.typeChildren.length ? t.typeChildren[fi] : unknownType();
+			const loc = makeLoc(0, 0);
+			const item: SgSuggest = {
+				sym: null, name: fname, kind: SymbolKind.Property, symType: ft,
+				location: loc, modulePath: "", containerName: "",
+				prefixScore: ps, scopeDepth: 0, contextFit: true,
+				isExported: false, isMutable: false, usageCount: 0,
+			};
+			result.push(item);
+		}
+	}
+	return result;
 }
 
 // ===== sgGetPrefix — extract word fragment at cursor =====
@@ -919,14 +1148,19 @@ export function sgGetPrefix(source: string, line: number, col: number): string {
 
 function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverType: Type): SgSuggest[] {
 	const result: SgSuggest[] = [];
+	// Unwrap Ref/Ptr to get inner struct (class instances are Ref<Struct>)
+	let rt = receiverType;
+	if (rt !== null && (rt.kind === TypeKind.Ref || rt.kind === TypeKind.Ptr)) {
+		rt = unwrapRef(rt);
+	}
 	// Dot completion: properties from receiver type
-	if (receiverType !== null && receiverType.kind === TypeKind.Struct) {
-		for (let i = 0; i < receiverType.typeNames.length; i = i + 1) {
-			const propName = receiverType.typeNames[i];
+	if (rt !== null && rt.kind === TypeKind.Struct) {
+		for (let i = 0; i < rt.typeNames.length; i = i + 1) {
+			const propName = rt.typeNames[i];
 			const ps = sgPrefixMatch(prefix, propName);
 			if (ps > 0) {
-				const propType = i < receiverType.typeChildren.length
-					? receiverType.typeChildren[i] : unknownType();
+				const propType = i < rt.typeChildren.length
+					? rt.typeChildren[i] : unknownType();
 				const loc = makeLoc(0, 0);
 				const item: SgSuggest = {
 					sym: null, name: propName, kind: SymbolKind.Property, symType: propType,
@@ -939,14 +1173,14 @@ function sgCompleteMemberAccess(ctx: CheckerContext, prefix: string, receiverTyp
 		}
 	}
 	// Enum member completion
-	if (receiverType !== null && receiverType.kind === TypeKind.Enum) {
-		for (let i = 0; i < receiverType.typeNames.length; i = i + 1) {
-			const memberName = receiverType.typeNames[i];
+	if (rt !== null && rt.kind === TypeKind.Enum) {
+		for (let i = 0; i < rt.typeNames.length; i = i + 1) {
+			const memberName = rt.typeNames[i];
 			const ps = sgPrefixMatch(prefix, memberName);
 			if (ps > 0) {
 				const loc = makeLoc(0, 0);
 				const item: SgSuggest = {
-					sym: null, name: memberName, kind: SymbolKind.Property, symType: receiverType,
+					sym: null, name: memberName, kind: SymbolKind.Property, symType: rt,
 					location: loc, modulePath: "", containerName: "",
 					prefixScore: ps, scopeDepth: 0, contextFit: false,
 					isExported: false, isMutable: false, usageCount: 0,
@@ -2010,26 +2244,43 @@ test "empty errors" {
 }
 
 test "dot triggers MemberAccess" {
-	// "foo.b" — cursor at col 5 (after 'b')
-	assert sgDetectCompletionContext("foo.b", 1, 5) === SgCompletionKind.MemberAccess;
+	// "foo.b" — cursor at col 5 (after 'b'). AST has MemberExpr at dot.
+	const src1 = "foo.b";
+	const pr1 = parseSource(src1);
+	const prog1 = pr1.ok ? pr1.value : null as unknown as Node;
+	assert sgDetectCompletionContext(prog1, src1, 1, 5) === SgCompletionKind.MemberAccess;
 }
 
 test "dot with no prefix" {
-	// "foo." — cursor at col 4 (right after '.')
-	assert sgDetectCompletionContext("foo.", 1, 4) === SgCompletionKind.MemberAccess;
+	// "foo." — cursor at col 4 (right after '.'). AST has MemberExpr with property=""
+	const src2 = "foo.";
+	const pr2 = parseSourceLenient(src2);
+	const prog2 = pr2.ok ? pr2.value : null as unknown as Node;
+	assert sgDetectCompletionContext(prog2, src2, 1, 4) === SgCompletionKind.MemberAccess;
 }
 
 test "colon triggers TypeAnnotation" {
 	// "x: num" — cursor at col 6
-	assert sgDetectCompletionContext("x: num", 1, 6) === SgCompletionKind.TypeAnnotation;
+	const src3 = "x: num";
+	const pr3 = parseSource(src3);
+	const prog3 = pr3.ok ? pr3.value : null as unknown as Node;
+	assert sgDetectCompletionContext(prog3, src3, 1, 6) === SgCompletionKind.TypeAnnotation;
 }
 
 test "bare identifier" {
 	// "con" — cursor at col 3
-	assert sgDetectCompletionContext("con", 1, 3) === SgCompletionKind.Identifier;
+	const src4 = "con";
+	const pr4 = parseSource(src4);
+	const prog4 = pr4.ok ? pr4.value : null as unknown as Node;
+	assert sgDetectCompletionContext(prog4, src4, 1, 3) === SgCompletionKind.Identifier;
 }
 
-test "start of line" { assert sgDetectCompletionContext("x", 1, 0) === SgCompletionKind.Identifier; }
+test "start of line" {
+	const src5 = "x";
+	const pr5 = parseSource(src5);
+	const prog5 = pr5.ok ? pr5.value : null as unknown as Node;
+	assert sgDetectCompletionContext(prog5, src5, 1, 0) === SgCompletionKind.Identifier;
+}
 
 test "extracts prefix" { assert sgGetPrefix("foo.bar", 1, 7) === "bar"; }
 

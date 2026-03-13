@@ -23,6 +23,17 @@ export function parseSource(input: string): NodeResult {
 	return Result.ok(pr.value);
 }
 
+// Lenient parse: returns partial AST even when there are parse errors.
+// Used by LSP — incomplete code (e.g. "config.") must still produce a usable AST.
+export function parseSourceLenient(input: string): NodeResult {
+	const lr = lex(input);
+	if (!lr.ok) return Result.err(lr.error);
+	const state = createState(lr.value);
+	const pr = callStateProgramParser(state);
+	if (!pr.ok) return Result.err(pr.error);
+	return Result.ok(pr.value);
+}
+
 export function programOk(input: string): boolean {
 	const pr = parseSource(input);
 	return pr.ok;

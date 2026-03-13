@@ -58,7 +58,7 @@ function lowerNullableNode(node: Node): Node {
 	//    Skip .present and .value (direct Maybe struct fields)
 	if (node.kind === NodeKind.MemberExpr) {
 		const d = node.data as MemberExprData;
-		if (d.property !== "present" && d.property !== "value"
+		if (d.object !== null && d.property !== "present" && d.property !== "value"
 			&& d.object.nodeType !== null && isMaybeType(d.object.nodeType)) {
 			d.object = makeMember(d.object, "value", loc);
 		}

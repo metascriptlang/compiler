@@ -79,15 +79,17 @@ function parseExprWithPrec(state: ParserState, minPrec: number): ExprResult {
 		if (token.kind === TokenKind.Dot) {
 			advance(state);
 			const prop = current(state);
+			let propName = "";
 			if (isIdentOrKeyword(prop.kind)) {
+				propName = prop.value;
 				advance(state);
-				const memberData: NodeData = {
-					object: left,
-					property: prop.value,
-					isOptional: false
-				};
-				left = createNode(NodeKind.MemberExpr, memberData, token);
 			}
+			const memberData: NodeData = {
+				object: left,
+				property: propName,
+				isOptional: false
+			};
+			left = createNode(NodeKind.MemberExpr, memberData, token);
 			continue;
 		}
 
@@ -95,10 +97,12 @@ function parseExprWithPrec(state: ParserState, minPrec: number): ExprResult {
 		if (token.kind === TokenKind.QuestionDot) {
 			advance(state);
 			const prop = current(state);
+			let optPropName = "";
 			if (isIdentOrKeyword(prop.kind)) {
+				optPropName = prop.value;
 				advance(state);
-				left = createNode(NodeKind.MemberExpr, { object: left, property: prop.value, isOptional: true }, token);
 			}
+			left = createNode(NodeKind.MemberExpr, { object: left, property: optPropName, isOptional: true }, token);
 			continue;
 		}
 
