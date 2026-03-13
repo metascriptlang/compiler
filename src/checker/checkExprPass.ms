@@ -286,16 +286,32 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 				const containerName = objExpected.typeName !== null ? objExpected.typeName : "";
 				let fi = 0;
 				while (fi < d.properties.length) {
-					const fieldExpected = (fi < objExpected.typeChildren.length)
-						? objExpected.typeChildren[fi]
-						: null;
+					// Name-based field lookup: match literal key against struct typeNames
+					let fieldExpected: Type = null;
+					const keyName = fi < d.keys.length ? d.keys[fi] : "";
+					if (keyName !== "" && keyName !== "..." && keyName !== "__computed__"
+						&& objExpected.typeNames !== null) {
+						let ni = 0;
+						while (ni < objExpected.typeNames.length) {
+							if (objExpected.typeNames[ni] === keyName) {
+								if (ni < objExpected.typeChildren.length) {
+									fieldExpected = objExpected.typeChildren[ni];
+								}
+								break;
+							}
+							ni = ni + 1;
+						}
+					}
+					// Fallback: positional match for spread/computed keys
+					if (fieldExpected === null && (keyName === "..." || keyName === "__computed__")
+						&& fi < objExpected.typeChildren.length) {
+						fieldExpected = objExpected.typeChildren[fi];
+					}
 					checkExpr(ctx, d.properties[fi], fieldExpected);
-					// Record property key as reference to struct field (TypeScript: "(property) Person.name: string")
+					// Record property key as reference to struct field
 					if (fi < d.keys.length && d.keyLocations !== null && fi < d.keyLocations.length && fieldExpected !== null) {
-						const keyName = d.keys[fi];
 						const keyLoc = d.keyLocations[fi];
 						if (keyName !== "..." && keyName !== "__computed__" && keyLoc.line > 0) {
-							// Look up field symbol: TypeName_fieldName convention
 							let fieldSym: Symbol = null;
 							if (containerName !== "") {
 								fieldSym = lookupSymbol(ctx.table, containerName + "_" + keyName);
