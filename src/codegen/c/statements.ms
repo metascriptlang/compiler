@@ -473,10 +473,9 @@ function genReturnStmt(g: CGen, p: CProc, node: Node): void {
 	if (d.argument !== null) {
 		const snippet = genExpr(g, p, d.argument);
 		if (isNrvo) {
-			// G4 fix: compound literals need (StructType) cast for C99
-			// If genObjectLiteral didn't add the cast (nodeType was null), add it here
-			const needsCast = d.argument.kind === NodeKind.ObjectLiteral && snippet.length > 0 && snippet.charAt(0) !== "(";
-			if (needsCast && p.returnType !== null) {
+			// C99 compound literal: (Type){ .f = v } needs the (Type) prefix.
+			// Hoisted temp variable: _lit3_ does NOT — struct-to-struct cast is invalid C.
+			if (d.argument.kind === NodeKind.ObjectLiteral && snippet.length > 0 && snippet.charAt(0) === "{" && p.returnType !== null) {
 				const castType = getTypeDesc(g, p.returnType);
 				emitStmtsLine(p, `*__result = (${castType})${snippet};`);
 			} else {

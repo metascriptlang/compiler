@@ -35,7 +35,7 @@ import {
 	scoreCandidatePriority, isNoMatch, emptyCandidateScore, cmpCandidates,
 } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
-import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation, buildTypeArgKey } from "./resolvePass";
+import { resolveAnnotation, resolveAnnotationLoc, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation, buildTypeArgKey } from "./resolvePass";
 import { parseNumberLiteral, findChar, splitTopLevel } from "../utils/string";
 import { findCallTypeArg, getExplicitTypeArg, getGenericDecl } from "../parser/context";
 import {
@@ -459,7 +459,8 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 		NodeKind.TypeAssertion => {
 			let d = node.data as TypeAssertionData;
 			let srcType = checkExpr(ctx, d.asExpr, null);
-			const targetType = (d.asType !== "") ? resolveAnnotation(d.asType, ctx) : unknownType();
+			const asLoc = node.typeExpr !== null ? node.typeExpr.location : node.location;
+			const targetType = (d.asType !== "") ? resolveAnnotationLoc(d.asType, ctx, asLoc.line, asLoc.column) : unknownType();
 			// Record type annotation position for LSP
 			resolveTypeExpr(node.typeExpr, ctx);
 			// General rule: `expr as unknown as T` → collapse to `expr as T`.

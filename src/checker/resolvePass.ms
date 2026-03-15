@@ -22,7 +22,7 @@ import {
 	setMinArity, typeNameOf, assignType, isInterfaceType, unwrapRef, propagateHasAsgn,
 } from "./types";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, lookupSymbol, lookupLocal, defineSymbol, makeSymbol, openScope, closeScope, SymbolState, hasFlag, setFlag, SymbolFlag } from "./symbol";
-import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, sgRecordSym } from "./context";
+import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addErrorRange, addWarning, sgRecordSym } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim } from "../utils/string";
 import { getProperty } from "./types";
 import { getGenericDecl, getGenericDeclFieldNames, getGenericDeclFieldTypes, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
@@ -252,6 +252,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 		"void" => voidType(),
 		"null" => nullType(),
 		"never" => neverType(),
+		"unknown" | "any" | "undefined" => unknownType(),
 		"int8" => createPrimitive(TypeKind.Int8),
 		"int16" => createPrimitive(TypeKind.Int16),
 		"int32" => createPrimitive(TypeKind.Int32),
@@ -278,6 +279,23 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 			return createTypeRef(trimmed);
 		},
 	};
+}
+
+// Location-aware variant: emits an error when a type name can't be resolved.
+// Use this when resolving user-written type annotations (function params, return types,
+// variable declarations) where source location is available.
+// Nim parity: semtypes.nim errors immediately on unresolved type identifiers.
+export function resolveAnnotationLoc(text: string, ctx: CheckerContext, line: number, col: number): Type {
+	const result = resolveAnnotation(text, ctx);
+	if (result.kind === TypeKind.TypeReference && line > 0) {
+		// TypeRef with a simple name (no __ mangling = not a generic specialization)
+		const name = result.typeName;
+		if (name.indexOf("__") < 0 && name.indexOf("typeof ") < 0
+				&& name !== "unknown" && name !== "any" && name !== "undefined" && name !== "never") {
+			addErrorRange(ctx, `Unresolved type '${name}' - missing import?`, line, col, col + name.length);
+		}
+	}
+	return result;
 }
 
 // ===== TypeExpr Recording (standard parity: markUsed in semTypeNode) =====
@@ -446,11 +464,11 @@ export function recordGenericTypeInstantiation(baseName: string, genericParams: 
 // ===== Resolve Helpers =====
 
 // Resolve an array of type annotation strings into Type[], matching names 1:1
-function resolveTypeStrings(typeStrs: string[], count: number, ctx: CheckerContext): Type[] {
+function resolveTypeStrings(typeStrs: string[], count: number, ctx: CheckerContext, line: number, col: number): Type[] {
 	const types: Type[] = [];
 	for (let i = 0; i < count; i += 1) {
 		if (i < typeStrs.length && typeStrs[i] !== "") {
-			types.push(resolveAnnotation(typeStrs[i], ctx));
+			types.push(resolveAnnotationLoc(typeStrs[i], ctx, line, col));
 		} else {
 			types.push(unknownType());
 		}
@@ -527,7 +545,7 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 		}
 	}
 
-	const paramTypes = resolveTypeStrings(d.fnParamTypes, d.params.length, ctx);
+	const paramTypes = resolveTypeStrings(d.fnParamTypes, d.params.length, ctx, node.location.line, node.location.column);
 	resolveTypeExprs(node.typeExprs, ctx);
 
 	// Wrap out param types in TypeKind.Var (reference parity: tyVar)
@@ -548,7 +566,8 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 		}
 	}
 
-	const returnType = (d.fnReturnType !== "") ? resolveAnnotation(d.fnReturnType, ctx) : unknownType();
+	const retLoc = node.typeExpr !== null ? node.typeExpr.location : node.location;
+	const returnType = (d.fnReturnType !== "") ? resolveAnnotationLoc(d.fnReturnType, ctx, retLoc.line, retLoc.column) : unknownType();
 	// Record return type annotation positions for LSP
 	resolveTypeExpr(node.typeExpr, ctx);
 	const fnType = createFunction(paramTypes, d.params, returnType);
@@ -636,7 +655,7 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 		}
 	}
 
-	const fieldTypes = resolveTypeStrings(d.interfaceFieldTypes, d.interfaceFields.length, ctx);
+	const fieldTypes = resolveTypeStrings(d.interfaceFieldTypes, d.interfaceFields.length, ctx, node.location.line, node.location.column);
 	resolveTypeExprs(node.typeExprs, ctx);
 
 	if (hasGenerics) {
@@ -694,7 +713,7 @@ function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 		return;
 	}
 
-	const resolved = resolveAnnotation(d.aliasType, ctx);
+	const resolved = resolveAnnotationLoc(d.aliasType, ctx, node.location.line, node.location.column);
 	resolveTypeExpr(node.typeExpr, ctx);
 	// Propagate alias name to Union types (Reference gap: string-based annotations don't carry names)
 	if (resolved.kind === TypeKind.Union && resolved.typeName === "") {
@@ -820,9 +839,9 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 					defineGenericParam(ctx, mgp);
 				}
 			}
-			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx);
+			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx, member.location.line, member.location.column);
 			resolveTypeExprs(member.typeExprs, ctx);
-			const returnType = (md.methodReturnType !== "") ? resolveAnnotation(md.methodReturnType, ctx) : unknownType();
+			const returnType = (md.methodReturnType !== "") ? resolveAnnotationLoc(md.methodReturnType, ctx, member.location.line, member.location.column) : unknownType();
 			resolveTypeExpr(member.typeExpr, ctx);
 			if (hasMethodGenerics) {
 				closeScope(ctx.table);
@@ -842,7 +861,7 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 			const pd = member.data as PropertyDeclData;
 			memberNames.push(pd.propName);
 			if (pd.propType !== "") {
-				const propType = resolveAnnotation(pd.propType, ctx);
+				const propType = resolveAnnotationLoc(pd.propType, ctx, member.location.line, member.location.column);
 				resolveTypeExpr(member.typeExpr, ctx);
 				member.nodeType = propType;
 				memberTypes.push(propType);
@@ -852,7 +871,7 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 		} else if (member.kind === NodeKind.ConstructorDecl) {
 			// Resolve constructor type but don't add to struct (data-only, like methods)
 			const cd = member.data as ConstructorDeclData;
-			const paramTypes = resolveTypeStrings(cd.ctorParamTypes, cd.ctorParams.length, ctx);
+			const paramTypes = resolveTypeStrings(cd.ctorParamTypes, cd.ctorParams.length, ctx, member.location.line, member.location.column);
 			resolveTypeExprs(member.typeExprs, ctx);
 			const ctorType = createFunction(paramTypes, cd.ctorParams, voidType());
 			member.nodeType = ctorType;

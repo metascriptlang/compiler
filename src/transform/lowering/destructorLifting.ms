@@ -27,10 +27,10 @@ import {
 	IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData,
 } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
-import { makeIdent, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
+import { makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
 import { Type, TypeKind, isPrimitiveKind, AttachedOp, setAttachedOp, unwrapRef, createArray, createPtr, createRef, createVar, createPrimitive, stringType, getTypeSize } from "../../checker/types";
 import { walkNode } from "../walker";
-import { lookupSymbol, SymbolKind } from "../../checker/symbol";
+import { Symbol, lookupSymbol, SymbolKind } from "../../checker/symbol";
 import { CheckerContext } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput } from "../testUtil";
@@ -580,6 +580,12 @@ function hasUserDefinedHook(typeName: string, hook: string, lctx: LiftCtx): bool
 	return sym !== null;
 }
 
+function getUserDefinedHookSym(typeName: string, hook: string, lctx: LiftCtx): Symbol {
+	const name = userHookName(typeName, hook);
+	if (name === "") return null as unknown as Symbol;
+	return lookupSymbol(lctx.checkerCtx.table, name);
+}
+
 // ===== Union variant arm generation (if/else chain on _tag) =====
 
 function generateUnionArms(hook: string, objType: Type, p1: string, p2: string, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
@@ -710,12 +716,13 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 	}
 
 	// User-defined hook dispatch (Reference considerUserDefinedOp)
-	if (hasUserDefinedHook(typeName, hook, lctx)) {
-		const uName = userHookName(typeName, hook);
+	const hookSym = getUserDefinedHookSym(typeName, hook, lctx);
+	if (hookSym !== null) {
+		const hookIdent = makeIdentResolved(hookSym, loc);
 		if (isUnary) {
-			buf.items.push(makeExprStmt(makeCall(makeIdent(uName, loc), [makeIdent(p1, loc)], loc), loc));
+			buf.items.push(makeExprStmt(makeCall(hookIdent, [makeIdent(p1, loc)], loc), loc));
 		} else {
-			buf.items.push(makeExprStmt(makeCall(makeIdent(uName, loc), [makeIdent(p1, loc), makeIdent(p2, loc)], loc), loc));
+			buf.items.push(makeExprStmt(makeCall(hookIdent, [makeIdent(p1, loc), makeIdent(p2, loc)], loc), loc));
 		}
 	} else {
 		// Inheritance: ensure base class hooks exist (Implementation parity)

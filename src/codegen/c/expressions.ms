@@ -1261,8 +1261,9 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	if (callee === "msBoxStruct" && node.nodeType !== null) {
 		const boxType = getTypeDesc(g, node.nodeType);
 		truncResults(ctx, cc);
-		// argsStr already has &val (ccgIntroducedPtr auto-adds & for structs)
-		ctx.results.push(`msBoxStruct(${argsStr}, sizeof(${boxType}))`);
+		// Explicitly add & — ccgIntroducedPtr won't fire for synthetic calls
+		const addrArg = argsStr.length > 0 && argsStr.charAt(0) === "&" ? argsStr : "&(" + argsStr + ")";
+		ctx.results.push(`msBoxStruct(${addrArg}, sizeof(${boxType}))`);
 		return;
 	}
 
