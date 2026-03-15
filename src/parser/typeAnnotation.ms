@@ -2,9 +2,9 @@
 //
 // Dual mode:
 // - skipTypeAnnotation: fast skip (existing behavior, no allocation)
-// - parseTypeExpr: builds positioned AST (standard parity: nkIdent, nkBracketExpr, nkProcTy)
+// - parseTypeExpr: builds positioned AST (standard parity: Identifier, GenericType, FunctionType)
 //
-// The TypeExpr tree uses Identifier nodes for leaf type names (like standard nkIdent),
+// The TypeExpr tree uses Identifier nodes for leaf type names (like standard Identifier),
 // plus TypeGeneric, TypeArray, TypeUnion, TypeFunction, TypeObject for structural types.
 // Every node carries .location from the token it was parsed from, enabling LSP symbol recording.
 
@@ -46,7 +46,7 @@ export function parseTypeAnnotation(state: ParserState): NodeResult {
 
 // ===== Positioned Type Expression Parser =====
 // Builds a TypeExpr AST tree with position info for every type identifier.
-// Standard parity: semTypeNode dispatches on nkIdent/nkBracketExpr etc.
+// Standard parity: semTypeNode dispatches on Identifier/GenericType etc.
 
 function isTypeIdent(token: Token): boolean {
 	const k = token.kind;

@@ -17,8 +17,10 @@ export class Result<T, E> {
 	error: E;
 
 	/** Creates a successful Result wrapping the given value. */
+	@builtin("ResultOk")
 	static extern ok(val: T): Result<T, E>;
 	/** Creates an error Result wrapping the given error. */
+	@builtin("ResultErr")
 	static extern err(e: E): Result<T, E>;
 }
 

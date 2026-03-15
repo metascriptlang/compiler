@@ -227,10 +227,10 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 		return rewriteZeroCopyBridge(node, false);
 	}
 
-	if (builtinKind === "msResultOk") {
+	if (builtinKind === "ResultOk") {
 		return rewriteResultToLiteral(node, true, ctx);
 	}
-	if (builtinKind === "msResultErr") {
+	if (builtinKind === "ResultErr") {
 		return rewriteResultToLiteral(node, false, ctx);
 	}
 
@@ -562,7 +562,7 @@ function preludeLowerExprKind(preludeSrc: string, userSrc: string): NodeKind {
 }
 
 test "@builtin on extern function rewrites to object literal" {
-	const prelude = "@builtin(\"msResultOk\") extern function ok(val: number): number;";
+	const prelude = "@builtin(\"ResultOk\") extern function ok(val: number): number;";
 	const kind = preludeLowerExprKind(prelude, "ok(42);");
 	assert kind === NodeKind.ObjectLiteral;
 }

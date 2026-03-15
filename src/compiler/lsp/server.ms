@@ -15,6 +15,7 @@ import { requestCancel, resetCancel } from "../transam/cancel";
 import { lspDispatch, buildTransitiveDiagnosticsWire, CompletionCache, createCompletionCache } from "./handlers";
 import { readLine, readBytes, writeStdout, writeStderr, stdinHasData, stdinDisableBuffering } from "std/io";
 import { clockMs } from "std/process";
+import { resolveRuntimeDir } from "../../utils/path";
 
 
 // ===== Server State =====
@@ -218,17 +219,9 @@ export function processMessage(msg: string, state: LspServerState): string {
 	// Track lifecycle
 	if (method === "initialize") {
 		state.initialized = true;
-		const rootUri = lspGetField(params, "rootUri");
-		if (rootUri.length > 0) {
-			const rp = lspUriToPath(rootUri);
-			if (rp.length > 0) {
-				state.db.stdPath = rp + "/std";
-			}
-		} else {
-			const rootPath = lspGetField(params, "rootPath");
-			if (rootPath.length > 0) {
-				state.db.stdPath = rootPath + "/std";
-			}
+		const root = resolveRuntimeDir();
+		if (root.length > 0) {
+			state.db.stdPath = root + "/std";
 		}
 	}
 	if (method === "shutdown") {

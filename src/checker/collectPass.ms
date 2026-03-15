@@ -879,22 +879,22 @@ test "overloaded @builtin routes to correct overload" {
 }
 
 test "@builtin on extern function sets both builtinKind and nativeName" {
-	const ctx = collectFromSource("@builtin(\"msResultOk\") extern function ok(val: number): number from \"msResultOk\";");
+	const ctx = collectFromSource("@builtin(\"ResultOk\") extern function ok(val: number): number from \"msResultOk\";");
 	const sym = lookupSymbol(ctx.table, "ok");
 	assert sym !== null;
 	if (sym !== null) {
-		assert sym.builtinKind === "msResultOk";
+		assert sym.builtinKind === "ResultOk";
 		assert sym.nativeName === "msResultOk";
 		assert hasFlag(sym, SymbolFlag.ImportC);
 	}
 }
 
 test "@builtin on generic extern function" {
-	const ctx = collectFromSource("@builtin(\"msResultOk\") extern function ok<T>(val: T): T;");
+	const ctx = collectFromSource("@builtin(\"ResultOk\") extern function ok<T>(val: T): T;");
 	const sym = lookupSymbol(ctx.table, "ok");
 	assert sym !== null;
 	if (sym !== null) {
-		assert sym.builtinKind === "msResultOk";
+		assert sym.builtinKind === "ResultOk";
 		assert hasFlag(sym, SymbolFlag.ImportC);
 	}
 }

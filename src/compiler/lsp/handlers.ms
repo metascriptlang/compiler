@@ -257,17 +257,13 @@ let _fmtOptionsLoaded = false;
 function getFormatOptions(db: TransAmDb): FormatOptions {
 	if (_fmtOptionsLoaded) return _fmtOptions;
 	_fmtOptionsLoaded = true;
-	const opts = defaultFormatOptions();
+	let opts = defaultFormatOptions();
 	// Derive workspace root from stdPath: "/path/to/project/std" → "/path/to/project"
 	const stdPath = db.stdPath;
-	writeStderr("[LSP] getFormatOptions stdPath=" + stdPath + " len=" + stdPath.length + "\n");
 	if (stdPath.length > 4) {
 		const wsRoot = stdPath.slice(0, stdPath.length - 4);
-		writeStderr("[LSP] loading fmt from wsRoot=" + wsRoot + "\n");
 		const fmtCfg = loadFmtSection(wsRoot);
-		writeStderr("[LSP] fmtCfg.useTabs=" + fmtCfg.useTabs + "\n");
-		applyFmtSection(opts, fmtCfg);
-		writeStderr("[LSP] opts.useTabs=" + opts.useTabs + "\n");
+		opts = applyFmtSection(opts, fmtCfg);
 	}
 	_fmtOptions = opts;
 	return opts;

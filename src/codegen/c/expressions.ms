@@ -1256,6 +1256,16 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	// DRC hooks — emit forward declaration on-demand
 	ensureDrcProto(g, callee);
 
+	// msBoxStruct(val) → msBoxStruct(&val, sizeof(TypeName))
+	// spawnLower emits this for struct returns. nodeType carries the type.
+	if (callee === "msBoxStruct" && node.nodeType !== null) {
+		const boxType = getTypeDesc(g, node.nodeType);
+		truncResults(ctx, cc);
+		// argsStr already has &val (ccgIntroducedPtr auto-adds & for structs)
+		ctx.results.push(`msBoxStruct(${argsStr}, sizeof(${boxType}))`);
+		return;
+	}
+
 	const calleeStr = callee;
 	// NRVO: call returns void, result via out-param
 	const nrvoRet = getCalleeReturnType(node);

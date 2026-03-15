@@ -104,4 +104,18 @@ void msCryptoHmacFree(msCryptoHmacCtx* ctx);
 /* Check if a hash algorithm is supported. Returns 1/0. */
 double msCryptoIsHashSupported(msString algorithm);
 
+/* ===== Encoding ===== */
+
+msString msCryptoToHex(msString data);
+msString msCryptoFromHex(msString hex);
+msString msCryptoToBase64(msString data);
+msString msCryptoFromBase64(msString b64);
+
+/* ===== Key Derivation ===== */
+
+msString msCryptoPbkdf2(msString password, msString salt,
+                        int32_t iterations, int32_t keyLength, msString digest);
+msString msCryptoHkdf(msString algorithm, msString ikm, msString salt,
+                      msString info, int32_t length);
+
 #endif /* MS_CRYPTO_H */

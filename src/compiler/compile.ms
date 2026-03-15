@@ -39,6 +39,8 @@ import { compileC, compileCFile, linkObjects, appendFlag, cliCompileFlags, cliLi
 import { initCache, stableOFile, fullCompileCmd, isCompileCached, writeCompileCache, projectCacheChanged, writeProjectCache, stableCFile, isCCodeCached, writeCCodeCache, isLinkCached, writeLinkCache, cacheDir } from "./cache";
 import { preprocessHeaders } from "../module/aro";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
+import { resolveRuntimeDir } from "../utils/path";
+import { join } from "std/fs/path";
 import { clockMs } from "std/process";
 
 // ===== Build Helpers =====
@@ -48,8 +50,10 @@ export function buildResolverConfig(target: Target, resolve: ResolveSection): Re
 	let backend = Backend.C;
 	if (target === Target.JS) { backend = Backend.JS; }
 	if (target === Target.Raiser) { backend = Backend.Raiser; }
-	// Default stdPath to "std" (relative to CWD). Future: MSC_STD_PATH env var.
-	const config = createDefaultConfig(backend, "std");
+	// Resolve stdPath from project root (handles both binary and Bun execution).
+	const root = resolveRuntimeDir();
+	const stdPath = root !== "" ? join(root, "std") : "std";
+	const config = createDefaultConfig(backend, stdPath);
 	// Override with build.ms settings if provided
 	if (resolve.extensions.length > 0) {
 		config.extensions = resolve.extensions;

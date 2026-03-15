@@ -10,7 +10,7 @@ import {
 	AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData,
 	HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData,
 	ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData,
-	FunctionDeclData, BlockStmtData, ExprStmtData, ReturnStmtData,
+	FunctionDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData,
 } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
 import {
@@ -870,13 +870,13 @@ function checkNewExpr(ctx: CheckerContext, node: Node): Type {
 	if (d.newCallee.kind === NodeKind.Identifier) {
 		const id = d.newCallee.data as IdentifierData;
 		if (id.name === "Promise") {
-			// Check executor argument
+			// Resolve type param: new Promise<string>(...) → Promise<string>
+			const typeArgStr = findCallTypeArg(node);
+			const innerType = typeArgStr !== null && typeArgStr !== "" ? resolveAnnotation(typeArgStr, ctx) : voidType();
+			// Check executor argument with expected type: (resolve: (T) => void, reject: (string) => void) => void
 			if (d.newArguments.length >= 1) {
 				checkExpr(ctx, d.newArguments[0], null);
 			}
-			// Resolve type param: new Promise<string>(...) → Promise<string>
-			const typeArg = findCallTypeArg(node);
-			const innerType = typeArg !== null ? typeArg : voidType();
 			const promType = createPromise(innerType);
 			node.nodeType = promType;
 			return promType;

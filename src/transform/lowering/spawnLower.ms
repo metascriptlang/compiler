@@ -24,6 +24,7 @@ function needsBoxing(t: Type): boolean {
 		TypeKind.Boolean => true,
 		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 => true,
 		TypeKind.String => true,
+		TypeKind.Struct | TypeKind.Result | TypeKind.Tuple => true,
 		_ => false,
 	};
 }
@@ -36,6 +37,12 @@ function boxForType(retVal: Node, retType: Type, loc: SourceLocation): Node {
 		TypeKind.Boolean => makeCall(makeIdent("msBoxBool", loc), [retVal], loc),
 		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 => makeCall(makeIdent("msBoxInt32", loc), [retVal], loc),
 		TypeKind.String => makeCall(makeIdent("msBoxString", loc), [retVal], loc),
+		TypeKind.Struct | TypeKind.Result | TypeKind.Tuple => {
+			// msBoxStruct: codegen expands to msBoxStruct(&val, sizeof(TypeName))
+			const call = makeCall(makeIdent("msBoxStruct", loc), [retVal], loc);
+			call.nodeType = retType;
+			return call;
+		},
 		_ => retVal,
 	};
 }

@@ -20,20 +20,26 @@ export class Promise<T> {
 	extern finally(callback: () => void): Promise<void> from "msFutureFinally";
 
 	// Static combinators
+	@builtin("PromiseAll")
 	static extern all(promises: Promise<void>[]): Promise<void> from "msPromiseAll";
+	@builtin("PromiseRace")
 	static extern race(promises: Promise<void>[]): Promise<void> from "msPromiseRace";
+	@builtin("PromiseAllSettled")
 	static extern allSettled(promises: Promise<void>[]): Promise<void> from "msPromiseAllSettled";
+	@builtin("PromiseAny")
 	static extern any(promises: Promise<void>[]): Promise<void> from "msPromiseAny";
 
 	// Static constructors
+	@builtin("PromiseResolve")
 	static extern resolve(value: T): Promise<T> from "msPromiseResolve";
+	@builtin("PromiseReject")
 	static extern reject(error: string): Promise<void> from "msPromiseReject";
 }
 
 // Standalone async utilities
 @builtin("PromiseSpawn")
-export extern function spawn(fn: () => void): Promise<void> from "msSpawn";
+export extern function spawn<T>(fn: () => T): Promise<T> from "msSpawn";
 
-export extern function waitFor(fut: Promise<void>): void from "msWaitFor";
+export extern function waitFor<T>(fut: Promise<T>): void from "msWaitFor";
 
 export extern function sleepAsync(ms: number): Promise<void> from "msSleepAsync";

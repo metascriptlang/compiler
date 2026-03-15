@@ -171,8 +171,8 @@ function typeToEnvStr(t: Type): string {
 		TypeKind.Array => {
 			if (t.typeReturn !== null) {
 				const elem = typeToEnvStr(t.typeReturn);
-				if (elem !== "") { elem + "[]"; } else { "unknown[]"; }
-			} else { "unknown[]"; }
+				if (elem !== "") { return elem + "[]"; } else { return "unknown[]"; }
+			} else { return "unknown[]"; }
 		},
 		TypeKind.Result => "Result",
 		TypeKind.TypeReference => {

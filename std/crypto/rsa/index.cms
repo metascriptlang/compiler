@@ -1,0 +1,183 @@
+// std/crypto/rsa — Asymmetric crypto (RSA + ECDSA + ECDH)
+// import { rsaGenerate, rsaSign, rsaVerify } from "std/crypto/rsa"
+// import { ecGenerate, ecdsaSign, ecdsaVerify, ecdhDerive } from "std/crypto/rsa"
+//
+// Heavy: compiles ~18 mbedTLS files. Only import when asymmetric crypto is needed.
+
+@include("std/crypto/rsa/native.h");
+@compile("std/crypto/rsa/native.c");
+
+// mbedTLS PK + PSA sources (4.0: crypto sources live under tf-psa-crypto/)
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pk.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pk_wrap.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pem.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/asn1parse.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/asn1write.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/bignum.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/bignum_core.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/rsa.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecdsa.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecdh.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecp.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecp_curves.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/base64.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/oid.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/entropy.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ctr_drbg.c");
+@compile("vendor/mbedtls/tf-psa-crypto/core/psa_crypto.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_hash.c");
+@compile("vendor/mbedtls/tf-psa-crypto/core/psa_crypto_slot_management.c");
+
+// mbedTLS include paths
+@passC("-Ivendor/mbedtls/tf-psa-crypto/include");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/include");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/src");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/core");
+@passC("-Ivendor/mbedtls/include");
+@passC("-Ivendor/mbedtls/library");
+@passC("-Wno-deprecated-declarations");
+
+import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
+export { CryptoError, CryptoErrorKind } from "../errors";
+
+// C bindings — opaque key handles as int64 (pointer stored as 64-bit integer)
+extern function msCryptoRsaGenerate(bits: int32): int64;
+extern function msCryptoRsaImportPrivatePem(pem: string): int64;
+extern function msCryptoRsaImportPublicPem(pem: string): int64;
+extern function msCryptoRsaExportPrivatePem(key: int64): string;
+extern function msCryptoRsaExportPublicPem(key: int64): string;
+extern function msCryptoRsaSign(key: int64, algorithm: string, data: string): string;
+extern function msCryptoRsaVerify(key: int64, algorithm: string, data: string, signature: string): boolean;
+extern function msCryptoRsaEncrypt(key: int64, data: string): string;
+extern function msCryptoRsaDecrypt(key: int64, data: string): string;
+extern function msCryptoRsaFree(key: int64): void;
+
+extern function msCryptoEcGenerate(curve: string): int64;
+extern function msCryptoEcImportPrivatePem(pem: string): int64;
+extern function msCryptoEcImportPublicPem(pem: string): int64;
+extern function msCryptoEcExportPrivatePem(key: int64): string;
+extern function msCryptoEcExportPublicPem(key: int64): string;
+extern function msCryptoEcdsaSign(key: int64, algorithm: string, data: string): string;
+extern function msCryptoEcdsaVerify(key: int64, algorithm: string, data: string, signature: string): boolean;
+extern function msCryptoEcdhDerive(privateKey: int64, publicKey: int64): string;
+extern function msCryptoEcFree(key: int64): void;
+
+// ===== RSA =====
+
+export function rsaGenerate(bits: int32): Result<int64, CryptoError> {
+	if (bits !== 2048 && bits !== 3072 && bits !== 4096) {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "rsaGenerate", "bits must be 2048, 3072, or 4096"));
+	}
+	const key = msCryptoRsaGenerate(bits);
+	if (key === 0) return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "rsaGenerate", "RSA key generation failed"));
+	return Result.ok(key);
+}
+
+export function rsaImportPrivate(pem: string): Result<int64, CryptoError> {
+	const key = msCryptoRsaImportPrivatePem(pem);
+	if (key === 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "rsaImportPrivate", "failed to parse private key PEM"));
+	return Result.ok(key);
+}
+
+export function rsaImportPublic(pem: string): Result<int64, CryptoError> {
+	const key = msCryptoRsaImportPublicPem(pem);
+	if (key === 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "rsaImportPublic", "failed to parse public key PEM"));
+	return Result.ok(key);
+}
+
+export function rsaExportPrivate(key: int64): Result<string, CryptoError> {
+	const pem = msCryptoRsaExportPrivatePem(key);
+	if (pem === "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "rsaExportPrivate", "failed to export private key"));
+	return Result.ok(pem);
+}
+
+export function rsaExportPublic(key: int64): Result<string, CryptoError> {
+	const pem = msCryptoRsaExportPublicPem(key);
+	if (pem === "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "rsaExportPublic", "failed to export public key"));
+	return Result.ok(pem);
+}
+
+export function rsaSign(key: int64, data: string, algorithm: string): Result<string, CryptoError> {
+	if (algorithm === "") algorithm = "sha256";
+	const sig = msCryptoRsaSign(key, algorithm, data);
+	if (sig === "") return Result.err(cryptoError(CryptoErrorKind.SignatureFailed, "rsaSign", "signing failed"));
+	return Result.ok(sig);
+}
+
+export function rsaVerify(key: int64, data: string, signature: string, algorithm: string): boolean {
+	if (algorithm === "") algorithm = "sha256";
+	return msCryptoRsaVerify(key, algorithm, data, signature);
+}
+
+export function rsaEncrypt(key: int64, data: string): Result<string, CryptoError> {
+	const encrypted = msCryptoRsaEncrypt(key, data);
+	if (encrypted === "") return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "rsaEncrypt", "RSA-OAEP encryption failed"));
+	return Result.ok(encrypted);
+}
+
+export function rsaDecrypt(key: int64, data: string): Result<string, CryptoError> {
+	const decrypted = msCryptoRsaDecrypt(key, data);
+	if (decrypted === "") return Result.err(cryptoError(CryptoErrorKind.DecryptionFailed, "rsaDecrypt", "RSA-OAEP decryption failed"));
+	return Result.ok(decrypted);
+}
+
+export function rsaFree(key: int64): void {
+	msCryptoRsaFree(key);
+}
+
+// ===== ECDSA =====
+
+export function ecGenerate(curve: string): Result<int64, CryptoError> {
+	if (curve === "") curve = "p256";
+	const key = msCryptoEcGenerate(curve);
+	if (key === 0) return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "ecGenerate", "EC key generation failed for curve " + curve));
+	return Result.ok(key);
+}
+
+export function ecImportPrivate(pem: string): Result<int64, CryptoError> {
+	const key = msCryptoEcImportPrivatePem(pem);
+	if (key === 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ecImportPrivate", "failed to parse EC private key PEM"));
+	return Result.ok(key);
+}
+
+export function ecImportPublic(pem: string): Result<int64, CryptoError> {
+	const key = msCryptoEcImportPublicPem(pem);
+	if (key === 0) return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ecImportPublic", "failed to parse EC public key PEM"));
+	return Result.ok(key);
+}
+
+export function ecExportPrivate(key: int64): Result<string, CryptoError> {
+	const pem = msCryptoEcExportPrivatePem(key);
+	if (pem === "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ecExportPrivate", "failed to export EC private key"));
+	return Result.ok(pem);
+}
+
+export function ecExportPublic(key: int64): Result<string, CryptoError> {
+	const pem = msCryptoEcExportPublicPem(key);
+	if (pem === "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ecExportPublic", "failed to export EC public key"));
+	return Result.ok(pem);
+}
+
+export function ecdsaSign(key: int64, data: string, algorithm: string): Result<string, CryptoError> {
+	if (algorithm === "") algorithm = "sha256";
+	const sig = msCryptoEcdsaSign(key, algorithm, data);
+	if (sig === "") return Result.err(cryptoError(CryptoErrorKind.SignatureFailed, "ecdsaSign", "ECDSA signing failed"));
+	return Result.ok(sig);
+}
+
+export function ecdsaVerify(key: int64, data: string, signature: string, algorithm: string): boolean {
+	if (algorithm === "") algorithm = "sha256";
+	return msCryptoEcdsaVerify(key, algorithm, data, signature);
+}
+
+// ===== ECDH =====
+
+export function ecdhDerive(privateKey: int64, publicKey: int64): Result<string, CryptoError> {
+	const shared = msCryptoEcdhDerive(privateKey, publicKey);
+	if (shared === "") return Result.err(cryptoError(CryptoErrorKind.KeyDerivationFailed, "ecdhDerive", "ECDH key agreement failed"));
+	return Result.ok(shared);
+}
+
+export function ecFree(key: int64): void {
+	msCryptoEcFree(key);
+}

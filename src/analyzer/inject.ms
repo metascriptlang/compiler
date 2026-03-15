@@ -308,7 +308,7 @@ function passCopyToSink(srcExpr: Node, dctx: DrcContext): Node {
 function processMember(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const md = node.data as MemberExprData;
 	md.object = processNode(md.object, dctx, DrcMode.Normal);
-	// Reference parity (nkDotExpr sinkArg): field access is a borrow —
+	// Reference parity (MemberExpr sinkArg): field access is a borrow —
 	// must copy for ownership transfer UNLESS field is last-read (Phase B).
 	if (mode === DrcMode.SinkArg && node.nodeType !== null) {
 		const rcInfo = classifyType(node.nodeType, dctx.ctx);
@@ -324,7 +324,7 @@ function processArrayAccess(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const ad = node.data as ArrayAccessData;
 	ad.array = processNode(ad.array, dctx, DrcMode.Normal);
 	ad.index = processNode(ad.index, dctx, DrcMode.Normal);
-	// Reference parity (nkBracketExpr sinkArg): element access is a borrow —
+	// Reference parity (ArrayAccess sinkArg): element access is a borrow —
 	// must copy for ownership transfer.
 	if (mode === DrcMode.SinkArg && node.nodeType !== null) {
 		const rcInfo = classifyType(node.nodeType, dctx.ctx);
@@ -433,7 +433,7 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	if (!rcInfo.needsCleanup) return node;
 
 	// Reference parity: SinkArg mode — passCopyToSink or destructive move
-	// Used for object literal fields, array literal elements (reference: nkObjConstr sinkArg)
+	// Used for object literal fields, array literal elements (reference: ObjectLiteral sinkArg)
 	if (mode === DrcMode.SinkArg) {
 		const loc = node.location;
 		if (isLastReadSafe(sym, node, dctx.currentStmtIdx, dctx.currentStmtList, dctx)) {
@@ -938,7 +938,7 @@ function isLastReadSafe(sym: Symbol, node: Node, idx: number, stmts: Node[], dct
 	// holds (and will decref) its own copy, causing use-after-free.
 	if (sym.symbolKind === SymbolKind.Parameter && !hasFlag(sym, SymbolFlag.Sink)) return false;
 	// Reference parity: cursor variables are borrows — never move them.
-	// isLastRead(n, c, s) and not (n.kind == nkSym and isCursor(n))
+	// isLastRead(n, c, s) and not (n.kind == Identifier and isCursor(n))
 	// Cursor vars (for-of bindings, $-prefixed temps) don't own the data;
 	// the source array/container still holds its own reference.
 	// Moving a cursor would leave the source with a dangling pointer.
@@ -1096,7 +1096,7 @@ function wrapWithCallArgPre(stmt: Node, preStmts: Node[], loc: SourceLocation): 
 
 // ===== Literal Field/Element RC Processing =====
 // NOTE: emitLiteralFieldCopies / emitArrayElementCopies removed.
-// Reference parity (nkObjConstr/nkBracket): processObjectLiteral and processArrayLiteral
+// Reference parity (ObjectLiteral/ArrayLiteral): processObjectLiteral and processArrayLiteral
 // handle field/element RC inline via SinkArg mode. No separate post-construction copy step.
 
 // ===== Sink Parameter Registration =====
@@ -1419,13 +1419,13 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	const init = d.initializer;
 
 	// Object literal: processObjectLiteral already handled field RC via SinkArg mode.
-	// Reference parity (nkObjConstr): sinkArg on fields inline, no separate copy step.
+	// Reference parity (ObjectLiteral): sinkArg on fields inline, no separate copy step.
 	if (init.kind === NodeKind.ObjectLiteral) {
 		return stmt;
 	}
 
 	// Array literal: processArrayLiteral already handled element RC via SinkArg mode.
-	// Reference parity (nkBracket): sinkArg on elements inline, no separate copy step.
+	// Reference parity (ArrayLiteral): sinkArg on elements inline, no separate copy step.
 	if (init.kind === NodeKind.ArrayLiteral) {
 		return stmt;
 	}
@@ -1471,7 +1471,7 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	}
 
 	// Member access: field-level move when analysable + last-read, else borrow-copy
-	// Reference: moveOrCopy nkBracketExpr branch (lines 1195-1204)
+	// Reference: moveOrCopy ArrayAccess branch
 	if (init.kind === NodeKind.MemberExpr) {
 		const md = init.data as MemberExprData;
 		// Result field extraction: $result_N.value → wasMoved on source to prevent double-free
@@ -1792,9 +1792,9 @@ function emitSaveAssignDestroy(stmt: Node, lhsExpr: Node, rhs: Node, rcInfo: RcI
 		return makeBlock([saveTmp, stmt, makeDestroyCall(tmpName, rcInfo, loc)], loc);
 	}
 
-	// Identifier RHS: check last-read for sink optimization (reference: moveOrCopy nkSym)
-	// Reference lines 1223-1233: nkSym branch allows move into any dest (including fields)
-	// when isAnalysableFieldAccess + isLastRead. No alias check needed for nkSym —
+	// Identifier RHS: check last-read for sink optimization (reference: moveOrCopy Identifier)
+	// Reference Identifier branch allows move into any dest (including fields)
+	// when isAnalysableFieldAccess + isLastRead. No alias check needed for Identifier —
 	// a plain identifier can never alias a MemberExpr/ArrayAccess dest.
 	if (rhs.kind === NodeKind.Identifier) {
 		const rhsSym = rhs.resolvedSym;
@@ -2004,7 +2004,7 @@ function processReturn(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 		// processNode(Consumed) adds wasMoved to pendingStmts, but return is a move —
 		// the value is bitcopied to the return slot first, then finally handles wasMoved.
 		// Without this, wasMoved fires BEFORE return, zeroing the value.
-		// Reference: genSink with IsReturn flag → nkFastAsgn only, no inline wasMoved.
+		// Reference: genSink with IsReturn flag → raw assignment only, no inline wasMoved.
 		clearPendingForReturnedVars(d.argument, dctx);
 	}
 

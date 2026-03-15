@@ -2,31 +2,16 @@
 //
 // Invokes clang to compile generated C source into native binaries.
 
-import { argv, exec, fileExists, cwd } from "std/process";
-import { dirname, join, resolve } from "std/fs/path";
+import { exec } from "std/process";
+import { join, dirname } from "std/fs/path";
 import { CliOptions } from "./options";
+import { resolveRuntimeDir } from "../utils/path";
 
 // -- Runtime resolution --
 
-// Find the compiler's std/runtime/ directory by walking up from argv[0],
-// then fallback to cwd() (needed when running under Bun where argv[0] is the bun binary).
 function resolveRuntime(): string {
-	const binDir = dirname(argv[0]);
-	let base = binDir;
-	for (let i = 0; i < 5; i += 1) {
-		const candidate = join(base, "std/runtime");
-		const marker = join(candidate, "arc.h");
-		if (fileExists(marker)) return candidate;
-		base = dirname(base);
-	}
-	// Fallback: try cwd and walk up
-	base = cwd();
-	for (let i = 0; i < 3; i += 1) {
-		const candidate = join(base, "std/runtime");
-		const marker = join(candidate, "arc.h");
-		if (fileExists(marker)) return candidate;
-		base = dirname(base);
-	}
+	const root = resolveRuntimeDir();
+	if (root.length > 0) return join(root, "std/runtime");
 	return "";
 }
 

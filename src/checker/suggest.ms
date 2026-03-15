@@ -900,7 +900,7 @@ function sgSortSuggestions(list: SgSuggest[]): void {
 
 // ===== AST-Based Completion Context Detection =====
 // Walks the parsed AST to determine completion context by node kind.
-// Aligned with reference (nkDotExpr/nkObjConstr) and rust-analyzer (classify_name_ref).
+// Aligned with reference (MemberExpr/ObjectLiteral) and rust-analyzer (classify_name_ref).
 
 // Find the innermost AST node at or before the given 1-based line:col.
 // Walks depth-first; among matches, prefers the one with largest column (closest to cursor).
@@ -994,7 +994,7 @@ function sgSubtreeTouchesLine(node: Node, targetLine: number): boolean {
 	return touches;
 }
 
-// ===== AST-Based Signature Help (nkCall[0] for callee, child count for active param) =====
+// ===== AST-Based Signature Help (CallExpr callee + child count for active param) =====
 
 // Find the innermost CallExpr enclosing the cursor position.
 // Mirrors findEnclosingObjectLiteral pattern. Deepest (innermost) call wins.
@@ -1022,7 +1022,7 @@ function findEnclosingCallExpr(root: Node, line: number, col: number): Node {
 }
 
 // Extract callee name from CallExpr AST node.
-// Reference: nkCall[0] → nkIdent or nkDotExpr[1].
+// Reference: CallExpr.callee → Identifier or MemberExpr.property.
 function sgGetCalleeFromNode(callNode: Node): string {
 	const d = callNode.data as CallExprData;
 	if (d.callee === null) return "";
@@ -1036,7 +1036,7 @@ function sgGetCalleeFromNode(callNode: Node): string {
 }
 
 // Extract receiver name for method calls (e.g. "console" from console.log()).
-// Reference: nkDotExpr[0].
+// Reference: MemberExpr.object.
 function sgGetReceiverFromNode(callNode: Node): string {
 	const d = callNode.data as CallExprData;
 	if (d.callee === null || d.callee.kind !== NodeKind.MemberExpr) return "";
@@ -1049,7 +1049,7 @@ function sgGetReceiverFromNode(callNode: Node): string {
 }
 
 // Determine active parameter index from cursor position within CallExpr arguments.
-// Reference: count nkCall children before cursor position.
+// Reference: count CallExpr arguments before cursor position.
 function sgGetActiveParamFromNode(callNode: Node, line: number, col: number): number {
 	const d = callNode.data as CallExprData;
 	if (d.arguments.length === 0) return 0;
@@ -1218,7 +1218,7 @@ function importContextFromAST(importNode: Node, col: number): string {
 }
 
 // ===== AST-Based Type Annotation Detection =====
-// Reference: nkIdentDefs[^2] position check + c.inTypeContext flag.
+// Reference: declaration type-position check + inTypeContext flag.
 // We check if cursor is on a typeExpr or typeExprs node of any declaration.
 
 function isInTypeAnnotation(program: Node, line: number, col: number): boolean {
@@ -1285,7 +1285,7 @@ export function sgDetectCompletionContext(program: Node, line: number, col: numb
 		return SgCompletionKind.ObjectField;
 	}
 
-	// TypeAnnotation: cursor on a typeExpr/typeExprs node (ref: nkIdentDefs[^2])
+	// TypeAnnotation: cursor on a typeExpr/typeExprs node (ref: declaration type-position)
 	if (isInTypeAnnotation(program, line, col)) {
 		return SgCompletionKind.TypeAnnotation;
 	}
@@ -1325,7 +1325,7 @@ export function sgExtractImportPath(source: string, line: number, col: number): 
 }
 
 // Extract existing imported names from ImportDecl AST node.
-// Reference: reads nkImportStmt children directly.
+// Reference: reads ImportDecl children directly.
 export function sgExtractExistingImportNames(program: Node, line: number, col: number): string[] {
 	const importNode = findImportDeclOnLine(program, line);
 	if (importNode === null) return [];

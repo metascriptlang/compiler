@@ -106,7 +106,7 @@ export enum NodeKind {
 	ExternDecl, MacroDecl, QuoteExpr, ComptimeBlock,
 	// Self-hosting primitives
 	SizeofExpr,
-	// Type expression nodes (reuse Identifier for leaf types — standard parity: nkIdent, nkBracketExpr, nkProcTy)
+	// Type expression nodes (reuse Identifier for leaf types — standard parity)
 	TypeGeneric, TypeArray, TypeUnion, TypeFunction, TypeObject,
 	// Program root
 	Program,
@@ -232,7 +232,7 @@ export type NodeData =
 	| { quoteBody: Node }                                          // QuoteExpr
 	| { comptimeBody: Node }                                       // ComptimeBlock
 	// Type expression variants (positioned type AST — standard parity)
-	// TypeName uses NodeKind.Identifier with { name: string } — reuses expression kind like standard nkIdent
+	// TypeName uses NodeKind.Identifier with { name: string } — reuses expression kind for type leaf nodes
 	| { typExprBase: Node, typExprArgs: Node[] }                   // TypeGeneric
 	| { typExprElement: Node, typExprSize: number }                // TypeArray (-1 = unsized)
 	| { typExprMembers: Node[] }                                   // TypeUnion
@@ -346,7 +346,7 @@ export type QuoteExprData = { quoteBody: Node };
 export type ComptimeBlockData = { comptimeBody: Node };
 
 // Type expression data types (positioned type AST — standard parity)
-// Leaf type names use IdentifierData (NodeKind.Identifier) — same as standard nkIdent
+// Leaf type names use IdentifierData (NodeKind.Identifier) — reuses expression kind for type leaf nodes
 export type TypeGenericData = { typExprBase: Node, typExprArgs: Node[] };
 export type TypeArrayData = { typExprElement: Node, typExprSize: number };
 export type TypeUnionData = { typExprMembers: Node[] };

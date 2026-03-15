@@ -61,6 +61,16 @@ extern function msCryptoHmacFree(ctx: string): void;
 // Utility
 extern function msCryptoIsHashSupported(algorithm: string): boolean;
 
+// Encoding
+extern function msCryptoToHex(data: string): string;
+extern function msCryptoFromHex(hex: string): string;
+extern function msCryptoToBase64(data: string): string;
+extern function msCryptoFromBase64(b64: string): string;
+
+// Key Derivation
+extern function msCryptoPbkdf2(password: string, salt: string, iterations: int32, keyLength: int32, digest: string): string;
+extern function msCryptoHkdf(algorithm: string, ikm: string, salt: string, info: string, length: int32): string;
+
 // ===== Types =====
 
 export type HashAlgorithm =
@@ -306,4 +316,27 @@ export function getHashes(): string[] {
 
 export function isHashSupported(algorithm: string): boolean {
 	return msCryptoIsHashSupported(algorithm);
+}
+
+// ===== Encoding =====
+
+export function toHex(data: string): string { return msCryptoToHex(data); }
+export function fromHex(hex: string): string { return msCryptoFromHex(hex); }
+export function toBase64(data: string): string { return msCryptoToBase64(data); }
+export function fromBase64(b64: string): string { return msCryptoFromBase64(b64); }
+
+// ===== Key Derivation =====
+
+export function pbkdf2(password: string, salt: string, iterations: int32, keyLength: int32, digest: string): Result<string, CryptoError> {
+	if (digest === "") digest = "sha256";
+	const result = msCryptoPbkdf2(password, salt, iterations, keyLength, digest);
+	if (result.length === 0) return Result.err({ kind: "KeyDerivationFailed", operation: "pbkdf2", message: "key derivation failed" });
+	return Result.ok(result);
+}
+
+export function hkdf(algorithm: string, ikm: string, salt: string, info: string, length: int32): Result<string, CryptoError> {
+	if (algorithm === "") algorithm = "sha256";
+	const result = msCryptoHkdf(algorithm, ikm, salt, info, length);
+	if (result.length === 0) return Result.err({ kind: "KeyDerivationFailed", operation: "hkdf", message: "key derivation failed" });
+	return Result.ok(result);
 }
