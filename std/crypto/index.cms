@@ -306,3 +306,13 @@ export function hkdf(algorithm: string, ikm: string, salt: string, info: string,
 	if (result.length === 0) return Result.err({ kind: "KeyDerivationFailed", operation: "hkdf", message: "key derivation failed" });
 	return Result.ok(result);
 }
+
+// ===== Async Versions (spawn to worker thread for heavy operations) =====
+
+export function pbkdf2Async(password: string, salt: string, iterations: int32, keyLength: int32, digest: string): Promise<Result<string, CryptoError>> {
+	return spawn(() => { return pbkdf2(password, salt, iterations, keyLength, digest); });
+}
+
+export function hashAsync(algorithm: string, data: string, encoding: string): Promise<Result<string, CryptoError>> {
+	return spawn(() => { return hash(algorithm, data, encoding); });
+}

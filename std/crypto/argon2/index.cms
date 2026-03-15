@@ -1,0 +1,83 @@
+// std/crypto/argon2 — Argon2id password hashing (PHC winner, OWASP #1 recommendation)
+// import { argon2Hash, argon2Verify } from "std/crypto/argon2"
+//
+// Only compiled when imported — no cost if not used.
+// Uses vendor/argon2 (PHC reference implementation).
+
+@include("std/crypto/argon2/native.h");
+@compile("std/crypto/argon2/native.c");
+
+// Argon2 reference implementation sources
+@compile("vendor/argon2/src/argon2.c");
+@compile("vendor/argon2/src/core.c");
+@compile("vendor/argon2/src/encoding.c");
+@compile("vendor/argon2/src/ref.c");
+@compile("vendor/argon2/src/thread.c");
+@compile("vendor/argon2/src/blake2/blake2b.c");
+
+// Include paths
+@passC("-Ivendor/argon2/include");
+@passC("-Ivendor/argon2/src");
+
+import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
+export { CryptoError, CryptoErrorKind } from "../errors";
+
+// C bindings
+extern function msCryptoArgon2Hash(password: string, salt: string, timeCost: int32, memoryCost: int32, parallelism: int32, hashLen: int32): string;
+extern function msCryptoArgon2Verify(encoded: string, password: string): boolean;
+extern function msCryptoArgon2HashRaw(password: string, salt: string, timeCost: int32, memoryCost: int32, parallelism: int32, hashLen: int32): string;
+
+// ===== Argon2id Password Hashing =====
+
+/**
+ * Hash a password with Argon2id (OWASP recommended defaults).
+ * Returns encoded string: $argon2id$v=19$m=65536,t=3,p=4$salt$hash
+ *
+ * timeCost: iterations (default 3)
+ * memoryCost: memory in KiB (default 65536 = 64MB)
+ * parallelism: threads (default 4)
+ * hashLen: output bytes (default 32)
+ */
+export function argon2Hash(password: string, salt: string, timeCost: int32 = 3, memoryCost: int32 = 65536, parallelism: int32 = 4, hashLen: int32 = 32): Result<string, CryptoError> {
+	if (salt.byteLength < 8) {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "argon2Hash", "salt must be at least 8 bytes"));
+	}
+	const result = msCryptoArgon2Hash(password, salt, timeCost, memoryCost, parallelism, hashLen);
+	if (result === "") {
+		return Result.err(cryptoError(CryptoErrorKind.HashFailed, "argon2Hash", "Argon2id hashing failed"));
+	}
+	return Result.ok(result);
+}
+
+/**
+ * Verify a password against an Argon2id encoded hash.
+ * The encoded hash contains all parameters — no need to specify them.
+ */
+export function argon2Verify(encoded: string, password: string): boolean {
+	return msCryptoArgon2Verify(encoded, password);
+}
+
+/**
+ * Hash with raw binary output (not encoded).
+ * Use when you need the hash bytes directly (e.g., for key derivation).
+ */
+export function argon2HashRaw(password: string, salt: string, timeCost: int32 = 3, memoryCost: int32 = 65536, parallelism: int32 = 4, hashLen: int32 = 32): Result<string, CryptoError> {
+	if (salt.byteLength < 8) {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "argon2HashRaw", "salt must be at least 8 bytes"));
+	}
+	const result = msCryptoArgon2HashRaw(password, salt, timeCost, memoryCost, parallelism, hashLen);
+	if (result === "") {
+		return Result.err(cryptoError(CryptoErrorKind.HashFailed, "argon2HashRaw", "Argon2id raw hashing failed"));
+	}
+	return Result.ok(result);
+}
+
+// ===== Async (spawn to worker thread — Argon2 is intentionally slow) =====
+
+export function argon2HashAsync(password: string, salt: string, timeCost: int32 = 3, memoryCost: int32 = 65536, parallelism: int32 = 4, hashLen: int32 = 32): Promise<Result<string, CryptoError>> {
+	return spawn(() => { return argon2Hash(password, salt, timeCost, memoryCost, parallelism, hashLen); });
+}
+
+export function argon2VerifyAsync(encoded: string, password: string): Promise<boolean> {
+	return spawn(() => { return argon2Verify(encoded, password); });
+}

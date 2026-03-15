@@ -212,6 +212,17 @@ function generateToStringC(helperName: string, typeName: string, structType: Typ
 // ===== Builtin Inline Expansion =====
 // Handles @builtin("Name") — known compiler builtins get inline C patterns.
 
+function unboxFnForType(t: Type): string {
+	if (t === null) return "";
+	return match (t.kind) {
+		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msUnboxDouble",
+		TypeKind.Boolean => "msUnboxBool",
+		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 => "msUnboxInt32",
+		TypeKind.String => "msUnboxString",
+		_ => "",
+	};
+}
+
 function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext): Node {
 	const cd = node.data as CallExprData;
 	const loc = node.location;
@@ -255,6 +266,23 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 		const spawnCall = makeCall(makeIdent("msSpawn", loc), cd.arguments, loc);
 		spawnCall.nodeType = node.nodeType;
 		return spawnCall;
+	}
+
+	if (builtinKind === "WaitFor") {
+		// waitFor(fut) → msUnboxT(msWaitFor(fut))
+		// msWaitFor returns void* (boxed). Wrap with unbox for the return type.
+		const waitCall = makeCall(makeIdent("msWaitFor", loc), cd.arguments, loc);
+		const retType = node.nodeType;
+		if (retType === null || retType.kind === TypeKind.Void) return waitCall;
+		const unboxFn = unboxFnForType(retType);
+		if (unboxFn !== "") {
+			const unboxCall = makeCall(makeIdent(unboxFn, loc), [waitCall], loc);
+			unboxCall.nodeType = retType;
+			return unboxCall;
+		}
+		// Struct types: void* is the heap-allocated struct pointer
+		waitCall.nodeType = retType;
+		return waitCall;
 	}
 
 	if (builtinKind === "JsonParse") {

@@ -1,16 +1,25 @@
 // Shared path resolution utilities for the MetaScript compiler.
 
-import { argv, fileExists } from "std/process";
+import { argv, fileExists, cwd } from "std/process";
 import { dirname, join } from "std/fs/path";
 
 // Find the compiler root directory (the one containing std/).
-// Resolves relative to the msc binary (argv[0]):
-// 1. ./std  — production layout (msc + std/ in same directory)
-// 2. ../std — development layout (bin/msc, std/ is one level up)
+// Walks up from argv[0], then falls back to cwd().
+// Returns absolute path to avoid relative path issues in C binary.
 export function resolveRuntimeDir(): string {
-	const binDir = dirname(argv[0]);
-	if (fileExists(join(binDir, "std/core/system/index.ms"))) return binDir;
-	const up = dirname(binDir);
-	if (fileExists(join(up, "std/core/system/index.ms"))) return up;
+	let base = dirname(argv[0]);
+	let i = 0;
+	while (i < 4) {
+		if (fileExists(join(base, "std/core/system/index.ms"))) {
+			// Resolve "." to absolute cwd to avoid relative path issues in C binary
+			if (base === "." || base === "") return cwd();
+			return base;
+		}
+		base = dirname(base);
+		i = i + 1;
+	}
+	// Fallback: cwd (needed when argv[0] doesn't resolve, e.g. Bun)
+	base = cwd();
+	if (fileExists(join(base, "std/core/system/index.ms"))) return base;
 	return "";
 }

@@ -40,6 +40,7 @@ export class Promise<T> {
 @builtin("PromiseSpawn")
 export extern function spawn<T>(fn: () => T): Promise<T> from "msSpawn";
 
-export extern function waitFor<T>(fut: Promise<T>): void from "msWaitFor";
+@builtin("WaitFor")
+export extern function waitFor<T>(fut: Promise<T>): T from "msWaitFor";
 
 export extern function sleepAsync(ms: number): Promise<void> from "msSleepAsync";

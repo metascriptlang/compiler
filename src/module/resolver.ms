@@ -84,14 +84,14 @@ function bareConfig(): ResolverConfig {
 // ===== Import Resolution (Full) =====
 
 export function resolveImportWithConfig(specifier: string, fromFile: string, config: ResolverConfig): ResolveCandidates {
-	const result: ResolveCandidates = [];
+	let result: ResolveCandidates = [];
 
 	// Apply alias rewriting
 	const spec = applyAlias(specifier, config);
 
 	// If specifier already has a known extension, return just that path
 	if (hasKnownExtension(spec)) {
-		addDirectCandidates(result, spec, fromFile, config);
+		result = addDirectCandidates(result, spec, fromFile, config);
 		return result;
 	}
 
@@ -100,20 +100,20 @@ export function resolveImportWithConfig(specifier: string, fromFile: string, con
 		// Relative: ./foo, ../bar
 		const baseDir = dirname(fromFile);
 		const base = join(baseDir, spec);
-		addExtensionCandidates(result, base, config.extensions);
+		result = addExtensionCandidates(result, base, config.extensions);
 	} else if (isStdImport(spec)) {
 		// Std library: std/testing → stdPath + "/testing"
 		if (config.stdPath.length > 0) {
 			const subpath = spec.slice(4, spec.length);
 			const base = join(config.stdPath, subpath);
-			addExtensionCandidates(result, base, config.extensions);
+			result = addExtensionCandidates(result, base, config.extensions);
 		}
 		// If no stdPath configured, return empty (handled externally)
 	} else {
 		// Bare import: try each search path
 		for (const sp of config.searchPaths) {
 			const base = join(sp, spec);
-			addExtensionCandidates(result, base, config.extensions);
+			result = addExtensionCandidates(result, base, config.extensions);
 		}
 	}
 
@@ -151,7 +151,7 @@ export function resolveImport(specifier: string, fromFile: string): ResolveCandi
 // ===== Candidate Generation =====
 
 // For a base path (without extension), add direct + index candidates for each extension.
-function addExtensionCandidates(result: ResolveCandidates, base: string, extensions: string[]): void {
+function addExtensionCandidates(result: ResolveCandidates, base: string, extensions: string[]): ResolveCandidates {
 	// Direct file candidates: base + ext
 	for (const ext of extensions) {
 		result.push(base + ext);
@@ -160,10 +160,11 @@ function addExtensionCandidates(result: ResolveCandidates, base: string, extensi
 	for (const ext of extensions) {
 		result.push(join(base, "index" + ext));
 	}
+	return result;
 }
 
 // For a specifier with an explicit extension, resolve it directly.
-function addDirectCandidates(result: ResolveCandidates, spec: string, fromFile: string, config: ResolverConfig): void {
+function addDirectCandidates(result: ResolveCandidates, spec: string, fromFile: string, config: ResolverConfig): ResolveCandidates {
 	if (isRelative(spec)) {
 		const baseDir = dirname(fromFile);
 		result.push(join(baseDir, spec));
@@ -178,6 +179,7 @@ function addDirectCandidates(result: ResolveCandidates, spec: string, fromFile: 
 			result.push(join(sp, spec));
 		}
 	}
+	return result;
 }
 
 // ===== Alias Rewriting =====
