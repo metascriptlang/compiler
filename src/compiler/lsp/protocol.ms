@@ -9,10 +9,13 @@
 // ===== JSON Building =====
 
 export function lspJsonString(val: string): string {
-	// Escape special characters for JSON
+	// Escape special characters for JSON. Strip non-ASCII to avoid
+	// byteLength/length mismatch in Content-Length framing.
 	let result = "\"";
-	for (let i = 0; i < val.byteLength; i = i + 1) {
+	for (let i = 0; i < val.length; i = i + 1) {
 		const ch = val.charAt(i);
+		const code = ch.charCodeAt(0);
+		if (code > 127) continue; // strip non-ASCII (em-dash, etc.)
 		result = result + match (ch) {
 			"\\" => "\\\\",
 			"\"" => "\\\"",

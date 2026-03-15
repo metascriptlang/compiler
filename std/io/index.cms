@@ -6,7 +6,7 @@
  * JSON parsing: use std/core/json (parseJson, stringify, etc.)
  */
 
-@include("io/native.h");
+@include("std/io/native.h");
 
 extern function msStdinDisableBuffering(): void;
 extern function msReadLine(): string;

@@ -10,6 +10,17 @@ std/
 │   ├── string/index.cms       -- string extension methods
 │   ├── array/index.cms        -- array extension methods
 │   ├── map/index.cms          -- Map<K,V> methods
+│   ├── buffer/                -- binary data (Buffer class wrapping C)
+│   │   ├── index.cms          -- prelude (Buffer class, 90 extern bindings)
+│   │   ├── native.h           -- C header (msBuffer = typedef msString)
+│   │   ├── native.c           -- C implementation (714 LOC)
+│   │   └── test.ms            -- 45 tests (alloc, int r/w, float, search, swap)
+│   ├── crypto/                -- cryptographic operations (mbedTLS)
+│   │   ├── index.cms          -- prelude (hash, HMAC, random, Hasher/Hmac classes)
+│   │   ├── errors.ms          -- CryptoError types + constructors
+│   │   ├── native.h           -- C header (Phase 1: hash/HMAC/random)
+│   │   ├── native.c           -- C implementation (~350 LOC, mbedTLS MD API)
+│   │   └── test.ms            -- 30+ tests (known vectors, streaming, random)
 │   └── json/                  -- JSON types + parser + stringify
 │       ├── index.cms          -- prelude (JsonKind, JsonValue, JSON class)
 │       ├── index.ms           -- re-exports for explicit import

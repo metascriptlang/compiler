@@ -44,8 +44,8 @@ ORC (deterministic reference counting) is C-backend-specific infrastructure:
 ORC includes:
 - `msRefHeader` (refcount header for heap objects)
 - `ms_incref` / `ms_decref` / `ms_decref_reassign`
-- `msString` struct layout (`{ len: int, p: ptr NimStrPayload }`)
-- `msArray` struct layout (`{ len: int, p: ptr Payload }`)
+- `msString` struct layout
+- `msArray` struct layout
 - Memory allocation (`alloc`, `dealloc`, `realloc`)
 - COW (copy-on-write) for string literals via `strlitFlag`
 
@@ -55,23 +55,23 @@ Location: `runtime/orc.h` (or equivalent C headers).
 
 ## Why String/Array Runtime Is MetaScript
 
-This is the key architectural insight, validated by Nim's design.
+This is a key architectural choice validated by proven systems-language designs.
 
 ### The Problem
 
 MetaScript has **mutable strings** (TypeScript superset — `s[i] = ch`, `s.add(x)` work on `let` bindings). JavaScript's native `String` is immutable. If the JS backend used native JS strings, mutation would be impossible.
 
-### Nim's Solution
+### Standard Solution
 
-Nim writes its string/seq runtime in Nim (`strs_v2.nim`, `seqs_v2.nim`). This compiles to:
-- **C**: `NimStringV2` struct with pointer to payload buffer
+Modern systems-to-JS compilers write their string/sequence runtime in the source language itself. This compiles to:
+- **C**: A struct with a pointer to a payload buffer
 - **JS**: `Array<number>` (char code array) — mutable, supports `s[i] = ch`
 
-Nim explicitly does NOT use native JS strings for `string`. `"Hello"` becomes `[72,101,108,108,111]` in JS output. Native JS strings are only used for `cstring` (FFI type).
+This approach explicitly does NOT use native JS strings for `string`. `"Hello"` becomes `[72,101,108,108,111]` in JS output. Native JS strings are only used for FFI types (`cstring`).
 
 ### Our Solution (Same Pattern)
 
-String/array runtime written in MetaScript (.ms), compiled by `msc` to both backends:
+String/array runtime written in MetaScript (.ms), compiled to both backends:
 
 | Backend | String Representation | Array Representation |
 |---------|----------------------|---------------------|
@@ -85,49 +85,39 @@ String/array runtime written in MetaScript (.ms), compiled by `msc` to both back
 3. **Single language** — contributors only need MetaScript, not MetaScript + C + JS
 4. **Testable** — runtime functions can use `std/testing` like any other .ms code
 
-**What the .ms runtime uses `extern` for (C backend only):**
-- `memcpy`, `memmove`, `memset` — raw memory operations
-- `strstr`, `strchr` — C string search primitives
-- `realloc` — memory growth
-- `qsort` — system sort
-
-These `extern` declarations are conditionally included (C backend only). The JS backend doesn't need them — it uses native JS operations.
-
 ---
 
 ## Operation Dispatch: Codegen vs Stdlib
 
-~10% of string/array operations are handled in codegen (compiler magic). ~90% are normal stdlib functions in `std/core.ms`. This matches Nim's architecture exactly.
+~10% of string/array operations are handled in codegen (compiler magic). ~90% are normal stdlib functions in `std/core.ms`. This matches standard optimized compiler architectures.
 
 ### Codegen-handled (magic) — `expressions.ms`
 
-These use AST-level type inspection (`nodeType`) to emit specialized code per backend. Equivalent to Nim's `{.magic.}` procs in `ccgexprs.nim`.
+These use AST-level type inspection (`nodeType`) to emit specialized code per backend. Equivalent to "magic" procedures in reference compilers.
 
 **String primitives:**
 
-| Operation | MetaScript | C Emission | Nim Magic |
+| Operation | MetaScript | C Emission | Internal Magic |
 |-----------|-----------|-----------|-----------|
 | Length | `s.length` | `s.len` | `mLengthStr` |
 | Equality | `s == t` / `s === t` | `ms_string_equals(s, t)` | `mEqStr` |
 | Inequality | `s != t` / `s !== t` | `(!ms_string_equals(s, t))` | (mEqStr negated) |
 | Less than | `s < t` | `(ms_string_compare(s, t) < 0)` | `mLtStr` |
 | Less/equal | `s <= t` | `(ms_string_compare(s, t) <= 0)` | `mLeStr` |
-| Greater than | `s > t` | `(ms_string_compare(s, t) > 0)` | (mLtStr flipped) |
-| Greater/equal | `s >= t` | `(ms_string_compare(s, t) >= 0)` | (mLeStr flipped) |
 | Concat | `s + t` | `ms_string_concat(s, t)` | `mConStrStr` |
 | Index read | `s[i]` | `ms_string_char_at(s, i)` | subscript magic |
-| Index write | `s[i] = ch` | `(ms_prepare_str_mutation(&s), ms_string_set_char(&s, i, ch))` | subscript + `nimPrepareStrMutationV2` |
+| Index write | `s[i] = ch` | `(ms_prepare_str_mutation(&s), ms_string_set_char(&s, i, ch))` | subscript + mutation guard |
 
 **Array primitives:**
 
-| Operation | MetaScript | C Emission | Nim Magic |
+| Operation | MetaScript | C Emission | Internal Magic |
 |-----------|-----------|-----------|-----------|
 | Length | `arr.length` | `arr.len` | `mLengthSeq` |
 | Index read | `arr[i]` | `arr.p->data[i]` | `mArrGet` |
 
 **Codegen optimizations:**
 
-| Operation | MetaScript | C Emission | Nim Magic |
+| Operation | MetaScript | C Emission | Internal Magic |
 |-----------|-----------|-----------|-----------|
 | Concat chain | `s + t + u` | `ms_string_concat_many(3, s, t, u)` | `mConStrStr` (chain walk) |
 | Empty string fast path | `s == ""` | `(s.len == 0)` | `mEqStr` (literal check) |
@@ -136,7 +126,7 @@ These use AST-level type inspection (`nodeType`) to emit specialized code per ba
 
 ### Why these are in codegen (not `std/core.ms`)
 
-MetaScript has operator/subscript overloading (reference compiler supports both). In theory, all operations could be `@runtime` declarations. However, codegen handling is required for AST-level optimizations that can't be expressed as function calls:
+MetaScript has operator/subscript overloading. In theory, all operations could be `@runtime` declarations. However, codegen handling is required for AST-level optimizations that can't be expressed as function calls:
 
 1. **Concat chain fusion**: `s + t + u + v` — codegen walks the AST, collects all segments, emits ONE allocation + N appends. A normal function `concat(a, b)` would allocate N-1 intermediate strings.
 
@@ -150,35 +140,35 @@ MetaScript has operator/subscript overloading (reference compiler supports both)
 
 ### Stdlib-handled — `std/core.ms` via `@runtime` pipeline
 
-These are normal extension methods: `collectPass` → `extensionMethodLower` → `builtinLower` → plain function call. Equivalent to Nim's `strutils.nim` / `sequtils.nim` normal procs. **No codegen awareness needed.**
+These are normal extension methods: `collectPass` → `extensionMethodLower` → `builtinLower` → plain function call. Equivalent to standard library procedures in reference implementations. **No codegen awareness needed.**
 
 **String methods (34 total):**
 
-| Category | Methods | Nim Equivalent |
+| Category | Methods | Equivalent |
 |----------|---------|----------------|
-| Search | `indexOf`, `lastIndexOf`, `includes`, `startsWith`, `endsWith` | `find`, `rfind`, `contains`, `startsWith`, `endsWith` (strutils) |
-| Extract | `charAt`, `charCodeAt`, `slice`, `substring`, `at` | `[]`, `ord`, `substr` (system) |
-| Split/Join | `split` | `split` (strutils) |
-| Transform | `toLowerCase`, `toUpperCase`, `trim`, `trimStart`, `trimEnd` | `toLowerAscii`, `toUpperAscii`, `strip` (strutils) |
-| Replace | `replace`, `replaceAll` | `replace` (strutils) |
-| Build | `concat`, `repeat`, `padStart`, `padEnd` | `&`, `repeat`, `align`, `alignLeft` (strutils) |
-| Mutate | `add`, `addChar`, `strInsert`, `strRemove`, `setLen` | `add`, `add(char)`, `insert`, `delete`, `setLen` (system) |
-| Query | `capacity`, `cmpIgnoreCase`, `strReverse`, `strCount`, `isBlank` | `capacity` (system), `cmpIgnoreCase`, manual, `count` (strutils) |
-| Edit | `removePrefix`, `removeSuffix` | `removePrefix`, `removeSuffix` (strutils) |
+| Search | `indexOf`, `lastIndexOf`, `includes`, `startsWith`, `endsWith` | `find`, `rfind`, `contains`, `startsWith`, `endsWith` |
+| Extract | `charAt`, `charCodeAt`, `slice`, `substring`, `at` | `[]`, `ord`, `substr` |
+| Split/Join | `split` | `split` |
+| Transform | `toLowerCase`, `toUpperCase`, `trim`, `trimStart`, `trimEnd` | `toLowerAscii`, `toUpperAscii`, `strip` |
+| Replace | `replace`, `replaceAll` | `replace` |
+| Build | `concat`, `repeat`, `padStart`, `padEnd` | `&`, `repeat`, `align`, `alignLeft` |
+| Mutate | `add`, `addChar`, `strInsert`, `strRemove`, `setLen` | `add`, `add(char)`, `insert`, `delete`, `setLen` |
+| Query | `capacity`, `cmpIgnoreCase`, `strReverse`, `strCount`, `isBlank` | `capacity`, `cmpIgnoreCase`, manual, `count` |
+| Edit | `removePrefix`, `removeSuffix` | `removePrefix`, `removeSuffix` |
 
 **String free functions (6):** `parseInt`, `parseFloat`, `intToString`, `toHex`, `newString`, `newStringOfCap`
 
 **Array methods (23 total):**
 
-| Category | Methods | Nim Equivalent |
+| Category | Methods | Equivalent |
 |----------|---------|----------------|
-| Add/Remove | `push`, `pop`, `shift`, `unshift` | `add` (system), `pop`, manual, manual |
-| Search | `arrIndexOf`, `arrIncludes` | `find`, `contains` (system) |
+| Add/Remove | `push`, `pop`, `shift`, `unshift` | `add`, `pop`, manual, manual |
+| Search | `arrIndexOf`, `arrIncludes` | `find`, `contains` |
 | Extract | `arrSlice`, `arrAt` | manual slice, `[]` with bounds |
-| Transform | `arrReverse`, `sort`, `fill` | `reversed` (sequtils), `sort` (algorithm), manual |
-| Build | `arrConcat`, `splice`, `join` | `concat` (sequtils), manual, `join` (strutils) |
-| Mutate | `arrInsert`, `removeAt`, `del`, `arrSetLen`, `shrink`, `grow`, `clear` | `insert`, `delete`, `del`, `setLen`, `shrink`, `grow` (system) |
-| Query | `arrCapacity`, `arrCount` | `capacity` (system), `count` (sequtils) |
+| Transform | `arrReverse`, `sort`, `fill` | `reversed`, `sort`, manual |
+| Build | `arrConcat`, `splice`, `join` | `concat`, manual, `join` |
+| Mutate | `arrInsert`, `removeAt`, `del`, `arrSetLen`, `shrink`, `grow`, `clear` | `insert`, `delete`, `del`, `setLen`, `shrink`, `grow` |
+| Query | `arrCapacity`, `arrCount` | `capacity`, `count` |
 
 **Array free functions (2):** `newArray`, `newArrayOfCap`
 
@@ -194,9 +184,9 @@ These are normal extension methods: `collectPass` → `extensionMethodLower` →
 | Empty string fast path | **DONE** — `s.len == 0` |
 | Array index write | **DONE** — `arr.p->data[i] = v` |
 | `std/core.ms` declarations (65 methods+functions) | **DONE** — all `@runtime` annotated |
-| C runtime implementations | **DONE** — in reference compiler `src/runtime/ms_string.h`, `ms_array.h` |
+| C runtime implementations | **DONE** — `runtime/core/string.h`, `runtime/core/array.h` |
 | Compiler pipeline (collect → UFCS → builtinLower) | **DONE** |
-| ORC foundation (pure C) | **DONE** — reference compiler `src/runtime/orc.h` |
+| ORC foundation (pure C) | **DONE** — `runtime/orc.h` |
 | Runtime rewrite to .ms | NOT STARTED — currently pure C headers |
 | JS backend string runtime | NOT STARTED — currently uses native JS strings (no mutation support) |
 | Fixed-size arrays (`T[N]`) | NOT STARTED — type system + stack allocation |
@@ -251,7 +241,7 @@ buf.add(" world");            // in-place append
 
 **Per-backend representation:**
 - **C**: `msString { len, p }` — growable COW buffer. `s[i] = ch` mutates in-place (COW copy if shared).
-- **JS**: `Array<number>` (char codes) — mutable. `"Hello"` → `[72,101,108,108,111]`. Same as Nim's approach.
+- **JS**: `Array<number>` (char codes) — mutable. `"Hello"` → `[72,101,108,108,111]`. Same as the standard reference approach.
 - **Raiser**: VM-managed string object with mutation support.
 
 **Encoding**: UTF-8 in C, char codes in JS. Identical behavior for ASCII (0-127). Non-ASCII diverges — accept pragmatically. Future `Rune` iterator for explicit Unicode work.
@@ -260,27 +250,27 @@ buf.add(" world");            // in-place append
 
 ## Three-Tier Array Type System
 
-MetaScript is a systems programming language with TypeScript syntax. Like Nim's `array[N,T]` / `seq[T]` / `openArray[T]` split, MetaScript needs three array tiers for performance-critical code — but expressed as TypeScript-compatible syntax.
+MetaScript is a systems programming language with TypeScript syntax. Similar to proven models like the `array[N,T]` / `seq[T]` / `openArray[T]` split, MetaScript needs three array tiers for performance-critical code — but expressed as TypeScript-compatible syntax.
 
 ### The Problem
 
-Nim has three distinct sequence types because systems programming demands control over allocation:
+Systems programming demands control over allocation, often requiring three distinct sequence types:
 
-| Nim Type | Allocation | Size | Growable |
+| Tier | Allocation | Size | Growable |
 |----------|-----------|------|----------|
-| `array[N, T]` | Stack | Fixed at compile time | No |
-| `seq[T]` | Heap | Dynamic | Yes |
-| `openArray[T]` | None (view) | Borrowed pointer + length | N/A |
+| Fixed-size | Stack | Fixed at compile time | No |
+| Dynamic | Heap | Dynamic | Yes |
+| View/Span | None (view) | Borrowed pointer + length | N/A |
 
-Without all three, you either waste heap allocations on known-size data, or duplicate every function for arrays vs sequences. `openArray` unifies them — ~70+ stdlib functions in Nim accept `openArray` to work with both.
+Without all three, you either waste heap allocations on known-size data, or duplicate every function for arrays vs sequences. A unified view type solves this by allowing a single function to work with both fixed and dynamic arrays.
 
 ### MetaScript Mapping
 
-| Nim | MetaScript | C Backend | JS Backend |
-|-----|-----------|-----------|------------|
-| `array[N, T]` | `T[N]` | `T arr[N]` (stack) | `Array(N)` (pre-sized) |
-| `seq[T]` | `T[]` | `msArray { len, p }` (heap) | `Array` (native) |
-| `openArray[T]` | `Span<T>` | `{ T* data, NI len }` (view) | `{ data, offset, len }` (view) |
+| Concept | MetaScript | C Backend | JS Backend |
+|---------|-----------|-----------|------------|
+| Fixed-size | `T[N]` | `T arr[N]` (stack) | `Array(N)` (pre-sized) |
+| Dynamic | `T[]` | `msArray { len, p }` (heap) | `Array` (native) |
+| View/Span | `Span<T>` | `{ T* data, NI len }` (view) | `{ data, offset, len }` (view) |
 
 ### Syntax (TypeScript Superset)
 
@@ -335,7 +325,7 @@ The compiler inserts conversions at call sites when a function expects `Span<T>`
 
 ### Restrictions
 
-- `Span<T>` **cannot be returned** from functions — dangling pointer risk (same as Nim's openArray)
+- `Span<T>` **cannot be returned** from functions — dangling pointer risk (same as the reference model)
 - `Span<T>` **cannot be stored** in interfaces/classes — lifetime not tracked
 - `T[N]` size must be a **compile-time constant** (literal or const generic)
 - `T[N]` **cannot be resized** — no `push`, `pop`, `splice`
@@ -371,7 +361,7 @@ Items tracked in `docs/FEATURE-GAP.md` that must be completed for full pipeline 
 |-----|---------|
 | Concepts / type classes | Type system design |
 | Multi-methods + VTables | Language feature |
-| Template/macro system | Hermes VM integration |
+| Template/macro system | VM integration |
 | Converter procs | `converter` keyword semantics |
 | Proc inlining | `@inline` implementation |
 | Spawn / parallel | Threading model |

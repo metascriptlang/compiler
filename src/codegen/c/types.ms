@@ -60,6 +60,7 @@ function anonFieldKey(t: Type): string {
 		TypeKind.Array => "arr:" + anonFieldKey(t.typeReturn),
 		TypeKind.Function => "fn",
 		TypeKind.Result => "result",
+		TypeKind.Promise => "promise",
 		TypeKind.Ref | TypeKind.Ptr => "ptr:" + anonFieldKey(t.typeReturn),
 		TypeKind.TypeReference => "ref:" + t.typeName,
 		_ => {
@@ -267,6 +268,7 @@ export function typeKey(t: Type): string {
 		TypeKind.Result => {
 			return `result:${typeKey(t.typeReturn)},${typeKey(t.typeExtra)}`;
 		},
+		TypeKind.Promise => "promise:" + typeKey(t.typeReturn),
 		TypeKind.TypeReference => { return "typeref:" + t.typeName; },
 		TypeKind.Distinct => { return "distinct:" + t.typeName; },
 		TypeKind.Union => {
@@ -331,7 +333,7 @@ export function isPointerType(t: Type): boolean {
 	const inner = skipModifier(t);
 	if (inner === null) return false;
 	return match (inner.kind) {
-		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow => true,
+		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow | TypeKind.Promise => true,
 		_ => false,
 	};
 }
@@ -377,6 +379,7 @@ export function needsRC(t: Type): boolean {
 		TypeKind.SizedArray => needsRC(t.typeReturn), // Recurse for nested RC
 		TypeKind.Span => false, // Span is non-owning
 		TypeKind.Ref => true,
+		TypeKind.Promise => true, // msFuture* needs msFutureDestroy
 		TypeKind.Map | TypeKind.Set => true,
 		TypeKind.Tuple => {
 			let i = 0;
@@ -532,86 +535,62 @@ export function getTypeDesc(g: CGen, t: Type): string {
 		return name;
 	}
 
-	// Generate based on kind
-	const result = match (t.kind) {
-		TypeKind.Enum => {
-			return genEnumType(g, t);
-		},
-		TypeKind.Struct => {
-			return genObjectType(g, t);
-		},
-		TypeKind.Array => {
-			return genArrayType(g, t);
-		},
-		TypeKind.SizedArray => {
-			return genSizedArrayType(g, t);
-		},
-		TypeKind.Span => {
-			return genSpanType(g, t);
-		},
-		TypeKind.Function => {
-			return genFunctionType(g, t);
-		},
-		TypeKind.Ref => {
-			const inner = getTypeDesc(g, t.typeReturn);
-			const ptrType = inner + "*";
+	// Generate based on kind — if-else chain to avoid match arm DRC scope cleanup
+	// destroying local strings before they can be used as return values.
+	const k = t.kind;
+	if (k === TypeKind.Enum) return genEnumType(g, t);
+	if (k === TypeKind.Struct) return genObjectType(g, t);
+	if (k === TypeKind.Array) return genArrayType(g, t);
+	if (k === TypeKind.SizedArray) return genSizedArrayType(g, t);
+	if (k === TypeKind.Span) return genSpanType(g, t);
+	if (k === TypeKind.Function) return genFunctionType(g, t);
+	if (k === TypeKind.Ref) {
+		const inner = getTypeDesc(g, t.typeReturn);
+		const ptrType = inner + "*";
+		typeCacheSet(g.typeCache, key, ptrType);
+		return ptrType;
+	}
+	if (k === TypeKind.Ptr) {
+		const innerType = t.typeReturn;
+		if (innerType !== null && (innerType.kind === TypeKind.Ref || innerType.kind === TypeKind.Ptr)) {
+			const ptrType = getTypeDesc(g, innerType);
 			typeCacheSet(g.typeCache, key, ptrType);
 			return ptrType;
-		},
-		TypeKind.Ptr => {
-			// Ptr<T> is unmanaged (no RC) but same C representation as a regular pointer.
-			// Ptr<Ref<Struct>> (Ptr of class) → same as Ref<Struct> = "ClassName*" (not "ClassName**")
-			// Ptr<Struct> (Ptr of value) → "StructName*"
-			const innerType = t.typeReturn;
-			if (innerType !== null && (innerType.kind === TypeKind.Ref || innerType.kind === TypeKind.Ptr)) {
-				// Inner is already a pointer type — use its descriptor directly
-				const ptrType = getTypeDesc(g, innerType);
-				typeCacheSet(g.typeCache, key, ptrType);
-				return ptrType;
-			}
-			const inner = getTypeDesc(g, innerType);
-			const ptrType = inner + "*";
-			typeCacheSet(g.typeCache, key, ptrType);
-			return ptrType;
-		},
-		TypeKind.Var => {
-			// Var returns inner type desc — the * is added by ccgIntroducedPtr at declaration/call level
-			const inner = getTypeDesc(g, t.typeReturn);
-			typeCacheSet(g.typeCache, key, inner);
-			return inner;
-		},
-		TypeKind.Borrow => {
-			const inner = getTypeDesc(g, t.typeReturn);
-			const ptrType = "const " + inner + "*";
-			typeCacheSet(g.typeCache, key, ptrType);
-			return ptrType;
-		},
-		TypeKind.Result => {
-			return genResultType(g, t);
-		},
-		TypeKind.Map => {
-			typeCacheSet(g.typeCache, key, "msMap");
-			return "msMap";
-		},
-		TypeKind.Set => {
-			typeCacheSet(g.typeCache, key, "msSet");
-			return "msSet";
-		},
-		TypeKind.TypeReference => "void*", // handled above, shouldn't reach here
-		TypeKind.Unknown => "void*",
-		TypeKind.Any => "void*",
-		TypeKind.Union => {
-			return genUnionType(g, t);
-		},
-		TypeKind.Intersection => "void*",
-		TypeKind.Tuple => {
-			return genTupleType(g, t);
-		},
-		TypeKind.Generic | TypeKind.GenericParam => "void*",
-		_ => "void",
-	};
-
-	return result;
+		}
+		const inner = getTypeDesc(g, innerType);
+		const ptrType = inner + "*";
+		typeCacheSet(g.typeCache, key, ptrType);
+		return ptrType;
+	}
+	if (k === TypeKind.Var) {
+		const inner = getTypeDesc(g, t.typeReturn);
+		typeCacheSet(g.typeCache, key, inner);
+		return inner;
+	}
+	if (k === TypeKind.Borrow) {
+		const inner = getTypeDesc(g, t.typeReturn);
+		const ptrType = "const " + inner + "*";
+		typeCacheSet(g.typeCache, key, ptrType);
+		return ptrType;
+	}
+	if (k === TypeKind.Result) return genResultType(g, t);
+	if (k === TypeKind.Promise) {
+		typeCacheSet(g.typeCache, key, "msFuture*");
+		return "msFuture*";
+	}
+	if (k === TypeKind.Map) {
+		typeCacheSet(g.typeCache, key, "msMap");
+		return "msMap";
+	}
+	if (k === TypeKind.Set) {
+		typeCacheSet(g.typeCache, key, "msSet");
+		return "msSet";
+	}
+	if (k === TypeKind.Union) return genUnionType(g, t);
+	if (k === TypeKind.Tuple) return genTupleType(g, t);
+	if (k === TypeKind.TypeReference || k === TypeKind.Unknown) return "void*";
+	if (k === TypeKind.GenericParam || k === TypeKind.GenericInstance) return "void*";
+	return "void";
 }
 
 // ===== Enum Type Generation =====

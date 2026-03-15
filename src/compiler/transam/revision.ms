@@ -35,7 +35,7 @@ export enum TaDurability {
 
 // ===== Revision — monotonically increasing counter =====
 
-export interface TaRevision {
+export class TaRevision {
 	value: number;
 }
 

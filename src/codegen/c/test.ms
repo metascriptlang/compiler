@@ -2,7 +2,7 @@
 //
 // Handles test-build-only emission:
 //   - genTestDeclNode: TestDecl → static wrapper function + register entry
-//   - emitTestHeader: #include "test.h"
+//   - emitTestHeader: #include "std/core/system/test.h"
 //   - emitTestTable: MsTestEntry[] (non-static, referenced by dispatcher)
 //   - genTestDispatcher: replaces genProjectDispatcher for test builds
 //
@@ -63,7 +63,7 @@ export function genTestDeclNode(g: CGen, node: Node): void {
 
 export function emitTestHeader(g: CGen): void {
 	if (!g.isTestBuild) return;
-	addLine(sec(g, CSection.Headers), "#include \"test.h\"");
+	addLine(sec(g, CSection.Headers), "#include \"std/core/system/test.h\"");
 }
 
 // ===== Test Table =====
@@ -100,7 +100,7 @@ export function emitTestTable(g: CGen): void {
 export function genTestDispatcher(modulePaths: string[], entryPath: string): string {
 	const b = createBuilder();
 
-	addLine(b, "#include \"test.h\"");
+	addLine(b, "#include \"std/core/system/test.h\"");
 	addNewline(b);
 
 	// Forward declarations: init functions + test entry tables

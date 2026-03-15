@@ -8,7 +8,7 @@
 // V1: No Promise wrapper (runtime/codegen concern, not AST transform).
 
 import {
-	Node, NodeKind, createNode,
+	Node, NodeKind, NodeFlag, createNode,
 	ProgramData, BlockStmtData, FunctionDeclData, FunctionExprData,
 	ArrowFunctionData, MethodDeclData, ConstructorDeclData,
 	ExportDeclData, ClassDeclData, DecoratedDeclData,
@@ -53,6 +53,7 @@ function walkAsync(node: Node): void {
 			// Recurse first (handle nested async functions)
 			walkAsync(d.fnBody);
 			if (d.fnFlags === "async" || d.fnFlags === "async_generator") {
+				node.flags = node.flags | NodeFlag.WasAsync;
 				rewriteAwaits(d.fnBody);
 				d.fnFlags = "generator";
 			}
@@ -81,6 +82,7 @@ function walkAsync(node: Node): void {
 			const d = node.data as MethodDeclData;
 			walkAsync(d.methodBody);
 			if (d.methodFlags === "async" || d.methodFlags === "async_generator") {
+				node.flags = node.flags | NodeFlag.WasAsync;
 				rewriteAwaits(d.methodBody);
 				d.methodFlags = "generator";
 			}
@@ -120,6 +122,7 @@ function walkCheckExpr(node: Node): void {
 			const d = node.data as FunctionExprData;
 			walkAsync(d.funcExprBody);
 			if (d.funcExprFlags === "async" || d.funcExprFlags === "async_generator") {
+				node.flags = node.flags | NodeFlag.WasAsync;
 				rewriteAwaits(d.funcExprBody);
 				d.funcExprFlags = "generator";
 			}
@@ -128,6 +131,7 @@ function walkCheckExpr(node: Node): void {
 			const d = node.data as ArrowFunctionData;
 			walkAsync(d.arrowBody);
 			if (d.arrowFlags === "async" || d.arrowFlags === "async_generator") {
+				node.flags = node.flags | NodeFlag.WasAsync;
 				rewriteAwaits(d.arrowBody);
 				d.arrowFlags = "generator";
 			}

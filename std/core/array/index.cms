@@ -2,7 +2,8 @@
 // Extension methods backed by runtime/core/array.h
 // Loaded automatically via globalImports() -> "std/core/array"
 
-@include("core/array.h");
+@include("std/core/array/native.h");
+@compile("std/core/array/native.c");
 
 // ===== Number Array =====
 
@@ -77,7 +78,7 @@ extern function count(this arr: number[], value: number): number from "&msNumber
 extern function join(this arr: number[], sep: string): string from "&msNumberArrayJoin";
 
 /** Sets the length of the array. */
-extern function setLen(this arr: number[], newLen: number): void from "&msNumberArraySetLen";
+extern function setLength(this arr: number[], newLen: number): void from "&msNumberArraySetLen";
 
 /** Returns the allocated capacity of the array buffer. */
 extern function capacity(this arr: number[]): number from "&msNumberArrayCapacity";
@@ -155,7 +156,7 @@ extern function count(this arr: string[], value: string): number from "&msString
 extern function join(this arr: string[], sep: string): string from "&msStringArrayJoin";
 
 /** Sets the length of the array. */
-extern function setLen(this arr: string[], newLen: number): void from "&msStringArraySetLen";
+extern function setLength(this arr: string[], newLen: number): void from "&msStringArraySetLen";
 
 /** Returns the allocated capacity of the array buffer. */
 extern function capacity(this arr: string[]): number from "&msStringArrayCapacity";
@@ -180,7 +181,7 @@ extern function pop<T>(this arr: T[]): T from "&msGenericArrayPop";
 extern function at<T>(this arr: T[], idx: number): T from "&msGenericArrayAt";
 
 /** Sets the length of the array. */
-extern function setLen<T>(this arr: T[], newLen: number): void from "&msGenericArraySetLen";
+extern function setLength<T>(this arr: T[], newLen: number): void from "&msGenericArraySetLen";
 
 /** Returns the allocated capacity of the array buffer. */
 extern function capacity<T>(this arr: T[]): number from "&msGenericArrayCapacity";

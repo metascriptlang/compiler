@@ -42,8 +42,8 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 	addLine(sec(g, CSection.Headers), "#include <stdbool.h>");
 	addLine(sec(g, CSection.Headers), "#include <string.h>");
 	addLine(sec(g, CSection.Headers), "#include <math.h>");
-	addLine(sec(g, CSection.Headers), "#include \"system.h\"");
-	nameSetAdd(g.declaredThings, "inc:system.h"); // prevent duplicate from @include
+	addLine(sec(g, CSection.Headers), "#include \"std/core/system/native.h\"");
+	nameSetAdd(g.declaredThings, "inc:std/core/system/native.h"); // prevent duplicate from @include
 	emitTestHeader(g);
 
 

@@ -357,8 +357,6 @@ function setupTupleCtx(): TransformContext {
 	return createTransformContextWithChecker(checkerCtx);
 }
 
-import { test, check } from "std/testing";
-
 // ===== Object operator tests =====
 
 test "operator lower rewrites === on interface types" {
@@ -367,8 +365,8 @@ test "operator lower rewrites === on interface types" {
 	if (!pr.ok) return;
 	const result = lowerOperators(pr.value, ctx);
 	const stmts = getStmts(result);
-	check(stmts.length > 0);
-	check(stmts[0].kind === NodeKind.ExprStmt);
+	assert stmts.length > 0;
+	assert stmts[0].kind === NodeKind.ExprStmt;
 }
 
 test "operator lower does not rewrite builtin types without override" {
@@ -382,7 +380,7 @@ test "operator lower does not rewrite builtin types without override" {
 	const pr = parseInput("a === b;");
 	if (!pr.ok) return;
 	const result = lowerOperators(pr.value, ctx);
-	check(firstExprKind(result) === NodeKind.BinaryExpr);
+	assert firstExprKind(result) === NodeKind.BinaryExpr;
 }
 
 test "operator lower rewrites builtin type with explicit override" {
@@ -392,7 +390,7 @@ test "operator lower rewrites builtin type with explicit override" {
 	if (!pr.ok) return;
 	const result = lowerOperators(pr.value, ctx);
 	// Explicit extension registered → rewritten to CallExpr
-	check(firstExprKind(result) === NodeKind.CallExpr);
+	assert firstExprKind(result) === NodeKind.CallExpr;
 }
 
 test "operator lower auto-rewrites === on interface without explicit extension" {
@@ -407,9 +405,9 @@ test "operator lower auto-rewrites === on interface without explicit extension" 
 	if (!pr.ok) return;
 	const result = lowerOperators(pr.value, ctx);
 	const stmts = getStmts(result);
-	check(stmts.length > 0);
+	assert stmts.length > 0;
 	// Interface type auto-rewrites to Token_eq(a, b) — CallExpr, not BinaryExpr
-	check(firstExprKind(result) === NodeKind.CallExpr);
+	assert firstExprKind(result) === NodeKind.CallExpr;
 }
 
 test "operator lower does not rewrite Ref types" {
@@ -423,7 +421,7 @@ test "operator lower does not rewrite Ref types" {
 	const pr = parseInput("a === b;");
 	if (!pr.ok) return;
 	const result = lowerOperators(pr.value, ctx);
-	check(firstExprKind(result) === NodeKind.BinaryExpr);
+	assert firstExprKind(result) === NodeKind.BinaryExpr;
 }
 
 // ===== Derived operator tests (reference: system/reference comparisons) =====
@@ -440,7 +438,7 @@ test "!== derives from == on interface (auto-generated)" {
 	if (!pr.ok) return;
 	const result = lowerOperators(pr.value, ctx);
 	// !== → !Token_eq(a, b) — UnaryExpr wrapping CallExpr
-	check(firstExprKind(result) === NodeKind.UnaryExpr);
+	assert firstExprKind(result) === NodeKind.UnaryExpr;
 }
 
 test "!== derives from explicit == extension" {
@@ -450,7 +448,7 @@ test "!== derives from explicit == extension" {
 	if (!pr.ok) return;
 	const result = lowerOperators(pr.value, ctx);
 	// !== → !==(a, b) — UnaryExpr wrapping CallExpr
-	check(firstExprKind(result) === NodeKind.UnaryExpr);
+	assert firstExprKind(result) === NodeKind.UnaryExpr;
 }
 
 test "> derives from < (swap operands)" {
@@ -460,7 +458,7 @@ test "> derives from < (swap operands)" {
 	if (!pr.ok) return;
 	const result = lowerOperators(pr.value, ctx);
 	// > → <(b, a) — CallExpr with swapped args
-	check(firstExprKind(result) === NodeKind.CallExpr);
+	assert firstExprKind(result) === NodeKind.CallExpr;
 }
 
 test ">= derives from <= (swap operands)" {
@@ -470,7 +468,7 @@ test ">= derives from <= (swap operands)" {
 	if (!pr.ok) return;
 	const result = lowerOperators(pr.value, ctx);
 	// >= → <=(b, a) — CallExpr with swapped args
-	check(firstExprKind(result) === NodeKind.CallExpr);
+	assert firstExprKind(result) === NodeKind.CallExpr;
 }
 
 test "> not derived without < defined" {
@@ -484,7 +482,7 @@ test "> not derived without < defined" {
 	const pr = parseInput("a > b;");
 	if (!pr.ok) return;
 	const result = lowerOperators(pr.value, ctx);
-	check(firstExprKind(result) === NodeKind.BinaryExpr);
+	assert firstExprKind(result) === NodeKind.BinaryExpr;
 }
 
 test "explicit != overrides derivation from ==" {
@@ -502,7 +500,7 @@ test "explicit != overrides derivation from ==" {
 	if (!pr.ok) return;
 	const result = lowerOperators(pr.value, ctx);
 	// Explicit != extension → direct CallExpr (not UnaryExpr wrapping)
-	check(firstExprKind(result) === NodeKind.CallExpr);
+	assert firstExprKind(result) === NodeKind.CallExpr;
 }
 
 // ===== Tuple operator tests (reference: reference core:1973-1996) =====
@@ -512,9 +510,9 @@ test "tuple === rewrites to _eq call" {
 	const pr = parseInput("a === b;");
 	if (!pr.ok) return;
 	const result = lowerOperators(pr.value, ctx);
-	check(firstExprKind(result) === NodeKind.CallExpr);
+	assert firstExprKind(result) === NodeKind.CallExpr;
 	// Should register pending tuple op
-	check(ctx.pendingTupleOps.length > 0);
+	assert ctx.pendingTupleOps.length > 0;
 }
 
 test "tuple < rewrites to _lt call" {
@@ -522,7 +520,7 @@ test "tuple < rewrites to _lt call" {
 	const pr = parseInput("a < b;");
 	if (!pr.ok) return;
 	const result = lowerOperators(pr.value, ctx);
-	check(firstExprKind(result) === NodeKind.CallExpr);
+	assert firstExprKind(result) === NodeKind.CallExpr;
 }
 
 test "tuple <= rewrites to _le call" {
@@ -530,7 +528,7 @@ test "tuple <= rewrites to _le call" {
 	const pr = parseInput("a <= b;");
 	if (!pr.ok) return;
 	const result = lowerOperators(pr.value, ctx);
-	check(firstExprKind(result) === NodeKind.CallExpr);
+	assert firstExprKind(result) === NodeKind.CallExpr;
 }
 
 test "tuple !== derives from == (auto-generated)" {
@@ -539,7 +537,7 @@ test "tuple !== derives from == (auto-generated)" {
 	const pr = parseInput("a !== b;");
 	if (!pr.ok) return;
 	const result = lowerOperators(pr.value, ctx);
-	check(firstExprKind(result) === NodeKind.UnaryExpr);
+	assert firstExprKind(result) === NodeKind.UnaryExpr;
 }
 
 test "tuple > derives from < (swap)" {
@@ -548,7 +546,7 @@ test "tuple > derives from < (swap)" {
 	const pr = parseInput("a > b;");
 	if (!pr.ok) return;
 	const result = lowerOperators(pr.value, ctx);
-	check(firstExprKind(result) === NodeKind.CallExpr);
+	assert firstExprKind(result) === NodeKind.CallExpr;
 }
 
 test "tuple >= derives from <= (swap)" {
@@ -557,7 +555,7 @@ test "tuple >= derives from <= (swap)" {
 	const pr = parseInput("a >= b;");
 	if (!pr.ok) return;
 	const result = lowerOperators(pr.value, ctx);
-	check(firstExprKind(result) === NodeKind.CallExpr);
+	assert firstExprKind(result) === NodeKind.CallExpr;
 }
 
 test "pending tuple ops dedup" {
@@ -569,7 +567,7 @@ test "pending tuple ops dedup" {
 	if (!pr2.ok) return;
 	lowerOperators(pr2.value, ctx);
 	// Same tuple type used twice — should only have 1 pending entry
-	check(ctx.pendingTupleOps.length === 1);
+	assert ctx.pendingTupleOps.length === 1;
 }
 
 // ===== Nullable Pointer Tests =====
@@ -585,7 +583,7 @@ test "Ref !== null is NOT constant-folded" {
 	if (!pr.ok) return;
 	const result = lowerOperators(pr.value, ctx);
 	// Should remain BinaryExpr (not constant-folded to BooleanLiteral)
-	check(firstExprKind(result) === NodeKind.BinaryExpr);
+	assert firstExprKind(result) === NodeKind.BinaryExpr;
 }
 
 test "Ptr !== null is NOT constant-folded" {
@@ -597,7 +595,7 @@ test "Ptr !== null is NOT constant-folded" {
 	const pr = parseInput("p !== null;");
 	if (!pr.ok) return;
 	const result = lowerOperators(pr.value, ctx);
-	check(firstExprKind(result) === NodeKind.BinaryExpr);
+	assert firstExprKind(result) === NodeKind.BinaryExpr;
 }
 
 test "Maybe<Interface> !== null rewrites to .present" {
@@ -610,7 +608,7 @@ test "Maybe<Interface> !== null rewrites to .present" {
 	if (!pr.ok) return;
 	const result = lowerOperators(pr.value, ctx);
 	// Should rewrite to t.present → MemberExpr
-	check(firstExprKind(result) === NodeKind.MemberExpr);
+	assert firstExprKind(result) === NodeKind.MemberExpr;
 }
 
 test "interface !== null constant-folds to true" {
@@ -624,5 +622,5 @@ test "interface !== null constant-folds to true" {
 	if (!pr.ok) return;
 	const result = lowerOperators(pr.value, ctx);
 	// Should constant-fold to BooleanLiteral(true)
-	check(firstExprKind(result) === NodeKind.BooleanLiteral);
+	assert firstExprKind(result) === NodeKind.BooleanLiteral;
 }

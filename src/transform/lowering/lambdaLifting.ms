@@ -25,7 +25,7 @@ import {
 	BinaryExprData, CallExprData, UnaryExprData,
 	IdentifierData,
 } from "../../ast/node";
-import { TransformContext, NameSet, nameSetAdd, nameSetContains } from "../context";
+import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../context";
 import { mapChildren, isFuncBoundary } from "../walker";
 import {
 	makeIdent, makeMember, makeMoveExpr, makeReturn, makeBlock,
@@ -148,13 +148,26 @@ function typeToEnvStr(t: Type): string {
 		TypeKind.Uint64 => "uint64",
 		TypeKind.Float32 => "float32",
 		TypeKind.Function => "msClosure",
-		TypeKind.Struct => (t.typeName !== null && t.typeName !== "") ? t.typeName : "",
+		TypeKind.Struct => {
+			// Use explicit local to ensure DRC incref on member access (avoids use-after-free)
+			if (t.typeName !== null && t.typeName !== "") {
+				const name = t.typeName;
+				return name;
+			}
+			return "";
+		},
 		TypeKind.Ref | TypeKind.Ptr => {
 			// Ref<T>/Ptr<T> store inner type in typeReturn, not typeName
 			if (t.typeReturn !== null) return typeToEnvStr(t.typeReturn);
 			return "";
 		},
-		TypeKind.Enum => (t.typeName !== null && t.typeName !== "") ? t.typeName : "",
+		TypeKind.Enum => {
+			if (t.typeName !== null && t.typeName !== "") {
+				const name = t.typeName;
+				return name;
+			}
+			return "";
+		},
 		TypeKind.Array => {
 			if (t.typeReturn !== null) {
 				const elem = typeToEnvStr(t.typeReturn);
@@ -162,7 +175,10 @@ function typeToEnvStr(t: Type): string {
 			} else { "unknown[]"; }
 		},
 		TypeKind.Result => "Result",
-		TypeKind.TypeReference => t.typeName,
+		TypeKind.TypeReference => {
+			const name = t.typeName;
+			return name;
+		},
 		_ => "",
 	};
 }
@@ -174,7 +190,7 @@ function createLiftState(): LiftState {
 		closureCounter: 0,
 		currentFnName: "anon",
 		ss: createScopeStack(),
-		lastUseCaptures: [],
+		lastUseCaptures: createNameSet(),
 		currentStmts: [],
 		currentStmtIdx: 0,
 		varTypes: [],
@@ -214,8 +230,8 @@ function isCaptureLastUse(varName: string, closureIdx: number, stmts: Node[]): b
 }
 
 function computeLastUseCaptures(captures: NameSet, closureIdx: number, stmts: Node[]): NameSet {
-	const result: NameSet = [];
-	for (const name of captures) {
+	const result: NameSet = createNameSet();
+	for (const name of captures.items) {
 		if (isCaptureLastUse(name, closureIdx, stmts)) {
 			nameSetAdd(result, name);
 		}
@@ -228,22 +244,23 @@ function computeLastUseCaptures(captures: NameSet, closureIdx: number, stmts: No
 // Walk the body recursively, collecting identifier names that are in outer scopes.
 // Module-level state avoids closure capture of value-type arrays (use-after-free in C backend).
 
-let _captureCC: NameSet = [];
+let _captureCC: NameSet = createNameSet();
 let _captureIdents: Node[] = [];
 let _captureSS: ScopeStack = { names: [], funcMarkers: [] };
 
 function detectCaptures(body: Node, ss: ScopeStack, identNodes: Node[]): NameSet {
-	_captureCC = [];
+	_captureCC = createNameSet();
 	_captureIdents = identNodes;
 	_captureSS = ss;
 	collectCaptures(body);
 	const result = _captureCC;
-	_captureCC = [];
+	_captureCC = createNameSet();
 	_captureIdents = [];
 	return result;
 }
 
 function collectCaptures(node: Node): void {
+	if (node === null) return;
 	if (node.kind === NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
 		if (!isBuiltinName(d.name) && !isLocalVar(_captureSS, d.name) && isOuterVar(_captureSS, d.name)) {
@@ -268,6 +285,7 @@ function collectCaptures(node: Node): void {
 // Replace captured Identifier nodes with _envP.name MemberExpr.
 
 function rewriteNode(node: Node, captures: NameSet, envTypeName: string): Node {
+	if (node === null) return null;
 	if (node.kind === NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
 		if (nameSetContains(captures, d.name)) {
@@ -304,7 +322,7 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 	// Env struct — resolve captured variable types (Standard reference pattern)
 	const envFields: string[] = [];
 	const envFieldTypes: string[] = [];
-	for (const name of captures) {
+	for (const name of captures.items) {
 		envFields.push(name);
 		envFieldTypes.push(lookupVarType(state, name));
 	}
@@ -357,7 +375,7 @@ function liftFuncExpr(node: Node, captures: NameSet, state: LiftState): Node {
 }
 
 // Non-capturing lift: module-level FunctionDecl + closure pair with env=null.
-// Reference parity: nimcall->closure conversion wraps fn ptr
+// Reference parity: plain->closure conversion wraps fn ptr
 // in { .ClP_0 = fn, .ClE_0 = NULL }. We emit the same via NF_CLOSURE ObjectLiteral.
 // originalNodeType: resolved Type from checker (symbol type preserved)
 function liftNonCapturing(body: Node, params: string[], paramTypes: string[], flags: string, returnType: string, state: LiftState, loc: SourceLocation, originalNodeType: Type): Node {
@@ -392,7 +410,7 @@ function findCapturedIdent(name: string, capturedIdents: Node[]): Node {
 }
 
 // Wrap a raw function Identifier in a closure pair { fn: ident, env: null }.
-// Reference parity: nimcall->closure wraps fn ptr in { ClP_0, ClE_0=NULL }.
+// Reference parity: plain->closure wraps fn ptr in { ClP_0, ClE_0=NULL }.
 function wrapFnAsClosure(ident: Node, loc: SourceLocation): Node {
 	const wrapKeys: string[] = [];
 	wrapKeys.push("fn");
@@ -408,7 +426,7 @@ function wrapFnAsClosure(ident: Node, loc: SourceLocation): Node {
 function makeClosurePair(liftedName: string, envTypeName: string, captures: NameSet, lastUseCaptures: NameSet, capturedIdents: Node[], loc: SourceLocation): Node {
 	const envKeys: string[] = [];
 	const envValues: Node[] = [];
-	for (const name of captures) {
+	for (const name of captures.items) {
 		envKeys.push(name);
 		// Create Identifier with resolvedSym from original node
 		let ident = makeIdent(name, loc);
@@ -661,7 +679,7 @@ function tryLiftClosure(node: Node, state: LiftState): Node {
 		state.capturedIdents = [];
 		const captures = detectCaptures(d.arrowBody, state.ss, state.capturedIdents);
 		popFuncBoundary(state.ss);
-		if (captures.length > 0) {
+		if (captures.items.length > 0) {
 			// Phase F: compute which captures are last-use in enclosing scope
 			state.lastUseCaptures = computeLastUseCaptures(captures, state.currentStmtIdx, state.currentStmts);
 			return liftArrow(node, captures, state);
@@ -674,7 +692,7 @@ function tryLiftClosure(node: Node, state: LiftState): Node {
 		state.capturedIdents = [];
 		const captures = detectCaptures(d.funcExprBody, state.ss, state.capturedIdents);
 		popFuncBoundary(state.ss);
-		if (captures.length > 0) {
+		if (captures.items.length > 0) {
 			// Phase F: compute which captures are last-use in enclosing scope
 			state.lastUseCaptures = computeLastUseCaptures(captures, state.currentStmtIdx, state.currentStmts);
 			return liftFuncExpr(node, captures, state);

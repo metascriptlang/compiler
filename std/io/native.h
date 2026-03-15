@@ -16,7 +16,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/select.h>
-#include "system.h"
+#include "std/core/system/native.h"
 
 #ifdef __cplusplus
 extern "C" {

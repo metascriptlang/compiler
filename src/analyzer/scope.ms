@@ -11,7 +11,7 @@ import { Node, NodeKind, SourceLocation, makeLoc, ExprStmtData, CallExprData, Id
 import { RcInfo, RcKind, noRcInfo } from "./classify";
 import { CursorSet, createCursorSet } from "./cursors";
 import { CfgCache, createCfgCache } from "./cfg";
-import { TransformContext, NameSet, freshTemp, createTransformContext } from "../transform/context";
+import { TransformContext, NameSet, freshTemp, createTransformContext, createNameSet } from "../transform/context";
 import { makeExprStmt, makeNull } from "../transform/util";
 
 // ===== Variable Info =====
@@ -74,7 +74,7 @@ export function createDrcContext(ctx: TransformContext): DrcContext {
 		outerCtx: [],
 		currentStmtIdx: 0,
 		currentStmtList: [],
-		finallyProtectedVars: [],
+		finallyProtectedVars: createNameSet(),
 		cursors: createCursorSet(),
 		cfgCache: createCfgCache(),
 		currentFuncBody: null as unknown as Node,
@@ -114,8 +114,15 @@ export function scopeDepth(dctx: DrcContext): number {
 // ===== Variable Registration =====
 
 export function registerVar(dctx: DrcContext, varName: string, rcInfo: RcInfo, isCursor: boolean): void {
+	if (isCursor) {
+		// Cursors are borrowed — never cleaned up, but MUST be registered so
+		// field accesses (d.field) are recognized as borrows by isLastReadFieldSafe.
+		const scope = currentScope(dctx);
+		const info: VarInfo = { varName, rcInfo, isCursor: true, isInitialized: true };
+		scope.varsToCleanup.push(info);
+		return;
+	}
 	if (!rcInfo.needsCleanup) return;
-	if (isCursor) return;  // cursors are borrowed, never cleaned up
 	const scope = currentScope(dctx);
 	const info: VarInfo = { varName, rcInfo, isCursor: false, isInitialized: true };
 	scope.varsToCleanup.push(info);
@@ -237,6 +244,9 @@ export function addPre(dctx: DrcContext, stmt: Node): void {
 }
 
 export function flushPending(dctx: DrcContext, target: Node[]): void {
+	// NOTE: target is passed by value in C — push can realloc the payload,
+	// but the caller's struct is stale. The hidden_addr transform on arrays
+	// ensures `target` is passed by pointer, so the caller sees the update.
 	for (const s of dctx.pendingStmts) {
 		target.push(s);
 	}
@@ -245,6 +255,7 @@ export function flushPending(dctx: DrcContext, target: Node[]): void {
 }
 
 export function flushPre(dctx: DrcContext, target: Node[]): void {
+	// NOTE: same as flushPending — relies on hidden_addr for array params.
 	for (const s of dctx.preStmts) {
 		target.push(s);
 	}
@@ -379,7 +390,12 @@ test "skip cursor" {
 	pushScope(dctx, false, true);
 	const rcInfo = testStringRc();
 	registerVar(dctx, "s", rcInfo, true);
-	assert currentScope(dctx).varsToCleanup.length === 0;
+	// Cursor IS registered (for findVarInfoInContext visibility) but marked isCursor=true.
+	// generateCleanup skips cursor vars, so no destroy/wasMoved is emitted.
+	assert currentScope(dctx).varsToCleanup.length === 1;
+	const vi = currentScope(dctx).varsToCleanup[0];
+	assert vi.isCursor;
+	assert vi.varName === "s";
 	popScope(dctx);
 }
 

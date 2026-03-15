@@ -4,7 +4,7 @@ Compile-time code execution and AST manipulation. Macros are **normal MetaScript
 
 ## Core Principle: `Node` is Compile-Time Only
 
-`Node` (from `std/metaprogramming`) is a **compile-time-only type** — like Nim's `NimNode`. Values of type `Node` exist only during compilation and are erased before codegen. Any `Node` remaining in the AST at codegen is a compile error.
+`Node` (from `std/metaprogramming`) is a **compile-time-only type** — like standard reference AST node implementations. Values of type `Node` exist only during compilation and are erased before codegen. Any `Node` remaining in the AST at codegen is a compile error.
 
 Multiple sources produce `Node` values — all follow the same rules:
 
@@ -38,7 +38,7 @@ const app = @render(optimized);                     // macro returns runtime cod
 
 ### How it works
 
-1. **Checker** recognizes `Node` type as compile-time only (like Nim's `tfTriggersCompileTime` flag)
+1. **Checker** recognizes `Node` type as compile-time only (like in standard reference implementations)
 2. **Propagation** — any function/interface containing `Node` in its signature becomes compile-time only
 3. **Macro expansion** (top-to-bottom) — when a macro argument is a const identifier whose initializer is a `Node` value, the initializer AST is inlined as the macro's argument
 4. **Chaining** — if a macro returns a `Node` value (e.g. modified JSX), the result stays as a Node const, available for the next macro. If it returns runtime code, the result becomes runtime.
@@ -46,19 +46,19 @@ const app = @render(optimized);                     // macro returns runtime cod
 6. **Erasure** — after all macros expand, `Node`-only const declarations are erased from the AST
 7. **Safety net** — any `Node` surviving to codegen = compile error: *"compile-time Node not consumed by a macro"*
 
-**Ordering constraint**: expansion processes declarations top-to-bottom. A Node const must be declared before it's referenced as a macro argument (same as Nim).
+**Ordering constraint**: expansion processes declarations top-to-bottom. A Node const must be declared before it's referenced as a macro argument (standard reference parity).
 
-### Nim comparison
+### Standard Reference comparison
 
-| | Nim | MetaScript |
+| | Reference | MetaScript |
 |--|-----|-----------|
-| Compile-time AST type | `NimNode` | `Node` |
-| Enforcement | `tfTriggersCompileTime` flag propagates to containers/procs | Checker flag, same propagation |
-| Backend safety | C/JS codegen emits hard error if NimNode leaks | Same |
+| Compile-time AST type | `ReferenceNode` | `Node` |
+| Enforcement | compile-time flag propagates to containers/procs | Checker flag, same propagation |
+| Backend safety | C/JS codegen emits hard error if Node leaks | Same |
 | Storage scope | Only inside macros/`static` blocks | Also at module scope (const only) — slightly more permissive |
 | Erasure | Implicit (macro bodies only generate VM bytecode) | Explicit (Node consts erased after expansion) |
 
-The module-scope extension enables the "store and reuse" pattern (`const el = <View/>; @jsx(el); @native(el);`) that Nim doesn't support. Cost: ~15 lines of const-inlining logic in macro expansion.
+The module-scope extension enables the "store and reuse" pattern (`const el = <View/>; @jsx(el); @native(el);`) that some reference models don't support. Cost: ~15 lines of const-inlining logic in macro expansion.
 
 ## Architecture
 
@@ -378,7 +378,7 @@ Maps a MetaScript function or method directly to a literal symbol in the backend
 
 - **On Function**: Codegen uses the provided string as the literal C/JS function name, bypassing standard mangling.
 - **On Method**: `builtinLower` intercepts calls to this method and rewrites them into direct calls (e.g., `console.log(s)` → `msPrintln(s)`).
-- **Nim Parity**: Equivalent to `{.importc: "symbol".}`.
+- **Implementation parity**: Equivalent to `{.importc: "symbol".}`.
 
 ### @builtin("kind") — Structural Intrinsics
 
@@ -386,7 +386,7 @@ Identifies "magic" functions that require structural AST transformation rather t
 
 - **Behavior**: `builtinLower` checks the `builtinKind` on the resolved symbol and performs a complex AST rewrite.
 - **Example**: `Result.ok(val)` is marked `@builtin("msResultOk")`. The transformer expands this into an `ObjectLiteral` node: `{ ok: true, value: val }`.
-- **Nim Parity**: Equivalent to Nim's `magic` system (e.g., `mResultOk`).
+- **Implementation parity**: Equivalent to standard reference `magic` system (e.g., `mResultOk`).
 
 ### Builtin Lowering (`src/transform/native/builtinLower.ms`)
 
@@ -482,10 +482,10 @@ E (directives)   -- independent, parallel with everything
 
 ## Key Design Decisions
 
-- **`Node` is compile-time only** — same proven model as Nim's `NimNode`. JSX, `quote`, `createNode` all produce `Node`. Zero `Node` at codegen.
+- **`Node` is compile-time only** — same proven model as standard reference implementations. JSX, `quote`, `createNode` all produce `Node`. Zero `Node` at codegen.
 - **No special macro API** — compiler's own AST types are the API. Same proven approach as Haxe (10+ years production). No `MacroContext`, `ASTBuilder`, or `MacroTarget`.
 - **Type-checked macros** — checker validates Node access, createNode() calls, `as` casts to `*Data` types before macro ever runs.
-- **Module-scope Node consts** — extends Nim's model to allow `const el = <View/>` at top level, enabling reuse across multiple macros. Erased after expansion.
+- **Module-scope Node consts** — extends standard reference models to allow `const el = <View/>` at top level, enabling reuse across multiple macros. Erased after expansion.
 - **node.nodeType over Context.typeof()** — type info already on every Node after phase 2. No separate API call needed (simpler than Haxe).
 - **quote is sugar** — everything `quote { }` does can be done with `createNode()`. Complex macros use createNode() for full control.
 - **Raiser VM is sufficient** — executes MetaScript natively, ~0.5ms startup, negligible compile-time cost.

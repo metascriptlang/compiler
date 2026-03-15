@@ -38,7 +38,7 @@ export enum TypeKind {
 	// Ownership modifiers (standard reference parity — wrap inner type)
 	Sink, Lent, Var,
 	// Special
-	TypeReference, Union, Enum, Result,
+	TypeReference, Union, Enum, Result, Promise,
 	// Distinct
 	Distinct,
 	// Error sentinel
@@ -276,6 +276,19 @@ export function createResult(okType: Type, errType: Type): Type {
 	propagateHasAsgn(t, okType);
 	propagateHasAsgn(t, errType);
 	return t;
+}
+
+export function createPromise(innerType: Type): Type {
+	const t = emptyType();
+	t.kind = TypeKind.Promise;
+	t.typeReturn = innerType;
+	return t;
+}
+
+export function isPromiseResult(t: Type): boolean {
+	if (t === null) return false;
+	if (t.kind !== TypeKind.Promise) return false;
+	return t.typeReturn !== null && t.typeReturn.kind === TypeKind.Result;
 }
 
 export function createTypeRef(name: string): Type {
@@ -731,6 +744,7 @@ function getTypeSizeInner(t: Type): number {
 			const payloadSize = okSize > errSize ? okSize : errSize;
 			return 1 + payloadSize;
 		},
+		TypeKind.Promise => getTargetPtrSize(),
 		TypeKind.Union => {
 			// tag + max(member sizes)
 			let maxSize = 0;
@@ -805,6 +819,7 @@ export function substituteType(t: Type, paramName: string, concrete: Type): Type
 			return createFunction(newParams, t.typeNames, substituteType(t.typeReturn, paramName, concrete));
 		},
 		TypeKind.Result => createResult(substituteType(t.typeReturn, paramName, concrete), substituteType(t.typeExtra, paramName, concrete)),
+		TypeKind.Promise => createPromise(substituteType(t.typeReturn, paramName, concrete)),
 		TypeKind.Union => {
 			const newMembers: Type[] = [];
 			for (const member of t.typeChildren) {
@@ -887,6 +902,10 @@ function unifyTypeInner(formal: Type, concrete: Type, bindings: UnifyBindings): 
 	if (formal.kind === TypeKind.Result) {
 		unifyType(formal.typeReturn, concrete.typeReturn, bindings);
 		unifyType(formal.typeExtra, concrete.typeExtra, bindings);
+		return;
+	}
+	if (formal.kind === TypeKind.Promise) {
+		unifyType(formal.typeReturn, concrete.typeReturn, bindings);
 		return;
 	}
 	if (formal.kind === TypeKind.Function) {
@@ -1042,6 +1061,25 @@ export function getProperty(t: Type, name: string): Type {
 		if (name === "value") return t.typeReturn !== null ? t.typeReturn : unknownType();
 		if (name === "error") return t.typeExtra !== null ? t.typeExtra : unknownType();
 	}
+	// Promise fields + methods
+	if (t.kind === TypeKind.Promise) {
+		if (name === "finished") return booleanType();
+		if (name === "failed") return booleanType();
+		if (name === "value") return t.typeReturn !== null ? t.typeReturn : unknownType();
+		if (name === "then") {
+			const cbParam = t.typeReturn !== null ? t.typeReturn : unknownType();
+			const cbType = createFunction([cbParam], ["value"], voidType());
+			return createFunction([cbType], ["callback"], createPromise(voidType()));
+		}
+		if (name === "catch") {
+			const cbType = createFunction([stringType()], ["error"], voidType());
+			return createFunction([cbType], ["callback"], t);
+		}
+		if (name === "finally") {
+			const cbType = createFunction([], [], voidType());
+			return createFunction([cbType], ["callback"], t);
+		}
+	}
 	// Enum member access: Color.Red → returns the Enum type
 	if (t.kind === TypeKind.Enum) {
 		for (const member of t.typeNames) {
@@ -1115,6 +1153,7 @@ export function typeNameOf(t: Type): string {
 		TypeKind.Set => "Set",
 		TypeKind.CString => "cstring",
 		TypeKind.Result => "Result",
+		TypeKind.Promise => "Promise",
 		TypeKind.Enum => t.typeName,
 		TypeKind.TypeReference => t.typeName,
 		TypeKind.Distinct => t.typeName,

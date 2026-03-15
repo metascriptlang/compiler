@@ -43,7 +43,9 @@ function foldNode(node: Node): Node {
 function foldBinary(node: Node): Node {
 	const d = node.data as BinaryExprData;
 	const loc = node.location;
-	const op = d.operator;
+	// NOTE: do NOT create `const op = d.operator` — DRC treats it as a move from d->operator,
+	// which zeroes the node's operator field because d is a pointer alias into node.data.
+	// Use d.operator directly everywhere instead.
 
 	// Both operands must be the same literal kind
 	if (d.left.kind !== d.right.kind) return node;
@@ -52,17 +54,17 @@ function foldBinary(node: Node): Node {
 		NodeKind.NumberLiteral => {
 			const lv = (d.left.data as NumberLiteralData).value;
 			const rv = (d.right.data as NumberLiteralData).value;
-			return foldNumberBinary(op, lv, rv, loc, node);
+			return foldNumberBinary(d.operator, lv, rv, loc, node);
 		},
 		NodeKind.StringLiteral => {
 			const lv = (d.left.data as StringLiteralData).value;
 			const rv = (d.right.data as StringLiteralData).value;
-			return foldStringBinary(op, lv, rv, loc, node);
+			return foldStringBinary(d.operator, lv, rv, loc, node);
 		},
 		NodeKind.BooleanLiteral => {
 			const lb = (d.left.data as BooleanLiteralData).boolValue;
 			const rb = (d.right.data as BooleanLiteralData).boolValue;
-			return foldBoolBinary(op, lb, rb, loc, node);
+			return foldBoolBinary(d.operator, lb, rb, loc, node);
 		},
 		_ => node,
 	};
@@ -112,18 +114,18 @@ function foldBoolBinary(op: string, lb: boolean, rb: boolean, loc: SourceLocatio
 function foldUnary(node: Node): Node {
 	const d = node.data as UnaryExprData;
 	const loc = node.location;
-	const op = d.unaryOp;
+	// NOTE: do NOT copy d.unaryOp to local — same DRC alias issue as foldBinary.
 
 	match (d.operand.kind) {
 		NodeKind.BooleanLiteral => {
-			if (op === "!") {
+			if (d.unaryOp === "!") {
 				const bv = (d.operand.data as BooleanLiteralData).boolValue;
 				return makeBool(!bv, loc);
 			}
 		},
 		NodeKind.NumberLiteral => {
 			const nv = (d.operand.data as NumberLiteralData).value;
-			return match (op) {
+			return match (d.unaryOp) {
 				"-" => makeNumber(0 - nv, loc),
 				"+" => makeNumber(nv, loc),
 				_ => node,

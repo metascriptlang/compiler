@@ -11,7 +11,7 @@
 @include("bridge.h");
 
 // Compile the bridge C wrapper (converts msString <-> char* for ARO FFI)
-@compile("bridge.c");
+@compile("./bridge.c");
 
 // Link the ARO static library
 @link("zig-out/lib/libaro_ffi.a");

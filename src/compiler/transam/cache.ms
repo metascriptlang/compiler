@@ -12,7 +12,7 @@ import { taHashKey } from "./hash";
 
 // ===== Cache Store =====
 
-export interface TaCacheStore {
+export class TaCacheStore {
 	entries: TaCacheEntry[];
 	accessCounters: number[];   // parallel: last-access time per entry
 	accessClock: number;            // monotonic clock, incremented on each access

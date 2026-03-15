@@ -63,6 +63,7 @@ export enum NodeFlag {
 	ExtCall = 512,      // checker: this CallExpr is an extension method call (UFCS)
 	ExtStatic = 1024,   // checker: this extension call is static (no receiver prepend)
 	ExportDefault = 2048, // parser: export default declaration
+	WasAsync = 4096,      // transform: function was async before asyncDesugar rewrote to generator
 }
 
 // ===== Node Kind Enum =====

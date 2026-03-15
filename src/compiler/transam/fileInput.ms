@@ -11,7 +11,7 @@ import { TaDurability } from "./revision";
 
 // ===== File Entry =====
 
-export interface TaFileEntry {
+export class TaFileEntry {
 	filePath: string;
 	source: string;
 	sourceHash: number;
@@ -21,7 +21,7 @@ export interface TaFileEntry {
 
 // ===== File Input Store =====
 
-export interface TaFileInputStore {
+export class TaFileInputStore {
 	files: TaFileEntry[];
 	nextFileId: number;
 }

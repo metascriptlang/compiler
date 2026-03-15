@@ -17,7 +17,7 @@ export interface TaDepEdge {
 
 // ===== Module Dependency Graph =====
 
-export interface TaModuleDepGraph {
+export class TaModuleDepGraph {
 	edges: TaDepEdge[];
 	reverseAdj: number[][];  // importedFileId → [importerFileId, ...] for O(1) reverse lookup
 	registeredAt: number[];  // fileId → revision when exports registered (-1 = never)

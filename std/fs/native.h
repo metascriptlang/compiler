@@ -22,7 +22,7 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <errno.h>
-#include "system.h"
+#include "std/core/system/native.h"
 
 #ifdef __cplusplus
 extern "C" {

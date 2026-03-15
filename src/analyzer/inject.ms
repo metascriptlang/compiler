@@ -24,7 +24,7 @@ import {
 } from "../ast/node";
 import { Type, TypeKind, isSinkType, skipModifier, createPrimitive } from "../checker/types";
 import { lookupSymbol, lookupLocal, SymbolKind, hasFlag, SymbolFlag } from "../checker/symbol";
-import { TransformContext, NameSet, nameSetContains, nameSetAdd, freshTemp, createTransformContextWithChecker } from "../transform/context";
+import { TransformContext, NameSet, createNameSet, nameSetContains, nameSetAdd, freshTemp, createTransformContextWithChecker } from "../transform/context";
 import {
 	makeIdent, makeBlock, makeExprStmt, makeCall, makeVarDecl,
 	makeReturn, makeAssign, makeTryCatch, makeNull, makeBinary, makeMember,
@@ -152,7 +152,7 @@ function scanFinallyBlocks(node: Node, result: NameSet): void {
 }
 
 function collectFinallyVars(body: Node): NameSet {
-	const result: NameSet = [];
+	const result: NameSet = createNameSet();
 	scanFinallyBlocks(body, result);
 	return result;
 }
@@ -313,13 +313,7 @@ function processMember(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	if (mode === DrcMode.SinkArg && node.nodeType !== null) {
 		const rcInfo = classifyType(node.nodeType, dctx.ctx);
 		if (rcInfo.needsCleanup) {
-			// Phase B: field-level move when analysable and last-read
-			if (isLastReadFieldSafe(node, dctx.currentStmtIdx, dctx.currentStmtList, dctx)) {
-				if (rcInfo.wasMovedFn !== "") {
-					addPending(dctx, makeWasMovedOnExpr(node, rcInfo, node.location));
-				}
-				return node;
-			}
+			// Always copy from MemberExpr: source field may belong to a shared object.
 			return passCopyToSink(node, dctx);
 		}
 	}
@@ -331,17 +325,11 @@ function processArrayAccess(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	ad.array = processNode(ad.array, dctx, DrcMode.Normal);
 	ad.index = processNode(ad.index, dctx, DrcMode.Normal);
 	// Reference parity (nkBracketExpr sinkArg): element access is a borrow —
-	// must copy for ownership transfer UNLESS element is last-read (Phase B).
+	// must copy for ownership transfer.
 	if (mode === DrcMode.SinkArg && node.nodeType !== null) {
 		const rcInfo = classifyType(node.nodeType, dctx.ctx);
 		if (rcInfo.needsCleanup) {
-			// Phase B: element-level move when analysable and last-read
-			if (isLastReadFieldSafe(node, dctx.currentStmtIdx, dctx.currentStmtList, dctx)) {
-				if (rcInfo.wasMovedFn !== "") {
-					addPending(dctx, makeWasMovedOnExpr(node, rcInfo, node.location));
-				}
-				return node;
-			}
+			// Always copy from ArrayAccess: source element may belong to a shared object.
 			return passCopyToSink(node, dctx);
 		}
 	}
@@ -543,6 +531,13 @@ function makeCopyAfterInit(destName: string, rcInfo: RcInfo, loc: SourceLocation
 	// 2-arg copy: Named types and String (=copy(&dest, src))
 	if (isBinaryCopy(rcInfo)) {
 		const actualSrc = srcName !== "" ? srcName : destName;
+		// Self-copy (srcName="") is a no-op for strings: msStringCopy(&x,x) checks
+		// dest->p == src.p and returns immediately, skipping the incref.
+		// Use msStringIncref(x) directly for proper refcount bump.
+		if (srcName === "" && rcInfo.rcKind === RcKind.String) {
+			return makeExprStmt(
+				makeCall(makeIdent("msStringIncref", loc), [makeIdent(destName, loc)], loc), loc);
+		}
 		// dest: pointer unless runtime macro (seqLike + empty typeName)
 		const destArg = needsDestAddr(rcInfo)
 			? makeHiddenAddr(makeIdent(destName, loc), loc)
@@ -663,7 +658,7 @@ function generateCleanup(scope: DrcScope, excludeNames: NameSet, loc: SourceLoca
 		if (mv.varName !== "" ) {
 			// Variable-level: move x
 			const vi = findVarInfo(scope, mv.varName);
-			if (vi !== null && vi.rcInfo.wasMovedFn !== "") {
+			if (vi !== null && !vi.isCursor && vi.rcInfo.wasMovedFn !== "") {
 				result.push(makeWasMovedCall(mv.varName, vi.rcInfo, loc));
 			}
 		} else if (mv.exprNode !== null) {
@@ -766,14 +761,27 @@ function processStmtList(stmts: Node[], dctx: DrcContext, loc: SourceLocation): 
 	for (let i = 0; i < stmts.length; i += 1) {
 		const savedIdx = dctx.currentStmtIdx;
 		dctx.currentStmtIdx = i;
-		
+
 		const processed = processStmt(stmts[i], i, stmts, dctx, loc);
-		
-		// Flush pre-statements (like incref) and post-statements (like wasMoved)
-		flushPre(dctx, buf);
+
+		// Flush pre-statements and post-statements INLINE to avoid
+		// pass-by-value array invalidation (flushPre/flushPending take
+		// Node[] by value in C — push+realloc inside them doesn't update
+		// the caller's buf struct, causing use-after-free).
+		let pi = 0;
+		while (pi < dctx.preStmts.length) {
+			buf.push(dctx.preStmts[pi]);
+			pi += 1;
+		}
+		dctx.preStmts = [];
 		buf.push(processed);
-		flushPending(dctx, buf);
-		
+		let qi = 0;
+		while (qi < dctx.pendingStmts.length) {
+			buf.push(dctx.pendingStmts[qi]);
+			qi += 1;
+		}
+		dctx.pendingStmts = [];
+
 		dctx.currentStmtIdx = savedIdx;
 	}
 	dctx.currentStmtList = savedList;
@@ -783,7 +791,7 @@ function processStmtList(stmts: Node[], dctx: DrcContext, loc: SourceLocation): 
 // ===== Empty NameSet factory (avoids repeated `[]`) =====
 
 function emptyNameSet(): NameSet {
-	return [];
+	return createNameSet();
 }
 
 // ===== Simple scoped statement list (no try/finally) =====
@@ -1352,11 +1360,14 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	if (varType === null) return stmt;
 
 	const rcInfo = classifyType(varType, dctx.ctx);
-	if (!rcInfo.needsCleanup) return stmt;
 
-	// Internal temps ($ prefix) initialized from existing variables are Cursors (Lent).
-	// This prevents unwanted cloning in for..of loops and intermediate assignments.
+	// Cursor detection must happen BEFORE the needsCleanup early-return.
+	// Even if the variable's own type doesn't need cleanup, it may be a pointer alias
+	// (e.g., `const d = node.data as Variant`). If not registered as cursor, field
+	// accesses through it (d.field) won't be recognized as borrows, allowing
+	// field-level moves that corrupt the aliased parent object.
 	let isCursor = false;
+	// Internal temps ($ prefix) initialized from existing variables are Cursors (Lent).
 	if (d.declName.startsWith("$") && d.initializer !== null && d.initializer.kind === NodeKind.Identifier) {
 		isCursor = true;
 	}
@@ -1380,6 +1391,15 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 	if (isCursorVar(dctx.cursors, d.declName)) {
 		isCursor = true;
 	}
+
+	// Register cursor variables even without cleanup — they must be visible in DRC scope
+	// so field accesses through them (d.field) are recognized as borrows.
+	if (isCursor && !rcInfo.needsCleanup) {
+		registerVar(dctx, d.declName, rcInfo, true);
+		return stmt;
+	}
+
+	if (!rcInfo.needsCleanup) return stmt;
 
 	// Register for scope cleanup
 	registerVar(dctx, d.declName, rcInfo, isCursor);
@@ -1466,25 +1486,14 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 				return stmt;
 			}
 		}
-		// Field-level move: analysable + last-read → SINK (move) instead of copy
-		if (isLastReadFieldSafe(init, idx, stmts, dctx)) {
-			if (rcInfo.wasMovedFn !== "") {
-				addPending(dctx, makeWasMovedOnExpr(init, rcInfo, loc));
-			}
-			return stmt;
-		}
+		// Always borrow-copy from MemberExpr: field belongs to another object
+		// that may be shared via ref counting. Moving would zero a shared field.
 		emitBorrowCopy(d.declName, init, rcInfo, dctx, loc);
 		return stmt;
 	}
 
-	// Array access / HiddenDeref: field-level move when analysable + last-read, else borrow-copy
+	// Array access / HiddenDeref: always borrow-copy (same reasoning as MemberExpr)
 	if (init.kind === NodeKind.ArrayAccess || init.kind === NodeKind.HiddenDeref) {
-		if (isLastReadFieldSafe(init, idx, stmts, dctx)) {
-			if (rcInfo.wasMovedFn !== "") {
-				addPending(dctx, makeWasMovedOnExpr(init, rcInfo, loc));
-			}
-			return stmt;
-		}
 		emitBorrowCopy(d.declName, init, rcInfo, dctx, loc);
 		return stmt;
 	}
@@ -1608,15 +1617,10 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 			const copyNode = makeCopyAfterInit(leftD.name, rcInfo, loc, rhsD.name);
 			return makeBlock([stmt, copyNode], loc);
 		}
-		// MemberExpr/ArrayAccess/HiddenDeref RHS: field-level move when analysable + last-read, else copy.
-		// Reference: moveOrCopy nkBracketExpr (lines 1195-1204) + else-branch (lines 1256-1260)
+		// MemberExpr/ArrayAccess/HiddenDeref RHS: always COPY (borrow).
+		// Field-level moves are unsafe because the source field may belong to a
+		// shared ref-counted object — moving zeroes the field in the shared object.
 		if (rhs.kind === NodeKind.MemberExpr || rhs.kind === NodeKind.ArrayAccess || rhs.kind === NodeKind.HiddenDeref) {
-			if (isLastReadFieldSafe(rhs, idx, stmts, dctx)) {
-				if (rcInfo.wasMovedFn !== "") {
-					addPending(dctx, makeWasMovedOnExpr(rhs, rcInfo, loc));
-				}
-				return stmt;
-			}
 			const copyNode = makeCopyAfterInit(leftD.name, rcInfo, loc, "");
 			return makeBlock([stmt, copyNode], loc);
 		}
@@ -1801,41 +1805,11 @@ function emitSaveAssignDestroy(stmt: Node, lhsExpr: Node, rhs: Node, rcInfo: RcI
 		}
 	}
 
-	// MemberExpr/ArrayAccess/HiddenDeref RHS: field-level move into fields (reference: moveOrCopy nkBracketExpr + else-branch)
-	// Reference: lines 1195-1204 (nkBracketExpr) + lines 1256-1260 (else catch-all with isAnalysableFieldAccess).
-	if ((rhs.kind === NodeKind.MemberExpr || rhs.kind === NodeKind.ArrayAccess || rhs.kind === NodeKind.HiddenDeref)
-		&& isLastReadFieldSafe(rhs, idx, stmts, dctx)) {
-		if (aliases(lhsExpr, rhs) === AliasKind.No) {
-			// No alias: direct move — save old, assign, wasMoved(rhs), destroy old
-			const result: Node[] = [saveTmp, stmt];
-			if (rcInfo.wasMovedFn !== "") {
-				result.push(makeWasMovedOnExpr(rhs, rcInfo, loc));
-			}
-			result.push(makeDestroyCall(tmpName, rcInfo, loc));
-			return makeBlock(result, loc);
-		}
-		// Alias Maybe/Yes (e.g. x[i] = x[j] with runtime indices): destructiveMoveVar pattern
-		// Reference line 1204: genSink(dest, destructiveMoveVar(ri, c, s))
-		// destructiveMoveVar extracts to temp FIRST, zeros source, then we handle dest.
-		// Safe even when dest == source: value captured before zeroing.
-		const blitName = freshTemp(dctx.ctx, "blit");
-		const blitDecl = makeVarDecl(blitName, rhs, DeclKind.Const, loc);
-		blitDecl.nodeType = rhs.nodeType;
-		const result: Node[] = [];
-		result.push(blitDecl);                                          // 1. capture rhs to temp
-		if (rcInfo.wasMovedFn !== "") {
-			result.push(makeWasMovedOnExpr(rhs, rcInfo, loc));          // 2. zero source
-		}
-		result.push(saveTmp);                                           // 3. save old dest
-		const assignBlit = makeExprStmt(
-			makeAssign(lhsExpr, makeIdent(blitName, loc), loc), loc);
-		result.push(assignBlit);                                        // 4. dest = captured temp
-		if (rcInfo.wasMovedFn !== "") {
-			result.push(makeWasMovedCall(blitName, rcInfo, loc));       // 5. zero temp (consumed by dest)
-		}
-		result.push(makeDestroyCall(tmpName, rcInfo, loc));             // 6. destroy old dest
-		return makeBlock(result, loc);
-	}
+	// MemberExpr/ArrayAccess/HiddenDeref RHS: always COPY into field destination.
+	// Field-level moves are unsafe here because the source field belongs to a shared
+	// ref-counted object (e.g., sym.symbolType where sym is in a scope's symbol array).
+	// Moving would zero the source field, corrupting the shared object.
+	// Fall through to the copy path below.
 
 	// Non-last-read / field-access / other: COPY
 	// Reference parity (moveOrCopy): for Named/String types, call =copy(&dest, src) directly.
@@ -2040,7 +2014,7 @@ function markReturnedVarsMoved(node: Node, dctx: DrcContext): void {
 		NodeKind.Identifier => {
 			const name = (node.data as IdentifierData).name;
 			const vi = findVarInfoInContext(dctx, name);
-			if (vi !== null && vi.rcInfo.needsCleanup) {
+			if (vi !== null && vi.rcInfo.needsCleanup && !vi.isCursor) {
 				recordMoveInContext(dctx, name);
 			}
 		},
@@ -2275,7 +2249,8 @@ test "generateCleanup skips excluded" {
 	registerVar(dctx, "a", rcStr, false);
 	registerVar(dctx, "b", rcStr, false);
 	const scope = popScope(dctx);
-	const exclude: NameSet = ["b"];
+	const exclude = createNameSet();
+	nameSetAdd(exclude, "b");
 	const cleanup = generateCleanup(scope, exclude, testLoc());
 	assert cleanup.length === 1;
 }
@@ -2286,7 +2261,7 @@ test "identifier is not fresh" { assert !isFreshExpr(NodeKind.Identifier); }
 
 test "emptyNameSet creates empty" {
 	const ns = emptyNameSet();
-	assert ns.length === 0;
+	assert ns.items.length === 0;
 }
 
 test "processBlockBody handles null" {
@@ -2559,12 +2534,14 @@ test "collectFinallyVars empty when no finally" {
 		makeExprStmt(makeIdent("x", loc), loc),
 	], loc);
 	const vars = collectFinallyVars(body);
-	assert vars.length === 0;
+	assert vars.items.length === 0;
 }
 
 test "finally-protected var blocks move in isLastReadSafe" {
 	const dctx = testDrcContext("const x = 1;");
-	dctx.finallyProtectedVars = ["s"];
+	const protVars = createNameSet();
+	nameSetAdd(protVars, "s");
+	dctx.finallyProtectedVars = protVars;
 	// Even with a null symbol, the name check fires first
 	const fakeSym: Symbol = { name: "s", symbolKind: 0, symbolType: null, symFlags: 0 };
 	assert !isLastReadSafe(fakeSym, null as unknown as Node, 0, [], dctx);

@@ -2,7 +2,7 @@
 
 MetaScript has first-class testing built into the language. `test` and `expect` are **keywords** — no imports, no library, no `std/testing`. The compiler strips all test code from production builds (zero overhead).
 
-Inspired by Zig (`test "name" { }`) and Rust (`#[test]`), but simpler than Nim (which uses templates/macros to fake keyword syntax).
+Inspired by Zig (`test "name" { }`) and Rust (`#[test]`), but simpler than other implementations that use macros to fake keyword syntax.
 
 ## `test` Keyword
 
@@ -25,8 +25,8 @@ Rules:
 - `test` is **top-level only** — cannot appear inside functions, classes, or other tests
 - The name is a **string literal** (allows spaces, punctuation, any description)
 - The body is a block `{ ... }` with access to all module-scope declarations (including private)
-- In non-test builds (`msc run`, `msc build`), test blocks are **completely stripped** — not even parsed
-- In test builds (`msc test`), test blocks are collected and executed by the generated test runner
+- In non-test builds (`bun run run-ms`), test blocks are **completely stripped** — not even parsed
+- In test builds (`bun run test-ms`), test blocks are collected and executed by the generated test runner
 
 ### No `testGroup` — File Is the Group
 
@@ -131,13 +131,13 @@ test "scanNumber integer" {
 
 ```bash
 # Run all tests (entry point's full import graph)
-msc test src/index.ms
+bun run test-ms src/index.ms
 
 # Run specific file's tests
-msc test src/lexer/scanner.ms
+bun run test-ms src/lexer/scanner.ms
 
 # Filter by test name (substring match)
-msc test src/index.ms --filter "isDigit"
+bun run test-ms src/index.ms --filter "isDigit"
 ```
 
 Output format:
@@ -164,7 +164,7 @@ Both are keywords in the lexer (`TokenKind.Test`, `TokenKind.Expect`). `test` is
 
 ## Comparison with Other Languages
 
-| | MetaScript | Zig | Rust | Nim |
+| | MetaScript | Zig | Rust | Reference |
 |---|---|---|---|---|
 | `test` | **keyword** | **keyword** | `#[test]` attribute | template (library) |
 | `expect`/assert | **keyword** | `try expect()` (library fn) | `assert!` (macro) | `check` (macro) |
@@ -179,40 +179,15 @@ MetaScript is the only language where BOTH test declaration AND assertion are ke
 
 ## Implementation
 
-### Phase 1: Keywords (Reference Compiler)
+### Implementation Status
 
-The reference compiler (Zig) must learn these keywords first (chicken-and-egg: it compiles .ms files).
+`test` and `assert` are implemented as keywords in the self-hosted compiler:
+- `Test`, `Assert` in `TokenKind` (`token.ms`)
+- `TestDecl` and `AssertStmt` parsed in the parser (`control.ms`)
+- Handled in checker (`checkPass.ms`)
+- C codegen emits test runner infrastructure (`statements.ms`, `declarations.ms`)
 
-**Lexer** (`lexer.zig`):
-- Add `Test`, `Expect` to TokenKind enum
-- Add `"test"`, `"expect"` to keyword map
-
-**Parser** (`parser.zig`):
-- `test`: at top-level, parse `Test StringLiteral Block` → TestDecl node
-- `expect`: at statement position, parse `Expect Expression Semicolon` → ExpectStmt node
-
-**AST** (`node.zig`):
-- Add `TestDecl` NodeKind with `{ name: string, body: Node }`
-- Add `ExpectStmt` NodeKind with `{ expr: Node }`
-
-**Codegen** (`cgen.zig`):
-- `TestDecl`: register test entry (reuse existing `emitTestDecl` infrastructure)
-- `ExpectStmt`: emit assertion (reuse existing `emitCheckAssert` with source location)
-- Non-test mode: strip both completely
-
-**Estimated**: ~150 lines across 4 Zig files. The existing test infrastructure (`test_entries`, `emitTestDecl`, `emitCheckAssert`, `ms_test_run_all`) is reused — only the frontend changes.
-
-### Phase 2: Keywords (Self-Hosted Compiler)
-
-Once the reference compiler supports the keywords, the self-hosted compiler can:
-1. Add `Test`, `Expect` to `TokenKind` in `token.ms`
-2. Parse `TestDecl` and `ExpectStmt` in the parser
-3. Handle in checker (type-check test body, validate expect expression)
-4. Emit in C codegen (same infrastructure as reference compiler)
-
-**Estimated**: ~200 lines across 6 .ms files.
-
-### Phase 3: Migration
+### Migration
 
 Mechanical transformation of all 111 .ms files:
 1. Remove `import { test, check, testGroup } from "std/testing"`
@@ -299,8 +274,8 @@ Could be a keyword modifier (`expect approx`) or a builtin function.
 Beyond `--filter "name"`, support file glob patterns:
 
 ```bash
-msc test src/index.ms --filter "src/lexer/*"     # all lexer tests
-msc test src/index.ms --filter "parse"            # name substring
+bun run test-ms src/index.ms --filter "src/lexer/*"     # all lexer tests
+bun run test-ms src/index.ms --filter "parse"            # name substring
 ```
 
 ### P6: Test Timeout
@@ -319,8 +294,8 @@ Default timeout: 30 seconds. Configurable via `--timeout` flag.
 Rust runs tests in parallel by default. For MetaScript's C backend:
 
 ```bash
-msc test src/index.ms --jobs 4        # 4 parallel workers
-msc test src/index.ms --jobs 1        # sequential (default)
+bun run test-ms src/index.ms --jobs 4        # 4 parallel workers
+bun run test-ms src/index.ms --jobs 1        # sequential (default)
 ```
 
 Requires test isolation (no shared mutable globals between tests).
@@ -376,10 +351,9 @@ Test passes if the code fails to type-check.
 
 | Phase | Feature | Effort | Status |
 |-------|---------|--------|--------|
-| 1 | `test` + `expect` keywords (ref compiler) | ~150 lines Zig | **NEXT** |
-| 2 | `test` + `expect` keywords (self-hosted) | ~200 lines MS | **NEXT** |
-| 3 | Migration (111 files) | Mechanical | After Phase 1-2 |
-| 4 | Source location P1 | Small | Part of Phase 1-2 |
+| 1 | `test` + `assert` keywords | ~350 lines MS | **DONE** |
+| 2 | Migration (111 files) | Mechanical | In progress |
+| 3 | Source location P1 | Small | Part of Phase 1 |
 | 5 | `skip` keyword P2 | Small | Pending |
 | 6 | Error expectation P3 | Medium | Pending |
 | 7 | Float tolerance P4 | Small | Pending |

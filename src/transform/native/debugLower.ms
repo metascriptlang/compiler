@@ -75,7 +75,7 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 			const jHelperName = "__jsonDbg_JsonValue";
 			if (!hasEmitted(ctx, jHelperName)) {
 				// Emit a small wrapper: prefix "Json " in magenta + msJsonStringifyColored(value)
-				let jc = "/*INCLUDESECTION*/#include \"core/json.h\"\n";
+				let jc = "/*INCLUDESECTION*/#include \"std/core/json/native.h\"\n";
 				jc = jc + "static msString " + jHelperName + "(JsonValue* value) {\n";
 				jc = jc + "  msString __body = msJsonStringifyColored(value);\n";
 				jc = jc + "  char __pbuf[64];\n";
@@ -130,8 +130,12 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 		return call;
 	}
 	// Fallback: emit type name as placeholder string (safe — no C compile error)
-	const typeName = t.typeName !== null && t.typeName !== "" ? t.typeName : "object";
-	const placeholder = makeString("<" + typeName + ">", loc);
+	// Use explicit local to avoid DRC ternary+member-access issue
+	let fallbackName = "object";
+	if (t.typeName !== null && t.typeName !== "") {
+		fallbackName = t.typeName;
+	}
+	const placeholder = makeString("<" + fallbackName + ">", loc);
 	placeholder.nodeType = stringType();
 	return placeholder;
 }

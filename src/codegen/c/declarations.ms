@@ -330,6 +330,7 @@ function genClassDecl(g: CGen, node: Node): void {
 		if (member.kind === NodeKind.MethodDecl) {
 			genMethodAsFunction(g, member, name);
 		} else if (member.kind === NodeKind.ConstructorDecl) {
+			nameSetAdd(g.classesWithCtors, name);
 			genConstructor(g, member, name);
 		}
 	}
@@ -339,7 +340,10 @@ function genClassDecl(g: CGen, node: Node): void {
 
 function genMethodAsFunction(g: CGen, node: Node, className: string): void {
 	const d = node.data as MethodDeclData;
-	const methodName = mangledFunctionName(node.resolvedSym, `${className}_${safeName(d.methodName)}`, 0);
+	// Use sym.name directly — matches how extensionMethodLower constructs the call name.
+	// Avoids safeName mismatch (e.g. "abort" → "abort_" on declaration but not call site).
+	const fallbackName = `${className}_${safeName(d.methodName)}`;
+	const methodName = mangledFunctionName(node.resolvedSym, (node.resolvedSym !== null && node.resolvedSym.name !== "") ? node.resolvedSym.name : fallbackName, 0);
 	const methodType = node.nodeType;
 	const cRetType = getTypeDesc(g, methodType.typeReturn);
 

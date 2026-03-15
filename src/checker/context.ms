@@ -1,4 +1,4 @@
-import { Type, TypeKind, unknownType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity } from "./types";
+import { Type, TypeKind, unknownType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity, isPromiseResult } from "./types";
 import { isAssignable } from "./compat";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, createSymbolTable } from "./symbol";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
@@ -387,7 +387,7 @@ export function hasAttachedOps(ops: AttachedOps): boolean {
 // Single source of truth for cancellation context type.
 // transam/cancel.ms imports this (transam→checker dependency already established).
 
-export interface CancelCtx {
+export class CancelCtx {
 	version: number;
 	cancelled: boolean;
 }
@@ -486,6 +486,7 @@ export class CheckerContext {
 	initTracker: InitTracker;    // ref parity: TEffects.init — definite assignment tracking
 	strictDefs: boolean;         // ref parity: strictDefs — warn on all uninit var use
 	strictNullChecks: boolean;   // ref parity: strictNotNil — warn on unguarded class deref
+	inTryExpr: boolean;          // true when checking tryArg of TryExpr or body of TryCatchStmt (V2 await guard)
 }
 
 // ===== Constructors =====
@@ -516,6 +517,7 @@ export function createContext(): CheckerContext {
 		initTracker: createInitTracker(),
 		strictDefs: false,
 		strictNullChecks: false,
+		inTryExpr: false,
 	};
 }
 

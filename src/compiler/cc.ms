@@ -6,29 +6,15 @@ import { argv, exec, fileExists } from "std/process";
 import { dirname, join, resolve } from "std/fs/path";
 import { CliOptions } from "./options";
 
-// -- ccache detection --
-
-let hasCcache = false;
-let ccacheChecked = false;
-
-function getCcachePrefix(): string {
-	if (!ccacheChecked) {
-		ccacheChecked = true;
-		hasCcache = exec("which ccache > /dev/null 2>&1") === 0;
-	}
-	if (hasCcache) return "ccache ";
-	return "";
-}
-
 // -- Runtime resolution --
 
-// Find the compiler's runtime/ directory by walking up from argv[0].
+// Find the compiler's std/runtime/ directory by walking up from argv[0].
 function resolveRuntime(): string {
 	const binDir = dirname(argv[0]);
 	let base = binDir;
 	for (let i = 0; i < 5; i += 1) {
-		const candidate = join(base, "runtime");
-		const marker = join(candidate, "system.h");
+		const candidate = join(base, "std/runtime");
+		const marker = join(candidate, "arc.h");
 		if (fileExists(marker)) return candidate;
 		base = dirname(base);
 	}
@@ -39,7 +25,7 @@ function resolveRuntime(): string {
 // 0=undetected, 1=clang, 2=gcc, 3=cc (fallback)
 let detectedCC = 0;
 
-function getCompilerName(ccOption: number): string {
+export function getCompilerName(ccOption: number): string {
 	if (ccOption === 1) return "clang";
 	if (ccOption === 2) return "gcc";
 	// auto-detect
@@ -60,7 +46,7 @@ function getCompilerName(ccOption: number): string {
 // -- Build mode flags --
 // mode: 0=debug, 1=release, 2=danger
 
-function modeFlags(mode: number): string {
+export function modeFlags(mode: number): string {
 	return match (mode) {
 		2 => " -O3 -flto -w -DNDEBUG",
 		1 => " -O2 -w -DNDEBUG",
@@ -73,14 +59,14 @@ function modeFlags(mode: number): string {
 // Append a flag to a space-separated flag string. No-op if flag is empty.
 export function appendFlag(base: string, flag: string): string {
 	if (flag === "") return base;
-	if (base.length > 0) return base + " " + flag;
+	if (base.length > 0) return `${base} ${flag}`;
 	return flag;
 }
 
 // Build compile-phase flags from CLI options (sanitize + passC).
 export function cliCompileFlags(opts: CliOptions): string {
 	let flags = "";
-	if (opts.sanitize !== "") flags = appendFlag(flags, "-fsanitize=" + opts.sanitize);
+	if (opts.sanitize !== "") flags = appendFlag(flags, `-fsanitize=${opts.sanitize}`);
 	// Linker DCE: place each function/data in its own section so the linker can strip unused ones
 	flags = appendFlag(flags, "-fdata-sections");
 	flags = appendFlag(flags, "-ffunction-sections");
@@ -110,23 +96,15 @@ export function cliAllFlags(opts: CliOptions): string {
 // -- Build command construction --
 
 function buildCompileCommand(cFile: string, outBinary: string, extraFlags: string, mode: number, ccOption: number): string {
-	let cmd = getCcachePrefix() + getCompilerName(ccOption);
-	cmd = cmd + " -std=c11" + modeFlags(mode);
+	let cmd = `${getCompilerName(ccOption)} -std=c11${modeFlags(mode)}`;
 
 	const rtDir = resolveRuntime();
 	if (rtDir !== "") {
-		cmd = cmd + " -iquote" + rtDir;
-		cmd = cmd + " " + join(rtDir, "system.c");
-		cmd = cmd + " " + join(rtDir, "core/string.c");
-		cmd = cmd + " " + join(rtDir, "core/array.c");
-		cmd = cmd + " " + join(rtDir, "core/map.c");
-		cmd = cmd + " " + join(rtDir, "mem/orc.c");
+		cmd = `${cmd} -iquote${dirname(dirname(rtDir))}`;
 	}
 
-	cmd = cmd + " " + cFile;
-	cmd = cmd + " -o " + outBinary;
-	cmd = cmd + " -lm";
-	if (extraFlags !== "") cmd = cmd + " " + extraFlags;
+	cmd = `${cmd} ${cFile} -o ${outBinary} -lm`;
+	if (extraFlags !== "") cmd = `${cmd} ${extraFlags}`;
 	return cmd;
 }
 
@@ -140,16 +118,15 @@ export function compileC(cFile: string, outBinary: string, extraFlags: string, m
 // Compile a .c file to an object file only (-c flag, no linking).
 // Returns 0 on success, non-zero on failure.
 export function compileCFile(cFile: string, oFile: string, extraFlags: string, mode: number, ccOption: number): number {
-	let cmd = getCcachePrefix() + getCompilerName(ccOption);
-	cmd = cmd + " -std=c11" + modeFlags(mode);
+	let cmd = `${getCompilerName(ccOption)} -std=c11${modeFlags(mode)}`;
 
 	const rtDir = resolveRuntime();
 	if (rtDir !== "") {
-		cmd = cmd + " -iquote" + rtDir;
+		cmd = `${cmd} -iquote${dirname(dirname(rtDir))}`;
 	}
 
-	cmd = cmd + " -c " + cFile + " -o " + oFile;
-	if (extraFlags !== "") cmd = cmd + " " + extraFlags;
+	cmd = `${cmd} -c ${cFile} -o ${oFile}`;
+	if (extraFlags !== "") cmd = `${cmd} ${extraFlags}`;
 	return exec(cmd);
 }
 
@@ -157,22 +134,15 @@ export function compileCFile(cFile: string, oFile: string, extraFlags: string, m
 // oFileList: space-separated list of .o file paths
 // Returns 0 on success, non-zero on failure.
 export function linkObjects(oFileList: string, outBinary: string, extraFlags: string, mode: number, ccOption: number): number {
-	let cmd = getCcachePrefix() + getCompilerName(ccOption);
+	let cmd = getCompilerName(ccOption);
 
 	const rtDir = resolveRuntime();
 	if (rtDir !== "") {
-		cmd = cmd + " -iquote" + rtDir;
-		cmd = cmd + " " + join(rtDir, "system.c");
-		cmd = cmd + " " + join(rtDir, "core/string.c");
-		cmd = cmd + " " + join(rtDir, "core/array.c");
-		cmd = cmd + " " + join(rtDir, "core/map.c");
-		cmd = cmd + " " + join(rtDir, "mem/orc.c");
+		cmd = `${cmd} -iquote${dirname(dirname(rtDir))}`;
 	}
 
-	cmd = cmd + " " + oFileList;
-	cmd = cmd + " -o " + outBinary;
-	cmd = cmd + " -lm";
-	if (extraFlags !== "") cmd = cmd + " " + extraFlags;
+	cmd = `${cmd} ${oFileList} -o ${outBinary} -lm`;
+	if (extraFlags !== "") cmd = `${cmd} ${extraFlags}`;
 	return exec(cmd);
 }
 

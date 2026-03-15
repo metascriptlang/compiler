@@ -10,3 +10,6 @@
 [submodule "metascript-zed"]
 	path = tools/editor-plugin/zed
 	url = https://github.com/metascriptlang/metascript-zed.git
+[submodule "vendor/mbedtls"]
+	path = vendor/mbedtls
+	url = https://github.com/Mbed-TLS/mbedtls.git

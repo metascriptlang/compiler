@@ -2,7 +2,8 @@
 // Extension methods backed by runtime/core/map.h
 // Loaded automatically via globalImports() -> "std/core/map"
 
-@include("core/map.h");
+@include("std/core/map/native.h");
+@compile("std/core/map/native.c");
 
 // ===== Lifecycle =====
 

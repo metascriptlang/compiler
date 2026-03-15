@@ -5,7 +5,7 @@
  * Path utilities re-exported from fs/path.ms.
  */
 
-@include("fs/native.h");
+@include("std/fs/native.h");
 
 // ===== C primitives (irreducible POSIX) =====
 

@@ -10,13 +10,14 @@ import {
 	dbGetFileCount, dbGetFilePathByIndex
 } from "../transam/index";
 import { detectCycle } from "../transam/moduleDeps";
-import { readFile, clockMs } from "std/process";
+import { readFile, clockMs, readDir } from "std/process";
 import { writeStderr } from "std/io";
 import {
 	lspJsonString, lspJsonNumber, lspJsonBool, lspJsonNull,
 	lspGetField, lspGetNumberField, lspGetObjectField,
 	lspResponse, lspNotification, lspErrorResponse,
-	lspUriToPath, lspPathToUri, lspResolveImport, lspFormatMessage
+	lspUriToPath, lspPathToUri, lspResolveImport, lspFormatMessage,
+	lspDirname
 } from "./protocol";
 import {
 	lspFmtPosition, lspFmtRange, lspFmtLineRange,
@@ -30,10 +31,10 @@ import {
 	sgTypeToString,
 	sgFormatHover, sgCollectDiagnostics,
 	sgDetectCompletionContext, sgGetPrefix, sgGetCompletionCandidates,
-	sgCollectSymbolsInFile, sgFormatSignature, sgFormatExtensionSignatures, sgCountActiveParam, sgGetCalleeAtCursor, sgGetReceiverAtCursor,
+	sgCollectSymbolsInFile, sgFormatSignature, sgFormatExtensionSignatures, sgGetSignatureContext, SgSignatureContext,
 	sgCollectInlayHints,
 	sgFormatHoverDoc, sgExtractDocComment, sgBuiltinDoc,
-	sgFindImportSource, sgFindExportedDecl,
+	sgFindImportSource, sgFindExportedDecl, sgExtractImportPath, sgExtractImportSource, sgExtractExistingImportNames,
 	sgQueryAtPosition, sgQueryBySym, sgQueryByName, sgQueryByDefiningModule,
 	SgSuggest, SgCompletionKind, sgObjectFieldPathAST, sgCompleteObjectFields,
 	findEnclosingObjectLiteral, findNodeAtPosition,
@@ -45,7 +46,7 @@ import {
 	SgDiagnostic,
 	SgSemanticToken, sgCollectSemanticTokens, sgSortTokens
 } from "../../checker/suggest";
-import { CheckerContext, createContext } from "../../checker/context";
+import { CheckerContext, createContext, findModuleExports, ExportedSymInfo } from "../../checker/context";
 import { Symbol, SymbolKind, lookupSymbol } from "../../checker/symbol";
 import { Type, TypeKind, unknownType, getProperty, typeNameOf } from "../../checker/types";
 import { Node, IdentifierData, MemberExprData, ObjectLiteralData, VariableDeclData, NodeKind, ProgramData, ImportDeclData, ExportDeclData, SourceLocation, makeLoc } from "../../ast/node";
@@ -56,13 +57,14 @@ import { formatDoc } from "../fmt/layout";
 import { registerCoreParsers } from "../../parser/statements/core";
 import { parseSource } from "../../parser/statements/validation";
 import { FmtSection, defaultFmtSection, loadFmtSection } from "../buildConfig";
+import { isMsModuleExtension, stripMsModuleExtension } from "../../module/resolver";
 
 
 // ===== Completion Cache =====
 // Caches last completion list per file for zero-lag character-by-character filtering.
 // Shared with server.ms via LspServerState.
 
-export interface CompletionCache {
+export class CompletionCache {
 	uri: string;           // file URI of last completion
 	line: number;          // line of last completion (1-indexed, internal)
 	prefix: string;        // prefix used for last completion
@@ -163,11 +165,10 @@ function lspFindObjectLiteralTypeAST(program: Node, line: number, col: number, c
 	// Find the VariableDecl that contains this ObjectLiteral
 	const varDecl = lspFindParentVarDecl(program, rootObj);
 	if (varDecl === null) return null;
-	// Query sgRecords for the variable's type
-	const sg = sgQueryAtPosition(ctx, varDecl.location.line, varDecl.location.column);
-	if (sg !== null) {
-		return sg.symType;
-	}
+	// Query sgRecords for the variable's type — use nameLocation (identifier position), not node location (keyword position)
+	const vd = varDecl.data as VariableDeclData;
+	const sg = sgQueryAtPosition(ctx, vd.nameLocation.line, vd.nameLocation.column);
+	if (sg !== null) return sg.symType;
 	return null;
 }
 
@@ -597,6 +598,7 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 	}
 
 	// Per-line format violation diagnostics — hint severity (4)
+	// Per-line format violation diagnostics — hint severity (4)
 	const fmtDiags = checkFormatViolations(db, path);
 	for (let fi = 0; fi < fmtDiags.length; fi = fi + 1) {
 		if (diagCount > 0) diagArray = diagArray + ",";
@@ -674,7 +676,7 @@ export function handleInitialize(id: string): string {
 	const caps = "{\"capabilities\":{"
 		+ "\"textDocumentSync\":{\"openClose\":true,\"change\":1}"
 		+ ",\"hoverProvider\":true"
-		+ ",\"completionProvider\":{\"triggerCharacters\":[\".\"]}"
+		+ ",\"completionProvider\":{\"triggerCharacters\":[\".\",\"/\"]}"
 		+ ",\"definitionProvider\":true"
 		+ ",\"documentSymbolProvider\":true"
 		+ ",\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]}"
@@ -712,16 +714,11 @@ export function handleDidOpen(params: string, db: TransAmDb): string {
 	dbSetFileText(db, path, text);
 	const program = dbParse(db, path);
 	recordImportsForFile(db, path, program);
-	// Eager type-check: warms cache so auto-fired requests (inlayHint,
-	// semanticTokens, documentHighlight) return correct results immediately.
-	// Cost: ~1s on cold files, but didOpen is a notification (no response needed)
-	// so the client doesn't time out — requests just queue in stdin.
 	dbTypeCheck(db, path);
 	const elapsed = clockMs() - t0;
 	if (elapsed > 50) {
 		writeStderr("[LSP] didOpen " + path + " " + elapsed + "ms\n");
 	}
-	// Publish diagnostics immediately on open (not just on change)
 	const diagParams = buildDiagnosticsJson(uri, db, path);
 	return lspNotification("textDocument/publishDiagnostics", diagParams);
 }
@@ -832,7 +829,19 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 	if (program === null) return lspResponse(id, "[]");
 
 	// AST-based context detection (1-based line, 1-based col for AST)
-	const kind = sgDetectCompletionContext(program, source, pos.line, pos.col + 1);
+	const kind = sgDetectCompletionContext(program, pos.line, pos.col + 1);
+
+	// ImportPath: scan filesystem for matching modules
+	if (kind === SgCompletionKind.ImportPath) {
+		const importItems = lspCompleteImportPath(source, pos, db, path);
+		return lspResponse(id, joinJsonItems(importItems));
+	}
+
+	// ImportName: suggest exported symbols from the resolved module
+	if (kind === SgCompletionKind.ImportName) {
+		const importNameItems = lspCompleteImportName(program, source, pos, db, path);
+		return lspResponse(id, joinJsonItems(importNameItems));
+	}
 
 	const ctx = dbTypeCheck(db, path);
 	if (ctx === null) return lspResponse(id, "[]");
@@ -933,6 +942,175 @@ function formatCompletionItemsArray(candidates: SgSuggest[], db: TransAmDb, path
 		result.push(lspFmtCompletionItem(item.name, kindNum, typeStr, sortText, false, commitChars, doc));
 	}
 	return result;
+}
+
+// ===== Import Path Completion =====
+// Scans filesystem for matching modules.
+
+function lspCompleteImportPath(source: string, pos: LspCursorParams, db: TransAmDb, filePath: string): string[] {
+	const partial = sgExtractImportPath(source, pos.line, pos.col + 1);
+	// Split partial into directory prefix and filename prefix
+	// "std/co" → dir="std", filePrefix="co"
+	// "std/core/" → dir="std/core", filePrefix=""
+	// "./pa" → dir=".", filePrefix="pa"
+	// "" → dir="", filePrefix=""
+	let dirPart = "";
+	let filePrefix = partial;
+	let lastSlash = -1;
+	let si = 0;
+	while (si < partial.length) {
+		if (partial.charAt(si) === "/") {
+			lastSlash = si;
+		}
+		si = si + 1;
+	}
+	if (lastSlash >= 0) {
+		dirPart = partial.slice(0, lastSlash);
+		filePrefix = partial.slice(lastSlash + 1, partial.length);
+	}
+
+	// Resolve the scan directory based on import category
+	let scanDir = "";
+	let insertPrefix = "";
+	if (dirPart === "." || dirPart === ".." || partial.startsWith("./") || partial.startsWith("../")) {
+		// Relative import — resolve against current file's directory
+		const fileDir = lspDirname(filePath);
+		if (dirPart === "") {
+			scanDir = fileDir;
+		} else {
+			scanDir = fileDir + "/" + dirPart;
+		}
+		insertPrefix = "";
+	} else if (dirPart.startsWith("std") || partial.startsWith("std")) {
+		// std/ import — resolve against db.stdPath
+		if (db.stdPath.length === 0) return [];
+		if (dirPart === "") {
+			scanDir = db.stdPath;
+		} else {
+			// "std/core" → stdPath + "/core"
+			const stdSuffix = dirPart.slice(3, dirPart.length); // strip "std"
+			scanDir = db.stdPath + stdSuffix;
+		}
+		insertPrefix = "";
+	} else if (dirPart === "" && filePrefix === "") {
+		// Empty — only suggest std/ (user types ./ or ../ explicitly for relative)
+		const items: string[] = [];
+		items.push(lspFmtCompletionItem("std/", 19, "Standard library", "00", false, "/", ""));
+		return items;
+	} else {
+		// Bare import with partial dir — try relative first
+		const fileDir = lspDirname(filePath);
+		if (dirPart === "") {
+			scanDir = fileDir;
+		} else {
+			scanDir = fileDir + "/" + dirPart;
+		}
+		insertPrefix = "";
+	}
+
+	if (scanDir === "") return [];
+
+	// Scan directory — only show MetaScript files and directories containing MS modules
+	const entries = readDir(scanDir);
+	const items: string[] = [];
+	let idx = 0;
+	for (let i = 0; i < entries.length; i = i + 1) {
+		const entry = entries[i];
+		const isDir = entry.charAt(entry.length - 1) === "/";
+		const name = isDir ? entry.slice(0, entry.length - 1) : entry;
+
+		// Skip hidden files/dirs
+		if (name.charAt(0) === ".") continue;
+		if (name === "node_modules" || name === "out" || name === "build") continue;
+
+		// Prefix filter
+		if (filePrefix.length > 0 && !lspStartsWith(name, filePrefix)) continue;
+
+		if (isDir) {
+			// Only show directories that contain MetaScript modules
+			if (!lspDirHasMsEntries(scanDir + "/" + name)) continue;
+			const sortIdx = idx < 10 ? "0" + idx.toString() : idx.toString();
+			items.push(lspFmtCompletionItem(insertPrefix + name, 19, "module", sortIdx, false, "/", ""));
+			idx = idx + 1;
+		} else {
+			// Only show .ms/.cms/.jms files (strip extension)
+			const moduleName = stripMsModuleExtension(name);
+			if (moduleName === "") continue;
+			if (moduleName === "index") continue; // accessed via directory name
+			const sortIdx = idx < 10 ? "0" + idx.toString() : idx.toString();
+			items.push(lspFmtCompletionItem(insertPrefix + moduleName, 17, "module", sortIdx, false, "", ""));
+			idx = idx + 1;
+		}
+	}
+	return items;
+}
+
+// ImportName: suggest exported symbols from the resolved module.
+// AST-based: reads ImportDeclData.importSource and importNames directly.
+function lspCompleteImportName(program: Node, source: string, pos: LspCursorParams, db: TransAmDb, filePath: string): string[] {
+	// AST-based: get import source from ImportDecl node
+	const importSpec = sgExtractImportSource(program, pos.line);
+	if (importSpec === "") return [];
+
+	// Resolve the module path
+	const targetPath = resolveImportForLsp(db, filePath, importSpec);
+	if (targetPath === "") return [];
+
+	// Ensure the target module is loaded and typechecked (registers exports)
+	lspEnsureFileLoaded(db, targetPath);
+	dbTypeCheck(db, targetPath);
+
+	// Get exports from registry
+	const modExports = findModuleExports(db.exportRegistry, targetPath);
+	if (modExports === null) return [];
+
+	// Prefix: reuse sgGetPrefix (same as any identifier completion)
+	const namePrefix = sgGetPrefix(source, pos.line, pos.col);
+	// AST-based: get already-imported names from ImportDeclData.importNames
+	const existingNames = sgExtractExistingImportNames(program, pos.line, pos.col + 1);
+
+	const items: string[] = [];
+	let idx = 0;
+	for (let i = 0; i < modExports.symbols.length; i = i + 1) {
+		const sym = modExports.symbols[i];
+		// Skip extension methods (they're auto-imported, not named imports)
+		if (sym.extReceiverType.length > 0) continue;
+		// Skip already-imported names
+		let alreadyImported = false;
+		for (let j = 0; j < existingNames.length; j = j + 1) {
+			if (existingNames[j] === sym.name) { alreadyImported = true; j = existingNames.length; }
+		}
+		if (alreadyImported) continue;
+		// Prefix filter
+		if (namePrefix.length > 0 && !lspStartsWith(sym.name, namePrefix)) continue;
+		const kindNum = lspCompletionItemKind(sym.kind, false);
+		const detail = sgTypeToString(sym.symType);
+		const sortIdx = idx < 10 ? "0" + idx.toString() : idx.toString();
+		items.push(lspFmtCompletionItem(sym.name, kindNum, detail, sortIdx, false, "", ""));
+		idx = idx + 1;
+	}
+	return items;
+}
+
+// Check if a directory contains at least one MetaScript file.
+function lspDirHasMsEntries(dirPath: string): boolean {
+	const entries = readDir(dirPath);
+	for (let i = 0; i < entries.length; i = i + 1) {
+		const entry = entries[i];
+		if (entry.charAt(entry.length - 1) === "/") continue; // skip subdirs
+		if (isMsModuleExtension(entry)) return true;
+	}
+	return false;
+}
+
+function lspStartsWith(text: string, prefix: string): boolean {
+	if (prefix.length > text.length) return false;
+	let i = 0;
+	while (i < prefix.length) {
+		if (text.charAt(i) !== prefix.charAt(i)) return false;
+		i = i + 1;
+	}
+	return true;
 }
 
 // Join pre-formatted JSON items into a JSON array string.
@@ -1114,30 +1292,29 @@ export function handleSignatureHelp(id: string, params: string, db: TransAmDb): 
 	const source = dbGetSource(db, path);
 	if (source === "") return lspResponse(id, "null");
 
-	const calleeName = sgGetCalleeAtCursor(source, pos.line, pos.col);
-	if (calleeName === "") return lspResponse(id, "null");
+	// AST-based signature context (with text-based fallback for incomplete source)
+	const program = dbParse(db, path);
+	const sigCtx = sgGetSignatureContext(program, source, pos.line, pos.col);
+	if (sigCtx.calleeName === "") return lspResponse(id, "null");
 
 	const ctx = dbTypeCheck(db, path);
 	if (ctx === null) return lspResponse(id, "null");
 
 	// For member calls (receiver.method()), try extension-based signatures first
 	let sigs: SgSignatureInfo[] = [];
-	const receiverName = sgGetReceiverAtCursor(source, pos.line, pos.col);
-	if (receiverName !== "") {
-		const recSym = lookupSymbol(ctx.table, receiverName);
+	if (sigCtx.receiverName !== "") {
+		const recSym = lookupSymbol(ctx.table, sigCtx.receiverName);
 		if (recSym !== null && recSym.symbolType !== null) {
-			sigs = sgFormatExtensionSignatures(ctx, calleeName, recSym.symbolType);
+			sigs = sgFormatExtensionSignatures(ctx, sigCtx.calleeName, recSym.symbolType);
 		}
 	}
 	// Fallback: standard symbol lookup (direct calls + non-extension methods)
 	if (sigs.length === 0) {
-		const sym = lookupSymbol(ctx.table, calleeName);
+		const sym = lookupSymbol(ctx.table, sigCtx.calleeName);
 		if (sym === null) return lspResponse(id, "null");
 		sigs = sgFormatSignature(sym);
 	}
 	if (sigs.length === 0) return lspResponse(id, "null");
-
-	const activeParam = sgCountActiveParam(source, pos.line, pos.col);
 
 	let sigArray = "[";
 	for (let i = 0; i < sigs.length; i = i + 1) {
@@ -1153,7 +1330,7 @@ export function handleSignatureHelp(id: string, params: string, db: TransAmDb): 
 	}
 	sigArray = sigArray + "]";
 
-	return lspResponse(id, lspFmtSignatureHelp(sigArray, 0, activeParam));
+	return lspResponse(id, lspFmtSignatureHelp(sigArray, 0, sigCtx.activeParam));
 }
 
 // ===== Inlay Hints =====

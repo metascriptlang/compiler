@@ -21,7 +21,7 @@ export function isAssignable(source: Type, target: Type): boolean {
 	// Same kind is always compatible
 	if (source.kind === target.kind) {
 		return match (source.kind) {
-			TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Ref | TypeKind.Ptr => isAssignable(source.typeReturn, target.typeReturn),
+			TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Ref | TypeKind.Ptr | TypeKind.Promise => isAssignable(source.typeReturn, target.typeReturn),
 			TypeKind.Function => isFunctionAssignable(source, target),
 			TypeKind.Struct => isObjectAssignable(source, target),
 			TypeKind.Enum | TypeKind.Distinct | TypeKind.TypeReference => source.typeName === target.typeName,
@@ -232,6 +232,13 @@ export function typeRelation(formal: Type, actual: Type): TypeRelation {
 				if (formal.typeExtra !== null && actual.typeExtra !== null) {
 					const errRel = typeRelation(formal.typeExtra, actual.typeExtra);
 					if (errRel === TypeRelation.None) return TypeRelation.None;
+				}
+				return TypeRelation.Exact;
+			},
+			TypeKind.Promise => {
+				if (formal.typeReturn !== null && actual.typeReturn !== null) {
+					const innerRel = typeRelation(formal.typeReturn, actual.typeReturn);
+					if (innerRel === TypeRelation.None) return TypeRelation.None;
 				}
 				return TypeRelation.Exact;
 			},

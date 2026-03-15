@@ -3,7 +3,7 @@
 
 import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, NodeData, createNode, MatchExprData } from "../../ast/node";
-import { ParserState, createState, current, advance, isAtEnd, consumeSemicolon, addError, synchronize } from "../context";
+import { ParserState, createState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize } from "../context";
 import { parseExpressionFromState, registerBlockParser } from "../expressions/core";
 import { parseIfStmt, parseWhileStmt, parseForStmt, parseBreakStmt, parseContinueStmt, parseReturnStmt, parseDoWhileStmt, parseSwitchStmt, parseDeferStmt, parseUnreachableStmt, parseTestDecl, parseAssertStmt } from "./control";
 import { parseVariableDecl, parseFunctionDecl, parseImportDecl, parseExportDecl, parseTypeAliasDecl, parseEnumDecl, parseInterfaceDecl, parseClassDecl, parseMacroInvocation, parseExternDecl, parseDistinctTypeDecl, parseMacroDecl } from "./declaration";
@@ -27,8 +27,7 @@ export function parseStatement(state: ParserState): NodeResult {
 
 	// Async function declaration — before match to avoid try-in-match-arm limitation
 	if (token.kind === TokenKind.Async) {
-		if (state.position + 1 < state.tokens.length &&
-			state.tokens[state.position + 1].kind === TokenKind.Function) {
+		if (peek(state, 1).kind === TokenKind.Function) {
 			const res = try parseFunctionDecl(state);
 			return Result.ok(attachComments(state, res));
 		}
@@ -38,10 +37,8 @@ export function parseStatement(state: ParserState): NodeResult {
 
 	// @comptime { ... } — intercept before decorator loop
 	if (token.kind === TokenKind.At) {
-		if (state.position + 1 < state.tokens.length &&
-			state.tokens[state.position + 1].value === "comptime" &&
-			state.position + 2 < state.tokens.length &&
-			state.tokens[state.position + 2].kind === TokenKind.LBrace) {
+		if (peek(state, 1).value === "comptime" &&
+			peek(state, 2).kind === TokenKind.LBrace) {
 			advance(state); // consume '@'
 			advance(state); // consume 'comptime'
 			const comptimeBody = try parseBlockStmt(state);

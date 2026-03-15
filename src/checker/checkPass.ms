@@ -18,7 +18,7 @@ import {
 	Type, TypeKind,
 	unknownType, nullType, stringType, charType, numberType, voidType,
 	createFunction, createUnion, isMaybeType, unwrapMaybeType,
-	isNarrowingIntConv, typeNameOf,
+	isNarrowingIntConv, typeNameOf, isPromiseResult,
 } from "./types";
 import {
 	Symbol, SymbolKind, SymbolState, ScopeKind,
@@ -34,7 +34,7 @@ import { isAssignable } from "./compat";
 import { resolveDeclarations, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped } from "./resolvePass";
 import { inferOwnership } from "./ownershipInference";
 import { validateTypedAST } from "./validate";
-import { getModuleDir, appendFlag } from "../utils/string";
+import { getModuleDir, appendFlag, prependFlag, concatFlag } from "../utils/string";
 import { checkExpr, checkEnumExhaustiveness, fitNode } from "./checkExprPass";
 import { registerCheckStmt } from "./checkerCallbacks";
 import { parseSource } from "../parser/statements/validation";
@@ -84,6 +84,14 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 		NodeKind.ThrowStmt => {
 			const d = node.data as ThrowStmtData;
 			checkExpr(ctx, d.throwArg, null);
+			// V1: throw forbidden in async functions returning Promise<Result<T,E>>
+			if (ctx.currentFunction !== null
+				&& hasFlag(ctx.currentFunction, SymbolFlag.Async)
+				&& ctx.currentFunction.symbolType !== null
+				&& ctx.currentFunction.symbolType.kind === TypeKind.Function
+				&& isPromiseResult(ctx.currentFunction.symbolType.typeReturn)) {
+				addError(ctx, "throw is forbidden in async function returning Promise<Result<T,E>> — use Result.err() instead", node.location.line, node.location.column);
+			}
 		},
 		NodeKind.TryCatchStmt => checkTryCatch(ctx, node),
 		NodeKind.SwitchStmt => checkSwitchStmt(ctx, node),
@@ -181,6 +189,11 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 
 	const fnType = sym.symbolType;
 	node.nodeType = fnType;
+
+	// Mark async functions for return type unwrapping
+	if (d.fnFlags === "async" || d.fnFlags === "async_generator" || (d.fnFlags !== "" && d.fnFlags.indexOf("async") >= 0)) {
+		setFlag(sym, SymbolFlag.Async);
+	}
 
 	// Save/restore inferredReturn for nested functions
 	const savedReturn = ctx.inferredReturn;
@@ -765,9 +778,16 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 		&& ctx.currentFunction.symbolType.typeReturn.kind !== TypeKind.Unknown
 		&& retType.kind !== TypeKind.Unknown
 		&& retType.kind !== TypeKind.Error) {
-		if (!isAssignable(retType, ctx.currentFunction.symbolType.typeReturn)) {
+		// Async functions: declared return is Promise<T>, actual return is T — unwrap for comparison.
+		// Only unwrap for async functions (flagged via SymbolFlag) to avoid false accept on non-async Promise returns.
+		let declaredReturn = ctx.currentFunction.symbolType.typeReturn;
+		if (declaredReturn.kind === TypeKind.Promise && declaredReturn.typeReturn !== null
+			&& hasFlag(ctx.currentFunction, SymbolFlag.Async)) {
+			declaredReturn = declaredReturn.typeReturn;
+		}
+		if (!isAssignable(retType, declaredReturn)) {
 			const got = formatTypeBrief(retType);
-			const expected = formatTypeBrief(ctx.currentFunction.symbolType.typeReturn);
+			const expected = formatTypeBrief(declaredReturn);
 			addError(ctx, "Return type mismatch in '" + ctx.currentFunction.name + "': expected " + expected + ", got " + got, node.location.line, node.location.column);
 		}
 	}
@@ -777,7 +797,10 @@ function checkTryCatch(ctx: CheckerContext, node: Node): void {
 	const d = node.data as TryCatchStmtData;
 	// Ref parity: trackTryStmt (sempass2 lines 524-597) — merge try + except
 	const oldState = saveInitState(ctx.initTracker);
+	const oldInTry = ctx.inTryExpr;
+	if (d.catchBody !== null) ctx.inTryExpr = true;
 	checkStmt(ctx, d.tryBody);
+	ctx.inTryExpr = oldInTry;
 	const branchInits: string[][] = [collectNewInits(ctx.initTracker, oldState)];
 	const branchBreaks: BreakState[] = [breaksBlock(d.tryBody)];
 
@@ -967,9 +990,9 @@ export function checkProgramBody(ctx: CheckerContext, program: Node): void {
 
 // Run all 3 passes on a program node with an existing context
 export function runThreePasses(ctx: CheckerContext, program: Node): void {
-	collectTopLevel(ctx, program);        // Pass 1: register names
-	resolveDeclarations(ctx, program);    // Pass 2: resolve types
-	checkProgramBody(ctx, program);       // Pass 3: infer + check
+	collectTopLevel(ctx, program);
+	resolveDeclarations(ctx, program);
+	checkProgramBody(ctx, program);
 }
 
 // Process a single MacroInvocation node as a directive (@include/@link/@passC/@passL).
@@ -986,16 +1009,24 @@ function collectOneDirective(ctx: CheckerContext, mi: Node): void {
 		if (modDir !== "") ctx.compilerFlags = appendFlag(ctx.compilerFlags, "-iquote" + modDir);
 	} else if (name === "compile") {
 		if (ctx.compileDirectives !== "") ctx.compileDirectives = ctx.compileDirectives + "\n";
-		ctx.compileDirectives = ctx.compileDirectives + sd.value;
+		// Per-file custom flags: @compile("file.c", "-O3") → "file.c\t-O3" (tab-separated)
+		let entry = sd.value;
+		if (md.macroArgs.length >= 2 && md.macroArgs[1].kind === NodeKind.StringLiteral) {
+			const flagsArg = md.macroArgs[1].data as StringLiteralData;
+			entry = entry + "\t" + flagsArg.value;
+		}
+		ctx.compileDirectives = ctx.compileDirectives + entry;
 	} else if (name === "passC") {
 		ctx.compilerFlags = appendFlag(ctx.compilerFlags, sd.value);
 	} else if (name === "link") {
-		// Resolve @link paths relative to declaring module's directory (like @compile)
+		// Resolve @link paths relative to declaring module's directory (like @compile).
+		// Prepend to link list (reference-aligned: linked first, like addExternalFileToLink).
 		const modDir = getModuleDir(ctx.modulePath);
 		const resolved = modDir !== "" ? modDir + "/" + sd.value : sd.value;
-		ctx.linkFlags = appendFlag(ctx.linkFlags, resolved);
+		ctx.linkFlags = prependFlag(ctx.linkFlags, resolved);
 	} else if (name === "passL") {
-		ctx.linkFlags = appendFlag(ctx.linkFlags, sd.value);
+		// No dedup (reference-aligned: addLinkOption is simple append).
+		ctx.linkFlags = concatFlag(ctx.linkFlags, sd.value);
 	}
 }
 
@@ -1070,9 +1101,6 @@ function loadPreludeOne(ctx: CheckerContext, specifier: string, stdPath: string)
 			const scope = ctx.table.current;
 			for (const sym of scope.symbols) {
 				ensureShaped(sym, ctx);
-				// Also ensure newly added overloads are shaped — if the primary was
-				// already shaped by a previous prelude, ensureShaped skips it and
-				// its new overloads never get resolved.
 				for (const ov of sym.overloads) {
 					ensureShaped(ov, ctx);
 				}
@@ -1132,15 +1160,14 @@ export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): 
 		if (ctx.includeDirectives !== "") ctx.includeDirectives = ctx.includeDirectives + "\n";
 		ctx.includeDirectives = ctx.includeDirectives + preludeCtx.includeDirectives;
 	}
-	if (preludeCtx.compileDirectives !== "") {
-		if (ctx.compileDirectives !== "") ctx.compileDirectives = ctx.compileDirectives + "\n";
-		ctx.compileDirectives = ctx.compileDirectives + preludeCtx.compileDirectives;
-	}
+	// NOTE: compileDirectives are NOT merged per-module. They are processed once
+	// from the prelude context in cmdBuildC. Merging would cause each of N modules
+	// to re-compile the same native.c files, producing N×M duplicate symbols.
 	if (preludeCtx.compilerFlags !== "") {
 		ctx.compilerFlags = appendFlag(ctx.compilerFlags, preludeCtx.compilerFlags);
 	}
 	if (preludeCtx.linkFlags !== "") {
-		ctx.linkFlags = appendFlag(ctx.linkFlags, preludeCtx.linkFlags);
+		ctx.linkFlags = concatFlag(ctx.linkFlags, preludeCtx.linkFlags);
 	}
 }
 

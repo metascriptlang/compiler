@@ -1,0 +1,399 @@
+@include("std/core/buffer/native.h");
+@compile("std/core/buffer/native.c");
+
+// C bindings (private — wrapped by Buffer class methods)
+
+// Allocation
+extern function msBufferAlloc(size: number): string;
+extern function msBufferAllocUnsafe(size: number): string;
+
+// Creation / Conversion
+extern function msBufferFromString(str: string): string;
+extern function msBufferFromHex(hex: string): string;
+extern function msBufferFromBase64(b64: string): string;
+extern function msBufferToHex(buf: string): string;
+extern function msBufferToBase64(buf: string): string;
+extern function msBufferToString(buf: string): string;
+
+// Properties / Access
+extern function msBufferLength(buf: string): number;
+extern function msBufferGet(buf: string, index: number): number;
+extern function msBufferSet(buf: string, index: number, value: number): void;
+
+// Operations
+extern function msBufferSlice(buf: string, start: number, end: number): string;
+extern function msBufferCopy(src: string, dst: string, dstStart: number, srcStart: number, srcEnd: number): number;
+extern function msBufferFill(buf: string, value: number, start: number, end: number): string;
+extern function msBufferConcat(a: string, b: string): string;
+extern function msBufferCopyNew(buf: string): string;
+extern function msBufferCompare(a: string, b: string): number;
+extern function msBufferEquals(a: string, b: string): number;
+
+// Unsigned integer read/write
+extern function msBufferReadUint8(buf: string, offset: number): number;
+extern function msBufferReadUint16LE(buf: string, offset: number): number;
+extern function msBufferReadUint16BE(buf: string, offset: number): number;
+extern function msBufferReadUint32LE(buf: string, offset: number): number;
+extern function msBufferReadUint32BE(buf: string, offset: number): number;
+extern function msBufferWriteUint8(buf: string, value: number, offset: number): number;
+extern function msBufferWriteUint16LE(buf: string, value: number, offset: number): number;
+extern function msBufferWriteUint16BE(buf: string, value: number, offset: number): number;
+extern function msBufferWriteUint32LE(buf: string, value: number, offset: number): number;
+extern function msBufferWriteUint32BE(buf: string, value: number, offset: number): number;
+
+// Signed integer read/write
+extern function msBufferReadInt8(buf: string, offset: number): number;
+extern function msBufferReadInt16LE(buf: string, offset: number): number;
+extern function msBufferReadInt16BE(buf: string, offset: number): number;
+extern function msBufferReadInt32LE(buf: string, offset: number): number;
+extern function msBufferReadInt32BE(buf: string, offset: number): number;
+extern function msBufferWriteInt8(buf: string, value: number, offset: number): number;
+extern function msBufferWriteInt16LE(buf: string, value: number, offset: number): number;
+extern function msBufferWriteInt16BE(buf: string, value: number, offset: number): number;
+extern function msBufferWriteInt32LE(buf: string, value: number, offset: number): number;
+extern function msBufferWriteInt32BE(buf: string, value: number, offset: number): number;
+
+// Float/double read/write
+extern function msBufferReadFloatLE(buf: string, offset: number): number;
+extern function msBufferReadFloatBE(buf: string, offset: number): number;
+extern function msBufferReadDoubleLE(buf: string, offset: number): number;
+extern function msBufferReadDoubleBE(buf: string, offset: number): number;
+extern function msBufferWriteFloatLE(buf: string, value: number, offset: number): number;
+extern function msBufferWriteFloatBE(buf: string, value: number, offset: number): number;
+extern function msBufferWriteDoubleLE(buf: string, value: number, offset: number): number;
+extern function msBufferWriteDoubleBE(buf: string, value: number, offset: number): number;
+
+// 64-bit integer read/write
+extern function msBufferReadUint64LE(buf: string, offset: number): number;
+extern function msBufferReadUint64BE(buf: string, offset: number): number;
+extern function msBufferReadInt64LE(buf: string, offset: number): number;
+extern function msBufferReadInt64BE(buf: string, offset: number): number;
+extern function msBufferWriteUint64LE(buf: string, value: number, offset: number): number;
+extern function msBufferWriteUint64BE(buf: string, value: number, offset: number): number;
+extern function msBufferWriteInt64LE(buf: string, value: number, offset: number): number;
+extern function msBufferWriteInt64BE(buf: string, value: number, offset: number): number;
+
+// Search
+extern function msBufferIndexOf(buf: string, value: number, byteOffset: number): number;
+extern function msBufferLastIndexOf(buf: string, value: number, byteOffset: number): number;
+extern function msBufferIncludes(buf: string, value: number, byteOffset: number): number;
+
+// Byte swap / reverse
+extern function msBufferSwap16(buf: string): string;
+extern function msBufferSwap32(buf: string): string;
+extern function msBufferSwap64(buf: string): string;
+extern function msBufferReverse(buf: string): string;
+
+// Validation
+extern function msBufferIsAscii(buf: string): number;
+extern function msBufferIsUtf8(buf: string): number;
+
+export class Buffer {
+	_raw: string;
+	length: number;
+
+	// --- Static Factories ---
+
+	static alloc(size: number): Buffer {
+		const raw = msBufferAlloc(size);
+		return { _raw: raw, length: msBufferLength(raw) };
+	}
+
+	static allocUnsafe(size: number): Buffer {
+		const raw = msBufferAllocUnsafe(size);
+		return { _raw: raw, length: msBufferLength(raw) };
+	}
+
+	static from(value: string, encoding: string): Buffer {
+		let raw = "";
+		if (encoding === "hex") {
+			raw = msBufferFromHex(value);
+		} else if (encoding === "base64") {
+			raw = msBufferFromBase64(value);
+		} else {
+			raw = msBufferFromString(value);
+		}
+		return { _raw: raw, length: msBufferLength(raw) };
+	}
+
+	static fromArray(arr: number[]): Buffer {
+		const raw = msBufferAlloc(arr.length);
+		let i = 0;
+		while (i < arr.length) {
+			msBufferSet(raw, i, arr[i]);
+			i = i + 1;
+		}
+		return { _raw: raw, length: msBufferLength(raw) };
+	}
+
+	static fromBuffer(buf: Buffer): Buffer {
+		const raw = msBufferCopyNew(buf._raw);
+		return { _raw: raw, length: msBufferLength(raw) };
+	}
+
+	static compare(a: Buffer, b: Buffer): number {
+		return msBufferCompare(a._raw, b._raw);
+	}
+
+	static concat(a: Buffer, b: Buffer): Buffer {
+		const raw = msBufferConcat(a._raw, b._raw);
+		return { _raw: raw, length: msBufferLength(raw) };
+	}
+
+	static isAscii(buf: Buffer): boolean {
+		return msBufferIsAscii(buf._raw) === 1;
+	}
+
+	static isUtf8(buf: Buffer): boolean {
+		return msBufferIsUtf8(buf._raw) === 1;
+	}
+
+	// --- Byte Access ---
+
+	get(index: number): number {
+		return msBufferGet(this._raw, index);
+	}
+
+	set(index: number, value: number): void {
+		msBufferSet(this._raw, index, value);
+	}
+
+	// --- Conversion ---
+
+	toHex(): string {
+		return msBufferToHex(this._raw);
+	}
+
+	toBase64(): string {
+		return msBufferToBase64(this._raw);
+	}
+
+	toString(): string {
+		return msBufferToString(this._raw);
+	}
+
+	// --- Operations ---
+
+	slice(start: number, end: number): Buffer {
+		const raw = msBufferSlice(this._raw, start, end);
+		return { _raw: raw, length: msBufferLength(raw) };
+	}
+
+	subarray(start: number, end: number): Buffer {
+		const raw = msBufferSlice(this._raw, start, end);
+		return { _raw: raw, length: msBufferLength(raw) };
+	}
+
+	copy(target: Buffer, targetStart: number, sourceStart: number, sourceEnd: number): number {
+		return msBufferCopy(this._raw, target._raw, targetStart, sourceStart, sourceEnd);
+	}
+
+	fill(value: number, start: number, end: number): Buffer {
+		msBufferFill(this._raw, value, start, end);
+		return this;
+	}
+
+	equals(other: Buffer): boolean {
+		return msBufferEquals(this._raw, other._raw) === 1;
+	}
+
+	compare(target: Buffer): number {
+		return msBufferCompare(this._raw, target._raw);
+	}
+
+	// --- Search ---
+
+	indexOf(value: number, byteOffset: number): number {
+		return msBufferIndexOf(this._raw, value, byteOffset);
+	}
+
+	lastIndexOf(value: number, byteOffset: number): number {
+		return msBufferLastIndexOf(this._raw, value, byteOffset);
+	}
+
+	includes(value: number, byteOffset: number): boolean {
+		return msBufferIndexOf(this._raw, value, byteOffset) !== -1;
+	}
+
+	// --- Read Unsigned Integers ---
+
+	readUInt8(offset: number): number {
+		return msBufferReadUint8(this._raw, offset);
+	}
+
+	readUInt16LE(offset: number): number {
+		return msBufferReadUint16LE(this._raw, offset);
+	}
+
+	readUInt16BE(offset: number): number {
+		return msBufferReadUint16BE(this._raw, offset);
+	}
+
+	readUInt32LE(offset: number): number {
+		return msBufferReadUint32LE(this._raw, offset);
+	}
+
+	readUInt32BE(offset: number): number {
+		return msBufferReadUint32BE(this._raw, offset);
+	}
+
+	// --- Read Signed Integers ---
+
+	readInt8(offset: number): number {
+		return msBufferReadInt8(this._raw, offset);
+	}
+
+	readInt16LE(offset: number): number {
+		return msBufferReadInt16LE(this._raw, offset);
+	}
+
+	readInt16BE(offset: number): number {
+		return msBufferReadInt16BE(this._raw, offset);
+	}
+
+	readInt32LE(offset: number): number {
+		return msBufferReadInt32LE(this._raw, offset);
+	}
+
+	readInt32BE(offset: number): number {
+		return msBufferReadInt32BE(this._raw, offset);
+	}
+
+	// --- Read Float/Double ---
+
+	readFloatLE(offset: number): number {
+		return msBufferReadFloatLE(this._raw, offset);
+	}
+
+	readFloatBE(offset: number): number {
+		return msBufferReadFloatBE(this._raw, offset);
+	}
+
+	readDoubleLE(offset: number): number {
+		return msBufferReadDoubleLE(this._raw, offset);
+	}
+
+	readDoubleBE(offset: number): number {
+		return msBufferReadDoubleBE(this._raw, offset);
+	}
+
+	// --- Read 64-bit ---
+
+	readBigUInt64LE(offset: number): number {
+		return msBufferReadUint64LE(this._raw, offset);
+	}
+
+	readBigUInt64BE(offset: number): number {
+		return msBufferReadUint64BE(this._raw, offset);
+	}
+
+	readBigInt64LE(offset: number): number {
+		return msBufferReadInt64LE(this._raw, offset);
+	}
+
+	readBigInt64BE(offset: number): number {
+		return msBufferReadInt64BE(this._raw, offset);
+	}
+
+	// --- Write Unsigned Integers ---
+
+	writeUInt8(value: number, offset: number): number {
+		return msBufferWriteUint8(this._raw, value, offset);
+	}
+
+	writeUInt16LE(value: number, offset: number): number {
+		return msBufferWriteUint16LE(this._raw, value, offset);
+	}
+
+	writeUInt16BE(value: number, offset: number): number {
+		return msBufferWriteUint16BE(this._raw, value, offset);
+	}
+
+	writeUInt32LE(value: number, offset: number): number {
+		return msBufferWriteUint32LE(this._raw, value, offset);
+	}
+
+	writeUInt32BE(value: number, offset: number): number {
+		return msBufferWriteUint32BE(this._raw, value, offset);
+	}
+
+	// --- Write Signed Integers ---
+
+	writeInt8(value: number, offset: number): number {
+		return msBufferWriteInt8(this._raw, value, offset);
+	}
+
+	writeInt16LE(value: number, offset: number): number {
+		return msBufferWriteInt16LE(this._raw, value, offset);
+	}
+
+	writeInt16BE(value: number, offset: number): number {
+		return msBufferWriteInt16BE(this._raw, value, offset);
+	}
+
+	writeInt32LE(value: number, offset: number): number {
+		return msBufferWriteInt32LE(this._raw, value, offset);
+	}
+
+	writeInt32BE(value: number, offset: number): number {
+		return msBufferWriteInt32BE(this._raw, value, offset);
+	}
+
+	// --- Write Float/Double ---
+
+	writeFloatLE(value: number, offset: number): number {
+		return msBufferWriteFloatLE(this._raw, value, offset);
+	}
+
+	writeFloatBE(value: number, offset: number): number {
+		return msBufferWriteFloatBE(this._raw, value, offset);
+	}
+
+	writeDoubleLE(value: number, offset: number): number {
+		return msBufferWriteDoubleLE(this._raw, value, offset);
+	}
+
+	writeDoubleBE(value: number, offset: number): number {
+		return msBufferWriteDoubleBE(this._raw, value, offset);
+	}
+
+	// --- Write 64-bit ---
+
+	writeBigUInt64LE(value: number, offset: number): number {
+		return msBufferWriteUint64LE(this._raw, value, offset);
+	}
+
+	writeBigUInt64BE(value: number, offset: number): number {
+		return msBufferWriteUint64BE(this._raw, value, offset);
+	}
+
+	writeBigInt64LE(value: number, offset: number): number {
+		return msBufferWriteInt64LE(this._raw, value, offset);
+	}
+
+	writeBigInt64BE(value: number, offset: number): number {
+		return msBufferWriteInt64BE(this._raw, value, offset);
+	}
+
+	// --- Byte Swap / Reverse ---
+
+	swap16(): Buffer {
+		msBufferSwap16(this._raw);
+		return this;
+	}
+
+	swap32(): Buffer {
+		msBufferSwap32(this._raw);
+		return this;
+	}
+
+	swap64(): Buffer {
+		msBufferSwap64(this._raw);
+		return this;
+	}
+
+	reverse(): Buffer {
+		msBufferReverse(this._raw);
+		return this;
+	}
+}

@@ -90,7 +90,7 @@ export function dbSetStdPath(db: TransAmDb, stdPath: string): void {
 // Cache keys use: parseKey = fileId, checkKey = fileId + 10000,
 // transformKey = fileId + 20000, analyzeKey = fileId + 30000.
 
-export interface TransAmDb {
+export class TransAmDb {
 	revision: TaRevision;
 	fileInput: TaFileInputStore;
 	depStack: TaDependencyStack;

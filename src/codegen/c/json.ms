@@ -1,7 +1,7 @@
 // JSON C Emission — generates per-type C helper functions for JSON.parse<T> / JSON.stringify<T>
 //
 // Called from builtinLower when @builtin("JsonParse") or @builtin("JsonStringify") is encountered.
-// Emits raw C code via @emit nodes — calls runtime/core/json.h functions directly
+// Emits raw C code via @emit nodes — calls runtime/std/core/json/native.h functions directly
 // (msJsonParse, msJsonGet, msJsonStringify, etc.). No cross-module symbol resolution needed.
 //
 // Architecture: builtinLower resolves the struct type + field metadata from the checker,
@@ -28,7 +28,7 @@ export function registerHelper(name: string, emitNode: Node, ctx: TransformConte
 export function ensureJsonInclude(ctx: TransformContext, loc: SourceLocation): void {
 	if (!hasEmitted(ctx, "__jsonInclude")) {
 		ctx.emittedHelpers.push("__jsonInclude");
-		ctx.pendingDecls.push(makeEmitNode("/*INCLUDESECTION*/#include \"core/json.h\"\n", loc));
+		ctx.pendingDecls.push(makeEmitNode("/*INCLUDESECTION*/#include \"std/core/json/native.h\"\n", loc));
 	}
 }
 
@@ -54,7 +54,7 @@ export function fieldTypeToCType(ftype: Type): string {
 	};
 }
 
-// Map MetaScript TypeKind → MsJsonKind C constant (matches runtime/core/json.h).
+// Map MetaScript TypeKind → MsJsonKind C constant (matches runtime/std/core/json/native.h).
 export function fieldTypeToJsonKind(ftype: Type): number {
 	if (ftype === null) return -1;
 	return match (ftype.kind) {
@@ -171,7 +171,7 @@ export function makeEmitNode(code: string, loc: SourceLocation): Node {
 // ===== JSON.parse<T> — C Helper Generation =====
 
 // Generate a C function: static msResult_T_msString __jsonParse_T(msString input) { ... }
-// Calls msJsonParse + msJsonGet from runtime/core/json.h.
+// Calls msJsonParse + msJsonGet from runtime/std/core/json/native.h.
 // Returns null if any field type is unsupported.
 export function generateJsonParseC(helperName: string, typeName: string, structType: Type, loc: SourceLocation): Node {
 	const fieldNames = structType.typeNames;
@@ -188,7 +188,7 @@ export function generateJsonParseC(helperName: string, typeName: string, structT
 	const resultCType = `msResult_${typeName}_msString`;
 
 	// Include json runtime header (INCLUDESECTION routes it to #include area)
-	let c = "/*INCLUDESECTION*/#include \"core/json.h\"\n";
+	let c = "/*INCLUDESECTION*/#include \"std/core/json/native.h\"\n";
 	c = c + `static ${resultCType} ${helperName}(msString input) {\n`;
 	c = c + `  ${resultCType} __r; memset(&__r, 0, sizeof(__r));\n`;
 	c = c + "  MsJsonValue* __jv = msJsonParse(input);\n";
@@ -240,7 +240,7 @@ export function generateJsonParseC(helperName: string, typeName: string, structT
 // ===== JSON.stringify<T> — C Helper Generation =====
 
 // Generate a C function: static msString __jsonStringify_T(T value) { ... }
-// Calls msJsonNewObject + msJsonSet + msJsonStringify from runtime/core/json.h.
+// Calls msJsonNewObject + msJsonSet + msJsonStringify from runtime/std/core/json/native.h.
 // Returns null if any field type is unsupported.
 export function generateJsonStringifyC(
 	helperName: string, typeName: string, structType: Type, loc: SourceLocation
@@ -251,7 +251,7 @@ export function generateJsonStringifyC(
 
 	if (!allFieldsSupported(fieldTypes)) return null as unknown as Node;
 
-	let c = "/*INCLUDESECTION*/#include \"core/json.h\"\n";
+	let c = "/*INCLUDESECTION*/#include \"std/core/json/native.h\"\n";
 	c = c + `static msString ${helperName}(${typeName} value) {\n`;
 	c = c + "  MsJsonValue* __o = msJsonNewObject();\n";
 	c = c + emitJsonSetFields(fieldNames, fieldTypes);
@@ -280,7 +280,7 @@ export function generateJsonStringifyColoredC(
 
 	if (!allFieldsSupported(fieldTypes)) return null as unknown as Node;
 
-	let c = "/*INCLUDESECTION*/#include \"core/json.h\"\n";
+	let c = "/*INCLUDESECTION*/#include \"std/core/json/native.h\"\n";
 	c = c + `static msString ${helperName}(${typeName} value) {\n`;
 	c = c + "  MsJsonValue* __o = msJsonNewObject();\n";
 	c = c + emitJsonSetFields(fieldNames, fieldTypes);

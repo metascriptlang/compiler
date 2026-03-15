@@ -14,7 +14,7 @@ import {
 	ExportDeclData, ClassDeclData, MethodDeclData, ConstructorDeclData,
 	ForOfStmtData, DoWhileStmtData, ReturnStmtData,
 } from "../ast/node";
-import { TransformContext, NameSet, nameSetContains, nameSetAdd, nameSetIntersect } from "../transform/context";
+import { TransformContext, NameSet, createNameSet, nameSetContains, nameSetAdd, nameSetIntersect } from "../transform/context";
 import {
 	makeIdent, makeBlock, makeExprStmt, makeCall,
 } from "../transform/util";
@@ -51,7 +51,7 @@ function isDestroyFn(name: string): boolean {
 
 // Scan a block's top-level statements for wasMoved calls
 function collectBlockMoved(block: Node): NameSet {
-	const result: NameSet = [];
+	const result: NameSet = createNameSet();
 	if (block === null) return result;
 	if (block.kind !== NodeKind.BlockStmt) return result;
 	const bd = block.data as BlockStmtData;
@@ -63,7 +63,7 @@ function collectBlockMoved(block: Node): NameSet {
 		// Also collect from nested if/else branches
 		if (stmt.kind === NodeKind.IfStmt) {
 			const nested = collectIfMoved(stmt);
-			for (const v of nested) {
+			for (const v of nested.items) {
 				nameSetAdd(result, v);
 			}
 		}
@@ -77,7 +77,7 @@ function collectIfMoved(ifNode: Node): NameSet {
 	const consMoved = collectBlockMoved(d.consequent);
 
 	// No else — can't guarantee moved on all paths
-	if (d.alternate === null) return [];
+	if (d.alternate === null) return createNameSet();
 
 	// else-if chain: recurse
 	if (d.alternate.kind === NodeKind.IfStmt) {
@@ -134,11 +134,15 @@ function getDestroyVar(stmt: Node): string {
 
 function optimizeBlock(stmts: Node[]): Node[] {
 	const result: Node[] = [];
-	const moved: NameSet = [];
+	const moved: NameSet = createNameSet();
 
 	let i = 0;
 	while (i < stmts.length) {
 		const stmt = stmts[i];
+		if (stmt === null) {
+			i += 1;
+			continue;
+		}
 
 		// Track wasMoved calls — add var to moved set
 		const wmVar = getWasMovedVar(stmt);
@@ -159,7 +163,7 @@ function optimizeBlock(stmts: Node[]): Node[] {
 		// Collect moved vars from exhaustive if/else branches
 		if (stmt.kind === NodeKind.IfStmt) {
 			const ifMoved = collectIfMoved(stmt);
-			for (const v of ifMoved) {
+			for (const v of ifMoved.items) {
 				nameSetAdd(moved, v);
 			}
 		}

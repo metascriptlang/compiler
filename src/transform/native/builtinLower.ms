@@ -14,7 +14,7 @@
 
 import {
 	Node, NodeKind, NodeFlag, DeclKind, ProgramData, SourceLocation,
-	CallExprData, MemberExprData, IdentifierData,
+	CallExprData, MemberExprData, IdentifierData, BinaryExprData, NewExprData,
 } from "../../ast/node";
 import { Type, TypeKind, isNumeric, createResult, createArray, createPrimitive, stringType, booleanType, numberType, unknownType, unwrapRef, typeNameOf } from "../../checker/types";
 import { findExtension } from "../../checker/context";
@@ -22,7 +22,7 @@ import { TransformContext, hasEmitted } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { walkNode } from "../walker";
 import {
-	makeIdent, makeCall, makeString, makeNumber, makeMember,
+	makeIdent, makeCall, makeString, makeNumber, makeMember, makeUnary,
 	makeObjectLiteral, makeBool, makeHiddenStdConv,
 	makeExprStmt, enumToStringName,
 } from "../util";
@@ -37,6 +37,14 @@ export function lowerBuiltins(program: Node, ctx: TransformContext): Node {
 	const result = walkNode(program, (node: Node): Node => {
 		if (node.kind === NodeKind.CallExpr) {
 			return lowerCallExpr(node, ctx);
+		}
+		// new Promise(executor) → msPromiseNew(executor)
+		if (node.kind === NodeKind.NewExpr) {
+			return lowerNewPromise(node);
+		}
+		// arr.length = n → msXxxArraySetLen(&arr, n)
+		if (node.kind === NodeKind.BinaryExpr) {
+			return lowerLengthAssign(node, ctx);
 		}
 		return node;
 	});
@@ -224,6 +232,22 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 	}
 	if (builtinKind === "msResultErr") {
 		return rewriteResultToLiteral(node, false, ctx);
+	}
+
+	// Promise.then/catch/finally — rewrite to C runtime calls
+	if (builtinKind === "PromiseThen" || builtinKind === "PromiseCatch" || builtinKind === "PromiseFinally") {
+		if (cd.callee.kind === NodeKind.MemberExpr && cd.arguments.length >= 1) {
+			const me = cd.callee.data as MemberExprData;
+			const runtimeName = builtinKind === "PromiseThen" ? "msFutureThen"
+				: builtinKind === "PromiseCatch" ? "msFutureCatch"
+				: "msFutureFinally";
+			const args: Node[] = [me.object];
+			for (const a of cd.arguments) { args.push(a); }
+			const newCall = makeCall(makeIdent(runtimeName, loc), args, loc);
+			newCall.nodeType = node.nodeType;
+			return newCall;
+		}
+		return node;
 	}
 
 	if (builtinKind === "JsonParse") {
@@ -452,6 +476,57 @@ function preludeLowerCallee(preludeSrc: string, userSrc: string): string {
 	}
 	if (cd.callee.kind === NodeKind.MemberExpr) return "STILL_MEMBER";
 	return "OTHER_KIND";
+}
+
+// ===== arr.length = n → setLength(arr, n) sugar =====
+// setLength is the real API. arr.length = n is syntactic sugar.
+// Rewrites new Promise(executor) → msPromiseNew(executor)
+
+function lowerNewPromise(node: Node): Node {
+	if (node.nodeType !== null && node.nodeType.kind === TypeKind.Promise) {
+		const d = node.data as NewExprData;
+		if (d.newArguments.length === 1) {
+			const loc = node.location;
+			const newCall = makeCall(makeIdent("msPromiseNew", loc), d.newArguments, loc);
+			newCall.nodeType = node.nodeType;
+			return newCall;
+		}
+	}
+	return node;
+}
+
+// Rewrites BinaryExpr(=, MemberExpr(arr, "length"), n) → CallExpr to C runtime setLength.
+
+function lowerLengthAssign(node: Node, ctx: TransformContext): Node {
+	if (ctx.jsBackend) return node;
+	const d = node.data as BinaryExprData;
+	if (d.operator !== "=") return node;
+	if (d.left.kind !== NodeKind.MemberExpr) return node;
+	const md = d.left.data as MemberExprData;
+	if (md.property !== "length") return node;
+	const objType = md.object.nodeType;
+	if (objType === null || objType.kind !== TypeKind.Array) return node;
+
+	const loc = node.location;
+	const elemType = objType.typeReturn;
+
+	// Pick the right C runtime function based on element type
+	let fn = "msGenericArraySetLen";
+	if (elemType !== null) {
+		if (isNumeric(elemType) || elemType.kind === TypeKind.Boolean) {
+			fn = "msNumberArraySetLen";
+		} else if (elemType.kind === TypeKind.String) {
+			fn = "msStringArraySetLen";
+		} else if (elemType.kind === TypeKind.Ref || elemType.kind === TypeKind.Ptr) {
+			fn = "msRefArraySetLen";
+		}
+	}
+
+	// setLength takes &arr (mutates in place)
+	const addrOf = makeUnary("&", md.object, loc);
+	const result = makeCall(makeIdent(fn, loc), [addrOf, d.right], loc);
+	result.nodeType = node.nodeType;
+	return result;
 }
 
 test "passthrough non-call" { assert stmtCountAfter("const x = 1;", lowerBuiltins) === 1; }

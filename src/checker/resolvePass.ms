@@ -17,7 +17,7 @@ import {
 	Type, TypeKind, TypeFlag,
 	unknownType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType,
 	createPrimitive, createArray, createFunction, createClosureType, createStruct,
-	createResult, createTypeRef, createUnion, createGenericParam, createDistinct,
+	createResult, createPromise, createTypeRef, createUnion, createGenericParam, createDistinct,
 	createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, createMap, createSet,
 	setMinArity, typeNameOf, assignType, isInterfaceType, unwrapRef, propagateHasAsgn,
 } from "./types";
@@ -179,6 +179,9 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 
 		if (baseName === "Result" && args.length === 2) {
 			return createResult(resolveAnnotation(args[0], ctx), resolveAnnotation(args[1], ctx));
+		}
+		if (baseName === "Promise" && args.length === 1) {
+			return createPromise(resolveAnnotation(args[0], ctx));
 		}
 		if (baseName === "Array" && args.length === 1) {
 			return createArray(resolveAnnotation(args[0], ctx));

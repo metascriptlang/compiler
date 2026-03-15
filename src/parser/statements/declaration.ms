@@ -3,7 +3,7 @@
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, ExternKind, NodeData, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd, skipDestructurePattern, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, addGenericDecl, updateGenericDeclFields, collectTokenText } from "../context";
+import { ParserState, current, advance, isAtEnd, peek, skipDestructurePattern, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, addGenericDecl, updateGenericDeclFields, collectTokenText } from "../context";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipDefaultValue, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, isIdentLike } from "../util";
 import { callBlockParser, callExprParser } from "./callbacks";
@@ -849,9 +849,9 @@ function parseClassMember(state: ParserState): NodeResult {
 	}
 
 	// Get/Set accessors — early return
+	// Lookahead must use peek() to skip comments, not raw state.tokens[pos+1]
 	if ((current(state).kind === TokenKind.Get || current(state).kind === TokenKind.Set) &&
-		state.position + 1 < state.tokens.length &&
-		isIdentLike(state.tokens[state.position + 1])) {
+		isIdentLike(peek(state, 1))) {
 		return parseClassAccessor(state, memberIsStatic, memberFlags);
 	}
 

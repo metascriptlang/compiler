@@ -22,6 +22,7 @@ import {
 	typeNameOf, unwrapRef, isDiscriminatedUnion, findVariantByDiscriminant, findFieldInVariant, findUnionVariant,
 	unifyType, createUnifyBindings, hasGenericParams,
 	getMinArity, setMinArity, isNarrowingIntConv, CallingConvention, skipModifier,
+	isPromiseResult, createPromise,
 } from "./types";
 import {
 	Symbol, SymbolKind, ScopeKind, SymbolState, SymbolFlag,
@@ -60,6 +61,7 @@ function invalidateFacts(ctx: CheckerContext, name: string): void {
 }
 
 function factReferencesVar(fact: Node, name: string): boolean {
+	if (fact === null) return false;
 	if (fact.kind === NodeKind.BinaryExpr) {
 		const d = fact.data as BinaryExprData;
 		if (d.left !== null && d.left.kind === NodeKind.Identifier &&
@@ -168,6 +170,17 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			if (isAsgn) {
 				ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn - 1;
 			}
+			// Block assignment to read-only properties (e.g., str.length = n)
+			if (isAsgn && d.left.kind === NodeKind.MemberExpr) {
+				const md = d.left.data as MemberExprData;
+				if (md.property === "length" && md.object.nodeType !== null) {
+					if (md.object.nodeType.kind === TypeKind.String || md.object.nodeType.kind === TypeKind.CString) {
+						addError(ctx, "cannot assign to 'length' on string (strings are immutable)", d.left.location.line, d.left.location.column);
+					} else if (md.object.nodeType.kind === TypeKind.Array && d.operator !== "=") {
+						addError(ctx, "compound assignment to 'length' is not allowed; use 'arr.length = arr.length " + d.operator.slice(0, d.operator.length - 1) + " n' instead", d.left.location.line, d.left.location.column);
+					}
+				}
+			}
 			// For assignment, pass LHS type as expectedType to RHS
 			const rightExpected = (d.operator === "=") ? leftType : null;
 			let rightType = checkExpr(ctx, d.right, rightExpected);
@@ -235,6 +248,13 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 		NodeKind.UpdateExpr => {
 			const d = node.data as UpdateExprData;
 			checkExpr(ctx, d.updateArg, null);
+			if (d.updateArg.kind === NodeKind.MemberExpr) {
+				const umd = d.updateArg.data as MemberExprData;
+				if (umd.property === "length" && umd.object.nodeType !== null &&
+					(umd.object.nodeType.kind === TypeKind.Array || umd.object.nodeType.kind === TypeKind.String || umd.object.nodeType.kind === TypeKind.CString)) {
+					addError(ctx, "cannot use increment/decrement on 'length'; use 'arr.length = n' instead", d.updateArg.location.line, d.updateArg.location.column);
+				}
+			}
 			return numberType();
 		},
 		NodeKind.CallExpr => checkCallExpr(ctx, node, expectedType),
@@ -493,7 +513,21 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 		NodeKind.MatchExpr => checkMatchExpr(ctx, node),
 		NodeKind.AwaitExpr => {
 			const d = node.data as AwaitExprData;
-			checkExpr(ctx, d.awaitArg, null);
+			const argType = checkExpr(ctx, d.awaitArg, null);
+			if (argType !== null && argType.kind === TypeKind.Promise) {
+				node.nodeType = argType.typeReturn !== null ? argType.typeReturn : unknownType();
+				// V2: in async fn returning Promise<Result<T,E>>, bare await on non-Result promise is error
+				if (!ctx.inTryExpr
+					&& ctx.currentFunction !== null
+					&& hasFlag(ctx.currentFunction, SymbolFlag.Async)
+					&& ctx.currentFunction.symbolType !== null
+					&& ctx.currentFunction.symbolType.kind === TypeKind.Function
+					&& isPromiseResult(ctx.currentFunction.symbolType.typeReturn)
+					&& (argType.typeReturn === null || argType.typeReturn.kind !== TypeKind.Result)) {
+					addError(ctx, "await on non-Result Promise must be guarded with 'try await ... catch ...' in function returning Promise<Result<T,E>>", node.location.line, node.location.column);
+				}
+				return node.nodeType;
+			}
 			return unknownType();
 		},
 		NodeKind.YieldExpr => {
@@ -835,6 +869,22 @@ function fillDefaultArgsForNode(ctx: CheckerContext, callNode: Node, fnName: str
 
 function checkNewExpr(ctx: CheckerContext, node: Node): Type {
 	const d = node.data as NewExprData;
+	// new Promise<T>(executor) — built-in type, not a class
+	if (d.newCallee.kind === NodeKind.Identifier) {
+		const id = d.newCallee.data as IdentifierData;
+		if (id.name === "Promise") {
+			// Check executor argument
+			if (d.newArguments.length >= 1) {
+				checkExpr(ctx, d.newArguments[0], null);
+			}
+			// Resolve type param: new Promise<string>(...) → Promise<string>
+			const typeArg = findCallTypeArg(node);
+			const innerType = typeArg !== null ? typeArg : voidType();
+			const promType = createPromise(innerType);
+			node.nodeType = promType;
+			return promType;
+		}
+	}
 	const calleeType = checkExpr(ctx, d.newCallee, null);
 	const resolvedType = resolveGenericNewExpr(ctx, d.newCallee, calleeType);
 	// Resolve inner struct type for field type propagation
@@ -861,7 +911,10 @@ function checkNewExpr(ctx: CheckerContext, node: Node): Type {
 
 function checkTryExpr(ctx: CheckerContext, node: Node): Type {
 	const d = node.data as TryExprData;
+	const oldInTry = ctx.inTryExpr;
+	ctx.inTryExpr = true;
 	const argType = checkExpr(ctx, d.tryArg, null);
+	ctx.inTryExpr = oldInTry;
 	// tryArg.nodeType = Result<T,E> (set by checkExpr on the CallExpr)
 	// resultDesugar reads tryArg.nodeType for the full Result type.
 	// TryExpr itself evaluates to T (the unwrapped value).
@@ -912,6 +965,14 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 		// Method call: resolveMemberExpr already set resolvedSym on the callee node
 		if (d.callee.resolvedSym !== null) {
 			node.resolvedSym = d.callee.resolvedSym;
+			// Class instance methods: detected by "this" as first param name.
+			// Set ExtCall so extensionMethodLower rewrites obj.method(args) → ClassName_method(obj, args)
+			const methSym = d.callee.resolvedSym;
+			if (methSym.symbolType !== null && methSym.symbolType.kind === TypeKind.Function
+				&& methSym.symbolType.typeNames !== null && methSym.symbolType.typeNames.length > 0
+				&& methSym.symbolType.typeNames[0] === "this") {
+				node.flags = node.flags | NodeFlag.ExtCall;
+			}
 		}
 		// Reference parity: pre-resolve extension methods BEFORE arg checking.
 		// sigmatch types args WITH formal param type from the resolved candidate.
@@ -1563,6 +1624,17 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 		}
 		node.resolvedSym = resultPropSym;
 		sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + d.property.length, resultPropSym, propType, SymbolKind.Property, d.property, "Result", false);
+		return propType;
+	}
+	// Promise methods: .then/.catch/.finally — synthetic symbols with builtinKind
+	if (resolvedObjType.kind === TypeKind.Promise && propType.kind === TypeKind.Function) {
+		const promiseMethSym = makeSymbol(d.property, SymbolKind.Method, propType, false);
+		promiseMethSym.state = SymbolState.Shaped;
+		if (d.property === "then") promiseMethSym.builtinKind = "PromiseThen";
+		else if (d.property === "catch") promiseMethSym.builtinKind = "PromiseCatch";
+		else if (d.property === "finally") promiseMethSym.builtinKind = "PromiseFinally";
+		node.resolvedSym = promiseMethSym;
+		sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + d.property.length, promiseMethSym, propType, SymbolKind.Method, d.property, "Promise", false);
 		return propType;
 	}
 	if (propType.kind !== TypeKind.Unknown) {

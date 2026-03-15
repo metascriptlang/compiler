@@ -135,6 +135,7 @@ export function classifyType(t: Type, ctx: TransformContext): RcInfo {
 		TypeKind.String => makeRcInfo(RcKind.String, "", "msStringDecref", "msStringCopy", "msStringWasMoved", "msStringSink", false),
 		TypeKind.Array => classifyArray(t, ctx),
 		TypeKind.Ref => makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false),
+		TypeKind.Promise => makeRcInfo(RcKind.Ref, "", "msFutureDrcDestroy", "", "msFutureDrcWasMoved", "", false),
 		TypeKind.Ptr => {
 			// Ptr<T> is always unmanaged — no RC, no lifecycle hooks.
 			// Reference parity: cursor fields skip all RC operations.

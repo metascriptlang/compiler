@@ -13,7 +13,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <time.h>
-#include "system.h"
+#include "std/core/system/native.h"
 
 #ifdef __cplusplus
 extern "C" {

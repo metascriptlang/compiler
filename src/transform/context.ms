@@ -45,10 +45,20 @@ export function createTransformContextWithChecker(cc: CheckerContext): Transform
 
 // ===== NameSet =====
 // Reusable string-name collector with contains/addUnique ops.
-export type NameSet = string[];
+// NameSet: heap-allocated string set (class = pointer semantics).
+// string[] arrays are passed by value in C (16-byte struct). When helper functions
+// push to a NameSet parameter, the push would modify a LOCAL COPY if NameSet were
+// a bare string[]. Using a class ensures mutations propagate through the call chain.
+export class NameSet {
+	items: string[];
+}
+
+export function createNameSet(): NameSet {
+	return { items: [] };
+}
 
 export function nameSetContains(ns: NameSet, name: string): boolean {
-	for (const n of ns) {
+	for (const n of ns.items) {
 		if (n === name) return true;
 	}
 	return false;
@@ -56,15 +66,15 @@ export function nameSetContains(ns: NameSet, name: string): boolean {
 
 export function nameSetAdd(ns: NameSet, name: string): void {
 	if (!nameSetContains(ns, name)) {
-		ns.push(name);
+		ns.items.push(name);
 	}
 }
 
 export function nameSetIntersect(a: NameSet, b: NameSet): NameSet {
-	const result: NameSet = [];
-	for (const n of a) {
+	const result = createNameSet();
+	for (const n of a.items) {
 		if (nameSetContains(b, n)) {
-			result.push(n);
+			nameSetAdd(result, n);
 		}
 	}
 	return result;

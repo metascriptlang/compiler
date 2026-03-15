@@ -521,15 +521,32 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 		return;
 	}
 
-	// NewExpr — inline allocation (Standard reference parity: inline object construction)
+	// NewExpr — constructor call or inline allocation
 	if (kind === NodeKind.NewExpr) {
 		const d = node.data as NewExprData;
 		const calleeName = genExpr(g, p, d.newCallee);
 		// Ensure cross-module typeInfo is declared
 		ensureTypeInfo(g, calleeName);
 		ensureForwardDecl(g, calleeName);
+		// If class has a constructor, call ClassName_new(args)
+		if (nameSetHas(g.classesWithCtors, calleeName)) {
+			const ctorName = calleeName + "_new";
+			if (d.newArguments.length === 0) {
+				ctx.results.push(`${ctorName}()`);
+			} else {
+				let argList = "";
+				let ai = 0;
+				while (ai < d.newArguments.length) {
+					if (ai > 0) argList = argList + ", ";
+					argList = argList + genExpr(g, p, d.newArguments[ai]);
+					ai += 1;
+				}
+				ctx.results.push(`${ctorName}(${argList})`);
+			}
+			return;
+		}
 		if (d.newArguments.length === 0) {
-			// No-arg new: allocate with zero-init
+			// No-arg new without constructor: allocate with zero-init
 			ctx.results.push(`(${calleeName}*)msAllocTyped(sizeof(${calleeName}), &${calleeName}_typeInfo)`);
 		} else {
 			// Positional args → field-by-field assignment using type info

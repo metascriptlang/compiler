@@ -131,9 +131,33 @@ export function getModuleDir(path: string): string {
 	return path.slice(0, lastSlash);
 }
 
-// Append a space-separated flag, deduplicating.
+// Check if a space-separated flag string contains an exact flag (word-boundary match).
+// Avoids substring false positives: "-I/usr" must not match "-I/usr/local".
+function hasExactFlag(flags: string, flag: string): boolean {
+	if (flags === flag) return true;
+	// Pad with spaces so every flag is bounded by spaces
+	const padded = " " + flags + " ";
+	const needle = " " + flag + " ";
+	return padded.contains(needle);
+}
+
+// Append a space-separated flag, deduplicating via exact word-boundary match.
 export function appendFlag(flags: string, flag: string): string {
-	if (flags !== "" && flags.contains(flag)) return flags;
+	if (flags !== "" && hasExactFlag(flags, flag)) return flags;
+	if (flags !== "") return flags + " " + flag;
+	return flag;
+}
+
+// Prepend a space-separated flag (no dedup — matches reference linker behavior).
+export function prependFlag(flags: string, flag: string): string {
+	if (flag === "") return flags;
+	if (flags !== "") return flag + " " + flags;
+	return flag;
+}
+
+// Concat a space-separated flag without dedup (matches reference @passL behavior).
+export function concatFlag(flags: string, flag: string): string {
+	if (flag === "") return flags;
 	if (flags !== "") return flags + " " + flag;
 	return flag;
 }

@@ -18,7 +18,7 @@ export interface TaDependencyEntry {
 
 // ===== Cache Entry — per-query metadata (NOT the result value) =====
 
-export interface TaCacheEntry {
+export class TaCacheEntry {
 	key: TaQueryKey;
 	state: TaQueryState;
 	computedAt: number;       // revision when last computed
@@ -42,13 +42,13 @@ export function createCacheEntry(key: TaQueryKey): TaCacheEntry {
 
 // ===== Dependency Frame — pushed when a query starts executing =====
 
-export interface TaDependencyFrame {
+export class TaDependencyFrame {
 	queryKey: TaQueryKey;
 	deps: TaDependencyEntry[];
 	minDurability: TaDurability;
 }
 
-export interface TaDependencyStack {
+export class TaDependencyStack {
 	frames: TaDependencyFrame[];
 }
 

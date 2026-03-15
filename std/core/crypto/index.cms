@@ -1,0 +1,309 @@
+@include("std/core/crypto/native.h");
+
+// mbedTLS include paths + minimal config
+@passC("-Istd/core/crypto/config");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/include");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/core");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/include");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/src");
+@passC("-DMBEDTLS_CONFIG_FILE='<mbedtls/mbedtls_config.h>'");
+
+// Our crypto implementation
+@compile("std/core/crypto/native.c");
+@compile("std/core/crypto/psa_stubs.c");
+
+// mbedTLS vendor sources (hash algorithms)
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/md.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha256.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha512.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha1.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha3.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/md5.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ripemd160.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/platform_util.c");
+
+// C bindings (private — wrapped by exported functions)
+
+// Initialization
+extern function msCryptoInit(): boolean;
+extern function msCryptoCleanup(): void;
+
+// Hashing
+extern function msCryptoHashString(algorithm: string, data: string, encoding: string): string;
+extern function msCryptoHashBuffer(algorithm: string, data: string): string;
+
+// HMAC
+extern function msCryptoHmacString(algorithm: string, key: string, data: string, encoding: string): string;
+extern function msCryptoHmacBuffer(algorithm: string, key: string, data: string): string;
+
+// Random
+extern function msCryptoRandomBytes(size: number): string;
+extern function msCryptoRandomInt(min: number, max: number): number;
+extern function msCryptoRandomUuid(): string;
+
+// Timing-safe comparison
+extern function msCryptoTimingSafeEqual(a: string, b: string): boolean;
+
+// Streaming hash
+extern function msCryptoHashInit(algorithm: string): string;
+extern function msCryptoHashUpdate(ctx: string, data: string): void;
+extern function msCryptoHashFinal(ctx: string, encoding: string): string;
+extern function msCryptoHashFinalBuffer(ctx: string): string;
+extern function msCryptoHashFree(ctx: string): void;
+
+// Streaming HMAC
+extern function msCryptoHmacInit(algorithm: string, key: string): string;
+extern function msCryptoHmacUpdate(ctx: string, data: string): void;
+extern function msCryptoHmacFinal(ctx: string, encoding: string): string;
+extern function msCryptoHmacFinalBuffer(ctx: string): string;
+extern function msCryptoHmacFree(ctx: string): void;
+
+// Utility
+extern function msCryptoIsHashSupported(algorithm: string): boolean;
+
+// ===== Types =====
+
+export type HashAlgorithm =
+	| "sha256" | "sha512" | "sha384" | "sha224"
+	| "sha1" | "md5" | "ripemd160"
+	| "sha3-224" | "sha3-256" | "sha3-384" | "sha3-512";
+
+export type HashEncoding = "hex" | "base64";
+
+export interface CryptoError {
+	kind: string;
+	operation: string;
+	message: string;
+}
+
+// ===== Initialization =====
+
+export function init(): boolean {
+	return msCryptoInit();
+}
+
+export function cleanup(): void {
+	msCryptoCleanup();
+}
+
+// ===== Hash Functions =====
+
+export function sha256(data: string, encoding: string = "hex"): Result<string, CryptoError> {
+	const result = msCryptoHashString("sha256", data, encoding);
+	if (result === "") {
+		return Result.err({ kind: "HashFailed", operation: "sha256", message: "Hash computation failed" });
+	}
+	return Result.ok(result);
+}
+
+export function sha512(data: string, encoding: string = "hex"): Result<string, CryptoError> {
+	const result = msCryptoHashString("sha512", data, encoding);
+	if (result === "") {
+		return Result.err({ kind: "HashFailed", operation: "sha512", message: "Hash computation failed" });
+	}
+	return Result.ok(result);
+}
+
+export function sha384(data: string, encoding: string = "hex"): Result<string, CryptoError> {
+	const result = msCryptoHashString("sha384", data, encoding);
+	if (result === "") {
+		return Result.err({ kind: "HashFailed", operation: "sha384", message: "Hash computation failed" });
+	}
+	return Result.ok(result);
+}
+
+export function sha1(data: string, encoding: string = "hex"): Result<string, CryptoError> {
+	const result = msCryptoHashString("sha1", data, encoding);
+	if (result === "") {
+		return Result.err({ kind: "HashFailed", operation: "sha1", message: "Hash computation failed" });
+	}
+	return Result.ok(result);
+}
+
+export function md5(data: string, encoding: string = "hex"): Result<string, CryptoError> {
+	const result = msCryptoHashString("md5", data, encoding);
+	if (result === "") {
+		return Result.err({ kind: "HashFailed", operation: "md5", message: "Hash computation failed" });
+	}
+	return Result.ok(result);
+}
+
+export function hash(algorithm: string, data: string, encoding: string = "hex"): Result<string, CryptoError> {
+	const result = msCryptoHashString(algorithm, data, encoding);
+	if (result === "") {
+		return Result.err({ kind: "HashFailed", operation: algorithm, message: "Hash computation failed" });
+	}
+	return Result.ok(result);
+}
+
+export function hashBuffer(algorithm: string, data: string): Result<string, CryptoError> {
+	const result = msCryptoHashBuffer(algorithm, data);
+	if (result === "") {
+		return Result.err({ kind: "HashFailed", operation: algorithm, message: "Hash computation failed" });
+	}
+	return Result.ok(result);
+}
+
+// ===== HMAC Functions =====
+
+export function hmac(
+	algorithm: string,
+	key: string,
+	data: string,
+	encoding: string = "hex"
+): Result<string, CryptoError> {
+	const result = msCryptoHmacString(algorithm, key, data, encoding);
+	if (result === "") {
+		return Result.err({ kind: "HmacFailed", operation: algorithm, message: "HMAC computation failed" });
+	}
+	return Result.ok(result);
+}
+
+export function hmacBuffer(algorithm: string, key: string, data: string): Result<string, CryptoError> {
+	const result = msCryptoHmacBuffer(algorithm, key, data);
+	if (result === "") {
+		return Result.err({ kind: "HmacFailed", operation: algorithm, message: "HMAC computation failed" });
+	}
+	return Result.ok(result);
+}
+
+// ===== Random Functions =====
+
+export function randomBytes(size: number): Result<string, CryptoError> {
+	const result = msCryptoRandomBytes(size);
+	if (result === "") {
+		return Result.err({ kind: "RandomFailed", operation: "random", message: "Random byte generation failed" });
+	}
+	return Result.ok(result);
+}
+
+export function randomInt(min: number, max: number): Result<number, CryptoError> {
+	const result = msCryptoRandomInt(min, max);
+	if (result === -1) {
+		return Result.err({ kind: "RandomFailed", operation: "random", message: "Random integer generation failed" });
+	}
+	return Result.ok(result);
+}
+
+export function randomUUID(): Result<string, CryptoError> {
+	const result = msCryptoRandomUuid();
+	if (result === "") {
+		return Result.err({ kind: "RandomFailed", operation: "random", message: "UUID generation failed" });
+	}
+	return Result.ok(result);
+}
+
+// ===== Timing-Safe Comparison =====
+
+export function timingSafeEqual(a: string, b: string): boolean {
+	return msCryptoTimingSafeEqual(a, b);
+}
+
+// ===== Streaming Hash =====
+
+export class Hasher {
+	_ctx: string;
+	_algorithm: string;
+
+	static create(algorithm: string): Hasher {
+		const ctx = msCryptoHashInit(algorithm);
+		return { _ctx: ctx, _algorithm: algorithm };
+	}
+
+	update(data: string): Hasher {
+		if (this._ctx !== "") {
+			msCryptoHashUpdate(this._ctx, data);
+		}
+		return this;
+	}
+
+	digest(encoding: string = "hex"): string {
+		if (this._ctx === "") {
+			return "";
+		}
+		const result = msCryptoHashFinal(this._ctx, encoding);
+		this._ctx = "";
+		return result;
+	}
+
+	digestBuffer(): string {
+		if (this._ctx === "") {
+			return "";
+		}
+		const result = msCryptoHashFinalBuffer(this._ctx);
+		this._ctx = "";
+		return result;
+	}
+
+	onDestroy(): void {
+		if (this._ctx !== "") {
+			msCryptoHashFree(this._ctx);
+			this._ctx = "";
+		}
+	}
+}
+
+// ===== Streaming HMAC =====
+
+export class Hmac {
+	_ctx: string;
+	_algorithm: string;
+
+	static create(algorithm: string, key: string): Hmac {
+		const ctx = msCryptoHmacInit(algorithm, key);
+		return { _ctx: ctx, _algorithm: algorithm };
+	}
+
+	update(data: string): Hmac {
+		if (this._ctx !== "") {
+			msCryptoHmacUpdate(this._ctx, data);
+		}
+		return this;
+	}
+
+	digest(encoding: string = "hex"): string {
+		if (this._ctx === "") {
+			return "";
+		}
+		const result = msCryptoHmacFinal(this._ctx, encoding);
+		this._ctx = "";
+		return result;
+	}
+
+	digestBuffer(): string {
+		if (this._ctx === "") {
+			return "";
+		}
+		const result = msCryptoHmacFinalBuffer(this._ctx);
+		this._ctx = "";
+		return result;
+	}
+
+	onDestroy(): void {
+		if (this._ctx !== "") {
+			msCryptoHmacFree(this._ctx);
+			this._ctx = "";
+		}
+	}
+}
+
+// ===== Factory Functions =====
+
+export function createHash(algorithm: string): Hasher {
+	return Hasher.create(algorithm);
+}
+
+export function createHmac(algorithm: string, key: string): Hmac {
+	return Hmac.create(algorithm, key);
+}
+
+// ===== Utility =====
+
+export function getHashes(): string[] {
+	return ["sha256", "sha512", "sha384", "sha224", "sha1", "md5", "ripemd160",
+		"sha3-256", "sha3-384", "sha3-512", "sha3-224"];
+}
+
+export function isHashSupported(algorithm: string): boolean {
+	return msCryptoIsHashSupported(algorithm);
+}

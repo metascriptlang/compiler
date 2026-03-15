@@ -25,7 +25,7 @@ import {
 	DoWhileStmtData, SwitchStmtData, SwitchCaseData, TryCatchStmtData,
 	BooleanLiteralData, ExprStmtData, CallExprData, IdentifierData,
 } from "../../ast/node";
-import { TransformContext, createTransformContextWithChecker, NameSet, nameSetAdd, nameSetContains } from "../context";
+import { TransformContext, createTransformContextWithChecker, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../context";
 import { forEachChild } from "../../ast/visitor";
 import { TypeKind, createFunction, neverType, voidType } from "../../checker/types";
 import { lookupSymbol, makeSymbol, SymbolKind, defineSymbol } from "../../checker/symbol";
@@ -37,7 +37,7 @@ import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts } from "../tes
 // ===== AliveSyms (Level 2 — public API for Phase 5 codegen) =====
 
 export function createAliveSyms(): NameSet {
-	const syms: NameSet = [];
+	const syms: NameSet = createNameSet();
 	return syms;
 }
 
@@ -141,7 +141,7 @@ function sweepDeadDecls(program: Node, ctx: TransformContext): void {
 
 	// Phase 1: Pre-compute names for ALL stmts (one getDeclName call per stmt, stored safely)
 	const names: StmtNames = [];
-	const declNames: NameSet = [];
+	const declNames: NameSet = createNameSet();
 	for (let idx = 0; idx < stmts.length; idx += 1) {
 		const n = getDeclName(stmts[idx]);
 		names.push(n);
@@ -149,10 +149,10 @@ function sweepDeadDecls(program: Node, ctx: TransformContext): void {
 			nameSetAdd(declNames, n);
 		}
 	}
-	if (declNames.length === 0) return;
+	if (declNames.items.length === 0) return;
 
 	// Phase 2: Seed — collect identifier refs from all non-eliminable stmts (entry points)
-	const refs: NameSet = [];
+	const refs: NameSet = createNameSet();
 	for (let si = 0; si < stmts.length; si += 1) {
 		if (!isEliminable(stmts[si])) {
 			collectIdentifiers(stmts[si], refs);
@@ -160,7 +160,7 @@ function sweepDeadDecls(program: Node, ctx: TransformContext): void {
 	}
 
 	// Phase 3: Transitive closure — fixpoint iteration using pre-computed names
-	const alive: NameSet = [];
+	const alive: NameSet = createNameSet();
 	// User-defined main() is always alive (called by dispatcher, not user code)
 	if (nameSetContains(declNames, "main")) {
 		nameSetAdd(alive, "main");

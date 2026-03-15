@@ -1,0 +1,58 @@
+/**
+ * Network — C Backend
+ *
+ * TCP socket primitives. Thin wrappers over POSIX socket API.
+ * Used by std/http for server and client operations.
+ */
+
+@include("std/net/native.h");
+
+// ===== C primitives =====
+
+extern function msNetSocket(): int32;
+extern function msNetBind(fd: int32, addr: string, port: int32): int32;
+extern function msNetListen(fd: int32, backlog: int32): int32;
+extern function msNetAccept(fd: int32): int32;
+extern function msNetConnect(fd: int32, host: string, port: int32): int32;
+extern function msNetSend(fd: int32, data: string): int32;
+extern function msNetRecv(fd: int32, maxBytes: int32): string;
+extern function msNetClose(fd: int32): void;
+extern function msNetSetTimeout(fd: int32, ms: int32): int32;
+
+// ===== Public API =====
+
+export function createSocket(): int32 {
+	return msNetSocket();
+}
+
+export function bind(fd: int32, addr: string, port: int32): int32 {
+	return msNetBind(fd, addr, port);
+}
+
+export function listen(fd: int32, backlog: int32): int32 {
+	return msNetListen(fd, backlog);
+}
+
+export function accept(fd: int32): int32 {
+	return msNetAccept(fd);
+}
+
+export function connect(fd: int32, host: string, port: int32): int32 {
+	return msNetConnect(fd, host, port);
+}
+
+export function send(fd: int32, data: string): int32 {
+	return msNetSend(fd, data);
+}
+
+export function recv(fd: int32, maxBytes: int32): string {
+	return msNetRecv(fd, maxBytes);
+}
+
+export function close(fd: int32): void {
+	msNetClose(fd);
+}
+
+export function setTimeout(fd: int32, ms: int32): int32 {
+	return msNetSetTimeout(fd, ms);
+}

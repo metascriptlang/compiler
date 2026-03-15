@@ -28,6 +28,7 @@ export function createState(tokens: Token[]): ParserState {
 
 // Internal helper to get the raw token at current position (including comments)
 function rawCurrent(state: ParserState): Token {
+	if (state.position >= state.tokens.length) return { kind: TokenKind.Eof, value: "", line: 0, column: 0 };
 	return state.tokens[state.position];
 }
 
@@ -39,6 +40,7 @@ export function current(state: ParserState): Token {
 		pos += 1;
 	}
 	if (pos < state.tokens.length) return state.tokens[pos];
+	if (state.tokens.length === 0) return { kind: TokenKind.Eof, value: "", line: 0, column: 0 };
 	return state.tokens[state.tokens.length - 1]; // Safe EOF fallback
 }
 
@@ -49,6 +51,7 @@ export function advance(state: ParserState): Token {
 		state.position += 1;
 	}
 	
+	if (state.position >= state.tokens.length) return { kind: TokenKind.Eof, value: "", line: 0, column: 0 };
 	const token = state.tokens[state.position];
 	if (token.kind !== TokenKind.Eof) {
 		state.position += 1;
@@ -90,6 +93,7 @@ export function peek(state: ParserState, offset: number): Token {
 		}
 		pos += 1;
 	}
+	if (state.tokens.length === 0) return { kind: TokenKind.Eof, value: "", line: 0, column: 0 };
 	return state.tokens[state.tokens.length - 1]; // EOF
 }
 

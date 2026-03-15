@@ -5,7 +5,7 @@
  * file I/O, shell execution, environment variables, and monotonic clock.
  */
 
-@include("process/native.h");
+@include("std/process/native.h");
 
 extern function msProcessArgc(): number;
 extern function msProcessArgvAt(idx: number): string;
@@ -89,4 +89,13 @@ export function getEnv(name: string): string {
 
 export function clockMs(): number {
 	return msProcessClockMs();
+}
+
+// =============================================================================
+// Directory listing
+// =============================================================================
+
+export function readDir(path: string): string[] {
+	// Bun shim provides this; C backend would need POSIX opendir/readdir
+	return [];
 }

@@ -4,7 +4,7 @@
 // formatHover, collectDiagnostics. No I/O, no protocol knowledge.
 // Called by src/lsp/handlers.ms.
 
-import { Node, NodeKind, SourceLocation, makeLoc, ProgramData, DeclKind,
+import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, ProgramData, DeclKind,
 	IdentifierData, MemberExprData, CallExprData,
 	BinaryExprData, UnaryExprData, VariableDeclData,
 	FunctionDeclData, IfStmtData, WhileStmtData, ForStmtData,
@@ -57,6 +57,8 @@ export enum SgCompletionKind {
 	MemberAccess,
 	TypeAnnotation,
 	ObjectField,
+	ImportPath,
+	ImportName,
 }
 
 export interface SgDocumentSymbol {
@@ -785,6 +787,16 @@ export function sgGetLineOffset(source: string, line: number): number {
 	return offset;
 }
 
+// Extract full line text for a 1-based line number.
+function sgGetLineText(source: string, line: number): string {
+	const lineOffset = sgGetLineOffset(source, line);
+	let lineEnd = lineOffset;
+	while (lineEnd < source.length && source.charAt(lineEnd) !== "\n") {
+		lineEnd = lineEnd + 1;
+	}
+	return source.slice(lineOffset, lineEnd);
+}
+
 function sgStartsWith(s: string, prefix: string): boolean {
 	if (prefix.length === 0) return true;
 	if (prefix.length > s.length) return false;
@@ -882,7 +894,7 @@ function sgSortSuggestions(list: SgSuggest[]): void {
 
 // ===== AST-Based Completion Context Detection =====
 // Walks the parsed AST to determine completion context by node kind.
-// Aligned with Nim (nkDotExpr/nkObjConstr) and rust-analyzer (classify_name_ref).
+// Aligned with reference (nkDotExpr/nkObjConstr) and rust-analyzer (classify_name_ref).
 
 // Find the innermost AST node at or before the given 1-based line:col.
 // Walks depth-first; among matches, prefers the one with largest column (closest to cursor).
@@ -939,7 +951,7 @@ export function findEnclosingObjectLiteral(root: Node, line: number, col: number
 			result = root;
 		}
 		// Multi-line check: ObjectLiteral starts before cursor line.
-		// Only match if a descendant of this ObjectLiteral touches cursor line.
+		// Only match if a descendant of this ObjectLiteral is on or past the cursor line.
 		if (root.location.line < line && sgSubtreeTouchesLine(root, line)) {
 			result = root;
 		}
@@ -954,16 +966,18 @@ export function findEnclosingObjectLiteral(root: Node, line: number, col: number
 	return result;
 }
 
-// Check if any descendant of node has location.line === targetLine.
-// Used to verify a multi-line ObjectLiteral actually spans to the cursor line.
+// Check if the subtree of node spans across the target line.
+// Returns true if any descendant is ON or PAST the target line.
+// This handles empty lines inside multi-line constructs (e.g. ObjectLiteral with blank lines).
 function sgSubtreeTouchesLine(node: Node, targetLine: number): boolean {
 	if (node === null) return false;
 	let touches = false;
 	forEachChild(node, (child: Node): void => {
 		if (!touches) {
-			if (child.location.line === targetLine) {
+			if (child.location.line >= targetLine) {
+				// Child is on or past target line — the parent spans across it
 				touches = true;
-			} else if (child.location.line < targetLine) {
+			} else {
 				// Child is before target — check its subtree
 				if (sgSubtreeTouchesLine(child, targetLine)) {
 					touches = true;
@@ -972,6 +986,103 @@ function sgSubtreeTouchesLine(node: Node, targetLine: number): boolean {
 		}
 	});
 	return touches;
+}
+
+// ===== AST-Based Signature Help (nkCall[0] for callee, child count for active param) =====
+
+// Find the innermost CallExpr enclosing the cursor position.
+// Mirrors findEnclosingObjectLiteral pattern. Deepest (innermost) call wins.
+function findEnclosingCallExpr(root: Node, line: number, col: number): Node {
+	if (root === null) return null as unknown as Node;
+	let result = null as unknown as Node;
+	if (root.kind === NodeKind.CallExpr) {
+		// Same-line: CallExpr location is at '(' token
+		if (root.location.line === line && root.location.column <= col) {
+			result = root;
+		}
+		// Multi-line: CallExpr starts before cursor line, has descendant on cursor line
+		if (root.location.line < line && sgSubtreeTouchesLine(root, line)) {
+			result = root;
+		}
+	}
+	// Recurse — deepest (innermost) CallExpr wins
+	forEachChild(root, (child: Node): void => {
+		const found = findEnclosingCallExpr(child, line, col);
+		if (found !== null) {
+			result = found;
+		}
+	});
+	return result;
+}
+
+// Extract callee name from CallExpr AST node.
+// Reference: nkCall[0] → nkIdent or nkDotExpr[1].
+function sgGetCalleeFromNode(callNode: Node): string {
+	const d = callNode.data as CallExprData;
+	if (d.callee === null) return "";
+	if (d.callee.kind === NodeKind.Identifier) {
+		return (d.callee.data as IdentifierData).name;
+	}
+	if (d.callee.kind === NodeKind.MemberExpr) {
+		return (d.callee.data as MemberExprData).property;
+	}
+	return "";
+}
+
+// Extract receiver name for method calls (e.g. "console" from console.log()).
+// Reference: nkDotExpr[0].
+function sgGetReceiverFromNode(callNode: Node): string {
+	const d = callNode.data as CallExprData;
+	if (d.callee === null || d.callee.kind !== NodeKind.MemberExpr) return "";
+	const md = d.callee.data as MemberExprData;
+	if (md.object === null) return "";
+	if (md.object.kind === NodeKind.Identifier) {
+		return (md.object.data as IdentifierData).name;
+	}
+	return "";
+}
+
+// Determine active parameter index from cursor position within CallExpr arguments.
+// Reference: count nkCall children before cursor position.
+function sgGetActiveParamFromNode(callNode: Node, line: number, col: number): number {
+	const d = callNode.data as CallExprData;
+	if (d.arguments.length === 0) return 0;
+	// Count arguments whose start location is before cursor
+	let activeParam = 0;
+	for (let i = 0; i < d.arguments.length; i = i + 1) {
+		const arg = d.arguments[i];
+		if (arg.location.line < line) {
+			activeParam = i + 1;
+		} else if (arg.location.line === line && arg.location.column < col) {
+			activeParam = i + 1;
+		}
+	}
+	return activeParam;
+}
+
+// Unified signature context: AST-based with text-based fallback.
+export interface SgSignatureContext {
+	calleeName: string;
+	receiverName: string;
+	activeParam: number;
+}
+
+export function sgGetSignatureContext(program: Node, source: string, line: number, col: number): SgSignatureContext {
+	// Primary: AST-based
+	const callNode = findEnclosingCallExpr(program, line, col);
+	if (callNode !== null) {
+		return {
+			calleeName: sgGetCalleeFromNode(callNode),
+			receiverName: sgGetReceiverFromNode(callNode),
+			activeParam: sgGetActiveParamFromNode(callNode, line, col),
+		};
+	}
+	// Fallback: text-based (handles incomplete source where parser couldn't produce CallExpr)
+	return {
+		calleeName: sgGetCalleeAtCursor(source, line, col),
+		receiverName: sgGetReceiverAtCursor(source, line, col),
+		activeParam: sgCountActiveParam(source, line, col),
+	};
 }
 
 // Find the ObjectLiteral nesting path from cursor to root.
@@ -1024,45 +1135,232 @@ function sgCollectObjLiteralChain(node: Node, line: number, col: number, path: s
 	return found;
 }
 
-// Detect completion context by walking the AST.
-// All context detection is AST-based except TypeAnnotation (type annotations are
-// strings in our AST, not positioned nodes — the `:` token has no AST representation).
-export function sgDetectCompletionContext(program: Node, source: string, line: number, col: number): SgCompletionKind {
-	// AST-based: find the deepest node at cursor position.
-	// MemberExpr at cursor → member access. Handles both:
-	//   - Incomplete dot: `config.|` (property === "")
-	//   - Partial typing: `config.x|` (MemberExpr is deepest node, property === "x")
-	// findNodeAtPosition returns MemberExpr because its location (at the dot)
-	// has the largest column among matching nodes — the property string is not a child node.
+// ===== AST-Based Import Detection =====
+// Reference: findImportStmtOnLine + extractImportContextFromAst
+
+// Find an ImportDecl node that spans the given line. Handles multi-line imports
+// by checking if cursor line is between this import and the next statement.
+function findImportDeclOnLine(program: Node, line: number): Node {
+	if (program === null) return null as unknown as Node;
+	let found = null as unknown as Node;
+	if (program.kind === NodeKind.Program && program.data !== null) {
+		const d = program.data as ProgramData;
+		if (d.programStmts === null) return null as unknown as Node;
+		for (let i = 0; i < d.programStmts.length; i = i + 1) {
+			const stmt = d.programStmts[i];
+			const imp = importNodeFrom(stmt);
+			if (imp === null) continue;
+			if (imp.location.line === line) return imp;
+			// Multi-line: import starts before cursor. Check if cursor is before next statement.
+			if (imp.location.line < line) {
+				const nextLine = (i + 1 < d.programStmts.length) ? d.programStmts[i + 1].location.line : imp.location.line;
+				if (line < nextLine) return imp;
+			}
+		}
+	} else {
+		let prevImp = null as unknown as Node;
+		let prevLine = 0;
+		forEachChild(program, (child: Node): void => {
+			if (found !== null) return;
+			// If we had a pending import and this child starts after cursor → import spans cursor
+			if (prevImp !== null && child.location.line > line) {
+				found = prevImp;
+				return;
+			}
+			prevImp = null as unknown as Node;
+			const imp = importNodeFrom(child);
+			if (imp !== null) {
+				if (imp.location.line === line) { found = imp; return; }
+				if (imp.location.line < line) { prevImp = imp; }
+			}
+		});
+		// If last statement was an import that started before cursor
+		if (found === null && prevImp !== null) found = prevImp;
+	}
+	return found;
+}
+
+// Extract ImportDecl from a statement (handles ExportDecl wrapping).
+function importNodeFrom(stmt: Node): Node {
+	if (stmt.kind === NodeKind.ImportDecl) return stmt;
+	if (stmt.kind === NodeKind.ExportDecl) {
+		const ed = stmt.data as ExportDeclData;
+		if (ed.exportedDecl !== null && ed.exportedDecl.kind === NodeKind.ImportDecl) return ed.exportedDecl;
+	}
+	return null as unknown as Node;
+}
+
+// Determine import context from AST ImportDecl node.
+// Returns: "names" if cursor is in the names region, "path" if in the source string.
+// Reference: extractImportContextFromAst checks child node positions.
+function importContextFromAST(importNode: Node, col: number): string {
+	const d = importNode.data as ImportDeclData;
+	// Side-effect import: `import "module"` — only path, no names
+	if (d.importNames.length === 0) return "path";
+	// Named import: `import { A, B } from "module"`
+	// nameLocations gives us where names are. The path string comes after `from "`.
+	// Strategy: if cursor is past the last name by a large margin (enough for `} from "`),
+	// it's likely in the path string. The minimum gap: `} from "` = 8 chars.
+	if (d.nameLocations.length > 0) {
+		const lastIdx = d.nameLocations.length - 1;
+		const lastNameEnd = d.nameLocations[lastIdx].column + d.importNames[lastIdx].length;
+		// If cursor is more than 8 chars past last name end → in path region
+		// (covers `} from "` = 8 chars minimum)
+		if (col > lastNameEnd + 8) return "path";
+	}
+	return "names";
+}
+
+// ===== AST-Based Type Annotation Detection =====
+// Reference: nkIdentDefs[^2] position check + c.inTypeContext flag.
+// We check if cursor is on a typeExpr or typeExprs node of any declaration.
+
+function isInTypeAnnotation(program: Node, line: number, col: number): boolean {
+	let found = false;
+	forEachChild(program, (child: Node): void => {
+		if (found) return;
+		if (sgCheckTypeExprAt(child, line, col)) {
+			found = true;
+			return;
+		}
+		if (isInTypeAnnotation(child, line, col)) {
+			found = true;
+		}
+	});
+	return found;
+}
+
+// Check if a node's typeExpr or typeExprs contains the cursor position.
+function sgCheckTypeExprAt(node: Node, line: number, col: number): boolean {
+	// Check typeExpr (return type, variable type, type alias RHS)
+	if (node.typeExpr !== null) {
+		const te = node.typeExpr;
+		if (te.location.line === line && te.location.column <= col) {
+			return true;
+		}
+	}
+	// Check typeExprs (per-param type annotations)
+	if (node.typeExprs !== null) {
+		for (let i = 0; i < node.typeExprs.length; i = i + 1) {
+			const te = node.typeExprs[i];
+			if (te !== null && te.location.line === line && te.location.column <= col) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+// ===== Fully AST-Based Completion Context Detection =====
+// Reference: all detection via node kinds, no text scanning.
+// - ImportDecl → ImportName / ImportPath
+// - MemberExpr → MemberAccess
+// - ObjectLiteral → ObjectField
+// - typeExpr/typeExprs → TypeAnnotation
+
+export function sgDetectCompletionContext(program: Node, line: number, col: number): SgCompletionKind {
+	// Import detection: find ImportDecl on cursor line (ref: findImportStmtOnLine)
+	const importNode = findImportDeclOnLine(program, line);
+	if (importNode !== null) {
+		const ctx = importContextFromAST(importNode, col);
+		if (ctx === "names") return SgCompletionKind.ImportName;
+		return SgCompletionKind.ImportPath;
+	}
+
+	// MemberExpr at cursor → member access
 	const node = findNodeAtPosition(program, line, col);
 	if (node !== null && node.kind === NodeKind.MemberExpr) {
 		return SgCompletionKind.MemberAccess;
 	}
 
-	// AST-based: cursor inside an ObjectLiteral → field completion.
-	// Uses subtree-touch validation to reject closed ObjectLiterals on earlier lines.
+	// ObjectLiteral → field completion
 	const objNode = findEnclosingObjectLiteral(program, line, col);
 	if (objNode !== null) {
 		return SgCompletionKind.ObjectField;
 	}
 
-	// TypeAnnotation: type annotations are stored as strings (declType, fnReturnType),
-	// not positioned AST nodes. The `:` token position is absent from our AST.
-	// Token-level scan for `:` — same technique as rust-analyzer's token analysis.
-	const lineOffset = sgGetLineOffset(source, line);
-	const cursorOffset = lineOffset + col;
-	let pos = cursorOffset - 1;
-	while (pos >= 0 && sgIsIdentChar(source.charAt(pos))) {
-		pos = pos - 1;
-	}
-	while (pos >= 0 && (source.charAt(pos) === " " || source.charAt(pos) === "\t")) {
-		pos = pos - 1;
-	}
-	if (pos >= 0 && source.charAt(pos) === ":") {
+	// TypeAnnotation: cursor on a typeExpr/typeExprs node (ref: nkIdentDefs[^2])
+	if (isInTypeAnnotation(program, line, col)) {
 		return SgCompletionKind.TypeAnnotation;
 	}
 
 	return SgCompletionKind.Identifier;
+}
+
+// ===== AST-Based Import Data Extraction =====
+// All import data comes from ImportDeclData — no text scanning.
+
+// Extract the import source path from the ImportDecl AST node on cursor line.
+// `import { ... } from "std/build"` → "std/build"
+export function sgExtractImportSource(program: Node, line: number): string {
+	const importNode = findImportDeclOnLine(program, line);
+	if (importNode === null) return "";
+	const d = importNode.data as ImportDeclData;
+	return d.importSource;
+}
+
+// Extract partial import path (what user has typed so far) for path completion.
+// For incomplete source like `from "std/bu|"` — the parser may not have the full string,
+// so we use source text to get the partial text between opening quote and cursor.
+// This is the ONE place where source text is needed: the parser only stores completed strings.
+export function sgExtractImportPath(source: string, line: number, col: number): string {
+	const lineText = sgGetLineText(source, line);
+	// Find opening quote on the line (after `from ` or `import `)
+	let fromIdx = sgFindPattern(lineText, "from ");
+	if (fromIdx < 0) fromIdx = sgFindPattern(lineText, "import ");
+	if (fromIdx < 0) return "";
+	let qi = fromIdx;
+	while (qi < lineText.length && lineText.charAt(qi) !== "\"") qi = qi + 1;
+	if (qi >= lineText.length) return "";
+	const openQuote = qi;
+	const cursorCol0 = col - 1;
+	if (cursorCol0 <= openQuote) return "";
+	return lineText.slice(openQuote + 1, cursorCol0);
+}
+
+// Extract existing imported names from ImportDecl AST node.
+// Reference: reads nkImportStmt children directly.
+export function sgExtractExistingImportNames(program: Node, line: number, col: number): string[] {
+	const importNode = findImportDeclOnLine(program, line);
+	if (importNode === null) return [];
+	const d = importNode.data as ImportDeclData;
+	// Exclude the name at the cursor position (the one being edited)
+	const result: string[] = [];
+	for (let i = 0; i < d.importNames.length; i = i + 1) {
+		if (i < d.nameLocations.length) {
+			const nameLoc = d.nameLocations[i];
+			const nameLen = d.importNames[i].length;
+			// If cursor is within this name's span, skip it (user is editing this name)
+			if (nameLoc.line === line && col >= nameLoc.column && col <= nameLoc.column + nameLen) {
+				continue;
+			}
+		}
+		result.push(d.importNames[i]);
+	}
+	return result;
+}
+
+// Extract the prefix being typed at cursor using sgGetPrefix (reuse existing function).
+// For import names: `import { re| }` → prefix is "re" — same as any identifier prefix.
+
+// Simple substring search (no indexOf on strings in MetaScript).
+function sgFindPattern(text: string, pattern: string): number {
+	if (pattern.length > text.length) return -1;
+	let i = 0;
+	while (i <= text.length - pattern.length) {
+		let match = true;
+		let j = 0;
+		while (j < pattern.length) {
+			if (text.charAt(i + j) !== pattern.charAt(j)) {
+				match = false;
+				j = pattern.length; // break
+			}
+			j = j + 1;
+		}
+		if (match) return i;
+		i = i + 1;
+	}
+	return -1;
 }
 
 // Get existing field keys from the ObjectLiteral node at cursor position.
@@ -1461,7 +1759,8 @@ export function sgFormatExtensionSignatures(ctx: CheckerContext, methodName: str
 // Scans backwards from cursor to matching unclosed '(', then extracts
 // the identifier before it (the callee name).
 // Returns "" if no enclosing call found.
-export function sgGetCalleeAtCursor(source: string, line: number, col: number): string {
+// Text-based fallback — used when parser can't produce CallExpr (incomplete source).
+function sgGetCalleeAtCursor(source: string, line: number, col: number): string {
 	const lineOffset = sgGetLineOffset(source, line);
 	const cursorOffset = lineOffset + col;
 	let pos = cursorOffset - 1;
@@ -1507,7 +1806,7 @@ export function sgGetCalleeAtCursor(source: string, line: number, col: number): 
 // For "console.log(x", returns "console". For "foo(x", returns "".
 // Scans backwards from the callee identifier to find "." + identifier pattern.
 
-export function sgGetReceiverAtCursor(source: string, line: number, col: number): string {
+function sgGetReceiverAtCursor(source: string, line: number, col: number): string {
 	const lineOffset = sgGetLineOffset(source, line);
 	const cursorOffset = lineOffset + col;
 	let pos = cursorOffset - 1;
@@ -1547,7 +1846,7 @@ export function sgGetReceiverAtCursor(source: string, line: number, col: number)
 
 // ===== Active Parameter — count commas from nearest unclosed ( =====
 
-export function sgCountActiveParam(source: string, line: number, col: number): number {
+function sgCountActiveParam(source: string, line: number, col: number): number {
 	const lineOffset = sgGetLineOffset(source, line);
 	const cursorOffset = lineOffset + col;
 	let pos = cursorOffset - 1;
@@ -1890,9 +2189,8 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 	// Declaration names get declaration modifier (bit 0)
 	if (node.kind === NodeKind.FunctionDecl) {
 		const fd = node.data as FunctionDeclData;
-		if (fd.fnName.length > 0) {
-			// "function " = 9 chars offset to name
-			const tok: SgSemanticToken = { line: loc.line, col: loc.column + 9, length: fd.fnName.length, tokenType: 12, modifiers: 1 };
+		if (fd.fnName.length > 0 && fd.nameLocation !== null) {
+			const tok: SgSemanticToken = { line: fd.nameLocation.line, col: fd.nameLocation.column, length: fd.fnName.length, tokenType: 12, modifiers: 1 };
 			tokens.push(tok);
 		}
 		if (fd.fnBody !== null) sgCollectTokensInNode(ctx, fd.fnBody, tokens);
@@ -1901,15 +2199,12 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 
 	if (node.kind === NodeKind.VariableDecl) {
 		const vd = node.data as VariableDeclData;
-		if (vd.declName.length > 0) {
+		if (vd.declName.length > 0 && vd.nameLocation !== null) {
 			let mods = 1; // declaration
-			// "const " = 6, "let " = 4, "var " = 4
-			let kwLen = 4;
 			if (vd.declKind === DeclKind.Const) {
 				mods = 5; // declaration + readonly (1 + 4)
-				kwLen = 6;
 			}
-			const tok: SgSemanticToken = { line: loc.line, col: loc.column + kwLen, length: vd.declName.length, tokenType: 8, modifiers: mods };
+			const tok: SgSemanticToken = { line: vd.nameLocation.line, col: vd.nameLocation.column, length: vd.declName.length, tokenType: 8, modifiers: mods };
 			tokens.push(tok);
 		}
 		if (vd.initializer !== null) sgCollectTokensInNode(ctx, vd.initializer, tokens);
@@ -1918,9 +2213,8 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 
 	if (node.kind === NodeKind.InterfaceDecl) {
 		const ifd = node.data as InterfaceDeclData;
-		if (ifd.interfaceName.length > 0) {
-			// "interface " = 10 chars offset to name
-			const tok: SgSemanticToken = { line: loc.line, col: loc.column + 10, length: ifd.interfaceName.length, tokenType: 4, modifiers: 1 };
+		if (ifd.interfaceName.length > 0 && ifd.nameLocation !== null) {
+			const tok: SgSemanticToken = { line: ifd.nameLocation.line, col: ifd.nameLocation.column, length: ifd.interfaceName.length, tokenType: 4, modifiers: 1 };
 			tokens.push(tok);
 		}
 		return;
@@ -1928,9 +2222,8 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 
 	if (node.kind === NodeKind.EnumDecl) {
 		const ed = node.data as EnumDeclData;
-		if (ed.enumName.length > 0) {
-			// "enum " = 5 chars offset to name
-			const tok: SgSemanticToken = { line: loc.line, col: loc.column + 5, length: ed.enumName.length, tokenType: 3, modifiers: 1 };
+		if (ed.enumName.length > 0 && ed.nameLocation !== null) {
+			const tok: SgSemanticToken = { line: ed.nameLocation.line, col: ed.nameLocation.column, length: ed.enumName.length, tokenType: 3, modifiers: 1 };
 			tokens.push(tok);
 		}
 		return;
@@ -1938,9 +2231,8 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 
 	if (node.kind === NodeKind.ClassDecl) {
 		const cd = node.data as ClassDeclData;
-		if (cd.className.length > 0) {
-			// "class " = 6 chars offset to name
-			const tok: SgSemanticToken = { line: loc.line, col: loc.column + 6, length: cd.className.length, tokenType: 2, modifiers: 1 };
+		if (cd.className.length > 0 && cd.nameLocation !== null) {
+			const tok: SgSemanticToken = { line: cd.nameLocation.line, col: cd.nameLocation.column, length: cd.className.length, tokenType: 2, modifiers: 1 };
 			tokens.push(tok);
 		}
 		for (let ci = 0; ci < cd.classBody.length; ci = ci + 1) {
@@ -1951,9 +2243,8 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 
 	if (node.kind === NodeKind.TypeAliasDecl) {
 		const td = node.data as TypeAliasDeclData;
-		if (td.aliasName.length > 0) {
-			// "type " = 5 chars offset to name
-			const tok: SgSemanticToken = { line: loc.line, col: loc.column + 5, length: td.aliasName.length, tokenType: 1, modifiers: 1 };
+		if (td.aliasName.length > 0 && td.nameLocation !== null) {
+			const tok: SgSemanticToken = { line: td.nameLocation.line, col: td.nameLocation.column, length: td.aliasName.length, tokenType: 1, modifiers: 1 };
 			tokens.push(tok);
 		}
 		return;
@@ -1993,6 +2284,9 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 		}
 		return;
 	}
+
+	// ExternDecl: skip — tree-sitter handles extern keyword highlighting.
+	if (node.kind === NodeKind.ExternDecl) return;
 
 	// Compound nodes — recurse into children
 	sgCollectTokensCompound(ctx, node, tokens);
@@ -2248,7 +2542,7 @@ test "dot triggers MemberAccess" {
 	const src1 = "foo.b";
 	const pr1 = parseSource(src1);
 	const prog1 = pr1.ok ? pr1.value : null as unknown as Node;
-	assert sgDetectCompletionContext(prog1, src1, 1, 5) === SgCompletionKind.MemberAccess;
+	assert sgDetectCompletionContext(prog1, 1, 5) === SgCompletionKind.MemberAccess;
 }
 
 test "dot with no prefix" {
@@ -2256,15 +2550,15 @@ test "dot with no prefix" {
 	const src2 = "foo.";
 	const pr2 = parseSourceLenient(src2);
 	const prog2 = pr2.ok ? pr2.value : null as unknown as Node;
-	assert sgDetectCompletionContext(prog2, src2, 1, 4) === SgCompletionKind.MemberAccess;
+	assert sgDetectCompletionContext(prog2, 1, 4) === SgCompletionKind.MemberAccess;
 }
 
 test "colon triggers TypeAnnotation" {
-	// "x: num" — cursor at col 6
-	const src3 = "x: num";
+	// "const x: num = 1;" — cursor at col 10 (on "num"). AST has typeExpr on VariableDecl.
+	const src3 = "const x: num = 1;";
 	const pr3 = parseSource(src3);
 	const prog3 = pr3.ok ? pr3.value : null as unknown as Node;
-	assert sgDetectCompletionContext(prog3, src3, 1, 6) === SgCompletionKind.TypeAnnotation;
+	assert sgDetectCompletionContext(prog3, 1, 10) === SgCompletionKind.TypeAnnotation;
 }
 
 test "bare identifier" {
@@ -2272,14 +2566,14 @@ test "bare identifier" {
 	const src4 = "con";
 	const pr4 = parseSource(src4);
 	const prog4 = pr4.ok ? pr4.value : null as unknown as Node;
-	assert sgDetectCompletionContext(prog4, src4, 1, 3) === SgCompletionKind.Identifier;
+	assert sgDetectCompletionContext(prog4, 1, 3) === SgCompletionKind.Identifier;
 }
 
 test "start of line" {
 	const src5 = "x";
 	const pr5 = parseSource(src5);
 	const prog5 = pr5.ok ? pr5.value : null as unknown as Node;
-	assert sgDetectCompletionContext(prog5, src5, 1, 0) === SgCompletionKind.Identifier;
+	assert sgDetectCompletionContext(prog5, 1, 0) === SgCompletionKind.Identifier;
 }
 
 test "extracts prefix" { assert sgGetPrefix("foo.bar", 1, 7) === "bar"; }
@@ -2746,4 +3040,50 @@ test "enum member in match all recorded and queryable" {
 	const sD = sgQueryAtPosition(ctx, 5, 4);
 	assert sD !== null;
 	assert sD.name === "D";
+}
+
+test "import line: cursor in path triggers ImportPath" {
+	// Test importContextFromAST directly with a hand-built ImportDecl node.
+	// Simulates: import { BuildConfig } from "std/build";
+	// BuildConfig at col 10, length 11 → lastNameEnd = 21
+	// "std/build" starts at col ~29 (21 + 8 = 29)
+	// col 30 should be past 21 + 8 = 29 → "path"
+	const importNode = createNodeAt(NodeKind.ImportDecl, {
+		importNames: ["BuildConfig"],
+		importAliases: ["BuildConfig"],
+		importSource: "std/build",
+		nameLocations: [makeLoc(1, 10)],
+	}, makeLoc(1, 1));
+	assert importContextFromAST(importNode, 30) === "path";
+}
+
+test "import line: cursor in braces triggers ImportName" {
+	// Same ImportDecl — col 12 is inside the names region
+	const importNode = createNodeAt(NodeKind.ImportDecl, {
+		importNames: ["BuildConfig"],
+		importAliases: ["BuildConfig"],
+		importSource: "std/build",
+		nameLocations: [makeLoc(1, 10)],
+	}, makeLoc(1, 1));
+	assert importContextFromAST(importNode, 12) === "names";
+}
+
+test "empty line inside ObjectLiteral triggers ObjectField" {
+	// Multi-line object with an empty line inside
+	const src = "const x = {\n\n  a: 1,\n};";
+	const pr = parseSource(src);
+	if (!pr.ok) { assert false; return; }
+	// Line 2 is the empty line — should detect ObjectField
+	assert sgDetectCompletionContext(pr.value, 2, 1) === SgCompletionKind.ObjectField;
+}
+
+test "empty line inside NESTED ObjectLiteral triggers ObjectField" {
+	// Simulates build.ms: const config = { root: "", fmt: {\n\n  useTabs: true,\n} };
+	const src = "const config = {\n  root: \"\",\n  fmt: {\n\n    useTabs: true,\n  },\n};";
+	const pr = parseSource(src);
+	if (!pr.ok) { assert false; return; }
+	// Line 4 is the empty line inside fmt:{} — should detect ObjectField
+	const obj = findEnclosingObjectLiteral(pr.value, 4, 1);
+	assert obj !== null;
+	assert sgDetectCompletionContext(pr.value, 4, 1) === SgCompletionKind.ObjectField;
 }

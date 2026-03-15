@@ -128,7 +128,7 @@ export function addrLoc(loc: CLoc): string {
 
 // ===== CBlock — nested scope (standard reference parity) =====
 
-export interface CBlock {
+export class CBlock {
 	id: number;            // block label ID
 	label: string;         // generated label text ("" if unused)
 	locals: Builder;       // cpsLocals for this block
@@ -152,7 +152,7 @@ export function createBlock(id: number, isLoop: boolean): CBlock {
 
 // ===== CProc — per-function state (standard reference parity) =====
 
-export interface CProc {
+export class CProc {
 	name: string;          // mangled C name
 	returnType: Type;      // MetaScript return type
 	isNrvo: boolean;       // true if function uses NRVO (out-param calling convention)
@@ -348,30 +348,31 @@ export interface TypeCacheEntry {
 	cTypeName: string; // generated C type name
 }
 
-export interface TypeCache {
-	entries: TypeCacheEntry[];
+export class TypeCache {
+	keys: string[];
+	values: string[];
 }
 
 export function createTypeCache(): TypeCache {
-	return { entries: [] };
+	return { keys: [], values: [] };
 }
 
 export function typeCacheGet(cache: TypeCache, key: string): string {
-	for (let i = 0; i < cache.entries.length; i += 1) {
-		if (cache.entries[i].key === key) return cache.entries[i].cTypeName;
+	for (let i = 0; i < cache.keys.length; i += 1) {
+		if (cache.keys[i] === key) return cache.values[i];
 	}
 	return "";
 }
 
 export function typeCacheSet(cache: TypeCache, key: string, cTypeName: string): void {
-	for (let i = 0; i < cache.entries.length; i += 1) {
-		if (cache.entries[i].key === key) {
-			cache.entries[i].cTypeName = cTypeName;
+	for (let i = 0; i < cache.keys.length; i += 1) {
+		if (cache.keys[i] === key) {
+			cache.values[i] = cTypeName;
 			return;
 		}
 	}
-	const entry: TypeCacheEntry = { key, cTypeName };
-	cache.entries.push(entry);
+	cache.keys.push(key);
+	cache.values.push(cTypeName);
 }
 
 export function typeCacheHas(cache: TypeCache, key: string): boolean {
@@ -455,7 +456,7 @@ export function aliveSetHas(aliveSet: AliveSet, modulePath: string, name: string
 
 // ===== CGen — module-level state (Standard reference parity) =====
 
-export interface CGen {
+export class CGen {
 	sections: Builder[];       // CSection enum-indexed (10 sections)
 	currentProc: CProc;        // active proc being generated
 	typeCache: TypeCache;      // fully-emitted types
@@ -465,6 +466,7 @@ export interface CGen {
 	declaredThings: NameSet;   // prevents duplicate declarations
 	knownTypeNames: NameSet;   // cross-module type names (enums + structs, for TypeReference resolution)
 	knownClassNames: NameSet;  // cross-module class names (need pointer semantics: Name*)
+	classesWithCtors: NameSet; // classes that have ConstructorDecl → use ClassName_new() in NewExpr
 	checkerCtx: CheckerContext;
 	modulePath: string;        // source file path (for module-qualified init names)
 	labels: number;            // module-scope unique counter
@@ -501,6 +503,7 @@ export function createCGen(ctx: CheckerContext, modulePath: string): CGen {
 		declaredThings: createNameSet(),
 		knownTypeNames: createNameSet(),
 		knownClassNames: createNameSet(),
+		classesWithCtors: createNameSet(),
 		checkerCtx: ctx,
 		modulePath,
 		labels: 0,

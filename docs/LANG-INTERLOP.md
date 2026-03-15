@@ -1,6 +1,6 @@
 # C Interop — Importing `.h` Files from MetaScript
 
-MetaScript provides seamless C interoperability through two complementary mechanisms: **manual extern declarations** (lightweight, no dependencies) and **automatic header import** (extracts symbols from `.h` files). The reference compiler uses libclang; the self-hosted compiler will use **ARO** (Zig-based C parser, MIT, ~5 MiB) via FFI. Both produce the same checked AST — the rest of the pipeline is unaware of the origin.
+MetaScript provides seamless C interoperability through two complementary mechanisms: **manual extern declarations** (lightweight, no dependencies) and **automatic header import** (extracts symbols from `.h` files). The compiler will use **ARO** (Zig-based C parser, MIT, ~5 MiB) for header parsing. Both mechanisms produce the same checked AST — the rest of the pipeline is unaware of the origin.
 
 ---
 
@@ -152,11 +152,11 @@ The `from` clause on extern functions serves two purposes:
 1. **Codegen**: Emits `#include "header.h"` in the C output (deduplicated)
 2. **Forward decl suppression**: Since the header provides the declaration, codegen skips emitting a prototype
 
-This mirrors Nim's `{.header: "header.h".}` pragma — symbols are declared in MetaScript for type checking but codegen trusts the header to provide the actual C declaration.
+This mirrors standard reference implementation patterns — symbols are declared in MetaScript for type checking but codegen trusts the header to provide the actual C declaration.
 
 ### `compile "file.c"` Pragma
 
-Tells the build system to compile a companion C source file alongside the header. This mirrors Nim's `{.compile: "file.c".}` pragma.
+Tells the build system to compile a companion C source file alongside the header. This mirrors standard reference implementation patterns.
 
 ### ExternDecl AST
 
@@ -268,7 +268,7 @@ C function names are preserved as-is. The `CTransformer` does **not** rename `ms
 For cases where the C name differs from the MetaScript name, use `native_name`:
 
 ```ms
-// Parser supports this in reference compiler:
+// Extern with native name:
 extern function printf "ms_printf" (fmt: string): number;
 // Declares MetaScript symbol "printf", emits C call to "ms_printf"
 ```
@@ -292,17 +292,17 @@ This allows modules to provide different implementations per backend. The buffer
 
 ## Self-Hosted Implementation Status
 
-| Feature | Reference Compiler | Self-Hosted | Notes |
-|---------|:---:|:---:|---|
-| `extern function` parsing | DONE | PARTIAL | Self-hosted parses kind+name only, no params/return type |
-| `extern class/enum` parsing | DONE | PARTIAL | Parsed as ExternDecl, no struct/enum fields |
-| `from "header.h"` pragma | DONE | NOT YET | Parser doesn't recognize `from` after extern |
-| `compile "file.c"` pragma | DONE | NOT YET | Parser doesn't recognize `compile` after extern |
-| `@include`/`@link`/`@passC`/`@passL` | DONE | NOT YET | Parser sees decorator but doesn't extract as CompileSource |
-| `import { x } from "./file.h"` | DONE | NOT YET | Module resolver doesn't handle .h |
-| C header parsing | DONE (libclang) | NOT YET | **Planned: ARO via FFI** (replaces libclang) |
-| CompileSource on Program node | DONE | NOT YET | ProgramData has no compile_sources field |
-| Build system integration | DONE | NOT YET | cc.ms doesn't handle extern sources |
+| Feature | Status | Notes |
+|---------|:---:|---|
+| `extern function` parsing | PARTIAL | Parses kind+name only, no params/return type |
+| `extern class/enum` parsing | PARTIAL | Parsed as ExternDecl, no struct/enum fields |
+| `from "header.h"` pragma | NOT YET | Parser doesn't recognize `from` after extern |
+| `compile "file.c"` pragma | NOT YET | Parser doesn't recognize `compile` after extern |
+| `@include`/`@link`/`@passC`/`@passL` | NOT YET | Parser sees decorator but doesn't extract as CompileSource |
+| `import { x } from "./file.h"` | NOT YET | Module resolver doesn't handle .h |
+| C header parsing | NOT YET | **Planned: ARO via FFI** |
+| CompileSource on Program node | NOT YET | ProgramData has no compile_sources field |
+| Build system integration | NOT YET | cc.ms doesn't handle extern sources |
 
 ---
 
@@ -310,9 +310,9 @@ This allows modules to provide different implementations per backend. The buffer
 
 ### Decision: ARO over libclang
 
-The reference compiler statically links libclang (109 MiB binary, 7 GB vendored LLVM). For the self-hosted compiler, we use **ARO** ([github.com/Vexu/arocc](https://github.com/Vexu/arocc)) — a standalone C89-C23 parser written in Zig, MIT licensed, actively maintained by a Zig core team member.
+We use **ARO** ([github.com/Vexu/arocc](https://github.com/Vexu/arocc)) — a standalone C89-C23 parser written in Zig, MIT licensed, actively maintained by a Zig core team member. Avoids the 109 MiB libclang + 7 GB LLVM dependency.
 
-| | libclang (reference) | ARO (self-hosted) |
+| | libclang | ARO |
 |---|---|---|
 | Binary size | +109 MiB | +~5 MiB |
 | Vendored deps | 7 GB LLVM | ~2 MB Zig module |
@@ -379,14 +379,6 @@ Phase 1 covers 90% of use cases (all `std/runtime/*.ms` patterns). Phase 2 enabl
 ---
 
 ## Reference Files
-
-| Component | File | Lines |
-|-----------|------|-------|
-| **Reference Compiler** | | |
-| Parser (extern + directives) | `~/projects/metascript/src/parser/parser.zig` | 183-250, 1607-1654 |
-| AST (FileImport, CompileSource) | `~/projects/metascript/src/ast/node.zig` | 1619-1652 |
-| Module resolver (.h paths) | `~/projects/metascript/src/module/resolver.zig` | 64-333 |
-| Module loader (loadCHeader) | `~/projects/metascript/src/module/loader.zig` | 681-880 |
 | libclang bindings | `~/projects/metascript/src/interop/c/clang.zig` | 200-520 |
 | C→MS AST transformer | `~/projects/metascript/src/interop/c/transform.zig` | 1-100 |
 | Codegen (#include emission) | `~/projects/metascript/src/codegen/c/cgen.zig` | 2930-3142, 19440-19460 |

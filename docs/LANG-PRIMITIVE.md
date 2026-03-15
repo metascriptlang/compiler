@@ -1,23 +1,23 @@
 # MetaScript Primitive Data Types — Gap Analysis
 
-Comprehensive status of non-array/string primitive and compound types in MetaScript vs. Nim and TypeScript.
+Comprehensive status of non-array/string primitive and compound types in MetaScript vs. reference and TypeScript implementations.
 
 ---
 
 ## Status Overview
 
-| Type | Kind | Status | Implementation | Gap vs. Nim/TS |
+| Type | Kind | Status | Implementation | Gap vs. Reference/TS |
 | :--- | :--- | :--- | :--- | :--- |
-| ~~`number`~~ | ~~Primitive~~ | ~~**DONE**~~ | ~~64-bit float (double)~~ | ~~Nim has `int` / `float` distinction~~ |
+| ~~`number`~~ | ~~Primitive~~ | ~~**DONE**~~ | ~~64-bit float (double)~~ | ~~Reference has `int` / `float` distinction~~ |
 | ~~`int32/64`~~ | ~~Primitive~~ | ~~**DONE**~~ | ~~Sized C integers~~ | ~~Full parity~~ |
 | ~~`boolean`~~ | ~~Primitive~~ | ~~**DONE**~~ | ~~C `bool`~~ | ~~Full parity~~ |
 | ~~`char`~~ | ~~Primitive~~ | ~~**DONE**~~ | ~~C `char` / `int8`~~ | ~~Full parity~~ |
 | ~~`string`~~ | ~~Managed~~ | ~~**DONE**~~ | ~~COW / UTF-8~~ | ~~TS `.length` parity implemented~~ |
-| ~~`Tuple`~~ | ~~Compound~~ | ~~**DONE**~~ | ~~Proper C structs~~ | ~~Nim has anonymous structs~~ |
+| ~~`Tuple`~~ | ~~Compound~~ | ~~**DONE**~~ | ~~Proper C structs~~ | ~~Reference has anonymous structs~~ |
 | ~~`Map<K, V>`~~ | ~~Managed~~ | ~~**DONE**~~ | ~~Open-addressing SoA~~ | ~~High-perf C runtime implemented~~ |
-| ~~`Set<T>`~~ | ~~Managed~~ | ~~**DONE**~~ | ~~Map wrapper (typedef)~~ | ~~Nim has `HashSet`~~ |
-| ~~`Result<T, E>`~~ | ~~Compound~~ | ~~**DONE**~~ | ~~Object literal lowering~~ | ~~Rust/Nim parity~~ |
-| ~~`cstring`~~ | ~~Primitive~~ | ~~**DONE**~~ | ~~Pointer alias~~ | ~~Nim/C interop parity~~ |
+| ~~`Set<T>`~~ | ~~Managed~~ | ~~**DONE**~~ | ~~Map wrapper (typedef)~~ | ~~Reference has `HashSet`~~ |
+| ~~`Result<T, E>`~~ | ~~Compound~~ | ~~**DONE**~~ | ~~Object literal lowering~~ | ~~Standard reference parity~~ |
+| ~~`cstring`~~ | ~~Primitive~~ | ~~**DONE**~~ | ~~Pointer alias~~ | ~~Reference/C interop parity~~ |
 
 ---
 
@@ -27,15 +27,13 @@ Currently, `Map<K, V>` and `Set<T>` are recognized by the checker but have **zer
 
 ### 1. Map<K, V> (HashMap)
 *   **The Issue**: The compiler itself uses Maps for scope tracking, but it runs on **Bun/JS** which provides them natively. A self-hosted MetaScript compiler cannot build its own scope table because it lacks a `Map` implementation that compiles to C.
-*   **Nim Reference**: `vendor/nim/lib/pure/collections/tables.nim`. Nim uses a high-performance open-addressing hash table with Robin Hood hashing or similar.
 *   **Strategy**: 
     1.  Implement `std/core/map.ms` using a flat `msRefArray` of entries.
-    2.  Implement a hashing protocol (similar to Nim's `hash()` proc).
+    2.  Implement a hashing protocol (similar to standard reference hash procs).
     3.  Lower `new Map()` to a runtime constructor in C.
 
 ### 2. Set<T>
 *   **The Issue**: Essential for deduplication and graph traversal (like module loading).
-*   **Nim Reference**: `vendor/nim/lib/pure/collections/sets.nim`.
 *   **Strategy**: Implement as a `Map<T, void>`.
 
 ---
@@ -43,7 +41,7 @@ Currently, `Map<K, V>` and `Set<T>` are recognized by the checker but have **zer
 ## The Tuple Gap (Ergonomics)
 
 *   **The Issue**: `[number, string]` is parsed as a Tuple but codegen treats it as `void*`.
-*   **Nim Reference**: Nim tuples are anonymous structs.
+*   **Standard Reference**: Reference tuples are typically anonymous structs.
 *   **Strategy**: 
     1.  Update `src/codegen/c/types.ms` to generate a named `struct` for every unique Tuple signature.
     2.  Implement `t.0`, `t.1` index access in `nativeLower.ms`.
@@ -102,4 +100,3 @@ This roadmap tracks the transition of compound types from **STUB** to **PRODUCTI
 | ~~**Tuple Structs**~~ | ~~**DONE**~~ | ~~P1~~ | ~~`src/codegen/c/types.ms`~~ |
 | ~~**Map Iteration**~~ | ~~**DONE**~~ | ~~P1~~ | ~~`src/transform/native/nativeLower.ms`~~ |
 | ~~**FFI Bridge**~~ | ~~**DONE**~~ | ~~P1~~ | ~~`src/checker/compat.ms`, `src/codegen/c/`~~ |
-

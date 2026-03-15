@@ -32,6 +32,7 @@ export enum SymbolFlag {
 	Sink = 2048,        // parameter takes ownership
 	Lent = 4096,        // parameter is a borrow (no RC)
 	NoReturn = 8192,    // function never returns (exit, abort, infinite loop)
+	Async = 16384,      // async function (return type is Promise<T>)
 }
 
 // Flag helpers

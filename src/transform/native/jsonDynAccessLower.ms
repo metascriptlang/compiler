@@ -64,7 +64,7 @@ export function lowerJsonDynAccess(program: Node, ctx: TransformContext): Node {
 	if (needsInclude && !hasEmitted(ctx, "__jsonInclude")) {
 		ctx.emittedHelpers.push("__jsonInclude");
 		const pd = result.data as ProgramData;
-		pd.programStmts.push(makeEmitNode("/*INCLUDESECTION*/#include \"core/json.h\"\n", makeLoc(0, 0)));
+		pd.programStmts.push(makeEmitNode("/*INCLUDESECTION*/#include \"std/core/json/native.h\"\n", makeLoc(0, 0)));
 	}
 	return result;
 }

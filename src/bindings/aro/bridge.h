@@ -15,7 +15,7 @@
 #define ARO_BRIDGE_H
 
 #include <stdint.h>
-#include "system.h"
+#include "std/core/system/native.h"
 
 // Parse a C header file. Returns 0 on success, 1 on error.
 // Stores results internally (global state, single-threaded).

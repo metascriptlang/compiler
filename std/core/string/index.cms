@@ -2,7 +2,8 @@
 // Extension methods backed by runtime/core/string.h
 // Loaded automatically via globalImports() -> "std/core/string"
 
-@include("core/string.h");
+@include("std/core/string/native.h");
+@compile("std/core/string/native.c");
 
 // ===== Comparison =====
 

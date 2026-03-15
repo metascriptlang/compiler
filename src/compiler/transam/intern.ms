@@ -12,7 +12,7 @@ export interface TaInternEntry {
 	value: string;
 }
 
-export interface TaStringInterner {
+export class TaStringInterner {
 	entries: TaInternEntry[];
 	nextId: number;
 }

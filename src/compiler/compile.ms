@@ -1,8 +1,8 @@
 // MetaScript Compiler CLI — compile command
 
-import { exit, exec } from "std/process";
+import { exit, exec, fileExists } from "std/process";
 import { parseSource } from "../parser/statements/validation";
-import { Node, NodeKind, ProgramData } from "../ast/node";
+import { Node } from "../ast/node";
 import { CheckerContext, hasErrors, hasFatalErrors, errorCount } from "../checker/context";
 import { checkProgramWithRegistry } from "../checker/checkPass";
 import { checkModuleGraph, getPreludeContext } from "../checker/index";
@@ -26,7 +26,7 @@ import { transformForNative } from "../transform/native/index";
 import { refineTypes } from "../transform/typeRefine";
 import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { liftHcrState } from "../transform/native/hcrLift";
-import { createTransformContextWithChecker } from "../transform/context";
+import { createTransformContextWithChecker, NameSet, createNameSet } from "../transform/context";
 import { setGlobalHookOwners } from "../transform/lowering/destructorLifting";
 import { findModule, ModuleGraph, ModuleError, ErrorSeverity } from "../module/graph";
 import { createFileSystemProvider, loadModuleGraphWithConfig } from "../module/loader";
@@ -36,6 +36,7 @@ import { evaluateComptimeBlocks } from "./comptime";
 import { CliOptions, Target, MODE_DEBUG, MODE_RELEASE } from "./options";
 import { readSource, writeOutput, printErrorsAndExit, printTiming, verboseLog, replaceExt, dirName, baseName, stripBase, ensureDir, getJSRuntime, exeSuffix, soSuffix, outDirForMode } from "./io";
 import { compileC, compileCFile, linkObjects, appendFlag, cliCompileFlags, cliLinkFlags } from "./cc";
+import { initCache, stableOFile, fullCompileCmd, isCompileCached, writeCompileCache, projectCacheChanged, writeProjectCache, stableCFile, isCCodeCached, writeCCodeCache, isLinkCached, writeLinkCache, cacheDir } from "./cache";
 import { preprocessHeaders } from "../module/aro";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { clockMs } from "std/process";
@@ -229,9 +230,6 @@ interface ProcessedModule {
 	modPath: string;
 }
 
-// Counter for unique @compile .o filenames across modules.
-let compileObjCount = 0;
-
 // Process @compile("foo.c") directives: compile each .c file to .o relative to module dir.
 // Returns space-separated .o file paths to add to the link list.
 function processCompileDirectives(directives: string, moduleDir: string, allFlags: string, mode: number, ccOption: number, verbose: boolean): string {
@@ -247,17 +245,44 @@ function processCompileDirectives(directives: string, moduleDir: string, allFlag
 		}
 		if (atEnd || atNewline) {
 			if (idx > start) {
-				const cPath = directives.slice(start, idx);
-				// Resolve relative to the declaring module's directory
-				const fullPath = `${moduleDir}/${cPath}`;
-				const oFile = `/tmp/_msc_compile_${compileObjCount}.o`;
-				compileObjCount = compileObjCount + 1;
-				if (verbose) verboseLog(`  @compile ${fullPath} → ${oFile}`);
-				const ccCode = compileCFile(fullPath, oFile, allFlags, mode, ccOption);
-				if (ccCode !== 0) {
-					console.log(`${error("error")}: @compile failed for ${fullPath} ${dim(`(exit ${ccCode})`)}`);
-
+				const entry = directives.slice(start, idx);
+				// Per-file custom flags: "file.c\t-O3" (tab-separated from collectOneDirective)
+				let cPath = entry;
+				let customFlags = "";
+				const tabPos = entry.indexOf("\t");
+				if (tabPos >= 0) {
+					cPath = entry.slice(0, tabPos);
+					customFlags = entry.slice(tabPos + 1, entry.length);
+				}
+				// ./ prefix: resolve relative to the declaring module's directory.
+				// Otherwise: resolve as project-root-relative (matches @include behavior).
+				let fullPath = cPath;
+				if (cPath.slice(0, 2) === "./") {
+					fullPath = `${moduleDir}/${cPath}`;
+				}
+				// Early file existence check (reference-aligned: checks in processCompile)
+				if (!fileExists(fullPath)) {
+					console.log(`${error("error")}: @compile cannot find: ${fullPath}`);
 					exit(1);
+				}
+				const oFile = stableOFile(fullPath);
+				// Merge global flags with per-file custom flags
+				let fileFlags = allFlags;
+				if (customFlags !== "") fileFlags = appendFlag(fileFlags, customFlags);
+				// Full compile command for fingerprint (includes compiler, -std, mode flags)
+				const cmdKey = fullCompileCmd(ccOption, mode, fileFlags);
+				// Fingerprint cache: skip recompilation if source + full command unchanged
+				if (isCompileCached(fullPath, oFile, cmdKey)) {
+					if (verbose) verboseLog(`  @compile ${fullPath} → ${oFile} ${dim("(cached)")}`);
+				} else {
+					if (verbose) verboseLog(`  @compile ${fullPath} → ${oFile}`);
+					const ccCode = compileCFile(fullPath, oFile, fileFlags, mode, ccOption);
+					if (ccCode !== 0) {
+						console.log(`${error("error")}: @compile failed for ${fullPath} ${dim(`(exit ${ccCode})`)}`);
+
+						exit(1);
+					}
+					writeCompileCache(oFile);
 				}
 				oFiles = appendFlag(oFiles, oFile);
 			}
@@ -279,14 +304,21 @@ function compileHeaderCompanions(graph: ModuleGraph, allFlags: string, mode: num
 		if (mod === null || !mod.isCHeader) continue;
 		// lib.h → lib.c
 		const cPath = `${mod.path.slice(0, mod.path.byteLength - 2)}.c`;
-		if (exec(`test -f ${cPath}`) === 0) {
-			const oFile = `/tmp/_msc_hcompanion_${i}.o`;
-			if (verbose) verboseLog(`  companion ${cPath} → ${oFile}`);
-			const ccCode = compileCFile(cPath, oFile, allFlags, mode, ccOption);
-			if (ccCode !== 0) {
-				console.log(`${error("error")}: companion compile failed for ${cPath} ${dim(`(exit ${ccCode})`)}`);
+		if (fileExists(cPath)) {
+			const oFile = stableOFile(cPath);
+			const cmdKey = fullCompileCmd(ccOption, mode, allFlags);
+			// Fingerprint cache for companion files too
+			if (isCompileCached(cPath, oFile, cmdKey)) {
+				if (verbose) verboseLog(`  companion ${cPath} → ${oFile} ${dim("(cached)")}`);
+			} else {
+				if (verbose) verboseLog(`  companion ${cPath} → ${oFile}`);
+				const ccCode = compileCFile(cPath, oFile, allFlags, mode, ccOption);
+				if (ccCode !== 0) {
+					console.log(`${error("error")}: companion compile failed for ${cPath} ${dim(`(exit ${ccCode})`)}`);
 
-				exit(1);
+					exit(1);
+				}
+				writeCompileCache(oFile);
 			}
 			oFiles = appendFlag(oFiles, oFile);
 		}
@@ -307,14 +339,6 @@ function writeDepsFile(graph: ModuleGraph, entryPath: string, outDir: string): v
 }
 
 // ===== Change Detection =====
-
-function needsRebuild(graph: ModuleGraph, outputBinary: string): boolean {
-	if (exec(`test -f ${outputBinary}`) !== 0) return true;
-	for (const modPath of graph.loadOrder) {
-		if (exec(`test ${modPath} -nt ${outputBinary}`) === 0) return true;
-	}
-	return false;
-}
 
 // ===== JS Build =====
 
@@ -375,6 +399,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 //   Link all .o files into final binary
 
 export function cmdBuildC(entryPath: string, opts: CliOptions): void {
+	initCache(opts.mode, opts.forceRebuild);
 	registerCoreParsers();
 	setTargetSizes(8, 8);
 	const t0 = clockMs();
@@ -390,8 +415,10 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		outBinary = outDir + "/" + replaceExt(baseName(entryPath), "") + suffix;
 	}
 
-	// Change detection: skip if all sources are older than binary
-	if (!opts.forceRebuild && !needsRebuild(graph, outBinary)) {
+	// Project-level cache: skip entire pipeline if nothing changed.
+	// Reference-aligned: changeDetectedViaJsonBuildInstructions — early return before codegen.
+	const allFlags0 = cliCompileFlags(opts);
+	if (!projectCacheChanged(graph.loadOrder, outBinary, opts.ccCompiler, opts.mode, allFlags0)) {
 		console.log(success("Up to date") + " " + bold(outBinary));
 		if (opts.genDeps) {
 			const depsDir = outDirForMode(opts.mode);
@@ -413,7 +440,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 
 	// Reference parity: global hook ownership registry shared across all modules.
 	// First module to need a type's DRC hooks generates them; others get extern protos.
-	const sharedHookOwners: string[] = [];
+	const sharedHookOwners = createNameSet();
 	setGlobalHookOwners(sharedHookOwners);
 
 	// Auto-compile companion .c files for .h imports
@@ -435,7 +462,6 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		ctx.errors = [];
 
 		const monoed = monomorphizeProgram(program, ctx);
-
 		validateTypedAST(ctx, monoed);
 		if (hasErrors(ctx)) {
 			for (const e of ctx.errors) {
@@ -481,8 +507,17 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
 	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false);
 
+	// Compile prelude @compile directives — unconditional (reference-aligned: all @compile are always built)
+	if (graphPreludeCtx !== null && graphPreludeCtx.compileDirectives !== "") {
+		const preludeObjs = processCompileDirectives(graphPreludeCtx.compileDirectives, ".", allFlags, opts.mode, opts.ccCompiler, opts.verbose);
+		oFiles = appendFlag(oFiles, preludeObjs);
+	}
+
 	// Phase C: Codegen + compile each module
+	// Per-module .c cache: only re-invoke clang if generated C code actually changed.
 	let compiled = 0;
+	let modulesRecompiled = 0;
+	const cd = cacheDir();
 	for (const p of processed) {
 		if (opts.verbose) verboseLog(`codegen ${p.modPath}`);
 
@@ -501,19 +536,25 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 			writeOutput(emitPath, cCode);
 			console.log(`${green("  Wrote")} ${bold(emitPath)}`);
 		} else {
-			const cFile = `/tmp/_msc_mod_${compiled}.c`;
-			const oFile = `/tmp/_msc_mod_${compiled}.o`;
-			writeOutput(cFile, cCode);
-			if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
 			let modFlags = appendFlag(allFlags, `-iquote${dirName(p.modPath)}`);
-			modFlags = appendFlag(modFlags, "-iquotestd");
-			modFlags = appendFlag(modFlags, "-iquote/tmp");
-			const ccCode = compileCFile(cFile, oFile, modFlags, opts.mode, opts.ccCompiler);
-			if (ccCode !== 0) {
-				console.log(`${error("error")}: compile failed for ${p.modPath} ${dim(`(exit ${ccCode})`)}`);
+			modFlags = appendFlag(modFlags, `-iquote${cd}`);
+			const compileCmd = fullCompileCmd(opts.ccCompiler, opts.mode, modFlags);
+			const oFile = stableOFile(p.modPath);
 
-			} else {
+			if (isCCodeCached(p.modPath, cCode, compileCmd)) {
 				oFiles = appendFlag(oFiles, oFile);
+				if (opts.verbose) verboseLog(`  cached ${p.modPath}`);
+			} else {
+				writeCCodeCache(p.modPath, cCode, compileCmd);
+				const cFile = stableCFile(p.modPath);
+				if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
+				const ccCode = compileCFile(cFile, oFile, modFlags, opts.mode, opts.ccCompiler);
+				if (ccCode !== 0) {
+					console.log(`${error("error")}: compile failed for ${p.modPath} ${dim(`(exit ${ccCode})`)}`);
+				} else {
+					oFiles = appendFlag(oFiles, oFile);
+				}
+				modulesRecompiled = modulesRecompiled + 1;
 			}
 		}
 		compiled = compiled + 1;
@@ -530,8 +571,8 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	if (!opts.isHcr) {
 		if (opts.verbose) verboseLog("generating dispatcher");
 		const dispatcher = genProjectDispatcher(graph.loadOrder, entryPath, hasUserMain, mainRetType);
-		const dispFile = "/tmp/_msc_dispatch.c";
-		const dispObj = "/tmp/_msc_dispatch.o";
+		const dispFile = `${cd}/_dispatch.c`;
+		const dispObj = `${cd}/_dispatch.o`;
 		writeOutput(dispFile, dispatcher);
 		const dispCode = compileCFile(dispFile, dispObj, "", opts.mode, opts.ccCompiler);
 		if (dispCode !== 0) {
@@ -544,6 +585,20 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 
 	// Link all .o files into final binary (or shared library for HCR)
 	const linkFlags = appendFlag(cliLinkFlags(allFlags, opts), allLinkFlags);
+
+	// Link cache: skip re-link if all modules hit .c cache and link flags unchanged
+	if (modulesRecompiled === 0 && isLinkCached(oFiles, linkFlags, outBinary)) {
+		if (opts.genDeps) {
+			const depsDir = outDirForMode(opts.mode);
+			ensureDir(depsDir);
+			writeDepsFile(graph, entryPath, depsDir);
+		}
+		writeProjectCache(graph.loadOrder, outBinary, opts.ccCompiler, opts.mode, allFlags0);
+		console.log(success(`Built ${compiled} module(s) → ${bold(outBinary)}`) + dim(" (link cached)"));
+		if (opts.showTime) printTiming("built", t0);
+		return;
+	}
+
 	if (opts.verbose) verboseLog("linking → " + outBinary);
 	const linkCode = linkObjects(oFiles, outBinary, linkFlags, opts.mode, opts.ccCompiler);
 	if (linkCode !== 0) {
@@ -552,10 +607,17 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		exit(1);
 	}
 
+	// Persist link cache after successful link
+	writeLinkCache(oFiles, linkFlags, outBinary);
+
 	if (opts.genDeps) {
 		const depsDir = outDirForMode(opts.mode);
 		writeDepsFile(graph, entryPath, depsDir);
 	}
+
+	// Reference-aligned: writeJsonBuildInstructions — persist project cache after successful build
+	writeProjectCache(graph.loadOrder, outBinary, opts.ccCompiler, opts.mode, allFlags0);
+
 	console.log(success(`Built ${compiled} module(s) → ${bold(outBinary)}`));
 	if (opts.showTime) printTiming("built", t0);
 }
@@ -564,6 +626,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 // Compiles all modules, suppresses user's main(), executes test binary.
 
 export function cmdTest(filePath: string, opts: CliOptions): void {
+	initCache(opts.mode, opts.forceRebuild);
 	registerCoreParsers();
 	setTargetSizes(8, 8);
 	const t0 = clockMs();
@@ -579,7 +642,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	let oFiles = "";
 
 	// Reference parity: global hook ownership registry shared across all modules.
-	const sharedHookOwners: string[] = [];
+	const sharedHookOwners = createNameSet();
 	setGlobalHookOwners(sharedHookOwners);
 
 	// Auto-compile companion .c files for .h imports
@@ -625,8 +688,15 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
 	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, filePath, true);
 
-	// Phase C: Codegen + compile each module
+	// Compile prelude @compile directives — unconditional (reference-aligned: all @compile are always built)
+	if (graphPreludeCtx !== null && graphPreludeCtx.compileDirectives !== "") {
+		const preludeObjs = processCompileDirectives(graphPreludeCtx.compileDirectives, ".", allFlags, opts.mode, opts.ccCompiler, opts.verbose);
+		oFiles = appendFlag(oFiles, preludeObjs);
+	}
+
+	// Phase C: Codegen + compile each module (per-module .c cache)
 	let compiled = 0;
+	const tcd = cacheDir();
 	for (const p of processed) {
 		if (opts.verbose) verboseLog(`codegen ${p.modPath}`);
 
@@ -635,25 +705,33 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const compileObjs = processCompileDirectives(p.ctx.compileDirectives, dirName(p.modPath), allFlags, opts.mode, opts.ccCompiler, opts.verbose);
 		oFiles = appendFlag(oFiles, compileObjs);
 
-		const cFile = `/tmp/_msc_test_${compiled}.c`;
-		const oFile = `/tmp/_msc_test_${compiled}.o`;
-		writeOutput(cFile, cCode);
-		let testModFlags = appendFlag(allFlags, "-iquote/tmp");
-		const ccCode = compileCFile(cFile, oFile, testModFlags, opts.mode, opts.ccCompiler);
-		if (ccCode !== 0) {
-			console.log(`${error("error")}: compile failed for ${p.modPath} ${dim(`(exit ${ccCode})`)}`);
+		let testModFlags = appendFlag(allFlags, `-iquote${dirName(p.modPath)}`);
+		testModFlags = appendFlag(testModFlags, `-iquote${tcd}`);
+		const compileCmd = fullCompileCmd(opts.ccCompiler, opts.mode, testModFlags);
+		const oFile = stableOFile(p.modPath);
 
-			exit(1);
+		if (isCCodeCached(p.modPath, cCode, compileCmd)) {
+			oFiles = appendFlag(oFiles, oFile);
+			if (opts.verbose) verboseLog(`  cached ${p.modPath}`);
+		} else {
+			writeCCodeCache(p.modPath, cCode, compileCmd);
+			const cFile = stableCFile(p.modPath);
+			if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
+			const ccCode = compileCFile(cFile, oFile, testModFlags, opts.mode, opts.ccCompiler);
+			if (ccCode !== 0) {
+				console.log(`${error("error")}: compile failed for ${p.modPath} ${dim(`(exit ${ccCode})`)}`);
+				exit(1);
+			}
+			oFiles = appendFlag(oFiles, oFile);
 		}
-		oFiles = appendFlag(oFiles, oFile);
 		compiled = compiled + 1;
 	}
 
 	// Generate test dispatcher (runs all module inits + test tables)
 	if (opts.verbose) verboseLog("generating test dispatcher");
 	const dispatcher = genTestDispatcher(graph.loadOrder, filePath);
-	const dispFile = "/tmp/_msc_test_dispatch.c";
-	const dispObj = "/tmp/_msc_test_dispatch.o";
+	const dispFile = `${tcd}/_test_dispatch.c`;
+	const dispObj = `${tcd}/_test_dispatch.o`;
 	writeOutput(dispFile, dispatcher);
 	const dispCode = compileCFile(dispFile, dispObj, "", opts.mode, opts.ccCompiler);
 	if (dispCode !== 0) {

@@ -200,6 +200,29 @@ function applyAlias(specifier: string, config: ResolverConfig): string {
 	return specifier;
 }
 
+// ===== MetaScript Module Extensions =====
+
+// Authoritative list of MetaScript source extensions (no .ts/.js/.h).
+export const msModuleExtensions: string[] = [".cms", ".ms", ".jms", ".rms", ".ems", ".wms"];
+
+// Check if a filename has a MetaScript module extension.
+export function isMsModuleExtension(name: string): boolean {
+	for (const ext of msModuleExtensions) {
+		if (name.length > ext.length && name.endsWith(ext)) return true;
+	}
+	return false;
+}
+
+// Strip a MetaScript extension from a filename, returning "" if not a MS file.
+export function stripMsModuleExtension(name: string): string {
+	for (const ext of msModuleExtensions) {
+		if (name.length > ext.length && name.endsWith(ext)) {
+			return name.slice(0, name.length - ext.length);
+		}
+	}
+	return "";
+}
+
 // ===== Extension Detection =====
 
 function hasKnownExtension(specifier: string): boolean {

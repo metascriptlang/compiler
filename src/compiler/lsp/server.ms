@@ -19,7 +19,7 @@ import { clockMs } from "std/process";
 
 // ===== Server State =====
 
-export interface LspServerState {
+export class LspServerState {
 	initialized: boolean;
 	shutdownRequested: boolean;
 	db: TransAmDb;

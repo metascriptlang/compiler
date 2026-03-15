@@ -1,0 +1,307 @@
+// HTTP Server — accept loop, request dispatch, streaming response API.
+// Imports std/net for TCP, parser/headers for protocol handling.
+
+@include("std/net/native.h");
+
+extern function msNetSocket(): int32;
+extern function msNetBind(fd: int32, addr: string, port: int32): int32;
+extern function msNetListen(fd: int32, backlog: int32): int32;
+extern function msNetAccept(fd: int32): int32;
+extern function msNetSend(fd: int32, data: string): int32;
+extern function msNetRecv(fd: int32, maxBytes: int32): string;
+extern function msNetClose(fd: int32): void;
+extern function msNetSetTimeout(fd: int32, ms: int32): int32;
+
+import {
+	HttpMethod, HttpRequest, HttpHeaders, ServerResponse, RequestHandler,
+	statusText,
+} from "./types";
+import { HttpError, socketError, bodyTooLarge, invalidRequest } from "./errors";
+import {
+	createHeaders, setHeader, hasHeader, getHeader, serializeHeaders,
+	getContentLength, isChunked, isKeepAlive,
+} from "./headers";
+import { ParsedRequest, parseRequest, encodeChunk, encodeLastChunk } from "./parser";
+
+// ===== Server Interface =====
+
+export interface HttpServer {
+	fd: int32;
+	handler: RequestHandler;
+	running: boolean;
+	address: string;
+	port: int32;
+	keepAlive: boolean;
+	keepAliveTimeout: int32;
+	maxRequestsPerConnection: int32;
+	maxHeaderSize: int32;
+	maxBodySize: int32;
+}
+
+// ===== Construction =====
+
+export function createServer(handler: RequestHandler): HttpServer {
+	return {
+		fd: -1,
+		handler: handler,
+		running: false,
+		address: "0.0.0.0",
+		port: 0,
+		keepAlive: true,
+		keepAliveTimeout: 5000,
+		maxRequestsPerConnection: 0,
+		maxHeaderSize: 8192,
+		maxBodySize: 1048576,
+	};
+}
+
+function createServerResponse(fd: int32): ServerResponse {
+	const headers = createHeaders();
+	const chunks: string[] = [];
+	return {
+		fd: fd,
+		status: 200,
+		headers: headers,
+		_chunks: chunks,
+		headersSent: false,
+		_finished: false,
+		_chunked: false,
+	};
+}
+
+// ===== Server Lifecycle =====
+
+export function serverListen(server: HttpServer, addr: string, port: int32): Result<void, HttpError> {
+	const fd = msNetSocket();
+	if (fd < 0) return Result.err(socketError("socket() failed"));
+
+	if (msNetBind(fd, addr, port) < 0) {
+		msNetClose(fd);
+		return Result.err(socketError("bind() failed on " + addr + ":" + port.toString()));
+	}
+
+	if (msNetListen(fd, 128) < 0) {
+		msNetClose(fd);
+		return Result.err(socketError("listen() failed"));
+	}
+
+	server.fd = fd;
+	server.address = addr;
+	server.port = port;
+	return Result.ok(undefined);
+}
+
+export function serve(server: HttpServer): void {
+	server.running = true;
+	while (server.running) {
+		const clientFd = msNetAccept(server.fd);
+		if (clientFd < 0) continue;
+
+		if (server.keepAliveTimeout > 0) {
+			msNetSetTimeout(clientFd, server.keepAliveTimeout);
+		}
+
+		handleConnection(server, clientFd);
+		msNetClose(clientFd);
+	}
+}
+
+// Serve exactly N requests then stop. Useful for testing.
+export function serveN(server: HttpServer, count: int32): void {
+	server.running = true;
+	let served = 0;
+	while (server.running && served < count) {
+		const clientFd = msNetAccept(server.fd);
+		if (clientFd < 0) continue;
+
+		handleConnection(server, clientFd);
+		msNetClose(clientFd);
+		served = served + 1;
+	}
+	server.running = false;
+}
+
+export function stop(server: HttpServer): void {
+	server.running = false;
+	if (server.fd >= 0) {
+		msNetClose(server.fd);
+		server.fd = -1;
+	}
+}
+
+// ===== Connection Handler =====
+
+function handleConnection(server: HttpServer, fd: int32): void {
+	let requestCount = 0;
+	let keepGoing = true;
+
+	while (keepGoing) {
+		const data = msNetRecv(fd, server.maxHeaderSize);
+		if (data.length === 0) return;
+
+		// Parse request
+		const parsed = parseRequest(data);
+		if (!parsed.ok) return;
+		const req = parsed.value;
+
+		// Read body if Content-Length present
+		const contentLength = getContentLength(req.headers);
+		let body = "";
+		if (contentLength > 0) {
+			const bodyResult = readRequestBody(fd, data, req.bodyStart, contentLength, server.maxBodySize);
+			if (!bodyResult.ok) return;
+			body = bodyResult.value;
+		}
+
+		// Build full request
+		const request: HttpRequest = {
+			method: req.method,
+			path: req.path,
+			version: req.version,
+			headers: req.headers,
+			body: body,
+			clientFd: fd,
+		};
+
+		// Build response
+		const res = createServerResponse(fd);
+
+		// Call handler
+		server.handler(request, res);
+
+		// Ensure response was sent
+		if (!res._finished) {
+			end(res);
+		}
+
+		requestCount = requestCount + 1;
+
+		// Keep-alive decision
+		if (!server.keepAlive) {
+			keepGoing = false;
+		} else if (server.maxRequestsPerConnection > 0 && requestCount >= server.maxRequestsPerConnection) {
+			keepGoing = false;
+		} else if (!isKeepAlive(req.headers, req.version)) {
+			keepGoing = false;
+		}
+	}
+}
+
+// ===== Request Body Reading =====
+
+function readRequestBody(fd: int32, initialData: string, bodyStart: int32, contentLength: int32, maxSize: int32): Result<string, HttpError> {
+	if (contentLength > maxSize) {
+		return Result.err(bodyTooLarge(contentLength, maxSize));
+	}
+	// Body bytes already in initial buffer
+	const available = initialData.length - bodyStart;
+	if (available >= contentLength) {
+		return Result.ok(initialData.slice(bodyStart, bodyStart + contentLength));
+	}
+	// Need more data from socket
+	let body = initialData.slice(bodyStart, initialData.length);
+	let remaining = contentLength - available;
+	while (remaining > 0) {
+		const chunk = msNetRecv(fd, remaining);
+		if (chunk.length === 0) {
+			return Result.err(socketError("connection closed while reading body"));
+		}
+		body = body + chunk;
+		remaining = remaining - chunk.length;
+	}
+	return Result.ok(body);
+}
+
+// ===== Internal Helpers =====
+
+function formatStatusLine(status: int32): string {
+	return "HTTP/1.1 " + status.toString() + " " + statusText(status) + "\r\n";
+}
+
+// ===== Streaming Response API =====
+
+// Send status line + headers immediately (enables streaming).
+export function writeHead(res: ServerResponse, status: int32, headers: HttpHeaders): void {
+	res.status = status;
+	// Merge provided headers
+	let i = 0;
+	while (i < headers._names.length) {
+		setHeader(res.headers, headers._names[i], headers._values[i]);
+		i = i + 1;
+	}
+	// If no Content-Length, use chunked encoding
+	if (!hasHeader(res.headers, "content-length")) {
+		setHeader(res.headers, "transfer-encoding", "chunked");
+		res._chunked = true;
+	}
+	// Send status line + headers
+	let head = formatStatusLine(status);
+	head = head + serializeHeaders(res.headers) + "\r\n";
+	msNetSend(res.fd, head);
+	res.headersSent = true;
+}
+
+// Send a chunk of body data (streaming).
+export function write(res: ServerResponse, chunk: string): void {
+	if (!res.headersSent) {
+		writeHead(res, res.status, res.headers);
+	}
+	if (res._chunked) {
+		msNetSend(res.fd, encodeChunk(chunk));
+	} else {
+		msNetSend(res.fd, chunk);
+	}
+}
+
+// Finalize response.
+export function end(res: ServerResponse): void {
+	if (!res.headersSent) {
+		// Buffered mode: collect all chunks, set Content-Length, send at once
+		let body = "";
+		for (const chunk of res._chunks) {
+			body = body + chunk;
+		}
+		setHeader(res.headers, "content-length", body.length.toString());
+		let response = formatStatusLine(res.status);
+		response = response + serializeHeaders(res.headers) + "\r\n" + body;
+		msNetSend(res.fd, response);
+	} else if (res._chunked) {
+		msNetSend(res.fd, encodeLastChunk());
+	}
+	res._finished = true;
+}
+
+// End with final data.
+export function endWithBody(res: ServerResponse, data: string): void {
+	res._chunks.push(data);
+	end(res);
+}
+
+// ===== Convenience Helpers =====
+
+function sendBody(res: ServerResponse, contentType: string, body: string): void {
+	setHeader(res.headers, "content-type", contentType);
+	setHeader(res.headers, "content-length", body.length.toString());
+	let response = formatStatusLine(res.status);
+	response = response + serializeHeaders(res.headers) + "\r\n" + body;
+	msNetSend(res.fd, response);
+	res.headersSent = true;
+	res._finished = true;
+}
+
+export function sendText(res: ServerResponse, text: string): void {
+	sendBody(res, "text/plain; charset=utf-8", text);
+}
+
+export function sendJson(res: ServerResponse, json: string): void {
+	sendBody(res, "application/json", json);
+}
+
+export function sendHtml(res: ServerResponse, html: string): void {
+	sendBody(res, "text/html; charset=utf-8", html);
+}
+
+export function sendError(res: ServerResponse, status: int32, msg: string): void {
+	res.status = status;
+	sendText(res, msg);
+}

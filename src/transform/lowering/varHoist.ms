@@ -20,7 +20,7 @@ import {
 	DoWhileStmtData, SwitchStmtData, SwitchCaseData,
 	ExportDeclData, ClassDeclData, DecoratedDeclData,
 } from "../../ast/node";
-import { TransformContext, NameSet } from "../context";
+import { TransformContext, NameSet, createNameSet } from "../context";
 import { makeVarDecl, makeIdent, makeNull, makeAssign, makeExprStmt, makeBlock, collectDeclNames } from "../util";
 import { stmtCountAfter, firstStmtKindAfter, fnBodyStmtCount } from "../testUtil";
 
@@ -92,10 +92,10 @@ function convertVarInBody(body: Node, loc: SourceLocation): void {
 // ===== Per-Function Hoisting =====
 
 function hoistVarsInBody(body: Node, loc: SourceLocation): void {
-	const ns: NameSet = [];
+	const ns: NameSet = createNameSet();
 	collectDeclNames(body, ns, true);
 
-	if (ns.length === 0) return;
+	if (ns.items.length === 0) return;
 
 	if (body.kind !== NodeKind.BlockStmt) return;
 	const bd = body.data as BlockStmtData;
@@ -104,8 +104,8 @@ function hoistVarsInBody(body: Node, loc: SourceLocation): void {
 
 	// Build new stmt list: hoisted decls + original stmts
 	const newStmts: Node[] = [];
-	for (let ni = 0; ni < ns.length; ni += 1) {
-		newStmts.push(makeVarDecl(ns[ni], makeNull(loc), DeclKind.Let, loc));
+	for (let ni = 0; ni < ns.items.length; ni += 1) {
+		newStmts.push(makeVarDecl(ns.items[ni], makeNull(loc), DeclKind.Let, loc));
 	}
 	for (let oi = 0; oi < bd.statements.length; oi += 1) {
 		newStmts.push(bd.statements[oi]);

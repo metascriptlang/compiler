@@ -11,7 +11,7 @@
 // Default global imports. Returns array (module-level const string[] hits DRC bug).
 // Later: merge with build.ms globalImports.
 export function globalImports(): string[] {
-	return ["std/core/system", "std/core/string", "std/core/array", "std/core/map", "std/core/json"];
+	return ["std/core/system", "std/core/string", "std/core/array", "std/core/map", "std/core/json", "std/core/buffer", "std/core/crypto"];
 }
 
 export function isGlobalImport(path: string): boolean {
@@ -22,14 +22,16 @@ export function isGlobalImport(path: string): boolean {
 }
 
 // ===== Tests =====
-test "globalImports has system, string, array, map, json" {
+test "globalImports has system, string, array, map, json, buffer, crypto" {
 	const imports = globalImports();
-	assert imports.length === 5;
+	assert imports.length === 7;
 	assert imports[0] === "std/core/system";
 	assert imports[1] === "std/core/string";
 	assert imports[2] === "std/core/array";
 	assert imports[3] === "std/core/map";
 	assert imports[4] === "std/core/json";
+	assert imports[5] === "std/core/buffer";
+	assert imports[6] === "std/core/crypto";
 }
 
 test "isGlobalImport matches" {

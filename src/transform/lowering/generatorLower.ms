@@ -27,7 +27,7 @@ import {
 	ConditionalExprData, TryCatchStmtData, YieldExprData,
 	ExportDeclData, ClassDeclData, MethodDeclData, DecoratedDeclData,
 } from "../../ast/node";
-import { TransformContext, NameSet, nameSetContains } from "../context";
+import { TransformContext, NameSet, createNameSet, nameSetContains } from "../context";
 import {
 	makeIdent, makeNull, makeNumber, makeBool,
 	makeBlock, makeVarDecl, makeExprStmt, makeReturn,
@@ -39,14 +39,14 @@ import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
 // ===== Data Structures =====
 
-interface GenState {
+export interface GenState {
 	index: number;
 	isYield: boolean;
 	nextState: number;
 	stmts: Node[];
 }
 
-interface StateCollector {
+export interface StateCollector {
 	items: GenState[];
 }
 
@@ -65,14 +65,14 @@ function makeDoneResult(loc: SourceLocation): Node {
 	return makeIterResult(makeNull(loc), true, loc);
 }
 
-function makeStateAssign(stateNum: number, loc: SourceLocation): Node {
+export function makeStateAssign(stateNum: number, loc: SourceLocation): Node {
 	return makeExprStmt(
 		makeAssign(makeIdent("$state", loc), makeNumber(stateNum, loc), loc),
 		loc,
 	);
 }
 
-function allocState(sc: StateCollector): number {
+export function allocState(sc: StateCollector): number {
 	const idx = sc.items.length;
 	const st: GenState = { index: idx, isYield: false, nextState: -1, stmts: [] };
 	sc.items.push(st);
@@ -88,7 +88,7 @@ function isGeneratorFlag(flags: string): boolean {
 
 // ===== Yield Detection =====
 
-function containsYield(node: Node): boolean {
+export function containsYield(node: Node): boolean {
 	return match (node.kind) {
 		NodeKind.YieldExpr => true,
 		// Stop at nested function boundaries
@@ -136,7 +136,7 @@ function containsYield(node: Node): boolean {
 // ===== State Splitting =====
 // Split a linear sequence of statements at yield points.
 
-function splitStmts(stmts: Node[], sc: StateCollector, startState: number, exitState: number, loc: SourceLocation): void {
+export function splitStmts(stmts: Node[], sc: StateCollector, startState: number, exitState: number, loc: SourceLocation): void {
 	let currentState = startState;
 	let i = 0;
 	while (i < stmts.length) {
@@ -316,7 +316,7 @@ function rewriteReturns(stmts: Node[], loc: SourceLocation): void {
 // Convert lifted variable declarations to assignments in state bodies.
 // Variables are hoisted to function scope, so decls become assignments.
 
-function convertDeclsToAssigns(stmts: Node[], liftedNames: NameSet, loc: SourceLocation): void {
+export function convertDeclsToAssigns(stmts: Node[], liftedNames: NameSet, loc: SourceLocation): void {
 	for (let i = 0; i < stmts.length; i += 1) {
 		const stmt = stmts[i];
 		if (stmt.kind === NodeKind.VariableDecl) {
@@ -355,7 +355,7 @@ function buildStateDispatch(sc: StateCollector, loc: SourceLocation): Node {
 
 function transformGeneratorFn(params: string[], paramTypes: string[], body: Node, flags: string, returnType: string, loc: SourceLocation): Node {
 	// 1. Collect all local variable names
-	const nc: NameSet = [];
+	const nc: NameSet = createNameSet();
 	collectDeclNames(body, nc, false);
 
 	// 2. Extract body statements
@@ -403,7 +403,7 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	//   return { next: function() { while(true) { if-else dispatch } } };
 	const newBodyStmts: Node[] = [];
 	newBodyStmts.push(makeVarDecl("$state", makeNumber(0, loc), DeclKind.Let, loc));
-	for (const localName of nc) {
+	for (const localName of nc.items) {
 		newBodyStmts.push(makeVarDecl(localName, makeNull(loc), DeclKind.Let, loc));
 	}
 	newBodyStmts.push(makeReturn(iterObj, loc));
