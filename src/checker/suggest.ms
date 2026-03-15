@@ -309,13 +309,13 @@ export function sgTypeToString(t: Type): string {
 
 // Find substring in string. Returns index or -1.
 function sgFindSubstring(haystack: string, needle: string): number {
-	if (needle.length === 0) return 0;
-	if (needle.length > haystack.length) return -1;
-	const limit = haystack.length - needle.length;
+	if (needle.byteLength === 0) return 0;
+	if (needle.byteLength > haystack.byteLength) return -1;
+	const limit = haystack.byteLength - needle.byteLength;
 	for (let i = 0; i <= limit; i = i + 1) {
 		let match = true;
-		for (let j = 0; j < needle.length; j = j + 1) {
-			if (haystack.charAt(i + j) !== needle.charAt(j)) {
+		for (let j = 0; j < needle.byteLength; j = j + 1) {
+			if (haystack.byteAt(i + j) !== needle.byteAt(j)) {
 				match = false;
 				break;
 			}
@@ -546,7 +546,7 @@ function sgExtractLine(source: string, line: number): string {
 	const start = sgGetLineOffset(source, line);
 	if (start >= source.byteLength) return "";
 	let end = start;
-	while (end < source.byteLength && source.charAt(end) !== "\n") {
+	while (end < source.byteLength && source.byteAt(end) !== "\n".code) {
 		end = end + 1;
 	}
 	return source.slice(start, end);
@@ -555,13 +555,13 @@ function sgExtractLine(source: string, line: number): string {
 // Strip leading whitespace from a string.
 function sgTrimLeft(s: string): string {
 	let i = 0;
-	while (i < s.length) {
-		const ch = s.charAt(i);
-		if (ch !== " " && ch !== "\t") break;
+	while (i < s.byteLength) {
+		const ch = s.byteAt(i);
+		if (ch !== " ".code && ch !== "\t".code) break;
 		i = i + 1;
 	}
 	if (i === 0) return s;
-	return s.slice(i, s.length);
+	return s.slice(i, s.byteLength);
 }
 
 // Extract /** JSDoc */ doc comment above a declaration at the given line (1-indexed).
@@ -615,10 +615,10 @@ function sgExtractJsDocBlock(source: string, endLine: number): string {
 		const raw = sgTrimLeft(sgExtractLine(source, ln));
 		let content = raw;
 		// Strip leading * (with optional space)
-		if (content.length > 0 && content.charAt(0) === "*") {
-			content = content.slice(1, content.length);
-			if (content.length > 0 && content.charAt(0) === " ") {
-				content = content.slice(1, content.length);
+		if (content.byteLength > 0 && content.byteAt(0) === "*".code) {
+			content = content.slice(1, content.byteLength);
+			if (content.byteLength > 0 && content.byteAt(0) === " ".code) {
+				content = content.slice(1, content.byteLength);
 			}
 		}
 		lines.push(sgTrimRight(content));
@@ -631,14 +631,14 @@ function sgExtractJsDocBlock(source: string, endLine: number): string {
 	const closeIdx2 = sgFindSubstring(lastContent, "*/");
 	if (closeIdx2 >= 0) lastContent = lastContent.slice(0, closeIdx2);
 	lastContent = sgTrimLeft(lastContent);
-	if (lastContent.length > 0 && lastContent.charAt(0) === "*") {
-		lastContent = lastContent.slice(1, lastContent.length);
-		if (lastContent.length > 0 && lastContent.charAt(0) === " ") {
-			lastContent = lastContent.slice(1, lastContent.length);
+	if (lastContent.byteLength > 0 && lastContent.byteAt(0) === "*".code) {
+		lastContent = lastContent.slice(1, lastContent.byteLength);
+		if (lastContent.byteLength > 0 && lastContent.byteAt(0) === " ".code) {
+			lastContent = lastContent.slice(1, lastContent.byteLength);
 		}
 	}
 	lastContent = sgTrimRight(lastContent);
-	if (lastContent.length > 0) lines.push(lastContent);
+	if (lastContent.byteLength > 0) lines.push(lastContent);
 	// Join lines
 	let result = "";
 	let i = 0;
@@ -652,10 +652,10 @@ function sgExtractJsDocBlock(source: string, endLine: number): string {
 
 // Trim trailing whitespace
 function sgTrimRight(s: string): string {
-	let i = s.length - 1;
+	let i = s.byteLength - 1;
 	while (i >= 0) {
-		const ch = s.charAt(i);
-		if (ch !== " " && ch !== "\t" && ch !== "\r") break;
+		const ch = s.byteAt(i);
+		if (ch !== " ".code && ch !== "\t".code && ch !== "\r".code) break;
 		i = i - 1;
 	}
 	return s.slice(0, i + 1);
@@ -766,11 +766,16 @@ export function sgCollectDiagnostics(ctx: CheckerContext): SgDiagnostic[] {
 // ===== Completion Helpers =====
 
 export function sgIsIdentChar(ch: string): boolean {
-	if (ch === "_") return true;
-	const identChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-	for (let i = 0; i < identChars.byteLength; i = i + 1) {
-		if (identChars.charAt(i) === ch) return true;
-	}
+	if (ch.byteLength === 0) return false;
+	const c = ch.byteAt(0);
+	return sgIsIdentByte(c);
+}
+
+function sgIsIdentByte(c: number): boolean {
+	if (c === "_".code) return true;
+	if (c >= "a".code && c <= "z".code) return true;
+	if (c >= "A".code && c <= "Z".code) return true;
+	if (c >= "0".code && c <= "9".code) return true;
 	return false;
 }
 
@@ -779,7 +784,7 @@ export function sgGetLineOffset(source: string, line: number): number {
 	let offset = 0;
 	let currentLine = 1;
 	while (offset < source.byteLength && currentLine < line) {
-		if (source.charAt(offset) === "\n") {
+		if (source.byteAt(offset) === "\n".code) {
 			currentLine = currentLine + 1;
 		}
 		offset = offset + 1;
@@ -791,7 +796,7 @@ export function sgGetLineOffset(source: string, line: number): number {
 function sgGetLineText(source: string, line: number): string {
 	const lineOffset = sgGetLineOffset(source, line);
 	let lineEnd = lineOffset;
-	while (lineEnd < source.length && source.charAt(lineEnd) !== "\n") {
+	while (lineEnd < source.byteLength && source.byteAt(lineEnd) !== "\n".code) {
 		lineEnd = lineEnd + 1;
 	}
 	return source.slice(lineOffset, lineEnd);
@@ -810,40 +815,41 @@ function sgIsTypeKind(kind: SymbolKind): boolean {
 
 // ===== Completion Ranking =====
 
-function sgToLower(ch: string): string {
-	return match (ch) {
-		"A" => "a", "B" => "b", "C" => "c", "D" => "d", "E" => "e",
-		"F" => "f", "G" => "g", "H" => "h", "I" => "i", "J" => "j",
-		"K" => "k", "L" => "l", "M" => "m", "N" => "n", "O" => "o",
-		"P" => "p", "Q" => "q", "R" => "r", "S" => "s", "T" => "t",
-		"U" => "u", "V" => "v", "W" => "w", "X" => "x", "Y" => "y",
-		"Z" => "z",
-		_ => ch,
-	};
+function sgToLowerByte(c: number): number {
+	if (c >= "A".code && c <= "Z".code) return c + 32;
+	return c;
 }
 
-function sgCaseEqual(a: string, b: string): boolean {
-	return sgToLower(a) === sgToLower(b);
+function sgCaseEqualByte(a: number, b: number): boolean {
+	return sgToLowerByte(a) === sgToLowerByte(b);
+}
+
+function sgCaseEqualStr(a: string, b: string): boolean {
+	if (a.byteLength !== b.byteLength) return false;
+	for (let i = 0; i < a.byteLength; i = i + 1) {
+		if (!sgCaseEqualByte(a.byteAt(i), b.byteAt(i))) return false;
+	}
+	return true;
 }
 
 // Returns 0=None, 1=Substr, 2=Prefix
 function sgPrefixMatch(prefix: string, name: string): number {
-	if (prefix.length === 0) return 2;
-	if (prefix.length > name.length) return 0;
+	if (prefix.byteLength === 0) return 2;
+	if (prefix.byteLength > name.byteLength) return 0;
 	// Check prefix match (case-insensitive)
 	let isPrefix = true;
-	for (let k = 0; k < prefix.length; k = k + 1) {
-		if (!sgCaseEqual(prefix.charAt(k), name.charAt(k))) {
+	for (let k = 0; k < prefix.byteLength; k = k + 1) {
+		if (!sgCaseEqualByte(prefix.byteAt(k), name.byteAt(k))) {
 			isPrefix = false;
 			break;
 		}
 	}
 	if (isPrefix) return 2;
 	// Check substring match (case-insensitive)
-	for (let start = 1; start + prefix.length <= name.length; start = start + 1) {
+	for (let start = 1; start + prefix.byteLength <= name.byteLength; start = start + 1) {
 		let matched = true;
-		for (let m = 0; m < prefix.length; m = m + 1) {
-			if (!sgCaseEqual(prefix.charAt(m), name.charAt(start + m))) {
+		for (let m = 0; m < prefix.byteLength; m = m + 1) {
+			if (!sgCaseEqualByte(prefix.byteAt(m), name.byteAt(start + m))) {
 				matched = false;
 				break;
 			}
@@ -1310,8 +1316,8 @@ export function sgExtractImportPath(source: string, line: number, col: number): 
 	if (fromIdx < 0) fromIdx = sgFindPattern(lineText, "import ");
 	if (fromIdx < 0) return "";
 	let qi = fromIdx;
-	while (qi < lineText.length && lineText.charAt(qi) !== "\"") qi = qi + 1;
-	if (qi >= lineText.length) return "";
+	while (qi < lineText.byteLength && lineText.byteAt(qi) !== "\"".code) qi = qi + 1;
+	if (qi >= lineText.byteLength) return "";
 	const openQuote = qi;
 	const cursorCol0 = col - 1;
 	if (cursorCol0 <= openQuote) return "";
@@ -1345,15 +1351,15 @@ export function sgExtractExistingImportNames(program: Node, line: number, col: n
 
 // Simple substring search (no indexOf on strings in MetaScript).
 function sgFindPattern(text: string, pattern: string): number {
-	if (pattern.length > text.length) return -1;
+	if (pattern.byteLength > text.byteLength) return -1;
 	let i = 0;
-	while (i <= text.length - pattern.length) {
+	while (i <= text.byteLength - pattern.byteLength) {
 		let match = true;
 		let j = 0;
-		while (j < pattern.length) {
-			if (text.charAt(i + j) !== pattern.charAt(j)) {
+		while (j < pattern.byteLength) {
+			if (text.byteAt(i + j) !== pattern.byteAt(j)) {
 				match = false;
-				j = pattern.length; // break
+				j = pattern.byteLength; // break
 			}
 			j = j + 1;
 		}
@@ -1435,7 +1441,7 @@ export function sgGetPrefix(source: string, line: number, col: number): string {
 	const lineOffset = sgGetLineOffset(source, line);
 	const cursorOffset = lineOffset + col;
 	let start = cursorOffset;
-	while (start > 0 && sgIsIdentChar(source.charAt(start - 1))) {
+	while (start > 0 && sgIsIdentByte(source.byteAt(start - 1))) {
 		start = start - 1;
 	}
 	if (start >= cursorOffset) return "";
@@ -1768,22 +1774,22 @@ function sgGetCalleeAtCursor(source: string, line: number, col: number): string 
 
 	// Find the matching unclosed '('
 	while (pos >= 0) {
-		const ch = source.charAt(pos);
-		if (ch === ")") { depth = depth + 1; }
-		if (ch === "(") {
+		const ch = source.byteAt(pos);
+		if (ch === ")".code) { depth = depth + 1; }
+		if (ch === "(".code) {
 			if (depth === 0) {
 				// Found the open paren. Now extract the identifier before it.
 				let end = pos;
 				pos = pos - 1;
 				// Skip whitespace
 				while (pos >= 0) {
-					const ws = source.charAt(pos);
-					if (ws !== " " && ws !== "\t") {
+					const ws = source.byteAt(pos);
+					if (ws !== " ".code && ws !== "\t".code) {
 						let identEnd = pos + 1;
 						// Scan backwards through identifier chars
 						while (pos >= 0) {
-							const ic = source.charAt(pos);
-							if (sgIsIdentChar(ic)) {
+							const ic = source.byteAt(pos);
+							if (sgIsIdentByte(ic)) {
 								pos = pos - 1;
 							} else {
 								return source.slice(pos + 1, identEnd);
@@ -1813,24 +1819,24 @@ function sgGetReceiverAtCursor(source: string, line: number, col: number): strin
 	let depth = 0;
 	// Find matching unclosed '('
 	while (pos >= 0) {
-		const ch = source.charAt(pos);
-		if (ch === ")") { depth = depth + 1; }
-		if (ch === "(") {
+		const ch = source.byteAt(pos);
+		if (ch === ")".code) { depth = depth + 1; }
+		if (ch === "(".code) {
 			if (depth === 0) {
 				// Skip backwards past callee identifier
 				pos = pos - 1;
-				while (pos >= 0 && (source.charAt(pos) === " " || source.charAt(pos) === "\t")) {
+				while (pos >= 0 && (source.byteAt(pos) === " ".code || source.byteAt(pos) === "\t".code)) {
 					pos = pos - 1;
 				}
-				while (pos >= 0 && sgIsIdentChar(source.charAt(pos))) {
+				while (pos >= 0 && sgIsIdentByte(source.byteAt(pos))) {
 					pos = pos - 1;
 				}
 				// Check for dot
-				if (pos >= 0 && source.charAt(pos) === ".") {
+				if (pos >= 0 && source.byteAt(pos) === ".".code) {
 					pos = pos - 1;
 					// Extract receiver identifier
 					const recEnd = pos + 1;
-					while (pos >= 0 && sgIsIdentChar(source.charAt(pos))) {
+					while (pos >= 0 && sgIsIdentByte(source.byteAt(pos))) {
 						pos = pos - 1;
 					}
 					return source.slice(pos + 1, recEnd);
@@ -1853,13 +1859,13 @@ function sgCountActiveParam(source: string, line: number, col: number): number {
 	let depth = 0;
 	let commas = 0;
 	while (pos >= 0) {
-		const ch = source.charAt(pos);
-		if (ch === ")") { depth = depth + 1; }
-		if (ch === "(") {
+		const ch = source.byteAt(pos);
+		if (ch === ")".code) { depth = depth + 1; }
+		if (ch === "(".code) {
 			if (depth === 0) return commas;
 			depth = depth - 1;
 		}
-		if (ch === "," && depth === 0) { commas = commas + 1; }
+		if (ch === ",".code && depth === 0) { commas = commas + 1; }
 		pos = pos - 1;
 	}
 	return commas;
@@ -1960,7 +1966,7 @@ function sgCollectVarTypeHint(
 
 	const typeStr = sgTypeToString(sym.symbolType);
 	// Skip hint when variable name matches type name (e.g. const token: Token)
-	if (sgCaseEqual(vd.declName, typeStr)) return;
+	if (sgCaseEqualStr(vd.declName, typeStr)) return;
 	const hint: SgInlayHint = {
 		label: ": " + typeStr,
 		line: node.location.line,
