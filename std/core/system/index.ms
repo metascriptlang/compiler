@@ -12,6 +12,10 @@ export class console {
 }
 
 export class Result<T, E> {
+	ok: boolean;
+	value: T;
+	error: E;
+
 	/** Creates a successful Result wrapping the given value. */
 	static extern ok(val: T): Result<T, E>;
 	/** Creates an error Result wrapping the given error. */

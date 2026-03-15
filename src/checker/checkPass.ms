@@ -18,16 +18,17 @@ import {
 	Type, TypeKind,
 	unknownType, nullType, stringType, charType, numberType, voidType,
 	createFunction, createUnion, isMaybeType, unwrapMaybeType,
-	isNarrowingIntConv, typeNameOf, isPromiseResult,
+	isNarrowingIntConv, typeNameOf, isPromise, getPromiseInner,
 } from "./types";
 import {
 	Symbol, SymbolKind, SymbolState, ScopeKind,
 	defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope,
 	setFlag, hasFlag, SymbolFlag,
 } from "./symbol";
-import { CheckerContext, CancelCtx, createContext, createModuleContext, addError, addFatalError, hasErrors, hasFatalErrors, errorCount, createExtensionRegistry, registerExtension, ExtensionMethod, ExportRegistry, isCancelled, sgRecordSym, sgSortRecords } from "./context";
+import { CheckerContext, CancelCtx, createContext, createModuleContext, addError, addFatalError, addWarning, hasErrors, hasFatalErrors, errorCount, createExtensionRegistry, registerExtension, ExtensionMethod, ExportRegistry, isCancelled, sgRecordSym, sgSortRecords, isInAsyncPromiseResult } from "./context";
 import { Module, ModuleGraph } from "../module/graph";
 import { collectTopLevel, defineOrError } from "./collectPass";
+import { getIdentId } from "./idents";
 import { readFile } from "std/process";
 import { globalImports } from "./prelude";
 import { isAssignable } from "./compat";
@@ -80,16 +81,17 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 		NodeKind.ExprStmt => {
 			const d = node.data as ExprStmtData;
 			checkExpr(ctx, d.expr, null);
+			// Warn: spawn result not awaited — borrowed captures may dangle
+			if (d.expr.kind === NodeKind.CallExpr && d.expr.resolvedSym !== null
+				&& d.expr.resolvedSym.builtinKind === "PromiseSpawn") {
+				addWarning(ctx, "spawn result not awaited — borrowed captures may outlive scope", d.expr.location.line, d.expr.location.column);
+			}
 		},
 		NodeKind.ThrowStmt => {
 			const d = node.data as ThrowStmtData;
 			checkExpr(ctx, d.throwArg, null);
 			// V1: throw forbidden in async functions returning Promise<Result<T,E>>
-			if (ctx.currentFunction !== null
-				&& hasFlag(ctx.currentFunction, SymbolFlag.Async)
-				&& ctx.currentFunction.symbolType !== null
-				&& ctx.currentFunction.symbolType.kind === TypeKind.Function
-				&& isPromiseResult(ctx.currentFunction.symbolType.typeReturn)) {
+			if (isInAsyncPromiseResult(ctx)) {
 				addError(ctx, "throw is forbidden in async function returning Promise<Result<T,E>> — use Result.err() instead", node.location.line, node.location.column);
 			}
 		},
@@ -781,9 +783,9 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 		// Async functions: declared return is Promise<T>, actual return is T — unwrap for comparison.
 		// Only unwrap for async functions (flagged via SymbolFlag) to avoid false accept on non-async Promise returns.
 		let declaredReturn = ctx.currentFunction.symbolType.typeReturn;
-		if (declaredReturn.kind === TypeKind.Promise && declaredReturn.typeReturn !== null
+		if (isPromise(declaredReturn) && getPromiseInner(declaredReturn) !== null
 			&& hasFlag(ctx.currentFunction, SymbolFlag.Async)) {
-			declaredReturn = declaredReturn.typeReturn;
+			declaredReturn = getPromiseInner(declaredReturn);
 		}
 		if (!isAssignable(retType, declaredReturn)) {
 			const got = formatTypeBrief(retType);
@@ -1130,6 +1132,12 @@ export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): 
 	while (si < preludeSyms.length) {
 		const sym = preludeSyms[si];
 		if (hasFlag(sym, SymbolFlag.Exported)) {
+			// Re-intern nameId in the user context's ident cache.
+			// Prelude symbols have nameIds from the prelude's cache — these are meaningless
+			// in the user's cache which assigns IDs independently. Without re-interning,
+			// lookupSymbol("main") could match a prelude symbol whose nameId happens to
+			// equal the user cache's ID for "main" (both caches count from 1).
+			sym.nameId = getIdentId(ctx.table.identCache, sym.name);
 			ctx.table.current.symbols.push(sym);
 		}
 		si = si + 1;
@@ -1191,6 +1199,12 @@ function checkProgramCore(
 		const consoleGlobal = makeSymbol("console", SymbolKind.Variable, consoleClass.symbolType, false);
 		defineSymbol(ctx.table, consoleGlobal);
 		consoleGlobal.state = SymbolState.Shaped;
+	}
+	const promiseClass = lookupSymbol(ctx.table, "Promise");
+	if (promiseClass !== null) {
+		const promiseGlobal = makeSymbol("Promise", SymbolKind.Variable, promiseClass.symbolType, false);
+		defineSymbol(ctx.table, promiseGlobal);
+		promiseGlobal.state = SymbolState.Shaped;
 	}
 	defineBuiltinConstants(ctx);
 	openScope(ctx.table, ScopeKind.Module);

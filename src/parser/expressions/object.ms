@@ -6,7 +6,7 @@ import { Node, NodeKind, NodeData, Expression, createNode, ObjectLiteralData, So
 import { ParserState, createState, current, advance, isAtEnd } from "../context";
 import { lex } from "../../lexer/lexer";
 import { parseOk, mockExpr } from "./util";
-import { isIdentLike } from "../util";
+import { isIdentLike, isPropertyName } from "../util";
 
 
 type ExprResult = Result<Expression, string>;
@@ -64,7 +64,7 @@ export function parseObjectLiteral(state: ParserState, exprParser: ExprParser): 
 		}
 
 		const keyToken = current(state);
-		if (!isIdentLike(keyToken)) {
+		if (!isPropertyName(keyToken)) {
 			return Result.err(`Expected property name at line ${keyToken.line}`);
 		}
 		advance(state);

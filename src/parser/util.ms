@@ -72,6 +72,15 @@ export function isIdentLike(token: Token): boolean {
 	return (k as number) >= (TokenKind.Abstract as number) && k !== TokenKind.Comment && k !== TokenKind.Eof;
 }
 
+// Property/method name position — allows ALL keywords (TypeScript parity).
+// In TypeScript: promise.catch(), map.delete(), set.has() are all valid.
+export function isPropertyName(token: Token): boolean {
+	const k = token.kind;
+	if (k === TokenKind.Ident) return true;
+	// Any keyword can be a property/method name
+	return (k as number) >= (TokenKind.Break as number) && k !== TokenKind.Comment && k !== TokenKind.Eof;
+}
+
 // ===== Initializer/Default Value Skip =====
 // Skips an expression value (consumed but not stored, Phase 1)
 // Tracks balanced parens, brackets, braces; stops at comma, semicolon, or unbalanced closer

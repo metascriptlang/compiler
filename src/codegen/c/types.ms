@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { Type, TypeKind, isInterfaceType, getTypeSize, skipModifier } from "../../checker/types";
+import { Type, TypeKind, isInterfaceType, getTypeSize, skipModifier, isPromise } from "../../checker/types";
 import { Node, NodeKind, CallExprData } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
 import { CGen, CSection, Builder, TypeCache, add, addLine, addNewline, extract, sec, createBuilder, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas } from "./context";
@@ -60,7 +60,6 @@ function anonFieldKey(t: Type): string {
 		TypeKind.Array => "arr:" + anonFieldKey(t.typeReturn),
 		TypeKind.Function => "fn",
 		TypeKind.Result => "result",
-		TypeKind.Promise => "promise",
 		TypeKind.Ref | TypeKind.Ptr => "ptr:" + anonFieldKey(t.typeReturn),
 		TypeKind.TypeReference => "ref:" + t.typeName,
 		_ => {
@@ -268,7 +267,6 @@ export function typeKey(t: Type): string {
 		TypeKind.Result => {
 			return `result:${typeKey(t.typeReturn)},${typeKey(t.typeExtra)}`;
 		},
-		TypeKind.Promise => "promise:" + typeKey(t.typeReturn),
 		TypeKind.TypeReference => { return "typeref:" + t.typeName; },
 		TypeKind.Distinct => { return "distinct:" + t.typeName; },
 		TypeKind.Union => {
@@ -333,7 +331,7 @@ export function isPointerType(t: Type): boolean {
 	const inner = skipModifier(t);
 	if (inner === null) return false;
 	return match (inner.kind) {
-		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow | TypeKind.Promise => true,
+		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow => true,
 		_ => false,
 	};
 }
@@ -379,7 +377,6 @@ export function needsRC(t: Type): boolean {
 		TypeKind.SizedArray => needsRC(t.typeReturn), // Recurse for nested RC
 		TypeKind.Span => false, // Span is non-owning
 		TypeKind.Ref => true,
-		TypeKind.Promise => true, // msFuture* needs msFutureDestroy
 		TypeKind.Map | TypeKind.Set => true,
 		TypeKind.Tuple => {
 			let i = 0;
@@ -574,7 +571,7 @@ export function getTypeDesc(g: CGen, t: Type): string {
 		return ptrType;
 	}
 	if (k === TypeKind.Result) return genResultType(g, t);
-	if (k === TypeKind.Promise) {
+	if (isPromise(t)) {
 		typeCacheSet(g.typeCache, key, "msFuture*");
 		return "msFuture*";
 	}

@@ -8,6 +8,7 @@ import {
 	findExtensionByName, findExtensionByType, registerExtension,
 } from "./context";
 import { SymbolKind, ScopeKind, openScope, hasFlag, SymbolFlag } from "./symbol";
+import { getIdentId } from "./idents";
 import { Module, ModuleGraph, findModule, createModuleError, ErrorSeverity } from "../module/graph";
 import { preprocessHeaders } from "../module/aro";
 import { runThreePasses, buildPreludeContext, collectDirectives, stampHeaderPaths, injectPrelude } from "./checkPass";
@@ -75,6 +76,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 		while (bsi < baseSyms.length) {
 			const sym = baseSyms[bsi];
 			if (hasFlag(sym, SymbolFlag.Exported)) {
+				sym.nameId = getIdentId(p1ctx.table.identCache, sym.name);
 				p1ctx.table.current.symbols.push(sym);
 			}
 			bsi = bsi + 1;

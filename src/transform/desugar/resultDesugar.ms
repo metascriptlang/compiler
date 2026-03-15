@@ -25,7 +25,7 @@ import {
 	CallExprData, MemberExprData, IdentifierData, HiddenDerefData,
 	IfStmtData,
 } from "../../ast/node";
-import { Type, TypeKind, booleanType, getProperty } from "../../checker/types";
+import { Type, TypeKind, booleanType, unknownType } from "../../checker/types";
 import { makeSymbol, lookupSymbol } from "../../checker/symbol";
 import { TransformContext, freshTemp } from "../context";
 import { walkNode, walkExpandBlocksHooked, containsExprKind, replaceInExpr } from "../walker";
@@ -39,16 +39,17 @@ import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 // ===== Helpers: Typed Result Access =====
 
 // Create a member access on a Result variable with resolvedSym for the property.
-// Uses getProperty(resType, propName) internally — single source of truth for type derivation.
+// Derives type from Result's typeReturn (T) and typeExtra (E) directly.
 function makeResultMember(tempName: string, resType: Type, propName: string, loc: SourceLocation): Node {
 	const ref = makeIdent(tempName, loc);
 	const mem = makeMember(ref, propName, loc);
 
-	// Context-aware: derive type from Result type structure
-	if (resType !== null) {
-		const propType = getProperty(resType, propName);
+	if (resType !== null && resType.kind === TypeKind.Result) {
+		let propType: Type = unknownType();
+		if (propName === "ok") { propType = booleanType(); }
+		else if (propName === "value") { propType = resType.typeReturn !== null ? resType.typeReturn : unknownType(); }
+		else if (propName === "error") { propType = resType.typeExtra !== null ? resType.typeExtra : unknownType(); }
 		mem.nodeType = propType;
-		// Synthetic property symbol (mirrors checkExprPass.ms line 703-707)
 		const propSym = makeSymbol(propName, SymbolKind.Property, propType, false);
 		propSym.state = SymbolState.Shaped;
 		mem.resolvedSym = propSym;

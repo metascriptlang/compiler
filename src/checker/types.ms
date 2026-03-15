@@ -271,6 +271,7 @@ export function createEnum(name: string, members: string[], values: number[]): T
 export function createResult(okType: Type, errType: Type): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Result;
+	t.typeName = "Result";
 	t.typeReturn = okType;
 	t.typeExtra = errType;
 	propagateHasAsgn(t, okType);
@@ -281,13 +282,23 @@ export function createResult(okType: Type, errType: Type): Type {
 export function createPromise(innerType: Type): Type {
 	const t = emptyType();
 	t.kind = TypeKind.Promise;
+	t.typeName = "Promise";
 	t.typeReturn = innerType;
 	return t;
 }
 
-export function isPromiseResult(t: Type): boolean {
+export function isPromise(t: Type): boolean {
 	if (t === null) return false;
-	if (t.kind !== TypeKind.Promise) return false;
+	return t.kind === TypeKind.Promise;
+}
+
+export function getPromiseInner(t: Type): Type {
+	if (t === null) return null;
+	return t.typeReturn;
+}
+
+export function isPromiseResult(t: Type): boolean {
+	if (!isPromise(t)) return false;
 	return t.typeReturn !== null && t.typeReturn.kind === TypeKind.Result;
 }
 
@@ -1054,31 +1065,6 @@ export function getProperty(t: Type, name: string): Type {
 		if (foundType !== null && !ambiguous) return foundType;
 		// Ambiguous fields (same name, different types across variants) require `as` cast
 		if (foundType !== null) return foundType; // return first match — runtime guard needed
-	}
-	// Result fields: ok (boolean), value (T), error (E)
-	if (t.kind === TypeKind.Result) {
-		if (name === "ok") return booleanType();
-		if (name === "value") return t.typeReturn !== null ? t.typeReturn : unknownType();
-		if (name === "error") return t.typeExtra !== null ? t.typeExtra : unknownType();
-	}
-	// Promise fields + methods
-	if (t.kind === TypeKind.Promise) {
-		if (name === "finished") return booleanType();
-		if (name === "failed") return booleanType();
-		if (name === "value") return t.typeReturn !== null ? t.typeReturn : unknownType();
-		if (name === "then") {
-			const cbParam = t.typeReturn !== null ? t.typeReturn : unknownType();
-			const cbType = createFunction([cbParam], ["value"], voidType());
-			return createFunction([cbType], ["callback"], createPromise(voidType()));
-		}
-		if (name === "catch") {
-			const cbType = createFunction([stringType()], ["error"], voidType());
-			return createFunction([cbType], ["callback"], t);
-		}
-		if (name === "finally") {
-			const cbType = createFunction([], [], voidType());
-			return createFunction([cbType], ["callback"], t);
-		}
 	}
 	// Enum member access: Color.Red → returns the Enum type
 	if (t.kind === TypeKind.Enum) {

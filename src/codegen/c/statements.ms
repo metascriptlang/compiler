@@ -476,8 +476,9 @@ function genReturnStmt(g: CGen, p: CProc, node: Node): void {
 			// G4 fix: compound literals need (StructType) cast for C99
 			// If genObjectLiteral didn't add the cast (nodeType was null), add it here
 			const needsCast = d.argument.kind === NodeKind.ObjectLiteral && snippet.length > 0 && snippet.charAt(0) !== "(";
-			if (needsCast && p.returnType !== null && p.returnType.typeName !== "") {
-				emitStmtsLine(p, `*__result = (${safeName(p.returnType.typeName)})${snippet};`);
+			if (needsCast && p.returnType !== null) {
+				const castType = getTypeDesc(g, p.returnType);
+				emitStmtsLine(p, `*__result = (${castType})${snippet};`);
 			} else {
 				emitStmtsLine(p, `*__result = ${snippet};`);
 			}

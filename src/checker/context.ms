@@ -1,6 +1,6 @@
 import { Type, TypeKind, unknownType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity, isPromiseResult } from "./types";
 import { isAssignable } from "./compat";
-import { Symbol, SymbolKind, SymbolTable, ScopeKind, createSymbolTable } from "./symbol";
+import { Symbol, SymbolKind, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag } from "./symbol";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
 import { Node, SourceLocation, makeLoc } from "../ast/node";
 import { findChar, splitTopLevel } from "../utils/string";
@@ -229,6 +229,12 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type): boolean {
 		if (recvElem.kind !== TypeKind.Unknown && objElem.kind !== TypeKind.Unknown) {
 			return isAssignable(objElem, recvElem);
 		}
+	}
+	// Name-based matching for well-known types (system module symbol lookup).
+	// Built-in TypeKinds (Promise, Result) have a different kind than their std lib class
+	// (Ref<Struct>), but share the same type name. Fall back to name comparison.
+	if (ext.receiverTypeName !== "" && ext.receiverTypeName === typeNameOf(objType)) {
+		return true;
 	}
 	return isAssignable(objType, receiverType);
 }
@@ -527,6 +533,16 @@ export function createModuleContext(graph: ModuleGraph, mod: Module): CheckerCon
 	ctx.currentModule = mod;
 	ctx.modulePath = mod.path;
 	return ctx;
+}
+
+// ===== Promise<Result<T,E>> Context Check =====
+
+export function isInAsyncPromiseResult(ctx: CheckerContext): boolean {
+	return ctx.currentFunction !== null
+		&& hasFlag(ctx.currentFunction, SymbolFlag.Async)
+		&& ctx.currentFunction.symbolType !== null
+		&& ctx.currentFunction.symbolType.kind === TypeKind.Function
+		&& isPromiseResult(ctx.currentFunction.symbolType.typeReturn);
 }
 
 // ===== Error Collection =====

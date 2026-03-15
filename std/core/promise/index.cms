@@ -1,1 +1,39 @@
-export class Promise {}
+@compile("std/core/promise/dispatch.c");
+@compile("std/core/promise/combinator.c");
+@compile("std/core/promise/pool.c");
+@compile("std/runtime/selectorKqueue.c");
+@compile("std/runtime/selectorEpoll.c");
+@compile("std/runtime/selectorPoll.c");
+
+export class Promise<T> {
+	finished: boolean;
+	failed: boolean;
+
+	// Instance methods
+	@builtin("PromiseThen")
+	extern then(callback: (value: T) => void): Promise<void> from "msFutureThen";
+
+	@builtin("PromiseCatch")
+	extern catch(callback: (error: string) => void): Promise<void> from "msFutureCatch";
+
+	@builtin("PromiseFinally")
+	extern finally(callback: () => void): Promise<void> from "msFutureFinally";
+
+	// Static combinators
+	static extern all(promises: Promise<void>[]): Promise<void> from "msPromiseAll";
+	static extern race(promises: Promise<void>[]): Promise<void> from "msPromiseRace";
+	static extern allSettled(promises: Promise<void>[]): Promise<void> from "msPromiseAllSettled";
+	static extern any(promises: Promise<void>[]): Promise<void> from "msPromiseAny";
+
+	// Static constructors
+	static extern resolve(value: T): Promise<T> from "msPromiseResolve";
+	static extern reject(error: string): Promise<void> from "msPromiseReject";
+}
+
+// Standalone async utilities
+@builtin("PromiseSpawn")
+export extern function spawn(fn: () => void): Promise<void> from "msSpawn";
+
+export extern function waitFor(fut: Promise<void>): void from "msWaitFor";
+
+export extern function sleepAsync(ms: number): Promise<void> from "msSleepAsync";

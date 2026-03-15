@@ -22,13 +22,13 @@ import {
 	typeNameOf, unwrapRef, isDiscriminatedUnion, findVariantByDiscriminant, findFieldInVariant, findUnionVariant,
 	unifyType, createUnifyBindings, hasGenericParams,
 	getMinArity, setMinArity, isNarrowingIntConv, CallingConvention, skipModifier,
-	isPromiseResult, createPromise,
+	createPromise, isPromise, getPromiseInner, createGenericParam,
 } from "./types";
 import {
 	Symbol, SymbolKind, ScopeKind, SymbolState, SymbolFlag,
 	defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag,
 } from "./symbol";
-import { CheckerContext, addError, addErrorRange, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled, isReceiverMatch, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym } from "./context";
+import { CheckerContext, addError, addErrorRange, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, isInAsyncPromiseResult } from "./context";
 import {
 	scoreCandidate, isAssignable, needsStdConv, resolveOverloadIdx,
 	findFirstMismatch, typeRelation, TypeRelation,
@@ -514,15 +514,12 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 		NodeKind.AwaitExpr => {
 			const d = node.data as AwaitExprData;
 			const argType = checkExpr(ctx, d.awaitArg, null);
-			if (argType !== null && argType.kind === TypeKind.Promise) {
-				node.nodeType = argType.typeReturn !== null ? argType.typeReturn : unknownType();
+			if (argType !== null && isPromise(argType)) {
+				const promiseInner = getPromiseInner(argType);
+				node.nodeType = promiseInner !== null ? promiseInner : unknownType();
 				// V2: in async fn returning Promise<Result<T,E>>, bare await on non-Result promise is error
 				if (!ctx.inTryExpr
-					&& ctx.currentFunction !== null
-					&& hasFlag(ctx.currentFunction, SymbolFlag.Async)
-					&& ctx.currentFunction.symbolType !== null
-					&& ctx.currentFunction.symbolType.kind === TypeKind.Function
-					&& isPromiseResult(ctx.currentFunction.symbolType.typeReturn)
+					&& isInAsyncPromiseResult(ctx)
 					&& (argType.typeReturn === null || argType.typeReturn.kind !== TypeKind.Result)) {
 					addError(ctx, "await on non-Result Promise must be guarded with 'try await ... catch ...' in function returning Promise<Result<T,E>>", node.location.line, node.location.column);
 				}
@@ -1067,6 +1064,18 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 	if (extMultiFiltered.length > 1) {
 		return resolveExtensionOverloadCall(ctx, extMultiFiltered, argTypes, extMultiObjType, extMultiMethodName, node);
 	}
+	// @builtin("PromiseSpawn"): infer Promise<T> from closure's return type
+	if (node.resolvedSym !== null && node.resolvedSym.builtinKind === "PromiseSpawn"
+		&& argTypes.length >= 1 && argTypes[0] !== null && argTypes[0].kind === TypeKind.Function) {
+		const spawnInner = argTypes[0].typeReturn !== null ? argTypes[0].typeReturn : voidType();
+		const spawnRet = createPromise(spawnInner);
+		node.nodeType = spawnRet;
+		// Spawn borrow checker: detect mutable variable captures
+		if (d.arguments.length >= 1) {
+			checkSpawnCaptures(ctx, d.arguments[0], node);
+		}
+		return spawnRet;
+	}
 	// Check argument types + infer generic return
 	// @builtin("Echo"): accept any number of args of any type (reference echo parity)
 	const isEchoBuiltin = node.resolvedSym !== null && node.resolvedSym.builtinKind === "Echo";
@@ -1554,6 +1563,11 @@ function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, d: Obje
 	return unionType;
 }
 
+function hasThisParam(sym: Symbol): boolean {
+	return sym.symbolType !== null && sym.symbolType.typeNames !== null
+		&& sym.symbolType.typeNames.length > 0 && sym.symbolType.typeNames[0] === "this";
+}
+
 function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 	const d = node.data as MemberExprData;
 	const objType = checkExpr(ctx, d.object, null);
@@ -1605,37 +1619,62 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 			resolvedObjType = resolvedObjType.typeReturn;
 		}
 	}
-	const propType = getProperty(resolvedObjType, d.property);
-	// Result fields: ok, value, error — synthetic symbol (no typeName on Result)
-	// Reference parity: field symbols share location from the base type's field declaration.
-	// Since Result is built-in (no .ms source), point to the resolved type's declaration
-	// so gd on `result.value` navigates to `Person` when value: Person.
-	if (resolvedObjType.kind === TypeKind.Result && propType.kind !== TypeKind.Unknown) {
-		const resultPropSym = makeSymbol(d.property, SymbolKind.Property, propType, false);
-		resultPropSym.state = SymbolState.Shaped;
-		// Resolve property type's declaration for location (e.g. value: Person → Person's decl)
-		const propTypeName = typeNameOf(propType);
-		if (propTypeName !== "") {
-			const typeSym = lookupSymbol(ctx.table, propTypeName);
-			if (typeSym !== null && typeSym.location !== null && typeSym.location.line > 0) {
-				resultPropSym.location = typeSym.location;
-				resultPropSym.modulePath = typeSym.modulePath;
+	// Static access detection (TypeScript parity): when the object is a class name
+	// (e.g. Result.ok()), skip instance field resolution — go to static method lookup.
+	// Allows field/method name coexistence: result.ok (field) vs Result.ok() (static method).
+	const isStaticClassAccess = d.object.resolvedSym !== null
+		&& d.object.resolvedSym.symbolKind === SymbolKind.Class;
+	let propType = isStaticClassAccess ? unknownType() : getProperty(resolvedObjType, d.property);
+	// Class-aware field delegation (system module symbol lookup):
+	// When a built-in TypeKind (Promise, Result, etc.) has a typeName but getProperty() can't
+	// find the field, look up the class symbol by name and try field resolution on its struct.
+	// For generic classes, substitute class-level generic params (T, E) with concrete types
+	// from the actual object (e.g. Result<string, number> → T=string, E=number).
+	// Skip for static class access — static methods are found via class method lookup below.
+	if (propType.kind === TypeKind.Unknown && !isStaticClassAccess && resolvedObjType.typeName !== "") {
+		const classSym = lookupSymbol(ctx.table, resolvedObjType.typeName);
+		if (classSym !== null) {
+			ensureShaped(classSym, ctx);
+			let classStruct = classSym.symbolType;
+			if (classStruct.kind === TypeKind.Ref && classStruct.typeReturn !== null) {
+				classStruct = classStruct.typeReturn;
+			}
+			if (classStruct.kind === TypeKind.Struct) {
+				propType = getProperty(classStruct, d.property);
+				// Substitute generic params: build a formal type with GenericParam placeholders,
+				// unify with the concrete object type to discover bindings, then substitute.
+				if (propType.kind !== TypeKind.Unknown && hasGenericParams(propType)) {
+					const genericStr = getGenericDecl(resolvedObjType.typeName);
+					if (genericStr !== "") {
+						const genericNames = splitTopLevel(genericStr, ",");
+						const genericParams: Type[] = [];
+						for (const gn of genericNames) {
+							genericParams.push(createGenericParam(gn.trim()));
+						}
+						let formalType: Type = null as unknown as Type;
+						if (resolvedObjType.kind === TypeKind.Promise && genericParams.length >= 1) {
+							formalType = createPromise(genericParams[0]);
+						} else if (resolvedObjType.kind === TypeKind.Result && genericParams.length >= 2) {
+							formalType = createResult(genericParams[0], genericParams[1]);
+						}
+						if (formalType !== null) {
+							const eb = createUnifyBindings();
+							unifyType(formalType, resolvedObjType, eb);
+							for (let gi = 0; gi < eb.names.length; gi += 1) {
+								propType = substituteType(propType, eb.names[gi], eb.types[gi]);
+							}
+						}
+					}
+				}
+				// Create synthetic resolvedSym for the field (needed by codegen/analyzer)
+				if (propType.kind !== TypeKind.Unknown) {
+					const fieldSym = makeSymbol(d.property, SymbolKind.Property, propType, false);
+					fieldSym.state = SymbolState.Shaped;
+					node.resolvedSym = fieldSym;
+					sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + d.property.length, fieldSym, propType, SymbolKind.Property, d.property, resolvedObjType.typeName, false);
+				}
 			}
 		}
-		node.resolvedSym = resultPropSym;
-		sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + d.property.length, resultPropSym, propType, SymbolKind.Property, d.property, "Result", false);
-		return propType;
-	}
-	// Promise methods: .then/.catch/.finally — synthetic symbols with builtinKind
-	if (resolvedObjType.kind === TypeKind.Promise && propType.kind === TypeKind.Function) {
-		const promiseMethSym = makeSymbol(d.property, SymbolKind.Method, propType, false);
-		promiseMethSym.state = SymbolState.Shaped;
-		if (d.property === "then") promiseMethSym.builtinKind = "PromiseThen";
-		else if (d.property === "catch") promiseMethSym.builtinKind = "PromiseCatch";
-		else if (d.property === "finally") promiseMethSym.builtinKind = "PromiseFinally";
-		node.resolvedSym = promiseMethSym;
-		sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + d.property.length, promiseMethSym, propType, SymbolKind.Method, d.property, "Promise", false);
-		return propType;
 	}
 	if (propType.kind !== TypeKind.Unknown) {
 		// reference parity: insert HiddenDeref AFTER field resolution succeeds
@@ -1755,10 +1794,24 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 			return methodType;
 		}
 	}
-	// Class method lookup: ClassName_methodName in symbol table (methods are standalone procs)
+	// Class method lookup: ClassName_methodName in symbol table (methods are standalone procs).
+	// Filters by static/instance: static access (SymbolKind.Class) only matches static methods,
+	// instance access only matches instance methods. Checks overloads if primary doesn't match.
 	if (resolvedObjType.typeName !== "") {
 		const classMethName = resolvedObjType.typeName + "_" + d.property;
-		const classMethSym = lookupSymbol(ctx.table, classMethName);
+		let classMethSym = lookupSymbol(ctx.table, classMethName);
+		// Filter: instance methods have "this" as first param, static methods don't.
+		// If the found symbol doesn't match the access type, check overloads for one that does.
+		if (classMethSym !== null && classMethSym.symbolKind === SymbolKind.Function) {
+			const wantInstance = !isStaticClassAccess;
+			if (hasThisParam(classMethSym) !== wantInstance) {
+				let found = false;
+				for (const ov of classMethSym.overloads) {
+					if (hasThisParam(ov) === wantInstance) { classMethSym = ov; found = true; break; }
+				}
+				if (!found) classMethSym = null as unknown as Symbol;
+			}
+		}
 		if (classMethSym !== null && classMethSym.symbolKind === SymbolKind.Function) {
 			ensureShaped(classMethSym, ctx);
 			node.resolvedSym = classMethSym;
@@ -1772,15 +1825,31 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 			// Strip receiver param (index 0) for instance methods only — static methods have no "this"
 			const methType = classMethSym.symbolType;
 			if (methType.kind === TypeKind.Function && methType.typeChildren.length > 0 && methType.typeNames.length > 0 && methType.typeNames[0] === "this") {
-				const callParams: Type[] = [];
+				// Generic class method substitution: unify receiver (e.g. Promise<T>) with
+				// actual object type (e.g. Promise<string>) to discover T → string,
+				// then substitute in parameter/return types.
+				const receiverType = methType.typeChildren[0];
+				const eb = createUnifyBindings();
+				if (hasGenericParams(receiverType)) {
+					unifyType(receiverType, objType, eb);
+				}
+				let callParams: Type[] = [];
 				const callNames: string[] = [];
 				for (let ci = 1; ci < methType.typeChildren.length; ci += 1) {
-					callParams.push(methType.typeChildren[ci]);
+					let paramType = methType.typeChildren[ci];
+					for (let gi = 0; gi < eb.names.length; gi += 1) {
+						paramType = substituteType(paramType, eb.names[gi], eb.types[gi]);
+					}
+					callParams.push(paramType);
 				}
 				for (let ci = 1; ci < methType.typeNames.length; ci += 1) {
 					callNames.push(methType.typeNames[ci]);
 				}
-				return createFunction(callParams, callNames, methType.typeReturn);
+				let retType = methType.typeReturn;
+				for (let gi = 0; gi < eb.names.length; gi += 1) {
+					retType = substituteType(retType, eb.names[gi], eb.types[gi]);
+				}
+				return createFunction(callParams, callNames, retType);
 			}
 			return methType;
 		}
@@ -1790,13 +1859,18 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 		let allByName = findAllExtensionsByName(ctx.extensionRegistry, d.property);
 		let ext = findFirstMatchingExt(allByName, objType);
 		// Static extension fallback: match 'typeof Type'
-		if (ext === null && objType.typeName !== "") {
-			const staticType = createTypeRef("typeof " + objType.typeName);
+		const objName = objType.typeName !== "" ? objType.typeName : typeNameOf(objType);
+		if (ext === null && objName !== "") {
+			const staticType = createTypeRef("typeof " + objName);
 			ext = findFirstMatchingExt(allByName, staticType);
-			// Also try mangled name (className_methodName) for class static methods
+			// Also try mangled name (className_methodName) for class static/instance methods
 			if (ext === null) {
-				const mangledByName = findAllExtensionsByName(ctx.extensionRegistry, objType.typeName + "_" + d.property);
-				ext = findFirstMatchingExt(mangledByName, staticType);
+				const mangledByName = findAllExtensionsByName(ctx.extensionRegistry, objName + "_" + d.property);
+				ext = findFirstMatchingExt(mangledByName, objType);
+				// Static fallback on mangled
+				if (ext === null) {
+					ext = findFirstMatchingExt(mangledByName, staticType);
+				}
 			}
 		}
 		if (ext !== null) {
@@ -2097,6 +2171,74 @@ function processEmitInterpolation(ctx: CheckerContext, md: MacroInvocationData, 
 	}
 	// Replace macroArgs with the interpolated args
 	md.macroArgs = newArgs;
+}
+
+// ===== Spawn Borrow Checker =====
+// Detects mutable variable captures in spawn closures — borrowed captures may dangle.
+
+function walkForMutableCaptures(node: Node, params: string[], reported: string[], ctx: CheckerContext): void {
+	if (node === null) return;
+	if (node.kind === NodeKind.FunctionDecl || node.kind === NodeKind.FunctionExpr || node.kind === NodeKind.ArrowFunction) return;
+	match (node.kind) {
+		NodeKind.Identifier => {
+			const d = node.data as IdentifierData;
+			let skip = false;
+			for (const p of params) { if (p === d.name) skip = true; }
+			for (const r of reported) { if (r === d.name) skip = true; }
+			if (!skip) {
+				const sym = lookupSymbol(ctx.table, d.name);
+				if (sym !== null && hasFlag(sym, SymbolFlag.Mutable)) {
+					addError(ctx, "mutable variable '" + d.name + "' cannot be captured by spawn — use const or move", node.location.line, node.location.column);
+					reported.push(d.name);
+				}
+			}
+		},
+		NodeKind.BlockStmt => {
+			for (const stmt of (node.data as BlockStmtData).statements) {
+				walkForMutableCaptures(stmt, params, reported, ctx);
+			}
+		},
+		NodeKind.ExprStmt => { walkForMutableCaptures((node.data as ExprStmtData).expr, params, reported, ctx); },
+		NodeKind.ReturnStmt => { walkForMutableCaptures((node.data as ReturnStmtData).argument, params, reported, ctx); },
+		NodeKind.BinaryExpr => {
+			const d = node.data as BinaryExprData;
+			walkForMutableCaptures(d.left, params, reported, ctx);
+			walkForMutableCaptures(d.right, params, reported, ctx);
+		},
+		NodeKind.CallExpr => {
+			const d = node.data as CallExprData;
+			walkForMutableCaptures(d.callee, params, reported, ctx);
+			for (const arg of d.arguments) { walkForMutableCaptures(arg, params, reported, ctx); }
+		},
+		NodeKind.MemberExpr => { walkForMutableCaptures((node.data as MemberExprData).object, params, reported, ctx); },
+		NodeKind.IfStmt | NodeKind.ConditionalExpr => {
+			const d = node.data as IfStmtData;
+			walkForMutableCaptures(d.condition, params, reported, ctx);
+			walkForMutableCaptures(d.consequent, params, reported, ctx);
+			walkForMutableCaptures(d.alternate, params, reported, ctx);
+		},
+		NodeKind.UnaryExpr => { walkForMutableCaptures((node.data as UnaryExprData).operand, params, reported, ctx); },
+		_ => {},
+	};
+}
+
+function checkSpawnCaptures(ctx: CheckerContext, closureNode: Node, spawnNode: Node): void {
+	if (closureNode === null) return;
+	let params: string[] = [];
+	let body: Node = null;
+	if (closureNode.kind === NodeKind.ArrowFunction) {
+		const ad = closureNode.data as ArrowFunctionData;
+		params = ad.arrowParams;
+		body = ad.arrowBody;
+	} else if (closureNode.kind === NodeKind.FunctionExpr) {
+		const fd = closureNode.data as FunctionExprData;
+		params = fd.funcExprParams;
+		body = fd.funcExprBody;
+	}
+	const reported: string[] = [];
+	if (body !== null) {
+		walkForMutableCaptures(body, params, reported, ctx);
+	}
 }
 
 // Register callback at module load time

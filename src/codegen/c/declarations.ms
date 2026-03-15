@@ -121,10 +121,7 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	// Module-qualified name (Standard reference implementation parity)
 	const isMain = d.fnName === "main";
 	const isExternFn = sym !== null && hasFlag(sym, SymbolFlag.ImportC);
-	let ovIdx = 0;
-	if (sym !== null && sym.overloads !== null && sym.overloads.length > 0) {
-		ovIdx = findOverloadIdx(sym, node.resolvedSym);
-	}
+	const ovIdx = sym !== null ? sym.overloadIdx : 0;
 	let name = mangledFunctionName(sym, d.fnName, ovIdx);
 
 	// Track whether we already emitted the proto or the body
@@ -206,20 +203,6 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 }
 
 // ===== Overload Index Matching =====
-// Find overload index using pre-resolved symbol identity.
-// Primary symbol = index 0, overloads[i] = index i+1.
-function findOverloadIdx(primarySym: Symbol, declSym: Symbol): number {
-	if (declSym === primarySym) return 0;
-	if (primarySym.overloads !== null) {
-		let i = 0;
-		while (i < primarySym.overloads.length) {
-			if (primarySym.overloads[i] === declSym) return i + 1;
-			i = i + 1;
-		}
-	}
-	return 0;
-}
-
 // ===== Enum Declaration =====
 
 function genEnumDecl(g: CGen, node: Node): void {
@@ -343,7 +326,8 @@ function genMethodAsFunction(g: CGen, node: Node, className: string): void {
 	// Use sym.name directly — matches how extensionMethodLower constructs the call name.
 	// Avoids safeName mismatch (e.g. "abort" → "abort_" on declaration but not call site).
 	const fallbackName = `${className}_${safeName(d.methodName)}`;
-	const methodName = mangledFunctionName(node.resolvedSym, (node.resolvedSym !== null && node.resolvedSym.name !== "") ? node.resolvedSym.name : fallbackName, 0);
+	const methodOvIdx = node.resolvedSym !== null ? node.resolvedSym.overloadIdx : 0;
+	const methodName = mangledFunctionName(node.resolvedSym, (node.resolvedSym !== null && node.resolvedSym.name !== "") ? node.resolvedSym.name : fallbackName, methodOvIdx);
 	const methodType = node.nodeType;
 	const cRetType = getTypeDesc(g, methodType.typeReturn);
 

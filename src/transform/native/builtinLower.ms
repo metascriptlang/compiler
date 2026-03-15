@@ -250,6 +250,13 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 		return node;
 	}
 
+	if (builtinKind === "PromiseSpawn") {
+		// Rewrite spawn(fn) → msSpawn(fn)
+		const spawnCall = makeCall(makeIdent("msSpawn", loc), cd.arguments, loc);
+		spawnCall.nodeType = node.nodeType;
+		return spawnCall;
+	}
+
 	if (builtinKind === "JsonParse") {
 		return rewriteJsonParse(node, ctx);
 	}
@@ -319,13 +326,11 @@ function rewriteResultToLiteral(node: Node, isOk: boolean, ctx: TransformContext
 	const values: Node[] = [makeBool(isOk, loc)];
 
 	if (isOk) {
-		// Only add value if T is not void
 		if (resType.typeReturn.kind !== TypeKind.Void) {
 			keys.push("value");
 			values.push(cd.arguments[0]);
 		}
 	} else {
-		// Only add error if E is not void
 		if (resType.typeExtra.kind !== TypeKind.Void) {
 			keys.push("error");
 			values.push(cd.arguments[0]);
@@ -333,7 +338,6 @@ function rewriteResultToLiteral(node: Node, isOk: boolean, ctx: TransformContext
 	}
 
 	const literal = makeObjectLiteral(keys, values, loc);
-	// V4: CRITICAL — preserve the monomorphized Result type from the call node
 	literal.nodeType = resType;
 	return literal;
 }

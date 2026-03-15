@@ -91,7 +91,7 @@ void msThrow(msString msg);
 		(s) = __c; \
 	} \
 } while(0)
-/* =copy(var dest, src) — Nim-aligned nimAsgnStrV2 pattern.
+/* =copy(var dest, src) — string copy-on-write assignment.
    Literal CoW: shallow copy for literals (pointer only, no alloc).
    Buffer reuse: if dest has enough capacity, memcpy without malloc.
    Full copy only when dest buffer is too small or is a literal. */
@@ -115,7 +115,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 		dest->p = src.p;
 		return;
 	}
-	/* Source is heap: try buffer reuse (Nim: reuse if capacity sufficient) */
+	/* Source is heap: try buffer reuse (reuse if capacity sufficient) */
 	if (!msIsLiteral(*dest) && dest->p != NULL &&
 		(dest->p->cap & MS_CAP_MASK) >= src.len) {
 		dest->len = src.len;

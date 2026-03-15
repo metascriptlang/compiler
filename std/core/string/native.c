@@ -11,7 +11,7 @@
 #include <ctype.h>
 #include <math.h>
 
-/* ===== Single-Char Interning Table (Nim parity: zero-alloc s[i]) ===== */
+/* ===== Single-Char Interning Table (zero-alloc s[i]) ===== */
 
 static struct { int64_t cap; char data[2]; } msCharPayloads[128];
 msString msCharTable[128];

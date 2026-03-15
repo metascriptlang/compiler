@@ -42,16 +42,16 @@ extern function contains(this s: string, sub: string): boolean from "msStringCon
  * @param sub The substring to search for in the string.
  * @param start The index at which to begin searching the String object. If omitted, search starts at the beginning of the string.
  */
-extern function indexOf(this s: string, sub: string, start: number = 0): number from "msStringIndexOf";
+extern function indexOf(this s: string, sub: string, start: int64 = 0): int64 from "msStringIndexOf";
 
 /**
  * Returns the last occurrence of a substring in the string.
  * @param sub The substring to search for.
  */
-extern function lastIndexOf(this s: string, sub: string): number from "msStringLastIndexOf";
+extern function lastIndexOf(this s: string, sub: string): int64 from "msStringLastIndexOf";
 
 /** Returns the number of non-overlapping occurrences of a substring. */
-extern function count(this s: string, sub: string): number from "msStringCount";
+extern function count(this s: string, sub: string): int64 from "msStringCount";
 
 // ===== Extraction =====
 
@@ -59,36 +59,36 @@ extern function count(this s: string, sub: string): number from "msStringCount";
  * Returns the character at the specified index.
  * @param idx The zero-based index of the desired character.
  */
-extern function charAt(this s: string, idx: number): string from "msStringCharAt";
+extern function charAt(this s: string, idx: int64): string from "msStringCharAt";
 
 /**
  * Returns the Unicode value of the character at the specified location.
  * @param idx The zero-based index of the desired character. If there is no character at the specified index, NaN is returned.
  */
-extern function charCodeAt(this s: string, idx: number): int32 from "msStringCharCodeAt";
+extern function charCodeAt(this s: string, idx: int64): int32 from "msStringCharCodeAt";
 
 /** Returns the byte length of the string in its underlying encoding. */
 extern function byteLength(this s: string): int64 from "msStringByteLength";
 
 /** Returns the raw byte value at the given byte offset. Returns -1 if out of range. */
-extern function byteAt(this s: string, idx: number): number from "msStringByteAt";
+extern function byteAt(this s: string, idx: int64): int32 from "msStringByteAt";
 
 /** Returns a substring by byte offsets [start, end). For lexer/binary protocols. */
-extern function byteSlice(this s: string, start: number, end: number): string from "msStringByteSlice";
+extern function byteSlice(this s: string, start: int64, end: int64): string from "msStringByteSlice";
 
 /**
  * Returns a section of a string.
  * @param start The index to the beginning of the specified portion of stringObj.
  * @param end The index to the end of the specified portion of stringObj. The substring includes the characters up to, but not including, the character indicated by end.
  */
-extern function slice(this s: string, start: number, end: number): string from "msStringSlice";
+extern function slice(this s: string, start: int64, end: int64): string from "msStringSlice";
 
 /**
  * Returns the substring at the specified location within a String object.
  * @param start The zero-based index number indicating the beginning of the substring.
  * @param end Zero-based index number indicating the end of the substring. The substring includes the characters up to, but not including, the character indicated by end.
  */
-extern function substring(this s: string, start: number, end: number): string from "msStringSubstring";
+extern function substring(this s: string, start: int64, end: int64): string from "msStringSubstring";
 
 // ===== Transformation =====
 
@@ -112,7 +112,7 @@ extern function trimEnd(this s: string): string from "msStringTrimEnd";
  * the empty string is returned.
  * @param count number of copies to append
  */
-extern function repeat(this s: string, count: number): string from "msStringRepeat";
+extern function repeat(this s: string, count: int32): string from "msStringRepeat";
 
 /**
  * Replaces text in a string, using a search string.
@@ -137,7 +137,7 @@ extern function reverse(this s: string): string from "msStringReverse";
  * @param targetLen The length of the resulting string once the current string has been padded.
  * @param pad The string to pad the current string with.
  */
-extern function padStart(this s: string, targetLen: number, pad: string): string from "msStringPadStart";
+extern function padStart(this s: string, targetLen: int64, pad: string): string from "msStringPadStart";
 
 /**
  * Pads the current string with a given string (possibly repeated) so that the resulting string reaches a given length.
@@ -145,7 +145,7 @@ extern function padStart(this s: string, targetLen: number, pad: string): string
  * @param targetLen The length of the resulting string once the current string has been padded.
  * @param pad The string to pad the current string with.
  */
-extern function padEnd(this s: string, targetLen: number, pad: string): string from "msStringPadEnd";
+extern function padEnd(this s: string, targetLen: int64, pad: string): string from "msStringPadEnd";
 
 // ===== Splitting =====
 
@@ -161,15 +161,15 @@ extern function split(this s: string, delimiter: string): string[] from "msStrin
 extern function parseFloat(this s: string): number from "msStringParseFloat";
 
 /** Converts a string representation of an integer to a number. */
-extern function parseInt(this s: string): number from "msStringParseInt";
+extern function parseInt(this s: string): int64 from "msStringParseInt";
 
 // ===== Capacity & Length =====
 
 /** Returns the allocated capacity of the string buffer. */
-extern function capacity(this s: string): number from "msStringCapacity";
+extern function capacity(this s: string): int64 from "msStringCapacity";
 
 /** Sets the length of the string, truncating or extending as needed. */
-extern function setLength(this s: string, newLen: number): void from "&msStringSetLength";
+extern function setLength(this s: string, newLen: int64): void from "&msStringSetLength";
 
 // ===== In-Place Append =====
 

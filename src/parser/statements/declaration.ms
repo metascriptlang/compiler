@@ -5,7 +5,7 @@ import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, DeclKind, ExternKind, NodeData, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, peek, skipDestructurePattern, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, addGenericDecl, updateGenericDeclFields, collectTokenText } from "../context";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
-import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipDefaultValue, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, isIdentLike } from "../util";
+import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipDefaultValue, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, isIdentLike, isPropertyName } from "../util";
 import { callBlockParser, callExprParser } from "./callbacks";
 import { programOk, stmtKind, stmtAt } from "./validation";
 
@@ -558,7 +558,7 @@ export function parseEnumDecl(state: ParserState): NodeResult {
 	let nextValue: number = 0;
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
 		const member = current(state);
-		if (!isIdentLike(member)) {
+		if (!isPropertyName(member)) {
 			return Result.err(`Expected enum member name at line ${member.line}`);
 		}
 
@@ -640,7 +640,7 @@ export function parseInterfaceDecl(state: ParserState): NodeResult {
 	const fieldTypeExprs: Node[] = [];
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
 		const field = current(state);
-		if (!isIdentLike(field)) {
+		if (!isPropertyName(field)) {
 			return Result.err(`Expected field name in interface at line ${field.line}`);
 		}
 
@@ -857,7 +857,7 @@ function parseClassMember(state: ParserState): NodeResult {
 
 	// Regular member: name followed by ( for method, or : / = / ; for property
 	const nameToken = current(state);
-	if (!isIdentLike(nameToken)) {
+	if (!isPropertyName(nameToken)) {
 		return Result.err(`Expected member name in class at line ${nameToken.line}`);
 	}
 	advance(state);

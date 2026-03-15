@@ -286,7 +286,7 @@ void msStringStripInPlace(msString* s);
 /* ===== Single-Char Interning Table ===== */
 /* 128 pre-allocated ASCII single-char strings. Each has MS_STRLIT_FLAG set
    so DRC treats them as literals (no dealloc, shallow copy on share).
-   Eliminates malloc-per-char in s[i] loops — Nim parity. */
+   Eliminates malloc-per-char in s[i] loops. */
 void msEnsureCharTable(void);
 extern msString msCharTable[128];
 

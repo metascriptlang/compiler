@@ -6,6 +6,7 @@ import { CheckerContext, ExportedSymInfo, addError, findExportedSymbol, findModu
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { findChar, getModuleDir, appendFlag } from "../utils/string";
+import { getGenericDecl } from "../parser/context";
 
 // ===== Top-Level Collector =====
 
@@ -220,13 +221,14 @@ function collectClass(ctx: CheckerContext, node: Node): void {
 	// Register methods as extensions — reference parity: procedures are separate from object types.
 	// Static → static extension (typeof ClassName). Instance → instance extension.
 	if (ctx.extensionRegistry !== null) {
+		const classGenerics = getGenericDecl(d.className);
 		for (let si = 0; si < d.classBody.length; si += 1) {
-			collectClassMethod(ctx, d.className, d.classBody[si]);
+			collectClassMethod(ctx, d.className, classGenerics, d.classBody[si]);
 		}
 	}
 }
 
-function collectClassMethod(ctx: CheckerContext, className: string, member: Node): void {
+function collectClassMethod(ctx: CheckerContext, className: string, classGenerics: string, member: Node): void {
 	let builtinKind = "";
 	let methodNode: Node = null as unknown as Node;
 	if (member.kind === NodeKind.MethodDecl) {
@@ -242,11 +244,12 @@ function collectClassMethod(ctx: CheckerContext, className: string, member: Node
 	if (methodNode === null) return;
 	const md = methodNode.data as MethodDeclData;
 	// Instance methods: prepend receiver as first param — same as standalone extensions.
-	// After this, md.methodParams = ["this", ...userParams], md.methodParamTypes = [className, ...userTypes].
-	// All downstream phases (resolve, check, codegen) read the same data — zero special cases.
+	// For generic classes (e.g. Promise<T>), the receiver carries the generic params so
+	// resolution creates GenericParam("T") and unification at the call site substitutes concrete types.
 	if (!md.methodIsStatic) {
+		const receiverType = classGenerics !== "" ? className + "<" + classGenerics + ">" : className;
 		const newParams: string[] = ["this"];
-		const newTypes: string[] = [className];
+		const newTypes: string[] = [receiverType];
 		for (let pi = 0; pi < md.methodParams.length; pi += 1) {
 			newParams.push(md.methodParams[pi]);
 		}
