@@ -11,6 +11,30 @@
 #include <ctype.h>
 #include <math.h>
 
+/* ===== Single-Char Interning Table (Nim parity: zero-alloc s[i]) ===== */
+
+static struct { int64_t cap; char data[2]; } msCharPayloads[128];
+msString msCharTable[128];
+static bool msCharTableInit = false;
+
+void msEnsureCharTable(void) {
+	if (msCharTableInit) return;
+	for (int i = 0; i < 128; i++) {
+		msCharPayloads[i].cap = MS_STRLIT_FLAG | 1;
+		msCharPayloads[i].data[0] = (char)i;
+		msCharPayloads[i].data[1] = '\0';
+		msCharTable[i].len = 1;
+		msCharTable[i].p = (msStrPayload*)&msCharPayloads[i];
+	}
+	msCharTableInit = true;
+}
+
+/* Auto-initialize at program start — avoids branch in hot path */
+__attribute__((constructor))
+static void msCharTableAutoInit(void) {
+	msEnsureCharTable();
+}
+
 /* ===== Internal Allocation Helpers ===== */
 
 static msStrPayload* allocPayload(int64_t cap) {
@@ -87,7 +111,7 @@ void msStringAssign(msString* a, msString b) {
 		a->len = b.len;
 		a->p = b.p;
 	} else {
-		if (msIsLiteral(*a) || (a->p->cap & ~MS_STRLIT_FLAG) < b.len) {
+		if (msIsLiteral(*a) || (a->p->cap & MS_CAP_MASK) < b.len) {
 			if (!msIsLiteral(*a)) free(a->p);
 			a->p = allocPayload(b.len);
 			a->p->cap = b.len;
@@ -118,7 +142,7 @@ void msStringPrepareAdd(msString* s, int64_t addLen) {
 			s->p->data[0] = '\0';
 		}
 	} else {
-		int64_t oldCap = s->p->cap & ~MS_STRLIT_FLAG;
+		int64_t oldCap = s->p->cap & MS_CAP_MASK;
 		if (newLen > oldCap) {
 			int64_t newCap = newLen;
 			int64_t resized = msStringResizeCap(oldCap);
@@ -168,7 +192,7 @@ void msStringSetLength(msString* s, int64_t newLen) {
 				memset(s->p->data, 0, newLen + 1);
 			}
 		} else if (newLen > s->len) {
-			int64_t oldCap = s->p->cap & ~MS_STRLIT_FLAG;
+			int64_t oldCap = s->p->cap & MS_CAP_MASK;
 			if (newLen > oldCap) {
 				int64_t newCap = newLen;
 				int64_t resized = msStringResizeCap(oldCap);
@@ -295,6 +319,10 @@ int64_t msStringByteAt(msString s, int64_t idx) {
 
 msString msStringByteCharAt(msString s, int64_t idx) {
 	if (idx < 0 || idx >= s.len || s.p == NULL) return MS_EMPTY_STRING;
+	unsigned char byte = (unsigned char)s.p->data[idx];
+	if (byte < 128) {
+		return msCharTable[byte];  /* interned — zero alloc */
+	}
 	return msStringNew(s.p->data + idx, 1);
 }
 
@@ -322,16 +350,12 @@ static uint32_t msUtf8Decode(const unsigned char* p, const unsigned char* end, i
 }
 
 msString msStringCharAt(msString s, int64_t idx) {
-	if (idx < 0 || s.p == NULL) return MS_EMPTY_STRING;
+	if (idx < 0 || s.p == NULL || idx >= s.len) return MS_EMPTY_STRING;
 	const unsigned char* p = (const unsigned char*)s.p->data;
 	const unsigned char* end = p + s.len;
-	/* ASCII fast path: if byte at idx is ASCII and all preceding bytes are ASCII */
-	if (idx < s.len && p[idx] < 0x80) {
-		int ascii = 1;
-		for (int64_t i = 0; i < idx; i++) {
-			if (p[i] >= 0x80) { ascii = 0; break; }
-		}
-		if (ascii) return msStringNew((const char*)p + idx, 1);
+	/* ASCII fast path: O(1) when string is known ASCII (cached check) */
+	if (msStringIsAscii(s)) {
+		return msCharTable[p[idx]];  /* zero alloc — interned */
 	}
 	/* Full scan: find the idx-th UTF-16 code unit */
 	int64_t charPos = 0;
@@ -341,7 +365,6 @@ msString msStringCharAt(msString s, int64_t idx) {
 		if (cp >= 0x10000) {
 			/* Surrogate pair: 2 UTF-16 code units */
 			if (charPos == idx || charPos + 1 == idx) {
-				/* Return the full codepoint as UTF-8 for both surrogate positions */
 				return msStringNew((const char*)(p), seqlen);
 			}
 			charPos += 2;
@@ -357,15 +380,11 @@ msString msStringCharAt(msString s, int64_t idx) {
 }
 
 int64_t msStringCharCodeAt(msString s, int64_t idx) {
-	if (idx < 0 || s.p == NULL) return -1;
+	if (idx < 0 || s.p == NULL || idx >= s.len) return -1;
 	const unsigned char* p = (const unsigned char*)s.p->data;
-	/* ASCII fast path: if byte at idx is ASCII and all preceding bytes are ASCII */
-	if (idx < s.len && p[idx] < 0x80) {
-		int ascii = 1;
-		for (int64_t i = 0; i < idx; i++) {
-			if (p[i] >= 0x80) { ascii = 0; break; }
-		}
-		if (ascii) return (int64_t)p[idx];
+	/* ASCII fast path: O(1) when string is known ASCII (cached check) */
+	if (msStringIsAscii(s)) {
+		return (int64_t)p[idx];
 	}
 	/* Full scan: find the idx-th UTF-16 code unit */
 	const unsigned char* end = p + s.len;
@@ -434,6 +453,16 @@ msString msStringByteSlice(msString s, int64_t start, int64_t end) {
 msString msStringSlice(msString s, int64_t start, int64_t end) {
 	if (s.p == NULL || s.len == 0) return MS_EMPTY_STRING;
 
+	/* ASCII fast path: char positions == byte positions, skip msStringLength */
+	if (msStringIsAscii(s)) {
+		if (start < 0) start = s.len + start;
+		if (end < 0) end = s.len + end;
+		if (start < 0) start = 0;
+		if (end > s.len) end = s.len;
+		if (start >= end) return MS_EMPTY_STRING;
+		return msStringNew(s.p->data + start, end - start);
+	}
+
 	int64_t charLen = msStringLength(s);
 
 	/* Handle negative indices (from end) */
@@ -443,14 +472,8 @@ msString msStringSlice(msString s, int64_t start, int64_t end) {
 	if (end > charLen) end = charLen;
 	if (start >= end) return MS_EMPTY_STRING;
 
-	/* ASCII fast path: all bytes < 0x80 → char pos == byte pos */
-	const unsigned char* data = (const unsigned char*)s.p->data;
-	if (charLen == s.len) {
-		/* Pure ASCII: char positions equal byte positions */
-		return msStringNew(s.p->data + start, end - start);
-	}
-
 	/* Full path: walk UTF-8 to find byte offsets for char positions */
+	const unsigned char* data = (const unsigned char*)s.p->data;
 	const unsigned char* p = data;
 	const unsigned char* pend = data + s.len;
 	int64_t charPos = 0;
@@ -666,6 +689,7 @@ msString msStringPadEnd(msString s, int64_t targetLen, msString pad) {
    11110xxx = 4-byte → 2 UTF-16 units (surrogate pair) */
 int64_t msStringLength(msString s) {
 	if (s.len == 0 || s.p == NULL) return 0;
+	if (msStringIsAscii(s)) return s.len;  /* O(1) for ASCII strings */
 	const unsigned char* p = (const unsigned char*)s.p->data;
 	const unsigned char* end = p + s.len;
 	int64_t count = 0;
@@ -887,7 +911,7 @@ int64_t msStringParseInt(msString s) {
 
 int64_t msStringCapacity(msString s) {
 	if (s.p == NULL) return 0;
-	return s.p->cap & ~MS_STRLIT_FLAG;
+	return s.p->cap & MS_CAP_MASK;
 }
 
 /* ===== In-Place Operations (Standard reference patterns) ===== */

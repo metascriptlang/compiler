@@ -37,12 +37,38 @@ typedef struct {
 /* High bit of cap marks string literals (COW) */
 #define MS_STRLIT_FLAG ((int64_t)1 << 62)
 
+/* Bit 61 of cap: ASCII-checked flag (set once we've verified ASCII status) */
+#define MS_ASCII_CHECKED ((int64_t)1 << 61)
+/* Bit 60 of cap: is-ASCII flag (valid only when ASCII_CHECKED is set) */
+#define MS_ASCII_FLAG    ((int64_t)1 << 60)
+/* Mask to extract actual capacity from cap field */
+#define MS_CAP_MASK (~(MS_STRLIT_FLAG | MS_ASCII_CHECKED | MS_ASCII_FLAG))
+
 /* Empty string */
 #define MS_EMPTY_STRING ((msString){0, NULL})
 
 /* ===== Literal Support ===== */
 
 #define msIsLiteral(s) ((s).p == NULL || ((s).p->cap & MS_STRLIT_FLAG) != 0)
+
+/* ===== ASCII Fast Path ===== */
+/* Check and cache whether a string is pure ASCII. O(n) first call, O(1) after. */
+static inline bool msStringIsAscii(msString s) {
+	if (s.p == NULL || s.len == 0) return true;
+	if (s.p->cap & MS_ASCII_CHECKED) {
+		return (s.p->cap & MS_ASCII_FLAG) != 0;
+	}
+	/* Scan once, cache result */
+	const unsigned char* p = (const unsigned char*)s.p->data;
+	bool ascii = true;
+	for (int64_t i = 0; i < s.len; i++) {
+		if (p[i] >= 0x80) { ascii = false; break; }
+	}
+	/* Cache the result (mutate cap bits — safe because these bits don't affect capacity) */
+	s.p->cap |= MS_ASCII_CHECKED;
+	if (ascii) s.p->cap |= MS_ASCII_FLAG;
+	return ascii;
+}
 
 /*
  * Static string literal constructor.
@@ -256,5 +282,12 @@ void msStringSetSlice(msString* s, int64_t start, int64_t end);
 
 /* In-place strip whitespace */
 void msStringStripInPlace(msString* s);
+
+/* ===== Single-Char Interning Table ===== */
+/* 128 pre-allocated ASCII single-char strings. Each has MS_STRLIT_FLAG set
+   so DRC treats them as literals (no dealloc, shallow copy on share).
+   Eliminates malloc-per-char in s[i] loops — Nim parity. */
+void msEnsureCharTable(void);
+extern msString msCharTable[128];
 
 #endif /* MS_STRING_H */

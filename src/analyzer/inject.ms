@@ -23,7 +23,7 @@ import {
 	DoWhileStmtData, MoveExprData, TypeAssertionData, Symbol,
 } from "../ast/node";
 import { Type, TypeKind, isSinkType, skipModifier, createPrimitive } from "../checker/types";
-import { lookupSymbol, lookupLocal, SymbolKind, hasFlag, SymbolFlag } from "../checker/symbol";
+import { lookupSymbol, lookupLocal, SymbolKind, hasFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { TransformContext, NameSet, createNameSet, nameSetContains, nameSetAdd, freshTemp, createTransformContextWithChecker } from "../transform/context";
 import {
 	makeIdent, makeBlock, makeExprStmt, makeCall, makeVarDecl,
@@ -1575,15 +1575,21 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 	if (bd.left.kind !== NodeKind.Identifier) return stmt;
 	const leftD = bd.left.data as IdentifierData;
 
-	// Demand-driven: use resolvedSym from Phase 2
+	// Demand-driven: use resolvedSym from Phase 2, fall back to VarInfo for synthetic temps
 	const sym = bd.left.resolvedSym;
-	if (sym === null) return stmt;
-
-	const rcInfo = classifyType(sym.symbolType, dctx.ctx);
+	const vi = findVarInfoInContext(dctx, leftD.name);
+	let rcInfo: RcInfo = noRcInfo();
+	if (sym !== null) {
+		rcInfo = classifyType(sym.symbolType, dctx.ctx);
+	} else {
+		// Synthetic variables (e.g. $matchres from match lowering) lack resolvedSym.
+		// Use registered VarInfo to get the correct RcInfo.
+		if (vi === null) return stmt;
+		rcInfo = vi.rcInfo;
+	}
 	if (!rcInfo.needsCleanup) return stmt;
 
 	// Phase D: first-write optimization — skip destroy on first assignment to uninitialized var
-	const vi = findVarInfoInContext(dctx, leftD.name);
 	const isFirstWrite = vi !== null && !vi.isInitialized;
 	if (isFirstWrite) {
 		vi.isInitialized = true;
@@ -2543,7 +2549,7 @@ test "finally-protected var blocks move in isLastReadSafe" {
 	nameSetAdd(protVars, "s");
 	dctx.finallyProtectedVars = protVars;
 	// Even with a null symbol, the name check fires first
-	const fakeSym: Symbol = { name: "s", symbolKind: 0, symbolType: null, symFlags: 0 };
+	const fakeSym = makeSymbol("s", SymbolKind.Variable, null as unknown as Type, false);
 	assert !isLastReadSafe(fakeSym, null as unknown as Node, 0, [], dctx);
 }
 

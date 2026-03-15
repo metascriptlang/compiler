@@ -291,8 +291,17 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 	}
 	if (kind === NodeKind.StringLiteral) {
 		const d = node.data as StringLiteralData;
+		// Single ASCII char: use interned char table (zero alloc, pointer identity)
+		const byteLen = cStringByteLen(d.value);
+		if (byteLen === 1 && d.value.byteLength === 1) {
+			const code = d.value.byteAt(0);
+			if (code < 128) {
+				ctx.results.push(`msCharTable[${code}]`);
+				return;
+			}
+		}
 		const poolName = internString(g.stringPool, d.value);
-		ctx.results.push(msStringPoolRef(poolName, cStringByteLen(d.value)));
+		ctx.results.push(msStringPoolRef(poolName, byteLen));
 		return;
 	}
 	if (kind === NodeKind.BooleanLiteral) {
@@ -644,10 +653,13 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		truncResults(ctx, cc);
 		const d = node.data as BinaryExprData;
 		let finalRight = right;
-		if (d.operator === "=" && d.left.nodeType !== null && d.right.nodeType !== null) {
+		if (d.operator === "=" && d.left.nodeType !== null && d.right.nodeType !== null
+				&& d.left.kind !== NodeKind.MemberExpr && d.left.kind !== NodeKind.ArrayAccess) {
 			// For assignment LHS, prefer the variable's declared type over narrowed nodeType.
 			// Parity: genAsgn uses the declared type (symbol type, never narrowed).
 			// Our checker stores narrowed types on nodeType, so we read resolvedSym.symbolType.
+			// Skip for MemberExpr/ArrayAccess — C knows the struct field type; our nodeType
+			// may be wrong (e.g. msClosure instead of the actual field type).
 			let leftType = d.left.nodeType;
 			if (d.left.resolvedSym !== null && d.left.resolvedSym.symbolType !== null) {
 				leftType = d.left.resolvedSym.symbolType;

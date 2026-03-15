@@ -32,6 +32,7 @@ export enum SymbolState {
 
 export class Symbol {
 	name: string;
+	nameId: int32;
 	symbolKind: SymbolKind;
 	symbolType: Type;
 	state: SymbolState;

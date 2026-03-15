@@ -1,5 +1,6 @@
 import { SourceLocation, Node, Symbol, SymbolKind, SymbolState, makeLoc } from "../ast/node";
 import { Type, TypeKind, unknownType } from "./types";
+import { IdentCache, createIdentCache, getIdentId } from "./idents";
 
 
 // Re-export from ast/node (unified Symbol definition)
@@ -57,13 +58,14 @@ export class Scope {
 export class SymbolTable {
 	current: Ptr<Scope>;  // borrowed — allScopes owns all scopes
 	allScopes: Scope[];
+	identCache: IdentCache;
 }
 
 // ===== Constructors =====
 
 export function createSymbolTable(): SymbolTable {
 	const global: Scope = { symbols: [], scopeKind: ScopeKind.Global, parent: null as unknown as Scope };
-	return { current: global, allScopes: [global] };
+	return { current: global, allScopes: [global], identCache: createIdentCache() };
 }
 
 // ===== Scope Operations =====
@@ -83,8 +85,12 @@ export function closeScope(table: SymbolTable): void {
 // ===== Symbol Registration =====
 
 export function defineSymbol(table: SymbolTable, sym: Symbol): Result<boolean, string> {
+	if (sym.nameId === 0) {
+		sym.nameId = getIdentId(table.identCache, sym.name);
+	}
+	const nameId = sym.nameId;
 	for (const existing of table.current.symbols) {
-		if (existing.name === sym.name) {
+		if (existing.nameId === nameId) {
 			// Allow function overloads: same name, both functions
 			if (existing.symbolKind === SymbolKind.Function && sym.symbolKind === SymbolKind.Function) {
 				existing.overloads.push(sym);
@@ -101,10 +107,11 @@ export function defineSymbol(table: SymbolTable, sym: Symbol): Result<boolean, s
 
 // Walk scope chain, return Symbol or null
 export function lookupSymbol(table: SymbolTable, name: string): Symbol {
+	const nameId = getIdentId(table.identCache, name);
 	let scope = table.current;
 	while (scope !== null) {
 		for (const sym of scope.symbols) {
-			if (sym.name === name) {
+			if (sym.nameId === nameId) {
 				return sym;
 			}
 		}
@@ -115,8 +122,9 @@ export function lookupSymbol(table: SymbolTable, name: string): Symbol {
 
 // Check current scope only, return Symbol or null
 export function lookupLocal(table: SymbolTable, name: string): Symbol {
+	const nameId = getIdentId(table.identCache, name);
 	for (const sym of table.current.symbols) {
-		if (sym.name === name) {
+		if (sym.nameId === nameId) {
 			return sym;
 		}
 	}
@@ -138,6 +146,7 @@ export function makeSymbol(name: string, kind: SymbolKind, symType: Type, mutabl
 export function makeSymbolState(name: string, kind: SymbolKind, symType: Type, mutable: boolean, state: SymbolState): Symbol {
 	const sym = new Symbol();
 	sym.name = name;
+	sym.nameId = 0;
 	sym.symbolKind = kind;
 	sym.symbolType = symType;
 	sym.state = state;
@@ -156,11 +165,12 @@ export function makeSymbolState(name: string, kind: SymbolKind, symType: Type, m
 
 // Look up an exported symbol in the table (searches Module and Global scopes)
 export function lookupExport(table: SymbolTable, name: string): Symbol {
+	const nameId = getIdentId(table.identCache, name);
 	let scope = table.current;
 	while (scope !== null) {
 		if (scope.scopeKind === ScopeKind.Module || scope.scopeKind === ScopeKind.Global) {
 			for (const sym of scope.symbols) {
-				if (sym.name === name && hasFlag(sym, SymbolFlag.Exported)) return sym;
+				if (sym.nameId === nameId && hasFlag(sym, SymbolFlag.Exported)) return sym;
 			}
 		}
 		scope = scope.parent;

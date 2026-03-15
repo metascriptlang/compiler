@@ -91,26 +91,40 @@ void msThrow(msString msg);
 		(s) = __c; \
 	} \
 } while(0)
-/* =copy(var dest, src) — 2-arg copy, dest by pointer, src by value.
-   Shared-payload check: if dest and src point to the same buffer (from shallow copy),
-   skip destroy — the source still owns it. Just allocate a fresh independent copy.
-   Without payload refcounting, this check is essential for correctness. */
+/* =copy(var dest, src) — Nim-aligned nimAsgnStrV2 pattern.
+   Literal CoW: shallow copy for literals (pointer only, no alloc).
+   Buffer reuse: if dest has enough capacity, memcpy without malloc.
+   Full copy only when dest buffer is too small or is a literal. */
 static inline void msStringCopy(msString* dest, msString src) {
+	/* Identity: same pointer + same length = same string */
+	if (dest->p == src.p && dest->len == src.len) return;
+	/* Shared payload (e.g. after bitwise copy): both point to same buffer.
+	   Don't free — source still owns it. Must allocate a fresh independent copy. */
 	if (dest->p == src.p) {
-		/* Shared payload (e.g., after bitwise copy): don't free — source still owns it */
 		if (src.p != NULL && !msIsLiteral(src)) {
 			*dest = msStringNew(src.p->data, src.len);
+		} else {
+			dest->len = src.len;  /* literal: just update length */
 		}
 		return;
 	}
-	/* Different payloads: destroy old dest, copy from src */
-	msString newStr;
-	if (src.p != NULL && !msIsLiteral(src)) {
-		newStr = msStringNew(src.p->data, src.len);
-	} else {
-		newStr = src;
+	/* Source is literal (or interned char): shallow copy — pointer only */
+	if (msIsLiteral(src)) {
+		if (!msIsLiteral(*dest)) free(dest->p);
+		dest->len = src.len;
+		dest->p = src.p;
+		return;
 	}
-	msStringDestroy(*dest);
+	/* Source is heap: try buffer reuse (Nim: reuse if capacity sufficient) */
+	if (!msIsLiteral(*dest) && dest->p != NULL &&
+		(dest->p->cap & MS_CAP_MASK) >= src.len) {
+		dest->len = src.len;
+		memcpy(dest->p->data, src.p->data, src.len + 1);
+		return;
+	}
+	/* Must allocate new buffer */
+	msString newStr = msStringNew(src.p->data, src.len);
+	if (!msIsLiteral(*dest)) free(dest->p);
 	*dest = newStr;
 }
 #define msStringWasMoved(s)   do { (s).len = 0; (s).p = NULL; } while(0)
@@ -252,6 +266,19 @@ typedef msMap msSet;
 
 /* Promise combinators (Promise.all, Promise.race) */
 #include "std/core/promise/combinator.h"
+
+/* String boxing for spawn — msString must be defined before this */
+static inline void* msBoxString(msString v) {
+	msString* p = (msString*)malloc(sizeof(msString));
+	*p = v;
+	if (v.p) msIncRef(v.p);
+	return p;
+}
+static inline msString msUnboxString(void* p) {
+	msString v = *(msString*)p;
+	free(p);
+	return v;
+}
 
 /* ===== Error Reporting ===== */
 
