@@ -46,6 +46,7 @@ export class Symbol {
 	modulePath: string;
 	originalName: string;  // Original declared name, used for C mangling when imported with alias
 	headerPath: string;    // @include header for this extern symbol
+	overloadIdx: int32;    // Index within overload set (0=primary, 1+=overload)
 }
 
 // ===== Node Flags (Standard parity: TNodeFlags) =====

@@ -37,6 +37,7 @@ import "./c/strings";
 import "./c/expressions";
 import "./c/closures";
 import "./c/result";
+import "./c/buffer";
 import "./js/basic";
 import "./js/result";
 

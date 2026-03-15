@@ -3,8 +3,8 @@
  * Binary data type — byte-oriented operations without UTF-8 interpretation.
  *
  * msBuffer = typedef msString (zero-cost, same 16-byte struct)
- * Key difference: msBufferLength returns buf.len (byte count),
- * while msStringLength counts UTF-16 code units.
+ * Redundant functions (get, length, slice, compare, equals, concat, copy)
+ * are handled by msString* equivalents — only unique ops live here.
  */
 
 #ifndef MS_BUFFER_H
@@ -19,71 +19,31 @@ typedef msString msBuffer;
 
 /* ===== Allocation ===== */
 
-/* Zero-filled buffer of given size */
 msBuffer msBufferAlloc(int64_t size);
-
-/* Uninitialized buffer (only null-terminated) */
 msBuffer msBufferAllocUnsafe(int64_t size);
 
 /* ===== Creation ===== */
 
-/* Wrap a string as buffer (identity — same type) */
 msBuffer msBufferFromString(msString str);
 
-/* Decode hex string to bytes */
+/* ===== Encoding ===== */
+
 msBuffer msBufferFromHex(msString hex);
-
-/* Decode base64 string to bytes */
 msBuffer msBufferFromBase64(msString b64);
-
-/* ===== Conversion ===== */
-
-/* Encode bytes to lowercase hex string */
 msString msBufferToHex(msBuffer buf);
-
-/* Encode bytes to base64 string */
 msString msBufferToBase64(msBuffer buf);
 
-/* Return as string (identity) */
-msString msBufferToString(msBuffer buf);
+/* ===== Byte Write (string has no byte-level write) ===== */
 
-/* ===== Properties ===== */
-
-/* Byte count (buf.len — NOT UTF-16 code units) */
-int64_t msBufferLength(msBuffer buf);
-
-/* ===== Byte Access ===== */
-
-/* Read byte at index (0-255), or -1 if out of bounds */
-int64_t msBufferGet(msBuffer buf, int64_t index);
-
-/* Write byte at index, no-op if out of bounds */
 void msBufferSet(msBuffer buf, int64_t index, int64_t value);
 
-/* ===== Operations ===== */
+/* ===== Cross-Buffer Copy ===== */
 
-/* Extract sub-buffer [start, end) */
-msBuffer msBufferSlice(msBuffer buf, int64_t start, int64_t end);
-
-/* Copy bytes from src to dst. Returns bytes copied. */
 int64_t msBufferCopy(msBuffer src, msBuffer dst, int64_t dstStart, int64_t srcStart, int64_t srcEnd);
 
-/* Fill range [start, end) with byte value */
+/* ===== Fill ===== */
+
 msBuffer msBufferFill(msBuffer buf, int64_t value, int64_t start, int64_t end);
-
-/* Concatenate two buffers */
-msBuffer msBufferConcat(msBuffer a, msBuffer b);
-
-/* Deep copy */
-msBuffer msBufferCopyNew(msBuffer buf);
-
-/* ===== Comparison ===== */
-
-/* memcmp-style: negative, 0, or positive */
-int64_t msBufferCompare(msBuffer a, msBuffer b);
-
-/* Content equality */
-int64_t msBufferEquals(msBuffer a, msBuffer b);
 
 /* ===== Read Integers ===== */
 
@@ -136,11 +96,10 @@ int64_t msBufferWriteUint64BE(msBuffer buf, int64_t value, int64_t offset);
 int64_t msBufferWriteInt64LE(msBuffer buf, int64_t value, int64_t offset);
 int64_t msBufferWriteInt64BE(msBuffer buf, int64_t value, int64_t offset);
 
-/* ===== Search ===== */
+/* ===== Single-Byte Search ===== */
 
 int64_t msBufferIndexOf(msBuffer buf, int64_t value, int64_t byteOffset);
 int64_t msBufferLastIndexOf(msBuffer buf, int64_t value, int64_t byteOffset);
-int64_t msBufferIncludes(msBuffer buf, int64_t value, int64_t byteOffset);
 
 /* ===== Byte Swap ===== */
 
@@ -148,7 +107,7 @@ msBuffer msBufferSwap16(msBuffer buf);
 msBuffer msBufferSwap32(msBuffer buf);
 msBuffer msBufferSwap64(msBuffer buf);
 
-/* ===== Reverse ===== */
+/* ===== Reverse (in-place mutation) ===== */
 
 msBuffer msBufferReverse(msBuffer buf);
 
@@ -156,5 +115,34 @@ msBuffer msBufferReverse(msBuffer buf);
 
 int64_t msBufferIsAscii(msBuffer buf);
 int64_t msBufferIsUtf8(msBuffer buf);
+
+/* ===== Advanced Search (Boyer-Moore Horspool) ===== */
+
+int64_t msBufferIndexOfBuffer(msBuffer buf, msBuffer needle, int64_t byteOffset);
+int64_t msBufferLastIndexOfBuffer(msBuffer buf, msBuffer needle, int64_t byteOffset);
+
+/* ===== Encoding-Aware String Operations ===== */
+
+int64_t msBufferWriteString(msBuffer buf, msString str, int64_t offset, int64_t length, msString encoding);
+
+/* ===== Variable-Length Integer Read/Write (1-6 bytes) ===== */
+
+int64_t msBufferReadUintLE(msBuffer buf, int64_t offset, int64_t byteLength);
+int64_t msBufferReadUintBE(msBuffer buf, int64_t offset, int64_t byteLength);
+int64_t msBufferReadIntLE(msBuffer buf, int64_t offset, int64_t byteLength);
+int64_t msBufferReadIntBE(msBuffer buf, int64_t offset, int64_t byteLength);
+int64_t msBufferWriteUintLE(msBuffer buf, int64_t value, int64_t offset, int64_t byteLength);
+int64_t msBufferWriteUintBE(msBuffer buf, int64_t value, int64_t offset, int64_t byteLength);
+int64_t msBufferWriteIntLE(msBuffer buf, int64_t value, int64_t offset, int64_t byteLength);
+int64_t msBufferWriteIntBE(msBuffer buf, int64_t value, int64_t offset, int64_t byteLength);
+
+/* ===== Fill String / Buffer ===== */
+
+msBuffer msBufferFillString(msBuffer buf, msString value, int64_t start, int64_t end, msString encoding);
+msBuffer msBufferFillBuffer(msBuffer buf, msBuffer pattern, int64_t start, int64_t end);
+
+/* ===== toString with encoding + range ===== */
+
+msString msBufferToStringRange(msBuffer buf, int64_t start, int64_t end, msString encoding);
 
 #endif

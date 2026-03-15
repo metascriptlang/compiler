@@ -24,10 +24,25 @@
   #define BSWAP16(x) __builtin_bswap16(x)
   #define BSWAP32(x) __builtin_bswap32(x)
   #define BSWAP64(x) __builtin_bswap64(x)
+#elif defined(_MSC_VER)
+  #include <intrin.h>
+  #define BSWAP16(x) _byteswap_ushort(x)
+  #define BSWAP32(x) _byteswap_ulong(x)
+  #define BSWAP64(x) _byteswap_uint64(x)
 #else
-  #define BSWAP16(x) ((uint16_t)((((x) >> 8) & 0xFF) | (((x) & 0xFF) << 8)))
-  #define BSWAP32(x) ((uint32_t)((((x) >> 24) & 0xFF) | (((x) >> 8) & 0xFF00) | (((x) & 0xFF00) << 8) | (((x) & 0xFF) << 24)))
-  #define BSWAP64(x) ((uint64_t)(BSWAP32((uint32_t)(x)) ) << 32 | BSWAP32((uint32_t)((x) >> 32)))
+  static inline uint16_t BSWAP16(uint16_t x) {
+    return (x >> 8) | (x << 8);
+  }
+  static inline uint32_t BSWAP32(uint32_t x) {
+    return ((x >> 24) & 0xFF) | ((x >> 8) & 0xFF00) |
+           ((x << 8) & 0xFF0000) | ((x << 24) & 0xFF000000);
+  }
+  static inline uint64_t BSWAP64(uint64_t x) {
+    return ((x >> 56) & 0xFF) | ((x >> 40) & 0xFF00) |
+           ((x >> 24) & 0xFF0000) | ((x >> 8) & 0xFF000000ULL) |
+           ((x << 8) & 0xFF00000000ULL) | ((x << 24) & 0xFF0000000000ULL) |
+           ((x << 40) & 0xFF000000000000ULL) | ((x << 56) & 0xFF00000000000000ULL);
+  }
 #endif
 
 /* ===== Hex/Base64 Helpers ===== */
@@ -89,12 +104,10 @@ msBuffer msBufferAllocUnsafe(int64_t size) {
 
 msBuffer msBufferFromString(msString str) {
 	if (!str.p || str.len == 0) return MS_EMPTY_BUFFER;
-	/* Deep copy — source may be a string literal (read-only COW memory) */
-	msBuffer buf = msBufferAlloc(str.len);
-	if (!buf.p) return MS_EMPTY_BUFFER;
-	memcpy(buf.p->data, str.p->data, str.len);
-	return buf;
+	return msStringNew(str.p->data, str.len);
 }
+
+/* ===== Encoding ===== */
 
 msBuffer msBufferFromHex(msString hex) {
 	if (!hex.p || hex.len < 2) return MS_EMPTY_BUFFER;
@@ -192,22 +205,7 @@ msString msBufferToBase64(msBuffer buf) {
 	return result;
 }
 
-msString msBufferToString(msBuffer buf) {
-	return buf;  /* identity */
-}
-
-/* ===== Properties ===== */
-
-int64_t msBufferLength(msBuffer buf) {
-	return buf.len;  /* true byte count — THE key difference from msStringLength */
-}
-
-/* ===== Byte Access ===== */
-
-int64_t msBufferGet(msBuffer buf, int64_t index) {
-	if (!buf.p || index < 0 || index >= buf.len) return -1;
-	return (int64_t)(unsigned char)buf.p->data[index];
-}
+/* ===== Byte Write ===== */
 
 void msBufferSet(msBuffer buf, int64_t index, int64_t value) {
 	if (!buf.p || index < 0 || index >= buf.len) return;
@@ -215,19 +213,6 @@ void msBufferSet(msBuffer buf, int64_t index, int64_t value) {
 }
 
 /* ===== Operations ===== */
-
-msBuffer msBufferSlice(msBuffer buf, int64_t start, int64_t end) {
-	if (!buf.p || start >= end || start >= buf.len) return MS_EMPTY_BUFFER;
-	if (end > buf.len) end = buf.len;
-	if (start < 0) start = 0;
-
-	int64_t len = end - start;
-	msBuffer result = msBufferAlloc(len);
-	if (!result.p) return MS_EMPTY_BUFFER;
-
-	memcpy(result.p->data, buf.p->data + start, len);
-	return result;
-}
 
 int64_t msBufferCopy(msBuffer src, msBuffer dst, int64_t dstStart, int64_t srcStart, int64_t srcEnd) {
 	if (!src.p || !dst.p) return 0;
@@ -252,52 +237,6 @@ msBuffer msBufferFill(msBuffer buf, int64_t value, int64_t start, int64_t end) {
 
 	memset(buf.p->data + start, (int)(value & 0xFF), end - start);
 	return buf;
-}
-
-msBuffer msBufferConcat(msBuffer a, msBuffer b) {
-	if ((!a.p || a.len == 0) && (!b.p || b.len == 0)) return MS_EMPTY_BUFFER;
-	if (!a.p || a.len == 0) return msBufferCopyNew(b);
-	if (!b.p || b.len == 0) return msBufferCopyNew(a);
-
-	int64_t totalLen = a.len + b.len;
-	msBuffer result = msBufferAlloc(totalLen);
-	if (!result.p) return MS_EMPTY_BUFFER;
-
-	memcpy(result.p->data, a.p->data, a.len);
-	memcpy(result.p->data + a.len, b.p->data, b.len);
-	return result;
-}
-
-msBuffer msBufferCopyNew(msBuffer buf) {
-	if (!buf.p || buf.len == 0) return MS_EMPTY_BUFFER;
-
-	msBuffer copy = msBufferAlloc(buf.len);
-	if (copy.p) {
-		memcpy(copy.p->data, buf.p->data, buf.len);
-	}
-	return copy;
-}
-
-/* ===== Comparison ===== */
-
-int64_t msBufferCompare(msBuffer a, msBuffer b) {
-	if (!a.p && !b.p) return 0;
-	if (!a.p) return -1;
-	if (!b.p) return 1;
-
-	int64_t minLen = (a.len < b.len) ? a.len : b.len;
-	int cmp = memcmp(a.p->data, b.p->data, minLen);
-	if (cmp != 0) return (int64_t)cmp;
-	if (a.len < b.len) return -1;
-	if (a.len > b.len) return 1;
-	return 0;
-}
-
-int64_t msBufferEquals(msBuffer a, msBuffer b) {
-	if (a.len != b.len) return 0;
-	if (!a.p && !b.p) return 1;
-	if (!a.p || !b.p) return 0;
-	return memcmp(a.p->data, b.p->data, a.len) == 0 ? 1 : 0;
 }
 
 /* ===== Read Integers ===== */
@@ -622,10 +561,6 @@ int64_t msBufferLastIndexOf(msBuffer buf, int64_t value, int64_t byteOffset) {
 	return -1;
 }
 
-int64_t msBufferIncludes(msBuffer buf, int64_t value, int64_t byteOffset) {
-	return msBufferIndexOf(buf, value, byteOffset) != -1 ? 1 : 0;
-}
-
 /* ===== Byte Swap ===== */
 
 msBuffer msBufferSwap16(msBuffer buf) {
@@ -715,4 +650,407 @@ int64_t msBufferIsUtf8(msBuffer buf) {
 		}
 	}
 	return 1;
+}
+
+/* ===== Encoding Helper ===== */
+
+static int encodingEq(const char* enc, int64_t encLen, const char* target) {
+	int tlen = (int)strlen(target);
+	if (encLen < tlen) return 0;
+	for (int i = 0; i < tlen; i++) {
+		char c = enc[i];
+		if (c >= 'A' && c <= 'Z') c += 32;
+		if (c != target[i]) return 0;
+	}
+	return 1;
+}
+
+/* ===== Boyer-Moore Horspool Search ===== */
+
+static void initSkipTable(const unsigned char* needle, int64_t needleLen, int skipTable[256]) {
+	for (int i = 0; i < 256; i++) {
+		skipTable[i] = (int)needleLen;
+	}
+	for (int64_t i = 0; i < needleLen - 1; i++) {
+		skipTable[needle[i]] = (int)(needleLen - 1 - i);
+	}
+}
+
+static void* memmemBmh(const void* haystack, int64_t haystackLen,
+                        const void* needle, int64_t needleLen) {
+	if (needleLen == 0) return (void*)haystack;
+	if (needleLen > haystackLen) return NULL;
+
+	const unsigned char* h = (const unsigned char*)haystack;
+	const unsigned char* n = (const unsigned char*)needle;
+
+	if (needleLen == 1) {
+		return memchr(haystack, *n, haystackLen);
+	}
+
+	if (needleLen <= 4) {
+		const unsigned char* end = h + haystackLen - needleLen + 1;
+		unsigned char first = n[0];
+		unsigned char last = n[needleLen - 1];
+		for (; h < end; h++) {
+			if (*h == first && h[needleLen - 1] == last) {
+				if (needleLen == 2 || memcmp(h, n, needleLen) == 0) {
+					return (void*)h;
+				}
+			}
+		}
+		return NULL;
+	}
+
+	int skipTable[256];
+	initSkipTable(n, needleLen, skipTable);
+
+	int64_t i = needleLen - 1;
+	while (i < haystackLen) {
+		int64_t j = needleLen - 1;
+		int64_t k = i;
+		while (j > 0 && h[k] == n[j]) {
+			k--;
+			j--;
+		}
+		if (j == 0 && h[k] == n[0]) {
+			return (void*)(h + k);
+		}
+		i += skipTable[h[i]];
+	}
+	return NULL;
+}
+
+int64_t msBufferIndexOfBuffer(msBuffer buf, msBuffer needle, int64_t byteOffset) {
+	if (!buf.p || buf.len == 0) return -1;
+	if (!needle.p || needle.len == 0) return byteOffset < 0 ? 0 : byteOffset;
+
+	int64_t start = (byteOffset < 0) ? 0 : byteOffset;
+	if (start >= buf.len) return -1;
+	if (needle.len > buf.len - start) return -1;
+
+	void* found = memmemBmh(buf.p->data + start, buf.len - start,
+	                         needle.p->data, needle.len);
+	if (found) {
+		return (int64_t)((char*)found - buf.p->data);
+	}
+	return -1;
+}
+
+int64_t msBufferLastIndexOfBuffer(msBuffer buf, msBuffer needle, int64_t byteOffset) {
+	if (!buf.p || buf.len == 0) return -1;
+	if (!needle.p || needle.len == 0) {
+		return (byteOffset < 0 || byteOffset >= buf.len) ? buf.len : byteOffset;
+	}
+	if (needle.len > buf.len) return -1;
+
+	int64_t maxStart = buf.len - needle.len;
+	int64_t start = (byteOffset < 0 || byteOffset > maxStart) ? maxStart : byteOffset;
+
+	for (int64_t i = start; i >= 0; i--) {
+		if (memcmp(buf.p->data + i, needle.p->data, needle.len) == 0) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+/* ===== String Operations ===== */
+
+int64_t msBufferWriteString(msBuffer buf, msString str, int64_t offset, int64_t length, msString encoding) {
+	if (!buf.p || !str.p || str.len == 0) return 0;
+	if (offset < 0 || offset >= buf.len) return 0;
+
+	int64_t maxLen = (length < 0) ? (buf.len - offset) : length;
+	if (offset + maxLen > buf.len) {
+		maxLen = buf.len - offset;
+	}
+
+	const char* enc = encoding.p ? encoding.p->data : NULL;
+	int64_t encLen = encoding.len;
+
+	if (!enc || encLen == 0 || encodingEq(enc, encLen, "utf8") || encodingEq(enc, encLen, "utf-8")) {
+		int64_t toWrite = (str.len < maxLen) ? str.len : maxLen;
+		memcpy(buf.p->data + offset, str.p->data, toWrite);
+		return toWrite;
+	}
+
+	if (encodingEq(enc, encLen, "latin1") || encodingEq(enc, encLen, "binary")) {
+		int64_t toWrite = (str.len < maxLen) ? str.len : maxLen;
+		memcpy(buf.p->data + offset, str.p->data, toWrite);
+		return toWrite;
+	}
+
+	if (encodingEq(enc, encLen, "ascii")) {
+		int64_t toWrite = (str.len < maxLen) ? str.len : maxLen;
+		for (int64_t i = 0; i < toWrite; i++) {
+			buf.p->data[offset + i] = str.p->data[i] & 0x7F;
+		}
+		return toWrite;
+	}
+
+	if (encodingEq(enc, encLen, "hex")) {
+		int64_t hexPairs = str.len / 2;
+		int64_t toWrite = (hexPairs < maxLen) ? hexPairs : maxLen;
+		for (int64_t i = 0; i < toWrite; i++) {
+			int hi = hexCharToInt(str.p->data[i * 2]);
+			int lo = hexCharToInt(str.p->data[i * 2 + 1]);
+			buf.p->data[offset + i] = (hi < 0 || lo < 0) ? 0 : (char)((hi << 4) | lo);
+		}
+		return toWrite;
+	}
+
+	if (encodingEq(enc, encLen, "base64") || encodingEq(enc, encLen, "base64url")) {
+		int padding = 0;
+		if (str.len > 0 && str.p->data[str.len - 1] == '=') padding++;
+		if (str.len > 1 && str.p->data[str.len - 2] == '=') padding++;
+		int64_t outLen = (str.len * 3) / 4 - padding;
+		int64_t toWrite = (outLen < maxLen) ? outLen : maxLen;
+
+		int64_t j = 0;
+		for (int64_t i = 0; i < str.len && j < toWrite; i += 4) {
+			int a = b64CharToInt(str.p->data[i]);
+			int b = (i + 1 < str.len) ? b64CharToInt(str.p->data[i + 1]) : 0;
+			int c = (i + 2 < str.len) ? b64CharToInt(str.p->data[i + 2]) : 0;
+			int d = (i + 3 < str.len) ? b64CharToInt(str.p->data[i + 3]) : 0;
+			if (a < 0) a = 0; if (b < 0) b = 0; if (c < 0) c = 0; if (d < 0) d = 0;
+			if (j < toWrite) buf.p->data[offset + j++] = (char)((a << 2) | (b >> 4));
+			if (j < toWrite) buf.p->data[offset + j++] = (char)(((b & 0x0F) << 4) | (c >> 2));
+			if (j < toWrite) buf.p->data[offset + j++] = (char)(((c & 0x03) << 6) | d);
+		}
+		return j;
+	}
+
+	int64_t toWrite = (str.len < maxLen) ? str.len : maxLen;
+	memcpy(buf.p->data + offset, str.p->data, toWrite);
+	return toWrite;
+}
+
+/* ===== Variable-Length Integer Read/Write ===== */
+
+int64_t msBufferReadUintLE(msBuffer buf, int64_t offset, int64_t byteLength) {
+	if (!buf.p || offset < 0 || byteLength == 0 || byteLength > 6 || offset + byteLength > buf.len) return 0;
+	uint64_t val = 0;
+	for (int64_t i = 0; i < byteLength; i++) {
+		val |= ((uint64_t)(unsigned char)buf.p->data[offset + i]) << (i * 8);
+	}
+	return (int64_t)val;
+}
+
+int64_t msBufferReadUintBE(msBuffer buf, int64_t offset, int64_t byteLength) {
+	if (!buf.p || offset < 0 || byteLength == 0 || byteLength > 6 || offset + byteLength > buf.len) return 0;
+	uint64_t val = 0;
+	for (int64_t i = 0; i < byteLength; i++) {
+		val |= ((uint64_t)(unsigned char)buf.p->data[offset + i]) << ((byteLength - 1 - i) * 8);
+	}
+	return (int64_t)val;
+}
+
+int64_t msBufferReadIntLE(msBuffer buf, int64_t offset, int64_t byteLength) {
+	if (!buf.p || offset < 0 || byteLength == 0 || byteLength > 6 || offset + byteLength > buf.len) return 0;
+	uint64_t val = 0;
+	for (int64_t i = 0; i < byteLength; i++) {
+		val |= ((uint64_t)(unsigned char)buf.p->data[offset + i]) << (i * 8);
+	}
+	uint64_t signBit = 1ULL << (byteLength * 8 - 1);
+	if (val & signBit) {
+		val |= ~((1ULL << (byteLength * 8)) - 1);
+	}
+	return (int64_t)val;
+}
+
+int64_t msBufferReadIntBE(msBuffer buf, int64_t offset, int64_t byteLength) {
+	if (!buf.p || offset < 0 || byteLength == 0 || byteLength > 6 || offset + byteLength > buf.len) return 0;
+	uint64_t val = 0;
+	for (int64_t i = 0; i < byteLength; i++) {
+		val |= ((uint64_t)(unsigned char)buf.p->data[offset + i]) << ((byteLength - 1 - i) * 8);
+	}
+	uint64_t signBit = 1ULL << (byteLength * 8 - 1);
+	if (val & signBit) {
+		val |= ~((1ULL << (byteLength * 8)) - 1);
+	}
+	return (int64_t)val;
+}
+
+int64_t msBufferWriteUintLE(msBuffer buf, int64_t value, int64_t offset, int64_t byteLength) {
+	if (!buf.p || offset < 0 || byteLength == 0 || byteLength > 6 || offset + byteLength > buf.len) return offset;
+	uint64_t v = (uint64_t)value;
+	for (int64_t i = 0; i < byteLength; i++) {
+		buf.p->data[offset + i] = (char)((v >> (i * 8)) & 0xFF);
+	}
+	return offset + byteLength;
+}
+
+int64_t msBufferWriteUintBE(msBuffer buf, int64_t value, int64_t offset, int64_t byteLength) {
+	if (!buf.p || offset < 0 || byteLength == 0 || byteLength > 6 || offset + byteLength > buf.len) return offset;
+	uint64_t v = (uint64_t)value;
+	for (int64_t i = 0; i < byteLength; i++) {
+		buf.p->data[offset + i] = (char)((v >> ((byteLength - 1 - i) * 8)) & 0xFF);
+	}
+	return offset + byteLength;
+}
+
+int64_t msBufferWriteIntLE(msBuffer buf, int64_t value, int64_t offset, int64_t byteLength) {
+	return msBufferWriteUintLE(buf, value, offset, byteLength);
+}
+
+int64_t msBufferWriteIntBE(msBuffer buf, int64_t value, int64_t offset, int64_t byteLength) {
+	return msBufferWriteUintBE(buf, value, offset, byteLength);
+}
+
+/* ===== Fill String ===== */
+
+msBuffer msBufferFillString(msBuffer buf, msString value, int64_t start, int64_t end, msString encoding) {
+	if (!buf.p || !value.p || value.len == 0) return buf;
+	if (start < 0) start = 0;
+	if (end > buf.len) end = buf.len;
+	if (start >= end) return buf;
+
+	const char* pattern = value.p->data;
+	int64_t patternLen = value.len;
+
+	msBuffer decoded;
+	decoded.len = 0;
+	decoded.p = NULL;
+	const char* enc = encoding.p ? encoding.p->data : NULL;
+	int64_t encLen = encoding.len;
+
+	if (enc && encLen > 0) {
+		if (encodingEq(enc, encLen, "hex")) {
+			decoded = msBufferFromHex(value);
+			if (decoded.p) {
+				pattern = decoded.p->data;
+				patternLen = decoded.len;
+			}
+		} else if (encodingEq(enc, encLen, "base64") || encodingEq(enc, encLen, "base64url")) {
+			decoded = msBufferFromBase64(value);
+			if (decoded.p) {
+				pattern = decoded.p->data;
+				patternLen = decoded.len;
+			}
+		}
+	}
+
+	if (patternLen == 0) {
+		if (decoded.p) free(decoded.p);
+		return buf;
+	}
+
+	/* Exponential doubling fill (Bun pattern: 1→2→4→8...) */
+	int64_t fillLen = end - start;
+	int64_t firstCopy = (patternLen < fillLen) ? patternLen : fillLen;
+	memcpy(buf.p->data + start, pattern, firstCopy);
+
+	if (decoded.p) free(decoded.p);
+
+	int64_t written = firstCopy;
+	while (written + written <= fillLen) {
+		memcpy(buf.p->data + start + written, buf.p->data + start, written);
+		written *= 2;
+	}
+	if (written < fillLen) {
+		memcpy(buf.p->data + start + written, buf.p->data + start, fillLen - written);
+	}
+
+	return buf;
+}
+
+/* ===== Fill Buffer (exponential doubling) ===== */
+
+msBuffer msBufferFillBuffer(msBuffer buf, msBuffer pattern, int64_t start, int64_t end) {
+	if (!buf.p || !pattern.p || pattern.len == 0) return buf;
+	if (start < 0) start = 0;
+	if (end > buf.len) end = buf.len;
+	if (start >= end) return buf;
+
+	int64_t fillLen = end - start;
+	int64_t patLen = pattern.len;
+
+	if (patLen == 1) {
+		memset(buf.p->data + start, (unsigned char)pattern.p->data[0], fillLen);
+		return buf;
+	}
+
+	int64_t firstCopy = (patLen < fillLen) ? patLen : fillLen;
+	memcpy(buf.p->data + start, pattern.p->data, firstCopy);
+
+	int64_t written = firstCopy;
+	while (written + written <= fillLen) {
+		memcpy(buf.p->data + start + written, buf.p->data + start, written);
+		written *= 2;
+	}
+	if (written < fillLen) {
+		memcpy(buf.p->data + start + written, buf.p->data + start, fillLen - written);
+	}
+
+	return buf;
+}
+
+/* ===== toString with encoding + range ===== */
+
+msString msBufferToStringRange(msBuffer buf, int64_t start, int64_t end, msString encoding) {
+	if (!buf.p || buf.len == 0) return MS_EMPTY_STRING;
+	if (start < 0) start = 0;
+	if (end < 0 || end > buf.len) end = buf.len;
+	if (start >= end) return MS_EMPTY_STRING;
+
+	int64_t len = end - start;
+	const char* enc = encoding.p ? encoding.p->data : NULL;
+	int64_t encLen = encoding.len;
+
+	/* utf8/latin1/binary: raw bytes as string */
+	if (!enc || encLen == 0 || encodingEq(enc, encLen, "utf8") || encodingEq(enc, encLen, "utf-8") ||
+	    encodingEq(enc, encLen, "latin1") || encodingEq(enc, encLen, "binary")) {
+		return msStringNew(buf.p->data + start, len);
+	}
+
+	if (encodingEq(enc, encLen, "ascii")) {
+		char* out = (char*)malloc(len + 1);
+		if (!out) return MS_EMPTY_STRING;
+		for (int64_t i = 0; i < len; i++) {
+			out[i] = buf.p->data[start + i] & 0x7F;
+		}
+		out[len] = '\0';
+		msString result = msStringNew(out, len);
+		free(out);
+		return result;
+	}
+
+	if (encodingEq(enc, encLen, "hex")) {
+		int64_t hexLen = len * 2;
+		char* out = (char*)malloc(hexLen + 1);
+		if (!out) return MS_EMPTY_STRING;
+		for (int64_t i = 0; i < len; i++) {
+			unsigned char byte = (unsigned char)buf.p->data[start + i];
+			out[i * 2] = hexTable[byte >> 4];
+			out[i * 2 + 1] = hexTable[byte & 0x0F];
+		}
+		out[hexLen] = '\0';
+		msString result = msStringNew(out, hexLen);
+		free(out);
+		return result;
+	}
+
+	if (encodingEq(enc, encLen, "base64") || encodingEq(enc, encLen, "base64url")) {
+		int64_t outLen = ((len + 2) / 3) * 4;
+		char* out = (char*)malloc(outLen + 1);
+		if (!out) return MS_EMPTY_STRING;
+		int64_t j = 0;
+		for (int64_t i = 0; i < len; i += 3) {
+			unsigned char b0 = (unsigned char)buf.p->data[start + i];
+			unsigned char b1 = (i + 1 < len) ? (unsigned char)buf.p->data[start + i + 1] : 0;
+			unsigned char b2 = (i + 2 < len) ? (unsigned char)buf.p->data[start + i + 2] : 0;
+			out[j++] = b64Chars[b0 >> 2];
+			out[j++] = b64Chars[((b0 & 0x03) << 4) | (b1 >> 4)];
+			out[j++] = (i + 1 < len) ? b64Chars[((b1 & 0x0F) << 2) | (b2 >> 6)] : '=';
+			out[j++] = (i + 2 < len) ? b64Chars[b2 & 0x3F] : '=';
+		}
+		out[outLen] = '\0';
+		msString result = msStringNew(out, outLen);
+		free(out);
+		return result;
+	}
+
+	/* Default: utf8 */
+	return msStringNew(buf.p->data + start, len);
 }

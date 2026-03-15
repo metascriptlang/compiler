@@ -93,6 +93,7 @@ export function defineSymbol(table: SymbolTable, sym: Symbol): Result<boolean, s
 		if (existing.nameId === nameId) {
 			// Allow function overloads: same name, both functions
 			if (existing.symbolKind === SymbolKind.Function && sym.symbolKind === SymbolKind.Function) {
+				sym.overloadIdx = existing.overloads.length + 1;
 				existing.overloads.push(sym);
 				return Result.ok(true);
 			}
@@ -160,6 +161,7 @@ export function makeSymbolState(name: string, kind: SymbolKind, symType: Type, m
 	sym.modulePath = "";
 	sym.originalName = "";
 	sym.headerPath = "";
+	sym.overloadIdx = 0;
 	return sym;
 }
 

@@ -366,7 +366,7 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 		}
 		// Module-qualified name for function references (Standard reference parity)
 		if (idSym !== null && idSym.symbolKind === SymbolKind.Function) {
-			ctx.results.push(mangledFunctionName(idSym, d.name, 0));
+			ctx.results.push(mangledFunctionName(idSym, d.name, idSym.overloadIdx));
 		} else {
 			// Reference parity: build CLoc for identifier, auto-dereference if indirect location
 			const isIndirect = isIndirectParam(p, d.name) || isIndirectLocal(p, d.name);
