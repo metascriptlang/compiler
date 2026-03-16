@@ -16,7 +16,7 @@ import {
 	Node, NodeKind, NodeFlag, DeclKind, ProgramData, SourceLocation,
 	CallExprData, MemberExprData, IdentifierData, BinaryExprData, NewExprData,
 } from "../../ast/node";
-import { Type, TypeKind, isNumeric, createResult, createArray, createPrimitive, stringType, booleanType, numberType, unknownType, unwrapRef, typeNameOf } from "../../checker/types";
+import { Type, TypeKind, isNumeric, createResult, createArray, createPrimitive, stringType, booleanType, numberType, unknownType, unwrapRef, typeNameOf, isResult, isPromise, getResultOkType, getResultErrType } from "../../checker/types";
 import { findExtension } from "../../checker/context";
 import { TransformContext, hasEmitted } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
@@ -280,9 +280,10 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 			unboxCall.nodeType = retType;
 			return unboxCall;
 		}
-		// Struct types: void* is the heap-allocated struct pointer
-		waitCall.nodeType = retType;
-		return waitCall;
+		// Struct types: codegen expands msUnboxStruct(ptr) → copy out + free shell
+		const unboxCall = makeCall(makeIdent("msUnboxStruct", loc), [waitCall], loc);
+		unboxCall.nodeType = retType;
+		return unboxCall;
 	}
 
 	if (builtinKind === "JsonParse") {
@@ -336,7 +337,7 @@ function rewriteResultToLiteral(node: Node, isOk: boolean, ctx: TransformContext
 	const loc = node.location;
 	let resType = node.nodeType;
 	// Fallback: infer Result type from argument when nodeType is missing
-	if (resType === null || resType.kind !== TypeKind.Result) {
+	if (resType === null || !isResult(resType)) {
 		if (cd.arguments.length > 0 && cd.arguments[0].nodeType !== null) {
 			if (isOk) {
 				resType = createResult(cd.arguments[0].nodeType, stringType());
@@ -345,7 +346,7 @@ function rewriteResultToLiteral(node: Node, isOk: boolean, ctx: TransformContext
 			}
 			node.nodeType = resType;
 		}
-		if (resType === null || resType.kind !== TypeKind.Result) {
+		if (resType === null || !isResult(resType)) {
 			return node;
 		}
 	}
@@ -354,12 +355,14 @@ function rewriteResultToLiteral(node: Node, isOk: boolean, ctx: TransformContext
 	const values: Node[] = [makeBool(isOk, loc)];
 
 	if (isOk) {
-		if (resType.typeReturn.kind !== TypeKind.Void) {
+		const okType = getResultOkType(resType);
+		if (okType !== null && okType.kind !== TypeKind.Void) {
 			keys.push("value");
 			values.push(cd.arguments[0]);
 		}
 	} else {
-		if (resType.typeExtra.kind !== TypeKind.Void) {
+		const errType = getResultErrType(resType);
+		if (errType !== null && errType.kind !== TypeKind.Void) {
 			keys.push("error");
 			values.push(cd.arguments[0]);
 		}
@@ -515,7 +518,7 @@ function preludeLowerCallee(preludeSrc: string, userSrc: string): string {
 // Rewrites new Promise(executor) → msPromiseNew(executor)
 
 function lowerNewPromise(node: Node): Node {
-	if (node.nodeType !== null && node.nodeType.kind === TypeKind.Promise) {
+	if (node.nodeType !== null && isPromise(node.nodeType)) {
 		const d = node.data as NewExprData;
 		if (d.newArguments.length === 1) {
 			const loc = node.location;

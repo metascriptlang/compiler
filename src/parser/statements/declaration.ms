@@ -186,7 +186,7 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 	const nameToken = current(state);
 	// Accept Ident, OperatorIdent (backtick-quoted: `==`, `[]`), TemplateNoSub, or contextual keywords
 	// Reference compiler: parser.zig:864 — operator_identifier token accepted as function name
-	if (!isIdentLike(nameToken) && nameToken.kind !== TokenKind.TemplateNoSub && nameToken.kind !== TokenKind.OperatorIdent) {
+	if (!isIdentLike(nameToken) && !isPropertyName(nameToken) && nameToken.kind !== TokenKind.TemplateNoSub && nameToken.kind !== TokenKind.OperatorIdent) {
 		return Result.err(`Expected function name at line ${nameToken.line}`);
 	}
 
@@ -1232,7 +1232,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 
 	// Parse name
 	const nameToken = current(state);
-	if (!isIdentLike(nameToken)) {
+	if (!isIdentLike(nameToken) && !isPropertyName(nameToken)) {
 		return Result.err(`Expected identifier in extern declaration at line ${nameToken.line}`);
 	}
 	advance(state);

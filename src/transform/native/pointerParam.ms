@@ -23,7 +23,7 @@ import {
 	HiddenDerefData, HiddenStdConvData,
 	SourceLocation, makeLoc,
 } from "../../ast/node";
-import { Type, TypeKind, createPtr, isInterfaceType, getTypeSize } from "../../checker/types";
+import { Type, TypeKind, createPtr, isInterfaceType, getTypeSize, isResult } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeHiddenAddr, makeHiddenDeref } from "../util";
@@ -54,7 +54,7 @@ export function ccgIntroducedPtr(t: Type): boolean {
 	// Reference: tuple types — same size threshold
 	if (t.kind === TypeKind.Tuple) return getTypeSize(t) > PTR_THRESHOLD;
 	// Result/Union/Span — always by pointer (compound types, no reference equivalent for size check)
-	if (t.kind === TypeKind.Result) return true;
+	if (isResult(t)) return true;
 	if (t.kind === TypeKind.Union) return true;
 	if (t.kind === TypeKind.Span) return true;
 	return false;

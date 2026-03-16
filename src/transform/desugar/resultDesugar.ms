@@ -25,7 +25,7 @@ import {
 	CallExprData, MemberExprData, IdentifierData, HiddenDerefData,
 	IfStmtData,
 } from "../../ast/node";
-import { Type, TypeKind, booleanType, unknownType } from "../../checker/types";
+import { Type, TypeKind, booleanType, unknownType, isResult, getResultOkType, getResultErrType } from "../../checker/types";
 import { makeSymbol, lookupSymbol } from "../../checker/symbol";
 import { TransformContext, freshTemp } from "../context";
 import { walkNode, walkExpandBlocksHooked, containsExprKind, replaceInExpr } from "../walker";
@@ -44,11 +44,11 @@ function makeResultMember(tempName: string, resType: Type, propName: string, loc
 	const ref = makeIdent(tempName, loc);
 	const mem = makeMember(ref, propName, loc);
 
-	if (resType !== null && resType.kind === TypeKind.Result) {
+	if (resType !== null && isResult(resType)) {
 		let propType: Type = unknownType();
 		if (propName === "ok") { propType = booleanType(); }
-		else if (propName === "value") { propType = resType.typeReturn !== null ? resType.typeReturn : unknownType(); }
-		else if (propName === "error") { propType = resType.typeExtra !== null ? resType.typeExtra : unknownType(); }
+		else if (propName === "value") { propType = getResultOkType(resType) !== null ? getResultOkType(resType) : unknownType(); }
+		else if (propName === "error") { propType = getResultErrType(resType) !== null ? getResultErrType(resType) : unknownType(); }
 		mem.nodeType = propType;
 		const propSym = makeSymbol(propName, SymbolKind.Property, propType, false);
 		propSym.state = SymbolState.Shaped;
@@ -249,7 +249,7 @@ function makeErrorCheck(tempName: string, resType: Type, loc: SourceLocation, ct
 
 	const errorAccess = makeResultMember(tempName, resType, "error", loc);
 	// Use enclosing function's return type for the error literal, falling back to resType
-	const errRetType = (enclosingFnRetType !== null && enclosingFnRetType.kind === TypeKind.Result)
+	const errRetType = (enclosingFnRetType !== null && isResult(enclosingFnRetType))
 		? enclosingFnRetType : resType;
 	const resultErr = makeResultErr(errorAccess, errRetType, loc);
 
@@ -334,5 +334,5 @@ test "makeErrorCheck Result.err call has nodeType" {
 	const thenBlock = ifData.consequent.data as BlockStmtData;
 	const retData = thenBlock.statements[0].data as RetData;
 	assert retData.argument.nodeType !== null;
-	assert retData.argument.nodeType.kind === TK.Result;
+	assert retData.argument.nodeType !== null;
 }

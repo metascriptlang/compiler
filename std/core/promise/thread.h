@@ -39,6 +39,10 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 		msCurrException = NULL;
 	} else {
 		msFutureComplete(ctx->fut, result);
+		/* Set valueDestructor so abandoned promises free the boxed value */
+		if (result != NULL) {
+			ctx->fut->valueDestructor = free;
+		}
 	}
 	/* Release worker's ownership of the env (ref acquired in msSpawn) */
 	if (ctx->env != NULL) {

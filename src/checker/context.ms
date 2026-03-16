@@ -230,11 +230,17 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type): boolean {
 			return isAssignable(objElem, recvElem);
 		}
 	}
-	// Name-based matching for well-known types (system module symbol lookup).
-	// Built-in TypeKinds (Promise, Result) have a different kind than their std lib class
-	// (Ref<Struct>), but share the same type name. Fall back to name comparison.
-	if (ext.receiverTypeName !== "" && ext.receiverTypeName === typeNameOf(objType)) {
-		return true;
+	// Name-based matching for well-known types and monomorphized generics.
+	// Monomorphized types have names like "Map__string,string" — match base name "Map".
+	if (ext.receiverTypeName !== "") {
+		const objName = typeNameOf(objType);
+		if (ext.receiverTypeName === objName) return true;
+		// Check base name for monomorphized generics: "Map__string,string" → "Map"
+		const sepPos = findChar(objName, "_");
+		if (sepPos > 0 && sepPos + 1 < objName.length && objName.charAt(sepPos + 1) === "_") {
+			const baseName = objName.slice(0, sepPos);
+			if (ext.receiverTypeName === baseName) return true;
+		}
 	}
 	return isAssignable(objType, receiverType);
 }
@@ -297,7 +303,11 @@ export function getExtReceiverType(flags: string): string {
 	const rest = seg.slice(4, seg.length);
 	const colonPos = findChar(rest, ":");
 	if (colonPos <= 0) return "";
-	return rest.slice(colonPos + 1, rest.length);
+	const fullType = rest.slice(colonPos + 1, rest.length);
+	// Strip generic params: "Map<K, V>" or "Map < K , V >" → "Map" for receiver matching
+	const ltPos = findChar(fullType, "<");
+	if (ltPos > 0) return fullType.slice(0, ltPos).trim();
+	return fullType.trim();
 }
 
 export function getStaticExtTypeName(flags: string): string {
@@ -493,6 +503,9 @@ export class CheckerContext {
 	strictDefs: boolean;         // ref parity: strictDefs — warn on all uninit var use
 	strictNullChecks: boolean;   // ref parity: strictNotNil — warn on unguarded class deref
 	inTryExpr: boolean;          // true when checking tryArg of TryExpr or body of TryCatchStmt (V2 await guard)
+	genericInstDepth: int32;     // recursion depth for on-demand instantiation (limit 50)
+	generatedInstances: Node[];  // on-demand instantiated function ASTs to inject into program
+	preludeCtx: CheckerContext;  // access private prelude symbols during instantiation
 }
 
 // ===== Constructors =====
@@ -524,6 +537,9 @@ export function createContext(): CheckerContext {
 		strictDefs: false,
 		strictNullChecks: false,
 		inTryExpr: false,
+		genericInstDepth: 0,
+		generatedInstances: [],
+		preludeCtx: null as unknown as CheckerContext,
 	};
 }
 

@@ -22,7 +22,7 @@ import {
 	typeNameOf, unwrapRef, isDiscriminatedUnion, findVariantByDiscriminant, findFieldInVariant, findUnionVariant,
 	unifyType, createUnifyBindings, hasGenericParams,
 	getMinArity, setMinArity, isNarrowingIntConv, CallingConvention, skipModifier,
-	createPromise, isPromise, getPromiseInner, createGenericParam,
+	createPromise, isPromise, getPromiseInner, isResult, getResultOkType, createGenericParam,
 } from "./types";
 import {
 	Symbol, SymbolKind, ScopeKind, SymbolState, SymbolFlag,
@@ -42,6 +42,7 @@ import {
 	markInitialized, isInitialized, impliesNotNull, getDeclBlock,
 	saveInitState, restoreInitState, collectNewInits, mergeInitBranches, breaksBlock, BreakState,
 } from "./initTracker";
+import { instantiateGenericFunction } from "./instantiate";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -138,7 +139,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			const d = node.data as IdentifierData;
 			const sym = lookupSymbol(ctx.table, d.name);
 			if (sym === null) {
-				addError(ctx, `Undefined variable '${d.name}'`, node.location.line, node.location.column);
+					addError(ctx, `Undefined variable '${d.name}'`, node.location.line, node.location.column);
 				return errorType();
 			}
 			// Demand-driven: ensure the symbol's signature is resolved before using its type
@@ -509,7 +510,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			checkExpr(ctx, d.spreadArg, null);
 			return unknownType();
 		},
-		NodeKind.NewExpr => checkNewExpr(ctx, node),
+		NodeKind.NewExpr => checkNewExpr(ctx, node, expectedType),
 		NodeKind.TryExpr => checkTryExpr(ctx, node),
 		NodeKind.MatchExpr => checkMatchExpr(ctx, node),
 		NodeKind.AwaitExpr => {
@@ -521,7 +522,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 				// V2: in async fn returning Promise<Result<T,E>>, bare await on non-Result promise is error
 				if (!ctx.inTryExpr
 					&& isInAsyncPromiseResult(ctx)
-					&& (argType.typeReturn === null || argType.typeReturn.kind !== TypeKind.Result)) {
+					&& (argType.typeReturn === null || !isResult(argType.typeReturn))) {
 					addError(ctx, "await on non-Result Promise must be guarded with 'try await ... catch ...' in function returning Promise<Result<T,E>>", node.location.line, node.location.column);
 				}
 				return node.nodeType;
@@ -865,23 +866,29 @@ function fillDefaultArgsForNode(ctx: CheckerContext, callNode: Node, fnName: str
 
 // ===== NewExpr =====
 
-function checkNewExpr(ctx: CheckerContext, node: Node): Type {
+function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type): Type {
 	const d = node.data as NewExprData;
-	// new Promise<T>(executor) — built-in type, not a class
+	// new BuiltinType<...>() — construct value types (Map, Set) and Promise
 	if (d.newCallee.kind === NodeKind.Identifier) {
 		const id = d.newCallee.data as IdentifierData;
-		if (id.name === "Promise") {
-			// Resolve type param: new Promise<string>(...) → Promise<string>
-			const typeArgStr = findCallTypeArg(node);
-			const innerType = typeArgStr !== null && typeArgStr !== "" ? resolveAnnotation(typeArgStr, ctx) : voidType();
-			// Check executor argument with expected type: (resolve: (T) => void, reject: (string) => void) => void
-			if (d.newArguments.length >= 1) {
-				checkExpr(ctx, d.newArguments[0], null);
+		// Interface/value type: new Map() / new Array(32) with type from variable annotation
+		if (expected !== null && (expected.kind === TypeKind.Struct || expected.kind === TypeKind.GenericInstance)) {
+			node.nodeType = expected;
+			// Check arguments
+			for (let ai = 0; ai < d.newArguments.length; ai += 1) {
+				checkExpr(ctx, d.newArguments[ai], null);
 			}
-			const promType = createPromise(innerType);
-			node.nodeType = promType;
-			return promType;
+			return expected;
 		}
+		// Array with expected element type: new Array(32) in typed context
+		if (expected !== null && expected.kind === TypeKind.Array && id.name === "Array") {
+			node.nodeType = expected;
+			for (let ai = 0; ai < d.newArguments.length; ai += 1) {
+				checkExpr(ctx, d.newArguments[ai], null);
+			}
+			return expected;
+		}
+		// Promise, Map, Set all resolve through resolveGenericNewExpr below
 	}
 	const calleeType = checkExpr(ctx, d.newCallee, null);
 	const resolvedType = resolveGenericNewExpr(ctx, d.newCallee, calleeType);
@@ -899,7 +906,12 @@ function checkNewExpr(ctx: CheckerContext, node: Node): Type {
 		checkExpr(ctx, d.newArguments[ai], argExpected);
 		ai = ai + 1;
 	}
-	if (resolvedType !== null && (resolvedType.kind === TypeKind.Struct || resolvedType.kind === TypeKind.Ref)) {
+	if (resolvedType !== null && (resolvedType.kind === TypeKind.Struct || resolvedType.kind === TypeKind.Ref || resolvedType.kind === TypeKind.GenericInstance)) {
+		return resolvedType;
+	}
+	// Forward reference: type not yet resolved
+	if (resolvedType !== null && resolvedType.kind === TypeKind.TypeReference) {
+		node.nodeType = resolvedType;
 		return resolvedType;
 	}
 	return unknownType();
@@ -919,8 +931,8 @@ function checkTryExpr(ctx: CheckerContext, node: Node): Type {
 	if (d.hasCatch) {
 		checkExpr(ctx, d.catchVal, null);
 	}
-	if (argType !== null && argType.kind === TypeKind.Result && argType.typeReturn !== null) {
-		return argType.typeReturn;
+	if (argType !== null && isResult(argType) && getResultOkType(argType) !== null) {
+		return getResultOkType(argType);
 	}
 	return argType;
 }
@@ -990,8 +1002,11 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 					const winner = filtered[0];
 					if (winner.sym !== null) {
 						ensureShaped(winner.sym, ctx);
-						node.resolvedSym = winner.sym;
-						d.callee.resolvedSym = winner.sym;
+						// Don't overwrite instSym (on-demand instantiated) with generic sym
+						if (node.resolvedSym === null || node.resolvedSym.name.indexOf("__", 0) < 0) {
+							node.resolvedSym = winner.sym;
+							d.callee.resolvedSym = winner.sym;
+						}
 						sgRecordSym(ctx, d.callee.location.line, d.callee.location.column + 1, d.callee.location.column + 1 + me.property.length, winner.sym, getExtFnType(winner), SymbolKind.Method, me.property, winner.receiverTypeName, false);
 						node.flags = node.flags | NodeFlag.ExtCall;
 						if (winner.isStatic) node.flags = node.flags | NodeFlag.ExtStatic;
@@ -1120,6 +1135,32 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 					convNode.nodeType = paramType;
 					convNode.flags = convNode.flags | NodeFlag.Sem;
 					d.arguments[pi] = convNode;
+				}
+			}
+		}
+		// On-demand generic instantiation for direct calls (transitive instantiation)
+		// When a generic function is called with concrete arg types, instantiate it.
+		if (node.resolvedSym !== null && node.resolvedSym.declNode !== null
+			&& node.resolvedSym.declNode.kind === NodeKind.FunctionDecl
+			&& node.resolvedSym.builtinKind === "") {  // skip builtins — they're rewritten, not instantiated
+			const directFlags = (node.resolvedSym.declNode.data as FunctionDeclData).fnFlags;
+			if (directFlags.indexOf("gen:", 0) >= 0) {
+				// Infer concrete types via structural unification
+				// GenericInstance types unify directly — no string parsing needed
+				const deb = createUnifyBindings();
+				const dLimit = argTypes.length < calleeType.typeChildren.length ? argTypes.length : calleeType.typeChildren.length;
+				for (let di = 0; di < dLimit; di += 1) {
+					if (argTypes[di] !== null) {
+						unifyType(calleeType.typeChildren[di], argTypes[di], deb);
+					}
+				}
+				if (deb.names.length > 0) {
+					const directInstSym = instantiateGenericFunction(node.resolvedSym, deb.names, deb.types, ctx);
+					if (directInstSym !== null) {
+						node.resolvedSym = directInstSym;
+						d.callee.resolvedSym = directInstSym;
+						calleeType = directInstSym.symbolType;
+					}
 				}
 			}
 		}
@@ -1653,11 +1694,6 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 							genericParams.push(createGenericParam(gn.trim()));
 						}
 						let formalType: Type = null as unknown as Type;
-						if (resolvedObjType.kind === TypeKind.Promise && genericParams.length >= 1) {
-							formalType = createPromise(genericParams[0]);
-						} else if (resolvedObjType.kind === TypeKind.Result && genericParams.length >= 2) {
-							formalType = createResult(genericParams[0], genericParams[1]);
-						}
 						if (formalType !== null) {
 							const eb = createUnifyBindings();
 							unifyType(formalType, resolvedObjType, eb);
@@ -1739,62 +1775,9 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 		node.resolvedSym = propSym;
 		return numberType();
 	}
-	// Map properties and methods
-	if (resolvedObjType.kind === TypeKind.Map) {
-		if (d.property === "size") {
-			const sizeSym = makeSymbol("size", SymbolKind.Property, numberType(), false);
-			sizeSym.state = SymbolState.Shaped;
-			node.resolvedSym = sizeSym;
-			return numberType();
-		}
-		// Map methods: get, set, has, delete, clear → function types
-		const valType = resolvedObjType.typeExtra !== null ? resolvedObjType.typeExtra : unknownType();
-		const keyType = resolvedObjType.typeReturn !== null ? resolvedObjType.typeReturn : unknownType();
-		let methodType: Type = null;
-		if (d.property === "get") {
-			methodType = createFunction([keyType], ["key"], valType);
-		} else if (d.property === "has") {
-			methodType = createFunction([keyType], ["key"], booleanType());
-		} else if (d.property === "set") {
-			methodType = createFunction([keyType, valType], ["key", "value"], voidType());
-		} else if (d.property === "delete") {
-			methodType = createFunction([keyType], ["key"], booleanType());
-		} else if (d.property === "clear") {
-			methodType = createFunction([], [], voidType());
-		}
-		if (methodType !== null) {
-			const methodSym = makeSymbol(d.property, SymbolKind.Method, methodType, false);
-			methodSym.state = SymbolState.Shaped;
-			node.resolvedSym = methodSym;
-			return methodType;
-		}
-	}
-	// Set properties and methods
-	if (resolvedObjType.kind === TypeKind.Set) {
-		if (d.property === "size") {
-			const sizeSym = makeSymbol("size", SymbolKind.Property, numberType(), false);
-			sizeSym.state = SymbolState.Shaped;
-			node.resolvedSym = sizeSym;
-			return numberType();
-		}
-		const elemType = resolvedObjType.typeReturn !== null ? resolvedObjType.typeReturn : unknownType();
-		let methodType: Type = null;
-		if (d.property === "has") {
-			methodType = createFunction([elemType], ["value"], booleanType());
-		} else if (d.property === "add") {
-			methodType = createFunction([elemType], ["value"], voidType());
-		} else if (d.property === "delete") {
-			methodType = createFunction([elemType], ["value"], booleanType());
-		} else if (d.property === "clear") {
-			methodType = createFunction([], [], voidType());
-		}
-		if (methodType !== null) {
-			const methodSym = makeSymbol(d.property, SymbolKind.Method, methodType, false);
-			methodSym.state = SymbolState.Shaped;
-			node.resolvedSym = methodSym;
-			return methodType;
-		}
-	}
+	// Map/Set methods — resolved via class-aware field delegation bridge below.
+	// No hardcoded dispatch: Map and Set classes declare @builtin methods in std/core/structure.
+
 	// Class method lookup: ClassName_methodName in symbol table (methods are standalone procs).
 	// Filters by static/instance: static access (SymbolKind.Class) only matches static methods,
 	// instance access only matches instance methods. Checks overloads if primary doesn't match.
@@ -1886,10 +1869,21 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 			const extFnT = getExtFnType(ext);
 			if (!ext.isStatic && extFnT.typeChildren.length > 0) {
 				let srcType = extFnT;
-				if (hasGenericParams(srcType)) {
+				// Check for generics: either type-level (hasGenericParams) or flag-level (gen: in fnFlags)
+				const symHasGenerics = hasGenericParams(srcType) || (ext.sym !== null && ext.sym.declNode !== null && ext.sym.declNode.kind === NodeKind.FunctionDecl && (ext.sym.declNode.data as FunctionDeclData).fnFlags.indexOf("gen:", 0) >= 0);
+				if (symHasGenerics) {
 					const eb = createUnifyBindings();
+					// GenericInstance unification — structural matching, no string parsing
 					unifyType(srcType.typeChildren[0], objType, eb);
 					if (eb.names.length > 0) {
+						// On-demand instantiation (generateInstance pattern)
+						// Clone the generic function, substitute types, register specialized version
+						if (ext.sym !== null && ext.sym.declNode !== null && ext.sym.builtinKind === "") {
+							const instSym = instantiateGenericFunction(ext.sym, eb.names, eb.types, ctx);
+							if (instSym !== null) {
+								node.resolvedSym = instSym;
+							}
+						}
 						srcType = instantiateGeneric(srcType, eb.names, eb.types);
 					}
 				}

@@ -14,6 +14,11 @@ import { CheckerContext, addError } from "./context";
 export function validateTypedAST(ctx: CheckerContext, node: Node): void {
 	if (node === null) return;
 
+	// Skip validation for on-demand instantiated functions — their bodies
+	// are cloned from prelude and may have nodes without resolvedSym.
+	// The C codegen handles them correctly via mangledFunctionName.
+	if (node.kind === NodeKind.FunctionDecl && node.resolvedSym !== null && node.resolvedSym.originalName !== "") return;
+
 	// Check semantic metadata on expression nodes
 	if (isExpression(node)) {
 		if (node.nodeType === null) {

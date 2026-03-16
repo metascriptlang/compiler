@@ -420,16 +420,6 @@ function runtimeOp(prefix: string, destroyName: string, copySuffix: string, wasM
 	};
 }
 
-// --- Set lifecycle ---
-function setOp(hook: string, xf: Node, yf: Node, buf: NodeBuf, loc: SourceLocation): void {
-	match (hook) {
-		"destroy" => { genCall("msSetFree", hook, xf, yf, buf, loc); },
-		"copy" => { genCall("msSetCopy", hook, xf, yf, buf, loc); },
-		"sink" => { genInlineSink("msSetFree", xf, yf, buf, loc); },
-		_ => { defaultOp(hook, xf, yf, buf, loc); },
-	};
-}
-
 // ===== fillBody — pure routing table (Standard pattern) =====
 // Routes TypeKind to type family helper. No inline hook logic.
 
@@ -486,9 +476,7 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 			defaultOp(hook, xf, yf, buf, loc);
 		},
 		TypeKind.Function => { runtimeOp("msClosure", "msClosureDestroy", "Copy", "WasMoved", "Trace", true, hook, xf, yf, buf, loc); },
-		TypeKind.Map => { runtimeOp("msMap", "msMapFree", "Copy", "WasMoved", "Trace", false, hook, xf, yf, buf, loc); },
-		TypeKind.Set => { setOp(hook, xf, yf, buf, loc); },
-		TypeKind.Result => {},
+		TypeKind.GenericInstance => {},
 		TypeKind.Union => {
 			if (fieldType.typeName !== "") {
 				if (hook !== "trace" || isCyclicType(fieldType, lctx, visited)) {

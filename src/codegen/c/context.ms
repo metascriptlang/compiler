@@ -432,26 +432,23 @@ export function nameSetAdd(ns: NameSet, name: string): void {
 
 export class AliveSet {
 	entries: string[];   // "modulePath:symbolName" keys
+	_set: Set<string>;   // O(1) lookup mirror
 }
 
 export function createAliveSet(): AliveSet {
-	return { entries: [] };
+	return { entries: [], _set: new Set() };
 }
 
 export function aliveSetAdd(aliveSet: AliveSet, modulePath: string, name: string): void {
 	const key = modulePath + ":" + name;
-	for (let i = 0; i < aliveSet.entries.length; i += 1) {
-		if (aliveSet.entries[i] === key) return;
-	}
+	if (aliveSet._set.has(key)) return;
+	aliveSet._set.add(key);
 	aliveSet.entries.push(key);
 }
 
 export function aliveSetHas(aliveSet: AliveSet, modulePath: string, name: string): boolean {
 	const key = modulePath + ":" + name;
-	for (let i = 0; i < aliveSet.entries.length; i += 1) {
-		if (aliveSet.entries[i] === key) return true;
-	}
-	return false;
+	return aliveSet._set.has(key);
 }
 
 // ===== CGen — module-level state (Standard reference parity) =====

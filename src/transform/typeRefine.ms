@@ -23,7 +23,7 @@ import {
 	ForOfStmtData, ArrowFunctionData,
 	ReturnStmtData,
 } from "../ast/node";
-import { Type, TypeKind, isNumeric, numberType, booleanType, stringType, charType, createArray } from "../checker/types";
+import { Type, TypeKind, isNumeric, numberType, booleanType, stringType, charType, createArray, isResult, getResultOkType, getResultErrType } from "../checker/types";
 import { ExportRegistry } from "../checker/context";
 import { TransformContext } from "./context";
 import { mapChildren } from "./walker";
@@ -184,12 +184,10 @@ function rederiveMemberType(node: Node): void {
 		node.nodeType = numberType();
 	} else if (ot.kind === TypeKind.String && (prop === "byteLength" || prop === "unicodeLength")) {
 		node.nodeType = numberType();
-	} else if ((ot.kind === TypeKind.Map || ot.kind === TypeKind.Set) && prop === "size") {
-		node.nodeType = numberType();
-	} else if (ot.kind === TypeKind.Result) {
+	} else if (isResult(ot)) {
 		if (prop === "ok") { node.nodeType = booleanType(); }
-		else if (prop === "value" && ot.typeReturn !== null) { node.nodeType = ot.typeReturn; }
-		else if (prop === "error" && ot.typeExtra !== null) { node.nodeType = ot.typeExtra; }
+		else if (prop === "value" && getResultOkType(ot) !== null) { node.nodeType = getResultOkType(ot); }
+		else if (prop === "error" && getResultErrType(ot) !== null) { node.nodeType = getResultErrType(ot); }
 	} else if (ot.kind === TypeKind.Struct) {
 		// Primary: look up field in typeNames/typeChildren
 		let found = false;
@@ -443,7 +441,7 @@ function registryTypeLookup(name: string): Type {
 			if (sym.name === name && sym.symType !== null) {
 				const k = sym.symType.kind;
 				if (k === TypeKind.Struct || k === TypeKind.Enum || k === TypeKind.Array ||
-					k === TypeKind.Result || k === TypeKind.Span || k === TypeKind.Tuple ||
+					k === TypeKind.GenericInstance || k === TypeKind.Span || k === TypeKind.Tuple ||
 					k === TypeKind.Function || k === TypeKind.Ref || k === TypeKind.Ptr) {
 					return sym.symType;
 				}

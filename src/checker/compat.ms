@@ -21,14 +21,17 @@ export function isAssignable(source: Type, target: Type): boolean {
 	// Same kind is always compatible
 	if (source.kind === target.kind) {
 		return match (source.kind) {
-			TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Ref | TypeKind.Ptr | TypeKind.Promise => isAssignable(source.typeReturn, target.typeReturn),
+			TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Ref | TypeKind.Ptr => isAssignable(source.typeReturn, target.typeReturn),
 			TypeKind.Function => isFunctionAssignable(source, target),
 			TypeKind.Struct => isObjectAssignable(source, target),
 			TypeKind.Enum | TypeKind.Distinct | TypeKind.TypeReference => source.typeName === target.typeName,
-			TypeKind.Result => {
-				const okCompat = isAssignable(source.typeReturn, target.typeReturn);
-				const errCompat = isAssignable(source.typeExtra, target.typeExtra);
-				return okCompat && errCompat;
+			TypeKind.GenericInstance => {
+				// Structural compatibility: compare type args pairwise
+				const limit = source.typeChildren.length < target.typeChildren.length ? source.typeChildren.length : target.typeChildren.length;
+				for (let gi = 0; gi < limit; gi += 1) {
+					if (!isAssignable(source.typeChildren[gi], target.typeChildren[gi])) return false;
+				}
+				return source.typeName === target.typeName;
 			},
 			_ => true,
 		};
@@ -224,21 +227,13 @@ export function typeRelation(formal: Type, actual: Type): TypeRelation {
 				}
 				return TypeRelation.Exact;
 			},
-			TypeKind.Result => {
-				if (formal.typeReturn !== null && actual.typeReturn !== null) {
-					const okRel = typeRelation(formal.typeReturn, actual.typeReturn);
-					if (okRel === TypeRelation.None) return TypeRelation.None;
-				}
-				if (formal.typeExtra !== null && actual.typeExtra !== null) {
-					const errRel = typeRelation(formal.typeExtra, actual.typeExtra);
-					if (errRel === TypeRelation.None) return TypeRelation.None;
-				}
-				return TypeRelation.Exact;
-			},
-			TypeKind.Promise => {
-				if (formal.typeReturn !== null && actual.typeReturn !== null) {
-					const innerRel = typeRelation(formal.typeReturn, actual.typeReturn);
-					if (innerRel === TypeRelation.None) return TypeRelation.None;
+			TypeKind.GenericInstance => {
+				// Structural type arg comparison (Result, Promise, Map, Set, user generics)
+				if (formal.typeName !== actual.typeName) return TypeRelation.None;
+				const giLimit = formal.typeChildren.length < actual.typeChildren.length ? formal.typeChildren.length : actual.typeChildren.length;
+				for (let gi = 0; gi < giLimit; gi += 1) {
+					const argRel = typeRelation(formal.typeChildren[gi], actual.typeChildren[gi]);
+					if (argRel === TypeRelation.None) return TypeRelation.None;
 				}
 				return TypeRelation.Exact;
 			},

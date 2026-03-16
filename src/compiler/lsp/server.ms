@@ -223,7 +223,6 @@ export function processMessage(msg: string, state: LspServerState): string {
 		if (root.length > 0) {
 			state.db.stdPath = root + "/std";
 		}
-		lspLog("stdPath=" + state.db.stdPath + " root=" + root);
 	}
 	if (method === "shutdown") {
 		state.shutdownRequested = true;

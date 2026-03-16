@@ -7,6 +7,20 @@ import { join, dirname } from "std/fs/path";
 import { CliOptions } from "./options";
 import { resolveRuntimeDir } from "../utils/path";
 
+// -- ccache detection --
+
+let hasCcache = false;
+let ccacheChecked = false;
+
+function getCcachePrefix(): string {
+	if (!ccacheChecked) {
+		ccacheChecked = true;
+		hasCcache = exec("which ccache > /dev/null 2>&1") === 0;
+	}
+	if (hasCcache) return "ccache ";
+	return "";
+}
+
 // -- Runtime resolution --
 
 function resolveRuntime(): string {
@@ -90,7 +104,7 @@ export function cliAllFlags(opts: CliOptions): string {
 // -- Build command construction --
 
 function buildCompileCommand(cFile: string, outBinary: string, extraFlags: string, mode: number, ccOption: number): string {
-	let cmd = `${getCompilerName(ccOption)} -std=c11${modeFlags(mode)}`;
+	let cmd = `${getCcachePrefix()}${getCompilerName(ccOption)} -std=c11${modeFlags(mode)}`;
 
 	const rtDir = resolveRuntime();
 	if (rtDir !== "") {
@@ -112,7 +126,7 @@ export function compileC(cFile: string, outBinary: string, extraFlags: string, m
 // Compile a .c file to an object file only (-c flag, no linking).
 // Returns 0 on success, non-zero on failure.
 export function compileCFile(cFile: string, oFile: string, extraFlags: string, mode: number, ccOption: number): number {
-	let cmd = `${getCompilerName(ccOption)} -std=c11${modeFlags(mode)}`;
+	let cmd = `${getCcachePrefix()}${getCompilerName(ccOption)} -std=c11${modeFlags(mode)}`;
 
 	const rtDir = resolveRuntime();
 	if (rtDir !== "") {

@@ -149,6 +149,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 		const ctx = createModuleContext(graph, mod);
 		ctx.exportRegistry = registry;
 		injectPrelude(ctx, baseCtx);
+		ctx.preludeCtx = baseCtx;
 
 		// Open Module scope for this module's declarations
 		openScope(ctx.table, ScopeKind.Module);

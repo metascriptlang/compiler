@@ -290,7 +290,7 @@ function passCopyToSink(srcExpr: Node, dctx: DrcContext): Node {
 				makeCall(makeIdent(rcInfo.copyFn, loc), [destArg, srcArg], loc), loc));
 		}
 	} else {
-		// Simple refcounted (Ref, Closure, Map, Set): shallow copy + unary incref.
+		// Simple refcounted (Ref, Closure): shallow copy + unary incref.
 		// Reference parity: no registerVar — sink consumes ownership, no scope cleanup.
 		const tmpDecl = makeVarDecl(tmpName, srcExpr, DeclKind.Const, loc);
 		if (srcExpr.nodeType !== null) tmpDecl.nodeType = srcExpr.nodeType;
@@ -474,7 +474,7 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 // Reference parity: =copy(var dest, src) takes 2 args for Named and String types.
 // Named-type hooks take pointer params (reference pointer introduction), so we wrap in HiddenAddr.
 // String: msStringCopy(dest*, src) — dest by pointer, src by value (like seqLike Named).
-// Ref/Closure/Map/Set: still unary incref (simple refcount bump, no reassignment issue).
+// Ref/Closure: still unary incref (simple refcount bump, no reassignment issue).
 
 function isBinaryCopy(rcInfo: RcInfo): boolean {
 	return rcInfo.rcKind === RcKind.Named || rcInfo.rcKind === RcKind.String;
@@ -525,7 +525,7 @@ function makeWasMovedCall(varName: string, rcInfo: RcInfo, loc: SourceLocation):
 	return makeRcCallStmt(rcInfo.wasMovedFn, varName, loc);
 }
 
-// Reference parity: =copy(&dest, src) for Named and String types; unary incref for Ref/Closure/Map/Set.
+// Reference parity: =copy(&dest, src) for Named and String types; unary incref for Ref/Closure.
 function makeCopyAfterInit(destName: string, rcInfo: RcInfo, loc: SourceLocation, srcName: string): Node {
 	if (rcInfo.copyFn === "") return makeExprStmt(makeNull(loc), loc);
 	// 2-arg copy: Named types and String (=copy(&dest, src))
@@ -1319,7 +1319,7 @@ function processFuncBodyWithParams(body: Node, fnName: string, paramNames: strin
 
 // Emit RC operations for a borrowed value (ArrayAccess or MemberExpr assigned to a local).
 // Named/String: wasMoved(dest) + =copy(&dest, src) — 2-arg reference parity.
-// Simple RC types (Ref, Closure, Map, Set): shallow copy + unary incref.
+// Simple RC types (Ref, Closure): shallow copy + unary incref.
 function emitBorrowCopy(destName: string, srcExpr: Node, rcInfo: RcInfo, dctx: DrcContext, loc: SourceLocation): void {
 	if (isBinaryCopy(rcInfo) && rcInfo.copyFn !== "") {
 		// Named/String: wasMoved(dest) + =copy(&dest, src) — Reference parity
@@ -1330,7 +1330,7 @@ function emitBorrowCopy(destName: string, srcExpr: Node, rcInfo: RcInfo, dctx: D
 		const srcArg = isCopySrcByValue(rcInfo) ? srcExpr : makeHiddenAddr(srcExpr, loc);
 		addPending(dctx, makeExprStmt(
 			makeCall(makeIdent(rcInfo.copyFn, loc), [destArg, srcArg], loc), loc));
-	} else if (rcInfo.rcKind === RcKind.Ref || rcInfo.rcKind === RcKind.Closure || rcInfo.rcKind === RcKind.Map) {
+	} else if (rcInfo.rcKind === RcKind.Ref || rcInfo.rcKind === RcKind.Closure) {
 		// Simple unary incref
 		addPending(dctx, makeCopyAfterInit(destName, rcInfo, loc, ""));
 	}

@@ -180,7 +180,9 @@ static inline void* msFutureRead(msFuture* f) {
 		msErrPayload = f->error; /* may be NULL — caller checks msErr, not payload */
 		return NULL;
 	}
-	return f->value;
+	void* v = f->value;
+	f->value = NULL;  /* prevent valueDestructor double-free after waitFor consumes the value */
+	return v;
 }
 
 /* Standard reference addCallback(fut, cb) parity — if finished, callSoon(cb); else append.

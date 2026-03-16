@@ -5,25 +5,17 @@
 //   for (const item of arr) { body }
 //   → { const $iter = arr; let $idx = 0; const $len = $iter.length;
 //       while ($idx < $len) { const item = $iter[$idx]; body; $idx++; } }
-//
-// Maps/Sets (slot-scan pattern):
-//   for (const key of map) { body }
-//   → { const $iter = map; let $slot = 0; const $cap = msMapCap($iter);
-//       while ($slot < $cap) {
-//         if (msMapSlotState($iter, $slot) == 2) {
-//           const key = msMapSlotKey($iter, $slot); body; }
-//         $slot++; } }
 
 import {
 	Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation,
 	ArrayPatternData, IdentifierData, NodeFlag,
 } from "../../ast/node";
 import { TransformContext, freshTemp } from "../context";
-import { Type, TypeKind, numberType, stringType } from "../../checker/types";
+import { Type, numberType } from "../../checker/types";
 import { walkNode } from "../walker";
 import {
 	makeIdent, makeTypedIdent, makeNumber, makeBlock, makeVarDecl, makeWhile,
-	makeBinary, makeAssign, makeExprStmt, makeMember, makeArrayAccess, makeCall, makeIf,
+	makeBinary, makeAssign, makeExprStmt, makeMember, makeArrayAccess,
 	extractBodyStmts, boolToDeclKind,
 } from "../util";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
@@ -40,12 +32,6 @@ function forOfVisitor(ctx: TransformContext): (node: Node) => Node {
 		if (node.kind !== NodeKind.ForOfStmt) return node;
 		const d = node.data as ForOfStmtData;
 		const loc = node.location;
-		const iterType = d.forOfIterable.nodeType;
-
-		// Map/Set: slot-scan pattern
-		if (iterType !== null && (iterType.kind === TypeKind.Map || iterType.kind === TypeKind.Set)) {
-			return lowerCollectionForOf(d, iterType, ctx, loc);
-		}
 
 		// Array/String: index-based pattern
 		return lowerArrayForOf(d, ctx, loc);
@@ -124,118 +110,6 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	const whileNode = makeWhile(whileCond, whileBody, loc);
 
 	return makeBlock([iterDecl, idxDecl, lenDecl, whileNode], loc);
-}
-
-// ===== Map/Set For-Of (slot-scan) =====
-
-function lowerCollectionForOf(d: ForOfStmtData, iterType: Type, ctx: TransformContext, loc: SourceLocation): Node {
-	const iterName = freshTemp(ctx, "iter");
-	const slotName = freshTemp(ctx, "slot");
-	const capName = freshTemp(ctx, "cap");
-	const curSlotName = freshTemp(ctx, "curSlot");
-
-	// const $iter = iterable; — cursor (borrow), DRC must not destroy (reference: cursor flag)
-	const iterDecl = makeVarDecl(iterName, d.forOfIterable, DeclKind.Const, loc);
-	iterDecl.flags = iterDecl.flags | NodeFlag.Cursor;
-
-	// let $slot = 0;
-	const slotDecl = makeVarDecl(slotName, makeNumber(0, loc), DeclKind.Let, loc);
-
-	// const $cap = msMapCap($iter);
-	const capExpr = makeCall(makeIdent("msMapCap", loc), [makeTypedIdent(iterName, iterType, loc)], loc);
-	const capDecl = makeVarDecl(capName, capExpr, DeclKind.Const, loc);
-
-	// Bindings inside the if-guarded block (shadowing safety: scoped per iteration)
-	const itemDk = boolToDeclKind(d.forOfIsConst);
-	const innerStmts: Node[] = [];
-
-	if (d.forOfPattern !== null && d.forOfPattern.kind === NodeKind.ArrayPattern && iterType.kind === TypeKind.Map) {
-		// Map destructured: for (const [k, v] of map) → bind key + value from slot
-		const apd = d.forOfPattern.data as ArrayPatternData;
-		const isNumericKey = iterType.typeReturn !== null && iterType.typeReturn.kind === TypeKind.Number;
-		// Element 0 → msMapSlotKey (key), with msKeyToNum unwrap for numeric maps
-		if (apd.patternElements.length > 0 && apd.patternElements[0].kind === NodeKind.Identifier) {
-			const keyId = apd.patternElements[0].data as IdentifierData;
-			if (keyId.name !== "_") {
-				let keyExpr: Node = makeCall(makeIdent("msMapSlotKey", loc), [
-					makeTypedIdent(iterName, iterType, loc),
-					makeTypedIdent(curSlotName, numberType(), loc),
-				], loc);
-				if (isNumericKey) {
-					keyExpr = makeCall(makeIdent("msKeyToNum", loc), [keyExpr], loc);
-					keyExpr.nodeType = numberType();
-				} else {
-					keyExpr.nodeType = stringType();
-				}
-				innerStmts.push(makeVarDecl(keyId.name, keyExpr, itemDk, loc));
-			}
-		}
-		// Element 1 → msMapSlotValue (value)
-		if (apd.patternElements.length > 1 && apd.patternElements[1].kind === NodeKind.Identifier) {
-			const valId = apd.patternElements[1].data as IdentifierData;
-			if (valId.name !== "_") {
-				const valExpr = makeCall(makeIdent("msMapSlotValue", loc), [
-					makeTypedIdent(iterName, iterType, loc),
-					makeTypedIdent(curSlotName, numberType(), loc),
-				], loc);
-				// Critical: set nodeType for C-level casting (void* → value type)
-				if (iterType.typeExtra !== null) {
-					valExpr.nodeType = iterType.typeExtra;
-				}
-				innerStmts.push(makeVarDecl(valId.name, valExpr, itemDk, loc));
-			}
-		}
-	} else {
-		// Non-destructured: yields keys
-		let keyExpr: Node = makeCall(makeIdent("msMapSlotKey", loc), [
-			makeTypedIdent(iterName, iterType, loc),
-			makeTypedIdent(curSlotName, numberType(), loc),
-		], loc);
-		// Unwrap numeric keys
-		if (iterType.typeReturn !== null && iterType.typeReturn.kind === TypeKind.Number) {
-			keyExpr = makeCall(makeIdent("msKeyToNum", loc), [keyExpr], loc);
-			keyExpr.nodeType = numberType();
-		}
-		innerStmts.push(makeVarDecl(d.forOfBinding, keyExpr, itemDk, loc));
-	}
-
-	// Original body stmts
-	const bodyStmts = extractBodyStmts(d.forOfBody);
-	let bi = 0;
-	while (bi < bodyStmts.length) {
-		innerStmts.push(bodyStmts[bi]);
-		bi += 1;
-	}
-	const innerBlock = makeBlock(innerStmts, loc);
-
-	// if (msMapSlotState($iter, $curSlot) == 2) { innerBlock }
-	const stateExpr = makeCall(makeIdent("msMapSlotState", loc), [
-		makeTypedIdent(iterName, iterType, loc),
-		makeTypedIdent(curSlotName, numberType(), loc),
-	], loc);
-	const ifCond = makeBinary(stateExpr, "===", makeNumber(2, loc), loc);
-	const ifNode = makeIf(ifCond, innerBlock, null as unknown as Node, loc);
-
-	// Snapshot + increment at top of while body (continue-safe):
-	// const $curSlot = $slot; $slot += 1; if (...) { bindings; body; }
-	const snapshotDecl = makeVarDecl(curSlotName, makeTypedIdent(slotName, numberType(), loc), DeclKind.Const, loc);
-	const increment = makeAssign(
-		makeTypedIdent(slotName, numberType(), loc),
-		makeBinary(makeTypedIdent(slotName, numberType(), loc), "+", makeNumber(1, loc), loc),
-		loc
-	);
-	const incStmt = makeExprStmt(increment, loc);
-
-	// while ($slot < $cap) { const $curSlot = $slot; $slot++; if (...) { ... } }
-	const whileStmts: Node[] = [];
-	whileStmts.push(snapshotDecl);
-	whileStmts.push(incStmt);
-	whileStmts.push(ifNode);
-	const whileCond = makeBinary(makeTypedIdent(slotName, numberType(), loc), "<", makeTypedIdent(capName, numberType(), loc), loc);
-	const whileBody = makeBlock(whileStmts, loc);
-	const whileNode = makeWhile(whileCond, whileBody, loc);
-
-	return makeBlock([iterDecl, slotDecl, capDecl, whileNode], loc);
 }
 
 // ===== Pattern Expansion Helper =====

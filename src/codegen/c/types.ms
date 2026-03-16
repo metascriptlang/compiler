@@ -4,7 +4,8 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { Type, TypeKind, isInterfaceType, getTypeSize, skipModifier, isPromise } from "../../checker/types";
+import { Type, TypeKind, isInterfaceType, getTypeSize, skipModifier, isPromise, isResult, getResultOkType, getResultErrType, substituteType, createStruct } from "../../checker/types";
+import { getGenericDecl } from "../../parser/context";
 import { Node, NodeKind, CallExprData } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
 import { CGen, CSection, Builder, TypeCache, add, addLine, addNewline, extract, sec, createBuilder, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas } from "./context";
@@ -59,7 +60,6 @@ function anonFieldKey(t: Type): string {
 		TypeKind.Enum => "enum:" + t.typeName,
 		TypeKind.Array => "arr:" + anonFieldKey(t.typeReturn),
 		TypeKind.Function => "fn",
-		TypeKind.Result => "result",
 		TypeKind.Ref | TypeKind.Ptr => "ptr:" + anonFieldKey(t.typeReturn),
 		TypeKind.TypeReference => "ref:" + t.typeName,
 		_ => {
@@ -262,10 +262,10 @@ export function typeKey(t: Type): string {
 		TypeKind.Ptr => { return "ptr:" + typeKey(t.typeReturn); },
 		TypeKind.Var => { return "var:" + typeKey(t.typeReturn); },
 		TypeKind.Borrow => { return "borrow:" + typeKey(t.typeReturn); },
-		TypeKind.Map => { return `map:${typeKey(t.typeReturn)}:${typeKey(t.typeExtra)}`; },
-		TypeKind.Set => { return "set:" + typeKey(t.typeReturn); },
-		TypeKind.Result => {
-			return `result:${typeKey(t.typeReturn)},${typeKey(t.typeExtra)}`;
+		TypeKind.GenericInstance => {
+			let giKey = `ginst:${t.typeName}`;
+			for (const arg of t.typeChildren) giKey = `${giKey}:${typeKey(arg)}`;
+			return giKey;
 		},
 		TypeKind.TypeReference => { return "typeref:" + t.typeName; },
 		TypeKind.Distinct => { return "distinct:" + t.typeName; },
@@ -341,9 +341,9 @@ export function isPointerType(t: Type): boolean {
 export function isNilableValueType(t: Type): boolean {
 	if (t === null) return false;
 	const k = t.kind;
-	return k === TypeKind.Struct || k === TypeKind.Array || k === TypeKind.Result
+	return k === TypeKind.Struct || k === TypeKind.Array || k === TypeKind.GenericInstance
 		|| k === TypeKind.Tuple || k === TypeKind.String || k === TypeKind.Function
-		|| k === TypeKind.Map || k === TypeKind.Set || k === TypeKind.Union;
+		|| k === TypeKind.Union;
 }
 
 // ===== ccgIntroducedPtr (Reference: reference codegen utils parity) =====
@@ -361,7 +361,8 @@ export function ccgIntroducedPtr(t: Type): boolean {
 	if (isInterfaceType(inner)) return getTypeSize(inner) > PTR_THRESHOLD;
 	return match (inner.kind) {
 		TypeKind.Tuple => getTypeSize(inner) > PTR_THRESHOLD,
-		TypeKind.Result | TypeKind.Union | TypeKind.Span => true,
+		TypeKind.Union | TypeKind.Span => true,
+		TypeKind.GenericInstance => !isPromise(inner),  // monomorphized value types by pointer, Promise is already msFuture*
 		_ => false,
 	};
 }
@@ -377,7 +378,6 @@ export function needsRC(t: Type): boolean {
 		TypeKind.SizedArray => needsRC(t.typeReturn), // Recurse for nested RC
 		TypeKind.Span => false, // Span is non-owning
 		TypeKind.Ref => true,
-		TypeKind.Map | TypeKind.Set => true,
 		TypeKind.Tuple => {
 			let i = 0;
 			while (i < t.typeChildren.length) {
@@ -397,7 +397,7 @@ export function isNrvoReturnType(t: Type): boolean {
 	if (t === null) return false;
 	if (isInterfaceType(t)) return true;  // value-type structs → NRVO
 	if (t.kind === TypeKind.Span) return true; // Span is { ptr, len } struct
-	if (t.kind === TypeKind.Result) return true;
+	if (isResult(t)) return true;
 	if (t.kind === TypeKind.Tuple) return true;
 	return false;
 }
@@ -570,23 +570,54 @@ export function getTypeDesc(g: CGen, t: Type): string {
 		typeCacheSet(g.typeCache, key, ptrType);
 		return ptrType;
 	}
-	if (k === TypeKind.Result) return genResultType(g, t);
+	if (isResult(t)) return genResultType(g, t);
 	if (isPromise(t)) {
 		typeCacheSet(g.typeCache, key, "msFuture*");
 		return "msFuture*";
 	}
-	if (k === TypeKind.Map) {
-		typeCacheSet(g.typeCache, key, "msMap");
-		return "msMap";
-	}
-	if (k === TypeKind.Set) {
-		typeCacheSet(g.typeCache, key, "msSet");
-		return "msSet";
-	}
 	if (k === TypeKind.Union) return genUnionType(g, t);
 	if (k === TypeKind.Tuple) return genTupleType(g, t);
 	if (k === TypeKind.TypeReference || k === TypeKind.Unknown) return "void*";
-	if (k === TypeKind.GenericParam || k === TypeKind.GenericInstance) return "void*";
+	if (k === TypeKind.GenericParam) return "void*";
+	// GenericInstance: resolve to monomorphized C struct name (Nim's tyGenericInst parity)
+	if (k === TypeKind.GenericInstance) {
+		// Build mangled name from base type name + type arg keys
+		let instName = t.typeName;
+		for (let gi = 0; gi < t.typeChildren.length; gi += 1) {
+			instName = `${instName}${gi === 0 ? "__" : "_"}${typeKey(t.typeChildren[gi])}`;
+		}
+		const cacheKey = `object:${instName}`;
+		const cached = typeCacheGet(g.typeCache, cacheKey);
+		if (cached !== "") return cached;
+		typeCacheSet(g.typeCache, cacheKey, instName);
+		// Instantiate the base struct with concrete type args, then emit as a named struct
+		if (t.typeExtra !== null && t.typeExtra.kind === TypeKind.Struct) {
+			const baseType = t.typeExtra;
+			// Substitute generic params in fields with concrete type args
+			const genericDecl = getGenericDecl(t.typeName);
+			if (genericDecl !== "") {
+				const paramNames = splitTopLevel(genericDecl, ",");
+				let concType = baseType;
+				for (let pi = 0; pi < paramNames.length; pi += 1) {
+					if (pi < t.typeChildren.length) {
+						concType = substituteType(concType, paramNames[pi].trim(), t.typeChildren[pi]);
+					}
+				}
+				// If substituteType returned the same object, clone to avoid mutating the shared base
+				if (concType === baseType) {
+					const newChildren: Type[] = [];
+					for (const c of concType.typeChildren) newChildren.push(c);
+					const newNames: string[] = [];
+					for (const n of concType.typeNames) newNames.push(n);
+					concType = createStruct(instName, newNames, newChildren, isInterfaceType(concType));
+				} else {
+					concType.typeName = instName;
+				}
+				return genObjectType(g, concType);
+			}
+		}
+		return instName;
+	}
 	return "void";
 }
 
@@ -986,8 +1017,8 @@ export function genClFullCastNrvo(g: CGen, t: Type, nrvoType: string): string { 
 // ===== Result Type Generation =====
 
 export function genResultType(g: CGen, t: Type): string {
-	const okType = getTypeDesc(g, t.typeReturn);
-	const errType = getTypeDesc(g, t.typeExtra);
+	const okType = getTypeDesc(g, getResultOkType(t));
+	const errType = getTypeDesc(g, getResultErrType(t));
 	const key = typeKey(t);
 
 	// Generate unique struct name
@@ -1095,25 +1126,6 @@ test "class (Ref<Object>) needs RC" { assert needsRC(createRef(createStruct("Foo
 test "interface no RC" { assert !needsRC(createStruct("Bar", [], [], true)); }
 
 test "number no RC" { assert !needsRC(createPrimitive(TypeKind.Number)); }
-
-test "map needs RC" { assert needsRC(createPrimitive(TypeKind.Map)); }
-
-test "map is not pointer" { assert !isPointerType(createPrimitive(TypeKind.Map)); }
-
-test "map type key" {
-	const t = createPrimitive(TypeKind.Map);
-	t.typeReturn = createPrimitive(TypeKind.String);
-	t.typeExtra = createPrimitive(TypeKind.Number);
-	assert typeKey(t) === "map:string:number";
-}
-
-test "map type desc" {
-	const g = createCGen(null as unknown as CheckerContext, "");
-	const t = createPrimitive(TypeKind.Map);
-	t.typeReturn = createPrimitive(TypeKind.String);
-	t.typeExtra = createPrimitive(TypeKind.Number);
-	assert getTypeDesc(g, t) === "msMap";
-}
 
 test "primitive type desc" {
 	const g = createCGen(null as unknown as CheckerContext, "");
@@ -1270,8 +1282,6 @@ test "tuple needsRC without RC elements" {
 	const t = createTuple([createPrimitive(TypeKind.Number), createPrimitive(TypeKind.Int32)]);
 	assert !needsRC(t);
 }
-
-test "set needs RC" { assert needsRC(createPrimitive(TypeKind.Set)); }
 
 test "anonymous type emits struct with hash name" {
 	const names1: string[] = [];

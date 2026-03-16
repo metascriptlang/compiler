@@ -22,9 +22,6 @@
 /* Array runtime (msNumberArray, msStringArray, msRefArray) */
 #include "std/core/array/native.h"
 
-/* Map runtime (msMap — string-keyed hash map) */
-#include "std/core/map/native.h"
-
 /* Buffer runtime (msBuffer — binary data, byte-oriented) */
 #include "std/core/buffer/native.h"
 
@@ -245,15 +242,6 @@ static inline void msStringCopy(msString* dest, msString src) {
 #define msMapWasMoved(m)      do { (m).len = 0; (m).p = NULL; } while(0)
 #define msMapSink(d, s)       do { msMapDestroy(&(d)); (d) = (s); } while(0)
 #define msMapTrace(m)         /* TODO: ORC trace */
-
-/* --- Set = Map with NULL values --- */
-typedef msMap msSet;
-#define msSetNew()            msMapNew(NULL)
-#define msSetFree(s)          msMapFree(s)
-#define msSetCopy(s)          msMapCopy(s)
-#define msSetWasMoved(s)      msMapWasMoved(s)
-#define msSetSink(d, s)       msMapSink(d, s)
-#define msSetTrace(s)         msMapTrace(s)
 
 /* --- Named object wasMoved (no-op for value-type named objects) --- */
 #define msObjectWasMoved(p)   /* no-op */

@@ -17,7 +17,8 @@ import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, ProgramData, Dec
 import { forEachChild } from "../ast/visitor";
 import { Type, TypeKind, typeNameOf, getProperty, unwrapRef,
 	numberType, stringType, booleanType, voidType, nullType,
-	unknownType, neverType, errorType } from "./types";
+	unknownType, neverType, errorType,
+	isResult, getResultOkType, getResultErrType } from "./types";
 import { Symbol, SymbolKind, SymbolTable, Scope, lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, findAllExtensionsByName, filterExtsByReceiverType, getExtFnType, stripReceiverParam, SgSymRecord } from "./context";
 // (utils/string imports removed — using native .slice/.charAt)
@@ -256,20 +257,10 @@ export function sgTypeToString(t: Type): string {
 		return result;
 	}
 
-	if (t.kind === TypeKind.Result) {
-		const ok = sgTypeToString(t.typeReturn);
-		const err = sgTypeToString(t.typeExtra);
+	if (isResult(t)) {
+		const ok = sgTypeToString(getResultOkType(t));
+		const err = sgTypeToString(getResultErrType(t));
 		return "Result<" + ok + ", " + err + ">";
-	}
-
-	if (t.kind === TypeKind.Map) {
-		const key = sgTypeToString(t.typeReturn);
-		const val = sgTypeToString(t.typeExtra);
-		return "Map<" + key + ", " + val + ">";
-	}
-
-	if (t.kind === TypeKind.Set) {
-		return "Set<" + sgTypeToString(t.typeReturn) + ">";
 	}
 
 	if (t.kind === TypeKind.Ref) {
@@ -2095,8 +2086,8 @@ function sgCollectExceptionHints(
 		if (node.location.line < startLine || node.location.line > endLine) return;
 		const d = node.data as TryExprData;
 		const argType = inferCalleeReturnType(ctx, d.tryArg);
-		if (argType !== null && argType.kind === TypeKind.Result && argType.typeExtra !== null) {
-			const errTypeName = typeNameOf(argType.typeExtra);
+		if (argType !== null && isResult(argType) && getResultErrType(argType) !== null) {
+			const errTypeName = typeNameOf(getResultErrType(argType));
 			if (errTypeName !== "" && errTypeName !== "unknown") {
 				const hint: SgInlayHint = {
 					label: "throws " + errTypeName,
@@ -2116,8 +2107,8 @@ function sgCollectExceptionHints(
 		const fd = node.data as FunctionDeclData;
 		const retType = node.nodeType;
 		if (retType !== null && retType.kind === TypeKind.Function && retType.typeReturn !== null) {
-			if (retType.typeReturn.kind === TypeKind.Result && retType.typeReturn.typeExtra !== null) {
-				const errName = typeNameOf(retType.typeReturn.typeExtra);
+			if (isResult(retType.typeReturn) && getResultErrType(retType.typeReturn) !== null) {
+				const errName = typeNameOf(getResultErrType(retType.typeReturn));
 				if (errName !== "" && errName !== "unknown") {
 					const hint: SgInlayHint = {
 						label: "throws " + errName,

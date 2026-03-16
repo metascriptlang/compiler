@@ -310,11 +310,28 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 		return;
 	}
 	if (kind === NodeKind.NullLiteral) {
-		// Reference parity: value types can't be nil — emit zero-init instead of NULL.
-		if (node.nodeType !== null && isNilableValueType(node.nodeType)) {
-			const cType = getTypeDesc(g, node.nodeType);
-			ctx.results.push(`(${cType}){0}`);
-			return;
+		// Nim's getDefaultValue() pattern: emit type-appropriate zero value.
+		// Primitives → 0/0.0/false, value types → {0}, pointers → NULL.
+		if (node.nodeType !== null) {
+			const nk = node.nodeType.kind;
+			if (nk === TypeKind.Number || nk === TypeKind.Float64 || nk === TypeKind.Float32) {
+				ctx.results.push("0.0");
+				return;
+			}
+			if (nk === TypeKind.Int8 || nk === TypeKind.Int16 || nk === TypeKind.Int32 || nk === TypeKind.Int64
+				|| nk === TypeKind.Uint8 || nk === TypeKind.Uint16 || nk === TypeKind.Uint32 || nk === TypeKind.Uint64) {
+				ctx.results.push("0");
+				return;
+			}
+			if (nk === TypeKind.Boolean) {
+				ctx.results.push("MS_FALSE");
+				return;
+			}
+			if (isNilableValueType(node.nodeType)) {
+				const cType = getTypeDesc(g, node.nodeType);
+				ctx.results.push(`(${cType}){0}`);
+				return;
+			}
 		}
 		ctx.results.push(cNullLiteral());
 		return;
@@ -533,6 +550,34 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 	// NewExpr — constructor call or inline allocation
 	if (kind === NodeKind.NewExpr) {
 		const d = node.data as NewExprData;
+		// Value-type new: interface/GenericInstance types → zero-initialized struct
+		if (node.nodeType !== null && (node.nodeType.kind === TypeKind.Struct || node.nodeType.kind === TypeKind.GenericInstance) && d.newArguments.length === 0) {
+			const cType = getTypeDesc(g, node.nodeType);
+			ctx.results.push(`(${cType}){0}`);
+			return;
+		}
+		if (node.nodeType !== null && node.nodeType.kind === TypeKind.TypeReference && d.newArguments.length === 0) {
+			const cType = getTypeDesc(g, node.nodeType);
+			ctx.results.push(`(${cType}){0}`);
+			return;
+		}
+		// new Array(N) with typed element type → allocate array with N zero-initialized elements
+		if (node.nodeType !== null && node.nodeType.kind === TypeKind.Array) {
+			const arrType = getTypeDesc(g, node.nodeType);
+			if (d.newArguments.length === 1) {
+				const sizeExpr = genExpr(g, p, d.newArguments[0]);
+				// Allocate array with N slots: { .len = N, .p = calloc(sizeof(Content) + N * sizeof(elem)) }
+				const elemType = node.nodeType.typeReturn !== null ? getTypeDesc(g, node.nodeType.typeReturn) : "void*";
+				const tmp = getTemp(p, arrType);
+				emitStmtsLine(p, `${tmp.snippet}.len = ${sizeExpr};`);
+				emitStmtsLine(p, `${tmp.snippet}.p = (${arrType}__Content*)calloc(1, sizeof(${arrType}__Content) + ${sizeExpr} * sizeof(${elemType}));`);
+				emitStmtsLine(p, `${tmp.snippet}.p->cap = ${sizeExpr};`);
+				ctx.results.push(tmp.snippet);
+			} else {
+				ctx.results.push(`(${arrType}){0}`);
+			}
+			return;
+		}
 		const calleeName = genExpr(g, p, d.newCallee);
 		// Ensure cross-module typeInfo is declared
 		ensureTypeInfo(g, calleeName);
@@ -753,12 +798,12 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			ctx.results.push(`${obj}.${d.property}`);
 			return;
 		}
-		// .length/.byteLength → .len for runtime types (arrays, strings, maps)
+		// .length/.byteLength → .len for runtime types (arrays, strings)
 		// User-defined structs keep their original field names
 		if (d.property === "length" || d.property === "byteLength") {
 			const objType = d.object.nodeType;
 			const isRuntimeType = objType !== null && (objType.kind === TypeKind.Array
-				|| objType.kind === TypeKind.String || objType.kind === TypeKind.Map);
+				|| objType.kind === TypeKind.String);
 			if (isRuntimeType) {
 				ctx.results.push(obj + ".len");
 				return;
@@ -1264,6 +1309,37 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		// Explicitly add & — ccgIntroducedPtr won't fire for synthetic calls
 		const addrArg = argsStr.length > 0 && argsStr.charAt(0) === "&" ? argsStr : "&(" + argsStr + ")";
 		ctx.results.push(`msBoxStruct(${addrArg}, sizeof(${boxType}))`);
+		return;
+	}
+
+	// msSinkBoxStruct(val) → malloc + memcpy + memset (DRC-aware boxing)
+	// spawnLower emits this for struct returns. nodeType carries the type.
+	// After memcpy, zeros source so DRC destroy is no-op on ref-counted fields.
+	// memset(&val, 0, sizeof(T)) is equivalent to wasMoved for all types.
+	if (callee === "msSinkBoxStruct" && node.nodeType !== null) {
+		const sinkType = getTypeDesc(g, node.nodeType);
+		truncResults(ctx, cc);
+		const boxTmp = getTemp(p, "void*");
+		const addrArg = argsStr.length > 0 && argsStr.charAt(0) === "&" ? argsStr : "&(" + argsStr + ")";
+		emitStmtsLine(p, `${boxTmp.snippet} = malloc(sizeof(${sinkType}));`);
+		emitStmtsLine(p, `memcpy(${boxTmp.snippet}, ${addrArg}, sizeof(${sinkType}));`);
+		// Neutralize source: zero all bytes so DRC destroy sees no refs to release
+		emitStmtsLine(p, `memset(${addrArg}, 0, sizeof(${sinkType}));`);
+		ctx.results.push(boxTmp.snippet);
+		return;
+	}
+
+	// msUnboxStruct(ptr) → copy out + free shell (DRC-aware unboxing)
+	// WaitFor builtin emits this for struct returns from spawn. nodeType carries the target type.
+	if (callee === "msUnboxStruct" && node.nodeType !== null) {
+		const unboxType = getTypeDesc(g, node.nodeType);
+		truncResults(ctx, cc);
+		const ptrTmp = getTemp(p, "void*");
+		const valTmp = getTemp(p, unboxType);
+		emitStmtsLine(p, `${ptrTmp.snippet} = ${argsStr};`);
+		emitStmtsLine(p, `${valTmp.snippet} = *(${unboxType}*)${ptrTmp.snippet};`);
+		emitStmtsLine(p, `free(${ptrTmp.snippet});`);
+		ctx.results.push(valTmp.snippet);
 		return;
 	}
 

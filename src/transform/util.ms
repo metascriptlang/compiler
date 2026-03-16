@@ -11,6 +11,7 @@ import {
 import {
 	Type, TypeKind, createFunction, createStruct, createTypeRef, createArray,
 	numberType, stringType, booleanType, voidType, nullType, unknownType, getSysType,
+	isResult, getResultOkType, getResultErrType,
 } from "../checker/types";
 import { TransformContext, freshTemp, NameSet, nameSetAdd } from "./context";
 
@@ -168,10 +169,10 @@ export function makeMember(obj: Node, prop: string, loc: SourceLocation): Node {
 	if (obj !== null && obj.nodeType !== null) {
 		if ((obj.nodeType.kind === TypeKind.Array || obj.nodeType.kind === TypeKind.String) && prop === "length") {
 			n.nodeType = numberType();
-		} else if (obj.nodeType.kind === TypeKind.Result) {
+		} else if (isResult(obj.nodeType)) {
 			if (prop === "ok") { n.nodeType = booleanType(); }
-			else if (prop === "value" && obj.nodeType.typeReturn !== null) { n.nodeType = obj.nodeType.typeReturn; }
-			else if (prop === "error" && obj.nodeType.typeExtra !== null) { n.nodeType = obj.nodeType.typeExtra; }
+			else if (prop === "value" && getResultOkType(obj.nodeType) !== null) { n.nodeType = getResultOkType(obj.nodeType); }
+			else if (prop === "error" && getResultErrType(obj.nodeType) !== null) { n.nodeType = getResultErrType(obj.nodeType); }
 		} else if (obj.nodeType.kind === TypeKind.Struct) {
 			let pi = 0;
 			while (pi < obj.nodeType.typeNames.length) {

@@ -97,7 +97,17 @@ function collectIdentifiers(node: Node, refs: NameSet): void {
 	if (node.kind === NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
 		nameSetAdd(refs, d.name);
+		// Also add resolvedSym.name for on-demand instantiated functions
+		// (the identifier keeps the original name "mapRawGet" but resolvedSym
+		// points to the instantiated "mapRawGet__string_string")
+		if (node.resolvedSym !== null && node.resolvedSym.name !== d.name) {
+			nameSetAdd(refs, node.resolvedSym.name);
+		}
 		return;
+	}
+	// Also check resolvedSym on CallExpr (extension methods set sym on call, not callee)
+	if (node.resolvedSym !== null && node.resolvedSym.name !== "") {
+		nameSetAdd(refs, node.resolvedSym.name);
 	}
 	forEachChild(node, (child: Node): void => {
 		collectIdentifiers(child, refs);

@@ -28,7 +28,7 @@ import {
 	HiddenStdConvData,
 	createNodeAt,
 } from "../ast/node";
-import { Type, TypeKind, unknownType, numberType, stringType, booleanType, nullType, createFunction, createArray, unifyType, createUnifyBindings } from "../checker/types";
+import { Type, TypeKind, unknownType, numberType, stringType, booleanType, nullType, createFunction, createArray, unifyType, createUnifyBindings, isResult, getResultOkType, getResultErrType } from "../checker/types";
 import { CheckerContext, extractGenericNames, stripGenFlag } from "../checker/context";
 import { SymbolTable, Symbol, SymbolKind, ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope } from "../checker/symbol";
 import { MonoRegistry, MonoEntry, monoRegister, monoFindEntry, buildTypeArgKeys, monoTypeKey, createMonoRegistry } from "./registry";
@@ -699,7 +699,7 @@ function cloneStringArray(strs: string[]): string[] {
 	return result;
 }
 
-function monoCloneNode(node: Node): Node {
+export function monoCloneNode(node: Node): Node {
 	if (node === null) return null as unknown as Node;
 	const loc = makeLoc(node.location.line, node.location.column);
 	const kind = node.kind;
@@ -785,7 +785,7 @@ function monoIsAlphaNumOrUnderscore(ch: string): boolean {
 	return false;
 }
 
-function monoSubstAnnotation(annotation: string, paramName: string, concreteTypeName: string): string {
+export function monoSubstAnnotation(annotation: string, paramName: string, concreteTypeName: string): string {
 	if (annotation === "") return "";
 	if (annotation === paramName) return concreteTypeName;
 	let result = "";
@@ -807,15 +807,15 @@ function monoSubstAnnotation(annotation: string, paramName: string, concreteType
 	return result;
 }
 
-function monoConcreteTypeName(t: Type): string {
+export function monoConcreteTypeName(t: Type): string {
 	if (t === null) return "unknown";
 	if (t.kind === TypeKind.Number) return "number";
 	if (t.kind === TypeKind.String) return "string";
 	if (t.kind === TypeKind.Boolean) return "boolean";
 	if (t.kind === TypeKind.Void) return "void";
 	if (t.kind === TypeKind.Null) return "null";
-	if (t.kind === TypeKind.Array) return "Array<" + monoConcreteTypeName(t.typeReturn) + ">";
-	if (t.kind === TypeKind.Result) return "Result<" + monoConcreteTypeName(t.typeReturn) + ", " + monoConcreteTypeName(t.typeExtra) + ">";
+	if (t.kind === TypeKind.Array) return `Array<${monoConcreteTypeName(t.typeReturn)}>`;
+	if (isResult(t)) return `Result<${monoConcreteTypeName(getResultOkType(t))}, ${monoConcreteTypeName(getResultErrType(t))}>`;
 	if (t.kind === TypeKind.Struct) return t.typeName;
 	if (t.kind === TypeKind.Enum) return t.typeName;
 	return "unknown";
@@ -938,7 +938,8 @@ export function monomorphizeProgram(program: Node, checkerCtx: CheckerContext): 
 
 	const pd = program.data as ProgramData;
 
-	// Phase 2: Monomorphize generic functions
+	// Phase 2: Monomorphize generic functions (user-defined only)
+	// Prelude generics are handled by on-demand instantiation in checkExprPass.ms
 	const declMap = createMonoGenericDeclMap();
 	monoCollectDefinitions(program, declMap);
 	if (declMap.names.length === 0) return program;

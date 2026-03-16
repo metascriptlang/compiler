@@ -220,15 +220,12 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 			if (opName === "!=") return member;
 			return makeUnary("!", member, loc);
 		}
-		// Array null check: arr !== null → arr.p !== null
-		// Our arrays are value-type structs { len, p } — can't compare whole struct to void*.
-		// Check the payload pointer instead (reference uses pointer-typed seqs, so no equivalent).
+		// Array null check: arrays are value-type structs { len, p } — can never be null.
+		// Reference parity: disallows isNil on sequences (value types with same layout).
+		// Empty arrays have p=NULL but are valid — push handles lazy alloc.
+		// Fold to constant true/false, same as strings, results, tuples.
 		if (valueType !== null && valueType.kind === TypeKind.Array) {
-			const nonNullSide = hasNullLeft ? d.right : d.left;
-			const pMember = makeMember(nonNullSide, "p", loc);
-			d.left = hasNullLeft ? d.left : pMember;
-			d.right = hasNullLeft ? pMember : d.right;
-			return node;
+			return makeBool(opName === "!=", loc);
 		}
 		// Closure null check: closure !== null → closure.fn !== null
 		// msClosure is a value struct { fn, env } — check the function pointer field.
@@ -243,7 +240,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 		// fold to constant true/false. Reference parity: value types can't be nil.
 		if (valueType !== null) {
 			const vk = valueType.kind;
-			if (vk === TypeKind.Result || vk === TypeKind.Tuple || vk === TypeKind.String
+			if (vk === TypeKind.GenericInstance || vk === TypeKind.Tuple || vk === TypeKind.String
 				|| vk === TypeKind.Union) {
 				return makeBool(opName === "!=", loc);
 			}

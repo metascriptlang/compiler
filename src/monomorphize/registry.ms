@@ -61,7 +61,13 @@ export function monoTypeKey(t: Type): string {
 		TypeKind.Ref => `ref_${monoTypeKey(t.typeReturn)}`,
 		TypeKind.Ptr => `ptr_${monoTypeKey(t.typeReturn)}`,
 		TypeKind.Struct | TypeKind.Enum => t.typeName,
-		TypeKind.Result => `result_${monoTypeKey(t.typeReturn)}_${monoTypeKey(t.typeExtra)}`,
+		TypeKind.GenericInstance => {
+			let key = t.typeName;
+			for (const child of t.typeChildren) {
+				key = `${key}_${monoTypeKey(child)}`;
+			}
+			return key;
+		},
 		TypeKind.Distinct => `distinct_${monoTypeKey(t.typeReturn)}`,
 		TypeKind.Function => {
 			let key = "fn";

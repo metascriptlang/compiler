@@ -1,11 +1,11 @@
 // Type Classification for DRC — determines RC needs and runtime function names
 //
-// Each type maps to: no-op (primitive), runtime call (string/array/ref/closure/map/set),
+// Each type maps to: no-op (primitive), runtime call (string/array/ref/closure),
 // or generated lifecycle hook (named Object types from destructorLifting).
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { Type, TypeKind, isPrimitiveKind, hasDestructor, hasAsgnFlag, isInterfaceType, createPrimitive, createStruct, createArray, createFunction, createPtr, numberType, stringType, booleanType, voidType, nullType, unknownType } from "../checker/types";
+import { Type, TypeKind, isPrimitiveKind, hasDestructor, hasAsgnFlag, isInterfaceType, isPromise, createPrimitive, createStruct, createArray, createFunction, createPtr, numberType, stringType, booleanType, voidType, nullType, unknownType } from "../checker/types";
 import { lookupSymbol, SymbolKind, Symbol, hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, createTransformContext } from "../transform/context";
 import { NodeKind } from "../ast/node";
@@ -18,8 +18,6 @@ export enum RcKind {
 	Array,      // msArray* (variant depends on element type)
 	Ref,        // msIncref / msDecref (pointers, interfaces, classes)
 	Closure,    // msClosure*
-	Map,        // msMap*
-	Set,        // msSet*
 	Named,      // TypeName_destroy / TypeName_copy (from destructorLifting)
 }
 
@@ -135,15 +133,17 @@ export function classifyType(t: Type, ctx: TransformContext): RcInfo {
 		TypeKind.String => makeRcInfo(RcKind.String, "", "msStringDecref", "msStringCopy", "msStringWasMoved", "msStringSink", false),
 		TypeKind.Array => classifyArray(t, ctx),
 		TypeKind.Ref => makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false),
-		TypeKind.Promise => makeRcInfo(RcKind.Ref, "", "msFutureDrcDestroy", "", "msFutureDrcWasMoved", "", false),
+		TypeKind.GenericInstance => {
+			// Result/Promise are GenericInstance now — delegate to named hooks if available
+			if (isPromise(t)) return makeRcInfo(RcKind.Ref, "", "msFutureDrcDestroy", "", "msFutureDrcWasMoved", "", false);
+			return makeRcInfo(RcKind.Named, "", "", "", "", "", false);
+		},
 		TypeKind.Ptr => {
 			// Ptr<T> is always unmanaged — no RC, no lifecycle hooks.
 			// Reference parity: cursor fields skip all RC operations.
 			return noRcInfo();
 		},
 		TypeKind.Function => makeRcInfo(RcKind.Closure, "", "msClosureDestroy", "msClosureCopy", "msClosureWasMoved", "msClosureSink", false),
-		TypeKind.Map => makeRcInfo(RcKind.Map, "", "msMapFree", "msMapCopy", "msMapWasMoved", "msMapSink", false),
-		TypeKind.Set => makeRcInfo(RcKind.Set, "", "msSetFree", "msSetCopy", "msSetWasMoved", "msSetSink", false),
 		TypeKind.Struct => classifyObject(t, ctx),
 		TypeKind.TypeReference => classifyTypeRef(t, ctx),
 		TypeKind.Distinct => { if (t.typeReturn !== null) { return classifyType(t.typeReturn, ctx); } else { return noRcInfo(); } },
@@ -152,7 +152,6 @@ export function classifyType(t: Type, ctx: TransformContext): RcInfo {
 				return makeRcInfo(RcKind.Named, t.typeName, t.typeName + "_destroy", t.typeName + "_copy", t.typeName + "_wasMoved", t.typeName + "_sink", false);
 			} else { return noRcInfo(); }
 		},
-		TypeKind.Result => makeRcInfo(RcKind.Named, "", "", "", "", "", false),
 		TypeKind.Tuple => {
 			// Check if any element needs RC
 			let hasRc = false;

@@ -17,8 +17,9 @@ import {
 	Type, TypeKind, TypeFlag,
 	unknownType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType,
 	createPrimitive, createArray, createFunction, createClosureType, createStruct,
-	createResult, createPromise, createTypeRef, createUnion, createGenericParam, createDistinct,
-	createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, createMap, createSet,
+	createResult, createPromise, createTypeRef, createUnion, createGenericParam, createDistinct, substituteType, createGenericInstance,
+	isResult, getResultOkType, getResultErrType,
+	createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType,
 	setMinArity, typeNameOf, assignType, isInterfaceType, unwrapRef, propagateHasAsgn,
 } from "./types";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, lookupSymbol, lookupLocal, defineSymbol, makeSymbol, openScope, closeScope, SymbolState, hasFlag, setFlag, SymbolFlag } from "./symbol";
@@ -201,35 +202,44 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 		if (baseName === "Var" && args.length === 1) {
 			return createVar(resolveAnnotation(args[0], ctx));
 		}
-		if (baseName === "Map" && args.length === 2) {
-			const keyType = resolveAnnotation(args[0], ctx);
-			const valType = resolveAnnotation(args[1], ctx);
-			if (keyType.kind !== TypeKind.String && keyType.kind !== TypeKind.Number && keyType.kind !== TypeKind.Unknown) {
-				addError(ctx, "Only string or number keys are supported for Map in the C backend. Got: " + typeNameOf(keyType), 0, 0);
-			}
-			return createMap(keyType, valType);
-		}
-		if (baseName === "Set" && args.length === 1) {
-			const elemType = resolveAnnotation(args[0], ctx);
-			if (elemType.kind !== TypeKind.String && elemType.kind !== TypeKind.Number && elemType.kind !== TypeKind.Unknown) {
-				addError(ctx, "Only string or number elements are supported for Set in the C backend. Got: " + typeNameOf(elemType), 0, 0);
-			}
-			return createSet(elemType);
-		}
-		if (baseName === "Record" && args.length === 2) {
-			const keyType = resolveAnnotation(args[0], ctx);
-			const valType = resolveAnnotation(args[1], ctx);
-			if (keyType.kind !== TypeKind.String && keyType.kind !== TypeKind.Number && keyType.kind !== TypeKind.Unknown) {
-				addError(ctx, "Only string or number keys are supported for Map in the C backend. Got: " + typeNameOf(keyType), 0, 0);
-			}
-			return createMap(keyType, valType);
-		}
-		// Generic instance: check if this is a generic interface/class
+		// Generic interface/class resolution (Map, Set, user-defined generics)
 		const genericParams = getGenericDecl(baseName);
 		if (genericParams !== "") {
-			// Record instantiation for codegen
+			// Check if ALL args are generic params of the enclosing function.
+			// If so, preserve as generic type (don't instantiate).
+			// e.g. inside set<K,V>(this m: Map<K,V>), Map<K,V> stays generic.
+			let allGenericParams = true;
+			const resolvedArgs: Type[] = [];
+			for (const arg of args) {
+				const resolved = resolveAnnotation(arg.trim(), ctx);
+				resolvedArgs.push(resolved);
+				if (resolved.kind !== TypeKind.GenericParam) allGenericParams = false;
+			}
+			if (allGenericParams && resolvedArgs.length > 0) {
+				// Return GenericInstance with GenericParam type args.
+				// This preserves hasGenericParams for unification + enables structural matching.
+				const baseSym = lookupSymbol(ctx.table, baseName);
+				if (baseSym !== null) {
+					ensureShaped(baseSym, ctx);
+					let baseType = baseSym.symbolType;
+					if (baseType.kind === TypeKind.Ref && baseType.typeReturn !== null) baseType = baseType.typeReturn;
+					return createGenericInstance(baseType, resolvedArgs);
+				}
+				return createTypeRef(baseName);
+			}
+			// Concrete instantiation: record for codegen
 			recordGenericTypeInstantiation(baseName, genericParams, args, ctx);
-			// Return a type reference with mangled name
+			// Build GenericInstance with structural type args (Nim's tyGenericInst parity)
+			const baseSym2 = lookupSymbol(ctx.table, baseName);
+			if (baseSym2 !== null) {
+				ensureShaped(baseSym2, ctx);
+				const resolvedArgs: Type[] = [];
+				for (const a of args) {
+					resolvedArgs.push(resolveAnnotation(a.trim(), ctx));
+				}
+				return createGenericInstance(baseSym2.symbolType, resolvedArgs);
+			}
+			// Symbol not found — forward reference. Return TypeRef with mangled name for codegen.
 			const typeArgKey = buildTypeArgKey(args, ctx);
 			const mangledName = baseName + "__" + typeArgKey;
 			return createTypeRef(mangledName);
@@ -284,7 +294,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 // Location-aware variant: emits an error when a type name can't be resolved.
 // Use this when resolving user-written type annotations (function params, return types,
 // variable declarations) where source location is available.
-// Nim parity: semtypes.nim errors immediately on unresolved type identifiers.
+// Reference parity: errors immediately on unresolved type identifiers.
 export function resolveAnnotationLoc(text: string, ctx: CheckerContext, line: number, col: number): Type {
 	const result = resolveAnnotation(text, ctx);
 	if (result.kind === TypeKind.TypeReference && line > 0) {
@@ -413,6 +423,47 @@ function findGenericParamIdx(rawType: string, paramNames: string[]): number {
 	return -1;
 }
 
+// Substitute all generic param names in a type string with concrete types.
+// Handles nested generics: "MapEntry<K, V>[]" with K=string, V=number → "MapEntry<string, number>[]"
+// Only replaces whole identifiers (not substrings): "Key" won't match param "K".
+function substituteGenericParamsInType(rawType: string, paramNames: string[], args: string[]): string {
+	let result = rawType;
+	for (let i = 0; i < paramNames.length; i += 1) {
+		if (i >= args.length) break;
+		const pname = paramNames[i].trim();
+		const arg = args[i].trim();
+		if (pname === "") continue;
+		// Replace whole-identifier occurrences of pname with arg
+		let out = "";
+		let pos = 0;
+		while (pos < result.length) {
+			// Check if pname appears at pos as a whole identifier
+			let matched = false;
+			if (pos + pname.length <= result.length) {
+				const slice = result.slice(pos, pos + pname.length);
+				if (slice === pname) {
+					// Check boundaries: char before and after must not be alphanumeric/underscore
+					const before = pos > 0 ? result.charAt(pos - 1) : " ";
+					const after = pos + pname.length < result.length ? result.charAt(pos + pname.length) : " ";
+					const isWordBefore = (before >= "a" && before <= "z") || (before >= "A" && before <= "Z") || (before >= "0" && before <= "9") || before === "_";
+					const isWordAfter = (after >= "a" && after <= "z") || (after >= "A" && after <= "Z") || (after >= "0" && after <= "9") || after === "_";
+					if (!isWordBefore && !isWordAfter) {
+						out = out + arg;
+						pos = pos + pname.length;
+						matched = true;
+					}
+				}
+			}
+			if (!matched) {
+				out = out + result.charAt(pos);
+				pos = pos + 1;
+			}
+		}
+		result = out;
+	}
+	return result;
+}
+
 // Record a generic type instantiation (e.g., Box<number>) for codegen
 // Looks up field names/types from parser side-channel, substitutes generic params -> concrete types
 // NOTE: Avoids all `let` string variables — only const strings + number let variables.
@@ -440,20 +491,16 @@ export function recordGenericTypeInstantiation(baseName: string, genericParams: 
 		return;
 	}
 
-	// Handle first field separately to initialize result strings from non-empty values
+	// Substitute generic params in field types (handles nested generics like MapEntry<K, V>[])
 	const firstRaw = ftParts.length > 0 ? ftParts[0].trim() : "";
-	const firstIdx = findGenericParamIdx(firstRaw, paramNames);
-	const firstSub = firstIdx >= 0 && firstIdx < args.length ? args[firstIdx].trim() : firstRaw;
+	const firstSub = substituteGenericParamsInType(firstRaw, paramNames, args);
 
-	// Only use `let` for result strings initialized from computed values (never from "")
 	let resultFieldNames = fnParts[0].trim();
 	let resultFieldTypes = firstSub;
 
-	// Append remaining fields with "|" separator
 	for (let fi = 1; fi < fnParts.length; fi += 1) {
 		const rawType = fi < ftParts.length ? ftParts[fi].trim() : "";
-		const paramIdx = findGenericParamIdx(rawType, paramNames);
-		const subType = paramIdx >= 0 && paramIdx < args.length ? args[paramIdx].trim() : rawType;
+		const subType = substituteGenericParamsInType(rawType, paramNames, args);
 		resultFieldNames = resultFieldNames + "|" + fnParts[fi].trim();
 		resultFieldTypes = resultFieldTypes + "|" + subType;
 	}
@@ -947,9 +994,9 @@ test "string[]" {
 
 test "Result<number, string>" {
 	const t = resolveWith("Result<number, string>");
-	assert t.kind === TypeKind.Result;
-	assert t.typeReturn.kind === TypeKind.Number;
-	assert t.typeExtra.kind === TypeKind.String;
+	assert isResult(t);
+	assert getResultOkType(t).kind === TypeKind.Number;
+	assert getResultErrType(t).kind === TypeKind.String;
 }
 
 test "Array<boolean>" {
@@ -969,26 +1016,6 @@ test "Span<boolean>" {
 	const t = resolveWith("Span<boolean>");
 	assert t.kind === TypeKind.Span;
 	assert t.typeReturn.kind === TypeKind.Boolean;
-}
-
-test "Map<string, number>" {
-	const t = resolveWith("Map<string, number>");
-	assert t.kind === TypeKind.Map;
-	assert t.typeReturn.kind === TypeKind.String;
-	assert t.typeExtra.kind === TypeKind.Number;
-}
-
-test "Record<string, number> desugars to Map" {
-	const t = resolveWith("Record<string, number>");
-	assert t.kind === TypeKind.Map;
-	assert t.typeReturn.kind === TypeKind.String;
-	assert t.typeExtra.kind === TypeKind.Number;
-}
-
-test "Record<string, boolean> value type" {
-	const t = resolveWith("Record<string, boolean>");
-	assert t.kind === TypeKind.Map;
-	assert t.typeExtra.kind === TypeKind.Boolean;
 }
 
 test "string | number" {

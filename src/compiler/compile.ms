@@ -2,7 +2,7 @@
 
 import { exit, exec, fileExists } from "std/process";
 import { parseSource } from "../parser/statements/validation";
-import { Node } from "../ast/node";
+import { Node, NodeKind, ProgramData, FunctionDeclData } from "../ast/node";
 import { CheckerContext, hasErrors, hasFatalErrors, errorCount } from "../checker/context";
 import { checkProgramWithRegistry } from "../checker/checkPass";
 import { checkModuleGraph, getPreludeContext } from "../checker/index";
@@ -10,7 +10,8 @@ import { ExportRegistry } from "../checker/context";
 import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
-import { monomorphizeProgram } from "../monomorphize/collect";
+import { monomorphizeProgram, monoCloneNode } from "../monomorphize/collect";
+import { SymbolKind, hasFlag, SymbolFlag } from "../checker/symbol";
 import { generateJS } from "../codegen/js/index";
 import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
 import { RaiserContext, createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
@@ -433,6 +434,8 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	}
 
 	// Phase A: Parse → Check → Mono → Transform → Analyze all modules, store results
+	if (opts.showTime) printTiming("graph load+check", t0);
+	const tA = clockMs();
 	const processed: ProcessedModule[] = [];
 	const transformedPrograms: Node[] = [];
 	const transformedPaths: string[] = [];
@@ -465,6 +468,50 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		exitOnFatalCheckerErrors(ctx, modPath, mod.source);
 		ctx.errors = [];
 
+		// Inject on-demand instantiated generic functions + their prelude dependencies
+		const instCount = ctx.generatedInstances !== null ? ctx.generatedInstances.length : 0;
+		if (instCount > 0) {
+			const instPd = program.data as ProgramData;
+			// Inject all generated instances
+			for (let ii = 0; ii < instCount; ii += 1) {
+				const instNode = ctx.generatedInstances[ii];
+				if (instNode.nodeType === null && instNode.resolvedSym !== null && instNode.resolvedSym.symbolType !== null) {
+					instNode.nodeType = instNode.resolvedSym.symbolType;
+				}
+				instPd.programStmts.push(instNode);
+			}
+			// Also inject non-generic prelude helper functions that instantiated bodies depend on.
+			// These have definitions only in the prelude AST (not compiled to C separately).
+			if (ctx.preludeCtx !== null) {
+				const preludeSyms = ctx.preludeCtx.table.current.symbols;
+				const injectedHelpers: string[] = [];
+				for (const ps of preludeSyms) {
+					if (ps.declNode !== null && ps.symbolKind === SymbolKind.Function
+						&& ps.nativeName === "" && !hasFlag(ps, SymbolFlag.ImportC)
+						&& ps.declNode.kind === NodeKind.FunctionDecl) {
+						const pfd = ps.declNode.data as FunctionDeclData;
+						// Skip generic functions (they're instantiated on-demand)
+						if (pfd.fnFlags.indexOf("gen:", 0) >= 0) continue;
+						// Skip extension methods (they're instantiated via extension matching)
+						if (pfd.fnFlags.indexOf("ext:", 0) >= 0) continue;
+						// Skip if already injected
+						let alreadyInjected = false;
+						for (const ih of injectedHelpers) { if (ih === ps.name) { alreadyInjected = true; break; } }
+						if (alreadyInjected) continue;
+						injectedHelpers.push(ps.name);
+						// Use original node directly (already type-checked during prelude loading)
+						// Don't clone — the original has all nodeType info intact.
+						const helperNode = ps.declNode;
+						if (helperNode.nodeType === null) helperNode.nodeType = ps.symbolType;
+						if (helperNode.resolvedSym === null) helperNode.resolvedSym = ps;
+						// Update sym modulePath to user module for correct name mangling
+						ps.modulePath = modPath;
+						ps.originalName = ps.name;
+						instPd.programStmts.push(helperNode);
+					}
+				}
+			}
+		}
 		const monoed = monomorphizeProgram(program, ctx);
 		validateTypedAST(ctx, monoed);
 		if (hasErrors(ctx)) {
@@ -507,9 +554,15 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		}
 	}
 
+	if (opts.showTime) printTiming("phase A (parse+check+transform)", tA);
+	const tB = clockMs();
+
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
 	if (opts.verbose) verboseLog("computing alive set (post-transform DCE)");
 	const aliveSet = computeAliveSet(transformedPrograms, transformedPaths, entryPath, false);
+
+	if (opts.showTime) printTiming("phase B (DCE)", tB);
+	const tC = clockMs();
 
 	// Compile prelude @compile directives — unconditional (reference-aligned: all @compile are always built)
 	if (graphPreludeCtx !== null && graphPreludeCtx.compileDirectives !== "") {
@@ -519,13 +572,17 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 
 	// Phase C: Codegen + compile each module
 	// Per-module .c cache: only re-invoke clang if generated C code actually changed.
+	let codegenTime = 0;
+	let clangTime = 0;
 	let compiled = 0;
 	let modulesRecompiled = 0;
 	const cd = cacheDir();
 	for (const p of processed) {
 		if (opts.verbose) verboseLog(`codegen ${p.modPath}`);
 
+		const tCg = clockMs();
 		const cCode = generateCModule(p.program, p.ctx, p.modPath, aliveSet, false, opts.isHcr);
+		codegenTime = codegenTime + (clockMs() - tCg);
 
 		// Process @compile("foo.c") directives
 		const compileObjs = processCompileDirectives(p.ctx.compileDirectives, dirName(p.modPath), allFlags, opts.mode, opts.ccCompiler, opts.verbose);
@@ -552,7 +609,9 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 				writeCCodeCache(p.modPath, cCode, compileCmd);
 				const cFile = stableCFile(p.modPath);
 				if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
+				const tCl = clockMs();
 				const ccCode = compileCFile(cFile, oFile, modFlags, opts.mode, opts.ccCompiler);
+				clangTime = clangTime + (clockMs() - tCl);
 				if (ccCode !== 0) {
 					console.log(`${error("error")}: compile failed for ${p.modPath} ${dim(`(exit ${ccCode})`)}`);
 				} else {
@@ -603,6 +662,11 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		return;
 	}
 
+	if (opts.showTime) {
+		printTiming("phase C (codegen+compile)", tC);
+		console.log(`    codegen: ${codegenTime}ms  clang: ${clangTime}ms`);
+	}
+	const tD = clockMs();
 	if (opts.verbose) verboseLog("linking → " + outBinary);
 	const linkCode = linkObjects(oFiles, outBinary, linkFlags, opts.mode, opts.ccCompiler);
 	if (linkCode !== 0) {
@@ -622,8 +686,9 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	// Reference-aligned: writeJsonBuildInstructions — persist project cache after successful build
 	writeProjectCache(graph.loadOrder, outBinary, opts.ccCompiler, opts.mode, allFlags0);
 
+	if (opts.showTime) printTiming("phase D (link)", tD);
 	console.log(success(`Built ${compiled} module(s) → ${bold(outBinary)}`));
-	if (opts.showTime) printTiming("built", t0);
+	if (opts.showTime) printTiming("total", t0);
 }
 
 // ===== Test (C backend) =====
@@ -667,6 +732,14 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		exitOnFatalCheckerErrors(ctx, modPath, mod.source);
 		ctx.errors = [];
 
+		// Inject on-demand instantiated generic functions
+		if (ctx.generatedInstances.length > 0) {
+			const instPd2 = program.data as ProgramData;
+			for (const inst of ctx.generatedInstances) {
+				instPd2.programStmts.push(inst);
+			}
+			ctx.generatedInstances = [];
+		}
 		const monoed = monomorphizeProgram(program, ctx);
 		validateTypedAST(ctx, monoed);
 		ctx.errors = [];

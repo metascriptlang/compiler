@@ -20,9 +20,16 @@ interface ModuleIndex {
 	programs: Node[];
 }
 
+let _programMap: Map<string, Node> = new Map();
+
 function findProgram(idx: ModuleIndex, path: string): Node {
+	const cached = _programMap.get(path);
+	if (cached !== undefined) return cached;
 	for (let i = 0; i < idx.paths.length; i += 1) {
-		if (idx.paths[i] === path) return idx.programs[i];
+		if (idx.paths[i] === path) {
+			_programMap.set(path, idx.programs[i]);
+			return idx.programs[i];
+		}
 	}
 	return null as unknown as Node;
 }
@@ -34,10 +41,11 @@ function findProgram(idx: ModuleIndex, path: string): Node {
 interface ImportMap {
 	names: string[];      // imported symbol name
 	sourcePaths: string[]; // resolved module path
+	_lookup: Map<string, number>; // O(1) name→index lookup
 }
 
 function buildImportMap(program: Node, modIdx: ModuleIndex): ImportMap {
-	const map: ImportMap = { names: [], sourcePaths: [] };
+	const map: ImportMap = { names: [], sourcePaths: [], _lookup: new Map() };
 	const d = program.data as ProgramData;
 	for (const stmt of d.programStmts) {
 		if (stmt === null) continue;
@@ -54,8 +62,10 @@ function buildImportMap(program: Node, modIdx: ModuleIndex): ImportMap {
 			const resolvedPath = resolveSpecifier(id.importSource, modIdx);
 			if (resolvedPath !== "") {
 				for (let i = 0; i < id.importNames.length; i += 1) {
+					const idx = map.names.length;
 					map.names.push(id.importNames[i]);
 					map.sourcePaths.push(resolvedPath);
+					map._lookup.set(id.importNames[i], idx);
 				}
 			}
 		}
@@ -78,15 +88,28 @@ function resolveSpecifier(specifier: string, modIdx: ModuleIndex): string {
 
 
 
-// ===== Visited Set (module-level to avoid closure capture of value-type array) =====
+// ===== Visited Set (Map-based for O(1) lookup) =====
 
-let _visited: string[] = [];
+let _visitedMap: Map<string, boolean> = new Map();
 
 function visitedHas(key: string): boolean {
-	for (let i = 0; i < _visited.length; i += 1) {
-		if (_visited[i] === key) return true;
-	}
-	return false;
+	return _visitedMap.has(key);
+}
+
+function visitedAdd(key: string): void {
+	_visitedMap.set(key, true);
+}
+
+// ===== Import Map Cache (avoid rebuilding per markAndWalk call) =====
+
+let _importMapCache: Map<string, ImportMap> = new Map();
+
+function getImportMap(program: Node, modulePath: string): ImportMap {
+	const cached = _importMapCache.get(modulePath);
+	if (cached !== undefined) return cached;
+	const map = buildImportMap(program, _modIdx);
+	_importMapCache.set(modulePath, map);
+	return map;
 }
 
 // ===== Module-level state (avoids closure capture of value-type arrays/structs) =====
@@ -161,7 +184,7 @@ function walkChildrenGeneric(node: Node, modulePath: string, importMap: ImportMa
 function markAndWalk(modulePath: string, name: string): void {
 	const key = modulePath + ":" + name;
 	if (visitedHas(key)) return;
-	_visited.push(key);
+	visitedAdd(key);
 	aliveSetAdd(_aliveSet, modulePath, name);
 
 	// Find the declaration in the module's AST and walk its body
@@ -170,8 +193,8 @@ function markAndWalk(modulePath: string, name: string): void {
 	const decl = findDecl(program, name);
 	if (decl === null) return;
 
-	// Build import map for cross-module tracing
-	const importMap = buildImportMap(program, _modIdx);
+	// Use cached import map for cross-module tracing
+	const importMap = getImportMap(program, modulePath);
 	walkBody(decl, modulePath, importMap);
 }
 
@@ -240,6 +263,8 @@ function matchDeclName(node: Node, name: string): Node {
 }
 
 function findImport(importMap: ImportMap, name: string): number {
+	const idx = importMap._lookup.get(name);
+	if (idx !== undefined) return idx;
 	for (let i = 0; i < importMap.names.length; i += 1) {
 		if (importMap.names[i] === name) return i;
 	}
@@ -252,7 +277,9 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 	// Initialize module-level state
 	_aliveSet = createAliveSet();
 	_modIdx = { paths, programs };
-	_visited = [];
+	_visitedMap = new Map();
+	_importMapCache = new Map();
+	_programMap = new Map();
 
 	// For each module, find roots and mark them alive
 	for (let m = 0; m < programs.length; m += 1) {
@@ -311,7 +338,8 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 	// Clear module-level state
 	_aliveSet = createAliveSet();
 	_modIdx = { paths: [], programs: [] };
-	_visited = [];
+	_visitedMap = new Map();
+	_programMap = new Map();
 	return result;
 }
 

@@ -59,9 +59,9 @@ function blockLeaveActions(g: CGen, p: CProc, howManyFinallys: number): void {
 function isStructType(t: Type): boolean {
 	if (t === null) return false;
 	return match (t.kind) {
-		TypeKind.String | TypeKind.Array | TypeKind.Map | TypeKind.Set => true,
+		TypeKind.String | TypeKind.Array => true,
 		TypeKind.Struct => { return isInterfaceType(t); },
-		TypeKind.Result | TypeKind.Tuple => true,
+		TypeKind.GenericInstance | TypeKind.Tuple => true,
 		TypeKind.Function => true,  // msClosure is a struct
 		_ => false,
 	};

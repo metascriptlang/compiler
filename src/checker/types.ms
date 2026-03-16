@@ -269,37 +269,58 @@ export function createEnum(name: string, members: string[], values: number[]): T
 
 
 export function createResult(okType: Type, errType: Type): Type {
-	const t = emptyType();
-	t.kind = TypeKind.Result;
-	t.typeName = "Result";
-	t.typeReturn = okType;
-	t.typeExtra = errType;
-	propagateHasAsgn(t, okType);
-	propagateHasAsgn(t, errType);
-	return t;
+	const base = emptyType();
+	base.kind = TypeKind.Struct;
+	base.typeName = "Result";
+	base.typeNames = ["ok", "value", "error"];
+	base.typeChildren = [createPrimitive(TypeKind.Boolean), okType, errType];
+	base.typeFlags = TypeFlag.HasAsgn as int32;
+	return createGenericInstance(base, [okType, errType]);
 }
 
 export function createPromise(innerType: Type): Type {
-	const t = emptyType();
-	t.kind = TypeKind.Promise;
-	t.typeName = "Promise";
-	t.typeReturn = innerType;
-	return t;
+	const base = emptyType();
+	base.kind = TypeKind.Struct;
+	base.typeName = "Promise";
+	base.typeNames = [];
+	base.typeChildren = [];
+	return createGenericInstance(base, [innerType]);
 }
 
 export function isPromise(t: Type): boolean {
 	if (t === null) return false;
-	return t.kind === TypeKind.Promise;
+	if (t.kind === TypeKind.Promise) return true;
+	return t.kind === TypeKind.GenericInstance && t.typeName === "Promise";
 }
 
 export function getPromiseInner(t: Type): Type {
 	if (t === null) return null;
+	if (t.kind === TypeKind.GenericInstance && t.typeChildren.length > 0) return t.typeChildren[0];
 	return t.typeReturn;
+}
+
+export function isResult(t: Type): boolean {
+	if (t === null) return false;
+	if (t.kind === TypeKind.Result) return true;
+	return t.kind === TypeKind.GenericInstance && t.typeName === "Result";
+}
+
+export function getResultOkType(t: Type): Type {
+	if (t === null) return null;
+	if (t.kind === TypeKind.GenericInstance && t.typeChildren.length > 0) return t.typeChildren[0];
+	return t.typeReturn;
+}
+
+export function getResultErrType(t: Type): Type {
+	if (t === null) return null;
+	if (t.kind === TypeKind.GenericInstance && t.typeChildren.length > 1) return t.typeChildren[1];
+	return t.typeExtra;
 }
 
 export function isPromiseResult(t: Type): boolean {
 	if (!isPromise(t)) return false;
-	return t.typeReturn !== null && t.typeReturn.kind === TypeKind.Result;
+	const inner = getPromiseInner(t);
+	return inner !== null && isResult(inner);
 }
 
 export function createTypeRef(name: string): Type {
@@ -466,27 +487,7 @@ export function createTuple(elementTypes: Type[]): Type {
 	return t;
 }
 
-export function createSet(elemType: Type): Type {
-	return {
-		kind: TypeKind.Set, typeName: "", typeNames: [], typeChildren: [],
-		typeReturn: elemType, typeExtra: null, typeFlags: TypeFlag.HasAsgn as int32,
-		callConv: CallingConvention.CcDefault, attachedOps: [],
-	};
-}
 
-export function createMap(keyType: Type, valueType: Type): Type {
-	return {
-		kind: TypeKind.Map,
-		typeName: "",
-		typeNames: [],
-		typeChildren: [],
-		typeReturn: keyType,
-		typeExtra: valueType,
-		typeFlags: TypeFlag.HasAsgn as int32,
-		callConv: CallingConvention.CcDefault,
-		attachedOps: [],
-	};
-}
 
 export function createDistinct(inner: Type): Type {
 	const t = emptyType();
@@ -501,6 +502,23 @@ export function createGenericParam(name: string): Type {
 	t.kind = TypeKind.GenericParam;
 	t.typeName = name;
 	return t;
+}
+
+// GenericInstance: Nim's tyGenericInst — preserves type args structurally.
+// typeChildren = type arguments, typeExtra = base type (struct/interface).
+// Enables structural unification: Map<K,V> vs Map<string,string> → K=string, V=string.
+export function createGenericInstance(baseType: Type, typeArgs: Type[]): Type {
+	return {
+		kind: TypeKind.GenericInstance,
+		typeName: baseType !== null ? baseType.typeName : "",
+		typeNames: [],  // GenericInstance has no field names — use typeExtra (base struct) for field access
+		typeChildren: typeArgs,
+		typeReturn: null as unknown as Type,
+		typeExtra: baseType,
+		typeFlags: baseType !== null ? baseType.typeFlags : 0 as int32,
+		callConv: CallingConvention.CcDefault,
+		attachedOps: [],
+	};
 }
 
 // ===== System Types (Standard reference parity) =====
@@ -748,14 +766,6 @@ function getTypeSizeInner(t: Type): number {
 				return size;
 			}
 		},
-		TypeKind.Result => {
-			// ok bool + max(okType, errType)
-			const okSize = getTypeSize(t.typeReturn);
-			const errSize = getTypeSize(t.typeExtra);
-			const payloadSize = okSize > errSize ? okSize : errSize;
-			return 1 + payloadSize;
-		},
-		TypeKind.Promise => getTargetPtrSize(),
 		TypeKind.Union => {
 			// tag + max(member sizes)
 			let maxSize = 0;
@@ -829,8 +839,7 @@ export function substituteType(t: Type, paramName: string, concrete: Type): Type
 			}
 			return createFunction(newParams, t.typeNames, substituteType(t.typeReturn, paramName, concrete));
 		},
-		TypeKind.Result => createResult(substituteType(t.typeReturn, paramName, concrete), substituteType(t.typeExtra, paramName, concrete)),
-		TypeKind.Promise => createPromise(substituteType(t.typeReturn, paramName, concrete)),
+		// Result and Promise are now GenericInstance — handled by the GenericInstance arm
 		TypeKind.Union => {
 			const newMembers: Type[] = [];
 			for (const member of t.typeChildren) {
@@ -838,14 +847,9 @@ export function substituteType(t: Type, paramName: string, concrete: Type): Type
 			}
 			return createUnion(newMembers);
 		},
-		TypeKind.Map => createMap(
-			substituteType(t.typeReturn, paramName, concrete),
-			substituteType(t.typeExtra, paramName, concrete),
-		),
 		TypeKind.Ref => createRef(substituteType(t.typeReturn, paramName, concrete)),
 		TypeKind.Ptr => createPtr(substituteType(t.typeReturn, paramName, concrete)),
 		TypeKind.Borrow => createBorrow(substituteType(t.typeReturn, paramName, concrete)),
-		TypeKind.Set => createSet(substituteType(t.typeReturn, paramName, concrete)),
 		TypeKind.Tuple => {
 			const newChildren: Type[] = [];
 			for (const child of t.typeChildren) {
@@ -854,6 +858,13 @@ export function substituteType(t: Type, paramName: string, concrete: Type): Type
 			return createTuple(newChildren);
 		},
 		TypeKind.Struct => substituteStruct(t, paramName, concrete),
+		TypeKind.GenericInstance => {
+			const newArgs: Type[] = [];
+			for (const arg of t.typeChildren) {
+				newArgs.push(substituteType(arg, paramName, concrete));
+			}
+			return createGenericInstance(t.typeExtra, newArgs);
+		},
 		_ => t,
 	};
 	substituteVisited.pop();
@@ -904,32 +915,36 @@ function unifyTypeInner(formal: Type, concrete: Type, bindings: UnifyBindings): 
 		bindings.types.push(concrete);
 		return;
 	}
+	// GenericInstance: structural unification of type arguments (Nim's tyGenericInst parity)
+	// Map<K,V> (formal, with GenericParam children) vs Map<string,string> (concrete)
+	if (formal.kind === TypeKind.GenericInstance && concrete.kind === TypeKind.GenericInstance) {
+		const limit = formal.typeChildren.length < concrete.typeChildren.length ? formal.typeChildren.length : concrete.typeChildren.length;
+		for (let gi = 0; gi < limit; gi += 1) {
+			unifyType(formal.typeChildren[gi], concrete.typeChildren[gi], bindings);
+		}
+		return;
+	}
+	// GenericInstance formal vs Struct concrete (or vice versa) — try base type matching
+	if (formal.kind === TypeKind.GenericInstance && concrete.kind === TypeKind.Struct) {
+		// Unify the base struct fields
+		if (formal.typeExtra !== null) {
+			unifyType(formal.typeExtra, concrete, bindings);
+		}
+		return;
+	}
 	// Structural match — same kind, recurse into children
 	if (formal.kind !== concrete.kind) return;
 	if (formal.kind === TypeKind.Array || formal.kind === TypeKind.SizedArray || formal.kind === TypeKind.Span) {
 		unifyType(formal.typeReturn, concrete.typeReturn, bindings);
 		return;
 	}
-	if (formal.kind === TypeKind.Result) {
-		unifyType(formal.typeReturn, concrete.typeReturn, bindings);
-		unifyType(formal.typeExtra, concrete.typeExtra, bindings);
-		return;
-	}
-	if (formal.kind === TypeKind.Promise) {
-		unifyType(formal.typeReturn, concrete.typeReturn, bindings);
-		return;
-	}
+	// Result and Promise are now GenericInstance — handled above
 	if (formal.kind === TypeKind.Function) {
 		const fnLimit = formal.typeChildren.length < concrete.typeChildren.length ? formal.typeChildren.length : concrete.typeChildren.length;
 		for (let i = 0; i < fnLimit; i += 1) {
 			unifyType(formal.typeChildren[i], concrete.typeChildren[i], bindings);
 		}
 		unifyType(formal.typeReturn, concrete.typeReturn, bindings);
-		return;
-	}
-	if (formal.kind === TypeKind.Map) {
-		unifyType(formal.typeReturn, concrete.typeReturn, bindings);
-		unifyType(formal.typeExtra, concrete.typeExtra, bindings);
 		return;
 	}
 	if (formal.kind === TypeKind.Ref || formal.kind === TypeKind.Ptr) {
@@ -949,6 +964,13 @@ function unifyTypeInner(formal: Type, concrete: Type, bindings: UnifyBindings): 
 export function hasGenericParams(t: Type): boolean {
 	if (t === null) return false;
 	if (t.kind === TypeKind.GenericParam) return true;
+	// GenericInstance: check type args for GenericParam (e.g., Map<K,V> has GenericParam children)
+	if (t.kind === TypeKind.GenericInstance) {
+		for (let gi = 0; gi < t.typeChildren.length; gi += 1) {
+			if (hasGenericParams(t.typeChildren[gi])) return true;
+		}
+		return false;
+	}
 	// Named types can't contain GenericParams (they're resolved) — skip to avoid cycles
 	if ((t.kind === TypeKind.Struct || t.kind === TypeKind.Union) && t.typeName !== "") return false;
 	if (t.typeReturn !== null && hasGenericParams(t.typeReturn)) return true;
@@ -1025,6 +1047,19 @@ export function getElementType(t: Type): Type {
 	return unknownType();
 }
 
+// Collect unique GenericParam names from a type tree (used by getProperty for GenericInstance substitution)
+function collectGenericParamNames(t: Type, names: string[]): void {
+	if (t === null) return;
+	if (t.kind === TypeKind.GenericParam) {
+		for (const n of names) { if (n === t.typeName) return; }
+		names.push(t.typeName);
+		return;
+	}
+	if (t.typeReturn !== null) collectGenericParamNames(t.typeReturn, names);
+	if (t.typeExtra !== null) collectGenericParamNames(t.typeExtra, names);
+	for (const c of t.typeChildren) { collectGenericParamNames(c, names); }
+}
+
 export function getProperty(t: Type, name: string): Type {
 	// Unwrap Ref/Ptr to access inner Object's properties (class types are Ref<Object>)
 	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) {
@@ -1039,6 +1074,25 @@ export function getProperty(t: Type, name: string): Type {
 			}
 			i += 1;
 		}
+	}
+	// GenericInstance: get property from base struct, substituting GenericParam→concrete type args.
+	// The base struct may have GenericParam fields (e.g., MapEntry<K,V>[]) that need K→string, V→string.
+	// We collect all GenericParam names from the base struct's fields, then substitute with instance's type args.
+	if (t.kind === TypeKind.GenericInstance && t.typeExtra !== null) {
+		let baseProp = getProperty(t.typeExtra, name);
+		if (baseProp.kind === TypeKind.Unknown) return baseProp;
+		if (hasGenericParams(baseProp) && t.typeChildren.length > 0) {
+			// Collect GenericParam names from the base struct to build name→typeArg mapping
+			const paramNames: string[] = [];
+			collectGenericParamNames(t.typeExtra, paramNames);
+			// Substitute: paramNames[i] → t.typeChildren[i]
+			for (let gi = 0; gi < paramNames.length; gi += 1) {
+				if (gi < t.typeChildren.length) {
+					baseProp = substituteType(baseProp, paramNames[gi], t.typeChildren[gi]);
+				}
+			}
+		}
+		return baseProp;
 	}
 	// Union field access: search all variants for the field.
 	// For discriminated unions, the discriminant field maps to _tag.
@@ -1111,6 +1165,7 @@ export function typeNameOf(t: Type): string {
 		return "out";
 	}
 	if (t.kind === TypeKind.Struct) return t.typeName;
+	if (t.kind === TypeKind.GenericInstance) return t.typeName;  // "Map" for receiver matching
 	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) {
 		if (t.typeReturn !== null) return typeNameOf(t.typeReturn);
 		return "";
@@ -1134,12 +1189,9 @@ export function typeNameOf(t: Type): string {
 		TypeKind.SizedArray => "Array", // Both map to "Array" for extension lookup (UFCS)
 		TypeKind.Span => "Span",
 		TypeKind.Borrow => "Borrow",
-		TypeKind.Map => "Map",
 		TypeKind.Tuple => "Tuple",
-		TypeKind.Set => "Set",
 		TypeKind.CString => "cstring",
-		TypeKind.Result => "Result",
-		TypeKind.Promise => "Promise",
+		// Result and Promise are now GenericInstance — handled above via t.typeName
 		TypeKind.Enum => t.typeName,
 		TypeKind.TypeReference => t.typeName,
 		TypeKind.Distinct => t.typeName,
@@ -1287,9 +1339,9 @@ test "createEnum" {
 
 test "createResult" {
 	const r = createResult(numberType(), stringType());
-	assert r.kind === TypeKind.Result;
-	assert r.typeReturn.kind === TypeKind.Number;
-	assert r.typeExtra.kind === TypeKind.String;
+	assert isResult(r);
+	assert getResultOkType(r).kind === TypeKind.Number;
+	assert getResultErrType(r).kind === TypeKind.String;
 }
 
 test "createTypeRef" {
@@ -1382,17 +1434,17 @@ test "substitute in Result" {
 	const r = createResult(createGenericParam("T"), createGenericParam("E"));
 	const step1 = substituteType(r, "T", numberType());
 	const step2 = substituteType(step1, "E", stringType());
-	assert step2.kind === TypeKind.Result;
-	assert step2.typeReturn.kind === TypeKind.Number;
-	assert step2.typeExtra.kind === TypeKind.String;
+	assert isResult(step2);
+	assert getResultOkType(step2).kind === TypeKind.Number;
+	assert getResultErrType(step2).kind === TypeKind.String;
 }
 
 test "instantiateGeneric multi-param" {
 	const r = createResult(createGenericParam("T"), createGenericParam("E"));
 	const result = instantiateGeneric(r, ["T", "E"], [numberType(), stringType()]);
-	assert result.kind === TypeKind.Result;
-	assert result.typeReturn.kind === TypeKind.Number;
-	assert result.typeExtra.kind === TypeKind.String;
+	assert isResult(result);
+	assert getResultOkType(result).kind === TypeKind.Number;
+	assert getResultErrType(result).kind === TypeKind.String;
 }
 
 test "primitive unchanged" {
@@ -1496,23 +1548,6 @@ test "substituteType Tuple" {
 	assert result.kind === TypeKind.Tuple;
 	assert result.typeChildren[0].kind === TypeKind.String;
 	assert result.typeChildren[1].kind === TypeKind.Number;
-}
-
-test "createSet" {
-	const s = createSet(stringType());
-	assert s.kind === TypeKind.Set;
-	assert s.typeReturn.kind === TypeKind.String;
-}
-
-test "typeNameOf Set" {
-	assert typeNameOf(createSet(stringType())) === "Set";
-}
-
-test "substituteType Set" {
-	const s = createSet(createGenericParam("T"));
-	const result = substituteType(s, "T", stringType());
-	assert result.kind === TypeKind.Set;
-	assert result.typeReturn.kind === TypeKind.String;
 }
 
 test "sizeOfType primitives 64-bit" {

@@ -174,7 +174,7 @@ function typeToEnvStr(t: Type): string {
 				if (elem !== "") { return elem + "[]"; } else { return "unknown[]"; }
 			} else { return "unknown[]"; }
 		},
-		TypeKind.Result => "Result",
+		TypeKind.GenericInstance => t.typeName,
 		TypeKind.TypeReference => {
 			const name = t.typeName;
 			return name;

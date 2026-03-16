@@ -54,6 +54,9 @@ function isDeclAlive(g: CGen, node: Node): boolean {
 	if (name.length > 0 && name.slice(0, 1) === "=") return true;
 	if (name.length > 1 && name.slice(0, 2) === "__") return true;
 	if (isDrcLifecycleName(name)) return true;
+	// On-demand instantiated generic functions (e.g., set__string_string): always alive.
+	// These are generated during type checking and injected into the program.
+	if (node.resolvedSym !== null && node.resolvedSym.name.indexOf("__", 0) > 0) return true;
 	return aliveSetHas(g.aliveSet, g.modulePath, name);
 }
 
@@ -69,6 +72,12 @@ function isArraySeqHook(name: string): boolean {
 
 export function genDecl(g: CGen, node: Node, exported: boolean): void {
 	if (node === null) return;
+	if (node.kind === NodeKind.FunctionDecl) {
+		const _fd2 = node.data as FunctionDeclData;
+		if (_fd2.fnName.indexOf("mapRawGet", 0) >= 0) {
+			console.log("GENDECL-ENTRY: " + _fd2.fnName + " kind=" + String(node.kind));
+		}
+	}
 
 	match (node.kind) {
 		NodeKind.FunctionDecl => {

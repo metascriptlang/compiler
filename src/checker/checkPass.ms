@@ -19,6 +19,7 @@ import {
 	unknownType, nullType, stringType, charType, numberType, voidType,
 	createFunction, createUnion, isMaybeType, unwrapMaybeType,
 	isNarrowingIntConv, typeNameOf, isPromise, getPromiseInner,
+	isResult, getResultOkType, getResultErrType,
 } from "./types";
 import {
 	Symbol, SymbolKind, SymbolState, ScopeKind,
@@ -49,9 +50,9 @@ import {
 // Brief type description for error messages
 function formatTypeBrief(t: Type): string {
 	if (t === null) return "unknown";
-	if (t.kind === TypeKind.Result) {
-		const okName = t.typeReturn !== null ? typeNameOf(t.typeReturn) : "?";
-		const errName = t.typeExtra !== null ? typeNameOf(t.typeExtra) : "?";
+	if (isResult(t)) {
+		const okName = getResultOkType(t) !== null ? typeNameOf(getResultOkType(t)) : "?";
+		const errName = getResultErrType(t) !== null ? typeNameOf(getResultErrType(t)) : "?";
 		return "Result<" + (okName !== "" ? okName : "void") + ", " + (errName !== "" ? errName : "?") + ">";
 	}
 	const name = typeNameOf(t);
@@ -613,11 +614,6 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 			elemType = iterType.typeReturn;
 		} else if (iterType.kind === TypeKind.String) {
 			elemType = charType();
-		} else if (iterType.kind === TypeKind.Set && iterType.typeReturn !== null) {
-			elemType = iterType.typeReturn;
-		} else if (iterType.kind === TypeKind.Map && iterType.typeReturn !== null) {
-			// Non-destructured for-of on Map yields keys
-			elemType = iterType.typeReturn;
 		}
 	}
 	// Ref parity: for loops — conservative, loop may not execute
@@ -648,14 +644,7 @@ function defineForOfPatternBindings(ctx: CheckerContext, pattern: Node, iterType
 				const id = elem.data as IdentifierData;
 				if (id.name !== "_") {
 					let elemType = unknownType();
-					if (iterType !== null && iterType.kind === TypeKind.Map) {
-						// Map [key, value]: element 0 = key type, element 1 = value type
-						if (i === 0) {
-							elemType = stringType();
-						} else if (i === 1 && iterType.typeReturn !== null) {
-							elemType = iterType.typeReturn;
-						}
-					} else if (iterType !== null && iterType.kind === TypeKind.Tuple && iterType.typeChildren !== null && i < iterType.typeChildren.length) {
+					if (iterType !== null && iterType.kind === TypeKind.Tuple && iterType.typeChildren !== null && i < iterType.typeChildren.length) {
 						elemType = iterType.typeChildren[i];
 					} else if (iterType !== null && (iterType.kind === TypeKind.Array || iterType.kind === TypeKind.SizedArray) && iterType.typeReturn !== null) {
 						// Array of tuples: element type from tuple children
@@ -912,7 +901,7 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 // Unified function body checker — works for FunctionDecl (resolved param types),
 // MethodDecl, ConstructorDecl.
 // paramLocs: per-param source locations for DEF recording (standard parity: semIdentDef → suggestSym)
-function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[]): void {
+export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[]): void {
 	const savedFunction = ctx.currentFunction;
 	const savedMatchDepth = ctx.matchExprDepth;
 	ctx.currentFunction = sym;
@@ -1194,6 +1183,7 @@ function checkProgramCore(
 	if (registry !== null) ctx.exportRegistry = registry;  // override empty default with caller's registry
 	if (cancelCtx !== null) { ctx.cancelCtx = cancelCtx; ctx.cancelVersion = cancelVersion; }
 	injectPrelude(ctx, preludeCtx);
+	ctx.preludeCtx = preludeCtx;  // friend modules — access private prelude symbols during instantiation
 	const consoleClass = lookupSymbol(ctx.table, "console");
 	if (consoleClass !== null) {
 		const consoleGlobal = makeSymbol("console", SymbolKind.Variable, consoleClass.symbolType, false);
@@ -1649,7 +1639,7 @@ test "type alias Result resolved" {
 	assert !hasErrors(ctx);
 	const sym = lookupSymbol(ctx.table, "MyResult");
 	assert sym !== null;
-	assert sym.symbolType.kind === TypeKind.Result;
+	assert isResult(sym.symbolType);
 }
 
 test "distinct type creates Distinct wrapper" {
