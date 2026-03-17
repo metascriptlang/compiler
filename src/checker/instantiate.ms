@@ -77,14 +77,15 @@ function substituteAnnotations(cd: FunctionDeclData, names: string[], types: Typ
 	}
 }
 
-// ===== replaceTypeVars (Nim's replaceTypeVarsN) =====
+// ===== replaceTypeVars =====
 // Walk every node in the cloned body, clear resolvedSym for re-resolution,
 // and substitute GenericParam types with concrete types on nodeType.
 
 function replaceTypeVars(node: Node, paramNames: string[], concreteTypes: Type[]): void {
 	if (node === null) return;
 
-	node.resolvedSym = null as unknown as Symbol;
+	// copyTree parity: preserve resolvedSym from clone (non-generic refs stay intact).
+	// Only substitute GenericParam types in nodeType — don't clear resolvedSym.
 	if (node.nodeType !== null) {
 		for (let i = 0; i < paramNames.length; i += 1) {
 			if (i < concreteTypes.length) {
@@ -102,13 +103,13 @@ function replaceTypeVars(node: Node, paramNames: string[], concreteTypes: Type[]
 				}
 			}
 		}
-		replaceTypeVars(d.declInit, paramNames, concreteTypes);
+		replaceTypeVars(d.initializer, paramNames, concreteTypes);
 		return;
 	}
 
 	match (node.kind) {
 		NodeKind.BlockStmt => { for (const stmt of (node.data as BlockStmtData).statements) { replaceTypeVars(stmt, paramNames, concreteTypes); } },
-		NodeKind.ExprStmt => { replaceTypeVars((node.data as ExprStmtData).expression, paramNames, concreteTypes); },
+		NodeKind.ExprStmt => { replaceTypeVars((node.data as ExprStmtData).expr, paramNames, concreteTypes); },
 		NodeKind.ReturnStmt => { replaceTypeVars((node.data as ReturnStmtData).argument, paramNames, concreteTypes); },
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
@@ -131,8 +132,8 @@ function replaceTypeVars(node: Node, paramNames: string[], concreteTypes: Type[]
 			replaceTypeVars(d.left, paramNames, concreteTypes);
 			replaceTypeVars(d.right, paramNames, concreteTypes);
 		},
-		NodeKind.UnaryExpr => { replaceTypeVars((node.data as UnaryExprData).argument, paramNames, concreteTypes); },
-		NodeKind.UpdateExpr => { replaceTypeVars((node.data as UpdateExprData).argument, paramNames, concreteTypes); },
+		NodeKind.UnaryExpr => { replaceTypeVars((node.data as UnaryExprData).operand, paramNames, concreteTypes); },
+		NodeKind.UpdateExpr => { replaceTypeVars((node.data as UpdateExprData).updateArg, paramNames, concreteTypes); },
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
 			replaceTypeVars(d.callee, paramNames, concreteTypes);
@@ -141,18 +142,28 @@ function replaceTypeVars(node: Node, paramNames: string[], concreteTypes: Type[]
 		NodeKind.MemberExpr => { replaceTypeVars((node.data as MemberExprData).object, paramNames, concreteTypes); },
 		NodeKind.ArrayAccess => {
 			const d = node.data as ArrayAccessData;
-			replaceTypeVars(d.object, paramNames, concreteTypes);
+			replaceTypeVars(d.array, paramNames, concreteTypes);
 			replaceTypeVars(d.index, paramNames, concreteTypes);
 		},
-		NodeKind.ObjectLiteral => { for (const val of (node.data as ObjectLiteralData).values) { replaceTypeVars(val, paramNames, concreteTypes); } },
+		NodeKind.ObjectLiteral => { for (const val of (node.data as ObjectLiteralData).properties) { replaceTypeVars(val, paramNames, concreteTypes); } },
 		NodeKind.ArrayLiteral => { for (const el of (node.data as ArrayLiteralData).elements) { replaceTypeVars(el, paramNames, concreteTypes); } },
 		NodeKind.ConditionalExpr => {
 			const d = node.data as ConditionalExprData;
-			replaceTypeVars(d.test, paramNames, concreteTypes);
-			replaceTypeVars(d.consequent, paramNames, concreteTypes);
-			replaceTypeVars(d.alternate, paramNames, concreteTypes);
+			replaceTypeVars(d.ternaryCondition, paramNames, concreteTypes);
+			replaceTypeVars(d.ternaryConsequent, paramNames, concreteTypes);
+			replaceTypeVars(d.ternaryAlternate, paramNames, concreteTypes);
 		},
-		NodeKind.TypeAssertion => { replaceTypeVars((node.data as TypeAssertionData).asExpr, paramNames, concreteTypes); },
+		NodeKind.TypeAssertion => {
+			const tad = node.data as TypeAssertionData;
+			replaceTypeVars(tad.asExpr, paramNames, concreteTypes);
+			if (tad.asType !== "") {
+				for (let i = 0; i < paramNames.length; i += 1) {
+					if (i < concreteTypes.length) {
+						tad.asType = monoSubstAnnotation(tad.asType, paramNames[i], monoConcreteTypeName(concreteTypes[i]));
+					}
+				}
+			}
+		},
 		NodeKind.NewExpr => {
 			const d = node.data as NewExprData;
 			replaceTypeVars(d.newCallee, paramNames, concreteTypes);
@@ -169,35 +180,59 @@ function replaceTypeVars(node: Node, paramNames: string[], concreteTypes: Type[]
 		NodeKind.FunctionExpr => { replaceTypeVars((node.data as FunctionExprData).funcExprBody, paramNames, concreteTypes); },
 		NodeKind.DeferStmt => { replaceTypeVars((node.data as DeferStmtData).deferExpr, paramNames, concreteTypes); },
 		NodeKind.HiddenDeref => { replaceTypeVars((node.data as HiddenDerefData).expr, paramNames, concreteTypes); },
-		NodeKind.HiddenStdConv => { replaceTypeVars((node.data as HiddenStdConvData).expr, paramNames, concreteTypes); },
+		NodeKind.HiddenStdConv => { replaceTypeVars((node.data as HiddenStdConvData).convExpr, paramNames, concreteTypes); },
 		NodeKind.SwitchStmt => {
 			const d = node.data as SwitchStmtData;
-			replaceTypeVars(d.switchExpr, paramNames, concreteTypes);
+			replaceTypeVars(d.switchDisc, paramNames, concreteTypes);
 			for (const c of d.switchCases) {
 				for (const s of (c.data as SwitchCaseData).caseStmts) { replaceTypeVars(s, paramNames, concreteTypes); }
 			}
 		},
-		NodeKind.MatchExpr | NodeKind.MatchStmt => {
+		NodeKind.MatchExpr => {
 			const d = node.data as MatchExprData;
-			replaceTypeVars(d.matchSubject, paramNames, concreteTypes);
+			replaceTypeVars(d.matchDisc, paramNames, concreteTypes);
 			for (const c of d.matchCases) { replaceTypeVars((c.data as MatchCaseData).caseBody, paramNames, concreteTypes); }
+		},
+		NodeKind.MatchStmt => {
+			const d = node.data as MatchStmtData;
+			replaceTypeVars(d.matchStmtDisc, paramNames, concreteTypes);
+			for (const c of d.matchStmtCases) { replaceTypeVars((c.data as MatchCaseData).caseBody, paramNames, concreteTypes); }
 		},
 		_ => {},
 	};
 }
 
-// ===== On-Demand Instantiation (Nim's generateInstance) =====
+// ===== On-Demand Instantiation =====
 
 export function instantiateGenericFunction(sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext): Symbol {
 	if (ctx.genericInstDepth > 50) return null as unknown as Symbol;
+
+	// Extern/ImportC generic functions are handled by the C runtime (nativeName binding).
+	// Don't instantiate — the runtime provides the implementation.
+	if (hasFlag(sym, SymbolFlag.ImportC)) return null as unknown as Symbol;
+	if (sym.nativeName !== "") return null as unknown as Symbol;
+
+	// Reference parity: refuse to instantiate if any type arg
+	// is still unresolved (GenericParam, Unknown). Only concrete types produce valid C.
+	for (const ct of concreteTypes) {
+		if (ct === null || ct.kind === TypeKind.GenericParam || ct.kind === TypeKind.Unknown) {
+			return null as unknown as Symbol;
+		}
+	}
+
 	ctx.genericInstDepth = ctx.genericInstDepth + 1;
 
 	const dedup = deduplicateBindings(paramNames, concreteTypes);
 	const mangledName = buildMangledName(sym.name, dedup.types);
 
-	// Cache check — skip if already instantiated
+	// Cache check — skip if already instantiated.
+	// Still inject the AST into this module's generatedInstances so codegen can
+	// dedup across modules (first module to emit wins, others get forward decl).
 	const existing = lookupSymbol(ctx.table, mangledName);
 	if (existing !== null) {
+		if (existing.declNode !== null) {
+			ctx.generatedInstances.push(existing.declNode);
+		}
 		ctx.genericInstDepth = ctx.genericInstDepth - 1;
 		return existing;
 	}
@@ -227,32 +262,38 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	const instType = sym.symbolType !== null ? instantiateGeneric(sym.symbolType, dedup.names, dedup.types) : sym.symbolType;
 	cloned.nodeType = instType;
 
-	// Create and register symbol in root scope
+	// Create and register symbol in root scope.
+	// Instance symbols get empty modulePath — codegen emits unqualified names
+	// and deduplicates across modules (first module to emit wins, others get forward decl).
+	// This matches Nim's generateInstance where instances are identified by mangled name alone.
 	const instSym = makeSymbol(mangledName, SymbolKind.Function, instType, false);
 	instSym.state = SymbolState.Shaped;
 	instSym.nativeName = "";
-	instSym.modulePath = ctx.modulePath;
+	instSym.modulePath = "";
 	instSym.declNode = cloned;
 	instSym.originalName = mangledName;
-	setFlag(instSym, SymbolFlag.Exported);
 	let rootScope = ctx.table.current;
 	while (rootScope.parent !== null) rootScope = rootScope.parent;
 	instSym.nameId = getIdentId(ctx.table.identCache, mangledName);
 	rootScope.symbols.push(instSym);
 	cloned.resolvedSym = instSym;
 
-	// Type-check body with friend module access
+	// Reference parity (generateInstance): check body in the DEFINING module's scope,
+	// not the calling module's. This gives access to private helpers (mapRawGet, etc.)
 	if (cd.fnBody !== null) {
-		if (ctx.preludeCtx !== null && ctx.genericInstDepth === 1) {
-			const preludeSyms = ctx.preludeCtx.table.current.symbols;
-			for (const ps of preludeSyms) {
-				if (!hasFlag(ps, SymbolFlag.Exported) && lookupSymbol(ctx.table, ps.name) === null) {
-					ps.nameId = getIdentId(ctx.table.identCache, ps.name);
-					ctx.table.current.symbols.push(ps);
-				}
-			}
-		}
-		checkFunctionBody(ctx, instSym, cd.params, cd.fnBody, null);
+		const bodyCtx = ctx.preludeCtx !== null ? ctx.preludeCtx : ctx;
+		// Register instance in body-check scope so recursive lookups find it
+		instSym.nameId = getIdentId(bodyCtx.table.identCache, mangledName);
+		bodyCtx.table.current.symbols.push(instSym);
+		// Share generatedInstances + modulePath so nested instantiations
+		// get the calling module's identity (not the prelude's empty path).
+		const savedInstances = bodyCtx.generatedInstances;
+		const savedModulePath = bodyCtx.modulePath;
+		bodyCtx.generatedInstances = ctx.generatedInstances;
+		bodyCtx.modulePath = ctx.modulePath;
+		checkFunctionBody(bodyCtx, instSym, cd.params, cd.fnBody, null as unknown as SourceLocation[]);
+		bodyCtx.generatedInstances = savedInstances;
+		bodyCtx.modulePath = savedModulePath;
 	}
 
 	ctx.generatedInstances.push(cloned);

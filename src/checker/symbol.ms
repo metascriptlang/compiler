@@ -68,6 +68,14 @@ export function createSymbolTable(): SymbolTable {
 	return { current: global, allScopes: [global], identCache: createIdentCache() };
 }
 
+// Create with shared IdentCache (single IdentCache per compilation).
+// All contexts sharing a cache get identical nameIds for the same string,
+// eliminating cross-context nameId mismatch during generic instantiation.
+export function createSymbolTableWithCache(cache: IdentCache): SymbolTable {
+	const global: Scope = { symbols: [], scopeKind: ScopeKind.Global, parent: null as unknown as Scope };
+	return { current: global, allScopes: [global], identCache: cache };
+}
+
 // ===== Scope Operations =====
 
 export function openScope(table: SymbolTable, kind: ScopeKind): void {

@@ -30,7 +30,7 @@ export enum TypeKind {
 	// Sized integers/floats (C interop)
 	Int8, Int16, Int32, Int64, Uint8, Uint16, Uint32, Uint64, Float32, Float64,
 	// Compound
-	Struct, Array, SizedArray, Span, Function, Tuple, Map, Set, CString,
+	Struct, Array, SizedArray, Span, Function, Tuple, CString,
 	// Generics
 	GenericParam, GenericInstance,
 	// Memory
@@ -504,7 +504,7 @@ export function createGenericParam(name: string): Type {
 	return t;
 }
 
-// GenericInstance: Nim's tyGenericInst — preserves type args structurally.
+// GenericInstance: preserves type args structurally after instantiation.
 // typeChildren = type arguments, typeExtra = base type (struct/interface).
 // Enables structural unification: Map<K,V> vs Map<string,string> → K=string, V=string.
 export function createGenericInstance(baseType: Type, typeArgs: Type[]): Type {
@@ -915,9 +915,11 @@ function unifyTypeInner(formal: Type, concrete: Type, bindings: UnifyBindings): 
 		bindings.types.push(concrete);
 		return;
 	}
-	// GenericInstance: structural unification of type arguments (Nim's tyGenericInst parity)
+	// GenericInstance: structural unification of type arguments
 	// Map<K,V> (formal, with GenericParam children) vs Map<string,string> (concrete)
+	// Base type must match: Map<K,V> unifies with Map<string,string> but NOT Set<string>
 	if (formal.kind === TypeKind.GenericInstance && concrete.kind === TypeKind.GenericInstance) {
+		if (formal.typeName !== concrete.typeName) return;
 		const limit = formal.typeChildren.length < concrete.typeChildren.length ? formal.typeChildren.length : concrete.typeChildren.length;
 		for (let gi = 0; gi < limit; gi += 1) {
 			unifyType(formal.typeChildren[gi], concrete.typeChildren[gi], bindings);

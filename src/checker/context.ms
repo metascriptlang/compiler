@@ -1,6 +1,7 @@
 import { Type, TypeKind, unknownType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity, isPromiseResult } from "./types";
 import { isAssignable } from "./compat";
-import { Symbol, SymbolKind, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag } from "./symbol";
+import { Symbol, SymbolKind, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, createSymbolTableWithCache, hasFlag } from "./symbol";
+import { IdentCache } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
 import { Node, SourceLocation, makeLoc } from "../ast/node";
 import { findChar, splitTopLevel } from "../utils/string";
@@ -548,6 +549,20 @@ export function createModuleContext(graph: ModuleGraph, mod: Module): CheckerCon
 	ctx.moduleGraph = graph;
 	ctx.currentModule = mod;
 	ctx.modulePath = mod.path;
+	return ctx;
+}
+
+// Create context with a shared IdentCache (one cache per compilation).
+// Eliminates cross-context nameId mismatch during generic instantiation.
+export function createContextWithCache(cache: IdentCache): CheckerContext {
+	const ctx = createContext();
+	ctx.table.identCache = cache;
+	return ctx;
+}
+
+export function createModuleContextWithCache(graph: ModuleGraph, mod: Module, cache: IdentCache): CheckerContext {
+	const ctx = createModuleContext(graph, mod);
+	ctx.table.identCache = cache;
 	return ctx;
 }
 

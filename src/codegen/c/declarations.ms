@@ -15,7 +15,7 @@ import {
 	ObjectLiteralData,
 	ExprStmtData, MacroInvocationData,
 } from "../../ast/node";
-import { Type, TypeKind } from "../../checker/types";
+import { Type, TypeKind, hasGenericParams } from "../../checker/types";
 import {
 	CGen, CProc, CSection, Builder,
 	createProc, createBuilder, add, addLine, addNewline,
@@ -36,6 +36,26 @@ import {
 } from "../../checker/symbol";
 // NOTE: parser/context imports are in index.ms (not here) to avoid DRC union member count issues.
 // genGenericTypeInsts lives in index.ms for the same reason.
+
+// ===== Generic Instance Deduplication =====
+// Across all modules in Phase C, each generic instance is emitted ONCE.
+// First module to codegen it emits the body; other modules get forward decls only.
+let _emittedInstances: string[] = [];
+
+export function resetEmittedInstances(): void {
+	_emittedInstances = [];
+}
+
+function isInstanceEmitted(name: string): boolean {
+	for (const n of _emittedInstances) {
+		if (n === name) return true;
+	}
+	return false;
+}
+
+function markInstanceEmitted(name: string): void {
+	_emittedInstances.push(name);
+}
 
 // ===== genDecl — main declaration dispatcher =====
 
@@ -72,12 +92,6 @@ function isArraySeqHook(name: string): boolean {
 
 export function genDecl(g: CGen, node: Node, exported: boolean): void {
 	if (node === null) return;
-	if (node.kind === NodeKind.FunctionDecl) {
-		const _fd2 = node.data as FunctionDeclData;
-		if (_fd2.fnName.indexOf("mapRawGet", 0) >= 0) {
-			console.log("GENDECL-ENTRY: " + _fd2.fnName + " kind=" + String(node.kind));
-		}
-	}
 
 	match (node.kind) {
 		NodeKind.FunctionDecl => {
@@ -140,6 +154,8 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	// Determine C return type — MUST have nodeType (Decisive Checker mandate)
 	const fnType = node.nodeType;
 	if (fnType === null) return;
+	// Skip uninstantiated generic functions (prelude templates with K, V, T params)
+	if (hasGenericParams(fnType)) return;
 	let cRetType = getTypeDesc(g, fnType.typeReturn);
 	// Null return type means void (not void*) — closures typed as `: void` may have null typeReturn
 	if (fnType.typeReturn === null) cRetType = "void";
@@ -162,15 +178,22 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	}
 	if (paramList === "") paramList = "void";
 
+	// Generic instance deduplication (reference parity).
+	// First module to codegen an instance emits the body; others get forward decl only.
+	const isGenericInstance = d.fnName.indexOf("__") > 0 && sym !== null && sym.name.indexOf("__") > 0;
+	const instanceAlreadyEmitted = isGenericInstance && isInstanceEmitted(d.fnName);
+	if (isGenericInstance && !instanceAlreadyEmitted) {
+		markInstanceEmitted(d.fnName);
+	}
+
 	// Non-exported functions get static prefix (Standard implementation parity)
 	// main() is never static — called from dispatcher
 	// Lifted functions (sym === null) are always static
 	// DRC lifecycle hooks need external linkage for cross-module access (reference parity).
-	// Reference: hooks generated once in owning module, consuming modules get extern protos.
-	// Global hook ownership registry ensures one definition per type across all modules.
+	// Generic instances: not static, not exported — one definition, other modules get forward decl.
 	const isExported = sym !== null && (exported || hasFlag(sym, SymbolFlag.Exported));
 	const isDrcHook = isDrcLifecycleName(d.fnName);
-	const prefix = (isExported || isExternFn || isMain || isDrcHook) ? "" : "static ";
+	const prefix = (isExported || isExternFn || isMain || isDrcHook || isGenericInstance) ? "" : "static ";
 
 	// Emit prototype to ProcHeaders — NRVO functions return void (skip if already forward-declared)
 	const actualRetType = nrvo ? "void" : cRetType;
@@ -189,6 +212,8 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	if (isExternFn) return;
 
 	// Emit function body to Procs
+	// Skip body for duplicate generic instances — forward decl already emitted above.
+	if (instanceAlreadyEmitted) return;
 	if (d.fnBody !== null) {
 		const p = createProc(name, fnType.typeReturn);
 		if (nrvo) p.isNrvo = true;
@@ -240,6 +265,10 @@ function genEnumDecl(g: CGen, node: Node): void {
 
 function genInterfaceDecl(g: CGen, node: Node): void {
 	const d = node.data as InterfaceDeclData;
+
+	// Skip uninstantiated generic interfaces (prelude templates with K, V, T params)
+	const declType = node.nodeType;
+	if (declType !== null && hasGenericParams(declType)) return;
 
 	const name = mangle(d.interfaceName);
 

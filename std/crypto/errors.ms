@@ -14,6 +14,8 @@ export enum CryptoErrorKind {
 	SignatureFailed,
 	VerificationFailed,
 	CertificateError,
+	ConnectionFailed,
+	HandshakeFailed,
 }
 
 export interface CryptoError {

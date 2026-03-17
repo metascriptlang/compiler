@@ -16,6 +16,7 @@ import { generateJS } from "../codegen/js/index";
 import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
 import { RaiserContext, createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
 import { generateCModule, genProjectDispatcher } from "../codegen/c/index";
+import { resetEmittedInstances } from "../codegen/c/declarations";
 import { genTestDispatcher } from "../codegen/c/test";
 import { registerCoreParsers } from "../parser/statements/core";
 import { AliveSet } from "../codegen/c/context";
@@ -29,9 +30,10 @@ import { lowerNativeAccess } from "../transform/native/nativeLower";
 import { liftHcrState } from "../transform/native/hcrLift";
 import { createTransformContextWithChecker, NameSet, createNameSet } from "../transform/context";
 import { setGlobalHookOwners } from "../transform/lowering/destructorLifting";
-import { findModule, ModuleGraph, ModuleError, ErrorSeverity } from "../module/graph";
-import { createFileSystemProvider, loadModuleGraphWithConfig } from "../module/loader";
-import { ResolverConfig, createDefaultConfig, Backend } from "../module/resolver";
+import { findModule, hasModule, ModuleGraph, ModuleError, ErrorSeverity } from "../module/graph";
+import { createFileSystemProvider, loadModuleGraphWithConfig, loadModule, provideSource, SourceProvider } from "../module/loader";
+import { ResolverConfig, createDefaultConfig, Backend, resolveImportWithConfig } from "../module/resolver";
+import { globalImports } from "../checker/prelude";
 import { ResolveSection, defaultResolveSection } from "./buildConfig";
 import { evaluateComptimeBlocks } from "./comptime";
 import { CliOptions, Target, MODE_DEBUG, MODE_RELEASE } from "./options";
@@ -200,10 +202,26 @@ function exitOnModuleErrors(graph: ModuleGraph, prefix: string): void {
 let graphRegistry: ExportRegistry = null as unknown as ExportRegistry;
 let graphPreludeCtx: CheckerContext = null as unknown as CheckerContext;
 
+// Global set of compiled .o file paths — deduplicates @compile directives across modules.
+// Nim parity: {.compile.} pragma processes each unique file path exactly once.
+let _compiledOFiles: Set<string> = new Set<string>();
+
+function resetCompiledOFiles(): void {
+	_compiledOFiles = new Set<string>();
+}
+
 function loadAndCheckGraph(entryPath: string, verbose: boolean, config: ResolverConfig): ModuleGraph {
 	if (verbose) verboseLog(`loading module graph from ${entryPath}`);
 	const provider = createFileSystemProvider();
 	const graph = loadModuleGraphWithConfig(entryPath, provider, config);
+
+	// Load pure .ms prelude modules into the graph so they get codegen'd.
+	// .cms preludes are extern-only (C headers); .ms preludes contain real MetaScript
+	// that must be compiled. This matches the standard compileSystemModule pattern.
+	if (config.stdPath !== "") {
+		loadPreludeModules(graph, provider, config);
+	}
+
 	reportGraphErrors(graph);
 	exitOnModuleErrors(graph, "error");
 
@@ -216,6 +234,33 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 	// Report type errors but continue — allows codegen to proceed past non-fatal checker issues
 	reportModuleErrors(graph, "type error");
 	return graph;
+}
+
+// Load pure .ms prelude modules into the module graph.
+// Only loads modules that have NO .cms counterpart (those are extern-only, already
+// in the graph via regular imports). Matches compileSystemModule pattern:
+// prelude modules with real MetaScript code need codegen just like user modules.
+function loadPreludeModules(graph: ModuleGraph, provider: SourceProvider, config: ResolverConfig): void {
+	for (const imp of globalImports()) {
+		const candidates = resolveImportWithConfig(imp, "virtual:prelude", config);
+		// Skip modules with .cms counterpart (extern-only, handled by regular imports)
+		let hasCms = false;
+		for (const candidate of candidates) {
+			if (!hasCms && candidate.endsWith(".cms") && provideSource(provider, candidate).ok) {
+				hasCms = true;
+			}
+		}
+		if (hasCms) continue;
+		// Find the .ms file for this pure-MS prelude module
+		for (const candidate of candidates) {
+			if (candidate.endsWith(".ms") && provideSource(provider, candidate).ok) {
+				if (!hasModule(graph, candidate)) {
+					const _r = loadModule(graph, candidate, provider, config, 1);
+				}
+				break;
+			}
+		}
+	}
 }
 
 // Parse source or exit with error message.
@@ -271,6 +316,9 @@ function processCompileDirectives(directives: string, moduleDir: string, allFlag
 					exit(1);
 				}
 				const oFile = stableOFile(fullPath);
+				// Deduplicate: each .o compiled/linked once (Nim {.compile.} parity)
+				if (!_compiledOFiles.has(oFile)) {
+				_compiledOFiles.add(oFile);
 				// Merge global flags with per-file custom flags
 				let fileFlags = allFlags;
 				if (customFlags !== "") fileFlags = appendFlag(fileFlags, customFlags);
@@ -290,6 +338,7 @@ function processCompileDirectives(directives: string, moduleDir: string, allFlag
 					writeCompileCache(oFile);
 				}
 				oFiles = appendFlag(oFiles, oFile);
+			} // if (!_compiledOFiles.has)
 			}
 			start = idx + 1;
 		}
@@ -311,8 +360,9 @@ function compileHeaderCompanions(graph: ModuleGraph, allFlags: string, mode: num
 		const cPath = `${mod.path.slice(0, mod.path.byteLength - 2)}.c`;
 		if (fileExists(cPath)) {
 			const oFile = stableOFile(cPath);
+			if (_compiledOFiles.has(oFile)) continue;
+			_compiledOFiles.add(oFile);
 			const cmdKey = fullCompileCmd(ccOption, mode, allFlags);
-			// Fingerprint cache for companion files too
 			if (isCompileCached(cPath, oFile, cmdKey)) {
 				if (verbose) verboseLog(`  companion ${cPath} → ${oFile} ${dim("(cached)")}`);
 			} else {
@@ -405,6 +455,7 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 
 export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	initCache(opts.mode, opts.forceRebuild);
+	resetCompiledOFiles();
 	registerCoreParsers();
 	setTargetSizes(8, 8);
 	const t0 = clockMs();
@@ -444,6 +495,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	let allFlags = cliCompileFlags(opts);
 	let allLinkFlags = "";  // @link/@passL — only passed at link step, not per-module compile
 	let oFiles = "";
+	let totalCheckerErrors = 0;
 
 	// Reference parity: global hook ownership registry shared across all modules.
 	// First module to need a type's DRC hooks generates them; others get extern protos.
@@ -466,50 +518,28 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		ctx.strictDefs = opts.strictDefs;
 		ctx.strictNullChecks = opts.strictNullChecks;
 		exitOnFatalCheckerErrors(ctx, modPath, mod.source);
+		// Render non-fatal checker errors and track for codegen gate
+		if (hasErrors(ctx)) {
+			for (const e of ctx.errors) {
+				renderModuleError(modPath, mod.source, {
+					message: e.message, line: e.line, column: e.column,
+					severity: e.fatal ? ErrorSeverity.Error : ErrorSeverity.Error,
+				});
+			}
+			totalCheckerErrors = totalCheckerErrors + errorCount(ctx);
+		}
 		ctx.errors = [];
 
-		// Inject on-demand instantiated generic functions + their prelude dependencies
-		const instCount = ctx.generatedInstances !== null ? ctx.generatedInstances.length : 0;
-		if (instCount > 0) {
+		// Inject instances into this module's program for transform/analyze pipeline.
+		// Codegen deduplicates at Phase C (first module to emit wins, others get forward decl).
+		if (ctx.generatedInstances !== null) {
 			const instPd = program.data as ProgramData;
-			// Inject all generated instances
-			for (let ii = 0; ii < instCount; ii += 1) {
+			for (let ii = 0; ii < ctx.generatedInstances.length; ii += 1) {
 				const instNode = ctx.generatedInstances[ii];
 				if (instNode.nodeType === null && instNode.resolvedSym !== null && instNode.resolvedSym.symbolType !== null) {
 					instNode.nodeType = instNode.resolvedSym.symbolType;
 				}
 				instPd.programStmts.push(instNode);
-			}
-			// Also inject non-generic prelude helper functions that instantiated bodies depend on.
-			// These have definitions only in the prelude AST (not compiled to C separately).
-			if (ctx.preludeCtx !== null) {
-				const preludeSyms = ctx.preludeCtx.table.current.symbols;
-				const injectedHelpers: string[] = [];
-				for (const ps of preludeSyms) {
-					if (ps.declNode !== null && ps.symbolKind === SymbolKind.Function
-						&& ps.nativeName === "" && !hasFlag(ps, SymbolFlag.ImportC)
-						&& ps.declNode.kind === NodeKind.FunctionDecl) {
-						const pfd = ps.declNode.data as FunctionDeclData;
-						// Skip generic functions (they're instantiated on-demand)
-						if (pfd.fnFlags.indexOf("gen:", 0) >= 0) continue;
-						// Skip extension methods (they're instantiated via extension matching)
-						if (pfd.fnFlags.indexOf("ext:", 0) >= 0) continue;
-						// Skip if already injected
-						let alreadyInjected = false;
-						for (const ih of injectedHelpers) { if (ih === ps.name) { alreadyInjected = true; break; } }
-						if (alreadyInjected) continue;
-						injectedHelpers.push(ps.name);
-						// Use original node directly (already type-checked during prelude loading)
-						// Don't clone — the original has all nodeType info intact.
-						const helperNode = ps.declNode;
-						if (helperNode.nodeType === null) helperNode.nodeType = ps.symbolType;
-						if (helperNode.resolvedSym === null) helperNode.resolvedSym = ps;
-						// Update sym modulePath to user module for correct name mangling
-						ps.modulePath = modPath;
-						ps.originalName = ps.name;
-						instPd.programStmts.push(helperNode);
-					}
-				}
 			}
 		}
 		const monoed = monomorphizeProgram(program, ctx);
@@ -535,7 +565,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		const analyzed = analyzeProgram(hcrResult, ctx);
 		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
 
-		processed.push({ program: nativeLowered, ctx, modPath });
+processed.push({ program: nativeLowered, ctx, modPath });
 		transformedPrograms.push(nativeLowered);
 		transformedPaths.push(modPath);
 
@@ -555,6 +585,14 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	}
 
 	if (opts.showTime) printTiming("phase A (parse+check+transform)", tA);
+
+	// Gate: stop before codegen if any type errors (Nim/Rust/Zig parity).
+	// All three reference compilers NEVER proceed to codegen with type errors.
+	if (totalCheckerErrors > 0) {
+		console.log(`${error("error")}: ${totalCheckerErrors} type error(s) found, stopping before codegen`);
+		exit(1);
+	}
+
 	const tB = clockMs();
 
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
@@ -571,7 +609,8 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	}
 
 	// Phase C: Codegen + compile each module
-	// Per-module .c cache: only re-invoke clang if generated C code actually changed.
+	// Reset generic instance deduplication (first module to codegen wins).
+	resetEmittedInstances();
 	let codegenTime = 0;
 	let clangTime = 0;
 	let compiled = 0;
@@ -696,6 +735,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 
 export function cmdTest(filePath: string, opts: CliOptions): void {
 	initCache(opts.mode, opts.forceRebuild);
+	resetCompiledOFiles();
 	registerCoreParsers();
 	setTargetSizes(8, 8);
 	const t0 = clockMs();

@@ -1,0 +1,63 @@
+// MetaScript TLS — mbedTLS SSL wrapper
+// Opaque handle pattern: connect → read/write → close
+// Only compiled when imported — no cost if not used.
+
+@include("std/crypto/tls/native.h");
+@compile("std/crypto/tls/native.c");
+
+// mbedTLS SSL library sources (only compiled when TLS is imported)
+@compile("vendor/mbedtls/library/ssl_tls.c");
+@compile("vendor/mbedtls/library/ssl_tls12_client.c");
+@compile("vendor/mbedtls/library/ssl_tls13_client.c");
+@compile("vendor/mbedtls/library/ssl_tls13_generic.c");
+@compile("vendor/mbedtls/library/ssl_tls13_keys.c");
+@compile("vendor/mbedtls/library/ssl_msg.c");
+@compile("vendor/mbedtls/library/ssl_ciphersuites.c");
+@compile("vendor/mbedtls/library/x509_crt.c");
+@compile("vendor/mbedtls/library/x509_crl.c");
+@compile("vendor/mbedtls/library/x509_create.c");
+
+// Include paths (same as crypto/rsa)
+@passC("-Ivendor/mbedtls/include");
+@passC("-Ivendor/mbedtls/library");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/include");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/include");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/src");
+@passC("-Ivendor/mbedtls/tf-psa-crypto/core");
+@passC("-Istd/crypto/config");
+@passC("-DMBEDTLS_CONFIG_FILE='<mbedtls/mbedtlsConfig.h>'");
+
+import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
+
+// C bindings
+extern function msTlsConnect(hostname: string, port: int32, caPath: string): int64;
+extern function msTlsRead(ctx: int64, maxBytes: int32): string;
+extern function msTlsWrite(ctx: int64, data: string): int32;
+extern function msTlsClose(ctx: int64): void;
+extern function msTlsPeerCertSubject(ctx: int64): string;
+
+// ===== Public API =====
+
+export function tlsConnect(hostname: string, port: int32, caPath: string = ""): Result<int64, CryptoError> {
+	const ctx = msTlsConnect(hostname, port, caPath);
+	if (ctx === 0) {
+		return Result.err(cryptoError(CryptoErrorKind.ConnectionFailed, "tlsConnect", "TLS handshake failed"));
+	}
+	return Result.ok(ctx);
+}
+
+export function tlsRead(ctx: int64, maxBytes: int32 = 4096): string {
+	return msTlsRead(ctx, maxBytes);
+}
+
+export function tlsWrite(ctx: int64, data: string): int32 {
+	return msTlsWrite(ctx, data);
+}
+
+export function tlsClose(ctx: int64): void {
+	msTlsClose(ctx);
+}
+
+export function tlsPeerCert(ctx: int64): string {
+	return msTlsPeerCertSubject(ctx);
+}

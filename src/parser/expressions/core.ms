@@ -3,7 +3,7 @@
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
 import { Node, NodeKind, NodeData, Expression, createNode, QuoteExprData, BlockStmtData } from "../../ast/node";
-import { ParserState, createState, current, advance, isAtEnd, isGenericCallAhead, captureGenericTypeArgs, addExplicitTypeArg, collectTokenText, consumePendingTypeArg } from "../context";
+import { ParserState, createState, current, advance, peek, isAtEnd, isGenericCallAhead, captureGenericTypeArgs, addExplicitTypeArg, collectTokenText, consumePendingTypeArg } from "../context";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, skipOptionalType, isIdentLike } from "../util";
 import { getPrecedence, isBinaryOperator, isRightAssociative } from "./precedence";
@@ -412,8 +412,9 @@ function parsePrimary(state: ParserState): ExprResult {
 		return Result.ok(createNode(NodeKind.SizeofExpr, { sizeofType }, token));
 	}
 
-	// Out expression: out x
-	if (token.kind === TokenKind.Out) {
+	// Out expression: out x — keyword only when followed by an identifier-like token.
+	// Otherwise 'out' is treated as a variable name (falls through to identifier handler below).
+	if (token.kind === TokenKind.Out && isIdentLike(peek(state, 1))) {
 		advance(state);
 		const outOperand = try parsePrimary(state);
 		return Result.ok(createNode(NodeKind.OutExpr, { outArg: outOperand }, token));

@@ -2019,14 +2019,23 @@ export function checkEnumExhaustiveness(ctx: CheckerContext, enumType: Type, cov
 
 // ===== Anonymous Functions =====
 
-export function checkAnonymousFunction(ctx: CheckerContext, name: string, params: string[], paramTypes: string[], body: Node, paramLocs: SourceLocation[]): Type {
+export function checkAnonymousFunction(ctx: CheckerContext, name: string, params: string[], paramTypes: string[], body: Node, paramLocs: SourceLocation[], returnTypeAnnotation: string): Type {
 	const savedReturn = ctx.inferredReturn;
 	ctx.inferredReturn = unknownType();
 	const savedMatchDepth = ctx.matchExprDepth;
 	ctx.matchExprDepth = 0;
 
+	// Resolve explicit return type annotation (semProcAux parity: annotation takes precedence)
+	let explicitReturnType: Type = null as unknown as Type;
+	if (returnTypeAnnotation !== "" && returnTypeAnnotation !== "void") {
+		explicitReturnType = resolveAnnotation(returnTypeAnnotation, ctx);
+	}
+
 	const savedFunction = ctx.currentFunction;
-	const sym = makeSymbol(name, SymbolKind.Function, unknownType(), false);
+	// Set explicit return type on function symbol BEFORE checking body, so return
+	// statements can use it as expectedType (semProcAux parity: annotation propagates)
+	const fnSymType = explicitReturnType !== null ? createFunction([], [], explicitReturnType) : unknownType();
+	const sym = makeSymbol(name, SymbolKind.Function, fnSymType, false);
 	ctx.currentFunction = sym;
 	openScope(ctx.table, ScopeKind.Function);
 	let pi = 0;
@@ -2047,7 +2056,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	if (body.kind === NodeKind.BlockStmt) {
 		callCheckStmt(ctx, body);
 	} else {
-		const exprType = checkExpr(ctx, body, null);
+		const exprType = checkExpr(ctx, body, explicitReturnType);
 		if (ctx.inferredReturn.kind === TypeKind.Unknown) {
 			ctx.inferredReturn = exprType;
 		}
@@ -2069,6 +2078,15 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 		types.push(pType);
 		ti += 1;
 	}
+	// Explicit return type annotation takes precedence over inferred (semProcAux parity).
+	// This ensures Result<Node, string> gets concrete types, not GenericParam("T") from
+	// inference of Result.err() which can't determine T without context.
+	if (explicitReturnType !== null && explicitReturnType.kind !== TypeKind.Unknown) {
+		return createFunction(types, params, explicitReturnType);
+	}
+	if (returnTypeAnnotation === "void") {
+		return createFunction(types, params, voidType());
+	}
 	if (inferredRet.kind !== TypeKind.Unknown) {
 		return createFunction(types, params, inferredRet);
 	}
@@ -2079,14 +2097,14 @@ function checkArrowExpr(ctx: CheckerContext, node: Node): Type {
 	const d = node.data as ArrowFunctionData;
 	resolveTypeExpr(node.typeExpr, ctx);
 	resolveTypeExprs(node.typeExprs, ctx);
-	return checkAnonymousFunction(ctx, "<arrow>", d.arrowParams, d.arrowParamTypes, d.arrowBody, node.paramLocations);
+	return checkAnonymousFunction(ctx, "<arrow>", d.arrowParams, d.arrowParamTypes, d.arrowBody, node.paramLocations, d.arrowReturnType);
 }
 
 function checkFuncExpr(ctx: CheckerContext, node: Node): Type {
 	const d = node.data as FunctionExprData;
 	resolveTypeExpr(node.typeExpr, ctx);
 	resolveTypeExprs(node.typeExprs, ctx);
-	return checkAnonymousFunction(ctx, "(anon)", d.funcExprParams, d.funcExprParamTypes, d.funcExprBody, node.paramLocations);
+	return checkAnonymousFunction(ctx, "(anon)", d.funcExprParams, d.funcExprParamTypes, d.funcExprBody, node.paramLocations, d.funcExprReturnType);
 }
 
 // ===== @emit Backtick Interpolation (reference emit processing parity) =====

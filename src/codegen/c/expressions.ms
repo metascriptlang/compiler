@@ -310,7 +310,7 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 		return;
 	}
 	if (kind === NodeKind.NullLiteral) {
-		// Nim's getDefaultValue() pattern: emit type-appropriate zero value.
+		// Reference getDefaultValue() pattern: emit type-appropriate zero value.
 		// Primitives → 0/0.0/false, value types → {0}, pointers → NULL.
 		if (node.nodeType !== null) {
 			const nk = node.nodeType.kind;

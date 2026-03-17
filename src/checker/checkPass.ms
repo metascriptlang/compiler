@@ -26,14 +26,15 @@ import {
 	defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope,
 	setFlag, hasFlag, SymbolFlag,
 } from "./symbol";
-import { CheckerContext, CancelCtx, createContext, createModuleContext, addError, addFatalError, addWarning, hasErrors, hasFatalErrors, errorCount, createExtensionRegistry, registerExtension, ExtensionMethod, ExportRegistry, isCancelled, sgRecordSym, sgSortRecords, isInAsyncPromiseResult } from "./context";
+import { CheckerContext, CancelCtx, createContext, createContextWithCache, createModuleContext, createModuleContextWithCache, addError, addFatalError, addWarning, hasErrors, hasFatalErrors, errorCount, createExtensionRegistry, registerExtension, ExtensionMethod, ExportRegistry, isCancelled, sgRecordSym, sgSortRecords, isInAsyncPromiseResult } from "./context";
+import { IdentCache, createIdentCache } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
 import { collectTopLevel, defineOrError } from "./collectPass";
 import { getIdentId } from "./idents";
 import { readFile } from "std/process";
 import { globalImports } from "./prelude";
 import { isAssignable } from "./compat";
-import { resolveDeclarations, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped } from "./resolvePass";
+import { resolveDeclarations, resolveAnnotation, resolveAnnotationLoc, resolveTypeExpr, resolveTypeExprs, ensureShaped } from "./resolvePass";
 import { inferOwnership } from "./ownershipInference";
 import { validateTypedAST } from "./validate";
 import { getModuleDir, appendFlag, prependFlag, concatFlag } from "../utils/string";
@@ -137,8 +138,8 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	// Resolve declared type FIRST so it can flow as expectedType into initializer (Implementation parity)
 	let declType: Type = null;
 	if (d.declType !== "") {
-		declType = resolveAnnotation(d.declType, ctx);
-		// Record type annotation positions for LSP (standard parity: markUsed in semTypeNode)
+		const typeLoc = node.typeExpr !== null ? node.typeExpr.location : d.nameLocation;
+		declType = resolveAnnotationLoc(d.declType, ctx, typeLoc.line, typeLoc.column);
 		resolveTypeExpr(node.typeExpr, ctx);
 	}
 	const initType = checkExpr(ctx, d.initializer, declType);
@@ -196,6 +197,16 @@ function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 	// Mark async functions for return type unwrapping
 	if (d.fnFlags === "async" || d.fnFlags === "async_generator" || (d.fnFlags !== "" && d.fnFlags.indexOf("async") >= 0)) {
 		setFlag(sym, SymbolFlag.Async);
+	}
+
+	// Reference parity (semProcAux): generic function bodies are NOT checked at declaration time.
+	// They're stored as raw AST and only checked when instantiated with concrete types
+	// (via instantiateGenericFunction → checkFunctionBody). This prevents creating
+	// bad instantiations (push__unknown) from unresolved GenericParam types.
+	const isGeneric = d.fnFlags !== "" && d.fnFlags.indexOf("gen:") >= 0;
+	if (isGeneric) {
+		sym.state = SymbolState.Checked;
+		return;
 	}
 
 	// Save/restore inferredReturn for nested functions
@@ -1102,13 +1113,21 @@ function loadPreludeOne(ctx: CheckerContext, specifier: string, stdPath: string)
 
 // Build a prelude context with all globalImports loaded.
 // Used by both standalone checkProgram and orchestrator.
+// Creates a shared IdentCache (one cache per compilation)
+// that must be passed to all module contexts in the same compilation.
 export function buildPreludeContext(stdPath: string): CheckerContext {
-	const ctx = createContext();
+	const cache = createIdentCache();
+	const ctx = createContextWithCache(cache);
 	ctx.extensionRegistry = createExtensionRegistry();
 	for (const imp of globalImports()) {
 		loadPreludeOne(ctx, imp, stdPath);
 	}
 	return ctx;
+}
+
+// Get the shared IdentCache from a prelude context.
+export function getSharedIdentCache(ctx: CheckerContext): IdentCache {
+	return ctx.table.identCache;
 }
 
 // Inject exported prelude symbols, extensions, and directives into a module context.
@@ -1121,12 +1140,8 @@ export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): 
 	while (si < preludeSyms.length) {
 		const sym = preludeSyms[si];
 		if (hasFlag(sym, SymbolFlag.Exported)) {
-			// Re-intern nameId in the user context's ident cache.
-			// Prelude symbols have nameIds from the prelude's cache — these are meaningless
-			// in the user's cache which assigns IDs independently. Without re-interning,
-			// lookupSymbol("main") could match a prelude symbol whose nameId happens to
-			// equal the user cache's ID for "main" (both caches count from 1).
-			sym.nameId = getIdentId(ctx.table.identCache, sym.name);
+			// With shared IdentCache, nameIds are already consistent
+			// across all contexts in the same compilation. No re-interning needed.
 			ctx.table.current.symbols.push(sym);
 		}
 		si = si + 1;
@@ -1178,7 +1193,9 @@ function checkProgramCore(
 	cancelCtx: CancelCtx,
 	cancelVersion: number,
 ): CheckerContext {
-	const ctx = mod !== null ? createModuleContext(graph, mod) : createContext();
+	// Use shared IdentCache from prelude (one cache per compilation)
+	const sharedCache = preludeCtx.table.identCache;
+	const ctx = mod !== null ? createModuleContextWithCache(graph, mod, sharedCache) : createContextWithCache(sharedCache);
 	ctx.extensionRegistry = createExtensionRegistry();
 	if (registry !== null) ctx.exportRegistry = registry;  // override empty default with caller's registry
 	if (cancelCtx !== null) { ctx.cancelCtx = cancelCtx; ctx.cancelVersion = cancelVersion; }

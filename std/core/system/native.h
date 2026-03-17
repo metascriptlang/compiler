@@ -173,11 +173,11 @@ static inline void msStringCopy(msString* dest, msString src) {
 } while(0)
 #define msArrayStringWasMoved(arr)     msArrayWasMoved(arr)
 #define msArrayStringSink(d, s)        do { msArrayDestroy(d); (d) = (s); } while(0)
-#define msArrayRefDestroy(arr)         msRefArrayDestroy(&(arr))
+#define msArrayRefDestroy(arr)         msRefArrayDestroy((msRefArray*)&(arr))
 /* Deep copy: allocate new payload, copy each ref element with incref */
 #define msArrayRefCopy(d, s)           do { \
 	int64_t _arc_len = (s).len; \
-	msRefPayload* _arc_sp = (s).p; \
+	msRefPayload* _arc_sp = (msRefPayload*)(s).p; \
 	msRefPayload* _arc_newp = NULL; \
 	if (_arc_sp) { \
 		size_t _arc_sz = sizeof(msRefPayload) + (size_t)_arc_sp->cap * sizeof(void*); \
@@ -188,9 +188,9 @@ static inline void msStringCopy(msString* dest, msString src) {
 			if (_arc_newp->data[_arc_i]) msIncRef(_arc_newp->data[_arc_i]); \
 		} \
 	} \
-	msRefArrayDestroy(&(d)); \
+	msRefArrayDestroy((msRefArray*)&(d)); \
 	(d).len = _arc_len; \
-	(d).p = _arc_newp; \
+	(d).p = (void*)_arc_newp; \
 } while(0)
 #define msArrayRefTrace(arr, cb)       do { \
 	for (int64_t _art_i = 0; _art_i < (arr).len && (arr).p; _art_i++) { \

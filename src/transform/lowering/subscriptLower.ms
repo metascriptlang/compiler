@@ -12,7 +12,7 @@ import { Node, NodeKind, ArrayAccessData, BinaryExprData, IdentifierData } from 
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall } from "../util";
-import { lookupSymbol, SymbolKind, defineSymbol, makeSymbol } from "../../checker/symbol";
+import { Symbol, lookupSymbol, SymbolKind, defineSymbol, makeSymbol } from "../../checker/symbol";
 import { TypeKind, unknownType, createStruct, createFunction, createArray, typeNameOf } from "../../checker/types";
 import { ExtensionRegistry, ExtensionMethod, createContext, registerExtension, findExtension } from "../../checker/context";
 import { createTransformContext, createTransformContextWithChecker } from "../context";

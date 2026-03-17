@@ -1,11 +1,11 @@
 export interface FmtConfig {
-	printWidth?: i32;
-	tabWidth?: i32;
+	printWidth?: int32;
+	tabWidth?: int32;
 	useTabs?: boolean;
 	singleQuote?: boolean;
 }
 
 export interface BuildConfig {
-	root?: string;
+	entry?: string;
 	fmt?: FmtConfig;
 }

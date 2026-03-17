@@ -23,7 +23,7 @@ import {
 	setMinArity, typeNameOf, assignType, isInterfaceType, unwrapRef, propagateHasAsgn,
 } from "./types";
 import { Symbol, SymbolKind, SymbolTable, ScopeKind, lookupSymbol, lookupLocal, defineSymbol, makeSymbol, openScope, closeScope, SymbolState, hasFlag, setFlag, SymbolFlag } from "./symbol";
-import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addErrorRange, addWarning, sgRecordSym } from "./context";
+import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addErrorRange, addWarning, addFatalError, sgRecordSym } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim } from "../utils/string";
 import { getProperty } from "./types";
 import { getGenericDecl, getGenericDeclFieldNames, getGenericDeclFieldTypes, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
@@ -229,7 +229,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 			}
 			// Concrete instantiation: record for codegen
 			recordGenericTypeInstantiation(baseName, genericParams, args, ctx);
-			// Build GenericInstance with structural type args (Nim's tyGenericInst parity)
+			// Build GenericInstance with structural type args
 			const baseSym2 = lookupSymbol(ctx.table, baseName);
 			if (baseSym2 !== null) {
 				ensureShaped(baseSym2, ctx);
@@ -302,7 +302,7 @@ export function resolveAnnotationLoc(text: string, ctx: CheckerContext, line: nu
 		const name = result.typeName;
 		if (name.indexOf("__") < 0 && name.indexOf("typeof ") < 0
 				&& name !== "unknown" && name !== "any" && name !== "undefined" && name !== "never") {
-			addErrorRange(ctx, `Unresolved type '${name}' - missing import?`, line, col, col + name.length);
+			addFatalError(ctx, `Unresolved type '${name}' - missing import?`, line, col);
 		}
 	}
 	return result;
@@ -408,7 +408,7 @@ export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
 export function buildTypeArgKey(args: string[], ctx: CheckerContext): string {
 	let key = "";
 	for (let i = 0; i < args.length; i += 1) {
-		if (i > 0) key = key + ",";
+		if (i > 0) key = key + "_";
 		key = key + args[i].trim();
 	}
 	return key;
@@ -434,7 +434,7 @@ function substituteGenericParamsInType(rawType: string, paramNames: string[], ar
 		const arg = args[i].trim();
 		if (pname === "") continue;
 		// Replace whole-identifier occurrences of pname with arg
-		let out = "";
+		let buf = "";
 		let pos = 0;
 		while (pos < result.length) {
 			// Check if pname appears at pos as a whole identifier
@@ -448,18 +448,18 @@ function substituteGenericParamsInType(rawType: string, paramNames: string[], ar
 					const isWordBefore = (before >= "a" && before <= "z") || (before >= "A" && before <= "Z") || (before >= "0" && before <= "9") || before === "_";
 					const isWordAfter = (after >= "a" && after <= "z") || (after >= "A" && after <= "Z") || (after >= "0" && after <= "9") || after === "_";
 					if (!isWordBefore && !isWordAfter) {
-						out = out + arg;
+						buf = buf + arg;
 						pos = pos + pname.length;
 						matched = true;
 					}
 				}
 			}
 			if (!matched) {
-				out = out + result.charAt(pos);
+				buf = buf + result.charAt(pos);
 				pos = pos + 1;
 			}
 		}
-		result = out;
+		result = buf;
 	}
 	return result;
 }
@@ -1113,8 +1113,8 @@ test "Pair<string, number> records instantiation" {
 	const ctx = createContext();
 	const t = resolveAnnotation("Pair<string, number>", ctx);
 	assert t.kind === TypeKind.TypeReference;
-	assert t.typeName === "Pair__string,number";
-	const idx = findGenericTypeInstIdx("Pair", "string,number");
+	assert t.typeName === "Pair__string_number";
+	const idx = findGenericTypeInstIdx("Pair", "string_number");
 	assert idx >= 0;
 	assert getGenericTypeInstFieldNames(idx) === "first|second";
 	assert getGenericTypeInstFieldTypes(idx) === "string|number";

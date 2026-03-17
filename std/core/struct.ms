@@ -5,7 +5,7 @@
 
 // ===== Hash Functions =====
 
-function hashString(s: string): int64 {
+export function hashString(s: string): int64 {
 	if (s.byteLength === 0) return 314159265;
 	let h: int64 = 5381;
 	let i: int64 = 0;
@@ -213,11 +213,11 @@ export function add<T>(this s: Set<T>, value: T): void {
 	s.counter = s.counter + 1;
 }
 
-export function setHas<T>(this s: Set<T>, value: T): boolean {
+export function has<T>(this s: Set<T>, value: T): boolean {
 	return setRawGet(s, value) >= 0;
 }
 
-export function setDelete<T>(this s: Set<T>, value: T): boolean {
+export function delete<T>(this s: Set<T>, value: T): boolean {
 	let i = setRawGet(s, value);
 	if (i < 0) return false;
 	const mask: int32 = s.data.length - 1;
@@ -238,11 +238,11 @@ export function setDelete<T>(this s: Set<T>, value: T): boolean {
 	return true;
 }
 
-export function setSize<T>(this s: Set<T>): int32 {
+export function size<T>(this s: Set<T>): int32 {
 	return s.counter;
 }
 
-export function setClear<T>(this s: Set<T>): void {
+export function clear<T>(this s: Set<T>): void {
 	let i: int32 = 0;
 	while (i < s.data.length) { s.data[i].hcode = 0; i = i + 1; }
 	s.counter = 0;

@@ -3,7 +3,7 @@
 
 import { Node, NodeKind, EnumDeclData, makeLoc } from "../ast/node";
 import {
-	CheckerContext, createModuleContext, Severity,
+	CheckerContext, createModuleContext, createModuleContextWithCache, Severity,
 	ExportRegistry, ExportedSymInfo, createExportRegistry, registerModuleExports, updateModuleExports,
 	findExtensionByName, findExtensionByType, registerExtension,
 } from "./context";
@@ -11,7 +11,7 @@ import { SymbolKind, ScopeKind, openScope, hasFlag, SymbolFlag } from "./symbol"
 import { getIdentId } from "./idents";
 import { Module, ModuleGraph, findModule, createModuleError, ErrorSeverity } from "../module/graph";
 import { preprocessHeaders } from "../module/aro";
-import { runThreePasses, buildPreludeContext, collectDirectives, stampHeaderPaths, injectPrelude } from "./checkPass";
+import { runThreePasses, buildPreludeContext, getSharedIdentCache, collectDirectives, stampHeaderPaths, injectPrelude } from "./checkPass";
 import { collectTopLevelLocal } from "./collectPass";
 import { inferOwnership } from "./ownershipInference";
 import { parseSource } from "../parser/statements/validation";
@@ -46,8 +46,10 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 	const registry = createExportRegistry();
 
 	// Load prelude into a base context — provides console, string methods, etc.
+	// Creates the shared IdentCache (one cache per compilation).
 	const baseCtx = buildPreludeContext(stdPath);
 	lastPreludeCtx = baseCtx;
+	const sharedCache = getSharedIdentCache(baseCtx);
 
 	// Pre-process C header modules (synthesis fallback for test/direct-call paths)
 	preprocessHeaders(graph, false);
@@ -67,16 +69,16 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 		const pr = callStateProgramParser(parseState);
 		if (!pr.ok) continue;
 
-		// Temporary context for Phase 1 (discarded after)
-		const p1ctx = createModuleContext(graph, mod);
+		// Temporary context for Phase 1 (discarded after) — shared IdentCache
+		const p1ctx = createModuleContextWithCache(graph, mod, sharedCache);
 		p1ctx.exportRegistry = registry;
 		// NOTE: while loops (not for-of) so DRC properly increfs shared symbols.
+		// With shared IdentCache, nameIds already match — no re-interning needed.
 		const baseSyms = baseCtx.table.current.symbols;
 		let bsi = 0;
 		while (bsi < baseSyms.length) {
 			const sym = baseSyms[bsi];
 			if (hasFlag(sym, SymbolFlag.Exported)) {
-				sym.nameId = getIdentId(p1ctx.table.identCache, sym.name);
 				p1ctx.table.current.symbols.push(sym);
 			}
 			bsi = bsi + 1;
@@ -146,7 +148,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 			mod.errors.push(createModuleError("Parse: " + parseErr, 0, 0, ErrorSeverity.Error));
 		}
 
-		const ctx = createModuleContext(graph, mod);
+		const ctx = createModuleContextWithCache(graph, mod, sharedCache);
 		ctx.exportRegistry = registry;
 		injectPrelude(ctx, baseCtx);
 		ctx.preludeCtx = baseCtx;

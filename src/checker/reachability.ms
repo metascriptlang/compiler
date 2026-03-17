@@ -20,14 +20,18 @@ interface ModuleIndex {
 	programs: Node[];
 }
 
-let _programMap: Map<string, Node> = new Map();
+// Program lookup cache — parallel arrays (works in both Bun and C binary)
+let _progCacheKeys: string[] = [];
+let _progCacheVals: Node[] = [];
 
 function findProgram(idx: ModuleIndex, path: string): Node {
-	const cached = _programMap.get(path);
-	if (cached !== undefined) return cached;
+	for (let c = 0; c < _progCacheKeys.length; c += 1) {
+		if (_progCacheKeys[c] === path) return _progCacheVals[c];
+	}
 	for (let i = 0; i < idx.paths.length; i += 1) {
 		if (idx.paths[i] === path) {
-			_programMap.set(path, idx.programs[i]);
+			_progCacheKeys.push(path);
+			_progCacheVals.push(idx.programs[i]);
 			return idx.programs[i];
 		}
 	}
@@ -41,11 +45,10 @@ function findProgram(idx: ModuleIndex, path: string): Node {
 interface ImportMap {
 	names: string[];      // imported symbol name
 	sourcePaths: string[]; // resolved module path
-	_lookup: Map<string, number>; // O(1) name→index lookup
 }
 
 function buildImportMap(program: Node, modIdx: ModuleIndex): ImportMap {
-	const map: ImportMap = { names: [], sourcePaths: [], _lookup: new Map() };
+	const map: ImportMap = { names: [], sourcePaths: [] };
 	const d = program.data as ProgramData;
 	for (const stmt of d.programStmts) {
 		if (stmt === null) continue;
@@ -62,10 +65,8 @@ function buildImportMap(program: Node, modIdx: ModuleIndex): ImportMap {
 			const resolvedPath = resolveSpecifier(id.importSource, modIdx);
 			if (resolvedPath !== "") {
 				for (let i = 0; i < id.importNames.length; i += 1) {
-					const idx = map.names.length;
 					map.names.push(id.importNames[i]);
 					map.sourcePaths.push(resolvedPath);
-					map._lookup.set(id.importNames[i], idx);
 				}
 			}
 		}
@@ -88,27 +89,30 @@ function resolveSpecifier(specifier: string, modIdx: ModuleIndex): string {
 
 
 
-// ===== Visited Set (Map-based for O(1) lookup) =====
+// ===== Visited Set (Set-based for O(1) lookup) =====
 
-let _visitedMap: Map<string, boolean> = new Map();
+let _visitedSet: Set<string> = new Set<string>();
 
 function visitedHas(key: string): boolean {
-	return _visitedMap.has(key);
+	return _visitedSet.has(key);
 }
 
 function visitedAdd(key: string): void {
-	_visitedMap.set(key, true);
+	_visitedSet.add(key);
 }
 
 // ===== Import Map Cache (avoid rebuilding per markAndWalk call) =====
 
-let _importMapCache: Map<string, ImportMap> = new Map();
+let _importCacheKeys: string[] = [];
+let _importCacheVals: ImportMap[] = [];
 
 function getImportMap(program: Node, modulePath: string): ImportMap {
-	const cached = _importMapCache.get(modulePath);
-	if (cached !== undefined) return cached;
+	for (let c = 0; c < _importCacheKeys.length; c += 1) {
+		if (_importCacheKeys[c] === modulePath) return _importCacheVals[c];
+	}
 	const map = buildImportMap(program, _modIdx);
-	_importMapCache.set(modulePath, map);
+	_importCacheKeys.push(modulePath);
+	_importCacheVals.push(map);
 	return map;
 }
 
@@ -263,8 +267,6 @@ function matchDeclName(node: Node, name: string): Node {
 }
 
 function findImport(importMap: ImportMap, name: string): number {
-	const idx = importMap._lookup.get(name);
-	if (idx !== undefined) return idx;
 	for (let i = 0; i < importMap.names.length; i += 1) {
 		if (importMap.names[i] === name) return i;
 	}
@@ -277,9 +279,11 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 	// Initialize module-level state
 	_aliveSet = createAliveSet();
 	_modIdx = { paths, programs };
-	_visitedMap = new Map();
-	_importMapCache = new Map();
-	_programMap = new Map();
+	_visitedSet = new Set<string>();
+	_importCacheKeys = [];
+	_importCacheVals = [];
+	_progCacheKeys = [];
+	_progCacheVals = [];
 
 	// For each module, find roots and mark them alive
 	for (let m = 0; m < programs.length; m += 1) {
@@ -338,8 +342,9 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 	// Clear module-level state
 	_aliveSet = createAliveSet();
 	_modIdx = { paths: [], programs: [] };
-	_visitedMap = new Map();
-	_programMap = new Map();
+	_visitedSet = new Set<string>();
+	_progCacheKeys = [];
+	_progCacheVals = [];
 	return result;
 }
 

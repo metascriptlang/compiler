@@ -436,7 +436,7 @@ export class AliveSet {
 }
 
 export function createAliveSet(): AliveSet {
-	return { entries: [], _set: new Set() };
+	return { entries: [], _set: new Set<string>() };
 }
 
 export function aliveSetAdd(aliveSet: AliveSet, modulePath: string, name: string): void {

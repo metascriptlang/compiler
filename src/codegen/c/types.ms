@@ -579,7 +579,7 @@ export function getTypeDesc(g: CGen, t: Type): string {
 	if (k === TypeKind.Tuple) return genTupleType(g, t);
 	if (k === TypeKind.TypeReference || k === TypeKind.Unknown) return "void*";
 	if (k === TypeKind.GenericParam) return "void*";
-	// GenericInstance: resolve to monomorphized C struct name (Nim's tyGenericInst parity)
+	// GenericInstance: resolve to monomorphized C struct name
 	if (k === TypeKind.GenericInstance) {
 		// Build mangled name from base type name + type arg keys
 		let instName = t.typeName;

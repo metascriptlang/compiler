@@ -13,7 +13,8 @@
 //   writeJsonBuildInstructions   → writeProjectCache
 //   BuildCache                   → project cache file (key=value format)
 
-import { fileExists, readFile, writeFile, exec } from "std/process";
+import { fileExists, writeFile, exec } from "std/process";
+import { readFile } from "std/fs";
 import { ensureDir } from "./io";
 import { getCompilerName, modeFlags } from "./cc";
 
@@ -87,33 +88,35 @@ let _forceRebuild = false;
 // Initialize cache with build mode and force flag. Must be called before any cache operations.
 // Reference-aligned: cacheSuffix (_d/_r), optForceFullMake (force bypass).
 export function initCache(mode: number, forceRebuild: boolean): void {
-	let suffix = "_d";
-	if (mode >= 1) suffix = "_r";
-	_cacheDir = `out/.cache${suffix}`;
+	const modeDir = mode >= 1 ? "release" : "debug";
+	_cacheDir = `out/${modeDir}/.cache`;
 	ensureDir(_cacheDir);
 	_forceRebuild = forceRebuild;
 }
 
 function getCacheDir(): string {
 	if (_cacheDir !== "") return _cacheDir;
-	_cacheDir = "out/.cache_d";
+	_cacheDir = "out/debug/.cache";
 	ensureDir(_cacheDir);
 	return _cacheDir;
 }
 
 // ===== Per-File Cache (Layer 1) =====
 
-// Sanitize a file path to a safe flat filename (replace / and . with _).
+// Sanitize a file path to a safe flat filename.
+// Uses distinct separators to avoid collisions:
+//   / → _d_  (directory)
+//   . → _x_  (extension)
+//   space → _s_
 function sanitizePath(path: string): string {
 	let result = "";
 	let i = 0;
 	while (i < path.length) {
 		const ch = path.charAt(i);
-		if (ch === "/" || ch === "." || ch === " ") {
-			result = result + "_";
-		} else {
-			result = result + ch;
-		}
+		if (ch === "/") { result = result + "_d_"; }
+		else if (ch === ".") { result = result + "_x_"; }
+		else if (ch === " ") { result = result + "_s_"; }
+		else { result = result + ch; }
 		i = i + 1;
 	}
 	return result;
@@ -182,10 +185,29 @@ function projectCacheFile(): string {
 }
 
 // Build command line fingerprint — everything that affects the build output.
-// Includes compile flags (sanitize, passC, fdata-sections, etc.).
+// Hashes compiler binary (not just name) to detect version upgrades.
+// Reference parity: hashes the compiler binary itself.
 // Link flags are tracked separately in link.cache.
+// Cache compiler identity hash (once per build session).
+// Captures `clang --version` output to detect version upgrades.
+// Reference parity: hashes the compiler binary to detect version changes.
+let _compilerHash = "";
+function getCompilerHash(ccOption: number): string {
+	if (_compilerHash !== "") return _compilerHash;
+	const name = getCompilerName(ccOption);
+	const tmpFile = getCacheDir() + "/_cc_version";
+	exec(name + " --version > " + tmpFile + " 2>&1");
+	const version = readFile(tmpFile);
+	if (version.length > 0) {
+		_compilerHash = hashContent(version);
+	} else {
+		_compilerHash = name;
+	}
+	return _compilerHash;
+}
+
 function buildCmdFingerprint(ccOption: number, mode: number, compileFlags: string): string {
-	return `${getCompilerName(ccOption)}:${mode}:${compileFlags}`;
+	return `${getCompilerHash(ccOption)}:${mode}:${compileFlags}`;
 }
 
 // Prefix constants for cache line parsing — avoids magic offset numbers.

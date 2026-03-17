@@ -134,7 +134,6 @@ export function classifyType(t: Type, ctx: TransformContext): RcInfo {
 		TypeKind.Array => classifyArray(t, ctx),
 		TypeKind.Ref => makeRcInfo(RcKind.Ref, "", "msDecref", "msIncref", "msPtrWasMoved", "", false),
 		TypeKind.GenericInstance => {
-			// Result/Promise are GenericInstance now — delegate to named hooks if available
 			if (isPromise(t)) return makeRcInfo(RcKind.Ref, "", "msFutureDrcDestroy", "", "msFutureDrcWasMoved", "", false);
 			return makeRcInfo(RcKind.Named, "", "", "", "", "", false);
 		},
