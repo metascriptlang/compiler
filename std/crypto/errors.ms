@@ -25,15 +25,15 @@ export interface CryptoError {
 }
 
 export function cryptoError(kind: CryptoErrorKind, operation: string, message: string): CryptoError {
-	return { kind: kind, operation: operation, message: message };
+	return { kind, operation, message };
 }
 
 export function hashFailed(algorithm: string, reason: string): CryptoError {
-	return cryptoError(CryptoErrorKind.HashFailed, "hash:" + algorithm, reason);
+	return cryptoError(CryptoErrorKind.HashFailed, `hash:${algorithm}`, reason);
 }
 
 export function hmacFailed(algorithm: string, reason: string): CryptoError {
-	return cryptoError(CryptoErrorKind.HmacFailed, "hmac:" + algorithm, reason);
+	return cryptoError(CryptoErrorKind.HmacFailed, `hmac:${algorithm}`, reason);
 }
 
 export function randomFailed(reason: string): CryptoError {
@@ -53,7 +53,7 @@ export function invalidInput(operation: string, reason: string): CryptoError {
 }
 
 export function keyDerivationFailed(algorithm: string, reason: string): CryptoError {
-	return cryptoError(CryptoErrorKind.KeyDerivationFailed, "kdf:" + algorithm, reason);
+	return cryptoError(CryptoErrorKind.KeyDerivationFailed, `kdf:${algorithm}`, reason);
 }
 
 export function isRetryable(e: CryptoError): boolean {

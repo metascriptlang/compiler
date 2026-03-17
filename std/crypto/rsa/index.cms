@@ -130,7 +130,7 @@ export function rsaFree(key: int64): void {
 export function ecGenerate(curve: string): Result<int64, CryptoError> {
 	if (curve === "") curve = "p256";
 	const key = msCryptoEcGenerate(curve);
-	if (key === 0) return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "ecGenerate", "EC key generation failed for curve " + curve));
+	if (key === 0) return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "ecGenerate", `EC key generation failed for curve ${curve}`));
 	return Result.ok(key);
 }
 

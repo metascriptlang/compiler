@@ -1,0 +1,46 @@
+// std/crypto/chacha20 — XChaCha20-Poly1305 AEAD encryption
+// import { chacha20Seal, chacha20Open } from "std/crypto/chacha20"
+//
+// Modern AEAD cipher (WireGuard, TLS 1.3, Signal Protocol).
+// Extended 24-byte nonce (safe for random nonce generation).
+// Uses Monocypher (audited by Cure53).
+
+@include("std/crypto/chacha20/native.h");
+@compile("std/crypto/chacha20/native.c");
+@compile("vendor/monocypher/src/monocypher.c");
+@passC("-Ivendor/monocypher/src");
+
+import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
+export { CryptoError, CryptoErrorKind } from "../errors";
+
+// C bindings
+extern function msChacha20Seal(key: string, plainText: string, aad: string): string;
+extern function msChacha20Open(key: string, sealed: string, aad: string): string;
+
+// ===== AEAD Encryption =====
+
+function validateKey(key: string, op: string): Result<boolean, CryptoError> {
+	if (key.byteLength !== 32) {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, op, "key must be 32 bytes"));
+	}
+	return Result.ok(true);
+}
+
+export function chacha20Seal(key: string, plainText: string, aad: string = ""): Result<string, CryptoError> {
+	const _v = try validateKey(key, "chacha20Seal");
+	const result = msChacha20Seal(key, plainText, aad);
+	if (result === "") return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "chacha20Seal", "XChaCha20-Poly1305 encryption failed"));
+	return Result.ok(result);
+}
+
+export function chacha20Open(key: string, sealed: string, aad: string = ""): Result<string, CryptoError> {
+	const _v = try validateKey(key, "chacha20Open");
+	if (sealed.byteLength < 40) {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "chacha20Open", "sealed data too short (need nonce+mac)"));
+	}
+	const result = msChacha20Open(key, sealed, aad);
+	if (result === "" && sealed.byteLength > 40) {
+		return Result.err(cryptoError(CryptoErrorKind.AuthenticationFailed, "chacha20Open", "authentication tag mismatch"));
+	}
+	return Result.ok(result);
+}

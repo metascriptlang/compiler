@@ -5,19 +5,7 @@
 @include("std/crypto/tls/native.h");
 @compile("std/crypto/tls/native.c");
 
-// mbedTLS SSL library sources (only compiled when TLS is imported)
-@compile("vendor/mbedtls/library/ssl_tls.c");
-@compile("vendor/mbedtls/library/ssl_tls12_client.c");
-@compile("vendor/mbedtls/library/ssl_tls13_client.c");
-@compile("vendor/mbedtls/library/ssl_tls13_generic.c");
-@compile("vendor/mbedtls/library/ssl_tls13_keys.c");
-@compile("vendor/mbedtls/library/ssl_msg.c");
-@compile("vendor/mbedtls/library/ssl_ciphersuites.c");
-@compile("vendor/mbedtls/library/x509_crt.c");
-@compile("vendor/mbedtls/library/x509_crl.c");
-@compile("vendor/mbedtls/library/x509_create.c");
-
-// Include paths (same as crypto/rsa)
+// Include paths
 @passC("-Ivendor/mbedtls/include");
 @passC("-Ivendor/mbedtls/library");
 @passC("-Ivendor/mbedtls/tf-psa-crypto/include");
@@ -26,6 +14,95 @@
 @passC("-Ivendor/mbedtls/tf-psa-crypto/core");
 @passC("-Istd/crypto/config");
 @passC("-DMBEDTLS_CONFIG_FILE='<mbedtls/mbedtlsConfig.h>'");
+@passC("-DMBEDTLS_PLATFORM_MEMORY");
+
+// mbedTLS SSL library
+@compile("vendor/mbedtls/library/ssl_tls.c");
+@compile("vendor/mbedtls/library/ssl_client.c");
+@compile("vendor/mbedtls/library/ssl_tls12_client.c");
+@compile("vendor/mbedtls/library/ssl_tls13_client.c");
+@compile("vendor/mbedtls/library/ssl_tls13_generic.c");
+@compile("vendor/mbedtls/library/ssl_tls13_keys.c");
+@compile("vendor/mbedtls/library/ssl_msg.c");
+@compile("vendor/mbedtls/library/ssl_ciphersuites.c");
+
+// X.509 certificate chain
+@compile("vendor/mbedtls/library/x509.c");
+@compile("vendor/mbedtls/library/x509_crt.c");
+@compile("vendor/mbedtls/library/x509_crl.c");
+@compile("vendor/mbedtls/library/x509_create.c");
+@compile("vendor/mbedtls/library/x509_oid.c");
+
+// PSA crypto core
+@compile("vendor/mbedtls/tf-psa-crypto/core/psa_crypto.c");
+@compile("vendor/mbedtls/tf-psa-crypto/core/psa_crypto_client.c");
+@compile("vendor/mbedtls/tf-psa-crypto/core/psa_crypto_slot_management.c");
+@compile("vendor/mbedtls/tf-psa-crypto/core/psa_crypto_storage.c");
+@compile("vendor/mbedtls/tf-psa-crypto/core/psa_crypto_driver_wrappers_no_static.c");
+
+// PSA crypto drivers
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_hash.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_cipher.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_mac.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_aead.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_ecp.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_rsa.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_ffdh.c");
+
+// mbedTLS foundation
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/asn1parse.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/asn1write.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pk.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pk_wrap.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pk_ecc.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pk_rsa.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pkparse.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pem.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/bignum.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/bignum_core.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/rsa.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/rsa_alt_helpers.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecdsa.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecdh.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecp.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecp_curves.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/base64.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/oid.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/entropy.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/entropy_poll.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ctr_drbg.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/hmac_drbg.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/platform.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/platform_util.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/constant_time.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_util.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/block_cipher.c");
+
+// Hash algorithms
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/md.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha256.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha512.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha1.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/sha3.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/md5.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ripemd160.c");
+
+// Symmetric ciphers
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/aes.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/aesce.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/gcm.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/cipher.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/cipher_wrap.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ccm.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/cmac.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/aria.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/camellia.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/chacha20.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/chachapoly.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/poly1305.c");
+
+// PSA ITS stubs (persistent key storage not used)
+@compile("std/crypto/tls/psaTlsStubs.c");
 
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 

@@ -1,0 +1,48 @@
+// std/crypto/x25519 — Elliptic Curve Diffie-Hellman on Curve25519 (RFC 7748)
+// import { x25519Generate, x25519PublicKey, x25519SharedSecret } from "std/crypto/x25519"
+//
+// Modern key exchange (TLS 1.3, WireGuard, Signal Protocol).
+// 32-byte keys, 32-byte shared secret.
+// Uses Monocypher (audited by Cure53).
+
+@include("std/crypto/x25519/native.h");
+@compile("std/crypto/x25519/native.c");
+@compile("vendor/monocypher/src/monocypher.c");
+@passC("-Ivendor/monocypher/src");
+
+import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
+export { CryptoError, CryptoErrorKind } from "../errors";
+
+// C bindings
+extern function msX25519Generate(): string;
+extern function msX25519PublicKey(secretKey: string): string;
+extern function msX25519SharedSecret(secretKey: string, publicKey: string): string;
+
+// ===== Key Exchange =====
+
+export function x25519Generate(): Result<string, CryptoError> {
+	const sk = msX25519Generate();
+	if (sk === "") return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "x25519Generate", "key generation failed"));
+	return Result.ok(sk);
+}
+
+export function x25519PublicKey(secretKey: string): Result<string, CryptoError> {
+	if (secretKey.byteLength !== 32) {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "x25519PublicKey", "secret key must be 32 bytes"));
+	}
+	const pk = msX25519PublicKey(secretKey);
+	if (pk === "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "x25519PublicKey", "failed to derive public key"));
+	return Result.ok(pk);
+}
+
+export function x25519SharedSecret(secretKey: string, publicKey: string): Result<string, CryptoError> {
+	if (secretKey.byteLength !== 32) {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "x25519SharedSecret", "secret key must be 32 bytes"));
+	}
+	if (publicKey.byteLength !== 32) {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "x25519SharedSecret", "public key must be 32 bytes"));
+	}
+	const shared = msX25519SharedSecret(secretKey, publicKey);
+	if (shared === "") return Result.err(cryptoError(CryptoErrorKind.KeyDerivationFailed, "x25519SharedSecret", "key agreement failed"));
+	return Result.ok(shared);
+}

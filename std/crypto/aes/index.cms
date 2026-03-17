@@ -29,6 +29,13 @@ extern function msCryptoAesCbcDecrypt(key: string, cipherText: string, iv: strin
 
 export { CryptoError, CryptoErrorKind } from "../errors";
 
+function validateAesKey(key: string, op: string): Result<boolean, CryptoError> {
+	if (key.byteLength !== 16 && key.byteLength !== 32) {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, op, "key must be 16 or 32 bytes"));
+	}
+	return Result.ok(true);
+}
+
 // ===== High-Level AEAD (safe by default) =====
 
 /**
@@ -37,9 +44,7 @@ export { CryptoError, CryptoErrorKind } from "../errors";
  * Key: 16 bytes (AES-128) or 32 bytes (AES-256).
  */
 export function seal(key: string, plainText: string, aad: string = ""): Result<string, CryptoError> {
-	if (key.byteLength !== 16 && key.byteLength !== 32) {
-		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "seal", "key must be 16 or 32 bytes"));
-	}
+	const _v1 = try validateAesKey(key, "seal");
 	const result = msCryptoAesSeal(key, plainText, aad);
 	if (result.byteLength === 0) {
 		return Result.err(cryptoError(CryptoErrorKind.EncryptionFailed, "seal", "AES-GCM encryption failed"));
@@ -53,9 +58,7 @@ export function seal(key: string, plainText: string, aad: string = ""): Result<s
  * Returns plainText or error if authentication fails.
  */
 export function open(key: string, sealed: string, aad: string = ""): Result<string, CryptoError> {
-	if (key.byteLength !== 16 && key.byteLength !== 32) {
-		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "open", "key must be 16 or 32 bytes"));
-	}
+	const _v2 = try validateAesKey(key, "open");
 	if (sealed.byteLength < 28) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "open", "sealed data too short"));
 	}
@@ -74,9 +77,7 @@ export function open(key: string, sealed: string, aad: string = ""): Result<stri
  * WARNING: CBC provides no authentication. Use seal/open for authenticated encryption.
  */
 export function cbcEncrypt(key: string, plainText: string, iv: string): Result<string, CryptoError> {
-	if (key.byteLength !== 16 && key.byteLength !== 32) {
-		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "cbcEncrypt", "key must be 16 or 32 bytes"));
-	}
+	const _v3 = try validateAesKey(key, "cbcEncrypt");
 	if (iv.byteLength !== 16) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "cbcEncrypt", "IV must be 16 bytes"));
 	}
@@ -92,9 +93,7 @@ export function cbcEncrypt(key: string, plainText: string, iv: string): Result<s
  * Key: 16 or 32 bytes. IV: must be 16 bytes.
  */
 export function cbcDecrypt(key: string, cipherText: string, iv: string): Result<string, CryptoError> {
-	if (key.byteLength !== 16 && key.byteLength !== 32) {
-		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "cbcDecrypt", "key must be 16 or 32 bytes"));
-	}
+	const _v4 = try validateAesKey(key, "cbcDecrypt");
 	if (iv.byteLength !== 16) {
 		return Result.err(cryptoError(CryptoErrorKind.InvalidInput, "cbcDecrypt", "IV must be 16 bytes"));
 	}

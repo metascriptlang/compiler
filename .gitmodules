@@ -16,3 +16,6 @@
 [submodule "vendor/argon2"]
 	path = vendor/argon2
 	url = https://github.com/P-H-C/phc-winner-argon2.git
+[submodule "vendor/monocypher"]
+	path = vendor/monocypher
+	url = https://github.com/LoupVaillant/Monocypher.git

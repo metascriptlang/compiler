@@ -1,0 +1,68 @@
+// std/crypto/blake2b — BLAKE2b cryptographic hash (RFC 7693)
+// import { blake2b, blake2bKeyed } from "std/crypto/blake2b"
+//
+// Faster than SHA-256, variable output length (1-64 bytes).
+// Uses Monocypher (audited by Cure53).
+
+@include("std/crypto/blake2b/native.h");
+@compile("std/crypto/blake2b/native.c");
+@compile("vendor/monocypher/src/monocypher.c");
+@passC("-Ivendor/monocypher/src");
+
+import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
+export { CryptoError, CryptoErrorKind } from "../errors";
+
+// C bindings
+extern function msBlake2b(data: string, hashSize: int32): string;
+extern function msBlake2bKeyed(key: string, data: string, hashSize: int32): string;
+extern function msBlake2bInit(hashSize: int32): int64;
+extern function msBlake2bUpdate(ctx: int64, data: string): void;
+extern function msBlake2bFinal(ctx: int64): string;
+
+// ===== One-shot Hashing =====
+
+export function blake2b(data: string, hashSize: int32 = 32): string {
+	return msBlake2b(data, hashSize);
+}
+
+export function blake2bKeyed(key: string, data: string, hashSize: int32 = 32): Result<string, CryptoError> {
+	if (key.byteLength < 1 || key.byteLength > 64) {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "blake2bKeyed", "key must be 1-64 bytes"));
+	}
+	const result = msBlake2bKeyed(key, data, hashSize);
+	if (result === "") return Result.err(cryptoError(CryptoErrorKind.HashFailed, "blake2bKeyed", "keyed hash failed"));
+	return Result.ok(result);
+}
+
+// ===== Streaming =====
+
+export class Blake2b {
+	_ctx: int64;
+
+	static create(hashSize: int32 = 32): Blake2b {
+		return { _ctx: msBlake2bInit(hashSize) };
+	}
+
+	update(data: string): Blake2b {
+		if (this._ctx !== 0) msBlake2bUpdate(this._ctx, data);
+		return this;
+	}
+
+	digest(): string {
+		if (this._ctx === 0) return "";
+		const result = msBlake2bFinal(this._ctx);
+		this._ctx = 0;
+		return result;
+	}
+
+	onDestroy(): void {
+		if (this._ctx !== 0) {
+			msBlake2bFinal(this._ctx);
+			this._ctx = 0;
+		}
+	}
+}
+
+export function createBlake2b(hashSize: int32 = 32): Blake2b {
+	return Blake2b.create(hashSize);
+}

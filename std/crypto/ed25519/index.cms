@@ -1,0 +1,87 @@
+// std/crypto/ed25519 — EdDSA signatures on Edwards25519 curve
+// import { ed25519Generate, ed25519Sign, ed25519Verify } from "std/crypto/ed25519"
+//
+// Deterministic signatures (no random nonce), 64-byte signatures, 32-byte keys.
+// Uses Monocypher (audited by Cure53, RFC 8032 compatible).
+
+@include("std/crypto/ed25519/native.h");
+@compile("std/crypto/ed25519/native.c");
+
+// Monocypher sources (core + Ed25519 optional)
+@compile("vendor/monocypher/src/monocypher.c");
+@compile("vendor/monocypher/src/optional/monocypher-ed25519.c");
+
+// Include paths
+@passC("-Ivendor/monocypher/src");
+
+import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
+export { CryptoError, CryptoErrorKind } from "../errors";
+
+// C bindings
+extern function msEd25519Generate(): string;
+extern function msEd25519PublicKey(secretKey: string): string;
+extern function msEd25519Sign(secretKey: string, message: string): string;
+extern function msEd25519Verify(signature: string, publicKey: string, message: string): boolean;
+extern function msEd25519FromSeed(seed: string): string;
+extern function msEd25519ToSeed(secretKey: string): string;
+
+function validateSecretKey(secretKey: string, op: string): Result<boolean, CryptoError> {
+	if (secretKey.byteLength !== 64) {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, op, "secret key must be 64 bytes"));
+	}
+	return Result.ok(true);
+}
+
+// ===== Key Generation =====
+
+export function ed25519Generate(): Result<string, CryptoError> {
+	const sk = msEd25519Generate();
+	if (sk === "") return Result.err(cryptoError(CryptoErrorKind.KeyGenerationFailed, "ed25519Generate", "key generation failed"));
+	return Result.ok(sk);
+}
+
+export function ed25519FromSeed(seed: string): Result<string, CryptoError> {
+	if (seed.byteLength !== 32) {
+		return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ed25519FromSeed", "seed must be 32 bytes"));
+	}
+	const sk = msEd25519FromSeed(seed);
+	if (sk === "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ed25519FromSeed", "failed to derive key from seed"));
+	return Result.ok(sk);
+}
+
+export function ed25519PublicKey(secretKey: string): Result<string, CryptoError> {
+	const _v1 = try validateSecretKey(secretKey, "ed25519PublicKey");
+	const pk = msEd25519PublicKey(secretKey);
+	if (pk === "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ed25519PublicKey", "failed to extract public key"));
+	return Result.ok(pk);
+}
+
+export function ed25519ToSeed(secretKey: string): Result<string, CryptoError> {
+	const _v2 = try validateSecretKey(secretKey, "ed25519ToSeed");
+	const seed = msEd25519ToSeed(secretKey);
+	if (seed === "") return Result.err(cryptoError(CryptoErrorKind.InvalidKey, "ed25519ToSeed", "failed to extract seed"));
+	return Result.ok(seed);
+}
+
+// ===== Sign / Verify =====
+
+export function ed25519Sign(secretKey: string, message: string): Result<string, CryptoError> {
+	const _v3 = try validateSecretKey(secretKey, "ed25519Sign");
+	const sig = msEd25519Sign(secretKey, message);
+	if (sig === "") return Result.err(cryptoError(CryptoErrorKind.SignatureFailed, "ed25519Sign", "signing failed"));
+	return Result.ok(sig);
+}
+
+export function ed25519Verify(signature: string, publicKey: string, message: string): boolean {
+	return msEd25519Verify(signature, publicKey, message);
+}
+
+// ===== Async (spawn for batch signing) =====
+
+export function ed25519GenerateAsync(): Promise<Result<string, CryptoError>> {
+	return spawn(() => { return ed25519Generate(); });
+}
+
+export function ed25519SignAsync(secretKey: string, message: string): Promise<Result<string, CryptoError>> {
+	return spawn(() => { return ed25519Sign(secretKey, message); });
+}

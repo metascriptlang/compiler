@@ -2,7 +2,7 @@
  * MetaScript TLS Runtime — mbedTLS SSL wrapper
  *
  * Opaque handle pattern (same as RSA key handles).
- * One handle = TCP fd + SSL context + config + CA chain + RNG.
+ * One handle = TCP fd + SSL context + config + CA chain.
  * Single allocation, single free.
  */
 

@@ -1,11 +1,17 @@
 .claude/
 .metascript-cache/
+.msc-cache/
 .DS_Store
 
 out/
+bin/
 examples/
 .zig-cache/
 zig-out/
 
 src/**/*.c
 !src/raiser/dispatch.c
+
+vendor/*
+!vendor/mbedtls
+!vendor/monocypher
