@@ -75,18 +75,27 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 	if (elem.kind === TypeKind.Array) {
 		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
 	}
-	// Named struct elements — use hasAsgnFlag to decide if per-type hooks are needed
-	// seqLike = true: destroy by-value, copy/sink src by-value (matching generated hook conventions)
-	// Note: generated hooks have dest by-pointer for copy/sink/wasMoved — handled via
-	// non-empty typeName check in inject.ms
-	if (elem.kind === TypeKind.Struct && elem.typeName !== "") {
-		if (hasAsgnFlag(elem)) {
-			const n = elem.typeName + "Array";
+	// Named struct elements — use hasAsgnFlag to decide if per-type hooks are needed.
+	// Nim parity: fillBody checks tfHasAsgn regardless of type kind (Struct or GenericInstance).
+	// GenericInstance whose base (typeExtra) is a Struct with fields also qualifies.
+	let structElem = elem;
+	if (elem.kind === TypeKind.GenericInstance && elem.typeExtra !== null && elem.typeExtra.kind === TypeKind.Struct) {
+		structElem = elem.typeExtra;
+	}
+	if ((structElem.kind === TypeKind.Struct) && structElem.typeName !== "") {
+		if (hasAsgnFlag(structElem)) {
+			// Use the ELEMENT's typeName (not the base struct) for the mangled hook name
+			const elemName = elem.typeName !== "" ? elem.typeName : structElem.typeName;
+			const n = elemName + "Array";
 			return makeRcInfo(RcKind.Named, n, n + "_destroy", n + "_copy", n + "_wasMoved", n + "_sink", true);
 		}
 		return noRcInfo();
 	}
 	// Ref/Ptr elements (class arrays) — msRefArray (all pointers are void*)
+	if (elem.kind === TypeKind.Ref || elem.kind === TypeKind.Ptr) {
+		return makeRcInfo(RcKind.Named, "", "msArrayRefDestroy", "msArrayRefCopy", "msArrayRefWasMoved", "msArrayRefCopy", true);
+	}
+	// Default: ref array for unknown element types (conservative safe fallback)
 	return makeRcInfo(RcKind.Named, "", "msArrayRefDestroy", "msArrayRefCopy", "msArrayRefWasMoved", "msArrayRefCopy", true);
 }
 

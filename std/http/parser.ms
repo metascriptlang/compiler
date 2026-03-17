@@ -39,7 +39,7 @@ function findCRLF(data: string, pos: int32): int32 {
 }
 
 // Find index of a single char starting from pos. Returns -1 if not found.
-function findChar(data: string, ch: int32, pos: int32): int32 {
+function findChar(data: string, ch: number, pos: int32): int32 {
 	let i = pos;
 	while (i < data.length) {
 		if (data.charCodeAt(i) === ch) return i;
@@ -151,7 +151,7 @@ export function parseResponse(data: string): Result<ParsedResponse, HttpError> {
 
 	const versionResult = try parseHttpVersion(versionStr, invalidResponse);
 
-	const status = statusStr.parseInt();
+	const status = statusStr.parseInt() as int32;
 
 	const headers = createHeaders();
 	const headerResult = try parseHeaderBlock(data, lineEnd + 2, headers);
@@ -167,7 +167,12 @@ export function parseResponse(data: string): Result<ParsedResponse, HttpError> {
 
 // ===== URL Parsing =====
 
-export function splitPathQuery(url: string): { path: string; query: string } {
+interface PathQuery {
+	path: string;
+	query: string;
+}
+
+export function splitPathQuery(url: string): PathQuery {
 	const qmark = url.indexOf("?");
 	if (qmark < 0) return { path: url, query: "" };
 	return { path: url.slice(0, qmark), query: url.slice(qmark + 1, url.length) };
@@ -202,7 +207,7 @@ export function parseUrl(url: string): Result<ParsedUrl, HttpError> {
 	if (colonIdx >= 0) {
 		hostname = hostPart.slice(0, colonIdx);
 		const portStr = hostPart.slice(colonIdx + 1, hostPart.length);
-		port = portStr.parseInt();
+		port = portStr.parseInt() as int32;
 	}
 
 	// Path + query

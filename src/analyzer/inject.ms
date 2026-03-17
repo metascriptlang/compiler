@@ -28,7 +28,7 @@ import { TransformContext, NameSet, createNameSet, nameSetContains, nameSetAdd, 
 import {
 	makeIdent, makeBlock, makeExprStmt, makeCall, makeVarDecl,
 	makeReturn, makeAssign, makeTryCatch, makeNull, makeBinary, makeMember,
-	makeUnary, makeHiddenAddr,
+	makeUnary, makeHiddenAddr, makeIf,
 } from "../transform/util";
 import { RcInfo, RcKind, classifyType, isFreshExpr, noRcInfo } from "./classify";
 import {
@@ -1488,12 +1488,21 @@ function processVarDecl(stmt: Node, idx: number, stmts: Node[], dctx: DrcContext
 		}
 		// Always borrow-copy from MemberExpr: field belongs to another object
 		// that may be shared via ref counting. Moving would zero a shared field.
+		// Reference parity (passCopyToSink): for binary-copy types, null-initialize the
+		// declaration so wasMoved+copy operates on a clean destination. Without this,
+		// the raw bitwise init is destroyed by wasMoved before copy can run.
+		if (isBinaryCopy(rcInfo) && rcInfo.copyFn !== "") {
+			d.initializer = makeNull(loc);
+		}
 		emitBorrowCopy(d.declName, init, rcInfo, dctx, loc);
 		return stmt;
 	}
 
 	// Array access / HiddenDeref: always borrow-copy (same reasoning as MemberExpr)
 	if (init.kind === NodeKind.ArrayAccess || init.kind === NodeKind.HiddenDeref) {
+		if (isBinaryCopy(rcInfo) && rcInfo.copyFn !== "") {
+			d.initializer = makeNull(loc);
+		}
 		emitBorrowCopy(d.declName, init, rcInfo, dctx, loc);
 		return stmt;
 	}
@@ -1595,6 +1604,24 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 		vi.isInitialized = true;
 	}
 
+	// Reference parity (moveOrCopy ConditionalExpr): when RHS is ConditionalExpr, split the
+	// assignment into if-else branches and process each branch independently.
+	// This ensures each branch gets proper RC (incref for field reads, etc.)
+	// instead of treating the ternary as an opaque expression.
+	if (bd.right.kind === NodeKind.ConditionalExpr) {
+		const cd = bd.right.data as ConditionalExprData;
+		const thenAssign = makeExprStmt(
+			makeAssign(makeIdent(leftD.name, loc), cd.ternaryConsequent, loc), loc);
+		const elseAssign = makeExprStmt(
+			makeAssign(makeIdent(leftD.name, loc), cd.ternaryAlternate, loc), loc);
+		// Process each branch through full DRC pipeline
+		const thenProcessed = processStmtList([thenAssign], dctx, loc);
+		const elseProcessed = processStmtList([elseAssign], dctx, loc);
+		const thenBlock = makeBlock(thenProcessed, loc);
+		const elseBlock = makeBlock(elseProcessed, loc);
+		return makeIf(cd.ternaryCondition, thenBlock, elseBlock, loc);
+	}
+
 	// Process RHS recursively with Consumed mode
 	bd.right = processNode(bd.right, dctx, DrcMode.Consumed);
 	const rhs = bd.right;
@@ -1629,6 +1656,17 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 		if (rhs.kind === NodeKind.MemberExpr || rhs.kind === NodeKind.ArrayAccess || rhs.kind === NodeKind.HiddenDeref) {
 			const copyNode = makeCopyAfterInit(leftD.name, rcInfo, loc, "");
 			return makeBlock([stmt, copyNode], loc);
+		}
+		// Default first-write: unhandled RHS (ternary, complex expressions).
+		// For Ref/Closure types, incref after assign (no old value to destroy on first write).
+		if (rcInfo.rcKind === RcKind.Ref || rcInfo.rcKind === RcKind.Closure) {
+			const copyNode = makeCopyAfterInit(leftD.name, rcInfo, loc, "");
+			return makeBlock([stmt, copyNode], loc);
+		}
+		if (isBinaryCopy(rcInfo) && rcInfo.copyFn !== "") {
+			const destArg = needsDestAddr(rcInfo) ? makeHiddenAddr(makeIdent(leftD.name, loc), loc) : makeIdent(leftD.name, loc);
+			const srcArg = isCopySrcByValue(rcInfo) ? rhs : makeHiddenAddr(rhs, loc);
+			return makeExprStmt(makeCall(makeIdent(rcInfo.copyFn, loc), [destArg, srcArg], loc), loc);
 		}
 		return stmt;
 	}
@@ -1758,13 +1796,56 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 	}
 
 	// MemberExpr/ArrayAccess/HiddenDeref RHS: borrow from field — must copy.
-	// Reference parity: preventCursor when source has shorter lifetime.
+	// Reference parity: =copy for ref is `incRef(src); decRef(dst); dst = src`.
+	// Self-alias safe: save old to temp, assign, incref new, destroy temp.
+	// For Named/String types, binary =copy handles old-value cleanup atomically.
 	if (rhs.kind === NodeKind.MemberExpr || rhs.kind === NodeKind.ArrayAccess || rhs.kind === NodeKind.HiddenDeref) {
-		const destroyOld = makeDestroyCall(leftD.name, rcInfo, loc);
+		// Binary copy types (_copy handles destroy-old + assign + incref atomically)
+		if (isBinaryCopy(rcInfo) && rcInfo.copyFn !== "") {
+			const destArg = needsDestAddr(rcInfo) ? makeHiddenAddr(makeIdent(leftD.name, loc), loc) : makeIdent(leftD.name, loc);
+			const srcArg = isCopySrcByValue(rcInfo) ? rhs : makeHiddenAddr(rhs, loc);
+			const copyCall = makeExprStmt(
+				makeCall(makeIdent(rcInfo.copyFn, loc), [destArg, srcArg], loc), loc);
+			return copyCall;
+		}
+		// Ref/Closure: save old → assign → incref(new) → destroy(old temp)
+		const tmpName = freshTemp(dctx.ctx, "oldRef");
+		const lhsIdent = makeIdent(leftD.name, loc);
+		// Propagate type from LHS node, sym, or RHS for correct C temp declaration
+		const tmpType = bd.left.nodeType !== null ? bd.left.nodeType
+			: (sym !== null && sym.symbolType !== null ? sym.symbolType
+			: rhs.nodeType);
+		lhsIdent.nodeType = tmpType;
+		const saveTmp = makeVarDecl(tmpName, lhsIdent, DeclKind.Const, loc);
+		saveTmp.nodeType = tmpType;
 		const copyNode = makeCopyAfterInit(leftD.name, rcInfo, loc, "");
-		return makeBlock([destroyOld, stmt, copyNode], loc);
+		const destroyTmp = makeDestroyCall(tmpName, rcInfo, loc);
+		return makeBlock([saveTmp, stmt, copyNode, destroyTmp], loc);
 	}
 
+	// Default: unhandled RHS patterns (ternary, complex expressions).
+	// Reference parity (moveOrCopy else branch): genCopy for any non-fresh RHS.
+	// Use save-to-temp for self-alias safety on Ref types.
+	if (rcInfo.rcKind === RcKind.Ref || rcInfo.rcKind === RcKind.Closure) {
+		const tmpName = freshTemp(dctx.ctx, "oldRef");
+		const lhsIdent = makeIdent(leftD.name, loc);
+		const tmpType = bd.left.nodeType !== null ? bd.left.nodeType
+			: (sym !== null && sym.symbolType !== null ? sym.symbolType
+			: rhs.nodeType);
+		lhsIdent.nodeType = tmpType;
+		const saveTmp = makeVarDecl(tmpName, lhsIdent, DeclKind.Const, loc);
+		saveTmp.nodeType = tmpType;
+		const copyNode = makeCopyAfterInit(leftD.name, rcInfo, loc, "");
+		const destroyTmp = makeDestroyCall(tmpName, rcInfo, loc);
+		return makeBlock([saveTmp, stmt, copyNode, destroyTmp], loc);
+	}
+	if (isBinaryCopy(rcInfo) && rcInfo.copyFn !== "") {
+		const destArg = needsDestAddr(rcInfo) ? makeHiddenAddr(makeIdent(leftD.name, loc), loc) : makeIdent(leftD.name, loc);
+		const srcArg = isCopySrcByValue(rcInfo) ? rhs : makeHiddenAddr(rhs, loc);
+		const copyCall = makeExprStmt(
+			makeCall(makeIdent(rcInfo.copyFn, loc), [destArg, srcArg], loc), loc);
+		return copyCall;
+	}
 	return stmt;
 }
 

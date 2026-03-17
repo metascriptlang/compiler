@@ -21,7 +21,7 @@
 import { Node, NodeKind, BinaryExprData, IdentifierData, TypeAssertionData, SourceLocation, ProgramData } from "../../ast/node";
 import { TransformContext, PendingTupleOp } from "../context";
 import { walkNode } from "../walker";
-import { makeIdent, makeCall, makeUnary, makeBool, makeMember } from "../util";
+import { makeIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary } from "../util";
 import { lookupSymbol } from "../../checker/symbol";
 import { Type, TypeKind, typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType } from "../../checker/types";
 import { findExtension, ExtensionMethod } from "../../checker/context";
@@ -166,6 +166,18 @@ function resolveOpCall(ctx: TransformContext, typeName: string, opName: string, 
 		const callee = makeIdent(typeName + "_eq", loc);
 		callee.nodeType = fnType;
 		return makeCall(callee, [left, right], loc);
+	}
+	// Closure equality: a === b → a.fn === b.fn && a.env === b.env (Nim parity: genEqProc)
+	if ((opName === "==" || opName === "!=") && leftType.kind === TypeKind.Function) {
+		const fnA = makeMember(left, "fn", loc);
+		const fnB = makeMember(right, "fn", loc);
+		const envA = makeMember(left, "env", loc);
+		const envB = makeMember(right, "env", loc);
+		const fnEq = makeBinary(fnA, "===", fnB, loc);
+		const envEq = makeBinary(envA, "===", envB, loc);
+		const bothEq = makeBinary(fnEq, "&&", envEq, loc);
+		if (opName === "!=") return makeUnary("!", bothEq, loc);
+		return bothEq;
 	}
 	// Auto-generated ==, <, <= for tuples (reference: reference core:1973-1996)
 	if (leftType.kind === TypeKind.Tuple) {

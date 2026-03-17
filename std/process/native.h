@@ -200,6 +200,15 @@ static inline double msProcessClockMs(void) {
 #endif
 }
 
+static inline int32_t msProcessCpuCount(void) {
+#ifdef _SC_NPROCESSORS_ONLN
+	int n = (int)sysconf(_SC_NPROCESSORS_ONLN);
+	return n > 0 ? (int32_t)n : 4;
+#else
+	return 4;
+#endif
+}
+
 #ifdef __cplusplus
 }
 #endif

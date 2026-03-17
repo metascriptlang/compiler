@@ -32,7 +32,7 @@ export {
 
 // Server
 export {
-	HttpServer, createServer, serverListen, serve, serveN, stop,
+	HttpServer, createServer, serverListen, serve, serveConcurrent, serveN, stop,
 	writeHead, write, end, endWithBody,
 	sendText, sendJson, sendHtml, sendError,
 } from "./server";
@@ -40,6 +40,6 @@ export {
 // Client
 export {
 	HttpClient, createClient,
-	httpGet, httpPost, request,
-	clientGet, clientPost, requestWithRedirects,
+	httpGet, httpPost, request, fetch,
+	clientGet, clientPost, clientFetch, requestWithRedirects,
 } from "./client";

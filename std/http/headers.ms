@@ -111,7 +111,8 @@ export function serializeHeaders(h: HttpHeaders): string {
 export function getContentLength(h: HttpHeaders): int32 {
 	const val = getHeader(h, "content-length");
 	if (val === "") return -1;
-	return val.parseInt();
+	const n = val.parseInt();
+	return n as int32;
 }
 
 // Transfer-Encoding contains "chunked"?

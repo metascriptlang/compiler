@@ -238,6 +238,7 @@ function genCopyRef(increfFn: string, x: Node, y: Node, fieldName: string, buf: 
 	}
 	// Unary incref types: decref old, assign, incref new
 	const decrefFn = increfFn === "msIncref" ? "msDecref"
+		: increfFn === "msClosureCopy" ? "msClosureDestroy"
 		: increfFn === "msClosureIncref" ? "msClosureDecref"
 		: increfFn === "msMapIncref" ? "msMapDecref"
 		: "";
@@ -475,7 +476,13 @@ function fillBody(hook: string, x: Node, y: Node, fieldName: string, fieldType: 
 		TypeKind.Ptr => {
 			defaultOp(hook, xf, yf, buf, loc);
 		},
-		TypeKind.Function => { runtimeOp("msClosure", "msClosureDestroy", "Copy", "WasMoved", "Trace", true, hook, xf, yf, buf, loc); },
+		TypeKind.Function => {
+			if (hook === "copy") {
+				genCopyRef("msClosureCopy", xf, yf, fieldName, buf, loc);
+			} else {
+				runtimeOp("msClosure", "msClosureDestroy", "Copy", "WasMoved", "Trace", true, hook, xf, yf, buf, loc);
+			}
+		},
 		TypeKind.GenericInstance => {},
 		TypeKind.Union => {
 			if (fieldType.typeName !== "") {
@@ -946,6 +953,14 @@ function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx,
 		const pA = makeMember(aField, "p", loc);
 		const pB = makeMember(bField, "p", loc);
 		return makeBinary(pA, "===", pB, loc);
+	}
+	// Closure fields — compare function pointer and environment separately (Nim parity: genEqProc)
+	if (fieldType.kind === TypeKind.Function) {
+		const fnA = makeMember(aField, "fn", loc);
+		const fnB = makeMember(bField, "fn", loc);
+		const envA = makeMember(aField, "env", loc);
+		const envB = makeMember(bField, "env", loc);
+		return makeBinary(makeBinary(fnA, "===", fnB, loc), "&&", makeBinary(envA, "===", envB, loc), loc);
 	}
 	// For all other types (primitives, enums, etc): use === directly
 	return makeBinary(aField, "===", bField, loc);

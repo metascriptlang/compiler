@@ -610,7 +610,11 @@ export function hasFatalErrors(ctx: CheckerContext): boolean {
 }
 
 export function errorCount(ctx: CheckerContext): number {
-	return ctx.errors.length;
+	let count = 0;
+	for (let i = 0; i < ctx.errors.length; i += 1) {
+		if (ctx.errors[i].severity !== Severity.Warning) count = count + 1;
+	}
+	return count;
 }
 
 export function errorMessage(err: CheckerError): string {

@@ -1033,6 +1033,18 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 			}
 		}
 	}
+	// Backwards type inference: resolve generic params from expectedType before checking args.
+	// e.g. Result.ok({...}) with expected Result<ParsedResponse, HttpError> → T=ParsedResponse
+	// so arg expected type becomes ParsedResponse instead of GenericParam("T").
+	if (!needsOverloadScoring && calleeType !== null && calleeType.kind === TypeKind.Function
+		&& expectedType !== null && calleeType.typeReturn !== null
+		&& hasGenericParams(calleeType)) {
+		const backBindings = createUnifyBindings();
+		unifyType(calleeType.typeReturn, expectedType, backBindings);
+		if (backBindings.names.length > 0) {
+			calleeType = instantiateGeneric(calleeType, backBindings.names, backBindings.types);
+		}
+	}
 	// Check args — with expectedType from callee params (Reference parity: signature match formal type)
 	const argTypes: Type[] = [];
 	for (let ai = 0; ai < d.arguments.length; ai += 1) {
@@ -1117,8 +1129,16 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 				&& argTypes[pi].kind !== TypeKind.Unknown && argTypes[pi].kind !== TypeKind.Error
 				&& argTypes[pi].kind !== TypeKind.Function) {
 				if (!isAssignable(argTypes[pi], paramType)) {
-					const calleeName = getCalleeName(d.callee);
-					addError(ctx, "Argument type mismatch in '" + calleeName + "' arg " + String(pi) + ": got " + typeNameOf(argTypes[pi]) + ", expected " + typeNameOf(paramType), node.location.line, node.location.column);
+					if (needsStdConv(argTypes[pi], paramType)) {
+						// Implicit numeric conversion — warn but allow (TypeScript compat)
+						if (argTypes[pi].kind === TypeKind.Number && isIntegerType(paramType)) {
+							const calleeName = getCalleeName(d.callee);
+							addWarning(ctx, `implicit number → ${typeNameOf(paramType)} narrowing in '${calleeName}' arg ${pi}`, node.location.line, node.location.column);
+						}
+					} else {
+						const calleeName = getCalleeName(d.callee);
+						addError(ctx, "Argument type mismatch in '" + calleeName + "' arg " + String(pi) + ": got " + typeNameOf(argTypes[pi]) + ", expected " + typeNameOf(paramType), node.location.line, node.location.column);
+					}
 				}
 				// Reference parity: var/out params require lvalue argument
 				if (paramType.kind === TypeKind.Var && pi < d.arguments.length) {
@@ -1145,8 +1165,6 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 			&& node.resolvedSym.builtinKind === "") {  // skip builtins — they're rewritten, not instantiated
 			const directFlags = (node.resolvedSym.declNode.data as FunctionDeclData).fnFlags;
 			if (directFlags.indexOf("gen:", 0) >= 0) {
-				// Infer concrete types via structural unification
-				// GenericInstance types unify directly — no string parsing needed
 				const deb = createUnifyBindings();
 				const dLimit = argTypes.length < calleeType.typeChildren.length ? argTypes.length : calleeType.typeChildren.length;
 				for (let di = 0; di < dLimit; di += 1) {

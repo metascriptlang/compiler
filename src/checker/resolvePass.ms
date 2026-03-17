@@ -127,11 +127,13 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 		if (members.length > 0) return createUnion(members);
 	}
 
-	// Object literal type: { field: Type, ... }
+	// Object literal type: { field: Type; ... } or { field: Type, ... }
 	if (trimmed.charAt(0) === "{" && trimmed.endsWith("}")) {
 		const inner = trimmed.slice(1, trimmed.length - 1).trim();
 		if (inner === "") return createStruct("", [], [], true);
-		const fields = splitTopLevel(inner, ",");
+		// TypeScript uses semicolons in type position, commas in value position — support both
+		const hasSemicolon = inner.indexOf(";") >= 0;
+		const fields = splitTopLevel(inner, hasSemicolon ? ";" : ",");
 		const names: string[] = [];
 		const types: Type[] = [];
 		for (const f of fields) {

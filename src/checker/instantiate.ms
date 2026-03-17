@@ -25,6 +25,17 @@ import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../mon
 import { checkFunctionBody } from "./checkPass";
 import { getIdentId } from "./idents";
 
+// ===== Global Instance Collection =====
+// Module-level pending list — all instantiated ASTs go here.
+// compile.ms drains this after each module's check.
+let _pendingInstances: Node[] = [];
+
+export function drainPendingInstances(): Node[] {
+	const result = _pendingInstances;
+	_pendingInstances = [];
+	return result;
+}
+
 // ===== Helpers =====
 
 // Deduplicate unify bindings (K=string may appear twice from Map<K,V> + K params)
@@ -226,13 +237,12 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	const mangledName = buildMangledName(sym.name, dedup.types);
 
 	// Cache check — skip if already instantiated.
-	// Still inject the AST into this module's generatedInstances so codegen can
-	// dedup across modules (first module to emit wins, others get forward decl).
+	// Reference parity (genericCacheGet + findPendingModule): return cached symbol only.
+	// The first module that created the instance has it in generatedInstances.
+	// Other modules get forward declarations via ensureCrossModuleProto at call sites.
+	// No AST re-injection — prevents shared-mutation by DRC across modules.
 	const existing = lookupSymbol(ctx.table, mangledName);
 	if (existing !== null) {
-		if (existing.declNode !== null) {
-			ctx.generatedInstances.push(existing.declNode);
-		}
 		ctx.genericInstDepth = ctx.genericInstDepth - 1;
 		return existing;
 	}
@@ -285,18 +295,15 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 		// Register instance in body-check scope so recursive lookups find it
 		instSym.nameId = getIdentId(bodyCtx.table.identCache, mangledName);
 		bodyCtx.table.current.symbols.push(instSym);
-		// Share generatedInstances + modulePath so nested instantiations
-		// get the calling module's identity (not the prelude's empty path).
-		const savedInstances = bodyCtx.generatedInstances;
 		const savedModulePath = bodyCtx.modulePath;
-		bodyCtx.generatedInstances = ctx.generatedInstances;
 		bodyCtx.modulePath = ctx.modulePath;
 		checkFunctionBody(bodyCtx, instSym, cd.params, cd.fnBody, null as unknown as SourceLocation[]);
-		bodyCtx.generatedInstances = savedInstances;
 		bodyCtx.modulePath = savedModulePath;
 	}
 
-	ctx.generatedInstances.push(cloned);
+	// Push to global pending list — reliable regardless of context save/restore.
+	_pendingInstances.push(cloned);
+
 	ctx.genericInstDepth = ctx.genericInstDepth - 1;
 	return instSym;
 }

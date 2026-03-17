@@ -25,7 +25,8 @@ import {
 	lspFmtCompletionItem, lspFmtHoverResult,
 	lspFmtDiagnostic, lspFmtPublishDiagnostics,
 	lspFmtDocumentSymbol, lspFmtDocumentHighlight, lspFmtInlayHint,
-	lspFmtSignatureParam, lspFmtSignature, lspFmtSignatureHelp
+	lspFmtSignatureParam, lspFmtSignature, lspFmtSignatureHelp,
+	lspFmtMultiLineTextEdit
 } from "./format";
 import {
 	sgTypeToString,
@@ -34,7 +35,8 @@ import {
 	sgCollectSymbolsInFile, sgFormatSignature, sgFormatExtensionSignatures, sgGetSignatureContext, SgSignatureContext,
 	sgCollectInlayHints,
 	sgFormatHoverDoc, sgExtractDocComment, sgBuiltinDoc,
-	sgFindImportSource, sgFindExportedDecl, sgExtractImportPath, sgExtractImportSource, sgExtractExistingImportNames,
+	sgFindImportSource, sgFindImportBySource, sgFindExportedDecl, sgExtractImportPath, sgExtractImportSource, sgExtractExistingImportNames,
+	sgComputeImportEdit,
 	sgQueryAtPosition, sgQueryBySym, sgQueryByName, sgQueryByDefiningModule,
 	SgSuggest, SgCompletionKind, sgObjectFieldPathAST, sgCompleteObjectFields,
 	findEnclosingObjectLiteral, findNodeAtPosition,
@@ -69,6 +71,30 @@ export class CompletionCache {
 	line: number;          // line of last completion (1-indexed, internal)
 	prefix: string;        // prefix used for last completion
 	items: string[];       // cached per-item JSON strings
+}
+
+// Resolve cache: maps label to additionalTextEdits JSON for completionItem/resolve.
+// nvim-cmp strips additionalTextEdits from initial response and expects them on resolve.
+let _resolveEdits: string[] = [];  // parallel arrays: keys and values
+let _resolveKeys: string[] = [];
+
+function cacheResolveEdit(label: string, detail: string, editsJson: string): void {
+	_resolveKeys.push(label);
+	_resolveEdits.push(editsJson);
+}
+
+function lookupResolveEdit(label: string, detail: string): string {
+	let i = _resolveKeys.length - 1;
+	while (i >= 0) {
+		if (_resolveKeys[i] === label) return _resolveEdits[i];
+		i = i - 1;
+	}
+	return "";
+}
+
+function clearResolveEdits(): void {
+	_resolveKeys = [];
+	_resolveEdits = [];
 }
 
 export function createCompletionCache(): CompletionCache {
@@ -684,7 +710,7 @@ export function handleInitialize(id: string): string {
 	const caps = "{\"capabilities\":{"
 		+ "\"textDocumentSync\":{\"openClose\":true,\"change\":1}"
 		+ ",\"hoverProvider\":true"
-		+ ",\"completionProvider\":{\"triggerCharacters\":[\".\",\"/\"]}"
+		+ ",\"completionProvider\":{\"triggerCharacters\":[\".\",\"/\"],\"resolveProvider\":true}"
 		+ ",\"definitionProvider\":true"
 		+ ",\"documentSymbolProvider\":true"
 		+ ",\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]}"
@@ -818,6 +844,77 @@ function lspCompletionItemKind(kind: SymbolKind, isMutable: boolean): number {
 	};
 }
 
+// Reverse-resolve a module path to an import specifier.
+// e.g., "/Users/le/project/std/build.ms" → "std/build"
+//       "/Users/le/project/src/foo.ms" → "./foo" (relative to currentPath)
+function lspModulePathToImportSpec(db: TransAmDb, currentPath: string, targetPath: string): string {
+	// std/ modules: strip stdPath prefix, extension, and /index suffix
+	if (db.stdPath.length > 0 && targetPath.length > db.stdPath.length && targetPath.slice(0, db.stdPath.length) === db.stdPath) {
+		let spec = targetPath.slice(db.stdPath.length - 3, targetPath.length); // keep "std/..."
+		// Strip .ms/.cms extension
+		if (spec.length > 3 && spec.slice(spec.length - 3, spec.length) === ".ms") spec = spec.slice(0, spec.length - 3);
+		if (spec.length > 4 && spec.slice(spec.length - 4, spec.length) === ".cms") spec = spec.slice(0, spec.length - 4);
+		// Strip /index suffix
+		if (spec.length > 6 && spec.slice(spec.length - 6, spec.length) === "/index") spec = spec.slice(0, spec.length - 6);
+		return spec;
+	}
+	// Relative path: compute from currentPath's directory
+	const currentDir = lspDirname(currentPath);
+	if (targetPath.length > currentDir.length && targetPath.slice(0, currentDir.length) === currentDir) {
+		let rel = "./" + targetPath.slice(currentDir.length + 1, targetPath.length);
+		if (rel.length > 3 && rel.slice(rel.length - 3, rel.length) === ".ms") rel = rel.slice(0, rel.length - 3);
+		if (rel.length > 4 && rel.slice(rel.length - 4, rel.length) === ".cms") rel = rel.slice(0, rel.length - 4);
+		if (rel.length > 6 && rel.slice(rel.length - 6, rel.length) === "/index") rel = rel.slice(0, rel.length - 6);
+		return rel;
+	}
+	return targetPath;
+}
+
+// Search ExportRegistry for cross-module auto-import candidates.
+function lspCrossModuleCandidates(
+	db: TransAmDb, prefix: string, currentPath: string,
+	program: Node, source: string, kind: SgCompletionKind, inScopeNames: string[]
+): string[] {
+	const items: string[] = [];
+	if (db.exportRegistry === null) return items;
+	const isTypeCtx = kind === SgCompletionKind.TypeAnnotation;
+
+	for (let ei = 0; ei < db.exportRegistry.entries.length; ei = ei + 1) {
+		const entry = db.exportRegistry.entries[ei];
+		if (entry.modulePath === currentPath) continue; // skip self
+		const importSpec = lspModulePathToImportSpec(db, currentPath, entry.modulePath);
+
+		for (let si = 0; si < entry.symbols.length; si = si + 1) {
+			const sym = entry.symbols[si];
+			if (sym.name.length === 0) continue;
+			// Prefix filter
+			if (prefix.length > 0 && prefix.length > sym.name.length) continue;
+			if (prefix.length > 0 && sym.name.slice(0, prefix.length) !== prefix) continue;
+			// Skip if already in scope
+			let inScope = false;
+			for (let ni = 0; ni < inScopeNames.length; ni = ni + 1) {
+				if (inScopeNames[ni] === sym.name) { inScope = true; break; }
+			}
+			if (inScope) continue;
+			// Type context: only suggest type-like symbols
+			if (isTypeCtx) {
+				if (sym.kind !== SymbolKind.Interface && sym.kind !== SymbolKind.Class
+					&& sym.kind !== SymbolKind.Enum && sym.kind !== SymbolKind.TypeAlias) continue;
+			}
+			// Compute import edit — included in initial response AND cached for resolve
+			const edit = sgComputeImportEdit(program, source, sym.name, importSpec);
+			const editJson = "[" + lspFmtMultiLineTextEdit(edit.line, edit.col, edit.line, edit.endCol, edit.newText) + "]";
+			const detail = sgTypeToString(sym.symType) + " (from " + importSpec + ")";
+			cacheResolveEdit(sym.name, detail, editJson);
+			const kindNum = lspCompletionItemKind(sym.kind, false);
+			const hasExistingImport = sgFindImportBySource(program, importSpec) !== null;
+			const sortText = hasExistingImport ? "20" : "25";
+			items.push(lspFmtCompletionItem(sym.name, kindNum, detail, sortText, false, "", "", editJson));
+		}
+	}
+	return items;
+}
+
 export function handleCompletion(id: string, params: string, db: TransAmDb, cache: CompletionCache): string {
 	const pos = lspExtractPosition(params);
 	const path = lspUriToPath(pos.uri);
@@ -898,12 +995,41 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 
 	// Cache the individual formatted items for future prefix filtering
 	const cachedItems = formatCompletionItemsArray(candidates, db, path);
+
+	// Cross-module auto-import candidates
+	if (kind === SgCompletionKind.Identifier || kind === SgCompletionKind.TypeAnnotation || kind === SgCompletionKind.ImportName) {
+		const inScopeNames: string[] = [];
+		for (let ci = 0; ci < candidates.length; ci = ci + 1) {
+			inScopeNames.push(candidates[ci].name);
+		}
+		const source = dbGetSource(db, path);
+		const autoImportItems = lspCrossModuleCandidates(db, prefix, path, program, source, kind, inScopeNames);
+		for (let ai = 0; ai < autoImportItems.length; ai = ai + 1) {
+			cachedItems.push(autoImportItems[ai]);
+		}
+	}
+
 	cache.uri = pos.uri;
 	cache.line = pos.line;
 	cache.prefix = prefix;
 	cache.items = cachedItems;
 
 	return lspResponse(id, joinJsonItems(cachedItems));
+}
+
+// completionItem/resolve — attach additionalTextEdits for auto-import items.
+// nvim-cmp strips additionalTextEdits from initial response and requests them here.
+function handleCompletionResolve(id: string, params: string): string {
+	const label = lspGetField(params, "label");
+	const detail = lspGetField(params, "detail");
+	const edits = lookupResolveEdit(label, detail);
+	if (edits.length > 0) {
+		let result = params;
+		const closeIdx = result.length - 1;
+		result = result.slice(0, closeIdx) + ",\"additionalTextEdits\":" + edits + "}";
+		return lspResponse(id, result);
+	}
+	return lspResponse(id, params);
 }
 
 // TypeScript-style sortText: lower number = higher priority
@@ -948,7 +1074,7 @@ function formatCompletionItemsArray(candidates: SgSuggest[], db: TransAmDb, path
 		if (doc === "") {
 			doc = sgBuiltinDoc(item.name, item.containerName);
 		}
-		result.push(lspFmtCompletionItem(item.name, kindNum, typeStr, sortText, false, commitChars, doc));
+		result.push(lspFmtCompletionItem(item.name, kindNum, typeStr, sortText, false, commitChars, doc, ""));
 	}
 	return result;
 }
@@ -1004,7 +1130,7 @@ function lspCompleteImportPath(source: string, pos: LspCursorParams, db: TransAm
 	} else if (dirPart === "" && filePrefix === "") {
 		// Empty — only suggest std/ (user types ./ or ../ explicitly for relative)
 		const items: string[] = [];
-		items.push(lspFmtCompletionItem("std/", 19, "Standard library", "00", false, "/", ""));
+		items.push(lspFmtCompletionItem("std/", 19, "Standard library", "00", false, "/", "", ""));
 		return items;
 	} else {
 		// Bare import with partial dir — try relative first
@@ -1039,7 +1165,7 @@ function lspCompleteImportPath(source: string, pos: LspCursorParams, db: TransAm
 			// Only show directories that contain MetaScript modules
 			if (!lspDirHasMsEntries(scanDir + "/" + name)) continue;
 			const sortIdx = idx < 10 ? "0" + idx.toString() : idx.toString();
-			items.push(lspFmtCompletionItem(insertPrefix + name, 19, "module", sortIdx, false, "/", ""));
+			items.push(lspFmtCompletionItem(insertPrefix + name, 19, "module", sortIdx, false, "/", "", ""));
 			idx = idx + 1;
 		} else {
 			// Only show .ms/.cms/.jms files (strip extension)
@@ -1047,7 +1173,7 @@ function lspCompleteImportPath(source: string, pos: LspCursorParams, db: TransAm
 			if (moduleName === "") continue;
 			if (moduleName === "index") continue; // accessed via directory name
 			const sortIdx = idx < 10 ? "0" + idx.toString() : idx.toString();
-			items.push(lspFmtCompletionItem(insertPrefix + moduleName, 17, "module", sortIdx, false, "", ""));
+			items.push(lspFmtCompletionItem(insertPrefix + moduleName, 17, "module", sortIdx, false, "", "", ""));
 			idx = idx + 1;
 		}
 	}
@@ -1095,7 +1221,7 @@ function lspCompleteImportName(program: Node, source: string, pos: LspCursorPara
 		const kindNum = lspCompletionItemKind(sym.kind, false);
 		const detail = sgTypeToString(sym.symType);
 		const sortIdx = idx < 10 ? "0" + idx.toString() : idx.toString();
-		items.push(lspFmtCompletionItem(sym.name, kindNum, detail, sortIdx, false, "", ""));
+		items.push(lspFmtCompletionItem(sym.name, kindNum, detail, sortIdx, false, "", "", ""));
 		idx = idx + 1;
 	}
 	return items;
@@ -1654,6 +1780,7 @@ export function lspDispatch(method: string, id: string, params: string, db: Tran
 		"textDocument/didClose" => handleDidClose(params, db),
 		"textDocument/hover" => handleHover(id, params, db),
 		"textDocument/completion" => handleCompletion(id, params, db, cache),
+		"completionItem/resolve" => handleCompletionResolve(id, params),
 		"textDocument/definition" => handleDefinition(id, params, db),
 		"textDocument/documentSymbol" => handleDocumentSymbol(id, params, db),
 		"textDocument/signatureHelp" => handleSignatureHelp(id, params, db),

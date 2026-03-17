@@ -71,6 +71,33 @@ static inline int32_t msNetBind(int32_t fd, msString addr, int32_t port) {
 }
 
 /**
+ * Bind with SO_REUSEPORT — allows multiple threads to bind to the same port.
+ * Kernel load-balances incoming connections across all threads.
+ * Used by serveConcurrent() for httpbeast-style thread-per-core architecture.
+ */
+static inline int32_t msNetBindShared(int32_t fd, msString addr, int32_t port) {
+	int opt = 1;
+	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+#ifdef SO_REUSEPORT
+	setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+#endif
+
+	struct sockaddr_in sa;
+	memset(&sa, 0, sizeof(sa));
+	sa.sin_family = AF_INET;
+	sa.sin_port = htons((uint16_t)port);
+
+	const char* addr_str = msCStr(addr);
+	if (strcmp(addr_str, "0.0.0.0") == 0) {
+		sa.sin_addr.s_addr = INADDR_ANY;
+	} else {
+		if (inet_pton(AF_INET, addr_str, &sa.sin_addr) != 1) return -1;
+	}
+
+	return (int32_t)bind(fd, (struct sockaddr*)&sa, sizeof(sa));
+}
+
+/**
  * Listen for connections. Returns 0 on success, -1 on error.
  */
 static inline int32_t msNetListen(int32_t fd, int32_t backlog) {

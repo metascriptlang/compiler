@@ -51,7 +51,7 @@ function lspBuildCommitCharsArray(chars: string): string {
 export function lspFmtCompletionItem(
 	label: string, kind: number, detail: string,
 	sortText: string, isDeprecated: boolean, commitChars: string,
-	documentation: string
+	documentation: string, additionalEdits: string
 ): string {
 	let result = "{\"label\":" + lspJsonString(label)
 		+ ",\"kind\":" + lspJsonNumber(kind)
@@ -69,8 +69,16 @@ export function lspFmtCompletionItem(
 	if (documentation.length > 0) {
 		result = result + ",\"documentation\":{\"kind\":\"markdown\",\"value\":" + lspJsonString(documentation) + "}";
 	}
+	if (additionalEdits.length > 0) {
+		result = result + ",\"additionalTextEdits\":" + additionalEdits;
+	}
 	result = result + "}";
 	return result;
+}
+
+// Format a multi-line LSP TextEdit as JSON (start line may differ from end line).
+export function lspFmtMultiLineTextEdit(line: number, col: number, endLine: number, endCol: number, newText: string): string {
+	return `{"range":{"start":{"line":${line},"character":${col}},"end":{"line":${endLine},"character":${endCol}}},"newText":${lspJsonString(newText)}}`;
 }
 
 // ===== Hover =====
@@ -197,27 +205,27 @@ test "basic" {
 }
 
 test "basic" {
-	const item = lspFmtCompletionItem("foo", 6, "number", "11", false, "", "");
+	const item = lspFmtCompletionItem("foo", 6, "number", "11", false, "", "", "");
 	assert item.length > 20;
 }
 
 test "with sortText" {
-	const item = lspFmtCompletionItem("bar", 3, "()", "10", false, "", "");
+	const item = lspFmtCompletionItem("bar", 3, "()", "10", false, "", "", "");
 	assert item.length > 20;
 }
 
 test "deprecated tag" {
-	const item = lspFmtCompletionItem("old", 6, "string", "z11", true, "", "");
+	const item = lspFmtCompletionItem("old", 6, "string", "z11", true, "", "", "");
 	assert item.length > 30;
 }
 
 test "commit chars" {
-	const item = lspFmtCompletionItem("fn", 3, "()", "11", false, "(.", "");
+	const item = lspFmtCompletionItem("fn", 3, "()", "11", false, "(.", "", "");
 	assert item.length > 40;
 }
 
 test "with documentation" {
-	const item = lspFmtCompletionItem("log", 2, "(message: string) => void", "10", false, "(.", "Logs a message to the console.");
+	const item = lspFmtCompletionItem("log", 2, "(message: string) => void", "10", false, "(.", "Logs a message to the console.", "");
 	assert item.length > 60;
 }
 

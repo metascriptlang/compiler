@@ -154,7 +154,6 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	// Determine C return type — MUST have nodeType (Decisive Checker mandate)
 	const fnType = node.nodeType;
 	if (fnType === null) return;
-	// Skip uninstantiated generic functions (prelude templates with K, V, T params)
 	if (hasGenericParams(fnType)) return;
 	let cRetType = getTypeDesc(g, fnType.typeReturn);
 	// Null return type means void (not void*) — closures typed as `: void` may have null typeReturn

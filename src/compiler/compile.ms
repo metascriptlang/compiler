@@ -34,6 +34,7 @@ import { findModule, hasModule, ModuleGraph, ModuleError, ErrorSeverity } from "
 import { createFileSystemProvider, loadModuleGraphWithConfig, loadModule, provideSource, SourceProvider } from "../module/loader";
 import { ResolverConfig, createDefaultConfig, Backend, resolveImportWithConfig } from "../module/resolver";
 import { globalImports } from "../checker/prelude";
+import { drainPendingInstances } from "../checker/instantiate";
 import { ResolveSection, defaultResolveSection } from "./buildConfig";
 import { evaluateComptimeBlocks } from "./comptime";
 import { CliOptions, Target, MODE_DEBUG, MODE_RELEASE } from "./options";
@@ -530,12 +531,12 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		}
 		ctx.errors = [];
 
-		// Inject instances into this module's program for transform/analyze pipeline.
-		// Codegen deduplicates at Phase C (first module to emit wins, others get forward decl).
-		if (ctx.generatedInstances !== null) {
+		// Drain pending instances (Nim parity: addCodeForGenerics at module close).
+		const pendingInsts = drainPendingInstances();
+		if (pendingInsts.length > 0) {
 			const instPd = program.data as ProgramData;
-			for (let ii = 0; ii < ctx.generatedInstances.length; ii += 1) {
-				const instNode = ctx.generatedInstances[ii];
+			for (let ii = 0; ii < pendingInsts.length; ii += 1) {
+				const instNode = pendingInsts[ii];
 				if (instNode.nodeType === null && instNode.resolvedSym !== null && instNode.resolvedSym.symbolType !== null) {
 					instNode.nodeType = instNode.resolvedSym.symbolType;
 				}
@@ -565,7 +566,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		const analyzed = analyzeProgram(hcrResult, ctx);
 		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
 
-processed.push({ program: nativeLowered, ctx, modPath });
+		processed.push({ program: nativeLowered, ctx, modPath });
 		transformedPrograms.push(nativeLowered);
 		transformedPaths.push(modPath);
 
@@ -772,14 +773,6 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		exitOnFatalCheckerErrors(ctx, modPath, mod.source);
 		ctx.errors = [];
 
-		// Inject on-demand instantiated generic functions
-		if (ctx.generatedInstances.length > 0) {
-			const instPd2 = program.data as ProgramData;
-			for (const inst of ctx.generatedInstances) {
-				instPd2.programStmts.push(inst);
-			}
-			ctx.generatedInstances = [];
-		}
 		const monoed = monomorphizeProgram(program, ctx);
 		validateTypedAST(ctx, monoed);
 		ctx.errors = [];
@@ -790,6 +783,18 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 		const hcrResult = opts.isHcr ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
+		// Drain pending instances (same as cmdBuildC)
+		const pendingInsts2 = drainPendingInstances();
+		if (pendingInsts2.length > 0) {
+			const instPd2 = program.data as ProgramData;
+			for (const inst of pendingInsts2) {
+				if (inst.nodeType === null && inst.resolvedSym !== null && inst.resolvedSym.symbolType !== null) {
+					inst.nodeType = inst.resolvedSym.symbolType;
+				}
+				instPd2.programStmts.push(inst);
+			}
+		}
+
 		const analyzed = analyzeProgram(hcrResult, ctx);
 		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
 

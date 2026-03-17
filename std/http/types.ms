@@ -63,6 +63,7 @@ export interface RequestOptions {
 	headers: HttpHeaders;
 	body: string;
 	timeout: int32;
+	tls: boolean;
 }
 
 // Parsed URL components.

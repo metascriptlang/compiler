@@ -115,14 +115,12 @@ function collectIdentifiers(node: Node, refs: NameSet): void {
 }
 
 // Returns true for declarations that can be eliminated if unreferenced.
-// Everything else (statements, imports, exports, variables) has side effects.
+// Nim parity: function-level DCE is handled by codegen (isDeclAlive with
+// cross-module visibility), NOT by transform-level DCE (per-module, no cross-module refs).
+// Only type aliases and enums are safe to eliminate at transform level.
 function isEliminable(node: Node): boolean {
 	return match (node.kind) {
-		NodeKind.FunctionDecl | NodeKind.EnumDecl
-			| NodeKind.TypeAliasDecl => true,
-		// InterfaceDecl & ClassDecl excluded: destructorLifting needs them to generate
-		// lifecycle hooks (_destroy/_copy/_typeInfo). The reference runs destructor lifting during sem
-		// (before DCE), so type declarations are always available for hook generation.
+		NodeKind.EnumDecl | NodeKind.TypeAliasDecl => true,
 		_ => false,
 	};
 }
@@ -501,12 +499,14 @@ test "strips after return" { assert stmtCountAfter("return 1; const x = 2; const
 
 test "strips after throw" { assert stmtCountAfter("throw 1; const x = 2;", lowerDCE) === 1; }
 
-test "hoisted function removed if unreferenced" {
-	// Level 1 preserves hoisted decl, but Level 2 eliminates it (nobody calls helper)
-	assert stmtCountAfter("return 1; function helper() { return 2; }", lowerDCE) === 1;
+test "hoisted function kept at transform level" {
+	// Functions not eliminated by transform DCE — codegen isDeclAlive handles cross-module DCE.
+	assert stmtCountAfter("return 1; function helper() { return 2; }", lowerDCE) === 2;
 }
 
-test "hoisted class removed if unreferenced" { assert stmtCountAfter("return 1; class Foo {}", lowerDCE) === 1; }
+test "hoisted class kept at transform level" {
+	assert stmtCountAfter("return 1; class Foo {}", lowerDCE) === 2;
+}
 
 test "function body dead code removed" {
 	// foo() call keeps the function alive; Level 1 strips dead const inside body
@@ -588,17 +588,17 @@ test "null checker graceful" {
 	assert stmtCountAfter("foo(); const alive = 2;", lowerDCE) === 2;
 }
 
-test "unused function removed" { assert stmtCountAfter("function unused() {} const x = 1;", lowerDCE) === 1; }
+test "unused function kept at transform level" { assert stmtCountAfter("function unused() {} const x = 1;", lowerDCE) === 2; }
 
 test "used function kept" { assert stmtCountAfter("function add(a, b) { return 1; } add(1, 2);", lowerDCE) === 2; }
 
 test "exported function always kept" { assert stmtCountAfter("export function api() { return 1; }", lowerDCE) === 1; }
 
-test "mutual recursion both dead" { assert stmtCountAfter("function a() { b(); } function b() { a(); }", lowerDCE) === 0; }
+test "mutual recursion kept at transform level" { assert stmtCountAfter("function a() { b(); } function b() { a(); }", lowerDCE) === 2; }
 
 test "mutual recursion alive via call" { assert stmtCountAfter("function a() { b(); } function b() { a(); } a();", lowerDCE) === 3; }
 
-test "unused class removed" { assert stmtCountAfter("class Dead {} const x = 1;", lowerDCE) === 1; }
+test "unused class kept at transform level" { assert stmtCountAfter("class Dead {} const x = 1;", lowerDCE) === 2; }
 
 test "used class kept" { assert stmtCountAfter("class Alive {} const x = Alive;", lowerDCE) === 2; }
 

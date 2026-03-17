@@ -1,0 +1,52 @@
+// std/os — System information (Node.js os module parity)
+// import { hostname, platform, arch, cpus, totalmem, freemem } from "std/os"
+
+@include("std/os/native.h");
+
+extern function msOsHostname(): string;
+extern function msOsPlatform(): string;
+extern function msOsArch(): string;
+extern function msOsType(): string;
+extern function msOsRelease(): string;
+extern function msOsMachine(): string;
+extern function msOsCpuCount(): int32;
+extern function msOsCpuModel(): string;
+extern function msOsCpuSpeed(): int32;
+extern function msOsTotalMem(): int64;
+extern function msOsFreeMem(): int64;
+extern function msOsUptime(): number;
+extern function msOsHomedir(): string;
+extern function msOsTmpdir(): string;
+extern function msOsEndianness(): string;
+
+export function hostname(): string { return msOsHostname(); }
+export function platform(): string { return msOsPlatform(); }
+export function arch(): string { return msOsArch(); }
+export function type(): string { return msOsType(); }
+export function release(): string { return msOsRelease(); }
+export function machine(): string { return msOsMachine(); }
+export interface CpuInfo {
+	model: string;
+	speed: int32;
+}
+
+export function cpus(): CpuInfo[] {
+	const count = msOsCpuCount();
+	const model = msOsCpuModel();
+	const speed = msOsCpuSpeed();
+	const result: CpuInfo[] = [];
+	let i = 0;
+	while (i < count) {
+		result.push({ model, speed });
+		i = i + 1;
+	}
+	return result;
+}
+export function totalmem(): int64 { return msOsTotalMem(); }
+export function freemem(): int64 { return msOsFreeMem(); }
+export function uptime(): number { return msOsUptime(); }
+export function homedir(): string { return msOsHomedir(); }
+export function tmpdir(): string { return msOsTmpdir(); }
+export function endianness(): string { return msOsEndianness(); }
+
+export const EOL: string = "\n";

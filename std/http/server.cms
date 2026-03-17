@@ -5,6 +5,7 @@
 
 extern function msNetSocket(): int32;
 extern function msNetBind(fd: int32, addr: string, port: int32): int32;
+extern function msNetBindShared(fd: int32, addr: string, port: int32): int32;
 extern function msNetListen(fd: int32, backlog: int32): int32;
 extern function msNetAccept(fd: int32): int32;
 extern function msNetSend(fd: int32, data: string): int32;
@@ -22,6 +23,7 @@ import {
 	getContentLength, isChunked, isKeepAlive,
 } from "./headers";
 import { ParsedRequest, parseRequest, encodeChunk, encodeLastChunk } from "./parser";
+import { cpus } from "std/os";
 
 // ===== Server Interface =====
 
@@ -88,7 +90,7 @@ export function serverListen(server: HttpServer, addr: string, port: int32): Res
 	server.fd = fd;
 	server.address = addr;
 	server.port = port;
-	return Result.ok(undefined);
+	return Result.ok(null);
 }
 
 export function serve(server: HttpServer): void {
@@ -103,6 +105,56 @@ export function serve(server: HttpServer): void {
 
 		handleConnection(server, clientFd);
 		msNetClose(clientFd);
+	}
+}
+
+// Concurrent serve — thread-per-core, kernel-balanced (httpbeast architecture).
+// Each thread gets its own socket bound to the same port via SO_REUSEPORT.
+// Kernel distributes connections across threads. Zero shared state between workers.
+export function serveConcurrent(server: HttpServer, threads: int32 = 0): void {
+	const n = threads > 0 ? threads : cpus().length;
+	server.running = true;
+
+	// Close the main listener — workers will each create their own via SO_REUSEPORT
+	if (server.fd >= 0) {
+		msNetClose(server.fd);
+		server.fd = -1;
+	}
+
+	const addr = server.address;
+	const port = server.port;
+	const handler = server.handler;
+	const keepAlive = server.keepAlive;
+	const keepAliveTimeout = server.keepAliveTimeout;
+	const maxRequestsPerConnection = server.maxRequestsPerConnection;
+	const maxHeaderSize = server.maxHeaderSize;
+	const maxBodySize = server.maxBodySize;
+
+	for (let i = 0; i < n; i += 1) {
+		spawn(() => {
+			const workerFd = msNetSocket();
+			if (workerFd < 0) return null;
+			if (msNetBindShared(workerFd, addr, port) < 0) { msNetClose(workerFd); return null; }
+			if (msNetListen(workerFd, 128) < 0) { msNetClose(workerFd); return null; }
+
+			const workerServer: HttpServer = {
+				fd: workerFd, handler: handler, running: true,
+				address: addr, port: port,
+				keepAlive: keepAlive, keepAliveTimeout: keepAliveTimeout,
+				maxRequestsPerConnection: maxRequestsPerConnection,
+				maxHeaderSize: maxHeaderSize, maxBodySize: maxBodySize,
+			};
+
+			while (server.running) {
+				const clientFd = msNetAccept(workerFd);
+				if (clientFd < 0) continue;
+				if (keepAliveTimeout > 0) msNetSetTimeout(clientFd, keepAliveTimeout);
+				handleConnection(workerServer, clientFd);
+				msNetClose(clientFd);
+			}
+			msNetClose(workerFd);
+			return null;
+		});
 	}
 }
 
