@@ -1,7 +1,61 @@
 // AST Node definitions for the MetaScript compiler
+// Reference parity: Node, Symbol, Type all in one file — no circular imports.
 
 import { Token } from "../lexer/token";
-import { Type } from "../checker/types";
+
+// ===== TypeKind Enum =====
+
+export enum TypeKind {
+	Number, String, Boolean, Void, Char, Null, Unknown, Never,
+	Int8, Int16, Int32, Int64, Uint8, Uint16, Uint32, Uint64, Float32, Float64,
+	Struct, Array, SizedArray, Span, Function, Tuple, CString,
+	GenericParam, GenericInstance,
+	Ref, Ptr, Borrow,
+	Sink, Lent, Var,
+	TypeReference, Union, Enum, Result, Promise,
+	Distinct,
+	Error,
+}
+
+// ===== Calling Convention =====
+export enum CallingConvention {
+	CcDefault,
+	CcClosure,
+	CcInline,
+	CcNoInline,
+}
+
+// ===== Type Flags =====
+export enum TypeFlag {
+	IsInterface = 1,
+	IsMaybe = 16,
+	HasAsgn = 32,
+}
+
+// ===== Attached Lifecycle Ops =====
+export enum AttachedOp {
+	AttachedWasMoved,
+	AttachedDestructor,
+	AttachedAsgn,
+	AttachedDup,
+	AttachedSink,
+	AttachedTrace,
+}
+
+// ===== Type =====
+
+export class Type {
+	kind: TypeKind;
+	typeName: string;
+	typeNames: string[];
+	typeChildren: Type[];
+	typeReturn: Type;
+	typeExtra: Type;
+	typeFlags: int32;
+	callConv: CallingConvention;
+	attachedOps: string[];
+	sym: Symbol;
+}
 
 // ===== Symbol Kind =====
 
@@ -66,6 +120,7 @@ export enum NodeFlag {
 	ExtStatic = 1024,   // checker: this extension call is static (no receiver prepend)
 	ExportDefault = 2048, // parser: export default declaration
 	WasAsync = 4096,      // transform: function was async before asyncDesugar rewrote to generator
+	ExternC = 8192,       // parser: extern interface — type defined in C header, skip codegen emission
 }
 
 // ===== Node Kind Enum =====

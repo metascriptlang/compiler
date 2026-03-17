@@ -19,14 +19,7 @@
 //
 // Both cases clear fnFlags so generatorLower skips these functions.
 
-import {
-	Node, NodeKind, NodeFlag, DeclKind, createNode, SourceLocation,
-	ProgramData, BlockStmtData, FunctionDeclData, FunctionExprData,
-	ArrowFunctionData, MethodDeclData, ReturnStmtData,
-	ExportDeclData, ClassDeclData, DecoratedDeclData,
-	VariableDeclData, ExprStmtData, IfStmtData, WhileStmtData, TryCatchStmtData,
-	CallExprData, BinaryExprData,
-} from "../../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, createNode, SourceLocation, ProgramData, BlockStmtData, FunctionDeclData, FunctionExprData, ArrowFunctionData, MethodDeclData, ReturnStmtData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, ExprStmtData, IfStmtData, WhileStmtData, TryCatchStmtData, CallExprData, BinaryExprData, Type, TypeKind } from "../../ast/node";
 import { TransformContext } from "../context";
 import {
 	makeIdent, makeTypedIdent, makeVarDecl, makeExprStmt, makeReturn,
@@ -35,7 +28,7 @@ import {
 	syntheticToken, extractBodyStmts, collectDeclNames,
 } from "../util";
 import { NameSet, createNameSet, nameSetContains, nameSetAdd } from "../context";
-import { Type, TypeKind, createPromise, createFunction, voidType, booleanType, numberType } from "../../checker/types";
+import { createPromise, createFunction, voidType, booleanType, numberType } from "../../checker/types";
 import {
 	GenState, StateCollector, allocState, containsYield, splitStmts, convertDeclsToAssigns, makeStateAssign,
 } from "./generatorLower";

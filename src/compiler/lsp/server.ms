@@ -10,7 +10,7 @@ import {
 	lspGetField, lspGetNumberField, lspGetObjectField, lspJsonNumber,
 	lspErrorResponse
 } from "./protocol";
-import { TransAmDb, createTransAmDb } from "../transam/index";
+import { TransAmDb, createTransAmDb, dbEnsurePrelude } from "../transam/index";
 import { requestCancel, resetCancel } from "../transam/cancel";
 import { lspDispatch, buildTransitiveDiagnosticsWire, CompletionCache, createCompletionCache } from "./handlers";
 import { readLine, readBytes, writeStdout, writeStderr, stdinHasData, stdinDisableBuffering } from "std/io";
@@ -223,6 +223,8 @@ export function processMessage(msg: string, state: LspServerState): string {
 		if (root.length > 0) {
 			state.db.stdPath = root + "/std";
 		}
+		// Eagerly build prelude so completions work even before first type check
+		dbEnsurePrelude(state.db);
 	}
 	if (method === "shutdown") {
 		state.shutdownRequested = true;

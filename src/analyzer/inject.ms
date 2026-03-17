@@ -9,21 +9,9 @@
 //
 // Follows the injectdestructors pattern (direct AST rewrite, scope-based).
 
-import {
-	Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag,
-	FunctionDeclData, ArrowFunctionData, FunctionExprData,
-	MethodDeclData, ConstructorDeclData,
-	BlockStmtData, VariableDeclData, ExprStmtData,
-	ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData,
-	TryCatchStmtData, SwitchStmtData, SwitchCaseData,
-	BinaryExprData, CallExprData, IdentifierData, MemberExprData,
-	ArrayAccessData, ObjectLiteralData, ArrayLiteralData,
-	ConditionalExprData, NumberLiteralData, NewExprData,
-	ExportDeclData, ClassDeclData,
-	DoWhileStmtData, MoveExprData, TypeAssertionData, Symbol,
-} from "../ast/node";
-import { Type, TypeKind, isSinkType, skipModifier, createPrimitive } from "../checker/types";
-import { lookupSymbol, lookupLocal, SymbolKind, hasFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
+import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, ProgramData, NodeFlag, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, BlockStmtData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, BinaryExprData, CallExprData, IdentifierData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, NumberLiteralData, NewExprData, ExportDeclData, ClassDeclData, DoWhileStmtData, MoveExprData, TypeAssertionData, Symbol, Type, TypeKind, SymbolKind } from "../ast/node";
+import { isSinkType, skipModifier, createPrimitive } from "../checker/types";
+import { lookupSymbol, lookupLocal, hasFlag, SymbolFlag, makeSymbol } from "../checker/symbol";
 import { TransformContext, NameSet, createNameSet, nameSetContains, nameSetAdd, freshTemp, createTransformContextWithChecker } from "../transform/context";
 import {
 	makeIdent, makeBlock, makeExprStmt, makeCall, makeVarDecl,

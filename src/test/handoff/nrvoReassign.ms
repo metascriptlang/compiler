@@ -4,9 +4,7 @@
 // should have nodeType matching the struct, not void.
 
 import { fullPipeline, findFnDecl } from "./helpers";
-import { Node, NodeKind, FunctionDeclData, BlockStmtData, ExprStmtData,
-	BinaryExprData, CallExprData, VariableDeclData } from "../../ast/node";
-import { TypeKind } from "../../checker/types";
+import { Node, NodeKind, FunctionDeclData, BlockStmtData, ExprStmtData, BinaryExprData, CallExprData, VariableDeclData, TypeKind } from "../../ast/node";
 
 // Walk statements to find the assignment `p = makePair(2)`
 function findAssignment(fn: Node): Node {

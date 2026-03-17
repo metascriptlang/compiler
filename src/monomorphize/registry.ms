@@ -3,7 +3,7 @@
 // Reference implementation equivalent: generic instantiation cache.
 // sameInstantiation() + genericCacheGet() in reference instantiation.
 
-import { Type, TypeKind } from "../checker/types";
+import { Type, TypeKind } from "../ast/node";
 
 // ===== Data Structures =====
 

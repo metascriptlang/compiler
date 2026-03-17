@@ -3,9 +3,9 @@
 // Bug: `createDoc(kind: DocKind, data: DocData)` where DocData is a union type
 // emits `void data` in C instead of the actual DocData struct.
 
+import { TypeKind } from "../../ast/node";
 import { checkSource } from "./helpers";
 import { compileToC } from "../helpers";
-import { TypeKind } from "../../checker/types";
 
 test "union type alias resolves to TypeKind.Union in checker" {
 	const ctx = checkSource(`

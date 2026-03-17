@@ -9,20 +9,8 @@
 // Phase 1: Conservative scope-local forward scan.
 // Phase 2 (future): CFG-based analysis for cross-block accuracy.
 
-import {
-	Node, NodeKind, ProgramData,
-	IdentifierData, BinaryExprData, UnaryExprData, CallExprData,
-	MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData,
-	ConditionalExprData, SpreadExprData, NewExprData,
-	UpdateExprData, TypeAssertionData,
-	VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData,
-	WhileStmtData, ForStmtData, ForOfStmtData, BlockStmtData,
-	TryCatchStmtData, SwitchStmtData, SwitchCaseData,
-	ThrowStmtData, DoWhileStmtData, FunctionDeclData,
-	ExportDeclData, MoveExprData, HiddenDerefData, HiddenStdConvData, Symbol,
-	isEmptyBlock,
-} from "../ast/node";
-import { SymbolKind, makeSymbol } from "../checker/symbol";
+import { Node, NodeKind, ProgramData, IdentifierData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, SpreadExprData, NewExprData, UpdateExprData, TypeAssertionData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, BlockStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ThrowStmtData, DoWhileStmtData, FunctionDeclData, ExportDeclData, MoveExprData, HiddenDerefData, HiddenStdConvData, Symbol, isEmptyBlock, SymbolKind } from "../ast/node";
+import { makeSymbol } from "../checker/symbol";
 import { unknownType } from "../checker/types";
 import { OuterEntry } from "./scope";
 import { parseInput } from "../transform/testUtil";

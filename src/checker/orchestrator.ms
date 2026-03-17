@@ -1,16 +1,15 @@
 // Module orchestrator — coordinates checking across module graph
 // Reference parallel implementation
 
-import { Node, NodeKind, EnumDeclData, makeLoc } from "../ast/node";
+import { Node, NodeKind, EnumDeclData, makeLoc, Type, SymbolKind } from "../ast/node";
 import {
 	CheckerContext, createModuleContext, createModuleContextWithCache, Severity,
 	ExportRegistry, ExportedSymInfo, createExportRegistry, registerModuleExports, updateModuleExports,
 	findExtensionByName, findExtensionByType, registerExtension,
 } from "./context";
-import { SymbolKind, ScopeKind, openScope, hasFlag, SymbolFlag } from "./symbol";
+import { ScopeKind, openScope, hasFlag, SymbolFlag } from "./symbol";
 import { getIdentId } from "./idents";
 import { Module, ModuleGraph, findModule, createModuleError, ErrorSeverity } from "../module/graph";
-import { preprocessHeaders } from "../module/aro";
 import { runThreePasses, buildPreludeContext, getSharedIdentCache, collectDirectives, stampHeaderPaths, injectPrelude } from "./checkPass";
 import { collectTopLevelLocal } from "./collectPass";
 import { inferOwnership } from "./ownershipInference";
@@ -50,9 +49,6 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 	const baseCtx = buildPreludeContext(stdPath);
 	lastPreludeCtx = baseCtx;
 	const sharedCache = getSharedIdentCache(baseCtx);
-
-	// Pre-process C header modules (synthesis fallback for test/direct-call paths)
-	preprocessHeaders(graph, false);
 
 	// ================================================================
 	// PHASE 1: Early export registration (Standard reference implementation)
@@ -451,23 +447,17 @@ test "parse error in dependency doesn't block dependent" {
 test "C header import synthesizes exports" {
 	// Requires native Aro C parser (msAroParse) — not available in Bun runtime.
 	// Passes when compiled via C backend. Skip gracefully under Bun.
-	try {
-		const entries: MapEntry[] = [];
-		entries.push({ entryPath: "/src/lib.h", entrySource: "void foo(int x);" });
-		entries.push({ entryPath: "/src/a.ms", entrySource: "import { foo } from \"./lib.h\"; const x = foo;" });
-		const provider = createMapProvider(entries);
-		const graph = loadModuleGraph("/src/a.ms", provider);
-		checkModuleGraph(graph, "");
-		const hmod = findModule(graph, "/src/lib.h");
-		assert hmod !== null;
-		assert hmod.isCHeader;
-		assert hasExportName(hmod, "foo");
-		const modA = findModule(graph, "/src/a.ms");
-		assert modA !== null;
-		assert modA.errors.length === 0;
-	} catch (e) {
-		// msAroParse not available — test skipped
-	}
+	// .h imports are inlined into the consuming module (reference parity)
+	const entries: MapEntry[] = [];
+	entries.push({ entryPath: "/src/lib.h", entrySource: "void foo(int x);" });
+	entries.push({ entryPath: "/src/a.ms", entrySource: "import { foo } from \"./lib.h\"; const x = foo;" });
+	const provider = createMapProvider(entries);
+	const graph = loadModuleGraph("/src/a.ms", provider);
+	// No separate .h module — declarations inlined into /src/a.ms
+	assert graph.modules.length === 1;
+	const modA = findModule(graph, "/src/a.ms");
+	assert modA !== null;
+	assert modA.source.indexOf("extern") >= 0;
 }
 
 // ===== Circular Import Tests =====

@@ -11,11 +11,8 @@
 //
 // Only runs for C backend (JS handles string ops natively).
 
-import {
-	Node, NodeKind, SourceLocation,
-	BinaryExprData, ArrayAccessData, StringLiteralData,
-} from "../../ast/node";
-import { TypeKind, isNumeric } from "../../checker/types";
+import { Node, NodeKind, SourceLocation, BinaryExprData, ArrayAccessData, StringLiteralData, TypeKind } from "../../ast/node";
+import { isNumeric } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent, makeBinary, makeMember, makeUnary } from "../util";

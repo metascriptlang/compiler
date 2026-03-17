@@ -7,10 +7,7 @@
 // Uses name strings (not Symbol identity) for tracking. This avoids DRC
 // refcount issues with the save/restore pattern (truncating Symbol[] leaks refs).
 
-import {
-	Node, NodeKind, BlockStmtData, CallExprData, ExprStmtData, IdentifierData, BooleanLiteralData, BinaryExprData,
-} from "../ast/node";
-import { TypeKind } from "./types";
+import { Node, NodeKind, BlockStmtData, CallExprData, ExprStmtData, IdentifierData, BooleanLiteralData, BinaryExprData, TypeKind } from "../ast/node";
 import { hasFlag, SymbolFlag } from "./symbol";
 
 // Reference parity: BreakState for branch merging

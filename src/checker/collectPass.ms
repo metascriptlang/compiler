@@ -1,7 +1,7 @@
-import { Node, NodeKind, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind } from "../ast/node";
+import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { extractDecoratorInfo } from "./decoratorHelpers";
-import { Type, TypeKind, unknownType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
-import { Symbol, SymbolKind, SymbolTable, ScopeKind, defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
+import { unknownType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
+import { SymbolTable, ScopeKind, defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, ExportedSymInfo, addError, findExportedSymbol, findModuleExports, ExtensionMethod, registerExtension, isStaticExtensionFlag, getExtTypeName, findExtension, sgRecordSym } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
@@ -124,7 +124,9 @@ function collectExportLocal(ctx: CheckerContext, node: Node): void {
 function collectVariable(ctx: CheckerContext, node: Node): void {
 	const d = node.data as VariableDeclData;
 	const mutable = d.declKind !== DeclKind.Const;
-	defineOrError(ctx, makeSymbol(d.declName, SymbolKind.Variable, unknownType(), mutable), node);
+	const sym = makeSymbol(d.declName, SymbolKind.Variable, unknownType(), mutable);
+	sym.symbolType.sym = sym;
+	defineOrError(ctx, sym, node);
 }
 
 // ===== Decorator Handling =====
@@ -168,6 +170,7 @@ function collectFunction(ctx: CheckerContext, node: Node): void {
 	const d = node.data as FunctionDeclData;
 	// Define symbol first — needed so extension can link to it
 	const sym = makeSymbol(d.fnName, SymbolKind.Function, unknownType(), false);
+	sym.symbolType.sym = sym;
 	// Extern functions are FFI bindings — implicitly exported for cross-module use
 	if (d.fnFlags === "extern" || d.fnFlags.indexOf("extern", 0) >= 0) {
 		setFlag(sym, SymbolFlag.Exported);
@@ -217,6 +220,8 @@ function collectClass(ctx: CheckerContext, node: Node): void {
 	}
 	const classType = createRef(innerType);
 	const sym = makeSymbol(d.className, SymbolKind.Class, classType, false);
+	classType.sym = sym;
+	innerType.sym = sym;
 	defineOrError(ctx, sym, node);
 	// Register methods as extensions — reference parity: procedures are separate from object types.
 	// Static → static extension (typeof ClassName). Instance → instance extension.
@@ -268,17 +273,20 @@ function collectClassMethod(ctx: CheckerContext, className: string, classGeneric
 	}
 	const mangledName = className + "_" + md.methodName;
 	const methodSym = makeSymbol(mangledName, SymbolKind.Function, fnType, false);
+	fnType.sym = methodSym;
 	if (md.nativeName !== null && md.nativeName !== "") {
 		methodSym.nativeName = md.nativeName;
 	}
 	if (builtinKind !== "") {
 		methodSym.builtinKind = builtinKind;
 	}
-	defineOrError(ctx, methodSym, member);
-	// Link node → symbol so resolvePass finds the exact sym (not an overload)
+	// Class method symbols live ONLY in the extension registry, NOT in the scope.
+	// This prevents mangled names (JSON_parse) from polluting identifier completions.
+	// The checker resolves them via extension registry lookup in checkMemberExpr.
+	// Link node → symbol for resolvePass
 	member.resolvedSym = methodSym;
 	const classExt: ExtensionMethod = {
-		methodName: mangledName,
+		methodName: md.methodName,
 		receiverTypeName: className,
 		sourcePath: "",
 		fnType: fnType,
@@ -291,7 +299,16 @@ function collectClassMethod(ctx: CheckerContext, className: string, classGeneric
 
 function collectInterface(ctx: CheckerContext, node: Node): void {
 	const d = node.data as InterfaceDeclData;
-	defineOrError(ctx, makeSymbol(d.interfaceName, SymbolKind.Interface, createStruct(d.interfaceName, [], [], true), false), node);
+	const isExtern = (node.flags & NodeFlag.ExternC) !== 0;
+	const structType = createStruct(d.interfaceName, [], [], true);
+	const sym = makeSymbol(d.interfaceName, SymbolKind.Interface, structType, false);
+	structType.sym = sym;
+	if (isExtern) {
+		setFlag(sym, SymbolFlag.ImportC);
+		setFlag(sym, SymbolFlag.Exported);
+		sym.nativeName = d.interfaceName;
+	}
+	defineOrError(ctx, sym, node);
 }
 
 function collectEnumDecl(ctx: CheckerContext, node: Node): void {
@@ -299,20 +316,23 @@ function collectEnumDecl(ctx: CheckerContext, node: Node): void {
 	const enumValues = d.enumValues !== null ? d.enumValues : [] as number[];
 	const enumType = createEnum(d.enumName, d.enumMembers, enumValues);
 	const enumSym = makeSymbol(d.enumName, SymbolKind.Enum, enumType, false);
+	enumType.sym = enumSym;
+	if ((node.flags & NodeFlag.ExternC) !== 0) {
+		setFlag(enumSym, SymbolFlag.ImportC);
+		setFlag(enumSym, SymbolFlag.Exported);
+		enumSym.nativeName = d.enumName;
+	}
 	defineOrError(ctx, enumSym, node);
 	// Record enum type DEF for symbol graph
 	sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.enumName.length, enumSym, enumType, SymbolKind.Enum, d.enumName, "", true);
-	// Register each enum member as EnumName_MemberName (standard implementation parity)
-	// Needed because checkMemberExpr rewrites Color.Red → Identifier "Color_Red"
+	// Record each enum member for the symbol graph (DEF records for go-to-definition).
+	// Enum member mangled names (Color_Red) are NOT registered in scope — they are
+	// resolved at use site in checkMemberExpr via synthetic symbols.
 	let mi = 0;
 	while (mi < d.enumMembers.length) {
-		const mangledName = d.enumName + "_" + d.enumMembers[mi];
-		const memberSym = makeSymbol(mangledName, SymbolKind.Variable, enumType, false);
-		// Use per-member location from parser (Reference parity: each enum member has its own location)
 		const memberLoc = d.memberLocations !== null && mi < d.memberLocations.length ? d.memberLocations[mi] : node.location;
+		const memberSym = makeSymbol(d.enumMembers[mi], SymbolKind.EnumMember, enumType, false);
 		memberSym.location = memberLoc;
-		defineOrError(ctx, memberSym, node);
-		// Record each enum member DEF for symbol graph
 		sgRecordSym(ctx, memberLoc.line, memberLoc.column, memberLoc.column + d.enumMembers[mi].length, memberSym, enumType, SymbolKind.EnumMember, d.enumMembers[mi], d.enumName, true);
 		mi = mi + 1;
 	}
@@ -321,8 +341,10 @@ function collectEnumDecl(ctx: CheckerContext, node: Node): void {
 
 function collectTypeAlias(ctx: CheckerContext, node: Node): void {
 	const d = node.data as TypeAliasDeclData;
-	// Fresh type (not singleton unknownType) — resolvePass will assignType in-place (reference: tyForward)
-	defineOrError(ctx, makeSymbol(d.aliasName, SymbolKind.TypeAlias, emptyType(), false), node);
+	const aliasType = emptyType();
+	const sym = makeSymbol(d.aliasName, SymbolKind.TypeAlias, aliasType, false);
+	aliasType.sym = sym;
+	defineOrError(ctx, sym, node);
 }
 
 function collectExtern(ctx: CheckerContext, node: Node): void {
@@ -336,6 +358,7 @@ function collectExtern(ctx: CheckerContext, node: Node): void {
 		_ => SymbolKind.Variable,
 	};
 	const sym = makeSymbol(d.externName, kind, unknownType(), false);
+	sym.symbolType.sym = sym;
 	// Extern declarations are FFI bindings — implicitly exported for cross-module use
 	setFlag(sym, SymbolFlag.Exported);
 	setFlag(sym, SymbolFlag.ImportC);
@@ -350,7 +373,9 @@ function collectExtern(ctx: CheckerContext, node: Node): void {
 
 function collectMacro(ctx: CheckerContext, node: Node): void {
 	const d = node.data as MacroDeclData;
-	defineOrError(ctx, makeSymbol(d.macroDeclName, SymbolKind.Function, unknownType(), false), node);
+	const sym = makeSymbol(d.macroDeclName, SymbolKind.Function, unknownType(), false);
+	sym.symbolType.sym = sym;
+	defineOrError(ctx, sym, node);
 }
 
 // Look up resolved source path for an import specifier from the module's import entries
@@ -430,20 +455,8 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 				if (exportInfo.kind === SymbolKind.Enum && exportInfo.symType.typeNames !== null) {
 					const enumTypeName = exportInfo.symType.typeName;
 					const enumDefModule = resolveDefiningModule(exportInfo, sourcePath);
-					let mi = 0;
-					while (mi < exportInfo.symType.typeNames.length) {
-						const mangledName = enumTypeName + "_" + exportInfo.symType.typeNames[mi];
-						if (lookupLocal(ctx.table, mangledName) === null) {
-							const memberSym = makeSymbol(mangledName, SymbolKind.Variable, exportInfo.symType, false);
-							memberSym.modulePath = enumDefModule;
-							// Preserve per-member declaration location (Reference parity)
-							if (exportInfo.memberLocations !== null && mi < exportInfo.memberLocations.length) {
-								memberSym.location = exportInfo.memberLocations[mi];
-							}
-							defineOrError(ctx, memberSym, node);
-						}
-						mi = mi + 1;
-					}
+					// Enum member mangled names NOT registered in scope — resolved at use site.
+				// Skip: was defineOrError for Color_Red etc.
 				}
 				const primarySym = lookupLocal(ctx.table, localAlias);
 				// Restore cross-module metadata (nativeName, builtinKind, defaults)
@@ -742,10 +755,9 @@ test "collect enum" {
 	assert symbolKindOf("enum Color { Red, Green }", "Color") === SymbolKind.Enum;
 }
 
-test "collect enum members as symbols" {
-	assert hasSymbol("enum Color { Red, Green, Blue }", "Color_Red");
-	assert hasSymbol("enum Color { Red, Green, Blue }", "Color_Green");
-	assert hasSymbol("enum Color { Red, Green, Blue }", "Color_Blue");
+test "collect enum type (members resolved at use site)" {
+	assert hasSymbol("enum Color { Red, Green, Blue }", "Color");
+	// Mangled members (Color_Red) no longer in scope — resolved in checkMemberExpr
 }
 
 test "collect type alias" {

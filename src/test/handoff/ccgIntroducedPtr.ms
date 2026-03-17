@@ -3,17 +3,10 @@
 // Verifies the codegen decision of whether to introduce pointer params
 // based on struct size, interface flag, and Ref wrapping.
 
-import {
-	TypeKind, createStruct, createRef, createPtr,
-	numberType, stringType, createMaybeType,
-} from "../../checker/types";
+import { createStruct, createRef, createPtr, numberType, stringType, createMaybeType } from "../../checker/types";
 import { ccgIntroducedPtr, isPointerType } from "../../codegen/c/types";
 import { fullPipeline, findFnDecl } from "./helpers";
-import {
-	Node, NodeKind, ProgramData, ExportDeclData,
-	FunctionDeclData, CallExprData, BlockStmtData,
-	IfStmtData, ReturnStmtData, ExprStmtData,
-} from "../../ast/node";
+import { Node, NodeKind, ProgramData, ExportDeclData, FunctionDeclData, CallExprData, BlockStmtData, IfStmtData, ReturnStmtData, ExprStmtData, TypeKind } from "../../ast/node";
 
 test "ccgIntroducedPtr: small struct = false" {
 	const t = createStruct("Small", ["x", "y"], [numberType(), numberType()], true);

@@ -19,13 +19,8 @@
 //   → const $result_0 = f();
 //     if (!$result_0.ok) { return Result.err($result_0.error); }
 
-import {
-	Node, NodeKind, DeclKind, SourceLocation, makeLoc, Symbol, SymbolKind, SymbolState,
-	VariableDeclData, ReturnStmtData, ExprStmtData, TryExprData,
-	CallExprData, MemberExprData, IdentifierData, HiddenDerefData,
-	IfStmtData,
-} from "../../ast/node";
-import { Type, TypeKind, booleanType, unknownType, isResult, getResultOkType, getResultErrType } from "../../checker/types";
+import { Node, NodeKind, DeclKind, SourceLocation, makeLoc, Symbol, SymbolKind, SymbolState, VariableDeclData, ReturnStmtData, ExprStmtData, TryExprData, CallExprData, MemberExprData, IdentifierData, HiddenDerefData, IfStmtData, Type, TypeKind } from "../../ast/node";
+import { booleanType, unknownType, isResult, getResultOkType, getResultErrType } from "../../checker/types";
 import { makeSymbol, lookupSymbol } from "../../checker/symbol";
 import { TransformContext, freshTemp } from "../context";
 import { walkNode, walkExpandBlocksHooked, containsExprKind, replaceInExpr } from "../walker";
@@ -265,7 +260,8 @@ import {
 	CallExprData as CData, MemberExprData as MData,
 } from "../../ast/node";
 import { parseInput, makeCtx, getStmts } from "../testUtil";
-import { TypeKind as TK, createResult, numberType, stringType } from "../../checker/types";
+import { TypeKind as TK } from "../../ast/node";
+import { createResult, numberType, stringType } from "../../checker/types";
 
 // --- Structural tests (pipeline output shape) ---
 

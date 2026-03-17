@@ -24,25 +24,28 @@ export class TaFileEntry {
 export class TaFileInputStore {
 	files: TaFileEntry[];
 	nextFileId: number;
+	pathIndex: Map<string, number>;  // filePath → array index (O(1) lookup)
 }
 
 export function createFileInputStore(): TaFileInputStore {
 	return {
 		files: [],
 		nextFileId: 0,
+		pathIndex: new Map<string, number>(),
 	};
 }
 
 // ===== Lookup =====
 
 function findByPath(store: TaFileInputStore, filePath: string): number {
-	for (let i = 0; i < store.files.length; i = i + 1) {
-		if (store.files[i].filePath === filePath) return i;
-	}
+	if (store.pathIndex.has(filePath)) return store.pathIndex.get(filePath) as number;
 	return -1;
 }
 
 function findByFileId(store: TaFileInputStore, fileId: number): number {
+	// fileId === array index for sequentially assigned IDs
+	if (fileId >= 0 && fileId < store.files.length && store.files[fileId].fileId === fileId) return fileId;
+	// Fallback linear scan for non-sequential IDs
 	for (let i = 0; i < store.files.length; i = i + 1) {
 		if (store.files[i].fileId === fileId) return i;
 	}
@@ -71,6 +74,7 @@ export function setFileText(store: TaFileInputStore, filePath: string, source: s
 		fileId,
 		durability: TaDurability.Low,
 	};
+	store.pathIndex.set(filePath, store.files.length);
 	store.files.push(entry);
 	return true;
 }

@@ -9,21 +9,8 @@
 //
 // Reference: standard optimized C codegen patterns for struct parameters
 
-import {
-	Node, NodeKind,
-	FunctionDeclData, CallExprData, IdentifierData,
-	BlockStmtData, IfStmtData, WhileStmtData,
-	ReturnStmtData, ExprStmtData, BinaryExprData,
-	VariableDeclData, ForOfStmtData, ForStmtData,
-	DoWhileStmtData, TryCatchStmtData,
-	MemberExprData, ArrayAccessData, UnaryExprData,
-	ConditionalExprData, ObjectLiteralData,
-	UpdateExprData, SpreadExprData,
-	ArrayLiteralData, MoveExprData,
-	HiddenDerefData, HiddenStdConvData,
-	SourceLocation, makeLoc,
-} from "../../ast/node";
-import { Type, TypeKind, createPtr, isInterfaceType, getTypeSize, isResult } from "../../checker/types";
+import { Node, NodeKind, FunctionDeclData, CallExprData, IdentifierData, BlockStmtData, IfStmtData, WhileStmtData, ReturnStmtData, ExprStmtData, BinaryExprData, VariableDeclData, ForOfStmtData, ForStmtData, DoWhileStmtData, TryCatchStmtData, MemberExprData, ArrayAccessData, UnaryExprData, ConditionalExprData, ObjectLiteralData, UpdateExprData, SpreadExprData, ArrayLiteralData, MoveExprData, HiddenDerefData, HiddenStdConvData, SourceLocation, makeLoc, Type, TypeKind } from "../../ast/node";
+import { createPtr, isInterfaceType, getTypeSize, isResult } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeHiddenAddr, makeHiddenDeref } from "../util";

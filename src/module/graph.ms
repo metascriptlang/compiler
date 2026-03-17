@@ -58,7 +58,6 @@ export class Module {
 	exportNames: string[];     // names of exported symbols (for lookup)
 	imports: ImportEntry[];    // resolved import dependencies
 	errors: ModuleError[];     // per-module errors (structured)
-	isCHeader: boolean;        // true if loaded from .h file (C header module)
 }
 
 // ===== Circular Dependency Info =====
@@ -104,7 +103,6 @@ export function createModule(path: string): Module {
 		exportNames: [],
 		imports: [],
 		errors: [],
-		isCHeader: false,
 	};
 }
 

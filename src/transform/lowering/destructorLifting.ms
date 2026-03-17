@@ -21,16 +21,12 @@
 //   =trace     TypeName_trace(self, callback)    — ORC cycle tracing (cyclic types only)
 //   TypeInfo   TypeName_typeInfo                  — msTypeInfo for ORC runtime
 
-import {
-	Node, NodeKind, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc,
-	InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData,
-	IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData,
-} from "../../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, Type, TypeKind, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
-import { Type, TypeKind, isPrimitiveKind, AttachedOp, setAttachedOp, unwrapRef, createArray, createPtr, createRef, createVar, createPrimitive, stringType, getTypeSize } from "../../checker/types";
+import { isPrimitiveKind, setAttachedOp, unwrapRef, createArray, createPtr, createRef, createVar, createPrimitive, stringType, getTypeSize } from "../../checker/types";
 import { walkNode } from "../walker";
-import { Symbol, lookupSymbol, SymbolKind } from "../../checker/symbol";
+import { lookupSymbol } from "../../checker/symbol";
 import { CheckerContext } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput } from "../testUtil";
@@ -954,7 +950,7 @@ function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx,
 		const pB = makeMember(bField, "p", loc);
 		return makeBinary(pA, "===", pB, loc);
 	}
-	// Closure fields — compare function pointer and environment separately (Nim parity: genEqProc)
+	// Closure fields — compare function pointer and environment separately (reference parity)
 	if (fieldType.kind === TypeKind.Function) {
 		const fnA = makeMember(aField, "fn", loc);
 		const fnB = makeMember(bField, "fn", loc);

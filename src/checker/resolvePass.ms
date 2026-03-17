@@ -6,24 +6,10 @@
 //   A. Parsing type annotation strings into Type objects
 //   B. Building proper Function/Object types for collected declarations
 
-import {
-	Node, NodeKind, SourceLocation, createNodeAt, makeLoc,
-	ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData,
-	ClassDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData,
-	TypeAliasDeclData, VariableDeclData, DecoratedDeclData,
-	IdentifierData, TypeGenericData, TypeArrayData, TypeUnionData, TypeFunctionData, TypeObjectData,
-} from "../ast/node";
-import {
-	Type, TypeKind, TypeFlag,
-	unknownType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType,
-	createPrimitive, createArray, createFunction, createClosureType, createStruct,
-	createResult, createPromise, createTypeRef, createUnion, createGenericParam, createDistinct, substituteType, createGenericInstance,
-	isResult, getResultOkType, getResultErrType,
-	createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType,
-	setMinArity, typeNameOf, assignType, isInterfaceType, unwrapRef, propagateHasAsgn,
-} from "./types";
-import { Symbol, SymbolKind, SymbolTable, ScopeKind, lookupSymbol, lookupLocal, defineSymbol, makeSymbol, openScope, closeScope, SymbolState, hasFlag, setFlag, SymbolFlag } from "./symbol";
-import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addErrorRange, addWarning, addFatalError, sgRecordSym } from "./context";
+import { Node, NodeKind, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ExternKind, IdentifierData, TypeGenericData, TypeArrayData, TypeUnionData, TypeFunctionData, TypeObjectData, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { unknownType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createTypeRef, createUnion, createGenericParam, createDistinct, substituteType, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, setMinArity, typeNameOf, assignType, isInterfaceType, unwrapRef, propagateHasAsgn } from "./types";
+import { SymbolTable, ScopeKind, lookupSymbol, lookupLocal, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, setFlag, SymbolFlag } from "./symbol";
+import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addErrorRange, addWarning, addFatalError, addFatalErrorRange, sgRecordSym } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim } from "../utils/string";
 import { getProperty } from "./types";
 import { getGenericDecl, getGenericDeclFieldNames, getGenericDeclFieldTypes, addGenericTypeInst, findGenericTypeInstIdx } from "../parser/context";
@@ -32,7 +18,7 @@ import { getDeclName } from "./collectPass";
 // ===== A. Resolve Annotation Strings =====
 
 // Parse function type string to resolved Function type
-function resolveFunctionType(text: string, ctx: CheckerContext): Type {
+function resolveFunctionType(text: string, ctx: CheckerContext, line: number, col: number): Type {
 	let depth = 0;
 	let closeIdx = -1;
 	for (let i = 0; i < text.length; i += 1) {
@@ -51,7 +37,7 @@ function resolveFunctionType(text: string, ctx: CheckerContext): Type {
 	if (afterParen.charAt(0) !== "=" || afterParen.charAt(1) !== ">") return createTypeRef(text);
 	const retStr = afterParen.slice(2, afterParen.length).trim();
 
-	const returnType = (retStr !== "") ? resolveAnnotation(retStr, ctx) : voidType();
+	const returnType = (retStr !== "") ? resolveAnnotation(retStr, ctx, line, col) : voidType();
 
 	// Standard reference parity: procedure type literals default to closure calling convention
 	if (paramsStr === "") return createClosureType([], [], returnType);
@@ -63,16 +49,16 @@ function resolveFunctionType(text: string, ctx: CheckerContext): Type {
 		const colonIdx = findChar(part, ":");
 		if (colonIdx > 0) {
 			paramNames.push(part.slice(0, colonIdx).trim());
-			paramTypes.push(resolveAnnotation(part.slice(colonIdx + 1, part.length).trim(), ctx));
+			paramTypes.push(resolveAnnotation(part.slice(colonIdx + 1, part.length).trim(), ctx, line, col));
 		} else {
 			paramNames.push("");
-			paramTypes.push(resolveAnnotation(part, ctx));
+			paramTypes.push(resolveAnnotation(part, ctx, line, col));
 		}
 	}
 	return createClosureType(paramTypes, paramNames, returnType);
 }
 
-export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
+export function resolveAnnotation(text: string, ctx: CheckerContext, line: number, col: number): Type {
 	const trimmed = text.trim();
 	if (trimmed === "") return unknownType();
 
@@ -91,7 +77,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 		if (fnCloseIdx >= 0) {
 			const afterClose = trimmed.slice(fnCloseIdx + 1, trimmed.length).trim();
 			if (afterClose.length >= 2 && afterClose.charAt(0) === "=" && afterClose.charAt(1) === ">") {
-				return resolveFunctionType(trimmed, ctx);
+				return resolveFunctionType(trimmed, ctx, line, col);
 			}
 		}
 	}
@@ -103,7 +89,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 		for (const up of unionParts) {
 			const part = up.trim();
 			if (part.length > 0) {
-				members.push(resolveAnnotation(part, ctx));
+				members.push(resolveAnnotation(part, ctx, line, col));
 			}
 		}
 		// T | null where T is interface → Maybe<T> (Reference: Maybe/Option parity)
@@ -144,7 +130,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 					const fname = field.slice(0, colonIdx).trim();
 					const ftypeStr = field.slice(colonIdx + 1, field.length).trim();
 					names.push(fname);
-					types.push(resolveAnnotation(ftypeStr, ctx));
+					types.push(resolveAnnotation(ftypeStr, ctx, line, col));
 				}
 			}
 		}
@@ -154,11 +140,11 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 	// Check for array suffix [] or [ ] (token-joined form from captureOptionalType)
 	if (trimmed.endsWith("[ ]")) {
 		const inner = trimmed.slice(0, trimmed.length - 3).trim();
-		return createArray(resolveAnnotation(inner, ctx));
+		return createArray(resolveAnnotation(inner, ctx, line, col));
 	}
 	if (trimmed.endsWith("[]")) {
 		const inner = trimmed.slice(0, trimmed.length - 2);
-		return createArray(resolveAnnotation(inner, ctx));
+		return createArray(resolveAnnotation(inner, ctx, line, col));
 	}
 	if (trimmed.endsWith("]")) {
 		const openBracket = findChar(trimmed, "[");
@@ -166,10 +152,10 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 			const inner = trimmed.slice(0, openBracket).trim();
 			const sizeStr = trimmed.slice(openBracket + 1, trimmed.length - 1).trim();
 			if (sizeStr === "" || sizeStr === " ") {
-				return createArray(resolveAnnotation(inner, ctx));
+				return createArray(resolveAnnotation(inner, ctx, line, col));
 			}
 			const size = parseIntStr(sizeStr);
-			return createSizedArray(resolveAnnotation(inner, ctx), size);
+			return createSizedArray(resolveAnnotation(inner, ctx, line, col), size);
 		}
 	}
 
@@ -181,28 +167,28 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 		const args = splitTopLevel(argsText, ",");
 
 		if (baseName === "Result" && args.length === 2) {
-			return createResult(resolveAnnotation(args[0], ctx), resolveAnnotation(args[1], ctx));
+			return createResult(resolveAnnotation(args[0], ctx, line, col), resolveAnnotation(args[1], ctx, line, col));
 		}
 		if (baseName === "Promise" && args.length === 1) {
-			return createPromise(resolveAnnotation(args[0], ctx));
+			return createPromise(resolveAnnotation(args[0], ctx, line, col));
 		}
 		if (baseName === "Array" && args.length === 1) {
-			return createArray(resolveAnnotation(args[0], ctx));
+			return createArray(resolveAnnotation(args[0], ctx, line, col));
 		}
 		if (baseName === "Span" && args.length === 1) {
-			return createSpan(resolveAnnotation(args[0], ctx));
+			return createSpan(resolveAnnotation(args[0], ctx, line, col));
 		}
 		if (baseName === "Borrow" && args.length === 1) {
-			return createBorrow(resolveAnnotation(args[0], ctx));
+			return createBorrow(resolveAnnotation(args[0], ctx, line, col));
 		}
 		if (baseName === "Ptr" && args.length === 1) {
-			return createPtr(resolveAnnotation(args[0], ctx));
+			return createPtr(resolveAnnotation(args[0], ctx, line, col));
 		}
 		if (baseName === "Ref" && args.length === 1) {
-			return createRef(resolveAnnotation(args[0], ctx));
+			return createRef(resolveAnnotation(args[0], ctx, line, col));
 		}
 		if (baseName === "Var" && args.length === 1) {
-			return createVar(resolveAnnotation(args[0], ctx));
+			return createVar(resolveAnnotation(args[0], ctx, line, col));
 		}
 		// Generic interface/class resolution (Map, Set, user-defined generics)
 		const genericParams = getGenericDecl(baseName);
@@ -213,7 +199,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 			let allGenericParams = true;
 			const resolvedArgs: Type[] = [];
 			for (const arg of args) {
-				const resolved = resolveAnnotation(arg.trim(), ctx);
+				const resolved = resolveAnnotation(arg.trim(), ctx, line, col);
 				resolvedArgs.push(resolved);
 				if (resolved.kind !== TypeKind.GenericParam) allGenericParams = false;
 			}
@@ -225,9 +211,11 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 					ensureShaped(baseSym, ctx);
 					let baseType = baseSym.symbolType;
 					if (baseType.kind === TypeKind.Ref && baseType.typeReturn !== null) baseType = baseType.typeReturn;
-					return createGenericInstance(baseType, resolvedArgs);
+					const gi1 = createGenericInstance(baseType, resolvedArgs);
+					instantiateGenericBody(gi1, genericParams);
+					return gi1;
 				}
-				return createTypeRef(baseName);
+				return emitUnresolvedTypeRef(ctx, baseName, line, col, "");
 			}
 			// Concrete instantiation: record for codegen
 			recordGenericTypeInstantiation(baseName, genericParams, args, ctx);
@@ -237,14 +225,16 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 				ensureShaped(baseSym2, ctx);
 				const resolvedArgs: Type[] = [];
 				for (const a of args) {
-					resolvedArgs.push(resolveAnnotation(a.trim(), ctx));
+					resolvedArgs.push(resolveAnnotation(a.trim(), ctx, line, col));
 				}
-				return createGenericInstance(baseSym2.symbolType, resolvedArgs);
+				const gi2 = createGenericInstance(baseSym2.symbolType, resolvedArgs);
+				instantiateGenericBody(gi2, genericParams);
+				return gi2;
 			}
-			// Symbol not found — forward reference. Return TypeRef with mangled name for codegen.
+			// Symbol not found — emit error + return TypeRef for recovery
 			const typeArgKey = buildTypeArgKey(args, ctx);
 			const mangledName = baseName + "__" + typeArgKey;
-			return createTypeRef(mangledName);
+			return emitUnresolvedTypeRef(ctx, baseName, line, col, mangledName);
 		}
 		// Non-generic: look up base type
 		const baseSym = lookupSymbol(ctx.table, baseName);
@@ -253,7 +243,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 			ensureShaped(baseSym, ctx);
 			return baseSym.symbolType;
 		}
-		return createTypeRef(baseName);
+		return emitUnresolvedTypeRef(ctx, baseName, line, col, "");
 	}
 
 	// Primitive types, symbol lookup, or forward reference
@@ -288,26 +278,33 @@ export function resolveAnnotation(text: string, ctx: CheckerContext): Type {
 				// and all references automatically see the resolved type.
 				return sym.symbolType;
 			}
-			return createTypeRef(trimmed);
+			return emitUnresolvedTypeRef(ctx, trimmed, line, col, "");
 		},
 	};
 }
 
-// Location-aware variant: emits an error when a type name can't be resolved.
-// Use this when resolving user-written type annotations (function params, return types,
-// variable declarations) where source location is available.
-// Reference parity: errors immediately on unresolved type identifiers.
-export function resolveAnnotationLoc(text: string, ctx: CheckerContext, line: number, col: number): Type {
-	const result = resolveAnnotation(text, ctx);
-	if (result.kind === TypeKind.TypeReference && line > 0) {
-		// TypeRef with a simple name (no __ mangling = not a generic specialization)
-		const name = result.typeName;
-		if (name.indexOf("__") < 0 && name.indexOf("typeof ") < 0
-				&& name !== "unknown" && name !== "any" && name !== "undefined" && name !== "never") {
-			addFatalError(ctx, `Unresolved type '${name}' - missing import?`, line, col);
-		}
+// Emit error for unresolved type name and return TypeRef for recovery.
+// Reference parity: semTypeIdent calls localError via qualifiedLookUp({checkUndeclared}).
+// When line > 0, a located diagnostic is emitted. When line === 0 (inference-time),
+// no error — the caller doesn't have source location.
+function isValidTypeIdentifier(name: string): boolean {
+	if (name.length === 0) return false;
+	const ch0 = name.charAt(0);
+	// String literals, quoted names, numbers — not type identifiers
+	if (ch0 === "\"" || ch0 === "'" || (ch0 >= "0" && ch0 <= "9")) return false;
+	// Names with dashes or spaces — string literal union members (parser strips quotes)
+	if (name.indexOf("-") >= 0 || name.indexOf(" ") >= 0) return false;
+	return true;
+}
+
+function emitUnresolvedTypeRef(ctx: CheckerContext, name: string, line: number, col: number, mangledName: string): Type {
+	if (line > 0 && isValidTypeIdentifier(name)
+			&& name.indexOf("__") < 0 && name.indexOf("typeof ") < 0
+			&& name !== "unknown" && name !== "any" && name !== "undefined" && name !== "never") {
+		addWarning(ctx, `Unresolved type '${name}' - missing import?`, line, col);
 	}
-	return result;
+	if (mangledName !== "") return createTypeRef(mangledName);
+	return createTypeRef(name);
 }
 
 // ===== TypeExpr Recording (standard parity: markUsed in semTypeNode) =====
@@ -393,6 +390,7 @@ export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
 			NodeKind.ClassDecl => resolveClass(ctx, node),
 			NodeKind.TypeAliasDecl => resolveTypeAlias(ctx, node),
 			NodeKind.VariableDecl => resolveVariable(ctx, node),
+			NodeKind.ExternDecl => resolveExtern(ctx, node),
 			_ => {},
 		};
 	}
@@ -517,7 +515,7 @@ function resolveTypeStrings(typeStrs: string[], count: number, ctx: CheckerConte
 	const types: Type[] = [];
 	for (let i = 0; i < count; i += 1) {
 		if (i < typeStrs.length && typeStrs[i] !== "") {
-			types.push(resolveAnnotationLoc(typeStrs[i], ctx, line, col));
+			types.push(resolveAnnotation(typeStrs[i], ctx, line, col));
 		} else {
 			types.push(unknownType());
 		}
@@ -537,7 +535,7 @@ function defineGenericParam(ctx: CheckerContext, paramStr: string): void {
 		const constraintStr = paramStr.slice(colonPos + 1, paramStr.length);
 		const gp = createGenericParam(paramName);
 		// Store constraint type in typeExtra
-		gp.typeExtra = resolveAnnotation(constraintStr, ctx);
+		gp.typeExtra = resolveAnnotation(constraintStr, ctx, 0, 0);
 		defineSymbol(ctx.table, makeSymbol(paramName, SymbolKind.TypeAlias, gp, false));
 	} else {
 		// No constraint: "T"
@@ -616,7 +614,7 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 	}
 
 	const retLoc = node.typeExpr !== null ? node.typeExpr.location : node.location;
-	const returnType = (d.fnReturnType !== "") ? resolveAnnotationLoc(d.fnReturnType, ctx, retLoc.line, retLoc.column) : unknownType();
+	const returnType = (d.fnReturnType !== "") ? resolveAnnotation(d.fnReturnType, ctx, retLoc.line, retLoc.column) : unknownType();
 	// Record return type annotation positions for LSP
 	resolveTypeExpr(node.typeExpr, ctx);
 	const fnType = createFunction(paramTypes, d.params, returnType);
@@ -762,7 +760,7 @@ function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 		return;
 	}
 
-	const resolved = resolveAnnotationLoc(d.aliasType, ctx, node.location.line, node.location.column);
+	const resolved = resolveAnnotation(d.aliasType, ctx, node.location.line, node.location.column);
 	resolveTypeExpr(node.typeExpr, ctx);
 	// Propagate alias name to Union types (Reference gap: string-based annotations don't carry names)
 	if (resolved.kind === TypeKind.Union && resolved.typeName === "") {
@@ -785,7 +783,7 @@ function resolveTypeAlias(ctx: CheckerContext, node: Node): void {
 //   typeNames = [discFieldName, variantKey0, variantKey1, ...]
 function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): Type {
 	// Resolve discriminant type — must be an enum
-	const discType = resolveAnnotation(d.discriminantType, ctx);
+	const discType = resolveAnnotation(d.discriminantType, ctx, 0, 0);
 	if (discType.kind !== TypeKind.Enum) {
 		addError(ctx, "Discriminant type '" + d.discriminantType + "' must be an enum", 0, 0);
 		return null;
@@ -810,7 +808,7 @@ function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): T
 	// Resolve each variant type
 	const variantTypes: Type[] = [];
 	for (const vt of d.variantTypes) {
-		const resolved = resolveAnnotation(vt, ctx);
+		const resolved = resolveAnnotation(vt, ctx, 0, 0);
 		variantTypes.push(resolved);
 	}
 
@@ -833,6 +831,25 @@ function resolveVariable(ctx: CheckerContext, node: Node): void {
 	// Variable annotations are used as hints in Pass 3 (checkVariableDecl)
 	// We don't resolve them here because the symbol isn't defined yet in Pass 2
 	// (variables are defined during Pass 3). Instead, we store the info for later use.
+}
+
+// Resolve extern const/let/var type annotation → set symbol type.
+// Reference parity: importc symbols get their type resolved during sem pass.
+function resolveExtern(ctx: CheckerContext, node: Node): void {
+	const d = node.data as ExternDeclData;
+	const sym = lookupSymbol(ctx.table, d.externName);
+	if (sym === null) return;
+	node.resolvedSym = sym;
+
+	// Resolve type annotation if present
+	if (d.externType !== "") {
+		const resolved = resolveAnnotation(d.externType, ctx, node.location.line, node.location.column);
+		if (resolved.kind !== TypeKind.Unknown) {
+			sym.symbolType = resolved;
+			resolved.sym = sym;
+			node.nodeType = resolved;
+		}
+	}
 }
 
 function resolveClass(ctx: CheckerContext, node: Node): void {
@@ -890,7 +907,7 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 			}
 			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx, member.location.line, member.location.column);
 			resolveTypeExprs(member.typeExprs, ctx);
-			const returnType = (md.methodReturnType !== "") ? resolveAnnotationLoc(md.methodReturnType, ctx, member.location.line, member.location.column) : unknownType();
+			const returnType = (md.methodReturnType !== "") ? resolveAnnotation(md.methodReturnType, ctx, member.location.line, member.location.column) : unknownType();
 			resolveTypeExpr(member.typeExpr, ctx);
 			if (hasMethodGenerics) {
 				closeScope(ctx.table);
@@ -910,7 +927,7 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 			const pd = member.data as PropertyDeclData;
 			memberNames.push(pd.propName);
 			if (pd.propType !== "") {
-				const propType = resolveAnnotationLoc(pd.propType, ctx, member.location.line, member.location.column);
+				const propType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
 				resolveTypeExpr(member.typeExpr, ctx);
 				member.nodeType = propType;
 				memberTypes.push(propType);
@@ -959,7 +976,7 @@ import {
 
 function resolveWith(text: string): Type {
 	const ctx = createContext();
-	return resolveAnnotation(text, ctx);
+	return resolveAnnotation(text, ctx, 0, 0);
 }
 
 test "number" { assert resolveWith("number").kind === TypeKind.Number; }
@@ -1031,7 +1048,7 @@ test "string | number" {
 test "known symbol" {
 	const ctx = createContext();
 	defineSymbol(ctx.table, makeSymbol("MyType", SymbolKind.Interface, createStruct("MyType", [], [], true), false));
-	const t = resolveAnnotation("MyType", ctx);
+	const t = resolveAnnotation("MyType", ctx, 0, 0);
 	assert t.kind === TypeKind.Struct;
 	assert t.typeName === "MyType";
 }
@@ -1095,7 +1112,7 @@ test "Box<number> records instantiation" {
 	updateGenericDeclFields("Box", "value", "T");
 	// Resolve Box<number> — should record instantiation
 	const ctx = createContext();
-	const t = resolveAnnotation("Box<number>", ctx);
+	const t = resolveAnnotation("Box<number>", ctx, 0, 0);
 	assert t.kind === TypeKind.TypeReference;
 	assert t.typeName === "Box__number";
 	// Check instantiation was recorded
@@ -1113,7 +1130,7 @@ test "Pair<string, number> records instantiation" {
 	addGenericDecl("Pair", "A,B");
 	updateGenericDeclFields("Pair", "first|second", "A|B");
 	const ctx = createContext();
-	const t = resolveAnnotation("Pair<string, number>", ctx);
+	const t = resolveAnnotation("Pair<string, number>", ctx, 0, 0);
 	assert t.kind === TypeKind.TypeReference;
 	assert t.typeName === "Pair__string_number";
 	const idx = findGenericTypeInstIdx("Pair", "string_number");
@@ -1128,8 +1145,8 @@ test "dedup instantiation" {
 	addGenericDecl("Box", "T");
 	updateGenericDeclFields("Box", "value", "T");
 	const ctx = createContext();
-	resolveAnnotation("Box<number>", ctx);
-	resolveAnnotation("Box<number>", ctx);
+	resolveAnnotation("Box<number>", ctx, 0, 0);
+	resolveAnnotation("Box<number>", ctx, 0, 0);
 	assert getGenericTypeInstCount() === 1;
 }
 
@@ -1139,7 +1156,7 @@ test "non-generic base falls through" {
 	// No addGenericDecl for "Foo" — should fall through to symbol lookup
 	const ctx = createContext();
 	defineSymbol(ctx.table, makeSymbol("Foo", SymbolKind.Interface, createStruct("Foo", [], [], true), false));
-	const t = resolveAnnotation("Foo<number>", ctx);
+	const t = resolveAnnotation("Foo<number>", ctx, 0, 0);
 	// Non-generic: returns base type (Foo)
 	assert t.kind === TypeKind.Struct;
 	assert t.typeName === "Foo";
@@ -1152,7 +1169,7 @@ test "generic class Container<T> records instantiation" {
 	addGenericDecl("Container", "T");
 	updateGenericDeclFields("Container", "item|count", "T|number");
 	const ctx = createContext();
-	const t = resolveAnnotation("Container<string>", ctx);
+	const t = resolveAnnotation("Container<string>", ctx, 0, 0);
 	assert t.kind === TypeKind.TypeReference;
 	assert t.typeName === "Container__string";
 	assert getGenericTypeInstCount() === 1;
@@ -1192,7 +1209,7 @@ test "constrained interface Box<T extends number>" {
 	addGenericDecl("Box", "T:number");
 	updateGenericDeclFields("Box", "value", "T");
 	const ctx = createContext();
-	const t = resolveAnnotation("Box<number>", ctx);
+	const t = resolveAnnotation("Box<number>", ctx, 0, 0);
 	assert t.kind === TypeKind.TypeReference;
 	assert t.typeName === "Box__number";
 }

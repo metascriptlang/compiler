@@ -6,8 +6,8 @@
 // Checker inserts HiddenStdConv for JsonValue → string/number/boolean/int32.
 // This transform rewrites both to direct C runtime calls.
 
-import { Node, NodeKind, MemberExprData, ProgramData, HiddenStdConvData, NodeFlag, makeLoc } from "../../ast/node";
-import { TypeKind, unwrapRef } from "../../checker/types";
+import { Node, NodeKind, MemberExprData, ProgramData, HiddenStdConvData, NodeFlag, makeLoc, TypeKind } from "../../ast/node";
+import { unwrapRef } from "../../checker/types";
 import { TransformContext, hasEmitted } from "../context";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall, makeString } from "../util";

@@ -4,9 +4,9 @@
 // demands it (var decl with type annotation, binary ops with integer operand).
 // Reference parity: standard reference's integer literal and range handling.
 
+import { TypeKind } from "../../ast/node";
 import { checkSource, strictErrorCount, warningCount, hasError } from "./helpers";
 import { lookupSymbol } from "../../checker/symbol";
-import { TypeKind } from "../../checker/types";
 
 // ===== A: Variable declaration coercion =====
 

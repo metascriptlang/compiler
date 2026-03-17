@@ -2,13 +2,7 @@
 // Validates each phase produces correct output for the next
 
 import { fullPipeline, checkSource, findFnDecl } from "./helpers";
-import {
-	Node, NodeKind, NodeFlag, ProgramData, FunctionDeclData,
-	VariableDeclData, CallExprData, MemberExprData, IdentifierData,
-	ExprStmtData, BlockStmtData, IfStmtData, ReturnStmtData,
-	BinaryExprData, UnaryExprData, ObjectLiteralData,
-} from "../../ast/node";
-import { Type, TypeKind } from "../../checker/types";
+import { Node, NodeKind, NodeFlag, ProgramData, FunctionDeclData, VariableDeclData, CallExprData, MemberExprData, IdentifierData, ExprStmtData, BlockStmtData, IfStmtData, ReturnStmtData, BinaryExprData, UnaryExprData, ObjectLiteralData, Type, TypeKind } from "../../ast/node";
 import { lookupSymbol } from "../../checker/symbol";
 import { resetAllSideChannels, findCallTypeArg, getExplicitTypeArg } from "../../parser/context";
 import { parseSource } from "../../parser/statements/validation";

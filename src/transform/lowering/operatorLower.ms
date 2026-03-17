@@ -18,12 +18,12 @@
 //
 // Reference compiler: parser.zig:7162 isOperatorName, lexer.zig:422 scanBacktick
 
-import { Node, NodeKind, BinaryExprData, IdentifierData, TypeAssertionData, SourceLocation, ProgramData } from "../../ast/node";
+import { Node, NodeKind, BinaryExprData, IdentifierData, TypeAssertionData, SourceLocation, ProgramData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, PendingTupleOp } from "../context";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary } from "../util";
 import { lookupSymbol } from "../../checker/symbol";
-import { Type, TypeKind, typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType } from "../../checker/types";
+import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType } from "../../checker/types";
 import { findExtension, ExtensionMethod } from "../../checker/context";
 
 // ===== Type Resolution =====
@@ -167,7 +167,7 @@ function resolveOpCall(ctx: TransformContext, typeName: string, opName: string, 
 		callee.nodeType = fnType;
 		return makeCall(callee, [left, right], loc);
 	}
-	// Closure equality: a === b → a.fn === b.fn && a.env === b.env (Nim parity: genEqProc)
+	// Closure equality: a === b → a.fn === b.fn && a.env === b.env (reference parity)
 	if ((opName === "==" || opName === "!=") && leftType.kind === TypeKind.Function) {
 		const fnA = makeMember(left, "fn", loc);
 		const fnB = makeMember(right, "fn", loc);
@@ -331,7 +331,7 @@ export function lowerOperators(program: Node, ctx: TransformContext): Node {
 
 import { createContext, createExtensionRegistry, registerExtension } from "../../checker/context";
 import { createStruct, createFunction, createTuple, createRef, createPtr, createMaybeType, unknownType, numberType, stringType, booleanType } from "../../checker/types";
-import { Symbol, defineSymbol, makeSymbol, SymbolKind, createSymbolTable } from "../../checker/symbol";
+import { defineSymbol, makeSymbol, createSymbolTable } from "../../checker/symbol";
 import { createTransformContext, createTransformContextWithChecker } from "../context";
 import { parseInput, getStmts, firstExprKind, firstCallArgCount } from "../testUtil";
 

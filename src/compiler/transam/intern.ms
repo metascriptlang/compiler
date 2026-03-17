@@ -15,38 +15,33 @@ export interface TaInternEntry {
 export class TaStringInterner {
 	entries: TaInternEntry[];
 	nextId: number;
+	index: Map<string, number>;  // string → id (O(1) dedup lookup)
 }
 
 export function createStringInterner(): TaStringInterner {
 	return {
 		entries: [],
 		nextId: 0,
+		index: new Map<string, number>(),
 	};
 }
 
 // ===== Interner API =====
 
-// Intern a string, returning its unique ID. Deduplicates.
+// Intern a string, returning its unique ID. Deduplicates via Map lookup.
 export function internString(interner: TaStringInterner, s: string): number {
-	for (let i = 0; i < interner.entries.length; i = i + 1) {
-		if (interner.entries[i].value === s) {
-			return interner.entries[i].id;
-		}
-	}
+	if (interner.index.has(s)) return interner.index.get(s) as number;
 	const id = interner.nextId;
 	interner.nextId = interner.nextId + 1;
 	const entry: TaInternEntry = { id: id, value: s };
 	interner.entries.push(entry);
+	interner.index.set(s, id);
 	return id;
 }
 
-// Retrieve interned string by ID.
+// Retrieve interned string by ID. O(1) via direct index (id === array index).
 export function lookupInterned(interner: TaStringInterner, id: number): string {
-	for (let i = 0; i < interner.entries.length; i = i + 1) {
-		if (interner.entries[i].id === id) {
-			return interner.entries[i].value;
-		}
-	}
+	if (id >= 0 && id < interner.entries.length) return interner.entries[id].value;
 	return "";
 }
 

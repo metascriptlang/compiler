@@ -1,10 +1,7 @@
-import { SourceLocation, Node, Symbol, SymbolKind, SymbolState, makeLoc } from "../ast/node";
-import { Type, TypeKind, unknownType } from "./types";
+import { SourceLocation, Node, Symbol, SymbolKind, SymbolState, makeLoc, Type, TypeKind } from "../ast/node";
+import { unknownType } from "./types";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 
-
-// Re-export from ast/node (unified Symbol definition)
-export { Symbol, SymbolKind, SymbolState } from "../ast/node";
 
 // Result<T, E> is now available globally via prelude.
 // In self-hosted source, we use it directly.

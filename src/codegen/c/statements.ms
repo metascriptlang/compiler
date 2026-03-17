@@ -3,20 +3,8 @@
 // Follows standard reference implementation patterns for statement emission.
 // Uses emitStmts/emitStmtsLine for direct write (avoids value-type Builder copy).
 
-import {
-	Node, NodeKind,
-	VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData,
-	BlockStmtData, ExprStmtData, ReturnStmtData,
-	BreakStmtData, ContinueStmtData, DeclKind,
-	TryCatchStmtData, ThrowStmtData,
-	SwitchStmtData, SwitchCaseData,
-	CallExprData, IdentifierData, AssertStmtData, UnreachableStmtData,
-	MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData,
-	TypeAssertionData,
-	isEmptyBlock,
-} from "../../ast/node";
-import { Type, TypeKind, isInterfaceType } from "../../checker/types";
-import { Symbol, SymbolKind } from "../../checker/symbol";
+import { Node, NodeKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, BreakStmtData, ContinueStmtData, DeclKind, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, AssertStmtData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, isEmptyBlock, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { isInterfaceType } from "../../checker/types";
 import {
 	CGen, CProc, CSection,
 	emitStmts, emitStmtsLine, emitStmtsNl,
@@ -27,7 +15,7 @@ import {
 import { genExpr, shimCallArg } from "./expressions";
 import { ensureCrossModuleProto } from "./forward";
 import { safeName } from "./names";
-import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, getCalleeReturnType, genClFullCastNrvo, genClHalfCastNrvo } from "./types";
+import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, genClFullCastNrvo, genClHalfCastNrvo } from "./types";
 
 // ===== blockLeaveActions — emit finally cleanup on break/continue/return =====
 // Reference parity: when control flow exits through
@@ -271,7 +259,8 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 		// G3 fix: NRVO call sites — when initializer is a call returning a struct,
 		// emit "Type var; fn(&var, args);" instead of "Type var = fn(args);"
 		const nrvoRet = (d.initializer.kind === NodeKind.CallExpr) ? getCalleeReturnType(d.initializer) : null;
-		if (nrvoRet !== null && isNrvoReturnType(nrvoRet)) {
+		const nrvoFuncT = (d.initializer.kind === NodeKind.CallExpr) ? getCalleeFuncType(d.initializer) : null;
+		if (nrvoRet !== null && isNrvoReturnType(nrvoRet, nrvoFuncT)) {
 			// Derive type from callee return type if cType is unresolved
 			if (cType === "void*" || cType === "double") {
 				cType = getTypeDesc(g, nrvoRet);

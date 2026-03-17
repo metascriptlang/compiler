@@ -52,9 +52,6 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 		emitIncludeDirectives(g, ctx.includeDirectives);
 	}
 
-	// Register cross-module class/interface names for pointer detection
-	registerCrossModuleTypeNames(g);
-
 	// Walk program statements
 	if (program !== null && program.kind === NodeKind.Program) {
 		const pd = program.data as ProgramData;
@@ -200,22 +197,6 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 // Registers class/interface names from imported modules for pointer detection.
 // Type resolution itself is handled lazily via symbol table lookup in getTypeDesc.
 
-function registerCrossModuleTypeNames(g: CGen): void {
-	const reg = (g.checkerCtx !== null) ? g.checkerCtx.exportRegistry : null as unknown as ExportRegistry;
-	if (reg !== null) {
-		for (const entry of reg.entries) {
-			for (const sym of entry.symbols) {
-				const name = safeName(sym.name);
-				if (sym.kind === SymbolKind.Class) {
-					nameSetAdd(g.knownClassNames, name);
-					nameSetAdd(g.knownTypeNames, name);
-				} else if (sym.kind === SymbolKind.Interface) {
-					nameSetAdd(g.knownTypeNames, name);
-				}
-			}
-		}
-	}
-}
 
 // ===== Tests =====
 

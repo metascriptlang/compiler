@@ -3,8 +3,7 @@
 // Fix: typeToEnvStr recursively derives element name; resolveSimpleTypeStr handles "Foo[]" patterns
 
 import { fullPipeline } from "./helpers";
-import { Node, NodeKind, ProgramData, InterfaceDeclData } from "../../ast/node";
-import { TypeKind } from "../../checker/types";
+import { Node, NodeKind, ProgramData, InterfaceDeclData, TypeKind } from "../../ast/node";
 
 // Helper to find $Env struct in program
 function findEnvDecl(prog: Node): Node {

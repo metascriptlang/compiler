@@ -7,16 +7,14 @@
 // TypeAssertion nodes (`expr as Type`) where the target type is a narrow integer
 // get wrapped with a runtime range check call.
 
-import {
-	Node, NodeKind, SourceLocation, TypeAssertionData, HiddenStdConvData,
-} from "../../ast/node";
+import { Node, NodeKind, SourceLocation, TypeAssertionData, HiddenStdConvData, Type, TypeKind } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent, makeNumber } from "../util";
 import { firstExprKindAfter, stmtCountAfter, parseInput, getStmts } from "../testUtil";
 import { ExprStmtData } from "../../ast/node";
 import { createTransformContext } from "../context";
-import { Type, TypeKind, typeNameOf } from "../../checker/types";
+import { typeNameOf } from "../../checker/types";
 
 // ===== Helpers =====
 

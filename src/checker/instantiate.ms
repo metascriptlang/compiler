@@ -4,25 +4,12 @@
 // immediately clone the function body, substitute types, and register
 // the specialized version. No separate monomorphize pass needed.
 
-import {
-	Node, NodeKind,
-	FunctionDeclData, ExportDeclData, DecoratedDeclData,
-	BlockStmtData, IfStmtData, WhileStmtData, ForOfStmtData,
-	ReturnStmtData, ExprStmtData, VariableDeclData,
-	BinaryExprData, UnaryExprData, CallExprData, MemberExprData,
-	ArrayAccessData, ObjectLiteralData, ArrayLiteralData,
-	ConditionalExprData, TypeAssertionData, NewExprData,
-	TryCatchStmtData, SwitchStmtData, SwitchCaseData,
-	ArrowFunctionData, FunctionExprData, SpreadExprData,
-	UpdateExprData, MatchExprData, MatchStmtData, MatchCaseData,
-	DestructuringDeclData, DeferStmtData,
-	HiddenDerefData, HiddenStdConvData,
-} from "../ast/node";
-import { Type, TypeKind, typeNameOf, instantiateGeneric, createTypeRef, substituteType } from "./types";
-import { Symbol, SymbolKind, SymbolState, lookupSymbol, defineSymbol, makeSymbol, setFlag, SymbolFlag, hasFlag } from "./symbol";
+import { Node, NodeKind, SourceLocation, FunctionDeclData, ExportDeclData, DecoratedDeclData, BlockStmtData, IfStmtData, WhileStmtData, ForOfStmtData, ReturnStmtData, ExprStmtData, VariableDeclData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, NewExprData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ArrowFunctionData, FunctionExprData, SpreadExprData, UpdateExprData, MatchExprData, MatchStmtData, MatchCaseData, DestructuringDeclData, DeferStmtData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { typeNameOf, instantiateGeneric, createTypeRef, substituteType } from "./types";
+import { lookupSymbol, defineSymbol, makeSymbol, setFlag, SymbolFlag, hasFlag } from "./symbol";
 import { CheckerContext } from "./context";
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/collect";
-import { checkFunctionBody } from "./checkPass";
+import { callCheckFunctionBody, registerInstantiateGeneric } from "./checkerCallbacks";
 import { getIdentId } from "./idents";
 
 // ===== Global Instance Collection =====
@@ -297,7 +284,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 		bodyCtx.table.current.symbols.push(instSym);
 		const savedModulePath = bodyCtx.modulePath;
 		bodyCtx.modulePath = ctx.modulePath;
-		checkFunctionBody(bodyCtx, instSym, cd.params, cd.fnBody, null as unknown as SourceLocation[]);
+		callCheckFunctionBody(bodyCtx, instSym, cd.params, cd.fnBody, null as unknown as SourceLocation[]);
 		bodyCtx.modulePath = savedModulePath;
 	}
 
@@ -307,3 +294,6 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	ctx.genericInstDepth = ctx.genericInstDepth - 1;
 	return instSym;
 }
+
+// Register callback at module load time
+registerInstantiateGeneric((sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext): Symbol => { return instantiateGenericFunction(sym, paramNames, concreteTypes, ctx); });

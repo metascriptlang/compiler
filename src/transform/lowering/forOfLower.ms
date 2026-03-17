@@ -6,12 +6,9 @@
 //   → { const $iter = arr; let $idx = 0; const $len = $iter.length;
 //       while ($idx < $len) { const item = $iter[$idx]; body; $idx++; } }
 
-import {
-	Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation,
-	ArrayPatternData, IdentifierData, NodeFlag,
-} from "../../ast/node";
+import { Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, NodeFlag, Type } from "../../ast/node";
 import { TransformContext, freshTemp } from "../context";
-import { Type, numberType } from "../../checker/types";
+import { numberType } from "../../checker/types";
 import { walkNode } from "../walker";
 import {
 	makeIdent, makeTypedIdent, makeNumber, makeBlock, makeVarDecl, makeWhile,

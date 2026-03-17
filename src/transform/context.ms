@@ -1,8 +1,7 @@
 // Transform Context — shared state across all transforms
 
 import { CheckerContext } from "../checker/context";
-import { Type } from "../checker/types";
-import { Node } from "../ast/node";
+import { Node, Type } from "../ast/node";
 
 // Pending tuple type entry — collected by operatorLower, consumed by destructorLifting.
 export interface PendingTupleOp {

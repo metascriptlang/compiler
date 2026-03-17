@@ -4,12 +4,12 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { Type, TypeKind, isInterfaceType, getTypeSize, skipModifier, isPromise, isResult, getResultOkType, getResultErrType, substituteType, createStruct } from "../../checker/types";
+import { isInterfaceType, getTypeSize, skipModifier, isPromise, isResult, getResultOkType, getResultErrType, substituteType, createStruct } from "../../checker/types";
 import { getGenericDecl } from "../../parser/context";
-import { Node, NodeKind, CallExprData } from "../../ast/node";
+import { Node, NodeKind, CallExprData, Type, TypeKind, CallingConvention, SymbolKind } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
 import { CGen, CSection, Builder, TypeCache, add, addLine, addNewline, extract, sec, createBuilder, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas } from "./context";
-import { lookupSymbol } from "../../checker/symbol";
+import { lookupSymbol, SymbolFlag, hasFlag } from "../../checker/symbol";
 import { mangle, mangleTypeName, mangleFieldName, safeName } from "./names";
 
 // ===== Resolve TypeReference via Symbol Table =====
@@ -393,12 +393,23 @@ export function needsRC(t: Type): boolean {
 // ===== NRVO Detection (Type-based, Standard reference parity) =====
 // Returns true for types that are C structs — these need out-param calling convention.
 
-export function isNrvoReturnType(t: Type): boolean {
-	if (t === null) return false;
-	if (isInterfaceType(t)) return true;  // value-type structs → NRVO
-	if (t.kind === TypeKind.Span) return true; // Span is { ptr, len } struct
-	if (isResult(t)) return true;
-	if (t.kind === TypeKind.Tuple) return true;
+// Reference parity: type defined in C header — skip codegen emission.
+function isImportedType(t: Type): boolean {
+	return t.sym !== null && hasFlag(t.sym, SymbolFlag.ImportC);
+}
+
+// Reference parity (isInvalidReturnType): returns true when NRVO needed.
+// Takes the return type AND optionally the function type (for cdecl/importc check).
+export function isNrvoReturnType(retType: Type, funcType: Type): boolean {
+	if (retType === null) return false;
+	// importc return types → no NRVO (C struct returned by value)
+	if (isImportedType(retType)) return false;
+	// importc/cdecl functions → no NRVO (C ABI compatibility)
+	if (funcType !== null && funcType.sym !== null && hasFlag(funcType.sym, SymbolFlag.ImportC)) return false;
+	if (isInterfaceType(retType)) return true;
+	if (retType.kind === TypeKind.Span) return true;
+	if (isResult(retType)) return true;
+	if (retType.kind === TypeKind.Tuple) return true;
 	return false;
 }
 
@@ -414,6 +425,18 @@ export function getCalleeReturnType(callNode: Node): Type {
 	if (callNode.resolvedSym !== null && callNode.resolvedSym.symbolType !== null) {
 		const st = callNode.resolvedSym.symbolType;
 		if (st.kind === TypeKind.Function) return st.typeReturn;
+	}
+	return null;
+}
+
+export function getCalleeFuncType(callNode: Node): Type {
+	const cd = callNode.data as CallExprData;
+	if (cd.callee !== null && cd.callee.nodeType !== null && cd.callee.nodeType.kind === TypeKind.Function) {
+		return cd.callee.nodeType;
+	}
+	if (callNode.resolvedSym !== null && callNode.resolvedSym.symbolType !== null) {
+		const st = callNode.resolvedSym.symbolType;
+		if (st.kind === TypeKind.Function) return st;
 	}
 	return null;
 }
@@ -628,6 +651,8 @@ function genEnumType(g: CGen, t: Type): string {
 	const key = typeKey(t);
 	typeCacheSet(g.typeCache, key, name);
 
+	if (isImportedType(t)) return name;
+
 	// Emit: typedef int32_t EnumName;
 	addLine(sec(g, CSection.Types), `typedef int32_t ${name};`);
 
@@ -652,6 +677,11 @@ function genObjectType(g: CGen, t: Type): string {
 	// Anonymous/structural types get hash-based names; named types get mangled names
 	const name = isAnonTypeName(t.typeName) ? anonTypeName(t) : mangle(t.typeName);
 	const key = typeKey(t);
+
+	if (isImportedType(t)) {
+		typeCacheSet(g.typeCache, key, t.typeName);
+		return t.typeName;
+	}
 
 	// Always value type — Ref<Object> adds the * via TypeKind.Ref path
 	const cTypeName = name;
@@ -847,9 +877,9 @@ function genArrayType(g: CGen, t: Type): string {
 
 	// Pointer element types (classes, refs, void*) → msRefArray (void* indirection is correct)
 	// Class types: symbol table returns Ref<Struct>, resolvedElem.kind === Ref → isPointerType catches it.
-	// Fallback for unresolved TypeReference: check knownClassNames.
-	const elemIsClass = t.typeReturn !== null && t.typeReturn.kind === TypeKind.TypeReference &&
-		t.typeReturn.typeName !== null && nameSetHas(g.knownClassNames, mangle(t.typeReturn.typeName));
+	// Fallback: check type.sym for class kind (reference parity: t.sym.kind == skType).
+	const elemIsClass = t.typeReturn !== null && t.typeReturn.sym !== null &&
+		t.typeReturn.sym.symbolKind === SymbolKind.Class;
 	if (elemType === "void*" || elemIsClass || (resolvedElem !== null && isPointerType(resolvedElem))) {
 		typeCacheSet(g.typeCache, key, "msRefArray");
 		return "msRefArray";
@@ -1003,7 +1033,7 @@ function genClosureCast(g: CGen, t: Type, withEnv: boolean, nrvoType: string): s
 // getClosureType calls genProcParams — so closure casts ALWAYS include NRVO when return type requires it.
 // Auto-detect NRVO from the function type's return type, matching the shared genProcParams path.
 function autoNrvoType(g: CGen, t: Type): string {
-	if (t !== null && t.kind === TypeKind.Function && t.typeReturn !== null && isNrvoReturnType(t.typeReturn)) {
+	if (t !== null && t.kind === TypeKind.Function && t.typeReturn !== null && isNrvoReturnType(t.typeReturn, t)) {
 		return getTypeDesc(g, t.typeReturn);
 	}
 	return "";

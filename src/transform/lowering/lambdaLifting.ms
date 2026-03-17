@@ -14,17 +14,7 @@
 //     const f = { fn: $lifted_outer_1, env: { x: x } };
 //   }
 
-import {
-	Node, NodeKind, SourceLocation, NodeFlag, SymbolKind, createNode,
-	ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData,
-	FunctionExprData, MethodDeclData, ConstructorDeclData,
-	ExportDeclData, ClassDeclData, DecoratedDeclData,
-	VariableDeclData, IfStmtData, WhileStmtData, TryCatchStmtData,
-	SwitchStmtData, SwitchCaseData,
-	ExprStmtData, ReturnStmtData,
-	BinaryExprData, CallExprData, UnaryExprData,
-	IdentifierData,
-} from "../../ast/node";
+import { Node, NodeKind, SourceLocation, NodeFlag, SymbolKind, createNode, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, IfStmtData, WhileStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ExprStmtData, ReturnStmtData, BinaryExprData, CallExprData, UnaryExprData, IdentifierData, Type, TypeKind } from "../../ast/node";
 import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../context";
 import { mapChildren, isFuncBoundary } from "../walker";
 import {
@@ -32,7 +22,7 @@ import {
 	makeFnDecl, makeInterfaceDecl, makeObjectLiteral, makeHiddenDeref,
 	makeNull, syntheticToken,
 } from "../util";
-import { Type, TypeKind, createTypeRef, createPtr } from "../../checker/types";
+import { createTypeRef, createPtr } from "../../checker/types";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts } from "../testUtil";
 
 // ===== Scope Stack =====

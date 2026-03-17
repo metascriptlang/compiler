@@ -4,10 +4,8 @@
 // TypeReference falls through to the default case (8 bytes) instead
 // of resolving to the actual type size.
 
-import {
-	TypeKind, createStruct, numberType, stringType,
-	getTypeSize, createTypeRef,
-} from "../../checker/types";
+import { TypeKind } from "../../ast/node";
+import { createStruct, numberType, stringType, getTypeSize, createTypeRef } from "../../checker/types";
 import { ccgIntroducedPtr } from "../../codegen/c/types";
 
 test "getTypeSize: number = 8" {

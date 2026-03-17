@@ -14,11 +14,8 @@
 //   Identifier, Variable    → closure
 //   Identifier, Parameter   → closure
 
-import {
-	Node, NodeKind, SymbolKind, Symbol,
-	CallExprData, SourceLocation, makeLoc, NodeFlag, createNodeAt,
-} from "../../ast/node";
-import { Type, TypeKind, CallingConvention, createFunction, voidType } from "../../checker/types";
+import { Node, NodeKind, SymbolKind, Symbol, CallExprData, SourceLocation, makeLoc, NodeFlag, createNodeAt, Type, TypeKind, CallingConvention } from "../../ast/node";
+import { createFunction, voidType } from "../../checker/types";
 import { Token } from "../../lexer/token";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -94,7 +91,7 @@ function getCalleeType(cd: CallExprData): Type {
 }
 
 // ===== Tests =====
-import { Type, createFunction, numberType, voidType } from "../../checker/types";
+import { createFunction, numberType, voidType } from "../../checker/types";
 import { makeSymbol } from "../../checker/symbol";
 import { SourceLocation, createNode } from "../../ast/node";
 import { makeIdent, makeCall, makeMember, makeBlock } from "../util";

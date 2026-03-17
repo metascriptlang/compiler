@@ -601,30 +601,16 @@ export function parseEnumDecl(state: ParserState): NodeResult {
 // ===== Interface Declaration =====
 // syntax: 'interface' ID ('<' params '>')? ('extends' type)? '{' members '}'
 
-export function parseInterfaceDecl(state: ParserState): NodeResult {
-	const ifaceToken = current(state);
-
-	advance(state);
-	const nameToken = current(state);
-	if (!isIdentLike(nameToken)) {
-		return Result.err(`Expected identifier after 'interface' at line ${nameToken.line}`);
-	}
-
-	advance(state);
-	// Optional generic type parameters: interface Box<T, U>
-	let ifaceIsGeneric = false;
-	if (!isAtEnd(state) && current(state).kind === TokenKind.Lt) {
-		const genericNames = captureGenericParams(state);
-		if (genericNames !== "") {
-			addGenericDecl(nameToken.value, genericNames);
-			ifaceIsGeneric = true;
-		}
+// Parse interface body: { field: Type; ... } — shared by parseInterfaceDecl and extern interface.
+function parseInterfaceBody(state: ParserState, name: string, token: Token, genericNames: string): NodeResult {
+	let ifaceIsGeneric = genericNames !== "";
+	if (ifaceIsGeneric) {
+		addGenericDecl(name, genericNames);
 	}
 
 	// Optional extends: interface X extends Y, Z { ... }
 	if (!isAtEnd(state) && current(state).kind === TokenKind.Extends) {
 		advance(state);
-		// Skip extended type names (comma-separated identifiers)
 		while (!isAtEnd(state) && current(state).kind !== TokenKind.LBrace) {
 			advance(state);
 		}
@@ -646,16 +632,13 @@ export function parseInterfaceDecl(state: ParserState): NodeResult {
 
 		fields.push(field.value);
 		advance(state);
-		// Optional marker: field?: Type
 		if (!isAtEnd(state) && current(state).kind === TokenKind.Question) {
 			advance(state);
 		}
 
-		// Colon + type annotation — capture it
 		fieldTypes.push(captureOptionalType(state));
 		fieldTypeExprs.push(getLastTypeExpr());
 
-		// Skip semicolons and commas between members
 		if (!isAtEnd(state) && (current(state).kind === TokenKind.Semicolon || current(state).kind === TokenKind.Comma)) {
 			advance(state);
 		}
@@ -667,7 +650,6 @@ export function parseInterfaceDecl(state: ParserState): NodeResult {
 
 	advance(state);
 
-	// Store field info in generic decl side-channel for checker to use
 	if (ifaceIsGeneric) {
 		let fnJoined = "";
 		let ftJoined = "";
@@ -676,17 +658,34 @@ export function parseInterfaceDecl(state: ParserState): NodeResult {
 			fnJoined = `${fnJoined}${fields[fi]}`;
 			if (fi < fieldTypes.length) { ftJoined = `${ftJoined}${fieldTypes[fi]}`; }
 		}
-		updateGenericDeclFields(nameToken.value, fnJoined, ftJoined);
+		updateGenericDeclFields(name, fnJoined, ftJoined);
 	}
 
 	const ifaceNode = createNode(NodeKind.InterfaceDecl, {
-		interfaceName: nameToken.value,
+		interfaceName: name,
 		interfaceFields: fields,
 		interfaceFieldTypes: fieldTypes,
-		nameLocation: makeLocFromToken(nameToken),
-	}, ifaceToken);
+		nameLocation: makeLocFromToken(token),
+	}, token);
 	ifaceNode.typeExprs = fieldTypeExprs;
 	return Result.ok(ifaceNode);
+}
+
+export function parseInterfaceDecl(state: ParserState): NodeResult {
+	const ifaceToken = current(state);
+	advance(state);
+	const nameToken = current(state);
+	if (!isIdentLike(nameToken)) {
+		return Result.err(`Expected identifier after 'interface' at line ${nameToken.line}`);
+	}
+	advance(state);
+
+	let genericNames = "";
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Lt) {
+		genericNames = captureGenericParams(state);
+	}
+
+	return parseInterfaceBody(state, nameToken.value, ifaceToken, genericNames);
 }
 
 // ===== Class Declaration =====
@@ -1288,6 +1287,70 @@ export function parseExternDecl(state: ParserState): NodeResult {
 		externFnNode.typeExprs = externParamTypeExprs;
 		externFnNode.paramLocations = externParamLocs;
 		return Result.ok(externFnNode);
+	}
+
+	// Extern enum with body: parse as EnumDecl with ExternC flag.
+	if (externKind === ExternKind.Enum && !isAtEnd(state) && current(state).kind === TokenKind.LBrace) {
+		advance(state); // skip {
+		const members: string[] = [];
+		const memberLocs: SourceLocation[] = [];
+		const values: number[] = [];
+		let nextValue: number = 0;
+		while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
+			const member = current(state);
+			if (!isPropertyName(member)) break;
+			members.push(member.value);
+			memberLocs.push(makeLocFromToken(member));
+			advance(state);
+			if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
+				advance(state);
+				if (current(state).kind === TokenKind.Number) {
+					nextValue = parseFloat(current(state).value);
+					advance(state);
+				}
+			}
+			values.push(nextValue);
+			nextValue = nextValue + 1;
+			if (!isAtEnd(state) && current(state).kind === TokenKind.Comma) advance(state);
+		}
+		if (!isAtEnd(state) && current(state).kind === TokenKind.RBrace) advance(state);
+		const enumNode = createNode(NodeKind.EnumDecl, {
+			enumName: nameToken.value,
+			enumMembers: members,
+			enumValues: values,
+			nameLocation: makeLocFromToken(nameToken),
+			memberLocations: memberLocs,
+		}, externToken);
+		enumNode.flags = enumNode.flags | NodeFlag.ExternC;
+		return Result.ok(enumNode);
+	}
+
+	// Extern interface with field body: parse as InterfaceDecl with ExternC flag.
+	// Reuses the full interface resolution pipeline (fields, types, generics).
+	// Only applies when body contains fields (name: Type), not methods (name(): Type).
+	if (externKind === ExternKind.Interface && !isAtEnd(state) && current(state).kind === TokenKind.LBrace) {
+		// Peek ahead to determine if body has fields or methods
+		const savedPos = state.position;
+		let hasFieldBody = true;
+		advance(state); // skip {
+		if (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
+			// Check second token after field name: colon = field, lparen = method
+			if (isPropertyName(current(state))) {
+				advance(state); // skip name
+				if (!isAtEnd(state) && current(state).kind === TokenKind.LParen) {
+					hasFieldBody = false; // method signature, not field
+				}
+			}
+		}
+		state.position = savedPos; // rewind
+
+		if (hasFieldBody) {
+			const ifaceResult = parseInterfaceBody(state, nameToken.value, externToken, genericNames);
+			if (ifaceResult.ok) {
+				ifaceResult.value.flags = ifaceResult.value.flags | NodeFlag.ExternC;
+				return ifaceResult;
+			}
+		}
 	}
 
 	// Non-function externs: keep ExternDecl node

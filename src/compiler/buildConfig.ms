@@ -1,9 +1,11 @@
 // MetaScript Compiler CLI — build.ms config loader
 // Uses AST parsing to extract config from build.ms (no Raiser VM needed).
 
-import { readFile, fileExists } from "std/process";
+import { fileExists } from "std/process";
+import { readFile } from "std/fs";
 import { registerCoreParsers } from "../parser/statements/core";
 import { parseSource } from "../parser/statements/validation";
+import { resolveImportWithConfig, createDefaultConfig, Backend } from "../module/resolver";
 import {
 	Node, NodeKind, ProgramData, VariableDeclData, ExportDeclData,
 	ObjectLiteralData, NumberLiteralData, StringLiteralData, BooleanLiteralData,
@@ -178,11 +180,8 @@ export interface BuildWarning {
 	line: number;
 }
 
-// Parse build.ms and return the config ObjectLiteral node, or null.
-function parseBuildFile(dir: string): Node {
-	const buildPath = dir + "/build.ms";
-	if (!fileExists(buildPath)) return null as unknown as Node;
-	const source = readFile(buildPath);
+// Parse build.ms source and return the config ObjectLiteral node, or null.
+function parseBuildSource(source: string): Node {
 	if (source.length === 0) return null as unknown as Node;
 	if (!_parsersRegistered) {
 		registerCoreParsers();
@@ -193,15 +192,24 @@ function parseBuildFile(dir: string): Node {
 	return findConfigObject(parseResult.value);
 }
 
-export function validateBuildConfig(dir: string): BuildWarning[] {
+export function validateBuildConfig(dir: string, source: string): BuildWarning[] {
 	const warnings: BuildWarning[] = [];
-	const configObj = parseBuildFile(dir);
+	const configObj = parseBuildSource(source);
 	if (configObj === null) return warnings;
 	const entryNode = findObjField(configObj, "entry");
 	if (entryNode !== null) {
 		const entry = nodeString(entryNode);
-		if (entry.length > 0 && !fileExists(entry)) {
-			warnings.push({ message: `Entry '${entry}' not found — build/run may fail unless entry is provided via command args`, line: entryNode.location.line });
+		if (entry.length > 0) {
+			// Use the module resolver to check entry — same extension lookup as build/run
+			const buildFile = dir + "/build.ms";
+			const candidates = resolveImportWithConfig(entry, buildFile, createDefaultConfig(Backend.C, dir));
+			let found = false;
+			for (const c of candidates) {
+				if (fileExists(c)) { found = true; break; }
+			}
+			if (!found) {
+				warnings.push({ message: `Entry '${entry}' not found — build/run may fail unless entry is provided via command args`, line: entryNode.location.line });
+			}
 		}
 	}
 	return warnings;
@@ -210,7 +218,10 @@ export function validateBuildConfig(dir: string): BuildWarning[] {
 // Load only the fmt section from build.ms at the given directory.
 // Returns default if build.ms not found or has no fmt section.
 export function loadFmtSection(dir: string): FmtSection {
-	const configObj = parseBuildFile(dir);
+	const buildPath = dir + "/build.ms";
+	if (!fileExists(buildPath)) return defaultFmtSection();
+	const source = readFile(buildPath);
+	const configObj = parseBuildSource(source);
 	if (configObj === null) return defaultFmtSection();
 	return extractFmt(findObjField(configObj, "fmt"));
 }

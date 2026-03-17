@@ -4,11 +4,11 @@
 // a symbol (resolvedSym) so codegen can emit correct field access.
 // Standard reference parity: lookupInRecordAndBuildCheck searches the record field list directly.
 
+import { TypeKind } from "../../ast/node";
 import { checkSource } from "./helpers";
 import { compileToC } from "../helpers";
 import { hasErrors } from "../../checker/context";
 import { lookupSymbol } from "../../checker/symbol";
-import { TypeKind } from "../../checker/types";
 
 test "as-cast on union: field access resolves without errors" {
 	const src = "type Data = | { value: number } | { name: string };\ntype NameData = { name: string };\nconst d: Data = { name: \"hello\" };\nconst nd = d as NameData;\nconst v: string = nd.name;";

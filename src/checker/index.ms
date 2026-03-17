@@ -3,7 +3,7 @@
 
 
 // Re-exports: types.ms
-export { TypeKind, Type } from "./types";
+export { TypeKind, Type } from "../ast/node";
 export {
 	numberType, stringType, booleanType, voidType, charType,
 	nullType, unknownType, neverType, errorType,
@@ -21,7 +21,8 @@ export {
 } from "./types";
 
 // Re-exports: symbol.ms
-export { SymbolKind, ScopeKind, Symbol, Scope, SymbolTable, SymbolFlag } from "./symbol";
+export { SymbolKind, Symbol } from "../ast/node";
+export { ScopeKind, Scope, SymbolTable, SymbolFlag } from "./symbol";
 // Explicit exports for helpers to avoid ambiguity
 export { createSymbolTable, openScope, closeScope, defineSymbol, lookupSymbol, lookupLocal, lookupExport, makeSymbol, hasOverloads, isPointerType } from "./symbol";
 
@@ -59,7 +60,7 @@ export { checkModuleGraph, getPreludeContext } from "./orchestrator";
 
 // ===== Integration Tests =====
 
-import { TypeKind } from "./types";
+import { TypeKind } from "../ast/node";
 import { hasErrors, errorCount } from "./context";
 import { checkSource } from "./checkPass";
 import { lookupSymbol } from "./symbol";

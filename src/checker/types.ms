@@ -1,12 +1,11 @@
-// Type System - TypeKind, Type interface, constructors
+// Type System — utility functions for Type manipulation
+// Type class + enums are defined in ast/node.ms (reference parity: single-file AST).
 
-// Design: Class type (heap-allocated, pointer-accessed) matching standard reference
-// PType = ref TType pattern. All Type variables are pointers; null is natural.
-// Function accessors instead of const singletons to avoid closure capture bugs.
-
-import { bareAfterDelim } from "../utils/string";
-
-
+import { bareAfterDelim, splitTopLevel } from "../utils/string";
+import {
+	Type, TypeKind, TypeFlag, CallingConvention, AttachedOp,
+	Symbol,
+} from "../ast/node";
 
 // ===== Target Configuration (Implementation parity) =====
 // Module-level state set once at startup. Defaults to 64-bit.
@@ -22,95 +21,6 @@ export function setTargetSizes(ptrSize: number, intSize: number): void {
 export function getTargetPtrSize(): number { return targetPtrSize; }
 export function getTargetIntSize(): number { return targetIntSize; }
 
-// ===== TypeKind Enum =====
-
-export enum TypeKind {
-	// Primitives
-	Number, String, Boolean, Void, Char, Null, Unknown, Never,
-	// Sized integers/floats (C interop)
-	Int8, Int16, Int32, Int64, Uint8, Uint16, Uint32, Uint64, Float32, Float64,
-	// Compound
-	Struct, Array, SizedArray, Span, Function, Tuple, CString,
-	// Generics
-	GenericParam, GenericInstance,
-	// Memory
-	Ref, Ptr, Borrow,
-	// Ownership modifiers (standard reference parity — wrap inner type)
-	Sink, Lent, Var,
-	// Special
-	TypeReference, Union, Enum, Result, Promise,
-	// Distinct
-	Distinct,
-	// Error sentinel
-	Error,
-}
-
-// ===== Type Interface (Tagged Union — standard implementation parity) =====
-// Flat interface with fields reused per TypeKind. Only read documented fields per kind.
-// Under Bun: all fields allocated (JS objects). Under C backend: fixed struct layout.
-//
-// Field validity per TypeKind (the "tag contract"):
-// ┌────────────────┬──────────┬───────────┬──────────────┬───────────┬──────────┬───────────┐
-// │ TypeKind       │ typeName │ typeNames │ typeChildren │ typeReturn│ typeExtra│ typeFlags │
-// ├────────────────┼──────────┼───────────┼──────────────┼───────────┼──────────┼───────────┤
-// │ Primitives(13) │    —     │     —     │      —       │     —     │    —     │     —     │
-// │ Object         │ name     │ propNames │ propTypes    │     —     │ baseClass│ isIface   │
-// │ Function       │ rtHint   │ paramNames│ paramTypes   │ returnTy  │    —     │ minArity  │
-// │ Array          │    —     │     —     │      —       │ elemType  │    —     │     —     │
-// │ SizedArray     │    —     │     —     │      —       │ elemType  │    —     │ size      │
-// │ Span           │    —     │     —     │      —       │ elemType  │    —     │     —     │
-// │ Tuple          │    —     │     —     │ elemTypes    │     —     │    —     │     —     │
-// │ Map            │    —     │     —     │      —       │ keyType   │ valType  │     —     │
-// │ Set            │    —     │     —     │      —       │ elemType  │    —     │     —     │
-// │ Enum           │ name     │ members   │      —       │     —     │    —     │     —     │
-// │ Union          │ aliasNm  │ disc+keys│ variantTypes │     —     │ discEnum │     —     │
-// │ Ref/Ptr        │    —     │     —     │      —       │ innerType │    —     │     —     │
-// │ Sink/Lent      │    —     │     —     │      —       │ innerType │    —     │     —     │
-// │ Distinct       │    —     │     —     │      —       │ innerType │    —     │     —     │
-// │ Result         │    —     │     —     │      —       │ okType    │ errType  │     —     │
-// │ GenericParam   │ paramName│     —     │      —       │     —     │ constraint│    —     │
-// │ GenericInstance │    —     │     —     │ typeArgs     │     —     │ baseType │     —     │
-// │ TypeReference  │ refName  │     —     │      —       │     —     │    —     │     —     │
-// └────────────────┴──────────┴───────────┴──────────────┴───────────┴──────────┴───────────┘
-
-// ===== Calling Convention (Standard reference parity) =====
-export enum CallingConvention {
-	CcDefault,       // normal function call
-	CcClosure,       // closure call (fn + env pair)
-	CcInline,        // inline hint
-	CcNoInline,      // no-inline hint
-}
-
-// ===== Type Flags (Reference parity: type flags bitfield) =====
-// Bitfield stored in Type.typeFlags. Propagated bottom-up from children to parents.
-export enum TypeFlag {
-	IsInterface = 1,    // bit 0: struct is an interface (value type)
-	IsMaybe = 16,       // bit 4: Maybe<T> wrapper struct
-	HasAsgn = 32,       // bit 5: type or child needs lifecycle management (Reference parity: tfHasAsgn)
-}
-
-// ===== Attached Lifecycle Ops (Standard reference parity) =====
-// Index into Type.attachedOps[] — stores the symbol/name for each lifecycle hook.
-export enum AttachedOp {
-	AttachedWasMoved,    // =wasMoved
-	AttachedDestructor,  // =destroy
-	AttachedAsgn,        // =copy
-	AttachedDup,         // =dup
-	AttachedSink,        // =sink
-	AttachedTrace,       // =trace (ORC)
-}
-
-export class Type {
-	kind: TypeKind;
-	typeName: string;         // Object name, Enum name, TypeRef name, GenericParam name
-	typeNames: string[];      // Function param names, Enum members, Object prop names
-	typeChildren: Type[];     // Function params, Union types, Tuple elements, Object prop types
-	typeReturn: Type;         // Function return, Array element, Ref/Ptr/Distinct inner, Result okType
-	typeExtra: Type;          // Result errType, Map value, GenericInstance base
-	typeFlags: int32;         // Bitfield: 1=isInterface, 16=isMaybe, 32=tfHasAsgn; bits 8-15=minArity
-	callConv: CallingConvention; // Function calling convention (Standard parity)
-	attachedOps: string[];    // Lifecycle hook names indexed by AttachedOp (Standard parity)
-}
 
 // ===== In-Place Type Upgrade (reference parity: assignType) =====
 // Copies all fields from source into target, preserving target's object identity.
@@ -506,12 +416,13 @@ export function createGenericParam(name: string): Type {
 
 // GenericInstance: preserves type args structurally after instantiation.
 // typeChildren = type arguments, typeExtra = base type (struct/interface).
+// typeReturn = EAGERLY INSTANTIATED body (concrete body after substitution).
 // Enables structural unification: Map<K,V> vs Map<string,string> → K=string, V=string.
 export function createGenericInstance(baseType: Type, typeArgs: Type[]): Type {
 	return {
 		kind: TypeKind.GenericInstance,
 		typeName: baseType !== null ? baseType.typeName : "",
-		typeNames: [],  // GenericInstance has no field names — use typeExtra (base struct) for field access
+		typeNames: [],
 		typeChildren: typeArgs,
 		typeReturn: null as unknown as Type,
 		typeExtra: baseType,
@@ -519,6 +430,35 @@ export function createGenericInstance(baseType: Type, typeArgs: Type[]): Type {
 		callConv: CallingConvention.CcDefault,
 		attachedOps: [],
 	};
+}
+
+// Reference parity (handleGenericInvocation): eagerly instantiate
+// GenericInstance body. Uses explicit param names from the parser's generic declaration
+// store. Produces a fully concrete body
+// stored in typeReturn for direct field access — no lazy substitution at access time.
+export function instantiateGenericBody(gi: Type, declaredParams: string): void {
+	if (gi.kind !== TypeKind.GenericInstance) return;
+	if (gi.typeReturn !== null) return;
+	if (declaredParams === "") return;
+	const baseType = gi.typeExtra;
+	if (baseType === null) return;
+	if (baseType.kind !== TypeKind.Struct && baseType.kind !== TypeKind.Union) return;
+	// Only instantiate if ALL type args are concrete
+	let ai = 0;
+	while (ai < gi.typeChildren.length) {
+		if (gi.typeChildren[ai] !== null && gi.typeChildren[ai].kind === TypeKind.GenericParam) return;
+		ai = ai + 1;
+	}
+	// Split declared param names (e.g. "K,V" → ["K", "V"])
+	const paramNames = splitTopLevel(declaredParams, ",");
+	if (paramNames.length === 0 || paramNames.length > gi.typeChildren.length) return;
+	let body = baseType;
+	let pi = 0;
+	while (pi < paramNames.length) {
+		body = substituteType(body, paramNames[pi].trim(), gi.typeChildren[pi]);
+		pi = pi + 1;
+	}
+	gi.typeReturn = body;
 }
 
 // ===== System Types (Standard reference parity) =====
@@ -1053,13 +993,19 @@ export function getElementType(t: Type): Type {
 function collectGenericParamNames(t: Type, names: string[]): void {
 	if (t === null) return;
 	if (t.kind === TypeKind.GenericParam) {
-		for (const n of names) { if (n === t.typeName) return; }
-		names.push(t.typeName);
+		let dup = false;
+		let ni = 0;
+		while (ni < names.length) { if (names[ni] === t.typeName) { dup = true; } ni = ni + 1; }
+		if (!dup) names.push(t.typeName);
 		return;
 	}
 	if (t.typeReturn !== null) collectGenericParamNames(t.typeReturn, names);
 	if (t.typeExtra !== null) collectGenericParamNames(t.typeExtra, names);
-	for (const c of t.typeChildren) { collectGenericParamNames(c, names); }
+	let ci = 0;
+	while (ci < t.typeChildren.length) {
+		collectGenericParamNames(t.typeChildren[ci], names);
+		ci = ci + 1;
+	}
 }
 
 export function getProperty(t: Type, name: string): Type {
@@ -1077,24 +1023,31 @@ export function getProperty(t: Type, name: string): Type {
 			i += 1;
 		}
 	}
-	// GenericInstance: get property from base struct, substituting GenericParam→concrete type args.
-	// The base struct may have GenericParam fields (e.g., MapEntry<K,V>[]) that need K→string, V→string.
-	// We collect all GenericParam names from the base struct's fields, then substitute with instance's type args.
-	if (t.kind === TypeKind.GenericInstance && t.typeExtra !== null) {
-		let baseProp = getProperty(t.typeExtra, name);
-		if (baseProp.kind === TypeKind.Unknown) return baseProp;
-		if (hasGenericParams(baseProp) && t.typeChildren.length > 0) {
-			// Collect GenericParam names from the base struct to build name→typeArg mapping
-			const paramNames: string[] = [];
-			collectGenericParamNames(t.typeExtra, paramNames);
-			// Substitute: paramNames[i] → t.typeChildren[i]
-			for (let gi = 0; gi < paramNames.length; gi += 1) {
-				if (gi < t.typeChildren.length) {
-					baseProp = substituteType(baseProp, paramNames[gi], t.typeChildren[gi]);
+	// GenericInstance: access instantiated body (skipTypes → concrete struct).
+	// typeReturn holds the eagerly instantiated body with concrete field types.
+	// No lazy substitution needed — field types are already concrete.
+	if (t.kind === TypeKind.GenericInstance) {
+		// Primary: eagerly instantiated body (typeReturn) — fully concrete
+		if (t.typeReturn !== null) {
+			return getProperty(t.typeReturn, name);
+		}
+		// Fallback: lazy substitution for GenericInstances without instantiated body
+		if (t.typeExtra !== null) {
+			let baseProp = getProperty(t.typeExtra, name);
+			if (baseProp.kind === TypeKind.Unknown) return baseProp;
+			if (hasGenericParams(baseProp) && t.typeChildren.length > 0) {
+				const paramNames: string[] = [];
+				collectGenericParamNames(t.typeExtra, paramNames);
+				let gi = 0;
+				while (gi < paramNames.length) {
+					if (gi < t.typeChildren.length) {
+						baseProp = substituteType(baseProp, paramNames[gi], t.typeChildren[gi]);
+					}
+					gi = gi + 1;
 				}
 			}
+			return baseProp;
 		}
-		return baseProp;
 	}
 	// Union field access: search all variants for the field.
 	// For discriminated unions, the discriminant field maps to _tag.

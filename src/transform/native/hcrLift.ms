@@ -13,14 +13,9 @@
 //
 // Codegen sees normal AST: MemberExpr, HiddenDeref, @emit. Zero HCR awareness needed.
 
-import {
-	Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNode,
-	ProgramData, VariableDeclData, IdentifierData,
-	FunctionDeclData, ExportDeclData, DecoratedDeclData,
-	MacroInvocationData, ExprStmtData, StringLiteralData,
-} from "../../ast/node";
-import { Type, TypeKind, createStruct, createPtr } from "../../checker/types";
-import { Symbol, SymbolFlag, hasFlag } from "../../checker/symbol";
+import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNode, ProgramData, VariableDeclData, IdentifierData, FunctionDeclData, ExportDeclData, DecoratedDeclData, MacroInvocationData, ExprStmtData, StringLiteralData, Type, TypeKind, Symbol } from "../../ast/node";
+import { createStruct, createPtr } from "../../checker/types";
+import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import { TransformContext } from "../context";
 import { walkNode, mapChildren } from "../walker";
 import {
@@ -249,7 +244,7 @@ function typeToCStr(t: Type): string {
 				return "msRefArray";
 			}
 		},
-		TypeKind.Class => {
+		TypeKind.Ref => {
 			if (t.typeName !== null && t.typeName.length > 0) {
 				return t.typeName + "*";
 			} else {

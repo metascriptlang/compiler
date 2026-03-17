@@ -5,14 +5,8 @@
 // Wraps return values in msBoxDouble/msBoxBool/msBoxInt32 so the
 // C runtime can store them as void* in msFuture.value.
 
-import {
-	Node, NodeKind, NodeFlag, SourceLocation,
-	CallExprData, ArrowFunctionData, FunctionExprData,
-	BlockStmtData, ReturnStmtData, IfStmtData,
-	WhileStmtData, ForOfStmtData, TryCatchStmtData,
-	SwitchStmtData, SwitchCaseData,
-} from "../../ast/node";
-import { Type, TypeKind, unknownType, isPromise, getPromiseInner } from "../../checker/types";
+import { Node, NodeKind, NodeFlag, SourceLocation, CallExprData, ArrowFunctionData, FunctionExprData, BlockStmtData, ReturnStmtData, IfStmtData, WhileStmtData, ForOfStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind } from "../../ast/node";
+import { unknownType, isPromise, getPromiseInner } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall } from "../util";

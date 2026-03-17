@@ -5,9 +5,9 @@
 // Enums allowed (integer-backed). Number warns + implicit int32 cast.
 // Float/string/boolean types are rejected at the checker phase.
 
+import { TypeKind } from "../../ast/node";
 import { checkSource, errorCount, strictErrorCount, warningCount, hasError, hasWarning } from "./helpers";
 import { lookupSymbol } from "../../checker/symbol";
-import { TypeKind } from "../../checker/types";
 import { Severity } from "../../checker/context";
 
 // ===== Valid: integer bitwise ops =====

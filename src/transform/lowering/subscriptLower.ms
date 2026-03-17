@@ -8,12 +8,12 @@
 // Detection: checks ExtensionRegistry for "[]"/"[]=" operators on receiver type.
 // Builtin indexable types (Array, string, Map) are never rewritten.
 
-import { Node, NodeKind, ArrayAccessData, BinaryExprData, IdentifierData } from "../../ast/node";
+import { Node, NodeKind, ArrayAccessData, BinaryExprData, IdentifierData, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall } from "../util";
-import { Symbol, lookupSymbol, SymbolKind, defineSymbol, makeSymbol } from "../../checker/symbol";
-import { TypeKind, unknownType, createStruct, createFunction, createArray, typeNameOf } from "../../checker/types";
+import { lookupSymbol, defineSymbol, makeSymbol } from "../../checker/symbol";
+import { unknownType, createStruct, createFunction, createArray, typeNameOf } from "../../checker/types";
 import { ExtensionRegistry, ExtensionMethod, createContext, registerExtension, findExtension } from "../../checker/context";
 import { createTransformContext, createTransformContextWithChecker } from "../context";
 import { parseInput, getStmts, firstExprKind, firstCallArgCount } from "../testUtil";

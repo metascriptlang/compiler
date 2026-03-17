@@ -444,34 +444,42 @@ export function addGenericDecl(name: string, genericParams: string): void {
 
 // Update an existing GenericDeclEntry with field info (called after parsing interface body)
 export function updateGenericDeclFields(name: string, fieldNames: string, fieldTypes: string): void {
-	for (const item of _genericDeclStore.items) {
-		if (item.key === name) {
-			item.fieldNames = fieldNames;
-			item.fieldTypes = fieldTypes;
+	let i = 0;
+	while (i < _genericDeclStore.items.length) {
+		if (_genericDeclStore.items[i].key === name) {
+			_genericDeclStore.items[i].fieldNames = fieldNames;
+			_genericDeclStore.items[i].fieldTypes = fieldTypes;
 			return;
 		}
+		i = i + 1;
 	}
 }
 
 export function getGenericDecl(name: string): string {
-	for (const item of _genericDeclStore.items) {
-		if (item.key === name) return item.val;
+	let i = 0;
+	while (i < _genericDeclStore.items.length) {
+		if (_genericDeclStore.items[i].key === name) return _genericDeclStore.items[i].val;
+		i = i + 1;
 	}
 	return "";
 }
 
 // Get "|"-joined field names for a generic interface/class
 export function getGenericDeclFieldNames(name: string): string {
-	for (const item of _genericDeclStore.items) {
-		if (item.key === name) return item.fieldNames;
+	let i = 0;
+	while (i < _genericDeclStore.items.length) {
+		if (_genericDeclStore.items[i].key === name) return _genericDeclStore.items[i].fieldNames;
+		i = i + 1;
 	}
 	return "";
 }
 
 // Get "|"-joined field type annotations for a generic interface/class
 export function getGenericDeclFieldTypes(name: string): string {
-	for (const item of _genericDeclStore.items) {
-		if (item.key === name) return item.fieldTypes;
+	let i = 0;
+	while (i < _genericDeclStore.items.length) {
+		if (_genericDeclStore.items[i].key === name) return _genericDeclStore.items[i].fieldTypes;
+		i = i + 1;
 	}
 	return "";
 }

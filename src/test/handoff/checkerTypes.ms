@@ -4,9 +4,10 @@
 // - Class = Ref<Struct> (not Struct or Ref<Ref<Struct>>)
 // - Interface = plain Struct
 
+import { TypeKind } from "../../ast/node";
 import { checkSource } from "./helpers";
 import { lookupSymbol } from "../../checker/symbol";
-import { TypeKind, unwrapRef, isInterfaceType } from "../../checker/types";
+import { unwrapRef, isInterfaceType } from "../../checker/types";
 
 test "checker: class type is Ref<Struct>" {
 	const ctx = checkSource("class Foo { x: number; y: string }");

@@ -21,14 +21,8 @@
 // V1 limitation: top-level FunctionDecl only. Span in closures/function-pointer types
 // emits a diagnostic.
 
-import {
-	Node, NodeKind, DeclKind,
-	FunctionDeclData, CallExprData, ObjectLiteralData, BlockStmtData,
-} from "../../ast/node";
-import {
-	Type, TypeKind,
-	createPtr, createSpan, getSysType,
-} from "../../checker/types";
+import { Node, NodeKind, DeclKind, FunctionDeclData, CallExprData, ObjectLiteralData, BlockStmtData, Type, TypeKind } from "../../ast/node";
+import { createPtr, createSpan, getSysType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import {

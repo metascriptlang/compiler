@@ -1,9 +1,9 @@
-import { Type, TypeKind, unknownType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity, isPromiseResult } from "./types";
+import { unknownType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity, isPromiseResult } from "./types";
 import { isAssignable } from "./compat";
-import { Symbol, SymbolKind, SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, createSymbolTableWithCache, hasFlag } from "./symbol";
+import { SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, createSymbolTableWithCache, hasFlag } from "./symbol";
 import { IdentCache } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
-import { Node, SourceLocation, makeLoc } from "../ast/node";
+import { Node, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { findChar, splitTopLevel } from "../utils/string";
 import { InitTracker, createInitTracker } from "./initTracker";
 
@@ -596,6 +596,10 @@ export function addWarning(ctx: CheckerContext, msg: string, line: number, col: 
 // globalError — fatal, compilation should abort
 export function addFatalError(ctx: CheckerContext, msg: string, line: number, col: number): void {
 	ctx.errors.push({ message: msg, line, column: col, endColumn: 0, fatal: true, severity: Severity.Error });
+}
+
+export function addFatalErrorRange(ctx: CheckerContext, msg: string, line: number, col: number, endCol: number): void {
+	ctx.errors.push({ message: msg, line, column: col, endColumn: endCol, fatal: true, severity: Severity.Error });
 }
 
 export function hasErrors(ctx: CheckerContext): boolean {

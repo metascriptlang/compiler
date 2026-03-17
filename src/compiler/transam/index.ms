@@ -8,6 +8,7 @@
 // dbExecute runs the full pipeline through the red-green engine.
 
 import { Node, NodeKind, nodeCacheStore, nodeCacheGet } from "../../ast/node";
+import { readFile as readStdFile } from "std/fs";
 import { CheckerContext, CancelCtx, ctxCacheStore, ctxCacheGet, createContext } from "../../checker/context";
 import {
 	TaQueryKey, TaQueryKind, TaQueryState, TaDurability,
@@ -82,6 +83,47 @@ function isStdPathFor(db: TransAmDb, filePath: string): boolean {
 
 export function dbSetStdPath(db: TransAmDb, stdPath: string): void {
 	db.stdPath = stdPath;
+}
+
+export function dbEnsurePrelude(db: TransAmDb): void {
+	if (db.preludeCtx === null && db.stdPath.length > 0) {
+		db.preludeCtx = buildPreludeContext(db.stdPath);
+		// Pre-register exports from top-level std modules (e.g., std/build.ms)
+		// so auto-import suggestions work even without explicit imports.
+		preRegisterStdModule(db, db.stdPath + "/build.ms", "std/build");
+	}
+}
+
+// Parse a single file and register its exports into the registry.
+function preRegisterStdModule(db: TransAmDb, filePath: string, specifier: string): void {
+	const source = readStdFile(filePath);
+	if (source.length === 0) return;
+	const pr = parseSourceLenient(source);
+	if (!pr.ok) return;
+	const tmpCtx = createTempCollectContext();
+	tmpCtx.modulePath = filePath;
+	collectTopLevelLocal(tmpCtx, pr.value);
+	resolveDeclarations(tmpCtx, pr.value);
+	const exports: ExportedSymInfo[] = [];
+	for (const sym of tmpCtx.table.current.symbols) {
+		if (hasFlag(sym, SymbolFlag.Exported)) {
+			exports.push({
+				name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
+				overloadTypes: [], extReceiverType: "", extIsStatic: false,
+				overloadExtReceiverTypes: [], overloadExtIsStatic: [],
+				nativeName: sym.nativeName, builtinKind: sym.builtinKind,
+				overloadNativeNames: [], overloadBuiltinKinds: [],
+				defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [],
+				definingModule: filePath, originalName: sym.originalName,
+				headerPath: sym.headerPath,
+				location: sym.location !== null ? sym.location : makeLoc(0, 0),
+				memberLocations: [],
+			});
+		}
+	}
+	if (exports.length > 0) {
+		registerModuleExports(db.exportRegistry, filePath, exports);
+	}
 }
 
 // ===== TransAmDb =====
@@ -217,12 +259,10 @@ export function dbParse(db: TransAmDb, filePath: string): Node {
 
 // Lazily ensure all files imported by `filePath` have their exports in the registry.
 // Walks dep edges (already stored by recordImportsForFile), runs Phase 1 for unregistered deps.
-function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: string[], startVersion: number): void {
-	// Cycle protection
-	for (let vi = 0; vi < visited.length; vi = vi + 1) {
-		if (visited[vi] === filePath) return;
-	}
-	visited.push(filePath);
+function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Set<string>, startVersion: number): void {
+	// Cycle protection — O(1) Set lookup
+	if (visited.has(filePath)) return;
+	visited.add(filePath);
 
 	const fileId = getFileId(db.fileInput, filePath);
 	if (fileId < 0) return;
@@ -375,7 +415,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const startVersion = getCancelVersion(db.cancelCtx);
 
 	// Ensure cross-module exports are registered for all dependencies
-	const visitedPaths: string[] = [];
+	const visitedPaths: Set<string> = new Set<string>();
 	dbEnsureExportsRegistered(db, filePath, visitedPaths, startVersion);
 
 	pushFrame(db.depStack, key);

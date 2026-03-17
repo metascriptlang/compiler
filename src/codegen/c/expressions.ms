@@ -6,18 +6,9 @@
 // Follows standard reference implementation pattern for destination carriers.
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
-import {
-	Node, NodeKind, NodeFlag,
-	NumberLiteralData, StringLiteralData, BooleanLiteralData,
-	IdentifierData, BinaryExprData, UnaryExprData,
-	MemberExprData, ArrayAccessData,
-	ConditionalExprData, TypeAssertionData, CallExprData,
-	ObjectLiteralData, ArrayLiteralData,
-	UpdateExprData, NewExprData, MoveExprData, SpreadExprData,
-	ExprStmtData, HiddenStdConvData, HiddenDerefData,
-} from "../../ast/node";
-import { Type, TypeKind, isIntegerType, getProperty, getMinArity, isInterfaceType, findUnionVariant, voidType } from "../../checker/types";
-import { Symbol, SymbolKind, SymbolFlag, hasFlag } from "../../checker/symbol";
+import { Node, NodeKind, NodeFlag, NumberLiteralData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, NewExprData, MoveExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, HiddenDerefData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { isIntegerType, getProperty, getMinArity, isInterfaceType, findUnionVariant, voidType } from "../../checker/types";
+import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, Builder, CSection,
 	initLoc, noLoc, rdLoc, addrLoc,
@@ -26,7 +17,7 @@ import {
 	emitProcLocalsLine,
 } from "./context";
 import { mangle, mangleFieldName, mangledFunctionName, safeName } from "./names";
-import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl } from "./types";
+import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl } from "./types";
 import { formatCNumber, cBoolLiteral, cNullLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { findChar } from "../../utils/string";
 import { ensureDrcProto, ensureCrossModuleProto, useHeader } from "./forward";
@@ -1158,7 +1149,8 @@ function genClosureCall(g: CGen, p: CProc, callee: string, argsStr: string, call
 
 	// NRVO for closures: pass &dest as first param (our convention; reference uses last param)
 	const nrvoRet = getCalleeReturnType(node);
-	const nrvoType = (nrvoRet !== null && isNrvoReturnType(nrvoRet)) ? nrvoRet : null;
+	const nrvoFuncType = getCalleeFuncType(node);
+	const nrvoType = (nrvoRet !== null && isNrvoReturnType(nrvoRet, nrvoFuncType)) ? nrvoRet : null;
 
 	if (nrvoType !== null) {
 		// NRVO: allocate temp, pass &tmp as first arg, read tmp after call
@@ -1346,7 +1338,8 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 	const calleeStr = callee;
 	// NRVO: call returns void, result via out-param
 	const nrvoRet = getCalleeReturnType(node);
-	const nrvoType = (nrvoRet !== null && isNrvoReturnType(nrvoRet)) ? nrvoRet : null;
+	const nrvoFuncType2 = getCalleeFuncType(node);
+	const nrvoType = (nrvoRet !== null && isNrvoReturnType(nrvoRet, nrvoFuncType2)) ? nrvoRet : null;
 	if (nrvoType !== null) {
 		const cType = getTypeDesc(g, nrvoType);
 		const tmp = getTemp(p, cType);

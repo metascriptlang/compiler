@@ -11,17 +11,9 @@
 //   deepAliases(dest, ri): boolean     — recursive self-alias check
 //   skipConvDfa(n): Node               — strip transparent wrappers
 
-import {
-	Node, NodeKind, Symbol,
-	IdentifierData, MemberExprData, ArrayAccessData,
-	NumberLiteralData, HiddenDerefData, HiddenStdConvData,
-	TypeAssertionData, CallExprData, ObjectLiteralData,
-	ArrayLiteralData, NewExprData, SpreadExprData,
-	BinaryExprData, UnaryExprData, ConditionalExprData,
-	ExprStmtData,
-} from "../ast/node";
-import { SymbolKind, SymbolFlag, hasFlag, makeSymbol } from "../checker/symbol";
-import { TypeKind, unknownType } from "../checker/types";
+import { Node, NodeKind, Symbol, IdentifierData, MemberExprData, ArrayAccessData, NumberLiteralData, HiddenDerefData, HiddenStdConvData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, NewExprData, SpreadExprData, BinaryExprData, UnaryExprData, ConditionalExprData, ExprStmtData, TypeKind, SymbolKind } from "../ast/node";
+import { SymbolFlag, hasFlag, makeSymbol } from "../checker/symbol";
+import { unknownType } from "../checker/types";
 import { parseInput } from "../transform/testUtil";
 
 // ===== AliasKind =====

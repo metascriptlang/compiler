@@ -9,12 +9,8 @@
 //   4. Value wrapping (decl): const x: T|null = tok → const x = { value: tok, present: true }
 //   5. Value wrapping (assign): x = tok → x = { value: tok, present: true }
 
-import {
-	Node, NodeKind, NodeFlag, SourceLocation,
-	ObjectLiteralData, MemberExprData, VariableDeclData,
-	BinaryExprData, IdentifierData, TypeAssertionData,
-} from "../../ast/node";
-import { Type, TypeKind, isInterfaceType, isMaybeType } from "../../checker/types";
+import { Node, NodeKind, NodeFlag, SourceLocation, ObjectLiteralData, MemberExprData, VariableDeclData, BinaryExprData, IdentifierData, TypeAssertionData, Type, TypeKind } from "../../ast/node";
+import { isInterfaceType, isMaybeType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeMember, makeBool, makeNull, makeTypedObjectLiteral } from "../util";

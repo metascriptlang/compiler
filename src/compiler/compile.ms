@@ -2,7 +2,7 @@
 
 import { exit, exec, fileExists } from "std/process";
 import { parseSource } from "../parser/statements/validation";
-import { Node, NodeKind, ProgramData, FunctionDeclData } from "../ast/node";
+import { Node, NodeKind, ProgramData, FunctionDeclData, SymbolKind } from "../ast/node";
 import { CheckerContext, hasErrors, hasFatalErrors, errorCount } from "../checker/context";
 import { checkProgramWithRegistry } from "../checker/checkPass";
 import { checkModuleGraph, getPreludeContext } from "../checker/index";
@@ -11,7 +11,7 @@ import { validateTypedAST } from "../checker/validate";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
 import { monomorphizeProgram, monoCloneNode } from "../monomorphize/collect";
-import { SymbolKind, hasFlag, SymbolFlag } from "../checker/symbol";
+import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { generateJS } from "../codegen/js/index";
 import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
 import { RaiserContext, createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
@@ -41,7 +41,6 @@ import { CliOptions, Target, MODE_DEBUG, MODE_RELEASE } from "./options";
 import { readSource, writeOutput, printErrorsAndExit, printTiming, verboseLog, replaceExt, dirName, baseName, stripBase, ensureDir, getJSRuntime, exeSuffix, soSuffix, outDirForMode } from "./io";
 import { compileC, compileCFile, linkObjects, appendFlag, cliCompileFlags, cliLinkFlags } from "./cc";
 import { initCache, stableOFile, fullCompileCmd, isCompileCached, writeCompileCache, projectCacheChanged, writeProjectCache, stableCFile, isCCodeCached, writeCCodeCache, isLinkCached, writeLinkCache, cacheDir } from "./cache";
-import { preprocessHeaders } from "../module/aro";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir } from "../utils/path";
 import { join } from "std/fs/path";
@@ -226,9 +225,6 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 	reportGraphErrors(graph);
 	exitOnModuleErrors(graph, "error");
 
-	// Pre-process C header modules (ARO parse with import-name synthesis fallback)
-	preprocessHeaders(graph, verbose);
-
 	if (verbose) verboseLog("cross-module type check");
 	graphRegistry = checkModuleGraph(graph, config.stdPath);
 	graphPreludeCtx = getPreludeContext();
@@ -348,40 +344,6 @@ function processCompileDirectives(directives: string, moduleDir: string, allFlag
 	return oFiles;
 }
 
-// Auto-compile companion .c files for .h imports.
-// For each .h module in the graph, checks if a .c file exists at the same path.
-// If so, compiles it to .o and returns accumulated object file paths.
-function compileHeaderCompanions(graph: ModuleGraph, allFlags: string, mode: number, ccOption: number, verbose: boolean): string {
-	let oFiles = "";
-	for (let i = 0; i < graph.loadOrder.length; i += 1) {
-		const modPath = graph.loadOrder[i];
-		const mod = findModule(graph, modPath);
-		if (mod === null || !mod.isCHeader) continue;
-		// lib.h → lib.c
-		const cPath = `${mod.path.slice(0, mod.path.byteLength - 2)}.c`;
-		if (fileExists(cPath)) {
-			const oFile = stableOFile(cPath);
-			if (_compiledOFiles.has(oFile)) continue;
-			_compiledOFiles.add(oFile);
-			const cmdKey = fullCompileCmd(ccOption, mode, allFlags);
-			if (isCompileCached(cPath, oFile, cmdKey)) {
-				if (verbose) verboseLog(`  companion ${cPath} → ${oFile} ${dim("(cached)")}`);
-			} else {
-				if (verbose) verboseLog(`  companion ${cPath} → ${oFile}`);
-				const ccCode = compileCFile(cPath, oFile, allFlags, mode, ccOption);
-				if (ccCode !== 0) {
-					console.log(`${error("error")}: companion compile failed for ${cPath} ${dim(`(exit ${ccCode})`)}`);
-
-					exit(1);
-				}
-				writeCompileCache(oFile);
-			}
-			oFiles = appendFlag(oFiles, oFile);
-		}
-	}
-	return oFiles;
-}
-
 // ===== Dependency File Output =====
 
 function writeDepsFile(graph: ModuleGraph, entryPath: string, outDir: string): void {
@@ -412,7 +374,6 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
-		if (mod.isCHeader) continue;
 
 		// Parse + Check (cross-module registry for proper import type resolution)
 		const program = parseOrExit(mod.source, modPath);
@@ -503,14 +464,10 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	const sharedHookOwners = createNameSet();
 	setGlobalHookOwners(sharedHookOwners);
 
-	// Auto-compile companion .c files for .h imports
-	const companionObjs = compileHeaderCompanions(graph, allFlags, opts.mode, opts.ccCompiler, opts.verbose);
-	oFiles = appendFlag(oFiles, companionObjs);
 
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
-		if (mod.isCHeader) continue;
 
 		if (opts.verbose) verboseLog(`transforming ${modPath}`);
 
@@ -531,7 +488,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		}
 		ctx.errors = [];
 
-		// Drain pending instances (Nim parity: addCodeForGenerics at module close).
+		// Drain pending instances (reference parity: addCodeForGenerics at module close).
 		const pendingInsts = drainPendingInstances();
 		if (pendingInsts.length > 0) {
 			const instPd = program.data as ProgramData;
@@ -755,14 +712,10 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	const sharedHookOwners = createNameSet();
 	setGlobalHookOwners(sharedHookOwners);
 
-	// Auto-compile companion .c files for .h imports
-	const companionObjs = compileHeaderCompanions(graph, allFlags, opts.mode, opts.ccCompiler, opts.verbose);
-	oFiles = appendFlag(oFiles, companionObjs);
 
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
-		if (mod.isCHeader) continue;
 
 		if (opts.verbose) verboseLog(`transforming ${modPath}`);
 
@@ -895,7 +848,6 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
-		if (mod.isCHeader) continue;
 
 		if (opts.verbose) verboseLog("compiling " + modPath);
 
@@ -939,7 +891,6 @@ export function cmdRunRaiser(filePath: string, opts: CliOptions): void {
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
-		if (mod.isCHeader) continue;
 
 		if (opts.verbose) verboseLog("parsing " + modPath);
 		const program = parseOrExit(mod.source, modPath);

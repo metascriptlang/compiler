@@ -3,8 +3,7 @@
 // Follows standard reference patterns for section-based output and block stacking.
 // CGen = BModule, CProc = BProc, CBlock = TBlock, CLoc = TLoc.
 
-import { Node, NodeKind } from "../../ast/node";
-import { Type, TypeKind } from "../../checker/types";
+import { Node, NodeKind, Type, TypeKind } from "../../ast/node";
 import { CheckerContext } from "../../checker/context";
 
 
@@ -461,8 +460,6 @@ export class CGen {
 	stringPool: StringPool;    // interned string literals
 	declaredProcs: NameSet;    // prevents duplicate prototypes
 	declaredThings: NameSet;   // prevents duplicate declarations
-	knownTypeNames: NameSet;   // cross-module type names (enums + structs, for TypeReference resolution)
-	knownClassNames: NameSet;  // cross-module class names (need pointer semantics: Name*)
 	classesWithCtors: NameSet; // classes that have ConstructorDecl → use ClassName_new() in NewExpr
 	checkerCtx: CheckerContext;
 	modulePath: string;        // source file path (for module-qualified init names)
@@ -498,8 +495,6 @@ export function createCGen(ctx: CheckerContext, modulePath: string): CGen {
 		stringPool: createStringPool(),
 		declaredProcs: createNameSet(),
 		declaredThings: createNameSet(),
-		knownTypeNames: createNameSet(),
-		knownClassNames: createNameSet(),
 		classesWithCtors: createNameSet(),
 		checkerCtx: ctx,
 		modulePath,

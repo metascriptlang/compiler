@@ -13,13 +13,7 @@
 // Or-patterns [p1, p2] → $m === p1 || $m === p2
 // Binding patterns (identifier) → const name = $m; prepended to body
 
-import {
-	Node, NodeKind, DeclKind, SourceLocation,
-	BlockStmtData,
-	MatchStmtData, MatchExprData, MatchCaseData,
-	VariableDeclData, ReturnStmtData, ExprStmtData, IfStmtData,
-	IdentifierData, NumberLiteralData, StringLiteralData,
-} from "../../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, BlockStmtData, MatchStmtData, MatchExprData, MatchCaseData, VariableDeclData, ReturnStmtData, ExprStmtData, IfStmtData, IdentifierData, NumberLiteralData, StringLiteralData, Type } from "../../ast/node";
 import { TransformContext, freshTemp } from "../context";
 import { walkExpandBlocks, containsExprKind, replaceInExpr } from "../walker";
 import {
@@ -27,7 +21,6 @@ import {
 	makeReturn, makeIf, makeBinary, makeAssign, makeBool, makeUnary,
 	makeCall, makeNumber, makeSwitch, makeSwitchCase,
 } from "../util";
-import { Type } from "../../checker/types";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
 // ===== Nested MatchExpr Hoisting via shared walker =====

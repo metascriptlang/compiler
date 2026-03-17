@@ -16,19 +16,11 @@
 // before destructorLifting). By this point if(true)/if(false) conditions are already
 // BooleanLiteral nodes from constant folding at step 2.
 
-import {
-	Node, NodeKind,
-	ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData,
-	FunctionExprData, MethodDeclData, ConstructorDeclData,
-	ExportDeclData, ClassDeclData, DecoratedDeclData,
-	IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData,
-	DoWhileStmtData, SwitchStmtData, SwitchCaseData, TryCatchStmtData,
-	BooleanLiteralData, ExprStmtData, CallExprData, IdentifierData,
-} from "../../ast/node";
+import { Node, NodeKind, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, ExportDeclData, ClassDeclData, DecoratedDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, TryCatchStmtData, BooleanLiteralData, ExprStmtData, CallExprData, IdentifierData, TypeKind, SymbolKind } from "../../ast/node";
 import { TransformContext, createTransformContextWithChecker, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../context";
 import { forEachChild } from "../../ast/visitor";
-import { TypeKind, createFunction, neverType, voidType } from "../../checker/types";
-import { lookupSymbol, makeSymbol, SymbolKind, defineSymbol } from "../../checker/symbol";
+import { createFunction, neverType, voidType } from "../../checker/types";
+import { lookupSymbol, makeSymbol, defineSymbol } from "../../checker/symbol";
 import { CheckerContext, createContext } from "../../checker/context";
 import { getDeclName } from "../../checker/collectPass";
 import { makeBlock } from "../util";
@@ -115,7 +107,7 @@ function collectIdentifiers(node: Node, refs: NameSet): void {
 }
 
 // Returns true for declarations that can be eliminated if unreferenced.
-// Nim parity: function-level DCE is handled by codegen (isDeclAlive with
+// Reference parity: function-level DCE is handled by codegen (isDeclAlive with
 // cross-module visibility), NOT by transform-level DCE (per-module, no cross-module refs).
 // Only type aliases and enums are safe to eliminate at transform level.
 function isEliminable(node: Node): boolean {

@@ -4,8 +4,7 @@
 // would create circular imports if left in declarations.ms or index.ms.
 // Extracted to break cycles: expressions↔declarations, statements↔declarations, expressions↔index.
 
-import { Type, TypeKind } from "../../checker/types";
-import { Symbol } from "../../checker/symbol";
+import { Type, TypeKind, Symbol } from "../../ast/node";
 import {
 	CGen, CSection,
 	addLine, sec, nameSetHas, nameSetAdd,
@@ -78,7 +77,7 @@ export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Type
 	if (nameSetHas(g.declaredProcs, protoKey)) return;
 	nameSetAdd(g.declaredProcs, protoKey);
 	const retType = getTypeDesc(g, fnType.typeReturn);
-	const nrvo = isNrvoReturnType(fnType.typeReturn);
+	const nrvo = isNrvoReturnType(fnType.typeReturn, fnType);
 	let paramList = "";
 	if (nrvo) {
 		paramList = retType + "* __result";

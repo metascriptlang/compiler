@@ -3,10 +3,8 @@
 // Tests implicit type coercions that the checker must support.
 // Each coercion is verified against standard reference behavior.
 
-import {
-	Type, TypeKind, createStruct, createRef, createEnum,
-	numberType, stringType,
-} from "../../checker/types";
+import { Type, TypeKind } from "../../ast/node";
+import { createStruct, createRef, createEnum, numberType, stringType } from "../../checker/types";
 import { isAssignable } from "../../checker/compat";
 
 // ===== Ref<T> → T auto-deref =====

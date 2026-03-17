@@ -9,10 +9,7 @@
 //   builtinLower.ms — AST rewriting (@builtin dispatch, call site replacement)
 //   json.ms         — C code generation (string building, type mapping)
 
-import {
-	Node, NodeKind, SourceLocation, createNode,
-} from "../../ast/node";
-import { Type, TypeKind } from "../../checker/types";
+import { Node, NodeKind, SourceLocation, createNode, Type, TypeKind } from "../../ast/node";
 import { syntheticToken, makeExprStmt } from "../../transform/util";
 import { TransformContext, hasEmitted } from "../../transform/context";
 

@@ -1,33 +1,10 @@
 // Expression Checker — type inference for all expression kinds
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
-import {
-	Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation,
-	IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData,
-	CallExprData, MemberExprData, ArrayAccessData,
-	ObjectLiteralData, ArrayLiteralData, ConditionalExprData,
-	TypeAssertionData, SpreadExprData, NewExprData, TryExprData,
-	AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData,
-	HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData,
-	ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData,
-	FunctionDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData,
-} from "../ast/node";
+import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { TokenKind, createToken } from "../lexer/token";
-import {
-	Type, TypeKind,
-	unknownType, numberType, stringType, booleanType, charType,
-	voidType, nullType, errorType,
-	createArray, createSpan, createFunction, createTypeRef, createStruct, createRef, createResult, createPrimitive, substituteType, instantiateGeneric, anonStructName,
-	isNumeric, isIntegerType, isStringType, isCallable, getReturnType, getElementType, getProperty, sizeOfType,
-	typeNameOf, unwrapRef, isDiscriminatedUnion, findVariantByDiscriminant, findFieldInVariant, findUnionVariant,
-	unifyType, createUnifyBindings, hasGenericParams,
-	getMinArity, setMinArity, isNarrowingIntConv, CallingConvention, skipModifier,
-	createPromise, isPromise, getPromiseInner, isResult, getResultOkType, createGenericParam,
-} from "./types";
-import {
-	Symbol, SymbolKind, ScopeKind, SymbolState, SymbolFlag,
-	defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag,
-} from "./symbol";
+import { unknownType, numberType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createSpan, createFunction, createTypeRef, createStruct, createRef, createResult, createPrimitive, substituteType, instantiateGeneric, anonStructName, isNumeric, isIntegerType, isStringType, isCallable, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, unwrapRef, isDiscriminatedUnion, findVariantByDiscriminant, findFieldInVariant, findUnionVariant, unifyType, createUnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, skipModifier, createPromise, isPromise, getPromiseInner, isResult, getResultOkType, createGenericParam, instantiateGenericBody } from "./types";
+import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag } from "./symbol";
 import { CheckerContext, addError, addErrorRange, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, isInAsyncPromiseResult } from "./context";
 import {
 	scoreCandidate, isAssignable, needsStdConv, resolveOverloadIdx,
@@ -35,14 +12,14 @@ import {
 	scoreCandidatePriority, isNoMatch, emptyCandidateScore, cmpCandidates,
 } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
-import { resolveAnnotation, resolveAnnotationLoc, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation, buildTypeArgKey } from "./resolvePass";
+import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation, buildTypeArgKey } from "./resolvePass";
 import { parseNumberLiteral, findChar, splitTopLevel } from "../utils/string";
 import { findCallTypeArg, getExplicitTypeArg, getGenericDecl } from "../parser/context";
 import {
 	markInitialized, isInitialized, impliesNotNull, getDeclBlock,
 	saveInitState, restoreInitState, collectNewInits, mergeInitBranches, breaksBlock, BreakState,
 } from "./initTracker";
-import { instantiateGenericFunction } from "./instantiate";
+import { callInstantiateGeneric } from "./checkerCallbacks";
 
 // Extension receiver matching functions imported from context.ms (shared with LSP)
 
@@ -98,7 +75,7 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 	for (let pi = 0; pi < paramNames.length; pi += 1) {
 		trimmedParamNames.push(paramNames[pi].trim());
 		const argName = pi < args.length ? args[pi].trim() : "";
-		concreteTypes.push(resolveAnnotation(argName, ctx));
+		concreteTypes.push(resolveAnnotation(argName, ctx, 0, 0));
 	}
 	const instType = instantiateGeneric(baseSym.symbolType, trimmedParamNames, concreteTypes);
 	const instInner = (instType.kind === TypeKind.Ref && instType.typeReturn !== null) ? instType.typeReturn : instType;
@@ -461,7 +438,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			let d = node.data as TypeAssertionData;
 			let srcType = checkExpr(ctx, d.asExpr, null);
 			const asLoc = node.typeExpr !== null ? node.typeExpr.location : node.location;
-			const targetType = (d.asType !== "") ? resolveAnnotationLoc(d.asType, ctx, asLoc.line, asLoc.column) : unknownType();
+			const targetType = (d.asType !== "") ? resolveAnnotation(d.asType, ctx, asLoc.line, asLoc.column) : unknownType();
 			// Record type annotation position for LSP
 			resolveTypeExpr(node.typeExpr, ctx);
 			// General rule: `expr as unknown as T` → collapse to `expr as T`.
@@ -552,7 +529,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 		},
 		NodeKind.SizeofExpr => {
 			const d = node.data as SizeofExprData;
-			const resolved = resolveAnnotation(d.sizeofType, ctx);
+			const resolved = resolveAnnotation(d.sizeofType, ctx, 0, 0);
 			resolveTypeExpr(node.typeExpr, ctx);
 			const size = sizeOfType(resolved);
 			node.kind = NodeKind.NumberLiteral;
@@ -992,11 +969,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 			const me = d.callee.data as MemberExprData;
 			const objType = me.object.nodeType;
 			if (objType !== null && objType.kind !== TypeKind.Unknown) {
-				const objName = typeNameOf(objType);
-				let allByName = findAllExtensionsByName(ctx.extensionRegistry, me.property);
-				if (allByName.length === 0 && objName !== "") {
-					allByName = findAllExtensionsByName(ctx.extensionRegistry, objName + "_" + me.property);
-				}
+				const allByName = findAllExtensionsByName(ctx.extensionRegistry, me.property);
 				const filtered = filterExtsByReceiverType(allByName, objType);
 				if (filtered.length === 1) {
 					const winner = filtered[0];
@@ -1173,7 +1146,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 					}
 				}
 				if (deb.names.length > 0) {
-					const directInstSym = instantiateGenericFunction(node.resolvedSym, deb.names, deb.types, ctx);
+					const directInstSym = callInstantiateGeneric(node.resolvedSym, deb.names, deb.types, ctx);
 					if (directInstSym !== null) {
 						node.resolvedSym = directInstSym;
 						d.callee.resolvedSym = directInstSym;
@@ -1219,6 +1192,11 @@ function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expected
 	// Single type arg → bind to first generic param found
 	if (genericParamName !== "") {
 		returnType = substituteType(returnType, genericParamName, concreteType);
+		// Reference parity: eagerly instantiate body for concrete GenericInstance
+		if (returnType.kind === TypeKind.GenericInstance && returnType.typeReturn === null) {
+			const declParams = getGenericDecl(returnType.typeName);
+			instantiateGenericBody(returnType, declParams);
+		}
 	}
 	return returnType;
 }
@@ -1648,22 +1626,19 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 		const enumName = objType.typeName;
 		const propName = d.property;
 		const mangledName = enumName + "_" + propName;
-		// Find and set the resolved enum member symbol (before node rewrite frees d)
+		// Create synthetic symbol for the enum member (no scope lookup needed).
+		// Enum member mangled names are NOT in scope — resolved here at use site.
 		const enumSym = lookupSymbol(ctx.table, enumName);
-		if (enumSym !== null) {
-			const memberSym = lookupSymbol(ctx.table, mangledName);
-			if (memberSym !== null) {
-				sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + propName.length, memberSym, objType, SymbolKind.EnumMember, propName, enumName, false);
-			}
-			// Rewrite entire node to Identifier (frees old MemberExprData)
-			node.kind = NodeKind.Identifier;
-			node.data = { name: mangledName };
-			node.resolvedSym = memberSym;
-		} else {
-			// Rewrite entire node to Identifier
-			node.kind = NodeKind.Identifier;
-			node.data = { name: mangledName };
+		const memberSym = makeSymbolState(propName, SymbolKind.EnumMember, objType, false, SymbolState.Shaped);
+		if (enumSym !== null && enumSym.location !== null) {
+			memberSym.location = enumSym.location;
+			memberSym.modulePath = enumSym.modulePath;
 		}
+		sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + propName.length, memberSym, objType, SymbolKind.EnumMember, propName, enumName, false);
+		// Rewrite entire node to Identifier
+		node.kind = NodeKind.Identifier;
+		node.data = { name: mangledName };
+		node.resolvedSym = memberSym;
 		node.nodeType = objType;
 		return objType;
 	}
@@ -1858,21 +1833,14 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 	}
 	// Fall back to extension registry — standard-aligned type-based lookup
 	if (ctx.extensionRegistry !== null) {
-		let allByName = findAllExtensionsByName(ctx.extensionRegistry, d.property);
+		const allByName = findAllExtensionsByName(ctx.extensionRegistry, d.property);
 		let ext = findFirstMatchingExt(allByName, objType);
 		// Static extension fallback: match 'typeof Type'
-		const objName = objType.typeName !== "" ? objType.typeName : typeNameOf(objType);
-		if (ext === null && objName !== "") {
-			const staticType = createTypeRef("typeof " + objName);
-			ext = findFirstMatchingExt(allByName, staticType);
-			// Also try mangled name (className_methodName) for class static/instance methods
-			if (ext === null) {
-				const mangledByName = findAllExtensionsByName(ctx.extensionRegistry, objName + "_" + d.property);
-				ext = findFirstMatchingExt(mangledByName, objType);
-				// Static fallback on mangled
-				if (ext === null) {
-					ext = findFirstMatchingExt(mangledByName, staticType);
-				}
+		if (ext === null) {
+			const objName = objType.typeName !== "" ? objType.typeName : typeNameOf(objType);
+			if (objName !== "") {
+				const staticType = createTypeRef("typeof " + objName);
+				ext = findFirstMatchingExt(allByName, staticType);
 			}
 		}
 		if (ext !== null) {
@@ -1897,7 +1865,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 						// On-demand instantiation (generateInstance pattern)
 						// Clone the generic function, substitute types, register specialized version
 						if (ext.sym !== null && ext.sym.declNode !== null && ext.sym.builtinKind === "") {
-							const instSym = instantiateGenericFunction(ext.sym, eb.names, eb.types, ctx);
+							const instSym = callInstantiateGeneric(ext.sym, eb.names, eb.types, ctx);
 							if (instSym !== null) {
 								node.resolvedSym = instSym;
 							}
@@ -2046,7 +2014,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	// Resolve explicit return type annotation (semProcAux parity: annotation takes precedence)
 	let explicitReturnType: Type = null as unknown as Type;
 	if (returnTypeAnnotation !== "" && returnTypeAnnotation !== "void") {
-		explicitReturnType = resolveAnnotation(returnTypeAnnotation, ctx);
+		explicitReturnType = resolveAnnotation(returnTypeAnnotation, ctx, 0, 0);
 	}
 
 	const savedFunction = ctx.currentFunction;
@@ -2060,7 +2028,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	for (const p of params) {
 		let pType = unknownType();
 		if (pi < paramTypes.length && paramTypes[pi] !== "") {
-			pType = resolveAnnotation(paramTypes[pi], ctx);
+			pType = resolveAnnotation(paramTypes[pi], ctx, 0, 0);
 		}
 		const paramSym = makeSymbol(p, SymbolKind.Parameter, pType, false);
 		defineSymbol(ctx.table, paramSym);
@@ -2091,7 +2059,7 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 	for (const p of params) {
 		let pType = unknownType();
 		if (ti < paramTypes.length && paramTypes[ti] !== "") {
-			pType = resolveAnnotation(paramTypes[ti], ctx);
+			pType = resolveAnnotation(paramTypes[ti], ctx, 0, 0);
 		}
 		types.push(pType);
 		ti += 1;

@@ -9,12 +9,8 @@
 // already boolean expressions (comparisons, calls, literals).
 // Conservative syntactic heuristic — no type info needed.
 
-import {
-	Node, NodeKind,
-	IfStmtData, WhileStmtData, DoWhileStmtData,
-	ConditionalExprData, UnaryExprData, BinaryExprData,
-} from "../../ast/node";
-import { TypeKind, isInterfaceType, isMaybeType } from "../../checker/types";
+import { Node, NodeKind, IfStmtData, WhileStmtData, DoWhileStmtData, ConditionalExprData, UnaryExprData, BinaryExprData, TypeKind } from "../../ast/node";
+import { isInterfaceType, isMaybeType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeBinary, makeMember, makeNumber, makeBool } from "../util";

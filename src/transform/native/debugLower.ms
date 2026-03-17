@@ -6,11 +6,8 @@
 //
 // C code generation for colored struct output delegated to codegen/c/json.ms.
 
-import {
-	Node, NodeKind, SourceLocation,
-	CallExprData,
-} from "../../ast/node";
-import { Type, TypeKind, isNumeric, stringType, unwrapRef } from "../../checker/types";
+import { Node, NodeKind, SourceLocation, CallExprData, Type, TypeKind } from "../../ast/node";
+import { isNumeric, stringType, unwrapRef } from "../../checker/types";
 import { TransformContext, hasEmitted } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { findExtension } from "../../checker/context";

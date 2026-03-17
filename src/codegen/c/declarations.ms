@@ -3,19 +3,8 @@
 // Handles function, enum, interface (struct), class, export, and import declarations.
 // Emits to appropriate CGen sections (Types, ProcHeaders, Procs, ForwardDecls).
 
-import {
-	Node, NodeKind, DeclKind, ExternKind,
-	FunctionDeclData, EnumDeclData,
-	InterfaceDeclData, ClassDeclData,
-	ExportDeclData, ImportDeclData,
-	VariableDeclData, DecoratedDeclData,
-	ExternDeclData, TypeAliasDeclData,
-	ProgramData, BlockStmtData,
-	PropertyDeclData, MethodDeclData, ConstructorDeclData,
-	ObjectLiteralData,
-	ExprStmtData, MacroInvocationData,
-} from "../../ast/node";
-import { Type, TypeKind, hasGenericParams } from "../../checker/types";
+import { Node, NodeKind, NodeFlag, DeclKind, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, ImportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, TypeAliasDeclData, ProgramData, BlockStmtData, PropertyDeclData, MethodDeclData, ConstructorDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../../ast/node";
+import { hasGenericParams } from "../../checker/types";
 import {
 	CGen, CProc, CSection, Builder,
 	createProc, createBuilder, add, addLine, addNewline,
@@ -30,10 +19,7 @@ import { mangle, mangleTypeName, mangleFieldName, mangledFunctionName, safeName 
 import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, annotationToC, ccgIntroducedPtr } from "./types";
 import { genTestDeclNode } from "./test";
 import { isDrcLifecycleName } from "./forward";
-import {
-	Symbol, SymbolKind, SymbolState,
-	hasFlag, SymbolFlag,
-} from "../../checker/symbol";
+import { hasFlag, SymbolFlag } from "../../checker/symbol";
 // NOTE: parser/context imports are in index.ms (not here) to avoid DRC union member count issues.
 // genGenericTypeInsts lives in index.ms for the same reason.
 
@@ -127,11 +113,12 @@ export function genDecl(g: CGen, node: Node, exported: boolean): void {
 function genExternDecl(g: CGen, node: Node): void {
 	const d = node.data as ExternDeclData;
 
-	if (d.externKind === ExternKind.Class || d.externKind === ExternKind.Interface || d.externKind === ExternKind.Type) {
-		// Opaque type forward decl: typedef struct Name Name;
-		// If @include provides full definition, this is harmless (forward decl before full def is valid C).
+	if (d.externKind === ExternKind.Class || d.externKind === ExternKind.Type) {
+		// Opaque type forward decl for classes/types without @include definition
 		addLine(sec(g, CSection.ForwardDecls), `typedef struct ${d.externName} ${d.externName};`);
 	}
+	// extern interface: type defined in C header via @include — no forward decl needed.
+	// Reference parity (sfImportc): importc types use the C name directly, no codegen emission.
 	// Vars/consts/enums/macros: provided by @include headers, no emission needed.
 }
 
@@ -158,7 +145,7 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	let cRetType = getTypeDesc(g, fnType.typeReturn);
 	// Null return type means void (not void*) — closures typed as `: void` may have null typeReturn
 	if (fnType.typeReturn === null) cRetType = "void";
-	const nrvo = isNrvoReturnType(fnType.typeReturn);
+	const nrvo = isNrvoReturnType(fnType.typeReturn, fnType);
 
 	// Build parameter list — NRVO adds out-param as first parameter
 	let paramList = "";
@@ -240,6 +227,10 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 
 function genEnumDecl(g: CGen, node: Node): void {
 	const d = node.data as EnumDeclData;
+
+	// Extern enum: defined in C header — skip emission entirely.
+	if ((node.flags & NodeFlag.ExternC) !== 0) return;
+
 	const name = mangle(d.enumName);
 
 	// Skip if already declared (check both declaration set and type cache)
@@ -264,6 +255,10 @@ function genEnumDecl(g: CGen, node: Node): void {
 
 function genInterfaceDecl(g: CGen, node: Node): void {
 	const d = node.data as InterfaceDeclData;
+
+	// Extern interface: type defined externally — skip struct emission.
+	// Reference parity: isImportedType() skips forward decl + struct body.
+	if ((node.flags & NodeFlag.ExternC) !== 0) return;
 
 	// Skip uninstantiated generic interfaces (prelude templates with K, V, T params)
 	const declType = node.nodeType;

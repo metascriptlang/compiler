@@ -49,9 +49,9 @@ import {
 	SgSemanticToken, sgCollectSemanticTokens, sgSortTokens
 } from "../../checker/suggest";
 import { CheckerContext, createContext, findModuleExports, ExportedSymInfo } from "../../checker/context";
-import { Symbol, SymbolKind, lookupSymbol } from "../../checker/symbol";
-import { Type, TypeKind, unknownType, getProperty, typeNameOf } from "../../checker/types";
-import { Node, IdentifierData, MemberExprData, ObjectLiteralData, VariableDeclData, NodeKind, ProgramData, ImportDeclData, ExportDeclData, SourceLocation, makeLoc } from "../../ast/node";
+import { SymbolFlag, hasFlag, lookupSymbol } from "../../checker/symbol";
+import { unknownType, getProperty, typeNameOf } from "../../checker/types";
+import { Node, IdentifierData, MemberExprData, ObjectLiteralData, VariableDeclData, NodeKind, ProgramData, ImportDeclData, ExportDeclData, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { FormatOptions, defaultFormatOptions, applyFmtSection } from "../fmt/options";
 import { printNode as printFormattedNode } from "../fmt/printer";
@@ -75,26 +75,15 @@ export class CompletionCache {
 
 // Resolve cache: maps label to additionalTextEdits JSON for completionItem/resolve.
 // nvim-cmp strips additionalTextEdits from initial response and expects them on resolve.
-let _resolveEdits: string[] = [];  // parallel arrays: keys and values
-let _resolveKeys: string[] = [];
+let _resolveCache: Map<string, string> = new Map<string, string>();
 
 function cacheResolveEdit(label: string, detail: string, editsJson: string): void {
-	_resolveKeys.push(label);
-	_resolveEdits.push(editsJson);
+	_resolveCache.set(label, editsJson);
 }
 
 function lookupResolveEdit(label: string, detail: string): string {
-	let i = _resolveKeys.length - 1;
-	while (i >= 0) {
-		if (_resolveKeys[i] === label) return _resolveEdits[i];
-		i = i - 1;
-	}
+	if (_resolveCache.has(label)) return _resolveCache.get(label);
 	return "";
-}
-
-function clearResolveEdits(): void {
-	_resolveKeys = [];
-	_resolveEdits = [];
 }
 
 export function createCompletionCache(): CompletionCache {
@@ -630,7 +619,8 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 
 	// build.ms validation warnings (entry path not found, etc.)
 	if (path.length > 9 && path.slice(path.length - 9, path.length) === "/build.ms") {
-		const buildWarnings = validateBuildConfig(lspDirname(path));
+		const buildSource = dbGetSource(db, path);
+		const buildWarnings = validateBuildConfig(lspDirname(path), buildSource);
 		for (let bw = 0; bw < buildWarnings.length; bw = bw + 1) {
 			if (diagCount > 0) diagArray = diagArray + ",";
 			const w = buildWarnings[bw];
@@ -686,6 +676,10 @@ export function recordImportsForFile(db: TransAmDb, path: string, program: Node)
 
 // Build wire-formatted diagnostics notifications for all files that
 // transitively depend on the changed file. Concatenated Content-Length messages.
+// Cache last diagnostics per file — skip publish if unchanged (output-hash gate).
+// Prevents redundant re-checks on comment edits that don't change semantics.
+let _lastDiagCache: Map<string, string> = new Map<string, string>();
+
 export function buildTransitiveDiagnosticsWire(db: TransAmDb, path: string): string {
 	const fileId = getFileId(db.fileInput, path);
 	if (fileId < 0) return "";
@@ -698,6 +692,10 @@ export function buildTransitiveDiagnosticsWire(db: TransAmDb, path: string): str
 		if (depPath === "") continue;
 		const depUri = lspPathToUri(depPath);
 		const diagJson = buildDiagnosticsJson(depUri, db, depPath);
+		// Skip publish if diagnostics unchanged since last time
+		const cached = _lastDiagCache.has(depPath) ? _lastDiagCache.get(depPath) : "";
+		if (diagJson === cached) continue;
+		_lastDiagCache.set(depPath, diagJson);
 		const notif = lspNotification("textDocument/publishDiagnostics", diagJson);
 		result = result + lspFormatMessage(notif);
 	}
@@ -873,7 +871,7 @@ function lspModulePathToImportSpec(db: TransAmDb, currentPath: string, targetPat
 // Search ExportRegistry for cross-module auto-import candidates.
 function lspCrossModuleCandidates(
 	db: TransAmDb, prefix: string, currentPath: string,
-	program: Node, source: string, kind: SgCompletionKind, inScopeNames: string[]
+	program: Node, source: string, kind: SgCompletionKind, inScopeSet: Set<string>
 ): string[] {
 	const items: string[] = [];
 	if (db.exportRegistry === null) return items;
@@ -890,12 +888,8 @@ function lspCrossModuleCandidates(
 			// Prefix filter
 			if (prefix.length > 0 && prefix.length > sym.name.length) continue;
 			if (prefix.length > 0 && sym.name.slice(0, prefix.length) !== prefix) continue;
-			// Skip if already in scope
-			let inScope = false;
-			for (let ni = 0; ni < inScopeNames.length; ni = ni + 1) {
-				if (inScopeNames[ni] === sym.name) { inScope = true; break; }
-			}
-			if (inScope) continue;
+			// Skip if already in scope — O(1) Set lookup
+			if (inScopeSet.has(sym.name)) continue;
 			// Type context: only suggest type-like symbols
 			if (isTypeCtx) {
 				if (sym.kind !== SymbolKind.Interface && sym.kind !== SymbolKind.Class
@@ -912,6 +906,36 @@ function lspCrossModuleCandidates(
 			items.push(lspFmtCompletionItem(sym.name, kindNum, detail, sortText, false, "", "", editJson));
 		}
 	}
+
+	// Also search prelude symbols (available even without explicit imports).
+	// These are always in scope via globalImports — suggest with auto-import if not already imported.
+	if (db.preludeCtx !== null && db.preludeCtx.table !== null && db.preludeCtx.table.current !== null) {
+		const preludeSyms = db.preludeCtx.table.current.symbols;
+		for (let pi = 0; pi < preludeSyms.length; pi = pi + 1) {
+			const sym = preludeSyms[pi];
+			if (sym.name.length === 0) continue;
+			if (!hasFlag(sym, SymbolFlag.Exported)) continue;
+			if (prefix.length > 0 && prefix.length > sym.name.length) continue;
+			if (prefix.length > 0 && sym.name.slice(0, prefix.length) !== prefix) continue;
+			if (inScopeSet.has(sym.name)) continue;
+			if (isTypeCtx) {
+				if (sym.symbolKind !== SymbolKind.Interface && sym.symbolKind !== SymbolKind.Class
+					&& sym.symbolKind !== SymbolKind.Enum && sym.symbolKind !== SymbolKind.TypeAlias) continue;
+			}
+			// Determine import spec from symbol's modulePath
+			const modPath = sym.modulePath !== null ? sym.modulePath : "";
+			if (modPath === "" || modPath === currentPath) continue;
+			const importSpec = lspModulePathToImportSpec(db, currentPath, modPath);
+			const edit = sgComputeImportEdit(program, source, sym.name, importSpec);
+			const editJson = "[" + lspFmtMultiLineTextEdit(edit.line, edit.col, edit.line, edit.endCol, edit.newText) + "]";
+			const detail = sgTypeToString(sym.symbolType) + " (from " + importSpec + ")";
+			cacheResolveEdit(sym.name, detail, editJson);
+			const kindNum = lspCompletionItemKind(sym.symbolKind, false);
+			const sortText = "22";
+			items.push(lspFmtCompletionItem(sym.name, kindNum, detail, sortText, false, "", "", editJson));
+		}
+	}
+
 	return items;
 }
 
@@ -950,20 +974,47 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 	}
 
 	const ctx = dbTypeCheck(db, path);
-	if (ctx === null) return lspResponse(id, "[]");
+	if (ctx === null) {
+		// Type check failed (incomplete code) — still try cross-module/prelude suggestions
+		if (kind === SgCompletionKind.Identifier || kind === SgCompletionKind.TypeAnnotation) {
+			const emptyScope: Set<string> = new Set<string>();
+			const fallbackItems = lspCrossModuleCandidates(db, prefix, path, program, source, kind, emptyScope);
+			if (fallbackItems.length > 0) return lspResponse(id, joinJsonItems(fallbackItems));
+		}
+		return lspResponse(id, "[]");
+	}
 
-	// For MemberAccess, resolve receiver type via AST MemberExpr node
+	// For MemberAccess, resolve receiver type via symRecords.
+	// Works for both simple (config.) and nested (config.fmt.) chains:
+	// scan backward from cursor to find the last `.`, then query the token before it.
 	let receiverType: Type = null;
 	if (kind === SgCompletionKind.MemberAccess) {
-		// findNodeAtPosition returns the MemberExpr for both `config.` and `config.x|`
-		const node = findNodeAtPosition(program, pos.line, pos.col + 1);
-		if (node !== null && node.kind === NodeKind.MemberExpr) {
-			const md = node.data as MemberExprData;
-			if (md.object !== null) {
-				const objLoc = md.object.location;
-				const sg = sgQueryAtPosition(ctx, objLoc.line, objLoc.column);
-				if (sg !== null) {
-					receiverType = sg.symType;
+		// Find the dot position by scanning source backward from cursor
+		const lineOffset = sgGetLineOffset(source, pos.line);
+		let dotCol = pos.col; // 0-based col of cursor
+		while (dotCol > 0 && source.byteAt(lineOffset + dotCol - 1) !== ".".code) {
+			dotCol = dotCol - 1;
+		}
+		// dotCol: scan stopped here. byteAt(lineOffset + dotCol - 1) === "."
+		// So dot is at 0-based col (dotCol - 1), char before dot at 0-based col (dotCol - 2)
+		// sgQueryAtPosition uses 1-based col → (dotCol - 2) + 1 = dotCol - 1
+		if (dotCol > 1) {
+			const sg = sgQueryAtPosition(ctx, pos.line, dotCol - 1);
+			if (sg !== null) {
+				receiverType = sg.symType;
+			}
+		}
+		// Fallback: try AST-based lookup
+		if (receiverType === null) {
+			const node = findNodeAtPosition(program, pos.line, pos.col + 1);
+			if (node !== null && node.kind === NodeKind.MemberExpr) {
+				const md = node.data as MemberExprData;
+				if (md.object !== null) {
+					const objLoc = md.object.location;
+					const sg = sgQueryAtPosition(ctx, objLoc.line, objLoc.column);
+					if (sg !== null) {
+						receiverType = sg.symType;
+					}
 				}
 			}
 		}
@@ -998,12 +1049,12 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 
 	// Cross-module auto-import candidates
 	if (kind === SgCompletionKind.Identifier || kind === SgCompletionKind.TypeAnnotation || kind === SgCompletionKind.ImportName) {
-		const inScopeNames: string[] = [];
+		const inScopeSet: Set<string> = new Set<string>();
 		for (let ci = 0; ci < candidates.length; ci = ci + 1) {
-			inScopeNames.push(candidates[ci].name);
+			inScopeSet.add(candidates[ci].name);
 		}
 		const source = dbGetSource(db, path);
-		const autoImportItems = lspCrossModuleCandidates(db, prefix, path, program, source, kind, inScopeNames);
+		const autoImportItems = lspCrossModuleCandidates(db, prefix, path, program, source, kind, inScopeSet);
 		for (let ai = 0; ai < autoImportItems.length; ai = ai + 1) {
 			cachedItems.push(autoImportItems[ai]);
 		}
@@ -1250,13 +1301,8 @@ function lspStartsWith(text: string, prefix: string): boolean {
 
 // Join pre-formatted JSON items into a JSON array string.
 function joinJsonItems(items: string[]): string {
-	let result = "[";
-	for (let i = 0; i < items.length; i = i + 1) {
-		if (i > 0) result = result + ",";
-		result = result + items[i];
-	}
-	result = result + "]";
-	return result;
+	if (items.length === 0) return "[]";
+	return "[" + items.join(",") + "]";
 }
 
 // Filter cached completion items by prefix match on label.

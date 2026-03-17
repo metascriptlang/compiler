@@ -5,10 +5,10 @@
 // extension lowering produces correct mangled call,
 // and new Box<number>(42) instantiates correctly.
 
+import { TypeKind } from "../../ast/node";
 import { checkSource, fullPipeline, errorCount } from "./helpers";
 import { compileToC } from "../helpers";
 import { lookupSymbol } from "../../checker/symbol";
-import { TypeKind } from "../../checker/types";
 
 test "checker: generic class method has this param" {
 	const ctx = checkSource("class Box<T> { value: T; get(): T { return this.value; } }");

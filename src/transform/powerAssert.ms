@@ -15,14 +15,8 @@
 // Only transforms AssertStmt nodes found inside TestDecl bodies.
 // Outside test blocks, AssertStmt is left untouched (codegen emits simple abort).
 
-import {
-	Node, NodeKind, DeclKind,
-	ProgramData, TestDeclData, BlockStmtData, AssertStmtData,
-	BinaryExprData, UnaryExprData, CallExprData, MemberExprData,
-	IdentifierData, NumberLiteralData, StringLiteralData, BooleanLiteralData,
-	SourceLocation, makeLoc,
-} from "../ast/node";
-import { Type, TypeKind, isIntegerType } from "../checker/types";
+import { Node, NodeKind, DeclKind, ProgramData, TestDeclData, BlockStmtData, AssertStmtData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, IdentifierData, NumberLiteralData, StringLiteralData, BooleanLiteralData, SourceLocation, makeLoc, Type, TypeKind } from "../ast/node";
+import { isIntegerType } from "../checker/types";
 import { TransformContext } from "./context";
 import {
 	makeIdent, makeString, makeNumber, makeBlock, makeVarDecl, makeExprStmt,

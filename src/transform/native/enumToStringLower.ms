@@ -7,19 +7,13 @@
 // Primary path: extract enum info from checker's symbol table (post-DCE safe).
 // Fallback path: walk AST programStmts (for tests without checker context).
 
-import {
-	Node, NodeKind,
-	ProgramData, EnumDeclData, ExportDeclData,
-} from "../../ast/node";
+import { Node, NodeKind, ProgramData, EnumDeclData, ExportDeclData, TypeKind, SymbolKind } from "../../ast/node";
 import { TransformContext } from "../context";
 import {
 	makeSwitch, makeSwitchCase, makeReturn, makeString, makeNumber,
 	makeIdent, makeBlock, makeFnDecl, syntheticToken, enumToStringName,
 } from "../util";
-import {
-	createEnum, stringType, createFunction, TypeKind,
-} from "../../checker/types";
-import { SymbolKind } from "../../checker/symbol";
+import { createEnum, stringType, createFunction } from "../../checker/types";
 import { SourceLocation, makeLoc } from "../../ast/node";
 
 // Helper: concat two Node arrays — returns new array (moved, not destroyed)

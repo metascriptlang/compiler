@@ -119,7 +119,7 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 	const monoed_paths: string[] = [];
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
-		if (mod === null || mod.isCHeader) continue;
+		if (mod === null) continue;
 		const pr = parseSource(mod.source);
 		if (!pr.ok) continue;
 		const ctx = checkProgramWithRegistry(pr.value, registry, graph, mod, preludeCtx);
@@ -134,7 +134,7 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 	let combined = "";
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
-		if (mod === null || mod.isCHeader) continue;
+		if (mod === null) continue;
 
 		const pr = parseSource(mod.source);
 		if (!pr.ok) return `ERROR: parse [${modPath}]: ${pr.error}`;
@@ -184,7 +184,7 @@ export function compileProjectToJS(entries: MapEntry[], entryPath: string): stri
 	let combined = "";
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
-		if (mod === null || mod.isCHeader) continue;
+		if (mod === null) continue;
 
 		const pr = parseSource(mod.source);
 		if (!pr.ok) return `ERROR: parse [${modPath}]: ${pr.error}`;

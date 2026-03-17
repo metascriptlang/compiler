@@ -3,11 +3,8 @@
 // Maybe<Ref<T>> and Maybe<Ptr<T>> collapse to the inner pointer type
 // (natively nullable). Maybe<Struct> creates a wrapper with hasValue flag.
 
-import {
-	TypeKind, createStruct, createRef, createPtr,
-	numberType, stringType,
-	createMaybeType, isMaybeType,
-} from "../../checker/types";
+import { TypeKind } from "../../ast/node";
+import { createStruct, createRef, createPtr, numberType, stringType, createMaybeType, isMaybeType } from "../../checker/types";
 import { ccgIntroducedPtr } from "../../codegen/c/types";
 
 test "Maybe<Ref<T>> collapses to Ref<T>" {

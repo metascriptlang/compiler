@@ -162,45 +162,8 @@ export function parseCHeader(headerPath: string): string {
 // Scans the module graph for all names imported from headerPath
 // and generates `export extern function NAME(): int64;` for each.
 // Actual C prototypes come from @include — this just satisfies the checker.
-export function synthesizeHeaderSource(graph: ModuleGraph, headerPath: string): string {
-	let source = `// Synthetic module for C header: ${headerPath}\n`;
-	const emitted: string[] = [];
-
-	for (const gmod of graph.modules) {
-		for (const imp of gmod.imports) {
-			if (imp.sourcePath === headerPath) {
-				for (const name of imp.names) {
-					let found = false;
-					for (const e of emitted) {
-						if (e === name) { found = true; }
-					}
-					if (!found) {
-						source = source + `export extern function ${name}(): int64;\n`;
-						emitted.push(name);
-					}
-				}
-			}
-		}
-	}
-	return source;
-}
-
-// ===== Header Pre-processing (ARO with synthesis fallback) =====
-
-// Pre-process all C header modules in the graph.
-// Tries ARO parsing first (type-aware); falls back to import-name synthesis.
-export function preprocessHeaders(graph: ModuleGraph, verbose: boolean): void {
-	for (const modPath of graph.loadOrder) {
-		const hmod = findModule(graph, modPath);
-		if (hmod === null || !hmod.isCHeader) continue;
-		const aroSource = parseCHeader(hmod.path);
-		if (aroSource.length > 60) {
-			hmod.source = aroSource;
-		} else {
-			hmod.source = synthesizeHeaderSource(graph, hmod.path);
-		}
-	}
-}
+// preprocessHeaders and synthesizeHeaderSource removed —
+// .h imports are now inlined into consuming modules by loader.ms inlineHeaderImports().
 
 // ===== Tests =====
 test "void" { assert mapCType("void") === "void"; }

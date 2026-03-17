@@ -5,10 +5,10 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { Type, TypeKind, isPrimitiveKind, hasDestructor, hasAsgnFlag, isInterfaceType, isPromise, createPrimitive, createStruct, createArray, createFunction, createPtr, numberType, stringType, booleanType, voidType, nullType, unknownType } from "../checker/types";
-import { lookupSymbol, SymbolKind, Symbol, hasFlag, SymbolFlag } from "../checker/symbol";
+import { isPrimitiveKind, hasDestructor, hasAsgnFlag, isInterfaceType, isPromise, createPrimitive, createStruct, createArray, createFunction, createPtr, numberType, stringType, booleanType, voidType, nullType, unknownType } from "../checker/types";
+import { lookupSymbol, hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, createTransformContext } from "../transform/context";
-import { NodeKind } from "../ast/node";
+import { NodeKind, Type, TypeKind, SymbolKind, Symbol } from "../ast/node";
 
 // ===== RC Classification Kind =====
 
@@ -76,7 +76,7 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 		return makeRcInfo(RcKind.Array, "", "msArrayDestroy", "msArrayCopy", "msArrayNumberWasMoved", "msArrayNumberSink", false);
 	}
 	// Named struct elements — use hasAsgnFlag to decide if per-type hooks are needed.
-	// Nim parity: fillBody checks tfHasAsgn regardless of type kind (Struct or GenericInstance).
+	// Reference parity: fillBody checks tfHasAsgn regardless of type kind (Struct or GenericInstance).
 	// GenericInstance whose base (typeExtra) is a Struct with fields also qualifies.
 	let structElem = elem;
 	if (elem.kind === TypeKind.GenericInstance && elem.typeExtra !== null && elem.typeExtra.kind === TypeKind.Struct) {

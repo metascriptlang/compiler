@@ -3,8 +3,8 @@
 // After the full transform pipeline, lifecycle hook parameters should
 // have fully resolved types (Struct), not unresolved TypeReference.
 
+import { TypeKind } from "../../ast/node";
 import { fullPipeline, findFnDecl } from "./helpers";
-import { TypeKind } from "../../checker/types";
 
 test "post-transform: lifecycle hook has resolved param type" {
 	const src = "interface Info { name: string; desc: string; tag: string }\nconst a: Info = { name: \"a\", desc: \"b\", tag: \"c\" };\nconst b: Info = a;";

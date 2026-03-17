@@ -1,7 +1,7 @@
 // Raiser VM — Bytecode executor
 // Computed goto dispatch via dispatch.c, if/else fallback for Print.
 
-@include("vm_dispatch.h")
+@include("vm_dispatch.h");
 import { raiser_dispatch_impl } from "./vm_dispatch.h";
 
 import { readFile as hostReadFile, writeFile as hostWriteFile } from "std/process";

@@ -3,9 +3,9 @@
 // Only wraps params that need cleanup (non-primitive types needing RC).
 // Only infers sink modifiers. Default (no wrapper) = borrow.
 
-import { Node, NodeKind, ProgramData, FunctionDeclData, VariableDeclData, BinaryExprData, CallExprData, IdentifierData, ReturnStmtData, MemberExprData, ExprStmtData, IfStmtData, WhileStmtData, BlockStmtData, ExportDeclData } from "../ast/node";
-import { Type, TypeKind, wrapSink, isSinkType, isPrimitiveKind } from "./types";
-import { Symbol, SymbolKind, hasFlag, setFlag, SymbolFlag } from "./symbol";
+import { Node, NodeKind, ProgramData, FunctionDeclData, VariableDeclData, BinaryExprData, CallExprData, IdentifierData, ReturnStmtData, MemberExprData, ExprStmtData, IfStmtData, WhileStmtData, BlockStmtData, ExportDeclData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
+import { wrapSink, isSinkType, isPrimitiveKind } from "./types";
+import { hasFlag, setFlag, SymbolFlag } from "./symbol";
 import { CheckerContext } from "./context";
 
 

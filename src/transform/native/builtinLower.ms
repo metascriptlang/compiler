@@ -12,11 +12,8 @@
 // Typed JSON (JsonParse/JsonStringify): delegates C code generation to
 // codegen/c/json.ms for clean separation of concerns.
 
-import {
-	Node, NodeKind, NodeFlag, DeclKind, ProgramData, SourceLocation,
-	CallExprData, MemberExprData, IdentifierData, BinaryExprData, NewExprData,
-} from "../../ast/node";
-import { Type, TypeKind, isNumeric, createResult, createArray, createPrimitive, stringType, booleanType, numberType, unknownType, unwrapRef, typeNameOf, isResult, isPromise, getResultOkType, getResultErrType } from "../../checker/types";
+import { Node, NodeKind, NodeFlag, DeclKind, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, NewExprData, Type, TypeKind } from "../../ast/node";
+import { isNumeric, createResult, createArray, createPrimitive, stringType, booleanType, numberType, unknownType, unwrapRef, typeNameOf, isResult, isPromise, getResultOkType, getResultErrType } from "../../checker/types";
 import { findExtension } from "../../checker/context";
 import { TransformContext, hasEmitted } from "../context";
 import { lookupSymbol } from "../../checker/symbol";

@@ -1,31 +1,9 @@
 // Statement Checker — Pass 3 statement validation and control flow
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
-import {
-	Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt,
-	ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData,
-	IdentifierData, BinaryExprData, MemberExprData,
-	VariableDeclData, FunctionDeclData, ClassDeclData,
-	MethodDeclData, ConstructorDeclData, ExportDeclData,
-	IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData,
-	DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData,
-	SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData,
-	DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ProgramData,
-	MacroInvocationData, StringLiteralData, CallExprData,
-	TestDeclData, AssertStmtData,
-} from "../ast/node";
-import {
-	Type, TypeKind,
-	unknownType, nullType, stringType, charType, numberType, voidType,
-	createFunction, createUnion, isMaybeType, unwrapMaybeType,
-	isNarrowingIntConv, typeNameOf, isPromise, getPromiseInner,
-	isResult, getResultOkType, getResultErrType,
-} from "./types";
-import {
-	Symbol, SymbolKind, SymbolState, ScopeKind,
-	defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope,
-	setFlag, hasFlag, SymbolFlag,
-} from "./symbol";
+import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, VariableDeclData, FunctionDeclData, ClassDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ProgramData, MacroInvocationData, StringLiteralData, CallExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { unknownType, nullType, stringType, charType, numberType, voidType, createFunction, createUnion, isMaybeType, unwrapMaybeType, isNarrowingIntConv, typeNameOf, isPromise, getPromiseInner, isResult, getResultOkType, getResultErrType } from "./types";
+import { ScopeKind, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, setFlag, hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, CancelCtx, createContext, createContextWithCache, createModuleContext, createModuleContextWithCache, addError, addFatalError, addWarning, hasErrors, hasFatalErrors, errorCount, createExtensionRegistry, registerExtension, ExtensionMethod, ExportRegistry, isCancelled, sgRecordSym, sgSortRecords, isInAsyncPromiseResult } from "./context";
 import { IdentCache, createIdentCache } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
@@ -34,12 +12,13 @@ import { getIdentId } from "./idents";
 import { readFile } from "std/process";
 import { globalImports } from "./prelude";
 import { isAssignable } from "./compat";
-import { resolveDeclarations, resolveAnnotation, resolveAnnotationLoc, resolveTypeExpr, resolveTypeExprs, ensureShaped } from "./resolvePass";
+import { resolveDeclarations, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped } from "./resolvePass";
 import { inferOwnership } from "./ownershipInference";
 import { validateTypedAST } from "./validate";
 import { getModuleDir, appendFlag, prependFlag, concatFlag } from "../utils/string";
 import { checkExpr, checkEnumExhaustiveness, fitNode } from "./checkExprPass";
-import { registerCheckStmt } from "./checkerCallbacks";
+import { registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
+import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { parseSource } from "../parser/statements/validation";
 import {
 	InitTracker, BreakState, createInitTracker,
@@ -139,7 +118,7 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 	let declType: Type = null;
 	if (d.declType !== "") {
 		const typeLoc = node.typeExpr !== null ? node.typeExpr.location : d.nameLocation;
-		declType = resolveAnnotationLoc(d.declType, ctx, typeLoc.line, typeLoc.column);
+		declType = resolveAnnotation(d.declType, ctx, typeLoc.line, typeLoc.column);
 		resolveTypeExpr(node.typeExpr, ctx);
 	}
 	const initType = checkExpr(ctx, d.initializer, declType);
@@ -1245,8 +1224,9 @@ export function checkProgramWithRegistryCancellable(
 	return checkProgramCore(program, preludeCtx, registry, graph, mod, cancelCtx, cancelVersion);
 }
 
-// Register callback at module load time
+// Register callbacks at module load time
 registerCheckStmt((ctx: CheckerContext, node: Node): void => { checkStmt(ctx, node); });
+registerCheckFunctionBody((ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[]): void => { checkFunctionBody(ctx, sym, params, body, paramLocs); });
 
 // ===== Tests =====
 

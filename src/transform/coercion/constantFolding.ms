@@ -115,18 +115,24 @@ function foldUnary(node: Node): Node {
 	const d = node.data as UnaryExprData;
 	const loc = node.location;
 	// NOTE: do NOT copy d.unaryOp to local — same DRC alias issue as foldBinary.
-	// Use if-else instead of statement match — return in match arms doesn't exit the function.
 
-	if (d.operand.kind === NodeKind.BooleanLiteral) {
-		if (d.unaryOp === "!") {
-			const bv = (d.operand.data as BooleanLiteralData).boolValue;
-			return makeBool(!bv, loc);
-		}
-	} else if (d.operand.kind === NodeKind.NumberLiteral) {
-		const nv = (d.operand.data as NumberLiteralData).value;
-		if (d.unaryOp === "-") return makeNumber(0 - nv, loc);
-		if (d.unaryOp === "+") return makeNumber(nv, loc);
-	}
+	match (d.operand.kind) {
+		NodeKind.BooleanLiteral => {
+			if (d.unaryOp === "!") {
+				const bv = (d.operand.data as BooleanLiteralData).boolValue;
+				return makeBool(!bv, loc);
+			}
+		},
+		NodeKind.NumberLiteral => {
+			const nv = (d.operand.data as NumberLiteralData).value;
+			return match (d.unaryOp) {
+				"-" => makeNumber(0 - nv, loc),
+				"+" => makeNumber(nv, loc),
+				_ => node,
+			};
+		},
+		_ => {},
+	};
 
 	return node;
 }

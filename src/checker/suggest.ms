@@ -4,22 +4,10 @@
 // formatHover, collectDiagnostics. No I/O, no protocol knowledge.
 // Called by src/lsp/handlers.ms.
 
-import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, ProgramData, DeclKind,
-	IdentifierData, MemberExprData, CallExprData,
-	BinaryExprData, UnaryExprData, VariableDeclData,
-	FunctionDeclData, IfStmtData, WhileStmtData, ForStmtData,
-	ForOfStmtData, BlockStmtData, ExprStmtData, ReturnStmtData,
-	ArrayLiteralData, ObjectLiteralData, ConditionalExprData,
-	ArrowFunctionData, ArrayAccessData, MatchExprData, MatchCaseData,
-	TryCatchStmtData, TryExprData, ClassDeclData, InterfaceDeclData, EnumDeclData,
-	TypeAliasDeclData, ExportDeclData, ImportDeclData, HiddenDerefData,
-	HiddenStdConvData, MethodDeclData, PropertyDeclData, ConstructorDeclData } from "../ast/node";
+import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, ProgramData, DeclKind, IdentifierData, MemberExprData, CallExprData, BinaryExprData, UnaryExprData, VariableDeclData, FunctionDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, ArrayLiteralData, ObjectLiteralData, ConditionalExprData, ArrowFunctionData, ArrayAccessData, MatchExprData, MatchCaseData, TryCatchStmtData, TryExprData, ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExportDeclData, ImportDeclData, HiddenDerefData, HiddenStdConvData, MethodDeclData, PropertyDeclData, ConstructorDeclData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { Type, TypeKind, typeNameOf, getProperty, unwrapRef,
-	numberType, stringType, booleanType, voidType, nullType,
-	unknownType, neverType, errorType,
-	isResult, getResultOkType, getResultErrType } from "./types";
-import { Symbol, SymbolKind, SymbolTable, Scope, lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
+import { typeNameOf, getProperty, unwrapRef, numberType, stringType, booleanType, voidType, nullType, unknownType, neverType, errorType, isResult, getResultOkType, getResultErrType } from "./types";
+import { SymbolTable, Scope, lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, findAllExtensionsByName, filterExtsByReceiverType, getExtFnType, stripReceiverParam, SgSymRecord } from "./context";
 // (utils/string imports removed — using native .slice/.charAt)
 import { checkProgram } from "./checkPass";
