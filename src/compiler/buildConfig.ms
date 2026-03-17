@@ -37,7 +37,7 @@ export function defaultFmtSection(): FmtSection {
 }
 
 export interface BuildConfig {
-	root: string;
+	entry: string;
 	build: BuildSection;
 	resolve: ResolveSection;
 	fmt: FmtSection;
@@ -147,7 +147,7 @@ export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfi
 	const defBs: BuildSection = { target: "c", outDir: "out", outFile: "", optimize: "debug" };
 	const defRs = defaultResolveSection();
 	const defFmt = defaultFmtSection();
-	const defCfg: BuildConfig = { root: "", build: defBs, resolve: defRs, fmt: defFmt, valid: false };
+	const defCfg: BuildConfig = { entry: "", build: defBs, resolve: defRs, fmt: defFmt, valid: false };
 
 	if (!fileExists(filePath)) return defCfg;
 
@@ -164,27 +164,53 @@ export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfi
 	const configObj = findConfigObject(parseResult.value);
 	if (configObj === null) return defCfg;
 
-	const root = nodeString(findObjField(configObj, "root"));
+	const entry = nodeString(findObjField(configObj, "entry"));
 	const bs = extractBuild(findObjField(configObj, "build"));
 	const fmt = extractFmt(findObjField(configObj, "fmt"));
 
-	return { root, build: bs, resolve: defRs, fmt, valid: true };
+	return { entry, build: bs, resolve: defRs, fmt, valid: true };
 }
 
-// Load only the fmt section from build.ms at the given directory.
-// Returns default if build.ms not found or has no fmt section.
-export function loadFmtSection(dir: string): FmtSection {
+// Validate build.ms and return LSP-style warnings.
+// Returns array of { message, line } for each issue found.
+export interface BuildWarning {
+	message: string;
+	line: number;
+}
+
+// Parse build.ms and return the config ObjectLiteral node, or null.
+function parseBuildFile(dir: string): Node {
 	const buildPath = dir + "/build.ms";
-	if (!fileExists(buildPath)) return defaultFmtSection();
+	if (!fileExists(buildPath)) return null as unknown as Node;
 	const source = readFile(buildPath);
-	if (source.length === 0) return defaultFmtSection();
+	if (source.length === 0) return null as unknown as Node;
 	if (!_parsersRegistered) {
 		registerCoreParsers();
 		_parsersRegistered = true;
 	}
 	const parseResult = parseSource(source);
-	if (!parseResult.ok) return defaultFmtSection();
-	const configObj = findConfigObject(parseResult.value);
+	if (!parseResult.ok) return null as unknown as Node;
+	return findConfigObject(parseResult.value);
+}
+
+export function validateBuildConfig(dir: string): BuildWarning[] {
+	const warnings: BuildWarning[] = [];
+	const configObj = parseBuildFile(dir);
+	if (configObj === null) return warnings;
+	const entryNode = findObjField(configObj, "entry");
+	if (entryNode !== null) {
+		const entry = nodeString(entryNode);
+		if (entry.length > 0 && !fileExists(entry)) {
+			warnings.push({ message: `Entry '${entry}' not found — build/run may fail unless entry is provided via command args`, line: entryNode.location.line });
+		}
+	}
+	return warnings;
+}
+
+// Load only the fmt section from build.ms at the given directory.
+// Returns default if build.ms not found or has no fmt section.
+export function loadFmtSection(dir: string): FmtSection {
+	const configObj = parseBuildFile(dir);
 	if (configObj === null) return defaultFmtSection();
 	return extractFmt(findObjField(configObj, "fmt"));
 }

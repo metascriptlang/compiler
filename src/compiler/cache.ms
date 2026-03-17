@@ -185,12 +185,10 @@ function projectCacheFile(): string {
 }
 
 // Build command line fingerprint — everything that affects the build output.
-// Hashes compiler binary (not just name) to detect version upgrades.
-// Reference parity: hashes the compiler binary itself.
-// Link flags are tracked separately in link.cache.
 // Cache compiler identity hash (once per build session).
 // Captures `clang --version` output to detect version upgrades.
-// Reference parity: hashes the compiler binary to detect version changes.
+// Reference parity: Nim's hashNimExe hashes the compiler binary.
+// Link flags are tracked separately in link.cache.
 let _compilerHash = "";
 function getCompilerHash(ccOption: number): string {
 	if (_compilerHash !== "") return _compilerHash;

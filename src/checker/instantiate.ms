@@ -265,7 +265,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	// Create and register symbol in root scope.
 	// Instance symbols get empty modulePath — codegen emits unqualified names
 	// and deduplicates across modules (first module to emit wins, others get forward decl).
-	// This matches Nim's generateInstance where instances are identified by mangled name alone.
+	// This matches the reference generateInstance where instances are identified by mangled name alone.
 	const instSym = makeSymbol(mangledName, SymbolKind.Function, instType, false);
 	instSym.state = SymbolState.Shaped;
 	instSym.nativeName = "";

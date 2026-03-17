@@ -1,6 +1,6 @@
 // AST Validator — post-check metadata verification
 //
-// Nim parity: sem IS the validation. Function bodies were type-checked by
+// Reference parity: sem IS the validation. Function bodies were type-checked by
 // checkProgramBody/checkFunctionBody. This validator only catches missing
 // nodeType on top-level identifier expressions (not inside function bodies).
 

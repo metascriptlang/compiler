@@ -203,7 +203,7 @@ let graphRegistry: ExportRegistry = null as unknown as ExportRegistry;
 let graphPreludeCtx: CheckerContext = null as unknown as CheckerContext;
 
 // Global set of compiled .o file paths — deduplicates @compile directives across modules.
-// Nim parity: {.compile.} pragma processes each unique file path exactly once.
+// Reference parity: @compile directive processes each unique file path exactly once.
 let _compiledOFiles: Set<string> = new Set<string>();
 
 function resetCompiledOFiles(): void {
@@ -316,7 +316,7 @@ function processCompileDirectives(directives: string, moduleDir: string, allFlag
 					exit(1);
 				}
 				const oFile = stableOFile(fullPath);
-				// Deduplicate: each .o compiled/linked once (Nim {.compile.} parity)
+				// Deduplicate: each .o compiled/linked once (@compile parity)
 				if (!_compiledOFiles.has(oFile)) {
 				_compiledOFiles.add(oFile);
 				// Merge global flags with per-file custom flags
@@ -586,7 +586,7 @@ processed.push({ program: nativeLowered, ctx, modPath });
 
 	if (opts.showTime) printTiming("phase A (parse+check+transform)", tA);
 
-	// Gate: stop before codegen if any type errors (Nim/Rust/Zig parity).
+	// Gate: stop before codegen if any type errors (standard compiler parity).
 	// All three reference compilers NEVER proceed to codegen with type errors.
 	if (totalCheckerErrors > 0) {
 		console.log(`${error("error")}: ${totalCheckerErrors} type error(s) found, stopping before codegen`);

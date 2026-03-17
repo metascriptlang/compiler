@@ -37,7 +37,7 @@ export function main(): number {
 			// argv path overrides build.ms root; fallback to build.ms when no argv
 			if (opts.inputFile === "") {
 				const cfg = loadBuildConfig("build.ms", opts.showTime);
-				if (cfg.valid && cfg.root.length > 0) { opts.inputFile = cfg.root; }
+				if (cfg.valid && cfg.entry.length > 0) { opts.inputFile = cfg.entry; }
 			}
 			requireFile(opts);
 			if (opts.target === Target.JS) {
@@ -60,14 +60,14 @@ export function main(): number {
 			// Load build.ms for config (target, optimize, outDir, etc.)
 			const cfg = loadBuildConfig("build.ms", opts.showTime);
 			// argv path overrides build.ms root
-			if (opts.inputFile === "" && cfg.valid && cfg.root.length > 0) {
-				opts.inputFile = cfg.root;
+			if (opts.inputFile === "" && cfg.valid && cfg.entry.length > 0) {
+				opts.inputFile = cfg.entry;
 			}
 			requireFile(opts);
 			// Apply build section settings from build.ms
 			if (cfg.valid) {
 				if (opts.verbose) {
-					verboseLog(`build.ms: root=${cfg.root} target=${cfg.build.target}`);
+					verboseLog(`build.ms: root=${cfg.entry} target=${cfg.build.target}`);
 				}
 				if (opts.mode === MODE_DEBUG && cfg.build.optimize === "release") {
 					opts.mode = MODE_RELEASE;

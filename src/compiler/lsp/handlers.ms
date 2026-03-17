@@ -56,7 +56,7 @@ import { printNode as printFormattedNode } from "../fmt/printer";
 import { formatDoc } from "../fmt/layout";
 import { registerCoreParsers } from "../../parser/statements/core";
 import { parseSource } from "../../parser/statements/validation";
-import { FmtSection, defaultFmtSection, loadFmtSection } from "../buildConfig";
+import { FmtSection, defaultFmtSection, loadFmtSection, validateBuildConfig } from "../buildConfig";
 import { isMsModuleExtension, stripMsModuleExtension } from "../../module/resolver";
 
 
@@ -602,6 +602,18 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 		diagCount = diagCount + 1;
 	}
 
+	// build.ms validation warnings (entry path not found, etc.)
+	if (path.length > 9 && path.slice(path.length - 9, path.length) === "/build.ms") {
+		const buildWarnings = validateBuildConfig(lspDirname(path));
+		for (let bw = 0; bw < buildWarnings.length; bw = bw + 1) {
+			if (diagCount > 0) diagArray = diagArray + ",";
+			const w = buildWarnings[bw];
+			const wLine = w.line > 0 ? w.line - 1 : 0;
+			diagArray = diagArray + lspFmtDiagnostic(wLine, 0, 999, 2, w.message, "msc", 0);
+			diagCount = diagCount + 1;
+		}
+	}
+
 	diagArray = diagArray + "]";
 
 	return lspFmtPublishDiagnostics(uri, diagArray);
@@ -707,6 +719,7 @@ export function handleDidOpen(params: string, db: TransAmDb): string {
 	const uri = lspGetField(textDoc, "uri");
 	const text = lspGetField(textDoc, "text");
 	const path = lspUriToPath(uri);
+
 	dbSetFileText(db, path, text);
 	const program = dbParse(db, path);
 	recordImportsForFile(db, path, program);
