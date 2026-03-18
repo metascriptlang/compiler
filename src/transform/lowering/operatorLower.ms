@@ -22,20 +22,20 @@ import { Node, NodeKind, BinaryExprData, IdentifierData, TypeAssertionData, Sour
 import { TransformContext, PendingTupleOp } from "../context";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary } from "../util";
-import { lookupSymbol } from "../../checker/symbol";
 import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType } from "../../checker/types";
+import { lookupSymbol } from "../../checker/symbol";
 import { findExtension, ExtensionMethod } from "../../checker/context";
 
 // ===== Type Resolution =====
 
 // Resolve the Type of an expression node.
-// Tries nodeType first (set by checker/analyzer), then symbol table lookup for identifiers.
+// Tries nodeType first (set by checker/analyzer), then resolvedSym, then symbol table.
 function resolveType(ctx: TransformContext, node: Node): Type {
-	// 1. nodeType (set by checker on declarations, by analyzer on DRC-injected nodes)
-	if (node.nodeType !== null) {
-		return node.nodeType;
+	if (node.nodeType !== null) return node.nodeType;
+	if (node.resolvedSym !== null && node.resolvedSym.symbolType !== null) {
+		return node.resolvedSym.symbolType;
 	}
-	// 2. Symbol table lookup for identifiers
+	// Fallback: symbol table lookup for identifiers without resolvedSym
 	if (ctx.checkerCtx === null) return null;
 	if (node.kind !== NodeKind.Identifier) return null;
 	const d = node.data as IdentifierData;

@@ -162,24 +162,19 @@ function hookSuffix(hook: string): string {
 	};
 }
 
-// Fix up function params/return created by makeFnDecl with string type names.
-// resolveSimpleTypeStr can't resolve named types → returns Unknown.
-// Replace Unknown params with the concrete type (reference parity: all types concrete).
-function fixupHookTypes(fnNode: Node, concreteType: Type): void {
-	if (fnNode.nodeType === null) return;
-	if (fnNode.nodeType.typeChildren !== null) {
-		for (let pi = 0; pi < fnNode.nodeType.typeChildren.length; pi += 1) {
-			const pk = fnNode.nodeType.typeChildren[pi].kind;
-			if (pk === TypeKind.Unknown || pk === TypeKind.TypeReference) {
-				fnNode.nodeType.typeChildren[pi] = concreteType;
-			}
-		}
+// Set hook function param/return types to concrete Types.
+// Reference parity: symPrototype sets dest.typ/src.typ directly, never string names.
+// We set each param individually because makeFnDecl can't resolve named struct types.
+function setHookParamType(fnNode: Node, index: number, t: Type): void {
+	if (fnNode.nodeType !== null && fnNode.nodeType.typeChildren !== null
+		&& index < fnNode.nodeType.typeChildren.length) {
+		fnNode.nodeType.typeChildren[index] = t;
 	}
-	if (fnNode.nodeType.typeReturn !== null) {
-		const rk = fnNode.nodeType.typeReturn.kind;
-		if (rk === TypeKind.Unknown || rk === TypeKind.TypeReference) {
-			fnNode.nodeType.typeReturn = concreteType;
-		}
+}
+
+function setHookReturnType(fnNode: Node, t: Type): void {
+	if (fnNode.nodeType !== null) {
+		fnNode.nodeType.typeReturn = t;
 	}
 }
 
@@ -767,11 +762,16 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 	} else {
 		fnNode = makeFnDecl(typeName + suffix, [p1, p2], [typeName, typeName], makeBlock(buf.items, loc), "", "void", loc);
 	}
-	// Set hook params to concrete type (reference parity: all types resolved).
+	// Set hook param types explicitly (reference parity: symPrototype sets dest.typ/src.typ directly).
 	// For class types, use classType (Ref<Struct>) — already a pointer.
 	// For value types, wrap in Var (= pointer) — Standard reference parity: =destroy(x: var T).
 	const paramType = classType !== null ? classType : createVar(objType);
-	fixupHookTypes(fnNode, paramType);
+	setHookParamType(fnNode, 0, paramType);
+	if (!isUnary && !isTrace) {
+		// copy/sink: both params are the struct type
+		setHookParamType(fnNode, 1, paramType);
+	}
+	// trace: param[1] stays void* (callback/env) — reference: getSysType(pointer)
 	lctx.collector.push(fnNode);
 }
 
@@ -854,7 +854,10 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 	}
 	const dupNode = makeFnDecl(typeName + "_dup", ["src"], [typeName], makeBlock(dupStmts, loc), "", typeName, loc);
 	// Fix up _dup param/return types — classType for classes, objType for value types
-	fixupHookTypes(dupNode, classType !== null ? classType : objType);
+	// _dup: param[0] = type, return = type (reference: symDupPrototype)
+	const dupType = classType !== null ? classType : objType;
+	setHookParamType(dupNode, 0, dupType);
+	setHookReturnType(dupNode, dupType);
 	lctx.collector.push(dupNode);
 	setAttachedOp(objType, AttachedOp.AttachedDup, typeName + "_dup");
 
@@ -901,7 +904,8 @@ function ensureTypeHooksForType(objType: Type, lctx: LiftCtx, loc: SourceLocatio
 	dupStmts.push(makeExprStmt(makeCall(makeIdent(typeName + "_copy", loc), [makeHiddenAddr(makeIdent("$result", loc), loc), makeHiddenAddr(makeIdent("src", loc), loc)], loc), loc));
 	dupStmts.push(makeReturn(makeIdent("$result", loc), loc));
 	const dupNode = makeFnDecl(typeName + "_dup", ["src"], [typeName], makeBlock(dupStmts, loc), "", typeName, loc);
-	fixupHookTypes(dupNode, objType);
+	setHookParamType(dupNode, 0, objType);
+	setHookReturnType(dupNode, objType);
 	lctx.collector.push(dupNode);
 	setAttachedOp(objType, AttachedOp.AttachedDup, typeName + "_dup");
 
@@ -967,7 +971,8 @@ function generateEq(typeName: string, objType: Type, lctx: LiftCtx, loc: SourceL
 	}
 	buf.push(makeReturn(makeBool(true, loc), loc));
 	const eqFn = makeFnDecl(typeName + "_eq", ["a", "b"], [typeName, typeName], makeBlock(buf, loc), "", "boolean", loc);
-	fixupHookTypes(eqFn, objType);
+	setHookParamType(eqFn, 0, objType);
+	setHookParamType(eqFn, 1, objType);
 	lctx.collector.push(eqFn);
 }
 
@@ -1012,7 +1017,8 @@ function generateTupleEq(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 	}
 	buf.push(makeReturn(makeBool(true, loc), loc));
 	const teqFn = makeFnDecl(tupleName + "_eq", ["a", "b"], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc);
-	fixupHookTypes(teqFn, t);
+	setHookParamType(teqFn, 0, t);
+	setHookParamType(teqFn, 1, t);
 	lctx.collector.push(teqFn);
 }
 
@@ -1041,7 +1047,8 @@ function generateTupleLt(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 	}
 	buf.push(makeReturn(makeBool(false, loc), loc));
 	const tltFn = makeFnDecl(tupleName + "_lt", ["a", "b"], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc);
-	fixupHookTypes(tltFn, t);
+	setHookParamType(tltFn, 0, t);
+	setHookParamType(tltFn, 1, t);
 	lctx.collector.push(tltFn);
 }
 
@@ -1066,7 +1073,8 @@ function generateTupleLe(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 	}
 	buf.push(makeReturn(makeBool(true, loc), loc));  // <= returns true when equal
 	const tleFn = makeFnDecl(tupleName + "_le", ["a", "b"], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc);
-	fixupHookTypes(tleFn, t);
+	setHookParamType(tleFn, 0, t);
+	setHookParamType(tleFn, 1, t);
 	lctx.collector.push(tleFn);
 }
 

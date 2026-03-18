@@ -1,3 +1,6 @@
+@include("std/core/json/native.h");
+@compile("std/core/json/native.c");
+
 // MetaScript JSON Prelude — C Backend
 // Single-file prelude loaded via globalImports(). Contains types, builders,
 // accessors, and the typed JSON API (JSON.parse<T>, JSON.stringify<T>).

@@ -119,6 +119,26 @@ function lookupVarType(state: LiftState, name: string): string {
 	return "unknown";
 }
 
+// Override lifted function's param/return types from checker-resolved originalNodeType.
+// Reference parity: the reference reuses original proc symbol (types already set). We create new node
+// via makeFnDecl (string-based), then fix types from the original's concrete type.
+function preserveResolvedTypes(fnNode: Node, originalNodeType: Type): void {
+	if (originalNodeType === null || fnNode.nodeType === null || fnNode.nodeType.typeChildren === null) return;
+	if (originalNodeType.typeChildren !== null) {
+		const origCount = originalNodeType.typeChildren.length;
+		for (let pi = 0; pi < origCount; pi += 1) {
+			if (pi < fnNode.nodeType.typeChildren.length
+				&& originalNodeType.typeChildren[pi].kind !== TypeKind.Unknown) {
+				fnNode.nodeType.typeChildren[pi] = originalNodeType.typeChildren[pi];
+			}
+		}
+	}
+	if (originalNodeType.typeReturn !== null
+		&& originalNodeType.typeReturn.kind !== TypeKind.Unknown) {
+		fnNode.nodeType.typeReturn = originalNodeType.typeReturn;
+	}
+}
+
 // Derive type string from resolved nodeType (Reference parity: use resolved symbol types for field typing)
 // Used when string annotation is empty but checker has resolved the type.
 function typeToEnvStr(t: Type): string {
@@ -346,15 +366,7 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 	liftedParamTypes.push("void*");
 
 	const fnNode = makeFnDecl(liftedName, liftedParams, liftedParamTypes, rewrittenBody, flags, returnType, loc);
-	// Preserve resolved return type from original lambda (symbol type's returnType).
-	// makeFnDecl uses resolveSimpleTypeStr which can't resolve type aliases like NodeResult.
-	// The checker already resolved the alias → concrete type on the original node.
-	// Skip overwrite when checker inferred Unknown — makeFnDecl's annotation-based type is more precise
-	// (e.g., void closures: checker infers Unknown because empty body has no returns, but annotation says "void").
-	if (originalNodeType !== null && originalNodeType.typeReturn !== null && fnNode.nodeType !== null
-		&& originalNodeType.typeReturn.kind !== TypeKind.Unknown) {
-		fnNode.nodeType.typeReturn = originalNodeType.typeReturn;
-	}
+	preserveResolvedTypes(fnNode, originalNodeType);
 	state.liftedFunctions.push(fnNode);
 
 	return makeClosurePair(liftedName, envStructType, captures, state.lastUseCaptures, state.capturedIdents, loc);
@@ -382,13 +394,7 @@ function liftNonCapturing(body: Node, params: string[], paramTypes: string[], fl
 		liftedBody = makeBlock([makeReturn(liftedBody, loc)], loc);
 	}
 	const fnNode = makeFnDecl(liftedName, params, paramTypes, liftedBody, flags, returnType, loc);
-	// Preserve resolved return type (symbol type's returnType untouched through lifting).
-	// Skip overwrite when checker inferred Unknown — annotation-based type is more precise
-	// (e.g., void closures: checker infers Unknown, but annotation says "void").
-	if (originalNodeType !== null && originalNodeType.typeReturn !== null && fnNode.nodeType !== null
-		&& originalNodeType.typeReturn.kind !== TypeKind.Unknown) {
-		fnNode.nodeType.typeReturn = originalNodeType.typeReturn;
-	}
+	preserveResolvedTypes(fnNode, originalNodeType);
 	state.liftedFunctions.push(fnNode);
 	// Wrap in closure pair { fn: liftedName, env: null } so codegen emits
 	// (msClosure){ .fn = (void*)ptr, .env = NULL } instead of raw function pointer.

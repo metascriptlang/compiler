@@ -88,7 +88,7 @@ export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Type
 		while (i < fnType.typeChildren.length) {
 			if (i > 0) paramList = paramList + ", ";
 			let pType = getTypeDesc(g, fnType.typeChildren[i]);
-			if (ccgIntroducedPtr(fnType.typeChildren[i]) && pType.byteLength > 0 && pType.charAt(pType.byteLength - 1) !== "*") {
+			if (ccgIntroducedPtr(fnType.typeChildren[i]) && pType.byteLength > 0 && pType.charAt(pType.byteLength as int64 - 1) !== "*") {
 				pType = pType + "*";
 			}
 			paramList = paramList + pType;

@@ -602,7 +602,7 @@ static void msJsonFree(MsJsonValue* v) {
 }
 
 /* TypeInfo — no trace/destroy needed (msJsonFree handles tree cleanup) */
-msTypeInfo MsJsonValue_typeInfo = { "MsJsonValue", MS_FALSE, NULL, NULL };
+/* Definition in native.c — only extern declaration here */
 
 /* Alias: codegen emits "JsonValue" from the class name, runtime uses "MsJsonValue".
    The _DEFINED guard suppresses the codegen's struct emission (codegen wraps in #ifndef). */

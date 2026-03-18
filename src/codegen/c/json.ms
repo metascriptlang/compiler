@@ -155,7 +155,7 @@ function allFieldsSupported(fieldTypes: Type[]): boolean {
 // Returns C code that must be emitted BEFORE the parent helper.
 // Reference parity: storeAny recursively dispatches on object kind for nested fields.
 // Get a stable key for an array element type (for dedup and naming).
-function arrayElemKey(elemType: Type): string {
+export function arrayElemKey(elemType: Type): string {
 	if (elemType === null) return "unknown";
 	if (elemType.typeName !== "") return elemType.typeName;
 	return match (elemType.kind) {
@@ -168,7 +168,20 @@ function arrayElemKey(elemType: Type): string {
 	};
 }
 
-function emitNestedToValueHelpers(fieldTypes: Type[], emitted: Set<string>): string {
+// Map element TypeKind to C array type name.
+export function arrayCType(elemType: Type): string {
+	if (elemType === null) return "msRefArray";
+	return match (elemType.kind) {
+		TypeKind.String => "msStringArray",
+		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msNumberArray",
+		TypeKind.Boolean => "msNumberArray",
+		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
+			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => "msNumberArray",
+		_ => "msRefArray",
+	};
+}
+
+export function emitNestedToValueHelpers(fieldTypes: Type[], emitted: Set<string>): string {
 	let c = "";
 	for (const ft of fieldTypes) {
 		if (ft === null) continue;
@@ -179,11 +192,16 @@ function emitNestedToValueHelpers(fieldTypes: Type[], emitted: Set<string>): str
 			if (ft.typeChildren !== null) {
 				c = c + emitNestedToValueHelpers(ft.typeChildren, emitted);
 			}
+			// #ifndef guard: Nim parity (declaredThings per-module dedup).
+			// Multiple JSON.stringify<T> calls sharing the same nested type
+			// each emit this helper — C preprocessor deduplicates.
+			const guard = `__jsonToValue_${ft.typeName}_DEFINED`;
+			c = c + `#ifndef ${guard}\n#define ${guard}\n`;
 			c = c + `static MsJsonValue* __jsonToValue_${ft.typeName}(${ft.typeName} value) {\n`;
 			c = c + "  MsJsonValue* __o = msJsonNewObject();\n";
 			c = c + emitJsonSetFields(ft.typeNames, ft.typeChildren);
 			c = c + "  return __o;\n";
-			c = c + "}\n";
+			c = c + "}\n#endif\n";
 		}
 		// Array: generate __jsonArrayToValue_ helper that iterates elements.
 		// Reference parity: array/sequence iterates a[i], recurses storeAny.
@@ -196,24 +214,18 @@ function emitNestedToValueHelpers(fieldTypes: Type[], emitted: Set<string>): str
 			const arrHelperName = "__jsonArrayToValue_" + elemKey;
 			if (!emitted.has(arrHelperName)) {
 				emitted.add(arrHelperName);
-				// Determine correct C array type and element accessor based on element type
-				const arrCType = match (elemType.kind) {
-					TypeKind.String => "msStringArray",
-					TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msNumberArray",
-					TypeKind.Boolean => "msNumberArray",
-					TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
-						| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => "msNumberArray",
-					_ => "msRefArray",
-				};
+				const arrCType = arrayCType(elemType);
 				const elemAccess = arrCType === "msRefArray" ? "msArrayAccess(arr, __i)" : "arr.p->data[__i]";
 				const elemConvert = emitValueToJson(elemAccess, elemType);
+				const arrGuard = arrHelperName + "_DEFINED";
+				c = c + `#ifndef ${arrGuard}\n#define ${arrGuard}\n`;
 				c = c + `static MsJsonValue* ${arrHelperName}(${arrCType} arr) {\n`;
 				c = c + "  MsJsonValue* __a = msJsonNewArray();\n";
 				c = c + "  for (int64_t __i = 0; __i < arr.len; __i++) {\n";
 				c = c + `    msJsonPush(__a, ${elemConvert});\n`;
 				c = c + "  }\n";
 				c = c + "  return __a;\n";
-				c = c + "}\n";
+				c = c + "}\n#endif\n";
 			}
 		}
 		// Tuple: recurse into children
@@ -229,7 +241,7 @@ function emitNestedToValueHelpers(fieldTypes: Type[], emitted: Set<string>): str
 // Reference parity: storeAny dispatches per field, recursing for object kind.
 // Emit C code to convert a single value to MsJsonValue*, given its type.
 // Used by emitJsonSetFields for each field and by array element emission.
-function emitValueToJson(valueExpr: string, ftype: Type): string {
+export function emitValueToJson(valueExpr: string, ftype: Type): string {
 	if (ftype === null) return `msJsonNewNull()`;
 	// Nested struct → call __jsonToValue_ helper
 	if (ftype.kind === TypeKind.Struct && ftype.typeName !== "") {
@@ -294,7 +306,7 @@ export function generateJsonParseC(helperName: string, typeName: string, structT
 	const resultCType = `msResult_${typeName}_msString`;
 
 	// Include json runtime header (INCLUDESECTION routes it to #include area)
-	let c = "/*INCLUDESECTION*/#include \"std/core/json/native.h\"\n";
+	let c = "";
 	c = c + `static ${resultCType} ${helperName}(msString input) {\n`;
 	c = c + `  ${resultCType} __r; memset(&__r, 0, sizeof(__r));\n`;
 	c = c + "  MsJsonValue* __jv = msJsonParse(input);\n";
@@ -357,7 +369,7 @@ export function generateJsonStringifyC(
 
 	if (!allFieldsSupported(fieldTypes)) return null as unknown as Node;
 
-	let c = "/*INCLUDESECTION*/#include \"std/core/json/native.h\"\n";
+	let c = "";
 
 	// Emit __jsonToValue_ helpers for nested struct fields (depth-first).
 	// These must appear before the parent so the C compiler sees their declarations.
@@ -393,7 +405,7 @@ export function generateJsonStringifyColoredC(
 
 	if (!allFieldsSupported(fieldTypes)) return null as unknown as Node;
 
-	let c = "/*INCLUDESECTION*/#include \"std/core/json/native.h\"\n";
+	let c = "";
 
 	// Emit __jsonToValue_ helpers for nested struct fields (depth-first).
 	const emittedDbg: Set<string> = new Set<string>();

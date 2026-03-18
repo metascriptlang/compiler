@@ -20,8 +20,12 @@ import { parseInput, getStmts, firstExprKind, firstCallArgCount } from "../testU
 
 // ===== Helpers =====
 
-// Get the type name of a node via symbol table lookup.
+// Get the type name of a node — tries nodeType, resolvedSym, then symbol table.
 function getTypeName(ctx: TransformContext, node: Node): string {
+	if (node.nodeType !== null) return typeNameOf(node.nodeType);
+	if (node.resolvedSym !== null && node.resolvedSym.symbolType !== null) {
+		return typeNameOf(node.resolvedSym.symbolType);
+	}
 	if (ctx.checkerCtx === null) return "";
 	if (node.kind !== NodeKind.Identifier) return "";
 	const d = node.data as IdentifierData;
