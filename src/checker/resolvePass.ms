@@ -7,7 +7,7 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { Node, NodeKind, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ExternKind, IdentifierData, TypeGenericData, TypeArrayData, TypeUnionData, TypeFunctionData, TypeObjectData, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { unknownType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createTypeRef, createUnion, createGenericParam, createDistinct, substituteType, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, setMinArity, typeNameOf, assignType, isInterfaceType, unwrapRef, propagateHasAsgn } from "./types";
+import { unknownType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createUnion, createGenericParam, createDistinct, substituteType, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, setMinArity, typeNameOf, assignType, isInterfaceType, unwrapRef, propagateHasAsgn } from "./types";
 import { SymbolTable, ScopeKind, lookupSymbol, lookupLocal, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, setFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addErrorRange, addWarning, addFatalError, addFatalErrorRange, sgRecordSym } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim } from "../utils/string";
@@ -29,12 +29,12 @@ function resolveFunctionType(text: string, ctx: CheckerContext, line: number, co
 			if (depth === 0) { closeIdx = i; break; }
 		}
 	}
-	if (closeIdx < 0) return createTypeRef(text);
+	if (closeIdx < 0) return unknownType();
 
 	const paramsStr = text.slice(1, closeIdx).trim();
 	const afterParen = text.slice(closeIdx + 1, text.length).trim();
-	if (afterParen.length < 2) return createTypeRef(text);
-	if (afterParen.charAt(0) !== "=" || afterParen.charAt(1) !== ">") return createTypeRef(text);
+	if (afterParen.length < 2) return unknownType();
+	if (afterParen.charAt(0) !== "=" || afterParen.charAt(1) !== ">") return unknownType();
 	const retStr = afterParen.slice(2, afterParen.length).trim();
 
 	const returnType = (retStr !== "") ? resolveAnnotation(retStr, ctx, line, col) : voidType();
@@ -303,8 +303,10 @@ function emitUnresolvedTypeRef(ctx: CheckerContext, name: string, line: number, 
 			&& name !== "unknown" && name !== "any" && name !== "undefined" && name !== "never") {
 		addWarning(ctx, `Unresolved type '${name}' - missing import?`, line, col);
 	}
-	if (mangledName !== "") return createTypeRef(mangledName);
-	return createTypeRef(name);
+	// Reference parity: unresolved types become unknownType, never TypeReference.
+	// All valid types must be resolved during semantic analysis — if lookupSymbol fails,
+	// it's a genuine error (missing import, typo). Codegen never does name resolution.
+	return unknownType();
 }
 
 // ===== TypeExpr Recording (standard parity: markUsed in semTypeNode) =====
@@ -956,7 +958,13 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 	inner.typeNames = memberNames;
 	inner.typeChildren = memberTypes;
 	inner.typeFlags = TypeFlag.IsInterface as int32;
-	// Preserve typeExtra (base class info set by collectPass)
+	// Resolve base class TypeReference → concrete type (reference parity: no TypeRef in codegen)
+	if (inner.typeExtra !== null && inner.typeExtra.kind === TypeKind.TypeReference) {
+		const baseSym = lookupSymbol(ctx.table, inner.typeExtra.typeName);
+		if (baseSym !== null) {
+			inner.typeExtra = baseSym.symbolType;
+		}
+	}
 	// Propagate HasAsgn from any managed field
 	for (const pt of memberTypes) { propagateHasAsgn(inner, pt); }
 	node.nodeType = sym.symbolType;
@@ -995,7 +1003,7 @@ test "int32" { assert resolveWith("int32").kind === TypeKind.Int32; }
 
 test "float64" { assert resolveWith("float64").kind === TypeKind.Float64; }
 
-test "unknown name" { assert resolveWith("Foo").kind === TypeKind.TypeReference; }
+test "unknown name" { assert resolveWith("Foo").kind === TypeKind.Unknown; }
 
 test "empty" { assert resolveWith("").kind === TypeKind.Unknown; }
 
@@ -1107,15 +1115,13 @@ test "decorated function gets resolved" {
 test "Box<number> records instantiation" {
 	resetGenericDeclStore();
 	resetGenericTypeInsts();
-	// Simulate parser registering interface Box<T> { value: T; }
 	addGenericDecl("Box", "T");
 	updateGenericDeclFields("Box", "value", "T");
-	// Resolve Box<number> — should record instantiation
 	const ctx = createContext();
 	const t = resolveAnnotation("Box<number>", ctx, 0, 0);
-	assert t.kind === TypeKind.TypeReference;
-	assert t.typeName === "Box__number";
-	// Check instantiation was recorded
+	// No symbol "Box" in scope → unknownType()
+	assert t.kind === TypeKind.Unknown;
+	// Check instantiation was recorded (happens before symbol lookup)
 	assert getGenericTypeInstCount() === 1;
 	assert getGenericTypeInstBaseName(0) === "Box";
 	assert getGenericTypeInstTypeArgKey(0) === "number";
@@ -1131,8 +1137,7 @@ test "Pair<string, number> records instantiation" {
 	updateGenericDeclFields("Pair", "first|second", "A|B");
 	const ctx = createContext();
 	const t = resolveAnnotation("Pair<string, number>", ctx, 0, 0);
-	assert t.kind === TypeKind.TypeReference;
-	assert t.typeName === "Pair__string_number";
+	assert t.kind === TypeKind.Unknown;
 	const idx = findGenericTypeInstIdx("Pair", "string_number");
 	assert idx >= 0;
 	assert getGenericTypeInstFieldNames(idx) === "first|second";
@@ -1170,8 +1175,7 @@ test "generic class Container<T> records instantiation" {
 	updateGenericDeclFields("Container", "item|count", "T|number");
 	const ctx = createContext();
 	const t = resolveAnnotation("Container<string>", ctx, 0, 0);
-	assert t.kind === TypeKind.TypeReference;
-	assert t.typeName === "Container__string";
+	assert t.kind === TypeKind.Unknown;
 	assert getGenericTypeInstCount() === 1;
 	assert getGenericTypeInstFieldNames(0) === "item|count";
 	assert getGenericTypeInstFieldTypes(0) === "string|number";
@@ -1210,8 +1214,7 @@ test "constrained interface Box<T extends number>" {
 	updateGenericDeclFields("Box", "value", "T");
 	const ctx = createContext();
 	const t = resolveAnnotation("Box<number>", ctx, 0, 0);
-	assert t.kind === TypeKind.TypeReference;
-	assert t.typeName === "Box__number";
+	assert t.kind === TypeKind.Unknown;
 }
 
 test "fnDefaults on FunctionDeclData" {

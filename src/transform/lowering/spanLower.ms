@@ -30,7 +30,12 @@ export function spanLower(program: Node, ctx: TransformContext): Node {
 			const targetType = d.convType;
 			if (targetType === null) return node;
 
-			if (targetType.kind === TypeKind.Span) {
+			// Unwrap Var/out modifier — reference parity: var openArray → openArray
+			let spanTarget = targetType;
+			if (spanTarget.kind === TypeKind.Var || spanTarget.kind === TypeKind.Sink || spanTarget.kind === TypeKind.Lent) {
+				spanTarget = spanTarget.typeReturn;
+			}
+			if (spanTarget.kind === TypeKind.Span) {
 				const srcType = d.convExpr.nodeType;
 				if (srcType !== null) {
 					const loc = node.location;

@@ -5,7 +5,7 @@
 // the specialized version. No separate monomorphize pass needed.
 
 import { Node, NodeKind, SourceLocation, FunctionDeclData, ExportDeclData, DecoratedDeclData, BlockStmtData, IfStmtData, WhileStmtData, ForOfStmtData, ReturnStmtData, ExprStmtData, VariableDeclData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, NewExprData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ArrowFunctionData, FunctionExprData, SpreadExprData, UpdateExprData, MatchExprData, MatchStmtData, MatchCaseData, DestructuringDeclData, DeferStmtData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { typeNameOf, instantiateGeneric, createTypeRef, substituteType } from "./types";
+import { typeNameOf, instantiateGeneric, substituteType } from "./types";
 import { lookupSymbol, defineSymbol, makeSymbol, setFlag, SymbolFlag, hasFlag } from "./symbol";
 import { CheckerContext } from "./context";
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/collect";

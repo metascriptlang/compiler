@@ -110,6 +110,8 @@ export function needsNumCast(ftype: Type): boolean {
 }
 
 // C builder function name for constructing MsJsonValue* from a field value.
+// Map a primitive field type to its MsJsonValue constructor name.
+// Struct, Array, Enum, Tuple are handled inline in emitJsonSetFields.
 export function fieldTypeToJsonCtor(ftype: Type): string {
 	if (ftype === null) return "";
 	return match (ftype.kind) {
@@ -125,32 +127,139 @@ export function fieldTypeToJsonCtor(ftype: Type): string {
 			| TypeKind.Uint16
 			| TypeKind.Uint32
 			| TypeKind.Uint64 => "msJsonNewNumber",
+		TypeKind.Enum => "msJsonNewNumber",  // enums are integers in C
 		_ => "",
 	};
+}
+
+// Check if a field type is supported for JSON serialization.
+// Reference parity: storeAny handles object, array, enum, tuple, and all primitives.
+function isFieldSupported(ftype: Type): boolean {
+	if (ftype === null) return false;
+	if (ftype.kind === TypeKind.Struct) return ftype.typeName !== "";
+	if (ftype.kind === TypeKind.Array) return ftype.typeReturn !== null && isFieldSupported(ftype.typeReturn);
+	if (ftype.kind === TypeKind.Tuple) return ftype.typeChildren !== null;
+	if (ftype.kind === TypeKind.Enum) return true;
+	return fieldTypeToJsonCtor(ftype) !== "";
 }
 
 // Validate all struct fields are supported for JSON stringify/colored emission.
 function allFieldsSupported(fieldTypes: Type[]): boolean {
 	for (const ft of fieldTypes) {
-		if (fieldTypeToJsonCtor(ft) === "") return false;
+		if (!isFieldSupported(ft)) return false;
 	}
 	return true;
 }
 
+// Generate __jsonToValue_<type> helpers for all nested struct types (recursive, depth-first).
+// Returns C code that must be emitted BEFORE the parent helper.
+// Reference parity: storeAny recursively dispatches on object kind for nested fields.
+// Get a stable key for an array element type (for dedup and naming).
+function arrayElemKey(elemType: Type): string {
+	if (elemType === null) return "unknown";
+	if (elemType.typeName !== "") return elemType.typeName;
+	return match (elemType.kind) {
+		TypeKind.String => "string",
+		TypeKind.Number | TypeKind.Float64 => "number",
+		TypeKind.Boolean => "boolean",
+		TypeKind.Int32 => "int32",
+		TypeKind.Int64 => "int64",
+		_ => "unknown",
+	};
+}
+
+function emitNestedToValueHelpers(fieldTypes: Type[], emitted: Set<string>): string {
+	let c = "";
+	for (const ft of fieldTypes) {
+		if (ft === null) continue;
+		// Nested struct: generate __jsonToValue_ helper
+		if (ft.kind === TypeKind.Struct && ft.typeName !== "") {
+			if (emitted.has(ft.typeName)) continue;
+			emitted.add(ft.typeName);
+			if (ft.typeChildren !== null) {
+				c = c + emitNestedToValueHelpers(ft.typeChildren, emitted);
+			}
+			c = c + `static MsJsonValue* __jsonToValue_${ft.typeName}(${ft.typeName} value) {\n`;
+			c = c + "  MsJsonValue* __o = msJsonNewObject();\n";
+			c = c + emitJsonSetFields(ft.typeNames, ft.typeChildren);
+			c = c + "  return __o;\n";
+			c = c + "}\n";
+		}
+		// Array: generate __jsonArrayToValue_ helper that iterates elements.
+		// Reference parity: array/sequence iterates a[i], recurses storeAny.
+		if (ft.kind === TypeKind.Array && ft.typeReturn !== null) {
+			const elemType = ft.typeReturn;
+			if (elemType.kind === TypeKind.Struct) {
+				c = c + emitNestedToValueHelpers([elemType], emitted);
+			}
+			const elemKey = arrayElemKey(elemType);
+			const arrHelperName = "__jsonArrayToValue_" + elemKey;
+			if (!emitted.has(arrHelperName)) {
+				emitted.add(arrHelperName);
+				// Determine correct C array type and element accessor based on element type
+				const arrCType = match (elemType.kind) {
+					TypeKind.String => "msStringArray",
+					TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msNumberArray",
+					TypeKind.Boolean => "msNumberArray",
+					TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
+						| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => "msNumberArray",
+					_ => "msRefArray",
+				};
+				const elemAccess = arrCType === "msRefArray" ? "msArrayAccess(arr, __i)" : "arr.p->data[__i]";
+				const elemConvert = emitValueToJson(elemAccess, elemType);
+				c = c + `static MsJsonValue* ${arrHelperName}(${arrCType} arr) {\n`;
+				c = c + "  MsJsonValue* __a = msJsonNewArray();\n";
+				c = c + "  for (int64_t __i = 0; __i < arr.len; __i++) {\n";
+				c = c + `    msJsonPush(__a, ${elemConvert});\n`;
+				c = c + "  }\n";
+				c = c + "  return __a;\n";
+				c = c + "}\n";
+			}
+		}
+		// Tuple: recurse into children
+		if (ft.kind === TypeKind.Tuple && ft.typeChildren !== null) {
+			c = c + emitNestedToValueHelpers(ft.typeChildren, emitted);
+		}
+	}
+	return c;
+}
+
 // Emit per-field msJsonSet calls for a struct value → MsJsonValue* object.
-// Shared by generateJsonStringifyC and generateJsonStringifyColoredC.
+// Primitives: msJsonNewString/Number/Bool. Nested structs: __jsonToValue_<type>.
+// Reference parity: storeAny dispatches per field, recursing for object kind.
+// Emit C code to convert a single value to MsJsonValue*, given its type.
+// Used by emitJsonSetFields for each field and by array element emission.
+function emitValueToJson(valueExpr: string, ftype: Type): string {
+	if (ftype === null) return `msJsonNewNull()`;
+	// Nested struct → call __jsonToValue_ helper
+	if (ftype.kind === TypeKind.Struct && ftype.typeName !== "") {
+		return `__jsonToValue_${ftype.typeName}(${valueExpr})`;
+	}
+	// Array → call generated array helper
+	// Reference parity: array iterates a[i], recurses storeAny
+	if (ftype.kind === TypeKind.Array && ftype.typeReturn !== null) {
+		return `__jsonArrayToValue_${arrayElemKey(ftype.typeReturn)}(${valueExpr})`;
+	}
+	// Tuple → build JSON array from tuple fields
+	// Reference parity: tuple same as object (keyed), but we serialize as positional array
+	if (ftype.kind === TypeKind.Tuple && ftype.typeChildren !== null) {
+		return `msJsonNewNull()`; // TODO: tuple serialization needs per-type helper
+	}
+	// Primitive types (number, string, bool, enum, integers)
+	if (needsNumCast(ftype)) return `msJsonNewNumber((double)${valueExpr})`;
+	const ctor = fieldTypeToJsonCtor(ftype);
+	if (ctor !== "") return `${ctor}(${valueExpr})`;
+	return `msJsonNewNull()`;
+}
+
 function emitJsonSetFields(fieldNames: string[], fieldTypes: Type[]): string {
 	let c = "";
 	let fi = 0;
 	while (fi < fieldNames.length) {
 		const fname = fieldNames[fi];
 		const ftype = fieldTypes[fi];
-		const ctorName = fieldTypeToJsonCtor(ftype);
-		let valueExpr = `value.${fname}`;
-		if (needsNumCast(ftype)) {
-			valueExpr = `(double)${valueExpr}`;
-		}
-		c = c + `  msJsonSet(__o, msStringNew("${fname}", ${fname.length.toString()}), ${ctorName}(${valueExpr}));\n`;
+		const key = `msStringNew("${fname}", ${fname.length})`;
+		c = c + `  msJsonSet(__o, ${key}, ${emitValueToJson("value." + fname, ftype)});\n`;
 		fi = fi + 1;
 	}
 	return c;
@@ -249,6 +358,13 @@ export function generateJsonStringifyC(
 	if (!allFieldsSupported(fieldTypes)) return null as unknown as Node;
 
 	let c = "/*INCLUDESECTION*/#include \"std/core/json/native.h\"\n";
+
+	// Emit __jsonToValue_ helpers for nested struct fields (depth-first).
+	// These must appear before the parent so the C compiler sees their declarations.
+	const emitted: Set<string> = new Set<string>();
+	c = c + emitNestedToValueHelpers(fieldTypes, emitted);
+
+	// Top-level: builds MsJsonValue* tree, stringifies, frees.
 	c = c + `static msString ${helperName}(${typeName} value) {\n`;
 	c = c + "  MsJsonValue* __o = msJsonNewObject();\n";
 	c = c + emitJsonSetFields(fieldNames, fieldTypes);
@@ -278,6 +394,11 @@ export function generateJsonStringifyColoredC(
 	if (!allFieldsSupported(fieldTypes)) return null as unknown as Node;
 
 	let c = "/*INCLUDESECTION*/#include \"std/core/json/native.h\"\n";
+
+	// Emit __jsonToValue_ helpers for nested struct fields (depth-first).
+	const emittedDbg: Set<string> = new Set<string>();
+	c = c + emitNestedToValueHelpers(fieldTypes, emittedDbg);
+
 	c = c + `static msString ${helperName}(${typeName} value) {\n`;
 	c = c + "  MsJsonValue* __o = msJsonNewObject();\n";
 	c = c + emitJsonSetFields(fieldNames, fieldTypes);

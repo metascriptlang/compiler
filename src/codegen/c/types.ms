@@ -9,20 +9,14 @@ import { getGenericDecl } from "../../parser/context";
 import { Node, NodeKind, CallExprData, Type, TypeKind, CallingConvention, SymbolKind } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
 import { CGen, CSection, Builder, TypeCache, add, addLine, addNewline, extract, sec, createBuilder, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas } from "./context";
-import { lookupSymbol, SymbolFlag, hasFlag } from "../../checker/symbol";
+import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import { mangle, mangleTypeName, mangleFieldName, safeName } from "./names";
+import { useHeader } from "./forward";
 
-// ===== Resolve TypeReference via Symbol Table =====
-// The reference PType is always a pointer to full type info. Our TypeReference is name-only.
-// Instead of a pre-built registry, resolve lazily via the checker's symbol table.
-// After 3 checker passes, all types (local + imported) are in scope.
+// ===== Type Resolution =====
+// All types are fully resolved PType objects by codegen time.
+// No TypeReference ever reaches codegen — the checker resolves everything.
 
-function resolveTypeName(g: CGen, name: string): Type {
-	if (g.checkerCtx === null) return null;
-	const sym = lookupSymbol(g.checkerCtx.table, name);
-	if (sym !== null && sym.symbolType !== null) return sym.symbolType;
-	return null;
-}
 
 // ===== Deferred Struct Body Emission (Union types only) =====
 // When resolving a union type's field types, nested getTypeDesc calls may trigger
@@ -61,7 +55,7 @@ function anonFieldKey(t: Type): string {
 		TypeKind.Array => "arr:" + anonFieldKey(t.typeReturn),
 		TypeKind.Function => "fn",
 		TypeKind.Ref | TypeKind.Ptr => "ptr:" + anonFieldKey(t.typeReturn),
-		TypeKind.TypeReference => "ref:" + t.typeName,
+		TypeKind.Unknown => "unknown",
 		_ => {
 			const simple = getSimpleTypeDesc(t);
 			if (simple !== "") return simple;
@@ -167,7 +161,7 @@ export function annotationToC(annotation: string): string {
 
 // ===== Anonymous Struct Definition Builder =====
 // Parses "{ field : type , field2 : type2 }" into a guarded C struct definition string.
-// Shared by CGen-path (emitAnonStructFromTypeName) and proto-path (index.ms).
+// Used by proto-path (index.ms) for anonymous struct definitions.
 
 export function buildAnonStructDef(structName: string, rawName: string): string {
 	// Strip outer braces
@@ -193,14 +187,6 @@ export function buildAnonStructDef(structName: string, rawName: string): string 
 
 	def = def + "};\n#endif\n";
 	return def;
-}
-
-// CGen-path: emit anonymous struct body into CSection.Types
-function emitAnonStructFromTypeName(g: CGen, structName: string, rawName: string): void {
-	if (typeCacheHas(g.typeCache, "anonBody:" + structName)) return;
-	typeCacheSet(g.typeCache, "anonBody:" + structName, structName);
-	add(sec(g, CSection.Types), buildAnonStructDef(structName, rawName));
-	addNewline(sec(g, CSection.Types));
 }
 
 // ===== Type Signature Key =====
@@ -267,7 +253,7 @@ export function typeKey(t: Type): string {
 			for (const arg of t.typeChildren) giKey = `${giKey}:${typeKey(arg)}`;
 			return giKey;
 		},
-		TypeKind.TypeReference => { return "typeref:" + t.typeName; },
+		TypeKind.TypeReference => { return "unknown"; },
 		TypeKind.Distinct => { return "distinct:" + t.typeName; },
 		TypeKind.Union => {
 			if (t.typeName.length > 0) {
@@ -398,6 +384,13 @@ function isImportedType(t: Type): boolean {
 	return t.sym !== null && hasFlag(t.sym, SymbolFlag.ImportC);
 }
 
+// Emit #include for imported type's header (reference parity: header pragma).
+function useImportedTypeHeader(g: CGen, t: Type): void {
+	if (t.sym !== null && t.sym.headerPath !== "") {
+		useHeader(g, t.sym);
+	}
+}
+
 // Reference parity (isInvalidReturnType): returns true when NRVO needed.
 // Takes the return type AND optionally the function type (for cdecl/importc check).
 export function isNrvoReturnType(retType: Type, funcType: Type): boolean {
@@ -455,14 +448,9 @@ export function getTypeForward(g: CGen, t: Type): string {
 	const key = typeKey(t);
 	const cached = typeCacheGet(g.typeCache, key);
 	if (cached !== "") return cached;
-	// For Object/Enum/TypeReference — forward-declare only
+	// For Object/Enum — forward-declare only
 	if (t.kind === TypeKind.Struct || t.kind === TypeKind.Enum) {
 		const name = isAnonTypeName(t.typeName) ? anonTypeName(t) : mangle(t.typeName);
-		ensureForwardDecl(g, name);
-		return name;
-	}
-	if (t.kind === TypeKind.TypeReference) {
-		const name = mangle(t.typeName);
 		ensureForwardDecl(g, name);
 		return name;
 	}
@@ -526,35 +514,6 @@ export function getTypeDesc(g: CGen, t: Type): string {
 	const cached = typeCacheGet(g.typeCache, key);
 	if (cached !== "") return cached;
 
-	// Handle TypeReference before match — avoid match arm value propagation gotcha
-	if (t.kind === TypeKind.TypeReference) {
-		if (findChar(t.typeName, "=") >= 0 || (t.typeName.length > 0 && t.typeName.charAt(0) === "(")) {
-			return "msClosure";
-		}
-		if (t.typeName === "unknown" || t.typeName === "undefined" || t.typeName === "any" || t.typeName === "never") {
-			return "void*";
-		}
-		// Anonymous type aliases (discriminated union variants) — resolve structurally
-		if (isAnonTypeName(t.typeName)) {
-			// TypeReference with anonymous typeName has no typeChildren/typeNames.
-			// Generate a stable hash-based name from the raw typeName string.
-			const anonName = "msAnon_" + hashToBase36(t.typeName);
-			ensureForwardDecl(g, anonName);
-			// Emit struct body by parsing field info from typeName if available
-			emitAnonStructFromTypeName(g, anonName, t.typeName);
-			return anonName;
-		}
-		// Resolve via symbol table (reference PType parity: full type info via pointer)
-		const resolved = resolveTypeName(g, t.typeName);
-		if (resolved !== null) {
-			return getTypeDesc(g, resolved);
-		}
-		// Fallback for C runtime types defined in headers (not in symbol table)
-		const name = mangle(t.typeName);
-		ensureForwardDecl(g, name);
-		return name;
-	}
-
 	// Generate based on kind — if-else chain to avoid match arm DRC scope cleanup
 	// destroying local strings before they can be used as return values.
 	const k = t.kind;
@@ -600,7 +559,7 @@ export function getTypeDesc(g: CGen, t: Type): string {
 	}
 	if (k === TypeKind.Union) return genUnionType(g, t);
 	if (k === TypeKind.Tuple) return genTupleType(g, t);
-	if (k === TypeKind.TypeReference || k === TypeKind.Unknown) return "void*";
+	if (k === TypeKind.Unknown) return "void*";
 	if (k === TypeKind.GenericParam) return "void*";
 	// GenericInstance: resolve to monomorphized C struct name
 	if (k === TypeKind.GenericInstance) {
@@ -651,7 +610,7 @@ function genEnumType(g: CGen, t: Type): string {
 	const key = typeKey(t);
 	typeCacheSet(g.typeCache, key, name);
 
-	if (isImportedType(t)) return name;
+	if (isImportedType(t)) { useImportedTypeHeader(g, t); return name; }
 
 	// Emit: typedef int32_t EnumName;
 	addLine(sec(g, CSection.Types), `typedef int32_t ${name};`);
@@ -679,6 +638,7 @@ function genObjectType(g: CGen, t: Type): string {
 	const key = typeKey(t);
 
 	if (isImportedType(t)) {
+		useImportedTypeHeader(g, t);
 		typeCacheSet(g.typeCache, key, t.typeName);
 		return t.typeName;
 	}
@@ -856,14 +816,8 @@ function genUnionType(g: CGen, t: Type): string {
 function genArrayType(g: CGen, t: Type): string {
 	const key = typeKey(t);
 
-	// Resolve TypeReference to concrete type for cycle detection and pointer classification.
-	// (Reference parity: skip irrelevant wrapper types before containsOrIncl cycle check)
-	// TypeReference key ("typeref:X") won't match Struct key ("object:X") in typesBeingDefined.
-	let resolvedElem = t.typeReturn;
-	if (resolvedElem !== null && resolvedElem.kind === TypeKind.TypeReference) {
-		const looked = resolveTypeName(g, resolvedElem.typeName);
-		if (looked !== null) resolvedElem = looked;
-	}
+	// Resolve element key for cycle detection and pointer classification.
+	const resolvedElem = t.typeReturn;
 	const elemKey = (resolvedElem !== null) ? typeKey(resolvedElem) : "";
 	const selfRef = elemKey !== "" && isBeingDefined(elemKey);
 
@@ -986,7 +940,6 @@ function closureRetTypeToC(g: CGen, t: Type): string {
 	if (t !== null && t.kind === TypeKind.Function && t.typeReturn !== null) {
 		return closureParamTypeToC(g, t.typeReturn);
 	}
-	if (t !== null && t.kind === TypeKind.TypeReference) return "void*";
 	return "void";
 }
 
@@ -1110,7 +1063,7 @@ function genTupleType(g: CGen, t: Type): string {
 
 // ===== Tests =====
 
-import { createPrimitive, createStruct, createArray, createFunction, createEnum, createResult, createTypeRef, createRef, createTuple } from "../../checker/types";
+import { createPrimitive, createStruct, createArray, createFunction, createEnum, createResult, createRef, createTuple } from "../../checker/types";
 import { createCGen } from "./context";
 import { CheckerContext } from "../../checker/context";
 test "primitive keys" {

@@ -19,10 +19,10 @@ import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains }
 import { mapChildren, isFuncBoundary } from "../walker";
 import {
 	makeIdent, makeMember, makeMoveExpr, makeReturn, makeBlock,
-	makeFnDecl, makeInterfaceDecl, makeObjectLiteral, makeHiddenDeref,
+	makeFnDecl, makeInterfaceDeclFromTypes, makeObjectLiteral, makeHiddenDeref,
 	makeNull, syntheticToken,
 } from "../util";
-import { createTypeRef, createPtr } from "../../checker/types";
+import { createPtr, unknownType } from "../../checker/types";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts } from "../testUtil";
 
 // ===== Scope Stack =====
@@ -165,10 +165,6 @@ function typeToEnvStr(t: Type): string {
 			} else { return "unknown[]"; }
 		},
 		TypeKind.GenericInstance => t.typeName,
-		TypeKind.TypeReference => {
-			const name = t.typeName;
-			return name;
-		},
 		_ => "",
 	};
 }
@@ -274,7 +270,7 @@ function collectCaptures(node: Node): void {
 // ===== Body Rewriting =====
 // Replace captured Identifier nodes with _envP.name MemberExpr.
 
-function rewriteNode(node: Node, captures: NameSet, envTypeName: string): Node {
+function rewriteNode(node: Node, captures: NameSet, envTypeName: string, envStructType: Type): Node {
 	if (node === null) return null;
 	if (node.kind === NodeKind.Identifier) {
 		const d = node.data as IdentifierData;
@@ -282,7 +278,7 @@ function rewriteNode(node: Node, captures: NameSet, envTypeName: string): Node {
 			// Implementation parity: env param is void*, cast+deref to typed pointer for field access
 			// Produces: (*((EnvType*)_envP)).field  in C
 			const envIdent = makeIdent("_envP", node.location);
-			const ptrType = createPtr(createTypeRef(envTypeName));
+			const ptrType = createPtr(envStructType);
 			const cast = createNode(NodeKind.TypeAssertion, { asExpr: envIdent, asType: envTypeName }, syntheticToken(node.location));
 			cast.nodeType = ptrType;
 			const deref = makeHiddenDeref(cast, node.location);
@@ -293,7 +289,7 @@ function rewriteNode(node: Node, captures: NameSet, envTypeName: string): Node {
 		return node;
 	}
 	if (isFuncBoundary(node)) return node;
-	mapChildren(node, (child: Node): Node => rewriteNode(child, captures, envTypeName));
+	mapChildren(node, (child: Node): Node => rewriteNode(child, captures, envTypeName, envStructType));
 	return node;
 }
 
@@ -309,20 +305,30 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 	const envName = "$Env_" + state.currentFnName + "_" + counter.toString();
 	const liftedName = "$lifted_" + state.currentFnName + "_" + counter.toString();
 
-	// Env struct — resolve captured variable types (Standard reference pattern)
+	// Env struct — use concrete Types from captured variables (no TypeReference)
 	const envFields: string[] = [];
 	const envFieldTypes: string[] = [];
+	const envResolvedTypes: Type[] = [];
 	for (const name of captures.items) {
 		envFields.push(name);
 		envFieldTypes.push(lookupVarType(state, name));
+		// Use actual resolved Type from captured ident (checker-resolved, concrete)
+		const orig = findCapturedIdent(name, state.capturedIdents);
+		if (orig !== null && orig.nodeType !== null) {
+			envResolvedTypes.push(orig.nodeType);
+		} else {
+			envResolvedTypes.push(unknownType());
+		}
 	}
-	state.envStructs.push(makeInterfaceDecl(envName, envFields, envFieldTypes, loc));
+	const envDecl = makeInterfaceDeclFromTypes(envName, envFields, envFieldTypes, envResolvedTypes, loc);
+	const envStructType = envDecl.nodeType;
+	state.envStructs.push(envDecl);
 
 	// Rewrite body to replace captured vars with (*((EnvType*)_envP)).name
 	// _envP is void* at runtime; each access casts+derefs to the typed env struct.
 	// Must capture return value: for expression bodies (single Identifier), rewriteNode
 	// returns a NEW node (MemberExpr); for block bodies, it mutates children in-place.
-	let rewrittenBody = rewriteNode(body, captures, envName);
+	let rewrittenBody = rewriteNode(body, captures, envName, envStructType);
 
 	// Expression bodies (arrow without block) need wrapping: expr → { return expr; }
 	if (rewrittenBody.kind !== NodeKind.BlockStmt) {
@@ -351,7 +357,7 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 	}
 	state.liftedFunctions.push(fnNode);
 
-	return makeClosurePair(liftedName, envName, captures, state.lastUseCaptures, state.capturedIdents, loc);
+	return makeClosurePair(liftedName, envStructType, captures, state.lastUseCaptures, state.capturedIdents, loc);
 }
 
 function liftArrow(node: Node, captures: NameSet, state: LiftState): Node {
@@ -413,7 +419,7 @@ function wrapFnAsClosure(ident: Node, loc: SourceLocation): Node {
 	return pair;
 }
 
-function makeClosurePair(liftedName: string, envTypeName: string, captures: NameSet, lastUseCaptures: NameSet, capturedIdents: Node[], loc: SourceLocation): Node {
+function makeClosurePair(liftedName: string, envStructType: Type, captures: NameSet, lastUseCaptures: NameSet, capturedIdents: Node[], loc: SourceLocation): Node {
 	const envKeys: string[] = [];
 	const envValues: Node[] = [];
 	for (const name of captures.items) {
@@ -444,7 +450,7 @@ function makeClosurePair(liftedName: string, envTypeName: string, captures: Name
 	}
 	const envObj = makeObjectLiteral(envKeys, envValues, loc);
 	// Set nodeType so codegen knows the env struct type for heap allocation
-	envObj.nodeType = createTypeRef(envTypeName);
+	envObj.nodeType = envStructType;
 
 	const closureKeys: string[] = [];
 	closureKeys.push("fn");

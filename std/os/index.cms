@@ -10,8 +10,6 @@ extern function msOsType(): string;
 extern function msOsRelease(): string;
 extern function msOsMachine(): string;
 extern function msOsCpuCount(): int32;
-extern function msOsCpuModel(): string;
-extern function msOsCpuSpeed(): int32;
 extern function msOsTotalMem(): int64;
 extern function msOsFreeMem(): int64;
 extern function msOsUptime(): number;
@@ -19,29 +17,34 @@ extern function msOsHomedir(): string;
 extern function msOsTmpdir(): string;
 extern function msOsEndianness(): string;
 
+// CpuInfo defined in C header — extern interface, no struct duplication
+extern interface CpuInfo {
+	model: string;
+	speed: int32;
+}
+
+// C fills buffer via Span — pointer + length expansion
+extern function msOsCpus(out buf: Span<CpuInfo>): int32;
+
 export function hostname(): string { return msOsHostname(); }
 export function platform(): string { return msOsPlatform(); }
 export function arch(): string { return msOsArch(); }
 export function type(): string { return msOsType(); }
 export function release(): string { return msOsRelease(); }
 export function machine(): string { return msOsMachine(); }
-export interface CpuInfo {
-	model: string;
-	speed: int32;
-}
 
 export function cpus(): CpuInfo[] {
 	const count = msOsCpuCount();
-	const model = msOsCpuModel();
-	const speed = msOsCpuSpeed();
 	const result: CpuInfo[] = [];
 	let i = 0;
 	while (i < count) {
-		result.push({ model, speed });
+		result.push({ model: "", speed: 0 });
 		i = i + 1;
 	}
+	const filled = msOsCpus(result);
 	return result;
 }
+
 export function totalmem(): int64 { return msOsTotalMem(); }
 export function freemem(): int64 { return msOsFreeMem(); }
 export function uptime(): number { return msOsUptime(); }

@@ -18,7 +18,7 @@ export function isAssignable(source: Type, target: Type): boolean {
 			TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Ref | TypeKind.Ptr => isAssignable(source.typeReturn, target.typeReturn),
 			TypeKind.Function => isFunctionAssignable(source, target),
 			TypeKind.Struct => isObjectAssignable(source, target),
-			TypeKind.Enum | TypeKind.Distinct | TypeKind.TypeReference => source.typeName === target.typeName,
+			TypeKind.Enum | TypeKind.Distinct => source.typeName === target.typeName,
 			TypeKind.GenericInstance => {
 				// Structural compatibility: compare type args pairwise
 				const limit = source.typeChildren.length < target.typeChildren.length ? source.typeChildren.length : target.typeChildren.length;
@@ -67,15 +67,7 @@ export function isAssignable(source: Type, target: Type): boolean {
 	}
 
 	// TypeReference: unresolved forward/cross-module type — compare by canonical name.
-	// TransAm exports resolve annotations to TypeRef when imported types aren't in tmpCtx scope.
-	// The reference avoids this via pointer identity; we use name-based comparison as fallback.
-	// Must use typeNameOf() to unwrap Ref/Ptr (class types are Ref<Struct("Name")>).
-	if (source.kind === TypeKind.TypeReference || target.kind === TypeKind.TypeReference) {
-		const sName = typeNameOf(source);
-		const tName = typeNameOf(target);
-		if (sName !== "" && sName === tName) return true;
-		return false;
-	}
+
 
 	// null assignable to nullable targets (Object, Array, SizedArray, Span, Function, Ref, Ptr)
 	if (source.kind === TypeKind.Null) {
@@ -209,7 +201,7 @@ export function typeRelation(formal: Type, actual: Type): TypeRelation {
 				if (isObjectAssignable(actual, formal)) return TypeRelation.Subtype;
 				return TypeRelation.None;
 			},
-			TypeKind.Enum | TypeKind.Distinct | TypeKind.TypeReference => {
+			TypeKind.Enum | TypeKind.Distinct => {
 				if (formal.typeName === actual.typeName) return TypeRelation.Exact;
 				return TypeRelation.None;
 			},
@@ -257,13 +249,6 @@ export function typeRelation(formal: Type, actual: Type): TypeRelation {
 	// Error type = suppress cascading
 	if (formal.kind === TypeKind.Error || actual.kind === TypeKind.Error) {
 		return TypeRelation.Exact;
-	}
-	// TypeReference: unresolved cross-module type — compare by canonical name
-	if (formal.kind === TypeKind.TypeReference || actual.kind === TypeKind.TypeReference) {
-		const fName = typeNameOf(formal);
-		const aName = typeNameOf(actual);
-		if (fName !== "" && fName === aName) return TypeRelation.Exact;
-		return TypeRelation.None;
 	}
 	// Numeric widening: sized → Number
 	if (isNumeric(actual) && formal.kind === TypeKind.Number) {

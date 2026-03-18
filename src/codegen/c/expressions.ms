@@ -547,11 +547,7 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 			ctx.results.push(`(${cType}){0}`);
 			return;
 		}
-		if (node.nodeType !== null && node.nodeType.kind === TypeKind.TypeReference && d.newArguments.length === 0) {
-			const cType = getTypeDesc(g, node.nodeType);
-			ctx.results.push(`(${cType}){0}`);
-			return;
-		}
+		// TypeReference eliminated — all types resolved before codegen
 		// new Array(N) with typed element type → allocate array with N zero-initialized elements
 		if (node.nodeType !== null && node.nodeType.kind === TypeKind.Array) {
 			const arrType = getTypeDesc(g, node.nodeType);

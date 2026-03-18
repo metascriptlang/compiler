@@ -108,13 +108,6 @@ function lspExtractPosition(params: string): LspCursorParams {
 }
 
 // Simple linear search for dedup (O(n^2) acceptable for typical reference counts).
-function lspArrayContains(arr: string[], value: string): boolean {
-	for (let i = 0; i < arr.length; i = i + 1) {
-		if (arr[i] === value) return true;
-	}
-	return false;
-}
-
 // Get raw source text from Trans-Am DB for a given path.
 // Used by handlers that need text scanning (completion prefix, callee detection).
 function dbGetSource(db: TransAmDb, path: string): string {
@@ -339,6 +332,31 @@ function describeFmtDiff(orig: string, fmt: string): string {
 	return "Reformat this line";
 }
 
+// Shared indent/trailing-whitespace detection — used by both diagnostics and code actions.
+interface LineIndent {
+	indentEnd: number;
+	hasSpace: boolean;
+	hasTab: boolean;
+	trailStart: number;
+}
+
+function detectLineIndent(line: string): LineIndent {
+	let indentEnd = 0;
+	let hasSpace = false;
+	let hasTab = false;
+	while (indentEnd < line.length) {
+		if (line[indentEnd] === " ") { hasSpace = true; }
+		else if (line[indentEnd] === "\t") { hasTab = true; }
+		else { break; }
+		indentEnd = indentEnd + 1;
+	}
+	let trailStart = line.length;
+	while (trailStart > 0 && (line[trailStart - 1] === " " || line[trailStart - 1] === "\t")) {
+		trailStart = trailStart - 1;
+	}
+	return { indentEnd, hasSpace, hasTab, trailStart };
+}
+
 // Lint-style per-line format checks. Runs independently of the full formatter —
 // detects specific issues (wrong indent char, trailing whitespace) on each line.
 function checkFormatViolations(db: TransAmDb, path: string): string[] {
@@ -360,38 +378,23 @@ function checkFormatViolations(db: TransAmDb, path: string): string[] {
 		const line = lines[i];
 		if (line.length === 0) continue;
 
-		// Check indentation character mismatch
-		let indentEnd = 0;
-		let hasSpace = false;
-		let hasTab = false;
-		while (indentEnd < line.length) {
-			if (line[indentEnd] === " ") { hasSpace = true; }
-			else if (line[indentEnd] === "\t") { hasTab = true; }
-			else { break; }
-			indentEnd = indentEnd + 1;
-		}
-		if (indentEnd > 0 && indentEnd < line.length) {
-			if (useTabs && hasSpace && !hasTab) {
-				result.push(lspFmtDiagnostic(i, 0, indentEnd, 4, "Use tabs for indentation", "metascript-fmt", 0));
+		const info = detectLineIndent(line);
+		if (info.indentEnd > 0 && info.indentEnd < line.length) {
+			if (useTabs && info.hasSpace && !info.hasTab) {
+				result.push(lspFmtDiagnostic(i, 0, info.indentEnd, 4, "Use tabs for indentation", "metascript-fmt", 0));
 				continue;
 			}
-			if (!useTabs && hasTab && !hasSpace) {
-				result.push(lspFmtDiagnostic(i, 0, indentEnd, 4, "Use spaces for indentation", "metascript-fmt", 0));
+			if (!useTabs && info.hasTab && !info.hasSpace) {
+				result.push(lspFmtDiagnostic(i, 0, info.indentEnd, 4, "Use spaces for indentation", "metascript-fmt", 0));
 				continue;
 			}
-			if (hasSpace && hasTab) {
-				result.push(lspFmtDiagnostic(i, 0, indentEnd, 4, "Mixed tabs and spaces", "metascript-fmt", 0));
+			if (info.hasSpace && info.hasTab) {
+				result.push(lspFmtDiagnostic(i, 0, info.indentEnd, 4, "Mixed tabs and spaces", "metascript-fmt", 0));
 				continue;
 			}
 		}
-
-		// Check trailing whitespace
-		let trailStart = line.length;
-		while (trailStart > 0 && (line[trailStart - 1] === " " || line[trailStart - 1] === "\t")) {
-			trailStart = trailStart - 1;
-		}
-		if (trailStart < line.length && trailStart > 0) {
-			result.push(lspFmtDiagnostic(i, trailStart, line.length, 4, "Remove trailing whitespace", "metascript-fmt", 0));
+		if (info.trailStart < line.length && info.trailStart > 0) {
+			result.push(lspFmtDiagnostic(i, info.trailStart, line.length, 4, "Remove trailing whitespace", "metascript-fmt", 0));
 		}
 	}
 
@@ -717,6 +720,7 @@ export function handleInitialize(id: string): string {
 		+ ",\"documentHighlightProvider\":true"
 		+ ",\"renameProvider\":true"
 		+ ",\"documentFormattingProvider\":true"
+		+ ",\"codeActionProvider\":{\"codeActionKinds\":[\"quickfix\",\"source.fixAll\"]}"
 		+ ",\"semanticTokensProvider\":{\"legend\":{\"tokenTypes\":"
 		+ "[\"namespace\",\"type\",\"class\",\"enum\",\"interface\",\"struct\","
 		+ "\"typeParameter\",\"parameter\",\"variable\",\"property\","
@@ -1569,21 +1573,18 @@ export function handleReferences(id: string, params: string, db: TransAmDb): str
 	const suggest = sgQueryAtPosition(ctx, pos.line, pos.col1);
 	if (suggest === null) return lspResponse(id, "[]");
 
-	let arr = "[";
-	let count = 0;
-	const seen: string[] = [];
+	const items: string[] = [];
+	const seen: Set<string> = new Set<string>();
 
 	// Search current file via symbol identity (no false positives from shadowing)
 	const refs = sgQueryBySym(ctx, suggest.sym);
 	for (let i = 0; i < refs.length; i = i + 1) {
 		const ref = refs[i];
 		const key = pos.uri + ":" + ref.line + ":" + ref.col;
-		if (lspArrayContains(seen, key)) continue;
-		seen.push(key);
-		if (count > 0) arr = arr + ",";
+		if (seen.has(key)) continue;
+		seen.add(key);
 		const refLine = ref.line - 1;
-		arr = arr + lspFmtLocation(pos.uri, refLine, ref.col - 1, refLine, ref.col - 1 + ref.nameLen);
-		count = count + 1;
+		items.push(lspFmtLocation(pos.uri, refLine, ref.col - 1, refLine, ref.col - 1 + ref.nameLen));
 	}
 
 	// Search transitive dependents only (files that could import this symbol)
@@ -1608,17 +1609,14 @@ export function handleReferences(id: string, params: string, db: TransAmDb): str
 			const mr = matched[mi];
 			mi = mi + 1;
 			const key = otherUri + ":" + mr.line + ":" + mr.col;
-			if (lspArrayContains(seen, key)) continue;
-			seen.push(key);
-			if (count > 0) arr = arr + ",";
+			if (seen.has(key)) continue;
+			seen.add(key);
 			const mrLine = mr.line - 1;
-			arr = arr + lspFmtLocation(otherUri, mrLine, mr.col - 1, mrLine, mr.col - 1 + mr.nameLen);
-			count = count + 1;
+			items.push(lspFmtLocation(otherUri, mrLine, mr.col - 1, mrLine, mr.col - 1 + mr.nameLen));
 		}
 	}
 
-	arr = arr + "]";
-	return lspResponse(id, arr);
+	return lspResponse(id, "[" + items.join(",") + "]");
 }
 
 // ===== Document Highlight =====
@@ -1651,34 +1649,30 @@ export function handleDocumentHighlight(id: string, params: string, db: TransAmD
 function buildFileEditsBySym(ctx: CheckerContext, sym: Symbol, newName: string): string {
 	const refs = sgQueryBySym(ctx, sym);
 	if (refs.length === 0) return "";
-	let edits = "[";
+	const edits: string[] = [];
 	let i = 0;
 	while (i < refs.length) {
-		if (i > 0) edits = edits + ",";
 		const ref = refs[i];
 		const refLine = ref.line - 1;
-		edits = edits + lspFmtTextEdit(refLine, ref.col - 1, ref.col - 1 + ref.nameLen, newName);
+		edits.push(lspFmtTextEdit(refLine, ref.col - 1, ref.col - 1 + ref.nameLen, newName));
 		i = i + 1;
 	}
-	edits = edits + "]";
-	return edits;
+	return "[" + edits.join(",") + "]";
 }
 
 // Build TextEdit array for refs in a cross-module file (name + modulePath fallback)
 function buildFileEdits(ctx: CheckerContext, name: string, modulePath: string, newName: string): string {
 	const refs = sgQueryByName(ctx, name, modulePath);
 	if (refs.length === 0) return "";
-	let edits = "[";
+	const edits: string[] = [];
 	let i = 0;
 	while (i < refs.length) {
-		if (i > 0) edits = edits + ",";
 		const ref = refs[i];
 		const refLine = ref.line - 1;
-		edits = edits + lspFmtTextEdit(refLine, ref.col - 1, ref.col - 1 + ref.nameLen, newName);
+		edits.push(lspFmtTextEdit(refLine, ref.col - 1, ref.col - 1 + ref.nameLen, newName));
 		i = i + 1;
 	}
-	edits = edits + "]";
-	return edits;
+	return "[" + edits.join(",") + "]";
 }
 
 export function handleRename(id: string, params: string, db: TransAmDb): string {
@@ -1778,6 +1772,71 @@ export function handleSemanticTokensFull(id: string, params: string, db: TransAm
 
 let _fmtParsersRegistered = false;
 
+// ===== Code Actions =====
+// Quick fixes for format violations — "Fix: Use tabs" etc.
+// Cache formatted output to avoid re-formatting on every code action request.
+let _codeActionFmtSource = "";
+let _codeActionFmtResult = "";
+
+export function handleCodeAction(id: string, params: string, db: TransAmDb): string {
+	const textDoc = lspGetObjectField(params, "textDocument");
+	const uri = lspGetField(textDoc, "uri");
+	const path = lspUriToPath(uri);
+	const source = dbGetSource(db, path);
+	if (source === "") return lspResponse(id, "[]");
+
+	// Get requested range (cursor line)
+	const rangeObj = lspGetObjectField(params, "range");
+	const startObj = lspGetObjectField(rangeObj, "start");
+	const startLine = lspGetNumberField(startObj, "line"); // 0-based
+
+	const lines = splitLines(source);
+	if (startLine < 0 || startLine >= lines.length) return lspResponse(id, "[]");
+
+	const line = lines[startLine];
+	const info = detectLineIndent(line);
+	const actions: string[] = [];
+
+	// Check if this line has a format violation
+	const options = getFormatOptions(db);
+	const hasIndentIssue = info.indentEnd > 0 && info.indentEnd < line.length
+		&& ((options.useTabs && info.hasSpace) || (!options.useTabs && info.hasTab) || (info.hasSpace && info.hasTab));
+	const hasTrailingWs = info.trailStart < line.length && info.trailStart > 0;
+
+	if (hasIndentIssue || hasTrailingWs) {
+		// Use the formatter as source of truth — get the correctly formatted version of this line.
+		// This ensures the fix is identical to what "Format Document" would produce.
+		// Cache: reuse formatted output if source unchanged
+		if (_codeActionFmtSource !== source) {
+			if (!_fmtParsersRegistered) {
+				registerCoreParsers();
+				_fmtParsersRegistered = true;
+			}
+			const parseResult = parseSource(source);
+			if (parseResult.ok) {
+				const doc = printFormattedNode(parseResult.value, options);
+				_codeActionFmtResult = formatDoc(doc, options);
+			} else {
+				_codeActionFmtResult = "";
+			}
+			_codeActionFmtSource = source;
+		}
+		if (_codeActionFmtResult.length > 0) {
+			const fmtLines = splitLines(_codeActionFmtResult);
+
+			if (startLine < fmtLines.length && fmtLines[startLine] !== line) {
+				// Single-line fix: replace this line with the formatted version
+				const edit = lspFmtTextEdit(startLine, 0, line.length, fmtLines[startLine]);
+				const changesJson = "{" + JSON.stringify(uri) + ":[" + edit + "]}";
+				const title = hasIndentIssue ? "Fix: Reformat this line" : "Fix: Remove trailing whitespace";
+				actions.push("{\"title\":" + JSON.stringify(title) + ",\"kind\":\"quickfix\",\"isPreferred\":true,\"edit\":{\"changes\":" + changesJson + "}}");
+			}
+		}
+	}
+
+	return lspResponse(id, "[" + actions.join(",") + "]");
+}
+
 export function handleFormatting(id: string, params: string, db: TransAmDb): string {
 	const textDoc = lspGetObjectField(params, "textDocument");
 	const uri = lspGetField(textDoc, "uri");
@@ -1836,6 +1895,7 @@ export function lspDispatch(method: string, id: string, params: string, db: Tran
 		"textDocument/rename" => handleRename(id, params, db),
 		"textDocument/semanticTokens/full" => handleSemanticTokensFull(id, params, db),
 		"textDocument/formatting" => handleFormatting(id, params, db),
+		"textDocument/codeAction" => handleCodeAction(id, params, db),
 		"$/cancelRequest" => {
 			// Single-threaded: requests complete before we read this.
 			return "";

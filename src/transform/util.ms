@@ -3,7 +3,7 @@
 
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, BlockStmtData, VariableDeclData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, CallExprData, MemberExprData, IdentifierData, Type, TypeKind } from "../ast/node";
-import { createFunction, createStruct, createTypeRef, createArray, numberType, stringType, booleanType, voidType, nullType, unknownType, getSysType, isResult, getResultOkType, getResultErrType } from "../checker/types";
+import { createFunction, createStruct, createArray, numberType, stringType, booleanType, voidType, nullType, unknownType, getSysType, isResult, getResultOkType, getResultErrType } from "../checker/types";
 import { TransformContext, freshTemp, NameSet, nameSetAdd } from "./context";
 
 // Create a synthetic token from a source location (for transform-generated nodes)
@@ -233,23 +233,20 @@ export function makeFnDecl(name: string, fnParams: string[], paramTypes: string[
 	return n;
 }
 
-export function makeInterfaceDecl(name: string, fields: string[], fieldTypes: string[], loc: SourceLocation): Node {
+// Create interface declaration with pre-resolved Type objects.
+// Reference parity: all types are concrete by codegen, no forward/TypeReference.
+export function makeInterfaceDeclFromTypes(name: string, fields: string[], fieldTypes: string[], resolvedTypes: Type[], loc: SourceLocation): Node {
 	const n = createNode(NodeKind.InterfaceDecl, {
 		interfaceName: name, interfaceFields: fields, interfaceFieldTypes: fieldTypes,
 		nameLocation: loc,
 	}, syntheticToken(loc));
-	// Build Type for codegen (Implementation parity)
-	const resolvedFieldTypes: Type[] = [];
-	for (let i = 0; i < fieldTypes.length; i += 1) {
-		resolvedFieldTypes.push(resolveSimpleTypeStr(fieldTypes[i]));
-	}
-	n.nodeType = createStruct(name, fields, resolvedFieldTypes, true);
+	n.nodeType = createStruct(name, fields, resolvedTypes, true);
 	return n;
 }
 
 // Resolve simple type annotation strings to Type objects for transform-generated nodes.
-// Handles primitives, named types, and array annotations ("Foo[]", "Foo [ ]").
-// Complex types (Result<T,E>, Map<K,V>) remain as TypeReference — codegen resolves those.
+// Handles primitives and array annotations. Non-primitive types resolve to Unknown —
+// actual types come from the checker via node.nodeType (no TypeReference).
 function resolveSimpleTypeStr(annotation: string): Type {
 	if (annotation === "") return unknownType();
 	if (annotation === "void*") return unknownType();  // void* → Unknown → "void*" in codegen
@@ -274,7 +271,7 @@ function resolveSimpleTypeStr(annotation: string): Type {
 		"uint32" => getSysType(TypeKind.Uint32),
 		"uint64" => getSysType(TypeKind.Uint64),
 		"float32" => getSysType(TypeKind.Float32),
-		_ => createTypeRef(annotation),
+		_ => unknownType(),
 	};
 }
 

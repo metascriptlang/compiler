@@ -73,7 +73,12 @@ static inline msString msOsMachine(void) {
 	return msOsArch();
 }
 
-/* ===== cpus() — number of logical CPUs ===== */
+/* ===== CPU Info ===== */
+
+typedef struct {
+	msString model;
+	int32_t speed;
+} CpuInfo;
 
 static inline int32_t msOsCpuCount(void) {
 #ifdef _SC_NPROCESSORS_ONLN
@@ -83,8 +88,6 @@ static inline int32_t msOsCpuCount(void) {
 	return 1;
 #endif
 }
-
-/* ===== CPU model string ===== */
 
 static inline msString msOsCpuModel(void) {
 #if defined(__APPLE__)
@@ -116,8 +119,6 @@ static inline msString msOsCpuModel(void) {
 	return msStringFromCStr("unknown");
 }
 
-/* ===== CPU speed in MHz ===== */
-
 static inline int32_t msOsCpuSpeed(void) {
 #if defined(__APPLE__)
 	int64_t freq = 0;
@@ -145,6 +146,19 @@ static inline int32_t msOsCpuSpeed(void) {
 #else
 	return 0;
 #endif
+}
+
+/* Fill CpuInfo buffer via Span (out param). Returns count filled. */
+static inline int32_t msOsCpus(CpuInfo* buf, int64_t buf_len) {
+	int32_t count = msOsCpuCount();
+	if (count > (int32_t)buf_len) count = (int32_t)buf_len;
+	msString model = msOsCpuModel();
+	int32_t speed = msOsCpuSpeed();
+	for (int32_t i = 0; i < count; i++) {
+		buf[i].model = model;
+		buf[i].speed = speed;
+	}
+	return count;
 }
 
 /* ===== totalmem() — total system memory in bytes ===== */

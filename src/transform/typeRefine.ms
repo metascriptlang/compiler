@@ -91,79 +91,6 @@ function recoverKnownField(node: Node, typeName: string, prop: string): void {
 
 // Extract field type from structural typeName: "{ name : type , name2 : type2 }"
 // Returns a Type or null if field not found.
-function extractFieldTypeFromStructural(typeName: string, fieldName: string): Type {
-	// Search for " fieldName : " pattern in typeName
-	const needle = " " + fieldName + " : ";
-	let pos = 0;
-	while (pos < typeName.length) {
-		// Find needle starting at pos
-		let found = false;
-		let ni = 0;
-		if (pos + needle.length <= typeName.length) {
-			found = true;
-			while (ni < needle.length) {
-				if (typeName.charAt(pos + ni) !== needle.charAt(ni)) {
-					found = false;
-					ni = needle.length; // break
-				}
-				ni = ni + 1;
-			}
-		}
-		if (found) {
-			// Extract type name after " fieldName : "
-			const typeStart = pos + needle.length;
-			let typeEnd = typeStart;
-			let depth = 0;
-			while (typeEnd < typeName.length) {
-				const ch = typeName.charAt(typeEnd);
-				if (ch === "<" || ch === "(" || ch === "{" || ch === "[") { depth = depth + 1; }
-				if (ch === ">" || ch === ")" || ch === "}" || ch === "]") { depth = depth - 1; }
-				if (depth === 0 && (ch === "," || ch === "}")) {
-					typeEnd = typeName.length; // break
-				} else {
-					typeEnd = typeEnd + 1;
-				}
-			}
-			// typeEnd went to typeName.length as break marker — actual end is before that
-			// Re-scan to find actual boundary
-			let actualEnd = typeStart;
-			depth = 0;
-			while (actualEnd < typeName.length) {
-				const ch = typeName.charAt(actualEnd);
-				if (ch === "<" || ch === "(" || ch === "{" || ch === "[") { depth = depth + 1; }
-				if (ch === ">" || ch === ")" || ch === "}" || ch === "]") { depth = depth - 1; }
-				if (depth === 0 && (ch === "," || ch === "}")) {
-					const rawType = typeName.slice(typeStart, actualEnd).trim();
-					return resolveFieldTypeName(rawType);
-				}
-				actualEnd = actualEnd + 1;
-			}
-		}
-		pos = pos + 1;
-	}
-	return null;
-}
-
-// Resolve a type name string to a Type. Handles primitives and registry types.
-function resolveFieldTypeName(rawType: string): Type {
-	if (rawType === "string") return stringType();
-	if (rawType === "number" || rawType === "float64") return numberType();
-	if (rawType === "boolean") return booleanType();
-	if (rawType === "void") return null;
-	// Array types: "T[]"
-	if (rawType.endsWith("[]")) {
-		const inner = rawType.slice(0, rawType.length - 2);
-		const innerType = resolveFieldTypeName(inner);
-		if (innerType !== null) return createArray(innerType);
-	}
-	// Named types: look up in registry
-	const reg = registryTypeLookup(rawType);
-	if (reg !== null) return reg;
-	const reg2 = registryLookup(rawType);
-	if (reg2 !== null) return reg2;
-	return null;
-}
-
 function rederiveMemberType(node: Node): void {
 	const d = node.data as MemberExprData;
 	if (d.object === null) return;
@@ -221,13 +148,6 @@ function rederiveMemberType(node: Node): void {
 				}
 				pi = pi + 1;
 			}
-		}
-	} else if (ot.kind === TypeKind.TypeReference && ot.typeName !== null && ot.typeName.startsWith("{")) {
-		// Structural TypeReference: parse field type from typeName string
-		// Format: "{ name : type , name2 : type2 }"
-		const fieldType = extractFieldTypeFromStructural(ot.typeName, prop);
-		if (fieldType !== null) {
-			node.nodeType = fieldType;
 		}
 	} else if (ot.kind === TypeKind.Function) {
 		// Not a typical member access — skip (closures are handled differently)

@@ -886,11 +886,6 @@ function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type): Type {
 	if (resolvedType !== null && (resolvedType.kind === TypeKind.Struct || resolvedType.kind === TypeKind.Ref || resolvedType.kind === TypeKind.GenericInstance)) {
 		return resolvedType;
 	}
-	// Forward reference: type not yet resolved
-	if (resolvedType !== null && resolvedType.kind === TypeKind.TypeReference) {
-		node.nodeType = resolvedType;
-		return resolvedType;
-	}
 	return unknownType();
 }
 

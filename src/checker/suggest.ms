@@ -279,8 +279,6 @@ export function sgTypeToString(t: Type): string {
 		return result;
 	}
 
-	if (t.kind === TypeKind.TypeReference) return t.typeName;
-
 	return "unknown";
 }
 
