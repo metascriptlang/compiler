@@ -1598,10 +1598,16 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 	// instead of treating the ternary as an opaque expression.
 	if (bd.right.kind === NodeKind.ConditionalExpr) {
 		const cd = bd.right.data as ConditionalExprData;
+		const thenLhs = makeIdent(leftD.name, loc);
+		thenLhs.resolvedSym = bd.left.resolvedSym;
+		thenLhs.nodeType = bd.left.nodeType;
+		const elseLhs = makeIdent(leftD.name, loc);
+		elseLhs.resolvedSym = bd.left.resolvedSym;
+		elseLhs.nodeType = bd.left.nodeType;
 		const thenAssign = makeExprStmt(
-			makeAssign(makeIdent(leftD.name, loc), cd.ternaryConsequent, loc), loc);
+			makeAssign(thenLhs, cd.ternaryConsequent, loc), loc);
 		const elseAssign = makeExprStmt(
-			makeAssign(makeIdent(leftD.name, loc), cd.ternaryAlternate, loc), loc);
+			makeAssign(elseLhs, cd.ternaryAlternate, loc), loc);
 		// Process each branch through full DRC pipeline
 		const thenProcessed = processStmtList([thenAssign], dctx, loc);
 		const elseProcessed = processStmtList([elseAssign], dctx, loc);

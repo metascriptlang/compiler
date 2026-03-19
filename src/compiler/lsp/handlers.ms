@@ -5,7 +5,7 @@
 
 import {
 	TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck,
-	getFileText, getFileId, getFilePath,
+	dbGetCheckedProgram, dbEnsureModuleExports, getFileText, getFileId, getFilePath,
 	recordModuleImport, clearImportsFor, getTransitiveDependents,
 	dbGetFileCount, dbGetFilePathByIndex
 } from "../transam/index";
@@ -949,6 +949,7 @@ function lspCrossModuleCandidates(
 }
 
 export function handleCompletion(id: string, params: string, db: TransAmDb, cache: CompletionCache): string {
+	const t0 = clockMs();
 	const pos = lspExtractPosition(params);
 	const path = lspUriToPath(pos.uri);
 	const source = dbGetSource(db, path);
@@ -1074,6 +1075,8 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 	cache.prefix = prefix;
 	cache.items = cachedItems;
 
+	const elapsed = clockMs() - t0;
+	writeStderr("[LSP] completion " + path + " prefix='" + prefix + "' items=" + cachedItems.length + " " + elapsed + "ms\n");
 	return lspResponse(id, joinJsonItems(cachedItems));
 }
 
@@ -1251,9 +1254,12 @@ function lspCompleteImportName(program: Node, source: string, pos: LspCursorPara
 	const targetPath = resolveImportForLsp(db, filePath, importSpec);
 	if (targetPath === "") return [];
 
-	// Ensure the target module is loaded and typechecked (registers exports)
+	// Ensure the target module is loaded and its exports are registered
 	lspEnsureFileLoaded(db, targetPath);
-	dbTypeCheck(db, targetPath);
+	if (findModuleExports(db.exportRegistry, targetPath) === null) {
+		// Target not yet in registry — register its exports directly
+		dbEnsureModuleExports(db, targetPath);
+	}
 
 	// Get exports from registry
 	const modExports = findModuleExports(db.exportRegistry, targetPath);
@@ -1536,11 +1542,13 @@ export function handleInlayHint(id: string, params: string, db: TransAmDb): stri
 	const startLine = lspGetNumberField(rangeStart, "line") + 1;
 	const endLine = lspGetNumberField(rangeEnd, "line") + 1;
 
-	const program = dbParse(db, path);
-	if (program === null) return lspResponse(id, "[]");
-
 	const ctx = dbTypeCheck(db, path);
 	if (ctx === null) return lspResponse(id, "[]");
+
+	// Use checked program (has resolvedSym/nodeType on AST nodes).
+	// Raw dbParse tree lacks resolved info — scope lookups find wrong symbols.
+	const program = dbGetCheckedProgram(db, path);
+	if (program === null) return lspResponse(id, "[]");
 
 	const hintsList = sgCollectInlayHints(ctx, program, startLine, endLine);
 

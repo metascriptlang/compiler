@@ -13,7 +13,7 @@
 // codegen/c/json.ms for clean separation of concerns.
 
 import { Node, NodeKind, NodeFlag, DeclKind, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, NewExprData, Type, TypeKind } from "../../ast/node";
-import { isNumeric, createResult, createArray, createPrimitive, stringType, booleanType, numberType, unknownType, unwrapRef, typeNameOf, isResult, isPromise, getResultOkType, getResultErrType } from "../../checker/types";
+import { isNumeric, createResult, createArray, createPrimitive, createRef, stringType, booleanType, numberType, unknownType, unwrapRef, typeNameOf, isResult, isPromise, getResultOkType, getResultErrType } from "../../checker/types";
 import { findExtension } from "../../checker/context";
 import { TransformContext, hasEmitted } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
@@ -25,7 +25,7 @@ import {
 } from "../util";
 import { findCallTypeArg } from "../../parser/context";
 import { generateJsonParseC, generateJsonStringifyC, makeEmitNode, ensureJsonInclude, registerHelper, fieldTypeToJsonCtor, needsNumCast, emitValueToJson, emitNestedToValueHelpers, arrayCType, arrayElemKey } from "../../codegen/c/json";
-import { rewriteEcho, resolveJsonTargetType } from "./debugLower";
+import { rewriteEcho, resolveJsonTargetType, isJsonTargetRef } from "./debugLower";
 import { stmtCountAfter, firstStmtKindAfter, firstExprKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -389,11 +389,13 @@ function rewriteJsonParse(node: Node, ctx: TransformContext): Node {
 	const structType = resolveJsonTargetType(typeArgStr, ctx);
 	if (structType === null) return node;
 
+	const isRef = isJsonTargetRef(typeArgStr, ctx);
 	const helperName = "__jsonParse_" + typeArgStr;
-	const resultType = createResult(structType, stringType());
+	const resultOkType = isRef ? createRef(structType) : structType;
+	const resultType = createResult(resultOkType, stringType());
 
 	if (!hasEmitted(ctx, helperName)) {
-		const emitNode = generateJsonParseC(helperName, typeArgStr, structType, loc);
+		const emitNode = generateJsonParseC(helperName, typeArgStr, structType, isRef, loc);
 		if (emitNode === null) return node;
 		registerHelper(helperName, emitNode, ctx);
 	}
@@ -516,11 +518,12 @@ function rewriteJsonStringify(node: Node, ctx: TransformContext): Node {
 	}
 	if (structType === null) return node;
 
+	const isRef = isJsonTargetRef(typeArgStr, ctx);
 	ensureJsonInclude(ctx, loc);
 	const helperName = "__jsonStringify_" + typeArgStr;
 
 	if (!hasEmitted(ctx, helperName)) {
-		const emitNode = generateJsonStringifyC(helperName, typeArgStr, structType, loc);
+		const emitNode = generateJsonStringifyC(helperName, typeArgStr, structType, isRef, loc);
 		if (emitNode === null) return node;
 		registerHelper(helperName, emitNode, ctx);
 	}

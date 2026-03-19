@@ -99,6 +99,10 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 		const earlyExports: ExportedSymInfo[] = [];
 		for (const sym of p1ctx.table.current.symbols) {
 			if (hasFlag(sym, SymbolFlag.Exported)) {
+				let memberLocs: SourceLocation[] = [];
+				if (sym.declNode !== null && sym.declNode.kind === NodeKind.EnumDecl) {
+					memberLocs = (sym.declNode.data as EnumDeclData).memberLocations;
+				}
 				const info: ExportedSymInfo = {
 					name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
 					overloadTypes: [],
@@ -111,7 +115,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 				originalName: sym.originalName,
 				headerPath: sym.headerPath,
 				location: sym.location !== null ? sym.location : makeLoc(0, 0),
-				memberLocations: sym.declNode !== null && sym.declNode.kind === NodeKind.EnumDecl ? (sym.declNode.data as EnumDeclData).memberLocations : [],
+				memberLocations: memberLocs,
 				};
 				earlyExports.push(info);
 			}
@@ -244,7 +248,11 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 						ovi3 = ovi3 + 1;
 					}
 				}
-				const info: ExportedSymInfo = { name: sym.name, kind: sym.symbolKind, symType: sym.symbolType, overloadTypes: ovTypes, extReceiverType: extRecv, extIsStatic: extStatic, overloadExtReceiverTypes: ovExtRecvs, overloadExtIsStatic: ovExtStatics, nativeName: sym.nativeName, builtinKind: sym.builtinKind, overloadNativeNames: ovRtNames, overloadBuiltinKinds: ovBiKinds, defaultParams: sym.defaultParams, overloadDefaultParamsFlat: ovDefParamsFlat, overloadDefaultParamsCounts: ovDefParamsCounts, definingModule: sym.modulePath !== "" ? sym.modulePath : path, originalName: sym.originalName, headerPath: sym.headerPath, location: sym.location !== null ? sym.location : makeLoc(0, 0), memberLocations: sym.declNode !== null && sym.declNode.kind === NodeKind.EnumDecl ? (sym.declNode.data as EnumDeclData).memberLocations : [] };
+				let memberLocs2: SourceLocation[] = [];
+				if (sym.declNode !== null && sym.declNode.kind === NodeKind.EnumDecl) {
+					memberLocs2 = (sym.declNode.data as EnumDeclData).memberLocations;
+				}
+				const info: ExportedSymInfo = { name: sym.name, kind: sym.symbolKind, symType: sym.symbolType, overloadTypes: ovTypes, extReceiverType: extRecv, extIsStatic: extStatic, overloadExtReceiverTypes: ovExtRecvs, overloadExtIsStatic: ovExtStatics, nativeName: sym.nativeName, builtinKind: sym.builtinKind, overloadNativeNames: ovRtNames, overloadBuiltinKinds: ovBiKinds, defaultParams: sym.defaultParams, overloadDefaultParamsFlat: ovDefParamsFlat, overloadDefaultParamsCounts: ovDefParamsCounts, definingModule: sym.modulePath !== "" ? sym.modulePath : path, originalName: sym.originalName, headerPath: sym.headerPath, location: sym.location !== null ? sym.location : makeLoc(0, 0), memberLocations: memberLocs2 };
 				exports.push(info);
 			}
 		}

@@ -140,10 +140,12 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		if (d.declKind !== DeclKind.Const) {
 			setFlag(existing, SymbolFlag.Mutable);
 		}
+		node.resolvedSym = existing;
 		sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.declName.length, existing, varType, SymbolKind.Variable, d.declName, "", true);
 	} else {
 		const newSym = makeSymbol(d.declName, SymbolKind.Variable, varType, d.declKind !== DeclKind.Const);
 		defineOrError(ctx, newSym, node);
+		node.resolvedSym = newSym;
 		sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.declName.length, newSym, varType, SymbolKind.Variable, d.declName, "", true);
 	}
 	// Ref parity: varDecl — record declaration block for nfFirstWrite logic

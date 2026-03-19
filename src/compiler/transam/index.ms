@@ -154,6 +154,7 @@ export function createTransAmDb(cacheCapacity: number): TransAmDb {
 // Cache key offsets for different query types
 function parseNodeKey(fileId: number): number { return fileId; }
 function checkCtxKey(fileId: number): number { return fileId + 10000; }
+function checkNodeKey(fileId: number): number { return fileId + 15000; }
 function transformNodeKey(fileId: number): number { return fileId + 20000; }
 function analyzeNodeKey(fileId: number): number { return fileId + 30000; }
 
@@ -393,6 +394,30 @@ function createTempCollectContext(): CheckerContext {
 	return ctx;
 }
 
+// Register a single file's exports into the ExportRegistry.
+// Used by import completion when the target module hasn't been processed as a dependency yet.
+export function dbEnsureModuleExports(db: TransAmDb, filePath: string): void {
+	if (findModuleExports(db.exportRegistry, filePath) !== null) return;
+	const program = dbParse(db, filePath);
+	if (program === null) return;
+	const tmpCtx = createTempCollectContext();
+	tmpCtx.exportRegistry = db.exportRegistry;
+	const depMod = createModule(filePath);
+	depMod.imports = buildImportEntries(db, filePath, program);
+	tmpCtx.currentModule = depMod;
+	collectTopLevel(tmpCtx, program);
+	resolveDeclarations(tmpCtx, program);
+	const exports: ExportedSymInfo[] = [];
+	for (const sym of tmpCtx.table.current.symbols) {
+		if (hasFlag(sym, SymbolFlag.Exported)) {
+			exports.push(buildExportInfo(sym, filePath));
+		}
+	}
+	if (exports.length > 0) {
+		registerModuleExports(db.exportRegistry, filePath, exports);
+	}
+}
+
 // Build ImportEntry[] from parsed program's import declarations + dep edge resolution
 function buildImportEntries(db: TransAmDb, filePath: string, program: Node): ImportEntry[] {
 	const entries: ImportEntry[] = [];
@@ -520,8 +545,19 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	}
 
 	ctxCacheStore(checkCtxKey(fileId), checkerCtx);
+	nodeCacheStore(checkNodeKey(fileId), program);  // cache checked program (has resolvedSym/nodeType)
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, 0, true);
 	return checkerCtx;
+}
+
+// Get the checked program (has resolvedSym/nodeType on AST nodes).
+// Falls back to raw parse if no checked version is cached.
+export function dbGetCheckedProgram(db: TransAmDb, filePath: string): Node {
+	const fileId = getFileId(db.fileInput, filePath);
+	if (fileId < 0) return null as unknown as Node;
+	const checked = nodeCacheGet(checkNodeKey(fileId));
+	if (checked !== null) return checked;
+	return dbParse(db, filePath);
 }
 
 // Execute full pipeline: parse → check → transform → analyze

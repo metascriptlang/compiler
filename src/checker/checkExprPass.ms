@@ -882,6 +882,11 @@ function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type): Type {
 		}
 		// new Array<T>() or new Array<T>(size) — resolve element type from explicit type arg
 		if (id.name === "Array") {
+			// Record Array symbol for hover/go-to-definition consistency
+			const arraySym = lookupSymbol(ctx.table, "Array");
+			if (arraySym !== null) {
+				sgRecordSym(ctx, d.newCallee.location.line, d.newCallee.location.column, d.newCallee.location.column + 5, arraySym, arraySym.symbolType, arraySym.symbolKind, "Array", "", false);
+			}
 			const ltCol = d.newCallee.location.column + id.name.length;
 			const typeArgStr = getExplicitTypeArg(d.newCallee.location.line, ltCol);
 			if (typeArgStr !== "") {

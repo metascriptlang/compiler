@@ -199,7 +199,7 @@ export function emitNestedToValueHelpers(fieldTypes: Type[], emitted: Set<string
 			c = c + `#ifndef ${guard}\n#define ${guard}\n`;
 			c = c + `static MsJsonValue* __jsonToValue_${ft.typeName}(${ft.typeName} value) {\n`;
 			c = c + "  MsJsonValue* __o = msJsonNewObject();\n";
-			c = c + emitJsonSetFields(ft.typeNames, ft.typeChildren);
+			c = c + emitJsonSetFields(ft.typeNames, ft.typeChildren, "value.");
 			c = c + "  return __o;\n";
 			c = c + "}\n#endif\n";
 		}
@@ -264,14 +264,14 @@ export function emitValueToJson(valueExpr: string, ftype: Type): string {
 	return `msJsonNewNull()`;
 }
 
-function emitJsonSetFields(fieldNames: string[], fieldTypes: Type[]): string {
+function emitJsonSetFields(fieldNames: string[], fieldTypes: Type[], accessor: string): string {
 	let c = "";
 	let fi = 0;
 	while (fi < fieldNames.length) {
 		const fname = fieldNames[fi];
 		const ftype = fieldTypes[fi];
 		const key = `msStringNew("${fname}", ${fname.length})`;
-		c = c + `  msJsonSet(__o, ${key}, ${emitValueToJson("value." + fname, ftype)});\n`;
+		c = c + `  msJsonSet(__o, ${key}, ${emitValueToJson(accessor + fname, ftype)});\n`;
 		fi = fi + 1;
 	}
 	return c;
@@ -291,7 +291,7 @@ export function makeEmitNode(code: string, loc: SourceLocation): Node {
 // Generate a C function: static msResult_T_msString __jsonParse_T(msString input) { ... }
 // Calls msJsonParse + msJsonGet from runtime/std/core/json/native.h.
 // Returns null if any field type is unsupported.
-export function generateJsonParseC(helperName: string, typeName: string, structType: Type, loc: SourceLocation): Node {
+export function generateJsonParseC(helperName: string, typeName: string, structType: Type, isRef: boolean, loc: SourceLocation): Node {
 	const fieldNames = structType.typeNames;
 	const fieldTypes = structType.typeChildren;
 	if (fieldNames === null || fieldTypes === null) return null as unknown as Node;
@@ -303,9 +303,12 @@ export function generateJsonParseC(helperName: string, typeName: string, structT
 		fi = fi + 1;
 	}
 
-	const resultCType = `msResult_${typeName}_msString`;
+	// Ref types: Result<Person*, string> → mangled name includes "star"
+	const mangledOk = isRef ? typeName + "star_" : typeName;
+	const resultCType = `msResult_${mangledOk}_msString`;
+	// Field accessor: pointer deref for Ref types
+	const valAcc = isRef ? "__r.value->" : "__r.value.";
 
-	// Include json runtime header (INCLUDESECTION routes it to #include area)
 	let c = "";
 	c = c + `static ${resultCType} ${helperName}(msString input) {\n`;
 	c = c + `  ${resultCType} __r; memset(&__r, 0, sizeof(__r));\n`;
@@ -315,6 +318,11 @@ export function generateJsonParseC(helperName: string, typeName: string, structT
 	c = c + "    __r.ok = MS_FALSE; __r.error = msStringNew(\"expected object\", 15);\n";
 	c = c + "    return __r;\n";
 	c = c + "  }\n";
+
+	// Ref types: allocate heap object (msAlloc includes refcount header + zeroes memory)
+	if (isRef) {
+		c = c + `  __r.value = (${typeName}*)msAlloc(sizeof(${typeName}));\n`;
+	}
 
 	// Per-field extraction
 	fi = 0;
@@ -335,12 +343,11 @@ export function generateJsonParseC(helperName: string, typeName: string, structT
 		c = c + "  }\n";
 
 		if (needsNumCast(ftype)) {
-			c = c + `  __r.value.${fname} = (${cFieldType})${fVar}->numVal;\n`;
+			c = c + `  ${valAcc}${fname} = (${cFieldType})${fVar}->numVal;\n`;
 		} else {
-			c = c + `  __r.value.${fname} = ${fVar}${jsonCAccessor(ftype)};\n`;
-			// String fields: incref before msJsonFree releases the JSON tree
+			c = c + `  ${valAcc}${fname} = ${fVar}${jsonCAccessor(ftype)};\n`;
 			if (ftype.kind === TypeKind.String) {
-				c = c + `  msStringIncref(__r.value.${fname});\n`;
+				c = c + `  msStringIncref(${valAcc}${fname});\n`;
 			}
 		}
 
@@ -361,7 +368,7 @@ export function generateJsonParseC(helperName: string, typeName: string, structT
 // Calls msJsonNewObject + msJsonSet + msJsonStringify from runtime/std/core/json/native.h.
 // Returns null if any field type is unsupported.
 export function generateJsonStringifyC(
-	helperName: string, typeName: string, structType: Type, loc: SourceLocation
+	helperName: string, typeName: string, structType: Type, isRef: boolean, loc: SourceLocation
 ): Node {
 	const fieldNames = structType.typeNames;
 	const fieldTypes = structType.typeChildren;
@@ -377,9 +384,11 @@ export function generateJsonStringifyC(
 	c = c + emitNestedToValueHelpers(fieldTypes, emitted);
 
 	// Top-level: builds MsJsonValue* tree, stringifies, frees.
-	c = c + `static msString ${helperName}(${typeName} value) {\n`;
+	const paramType = isRef ? typeName + "*" : typeName;
+	c = c + `static msString ${helperName}(${paramType} value) {\n`;
 	c = c + "  MsJsonValue* __o = msJsonNewObject();\n";
-	c = c + emitJsonSetFields(fieldNames, fieldTypes);
+	const accessor = isRef ? "value->" : "value.";
+	c = c + emitJsonSetFields(fieldNames, fieldTypes, accessor);
 	c = c + "  msString __result = msJsonStringify(__o);\n";
 	c = c + "  msJsonFree(__o);\n";
 	c = c + "  return __result;\n";
@@ -397,7 +406,7 @@ export function generateJsonStringifyC(
 // displayName: prefix shown before { ... } (e.g., "Person ", "class Person ", "Anon ")
 // colorCode: ANSI escape for the prefix (e.g., "\\x1b[34m" blue, "\\x1b[32m" green, "\\x1b[36m" cyan)
 export function generateJsonStringifyColoredC(
-	helperName: string, typeName: string, structType: Type, displayName: string, colorCode: string, loc: SourceLocation
+	helperName: string, typeName: string, structType: Type, displayName: string, colorCode: string, isRef: boolean, loc: SourceLocation
 ): Node {
 	const fieldNames = structType.typeNames;
 	const fieldTypes = structType.typeChildren;
@@ -411,9 +420,11 @@ export function generateJsonStringifyColoredC(
 	const emittedDbg: Set<string> = new Set<string>();
 	c = c + emitNestedToValueHelpers(fieldTypes, emittedDbg);
 
-	c = c + `static msString ${helperName}(${typeName} value) {\n`;
+	const paramType = isRef ? typeName + "*" : typeName;
+	c = c + `static msString ${helperName}(${paramType} value) {\n`;
 	c = c + "  MsJsonValue* __o = msJsonNewObject();\n";
-	c = c + emitJsonSetFields(fieldNames, fieldTypes);
+	const accessor = isRef ? "value->" : "value.";
+	c = c + emitJsonSetFields(fieldNames, fieldTypes, accessor);
 	c = c + "  msString __body = msJsonStringifyColored(__o);\n";
 	c = c + "  msJsonFree(__o);\n";
 	// Build colored prefix at runtime: color + "class TypeName " + reset + body

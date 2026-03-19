@@ -374,8 +374,6 @@ function collectExtern(ctx: CheckerContext, node: Node): void {
 	};
 	const sym = makeSymbol(d.externName, kind, unknownType(), false);
 	sym.symbolType.sym = sym;
-	// Extern declarations are FFI bindings — implicitly exported for cross-module use
-	setFlag(sym, SymbolFlag.Exported);
 	setFlag(sym, SymbolFlag.ImportC);
 	// Wire nativeName from AST 'from "c_name"' clause
 	if (d.nativeName !== null && d.nativeName !== "") {

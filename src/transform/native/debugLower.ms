@@ -26,6 +26,15 @@ export function resolveJsonTargetType(typeArgStr: string, ctx: TransformContext)
 	return null;
 }
 
+// Check if a JSON target type is Ref-wrapped (interface/class vs struct).
+// Used by JSON generators to emit pointer-aware C code.
+export function isJsonTargetRef(typeArgStr: string, ctx: TransformContext): boolean {
+	if (ctx.checkerCtx === null) return false;
+	const sym = lookupSymbol(ctx.checkerCtx.table, typeArgStr);
+	if (sym === null || sym.symbolType === null) return false;
+	return sym.symbolType.kind === TypeKind.Ref;
+}
+
 function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): Node {
 	if (arg.nodeType === null) return arg;
 	const t = arg.nodeType;
@@ -105,7 +114,7 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 			const dbgColor = isAnon ? "\\x1b[36m" : isClass ? "\\x1b[32m" : "\\x1b[34m";
 			const helperName = "__jsonDbg_" + typeName;
 			if (!hasEmitted(ctx, helperName)) {
-				const emitNode = generateJsonStringifyColoredC(helperName, typeName, structType, displayName, dbgColor, loc);
+				const emitNode = generateJsonStringifyColoredC(helperName, typeName, structType, displayName, dbgColor, isClass, loc);
 				if (emitNode === null) return arg;  // unsupported field type — pass through
 				registerHelper(helperName, emitNode, ctx);
 			}

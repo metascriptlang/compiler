@@ -79,16 +79,17 @@ function inlineHeaderImports(source: string, modulePath: string, provider: Sourc
 		const importIdx = result.indexOf("import ", searchPos);
 		if (importIdx < 0) break;
 
-		// Find the "from" and the specifier
-		const lineEnd = result.indexOf("\n", importIdx);
-		const line = result.slice(importIdx, lineEnd >= 0 ? lineEnd : result.length);
+		// Find the full import statement (may span multiple lines) — terminated by ;
+		const stmtEnd = result.indexOf(";", importIdx);
+		if (stmtEnd < 0) { searchPos = importIdx + 7; continue; }
+		const stmt = result.slice(importIdx, stmtEnd + 1);
 
 		// Check if it imports from a .h file
-		const fromIdx = line.indexOf(" from ");
+		const fromIdx = stmt.indexOf(" from ");
 		if (fromIdx < 0) { searchPos = importIdx + 7; continue; }
 
-		// Extract specifier (between quotes)
-		const afterFrom = line.slice(fromIdx + 6, line.length).trim();
+		// Extract specifier (between quotes after "from")
+		const afterFrom = stmt.slice(fromIdx + 6, stmt.length).trim();
 		let specifier = "";
 		if (afterFrom.startsWith("\"") || afterFrom.startsWith("'")) {
 			const quote = afterFrom.charAt(0);
@@ -111,10 +112,10 @@ function inlineHeaderImports(source: string, modulePath: string, provider: Sourc
 
 		// Extract import list: import { A, B, C } → ["A", "B", "C"]
 		const importedNames: string[] = [];
-		const braceOpen = line.indexOf("{");
-		const braceClose = line.indexOf("}");
+		const braceOpen = stmt.indexOf("{");
+		const braceClose = stmt.indexOf("}");
 		if (braceOpen >= 0 && braceClose > braceOpen) {
-			const importList = line.slice(braceOpen + 1, braceClose).split(",");
+			const importList = stmt.slice(braceOpen + 1, braceClose).split(",");
 			for (const n of importList) {
 				const trimmed = n.trim();
 				if (trimmed.length > 0) importedNames.push(trimmed);
@@ -135,10 +136,12 @@ function inlineHeaderImports(source: string, modulePath: string, provider: Sourc
 		// Build replacement: @include + @compile (if .c exists) + extern declarations
 		const replacement = `@include("${headerPath}");\n${compileDirective}${translated}`;
 
-		// Replace the import line with the inlined declarations
+		// Replace the import statement (may span multiple lines) with the inlined declarations
 		const replaceStart = importIdx;
-		const replaceEnd = lineEnd >= 0 ? lineEnd + 1 : result.length;
-		result = result.slice(0, replaceStart) + replacement + result.slice(replaceEnd, result.length);
+		const replaceEnd = stmtEnd + 1;
+		// Skip trailing newline after semicolon if present
+		const afterSemi = replaceEnd < result.length && result.charCodeAt(replaceEnd) === "\n".code ? replaceEnd + 1 : replaceEnd;
+		result = result.slice(0, replaceStart) + replacement + result.slice(afterSemi, result.length);
 
 		searchPos = replaceStart + replacement.length;
 	}

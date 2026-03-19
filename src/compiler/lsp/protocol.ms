@@ -9,13 +9,16 @@
 // ===== JSON Building =====
 
 export function lspJsonString(val: string): string {
-	// Escape special characters for JSON. Strip non-ASCII to avoid
-	// byteLength/length mismatch in Content-Length framing.
 	let result = "\"";
 	for (let i = 0; i < val.length; i = i + 1) {
+		const code = val.charCodeAt(i);
+		if (code > 127) {
+			// Escape non-ASCII as \uXXXX — keeps output pure ASCII so .length = byte count
+			const hex = code.toString(16);
+			result = result + "\\u" + "0000".slice(0, 4 - hex.length) + hex;
+			continue;
+		}
 		const ch = val.charAt(i);
-		const code = ch.charCodeAt(0);
-		if (code > 127) continue; // strip non-ASCII (em-dash, etc.)
 		result = result + match (ch) {
 			"\\" => "\\\\",
 			"\"" => "\\\"",
@@ -205,8 +208,9 @@ export function lspParseContentLength(headerLine: string): number {
 }
 
 // Format a JSON-RPC message with Content-Length header for writing.
+// JSON output is pure ASCII (non-ASCII escaped as \uXXXX), so .length = byte count.
 export function lspFormatMessage(json: string): string {
-	return "Content-Length: " + lspJsonNumber(json.byteLength) + "\r\n\r\n" + json;
+	return "Content-Length: " + lspJsonNumber(json.length) + "\r\n\r\n" + json;
 }
 
 // ===== Helpers =====

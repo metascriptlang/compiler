@@ -50,35 +50,25 @@ export function lspFmtCompletionItem(
 	sortText: string, isDeprecated: boolean, commitChars: string,
 	documentation: string, additionalEdits: string
 ): string {
-	// Build base object, then add optional fields
-	// Note: additionalEdits is pre-formatted JSON — can't include in struct stringify.
-	// For now, build base with JSON.stringify then append additionalEdits if present.
-	let result = "{\"label\":" + JSON.stringify(label)
-		+ ",\"kind\":" + kind
-		+ ",\"detail\":" + JSON.stringify(detail);
-	if (sortText.length > 0) {
-		result = result + ",\"sortText\":" + JSON.stringify(sortText);
-	}
-	if (isDeprecated) {
-		result = result + ",\"tags\":[1]";
-	}
+	const item: any = { label, kind, detail };
+	if (sortText.length > 0) item.sortText = sortText;
+	if (isDeprecated) item.tags = [1];
 	if (commitChars.length > 0) {
 		const chars: string[] = [];
 		let i = 0;
-		while (i < commitChars.byteLength) {
+		while (i < commitChars.length) {
 			chars.push(commitChars.slice(i, i + 1));
 			i = i + 1;
 		}
-		result = result + ",\"commitCharacters\":" + JSON.stringify(chars);
+		item.commitCharacters = chars;
 	}
 	if (documentation.length > 0) {
-		result = result + ",\"documentation\":" + JSON.stringify({ kind: "markdown", value: documentation });
+		item.documentation = { kind: "markdown", value: documentation };
 	}
 	if (additionalEdits.length > 0) {
-		result = result + ",\"additionalTextEdits\":" + additionalEdits;
+		item.additionalTextEdits = JSON.parse(additionalEdits);
 	}
-	result = result + "}";
-	return result;
+	return JSON.stringify(item);
 }
 
 // ===== Hover =====

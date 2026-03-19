@@ -1,32 +1,29 @@
 // std/os — System information (Node.js os module parity)
-// import { hostname, platform, arch, cpus, totalmem, freemem } from "std/os"
 
-import { CpuInfo, msOsHostname, msOsPlatform, msOsArch, msOsType, msOsRelease, msOsMachine, msOsCpuCount, msOsTotalMem, msOsFreeMem, msOsUptime, msOsHomedir, msOsTmpdir, msOsEndianness } from "./native.h";
+import { CpuInfo } from "./native.h";
 
-type ArrC = Array<CpuInfo>;
+export extern function hostname(): string from "msOsHostname";
+export extern function platform(): string from "msOsPlatform";
+export extern function arch(): string from "msOsArch";
+export extern function type(): string from "msOsType";
+export extern function release(): string from "msOsRelease";
+export extern function machine(): string from "msOsMachine";
+export extern function cpuCount(): int32 from "msOsCpuCount";
+export extern function totalMem(): int64 from "msOsTotalMem";
+export extern function freeMem(): int64 from "msOsFreeMem";
+export extern function uptime(): number from "msOsUptime";
+export extern function homeDir(): string from "msOsHomedir";
+export extern function tmpDir(): string from "msOsTmpdir";
+export extern function endianness(): string from "msOsEndianness";
 
 // Span expansion: CpuInfo* buf, int64_t buf_len → out buf: Span<CpuInfo>
-extern function msOsCpus(out buf: Span<CpuInfo>): int32;
-
-export function hostname(): string { return msOsHostname(); }
-export function platform(): string { return msOsPlatform(); }
-export function arch(): string { return msOsArch(); }
-export function type(): string { return msOsType(); }
-export function release(): string { return msOsRelease(); }
-export function machine(): string { return msOsMachine(); }
+extern function fillCpus(out buf: Span<CpuInfo>): int32 from "msOsCpus";
 
 export function cpus(): CpuInfo[] {
-	const count = msOsCpuCount();
-	const buf = new Array<CpuInfo>(count);
-	const filled = msOsCpus(buf);
-	return buf;
+	const count = cpuCount();
+	const result = new Array<CpuInfo>(count);
+	fillCpus(result);
+	return result;
 }
-
-export function totalmem(): int64 { return msOsTotalMem(); }
-export function freemem(): int64 { return msOsFreeMem(); }
-export function uptime(): number { return msOsUptime(); }
-export function homedir(): string { return msOsHomedir(); }
-export function tmpdir(): string { return msOsTmpdir(); }
-export function endianness(): string { return msOsEndianness(); }
 
 export const EOL: string = "\n";

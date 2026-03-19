@@ -266,6 +266,22 @@ export function sgTypeToString(t: Type): string {
 		return "distinct " + sgTypeToString(t.typeReturn);
 	}
 
+	if (t.kind === TypeKind.Span) {
+		return "Span<" + sgTypeToString(t.typeReturn) + ">";
+	}
+
+	if (t.kind === TypeKind.Var) {
+		return sgTypeToString(t.typeReturn);
+	}
+
+	if (t.kind === TypeKind.Borrow) {
+		return sgTypeToString(t.typeReturn);
+	}
+
+	if (t.kind === TypeKind.SizedArray) {
+		return sgTypeToString(t.typeReturn) + "[" + String(t.typeFlags as int64) + "]";
+	}
+
 	if (t.kind === TypeKind.GenericParam) return t.typeName;
 
 	if (t.kind === TypeKind.GenericInstance) {
@@ -323,6 +339,9 @@ function sgFormatParamList(t: Type): string {
 	let result = "(";
 	for (let i = 0; i < t.typeChildren.length; i = i + 1) {
 		if (i > 0) result = result + ", ";
+		// Show `out` prefix for Var<T> params (out parameters)
+		const isOut = t.typeChildren[i] !== null && t.typeChildren[i].kind === TypeKind.Var;
+		if (isOut) result = result + "out ";
 		if (i < t.typeNames.length && t.typeNames[i].length > 0) {
 			result = result + t.typeNames[i] + ": ";
 		}
@@ -1283,8 +1302,9 @@ function importNodeFrom(stmt: Node): Node {
 // Reference: extractImportContextFromAst checks child node positions.
 function importContextFromAST(importNode: Node, col: number): string {
 	const d = importNode.data as ImportDeclData;
-	// Side-effect import: `import "module"` — only path, no names
-	if (d.importNames.length === 0) return "path";
+	// Side-effect import: `import "module"` — only path, no names.
+	// But `import { } from "mod"` has importSource set — cursor is in names region.
+	if (d.importNames.length === 0 && d.importSource === "") return "path";
 	// Named import: `import { A, B } from "module"`
 	// nameLocations gives us where names are. The path string comes after `from "`.
 	// Strategy: if cursor is past the last name by a large margin (enough for `} from "`),
@@ -2042,8 +2062,12 @@ function sgCollectVarTypeHint(
 	// Only show hint if no explicit type annotation
 	if (vd.declType.length > 0) return;
 
-	const sym = lookupSymbol(ctx.table, vd.declName);
+	// Use resolvedSym from the checked AST node (set during semantic analysis).
+	// Scope-based lookupSymbol is unreliable after checker finishes — function scopes
+	// are closed, so prelude extensions with the same name could shadow local variables.
+	const sym = node.resolvedSym !== null ? node.resolvedSym : lookupSymbol(ctx.table, vd.declName);
 	if (sym === null) return;
+	if (sym.symbolKind !== SymbolKind.Variable && sym.symbolKind !== SymbolKind.Parameter) return;
 	if (sym.symbolType === null) return;
 	if (sym.symbolType.kind === TypeKind.Unknown) return;
 	if (sym.symbolType.kind === TypeKind.Error) return;
