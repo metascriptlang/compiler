@@ -233,7 +233,7 @@ function matchDeclName(node: Node, name: string): Node {
 		if (d.className === name) return node;
 		return null as unknown as Node;
 	}
-	if (k === NodeKind.InterfaceDecl) {
+	if (k === NodeKind.InterfaceDecl || k === NodeKind.StructDecl) {
 		const d = node.data as { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[] };
 		if (d.interfaceName === name) return node;
 		return null as unknown as Node;

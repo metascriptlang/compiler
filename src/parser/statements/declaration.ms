@@ -146,16 +146,26 @@ function applyExtensionFlags(flags: string, params: string[], fnParamTypes: stri
 	}
 	// Out parameters: strip "out:" prefix, encode positions in flags
 	let outPositions = "";
+	let refPositions = "";
 	for (let oi = 0; oi < params.length; oi += 1) {
 		if (params[oi].length > 4 && params[oi].slice(0, 4) === "out:") {
 			params[oi] = params[oi].slice(4, params[oi].length);
 			if (outPositions === "") { outPositions = `${oi}`; }
 			else { outPositions = `${outPositions},${oi}`; }
 		}
+		if (params[oi].length > 4 && params[oi].slice(0, 4) === "ref:") {
+			params[oi] = params[oi].slice(4, params[oi].length);
+			if (refPositions === "") { refPositions = `${oi}`; }
+			else { refPositions = `${refPositions},${oi}`; }
+		}
 	}
 	if (outPositions !== "") {
 		if (flags === "") { flags = `out:${outPositions}`; }
 		else { flags = `${flags}|out:${outPositions}`; }
+	}
+	if (refPositions !== "") {
+		if (flags === "") { flags = `ref:${refPositions}`; }
+		else { flags = `${flags}|ref:${refPositions}`; }
 	}
 	// Encode generic param names
 	if (genericNames !== "") {
@@ -334,6 +344,11 @@ export function parseExportDecl(state: ParserState): NodeResult {
 
 	if (nextKind === TokenKind.Interface) {
 		const decl = try parseInterfaceDecl(state);
+		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
+	}
+
+	if (nextKind === TokenKind.Struct) {
+		const decl = try parseStructDecl(state);
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
 
@@ -602,7 +617,8 @@ export function parseEnumDecl(state: ParserState): NodeResult {
 // syntax: 'interface' ID ('<' params '>')? ('extends' type)? '{' members '}'
 
 // Parse interface body: { field: Type; ... } — shared by parseInterfaceDecl and extern interface.
-function parseInterfaceBody(state: ParserState, name: string, token: Token, genericNames: string): NodeResult {
+function parseInterfaceBody(state: ParserState, name: string, token: Token, genericNames: string, nodeKind: NodeKind): NodeResult {
+	const keyword = nodeKind === NodeKind.StructDecl ? "struct" : "interface";
 	let ifaceIsGeneric = genericNames !== "";
 	if (ifaceIsGeneric) {
 		addGenericDecl(name, genericNames);
@@ -617,7 +633,7 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 	}
 
 	if (current(state).kind !== TokenKind.LBrace) {
-		return Result.err(`Expected '{' after interface name at line ${current(state).line}`);
+		return Result.err(`Expected '{' after ${keyword} name at line ${current(state).line}`);
 	}
 
 	advance(state);
@@ -627,7 +643,7 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
 		const field = current(state);
 		if (!isPropertyName(field)) {
-			return Result.err(`Expected field name in interface at line ${field.line}`);
+			return Result.err(`Expected field name in ${keyword} at line ${field.line}`);
 		}
 
 		fields.push(field.value);
@@ -645,7 +661,7 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 	}
 
 	if (current(state).kind !== TokenKind.RBrace) {
-		return Result.err(`Expected '}' after interface body at line ${current(state).line}`);
+		return Result.err(`Expected '}' after ${keyword} body at line ${current(state).line}`);
 	}
 
 	advance(state);
@@ -661,7 +677,7 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 		updateGenericDeclFields(name, fnJoined, ftJoined);
 	}
 
-	const ifaceNode = createNode(NodeKind.InterfaceDecl, {
+	const ifaceNode = createNode(nodeKind, {
 		interfaceName: name,
 		interfaceFields: fields,
 		interfaceFieldTypes: fieldTypes,
@@ -671,12 +687,12 @@ function parseInterfaceBody(state: ParserState, name: string, token: Token, gene
 	return Result.ok(ifaceNode);
 }
 
-export function parseInterfaceDecl(state: ParserState): NodeResult {
-	const ifaceToken = current(state);
+function parseStructLikeDecl(state: ParserState, keyword: string, nodeKind: NodeKind): NodeResult {
+	const token = current(state);
 	advance(state);
 	const nameToken = current(state);
 	if (!isIdentLike(nameToken)) {
-		return Result.err(`Expected identifier after 'interface' at line ${nameToken.line}`);
+		return Result.err(`Expected identifier after '${keyword}' at line ${nameToken.line}`);
 	}
 	advance(state);
 
@@ -685,7 +701,15 @@ export function parseInterfaceDecl(state: ParserState): NodeResult {
 		genericNames = captureGenericParams(state);
 	}
 
-	return parseInterfaceBody(state, nameToken.value, ifaceToken, genericNames);
+	return parseInterfaceBody(state, nameToken.value, token, genericNames, nodeKind);
+}
+
+export function parseInterfaceDecl(state: ParserState): NodeResult {
+	return parseStructLikeDecl(state, "interface", NodeKind.InterfaceDecl);
+}
+
+export function parseStructDecl(state: ParserState): NodeResult {
+	return parseStructLikeDecl(state, "struct", NodeKind.StructDecl);
 }
 
 // ===== Class Declaration =====
@@ -1216,6 +1240,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 		TokenKind.Type => ExternKind.Type,
 		TokenKind.Enum => ExternKind.Enum,
 		TokenKind.Interface => ExternKind.Interface,
+		TokenKind.Struct => ExternKind.Struct,
 		TokenKind.Macro => ExternKind.Macro,
 		_ => ExternKind.Invalid,
 	};
@@ -1328,7 +1353,8 @@ export function parseExternDecl(state: ParserState): NodeResult {
 	// Extern interface with field body: parse as InterfaceDecl with ExternC flag.
 	// Reuses the full interface resolution pipeline (fields, types, generics).
 	// Only applies when body contains fields (name: Type), not methods (name(): Type).
-	if (externKind === ExternKind.Interface && !isAtEnd(state) && current(state).kind === TokenKind.LBrace) {
+	if ((externKind === ExternKind.Interface || externKind === ExternKind.Struct) && !isAtEnd(state) && current(state).kind === TokenKind.LBrace) {
+		const bodyNodeKind = externKind === ExternKind.Struct ? NodeKind.StructDecl : NodeKind.InterfaceDecl;
 		// Peek ahead to determine if body has fields or methods
 		const savedPos = state.position;
 		let hasFieldBody = true;
@@ -1345,7 +1371,7 @@ export function parseExternDecl(state: ParserState): NodeResult {
 		state.position = savedPos; // rewind
 
 		if (hasFieldBody) {
-			const ifaceResult = parseInterfaceBody(state, nameToken.value, externToken, genericNames);
+			const ifaceResult = parseInterfaceBody(state, nameToken.value, externToken, genericNames, bodyNodeKind);
 			if (ifaceResult.ok) {
 				ifaceResult.value.flags = ifaceResult.value.flags | NodeFlag.ExternC;
 				return ifaceResult;
@@ -1505,6 +1531,17 @@ test "interface" { assert programOk("interface Point { x: number; y: number; }")
 test "interface optional" { assert programOk("interface Opt { value?: number; }"); }
 
 test "interface extends" { assert programOk("interface Dog extends Animal { breed: string; }"); }
+
+test "struct" { assert programOk("struct Point { x: number; y: number; }"); }
+
+test "struct single field" { assert programOk("struct Id { value: number; }"); }
+
+test "struct generic" { assert programOk("struct Box<T> { value: T; }"); }
+
+test "export struct" { assert programOk("export struct Vec2 { x: number; y: number; }"); }
+
+test "extern struct" { assert programOk("extern struct NativePoint { x: float64; y: float64; }"); }
+
 // Param features — exercises parseParamList + skipDefaultValue
 test "rest param" { assert programOk("function f(...args) { return args; }"); }
 
@@ -1513,6 +1550,10 @@ test "default param" { assert programOk("function f(x = 5) { return x; }"); }
 test "default param complex" { assert programOk("function f(x = [1, 2], y = {a: 3}) {}"); }
 
 test "typed param" { assert programOk("function f(x: number, y: string) {}"); }
+
+test "ref param" { assert programOk("function update(ref v: number): void {}"); }
+
+test "ref struct param" { assert programOk("struct Vec2 { x: number; y: number; }\nfunction scale(ref v: Vec2): void {}"); }
 // Enum with complex values — exercises skipDefaultValue depth tracking
 test "enum complex value" { assert programOk("enum E { A = fn(1, 2), B = arr[0] }"); }
 // Var declarations

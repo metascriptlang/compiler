@@ -16,7 +16,7 @@
 
 import { Node, NodeKind, IdentifierData, VariableDeclData, FunctionDeclData, MemberExprData, ArrayAccessData, BlockStmtData, CallExprData, BinaryExprData, UnaryExprData, NumberLiteralData, ConditionalExprData, TypeAssertionData, ForOfStmtData, ArrowFunctionData, ReturnStmtData, Type, TypeKind } from "../ast/node";
 import { isNumeric, numberType, booleanType, stringType, charType, createArray, isResult, getResultOkType, getResultErrType } from "../checker/types";
-import { ExportRegistry } from "../checker/context";
+import { ExportRegistry, ModuleExports, ExportedSymInfo } from "../checker/context";
 import { TransformContext } from "./context";
 import { mapChildren } from "./walker";
 
@@ -289,18 +289,7 @@ function deriveConditionalExprType(node: Node): void {
 
 // ===== Main Refiner =====
 
-// Registry entries stored as duck-typed array to avoid circular imports
-interface RegistrySymbol {
-	name: string;
-	symType: Type;
-}
-interface RegistryEntry {
-	symbols: RegistrySymbol[];
-}
-interface RegistryWrapper {
-	entries: RegistryEntry[];
-}
-let _registryEntries: RegistryEntry[] = null as unknown as RegistryEntry[];
+let _registryEntries: ModuleExports[] = null as unknown as ModuleExports[];
 
 // Module-level scopes — avoids closure capture of value-type array.
 // Under C, closures copy value types into env structs. Array push/pop inside
@@ -310,16 +299,15 @@ let _scopes: TypeScope[] = [];
 
 export function refineTypes(program: Node, ctx: TransformContext, registry: ExportRegistry): Node {
 	if (registry !== null && registry.entries !== null) {
-		const r = registry as unknown as RegistryWrapper;
-		_registryEntries = r.entries;
+		_registryEntries = registry.entries;
 	} else {
-		_registryEntries = null as unknown as RegistryEntry[];
+		_registryEntries = null as unknown as ModuleExports[];
 	}
 	_scopes = [];
 	_scopes.push(createScope());
 
 	refineNode(program);
-	_registryEntries = null as unknown as RegistryEntry[];
+	_registryEntries = null as unknown as ModuleExports[];
 	return program;
 }
 

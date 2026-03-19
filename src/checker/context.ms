@@ -479,9 +479,22 @@ export interface CheckerError {
 	severity: Severity;
 }
 
+// ===== GC Mode =====
+// Controls DRC (Deterministic Reference Counting) behavior.
+// Auto: compiler scans types, enables DRC only if RC types are found.
+// Orc: always enable DRC (user-forced).
+// None: never enable DRC (user-forced, compile error on RC types).
+
+export enum GcMode {
+	Auto,
+	Orc,
+	None,
+}
+
 export class CheckerContext {
 	table: SymbolTable;
 	errors: CheckerError[];
+	gcMode: GcMode;                // DRC mode — Auto (default), Orc (forced on), None (forced off)
 	currentFunction: Symbol;   // innermost function (for return type validation)
 	inLoop: boolean;           // break/continue validation
 	inTestBlock: boolean;      // assert validation — only allowed inside test blocks
@@ -516,6 +529,7 @@ export function createContext(): CheckerContext {
 	return {
 		table,
 		errors: [],
+		gcMode: GcMode.Auto,
 		currentFunction: null as unknown as Symbol,
 		inLoop: false,
 		inTestBlock: false,

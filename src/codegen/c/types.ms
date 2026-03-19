@@ -4,14 +4,14 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { isInterfaceType, getTypeSize, skipModifier, isPromise, isResult, getResultOkType, getResultErrType, substituteType, createStruct } from "../../checker/types";
+import { isStructType, getTypeSize, skipModifier, isPromise, isResult, getResultOkType, getResultErrType, substituteType, createStruct, needsRC } from "../../checker/types";
 import { getGenericDecl } from "../../parser/context";
 import { Node, NodeKind, CallExprData, Type, TypeKind, CallingConvention, SymbolKind } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
 import { CGen, CSection, Builder, TypeCache, add, addLine, addNewline, extract, sec, createBuilder, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas } from "./context";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import { mangle, mangleTypeName, mangleFieldName, safeName } from "./names";
-import { useHeader } from "./forward";
+import { useHeader } from "./context";
 
 // ===== Type Resolution =====
 // All types are fully resolved PType objects by codegen time.
@@ -344,37 +344,16 @@ export function ccgIntroducedPtr(t: Type): boolean {
 	if (t.kind === TypeKind.Var) return true;  // out params always by pointer
 	const inner = skipModifier(t);
 	if (inner === null) return false;
-	if (isInterfaceType(inner)) return getTypeSize(inner) > PTR_THRESHOLD;
+	if (isStructType(inner)) return getTypeSize(inner) > PTR_THRESHOLD;
 	return match (inner.kind) {
 		TypeKind.Tuple => getTypeSize(inner) > PTR_THRESHOLD,
 		TypeKind.Union | TypeKind.Span => true,
-		TypeKind.GenericInstance => !isPromise(inner),  // monomorphized value types by pointer, Promise is already msFuture*
+		TypeKind.GenericInstance => !isPromise(inner),
 		_ => false,
 	};
 }
 
-// ===== Needs RC =====
-// Types that need reference counting in C backend.
-
-export function needsRC(t: Type): boolean {
-	if (t === null) return false;
-	return match (t.kind) {
-		TypeKind.String => true,
-		TypeKind.Array => true,
-		TypeKind.SizedArray => needsRC(t.typeReturn), // Recurse for nested RC
-		TypeKind.Span => false, // Span is non-owning
-		TypeKind.Ref => true,
-		TypeKind.Tuple => {
-			let i = 0;
-			while (i < t.typeChildren.length) {
-				if (needsRC(t.typeChildren[i])) return true;
-				i += 1;
-			}
-			return false;
-		},
-		_ => false,
-	};
-}
+// needsRC is now in checker/types.ms — imported above
 
 // ===== NRVO Detection (Type-based, Standard reference parity) =====
 // Returns true for types that are C structs — these need out-param calling convention.
@@ -399,7 +378,7 @@ export function isNrvoReturnType(retType: Type, funcType: Type): boolean {
 	if (isImportedType(retType)) return false;
 	// importc/cdecl functions → no NRVO (C ABI compatibility)
 	if (funcType !== null && funcType.sym !== null && hasFlag(funcType.sym, SymbolFlag.ImportC)) return false;
-	if (isInterfaceType(retType)) return true;
+	if (isStructType(retType)) return true;
 	if (retType.kind === TypeKind.Span) return true;
 	if (isResult(retType)) return true;
 	if (retType.kind === TypeKind.Tuple) return true;
@@ -573,6 +552,7 @@ export function getTypeDesc(g: CGen, t: Type): string {
 		if (cached !== "") return cached;
 		typeCacheSet(g.typeCache, cacheKey, instName);
 		// Instantiate the base struct with concrete type args, then emit as a named struct
+		// Unwrap Ref for interface types (interface = Ref<Struct>)
 		if (t.typeExtra !== null && t.typeExtra.kind === TypeKind.Struct) {
 			const baseType = t.typeExtra;
 			// Substitute generic params in fields with concrete type args
@@ -591,7 +571,7 @@ export function getTypeDesc(g: CGen, t: Type): string {
 					for (const c of concType.typeChildren) newChildren.push(c);
 					const newNames: string[] = [];
 					for (const n of concType.typeNames) newNames.push(n);
-					concType = createStruct(instName, newNames, newChildren, isInterfaceType(concType));
+					concType = createStruct(instName, newNames, newChildren, isStructType(concType));
 				} else {
 					concType.typeName = instName;
 				}
@@ -867,6 +847,16 @@ export function getArrayTypeName(elemType: string): string {
 	if (elemType === "msString") return "msStringArray";
 	if (elemType === "uint8_t") return "msUint8Array";
 	return mangle(elemType) + "Array";
+}
+
+// Returns the array content/payload struct name for a given array type name.
+// Built-in array types use runtime-defined payload structs; custom arrays use __Content suffix.
+export function getArrayContentType(arrTypeName: string): string {
+	if (arrTypeName === "msNumberArray") return "msNumberPayload";
+	if (arrTypeName === "msStringArray") return "msStringPayload";
+	if (arrTypeName === "msRefArray") return "msRefPayload";
+	if (arrTypeName === "msUint8Array") return "msUint8Payload";
+	return arrTypeName + "__Content";
 }
 
 // ===== Sized Array (Stack) =====

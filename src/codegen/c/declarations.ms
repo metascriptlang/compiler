@@ -86,6 +86,7 @@ export function genDecl(g: CGen, node: Node, exported: boolean): void {
 		},
 		NodeKind.EnumDecl => { genEnumDecl(g, node); },
 		NodeKind.InterfaceDecl => { genInterfaceDecl(g, node); },
+		NodeKind.StructDecl => { genInterfaceDecl(g, node); },
 		NodeKind.ClassDecl => { genClassDecl(g, node); },
 		NodeKind.ExportDecl => {
 			const d = node.data as ExportDeclData;
@@ -153,11 +154,14 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 		paramList = cRetType + "* __result";
 		if (d.params.length > 0) paramList = paramList + ", ";
 	}
+	const protoMutBits: int32 = sym !== null ? sym.mutatedParams : 0;
 	for (let i = 0; i < d.params.length; i += 1) {
 		if (i > 0) paramList = paramList + ", ";
 		let pType = (i < fnType.typeChildren.length) ? getTypeDesc(g, fnType.typeChildren[i]) : "void*";
-		// Implementation parity: pointer parameter introduction — interface/union params → pointer (must match proto header)
-		if (i < fnType.typeChildren.length && ccgIntroducedPtr(fnType.typeChildren[i]) && pType.charAt(pType.byteLength - 1) !== "*") {
+		// Implementation parity: pointer parameter introduction — struct/union params → pointer (must match proto header)
+		// Gate: skip pointer promotion if param is mutated (needs value copy for correct semantics)
+		const protoMut = (protoMutBits & (1 << (i as int32))) !== 0;
+		if (!protoMut && i < fnType.typeChildren.length && ccgIntroducedPtr(fnType.typeChildren[i]) && pType.charAt(pType.byteLength - 1) !== "*") {
 			pType = pType + "*";
 		}
 		paramList = paramList + `${pType} ${safeName(d.params[i])}`;
@@ -204,9 +208,12 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 		const p = createProc(name, fnType.typeReturn);
 		if (nrvo) p.isNrvo = true;
 		// Populate param names + detect reference pointer introduction params (reference indirect location parity)
+		// Gate: only promote to const-ptr if param is NOT mutated in body (sym.mutatedParams bitfield)
+		const mutBits: int32 = sym !== null ? sym.mutatedParams : 0;
 		for (let pi = 0; pi < d.params.length; pi += 1) {
 			p.params.push(d.params[pi]);
-			if (pi < fnType.typeChildren.length && ccgIntroducedPtr(fnType.typeChildren[pi])) {
+			const isMutated = (mutBits & (1 << (pi as int32))) !== 0;
+			if (!isMutated && pi < fnType.typeChildren.length && ccgIntroducedPtr(fnType.typeChildren[pi])) {
 				p.indirectParams.push(d.params[pi]);
 			}
 		}
@@ -278,7 +285,11 @@ function genInterfaceDecl(g: CGen, node: Node): void {
 	addLine(sec(g, CSection.ForwardDecls), `typedef struct ${name} ${name};`);
 
 	// Pre-resolve field types (ensures nested type definitions are emitted before struct body)
-	const ifaceType = node.nodeType;
+	// For interface (Ref<Struct>), unwrap to get inner struct's fields. For struct (plain Struct), use directly.
+	let ifaceType = node.nodeType;
+	if (ifaceType !== null && ifaceType.kind === TypeKind.Ref && ifaceType.typeReturn !== null) {
+		ifaceType = ifaceType.typeReturn;
+	}
 	const fieldTypes: string[] = [];
 	for (let i = 0; i < d.interfaceFields.length; i += 1) {
 		const ft = (ifaceType !== null && i < ifaceType.typeChildren.length) ? getTypeDesc(g, ifaceType.typeChildren[i]) : "void*";

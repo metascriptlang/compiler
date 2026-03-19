@@ -157,6 +157,11 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 			advance(state);
 			paramPrefix = `${paramPrefix}out:`;
 		}
+		// Ref parameter: ref name: Type → stored as "ref:name"
+		if (current(state).kind === TokenKind.Ref) {
+			advance(state);
+			paramPrefix = `${paramPrefix}ref:`;
+		}
 		// Extension method receiver (must be first param)
 		if (params.length === 0 && current(state).kind === TokenKind.This) {
 			advance(state);

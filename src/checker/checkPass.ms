@@ -14,6 +14,7 @@ import { globalImports } from "./prelude";
 import { isAssignable } from "./compat";
 import { resolveDeclarations, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped } from "./resolvePass";
 import { inferOwnership } from "./ownershipInference";
+import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { validateTypedAST } from "./validate";
 import { getModuleDir, appendFlag, prependFlag, concatFlag } from "../utils/string";
 import { checkExpr, checkEnumExhaustiveness, fitNode } from "./checkExprPass";
@@ -46,7 +47,7 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 		NodeKind.VariableDecl => checkVariableDecl(ctx, node),
 		NodeKind.FunctionDecl => checkFunctionDecl(ctx, node),
 		NodeKind.ClassDecl => checkClassDecl(ctx, node),
-		NodeKind.InterfaceDecl | NodeKind.EnumDecl | NodeKind.TypeAliasDecl |
+		NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.EnumDecl | NodeKind.TypeAliasDecl |
 		NodeKind.ExternDecl | NodeKind.MacroDecl | NodeKind.ImportDecl => {},
 		NodeKind.ExportDecl => checkExportDecl(ctx, node),
 		NodeKind.IfStmt => checkIfStmt(ctx, node),
@@ -1198,6 +1199,7 @@ function checkProgramCore(
 	collectDirectives(ctx, program);
 	stampHeaderPaths(ctx);
 	inferOwnership(ctx, program);
+	analyzeParamMutations(ctx, program);
 	sgSortRecords(ctx.symRecords);
 	return ctx;
 }

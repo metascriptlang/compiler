@@ -278,6 +278,13 @@ export function printNode(node: Node, level: number): void {
 				console.log(`${indent(level + 1)}${field}`);
 			}
 		},
+		NodeKind.StructDecl => {
+			const data = node.data as InterfaceDeclData;
+			console.log(`${pad}StructDecl: ${data.interfaceName} (${data.interfaceFields.length.toString()} fields)`);
+			for (const field of data.interfaceFields) {
+				console.log(`${indent(level + 1)}${field}`);
+			}
+		},
 		NodeKind.ThrowStmt => {
 			const data = node.data as ThrowStmtData;
 			console.log(`${pad}ThrowStmt:`);

@@ -54,9 +54,9 @@ import { transformProgram } from "../../transform/index";
 import { analyzeProgram } from "../../analyzer/index";
 import {
 	ExportRegistry, createExportRegistry, ExportedSymInfo,
-	findModuleExports, registerModuleExports,
+	findModuleExports, registerModuleExports, findExportedSymbol,
 } from "../../checker/context";
-import { collectTopLevelLocal } from "../../checker/collectPass";
+import { collectTopLevelLocal, collectTopLevel } from "../../checker/collectPass";
 import { resolveDeclarations } from "../../checker/resolvePass";
 import { SymbolFlag, hasFlag, openScope, ScopeKind } from "../../checker/symbol";
 import {
@@ -67,6 +67,7 @@ import {
 	ImportEntry, createImportEntry,
 } from "../../module/graph";
 import { getDirectImports } from "./moduleDeps";
+import { lspDirname, lspResolveImport } from "../lsp/protocol";
 
 // ===== Stdlib Detection =====
 
@@ -257,8 +258,62 @@ export function dbParse(db: TransAmDb, filePath: string): Node {
 
 // ===== Cross-Module Export Registration =====
 
+// Ensure a file is loaded into the db (read from disk if needed).
+function dbEnsureFileLoaded(db: TransAmDb, filePath: string): void {
+	if (getFileId(db.fileInput, filePath) >= 0) return;
+	const source = readStdFile(filePath);
+	if (source.byteLength > 0) {
+		dbSetFileText(db, filePath, source);
+	}
+}
+
+// Resolve import specifier to absolute path (relative + std/ imports).
+function dbResolveImport(db: TransAmDb, basePath: string, importSpec: string): string {
+	// Relative imports
+	const rel = lspResolveImport(basePath, importSpec);
+	if (rel !== "") return rel;
+	// std/ imports
+	if (db.stdPath.length > 0 && importSpec.length > 4 && importSpec.slice(0, 4) === "std/") {
+		const rest = importSpec.slice(4, importSpec.length);
+		const base = db.stdPath + "/" + rest;
+		const candidates: string[] = [base + ".ms", base + ".cms", base + "/index.ms", base + "/index.cms"];
+		for (const c of candidates) {
+			if (getFileId(db.fileInput, c) >= 0) return c;
+		}
+		for (const c of candidates) {
+			dbEnsureFileLoaded(db, c);
+			if (getFileId(db.fileInput, c) >= 0) return c;
+		}
+	}
+	return "";
+}
+
+// Scan a parsed program's imports, resolve paths, load files, record dep edges.
+// Enables depth-first traversal in dbEnsureExportsRegistered.
+function dbRecordDepImports(db: TransAmDb, depPath: string, depProgram: Node): void {
+	const depFileId = getFileId(db.fileInput, depPath);
+	if (depFileId < 0) return;
+	if (depProgram === null || depProgram.kind !== NodeKind.Program) return;
+	const pd = depProgram.data as ProgramData;
+	for (const rawStmt of pd.programStmts) {
+		let stmt = rawStmt;
+		if (stmt.kind === NodeKind.ExportDecl) {
+			stmt = (stmt.data as ExportDeclData).exportedDecl;
+		}
+		if (stmt.kind !== NodeKind.ImportDecl) continue;
+		const imp = stmt.data as ImportDeclData;
+		const targetPath = dbResolveImport(db, depPath, imp.importSource);
+		if (targetPath === "") continue;
+		dbEnsureFileLoaded(db, targetPath);
+		const targetId = getFileId(db.fileInput, targetPath);
+		if (targetId >= 0) {
+			recordModuleImport(db.moduleDeps, depFileId, targetId);
+		}
+	}
+}
+
 // Lazily ensure all files imported by `filePath` have their exports in the registry.
-// Walks dep edges (already stored by recordImportsForFile), runs Phase 1 for unregistered deps.
+// Depth-first: processes transitive deps before current (compileModule pattern).
 function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Set<string>, startVersion: number): void {
 	// Cycle protection — O(1) Set lookup
 	if (visited.has(filePath)) return;
@@ -268,29 +323,44 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Set
 	if (fileId < 0) return;
 
 	const depIds = getDirectImports(db.moduleDeps, fileId);
-	for (let i = 0; i < depIds.length; i = i + 1) {
+	for (const depId of depIds) {
 		// G5: Bail early if cancelled (new keystroke arrived)
 		if (checkCancel(db.cancelCtx, startVersion)) return;
 
-		const depId = depIds[i];
 		const depPath = getFilePath(db.fileInput, depId);
 		if (depPath === "") continue;
 
 		// Skip if registered at current revision (reference: incremental cache hit)
 		if (getRegisteredAt(db.moduleDeps, depId) >= db.revision.value) continue;
 
-		// Skip if already registered (but still recurse for transitive deps)
+		// Skip if already registered (but still recurse for transitive deps).
 		if (findModuleExports(db.exportRegistry, depPath) !== null) {
+			// Ensure dep's import edges are recorded before recursing
+			if (!visited.has(depPath)) {
+				const regProgram = dbParse(db, depPath);
+				if (regProgram !== null) dbRecordDepImports(db, depPath, regProgram);
+			}
 			dbEnsureExportsRegistered(db, depPath, visited, startVersion);
 			continue;
 		}
 
-		// Phase 1: parse + collectTopLevelLocal → register exports
+		// Phase 1: parse dep, record its import edges, then depth-first recurse.
 		const depProgram = dbParse(db, depPath);
 		if (depProgram === null) continue;
 
+		// Record dep's own import edges so depth-first recursion can traverse them
+		dbRecordDepImports(db, depPath, depProgram);
+		// Recurse into transitive deps BEFORE resolving this dep
+		dbEnsureExportsRegistered(db, depPath, visited, startVersion);
+
+		// Wire db.exportRegistry + module imports so collectImport can resolve
+		// cross-module types (e.g., DrcContext.ctx: TransformContext).
 		const tmpCtx = createTempCollectContext();
-		collectTopLevelLocal(tmpCtx, depProgram);
+		tmpCtx.exportRegistry = db.exportRegistry;
+		const depMod = createModule(depPath);
+		depMod.imports = buildImportEntries(db, depPath, depProgram);
+		tmpCtx.currentModule = depMod;
+		collectTopLevel(tmpCtx, depProgram);
 		resolveDeclarations(tmpCtx, depProgram);
 
 		const earlyExports: ExportedSymInfo[] = [];
@@ -315,9 +385,6 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Set
 		}
 		registerModuleExports(db.exportRegistry, depPath, earlyExports);
 		setRegisteredAt(db.moduleDeps, depId, db.revision.value);
-
-		// Recurse for transitive deps
-		dbEnsureExportsRegistered(db, depPath, visited, startVersion);
 	}
 }
 
@@ -821,4 +888,33 @@ test "syntax error parse still stores hash" {
 	assert entry !== null;
 	// Even failed parse stores a hash (of null node → 0)
 	assert entry.state === TaQueryState.Green;
+}
+
+test "cross-module interface field resolution" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/test/c.ms", "export interface Bar { value: number; }");
+	dbSetFileText(db, "/test/b.ms", 'import { Bar } from "./c";\nexport interface Foo { x: Bar; count: number; }');
+	dbSetFileText(db, "/test/a.ms", 'import { Foo } from "./b";\nfunction test(f: Foo): number { return f.count; }');
+
+	const aId = getFileId(db.fileInput, "/test/a.ms");
+	const bId = getFileId(db.fileInput, "/test/b.ms");
+	recordModuleImport(db.moduleDeps, aId, bId);
+
+	const visited: Set<string> = new Set<string>();
+	dbEnsureExportsRegistered(db, "/test/a.ms", visited, 0);
+
+	// Foo should be registered with resolved fields
+	const fooInfo = findExportedSymbol(db.exportRegistry, "/test/b.ms", "Foo");
+	assert fooInfo !== null;
+	const fooType = fooInfo.symType;
+	assert fooType !== null;
+	// Interface = Ref<Struct>. Unwrap Ref to get inner Struct.
+	const inner = fooType.typeReturn !== null ? fooType.typeReturn : fooType;
+	assert inner.typeNames !== null;
+	assert inner.typeNames.length === 2;
+	assert inner.typeNames[0] === "x";
+	assert inner.typeNames[1] === "count";
+	// Field types should be resolved — x: Bar is Ref<Struct(Bar)>
+	assert inner.typeChildren !== null;
+	assert inner.typeChildren.length === 2;
 }

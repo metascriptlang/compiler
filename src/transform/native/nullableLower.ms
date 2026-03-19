@@ -10,7 +10,7 @@
 //   5. Value wrapping (assign): x = tok → x = { value: tok, present: true }
 
 import { Node, NodeKind, NodeFlag, SourceLocation, ObjectLiteralData, MemberExprData, VariableDeclData, BinaryExprData, IdentifierData, TypeAssertionData, Type, TypeKind } from "../../ast/node";
-import { isInterfaceType, isMaybeType } from "../../checker/types";
+import { isStructType, isMaybeType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeMember, makeBool, makeNull, makeTypedObjectLiteral } from "../util";
@@ -63,7 +63,7 @@ function lowerNullableNode(node: Node): Node {
 	// 3. Null expression unwrap: null as unknown as InterfaceType → NullLiteral
 	//    Codegen's existing {0} handler works for NullLiteral + struct type
 	if (isNullExpr(node) && node.kind !== NodeKind.NullLiteral
-		&& node.nodeType !== null && isInterfaceType(node.nodeType)) {
+		&& node.nodeType !== null && isStructType(node.nodeType)) {
 		const nullNode = makeNull(loc);
 		nullNode.nodeType = node.nodeType;
 		return nullNode;

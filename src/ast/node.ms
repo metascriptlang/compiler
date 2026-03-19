@@ -27,7 +27,7 @@ export enum CallingConvention {
 
 // ===== Type Flags =====
 export enum TypeFlag {
-	IsInterface = 1,
+	IsStruct = 1,
 	IsMaybe = 16,
 	HasAsgn = 32,
 }
@@ -70,6 +70,7 @@ export enum SymbolKind {
 	Property,
 	Method,
 	EnumMember,
+	Struct,
 }
 
 // ===== Symbol State (Lifecycle) =====
@@ -101,6 +102,7 @@ export class Symbol {
 	originalName: string;  // Original declared name, used for C mangling when imported with alias
 	headerPath: string;    // @include header for this extern symbol
 	overloadIdx: int32;    // Index within overload set (0=primary, 1+=overload)
+	mutatedParams: int32;  // Bitfield: bit i = param i is mutated in body (gates const-ptr promotion)
 }
 
 // ===== Node Flags (Standard parity: TNodeFlags) =====
@@ -147,7 +149,7 @@ export enum NodeKind {
 	DoWhileStmt, SwitchStmt, SwitchCase,
 	UnreachableStmt, MatchStmt,
 	// Declarations
-	ImportDecl, ExportDecl, TypeAliasDecl, EnumDecl, InterfaceDecl,
+	ImportDecl, ExportDecl, TypeAliasDecl, EnumDecl, InterfaceDecl, StructDecl,
 	ClassDecl, PropertyDecl, MethodDecl, ConstructorDecl,
 	// Error handling
 	ThrowStmt, TryCatchStmt,
@@ -180,6 +182,7 @@ export enum ExternKind {
 	Function,
 	Class,
 	Interface,
+	Struct,
 	Const,
 	Var,
 	Let,
@@ -267,6 +270,7 @@ export type NodeData =
 	| { aliasName: string, aliasType: string, aliasIsDistinct: boolean, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[], nameLocation: SourceLocation } // TypeAliasDecl
 	| { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[] } // EnumDecl
 	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], nameLocation: SourceLocation } // InterfaceDecl
+	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], nameLocation: SourceLocation } // StructDecl
 	| { className: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation } // ClassDecl
 	| { propName: string, propType: string, propIsStatic: boolean }                 // PropertyDecl
 	| { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodReturnType: string, nativeName: string, nameLocation: SourceLocation } // MethodDecl
@@ -382,6 +386,7 @@ export type ExportDeclData = { exportedDecl: Node };
 export type TypeAliasDeclData = { aliasName: string, aliasType: string, aliasIsDistinct: boolean, discriminantName: string, discriminantType: string, variantKeys: string[], variantTypes: string[], nameLocation: SourceLocation };
 export type EnumDeclData = { enumName: string, enumMembers: string[], enumValues: number[], nameLocation: SourceLocation, memberLocations: SourceLocation[] };
 export type InterfaceDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], nameLocation: SourceLocation };
+export type StructDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], nameLocation: SourceLocation };
 export type ClassDeclData = { className: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation };
 export type PropertyDeclData = { propName: string, propType: string, propIsStatic: boolean };
 export type MethodDeclData = { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodReturnType: string, nativeName: string, nameLocation: SourceLocation };

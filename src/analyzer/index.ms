@@ -5,8 +5,9 @@
 // Re-exports the public API from all sub-modules.
 // analyzeProgram is the main entry point called from src/index.ms.
 
-import { Node, NodeKind, ProgramData } from "../ast/node";
-import { CheckerContext } from "../checker/context";
+import { Node, NodeKind, ProgramData, Symbol } from "../ast/node";
+import { CheckerContext, GcMode } from "../checker/context";
+import { needsRC } from "../checker/types";
 import { TransformContext, createTransformContextWithChecker } from "../transform/context";
 import { createDrcContext, pushScope, popScope, scopeDepth } from "./scope";
 import { injectProgram } from "./inject";
@@ -19,11 +20,36 @@ import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/index";
 import { transformProgram } from "../transform/index";
 
+// ===== Auto-detect RC requirement =====
+// Scan all symbols — if no type needs RC, skip the entire DRC pass.
+// Monotonic: flips true on first RC type, never checks again.
+
+function programNeedsRC(checkerCtx: CheckerContext): boolean {
+	const scopes = checkerCtx.table.allScopes;
+	let i = 0;
+	while (i < scopes.length) {
+		const syms = scopes[i].symbols;
+		let j = 0;
+		while (j < syms.length) {
+			if (needsRC(syms[j].symbolType)) return true;
+			j = j + 1;
+		}
+		i = i + 1;
+	}
+	return false;
+}
+
 // ===== Public Entry Point =====
 
 export function analyzeProgram(program: Node, checkerCtx: CheckerContext): Node {
 	if (checkerCtx === null) return program;  // test mode — skip analysis
+	const skipDrc = match (checkerCtx.gcMode) {
+		GcMode.None => true,
+		GcMode.Orc => false,
+		_ => !programNeedsRC(checkerCtx),
+	};
 
+	if (skipDrc) return program;
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	const dctx = createDrcContext(ctx);
 	const injected = injectProgram(program, dctx);

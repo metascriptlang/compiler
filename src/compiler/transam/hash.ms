@@ -351,7 +351,7 @@ export function taHashNode(node: Node): number {
 			const d = node.data as EnumDeclData;
 			h = hS(h, d.enumName); h = hStrings(h, d.enumMembers); h = hNumbers(h, d.enumValues);
 		},
-		NodeKind.InterfaceDecl => {
+		NodeKind.InterfaceDecl | NodeKind.StructDecl => {
 			const d = node.data as InterfaceDeclData;
 			h = hS(h, d.interfaceName); h = hStrings(h, d.interfaceFields); h = hStrings(h, d.interfaceFieldTypes);
 		},

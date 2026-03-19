@@ -192,7 +192,7 @@ export function emitNestedToValueHelpers(fieldTypes: Type[], emitted: Set<string
 			if (ft.typeChildren !== null) {
 				c = c + emitNestedToValueHelpers(ft.typeChildren, emitted);
 			}
-			// #ifndef guard: Nim parity (declaredThings per-module dedup).
+			// #ifndef guard: reference parity (declaredThings per-module dedup).
 			// Multiple JSON.stringify<T> calls sharing the same nested type
 			// each emit this helper — C preprocessor deduplicates.
 			const guard = `__jsonToValue_${ft.typeName}_DEFINED`;

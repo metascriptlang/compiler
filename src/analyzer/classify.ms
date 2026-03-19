@@ -5,7 +5,7 @@
 //
 // The RcInfo result carries enough info to emit the correct AST calls.
 
-import { isPrimitiveKind, hasDestructor, hasAsgnFlag, isInterfaceType, isPromise, createPrimitive, createStruct, createArray, createFunction, createPtr, numberType, stringType, booleanType, voidType, nullType, unknownType } from "../checker/types";
+import { isPrimitiveKind, hasDestructor, hasAsgnFlag, isStructType, isPromise, createPrimitive, createStruct, createArray, createFunction, createPtr, numberType, stringType, booleanType, voidType, nullType, unknownType } from "../checker/types";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
 import { TransformContext, createTransformContext } from "../transform/context";
 import { NodeKind, Type, TypeKind, SymbolKind, Symbol } from "../ast/node";

@@ -3,7 +3,7 @@
 // Follows standard reference patterns for section-based output and block stacking.
 // CGen = BModule, CProc = BProc, CBlock = TBlock, CLoc = TLoc.
 
-import { Node, NodeKind, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, Type, TypeKind, Symbol } from "../../ast/node";
 import { CheckerContext } from "../../checker/context";
 
 
@@ -548,6 +548,40 @@ export function assembleOutput(g: CGen): string {
 		}
 	}
 	return result;
+}
+
+// ===== Header Include Emission =====
+// Moved from forward.ms to break circular import: types.ms ↔ forward.ms.
+// Only depends on CGen/CSection/Symbol — no type-mapping logic.
+
+export function useHeader(g: CGen, sym: Symbol): void {
+	if (sym === null || sym.headerPath === "") return;
+	emitIncludeDirectives(g, sym.headerPath);
+}
+
+export function emitIncludeDirectives(g: CGen, directives: string): void {
+	let start = 0;
+	for (let pos = 0; pos < directives.length; pos += 1) {
+		if (directives.charAt(pos) === "\n") {
+			const header = directives.slice(start, pos);
+			if (header.length > 0) {
+				emitOneInclude(g, header);
+			}
+			start = pos + 1;
+		}
+	}
+	if (start < directives.length) {
+		const header = directives.slice(start, directives.length);
+		if (header.length > 0) {
+			emitOneInclude(g, header);
+		}
+	}
+}
+
+function emitOneInclude(g: CGen, header: string): void {
+	if (nameSetHas(g.declaredThings, "inc:" + header)) return;
+	nameSetAdd(g.declaredThings, "inc:" + header);
+	addLine(sec(g, CSection.Headers), `#include "${header}"`);
 }
 
 // ===== Tests =====

@@ -76,7 +76,7 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 			const d = node.data as DecoratedDeclData;
 			compileStmt(s, d.decoratedNode);
 		},
-		NodeKind.EnumDecl | NodeKind.InterfaceDecl | NodeKind.TypeAliasDecl | NodeKind.ClassDecl => {},
+		NodeKind.EnumDecl | NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.TypeAliasDecl | NodeKind.ClassDecl => {},
 		_ => {},
 	};
 }

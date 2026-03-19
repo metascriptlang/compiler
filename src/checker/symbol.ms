@@ -31,6 +31,7 @@ export enum SymbolFlag {
 	Lent = 4096,        // parameter is a borrow (no RC)
 	NoReturn = 8192,    // function never returns (exit, abort, infinite loop)
 	Async = 16384,      // async function (return type is Promise<T>)
+	ParamMutated = 32768,  // parameter is mutated inside function body (blocks const-ptr promotion)
 }
 
 // Flag helpers

@@ -7,7 +7,7 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { Node, NodeKind, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ExternKind, IdentifierData, TypeGenericData, TypeArrayData, TypeUnionData, TypeFunctionData, TypeObjectData, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { unknownType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createUnion, createGenericParam, createDistinct, substituteType, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, setMinArity, typeNameOf, assignType, isInterfaceType, unwrapRef, propagateHasAsgn } from "./types";
+import { unknownType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createUnion, createGenericParam, createDistinct, substituteType, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, setMinArity, typeNameOf, assignType, isStructType, unwrapRef, propagateHasAsgn } from "./types";
 import { SymbolTable, ScopeKind, lookupSymbol, lookupLocal, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, setFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addErrorRange, addWarning, addFatalError, addFatalErrorRange, sgRecordSym } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim } from "../utils/string";
@@ -94,10 +94,10 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 		}
 		// T | null where T is interface → Maybe<T> (Reference: Maybe/Option parity)
 		if (members.length === 2) {
-			if (isInterfaceType(members[0]) && members[1] !== null && members[1].kind === TypeKind.Null) {
+			if (isStructType(members[0]) && members[1] !== null && members[1].kind === TypeKind.Null) {
 				return createMaybeType(members[0]);
 			}
-			if (members[0] !== null && members[0].kind === TypeKind.Null && isInterfaceType(members[1])) {
+			if (members[0] !== null && members[0].kind === TypeKind.Null && isStructType(members[1])) {
 				return createMaybeType(members[1]);
 			}
 			// Ref<T> | null or Ptr<T> | null → bare pointer (already nullable in C)
@@ -209,11 +209,12 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 				const baseSym = lookupSymbol(ctx.table, baseName);
 				if (baseSym !== null) {
 					ensureShaped(baseSym, ctx);
+					const isRefBase = baseSym.symbolType.kind === TypeKind.Ref;
 					let baseType = baseSym.symbolType;
-					if (baseType.kind === TypeKind.Ref && baseType.typeReturn !== null) baseType = baseType.typeReturn;
+					if (isRefBase && baseType.typeReturn !== null) baseType = baseType.typeReturn;
 					const gi1 = createGenericInstance(baseType, resolvedArgs);
 					instantiateGenericBody(gi1, genericParams);
-					return gi1;
+					return isRefBase ? createRef(gi1) : gi1;
 				}
 				return emitUnresolvedTypeRef(ctx, baseName, line, col, "");
 			}
@@ -223,13 +224,16 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 			const baseSym2 = lookupSymbol(ctx.table, baseName);
 			if (baseSym2 !== null) {
 				ensureShaped(baseSym2, ctx);
+				const isRefBase2 = baseSym2.symbolType.kind === TypeKind.Ref;
+				let baseType2 = baseSym2.symbolType;
+				if (isRefBase2 && baseType2.typeReturn !== null) baseType2 = baseType2.typeReturn;
 				const resolvedArgs: Type[] = [];
 				for (const a of args) {
 					resolvedArgs.push(resolveAnnotation(a.trim(), ctx, line, col));
 				}
-				const gi2 = createGenericInstance(baseSym2.symbolType, resolvedArgs);
+				const gi2 = createGenericInstance(baseType2, resolvedArgs);
 				instantiateGenericBody(gi2, genericParams);
-				return gi2;
+				return isRefBase2 ? createRef(gi2) : gi2;
 			}
 			// Symbol not found — emit error + return TypeRef for recovery
 			const typeArgKey = buildTypeArgKey(args, ctx);
@@ -389,6 +393,7 @@ export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
 		match (node.kind) {
 			NodeKind.FunctionDecl => resolveFunction(ctx, node),
 			NodeKind.InterfaceDecl => resolveInterface(ctx, node),
+			NodeKind.StructDecl => resolveInterface(ctx, node),
 			NodeKind.ClassDecl => resolveClass(ctx, node),
 			NodeKind.TypeAliasDecl => resolveTypeAlias(ctx, node),
 			NodeKind.VariableDecl => resolveVariable(ctx, node),
@@ -597,12 +602,13 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 	const paramTypes = resolveTypeStrings(d.fnParamTypes, d.params.length, ctx, node.location.line, node.location.column);
 	resolveTypeExprs(node.typeExprs, ctx);
 
-	// Wrap out param types in TypeKind.Var (reference parity: tyVar)
-	if (d.fnFlags !== "" && d.fnFlags.indexOf("out:") >= 0) {
+	// Wrap out/ref param types in TypeKind.Var (reference parity: tyVar — both are T* in C)
+	if (d.fnFlags !== "" && (d.fnFlags.indexOf("out:") >= 0 || d.fnFlags.indexOf("ref:") >= 0)) {
 		const flagParts = splitTopLevel(d.fnFlags, "|");
 		for (const fp of flagParts) {
 			const trimFp = fp.trim();
-			if (trimFp.length > 4 && trimFp.slice(0, 4) === "out:") {
+			if ((trimFp.length > 4 && trimFp.slice(0, 4) === "out:") ||
+				(trimFp.length > 4 && trimFp.slice(0, 4) === "ref:")) {
 				const idxStr = trimFp.slice(4, trimFp.length);
 				const idxParts = splitTopLevel(idxStr, ",");
 				for (const ip of idxParts) {
@@ -688,7 +694,7 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 
 	// Set state to Shaped immediately to allow circular references in fields
 	sym.state = SymbolState.Shaped;
-	sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.interfaceName.length, sym, sym.symbolType, SymbolKind.Interface, d.interfaceName, "", true);
+	sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.interfaceName.length, sym, sym.symbolType, sym.symbolKind, d.interfaceName, "", true);
 
 	// Check for generic params (e.g., interface Box<T> — parser stores in side-channel)
 	const genericStr = getGenericDecl(d.interfaceName);
@@ -716,7 +722,7 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 	// Standard reference requires explicit pointer types and errors otherwise. We auto-promote with a warning.
 	for (let fi = 0; fi < fieldTypes.length; fi += 1) {
 		const ft = fieldTypes[fi];
-		if (ft !== null && isInterfaceType(ft) && ft.typeName === d.interfaceName) {
+		if (ft !== null && isStructType(ft) && ft.typeName === d.interfaceName) {
 			fieldTypes[fi] = createRef(ft);
 			const fieldName = fi < d.interfaceFields.length ? d.interfaceFields[fi] : "?";
 			addError(ctx, "warning: self-referential field '" + fieldName + "' in '" + d.interfaceName + "' auto-promoted to Ref<" + d.interfaceName + ">", node.location.line, 0);
@@ -725,12 +731,14 @@ function resolveInterface(ctx: CheckerContext, node: Node): void {
 
 	// Update sym type in-place — avoid temporary Type that shares typeChildren
 	// (temporary's destructor would decref elements while sym still references them)
-	sym.symbolType.kind = TypeKind.Struct;
-	sym.symbolType.typeName = d.interfaceName;
-	sym.symbolType.typeNames = d.interfaceFields;
-	sym.symbolType.typeChildren = fieldTypes;
-	sym.symbolType.typeFlags = TypeFlag.IsInterface as int32;
-	for (const pt of fieldTypes) { propagateHasAsgn(sym.symbolType, pt); }
+	// For interface (Ref<Struct>), update the inner struct. For struct (plain Struct), update directly.
+	const target = sym.symbolType.kind === TypeKind.Ref ? unwrapRef(sym.symbolType) : sym.symbolType;
+	target.kind = TypeKind.Struct;
+	target.typeName = d.interfaceName;
+	target.typeNames = d.interfaceFields;
+	target.typeChildren = fieldTypes;
+	target.typeFlags = TypeFlag.IsStruct as int32;
+	for (const pt of fieldTypes) { propagateHasAsgn(target, pt); }
 	node.nodeType = sym.symbolType;
 	// Record each interface field DEF for symbol graph
 	// (no per-field location available; use interface node location as fallback)
@@ -957,7 +965,7 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 	inner.typeName = d.className;
 	inner.typeNames = memberNames;
 	inner.typeChildren = memberTypes;
-	inner.typeFlags = TypeFlag.IsInterface as int32;
+	inner.typeFlags = TypeFlag.IsStruct as int32;
 	// Resolve base class TypeReference → concrete type (reference parity: no TypeRef in codegen)
 	if (inner.typeExtra !== null && inner.typeExtra.kind === TypeKind.TypeReference) {
 		const baseSym = lookupSymbol(ctx.table, inner.typeExtra.typeName);

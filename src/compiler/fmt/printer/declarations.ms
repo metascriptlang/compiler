@@ -82,9 +82,9 @@ export function printEnumDecl(node: Node, options: FormatOptions): Doc {
 	]);
 }
 
-export function printInterfaceDecl(node: Node, options: FormatOptions): Doc {
+function printStructLikeDecl(node: Node, keyword: string): Doc {
 	const d = node.data as InterfaceDeclData;
-	if (d.interfaceFields.length === 0) return docText("interface " + d.interfaceName + " {}");
+	if (d.interfaceFields.length === 0) return docText(keyword + " " + d.interfaceName + " {}");
 	const fields: Doc[] = [];
 	for (let i = 0; i < d.interfaceFields.length; i += 1) {
 		let field = d.interfaceFields[i];
@@ -94,11 +94,19 @@ export function printInterfaceDecl(node: Node, options: FormatOptions): Doc {
 		fields.push(docText(field + ";"));
 	}
 	return docGroup([
-		docText("interface " + d.interfaceName + " {"),
+		docText(keyword + " " + d.interfaceName + " {"),
 		docIndent([docHardLine(), docJoin(fields, docHardLine())]),
 		docHardLine(),
 		docText("}"),
 	]);
+}
+
+export function printInterfaceDecl(node: Node, options: FormatOptions): Doc {
+	return printStructLikeDecl(node, "interface");
+}
+
+export function printStructDecl(node: Node, options: FormatOptions): Doc {
+	return printStructLikeDecl(node, "struct");
 }
 
 export function printClassDecl(node: Node, options: FormatOptions): Doc {

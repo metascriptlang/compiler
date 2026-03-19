@@ -68,7 +68,7 @@ export function createStruct(name: string, propNames: string[], propTypes: Type[
 	t.typeName = name;
 	t.typeNames = propNames;
 	t.typeChildren = propTypes;
-	if (isInterface) { t.typeFlags = TypeFlag.IsInterface as int32; }
+	if (isInterface) { t.typeFlags = TypeFlag.IsStruct as int32; }
 	// Propagate HasAsgn from any managed field (Reference parity: bottom-up flag propagation)
 	for (const pt of propTypes) { propagateHasAsgn(t, pt); }
 	return t;
@@ -333,7 +333,7 @@ export function findVariantByDiscriminant(unionType: Type, enumValue: string): n
 }
 
 // Maybe<T> — Reference: Maybe/Option parity. Wrapper struct { value: T, present: bool }.
-// Only for interfaces. Cached by inner type name to avoid duplicates.
+// Only for value-type structs. Ref/Ptr types are inherently nullable (NULL pointer). Cached by name.
 const _maybeCache: Type[] = [];
 const _maybeCacheNames: string[] = [];
 
@@ -351,7 +351,7 @@ export function createMaybeType(inner: Type): Type {
 	t.typeName = "Maybe_" + name;
 	t.typeNames = ["value", "present"];
 	t.typeChildren = [inner, booleanType()];
-	t.typeFlags = (TypeFlag.IsInterface | TypeFlag.IsMaybe) as int32;
+	t.typeFlags = (TypeFlag.IsStruct | TypeFlag.IsMaybe) as int32;
 	t.typeReturn = inner;    // store inner type for unwrapping
 	propagateHasAsgn(t, inner);
 	_maybeCache.push(t);
@@ -419,14 +419,16 @@ export function createGenericParam(name: string): Type {
 // typeReturn = EAGERLY INSTANTIATED body (concrete body after substitution).
 // Enables structural unification: Map<K,V> vs Map<string,string> → K=string, V=string.
 export function createGenericInstance(baseType: Type, typeArgs: Type[]): Type {
+	// For Ref<Struct> (interface types), use inner struct's name and flags
+	const innerBase = (baseType !== null && baseType.kind === TypeKind.Ref && baseType.typeReturn !== null) ? baseType.typeReturn : baseType;
 	return {
 		kind: TypeKind.GenericInstance,
-		typeName: baseType !== null ? baseType.typeName : "",
+		typeName: innerBase !== null ? innerBase.typeName : "",
 		typeNames: [],
 		typeChildren: typeArgs,
 		typeReturn: null as unknown as Type,
 		typeExtra: baseType,
-		typeFlags: baseType !== null ? baseType.typeFlags : 0 as int32,
+		typeFlags: innerBase !== null ? innerBase.typeFlags : 0 as int32,
 		callConv: CallingConvention.CcDefault,
 		attachedOps: [],
 	};
@@ -442,7 +444,10 @@ export function instantiateGenericBody(gi: Type, declaredParams: string): void {
 	if (declaredParams === "") return;
 	const baseType = gi.typeExtra;
 	if (baseType === null) return;
-	if (baseType.kind !== TypeKind.Struct && baseType.kind !== TypeKind.Union) return;
+	// Unwrap Ref for interface types (interface = Ref<Struct> after refactor)
+	const isRefWrapped = baseType.kind === TypeKind.Ref && baseType.typeReturn !== null;
+	const innerBase = isRefWrapped ? baseType.typeReturn : baseType;
+	if (innerBase.kind !== TypeKind.Struct && innerBase.kind !== TypeKind.Union) return;
 	// Only instantiate if ALL type args are concrete
 	let ai = 0;
 	while (ai < gi.typeChildren.length) {
@@ -452,13 +457,14 @@ export function instantiateGenericBody(gi: Type, declaredParams: string): void {
 	// Split declared param names (e.g. "K,V" → ["K", "V"])
 	const paramNames = splitTopLevel(declaredParams, ",");
 	if (paramNames.length === 0 || paramNames.length > gi.typeChildren.length) return;
-	let body = baseType;
+	let body = innerBase;
 	let pi = 0;
 	while (pi < paramNames.length) {
 		body = substituteType(body, paramNames[pi].trim(), gi.typeChildren[pi]);
 		pi = pi + 1;
 	}
-	gi.typeReturn = body;
+	// Re-wrap in Ref if the base was Ref<Struct>
+	gi.typeReturn = isRefWrapped ? createRef(body) : body;
 }
 
 // ===== System Types (Standard reference parity) =====
@@ -589,10 +595,10 @@ function typeKey(t: Type): string {
 
 // ===== Type Classification Helpers =====
 
-export function isInterfaceType(t: Type): boolean {
+export function isStructType(t: Type): boolean {
 	if (t === null) return false;
 	if (t.kind !== TypeKind.Struct) return false;
-	return (t.typeFlags & TypeFlag.IsInterface) !== 0;
+	return (t.typeFlags & TypeFlag.IsStruct) !== 0;
 }
 
 export function isMaybeType(t: Type): boolean {
@@ -609,6 +615,29 @@ export function unwrapRef(t: Type): Type {
 	if (t === null) return t;
 	if (t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr) return t.typeReturn;
 	return t;
+}
+
+// ===== Needs RC =====
+// Types that need reference counting. Pure type query — no codegen dependency.
+
+export function needsRC(t: Type): boolean {
+	if (t === null) return false;
+	return match (t.kind) {
+		TypeKind.String => true,
+		TypeKind.Array => true,
+		TypeKind.SizedArray => needsRC(t.typeReturn),
+		TypeKind.Span => false,
+		TypeKind.Ref => true,
+		TypeKind.Tuple => {
+			let i = 0;
+			while (i < t.typeChildren.length) {
+				if (needsRC(t.typeChildren[i])) return true;
+				i += 1;
+			}
+			return false;
+		},
+		_ => false,
+	};
 }
 
 // ===== tfHasAsgn Flag — Reference parity: propagated lifecycle management flag =====
@@ -739,7 +768,7 @@ function substituteStruct(t: Type, paramName: string, concrete: Type): Type {
 	for (let ni = 0; ni < t.typeNames.length; ni += 1) {
 		newNames.push(t.typeNames[ni]);
 	}
-	const result = createStruct(t.typeName, newNames, newFieldTypes, isInterfaceType(t));
+	const result = createStruct(t.typeName, newNames, newFieldTypes, isStructType(t));
 	result.typeReturn = t.typeReturn;
 	result.typeExtra = t.typeExtra;
 	return result;
@@ -866,11 +895,24 @@ function unifyTypeInner(formal: Type, concrete: Type, bindings: UnifyBindings): 
 		}
 		return;
 	}
-	// GenericInstance formal vs Struct concrete (or vice versa) — try base type matching
+	// GenericInstance vs Struct (either direction) — try base type matching
 	if (formal.kind === TypeKind.GenericInstance && concrete.kind === TypeKind.Struct) {
-		// Unify the base struct fields
 		if (formal.typeExtra !== null) {
 			unifyType(formal.typeExtra, concrete, bindings);
+		}
+		return;
+	}
+	if (formal.kind === TypeKind.Struct && concrete.kind === TypeKind.GenericInstance) {
+		// Struct("Map") with generic params vs GenericInstance("Map", [string, string])
+		// Unify by matching formal's fields against the instantiated body's fields
+		if (formal.typeName === concrete.typeName && concrete.typeReturn !== null) {
+			const body = unwrapRef(concrete.typeReturn);
+			if (body.kind === TypeKind.Struct) {
+				const limit = formal.typeChildren.length < body.typeChildren.length ? formal.typeChildren.length : body.typeChildren.length;
+				for (let i = 0; i < limit; i += 1) {
+					unifyType(formal.typeChildren[i], body.typeChildren[i], bindings);
+				}
+			}
 		}
 		return;
 	}
@@ -903,9 +945,18 @@ function unifyTypeInner(formal: Type, concrete: Type, bindings: UnifyBindings): 
 }
 
 // Cycle-safe: named Object/Union types don't contain GenericParams after resolution
+let _hasGenericDepth = 0;
 export function hasGenericParams(t: Type): boolean {
 	if (t === null) return false;
 	if (t.kind === TypeKind.GenericParam) return true;
+	if (_hasGenericDepth > 20) return false;
+	_hasGenericDepth = _hasGenericDepth + 1;
+	const result = hasGenericParamsInner(t);
+	_hasGenericDepth = _hasGenericDepth - 1;
+	return result;
+}
+
+function hasGenericParamsInner(t: Type): boolean {
 	// GenericInstance: check type args for GenericParam (e.g., Map<K,V> has GenericParam children)
 	if (t.kind === TypeKind.GenericInstance) {
 		for (let gi = 0; gi < t.typeChildren.length; gi += 1) {
@@ -990,8 +1041,10 @@ export function getElementType(t: Type): Type {
 }
 
 // Collect unique GenericParam names from a type tree (used by getProperty for GenericInstance substitution)
+let _collectGenericDepth = 0;
 function collectGenericParamNames(t: Type, names: string[]): void {
 	if (t === null) return;
+	if (_collectGenericDepth > 20) return;
 	if (t.kind === TypeKind.GenericParam) {
 		let dup = false;
 		let ni = 0;
@@ -999,6 +1052,7 @@ function collectGenericParamNames(t: Type, names: string[]): void {
 		if (!dup) names.push(t.typeName);
 		return;
 	}
+	_collectGenericDepth = _collectGenericDepth + 1;
 	if (t.typeReturn !== null) collectGenericParamNames(t.typeReturn, names);
 	if (t.typeExtra !== null) collectGenericParamNames(t.typeExtra, names);
 	let ci = 0;
@@ -1006,6 +1060,7 @@ function collectGenericParamNames(t: Type, names: string[]): void {
 		collectGenericParamNames(t.typeChildren[ci], names);
 		ci = ci + 1;
 	}
+	_collectGenericDepth = _collectGenericDepth - 1;
 }
 
 export function getProperty(t: Type, name: string): Type {
@@ -1478,10 +1533,10 @@ test "setMinArity zero" {
 
 test "preserves low bits" {
 	const fn4 = createFunction([numberType()], ["a"], voidType());
-	fn4.typeFlags = TypeFlag.IsInterface as int32;
+	fn4.typeFlags = TypeFlag.IsStruct as int32;
 	setMinArity(fn4, 1);
 	assert getMinArity(fn4) === 1;
-	assert (fn4.typeFlags & TypeFlag.IsInterface) !== 0;
+	assert (fn4.typeFlags & TypeFlag.IsStruct) !== 0;
 }
 
 test "createTuple" {

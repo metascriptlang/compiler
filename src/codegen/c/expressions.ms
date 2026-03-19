@@ -7,7 +7,7 @@
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, NewExprData, MoveExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, HiddenDerefData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { isIntegerType, getProperty, getMinArity, isInterfaceType, findUnionVariant, voidType } from "../../checker/types";
+import { isIntegerType, getProperty, getMinArity, isStructType, findUnionVariant, voidType } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, Builder, CSection,
@@ -17,10 +17,11 @@ import {
 	emitProcLocalsLine,
 } from "./context";
 import { mangle, mangleFieldName, mangledFunctionName, safeName } from "./names";
-import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl } from "./types";
+import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, getArrayContentType } from "./types";
 import { formatCNumber, cBoolLiteral, cNullLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { findChar } from "../../utils/string";
-import { ensureDrcProto, ensureCrossModuleProto, useHeader } from "./forward";
+import { ensureDrcProto, ensureCrossModuleProto } from "./forward";
+import { useHeader } from "./context";
 
 // ===== Reference: argument passing for introduced pointers =====
 // Wraps arg for pointer introduction params at call sites.
@@ -41,11 +42,17 @@ function isRefArrayAccessCall(node: Node): boolean {
 
 // Shared ABI shim for call arguments — reference parity: genArg
 // Single point for ccgIntroducedPtr, pointer/value conversion, and untyped literal handling.
-export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Type, argNode: Node): string {
+// mutBits/paramIdx: callee's sym.mutatedParams bitfield + param index, gates const-ptr promotion
+export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Type, argNode: Node, mutBits: int32, paramIdx: number): string {
 	if (paramType !== null && argNode.nodeType !== null && argNode.kind !== NodeKind.HiddenAddr) {
 		const paramIsPtr = isPointerType(paramType);
-		const argIsPtr = isPointerType(argNode.nodeType);
-		const paramCcgPtr = ccgIntroducedPtr(paramType);
+		// Check nodeType first, fallback to resolvedSym.symbolType (DRC may not propagate Ref to nodeType)
+		let argIsPtr = isPointerType(argNode.nodeType);
+		if (!argIsPtr && argNode.resolvedSym !== null && argNode.resolvedSym.symbolType !== null) {
+			argIsPtr = isPointerType(argNode.resolvedSym.symbolType);
+		}
+		const isMutated = (mutBits & (1 << (paramIdx as int32))) !== 0;
+		const paramCcgPtr = !isMutated && ccgIntroducedPtr(paramType);
 		if (paramIsPtr && !argIsPtr && argNode.kind !== NodeKind.NullLiteral) {
 			return safeAddrOf(g, p, arg, argNode, paramType);
 		} else if (!paramIsPtr && argIsPtr && !paramCcgPtr) {
@@ -541,10 +548,34 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 	// NewExpr — constructor call or inline allocation
 	if (kind === NodeKind.NewExpr) {
 		const d = node.data as NewExprData;
-		// Value-type new: interface/GenericInstance types → zero-initialized struct
+		// Value-type new: struct/GenericInstance types → zero-initialized struct
 		if (node.nodeType !== null && (node.nodeType.kind === TypeKind.Struct || node.nodeType.kind === TypeKind.GenericInstance) && d.newArguments.length === 0) {
 			const cType = getTypeDesc(g, node.nodeType);
 			ctx.results.push(`(${cType}){0}`);
+			return;
+		}
+		// Ref-type new: Ref<GenericInstance> → heap-allocate with monomorphized name
+		if (node.nodeType !== null && node.nodeType.kind === TypeKind.Ref && node.nodeType.typeReturn !== null) {
+			const innerType = node.nodeType.typeReturn;
+			const cType = getTypeDesc(g, innerType);
+			ensureTypeInfoDef(g, cType);
+			if (d.newArguments.length === 0) {
+				ctx.results.push(`(${cType}*)msAllocTyped(sizeof(${cType}), &${cType}_typeInfo)`);
+			} else {
+				g.labels += 1;
+				const tmp = `_new${g.labels}_`;
+				emitProcLocalsLine(p, `${cType}* ${tmp};`);
+				emitStmtsLine(p, `${tmp} = (${cType}*)msAllocTyped(sizeof(${cType}), &${cType}_typeInfo);`);
+				const fieldNames = (innerType.typeNames !== null) ? innerType.typeNames : null as unknown as string[];
+				let fi = 0;
+				while (fi < d.newArguments.length) {
+					const fieldVal = genExpr(g, p, d.newArguments[fi]);
+					const fieldName = (fieldNames !== null && fi < fieldNames.length) ? mangleFieldName(fieldNames[fi]) : ("_f" + fi);
+					emitStmtsLine(p, `${tmp}->${fieldName} = ${fieldVal};`);
+					fi += 1;
+				}
+				ctx.results.push(tmp);
+			}
 			return;
 		}
 		// TypeReference eliminated — all types resolved before codegen
@@ -555,9 +586,10 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 				const sizeExpr = genExpr(g, p, d.newArguments[0]);
 				// Allocate array with N slots: { .len = N, .p = calloc(sizeof(Content) + N * sizeof(elem)) }
 				const elemType = node.nodeType.typeReturn !== null ? getTypeDesc(g, node.nodeType.typeReturn) : "void*";
+				const contentType = getArrayContentType(arrType);
 				const tmp = getTemp(p, arrType);
 				emitStmtsLine(p, `${tmp.snippet}.len = ${sizeExpr};`);
-				emitStmtsLine(p, `${tmp.snippet}.p = (${arrType}__Content*)calloc(1, sizeof(${arrType}__Content) + ${sizeExpr} * sizeof(${elemType}));`);
+				emitStmtsLine(p, `${tmp.snippet}.p = (${contentType}*)calloc(1, sizeof(${contentType}) + ${sizeExpr} * sizeof(${elemType}));`);
 				emitStmtsLine(p, `${tmp.snippet}.p->cap = ${sizeExpr};`);
 				ctx.results.push(tmp.snippet);
 			} else {
@@ -1044,7 +1076,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 						unionWrapIdx = varIdx;
 					}
 				} else if (node.nodeType.kind === TypeKind.Ref && node.nodeType.typeReturn !== null) {
-					// Class type: ObjectLiteral constructs inner struct, heap-allocated
+					// Class/interface type: ObjectLiteral constructs inner struct, heap-allocated
 					cType = getTypeDesc(g, node.nodeType.typeReturn);
 					isClassObj = true;
 				} else {
@@ -1230,7 +1262,8 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 			if (ovNeedsAddr && ai === 0) {
 				arg = safeAddrOf(g, p, arg, cd.arguments[ai], null);
 			} else if (hasOvParams && ai < ovType.typeChildren.length && ai < cd.arguments.length) {
-				arg = shimCallArg(g, p, arg, ovType.typeChildren[ai], cd.arguments[ai]);
+				const ovMutBits: int32 = sym !== null ? sym.mutatedParams : 0;
+				arg = shimCallArg(g, p, arg, ovType.typeChildren[ai], cd.arguments[ai], ovMutBits, ai);
 			}
 			argsStr = argsStr + arg;
 			ai += 1;
@@ -1265,7 +1298,8 @@ function emitCallExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx):
 		} else if (hasParamTypes) {
 			const argIdx = i - 1;
 			if (argIdx < calleeType.typeChildren.length && argIdx < cd.arguments.length) {
-				arg = shimCallArg(g, p, arg, calleeType.typeChildren[argIdx], cd.arguments[argIdx]);
+				const callMutBits: int32 = sym !== null ? sym.mutatedParams : 0;
+				arg = shimCallArg(g, p, arg, calleeType.typeChildren[argIdx], cd.arguments[argIdx], callMutBits, argIdx);
 			}
 		}
 		argsStr = argsStr + arg;

@@ -84,11 +84,13 @@ export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Type
 		if (fnType.typeChildren !== null && fnType.typeChildren.length > 0) paramList = paramList + ", ";
 	}
 	if (fnType.typeChildren !== null) {
+		const fwdMutBits: int32 = sym !== null ? sym.mutatedParams : 0;
 		let i = 0;
 		while (i < fnType.typeChildren.length) {
 			if (i > 0) paramList = paramList + ", ";
 			let pType = getTypeDesc(g, fnType.typeChildren[i]);
-			if (ccgIntroducedPtr(fnType.typeChildren[i]) && pType.byteLength > 0 && pType.charAt(pType.byteLength as int64 - 1) !== "*") {
+			const fwdMut = (fwdMutBits & (1 << (i as int32))) !== 0;
+			if (!fwdMut && ccgIntroducedPtr(fnType.typeChildren[i]) && pType.byteLength > 0 && pType.charAt(pType.byteLength as int64 - 1) !== "*") {
 				pType = pType + "*";
 			}
 			paramList = paramList + pType;
@@ -101,34 +103,4 @@ export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Type
 	addLine(sec(g, CSection.ProcHeaders), `${cRetType} ${calleeName}(${paramList});`);
 }
 
-// ===== useHeader — propagate @include to consuming module =====
-
-export function useHeader(g: CGen, sym: Symbol): void {
-	if (sym === null || sym.headerPath === "") return;
-	emitIncludeDirectives(g, sym.headerPath);
-}
-
-export function emitIncludeDirectives(g: CGen, directives: string): void {
-	let start = 0;
-	for (let pos = 0; pos < directives.length; pos += 1) {
-		if (directives.charAt(pos) === "\n") {
-			const header = directives.slice(start, pos);
-			if (header.length > 0) {
-				emitOneInclude(g, header);
-			}
-			start = pos + 1;
-		}
-	}
-	if (start < directives.length) {
-		const header = directives.slice(start, directives.length);
-		if (header.length > 0) {
-			emitOneInclude(g, header);
-		}
-	}
-}
-
-function emitOneInclude(g: CGen, header: string): void {
-	if (nameSetHas(g.declaredThings, "inc:" + header)) return;
-	nameSetAdd(g.declaredThings, "inc:" + header);
-	addLine(sec(g, CSection.Headers), `#include "${header}"`);
-}
+// useHeader + emitIncludeDirectives moved to context.ms to break types.ms ↔ forward.ms cycle.

@@ -10,7 +10,7 @@
 // Reference: standard optimized C codegen patterns for struct parameters
 
 import { Node, NodeKind, FunctionDeclData, CallExprData, IdentifierData, BlockStmtData, IfStmtData, WhileStmtData, ReturnStmtData, ExprStmtData, BinaryExprData, VariableDeclData, ForOfStmtData, ForStmtData, DoWhileStmtData, TryCatchStmtData, MemberExprData, ArrayAccessData, UnaryExprData, ConditionalExprData, ObjectLiteralData, UpdateExprData, SpreadExprData, ArrayLiteralData, MoveExprData, HiddenDerefData, HiddenStdConvData, SourceLocation, makeLoc, Type, TypeKind } from "../../ast/node";
-import { createPtr, isInterfaceType, getTypeSize, isResult } from "../../checker/types";
+import { createPtr, isStructType, getTypeSize, isResult } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeHiddenAddr, makeHiddenDeref } from "../util";
@@ -37,7 +37,7 @@ const TF_CCG_INTRODUCED: number = 32;
 export function ccgIntroducedPtr(t: Type): boolean {
 	if (t === null) return false;
 	// Reference: object types
-	if (isInterfaceType(t)) return getTypeSize(t) > PTR_THRESHOLD;
+	if (isStructType(t)) return getTypeSize(t) > PTR_THRESHOLD;
 	// Reference: tuple types — same size threshold
 	if (t.kind === TypeKind.Tuple) return getTypeSize(t) > PTR_THRESHOLD;
 	// Result/Union/Span — always by pointer (compound types, no reference equivalent for size check)

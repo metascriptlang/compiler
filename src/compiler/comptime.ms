@@ -503,7 +503,7 @@ function nodeToValue(node: Node, objHeap: RaiserObjectHeap, arrHeap: RaiserArray
 			setStr(objHeap, handle, "enumName", d.enumName);
 			setStrs(objHeap, arrHeap, handle, "enumMembers", d.enumMembers);
 		},
-		NodeKind.InterfaceDecl => {
+		NodeKind.InterfaceDecl | NodeKind.StructDecl => {
 			const d = node.data as InterfaceDeclData;
 			setStr(objHeap, handle, "interfaceName", d.interfaceName);
 			setStrs(objHeap, arrHeap, handle, "interfaceFields", d.interfaceFields);

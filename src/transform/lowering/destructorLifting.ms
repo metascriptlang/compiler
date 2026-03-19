@@ -800,8 +800,8 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 	const objType = unwrapRef(sym.symbolType);
 	if (objType.kind !== TypeKind.Struct && objType.kind !== TypeKind.Union) return;
 	if (!typeNeedsHooks(objType, lctx, loc)) {
-		// Classes still need a minimal _typeInfo for msAllocTyped (even without RC hooks)
-		if (sym.symbolKind === SymbolKind.Class) {
+		// Classes and interfaces (Ref types) still need a minimal _typeInfo for msAllocTyped (even without RC hooks)
+		if (sym.symbolKind === SymbolKind.Class || sym.symbolKind === SymbolKind.Interface) {
 			const typeInfoObj = makeObjectLiteral(
 				["name", "isCyclic", "traceFn", "destroyFn"],
 				[makeString(typeName, loc), makeBool(false, loc), makeNull(loc), makeNull(loc)],
@@ -814,8 +814,8 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 		return;
 	}
 
-	// Class types: hooks receive Ref<Struct> (pointer) — see generateHook comment
-	const classType = sym.symbolKind === SymbolKind.Class ? sym.symbolType : null;
+	// Class/Interface types: hooks receive Ref<Struct> (pointer) — see generateHook comment
+	const classType = (sym.symbolKind === SymbolKind.Class || sym.symbolKind === SymbolKind.Interface) ? sym.symbolType : null;
 
 	// 4 core hooks via fillBody dispatch
 	generateHook("destroy", typeName, objType, classType, lctx, loc);
@@ -839,8 +839,8 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 
 	// =dup: init + copy, return
 	const dupStmts: Node[] = [];
-	const isClass = sym.symbolKind === SymbolKind.Class;
-	if (isClass) {
+	const isRefType = sym.symbolKind === SymbolKind.Class || sym.symbolKind === SymbolKind.Interface;
+	if (isRefType) {
 		// reference parity (reference atomic ref op):
 		// ref types: result = src; incref(result). No =copy call — just pointer copy + refcount.
 		dupStmts.push(makeVarDecl("$result", makeIdent("src", loc), DeclKind.Let, loc));
@@ -986,10 +986,12 @@ function ensureEq(typeName: string, lctx: LiftCtx, loc: SourceLocation): void {
 
 	const sym = lookupSymbol(lctx.checkerCtx.table, typeName);
 	if (sym === null) return;
-	// Only for value-type objects (interfaces), not ref-type classes (Ref<Object>)
-	if (sym.symbolType.kind !== TypeKind.Struct) return;
+	// For value-type structs and interfaces (not classes — classes use reference equality)
+	if (sym.symbolKind === SymbolKind.Class) return;
+	const eqType = unwrapRef(sym.symbolType);
+	if (eqType.kind !== TypeKind.Struct) return;
 
-	generateEq(typeName, sym.symbolType, lctx, loc);
+	generateEq(typeName, eqType, lctx, loc);
 }
 
 // ===== Tuple Comparison Operators (reference parity: reference core lines 1973-1996) =====
@@ -1306,7 +1308,7 @@ function scanForAnonStructTypes(program: Node, lctx: LiftCtx, loc: SourceLocatio
 
 function processDecl(stmt: Node, lctx: LiftCtx): void {
 	match (stmt.kind) {
-		NodeKind.InterfaceDecl => {
+		NodeKind.InterfaceDecl | NodeKind.StructDecl => {
 			const d = stmt.data as InterfaceDeclData;
 			ensureTypeHooks(d.interfaceName, lctx, stmt.location);
 			ensureEq(d.interfaceName, lctx, stmt.location);
@@ -1455,9 +1457,11 @@ test "string field generates 5 hooks" { assert generatedFnCount("interface Token
 
 test "array field generates 5 hooks" { assert generatedFnCount("interface Data { items: number[]; }") === 5; }
 
-test "nested interface generates 10 hooks" { assert generatedFnCount("interface A { name: string; } interface B { a: A; }") === 10; }
+// Interface is now Ref type — B.a is Ref<A>, which is cyclic-capable → B gets _trace (6 hooks instead of 5)
+test "nested interface generates 11 hooks" { assert generatedFnCount("interface A { name: string; } interface B { a: A; }") === 11; }
 
-test "no duplicates" { assert generatedFnCount("interface A { name: string; } interface B { a1: A; a2: A; }") === 10; }
+// B has Ref<A> fields → cyclic-capable → gets _trace (11 = 5 for A + 6 for B)
+test "no duplicates" { assert generatedFnCount("interface A { name: string; } interface B { a1: A; a2: A; }") === 11; }
 
 test "exported interface" { assert generatedFnCount("export interface Token { value: string; }") === 5; }
 
@@ -1467,7 +1471,10 @@ test "trace NOT generated for flat string" { assert !hasGeneratedFn("interface T
 // TypeInfo generated alongside hooks
 test "typeInfo generated" { assert hasTypeInfo("interface Token { value: string; }", "Token"); }
 
-test "typeInfo NOT generated for primitives" { assert !hasTypeInfo("interface Point { x: number; y: number; }", "Point"); }
+// Interface is now Ref type — always needs typeInfo for msAllocTyped (even primitive-only)
+test "typeInfo generated for primitive-only interface" { assert hasTypeInfo("interface Point { x: number; y: number; }", "Point"); }
+// Struct (value type) with only primitives does NOT need typeInfo
+test "typeInfo NOT generated for primitive-only struct" { assert !hasTypeInfo("struct Point { x: number; y: number; }", "Point"); }
 // Inheritance: child with own hookable field + base both generate hooks
 test "inheritance generates parent hooks" {
 	const src = "interface Base { name: string; } class Child extends Base { extra: string; }";

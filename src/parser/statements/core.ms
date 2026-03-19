@@ -6,7 +6,7 @@ import { Node, NodeKind, NodeData, createNode, MatchExprData } from "../../ast/n
 import { ParserState, createState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize } from "../context";
 import { parseExpressionFromState, registerBlockParser } from "../expressions/core";
 import { parseIfStmt, parseWhileStmt, parseForStmt, parseBreakStmt, parseContinueStmt, parseReturnStmt, parseDoWhileStmt, parseSwitchStmt, parseDeferStmt, parseUnreachableStmt, parseTestDecl, parseAssertStmt } from "./control";
-import { parseVariableDecl, parseFunctionDecl, parseImportDecl, parseExportDecl, parseTypeAliasDecl, parseEnumDecl, parseInterfaceDecl, parseClassDecl, parseMacroInvocation, parseExternDecl, parseDistinctTypeDecl, parseMacroDecl } from "./declaration";
+import { parseVariableDecl, parseFunctionDecl, parseImportDecl, parseExportDecl, parseTypeAliasDecl, parseEnumDecl, parseInterfaceDecl, parseStructDecl, parseClassDecl, parseMacroInvocation, parseExternDecl, parseDistinctTypeDecl, parseMacroDecl } from "./declaration";
 import { parseThrowStmt, parseTryCatchStmt } from "./errorHandling";
 import { registerStmtBlockParser, registerStmtExprParser, registerStmtParser, registerStateProgramParser } from "./callbacks";
 import { programOk, stmtKind, stmtCount, parseErrorCount } from "./validation";
@@ -83,6 +83,7 @@ export function parseStatement(state: ParserState): NodeResult {
 		TokenKind.Type => parseTypeAliasDecl(state),
 		TokenKind.Enum => parseEnumDecl(state),
 		TokenKind.Interface => parseInterfaceDecl(state),
+		TokenKind.Struct => parseStructDecl(state),
 		TokenKind.Throw => parseThrowStmt(state),
 		TokenKind.Try => parseTryCatchStmt(state),
 		TokenKind.Do => parseDoWhileStmt(state),

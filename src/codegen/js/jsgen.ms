@@ -98,7 +98,7 @@ function emitNodeDispatch(gen: JSGenerator, node: Node): void {
 		NodeKind.DecoratedDecl => { emitDecoratedDecl(gen, node); },
 
 		// Type-only declarations — no JS output
-		NodeKind.InterfaceDecl | NodeKind.TypeAliasDecl | NodeKind.ExternDecl
+		NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.TypeAliasDecl | NodeKind.ExternDecl
 			| NodeKind.MacroDecl | NodeKind.ComptimeBlock | NodeKind.TypeAnnotation => {},
 
 		// Program — emit all statements

@@ -173,6 +173,7 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 	const inner = d.exportedDecl;
 	// Skip type-only exports (no JS output)
 	if (inner.kind === NodeKind.InterfaceDecl) return;
+	if (inner.kind === NodeKind.StructDecl) return;
 	if (inner.kind === NodeKind.TypeAliasDecl) return;
 	if (inner.kind === NodeKind.ExternDecl) return;
 	emitIndent(gen);

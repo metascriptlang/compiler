@@ -10,7 +10,7 @@
 // Conservative syntactic heuristic — no type info needed.
 
 import { Node, NodeKind, IfStmtData, WhileStmtData, DoWhileStmtData, ConditionalExprData, UnaryExprData, BinaryExprData, TypeKind } from "../../ast/node";
-import { isInterfaceType, isMaybeType } from "../../checker/types";
+import { isStructType, isMaybeType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeBinary, makeMember, makeNumber, makeBool } from "../util";
@@ -60,7 +60,7 @@ function wrapTruthiness(cond: Node): Node {
 		return makeMember(cond, "present", cond.location);
 	}
 	// Non-nullable value types → always true (Reference: rejects objects in boolean context)
-	if (cond.nodeType !== null && isInterfaceType(cond.nodeType)) return makeBool(true, cond.location);
+	if (cond.nodeType !== null && isStructType(cond.nodeType)) return makeBool(true, cond.location);
 	// Arrays → len > 0
 	if (cond.nodeType !== null && cond.nodeType.kind === TypeKind.Array) {
 		return makeBinary(makeMember(cond, "len", cond.location), ">", makeNumber(0, cond.location), cond.location);

@@ -23,7 +23,7 @@ import { isNrvoReturnType, getTypeDesc, ccgIntroducedPtr } from "./types";
 import { mangle } from "./names";
 import { emitStringPoolDecls } from "./literals";
 import { emitTestHeader, emitTestTable, genTestDispatcher } from "./test";
-import { emitIncludeDirectives } from "./forward";
+import { emitIncludeDirectives } from "./context";
 
 // ===== generateCModule — one module's C code (no dispatcher) =====
 //

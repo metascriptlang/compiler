@@ -4,7 +4,7 @@
 // Uses emitStmts/emitStmtsLine for direct write (avoids value-type Builder copy).
 
 import { Node, NodeKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, BreakStmtData, ContinueStmtData, DeclKind, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, AssertStmtData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, isEmptyBlock, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { isInterfaceType } from "../../checker/types";
+import { isStructType } from "../../checker/types";
 import {
 	CGen, CProc, CSection,
 	emitStmts, emitStmtsLine, emitStmtsNl,
@@ -44,17 +44,6 @@ function blockLeaveActions(g: CGen, p: CProc, howManyFinallys: number): void {
 // ===== NRVO Call Site Helpers =====
 // G3 fix: detect calls to NRVO functions and emit fn(&dest, args) instead of dest = fn(args)
 
-function isStructType(t: Type): boolean {
-	if (t === null) return false;
-	return match (t.kind) {
-		TypeKind.String | TypeKind.Array => true,
-		TypeKind.Struct => { return isInterfaceType(t); },
-		TypeKind.GenericInstance | TypeKind.Tuple => true,
-		TypeKind.Function => true,  // msClosure is a struct
-		_ => false,
-	};
-}
-
 function isUndefinedIdent(node: Node): boolean {
 	return node.kind === NodeKind.Identifier && (node.data as IdentifierData).name === "undefined";
 }
@@ -86,9 +75,10 @@ function genNrvoCallExpr(g: CGen, p: CProc, callNode: Node, destVar: string): st
 	for (let i = 0; i < cd.arguments.length; i += 1) {
 		if (argsStr !== "") argsStr = argsStr + ", ";
 		let arg = genExpr(g, p, cd.arguments[i]);
-		// ABI shim — genArg always checks ccgIntroducedPtr
+		// ABI shim — genArg always checks ccgIntroducedPtr (gated on param mutation)
 		if (hasParamTypes && i < nrvoFnType.typeChildren.length) {
-			arg = shimCallArg(g, p, arg, nrvoFnType.typeChildren[i], cd.arguments[i]);
+			const nrvoMutBits: int32 = nrvoSym !== null ? nrvoSym.mutatedParams : 0;
+			arg = shimCallArg(g, p, arg, nrvoFnType.typeChildren[i], cd.arguments[i], nrvoMutBits, i);
 		}
 		argsStr = argsStr + arg;
 	}

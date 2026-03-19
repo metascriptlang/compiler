@@ -22,6 +22,7 @@ function collectDecl(ctx: CheckerContext, node: Node): void {
 		NodeKind.FunctionDecl => collectFunction(ctx, node),
 		NodeKind.ClassDecl => collectClass(ctx, node),
 		NodeKind.InterfaceDecl => collectInterface(ctx, node),
+		NodeKind.StructDecl => collectStruct(ctx, node),
 		NodeKind.EnumDecl => collectEnumDecl(ctx, node),
 		NodeKind.TypeAliasDecl => collectTypeAlias(ctx, node),
 		NodeKind.ExternDecl => collectExtern(ctx, node),
@@ -41,8 +42,9 @@ function collectDecl(ctx: CheckerContext, node: Node): void {
 }
 
 // ===== Local-Only Collector (Phase 1 — skips imports) =====
-// Implementation parity: registers module's own declarations before cross-module import resolution.
-// Used in two-phase checkModuleGraph to pre-populate ExportRegistry with names+kinds.
+// Registers module's own declarations without processing imports.
+// Used by preRegisterStdModule for lightweight export pre-population.
+// For full export registration (with field type resolution), use collectTopLevel instead.
 
 export function collectTopLevelLocal(ctx: CheckerContext, program: Node): void {
 	const stmts = program.data as ProgramData;
@@ -56,11 +58,12 @@ function collectDeclLocal(ctx: CheckerContext, node: Node): void {
 		NodeKind.FunctionDecl => collectFunction(ctx, node),
 		NodeKind.ClassDecl => collectClass(ctx, node),
 		NodeKind.InterfaceDecl => collectInterface(ctx, node),
+		NodeKind.StructDecl => collectStruct(ctx, node),
 		NodeKind.EnumDecl => collectEnumDecl(ctx, node),
 		NodeKind.TypeAliasDecl => collectTypeAlias(ctx, node),
 		NodeKind.ExternDecl => collectExtern(ctx, node),
 		NodeKind.MacroDecl => collectMacro(ctx, node),
-		NodeKind.ImportDecl => {},  // skip — registry not ready yet
+		NodeKind.ImportDecl => {},  // skip — caller handles imports separately or not at all
 		NodeKind.ExportDecl => collectExportLocal(ctx, node),
 		NodeKind.DecoratedDecl => {
 			const dd = node.data as DecoratedDeclData;
@@ -297,18 +300,29 @@ function collectClassMethod(ctx: CheckerContext, className: string, classGeneric
 	registerExtension(ctx.extensionRegistry, classExt);
 }
 
-function collectInterface(ctx: CheckerContext, node: Node): void {
+function collectStructLike(ctx: CheckerContext, node: Node, kind: SymbolKind, isRef: boolean): void {
 	const d = node.data as InterfaceDeclData;
 	const isExtern = (node.flags & NodeFlag.ExternC) !== 0;
-	const structType = createStruct(d.interfaceName, [], [], true);
-	const sym = makeSymbol(d.interfaceName, SymbolKind.Interface, structType, false);
-	structType.sym = sym;
+	const innerType = createStruct(d.interfaceName, [], [], true);
+	// Extern interfaces stay as value types (C header defines the struct layout)
+	const symType = (isRef && !isExtern) ? createRef(innerType) : innerType;
+	const sym = makeSymbol(d.interfaceName, kind, symType, false);
+	symType.sym = sym;
+	innerType.sym = sym;
 	if (isExtern) {
 		setFlag(sym, SymbolFlag.ImportC);
 		setFlag(sym, SymbolFlag.Exported);
 		sym.nativeName = d.interfaceName;
 	}
 	defineOrError(ctx, sym, node);
+}
+
+function collectInterface(ctx: CheckerContext, node: Node): void {
+	collectStructLike(ctx, node, SymbolKind.Interface, true);
+}
+
+function collectStruct(ctx: CheckerContext, node: Node): void {
+	collectStructLike(ctx, node, SymbolKind.Struct, false);
 }
 
 function collectEnumDecl(ctx: CheckerContext, node: Node): void {
@@ -353,6 +367,7 @@ function collectExtern(ctx: CheckerContext, node: Node): void {
 		ExternKind.Function => SymbolKind.Function,
 		ExternKind.Class => SymbolKind.Class,
 		ExternKind.Interface => SymbolKind.Interface,
+		ExternKind.Struct => SymbolKind.Struct,
 		ExternKind.Enum => SymbolKind.Enum,
 		ExternKind.Type => SymbolKind.TypeAlias,
 		_ => SymbolKind.Variable,
@@ -661,6 +676,7 @@ export function getDeclName(node: Node): string {
 		NodeKind.FunctionDecl => { const d = node.data as FunctionDeclData; return d.fnName; },
 		NodeKind.ClassDecl => { const d = node.data as ClassDeclData; return d.className; },
 		NodeKind.InterfaceDecl => { const d = node.data as InterfaceDeclData; return d.interfaceName; },
+		NodeKind.StructDecl => { const d = node.data as InterfaceDeclData; return d.interfaceName; },
 		NodeKind.EnumDecl => { const d = node.data as EnumDeclData; return d.enumName; },
 		NodeKind.TypeAliasDecl => { const d = node.data as TypeAliasDeclData; return d.aliasName; },
 		NodeKind.ExternDecl => { const d = node.data as ExternDeclData; return d.externName; },

@@ -308,6 +308,7 @@ function sgSymbolKindName(kind: SymbolKind): string {
 		SymbolKind.Function => "function",
 		SymbolKind.Class => "class",
 		SymbolKind.Interface => "interface",
+		SymbolKind.Struct => "struct",
 		SymbolKind.TypeAlias => "type",
 		SymbolKind.Enum => "enum",
 		SymbolKind.Parameter => "parameter",
@@ -750,7 +751,7 @@ function sgGetDeclName(node: Node): string {
 		const d = node.data as VariableDeclData;
 		return d.declName;
 	}
-	if (node.kind === NodeKind.InterfaceDecl) {
+	if (node.kind === NodeKind.InterfaceDecl || node.kind === NodeKind.StructDecl) {
 		const d = node.data as InterfaceDeclData;
 		return d.interfaceName;
 	}
@@ -1708,11 +1709,12 @@ function sgCollectOneSymbol(node: Node, ctx: CheckerContext, result: SgDocumentS
 		result.push(item);
 		return;
 	}
-	if (node.kind === NodeKind.InterfaceDecl) {
+	if (node.kind === NodeKind.InterfaceDecl || node.kind === NodeKind.StructDecl) {
 		const ifd = node.data as InterfaceDeclData;
 		const dt = sgJoinFieldNames(ifd.interfaceFields);
 		const children = sgCollectInterfaceChildren(ifd, node.location);
-		const item: SgDocumentSymbol = { name: ifd.interfaceName, kind: SymbolKind.Interface, location: node.location, detail: dt, isMutable: false, children };
+		const skind = node.kind === NodeKind.StructDecl ? SymbolKind.Struct : SymbolKind.Interface;
+		const item: SgDocumentSymbol = { name: ifd.interfaceName, kind: skind, location: node.location, detail: dt, isMutable: false, children };
 		result.push(item);
 		return;
 	}
@@ -2273,7 +2275,7 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 		return;
 	}
 
-	if (node.kind === NodeKind.InterfaceDecl) {
+	if (node.kind === NodeKind.InterfaceDecl || node.kind === NodeKind.StructDecl) {
 		const ifd = node.data as InterfaceDeclData;
 		if (ifd.interfaceName.length > 0 && ifd.nameLocation !== null) {
 			const tok: SgSemanticToken = { line: ifd.nameLocation.line, col: ifd.nameLocation.column, length: ifd.interfaceName.length, tokenType: 4, modifiers: 1 };

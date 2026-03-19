@@ -46,7 +46,7 @@ export function isAlive(syms: NameSet, name: string): boolean {
 function isHoistedDecl(node: Node): boolean {
 	return match (node.kind) {
 		NodeKind.FunctionDecl | NodeKind.ClassDecl | NodeKind.EnumDecl
-			| NodeKind.InterfaceDecl | NodeKind.TypeAliasDecl
+			| NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.TypeAliasDecl
 			| NodeKind.ImportDecl | NodeKind.ExportDecl | NodeKind.ExternDecl => true,
 		_ => false,
 	};

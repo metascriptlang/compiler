@@ -66,7 +66,7 @@ Tracks function-local state:
 
 ### NRVO (Named Return Value Optimization)
 
-Large value-types (interfaces, tuples, results) are returned via an implicit out-parameter `Result*` rather than on the stack.
+Large value-types (structs, tuples, results) are returned via an implicit out-parameter `Result*` rather than on the stack. Interfaces and classes are reference types (Ref<Struct>) — returned as pointers, no NRVO needed.
 - `getTypeDesc` determines if a type needs NRVO
 - `genCallExpr` injects the destination address as the first argument
 - **Convention**: Result pointer is the FIRST parameter (some references put it LAST). Internally consistent — both direct calls and closure calls use first-param position.

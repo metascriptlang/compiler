@@ -6,7 +6,16 @@ import { isNumeric, skipModifier, typeNameOf, numberType, stringType, booleanTyp
 
 // ===== Assignability =====
 
+let _assignDepth = 0;
 export function isAssignable(source: Type, target: Type): boolean {
+	if (_assignDepth > 20) return true;
+	_assignDepth = _assignDepth + 1;
+	const result = isAssignableInner(source, target);
+	_assignDepth = _assignDepth - 1;
+	return result;
+}
+
+function isAssignableInner(source: Type, target: Type): boolean {
 	// Reference parity: sink and lent modifiers are transparent ownership modifiers — unwrap before comparing
 	// Standard reference implementation skips these modifiers during type relationship checks.
 	source = skipModifier(source);
@@ -192,7 +201,16 @@ export enum TypeRelation {
 	Exact,          // 6 - exact match
 }
 
+let _relationDepth = 0;
 export function typeRelation(formal: Type, actual: Type): TypeRelation {
+	if (_relationDepth > 20) return TypeRelation.Generic;
+	_relationDepth = _relationDepth + 1;
+	const result = typeRelationInner(formal, actual);
+	_relationDepth = _relationDepth - 1;
+	return result;
+}
+
+function typeRelationInner(formal: Type, actual: Type): TypeRelation {
 	// Same kind: dispatch on type-specific rules
 	if (formal.kind === actual.kind) {
 		return match (formal.kind) {
@@ -426,9 +444,12 @@ function checkGenericSpecialization(typeA: Type, typeB: Type): number {
 // Count generic nesting depth of a type (Standard reference implementation).
 // Higher depth = more specific overload.
 // GenericParam = 1, Container<T> = 1 + sumGeneric(T)
+let sumGenericDepth = 0;
 function sumGeneric(t: Type): number {
 	if (t === null) return 0;
 	if (t.kind === TypeKind.GenericParam || t.kind === TypeKind.Unknown) return 1;
+	if (sumGenericDepth > 20) return 0;
+	sumGenericDepth = sumGenericDepth + 1;
 	let childSum = 0;
 	let i = 0;
 	while (i < t.typeChildren.length) {
@@ -441,7 +462,7 @@ function sumGeneric(t: Type): number {
 	if (t.typeExtra !== null) {
 		childSum = childSum + sumGeneric(t.typeExtra);
 	}
-	// If any sub-component is generic, count this type as a container (+1 depth)
+	sumGenericDepth = sumGenericDepth - 1;
 	if (childSum > 0) return childSum + 1;
 	return 0;
 }
