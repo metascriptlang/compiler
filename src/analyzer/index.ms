@@ -25,16 +25,10 @@ import { transformProgram } from "../transform/index";
 // Monotonic: flips true on first RC type, never checks again.
 
 function programNeedsRC(checkerCtx: CheckerContext): boolean {
-	const scopes = checkerCtx.table.allScopes;
-	let i = 0;
-	while (i < scopes.length) {
-		const syms = scopes[i].symbols;
-		let j = 0;
-		while (j < syms.length) {
-			if (needsRC(syms[j].symbolType)) return true;
-			j = j + 1;
+	for (const scope of checkerCtx.table.allScopes) {
+		for (const sym of scope.symbols) {
+			if (needsRC(sym.symbolType)) return true;
 		}
-		i = i + 1;
 	}
 	return false;
 }

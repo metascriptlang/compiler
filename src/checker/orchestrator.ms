@@ -99,7 +99,6 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 		const earlyExports: ExportedSymInfo[] = [];
 		for (const sym of p1ctx.table.current.symbols) {
 			if (hasFlag(sym, SymbolFlag.Exported)) {
-				console.log("EXPORT: " + sym.name + " kind=" + sym.symbolKind.toString());
 				const info: ExportedSymInfo = {
 					name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
 					overloadTypes: [],
@@ -114,11 +113,7 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 				location: sym.location !== null ? sym.location : makeLoc(0, 0),
 				memberLocations: sym.declNode !== null && sym.declNode.kind === NodeKind.EnumDecl ? (sym.declNode.data as EnumDeclData).memberLocations : [],
 				};
-				if (info === null) {
-					console.log("BUG: info is null for sym=" + sym.name);
-				} else {
-					earlyExports.push(info);
-				}
+				earlyExports.push(info);
 			}
 		}
 		registerModuleExports(registry, path, earlyExports);

@@ -1669,7 +1669,7 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 			clearPendingForVar(dctx, leftD.name);
 			const tmpName = freshTemp(dctx.ctx, "old");
 			const saveTmp = makeVarDecl(tmpName, makeIdent(leftD.name, loc), DeclKind.Const, loc);
-			saveTmp.nodeType = sym.symbolType;
+			saveTmp.nodeType = sym !== null ? sym.symbolType : (bd.left.nodeType !== null ? bd.left.nodeType : rhs.nodeType);
 			const destroyTmp = makeDestroyCall(tmpName, rcInfo, loc);
 			const result: Node[] = [];
 			for (const p of preStmts) { result.push(p); }
@@ -1746,7 +1746,7 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 			clearPendingForVar(dctx, leftD.name);
 			const tmpName = freshTemp(dctx.ctx, "old");
 			const saveTmp = makeVarDecl(tmpName, makeIdent(leftD.name, loc), DeclKind.Const, loc);
-			saveTmp.nodeType = sym.symbolType;
+			saveTmp.nodeType = sym !== null ? sym.symbolType : (bd.left.nodeType !== null ? bd.left.nodeType : rhs.nodeType);
 			const destroyTmp = makeDestroyCall(tmpName, rcInfo, loc);
 			return makeBlock([saveTmp, stmt, destroyTmp], loc);
 		}

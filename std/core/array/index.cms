@@ -5,6 +5,20 @@
 @include("std/core/array/native.h");
 @compile("std/core/array/native.c");
 
+// ===== Array<T> — Generic array type =====
+// Backed by per-element-type C arrays (monomorphized by the compiler).
+// This declaration makes Array<T> a real symbol in scope for:
+//   - new Array<T>(size) — typed construction
+//   - Array<T> in type annotations
+//   - LSP hover/completion
+// NOTE: The actual array type is TypeKind.Array (compiler magic).
+// This class declaration is for symbol visibility only — resolveAnnotation
+// handles "Array<T>" as a keyword, and .length is resolved by the checker's
+// special case (checkExprPass.ms), not from this struct field.
+export class Array<T> {
+	length: number;
+}
+
 // ===== Number Array =====
 
 /**

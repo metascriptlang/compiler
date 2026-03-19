@@ -725,6 +725,9 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 			ensureTypeHooks(baseTypeName, lctx, loc);
 		}
 
+		// Ref types: HiddenDeref unwraps Ref<Struct> → Struct for field access.
+		// Value types (Var<T>): params are T* pointers — MemberExpr uses -> automatically
+		// when it sees isPointerType on the identifier's symbolType.
 		const isRef = classType !== null;
 		const x1 = isRef ? makeHiddenDeref(makeIdent(p1, loc), loc) : makeIdent(p1, loc);
 		const x2 = (isRef && !isTrace) ? makeHiddenDeref(makeIdent(p2, loc), loc) : makeIdent(p2, loc);

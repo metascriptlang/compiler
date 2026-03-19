@@ -144,9 +144,10 @@ function applyExtensionFlags(flags: string, params: string[], fnParamTypes: stri
 		if (flags === "") { flags = `sext:${staticType}`; }
 		else { flags = `${flags}|sext:${staticType}`; }
 	}
-	// Out parameters: strip "out:" prefix, encode positions in flags
+	// Out/ref/readonly parameters: strip prefix, encode positions in flags
 	let outPositions = "";
 	let refPositions = "";
+	let rdonlyPositions = "";
 	for (let oi = 0; oi < params.length; oi += 1) {
 		if (params[oi].length > 4 && params[oi].slice(0, 4) === "out:") {
 			params[oi] = params[oi].slice(4, params[oi].length);
@@ -158,6 +159,11 @@ function applyExtensionFlags(flags: string, params: string[], fnParamTypes: stri
 			if (refPositions === "") { refPositions = `${oi}`; }
 			else { refPositions = `${refPositions},${oi}`; }
 		}
+		if (params[oi].length > 7 && params[oi].slice(0, 7) === "rdonly:") {
+			params[oi] = params[oi].slice(7, params[oi].length);
+			if (rdonlyPositions === "") { rdonlyPositions = `${oi}`; }
+			else { rdonlyPositions = `${rdonlyPositions},${oi}`; }
+		}
 	}
 	if (outPositions !== "") {
 		if (flags === "") { flags = `out:${outPositions}`; }
@@ -166,6 +172,10 @@ function applyExtensionFlags(flags: string, params: string[], fnParamTypes: stri
 	if (refPositions !== "") {
 		if (flags === "") { flags = `ref:${refPositions}`; }
 		else { flags = `${flags}|ref:${refPositions}`; }
+	}
+	if (rdonlyPositions !== "") {
+		if (flags === "") { flags = `rdonly:${rdonlyPositions}`; }
+		else { flags = `${flags}|rdonly:${rdonlyPositions}`; }
 	}
 	// Encode generic param names
 	if (genericNames !== "") {

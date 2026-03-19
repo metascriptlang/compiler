@@ -1,29 +1,11 @@
 // std/os — System information (Node.js os module parity)
 // import { hostname, platform, arch, cpus, totalmem, freemem } from "std/os"
 
-@include("std/os/native.h");
+import { CpuInfo, msOsHostname, msOsPlatform, msOsArch, msOsType, msOsRelease, msOsMachine, msOsCpuCount, msOsTotalMem, msOsFreeMem, msOsUptime, msOsHomedir, msOsTmpdir, msOsEndianness } from "./native.h";
 
-extern function msOsHostname(): string;
-extern function msOsPlatform(): string;
-extern function msOsArch(): string;
-extern function msOsType(): string;
-extern function msOsRelease(): string;
-extern function msOsMachine(): string;
-extern function msOsCpuCount(): int32;
-extern function msOsTotalMem(): int64;
-extern function msOsFreeMem(): int64;
-extern function msOsUptime(): number;
-extern function msOsHomedir(): string;
-extern function msOsTmpdir(): string;
-extern function msOsEndianness(): string;
+type ArrC = Array<CpuInfo>;
 
-// CpuInfo defined in C header — extern interface, no struct duplication
-extern interface CpuInfo {
-	model: string;
-	speed: int32;
-}
-
-// C fills buffer via Span — pointer + length expansion
+// Span expansion: CpuInfo* buf, int64_t buf_len → out buf: Span<CpuInfo>
 extern function msOsCpus(out buf: Span<CpuInfo>): int32;
 
 export function hostname(): string { return msOsHostname(); }
@@ -35,14 +17,9 @@ export function machine(): string { return msOsMachine(); }
 
 export function cpus(): CpuInfo[] {
 	const count = msOsCpuCount();
-	const result: CpuInfo[] = [];
-	let i = 0;
-	while (i < count) {
-		result.push({ model: "", speed: 0 });
-		i = i + 1;
-	}
-	const filled = msOsCpus(result);
-	return result;
+	const buf = new Array<CpuInfo>(count);
+	const filled = msOsCpus(buf);
+	return buf;
 }
 
 export function totalmem(): int64 { return msOsTotalMem(); }

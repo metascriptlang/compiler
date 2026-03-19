@@ -353,6 +353,31 @@ export function ccgIntroducedPtr(t: Type): boolean {
 	};
 }
 
+// ===== Struct-aware param promotion =====
+// Combines ccgIntroducedPtr with mutatedParams analysis for struct params.
+// Struct params: mutated → T* (propagates), not mutated + big → const T*, not mutated + small → value.
+// Non-struct params: same as ccgIntroducedPtr (no mutation-based promotion).
+export function shouldIndirectParam(paramType: Type, isMutated: boolean): boolean {
+	if (paramType === null) return false;
+	const inner = skipModifier(paramType);
+	// Struct-specific: mutation analysis controls promotion
+	if (inner !== null && isStructType(inner)) {
+		if (isMutated) return true;                    // mutated struct → T* (propagates)
+		return getTypeSize(inner) > PTR_THRESHOLD;     // not mutated → big = const T*, small = value
+	}
+	// Non-struct types: always use ccgIntroducedPtr (mutation doesn't change ABI)
+	return ccgIntroducedPtr(paramType);
+}
+
+// Should this promoted param use const qualifier?
+// Only unmutated struct params get const — all other promoted types use plain T*.
+export function shouldConstParam(paramType: Type, isMutated: boolean): boolean {
+	if (isMutated) return false;
+	if (paramType === null) return false;
+	const inner = skipModifier(paramType);
+	return inner !== null && isStructType(inner);
+}
+
 // needsRC is now in checker/types.ms — imported above
 
 // ===== NRVO Detection (Type-based, Standard reference parity) =====
@@ -521,9 +546,12 @@ export function getTypeDesc(g: CGen, t: Type): string {
 		return ptrType;
 	}
 	if (k === TypeKind.Var) {
+		// Reference parity: tyVar → T* in C (pass by pointer).
+		// liftdestructors uses Var<T> for lifecycle hook params (=destroy, =copy, =sink, =wasMoved).
 		const inner = getTypeDesc(g, t.typeReturn);
-		typeCacheSet(g.typeCache, key, inner);
-		return inner;
+		const varPtr = inner + "*";
+		typeCacheSet(g.typeCache, key, varPtr);
+		return varPtr;
 	}
 	if (k === TypeKind.Borrow) {
 		const inner = getTypeDesc(g, t.typeReturn);

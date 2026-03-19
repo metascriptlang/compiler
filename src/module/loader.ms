@@ -109,9 +109,21 @@ function inlineHeaderImports(source: string, modulePath: string, provider: Sourc
 		const headerSource = provideSource(provider, headerPath);
 		if (!headerSource.ok) { searchPos = importIdx + 7; continue; }
 
-		// Generate extern declarations (without export — inline, not a module)
-		let translated = translateCHeader(headerSource.value);
-		// Strip "export " prefix from each declaration (inline declarations don't need export)
+		// Extract import list: import { A, B, C } → ["A", "B", "C"]
+		const importedNames: string[] = [];
+		const braceOpen = line.indexOf("{");
+		const braceClose = line.indexOf("}");
+		if (braceOpen >= 0 && braceClose > braceOpen) {
+			const importList = line.slice(braceOpen + 1, braceClose).split(",");
+			for (const n of importList) {
+				const trimmed = n.trim();
+				if (trimmed.length > 0) importedNames.push(trimmed);
+			}
+		}
+
+		// Generate extern declarations — only for symbols in importedNames
+		let translated = translateCHeader(headerSource.value, importedNames);
+		// Strip "export " prefix (inline declarations don't need export)
 		translated = translated.split("export extern ").join("extern ");
 
 		// Auto-compile companion .c file if it exists (e.g., native.h → native.c)
@@ -144,27 +156,29 @@ function isCHeaderPath(path: string): boolean {
 
 function cTypeToMs(cType: string): string {
 	const t = cType.trim();
-	if (t === "msString" || t === "const char*" || t === "char*") return "string";
-	if (t === "int32_t" || t === "int") return "int32";
-	if (t === "int64_t" || t === "long long") return "int64";
-	if (t === "uint8_t" || t === "unsigned char") return "uint8";
-	if (t === "uint16_t") return "uint16";
-	if (t === "uint32_t" || t === "unsigned int") return "uint32";
-	if (t === "uint64_t") return "uint64";
-	if (t === "double") return "number";
-	if (t === "float") return "float32";
-	if (t === "void") return "void";
-	if (t === "bool" || t === "_Bool") return "boolean";
-	if (t === "size_t") return "number";
-	// Pointer types → int64 (opaque handle)
 	if (t.endsWith("*")) return "int64";
-	// Unknown → string fallback
-	return t;
+	return match (t) {
+		"msString" | "const char*" | "char*" => "string",
+		"int32_t" | "int" => "int32",
+		"int64_t" | "long long" => "int64",
+		"uint8_t" | "unsigned char" => "uint8",
+		"uint16_t" => "uint16",
+		"uint32_t" | "unsigned int" => "uint32",
+		"uint64_t" => "uint64",
+		"double" | "size_t" => "number",
+		"float" => "float32",
+		"void" => "void",
+		"bool" | "_Bool" => "boolean",
+		_ => t,
+	};
 }
 
-function translateCHeader(source: string): string {
-	let result = "// Auto-generated from C header\n";
+export function translateCHeader(source: string, importedNames: string[]): string {
+	let result = "";
+	let resultLines = 1;  // current line count in result
 	let pos = 0;
+	let lastLinePos = 0;  // position up to which we've counted lines
+	let lastLineNum = 1;  // line number at lastLinePos
 
 	while (pos < source.length) {
 		// Skip whitespace and comments
@@ -208,10 +222,13 @@ function translateCHeader(source: string): string {
 			while (nameEnd < source.length && source.charCodeAt(nameEnd) > 32 && source.charCodeAt(nameEnd) !== ";".code) nameEnd = nameEnd + 1;
 			const structName = source.slice(nameStart, nameEnd);
 
-			if (structName.length > 0 && structName !== "{") {
+			if (structName.length > 0 && structName !== "{" && (importedNames.length === 0 || importedNames.indexOf(structName) >= 0)) {
+				// Pad to preserve original line number (go-to-definition accuracy)
+				while (lastLinePos < pos) { if (source.charCodeAt(lastLinePos) === "\n".code) lastLineNum = lastLineNum + 1; lastLinePos = lastLinePos + 1; }
+				while (resultLines < lastLineNum) { result = result + "\n"; resultLines = resultLines + 1; }
 				// Parse fields inside braces
 				const fieldsStr = source.slice(braceStart + 1, braceEnd - 1).trim();
-				result = result + `export extern interface ${structName} {\n`;
+				result = result + `export extern struct ${structName} {\n`; resultLines = resultLines + 1;
 				// Split by semicolons for fields
 				let fPos = 0;
 				while (fPos < fieldsStr.length) {
@@ -228,12 +245,12 @@ function translateCHeader(source: string): string {
 						if (lastSpace > 0) {
 							const fType = fieldDecl.slice(0, lastSpace).trim();
 							const fName = fieldDecl.slice(lastSpace + 1, fieldDecl.length).trim();
-							result = result + `\t${fName}: ${cTypeToMs(fType)};\n`;
+							result = result + `\t${fName}: ${cTypeToMs(fType)};\n`; resultLines = resultLines + 1;
 						}
 					}
 					fPos = semi + 1;
 				}
-				result = result + "}\n\n";
+				result = result + "}\n\n"; resultLines = resultLines + 2;
 			}
 			// Skip past semicolon
 			pos = source.indexOf(";", braceEnd);
@@ -256,8 +273,9 @@ function translateCHeader(source: string): string {
 			&& !funcLine.startsWith("#") && !funcLine.startsWith("extern \"C\"")
 			&& !funcLine.startsWith("{") && !funcLine.startsWith("}")
 			&& funcLine.indexOf("(") > 0 && (funcLine.endsWith(";") || funcLine.endsWith(") {"))) {
-			// Normalize: strip trailing " {" for function definitions
-			if (funcLine.endsWith(") {")) funcLine = funcLine.slice(0, funcLine.length - 2) + ";";
+			// Function definition with body: skip the entire body
+			const hasBody = funcLine.endsWith(") {") || line.endsWith(") {");
+			if (hasBody) funcLine = funcLine.slice(0, funcLine.length - 2) + ";";
 			// Parse: returnType funcName(param1Type param1Name, ...);
 			const parenOpen = funcLine.indexOf("(");
 			const parenClose = funcLine.lastIndexOf(")");
@@ -269,7 +287,10 @@ function translateCHeader(source: string): string {
 					const funcName = beforeParen.slice(lastSp + 1, beforeParen.length).trim();
 					const paramsStr = funcLine.slice(parenOpen + 1, parenClose).trim();
 
-					if (funcName.length > 0 && funcName.charCodeAt(0) !== "*".code) {
+					if (funcName.length > 0 && funcName.charCodeAt(0) !== "*".code && (importedNames.length === 0 || importedNames.indexOf(funcName) >= 0)) {
+						// Pad to preserve original line number
+						while (lastLinePos < pos) { if (source.charCodeAt(lastLinePos) === "\n".code) lastLineNum = lastLineNum + 1; lastLinePos = lastLinePos + 1; }
+						while (resultLines < lastLineNum) { result = result + "\n"; resultLines = resultLines + 1; }
 						let msParams = "";
 						if (paramsStr !== "void" && paramsStr.length > 0) {
 							const params = paramsStr.split(",");
@@ -291,8 +312,23 @@ function translateCHeader(source: string): string {
 								}
 							}
 						}
-						result = result + `export extern function ${funcName}(${msParams}): ${cTypeToMs(retType)};\n`;
+						result = result + `export extern function ${funcName}(${msParams}): ${cTypeToMs(retType)};\n`; resultLines = resultLines + 1;
 					}
+				}
+			}
+			// Skip function body: find matching closing brace
+			if (hasBody) {
+				let bodyDepth = 1;
+				let bodyPos = source.indexOf("{", pos);
+				if (bodyPos >= 0) {
+					bodyPos = bodyPos + 1;
+					while (bodyPos < source.length && bodyDepth > 0) {
+						if (source.charCodeAt(bodyPos) === "{".code) bodyDepth = bodyDepth + 1;
+						if (source.charCodeAt(bodyPos) === "}".code) bodyDepth = bodyDepth - 1;
+						bodyPos = bodyPos + 1;
+					}
+					pos = bodyPos;
+					continue;
 				}
 			}
 		}
@@ -618,6 +654,22 @@ test "C header import inlines declarations" {
 	const appMod = findModule(graph, "/src/app.ms");
 	assert appMod !== null;
 	assert appMod.errors.length === 0;
+}
+
+test "translateCHeader extracts struct after static inline functions" {
+	const header = '#ifndef GUARD\n#define GUARD\n#include <stdio.h>\n\nstatic inline msString getFoo(void) {\n\treturn msStringFromCStr("foo");\n}\n\ntypedef struct {\n\tmsString name;\n\tint32_t age;\n} Person;\n\nstatic inline int32_t getAge(void) {\n\treturn 42;\n}\n\n#endif';
+	const ms = translateCHeader(header, []);
+	assert ms.indexOf("Person") >= 0;
+	assert ms.indexOf("name: string") >= 0;
+	assert ms.indexOf("age: int32") >= 0;
+}
+
+test "translateCHeader with empty filter extracts all" {
+	const header = 'typedef struct {\n\tmsString model;\n\tint32_t speed;\n} CpuInfo;\n\nstatic inline msString getName(void) {\n\treturn msStringFromCStr("cpu");\n}';
+	const ms = translateCHeader(header, []);
+	assert ms.indexOf("CpuInfo") >= 0;
+	assert ms.indexOf("model: string") >= 0;
+	assert ms.indexOf("getName") >= 0;
 }
 
 test "parse error recorded" {

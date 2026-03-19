@@ -17,7 +17,7 @@ import {
 	emitProcLocalsLine,
 } from "./context";
 import { mangle, mangleFieldName, mangledFunctionName, safeName } from "./names";
-import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, ccgIntroducedPtr, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, getArrayContentType } from "./types";
+import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, ccgIntroducedPtr, shouldIndirectParam, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, getArrayContentType } from "./types";
 import { formatCNumber, cBoolLiteral, cNullLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { findChar } from "../../utils/string";
 import { ensureDrcProto, ensureCrossModuleProto } from "./forward";
@@ -41,8 +41,8 @@ function isRefArrayAccessCall(node: Node): boolean {
 }
 
 // Shared ABI shim for call arguments — reference parity: genArg
-// Single point for ccgIntroducedPtr, pointer/value conversion, and untyped literal handling.
-// mutBits/paramIdx: callee's sym.mutatedParams bitfield + param index, gates const-ptr promotion
+// Single point for struct-aware pointer promotion, pointer/value conversion, and untyped literal handling.
+// mutBits/paramIdx: callee's sym.mutatedParams bitfield + param index for struct-aware promotion.
 export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Type, argNode: Node, mutBits: int32, paramIdx: number): string {
 	if (paramType !== null && argNode.nodeType !== null && argNode.kind !== NodeKind.HiddenAddr) {
 		const paramIsPtr = isPointerType(paramType);
@@ -52,7 +52,7 @@ export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Type, arg
 			argIsPtr = isPointerType(argNode.resolvedSym.symbolType);
 		}
 		const isMutated = (mutBits & (1 << (paramIdx as int32))) !== 0;
-		const paramCcgPtr = !isMutated && ccgIntroducedPtr(paramType);
+		const paramCcgPtr = shouldIndirectParam(paramType, isMutated);
 		if (paramIsPtr && !argIsPtr && argNode.kind !== NodeKind.NullLiteral) {
 			return safeAddrOf(g, p, arg, argNode, paramType);
 		} else if (!paramIsPtr && argIsPtr && !paramCcgPtr) {
@@ -817,11 +817,16 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			ctx.results.push(`${obj}.${d.property}`);
 			return;
 		}
-		// .length/.byteLength → .len for runtime types (arrays, strings)
-		// User-defined structs keep their original field names
+		// .length/.byteLength → .len for runtime types (arrays, strings, spans)
+		// SizedArray: compile-time constant size (no .len field in C struct)
 		if (d.property === "length" || d.property === "byteLength") {
 			const objType = d.object.nodeType;
+			if (objType !== null && objType.kind === TypeKind.SizedArray) {
+				ctx.results.push(String(objType.typeFlags));
+				return;
+			}
 			const isRuntimeType = objType !== null && (objType.kind === TypeKind.Array
+				|| objType.kind === TypeKind.Span
 				|| objType.kind === TypeKind.String);
 			if (isRuntimeType) {
 				ctx.results.push(obj + ".len");

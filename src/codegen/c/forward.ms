@@ -9,7 +9,7 @@ import {
 	CGen, CSection,
 	addLine, sec, nameSetHas, nameSetAdd,
 } from "./context";
-import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr } from "./types";
+import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam } from "./types";
 
 // ===== DRC forward prototypes =====
 
@@ -72,6 +72,11 @@ export function ensureDrcProto(g: CGen, callee: string): void {
 // Called from genCallExpr when a cross-module function is referenced.
 export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Type, sym: Symbol): void {
 	if (fnType === null || fnType.kind !== TypeKind.Function) return;
+	// DRC hooks: use ensureDrcProto instead (correct fixed-convention signatures)
+	if (isDrcLifecycleName(calleeName)) {
+		ensureDrcProto(g, calleeName);
+		return;
+	}
 	if (sym !== null && sym.modulePath !== "" && sym.modulePath === g.modulePath) return;
 	const protoKey = "proto:" + calleeName;
 	if (nameSetHas(g.declaredProcs, protoKey)) return;
@@ -90,8 +95,8 @@ export function ensureCrossModuleProto(g: CGen, calleeName: string, fnType: Type
 			if (i > 0) paramList = paramList + ", ";
 			let pType = getTypeDesc(g, fnType.typeChildren[i]);
 			const fwdMut = (fwdMutBits & (1 << (i as int32))) !== 0;
-			if (!fwdMut && ccgIntroducedPtr(fnType.typeChildren[i]) && pType.byteLength > 0 && pType.charAt(pType.byteLength as int64 - 1) !== "*") {
-				pType = pType + "*";
+			if (shouldIndirectParam(fnType.typeChildren[i], fwdMut) && pType.byteLength > 0 && pType.charAt(pType.byteLength as int64 - 1) !== "*") {
+				pType = shouldConstParam(fnType.typeChildren[i], fwdMut) ? "const " + pType + "*" : pType + "*";
 			}
 			paramList = paramList + pType;
 			i += 1;

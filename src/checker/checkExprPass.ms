@@ -72,10 +72,20 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 	const paramNames = splitTopLevel(genericParams, ",");
 	const trimmedParamNames: string[] = [];
 	const concreteTypes: Type[] = [];
+	let typeArgCol = ltCol + 1;  // column after '<'
 	for (let pi = 0; pi < paramNames.length; pi += 1) {
 		trimmedParamNames.push(paramNames[pi].trim());
 		const argName = pi < args.length ? args[pi].trim() : "";
-		concreteTypes.push(resolveAnnotation(argName, ctx, 0, 0));
+		const resolved = resolveAnnotation(argName, ctx, callee.location.line, typeArgCol);
+		concreteTypes.push(resolved);
+		// Record type arg symbol for hover/go-to-definition
+		if (argName !== "") {
+			const typeArgSym = lookupSymbol(ctx.table, argName);
+			if (typeArgSym !== null) {
+				sgRecordSym(ctx, callee.location.line, typeArgCol, typeArgCol + argName.length, typeArgSym, typeArgSym.symbolType, typeArgSym.symbolKind, argName, "", false);
+			}
+			typeArgCol = typeArgCol + argName.length + 2;  // skip "T, " for next arg
+		}
 	}
 	const instType = instantiateGeneric(baseSym.symbolType, trimmedParamNames, concreteTypes);
 	const instInner = (instType.kind === TypeKind.Ref && instType.typeReturn !== null) ? instType.typeReturn : instType;
@@ -154,6 +164,8 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 				if (md.property === "length" && md.object.nodeType !== null) {
 					if (md.object.nodeType.kind === TypeKind.String || md.object.nodeType.kind === TypeKind.CString) {
 						addError(ctx, "cannot assign to 'length' on string (strings are immutable)", d.left.location.line, d.left.location.column);
+					} else if (md.object.nodeType.kind === TypeKind.SizedArray) {
+						addError(ctx, "cannot modify 'length' on fixed-size array", d.left.location.line, d.left.location.column);
 					} else if (md.object.nodeType.kind === TypeKind.Array && d.operator !== "=") {
 						addError(ctx, "compound assignment to 'length' is not allowed; use 'arr.length = arr.length " + d.operator.slice(0, d.operator.length - 1) + " n' instead", d.left.location.line, d.left.location.column);
 					}
@@ -229,8 +241,12 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			if (d.updateArg.kind === NodeKind.MemberExpr) {
 				const umd = d.updateArg.data as MemberExprData;
 				if (umd.property === "length" && umd.object.nodeType !== null &&
-					(umd.object.nodeType.kind === TypeKind.Array || umd.object.nodeType.kind === TypeKind.String || umd.object.nodeType.kind === TypeKind.CString)) {
-					addError(ctx, "cannot use increment/decrement on 'length'; use 'arr.length = n' instead", d.updateArg.location.line, d.updateArg.location.column);
+					(umd.object.nodeType.kind === TypeKind.Array || umd.object.nodeType.kind === TypeKind.SizedArray || umd.object.nodeType.kind === TypeKind.Span || umd.object.nodeType.kind === TypeKind.String || umd.object.nodeType.kind === TypeKind.CString)) {
+					if (umd.object.nodeType.kind === TypeKind.SizedArray) {
+						addError(ctx, "cannot modify 'length' on fixed-size array", d.updateArg.location.line, d.updateArg.location.column);
+					} else {
+						addError(ctx, "cannot use increment/decrement on 'length'; use 'arr.length = n' instead", d.updateArg.location.line, d.updateArg.location.column);
+					}
 				}
 			}
 			return numberType();
@@ -843,6 +859,10 @@ function fillDefaultArgsForNode(ctx: CheckerContext, callNode: Node, fnName: str
 
 // ===== NewExpr =====
 
+function checkNewArgs(ctx: CheckerContext, args: Node[]): void {
+	for (const arg of args) { checkExpr(ctx, arg, null); }
+}
+
 function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type): Type {
 	const d = node.data as NewExprData;
 	// new BuiltinType<...>() — construct value types (Map, Set) and Promise
@@ -851,19 +871,32 @@ function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type): Type {
 		// Interface/value type: new Map() / new Array(32) with type from variable annotation
 		if (expected !== null && (expected.kind === TypeKind.Struct || expected.kind === TypeKind.GenericInstance)) {
 			node.nodeType = expected;
-			// Check arguments
-			for (let ai = 0; ai < d.newArguments.length; ai += 1) {
-				checkExpr(ctx, d.newArguments[ai], null);
-			}
+			checkNewArgs(ctx, d.newArguments);
 			return expected;
 		}
 		// Array with expected element type: new Array(32) in typed context
 		if (expected !== null && expected.kind === TypeKind.Array && id.name === "Array") {
 			node.nodeType = expected;
-			for (let ai = 0; ai < d.newArguments.length; ai += 1) {
-				checkExpr(ctx, d.newArguments[ai], null);
-			}
+			checkNewArgs(ctx, d.newArguments);
 			return expected;
+		}
+		// new Array<T>() or new Array<T>(size) — resolve element type from explicit type arg
+		if (id.name === "Array") {
+			const ltCol = d.newCallee.location.column + id.name.length;
+			const typeArgStr = getExplicitTypeArg(d.newCallee.location.line, ltCol);
+			if (typeArgStr !== "") {
+				const trimmed = typeArgStr.trim();
+				const elemType = resolveAnnotation(trimmed, ctx, d.newCallee.location.line, ltCol + 1);
+				// Record type arg symbol for hover/go-to-definition
+				const typeArgSym = lookupSymbol(ctx.table, trimmed);
+				if (typeArgSym !== null) {
+					sgRecordSym(ctx, d.newCallee.location.line, ltCol + 1, ltCol + 1 + trimmed.length, typeArgSym, typeArgSym.symbolType, typeArgSym.symbolKind, trimmed, "", false);
+				}
+				const arrType = createArray(elemType);
+				node.nodeType = arrType;
+				checkNewArgs(ctx, d.newArguments);
+				return arrType;
+			}
 		}
 		// Promise, Map, Set all resolve through resolveGenericNewExpr below
 	}
@@ -1742,7 +1775,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 	}
 
 	// Builtin properties: .length on array/string
-	if (d.property === "length" && (resolvedObjType.kind === TypeKind.Array || resolvedObjType.kind === TypeKind.String || resolvedObjType.kind === TypeKind.CString)) {
+	if (d.property === "length" && (resolvedObjType.kind === TypeKind.Array || resolvedObjType.kind === TypeKind.SizedArray || resolvedObjType.kind === TypeKind.Span || resolvedObjType.kind === TypeKind.String || resolvedObjType.kind === TypeKind.CString)) {
 		// Create a synthetic symbol for 'length' to satisfy the validator
 		const lengthSym = makeSymbol("length", SymbolKind.Property, numberType(), false);
 		lengthSym.state = SymbolState.Shaped;

@@ -147,9 +147,9 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 	while (!isAtEnd(state) && current(state).kind !== TokenKind.RParen) {
 		let paramPrefix = "";
 		if (current(state).kind === TokenKind.DotDotDot) { paramPrefix = "..."; advance(state); }
-		// Skip constructor param modifiers: public/private/protected/readonly
+		// Skip constructor param modifiers: public/private/protected
 		if (current(state).kind === TokenKind.Public || current(state).kind === TokenKind.Private ||
-			current(state).kind === TokenKind.Protected || current(state).kind === TokenKind.Readonly) {
+			current(state).kind === TokenKind.Protected) {
 			advance(state);
 		}
 		// Out parameter: out name: Type → stored as "out:name"
@@ -161,6 +161,12 @@ export function parseParamList(state: ParserState, fnName: string): string[] {
 		if (current(state).kind === TokenKind.Ref) {
 			advance(state);
 			paramPrefix = `${paramPrefix}ref:`;
+		}
+		// Readonly parameter: readonly name: Type → stored as "rdonly:name"
+		// Cannot combine with out/ref — readonly means value copy, out/ref means pointer
+		if (current(state).kind === TokenKind.Readonly && paramPrefix.indexOf("out:") < 0 && paramPrefix.indexOf("ref:") < 0) {
+			advance(state);
+			paramPrefix = `${paramPrefix}rdonly:`;
 		}
 		// Extension method receiver (must be first param)
 		if (params.length === 0 && current(state).kind === TokenKind.This) {

@@ -4,7 +4,7 @@
 // formatHover, collectDiagnostics. No I/O, no protocol knowledge.
 // Called by src/lsp/handlers.ms.
 
-import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, ProgramData, DeclKind, IdentifierData, MemberExprData, CallExprData, BinaryExprData, UnaryExprData, VariableDeclData, FunctionDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, ArrayLiteralData, ObjectLiteralData, ConditionalExprData, ArrowFunctionData, ArrayAccessData, MatchExprData, MatchCaseData, TryCatchStmtData, TryExprData, ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExportDeclData, ImportDeclData, HiddenDerefData, HiddenStdConvData, MethodDeclData, PropertyDeclData, ConstructorDeclData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
+import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, ProgramData, DeclKind, IdentifierData, MemberExprData, CallExprData, BinaryExprData, UnaryExprData, VariableDeclData, FunctionDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, ArrayLiteralData, ObjectLiteralData, ConditionalExprData, ArrowFunctionData, ArrayAccessData, MatchExprData, MatchCaseData, TryCatchStmtData, TryExprData, ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExportDeclData, ImportDeclData, HiddenDerefData, HiddenStdConvData, MethodDeclData, PropertyDeclData, ConstructorDeclData, NewExprData, NumberLiteralData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { typeNameOf, getProperty, unwrapRef, numberType, stringType, booleanType, voidType, nullType, unknownType, neverType, errorType, isResult, getResultOkType, getResultErrType } from "./types";
 import { SymbolTable, Scope, lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
@@ -355,6 +355,26 @@ function sgFormatFieldList(t: Type): string {
 	return result;
 }
 
+// Format struct/interface/class fields as multiline "  field: type;\n" for hover display.
+// Unwraps Ref to reach the inner Struct. Returns "" if no fields.
+function sgFormatStructFields(t: Type): string {
+	if (t === null) return "";
+	let st = t;
+	if (st.kind === TypeKind.Ref && st.typeReturn !== null) st = st.typeReturn;
+	if (st.kind !== TypeKind.Struct || st.typeNames === null || st.typeNames.length === 0) return "";
+	let result = "";
+	for (let i = 0; i < st.typeNames.length; i = i + 1) {
+		result = result + "  " + st.typeNames[i] + ": ";
+		if (i < st.typeChildren.length) {
+			result = result + sgTypeToString(st.typeChildren[i]);
+		} else {
+			result = result + "unknown";
+		}
+		result = result + ";\n";
+	}
+	return result;
+}
+
 function sgIsAlias(suggest: SgSuggest): boolean {
 	if (suggest.sym === null) return false;
 	const orig = suggest.sym.originalName;
@@ -405,13 +425,18 @@ export function sgFormatHover(suggest: SgSuggest): string {
 		}
 		return "```metascript\n" + aliasPrefix + "(property) " + propContainer + suggest.name + ": " + typeStr + "\n```";
 	}
-	// Interface: interface Name — TS-Go: no fields, shows type params if generic
-	if (suggest.kind === SymbolKind.Interface) {
-		return "```metascript\n" + aliasPrefix + "interface " + suggest.name + "\n```";
-	}
-	// Class: class Name — TS-Go: no fields, shows type params if generic
-	if (suggest.kind === SymbolKind.Class) {
-		return "```metascript\n" + aliasPrefix + "class " + suggest.name + "\n```";
+	// Interface/Struct/Class: show keyword + name + fields
+	if (suggest.kind === SymbolKind.Interface || suggest.kind === SymbolKind.Struct || suggest.kind === SymbolKind.Class) {
+		const kw = match (suggest.kind) {
+			SymbolKind.Interface => "interface",
+			SymbolKind.Struct => "struct",
+			_ => "class",
+		};
+		const fields = sgFormatStructFields(suggest.symType);
+		if (fields === "") {
+			return "```metascript\n" + aliasPrefix + kw + " " + suggest.name + "\n```";
+		}
+		return "```metascript\n" + aliasPrefix + kw + " " + suggest.name + " {\n" + fields + "}\n```";
 	}
 	// Enum: enum Name — TS-Go: just the name, no members
 	if (suggest.kind === SymbolKind.Enum) {
@@ -1970,6 +1995,7 @@ function sgCollectHintsInNode(
 	// Variable declarations: type hint if no annotation + walk initializer
 	if (node.kind === NodeKind.VariableDecl) {
 		sgCollectVarTypeHint(ctx, node, startLine, endLine, hints);
+		sgCollectArraySizeHint(node, startLine, endLine, hints);
 		const vd = node.data as VariableDeclData;
 		if (vd.initializer !== null) {
 			sgCollectHintsInNode(ctx, vd.initializer, startLine, endLine, hints);
@@ -2022,13 +2048,69 @@ function sgCollectVarTypeHint(
 	if (sym.symbolType.kind === TypeKind.Unknown) return;
 	if (sym.symbolType.kind === TypeKind.Error) return;
 
-	const typeStr = sgTypeToString(sym.symbolType);
+	let typeStr = sgTypeToString(sym.symbolType);
+	// For `const a = new Array<T>(n)` — show `T[n]` instead of `T[]`
+	if (typeStr.endsWith("[]") && vd.initializer !== null && vd.initializer.kind === NodeKind.NewExpr) {
+		const arraySizeStr = sgExtractNewArraySize(vd.initializer);
+		if (arraySizeStr !== "") {
+			typeStr = `${typeStr.slice(0, typeStr.length - 1)}${arraySizeStr}]`;
+		}
+	}
 	// Skip hint when variable name matches type name (e.g. const token: Token)
 	if (sgCaseEqualStr(vd.declName, typeStr)) return;
 	const hint: SgInlayHint = {
 		label: ": " + typeStr,
 		line: node.location.line,
 		col: node.location.column + vd.declName.length,
+		hintKind: SgInlayHintKind.Type,
+	};
+	hints.push(hint);
+}
+
+// Extract the size argument from `new Array<T>(n)` as a display string.
+// Returns "" if the initializer is not a sized Array constructor.
+function sgExtractNewArraySize(init: Node): string {
+	if (init.kind !== NodeKind.NewExpr) return "";
+	const nd = init.data as NewExprData;
+	if (nd.newArguments.length !== 1) return "";
+	if (nd.newCallee === null || nd.newCallee.kind !== NodeKind.Identifier) return "";
+	if ((nd.newCallee.data as IdentifierData).name !== "Array") return "";
+	const sizeArg = nd.newArguments[0];
+	if (sizeArg.kind === NodeKind.NumberLiteral) {
+		const v = (sizeArg.data as NumberLiteralData).value;
+		return String(v as int64);
+	}
+	if (sizeArg.kind === NodeKind.Identifier) return (sizeArg.data as IdentifierData).name;
+	return "";
+}
+
+// For `const e: string[] = new Array(8)` → show trailing hint `string[8]` at end of line.
+// LSP inlay hints can only insert text, not replace — so we show the full sized type as trailing.
+function sgCollectArraySizeHint(
+	node: Node, startLine: number, endLine: number, hints: SgInlayHint[]
+): void {
+	if (node.location.line < startLine || node.location.line > endLine) return;
+	const vd = node.data as VariableDeclData;
+	// Only for annotated arrays — unannotated case handled in sgCollectVarTypeHint
+	if (vd.declType.length === 0) return;
+	if (!vd.declType.endsWith("[]") && !vd.declType.endsWith("[ ]")) return;
+	if (vd.initializer === null) return;
+	const sizeStr = sgExtractNewArraySize(vd.initializer);
+	if (sizeStr === "") return;
+	// Show full sized type as trailing hint: "string[8]"
+	// Extract element type from annotation (strip trailing "[]" or "[ ]")
+	let elemType = vd.declType;
+	if (elemType.endsWith("[ ]")) {
+		elemType = elemType.slice(0, elemType.length - 3).trim();
+	} else if (elemType.endsWith("[]")) {
+		elemType = elemType.slice(0, elemType.length - 2).trim();
+	}
+	// Place at end of line — LSP renders trailing hints after all source text
+	const endOfLineCol = 10000;
+	const hint: SgInlayHint = {
+		label: `${elemType}[${sizeStr}]`,
+		line: node.location.line,
+		col: endOfLineCol,
 		hintKind: SgInlayHintKind.Type,
 	};
 	hints.push(hint);

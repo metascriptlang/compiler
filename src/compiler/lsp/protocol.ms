@@ -297,8 +297,8 @@ export function lspResolveImport(basePath: string, importSpec: string): string {
 	}
 
 	let result = dir + "/" + spec;
-	// Auto-append .ms if not already present
-	if (result.byteLength < 3 || result.slice(result.byteLength - 3, result.byteLength) !== ".ms") {
+	// Auto-append .ms if no recognized extension present
+	if (!result.endsWith(".ms") && !result.endsWith(".h") && !result.endsWith(".cms")) {
 		result = result + ".ms";
 	}
 	return result;

@@ -16,7 +16,7 @@ import {
 import { genExpr } from "./expressions";
 import { genStmt, genStmts, resolveEmitArgs } from "./statements";
 import { mangle, mangleTypeName, mangleFieldName, mangledFunctionName, safeName } from "./names";
-import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, annotationToC, ccgIntroducedPtr } from "./types";
+import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, annotationToC, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam } from "./types";
 import { genTestDeclNode } from "./test";
 import { isDrcLifecycleName } from "./forward";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
@@ -154,15 +154,18 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 		paramList = cRetType + "* __result";
 		if (d.params.length > 0) paramList = paramList + ", ";
 	}
+	// DRC lifecycle hooks have fixed ABI — skip struct-aware promotion
+	const isDrcHookFn = isDrcLifecycleName(name);
 	const protoMutBits: int32 = sym !== null ? sym.mutatedParams : 0;
 	for (let i = 0; i < d.params.length; i += 1) {
 		if (i > 0) paramList = paramList + ", ";
 		let pType = (i < fnType.typeChildren.length) ? getTypeDesc(g, fnType.typeChildren[i]) : "void*";
-		// Implementation parity: pointer parameter introduction — struct/union params → pointer (must match proto header)
-		// Gate: skip pointer promotion if param is mutated (needs value copy for correct semantics)
 		const protoMut = (protoMutBits & (1 << (i as int32))) !== 0;
-		if (!protoMut && i < fnType.typeChildren.length && ccgIntroducedPtr(fnType.typeChildren[i]) && pType.charAt(pType.byteLength - 1) !== "*") {
-			pType = pType + "*";
+		// DRC hooks: use ccgIntroducedPtr only (skip struct-aware mutation logic)
+		// Regular functions: use shouldIndirectParam (struct-aware + mutation)
+		const promote = i < fnType.typeChildren.length && (isDrcHookFn ? ccgIntroducedPtr(fnType.typeChildren[i]) : shouldIndirectParam(fnType.typeChildren[i], protoMut));
+		if (promote && pType.charAt(pType.byteLength - 1) !== "*") {
+			pType = (!isDrcHookFn && shouldConstParam(fnType.typeChildren[i], protoMut)) ? "const " + pType + "*" : pType + "*";
 		}
 		paramList = paramList + `${pType} ${safeName(d.params[i])}`;
 	}
@@ -182,8 +185,7 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	// DRC lifecycle hooks need external linkage for cross-module access (reference parity).
 	// Generic instances: not static, not exported — one definition, other modules get forward decl.
 	const isExported = sym !== null && (exported || hasFlag(sym, SymbolFlag.Exported));
-	const isDrcHook = isDrcLifecycleName(d.fnName);
-	const prefix = (isExported || isExternFn || isMain || isDrcHook || isGenericInstance) ? "" : "static ";
+	const prefix = (isExported || isExternFn || isMain || isDrcHookFn || isGenericInstance) ? "" : "static ";
 
 	// Emit prototype to ProcHeaders — NRVO functions return void (skip if already forward-declared)
 	const actualRetType = nrvo ? "void" : cRetType;
@@ -194,7 +196,9 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	const hasNativeName = sym !== null && sym.nativeName !== "";
 	if (isExternFn && hasNativeName) return;
 
-	if (!alreadyDeclared) {
+	// DRC hooks: ensureDrcProto handles their forward decls with correct pointer convention.
+	// genFunctionDecl's proto may have wrong param types for union variant hooks.
+	if (!alreadyDeclared && !isDrcHookFn) {
 		addLine(sec(g, CSection.ProcHeaders), proto + ";");
 	}
 
@@ -207,13 +211,13 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 	if (d.fnBody !== null) {
 		const p = createProc(name, fnType.typeReturn);
 		if (nrvo) p.isNrvo = true;
-		// Populate param names + detect reference pointer introduction params (reference indirect location parity)
-		// Gate: only promote to const-ptr if param is NOT mutated in body (sym.mutatedParams bitfield)
+		// Populate param names + pointer promotion (auto-deref via indirectParams)
 		const mutBits: int32 = sym !== null ? sym.mutatedParams : 0;
 		for (let pi = 0; pi < d.params.length; pi += 1) {
 			p.params.push(d.params[pi]);
 			const isMutated = (mutBits & (1 << (pi as int32))) !== 0;
-			if (!isMutated && pi < fnType.typeChildren.length && ccgIntroducedPtr(fnType.typeChildren[pi])) {
+			const bodyPromote = pi < fnType.typeChildren.length && (isDrcHookFn ? ccgIntroducedPtr(fnType.typeChildren[pi]) : shouldIndirectParam(fnType.typeChildren[pi], isMutated));
+			if (bodyPromote) {
 				p.indirectParams.push(d.params[pi]);
 			}
 		}

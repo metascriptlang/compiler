@@ -11,6 +11,7 @@ import {
 } from "../transam/index";
 import { detectCycle } from "../transam/moduleDeps";
 import { readFile, clockMs, readDir } from "std/process";
+import { translateCHeader } from "../../module/loader";
 import { writeStderr } from "std/io";
 import {
 	lspJsonString, lspJsonNumber, lspJsonBool, lspJsonNull,
@@ -120,8 +121,12 @@ function dbGetSource(db: TransAmDb, path: string): string {
 function lspEnsureFileLoaded(db: TransAmDb, filePath: string): void {
 	if (getFileId(db.fileInput, filePath) < 0) {
 		const t0 = clockMs();
-		const source = readFile(filePath);
+		let source = readFile(filePath);
 		if (source.byteLength > 0) {
+			// Translate .h files to MS extern declarations at input boundary
+			if (filePath.length >= 2 && filePath.slice(filePath.length - 2, filePath.length) === ".h") {
+				source = translateCHeader(source, []);
+			}
 			dbSetFileText(db, filePath, source);
 		}
 		const t1 = clockMs();
@@ -2123,6 +2128,30 @@ test "dispatch routes correctly" {
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":10,\"character\":0}}}";
 	const r = lspDispatch("textDocument/inlayHint", "42", params, db, testCache());
 	assert lspGetNumberField(r, "id") === 42;
+}
+
+test "array size hint: inferred type shows string[4]" {
+	const db = testDb("file:///test.ms", "const a = new Array<string>(4);");
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":10,\"character\":0}}}";
+	const r = handleInlayHint("43", params, db);
+	// Type hint should show "string[4]" not "string[]"
+	assert r.indexOf("string[4]") >= 0;
+}
+
+test "array size hint: annotated type shows string[8] trailing" {
+	const db = testDb("file:///test.ms", "const e: string[] = new Array(8);");
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":10,\"character\":0}}}";
+	const r = handleInlayHint("44", params, db);
+	// Should contain "string[8]" as trailing hint
+	assert r.indexOf("string[8]") >= 0;
+}
+
+test "no array size hint for empty new Array<T>()" {
+	const db = testDb("file:///test.ms", "const a = new Array<string>();");
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":10,\"character\":0}}}";
+	const r = handleInlayHint("45", params, db);
+	// Type hint should show "string[]" — no size
+	assert r.indexOf("string[]") >= 0;
 }
 
 test "finds all references to a variable" {

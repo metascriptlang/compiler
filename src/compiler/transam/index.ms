@@ -60,7 +60,7 @@ import { collectTopLevelLocal, collectTopLevel } from "../../checker/collectPass
 import { resolveDeclarations } from "../../checker/resolvePass";
 import { SymbolFlag, hasFlag, openScope, ScopeKind } from "../../checker/symbol";
 import {
-	ImportDeclData, ExportDeclData, ProgramData, EnumDeclData, makeLoc,
+	ImportDeclData, ExportDeclData, ProgramData, EnumDeclData, makeLoc, Symbol,
 } from "../../ast/node";
 import {
 	Module, ModuleGraph, createModule, createModuleGraph, addModule,
@@ -68,6 +68,7 @@ import {
 } from "../../module/graph";
 import { getDirectImports } from "./moduleDeps";
 import { lspDirname, lspResolveImport } from "../lsp/protocol";
+import { translateCHeader } from "../../module/loader";
 
 // ===== Stdlib Detection =====
 
@@ -108,18 +109,7 @@ function preRegisterStdModule(db: TransAmDb, filePath: string, specifier: string
 	const exports: ExportedSymInfo[] = [];
 	for (const sym of tmpCtx.table.current.symbols) {
 		if (hasFlag(sym, SymbolFlag.Exported)) {
-			exports.push({
-				name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
-				overloadTypes: [], extReceiverType: "", extIsStatic: false,
-				overloadExtReceiverTypes: [], overloadExtIsStatic: [],
-				nativeName: sym.nativeName, builtinKind: sym.builtinKind,
-				overloadNativeNames: [], overloadBuiltinKinds: [],
-				defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [],
-				definingModule: filePath, originalName: sym.originalName,
-				headerPath: sym.headerPath,
-				location: sym.location !== null ? sym.location : makeLoc(0, 0),
-				memberLocations: [],
-			});
+			exports.push(buildExportInfo(sym, filePath));
 		}
 	}
 	if (exports.length > 0) {
@@ -259,12 +249,34 @@ export function dbParse(db: TransAmDb, filePath: string): Node {
 // ===== Cross-Module Export Registration =====
 
 // Ensure a file is loaded into the db (read from disk if needed).
+// For .h files, translates C declarations to MetaScript extern source at the input boundary,
+// so the rest of the pipeline (parse → collect → resolve → register) works generically.
 function dbEnsureFileLoaded(db: TransAmDb, filePath: string): void {
 	if (getFileId(db.fileInput, filePath) >= 0) return;
-	const source = readStdFile(filePath);
-	if (source.byteLength > 0) {
-		dbSetFileText(db, filePath, source);
+	const raw = readStdFile(filePath);
+	if (raw.byteLength === 0) return;
+	let source = raw;
+	if (filePath.length >= 2 && filePath.slice(filePath.length - 2, filePath.length) === ".h") {
+		source = translateCHeader(raw, []);
 	}
+	dbSetFileText(db, filePath, source);
+}
+
+// Build ExportedSymInfo from a collected symbol. Shared by preRegisterStdModule and dbEnsureExportsRegistered.
+function buildExportInfo(sym: Symbol, modulePath: string): ExportedSymInfo {
+	return {
+		name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
+		overloadTypes: [], extReceiverType: "", extIsStatic: false,
+		overloadExtReceiverTypes: [], overloadExtIsStatic: [],
+		nativeName: sym.nativeName, builtinKind: sym.builtinKind,
+		overloadNativeNames: [], overloadBuiltinKinds: [],
+		defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [],
+		definingModule: sym.modulePath !== "" ? sym.modulePath : modulePath,
+		originalName: sym.originalName,
+		headerPath: sym.headerPath,
+		location: sym.location !== null ? sym.location : makeLoc(0, 0),
+		memberLocations: sym.declNode !== null && sym.declNode.kind === NodeKind.EnumDecl ? (sym.declNode.data as EnumDeclData).memberLocations : [],
+	};
 }
 
 // Resolve import specifier to absolute path (relative + std/ imports).
@@ -366,21 +378,7 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Set
 		const earlyExports: ExportedSymInfo[] = [];
 		for (const sym of tmpCtx.table.current.symbols) {
 			if (hasFlag(sym, SymbolFlag.Exported)) {
-				const info: ExportedSymInfo = {
-					name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
-					overloadTypes: [],
-					extReceiverType: "", extIsStatic: false,
-					overloadExtReceiverTypes: [], overloadExtIsStatic: [],
-					nativeName: sym.nativeName, builtinKind: sym.builtinKind,
-					overloadNativeNames: [], overloadBuiltinKinds: [],
-					defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [],
-				definingModule: sym.modulePath !== "" ? sym.modulePath : depPath,
-				originalName: sym.originalName,
-				headerPath: sym.headerPath,
-				location: sym.location !== null ? sym.location : makeLoc(0, 0),
-				memberLocations: sym.declNode !== null && sym.declNode.kind === NodeKind.EnumDecl ? (sym.declNode.data as EnumDeclData).memberLocations : [],
-				};
-				earlyExports.push(info);
+				earlyExports.push(buildExportInfo(sym, depPath));
 			}
 		}
 		registerModuleExports(db.exportRegistry, depPath, earlyExports);
@@ -445,8 +443,8 @@ function matchesImportSpec(absPath: string, spec: string): boolean {
 	if (stem.length >= 2 && stem[0] === "." && stem[1] === "/") {
 		stem = stem.slice(2, stem.length);
 	}
-	// absPath should end with /stem.ms or /stem/index.ms or /stem/index.cms
-	const suffixes = ["/" + stem + ".ms", "/" + stem + "/index.ms", "/" + stem + "/index.cms"];
+	// absPath should end with /stem.ms, /stem/index.ms, /stem/index.cms, or /stem directly (for .h/.cms)
+	const suffixes = ["/" + stem + ".ms", "/" + stem + "/index.ms", "/" + stem + "/index.cms", "/" + stem];
 	for (let si = 0; si < suffixes.length; si = si + 1) {
 		const suf = suffixes[si];
 		if (absPath.length >= suf.length) {

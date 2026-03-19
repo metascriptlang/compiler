@@ -14,7 +14,7 @@
 //   - Passed as ref/out: HiddenAddr(param)
 
 import {
-	Node, NodeKind,
+	Node, NodeKind, SourceLocation, makeLoc,
 	ProgramData, FunctionDeclData, BinaryExprData, MemberExprData,
 	ArrayAccessData, IdentifierData, CallExprData, BlockStmtData,
 	IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData,
@@ -22,7 +22,8 @@ import {
 	ExprStmtData, VariableDeclData, UpdateExprData, UnaryExprData,
 	ExportDeclData, DoWhileStmtData,
 } from "../ast/node";
-import { CheckerContext } from "./context";
+import { CheckerContext, addError } from "./context";
+import { splitTopLevel, parseIntStr } from "../utils/string";
 
 // ===== Public Entry Point =====
 
@@ -35,18 +36,18 @@ export function analyzeParamMutations(ctx: CheckerContext, program: Node): void 
 			inner = (inner.data as ExportDeclData).exportedDecl;
 		}
 		if (inner.kind === NodeKind.FunctionDecl) {
-			analyzeFunctionParams(inner);
+			analyzeFunctionParams(inner, ctx);
 		}
 	}
 }
 
-function analyzeFunctionParams(node: Node): void {
+function analyzeFunctionParams(node: Node, ctx: CheckerContext): void {
 	const d = node.data as FunctionDeclData;
 	const sym = node.resolvedSym;
 	if (sym === null || d.fnBody === null) return;
 
 	// Recurse into nested functions first
-	scanNestedFunctions(d.fnBody);
+	scanNestedFunctions(d.fnBody, ctx);
 
 	if (d.params.length === 0) return;
 
@@ -59,29 +60,43 @@ function analyzeFunctionParams(node: Node): void {
 		i = i + 1;
 	}
 	sym.mutatedParams = bits;
+
+	// Cross-check: readonly params must not be mutated
+	if (bits !== 0 && d.fnFlags !== "" && d.fnFlags.indexOf("rdonly:") >= 0) {
+		const flagParts = splitTopLevel(d.fnFlags, "|");
+		for (const fp of flagParts) {
+			const trimFp = fp.trim();
+			if (trimFp.length > 7 && trimFp.slice(0, 7) === "rdonly:") {
+				const idxStr = trimFp.slice(7, trimFp.length);
+				const idxParts = splitTopLevel(idxStr, ",");
+				for (const ip of idxParts) {
+					const idx = parseIntStr(ip.trim());
+					if (idx >= 0 && idx < d.params.length && (bits & (1 << (idx as int32))) !== 0) {
+						const mutLoc = findMutationLocation(d.fnBody, d.params[idx]);
+						addError(ctx, `cannot mutate readonly parameter '${d.params[idx]}'`, mutLoc.line, mutLoc.column);
+					}
+				}
+			}
+		}
+	}
 }
 
 // Find and analyze nested function declarations within a body
-function scanNestedFunctions(node: Node): void {
+function scanNestedFunctions(node: Node, ctx: CheckerContext): void {
 	if (node === null) return;
-	if (node.kind === NodeKind.FunctionDecl) {
-		analyzeFunctionParams(node);
-		return;
-	}
-	if (node.kind === NodeKind.BlockStmt) {
-		const d = node.data as BlockStmtData;
-		for (const stmt of d.statements) { scanNestedFunctions(stmt); }
-		return;
-	}
-	if (node.kind === NodeKind.ExportDecl) {
-		scanNestedFunctions((node.data as ExportDeclData).exportedDecl);
-		return;
-	}
-	if (node.kind === NodeKind.IfStmt) {
-		const d = node.data as IfStmtData;
-		scanNestedFunctions(d.consequent);
-		scanNestedFunctions(d.alternate);
-	}
+	match (node.kind) {
+		NodeKind.FunctionDecl => { analyzeFunctionParams(node, ctx); },
+		NodeKind.BlockStmt => {
+			for (const stmt of (node.data as BlockStmtData).statements) { scanNestedFunctions(stmt, ctx); }
+		},
+		NodeKind.ExportDecl => { scanNestedFunctions((node.data as ExportDeclData).exportedDecl, ctx); },
+		NodeKind.IfStmt => {
+			const d = node.data as IfStmtData;
+			scanNestedFunctions(d.consequent, ctx);
+			scanNestedFunctions(d.alternate, ctx);
+		},
+		_ => {},
+	};
 }
 
 // ===== Mutation Detection =====
@@ -93,8 +108,58 @@ function getRootName(node: Node): string {
 		NodeKind.Identifier => (node.data as IdentifierData).name,
 		NodeKind.MemberExpr => getRootName((node.data as MemberExprData).object),
 		NodeKind.ArrayAccess => getRootName((node.data as ArrayAccessData).array),
+		NodeKind.HiddenDeref | NodeKind.HiddenAddr => getRootName((node.data as { expr: Node }).expr),
 		_ => "",
 	};
+}
+
+// Find the source location of the first mutation of paramName in the subtree.
+// Used for readonly error reporting — points to the actual mutation site.
+function findMutationLocation(node: Node, paramName: string): SourceLocation {
+	if (node === null) return makeLoc(0, 0);
+	if (node.kind === NodeKind.BinaryExpr) {
+		const d = node.data as BinaryExprData;
+		if (d.operator === "=" || d.operator === "+=" || d.operator === "-="
+			|| d.operator === "*=" || d.operator === "/=" || d.operator === "%=") {
+			if (getRootName(d.left) === paramName) return node.location;
+		}
+	}
+	if (node.kind === NodeKind.UpdateExpr) {
+		if (getRootName((node.data as UpdateExprData).updateArg) === paramName) return node.location;
+	}
+	if (node.kind === NodeKind.HiddenAddr) {
+		if (getRootName((node.data as { expr: Node }).expr) === paramName) return node.location;
+	}
+	if (node.kind === NodeKind.FunctionDecl) return makeLoc(0, 0);
+	if (node.kind === NodeKind.BlockStmt) {
+		for (const stmt of (node.data as BlockStmtData).statements) {
+			const loc = findMutationLocation(stmt, paramName);
+			if (loc.line > 0) return loc;
+		}
+	}
+	if (node.kind === NodeKind.ExprStmt) return findMutationLocation((node.data as ExprStmtData).expr, paramName);
+	if (node.kind === NodeKind.IfStmt) {
+		const d = node.data as IfStmtData;
+		let loc = findMutationLocation(d.condition, paramName);
+		if (loc.line > 0) return loc;
+		loc = findMutationLocation(d.consequent, paramName);
+		if (loc.line > 0) return loc;
+		return findMutationLocation(d.alternate, paramName);
+	}
+	if (node.kind === NodeKind.WhileStmt) {
+		const d = node.data as WhileStmtData;
+		let loc = findMutationLocation(d.whileCondition, paramName);
+		if (loc.line > 0) return loc;
+		return findMutationLocation(d.whileBody, paramName);
+	}
+	if (node.kind === NodeKind.CallExpr) {
+		const d = node.data as CallExprData;
+		for (const arg of d.arguments) {
+			const loc = findMutationLocation(arg, paramName);
+			if (loc.line > 0) return loc;
+		}
+	}
+	return makeLoc(0, 0);
 }
 
 // Returns true if paramName is mutated anywhere in the subtree
