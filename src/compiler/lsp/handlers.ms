@@ -880,8 +880,7 @@ function lspModulePathToImportSpec(db: TransAmDb, currentPath: string, targetPat
 // Search ExportRegistry for cross-module auto-import candidates.
 function lspCrossModuleCandidates(
 	db: TransAmDb, prefix: string, currentPath: string,
-	program: Node, source: string, kind: SgCompletionKind, inScopeSet: Set<string>,
-	cursorLine: number, cursorCol: number, prefixLen: number
+	program: Node, source: string, kind: SgCompletionKind, inScopeSet: Set<string>
 ): string[] {
 	const items: string[] = [];
 	if (db.exportRegistry === null) return items;
@@ -913,7 +912,7 @@ function lspCrossModuleCandidates(
 			const kindNum = lspCompletionItemKind(sym.kind, false);
 			const hasExistingImport = sgFindImportBySource(program, importSpec) !== null;
 			const sortText = hasExistingImport ? "20" : "25";
-			items.push(lspFmtCompletionItem(sym.name, kindNum, detail, sortText, false, "", "", editJson, cursorLine, cursorCol, prefixLen));
+			items.push(lspFmtCompletionItem(sym.name, kindNum, detail, sortText, false, "", "", editJson));
 		}
 	}
 
@@ -942,7 +941,7 @@ function lspCrossModuleCandidates(
 			cacheResolveEdit(sym.name, detail, editJson);
 			const kindNum = lspCompletionItemKind(sym.symbolKind, false);
 			const sortText = "22";
-			items.push(lspFmtCompletionItem(sym.name, kindNum, detail, sortText, false, "", "", editJson, cursorLine, cursorCol, prefixLen));
+			items.push(lspFmtCompletionItem(sym.name, kindNum, detail, sortText, false, "", "", editJson));
 		}
 	}
 
@@ -989,7 +988,7 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 		// Type check failed (incomplete code) — still try cross-module/prelude suggestions
 		if (kind === SgCompletionKind.Identifier || kind === SgCompletionKind.TypeAnnotation) {
 			const emptyScope: Set<string> = new Set<string>();
-			const fallbackItems = lspCrossModuleCandidates(db, prefix, path, program, source, kind, emptyScope, pos.line - 1, pos.col - prefix.length, prefix.length);
+			const fallbackItems = lspCrossModuleCandidates(db, prefix, path, program, source, kind, emptyScope);
 			if (fallbackItems.length > 0) return lspResponse(id, joinJsonItems(fallbackItems));
 		}
 		return lspResponse(id, "[]");
@@ -1056,8 +1055,7 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 	const candidates = sgGetCompletionCandidates(ctx, kind, prefix, receiverType);
 
 	// Cache the individual formatted items for future prefix filtering
-	const prefixStart = pos.col - prefix.length;
-	const cachedItems = formatCompletionItemsArray(candidates, db, path, pos.line - 1, prefixStart, prefix.length);
+	const cachedItems = formatCompletionItemsArray(candidates, db, path);
 
 	// Cross-module auto-import candidates
 	if (kind === SgCompletionKind.Identifier || kind === SgCompletionKind.TypeAnnotation || kind === SgCompletionKind.ImportName) {
@@ -1066,7 +1064,7 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 			inScopeSet.add(candidates[ci].name);
 		}
 		const source = dbGetSource(db, path);
-		const autoImportItems = lspCrossModuleCandidates(db, prefix, path, program, source, kind, inScopeSet, pos.line - 1, prefixStart, prefix.length);
+		const autoImportItems = lspCrossModuleCandidates(db, prefix, path, program, source, kind, inScopeSet);
 		for (let ai = 0; ai < autoImportItems.length; ai = ai + 1) {
 			cachedItems.push(autoImportItems[ai]);
 		}
@@ -1077,10 +1075,6 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 	cache.prefix = prefix;
 	cache.items = cachedItems;
 
-	const elapsed = clockMs() - t0;
-	if (elapsed > 50) {
-		writeStderr("[LSP] completion " + path + " prefix='" + prefix + "' items=" + cachedItems.length + " " + elapsed + "ms\n");
-	}
 	return lspResponse(id, joinJsonItems(cachedItems));
 }
 
@@ -1118,7 +1112,7 @@ function lspCommitCharsForKind(kind: SymbolKind): string {
 }
 
 // Format each candidate as an individual JSON item string for caching.
-function formatCompletionItemsArray(candidates: SgSuggest[], db: TransAmDb, path: string, cursorLine: number, cursorCol: number, prefixLen: number): string[] {
+function formatCompletionItemsArray(candidates: SgSuggest[], db: TransAmDb, path: string): string[] {
 	const result: string[] = [];
 	// Pre-fetch current file source for doc comment extraction
 	const currentSource = dbGetSource(db, path);
@@ -1141,7 +1135,7 @@ function formatCompletionItemsArray(candidates: SgSuggest[], db: TransAmDb, path
 		if (doc === "") {
 			doc = sgBuiltinDoc(item.name, item.containerName);
 		}
-		result.push(lspFmtCompletionItem(item.name, kindNum, typeStr, sortText, false, commitChars, doc, "", cursorLine, cursorCol, prefixLen));
+		result.push(lspFmtCompletionItem(item.name, kindNum, typeStr, sortText, false, commitChars, doc, ""));
 	}
 	return result;
 }
@@ -1197,7 +1191,7 @@ function lspCompleteImportPath(source: string, pos: LspCursorParams, db: TransAm
 	} else if (dirPart === "" && filePrefix === "") {
 		// Empty — only suggest std/ (user types ./ or ../ explicitly for relative)
 		const items: string[] = [];
-		items.push(lspFmtCompletionItem("std/", 19, "Standard library", "00", false, "/", "", "", -1, 0, 0));
+		items.push(lspFmtCompletionItem("std/", 19, "Standard library", "00", false, "/", "", ""));
 		return items;
 	} else {
 		// Bare import with partial dir — try relative first
@@ -1232,7 +1226,7 @@ function lspCompleteImportPath(source: string, pos: LspCursorParams, db: TransAm
 			// Only show directories that contain MetaScript modules
 			if (!lspDirHasMsEntries(scanDir + "/" + name)) continue;
 			const sortIdx = idx < 10 ? "0" + idx.toString() : idx.toString();
-			items.push(lspFmtCompletionItem(insertPrefix + name, 19, "module", sortIdx, false, "/", "", "", -1, 0, 0));
+			items.push(lspFmtCompletionItem(insertPrefix + name, 19, "module", sortIdx, false, "/", "", ""));
 			idx = idx + 1;
 		} else {
 			// Only show .ms/.cms/.jms files (strip extension)
@@ -1240,7 +1234,7 @@ function lspCompleteImportPath(source: string, pos: LspCursorParams, db: TransAm
 			if (moduleName === "") continue;
 			if (moduleName === "index") continue; // accessed via directory name
 			const sortIdx = idx < 10 ? "0" + idx.toString() : idx.toString();
-			items.push(lspFmtCompletionItem(insertPrefix + moduleName, 17, "module", sortIdx, false, "", "", "", -1, 0, 0));
+			items.push(lspFmtCompletionItem(insertPrefix + moduleName, 17, "module", sortIdx, false, "", "", ""));
 			idx = idx + 1;
 		}
 	}
@@ -1291,7 +1285,7 @@ function lspCompleteImportName(program: Node, source: string, pos: LspCursorPara
 		const kindNum = lspCompletionItemKind(sym.kind, false);
 		const detail = sgTypeToString(sym.symType);
 		const sortIdx = idx < 10 ? "0" + idx.toString() : idx.toString();
-		items.push(lspFmtCompletionItem(sym.name, kindNum, detail, sortIdx, false, "", "", "", -1, 0, 0));
+		items.push(lspFmtCompletionItem(sym.name, kindNum, detail, sortIdx, false, "", "", ""));
 		idx = idx + 1;
 	}
 	return items;

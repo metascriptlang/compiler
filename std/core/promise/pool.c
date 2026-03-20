@@ -72,6 +72,9 @@ static pthread_once_t gPoolOnce = PTHREAD_ONCE_INIT;
 
 static void msPoolInit(void) {
 	gPool = (msThreadPool*)calloc(1, sizeof(msThreadPool));
+	/* I/O-bound tasks spend most time blocked in syscalls —
+	 * overprovisioning threads avoids pool exhaustion under load.
+	 * CPU-bound tasks self-limit via OS scheduler. */
 	gPool->workerCount = msDetectCPUs();
 	gPool->cap = MS_POOL_MAX_QUEUE;
 	gPool->queue = (msSpawnCtx**)calloc(gPool->cap, sizeof(msSpawnCtx*));

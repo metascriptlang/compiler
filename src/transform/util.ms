@@ -3,7 +3,7 @@
 
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, BlockStmtData, VariableDeclData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, CallExprData, MemberExprData, IdentifierData, Type, TypeKind } from "../ast/node";
-import { createFunction, createStruct, createArray, numberType, stringType, booleanType, voidType, nullType, unknownType, getSysType, isResult, getResultOkType, getResultErrType } from "../checker/types";
+import { createFunction, createStruct, createArray, numberType, int32Type, float64Type, stringType, booleanType, voidType, nullType, unknownType, getSysType, isResult, getResultOkType, getResultErrType } from "../checker/types";
 import { TransformContext, freshTemp, NameSet, nameSetAdd } from "./context";
 
 // Create a synthetic token from a source location (for transform-generated nodes)
@@ -48,7 +48,7 @@ export function makeNull(loc: SourceLocation): Node {
 
 export function makeNumber(val: number, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.NumberLiteral, { value: val }, syntheticToken(loc));
-	n.nodeType = numberType();
+	if (val % 1 === 0) { n.nodeType = int32Type(); } else { n.nodeType = float64Type(); }
 	return n;
 }
 
@@ -159,7 +159,7 @@ export function makeMember(obj: Node, prop: string, loc: SourceLocation): Node {
 	const n = createNode(NodeKind.MemberExpr, { object: obj, property: prop, isOptional: false }, syntheticToken(loc));
 	if (obj !== null && obj.nodeType !== null) {
 		if ((obj.nodeType.kind === TypeKind.Array || obj.nodeType.kind === TypeKind.String) && prop === "length") {
-			n.nodeType = numberType();
+			n.nodeType = int32Type();
 		} else if (isResult(obj.nodeType)) {
 			if (prop === "ok") { n.nodeType = booleanType(); }
 			else if (prop === "value" && getResultOkType(obj.nodeType) !== null) { n.nodeType = getResultOkType(obj.nodeType); }

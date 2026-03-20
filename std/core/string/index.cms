@@ -187,7 +187,7 @@ extern function stripInPlace(this s: string): void from "&msStringStripInPlace";
 // ===== Character Construction =====
 
 /** Returns a string created from the specified Unicode code point. */
-extern function fromCodePoint(cp: number): string from "msStringFromCodePoint";
+export extern function fromCodePoint(cp: number): string from "msStringFromCodePoint";
 
 // ===== Type Coercion =====
 

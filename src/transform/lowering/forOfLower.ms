@@ -8,7 +8,7 @@
 
 import { Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, NodeFlag, Type } from "../../ast/node";
 import { TransformContext, freshTemp } from "../context";
-import { numberType } from "../../checker/types";
+import { int32Type } from "../../checker/types";
 import { walkNode } from "../walker";
 import {
 	makeIdent, makeTypedIdent, makeNumber, makeBlock, makeVarDecl, makeWhile,
@@ -56,8 +56,8 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 
 	// $idx = $idx + 1;
 	const increment = makeAssign(
-		makeTypedIdent(idxName, numberType(), loc),
-		makeBinary(makeTypedIdent(idxName, numberType(), loc), "+", makeNumber(1, loc), loc),
+		makeTypedIdent(idxName, int32Type(), loc),
+		makeBinary(makeTypedIdent(idxName, int32Type(), loc), "+", makeNumber(1, loc), loc),
 		loc
 	);
 	const incStmt = makeExprStmt(increment, loc);
@@ -69,7 +69,7 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	if (d.forOfPattern !== null && d.forOfPattern.kind === NodeKind.ArrayPattern) {
 		// Destructured: const $elem = $iter[$idx]; const a = $elem[0]; const b = $elem[1]; ...
 		const elemName = freshTemp(ctx, "elem");
-		const elemAccess = makeArrayAccess(makeTypedIdent(iterName, iterType, loc), makeTypedIdent(idxName, numberType(), loc), loc);
+		const elemAccess = makeArrayAccess(makeTypedIdent(iterName, iterType, loc), makeTypedIdent(idxName, int32Type(), loc), loc);
 		const elemDecl = makeVarDecl(elemName, elemAccess, DeclKind.Const, loc);
 		// Propagate element type for nativeLower (tuple → member access)
 		if (iterType !== null && iterType.typeReturn !== null) {
@@ -85,7 +85,7 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	} else {
 		// Simple binding: const item = $iter[$idx];
 		// NodeFlag.Cursor: for-of binding is a borrow from the array — DRC must skip destroy (reference: cursor flag)
-		const itemAccess = makeArrayAccess(makeTypedIdent(iterName, iterType, loc), makeTypedIdent(idxName, numberType(), loc), loc);
+		const itemAccess = makeArrayAccess(makeTypedIdent(iterName, iterType, loc), makeTypedIdent(idxName, int32Type(), loc), loc);
 		const itemDecl = makeVarDecl(d.forOfBinding, itemAccess, itemDk, loc);
 		itemDecl.flags = itemDecl.flags | NodeFlag.Cursor;
 		whileStmts.push(itemDecl);
@@ -102,7 +102,7 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		bi += 1;
 	}
 
-	const whileCond = makeBinary(makeTypedIdent(idxName, numberType(), loc), "<", makeTypedIdent(lenName, numberType(), loc), loc);
+	const whileCond = makeBinary(makeTypedIdent(idxName, int32Type(), loc), "<", makeTypedIdent(lenName, int32Type(), loc), loc);
 	const whileBody = makeBlock(whileStmts, loc);
 	const whileNode = makeWhile(whileCond, whileBody, loc);
 

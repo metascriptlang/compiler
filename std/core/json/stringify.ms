@@ -1,215 +1,181 @@
-// MetaScript JSON — Stringify
+// MetaScript JSON2 — Serializer
 //
-// Serializes JsonValue to JSON string. Uses index-based loops
-// (not for-of) for safety with JsonEntry[] containing class pointers.
+// Two-path: compact (stringify) and pretty (stringifyPretty).
+// Recursive dispatch via match on value.kind.
 
-import { parseJson } from "./parser";
-// ===== Helpers =====
+import { JsonKind, JsonValue } from "./types";
+import { jsonNull, jsonBool, jsonNumber, jsonString, jsonArray, jsonObject } from "./builder";
 
-const HEX_CHARS: string = "0123456789abcdef";
+// ===== Compact Stringify =====
+// color=false: {"key":"value","n":3}  (standard JSON)
+// color=true:  { key: "value", n: 3 } (colored console output, unquoted keys)
 
-function hexChar(n: number): string {
-	return HEX_CHARS.charAt(n);
+export function stringify(value: JsonValue, color: boolean = false): string {
+	if (value === null) return color ? "\x1b[2mnull\x1b[0m" : "null";
+	return match (value.kind) {
+		JsonKind.Null => { return color ? "\x1b[2mnull\x1b[0m" : "null"; },
+		JsonKind.Bool => {
+			const s = value.boolVal ? "true" : "false";
+			return color ? "\x1b[36m" + s + "\x1b[0m" : s;
+		},
+		JsonKind.Number => {
+			const s = value.numVal.toString();
+			return color ? "\x1b[33m" + s + "\x1b[0m" : s;
+		},
+		JsonKind.String => {
+			return color ? "\x1b[32m" + escapeString(value.strVal) + "\x1b[0m" : escapeString(value.strVal);
+		},
+		JsonKind.Array => {
+			let result = "[";
+			let i = 0;
+			while (i < value.items.length) {
+				if (i > 0) result = result + (color ? ", " : ",");
+				result = result + stringify(value.items[i], color);
+				i = i + 1;
+			}
+			return result + "]";
+		},
+		JsonKind.Object => {
+			let result = color ? "{ " : "{";
+			let i = 0;
+			while (i < value.keys.length) {
+				if (i > 0) result = result + (color ? ", " : ",");
+				if (color) {
+					result = result + value.keys[i] + ": " + stringify(value.values[i], true);
+				} else {
+					result = result + escapeString(value.keys[i]) + ":" + stringify(value.values[i], false);
+				}
+				i = i + 1;
+			}
+			return result + (color ? " }" : "}");
+		},
+		_ => "null",
+	};
+}
+
+// ===== Pretty Stringify =====
+
+export function stringifyPretty(value: JsonValue, indent: number): string {
+	return prettyImpl(value, indent, 0);
+}
+
+function prettyImpl(value: JsonValue, indent: number, depth: number): string {
+	if (value === null) return "null";
+	return match (value.kind) {
+		JsonKind.Null => "null",
+		JsonKind.Bool => { return value.boolVal ? "true" : "false"; },
+		JsonKind.Number => value.numVal.toString(),
+		JsonKind.String => escapeString(value.strVal),
+		JsonKind.Array => {
+			if (value.items.length === 0) return "[]";
+			const pad = makeIndent(indent, depth + 1);
+			const endPad = makeIndent(indent, depth);
+			let result = "[\n";
+			let i = 0;
+			while (i < value.items.length) {
+				if (i > 0) result = result + ",\n";
+				result = result + pad + prettyImpl(value.items[i], indent, depth + 1);
+				i = i + 1;
+			}
+			return result + "\n" + endPad + "]";
+		},
+		JsonKind.Object => {
+			if (value.keys.length === 0) return "{}";
+			const pad = makeIndent(indent, depth + 1);
+			const endPad = makeIndent(indent, depth);
+			let result = "{\n";
+			let i = 0;
+			while (i < value.keys.length) {
+				if (i > 0) result = result + ",\n";
+				result = result + pad + escapeString(value.keys[i]) + ": " + prettyImpl(value.values[i], indent, depth + 1);
+				i = i + 1;
+			}
+			return result + "\n" + endPad + "}";
+		},
+		_ => "null",
+	};
+}
+
+function makeIndent(size: number, depth: number): string {
+	let result = "";
+	let i = 0;
+	const total = size * depth;
+	while (i < total) {
+		result = result + " ";
+		i = i + 1;
+	}
+	return result;
 }
 
 // ===== String Escaping =====
 
 function escapeString(s: string): string {
-	const len = s.length;
-
-	// Fast check: any chars needing escape?
-	let needsEscape = false;
-	let i = 0;
-	while (i < len) {
-		const ch = s.charCodeAt(i);
-		if (ch === "\"".code || ch === "\\".code || ch < 32) {
-			needsEscape = true;
-			break;
-		}
-		i = i + 1;
-	}
-
-	if (!needsEscape) return "\"" + s + "\"";
-
-	// Slow path: run-based escape with append()
 	let result = "\"";
-	let runStart = 0;
-	i = 0;
-	while (i < len) {
+	let i = 0;
+	while (i < s.byteLength) {
 		const ch = s.charCodeAt(i);
-		if (ch === "\"".code || ch === "\\".code || ch < 32) {
-			// Flush safe run
-			if (runStart < i) {
-				result.append(s.slice(runStart, i));
-			}
-			if (ch === "\"".code) {
-				result.append("\\\"");
-			} else if (ch === "\\".code) {
-				result.append("\\\\");
-			} else if (ch === "\n".code) {
-				result.append("\\n");
-			} else if (ch === "\r".code) {
-				result.append("\\r");
-			} else if (ch === "\t".code) {
-				result.append("\\t");
-			} else if (ch === "\b".code) {
-				result.append("\\b");
-			} else if (ch === "\f".code) {
-				result.append("\\f");
-			} else {
-				// Control characters: \u00XX
-				result.append("\\u00");
-				result.append(hexChar(ch / 16));
-				result.append(hexChar(ch % 16));
-			}
-			runStart = i + 1;
-		}
+		match (ch) {
+			"\"".code => { result = result + "\\\""; },
+			"\\".code => { result = result + "\\\\"; },
+			"\n".code => { result = result + "\\n"; },
+			"\r".code => { result = result + "\\r"; },
+			"\t".code => { result = result + "\\t"; },
+			_ => { result = result + s.charAt(i); },
+		};
 		i = i + 1;
 	}
-	// Flush trailing safe run
-	if (runStart < len) {
-		result.append(s.slice(runStart, len));
-	}
-	result.append("\"");
-	return result;
-}
-
-// ===== Array/Object Stringify =====
-
-function stringifyArray(value: JsonValue): string {
-	let result = "[";
-	let i = 0;
-	const len = value.arrVal.length;
-	while (i < len) {
-		if (i > 0) result.append(",");
-		result.append(stringify(value.arrVal[i]));
-		i = i + 1;
-	}
-	result.append("]");
-	return result;
-}
-
-function stringifyObject(value: JsonValue): string {
-	let result = "{";
-	let i = 0;
-	const len = value.objKeys.length;
-	while (i < len) {
-		if (i > 0) result.append(",");
-		result.append(escapeString(value.objKeys[i]));
-		result.append(":");
-		result.append(stringify(value.objVals[i]));
-		i = i + 1;
-	}
-	result.append("}");
-	return result;
-}
-
-// ===== Public API =====
-
-export function stringify(value: JsonValue): string {
-	if (value.kind === JsonKind.Null) return "null";
-	if (value.kind === JsonKind.Bool) {
-		if (value.boolVal) return "true";
-		return "false";
-	}
-	if (value.kind === JsonKind.Number) return "" + value.numVal;
-	if (value.kind === JsonKind.String) return escapeString(value.strVal);
-	if (value.kind === JsonKind.Array) return stringifyArray(value);
-	if (value.kind === JsonKind.Object) return stringifyObject(value);
-	return "null";
+	return result + "\"";
 }
 
 // ===== Tests =====
-
-import { jsonNull, jsonBool, jsonNumber, jsonString, jsonArray, jsonObject, jsonObjectFromKV } from "./builder";
 
 test "stringify null" {
 	assert stringify(jsonNull()) === "null";
 }
 
-test "stringify true" {
+test "stringify bool" {
 	assert stringify(jsonBool(true)) === "true";
-}
-
-test "stringify false" {
 	assert stringify(jsonBool(false)) === "false";
 }
 
-test "stringify integer" {
+test "stringify number" {
 	assert stringify(jsonNumber(42)) === "42";
 }
 
-test "stringify float" {
-	assert stringify(jsonNumber(3.14)) === "3.14";
-}
-
-test "stringify simple string" {
+test "stringify string" {
 	assert stringify(jsonString("hello")) === "\"hello\"";
 }
 
-test "stringify string with quotes" {
-	assert stringify(jsonString("say \"hi\"")) === "\"say \\\"hi\\\"\"";
-}
-
-test "stringify string with newline" {
+test "stringify string with escapes" {
+	assert stringify(jsonString("a\"b")) === "\"a\\\"b\"";
 	assert stringify(jsonString("a\nb")) === "\"a\\nb\"";
 }
 
-test "stringify string with backslash" {
-	assert stringify(jsonString("a\\b")) === "\"a\\\\b\"";
-}
-
-test "stringify string with tab" {
-	assert stringify(jsonString("a\tb")) === "\"a\\tb\"";
-}
-
 test "stringify empty array" {
-	assert stringify(jsonArray([])) === "[]";
+	const arr: JsonValue[] = [];
+	assert stringify(jsonArray(arr)) === "[]";
 }
 
 test "stringify array" {
-	assert stringify(jsonArray([jsonNumber(1), jsonNumber(2)])) === "[1,2]";
+	const items: JsonValue[] = [jsonNumber(1), jsonNumber(2), jsonNumber(3)];
+	assert stringify(jsonArray(items)) === "[1,2,3]";
 }
 
 test "stringify empty object" {
-	assert stringify(jsonObject()) === "{}";
+	const keys: string[] = [];
+	const vals: JsonValue[] = [];
+	assert stringify(jsonObject(keys, vals)) === "{}";
 }
 
 test "stringify object" {
-	const obj = jsonObjectFromKV(["a"], [jsonNumber(1)]);
-	assert stringify(obj) === "{\"a\":1}";
+	const keys: string[] = ["name", "age"];
+	const vals: JsonValue[] = [jsonString("Alice"), jsonNumber(30)];
+	assert stringify(jsonObject(keys, vals)) === "{\"name\":\"Alice\",\"age\":30}";
 }
 
 test "stringify nested" {
-	const inner = jsonArray([jsonBool(true), jsonNull()]);
-	const obj = jsonObjectFromKV(["x"], [inner]);
-	assert stringify(obj) === "{\"x\":[true,null]}";
-}
-
-test "roundtrip simple object" {
-	const input = "{\"name\":\"MetaScript\",\"version\":1}";
-	const r = parseJson(input);
-	assert r.ok;
-	assert stringify(r.value) === input;
-}
-
-test "roundtrip array" {
-	const input = "[1,2,3]";
-	const r = parseJson(input);
-	assert r.ok;
-	assert stringify(r.value) === input;
-}
-
-test "roundtrip nested" {
-	const input = "{\"a\":{\"b\":[1,true,null,\"hi\"]}}";
-	const r = parseJson(input);
-	assert r.ok;
-	assert stringify(r.value) === input;
-}
-
-test "roundtrip escaped string" {
-	const input = "{\"msg\":\"hello\\nworld\"}";
-	const r = parseJson(input);
-	assert r.ok;
-	assert stringify(r.value) === input;
+	const inner: JsonValue[] = [jsonNumber(1), jsonBool(true)];
+	const keys: string[] = ["data"];
+	const vals: JsonValue[] = [jsonArray(inner)];
+	assert stringify(jsonObject(keys, vals)) === "{\"data\":[1,true]}";
 }

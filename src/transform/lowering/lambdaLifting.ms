@@ -672,12 +672,15 @@ function walkOrLift(node: Node, state: LiftState): Node {
 
 // Try to lift a closure. Returns the original node if no captures, or a closure pair if lifted.
 function tryLiftClosure(node: Node, state: LiftState): Node {
-	// Detect captures by analyzing the closure body
+	// Detect captures by analyzing the closure body.
+	// First, walk the body to lift any nested closures (inner-first order).
 	pushFuncBoundary(state.ss);
 
 	if (node.kind === NodeKind.ArrowFunction) {
 		const d = node.data as ArrowFunctionData;
 		for (const p of d.arrowParams) { defineVar(state.ss, p); }
+		// Walk body first to lift nested closures before capture detection
+		walkLiftBody(d.arrowBody, state);
 		state.capturedIdents = [];
 		const captures = detectCaptures(d.arrowBody, state.ss, state.capturedIdents);
 		popFuncBoundary(state.ss);
@@ -691,6 +694,8 @@ function tryLiftClosure(node: Node, state: LiftState): Node {
 	} else if (node.kind === NodeKind.FunctionExpr) {
 		const d = node.data as FunctionExprData;
 		for (const p of d.funcExprParams) { defineVar(state.ss, p); }
+		// Walk body first to lift nested closures before capture detection
+		walkLiftBody(d.funcExprBody, state);
 		state.capturedIdents = [];
 		const captures = detectCaptures(d.funcExprBody, state.ss, state.capturedIdents);
 		popFuncBoundary(state.ss);

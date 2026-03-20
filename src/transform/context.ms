@@ -17,21 +17,10 @@ export class TransformContext {
 	checkerCtx: CheckerContext;  // type info from Phase 2 (null in test mode)
 	jsBackend: boolean;  // true = skip C-specific transforms (lambda lifting, destructor lifting, etc.)
 	pendingTupleOps: PendingTupleOp[];  // tuple comparison ops to generate (reference parity)
-	pendingDecls: Node[];  // generated helper functions (e.g. JSON.parse<T> → __jsonParse_T)
-	emittedHelpers: string[];  // dedup tracker for generated helpers (prevents double emission)
 }
 
 export function createTransformContext(): TransformContext {
-	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, pendingTupleOps: [], pendingDecls: [], emittedHelpers: [] };
-}
-
-export function hasEmitted(ctx: TransformContext, name: string): boolean {
-	let i = 0;
-	while (i < ctx.emittedHelpers.length) {
-		if (ctx.emittedHelpers[i] === name) return true;
-		i = i + 1;
-	}
-	return false;
+	return { tempCounter: 0, errors: [], fnDeclNames: [], checkerCtx: null as unknown as CheckerContext, jsBackend: false, pendingTupleOps: [] };
 }
 
 export function createTransformContextWithChecker(cc: CheckerContext): TransformContext {

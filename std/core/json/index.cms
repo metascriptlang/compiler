@@ -1,113 +1,19 @@
-@include("std/core/json/native.h");
-@compile("std/core/json/native.c");
+// JSON Prelude — auto-loaded, no import needed
 
-// MetaScript JSON Prelude — C Backend
-// Single-file prelude loaded via globalImports(). Contains types, builders,
-// accessors, and the typed JSON API (JSON.parse<T>, JSON.stringify<T>).
-// Implementation files (parser.ms, stringify.ms) are loaded separately by the
-// module system when their symbols are referenced.
+// ===== Core Types (from sub-modules, loaded dependency-first) =====
 
-// ===== Typed JSON API =====
-// Usage: const person = try JSON.parse<Person>(jsonStr);
-// @builtin monomorphizes at compile time via builtinLower.
+export { JsonKind, JsonValue, JsonValueData } from "./types";
+export { jsonNull, jsonBool, jsonNumber, jsonString, jsonArray, jsonObject } from "./builder";
+export { stringify, stringifyPretty } from "./stringify";
+export { parseJson } from "./parser";
+export { asString, asNumber, asBool, asInt, at, length, get } from "./accessors";
 
-/**
- * An intrinsic object that provides functions to convert JavaScript values to and from the JavaScript Object Notation (JSON) format.
- */
+// ===== Typed JSON API — @builtin monomorphizes at compile time via builtinLower =====
+
 export class JSON {
-	/**
-	 * Converts a JavaScript Object Notation (JSON) string into an object.
-	 * @param input A valid JSON string.
-	 * @throws {SyntaxError} If `input` is not valid JSON.
-	 */
 	@builtin("JsonParse")
 	static extern parse<T>(input: string): Result<T, string>;
 
-	/**
-	 * Converts a JavaScript value to a JavaScript Object Notation (JSON) string.
-	 * @param value A JavaScript value, usually an object or array, to be converted.
-	 */
 	@builtin("JsonStringify")
 	static extern stringify<T>(value: T): string;
 }
-
-// ===== Types =====
-
-export enum JsonKind {
-	Null,
-	Bool,
-	Number,
-	String,
-	Array,
-	Object,
-}
-
-export class JsonValue {
-	kind: JsonKind;
-	boolVal: boolean;
-	numVal: number;
-	strVal: string;
-	arrVal: JsonValue[];
-	objKeys: string[];
-	objVals: JsonValue[];
-}
-
-// ===== Constructors =====
-
-/** Creates a JSON null value. */
-export function jsonNull(): JsonValue {
-	return new JsonValue(JsonKind.Null, false, 0, "", [], [], []);
-}
-
-/** Creates a JSON boolean value. */
-export function jsonBool(b: boolean): JsonValue {
-	return new JsonValue(JsonKind.Bool, b, 0, "", [], [], []);
-}
-
-/** Creates a JSON number value. */
-export function jsonNumber(n: number): JsonValue {
-	return new JsonValue(JsonKind.Number, false, n, "", [], [], []);
-}
-
-/** Creates a JSON string value. */
-export function jsonString(s: string): JsonValue {
-	return new JsonValue(JsonKind.String, false, 0, s, [], [], []);
-}
-
-/** Creates a JSON array value from a list of JsonValue items. */
-export function jsonArray(items: JsonValue[]): JsonValue {
-	return new JsonValue(JsonKind.Array, false, 0, "", items, [], []);
-}
-
-/** Creates a JSON object value from parallel key and value arrays. */
-export function jsonObjectFromKV(keys: string[], vals: JsonValue[]): JsonValue {
-	return new JsonValue(JsonKind.Object, false, 0, "", [], keys, vals);
-}
-
-/** Creates an empty JSON object value. */
-export function jsonObject(): JsonValue {
-	return new JsonValue(JsonKind.Object, false, 0, "", [], [], []);
-}
-
-// ===== JsonValue Accessors (extension methods → C runtime) =====
-
-/** Returns the string value, or "" if not a string. */
-extern function asString(this v: JsonValue): string from "msJsonAsString";
-/** Returns the number value, or 0 if not a number. */
-extern function asNumber(this v: JsonValue): number from "msJsonAsNumber";
-/** Returns the boolean value, or false if not a boolean. */
-extern function asBool(this v: JsonValue): boolean from "msJsonAsBool";
-/** Returns the integer value, or 0 if not a number. */
-extern function asInt(this v: JsonValue): int32 from "msJsonAsInt";
-/** Returns the string value, or the default if not a string. */
-extern function asString(this v: JsonValue, def: string): string from "msJsonAsStringDef";
-/** Returns the number value, or the default if not a number. */
-extern function asNumber(this v: JsonValue, def: number): number from "msJsonAsNumberDef";
-/** Returns the boolean value, or the default if not a boolean. */
-extern function asBool(this v: JsonValue, def: boolean): boolean from "msJsonAsBoolDef";
-/** Returns the integer value, or the default if not a number. */
-extern function asInt(this v: JsonValue, def: int32): int32 from "msJsonAsIntDef";
-/** Returns the element at the specified index in a JSON array. */
-extern function at(this v: JsonValue, idx: number): JsonValue from "msJsonAt";
-/** Returns the number of elements in a JSON array or object. */
-extern function len(this v: JsonValue): number from "msJsonLen";

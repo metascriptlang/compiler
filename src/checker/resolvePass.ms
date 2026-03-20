@@ -924,7 +924,8 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 			}
 			const fnType = createFunction(paramTypes, md.methodParams, returnType);
 			// Use resolvedSym set by collectClassMethod — avoids overload ambiguity with lookupSymbol
-			const methodSym = d.classBody[mi].resolvedSym;
+			// DecoratedDecl wraps MethodDecl — resolvedSym is on the inner node
+			const methodSym = member.resolvedSym !== null ? member.resolvedSym : d.classBody[mi].resolvedSym;
 			if (methodSym !== null && methodSym.symbolType !== null && methodSym.symbolType.typeName !== "") {
 				fnType.typeName = methodSym.symbolType.typeName;
 			}

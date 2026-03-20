@@ -1,9 +1,9 @@
 // Expression Checker — type inference for all expression kinds
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
-import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { TokenKind, createToken } from "../lexer/token";
-import { unknownType, numberType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createSpan, createFunction, createTypeRef, createStruct, createRef, createResult, createPrimitive, substituteType, instantiateGeneric, anonStructName, isNumeric, isIntegerType, isStringType, isCallable, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, unwrapRef, isDiscriminatedUnion, findVariantByDiscriminant, findFieldInVariant, findUnionVariant, unifyType, createUnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, skipModifier, createPromise, isPromise, getPromiseInner, isResult, getResultOkType, createGenericParam, instantiateGenericBody } from "./types";
+import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, DeclKind, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { TokenKind, Token, createToken } from "../lexer/token";
+import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createSpan, createFunction, createTypeRef, createStruct, createRef, createResult, createPrimitive, substituteType, instantiateGeneric, anonStructName, isNumeric, isIntegerType, isStringType, isCallable, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, unwrapRef, isDiscriminatedUnion, findVariantByDiscriminant, findFieldInVariant, findUnionVariant, unifyType, createUnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, skipModifier, createPromise, isPromise, getPromiseInner, isResult, getResultOkType, createGenericParam, instantiateGenericBody } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag } from "./symbol";
 import { CheckerContext, addError, addErrorRange, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, isInAsyncPromiseResult } from "./context";
 import {
@@ -111,13 +111,19 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 					addError(ctx, "cannot convert " + v + " to " + typeNameOf(expectedType), node.location.line, node.location.column);
 					return expectedType;
 				} else {
-					return numberType();
+					return float64Type();
 				}
-			} else {
+			} else if (expectedType !== null && (expectedType.kind === TypeKind.Float64 || expectedType.kind === TypeKind.Float32)) {
+				return expectedType;
+			} else if (expectedType !== null && expectedType.kind === TypeKind.Number) {
 				return numberType();
+			} else {
+				// Default inference: integer literals → int32, float literals → float64
+				if (isNodeIntLit(node)) return int32Type();
+				return float64Type();
 			}
 		},
-		NodeKind.BigIntLiteral => numberType(),
+		NodeKind.BigIntLiteral => createPrimitive(TypeKind.Int64),
 		NodeKind.StringLiteral => stringType(),
 		NodeKind.BooleanLiteral => booleanType(),
 		NodeKind.NullLiteral => nullType(),
@@ -249,7 +255,8 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 					}
 				}
 			}
-			return numberType();
+			if (d.updateArg.nodeType !== null && isNumeric(d.updateArg.nodeType)) return d.updateArg.nodeType;
+			return int32Type();
 		},
 		NodeKind.CallExpr => checkCallExpr(ctx, node, expectedType),
 		NodeKind.MemberExpr => checkMemberExpr(ctx, node),
@@ -289,6 +296,10 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			// Unwrap Ref for class types — ObjectLiteral constructs the inner struct
 			if (objExpected !== null && objExpected.kind === TypeKind.Ref && objExpected.typeReturn !== null) {
 				objExpected = objExpected.typeReturn;
+			}
+			// Unwrap GenericInstance (e.g., Result<T, E>) to inner Struct via typeExtra (base type)
+			if (objExpected !== null && objExpected.kind === TypeKind.GenericInstance && objExpected.typeExtra !== null && objExpected.typeExtra.kind === TypeKind.Struct) {
+				objExpected = objExpected.typeExtra;
 			}
 			if (objExpected !== null && objExpected.kind === TypeKind.Struct
 				&& objExpected.typeChildren !== null) {
@@ -374,7 +385,8 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			} else if (objExpected !== null && objExpected.kind === TypeKind.Union
 				&& isDiscriminatedUnion(objExpected)) {
 				// Discriminated union construction validation
-				checkDiscriminatedConstruction(ctx, node, d, objExpected);
+				// Pass original expectedType so Ref wrapper is preserved for codegen heap-alloc
+				checkDiscriminatedConstruction(ctx, node, d, objExpected, expectedType);
 			} else if (objExpected !== null && objExpected.kind === TypeKind.Union) {
 				// Non-discriminated union (e.g. NodeData): find variant by field names
 				// and propagate field types to properties. Standard reference pattern:
@@ -550,7 +562,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			const size = sizeOfType(resolved);
 			node.kind = NodeKind.NumberLiteral;
 			node.data = { value: size } as unknown as NodeData;
-			return numberType();
+			return int32Type();
 		},
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => {
 			const d = node.data as HiddenDerefData;
@@ -594,24 +606,36 @@ function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
 			if (rightType !== null && rightType.kind === TypeKind.Ptr) return rightType;
 			// Reference parity: int32 + int32 → int32 (magic proc preserves type)
 			if (isIntegerType(leftType) && isIntegerType(rightType) && leftType.kind === rightType.kind) return leftType;
-			if (isNumeric(leftType) && isNumeric(rightType)) return numberType();
+			// Mixed numeric: explicit number stays number, otherwise float64
+			if (isNumeric(leftType) && isNumeric(rightType)) {
+				if (leftType.kind === TypeKind.Number || rightType.kind === TypeKind.Number) return numberType();
+				return float64Type();
+			}
 			return unknownType();
 		},
 		"-" => {
-			if (leftType !== null && leftType.kind === TypeKind.Ptr && rightType !== null && rightType.kind === TypeKind.Ptr) return numberType();
+			if (leftType !== null && leftType.kind === TypeKind.Ptr && rightType !== null && rightType.kind === TypeKind.Ptr) return int32Type();
 			if (leftType !== null && leftType.kind === TypeKind.Ptr) return leftType;
 			// Reference parity: int32 - int32 → int32
 			if (isIntegerType(leftType) && isIntegerType(rightType) && leftType.kind === rightType.kind) return leftType;
-			return numberType();
+			if (isNumeric(leftType) && isNumeric(rightType)) {
+				if (leftType.kind === TypeKind.Number || rightType.kind === TypeKind.Number) return numberType();
+				return float64Type();
+			}
+			return float64Type();
 		},
 		"*" | "/" | "%" | "**" => {
 			// Reference parity: int32 * int32 → int32
 			if (isIntegerType(leftType) && isIntegerType(rightType) && leftType.kind === rightType.kind) return leftType;
-			return numberType();
+			if (isNumeric(leftType) && isNumeric(rightType)) {
+				if (leftType.kind === TypeKind.Number || rightType.kind === TypeKind.Number) return numberType();
+				return float64Type();
+			}
+			return float64Type();
 		},
 		"&" | "|" | "^" | "<<" | ">>" | ">>>" => {
 			if (isIntegerType(leftType)) return leftType;
-			return numberType();
+			return int32Type();
 		},
 		"??" => leftType,
 		_ => unknownType(),
@@ -624,12 +648,13 @@ function inferUnaryOp(op: string, operandType: Type): Type {
 		"-" | "+" => {
 			// Reference parity: -int32 → int32, +int32 → int32
 			if (isIntegerType(operandType)) return operandType;
+			if (isFloatType(operandType)) return operandType;
 			return numberType();
 		},
 		"~" => {
 			// Reference parity: ~int32 → int32
 			if (isIntegerType(operandType)) return operandType;
-			return numberType();
+			return int32Type();
 		},
 		"typeof" => stringType(),
 		_ => unknownType(),
@@ -814,7 +839,8 @@ function cloneDefaultNode(node: Node): Node {
 		clone.nodeType = node.nodeType;
 	} else {
 		match (node.kind) {
-			NodeKind.NumberLiteral | NodeKind.BigIntLiteral => { clone.nodeType = numberType(); },
+			NodeKind.NumberLiteral => { if (isNodeIntLit(node)) { clone.nodeType = int32Type(); } else { clone.nodeType = float64Type(); } },
+			NodeKind.BigIntLiteral => { clone.nodeType = createPrimitive(TypeKind.Int64); },
 			NodeKind.StringLiteral => { clone.nodeType = stringType(); },
 			NodeKind.BooleanLiteral => { clone.nodeType = booleanType(); },
 			NodeKind.NullLiteral => { clone.nodeType = nullType(); },
@@ -1080,16 +1106,31 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 		if (hasGenericParams(calleeType)) {
 			const explicitArg = findCallTypeArg(node);
 			if (explicitArg !== "") {
+				// JSON.parse<T> / JSON.stringify<T> — generate specialized function during checker
+				// (reference-aligned: generateInstance + semProcBody pattern)
+				if (node.resolvedSym !== null && node.resolvedSym.builtinKind === "JsonParse") {
+					const result = generateJsonParseInstance(ctx, node, d, explicitArg, node.location);
+					if (result !== null) return result;
+				}
+				if (node.resolvedSym !== null && node.resolvedSym.builtinKind === "JsonStringify") {
+					const result = generateJsonStringifyInstance(ctx, node, d, node.location);
+					if (result !== null) return result;
+				}
 				return inferGenericReturnWithExplicit(calleeType, argTypes, expectedType, explicitArg, ctx, node);
 			}
 			// JSON.parse() without <T> → returns Result<JsonValue, string> (untyped)
 			if (node.resolvedSym !== null && node.resolvedSym.builtinKind === "JsonParse") {
 				const jvSym = lookupSymbol(ctx.table, "JsonValue");
-				if (jvSym !== null && jvSym.symbolType !== null) {
+				if (jvSym !== null && jvSym.symbolType !== null && jvSym.symbolType.kind !== TypeKind.Unknown) {
 					const resultType = createResult(jvSym.symbolType, stringType());
 					node.nodeType = resultType;
 					return resultType;
 				}
+			}
+			// JSON.stringify(value) without <T> → infer T from argument, generate specialization
+			if (node.resolvedSym !== null && node.resolvedSym.builtinKind === "JsonStringify") {
+				const result = generateJsonStringifyInstance(ctx, node, d, node.location);
+				if (result !== null) return result;
 			}
 		}
 		return inferGenericReturn(calleeType, argTypes, expectedType);
@@ -1136,10 +1177,10 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 				&& argTypes[pi].kind !== TypeKind.Function) {
 				if (!isAssignable(argTypes[pi], paramType)) {
 					if (needsStdConv(argTypes[pi], paramType)) {
-						// Implicit numeric conversion — warn but allow (TypeScript compat)
-						if (argTypes[pi].kind === TypeKind.Number && isIntegerType(paramType)) {
+						// Implicit numeric conversion — warn for float/number → integer narrowing
+						if ((argTypes[pi].kind === TypeKind.Number || isFloatType(argTypes[pi])) && isIntegerType(paramType)) {
 							const calleeName = getCalleeName(d.callee);
-							addWarning(ctx, `implicit number → ${typeNameOf(paramType)} narrowing in '${calleeName}' arg ${pi}`, node.location.line, node.location.column);
+							addWarning(ctx, `implicit ${typeNameOf(argTypes[pi])} → ${typeNameOf(paramType)} narrowing in '${calleeName}' arg ${pi}`, node.location.line, node.location.column);
 						}
 					} else {
 						const calleeName = getCalleeName(d.callee);
@@ -1541,7 +1582,7 @@ function isPointerInC(t: Type, ctx: CheckerContext): boolean {
 
 // Validate object literal construction against a discriminated union type.
 // Finds the discriminant field in the literal, resolves the variant, and validates fields.
-function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, d: ObjectLiteralData, unionType: Type): Type {
+function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, d: ObjectLiteralData, unionType: Type, stampType: Type): Type {
 	const discName = unionType.typeNames[0]; // discriminant field name (e.g. "kind")
 
 	// Find the discriminant field in the object literal keys
@@ -1561,8 +1602,8 @@ function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, d: Obje
 			checkExpr(ctx, prop, null);
 		}
 		addError(ctx, "Object literal for discriminated union '" + unionType.typeName + "' missing discriminant field '" + discName + "'", node.location.line, node.location.column);
-		node.nodeType = unionType;
-		return unionType;
+		node.nodeType = stampType !== null ? stampType : unionType;
+		return node.nodeType;
 	}
 
 	// Check the discriminant expression first to get its value
@@ -1601,7 +1642,8 @@ function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, d: Obje
 	if (variantIdx >= 0 && variantIdx < unionType.typeChildren.length) {
 		const variant = unionType.typeChildren[variantIdx];
 		// Validate remaining fields match this variant
-		node.nodeType = unionType;
+		// Use stampType (preserves Ref wrapper) so codegen knows to heap-allocate
+		node.nodeType = stampType !== null ? stampType : unionType;
 		let fi = 0;
 		while (fi < d.keys.length) {
 			if (fi === discIdx) {
@@ -1619,7 +1661,7 @@ function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, d: Obje
 			}
 			fi = fi + 1;
 		}
-		return unionType;
+		return node.nodeType;
 	}
 
 	// Could not resolve variant — check properties without validation
@@ -1630,8 +1672,8 @@ function checkDiscriminatedConstruction(ctx: CheckerContext, node: Node, d: Obje
 		}
 		pi = pi + 1;
 	}
-	node.nodeType = unionType;
-	return unionType;
+	node.nodeType = stampType !== null ? stampType : unionType;
+	return node.nodeType;
 }
 
 function hasThisParam(sym: Symbol): boolean {
@@ -1782,24 +1824,24 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 	// Builtin properties: .length on array/string
 	if (d.property === "length" && (resolvedObjType.kind === TypeKind.Array || resolvedObjType.kind === TypeKind.SizedArray || resolvedObjType.kind === TypeKind.Span || resolvedObjType.kind === TypeKind.String || resolvedObjType.kind === TypeKind.CString)) {
 		// Create a synthetic symbol for 'length' to satisfy the validator
-		const lengthSym = makeSymbol("length", SymbolKind.Property, numberType(), false);
+		const lengthSym = makeSymbol("length", SymbolKind.Property, int32Type(), false);
 		lengthSym.state = SymbolState.Shaped;
 		node.resolvedSym = lengthSym;
-		return numberType();
+		return int32Type();
 	}
 	// String .code — compile-time char code, folded by constantFolding transform
 	if (d.property === "code" && resolvedObjType.kind === TypeKind.String) {
-		const codeSym = makeSymbol("code", SymbolKind.Property, numberType(), false);
+		const codeSym = makeSymbol("code", SymbolKind.Property, int32Type(), false);
 		codeSym.state = SymbolState.Shaped;
 		node.resolvedSym = codeSym;
-		return numberType();
+		return int32Type();
 	}
 	// String-specific properties: .byteLength, .unicodeLength
 	if ((d.property === "byteLength" || d.property === "unicodeLength") && resolvedObjType.kind === TypeKind.String) {
-		const propSym = makeSymbol(d.property, SymbolKind.Property, numberType(), false);
+		const propSym = makeSymbol(d.property, SymbolKind.Property, int32Type(), false);
 		propSym.state = SymbolState.Shaped;
 		node.resolvedSym = propSym;
-		return numberType();
+		return int32Type();
 	}
 	// Map/Set methods — resolved via class-aware field delegation bridge below.
 	// No hardcoded dispatch: Map and Set classes declare @builtin methods in std/core/structure.
@@ -1913,8 +1955,8 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 	}
 	// JsonValue dynamic member access: any unknown property returns JsonValue (null-propagating)
 	// Placed AFTER extension registry so asString/asNumber/etc. resolve as extensions first.
-	// No HiddenDeref — msJsonGet takes MsJsonValue* (pointer), not dereferenced value.
-	if (propType.kind === TypeKind.Unknown && resolvedObjType.typeName === "JsonValue") {
+	// No HiddenDeref — get() extension takes JsonValue (pointer), not dereferenced value.
+	if (propType.kind === TypeKind.Unknown && (resolvedObjType.typeName === "JsonValue" || resolvedObjType.typeName === "JsonValueData")) {
 		const dynSym = makeSymbol(d.property, SymbolKind.Property, objType, false);
 		dynSym.state = SymbolState.Shaped;
 		dynSym.nativeName = "__jsonDynAccess";
@@ -1928,7 +1970,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 	if (d.property === "toString" && propType.kind === TypeKind.Unknown) {
 		let toStrFnType: Type = null;
 		if (isNumeric(resolvedObjType)) {
-			toStrFnType = createFunction([numberType()], ["radix"], stringType());
+			toStrFnType = createFunction([int32Type()], ["radix"], stringType());
 			setMinArity(toStrFnType, 0);
 		} else {
 			toStrFnType = createFunction([], [], stringType());
@@ -2271,6 +2313,262 @@ function checkSpawnCaptures(ctx: CheckerContext, closureNode: Node, spawnNode: N
 	if (body !== null) {
 		walkForMutableCaptures(body, params, reported, ctx);
 	}
+}
+
+// ===== JSON Typed Specialization (reference-aligned: generate + check during sem) =====
+
+import { callCheckFunctionBody } from "./checkerCallbacks";
+import { addPendingInstance } from "./instantiate";
+import { getIdentId } from "./idents";
+
+// Shared: register a generated JSON instance (symbol + checker + pending + callee rewrite)
+function registerJsonInstance(
+	ctx: CheckerContext, helperName: string, params: string[], paramTypes: Type[],
+	body: Node, fnReturnType: Type, fnNode: Node, node: Node, d: CallExprData, loc: SourceLocation
+): Symbol {
+	const syntheticTok = createSyntheticToken(loc);
+	const fnType = createFunction(paramTypes, params, fnReturnType);
+	const instSym = makeSymbol(helperName, SymbolKind.Function, fnType, false);
+	instSym.state = SymbolState.Shaped;
+	instSym.modulePath = "";
+	instSym.originalName = helperName;
+	instSym.nameId = getIdentId(ctx.table.identCache, helperName);
+	let rootScope = ctx.table.current;
+	while (rootScope.parent !== null) rootScope = rootScope.parent;
+	rootScope.symbols.push(instSym);
+	fnNode.resolvedSym = instSym;
+	fnNode.nodeType = fnType;
+
+	callCheckFunctionBody(ctx, instSym, params, body, null as unknown as SourceLocation[]);
+	addPendingInstance(fnNode);
+
+	const callIdent = createNode(NodeKind.Identifier, { name: helperName }, syntheticTok);
+	callIdent.resolvedSym = instSym;
+	callIdent.nodeType = fnType;
+	d.callee = callIdent;
+	node.resolvedSym = instSym;
+	return instSym;
+}
+
+// JSON.parse<Person>(input) → generate __jsonParse_Person, run checker on it, return call
+function generateJsonParseInstance(ctx: CheckerContext, node: Node, d: CallExprData, typeArgStr: string, loc: SourceLocation): Type {
+	const sym = lookupSymbol(ctx.table, typeArgStr);
+	if (sym === null || sym.symbolType === null) return null;
+	const structType = unwrapRef(sym.symbolType);
+	if (structType.kind !== TypeKind.Struct || structType.typeNames === null || structType.typeChildren === null) return null;
+
+	const isRef = sym.symbolType.kind === TypeKind.Ref;
+	const resultOkType = isRef ? sym.symbolType : structType;
+	const resultType = createResult(resultOkType, stringType());
+	const helperName = "__jsonParse_" + typeArgStr;
+	const syntheticTok = createSyntheticToken(loc);
+
+	// Cache check — skip if already generated
+	const existing = lookupSymbol(ctx.table, helperName);
+	if (existing !== null) {
+		const callIdent = createNode(NodeKind.Identifier, { name: helperName }, syntheticTok);
+		callIdent.resolvedSym = existing;
+		callIdent.nodeType = existing.symbolType;
+		d.callee = callIdent;
+		node.nodeType = resultType;
+		return resultType;
+	}
+
+	// Generate function body AST:
+	//   const $r = parseJson(input);
+	//   if (!$r.ok) { return { ok: false, value: null, error: $r.error }; }
+	//   const $v = $r.value;
+	//   return { ok: true, value: { name: get($v, "name").strVal, ... }, error: "" };
+	const stmts: Node[] = [];
+
+	// const $r = parseJson(input)
+	stmts.push(createNode(NodeKind.VariableDecl, {
+		declName: "$r", declType: "", initializer: createNode(NodeKind.CallExpr, {
+			callee: createNode(NodeKind.Identifier, { name: "parseJson" }, syntheticTok),
+			arguments: [createNode(NodeKind.Identifier, { name: "input" }, syntheticTok)],
+			isDirectCall: true,
+		}, syntheticTok), declKind: DeclKind.Const, nameLocation: loc,
+	}, syntheticTok));
+
+	// if (!$r.ok) { return { ok: false, value: null, error: $r.error }; }
+	const errObj = createNode(NodeKind.ObjectLiteral, {
+		keys: ["ok", "value", "error"],
+		properties: [
+			createNode(NodeKind.BooleanLiteral, { boolValue: false }, syntheticTok),
+			createNode(NodeKind.NullLiteral, {}, syntheticTok),
+			createNode(NodeKind.MemberExpr, { object: createNode(NodeKind.Identifier, { name: "$r" }, syntheticTok), property: "error" }, syntheticTok),
+		],
+		keyLocations: [],
+	}, syntheticTok);
+	errObj.nodeType = resultType;
+	stmts.push(createNode(NodeKind.IfStmt, {
+		condition: createNode(NodeKind.UnaryExpr, {
+			unaryOp: "!",
+			operand: createNode(NodeKind.MemberExpr, { object: createNode(NodeKind.Identifier, { name: "$r" }, syntheticTok), property: "ok" }, syntheticTok),
+		}, syntheticTok),
+		consequent: createNode(NodeKind.BlockStmt, { statements: [
+			createNode(NodeKind.ReturnStmt, { argument: errObj }, syntheticTok),
+		] }, syntheticTok),
+		alternate: createNode(NodeKind.BlockStmt, { statements: [] }, syntheticTok),
+	}, syntheticTok));
+
+	// const $v = $r.value
+	stmts.push(createNode(NodeKind.VariableDecl, {
+		declName: "$v", declType: "", initializer: createNode(NodeKind.MemberExpr, {
+			object: createNode(NodeKind.Identifier, { name: "$r" }, syntheticTok), property: "value",
+		}, syntheticTok), declKind: DeclKind.Const, nameLocation: loc,
+	}, syntheticTok));
+
+	// Build field extraction: { name: get($v, "name").strVal, age: get($v, "age").numVal }
+	const fieldKeys: string[] = [];
+	const fieldProps: Node[] = [];
+	let fi = 0;
+	while (fi < structType.typeNames.length && fi < structType.typeChildren.length) {
+		const fname = structType.typeNames[fi];
+		const ftype = structType.typeChildren[fi];
+		fieldKeys.push(fname);
+
+		// get($v, "fieldName")
+		const getCall = createNode(NodeKind.CallExpr, {
+			callee: createNode(NodeKind.Identifier, { name: "get" }, syntheticTok),
+			arguments: [
+				createNode(NodeKind.Identifier, { name: "$v" }, syntheticTok),
+				createNode(NodeKind.StringLiteral, { value: fname }, syntheticTok),
+			],
+			isDirectCall: true,
+		}, syntheticTok);
+
+		// .strVal / .numVal / .boolVal
+		const accessor = match (ftype.kind) {
+			TypeKind.String => "strVal",
+			TypeKind.Boolean => "boolVal",
+			_ => "numVal",
+		};
+		let fieldVal: Node = createNode(NodeKind.MemberExpr, {
+			object: getCall, property: accessor,
+		}, syntheticTok);
+
+		// Integer cast: numVal is double → cast to int32/int64/etc.
+		if (ftype.kind !== TypeKind.Number && ftype.kind !== TypeKind.Float64 && ftype.kind !== TypeKind.String && ftype.kind !== TypeKind.Boolean) {
+			fieldVal = createNode(NodeKind.TypeAssertion, {
+				asExpr: fieldVal, asType: typeNameOf(ftype),
+			}, syntheticTok);
+		}
+
+		fieldProps.push(fieldVal);
+		fi = fi + 1;
+	}
+
+	// return { ok: true, value: { fields... }, error: "" }
+	const resultObj = createNode(NodeKind.ObjectLiteral, {
+		keys: ["ok", "value", "error"],
+		properties: [
+			createNode(NodeKind.BooleanLiteral, { boolValue: true }, syntheticTok),
+			createNode(NodeKind.ObjectLiteral, { keys: fieldKeys, properties: fieldProps, keyLocations: [] }, syntheticTok),
+			createNode(NodeKind.StringLiteral, { value: "" }, syntheticTok),
+		],
+		keyLocations: [],
+	}, syntheticTok);
+	resultObj.nodeType = resultType;
+	// Also stamp the inner value object with the target struct type
+	resultObj.data.properties[1].nodeType = resultOkType;
+	stmts.push(createNode(NodeKind.ReturnStmt, { argument: resultObj }, syntheticTok));
+
+	const body = createNode(NodeKind.BlockStmt, { statements: stmts }, syntheticTok);
+	const fnNode = createNode(NodeKind.FunctionDecl, {
+		fnName: helperName, params: ["input"], fnParamTypes: ["string"],
+		fnBody: body, fnFlags: "", fnReturnType: "",
+		fnDefaults: [], nativeName: "", nameLocation: loc,
+	}, syntheticTok);
+
+	registerJsonInstance(ctx, helperName, ["input"], [stringType()], body, resultType, fnNode, node, d, loc);
+	node.nodeType = resultType;
+	return resultType;
+}
+
+// JSON.stringify(person) → generate __jsonStringify_Person, run checker on it, return call
+function generateJsonStringifyInstance(ctx: CheckerContext, node: Node, d: CallExprData, loc: SourceLocation): Type {
+	if (d.arguments.length < 1) return null;
+	const argType = d.arguments[0].nodeType;
+	if (argType === null) return null;
+	const structType = unwrapRef(argType);
+	if (structType.kind !== TypeKind.Struct || structType.typeNames === null || structType.typeChildren === null) return null;
+	const typeName = structType.typeName;
+	if (typeName === "") return null;
+
+	const isRef = argType.kind === TypeKind.Ref;
+	const helperName = "__jsonStringify_" + typeName;
+	const syntheticTok = createSyntheticToken(loc);
+
+	// Cache check
+	const existing = lookupSymbol(ctx.table, helperName);
+	if (existing !== null) {
+		const callIdent = createNode(NodeKind.Identifier, { name: helperName }, syntheticTok);
+		callIdent.resolvedSym = existing;
+		callIdent.nodeType = existing.symbolType;
+		d.callee = callIdent;
+		node.resolvedSym = existing;
+		node.nodeType = stringType();
+		return stringType();
+	}
+
+	// Generate: return stringify(jsonObject(["f1","f2"], [jsonString(value.f1), jsonNumber(value.f2)]))
+	const keyNodes: Node[] = [];
+	const valNodes: Node[] = [];
+	let fi = 0;
+	while (fi < structType.typeNames.length && fi < structType.typeChildren.length) {
+		const fname = structType.typeNames[fi];
+		const ftype = structType.typeChildren[fi];
+		keyNodes.push(createNode(NodeKind.StringLiteral, { value: fname }, syntheticTok));
+
+		const fieldAccess = createNode(NodeKind.MemberExpr, {
+			object: createNode(NodeKind.Identifier, { name: "value" }, syntheticTok), property: fname,
+		}, syntheticTok);
+
+		const wrapper = match (ftype.kind) {
+			TypeKind.String => "jsonString",
+			TypeKind.Boolean => "jsonBool",
+			_ => "jsonNumber",
+		};
+		valNodes.push(createNode(NodeKind.CallExpr, {
+			callee: createNode(NodeKind.Identifier, { name: wrapper }, syntheticTok),
+			arguments: [fieldAccess],
+			isDirectCall: true,
+		}, syntheticTok));
+		fi = fi + 1;
+	}
+
+	const keysArr = createNode(NodeKind.ArrayLiteral, { elements: keyNodes }, syntheticTok);
+	const valsArr = createNode(NodeKind.ArrayLiteral, { elements: valNodes }, syntheticTok);
+	const objCall = createNode(NodeKind.CallExpr, {
+		callee: createNode(NodeKind.Identifier, { name: "jsonObject" }, syntheticTok),
+		arguments: [keysArr, valsArr],
+		isDirectCall: true,
+	}, syntheticTok);
+	const strCall = createNode(NodeKind.CallExpr, {
+		callee: createNode(NodeKind.Identifier, { name: "stringify" }, syntheticTok),
+		arguments: [objCall, createNode(NodeKind.BooleanLiteral, { boolValue: false }, syntheticTok)],
+		isDirectCall: true,
+	}, syntheticTok);
+
+	const body = createNode(NodeKind.BlockStmt, { statements: [
+		createNode(NodeKind.ReturnStmt, { argument: strCall }, syntheticTok),
+	] }, syntheticTok);
+
+	const fnNode = createNode(NodeKind.FunctionDecl, {
+		fnName: helperName, params: ["value"], fnParamTypes: [typeName],
+		fnBody: body, fnFlags: "", fnReturnType: "string",
+		fnDefaults: [], nativeName: "", nameLocation: loc,
+	}, syntheticTok);
+
+	const paramType = isRef ? argType : structType;
+	registerJsonInstance(ctx, helperName, ["value"], [paramType], body, stringType(), fnNode, node, d, loc);
+	node.nodeType = stringType();
+	return stringType();
+}
+
+function createSyntheticToken(loc: SourceLocation): Token {
+	return createToken(TokenKind.Ident, "", loc.line);
 }
 
 // Register callback at module load time

@@ -14,7 +14,6 @@
 @passC("-Ivendor/mbedtls/tf-psa-crypto/core");
 @passC("-Istd/crypto/config");
 @passC("-DMBEDTLS_CONFIG_FILE='<mbedtls/mbedtlsConfig.h>'");
-@passC("-DMBEDTLS_PLATFORM_MEMORY");
 
 // mbedTLS SSL library
 @compile("vendor/mbedtls/library/ssl_tls.c");

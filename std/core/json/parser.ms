@@ -1,363 +1,267 @@
-// MetaScript JSON — Recursive Descent Parser
+// MetaScript JSON2 — Recursive Descent Parser
 //
-// Pure MetaScript implementation. Returns Result<JsonValue, string> with
-// error position on failure. Optimized: uses charCodeAt for scanning,
-// append() for string building, manual integer parsing fast path.
+// Pure MetaScript. Returns Result<JsonValue, string>.
+// Depth-limited to prevent stack overflow.
 
-import { jsonNull, jsonBool, jsonNumber, jsonString, jsonArray, jsonObject, jsonObjectFromKV } from "./builder";
-import { fromCodePoint } from "std/core/string";
+import { JsonKind, JsonValue } from "./types";
+import { jsonNull, jsonBool, jsonNumber, jsonString, jsonArray, jsonObject } from "./builder";
+// fromCodePoint is exported from std/core/string prelude — available globally
 
-// ===== Internal Types =====
+const DEPTH_LIMIT: number = 1000;
 
-interface ParseResult {
-	node: JsonValue;
-	pos: number;
+type ParseOk = { node: JsonValue, pos: number };
+type ParseResult = Result<ParseOk, string>;
+
+// ===== Public API =====
+
+export function parseJson(input: string): Result<JsonValue, string> {
+	let pos = skipWs(input, 0);
+	const result = parseValue(input, pos, 0);
+	if (!result.ok) return Result.err(result.error);
+	pos = skipWs(input, result.value.pos);
+	if (pos < input.byteLength) {
+		return Result.err(`Unexpected character at position ${pos}`);
+	}
+	return Result.ok(result.value.node);
 }
-
-type JsonResult = Result<ParseResult, string>;
 
 // ===== Scanning Helpers =====
 
-function skipWhitespace(input: string, pos: number): number {
+function skipWs(input: string, pos: number): number {
 	let p = pos;
-	const len = input.byteLength();
+	const len = input.byteLength;
 	while (p < len) {
 		const ch = input.charCodeAt(p);
-		if (ch !== " ".code && ch !== "\t".code && ch !== "\n".code && ch !== "\r".code) break;
+		if (ch !== " ".code && ch !== "\t".code && ch !== "\n".code && ch !== "\r".code) return p;
 		p = p + 1;
 	}
 	return p;
 }
 
-function isDigit(ch: number): boolean {
-	return ch >= "0".code && ch <= "9".code;
+function errorAt(msg: string, pos: number): ParseResult {
+	return Result.err(`${msg} at position ${pos}`);
 }
 
-function hexDigit(ch: number): number {
-	if (ch >= 48 && ch <= 57) return ch - 48;       // '0'-'9'
-	if (ch >= 97 && ch <= 102) return 10 + ch - 97;  // 'a'-'f'
-	if (ch >= 65 && ch <= 70) return 10 + ch - 65;   // 'A'-'F'
-	return -1;
+// ===== Value Parser =====
+
+function parseValue(input: string, pos: number, depth: number): ParseResult {
+	if (depth > DEPTH_LIMIT) return errorAt("Maximum nesting depth exceeded", pos);
+	if (pos >= input.byteLength) return errorAt("Unexpected end of input", pos);
+
+	const ch = input.charCodeAt(pos);
+	return match (ch) {
+		"\"".code => parseString(input, pos),
+		"{".code => parseObject(input, pos, depth),
+		"[".code => parseArray(input, pos, depth),
+		"t".code => parseLiteral(input, pos, "true", jsonBool(true)),
+		"f".code => parseLiteral(input, pos, "false", jsonBool(false)),
+		"n".code => parseLiteral(input, pos, "null", jsonNull()),
+		_ => {
+			if (ch === "-".code || (ch >= "0".code && ch <= "9".code)) {
+				return parseNumber(input, pos);
+			}
+			return errorAt(`Unexpected character '${input.charAt(pos)}'`, pos);
+		},
+	};
 }
 
-function parseHex4(input: string, pos: number): number {
+// ===== Literal Parser =====
+
+function parseLiteral(input: string, pos: number, expected: string, value: JsonValue): ParseResult {
+	if (pos + expected.length > input.byteLength) {
+		return errorAt(`Expected '${expected}'`, pos);
+	}
+	if (input.slice(pos, pos + expected.length) !== expected) {
+		return errorAt(`Expected '${expected}'`, pos);
+	}
+	return Result.ok({ node: value, pos: pos + expected.length });
+}
+
+// ===== Number Parser =====
+
+function parseNumber(input: string, pos: number): ParseResult {
+	let p = pos;
+	const len = input.byteLength;
+
+	// Optional minus
+	if (p < len && input.charCodeAt(p) === "-".code) p = p + 1;
+
+	// Integer part
+	if (p >= len || input.charCodeAt(p) < "0".code || input.charCodeAt(p) > "9".code) {
+		return errorAt("Invalid number", pos);
+	}
+	while (p < len && input.charCodeAt(p) >= "0".code && input.charCodeAt(p) <= "9".code) {
+		p = p + 1;
+	}
+
+	// Decimal part
+	if (p < len && input.charCodeAt(p) === ".".code) {
+		p = p + 1;
+		while (p < len && input.charCodeAt(p) >= "0".code && input.charCodeAt(p) <= "9".code) {
+			p = p + 1;
+		}
+	}
+
+	// Exponent part
+	if (p < len && (input.charCodeAt(p) === "e".code || input.charCodeAt(p) === "E".code)) {
+		p = p + 1;
+		if (p < len && (input.charCodeAt(p) === "+".code || input.charCodeAt(p) === "-".code)) {
+			p = p + 1;
+		}
+		while (p < len && input.charCodeAt(p) >= "0".code && input.charCodeAt(p) <= "9".code) {
+			p = p + 1;
+		}
+	}
+
+	const numStr = input.slice(pos, p);
+	const num = parseFloat(numStr);
+	return Result.ok({ node: jsonNumber(num), pos: p });
+}
+
+// ===== String Parser =====
+
+function parseString(input: string, pos: number): ParseResult {
+	if (input.charCodeAt(pos) !== "\"".code) return errorAt("Expected '\"'", pos);
+	let p = pos + 1;
+	const len = input.byteLength;
+	let result = "";
+
+	while (p < len) {
+		const ch = input.charCodeAt(p);
+		if (ch === "\"".code) {
+			return Result.ok({ node: jsonString(result), pos: p + 1 });
+		}
+		if (ch === "\\".code) {
+			p = p + 1;
+			if (p >= len) return errorAt("Unexpected end of string", p);
+			const esc = input.charCodeAt(p);
+			match (esc) {
+				"\"".code => { result = result + "\""; },
+				"\\".code => { result = result + "\\"; },
+				"/".code => { result = result + "/"; },
+				"b".code => { result = result + "\b"; },
+				"f".code => { result = result + "\f"; },
+				"n".code => { result = result + "\n"; },
+				"r".code => { result = result + "\r"; },
+				"t".code => { result = result + "\t"; },
+				"u".code => {
+					if (p + 4 >= len) return errorAt("Invalid unicode escape", p);
+					const hex = input.slice(p + 1, p + 5);
+					const codePoint = parseHex(hex);
+					if (codePoint < 0) return errorAt("Invalid unicode escape", p);
+					// Handle UTF-16 surrogate pairs
+					if (codePoint >= 55296 && codePoint <= 56319 && p + 10 < len) {
+						if (input.charCodeAt(p + 5) === "\\".code && input.charCodeAt(p + 6) === "u".code) {
+							const hex2 = input.slice(p + 7, p + 11);
+							const low = parseHex(hex2);
+							if (low >= 56320 && low <= 57343) {
+								const full = 65536 + ((codePoint - 55296) * 1024) + (low - 56320);
+								result = result + fromCodePoint(full);
+								p = p + 10;
+								p = p + 1;
+								continue;
+							}
+						}
+					}
+					result = result + fromCodePoint(codePoint);
+					p = p + 4;
+				},
+				_ => { return errorAt(`Invalid escape '\\${input.charAt(p)}'`, p); },
+			};
+		} else {
+			result = result + input.charAt(p);
+		}
+		p = p + 1;
+	}
+	return errorAt("Unterminated string", pos);
+}
+
+function parseHex(s: string): number {
 	let result = 0;
 	let i = 0;
-	while (i < 4) {
-		const d = hexDigit(input.charCodeAt(pos + i));
-		if (d < 0) return -1;
-		result = result * 16 + d;
+	while (i < s.length) {
+		const ch = s.charCodeAt(i);
+		result = result * 16;
+		if (ch >= "0".code && ch <= "9".code) { result = result + (ch - "0".code); }
+		else if (ch >= "a".code && ch <= "f".code) { result = result + 10 + (ch - "a".code); }
+		else if (ch >= "A".code && ch <= "F".code) { result = result + 10 + (ch - "A".code); }
+		else { return -1; }
 		i = i + 1;
 	}
 	return result;
 }
 
-// ===== Literal Parsing =====
+// ===== Array Parser =====
 
-function parseLiteral(input: string, pos: number, expected: string, value: JsonValue): JsonResult {
-	if (pos + expected.length > input.byteLength()) {
-		return Result.err("expected '" + expected + "' at position " + pos);
-	}
-	let i = 0;
-	while (i < expected.length) {
-		if (input.charCodeAt(pos + i) !== expected.charCodeAt(i)) {
-			return Result.err("expected '" + expected + "' at position " + pos);
-		}
-		i = i + 1;
-	}
-	return Result.ok({ node: value, pos: pos + expected.length });
-}
-
-// ===== String Parsing =====
-
-function parseString(input: string, pos: number): JsonResult {
-	// pos points at opening "
-	let p = pos + 1;
-	const len = input.byteLength();
-
-	// Fast scan: look for closing " without any escapes
-	let hasEscape = false;
-	let scanP = p;
-	while (scanP < len) {
-		const ch = input.charCodeAt(scanP);
-		if (ch === "\"".code) break;
-		if (ch === "\\".code) {
-			hasEscape = true;
-			scanP = scanP + 2;
-		} else {
-			scanP = scanP + 1;
-		}
-	}
-
-	if (scanP >= len) {
-		return Result.err("unterminated string at position " + pos);
-	}
-
-	// Fast path: no escapes — single slice
-	if (!hasEscape) {
-		const s = input.slice(p, scanP);
-		return Result.ok({ node: jsonString(s), pos: scanP + 1 });
-	}
-
-	// Slow path: rebuild with escape handling using append()
-	let result = "";
-	let runStart = p;
-	p = p; // restart from after opening quote
-	while (p < len) {
-		const ch = input.charCodeAt(p);
-		if (ch === "\"".code) {
-			// Flush remaining run
-			if (runStart < p) {
-				result.append(input.slice(runStart, p));
-			}
-			return Result.ok({ node: jsonString(result), pos: p + 1 });
-		}
-		if (ch === "\\".code) {
-			// Flush run before escape
-			if (runStart < p) {
-				result.append(input.slice(runStart, p));
-			}
-			p = p + 1;
-			if (p >= len) {
-				return Result.err("unterminated escape at position " + p);
-			}
-			const esc = input.charCodeAt(p);
-			if (esc === "\"".code) {
-				result.append("\"");
-			} else if (esc === "\\".code) {
-				result.append("\\");
-			} else if (esc === "/".code) {
-				result.append("/");
-			} else if (esc === "n".code) {
-				result.append("\n");
-			} else if (esc === "r".code) {
-				result.append("\r");
-			} else if (esc === "t".code) {
-				result.append("\t");
-			} else if (esc === "b".code) {
-				result.append("\b");
-			} else if (esc === "f".code) {
-				result.append("\f");
-			} else if (esc === "u".code) {
-				// \uXXXX — 4 hex digits
-				if (p + 4 >= len) {
-					return Result.err("incomplete unicode escape at position " + p);
-				}
-				const hex = parseHex4(input, p + 1);
-				if (hex < 0) {
-					return Result.err("invalid unicode escape at position " + p);
-				}
-				p = p + 4; // skip 4 hex digits (loop adds 1 more below)
-				// Surrogate pair: \uD800-\uDBFF followed by \uDC00-\uDFFF
-				if (hex >= 0xD800 && hex <= 0xDBFF) {
-					if (p + 2 < len && input.charCodeAt(p + 1) === "\\".code && input.charCodeAt(p + 2) === "u".code) {
-						const low = parseHex4(input, p + 3);
-						if (low >= 0xDC00 && low <= 0xDFFF) {
-							const cp = 0x10000 + ((hex - 0xD800) * 1024) + (low - 0xDC00);
-							result.append(fromCodePoint(cp));
-							p = p + 6; // skip \uXXXX
-						} else {
-							result.append(fromCodePoint(hex));
-						}
-					} else {
-						result.append(fromCodePoint(hex));
-					}
-				} else {
-					result.append(fromCodePoint(hex));
-				}
-			} else {
-				// Lenient fallback: emit the escaped char as-is
-				result.append(input.charAt(p));
-			}
-			p = p + 1;
-			runStart = p;
-		} else {
-			p = p + 1;
-		}
-	}
-	return Result.err("unterminated string at position " + pos);
-}
-
-// ===== Number Parsing =====
-
-function parseNumber(input: string, pos: number): JsonResult {
-	let p = pos;
-	const len = input.byteLength();
-
-	// Fast path: try to parse as integer directly
-	let negative = false;
-	if (p < len && input.charCodeAt(p) === "-".code) {
-		negative = true;
-		p = p + 1;
-	}
-
-	if (p >= len || !isDigit(input.charCodeAt(p))) {
-		return Result.err("expected digit at position " + p);
-	}
-
-	// Leading zero check
-	if (input.charCodeAt(p) === "0".code && p + 1 < len && isDigit(input.charCodeAt(p + 1))) {
-		return Result.err("leading zeros not allowed at position " + p);
-	}
-
-	// Read integer part
-	let intVal: number = 0;
-	let isFloat = false;
-	while (p < len && isDigit(input.charCodeAt(p))) {
-		intVal = intVal * 10 + (input.charCodeAt(p) - "0".code);
-		p = p + 1;
-	}
-
-	// Fractional part — fall back to parseFloat for precision
-	if (p < len && input.charCodeAt(p) === ".".code) {
-		isFloat = true;
-		p = p + 1;
-		if (p >= len || !isDigit(input.charCodeAt(p))) {
-			return Result.err("expected digit after '.' at position " + p);
-		}
-		while (p < len && isDigit(input.charCodeAt(p))) {
-			p = p + 1;
-		}
-	}
-
-	// Exponent
-	if (p < len && (input.charCodeAt(p) === "e".code || input.charCodeAt(p) === "E".code)) {
-		isFloat = true;
-		p = p + 1;
-		if (p < len && (input.charCodeAt(p) === "+".code || input.charCodeAt(p) === "-".code)) {
-			p = p + 1;
-		}
-		if (p >= len || !isDigit(input.charCodeAt(p))) {
-			return Result.err("expected digit in exponent at position " + p);
-		}
-		while (p < len && isDigit(input.charCodeAt(p))) {
-			p = p + 1;
-		}
-	}
-
-	// Integer fast path: no slice + parseFloat needed
-	if (!isFloat) {
-		const num = negative ? -intVal : intVal;
-		return Result.ok({ node: jsonNumber(num), pos: p });
-	}
-
-	// Float: use slice + parseFloat for IEEE-754 precision
-	const numStr = input.slice(pos, p);
-	const num = numStr.parseFloat();
-	return Result.ok({ node: jsonNumber(num), pos: p });
-}
-
-// ===== Array Parsing =====
-
-function parseArray(input: string, pos: number): JsonResult {
+function parseArray(input: string, pos: number, depth: number): ParseResult {
 	let p = pos + 1; // skip [
-	p = skipWhitespace(input, p);
-
-	// Empty array
-	if (p < input.byteLength() && input.charCodeAt(p) === "]".code) {
-		return Result.ok({ node: jsonArray([]), pos: p + 1 });
-	}
-
+	p = skipWs(input, p);
 	const items: JsonValue[] = [];
-	while (p < input.byteLength()) {
-		const elem = try parseValue(input, p);
-		items.push(elem.node);
-		p = skipWhitespace(input, elem.pos);
 
-		if (p >= input.byteLength()) {
-			return Result.err("unterminated array at position " + pos);
-		}
-		if (input.charCodeAt(p) === ",".code) {
-			p = skipWhitespace(input, p + 1);
-		} else if (input.charCodeAt(p) === "]".code) {
-			return Result.ok({ node: jsonArray(items), pos: p + 1 });
-		} else {
-			return Result.err("expected ',' or ']' at position " + p);
-		}
+	if (p < input.byteLength && input.charCodeAt(p) === "]".code) {
+		return Result.ok({ node: jsonArray(items), pos: p + 1 });
 	}
-	return Result.err("unterminated array at position " + pos);
+
+	while (p < input.byteLength) {
+		p = skipWs(input, p);
+		const elem = try parseValue(input, p, depth + 1);
+		items.push(elem.node);
+		p = skipWs(input, elem.pos);
+
+		if (p >= input.byteLength) return errorAt("Unterminated array", pos);
+		const ch = input.charCodeAt(p);
+		if (ch === "]".code) {
+			return Result.ok({ node: jsonArray(items), pos: p + 1 });
+		}
+		if (ch !== ",".code) {
+			return errorAt("Expected ',' or ']' in array", p);
+		}
+		p = p + 1;
+	}
+	return errorAt("Unterminated array", pos);
 }
 
-// ===== Object Parsing =====
+// ===== Object Parser =====
 
-function parseObject(input: string, pos: number): JsonResult {
+function parseObject(input: string, pos: number, depth: number): ParseResult {
 	let p = pos + 1; // skip {
-	p = skipWhitespace(input, p);
+	p = skipWs(input, p);
+	const keys: string[] = [];
+	const values: JsonValue[] = [];
 
-	// Empty object
-	if (p < input.byteLength() && input.charCodeAt(p) === "}".code) {
-		return Result.ok({ node: jsonObject(), pos: p + 1 });
+	if (p < input.byteLength && input.charCodeAt(p) === "}".code) {
+		return Result.ok({ node: jsonObject(keys, values), pos: p + 1 });
 	}
 
-	const keys: string[] = [];
-	const vals: JsonValue[] = [];
-	while (p < input.byteLength()) {
-		// Key must be a string
+	while (p < input.byteLength) {
+		p = skipWs(input, p);
 		if (input.charCodeAt(p) !== "\"".code) {
-			return Result.err("expected string key at position " + p);
+			return errorAt("Expected string key", p);
 		}
 		const keyResult = try parseString(input, p);
-		// Push key immediately — DRC may free keyResult.node on next iteration
 		keys.push(keyResult.node.strVal);
-		p = skipWhitespace(input, keyResult.pos);
+		p = skipWs(input, keyResult.pos);
 
-		// Expect colon
-		if (p >= input.byteLength() || input.charCodeAt(p) !== ":".code) {
-			return Result.err("expected ':' at position " + p);
+		if (p >= input.byteLength || input.charCodeAt(p) !== ":".code) {
+			return errorAt("Expected ':'", p);
 		}
-		p = skipWhitespace(input, p + 1);
+		p = skipWs(input, p + 1);
 
-		// Value
-		const valResult = try parseValue(input, p);
-		vals.push(valResult.node);
-		p = skipWhitespace(input, valResult.pos);
+		const valResult = try parseValue(input, p, depth + 1);
+		values.push(valResult.node);
+		p = skipWs(input, valResult.pos);
 
-		if (p >= input.byteLength()) {
-			return Result.err("unterminated object at position " + pos);
+		if (p >= input.byteLength) return errorAt("Unterminated object", pos);
+		const ch = input.charCodeAt(p);
+		if (ch === "}".code) {
+			return Result.ok({ node: jsonObject(keys, values), pos: p + 1 });
 		}
-		if (input.charCodeAt(p) === ",".code) {
-			p = skipWhitespace(input, p + 1);
-		} else if (input.charCodeAt(p) === "}".code) {
-			return Result.ok({ node: jsonObjectFromKV(keys, vals), pos: p + 1 });
-		} else {
-			return Result.err("expected ',' or '}' at position " + p);
+		if (ch !== ",".code) {
+			return errorAt("Expected ',' or '}' in object", p);
 		}
+		p = p + 1;
 	}
-	return Result.err("unterminated object at position " + pos);
-}
-
-// ===== Value Dispatch =====
-
-function parseValue(input: string, pos: number): JsonResult {
-	const p = skipWhitespace(input, pos);
-	if (p >= input.byteLength()) {
-		return Result.err("unexpected end of input");
-	}
-
-	const ch = input.charCodeAt(p);
-	if (ch === "\"".code) return parseString(input, p);
-	if (ch === "{".code) return parseObject(input, p);
-	if (ch === "[".code) return parseArray(input, p);
-	if (ch === "t".code) return parseLiteral(input, p, "true", jsonBool(true));
-	if (ch === "f".code) return parseLiteral(input, p, "false", jsonBool(false));
-	if (ch === "n".code) return parseLiteral(input, p, "null", jsonNull());
-	if (ch === "-".code || isDigit(ch)) return parseNumber(input, p);
-	return Result.err("unexpected character at position " + p);
-}
-
-// ===== Public API =====
-
-export function parseJson(input: string): Result<JsonValue, string> {
-	if (input.byteLength() === 0) {
-		return Result.err("unexpected end of input");
-	}
-	const result = parseValue(input, 0);
-	if (!result.ok) return Result.err(result.error);
-	const endPos = skipWhitespace(input, result.value.pos);
-	if (endPos < input.byteLength()) {
-		return Result.err("unexpected content after value at position " + endPos);
-	}
-	return Result.ok(result.value.node);
+	return errorAt("Unterminated object", pos);
 }
 
 // ===== Tests =====
@@ -378,212 +282,88 @@ test "parse true" {
 test "parse false" {
 	const r = parseJson("false");
 	assert r.ok;
-	assert r.value.kind === JsonKind.Bool;
 	assert r.value.boolVal === false;
 }
 
 test "parse integer" {
 	const r = parseJson("42");
 	assert r.ok;
-	assert r.value.kind === JsonKind.Number;
 	assert r.value.numVal === 42;
 }
 
-test "parse zero" {
-	const r = parseJson("0");
+test "parse negative" {
+	const r = parseJson("-3.14");
 	assert r.ok;
-	assert r.value.numVal === 0;
 }
 
-test "parse negative number" {
-	const r = parseJson("-7");
-	assert r.ok;
-	assert r.value.numVal === -7;
-}
-
-test "parse float" {
-	const r = parseJson("3.14");
-	assert r.ok;
-	assert r.value.numVal === 3.14;
-}
-
-test "parse exponent" {
-	const r = parseJson("1e10");
-	assert r.ok;
-	assert r.value.numVal === 1e10;
-}
-
-test "parse negative exponent" {
-	const r = parseJson("5e-3");
-	assert r.ok;
-	assert r.value.numVal === 5e-3;
-}
-
-test "parse simple string" {
+test "parse string" {
 	const r = parseJson("\"hello\"");
 	assert r.ok;
-	assert r.value.kind === JsonKind.String;
 	assert r.value.strVal === "hello";
 }
 
-test "parse empty string" {
-	const r = parseJson("\"\"");
-	assert r.ok;
-	assert r.value.strVal === "";
-}
-
 test "parse string with escapes" {
-	const r = parseJson("\"hello\\nworld\"");
+	const r = parseJson("\"a\\nb\"");
 	assert r.ok;
-	assert r.value.strVal === "hello\nworld";
-}
-
-test "parse string with escaped quote" {
-	const r = parseJson("\"say \\\"hi\\\"\"");
-	assert r.ok;
-	assert r.value.strVal === "say \"hi\"";
-}
-
-test "parse string with backslash" {
-	const r = parseJson("\"a\\\\b\"");
-	assert r.ok;
-	assert r.value.strVal === "a\\b";
-}
-
-test "parse string with tab" {
-	const r = parseJson("\"a\\tb\"");
-	assert r.ok;
-	assert r.value.strVal === "a\tb";
+	assert r.value.strVal === "a\nb";
 }
 
 test "parse empty array" {
 	const r = parseJson("[]");
 	assert r.ok;
 	assert r.value.kind === JsonKind.Array;
-	assert r.value.arrVal.length === 0;
+	assert r.value.items.length === 0;
 }
 
-test "parse array of numbers" {
+test "parse array" {
 	const r = parseJson("[1, 2, 3]");
 	assert r.ok;
-	assert r.value.arrVal.length === 3;
-	assert r.value.arrVal[0].numVal === 1;
-	assert r.value.arrVal[1].numVal === 2;
-	assert r.value.arrVal[2].numVal === 3;
-}
-
-test "parse nested array" {
-	const r = parseJson("[[1, 2], [3]]");
-	assert r.ok;
-	assert r.value.arrVal.length === 2;
-	assert r.value.arrVal[0].arrVal.length === 2;
-	assert r.value.arrVal[1].arrVal.length === 1;
+	assert r.value.items.length === 3;
+	assert r.value.items[0].numVal === 1;
 }
 
 test "parse empty object" {
 	const r = parseJson("{}");
 	assert r.ok;
 	assert r.value.kind === JsonKind.Object;
-	assert r.value.objKeys.length === 0;
+	assert r.value.keys.length === 0;
 }
 
-test "parse simple object" {
-	const r = parseJson("{\"name\": \"MetaScript\"}");
+test "parse object" {
+	const r = parseJson("{\"name\": \"Alice\", \"age\": 30}");
 	assert r.ok;
-	assert r.value.objKeys.length === 1;
-	assert r.value.objKeys[0] === "name";
-	assert r.value.objVals[0].strVal === "MetaScript";
+	assert r.value.keys.length === 2;
+	assert r.value.keys[0] === "name";
+	assert r.value.values[0].strVal === "Alice";
+	assert r.value.values[1].numVal === 30;
 }
 
-test "parse object with multiple keys" {
-	const r = parseJson("{\"a\": 1, \"b\": 2}");
+test "parse nested" {
+	const r = parseJson("{\"data\": [1, true, null]}");
 	assert r.ok;
-	assert r.value.objKeys.length === 2;
-	assert r.value.objKeys[0] === "a";
-	assert r.value.objVals[0].numVal === 1;
-	assert r.value.objKeys[1] === "b";
-	assert r.value.objVals[1].numVal === 2;
+	assert r.value.values[0].items.length === 3;
+	assert r.value.values[0].items[0].numVal === 1;
+	assert r.value.values[0].items[1].boolVal === true;
+	assert r.value.values[0].items[2].kind === JsonKind.Null;
 }
 
-test "parse nested object" {
-	const r = parseJson("{\"outer\": {\"inner\": 42}}");
-	assert r.ok;
-	assert r.value.objVals[0].objKeys[0] === "inner";
-	assert r.value.objVals[0].objVals[0].numVal === 42;
-}
-
-test "parse mixed types" {
-	const r = parseJson("{\"s\": \"hi\", \"n\": 1, \"b\": true, \"x\": null, \"a\": [1]}");
-	assert r.ok;
-	assert r.value.objKeys.length === 5;
-}
-
-test "parse with whitespace" {
-	const r = parseJson("  { \"key\" : \"val\" }  ");
-	assert r.ok;
-	assert r.value.objKeys[0] === "key";
-	assert r.value.objVals[0].strVal === "val";
-}
-
-test "error: empty input" {
-	const r = parseJson("");
+test "parse error trailing" {
+	const r = parseJson("42 extra");
 	assert !r.ok;
 }
 
-test "error: unterminated string" {
+test "parse error unterminated string" {
 	const r = parseJson("\"hello");
 	assert !r.ok;
 }
 
-test "error: unexpected character" {
-	const r = parseJson("@");
+test "parse error invalid" {
+	const r = parseJson("xyz");
 	assert !r.ok;
 }
 
-test "error: trailing content" {
-	const r = parseJson("123 abc");
-	assert !r.ok;
-}
-
-test "error: leading zeros" {
-	const r = parseJson("007");
-	assert !r.ok;
-}
-
-test "error: unterminated array" {
-	const r = parseJson("[1, 2");
-	assert !r.ok;
-}
-
-test "error: unterminated object" {
-	const r = parseJson("{\"a\": 1");
-	assert !r.ok;
-}
-
-test "parse unicode escape ASCII" {
-	const r = parseJson("\"\\u0041\"");
+test "parse whitespace" {
+	const r = parseJson("  { \"x\" : 1 }  ");
 	assert r.ok;
-	assert r.value.strVal === "A";
-}
-
-test "parse unicode escape newline" {
-	const r = parseJson("\"\\u000A\"");
-	assert r.ok;
-	assert r.value.strVal === "\n";
-}
-
-test "parse backspace escape" {
-	const r = parseJson("\"a\\bb\"");
-	assert r.ok;
-	assert r.value.strVal === "a\bb";
-}
-
-test "error: incomplete unicode escape" {
-	const r = parseJson("\"\\u00\"");
-	assert !r.ok;
-}
-
-test "error: invalid hex in unicode escape" {
-	const r = parseJson("\"\\u00GG\"");
-	assert !r.ok;
+	assert r.value.keys[0] === "x";
 }

@@ -1,10 +1,10 @@
 // Statement Checker — Pass 3 statement validation and control flow
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
-import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, VariableDeclData, FunctionDeclData, ClassDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ProgramData, MacroInvocationData, StringLiteralData, CallExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { unknownType, nullType, stringType, charType, numberType, voidType, createFunction, createUnion, isMaybeType, unwrapMaybeType, isNarrowingIntConv, typeNameOf, isPromise, getPromiseInner, isResult, getResultOkType, getResultErrType } from "./types";
+import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, makeLoc, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, VariableDeclData, FunctionDeclData, ClassDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ProgramData, MacroInvocationData, StringLiteralData, CallExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { unknownType, nullType, stringType, charType, numberType, float64Type, voidType, createFunction, createUnion, isMaybeType, unwrapMaybeType, isNarrowingIntConv, typeNameOf, isPromise, getPromiseInner, isResult, getResultOkType, getResultErrType } from "./types";
 import { ScopeKind, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, setFlag, hasFlag, SymbolFlag } from "./symbol";
-import { CheckerContext, CancelCtx, createContext, createContextWithCache, createModuleContext, createModuleContextWithCache, addError, addFatalError, addWarning, hasErrors, hasFatalErrors, errorCount, createExtensionRegistry, registerExtension, ExtensionMethod, ExportRegistry, isCancelled, sgRecordSym, sgSortRecords, isInAsyncPromiseResult } from "./context";
+import { CheckerContext, CancelCtx, createContext, createContextWithCache, createModuleContext, createModuleContextWithCache, addError, addFatalError, addWarning, hasErrors, hasFatalErrors, errorCount, createExtensionRegistry, registerExtension, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, isCancelled, sgRecordSym, sgSortRecords, isInAsyncPromiseResult } from "./context";
 import { IdentCache, createIdentCache } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
 import { collectTopLevel, defineOrError } from "./collectPass";
@@ -64,8 +64,9 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 			const d = node.data as ExprStmtData;
 			checkExpr(ctx, d.expr, null);
 			// Warn: spawn result not awaited — borrowed captures may dangle
+			// Suppress inside loops: fire-and-forget spawn for worker threads is a valid pattern
 			if (d.expr.kind === NodeKind.CallExpr && d.expr.resolvedSym !== null
-				&& d.expr.resolvedSym.builtinKind === "PromiseSpawn") {
+				&& d.expr.resolvedSym.builtinKind === "PromiseSpawn" && !ctx.inLoop) {
 				addWarning(ctx, "spawn result not awaited — borrowed captures may outlive scope", d.expr.location.line, d.expr.location.column);
 			}
 		},
@@ -1047,11 +1048,11 @@ export function stampHeaderPaths(ctx: CheckerContext): void {
 }
 
 function defineBuiltinConstants(ctx: CheckerContext): void {
-	const nanSym = makeSymbol("NaN", SymbolKind.Variable, numberType(), false);
+	const nanSym = makeSymbol("NaN", SymbolKind.Variable, float64Type(), false);
 	nanSym.state = SymbolState.Checked;
 	nanSym.builtinKind = "NaN";
 	defineSymbol(ctx.table, nanSym);
-	const infSym = makeSymbol("Infinity", SymbolKind.Variable, numberType(), false);
+	const infSym = makeSymbol("Infinity", SymbolKind.Variable, float64Type(), false);
 	infSym.state = SymbolState.Checked;
 	infSym.builtinKind = "Infinity";
 	defineSymbol(ctx.table, infSym);
@@ -1075,9 +1076,13 @@ function loadPreludeOne(ctx: CheckerContext, specifier: string, stdPath: string)
 	if (src.length > 0) {
 		const pr = parseSource(src);
 		if (pr.ok) {
-			// Set modulePath so prelude symbols know their source file
+			// Set modulePath BEFORE sub-module loading so path resolution is consistent
 			const savedPath = ctx.modulePath;
 			ctx.modulePath = resolvedPath;
+
+			// Load sub-modules first (dependency-first, recursive compilation)
+			// Register sub-module exports in ExportRegistry so index.cms re-exports resolve
+			loadPreludeSubModules(ctx, pr.value, resolvedPath, stdPath);
 			runThreePasses(ctx, pr.value);
 			ctx.modulePath = savedPath;
 			collectDirectives(ctx, pr.value);
@@ -1087,6 +1092,90 @@ function loadPreludeOne(ctx: CheckerContext, specifier: string, stdPath: string)
 				ensureShaped(sym, ctx);
 				for (const ov of sym.overloads) {
 					ensureShaped(ov, ctx);
+				}
+			}
+		}
+	}
+}
+
+// Load prelude sub-modules referenced by re-exports (export { X } from "./sub")
+// Reference-aligned: each sub-module is fully compiled (3 passes) before the parent.
+// Exports are registered in ExportRegistry so the parent's collectImport resolves them.
+// Note: compile.ms loadPreludeModules also loads these into the module graph for codegen.
+// Both paths are needed: checker needs types early, codegen needs compiled C later.
+function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: string, stdPath: string): void {
+	if (program.kind !== NodeKind.Program) return;
+	const pd = program.data as ProgramData;
+	const dir = getModuleDir(indexPath);
+	if (dir === "") return;
+
+	for (const stmt of pd.programStmts) {
+		if (stmt.kind !== NodeKind.ExportDecl) continue;
+		const ed = stmt.data as ExportDeclData;
+		if (ed.exportedDecl === null) continue;
+		if (ed.exportedDecl.kind !== NodeKind.ImportDecl) continue;
+		const id = ed.exportedDecl.data as ImportDeclData;
+		// Only relative imports (./sub or ../sub)
+		if (id.importSource.length < 2 || id.importSource.charAt(0) !== ".") continue;
+
+		// Resolve path relative to index file (strip ./ prefix)
+		let importRel = id.importSource;
+		if (importRel.length > 2 && importRel.slice(0, 2) === "./") {
+			importRel = importRel.slice(2, importRel.length);
+		}
+		const subPath = dir + "/" + importRel;
+		let subSrc = readFile(subPath + ".ms");
+		let subResolved = subPath + ".ms";
+		if (subSrc.length === 0) {
+			subSrc = readFile(subPath + ".cms");
+			subResolved = subPath + ".cms";
+		}
+		if (subSrc.length === 0) continue;
+		const subPr = parseSource(subSrc);
+		if (!subPr.ok) continue;
+
+		// Compile sub-module in a temporary context (separate scope, shared cache)
+		const subCtx = createContextWithCache(ctx.table.identCache);
+		subCtx.extensionRegistry = createExtensionRegistry();
+		subCtx.exportRegistry = ctx.exportRegistry;
+		// Inject prelude symbols so sub-module can reference them
+		for (const sym of ctx.table.current.symbols) {
+			subCtx.table.current.symbols.push(sym);
+		}
+		openScope(subCtx.table, ScopeKind.Module);
+		subCtx.modulePath = subResolved;
+		runThreePasses(subCtx, subPr.value);
+
+		// Register sub-module's exported symbols in ExportRegistry
+		const subExports: ExportedSymInfo[] = [];
+		const subScope = subCtx.table.current;
+		for (const sym of subScope.symbols) {
+			if (hasFlag(sym, SymbolFlag.Exported)) {
+				subExports.push({
+					name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
+					overloadTypes: [],
+					extReceiverType: "", extIsStatic: false,
+					overloadExtReceiverTypes: [], overloadExtIsStatic: [],
+					nativeName: sym.nativeName, builtinKind: sym.builtinKind,
+					overloadNativeNames: [], overloadBuiltinKinds: [],
+					defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [],
+					definingModule: subResolved,
+					originalName: "",
+					headerPath: sym.headerPath,
+					location: sym.location !== null ? sym.location : makeLoc(0, 0),
+					memberLocations: [],
+				});
+			}
+		}
+		registerModuleExports(ctx.exportRegistry, subResolved, subExports);
+		// Also register without extension so collectImport's relative path resolution finds it
+		registerModuleExports(ctx.exportRegistry, subPath, subExports);
+
+		// Also register sub-module extensions into parent context
+		if (subCtx.extensionRegistry !== null && ctx.extensionRegistry !== null) {
+			for (const ext of subCtx.extensionRegistry.methods) {
+				if (ext.sym !== null && hasFlag(ext.sym, SymbolFlag.Exported)) {
+					registerExtension(ctx.extensionRegistry, ext);
 				}
 			}
 		}

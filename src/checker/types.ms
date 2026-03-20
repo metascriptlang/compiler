@@ -518,6 +518,13 @@ export function neverType(): Type { return getSysType(TypeKind.Never); }
 export function errorType(): Type { return getSysType(TypeKind.Error); }
 export function charType(): Type { return getSysType(TypeKind.Char); }
 export function cstringType(): Type { return getSysType(TypeKind.CString); }
+export function int32Type(): Type { return getSysType(TypeKind.Int32); }
+export function float64Type(): Type { return getSysType(TypeKind.Float64); }
+
+export function isFloatType(t: Type): boolean {
+	if (t === null) return false;
+	return t.kind === TypeKind.Float32 || t.kind === TypeKind.Float64;
+}
 
 // ===== Min Arity (Default Parameters) =====
 // Encoded in typeFlags bits 8-15. Zero = not set = all params required.
@@ -1031,7 +1038,7 @@ export function integerRank(t: Type): number {
 // Parity: standard reference integer conversion matching — narrowing needs HiddenStdConv + range check
 export function isNarrowingIntConv(source: Type, target: Type): boolean {
 	if (!isIntegerType(target)) return false;
-	if (!isIntegerType(source) && source.kind !== TypeKind.Number) return false;
+	if (!isIntegerType(source) && source.kind !== TypeKind.Number && source.kind !== TypeKind.Float64) return false;
 	return integerRank(source) > integerRank(target);
 }
 

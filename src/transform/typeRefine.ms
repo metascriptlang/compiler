@@ -15,7 +15,7 @@
 // Pipeline position: after evaluateComptimeBlocks, before transformForNative.
 
 import { Node, NodeKind, IdentifierData, VariableDeclData, FunctionDeclData, MemberExprData, ArrayAccessData, BlockStmtData, CallExprData, BinaryExprData, UnaryExprData, NumberLiteralData, ConditionalExprData, TypeAssertionData, ForOfStmtData, ArrowFunctionData, ReturnStmtData, Type, TypeKind } from "../ast/node";
-import { isNumeric, numberType, booleanType, stringType, charType, createArray, isResult, getResultOkType, getResultErrType } from "../checker/types";
+import { isNumeric, numberType, int32Type, booleanType, stringType, charType, createArray, isResult, getResultOkType, getResultErrType } from "../checker/types";
 import { ExportRegistry, ModuleExports, ExportedSymInfo } from "../checker/context";
 import { TransformContext } from "./context";
 import { mapChildren } from "./walker";
@@ -85,7 +85,7 @@ function recoverKnownField(node: Node, typeName: string, prop: string): void {
 	else if (typeName === "Token") {
 		if (prop === "kind") { node.nodeType = registryTypeLookup("TokenKind"); }
 		else if (prop === "value") { node.nodeType = stringType(); }
-		else if (prop === "line" || prop === "column") { node.nodeType = numberType(); }
+		else if (prop === "line" || prop === "column") { node.nodeType = int32Type(); }
 	}
 }
 
@@ -100,9 +100,9 @@ function rederiveMemberType(node: Node): void {
 	const prop = d.property;
 
 	if ((ot.kind === TypeKind.Array || ot.kind === TypeKind.String) && prop === "length") {
-		node.nodeType = numberType();
+		node.nodeType = int32Type();
 	} else if (ot.kind === TypeKind.String && (prop === "byteLength" || prop === "unicodeLength")) {
-		node.nodeType = numberType();
+		node.nodeType = int32Type();
 	} else if (isResult(ot)) {
 		if (prop === "ok") { node.nodeType = booleanType(); }
 		else if (prop === "value" && getResultOkType(ot) !== null) { node.nodeType = getResultOkType(ot); }
@@ -128,10 +128,10 @@ function rederiveMemberType(node: Node): void {
 			recoverKnownField(node, ot.typeName, prop);
 		}
 	} else if (ot.kind === TypeKind.SizedArray) {
-		if (prop === "length") { node.nodeType = numberType(); }
+		if (prop === "length") { node.nodeType = int32Type(); }
 		else if (prop === "data" && ot.typeReturn !== null) { node.nodeType = ot.typeReturn; }
 	} else if (ot.kind === TypeKind.Span) {
-		if (prop === "length") { node.nodeType = numberType(); }
+		if (prop === "length") { node.nodeType = int32Type(); }
 		else if (prop === "data" && ot.typeReturn !== null) { node.nodeType = ot.typeReturn; }
 	} else if (ot.kind === TypeKind.Enum) {
 		// Enum member access (e.g. TokenKind.Plus) → the enum type itself

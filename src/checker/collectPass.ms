@@ -393,9 +393,21 @@ function collectMacro(ctx: CheckerContext, node: Node): void {
 
 // Look up resolved source path for an import specifier from the module's import entries
 function resolveImportSourcePath(ctx: CheckerContext, specifier: string): string {
-	if (ctx.currentModule === null) return "";
-	for (const imp of ctx.currentModule.imports) {
-		if (imp.sourceSpecifier === specifier) return imp.sourcePath;
+	if (ctx.currentModule !== null) {
+		for (const imp of ctx.currentModule.imports) {
+			if (imp.sourceSpecifier === specifier) return imp.sourcePath;
+		}
+	}
+	// Prelude context fallback: resolve relative specifier using modulePath
+	if (specifier.length >= 2 && specifier.charAt(0) === "." && ctx.modulePath !== "") {
+		const dir = getModuleDir(ctx.modulePath);
+		if (dir !== "") {
+			let rel = specifier;
+			if (rel.length > 2 && rel.slice(0, 2) === "./") {
+				rel = rel.slice(2, rel.length);
+			}
+			return dir + "/" + rel;
+		}
 	}
 	return "";
 }

@@ -1,7 +1,7 @@
 // Type Compatibility - table-driven assignability checking
 
 import { Type, TypeKind } from "../ast/node";
-import { isNumeric, skipModifier, typeNameOf, numberType, stringType, booleanType, voidType, nullType, unknownType, errorType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createDistinct, createGenericParam, createSizedArray, createSpan, getMinArity } from "./types";
+import { isNumeric, isIntegerType, skipModifier, typeNameOf, numberType, stringType, booleanType, voidType, nullType, unknownType, errorType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createDistinct, createGenericParam, createSizedArray, createSpan, getMinArity } from "./types";
 
 
 // ===== Assignability =====
@@ -88,6 +88,11 @@ function isAssignableInner(source: Type, target: Type): boolean {
 
 	// Numeric widening: any numeric type assignable to Number
 	if (isNumeric(source) && target.kind === TypeKind.Number) {
+		return true;
+	}
+
+	// Integer → float64 widening (lossless for int32 range)
+	if (isIntegerType(source) && target.kind === TypeKind.Float64) {
 		return true;
 	}
 

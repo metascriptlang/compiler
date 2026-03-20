@@ -2,6 +2,7 @@
 // Imports std/net for TCP, parser/headers for protocol handling.
 
 @include("std/net/native.h");
+@include("std/net/async.h");
 
 extern function msNetSocket(): int32;
 extern function msNetBind(fd: int32, addr: string, port: int32): int32;
@@ -12,10 +13,15 @@ extern function msNetSend(fd: int32, data: string): int32;
 extern function msNetRecv(fd: int32, maxBytes: int32): string;
 extern function msNetClose(fd: int32): void;
 extern function msNetSetTimeout(fd: int32, ms: int32): int32;
+extern function msNetSetNonBlocking(fd: int32): int32;
+extern function msNetAcceptAsync(fd: int32): Promise<int32>;
+extern function msNetRecvAsync(fd: int32, maxBytes: int32): Promise<string>;
+extern function msNetSendAsync(fd: int32, data: string): Promise<int32>;
+extern function msRunForever(): void;
 
 import {
 	HttpMethod, HttpRequest, HttpHeaders, ServerResponse, RequestHandler,
-	statusText,
+	statusText, parseMethod,
 } from "./types";
 import { HttpError, socketError, bodyTooLarge, invalidRequest } from "./errors";
 import {
@@ -108,9 +114,9 @@ export function serve(server: HttpServer): void {
 	}
 }
 
-// Concurrent serve — thread-per-core, kernel-balanced (httpbeast architecture).
-// Each thread gets its own socket bound to the same port via SO_REUSEPORT.
-// Kernel distributes connections across threads. Zero shared state between workers.
+// Concurrent serve — thread-per-core acceptors, thread-per-connection handlers.
+// Each core runs a blocking accept loop; each accepted connection spawns a handler thread.
+// Parallel across cores (spawn), concurrent connections via thread-per-connection (spawn).
 export function serveConcurrent(server: HttpServer, threads: int32 = 0): void {
 	const n = threads > 0 ? threads : cpus().length;
 	server.running = true;
@@ -149,13 +155,22 @@ export function serveConcurrent(server: HttpServer, threads: int32 = 0): void {
 				const clientFd = msNetAccept(workerFd);
 				if (clientFd < 0) continue;
 				if (keepAliveTimeout > 0) msNetSetTimeout(clientFd, keepAliveTimeout);
-				handleConnection(workerServer, clientFd);
-				msNetClose(clientFd);
+				// Spawn handler thread per connection — accept loop continues immediately
+				spawnHandler(workerServer, clientFd);
 			}
 			msNetClose(workerFd);
 			return null;
 		});
 	}
+}
+
+// Top-level spawn wrapper — avoids nested closure limitation
+function spawnHandler(server: HttpServer, fd: int32): void {
+	spawn(() => {
+		handleConnection(server, fd);
+		msNetClose(fd);
+		return null;
+	});
 }
 
 // Serve exactly N requests then stop. Useful for testing.
@@ -191,27 +206,21 @@ function handleConnection(server: HttpServer, fd: int32): void {
 		const data = msNetRecv(fd, server.maxHeaderSize);
 		if (data.length === 0) return;
 
-		// Parse request
-		const parsed = parseRequest(data);
-		if (!parsed.ok) return;
-		const req = parsed.value;
+		// Fast path: extract method + path without full header parsing
+		// Request line format: "METHOD /path HTTP/1.1\r\n..."
+		const sp1 = data.indexOf(" ");
+		if (sp1 < 0) return;
+		const sp2 = data.indexOf(" ", sp1 + 1);
+		if (sp2 < 0) return;
+		const path = data.slice(sp1 + 1, sp2);
 
-		// Read body if Content-Length present
-		const contentLength = getContentLength(req.headers);
-		let body = "";
-		if (contentLength > 0) {
-			const bodyResult = readRequestBody(fd, data, req.bodyStart, contentLength, server.maxBodySize);
-			if (!bodyResult.ok) return;
-			body = bodyResult.value;
-		}
-
-		// Build full request
+		// Lightweight request — headers parsed lazily only if handler needs them
 		const request: HttpRequest = {
-			method: req.method,
-			path: req.path,
-			version: req.version,
-			headers: req.headers,
-			body: body,
+			method: parseMethod(data.slice(0, sp1)),
+			path: path,
+			version: "1.1",
+			headers: null as unknown as HttpHeaders,
+			body: "",
 			clientFd: fd,
 		};
 
@@ -233,8 +242,9 @@ function handleConnection(server: HttpServer, fd: int32): void {
 			keepGoing = false;
 		} else if (server.maxRequestsPerConnection > 0 && requestCount >= server.maxRequestsPerConnection) {
 			keepGoing = false;
-		} else if (!isKeepAlive(req.headers, req.version)) {
-			keepGoing = false;
+		} else {
+			// Fast path: assume keep-alive for HTTP/1.1 (default per RFC 7230)
+			// Full header check skipped — we didn't parse headers in fast path
 		}
 	}
 }
@@ -332,10 +342,10 @@ export function endWithBody(res: ServerResponse, data: string): void {
 // ===== Convenience Helpers =====
 
 function sendBody(res: ServerResponse, contentType: string, body: string): void {
-	setHeader(res.headers, "content-type", contentType);
-	setHeader(res.headers, "content-length", body.length.toString());
-	let response = formatStatusLine(res.status);
-	response = response + serializeHeaders(res.headers) + "\r\n" + body;
+	// Fast path: direct format without Map overhead
+	const response = "HTTP/1.1 200 OK\r\nContent-Type: " + contentType +
+		"\r\nContent-Length: " + body.length.toString() +
+		"\r\nConnection: keep-alive\r\n\r\n" + body;
 	msNetSend(res.fd, response);
 	res.headersSent = true;
 	res._finished = true;

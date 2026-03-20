@@ -17,6 +17,14 @@ import { getIdentId } from "./idents";
 // compile.ms drains this after each module's check.
 let _pendingInstances: Node[] = [];
 
+export function addPendingInstance(node: Node): void {
+	const fd = node.data as FunctionDeclData;
+	for (const existing of _pendingInstances) {
+		if ((existing.data as FunctionDeclData).fnName === fd.fnName) return;
+	}
+	_pendingInstances.push(node);
+}
+
 export function drainPendingInstances(): Node[] {
 	const result = _pendingInstances;
 	_pendingInstances = [];

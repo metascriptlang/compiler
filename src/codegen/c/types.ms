@@ -701,14 +701,41 @@ function genObjectType(g: CGen, t: Type): string {
 // The `as` cast maps to .vN member access at the codegen level.
 
 function genUnionType(g: CGen, t: Type): string {
-	const name = (t.typeName.length > 0) ? mangle(t.typeName) : "msUnion_" + hashToBase36(typeKey(t));
 	const key = typeKey(t);
 
 	// Early return if already cached
 	const cached = typeCacheGet(g.typeCache, key);
 	if (cached !== "") return cached;
 
+	// Also check structural key for anonymous copies of named unions
+	let structuralKey = "";
+	if (t.typeName.length > 0) {
+		let sk = "union(";
+		let ski = 0;
+		while (ski < t.typeChildren.length) {
+			if (ski > 0) sk = sk + "|";
+			sk = sk + typeKey(t.typeChildren[ski]);
+			ski = ski + 1;
+		}
+		structuralKey = sk + ")";
+		const structCached = typeCacheGet(g.typeCache, structuralKey);
+		if (structCached !== "") return structCached;
+	} else {
+		// Anonymous union: check if a named version was already generated
+		const namedKey = t.typeExtra !== null && t.typeExtra.typeName !== ""
+			? "union:" + t.typeExtra.typeName : "";
+		if (namedKey !== "") {
+			const namedCached = typeCacheGet(g.typeCache, namedKey);
+			if (namedCached !== "") return namedCached;
+		}
+	}
+
+	const name = (t.typeName.length > 0) ? mangle(t.typeName) : "msUnion_" + hashToBase36(key);
 	typeCacheSet(g.typeCache, key, name);
+	// Cross-cache: structural key → same name (prevents named/anonymous divergence)
+	if (structuralKey !== "") {
+		typeCacheSet(g.typeCache, structuralKey, name);
+	}
 	ensureForwardDecl(g, name);
 
 	const b = sec(g, CSection.Types);

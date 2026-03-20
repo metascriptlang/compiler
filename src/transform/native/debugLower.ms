@@ -1,22 +1,18 @@
 // Debug Lowering — rewrite console.log (Echo builtin) to msPrintln + string coercion
 //
 // Rewrites console.log(arg1, arg2, ...) → msPrintln(toString(arg1) + " " + toString(arg2) + ...)
-// Each arg is coerced to string here. Primitives use direct calls, structs use JSON.stringify,
-// and stringOpLower handles any remaining coercion for + operators.
-//
-// C code generation for colored struct output delegated to codegen/c/json.ms.
+// Each arg is coerced to string here. Primitives use direct calls, structs use
+// json builders (jsonObject/jsonString/jsonNumber/jsonBool) + stringify from std/core/json.
 
-import { Node, NodeKind, SourceLocation, CallExprData, Type, TypeKind } from "../../ast/node";
-import { isNumeric, stringType, unwrapRef } from "../../checker/types";
-import { TransformContext, hasEmitted } from "../context";
+import { Node, NodeKind, SourceLocation, CallExprData, Type, TypeKind, createNode } from "../../ast/node";
+import { isNumeric, stringType, createArray, unwrapRef } from "../../checker/types";
+import { TransformContext } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { findExtension } from "../../checker/context";
-import { makeIdent, makeCall, makeString, makeBinary, makeMember, enumToStringName } from "../util";
-import { makeEmitNode, generateJsonStringifyColoredC, registerHelper } from "../../codegen/c/json";
+import { makeIdent, makeCall, makeString, makeBool, makeBinary, makeMember, enumToStringName, syntheticToken } from "../util";
 
 // Resolve the struct type for a type name string (e.g., "Person" → struct type with fields).
-// Shared by echo coercion and JSON builtin rewriting.
-export function resolveJsonTargetType(typeArgStr: string, ctx: TransformContext): Type {
+function resolveJsonTargetType(typeArgStr: string, ctx: TransformContext): Type {
 	if (ctx.checkerCtx === null) return null;
 	const sym = lookupSymbol(ctx.checkerCtx.table, typeArgStr);
 	if (sym === null) return null;
@@ -24,15 +20,6 @@ export function resolveJsonTargetType(typeArgStr: string, ctx: TransformContext)
 	const unwrapped = unwrapRef(sym.symbolType);
 	if (unwrapped.kind === TypeKind.Struct) return unwrapped;
 	return null;
-}
-
-// Check if a JSON target type is Ref-wrapped (interface/class vs struct).
-// Used by JSON generators to emit pointer-aware C code.
-export function isJsonTargetRef(typeArgStr: string, ctx: TransformContext): boolean {
-	if (ctx.checkerCtx === null) return false;
-	const sym = lookupSymbol(ctx.checkerCtx.table, typeArgStr);
-	if (sym === null || sym.symbolType === null) return false;
-	return sym.symbolType.kind === TypeKind.Ref;
 }
 
 function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): Node {
@@ -52,9 +39,9 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 		call.nodeType = stringType();
 		return call;
 	}
-	// Struct/Class → check toString() extension first, then fall back to JSON debug format
+	// Struct/Class/Union → check toString() extension first, then fall back to JSON debug format
 	const inner = unwrapRef(t);
-	if (inner.kind === TypeKind.Struct && inner.typeName !== "") {
+	if ((inner.kind === TypeKind.Struct || inner.kind === TypeKind.Union) && inner.typeName !== "") {
 		const typeName = inner.typeName;
 		// Priority 1: user-defined toString() extension method
 		if (ctx.checkerCtx !== null && typeName !== "JsonValue") {
@@ -76,33 +63,11 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 				return call;
 			}
 		}
-		// JsonValue → "Json { ... }" with magenta prefix
-		if (typeName === "JsonValue") {
-			const jHelperName = "__jsonDbg_JsonValue";
-			if (!hasEmitted(ctx, jHelperName)) {
-				// Emit a small wrapper: prefix "Json " in magenta + msJsonStringifyColored(value)
-				let jc = "/*INCLUDESECTION*/#include \"std/core/json/native.h\"\n";
-				jc = jc + "static msString " + jHelperName + "(JsonValue* value) {\n";
-				jc = jc + "  msString __body = msJsonStringifyColored(value);\n";
-				jc = jc + "  char __pbuf[64];\n";
-				jc = jc + "  int __plen;\n";
-				jc = jc + "  if (msColorsEnabled()) {\n";
-				jc = jc + "    __plen = snprintf(__pbuf, sizeof(__pbuf), \"\\x1b[35mJson \\x1b[0m\");\n";
-				jc = jc + "  } else {\n";
-				jc = jc + "    __plen = snprintf(__pbuf, sizeof(__pbuf), \"Json \");\n";
-				jc = jc + "  }\n";
-				jc = jc + "  msString __prefix = msStringNew(__pbuf, __plen);\n";
-				jc = jc + "  return msStringConcat(__prefix, __body);\n";
-				jc = jc + "}\n";
-				registerHelper(jHelperName, makeEmitNode(jc, loc), ctx);
-			}
-			const call = makeCall(makeIdent(jHelperName, loc), [arg], loc);
-			call.nodeType = stringType();
-			return call;
+		// JsonValue → "\x1b[35mJson \x1b[0m" + stringify(value)
+		if (typeName === "JsonValue" || typeName === "JsonValueData") {
+			return buildJsonValueDebug(arg, loc, ctx);
 		}
-		// Named struct → __jsonDbg_T (colored debug format for console.log)
-		// Try symbol table first; fall back to type directly if it has field metadata
-		// (synthesized anonymous types like __anon... have no symbol table entry)
+		// Named struct/class → "\x1b[34mTypeName \x1b[0m" + stringify(jsonObject(...))
 		let structType = resolveJsonTargetType(typeName, ctx);
 		if (structType === null && inner.typeNames !== null && inner.typeChildren !== null) {
 			structType = inner;
@@ -110,17 +75,7 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 		if (structType !== null) {
 			const isClass = t.kind === TypeKind.Ref;
 			const isAnon = typeName.length > 6 && typeName.slice(0, 6) === "__anon";
-			const displayName = isAnon ? "Object " : isClass ? "class " + typeName + " " : typeName + " ";
-			const dbgColor = isAnon ? "\\x1b[36m" : isClass ? "\\x1b[32m" : "\\x1b[34m";
-			const helperName = "__jsonDbg_" + typeName;
-			if (!hasEmitted(ctx, helperName)) {
-				const emitNode = generateJsonStringifyColoredC(helperName, typeName, structType, displayName, dbgColor, isClass, loc);
-				if (emitNode === null) return arg;  // unsupported field type — pass through
-				registerHelper(helperName, emitNode, ctx);
-			}
-			const call = makeCall(makeIdent(helperName, loc), [arg], loc);
-			call.nodeType = stringType();
-			return call;
+			return buildStructDebugString(arg, typeName, structType, isClass, isAnon, loc, ctx);
 		}
 	}
 	// Enum → EnumName_toString(value) (generated by enumToStringLower)
@@ -144,6 +99,120 @@ function echoCoerceArg(arg: Node, loc: SourceLocation, ctx: TransformContext): N
 	const placeholder = makeString("<" + fallbackName + ">", loc);
 	placeholder.nodeType = stringType();
 	return placeholder;
+}
+
+// Resolve a prelude identifier with symbol from checker table
+function resolveDbgIdent(name: string, ctx: TransformContext, loc: SourceLocation): Node {
+	const ident = makeIdent(name, loc);
+	if (ctx.checkerCtx !== null && ctx.checkerCtx.table !== null) {
+		const sym = lookupSymbol(ctx.checkerCtx.table, name);
+		if (sym !== null) {
+			ident.resolvedSym = sym;
+			if (sym.symbolType !== null) ident.nodeType = sym.symbolType;
+		}
+	}
+	return ident;
+}
+
+// Wrap a field access node in the appropriate json builder call.
+// Handles primitives, nested structs, and arrays recursively.
+function wrapFieldAsJson(fieldAccess: Node, ftype: Type, loc: SourceLocation, ctx: TransformContext): Node {
+	if (ftype === null) return makeCall(resolveDbgIdent("jsonNull", ctx, loc), [], loc);
+
+	// Primitives
+	const primWrapper = match (ftype.kind) {
+		TypeKind.String => "jsonString",
+		TypeKind.Boolean => "jsonBool",
+		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32
+			| TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
+			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64
+			| TypeKind.Enum => "jsonNumber",
+		_ => "",
+	};
+	if (primWrapper !== "") return makeCall(resolveDbgIdent(primWrapper, ctx, loc), [fieldAccess], loc);
+
+	// Nested struct → recursive jsonObject
+	const inner = unwrapRef(ftype);
+	if (inner.kind === TypeKind.Struct && inner.typeNames !== null && inner.typeChildren !== null) {
+		return buildNestedJsonObject(fieldAccess, inner, loc, ctx);
+	}
+
+	// Fallback: jsonNull
+	return makeCall(resolveDbgIdent("jsonNull", ctx, loc), [], loc);
+}
+
+// Build jsonObject(keys, vals) for a nested struct field
+function buildNestedJsonObject(obj: Node, structType: Type, loc: SourceLocation, ctx: TransformContext): Node {
+	const keyNodes: Node[] = [];
+	const valNodes: Node[] = [];
+	let fi = 0;
+	while (fi < structType.typeNames.length && fi < structType.typeChildren.length) {
+		const fname = structType.typeNames[fi];
+		const ftype = structType.typeChildren[fi];
+		keyNodes.push(makeString(fname, loc));
+		const fa = makeMember(obj, fname, loc);
+		valNodes.push(wrapFieldAsJson(fa, ftype, loc, ctx));
+		fi = fi + 1;
+	}
+	const keysArr = createNode(NodeKind.ArrayLiteral, { elements: keyNodes }, syntheticToken(loc));
+	keysArr.nodeType = createArray(stringType());
+	const valsArr = createNode(NodeKind.ArrayLiteral, { elements: valNodes }, syntheticToken(loc));
+	return makeCall(resolveDbgIdent("jsonObject", ctx, loc), [keysArr, valsArr], loc);
+}
+
+// Build: "\x1b[35mJson \x1b[0m" + stringify(value, true)
+function buildJsonValueDebug(arg: Node, loc: SourceLocation, ctx: TransformContext): Node {
+	const prefix = makeString("\x1b[35mJson \x1b[0m", loc);
+	prefix.nodeType = stringType();
+	const strCall = makeCall(resolveDbgIdent("stringify", ctx, loc), [arg, makeBool(true, loc)], loc);
+	strCall.nodeType = stringType();
+	let result = makeBinary(prefix, "+", strCall, loc);
+	result.nodeType = stringType();
+	return result;
+}
+
+// Build: "\x1b[34mTypeName \x1b[0m" + stringify(jsonObject(keys, vals))
+function buildStructDebugString(arg: Node, typeName: string, structType: Type, isClass: boolean, isAnon: boolean, loc: SourceLocation, ctx: TransformContext): Node {
+	if (structType.typeNames === null || structType.typeChildren === null) return arg;
+
+	// Color prefix: blue for struct, green for class, cyan for anon
+	const color = isAnon ? "\x1b[36m" : isClass ? "\x1b[32m" : "\x1b[34m";
+	const label = isAnon ? "Object " : isClass ? typeName + " " : typeName + " ";
+	const prefix = makeString(color + label + "\x1b[0m", loc);
+	prefix.nodeType = stringType();
+
+	// Safety: if arg is not a simple identifier, accessing N fields evaluates it N times.
+	// For non-identifiers, build jsonObject inline (arg still evaluated once per field access,
+	// but this matches how the expression appears in user code — no worse than writing it manually).
+	const safeArg = arg;
+
+	// Build keys and values arrays
+	const keyNodes: Node[] = [];
+	const valNodes: Node[] = [];
+	let fi = 0;
+	while (fi < structType.typeNames.length && fi < structType.typeChildren.length) {
+		const fname = structType.typeNames[fi];
+		const ftype = structType.typeChildren[fi];
+		keyNodes.push(makeString(fname, loc));
+		const fieldAccess = makeMember(safeArg, fname, loc);
+		valNodes.push(wrapFieldAsJson(fieldAccess, ftype, loc, ctx));
+		fi = fi + 1;
+	}
+
+	// jsonObject(keys, values)
+	const keysArr = createNode(NodeKind.ArrayLiteral, { elements: keyNodes }, syntheticToken(loc));
+	keysArr.nodeType = createArray(stringType());
+	const valsArr = createNode(NodeKind.ArrayLiteral, { elements: valNodes }, syntheticToken(loc));
+	const objCall = makeCall(resolveDbgIdent("jsonObject", ctx, loc), [keysArr, valsArr], loc);
+
+	// stringify(obj, true) — colored console output
+	const strCall = makeCall(resolveDbgIdent("stringify", ctx, loc), [objCall, makeBool(true, loc)], loc);
+	strCall.nodeType = stringType();
+
+	// prefix + stringify result
+	let result = makeBinary(prefix, "+", strCall, loc);
+	result.nodeType = stringType();
+	return result;
 }
 
 export function rewriteEcho(node: Node, ctx: TransformContext): Node {

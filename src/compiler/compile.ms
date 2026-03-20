@@ -3,7 +3,7 @@
 import { exit, exec, fileExists } from "std/process";
 import { parseSource } from "../parser/statements/validation";
 import { Node, NodeKind, ProgramData, FunctionDeclData, SymbolKind } from "../ast/node";
-import { CheckerContext, hasErrors, hasFatalErrors, errorCount } from "../checker/context";
+import { CheckerContext, hasErrors, hasFatalErrors, errorCount, Severity } from "../checker/context";
 import { checkProgramWithRegistry } from "../checker/checkPass";
 import { checkModuleGraph, getPreludeContext } from "../checker/index";
 import { ExportRegistry } from "../checker/context";
@@ -230,20 +230,20 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 	graphPreludeCtx = getPreludeContext();
 	// Report type errors but continue — allows codegen to proceed past non-fatal checker issues
 	reportModuleErrors(graph, "type error");
+	// Clear graph-phase errors to prevent duplicate rendering in per-module phase
+	for (const mod of graph.modules) {
+		mod.errors = [];
+	}
 	return graph;
 }
 
-// Load pure .ms prelude modules into the module graph.
-// Only loads modules that have NO .cms counterpart (those are extern-only, already
-// in the graph via regular imports). Matches compileSystemModule pattern:
-// prelude modules with real MetaScript code need codegen just like user modules.
+// Load prelude modules (globalImports) into the module graph.
+// Extension resolved by the resolver based on target backend.
 function loadPreludeModules(graph: ModuleGraph, provider: SourceProvider, config: ResolverConfig): void {
 	for (const imp of globalImports()) {
 		const candidates = resolveImportWithConfig(imp, "virtual:prelude", config);
-		// Skip .cms preludes — they may have type conflicts with @include headers.
-		// Only .ms preludes (pure MetaScript) are added to the graph for codegen.
 		for (const candidate of candidates) {
-			if (candidate.endsWith(".ms") && provideSource(provider, candidate).ok) {
+			if (provideSource(provider, candidate).ok) {
 				if (!hasModule(graph, candidate)) {
 					const _r = loadModule(graph, candidate, provider, config, 1);
 				}
@@ -470,8 +470,10 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		ctx.strictNullChecks = opts.strictNullChecks;
 		exitOnFatalCheckerErrors(ctx, modPath, mod.source);
 		// Render non-fatal checker errors and track for codegen gate
+		// Skip warnings — already rendered in graph checker phase
 		if (hasErrors(ctx)) {
 			for (const e of ctx.errors) {
+				if (e.severity === Severity.Warning) continue;
 				renderModuleError(modPath, mod.source, {
 					message: e.message, line: e.line, column: e.column,
 					severity: e.fatal ? ErrorSeverity.Error : ErrorSeverity.Error,

@@ -9,13 +9,13 @@
 //
 // This is an AST-to-AST transform — codegen sees only plain calls.
 //
-// Typed JSON (JsonParse/JsonStringify): delegates C code generation to
-// codegen/c/json.ms for clean separation of concerns.
+// Typed JSON (JsonParse/JsonStringify): specialization handled in checker phase
+// (generateJsonParseInstance/generateJsonStringifyInstance). Transform handles untyped + primitives.
 
-import { Node, NodeKind, NodeFlag, DeclKind, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, NewExprData, Type, TypeKind } from "../../ast/node";
-import { isNumeric, createResult, createArray, createPrimitive, createRef, stringType, booleanType, numberType, unknownType, unwrapRef, typeNameOf, isResult, isPromise, getResultOkType, getResultErrType } from "../../checker/types";
+import { Node, NodeKind, NodeFlag, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, NewExprData, Type, TypeKind } from "../../ast/node";
+import { isNumeric, createResult, createArray, createPrimitive, stringType, unknownType, unwrapRef, typeNameOf, isResult, isPromise, getResultOkType, getResultErrType } from "../../checker/types";
 import { findExtension } from "../../checker/context";
-import { TransformContext, hasEmitted } from "../context";
+import { TransformContext } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { walkNode } from "../walker";
 import {
@@ -24,8 +24,7 @@ import {
 	makeExprStmt, enumToStringName,
 } from "../util";
 import { findCallTypeArg } from "../../parser/context";
-import { generateJsonParseC, generateJsonStringifyC, makeEmitNode, ensureJsonInclude, registerHelper, fieldTypeToJsonCtor, needsNumCast, emitValueToJson, emitNestedToValueHelpers, arrayCType, arrayElemKey } from "../../codegen/c/json";
-import { rewriteEcho, resolveJsonTargetType, isJsonTargetRef } from "./debugLower";
+import { rewriteEcho } from "./debugLower";
 import { stmtCountAfter, firstStmtKindAfter, firstExprKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====
@@ -45,13 +44,6 @@ export function lowerBuiltins(program: Node, ctx: TransformContext): Node {
 		}
 		return node;
 	});
-	// Append generated @emit nodes (JSON helpers)
-	if (ctx.pendingDecls.length > 0) {
-		const pd = result.data as ProgramData;
-		for (const decl of ctx.pendingDecls) {
-			pd.programStmts.push(decl);
-		}
-	}
 	return result;
 }
 
@@ -125,25 +117,12 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 	if (tk === TypeKind.String) {
 		return obj;
 	}
-	// Struct/Class → JSON debug format (same as console.log default)
+	// Struct/Class → JSON stringify (same as console.log default)
 	const inner = unwrapRef(objType);
 	if (inner.kind === TypeKind.Struct && inner.typeName !== "") {
-		let structType = resolveJsonTargetType(inner.typeName, ctx);
-		if (structType === null && inner.typeNames !== null && inner.typeChildren !== null) {
-			structType = inner;
-		}
-		if (structType !== null) {
-			const helperName = "__toString_" + inner.typeName;
-			if (!hasEmitted(ctx, helperName)) {
-				const emitNode = generateToStringC(helperName, inner.typeName, structType, loc);
-				if (emitNode !== null) {
-					registerHelper(helperName, emitNode, ctx);
-				}
-			}
-			const call = makeCall(makeIdent(helperName, loc), [obj], loc);
-			call.nodeType = stringType();
-			return call;
-		}
+		// Use JSON.stringify which is already handled by the checker
+		// For .toString() fallback, just pass through — the caller handles it
+		return obj;
 	}
 	// Array → msArrayToString (runtime helper)
 	if (tk === TypeKind.Array) {
@@ -170,41 +149,6 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 	return s;
 }
 
-// Generate a plain (non-colored) struct toString C helper via @emit
-function generateToStringC(helperName: string, typeName: string, structType: Type, loc: SourceLocation): Node {
-	if (structType.typeNames === null || structType.typeChildren === null) return null as unknown as Node;
-	const isAnon = typeName.length > 6 && typeName.slice(0, 6) === "__anon";
-	let c = "static msString " + helperName + "(" + typeName + "* self) {\n";
-	c = c + "  char __buf[4096];\n";
-	c = c + "  int __pos = 0;\n";
-	// Opening: "{ " or "TypeName { "
-	if (isAnon) {
-		c = c + "  __pos += snprintf(__buf + __pos, sizeof(__buf) - __pos, \"{ \");\n";
-	} else {
-		c = c + "  __pos += snprintf(__buf + __pos, sizeof(__buf) - __pos, \"" + typeName + " { \");\n";
-	}
-	let fi = 0;
-	while (fi < structType.typeNames.length) {
-		const fname = structType.typeNames[fi];
-		const ftype = structType.typeChildren[fi];
-		const sep = fi > 0 ? ", " : "";
-		if (ftype.kind === TypeKind.String) {
-			c = c + "  __pos += snprintf(__buf + __pos, sizeof(__buf) - __pos, \"" + sep + fname + ": \\\"%.*s\\\"\", (int)self->" + fname + ".len, self->" + fname + ".data);\n";
-		} else if (isNumeric(ftype)) {
-			c = c + "  __pos += snprintf(__buf + __pos, sizeof(__buf) - __pos, \"" + sep + fname + ": %g\", self->" + fname + ");\n";
-		} else if (ftype.kind === TypeKind.Boolean) {
-			c = c + "  __pos += snprintf(__buf + __pos, sizeof(__buf) - __pos, \"" + sep + fname + ": %s\", self->" + fname + " ? \"true\" : \"false\");\n";
-		} else {
-			// Unknown field type — print as placeholder
-			c = c + "  __pos += snprintf(__buf + __pos, sizeof(__buf) - __pos, \"" + sep + fname + ": <...>\");\n";
-		}
-		fi = fi + 1;
-	}
-	c = c + "  __pos += snprintf(__buf + __pos, sizeof(__buf) - __pos, \" }\");\n";
-	c = c + "  return msStringNew(__buf, __pos);\n";
-	c = c + "}\n";
-	return makeEmitNode(c, loc);
-}
 
 // ===== Builtin Inline Expansion =====
 // Handles @builtin("Name") — known compiler builtins get inline C patterns.
@@ -371,10 +315,7 @@ function rewriteResultToLiteral(node: Node, isOk: boolean, ctx: TransformContext
 }
 
 // ===== Typed JSON — @builtin("JsonParse") / @builtin("JsonStringify") =====
-// AST rewriting only — C code generation delegated to codegen/c/json.ms
-
-// Dedup check — prevents generating the same helper twice.
-// Uses ctx.emittedHelpers (per-compilation) instead of module-level state.
+// Typed struct paths handled by checker. This handles untyped parse + primitive stringify.
 
 function rewriteJsonParse(node: Node, ctx: TransformContext): Node {
 	const cd = node.data as CallExprData;
@@ -386,51 +327,35 @@ function rewriteJsonParse(node: Node, ctx: TransformContext): Node {
 		return rewriteUntypedJsonParse(node, ctx);
 	}
 
-	const structType = resolveJsonTargetType(typeArgStr, ctx);
-	if (structType === null) return node;
-
-	const isRef = isJsonTargetRef(typeArgStr, ctx);
-	const helperName = "__jsonParse_" + typeArgStr;
-	const resultOkType = isRef ? createRef(structType) : structType;
-	const resultType = createResult(resultOkType, stringType());
-
-	if (!hasEmitted(ctx, helperName)) {
-		const emitNode = generateJsonParseC(helperName, typeArgStr, structType, isRef, loc);
-		if (emitNode === null) return node;
-		registerHelper(helperName, emitNode, ctx);
-	}
-
-	const newCallee = makeIdent(helperName, loc);
-	const result = makeCall(newCallee, cd.arguments, loc);
-	result.nodeType = resultType;
-	return result;
+	// Typed path: already handled by checker (generateJsonParseInstance)
+	return node;
 }
 
 // Untyped JSON.parse(str) — returns Result<JsonValue, string>
-// C runtime msJsonParse returns MsJsonValue*, wrap in Result.ok literal.
+// Rewrites to parseJson(str) from std/core/json/parser.ms.
 function rewriteUntypedJsonParse(node: Node, ctx: TransformContext): Node {
 	const cd = node.data as CallExprData;
 	const loc = node.location;
 	if (cd.arguments.length < 1) return node;
 
-	// Look up JsonValue type from checker
-	if (ctx.checkerCtx === null) return node;
-	const jvSym = lookupSymbol(ctx.checkerCtx.table, "JsonValue");
-	if (jvSym === null || jvSym.symbolType === null) return node;
-	const jvType = jvSym.symbolType;  // Ref<Struct("JsonValue", ...)>
-
-	ensureJsonInclude(ctx, loc);
-
-	const call = makeCall(makeIdent("msJsonParse", loc), cd.arguments, loc);
-	call.nodeType = jvType;
-
-	// Wrap in Result.ok literal: { ok: true, value: msJsonParse(...), error: "" }
-	const resultType = createResult(jvType, stringType());
-	const keys: string[] = ["ok", "value", "error"];
-	const values: Node[] = [makeBool(true, loc), call, makeString("", loc)];
-	const literal = makeObjectLiteral(keys, values, loc);
-	literal.nodeType = resultType;
-	return literal;
+	// Pure MetaScript: JSON.parse(str) → parseJson(str)
+	// Resolve symbol so codegen emits the correct mangled name
+	const parseIdent = makeIdent("parseJson", loc);
+	if (ctx.checkerCtx !== null) {
+		const parseSym = lookupSymbol(ctx.checkerCtx.table, "parseJson");
+		if (parseSym !== null) {
+			parseIdent.resolvedSym = parseSym;
+			if (parseSym.symbolType !== null) parseIdent.nodeType = parseSym.symbolType;
+		}
+	}
+	const call = makeCall(parseIdent, cd.arguments, loc);
+	if (ctx.checkerCtx !== null) {
+		const jvSym = lookupSymbol(ctx.checkerCtx.table, "JsonValue");
+		if (jvSym !== null && jvSym.symbolType !== null && jvSym.symbolType.kind !== TypeKind.Unknown) {
+			call.nodeType = createResult(jvSym.symbolType, stringType());
+		}
+	}
+	return call;
 }
 
 function rewriteJsonStringify(node: Node, ctx: TransformContext): Node {
@@ -442,96 +367,35 @@ function rewriteJsonStringify(node: Node, ctx: TransformContext): Node {
 	const argType = cd.arguments[0].nodeType !== null ? unwrapRef(cd.arguments[0].nodeType) : null;
 	if (argType === null) return node;
 
-	// Primitive types: rewrite to runtime call that builds MsJsonValue*, stringifies, frees.
-	// Reference parity: storeAny handles bool, char, enum etc. directly.
-	const primCtor = fieldTypeToJsonCtor(argType);
-	if (primCtor !== "") {
-		ensureJsonInclude(ctx, loc);
-		const helperName = "__jsonStringifyPrim_" + argType.kind;
-		if (!hasEmitted(ctx, helperName)) {
-			let valueExpr = "value";
-			if (needsNumCast(argType)) valueExpr = "(double)value";
-			const cType = match (argType.kind) {
-				TypeKind.String => "msString",
-				TypeKind.Boolean => "MS_BOOL",
-				_ => "double",
-			};
-			let c = "";
-			c = c + `static msString ${helperName}(${cType} value) {\n`;
-			c = c + `  MsJsonValue* __v = ${primCtor}(${valueExpr});\n`;
-			c = c + "  msString __r = msJsonStringify(__v);\n";
-			c = c + "  msJsonFree(__v);\n";
-			c = c + "  return __r;\n";
-			c = c + "}\n";
-			registerHelper(helperName, makeEmitNode(c, loc), ctx);
+	// Primitive types: stringify(jsonString/jsonNumber/jsonBool(value))
+	const primWrapper = match (argType.kind) {
+		TypeKind.String => "jsonString",
+		TypeKind.Boolean => "jsonBool",
+		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32
+			| TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
+			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64
+			| TypeKind.Enum => "jsonNumber",
+		_ => "",
+	};
+	if (primWrapper !== "") {
+		const wrapIdent = makeIdent(primWrapper, loc);
+		if (ctx.checkerCtx !== null) {
+			const ws = lookupSymbol(ctx.checkerCtx.table, primWrapper);
+			if (ws !== null) { wrapIdent.resolvedSym = ws; if (ws.symbolType !== null) wrapIdent.nodeType = ws.symbolType; }
 		}
-		const newCallee = makeIdent(helperName, loc);
-		const result = makeCall(newCallee, cd.arguments, loc);
+		const wrapped = makeCall(wrapIdent, cd.arguments, loc);
+		const strIdent = makeIdent("stringify", loc);
+		if (ctx.checkerCtx !== null) {
+			const ss = lookupSymbol(ctx.checkerCtx.table, "stringify");
+			if (ss !== null) { strIdent.resolvedSym = ss; if (ss.symbolType !== null) strIdent.nodeType = ss.symbolType; }
+		}
+		const result = makeCall(strIdent, [wrapped], loc);
 		result.nodeType = stringType();
 		return result;
 	}
 
-	// Array types: generate helper that iterates and serializes each element.
-	if (argType.kind === TypeKind.Array && argType.typeReturn !== null) {
-		ensureJsonInclude(ctx, loc);
-		const elemType = argType.typeReturn;
-		const elemKey = arrayElemKey(argType.typeReturn);
-		const helperName = "__jsonStringifyArr_" + elemKey;
-		if (!hasEmitted(ctx, helperName)) {
-			let c = "";
-			// Emit nested struct helpers if array of structs
-			if (elemType.kind === TypeKind.Struct && elemType.typeName !== "") {
-				const emitted: Set<string> = new Set<string>();
-				const nestedC = emitNestedToValueHelpers([elemType], emitted);
-				c = c + nestedC;
-			}
-			const arrCType = arrayCType(elemType);
-			const elemAccess = arrCType === "msRefArray" ? "msArrayAccess(arr, __i)" : "arr.p->data[__i]";
-			const elemConvert = emitValueToJson(elemAccess, elemType);
-			c = c + `static msString ${helperName}(${arrCType} arr) {\n`;
-			c = c + "  MsJsonValue* __a = msJsonNewArray();\n";
-			c = c + "  for (int64_t __i = 0; __i < arr.len; __i++) {\n";
-			c = c + `    msJsonPush(__a, ${elemConvert});\n`;
-			c = c + "  }\n";
-			c = c + "  msString __r = msJsonStringify(__a);\n";
-			c = c + "  msJsonFree(__a);\n";
-			c = c + "  return __r;\n";
-			c = c + "}\n";
-			registerHelper(helperName, makeEmitNode(c, loc), ctx);
-		}
-		const newCallee = makeIdent(helperName, loc);
-		const result = makeCall(newCallee, cd.arguments, loc);
-		result.nodeType = stringType();
-		return result;
-	}
-
-	// Struct types: generate per-type stringify helper (existing logic).
-	let typeArgStr = findCallTypeArg(node);
-	if (typeArgStr === "" && argType.kind === TypeKind.Struct && argType.typeName !== "") {
-		typeArgStr = argType.typeName;
-	}
-	if (typeArgStr === "") return node;
-
-	let structType = resolveJsonTargetType(typeArgStr, ctx);
-	if (structType === null && argType.kind === TypeKind.Struct && argType.typeName === typeArgStr) {
-		structType = argType;
-	}
-	if (structType === null) return node;
-
-	const isRef = isJsonTargetRef(typeArgStr, ctx);
-	ensureJsonInclude(ctx, loc);
-	const helperName = "__jsonStringify_" + typeArgStr;
-
-	if (!hasEmitted(ctx, helperName)) {
-		const emitNode = generateJsonStringifyC(helperName, typeArgStr, structType, isRef, loc);
-		if (emitNode === null) return node;
-		registerHelper(helperName, emitNode, ctx);
-	}
-
-	const newCallee = makeIdent(helperName, loc);
-	const result = makeCall(newCallee, cd.arguments, loc);
-	result.nodeType = stringType();
-	return result;
+	// Typed struct/array stringify: already handled by checker (generateJsonStringifyInstance)
+	return node;
 }
 
 // ===== Tests =====

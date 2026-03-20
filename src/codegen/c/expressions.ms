@@ -844,8 +844,12 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			}
 		}
 		// Discriminated union: tag field → _tag, variant fields → v<N>.field
-		const objType = d.object.nodeType !== null ? d.object.nodeType
+		// Unwrap Ref<Union> for field access (Ref<Union> is how type alias Ref<Data> resolves)
+		let objType = d.object.nodeType !== null ? d.object.nodeType
 			: (d.object.resolvedSym !== null ? d.object.resolvedSym.symbolType : null);
+		if (objType !== null && objType.kind === TypeKind.Ref && objType.typeReturn !== null) {
+			objType = objType.typeReturn;
+		}
 		if (objType !== null && objType.kind === TypeKind.Union) {
 			const acc = objIsPtr ? "->" : ".";
 			// Tag field access: s.kind → s._tag
@@ -1079,11 +1083,18 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			let unionWrapName = "";
 			let unionWrapIdx = -1;
 			let unionDiscKeyIdx = -1;
+			let isRefUnion = false;
 			if (node.nodeType !== null) {
-					if (node.nodeType.kind === TypeKind.Union && d.keys.length > 0) {
-					const unionName = getTypeDesc(g, node.nodeType);
+				// Unwrap Ref<Union> for discriminated union construction
+				let litType = node.nodeType;
+				if (litType.kind === TypeKind.Ref && litType.typeReturn !== null && litType.typeReturn.kind === TypeKind.Union) {
+					litType = litType.typeReturn;
+					isRefUnion = true;
+				}
+				if (litType.kind === TypeKind.Union && d.keys.length > 0) {
+					const unionName = getTypeDesc(g, litType);
 					// Discriminated union: use discriminant key to find variant
-					const discName = isDiscriminatedUnion(node.nodeType) ? getDiscriminantName(node.nodeType) : "";
+					const discName = isDiscriminatedUnion(litType) ? getDiscriminantName(litType) : "";
 					let discKeyIdx = -1;
 					if (discName !== "") {
 						let ki = 0;
@@ -1113,7 +1124,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 								discValStr = idName;
 							}
 						}
-						const varIdx = findVariantByDiscriminant(node.nodeType, discValStr);
+						const varIdx = findVariantByDiscriminant(litType, discValStr);
 						if (varIdx >= 0) {
 							cType = `${unionName}_v${varIdx}`;
 							unionWrapName = unionName;
@@ -1177,8 +1188,17 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					i += 1;
 				}
 				truncResults(ctx, cc);
-				if (unionWrapIdx >= 0) {
-					// Wrap variant struct in parent union compound literal
+				if (unionWrapIdx >= 0 && isRefUnion) {
+					// Ref<Union>: heap-allocate union, assign variant
+					p.labels += 1;
+					const refTmp = `_ref${p.labels}_`;
+					emitProcLocalsLine(p, `${unionWrapName}* ${refTmp};`);
+					emitStmtsLine(p, `${refTmp} = (${unionWrapName}*)msAlloc(sizeof(${unionWrapName}));`);
+					emitStmtsLine(p, `${refTmp}->_tag = ${unionWrapIdx};`);
+					emitStmtsLine(p, `${refTmp}->v${unionWrapIdx} = ${tmpName};`);
+					ctx.results.push(refTmp);
+				} else if (unionWrapIdx >= 0) {
+					// Value union: wrap variant struct in compound literal
 					ctx.results.push(`(${unionWrapName}){ ._tag = ${unionWrapIdx}, .v${unionWrapIdx} = ${tmpName} }`);
 				} else {
 					ctx.results.push(tmpName);

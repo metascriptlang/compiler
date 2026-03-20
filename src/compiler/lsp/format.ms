@@ -1,19 +1,25 @@
-// LSP Format Helpers — JSON.stringify on anonymous structs
+// LSP Format Helpers — safe JSON string building for LSP responses.
 //
-// All functions return JSON strings via JSON.stringify({ ... }).
-// No manual string concatenation — single allocation per response.
+// All functions use JsonBuilder (string concatenation). No JSON.stringify.
+// Safe from circular references. Fast (no object graph walking).
+
+import { lspJsonString } from "./protocol";
+import { jsonObj, jsonArr, jStr, jNum, jBool, jRaw, jStrIf, jRawIf, jItem, jStrItem, jEnd } from "./responseBuilder";
 
 // ===== Position + Range =====
 
 export function lspFmtPosition(line: number, col: number): string {
-	return JSON.stringify({ line, character: col });
+	const b = jsonObj();
+	jNum(b, "line", line);
+	jNum(b, "character", col);
+	return jEnd(b);
 }
 
 export function lspFmtRange(line: number, col: number, endLine: number, endCol: number): string {
-	return JSON.stringify({
-		start: { line, character: col },
-		end: { line: endLine, character: endCol },
-	});
+	const b = jsonObj();
+	jRaw(b, "start", lspFmtPosition(line, col));
+	jRaw(b, "end", lspFmtPosition(endLine, endCol));
+	return jEnd(b);
 }
 
 export function lspFmtLineRange(line: number, col: number, endCol: number): string {
@@ -23,24 +29,24 @@ export function lspFmtLineRange(line: number, col: number, endCol: number): stri
 // ===== Location + TextEdit =====
 
 export function lspFmtLocation(uri: string, line: number, col: number, endLine: number, endCol: number): string {
-	return JSON.stringify({
-		uri,
-		range: { start: { line, character: col }, end: { line: endLine, character: endCol } },
-	});
+	const b = jsonObj();
+	jStr(b, "uri", uri);
+	jRaw(b, "range", lspFmtRange(line, col, endLine, endCol));
+	return jEnd(b);
 }
 
 export function lspFmtTextEdit(line: number, col: number, endCol: number, newText: string): string {
-	return JSON.stringify({
-		range: { start: { line, character: col }, end: { line, character: endCol } },
-		newText,
-	});
+	const b = jsonObj();
+	jRaw(b, "range", lspFmtRange(line, col, line, endCol));
+	jStr(b, "newText", newText);
+	return jEnd(b);
 }
 
 export function lspFmtMultiLineTextEdit(line: number, col: number, endLine: number, endCol: number, newText: string): string {
-	return JSON.stringify({
-		range: { start: { line, character: col }, end: { line: endLine, character: endCol } },
-		newText,
-	});
+	const b = jsonObj();
+	jRaw(b, "range", lspFmtRange(line, col, endLine, endCol));
+	jStr(b, "newText", newText);
+	return jEnd(b);
 }
 
 // ===== Completion Item =====
@@ -48,35 +54,33 @@ export function lspFmtMultiLineTextEdit(line: number, col: number, endLine: numb
 export function lspFmtCompletionItem(
 	label: string, kind: number, detail: string,
 	sortText: string, isDeprecated: boolean, commitChars: string,
-	documentation: string, additionalEdits: string,
-	cursorLine: number, cursorCol: number, prefixLen: number
+	documentation: string, additionalEdits: string
 ): string {
-	const item: any = { label, kind, detail, filterText: label };
-	if (sortText.length > 0) item.sortText = sortText;
-	if (isDeprecated) item.tags = [1];
+	const b = jsonObj();
+	jStr(b, "label", label);
+	jNum(b, "kind", kind);
+	jStr(b, "detail", detail);
+	jStr(b, "insertText", label);
+	jNum(b, "insertTextFormat", 1);
+	jStrIf(b, "sortText", sortText);
+	if (isDeprecated) jRaw(b, "tags", "[1]");
 	if (commitChars.length > 0) {
-		const chars: string[] = [];
+		const ca = jsonArr();
 		let i = 0;
 		while (i < commitChars.length) {
-			chars.push(commitChars.slice(i, i + 1));
+			jStrItem(ca, commitChars.slice(i, i + 1));
 			i = i + 1;
 		}
-		item.commitCharacters = chars;
+		jRaw(b, "commitCharacters", jEnd(ca));
 	}
 	if (documentation.length > 0) {
-		item.documentation = { kind: "markdown", value: documentation };
+		const doc = jsonObj();
+		jStr(doc, "kind", "markdown");
+		jStr(doc, "value", documentation);
+		jRaw(b, "documentation", jEnd(doc));
 	}
-	// textEdit: replace typed prefix with label (enables empty-prefix completion in nvim-cmp)
-	if (cursorLine >= 0) {
-		item.textEdit = {
-			range: { start: { line: cursorLine, character: cursorCol }, end: { line: cursorLine, character: cursorCol + prefixLen } },
-			newText: label,
-		};
-	}
-	if (additionalEdits.length > 0) {
-		item.additionalTextEdits = JSON.parse(additionalEdits);
-	}
-	return JSON.stringify(item);
+	jRawIf(b, "additionalTextEdits", additionalEdits);
+	return jEnd(b);
 }
 
 // ===== Hover =====
@@ -89,13 +93,15 @@ export function lspFmtHoverResult(
 	if (documentation.length > 0) {
 		content = content + "\n\n---\n\n" + documentation;
 	}
+	const contentObj = jsonObj();
+	jStr(contentObj, "kind", "markdown");
+	jStr(contentObj, "value", content);
+	const b = jsonObj();
+	jRaw(b, "contents", jEnd(contentObj));
 	if (line >= 0) {
-		return JSON.stringify({
-			contents: { kind: "markdown", value: content },
-			range: { start: { line, character: col }, end: { line, character: endCol } },
-		});
+		jRaw(b, "range", lspFmtRange(line, col, line, endCol));
 	}
-	return JSON.stringify({ contents: { kind: "markdown", value: content } });
+	return jEnd(b);
 }
 
 // ===== Diagnostics =====
@@ -104,20 +110,20 @@ export function lspFmtDiagnostic(
 	line: number, col: number, endCol: number,
 	severity: number, message: string, source: string, code: number
 ): string {
-	if (code > 0) {
-		return JSON.stringify({
-			range: { start: { line, character: col }, end: { line, character: endCol } },
-			severity, source, message, code,
-		});
-	}
-	return JSON.stringify({
-		range: { start: { line, character: col }, end: { line, character: endCol } },
-		severity, source, message,
-	});
+	const b = jsonObj();
+	jRaw(b, "range", lspFmtRange(line, col, line, endCol));
+	jNum(b, "severity", severity);
+	jStr(b, "source", source);
+	jStr(b, "message", message);
+	if (code > 0) jNum(b, "code", code);
+	return jEnd(b);
 }
 
 export function lspFmtPublishDiagnostics(uri: string, diagnosticsArray: string): string {
-	return "{\"uri\":" + JSON.stringify(uri) + ",\"diagnostics\":" + diagnosticsArray + "}";
+	const b = jsonObj();
+	jStr(b, "uri", uri);
+	jRaw(b, "diagnostics", diagnosticsArray);
+	return jEnd(b);
 }
 
 // ===== Document Symbol =====
@@ -127,19 +133,15 @@ export function lspFmtDocumentSymbol(
 	line: number, col: number, endCol: number,
 	childrenJson: string
 ): string {
-	const range = { start: { line, character: col }, end: { line, character: endCol } };
-	let result = "{\"name\":" + JSON.stringify(name)
-		+ ",\"kind\":" + kind;
-	if (detail.length > 0) {
-		result = result + ",\"detail\":" + JSON.stringify(detail);
-	}
-	const rangeStr = JSON.stringify(range);
-	result = result + ",\"range\":" + rangeStr + ",\"selectionRange\":" + rangeStr;
-	if (childrenJson.length > 0) {
-		result = result + ",\"children\":" + childrenJson;
-	}
-	result = result + "}";
-	return result;
+	const b = jsonObj();
+	jStr(b, "name", name);
+	jNum(b, "kind", kind);
+	jStrIf(b, "detail", detail);
+	const rangeStr = lspFmtRange(line, col, line, endCol);
+	jRaw(b, "range", rangeStr);
+	jRaw(b, "selectionRange", rangeStr);
+	jRawIf(b, "children", childrenJson);
+	return jEnd(b);
 }
 
 // ===== Inlay Hint =====
@@ -148,35 +150,45 @@ export function lspFmtInlayHint(
 	line: number, col: number, label: string, kind: number,
 	paddingLeft: boolean, paddingRight: boolean
 ): string {
-	return JSON.stringify({
-		position: { line, character: col },
-		label, kind, paddingLeft, paddingRight,
-	});
+	const b = jsonObj();
+	jRaw(b, "position", lspFmtPosition(line, col));
+	jStr(b, "label", label);
+	jNum(b, "kind", kind);
+	jBool(b, "paddingLeft", paddingLeft);
+	jBool(b, "paddingRight", paddingRight);
+	return jEnd(b);
 }
 
 // ===== Document Highlight =====
 
 export function lspFmtDocumentHighlight(line: number, col: number, endCol: number, kind: number): string {
-	return JSON.stringify({
-		range: { start: { line, character: col }, end: { line, character: endCol } },
-		kind,
-	});
+	const b = jsonObj();
+	jRaw(b, "range", lspFmtRange(line, col, line, endCol));
+	jNum(b, "kind", kind);
+	return jEnd(b);
 }
 
 // ===== Signature Help =====
 
 export function lspFmtSignatureParam(label: string): string {
-	return JSON.stringify({ label });
+	const b = jsonObj();
+	jStr(b, "label", label);
+	return jEnd(b);
 }
 
 export function lspFmtSignature(label: string, paramsJson: string): string {
-	return "{\"label\":" + JSON.stringify(label) + ",\"parameters\":" + paramsJson + "}";
+	const b = jsonObj();
+	jStr(b, "label", label);
+	jRaw(b, "parameters", paramsJson);
+	return jEnd(b);
 }
 
 export function lspFmtSignatureHelp(signaturesJson: string, activeSig: number, activeParam: number): string {
-	return "{\"signatures\":" + signaturesJson
-		+ ",\"activeSignature\":" + activeSig
-		+ ",\"activeParameter\":" + activeParam + "}";
+	const b = jsonObj();
+	jRaw(b, "signatures", signaturesJson);
+	jNum(b, "activeSignature", activeSig);
+	jNum(b, "activeParameter", activeParam);
+	return jEnd(b);
 }
 
 // ===== Tests =====
@@ -205,27 +217,27 @@ test "text edit" {
 }
 
 test "completion item" {
-	const item = lspFmtCompletionItem("foo", 6, "number", "11", false, "", "", "", -1, 0, 0);
+	const item = lspFmtCompletionItem("foo", 6, "number", "11", false, "", "", "");
 	assert item.length > 20;
 }
 
 test "completion with sortText" {
-	const item = lspFmtCompletionItem("bar", 3, "()", "10", false, "", "", "", -1, 0, 0);
+	const item = lspFmtCompletionItem("bar", 3, "()", "10", false, "", "", "");
 	assert item.length > 20;
 }
 
 test "completion deprecated" {
-	const item = lspFmtCompletionItem("old", 6, "string", "z11", true, "", "", "", -1, 0, 0);
+	const item = lspFmtCompletionItem("old", 6, "string", "z11", true, "", "", "");
 	assert item.length > 30;
 }
 
 test "completion commit chars" {
-	const item = lspFmtCompletionItem("fn", 3, "()", "11", false, "(.", "", "", -1, 0, 0);
+	const item = lspFmtCompletionItem("fn", 3, "()", "11", false, "(.", "", "");
 	assert item.length > 40;
 }
 
 test "completion with docs" {
-	const item = lspFmtCompletionItem("log", 2, "(message: string) => void", "10", false, "(.", "Logs a message to the console.", "", -1, 0, 0);
+	const item = lspFmtCompletionItem("log", 2, "(message: string) => void", "10", false, "(.", "Logs a message to the console.", "");
 	assert item.length > 60;
 }
 
