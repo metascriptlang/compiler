@@ -1,7 +1,7 @@
 // Module orchestrator — coordinates checking across module graph
 // Reference parallel implementation
 
-import { Node, NodeKind, EnumDeclData, makeLoc, Type, SymbolKind } from "../ast/node";
+import { Node, NodeKind, EnumDeclData, makeLoc, SourceLocation, Type, SymbolKind } from "../ast/node";
 import {
 	CheckerContext, createModuleContext, createModuleContextWithCache, Severity,
 	ExportRegistry, ExportedSymInfo, createExportRegistry, registerModuleExports, updateModuleExports,

@@ -3,7 +3,6 @@
 // Serializes JsonValue to JSON string. Uses index-based loops
 // (not for-of) for safety with JsonEntry[] containing class pointers.
 
-import { JsonKind, JsonValue } from "./types";
 import { parseJson } from "./parser";
 // ===== Helpers =====
 

@@ -3,7 +3,6 @@
 // Constructor helpers (jsonNull, jsonBool, etc.) and extension methods
 // (get, at, asString, etc.) for ergonomic JSON manipulation.
 
-import { JsonKind, JsonValue } from "./types";
 
 // ===== Constructors =====
 

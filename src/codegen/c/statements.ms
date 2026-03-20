@@ -7,7 +7,7 @@ import { Node, NodeKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileSt
 import { isStructType } from "../../checker/types";
 import {
 	CGen, CProc, CSection,
-	emitStmts, emitStmtsLine, emitStmtsNl,
+	emitStmts, emitStmtsLine, emitStmtsNl, emitProcLocalsLine,
 	getStmtsIndent, setStmtsIndent,
 	pushBlock, popBlock, readProcStmts,
 	sec, addLine, emitLineDir, getTemp,
@@ -228,6 +228,9 @@ function isUnionNarrowing(node: Node): boolean {
 function genVarDecl(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as VariableDeclData;
 	const varName = safeName(d.declName);
+	// Reference parity (cpsLocals): DRC-generated temps ($ prefix) hoist declaration to function
+	// scope to survive C block scoping in if-else branches. User variables stay at block position.
+	const hoistDecl = d.declName.length > 0 && d.declName.byteAt(0) === "$".code;
 
 	// Type resolution priority: nodeType (checker) > initializer.nodeType (DRC) > annotation fallback
 	let cType = "";
@@ -246,6 +249,11 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 		if (d.initializer.nodeType === null && node.nodeType !== null) {
 			d.initializer.nodeType = node.nodeType;
 		}
+		// Union type: ensure ObjectLiteral has the union type for proper variant construction
+		if (node.nodeType !== null && node.nodeType.kind === TypeKind.Union
+			&& d.initializer.kind === NodeKind.ObjectLiteral) {
+			d.initializer.nodeType = node.nodeType;
+		}
 		// G3 fix: NRVO call sites — when initializer is a call returning a struct,
 		// emit "Type var; fn(&var, args);" instead of "Type var = fn(args);"
 		const nrvoRet = (d.initializer.kind === NodeKind.CallExpr) ? getCalleeReturnType(d.initializer) : null;
@@ -255,25 +263,25 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 			if (cType === "void*" || cType === "double") {
 				cType = getTypeDesc(g, nrvoRet);
 			}
-			emitStmtsLine(p, `${cType} ${varName};`);
+			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); }
+			else { emitStmtsLine(p, `${cType} ${varName};`); }
 			const nrvoCall = genNrvoCallExpr(g, p, d.initializer, varName);
 			emitStmtsLine(p, `${nrvoCall};`);
 		} else if ((d.initializer.kind === NodeKind.NullLiteral || isUndefinedIdent(d.initializer))
 			&& (isStructType(node.nodeType) || isStructCType(cType))) {
-			// Value-type null/undefined init → {0} instead of MS_NIL
-			emitStmtsLine(p, `${cType} ${varName} = {0};`);
+			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = (${cType}){0};`); }
+			else { emitStmtsLine(p, `${cType} ${varName} = {0};`); }
 		} else if ((d.initializer.kind === NodeKind.NullLiteral || isUndefinedIdent(d.initializer)) && isNumericCType(cType)) {
-			// Numeric-type null/undefined init → 0 instead of MS_NIL
-			emitStmtsLine(p, `${cType} ${varName} = 0;`);
+			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = 0;`); }
+			else { emitStmtsLine(p, `${cType} ${varName} = 0;`); }
 		} else if (d.initializer.kind === NodeKind.ArrayLiteral && (d.initializer.data as ArrayLiteralData).elements.length === 0) {
-			// Empty array: use declared type for zero-init (avoids msRefArray default)
-			emitStmtsLine(p, `${cType} ${varName} = (${cType}){0};`);
+			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = (${cType}){0};`); }
+			else { emitStmtsLine(p, `${cType} ${varName} = (${cType}){0};`); }
 		} else if (d.initializer.kind === NodeKind.TypeAssertion && isUnionNarrowing(d.initializer)) {
-			// Union variant narrowing: emit pointer to avoid value copy.
-			// `const d = node.data as BlockStmtData` → `BlockStmtData* d = &(expr).vN`
-			// Mutations via `d.field = x` propagate back to the original node.
 			const initSnippet = genExpr(g, p, d.initializer);
-			emitStmtsLine(p, `${cType}* ${varName} = &(${initSnippet});`);
+			if (hoistDecl) { emitProcLocalsLine(p, `${cType}* ${varName};`); }
+			else { emitStmtsLine(p, `${cType}* ${varName};`); }
+			emitStmtsLine(p, `${varName} = &(${initSnippet});`);
 			p.indirectLocals.push(d.declName);
 		} else {
 			const initSnippet = genExpr(g, p, d.initializer);
@@ -281,7 +289,6 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 			if (d.initializer.nodeType !== null) {
 				const sourceCType = getTypeDesc(g, d.initializer.nodeType);
 				if (cType !== sourceCType && cType !== "void*" && sourceCType !== "void") {
-					// Only cast between compatible C categories (both pointer or both non-pointer)
 					const destIsPtr = cType.indexOf("*") >= 0;
 					const srcIsPtr = sourceCType.indexOf("*") >= 0;
 					if (destIsPtr === srcIsPtr) {
@@ -289,10 +296,12 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 					}
 				}
 			}
-			emitStmtsLine(p, `${cType} ${varName} = ${finalInit};`);
+			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = ${finalInit};`); }
+			else { emitStmtsLine(p, `${cType} ${varName} = ${finalInit};`); }
 		}
 	} else {
-		emitStmtsLine(p, `${cType} ${varName};`);
+		if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); }
+		else { emitStmtsLine(p, `${cType} ${varName};`); }
 	}
 }
 

@@ -48,9 +48,10 @@ export function lspFmtMultiLineTextEdit(line: number, col: number, endLine: numb
 export function lspFmtCompletionItem(
 	label: string, kind: number, detail: string,
 	sortText: string, isDeprecated: boolean, commitChars: string,
-	documentation: string, additionalEdits: string
+	documentation: string, additionalEdits: string,
+	cursorLine: number, cursorCol: number, prefixLen: number
 ): string {
-	const item: any = { label, kind, detail };
+	const item: any = { label, kind, detail, filterText: label };
 	if (sortText.length > 0) item.sortText = sortText;
 	if (isDeprecated) item.tags = [1];
 	if (commitChars.length > 0) {
@@ -64,6 +65,13 @@ export function lspFmtCompletionItem(
 	}
 	if (documentation.length > 0) {
 		item.documentation = { kind: "markdown", value: documentation };
+	}
+	// textEdit: replace typed prefix with label (enables empty-prefix completion in nvim-cmp)
+	if (cursorLine >= 0) {
+		item.textEdit = {
+			range: { start: { line: cursorLine, character: cursorCol }, end: { line: cursorLine, character: cursorCol + prefixLen } },
+			newText: label,
+		};
 	}
 	if (additionalEdits.length > 0) {
 		item.additionalTextEdits = JSON.parse(additionalEdits);
@@ -197,27 +205,27 @@ test "text edit" {
 }
 
 test "completion item" {
-	const item = lspFmtCompletionItem("foo", 6, "number", "11", false, "", "", "");
+	const item = lspFmtCompletionItem("foo", 6, "number", "11", false, "", "", "", -1, 0, 0);
 	assert item.length > 20;
 }
 
 test "completion with sortText" {
-	const item = lspFmtCompletionItem("bar", 3, "()", "10", false, "", "", "");
+	const item = lspFmtCompletionItem("bar", 3, "()", "10", false, "", "", "", -1, 0, 0);
 	assert item.length > 20;
 }
 
 test "completion deprecated" {
-	const item = lspFmtCompletionItem("old", 6, "string", "z11", true, "", "", "");
+	const item = lspFmtCompletionItem("old", 6, "string", "z11", true, "", "", "", -1, 0, 0);
 	assert item.length > 30;
 }
 
 test "completion commit chars" {
-	const item = lspFmtCompletionItem("fn", 3, "()", "11", false, "(.", "", "");
+	const item = lspFmtCompletionItem("fn", 3, "()", "11", false, "(.", "", "", -1, 0, 0);
 	assert item.length > 40;
 }
 
 test "completion with docs" {
-	const item = lspFmtCompletionItem("log", 2, "(message: string) => void", "10", false, "(.", "Logs a message to the console.", "");
+	const item = lspFmtCompletionItem("log", 2, "(message: string) => void", "10", false, "(.", "Logs a message to the console.", "", -1, 0, 0);
 	assert item.length > 60;
 }
 

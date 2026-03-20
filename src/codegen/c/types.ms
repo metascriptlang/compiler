@@ -787,16 +787,16 @@ function genUnionType(g: CGen, t: Type): string {
 	addNewline(b);
 
 	// Phase 2: Emit wrapper struct with anonymous union
+	// Pre-resolve discriminant enum type BEFORE opening the struct (avoid nested typedef)
+	let tagTypeName = "int32_t";
+	if (t.typeExtra !== null && t.typeExtra.kind === TypeKind.Enum && t.typeExtra.typeName !== "") {
+		tagTypeName = getTypeDesc(g, t.typeExtra);
+	}
 	addLine(b, `#ifndef ${name}_DEFINED`);
 	addLine(b, `#define ${name}_DEFINED`);
 	addLine(b, `struct ${name} {`);
 	b.indent += 1;
-	// Discriminated union: use enum type for _tag; undiscriminated: int32_t
-	if (t.typeExtra !== null && t.typeExtra.kind === TypeKind.Enum && t.typeExtra.typeName !== "") {
-		addLine(b, mangle(t.typeExtra.typeName) + " _tag;");
-	} else {
-		addLine(b, "int32_t _tag;");
-	}
+	addLine(b, tagTypeName + " _tag;");
 	addLine(b, "union {");
 	b.indent += 1;
 	vi = 0;

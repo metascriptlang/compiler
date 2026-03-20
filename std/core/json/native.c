@@ -3,4 +3,4 @@
 
 #include "native.h"
 
-msTypeInfo MsJsonValue_typeInfo = { "MsJsonValue", MS_FALSE, NULL, NULL };
+msTypeInfo JsonValue_typeInfo = { "JsonValue", MS_FALSE, NULL, NULL };

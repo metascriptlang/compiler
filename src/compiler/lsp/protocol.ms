@@ -208,9 +208,8 @@ export function lspParseContentLength(headerLine: string): number {
 }
 
 // Format a JSON-RPC message with Content-Length header for writing.
-// JSON output is pure ASCII (non-ASCII escaped as \uXXXX), so .length = byte count.
 export function lspFormatMessage(json: string): string {
-	return "Content-Length: " + lspJsonNumber(json.length) + "\r\n\r\n" + json;
+	return "Content-Length: " + lspJsonNumber(Buffer.byteLength(json)) + "\r\n\r\n" + json;
 }
 
 // ===== Helpers =====

@@ -240,15 +240,8 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 function loadPreludeModules(graph: ModuleGraph, provider: SourceProvider, config: ResolverConfig): void {
 	for (const imp of globalImports()) {
 		const candidates = resolveImportWithConfig(imp, "virtual:prelude", config);
-		// Skip modules with .cms counterpart (extern-only, handled by regular imports)
-		let hasCms = false;
-		for (const candidate of candidates) {
-			if (!hasCms && candidate.endsWith(".cms") && provideSource(provider, candidate).ok) {
-				hasCms = true;
-			}
-		}
-		if (hasCms) continue;
-		// Find the .ms file for this pure-MS prelude module
+		// Skip .cms preludes — they may have type conflicts with @include headers.
+		// Only .ms preludes (pure MetaScript) are added to the graph for codegen.
 		for (const candidate of candidates) {
 			if (candidate.endsWith(".ms") && provideSource(provider, candidate).ok) {
 				if (!hasModule(graph, candidate)) {

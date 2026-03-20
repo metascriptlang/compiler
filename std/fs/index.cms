@@ -1,37 +1,18 @@
-/**
- * File System — C Backend
- *
- * Minimal C layer (7 POSIX wrappers) + pure MetaScript logic.
- * Path utilities re-exported from fs/path.ms.
- */
+// std/fs — File System (POSIX)
 
-@include("std/fs/native.h");
+import {
+	msFsReadFile, msFsWriteFileMode, msFsExists, msFsIsFile, msFsIsDir,
+	msFsFileSize, msFsMkdir, msFsRmdir, msFsRemove, msFsRename,
+} from "./native.h";
 
-// ===== C primitives (irreducible POSIX) =====
-
-extern function msFsReadFile(path: string): string;
-extern function msFsWriteFileMode(path: string, content: string, mode: string): number;
-extern function msFsExists(path: string): number;
-extern function msFsIsFile(path: string): number;
-extern function msFsIsDir(path: string): number;
-extern function msFsFileSize(path: string): number;
-extern function msFsMkdir(path: string): number;
-extern function msFsRmdir(path: string): number;
-extern function msFsRemove(path: string): number;
-extern function msFsRename(oldPath: string, newPath: string): number;
-
-// ===== Path (pure MetaScript, re-exported) =====
-
+// Path utilities (pure MetaScript)
 export { dirname, basename, extname, join, resolve, isAbsolute, normalize } from "./path";
 
-// ===== Read =====
+// Direct C bindings
+export extern function readFile(path: string): string from "msFsReadFile";
+export extern function fileSize(path: string): number from "msFsFileSize";
 
-export function readFile(path: string): string {
-	return msFsReadFile(path);
-}
-
-// ===== Write =====
-
+// Boolean wrappers (C returns 1.0/0.0)
 export function writeFile(path: string, content: string): boolean {
 	return msFsWriteFileMode(path, content, "wb") === 1;
 }
@@ -40,46 +21,15 @@ export function appendFile(path: string, content: string): boolean {
 	return msFsWriteFileMode(path, content, "ab") === 1;
 }
 
-// ===== Stat (pure MetaScript — bitwise decode of POSIX mode bits) =====
+export function exists(path: string): boolean { return msFsExists(path) === 1; }
+export function isFile(path: string): boolean { return msFsIsFile(path) === 1; }
+export function isDir(path: string): boolean { return msFsIsDir(path) === 1; }
+export function mkdir(path: string): boolean { return msFsMkdir(path) === 1; }
+export function rmdir(path: string): boolean { return msFsRmdir(path) === 1; }
+export function remove(path: string): boolean { return msFsRemove(path) === 1; }
+export function rename(oldPath: string, newPath: string): boolean { return msFsRename(oldPath, newPath) === 1; }
 
-export function exists(path: string): boolean {
-	return msFsExists(path) === 1;
-}
-
-export function isFile(path: string): boolean {
-	return msFsIsFile(path) === 1;
-}
-
-export function isDir(path: string): boolean {
-	return msFsIsDir(path) === 1;
-}
-
-export function fileSize(path: string): number {
-	return msFsFileSize(path);
-}
-
-// ===== Directory =====
-
-export function mkdir(path: string): boolean {
-	return msFsMkdir(path) === 1;
-}
-
-export function rmdir(path: string): boolean {
-	return msFsRmdir(path) === 1;
-}
-
-// ===== Remove / Rename =====
-
-export function remove(path: string): boolean {
-	return msFsRemove(path) === 1;
-}
-
-export function rename(oldPath: string, newPath: string): boolean {
-	return msFsRename(oldPath, newPath) === 1;
-}
-
-// ===== Pure MetaScript utilities =====
-
+// Pure MetaScript utilities
 export function readLines(path: string): string[] {
 	const content = msFsReadFile(path);
 	if (content.length === 0) return [];
@@ -98,7 +48,6 @@ export function copyFile(src: string, dst: string): boolean {
 
 export function ensureDir(path: string): boolean {
 	if (msFsExists(path) === 1) return true;
-	// Walk segments, mkdir each prefix
 	let i = 0;
 	while (i < path.length) {
 		if (path.charCodeAt(i) === "/".code) {
@@ -111,7 +60,6 @@ export function ensureDir(path: string): boolean {
 		}
 		i = i + 1;
 	}
-	// Final segment
 	if (msFsExists(path) !== 1) {
 		return msFsMkdir(path) === 1;
 	}

@@ -1,33 +1,5 @@
-// MetaScript JSON — Type Definitions
-//
-// JsonKind enum, JsonValue class.
-// JsonValue is a class (heap-allocated, ARC-managed) because it's recursive:
-// arrays/objects contain JsonValues. Flat fields pattern (same as Type in checker).
-//
-// Objects use parallel arrays (objKeys + objVals) instead of a single
-// JsonEntry[] to avoid DRC issues with custom interface arrays containing
-// class pointers.
-
-export enum JsonKind {
-	Null,
-	Bool,
-	Number,
-	String,
-	Array,
-	Object,
-}
-
-export class JsonValue {
-	kind: JsonKind;
-	boolVal: boolean;
-	numVal: number;
-	strVal: string;
-	arrVal: JsonValue[];
-	objKeys: string[];
-	objVals: JsonValue[];
-}
-
-// ===== Tests =====
+// MetaScript JSON — Type Tests
+// JsonKind and JsonValue are defined in index.cms (prelude — auto-loaded).
 
 test "JsonKind values" {
 	assert JsonKind.Null === 0;

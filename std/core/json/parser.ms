@@ -4,7 +4,6 @@
 // error position on failure. Optimized: uses charCodeAt for scanning,
 // append() for string building, manual integer parsing fast path.
 
-import { JsonKind, JsonValue } from "./types";
 import { jsonNull, jsonBool, jsonNumber, jsonString, jsonArray, jsonObject, jsonObjectFromKV } from "./builder";
 import { fromCodePoint } from "std/core/string";
 

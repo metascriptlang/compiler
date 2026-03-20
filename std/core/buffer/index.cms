@@ -158,7 +158,7 @@ export function bufferIsUtf8(buf: Buffer): boolean {
 	return msBufferIsUtf8(buf) === 1;
 }
 
-export function bufferByteLength(str: string, encoding: string): number {
+export function byteLength(this typeof string, str: string, encoding: string = "utf-8"): number {
 	if (encoding === "" || encoding === "utf8" || encoding === "utf-8" ||
 			encoding === "ascii" || encoding === "latin1" || encoding === "binary") {
 		return str.byteLength;

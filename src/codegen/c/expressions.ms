@@ -7,7 +7,7 @@
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, NewExprData, MoveExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, HiddenDerefData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { isIntegerType, getProperty, getMinArity, isStructType, findUnionVariant, voidType } from "../../checker/types";
+import { isIntegerType, getProperty, getMinArity, isStructType, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, getDiscriminantName, voidType } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, Builder, CSection,
@@ -843,6 +843,23 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				objIsPtr = true;
 			}
 		}
+		// Discriminated union: tag field → _tag, variant fields → v<N>.field
+		const objType = d.object.nodeType !== null ? d.object.nodeType
+			: (d.object.resolvedSym !== null ? d.object.resolvedSym.symbolType : null);
+		if (objType !== null && objType.kind === TypeKind.Union) {
+			const acc = objIsPtr ? "->" : ".";
+			// Tag field access: s.kind → s._tag
+			if (isDiscriminatedUnion(objType) && getDiscriminantName(objType) === d.property) {
+				ctx.results.push(`${obj}${acc}_tag`);
+				return;
+			}
+			// Variant field access: s.radius → s.v<N>.radius
+			const varIdx = findVariantByFieldName(objType, d.property);
+			if (varIdx >= 0) {
+				ctx.results.push(`${obj}${acc}v${varIdx}.${field}`);
+				return;
+			}
+		}
 		if (objIsPtr) {
 			ctx.results.push(`${obj}->${field}`);
 		} else {
@@ -1061,24 +1078,63 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			let isClassObj = false;
 			let unionWrapName = "";
 			let unionWrapIdx = -1;
+			let unionDiscKeyIdx = -1;
 			if (node.nodeType !== null) {
-				if (node.nodeType.kind === TypeKind.Union && d.keys.length > 0) {
-					// Union variant: determine variant type from field names + types
-					// Pass all keys and their types for disambiguation (e.g., { value: string } vs { value: number })
+					if (node.nodeType.kind === TypeKind.Union && d.keys.length > 0) {
 					const unionName = getTypeDesc(g, node.nodeType);
-					const keyArr: string[] = [];
-					const typeArr: Type[] = [];
-					for (let ki = 0; ki < d.keys.length; ki += 1) {
-						keyArr.push(d.keys[ki]);
-						if (ki < d.properties.length && d.properties[ki] !== null && d.properties[ki].nodeType !== null) {
-							typeArr.push(d.properties[ki].nodeType);
+					// Discriminated union: use discriminant key to find variant
+					const discName = isDiscriminatedUnion(node.nodeType) ? getDiscriminantName(node.nodeType) : "";
+					let discKeyIdx = -1;
+					if (discName !== "") {
+						let ki = 0;
+						while (ki < d.keys.length) {
+							if (d.keys[ki] === discName) { discKeyIdx = ki; ki = d.keys.length; }
+							ki = ki + 1;
 						}
 					}
-					const varIdx = findUnionVariant(node.nodeType, keyArr, typeArr);
-					if (varIdx >= 0) {
-						cType = `${unionName}_v${varIdx}`;
-						unionWrapName = unionName;
-						unionWrapIdx = varIdx;
+					unionDiscKeyIdx = discKeyIdx;
+					if (discKeyIdx >= 0) {
+						// Discriminated: resolve variant from discriminant value
+						const discValNode = d.properties[discKeyIdx];
+						let discValStr = "";
+						if (discValNode !== null && discValNode.kind === NodeKind.MemberExpr) {
+							const md = discValNode.data as MemberExprData;
+							if (md.object !== null && md.object.kind === NodeKind.Identifier) {
+								discValStr = (md.object.data as IdentifierData).name + "." + md.property;
+							}
+						} else if (discValNode !== null && discValNode.kind === NodeKind.Identifier) {
+							// Checker rewrites Enum.Member → Enum_Member identifier
+							const idName = (discValNode.data as IdentifierData).name;
+							// Convert Enum_Member back to Enum.Member for variant lookup
+							const usIdx = idName.indexOf("_");
+							if (usIdx > 0) {
+								discValStr = idName.slice(0, usIdx) + "." + idName.slice(usIdx + 1, idName.length);
+							} else {
+								discValStr = idName;
+							}
+						}
+						const varIdx = findVariantByDiscriminant(node.nodeType, discValStr);
+						if (varIdx >= 0) {
+							cType = `${unionName}_v${varIdx}`;
+							unionWrapName = unionName;
+							unionWrapIdx = varIdx;
+						}
+					} else {
+						// Undiscriminated: determine variant from field names + types
+						const keyArr: string[] = [];
+						const typeArr: Type[] = [];
+						for (let ki = 0; ki < d.keys.length; ki += 1) {
+							keyArr.push(d.keys[ki]);
+							if (ki < d.properties.length && d.properties[ki] !== null && d.properties[ki].nodeType !== null) {
+								typeArr.push(d.properties[ki].nodeType);
+							}
+						}
+						const varIdx = findUnionVariant(node.nodeType, keyArr, typeArr);
+						if (varIdx >= 0) {
+							cType = `${unionName}_v${varIdx}`;
+							unionWrapName = unionName;
+							unionWrapIdx = varIdx;
+						}
 					}
 				} else if (node.nodeType.kind === TypeKind.Ref && node.nodeType.typeReturn !== null) {
 					// Class/interface type: ObjectLiteral constructs inner struct, heap-allocated
@@ -1110,6 +1166,8 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				let i = 0;
 				while (i < d.keys.length) {
 					const val = peekResult(ctx, cc, i);
+					// Skip discriminant key — handled by _tag in union wrap
+					if (i === unionDiscKeyIdx) { i += 1; continue; }
 					// Skip NullLiteral fields — memset already zeroed them.
 					// This avoids void* → value-type errors for self-referential pointer fields
 					// where the C field is T* but the MS type is T (e.g. Type.typeReturn).

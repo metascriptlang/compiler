@@ -2,7 +2,7 @@
 // For direct import: import { parseJson, stringify, ... } from "std/core/json";
 // Prelude (no-import) path uses index.cms instead.
 
-export { JsonKind, JsonValue } from "./types";
+// JsonKind and JsonValue are prelude symbols (from index.cms — auto-loaded)
 export { parseJson } from "./parser";
 export { stringify } from "./stringify";
 export {

@@ -316,6 +316,23 @@ export function getDiscriminantName(t: Type): string {
 	return "";
 }
 
+// Find variant index by field name. Returns the first variant containing the field.
+// Used for direct field access on discriminated unions (e.g., s.radius → s.v0.radius).
+export function findVariantByFieldName(unionType: Type, fieldName: string): number {
+	if (unionType.typeChildren === null) return -1;
+	let i = 0;
+	while (i < unionType.typeChildren.length) {
+		const variant = unionType.typeChildren[i];
+		if (variant !== null && variant.typeNames !== null) {
+			for (const fn of variant.typeNames) {
+				if (fn === fieldName) return i;
+			}
+		}
+		i = i + 1;
+	}
+	return -1;
+}
+
 // Find variant index by discriminant enum value name (e.g. "NumLit" or "NodeKind.NumLit").
 // typeNames layout: [discFieldName, key0, key1, ...] — keys start at index 1.
 // Matches both qualified ("Kind.A") and unqualified ("A") against stored keys.

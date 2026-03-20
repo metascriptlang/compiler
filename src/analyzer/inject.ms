@@ -401,10 +401,34 @@ function processMove(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 
 function processConditional(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const cd = node.data as ConditionalExprData;
+	const loc = node.location;
 	cd.ternaryCondition = processNode(cd.ternaryCondition, dctx, DrcMode.Normal);
-	cd.ternaryConsequent = processNode(cd.ternaryConsequent, dctx, mode);
-	cd.ternaryAlternate = processNode(cd.ternaryAlternate, dctx, mode);
-	return node;
+	if (mode === DrcMode.Normal) {
+		cd.ternaryConsequent = processNode(cd.ternaryConsequent, dctx, mode);
+		cd.ternaryAlternate = processNode(cd.ternaryAlternate, dctx, mode);
+		return node;
+	}
+	// Reference parity (IfExpr nestedScope): convert to if-else with temp result so each branch
+	// gets its own statement context. Borrow copies stay scoped to their branch.
+	// Pattern from processAssignment (line 1599-1616).
+	const tmpName = freshTemp(dctx.ctx, "cond");
+	const resultType = node.nodeType;
+	const tmpDecl = makeVarDecl(tmpName, null as unknown as Node, DeclKind.Let, loc);
+	tmpDecl.nodeType = resultType;
+	addPre(dctx, tmpDecl);
+	const thenProcessed = processBranchAssign(tmpName, resultType, cd.ternaryConsequent, dctx, loc);
+	const elseProcessed = processBranchAssign(tmpName, resultType, cd.ternaryAlternate, dctx, loc);
+	addPre(dctx, makeIf(cd.ternaryCondition, makeBlock(thenProcessed, loc), makeBlock(elseProcessed, loc), loc));
+	const resultIdent = makeIdent(tmpName, loc);
+	resultIdent.nodeType = resultType;
+	return resultIdent;
+}
+
+function processBranchAssign(tmpName: string, resultType: Type, branchExpr: Node, dctx: DrcContext, loc: SourceLocation): Node[] {
+	const lhs = makeIdent(tmpName, loc);
+	lhs.nodeType = resultType;
+	const assign = makeExprStmt(makeAssign(lhs, branchExpr, loc), loc);
+	return processStmtList([assign], dctx, loc);
 }
 
 function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
