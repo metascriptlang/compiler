@@ -125,7 +125,8 @@ function inlineHeaderImports(source: string, modulePath: string, provider: Sourc
 		// Generate extern declarations — only for symbols in importedNames
 		let translated = translateCHeader(headerSource.value, importedNames);
 		// Strip "export " prefix (inline declarations don't need export)
-		translated = translated.split("export extern ").join("extern ");
+		const parts = translated.split("export extern ");
+		translated = parts.join("extern ");
 
 		// Auto-compile companion .c file if it exists (e.g., native.h → native.c)
 		const companionC = headerPath.slice(0, headerPath.length - 2) + ".c";

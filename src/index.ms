@@ -19,9 +19,7 @@ function requireFile(opts: CliOptions): void {
 }
 
 export function main(): number {
-	console.log("[dbg] main");
 	const opts = parseArgs();
-	console.log("[dbg] cmd=" + opts.command);
 	const cmd = opts.command;
 
 	match (cmd) {

@@ -179,6 +179,7 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 					makeReturn(makeIterResult(yd.yieldArg, false, loc), loc),
 				);
 				sc.items[currentState].isYield = true;
+				sc.items[currentState].nextState = nextSt;
 				sc.items[currentState].yieldVarName = vd.declName;
 				sc.items[currentState].yieldVarType = stmt.nodeType;
 				// On resume: convert decl to assignment (var is lifted)

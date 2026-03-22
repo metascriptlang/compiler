@@ -106,14 +106,19 @@ typedef msFuture_ptr msFuture;
 
 /* ===== Base Operations (work on any future via msFutureBase*) ===== */
 
-/* Allocate a typed future. Usage: msFutureCreateT(msFuture_double) */
-#define msFutureCreateT(type) ((type*)msAlloc(sizeof(type)))
+/* Allocate a typed future. Always allocates at least base + MS_FUTURE_VALUE_MAX_SIZE
+ * to prevent buffer overflow when combinators read .value on any future type. */
+#define MS_FUTURE_VALUE_MAX_SIZE 16  /* sizeof(msString) — largest value type */
+#define MS_FUTURE_MIN_ALLOC (sizeof(msFutureBase) + MS_FUTURE_VALUE_MAX_SIZE)
+#define msFutureCreateT(type) ((type*)msAlloc(sizeof(type) > MS_FUTURE_MIN_ALLOC ? sizeof(type) : MS_FUTURE_MIN_ALLOC))
 
 /* Untyped create — returns void* so it can be assigned to any typed future pointer.
- * Allocates msFuture_ptr size (base + void* value) — correct for boxing path.
- * Reference parity: newFuture[T]() returns a ref compatible with any Future[T]. */
+ * Allocates enough for the LARGEST value type (msString = 16 bytes) to prevent
+ * buffer overflow when msFutureCompleteT writes typed values.
+ * Reference parity: newFuture[T]() allocates based on sizeof(T). Our untyped version
+ * must be safe for any T, so we use the max. 8 bytes overhead for non-string futures. */
 static inline void* msFutureCreate(void) {
-	return msAlloc(sizeof(msFuture));
+	return msAlloc(MS_FUTURE_MIN_ALLOC);
 }
 
 /* Alias for combinator code clarity */

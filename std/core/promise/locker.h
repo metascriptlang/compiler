@@ -17,6 +17,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include "std/runtime/arc.h"
 
 /* ===== Ticket Lock (Malebolgia parity) =====
  * Fair spinlock — threads served in FIFO order.
@@ -77,15 +78,16 @@ typedef struct {
 } msLocker;
 
 /* Create a Locker with space for `dataSize` bytes of value data.
- * Value is zero-initialized. */
-static inline msLocker* msLockerCreate(int dataSize) {
-	msLocker* loc = (msLocker*)calloc(1, sizeof(msLocker) + dataSize);
-	return loc;
+ * Allocated via msAlloc so DRC refcount header is present —
+ * MetaScript interface variables call msDecref on scope exit.
+ * Zero-initialized (ticket lock valid at zero, same as Malebolgia initTicketLock). */
+static inline void* msLockerCreate(int dataSize) {
+	return msAlloc(sizeof(msLocker) + dataSize);
 }
 
 /* Create a Locker initialized with a copy of `src` data. */
-static inline msLocker* msLockerCreateFrom(const void* src, int dataSize) {
-	msLocker* loc = (msLocker*)calloc(1, sizeof(msLocker) + dataSize);
+static inline void* msLockerCreateFrom(const void* src, int dataSize) {
+	msLocker* loc = (msLocker*)msAlloc(sizeof(msLocker) + dataSize);
 	memcpy(loc->data, src, dataSize);
 	return loc;
 }
@@ -125,9 +127,9 @@ static inline void msLockerSetInt32(void* p, int32_t v) {
 	*(int32_t*)((msLocker*)p)->data = v;
 }
 
-/* Destroy the locker. */
+/* Destroy the locker — free via ARC header (allocated with msAlloc). */
 static inline void msLockerDestroy(void* p) {
-	free(p);
+	msDestroyAndDispose(p);
 }
 
 #endif /* MS_LOCKER_H */

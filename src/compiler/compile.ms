@@ -3,7 +3,7 @@
 import { exit, exec, fileExists } from "std/process";
 import { parseSource } from "../parser/statements/validation";
 import { Node, NodeKind, ProgramData, FunctionDeclData, SymbolKind } from "../ast/node";
-import { CheckerContext, hasErrors, hasFatalErrors, errorCount, Severity } from "../checker/context";
+import { CheckerContext, GcMode, hasErrors, hasFatalErrors, errorCount, Severity } from "../checker/context";
 import { checkProgramWithRegistry } from "../checker/checkPass";
 import { checkModuleGraph, getPreludeContext } from "../checker/index";
 import { ExportRegistry } from "../checker/context";
@@ -210,6 +210,14 @@ function resetCompiledOFiles(): void {
 	_compiledOFiles = new Set<string>();
 }
 
+// Apply --gc=none: set GcMode.None on the shared prelude context so all modules inherit it.
+// analyzeProgram checks ctx.gcMode and skips DRC injection when None.
+export function applyGcMode(opts: CliOptions): void {
+	if (opts.gcNone && graphPreludeCtx !== null) {
+		graphPreludeCtx.gcMode = GcMode.None;
+	}
+}
+
 function loadAndCheckGraph(entryPath: string, verbose: boolean, config: ResolverConfig): ModuleGraph {
 	if (verbose) verboseLog(`loading module graph from ${entryPath}`);
 	const provider = createFileSystemProvider();
@@ -413,6 +421,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	const t0 = clockMs();
 	const config = buildResolverConfig(Target.C, defaultResolveSection());
 	const graph = loadAndCheckGraph(entryPath, opts.verbose, config);
+	applyGcMode(opts);
 
 	// Compute output binary path early for change detection
 	let outBinary = opts.outputPath;
@@ -512,6 +521,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 		const hcrResult = opts.isHcr ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
+		if (opts.gcNone) ctx.gcMode = GcMode.None;
 		const analyzed = analyzeProgram(hcrResult, ctx);
 		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
 
@@ -733,6 +743,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 		const hcrResult = opts.isHcr ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
+		if (opts.gcNone) ctx.gcMode = GcMode.None;
 		// Drain pending instances (same as cmdBuildC)
 		const pendingInsts2 = drainPendingInstances();
 		if (pendingInsts2.length > 0) {

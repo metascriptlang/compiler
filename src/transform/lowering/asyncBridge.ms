@@ -216,8 +216,17 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 		// If previous state was a yield with a variable, emit unbox+assign at state entry.
 		// This runs for BOTH yield and non-yield states (a state can resume from a previous
 		// yield AND itself yield — e.g., `const num = await f(); const msg = await g();`).
-		if (i > 0 && sc.items[i - 1].isYield && sc.items[i - 1].yieldVarName !== "") {
-			const prevIdx = i - 1;
+		// Find the ACTUAL yield predecessor: the state whose nextState === i.
+		// Can't use i-1 because splitIf creates parallel branches.
+		let prevIdx = -1;
+		let pi = 0;
+		while (pi < sc.items.length) {
+			if (sc.items[pi].isYield && sc.items[pi].nextState === i && sc.items[pi].yieldVarName !== "") {
+				prevIdx = pi;
+			}
+			pi = pi + 1;
+		}
+		if (prevIdx >= 0) {
 			const futName = "$yf" + prevIdx;
 			const varName = sc.items[prevIdx].yieldVarName;
 			const varType = sc.items[prevIdx].yieldVarType;

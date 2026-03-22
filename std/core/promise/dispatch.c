@@ -195,7 +195,7 @@ int msProcessTimers(msDispatcher* d, bool* didWork) {
 	}
 	if (d->timers.len > 0) {
 		int64_t diff = d->timers.data[0].finishAtMs - now;
-		return (int)(diff > 0 ? diff + 1 : 1); /* +1 margin matches standard reference implementation */
+		return (int)(diff > 0 ? diff : 0); /* No margin — step 3 re-processes timers after poll */
 	}
 	return -1; /* no timers */
 }

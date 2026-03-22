@@ -12,12 +12,14 @@ type NodeResult = Result<Node, string>;
 // ===== Convenience: lex + parse in one step =====
 
 export function parseSource(input: string): NodeResult {
+	console.log("[dbg]     lex...");
 	const lr = lex(input);
+	console.log("[dbg]     lex ok=" + String(lr.ok));
 	if (!lr.ok) return Result.err(lr.error);
-	// parseProgramFromState always returns ok (partial AST on errors)
-	// Check errors via parseErrorCount() or low-level state API
 	const state = createState(lr.value);
+	console.log("[dbg]     parse...");
 	const pr = callStateProgramParser(state);
+	console.log("[dbg]     parse ok=" + String(pr.ok));
 	if (state.errors.length > 0) return Result.err(state.errors[0]);
 	if (!pr.ok) return Result.err(pr.error);
 	return Result.ok(pr.value);

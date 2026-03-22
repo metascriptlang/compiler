@@ -41,6 +41,7 @@ export function printUsage(): void {
 	console.log("  " + cyan("--danger") + "              Maximum optimization " + dim("(-O3 -flto)"));
 	console.log("  " + cyan("--cc") + "=<clang|gcc>      C compiler " + dim("(default: auto-detect)"));
 	console.log("  " + cyan("--strip") + "               Strip symbols from binary");
+	console.log("  " + cyan("--gc") + "=<mode>           GC mode " + dim("(auto|none)"));
 	console.log("  " + cyan("--sanitize") + "=<mode>    Enable sanitizer " + dim("(address|undefined|thread)"));
 	console.log("  " + cyan("--passC") + "=<flags>      Extra C compiler flags");
 	console.log("  " + cyan("--passL") + "=<flags>      Extra linker flags");

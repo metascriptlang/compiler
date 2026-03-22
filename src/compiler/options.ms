@@ -38,6 +38,7 @@ export interface CliOptions {
 	isHcr: boolean;
 	strictDefs: boolean;       // --strict-defs: warn on all uninit var use
 	strictNullChecks: boolean; // --strict-nil: warn on unguarded class deref
+	gcNone: boolean;           // --gc=none: skip DRC analyzer (leak memory, no RC)
 }
 
 // -- Argument parsing --
@@ -70,6 +71,7 @@ export function parseArgs(): CliOptions {
 		isHcr: false,
 		strictDefs: false,
 		strictNullChecks: false,
+		gcNone: false,
 	};
 
 	if (argv.length < 2) return opts;
@@ -143,6 +145,8 @@ export function parseArgs(): CliOptions {
 			opts.strictDefs = true;
 		} else if (arg === "--strict-nil") {
 			opts.strictNullChecks = true;
+		} else if (arg === "--gc=none") {
+			opts.gcNone = true;
 		} else if (arg === "--emit=c") {
 			opts.emitC = true;
 		} else if (arg === "--colors=on") {
