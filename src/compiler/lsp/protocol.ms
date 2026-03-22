@@ -9,27 +9,42 @@
 // ===== JSON Building =====
 
 export function lspJsonString(val: string): string {
-	let result = "\"";
-	for (let i = 0; i < val.length; i = i + 1) {
+	const parts: string[] = [];
+	parts.push("\"");
+	let start = 0;
+	let i = 0;
+	while (i < val.length) {
 		const code = val.charCodeAt(i);
 		if (code > 127) {
-			// Escape non-ASCII as \uXXXX — keeps output pure ASCII so .length = byte count
+			if (start < i) parts.push(val.slice(start, i));
 			const hex = code.toString(16);
-			result = result + "\\u" + "0000".slice(0, 4 - hex.length) + hex;
+			parts.push("\\u");
+			parts.push("0000".slice(0, 4 - hex.length));
+			parts.push(hex);
+			i = i + 1;
+			start = i;
 			continue;
 		}
 		const ch = val.charAt(i);
-		result = result + match (ch) {
-			"\\" => "\\\\",
-			"\"" => "\\\"",
-			"\n" => "\\n",
-			"\r" => "\\r",
-			"\t" => "\\t",
-			_ => ch,
-		};
+		if (ch === "\\" || ch === "\"" || ch === "\n" || ch === "\r" || ch === "\t") {
+			if (start < i) parts.push(val.slice(start, i));
+			parts.push(match (ch) {
+				"\\" => "\\\\",
+				"\"" => "\\\"",
+				"\n" => "\\n",
+				"\r" => "\\r",
+				"\t" => "\\t",
+				_ => ch,
+			});
+			i = i + 1;
+			start = i;
+			continue;
+		}
+		i = i + 1;
 	}
-	result = result + "\"";
-	return result;
+	if (start < val.length) parts.push(val.slice(start, val.length));
+	parts.push("\"");
+	return parts.join("");
 }
 
 export function lspJsonNumber(val: number): string {

@@ -27,8 +27,8 @@ export function printProgram(node: Node, options: FormatOptions): Doc {
 		// is between this statement and the next. These are standalone comments
 		// (e.g., `// comment` between `};` and `export default`).
 		const interComments: Token[] = [];
-		if (stmt.comments.length > 0 && i + 1 < d.programStmts.length) {
-			const nextLine = d.programStmts[i + 1].location.line;
+		if (stmt.comments.length > 0) {
+			const nextLine = (i + 1 < d.programStmts.length) ? d.programStmts[i + 1].location.line : 999999;
 			const remaining: Token[] = [];
 			for (const comment of stmt.comments) {
 				if (comment.line > stmt.location.line && comment.line < nextLine) {

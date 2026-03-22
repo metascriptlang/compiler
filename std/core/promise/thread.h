@@ -49,7 +49,7 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 void msPoolSubmit(msSpawnCtx* ctx);
 
 /* Spawn a closure on a worker pool thread. Returns void* (msFuture_ptr internally).
- * Nim parity: spawn result compatible with any Future[T] pointer.
+ * Reference parity: spawn result compatible with any Future[T] pointer.
  * Takes ownership of the closure env by incrementing its refcount. */
 static inline void* msSpawn(msClosure fn) {
 	msFuture_ptr* fut = msFutureCreateT(msFuture_ptr);

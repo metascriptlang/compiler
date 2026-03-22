@@ -72,6 +72,7 @@ typedef struct msFutureBase {
 	bool finished;
 	bool failed;          /* set by msFutureFail (even when error payload is NULL) */
 	bool cancelled;       /* set by msFutureCancel */
+	bool isBoxed;         /* true = void* boxed value, false = typed value in struct */
 	void* error;          /* error payload (may be NULL even when failed) */
 	void (*valueDestructor)(void*); /* optional: frees value on destroy (combinators) */
 	msFutureCb* callbacks;
@@ -110,7 +111,7 @@ typedef msFuture_ptr msFuture;
 
 /* Untyped create — returns void* so it can be assigned to any typed future pointer.
  * Allocates msFuture_ptr size (base + void* value) — correct for boxing path.
- * Nim parity: newFuture[T]() returns a ref that's compatible with any Future[T]. */
+ * Reference parity: newFuture[T]() returns a ref compatible with any Future[T]. */
 static inline void* msFutureCreate(void) {
 	return msAlloc(sizeof(msFuture));
 }
@@ -221,6 +222,7 @@ static inline void msFutureAddCallback(void* fp, msClosure cb) {
 #define msFutureCompleteT(f, val) do { \
 	if (((msFutureBase*)(f))->finished) break; \
 	(f)->value = (val); \
+	((msFutureBase*)(f))->isBoxed = false; \
 	((msFutureBase*)(f))->finished = true; \
 	msFutureFireCallbacks((msFutureBase*)(f)); \
 } while(0)
@@ -233,11 +235,12 @@ static inline void msFutureCompleteVoid(void* fp) {
 	msFutureFireCallbacks(f);
 }
 
-/* Complete with void* value (backward compat for combinators, spawn pipe) */
+/* Complete with void* value (boxed path — spawn pipe, combinators) */
 static inline void msFutureComplete(void* fp, void* val) {
 	msFuture* f = (msFuture*)fp;
 	if (f->base.finished) return;
 	f->value = val;
+	f->base.isBoxed = true;
 	f->base.finished = true;
 	msFutureFireCallbacks(&f->base);
 }
@@ -261,6 +264,46 @@ static inline bool msFutureCheckErr(void* fp) {
 #define msFutureReadT(f, zeroval) \
 	(msFutureCheckErr(f) ? (zeroval) : (f)->value)
 
+/* ===== Value Boxing (used by spawn pipe boundary + isBoxed fallback in smart read) ===== */
+
+static inline void* msBoxDouble(double v) { double* p = (double*)malloc(sizeof(double)); *p = v; return p; }
+static inline double msUnboxDouble(void* p) { double v = *(double*)p; free(p); return v; }
+static inline void* msBoxInt32(int32_t v) { int32_t* p = (int32_t*)malloc(sizeof(int32_t)); *p = v; return p; }
+static inline int32_t msUnboxInt32(void* p) { int32_t v = *(int32_t*)p; free(p); return v; }
+static inline void* msBoxBool(bool v) { bool* p = (bool*)malloc(sizeof(bool)); *p = v; return p; }
+static inline bool msUnboxBool(void* p) { bool v = *(bool*)p; free(p); return v; }
+
+/* ===== Per-Type Smart Read Functions =====
+ * Handle both boxed (spawn) and typed (async) paths via runtime isBoxed flag.
+ * Consumer calls msFutureReadDouble($yf) — transparently handles both. */
+
+static inline double msFutureReadDouble(void* fp) {
+	msFutureBase* f = (msFutureBase*)fp;
+	assert(f->finished && "Future not yet finished");
+	if (f->cancelled || f->failed) { msErr = true; msErrPayload = f->error; return 0.0; }
+	if (f->isBoxed) return msUnboxDouble(((msFuture_ptr*)fp)->value);
+	return ((msFuture_double*)fp)->value;
+}
+
+static inline int32_t msFutureReadInt32(void* fp) {
+	msFutureBase* f = (msFutureBase*)fp;
+	assert(f->finished && "Future not yet finished");
+	if (f->cancelled || f->failed) { msErr = true; msErrPayload = f->error; return 0; }
+	if (f->isBoxed) return msUnboxInt32(((msFuture_ptr*)fp)->value);
+	return ((msFuture_int32*)fp)->value;
+}
+
+static inline bool msFutureReadBool(void* fp) {
+	msFutureBase* f = (msFutureBase*)fp;
+	assert(f->finished && "Future not yet finished");
+	if (f->cancelled || f->failed) { msErr = true; msErrPayload = f->error; return false; }
+	if (f->isBoxed) return msUnboxBool(((msFuture_ptr*)fp)->value);
+	return ((msFuture_bool*)fp)->value;
+}
+
+/* msString needs forward declaration from string header — defined after msBoxString in native.h.
+ * For now, use msFutureRead (void*) + cast for string reads. */
+
 /* Legacy untyped read (for combinators, backward compat) */
 static inline void* msFutureRead(void* fp) {
 	msFuture* f = (msFuture*)fp;
@@ -277,14 +320,7 @@ static inline void* msFutureRead(void* fp) {
 #define msFutureDrcDestroy(f) do { if ((f) != NULL) { msFutureDestroyInner(f); } } while(0)
 #define msFutureDrcWasMoved(f) do { (f) = NULL; } while(0)
 
-/* ===== Legacy Boxing (kept for combinator backward compat, Phase 2 removes) ===== */
-
-static inline void* msBoxDouble(double v) { double* p = (double*)malloc(sizeof(double)); *p = v; return p; }
-static inline double msUnboxDouble(void* p) { double v = *(double*)p; free(p); return v; }
-static inline void* msBoxInt32(int32_t v) { int32_t* p = (int32_t*)malloc(sizeof(int32_t)); *p = v; return p; }
-static inline int32_t msUnboxInt32(void* p) { int32_t v = *(int32_t*)p; free(p); return v; }
-static inline void* msBoxBool(bool v) { bool* p = (bool*)malloc(sizeof(bool)); *p = v; return p; }
-static inline bool msUnboxBool(void* p) { bool v = *(bool*)p; free(p); return v; }
+/* (Boxing functions moved above per-type read functions for forward declaration order) */
 
 /* ===== Async Stepper Callback (createCb pattern) ===== */
 /* The stepper returns the next msFutureBase* to wait on, or NULL when done.

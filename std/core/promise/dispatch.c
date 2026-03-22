@@ -246,9 +246,12 @@ bool msRunOnce(int timeoutMs) {
 				}
 				continue;
 			}
-			msFuture* fut = (msFuture*)readyBuf[i].userdata;
-			if (fut != NULL && !msFutureFinished(fut)) {
-				msFutureComplete(fut, (void*)(intptr_t)readyBuf[i].events);
+			void* ud = readyBuf[i].userdata;
+			if (ud != NULL && !msFutureFinished(ud)) {
+				/* One-shot: unregister fd after completing (async I/O pattern).
+				 * Persistent fds (like completion pipe) are handled above. */
+				msSelectorUnregister(d->selector, readyBuf[i].fd);
+				msFutureCompleteVoid(ud);
 			}
 		}
 	} else if (adj > 0 && msDequeLen(&d->callbacks) == 0) {

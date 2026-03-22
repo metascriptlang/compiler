@@ -17,7 +17,7 @@ import { inferOwnership } from "./ownershipInference";
 import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { validateTypedAST } from "./validate";
 import { getModuleDir, appendFlag, prependFlag, concatFlag } from "../utils/string";
-import { checkExpr, checkEnumExhaustiveness, fitNode } from "./checkExprPass";
+import { checkExpr, checkEnumExhaustiveness, checkDuplicatePatterns, fitNode } from "./checkExprPass";
 import { registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { parseSource } from "../parser/statements/validation";
@@ -850,30 +850,31 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 	for (const c of d.matchStmtCases) {
 		const cd = c.data as MatchCaseData;
 		restoreInitState(ctx.initTracker, oldState);
+		const hasGuard = cd.caseGuard !== null;
 		for (const p of cd.casePatterns) {
 			if (p.kind === NodeKind.Identifier) {
-				// Wildcard/binding — Standard reference's else has no pattern nodes at all.
-				// We set nodeType for validator; no symbol needed (never referenced).
-				hasWildcard = true;
+				if (!hasGuard) hasWildcard = true;
 				p.nodeType = discType;
 			} else {
-				// Extract enum member name before checkExpr (which rewrites MemberExpr → Identifier)
-				if (p.kind === NodeKind.MemberExpr) {
+				if (p.kind === NodeKind.MemberExpr && !hasGuard) {
 					const pmd = p.data as MemberExprData;
 					coveredMembers.push(pmd.property);
 				}
-				// All pattern expressions: semConstExpr + fitNode (reference parity)
 				checkExpr(ctx, p, discType);
 			}
+		}
+		if (cd.caseGuard !== null) {
+			checkExpr(ctx, cd.caseGuard, null);
 		}
 		checkStmt(ctx, cd.caseBody);
 		branchInits.push(collectNewInits(ctx.initTracker, oldState));
 		branchBreaks.push(breaksBlock(cd.caseBody));
 	}
+	checkDuplicatePatterns(ctx, d.matchStmtCases);
+
 	// Match is exhaustive if has wildcard (_) or covers all enum members
 	let isExhaustive = hasWildcard;
 	if (!isExhaustive && discType.kind === TypeKind.Enum) {
-		// Check if all enum members are covered
 		let allCovered = true;
 		for (const member of discType.typeNames) {
 			let found = false;

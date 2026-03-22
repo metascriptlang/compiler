@@ -1,7 +1,7 @@
 // Expression Checker — type inference for all expression kinds
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
-import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, DeclKind, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, DeclKind, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
 import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createSpan, createFunction, createTypeRef, createStruct, createRef, createResult, createPrimitive, substituteType, instantiateGeneric, anonStructName, isNumeric, isIntegerType, isStringType, isCallable, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, unwrapRef, isDiscriminatedUnion, findVariantByDiscriminant, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, skipModifier, createPromise, isPromise, getPromiseInner, isResult, getResultOkType, createGenericParam, instantiateGenericBody } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag } from "./symbol";
@@ -390,7 +390,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 				checkDiscriminatedConstruction(ctx, node, d, objExpected, expectedType);
 			} else if (objExpected !== null && objExpected.kind === TypeKind.Union) {
 				// Non-discriminated union: resolve variant, propagate field types.
-				// Reference parity: Nim's semObjConstr resolves fields then calls
+				// Reference parity: semObjConstr resolves fields then calls
 				// fitNode(field.typ, value) once per field. One pass, known types.
 				node.nodeType = objExpected;
 				// Try name-only matching first (unique for most variants)
@@ -410,7 +410,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 					if (refined >= 0) varIdx = refined;
 				}
 				// Single pass: check properties WITH variant field types as expectedType
-				// (Nim: fitNode(field.typ, value) — proper literal coercion)
+				// (reference: fitNode(field.typ, value) — proper literal coercion)
 				const variant = (varIdx >= 0 && objExpected.typeChildren !== null
 					&& varIdx < objExpected.typeChildren.length)
 					? objExpected.typeChildren[varIdx]
@@ -2065,21 +2065,25 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 	for (const c of d.matchCases) {
 		const cd = c.data as MatchCaseData;
 		restoreInitState(ctx.initTracker, oldState);
+		const hasGuard = cd.caseGuard !== null;
 		for (const p of cd.casePatterns) {
 			if (p.kind === NodeKind.Identifier) {
 				// Wildcard/binding — Standard reference's else has no pattern nodes at all.
-				// We set nodeType for validator; no symbol needed (never referenced).
-				hasWildcard = true;
+				// Guarded wildcard/binding does NOT count as exhaustive coverage.
+				if (!hasGuard) hasWildcard = true;
 				p.nodeType = discType;
 			} else {
-				// Extract enum member name before checkExpr (which rewrites MemberExpr → Identifier)
-				if (p.kind === NodeKind.MemberExpr) {
+				// Extract enum member name — only unguarded arms count for exhaustiveness
+				if (p.kind === NodeKind.MemberExpr && !hasGuard) {
 					const pmd = p.data as MemberExprData;
 					coveredMembers.push(pmd.property);
 				}
-				// All pattern expressions: semConstExpr + fitNode (reference parity)
 				checkExpr(ctx, p, discType);
 			}
+		}
+		// Type-check guard expression (must be boolean)
+		if (cd.caseGuard !== null) {
+			checkExpr(ctx, cd.caseGuard, null);
 		}
 		let bodyType = unknownType();
 		if (cd.caseBody.kind === NodeKind.BlockStmt) {
@@ -2108,6 +2112,8 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 			returnType = bodyType;
 		}
 	}
+	checkDuplicatePatterns(ctx, d.matchCases);
+
 	// Match is exhaustive if has wildcard (_) or covers all enum members
 	let isExhaustive = hasWildcard;
 	if (!isExhaustive && discType.kind === TypeKind.Enum) {
@@ -2136,6 +2142,39 @@ export function checkEnumExhaustiveness(ctx: CheckerContext, enumType: Type, cov
 		}
 		if (!found) {
 			addError(ctx, "Non-exhaustive match: missing '" + enumType.typeName + "." + member + "'", 0, 0);
+		}
+	}
+}
+
+// Detect duplicate unguarded match patterns (reference parity: checkForOverlap).
+// Shared by checkMatchExpr and checkMatchStmt.
+export function checkDuplicatePatterns(ctx: CheckerContext, cases: Node[]): void {
+	const seen: string[] = [];
+	for (const c of cases) {
+		const cd = c.data as MatchCaseData;
+		if (cd.caseGuard !== null) continue;
+		for (const p of cd.casePatterns) {
+			let patKey = "";
+			if (p.kind === NodeKind.NumberLiteral) {
+				patKey = "n:" + (p.data as NumberLiteralData).value.toString();
+			} else if (p.kind === NodeKind.MemberExpr) {
+				const pmd = p.data as MemberExprData;
+				if (pmd.object !== null && pmd.object.nodeType !== null && pmd.object.nodeType.kind === TypeKind.Enum) {
+					patKey = "e:" + pmd.property;
+				}
+			} else if (p.kind === NodeKind.StringLiteral) {
+				patKey = "s:" + (p.data as StringLiteralData).value;
+			} else if (p.kind === NodeKind.BooleanLiteral) {
+				patKey = "b:" + (p.data as BooleanLiteralData).boolValue.toString();
+			}
+			if (patKey !== "") {
+				for (const s of seen) {
+					if (s === patKey) {
+						addError(ctx, "Duplicate match pattern", p.location.line, p.location.column);
+					}
+				}
+				seen.push(patKey);
+			}
 		}
 	}
 }

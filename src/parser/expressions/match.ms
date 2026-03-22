@@ -75,6 +75,13 @@ function parseMatchCase(
 	// Parse patterns: pattern1 | pattern2 | ...
 	const patterns = try parseMatchPatterns(state);
 
+	// Parse optional 'when' guard: pattern when condition => body
+	let guard: Node = null;
+	if (current(state).kind === TokenKind.When) {
+		advance(state);
+		guard = try exprParser(state, 0);
+	}
+
 	// Expect =>
 	if (current(state).kind !== TokenKind.Arrow) {
 		return Result.err(`Expected '=>' after match pattern at line ${current(state).line}`);
@@ -87,6 +94,7 @@ function parseMatchCase(
 
 	return Result.ok(createNode(NodeKind.MatchCase, {
 		casePatterns: patterns,
+		caseGuard: guard,
 		caseBody: body,
 	}, arrowToken));
 }

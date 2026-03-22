@@ -23,7 +23,7 @@ import { Node, NodeKind, NodeFlag, DeclKind, createNode, SourceLocation, Program
 import { TransformContext } from "../context";
 import {
 	makeIdent, makeTypedIdent, makeVarDecl, makeExprStmt, makeReturn,
-	makeCall, makeBlock, makeNull, makeIf, makeWhile, makeBool, makeNumber,
+	makeCall, makeBlock, makeNull, makeIf, makeWhile, makeBool, makeNumber, makeString,
 	makeAssign, makeBinary, makeTryCatch, makeContinue,
 	syntheticToken, extractBodyStmts, collectDeclNames,
 } from "../util";
@@ -81,6 +81,18 @@ function promiseTypeFor(inner: Type): Type {
 	return inner !== null ? createPromise(inner) : createPromise(voidType());
 }
 
+// Zero value for a type — used as fallback in msFutureReadT(f, zeroval) when future failed
+function zeroValueForType(t: Type, loc: SourceLocation): Node {
+	if (t === null) return makeNull(loc);
+	if (t.kind === TypeKind.Number || t.kind === TypeKind.Float64 || t.kind === TypeKind.Float32
+		|| t.kind === TypeKind.Int8 || t.kind === TypeKind.Int16 || t.kind === TypeKind.Int32 || t.kind === TypeKind.Int64) {
+		return makeNumber(0, loc);
+	}
+	if (t.kind === TypeKind.Boolean) return makeBool(false, loc);
+	if (t.kind === TypeKind.String) return makeString("", loc);
+	return makeNull(loc);
+}
+
 // ===== Core: Rewrite a was-async function body =====
 
 // Check if this function body contains any yield (from asyncDesugar converting await→yield).
@@ -126,15 +138,27 @@ function rewriteAsyncReturns(stmts: Node[], promiseType: Type, fnReturnInner: Ty
 		if (stmt === null) continue;
 		if (stmt.kind === NodeKind.ReturnStmt) {
 			const rd = stmt.data as ReturnStmtData;
-			const retVal = rd.argument !== null ? boxReturnValue(rd.argument, fnReturnInner, loc) : makeNull(loc);
+			// Monomorphic: typed complete (no boxing). Consumer uses per-type read
+			// functions (msFutureReadDouble etc.) that handle both boxed and typed via isBoxed flag.
+			const isVoidReturn = fnReturnInner === null || fnReturnInner.kind === TypeKind.Void;
+			let completeCall: Node = null as unknown as Node;
+			if (isVoidReturn || rd.argument === null) {
+				completeCall = makeExprStmt(makeCall(
+					makeIdent("msFutureCompleteVoid", loc),
+					[makeTypedIdent("$retFut", promiseType, loc)],
+					loc,
+				), loc);
+			} else {
+				completeCall = makeExprStmt(makeCall(
+					makeIdent("msFutureCompleteT", loc),
+					[makeTypedIdent("$retFut", promiseType, loc), rd.argument],
+					loc,
+				), loc);
+			}
 			const block = makeBlock([
 				makeStateAssign(-1, loc),
-				makeExprStmt(makeCall(
-					makeIdent("msFutureComplete", loc),
-					[makeTypedIdent("$retFut", promiseType, loc), retVal],
-					loc,
-				), loc),
-				makeReturn(makeNull(loc), loc),  // return null = stepper done
+				completeCall,
+				makeReturn(makeNull(loc), loc),
 			], loc);
 			stmts[i] = block;
 		} else if (stmt.kind === NodeKind.BlockStmt) {
@@ -166,13 +190,14 @@ function rewriteAsyncReturns(stmts: Node[], promiseType: Type, fnReturnInner: Ty
 }
 
 // Unbox function for msFutureRead result (same as builtinLower's unboxFnForType)
-function unboxFnForAwait(t: Type): string {
+// Per-type smart read function — handles both boxed (spawn) and typed (async) via isBoxed flag
+function readFnForAwait(t: Type): string {
 	if (t === null) return "";
 	return match (t.kind) {
-		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msUnboxDouble",
-		TypeKind.Boolean => "msUnboxBool",
-		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 => "msUnboxInt32",
-		TypeKind.String => "msUnboxString",
+		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msFutureReadDouble",
+		TypeKind.Boolean => "msFutureReadBool",
+		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 => "msFutureReadInt32",
+		TypeKind.String => "msFutureReadString",
 		_ => "",
 	};
 }
@@ -197,12 +222,15 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 			const varName = sc.items[prevIdx].yieldVarName;
 			const varType = sc.items[prevIdx].yieldVarType;
 			const prevYfType = promiseTypeFor(varType);
-			let readExpr: Node = makeCall(makeIdent("msFutureRead", loc), [makeTypedIdent(futName, prevYfType, loc)], loc);
-			if (varType !== null) {
-				const unboxFn = unboxFnForAwait(varType);
-				if (unboxFn !== "") {
-					readExpr = makeCall(makeIdent(unboxFn, loc), [readExpr], loc);
-				}
+			// Smart read: per-type functions handle both boxed (spawn) and typed (async)
+			// via runtime isBoxed flag. No transform-time detection needed.
+			const readFn = readFnForAwait(varType);
+			let readExpr: Node = null as unknown as Node;
+			if (readFn !== "") {
+				readExpr = makeCall(makeIdent(readFn, loc), [makeTypedIdent(futName, prevYfType, loc)], loc);
+			} else {
+				// Fallback for string/pointer: use legacy msFutureRead
+				readExpr = makeCall(makeIdent("msFutureRead", loc), [makeTypedIdent(futName, prevYfType, loc)], loc);
 			}
 			stateStmts.push(makeExprStmt(
 				makeAssign(makeIdent(varName, loc), readExpr, loc),
@@ -303,11 +331,10 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type): Node {
 	// 3. Rewrite returns: return val → msFutureComplete($retFut, val); return null;
 	rewriteAsyncReturns(bodyStmts, retFutType, fnReturnInner, loc);
 
-	// 3b. Implicit completion for void async functions (no explicit return at end)
-	// Nim does this implicitly; we must add it explicitly.
+	// 3b. Implicit void completion at body end
 	bodyStmts.push(makeExprStmt(makeCall(
-		makeIdent("msFutureComplete", loc),
-		[makeTypedIdent("$retFut", retFutType, loc), makeNull(loc)],
+		makeIdent("msFutureCompleteVoid", loc),
+		[makeTypedIdent("$retFut", retFutType, loc)],
 		loc,
 	), loc));
 	bodyStmts.push(makeReturn(makeNull(loc), loc));
@@ -404,7 +431,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type): Node {
 	outerStmts.push(stepperDecl);
 
 
-	// msAsyncStart($retFut, $stepper) — Nim createCb pattern: C callback drives the stepper
+	// msAsyncStart($retFut, $stepper) — createCb pattern: C callback drives the stepper
 	const kickoffCall = makeCall(
 		makeIdent("msAsyncStart", loc),
 		[makeTypedIdent("$retFut", retFutType, loc), makeTypedIdent("$stepper", closureType, loc)],
@@ -457,12 +484,15 @@ function rewriteReturns(node: Node, promiseType: Type, fnReturnInner: Type): voi
 				if (stmt.kind === NodeKind.ReturnStmt) {
 					const rd = stmt.data as ReturnStmtData;
 					const loc = stmt.location;
-					const retVal = rd.argument !== null ? boxReturnValue(rd.argument, fnReturnInner, loc) : makeNull(loc);
-					const completeCall = makeCall(
-						makeIdent("msFutureComplete", loc),
-						[makeTypedIdent("$retFut", promiseType, loc), retVal],
-						loc,
-					);
+					const isVoid = fnReturnInner === null || fnReturnInner.kind === TypeKind.Void;
+					let completeCall: Node = null as unknown as Node;
+					if (isVoid || rd.argument === null) {
+						completeCall = makeCall(makeIdent("msFutureCompleteVoid", loc),
+							[makeTypedIdent("$retFut", promiseType, loc)], loc);
+					} else {
+						completeCall = makeCall(makeIdent("msFutureCompleteT", loc),
+							[makeTypedIdent("$retFut", promiseType, loc), rd.argument], loc);
+					}
 					newStmts.push(makeExprStmt(completeCall, loc));
 					newStmts.push(makeReturn(makeTypedIdent("$retFut", promiseType, loc), loc));
 				} else {
@@ -516,11 +546,11 @@ function rewriteSimpleAsyncBody(body: Node, fnReturnInner: Type): Node {
 		newStmts.push(stmt);
 	}
 
-	// If no explicit return at end, add msFutureComplete + return
+	// If no explicit return at end, add implicit void completion
 	if (rewrittenStmts.length === 0 || rewrittenStmts[rewrittenStmts.length - 1].kind !== NodeKind.ReturnStmt) {
 		const completeCall = makeCall(
-			makeIdent("msFutureComplete", loc),
-			[makeTypedIdent("$retFut", retFutType, loc), makeNull(loc)],
+			makeIdent("msFutureCompleteVoid", loc),
+			[makeTypedIdent("$retFut", retFutType, loc)],
 			loc,
 		);
 		newStmts.push(makeExprStmt(completeCall, loc));

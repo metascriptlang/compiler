@@ -78,3 +78,25 @@ export function recvNonBlock(fd: int32, maxBytes: int32): string {
 export function sendNonBlock(fd: int32, data: string, offset: int32): int32 {
 	return msNetSendNonBlock(fd, data, offset);
 }
+
+// ===== Async I/O API (Future-based, for await) =====
+
+@include("std/net/async.h");
+
+extern function msNetRegisterRead(fd: int32): Promise<void> from "msNetRegisterRead";
+extern function msNetRegisterWrite(fd: int32): Promise<void> from "msNetRegisterWrite";
+
+export async function recvAsync(fd: int32, maxBytes: int32): Promise<string> {
+	await msNetRegisterRead(fd);
+	return msNetRecvNonBlock(fd, maxBytes);
+}
+
+export async function sendAsync(fd: int32, data: string, offset: int32): Promise<number> {
+	await msNetRegisterWrite(fd);
+	return msNetSendNonBlock(fd, data, offset);
+}
+
+export async function acceptAsync(listenFd: int32): Promise<number> {
+	await msNetRegisterRead(listenFd);
+	return msNetAcceptNonBlock(listenFd);
+}

@@ -267,7 +267,7 @@ export function findUnionVariant(unionType: Type, fieldNames: string[], fieldTyp
 					if (variant.typeNames[fi] === fieldNames[ti]) {
 						// When fieldTypes provided, match by type compatibility to disambiguate
 						// variants with same field names but different types.
-						// Reference parity: Nim uses fitNode (subtype check), not exact equality.
+						// Reference parity: uses fitNode (subtype check), not exact equality.
 						if (fieldTypes.length > ti && fi < variant.typeChildren.length) {
 							if (typesCompatibleForVariant(variant.typeChildren[fi], fieldTypes[ti])) {
 								found = true;
@@ -293,7 +293,7 @@ export function findUnionVariant(unionType: Type, fieldNames: string[], fieldTyp
 }
 
 // Compatible type matching for union variant field disambiguation.
-// Reference parity: Nim's fitNode does subtype checking for object fields.
+// Reference parity: fitNode does subtype checking for object fields.
 // We check type-class compatibility: all numerics match, all strings match,
 // all ref/ptr types match, exact kind for everything else.
 function typesCompatibleForVariant(formal: Type, actual: Type): boolean {

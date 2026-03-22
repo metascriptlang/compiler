@@ -193,6 +193,9 @@ export function lspRunServer(): void {
 			try {
 				const response = processMessage(qm.body, state);
 				if (response.length > 0) {
+					if (response.length > 5000) {
+						writeStderr(`[LSP] sending response len=${response.length} byteLen=${Buffer.byteLength(response)} method=${qm.method}\n`);
+					}
 					writeStdout(response);
 				}
 			} catch (e) {

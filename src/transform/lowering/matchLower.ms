@@ -13,7 +13,7 @@
 // Or-patterns [p1, p2] → $m === p1 || $m === p2
 // Binding patterns (identifier) → const name = $m; prepended to body
 
-import { Node, NodeKind, DeclKind, SourceLocation, BlockStmtData, MatchStmtData, MatchExprData, MatchCaseData, VariableDeclData, ReturnStmtData, ExprStmtData, IfStmtData, IdentifierData, NumberLiteralData, StringLiteralData, Type } from "../../ast/node";
+import { Node, NodeKind, DeclKind, TypeKind, SourceLocation, BlockStmtData, MatchStmtData, MatchExprData, MatchCaseData, VariableDeclData, ReturnStmtData, ExprStmtData, IfStmtData, IdentifierData, NumberLiteralData, StringLiteralData, Type } from "../../ast/node";
 import { TransformContext, freshTemp } from "../context";
 import { walkExpandBlocks, containsExprKind, replaceInExpr } from "../walker";
 import {
@@ -193,10 +193,170 @@ function lowerMatchExprInReturn(stmt: Node, ctx: TransformContext): Node[] {
 // Unified builder for all match contexts.
 // mode: "stmt" = body as-is, "assign" = varName = body, "return" = return body
 
+// Check if all non-wildcard/non-binding patterns are enum members or integer literals.
+// Guards are allowed — they become if-chains inside switch case bodies.
+function canUseSwitchDispatch(cases: Node[], discType: Type): boolean {
+	if (discType === null) return false;
+	// Only integer types and enums — C switch requires integer discriminant.
+	// TypeKind.Number is double in C, NOT valid for switch.
+	const k = discType.kind;
+	if (k !== TypeKind.Enum && k !== TypeKind.Int8
+		&& k !== TypeKind.Int16 && k !== TypeKind.Int32 && k !== TypeKind.Int64
+		&& k !== TypeKind.Uint8 && k !== TypeKind.Uint16 && k !== TypeKind.Uint32
+		&& k !== TypeKind.Uint64) {
+		return false;
+	}
+	for (let i = 0; i < cases.length; i += 1) {
+		const cd = cases[i].data as MatchCaseData;
+		if (isWildcard(cd.casePatterns)) continue;
+		if (isBindingPattern(cd.casePatterns)) return false;
+		for (let j = 0; j < cd.casePatterns.length; j += 1) {
+			const p = cd.casePatterns[j];
+			if (p.kind === NodeKind.NumberLiteral) continue;
+			if (p.kind === NodeKind.Identifier && p.resolvedSym !== null) continue;
+			if (p.kind === NodeKind.MemberExpr) {
+				// Only accept enum member access (Color.Red), not .code or other property access.
+				// .code patterns are MemberExpr but resolve to runtime values, not constants.
+				const pmd = p.data as { object: Node, property: string };
+				if (pmd.object !== null && pmd.object.nodeType !== null && pmd.object.nodeType.kind === TypeKind.Enum) continue;
+				return false;
+			}
+			if (p.kind === NodeKind.UnaryExpr) continue;
+			return false;
+		}
+	}
+	return true;
+}
+
+// Build switch dispatch for enum/int patterns with guard support.
+// Groups same-pattern arms with different guards into one switch case.
+function buildSwitchDispatch(cases: Node[], tempName: string, discType: Type, loc: SourceLocation, mode: string, varName: string): Node {
+	const needsFlag = mode !== "return";
+	const matchedName = "$matched";
+
+	// Build default body from wildcards: process unguarded first (base), then guarded (wrap).
+	// This ensures: _ when g1 => b1, _ when g2 => b2, _ => b3
+	// becomes: if (g1) { b1 } else if (g2) { b2 } else { b3 }
+	let defaultBody = makeBlock([], loc);
+	for (let wi = cases.length - 1; wi >= 0; wi -= 1) {
+		const wd = cases[wi].data as MatchCaseData;
+		if (!isWildcard(wd.casePatterns)) continue;
+		const body = wrapArmBody(wd.caseBody, mode, varName, loc);
+		if (wd.caseGuard !== null) {
+			defaultBody = makeIf(wd.caseGuard, body, defaultBody, loc);
+		} else {
+			defaultBody = body;
+		}
+	}
+
+	// Group non-wildcard arms by pattern key.
+	const patternKeys: string[] = [];
+	const patternTests: Node[][] = [];
+	const armGuards: Node[][] = [];
+	const armBodies: Node[][] = [];
+
+	for (let i = 0; i < cases.length; i += 1) {
+		const caseData = cases[i].data as MatchCaseData;
+		if (isWildcard(caseData.casePatterns)) continue;
+
+		const body = wrapArmBody(caseData.caseBody, mode, varName, loc);
+
+		// For or-patterns (A | B => body), each pattern gets the same body
+		for (let j = 0; j < caseData.casePatterns.length; j += 1) {
+			const pat = caseData.casePatterns[j];
+			// Key for grouping: semantic equality (resolved symbol name for enums, value for literals)
+			let key = "";
+			if (pat.kind === NodeKind.NumberLiteral) {
+				key = "n:" + (pat.data as NumberLiteralData).value.toString();
+			} else if (pat.kind === NodeKind.Identifier) {
+				key = "id:" + (pat.data as IdentifierData).name;
+			} else if (pat.kind === NodeKind.MemberExpr) {
+				// Use resolved symbol name for semantic equality (Color.Red at any location → same key)
+				if (pat.resolvedSym !== null) {
+					key = "sym:" + pat.resolvedSym.name;
+				} else {
+					const md = pat.data as { object: Node, property: string };
+					key = "m:" + md.property;
+				}
+			} else {
+				key = "x:" + i.toString() + ":" + j.toString();
+			}
+
+			// Find existing group or create new
+			let found = false;
+			for (let gi = 0; gi < patternKeys.length; gi += 1) {
+				if (patternKeys[gi] === key) {
+					armGuards[gi].push(caseData.caseGuard);
+					armBodies[gi].push(body);
+					found = true;
+					break;
+				}
+			}
+			if (!found) {
+				patternKeys.push(key);
+				const tests: Node[] = [];
+				tests.push(pat);
+				patternTests.push(tests);
+				const guards: Node[] = [];
+				guards.push(caseData.caseGuard);
+				armGuards.push(guards);
+				const bodies: Node[] = [];
+				bodies.push(body);
+				armBodies.push(bodies);
+			}
+		}
+	}
+
+	// Build switch cases from grouped arms
+	const switchCases: Node[] = [];
+	for (let gi = 0; gi < patternKeys.length; gi += 1) {
+		const guards = armGuards[gi];
+		const bodies = armBodies[gi];
+		const caseStmts: Node[] = [];
+
+		// Chain guard-body pairs as if-else: if (g1) { body1 } if (g2) { body2 } body_unguarded
+		for (let ai = 0; ai < guards.length; ai += 1) {
+			let armBody = bodies[ai];
+			if (needsFlag) {
+				const setMatched = makeExprStmt(makeAssign(makeIdent(matchedName, loc), makeBool(true, loc), loc), loc);
+				armBody = makeBlock([setMatched, armBody], loc);
+			}
+			if (guards[ai] !== null) {
+				caseStmts.push(makeIf(guards[ai], armBody, makeBlock([], loc), loc));
+			} else {
+				caseStmts.push(armBody);
+			}
+		}
+
+		switchCases.push(makeSwitchCase(patternTests[gi], caseStmts, false, loc));
+	}
+
+	// Build final switch
+	const discIdent = makeTypedIdent(tempName, discType, loc);
+	const switchNode = makeSwitch(discIdent, switchCases, loc);
+
+	const stmts: Node[] = [];
+	if (needsFlag) {
+		stmts.push(makeVarDecl(matchedName, makeBool(false, loc), DeclKind.Let, loc));
+		stmts.push(switchNode);
+		const notMatched = makeUnary("!", makeIdent(matchedName, loc), loc);
+		stmts.push(makeIf(notMatched, defaultBody, makeBlock([], loc), loc));
+	} else {
+		stmts.push(switchNode);
+		stmts.push(defaultBody);
+	}
+	return makeBlock(stmts, loc);
+}
+
 function buildIfChain(cases: Node[], tempName: string, discType: Type, loc: SourceLocation, mode: string, varName: string): Node {
 	// String hash dispatch for >8 string cases
 	if (isAllStringCases(cases)) {
 		return buildHashSwitch(cases, tempName, discType, loc, mode, varName);
+	}
+
+	// Switch dispatch for enum/int discriminants (O(1) jump table in C)
+	if (canUseSwitchDispatch(cases, discType)) {
+		return buildSwitchDispatch(cases, tempName, discType, loc, mode, varName);
 	}
 
 	// Check if any case is a wildcard/binding — if not, last arm becomes the else
@@ -216,25 +376,39 @@ function buildIfChain(cases: Node[], tempName: string, discType: Type, loc: Sour
 		const body = wrapArmBody(caseData.caseBody, mode, varName, loc);
 
 		if (isWildcard(caseData.casePatterns)) {
-			elseNode = body;
+			if (caseData.caseGuard !== null) {
+				// Guarded wildcard: if (guard) { body } else { previous_else }
+				elseNode = makeIf(caseData.caseGuard, body, elseNode, loc);
+			} else {
+				elseNode = body;
+			}
 			continue;
 		}
 
 		if (isBindingPattern(caseData.casePatterns)) {
 			const bindingName = getBindingName(caseData.casePatterns);
 			const bindDecl = makeVarDecl(bindingName, makeTypedIdent(tempName, discType, loc), DeclKind.Const, loc);
-			elseNode = prependToBody(bindDecl, body, loc);
+			if (caseData.caseGuard !== null) {
+				// Bind first, then check guard
+				const guardedBody = makeIf(caseData.caseGuard, body, elseNode, loc);
+				elseNode = prependToBody(bindDecl, guardedBody, loc);
+			} else {
+				elseNode = prependToBody(bindDecl, body, loc);
+			}
 			continue;
 		}
 
 		// No wildcard and this is the last arm → use as unconditional else
 		// (checker verified exhaustiveness, so this is safe)
-		if (!hasDefault && i === cases.length - 1) {
+		if (!hasDefault && i === cases.length - 1 && caseData.caseGuard === null) {
 			elseNode = body;
 			continue;
 		}
 
-		const cond = buildPatternCondition(caseData.casePatterns, tempName, discType, loc);
+		let cond = buildPatternCondition(caseData.casePatterns, tempName, discType, loc);
+		if (caseData.caseGuard !== null) {
+			cond = makeBinary(cond, "&&", caseData.caseGuard, loc);
+		}
 		elseNode = makeIf(cond, body, elseNode, loc);
 	}
 

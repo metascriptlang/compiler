@@ -273,6 +273,22 @@ static inline msString msUnboxString(void* p) {
 	return v;
 }
 
+/* msFuture_msString — defined here (after msString type is available from string/native.h) */
+#ifndef msFuture_msString_DEFINED
+#define msFuture_msString_DEFINED
+MS_FUTURE_STRUCT(msFuture_msString, msString);
+#endif
+
+/* Per-type smart read for msString (needs msUnboxString + msFuture_msString, defined above).
+ * Handles both boxed (spawn, isBoxed=true) and typed (async, isBoxed=false). */
+static inline msString msFutureReadString(void* fp) {
+	msFutureBase* f = (msFutureBase*)fp;
+	assert(f->finished && "Future not yet finished");
+	if (f->cancelled || f->failed) { msErr = true; msErrPayload = f->error; return MS_EMPTY_STRING; }
+	if (f->isBoxed) return msUnboxString(((msFuture_ptr*)fp)->value);
+	return ((msFuture_msString*)fp)->value;
+}
+
 /* Generic struct boxing for spawn — any value type via memcpy.
  * Used when spawn closure returns a struct (Result, interface, etc.).
  * Caller passes &value and sizeof(Type). Box allocates heap copy.

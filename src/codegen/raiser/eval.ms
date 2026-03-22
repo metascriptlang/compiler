@@ -62,6 +62,26 @@ test "match on string" {
 	assert ctx.lastResult.intVal === 1;
 }
 
+test "match with when guard" {
+	const ctx = evalFull("const x = 2; const flag = true; return match (x) { 2 when flag => 200, 2 => 20, _ => 0, };");
+	assert ctx.lastResult.intVal === 200;
+}
+
+test "match when guard fails" {
+	const ctx = evalFull("const x = 2; const flag = false; return match (x) { 2 when flag => 200, 2 => 20, _ => 0, };");
+	assert ctx.lastResult.intVal === 20;
+}
+
+test "match simple wildcard default" {
+	const ctx = evalFull("const x = 5; return match (x) { 1 => 10, _ => 42, };");
+	assert ctx.lastResult.intVal === 42;
+}
+
+test "match guarded wildcard" {
+	const ctx = evalFull("const x = 5; const flag = true; return match (x) { 1 => 10, _ when flag => 999, _ => 0, };");
+	assert ctx.lastResult.intVal === 999;
+}
+
 test "existing arithmetic still works" {
 	const ctx = evalFull("return 2 + 3 * 4;");
 	assert ctx.lastResult.intVal === 14;

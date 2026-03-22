@@ -232,7 +232,7 @@ export type NodeData =
 	| { newCallee: Node, newArguments: Node[] }                    // NewExpr
 	| { tryArg: Node, hasCatch: boolean, catchVal: Node }          // TryExpr
 	| { matchDisc: Node, matchCases: Node[] }                      // MatchExpr
-	| { casePatterns: Node[], caseBody: Node }                     // MatchCase
+	| { casePatterns: Node[], caseGuard: Node, caseBody: Node }    // MatchCase
 	| { awaitArg: Node }                                           // AwaitExpr
 	| { yieldArg: Node, isDelegate: boolean }                      // YieldExpr
 	| { moveArg: Node }                                            // MoveExpr
@@ -346,7 +346,7 @@ export type SpreadExprData = { spreadArg: Node };
 export type NewExprData = { newCallee: Node, newArguments: Node[] };
 export type TryExprData = { tryArg: Node, hasCatch: boolean, catchVal: Node };
 export type MatchExprData = { matchDisc: Node, matchCases: Node[] };
-export type MatchCaseData = { casePatterns: Node[], caseBody: Node };
+export type MatchCaseData = { casePatterns: Node[], caseGuard: Node, caseBody: Node };
 export type AwaitExprData = { awaitArg: Node };
 export type YieldExprData = { yieldArg: Node, isDelegate: boolean };
 export type MoveExprData = { moveArg: Node };

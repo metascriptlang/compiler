@@ -7,7 +7,7 @@ import {
 	VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData,
 	ForStmtData, ForOfStmtData,
 	ExportDeclData, DecoratedDeclData, ImportDeclData,
-	IdentifierData
+	IdentifierData, SwitchStmtData, SwitchCaseData,
 } from "../../ast/node";
 import { RaiserOpcode, raiserABC, raiserAx } from "../../raiser/bytecode";
 import { raiserNil, raiserInt } from "../../raiser/value";
@@ -76,6 +76,7 @@ export function compileStmt(s: RaiserCompState, node: Node): void {
 			const d = node.data as DecoratedDeclData;
 			compileStmt(s, d.decoratedNode);
 		},
+		NodeKind.SwitchStmt => { compileSwitchStmt(s, node); },
 		NodeKind.EnumDecl | NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.TypeAliasDecl | NodeKind.ClassDecl => {},
 		_ => {},
 	};
@@ -281,5 +282,73 @@ function compileImportDecl(s: RaiserCompState, node: Node): void {
 			registerFunc(s, name, funcIdx);
 		}
 		// Unknown imports are silently skipped
+	}
+}
+
+// --- Switch Statement ---
+// Compiled as sequential test-and-branch (Raiser has no jump table opcode).
+// Each case: compare disc with test values, if match execute body and jump past.
+
+function compileSwitchStmt(s: RaiserCompState, node: Node): void {
+	const d = node.data as SwitchStmtData;
+	const discReg = compileExpr(s, d.switchDisc);
+
+	// Collect jump-to-end patches for each matched case (break equivalent)
+	const endPatches: number[] = [];
+	let defaultCaseIdx = -1;
+
+	// First pass: find default case index
+	for (let ci = 0; ci < d.switchCases.length; ci += 1) {
+		const cd = d.switchCases[ci].data as SwitchCaseData;
+		if (cd.isDefault) { defaultCaseIdx = ci; }
+	}
+
+	// Compile non-default cases as sequential test-and-branch.
+	// Each case: test all values → if any match, execute body once and jump to end.
+	for (let ci = 0; ci < d.switchCases.length; ci += 1) {
+		const cd = d.switchCases[ci].data as SwitchCaseData;
+		if (cd.isDefault) continue;
+
+		if (cd.caseTests.length === 1) {
+			// Single test (common case — fast path)
+			const testReg = compileExpr(s, cd.caseTests[0]);
+			emitInst(s, raiserABC(RaiserOpcode.BeqI64, discReg, testReg, 1));
+			const skipJump = emitJumpPlaceholder(s);
+			for (const stmt of cd.caseStmts) { compileStmt(s, stmt); }
+			endPatches.push(emitJumpPlaceholder(s));
+			patchJumpTo(s, skipJump, codeLen(s));
+		} else {
+			// Multiple tests (or-pattern): check each, any match → body
+			// Use a matched flag register
+			const flagReg = allocReg(s);
+			emitLoadConst(s, flagReg, raiserInt(0));
+			for (const test of cd.caseTests) {
+				const testReg = compileExpr(s, test);
+				// If disc == test, set flag = 1
+				emitInst(s, raiserABC(RaiserOpcode.BeqI64, discReg, testReg, 1));
+				const skipSet = emitJumpPlaceholder(s);
+				emitLoadConst(s, flagReg, raiserInt(1));
+				patchJumpTo(s, skipSet, codeLen(s));
+			}
+			// If flag == 0, skip body
+			const zeroReg = allocReg(s);
+			emitLoadConst(s, zeroReg, raiserInt(0));
+			emitInst(s, raiserABC(RaiserOpcode.BneI64, flagReg, zeroReg, 1));
+			const skipBody = emitJumpPlaceholder(s);
+			for (const stmt of cd.caseStmts) { compileStmt(s, stmt); }
+			endPatches.push(emitJumpPlaceholder(s));
+			patchJumpTo(s, skipBody, codeLen(s));
+		}
+	}
+
+	// Default case
+	if (defaultCaseIdx >= 0) {
+		const dd = d.switchCases[defaultCaseIdx].data as SwitchCaseData;
+		for (const stmt of dd.caseStmts) { compileStmt(s, stmt); }
+	}
+
+	// Patch all end jumps to here
+	for (const patch of endPatches) {
+		patchJumpTo(s, patch, codeLen(s));
 	}
 }

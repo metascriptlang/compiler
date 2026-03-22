@@ -287,12 +287,15 @@ export function printMatchCase(node: Node, options: FormatOptions): Doc {
 	for (const p of d.casePatterns) {
 		pats.push(callPrintNode(p, options));
 	}
-	return docGroup([
-		docJoin(pats, docText(" | ")),
-		docText(" => "),
-		callPrintNode(d.caseBody, options),
-		docText(","),
-	]);
+	const parts: Doc[] = [docJoin(pats, docText(" | "))];
+	if (d.caseGuard !== null) {
+		parts.push(docText(" when "));
+		parts.push(callPrintNode(d.caseGuard, options));
+	}
+	parts.push(docText(" => "));
+	parts.push(callPrintNode(d.caseBody, options));
+	parts.push(docText(","));
+	return docGroup(parts);
 }
 
 export function printTryExpr(node: Node, options: FormatOptions): Doc {

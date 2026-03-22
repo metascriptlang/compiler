@@ -201,7 +201,7 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 			}
 		} else if (stmt.kind === NodeKind.WhileStmt) {
 			// Flush current state to a new condition state so pre-loop stmts
-			// don't re-execute on back-edge. Same pattern as Nim's closureiters.
+			// don't re-execute on back-edge. Same pattern as reference closureiters.
 			const condState = allocState(sc);
 			sc.items[currentState].stmts.push(makeStateAssign(condState, loc));
 			const afterSt = (i + 1 < stmts.length) ? allocState(sc) : exitState;

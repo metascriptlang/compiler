@@ -805,17 +805,18 @@ export function handleDidOpen(params: string, db: TransAmDb): string {
 	const path = lspUriToPath(uri);
 
 	dbSetFileText(db, path, text);
+	const t1 = clockMs();
 	const program = dbParse(db, path);
+	const t2 = clockMs();
 	recordImportsForFile(db, path, program);
+	const t3 = clockMs();
 	dbTypeCheck(db, path);
-	// Pre-build completion items so handleCompletion can return instantly (rust-analyzer pattern).
-	// Stdio LSPs must respond within the same event loop tick to beat nvim-cmp's dedup reset.
+	const t4 = clockMs();
 	prebuildCompletionCache(db, path, uri);
-	const elapsed = clockMs() - t0;
-	if (elapsed > 50) {
-		writeStderr("[LSP] didOpen " + path + " " + elapsed + "ms\n");
-	}
+	const t5 = clockMs();
 	const diagParams = buildDiagnosticsJson(uri, db, path);
+	const t6 = clockMs();
+	writeStderr(`[LSP-OPEN] ${path} parse=${t2 - t1}ms imports=${t3 - t2}ms check=${t4 - t3}ms cache=${t5 - t4}ms diag=${t6 - t5}ms total=${t6 - t0}ms\n`);
 	return lspNotification("textDocument/publishDiagnostics", diagParams);
 }
 
@@ -1937,39 +1938,40 @@ export function handleCodeAction(id: string, params: string, db: TransAmDb): str
 }
 
 export function handleFormatting(id: string, params: string, db: TransAmDb): string {
+	const t0 = clockMs();
 	const textDoc = lspGetObjectField(params, "textDocument");
 	const uri = lspGetField(textDoc, "uri");
 	const path = lspUriToPath(uri);
 	const source = dbGetSource(db, path);
 	if (source === "") return lspResponse(id, "[]");
 
-	if (!_fmtParsersRegistered) {
-		registerCoreParsers();
-		_fmtParsersRegistered = true;
-	}
-
-	const parseResult = parseSource(source);
-	if (!parseResult.ok) return lspResponse(id, "[]");
+	const t1 = clockMs();
+	const program = dbParse(db, path);
+	if (program === null) return lspResponse(id, "[]");
+	const t2 = clockMs();
 
 	const options = getFormatOptions(db);
-	const doc = printFormattedNode(parseResult.value, options);
+	options.source = source;
+	const doc = printFormattedNode(program, options);
+	const t3 = clockMs();
 	const formatted = formatDoc(doc, options);
+	const t4 = clockMs();
 
-	if (formatted === source) return lspResponse(id, "[]");
+	writeStderr(`[LSP-FMT] ${path} parse=${t2 - t1}ms print=${t3 - t2}ms layout=${t4 - t3}ms source=${source.byteLength}b\n`);
 
-	// Single TextEdit replacing entire document
+	if (formatted.byteLength === source.byteLength && formatted === source) return lspResponse(id, "[]");
+
 	let lineCount = 0;
-	for (let i = 0; i < source.byteLength; i = i + 1) {
-		if (source.byteAt(i) === "\n".code) lineCount = lineCount + 1;
-	}
-	let lastLineLen = 0;
 	let lastNl = -1;
-	for (let j = source.byteLength - 1; j >= 0; j = j - 1) {
-		if (source.byteAt(j) === "\n".code) { lastNl = j; break; }
+	for (let i = 0; i < source.byteLength; i = i + 1) {
+		if (source.byteAt(i) === "\n".code) { lineCount = lineCount + 1; lastNl = i; }
 	}
-	lastLineLen = source.byteLength - lastNl - 1;
+	const lastLineLen = source.byteLength - lastNl - 1;
 	const range = lspFmtRange(0, 0, lineCount, lastLineLen);
+	const t5 = clockMs();
 	const edit = "{\"range\":" + range + ",\"newText\":" + lspJsonString(formatted) + "}";
+	const t6 = clockMs();
+	writeStderr(`[LSP-FMT] json=${t6 - t5}ms total=${t6 - t0}ms lines=${lineCount} lastLineLen=${lastLineLen} responseLen=${edit.length}\n`);
 	return lspResponse(id, "[" + edit + "]");
 }
 

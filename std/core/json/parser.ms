@@ -117,10 +117,10 @@ function parseNumber(input: string, pos: number): ParseResult {
 	}
 
 	const numStr = input.slice(pos, p);
-	if (isFloat) {
-		return Result.ok({ node: jsonNumber(parseFloat(numStr)), pos: p });
-	}
-	return Result.ok({ node: jsonInt(numStr.parseInt()), pos: p });
+	return Result.ok({
+		node: isFloat ? jsonNumber(parseFloat(numStr)) : jsonInt(numStr.parseInt()),
+		pos: p,
+	});
 }
 
 // ===== String Parser =====
