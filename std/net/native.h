@@ -219,6 +219,61 @@ static inline int32_t msNetSetTimeout(int32_t fd, int32_t ms) {
 	return (int32_t)setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 }
 
+/* ===== Non-Blocking Variants (for event-loop servers) ===== */
+
+/**
+ * Set fd to non-blocking mode. Returns 0 on success, -1 on error.
+ */
+static inline int32_t msNetSetNonBlocking(int32_t fd) {
+	int flags = fcntl(fd, F_GETFL, 0);
+	if (flags < 0) return -1;
+	return fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0 ? -1 : 0;
+}
+
+/**
+ * Non-blocking accept. Returns client fd, or -1 on EAGAIN/error.
+ * Sets TCP_NODELAY on accepted socket.
+ */
+static inline int32_t msNetAcceptNonBlock(int32_t fd) {
+	struct sockaddr_in ca;
+	socklen_t cl = sizeof(ca);
+	int cfd = accept(fd, (struct sockaddr*)&ca, &cl);
+	if (cfd >= 0) {
+		int f = 1;
+		setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY, &f, sizeof(f));
+	}
+	return (int32_t)cfd;
+}
+
+/**
+ * Non-blocking recv. Returns received data, or empty string on EAGAIN/close/error.
+ */
+static inline msString msNetRecvNonBlock(int32_t fd, int32_t maxBytes) {
+	if (maxBytes <= 0) return MS_EMPTY_STRING;
+	if (maxBytes > 16777216) maxBytes = 16777216;
+	char* buf = (char*)malloc((size_t)maxBytes + 1);
+	ssize_t r = recv(fd, buf, (size_t)maxBytes, 0);
+	if (r <= 0) { free(buf); return MS_EMPTY_STRING; }
+	buf[r] = '\0';
+	msString result = msStringNew(buf, (int64_t)r);
+	free(buf);
+	return result;
+}
+
+/**
+ * Non-blocking send with offset. Returns bytes sent, 0 on EAGAIN, -1 on error.
+ * Allows incremental sending from a sendQueue.
+ */
+static inline int32_t msNetSendNonBlock(int32_t fd, msString data, int32_t offset) {
+	if (!data.p || offset >= (int32_t)data.len) return 0;
+	const char* buf = data.p->data + offset;
+	int32_t remaining = (int32_t)data.len - offset;
+	ssize_t n = send(fd, buf, (size_t)remaining, 0);
+	if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return 0;
+	if (n < 0) return -1;
+	return (int32_t)n;
+}
+
 #ifdef __cplusplus
 }
 #endif

@@ -123,10 +123,10 @@ function wrapFieldAsJson(fieldAccess: Node, ftype: Type, loc: SourceLocation, ct
 	const primWrapper = match (ftype.kind) {
 		TypeKind.String => "jsonString",
 		TypeKind.Boolean => "jsonBool",
-		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32
-			| TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
+		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "jsonNumber",
+		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
 			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64
-			| TypeKind.Enum => "jsonNumber",
+			| TypeKind.Enum => "jsonInt",
 		_ => "",
 	};
 	if (primWrapper !== "") return makeCall(resolveDbgIdent(primWrapper, ctx, loc), [fieldAccess], loc);

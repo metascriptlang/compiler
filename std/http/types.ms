@@ -50,6 +50,7 @@ export interface ServerResponse {
 	headersSent: boolean;
 	_finished: boolean;
 	_chunked: boolean;
+	_responseData: string;
 }
 
 export type RequestHandler = (req: HttpRequest, res: ServerResponse) => void;

@@ -3,7 +3,7 @@
 // ===== Core Types (from sub-modules, loaded dependency-first) =====
 
 export { JsonKind, JsonValue, JsonValueData } from "./types";
-export { jsonNull, jsonBool, jsonNumber, jsonString, jsonArray, jsonObject } from "./builder";
+export { jsonNull, jsonBool, jsonNumber, jsonString, jsonArray, jsonObject, jsonInt } from "./builder";
 export { stringify, stringifyPretty } from "./stringify";
 export { parseJson } from "./parser";
 export { asString, asNumber, asBool, asInt, at, length, get } from "./accessors";
@@ -16,4 +16,6 @@ export class JSON {
 
 	@builtin("JsonStringify")
 	static extern stringify<T>(value: T): string;
+
+	static med(): void {}
 }

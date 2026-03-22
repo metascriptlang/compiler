@@ -126,6 +126,12 @@ function stripFirstParam(arr: string[]): string[] {
 	return result;
 }
 
+function stripFirstDefault(arr: Node[]): Node[] {
+	const result: Node[] = [];
+	for (let i = 1; i < arr.length; i += 1) { result.push(arr[i]); }
+	return result;
+}
+
 // Detect extension method `this`/`typeof` in params and append to flags.
 // Mutates params[0] for instance extensions (strips "this:" prefix).
 // Appends generic names. Used by both regular and extern function parsers.
@@ -241,7 +247,7 @@ export function parseFunctionDecl(state: ParserState): NodeResult {
 		fnBody: try callBlockParser(state),
 		fnFlags: flags,
 		fnReturnType,
-		fnDefaults,
+		fnDefaults: isStatic ? stripFirstDefault(fnDefaults) : fnDefaults,
 		nameLocation: makeLocFromToken(nameToken),
 	}, fnToken);
 	fnNode.typeExpr = fnReturnTypeExpr;

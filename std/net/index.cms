@@ -6,7 +6,6 @@
  */
 
 @include("std/net/native.h");
-@include("std/net/async.h");
 
 // ===== C primitives (blocking) =====
 
@@ -20,12 +19,9 @@ extern function msNetRecv(fd: int32, maxBytes: int32): string;
 extern function msNetClose(fd: int32): void;
 extern function msNetSetTimeout(fd: int32, ms: int32): int32;
 extern function msNetSetNonBlocking(fd: int32): int32;
-
-// ===== C primitives (async) =====
-
-extern function msNetAcceptAsync(fd: int32): Promise<int32>;
-extern function msNetRecvAsync(fd: int32, maxBytes: int32): Promise<string>;
-extern function msNetSendAsync(fd: int32, data: string): Promise<int32>;
+extern function msNetAcceptNonBlock(fd: int32): int32;
+extern function msNetRecvNonBlock(fd: int32, maxBytes: int32): string;
+extern function msNetSendNonBlock(fd: int32, data: string, offset: int32): int32;
 
 // ===== Public API =====
 
@@ -69,16 +65,16 @@ export function setNonBlocking(fd: int32): int32 {
 	return msNetSetNonBlocking(fd);
 }
 
-// ===== Async API =====
+// ===== Non-Blocking API (for event-loop servers) =====
 
-export function acceptAsync(fd: int32): Promise<int32> {
-	return msNetAcceptAsync(fd);
+export function acceptNonBlock(fd: int32): int32 {
+	return msNetAcceptNonBlock(fd);
 }
 
-export function recvAsync(fd: int32, maxBytes: int32): Promise<string> {
-	return msNetRecvAsync(fd, maxBytes);
+export function recvNonBlock(fd: int32, maxBytes: int32): string {
+	return msNetRecvNonBlock(fd, maxBytes);
 }
 
-export function sendAsync(fd: int32, data: string): Promise<int32> {
-	return msNetSendAsync(fd, data);
+export function sendNonBlock(fd: int32, data: string, offset: int32): int32 {
+	return msNetSendNonBlock(fd, data, offset);
 }

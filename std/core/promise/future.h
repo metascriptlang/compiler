@@ -102,14 +102,16 @@ static inline bool msFutureFinished(msFuture* f) {
 	return f->finished;
 }
 
-/* Fire all registered callbacks via callSoon (shared by complete/fail).
- * Matches standard reference: set finished BEFORE firing, clear list, route through callSoon. */
+/* Fire all registered callbacks directly (shared by complete/fail).
+ * Direct invocation instead of callSoon — works correctly across threads.
+ * When spawn completes on a pool thread, callbacks fire on that thread.
+ * This matches most C future libraries and avoids cross-thread dispatcher issues. */
 static inline void msFutureFireCallbacks(msFuture* f) {
 	msFutureCb* cb = f->callbacks;
 	f->callbacks = NULL;
 	f->cbTail = NULL;
 	while (cb) {
-		msCallSoon((msClosure){ .fn = (msClosureFn)cb->fn, .env = cb->env });
+		((void(*)(void*))cb->fn)(cb->env);
 		msFutureCb* next = cb->next;
 		free(cb);
 		cb = next;
@@ -185,11 +187,16 @@ static inline void* msFutureRead(msFuture* f) {
 	return v;
 }
 
-/* Standard reference addCallback(fut, cb) parity — if finished, callSoon(cb); else append.
- * O(1) append via tail pointer (Standard reference uses intrusive list, same complexity). */
+/* Add callback — if already finished, call directly; else append to list.
+ * Direct invocation avoids cross-thread dispatcher routing issues. */
 static inline void msFutureAddCallback(msFuture* f, msClosure cb) {
 	if (f->finished) {
-		msCallSoon(cb);
+		/* Already finished — call directly (not through callSoon) */
+		if (cb.env != NULL) {
+			((void(*)(void*))cb.fn)(cb.env);
+		} else {
+			((void(*)(void))cb.fn)();
+		}
 		return;
 	}
 	msFutureCb* node = (msFutureCb*)malloc(sizeof(msFutureCb));
@@ -216,5 +223,18 @@ static inline void* msBoxInt32(int32_t v) { int32_t* p = (int32_t*)malloc(sizeof
 static inline int32_t msUnboxInt32(void* p) { int32_t v = *(int32_t*)p; free(p); return v; }
 static inline void* msBoxBool(bool v) { bool* p = (bool*)malloc(sizeof(bool)); *p = v; return p; }
 static inline bool msUnboxBool(void* p) { bool v = *(bool*)p; free(p); return v; }
+
+/* ===== Async Stepper Callback (Nim createCb pattern) ===== */
+/* The stepper (state machine) returns the next msFuture* to wait on, or NULL when done.
+ * msAsyncCb drives the stepper: calls it, checks the result, re-registers on yielded future.
+ * This eliminates the self-referencing closure problem — the stepper never references itself.
+ * Defined as declarations here; implemented in dispatch.c (where arc.h is available for refcounting). */
+
+typedef struct {
+	msClosure stepper;
+} msAsyncCbEnv;
+
+void msAsyncCb(void* raw);
+void msAsyncStart(msFuture* retFut, msClosure stepper);
 
 #endif /* MS_FUTURE_H */

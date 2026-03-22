@@ -230,7 +230,14 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 	const varName = safeName(d.declName);
 	// Reference parity (cpsLocals): DRC-generated temps ($ prefix) hoist declaration to function
 	// scope to survive C block scoping in if-else branches. User variables stay at block position.
-	const hoistDecl = d.declName.length > 0 && d.declName.byteAt(0) === "$".code;
+	let hoistDecl = d.declName.length > 0 && d.declName.byteAt(0) === "$".code;
+	// Dedup: skip hoisting if already declared by expression-level auto-declare (seenSinks)
+	if (hoistDecl && p !== null) {
+		for (const s of p.seenSinks) {
+			if (s === d.declName) { hoistDecl = false; }
+		}
+		if (hoistDecl) p.seenSinks.push(d.declName);
+	}
 
 	// Type resolution priority: nodeType (checker) > initializer.nodeType (DRC) > annotation fallback
 	let cType = "";

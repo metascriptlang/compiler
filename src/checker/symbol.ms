@@ -99,7 +99,10 @@ export function defineSymbol(table: SymbolTable, sym: Symbol): Result<boolean, s
 		if (existing.nameId === nameId) {
 			// Allow function overloads: same name, both functions
 			if (existing.symbolKind === SymbolKind.Function && sym.symbolKind === SymbolKind.Function) {
-				sym.overloadIdx = existing.overloads.length + 1;
+				// overloadIdx only disambiguates same-MODULE functions (module path handles cross-module).
+				if (existing.modulePath === sym.modulePath) {
+					sym.overloadIdx = existing.overloads.length + 1;
+				}
 				existing.overloads.push(sym);
 				return Result.ok(true);
 			}

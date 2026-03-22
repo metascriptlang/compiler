@@ -247,7 +247,7 @@ export function makeInterfaceDeclFromTypes(name: string, fields: string[], field
 // Resolve simple type annotation strings to Type objects for transform-generated nodes.
 // Handles primitives and array annotations. Non-primitive types resolve to Unknown —
 // actual types come from the checker via node.nodeType (no TypeReference).
-function resolveSimpleTypeStr(annotation: string): Type {
+export function resolveSimpleTypeStr(annotation: string): Type {
 	if (annotation === "") return unknownType();
 	if (annotation === "void*") return unknownType();  // void* → Unknown → "void*" in codegen
 	// Handle array annotations: "Foo[]", "Foo [ ]" (parser joins tokens with spaces)

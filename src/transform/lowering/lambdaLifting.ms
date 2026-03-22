@@ -20,7 +20,7 @@ import { mapChildren, isFuncBoundary } from "../walker";
 import {
 	makeIdent, makeMember, makeMoveExpr, makeReturn, makeBlock,
 	makeFnDecl, makeInterfaceDeclFromTypes, makeObjectLiteral, makeHiddenDeref,
-	makeNull, syntheticToken,
+	makeNull, syntheticToken, resolveSimpleTypeStr,
 } from "../util";
 import { createPtr, unknownType } from "../../checker/types";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts } from "../testUtil";
@@ -337,7 +337,9 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 		if (orig !== null && orig.nodeType !== null) {
 			envResolvedTypes.push(orig.nodeType);
 		} else {
-			envResolvedTypes.push(unknownType());
+			// Fallback: resolve from registered string type (for synthetic vars from asyncBridge)
+			const typeStr = lookupVarType(state, name);
+			envResolvedTypes.push(resolveSimpleTypeStr(typeStr));
 		}
 	}
 	const envDecl = makeInterfaceDeclFromTypes(envName, envFields, envFieldTypes, envResolvedTypes, loc);

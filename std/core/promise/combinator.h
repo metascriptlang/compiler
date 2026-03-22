@@ -111,16 +111,28 @@ msFuture* msPromiseNew(msClosure executor);
 
 /* ===== Promise.then / .catch / .finally ===== */
 
+/* Type tags for typed callback dispatch.
+ * 0 = void/pointer (pass void* directly)
+ * 1 = int (pass void* directly — lower bits are the int value)
+ * 2 = double (val is double*, dereference + free)
+ * 3 = string (val is msString*, dereference + free) */
+#define MS_TYPETAG_PTR    0
+#define MS_TYPETAG_INT    1
+#define MS_TYPETAG_DOUBLE 2
+#define MS_TYPETAG_STRING 3
+
 typedef struct {
 	msFuture* output;
 	msFuture* input;
 	msClosure onFulfilled;
+	int typeTag;
 } msFutureThenEnv;
 
 typedef struct {
 	msFuture* output;
 	msFuture* input;
 	msClosure onRejected;
+	int typeTag;
 } msFutureCatchEnv;
 
 typedef struct {
@@ -130,7 +142,9 @@ typedef struct {
 } msFutureFinallyEnv;
 
 msFuture* msFutureThen(msFuture* input, msClosure onFulfilled);
+msFuture* msFutureThenTyped(msFuture* input, msClosure onFulfilled, int typeTag);
 msFuture* msFutureCatch(msFuture* input, msClosure onRejected);
+msFuture* msFutureCatchTyped(msFuture* input, msClosure onRejected, int typeTag);
 msFuture* msFutureFinally(msFuture* input, msClosure onSettled);
 
 #endif /* MS_COMBINATOR_H */

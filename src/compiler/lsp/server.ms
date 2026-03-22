@@ -236,6 +236,11 @@ export function processMessage(msg: string, state: LspServerState): string {
 		state.completionCache.line = -1;
 	}
 
+	// Log all requests for debugging
+	if (method === "textDocument/completion") {
+		writeStderr("[LSP] >>> " + method + " id=" + idStr + "\n");
+	}
+	const _isCompletion = method === "textDocument/completion";
 	// Dispatch with error recovery
 	let json = "";
 	const t0 = clockMs();
@@ -260,6 +265,10 @@ export function processMessage(msg: string, state: LspServerState): string {
 		return "";
 	}
 
+	if (_isCompletion) {
+		const elapsed = t1 - t0;
+		writeStderr("[LSP] <<< completion id=" + idStr + " " + elapsed + "ms len=" + json.length + "\n");
+	}
 	let result = lspFormatMessage(json);
 
 	// Append transitive diagnostics on didOpen and didChange.

@@ -29,8 +29,8 @@ export function stringify(value: JsonValue, color: boolean = false): string {
 			let result = "[";
 			let i = 0;
 			while (i < value.items.length) {
-				if (i > 0) result = result + (color ? ", " : ",");
-				result = result + stringify(value.items[i], color);
+				if (i > 0) result += color ? ", " : ",";
+				result += stringify(value.items[i], color);
 				i = i + 1;
 			}
 			return result + "]";
@@ -39,15 +39,19 @@ export function stringify(value: JsonValue, color: boolean = false): string {
 			let result = color ? "{ " : "{";
 			let i = 0;
 			while (i < value.keys.length) {
-				if (i > 0) result = result + (color ? ", " : ",");
+				if (i > 0) result += color ? ", " : ",";
 				if (color) {
-					result = result + value.keys[i] + ": " + stringify(value.values[i], true);
+					result += value.keys[i] + ": " + stringify(value.values[i], true);
 				} else {
-					result = result + escapeString(value.keys[i]) + ":" + stringify(value.values[i], false);
+					result += escapeString(value.keys[i]) + ":" + stringify(value.values[i], false);
 				}
 				i = i + 1;
 			}
 			return result + (color ? " }" : "}");
+		},
+		JsonKind.Int => {
+			const s = value.intVal.toString();
+			return color ? "\x1b[33m" + s + "\x1b[0m" : s;
 		},
 		_ => "null",
 	};
@@ -65,6 +69,7 @@ function prettyImpl(value: JsonValue, indent: number, depth: number): string {
 		JsonKind.Null => "null",
 		JsonKind.Bool => { return value.boolVal ? "true" : "false"; },
 		JsonKind.Number => value.numVal.toString(),
+		JsonKind.Int => value.intVal.toString(),
 		JsonKind.String => escapeString(value.strVal),
 		JsonKind.Array => {
 			if (value.items.length === 0) return "[]";
@@ -73,8 +78,8 @@ function prettyImpl(value: JsonValue, indent: number, depth: number): string {
 			let result = "[\n";
 			let i = 0;
 			while (i < value.items.length) {
-				if (i > 0) result = result + ",\n";
-				result = result + pad + prettyImpl(value.items[i], indent, depth + 1);
+				if (i > 0) result += ",\n";
+				result += pad + prettyImpl(value.items[i], indent, depth + 1);
 				i = i + 1;
 			}
 			return result + "\n" + endPad + "]";
@@ -86,8 +91,8 @@ function prettyImpl(value: JsonValue, indent: number, depth: number): string {
 			let result = "{\n";
 			let i = 0;
 			while (i < value.keys.length) {
-				if (i > 0) result = result + ",\n";
-				result = result + pad + escapeString(value.keys[i]) + ": " + prettyImpl(value.values[i], indent, depth + 1);
+				if (i > 0) result += ",\n";
+				result += pad + escapeString(value.keys[i]) + ": " + prettyImpl(value.values[i], indent, depth + 1);
 				i = i + 1;
 			}
 			return result + "\n" + endPad + "}";
@@ -101,7 +106,7 @@ function makeIndent(size: number, depth: number): string {
 	let i = 0;
 	const total = size * depth;
 	while (i < total) {
-		result = result + " ";
+		result += " ";
 		i = i + 1;
 	}
 	return result;
@@ -109,18 +114,31 @@ function makeIndent(size: number, depth: number): string {
 
 // ===== String Escaping =====
 
+function hexDigit(n: number): string {
+	if (n < 10) return fromCodePoint("0".code + n);
+	return fromCodePoint("a".code + n - 10);
+}
+
 function escapeString(s: string): string {
 	let result = "\"";
 	let i = 0;
 	while (i < s.byteLength) {
 		const ch = s.charCodeAt(i);
 		match (ch) {
-			"\"".code => { result = result + "\\\""; },
-			"\\".code => { result = result + "\\\\"; },
-			"\n".code => { result = result + "\\n"; },
-			"\r".code => { result = result + "\\r"; },
-			"\t".code => { result = result + "\\t"; },
-			_ => { result = result + s.charAt(i); },
+			"\"".code => { result += "\\\""; },
+			"\\".code => { result += "\\\\"; },
+			"\n".code => { result += "\\n"; },
+			"\r".code => { result += "\\r"; },
+			"\t".code => { result += "\\t"; },
+			8 => { result += "\\b"; },
+			12 => { result += "\\f"; },
+			_ => {
+				if (ch < 32) {
+					result += "\\u00" + hexDigit((ch >> 4) & 15) + hexDigit(ch & 15);
+				} else {
+					result += s.charAt(i);
+				}
+			},
 		};
 		i = i + 1;
 	}

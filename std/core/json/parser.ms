@@ -4,7 +4,7 @@
 // Depth-limited to prevent stack overflow.
 
 import { JsonKind, JsonValue } from "./types";
-import { jsonNull, jsonBool, jsonNumber, jsonString, jsonArray, jsonObject } from "./builder";
+import { jsonNull, jsonBool, jsonNumber, jsonString, jsonArray, jsonObject, jsonInt } from "./builder";
 // fromCodePoint is exported from std/core/string prelude — available globally
 
 const DEPTH_LIMIT: number = 1000;
@@ -95,7 +95,9 @@ function parseNumber(input: string, pos: number): ParseResult {
 	}
 
 	// Decimal part
+	let isFloat = false;
 	if (p < len && input.charCodeAt(p) === ".".code) {
+		isFloat = true;
 		p = p + 1;
 		while (p < len && input.charCodeAt(p) >= "0".code && input.charCodeAt(p) <= "9".code) {
 			p = p + 1;
@@ -104,6 +106,7 @@ function parseNumber(input: string, pos: number): ParseResult {
 
 	// Exponent part
 	if (p < len && (input.charCodeAt(p) === "e".code || input.charCodeAt(p) === "E".code)) {
+		isFloat = true;
 		p = p + 1;
 		if (p < len && (input.charCodeAt(p) === "+".code || input.charCodeAt(p) === "-".code)) {
 			p = p + 1;
@@ -114,8 +117,10 @@ function parseNumber(input: string, pos: number): ParseResult {
 	}
 
 	const numStr = input.slice(pos, p);
-	const num = parseFloat(numStr);
-	return Result.ok({ node: jsonNumber(num), pos: p });
+	if (isFloat) {
+		return Result.ok({ node: jsonNumber(parseFloat(numStr)), pos: p });
+	}
+	return Result.ok({ node: jsonInt(numStr.parseInt()), pos: p });
 }
 
 // ===== String Parser =====
@@ -136,14 +141,14 @@ function parseString(input: string, pos: number): ParseResult {
 			if (p >= len) return errorAt("Unexpected end of string", p);
 			const esc = input.charCodeAt(p);
 			match (esc) {
-				"\"".code => { result = result + "\""; },
-				"\\".code => { result = result + "\\"; },
-				"/".code => { result = result + "/"; },
-				"b".code => { result = result + "\b"; },
-				"f".code => { result = result + "\f"; },
-				"n".code => { result = result + "\n"; },
-				"r".code => { result = result + "\r"; },
-				"t".code => { result = result + "\t"; },
+				"\"".code => { result += "\""; },
+				"\\".code => { result += "\\"; },
+				"/".code => { result += "/"; },
+				"b".code => { result += "\b"; },
+				"f".code => { result += "\f"; },
+				"n".code => { result += "\n"; },
+				"r".code => { result += "\r"; },
+				"t".code => { result += "\t"; },
 				"u".code => {
 					if (p + 4 >= len) return errorAt("Invalid unicode escape", p);
 					const hex = input.slice(p + 1, p + 5);
@@ -156,20 +161,20 @@ function parseString(input: string, pos: number): ParseResult {
 							const low = parseHex(hex2);
 							if (low >= 56320 && low <= 57343) {
 								const full = 65536 + ((codePoint - 55296) * 1024) + (low - 56320);
-								result = result + fromCodePoint(full);
+								result += fromCodePoint(full);
 								p = p + 10;
 								p = p + 1;
 								continue;
 							}
 						}
 					}
-					result = result + fromCodePoint(codePoint);
+					result += fromCodePoint(codePoint);
 					p = p + 4;
 				},
 				_ => { return errorAt(`Invalid escape '\\${input.charAt(p)}'`, p); },
 			};
 		} else {
-			result = result + input.charAt(p);
+			result += input.charAt(p);
 		}
 		p = p + 1;
 	}

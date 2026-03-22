@@ -11,7 +11,7 @@
 //
 // Only runs for C backend (JS handles string ops natively).
 
-import { Node, NodeKind, SourceLocation, BinaryExprData, ArrayAccessData, StringLiteralData, TypeKind } from "../../ast/node";
+import { Node, NodeKind, SourceLocation, BinaryExprData, ArrayAccessData, StringLiteralData, IdentifierData, MemberExprData, TypeKind } from "../../ast/node";
 import { isNumeric } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -35,6 +35,21 @@ function rewriteStringOp(node: Node): Node {
 		const ad = d.left.data as ArrayAccessData;
 		if (isStringTyped(ad.array)) {
 			return rewriteStringIndexAssign(ad.array, ad.index, d.right, node);
+		}
+	}
+
+	// String self-append: x = x + y → msStringAppend(&x, y)
+	// Reference parity: standard compiler recognizes this pattern and rewrites to in-place append.
+	// Avoids O(n) allocation per concat — uses amortized O(1) append with capacity growth.
+	if (d.operator === "=" && d.right.kind === NodeKind.BinaryExpr) {
+		const rd = d.right.data as BinaryExprData;
+		if (rd.operator === "+" && isStringTyped(d.left) && isSameIdent(d.left, rd.left)) {
+			const loc = node.location;
+			const addrOf = makeUnary("&", d.left, loc);
+			const right = coercePartToString(rd.right, loc);
+			const result = makeCall(makeIdent("msStringAppend", loc), [addrOf, right], loc);
+			result.nodeType = node.nodeType;
+			return result;
 		}
 	}
 
@@ -154,6 +169,21 @@ function isStringTyped(node: Node): boolean {
 	if (node === null) return false;
 	if (node.nodeType === null) return false;
 	return node.nodeType.kind === TypeKind.String;
+}
+
+// Check if two nodes refer to the same identifier (by name) or same member access chain.
+function isSameIdent(a: Node, b: Node): boolean {
+	if (a === null || b === null) return false;
+	if (a.kind !== b.kind) return false;
+	if (a.kind === NodeKind.Identifier) {
+		return (a.data as IdentifierData).name === (b.data as IdentifierData).name;
+	}
+	if (a.kind === NodeKind.MemberExpr) {
+		const ad = a.data as MemberExprData;
+		const bd = b.data as MemberExprData;
+		return ad.property === bd.property && isSameIdent(ad.object, bd.object);
+	}
+	return false;
 }
 
 function isEmptyStringLiteral(node: Node): boolean {

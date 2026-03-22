@@ -3,6 +3,19 @@
 // No C runtime, no type erasure, no boxing.
 // All code in one file (prelude system loads a single file per module).
 
+// ===== Map<K, V> =====
+
+export interface MapEntry<K, V> {
+	hcode: int64;
+	key: K;
+	value: V;
+}
+
+export interface Map<K, V> {
+	data: MapEntry<K, V>[];
+	counter: int32;
+}
+
 // ===== Hash Functions =====
 
 export function hashString(s: string): int64 {
@@ -15,19 +28,6 @@ export function hashString(s: string): int64 {
 	}
 	if (h === 0) return 314159265;
 	return h;
-}
-
-// ===== Map<K, V> =====
-
-export interface MapEntry<K, V> {
-	hcode: int64;
-	key: K;
-	value: V;
-}
-
-export interface Map<K, V> {
-	data: MapEntry<K, V>[];
-	counter: int32;
 }
 
 function mapRawGet<K, V>(m: Map<K, V>, key: K): int32 {

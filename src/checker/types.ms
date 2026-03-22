@@ -1021,15 +1021,17 @@ export function isIntegerType(t: Type): boolean {
 // Parity: standard reference's ordinal range comparison patterns
 export function integerRank(t: Type): number {
 	return match (t.kind) {
-		TypeKind.Int8   => 1,
-		TypeKind.Uint8  => 2,
-		TypeKind.Int16  => 3,
-		TypeKind.Uint16 => 4,
-		TypeKind.Int32  => 5,
-		TypeKind.Uint32 => 6,
-		TypeKind.Int64  => 7,
-		TypeKind.Uint64 => 8,
-		TypeKind.Number => 9,
+		TypeKind.Int8    => 1,
+		TypeKind.Uint8   => 2,
+		TypeKind.Int16   => 3,
+		TypeKind.Uint16  => 4,
+		TypeKind.Int32   => 5,
+		TypeKind.Uint32  => 6,
+		TypeKind.Int64   => 7,
+		TypeKind.Uint64  => 8,
+		TypeKind.Float32 => 9,
+		TypeKind.Number  => 10,
+		TypeKind.Float64 => 10,
 		_ => 0,
 	};
 }

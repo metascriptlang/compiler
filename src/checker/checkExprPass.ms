@@ -622,7 +622,7 @@ function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
 				if (leftType.kind === TypeKind.Number || rightType.kind === TypeKind.Number) return numberType();
 				return float64Type();
 			}
-			return float64Type();
+			return unknownType();
 		},
 		"*" | "/" | "%" | "**" => {
 			// Reference parity: int32 * int32 → int32
@@ -1029,7 +1029,19 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 			const objType = me.object.nodeType;
 			if (objType !== null && objType.kind !== TypeKind.Unknown) {
 				const allByName = findAllExtensionsByName(ctx.extensionRegistry, me.property);
-				const filtered = filterExtsByReceiverType(allByName, objType);
+				let filtered = filterExtsByReceiverType(allByName, objType);
+				// Type-level access (e.g., Buffer.method()) — only static extensions apply.
+				const isStaticAccess = me.object.resolvedSym !== null
+					&& (me.object.resolvedSym.symbolKind === SymbolKind.TypeAlias
+						|| me.object.resolvedSym.symbolKind === SymbolKind.Class
+						|| me.object.resolvedSym.symbolKind === SymbolKind.Interface);
+				if (isStaticAccess && filtered.length > 1) {
+					const staticOnly: ExtensionMethod[] = [];
+					for (const ext of filtered) {
+						if (ext.isStatic) staticOnly.push(ext);
+					}
+					if (staticOnly.length > 0) filtered = staticOnly;
+				}
 				if (filtered.length === 1) {
 					const winner = filtered[0];
 					if (winner.sym !== null) {
@@ -1096,7 +1108,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 	// Pre-resolved single extension — return type inference (needs argTypes)
 	if (extPreResolved) {
 		// Fill default args (calleeType already has receiver stripped for non-static)
-		// defaultOffset = 1 for non-static (fnDefaults[0] is receiver slot), 0 for static
+		// defaultOffset = 1 for non-static (fnDefaults[0] is receiver slot), 0 for static (receiver stripped in parser)
 		const extDefaultOffset = (node.flags & NodeFlag.ExtStatic) !== 0 ? 0 : 1;
 		if (argTypes.length < calleeType.typeChildren.length) {
 			const me = d.callee.data as MemberExprData;
@@ -1464,10 +1476,12 @@ function resolveExtensionOverloadCall(ctx: CheckerContext, exts: ExtensionMethod
 		callNode.flags = callNode.flags | NodeFlag.ExtCall;
 		if (exts[idx].isStatic) callNode.flags = callNode.flags | NodeFlag.ExtStatic;
 	}
-	// Fill default args for extension overloads (candidates already have receiver stripped)
+	// Fill default args for extension overloads
+	// defaultOffset: 0 for static (parser stripped receiver from fnDefaults), 1 for non-static
 	const winnerType = candidates[idx];
 	if (winnerType.kind === TypeKind.Function && argTypes.length < winnerType.typeChildren.length) {
-		fillDefaultArgsForNode(ctx, callNode, methodName, winnerType.typeChildren.length, 1);
+		const ovDefaultOffset = (idx >= 0 && idx < exts.length && exts[idx].isStatic) ? 0 : 1;
+		fillDefaultArgsForNode(ctx, callNode, methodName, winnerType.typeChildren.length, ovDefaultOffset);
 	}
 	return inferGenericReturn(winnerType, argTypes, null);
 }
@@ -1729,11 +1743,15 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 			resolvedObjType = resolvedObjType.typeReturn;
 		}
 	}
-	// Static access detection (TypeScript parity): when the object is a class name
-	// (e.g. Result.ok()), skip instance field resolution — go to static method lookup.
+	// Static access detection: when the object is a type name (class, type alias, interface, struct),
+	// skip instance field resolution — go to static method lookup.
 	// Allows field/method name coexistence: result.ok (field) vs Result.ok() (static method).
+	// TypeAlias included for patterns like Buffer.alloc() where Buffer is `type Buffer = string`.
 	const isStaticClassAccess = d.object.resolvedSym !== null
-		&& d.object.resolvedSym.symbolKind === SymbolKind.Class;
+		&& (d.object.resolvedSym.symbolKind === SymbolKind.Class
+			|| d.object.resolvedSym.symbolKind === SymbolKind.TypeAlias
+			|| d.object.resolvedSym.symbolKind === SymbolKind.Interface
+			|| d.object.resolvedSym.symbolKind === SymbolKind.Struct);
 	let propType = isStaticClassAccess ? unknownType() : getProperty(resolvedObjType, d.property);
 	// Class-aware field delegation (system module symbol lookup):
 	// When a built-in TypeKind (Promise, Result, etc.) has a typeName but getProperty() can't
@@ -1837,11 +1855,19 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 		return int32Type();
 	}
 	// String-specific properties: .byteLength, .unicodeLength
+	// Skip when accessed on a TYPE (e.g., Buffer.byteLength(json)) — that's a static extension call.
+	// Only resolve as property when accessed on an instance (e.g., str.byteLength).
 	if ((d.property === "byteLength" || d.property === "unicodeLength") && resolvedObjType.kind === TypeKind.String) {
-		const propSym = makeSymbol(d.property, SymbolKind.Property, int32Type(), false);
-		propSym.state = SymbolState.Shaped;
-		node.resolvedSym = propSym;
-		return int32Type();
+		const isTypeAccess = d.object.resolvedSym !== null
+			&& (d.object.resolvedSym.symbolKind === SymbolKind.TypeAlias
+				|| d.object.resolvedSym.symbolKind === SymbolKind.Class
+				|| d.object.resolvedSym.symbolKind === SymbolKind.Interface);
+		if (!isTypeAccess) {
+			const propSym = makeSymbol(d.property, SymbolKind.Property, int32Type(), false);
+			propSym.state = SymbolState.Shaped;
+			node.resolvedSym = propSym;
+			return int32Type();
+		}
 	}
 	// Map/Set methods — resolved via class-aware field delegation bridge below.
 	// No hardcoded dispatch: Map and Set classes declare @builtin methods in std/core/structure.
@@ -1917,6 +1943,14 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 				const staticType = createTypeRef("typeof " + objName);
 				ext = findFirstMatchingExt(allByName, staticType);
 			}
+		}
+		// Static extension on type alias: try the symbol name directly (e.g., Buffer.alloc
+		// where Buffer is `type Buffer = string` — objType resolves to string, but
+		// the extension is registered as `this typeof Buffer`).
+		if (ext === null && isStaticClassAccess && d.object.resolvedSym !== null) {
+			const symName = d.object.resolvedSym.name;
+			const aliasType = createTypeRef(symName);
+			ext = findFirstMatchingExt(allByName, aliasType);
 		}
 		if (ext !== null) {
 			// Direct sym link — no name-based lookup needed
@@ -2438,10 +2472,12 @@ function generateJsonParseInstance(ctx: CheckerContext, node: Node, d: CallExprD
 			isDirectCall: true,
 		}, syntheticTok);
 
-		// .strVal / .numVal / .boolVal
+		// .strVal / .numVal / .intVal / .boolVal — match JsonValueData variant fields
 		const accessor = match (ftype.kind) {
 			TypeKind.String => "strVal",
 			TypeKind.Boolean => "boolVal",
+			TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
+				| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => "intVal",
 			_ => "numVal",
 		};
 		let fieldVal: Node = createNode(NodeKind.MemberExpr, {
@@ -2528,6 +2564,10 @@ function generateJsonStringifyInstance(ctx: CheckerContext, node: Node, d: CallE
 		const wrapper = match (ftype.kind) {
 			TypeKind.String => "jsonString",
 			TypeKind.Boolean => "jsonBool",
+			TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "jsonNumber",
+			TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
+				| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64
+				| TypeKind.Enum => "jsonInt",
 			_ => "jsonNumber",
 		};
 		valNodes.push(createNode(NodeKind.CallExpr, {

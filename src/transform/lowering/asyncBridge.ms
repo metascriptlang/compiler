@@ -28,11 +28,53 @@ import {
 	syntheticToken, extractBodyStmts, collectDeclNames,
 } from "../util";
 import { NameSet, createNameSet, nameSetContains, nameSetAdd } from "../context";
-import { createPromise, createFunction, voidType, booleanType, numberType } from "../../checker/types";
+import { createPromise, createFunction, voidType, unknownType, booleanType, numberType, int32Type } from "../../checker/types";
 import {
 	GenState, StateCollector, allocState, containsYield, splitStmts, convertDeclsToAssigns, makeStateAssign,
 } from "./generatorLower";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
+
+// ===== Variable Type Collection =====
+// Walk body to collect variable name → Type BEFORE rewriting. Used to set nodeType
+// on hoisted locals so lambda lifting creates correctly typed env struct fields.
+
+interface VarTypeInfo { name: string; varType: Type; }
+
+function collectVarTypes(node: Node, result: VarTypeInfo[]): void {
+	if (node === null) return;
+	match (node.kind) {
+		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {},
+		NodeKind.VariableDecl => {
+			const d = node.data as VariableDeclData;
+			if (node.nodeType !== null) {
+				result.push({ name: d.declName, varType: node.nodeType });
+			}
+		},
+		NodeKind.BlockStmt => {
+			const d = node.data as BlockStmtData;
+			for (const s of d.statements) { collectVarTypes(s, result); }
+		},
+		NodeKind.IfStmt => {
+			const d = node.data as IfStmtData;
+			collectVarTypes(d.consequent, result);
+			collectVarTypes(d.alternate, result);
+		},
+		NodeKind.WhileStmt => { collectVarTypes((node.data as WhileStmtData).whileBody, result); },
+		NodeKind.TryCatchStmt => {
+			const d = node.data as TryCatchStmtData;
+			collectVarTypes(d.tryBody, result);
+			collectVarTypes(d.catchBody, result);
+		},
+		_ => {},
+	};
+}
+
+function findVarType(entries: VarTypeInfo[], name: string): Type {
+	for (const e of entries) {
+		if (e.name === name) return e.varType;
+	}
+	return null as unknown as Type;
+}
 
 // ===== Core: Rewrite a was-async function body =====
 
@@ -59,6 +101,10 @@ function hasYieldInBody(node: Node): boolean {
 			const d = node.data as TryCatchStmtData;
 			return hasYieldInBody(d.tryBody) || hasYieldInBody(d.catchBody) || hasYieldInBody(d.finallyBody);
 		},
+		NodeKind.VariableDecl => {
+			const d = node.data as VariableDeclData;
+			return hasYieldInBody(d.initializer);
+		},
 		_ => false,
 	};
 }
@@ -83,7 +129,7 @@ function rewriteAsyncReturns(stmts: Node[], promiseType: Type, loc: SourceLocati
 					[makeTypedIdent("$retFut", promiseType, loc), retVal],
 					loc,
 				), loc),
-				makeReturn(null, loc),
+				makeReturn(makeNull(loc), loc),  // return null = stepper done
 			], loc);
 			stmts[i] = block;
 		} else if (stmt.kind === NodeKind.BlockStmt) {
@@ -114,11 +160,23 @@ function rewriteAsyncReturns(stmts: Node[], promiseType: Type, loc: SourceLocati
 	}
 }
 
+// Unbox function for msFutureRead result (same as builtinLower's unboxFnForType)
+function unboxFnForAwait(t: Type): string {
+	if (t === null) return "";
+	return match (t.kind) {
+		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "msUnboxDouble",
+		TypeKind.Boolean => "msUnboxBool",
+		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 => "msUnboxInt32",
+		TypeKind.String => "msUnboxString",
+		_ => "",
+	};
+}
+
 // Build the async stepper dispatch: instead of generatorLower's iterator result pattern,
 // emit msFutureAddCallback at yield points and msFutureComplete at return points.
 function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureType: Type, loc: SourceLocation): Node {
-	// Default (terminal) state: return (stepper done)
-	let current: Node = makeBlock([makeReturn(null, loc)], loc);
+	// Default (terminal) state: return null (stepper done)
+	let current: Node = makeBlock([makeReturn(makeNull(loc), loc)], loc);
 
 	// Build if-else chain from last state to first
 	for (let i = sc.items.length - 1; i >= 0; i -= 1) {
@@ -171,28 +229,40 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 				const preResolvedIf = makeIf(finishedCheck, makeBlock([continueStmt], loc), makeBlock([], loc), loc);
 				stateStmts.push(preResolvedIf);
 
-				// Not resolved: register callback and suspend
-				const addCbCall = makeExprStmt(
-					makeCall(
-						makeIdent("msFutureAddCallback", loc),
-						[makeTypedIdent(futName, promiseType, loc), makeTypedIdent("$stepper", closureType, loc)],
-						loc,
-					),
-					loc,
-				);
-				stateStmts.push(addCbCall);
-				stateStmts.push(makeReturn(null, loc)); // suspend (void return)
+				// Not resolved: return the yielded future to msAsyncCb for registration
+				stateStmts.push(makeReturn(makeTypedIdent(futName, promiseType, loc), loc));
 			} else {
 				// Unexpected — just copy all stmts
 				for (const s of state.stmts) { stateStmts.push(s); }
 			}
 		} else {
-			// Non-yield state: copy stmts directly
+			// Non-yield state: if previous state was a yield, insert msFutureRead + unbox
+			if (i > 0 && sc.items[i - 1].isYield && sc.items[i - 1].yieldVarName !== "") {
+				const prevIdx = i - 1;
+				const futName = "$yf" + prevIdx;
+				const varName = sc.items[prevIdx].yieldVarName;
+				const varType = sc.items[prevIdx].yieldVarType;
+				// x = unbox(msFutureRead($yf_N)) — extract + unbox value from resolved future
+				let readExpr: Node = makeCall(makeIdent("msFutureRead", loc), [makeTypedIdent(futName, promiseType, loc)], loc);
+				// Wrap with unbox function based on awaited type (same as waitFor)
+				if (varType !== null) {
+					const unboxFn = unboxFnForAwait(varType);
+					if (unboxFn !== "") {
+						readExpr = makeCall(makeIdent(unboxFn, loc), [readExpr], loc);
+					}
+				}
+				const readAssign = makeExprStmt(
+					makeAssign(makeIdent(varName, loc), readExpr, loc),
+					loc,
+				);
+				stateStmts.push(readAssign);
+			}
+			// Copy stmts directly
 			for (const s of state.stmts) { stateStmts.push(s); }
 		}
 
 		const cond = makeBinary(
-			makeIdent("$state", loc), "===",
+			makeTypedIdent("$state", numberType(), loc), "===",
 			makeNumber(state.index, loc), loc,
 		);
 		const body = makeBlock(stateStmts, loc);
@@ -207,17 +277,31 @@ function rewriteAwaitAsyncBody(body: Node): Node {
 
 	const loc = body.location;
 	const promiseVoidType = createPromise(voidType());
-	const closureType = createFunction([], [], voidType());
+	const stepperRetType = createFunction([], [], unknownType());  // returns void* (msFuture* or NULL)
+	const closureType = stepperRetType;
 
 	// 1. Extract body statements
 	const bodyStmts = extractBodyStmts(body);
+
+	// 1b. Collect variable types BEFORE rewriting (types are lost after transforms)
+	const varTypes: VarTypeInfo[] = [];
+	collectVarTypes(body, varTypes);
 
 	// 2. Collect local variable names for hoisting
 	const nc: NameSet = createNameSet();
 	collectDeclNames(body, nc, false);
 
-	// 3. Rewrite returns: return val → msFutureComplete($retFut, val); return;
+	// 3. Rewrite returns: return val → msFutureComplete($retFut, val); return null;
 	rewriteAsyncReturns(bodyStmts, promiseVoidType, loc);
+
+	// 3b. Implicit completion for void async functions (no explicit return at end)
+	// Nim does this implicitly; we must add it explicitly.
+	bodyStmts.push(makeExprStmt(makeCall(
+		makeIdent("msFutureComplete", loc),
+		[makeTypedIdent("$retFut", promiseVoidType, loc), makeNull(loc)],
+		loc,
+	), loc));
+	bodyStmts.push(makeReturn(makeNull(loc), loc));
 
 	// 4. Split at yield points (reuse generatorLower's algorithm)
 	const sc: StateCollector = { items: [] };
@@ -248,17 +332,17 @@ function rewriteAwaitAsyncBody(body: Node): Node {
 		),
 		loc,
 	);
-	const catchBody = makeBlock([failCall], loc);
+	const catchBody = makeBlock([failCall, makeReturn(makeNull(loc), loc)], loc);
 	const tryCatch = makeTryCatch(tryBody, "$e", catchBody, makeBlock([], loc), loc);
 
 	// 8. Build stepper as FunctionExpr
-	const stepperBody = makeBlock([tryCatch], loc);
+	const stepperBody = makeBlock([tryCatch, makeReturn(makeNull(loc), loc)], loc);
 	const stepperFnExpr = createNode(NodeKind.FunctionExpr, {
 		funcExprParams: [],
 		funcExprParamTypes: [],
 		funcExprBody: stepperBody,
 		funcExprFlags: "",
-		funcExprReturnType: "",
+		funcExprReturnType: "void*",  // returns msFuture* (next future) or NULL (done)
 	}, syntheticToken(loc));
 	stepperFnExpr.nodeType = closureType;
 
@@ -278,29 +362,30 @@ function rewriteAwaitAsyncBody(body: Node): Node {
 	outerStmts.push(stateDecl);
 
 	// Hoisted locals: let a; let b; let $yf0; let $yf1; ...
+	// Set nodeType from original declarations so lambda lifting creates typed env fields.
 	for (const localName of nc.items) {
 		const localDecl = makeVarDecl(localName, makeNull(loc), DeclKind.Let, loc);
+		const origType = findVarType(varTypes, localName);
+		if (origType !== null) {
+			localDecl.nodeType = origType;
+		}
 		outerStmts.push(localDecl);
 	}
 
-	// let $stepper; (declared before assignment so lambdaLifting captures it)
-	const stepperDecl = makeVarDecl("$stepper", makeNull(loc), DeclKind.Let, loc);
+	// const $stepper = function() { ... };
+	// No self-reference needed — msAsyncCb handles re-registration externally.
+	const stepperDecl = makeVarDecl("$stepper", stepperFnExpr, DeclKind.Const, loc);
 	stepperDecl.nodeType = closureType;
 	outerStmts.push(stepperDecl);
 
-	// $stepper = function() { ... }; (assign after decl)
-	const stepperAssign = makeExprStmt(
-		makeAssign(makeTypedIdent("$stepper", closureType, loc), stepperFnExpr, loc),
+
+	// msAsyncStart($retFut, $stepper) — Nim createCb pattern: C callback drives the stepper
+	const kickoffCall = makeCall(
+		makeIdent("msAsyncStart", loc),
+		[makeTypedIdent("$retFut", promiseVoidType, loc), makeTypedIdent("$stepper", closureType, loc)],
 		loc,
 	);
-	outerStmts.push(stepperAssign);
-
-	// $stepper(); — closure call (isDirectCall=false for closure dispatch)
-	const kickoffCall = makeCall(makeTypedIdent("$stepper", closureType, loc), [], loc);
-	const kickoffData = kickoffCall.data as CallExprData;
-	kickoffData.isDirectCall = false;
-	const kickoff = makeExprStmt(kickoffCall, loc);
-	outerStmts.push(kickoff);
+	outerStmts.push(makeExprStmt(kickoffCall, loc));
 
 	// return $retFut;
 	const returnFut = makeReturn(makeTypedIdent("$retFut", promiseVoidType, loc), loc);

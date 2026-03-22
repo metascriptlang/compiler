@@ -25,16 +25,17 @@ import {
 	ExprStmtData, ReturnStmtData,
 	BinaryExprData, UnaryExprData, CallExprData,
 	ConditionalExprData, TryCatchStmtData, YieldExprData,
-	ExportDeclData, ClassDeclData, MethodDeclData, DecoratedDeclData,
+	ExportDeclData, ClassDeclData, MethodDeclData, DecoratedDeclData, Type,
 } from "../../ast/node";
 import { TransformContext, NameSet, createNameSet, nameSetContains } from "../context";
 import {
-	makeIdent, makeNull, makeNumber, makeBool,
+	makeIdent, makeTypedIdent, makeNull, makeNumber, makeBool,
 	makeBlock, makeVarDecl, makeExprStmt, makeReturn,
 	makeIf, makeWhile, makeBinary, makeAssign,
 	makeObjectLiteral, syntheticToken, extractBodyStmts,
 	collectDeclNames,
 } from "../util";
+import { numberType } from "../../checker/types";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
 // ===== Data Structures =====
@@ -44,6 +45,8 @@ export interface GenState {
 	isYield: boolean;
 	nextState: number;
 	stmts: Node[];
+	yieldVarName: string;   // variable assigned from yield (for async resume)
+	yieldVarType: Type;     // type of the variable (for unboxing msFutureRead)
 }
 
 export interface StateCollector {
@@ -67,14 +70,14 @@ function makeDoneResult(loc: SourceLocation): Node {
 
 export function makeStateAssign(stateNum: number, loc: SourceLocation): Node {
 	return makeExprStmt(
-		makeAssign(makeIdent("$state", loc), makeNumber(stateNum, loc), loc),
+		makeAssign(makeTypedIdent("$state", numberType(), loc), makeNumber(stateNum, loc), loc),
 		loc,
 	);
 }
 
 export function allocState(sc: StateCollector): number {
 	const idx = sc.items.length;
-	const st: GenState = { index: idx, isYield: false, nextState: -1, stmts: [] };
+	const st: GenState = { index: idx, isYield: false, nextState: -1, stmts: [], yieldVarName: "", yieldVarType: null as unknown as Type };
 	sc.items.push(st);
 	return idx;
 }
@@ -176,6 +179,8 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 					makeReturn(makeIterResult(yd.yieldArg, false, loc), loc),
 				);
 				sc.items[currentState].isYield = true;
+				sc.items[currentState].yieldVarName = vd.declName;
+				sc.items[currentState].yieldVarType = stmt.nodeType;
 				// On resume: convert decl to assignment (var is lifted)
 				if (i + 1 < stmts.length) {
 					currentState = nextSt;

@@ -1,7 +1,7 @@
 // Type Compatibility - table-driven assignability checking
 
 import { Type, TypeKind } from "../ast/node";
-import { isNumeric, isIntegerType, skipModifier, typeNameOf, numberType, stringType, booleanType, voidType, nullType, unknownType, errorType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createDistinct, createGenericParam, createSizedArray, createSpan, getMinArity } from "./types";
+import { isNumeric, isIntegerType, integerRank, skipModifier, typeNameOf, numberType, stringType, booleanType, voidType, nullType, unknownType, errorType, createPrimitive, createArray, createFunction, createStruct, createUnion, createEnum, createResult, createRef, createPtr, createDistinct, createGenericParam, createSizedArray, createSpan, getMinArity } from "./types";
 
 
 // ===== Assignability =====
@@ -277,8 +277,15 @@ function typeRelationInner(formal: Type, actual: Type): TypeRelation {
 	if (isNumeric(actual) && formal.kind === TypeKind.Number) {
 		return TypeRelation.IntConv;
 	}
-	// FromLiteral: Number literal → sized numeric formal
-	if (isNumeric(formal) && actual.kind === TypeKind.Number) {
+	// Int-to-int widening: smaller int → larger int (e.g., int32 → int64)
+	// Safe widening (rank increases) and same-rank conversions (e.g., int32 → uint32).
+	// Narrowing (rank decreases) requires explicit cast.
+	if (isNumeric(actual) && isNumeric(formal) && actual.kind !== formal.kind
+		&& integerRank(actual) <= integerRank(formal)) {
+		return TypeRelation.IntConv;
+	}
+	// FromLiteral: Number/Float64 → sized numeric formal (number and float64 are both IEEE 754 double)
+	if (isNumeric(formal) && (actual.kind === TypeKind.Number || actual.kind === TypeKind.Float64)) {
 		return TypeRelation.FromLiteral;
 	}
 	// Null to nullable

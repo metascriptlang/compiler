@@ -11,6 +11,7 @@ export enum JsonKind {
 	String,
 	Array,
 	Object,
+	Int,
 }
 
 export type JsonValueData = match (kind: JsonKind) {
@@ -20,6 +21,7 @@ export type JsonValueData = match (kind: JsonKind) {
 	JsonKind.String => { strVal: string },
 	JsonKind.Array  => { items: JsonValue[] },
 	JsonKind.Object => { keys: string[], values: JsonValue[] },
+	JsonKind.Int    => { intVal: int64 },
 };
 
 export type JsonValue = Ref<JsonValueData>;
@@ -33,4 +35,5 @@ test "JsonKind values" {
 	assert JsonKind.String === 3;
 	assert JsonKind.Array === 4;
 	assert JsonKind.Object === 5;
+	assert JsonKind.Int === 6;
 }

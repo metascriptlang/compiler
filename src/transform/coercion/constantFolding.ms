@@ -50,7 +50,7 @@ function foldBinary(node: Node): Node {
 	// Both operands must be the same literal kind
 	if (d.left.kind !== d.right.kind) return node;
 
-	return match (d.left.kind) {
+	const result = match (d.left.kind) {
 		NodeKind.NumberLiteral => {
 			const lv = (d.left.data as NumberLiteralData).value;
 			const rv = (d.right.data as NumberLiteralData).value;
@@ -68,6 +68,12 @@ function foldBinary(node: Node): Node {
 		},
 		_ => node,
 	};
+	// Preserve checker-stamped type through constant folding.
+	// Reference parity: semfold preserves n.typ on folded literals.
+	if (result !== node && node.nodeType !== null) {
+		result.nodeType = node.nodeType;
+	}
+	return result;
 }
 
 function foldNumberBinary(op: string, lv: number, rv: number, loc: SourceLocation, fallback: Node): Node {
@@ -125,11 +131,17 @@ function foldUnary(node: Node): Node {
 		},
 		NodeKind.NumberLiteral => {
 			const nv = (d.operand.data as NumberLiteralData).value;
-			return match (d.unaryOp) {
+			const result = match (d.unaryOp) {
 				"-" => makeNumber(0 - nv, loc),
 				"+" => makeNumber(nv, loc),
 				_ => node,
 			};
+			// Preserve checker-stamped type through constant folding.
+			// Reference parity: semfold preserves n.typ on folded literals.
+			if (result !== node && node.nodeType !== null) {
+				result.nodeType = node.nodeType;
+			}
+			return result;
 		},
 		_ => {},
 	};

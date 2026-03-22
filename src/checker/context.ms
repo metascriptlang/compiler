@@ -3,7 +3,7 @@ import { isAssignable } from "./compat";
 import { SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, createSymbolTableWithCache, hasFlag } from "./symbol";
 import { IdentCache } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
-import { Node, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
+import { Node, NodeKind, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind, EnumDeclData } from "../ast/node";
 import { findChar, splitTopLevel } from "../utils/string";
 import { InitTracker, createInitTracker } from "./initTracker";
 
@@ -79,6 +79,90 @@ export function findExportedSymbol(registry: ExportRegistry, modulePath: string,
 		if (sym.name === name) return sym;
 	}
 	return null as unknown as ExportedSymInfo;
+}
+
+// ===== Export Info Builder (shared by orchestrator + loadPreludeSubModules) =====
+
+export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistry, modulePath: string): ExportedSymInfo {
+	// Extension receiver metadata for primary symbol
+	let extRecv = "";
+	let extStatic = false;
+	if (extensionRegistry !== null && sym.symbolKind === SymbolKind.Function) {
+		const ext = findExtensionByType(extensionRegistry, sym.name, sym.symbolType);
+		if (ext !== null) {
+			extRecv = ext.receiverTypeName;
+			extStatic = ext.isStatic;
+		} else {
+			const extFb = findExtensionByName(extensionRegistry, sym.name);
+			if (extFb !== null) {
+				extRecv = extFb.receiverTypeName;
+				extStatic = extFb.isStatic;
+			}
+		}
+	}
+
+	// Collect overload types + per-overload metadata
+	const ovTypes: Type[] = [];
+	const ovExtRecvs: string[] = [];
+	const ovExtStatics: boolean[] = [];
+	const ovRtNames: string[] = [];
+	const ovBiKinds: string[] = [];
+	const ovDefParamsFlat: Node[] = [];
+	const ovDefParamsCounts: number[] = [];
+
+	let ovi = 0;
+	while (ovi < sym.overloads.length) {
+		ovTypes.push(sym.overloads[ovi].symbolType);
+		ovRtNames.push(sym.overloads[ovi].nativeName);
+		ovBiKinds.push(sym.overloads[ovi].builtinKind);
+
+		if (extensionRegistry !== null) {
+			const ovExt = findExtensionByType(extensionRegistry, sym.name, sym.overloads[ovi].symbolType);
+			if (ovExt !== null) {
+				ovExtRecvs.push(ovExt.receiverTypeName);
+				ovExtStatics.push(ovExt.isStatic);
+			} else {
+				ovExtRecvs.push("");
+				ovExtStatics.push(false);
+			}
+		} else {
+			ovExtRecvs.push("");
+			ovExtStatics.push(false);
+		}
+
+		const dps = sym.overloads[ovi].defaultParams;
+		if (dps !== null) {
+			ovDefParamsCounts.push(dps.length);
+			for (const dp of dps) {
+				ovDefParamsFlat.push(dp);
+			}
+		} else {
+			ovDefParamsCounts.push(0);
+		}
+		ovi = ovi + 1;
+	}
+
+	// Enum member locations
+	let memberLocs: SourceLocation[] = [];
+	if (sym.declNode !== null && sym.declNode.kind === NodeKind.EnumDecl) {
+		memberLocs = (sym.declNode.data as EnumDeclData).memberLocations;
+	}
+
+	return {
+		name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
+		overloadTypes: ovTypes,
+		extReceiverType: extRecv, extIsStatic: extStatic,
+		overloadExtReceiverTypes: ovExtRecvs, overloadExtIsStatic: ovExtStatics,
+		nativeName: sym.nativeName, builtinKind: sym.builtinKind,
+		overloadNativeNames: ovRtNames, overloadBuiltinKinds: ovBiKinds,
+		defaultParams: sym.defaultParams,
+		overloadDefaultParamsFlat: ovDefParamsFlat, overloadDefaultParamsCounts: ovDefParamsCounts,
+		definingModule: sym.modulePath !== "" ? sym.modulePath : modulePath,
+		originalName: sym.originalName,
+		headerPath: sym.headerPath,
+		location: sym.location !== null ? sym.location : makeLoc(0, 0),
+		memberLocations: memberLocs,
+	};
 }
 
 // ===== Extension Registry (extension method tracking) =====

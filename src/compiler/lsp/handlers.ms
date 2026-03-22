@@ -51,7 +51,7 @@ import {
 } from "../../checker/suggest";
 import { CheckerContext, createContext, findModuleExports, ExportedSymInfo } from "../../checker/context";
 import { SymbolFlag, hasFlag, lookupSymbol } from "../../checker/symbol";
-import { unknownType, getProperty, typeNameOf } from "../../checker/types";
+import { unknownType, getProperty, typeNameOf, createTypeRef } from "../../checker/types";
 import { Node, IdentifierData, MemberExprData, ObjectLiteralData, VariableDeclData, NodeKind, ProgramData, ImportDeclData, ExportDeclData, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { FormatOptions, defaultFormatOptions, applyFmtSection } from "../fmt/options";
@@ -89,6 +89,44 @@ function lookupResolveEdit(label: string, detail: string): string {
 
 export function createCompletionCache(): CompletionCache {
 	return { uri: "", line: -1, prefix: "", items: [] };
+}
+
+// Pre-built completion items: computed during didOpen/didChange, returned instantly on completion.
+// Contains all scope + cross-module symbols for the file. Keyed by file URI.
+let _prebuiltUri: string = "";
+let _prebuiltItems: string[] = [];
+
+function prebuildCompletionCache(db: TransAmDb, path: string, uri: string): void {
+	const ctx = dbTypeCheck(db, path);
+	if (ctx === null) return;
+	const program = dbParse(db, path);
+	if (program === null) return;
+	const source = dbGetSource(db, path);
+	// Build minimal items (label + kind + sortText only) for fast stdio transfer.
+	// rust-analyzer pattern: defer detail/docs/textEdit to completionItem/resolve.
+	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "", null);
+	const items: string[] = [];
+	for (const c of candidates) {
+		const kindNum = lspCompletionItemKind(c.kind, c.isMutable);
+		const sortText = lspCompletionSortText(c);
+		items.push("{\"label\":" + lspJsonString(c.name) + ",\"kind\":" + kindNum + ",\"sortText\":" + lspJsonString(sortText) + "}");
+	}
+	// Cross-module candidates (also minimal — just label + kind)
+	if (db.exportRegistry !== null) {
+		const inScopeSet: Set<string> = new Set<string>();
+		for (const c of candidates) { inScopeSet.add(c.name); }
+		for (const entry of db.exportRegistry.entries) {
+			if (entry.modulePath === path) continue;
+			for (const sym of entry.symbols) {
+				if (sym.name.length === 0 || inScopeSet.has(sym.name)) continue;
+				if (sym.extReceiverType.length > 0) continue;
+				const kindNum = lspCompletionItemKind(sym.kind, false);
+				items.push("{\"label\":" + lspJsonString(sym.name) + ",\"kind\":" + kindNum + ",\"sortText\":\"25\"}");
+			}
+		}
+	}
+	_prebuiltUri = uri;
+	_prebuiltItems = items;
 }
 
 // ===== Shared Helpers =====
@@ -757,6 +795,9 @@ export function handleDidOpen(params: string, db: TransAmDb): string {
 	const program = dbParse(db, path);
 	recordImportsForFile(db, path, program);
 	dbTypeCheck(db, path);
+	// Pre-build completion items so handleCompletion can return instantly (rust-analyzer pattern).
+	// Stdio LSPs must respond within the same event loop tick to beat nvim-cmp's dedup reset.
+	prebuildCompletionCache(db, path, uri);
 	const elapsed = clockMs() - t0;
 	if (elapsed > 50) {
 		writeStderr("[LSP] didOpen " + path + " " + elapsed + "ms\n");
@@ -777,6 +818,8 @@ export function handleDidChange(params: string, db: TransAmDb): string {
 	// Record import edges for dependency tracking
 	const program = dbParse(db, path);
 	recordImportsForFile(db, path, program);
+	// Pre-build completion cache for instant response
+	prebuildCompletionCache(db, path, uri);
 	const diagParams = buildDiagnosticsJson(uri, db, path);
 	return lspNotification("textDocument/publishDiagnostics", diagParams);
 }
@@ -894,6 +937,8 @@ function lspCrossModuleCandidates(
 		for (let si = 0; si < entry.symbols.length; si = si + 1) {
 			const sym = entry.symbols[si];
 			if (sym.name.length === 0) continue;
+			// Skip extension methods — they only appear via member access
+			if (sym.extReceiverType.length > 0) continue;
 			// Prefix filter
 			if (prefix.length > 0 && prefix.length > sym.name.length) continue;
 			if (prefix.length > 0 && sym.name.slice(0, prefix.length) !== prefix) continue;
@@ -919,11 +964,20 @@ function lspCrossModuleCandidates(
 	// Also search prelude symbols (available even without explicit imports).
 	// These are always in scope via globalImports — suggest with auto-import if not already imported.
 	if (db.preludeCtx !== null && db.preludeCtx.table !== null && db.preludeCtx.table.current !== null) {
+		// Build extension name set to filter prelude extensions from standalone suggestions
+		const preludeExtNames: Set<string> = new Set<string>();
+		if (db.preludeCtx.extensionRegistry !== null) {
+			for (const m of db.preludeCtx.extensionRegistry.methods) {
+				preludeExtNames.add(m.methodName);
+			}
+		}
 		const preludeSyms = db.preludeCtx.table.current.symbols;
 		for (let pi = 0; pi < preludeSyms.length; pi = pi + 1) {
 			const sym = preludeSyms[pi];
 			if (sym.name.length === 0) continue;
 			if (!hasFlag(sym, SymbolFlag.Exported)) continue;
+			// Skip extension methods — they only appear via member access
+			if (preludeExtNames.has(sym.name)) continue;
 			if (prefix.length > 0 && prefix.length > sym.name.length) continue;
 			if (prefix.length > 0 && sym.name.slice(0, prefix.length) !== prefix) continue;
 			if (inScopeSet.has(sym.name)) continue;
@@ -956,6 +1010,20 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 	if (source === "") return lspResponse(id, "[]");
 
 	const prefix = sgGetPrefix(source, pos.line, pos.col);
+
+	// Prebuilt cache hit: return pre-computed items instantly (beats nvim-cmp dedup reset).
+	// Skip for member access (char before cursor is '.') — those need receiver-based resolution.
+	const lineOffset = sgGetLineOffset(source, pos.line);
+	const charBefore = pos.col > 0 ? source.byteAt(lineOffset + pos.col - 1) : 0;
+	if (prefix.length === 0 && charBefore !== ".".code && _prebuiltUri === pos.uri && _prebuiltItems.length > 0) {
+		// Limit to keep response small for reliable stdio delivery within nvim-cmp's dedup window
+		const limited = _prebuiltItems.length > 100 ? _prebuiltItems.slice(0, 100) : _prebuiltItems;
+		cache.uri = pos.uri;
+		cache.line = pos.line;
+		cache.prefix = "";
+		cache.items = limited;
+		return lspResponse(id, joinJsonItems(limited));
+	}
 
 	// Cache hit: same file, same line, prefix extends previous — filter instantly
 	if (cache.uri === pos.uri && cache.line === pos.line && prefix.length >= cache.prefix.length && prefix.startsWith(cache.prefix)) {
@@ -1012,6 +1080,12 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 			const sg = sgQueryAtPosition(ctx, pos.line, dotCol - 1);
 			if (sg !== null) {
 				receiverType = sg.symType;
+				// Static access on type name (e.g., Buffer.alloc, Result.ok):
+				// use "typeof TypeName" so extension registry matches static extensions.
+				if (sg.kind === SymbolKind.TypeAlias || sg.kind === SymbolKind.Class
+					|| sg.kind === SymbolKind.Interface || sg.kind === SymbolKind.Struct) {
+					receiverType = createTypeRef(sg.name);
+				}
 			}
 		}
 		// Fallback: try AST-based lookup
@@ -1838,9 +1912,9 @@ export function handleCodeAction(id: string, params: string, db: TransAmDb): str
 			if (startLine < fmtLines.length && fmtLines[startLine] !== line) {
 				// Single-line fix: replace this line with the formatted version
 				const edit = lspFmtTextEdit(startLine, 0, line.length, fmtLines[startLine]);
-				const changesJson = "{" + JSON.stringify(uri) + ":[" + edit + "]}";
+				const changesJson = "{" + lspJsonString(uri) + ":[" + edit + "]}";
 				const title = hasIndentIssue ? "Fix: Reformat this line" : "Fix: Remove trailing whitespace";
-				actions.push("{\"title\":" + JSON.stringify(title) + ",\"kind\":\"quickfix\",\"isPreferred\":true,\"edit\":{\"changes\":" + changesJson + "}}");
+				actions.push("{\"title\":" + lspJsonString(title) + ",\"kind\":\"quickfix\",\"isPreferred\":true,\"edit\":{\"changes\":" + changesJson + "}}");
 			}
 		}
 	}

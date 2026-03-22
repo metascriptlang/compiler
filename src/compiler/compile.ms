@@ -22,7 +22,7 @@ import { registerCoreParsers } from "../parser/statements/core";
 import { AliveSet } from "../codegen/c/context";
 import { computeAliveSet } from "../checker/reachability";
 import { getSimpleTypeDesc } from "../codegen/c/types";
-import { setTargetSizes } from "../checker/types";
+import { setTargetSizes, isPromise } from "../checker/types";
 import { lookupSymbol } from "../checker/symbol";
 import { transformForNative } from "../transform/native/index";
 import { refineTypes } from "../transform/typeRefine";
@@ -230,10 +230,7 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 	graphPreludeCtx = getPreludeContext();
 	// Report type errors but continue — allows codegen to proceed past non-fatal checker issues
 	reportModuleErrors(graph, "type error");
-	// Clear graph-phase errors to prevent duplicate rendering in per-module phase
-	for (const mod of graph.modules) {
-		mod.errors = [];
-	}
+	// Per-module phase (line 476) skips warnings via Severity check — no clearing needed
 	return graph;
 }
 
@@ -476,7 +473,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 				if (e.severity === Severity.Warning) continue;
 				renderModuleError(modPath, mod.source, {
 					message: e.message, line: e.line, column: e.column,
-					severity: e.fatal ? ErrorSeverity.Error : ErrorSeverity.Error,
+					severity: ErrorSeverity.Error,
 				});
 			}
 			totalCheckerErrors = totalCheckerErrors + errorCount(ctx);
@@ -531,8 +528,13 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 			const mainSym = lookupSymbol(ctx.table, "main");
 			hasUserMain = mainSym !== null;
 			if (mainSym !== null && mainSym.symbolType !== null && mainSym.symbolType.typeReturn !== null) {
-				const ret = getSimpleTypeDesc(mainSym.symbolType.typeReturn);
-				if (ret !== "") mainRetType = ret;
+				const retT = mainSym.symbolType.typeReturn;
+				if (isPromise(retT)) {
+					mainRetType = "msFuture*";
+				} else {
+					const ret = getSimpleTypeDesc(retT);
+					if (ret !== "") mainRetType = ret;
+				}
 			}
 		}
 	}

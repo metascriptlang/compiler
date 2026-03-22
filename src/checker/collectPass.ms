@@ -174,9 +174,8 @@ function collectFunction(ctx: CheckerContext, node: Node): void {
 	// Define symbol first — needed so extension can link to it
 	const sym = makeSymbol(d.fnName, SymbolKind.Function, unknownType(), false);
 	sym.symbolType.sym = sym;
-	// Extern functions are FFI bindings — implicitly exported for cross-module use
+	// Extern functions: mark as C import (export requires explicit `export` keyword)
 	if (d.fnFlags === "extern" || d.fnFlags.indexOf("extern", 0) >= 0) {
-		setFlag(sym, SymbolFlag.Exported);
 		setFlag(sym, SymbolFlag.ImportC);
 		// Wire nativeName from AST 'from "c_name"' clause
 		if (d.nativeName !== null && d.nativeName !== "") {
@@ -311,7 +310,6 @@ function collectStructLike(ctx: CheckerContext, node: Node, kind: SymbolKind, is
 	innerType.sym = sym;
 	if (isExtern) {
 		setFlag(sym, SymbolFlag.ImportC);
-		setFlag(sym, SymbolFlag.Exported);
 		sym.nativeName = d.interfaceName;
 	}
 	defineOrError(ctx, sym, node);
@@ -333,7 +331,6 @@ function collectEnumDecl(ctx: CheckerContext, node: Node): void {
 	enumType.sym = enumSym;
 	if ((node.flags & NodeFlag.ExternC) !== 0) {
 		setFlag(enumSym, SymbolFlag.ImportC);
-		setFlag(enumSym, SymbolFlag.Exported);
 		enumSym.nativeName = d.enumName;
 	}
 	defineOrError(ctx, enumSym, node);
@@ -444,8 +441,20 @@ function resolveOriginalName(info: ExportedSymInfo, importName: string): string 
 function collectImport(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ImportDeclData;
 
-	// std/core is the prelude — already injected into Global scope, skip
-	if (isGlobalImport(d.importSource)) return;
+	// std/core is the prelude — symbols already in Global scope via injectPrelude.
+	// But explicit imports promote them to Module scope (e.g., making extension methods
+	// available as standalone functions in completion).
+	if (isGlobalImport(d.importSource)) {
+		for (let gi = 0; gi < d.importNames.length; gi += 1) {
+			const name = d.importAliases[gi];
+			if (lookupLocal(ctx.table, name) !== null) continue;
+			const sym = lookupSymbol(ctx.table, d.importNames[gi]);
+			if (sym !== null) {
+				defineSymbol(ctx.table, sym);
+			}
+		}
+		return;
+	}
 
 	// Resolve types from ExportRegistry
 	const sourcePath = resolveImportSourcePath(ctx, d.importSource);

@@ -5,7 +5,7 @@ import { Node, NodeKind, EnumDeclData, makeLoc, SourceLocation, Type, SymbolKind
 import {
 	CheckerContext, createModuleContext, createModuleContextWithCache, Severity,
 	ExportRegistry, ExportedSymInfo, createExportRegistry, registerModuleExports, updateModuleExports,
-	findExtensionByName, findExtensionByType, registerExtension,
+	buildExportInfo, registerExtension,
 } from "./context";
 import { ScopeKind, openScope, hasFlag, SymbolFlag } from "./symbol";
 import { getIdentId } from "./idents";
@@ -177,89 +177,14 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportReg
 		for (const sym of ctx.table.current.symbols) {
 			if (hasFlag(sym, SymbolFlag.Exported)) {
 				mod.exportNames.push(sym.name);
-				// Check if this exported function is an extension method
-				let extRecv = "";
-				let extStatic = false;
-				if (ctx.extensionRegistry !== null && sym.symbolKind === SymbolKind.Function) {
-					const ext = findExtensionByType(ctx.extensionRegistry, sym.name, sym.symbolType);
-					if (ext !== null) {
-						extRecv = ext.receiverTypeName;
-						extStatic = ext.isStatic;
-					} else {
-						const extFb = findExtensionByName(ctx.extensionRegistry, sym.name);
-						if (extFb !== null) {
-							extRecv = extFb.receiverTypeName;
-							extStatic = extFb.isStatic;
-						}
-					}
-				}
-				// Collect overload types + per-overload extension metadata
-				const ovTypes: Type[] = [];
-				const ovExtRecvs: string[] = [];
-				const ovExtStatics: boolean[] = [];
-				if (sym.overloads.length > 0) {
-					let ovi = 0;
-					while (ovi < sym.overloads.length) {
-						ovTypes.push(sym.overloads[ovi].symbolType);
-						if (ctx.extensionRegistry !== null) {
-							const ovExt = findExtensionByType(ctx.extensionRegistry, sym.name, sym.overloads[ovi].symbolType);
-							if (ovExt !== null) {
-								ovExtRecvs.push(ovExt.receiverTypeName);
-								ovExtStatics.push(ovExt.isStatic);
-							} else {
-								ovExtRecvs.push("");
-								ovExtStatics.push(false);
-							}
-						} else {
-							ovExtRecvs.push("");
-							ovExtStatics.push(false);
-						}
-						ovi = ovi + 1;
-					}
-				}
-				// Collect per-overload nativeName/builtinKind
-				const ovRtNames: string[] = [];
-				const ovBiKinds: string[] = [];
-				if (sym.overloads.length > 0) {
-					let ovi2 = 0;
-					while (ovi2 < sym.overloads.length) {
-						ovRtNames.push(sym.overloads[ovi2].nativeName);
-						ovBiKinds.push(sym.overloads[ovi2].builtinKind);
-						ovi2 = ovi2 + 1;
-					}
-				}
-				// Collect per-overload defaultParams as flat array + counts (avoids Node[][] which C codegen can't handle)
-				const ovDefParamsFlat: Node[] = [];
-				const ovDefParamsCounts: number[] = [];
-				if (sym.overloads.length > 0) {
-					let ovi3 = 0;
-					while (ovi3 < sym.overloads.length) {
-						const dps = sym.overloads[ovi3].defaultParams;
-						if (dps !== null) {
-							ovDefParamsCounts.push(dps.length);
-							let dpi = 0;
-							while (dpi < dps.length) {
-								ovDefParamsFlat.push(dps[dpi]);
-								dpi = dpi + 1;
-							}
-						} else {
-							ovDefParamsCounts.push(0);
-						}
-						ovi3 = ovi3 + 1;
-					}
-				}
-				let memberLocs2: SourceLocation[] = [];
-				if (sym.declNode !== null && sym.declNode.kind === NodeKind.EnumDecl) {
-					memberLocs2 = (sym.declNode.data as EnumDeclData).memberLocations;
-				}
-				const info: ExportedSymInfo = { name: sym.name, kind: sym.symbolKind, symType: sym.symbolType, overloadTypes: ovTypes, extReceiverType: extRecv, extIsStatic: extStatic, overloadExtReceiverTypes: ovExtRecvs, overloadExtIsStatic: ovExtStatics, nativeName: sym.nativeName, builtinKind: sym.builtinKind, overloadNativeNames: ovRtNames, overloadBuiltinKinds: ovBiKinds, defaultParams: sym.defaultParams, overloadDefaultParamsFlat: ovDefParamsFlat, overloadDefaultParamsCounts: ovDefParamsCounts, definingModule: sym.modulePath !== "" ? sym.modulePath : path, originalName: sym.originalName, headerPath: sym.headerPath, location: sym.location !== null ? sym.location : makeLoc(0, 0), memberLocations: memberLocs2 };
-				exports.push(info);
+				exports.push(buildExportInfo(sym, ctx.extensionRegistry, path));
 			}
 		}
 		updateModuleExports(registry, path, exports);
 	}
 	return registry;
 }
+
 
 // ===== Tests =====
 

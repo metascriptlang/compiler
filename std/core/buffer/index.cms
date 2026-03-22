@@ -12,14 +12,20 @@ export type Buffer = string;
 // ===== C Bindings =====
 
 // Allocation (zero-filled / uninitialized)
-export extern function bufferAlloc(size: number): Buffer from "msBufferAlloc";
-export extern function bufferAllocUnsafe(size: number): Buffer from "msBufferAllocUnsafe";
+extern function bufferAlloc(size: number): Buffer from "msBufferAlloc";
+extern function bufferAllocUnsafe(size: number): Buffer from "msBufferAllocUnsafe";
+
+export function alloc(this typeof Buffer, size: number): Buffer {
+	return bufferAlloc(size);
+}
+
+export function allocUnsafe(this typeof Buffer, size: number): Buffer {
+	return bufferAllocUnsafe(size);
+}
 
 // Encoding
 extern function msBufferFromHex(hex: string): Buffer;
 extern function msBufferFromBase64(b64: string): Buffer;
-extern function msBufferToHex(buf: Buffer): string;
-extern function msBufferToBase64(buf: Buffer): string;
 
 // Byte write (string has byteAt for read, but no byte-level write)
 extern function msBufferSet(buf: Buffer, index: number, value: number): void;
@@ -122,13 +128,13 @@ extern function msBufferFromString(str: string): Buffer;
 extern function msStringConcat(a: string, b: string): string;
 extern function msStringCompare(a: string, b: string): number;
 
-export function bufferFrom(value: string, encoding: string): Buffer {
+export function fromString(this typeof Buffer, value: string, encoding: string): Buffer {
 	if (encoding === "hex") return msBufferFromHex(value);
 	if (encoding === "base64") return msBufferFromBase64(value);
 	return msBufferFromString(value);
 }
 
-export function bufferFromArray(arr: number[]): Buffer {
+export function fromArray(this typeof Buffer, arr: number[]): Buffer {
 	const buf = bufferAlloc(arr.length);
 	let i = 0;
 	while (i < arr.length) {
@@ -138,24 +144,24 @@ export function bufferFromArray(arr: number[]): Buffer {
 	return buf;
 }
 
-export function bufferCopy(buf: Buffer): Buffer {
-	return msBufferFromString(buf);
+export function copy(this typeof Buffer, value: Buffer): Buffer {
+	return msBufferFromString(value);
 }
 
-export function bufferCompare(a: Buffer, b: Buffer): number {
+export function compare(this typeof Buffer, a: Buffer, b: Buffer): number {
 	return msStringCompare(a, b);
 }
 
-export function bufferConcat(a: Buffer, b: Buffer): Buffer {
+export function concat(this typeof Buffer, a: Buffer, b: Buffer): Buffer {
 	return msStringConcat(a, b);
 }
 
-export function bufferIsAscii(buf: Buffer): boolean {
-	return msBufferIsAscii(buf) === 1;
+export function isAscii(this typeof Buffer, value: Buffer): boolean {
+	return msBufferIsAscii(value) === 1;
 }
 
-export function bufferIsUtf8(buf: Buffer): boolean {
-	return msBufferIsUtf8(buf) === 1;
+export function isUtf8(this typeof Buffer, value: Buffer): boolean {
+	return msBufferIsUtf8(value) === 1;
 }
 
 export function byteLength(this typeof string, str: string, encoding: string = "utf-8"): number {
@@ -180,7 +186,7 @@ export function byteLength(this typeof string, str: string, encoding: string = "
 	return str.byteLength;
 }
 
-export function bufferIsEncoding(encoding: string): boolean {
+export function isBufferEncoding(this typeof Buffer, encoding: string): boolean {
 	if (encoding === "utf8" || encoding === "utf-8" ||
 			encoding === "hex" || encoding === "ascii" ||
 			encoding === "latin1" || encoding === "binary" ||
@@ -191,7 +197,7 @@ export function bufferIsEncoding(encoding: string): boolean {
 	return false;
 }
 
-export function bufferConcatList(buffers: Buffer[]): Buffer {
+export function concatList(this typeof Buffer, buffers: Buffer[]): Buffer {
 	let totalLen = 0;
 	let i = 0;
 	while (i < buffers.length) {
@@ -214,19 +220,15 @@ export function bufferConcatList(buffers: Buffer[]): Buffer {
 
 // --- Byte write (string has byteAt for read, but no write) ---
 
-export function bufSet(this buf: Buffer, index: number, value: number): void {
+export function set(this buf: Buffer, index: number, value: number): void {
 	msBufferSet(buf, index, value);
 }
 
 // --- Hex/Base64 conversion ---
 
-export function toHex(this buf: Buffer): string {
-	return msBufferToHex(buf);
-}
+export extern function toHex(this buf: Buffer): string from "msBufferToHex";
 
-export function toBase64(this buf: Buffer): string {
-	return msBufferToBase64(buf);
-}
+export extern function toBase64(this buf: Buffer): string from "msBufferToBase64";
 
 export function toStringEncoded(this buf: Buffer, encoding: string, start: number, end: number): string {
 	return msBufferToStringRange(buf, start, end, encoding);
@@ -240,21 +242,21 @@ export function copyTo(this buf: Buffer, target: Buffer, targetStart: number, so
 
 // --- Byte fill ---
 
-export function bufFill(this buf: Buffer, value: number, start: number, end: number): Buffer {
+export function fill(this buf: Buffer, value: number, start: number, end: number): Buffer {
 	return msBufferFill(buf, value, start, end);
 }
 
 // --- Single-byte search (by value, not by string needle) ---
 
-export function bufIndexOf(this buf: Buffer, value: number, byteOffset: number): number {
+export function indexOf(this buf: Buffer, value: number, byteOffset: number): number {
 	return msBufferIndexOf(buf, value, byteOffset);
 }
 
-export function bufLastIndexOf(this buf: Buffer, value: number, byteOffset: number): number {
+export function lastIndexOf(this buf: Buffer, value: number, byteOffset: number): number {
 	return msBufferLastIndexOf(buf, value, byteOffset);
 }
 
-export function bufIncludes(this buf: Buffer, value: number, byteOffset: number): boolean {
+export function includes(this buf: Buffer, value: number, byteOffset: number): boolean {
 	return msBufferIndexOf(buf, value, byteOffset) !== -1;
 }
 
@@ -274,7 +276,7 @@ export function includesBuffer(this buf: Buffer, needle: Buffer, byteOffset: num
 
 // --- Encoding-aware write ---
 
-export function bufWrite(this buf: Buffer, str: string, offset: number, length: number, encoding: string): number {
+export function write(this buf: Buffer, str: string, offset: number, length: number, encoding: string): number {
 	return msBufferWriteString(buf, str, offset, length, encoding);
 }
 

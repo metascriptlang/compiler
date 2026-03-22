@@ -7,7 +7,7 @@
 import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, ProgramData, DeclKind, IdentifierData, MemberExprData, CallExprData, BinaryExprData, UnaryExprData, VariableDeclData, FunctionDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, ArrayLiteralData, ObjectLiteralData, ConditionalExprData, ArrowFunctionData, ArrayAccessData, MatchExprData, MatchCaseData, TryCatchStmtData, TryExprData, ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExportDeclData, ImportDeclData, HiddenDerefData, HiddenStdConvData, MethodDeclData, PropertyDeclData, ConstructorDeclData, NewExprData, NumberLiteralData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { typeNameOf, getProperty, unwrapRef, numberType, stringType, booleanType, voidType, nullType, unknownType, neverType, errorType, isResult, getResultOkType, getResultErrType } from "./types";
-import { SymbolTable, Scope, lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
+import { SymbolTable, Scope, ScopeKind, lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, findAllExtensionsByName, filterExtsByReceiverType, getExtFnType, stripReceiverParam, SgSymRecord } from "./context";
 // (utils/string imports removed — using native .slice/.charAt)
 import { checkProgram } from "./checkPass";
@@ -171,7 +171,12 @@ export function sgQueryByDefiningModule(ctx: CheckerContext, name: string, defMo
 // ===== sgTypeToString — full recursive type formatting =====
 
 export function sgTypeToString(t: Type): string {
+	return sgTypeToStringDepth(t, 0);
+}
+
+function sgTypeToStringDepth(t: Type, depth: number): string {
 	if (t === null) return "unknown";
+	if (depth > 10) return "...";
 
 	const prim = match (t.kind) {
 		TypeKind.Number => "number", TypeKind.String => "string",
@@ -188,7 +193,7 @@ export function sgTypeToString(t: Type): string {
 	if (prim.length > 0) return prim;
 
 	if (t.kind === TypeKind.Array) {
-		const elem = sgTypeToString(t.typeReturn);
+		const elem = sgTypeToStringDepth(t.typeReturn, depth + 1);
 		return elem + "[]";
 	}
 
@@ -202,7 +207,7 @@ export function sgTypeToString(t: Type): string {
 				if (i > 0) result = result + "; ";
 				result = result + t.typeNames[i] + ": ";
 				if (i < t.typeChildren.length) {
-					result = result + sgTypeToString(t.typeChildren[i]);
+					result = result + sgTypeToStringDepth(t.typeChildren[i], depth + 1);
 				}
 			}
 			result = result + " }";
@@ -218,9 +223,9 @@ export function sgTypeToString(t: Type): string {
 			if (i < t.typeNames.length && t.typeNames[i].length > 0) {
 				result = result + t.typeNames[i] + ": ";
 			}
-			result = result + sgTypeToString(t.typeChildren[i]);
+			result = result + sgTypeToStringDepth(t.typeChildren[i], depth + 1);
 		}
-		result = result + ") => " + sgTypeToString(t.typeReturn);
+		result = result + ") => " + sgTypeToStringDepth(t.typeReturn, depth + 1);
 		return result;
 	}
 
@@ -230,7 +235,7 @@ export function sgTypeToString(t: Type): string {
 		let result = "";
 		for (let i = 0; i < t.typeChildren.length; i = i + 1) {
 			if (i > 0) result = result + " | ";
-			result = result + sgTypeToString(t.typeChildren[i]);
+			result = result + sgTypeToStringDepth(t.typeChildren[i], depth + 1);
 		}
 		return result;
 	}
@@ -239,57 +244,57 @@ export function sgTypeToString(t: Type): string {
 		let result = "[";
 		for (let i = 0; i < t.typeChildren.length; i = i + 1) {
 			if (i > 0) result = result + ", ";
-			result = result + sgTypeToString(t.typeChildren[i]);
+			result = result + sgTypeToStringDepth(t.typeChildren[i], depth + 1);
 		}
 		result = result + "]";
 		return result;
 	}
 
 	if (isResult(t)) {
-		const ok = sgTypeToString(getResultOkType(t));
-		const err = sgTypeToString(getResultErrType(t));
+		const ok = sgTypeToStringDepth(getResultOkType(t), depth + 1);
+		const err = sgTypeToStringDepth(getResultErrType(t), depth + 1);
 		return "Result<" + ok + ", " + err + ">";
 	}
 
 	if (t.kind === TypeKind.Ref) {
 		// Ref<T> is an implementation detail (class = heap pointer + RC).
 		// Show just the inner type name — TypeScript doesn't expose ref/ptr.
-		return sgTypeToString(t.typeReturn);
+		return sgTypeToStringDepth(t.typeReturn, depth + 1);
 	}
 
 	if (t.kind === TypeKind.Ptr) {
 		// Ptr<T> is also an implementation detail — show inner type.
-		return sgTypeToString(t.typeReturn);
+		return sgTypeToStringDepth(t.typeReturn, depth + 1);
 	}
 
 	if (t.kind === TypeKind.Distinct) {
-		return "distinct " + sgTypeToString(t.typeReturn);
+		return "distinct " + sgTypeToStringDepth(t.typeReturn, depth + 1);
 	}
 
 	if (t.kind === TypeKind.Span) {
-		return "Span<" + sgTypeToString(t.typeReturn) + ">";
+		return "Span<" + sgTypeToStringDepth(t.typeReturn, depth + 1) + ">";
 	}
 
 	if (t.kind === TypeKind.Var) {
-		return sgTypeToString(t.typeReturn);
+		return sgTypeToStringDepth(t.typeReturn, depth + 1);
 	}
 
 	if (t.kind === TypeKind.Borrow) {
-		return sgTypeToString(t.typeReturn);
+		return sgTypeToStringDepth(t.typeReturn, depth + 1);
 	}
 
 	if (t.kind === TypeKind.SizedArray) {
-		return sgTypeToString(t.typeReturn) + "[" + String(t.typeFlags as int64) + "]";
+		return sgTypeToStringDepth(t.typeReturn, depth + 1) + "[" + String(t.typeFlags as int64) + "]";
 	}
 
 	if (t.kind === TypeKind.GenericParam) return t.typeName;
 
 	if (t.kind === TypeKind.GenericInstance) {
-		let result = sgTypeToString(t.typeExtra);
+		let result = sgTypeToStringDepth(t.typeExtra, depth + 1);
 		result = result + "<";
 		for (let i = 0; i < t.typeChildren.length; i = i + 1) {
 			if (i > 0) result = result + ", ";
-			result = result + sgTypeToString(t.typeChildren[i]);
+			result = result + sgTypeToStringDepth(t.typeChildren[i], depth + 1);
 		}
 		result = result + ">";
 		return result;
@@ -392,6 +397,18 @@ function sgFormatStructFields(t: Type): string {
 		result = result + ";\n";
 	}
 	return result;
+}
+
+// Build a Set of extension method names from the ExtensionRegistry.
+// Used to filter prelude extensions from global completion (they only appear via member access).
+function sgBuildExtensionNameSet(ctx: CheckerContext): Set<string> {
+	const names: Set<string> = new Set<string>();
+	if (ctx.extensionRegistry !== null) {
+		for (const m of ctx.extensionRegistry.methods) {
+			names.add(m.methodName);
+		}
+	}
+	return names;
 }
 
 function sgIsAlias(suggest: SgSuggest): boolean {
@@ -1642,6 +1659,7 @@ export function sgGetCompletionCandidates(ctx: CheckerContext, kind: SgCompletio
 
 	// Walk scope chain for Identifier or TypeAnnotation
 	const result: SgSuggest[] = [];
+	const extNames = sgBuildExtensionNameSet(ctx);
 	let scope = ctx.table.current;
 	let depth = 0;
 	while (scope !== null) {
@@ -1649,6 +1667,9 @@ export function sgGetCompletionCandidates(ctx: CheckerContext, kind: SgCompletio
 			const sym = scope.symbols[i];
 			const ps = sgPrefixMatch(prefix, sym.name);
 			if (ps > 0) {
+				// Skip prelude extension methods at Global scope — they only appear via member access.
+				// Explicitly imported extensions at Module scope are kept.
+				if (scope.scopeKind === ScopeKind.Global && extNames.has(sym.name)) continue;
 				const inTypeCtx = kind === SgCompletionKind.TypeAnnotation;
 				const cf = inTypeCtx === sgIsTypeKind(sym.symbolKind);
 				if (!inTypeCtx || sgIsTypeKind(sym.symbolKind)) {

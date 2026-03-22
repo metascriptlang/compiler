@@ -33,7 +33,6 @@ export {
 // Server
 export {
 	HttpServer, createServer, serverListen, serve, serveConcurrent, serveN, stop,
-	writeHead, write, end, endWithBody,
 	sendText, sendJson, sendHtml, sendError,
 } from "./server";
 

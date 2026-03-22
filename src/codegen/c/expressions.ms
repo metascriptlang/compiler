@@ -1140,7 +1140,14 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 								typeArr.push(d.properties[ki].nodeType);
 							}
 						}
-						const varIdx = findUnionVariant(node.nodeType, keyArr, typeArr);
+						let varIdx = findUnionVariant(node.nodeType, keyArr, typeArr);
+						// Fallback: name-only matching when actual property type kinds
+						// differ from formal variant types (e.g., Int32 property for Number field).
+						// Reference parity: sem stamps resolved types on fields, codegen never
+						// re-determines variants. We approximate by falling back to name-only.
+						if (varIdx < 0 && typeArr.length > 0) {
+							varIdx = findUnionVariant(node.nodeType, keyArr, []);
+						}
 						if (varIdx >= 0) {
 							cType = `${unionName}_v${varIdx}`;
 							unionWrapName = unionName;

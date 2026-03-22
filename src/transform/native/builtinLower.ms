@@ -13,14 +13,14 @@
 // (generateJsonParseInstance/generateJsonStringifyInstance). Transform handles untyped + primitives.
 
 import { Node, NodeKind, NodeFlag, ProgramData, SourceLocation, CallExprData, MemberExprData, IdentifierData, BinaryExprData, NewExprData, Type, TypeKind } from "../../ast/node";
-import { isNumeric, createResult, createArray, createPrimitive, stringType, unknownType, unwrapRef, typeNameOf, isResult, isPromise, getResultOkType, getResultErrType } from "../../checker/types";
+import { isNumeric, createResult, createArray, createPrimitive, stringType, unknownType, unwrapRef, typeNameOf, isResult, isPromise, getPromiseInner, getResultOkType, getResultErrType } from "../../checker/types";
 import { findExtension } from "../../checker/context";
 import { TransformContext } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { walkNode } from "../walker";
 import {
 	makeIdent, makeCall, makeString, makeNumber, makeMember, makeUnary,
-	makeObjectLiteral, makeBool, makeHiddenStdConv,
+	makeObjectLiteral, makeBool, makeNull, makeHiddenStdConv,
 	makeExprStmt, enumToStringName,
 } from "../util";
 import { findCallTypeArg } from "../../parser/context";
@@ -69,8 +69,21 @@ function lowerCallExpr(node: Node, ctx: TransformContext): Node {
 	if (!ctx.jsBackend) {
 		if (cd.callee.kind === NodeKind.MemberExpr) {
 			const me2 = cd.callee.data as MemberExprData;
-			if (me2.property === "toString" && me2.object.nodeType !== null) {
-				return lowerToString(node, me2.object, me2.object.nodeType, loc, ctx);
+			if (me2.property === "toString") {
+				if (me2.object.nodeType !== null) {
+					return lowerToString(node, me2.object, me2.object.nodeType, loc, ctx);
+				}
+				// Fallback: NumberLiteral/BooleanLiteral may not have nodeType stamped by checker
+				if (me2.object.kind === NodeKind.NumberLiteral) {
+					const call = makeCall(makeIdent("msNumberToString", loc), [me2.object], loc);
+					call.nodeType = stringType();
+					return call;
+				}
+				if (me2.object.kind === NodeKind.BooleanLiteral) {
+					const call = makeCall(makeIdent("msBoolToString", loc), [me2.object], loc);
+					call.nodeType = stringType();
+					return call;
+				}
 			}
 		}
 	}
@@ -153,6 +166,31 @@ function lowerToString(callNode: Node, obj: Node, objType: Type, loc: SourceLoca
 // ===== Builtin Inline Expansion =====
 // Handles @builtin("Name") — known compiler builtins get inline C patterns.
 
+// Type tag for typed Promise.then/catch dispatch (matches MS_TYPETAG_* in combinator.h)
+function typeTagFor(t: Type): number {
+	if (t === null) return 0;
+	return match (t.kind) {
+		TypeKind.Void | TypeKind.Unknown => 0,
+		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => 2,
+		TypeKind.String => 3,
+		TypeKind.Struct | TypeKind.Ref | TypeKind.Ptr | TypeKind.Array => 0,
+		_ => 1,  // int8-64, uint8-64, bool, enum — all fit in void*
+	};
+}
+
+// Box a value for void* storage in msFuture (Promise.resolve, spawn return)
+function boxValueForFuture(node: Node, loc: SourceLocation): Node {
+	if (node === null) return makeNull(loc);
+	if (node.nodeType === null) return node;
+	return match (node.nodeType.kind) {
+		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => makeCall(makeIdent("msBoxDouble", loc), [node], loc),
+		TypeKind.Boolean => makeCall(makeIdent("msBoxBool", loc), [node], loc),
+		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 |
+		TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64 => makeCall(makeIdent("msBoxInt32", loc), [node], loc),
+		_ => node,
+	};
+}
+
 function unboxFnForType(t: Type): string {
 	if (t === null) return "";
 	return match (t.kind) {
@@ -186,18 +224,44 @@ function lowerBuiltinCall(node: Node, builtinKind: string, ctx: TransformContext
 		return rewriteResultToLiteral(node, false, ctx);
 	}
 
-	// Promise.then/catch/finally — rewrite to C runtime calls
+	// Promise.then/catch/finally — rewrite to typed C runtime calls
 	if (builtinKind === "PromiseThen" || builtinKind === "PromiseCatch" || builtinKind === "PromiseFinally") {
 		if (cd.callee.kind === NodeKind.MemberExpr && cd.arguments.length >= 1) {
 			const me = cd.callee.data as MemberExprData;
-			const runtimeName = builtinKind === "PromiseThen" ? "msFutureThen"
-				: builtinKind === "PromiseCatch" ? "msFutureCatch"
-				: "msFutureFinally";
-			const args: Node[] = [me.object];
-			for (const a of cd.arguments) { args.push(a); }
-			const newCall = makeCall(makeIdent(runtimeName, loc), args, loc);
-			newCall.nodeType = node.nodeType;
-			return newCall;
+			if (builtinKind === "PromiseThen") {
+				// Determine type tag from Promise<T>'s inner type
+				const innerType = getPromiseInner(me.object.nodeType);
+				const tag = typeTagFor(innerType);
+				const args: Node[] = [me.object, cd.arguments[0], makeNumber(tag, loc)];
+				const newCall = makeCall(makeIdent("msFutureThenTyped", loc), args, loc);
+				newCall.nodeType = node.nodeType;
+				return newCall;
+			} else if (builtinKind === "PromiseCatch") {
+				// Error is always string in MetaScript
+				const args: Node[] = [me.object, cd.arguments[0], makeNumber(3, loc)];
+				const newCall = makeCall(makeIdent("msFutureCatchTyped", loc), args, loc);
+				newCall.nodeType = node.nodeType;
+				return newCall;
+			} else {
+				// PromiseFinally — no value, no type tag needed
+				const args: Node[] = [me.object];
+				for (const a of cd.arguments) { args.push(a); }
+				const newCall = makeCall(makeIdent("msFutureFinally", loc), args, loc);
+				newCall.nodeType = node.nodeType;
+				return newCall;
+			}
+		}
+		return node;
+	}
+
+	// Promise.resolve(val) — box the value for void* storage
+	if (builtinKind === "PromiseResolve") {
+		if (cd.arguments.length >= 1) {
+			const valArg = cd.arguments[0];
+			const boxed = boxValueForFuture(valArg, loc);
+			const resolveCall = makeCall(makeIdent("msPromiseResolve", loc), [boxed], loc);
+			resolveCall.nodeType = node.nodeType;
+			return resolveCall;
 		}
 		return node;
 	}
@@ -371,10 +435,10 @@ function rewriteJsonStringify(node: Node, ctx: TransformContext): Node {
 	const primWrapper = match (argType.kind) {
 		TypeKind.String => "jsonString",
 		TypeKind.Boolean => "jsonBool",
-		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32
-			| TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
+		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => "jsonNumber",
+		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64
 			| TypeKind.Uint8 | TypeKind.Uint16 | TypeKind.Uint32 | TypeKind.Uint64
-			| TypeKind.Enum => "jsonNumber",
+			| TypeKind.Enum => "jsonInt",
 		_ => "",
 	};
 	if (primWrapper !== "") {

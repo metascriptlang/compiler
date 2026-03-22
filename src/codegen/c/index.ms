@@ -135,6 +135,9 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 		addLine(b, `void ${modName}__Init000(void);`);
 	}
 	if (hasUserMain) {
+		if (retType === "msFuture*") {
+			addLine(b, "typedef struct msFuture msFuture;");
+		}
 		addLine(b, `${retType} main_(void);`);
 	}
 	addNewline(b);
@@ -166,7 +169,11 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 	}
 	addLine(b, `${mangleModuleName(entryPath)}__Init000();`);
 	if (hasUserMain) {
-		if (retType !== "void") {
+		if (retType === "msFuture*") {
+			// Async main — run event loop until completion (Nim pattern: waitFor at entry)
+			addLine(b, "extern void* msWaitFor(void*);");
+			addLine(b, "msWaitFor(main_());");
+		} else if (retType !== "void") {
 			addLine(b, "msProgramResult = (int)main_();");
 		} else {
 			addLine(b, "main_();");

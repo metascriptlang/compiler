@@ -4,7 +4,7 @@
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, makeLoc, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, VariableDeclData, FunctionDeclData, ClassDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ProgramData, MacroInvocationData, StringLiteralData, CallExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { unknownType, nullType, stringType, charType, numberType, float64Type, voidType, createFunction, createUnion, isMaybeType, unwrapMaybeType, isNarrowingIntConv, typeNameOf, isPromise, getPromiseInner, isResult, getResultOkType, getResultErrType } from "./types";
 import { ScopeKind, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, setFlag, hasFlag, SymbolFlag } from "./symbol";
-import { CheckerContext, CancelCtx, createContext, createContextWithCache, createModuleContext, createModuleContextWithCache, addError, addFatalError, addWarning, hasErrors, hasFatalErrors, errorCount, createExtensionRegistry, registerExtension, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, isCancelled, sgRecordSym, sgSortRecords, isInAsyncPromiseResult } from "./context";
+import { CheckerContext, CancelCtx, createContext, createContextWithCache, createModuleContext, createModuleContextWithCache, addError, addFatalError, addWarning, hasErrors, hasFatalErrors, errorCount, createExtensionRegistry, registerExtension, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, buildExportInfo, isCancelled, sgRecordSym, sgSortRecords, isInAsyncPromiseResult } from "./context";
 import { IdentCache, createIdentCache } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
 import { collectTopLevel, defineOrError } from "./collectPass";
@@ -1142,6 +1142,12 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 		for (const sym of ctx.table.current.symbols) {
 			subCtx.table.current.symbols.push(sym);
 		}
+		// Copy parent extensions so sub-module can use string/array methods
+		if (ctx.extensionRegistry !== null) {
+			for (const ext of ctx.extensionRegistry.methods) {
+				registerExtension(subCtx.extensionRegistry, ext);
+			}
+		}
 		openScope(subCtx.table, ScopeKind.Module);
 		subCtx.modulePath = subResolved;
 		runThreePasses(subCtx, subPr.value);
@@ -1151,20 +1157,7 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 		const subScope = subCtx.table.current;
 		for (const sym of subScope.symbols) {
 			if (hasFlag(sym, SymbolFlag.Exported)) {
-				subExports.push({
-					name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
-					overloadTypes: [],
-					extReceiverType: "", extIsStatic: false,
-					overloadExtReceiverTypes: [], overloadExtIsStatic: [],
-					nativeName: sym.nativeName, builtinKind: sym.builtinKind,
-					overloadNativeNames: [], overloadBuiltinKinds: [],
-					defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [],
-					definingModule: subResolved,
-					originalName: "",
-					headerPath: sym.headerPath,
-					location: sym.location !== null ? sym.location : makeLoc(0, 0),
-					memberLocations: [],
-				});
+				subExports.push(buildExportInfo(sym, subCtx.extensionRegistry, subResolved));
 			}
 		}
 		registerModuleExports(ctx.exportRegistry, subResolved, subExports);

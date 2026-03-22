@@ -256,31 +256,67 @@ msFuture* msPromiseNew(msClosure executor) {
 
 /* ===== Promise.then ===== */
 
+/* Type-aware callback dispatch for .then.
+ * MetaScript convention: lifted closures have params first, env last.
+ * Type tag determines how to pass the value to match the callback's C signature. */
 static void msFutureThenCb(void* raw) {
 	msFutureThenEnv* e = (msFutureThenEnv*)raw;
 	if (e->input->failed || e->input->cancelled) {
 		msFutureFail(e->output, e->input->error);
+		free(e);
+		return;
+	}
+	void* val = e->input->value;
+	e->input->value = NULL;  /* consumed — prevent double-free by valueDestructor */
+	void* fn = (void*)e->onFulfilled.fn;
+	void* env = e->onFulfilled.env;
+
+	switch (e->typeTag) {
+	case MS_TYPETAG_INT: {
+		/* val is msBoxInt32 result (int32_t* on heap) — dereference + free */
+		int32_t ival = val ? *(int32_t*)val : 0;
+		if (val) free(val);
+		if (env) ((void(*)(int32_t, void*))fn)(ival, env);
+		else ((void(*)(int32_t))fn)(ival);
+		break;
+	}
+	case MS_TYPETAG_DOUBLE: {
+		double dval = val ? *(double*)val : 0.0;
+		if (val) free(val);
+		if (env) ((void(*)(double, void*))fn)(dval, env);
+		else ((void(*)(double))fn)(dval);
+		break;
+	}
+	case MS_TYPETAG_STRING: {
+		msString sval = val ? *(msString*)val : MS_EMPTY_STRING;
+		if (val) free(val);
+		if (env) ((void(*)(msString, void*))fn)(sval, env);
+		else ((void(*)(msString))fn)(sval);
+		break;
+	}
+	default: /* PTR or VOID — pass void* directly */
+		if (env) ((void(*)(void*, void*))fn)(val, env);
+		else ((void(*)(void*))fn)(val);
+		break;
+	}
+
+	if (msErr) {
+		msFutureFail(e->output, (void*)msCurrException);
+		msErr = false; msCurrException = NULL;
 	} else {
-		void* val = e->input->value;
-		if (e->onFulfilled.env != NULL) {
-			((void(*)(void*, void*))e->onFulfilled.fn)(e->onFulfilled.env, val);
-		} else {
-			((void(*)(void*))e->onFulfilled.fn)(val);
-		}
-		if (msErr) {
-			msFutureFail(e->output, (void*)msCurrException);
-			msErr = false; msCurrException = NULL;
-		} else {
-			msFutureComplete(e->output, NULL);
-		}
+		msFutureComplete(e->output, NULL);
 	}
 	free(e);
 }
 
 msFuture* msFutureThen(msFuture* input, msClosure onFulfilled) {
+	return msFutureThenTyped(input, onFulfilled, MS_TYPETAG_PTR);
+}
+
+msFuture* msFutureThenTyped(msFuture* input, msClosure onFulfilled, int typeTag) {
 	msFuture* output = msFutureCreate();
 	msFutureThenEnv* env = (msFutureThenEnv*)malloc(sizeof(msFutureThenEnv));
-	env->output = output; env->input = input; env->onFulfilled = onFulfilled;
+	env->output = output; env->input = input; env->onFulfilled = onFulfilled; env->typeTag = typeTag;
 	msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)msFutureThenCb, .env = env});
 	return output;
 }
@@ -291,10 +327,21 @@ static void msFutureCatchCb(void* raw) {
 	msFutureCatchEnv* e = (msFutureCatchEnv*)raw;
 	if (e->input->failed || e->input->cancelled) {
 		void* err = e->input->error;
-		if (e->onRejected.env != NULL) {
-			((void(*)(void*, void*))e->onRejected.fn)(e->onRejected.env, err);
-		} else {
-			((void(*)(void*))e->onRejected.fn)(err);
+		e->input->error = NULL;  /* consumed — prevent double-free */
+		void* fn = (void*)e->onRejected.fn;
+		void* env = e->onRejected.env;
+		/* Error is always a string (msString*) in MetaScript */
+		switch (e->typeTag) {
+		case MS_TYPETAG_STRING: {
+			msString sval = err ? *(msString*)err : MS_EMPTY_STRING;
+			if (env) ((void(*)(msString, void*))fn)(sval, env);
+			else ((void(*)(msString))fn)(sval);
+			break;
+		}
+		default:
+			if (env) ((void(*)(void*, void*))fn)(err, env);
+			else ((void(*)(void*))fn)(err);
+			break;
 		}
 		if (msErr) {
 			msFutureFail(e->output, (void*)msCurrException);
@@ -309,9 +356,13 @@ static void msFutureCatchCb(void* raw) {
 }
 
 msFuture* msFutureCatch(msFuture* input, msClosure onRejected) {
+	return msFutureCatchTyped(input, onRejected, MS_TYPETAG_PTR);
+}
+
+msFuture* msFutureCatchTyped(msFuture* input, msClosure onRejected, int typeTag) {
 	msFuture* output = msFutureCreate();
 	msFutureCatchEnv* env = (msFutureCatchEnv*)malloc(sizeof(msFutureCatchEnv));
-	env->output = output; env->input = input; env->onRejected = onRejected;
+	env->output = output; env->input = input; env->onRejected = onRejected; env->typeTag = typeTag;
 	msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)msFutureCatchCb, .env = env});
 	return output;
 }

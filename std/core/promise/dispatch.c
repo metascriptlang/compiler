@@ -3,6 +3,7 @@
  *
  * Event loop implementation: timer heap, ring buffer callback deque, runOnce/poll/waitFor.
  */
+#include "std/core/system/native.h"  /* msIncRef/msDecref for async stepper lifecycle */
 #include "dispatch.h"
 #include <stdlib.h>
 #include <string.h>
@@ -239,8 +240,12 @@ void msPoll(int timeoutMs) {
 /* Standard reference waitFor pattern
  * Block until future completes, then read (re-raising errors via msErr) */
 void* msWaitFor(msFuture* fut) {
-	while (!fut->finished) {
-		msPoll(500);
+	while (1) {
+		__atomic_thread_fence(__ATOMIC_ACQUIRE);
+		if (fut->finished) break;
+		msPoll(1);
+		__atomic_thread_fence(__ATOMIC_ACQUIRE);
+		if (fut->finished) break;
 	}
 	return msFutureRead(fut);
 }
@@ -261,6 +266,42 @@ msFuture* msSleepAsync(int ms) {
 	msTimer t = { .finishAtMs = finishAt, .fut = fut };
 	msTimerPush(&d->timers, t);
 	return fut;
+}
+
+/* ===== Async Stepper Callback (Nim createCb pattern) ===== */
+
+void msAsyncCb(void* raw) {
+	msAsyncCbEnv* e = (msAsyncCbEnv*)raw;
+
+	/* Call stepper — returns next future to wait on, or NULL when done */
+	msFuture* next = e->stepper.env != NULL
+		? ((msFuture*(*)(void*))e->stepper.fn)(e->stepper.env)
+		: ((msFuture*(*)(void))e->stepper.fn)();
+
+	/* Eager resume: loop while yielded future is already resolved */
+	while (next != NULL && next->finished) {
+		next = e->stepper.env != NULL
+			? ((msFuture*(*)(void*))e->stepper.fn)(e->stepper.env)
+			: ((msFuture*(*)(void))e->stepper.fn)();
+	}
+
+	if (next == NULL) {
+		/* Stepper finished — retFut already completed by stepper */
+		if (e->stepper.env) msDecref(e->stepper.env);
+		free(e);
+		return;
+	}
+
+	/* Not resolved — register ourselves as callback on the yielded future */
+	msFutureAddCallback(next, (msClosure){ .fn = (msClosureFn)msAsyncCb, .env = raw });
+}
+
+void msAsyncStart(msFuture* retFut, msClosure stepper) {
+	(void)retFut;  /* retFut is completed by the stepper directly, not by msAsyncCb */
+	msAsyncCbEnv* env = (msAsyncCbEnv*)malloc(sizeof(msAsyncCbEnv));
+	env->stepper = stepper;
+	if (stepper.env) msIncRef(stepper.env);
+	msAsyncCb(env);
 }
 
 /* Destroy the global dispatcher — cancel timers, drain callbacks, free memory.

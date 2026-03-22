@@ -26,6 +26,10 @@ export function jsonObject(keys: string[], values: JsonValue[]): JsonValue {
 	return { kind: JsonKind.Object, keys: keys, values: values };
 }
 
+export function jsonInt(n: int64): JsonValue {
+	return { kind: JsonKind.Int, intVal: n };
+}
+
 // ===== Tests =====
 
 test "construct null" {
@@ -64,5 +68,5 @@ test "construct object" {
 	const v = jsonObject(keys, vals);
 	assert v.kind === JsonKind.Object;
 	assert v.keys.length === 2;
-	assert v.keys[0] === "name";
+	assert v.keys[0] === "namnte";
 }
