@@ -28,7 +28,7 @@ typedef struct {
 
 /* Resolves when ALL resolve. Rejects on FIRST rejection.
  * Takes msRefArray (Promise<void>[]) — extracts .p->data and .len internally. */
-msFuture* msPromiseAll(msRefArray futures);
+void* msPromiseAll(msRefArray futures);
 
 /* ===== Promise.race ===== */
 
@@ -45,7 +45,7 @@ typedef struct {
 
 /* Resolves/rejects with the FIRST settled input.
  * Takes msRefArray (Promise<void>[]) — extracts .p->data and .len internally. */
-msFuture* msPromiseRace(msRefArray futures);
+void* msPromiseRace(msRefArray futures);
 
 /* ===== Promise.resolve / Promise.reject ===== */
 
@@ -79,7 +79,7 @@ typedef struct {
 
 /* Resolves when ALL settle (never rejects).
  * Takes msRefArray (Promise<void>[]) — extracts .p->data and .len internally. */
-msFuture* msPromiseAllSettled(msRefArray futures);
+void* msPromiseAllSettled(msRefArray futures);
 
 /* ===== Promise.any ===== */
 
@@ -98,7 +98,7 @@ typedef struct {
 
 /* Resolves with FIRST fulfilled input. Rejects only if ALL reject.
  * Takes msRefArray (Promise<void>[]) — extracts .p->data and .len internally. */
-msFuture* msPromiseAny(msRefArray futures);
+void* msPromiseAny(msRefArray futures);
 
 /* ===== new Promise(executor) ===== */
 

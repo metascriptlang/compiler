@@ -38,7 +38,7 @@ static void msPromiseAllCb(void* env) {
 	}
 }
 
-msFuture* msPromiseAll(msRefArray arr) {
+void* msPromiseAll(msRefArray arr) {
 	int count = (int)arr.len;
 	msFuture** futures = (arr.p != NULL) ? (msFuture**)arr.p->data : NULL;
 	msFuture* result = (msFuture*)msFutureCreate();
@@ -94,7 +94,7 @@ static void msPromiseRaceCb(void* env) {
 	if (s->remaining == 0) free(s);
 }
 
-msFuture* msPromiseRace(msRefArray arr) {
+void* msPromiseRace(msRefArray arr) {
 	int count = (int)arr.len;
 	msFuture** futures = (arr.p != NULL) ? (msFuture**)arr.p->data : NULL;
 	msFuture* result = (msFuture*)msFutureCreate();
@@ -133,7 +133,7 @@ static void msPromiseAllSettledCb(void* env) {
 	}
 }
 
-msFuture* msPromiseAllSettled(msRefArray arr) {
+void* msPromiseAllSettled(msRefArray arr) {
 	int count = (int)arr.len;
 	msFuture** futures = (arr.p != NULL) ? (msFuture**)arr.p->data : NULL;
 	msFuture* result = (msFuture*)msFutureCreate();
@@ -191,7 +191,7 @@ static void msPromiseAnyCb(void* env) {
 	if (s->remaining == 0) free(s);
 }
 
-msFuture* msPromiseAny(msRefArray arr) {
+void* msPromiseAny(msRefArray arr) {
 	int count = (int)arr.len;
 	msFuture** futures = (arr.p != NULL) ? (msFuture**)arr.p->data : NULL;
 	msFuture* result = (msFuture*)msFutureCreate();

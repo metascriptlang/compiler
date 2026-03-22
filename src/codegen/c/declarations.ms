@@ -228,6 +228,11 @@ function genFunctionDecl(g: CGen, node: Node, exported: boolean): void {
 		addLine(procs, proto + " {");
 		if (locals.length > 0) add(procs, locals);
 		add(procs, stmts);
+		// Reference parity (BeforeRet_): emit default return after DRC cleanup labels
+		// to satisfy C compiler's control flow analysis for non-void functions.
+		if (!nrvo && actualRetType !== "void") {
+			addLine(procs, `  return (${actualRetType}){0};`);
+		}
 		addLine(procs, "}");
 		addNewline(procs);
 	}

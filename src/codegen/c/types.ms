@@ -866,7 +866,7 @@ function genArrayType(g: CGen, t: Type): string {
 	// Fallback: check type.sym for class kind (reference parity: t.sym.kind == skType).
 	const elemIsClass = t.typeReturn !== null && t.typeReturn.sym !== null &&
 		t.typeReturn.sym.symbolKind === SymbolKind.Class;
-	if (elemType === "void*" || elemIsClass || (resolvedElem !== null && isPointerType(resolvedElem))) {
+	if (elemType === "void*" || elemType.endsWith("*") || elemIsClass || (resolvedElem !== null && isPointerType(resolvedElem))) {
 		typeCacheSet(g.typeCache, key, "msRefArray");
 		return "msRefArray";
 	}
