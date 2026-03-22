@@ -298,7 +298,7 @@ Emit `wasMoved(source)` + `recordMoveInContext(source)` when `move x` is used an
 
 ### Production Compiler Equivalent
 
-`moveOrCopy()` → detects `ensureMove`, strips wrapper → `genSink(dest, ri) + genWasMoved(ri)` for `nkSym` (symbol/identifier).
+`moveOrCopy()` → detects `ensureMove`, strips wrapper → `genSink(dest, ri) + genWasMoved(ri)` for identifier nodes.
 
 ---
 
@@ -368,7 +368,7 @@ Use existing `deepAliases(leftD.name, md.moveArg)` — returns true when RHS ref
 
 ### Special Cases
 
-- **Self-move** `x = move x` → no-op (production compiler: `nkEmpty`)
+- **Self-move** `x = move x` → no-op (production compiler: empty node)
 - **Aliased identifier** `x = move x` → caught by self-move check above
 - **Non-aliased** → standard path (Phase 1)
 

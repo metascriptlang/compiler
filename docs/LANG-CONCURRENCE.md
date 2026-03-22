@@ -224,8 +224,9 @@ Works with spawn, async, Promise.all — model-agnostic
    std/thread prelude                  ~10 lines — import { spawn } from "std/thread"
    move in spawn closures             ~50 lines — MoveExpr + wasMoved per-variable
 
+   Promise.withResolvers              msFutureCreate + msPromiseSettle/RejectFuture
+
 🔮 LATER:
-   Promise.withResolvers              ~30 lines — ES2024 deconstructed resolve/reject
    AbortSignal.timeout(ms)            ~30 lines — timer-based auto-cancel (needs dispatcher)
    Locker<T> + TicketLock             ~120 lines — thread-safe mutable sharing
    parMap/parApply/parReduce          ~100 lines — parallel algorithm sugar

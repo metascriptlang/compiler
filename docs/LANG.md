@@ -101,6 +101,7 @@ static    type      unknown
 ```
 match     when      unreachable
 defer     distinct  move      out
+struct    borrow    ref
 macro     quote     extern    sizeof
 test      assert
 int8      int16     int32     int64
@@ -318,24 +319,111 @@ class Service {
 ```
 
 ### Interfaces
-```typescript
-interface Shape {
-    area(): number;
-    perimeter(): number;
-}
 
-// With properties
+Interfaces are **reference types** — heap-allocated, reference-counted via DRC. They work identically across JS and C backends. Interfaces can have both fields and method signatures.
+
+```typescript
+// Data shape (fields only)
 interface Point {
     x: number;
     y: number;
     label?: string;        // Optional property
 }
 
+// Behavioral contract (with methods)
+interface Shape {
+    area(): number;
+    perimeter(): number;
+}
+
+// Both (fields + methods)
+interface ISerializable {
+    id: string;
+    function serialize(): string;
+}
+
 // Extends
 interface Circle extends Shape {
     radius: number;
 }
+
+// Construction — object literals (heap-allocated, reference-counted)
+const p: Point = { x: 1.0, y: 2.0 };
 ```
+
+**C backend**: Interfaces emit as C structs, passed by pointer (`T*`), heap-allocated with DRC refcounting.
+
+### Structs
+
+Structs are **value types** — stack-allocated, no refcounting, no DRC overhead. Pure data containers: no methods, no vtable. Structs are a MetaScript extension (Layer 2) — an opt-in performance optimization for hot paths.
+
+```typescript
+// Direct declaration (fields only)
+struct Vec2 { x: float64; y: float64; }
+struct Color { r: uint8; g: uint8; b: uint8; a: uint8; }
+
+const p: Vec2 = { x: 1.0, y: 2.0 };  // stack-allocated
+
+// Intersection with data-only interfaces
+interface IUser { name: string; age: number; }
+struct SuperUser = IUser & { role: string; };
+```
+
+#### Struct Parameter Passing
+
+Struct params are **TS-compatible** — mutation propagates to the caller, just like TypeScript objects. The compiler auto-selects the optimal C ABI per parameter based on size and mutation analysis:
+
+```typescript
+struct Vec2 { x: float64; y: float64; }
+struct BigData { name: string; items: number[100]; }
+
+// Not mutated → compiler uses value (small) or const T* (big) — zero copy
+function length(v: Vec2): float64 {
+    return Math.sqrt(v.x * v.x + v.y * v.y);
+}
+
+// Mutated → compiler uses T* — mutation propagates to caller
+function reset(v: Vec2): void {
+    v.x = 0;  // caller's v.x becomes 0
+    v.y = 0;
+}
+
+// readonly → explicit copy, caller's value is never affected
+function tryParse(readonly data: BigData): boolean {
+    data.name = "test";  // mutates local copy only
+    return validate(data);
+}
+```
+
+| Size | Mutated? | `readonly`? | C output |
+|------|----------|-------------|----------|
+| Small (≤24B) | No | No | `void f(Vec2 v)` — value, registers |
+| Small (≤24B) | Yes | No | `void f(Vec2* v)` — pointer, mutation propagates |
+| Small (≤24B) | — | Yes | `void f(Vec2 v)` — forced copy |
+| Big (>24B) | No | No | `void f(const BigData* v)` — zero copy |
+| Big (>24B) | Yes | No | `void f(BigData* v)` — pointer, mutation propagates |
+| Big (>24B) | — | Yes | Copy-on-entry — explicit isolation |
+
+Developer writes normal code — the compiler picks the fastest path automatically.
+
+#### Parameter Modifiers
+
+| Modifier | Syntax | Purpose |
+|---|---|---|
+| *(default)* | `f(v: Struct)` | Auto-optimized: compiler picks best ABI |
+| `readonly` | `f(readonly v: Struct)` | Explicit copy — caller's value unaffected |
+| `move` | `f(move v: Struct)` | Ownership transfer — caller's value zeroed |
+| `out` | `f(out v: Struct)` | Output parameter — callee fills the value |
+
+#### When to use what
+
+| Construct | Value/Ref | Methods | Allocation | Use Case |
+|-----------|-----------|---------|------------|----------|
+| `interface` | Reference | Yes | Heap (DRC) | General data + behavior, TS compatibility |
+| `struct` | Value | No | Stack | Hot paths, math types, small data, C interop |
+| `class` | Reference | Yes | Heap (DRC) | OOP, inheritance, polymorphism |
+
+**Workflow**: Start with `interface` (reference, familiar). Profile. Promote hot paths to `struct` (value, fast). Need methods on a value type? Use extension methods (`this self: T` syntax).
 
 ### Enums
 ```typescript
@@ -374,6 +462,7 @@ import * as utils from "./utils";
 // Named exports
 export function helper(): void { }
 export interface Config { debug: boolean; }
+export struct Vec2 { x: float64; y: float64; }
 export type ID = number;
 
 // Default export
@@ -472,6 +561,12 @@ type Shape = Circle & Drawable;
 type Result<T, E> =
     | { ok: true; value: T }
     | { ok: false; error: E };
+
+// Intersection types — combine multiple types
+type Extended = IUser & { role: string };
+
+// Struct intersection — compose value types from data-only interfaces
+struct SuperUser = IUser & { role: string; };
 ```
 
 ### Discriminated Union Types (Variant Objects)
@@ -651,13 +746,52 @@ match (result) {
     { ok: false, error: e } => handleError(e),
 }
 
-// Or-patterns and guards
+// Or-patterns
 match (token.kind) {
     TokenKind.Plus | TokenKind.Minus => parseBinary(),
-    x when (x > 10) => handleLarge(x),
+    TokenKind.Star | TokenKind.Slash => parseMulDiv(),
     _ => defaultCase(),
 }
+
+// Guards — `when` adds a condition after the pattern match (parentheses optional)
+match (token.kind) {
+    TokenKind.Ident when isKeyword(token.value) => handleKeyword(token),
+    TokenKind.Ident when isBuiltin(token.value) => handleBuiltin(token),
+    TokenKind.Ident => handleIdentifier(token),  // fallback when guards fail
+    TokenKind.Number => handleNumber(token),
+    _ => handleOther(token),
+}
+
+// Guard on binding — binding is assigned before guard is evaluated
+match (score) {
+    x when x >= 90 => "A",
+    x when x >= 80 => "B",
+    _ => "F",
+}
+
+// Guard on wildcard — conditional default
+match (mode) {
+    _ when strictMode => { unreachable; },
+    _ => handleFallback(),
+}
+
+// Guard with char codes
+match (ch) {
+    "\\".code => "\\\\",
+    "\n".code => "\\n",
+    "\"".code when quote === "\"".code => "\\\"",
+    "'".code when quote === "'".code => "\\'",
+    _ => s.byteSlice(i, i + 1),
+}
 ```
+
+**Guard rules:**
+- `when` keyword after pattern, before `=>`
+- Parentheses around guard expression are **optional**
+- Guard is evaluated only when the pattern matches (short-circuit)
+- Multiple guards on same pattern: tried top-to-bottom, first match wins
+- Guarded arm does **not** count as exhaustive — an unguarded fallback is required
+- Enum/integer discriminants generate C `switch` with `if` chains inside case bodies
 
 ### Result Type & Try Operator
 ```typescript
@@ -750,6 +884,80 @@ const result = await p;
 
 The executor runs **synchronously**. Only the first call to `resolve` or `reject` takes effect — subsequent calls are ignored (settled flag). The constructor is lowered to `msPromiseNew(executor)` by the compiler.
 
+#### Promise.withResolvers (ES2024)
+
+Creates a pending promise with explicit `resolve`/`reject` control — the deconstructed form of `new Promise(executor)`:
+
+```typescript
+extern function msFutureCreate(): Promise<void> from "msFutureCreate";
+extern function msPromiseSettle(p: Promise<void>, value: void): void from "msPromiseSettle";
+extern function msPromiseRejectFuture(p: Promise<void>, error: string): void from "msPromiseRejectFuture";
+
+// Create pending promise
+const p = msFutureCreate();
+
+// Settle it later (first call wins — double-settle is no-op)
+msPromiseSettle(p, null as unknown as void);
+
+// Or reject it
+msPromiseRejectFuture(p, "error");
+```
+
+Useful when resolve/reject need to be called from a different scope than where the promise was created — e.g., event handlers, timers, or cross-module coordination.
+
+#### Spawn — Thread Pool Parallelism
+
+`spawn` offloads work to a thread pool (Malebolgia-style: fixed workers, backpressure, local execution fallback):
+
+```typescript
+extern function msSpawn(fn: () => void): Promise<void> from "msSpawn";
+extern function msWaitFor(fut: Promise<void>): void from "msWaitFor";
+
+const fut = msSpawn(() => {
+    // runs on a worker thread
+    heavyComputation();
+});
+
+msWaitFor(fut);  // block until complete
+```
+
+Spawn works with all Promise combinators:
+
+```typescript
+// Parallel execution — wait for both
+const results = msPromiseAll([msSpawn(workA), msSpawn(workB)]);
+msWaitFor(results);
+
+// Race — first to finish wins
+const fastest = msPromiseRace([msSpawn(workA), msSpawn(workB)]);
+msWaitFor(fastest);
+```
+
+**Memory ownership**: Captured variables are borrowed (read-only) by default. Use `move` for ownership transfer to the spawned thread.
+
+#### AbortController — Cooperative Cancellation
+
+ECMAScript-compatible cancellation for async and spawned work:
+
+```typescript
+const controller = new AbortController();
+const signal = controller.signal;
+
+// Check cancellation
+if (signal.aborted) { /* cancelled */ }
+
+// Abort with reason
+controller.abort("timeout");
+
+// Throw if aborted (cooperative check)
+signal.throwIfAborted();  // throws AbortError if aborted
+
+// Static factory
+const preAborted = AbortSignal.abort("already done");
+```
+
+Works with spawn, async, and all Promise combinators — model-agnostic cooperative cancellation.
+
 #### Value Boxing
 
 Async functions returning non-pointer types (`number`, `boolean`, `int32`) require value boxing because the C runtime stores results as `void*`. The compiler automatically inserts boxing/unboxing:
@@ -769,6 +977,27 @@ const n = await compute();  // compiler inserts msUnboxDouble(result)
 | `int32` | `msBoxInt32` | `msUnboxInt32` |
 
 String and pointer types pass through without boxing (they are already pointer-sized).
+
+#### Feature Parity with TypeScript/Node.js
+
+| Feature | TypeScript | MetaScript | Notes |
+|---------|-----------|------------|-------|
+| `async`/`await` | Yes | Yes | State machine desugaring |
+| `Promise.all` | Yes | Yes | Thread-safe (atomics) |
+| `Promise.race` | Yes | Yes | Thread-safe (atomics) |
+| `Promise.allSettled` | Yes (ES2020) | Yes | Per-future outcome tracking |
+| `Promise.any` | Yes (ES2021) | Yes | Thread-safe (atomics) |
+| `Promise.resolve`/`.reject` | Yes | Yes | Pre-settled futures |
+| `.then()`/`.catch()`/`.finally()` | Yes | Yes | Callback chaining |
+| `new Promise(executor)` | Yes | Yes | Synchronous executor |
+| `Promise.withResolvers` | Yes (ES2024) | Yes | `msFutureCreate` + `msPromiseSettle` |
+| `AbortController`/`AbortSignal` | Yes | Yes | ECMAScript-compatible |
+| **`Promise<Result<T,E>>`** | No | **Yes** | Typed errors, no rejection |
+| **V1: throw-ban enforcement** | No | **Yes** | Compiler-enforced safety |
+| **V2: unguarded await-ban** | No | **Yes** | Compiler-enforced safety |
+| **`try await` composition** | No | **Yes** | Unwraps both layers |
+| **Thread-safe combinators** | No | **Yes** | Atomic ops for spawn |
+| **`spawn` + thread pool** | No | **Yes** | Malebolgia-style parallelism |
 
 ---
 
@@ -1068,21 +1297,23 @@ class Point {
 // What the compiler sees internally:
 //   Point = Ref<{ x: number; y: number }>
 //
-// - The inner struct is a value type (like an interface)
+// - The inner struct is a value type (like a struct)
 // - The Ref wrapper adds heap allocation + RC
 // - `new Point(1, 2)` allocates via msAllocTyped and returns a Ref
 ```
 
 This means:
-- **`interface`** declares a **value type** — stack-allocated, passed by copy (or by pointer if large)
-- **`class`** declares a **reference type** — heap-allocated, passed by pointer, reference-counted
+- **`interface`** declares a **reference type** — heap-allocated, passed by pointer, reference-counted (like class)
+- **`class`** declares a **reference type** — heap-allocated, passed by pointer, reference-counted, with methods
+- **`struct`** declares a **value type** — stack-allocated, auto-optimized passing (compiler picks value or pointer based on size + mutation)
 - Users can write `Ref<T>` or `Ptr<T>` explicitly for fine-grained control
 
 | Declaration | Internal Type | Allocation | Passed As |
 |-------------|--------------|------------|-----------|
-| `interface Foo { ... }` | `Object` | Stack | Value (copy) or `T*` if large |
-| `class Foo { ... }` | `Ref<Object>` | Heap (RC) | `Foo*` (pointer) |
-| `const x: Ptr<Foo> = ...` | `Ptr<Object>` | Heap (manual) | `Foo*` (pointer) |
+| `interface Foo { ... }` | `Ref<Struct>` | Heap (RC) | `Foo*` (pointer) |
+| `class Foo { ... }` | `Ref<Struct>` | Heap (RC) | `Foo*` (pointer) |
+| `struct Foo { ... }` | `Struct` | Stack | Auto: value or `Foo*` (size + mutation) |
+| `const x: Ptr<Foo> = ...` | `Ptr<Struct>` | Heap (manual) | `Foo*` (pointer) |
 
 #### Nullable Pointers
 
@@ -1106,19 +1337,20 @@ MetaScript uses a unified `T | null` syntax for all nullable types. Under the ho
 
 | Source Type | Internal Representation | C Layout | Null Sentinel |
 |-------------|------------------------|----------|---------------|
-| `Interface \| null` | `Maybe<Interface>` (wrapper struct) | `struct { T value; bool present; }` | `present == false` |
+| `interface \| null` | Bare `Ref<Struct>` (pointer) | `T*` | `NULL` (0x0) |
+| `class \| null` | Bare `Ref<Struct>` (pointer) | `T*` | `NULL` (0x0) |
 | `Ref<T> \| null` | Bare `Ref<T>` (pointer) | `T*` | `NULL` (0x0) |
 | `Ptr<T> \| null` | Bare `Ptr<T>` (pointer) | `T*` | `NULL` (0x0) |
-| `class \| null` | Bare `Ref<Object>` (pointer) | `T*` | `NULL` (0x0) |
+| `struct \| null` | `Maybe<Struct>` (wrapper struct) | `struct { T value; bool present; }` | `present == false` |
 
-**Why the split?** Value-type interfaces live on the stack. There is no "null address" for a stack value — every bit pattern is a valid struct. The compiler must add an explicit `present` flag. Pointers (`Ref<T>`, `Ptr<T>`, classes) already have a natural sentinel: the null pointer. Wrapping them in a struct would waste memory and add indirection for no benefit.
+**Why the split?** Value-type structs live on the stack. There is no "null address" for a stack value — every bit pattern is a valid struct. The compiler must add an explicit `present` flag. Pointers (`Ref<T>`, `Ptr<T>`, interfaces, classes) already have a natural sentinel: the null pointer. Wrapping them in a struct would waste memory and add indirection for no benefit.
 
-#### `Maybe<Interface>` — Wrapper Struct for Value Types
+#### `Maybe<Struct>` — Wrapper Struct for Value Types
 
-When you write `Token | null`, the compiler creates a `Maybe<Token>` type internally:
+When you write `MyStruct | null` where `MyStruct` is a `struct` (value type), the compiler creates a `Maybe<MyStruct>` type internally:
 
 ```typescript
-interface Token {
+struct Token {
     kind: TokenKind;
     value: string;
     line: number;
@@ -1151,6 +1383,8 @@ function process(tok: Token | null): string {
 }
 ```
 
+Note: `interface | null` and `class | null` are pointer types and use `NULL` directly — no `Maybe` wrapper needed. `Maybe` only applies to `struct` (value types) where there is no null address.
+
 **Optional chaining** works as expected:
 ```typescript
 const name: string | null = node?.name;    // null if node is null, node.name otherwise
@@ -1182,8 +1416,8 @@ c = allocBuffer();      // → c = allocBuffer()  (no wrapping)
 
 The compiler resolves `T | null` in the type checker's resolve pass:
 
-1. **Is `T` a pointer type?** (`Ref<T>`, `Ptr<T>`, or `class`) → Collapse to bare `T`. Done.
-2. **Is `T` a value-type interface?** → Create `Maybe<T>` wrapper struct.
+1. **Is `T` a pointer type?** (`Ref<T>`, `Ptr<T>`, `interface`, or `class`) → Collapse to bare `T`. Done.
+2. **Is `T` a value-type struct?** → Create `Maybe<T>` wrapper struct.
 3. Later passes handle the structural rewrites:
    - **operatorLower**: `x !== null` → `x.present` (for Maybe) or pass-through (for pointers)
    - **nullableLower**: Inserts `.value` on narrowed identifiers, wraps RHS in assignments
@@ -1192,9 +1426,10 @@ The compiler resolves `T | null` in the type checker's resolve pass:
 
 | You Write | Compiler Sees | Null Check | Field Access | Assignment |
 |-----------|--------------|------------|--------------|------------|
-| `tok: Token \| null` | `Maybe<Token>` | `tok.present` | `tok.value.kind` | `{value: x, present: true}` |
-| `node: Ref<T> \| null` | `Ref<T>` | `node != NULL` | `node->field` | `node = x` |
+| `v: MyStruct \| null` (struct) | `Maybe<MyStruct>` | `v.present` | `v.value.field` | `{value: x, present: true}` |
+| `iface: IFoo \| null` (interface) | `Ref<IFoo>` | `iface != NULL` | `iface->field` | `iface = x` |
 | `obj: MyClass \| null` | `Ref<Object>` | `obj != NULL` | `obj->field` | `obj = x` |
+| `node: Ref<T> \| null` | `Ref<T>` | `node != NULL` | `node->field` | `node = x` |
 | `buf: Ptr<T> \| null` | `Ptr<T>` | `buf != NULL` | `buf->field` | `buf = x` |
 
 All of this is invisible to the programmer. You write `T | null`, check with `!== null`, and access fields normally after narrowing. The compiler picks the optimal representation and inserts the right code.
@@ -1666,7 +1901,7 @@ function parse(input: string, out result: AST): boolean {
 - `defer` for cleanup
 - Arena, Pool, FixedBuffer allocators
 
-## AST Node Kinds (111 total)
+## AST Node Kinds (112 total)
 
 ### Literals (6)
 `number_literal`, `bigint_literal`, `string_literal`, `regex_literal`, `boolean_literal`, `null_literal`
@@ -1683,8 +1918,8 @@ function parse(input: string, out result: AST): boolean {
 ### Statements (16)
 `block_stmt`, `expression_stmt`, `if_stmt`, `while_stmt`, `for_stmt`, `for_of_stmt`, `switch_stmt`, `match_stmt`, `return_stmt`, `break_stmt`, `continue_stmt`, `variable_stmt`, `try_stmt`, `throw_stmt`, `defer_stmt`, `unreachable_stmt`
 
-### Declarations (7)
-`function_decl`, `class_decl`, `enum_decl`, `interface_decl`, `type_alias_decl`, `import_decl`, `export_decl`
+### Declarations (8)
+`function_decl`, `class_decl`, `enum_decl`, `interface_decl`, `struct_decl`, `type_alias_decl`, `import_decl`, `export_decl`
 
 ### Class Members (3)
 `property_decl`, `method_decl`, `constructor_decl`
