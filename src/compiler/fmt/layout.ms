@@ -1,167 +1,357 @@
 // Layout Engine — transforms Doc Tree → String
-// Implements the "Measure and Break" greedy algorithm for pretty printing.
+// Iterative stack-based printer (Prettier/Biome pattern).
+// Uses a command stack instead of recursion to avoid stack overflow
+// and enable rest-of-line measurement in fits().
 
 import { FormatOptions } from "./options";
 import { Doc, DocKind, DocData } from "./doc";
 
-interface LayoutState {
-	options: FormatOptions;
+// Mode: flat (try to fit on one line) or break (multi-line)
+const MODE_FLAT = 0;
+const MODE_BREAK = 1;
+
+// Command: a triple pushed onto the print stack.
+interface Cmd {
 	indent: number;
-	column: number;
-	result: string;
-	brokenGroups: boolean[]; // Parallel to Doc structure for group-break tracking
-	lineSuffixes: Doc[];     // Buffered LineSuffix content, flushed before newlines
+	mode: number;
+	doc: Doc;
 }
 
-// Result of a "measure" pass
-interface MeasureResult {
-	width: number;
-	fits: boolean;
-}
-
-export function formatDoc(doc: Doc, options: FormatOptions): string {
-	const state: LayoutState = {
-		options,
-		indent: 0,
-		column: 0,
-		result: "",
-		brokenGroups: [],
-		lineSuffixes: [],
-	};
-
-	renderDoc(doc, false, state);
-	flushLineSuffixes(state);
-	// Ensure trailing newline
-	if (state.result.length > 0 && state.result[state.result.length - 1] !== "\n") {
-		state.result = state.result + "\n";
-	}
-	return state.result;
-}
-
-// Recursive renderer for the Doc IR
-function renderDoc(doc: Doc, isBroken: boolean, state: LayoutState): void {
-	match (doc.kind) {
-		DocKind.Nil => {},
-		DocKind.Text => {
-			const d = doc.data as { text: string };
-			state.result = state.result + d.text;
-			state.column = state.column + d.text.length;
-		},
-		DocKind.Group => {
-			const d = doc.data as { children: Doc[] };
-			// Measure if the group fits on one line
-			const fits = fitsOnOneLine(doc, state.options.printWidth - state.column);
-			for (const child of d.children) {
-				renderDoc(child, !fits, state);
-			}
-		},
-		DocKind.Indent => {
-			const d = doc.data as { children: Doc[] };
-			state.indent = state.indent + state.options.tabWidth;
-			for (const child of d.children) {
-				renderDoc(child, isBroken, state);
-			}
-			state.indent = state.indent - state.options.tabWidth;
-		},
-		DocKind.Line => {
-			const d = doc.data as { isSoft: boolean };
-			if (isBroken) {
-				flushLineSuffixes(state);
-				state.result = state.result + "\n";
-				for (let j = 0; j < state.indent; j += 1) {
-					state.result = state.result + " ";
-				}
-				state.column = state.indent;
-			} else if (!d.isSoft) {
-				state.result = state.result + " ";
-				state.column = state.column + 1;
-			}
-		},
-		DocKind.HardLine => {
-			flushLineSuffixes(state);
-			state.result = state.result + "\n";
-			for (let k = 0; k < state.indent; k += 1) {
-				state.result = state.result + " ";
-			}
-			state.column = state.indent;
-		},
-		DocKind.IfBreak => {
-			const d = doc.data as { flat: Doc, broken: Doc };
-			if (isBroken) {
-				renderDoc(d.broken, true, state);
-			} else {
-				renderDoc(d.flat, false, state);
-			}
-		},
-		DocKind.LineSuffix => {
-			state.lineSuffixes.push(doc);
-		},
-		_ => {},
-	};
-}
-
-function flushLineSuffixes(state: LayoutState): void {
-	if (state.lineSuffixes.length === 0) return;
-	for (const suffix of state.lineSuffixes) {
-		const d = suffix.data as { children: Doc[] };
+// Pre-pass: propagate break markers upward through the doc tree.
+// If a group contains a BreakParent or HardLine, it must break — and its parent group too.
+// Returns true if the subtree forces a break.
+function propagateBreaks(doc: Doc): boolean {
+	if (doc === null) return false;
+	if (doc.kind === DocKind.BreakParent || doc.kind === DocKind.HardLine) return true;
+	if (doc.kind === DocKind.Group || doc.kind === DocKind.Indent || doc.kind === DocKind.LineSuffix) {
+		const d = doc.data as { children: Doc[] };
+		let hasBreak = false;
 		for (const child of d.children) {
-			renderDoc(child, false, state);
+			if (propagateBreaks(child)) hasBreak = true;
+		}
+		if (hasBreak && doc.kind === DocKind.Group) {
+			doc.shouldBreak = true;
+		}
+		return hasBreak;
+	}
+	if (doc.kind === DocKind.IfBreak) {
+		const d = doc.data as { flat: Doc, broken: Doc };
+		propagateBreaks(d.flat);
+		propagateBreaks(d.broken);
+	}
+	return false;
+}
+
+// Flush line suffix content directly to result string.
+function flushSuffixes(lineSuffixes: Doc[]): string {
+	let out = "";
+	for (const ls of lineSuffixes) {
+		const lsChildren = (ls.data as { children: Doc[] }).children;
+		for (const lsc of lsChildren) {
+			if (lsc.kind === DocKind.Text) {
+				out = out + (lsc.data as { text: string }).text;
+			}
 		}
 	}
-	state.lineSuffixes = [];
+	lineSuffixes.length = 0;
+	return out;
 }
 
-// Simple greedy measurement: does the flat version of this doc fit in 'rem' space?
-function fitsOnOneLine(doc: Doc, rem: number): boolean {
-	if (rem < 0) return false;
+// Emit indentation string — tabs when useTabs, spaces otherwise.
+function makeIndentStr(indent: number, options: FormatOptions): string {
+	if (options.useTabs) {
+		const tabCount = indent / options.tabWidth;
+		let s = "";
+		for (let i = 0; i < tabCount; i += 1) {
+			s = s + "\t";
+		}
+		return s;
+	}
+	let s = "";
+	for (let i = 0; i < indent; i += 1) {
+		s = s + " ";
+	}
+	return s;
+}
 
-	return match (doc.kind) {
-		DocKind.Nil => true,
-		DocKind.Text => {
-			const d = doc.data as { text: string };
-			return d.text.length <= rem;
-		},
-		DocKind.Group | DocKind.Indent => {
+// Measure if content fits in remaining width.
+// Prettier pattern: simulates printing the doc AND the rest of the command stack
+// to determine if everything fits on the current line.
+function fits(next: Cmd, restStack: Cmd[], restIdx: number, rem: number): boolean {
+	// Local simulation stack — start with the candidate command
+	const stack: Cmd[] = [next];
+	let remaining = rem;
+
+	while (stack.length > 0) {
+		if (remaining < 0) return false;
+
+		const cmd = stack[stack.length - 1];
+		stack.length = stack.length - 1;
+		const doc = cmd.doc;
+
+		if (doc === null) continue;
+
+		if (doc.kind === DocKind.Nil || doc.kind === DocKind.BreakParent) {
+			continue;
+		}
+		if (doc.kind === DocKind.Text) {
+			remaining = remaining - (doc.data as { text: string }).text.length;
+			continue;
+		}
+		if (doc.kind === DocKind.Group) {
+			// A group with shouldBreak can never fit flat — fail immediately
+			if (doc.shouldBreak) return false;
 			const d = doc.data as { children: Doc[] };
-			let totalWidth = 0;
-			let fits = true;
-			let i = 0;
-			while (i < d.children.length && fits) {
-				totalWidth = totalWidth + getFlatWidth(d.children[i]);
-				if (totalWidth > rem) { fits = false; }
-				i = i + 1;
+			let j = d.children.length - 1;
+			while (j >= 0) {
+				stack.push({ indent: cmd.indent, mode: cmd.mode, doc: d.children[j] });
+				j = j - 1;
 			}
-			return fits;
-		},
-		DocKind.Line => {
+			continue;
+		}
+		if (doc.kind === DocKind.Indent) {
+			const d = doc.data as { children: Doc[] };
+			let j = d.children.length - 1;
+			while (j >= 0) {
+				stack.push({ indent: cmd.indent + 1, mode: cmd.mode, doc: d.children[j] });
+				j = j - 1;
+			}
+			continue;
+		}
+		if (doc.kind === DocKind.Line) {
 			const d = doc.data as { isSoft: boolean };
-			return d.isSoft ? true : 1 <= rem;
-		},
-		DocKind.HardLine => false, // HardLine ALWAYS forces a break
-		DocKind.IfBreak => {
+			if (cmd.mode === MODE_BREAK) {
+				return true; // Line break in break mode — rest doesn't matter, fits
+			}
+			if (!d.isSoft) {
+				remaining = remaining - 1; // Space in flat mode
+			}
+			continue;
+		}
+		if (doc.kind === DocKind.HardLine) {
+			return true; // Hard line always fits (forces break)
+		}
+		if (doc.kind === DocKind.IfBreak) {
 			const d = doc.data as { flat: Doc, broken: Doc };
-			return getFlatWidth(d.flat) <= rem;
-		},
-		_ => true,
-	};
+			if (cmd.mode === MODE_BREAK) {
+				stack.push({ indent: cmd.indent, mode: cmd.mode, doc: d.broken });
+			} else {
+				stack.push({ indent: cmd.indent, mode: cmd.mode, doc: d.flat });
+			}
+			continue;
+		}
+		if (doc.kind === DocKind.LineSuffix) {
+			continue; // Line suffixes don't contribute to width measurement
+		}
+	}
+
+	// Local stack empty — check rest of the main stack (rest-of-line measurement).
+	// Only measure until the next line break — content after a newline doesn't affect fit.
+	while (restIdx >= 0) {
+		if (remaining < 0) return false;
+		const cmd = restStack[restIdx];
+		restIdx = restIdx - 1;
+		const doc = cmd.doc;
+
+		if (doc === null || doc.kind === DocKind.Nil || doc.kind === DocKind.BreakParent) continue;
+		if (doc.kind === DocKind.Text) {
+			remaining = remaining - (doc.data as { text: string }).text.length;
+			continue;
+		}
+		if (doc.kind === DocKind.HardLine) return true;
+		if (doc.kind === DocKind.Line) {
+			if (cmd.mode === MODE_BREAK) return true;
+			if (!(doc.data as { isSoft: boolean }).isSoft) remaining = remaining - 1;
+			continue;
+		}
+		// Stop rest-of-line scan at compound docs in break mode —
+		// they will produce newlines, so content after them is irrelevant.
+		if (cmd.mode === MODE_BREAK) return true;
+		if (doc.kind === DocKind.IfBreak) {
+			remaining = remaining - getFlatWidth((doc.data as { flat: Doc, broken: Doc }).flat);
+			continue;
+		}
+	}
+
+	return remaining >= 0;
 }
 
-// Calculate the width of the doc if it were printed entirely flat
+// Calculate flat width of a doc (used by fits rest-of-line fallback)
 function getFlatWidth(doc: Doc): number {
+	if (doc === null) return 0;
 	return match (doc.kind) {
-		DocKind.Nil => 0,
+		DocKind.Nil | DocKind.BreakParent | DocKind.LineSuffix => 0,
 		DocKind.Text => (doc.data as { text: string }).text.length,
 		DocKind.Group | DocKind.Indent => {
 			const d = doc.data as { children: Doc[] };
 			let w = 0;
-			for (const child of d.children) {
-				w = w + getFlatWidth(child);
-			}
+			for (const child of d.children) { w = w + getFlatWidth(child); }
 			return w;
 		},
 		DocKind.Line => (doc.data as { isSoft: boolean }).isSoft ? 0 : 1,
-		DocKind.HardLine => 1000, // Effectively infinite width to force break
+		DocKind.HardLine => 1000,
 		DocKind.IfBreak => getFlatWidth((doc.data as { flat: Doc, broken: Doc }).flat),
 		_ => 0,
 	};
+}
+
+export function formatDoc(doc: Doc, options: FormatOptions): string {
+	// Propagate break markers before rendering (Prettier/Biome parity)
+	propagateBreaks(doc);
+
+	let result = "";
+	let column = 0;
+	const lineSuffixes: Doc[] = [];
+	// Track group break decisions by ID for cross-group IfBreak
+	const groupModes: number[] = []; // groupId → MODE_FLAT or MODE_BREAK
+
+	// Command stack — push in reverse order so children pop in correct order
+	const stack: Cmd[] = [{ indent: 0, mode: MODE_BREAK, doc }];
+
+	while (stack.length > 0) {
+		const cmd = stack[stack.length - 1];
+		stack.length = stack.length - 1;
+		const d = cmd.doc;
+
+		if (d === null || d.kind === DocKind.Nil || d.kind === DocKind.BreakParent) continue;
+
+		if (d.kind === DocKind.Text) {
+			const text = (d.data as { text: string }).text;
+			result = result + text;
+			column = column + text.length;
+			continue;
+		}
+
+		if (d.kind === DocKind.Group) {
+			const children = (d.data as { children: Doc[] }).children;
+			let childMode: number;
+			if (d.shouldBreak) {
+				childMode = MODE_BREAK;
+			} else {
+				const flatCmd: Cmd = { indent: cmd.indent, mode: MODE_FLAT, doc: d };
+				const groupFits = fits(flatCmd, stack, stack.length - 1, options.printWidth - column);
+				childMode = groupFits ? MODE_FLAT : MODE_BREAK;
+			}
+			// Record break decision for cross-group IfBreak references
+			if (d.groupId > 0) {
+				while (groupModes.length <= d.groupId) { groupModes.push(0); }
+				groupModes[d.groupId] = childMode;
+			}
+			let j = children.length - 1;
+			while (j >= 0) {
+				stack.push({ indent: cmd.indent, mode: childMode, doc: children[j] });
+				j = j - 1;
+			}
+			continue;
+		}
+
+		if (d.kind === DocKind.Indent) {
+			const children = (d.data as { children: Doc[] }).children;
+			let j = children.length - 1;
+			while (j >= 0) {
+				stack.push({ indent: cmd.indent + 1, mode: cmd.mode, doc: children[j] });
+				j = j - 1;
+			}
+			continue;
+		}
+
+		if (d.kind === DocKind.Line) {
+			if (cmd.mode === MODE_BREAK) {
+				if (lineSuffixes.length > 0) { result = result + flushSuffixes(lineSuffixes); }
+				const indentStr = makeIndentStr(cmd.indent * options.tabWidth, options);
+				result = result + "\n" + indentStr;
+				column = cmd.indent * options.tabWidth;
+			} else {
+				// Flat mode: soft line = nothing, regular line = space
+				if (!(d.data as { isSoft: boolean }).isSoft) {
+					result = result + " ";
+					column = column + 1;
+				}
+			}
+			continue;
+		}
+
+		if (d.kind === DocKind.HardLine) {
+			if (lineSuffixes.length > 0) { result = result + flushSuffixes(lineSuffixes); }
+			const indentStr = makeIndentStr(cmd.indent * options.tabWidth, options);
+			result = result + "\n" + indentStr;
+			column = cmd.indent * options.tabWidth;
+			continue;
+		}
+
+		if (d.kind === DocKind.IfBreak) {
+			const ifData = d.data as { flat: Doc, broken: Doc };
+			// Check specific group's mode if groupId is set, otherwise use current mode
+			let isBroken = cmd.mode === MODE_BREAK;
+			if (d.groupId > 0 && d.groupId < groupModes.length) {
+				isBroken = groupModes[d.groupId] === MODE_BREAK;
+			}
+			if (isBroken) {
+				stack.push({ indent: cmd.indent, mode: cmd.mode, doc: ifData.broken });
+			} else {
+				stack.push({ indent: cmd.indent, mode: cmd.mode, doc: ifData.flat });
+			}
+			continue;
+		}
+
+		if (d.kind === DocKind.LineSuffix) {
+			lineSuffixes.push(d);
+			continue;
+		}
+
+		if (d.kind === DocKind.Fill) {
+			// Fill: pack items with separators, wrapping per-pair.
+			// children alternate: [item, sep, item, sep, item]
+			// Must push in reverse so they process left-to-right.
+			// But each separator's mode depends on whether the NEXT item fits,
+			// which depends on the current column — a chicken-and-egg problem.
+			// Solution: push remaining items as a nested Fill, process first pair now.
+			const parts = (d.data as { children: Doc[] }).children;
+			if (parts.length === 0) { continue; }
+
+			// Push remaining pairs as a new Fill (processed after current pair)
+			if (parts.length > 2) {
+				const rest: Doc[] = [];
+				let ri = 2;
+				while (ri < parts.length) {
+					rest.push(parts[ri]);
+					ri = ri + 1;
+				}
+				const restFill = new Doc();
+				restFill.kind = DocKind.Fill;
+				restFill.data = { children: rest } as DocData;
+				restFill.shouldBreak = false;
+				restFill.groupId = 0;
+				stack.push({ indent: cmd.indent, mode: cmd.mode, doc: restFill });
+			}
+
+			// Determine if item[0] + sep[1] + item[2] fits on current line
+			const itemWidth = getFlatWidth(parts[0]);
+			const sepWidth = (parts.length > 1) ? getFlatWidth(parts[1]) : 0;
+			const nextWidth = (parts.length > 2) ? getFlatWidth(parts[2]) : 0;
+			const rem = options.printWidth - column;
+
+			if (parts.length > 1) {
+				if (itemWidth + sepWidth + nextWidth <= rem) {
+					// Both fit — emit separator flat
+					stack.push({ indent: cmd.indent, mode: MODE_FLAT, doc: parts[1] });
+				} else {
+					// Doesn't fit — break separator
+					stack.push({ indent: cmd.indent, mode: MODE_BREAK, doc: parts[1] });
+				}
+			}
+			// Always emit first item flat
+			stack.push({ indent: cmd.indent, mode: MODE_FLAT, doc: parts[0] });
+			continue;
+		}
+	}
+
+	// Flush remaining line suffixes
+	if (lineSuffixes.length > 0) { result = result + flushSuffixes(lineSuffixes); }
+
+	// Ensure trailing newline
+	if (result.length > 0 && result[result.length - 1] !== "\n") {
+		result = result + "\n";
+	}
+	return result;
 }

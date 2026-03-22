@@ -39,7 +39,7 @@ function convertVarInNode(stmts: Node[], idx: number, loc: SourceLocation): void
 		NodeKind.VariableDecl => {
 			const d = stmt.data as VariableDeclData;
 			if (d.declKind === DeclKind.Var) {
-				if (d.initializer.kind !== NodeKind.NullLiteral) {
+				if (d.initializer !== null && d.initializer.kind !== NodeKind.NullLiteral) {
 					stmts[idx] = makeExprStmt(makeAssign(makeIdent(d.declName, loc), d.initializer, loc), loc);
 				} else {
 					stmts[idx] = makeBlock([], loc);
@@ -176,7 +176,7 @@ function walkVarHoist(node: Node): void {
 		},
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
-			walkVarHoist(d.initializer);
+			if (d.initializer !== null) walkVarHoist(d.initializer);
 		},
 		_ => {},
 	};

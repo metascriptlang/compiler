@@ -118,12 +118,16 @@ export function scanString(s: LexerState, quote: number): void {
 	const startCol = s.column;
 	let val = "";
 	advanceChar(s); // skip opening quote
+	const rawStart = s.pos; // capture raw source start (after opening quote)
 
 	while (s.pos < s.source.byteLength) {
 		const ch = peek(s);
 		if (ch === quote) {
+			const rawEnd = s.pos; // before closing quote
 			advanceChar(s);
-			addToken(s, TokenKind.String, val, startLine, startCol);
+			const tok = addToken(s, TokenKind.String, val, startLine, startCol);
+			// Store raw source text for formatter (Prettier pattern: preserve original escapes)
+			tok.rawValue = s.source.byteSlice(rawStart, rawEnd);
 			return;
 		}
 		if (ch === "\\".code) {

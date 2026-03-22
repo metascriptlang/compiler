@@ -156,6 +156,7 @@ export function cmdFmt(filePath: string, opts: CliOptions, fmtCfg: FmtSection): 
 	}
 	const program = result.value;
 	const options = applyFmtSection(defaultFormatOptions(), fmtCfg);
+	options.source = source;
 
 	const doc = printFormattedNode(program, options);
 	const formatted = formatDoc(doc, options);

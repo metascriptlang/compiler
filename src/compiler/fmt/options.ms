@@ -23,12 +23,14 @@ export interface FormatOptions {
 	trailingComma: TrailingComma; // Default: All
 	bracketSpacing: boolean; // Default: true
 	arrowParens: ArrowParens; // Default: Always
+	source: string;          // Original source text (for raw token extraction)
 }
 
 export function defaultFormatOptions(): FormatOptions {
 	return {
 		printWidth: 80,
 		tabWidth: 2,
+		source: "",
 		useTabs: false,
 		semi: true,
 		singleQuote: false,

@@ -24,7 +24,8 @@ function isAssignableInner(source: Type, target: Type): boolean {
 	// Same kind is always compatible
 	if (source.kind === target.kind) {
 		return match (source.kind) {
-			TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Ref | TypeKind.Ptr => isAssignable(source.typeReturn, target.typeReturn),
+			TypeKind.SizedArray => source.typeFlags === target.typeFlags && isAssignable(source.typeReturn, target.typeReturn),
+			TypeKind.Array | TypeKind.Span | TypeKind.Ref | TypeKind.Ptr => isAssignable(source.typeReturn, target.typeReturn),
 			TypeKind.Function => isFunctionAssignable(source, target),
 			TypeKind.Struct => isObjectAssignable(source, target),
 			TypeKind.Enum | TypeKind.Distinct => source.typeName === target.typeName,
@@ -228,7 +229,16 @@ function typeRelationInner(formal: Type, actual: Type): TypeRelation {
 				if (formal.typeName === actual.typeName) return TypeRelation.Exact;
 				return TypeRelation.None;
 			},
-			TypeKind.Array | TypeKind.SizedArray | TypeKind.Span | TypeKind.Ref | TypeKind.Ptr => {
+			TypeKind.SizedArray => {
+				if (formal.typeFlags !== actual.typeFlags) return TypeRelation.None;
+				if (formal.typeReturn !== null && actual.typeReturn !== null) {
+					const elemRel = typeRelation(formal.typeReturn, actual.typeReturn);
+					if (elemRel === TypeRelation.None) return TypeRelation.None;
+					return elemRel;
+				}
+				return TypeRelation.Exact;
+			},
+			TypeKind.Array | TypeKind.Span | TypeKind.Ref | TypeKind.Ptr => {
 				if (formal.typeReturn !== null && actual.typeReturn !== null) {
 					const elemRel = typeRelation(formal.typeReturn, actual.typeReturn);
 					if (elemRel === TypeRelation.None) return TypeRelation.None;

@@ -9,6 +9,7 @@ import {
 	MatchStmtData, ThrowStmtData, TryCatchStmtData, DeferStmtData,
 	FunctionDeclData,
 } from "../../../ast/node";
+import { Token } from "../../../lexer/token";
 import { FormatOptions } from "../options";
 import {
 	Doc, docText, docGroup, docIndent,
@@ -18,11 +19,46 @@ import { callPrintNode } from "./callbacks";
 
 export function printProgram(node: Node, options: FormatOptions): Doc {
 	const d = node.data as ProgramData;
-	const stmts: Doc[] = [];
-	for (const s of d.programStmts) {
-		stmts.push(callPrintNode(s, options));
+	const parts: Doc[] = [];
+	for (let i = 0; i < d.programStmts.length; i += 1) {
+		const stmt = d.programStmts[i];
+
+		// Extract inter-statement comments: comments on this statement whose line
+		// is between this statement and the next. These are standalone comments
+		// (e.g., `// comment` between `};` and `export default`).
+		const interComments: Token[] = [];
+		if (stmt.comments.length > 0 && i + 1 < d.programStmts.length) {
+			const nextLine = d.programStmts[i + 1].location.line;
+			const remaining: Token[] = [];
+			for (const comment of stmt.comments) {
+				if (comment.line > stmt.location.line && comment.line < nextLine) {
+					interComments.push(comment);
+				} else {
+					remaining.push(comment);
+				}
+			}
+			stmt.comments = remaining;
+		}
+
+		if (i > 0) {
+			parts.push(docHardLine());
+			// Preserve one blank line between statement groups (Prettier convention)
+			const prevLine = d.programStmts[i - 1].location.line;
+			const currLine = d.programStmts[i].location.line;
+			if (currLine - prevLine > 1) {
+				parts.push(docHardLine());
+			}
+		}
+		parts.push(callPrintNode(stmt, options));
+
+		// Emit inter-statement comments with surrounding blank lines
+		for (const ic of interComments) {
+			parts.push(docHardLine());
+			parts.push(docHardLine());
+			parts.push(docText(ic.value));
+		}
 	}
-	return docJoin(stmts, docHardLine());
+	return docGroup(parts);
 }
 
 export function printBlock(node: Node, options: FormatOptions): Doc {
@@ -95,9 +131,17 @@ export function printIfStmt(node: Node, options: FormatOptions): Doc {
 		docText(") "),
 		callPrintNode(d.consequent, options),
 	];
+	// Skip empty else blocks (parser may create a BlockStmt with 0 statements)
 	if (d.alternate !== null) {
-		parts.push(docText(" else "));
-		parts.push(callPrintNode(d.alternate, options));
+		let isEmpty = false;
+		if (d.alternate.kind === NodeKind.BlockStmt) {
+			const altData = d.alternate.data as BlockStmtData;
+			if (altData.statements.length === 0) { isEmpty = true; }
+		}
+		if (!isEmpty) {
+			parts.push(docText(" else "));
+			parts.push(callPrintNode(d.alternate, options));
+		}
 	}
 	return docGroup(parts);
 }

@@ -265,10 +265,11 @@ export function findUnionVariant(unionType: Type, fieldNames: string[], fieldTyp
 				let fi = 0;
 				while (fi < variant.typeNames.length) {
 					if (variant.typeNames[fi] === fieldNames[ti]) {
-						// When fieldTypes provided, also match by type kind to disambiguate
-						// variants with same field names but different types
+						// When fieldTypes provided, match by type compatibility to disambiguate
+						// variants with same field names but different types.
+						// Reference parity: Nim uses fitNode (subtype check), not exact equality.
 						if (fieldTypes.length > ti && fi < variant.typeChildren.length) {
-							if (variant.typeChildren[fi].kind === fieldTypes[ti].kind) {
+							if (typesCompatibleForVariant(variant.typeChildren[fi], fieldTypes[ti])) {
 								found = true;
 							}
 						} else {
@@ -289,6 +290,50 @@ export function findUnionVariant(unionType: Type, fieldNames: string[], fieldTyp
 		vi = vi + 1;
 	}
 	return -1;
+}
+
+// Compatible type matching for union variant field disambiguation.
+// Reference parity: Nim's fitNode does subtype checking for object fields.
+// We check type-class compatibility: all numerics match, all strings match,
+// all ref/ptr types match, exact kind for everything else.
+function typesCompatibleForVariant(formal: Type, actual: Type): boolean {
+	if (formal === null || actual === null) return false;
+	if (formal.kind === actual.kind) return true;
+	// Numeric family: number, int8-int64, uint8-uint64, float32, float64
+	if (isNumeric(formal) && isNumeric(actual)) return true;
+	// Reference family: Ref, Ptr, Borrow all compatible
+	if ((formal.kind === TypeKind.Ref || formal.kind === TypeKind.Ptr || formal.kind === TypeKind.Borrow)
+		&& (actual.kind === TypeKind.Ref || actual.kind === TypeKind.Ptr || actual.kind === TypeKind.Borrow)) return true;
+	return false;
+}
+
+// Check if a name-only matched variant is ambiguous (another variant has the same field names).
+// When ambiguous, we need property types to disambiguate (e.g. { value: number } vs { value: string }).
+export function isAmbiguousVariant(unionType: Type, matchedIdx: number, fieldNames: string[]): boolean {
+	if (unionType.typeChildren === null) return false;
+	let vi = 0;
+	while (vi < unionType.typeChildren.length) {
+		if (vi !== matchedIdx) {
+			const variant = unionType.typeChildren[vi];
+			if (variant !== null && variant.typeNames !== null && variant.typeNames.length >= fieldNames.length) {
+				let allFound = true;
+				let ti = 0;
+				while (ti < fieldNames.length) {
+					let found = false;
+					let fi = 0;
+					while (fi < variant.typeNames.length) {
+						if (variant.typeNames[fi] === fieldNames[ti]) { found = true; fi = variant.typeNames.length; }
+						fi = fi + 1;
+					}
+					if (!found) { allFound = false; ti = fieldNames.length; }
+					ti = ti + 1;
+				}
+				if (allFound) return true;
+			}
+		}
+		vi = vi + 1;
+	}
+	return false;
 }
 
 // Find a field's type within a single variant struct. Returns null if not found.

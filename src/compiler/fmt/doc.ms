@@ -2,14 +2,16 @@
 // Based on Philip Wadler's "A Prettier Printer" (2003).
 
 export enum DocKind {
-	Nil,        // Empty doc
-	Text,       // Literal text
-	Group,      // Tries to fit on one line; breaks all internal lines if it fails
-	Indent,     // Increments indentation level
-	Line,       // Breakpoint: becomes space if group fits, newline if it doesn't
-	HardLine,   // Always a newline
-	IfBreak,    // Conditional content based on whether parent group broke
-	LineSuffix, // Content appended at end of current line (trailing comments)
+	Nil,         // Empty doc
+	Text,        // Literal text
+	Group,       // Tries to fit on one line; breaks all internal lines if it fails
+	Indent,      // Increments indentation level
+	Line,        // Breakpoint: becomes space if group fits, newline if it doesn't
+	HardLine,    // Always a newline
+	IfBreak,     // Conditional content based on whether parent group broke
+	LineSuffix,  // Content appended at end of current line (trailing comments)
+	BreakParent, // Forces enclosing group to break (Prettier/Biome parity)
+	Fill,        // Pack as many items per line as possible (partial wrapping)
 }
 
 export type DocData =
@@ -21,14 +23,34 @@ export type DocData =
 export class Doc {
 	kind: DocKind;
 	data: DocData;
+	shouldBreak: boolean; // When true, group always breaks (Prettier: group({ shouldBreak }))
+	groupId: number;      // Group ID for cross-group IfBreak references (0 = no ID)
 }
 
 // ===== Factory Helpers =====
+
+let _nextGroupId = 1;
 
 function createDoc(kind: DocKind, data: DocData): Doc {
 	const d = new Doc();
 	d.kind = kind;
 	d.data = data;
+	d.shouldBreak = false;
+	d.groupId = 0;
+	return d;
+}
+
+// Allocate a unique group ID for cross-group IfBreak references.
+export function allocGroupId(): number {
+	const id = _nextGroupId;
+	_nextGroupId = _nextGroupId + 1;
+	return id;
+}
+
+// Create a named group (can be referenced by IfBreak via groupId).
+export function docGroupWithId(children: Doc[], id: number): Doc {
+	const d = createDoc(DocKind.Group, { children } as DocData);
+	d.groupId = id;
 	return d;
 }
 
@@ -64,11 +86,31 @@ export function docIfBreak(flat: Doc, broken: Doc): Doc {
 	return createDoc(DocKind.IfBreak, { flat, broken } as DocData);
 }
 
+// IfBreak that checks a specific group's break status (not just nearest parent).
+export function docIfBreakGroup(flat: Doc, broken: Doc, gId: number): Doc {
+	const d = createDoc(DocKind.IfBreak, { flat, broken } as DocData);
+	d.groupId = gId;
+	return d;
+}
+
 export function docLineSuffix(children: Doc[]): Doc {
 	return createDoc(DocKind.LineSuffix, { children } as DocData);
 }
 
-// Common shorthand: join(docs, docLine())
+// Force enclosing group to break. Propagated upward by propagateBreaks().
+export function docBreakParent(): Doc {
+	return createDoc(DocKind.BreakParent, {} as DocData);
+}
+
+// Group that always breaks (skip fitsOnOneLine). Shorthand for group + shouldBreak.
+export function docGroupBreak(children: Doc[]): Doc {
+	const d = createDoc(DocKind.Group, { children } as DocData);
+	d.shouldBreak = true;
+	return d;
+}
+
+// Common shorthand: join docs with separator. Returns a flat list in a group.
+// Note: the wrapping group inherits break behavior from propagateBreaks.
 export function docJoin(docs: Doc[], sep: Doc): Doc {
 	const result: Doc[] = [];
 	for (let i = 0; i < docs.length; i += 1) {
@@ -76,4 +118,21 @@ export function docJoin(docs: Doc[], sep: Doc): Doc {
 		result.push(docs[i]);
 	}
 	return docGroup(result);
+}
+
+// Fill: pack items with separator, wrapping when a line is full.
+// Items and separators alternate: [item, sep, item, sep, item].
+// Unlike Group, each pair is measured independently for partial wrapping.
+export function docFill(parts: Doc[]): Doc {
+	return createDoc(DocKind.Fill, { children: parts } as DocData);
+}
+
+// Join without wrapping group — items inherit parent's break mode directly.
+export function docJoinFlat(docs: Doc[], sep: Doc): Doc[] {
+	const result: Doc[] = [];
+	for (let i = 0; i < docs.length; i += 1) {
+		if (i > 0) result.push(sep);
+		result.push(docs[i]);
+	}
+	return result;
 }

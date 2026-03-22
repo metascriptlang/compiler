@@ -97,12 +97,16 @@ export function parseVariableDecl(state: ParserState): NodeResult {
 	const declType = captureOptionalType(state);
 	const declTypeExpr = getLastTypeExpr();
 
-	if (current(state).kind !== TokenKind.Assign) {
-		return Result.err(`Expected '=' in variable declaration at line ${current(state).line}`);
+	// Uninitialized declaration: `let x: Type;` — requires type annotation, disallowed for const
+	let init: Node = null;
+	if (current(state).kind === TokenKind.Assign) {
+		advance(state);
+		init = try callExprParser(state);
+	} else if (declType === "") {
+		return Result.err(`Expected '=' or type annotation in declaration at line ${current(state).line}`);
+	} else if (keyword.kind === TokenKind.Const) {
+		return Result.err(`'const' declaration must be initialized at line ${current(state).line}`);
 	}
-
-	advance(state);
-	const init = try callExprParser(state);
 	consumeSemicolon(state);
 
 	const varNode = createNode(NodeKind.VariableDecl, {

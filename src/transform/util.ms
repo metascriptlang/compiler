@@ -341,6 +341,7 @@ export function makeHiddenSubConv(inner: Node, targetType: Type, loc: SourceLoca
 // Handles: BlockStmt, IfStmt, WhileStmt, TryCatchStmt, DoWhileStmt, SwitchStmt/SwitchCase.
 
 export function collectDeclNames(node: Node, ns: NameSet, varOnly: boolean): void {
+	if (node === null) return;
 	match (node.kind) {
 		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {},
 		NodeKind.VariableDecl => {

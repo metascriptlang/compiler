@@ -704,7 +704,7 @@ export function monoCloneNode(node: Node): Node {
 	const kind = node.kind;
 
 	if (kind === NodeKind.NumberLiteral) { const d = node.data as NumberLiteralData; const data: NodeData = { value: d.value }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
-	if (kind === NodeKind.StringLiteral) { const d = node.data as StringLiteralData; const data: NodeData = { value: d.value }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
+	if (kind === NodeKind.StringLiteral) { const d = node.data as StringLiteralData; return copyNodeMeta(node, createNodeAt(kind, { value: d.value } as NodeData, loc)); }
 	if (kind === NodeKind.BooleanLiteral) { const d = node.data as BooleanLiteralData; const data: NodeData = { boolValue: d.boolValue }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
 	if (kind === NodeKind.NullLiteral) { const data: NodeData = { nullPlaceholder: true }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }
 	if (kind === NodeKind.BigIntLiteral) { const d = node.data as BigIntLiteralData; const data: NodeData = { bigintValue: d.bigintValue }; return copyNodeMeta(node, createNodeAt(kind, data, loc)); }

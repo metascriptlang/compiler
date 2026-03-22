@@ -28,7 +28,7 @@ export function createState(tokens: Token[]): ParserState {
 
 // Internal helper to get the raw token at current position (including comments)
 function rawCurrent(state: ParserState): Token {
-	if (state.position >= state.tokens.length) return { kind: TokenKind.Eof, value: "", line: 0, column: 0 };
+	if (state.position >= state.tokens.length) return { kind: TokenKind.Eof, value: "", line: 0, column: 0, rawValue: "" };
 	return state.tokens[state.position];
 }
 
@@ -40,18 +40,19 @@ export function current(state: ParserState): Token {
 		pos += 1;
 	}
 	if (pos < state.tokens.length) return state.tokens[pos];
-	if (state.tokens.length === 0) return { kind: TokenKind.Eof, value: "", line: 0, column: 0 };
+	if (state.tokens.length === 0) return { kind: TokenKind.Eof, value: "", line: 0, column: 0, rawValue: "" };
 	return state.tokens[state.tokens.length - 1]; // Safe EOF fallback
 }
 
 export function advance(state: ParserState): Token {
-	// Skip and collect leading comments into the side-channel
+	// Skip and collect comment tokens into the side-channel.
+	// Comments are attached to the NEXT non-comment token (leading comments).
 	while (state.position < state.tokens.length && state.tokens[state.position].kind === TokenKind.Comment) {
 		state.pendingComments.push(state.tokens[state.position]);
 		state.position += 1;
 	}
-	
-	if (state.position >= state.tokens.length) return { kind: TokenKind.Eof, value: "", line: 0, column: 0 };
+
+	if (state.position >= state.tokens.length) return { kind: TokenKind.Eof, value: "", line: 0, column: 0, rawValue: "" };
 	const token = state.tokens[state.position];
 	if (token.kind !== TokenKind.Eof) {
 		state.position += 1;
@@ -60,7 +61,9 @@ export function advance(state: ParserState): Token {
 }
 
 // Helper to take and clear pending comments (the "Harvest")
-// Audit fix: Also harvests comments at current position that haven't been "advanced" over yet.
+// Also collects any comment tokens at the current position that haven't been
+// advanced over yet. This ensures comments immediately before a construct
+// are attached to it (e.g., leading comments before a function parameter).
 export function takePendingComments(state: ParserState): Token[] {
 	while (state.position < state.tokens.length && state.tokens[state.position].kind === TokenKind.Comment) {
 		state.pendingComments.push(state.tokens[state.position]);
@@ -93,7 +96,7 @@ export function peek(state: ParserState, offset: number): Token {
 		}
 		pos += 1;
 	}
-	if (state.tokens.length === 0) return { kind: TokenKind.Eof, value: "", line: 0, column: 0 };
+	if (state.tokens.length === 0) return { kind: TokenKind.Eof, value: "", line: 0, column: 0, rawValue: "" };
 	return state.tokens[state.tokens.length - 1]; // EOF
 }
 
@@ -146,9 +149,21 @@ export function synchronize(state: ParserState): void {
 export function collectTokenText(state: ParserState, start: number, end: number): string {
 	let text = "";
 	for (let i = start; i < end; i += 1) {
-		if (state.tokens[i].kind === TokenKind.Comment) continue;
-		if (text !== "") text = text + " ";
-		text = text + state.tokens[i].value;
+		const tok = state.tokens[i];
+		if (tok.kind === TokenKind.Comment) continue;
+		// Smart spacing: reproduce original token adjacency for type annotations.
+		// No space around brackets [], angles <>, parens (), commas, colons, dots.
+		if (text !== "") {
+			const lastCh = text.byteAt(text.byteLength - 1);
+			const v = tok.value;
+			const noSpaceBefore = v === "[" || v === "]" || v === ">" || v === ">>" || v === ">>>"
+				|| v === ")" || v === "," || v === "." || v === "?" || v === ":"
+				|| v === "<" || v === "(";
+			const noSpaceAfter = lastCh === "[".code || lastCh === "<".code || lastCh === "(".code
+				|| lastCh === ".".code || lastCh === "?".code;
+			if (!noSpaceBefore && !noSpaceAfter) text = text + " ";
+		}
+		text = text + tok.value;
 	}
 	return text;
 }

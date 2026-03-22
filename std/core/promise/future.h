@@ -1,8 +1,10 @@
 /*
- * MetaScript Future Runtime — Standard reference implementation parity
+ * MetaScript Future Runtime — Monomorphic Future<T>
  *
- * Type-erased Future with callback chains and callSoon bridge.
- * Matches standard reference Future patterns, CallbackList, callSoon.
+ * Base struct (msFutureBase) holds shared fields: finished, error, callbacks.
+ * Per-type structs extend base with typed value field (C struct inheritance).
+ * Event loop, callbacks, dispatch operate on msFutureBase*.
+ * Only complete() and read() are typed — zero boxing overhead.
  */
 #ifndef MS_FUTURE_H
 #define MS_FUTURE_H
@@ -10,6 +12,12 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <assert.h>
+
+/* ARC runtime — futures participate in DRC refcounting.
+ * arc.h is always included before future.h (via native.h include order).
+ * Generated code emits msIncref/msDecref on future variables,
+ * so futures must be allocated via msAlloc (with refcount header). */
+#include "std/runtime/arc.h"
 
 /* ===== Thread-Local Storage (Standard reference threadvar pattern) ===== */
 
@@ -58,32 +66,68 @@ typedef struct msFutureCb {
 	struct msFutureCb* next;
 } msFutureCb;
 
-/* ===== Future (Standard reference implementation parity, type-erased) ===== */
+/* ===== Future Base (shared fields — used by event loop, callbacks, dispatch) ===== */
 
-typedef struct msFuture {
+typedef struct msFutureBase {
 	bool finished;
 	bool failed;          /* set by msFutureFail (even when error payload is NULL) */
 	bool cancelled;       /* set by msFutureCancel */
-	void* value;          /* result payload (type-erased) */
 	void* error;          /* error payload (may be NULL even when failed) */
-	void (*valueDestructor)(void*); /* optional: frees value on destroy (set by Promise.all etc.) */
+	void (*valueDestructor)(void*); /* optional: frees value on destroy (combinators) */
 	msFutureCb* callbacks;
 	msFutureCb* cbTail;   /* tail pointer for O(1) append */
-} msFuture;
+} msFutureBase;
 
-/* ===== Operations ===== */
+/* ===== Monomorphic Future Structs =====
+ * Each Future<T> gets a typed struct with base as FIRST field.
+ * C guarantees: pointer to struct == pointer to first member.
+ * So msFuture_double* can safely cast to msFutureBase*.
+ *
+ * Codegen emits MS_FUTURE_STRUCT for each instantiated Promise<T>. */
 
-/* Standard reference newFuture[T]() parity */
-static inline msFuture* msFutureCreate(void) {
-	msFuture* f = (msFuture*)calloc(1, sizeof(msFuture));
-	return f;
+#define MS_FUTURE_STRUCT(name, valtype) \
+	typedef struct name { msFutureBase base; valtype value; } name
+
+/* Common typed futures (always available) */
+MS_FUTURE_STRUCT(msFuture_double, double);
+MS_FUTURE_STRUCT(msFuture_int32, int32_t);
+MS_FUTURE_STRUCT(msFuture_int64, int64_t);
+MS_FUTURE_STRUCT(msFuture_bool, bool);
+
+/* Future<void> = just the base (no value field) */
+typedef msFutureBase msFuture_void;
+
+/* Future<ptr> — fallback for reference/pointer types (void* value) */
+MS_FUTURE_STRUCT(msFuture_ptr, void*);
+
+/* Backward compat: msFuture = msFuture_ptr (used by combinators, dispatch) */
+typedef msFuture_ptr msFuture;
+
+/* ===== Base Operations (work on any future via msFutureBase*) ===== */
+
+/* Allocate a typed future. Usage: msFutureCreateT(msFuture_double) */
+#define msFutureCreateT(type) ((type*)msAlloc(sizeof(type)))
+
+/* Untyped create — returns void* so it can be assigned to any typed future pointer.
+ * Allocates msFuture_ptr size (base + void* value) — correct for boxing path.
+ * Nim parity: newFuture[T]() returns a ref that's compatible with any Future[T]. */
+static inline void* msFutureCreate(void) {
+	return msAlloc(sizeof(msFuture));
 }
 
-/* Destroy future — free value (if destructor set), callback chain, and the future itself. */
-static inline void msFutureDestroyInner(msFuture* f) {
+/* Alias for combinator code clarity */
+#define msFutureCreateUntyped msFutureCreate
+
+/* Destroy future — clean up value (if destructor set), callbacks, free via ARC header.
+ * Works generically on any future type via msFutureBase* cast.
+ * valueDestructor is set by combinators (Promise.all) to free the values array. */
+static inline void msFutureDestroyInner(void* fp) {
+	msFutureBase* f = (msFutureBase*)fp;
 	if (f == NULL) return;
-	if (f->valueDestructor != NULL && f->value != NULL) {
-		f->valueDestructor(f->value);
+	if (f->valueDestructor != NULL) {
+		/* Value is the first field after base — access via msFuture_ptr layout */
+		void* val = ((msFuture_ptr*)fp)->value;
+		if (val != NULL) f->valueDestructor(val);
 	}
 	msFutureCb* cb = f->callbacks;
 	while (cb) {
@@ -91,45 +135,35 @@ static inline void msFutureDestroyInner(msFuture* f) {
 		free(cb);
 		cb = next;
 	}
-	free(f);
+	msDestroyAndDispose(f);
 }
 
 /* Non-DRC destroy (direct call) */
-static inline void msFutureDestroy(msFuture* f) { msFutureDestroyInner(f); }
+static inline void msFutureDestroy(void* f) { msFutureDestroyInner(f); }
 
 /* Standard reference future.finished parity */
-static inline bool msFutureFinished(msFuture* f) {
-	return f->finished;
+static inline bool msFutureFinished(void* fp) {
+	return ((msFutureBase*)fp)->finished;
 }
 
-/* Fire all registered callbacks directly (shared by complete/fail).
- * Direct invocation instead of callSoon — works correctly across threads.
- * When spawn completes on a pool thread, callbacks fire on that thread.
- * This matches most C future libraries and avoids cross-thread dispatcher issues. */
-static inline void msFutureFireCallbacks(msFuture* f) {
+/* Fire all registered callbacks via callSoon (reference parity).
+ * Deferred execution prevents reentrancy during msProcessTimers/msFutureComplete. */
+static inline void msFutureFireCallbacks(msFutureBase* f) {
 	msFutureCb* cb = f->callbacks;
 	f->callbacks = NULL;
 	f->cbTail = NULL;
 	while (cb) {
-		((void(*)(void*))cb->fn)(cb->env);
+		msCallSoon((msClosure){ .fn = (msClosureFn)cb->fn, .env = cb->env });
 		msFutureCb* next = cb->next;
 		free(cb);
 		cb = next;
 	}
 }
 
-/* Standard reference complete(fut, val) parity — sets value + fires callbacks.
- * Double-complete is a safe no-op (replaces assert for release safety). */
-static inline void msFutureComplete(msFuture* f, void* val) {
-	if (f->finished) return;
-	f->value = val;
-	f->finished = true;
-	msFutureFireCallbacks(f);
-}
-
 /* Standard reference fail(fut, err) parity — sets error + fires callbacks.
- * Double-fail/complete is a safe no-op (replaces assert for release safety). */
-static inline void msFutureFail(msFuture* f, void* err) {
+ * Works on any future type via msFutureBase*. */
+static inline void msFutureFail(void* fp, void* err) {
+	msFutureBase* f = (msFutureBase*)fp;
 	if (f->finished) return;
 	f->error = err;
 	f->failed = true;
@@ -137,11 +171,10 @@ static inline void msFutureFail(msFuture* f, void* err) {
 	msFutureFireCallbacks(f);
 }
 
-/* Cancel a pending future — clears callbacks without firing, marks finished+cancelled.
- * If already finished, this is a no-op. Matches standard reference pattern: clearCallbacks() + fail(). */
-static inline void msFutureCancel(msFuture* f) {
+/* Cancel a pending future — clears callbacks without firing, marks finished+cancelled. */
+static inline void msFutureCancel(void* fp) {
+	msFutureBase* f = (msFutureBase*)fp;
 	if (f->finished) return;
-	/* Free callback chain without firing them */
 	msFutureCb* cb = f->callbacks;
 	f->callbacks = NULL;
 	f->cbTail = NULL;
@@ -155,48 +188,16 @@ static inline void msFutureCancel(msFuture* f) {
 }
 
 /* Check if future was failed */
-static inline bool msFutureFailed(msFuture* f) {
-	return f->failed;
-}
+static inline bool msFutureFailed(void* fp) { return ((msFutureBase*)fp)->failed; }
 
 /* Check if future was cancelled */
-static inline bool msFutureCancelled(msFuture* f) {
-	return f->cancelled;
-}
+static inline bool msFutureCancelled(void* fp) { return ((msFutureBase*)fp)->cancelled; }
 
-/* Standard reference read(fut) parity — returns value or re-raises error via msErr flag.
- * Caller must check msErr after calling this (codegen does it via goto).
- * Error payload is stored in msErrPayload for inspection. */
-extern MS_THREAD_LOCAL bool msErr; /* from native.c — thread-local for spawn safety */
-extern MS_THREAD_LOCAL void* msErrPayload; /* from native.c */
-
-static inline void* msFutureRead(msFuture* f) {
-	assert(f->finished && "Future not yet finished");
-	if (f->cancelled) {
-		msErr = true;
-		msErrPayload = NULL;
-		return NULL;
-	}
-	if (f->failed) {
-		msErr = true;
-		msErrPayload = f->error; /* may be NULL — caller checks msErr, not payload */
-		return NULL;
-	}
-	void* v = f->value;
-	f->value = NULL;  /* prevent valueDestructor double-free after waitFor consumes the value */
-	return v;
-}
-
-/* Add callback — if already finished, call directly; else append to list.
- * Direct invocation avoids cross-thread dispatcher routing issues. */
-static inline void msFutureAddCallback(msFuture* f, msClosure cb) {
+/* Add callback — if already finished, defer via callSoon; else append to list. */
+static inline void msFutureAddCallback(void* fp, msClosure cb) {
+	msFutureBase* f = (msFutureBase*)fp;
 	if (f->finished) {
-		/* Already finished — call directly (not through callSoon) */
-		if (cb.env != NULL) {
-			((void(*)(void*))cb.fn)(cb.env);
-		} else {
-			((void(*)(void))cb.fn)();
-		}
+		msCallSoon(cb);
 		return;
 	}
 	msFutureCb* node = (msFutureCb*)malloc(sizeof(msFutureCb));
@@ -212,11 +213,72 @@ static inline void msFutureAddCallback(msFuture* f, msClosure cb) {
 	}
 }
 
-/* DRC lifecycle (Ref kind — receives variable by value, like msDecref/msPtrWasMoved) */
+/* ===== Typed Complete / Read (monomorphic — no boxing) ===== */
+
+/* Complete a typed future — sets value + fires callbacks.
+ * Usage: msFutureCompleteT(myDoubleFut, 3.14);
+ * Works for any MS_FUTURE_STRUCT type. For void futures, use msFutureCompleteVoid. */
+#define msFutureCompleteT(f, val) do { \
+	if (((msFutureBase*)(f))->finished) break; \
+	(f)->value = (val); \
+	((msFutureBase*)(f))->finished = true; \
+	msFutureFireCallbacks((msFutureBase*)(f)); \
+} while(0)
+
+/* Complete a void future (no value) */
+static inline void msFutureCompleteVoid(void* fp) {
+	msFutureBase* f = (msFutureBase*)fp;
+	if (f->finished) return;
+	f->finished = true;
+	msFutureFireCallbacks(f);
+}
+
+/* Complete with void* value (backward compat for combinators, spawn pipe) */
+static inline void msFutureComplete(void* fp, void* val) {
+	msFuture* f = (msFuture*)fp;
+	if (f->base.finished) return;
+	f->value = val;
+	f->base.finished = true;
+	msFutureFireCallbacks(&f->base);
+}
+
+/* ===== Error Re-raising (Standard reference read parity) ===== */
+
+extern MS_THREAD_LOCAL bool msErr;
+extern MS_THREAD_LOCAL void* msErrPayload;
+
+/* Check error status on a future base (used before typed read) */
+static inline bool msFutureCheckErr(void* fp) {
+	msFutureBase* f = (msFutureBase*)fp;
+	assert(f->finished && "Future not yet finished");
+	if (f->cancelled) { msErr = true; msErrPayload = NULL; return true; }
+	if (f->failed) { msErr = true; msErrPayload = f->error; return true; }
+	return false;
+}
+
+/* Read typed value. Usage: double v = msFutureReadT(myDoubleFut, 0.0);
+ * Sets msErr if failed/cancelled and returns zeroval. */
+#define msFutureReadT(f, zeroval) \
+	(msFutureCheckErr(f) ? (zeroval) : (f)->value)
+
+/* Legacy untyped read (for combinators, backward compat) */
+static inline void* msFutureRead(void* fp) {
+	msFuture* f = (msFuture*)fp;
+	assert(f->base.finished && "Future not yet finished");
+	if (f->base.cancelled) { msErr = true; msErrPayload = NULL; return NULL; }
+	if (f->base.failed) { msErr = true; msErrPayload = f->base.error; return NULL; }
+	void* v = f->value;
+	f->value = NULL;
+	return v;
+}
+
+/* ===== DRC lifecycle ===== */
+
 #define msFutureDrcDestroy(f) do { if ((f) != NULL) { msFutureDestroyInner(f); } } while(0)
 #define msFutureDrcWasMoved(f) do { (f) = NULL; } while(0)
 
-/* Value boxing for type-erased futures: box non-pointer values to void* */
+/* ===== Legacy Boxing (kept for combinator backward compat, Phase 2 removes) ===== */
+
 static inline void* msBoxDouble(double v) { double* p = (double*)malloc(sizeof(double)); *p = v; return p; }
 static inline double msUnboxDouble(void* p) { double v = *(double*)p; free(p); return v; }
 static inline void* msBoxInt32(int32_t v) { int32_t* p = (int32_t*)malloc(sizeof(int32_t)); *p = v; return p; }
@@ -224,17 +286,19 @@ static inline int32_t msUnboxInt32(void* p) { int32_t v = *(int32_t*)p; free(p);
 static inline void* msBoxBool(bool v) { bool* p = (bool*)malloc(sizeof(bool)); *p = v; return p; }
 static inline bool msUnboxBool(void* p) { bool v = *(bool*)p; free(p); return v; }
 
-/* ===== Async Stepper Callback (Nim createCb pattern) ===== */
-/* The stepper (state machine) returns the next msFuture* to wait on, or NULL when done.
+/* ===== Async Stepper Callback (createCb pattern) ===== */
+/* The stepper returns the next msFutureBase* to wait on, or NULL when done.
  * msAsyncCb drives the stepper: calls it, checks the result, re-registers on yielded future.
- * This eliminates the self-referencing closure problem — the stepper never references itself.
- * Defined as declarations here; implemented in dispatch.c (where arc.h is available for refcounting). */
+ * This eliminates the self-referencing closure problem. */
 
 typedef struct {
 	msClosure stepper;
 } msAsyncCbEnv;
 
 void msAsyncCb(void* raw);
-void msAsyncStart(msFuture* retFut, msClosure stepper);
+void msAsyncStart(void* retFut, msClosure stepper);
+
+/* ===== String boxing (kept for spawn pipe boundary) ===== */
+/* msBoxString/msUnboxString defined in native.h (needs msString type) */
 
 #endif /* MS_FUTURE_H */

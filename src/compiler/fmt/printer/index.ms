@@ -6,7 +6,7 @@ import { FormatOptions } from "../options";
 import {
 	Doc, docNil, docText, docGroup, docHardLine, docLineSuffix,
 } from "../doc";
-import { registerNodePrinter } from "./callbacks";
+import { registerNodePrinter, callPrintNode } from "./callbacks";
 
 import {
 	printNumberLiteral, printStringLiteral, printBooleanLiteral, printIdentifier,
@@ -15,7 +15,7 @@ import {
 	printBinaryExpr, printUnaryExpr, printUpdateExpr, printCallExpr,
 	printMemberExpr, printArrayAccess, printObjectLiteral, printArrayLiteral,
 	printArrowFunction, printConditionalExpr, printSpreadExpr, printNewExpr,
-	printTypeAssertion, printMatchExpr,
+	printTypeAssertion, printMatchExpr, printTryExpr, printMoveExpr,
 } from "./expressions";
 import {
 	printProgram, printBlock, printVariableDecl, printExprStmt,
@@ -56,6 +56,10 @@ export function printNode(node: Node, options: FormatOptions): Doc {
 		NodeKind.NewExpr => printNewExpr(node, options),
 		NodeKind.TypeAssertion => printTypeAssertion(node, options),
 		NodeKind.MatchExpr => printMatchExpr(node, options),
+		NodeKind.TryExpr => printTryExpr(node, options),
+		NodeKind.MoveExpr => printMoveExpr(node, options),
+		NodeKind.AwaitExpr => docGroup([docText("await "), callPrintNode((node.data as { awaitArg: Node }).awaitArg, options)]),
+		NodeKind.YieldExpr => docGroup([docText("yield "), callPrintNode((node.data as { yieldArg: Node }).yieldArg, options)]),
 
 		// ===== Statements =====
 		NodeKind.Program => printProgram(node, options),
@@ -100,13 +104,13 @@ export function printNode(node: Node, options: FormatOptions): Doc {
 		const leading: Doc[] = [];
 		const trailing: Doc[] = [];
 		for (const comment of node.comments) {
-			if (comment.line === node.location.line) {
-				// Same line as node — trailing comment
-				trailing.push(docLineSuffix([docText(" " + comment.value)]));
-			} else {
-				// Different line — leading comment
+			if (comment.line < node.location.line) {
+				// Before the node — leading comment
 				leading.push(docText(comment.value));
 				leading.push(docHardLine());
+			} else {
+				// Same line or after — trailing comment
+				trailing.push(docLineSuffix([docText(" " + comment.value)]));
 			}
 		}
 		if (leading.length > 0 || trailing.length > 0) {

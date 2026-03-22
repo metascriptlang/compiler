@@ -16,6 +16,4 @@ export class JSON {
 
 	@builtin("JsonStringify")
 	static extern stringify<T>(value: T): string;
-
-	static med(): void {}
 }

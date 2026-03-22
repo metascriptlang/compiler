@@ -3,7 +3,7 @@
 
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, DeclKind, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createSpan, createFunction, createTypeRef, createStruct, createRef, createResult, createPrimitive, substituteType, instantiateGeneric, anonStructName, isNumeric, isIntegerType, isStringType, isCallable, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, unwrapRef, isDiscriminatedUnion, findVariantByDiscriminant, findFieldInVariant, findUnionVariant, unifyType, createUnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, skipModifier, createPromise, isPromise, getPromiseInner, isResult, getResultOkType, createGenericParam, instantiateGenericBody } from "./types";
+import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createSpan, createFunction, createTypeRef, createStruct, createRef, createResult, createPrimitive, substituteType, instantiateGeneric, anonStructName, isNumeric, isIntegerType, isStringType, isCallable, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, unwrapRef, isDiscriminatedUnion, findVariantByDiscriminant, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, skipModifier, createPromise, isPromise, getPromiseInner, isResult, getResultOkType, createGenericParam, instantiateGenericBody } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag } from "./symbol";
 import { CheckerContext, addError, addErrorRange, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, isInAsyncPromiseResult } from "./context";
 import {
@@ -96,6 +96,7 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 // ===== Expression Checker =====
 
 export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): Type {
+	if (node === null) return null;
 	// Implementation parity: skip already-checked nodes (nfSem guard)
 	if ((node.flags & NodeFlag.Sem) !== 0 && node.nodeType !== null) return node.nodeType;
 	if (isCancelled(ctx.cancelCtx, ctx.cancelVersion)) return unknownType();
@@ -388,14 +389,28 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 				// Pass original expectedType so Ref wrapper is preserved for codegen heap-alloc
 				checkDiscriminatedConstruction(ctx, node, d, objExpected, expectedType);
 			} else if (objExpected !== null && objExpected.kind === TypeKind.Union) {
-				// Non-discriminated union (e.g. NodeData): find variant by field names
-				// and propagate field types to properties. Standard reference pattern:
-				// use variant type info for field-level type checking in union construction.
+				// Non-discriminated union: resolve variant, propagate field types.
+				// Reference parity: Nim's semObjConstr resolves fields then calls
+				// fitNode(field.typ, value) once per field. One pass, known types.
 				node.nodeType = objExpected;
-				// Try to find the matching variant to propagate field types
-				const varIdx = (d.keys.length > 0)
+				// Try name-only matching first (unique for most variants)
+				let varIdx = (d.keys.length > 0)
 					? findUnionVariant(objExpected, d.keys, [])
 					: -1;
+				// Ambiguous? (e.g. { value: X } matches both NumberLiteral and StringLiteral)
+				// Check properties without expectedType to get actual types, then disambiguate.
+				if (varIdx >= 0 && d.keys.length > 0 && isAmbiguousVariant(objExpected, varIdx, d.keys)) {
+					const propTypes: Type[] = [];
+					let pi = 0;
+					while (pi < d.properties.length) {
+						propTypes.push(checkExpr(ctx, d.properties[pi], null));
+						pi = pi + 1;
+					}
+					const refined = findUnionVariant(objExpected, d.keys, propTypes);
+					if (refined >= 0) varIdx = refined;
+				}
+				// Single pass: check properties WITH variant field types as expectedType
+				// (Nim: fitNode(field.typ, value) — proper literal coercion)
 				const variant = (varIdx >= 0 && objExpected.typeChildren !== null
 					&& varIdx < objExpected.typeChildren.length)
 					? objExpected.typeChildren[varIdx]
@@ -407,6 +422,11 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 						: null;
 					checkExpr(ctx, d.properties[fi], fieldExpected);
 					fi = fi + 1;
+				}
+				// Stamp variant index in high 16 bits of flags.
+				// +1 offset so 0 means "not set" (variant 0 becomes 1).
+				if (varIdx >= 0) {
+					node.flags = node.flags | (((varIdx + 1) as int32) << 16);
 				}
 				return objExpected;
 			} else {
@@ -437,7 +457,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 				? arrExpected.typeReturn
 				: null;
 			if (d.elements.length === 0) {
-				if (arrExpected !== null && (arrExpected.kind === TypeKind.Array || arrExpected.kind === TypeKind.SizedArray)) {
+				if (arrExpected !== null && (arrExpected.kind === TypeKind.SizedArray || arrExpected.kind === TypeKind.Array)) {
 					return arrExpected;
 				} else {
 					return createArray(unknownType());
@@ -446,7 +466,15 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 				const elemType = checkExpr(ctx, d.elements[0], elemExpected);
 				let i = 1;
 				while (i < d.elements.length) { checkExpr(ctx, d.elements[i], elemExpected); i += 1; }
-				if (arrExpected !== null && (arrExpected.kind === TypeKind.Array || arrExpected.kind === TypeKind.SizedArray)) {
+				// Reference parity (semArrayConstr): error only on too-many elements.
+				// Too-few is allowed at literal level; type compatibility catches mismatches.
+				if (arrExpected !== null && arrExpected.kind === TypeKind.SizedArray) {
+					const expectedLen = arrExpected.typeFlags;
+					if (d.elements.length > expectedLen) {
+						addError(ctx, `Fixed-size array expects at most ${expectedLen} element(s), got ${d.elements.length}`, node.location.line, node.location.column);
+					}
+					return arrExpected;
+				} else if (arrExpected !== null && arrExpected.kind === TypeKind.Array) {
 					return arrExpected;
 				} else {
 					return createArray(elemType);

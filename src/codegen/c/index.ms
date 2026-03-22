@@ -128,6 +128,12 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 	const b = createBuilder();
 	const retType = (mainRetType.length > 0) ? mainRetType : "void";
 
+	// Include system header when async main needs typed future types
+	if (retType.startsWith("msFuture_")) {
+		addLine(b, "#include \"std/core/system/native.h\"");
+		addNewline(b);
+	}
+
 	// Forward declarations for all module init functions
 	for (const mp of modulePaths) {
 		const modName = mangleModuleName(mp);
@@ -135,9 +141,6 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 		addLine(b, `void ${modName}__Init000(void);`);
 	}
 	if (hasUserMain) {
-		if (retType === "msFuture*") {
-			addLine(b, "typedef struct msFuture msFuture;");
-		}
 		addLine(b, `${retType} main_(void);`);
 	}
 	addNewline(b);
@@ -169,8 +172,8 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 	}
 	addLine(b, `${mangleModuleName(entryPath)}__Init000();`);
 	if (hasUserMain) {
-		if (retType === "msFuture*") {
-			// Async main — run event loop until completion (Nim pattern: waitFor at entry)
+		if (retType.startsWith("msFuture_")) {
+			// Async main — run event loop until completion
 			addLine(b, "extern void* msWaitFor(void*);");
 			addLine(b, "msWaitFor(main_());");
 		} else if (retType !== "void") {

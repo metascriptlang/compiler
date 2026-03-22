@@ -530,7 +530,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 			if (mainSym !== null && mainSym.symbolType !== null && mainSym.symbolType.typeReturn !== null) {
 				const retT = mainSym.symbolType.typeReturn;
 				if (isPromise(retT)) {
-					mainRetType = "msFuture*";
+					mainRetType = "msFuture_void*";
 				} else {
 					const ret = getSimpleTypeDesc(retT);
 					if (ret !== "") mainRetType = ret;

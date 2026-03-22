@@ -9,9 +9,10 @@ import {
 } from "../../../ast/node";
 import { FormatOptions } from "../options";
 import {
-	Doc, docText, docGroup, docIndent,
-	docLine, docSoftLine, docHardLine, docJoin,
+	Doc, docText, docGroup, docIndent, docLineSuffix,
+	docLine, docSoftLine, docHardLine, docIfBreak, docNil, docJoin,
 } from "../doc";
+import { Token } from "../../../lexer/token";
 import { callPrintNode } from "./callbacks";
 
 export function printImportDecl(node: Node, options: FormatOptions): Doc {
@@ -26,9 +27,18 @@ export function printImportDecl(node: Node, options: FormatOptions): Doc {
 				names.push(docText(d.importNames[i]));
 			}
 		}
-		parts.push(docText("{ "));
-		parts.push(docJoin(names, docText(", ")));
-		parts.push(docText(" }"));
+		// Prettier pattern: single specifier stays inline, multiple use group + indent + line
+		if (names.length === 1) {
+			parts.push(docText("{ "));
+			parts.push(names[0]);
+			parts.push(docText(" }"));
+		} else {
+			parts.push(docText("{"));
+			parts.push(docIndent([docLine(), docJoin(names, docGroup([docText(","), docLine()]))]));
+			parts.push(docIfBreak(docNil(), docText(",")));
+			parts.push(docLine());
+			parts.push(docText("}"));
+		}
 		parts.push(docText(" from "));
 	}
 	let q = "\"";
@@ -85,13 +95,37 @@ export function printEnumDecl(node: Node, options: FormatOptions): Doc {
 function printStructLikeDecl(node: Node, keyword: string): Doc {
 	const d = node.data as InterfaceDeclData;
 	if (d.interfaceFields.length === 0) return docText(keyword + " " + d.interfaceName + " {}");
+
+	// Build a map of comment line → comment text for inline comments on fields.
+	// Comments on the InterfaceDecl node that have line > node start are field comments.
+	const commentsByLine: Token[] = [];
+	const remaining: Token[] = [];
+	for (const comment of node.comments) {
+		if (comment.line > node.location.line) {
+			commentsByLine.push(comment);
+		} else {
+			remaining.push(comment);
+		}
+	}
+	node.comments = remaining;
+
 	const fields: Doc[] = [];
+	let commentIdx = 0;
 	for (let i = 0; i < d.interfaceFields.length; i += 1) {
 		let field = d.interfaceFields[i];
 		if (d.interfaceFieldTypes[i] !== "") {
 			field = field + ": " + d.interfaceFieldTypes[i];
 		}
-		fields.push(docText(field + ";"));
+		// Check if there's a trailing comment for this field (next comment in order)
+		if (commentIdx < commentsByLine.length) {
+			fields.push(docGroup([
+				docText(field + ";"),
+				docLineSuffix([docText(" " + commentsByLine[commentIdx].value)]),
+			]));
+			commentIdx = commentIdx + 1;
+		} else {
+			fields.push(docText(field + ";"));
+		}
 	}
 	return docGroup([
 		docText(keyword + " " + d.interfaceName + " {"),

@@ -1,6 +1,6 @@
 // std/os — System information (Node.js os module parity)
 
-import { CpuInfo } from "./native.h";
+import { CpuInfo, msOsHostname } from "./native.h";
 
 export extern function hostname(): string from "msOsHostname";
 export extern function platform(): string from "msOsPlatform";

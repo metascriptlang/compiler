@@ -376,10 +376,15 @@ function describeFmtDiff(orig: string, fmt: string): string {
 }
 
 // Shared indent/trailing-whitespace detection — used by both diagnostics and code actions.
+// Uses the "tabs for indentation, spaces for alignment" model (EditorConfig/Go convention):
+//   - Tabs-mode: tabs first, then optional trailing spaces for alignment → valid.
+//     Only flag when a space appears *before* a tab (interleaved).
+//   - Spaces-mode: any tab in leading whitespace → wrong.
 interface LineIndent {
 	indentEnd: number;
 	hasSpace: boolean;
 	hasTab: boolean;
+	isMixed: boolean;
 	trailStart: number;
 }
 
@@ -387,9 +392,14 @@ function detectLineIndent(line: string): LineIndent {
 	let indentEnd = 0;
 	let hasSpace = false;
 	let hasTab = false;
+	let isMixed = false;
+	let seenSpace = false;
 	while (indentEnd < line.length) {
-		if (line[indentEnd] === " ") { hasSpace = true; }
-		else if (line[indentEnd] === "\t") { hasTab = true; }
+		if (line[indentEnd] === " ") { hasSpace = true; seenSpace = true; }
+		else if (line[indentEnd] === "\t") {
+			hasTab = true;
+			if (seenSpace) { isMixed = true; }
+		}
 		else { break; }
 		indentEnd = indentEnd + 1;
 	}
@@ -397,7 +407,7 @@ function detectLineIndent(line: string): LineIndent {
 	while (trailStart > 0 && (line[trailStart - 1] === " " || line[trailStart - 1] === "\t")) {
 		trailStart = trailStart - 1;
 	}
-	return { indentEnd, hasSpace, hasTab, trailStart };
+	return { indentEnd, hasSpace, hasTab, isMixed, trailStart };
 }
 
 // Lint-style per-line format checks. Runs independently of the full formatter —
@@ -423,16 +433,19 @@ function checkFormatViolations(db: TransAmDb, path: string): string[] {
 
 		const info = detectLineIndent(line);
 		if (info.indentEnd > 0 && info.indentEnd < line.length) {
+			// Skip block comment continuation lines ( * text) — spaces before * are alignment
+			const afterIndent = line.byteAt(info.indentEnd);
+			if (afterIndent === "*".code) continue;
+			if (info.isMixed) {
+				result.push(lspFmtDiagnostic(i, 0, info.indentEnd, 4, "Mixed tabs and spaces", "metascript-fmt", 0));
+				continue;
+			}
 			if (useTabs && info.hasSpace && !info.hasTab) {
 				result.push(lspFmtDiagnostic(i, 0, info.indentEnd, 4, "Use tabs for indentation", "metascript-fmt", 0));
 				continue;
 			}
 			if (!useTabs && info.hasTab && !info.hasSpace) {
 				result.push(lspFmtDiagnostic(i, 0, info.indentEnd, 4, "Use spaces for indentation", "metascript-fmt", 0));
-				continue;
-			}
-			if (info.hasSpace && info.hasTab) {
-				result.push(lspFmtDiagnostic(i, 0, info.indentEnd, 4, "Mixed tabs and spaces", "metascript-fmt", 0));
 				continue;
 			}
 		}
@@ -1884,8 +1897,9 @@ export function handleCodeAction(id: string, params: string, db: TransAmDb): str
 
 	// Check if this line has a format violation
 	const options = getFormatOptions(db);
-	const hasIndentIssue = info.indentEnd > 0 && info.indentEnd < line.length
-		&& ((options.useTabs && info.hasSpace) || (!options.useTabs && info.hasTab) || (info.hasSpace && info.hasTab));
+	const isCommentCont = info.indentEnd > 0 && info.indentEnd < line.length && line.byteAt(info.indentEnd) === "*".code;
+	const hasIndentIssue = info.indentEnd > 0 && info.indentEnd < line.length && !isCommentCont
+		&& (info.isMixed || (options.useTabs && info.hasSpace && !info.hasTab) || (!options.useTabs && info.hasTab && !info.hasSpace));
 	const hasTrailingWs = info.trailStart < line.length && info.trailStart > 0;
 
 	if (hasIndentIssue || hasTrailingWs) {

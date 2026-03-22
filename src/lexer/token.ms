@@ -40,10 +40,11 @@ export interface Token {
 	value: string;
 	line: number;
 	column: number;
+	rawValue: string;
 }
 
 export function createToken(kind: TokenKind, tokenValue: string, lineNum: number): Token {
-	return { kind, value: tokenValue, line: lineNum, column: 0 };
+	return { kind, value: tokenValue, line: lineNum, column: 0, rawValue: "" };
 }
 
 export function formatToken(token: Token): string {

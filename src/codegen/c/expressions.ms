@@ -91,15 +91,24 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, p
 				const od = exprNode.data as ObjectLiteralData;
 				if (od.keys !== null && od.keys.length > 0) {
 					const unionName = getTypeDesc(g, exprNode.nodeType);
-					const keyArr: string[] = [];
-					const typeArr: Type[] = [];
-					for (let ki = 0; ki < od.keys.length; ki += 1) {
-						keyArr.push(od.keys[ki]);
-						if (ki < od.properties.length && od.properties[ki] !== null && od.properties[ki].nodeType !== null) {
-							typeArr.push(od.properties[ki].nodeType);
+					// Use checker-stamped variant index (reference parity: codegen reads, never re-determines)
+					const stamped = ((exprNode.flags >> 16) & 65535) as int32;
+					let varIdx = stamped > 0 ? stamped - 1 : -1;
+					// Fallback for unchecked nodes (transform-generated)
+					if (varIdx < 0) {
+						const keyArr: string[] = [];
+						const typeArr: Type[] = [];
+						for (let ki = 0; ki < od.keys.length; ki += 1) {
+							keyArr.push(od.keys[ki]);
+							if (ki < od.properties.length && od.properties[ki] !== null && od.properties[ki].nodeType !== null) {
+								typeArr.push(od.properties[ki].nodeType);
+							}
+						}
+						varIdx = findUnionVariant(exprNode.nodeType, keyArr, typeArr);
+						if (varIdx < 0 && typeArr.length > 0) {
+							varIdx = findUnionVariant(exprNode.nodeType, keyArr, []);
 						}
 					}
-					const varIdx = findUnionVariant(exprNode.nodeType, keyArr, typeArr);
 					if (varIdx >= 0) {
 						// Wrap in full union type so &temp is NodeData*, not variant*
 						p.labels += 1;
@@ -123,19 +132,26 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, p
 				innerType = paramType.typeReturn;
 			}
 			if (innerType !== null && innerType.kind === TypeKind.Union && exprNode !== null && exprNode.kind === NodeKind.ObjectLiteral) {
-				// Union variant: determine variant type from ObjectLiteral keys + types
+				// Union variant: use checker-stamped index, fallback to field matching
 				const od = exprNode.data as ObjectLiteralData;
 				if (od.keys !== null && od.keys.length > 0) {
 					const unionName = getTypeDesc(g, innerType);
-					const keyArr: string[] = [];
-					const typeArr: Type[] = [];
-					for (let ki = 0; ki < od.keys.length; ki += 1) {
-						keyArr.push(od.keys[ki]);
-						if (ki < od.properties.length && od.properties[ki] !== null && od.properties[ki].nodeType !== null) {
-							typeArr.push(od.properties[ki].nodeType);
+					const stamped = ((exprNode.flags >> 16) & 65535) as int32;
+					let varIdx = stamped > 0 ? stamped - 1 : -1;
+					if (varIdx < 0) {
+						const keyArr: string[] = [];
+						const typeArr: Type[] = [];
+						for (let ki = 0; ki < od.keys.length; ki += 1) {
+							keyArr.push(od.keys[ki]);
+							if (ki < od.properties.length && od.properties[ki] !== null && od.properties[ki].nodeType !== null) {
+								typeArr.push(od.properties[ki].nodeType);
+							}
+						}
+						varIdx = findUnionVariant(innerType, keyArr, typeArr);
+						if (varIdx < 0 && typeArr.length > 0) {
+							varIdx = findUnionVariant(innerType, keyArr, []);
 						}
 					}
-					const varIdx = findUnionVariant(innerType, keyArr, typeArr);
 					if (varIdx >= 0) {
 						// Emit as full union with tag + variant
 						p.labels += 1;
@@ -168,15 +184,23 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, p
 		const od = exprNode.data as ObjectLiteralData;
 		if (od.keys !== null && od.keys.length > 0) {
 			const unionName = getTypeDesc(g, paramType);
-			const keyArr: string[] = [];
-			const typeArr: Type[] = [];
-			for (let ki = 0; ki < od.keys.length; ki += 1) {
-				keyArr.push(od.keys[ki]);
-				if (ki < od.properties.length && od.properties[ki] !== null && od.properties[ki].nodeType !== null) {
-					typeArr.push(od.properties[ki].nodeType);
+			// Use checker-stamped variant index
+			const stamped = ((exprNode.flags >> 16) & 65535) as int32;
+			let varIdx = stamped > 0 ? stamped - 1 : -1;
+			if (varIdx < 0) {
+				const keyArr: string[] = [];
+				const typeArr: Type[] = [];
+				for (let ki = 0; ki < od.keys.length; ki += 1) {
+					keyArr.push(od.keys[ki]);
+					if (ki < od.properties.length && od.properties[ki] !== null && od.properties[ki].nodeType !== null) {
+						typeArr.push(od.properties[ki].nodeType);
+					}
+				}
+				varIdx = findUnionVariant(paramType, keyArr, typeArr);
+				if (varIdx < 0 && typeArr.length > 0) {
+					varIdx = findUnionVariant(paramType, keyArr, []);
 				}
 			}
-			const varIdx = findUnionVariant(paramType, keyArr, typeArr);
 			if (varIdx >= 0) {
 				p.labels += 1;
 				const tmpName = `_clit${p.labels}_`;
@@ -1131,22 +1155,25 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 							unionWrapIdx = varIdx;
 						}
 					} else {
-						// Undiscriminated: determine variant from field names + types
-						const keyArr: string[] = [];
-						const typeArr: Type[] = [];
-						for (let ki = 0; ki < d.keys.length; ki += 1) {
-							keyArr.push(d.keys[ki]);
-							if (ki < d.properties.length && d.properties[ki] !== null && d.properties[ki].nodeType !== null) {
-								typeArr.push(d.properties[ki].nodeType);
+						// Undiscriminated: use checker-stamped variant index (high 16 bits of flags).
+						// Reference parity: sem stamps resolved variant, codegen reads directly.
+						const stamped = ((node.flags >> 16) & 65535) as int32;
+						let varIdx = stamped > 0 ? stamped - 1 : -1;
+						// Fallback: re-match by field names + types (for nodes not checked, e.g. transforms)
+						if (varIdx < 0 && d.keys.length > 0) {
+							const keyArr: string[] = [];
+							const typeArr: Type[] = [];
+							for (let ki = 0; ki < d.keys.length; ki += 1) {
+								keyArr.push(d.keys[ki]);
+								if (ki < d.properties.length && d.properties[ki] !== null && d.properties[ki].nodeType !== null) {
+									typeArr.push(d.properties[ki].nodeType);
+								}
 							}
-						}
-						let varIdx = findUnionVariant(node.nodeType, keyArr, typeArr);
-						// Fallback: name-only matching when actual property type kinds
-						// differ from formal variant types (e.g., Int32 property for Number field).
-						// Reference parity: sem stamps resolved types on fields, codegen never
-						// re-determines variants. We approximate by falling back to name-only.
-						if (varIdx < 0 && typeArr.length > 0) {
-							varIdx = findUnionVariant(node.nodeType, keyArr, []);
+							varIdx = findUnionVariant(node.nodeType, keyArr, typeArr);
+							// Last resort: name-only if type kinds mismatch (constant folding, etc.)
+							if (varIdx < 0 && typeArr.length > 0) {
+								varIdx = findUnionVariant(node.nodeType, keyArr, []);
+							}
 						}
 						if (varIdx >= 0) {
 							cType = `${unionName}_v${varIdx}`;

@@ -105,7 +105,7 @@ export function containsYield(node: Node): boolean {
 		},
 		NodeKind.ExprStmt => { const d = node.data as ExprStmtData; return containsYield(d.expr); },
 		NodeKind.ReturnStmt => { const d = node.data as ReturnStmtData; return containsYield(d.argument); },
-		NodeKind.VariableDecl => { const d = node.data as VariableDeclData; return containsYield(d.initializer); },
+		NodeKind.VariableDecl => { const d = node.data as VariableDeclData; return d.initializer !== null && containsYield(d.initializer); },
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
 			return containsYield(d.condition) || containsYield(d.consequent) || containsYield(d.alternate);
@@ -170,7 +170,7 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 			}
 		} else if (stmt.kind === NodeKind.VariableDecl) {
 			const vd = stmt.data as VariableDeclData;
-			if (vd.initializer.kind === NodeKind.YieldExpr) {
+			if (vd.initializer !== null && vd.initializer.kind === NodeKind.YieldExpr) {
 				// const x = yield expr; → yield, then assign on resume
 				const yd = vd.initializer.data as YieldExprData;
 				const nextSt = (i + 1 < stmts.length) ? allocState(sc) : exitState;
@@ -186,7 +186,7 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 					currentState = nextSt;
 				}
 				i += 1;
-			} else {
+			} else if (vd.initializer !== null) {
 				// VariableDecl with yield somewhere in initializer — treat as normal for V1
 				// Convert to assignment since var is lifted
 				const assignStmt = makeExprStmt(
@@ -195,17 +195,17 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 				);
 				sc.items[currentState].stmts.push(assignStmt);
 				i += 1;
+			} else {
+				// No initializer — just skip, var is already lifted
+				i += 1;
 			}
 		} else if (stmt.kind === NodeKind.WhileStmt) {
-			splitWhile(stmt, sc, currentState, loc);
-			// After splitting while, allocate continuation state
+			// Flush current state to a new condition state so pre-loop stmts
+			// don't re-execute on back-edge. Same pattern as Nim's closureiters.
+			const condState = allocState(sc);
+			sc.items[currentState].stmts.push(makeStateAssign(condState, loc));
 			const afterSt = (i + 1 < stmts.length) ? allocState(sc) : exitState;
-			// The while exit transitions to afterSt — handled in splitWhile
-			// We need to patch: splitWhile uses exitState = afterSt
-			// Actually, redo: splitWhile needs to know where to go after the loop
-			// Let me restructure: splitWhile returns the exit state index
-			// For now, flush current state to transition to a condition state
-			// and splitWhile handles everything
+			splitWhile(stmt, sc, condState, afterSt, loc);
 			currentState = afterSt;
 			i += 1;
 		} else if (stmt.kind === NodeKind.IfStmt) {
@@ -228,15 +228,14 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 // Split while loop containing yield into states:
 // condState: if (cond) { $state = bodyStart } else { $state = exitState }
 // bodyStates: ... (recursive split, last transitions back to condState)
-function splitWhile(node: Node, sc: StateCollector, currentState: number, loc: SourceLocation): void {
+function splitWhile(node: Node, sc: StateCollector, currentState: number, exitState: number, loc: SourceLocation): void {
 	const wd = node.data as WhileStmtData;
 
 	// Condition state = currentState (reuse, already allocated)
 	const condState = currentState;
 
-	// Allocate body start and exit states
+	// Allocate body start (exit comes from caller — same pattern as splitIf)
 	const bodyStart = allocState(sc);
-	const exitState = allocState(sc);
 
 	// Condition: if (cond) { $state = bodyStart } else { $state = exitState }
 	sc.items[condState].stmts.push(
@@ -326,7 +325,7 @@ export function convertDeclsToAssigns(stmts: Node[], liftedNames: NameSet, loc: 
 		const stmt = stmts[i];
 		if (stmt.kind === NodeKind.VariableDecl) {
 			const vd = stmt.data as VariableDeclData;
-			if (nameSetContains(liftedNames, vd.declName)) {
+			if (nameSetContains(liftedNames, vd.declName) && vd.initializer !== null) {
 				// Convert: const/let x = init → x = init (assignment)
 				stmts[i] = makeExprStmt(
 					makeAssign(makeIdent(vd.declName, loc), vd.initializer, loc),
@@ -457,7 +456,7 @@ function walkGenerators(node: Node): void {
 		},
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
-			walkCheckFuncExpr(d.initializer);
+			if (d.initializer !== null) walkCheckFuncExpr(d.initializer);
 		},
 		_ => {},
 	};

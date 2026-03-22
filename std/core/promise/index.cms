@@ -46,5 +46,5 @@ export extern function waitFor<T>(fut: Promise<T>): T from "msWaitFor";
 
 export extern function sleepAsync(ms: number): Promise<void> from "msSleepAsync";
 
-// Async stepper start — Nim createCb pattern (used by asyncBridge, not user code)
+// Async stepper start — createCb pattern (used by asyncBridge, not user code)
 extern function msAsyncStart(retFut: Promise<void>, stepper: () => void): void;

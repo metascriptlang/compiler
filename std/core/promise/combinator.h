@@ -51,14 +51,14 @@ msFuture* msPromiseRace(msRefArray futures);
 
 /* Create pre-completed future (Reference: newFuture[T]() + complete(val)) */
 static inline msFuture* msPromiseResolve(void* val) {
-	msFuture* f = msFutureCreate();
+	msFuture* f = (msFuture*)msFutureCreate();
 	msFutureComplete(f, val);
 	return f;
 }
 
 /* Create pre-failed future (Reference: newFuture[T]() + fail(err)) */
 static inline msFuture* msPromiseReject(void* err) {
-	msFuture* f = msFutureCreate();
+	msFuture* f = (msFuture*)msFutureCreate();
 	msFutureFail(f, err);
 	return f;
 }

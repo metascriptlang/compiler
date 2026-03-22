@@ -16,9 +16,9 @@ static void msPromiseAllCb(void* env) {
 	/* Record result or failure */
 	if (!s->failed) {
 		msFuture* f = s->inputs[idx];
-		if (f->failed || f->cancelled) {
+		if (f->base.failed || f->base.cancelled) {
 			s->failed = true;
-			msFutureFail(s->result, f->error);
+			msFutureFail(s->result, f->base.error);
 		} else {
 			s->values[idx] = f->value;
 		}
@@ -28,7 +28,7 @@ static void msPromiseAllCb(void* env) {
 	s->remaining--;
 	if (s->remaining == 0) {
 		if (!s->failed) {
-			s->result->valueDestructor = free; /* values array freed when future destroyed */
+			s->result->base.valueDestructor = free; /* values array freed when future destroyed */
 			msFutureComplete(s->result, s->values);
 		} else {
 			free(s->values);
@@ -41,7 +41,7 @@ static void msPromiseAllCb(void* env) {
 msFuture* msPromiseAll(msRefArray arr) {
 	int count = (int)arr.len;
 	msFuture** futures = (arr.p != NULL) ? (msFuture**)arr.p->data : NULL;
-	msFuture* result = msFutureCreate();
+	msFuture* result = (msFuture*)msFutureCreate();
 
 	if (count == 0 || futures == NULL) {
 		msFutureComplete(result, NULL);
@@ -82,8 +82,8 @@ static void msPromiseRaceCb(void* env) {
 	/* First settlement wins */
 	if (!s->settled) {
 		s->settled = true;
-		if (f->failed || f->cancelled) {
-			msFutureFail(s->result, f->error);
+		if (f->base.failed || f->base.cancelled) {
+			msFutureFail(s->result, f->base.error);
 		} else {
 			msFutureComplete(s->result, f->value);
 		}
@@ -97,7 +97,7 @@ static void msPromiseRaceCb(void* env) {
 msFuture* msPromiseRace(msRefArray arr) {
 	int count = (int)arr.len;
 	msFuture** futures = (arr.p != NULL) ? (msFuture**)arr.p->data : NULL;
-	msFuture* result = msFutureCreate();
+	msFuture* result = (msFuture*)msFutureCreate();
 
 	if (count == 0 || futures == NULL) return result;  /* never settles — ECMAScript spec */
 
@@ -136,7 +136,7 @@ static void msPromiseAllSettledCb(void* env) {
 msFuture* msPromiseAllSettled(msRefArray arr) {
 	int count = (int)arr.len;
 	msFuture** futures = (arr.p != NULL) ? (msFuture**)arr.p->data : NULL;
-	msFuture* result = msFutureCreate();
+	msFuture* result = (msFuture*)msFutureCreate();
 
 	if (count == 0 || futures == NULL) {
 		msFutureComplete(result, NULL);
@@ -175,7 +175,7 @@ static void msPromiseAnyCb(void* env) {
 
 	/* First fulfillment wins */
 	if (!s->resolved) {
-		if (!(f->failed || f->cancelled)) {
+		if (!(f->base.failed || f->base.cancelled)) {
 			s->resolved = true;
 			msFutureComplete(s->result, f->value);
 		} else {
@@ -194,7 +194,7 @@ static void msPromiseAnyCb(void* env) {
 msFuture* msPromiseAny(msRefArray arr) {
 	int count = (int)arr.len;
 	msFuture** futures = (arr.p != NULL) ? (msFuture**)arr.p->data : NULL;
-	msFuture* result = msFutureCreate();
+	msFuture* result = (msFuture*)msFutureCreate();
 
 	if (count == 0 || futures == NULL) {
 		msFutureFail(result, (void*)"All promises were rejected");
@@ -239,7 +239,7 @@ static void msPromiseRejectFn(void* env, void* error) {
 }
 
 msFuture* msPromiseNew(msClosure executor) {
-	msFuture* f = msFutureCreate();
+	msFuture* f = (msFuture*)msFutureCreate();
 	msPromiseNewEnv* env = (msPromiseNewEnv*)calloc(1, sizeof(msPromiseNewEnv));
 	env->future = f;
 	msClosure resolve = { .fn = (msClosureFn)msPromiseResolveFn, .env = env };
@@ -261,8 +261,8 @@ msFuture* msPromiseNew(msClosure executor) {
  * Type tag determines how to pass the value to match the callback's C signature. */
 static void msFutureThenCb(void* raw) {
 	msFutureThenEnv* e = (msFutureThenEnv*)raw;
-	if (e->input->failed || e->input->cancelled) {
-		msFutureFail(e->output, e->input->error);
+	if (e->input->base.failed || e->input->base.cancelled) {
+		msFutureFail(e->output, e->input->base.error);
 		free(e);
 		return;
 	}
@@ -314,7 +314,7 @@ msFuture* msFutureThen(msFuture* input, msClosure onFulfilled) {
 }
 
 msFuture* msFutureThenTyped(msFuture* input, msClosure onFulfilled, int typeTag) {
-	msFuture* output = msFutureCreate();
+	msFuture* output = (msFuture*)msFutureCreate();
 	msFutureThenEnv* env = (msFutureThenEnv*)malloc(sizeof(msFutureThenEnv));
 	env->output = output; env->input = input; env->onFulfilled = onFulfilled; env->typeTag = typeTag;
 	msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)msFutureThenCb, .env = env});
@@ -325,9 +325,9 @@ msFuture* msFutureThenTyped(msFuture* input, msClosure onFulfilled, int typeTag)
 
 static void msFutureCatchCb(void* raw) {
 	msFutureCatchEnv* e = (msFutureCatchEnv*)raw;
-	if (e->input->failed || e->input->cancelled) {
-		void* err = e->input->error;
-		e->input->error = NULL;  /* consumed — prevent double-free */
+	if (e->input->base.failed || e->input->base.cancelled) {
+		void* err = e->input->base.error;
+		e->input->base.error = NULL;  /* consumed — prevent double-free */
 		void* fn = (void*)e->onRejected.fn;
 		void* env = e->onRejected.env;
 		/* Error is always a string (msString*) in MetaScript */
@@ -360,7 +360,7 @@ msFuture* msFutureCatch(msFuture* input, msClosure onRejected) {
 }
 
 msFuture* msFutureCatchTyped(msFuture* input, msClosure onRejected, int typeTag) {
-	msFuture* output = msFutureCreate();
+	msFuture* output = (msFuture*)msFutureCreate();
 	msFutureCatchEnv* env = (msFutureCatchEnv*)malloc(sizeof(msFutureCatchEnv));
 	env->output = output; env->input = input; env->onRejected = onRejected; env->typeTag = typeTag;
 	msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)msFutureCatchCb, .env = env});
@@ -376,8 +376,8 @@ static void msFutureFinallyCb(void* raw) {
 	} else {
 		((void(*)(void))e->onSettled.fn)();
 	}
-	if (e->input->failed || e->input->cancelled) {
-		msFutureFail(e->output, e->input->error);
+	if (e->input->base.failed || e->input->base.cancelled) {
+		msFutureFail(e->output, e->input->base.error);
 	} else {
 		msFutureComplete(e->output, e->input->value);
 	}
@@ -385,7 +385,7 @@ static void msFutureFinallyCb(void* raw) {
 }
 
 msFuture* msFutureFinally(msFuture* input, msClosure onSettled) {
-	msFuture* output = msFutureCreate();
+	msFuture* output = (msFuture*)msFutureCreate();
 	msFutureFinallyEnv* env = (msFutureFinallyEnv*)malloc(sizeof(msFutureFinallyEnv));
 	env->output = output; env->input = input; env->onSettled = onSettled;
 	msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)msFutureFinallyCb, .env = env});

@@ -4,7 +4,7 @@
 // Two-tier cache (forwTypeCache for forward decls, typeCache for full defs).
 // Topological emit with cycle detection via forward declarations.
 
-import { isStructType, getTypeSize, skipModifier, isPromise, isResult, getResultOkType, getResultErrType, substituteType, createStruct, needsRC } from "../../checker/types";
+import { isStructType, getTypeSize, skipModifier, isPromise, getPromiseInner, isResult, getResultOkType, getResultErrType, substituteType, createStruct, needsRC } from "../../checker/types";
 import { getGenericDecl } from "../../parser/context";
 import { Node, NodeKind, CallExprData, Type, TypeKind, CallingConvention, SymbolKind } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
@@ -560,10 +560,7 @@ export function getTypeDesc(g: CGen, t: Type): string {
 		return ptrType;
 	}
 	if (isResult(t)) return genResultType(g, t);
-	if (isPromise(t)) {
-		typeCacheSet(g.typeCache, key, "msFuture*");
-		return "msFuture*";
-	}
+	if (isPromise(t)) return genFutureType(g, t);
 	if (k === TypeKind.Union) return genUnionType(g, t);
 	if (k === TypeKind.Tuple) return genTupleType(g, t);
 	if (k === TypeKind.Unknown) return "void*";
@@ -1073,6 +1070,49 @@ export function genResultType(g: CGen, t: Type): string {
 	addNewline(b);
 
 	return name;
+}
+
+// ===== Future Type Generation =====
+
+export function genFutureType(g: CGen, t: Type): string {
+	const innerType = getPromiseInner(t);
+	const key = typeKey(t);
+
+	// Promise<void> → msFuture_void* (typedef of msFutureBase, predefined in future.h)
+	if (innerType === null || innerType.kind === TypeKind.Void) {
+		typeCacheSet(g.typeCache, key, "msFuture_void*");
+		return "msFuture_void*";
+	}
+
+	const innerDesc = getTypeDesc(g, innerType);
+
+	// Map to predefined typed futures (avoid re-emitting structs already in future.h)
+	if (innerDesc === "double") { typeCacheSet(g.typeCache, key, "msFuture_double*"); return "msFuture_double*"; }
+	if (innerDesc === "int32_t") { typeCacheSet(g.typeCache, key, "msFuture_int32*"); return "msFuture_int32*"; }
+	if (innerDesc === "int64_t") { typeCacheSet(g.typeCache, key, "msFuture_int64*"); return "msFuture_int64*"; }
+	if (innerDesc === "bool" || innerDesc === "MS_BOOL") { typeCacheSet(g.typeCache, key, "msFuture_bool*"); return "msFuture_bool*"; }
+
+	// Pointer/reference types → msFuture_ptr* (void* value, predefined)
+	if (innerDesc.endsWith("*")) {
+		typeCacheSet(g.typeCache, key, "msFuture_ptr*");
+		return "msFuture_ptr*";
+	}
+
+	// String → emit custom struct (msString is a value type, not a pointer)
+	// Other value types (structs, tuples) → emit custom struct
+	const name = "msFuture_" + mangle(innerDesc);
+	typeCacheSet(g.typeCache, key, name + "*");
+
+	// Emit struct (guarded for cross-module safety, same pattern as genResultType)
+	ensureForwardDecl(g, name);
+	const b = sec(g, CSection.Types);
+	addLine(b, "#ifndef " + name + "_DEFINED");
+	addLine(b, "#define " + name + "_DEFINED");
+	addLine(b, "MS_FUTURE_STRUCT(" + name + ", " + innerDesc + ");");
+	addLine(b, "#endif");
+	addNewline(b);
+
+	return name + "*";
 }
 
 // ===== Tuple Type Generation =====

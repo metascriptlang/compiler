@@ -28,7 +28,7 @@ import {
 	syntheticToken, extractBodyStmts, collectDeclNames,
 } from "../util";
 import { NameSet, createNameSet, nameSetContains, nameSetAdd } from "../context";
-import { createPromise, createFunction, voidType, unknownType, booleanType, numberType, int32Type } from "../../checker/types";
+import { createPromise, createFunction, voidType, unknownType, booleanType, numberType, int32Type, isPromise, getPromiseInner } from "../../checker/types";
 import {
 	GenState, StateCollector, allocState, containsYield, splitStmts, convertDeclsToAssigns, makeStateAssign,
 } from "./generatorLower";
@@ -76,6 +76,11 @@ function findVarType(entries: VarTypeInfo[], name: string): Type {
 	return null as unknown as Type;
 }
 
+// Promise<T> from inner type, or Promise<void> if null
+function promiseTypeFor(inner: Type): Type {
+	return inner !== null ? createPromise(inner) : createPromise(voidType());
+}
+
 // ===== Core: Rewrite a was-async function body =====
 
 // Check if this function body contains any yield (from asyncDesugar converting await→yield).
@@ -115,13 +120,13 @@ function hasYieldInBody(node: Node): boolean {
 
 // Rewrite return stmts in the body for the state machine:
 // return val → msFutureComplete($retFut, val); return;
-function rewriteAsyncReturns(stmts: Node[], promiseType: Type, loc: SourceLocation): void {
+function rewriteAsyncReturns(stmts: Node[], promiseType: Type, fnReturnInner: Type, loc: SourceLocation): void {
 	for (let i = 0; i < stmts.length; i += 1) {
 		const stmt = stmts[i];
 		if (stmt === null) continue;
 		if (stmt.kind === NodeKind.ReturnStmt) {
 			const rd = stmt.data as ReturnStmtData;
-			const retVal = rd.argument !== null ? boxReturnValue(rd.argument, loc) : makeNull(loc);
+			const retVal = rd.argument !== null ? boxReturnValue(rd.argument, fnReturnInner, loc) : makeNull(loc);
 			const block = makeBlock([
 				makeStateAssign(-1, loc),
 				makeExprStmt(makeCall(
@@ -134,27 +139,27 @@ function rewriteAsyncReturns(stmts: Node[], promiseType: Type, loc: SourceLocati
 			stmts[i] = block;
 		} else if (stmt.kind === NodeKind.BlockStmt) {
 			const bd = stmt.data as BlockStmtData;
-			rewriteAsyncReturns(bd.statements, promiseType, loc);
+			rewriteAsyncReturns(bd.statements, promiseType, fnReturnInner, loc);
 		} else if (stmt.kind === NodeKind.IfStmt) {
 			const id = stmt.data as IfStmtData;
 			if (id.consequent !== null && id.consequent.kind === NodeKind.BlockStmt) {
-				rewriteAsyncReturns((id.consequent.data as BlockStmtData).statements, promiseType, loc);
+				rewriteAsyncReturns((id.consequent.data as BlockStmtData).statements, promiseType, fnReturnInner, loc);
 			}
 			if (id.alternate !== null && id.alternate.kind === NodeKind.BlockStmt) {
-				rewriteAsyncReturns((id.alternate.data as BlockStmtData).statements, promiseType, loc);
+				rewriteAsyncReturns((id.alternate.data as BlockStmtData).statements, promiseType, fnReturnInner, loc);
 			}
 		} else if (stmt.kind === NodeKind.WhileStmt) {
 			const wd = stmt.data as WhileStmtData;
 			if (wd.whileBody !== null && wd.whileBody.kind === NodeKind.BlockStmt) {
-				rewriteAsyncReturns((wd.whileBody.data as BlockStmtData).statements, promiseType, loc);
+				rewriteAsyncReturns((wd.whileBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc);
 			}
 		} else if (stmt.kind === NodeKind.TryCatchStmt) {
 			const td = stmt.data as TryCatchStmtData;
 			if (td.tryBody !== null && td.tryBody.kind === NodeKind.BlockStmt) {
-				rewriteAsyncReturns((td.tryBody.data as BlockStmtData).statements, promiseType, loc);
+				rewriteAsyncReturns((td.tryBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc);
 			}
 			if (td.catchBody !== null && td.catchBody.kind === NodeKind.BlockStmt) {
-				rewriteAsyncReturns((td.catchBody.data as BlockStmtData).statements, promiseType, loc);
+				rewriteAsyncReturns((td.catchBody.data as BlockStmtData).statements, promiseType, fnReturnInner, loc);
 			}
 		}
 	}
@@ -182,6 +187,28 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 	for (let i = sc.items.length - 1; i >= 0; i -= 1) {
 		const state = sc.items[i];
 		const stateStmts: Node[] = [];
+
+		// If previous state was a yield with a variable, emit unbox+assign at state entry.
+		// This runs for BOTH yield and non-yield states (a state can resume from a previous
+		// yield AND itself yield — e.g., `const num = await f(); const msg = await g();`).
+		if (i > 0 && sc.items[i - 1].isYield && sc.items[i - 1].yieldVarName !== "") {
+			const prevIdx = i - 1;
+			const futName = "$yf" + prevIdx;
+			const varName = sc.items[prevIdx].yieldVarName;
+			const varType = sc.items[prevIdx].yieldVarType;
+			const prevYfType = promiseTypeFor(varType);
+			let readExpr: Node = makeCall(makeIdent("msFutureRead", loc), [makeTypedIdent(futName, prevYfType, loc)], loc);
+			if (varType !== null) {
+				const unboxFn = unboxFnForAwait(varType);
+				if (unboxFn !== "") {
+					readExpr = makeCall(makeIdent(unboxFn, loc), [readExpr], loc);
+				}
+			}
+			stateStmts.push(makeExprStmt(
+				makeAssign(makeIdent(varName, loc), readExpr, loc),
+				loc,
+			));
+		}
 
 		if (state.isYield) {
 			// This state yields a future. The original stmts end with:
@@ -211,10 +238,11 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 					}
 				}
 
-				// Save yielded future to a hoisted local
+				// Save yielded future to a hoisted local (typed: Promise<T> from yield variable)
 				const futName = "$yf" + i;
+				const yfType = promiseTypeFor(state.yieldVarType);
 				const futAssign = makeExprStmt(
-					makeAssign(makeTypedIdent(futName, promiseType, loc), yieldArg, loc),
+					makeAssign(makeTypedIdent(futName, yfType, loc), yieldArg, loc),
 					loc,
 				);
 				stateStmts.push(futAssign);
@@ -223,41 +251,20 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 				stateStmts.push(state.stmts[copyEnd - 2]); // $state = nextState
 
 				// Pre-resolved check: if (msFutureFinished($yf_N)) continue;
-				const finishedCheck = makeCall(makeIdent("msFutureFinished", loc), [makeTypedIdent(futName, promiseType, loc)], loc);
+				const finishedCheck = makeCall(makeIdent("msFutureFinished", loc), [makeTypedIdent(futName, yfType, loc)], loc);
 				finishedCheck.nodeType = booleanType();
 				const continueStmt = makeContinue(loc);
 				const preResolvedIf = makeIf(finishedCheck, makeBlock([continueStmt], loc), makeBlock([], loc), loc);
 				stateStmts.push(preResolvedIf);
 
 				// Not resolved: return the yielded future to msAsyncCb for registration
-				stateStmts.push(makeReturn(makeTypedIdent(futName, promiseType, loc), loc));
+				stateStmts.push(makeReturn(makeTypedIdent(futName, yfType, loc), loc));
 			} else {
 				// Unexpected — just copy all stmts
 				for (const s of state.stmts) { stateStmts.push(s); }
 			}
 		} else {
-			// Non-yield state: if previous state was a yield, insert msFutureRead + unbox
-			if (i > 0 && sc.items[i - 1].isYield && sc.items[i - 1].yieldVarName !== "") {
-				const prevIdx = i - 1;
-				const futName = "$yf" + prevIdx;
-				const varName = sc.items[prevIdx].yieldVarName;
-				const varType = sc.items[prevIdx].yieldVarType;
-				// x = unbox(msFutureRead($yf_N)) — extract + unbox value from resolved future
-				let readExpr: Node = makeCall(makeIdent("msFutureRead", loc), [makeTypedIdent(futName, promiseType, loc)], loc);
-				// Wrap with unbox function based on awaited type (same as waitFor)
-				if (varType !== null) {
-					const unboxFn = unboxFnForAwait(varType);
-					if (unboxFn !== "") {
-						readExpr = makeCall(makeIdent(unboxFn, loc), [readExpr], loc);
-					}
-				}
-				const readAssign = makeExprStmt(
-					makeAssign(makeIdent(varName, loc), readExpr, loc),
-					loc,
-				);
-				stateStmts.push(readAssign);
-			}
-			// Copy stmts directly
+			// Non-yield state: copy stmts directly (unbox+assign already emitted above)
 			for (const s of state.stmts) { stateStmts.push(s); }
 		}
 
@@ -271,13 +278,15 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 	return current;
 }
 
-function rewriteAwaitAsyncBody(body: Node): Node {
+function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type): Node {
 	if (body === null) return body;
 	if (body.kind !== NodeKind.BlockStmt) return body;
 
 	const loc = body.location;
+	// retFutType: actual typed Promise for $retFut (Promise<number> → msFuture_double*)
+	const retFutType = promiseTypeFor(fnReturnInner);
 	const promiseVoidType = createPromise(voidType());
-	const stepperRetType = createFunction([], [], unknownType());  // returns void* (msFuture* or NULL)
+	const stepperRetType = createFunction([], [], unknownType());  // returns void* (msFutureBase* or NULL)
 	const closureType = stepperRetType;
 
 	// 1. Extract body statements
@@ -292,13 +301,13 @@ function rewriteAwaitAsyncBody(body: Node): Node {
 	collectDeclNames(body, nc, false);
 
 	// 3. Rewrite returns: return val → msFutureComplete($retFut, val); return null;
-	rewriteAsyncReturns(bodyStmts, promiseVoidType, loc);
+	rewriteAsyncReturns(bodyStmts, retFutType, fnReturnInner, loc);
 
 	// 3b. Implicit completion for void async functions (no explicit return at end)
 	// Nim does this implicitly; we must add it explicitly.
 	bodyStmts.push(makeExprStmt(makeCall(
 		makeIdent("msFutureComplete", loc),
-		[makeTypedIdent("$retFut", promiseVoidType, loc), makeNull(loc)],
+		[makeTypedIdent("$retFut", retFutType, loc), makeNull(loc)],
 		loc,
 	), loc));
 	bodyStmts.push(makeReturn(makeNull(loc), loc));
@@ -309,12 +318,28 @@ function rewriteAwaitAsyncBody(body: Node): Node {
 	const doneState = -1;
 	splitStmts(bodyStmts, sc, initState, doneState, loc);
 
-	// 5. Convert variable declarations to assignments in all state bodies
+	// 5. Patch yieldVarType from collected varTypes (nodeType may be cleared by transforms)
+	for (let si = 0; si < sc.items.length; si += 1) {
+		if (sc.items[si].isYield && sc.items[si].yieldVarName !== "") {
+			const collected = findVarType(varTypes, sc.items[si].yieldVarName);
+			if (collected !== null) {
+				sc.items[si].yieldVarType = collected;
+			}
+		}
+	}
+
+	// 6. Convert variable declarations to assignments in all state bodies
 	// Also add yielded-future locals ($yf0, $yf1, ...) to the hoisted set
+	// with typed future types (Promise<T> from the yield variable type)
 	for (let si = 0; si < sc.items.length; si += 1) {
 		convertDeclsToAssigns(sc.items[si].stmts, nc, loc);
 		if (sc.items[si].isYield) {
-			nameSetAdd(nc, "$yf" + si);
+			const yfName = "$yf" + si;
+			nameSetAdd(nc, yfName);
+			// Set $yf type to Promise<T> where T = yield variable type
+			const yfVarType = sc.items[si].yieldVarType;
+			const yfFutType = promiseTypeFor(yfVarType);
+			varTypes.push({ name: yfName, varType: yfFutType });
 		}
 	}
 
@@ -327,7 +352,7 @@ function rewriteAwaitAsyncBody(body: Node): Node {
 	const failCall = makeExprStmt(
 		makeCall(
 			makeIdent("msFutureFail", loc),
-			[makeTypedIdent("$retFut", promiseVoidType, loc), makeIdent("$e", loc)],
+			[makeTypedIdent("$retFut", retFutType, loc), makeIdent("$e", loc)],
 			loc,
 		),
 		loc,
@@ -349,11 +374,11 @@ function rewriteAwaitAsyncBody(body: Node): Node {
 	// 9. Build outer function body
 	const outerStmts: Node[] = [];
 
-	// const $retFut = msFutureCreate();
+	// const $retFut = msFutureCreate();  (typed: msFuture_double*, msFuture_void*, etc.)
 	const retFutInit = makeCall(makeIdent("msFutureCreate", loc), [], loc);
-	retFutInit.nodeType = promiseVoidType;
+	retFutInit.nodeType = retFutType;
 	const retFutDecl = makeVarDecl("$retFut", retFutInit, DeclKind.Const, loc);
-	retFutDecl.nodeType = promiseVoidType;
+	retFutDecl.nodeType = retFutType;
 	outerStmts.push(retFutDecl);
 
 	// let $state = 0;
@@ -382,34 +407,46 @@ function rewriteAwaitAsyncBody(body: Node): Node {
 	// msAsyncStart($retFut, $stepper) — Nim createCb pattern: C callback drives the stepper
 	const kickoffCall = makeCall(
 		makeIdent("msAsyncStart", loc),
-		[makeTypedIdent("$retFut", promiseVoidType, loc), makeTypedIdent("$stepper", closureType, loc)],
+		[makeTypedIdent("$retFut", retFutType, loc), makeTypedIdent("$stepper", closureType, loc)],
 		loc,
 	);
 	outerStmts.push(makeExprStmt(kickoffCall, loc));
 
 	// return $retFut;
-	const returnFut = makeReturn(makeTypedIdent("$retFut", promiseVoidType, loc), loc);
+	const returnFut = makeReturn(makeTypedIdent("$retFut", retFutType, loc), loc);
 	outerStmts.push(returnFut);
 
 	return makeBlock(outerStmts, loc);
 }
 
 // Box a return value for msFutureComplete(fut, void*). Non-void non-pointer values
-// need boxing via msBoxDouble/msBoxBool. Void returns pass NULL.
-function boxReturnValue(retVal: Node, loc: SourceLocation): Node {
+// need boxing (msBoxDouble/msBoxBool/msBoxInt32/msBoxString). Void returns pass NULL.
+// Uses the function's declared return type (fnReturnInner) for consistency with unbox side.
+function boxReturnValue(retVal: Node, fnReturnInner: Type, loc: SourceLocation): Node {
 	if (retVal === null) return makeNull(loc);
-	if (retVal.nodeType === null) return retVal;
-	return match (retVal.nodeType.kind) {
-		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => makeCall(makeIdent("msBoxDouble", loc), [retVal], loc),
-		TypeKind.Boolean => makeCall(makeIdent("msBoxBool", loc), [retVal], loc),
-		TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 => makeCall(makeIdent("msBoxInt32", loc), [retVal], loc),
+	// Use the function's declared return type for boxing (matches unbox side which uses variable type)
+	const t = fnReturnInner !== null ? fnReturnInner : retVal.nodeType;
+	if (t !== null) {
+		return match (t.kind) {
+			TypeKind.Number | TypeKind.Float64 | TypeKind.Float32 => makeCall(makeIdent("msBoxDouble", loc), [retVal], loc),
+			TypeKind.Boolean => makeCall(makeIdent("msBoxBool", loc), [retVal], loc),
+			TypeKind.Int8 | TypeKind.Int16 | TypeKind.Int32 | TypeKind.Int64 => makeCall(makeIdent("msBoxInt32", loc), [retVal], loc),
+			TypeKind.String => makeCall(makeIdent("msBoxString", loc), [retVal], loc),
+			_ => retVal,
+		};
+	}
+	// Fallback: box based on node kind (nodeType may be null for literals after transforms)
+	return match (retVal.kind) {
+		NodeKind.NumberLiteral => makeCall(makeIdent("msBoxDouble", loc), [retVal], loc),
+		NodeKind.StringLiteral => makeCall(makeIdent("msBoxString", loc), [retVal], loc),
+		NodeKind.BooleanLiteral => makeCall(makeIdent("msBoxBool", loc), [retVal], loc),
 		_ => retVal,
 	};
 }
 
 // Recursively rewrite all ReturnStmt nodes to msFutureComplete + return $retFut.
 // Stops at nested function boundaries (each function has its own return semantics).
-function rewriteReturns(node: Node, promiseType: Type): void {
+function rewriteReturns(node: Node, promiseType: Type, fnReturnInner: Type): void {
 	if (node === null) return;
 	match (node.kind) {
 		NodeKind.FunctionDecl | NodeKind.FunctionExpr | NodeKind.ArrowFunction => {},
@@ -420,7 +457,7 @@ function rewriteReturns(node: Node, promiseType: Type): void {
 				if (stmt.kind === NodeKind.ReturnStmt) {
 					const rd = stmt.data as ReturnStmtData;
 					const loc = stmt.location;
-					const retVal = rd.argument !== null ? boxReturnValue(rd.argument, loc) : makeNull(loc);
+					const retVal = rd.argument !== null ? boxReturnValue(rd.argument, fnReturnInner, loc) : makeNull(loc);
 					const completeCall = makeCall(
 						makeIdent("msFutureComplete", loc),
 						[makeTypedIdent("$retFut", promiseType, loc), retVal],
@@ -429,7 +466,7 @@ function rewriteReturns(node: Node, promiseType: Type): void {
 					newStmts.push(makeExprStmt(completeCall, loc));
 					newStmts.push(makeReturn(makeTypedIdent("$retFut", promiseType, loc), loc));
 				} else {
-					rewriteReturns(stmt, promiseType);
+					rewriteReturns(stmt, promiseType, fnReturnInner);
 					newStmts.push(stmt);
 				}
 			}
@@ -437,38 +474,39 @@ function rewriteReturns(node: Node, promiseType: Type): void {
 		},
 		NodeKind.IfStmt => {
 			const d = node.data as IfStmtData;
-			rewriteReturns(d.consequent, promiseType);
-			rewriteReturns(d.alternate, promiseType);
+			rewriteReturns(d.consequent, promiseType, fnReturnInner);
+			rewriteReturns(d.alternate, promiseType, fnReturnInner);
 		},
-		NodeKind.WhileStmt => { rewriteReturns((node.data as WhileStmtData).whileBody, promiseType); },
+		NodeKind.WhileStmt => { rewriteReturns((node.data as WhileStmtData).whileBody, promiseType, fnReturnInner); },
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
-			rewriteReturns(d.tryBody, promiseType);
-			rewriteReturns(d.catchBody, promiseType);
-			rewriteReturns(d.finallyBody, promiseType);
+			rewriteReturns(d.tryBody, promiseType, fnReturnInner);
+			rewriteReturns(d.catchBody, promiseType, fnReturnInner);
+			rewriteReturns(d.finallyBody, promiseType, fnReturnInner);
 		},
 		_ => {},
 	};
 }
 
 // Simple wrapper: async function with no await → wrap return value in msFutureComplete
-function rewriteSimpleAsyncBody(body: Node): Node {
+function rewriteSimpleAsyncBody(body: Node, fnReturnInner: Type): Node {
 	if (body === null) return body;
 	if (body.kind !== NodeKind.BlockStmt) return body;
 
 	const bd = body.data as BlockStmtData;
 	const loc = body.location;
 
+	const retFutType = promiseTypeFor(fnReturnInner);
 	const promiseVoidType = createPromise(voidType());
 
 	// const $retFut = msFutureCreate();
 	const retFutInit = makeCall(makeIdent("msFutureCreate", loc), [], loc);
-	retFutInit.nodeType = promiseVoidType;
+	retFutInit.nodeType = retFutType;
 	const retFutDecl = makeVarDecl("$retFut", retFutInit, DeclKind.Const, loc);
-	retFutDecl.nodeType = promiseVoidType;
+	retFutDecl.nodeType = retFutType;
 
 	// Rewrite all return statements recursively (handles if/else, while, try/catch)
-	rewriteReturns(body, promiseVoidType);
+	rewriteReturns(body, retFutType, fnReturnInner);
 
 	// Prepend $retFut declaration. Read bd.statements AFTER rewriteReturns (it mutates the array).
 	const rewrittenStmts = bd.statements;
@@ -482,11 +520,11 @@ function rewriteSimpleAsyncBody(body: Node): Node {
 	if (rewrittenStmts.length === 0 || rewrittenStmts[rewrittenStmts.length - 1].kind !== NodeKind.ReturnStmt) {
 		const completeCall = makeCall(
 			makeIdent("msFutureComplete", loc),
-			[makeTypedIdent("$retFut", promiseVoidType, loc), makeNull(loc)],
+			[makeTypedIdent("$retFut", retFutType, loc), makeNull(loc)],
 			loc,
 		);
 		newStmts.push(makeExprStmt(completeCall, loc));
-		newStmts.push(makeReturn(makeTypedIdent("$retFut", promiseVoidType, loc), loc));
+		newStmts.push(makeReturn(makeTypedIdent("$retFut", retFutType, loc), loc));
 	}
 
 	return makeBlock(newStmts, loc);
@@ -498,11 +536,20 @@ function isWasAsync(node: Node): boolean {
 	return (node.flags & NodeFlag.WasAsync) !== 0;
 }
 
-function rewriteAsyncFnBody(body: Node): Node {
+// Extract Promise<T>'s inner type from a function's declared return type.
+function getFnReturnInner(fnNode: Node): Type {
+	if (fnNode === null || fnNode.nodeType === null) return null as unknown as Type;
+	const fnType = fnNode.nodeType;
+	if (fnType.kind !== TypeKind.Function || fnType.typeReturn === null) return null as unknown as Type;
+	if (isPromise(fnType.typeReturn)) return getPromiseInner(fnType.typeReturn);
+	return null as unknown as Type;
+}
+
+function rewriteAsyncFnBody(body: Node, fnReturnInner: Type): Node {
 	if (!hasYieldInBody(body)) {
-		return rewriteSimpleAsyncBody(body);
+		return rewriteSimpleAsyncBody(body, fnReturnInner);
 	}
-	return rewriteAwaitAsyncBody(body);
+	return rewriteAwaitAsyncBody(body, fnReturnInner);
 }
 
 // Walk expressions to find async FunctionExpr/ArrowFunction nodes
@@ -512,12 +559,12 @@ function walkBridgeExpr(node: Node): void {
 		NodeKind.FunctionExpr => {
 			const d = node.data as FunctionExprData;
 			walkBridge(d.funcExprBody);
-			if (isWasAsync(node)) { d.funcExprBody = rewriteAsyncFnBody(d.funcExprBody); d.funcExprFlags = ""; }
+			if (isWasAsync(node)) { d.funcExprBody = rewriteAsyncFnBody(d.funcExprBody, getFnReturnInner(node)); d.funcExprFlags = ""; }
 		},
 		NodeKind.ArrowFunction => {
 			const d = node.data as ArrowFunctionData;
 			walkBridge(d.arrowBody);
-			if (isWasAsync(node)) { d.arrowBody = rewriteAsyncFnBody(d.arrowBody); d.arrowFlags = ""; }
+			if (isWasAsync(node)) { d.arrowBody = rewriteAsyncFnBody(d.arrowBody, getFnReturnInner(node)); d.arrowFlags = ""; }
 		},
 		NodeKind.CallExpr => {
 			const d = node.data as CallExprData;
@@ -547,7 +594,7 @@ function walkBridge(node: Node): void {
 		NodeKind.FunctionDecl => {
 			const d = node.data as FunctionDeclData;
 			walkBridge(d.fnBody);
-			if (isWasAsync(node)) { d.fnBody = rewriteAsyncFnBody(d.fnBody); d.fnFlags = ""; }
+			if (isWasAsync(node)) { d.fnBody = rewriteAsyncFnBody(d.fnBody, getFnReturnInner(node)); d.fnFlags = ""; }
 		},
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
@@ -572,7 +619,7 @@ function walkBridge(node: Node): void {
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;
 			walkBridge(d.methodBody);
-			if (isWasAsync(node)) { d.methodBody = rewriteAsyncFnBody(d.methodBody); d.methodFlags = ""; }
+			if (isWasAsync(node)) { d.methodBody = rewriteAsyncFnBody(d.methodBody, getFnReturnInner(node)); d.methodFlags = ""; }
 		},
 		NodeKind.DecoratedDecl => {
 			const d = node.data as DecoratedDeclData;

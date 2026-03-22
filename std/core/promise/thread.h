@@ -4,12 +4,9 @@
  * Runs a closure on a worker pool thread, completes an msFuture when done.
  * Uses a Malebolgia-style fixed thread pool (N = CPU cores).
  *
- * Memory ownership (reference parity with spawn scratch-object pattern):
- * - msSpawn takes ownership of the closure env via msIncRef
- * - The worker thread holds its own reference to the env
- * - When the task finishes, msDecref releases the worker's reference
- * - The caller's DRC may also decref the env (via msClosureDestroy)
- * - The env is freed when the last reference drops to zero
+ * Spawn uses msFuture_ptr (void* value) at the thread boundary.
+ * The boxed value crosses the completion pipe and gets stored in the future.
+ * Caller's await code reads the void* and casts/unboxes as needed.
  */
 #ifndef MS_THREAD_H
 #define MS_THREAD_H
@@ -20,11 +17,12 @@
 typedef struct msSpawnCtx {
 	void* fn;           /* closure function pointer */
 	void* env;          /* closure environment (NULL for non-capturing) */
-	msFuture* fut;      /* future to complete when task finishes */
+	void* fut;          /* msFuture_ptr* to complete when task finishes */
 } msSpawnCtx;
 
-/* Task runner — calls closure, completes or fails future, cleans up.
- * Used by pool workers. Extracted so pool.c can call it. */
+/* Forward declaration — implemented in dispatch.c */
+extern void msPostCompletion(void* fut, void* value, bool isFail, void* error);
+
 static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 	void* result = NULL;
 	if (ctx->env != NULL) {
@@ -32,19 +30,15 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 	} else {
 		result = ((void*(*)(void))ctx->fn)();
 	}
-	/* Check for exception — propagate to future instead of silent loss */
+	/* Post result to event loop thread via completion pipe */
 	if (msErr) {
-		msFutureFail(ctx->fut, (void*)msCurrException);
+		msPostCompletion(ctx->fut, NULL, true, (void*)msCurrException);
 		msErr = false;
 		msCurrException = NULL;
 	} else {
-		msFutureComplete(ctx->fut, result);
-		/* Set valueDestructor so abandoned promises free the boxed value */
-		if (result != NULL) {
-			ctx->fut->valueDestructor = free;
-		}
+		msPostCompletion(ctx->fut, result, false, NULL);
 	}
-	/* Release worker's ownership of the env (ref acquired in msSpawn) */
+	/* Release worker's ownership of the env */
 	if (ctx->env != NULL) {
 		msDecref(ctx->env);
 	}
@@ -54,17 +48,15 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 /* Forward declaration — pool submit defined in pool.c */
 void msPoolSubmit(msSpawnCtx* ctx);
 
-/* Spawn a closure on a worker pool thread. Returns future that completes when done.
- *
- * Takes ownership of the closure env by incrementing its refcount.
- * The worker holds its own reference — safe even if caller's scope exits first. */
-static inline msFuture* msSpawn(msClosure fn) {
-	msFuture* fut = msFutureCreate();
+/* Spawn a closure on a worker pool thread. Returns void* (msFuture_ptr internally).
+ * Nim parity: spawn result compatible with any Future[T] pointer.
+ * Takes ownership of the closure env by incrementing its refcount. */
+static inline void* msSpawn(msClosure fn) {
+	msFuture_ptr* fut = msFutureCreateT(msFuture_ptr);
 	msSpawnCtx* ctx = (msSpawnCtx*)malloc(sizeof(msSpawnCtx));
 	ctx->fn = (void*)fn.fn;
 	ctx->env = fn.env;
 	ctx->fut = fut;
-	/* Take worker's ownership of env — prevents caller DRC from freeing it prematurely */
 	if (fn.env != NULL) {
 		msIncRef(fn.env);
 	}

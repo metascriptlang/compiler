@@ -49,9 +49,11 @@ export function skip(s: LexerState, n: number): void {
 	}
 }
 
-export function addToken(s: LexerState, kind: TokenKind, value: string, line: number, column: number): void {
-	s.tokens.push({ kind, value, line, column });
+export function addToken(s: LexerState, kind: TokenKind, value: string, line: number, column: number): Token {
+	const tok: Token = { kind, value, line, column, rawValue: "" };
+	s.tokens.push(tok);
 	s.lastToken = kind;
+	return tok;
 }
 
 // Comment preservation: push to tokens array (parser skips via TokenKind.Comment check).

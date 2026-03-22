@@ -4,10 +4,18 @@
  * Event loop implementation: timer heap, ring buffer callback deque, runOnce/poll/waitFor.
  */
 #include "std/core/system/native.h"  /* msIncRef/msDecref for async stepper lifecycle */
+/* selector.h is included via dispatch.h → future.h chain, but MS_EVENT_READ may not be defined.
+ * Define it here for the completion pipe registration. */
+#ifndef MS_EVENT_READ
+#define MS_EVENT_READ 1
+#endif
 #include "dispatch.h"
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <fcntl.h>
 
 /* ===== Platform-specific time + sleep ===== */
 
@@ -88,11 +96,25 @@ static void msDispatcherCallSoon(msClosure cb) {
 	msDequePush(&d->callbacks, cb);
 }
 
+/* Global completion pipe for cross-thread posting.
+ * [0]=read (event loop), [1]=write (pool threads). */
+static int gCompletionPipe[2] = {-1, -1};
+
 /* Standard reference getGlobalDispatcher pattern — lazy init */
 msDispatcher* msGetDispatcher(void) {
 	if (gDispatcher == NULL) {
 		gDispatcher = (msDispatcher*)calloc(1, sizeof(msDispatcher));
 		gDispatcher->selector = msSelectorCreate();
+		/* Completion pipe: pool threads write results, event loop reads + completes futures */
+		if (gCompletionPipe[0] < 0) {
+			pipe(gCompletionPipe);
+			fcntl(gCompletionPipe[0], F_SETFL, O_NONBLOCK);
+		}
+		gDispatcher->completionPipe[0] = gCompletionPipe[0];
+		gDispatcher->completionPipe[1] = gCompletionPipe[1];
+		if (gDispatcher->selector) {
+			msSelectorRegister(gDispatcher->selector, gDispatcher->completionPipe[0], MS_EVENT_READ, NULL);
+		}
 		/* Register callSoon with future system (Standard reference pattern) */
 		msCallSoonProc = msDispatcherCallSoon;
 	}
@@ -168,7 +190,7 @@ int msProcessTimers(msDispatcher* d, bool* didWork) {
 	int64_t now = msMonoTimeMs();
 	while (d->timers.len > 0 && d->timers.data[0].finishAtMs <= now) {
 		msTimer t = msTimerPop(&d->timers);
-		msFutureComplete(t.fut, NULL);
+		msFutureCompleteVoid(t.fut);
 		*didWork = true;
 	}
 	if (d->timers.len > 0) {
@@ -214,8 +236,18 @@ bool msRunOnce(int timeoutMs) {
 		int nready = msSelectorPoll(d->selector, adj, readyBuf, 64);
 		for (int i = 0; i < nready; i++) {
 			didWork = true;
+			/* Completion pipe: drain cross-thread spawn results */
+			int pipeFdRead = d->completionPipe[0];
+			if (readyBuf[i].fd == pipeFdRead) {
+				msCompletionMsg msg;
+				while (read(pipeFdRead, &msg, sizeof(msg)) == (ssize_t)sizeof(msg)) {
+					if (msg.isFail) msFutureFail(msg.fut, msg.error);
+					else msFutureComplete(msg.fut, msg.value);
+				}
+				continue;
+			}
 			msFuture* fut = (msFuture*)readyBuf[i].userdata;
-			if (fut != NULL && !fut->finished) {
+			if (fut != NULL && !msFutureFinished(fut)) {
 				msFutureComplete(fut, (void*)(intptr_t)readyBuf[i].events);
 			}
 		}
@@ -237,17 +269,17 @@ void msPoll(int timeoutMs) {
 	(void)msRunOnce(timeoutMs);
 }
 
-/* Standard reference waitFor pattern
- * Block until future completes, then read (re-raising errors via msErr) */
-void* msWaitFor(msFuture* fut) {
-	while (1) {
-		__atomic_thread_fence(__ATOMIC_ACQUIRE);
-		if (fut->finished) break;
-		msPoll(1);
-		__atomic_thread_fence(__ATOMIC_ACQUIRE);
-		if (fut->finished) break;
+/* Standard reference waitFor pattern — delegates to runOnce (same as reference: while !finished: poll).
+ * This ensures all event sources (timers, I/O selector, completion pipe, callbacks) are processed. */
+void* msWaitFor(void* fp) {
+	msFutureBase* fut = (msFutureBase*)fp;
+	while (!fut->finished) {
+		msRunOnce(500);
 	}
-	return msFutureRead(fut);
+	/* Return the void* value from the future (for backward compat with boxing path).
+	 * Treats future as msFuture_ptr and reads its value field.
+	 * For void futures, this returns NULL (harmless). */
+	return msFutureRead(fp);
 }
 
 /* Standard reference runForever pattern */
@@ -257,37 +289,55 @@ void msRunForever(void) {
 	}
 }
 
+/* Post completion from pool thread to event loop.
+ * Thread-safe: POSIX pipe write is atomic for messages < PIPE_BUF (4096 bytes).
+ * The event loop reads and completes futures on its own thread. */
+void msPostCompletion(void* fut, void* value, bool isFail, void* error) {
+	msCompletionMsg msg = { .fut = fut, .value = value, .isFail = isFail, .error = error };
+	int wfd = gCompletionPipe[1];
+	if (wfd >= 0) {
+		write(wfd, &msg, sizeof(msg));
+	} else {
+		/* Fallback: no event loop — complete directly (single-threaded mode) */
+		if (isFail) msFutureFail(fut, error);
+		else msFutureComplete(fut, value);
+	}
+}
+
 /* Standard reference sleepAsync pattern
  * Create timer future, push to heap, return future */
-msFuture* msSleepAsync(int ms) {
+msFuture_void* msSleepAsync(int ms) {
 	msDispatcher* d = msGetDispatcher();
-	msFuture* fut = msFutureCreate();
+	msFuture_void* fut = msFutureCreateT(msFuture_void);
 	int64_t finishAt = msMonoTimeMs() + ms;
 	msTimer t = { .finishAtMs = finishAt, .fut = fut };
 	msTimerPush(&d->timers, t);
 	return fut;
 }
 
-/* ===== Async Stepper Callback (Nim createCb pattern) ===== */
+/* ===== Async Stepper Callback (createCb pattern) ===== */
 
 void msAsyncCb(void* raw) {
 	msAsyncCbEnv* e = (msAsyncCbEnv*)raw;
 
-	/* Call stepper — returns next future to wait on, or NULL when done */
-	msFuture* next = e->stepper.env != NULL
-		? ((msFuture*(*)(void*))e->stepper.fn)(e->stepper.env)
-		: ((msFuture*(*)(void))e->stepper.fn)();
+	/* Call stepper — returns next msFutureBase* to wait on, or NULL when done.
+	 * Stepper returns msFutureBase* (any typed future cast to base). */
+	msFutureBase* next = e->stepper.env != NULL
+		? ((msFutureBase*(*)(void*))e->stepper.fn)(e->stepper.env)
+		: ((msFutureBase*(*)(void))e->stepper.fn)();
 
 	/* Eager resume: loop while yielded future is already resolved */
 	while (next != NULL && next->finished) {
 		next = e->stepper.env != NULL
-			? ((msFuture*(*)(void*))e->stepper.fn)(e->stepper.env)
-			: ((msFuture*(*)(void))e->stepper.fn)();
+			? ((msFutureBase*(*)(void*))e->stepper.fn)(e->stepper.env)
+			: ((msFutureBase*(*)(void))e->stepper.fn)();
 	}
 
 	if (next == NULL) {
-		/* Stepper finished — retFut already completed by stepper */
-		if (e->stepper.env) msDecref(e->stepper.env);
+		/* Stepper finished — retFut already completed by stepper.
+		 * Do NOT msDecref the stepper env here — the future's value may still
+		 * reference memory inside the env. DRC handles env cleanup when the
+		 * outer scope's stepper variable goes out of scope naturally. */
 		free(e);
 		return;
 	}
@@ -296,8 +346,11 @@ void msAsyncCb(void* raw) {
 	msFutureAddCallback(next, (msClosure){ .fn = (msClosureFn)msAsyncCb, .env = raw });
 }
 
-void msAsyncStart(msFuture* retFut, msClosure stepper) {
-	(void)retFut;  /* retFut is completed by the stepper directly, not by msAsyncCb */
+void msAsyncStart(void* retFut, msClosure stepper) {
+	(void)retFut;
+	/* Ensure completion pipe exists BEFORE any spawn can happen.
+	 * The stepper may call msSpawn which needs the pipe for cross-thread completion. */
+	msGetDispatcher();
 	msAsyncCbEnv* env = (msAsyncCbEnv*)malloc(sizeof(msAsyncCbEnv));
 	env->stepper = stepper;
 	if (stepper.env) msIncRef(stepper.env);
@@ -323,6 +376,9 @@ void msDestroyDispatcher(void) {
 	free(d->callbacks.items);
 	/* Destroy I/O selector */
 	if (d->selector != NULL) msSelectorDestroy(d->selector);
+	/* Close completion pipe fds */
+	if (gCompletionPipe[0] >= 0) { close(gCompletionPipe[0]); gCompletionPipe[0] = -1; }
+	if (gCompletionPipe[1] >= 0) { close(gCompletionPipe[1]); gCompletionPipe[1] = -1; }
 	/* Reset globals */
 	msCallSoonProc = NULL;
 	free(d);

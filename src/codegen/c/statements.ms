@@ -307,8 +307,20 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 			else { emitStmtsLine(p, `${cType} ${varName} = ${finalInit};`); }
 		}
 	} else {
-		if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); }
-		else { emitStmtsLine(p, `${cType} ${varName};`); }
+		// No initializer: emit zero-initialized declaration (reference: resetLoc/constructLoc)
+		if (isNumericCType(cType)) {
+			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = 0;`); }
+			else { emitStmtsLine(p, `${cType} ${varName} = 0;`); }
+		} else if (isStructCType(cType)) {
+			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = (${cType}){0};`); }
+			else { emitStmtsLine(p, `${cType} ${varName} = {0};`); }
+		} else if (cType.byteLength > 0 && cType.charAt(cType.byteLength - 1) === "*") {
+			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); emitStmtsLine(p, `${varName} = NULL;`); }
+			else { emitStmtsLine(p, `${cType} ${varName} = NULL;`); }
+		} else {
+			if (hoistDecl) { emitProcLocalsLine(p, `${cType} ${varName};`); }
+			else { emitStmtsLine(p, `${cType} ${varName};`); }
+		}
 	}
 }
 

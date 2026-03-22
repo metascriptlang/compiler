@@ -6,7 +6,7 @@ import { Node, NodeKind, NodeData, Expression, createNode, ObjectLiteralData, So
 import { ParserState, createState, current, advance, isAtEnd } from "../context";
 import { lex } from "../../lexer/lexer";
 import { parseOk, mockExpr } from "./util";
-import { isIdentLike, isPropertyName } from "../util";
+import { isIdentLike, isPropertyName, attachComments } from "../util";
 
 
 type ExprResult = Result<Expression, string>;
@@ -63,6 +63,9 @@ export function parseObjectLiteral(state: ParserState, exprParser: ExprParser): 
 			continue;
 		}
 
+		// Attach any pending comments (e.g., commented-out properties) to the key token.
+		// Comments between properties are collected during advance() and need to be
+		// attached to the next property's value node.
 		const keyToken = current(state);
 		if (!isPropertyName(keyToken)) {
 			return Result.err(`Expected property name at line ${keyToken.line}`);
@@ -76,12 +79,15 @@ export function parseObjectLiteral(state: ParserState, exprParser: ExprParser): 
 			keys.push(keyToken.value);
 			keyLocs.push(keyLoc);
 			const val = try exprParser(state, 0);
+			attachComments(state, val);
 			values.push(val);
 		} else {
 			// Shorthand property: { key } means { key: key }
 			keys.push(keyToken.value);
 			keyLocs.push(keyLoc);
-			values.push(createNode(NodeKind.Identifier, { name: keyToken.value }, keyToken));
+			const ident = createNode(NodeKind.Identifier, { name: keyToken.value }, keyToken);
+			attachComments(state, ident);
+			values.push(ident);
 		}
 
 		if (current(state).kind === TokenKind.Comma) {
@@ -93,11 +99,13 @@ export function parseObjectLiteral(state: ParserState, exprParser: ExprParser): 
 
 	if (current(state).kind === TokenKind.RBrace) { advance(state); }
 
-	return Result.ok(createNode(NodeKind.ObjectLiteral, {
+	const objNode = createNode(NodeKind.ObjectLiteral, {
 		properties: values,
 		keys,
 		keyLocations: keyLocs,
-	}, lbrace));
+	}, lbrace);
+	attachComments(state, objNode);
+	return Result.ok(objNode);
 }
 
 // ===== Tests =====

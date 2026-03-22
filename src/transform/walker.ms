@@ -191,7 +191,7 @@ export function mapChildren(node: Node, f: Visitor): void {
 		// Simple statements with one child
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
-			d.initializer = f(d.initializer);
+			if (d.initializer !== null) d.initializer = f(d.initializer);
 		},
 		NodeKind.ReturnStmt => {
 			const d = node.data as ReturnStmtData;

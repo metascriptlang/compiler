@@ -255,16 +255,21 @@ static inline void msStringCopy(msString* dest, msString src) {
 /* Promise combinators (Promise.all, Promise.race) */
 #include "std/core/promise/combinator.h"
 
-/* String boxing for spawn — msString must be defined before this */
+/* String boxing for spawn/Promise — msString must be defined before this.
+ * Reference parity: check strlitFlag before refcounting.
+ * String literals have MS_STRLIT_FLAG in cap and NO heap header — msIncRef
+ * on a literal would write into adjacent static memory (corruption). */
 static inline void* msBoxString(msString v) {
 	msString* p = (msString*)malloc(sizeof(msString));
 	*p = v;
-	if (v.p) msIncRef(v.p);
+	if (v.p && !(v.p->cap & MS_STRLIT_FLAG)) {
+		msIncRef(v.p);  /* heap string — incref to keep payload alive */
+	}
 	return p;
 }
 static inline msString msUnboxString(void* p) {
 	msString v = *(msString*)p;
-	free(p);
+	free(p);  /* free the box shell; string payload survives via its own refcount */
 	return v;
 }
 

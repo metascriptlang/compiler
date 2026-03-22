@@ -777,6 +777,10 @@ export function sgComputeImportEdit(program: Node, source: string, symbolName: s
 			while (insertPos > lineOffset && source.byteAt(insertPos - 1) === " ".code) {
 				insertPos = insertPos - 1;
 			}
+			// Skip back over trailing comma: { CpuInfo, } → insert after "CpuInfo"
+			if (insertPos > lineOffset && source.byteAt(insertPos - 1) === ",".code) {
+				insertPos = insertPos - 1;
+			}
 			const col = insertPos - lineOffset;
 			const insertText = imp.importNames.length > 0 ? ", " + symbolName : symbolName;
 			return { kind: 0, line: importLine - 1, col, endCol: col, newText: insertText };
