@@ -815,10 +815,14 @@ function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): T
 		}
 	}
 
-	// Resolve each variant type
+	// Resolve each variant type — name each variant for error messages
 	const variantTypes: Type[] = [];
-	for (const vt of d.variantTypes) {
-		const resolved = resolveAnnotation(vt, ctx, 0, 0);
+	for (let vi = 0; vi < d.variantTypes.length; vi += 1) {
+		const resolved = resolveAnnotation(d.variantTypes[vi], ctx, 0, 0);
+		if (resolved !== null && vi < d.variantKeys.length) {
+			const bareKey = d.variantKeys[vi].indexOf(".") >= 0 ? d.variantKeys[vi].slice(d.variantKeys[vi].indexOf(".") + 1, d.variantKeys[vi].length) : d.variantKeys[vi];
+			resolved.typeName = d.aliasName + "." + bareKey;
+		}
 		variantTypes.push(resolved);
 	}
 

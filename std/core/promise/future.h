@@ -264,14 +264,20 @@ static inline bool msFutureCheckErr(void* fp) {
 #define msFutureReadT(f, zeroval) \
 	(msFutureCheckErr(f) ? (zeroval) : (f)->value)
 
-/* ===== Value Boxing (used by spawn pipe boundary + isBoxed fallback in smart read) ===== */
+/* ===== Value Boxing — Inline (zero-copy, zero-malloc) =====
+ * Store small values directly in the void* bits instead of heap-allocating.
+ * Safe on 64-bit: sizeof(void*) = 8 >= sizeof(double) = sizeof(int64_t).
+ * Double uses memcpy to avoid strict aliasing violation.
+ * String boxing (msBoxString in native.h) still heap-allocates (16 bytes > pointer). */
 
-static inline void* msBoxDouble(double v) { double* p = (double*)malloc(sizeof(double)); *p = v; return p; }
-static inline double msUnboxDouble(void* p) { double v = *(double*)p; free(p); return v; }
-static inline void* msBoxInt32(int32_t v) { int32_t* p = (int32_t*)malloc(sizeof(int32_t)); *p = v; return p; }
-static inline int32_t msUnboxInt32(void* p) { int32_t v = *(int32_t*)p; free(p); return v; }
-static inline void* msBoxBool(bool v) { bool* p = (bool*)malloc(sizeof(bool)); *p = v; return p; }
-static inline bool msUnboxBool(void* p) { bool v = *(bool*)p; free(p); return v; }
+#include <string.h> /* memcpy */
+
+static inline void* msBoxDouble(double v) { void* p = NULL; memcpy(&p, &v, sizeof(double)); return p; }
+static inline double msUnboxDouble(void* p) { double v; memcpy(&v, &p, sizeof(double)); return v; }
+static inline void* msBoxInt32(int32_t v) { return (void*)(intptr_t)v; }
+static inline int32_t msUnboxInt32(void* p) { return (int32_t)(intptr_t)p; }
+static inline void* msBoxBool(bool v) { return (void*)(intptr_t)v; }
+static inline bool msUnboxBool(void* p) { return (bool)(intptr_t)p; }
 
 /* ===== Per-Type Smart Read Functions =====
  * Handle both boxed (spawn) and typed (async) paths via runtime isBoxed flag.

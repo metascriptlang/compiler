@@ -2,7 +2,7 @@
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, makeLoc, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, VariableDeclData, FunctionDeclData, ClassDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ProgramData, MacroInvocationData, StringLiteralData, CallExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { unknownType, nullType, stringType, charType, numberType, float64Type, voidType, createFunction, createUnion, isMaybeType, unwrapMaybeType, isNarrowingIntConv, typeNameOf, isPromise, getPromiseInner, isResult, getResultOkType, getResultErrType } from "./types";
+import { unknownType, nullType, stringType, charType, numberType, float64Type, voidType, createFunction, createUnion, isMaybeType, unwrapMaybeType, isNarrowingIntConv, typeNameOf, isPromise, getPromiseInner, isResult, getResultOkType, getResultErrType, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant } from "./types";
 import { ScopeKind, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, setFlag, hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, CancelCtx, createContext, createContextWithCache, createModuleContext, createModuleContextWithCache, addError, addFatalError, addWarning, hasErrors, hasFatalErrors, errorCount, createExtensionRegistry, registerExtension, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, buildExportInfo, isCancelled, sgRecordSym, sgSortRecords, isInAsyncPromiseResult } from "./context";
 import { IdentCache, createIdentCache } from "./idents";
@@ -843,7 +843,21 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 	const discType = checkExpr(ctx, d.matchStmtDisc, null);
 	let hasWildcard = false;
 	const coveredMembers: string[] = [];
-	// Ref parity: trackCase — same count-table pattern for match
+
+	// Detect discriminated union narrowing: match (base.discriminantField)
+	let narrowBase: Symbol = null;
+	let narrowUnion: Type = null;
+	if (d.matchStmtDisc.kind === NodeKind.MemberExpr) {
+		const discMd = d.matchStmtDisc.data as MemberExprData;
+		if (discMd.object !== null && discMd.object.kind === NodeKind.Identifier) {
+			const baseSym = lookupSymbol(ctx.table, (discMd.object.data as IdentifierData).name);
+			if (baseSym !== null && baseSym.symbolType !== null && isDiscriminatedUnion(baseSym.symbolType) && getDiscriminantName(baseSym.symbolType) === discMd.property) {
+				narrowBase = baseSym;
+				narrowUnion = baseSym.symbolType;
+			}
+		}
+	}
+
 	const oldState = saveInitState(ctx.initTracker);
 	const branchInits: string[][] = [];
 	const branchBreaks: BreakState[] = [];
@@ -863,10 +877,35 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 				checkExpr(ctx, p, discType);
 			}
 		}
+
+		// Variant narrowing
+		let savedNarrowType: Type = null;
+		if (narrowBase !== null && cd.casePatterns.length === 1) {
+			const pat = cd.casePatterns[0];
+			let patEnumName = "";
+			if (pat.kind === NodeKind.MemberExpr) {
+				patEnumName = (pat.data as MemberExprData).property;
+			} else if (pat.kind === NodeKind.Identifier && pat.resolvedSym !== null) {
+				patEnumName = pat.resolvedSym.name;
+			}
+			if (patEnumName !== "") {
+				const variantIdx = findVariantByDiscriminant(narrowUnion, patEnumName);
+				if (variantIdx >= 0 && narrowUnion.typeChildren !== null && variantIdx < narrowUnion.typeChildren.length) {
+					savedNarrowType = narrowBase.symbolType;
+					narrowBase.symbolType = narrowUnion.typeChildren[variantIdx];
+				}
+			}
+		}
+
 		if (cd.caseGuard !== null) {
 			checkExpr(ctx, cd.caseGuard, null);
 		}
 		checkStmt(ctx, cd.caseBody);
+
+		if (savedNarrowType !== null) {
+			narrowBase.symbolType = savedNarrowType;
+		}
+
 		branchInits.push(collectNewInits(ctx.initTracker, oldState));
 		branchBreaks.push(breaksBlock(cd.caseBody));
 	}
@@ -1074,8 +1113,11 @@ function loadPreludeOne(ctx: CheckerContext, specifier: string, stdPath: string)
 		src = readFile(base + "/index.ms");
 		resolvedPath = base + "/index.ms";
 	}
+	console.log("[dbg]   resolved=" + resolvedPath + " len=" + String(src.length));
 	if (src.length > 0) {
+		console.log("[dbg]   parsing...");
 		const pr = parseSource(src);
+		console.log("[dbg]   parsed ok=" + String(pr.ok));
 		if (pr.ok) {
 			// Set modulePath BEFORE sub-module loading so path resolution is consistent
 			const savedPath = ctx.modulePath;
@@ -1181,12 +1223,20 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 // Creates a shared IdentCache (one cache per compilation)
 // that must be passed to all module contexts in the same compilation.
 export function buildPreludeContext(stdPath: string): CheckerContext {
+	console.log("[dbg] buildPreludeContext");
 	const cache = createIdentCache();
 	const ctx = createContextWithCache(cache);
 	ctx.extensionRegistry = createExtensionRegistry();
-	for (const imp of globalImports()) {
-		loadPreludeOne(ctx, imp, stdPath);
+	console.log("[dbg] context ready, loading preludes");
+	const imps = globalImports();
+	let idx = 0;
+	while (idx < imps.length) {
+		console.log("[dbg] prelude " + String(idx) + ": " + imps[idx]);
+		loadPreludeOne(ctx, imps[idx], stdPath);
+		console.log("[dbg] done " + String(idx));
+		idx = idx + 1;
 	}
+	console.log("[dbg] all preludes loaded");
 	return ctx;
 }
 

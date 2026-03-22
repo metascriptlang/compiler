@@ -57,15 +57,20 @@ export function cmdDumpAst(filePath: string): void {
 // -- check --
 
 export function cmdCheck(filePath: string, opts: CliOptions): void {
+	console.log("[dbg] cmdCheck: " + filePath);
 	const t0 = clockMs();
 	const source = readSource(filePath);
+	console.log("[dbg] source len=" + String(source.length));
 	const parseResult = parseSource(source);
+	console.log("[dbg] parsed ok=" + String(parseResult.ok));
 	if (!parseResult.ok) {
 		console.log(error("parse error") + ": " + parseResult.error);
 		exit(1);
 	}
 	const program = parseResult.value;
+	console.log("[dbg] checkProgram...");
 	const ctx = checkProgram(program);
+	console.log("[dbg] checkProgram done");
 	if (!hasErrors(ctx)) {
 		console.log(success("OK") + " " + dim("no type errors"));
 	} else {

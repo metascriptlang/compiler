@@ -3,7 +3,7 @@
 
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, DeclKind, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createSpan, createFunction, createTypeRef, createStruct, createRef, createResult, createPrimitive, substituteType, instantiateGeneric, anonStructName, isNumeric, isIntegerType, isStringType, isCallable, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, unwrapRef, isDiscriminatedUnion, findVariantByDiscriminant, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, skipModifier, createPromise, isPromise, getPromiseInner, isResult, getResultOkType, createGenericParam, instantiateGenericBody } from "./types";
+import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createSpan, createFunction, createTypeRef, createStruct, createRef, createResult, createPrimitive, substituteType, instantiateGeneric, anonStructName, isNumeric, isIntegerType, isStringType, isCallable, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, unwrapRef, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, skipModifier, createPromise, isPromise, getPromiseInner, isResult, getResultOkType, createGenericParam, instantiateGenericBody } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag } from "./symbol";
 import { CheckerContext, addError, addErrorRange, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, isInAsyncPromiseResult } from "./context";
 import {
@@ -2042,10 +2042,23 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 		node.resolvedSym = toStrSym;
 		return toStrFnType;
 	}
-	// Unresolved member access — emit error if object type is known
+	// Unresolved member access — emit error with field suggestion if available
 	if (propType.kind === TypeKind.Unknown && resolvedObjType.kind !== TypeKind.Unknown) {
 		const typeName = typeNameOf(resolvedObjType) !== "" ? typeNameOf(resolvedObjType) : "object";
-		addError(ctx, `Property '${d.property}' does not exist on type '${typeName}'`, node.location.line, node.location.column);
+		let suggestion = "";
+		if (resolvedObjType.typeNames !== null) {
+			for (const fn of resolvedObjType.typeNames) {
+				if (fn !== d.property && fn.length > 0) {
+					if (suggestion === "") { suggestion = fn; }
+					else { suggestion = suggestion + ", " + fn; }
+				}
+			}
+		}
+		if (suggestion !== "") {
+			addError(ctx, `Property '${d.property}' does not exist on type '${typeName}'. Available: ${suggestion}`, node.location.line, node.location.column);
+		} else {
+			addError(ctx, `Property '${d.property}' does not exist on type '${typeName}'`, node.location.line, node.location.column);
+		}
 	}
 	return propType;
 }
@@ -2058,6 +2071,23 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 	let returnType = unknownType();
 	let hasWildcard = false;
 	const coveredMembers: string[] = [];
+
+	// Detect discriminated union narrowing: match (base.discriminantField)
+	// Use symbol lookup (not node.nodeType which may not be set by checkExpr's return path)
+	let narrowBase: Symbol = null;
+	let narrowUnion: Type = null;
+	if (d.matchDisc.kind === NodeKind.MemberExpr) {
+		const discMd = d.matchDisc.data as MemberExprData;
+		if (discMd.object !== null && discMd.object.kind === NodeKind.Identifier) {
+			const baseName = (discMd.object.data as IdentifierData).name;
+			const baseSym = lookupSymbol(ctx.table, baseName);
+			if (baseSym !== null && baseSym.symbolType !== null && isDiscriminatedUnion(baseSym.symbolType) && getDiscriminantName(baseSym.symbolType) === discMd.property) {
+				narrowBase = baseSym;
+				narrowUnion = baseSym.symbolType;
+			}
+		}
+	}
+
 	// Ref parity: trackCase — init tracking for match expression arms
 	const oldState = saveInitState(ctx.initTracker);
 	const branchInits: string[][] = [];
@@ -2081,13 +2111,34 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 				checkExpr(ctx, p, discType);
 			}
 		}
-		// Type-check guard expression (must be boolean)
+		// Variant narrowing: temporarily narrow base symbol to the matched variant
+		let savedNarrowType: Type = null;
+		if (narrowBase !== null && cd.casePatterns.length === 1) {
+			const pat = cd.casePatterns[0];
+			// Extract enum member name from pattern — handles both:
+			// - MemberExpr (before checkExpr resolves it): Kind.A → property "A"
+			// - Identifier with resolvedSym (after checkExpr resolves it): name from symbol
+			let patEnumName = "";
+			if (pat.kind === NodeKind.MemberExpr) {
+				patEnumName = (pat.data as MemberExprData).property;
+			} else if (pat.kind === NodeKind.Identifier && pat.resolvedSym !== null) {
+				patEnumName = pat.resolvedSym.name;
+			}
+			if (patEnumName !== "") {
+				const variantIdx = findVariantByDiscriminant(narrowUnion, patEnumName);
+				if (variantIdx >= 0 && narrowUnion.typeChildren !== null && variantIdx < narrowUnion.typeChildren.length) {
+					savedNarrowType = narrowBase.symbolType;
+					narrowBase.symbolType = narrowUnion.typeChildren[variantIdx];
+				}
+			}
+		}
+
+		// Type-check guard expression with narrowing active
 		if (cd.caseGuard !== null) {
 			checkExpr(ctx, cd.caseGuard, null);
 		}
 		let bodyType = unknownType();
 		if (cd.caseBody.kind === NodeKind.BlockStmt) {
-			// Block arm: check statements inside, infer type from return statement
 			ctx.matchExprDepth = ctx.matchExprDepth + 1;
 			callCheckStmt(ctx, cd.caseBody);
 			ctx.matchExprDepth = ctx.matchExprDepth - 1;
@@ -2100,11 +2151,14 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 						bodyType = checkExpr(ctx, rd.argument, null);
 					}
 				}
-				// No error for missing return — block arm may be void (side-effect only).
-				// Match expressions used as statements (ExprStmt > MatchExpr) don't need values.
 			}
 		} else {
 			bodyType = checkExpr(ctx, cd.caseBody, null);
+		}
+
+		// Restore narrowed type
+		if (savedNarrowType !== null) {
+			narrowBase.symbolType = savedNarrowType;
 		}
 		branchInits.push(collectNewInits(ctx.initTracker, oldState));
 		branchBreaks.push(breaksBlock(cd.caseBody));

@@ -48,3 +48,47 @@ export extern function sleepAsync(ms: number): Promise<void> from "msSleepAsync"
 
 // Async stepper start — createCb pattern (used by asyncBridge, not user code)
 extern function msAsyncStart(retFut: Promise<void>, stepper: () => void): void;
+
+// ===== Locker<T> — Thread-safe shared mutable state (Malebolgia pattern) =====
+// Wraps a value + ticket lock. Access via lock/unlock or withLock callback.
+
+@include("std/core/promise/locker.h");
+
+extern function msLockerCreate(dataSize: int32): Locker from "msLockerCreate";
+extern function msLockerLock(loc: Locker): void from "msLockerLock";
+extern function msLockerUnlock(loc: Locker): void from "msLockerUnlock";
+extern function msLockerGetDouble(loc: Locker): number from "msLockerGetDouble";
+extern function msLockerSetDouble(loc: Locker, val: number): void from "msLockerSetDouble";
+extern function msLockerDestroy(loc: Locker): void from "msLockerDestroy";
+
+export interface Locker {
+	_ptr: number; // opaque pointer (msLocker*)
+}
+
+export function createLocker(): Locker {
+	return msLockerCreate(8) as unknown as Locker;
+}
+
+export function lockAcquire(loc: Locker): void {
+	msLockerLock(loc);
+}
+
+export function lockRelease(loc: Locker): void {
+	msLockerUnlock(loc);
+}
+
+// Typed data access (caller must hold lock)
+export function lockerGet(loc: Locker): number {
+	return msLockerGetDouble(loc);
+}
+
+export function lockerSet(loc: Locker, val: number): void {
+	msLockerSetDouble(loc, val);
+}
+
+// Malebolgia-aligned: acquire lock, run callback, release (guaranteed via defer)
+export function withLock(loc: Locker, fn: () => void): void {
+	msLockerLock(loc);
+	defer msLockerUnlock(loc);
+	fn();
+}
