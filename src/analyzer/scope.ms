@@ -33,6 +33,8 @@ export class MovedVar {
 export interface DrcScope {
 	varsToCleanup: VarInfo[];     // variables needing cleanup at scope exit
 	wasMoved: MovedVar[];         // moved vars + expr-level wasMoved calls
+	preStmts: Node[];             // stmts to flush before current statement (per-scope, nestedScope parity)
+	pendingStmts: Node[];         // stmts to flush after current statement (per-scope, nestedScope parity)
 	needsTry: boolean;            // does this scope need try/finally wrapping?
 	isLoop: boolean;              // is this a loop body scope?
 	isFunction: boolean;          // is this a function scope?
@@ -51,8 +53,6 @@ export class OuterEntry {
 export interface DrcContext {
 	ctx: TransformContext;
 	scopes: DrcScope[];          // scope stack
-	pendingStmts: Node[];        // stmts to flush after current statement
-	preStmts: Node[];            // stmts to flush before current statement
 	outerCtx: OuterEntry[];      // cross-scope remaining stmts for last-read
 	currentStmtIdx: number;      // Index of the statement currently being processed
 	currentStmtList: Node[];     // The list containing the current statement
@@ -69,8 +69,6 @@ export function createDrcContext(ctx: TransformContext): DrcContext {
 	return {
 		ctx,
 		scopes: [],
-		pendingStmts: [],
-		preStmts: [],
 		outerCtx: [],
 		currentStmtIdx: 0,
 		currentStmtList: [],
@@ -86,6 +84,8 @@ function createScope(isLoop: boolean, isFunction: boolean): DrcScope {
 	return {
 		varsToCleanup: [],
 		wasMoved: [],
+		preStmts: [],
+		pendingStmts: [],
 		needsTry: false,
 		isLoop,
 		isFunction,
@@ -236,47 +236,48 @@ export function findVarInfoInFunction(dctx: DrcContext, varName: string): VarInf
 // ===== Pending Statement Buffers =====
 
 export function addPending(dctx: DrcContext, stmt: Node): void {
-	dctx.pendingStmts.push(stmt);
+	currentScope(dctx).pendingStmts.push(stmt);
 }
 
 export function addPre(dctx: DrcContext, stmt: Node): void {
-	dctx.preStmts.push(stmt);
+	currentScope(dctx).preStmts.push(stmt);
 }
 
 export function flushPending(dctx: DrcContext, target: Node[]): void {
-	// NOTE: target is passed by value in C — push can realloc the payload,
-	// but the caller's struct is stale. The hidden_addr transform on arrays
-	// ensures `target` is passed by pointer, so the caller sees the update.
-	for (const s of dctx.pendingStmts) {
-		target.push(s);
+	const scope = currentScope(dctx);
+	let i = 0;
+	while (i < scope.pendingStmts.length) {
+		target.push(scope.pendingStmts[i]);
+		i += 1;
 	}
-	const empty: Node[] = [];
-	dctx.pendingStmts = empty;
+	scope.pendingStmts = [];
 }
 
 export function flushPre(dctx: DrcContext, target: Node[]): void {
-	// NOTE: same as flushPending — relies on hidden_addr for array params.
-	for (const s of dctx.preStmts) {
-		target.push(s);
+	const scope = currentScope(dctx);
+	let i = 0;
+	while (i < scope.preStmts.length) {
+		target.push(scope.preStmts[i]);
+		i += 1;
 	}
-	const empty: Node[] = [];
-	dctx.preStmts = empty;
+	scope.preStmts = [];
 }
 
 export function hasPending(dctx: DrcContext): boolean {
-	return dctx.pendingStmts.length > 0;
+	return currentScope(dctx).pendingStmts.length > 0;
 }
 
 // Remove pending wasMoved stmts for a variable that was prematurely marked as last-read.
 // Used when `x = f(x)` — the RHS arg `x` gets wasMoved but the assignment overwrites `x`.
 export function clearPendingForVar(dctx: DrcContext, varName: string): void {
+	const scope = currentScope(dctx);
 	const filtered: Node[] = [];
-	for (const s of dctx.pendingStmts) {
+	for (const s of scope.pendingStmts) {
 		if (!isPendingWasMovedFor(s, varName)) {
 			filtered.push(s);
 		}
 	}
-	dctx.pendingStmts = filtered;
+	scope.pendingStmts = filtered;
 }
 
 function isPendingWasMovedFor(s: Node, varName: string): boolean {
@@ -301,7 +302,7 @@ function isPendingWasMovedFor(s: Node, varName: string): boolean {
 }
 
 export function hasPre(dctx: DrcContext): boolean {
-	return dctx.preStmts.length > 0;
+	return currentScope(dctx).preStmts.length > 0;
 }
 
 // ===== Outer Statement Context Operations =====
@@ -472,12 +473,14 @@ test "findVarInfoInContext searches outer scopes" {
 
 test "initially empty" {
 	const dctx = testDrcCtx();
+	pushScope(dctx, false, false);
 	assert !hasPending(dctx);
-	assert dctx.pendingStmts.length === 0;
+	assert currentScope(dctx).pendingStmts.length === 0;
 }
 
 test "add and flush cycle" {
 	const dctx = testDrcCtx();
+	pushScope(dctx, false, false);
 	const loc = makeLoc(0, 0);
 	addPending(dctx, makeExprStmt(makeNull(loc), loc));
 	assert hasPending(dctx);

@@ -438,6 +438,27 @@ function resolveOriginalName(info: ExportedSymInfo, importName: string): string 
 	return info.originalName !== "" ? info.originalName : importName;
 }
 
+// Shared helper: create a symbol from export registry info, define it, and record for LSP.
+// Used by both collectImport and collectExport (re-export path) to avoid duplication.
+function importSymFromRegistry(
+	ctx: CheckerContext, alias: string, importName: string,
+	exportInfo: ExportedSymInfo, sourcePath: string,
+	nameLoc: SourceLocation, defNode: Node
+): Symbol {
+	const sym = makeSymbol(alias, exportInfo.kind, exportInfo.symType, false);
+	sym.modulePath = resolveDefiningModule(exportInfo, sourcePath);
+	const origName = resolveOriginalName(exportInfo, importName);
+	if (origName !== alias) sym.originalName = origName;
+	if (exportInfo.nativeName !== "") sym.nativeName = exportInfo.nativeName;
+	if (exportInfo.headerPath !== "") sym.headerPath = exportInfo.headerPath;
+	if (exportInfo.location !== null && exportInfo.location.line > 0) {
+		sym.location = exportInfo.location;
+	}
+	defineOrError(ctx, sym, defNode);
+	sgRecordSym(ctx, nameLoc.line, nameLoc.column, nameLoc.column + alias.length, sym, exportInfo.symType, exportInfo.kind, alias, "", false);
+	return sym;
+}
+
 function collectImport(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ImportDeclData;
 
@@ -469,21 +490,8 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 		if (sourcePath !== "") {
 			const exportInfo = findExportedSymbol(ctx.exportRegistry, sourcePath, importName);
 			if (exportInfo !== null) {
-				// Use actual type and kind from source module
-				// Preserve original defining module (owner), not the re-exporting hub
-				const importedSym = makeSymbol(localAlias, exportInfo.kind, exportInfo.symType, false);
-				importedSym.modulePath = resolveDefiningModule(exportInfo, sourcePath);
-				// Preserve original declared name for C mangling (chain re-exports handled)
-				const origName = resolveOriginalName(exportInfo, importName);
-				if (origName !== localAlias) importedSym.originalName = origName;
-				// Preserve original declaration location from defining module (Reference parity)
-				if (exportInfo.location !== null && exportInfo.location.line > 0) {
-					importedSym.location = exportInfo.location;
-				}
-				defineOrError(ctx, importedSym, node);
-				// Record imported symbol as usage (isDecl=false) — use per-name location if available
 				const nameLoc = d.nameLocations !== null && i < d.nameLocations.length ? d.nameLocations[i] : node.location;
-				sgRecordSym(ctx, nameLoc.line, nameLoc.column, nameLoc.column + localAlias.length, importedSym, exportInfo.symType, exportInfo.kind, localAlias, "", false);
+				importSymFromRegistry(ctx, localAlias, importName, exportInfo, sourcePath, nameLoc, node);
 				// Implementation parity: import enum members alongside enum type
 				// (rawImportSymbol registers each skEnumField in the importing scope)
 				if (exportInfo.kind === SymbolKind.Enum && exportInfo.symType.typeNames !== null) {
@@ -493,12 +501,10 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 				// Skip: was defineOrError for Color_Red etc.
 				}
 				const primarySym = lookupLocal(ctx.table, localAlias);
-				// Restore cross-module metadata (nativeName, builtinKind, defaults)
+				// Restore cross-module metadata not handled by importSymFromRegistry
 				if (primarySym !== null) {
-					if (exportInfo.nativeName !== "") primarySym.nativeName = exportInfo.nativeName;
 					if (exportInfo.builtinKind !== "") primarySym.builtinKind = exportInfo.builtinKind;
 					if (exportInfo.defaultParams !== null && exportInfo.defaultParams.length > 0) primarySym.defaultParams = exportInfo.defaultParams;
-					if (exportInfo.headerPath !== "") primarySym.headerPath = exportInfo.headerPath;
 				}
 				// Propagate -iquote for header search path
 				if (exportInfo.headerPath !== "" && exportInfo.definingModule !== "") {
@@ -628,13 +634,8 @@ function collectExport(ctx: CheckerContext, node: Node): void {
 					if (sourcePath !== "") {
 						const exportInfo = findExportedSymbol(ctx.exportRegistry, sourcePath, importName);
 						if (exportInfo !== null) {
-							const reExpSym = makeSymbol(alias, exportInfo.kind, exportInfo.symType, false);
-							reExpSym.modulePath = resolveDefiningModule(exportInfo, sourcePath);
-							const origN = resolveOriginalName(exportInfo, importName);
-							if (origN !== alias) reExpSym.originalName = origN;
-							if (exportInfo.nativeName !== "") reExpSym.nativeName = exportInfo.nativeName;
-							if (exportInfo.headerPath !== "") reExpSym.headerPath = exportInfo.headerPath;
-							defineOrError(ctx, reExpSym, node);
+							const reNameLoc = imp.nameLocations !== null && i < imp.nameLocations.length ? imp.nameLocations[i] : d.exportedDecl.location;
+							importSymFromRegistry(ctx, alias, importName, exportInfo, sourcePath, reNameLoc, node);
 						} else {
 							const isCirc = ctx.moduleGraph !== null
 								&& ctx.currentModule !== null
@@ -748,7 +749,7 @@ export function extractDirectives(program: Node): string[] {
 import { parseSource } from "../parser/statements/validation";
 import "../parser/statements/core"; // registers parser callback
 import { lookupSymbol } from "./symbol";
-import { createContext, findExtension } from "./context";
+import { createContext, findExtension, registerModuleExports } from "./context";
 
 function collectFromSource(input: string): CheckerContext {
 	const ctx = createContext();
@@ -996,4 +997,45 @@ test "VariableDecl collected in pass 1" {
 	if (sym !== null) {
 		assert hasFlag(sym, SymbolFlag.Exported);
 	}
+}
+
+test "re-export preserves original location and records sgSymRecord" {
+	// Set up: register a fake source module with an exported symbol at line 51
+	const ctx = createContext();
+	ctx.modulePath = "/test/hub/index.ms";
+	const origLoc = makeLoc(51, 17);
+	const fakeExport: ExportedSymInfo = {
+		name: "get", kind: SymbolKind.Function, symType: unknownType(),
+		overloadTypes: [], extReceiverType: "", extIsStatic: false,
+		overloadExtReceiverTypes: [], overloadExtIsStatic: [],
+		nativeName: "", builtinKind: "",
+		overloadNativeNames: [], overloadBuiltinKinds: [],
+		defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [],
+		definingModule: "/test/hub/accessors", originalName: "", headerPath: "",
+		location: origLoc, memberLocations: [],
+	};
+	registerModuleExports(ctx.exportRegistry, "/test/hub/accessors", [fakeExport]);
+
+	// Parse a re-export statement and collect
+	const pr = parseSource("export { get } from \"./accessors\";");
+	assert pr.ok;
+	collectTopLevel(ctx, pr.value);
+
+	// Verify symbol has correct modulePath and preserved location
+	const sym = lookupSymbol(ctx.table, "get");
+	assert sym !== null;
+	if (sym !== null) {
+		assert hasFlag(sym, SymbolFlag.Exported);
+		assert sym.modulePath === "/test/hub/accessors";
+		assert sym.location.line === 51;
+		assert sym.location.column === 17;
+	}
+
+	// Verify sgSymRecord was created for the re-export name
+	assert ctx.symRecords.length > 0;
+	let found = false;
+	for (const rec of ctx.symRecords) {
+		if (rec.name === "get") { found = true; }
+	}
+	assert found;
 }

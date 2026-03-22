@@ -14,7 +14,6 @@ import {
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
 import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation, buildTypeArgKey } from "./resolvePass";
 import { parseNumberLiteral, findChar, splitTopLevel } from "../utils/string";
-import { writeStderr } from "std/io";
 import { findCallTypeArg, getExplicitTypeArg, getGenericDecl } from "../parser/context";
 import {
 	markInitialized, isInitialized, impliesNotNull, getDeclBlock,
@@ -2082,13 +2081,9 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 		if (discMd.object !== null && discMd.object.kind === NodeKind.Identifier) {
 			const baseName = (discMd.object.data as IdentifierData).name;
 			const baseSym = lookupSymbol(ctx.table, baseName);
-			const symType = baseSym !== null ? baseSym.symbolType : null;
-			const isDisc = symType !== null ? isDiscriminatedUnion(symType) : false;
-			const discName = symType !== null && isDisc ? getDiscriminantName(symType) : "";
-			writeStderr("[NARROW-DETECT] base=" + baseName + " symFound=" + (baseSym !== null).toString() + " typeKind=" + (symType !== null ? symType.kind.toString() : "null") + " isDisc=" + isDisc.toString() + " discName=" + discName + " prop=" + discMd.property + "\n");
-			if (baseSym !== null && symType !== null && isDisc && discName === discMd.property) {
+			if (baseSym !== null && baseSym.symbolType !== null && isDiscriminatedUnion(baseSym.symbolType) && getDiscriminantName(baseSym.symbolType) === discMd.property) {
 				narrowBase = baseSym;
-				narrowUnion = symType;
+				narrowUnion = baseSym.symbolType;
 			}
 		}
 	}
@@ -2131,9 +2126,6 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 				if (variantIdx >= 0 && narrowUnion.typeChildren !== null && variantIdx < narrowUnion.typeChildren.length) {
 					savedNarrowType = narrowBase.symbolType;
 					narrowBase.symbolType = narrowUnion.typeChildren[variantIdx];
-					const vt = narrowUnion.typeChildren[variantIdx];
-					const vtFields = vt.typeNames !== null ? vt.typeNames.join(",") : "null";
-					writeStderr("[NARROW] arm=" + patEnumName + " vi=" + variantIdx.toString() + " fields=" + vtFields + "\n");
 				}
 			}
 		}

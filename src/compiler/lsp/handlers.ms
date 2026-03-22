@@ -10,7 +10,6 @@ import {
 	dbGetFileCount, dbGetFilePathByIndex
 } from "../transam/index";
 import { detectCycle } from "../transam/moduleDeps";
-import { markQueriesRedForFile } from "../transam/cache";
 import { readFile, clockMs, readDir } from "std/process";
 import { translateCHeader } from "../../module/loader";
 import { writeStderr } from "std/io";
@@ -830,31 +829,10 @@ export function handleDidChange(params: string, db: TransAmDb): string {
 	const changes = lspGetField(params, "text");
 	const path = lspUriToPath(uri);
 	dbSetFileText(db, path, changes);
-	// Force-invalidate type_check cache — Trans-Am's Salsa early cutoff
-	// considers parse output hash unchanged for comment/whitespace edits,
-	// but structural edits inside expressions (e.g., field name changes in match guards)
-	// produce identical AST hashes because the string value change doesn't affect AST structure.
-	const fileId = getFileId(db.fileInput, path);
-	if (fileId >= 0) {
-		markQueriesRedForFile(db.cache, fileId);
-	}
-	// Record import edges for dependency tracking
 	const program = dbParse(db, path);
 	recordImportsForFile(db, path, program);
-	// Pre-build completion cache for instant response
 	prebuildCompletionCache(db, path, uri);
-	const srcAfter = dbGetSource(db, path);
-	const lines = srcAfter.split("\n");
-	const line13 = lines.length > 12 ? lines[12] : "???";
-	const srcHash = srcAfter.length;
-	// Force fresh type check by invalidating the cache entry directly
-	const fileId = getFileId(db.fileInput, path);
-	writeStderr("[LSP] didChange " + path + " fileId=" + fileId.toString() + " rev=" + db.revision.value.toString() + " line13=" + line13 + "\n");
-	const ctx = dbTypeCheck(db, path);
-	const errCount = ctx !== null ? ctx.errors.length.toString() : "null";
-	const errMsg = ctx !== null && ctx.errors.length > 0 ? ctx.errors[0].message : "none";
 	const diagParams = buildDiagnosticsJson(uri, db, path);
-	writeStderr("[LSP] didChange " + path + " errors=" + errCount + " msg=" + errMsg + "\n");
 	return lspNotification("textDocument/publishDiagnostics", diagParams);
 }
 

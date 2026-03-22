@@ -274,6 +274,65 @@ static inline int32_t msNetSendNonBlock(int32_t fd, msString data, int32_t offse
 	return (int32_t)n;
 }
 
+/* ===== HTTP Performance Helpers ===== */
+
+/* Fast headers check — O(1) last-4-bytes (httpbeast pattern).
+ * Returns position after \r\n\r\n, or -1 if not found.
+ * Assumes common case: full headers arrive in one read. */
+static inline int32_t msFastHeadersCheck(msString data) {
+	int32_t len = (int32_t)data.len;
+	if (len < 4 || !data.p) return -1;
+	const char* d = data.p->data;
+	if (d[len-4]=='\r' && d[len-3]=='\n' && d[len-2]=='\r' && d[len-1]=='\n')
+		return len;
+	return -1;
+}
+
+/* Slow headers check — linear scan for \r\n\r\n (fallback for partial headers). */
+static inline int32_t msSlowHeadersCheck(msString data) {
+	int32_t len = (int32_t)data.len;
+	if (!data.p) return -1;
+	const char* d = data.p->data;
+	for (int32_t i = 0; i + 3 < len; i++) {
+		if (d[i]=='\r' && d[i+1]=='\n' && d[i+2]=='\r' && d[i+3]=='\n')
+			return i + 4;
+	}
+	return -1;
+}
+
+/* Build HTTP response in one allocation (httpbeast pattern).
+ * snprintf header + memcpy body → single string. */
+static inline msString msBuildResponse(int32_t status, msString statusTextStr,
+                                        msString contentType, msString body) {
+	char header[512];
+	int32_t bodyLen = (int32_t)body.len;
+	/* Extract C strings from msString for snprintf */
+	char stBuf[64], ctBuf[128];
+	int stLen = statusTextStr.len < 63 ? (int)statusTextStr.len : 63;
+	int ctLen = contentType.len < 127 ? (int)contentType.len : 127;
+	if (statusTextStr.p) memcpy(stBuf, statusTextStr.p->data, stLen);
+	stBuf[stLen] = '\0';
+	if (contentType.p) memcpy(ctBuf, contentType.p->data, ctLen);
+	ctBuf[ctLen] = '\0';
+
+	int hlen = snprintf(header, 512,
+		"HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %d\r\n\r\n",
+		(int)status, stBuf, ctBuf, (int)bodyLen);
+	if (hlen < 0 || hlen >= 512) hlen = 511;
+	int32_t total = hlen + bodyLen;
+	/* Allocate string: payload header + data */
+	msStrPayload* pp = (msStrPayload*)malloc(sizeof(msStrPayload) + total + 1);
+	pp->cap = total;
+	memcpy(pp->data, header, hlen);
+	if (body.p && bodyLen > 0)
+		memcpy(pp->data + hlen, body.p->data, bodyLen);
+	pp->data[total] = '\0';
+	msString result;
+	result.len = total;
+	result.p = pp;
+	return result;
+}
+
 #ifdef __cplusplus
 }
 #endif

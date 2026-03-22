@@ -47,10 +47,6 @@ export function cmdDumpAst(filePath: string): void {
 		console.log(error("parse error") + ": " + result.error);
 		exit(1);
 	}
-	// Debug: parse same file again to check if parser globals get corrupted
-	console.log("[dbg] first parse ok, trying second parse (same file)...");
-	const r2 = parseSource(source);
-	console.log("[dbg] second parse ok=" + String(r2.ok));
 	const program = result.value;
 	const pd = program.data as ProgramData;
 	for (const stmt of pd.programStmts) {
@@ -61,20 +57,15 @@ export function cmdDumpAst(filePath: string): void {
 // -- check --
 
 export function cmdCheck(filePath: string, opts: CliOptions): void {
-	console.log("[dbg] cmdCheck: " + filePath);
 	const t0 = clockMs();
 	const source = readSource(filePath);
-	console.log("[dbg] source len=" + String(source.length));
 	const parseResult = parseSource(source);
-	console.log("[dbg] parsed ok=" + String(parseResult.ok));
 	if (!parseResult.ok) {
 		console.log(error("parse error") + ": " + parseResult.error);
 		exit(1);
 	}
 	const program = parseResult.value;
-	console.log("[dbg] checkProgram...");
 	const ctx = checkProgram(program);
-	console.log("[dbg] checkProgram done");
 	if (!hasErrors(ctx)) {
 		console.log(success("OK") + " " + dim("no type errors"));
 	} else {

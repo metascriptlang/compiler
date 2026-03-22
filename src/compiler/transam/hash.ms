@@ -218,7 +218,7 @@ export function taHashNode(node: Node): number {
 		},
 		NodeKind.MatchCase => {
 			const d = node.data as MatchCaseData;
-			h = hNodes(h, d.casePatterns); h = hN(h, d.caseBody);
+			h = hNodes(h, d.casePatterns); h = hN(h, d.caseGuard); h = hN(h, d.caseBody);
 		},
 		NodeKind.AwaitExpr => {
 			h = hN(h, (node.data as AwaitExprData).awaitArg);

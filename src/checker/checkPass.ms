@@ -1113,11 +1113,8 @@ function loadPreludeOne(ctx: CheckerContext, specifier: string, stdPath: string)
 		src = readFile(base + "/index.ms");
 		resolvedPath = base + "/index.ms";
 	}
-	console.log("[dbg]   resolved=" + resolvedPath + " len=" + String(src.length));
 	if (src.length > 0) {
-		console.log("[dbg]   parsing...");
 		const pr = parseSource(src);
-		console.log("[dbg]   parsed ok=" + String(pr.ok));
 		if (pr.ok) {
 			// Set modulePath BEFORE sub-module loading so path resolution is consistent
 			const savedPath = ctx.modulePath;
@@ -1223,20 +1220,15 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 // Creates a shared IdentCache (one cache per compilation)
 // that must be passed to all module contexts in the same compilation.
 export function buildPreludeContext(stdPath: string): CheckerContext {
-	console.log("[dbg] buildPreludeContext");
 	const cache = createIdentCache();
 	const ctx = createContextWithCache(cache);
 	ctx.extensionRegistry = createExtensionRegistry();
-	console.log("[dbg] context ready, loading preludes");
 	const imps = globalImports();
 	let idx = 0;
 	while (idx < imps.length) {
-		console.log("[dbg] prelude " + String(idx) + ": " + imps[idx]);
 		loadPreludeOne(ctx, imps[idx], stdPath);
-		console.log("[dbg] done " + String(idx));
 		idx = idx + 1;
 	}
-	console.log("[dbg] all preludes loaded");
 	return ctx;
 }
 

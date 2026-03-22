@@ -51,11 +51,11 @@ export function printProgram(node: Node, options: FormatOptions): Doc {
 		}
 		parts.push(callPrintNode(stmt, options));
 
-		// Emit inter-statement comments with surrounding blank lines
-		for (const ic of interComments) {
+		// Emit inter-statement comments: blank line before first, single newline between
+		for (let ci = 0; ci < interComments.length; ci += 1) {
 			parts.push(docHardLine());
-			parts.push(docHardLine());
-			parts.push(docText(ic.value));
+			if (ci === 0) parts.push(docHardLine());
+			parts.push(docText(interComments[ci].value));
 		}
 	}
 	return docGroup(parts);

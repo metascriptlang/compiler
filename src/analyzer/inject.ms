@@ -300,10 +300,13 @@ function processMember(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	// must copy for ownership transfer UNLESS field is last-read (Phase B).
 	if (mode === DrcMode.SinkArg && node.nodeType !== null) {
 		const rcInfo = classifyType(node.nodeType, dctx.ctx);
+		console.log(`[DRC-DBG] processMember SinkArg field=${md.property} typeKind=${node.nodeType.kind} needsCleanup=${rcInfo.needsCleanup} mod=${dctx.ctx.modulePath}`);
 		if (rcInfo.needsCleanup) {
 			// Always copy from MemberExpr: source field may belong to a shared object.
 			return passCopyToSink(node, dctx);
 		}
+	} else if (mode === DrcMode.SinkArg) {
+		console.log(`[DRC-DBG] processMember SinkArg field=${md.fieldName} nodeType=NULL`);
 	}
 	return node;
 }
@@ -408,16 +411,22 @@ function processConditional(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		cd.ternaryAlternate = processNode(cd.ternaryAlternate, dctx, mode);
 		return node;
 	}
-	// Reference parity (IfExpr nestedScope): convert to if-else with temp result so each branch
-	// gets its own statement context. Borrow copies stay scoped to their branch.
-	// Pattern from processAssignment (line 1599-1616).
+	// Reference parity (IfExpr nestedScope): convert to if-else with temp result.
+	// Each branch gets its own scope — preStmts/pendingStmts are per-scope,
+	// so sibling borrows can't leak into branch statement lists.
+	// Reference: nestedScope creates fresh Scope per branch.
 	const tmpName = freshTemp(dctx.ctx, "cond");
 	const resultType = node.nodeType;
 	const tmpDecl = makeVarDecl(tmpName, null as unknown as Node, DeclKind.Let, loc);
 	tmpDecl.nodeType = resultType;
 	addPre(dctx, tmpDecl);
+	// nestedScope parity: push/pop scope for each branch isolates preStmts/pendingStmts
+	pushScope(dctx, false, false);
 	const thenProcessed = processBranchAssign(tmpName, resultType, cd.ternaryConsequent, dctx, loc);
+	popScope(dctx);
+	pushScope(dctx, false, false);
 	const elseProcessed = processBranchAssign(tmpName, resultType, cd.ternaryAlternate, dctx, loc);
+	popScope(dctx);
 	addPre(dctx, makeIf(cd.ternaryCondition, makeBlock(thenProcessed, loc), makeBlock(elseProcessed, loc), loc));
 	const resultIdent = makeIdent(tmpName, loc);
 	resultIdent.nodeType = resultType;
@@ -449,6 +458,7 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	if (mode === DrcMode.SinkArg) {
 		const loc = node.location;
 		if (isLastReadSafe(sym, node, dctx.currentStmtIdx, dctx.currentStmtList, dctx)) {
+			console.log(`[DRC-DBG] processIdent SinkArg MOVE name=${d.name} line=${loc.line}`);
 			// Last read: destructiveMoveVar — blit + wasMoved
 			if (rcInfo.wasMovedFn !== "") {
 				addPending(dctx, makeWasMovedCall(d.name, rcInfo, loc));
@@ -466,6 +476,7 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	if (mode === DrcMode.Consumed) {
 		const loc = node.location;
 		if (isLastReadSafe(sym, node, dctx.currentStmtIdx, dctx.currentStmtList, dctx)) {
+			console.log(`[DRC-DBG] processIdent Consumed MOVE name=${d.name} line=${loc.line}`);
 			if (rcInfo.wasMovedFn !== "") {
 				addPending(dctx, makeWasMovedCall(d.name, rcInfo, loc));
 			}
@@ -630,7 +641,7 @@ function classifyArrayElementRc(arrayExpr: Node, dctx: DrcContext): RcInfo {
 function emitMoveSourceWasMoved(moveArg: Node, rcInfo: RcInfo, idx: number, stmts: Node[], dctx: DrcContext, loc: SourceLocation, checkLastRead: boolean): boolean {
 	if (moveArg.kind === NodeKind.Identifier) {
 		const srcName = (moveArg.data as IdentifierData).name;
-		// errFailedMove diagnostic: error when move can't actually move
+		// errFailedMove diagnostic: error when target is still used after this point
 		if (checkLastRead && !isLastReadSafe(moveArg.resolvedSym, moveArg, idx, stmts, dctx)) {
 			if (dctx.ctx.checkerCtx !== null) {
 				dctx.ctx.checkerCtx.errors.push({ message: "cannot move '" + srcName + "': variable is still used after this point", line: moveArg.location.line, column: moveArg.location.column, fatal: false });
@@ -776,23 +787,23 @@ function processStmtList(stmts: Node[], dctx: DrcContext, loc: SourceLocation): 
 
 		const processed = processStmt(stmts[i], i, stmts, dctx, loc);
 
-		// Flush pre-statements and post-statements INLINE to avoid
-		// pass-by-value array invalidation (flushPre/flushPending take
-		// Node[] by value in C — push+realloc inside them doesn't update
-		// the caller's buf struct, causing use-after-free).
+		// Flush pre-statements and post-statements from current scope.
+		// Per-scope isolation (nestedScope parity): each scope has its own
+		// preStmts/pendingStmts, so branch processing can't leak parent stmts.
+		const curScope = currentScope(dctx);
 		let pi = 0;
-		while (pi < dctx.preStmts.length) {
-			buf.push(dctx.preStmts[pi]);
+		while (pi < curScope.preStmts.length) {
+			buf.push(curScope.preStmts[pi]);
 			pi += 1;
 		}
-		dctx.preStmts = [];
+		curScope.preStmts = [];
 		buf.push(processed);
 		let qi = 0;
-		while (qi < dctx.pendingStmts.length) {
-			buf.push(dctx.pendingStmts[qi]);
+		while (qi < curScope.pendingStmts.length) {
+			buf.push(curScope.pendingStmts[qi]);
 			qi += 1;
 		}
-		dctx.pendingStmts = [];
+		curScope.pendingStmts = [];
 
 		dctx.currentStmtIdx = savedIdx;
 	}

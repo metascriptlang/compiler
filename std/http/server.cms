@@ -94,11 +94,12 @@ function createServerResponse(fd: int32): ServerResponse {
 	};
 }
 
-// Build HTTP response. Uses res.status (not hardcoded 200).
-// No Connection header — HTTP/1.1 is keep-alive by default (RFC 7230 §6.3).
-// httpbeast pattern: no Connection header, close handled by selector unregister.
+// Build HTTP response in one C-level allocation (httpbeast pattern).
+// snprintf header + memcpy body — zero template literal overhead.
+extern function msBuildResponse(status: int32, statusText: string, contentType: string, body: string): string;
+
 function sendBody(res: ServerResponse, contentType: string, body: string): void {
-	res._responseData = `HTTP/1.1 ${res.status} ${statusText(res.status)}\r\nContent-Type: ${contentType}\r\nContent-Length: ${body.length}\r\n\r\n${body}`;
+	res._responseData = msBuildResponse(res.status, statusText(res.status), contentType, body);
 	res.headersSent = true;
 	res._finished = true;
 }
@@ -144,18 +145,14 @@ interface ClientState {
 	headersEndPos: int32;
 }
 
-// Find first \r\n\r\n. Returns position after it, or -1.
+// Fast headers check: O(1) last-4-bytes, then slow linear fallback (httpbeast pattern)
+extern function msFastHeadersCheck(data: string): int32;
+extern function msSlowHeadersCheck(data: string): int32;
+
 function findHeaderEnd(data: string): int32 {
-	const len = data.length;
-	let i = 0;
-	while (i + 3 < len) {
-		if (data.charCodeAt(i) === "\r".code && data.charCodeAt(i + 1) === "\n".code
-			&& data.charCodeAt(i + 2) === "\r".code && data.charCodeAt(i + 3) === "\n".code) {
-			return i + 4;
-		}
-		i = i + 1;
-	}
-	return -1;
+	const fast = msFastHeadersCheck(data);
+	if (fast >= 0) return fast;
+	return msSlowHeadersCheck(data);
 }
 
 export function serveConcurrent(server: HttpServer, threads: int32 = 0): void {
