@@ -543,8 +543,8 @@ msRefArray msRefArrayNew(int64_t cap) {
 void msRefArrayDestroy(msRefArray* arr) {
 	if (arr->p != NULL) {
 		/* Decref each element before freeing the payload.
-		   Reference parity: =destroy for seq[ref T] iterates elements
-		   and calls =destroy on each before freeing the backing buffer.
+		   Reference parity: destroy for ref-element sequences iterates elements
+		   and calls destroy on each before freeing the backing buffer.
 		   Without this, the inject pass (inline scope cleanup) frees the
 		   payload while elements still hold stale refcounts — use-after-free. */
 		for (int64_t i = 0; i < arr->len; i++) {

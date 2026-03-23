@@ -1136,6 +1136,8 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 			cache.items = objItems;
 			return lspResponse(id, joinJsonItems(objItems));
 		}
+		// Inside object literal but type unknown — return empty, not global scope
+		return lspResponse(id, "[]");
 	}
 
 	const candidates = sgGetCompletionCandidates(ctx, kind, prefix, receiverType);
@@ -2155,6 +2157,25 @@ test "unknown position returns null result" {
 	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":99,\"character\":0}}";
 	const r = handleDefinition("9", params, db);
 	assert lspGetNumberField(r, "id") === 9;
+}
+
+test "definition inside template literal" {
+	const src = "const myName = \"world\";\nconst msg = `hello ${myName}`;";
+	const db = testDb("file:///test.ms", src);
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":21}}";
+	const r = handleDefinition("50", params, db);
+	assert r.indexOf("\"line\":0") >= 0;
+	assert r.indexOf("\"character\":6") >= 0;
+}
+
+test "definition on param inside template literal" {
+	const src = "function fmt(expected: string): string {\n\treturn `Expected ${expected}!`;\n}";
+	const db = testDb("file:///test.ms", src);
+	// "expected" in template at line 1, character 22 → should jump to param declaration on line 0
+	const params = "{\"textDocument\":{\"uri\":\"file:///test.ms\"},\"position\":{\"line\":1,\"character\":22}}";
+	const r = handleDefinition("51", params, db);
+	assert r.indexOf("\"line\":0") >= 0;
+	assert r.indexOf("\"character\":13") >= 0;
 }
 
 test "returns symbols for file" {

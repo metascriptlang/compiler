@@ -37,14 +37,16 @@ static uint32_t msEventsToEpoll(uint32_t events) {
 int msSelectorRegister(msSelector* sel, int fd, uint32_t events, void* userdata) {
 	struct epoll_event ev;
 	ev.events = msEventsToEpoll(events);
-	ev.data.ptr = userdata;
+	ev.data.fd = fd;
+	(void)userdata;
 	return epoll_ctl(sel->epfd, EPOLL_CTL_ADD, fd, &ev) < 0 ? -1 : 0;
 }
 
 int msSelectorUpdate(msSelector* sel, int fd, uint32_t events, void* userdata) {
 	struct epoll_event ev;
 	ev.events = msEventsToEpoll(events);
-	ev.data.ptr = userdata;
+	ev.data.fd = fd;
+	(void)userdata;
 	return epoll_ctl(sel->epfd, EPOLL_CTL_MOD, fd, &ev) < 0 ? -1 : 0;
 }
 
@@ -64,8 +66,8 @@ int msSelectorPoll(msSelector* sel, int timeoutMs, msReadyEvent* out, int maxEve
 	if (nready < 0) return -1;
 
 	for (int i = 0; i < nready; i++) {
-		out[i].fd = -1;  /* epoll doesn't directly expose fd in events */
-		out[i].userdata = events[i].data.ptr;
+		out[i].fd = events[i].data.fd;
+		out[i].userdata = NULL;
 		out[i].events = 0;
 
 		if (events[i].events & EPOLLIN)

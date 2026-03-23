@@ -277,7 +277,7 @@ interface ProcessedModule {
 
 // Process @compile("foo.c") directives: compile each .c file to .o relative to module dir.
 // Returns space-separated .o file paths to add to the link list.
-function processCompileDirectives(directives: string, moduleDir: string, allFlags: string, mode: number, ccOption: number, verbose: boolean): string {
+function processCompileDirectives(directives: string, moduleDir: string, allFlags: string, mode: number, ccOption: number, ccBinary: string, verbose: boolean): string {
 	if (directives === "") return "";
 	let oFiles = "";
 	let start = 0;
@@ -324,7 +324,7 @@ function processCompileDirectives(directives: string, moduleDir: string, allFlag
 					if (verbose) verboseLog(`  @compile ${fullPath} → ${oFile} ${dim("(cached)")}`);
 				} else {
 					if (verbose) verboseLog(`  @compile ${fullPath} → ${oFile}`);
-					const ccCode = compileCFile(fullPath, oFile, fileFlags, mode, ccOption);
+					const ccCode = compileCFile(fullPath, oFile, fileFlags, mode, ccOption, ccBinary);
 					if (ccCode !== 0) {
 						console.log(`${error("error")}: @compile failed for ${fullPath} ${dim(`(exit ${ccCode})`)}`);
 
@@ -569,7 +569,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 
 	// Compile prelude @compile directives — unconditional (reference-aligned: all @compile are always built)
 	if (graphPreludeCtx !== null && graphPreludeCtx.compileDirectives !== "") {
-		const preludeObjs = processCompileDirectives(graphPreludeCtx.compileDirectives, ".", allFlags, opts.mode, opts.ccCompiler, opts.verbose);
+		const preludeObjs = processCompileDirectives(graphPreludeCtx.compileDirectives, ".", allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose);
 		oFiles = appendFlag(oFiles, preludeObjs);
 	}
 
@@ -589,7 +589,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		codegenTime = codegenTime + (clockMs() - tCg);
 
 		// Process @compile("foo.c") directives
-		const compileObjs = processCompileDirectives(p.ctx.compileDirectives, dirName(p.modPath), allFlags, opts.mode, opts.ccCompiler, opts.verbose);
+		const compileObjs = processCompileDirectives(p.ctx.compileDirectives, dirName(p.modPath), allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose);
 		oFiles = appendFlag(oFiles, compileObjs);
 
 		if (opts.emitC) {
@@ -614,7 +614,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 				const cFile = stableCFile(p.modPath);
 				if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
 				const tCl = clockMs();
-				const ccCode = compileCFile(cFile, oFile, modFlags, opts.mode, opts.ccCompiler);
+				const ccCode = compileCFile(cFile, oFile, modFlags, opts.mode, opts.ccCompiler, opts.ccBinary);
 				clangTime = clangTime + (clockMs() - tCl);
 				if (ccCode !== 0) {
 					console.log(`${error("error")}: compile failed for ${p.modPath} ${dim(`(exit ${ccCode})`)}`);
@@ -641,7 +641,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		const dispFile = `${cd}/_dispatch.c`;
 		const dispObj = `${cd}/_dispatch.o`;
 		writeOutput(dispFile, dispatcher);
-		const dispCode = compileCFile(dispFile, dispObj, "", opts.mode, opts.ccCompiler);
+		const dispCode = compileCFile(dispFile, dispObj, "", opts.mode, opts.ccCompiler, opts.ccBinary);
 		if (dispCode !== 0) {
 			console.log(`${error("error")}: compile failed for dispatcher ${dim(`(exit ${dispCode})`)}`);
 
@@ -672,7 +672,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	}
 	const tD = clockMs();
 	if (opts.verbose) verboseLog("linking → " + outBinary);
-	const linkCode = linkObjects(oFiles, outBinary, linkFlags, opts.mode, opts.ccCompiler);
+	const linkCode = linkObjects(oFiles, outBinary, linkFlags, opts.mode, opts.ccCompiler, opts.ccBinary);
 	if (linkCode !== 0) {
 		console.log(`${error("error")}: link failed ${dim(`(exit ${linkCode})`)}`);
 
@@ -773,7 +773,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 
 	// Compile prelude @compile directives — unconditional (reference-aligned: all @compile are always built)
 	if (graphPreludeCtx !== null && graphPreludeCtx.compileDirectives !== "") {
-		const preludeObjs = processCompileDirectives(graphPreludeCtx.compileDirectives, ".", allFlags, opts.mode, opts.ccCompiler, opts.verbose);
+		const preludeObjs = processCompileDirectives(graphPreludeCtx.compileDirectives, ".", allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose);
 		oFiles = appendFlag(oFiles, preludeObjs);
 	}
 
@@ -785,7 +785,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 
 		const cCode = generateCModule(p.program, p.ctx, p.modPath, aliveSet, true, opts.isHcr);
 
-		const compileObjs = processCompileDirectives(p.ctx.compileDirectives, dirName(p.modPath), allFlags, opts.mode, opts.ccCompiler, opts.verbose);
+		const compileObjs = processCompileDirectives(p.ctx.compileDirectives, dirName(p.modPath), allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose);
 		oFiles = appendFlag(oFiles, compileObjs);
 
 		let testModFlags = appendFlag(allFlags, `-iquote${dirName(p.modPath)}`);
@@ -800,7 +800,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 			writeCCodeCache(p.modPath, cCode, compileCmd);
 			const cFile = stableCFile(p.modPath);
 			if (opts.verbose) verboseLog(`  cc ${cFile} → ${oFile}`);
-			const ccCode = compileCFile(cFile, oFile, testModFlags, opts.mode, opts.ccCompiler);
+			const ccCode = compileCFile(cFile, oFile, testModFlags, opts.mode, opts.ccCompiler, opts.ccBinary);
 			if (ccCode !== 0) {
 				console.log(`${error("error")}: compile failed for ${p.modPath} ${dim(`(exit ${ccCode})`)}`);
 				exit(1);
@@ -816,7 +816,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	const dispFile = `${tcd}/_test_dispatch.c`;
 	const dispObj = `${tcd}/_test_dispatch.o`;
 	writeOutput(dispFile, dispatcher);
-	const dispCode = compileCFile(dispFile, dispObj, "", opts.mode, opts.ccCompiler);
+	const dispCode = compileCFile(dispFile, dispObj, "", opts.mode, opts.ccCompiler, opts.ccBinary);
 	if (dispCode !== 0) {
 		console.log(`${error("error")}: compile failed for test dispatcher ${dim(`(exit ${dispCode})`)}`);
 
@@ -827,7 +827,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	// Link and execute
 	ensureDir("out/debug");
 	const testBin = "out/debug/_test_" + replaceExt(baseName(filePath), "");
-	const linkCode = linkObjects(oFiles, testBin, appendFlag(allFlags, allLinkFlags), opts.mode, opts.ccCompiler);
+	const linkCode = linkObjects(oFiles, testBin, appendFlag(allFlags, allLinkFlags), opts.mode, opts.ccCompiler, opts.ccBinary);
 	if (linkCode !== 0) {
 		console.log(`${error("error")}: link failed ${dim(`(exit ${linkCode})`)}`);
 

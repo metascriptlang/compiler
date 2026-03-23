@@ -95,7 +95,12 @@ export function sgQueryAtPosition(ctx: CheckerContext, line: number, col: number
 }
 
 function sgSuggestFromRecord(rec: SgSymRecord): SgSuggest {
-	const loc: SourceLocation = rec.sym !== null && rec.sym.location !== null ? rec.sym.location : makeLoc(rec.line, rec.col);
+	// Use sym.location if valid, otherwise fall back to record's own position.
+	// Catches symbols created with default location {0, 0} (e.g. synthetic field syms).
+	let loc: SourceLocation = makeLoc(rec.line, rec.col);
+	if (rec.sym !== null && rec.sym.location !== null && rec.sym.location.line > 0) {
+		loc = rec.sym.location;
+	}
 	const modPath = rec.sym !== null && rec.sym.modulePath !== null ? rec.sym.modulePath : "";
 	return {
 		sym: rec.sym,

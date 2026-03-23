@@ -129,7 +129,7 @@ export function stableOFile(srcPath: string): string {
 
 // Full compile command for fingerprint — includes compiler, -std, mode flags.
 export function fullCompileCmd(ccOption: number, mode: number, extraFlags: string): string {
-	return `${getCompilerName(ccOption)} -std=c11${modeFlags(mode)} ${extraFlags}`;
+	return `${getCompilerName(ccOption, "")} -std=c11${modeFlags(mode)} ${extraFlags}`;
 }
 
 function computeFingerprint(srcPath: string, compileCmd: string): string {
@@ -192,7 +192,7 @@ function projectCacheFile(): string {
 let _compilerHash = "";
 function getCompilerHash(ccOption: number): string {
 	if (_compilerHash !== "") return _compilerHash;
-	const name = getCompilerName(ccOption);
+	const name = getCompilerName(ccOption, "");
 	const tmpFile = getCacheDir() + "/_cc_version";
 	exec(name + " --version > " + tmpFile + " 2>&1");
 	const version = readFile(tmpFile);

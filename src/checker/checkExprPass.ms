@@ -93,6 +93,37 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 	return instType;
 }
 
+// Resolve the defining module info for a type by name.
+// Tries scope lookup first, then searches the export registry.
+// Returns a symbol with modulePath + location, or null if not found.
+function resolveContainerModule(ctx: CheckerContext, typeName: string): Symbol {
+	const sym = lookupSymbol(ctx.table, typeName);
+	if (sym !== null && sym.modulePath !== "") return sym;
+	// Fallback: search export registry for types not directly in scope (e.g. nested struct fields)
+	for (const entry of ctx.exportRegistry.entries) {
+		for (const exp of entry.symbols) {
+			if (exp.name === typeName) {
+				const synth = makeSymbolState(typeName, exp.kind, exp.symType, false, SymbolState.Shaped);
+				synth.modulePath = exp.definingModule !== "" ? exp.definingModule : entry.modulePath;
+				if (exp.location !== null && exp.location.line > 0) synth.location = exp.location;
+				return synth;
+			}
+		}
+	}
+	return null;
+}
+
+// Inherit modulePath + location from a container type onto a synthetic field symbol.
+// Used for cross-file go-to-definition on object literal keys and member access properties.
+function inheritContainerInfo(fieldSym: Symbol, ctx: CheckerContext, typeName: string): void {
+	if (typeName === "") return;
+	const cSym = resolveContainerModule(ctx, typeName);
+	if (cSym !== null) {
+		fieldSym.modulePath = cSym.modulePath;
+		if (cSym.location !== null) fieldSym.location = cSym.location;
+	}
+}
+
 // ===== Expression Checker =====
 
 export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): Type {
@@ -345,6 +376,7 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 							}
 							if (fieldSym === null) {
 								fieldSym = makeSymbolState(keyName, SymbolKind.Property, fieldExpected, false, SymbolState.Shaped);
+								inheritContainerInfo(fieldSym, ctx, containerName);
 							}
 							sgRecordSym(ctx, keyLoc.line, keyLoc.column, keyLoc.column + keyName.length, fieldSym, fieldExpected, SymbolKind.Property, keyName, containerName, false);
 						}
@@ -390,8 +422,8 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 				checkDiscriminatedConstruction(ctx, node, d, objExpected, expectedType);
 			} else if (objExpected !== null && objExpected.kind === TypeKind.Union) {
 				// Non-discriminated union: resolve variant, propagate field types.
-				// Reference parity: semObjConstr resolves fields then calls
-				// fitNode(field.typ, value) once per field. One pass, known types.
+				// Reference parity: sem resolves fields then calls fitNode(field.typ, value)
+				// once per field. One pass, known types.
 				node.nodeType = objExpected;
 				// Try name-only matching first (unique for most variants)
 				let varIdx = (d.keys.length > 0)
@@ -1821,6 +1853,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 				if (propType.kind !== TypeKind.Unknown) {
 					const fieldSym = makeSymbol(d.property, SymbolKind.Property, propType, false);
 					fieldSym.state = SymbolState.Shaped;
+					inheritContainerInfo(fieldSym, ctx, resolvedObjType.typeName);
 					node.resolvedSym = fieldSym;
 					sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + d.property.length, fieldSym, propType, SymbolKind.Property, d.property, resolvedObjType.typeName, false);
 				}
@@ -1857,6 +1890,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 					if (resolvedObjType.typeChildren[mi].typeName !== "") {
 						synthSym.nativeName = resolvedObjType.typeChildren[mi].typeName;
 					}
+					inheritContainerInfo(synthSym, ctx, resolvedObjType.typeName);
 					node.resolvedSym = synthSym;
 					sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + mName.length, synthSym, resolvedObjType.typeChildren[mi], SymbolKind.Property, mName, resolvedObjType.typeName, false);
 					break;
@@ -2258,6 +2292,9 @@ export function checkAnonymousFunction(ctx: CheckerContext, name: string, params
 			pType = resolveAnnotation(paramTypes[pi], ctx, 0, 0);
 		}
 		const paramSym = makeSymbol(p, SymbolKind.Parameter, pType, false);
+		if (paramLocs !== null && pi < paramLocs.length && paramLocs[pi] !== null) {
+			paramSym.location = paramLocs[pi];
+		}
 		defineSymbol(ctx.table, paramSym);
 		if (paramLocs !== null && pi < paramLocs.length && paramLocs[pi] !== null) {
 			sgRecordSym(ctx, paramLocs[pi].line, paramLocs[pi].column,

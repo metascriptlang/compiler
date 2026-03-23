@@ -27,6 +27,9 @@ export interface CliOptions {
 	errorMax: number;
 	mode: number;
 	ccCompiler: number;
+	ccBinary: string;          // --cc=<path>: explicit C compiler binary (cross-compile)
+	osTarget: string;          // --os=<linux|macos|windows>: target OS (cross-compile)
+	cpuTarget: string;         // --cpu=<x86_64|arm64|...>: target CPU (cross-compile)
 	genDeps: boolean;
 	forceRebuild: boolean;
 	strip: boolean;
@@ -60,6 +63,9 @@ export function parseArgs(): CliOptions {
 		errorMax: 0,
 		mode: MODE_DEBUG,
 		ccCompiler: 0,
+		ccBinary: "",
+		osTarget: "",
+		cpuTarget: "",
 		genDeps: false,
 		forceRebuild: false,
 		strip: false,
@@ -119,10 +125,15 @@ export function parseArgs(): CliOptions {
 			opts.mode = MODE_RELEASE;
 		} else if (arg === "--danger") {
 			opts.mode = MODE_DANGER;
-		} else if (arg === "--cc=clang") {
-			opts.ccCompiler = 1;
-		} else if (arg === "--cc=gcc") {
-			opts.ccCompiler = 2;
+		} else if (arg.startsWith("--cc=")) {
+			const ccVal = arg.slice(5, arg.length);
+			if (ccVal === "clang") { opts.ccCompiler = 1; }
+			else if (ccVal === "gcc") { opts.ccCompiler = 2; }
+			else { opts.ccBinary = ccVal; }
+		} else if (arg.startsWith("--os=")) {
+			opts.osTarget = arg.slice(5, arg.length);
+		} else if (arg.startsWith("--cpu=")) {
+			opts.cpuTarget = arg.slice(6, arg.length);
 		} else if (arg === "--gendeps") {
 			opts.genDeps = true;
 		} else if (arg === "--force" || arg === "-f") {

@@ -6,7 +6,7 @@ import { VERSION, printUsage } from "./compiler/usage";
 import { cmdBuildJS, cmdBuildC, cmdRunJS, cmdRunRaiser, cmdTest } from "./compiler/compile";
 import { cmdCheck, cmdDumpTokens, cmdDumpAst, cmdPipeline, cmdRun, cmdFmt, cmdInit, cmdClean } from "./compiler/commands";
 import { lspRunServer } from "./compiler/lsp/server";
-import { loadBuildConfig, loadFmtSection, BuildConfig } from "./compiler/buildConfig";
+import { loadBuildConfig, loadFmtSection, BuildConfig, resolveCcForTarget } from "./compiler/buildConfig";
 import { verboseLog } from "./compiler/io";
 import { error, bold, green, cyan } from "./utils/color";
 
@@ -72,6 +72,14 @@ export function main(): number {
 				if (opts.mode === MODE_DEBUG && cfg.build.optimize === "release") {
 					opts.mode = MODE_RELEASE;
 				}
+			}
+			// Apply cc section from build.ms: resolve per-target config, CLI flags override
+			if (cfg.valid) {
+				const resolved = resolveCcForTarget(cfg.cc, opts.osTarget, opts.cpuTarget);
+				if (resolved.entry !== "" && opts.inputFile === "") opts.inputFile = resolved.entry;
+				if (opts.ccBinary === "" && resolved.compiler !== "") opts.ccBinary = resolved.compiler;
+				if (opts.passC === "" && resolved.flags.length > 0) opts.passC = resolved.flags.join(" ");
+				if (opts.passL === "" && resolved.linkFlags.length > 0) opts.passL = resolved.linkFlags.join(" ");
 			}
 			if ((cfg.valid && cfg.build.target === "js") || opts.target === Target.JS) {
 				const outDir = (cfg.valid && cfg.build.outDir !== "") ? cfg.build.outDir : opts.outputPath;

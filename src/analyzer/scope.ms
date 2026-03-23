@@ -33,8 +33,8 @@ export class MovedVar {
 export interface DrcScope {
 	varsToCleanup: VarInfo[];     // variables needing cleanup at scope exit
 	wasMoved: MovedVar[];         // moved vars + expr-level wasMoved calls
-	preStmts: Node[];             // stmts to flush before current statement (per-scope, nestedScope parity)
-	pendingStmts: Node[];         // stmts to flush after current statement (per-scope, nestedScope parity)
+	preStmts: Node[];             // stmts to flush before current statement (per-scope isolation, reference parity)
+	pendingStmts: Node[];         // stmts to flush after current statement (per-scope isolation, reference parity)
 	needsTry: boolean;            // does this scope need try/finally wrapping?
 	isLoop: boolean;              // is this a loop body scope?
 	isFunction: boolean;          // is this a function scope?
@@ -245,21 +245,13 @@ export function addPre(dctx: DrcContext, stmt: Node): void {
 
 export function flushPending(dctx: DrcContext, target: Node[]): void {
 	const scope = currentScope(dctx);
-	let i = 0;
-	while (i < scope.pendingStmts.length) {
-		target.push(scope.pendingStmts[i]);
-		i += 1;
-	}
+	for (const s of scope.pendingStmts) { target.push(s); }
 	scope.pendingStmts = [];
 }
 
 export function flushPre(dctx: DrcContext, target: Node[]): void {
 	const scope = currentScope(dctx);
-	let i = 0;
-	while (i < scope.preStmts.length) {
-		target.push(scope.preStmts[i]);
-		i += 1;
-	}
+	for (const s of scope.preStmts) { target.push(s); }
 	scope.preStmts = [];
 }
 

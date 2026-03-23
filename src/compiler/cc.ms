@@ -33,7 +33,9 @@ function resolveRuntime(): string {
 // 0=undetected, 1=clang, 2=gcc, 3=cc (fallback)
 let detectedCC = 0;
 
-export function getCompilerName(ccOption: number): string {
+export function getCompilerName(ccOption: number, ccBinary: string): string {
+	// Explicit binary overrides everything (cross-compile: --cc=x86_64-linux-gnu-gcc)
+	if (ccBinary !== "") return ccBinary;
 	if (ccOption === 1) return "clang";
 	if (ccOption === 2) return "gcc";
 	// auto-detect
@@ -49,6 +51,36 @@ export function getCompilerName(ccOption: number): string {
 	if (detectedCC === 1) return "clang";
 	if (detectedCC === 2) return "gcc";
 	return "cc";
+}
+
+// -- Cross-compilation target triple --
+// Builds clang --target flag from os + cpu (e.g. "x86_64-unknown-linux-gnu").
+// Returns "" if no cross-compilation is configured.
+
+// Normalize Go-style CPU name to clang triple format.
+function normalizeCpu(cpu: string): string {
+	if (cpu === "amd64") return "x86_64";
+	if (cpu === "arm64") return "aarch64";
+	if (cpu === "386") return "i386";
+	return cpu;  // riscv64, mips64, etc. pass through
+}
+
+export function crossTargetFlag(osTarget: string, cpuTarget: string): string {
+	if (osTarget === "" && cpuTarget === "") return "";
+	const cpu = normalizeCpu(cpuTarget !== "" ? cpuTarget : "amd64");
+	let triple = cpu;
+	if (osTarget === "linux") {
+		triple = `${cpu}-unknown-linux-gnu`;
+	} else if (osTarget === "macos" || osTarget === "darwin") {
+		triple = `${cpu}-apple-darwin`;
+	} else if (osTarget === "windows") {
+		triple = `${cpu}-pc-windows-gnu`;
+	} else if (osTarget === "freebsd") {
+		triple = `${cpu}-unknown-freebsd`;
+	} else if (osTarget !== "") {
+		triple = `${cpu}-unknown-${osTarget}`;
+	}
+	return `--target=${triple}`;
 }
 
 // -- Build mode flags --
@@ -71,9 +103,21 @@ export function appendFlag(base: string, flag: string): string {
 	return flag;
 }
 
-// Build compile-phase flags from CLI options (sanitize + passC).
+// Build compile-phase flags from CLI options (sanitize + passC + cross-compile target).
 export function cliCompileFlags(opts: CliOptions): string {
 	let flags = "";
+	// Cross-compilation: --target triple for clang only.
+	// Cross-gcc binaries (x86_64-unknown-linux-gnu-gcc) have the target baked in.
+	if (opts.ccBinary === "") {
+		const ct = crossTargetFlag(opts.osTarget, opts.cpuTarget);
+		if (ct !== "") flags = appendFlag(flags, ct);
+	}
+	// Linux requires _GNU_SOURCE for POSIX APIs (clock_gettime, getaddrinfo, etc.)
+	// -fcommon: allow duplicate typeInfo globals across translation units (codegen emits them per-module)
+	if (opts.osTarget === "linux") {
+		flags = appendFlag(flags, "-D_GNU_SOURCE");
+		flags = appendFlag(flags, "-fcommon");
+	}
 	if (opts.sanitize !== "") flags = appendFlag(flags, `-fsanitize=${opts.sanitize}`);
 	// Linker DCE: place each function/data in its own section so the linker can strip unused ones
 	flags = appendFlag(flags, "-fdata-sections");
@@ -90,7 +134,10 @@ export function cliLinkFlags(base: string, opts: CliOptions): string {
 	if (opts.strip) flags = appendFlag(flags, "-s");
 	if (opts.isHcr) {
 		flags = appendFlag(flags, "-shared");
-	} else {
+	} else if (opts.osTarget === "linux") {
+		flags = appendFlag(flags, "-Wl,--gc-sections");
+		flags = appendFlag(flags, "-lpthread");
+	} else if (opts.osTarget === "" || opts.osTarget === "darwin") {
 		flags = appendFlag(flags, "-Wl,-dead_strip");
 	}
 	return flags;
@@ -103,8 +150,8 @@ export function cliAllFlags(opts: CliOptions): string {
 
 // -- Build command construction --
 
-function buildCompileCommand(cFile: string, outBinary: string, extraFlags: string, mode: number, ccOption: number): string {
-	let cmd = `${getCcachePrefix()}${getCompilerName(ccOption)} -std=c11${modeFlags(mode)}`;
+function buildCompileCommand(cFile: string, outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): string {
+	let cmd = `${getCcachePrefix()}${getCompilerName(ccOption, ccBinary)} -std=c11${modeFlags(mode)}`;
 
 	const rtDir = resolveRuntime();
 	if (rtDir !== "") {
@@ -118,15 +165,15 @@ function buildCompileCommand(cFile: string, outBinary: string, extraFlags: strin
 
 // Compile a .c file to a native binary.
 // Returns 0 on success, non-zero on failure.
-export function compileC(cFile: string, outBinary: string, extraFlags: string, mode: number, ccOption: number): number {
-	const cmd = buildCompileCommand(cFile, outBinary, extraFlags, mode, ccOption);
+export function compileC(cFile: string, outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): number {
+	const cmd = buildCompileCommand(cFile, outBinary, extraFlags, mode, ccOption, ccBinary);
 	return exec(cmd);
 }
 
 // Compile a .c file to an object file only (-c flag, no linking).
 // Returns 0 on success, non-zero on failure.
-export function compileCFile(cFile: string, oFile: string, extraFlags: string, mode: number, ccOption: number): number {
-	let cmd = `${getCcachePrefix()}${getCompilerName(ccOption)} -std=c11${modeFlags(mode)}`;
+export function compileCFile(cFile: string, oFile: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): number {
+	let cmd = `${getCcachePrefix()}${getCompilerName(ccOption, ccBinary)} -std=c11${modeFlags(mode)}`;
 
 	const rtDir = resolveRuntime();
 	if (rtDir !== "") {
@@ -141,8 +188,8 @@ export function compileCFile(cFile: string, oFile: string, extraFlags: string, m
 // Link object files + runtime into a binary.
 // oFileList: space-separated list of .o file paths
 // Returns 0 on success, non-zero on failure.
-export function linkObjects(oFileList: string, outBinary: string, extraFlags: string, mode: number, ccOption: number): number {
-	let cmd = getCompilerName(ccOption);
+export function linkObjects(oFileList: string, outBinary: string, extraFlags: string, mode: number, ccOption: number, ccBinary: string): number {
+	let cmd = getCompilerName(ccOption, ccBinary);
 
 	const rtDir = resolveRuntime();
 	if (rtDir !== "") {

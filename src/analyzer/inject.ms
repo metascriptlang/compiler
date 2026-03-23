@@ -300,13 +300,10 @@ function processMember(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	// must copy for ownership transfer UNLESS field is last-read (Phase B).
 	if (mode === DrcMode.SinkArg && node.nodeType !== null) {
 		const rcInfo = classifyType(node.nodeType, dctx.ctx);
-		console.log(`[DRC-DBG] processMember SinkArg field=${md.property} typeKind=${node.nodeType.kind} needsCleanup=${rcInfo.needsCleanup} mod=${dctx.ctx.modulePath}`);
 		if (rcInfo.needsCleanup) {
 			// Always copy from MemberExpr: source field may belong to a shared object.
 			return passCopyToSink(node, dctx);
 		}
-	} else if (mode === DrcMode.SinkArg) {
-		console.log(`[DRC-DBG] processMember SinkArg field=${md.fieldName} nodeType=NULL`);
 	}
 	return node;
 }
@@ -411,16 +408,15 @@ function processConditional(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		cd.ternaryAlternate = processNode(cd.ternaryAlternate, dctx, mode);
 		return node;
 	}
-	// Reference parity (IfExpr nestedScope): convert to if-else with temp result.
+	// Reference parity: convert to if-else with temp result.
 	// Each branch gets its own scope — preStmts/pendingStmts are per-scope,
 	// so sibling borrows can't leak into branch statement lists.
-	// Reference: nestedScope creates fresh Scope per branch.
 	const tmpName = freshTemp(dctx.ctx, "cond");
 	const resultType = node.nodeType;
 	const tmpDecl = makeVarDecl(tmpName, null as unknown as Node, DeclKind.Let, loc);
 	tmpDecl.nodeType = resultType;
 	addPre(dctx, tmpDecl);
-	// nestedScope parity: push/pop scope for each branch isolates preStmts/pendingStmts
+	// Reference parity: push/pop scope for each branch isolates preStmts/pendingStmts
 	pushScope(dctx, false, false);
 	const thenProcessed = processBranchAssign(tmpName, resultType, cd.ternaryConsequent, dctx, loc);
 	popScope(dctx);
@@ -458,7 +454,6 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	if (mode === DrcMode.SinkArg) {
 		const loc = node.location;
 		if (isLastReadSafe(sym, node, dctx.currentStmtIdx, dctx.currentStmtList, dctx)) {
-			console.log(`[DRC-DBG] processIdent SinkArg MOVE name=${d.name} line=${loc.line}`);
 			// Last read: destructiveMoveVar — blit + wasMoved
 			if (rcInfo.wasMovedFn !== "") {
 				addPending(dctx, makeWasMovedCall(d.name, rcInfo, loc));
@@ -476,7 +471,6 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	if (mode === DrcMode.Consumed) {
 		const loc = node.location;
 		if (isLastReadSafe(sym, node, dctx.currentStmtIdx, dctx.currentStmtList, dctx)) {
-			console.log(`[DRC-DBG] processIdent Consumed MOVE name=${d.name} line=${loc.line}`);
 			if (rcInfo.wasMovedFn !== "") {
 				addPending(dctx, makeWasMovedCall(d.name, rcInfo, loc));
 			}
@@ -788,21 +782,13 @@ function processStmtList(stmts: Node[], dctx: DrcContext, loc: SourceLocation): 
 		const processed = processStmt(stmts[i], i, stmts, dctx, loc);
 
 		// Flush pre-statements and post-statements from current scope.
-		// Per-scope isolation (nestedScope parity): each scope has its own
+		// Per-scope isolation (reference parity): each scope has its own
 		// preStmts/pendingStmts, so branch processing can't leak parent stmts.
 		const curScope = currentScope(dctx);
-		let pi = 0;
-		while (pi < curScope.preStmts.length) {
-			buf.push(curScope.preStmts[pi]);
-			pi += 1;
-		}
+		for (const pre of curScope.preStmts) { buf.push(pre); }
 		curScope.preStmts = [];
 		buf.push(processed);
-		let qi = 0;
-		while (qi < curScope.pendingStmts.length) {
-			buf.push(curScope.pendingStmts[qi]);
-			qi += 1;
-		}
+		for (const post of curScope.pendingStmts) { buf.push(post); }
 		curScope.pendingStmts = [];
 
 		dctx.currentStmtIdx = savedIdx;

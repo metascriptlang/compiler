@@ -3,8 +3,8 @@
 // Parallel across cores (spawn + SO_REUSEPORT), concurrent within each (selector).
 
 @include("std/net/native.h");
+@emit("#define MS_SELECTOR_BRIDGE");
 @include("std/runtime/selector.h");
-@include("std/runtime/selector_ms.h");
 
 extern function msNetSocket(): int32;
 extern function msNetBind(fd: int32, addr: string, port: int32): int32;
@@ -19,14 +19,14 @@ extern function msNetSetNonBlocking(fd: int32): int32;
 extern function msNetAcceptNonBlock(fd: int32): int32;
 extern function msNetRecvNonBlock(fd: int32, maxBytes: int32): string;
 extern function msNetSendNonBlock(fd: int32, data: string, offset: int32): int32;
-extern function msSelectorCreateMS(): int64;
-extern function msSelectorRegisterMS(sel: int64, fd: int32, events: int32): int32;
-extern function msSelectorUpdateMS(sel: int64, fd: int32, events: int32): int32;
-extern function msSelectorUnregisterMS(sel: int64, fd: int32): int32;
-extern function msSelectorPollMS(sel: int64, timeoutMs: int32): int32;
+extern function msSelectorOpen(): int64;
+extern function msSelectorAdd(sel: int64, fd: int32, events: int32): int32;
+extern function msSelectorModify(sel: int64, fd: int32, events: int32): int32;
+extern function msSelectorRemove(sel: int64, fd: int32): int32;
+extern function msSelectorWait(sel: int64, timeoutMs: int32): int32;
 extern function msSelectorEventFd(index: int32): int32;
 extern function msSelectorEventFlags(index: int32): int32;
-extern function msSelectorDestroyMS(sel: int64): void;
+extern function msSelectorClose(sel: int64): void;
 extern function msRunOnce(timeoutMs: int32): boolean;
 
 import {
@@ -164,7 +164,9 @@ export function serveConcurrent(server: HttpServer, threads: int32 = 0): void {
 	const port = server.port;
 	const handler = server.handler;
 
-	for (let i = 0; i < n; i += 1) {
+	// httpbeast pattern: N-1 worker threads + main thread runs event loop directly.
+	// Main thread participates as a worker — no wasted core on busy-wait.
+	for (let i = 0; i < n - 1; i += 1) {
 		spawn(() => {
 			const fd = msNetSocket();
 			if (fd < 0) return null;
@@ -176,6 +178,15 @@ export function serveConcurrent(server: HttpServer, threads: int32 = 0): void {
 			return null;
 		});
 	}
+
+	// Main thread runs the Nth event loop (blocks here until server.running = false)
+	const fd = msNetSocket();
+	if (fd < 0) return;
+	if (msNetBindShared(fd, addr, port) < 0) { msNetClose(fd); return; }
+	if (msNetListen(fd, 1024) < 0) { msNetClose(fd); return; }
+	msNetSetNonBlocking(fd);
+	eventLoop(server, fd, handler);
+	msNetClose(fd);
 }
 
 // After send completes: check for pipelined data or reset to READ.
@@ -189,13 +200,13 @@ function resetOrPipeline(client: ClientState, fd: int32, sel: int64, handler: Re
 		}
 	}
 	client.headersEndPos = -1;
-	msSelectorUpdateMS(sel, fd, 1);
+	msSelectorModify(sel, fd, 1);
 }
 
 function eventLoop(server: HttpServer, listenFd: int32, handler: RequestHandler): void {
-	const sel = msSelectorCreateMS();
-	msSelectorRegisterMS(sel, listenFd, 1);
-	const maxFds = 4096;
+	const sel = msSelectorOpen();
+	msSelectorAdd(sel, listenFd, 1);
+	const maxFds = 1024;
 	const clients: ClientState[] = new Array(maxFds);
 	let ci = 0;
 	while (ci < maxFds) {
@@ -204,7 +215,8 @@ function eventLoop(server: HttpServer, listenFd: int32, handler: RequestHandler)
 	}
 
 	while (server.running) {
-		const count = msSelectorPollMS(sel, -1);
+		const count = msSelectorWait(sel, -1);
+		if (count < 0) continue;
 		let i = 0;
 		while (i < count) {
 			const fd = msSelectorEventFd(i);
@@ -217,25 +229,25 @@ function eventLoop(server: HttpServer, listenFd: int32, handler: RequestHandler)
 					if (cfd < 0) break;
 					if (cfd >= maxFds) { msNetClose(cfd); continue; }  // fd too large for our array
 					msNetSetNonBlocking(cfd);
-					msSelectorRegisterMS(sel, cfd, 1);
+					msSelectorAdd(sel, cfd, 1);
 					clients[cfd] = { data: "", sendQueue: "", bytesSent: 0, headersEndPos: -1 };
 				}
 			} else if (fd >= maxFds) {
 				// fd out of range — shouldn't happen, but don't crash
-				msSelectorUnregisterMS(sel, fd);
+				msSelectorRemove(sel, fd);
 				msNetClose(fd);
 			} else if ((flags & 1) !== 0) {
-				// Read until EAGAIN
+				// Read until EAGAIN — in-place append (no new string allocation per recv)
 				const client = clients[fd];
 				let closed = false;
 				while (true) {
 					const chunk = msNetRecvNonBlock(fd, 4096);
 					if (chunk.length === 0) { closed = true; break; }
-					client.data = client.data + chunk;
+					client.data.append(chunk);
 					if (chunk.length < 4096) break;
 				}
 				if (closed) {
-					msSelectorUnregisterMS(sel, fd);
+					msSelectorRemove(sel, fd);
 					msNetClose(fd);
 				} else {
 					const endPos = findHeaderEnd(client.data);
@@ -250,7 +262,7 @@ function eventLoop(server: HttpServer, listenFd: int32, handler: RequestHandler)
 				if (client.sendQueue.length > 0) {
 					const sent = msNetSendNonBlock(fd, client.sendQueue, client.bytesSent);
 					if (sent < 0) {
-						msSelectorUnregisterMS(sel, fd);
+						msSelectorRemove(sel, fd);
 						msNetClose(fd);
 					} else {
 						client.bytesSent = client.bytesSent + sent;
@@ -262,7 +274,7 @@ function eventLoop(server: HttpServer, listenFd: int32, handler: RequestHandler)
 					}
 				}
 			} else if ((flags & 4) !== 0) {
-				msSelectorUnregisterMS(sel, fd);
+				msSelectorRemove(sel, fd);
 				msNetClose(fd);
 			}
 			i = i + 1;
@@ -270,7 +282,7 @@ function eventLoop(server: HttpServer, listenFd: int32, handler: RequestHandler)
 		// Drain async dispatcher — enables Promise callbacks/timers in handlers (httpbeast pattern)
 		msRunOnce(0);
 	}
-	msSelectorDestroyMS(sel);
+	msSelectorClose(sel);
 }
 
 function dispatch(client: ClientState, fd: int32, sel: int64, handler: RequestHandler): void {
@@ -292,7 +304,7 @@ function dispatch(client: ClientState, fd: int32, sel: int64, handler: RequestHa
 	if (res._finished && res._responseData.length > 0) {
 		client.sendQueue = res._responseData;
 		client.bytesSent = 0;
-		msSelectorUpdateMS(sel, fd, 3);
+		msSelectorModify(sel, fd, 3);
 	} else {
 		client.headersEndPos = -1;
 	}

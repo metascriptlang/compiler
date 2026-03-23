@@ -952,6 +952,10 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 			paramType = sym.symbolType.typeChildren[i];
 		}
 		const paramSym = makeSymbol(param, SymbolKind.Parameter, paramType, false);
+		// Set declaration location for go-to-definition
+		if (paramLocs !== null && i < paramLocs.length && paramLocs[i] !== null) {
+			paramSym.location = paramLocs[i];
+		}
 		// Receiver is implicitly LENT (borrowed)
 		if (param === "this" || (i === 0 && param === "self")) {
 			setFlag(paramSym, SymbolFlag.Lent);

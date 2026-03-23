@@ -69,7 +69,7 @@ function foldBinary(node: Node): Node {
 		_ => node,
 	};
 	// Preserve checker-stamped type through constant folding.
-	// Reference parity: semfold preserves n.typ on folded literals.
+	// Reference parity: constant folding preserves original type on folded literals.
 	if (result !== node && node.nodeType !== null) {
 		result.nodeType = node.nodeType;
 	}
@@ -137,7 +137,7 @@ function foldUnary(node: Node): Node {
 				_ => node,
 			};
 			// Preserve checker-stamped type through constant folding.
-			// Reference parity: semfold preserves n.typ on folded literals.
+			// Reference parity: constant folding preserves original type on folded literals.
 			if (result !== node && node.nodeType !== null) {
 				result.nodeType = node.nodeType;
 			}

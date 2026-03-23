@@ -17,6 +17,11 @@
 #ifndef MS_STD_NET_H
 #define MS_STD_NET_H
 
+#ifndef MS_LIKELY
+#define MS_LIKELY(x)   __builtin_expect(!!(x), 1)
+#define MS_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,6 +29,7 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <time.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
@@ -112,7 +118,7 @@ static inline int32_t msNetAccept(int32_t fd) {
 	struct sockaddr_in client_addr;
 	socklen_t client_len = sizeof(client_addr);
 	int client_fd = accept(fd, (struct sockaddr*)&client_addr, &client_len);
-	if (client_fd >= 0) {
+	if (MS_LIKELY(client_fd >= 0)) {
 		int flag = 1;
 		setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 	}
@@ -162,8 +168,8 @@ static inline int32_t msNetSend(int32_t fd, msString data) {
 	int32_t len = (int32_t)data.len;
 	while (total < len) {
 		ssize_t n = send(fd, buf + total, (size_t)(len - total), 0);
-		if (n < 0 && errno == EINTR) continue;
-		if (n <= 0) return -1;
+		if (MS_UNLIKELY(n < 0 && errno == EINTR)) continue;
+		if (MS_UNLIKELY(n <= 0)) return -1;
 		total += (int32_t)n;
 	}
 	return total;
@@ -283,7 +289,7 @@ static inline int32_t msFastHeadersCheck(msString data) {
 	int32_t len = (int32_t)data.len;
 	if (len < 4 || !data.p) return -1;
 	const char* d = data.p->data;
-	if (d[len-4]=='\r' && d[len-3]=='\n' && d[len-2]=='\r' && d[len-1]=='\n')
+	if (MS_LIKELY(d[len-4]=='\r' && d[len-3]=='\n' && d[len-2]=='\r' && d[len-1]=='\n'))
 		return len;
 	return -1;
 }
@@ -300,8 +306,25 @@ static inline int32_t msSlowHeadersCheck(msString data) {
 	return -1;
 }
 
+/* Thread-local cached Date header (httpbeast pattern).
+ * Updated at most once per second — avoids strftime per response. */
+static _Thread_local char _msDateBuf[64];
+static _Thread_local time_t _msDateEpoch = 0;
+
+static inline const char* msGetDateHeader(void) {
+	time_t now = time(NULL);
+	if (now != _msDateEpoch) {
+		_msDateEpoch = now;
+		struct tm tm;
+		gmtime_r(&now, &tm);
+		strftime(_msDateBuf, sizeof(_msDateBuf), "%a, %d %b %Y %H:%M:%S GMT", &tm);
+	}
+	return _msDateBuf;
+}
+
 /* Build HTTP response in one allocation (httpbeast pattern).
- * snprintf header + memcpy body → single string. */
+ * snprintf header + memcpy body → single string.
+ * Includes cached Date header (RFC 7231 requirement). */
 static inline msString msBuildResponse(int32_t status, msString statusTextStr,
                                         msString contentType, msString body) {
 	char header[512];
@@ -316,8 +339,8 @@ static inline msString msBuildResponse(int32_t status, msString statusTextStr,
 	ctBuf[ctLen] = '\0';
 
 	int hlen = snprintf(header, 512,
-		"HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %d\r\n\r\n",
-		(int)status, stBuf, ctBuf, (int)bodyLen);
+		"HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %d\r\nDate: %s\r\n\r\n",
+		(int)status, stBuf, ctBuf, (int)bodyLen, msGetDateHeader());
 	if (hlen < 0 || hlen >= 512) hlen = 511;
 	int32_t total = hlen + bodyLen;
 	/* Allocate string: payload header + data */

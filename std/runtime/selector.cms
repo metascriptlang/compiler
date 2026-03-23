@@ -2,30 +2,30 @@
 // Wraps kqueue (macOS/BSD), epoll (Linux), poll (POSIX fallback).
 // Used for event-loop-per-core HTTP server architecture.
 
+@emit("#define MS_SELECTOR_BRIDGE");
 @include("std/runtime/selector.h");
-@include("std/runtime/selector_ms.h");
 
 // Event flags (bitmask)
 export const EVENT_READ: int32 = 1;
 export const EVENT_WRITE: int32 = 2;
 export const EVENT_ERROR: int32 = 4;
 
-// C bindings
-extern function msSelectorCreateMS(): int64;
-extern function msSelectorDestroyMS(sel: int64): void;
-extern function msSelectorRegisterMS(sel: int64, fd: int32, events: int32): int32;
-extern function msSelectorUpdateMS(sel: int64, fd: int32, events: int32): int32;
-extern function msSelectorUnregisterMS(sel: int64, fd: int32): int32;
-extern function msSelectorPollMS(sel: int64, timeoutMs: int32): int32;
+// C bindings (bridge layer — int64 handles instead of raw pointers)
+extern function msSelectorOpen(): int64;
+extern function msSelectorClose(sel: int64): void;
+extern function msSelectorAdd(sel: int64, fd: int32, events: int32): int32;
+extern function msSelectorModify(sel: int64, fd: int32, events: int32): int32;
+extern function msSelectorRemove(sel: int64, fd: int32): int32;
+extern function msSelectorWait(sel: int64, timeoutMs: int32): int32;
 extern function msSelectorEventFd(index: int32): int32;
 extern function msSelectorEventFlags(index: int32): int32;
 
 // Public API
-export function createSelector(): int64 { return msSelectorCreateMS(); }
-export function destroySelector(sel: int64): void { msSelectorDestroyMS(sel); }
-export function selectorRegister(sel: int64, fd: int32, events: int32): int32 { return msSelectorRegisterMS(sel, fd, events); }
-export function selectorUpdate(sel: int64, fd: int32, events: int32): int32 { return msSelectorUpdateMS(sel, fd, events); }
-export function selectorUnregister(sel: int64, fd: int32): int32 { return msSelectorUnregisterMS(sel, fd); }
-export function selectorPoll(sel: int64, timeoutMs: int32): int32 { return msSelectorPollMS(sel, timeoutMs); }
+export function createSelector(): int64 { return msSelectorOpen(); }
+export function destroySelector(sel: int64): void { msSelectorClose(sel); }
+export function selectorRegister(sel: int64, fd: int32, events: int32): int32 { return msSelectorAdd(sel, fd, events); }
+export function selectorUpdate(sel: int64, fd: int32, events: int32): int32 { return msSelectorModify(sel, fd, events); }
+export function selectorUnregister(sel: int64, fd: int32): int32 { return msSelectorRemove(sel, fd); }
+export function selectorPoll(sel: int64, timeoutMs: int32): int32 { return msSelectorWait(sel, timeoutMs); }
 export function eventFd(index: int32): int32 { return msSelectorEventFd(index); }
 export function eventFlags(index: int32): int32 { return msSelectorEventFlags(index); }

@@ -8,7 +8,7 @@ import { parseSource } from "../parser/statements/validation";
 import { resolveImportWithConfig, createDefaultConfig, Backend } from "../module/resolver";
 import {
 	Node, NodeKind, ProgramData, VariableDeclData, ExportDeclData,
-	ObjectLiteralData, NumberLiteralData, StringLiteralData, BooleanLiteralData,
+	ObjectLiteralData, ArrayLiteralData, NumberLiteralData, StringLiteralData, BooleanLiteralData,
 } from "../ast/node";
 
 // --- Interfaces ---
@@ -38,11 +38,81 @@ export function defaultFmtSection(): FmtSection {
 	return { printWidth: -1, tabWidth: -1, useTabs: -1, singleQuote: -1 };
 }
 
+export interface CcTargetSection {
+	entry: string;
+	compiler: string;
+	flags: string[];
+	linkFlags: string[];
+}
+
+export interface CcSection {
+	compiler: string;          // default C compiler binary
+	flags: string[];           // default extra compile flags
+	linkFlags: string[];       // default extra link flags
+	targetKeys: string[];      // per-target keys (e.g. ["linux-x86_64", "linux-arm64"])
+	targetValues: CcTargetSection[];  // per-target overrides (parallel to targetKeys)
+}
+
+export function defaultCcSection(): CcSection {
+	const f: string[] = [];
+	const lf: string[] = [];
+	const tk: string[] = [];
+	const tv: CcTargetSection[] = [];
+	return { compiler: "", flags: f, linkFlags: lf, targetKeys: tk, targetValues: tv };
+}
+
+// Well-known cross-compiler binary for common os-cpu targets.
+// Covers 90% of cross-compile use cases without explicit config.
+function defaultCompilerForTarget(osTarget: string, cpuTarget: string): string {
+	const key = `${osTarget}-${cpuTarget}`;
+	if (key === "linux-amd64") return "x86_64-unknown-linux-gnu-gcc";
+	if (key === "linux-arm64") return "aarch64-unknown-linux-gnu-gcc";
+	if (key === "linux-386") return "i686-unknown-linux-gnu-gcc";
+	if (key === "linux-riscv64") return "riscv64-unknown-linux-gnu-gcc";
+	if (key === "linux-mips64") return "mips64-unknown-linux-gnu-gcc";
+	if (key === "windows-amd64") return "x86_64-w64-mingw32-gcc";
+	if (key === "windows-386") return "i686-w64-mingw32-gcc";
+	if (key === "windows-arm64") return "aarch64-w64-mingw32-gcc";
+	return "";
+}
+
+// Resolve CcSection for a specific os-cpu target.
+// Priority: explicit per-target config > cc.compiler default > well-known default.
+export function resolveCcForTarget(cc: CcSection, osTarget: string, cpuTarget: string): CcTargetSection {
+	let entry = "";
+	let compiler = cc.compiler;
+	let flags = cc.flags;
+	let linkFlags = cc.linkFlags;
+
+	if (osTarget !== "" || cpuTarget !== "") {
+		const key = `${osTarget}-${cpuTarget}`;
+		let i = 0;
+		while (i < cc.targetKeys.length) {
+			if (cc.targetKeys[i] === key) {
+				const t = cc.targetValues[i];
+				if (t.entry !== "") entry = t.entry;
+				if (t.compiler !== "") compiler = t.compiler;
+				if (t.flags.length > 0) flags = t.flags;
+				if (t.linkFlags.length > 0) linkFlags = t.linkFlags;
+				break;
+			}
+			i += 1;
+		}
+		// Fallback to well-known cross-compiler if nothing configured
+		if (compiler === "") {
+			compiler = defaultCompilerForTarget(osTarget, cpuTarget);
+		}
+	}
+
+	return { entry, compiler, flags, linkFlags };
+}
+
 export interface BuildConfig {
 	entry: string;
 	build: BuildSection;
 	resolve: ResolveSection;
 	fmt: FmtSection;
+	cc: CcSection;
 	valid: boolean;
 }
 
@@ -78,6 +148,18 @@ function nodeString(node: Node): string {
 function nodeNumber(node: Node): number {
 	if (node === null || node.kind !== NodeKind.NumberLiteral) return -1;
 	return (node.data as NumberLiteralData).value;
+}
+
+// Extract a string array from an ArrayLiteral node.
+function nodeStringArray(node: Node): string[] {
+	const result: string[] = [];
+	if (node === null || node.kind !== NodeKind.ArrayLiteral) return result;
+	const ad = node.data as ArrayLiteralData;
+	for (const elem of ad.elements) {
+		const s = nodeString(elem);
+		if (s.length > 0) result.push(s);
+	}
+	return result;
 }
 
 // Extract a boolean value from a node. Returns -1 if not bool, 0 for false, 1 for true.
@@ -128,6 +210,47 @@ function extractFmt(fmtNode: Node): FmtSection {
 	return fmt;
 }
 
+// Extract a CcTargetSection from an ObjectLiteral node.
+function extractCcTarget(node: Node): CcTargetSection {
+	const ef: string[] = [];
+	const elf: string[] = [];
+	const t: CcTargetSection = { entry: "", compiler: "", flags: ef, linkFlags: elf };
+	if (node === null || node.kind !== NodeKind.ObjectLiteral) return t;
+	const e = nodeString(findObjField(node, "entry"));
+	if (e.length > 0) { t.entry = e; }
+	const c = nodeString(findObjField(node, "compiler"));
+	if (c.length > 0) { t.compiler = c; }
+	const f = nodeStringArray(findObjField(node, "flags"));
+	if (f.length > 0) { t.flags = f; }
+	const lf = nodeStringArray(findObjField(node, "linkFlags"));
+	if (lf.length > 0) { t.linkFlags = lf; }
+	return t;
+}
+
+// Extract CcSection from an ObjectLiteral node.
+function extractCc(ccNode: Node): CcSection {
+	const cc = defaultCcSection();
+	if (ccNode === null || ccNode.kind !== NodeKind.ObjectLiteral) return cc;
+	const c = nodeString(findObjField(ccNode, "compiler"));
+	if (c.length > 0) { cc.compiler = c; }
+	const f = nodeStringArray(findObjField(ccNode, "flags"));
+	if (f.length > 0) { cc.flags = f; }
+	const lf = nodeStringArray(findObjField(ccNode, "linkFlags"));
+	if (lf.length > 0) { cc.linkFlags = lf; }
+	// Per-target overrides: targets: { "linux-x86_64": { compiler: "...", flags: [...] } }
+	const targetsNode = findObjField(ccNode, "targets");
+	if (targetsNode !== null && targetsNode.kind === NodeKind.ObjectLiteral) {
+		const od = targetsNode.data as ObjectLiteralData;
+		let i = 0;
+		while (i < od.keys.length && i < od.properties.length) {
+			cc.targetKeys.push(od.keys[i]);
+			cc.targetValues.push(extractCcTarget(od.properties[i]));
+			i += 1;
+		}
+	}
+	return cc;
+}
+
 // Extract BuildSection from an ObjectLiteral node.
 function extractBuild(buildNode: Node): BuildSection {
 	const bs: BuildSection = { target: "c", outDir: "out", outFile: "", optimize: "debug" };
@@ -149,7 +272,8 @@ export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfi
 	const defBs: BuildSection = { target: "c", outDir: "out", outFile: "", optimize: "debug" };
 	const defRs = defaultResolveSection();
 	const defFmt = defaultFmtSection();
-	const defCfg: BuildConfig = { entry: "", build: defBs, resolve: defRs, fmt: defFmt, valid: false };
+	const defCc = defaultCcSection();
+	const defCfg: BuildConfig = { entry: "", build: defBs, resolve: defRs, fmt: defFmt, cc: defCc, valid: false };
 
 	if (!fileExists(filePath)) return defCfg;
 
@@ -169,8 +293,9 @@ export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfi
 	const entry = nodeString(findObjField(configObj, "entry"));
 	const bs = extractBuild(findObjField(configObj, "build"));
 	const fmt = extractFmt(findObjField(configObj, "fmt"));
+	const cc = extractCc(findObjField(configObj, "cc"));
 
-	return { entry, build: bs, resolve: defRs, fmt, valid: true };
+	return { entry, build: bs, resolve: defRs, fmt, cc, valid: true };
 }
 
 // Validate build.ms and return LSP-style warnings.

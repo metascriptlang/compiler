@@ -14,7 +14,7 @@
 //     const f = { fn: $lifted_outer_1, env: { x: x } };
 //   }
 
-import { Node, NodeKind, SourceLocation, NodeFlag, SymbolKind, createNode, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, IfStmtData, WhileStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ExprStmtData, ReturnStmtData, BinaryExprData, CallExprData, UnaryExprData, IdentifierData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, SourceLocation, NodeFlag, SymbolKind, createNode, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ExprStmtData, ReturnStmtData, BinaryExprData, CallExprData, UnaryExprData, IdentifierData, Type, TypeKind } from "../../ast/node";
 import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../context";
 import { mapChildren, isFuncBoundary } from "../walker";
 import {
@@ -102,6 +102,7 @@ interface LiftState {
 	lastUseCaptures: NameSet;  // Phase F: captures that are last-use (can be moved)
 	currentStmts: Node[];      // Phase F: current statement list (for last-use scan)
 	currentStmtIdx: number;    // Phase F: current statement index in list
+	insideLoop: number;        // >0 when inside a loop body (disables last-use move optimization)
 	varTypes: VarTypeEntry[];  // Variable name → type string for env field typing
 	capturedIdents: Node[];    // Parallel to captures NameSet: original Identifier nodes with resolvedSym
 }
@@ -199,6 +200,7 @@ function createLiftState(): LiftState {
 		lastUseCaptures: createNameSet(),
 		currentStmts: [],
 		currentStmtIdx: 0,
+		insideLoop: 0,
 		varTypes: [],
 		capturedIdents: [],
 	};
@@ -243,6 +245,16 @@ function computeLastUseCaptures(captures: NameSet, closureIdx: number, stmts: No
 		}
 	}
 	return result;
+}
+
+// Phase F + loop safety: inside a loop body, captures are NEVER last-use
+// (loop back-edge repeats the capture). Outside loops, use forward scan.
+function computeLastUseCapturesForState(captures: NameSet, state: LiftState): void {
+	if (state.insideLoop > 0) {
+		state.lastUseCaptures = createNameSet();
+	} else {
+		state.lastUseCaptures = computeLastUseCaptures(captures, state.currentStmtIdx, state.currentStmts);
+	}
 }
 
 // ===== Capture Detection =====
@@ -573,7 +585,16 @@ function walkLift(node: Node, state: LiftState): void {
 		NodeKind.WhileStmt => {
 			const d = node.data as WhileStmtData;
 			d.whileCondition = walkOrLift(d.whileCondition, state);
+			state.insideLoop += 1;
 			walkLift(d.whileBody, state);
+			state.insideLoop -= 1;
+		},
+		NodeKind.DoWhileStmt => {
+			const d = node.data as DoWhileStmtData;
+			state.insideLoop += 1;
+			walkLift(d.doBody, state);
+			state.insideLoop -= 1;
+			d.doCondition = walkOrLift(d.doCondition, state);
 		},
 		NodeKind.TryCatchStmt => {
 			const d = node.data as TryCatchStmtData;
@@ -687,8 +708,7 @@ function tryLiftClosure(node: Node, state: LiftState): Node {
 		const captures = detectCaptures(d.arrowBody, state.ss, state.capturedIdents);
 		popFuncBoundary(state.ss);
 		if (captures.items.length > 0) {
-			// Phase F: compute which captures are last-use in enclosing scope
-			state.lastUseCaptures = computeLastUseCaptures(captures, state.currentStmtIdx, state.currentStmts);
+			computeLastUseCapturesForState(captures, state);
 			return liftArrow(node, captures, state);
 		}
 		// Non-capturing: lift to module-level FunctionDecl, return Identifier
@@ -702,8 +722,7 @@ function tryLiftClosure(node: Node, state: LiftState): Node {
 		const captures = detectCaptures(d.funcExprBody, state.ss, state.capturedIdents);
 		popFuncBoundary(state.ss);
 		if (captures.items.length > 0) {
-			// Phase F: compute which captures are last-use in enclosing scope
-			state.lastUseCaptures = computeLastUseCaptures(captures, state.currentStmtIdx, state.currentStmts);
+			computeLastUseCapturesForState(captures, state);
 			return liftFuncExpr(node, captures, state);
 		}
 		// Non-capturing: lift to module-level FunctionDecl, return Identifier

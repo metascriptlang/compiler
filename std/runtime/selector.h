@@ -44,4 +44,50 @@ int msSelectorUnregister(msSelector* sel, int fd);
  * Results written to out array, up to maxEvents entries. */
 int msSelectorPoll(msSelector* sel, int timeoutMs, msReadyEvent* out, int maxEvents);
 
+/* ===== MetaScript Bridge =====
+ * Thin wrappers that cast int64 handles ↔ msSelector* pointers.
+ * MetaScript has no raw pointer type, so selector handles are passed as int64.
+ * Thread-local result buffer avoids passing struct arrays across the FFI boundary. */
+
+/* Bridge is always available — the static inline functions are only
+ * instantiated in translation units that actually call them. */
+
+#include "std/core/promise/future.h"  /* MS_THREAD_LOCAL */
+
+static MS_THREAD_LOCAL msReadyEvent _msEvtBuf[64];
+
+static inline int64_t msSelectorOpen(void) {
+	return (int64_t)(intptr_t)msSelectorCreate();
+}
+
+static inline void msSelectorClose(int64_t sel) {
+	msSelectorDestroy((msSelector*)(intptr_t)sel);
+}
+
+static inline int32_t msSelectorAdd(int64_t sel, int32_t fd, int32_t events) {
+	return msSelectorRegister((msSelector*)(intptr_t)sel, fd, (uint32_t)events, NULL);
+}
+
+static inline int32_t msSelectorModify(int64_t sel, int32_t fd, int32_t events) {
+	return msSelectorUpdate((msSelector*)(intptr_t)sel, fd, (uint32_t)events, NULL);
+}
+
+static inline int32_t msSelectorRemove(int64_t sel, int32_t fd) {
+	return msSelectorUnregister((msSelector*)(intptr_t)sel, fd);
+}
+
+static inline int32_t msSelectorWait(int64_t sel, int32_t timeoutMs) {
+	return msSelectorPoll((msSelector*)(intptr_t)sel, timeoutMs, _msEvtBuf, 64);
+}
+
+static inline int32_t msSelectorEventFd(int32_t index) {
+	return (int32_t)_msEvtBuf[index].fd;
+}
+
+static inline int32_t msSelectorEventFlags(int32_t index) {
+	return (int32_t)_msEvtBuf[index].events;
+}
+
+/* end bridge */
+
 #endif /* MS_SELECTOR_H */
