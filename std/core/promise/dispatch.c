@@ -10,6 +10,7 @@
 #define MS_EVENT_READ 1
 #endif
 #include "dispatch.h"
+#include "std/io/engine.h"
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
@@ -263,6 +264,12 @@ bool msRunOnce(int timeoutMs) {
 
 	/* Step 4: Drain callback deque */
 	msProcessCallbacks(d, &didWork);
+
+	/* Step 5: Process I/O engine completions (if engine is active) */
+	msIoEngine* eng = msGetIoEngineIfExists();
+	if (eng != NULL) {
+		if (msIoEnginePoll(eng, 0) > 0) didWork = true;
+	}
 
 	return didWork;
 }

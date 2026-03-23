@@ -91,6 +91,7 @@ function isBuiltinName(name: string): boolean {
 interface VarTypeEntry {
 	name: string;
 	typeStr: string;
+	resolvedType: Type;  // resolved Type for env struct field (fallback when captured ident has no nodeType)
 }
 
 interface LiftState {
@@ -108,7 +109,20 @@ interface LiftState {
 }
 
 function registerVarType(state: LiftState, name: string, typeStr: string): void {
-	state.varTypes.push({ name, typeStr });
+	state.varTypes.push({ name, typeStr, resolvedType: null as unknown as Type });
+}
+
+function registerVarTypeResolved(state: LiftState, name: string, typeStr: string, resolved: Type): void {
+	state.varTypes.push({ name, typeStr, resolvedType: resolved });
+}
+
+function lookupVarResolvedType(state: LiftState, name: string): Type {
+	let i = state.varTypes.length - 1;
+	while (i >= 0) {
+		if (state.varTypes[i].name === name && state.varTypes[i].resolvedType !== null) return state.varTypes[i].resolvedType;
+		i -= 1;
+	}
+	return null as unknown as Type;
 }
 
 function lookupVarType(state: LiftState, name: string): string {
@@ -349,9 +363,15 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 		if (orig !== null && orig.nodeType !== null) {
 			envResolvedTypes.push(orig.nodeType);
 		} else {
-			// Fallback: resolve from registered string type (for synthetic vars from asyncBridge)
-			const typeStr = lookupVarType(state, name);
-			envResolvedTypes.push(resolveSimpleTypeStr(typeStr));
+			// Fallback: use resolved Type from registerVarTypeResolved (asyncBridge hoisted vars)
+			const resolvedFallback = lookupVarResolvedType(state, name);
+			if (resolvedFallback !== null) {
+				envResolvedTypes.push(resolvedFallback);
+			} else {
+				// Last resort: resolve from string type (primitives only)
+				const typeStr = lookupVarType(state, name);
+				envResolvedTypes.push(resolveSimpleTypeStr(typeStr));
+			}
 		}
 	}
 	const envDecl = makeInterfaceDeclFromTypes(envName, envFields, envFieldTypes, envResolvedTypes, loc);
@@ -564,7 +584,7 @@ function walkLift(node: Node, state: LiftState): void {
 				// Reference parity: use resolved type from checker when no annotation
 				const derived = typeToEnvStr(node.nodeType);
 				if (derived !== "") {
-					registerVarType(state, d.declName, derived);
+					registerVarTypeResolved(state, d.declName, derived, node.nodeType);
 				}
 			}
 		},

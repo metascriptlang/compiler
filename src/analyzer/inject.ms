@@ -1578,6 +1578,9 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 		if (!rcInfo.needsCleanup) return stmt;
 		// Skip save-assign-destroy inside DRC hooks — they manage RC manually
 		if (isDrcHookFunction(dctx)) return stmt;
+		// Reference parity: moveOrCopy processes RHS via p(ri, c, s, consumed).
+		// Process RHS so ObjectLiteral fields get proper sink/copy (wasMoved on last-read locals).
+		bd.right = processNode(bd.right, dctx, DrcMode.SinkArg);
 		return emitSaveAssignDestroy(stmt, bd.left, bd.right, rcInfo, "Field", idx, stmts, dctx, loc);
 	}
 
@@ -1587,6 +1590,8 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 		if (!rcInfo.needsCleanup) return stmt;
 		// Skip save-assign-destroy inside DRC hooks — they manage RC manually
 		if (isDrcHookFunction(dctx)) return stmt;
+		// Reference parity: process RHS for proper sink/copy
+		bd.right = processNode(bd.right, dctx, DrcMode.SinkArg);
 		return emitSaveAssignDestroy(stmt, bd.left, bd.right, rcInfo, "Elem", idx, stmts, dctx, loc);
 	}
 
@@ -1879,13 +1884,31 @@ function emitSaveAssignDestroy(stmt: Node, lhsExpr: Node, rhs: Node, rcInfo: RcI
 		return makeBlock([saveTmp, stmt, makeDestroyCall(tmpName, rcInfo, loc)], loc);
 	}
 
-	// CallExpr RHS: fresh value, but check alias (GAP 4 — reference parity safety)
+	// CallExpr RHS: fresh value but may alias dest (e.g., x = f(x)).
+	// Must use save-assign-destroy to avoid use-after-free on aliased args.
 	if (rhs.kind === NodeKind.CallExpr) {
 		return makeBlock([saveTmp, stmt, makeDestroyCall(tmpName, rcInfo, loc)], loc);
 	}
 
+	// Non-call fresh RHS (ObjectLiteral, ArrayLiteral, NewExpr, etc.): destroy dest first.
+	// Reference parity: genSink path C — constructors can't alias dest, destroy-first is safe.
+	// This avoids save-assign-destroy which shallow-copies Union string pointers via raw `=`,
+	// leaving shared pointers that get double-freed when locals are destroyed at scope exit.
 	if (isFreshExpr(rhs.kind)) {
-		return makeBlock([saveTmp, stmt, makeDestroyCall(tmpName, rcInfo, loc)], loc);
+		const destroyCall = makeDestroyCall(tmpName, rcInfo, loc);
+		// Flush pendingStmts (e.g., wasMoved from SinkArg fields) into the block.
+		// Without this, wasMoved calls from processObjectLiteral fields get lost —
+		// they stay in the scope's pendingStmts and flush AFTER scope cleanup,
+		// which is too late (the local is already destroyed).
+		const result: Node[] = [saveTmp, destroyCall, stmt];
+		const curScope = currentScope(dctx);
+		let pi = 0;
+		while (pi < curScope.pendingStmts.length) {
+			result.push(curScope.pendingStmts[pi]);
+			pi += 1;
+		}
+		curScope.pendingStmts = [];
+		return makeBlock(result, loc);
 	}
 
 	// Identifier RHS: check last-read for sink optimization (reference: moveOrCopy Identifier)

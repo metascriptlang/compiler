@@ -639,3 +639,38 @@ void msRefArraySetLenUninit(msRefArray* arr, int64_t newLen) {
 	}
 	arr->len = newLen;
 }
+
+/* ===== Splice — remove deleteCount elements starting at index ===== */
+
+void msNumberArraySplice(msNumberArray* arr, int64_t start, int64_t deleteCount) {
+	if (arr->p == NULL || start < 0 || start >= arr->len) return;
+	if (deleteCount <= 0) return;
+	if (start + deleteCount > arr->len) deleteCount = arr->len - start;
+	int64_t remaining = arr->len - start - deleteCount;
+	if (remaining > 0) {
+		memmove(arr->p->data + start, arr->p->data + start + deleteCount, remaining * sizeof(double));
+	}
+	arr->len -= deleteCount;
+}
+
+void msStringArraySplice(msStringArray* arr, int64_t start, int64_t deleteCount) {
+	if (arr->p == NULL || start < 0 || start >= arr->len) return;
+	if (deleteCount <= 0) return;
+	if (start + deleteCount > arr->len) deleteCount = arr->len - start;
+	int64_t remaining = arr->len - start - deleteCount;
+	if (remaining > 0) {
+		memmove(arr->p->data + start, arr->p->data + start + deleteCount, remaining * sizeof(msString));
+	}
+	arr->len -= deleteCount;
+}
+
+void msRefArraySplice(msRefArray* arr, int64_t start, int64_t deleteCount) {
+	if (arr->p == NULL || start < 0 || start >= arr->len) return;
+	if (deleteCount <= 0) return;
+	if (start + deleteCount > arr->len) deleteCount = arr->len - start;
+	int64_t remaining = arr->len - start - deleteCount;
+	if (remaining > 0) {
+		memmove(arr->p->data + start, arr->p->data + start + deleteCount, remaining * sizeof(void*));
+	}
+	arr->len -= deleteCount;
+}

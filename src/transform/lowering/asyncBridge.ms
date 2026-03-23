@@ -46,8 +46,15 @@ function collectVarTypes(node: Node, result: VarTypeInfo[]): void {
 		NodeKind.FunctionDecl | NodeKind.ArrowFunction | NodeKind.FunctionExpr => {},
 		NodeKind.VariableDecl => {
 			const d = node.data as VariableDeclData;
-			if (node.nodeType !== null) {
-				result.push({ name: d.declName, varType: node.nodeType });
+			let varType = node.nodeType;
+			if (varType === null && d.initializer !== null && d.initializer.nodeType !== null) {
+				varType = d.initializer.nodeType;
+			}
+			if (varType === null && node.resolvedSym !== null && node.resolvedSym.symbolType !== null) {
+				varType = node.resolvedSym.symbolType;
+			}
+			if (varType !== null) {
+				result.push({ name: d.declName, varType });
 			}
 		},
 		NodeKind.BlockStmt => {
@@ -189,6 +196,47 @@ function rewriteAsyncReturns(stmts: Node[], promiseType: Type, fnReturnInner: Ty
 	}
 }
 
+// Extract yield argument from nested stmts. Generator lower may place the yield return
+// (return { value: future, done: false }) inside if/while blocks, not at the top level.
+// This walks recursively to find and extract it, returning the yield arg (future node).
+// Also replaces the found return+stateAssign with empty stmts to prevent duplicate emission.
+function extractYieldArgDeep(stmts: Node[]): Node {
+	for (let i = stmts.length - 1; i >= 0; i -= 1) {
+		const s = stmts[i];
+		if (s.kind === NodeKind.ReturnStmt) {
+			const rd = s.data as ReturnStmtData;
+			if (rd.argument !== null && rd.argument.kind === NodeKind.ObjectLiteral) {
+				const od = rd.argument.data as { properties: Node[], keys: string[] };
+				if (od.properties.length > 0) {
+					const yieldArg = od.properties[0];
+					// Remove return + preceding state assign
+					if (i > 0) { stmts.splice(i - 1, 2); }
+					else { stmts.splice(i, 1); }
+					return yieldArg;
+				}
+			}
+		}
+		// Recurse into blocks
+		if (s.kind === NodeKind.BlockStmt) {
+			const bd = s.data as BlockStmtData;
+			const found = extractYieldArgDeep(bd.statements);
+			if (found !== null) return found;
+		}
+		if (s.kind === NodeKind.IfStmt) {
+			const id = s.data as IfStmtData;
+			if (id.consequent !== null && id.consequent.kind === NodeKind.BlockStmt) {
+				const found = extractYieldArgDeep((id.consequent.data as BlockStmtData).statements);
+				if (found !== null) return found;
+			}
+			if (id.alternate !== null && id.alternate.kind === NodeKind.BlockStmt) {
+				const found = extractYieldArgDeep((id.alternate.data as BlockStmtData).statements);
+				if (found !== null) return found;
+			}
+		}
+	}
+	return null as unknown as Node;
+}
+
 // Unbox function for msFutureRead result (same as builtinLower's unboxFnForType)
 // Per-type smart read function — handles both boxed (spawn) and typed (async) via isBoxed flag
 function readFnForAwait(t: Type): string {
@@ -229,10 +277,10 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 		if (prevIdx >= 0) {
 			const futName = "$yf" + prevIdx;
 			const varName = sc.items[prevIdx].yieldVarName;
-			const varType = sc.items[prevIdx].yieldVarType;
+			let varType = sc.items[prevIdx].yieldVarType;
+			// Defensive: if yieldVarType is still a Promise wrapper, extract inner type
+			if (varType !== null && isPromise(varType)) varType = getPromiseInner(varType);
 			const prevYfType = promiseTypeFor(varType);
-			// Smart read: per-type functions handle both boxed (spawn) and typed (async)
-			// via runtime isBoxed flag. No transform-time detection needed.
 			const readFn = readFnForAwait(varType);
 			let readExpr: Node = null as unknown as Node;
 			if (readFn !== "") {
@@ -248,31 +296,36 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 		}
 
 		if (state.isYield) {
-			// This state yields a future. The original stmts end with:
-			//   makeStateAssign(nextState) + return makeIterResult(yieldArg, false)
-			// We need to replace the last 2 stmts with our stepper pattern.
-			// Copy all stmts except the last 2 (state assign + return iterResult)
+			// This state yields a future. The generator lower produces:
+			//   [...stmts, $state=next, return {value: yieldArg, done: false}]
+			// We replace with the stepper pattern:
+			//   [...stmts, $yf_N = yieldArg, $state=next, if(finished) continue, return $yf_N]
+			//
+			// The yield return may be at the top level OR nested inside if/while blocks
+			// (from splitIf/splitWhile). We handle both cases.
 			let copyEnd = state.stmts.length;
-			// Find the return-iterResult at the end — it's the yield point
-			// The pattern from splitStmts is: [...stmts, $state=next, return {value, done:false}]
-			// We want: [...stmts, $yf_N = yieldArg, $state=next, if(finished) continue else addCallback+return]
+			let yieldArg: Node = makeNull(loc);
+			let foundTopLevel = false;
+
+			// Try top-level pattern first (most common: last 2 stmts)
 			if (copyEnd >= 2) {
-				// Copy everything except last 2 (stateAssign + return)
-				for (let j = 0; j < copyEnd - 2; j += 1) {
-					stateStmts.push(state.stmts[j]);
-				}
-				// Extract the yield argument from the return stmt
 				const returnStmt = state.stmts[copyEnd - 1];
-				let yieldArg: Node = makeNull(loc);
 				if (returnStmt.kind === NodeKind.ReturnStmt) {
 					const rd = returnStmt.data as ReturnStmtData;
-					// rd.argument is makeIterResult(yieldArg, false) = ObjectLiteral {value: yieldArg, done: false}
 					if (rd.argument !== null && rd.argument.kind === NodeKind.ObjectLiteral) {
 						const od = rd.argument.data as { properties: Node[], keys: string[] };
 						if (od.properties.length > 0) {
-							yieldArg = od.properties[0]; // first property = value = the yielded expr
+							yieldArg = od.properties[0];
+							foundTopLevel = true;
 						}
 					}
+				}
+			}
+
+			if (foundTopLevel) {
+				// Top-level: copy all except last 2
+				for (let j = 0; j < copyEnd - 2; j += 1) {
+					stateStmts.push(state.stmts[j]);
 				}
 
 				// Save yielded future to a hoisted local (typed: Promise<T> from yield variable)
@@ -297,8 +350,26 @@ function buildAsyncStateDispatch(sc: StateCollector, promiseType: Type, closureT
 				// Not resolved: return the yielded future to msAsyncCb for registration
 				stateStmts.push(makeReturn(makeTypedIdent(futName, yfType, loc), loc));
 			} else {
-				// Unexpected — just copy all stmts
-				for (const s of state.stmts) { stateStmts.push(s); }
+				// Nested yield: yield return is inside an if/while block (from splitIf/splitWhile).
+				// Extract it recursively and replace with stepper pattern.
+				const deepArg = extractYieldArgDeep(state.stmts);
+				if (deepArg !== null) {
+					yieldArg = deepArg;
+					// Copy remaining stmts (extractYieldArgDeep removed the yield return)
+					for (const s of state.stmts) { stateStmts.push(s); }
+					// Append stepper pattern
+					const futName = "$yf" + i;
+					const yfType = promiseTypeFor(state.yieldVarType);
+					stateStmts.push(makeExprStmt(makeAssign(makeTypedIdent(futName, yfType, loc), yieldArg, loc), loc));
+					stateStmts.push(makeExprStmt(makeAssign(makeIdent("$state", loc), makeNumber(state.nextState, loc), loc), loc));
+					const finishedCheck = makeCall(makeIdent("msFutureFinished", loc), [makeTypedIdent(futName, yfType, loc)], loc);
+					finishedCheck.nodeType = booleanType();
+					stateStmts.push(makeIf(finishedCheck, makeBlock([makeContinue(loc)], loc), makeBlock([], loc), loc));
+					stateStmts.push(makeReturn(makeTypedIdent(futName, yfType, loc), loc));
+				} else {
+					// Truly unexpected — copy all stmts unchanged
+					for (const s of state.stmts) { stateStmts.push(s); }
+				}
 			}
 		} else {
 			// Non-yield state: copy stmts directly (unbox+assign already emitted above)
@@ -359,7 +430,8 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type): Node {
 		if (sc.items[si].isYield && sc.items[si].yieldVarName !== "") {
 			const collected = findVarType(varTypes, sc.items[si].yieldVarName);
 			if (collected !== null) {
-				sc.items[si].yieldVarType = collected;
+				// Collected type may be Promise<T> from async call return type — extract T
+				sc.items[si].yieldVarType = isPromise(collected) ? getPromiseInner(collected) : collected;
 			}
 		}
 	}

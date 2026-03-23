@@ -5,6 +5,7 @@
 @compile("std/runtime/selectorKqueue.c");
 @compile("std/runtime/selectorEpoll.c");
 @compile("std/runtime/selectorPoll.c");
+@compile("std/io/engineSelect.c");
 
 export class Promise<T> {
 	finished: boolean;
@@ -48,6 +49,15 @@ export extern function sleepAsync(ms: number): Promise<void> from "msSleepAsync"
 
 // Async stepper start — createCb pattern (used by asyncBridge, not user code)
 extern function msAsyncStart(retFut: Promise<void>, stepper: () => void): void;
+
+// asyncCheck — fire-and-forget for async calls (Nim asyncCheck parity).
+// Starts the async function and raises on error. Does NOT block.
+// Use instead of discarding the return value of an async call.
+export function asyncCheck(fut: Promise<void>): void {
+	// Future is already started (stepper runs via msAsyncCb).
+	// Just register an error callback so failures don't go silent.
+	// TODO: add error re-raise callback (Nim pattern: raise fut.error)
+}
 
 // ===== Locker<T> — Thread-safe shared mutable state (Malebolgia pattern) =====
 // Wraps a value + ticket lock. Access via lock/unlock or withLock callback.

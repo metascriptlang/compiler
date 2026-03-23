@@ -27,6 +27,7 @@ import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 // Stops at nested function boundaries (each async function is independent).
 
 function rewriteAwaits(node: Node): Node {
+	if (node === null) return node;
 	if (node.kind === NodeKind.AwaitExpr) {
 		const d = node.data as AwaitExprData;
 		return createNode(NodeKind.YieldExpr, { yieldArg: d.awaitArg, isDelegate: false }, syntheticToken(node.location));

@@ -97,6 +97,9 @@ export extern function setLength(this arr: number[], newLen: number): void from 
 /** Returns the allocated capacity of the array buffer. */
 export extern function capacity(this arr: number[]): number from "&msNumberArrayCapacity";
 
+/** Removes deleteCount elements starting at index start. */
+export extern function splice(this arr: number[], start: number, deleteCount: number): void from "&msNumberArraySplice";
+
 // ===== String Array =====
 
 /**
@@ -175,6 +178,9 @@ export extern function setLength(this arr: string[], newLen: number): void from 
 /** Returns the allocated capacity of the array buffer. */
 export extern function capacity(this arr: string[]): number from "&msStringArrayCapacity";
 
+/** Removes deleteCount elements starting at index start. */
+export extern function splice(this arr: string[], start: number, deleteCount: number): void from "&msStringArraySplice";
+
 // ===== Generic Array (matches any T[] not covered by number[]/string[]) =====
 // Uses msGenericArray* macros which work with any MS_ARRAY(T) typedef.
 // These are C macros (not functions) that use sizeof(arr->p->data[0]) for type safety.
@@ -199,6 +205,9 @@ export extern function setLength<T>(this arr: T[], newLen: number): void from "&
 
 /** Returns the allocated capacity of the array buffer. */
 export extern function capacity<T>(this arr: T[]): number from "&msGenericArrayCapacity";
+
+/** Removes deleteCount elements starting at index start. */
+export extern function splice<T>(this arr: T[], start: number, deleteCount: number): void from "&msRefArraySplice";
 
 // ===== Zero-Copy Bridge (uint8[] → string) =====
 

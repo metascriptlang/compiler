@@ -2,8 +2,8 @@
 // Each core: kqueue/epoll selector multiplexing all connections.
 // Parallel across cores (spawn + SO_REUSEPORT), concurrent within each (selector).
 
-@include("std/net/native.h");
 @emit("#define MS_SELECTOR_BRIDGE");
+@include("std/net/native.h");
 @include("std/runtime/selector.h");
 
 extern function msNetSocket(): int32;
@@ -353,4 +353,69 @@ function handleBlocking(server: HttpServer, fd: int32): void {
 		if (!server.keepAlive) keepGoing = false;
 		else if (server.maxRequestsPerConnection > 0 && requestCount >= server.maxRequestsPerConnection) keepGoing = false;
 	}
+}
+
+// ===== Async Engine Mode =====
+
+import { recvAsync, sendAsync, acceptAsync } from "std/net";
+import { asyncCheck } from "std/core/promise";
+
+async function handleClientAsync(fd: int32, handler: RequestHandler): Promise<void> {
+	msNetSetNonBlocking(fd);
+	const data = await recvAsync(fd, 4096);
+	if (data.length === 0) { msNetClose(fd); return; }
+
+	const endPos = findHeaderEnd(data);
+	if (endPos < 0) { msNetClose(fd); return; }
+
+	const request = parseRequestLine(data, fd);
+	if (request === null) { msNetClose(fd); return; }
+	const res = createServerResponse(fd);
+	handler(request, res);
+
+	if (res._finished && res._responseData.length > 0) {
+		msNetSend(fd, res._responseData);
+	}
+	msNetClose(fd);
+}
+
+async function acceptLoopAsync(listenFd: int32, handler: RequestHandler): Promise<void> {
+	while (true) {
+		const clientFd = await acceptAsync(listenFd);
+		if (clientFd < 0) continue;
+		asyncCheck(handleClientAsync(clientFd, handler));
+	}
+}
+
+export function serveAsync(server: HttpServer, threads: int32 = 0): void {
+	const n = threads > 0 ? threads : cpus().length;
+	server.running = true;
+	if (server.fd >= 0) { msNetClose(server.fd); server.fd = -1; }
+
+	const addr = server.address;
+	const port = server.port;
+	const handler = server.handler;
+
+	for (let i = 0; i < n - 1; i += 1) {
+		spawn(() => {
+			const fd = msNetSocket();
+			if (fd < 0) return null;
+			if (msNetBindShared(fd, addr, port) < 0) { msNetClose(fd); return null; }
+			if (msNetListen(fd, 1024) < 0) { msNetClose(fd); return null; }
+			msNetSetNonBlocking(fd);
+			asyncCheck(acceptLoopAsync(fd, handler));
+			while (server.running) { msRunOnce(100); }
+			msNetClose(fd);
+			return null;
+		});
+	}
+
+	const fd = msNetSocket();
+	if (fd < 0) return;
+	if (msNetBindShared(fd, addr, port) < 0) { msNetClose(fd); return; }
+	if (msNetListen(fd, 1024) < 0) { msNetClose(fd); return; }
+	msNetSetNonBlocking(fd);
+	asyncCheck(acceptLoopAsync(fd, handler));
+	while (server.running) { msRunOnce(100); }
+	msNetClose(fd);
 }
