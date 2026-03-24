@@ -6,7 +6,7 @@
 //   → { const $iter = arr; let $idx = 0; const $len = $iter.length;
 //       while ($idx < $len) { const item = $iter[$idx]; body; $idx++; } }
 
-import { Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, NodeFlag, Type } from "../../ast/node";
+import { Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, NodeFlag, Type } from "../../ast/node";
 import { TransformContext, freshTemp } from "../context";
 import { int32Type } from "../../checker/types";
 import { walkNode } from "../walker";
@@ -38,21 +38,37 @@ function forOfVisitor(ctx: TransformContext): (node: Node) => Node {
 // ===== Array/String For-Of =====
 
 function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLocation): Node {
-	const iterName = freshTemp(ctx, "iter");
 	const idxName = freshTemp(ctx, "idx");
 	const lenName = freshTemp(ctx, "len");
 	const iterType = d.forOfIterable.nodeType;
 
-	// const $iter = arr; — cursor (borrow), DRC must not destroy (reference: cursor flag)
-	const iterDecl = makeVarDecl(iterName, d.forOfIterable, DeclKind.Const, loc);
-	iterDecl.flags = iterDecl.flags | NodeFlag.Cursor;
+	// Stable lvalue check: Identifier/MemberExpr can be accessed directly without copy.
+	// Value-based arrays in C are {len, p} structs — copying creates a stale p pointer
+	// if the loop body pushes to the original (reallocation invalidates the copy).
+	// For non-lvalue expressions (calls, etc.), still use a temp to evaluate once.
+	const isStableLvalue = d.forOfIterable.kind === NodeKind.Identifier
+		|| d.forOfIterable.kind === NodeKind.MemberExpr;
+
+	const preamble: Node[] = [];
+
+	// For non-stable expressions, copy to a temp (evaluated once)
+	let iterExpr: Node = d.forOfIterable;
+	if (!isStableLvalue) {
+		const iterName = freshTemp(ctx, "iter");
+		const iterDecl = makeVarDecl(iterName, d.forOfIterable, DeclKind.Const, loc);
+		iterDecl.flags = iterDecl.flags | NodeFlag.Cursor;
+		preamble.push(iterDecl);
+		iterExpr = makeTypedIdent(iterName, iterType, loc);
+	}
 
 	// let $idx = 0;
 	const idxDecl = makeVarDecl(idxName, makeNumber(0, loc), DeclKind.Let, loc);
+	preamble.push(idxDecl);
 
-	// const $len = $iter.length;
-	const lenExpr = makeMember(makeTypedIdent(iterName, iterType, loc), "length", loc);
+	// const $len = <iter>.length;  — captured once (new elements from push won't be visited)
+	const lenExpr = makeMember(cloneExpr(iterExpr, loc), "length", loc);
 	const lenDecl = makeVarDecl(lenName, lenExpr, DeclKind.Const, loc);
+	preamble.push(lenDecl);
 
 	// $idx = $idx + 1;
 	const increment = makeAssign(
@@ -67,9 +83,9 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	const itemDk = boolToDeclKind(d.forOfIsConst);
 
 	if (d.forOfPattern !== null && d.forOfPattern.kind === NodeKind.ArrayPattern) {
-		// Destructured: const $elem = $iter[$idx]; const a = $elem[0]; const b = $elem[1]; ...
+		// Destructured: const $elem = <iter>[$idx]; const a = $elem[0]; const b = $elem[1]; ...
 		const elemName = freshTemp(ctx, "elem");
-		const elemAccess = makeArrayAccess(makeTypedIdent(iterName, iterType, loc), makeTypedIdent(idxName, int32Type(), loc), loc);
+		const elemAccess = makeArrayAccess(cloneExpr(iterExpr, loc), makeTypedIdent(idxName, int32Type(), loc), loc);
 		const elemDecl = makeVarDecl(elemName, elemAccess, DeclKind.Const, loc);
 		// Propagate element type for nativeLower (tuple → member access)
 		if (iterType !== null && iterType.typeReturn !== null) {
@@ -83,9 +99,9 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 			pi += 1;
 		}
 	} else {
-		// Simple binding: const item = $iter[$idx];
+		// Simple binding: const item = <iter>[$idx];
 		// NodeFlag.Cursor: for-of binding is a borrow from the array — DRC must skip destroy (reference: cursor flag)
-		const itemAccess = makeArrayAccess(makeTypedIdent(iterName, iterType, loc), makeTypedIdent(idxName, int32Type(), loc), loc);
+		const itemAccess = makeArrayAccess(cloneExpr(iterExpr, loc), makeTypedIdent(idxName, int32Type(), loc), loc);
 		const itemDecl = makeVarDecl(d.forOfBinding, itemAccess, itemDk, loc);
 		itemDecl.flags = itemDecl.flags | NodeFlag.Cursor;
 		whileStmts.push(itemDecl);
@@ -106,7 +122,28 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	const whileBody = makeBlock(whileStmts, loc);
 	const whileNode = makeWhile(whileCond, whileBody, loc);
 
-	return makeBlock([iterDecl, idxDecl, lenDecl, whileNode], loc);
+	preamble.push(whileNode);
+	return makeBlock(preamble, loc);
+}
+
+// Clone a simple expression node (Identifier or MemberExpr) for reuse in lowered code.
+// Avoids sharing a single AST node across multiple parents.
+function cloneExpr(node: Node, loc: SourceLocation): Node {
+	if (node.kind === NodeKind.Identifier) {
+		const d = node.data as IdentifierData;
+		const clone = makeTypedIdent(d.name, node.nodeType, loc);
+		clone.resolvedSym = node.resolvedSym;
+		return clone;
+	}
+	if (node.kind === NodeKind.MemberExpr) {
+		const d = node.data as MemberExprData;
+		const clone = makeMember(cloneExpr(d.object, loc), d.property, loc);
+		clone.nodeType = node.nodeType;
+		clone.resolvedSym = node.resolvedSym;
+		return clone;
+	}
+	// Fallback: return as-is (temp ident from non-lvalue path)
+	return node;
 }
 
 // ===== Pattern Expansion Helper =====

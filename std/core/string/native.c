@@ -254,45 +254,118 @@ bool msStringEndsWith(msString s, msString suffix) {
 	return memcmp(s.p->data + s.len - suffix.len, suffix.p->data, suffix.len) == 0;
 }
 
+static int64_t msStringByteIndexOf(msString s, msString sub, int64_t byteStart);
+
 bool msStringContains(msString s, msString sub) {
 	if (sub.len == 0) return true;
 	if (sub.len > s.len) return false;
 	if (s.p == NULL) return false;
-	return msStringIndexOf(s, sub, 0) >= 0;
+	return msStringByteIndexOf(s, sub, 0) >= 0;
 }
 
 /* ===== Search ===== */
 
+/* Internal byte-based indexOf — for C runtime use (replace, split, count).
+ * start and return value are byte offsets. */
+static int64_t msStringByteIndexOf(msString s, msString sub, int64_t byteStart) {
+	if (sub.len == 0) return byteStart <= s.len ? byteStart : -1;
+	if (byteStart < 0) byteStart = 0;
+	if (sub.len > s.len || s.p == NULL) return -1;
+	const char* haystack = s.p->data;
+	const char* needle = sub.p->data;
+	int64_t limit = s.len - sub.len;
+	for (int64_t i = byteStart; i <= limit; i++) {
+		if (memcmp(haystack + i, needle, sub.len) == 0) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+/* Public char-based indexOf — JavaScript/TypeScript semantics.
+ * start and return value are char positions (UTF-16 code units). */
 int64_t msStringIndexOf(msString s, msString sub, int64_t start) {
 	if (sub.len == 0) return start <= s.len ? start : -1;
 	if (start < 0) start = 0;
 	if (sub.len > s.len || s.p == NULL) return -1;
 
-	const char* haystack = s.p->data;
-	const char* needle = sub.p->data;
-	int64_t limit = s.len - sub.len;
+	/* ASCII fast path: byte positions == char positions */
+	if (msStringIsAscii(s)) {
+		return msStringByteIndexOf(s, sub, start);
+	}
 
-	for (int64_t i = start; i <= limit; i++) {
-		if (memcmp(haystack + i, needle, sub.len) == 0) {
-			return i;
+	/* Non-ASCII: walk by UTF-8 chars, return char position. */
+	const unsigned char* haystack = (const unsigned char*)s.p->data;
+	const unsigned char* pend = haystack + s.len;
+	const unsigned char* p = haystack;
+	int64_t charPos = 0;
+
+	/* Advance to start char position */
+	while (p < pend && charPos < start) {
+		unsigned char b = *p;
+		if (b < 0x80) p++;
+		else if (b < 0xE0) p += 2;
+		else if (b < 0xF0) p += 3;
+		else { p += 4; charPos++; } /* surrogate pair = 2 UTF-16 units */
+		charPos++;
+	}
+
+	/* Search from current byte position, tracking char position */
+	while (p + sub.len <= pend) {
+		if (memcmp(p, (const unsigned char*)sub.p->data, sub.len) == 0) {
+			return charPos;
 		}
+		unsigned char b = *p;
+		if (b < 0x80) p++;
+		else if (b < 0xE0) p += 2;
+		else if (b < 0xF0) p += 3;
+		else { p += 4; charPos++; }
+		charPos++;
 	}
 	return -1;
 }
 
 int64_t msStringLastIndexOf(msString s, msString sub) {
-	if (sub.len == 0) return s.len;
+	if (sub.len == 0) return msStringIsAscii(s) ? s.len : msStringLength(s);
 	if (sub.len > s.len || s.p == NULL) return -1;
 
+	/* ASCII fast path */
+	if (msStringIsAscii(s)) {
+		const char* haystack = s.p->data;
+		const char* needle = sub.p->data;
+		for (int64_t i = s.len - sub.len; i >= 0; i--) {
+			if (memcmp(haystack + i, needle, sub.len) == 0) {
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	/* Non-ASCII: find last byte match, convert to char position */
 	const char* haystack = s.p->data;
 	const char* needle = sub.p->data;
-
+	int64_t lastBytePos = -1;
 	for (int64_t i = s.len - sub.len; i >= 0; i--) {
 		if (memcmp(haystack + i, needle, sub.len) == 0) {
-			return i;
+			lastBytePos = i;
+			break;
 		}
 	}
-	return -1;
+	if (lastBytePos < 0) return -1;
+
+	/* Convert byte position to char position */
+	const unsigned char* p = (const unsigned char*)haystack;
+	int64_t charPos = 0;
+	int64_t bytePos = 0;
+	while (bytePos < lastBytePos) {
+		unsigned char b = p[bytePos];
+		if (b < 0x80) bytePos++;
+		else if (b < 0xE0) bytePos += 2;
+		else if (b < 0xF0) bytePos += 3;
+		else { bytePos += 4; charPos++; }
+		charPos++;
+	}
+	return charPos;
 }
 
 int64_t msStringCount(msString s, msString sub) {
@@ -300,7 +373,7 @@ int64_t msStringCount(msString s, msString sub) {
 	int64_t count = 0;
 	int64_t pos = 0;
 	while (pos <= s.len - sub.len) {
-		int64_t found = msStringIndexOf(s, sub, pos);
+		int64_t found = msStringByteIndexOf(s, sub, pos);
 		if (found < 0) break;
 		count++;
 		pos = found + sub.len;
@@ -567,7 +640,7 @@ msString msStringReplace(msString s, msString search, msString replacement) {
 	if (s.len == 0 || search.len == 0) {
 		return s.len > 0 ? msStringNew(s.p->data, s.len) : MS_EMPTY_STRING;
 	}
-	int64_t pos = msStringIndexOf(s, search, 0);
+	int64_t pos = msStringByteIndexOf(s, search, 0);
 	if (pos < 0) {
 		return msStringNew(s.p->data, s.len);
 	}
@@ -603,7 +676,7 @@ msString msStringReplaceAll(msString s, msString search, msString replacement) {
 	int64_t dstPos = 0;
 
 	while (srcPos <= s.len - search.len) {
-		int64_t found = msStringIndexOf(s, search, srcPos);
+		int64_t found = msStringByteIndexOf(s, search, srcPos);
 		if (found < 0) break;
 		/* Copy segment before match */
 		int64_t segLen = found - srcPos;
@@ -851,7 +924,7 @@ msStringArray msStringSplit(msString s, msString delimiter) {
 
 	int64_t pos = 0;
 	while (pos <= s.len) {
-		int64_t found = msStringIndexOf(s, delimiter, pos);
+		int64_t found = msStringByteIndexOf(s, delimiter, pos);
 		if (found < 0) {
 			msStringArrayPush(&arr, msStringNew(s.p->data + pos, s.len - pos));
 			break;

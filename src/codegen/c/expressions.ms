@@ -80,25 +80,33 @@ function isRefArrayAccessCall(node: Node): boolean {
 // Single point for struct-aware pointer promotion, pointer/value conversion, and untyped literal handling.
 // mutBits/paramIdx: callee's sym.mutatedParams bitfield + param index for struct-aware promotion.
 export function shimCallArg(g: CGen, p: CProc, arg: string, paramType: Type, argNode: Node, mutBits: int32, paramIdx: number): string {
-	if (paramType !== null && argNode.nodeType !== null && argNode.kind !== NodeKind.HiddenAddr) {
+	if (paramType !== null && argNode.kind !== NodeKind.HiddenAddr) {
 		const paramIsPtr = isPointerType(paramType);
-		// Check nodeType first, fallback to resolvedSym.symbolType (DRC may not propagate Ref to nodeType)
-		let argIsPtr = isPointerType(argNode.nodeType);
-		if (!argIsPtr && argNode.resolvedSym !== null && argNode.resolvedSym.symbolType !== null) {
-			argIsPtr = isPointerType(argNode.resolvedSym.symbolType);
-		}
 		const isMutated = (mutBits & (1 << (paramIdx as int32))) !== 0;
 		const paramCcgPtr = shouldIndirectParam(paramType, isMutated);
-		if (paramIsPtr && !argIsPtr && argNode.kind !== NodeKind.NullLiteral) {
-			return safeAddrOf(g, p, arg, argNode, paramType);
-		} else if (!paramIsPtr && argIsPtr && !paramCcgPtr) {
-			return `*(${arg})`;
+		if (argNode.nodeType !== null) {
+			// Full type info: check pointer/value mismatch + ccgIntroducedPtr
+			let argIsPtr = isPointerType(argNode.nodeType);
+			if (!argIsPtr && argNode.resolvedSym !== null && argNode.resolvedSym.symbolType !== null) {
+				argIsPtr = isPointerType(argNode.resolvedSym.symbolType);
+			}
+			if (paramIsPtr && !argIsPtr && argNode.kind !== NodeKind.NullLiteral) {
+				return safeAddrOf(g, p, arg, argNode, paramType);
+			} else if (!paramIsPtr && argIsPtr && !paramCcgPtr) {
+				return `*(${arg})`;
+			}
+			if (!paramIsPtr && !argIsPtr && paramCcgPtr) {
+				return genArgCcgPtr(g, arg, argNode, p, paramType);
+			}
+		} else {
+			// No arg type — genArg pattern: decide promotion from param type alone
+			if (!paramIsPtr && paramCcgPtr) {
+				return genArgCcgPtr(g, arg, argNode, p, paramType);
+			}
+			if (arg.byteLength > 0 && arg.byteAt(0) === "{".code) {
+				return safeAddrOf(g, p, arg, argNode, paramType);
+			}
 		}
-		if (!paramIsPtr && !argIsPtr && paramCcgPtr) {
-			return genArgCcgPtr(g, arg, argNode, p, paramType);
-		}
-	} else if (paramType !== null && argNode.nodeType === null && arg.byteLength > 0 && arg.byteAt(0) === "{".code) {
-		return safeAddrOf(g, p, arg, argNode, paramType);
 	}
 	return arg;
 }

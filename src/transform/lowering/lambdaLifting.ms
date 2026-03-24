@@ -395,12 +395,10 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 		const orig = findCapturedIdent(name, state.capturedIdents);
 		if (orig !== null && orig.nodeType !== null) {
 			let resolvedType = orig.nodeType;
-			// Nim parity: captured var params store pointer in env.
-			// If this capture is a function param whose type is pointer-promoted
-			// (Array, Union, Span via ccgIntroducedPtr), wrap in Ptr so the env
-			// field stores the pointer, not the dereferenced value.
-			const isParam = nameSetContains(state.currentParams, name);
-			if (isParam && isCcgPtrType(resolvedType)) {
+			// Reference parity: captured variables of ccgIntroducedPtr types (Array, Union, Span)
+			// store a pointer in the env so mutations (push/realloc) are visible across closures.
+			// Without this, each closure gets a value copy — push invalidates the copy's .p pointer.
+			if (isCcgPtrType(resolvedType)) {
 				resolvedType = createPtr(resolvedType);
 			}
 			envResolvedTypes.push(resolvedType);
@@ -521,10 +519,11 @@ function makeClosurePair(liftedName: string, envStructType: Type, captures: Name
 		if (isFnCapture) {
 			envVal = wrapFnAsClosure(ident, loc);
 		}
-		// Nim parity: pointer-promoted param captures store the pointer via HiddenAddr.
-		// The codegen for HiddenAddr on an indirectParam returns the raw pointer name.
-		const isParamPtr = nameSetContains(currentParams, name) && orig !== null && orig.nodeType !== null && isCcgPtrType(orig.nodeType);
-		if (isParamPtr) {
+		// ccgIntroducedPtr captures (Array, Union, Span) store pointer via HiddenAddr.
+		// For params: codegen returns raw pointer name (already indirect).
+		// For locals: takes address of the stack variable (&localVar).
+		const isCcgCapture = orig !== null && orig.nodeType !== null && isCcgPtrType(orig.nodeType);
+		if (isCcgCapture) {
 			envVal = createNode(NodeKind.HiddenAddr, { expr: envVal }, syntheticToken(loc));
 			if (orig.nodeType !== null) envVal.nodeType = createPtr(orig.nodeType);
 		}

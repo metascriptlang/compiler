@@ -230,7 +230,7 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 			}
 		}
 	}
-	// Reference parity (injectdestructors.nim:935-939): ensureDestruction on the call's
+	// Reference parity (injectdestructors:935-939): ensureDestruction on the call's
 	// RETURN value in Normal mode — NOT on individual arguments. Each nested call arg
 	// gets its own ensureDestruction via recursive processNode→processCall.
 	// Applying ensureDestruction on args causes double-free when callee stores the arg

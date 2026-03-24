@@ -5,7 +5,7 @@
 // json builders (jsonObject/jsonString/jsonNumber/jsonBool) + stringify from std/core/json.
 
 import { Node, NodeKind, SourceLocation, CallExprData, Type, TypeKind, createNode } from "../../ast/node";
-import { isNumeric, stringType, createArray, unwrapRef } from "../../checker/types";
+import { isNumeric, stringType, unknownType, createArray, unwrapRef } from "../../checker/types";
 import { TransformContext } from "../context";
 import { lookupSymbol } from "../../checker/symbol";
 import { findExtension } from "../../checker/context";
@@ -157,6 +157,7 @@ function buildNestedJsonObject(obj: Node, structType: Type, loc: SourceLocation,
 	const keysArr = createNode(NodeKind.ArrayLiteral, { elements: keyNodes }, syntheticToken(loc));
 	keysArr.nodeType = createArray(stringType());
 	const valsArr = createNode(NodeKind.ArrayLiteral, { elements: valNodes }, syntheticToken(loc));
+	valsArr.nodeType = createArray(unknownType());
 	return makeCall(resolveDbgIdent("jsonObject", ctx, loc), [keysArr, valsArr], loc);
 }
 
@@ -181,29 +182,7 @@ function buildStructDebugString(arg: Node, typeName: string, structType: Type, i
 	const prefix = makeString(color + label + "\x1b[0m", loc);
 	prefix.nodeType = stringType();
 
-	// Safety: if arg is not a simple identifier, accessing N fields evaluates it N times.
-	// For non-identifiers, build jsonObject inline (arg still evaluated once per field access,
-	// but this matches how the expression appears in user code — no worse than writing it manually).
-	const safeArg = arg;
-
-	// Build keys and values arrays
-	const keyNodes: Node[] = [];
-	const valNodes: Node[] = [];
-	let fi = 0;
-	while (fi < structType.typeNames.length && fi < structType.typeChildren.length) {
-		const fname = structType.typeNames[fi];
-		const ftype = structType.typeChildren[fi];
-		keyNodes.push(makeString(fname, loc));
-		const fieldAccess = makeMember(safeArg, fname, loc);
-		valNodes.push(wrapFieldAsJson(fieldAccess, ftype, loc, ctx));
-		fi = fi + 1;
-	}
-
-	// jsonObject(keys, values)
-	const keysArr = createNode(NodeKind.ArrayLiteral, { elements: keyNodes }, syntheticToken(loc));
-	keysArr.nodeType = createArray(stringType());
-	const valsArr = createNode(NodeKind.ArrayLiteral, { elements: valNodes }, syntheticToken(loc));
-	const objCall = makeCall(resolveDbgIdent("jsonObject", ctx, loc), [keysArr, valsArr], loc);
+	const objCall = buildNestedJsonObject(arg, structType, loc, ctx);
 
 	// stringify(obj, true) — colored console output
 	const strCall = makeCall(resolveDbgIdent("stringify", ctx, loc), [objCall, makeBool(true, loc)], loc);
