@@ -940,14 +940,31 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 			}
 		} else if (member.kind === NodeKind.PropertyDecl) {
 			const pd = member.data as PropertyDeclData;
-			memberNames.push(pd.propName);
-			if (pd.propType !== "") {
-				const propType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
-				resolveTypeExpr(member.typeExpr, ctx);
-				member.nodeType = propType;
-				memberTypes.push(propType);
+			if (pd.propIsStatic) {
+				// Resolve static property type and update the staticFields symbol
+				let staticType = unknownType();
+				if (pd.propType !== "") {
+					staticType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
+					resolveTypeExpr(member.typeExpr, ctx);
+				}
+				member.nodeType = staticType;
+				// Find matching staticFields entry and set its type
+				for (const sf of sym.staticFields) {
+					if (sf.name === d.className + "." + pd.propName) {
+						sf.symbolType = staticType;
+						sf.state = SymbolState.Shaped;
+					}
+				}
 			} else {
-				memberTypes.push(unknownType());
+				memberNames.push(pd.propName);
+				if (pd.propType !== "") {
+					const propType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
+					resolveTypeExpr(member.typeExpr, ctx);
+					member.nodeType = propType;
+					memberTypes.push(propType);
+				} else {
+					memberTypes.push(unknownType());
+				}
 			}
 		} else if (member.kind === NodeKind.ConstructorDecl) {
 			// Resolve constructor type but don't add to struct (data-only, like methods)

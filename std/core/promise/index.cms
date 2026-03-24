@@ -5,7 +5,7 @@
 @compile("std/runtime/selectorKqueue.c");
 @compile("std/runtime/selectorEpoll.c");
 @compile("std/runtime/selectorPoll.c");
-@compile("std/io/engineSelect.c");
+// Engine compiled via std/net/index.cms (only when network I/O is used)
 
 export class Promise<T> {
 	finished: boolean;

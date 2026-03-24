@@ -169,6 +169,15 @@ export function mangleProcName(name: string, moduleName: string, id: number): st
 	return `${mangled}__${moduleName}_u${id}`;
 }
 
+// Static field global name: "Counter.total" → "Counter__total"
+export function staticFieldCName(qualifiedName: string): string {
+	const dotIdx = qualifiedName.indexOf(".");
+	if (dotIdx >= 0) {
+		return mangle(qualifiedName.slice(0, dotIdx)) + "__" + safeName(qualifiedName.slice(dotIdx + 1, qualifiedName.length));
+	}
+	return mangle(qualifiedName);
+}
+
 // ===== Symbol → C Name (Standard reference parity) =====
 // Single source of truth for function C names. Reads sym.modulePath.
 // extern functions use nativeName. main() stays main_. Others get module-qualified.

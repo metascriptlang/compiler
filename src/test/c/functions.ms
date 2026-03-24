@@ -42,3 +42,19 @@ test "E2E C: string param function" {
 	assert c.ok;
 	assert c.value.contains("msString");
 }
+
+test "E2E C: array param passed by pointer" {
+	const src = "function count(arr: string[]): number { return arr.length; }\nconst a: string[] = [];\ncount(a);";
+	const c = compileToC(src);
+	assert c.ok;
+	// Array params must be pointers (msStringArray*) so callee mutations are visible to caller
+	assert c.value.contains("msStringArray*");
+}
+
+test "E2E C: array return is by value not pointer" {
+	const src = "function getItems(): string[] { return []; }\nconst a = getItems();";
+	const c = compileToC(src);
+	assert c.ok;
+	// Return types must NOT be promoted to pointers — arrays returned by value
+	assert c.value.contains("msStringArray getItems__");
+}

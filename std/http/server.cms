@@ -5,6 +5,7 @@
 @emit("#define MS_SELECTOR_BRIDGE");
 @include("std/net/native.h");
 @include("std/runtime/selector.h");
+@include("std/net/eventLoopUring.h");
 
 extern function msNetSocket(): int32;
 extern function msNetBind(fd: int32, addr: string, port: int32): int32;
@@ -29,9 +30,27 @@ extern function msSelectorEventFlags(index: int32): int32;
 extern function msSelectorClose(sel: int64): void;
 extern function msRunOnce(timeoutMs: int32): boolean;
 
+// io_uring native event loop (Linux only — falls back to selector on macOS)
+extern function msHasUringEventLoop(): int32;
+extern function msUringEvtInit(): int32;
+extern function msUringSubmitAccept(listenFd: int32): void;
+extern function msUringSubmitRecv(fd: int32, buf: string, len: int32): void;
+extern function msUringSubmitSend(fd: int32, buf: string, len: int32): void;
+extern function msUringWait(timeoutMs: int32): int32;
+extern function msUringEventFd(idx: int32): int32;
+extern function msUringEventOp(idx: int32): int32;
+extern function msUringEventRes(idx: int32): int32;
+extern function msUringRecvData(fd: int32, bytesRecv: int32): string;
+extern function msUringFastHeaderCheck(fd: int32, bytesRecv: int32): int32;
+extern function msUringBuildResponse(fd: int32, status: int32, statusText: string, contentType: string, body: string): string;
+extern function msFastParseMethod(data: string): int32;
+extern function msFastParsePath(data: string): string;
+extern function msNetSetTcpNoDelay(fd: int32): void;
+extern function msNetSetNoSigpipe(fd: int32): void;
+
 import {
 	HttpMethod, HttpRequest, HttpHeaders, ServerResponse, RequestHandler,
-	statusText, parseMethod,
+	statusText,
 } from "./types";
 import { HttpError, socketError, bodyTooLarge } from "./errors";
 import { cpus } from "std/os";
@@ -84,16 +103,6 @@ export function stop(server: HttpServer): void {
 
 // ===== Response Helpers =====
 
-function createServerResponse(fd: int32): ServerResponse {
-	return {
-		fd: fd, status: 200,
-		headers: null as unknown as HttpHeaders,
-		_chunks: null as unknown as string[],
-		headersSent: false, _finished: false, _chunked: false,
-		_responseData: "",
-	};
-}
-
 // Build HTTP response in one C-level allocation (httpbeast pattern).
 // snprintf header + memcpy body — zero template literal overhead.
 extern function msBuildResponse(status: int32, statusText: string, contentType: string, body: string): string;
@@ -121,20 +130,19 @@ export function sendError(res: ServerResponse, status: int32, msg: string): void
 	sendBody(res, "text/plain", msg);
 }
 
-// Parse method + path from raw request line. Returns null on malformed input.
-function parseRequestLine(data: string, fd: int32): HttpRequest {
-	const sp1 = data.indexOf(" ");
-	if (sp1 < 0) return null as unknown as HttpRequest;
-	const sp2 = data.indexOf(" ", sp1 + 1);
-	if (sp2 < 0) return null as unknown as HttpRequest;
-	return {
-		method: parseMethod(data.slice(0, sp1)),
-		path: data.slice(sp1 + 1, sp2),
-		version: "1.1",
-		headers: null as unknown as HttpHeaders,
-		body: "", clientFd: fd,
-	};
+// Raw response — send pre-built response string directly (zero overhead).
+// For users who build their own HTTP response (custom headers, status, etc.).
+export function sendRaw(res: ServerResponse, raw: string): void {
+	res._responseData = raw;
+	res.headersSent = true;
+	res._finished = true;
 }
+
+// Direct fd access — for advanced socket ops (setsockopt, shutdown, etc.)
+export function getClientFd(req: HttpRequest): int32 {
+	return req.clientFd;
+}
+
 
 // ===== Event Loop =====
 
@@ -143,6 +151,42 @@ interface ClientState {
 	sendQueue: string;
 	bytesSent: int32;
 	headersEndPos: int32;
+	// Pre-allocated per-connection — reused across requests (zero alloc after first request)
+	request: HttpRequest;
+	response: ServerResponse;
+}
+
+function initClient(fd: int32): ClientState {
+	return {
+		data: "", sendQueue: "", bytesSent: 0, headersEndPos: -1,
+		request: {
+			method: HttpMethod.GET, path: "", version: "1.1",
+			headers: null as unknown as HttpHeaders, body: "", clientFd: fd,
+		},
+		response: {
+			fd: fd, status: 200,
+			headers: null as unknown as HttpHeaders,
+			_chunks: null as unknown as string[],
+			headersSent: false, _finished: false, _chunked: false,
+			_responseData: "",
+		},
+	};
+}
+
+function resetRequest(client: ClientState, fd: int32, method: int32, path: string): void {
+	client.request.method = method as unknown as HttpMethod;
+	client.request.path = path;
+	client.request.clientFd = fd;
+	client.request.body = "";
+}
+
+function resetResponse(client: ClientState, fd: int32): void {
+	client.response.fd = fd;
+	client.response.status = 200;
+	client.response.headersSent = false;
+	client.response._finished = false;
+	client.response._chunked = false;
+	client.response._responseData = "";
 }
 
 // Fast headers check: O(1) last-4-bytes, then slow linear fallback (httpbeast pattern)
@@ -164,8 +208,8 @@ export function serveConcurrent(server: HttpServer, threads: int32 = 0): void {
 	const port = server.port;
 	const handler = server.handler;
 
-	// httpbeast pattern: N-1 worker threads + main thread runs event loop directly.
-	// Main thread participates as a worker — no wasted core on busy-wait.
+	const useUring = msHasUringEventLoop() === 1;
+
 	for (let i = 0; i < n - 1; i += 1) {
 		spawn(() => {
 			const fd = msNetSocket();
@@ -173,19 +217,20 @@ export function serveConcurrent(server: HttpServer, threads: int32 = 0): void {
 			if (msNetBindShared(fd, addr, port) < 0) { msNetClose(fd); return null; }
 			if (msNetListen(fd, 1024) < 0) { msNetClose(fd); return null; }
 			msNetSetNonBlocking(fd);
-			eventLoop(server, fd, handler);
+			if (useUring) { eventLoopUring(server, fd, handler); }
+			else { eventLoop(server, fd, handler); }
 			msNetClose(fd);
 			return null;
 		});
 	}
 
-	// Main thread runs the Nth event loop (blocks here until server.running = false)
 	const fd = msNetSocket();
 	if (fd < 0) return;
 	if (msNetBindShared(fd, addr, port) < 0) { msNetClose(fd); return; }
 	if (msNetListen(fd, 1024) < 0) { msNetClose(fd); return; }
 	msNetSetNonBlocking(fd);
-	eventLoop(server, fd, handler);
+	if (useUring) { eventLoopUring(server, fd, handler); }
+	else { eventLoop(server, fd, handler); }
 	msNetClose(fd);
 }
 
@@ -210,7 +255,7 @@ function eventLoop(server: HttpServer, listenFd: int32, handler: RequestHandler)
 	const clients: ClientState[] = new Array(maxFds);
 	let ci = 0;
 	while (ci < maxFds) {
-		clients[ci] = { data: "", sendQueue: "", bytesSent: 0, headersEndPos: -1 };
+		clients[ci] = initClient(ci);
 		ci = ci + 1;
 	}
 
@@ -227,10 +272,11 @@ function eventLoop(server: HttpServer, listenFd: int32, handler: RequestHandler)
 				while (true) {
 					const cfd = msNetAcceptNonBlock(listenFd);
 					if (cfd < 0) break;
-					if (cfd >= maxFds) { msNetClose(cfd); continue; }  // fd too large for our array
+					if (cfd >= maxFds) { msNetClose(cfd); continue; }
 					msNetSetNonBlocking(cfd);
+					msNetSetNoSigpipe(cfd);
 					msSelectorAdd(sel, cfd, 1);
-					clients[cfd] = { data: "", sendQueue: "", bytesSent: 0, headersEndPos: -1 };
+					clients[cfd] = initClient(cfd);
 				}
 			} else if (fd >= maxFds) {
 				// fd out of range — shouldn't happen, but don't crash
@@ -289,10 +335,15 @@ function dispatch(client: ClientState, fd: int32, sel: int64, handler: RequestHa
 	const data = client.data;
 	const endPos = client.headersEndPos;
 
-	const request = parseRequestLine(data, fd);
-	if (request === null) { client.data = ""; return; }
-	const res = createServerResponse(fd);
-	handler(request, res);
+	const methodInt = msFastParseMethod(data);
+	if (methodInt < 0) { client.data = ""; return; }
+	const path = msFastParsePath(data);
+	if (path.length === 0) { client.data = ""; return; }
+
+	// Reuse pre-allocated request/response (zero heap alloc)
+	resetRequest(client, fd, methodInt, path);
+	resetResponse(client, fd);
+	handler(client.request, client.response);
 
 	// Preserve pipelined data
 	if (endPos < data.length) {
@@ -301,8 +352,8 @@ function dispatch(client: ClientState, fd: int32, sel: int64, handler: RequestHa
 		client.data = "";
 	}
 
-	if (res._finished && res._responseData.length > 0) {
-		client.sendQueue = res._responseData;
+	if (client.response._finished && client.response._responseData.length > 0) {
+		client.sendQueue = client.response._responseData;
 		client.bytesSent = 0;
 		msSelectorModify(sel, fd, 3);
 	} else {
@@ -339,15 +390,20 @@ export function serveN(server: HttpServer, count: int32): void {
 function handleBlocking(server: HttpServer, fd: int32): void {
 	let requestCount = 0;
 	let keepGoing = true;
+	const client = initClient(fd);
 	while (keepGoing) {
 		const data = msNetRecv(fd, server.maxHeaderSize);
 		if (data.length === 0) return;
 
-		const request = parseRequestLine(data, fd);
-		if (request === null) return;
-		const res = createServerResponse(fd);
-		server.handler(request, res);
-		if (res._responseData.length > 0) msNetSend(fd, res._responseData);
+		const methodInt = msFastParseMethod(data);
+		if (methodInt < 0) return;
+		const path = msFastParsePath(data);
+		if (path.length === 0) return;
+
+		resetRequest(client, fd, methodInt, path);
+		resetResponse(client, fd);
+		server.handler(client.request, client.response);
+		if (client.response._responseData.length > 0) msNetSend(fd, client.response._responseData);
 
 		requestCount = requestCount + 1;
 		if (!server.keepAlive) keepGoing = false;
@@ -355,67 +411,87 @@ function handleBlocking(server: HttpServer, fd: int32): void {
 	}
 }
 
-// ===== Async Engine Mode =====
+// ===== io_uring Native Event Loop (Linux) =====
+// Same logic as eventLoop but uses native RECV/SEND/ACCEPT via io_uring.
+// Zero epoll, zero separate recv/send syscalls — all through the ring buffer.
+// Per-fd response buffers: zero malloc after warmup (msBuildResponseReuse).
 
-import { recvAsync, sendAsync, acceptAsync } from "std/net";
-import { asyncCheck } from "std/core/promise";
-
-async function handleClientAsync(fd: int32, handler: RequestHandler): Promise<void> {
-	msNetSetNonBlocking(fd);
-	const data = await recvAsync(fd, 4096);
-	if (data.length === 0) { msNetClose(fd); return; }
-
-	const endPos = findHeaderEnd(data);
-	if (endPos < 0) { msNetClose(fd); return; }
-
-	const request = parseRequestLine(data, fd);
-	if (request === null) { msNetClose(fd); return; }
-	const res = createServerResponse(fd);
-	handler(request, res);
-
-	if (res._finished && res._responseData.length > 0) {
-		msNetSend(fd, res._responseData);
-	}
-	msNetClose(fd);
-}
-
-async function acceptLoopAsync(listenFd: int32, handler: RequestHandler): Promise<void> {
-	while (true) {
-		const clientFd = await acceptAsync(listenFd);
-		if (clientFd < 0) continue;
-		asyncCheck(handleClientAsync(clientFd, handler));
-	}
-}
-
-export function serveAsync(server: HttpServer, threads: int32 = 0): void {
-	const n = threads > 0 ? threads : cpus().length;
-	server.running = true;
-	if (server.fd >= 0) { msNetClose(server.fd); server.fd = -1; }
-
-	const addr = server.address;
-	const port = server.port;
-	const handler = server.handler;
-
-	for (let i = 0; i < n - 1; i += 1) {
-		spawn(() => {
-			const fd = msNetSocket();
-			if (fd < 0) return null;
-			if (msNetBindShared(fd, addr, port) < 0) { msNetClose(fd); return null; }
-			if (msNetListen(fd, 1024) < 0) { msNetClose(fd); return null; }
-			msNetSetNonBlocking(fd);
-			asyncCheck(acceptLoopAsync(fd, handler));
-			while (server.running) { msRunOnce(100); }
-			msNetClose(fd);
-			return null;
-		});
+function eventLoopUring(server: HttpServer, listenFd: int32, handler: RequestHandler): void {
+	if (msUringEvtInit() < 0) {
+		// Fallback to selector-based event loop
+		eventLoop(server, listenFd, handler);
+		return;
 	}
 
-	const fd = msNetSocket();
-	if (fd < 0) return;
-	if (msNetBindShared(fd, addr, port) < 0) { msNetClose(fd); return; }
-	if (msNetListen(fd, 1024) < 0) { msNetClose(fd); return; }
-	msNetSetNonBlocking(fd);
-	asyncCheck(acceptLoopAsync(fd, handler));
-	while (server.running) { msRunOnce(100); }
-	msNetClose(fd);
+	const maxFds = 1024;
+	const clients: ClientState[] = new Array(maxFds);
+	let ci = 0;
+	while (ci < maxFds) {
+		clients[ci] = initClient(ci);
+		ci = ci + 1;
+	}
+
+	// Start accepting
+	msUringSubmitAccept(listenFd);
+
+	while (server.running) {
+		const count = msUringWait(-1);
+		let i = 0;
+		while (i < count) {
+			const evFd = msUringEventFd(i);
+			const op = msUringEventOp(i);
+			const res = msUringEventRes(i);
+
+			if (op === 0) {
+				// ACCEPT — set socket opts, start recv
+				if (res >= 0 && res < maxFds) {
+					msNetSetTcpNoDelay(res);
+					msNetSetNoSigpipe(res);
+					msNetSetNonBlocking(res);
+					clients[res] = initClient(res);
+					msUringSubmitRecv(res, "", 4096);
+				} else if (res >= 0) {
+					msNetClose(res);
+				}
+				msUringSubmitAccept(listenFd);
+			} else if (op === 1) {
+				// RECV — fast path: check headers on raw C buffer, parse + dispatch
+				if (res <= 0) {
+					msNetClose(evFd);
+				} else if (evFd >= 0 && evFd < maxFds) {
+					const headerEnd = msUringFastHeaderCheck(evFd, res);
+					if (headerEnd < 0) {
+						msUringSubmitRecv(evFd, "", 4096);
+					} else {
+						const data = msUringRecvData(evFd, res);
+						const methodInt = msFastParseMethod(data);
+						if (methodInt >= 0) {
+							const path = msFastParsePath(data);
+							const client = clients[evFd];
+							resetRequest(client, evFd, methodInt, path);
+							resetResponse(client, evFd);
+							handler(client.request, client.response);
+							if (client.response._finished && client.response._responseData.length > 0) {
+								client.sendQueue = client.response._responseData;
+								msUringSubmitSend(evFd, client.sendQueue, client.sendQueue.length);
+							} else {
+								msUringSubmitRecv(evFd, "", 4096);
+							}
+						} else {
+							msNetClose(evFd);
+						}
+					}
+				}
+			} else if (op === 2) {
+				// SEND complete — re-arm recv for keep-alive
+				if (evFd >= 0 && evFd < maxFds) {
+					clients[evFd].sendQueue = "";
+					msUringSubmitRecv(evFd, "", 4096);
+				}
+			}
+			i = i + 1;
+		}
+		msRunOnce(0);
+	}
 }
+

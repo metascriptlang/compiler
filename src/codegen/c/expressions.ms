@@ -6,7 +6,7 @@
 // Follows standard reference implementation pattern for destination carriers.
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
-import { Node, NodeKind, NodeFlag, NumberLiteralData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, NewExprData, MoveExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, HiddenDerefData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, NumberLiteralData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, NewExprData, MoveExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, HiddenDerefData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { isIntegerType, getProperty, getMinArity, isStructType, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, getDiscriminantName, voidType } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
@@ -16,7 +16,7 @@ import {
 	pStmts, getTemp, nameSetHas, nameSetAdd, emitStmtsLine, internString,
 	emitProcLocalsLine,
 } from "./context";
-import { mangle, mangleFieldName, mangledFunctionName, safeName } from "./names";
+import { mangle, mangleFieldName, mangledFunctionName, safeName, staticFieldCName } from "./names";
 import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, ccgIntroducedPtr, shouldIndirectParam, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, getArrayContentType } from "./types";
 import { formatCNumber, cBoolLiteral, cNullLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { findChar } from "../../utils/string";
@@ -32,6 +32,42 @@ import { useHeader } from "./context";
 // Our Identifier handler already applies rdLoc (pushes (*name) for indirect params).
 // So for indirect args: snippet on stack = (*name), but we need raw pointer = name.
 // We use the raw safeName directly (the reference implementation's snippet is always the raw name).
+// Check if a class type has instance fields with default initializers
+function hasInstanceFieldDefaults(classType: Type): boolean {
+	if (classType === null) return false;
+	const classSym = classType.sym;
+	if (classSym === null || classSym.declNode === null) return false;
+	const cd = classSym.declNode.data as ClassDeclData;
+	for (const member of cd.classBody) {
+		if (member.kind === NodeKind.PropertyDecl) {
+			const pd = member.data as PropertyDeclData;
+			if (!pd.propIsStatic && pd.propInitializer !== null) return true;
+		}
+	}
+	return false;
+}
+
+// Emit instance field default initializers for fields not covered by constructor args
+function emitInstanceFieldDefaults(g: CGen, p: CProc, tmp: string, classType: Type, argCount: number): void {
+	if (classType === null) return;
+	const classSym = classType.sym;
+	if (classSym === null || classSym.declNode === null) return;
+	const cd = classSym.declNode.data as ClassDeclData;
+	let fieldIdx = 0;
+	for (const member of cd.classBody) {
+		if (member.kind === NodeKind.PropertyDecl) {
+			const pd = member.data as PropertyDeclData;
+			if (!pd.propIsStatic) {
+				if (pd.propInitializer !== null && fieldIdx >= argCount) {
+					const initVal = genExpr(g, p, pd.propInitializer);
+					emitStmtsLine(p, `${tmp}->${mangleFieldName(pd.propName)} = ${initVal};`);
+				}
+				fieldIdx += 1;
+			}
+		}
+	}
+}
+
 // Check if a node is a CallExpr("msRefArrayAccess", ...) — used by MemberExpr and HiddenDeref
 // to handle void* results from ref array macros. Returns true if the node matches.
 function isRefArrayAccessCall(node: Node): boolean {
@@ -74,6 +110,16 @@ export function genArgCcgPtr(g: CGen, arg: string, argNode: Node, p: CProc, para
 	}
 	// Not indirect: take address — use safeAddrOf to handle bare compound literals
 	return safeAddrOf(g, p, arg, argNode, paramType);
+}
+
+// Check if an AST node produces a C lvalue (can have & applied directly).
+// Identifiers, member access, and array subscripts are lvalues.
+// Everything else (calls, literals, conditionals, casts) needs hoisting to a temp.
+function isLvalueNode(node: Node): boolean {
+	if (node === null) return false;
+	return node.kind === NodeKind.Identifier
+		|| node.kind === NodeKind.MemberExpr
+		|| node.kind === NodeKind.ArrayAccess;
 }
 
 // Reference parity: standard address generation always operates on a named variable,
@@ -210,6 +256,23 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, p
 				emitStmtsLine(p, `${tmpName}.v${varIdx} = (${varTypeName})${snippet};`);
 				return "&" + tmpName;
 			}
+		}
+	}
+	// Fallback: non-lvalue expressions (calls, constructors) cannot have & applied directly.
+	// Hoist to a temp local so we can take its address.
+	if (p !== null && exprNode !== null && !isLvalueNode(exprNode)) {
+		let cType = "";
+		if (exprNode.nodeType !== null) {
+			cType = getTypeDesc(g, exprNode.nodeType);
+		} else if (paramType !== null) {
+			cType = getTypeDesc(g, paramType);
+		}
+		if (cType !== "" && cType !== "void" && cType !== "void*") {
+			p.labels += 1;
+			const tmpName = `_clit${p.labels}_`;
+			emitProcLocalsLine(p, `${cType} ${tmpName};`);
+			emitStmtsLine(p, `${tmpName} = ${snippet};`);
+			return "&" + tmpName;
 		}
 	}
 	return `&(${snippet})`;
@@ -584,7 +647,17 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 			const cType = getTypeDesc(g, innerType);
 			ensureTypeInfoDef(g, cType);
 			if (d.newArguments.length === 0) {
-				ctx.results.push(`(${cType}*)msAllocTyped(sizeof(${cType}), &${cType}_typeInfo)`);
+				// Check if any instance fields have initializers
+				if (hasInstanceFieldDefaults(node.nodeType)) {
+					g.labels += 1;
+					const tmp0 = `_new${g.labels}_`;
+					emitProcLocalsLine(p, `${cType}* ${tmp0};`);
+					emitStmtsLine(p, `${tmp0} = (${cType}*)msAllocTyped(sizeof(${cType}), &${cType}_typeInfo);`);
+					emitInstanceFieldDefaults(g, p, tmp0, node.nodeType, 0);
+					ctx.results.push(tmp0);
+				} else {
+					ctx.results.push(`(${cType}*)msAllocTyped(sizeof(${cType}), &${cType}_typeInfo)`);
+				}
 			} else {
 				g.labels += 1;
 				const tmp = `_new${g.labels}_`;
@@ -598,6 +671,8 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 					emitStmtsLine(p, `${tmp}->${fieldName} = ${fieldVal};`);
 					fi += 1;
 				}
+				// Apply instance field initializers for fields not covered by constructor args
+				emitInstanceFieldDefaults(g, p, tmp, node.nodeType, d.newArguments.length);
 				ctx.results.push(tmp);
 			}
 			return;
@@ -817,6 +892,12 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		let obj = peekResult(ctx, cc, 0);
 		truncResults(ctx, cc);
 		const d = node.data as MemberExprData;
+
+		// Static property access: emit global variable name (ClassName.prop → ClassName__prop)
+		if (node.resolvedSym !== null && hasFlag(node.resolvedSym, SymbolFlag.Static)) {
+			ctx.results.push(staticFieldCName(node.resolvedSym.name));
+			return;
+		}
 
 		// Ref array access returns void* — cast to element type for member access
 		// Reference parity: record field access via dot notation

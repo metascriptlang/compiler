@@ -915,12 +915,13 @@ function parseClassMember(state: ParserState): NodeResult {
 		return parseClassMethodBody(state, nameToken, memberIsStatic, memberFlags);
 	}
 
-	// Property — capture type, skip initializer tokens manually
+	// Property — capture type and optional initializer
 	const propType = captureOptionalType(state);
 	const propTypeExpr = getLastTypeExpr();
+	let propInit: Node = null as unknown as Node;
 	if (!isAtEnd(state) && current(state).kind === TokenKind.Assign) {
 		advance(state);
-		skipDefaultValue(state);
+		propInit = try callExprParser(state);
 	}
 	consumeSemicolon(state);
 
@@ -928,6 +929,7 @@ function parseClassMember(state: ParserState): NodeResult {
 		propName: nameToken.value,
 		propType,
 		propIsStatic: memberIsStatic,
+		propInitializer: propInit,
 	}, nameToken);
 	propNode.typeExpr = propTypeExpr;
 	return Result.ok(propNode);

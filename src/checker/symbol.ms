@@ -171,6 +171,7 @@ export function makeSymbolState(name: string, kind: SymbolKind, symType: Type, m
 	sym.originalName = "";
 	sym.headerPath = "";
 	sym.overloadIdx = 0;
+	sym.staticFields = [];
 	return sym;
 }
 

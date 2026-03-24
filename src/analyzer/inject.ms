@@ -221,22 +221,22 @@ function processCall(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 		if (isArrayPush && i === 1) argMode = DrcMode.Consumed;
 		cd.arguments[i] = processNode(cd.arguments[i], dctx, argMode);
 
-		// Reference parity (ensureDestruction): Normal-mode fresh results need temp for cleanup.
-		// Without this, call results passed as non-sink args leak (never destroyed).
-		if (argMode === DrcMode.Normal) {
-			cd.arguments[i] = ensureDestructionIfNeeded(cd.arguments[i], dctx);
-		}
-
 		// Reference parity (passCopyToSink): when a borrow expression (ArrayAccess/MemberExpr)
 		// is passed to a sink param, extract to temp with deep copy.
-		// This is done here (not in processArrayAccess/processMember) to avoid double-handling
-		// with processVarDecl which also passes Consumed mode but handles borrows explicitly.
 		if (argMode === DrcMode.Consumed) {
 			const arg = cd.arguments[i];
 			if (arg.kind === NodeKind.ArrayAccess || arg.kind === NodeKind.MemberExpr) {
 				cd.arguments[i] = passCopyToSink(arg, dctx);
 			}
 		}
+	}
+	// Reference parity (injectdestructors.nim:935-939): ensureDestruction on the call's
+	// RETURN value in Normal mode — NOT on individual arguments. Each nested call arg
+	// gets its own ensureDestruction via recursive processNode→processCall.
+	// Applying ensureDestruction on args causes double-free when callee stores the arg
+	// (callee increfs for field, scope cleanup decrefs temp → rc=0 → freed).
+	if (mode === DrcMode.Normal) {
+		return ensureDestructionIfNeeded(node, dctx);
 	}
 	return node;
 }
@@ -1538,18 +1538,11 @@ function processExprStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContex
 		// Other compound assignments (number +=, etc.) use native C operators — no DRC needed.
 	}
 
-	// Use recursive processNode to handle RefCounting inside the expression.
-	// Most ExprStmts are 'Normal' mode (result is discarded).
-	// CallExpr returns are handled specifically if they need cleanup.
+	// Reference parity: processNode in Normal mode calls processCall → ensureDestructionIfNeeded,
+	// which captures RC-returning calls in a $tmp and registers scope-exit destroy.
+	// This is the single capture path — matches reference ensureDestruction.
+	// processDiscardedCall was a redundant second capture that caused double function calls.
 	d.expr = processNode(expr, dctx, DrcMode.Normal);
-
-	// If the expression was a discarded call that returns an RC type, 
-	// it needs to be captured and destroyed.
-	if (expr.kind === NodeKind.CallExpr) {
-		const preStmts = processCallArgs(expr, idx, stmts, dctx, loc);
-		const processed = processDiscardedCall(stmt, expr, dctx, loc);
-		return wrapWithCallArgPre(processed, preStmts, loc);
-	}
 
 	return stmt;
 }
@@ -1691,30 +1684,26 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 		return stmt;
 	}
 
-	// Call RHS: fresh for dest, but also process call arguments
+	// Call RHS: fresh for dest, but also process call arguments.
+	// Reference parity (genSink): always use save-assign-destroy for call RHS.
+	// Destroy-first is unsafe when dest aliases RHS arguments through value-flow
+	// (e.g., match result var assigned from discriminant in earlier arm).
+	// deepAliases catches direct name aliasing but not value-flow aliasing.
 	if (rhs.kind === NodeKind.CallExpr) {
 		const preStmts = processCallArgs(rhs, idx, stmts, dctx, loc);
 		if (deepAliases(bd.left, rhs)) {
-			// Reference parity: self-aliased call `x = f(x)`.
-			// processIdentifier may have added wasMoved(x) to pending (last-read in Consumed mode).
-			// Clear it — the assignment overwrites x, so wasMoved would zero the NEW value.
+			// Direct self-alias: clear pending wasMoved since assignment overwrites dest.
 			clearPendingForVar(dctx, leftD.name);
-			const tmpName = freshTemp(dctx.ctx, "old");
-			const saveTmp = makeVarDecl(tmpName, makeIdent(leftD.name, loc), DeclKind.Const, loc);
-			saveTmp.nodeType = sym !== null ? sym.symbolType : (bd.left.nodeType !== null ? bd.left.nodeType : rhs.nodeType);
-			const destroyTmp = makeDestroyCall(tmpName, rcInfo, loc);
-			const result: Node[] = [];
-			for (const p of preStmts) { result.push(p); }
-			result.push(saveTmp);
-			result.push(stmt);
-			result.push(destroyTmp);
-			return makeBlock(result, loc);
 		}
-		const destroyOld = makeDestroyCall(leftD.name, rcInfo, loc);
+		const tmpName = freshTemp(dctx.ctx, "old");
+		const saveTmp = makeVarDecl(tmpName, makeIdent(leftD.name, loc), DeclKind.Const, loc);
+		saveTmp.nodeType = sym !== null ? sym.symbolType : (bd.left.nodeType !== null ? bd.left.nodeType : rhs.nodeType);
+		const destroyTmp = makeDestroyCall(tmpName, rcInfo, loc);
 		const result: Node[] = [];
 		for (const p of preStmts) { result.push(p); }
-		result.push(destroyOld);
+		result.push(saveTmp);
 		result.push(stmt);
+		result.push(destroyTmp);
 		return makeBlock(result, loc);
 	}
 
@@ -1957,29 +1946,6 @@ function emitSaveAssignDestroy(stmt: Node, lhsExpr: Node, rhs: Node, rcInfo: RcI
 	}
 	result.push(makeDestroyCall(tmpName, rcInfo, loc));
 	return makeBlock(result, loc);
-}
-
-// ===== Discarded Call Result =====
-
-function processDiscardedCall(stmt: Node, callExpr: Node, dctx: DrcContext, loc: SourceLocation): Node {
-	// Use resolvedSym (set by checker) — works for all callee kinds (Identifier, MemberExpr, etc.)
-	const sym = callExpr.resolvedSym;
-	if (sym === null) return stmt;
-
-	// Check return type of function
-	const fnType = sym.symbolType;
-	if (fnType === null || fnType.typeReturn === null) return stmt;
-	const retRcInfo = classifyType(fnType.typeReturn, dctx.ctx);
-	if (!retRcInfo.needsCleanup) return stmt;
-
-	// Capture in temp for proper cleanup — set nodeType so codegen emits correct C type (D2 fix)
-	const tmpName = freshTemp(dctx.ctx, "discard");
-	const capture = makeVarDecl(tmpName, callExpr, DeclKind.Const, loc);
-	if (fnType.typeReturn !== null) {
-		capture.nodeType = fnType.typeReturn;
-	}
-	registerVar(dctx, tmpName, retRcInfo, false);
-	return capture;
 }
 
 // ===== Return Statement =====

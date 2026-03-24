@@ -361,7 +361,7 @@ export function taHashNode(node: Node): number {
 		},
 		NodeKind.PropertyDecl => {
 			const d = node.data as PropertyDeclData;
-			h = hS(h, d.propName); h = hS(h, d.propType); h = hB(h, d.propIsStatic);
+			h = hS(h, d.propName); h = hS(h, d.propType); h = hB(h, d.propIsStatic); if (d.propInitializer !== null) { h = hNodes(h, [d.propInitializer]); }
 		},
 		NodeKind.MethodDecl => {
 			const d = node.data as MethodDeclData;

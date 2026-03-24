@@ -212,8 +212,10 @@ function collectClass(ctx: CheckerContext, node: Node): void {
 		const member = d.classBody[i];
 		if (member.kind === NodeKind.PropertyDecl) {
 			const pd = member.data as PropertyDeclData;
-			memberNames.push(pd.propName);
-			memberTypes.push(unknownType());
+			if (!pd.propIsStatic) {
+				memberNames.push(pd.propName);
+				memberTypes.push(unknownType());
+			}
 		}
 	}
 	const innerType = createStruct(d.className, memberNames, memberTypes, true);
@@ -225,6 +227,18 @@ function collectClass(ctx: CheckerContext, node: Node): void {
 	classType.sym = sym;
 	innerType.sym = sym;
 	defineOrError(ctx, sym, node);
+	// Collect static properties into sym.staticFields
+	for (const member of d.classBody) {
+		if (member.kind === NodeKind.PropertyDecl) {
+			const pd = member.data as PropertyDeclData;
+			if (pd.propIsStatic) {
+				const staticSym = makeSymbol(d.className + "." + pd.propName, SymbolKind.Variable, unknownType(), true);
+				setFlag(staticSym, SymbolFlag.Static);
+				staticSym.declNode = member;
+				sym.staticFields.push(staticSym);
+			}
+		}
+	}
 	// Register methods as extensions — reference parity: procedures are separate from object types.
 	// Static → static extension (typeof ClassName). Instance → instance extension.
 	if (ctx.extensionRegistry !== null) {

@@ -86,4 +86,17 @@ static inline void* msIoSend_ms(int32_t fd, msString data) {
 	return msIoSendString(msGetIoEngine(), fd, data);
 }
 
+/* Poll engine + dispatcher together (for async server event loops) */
+static inline int32_t msIoRunOnce(int32_t timeoutMs) {
+	msIoEngine* eng = msGetIoEngineIfExists();
+	int32_t did = 0;
+	if (eng != NULL) {
+		did = (int32_t)msIoEnginePoll(eng, timeoutMs);
+	}
+	/* Also drain dispatcher callbacks/timers */
+	extern bool msRunOnce(int timeoutMs);
+	msRunOnce(0);
+	return did;
+}
+
 #endif /* MS_IO_ENGINE_H */

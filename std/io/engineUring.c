@@ -5,7 +5,7 @@
  * No liburing needed — only <linux/io_uring.h> kernel header.
  * Zig-aio inspired: minimal wrapper for the subset we need.
  *
- * Included from engineSelect.c when MS_USE_IO_URING is defined.
+ * Included from engineSelect.c on Linux (automatic — no flags needed).
  */
 
 /* Included from engineSelect.c — engine.h already included by parent */
@@ -98,7 +98,7 @@ static int uringInit(struct msUring* ring) {
 }
 
 static struct io_uring_sqe* uringGetSqe(struct msUring* ring) {
-	unsigned tail = *ring->sqTail;
+	unsigned tail = atomic_load_explicit((_Atomic unsigned*)ring->sqTail, memory_order_relaxed);
 	unsigned head = atomic_load_explicit((_Atomic unsigned*)ring->sqHead, memory_order_acquire);
 	if (tail - head >= ring->sqEntries) return NULL;
 	struct io_uring_sqe* sqe = &ring->sqes[tail & *ring->sqMask];
@@ -107,8 +107,9 @@ static struct io_uring_sqe* uringGetSqe(struct msUring* ring) {
 }
 
 static void uringSubmitSqe(struct msUring* ring) {
-	unsigned tail = *ring->sqTail;
+	unsigned tail = atomic_load_explicit((_Atomic unsigned*)ring->sqTail, memory_order_relaxed);
 	ring->sqArray[tail & *ring->sqMask] = tail & *ring->sqMask;
+	/* Write barrier: ensure SQE data + sq_array entry visible before tail advance */
 	atomic_store_explicit((_Atomic unsigned*)ring->sqTail, tail + 1, memory_order_release);
 }
 

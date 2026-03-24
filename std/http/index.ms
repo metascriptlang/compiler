@@ -32,8 +32,8 @@ export {
 
 // Server
 export {
-	HttpServer, createServer, serverListen, serve, serveConcurrent, serveAsync, serveN, stop,
-	sendText, sendJson, sendHtml, sendError,
+	HttpServer, createServer, serverListen, serve, serveConcurrent, serveN, stop,
+	sendText, sendJson, sendHtml, sendError, sendRaw, getClientFd,
 } from "./server";
 
 // Client

@@ -1813,6 +1813,14 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 			|| d.object.resolvedSym.symbolKind === SymbolKind.Interface
 			|| d.object.resolvedSym.symbolKind === SymbolKind.Struct);
 	let propType = isStaticClassAccess ? unknownType() : getProperty(resolvedObjType, d.property);
+	// Static property lookup: check class symbol's staticFields
+	if (isStaticClassAccess && propType.kind === TypeKind.Unknown && d.object.resolvedSym !== null) {
+		const staticField = findStaticField(d.object.resolvedSym, d.property);
+		if (staticField !== null) {
+			node.resolvedSym = staticField;
+			return staticField.symbolType;
+		}
+	}
 	// Class-aware field delegation (system module symbol lookup):
 	// When a built-in TypeKind (Promise, Result, etc.) has a typeName but getProperty() can't
 	// find the field, look up the class symbol by name and try field resolution on its struct.
@@ -2764,6 +2772,22 @@ function generateJsonStringifyInstance(ctx: CheckerContext, node: Node, d: CallE
 
 function createSyntheticToken(loc: SourceLocation): Token {
 	return createToken(TokenKind.Ident, "", loc.line);
+}
+
+// Static field lookup — searches class symbol's staticFields
+function findStaticField(classSym: Symbol, fieldName: string): Symbol {
+	if (classSym === null) return null as unknown as Symbol;
+	const qualifiedName = classSym.name + "." + fieldName;
+	for (const sf of classSym.staticFields) {
+		if (sf.name === qualifiedName) return sf;
+	}
+	// Walk parent chain for inherited static fields
+	let inner = classSym.symbolType;
+	if (inner !== null && inner.kind === TypeKind.Ref && inner.typeReturn !== null) inner = inner.typeReturn;
+	if (inner !== null && inner.typeExtra !== null && inner.typeExtra.sym !== null) {
+		return findStaticField(inner.typeExtra.sym, fieldName);
+	}
+	return null as unknown as Symbol;
 }
 
 // Register callback at module load time

@@ -6,6 +6,7 @@
  */
 
 @include("std/net/native.h");
+@compile("std/io/engineSelect.c");
 
 // ===== C primitives (blocking) =====
 
@@ -88,6 +89,7 @@ export function sendNonBlock(fd: int32, data: string, offset: int32): int32 {
 @include("std/io/engine.h");
 
 extern function msIoAccept_ms(listenFd: int32): Promise<int32>;
+export extern function msIoRunOnce(timeoutMs: int32): int32;
 extern function msIoRecv_ms(fd: int32, maxBytes: int32): Promise<string>;
 extern function msIoSend_ms(fd: int32, data: string): Promise<int32>;
 

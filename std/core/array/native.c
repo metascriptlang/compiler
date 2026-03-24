@@ -584,14 +584,11 @@ void* msRefArrayAt(msRefArray* arr, int64_t idx) {
 void msRefArrayShrink(msRefArray* arr, int64_t newLen) {
 	if (newLen < 0) newLen = 0;
 	if (newLen >= arr->len) return;
-	/* Decref + destroy evicted elements */
+	/* Clear evicted slots without RC operations.
+	 * RC management (incref on store, decref on evict) is the DRC's responsibility.
+	 * The runtime must not assume ownership — elements may be referenced elsewhere. */
 	for (int64_t i = newLen; i < arr->len; i++) {
-		if (arr->p->data[i] != NULL) {
-			if (msDecRefIsLast(arr->p->data[i])) {
-				msDestroyAndDispose(arr->p->data[i]);
-			}
-			arr->p->data[i] = NULL;
-		}
+		arr->p->data[i] = NULL;
 	}
 	arr->len = newLen;
 }

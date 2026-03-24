@@ -9,7 +9,7 @@
 //
 // Pure function — no filesystem access. The loader tries candidates in order.
 
-import { dirname, join } from "std/fs/path";
+import { dirname, join, normalize } from "std/fs/path";
 // (utils/string imports removed — using native .slice)
 
 // ===== Backend Enum =====
@@ -97,9 +97,9 @@ export function resolveImportWithConfig(specifier: string, fromFile: string, con
 
 	// Classify and resolve
 	if (isRelative(spec)) {
-		// Relative: ./foo, ../bar
+		// Relative: ./foo, ../bar — normalize to collapse ./ and ../ segments
 		const baseDir = dirname(fromFile);
-		const base = join(baseDir, spec);
+		const base = normalize(join(baseDir, spec));
 		result = addExtensionCandidates(result, base, config.extensions);
 	} else if (isStdImport(spec)) {
 		// Std library: std/testing → stdPath + "/testing"

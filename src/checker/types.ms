@@ -1143,7 +1143,10 @@ export function getProperty(t: Type, name: string): Type {
 		let i = 0;
 		for (const propName of t.typeNames) {
 			if (propName === name) {
-				if (i < t.typeChildren.length) return t.typeChildren[i];
+				if (i < t.typeChildren.length) {
+					const found = t.typeChildren[i];
+						return found;
+				}
 				return unknownType();
 			}
 			i += 1;

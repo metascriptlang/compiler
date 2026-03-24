@@ -347,6 +347,7 @@ export function ccgIntroducedPtr(t: Type): boolean {
 	if (isStructType(inner)) return getTypeSize(inner) > PTR_THRESHOLD;
 	return match (inner.kind) {
 		TypeKind.Tuple => getTypeSize(inner) > PTR_THRESHOLD,
+		TypeKind.Array => true,  // arrays always by pointer: mutable by default, realloc invalidates caller copy
 		TypeKind.Union | TypeKind.Span => true,
 		TypeKind.GenericInstance => !isPromise(inner),
 		_ => false,
@@ -968,19 +969,25 @@ function genFunctionType(g: CGen, t: Type): string {
 // Shared helpers for genClHalfCast/genClFullCast — standard reference pattern
 // with a declareEnvironment boolean. We extract the common param/return mapping.
 
-function closureParamTypeToC(g: CGen, pt: Type): string {
+// Base type-to-C mapping for closure signatures (params and returns).
+function closureBaseTypeToC(g: CGen, pt: Type): string {
 	if (pt === null) return "void*";
 	const simple = getSimpleTypeDesc(pt);
 	if (simple !== "") return simple;
-	const desc = getTypeDesc(g, pt);
+	return getTypeDesc(g, pt);
+}
+
+function closureParamTypeToC(g: CGen, pt: Type): string {
+	const base = closureBaseTypeToC(g, pt);
 	// Reference parity: ccgIntroducedPtr params are passed by pointer in C
-	if (ccgIntroducedPtr(pt)) return desc + "*";
-	return desc;
+	if (pt !== null && ccgIntroducedPtr(pt)) return base + "*";
+	return base;
 }
 
 function closureRetTypeToC(g: CGen, t: Type): string {
 	if (t !== null && t.kind === TypeKind.Function && t.typeReturn !== null) {
-		return closureParamTypeToC(g, t.typeReturn);
+		// Return types are NOT promoted to pointers — only params are.
+		return closureBaseTypeToC(g, t.typeReturn);
 	}
 	return "void";
 }

@@ -218,6 +218,9 @@ export function printPropertyDecl(node: Node, options: FormatOptions): Doc {
 	if (d.propType !== "") {
 		parts.push(docText(": " + d.propType));
 	}
+	if (d.propInitializer !== null) {
+		parts.push(docText(" = ..."));
+	}
 	parts.push(docText(";"));
 	return docGroup(parts);
 }

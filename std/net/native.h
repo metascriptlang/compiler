@@ -156,6 +156,14 @@ static inline int32_t msNetConnect(int32_t fd, msString host, int32_t port) {
 	return (int32_t)ret;
 }
 
+/* MSG_NOSIGNAL: suppress SIGPIPE on broken connections.
+ * On macOS, use SO_NOSIGPIPE at socket level instead. */
+#ifdef __linux__
+#define MS_SEND_FLAGS MSG_NOSIGNAL
+#else
+#define MS_SEND_FLAGS 0
+#endif
+
 /* ===== Data Transfer ===== */
 
 /**
@@ -167,7 +175,7 @@ static inline int32_t msNetSend(int32_t fd, msString data) {
 	int32_t total = 0;
 	int32_t len = (int32_t)data.len;
 	while (total < len) {
-		ssize_t n = send(fd, buf + total, (size_t)(len - total), 0);
+		ssize_t n = send(fd, buf + total, (size_t)(len - total), MS_SEND_FLAGS);
 		if (MS_UNLIKELY(n < 0 && errno == EINTR)) continue;
 		if (MS_UNLIKELY(n <= 0)) return -1;
 		total += (int32_t)n;
@@ -253,17 +261,41 @@ static inline int32_t msNetAcceptNonBlock(int32_t fd) {
 
 /**
  * Non-blocking recv. Returns received data, or empty string on EAGAIN/close/error.
+ * Uses thread-local buffer to avoid per-recv malloc+free.
  */
+static _Thread_local char _msRecvTlBuf[8192];
+
 static inline msString msNetRecvNonBlock(int32_t fd, int32_t maxBytes) {
 	if (maxBytes <= 0) return MS_EMPTY_STRING;
-	if (maxBytes > 16777216) maxBytes = 16777216;
-	char* buf = (char*)malloc((size_t)maxBytes + 1);
-	ssize_t r = recv(fd, buf, (size_t)maxBytes, 0);
-	if (r <= 0) { free(buf); return MS_EMPTY_STRING; }
-	buf[r] = '\0';
-	msString result = msStringNew(buf, (int64_t)r);
-	free(buf);
-	return result;
+	if (maxBytes > 8192) maxBytes = 8192;
+	ssize_t r = recv(fd, _msRecvTlBuf, (size_t)maxBytes, 0);
+	if (r <= 0) return MS_EMPTY_STRING;
+	_msRecvTlBuf[r] = '\0';
+	return msStringNew(_msRecvTlBuf, (int64_t)r);
+}
+
+/**
+ * Non-blocking recv directly into an msString buffer — true zero-copy recv.
+ * Appends received data to dest, growing if needed. Returns bytes received, 0 on EAGAIN, -1 on close/error.
+ * Eliminates ALL allocations after the first request on a connection (buffer grows once, reused).
+ */
+static inline int32_t msNetRecvInto(int32_t fd, msString* dest, int32_t maxBytes) {
+	extern void msStringPrepareAdd(msString* s, int64_t addLen);
+	if (maxBytes <= 0) return 0;
+	if (maxBytes > 8192) maxBytes = 8192;
+	int64_t oldLen = dest->len;
+	msStringPrepareAdd(dest, (int64_t)maxBytes);
+	ssize_t r = recv(fd, dest->p->data + oldLen, (size_t)maxBytes, 0);
+	if (r <= 0) {
+		dest->p->data[oldLen] = '\0';
+		dest->len = oldLen;
+		if (r == 0) return -1;  /* connection closed */
+		if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
+		return -1;
+	}
+	dest->len = oldLen + (int64_t)r;
+	dest->p->data[dest->len] = '\0';
+	return (int32_t)r;
 }
 
 /**
@@ -274,10 +306,30 @@ static inline int32_t msNetSendNonBlock(int32_t fd, msString data, int32_t offse
 	if (!data.p || offset >= (int32_t)data.len) return 0;
 	const char* buf = data.p->data + offset;
 	int32_t remaining = (int32_t)data.len - offset;
-	ssize_t n = send(fd, buf, (size_t)remaining, 0);
+	ssize_t n = send(fd, buf, (size_t)remaining, MS_SEND_FLAGS);
 	if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return 0;
 	if (n < 0) return -1;
 	return (int32_t)n;
+}
+
+/**
+ * Set TCP_NODELAY on fd (low-latency, no Nagle buffering).
+ */
+static inline void msNetSetTcpNoDelay(int32_t fd) {
+	int flag = 1;
+	setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+}
+
+/**
+ * Set SO_NOSIGPIPE on macOS (equivalent to MSG_NOSIGNAL per-send on Linux).
+ */
+static inline void msNetSetNoSigpipe(int32_t fd) {
+#ifdef SO_NOSIGPIPE
+	int flag = 1;
+	setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &flag, sizeof(flag));
+#else
+	(void)fd;
+#endif
 }
 
 /* ===== HTTP Performance Helpers ===== */
@@ -304,6 +356,44 @@ static inline int32_t msSlowHeadersCheck(msString data) {
 			return i + 4;
 	}
 	return -1;
+}
+
+/* Fast method parse — returns method enum (0=GET..6=OPTIONS) and method length, or -1 on error.
+ * Avoids msString creation + parseMethod() match. */
+static inline int32_t msFastParseMethod(msString data) {
+	if (data.len < 14 || !data.p) return -1;  /* minimum: "GET / HTTP/1.1" */
+	const char* d = data.p->data;
+	int32_t len = (int32_t)data.len;
+	switch (d[0]) {
+	case 'G': if (d[1]=='E' && d[2]=='T' && d[3]==' ') return 0; break;
+	case 'P':
+		if (d[1]=='O' && d[2]=='S' && d[3]=='T' && d[4]==' ') return 1;
+		if (d[1]=='U' && d[2]=='T' && d[3]==' ') return 2;
+		if (len > 5 && d[1]=='A' && d[2]=='T' && d[3]=='C' && d[4]=='H' && d[5]==' ') return 4;
+		break;
+	case 'D': if (len > 6 && d[1]=='E' && d[2]=='L' && d[3]=='E' && d[4]=='T' && d[5]=='E' && d[6]==' ') return 3; break;
+	case 'H': if (d[1]=='E' && d[2]=='A' && d[3]=='D' && d[4]==' ') return 5; break;
+	case 'O': if (len > 7 && d[1]=='P' && d[2]=='T' && d[3]=='I' && d[4]=='O' && d[5]=='N' && d[6]=='S' && d[7]==' ') return 6; break;
+	}
+	return -1;
+}
+
+/* Fast path extract — returns path substring from raw request data.
+ * Avoids indexOf + two slice() calls. */
+static inline msString msFastParsePath(msString data) {
+	if (data.len < 14 || !data.p) return MS_EMPTY_STRING;
+	const char* d = data.p->data;
+	int32_t len = (int32_t)data.len;
+	/* Find first space (end of method) */
+	int32_t i = 0;
+	while (i < len && d[i] != ' ') i++;
+	if (i >= len) return MS_EMPTY_STRING;
+	int32_t pathStart = i + 1;
+	/* Find second space (end of path) */
+	int32_t pathEnd = pathStart;
+	while (pathEnd < len && d[pathEnd] != ' ') pathEnd++;
+	if (pathEnd >= len) return MS_EMPTY_STRING;
+	return msStringNew(d + pathStart, (int64_t)(pathEnd - pathStart));
 }
 
 /* Thread-local cached Date header (httpbeast pattern).
@@ -354,6 +444,38 @@ static inline msString msBuildResponse(int32_t status, msString statusTextStr,
 	result.len = total;
 	result.p = pp;
 	return result;
+}
+
+/* Build response into existing msString — reuses buffer (zero malloc after first request).
+ * The dest string grows on first use, then subsequent calls reuse the allocation.
+ * Call from C with pointer to msString (not through MetaScript extern). */
+static inline void msBuildResponseReuse(msString* dest, int32_t status, msString statusTextStr,
+                                         msString contentType, msString body) {
+	char header[512];
+	int32_t bodyLen = (int32_t)body.len;
+	char stBuf[64], ctBuf[128];
+	int stLen = statusTextStr.len < 63 ? (int)statusTextStr.len : 63;
+	int ctLen = contentType.len < 127 ? (int)contentType.len : 127;
+	if (statusTextStr.p) memcpy(stBuf, statusTextStr.p->data, stLen);
+	stBuf[stLen] = '\0';
+	if (contentType.p) memcpy(ctBuf, contentType.p->data, ctLen);
+	ctBuf[ctLen] = '\0';
+
+	int hlen = snprintf(header, 512,
+		"HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: %d\r\nDate: %s\r\n\r\n",
+		(int)status, stBuf, ctBuf, (int)bodyLen, msGetDateHeader());
+	if (MS_UNLIKELY(hlen < 0 || hlen >= 512)) hlen = 511;
+	int32_t total = hlen + bodyLen;
+
+	/* Reuse buffer: reset length, grow if needed (realloc only on first call or size increase) */
+	extern void msStringPrepareAdd(msString* s, int64_t addLen);
+	dest->len = 0;
+	msStringPrepareAdd(dest, (int64_t)total);
+	memcpy(dest->p->data, header, hlen);
+	if (body.p && bodyLen > 0)
+		memcpy(dest->p->data + hlen, body.p->data, bodyLen);
+	dest->p->data[total] = '\0';
+	dest->len = total;
 }
 
 #ifdef __cplusplus
