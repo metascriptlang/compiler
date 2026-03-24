@@ -113,13 +113,14 @@ export function genArgCcgPtr(g: CGen, arg: string, argNode: Node, p: CProc, para
 }
 
 // Check if an AST node produces a C lvalue (can have & applied directly).
-// Identifiers, member access, and array subscripts are lvalues.
+// Identifiers, member access, array subscripts, and pointer derefs are lvalues.
 // Everything else (calls, literals, conditionals, casts) needs hoisting to a temp.
 function isLvalueNode(node: Node): boolean {
 	if (node === null) return false;
 	return node.kind === NodeKind.Identifier
 		|| node.kind === NodeKind.MemberExpr
-		|| node.kind === NodeKind.ArrayAccess;
+		|| node.kind === NodeKind.ArrayAccess
+		|| node.kind === NodeKind.HiddenDeref;
 }
 
 // Reference parity: standard address generation always operates on a named variable,

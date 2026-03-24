@@ -600,14 +600,14 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 		}
 	}
 
-	// Auto-propagate exported operator overloads from imported module.
-	// When you import anything from a module, all its exported operator functions
-	// become available automatically — no need to import them by name.
+	// Auto-propagate exported extension methods from imported module.
+	// When you import anything from a module, all its exported extension methods
+	// (operators and named methods) become available automatically.
 	if (ctx.extensionRegistry !== null && sourcePath !== "") {
 		const modExports = findModuleExports(ctx.exportRegistry, sourcePath);
 		if (modExports !== null) {
 			for (const sym of modExports.symbols) {
-				if (sym.extReceiverType !== "" && isOperatorSymName(sym.name)) {
+				if (sym.extReceiverType !== "") {
 					// Only register if not already present
 					if (findExtension(ctx.extensionRegistry, sym.extReceiverType, sym.name) === null) {
 						const opExt: ExtensionMethod = {

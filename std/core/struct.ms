@@ -5,7 +5,7 @@
 
 // ===== Map<K, V> =====
 
-export interface MapEntry<K, V> {
+export struct MapEntry<K, V> {
 	hcode: int64;
 	key: K;
 	value: V;
@@ -155,7 +155,7 @@ export function values<K, V>(this m: Map<K, V>): V[] {
 
 // ===== Set<T> =====
 
-export interface SetEntry<T> {
+export struct SetEntry<T> {
 	hcode: int64;
 	key: T;
 }

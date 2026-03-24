@@ -106,6 +106,7 @@ interface LiftState {
 	insideLoop: number;        // >0 when inside a loop body (disables last-use move optimization)
 	varTypes: VarTypeEntry[];  // Variable name → type string for env field typing
 	capturedIdents: Node[];    // Parallel to captures NameSet: original Identifier nodes with resolvedSym
+	currentParams: NameSet;    // Names of current function's params (for pointer-in-env detection)
 }
 
 function registerVarType(state: LiftState, name: string, typeStr: string): void {
@@ -204,6 +205,17 @@ function typeToEnvStr(t: Type): string {
 	};
 }
 
+// Check if a type would be pointer-promoted by ccgIntroducedPtr in the C codegen.
+// Mirrors the codegen check — Array, Union, Span are promoted to pointers as params.
+// Mirrors ccgIntroducedPtr in codegen/types.ms — kept in sync manually
+// (transform must not import codegen to avoid circular dependency).
+function isCcgPtrType(t: Type): boolean {
+	if (t === null) return false;
+	return t.kind === TypeKind.Array || t.kind === TypeKind.Union || t.kind === TypeKind.Span;
+}
+// Note: ccgIntroducedPtr also promotes GenericInstance and large Tuples.
+// Those are rare as captured params — add here if needed.
+
 function createLiftState(): LiftState {
 	const state: LiftState = {
 		liftedFunctions: [],
@@ -217,6 +229,7 @@ function createLiftState(): LiftState {
 		insideLoop: 0,
 		varTypes: [],
 		capturedIdents: [],
+		currentParams: createNameSet(),
 	};
 	return state;
 }
@@ -316,6 +329,21 @@ function collectCaptures(node: Node): void {
 // ===== Body Rewriting =====
 // Replace captured Identifier nodes with _envP.name MemberExpr.
 
+// Check if an env struct field is a Ptr type (pointer-promoted param capture).
+function isEnvPtrField(envStructType: Type, fieldName: string): boolean {
+	if (envStructType === null || envStructType.typeNames === null) return false;
+	let i = 0;
+	while (i < envStructType.typeNames.length) {
+		if (envStructType.typeNames[i] === fieldName) {
+			return i < envStructType.typeChildren.length
+				&& envStructType.typeChildren[i] !== null
+				&& envStructType.typeChildren[i].kind === TypeKind.Ptr;
+		}
+		i += 1;
+	}
+	return false;
+}
+
 function rewriteNode(node: Node, captures: NameSet, envTypeName: string, envStructType: Type): Node {
 	if (node === null) return null;
 	if (node.kind === NodeKind.Identifier) {
@@ -328,9 +356,14 @@ function rewriteNode(node: Node, captures: NameSet, envTypeName: string, envStru
 			const cast = createNode(NodeKind.TypeAssertion, { asExpr: envIdent, asType: envTypeName }, syntheticToken(node.location));
 			cast.nodeType = ptrType;
 			const deref = makeHiddenDeref(cast, node.location);
-			const member = makeMember(deref, d.name, node.location);
-			if (node.nodeType !== null) member.nodeType = node.nodeType;
-			return member;
+			let result = makeMember(deref, d.name, node.location);
+			if (node.nodeType !== null) result.nodeType = node.nodeType;
+			// Ptr field (pointer-promoted param capture): extra deref to get T from T*
+			if (isEnvPtrField(envStructType, d.name)) {
+				result = makeHiddenDeref(result, node.location);
+				if (node.nodeType !== null) result.nodeType = node.nodeType;
+			}
+			return result;
 		}
 		return node;
 	}
@@ -361,7 +394,16 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 		// Use actual resolved Type from captured ident (checker-resolved, concrete)
 		const orig = findCapturedIdent(name, state.capturedIdents);
 		if (orig !== null && orig.nodeType !== null) {
-			envResolvedTypes.push(orig.nodeType);
+			let resolvedType = orig.nodeType;
+			// Nim parity: captured var params store pointer in env.
+			// If this capture is a function param whose type is pointer-promoted
+			// (Array, Union, Span via ccgIntroducedPtr), wrap in Ptr so the env
+			// field stores the pointer, not the dereferenced value.
+			const isParam = nameSetContains(state.currentParams, name);
+			if (isParam && isCcgPtrType(resolvedType)) {
+				resolvedType = createPtr(resolvedType);
+			}
+			envResolvedTypes.push(resolvedType);
 		} else {
 			// Fallback: use resolved Type from registerVarTypeResolved (asyncBridge hoisted vars)
 			const resolvedFallback = lookupVarResolvedType(state, name);
@@ -403,7 +445,10 @@ function liftClosure(body: Node, params: string[], paramTypes: string[], flags: 
 	preserveResolvedTypes(fnNode, originalNodeType);
 	state.liftedFunctions.push(fnNode);
 
-	return makeClosurePair(liftedName, envStructType, captures, state.lastUseCaptures, state.capturedIdents, loc);
+	// Reference parity: capture by reference — env is a named variable, not inline literal.
+	// The env VarDecl is inserted before the closure site, and the outer function's references
+	// to captured vars are rewritten to go through env->field.
+	return makeClosurePair(liftedName, envStructType, captures, state.lastUseCaptures, state.capturedIdents, state.currentParams, loc);
 }
 
 function liftArrow(node: Node, captures: NameSet, state: LiftState): Node {
@@ -459,29 +504,30 @@ function wrapFnAsClosure(ident: Node, loc: SourceLocation): Node {
 	return pair;
 }
 
-function makeClosurePair(liftedName: string, envStructType: Type, captures: NameSet, lastUseCaptures: NameSet, capturedIdents: Node[], loc: SourceLocation): Node {
+function makeClosurePair(liftedName: string, envStructType: Type, captures: NameSet, lastUseCaptures: NameSet, capturedIdents: Node[], currentParams: NameSet, loc: SourceLocation): Node {
 	const envKeys: string[] = [];
 	const envValues: Node[] = [];
 	for (const name of captures.items) {
 		envKeys.push(name);
-		// Create Identifier with resolvedSym from original node
 		let ident = makeIdent(name, loc);
 		const orig = findCapturedIdent(name, capturedIdents);
 		if (orig !== null && orig.resolvedSym !== null) {
 			ident.resolvedSym = orig.resolvedSym;
 			ident.nodeType = orig.nodeType;
 		}
-		// Captured function declarations: wrap in closure pair so codegen emits
-		// (msClosure){ .fn = ..., .env = NULL } instead of raw function pointer.
-		// Only wrap SymbolKind.Function (raw fn ptrs), NOT SymbolKind.Variable
-		// (closure variables are already msClosure — wrapping them double-wraps).
 		const isFnCapture = orig !== null && orig.resolvedSym !== null
 			&& orig.resolvedSym.symbolKind === SymbolKind.Function;
 		let envVal: Node = ident;
 		if (isFnCapture) {
 			envVal = wrapFnAsClosure(ident, loc);
 		}
-		// Phase F: move last-use captures instead of copying
+		// Nim parity: pointer-promoted param captures store the pointer via HiddenAddr.
+		// The codegen for HiddenAddr on an indirectParam returns the raw pointer name.
+		const isParamPtr = nameSetContains(currentParams, name) && orig !== null && orig.nodeType !== null && isCcgPtrType(orig.nodeType);
+		if (isParamPtr) {
+			envVal = createNode(NodeKind.HiddenAddr, { expr: envVal }, syntheticToken(loc));
+			if (orig.nodeType !== null) envVal.nodeType = createPtr(orig.nodeType);
+		}
 		if (nameSetContains(lastUseCaptures, name)) {
 			envValues.push(makeMoveExpr(envVal, loc));
 		} else {
@@ -489,7 +535,6 @@ function makeClosurePair(liftedName: string, envStructType: Type, captures: Name
 		}
 	}
 	const envObj = makeObjectLiteral(envKeys, envValues, loc);
-	// Set nodeType so codegen knows the env struct type for heap allocation
 	envObj.nodeType = envStructType;
 
 	const closureKeys: string[] = [];
@@ -549,10 +594,13 @@ function walkLift(node: Node, state: LiftState): void {
 			// Push function boundary, define params + register types for env field resolution
 			// Prefer resolved types from nodeType (handles type aliases like NumFn → Function)
 			pushFuncBoundary(state.ss);
+			const savedParams = state.currentParams;
+			state.currentParams = createNameSet();
 			const fnType = node.nodeType;
 			let pi = 0;
 			while (pi < d.params.length) {
 				defineVar(state.ss, d.params[pi]);
+				nameSetAdd(state.currentParams, d.params[pi]);
 				let paramTypeStr = (pi < d.fnParamTypes.length) ? d.fnParamTypes[pi] : "";
 				// Reference parity: use resolved type from checker for env field typing
 				if (fnType !== null && fnType.typeChildren !== null && pi < fnType.typeChildren.length) {
@@ -572,6 +620,7 @@ function walkLift(node: Node, state: LiftState): void {
 			// Walk body — this may transform inner closures
 			walkLiftBody(d.fnBody, state);
 			popFuncBoundary(state.ss);
+			state.currentParams = savedParams;
 			state.currentFnName = savedName;
 		},
 		NodeKind.VariableDecl => {
