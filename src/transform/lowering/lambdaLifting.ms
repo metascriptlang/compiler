@@ -860,10 +860,18 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, loc: SourceLocat
 		envFields.push(name);
 		envFieldTypes.push(lookupVarType(state, name));
 		const orig = findCapturedIdent(name, state.sharedEnvCapturedIdents);
+		const isParamCapture = nameSetContains(state.currentParams, name);
 		if (orig !== null && orig.nodeType !== null) {
-			// Shared env: captured vars live IN the env as values (no ccgIntroducedPtr promotion).
-			// Per-closure envs store POINTERS to locals; shared envs ARE the storage.
-			envResolvedTypes.push(orig.nodeType);
+			let resolvedType = orig.nodeType;
+			// Intentional divergence from standard reference (see CLAUDE.md):
+			// ccgIntroducedPtr params (Array, Union, Span): store POINTER in shared env.
+			// Standard ref copies param value + forbids capturing var params (illegalCapture).
+			// MetaScript arrays are reference types (JS semantics) — closure and caller must
+			// share the same array. Without Ptr, closure pushes to env copy, caller never sees changes.
+			if (isParamCapture && isCcgPtrType(resolvedType)) {
+				resolvedType = createPtr(resolvedType);
+			}
+			envResolvedTypes.push(resolvedType);
 		} else {
 			const fallback = lookupVarResolvedType(state, name);
 			if (fallback !== null) { envResolvedTypes.push(fallback); }
@@ -905,6 +913,11 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, loc: SourceLocat
 				&& orig.resolvedSym.symbolKind === SymbolKind.Function;
 			if (isFnCapture) {
 				rhs = wrapFnAsClosure(rhs, loc);
+			}
+			// ccgIntroducedPtr params: store pointer via HiddenAddr (share, don't copy)
+			if (isParam && orig !== null && orig.nodeType !== null && isCcgPtrType(orig.nodeType)) {
+				rhs = createNode(NodeKind.HiddenAddr, { expr: rhs }, syntheticToken(loc));
+				rhs.nodeType = createPtr(orig.nodeType);
 			}
 			state.hoistedEnvDecls.push(makeExprStmt(makeAssign(
 				lhs, rhs, loc

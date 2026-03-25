@@ -14,9 +14,14 @@
 
 #include <stdio.h>
 #include <string.h>
+#include "std/core/system/native.h"
+
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <unistd.h>
 #include <sys/select.h>
-#include "std/core/system/native.h"
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -81,12 +86,18 @@ static inline msString msReadBytes(double n) {
  * Returns 1.0 if data available, 0.0 otherwise.
  */
 static inline double msStdinHasData(void) {
+#ifdef _WIN32
+	HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
+	DWORD result = WaitForSingleObject(hStdin, 0);
+	return result == WAIT_OBJECT_0 ? 1.0 : 0.0;
+#else
 	fd_set fds;
 	struct timeval tv = {0, 0};
 	FD_ZERO(&fds);
 	FD_SET(STDIN_FILENO, &fds);
 	int r = select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv);
 	return (r > 0 && FD_ISSET(STDIN_FILENO, &fds)) ? 1.0 : 0.0;
+#endif
 }
 
 /* ===== Stdout / Stderr ===== */

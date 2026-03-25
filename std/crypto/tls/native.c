@@ -17,10 +17,25 @@
 
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#define ms_close_socket(fd) closesocket((SOCKET)(intptr_t)(fd))
+#define MS_SOCKOPT_CAST (const char*)
+static inline int _ms_access(const char* path) {
+	DWORD attr = GetFileAttributesA(path);
+	return attr != INVALID_FILE_ATTRIBUTES ? 0 : -1;
+}
+#define access(p, m) _ms_access(p)
+#else
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netdb.h>
 #include <netinet/tcp.h>
+#define ms_close_socket(fd) close(fd)
+#define MS_SOCKOPT_CAST
+#endif
 
 /* ===== TLS Context ===== */
 
@@ -35,14 +50,14 @@ typedef struct msTlsCtx {
 
 static int tls_send(void *ctx, const unsigned char *buf, size_t len) {
 	int fd = *(int*)ctx;
-	ssize_t ret = send(fd, buf, len, 0);
+	int ret = (int)send(fd, (const char*)buf, (int)len, 0);
 	if (ret < 0) return MBEDTLS_ERR_SSL_INTERNAL_ERROR;
 	return (int)ret;
 }
 
 static int tls_recv(void *ctx, unsigned char *buf, size_t len) {
 	int fd = *(int*)ctx;
-	ssize_t ret = recv(fd, buf, len, 0);
+	int ret = (int)recv(fd, (char*)buf, (int)len, 0);
 	if (ret < 0) return MBEDTLS_ERR_SSL_INTERNAL_ERROR;
 	if (ret == 0) return MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY;
 	return (int)ret;
@@ -86,7 +101,7 @@ static int tcpConnect(const char *hostname, int port) {
 	if (fd < 0) { freeaddrinfo(res); return -1; }
 
 	if (connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
-		close(fd);
+		ms_close_socket(fd);
 		freeaddrinfo(res);
 		return -1;
 	}
@@ -94,7 +109,7 @@ static int tcpConnect(const char *hostname, int port) {
 	freeaddrinfo(res);
 
 	int flag = 1;
-	setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+	setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, MS_SOCKOPT_CAST &flag, sizeof(flag));
 
 	return fd;
 }
@@ -115,7 +130,7 @@ int64_t msTlsConnect(msString hostname, int32_t port, msString caPath) {
 	if (fd < 0) return 0;
 
 	msTlsCtx *ctx = (msTlsCtx*)calloc(1, sizeof(msTlsCtx));
-	if (!ctx) { close(fd); return 0; }
+	if (!ctx) { ms_close_socket(fd); return 0; }
 	ctx->fd = fd;
 
 	mbedtls_ssl_init(&ctx->ssl);
@@ -174,7 +189,7 @@ fail:
 	mbedtls_ssl_free(&ctx->ssl);
 	mbedtls_ssl_config_free(&ctx->conf);
 	mbedtls_x509_crt_free(&ctx->cacert);
-	close(fd);
+	ms_close_socket(fd);
 	free(ctx);
 	return 0;
 }
@@ -214,7 +229,7 @@ void msTlsClose(int64_t handle) {
 	mbedtls_ssl_free(&ctx->ssl);
 	mbedtls_ssl_config_free(&ctx->conf);
 	mbedtls_x509_crt_free(&ctx->cacert);
-	close(ctx->fd);
+	ms_close_socket(ctx->fd);
 	free(ctx);
 }
 

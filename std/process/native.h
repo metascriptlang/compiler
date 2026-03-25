@@ -10,10 +10,17 @@
 #define MS_STD_PROCESS_H
 
 #include <stdlib.h>
-#include <unistd.h>
-#include <sys/wait.h>
 #include <time.h>
 #include "std/core/system/native.h"
+
+#ifdef _WIN32
+#include <windows.h>
+#include <direct.h>
+#include <shellapi.h>
+#else
+#include <unistd.h>
+#include <sys/wait.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -30,8 +37,19 @@ extern "C" {
 /**
  * Get number of command-line arguments.
  */
+#ifdef _WIN32
+static wchar_t** _msWargv = NULL;
+static int _msWargc = 0;
+static inline void _msInitWargv(void) {
+	if (!_msWargv) _msWargv = CommandLineToArgvW(GetCommandLineW(), &_msWargc);
+}
+#endif
+
 static inline double msProcessArgc(void) {
-#if defined(__APPLE__)
+#if defined(_WIN32)
+	_msInitWargv();
+	return (double)_msWargc;
+#elif defined(__APPLE__)
 	return (double)(*_NSGetArgc());
 #elif defined(__linux__)
 	static int cached_argc = -1;
@@ -55,7 +73,18 @@ static inline double msProcessArgc(void) {
  */
 static inline msString msProcessArgvAt(double index) {
 	int idx = (int)index;
-#if defined(__APPLE__)
+#if defined(_WIN32)
+	_msInitWargv();
+	if (idx < 0 || idx >= _msWargc) return MS_EMPTY_STRING;
+	/* Convert wide string to UTF-8 */
+	int needed = WideCharToMultiByte(CP_UTF8, 0, _msWargv[idx], -1, NULL, 0, NULL, NULL);
+	if (needed <= 0) return MS_EMPTY_STRING;
+	char* buf = (char*)malloc(needed);
+	WideCharToMultiByte(CP_UTF8, 0, _msWargv[idx], -1, buf, needed, NULL, NULL);
+	msString result = msStringFromCStr(buf);
+	free(buf);
+	return result;
+#elif defined(__APPLE__)
 	char*** argv_ptr = _NSGetArgv();
 	int argc = *_NSGetArgc();
 	if (idx < 0 || idx >= argc) return MS_EMPTY_STRING;
@@ -99,7 +128,11 @@ static inline void msProcessExit(double code) {
  */
 static inline msString msProcessCwd(void) {
 	char buf[4096];
+#ifdef _WIN32
+	if (_getcwd(buf, sizeof(buf)) != NULL) {
+#else
 	if (getcwd(buf, sizeof(buf)) != NULL) {
+#endif
 		return msStringFromCStr(buf);
 	}
 	return MS_EMPTY_STRING;
@@ -191,7 +224,12 @@ static inline msString msProcessGetEnv(msString name) {
  * Get monotonic clock time in milliseconds (fractional).
  */
 static inline double msProcessClockMs(void) {
-#if defined(__APPLE__) || defined(__linux__)
+#if defined(_WIN32)
+	LARGE_INTEGER freq, cnt;
+	QueryPerformanceFrequency(&freq);
+	QueryPerformanceCounter(&cnt);
+	return (double)(cnt.QuadPart * 1000) / (double)freq.QuadPart;
+#elif defined(__APPLE__) || defined(__linux__)
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1000000.0;

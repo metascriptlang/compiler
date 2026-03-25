@@ -14,8 +14,10 @@
 #include <string.h>
 #include <assert.h>
 #include <stdio.h>
+#ifndef _WIN32
 #include <unistd.h>
 #include <fcntl.h>
+#endif
 
 /* ===== Platform-specific time + sleep ===== */
 
@@ -96,16 +98,30 @@ static void msDispatcherCallSoon(msClosure cb) {
 	msDequePush(&d->callbacks, cb);
 }
 
-/* Global completion pipe for cross-thread posting.
- * [0]=read (event loop), [1]=write (pool threads). */
+/* ===== Platform-Specific Cross-Thread Signaling ===== */
+
+#ifdef _WIN32
+/* Windows: IOCP — PostQueuedCompletionStatus / GetQueuedCompletionStatusEx.
+ * No pipe, no selector. Native completion port handles everything. */
+
+msDispatcher* msGetDispatcher(void) {
+	if (gDispatcher == NULL) {
+		gDispatcher = (msDispatcher*)calloc(1, sizeof(msDispatcher));
+		gDispatcher->iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
+		msCallSoonProc = msDispatcherCallSoon;
+	}
+	return gDispatcher;
+}
+
+#else
+/* POSIX: self-pipe pattern — pool threads write to pipe[1], event loop reads pipe[0]. */
+
 static int gCompletionPipe[2] = {-1, -1};
 
-/* Standard reference getGlobalDispatcher pattern — lazy init */
 msDispatcher* msGetDispatcher(void) {
 	if (gDispatcher == NULL) {
 		gDispatcher = (msDispatcher*)calloc(1, sizeof(msDispatcher));
 		gDispatcher->selector = msSelectorCreate();
-		/* Completion pipe: pool threads write results, event loop reads + completes futures */
 		if (gCompletionPipe[0] < 0) {
 			pipe(gCompletionPipe);
 			fcntl(gCompletionPipe[0], F_SETFL, O_NONBLOCK);
@@ -115,11 +131,12 @@ msDispatcher* msGetDispatcher(void) {
 		if (gDispatcher->selector) {
 			msSelectorRegister(gDispatcher->selector, gDispatcher->completionPipe[0], MS_EVENT_READ, NULL);
 		}
-		/* Register callSoon with future system (Standard reference pattern) */
 		msCallSoonProc = msDispatcherCallSoon;
 	}
 	return gDispatcher;
 }
+
+#endif /* _WIN32 */
 
 /* Check if dispatcher exists (without creating one) */
 bool msHasDispatcher(void) {
@@ -229,8 +246,28 @@ bool msRunOnce(int timeoutMs) {
 	/* Step 1: Process expired timers */
 	int nextTimer = msProcessTimers(d, &didWork);
 
-	/* Step 2: I/O selector — poll for ready events, or sleep as fallback */
+	/* Step 2: Poll for cross-thread completions + I/O events */
 	int adj = msAdjustTimeout(d, timeoutMs, nextTimer);
+#ifdef _WIN32
+	/* Windows: IOCP — drain thread-pool completions (and future I/O engine completions) */
+	if (d->iocp != NULL) {
+		OVERLAPPED_ENTRY entries[64];
+		ULONG count = 0;
+		BOOL ok = GetQueuedCompletionStatusEx(d->iocp, entries, 64, &count, (DWORD)(adj >= 0 ? adj : 500), FALSE);
+		if (ok) {
+			for (ULONG i = 0; i < count; i++) {
+				didWork = true;
+				msCompletionMsg* msg = (msCompletionMsg*)entries[i].lpOverlapped;
+				if (msg->isFail) msFutureFail(msg->fut, msg->error);
+				else msFutureComplete(msg->fut, msg->value);
+				free(msg);
+			}
+		}
+	} else if (adj > 0 && msDequeLen(&d->callbacks) == 0) {
+		msSleepMs(adj);
+	}
+#else
+	/* POSIX: selector poll + completion pipe drain */
 	if (d->selector != NULL) {
 		msReadyEvent readyBuf[64];
 		int nready = msSelectorPoll(d->selector, adj, readyBuf, 64);
@@ -248,8 +285,6 @@ bool msRunOnce(int timeoutMs) {
 			}
 			void* ud = readyBuf[i].userdata;
 			if (ud != NULL && !msFutureFinished(ud)) {
-				/* One-shot: unregister fd after completing (async I/O pattern).
-				 * Persistent fds (like completion pipe) are handled above. */
 				msSelectorUnregister(d->selector, readyBuf[i].fd);
 				msFutureCompleteVoid(ud);
 			}
@@ -257,6 +292,7 @@ bool msRunOnce(int timeoutMs) {
 	} else if (adj > 0 && msDequeLen(&d->callbacks) == 0) {
 		msSleepMs(adj);  /* fallback: no selector */
 	}
+#endif
 
 	/* Step 3: Process timers again (may have expired during sleep) */
 	msProcessTimers(d, &didWork);
@@ -295,19 +331,33 @@ void msRunForever(void) {
 	}
 }
 
-/* Post completion from pool thread to event loop.
- * Thread-safe: POSIX pipe write is atomic for messages < PIPE_BUF (4096 bytes).
- * The event loop reads and completes futures on its own thread. */
+/* Post completion from pool thread to event loop. Thread-safe.
+ * POSIX: pipe write (atomic for messages < PIPE_BUF).
+ * Windows: PostQueuedCompletionStatus to IOCP. */
 void msPostCompletion(void* fut, void* value, bool isFail, void* error) {
+#ifdef _WIN32
+	HANDLE iocp = gDispatcher != NULL ? gDispatcher->iocp : NULL;
+	if (iocp != NULL) {
+		msCompletionMsg* msg = (msCompletionMsg*)malloc(sizeof(msCompletionMsg));
+		msg->fut = fut;
+		msg->value = value;
+		msg->isFail = isFail;
+		msg->error = error;
+		PostQueuedCompletionStatus(iocp, 0, 0, (LPOVERLAPPED)msg);
+	} else {
+		if (isFail) msFutureFail(fut, error);
+		else msFutureComplete(fut, value);
+	}
+#else
 	msCompletionMsg msg = { .fut = fut, .value = value, .isFail = isFail, .error = error };
 	int wfd = gCompletionPipe[1];
 	if (wfd >= 0) {
 		write(wfd, &msg, sizeof(msg));
 	} else {
-		/* Fallback: no event loop — complete directly (single-threaded mode) */
 		if (isFail) msFutureFail(fut, error);
 		else msFutureComplete(fut, value);
 	}
+#endif
 }
 
 /* Standard reference sleepAsync pattern
@@ -354,8 +404,8 @@ void msAsyncCb(void* raw) {
 
 void msAsyncStart(void* retFut, msClosure stepper) {
 	(void)retFut;
-	/* Ensure completion pipe exists BEFORE any spawn can happen.
-	 * The stepper may call msSpawn which needs the pipe for cross-thread completion. */
+	/* Ensure dispatcher exists BEFORE any spawn can happen.
+	 * The stepper may call msSpawn which needs the IOCP/pipe for cross-thread completion. */
 	msGetDispatcher();
 	msAsyncCbEnv* env = (msAsyncCbEnv*)malloc(sizeof(msAsyncCbEnv));
 	env->stepper = stepper;
@@ -380,11 +430,14 @@ void msDestroyDispatcher(void) {
 		((void(*)(void*))cb.fn)(cb.env);
 	}
 	free(d->callbacks.items);
-	/* Destroy I/O selector */
+	/* Destroy platform-specific I/O notification */
+#ifdef _WIN32
+	if (d->iocp != NULL) { CloseHandle(d->iocp); d->iocp = NULL; }
+#else
 	if (d->selector != NULL) msSelectorDestroy(d->selector);
-	/* Close completion pipe fds */
 	if (gCompletionPipe[0] >= 0) { close(gCompletionPipe[0]); gCompletionPipe[0] = -1; }
 	if (gCompletionPipe[1] >= 0) { close(gCompletionPipe[1]); gCompletionPipe[1] = -1; }
+#endif
 	/* Reset globals */
 	msCallSoonProc = NULL;
 	free(d);

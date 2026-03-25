@@ -1,6 +1,6 @@
 // MetaScript Compiler CLI — Entry point (dispatch only)
 
-import { exit } from "std/process";
+import { exit, exec } from "std/process";
 import { CliOptions, Target, parseArgs, MODE_DEBUG, MODE_RELEASE, MODE_DANGER } from "./compiler/options";
 import { VERSION, printUsage } from "./compiler/usage";
 import { cmdBuildJS, cmdBuildC, cmdRunJS, cmdRunRaiser, cmdTest } from "./compiler/compile";
@@ -80,6 +80,11 @@ export function main(): number {
 				if (opts.ccBinary === "" && resolved.compiler !== "") opts.ccBinary = resolved.compiler;
 				if (opts.passC === "" && resolved.flags.length > 0) opts.passC = resolved.flags.join(" ");
 				if (opts.passL === "" && resolved.linkFlags.length > 0) opts.passL = resolved.linkFlags.join(" ");
+			}
+			// Cross-compile default: prefer zig cc over platform-specific cross-gcc.
+			// zig cc bundles clang + lld + sysroots for all targets — no external deps.
+			if (opts.osTarget !== "" && exec("which zig > /dev/null 2>&1") === 0) {
+				opts.ccBinary = "zig cc";
 			}
 			if ((cfg.valid && cfg.build.target === "js") || opts.target === Target.JS) {
 				const outDir = (cfg.valid && cfg.build.outDir !== "") ? cfg.build.outDir : opts.outputPath;

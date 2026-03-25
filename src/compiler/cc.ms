@@ -30,17 +30,31 @@ function resolveRuntime(): string {
 }
 
 // -- C compiler detection --
-// 0=undetected, 1=clang, 2=gcc, 3=cc (fallback)
+// 0=undetected, 1=clang, 2=gcc, 3=cc (fallback), 4=zig cc
 let detectedCC = 0;
+let hasZigCC = false;
+let zigCCChecked = false;
+
+function checkZigCC(): boolean {
+	if (!zigCCChecked) {
+		zigCCChecked = true;
+		hasZigCC = exec("which zig > /dev/null 2>&1") === 0;
+	}
+	return hasZigCC;
+}
 
 export function getCompilerName(ccOption: number, ccBinary: string): string {
-	// Explicit binary overrides everything (cross-compile: --cc=x86_64-linux-gnu-gcc)
+	// Explicit binary overrides everything (--cc=x86_64-linux-gnu-gcc)
 	if (ccBinary !== "") return ccBinary;
 	if (ccOption === 1) return "clang";
 	if (ccOption === 2) return "gcc";
-	// auto-detect
+	// auto-detect: zig cc > clang > gcc > cc
+	// zig cc preferred: unified experience, cross-compile ready, bundled sysroots.
+	// Override with --cc=clang or --cc=gcc if needed.
 	if (detectedCC === 0) {
-		if (exec("which clang > /dev/null 2>&1") === 0) {
+		if (checkZigCC()) {
+			detectedCC = 4;
+		} else if (exec("which clang > /dev/null 2>&1") === 0) {
 			detectedCC = 1;
 		} else if (exec("which gcc > /dev/null 2>&1") === 0) {
 			detectedCC = 2;
@@ -48,9 +62,20 @@ export function getCompilerName(ccOption: number, ccBinary: string): string {
 			detectedCC = 3;
 		}
 	}
+	if (detectedCC === 4) return "zig cc";
 	if (detectedCC === 1) return "clang";
 	if (detectedCC === 2) return "gcc";
 	return "cc";
+}
+
+// Cross-compiler: zig cc is the default for cross-compilation.
+// Returns "zig cc" if available, falls back to platform-specific cross-gcc.
+export function getCrossCompilerName(ccOption: number, ccBinary: string, osTarget: string, cpuTarget: string): string {
+	if (ccBinary !== "") return ccBinary;
+	// zig cc: modern cross-compiler (clang + lld + all sysroots bundled)
+	if (checkZigCC()) return "zig cc";
+	// Fallback: platform-specific cross-gcc
+	return getCompilerName(ccOption, ccBinary);
 }
 
 // -- Cross-compilation target triple --
@@ -65,9 +90,22 @@ function normalizeCpu(cpu: string): string {
 	return cpu;  // riscv64, mips64, etc. pass through
 }
 
-export function crossTargetFlag(osTarget: string, cpuTarget: string): string {
+// Build cross-compilation target flag.
+// zig cc uses "-target x86_64-windows-gnu" (no --target= prefix, no -pc-/-unknown- infixes).
+// clang/gcc uses "--target=x86_64-pc-windows-gnu".
+export function crossTargetFlag(osTarget: string, cpuTarget: string, useZig: boolean): string {
 	if (osTarget === "" && cpuTarget === "") return "";
 	const cpu = normalizeCpu(cpuTarget !== "" ? cpuTarget : "amd64");
+	if (useZig) {
+		// zig cc target format: cpu-os[-abi]
+		let zigOs = osTarget;
+		if (osTarget === "macos" || osTarget === "darwin") zigOs = "macos";
+		if (osTarget === "windows") return `-target ${cpu}-windows-gnu`;
+		if (osTarget === "linux") return `-target ${cpu}-linux-gnu`;
+		if (zigOs !== "") return `-target ${cpu}-${zigOs}`;
+		return `-target ${cpu}-native`;
+	}
+	// clang/gcc target format: cpu-vendor-os[-abi]
 	let triple = cpu;
 	if (osTarget === "linux") {
 		triple = `${cpu}-unknown-linux-gnu`;
@@ -104,19 +142,27 @@ export function appendFlag(base: string, flag: string): string {
 }
 
 // Build compile-phase flags from CLI options (sanitize + passC + cross-compile target).
+// Is this a cross-compilation using zig cc?
+function isCrossZig(opts: CliOptions): boolean {
+	return opts.osTarget !== "" && opts.ccBinary === "" && checkZigCC();
+}
+
 export function cliCompileFlags(opts: CliOptions): string {
 	let flags = "";
-	// Cross-compilation: --target triple for clang only.
-	// Cross-gcc binaries (x86_64-unknown-linux-gnu-gcc) have the target baked in.
-	if (opts.ccBinary === "") {
-		const ct = crossTargetFlag(opts.osTarget, opts.cpuTarget);
+	// Cross-compilation target triple
+	// zig cc: -target cpu-os-abi (bundled sysroot, no --target= prefix)
+	// clang/gcc: --target=cpu-vendor-os-abi
+	if (opts.osTarget !== "" || opts.cpuTarget !== "") {
+		const useZig = opts.ccBinary === "zig cc";
+		const ct = crossTargetFlag(opts.osTarget, opts.cpuTarget, useZig);
 		if (ct !== "") flags = appendFlag(flags, ct);
 	}
 	// Linux requires _GNU_SOURCE for POSIX APIs (clock_gettime, getaddrinfo, etc.)
-	// -fcommon: allow duplicate typeInfo globals across translation units (codegen emits them per-module)
 	if (opts.osTarget === "linux") {
 		flags = appendFlag(flags, "-D_GNU_SOURCE");
-		flags = appendFlag(flags, "-fcommon");
+	}
+	if (opts.osTarget === "windows" && opts.ccBinary !== "zig cc") {
+		flags = appendFlag(flags, "-D_WIN32_WINNT=0x0600");
 	}
 	if (opts.sanitize !== "") flags = appendFlag(flags, `-fsanitize=${opts.sanitize}`);
 	// Linker DCE: place each function/data in its own section so the linker can strip unused ones
@@ -137,6 +183,11 @@ export function cliLinkFlags(base: string, opts: CliOptions): string {
 	} else if (opts.osTarget === "linux") {
 		flags = appendFlag(flags, "-Wl,--gc-sections");
 		flags = appendFlag(flags, "-lpthread");
+	} else if (opts.osTarget === "windows") {
+		flags = appendFlag(flags, "-Wl,--gc-sections");
+		flags = appendFlag(flags, "-lws2_32");
+		flags = appendFlag(flags, "-lmswsock");
+		flags = appendFlag(flags, "-lbcrypt");
 	} else if (opts.osTarget === "" || opts.osTarget === "darwin") {
 		flags = appendFlag(flags, "-Wl,-dead_strip");
 	}

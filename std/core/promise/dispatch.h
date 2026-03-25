@@ -8,9 +8,15 @@
 #define MS_DISPATCH_H
 
 #include "future.h"
+#ifndef _WIN32
 #include "std/runtime/selector.h"
+#endif
 #include <stdint.h>
 #include <stdbool.h>
+#ifdef _WIN32
+#include <winsock2.h>
+#include <windows.h>
+#endif
 
 /* ===== Callback Ring Buffer (Standard reference pattern) ===== */
 
@@ -34,8 +40,10 @@ typedef struct msTimerHeap {
 	int cap;
 } msTimerHeap;
 
-/* ===== Cross-Thread Completion (libuv self-pipe pattern) ===== */
-/* Pool threads write completion messages to a pipe. Event loop reads + completes futures. */
+/* ===== Cross-Thread Completion ===== */
+/* Pool threads post completion messages. Event loop receives + completes futures.
+ * POSIX: self-pipe pattern (write to pipe, selector wakes event loop).
+ * Windows: IOCP (PostQueuedCompletionStatus, native completion port). */
 
 typedef struct {
 	void* fut;          /* msFuture_ptr* — spawn results use void* value */
@@ -49,8 +57,12 @@ typedef struct {
 typedef struct msDispatcher {
 	msTimerHeap timers;
 	msCallbackDeque callbacks;
+#ifdef _WIN32
+	HANDLE iocp;             /* I/O Completion Port for cross-thread signaling */
+#else
 	msSelector* selector;    /* I/O event notification (kqueue/epoll/poll) */
 	int completionPipe[2];   /* [0]=read (event loop), [1]=write (pool threads) */
+#endif
 } msDispatcher;
 
 /* ===== API ===== */

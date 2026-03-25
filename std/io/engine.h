@@ -14,7 +14,9 @@
 #define MS_IO_ENGINE_H
 
 #include "std/core/promise/future.h"
+#ifndef _WIN32
 #include "std/runtime/selector.h"
+#endif
 #include "std/core/system/native.h"
 #include <stdint.h>
 

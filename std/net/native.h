@@ -25,17 +25,62 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <errno.h>
-#include <unistd.h>
-#include <sys/socket.h>
-#include <sys/time.h>
 #include <time.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <fcntl.h>
 #include "std/core/system/native.h"
+
+/* ===== Platform Abstraction ===== */
+#ifdef _WIN32
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
+  #include <windows.h>
+  typedef int ms_socklen_t;
+  typedef int ms_ssize_t;
+  #define ms_close_socket(fd)  closesocket((SOCKET)(intptr_t)(fd))
+  #define ms_errno()           WSAGetLastError()
+  #define MS_EWOULDBLOCK       WSAEWOULDBLOCK
+  #define MS_EINTR             WSAEINTR
+  #define MS_SEND_FLAGS        0
+  static inline int32_t ms_set_nonblock(int32_t fd) {
+      u_long mode = 1;
+      return ioctlsocket((SOCKET)(intptr_t)fd, FIONBIO, &mode) == 0 ? 0 : -1;
+  }
+  #define MS_SOCKOPT_CAST (const char*)
+  static inline struct tm* ms_gmtime(const time_t* t, struct tm* result) {
+      gmtime_s(result, t); return result;
+  }
+  static inline void msNetEnsureInit(void) {
+      static int _wsaReady = 0;
+      if (!_wsaReady) { WSADATA d; WSAStartup(MAKEWORD(2,2), &d); _wsaReady = 1; }
+  }
+#else
+  #include <errno.h>
+  #include <unistd.h>
+  #include <sys/socket.h>
+  #include <sys/time.h>
+  #include <netinet/in.h>
+  #include <netinet/tcp.h>
+  #include <arpa/inet.h>
+  #include <netdb.h>
+  #include <fcntl.h>
+  typedef socklen_t ms_socklen_t;
+  typedef ssize_t ms_ssize_t;
+  #define ms_close_socket(fd)  close(fd)
+  #define ms_errno()           errno
+  #define MS_EWOULDBLOCK       EAGAIN
+  #define MS_EINTR             EINTR
+  #ifdef __linux__
+    #define MS_SEND_FLAGS      MSG_NOSIGNAL
+  #else
+    #define MS_SEND_FLAGS      0
+  #endif
+  static inline int32_t ms_set_nonblock(int32_t fd) {
+      int flags = fcntl(fd, F_GETFL, 0);
+      return (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) ? -1 : 0;
+  }
+  #define MS_SOCKOPT_CAST
+  #define ms_gmtime(t, tm)     gmtime_r(t, tm)
+  static inline void msNetEnsureInit(void) {}
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -48,7 +93,13 @@ extern "C" {
  * Returns fd on success, -1 on error.
  */
 static inline int32_t msNetSocket(void) {
+	msNetEnsureInit();
+#ifdef _WIN32
+	SOCKET s = WSASocketW(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
+	return s == INVALID_SOCKET ? -1 : (int32_t)(intptr_t)s;
+#else
 	return (int32_t)socket(AF_INET, SOCK_STREAM, 0);
+#endif
 }
 
 /* ===== Server Operations ===== */
@@ -59,7 +110,7 @@ static inline int32_t msNetSocket(void) {
  */
 static inline int32_t msNetBind(int32_t fd, msString addr, int32_t port) {
 	int opt = 1;
-	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, MS_SOCKOPT_CAST &opt, sizeof(opt));
 
 	struct sockaddr_in sa;
 	memset(&sa, 0, sizeof(sa));
@@ -83,9 +134,9 @@ static inline int32_t msNetBind(int32_t fd, msString addr, int32_t port) {
  */
 static inline int32_t msNetBindShared(int32_t fd, msString addr, int32_t port) {
 	int opt = 1;
-	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, MS_SOCKOPT_CAST &opt, sizeof(opt));
 #ifdef SO_REUSEPORT
-	setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+	setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, MS_SOCKOPT_CAST &opt, sizeof(opt));
 #endif
 
 	struct sockaddr_in sa;
@@ -116,11 +167,11 @@ static inline int32_t msNetListen(int32_t fd, int32_t backlog) {
  */
 static inline int32_t msNetAccept(int32_t fd) {
 	struct sockaddr_in client_addr;
-	socklen_t client_len = sizeof(client_addr);
+	ms_socklen_t client_len = sizeof(client_addr);
 	int client_fd = accept(fd, (struct sockaddr*)&client_addr, &client_len);
 	if (MS_LIKELY(client_fd >= 0)) {
 		int flag = 1;
-		setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+		setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, MS_SOCKOPT_CAST &flag, sizeof(flag));
 	}
 	return (int32_t)client_fd;
 }
@@ -147,22 +198,14 @@ static inline int32_t msNetConnect(int32_t fd, msString host, int32_t port) {
 	int ret = -1;
 	for (rp = result; rp != NULL; rp = rp->ai_next) {
 		do {
-			ret = connect(fd, rp->ai_addr, (socklen_t)rp->ai_addrlen);
-		} while (ret < 0 && errno == EINTR);
+			ret = connect(fd, rp->ai_addr, (ms_socklen_t)rp->ai_addrlen);
+		} while (ret < 0 && ms_errno() == MS_EINTR);
 		if (ret == 0) break;
 	}
 
 	freeaddrinfo(result);
 	return (int32_t)ret;
 }
-
-/* MSG_NOSIGNAL: suppress SIGPIPE on broken connections.
- * On macOS, use SO_NOSIGPIPE at socket level instead. */
-#ifdef __linux__
-#define MS_SEND_FLAGS MSG_NOSIGNAL
-#else
-#define MS_SEND_FLAGS 0
-#endif
 
 /* ===== Data Transfer ===== */
 
@@ -175,8 +218,8 @@ static inline int32_t msNetSend(int32_t fd, msString data) {
 	int32_t total = 0;
 	int32_t len = (int32_t)data.len;
 	while (total < len) {
-		ssize_t n = send(fd, buf + total, (size_t)(len - total), MS_SEND_FLAGS);
-		if (MS_UNLIKELY(n < 0 && errno == EINTR)) continue;
+		ms_ssize_t n = send(fd, buf + total, (size_t)(len - total), MS_SEND_FLAGS);
+		if (MS_UNLIKELY(n < 0 && ms_errno() == MS_EINTR)) continue;
 		if (MS_UNLIKELY(n <= 0)) return -1;
 		total += (int32_t)n;
 	}
@@ -194,10 +237,10 @@ static inline msString msNetRecv(int32_t fd, int32_t maxBytes) {
 	char* buf = (char*)malloc((size_t)maxBytes + 1);
 	if (!buf) return MS_EMPTY_STRING;
 
-	ssize_t received;
+	ms_ssize_t received;
 	do {
 		received = recv(fd, buf, (size_t)maxBytes, 0);
-	} while (received < 0 && errno == EINTR);
+	} while (received < 0 && ms_errno() == MS_EINTR);
 
 	if (received <= 0) {
 		free(buf);
@@ -216,7 +259,7 @@ static inline msString msNetRecv(int32_t fd, int32_t maxBytes) {
  * Close a socket.
  */
 static inline void msNetClose(int32_t fd) {
-	close(fd);
+	ms_close_socket(fd);
 }
 
 /**
@@ -224,13 +267,20 @@ static inline void msNetClose(int32_t fd) {
  * Returns 0 on success, -1 on error.
  */
 static inline int32_t msNetSetTimeout(int32_t fd, int32_t ms) {
+#ifdef _WIN32
+	/* Windows setsockopt SO_RCVTIMEO/SO_SNDTIMEO takes DWORD milliseconds */
+	DWORD timeout = (DWORD)ms;
+	int ret = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, MS_SOCKOPT_CAST &timeout, sizeof(timeout));
+	if (ret != 0) return -1;
+	return (int32_t)setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, MS_SOCKOPT_CAST &timeout, sizeof(timeout));
+#else
 	struct timeval tv;
 	tv.tv_sec = ms / 1000;
 	tv.tv_usec = (ms % 1000) * 1000;
-
 	int ret = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 	if (ret != 0) return -1;
 	return (int32_t)setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+#endif
 }
 
 /* ===== Non-Blocking Variants (for event-loop servers) ===== */
@@ -239,9 +289,7 @@ static inline int32_t msNetSetTimeout(int32_t fd, int32_t ms) {
  * Set fd to non-blocking mode. Returns 0 on success, -1 on error.
  */
 static inline int32_t msNetSetNonBlocking(int32_t fd) {
-	int flags = fcntl(fd, F_GETFL, 0);
-	if (flags < 0) return -1;
-	return fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0 ? -1 : 0;
+	return ms_set_nonblock(fd);
 }
 
 /**
@@ -250,11 +298,11 @@ static inline int32_t msNetSetNonBlocking(int32_t fd) {
  */
 static inline int32_t msNetAcceptNonBlock(int32_t fd) {
 	struct sockaddr_in ca;
-	socklen_t cl = sizeof(ca);
+	ms_socklen_t cl = sizeof(ca);
 	int cfd = accept(fd, (struct sockaddr*)&ca, &cl);
 	if (cfd >= 0) {
 		int f = 1;
-		setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY, &f, sizeof(f));
+		setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY, MS_SOCKOPT_CAST &f, sizeof(f));
 	}
 	return (int32_t)cfd;
 }
@@ -268,7 +316,7 @@ static _Thread_local char _msRecvTlBuf[8192];
 static inline msString msNetRecvNonBlock(int32_t fd, int32_t maxBytes) {
 	if (maxBytes <= 0) return MS_EMPTY_STRING;
 	if (maxBytes > 8192) maxBytes = 8192;
-	ssize_t r = recv(fd, _msRecvTlBuf, (size_t)maxBytes, 0);
+	ms_ssize_t r = recv(fd, _msRecvTlBuf, (size_t)maxBytes, 0);
 	if (r <= 0) return MS_EMPTY_STRING;
 	_msRecvTlBuf[r] = '\0';
 	return msStringNew(_msRecvTlBuf, (int64_t)r);
@@ -285,12 +333,12 @@ static inline int32_t msNetRecvInto(int32_t fd, msString* dest, int32_t maxBytes
 	if (maxBytes > 8192) maxBytes = 8192;
 	int64_t oldLen = dest->len;
 	msStringPrepareAdd(dest, (int64_t)maxBytes);
-	ssize_t r = recv(fd, dest->p->data + oldLen, (size_t)maxBytes, 0);
+	ms_ssize_t r = recv(fd, dest->p->data + oldLen, (size_t)maxBytes, 0);
 	if (r <= 0) {
 		dest->p->data[oldLen] = '\0';
 		dest->len = oldLen;
 		if (r == 0) return -1;  /* connection closed */
-		if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
+		if (ms_errno() == MS_EWOULDBLOCK) return 0;
 		return -1;
 	}
 	dest->len = oldLen + (int64_t)r;
@@ -306,8 +354,8 @@ static inline int32_t msNetSendNonBlock(int32_t fd, msString data, int32_t offse
 	if (!data.p || offset >= (int32_t)data.len) return 0;
 	const char* buf = data.p->data + offset;
 	int32_t remaining = (int32_t)data.len - offset;
-	ssize_t n = send(fd, buf, (size_t)remaining, MS_SEND_FLAGS);
-	if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return 0;
+	ms_ssize_t n = send(fd, buf, (size_t)remaining, MS_SEND_FLAGS);
+	if (n < 0 && ms_errno() == MS_EWOULDBLOCK) return 0;
 	if (n < 0) return -1;
 	return (int32_t)n;
 }
@@ -317,7 +365,7 @@ static inline int32_t msNetSendNonBlock(int32_t fd, msString data, int32_t offse
  */
 static inline void msNetSetTcpNoDelay(int32_t fd) {
 	int flag = 1;
-	setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+	setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, MS_SOCKOPT_CAST &flag, sizeof(flag));
 }
 
 /**
@@ -326,7 +374,7 @@ static inline void msNetSetTcpNoDelay(int32_t fd) {
 static inline void msNetSetNoSigpipe(int32_t fd) {
 #ifdef SO_NOSIGPIPE
 	int flag = 1;
-	setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &flag, sizeof(flag));
+	setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, MS_SOCKOPT_CAST &flag, sizeof(flag));
 #else
 	(void)fd;
 #endif
@@ -406,7 +454,7 @@ static inline const char* msGetDateHeader(void) {
 	if (now != _msDateEpoch) {
 		_msDateEpoch = now;
 		struct tm tm;
-		gmtime_r(&now, &tm);
+		ms_gmtime(&now, &tm);
 		strftime(_msDateBuf, sizeof(_msDateBuf), "%a, %d %b %Y %H:%M:%S GMT", &tm);
 	}
 	return _msDateBuf;

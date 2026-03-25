@@ -35,11 +35,11 @@ import { createFileSystemProvider, loadModuleGraphWithConfig, loadModule, provid
 import { ResolverConfig, createDefaultConfig, Backend, resolveImportWithConfig } from "../module/resolver";
 import { globalImports } from "../checker/prelude";
 import { drainPendingInstances } from "../checker/instantiate";
-import { ResolveSection, defaultResolveSection } from "./buildConfig";
+import { ResolveSection, defaultResolveSection, defaultCcSection, resolveCcForTarget } from "./buildConfig";
 import { evaluateComptimeBlocks } from "./comptime";
 import { CliOptions, Target, MODE_DEBUG, MODE_RELEASE } from "./options";
 import { readSource, writeOutput, printErrorsAndExit, printTiming, verboseLog, replaceExt, dirName, baseName, stripBase, ensureDir, getJSRuntime, exeSuffix, soSuffix, outDirForMode } from "./io";
-import { compileC, compileCFile, linkObjects, appendFlag, cliCompileFlags, cliLinkFlags } from "./cc";
+import { compileC, compileCFile, linkObjects, appendFlag, cliCompileFlags, cliLinkFlags, getCrossCompilerName } from "./cc";
 import { initCache, stableOFile, fullCompileCmd, isCompileCached, writeCompileCache, projectCacheChanged, writeProjectCache, stableCFile, isCCodeCached, writeCCodeCache, isLinkCached, writeLinkCache, cacheDir } from "./cache";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir } from "../utils/path";
@@ -423,12 +423,29 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	const graph = loadAndCheckGraph(entryPath, opts.verbose, config);
 	applyGcMode(opts);
 
+	// Cross-compile: resolve compiler binary.
+	// Default: "zig cc" (modern cross-compiler, bundled sysroots, no external deps).
+	// Fallback: platform-specific cross-gcc (e.g. x86_64-w64-mingw32-gcc).
+	// Override: --cc=<binary>
+	if (opts.osTarget !== "" && opts.ccBinary === "") {
+		if (exec("which zig > /dev/null 2>&1") === 0) {
+			opts.ccBinary = "zig cc";
+		} else {
+			const resolved = resolveCcForTarget(defaultCcSection(), opts.osTarget, opts.cpuTarget !== "" ? opts.cpuTarget : "amd64");
+			if (resolved.compiler !== "") {
+				opts.ccBinary = resolved.compiler;
+			}
+		}
+	}
+
 	// Compute output binary path early for change detection
 	let outBinary = opts.outputPath;
 	if (outBinary === "") {
 		const outDir = outDirForMode(opts.mode);
 		ensureDir(outDir);
-		const suffix = opts.isHcr ? soSuffix() : exeSuffix();
+		let suffix = opts.isHcr ? soSuffix() : exeSuffix();
+		// Cross-compile: use target OS suffix, not host
+		if (opts.osTarget === "windows") suffix = opts.isHcr ? ".dll" : ".exe";
 		outBinary = outDir + "/" + replaceExt(baseName(entryPath), "") + suffix;
 	}
 
@@ -641,7 +658,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		const dispFile = `${cd}/_dispatch.c`;
 		const dispObj = `${cd}/_dispatch.o`;
 		writeOutput(dispFile, dispatcher);
-		const dispCode = compileCFile(dispFile, dispObj, "", opts.mode, opts.ccCompiler, opts.ccBinary);
+		const dispCode = compileCFile(dispFile, dispObj, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary);
 		if (dispCode !== 0) {
 			console.log(`${error("error")}: compile failed for dispatcher ${dim(`(exit ${dispCode})`)}`);
 

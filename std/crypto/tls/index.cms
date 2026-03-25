@@ -14,6 +14,7 @@
 @passC("-Ivendor/mbedtls/tf-psa-crypto/core");
 @passC("-Istd/crypto/config");
 @passC("-DMBEDTLS_CONFIG_FILE='<mbedtls/mbedtlsConfig.h>'");
+@passC("-DMBEDTLS_PLATFORM_MEMORY");
 
 // mbedTLS SSL library
 @compile("vendor/mbedtls/library/ssl_tls.c");
@@ -88,6 +89,7 @@
 
 // Symmetric ciphers
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/aes.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/aesni.c");
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/aesce.c");
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/gcm.c");
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/cipher.c");
@@ -99,6 +101,11 @@
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/chacha20.c");
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/chachapoly.c");
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/poly1305.c");
+
+// PAKE + PKCS5 + EC-JPAKE
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/psa_crypto_pake.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pkcs5.c");
+@compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecjpake.c");
 
 // PSA ITS stubs (persistent key storage not used)
 @compile("std/crypto/tls/psaTlsStubs.c");

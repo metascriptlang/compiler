@@ -482,9 +482,10 @@ export function ensureTypeInfo(g: CGen, className: string): void {
 	addLine(sec(g, CSection.ForwardDecls), `extern msTypeInfo ${className}_typeInfo;`);
 }
 
-// Ensure msTypeInfo DEFINITION exists for class object literals in the owning module.
-// If destructorLifting already generated it, the GlobalVars section will have it.
-// Otherwise, emit a minimal definition (name only, no destroy/trace).
+// Ensure msTypeInfo exists for object literal allocation (new Foo()).
+// Reference parity (genTypeInfoV2): ownership-based deduplication.
+// The owning module (has InterfaceDecl/ClassDecl → in declaredThings) emits the definition.
+// Consuming modules emit extern. Compiler-generated types ($Env_*) are always local.
 export function ensureTypeInfoDef(g: CGen, className: string): void {
 	const defKey = "typeInfoDef:" + className;
 	if (typeCacheHas(g.forwTypeCache, defKey)) return;
@@ -492,8 +493,23 @@ export function ensureTypeInfoDef(g: CGen, className: string): void {
 	// Check if destructorLifting already generated it (via genTypeInfoVar)
 	const key = "typeInfo:" + className;
 	if (typeCacheHas(g.typeCache, key)) return;
-	// Emit minimal typeInfo definition + DatInit assignment
-	addLine(sec(g, CSection.GlobalVars), `msTypeInfo ${className}_typeInfo;`);
+	// Ownership check (reference parity: genTypeInfoV2 routes to owning module).
+	// declaredThings has the mangled name if this module processed InterfaceDecl/ClassDecl/EnumDecl.
+	// Compiler-generated ($Env_*) and monomorphized generics (Map__K_V) are always local.
+	const isCompilerGen = className.length > 0 && className.slice(0, 1) === "$";
+	const isGeneric = className.indexOf("__", 0) >= 0;
+	const isOwner = nameSetHas(g.declaredThings, className) || isCompilerGen || isGeneric;
+	if (!isOwner) {
+		ensureTypeInfo(g, className);
+		return;
+	}
+	// Owning module: emit definition + DatInit assignment.
+	// Generics use weak linkage — multiple modules may emit, linker deduplicates.
+	if (isGeneric) {
+		addLine(sec(g, CSection.GlobalVars), `__attribute__((weak)) msTypeInfo ${className}_typeInfo;`);
+	} else {
+		addLine(sec(g, CSection.GlobalVars), `msTypeInfo ${className}_typeInfo;`);
+	}
 	addLine(sec(g, CSection.DatInit), `  ${className}_typeInfo.name = "${className}";`);
 }
 

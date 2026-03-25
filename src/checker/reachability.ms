@@ -327,7 +327,6 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 			}
 
 			// Root 3: TestDecl nodes (test mode only)
-
 			if (isTest && stmt.kind === NodeKind.TestDecl) {
 				walkBody(stmt, modulePath, importMap);
 				continue;
