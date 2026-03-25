@@ -17,7 +17,7 @@ import { inferOwnership } from "./ownershipInference";
 import { analyzeParamMutations } from "./paramMutationAnalysis";
 import { validateTypedAST } from "./validate";
 import { getModuleDir, appendFlag, prependFlag, concatFlag } from "../utils/string";
-import { checkExpr, checkEnumExhaustiveness, checkDuplicatePatterns, fitNode } from "./checkExprPass";
+import { checkExpr, checkEnumExhaustiveness, checkDuplicatePatterns, fitNode, estimateExprEndCol } from "./checkExprPass";
 import { registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { parseSource } from "../parser/statements/validation";
@@ -926,7 +926,8 @@ function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 	}
 	mergeInitBranches(ctx.initTracker, oldState, branchInits, branchBreaks, isExhaustive);
 	if (discType.kind === TypeKind.Enum && !hasWildcard) {
-		checkEnumExhaustiveness(ctx, discType, coveredMembers);
+		const discEnd = estimateExprEndCol(d.matchStmtDisc) + 1;
+		checkEnumExhaustiveness(ctx, discType, coveredMembers, node.location.line, node.location.column, discEnd);
 	}
 }
 

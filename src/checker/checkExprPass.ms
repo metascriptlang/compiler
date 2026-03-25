@@ -2222,21 +2222,47 @@ function checkMatchExpr(ctx: CheckerContext, node: Node): Type {
 	}
 	mergeInitBranches(ctx.initTracker, oldState, branchInits, branchBreaks, isExhaustive);
 	if (discType.kind === TypeKind.Enum && !hasWildcard) {
-		checkEnumExhaustiveness(ctx, discType, coveredMembers);
+		// Range covers `match (disc)` — from match keyword to closing paren
+		const discEnd = estimateExprEndCol(d.matchDisc) + 1; // +1 for ")"
+		checkEnumExhaustiveness(ctx, discType, coveredMembers, node.location.line, node.location.column, discEnd);
 	}
 	return returnType;
 }
 
-export function checkEnumExhaustiveness(ctx: CheckerContext, enumType: Type, covered: string[]): void {
+export function checkEnumExhaustiveness(ctx: CheckerContext, enumType: Type, covered: string[], matchLine: number, matchCol: number, discEndCol: number): void {
 	for (const member of enumType.typeNames) {
 		let found = false;
 		for (const c of covered) {
 			if (c === member) { found = true; }
 		}
 		if (!found) {
-			addError(ctx, "Non-exhaustive match: missing '" + enumType.typeName + "." + member + "'", 0, 0);
+			// Range: from `match` keyword to closing `)` after discriminant
+			addErrorRange(ctx, `Non-exhaustive match: missing '${enumType.typeName}.${member}'`, matchLine, matchCol, discEndCol);
 		}
 	}
+}
+
+// Estimate end column of an expression node (for diagnostic ranges)
+export function estimateExprEndCol(node: Node): number {
+	const col = node.location.column;
+	return match (node.kind) {
+		NodeKind.Identifier => col + (node.data as IdentifierData).name.length,
+		NodeKind.MemberExpr => {
+			const md = node.data as MemberExprData;
+			return estimateExprEndCol(md.object) + 1 + md.property.length;
+		},
+		NodeKind.CallExpr => {
+			// f(args) — estimate callee end + "()"
+			const cd = node.data as CallExprData;
+			return estimateExprEndCol(cd.callee) + 2;
+		},
+		NodeKind.ArrayAccess => {
+			// arr[idx] — estimate array end + "[]"
+			const ad = node.data as ArrayAccessData;
+			return estimateExprEndCol(ad.array) + 3;
+		},
+		_ => col + 1,
+	};
 }
 
 // Detect duplicate unguarded match patterns (reference parity: checkForOverlap).

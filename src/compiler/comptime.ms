@@ -632,6 +632,7 @@ function evalComptimeBlock(node: Node): Node {
 // --- First pass: check if AST contains any ComptimeBlock nodes ---
 
 function hasComptimeBlock(node: Node): boolean {
+	if (node === null) return false;
 	return match (node.kind) {
 		NodeKind.ComptimeBlock => true,
 		NodeKind.VariableDecl => {

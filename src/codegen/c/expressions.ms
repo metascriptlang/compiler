@@ -1178,15 +1178,22 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			if (envExpr === "MS_NIL" || envExpr === "NULL") {
 				ctx.results.push(`(msClosure){ .fn = (void*)${fnExpr}, .env = NULL }`);
 			} else {
-				// Standard reference pattern: heap-allocate env struct, init fields, use pointer.
+				// Check if env is a pre-allocated named variable (lambda lifting env rewrite)
+				// vs inline ObjectLiteral (original pattern needing heap allocation)
 				const envNode = d.properties[1];
-				const envTypeName = (envNode !== null && envNode.nodeType !== null) ? getTypeDesc(g, envNode.nodeType) : "void";
-				g.labels += 1;
-				const envTemp = `_env${g.labels}_`;
-				emitProcLocalsLine(p, `${envTypeName}* ${envTemp};`);
-				emitStmtsLine(p, `${envTemp} = (${envTypeName}*)msAllocTyped(sizeof(${envTypeName}), NULL);`);
-				emitStmtsLine(p, `*${envTemp} = ${envExpr};`);
-				ctx.results.push(`(msClosure){ .fn = (void*)${fnExpr}, .env = (void*)${envTemp} }`);
+				if (envNode !== null && envNode.kind === NodeKind.Identifier) {
+					// Pre-allocated env: already a heap pointer, use directly
+					ctx.results.push(`(msClosure){ .fn = (void*)${fnExpr}, .env = (void*)${envExpr} }`);
+				} else {
+					// Inline env: heap-allocate, init fields, use pointer
+					const envTypeName = (envNode !== null && envNode.nodeType !== null) ? getTypeDesc(g, envNode.nodeType) : "void";
+					g.labels += 1;
+					const envTemp = `_env${g.labels}_`;
+					emitProcLocalsLine(p, `${envTypeName}* ${envTemp};`);
+					emitStmtsLine(p, `${envTemp} = (${envTypeName}*)msAllocTyped(sizeof(${envTypeName}), NULL);`);
+					emitStmtsLine(p, `*${envTemp} = ${envExpr};`);
+					ctx.results.push(`(msClosure){ .fn = (void*)${fnExpr}, .env = (void*)${envTemp} }`);
+				}
 			}
 		} else {
 			// Reference-aligned: hoist struct literal to temp variable + field-by-field assignment.

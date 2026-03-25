@@ -603,6 +603,77 @@ function lspFindEnumMemberLine(src: string, containerName: string, memberName: s
 	return makeLoc(-1, -1);
 }
 
+// ===== Extern → Native Header Navigation =====
+
+// Collect .h import paths from the parsed AST (ImportDecl nodes with .h source)
+function lspCollectHeaderImports(program: Node): string {
+	if (program === null) return "";
+	const pd = program.data as ProgramData;
+	let result = "";
+	for (const stmt of pd.programStmts) {
+		let importNode = stmt;
+		if (importNode.kind === NodeKind.ExportDecl) {
+			const ed = importNode.data as ExportDeclData;
+			importNode = ed.exportedDecl;
+		}
+		if (importNode !== null && importNode.kind === NodeKind.ImportDecl) {
+			const id = importNode.data as ImportDeclData;
+			if (id.importSource.length > 2
+				&& id.importSource.slice(id.importSource.length - 2, id.importSource.length) === ".h") {
+				if (result !== "") { result = result + "\n"; }
+				result = result + id.importSource;
+			}
+		}
+	}
+	return result;
+}
+
+function lspFindNativeDefinition(nativeName: string, headerPath: string, modulePath: string): string {
+	// headerPath may contain multiple paths (newline-separated). Search each.
+	// Resolve relative to the MODULE that declares the extern, not the current file.
+	const headers = headerPath.split("\n");
+	for (const h of headers) {
+		if (h === "") continue;
+		const result = lspSearchHeaderForName(nativeName, h, modulePath);
+		if (result !== "") return result;
+	}
+	return "";
+}
+
+function lspSearchHeaderForName(nativeName: string, headerRelPath: string, modulePath: string): string {
+	let hPath = headerRelPath;
+	if (hPath.length > 0 && hPath.charCodeAt(0) !== "/".code) {
+		hPath = lspDirname(modulePath) + "/" + hPath;
+	}
+	const hSrc = readFile(hPath);
+	if (hSrc === "") return "";
+	let lineNum = 0;
+	let lineStart = 0;
+	let i = 0;
+	while (i < hSrc.byteLength) {
+		if (hSrc.charCodeAt(i) === "\n".code) {
+			lineNum = lineNum + 1;
+			lineStart = i + 1;
+			i = i + 1;
+			continue;
+		}
+		if (i + nativeName.byteLength <= hSrc.byteLength) {
+			if (hSrc.slice(i, i + nativeName.byteLength) === nativeName) {
+				const endIdx = i + nativeName.byteLength;
+				const before = i === 0 || !lspIsWordChar(hSrc.charAt(i - 1));
+				const after = endIdx >= hSrc.byteLength || !lspIsWordChar(hSrc.charAt(endIdx));
+				if (before && after) {
+					const col = i - lineStart;
+					const hUri = lspPathToUri(hPath);
+					return lspFmtLocation(hUri, lineNum, col, lineNum, col + nativeName.byteLength);
+				}
+			}
+		}
+		i = i + 1;
+	}
+	return "";
+}
+
 // ===== Diagnostics =====
 
 export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): string {
@@ -1441,6 +1512,20 @@ export function handleDefinition(id: string, params: string, db: TransAmDb): str
 		writeStderr("[LSP-DEF] id=" + id + " null: no sgQuery at " + pos.line + ":" + pos.col1 + " in " + path + "\n");
 	}
 	if (suggest !== null) {
+		// Extern function → navigate to C definition in module's .h file
+		if (suggest.sym !== null && hasFlag(suggest.sym, SymbolFlag.ImportC)
+			&& suggest.sym.nativeName !== "") {
+			const externModPath = suggest.sym.modulePath !== null && suggest.sym.modulePath !== "" ? suggest.sym.modulePath : path;
+			// Module's own .h imports from AST first (most specific), then @include headerPath fallback
+			const externProgram = dbParse(db, externModPath);
+			const moduleHdrs = lspCollectHeaderImports(externProgram);
+			const hdrPath = moduleHdrs !== "" ? moduleHdrs : suggest.sym.headerPath;
+			if (hdrPath !== "") {
+				const nativeResult = lspFindNativeDefinition(suggest.sym.nativeName, hdrPath, externModPath);
+				if (nativeResult !== "") return lspResponse(id, "[" + nativeResult + "]");
+			}
+		}
+
 		let defLine = suggest.location.line - 1;
 		let defCol = suggest.location.column - 1;
 		let defUri = pos.uri;
@@ -1654,7 +1739,7 @@ export function handleInlayHint(id: string, params: string, db: TransAmDb): stri
 		// Parameter hints: paddingRight (space after "name:")
 		const padLeft = h.hintKind === SgInlayHintKind.Type || h.hintKind === SgInlayHintKind.Exception;
 		const padRight = h.hintKind === SgInlayHintKind.Parameter;
-		arr = arr + lspFmtInlayHint(h.line - 1, h.col, h.label, lspKind, padLeft, padRight);
+		arr = arr + lspFmtInlayHint(h.line - 1, h.col - 1, h.label, lspKind, padLeft, padRight);
 	}
 	arr = arr + "]";
 	return lspResponse(id, arr);

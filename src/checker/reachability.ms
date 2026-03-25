@@ -316,19 +316,30 @@ export function computeAliveSet(programs: Node[], paths: string[], entryPath: st
 				}
 			}
 
-			// Root 2: TestDecl nodes (test mode only)
+			// Root 2: Compiler-generated functions ($lifted_*, $fn_*, $Env_*) — always alive.
+			// Walk their bodies so callees (e.g., self-recursive functions) are traced.
+			if (stmt.kind === NodeKind.FunctionDecl) {
+				const fd2 = stmt.data as FunctionDeclData;
+				if (fd2.fnName.length > 0 && fd2.fnName.slice(0, 1) === "$") {
+					walkBody(stmt, modulePath, importMap);
+					continue;
+				}
+			}
+
+			// Root 3: TestDecl nodes (test mode only)
+
 			if (isTest && stmt.kind === NodeKind.TestDecl) {
 				walkBody(stmt, modulePath, importMap);
 				continue;
 			}
 
-			// Root 3: Top-level statements (side-effecting init code in Init000)
+			// Root 4: Top-level statements (side-effecting init code in Init000)
 			if (isTopLevelStatement(stmt)) {
 				walkBody(stmt, modulePath, importMap);
 				continue;
 			}
 
-			// Root 4: Exported declarations (reachable from outside)
+			// Root 5: Exported declarations (reachable from outside)
 			if (isExportedDecl(stmt)) {
 				const name = getDeclName(stmt);
 				if (name !== "") {

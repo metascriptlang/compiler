@@ -691,6 +691,10 @@ export function addWarning(ctx: CheckerContext, msg: string, line: number, col: 
 	ctx.errors.push({ message: msg, line, column: col, endColumn: 0, fatal: false, severity: Severity.Warning });
 }
 
+export function addWarningRange(ctx: CheckerContext, msg: string, line: number, col: number, endCol: number): void {
+	ctx.errors.push({ message: msg, line, column: col, endColumn: endCol, fatal: false, severity: Severity.Warning });
+}
+
 // globalError — fatal, compilation should abort
 export function addFatalError(ctx: CheckerContext, msg: string, line: number, col: number): void {
 	ctx.errors.push({ message: msg, line, column: col, endColumn: 0, fatal: true, severity: Severity.Error });
