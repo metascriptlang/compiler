@@ -4,6 +4,7 @@
 // emitNode delegates to registered callback (set by jsgen.ms) to break circular imports.
 
 import { Node, NodeKind, BlockStmtData } from "../../ast/node";
+import { JsImportEntry } from "../../checker/context";
 
 
 // ===== JS Generator =====
@@ -11,10 +12,11 @@ import { Node, NodeKind, BlockStmtData } from "../../ast/node";
 export class JSGenerator {
 	buf: string[];
 	indentLevel: number;
+	jsImports: JsImportEntry[];
 }
 
 export function createJSGenerator(): JSGenerator {
-	return { buf: [], indentLevel: 0 };
+	return { buf: [], indentLevel: 0, jsImports: [] };
 }
 
 // ===== Callback Registration (breaks circular imports) =====

@@ -4,8 +4,9 @@
 // immediately clone the function body, substitute types, and register
 // the specialized version. No separate monomorphize pass needed.
 
-import { Node, NodeKind, SourceLocation, FunctionDeclData, ExportDeclData, DecoratedDeclData, BlockStmtData, IfStmtData, WhileStmtData, ForOfStmtData, ReturnStmtData, ExprStmtData, VariableDeclData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, NewExprData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ArrowFunctionData, FunctionExprData, SpreadExprData, UpdateExprData, MatchExprData, MatchStmtData, MatchCaseData, DestructuringDeclData, DeferStmtData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { typeNameOf, instantiateGeneric, substituteType } from "./types";
+import { Node, NodeKind, NodeData, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, BlockStmtData, IfStmtData, WhileStmtData, ForOfStmtData, ReturnStmtData, ExprStmtData, VariableDeclData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, NewExprData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ArrowFunctionData, FunctionExprData, SpreadExprData, UpdateExprData, MatchExprData, MatchStmtData, MatchCaseData, DestructuringDeclData, DeferStmtData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { typeNameOf, instantiateGeneric, substituteType, createFunction } from "./types";
+import { resolveAnnotation } from "./resolvePass";
 import { lookupSymbol, defineSymbol, makeSymbol, setFlag, SymbolFlag, hasFlag } from "./symbol";
 import { CheckerContext } from "./context";
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/collect";
@@ -18,9 +19,16 @@ import { getIdentId } from "./idents";
 let _pendingInstances: Node[] = [];
 
 export function addPendingInstance(node: Node): void {
-	const fd = node.data as FunctionDeclData;
-	for (const existing of _pendingInstances) {
-		if ((existing.data as FunctionDeclData).fnName === fd.fnName) return;
+	if (node.kind === NodeKind.FunctionDecl) {
+		const fd = node.data as FunctionDeclData;
+		for (const existing of _pendingInstances) {
+			if (existing.kind === NodeKind.FunctionDecl && (existing.data as FunctionDeclData).fnName === fd.fnName) return;
+		}
+	} else if (node.kind === NodeKind.ClassDecl) {
+		const cd = node.data as ClassDeclData;
+		for (const existing of _pendingInstances) {
+			if (existing.kind === NodeKind.ClassDecl && (existing.data as ClassDeclData).className === cd.className) return;
+		}
 	}
 	_pendingInstances.push(node);
 }
@@ -68,19 +76,87 @@ function unwrapToFunctionDecl(node: Node): Node {
 	return null as unknown as Node;
 }
 
-// Substitute type annotations in param types and return type
-function substituteAnnotations(cd: FunctionDeclData, names: string[], types: Type[]): void {
+// Substitute type param names in an array of type annotation strings.
+function substituteTypeStrings(strs: string[], names: string[], types: Type[]): void {
 	for (let i = 0; i < names.length; i += 1) {
 		if (i >= types.length) break;
 		const pname = names[i];
 		const cname = monoConcreteTypeName(types[i]);
-		for (let pi = 0; pi < cd.fnParamTypes.length; pi += 1) {
-			cd.fnParamTypes[pi] = monoSubstAnnotation(cd.fnParamTypes[pi], pname, cname);
-		}
-		if (cd.fnReturnType !== "") {
-			cd.fnReturnType = monoSubstAnnotation(cd.fnReturnType, pname, cname);
+		for (let si = 0; si < strs.length; si += 1) {
+			strs[si] = monoSubstAnnotation(strs[si], pname, cname);
 		}
 	}
+}
+
+// Substitute type annotations in param types and return type
+function substituteAnnotations(cd: FunctionDeclData, names: string[], types: Type[]): void {
+	substituteTypeStrings(cd.fnParamTypes, names, types);
+	if (cd.fnReturnType !== "") {
+		for (let i = 0; i < names.length; i += 1) {
+			if (i >= types.length) break;
+			cd.fnReturnType = monoSubstAnnotation(cd.fnReturnType, names[i], monoConcreteTypeName(types[i]));
+		}
+	}
+}
+
+// ===== clearCheckerState =====
+// Strip HiddenDeref/HiddenAddr/HiddenStdConv wrappers and clear resolvedSym/flags
+// on a cloned AST so the checker re-processes it fresh.
+// Reference parity: standard re-check tolerates stale HiddenDeref by reading child types.
+// We strip them entirely — the re-check regenerates correct wrappers with concrete types.
+
+function stripHidden(node: Node): Node {
+	if (node === null) return node;
+	if (node.kind === NodeKind.HiddenDeref || node.kind === NodeKind.HiddenAddr) {
+		return stripHidden((node.data as HiddenDerefData).expr);
+	}
+	if (node.kind === NodeKind.HiddenStdConv) {
+		return stripHidden((node.data as HiddenStdConvData).convExpr);
+	}
+	return node;
+}
+
+// Strip hidden wrappers and clear checker state on a single child, returning the cleaned node.
+function cleanChild(child: Node): Node {
+	const stripped = stripHidden(child);
+	clearCheckerState(stripped);
+	return stripped;
+}
+
+function clearCheckerState(node: Node): void {
+	if (node === null) return;
+	node.resolvedSym = null as unknown as Symbol;
+	node.flags = 0;
+	match (node.kind) {
+		NodeKind.BlockStmt => {
+			const d = node.data as BlockStmtData;
+			for (let i = 0; i < d.statements.length; i += 1) { d.statements[i] = cleanChild(d.statements[i]); }
+		},
+		NodeKind.ExprStmt => { const d = node.data as ExprStmtData; d.expr = cleanChild(d.expr); },
+		NodeKind.ReturnStmt => { const d = node.data as ReturnStmtData; d.argument = cleanChild(d.argument); },
+		NodeKind.IfStmt => { const d = node.data as IfStmtData; d.condition = cleanChild(d.condition); d.consequent = cleanChild(d.consequent); d.alternate = cleanChild(d.alternate); },
+		NodeKind.WhileStmt => { const d = node.data as WhileStmtData; d.whileCondition = cleanChild(d.whileCondition); clearCheckerState(d.whileBody); },
+		NodeKind.ForOfStmt => { const d = node.data as ForOfStmtData; d.forOfIterable = cleanChild(d.forOfIterable); clearCheckerState(d.forOfBody); },
+		NodeKind.BinaryExpr => { const d = node.data as BinaryExprData; d.left = cleanChild(d.left); d.right = cleanChild(d.right); },
+		NodeKind.UnaryExpr => { const d = node.data as UnaryExprData; d.operand = cleanChild(d.operand); },
+		NodeKind.CallExpr => {
+			const d = node.data as CallExprData;
+			d.callee = cleanChild(d.callee);
+			for (let i = 0; i < d.arguments.length; i += 1) { d.arguments[i] = cleanChild(d.arguments[i]); }
+		},
+		NodeKind.MemberExpr => { const d = node.data as MemberExprData; d.object = cleanChild(d.object); },
+		NodeKind.ArrayAccess => { const d = node.data as ArrayAccessData; d.array = cleanChild(d.array); d.index = cleanChild(d.index); },
+		NodeKind.VariableDecl => { const d = node.data as VariableDeclData; d.initializer = cleanChild(d.initializer); },
+		NodeKind.ObjectLiteral => { for (const p of (node.data as ObjectLiteralData).properties) { clearCheckerState(p); } },
+		NodeKind.ArrayLiteral => { for (const e of (node.data as ArrayLiteralData).elements) { clearCheckerState(e); } },
+		NodeKind.ConditionalExpr => { const d = node.data as ConditionalExprData; d.ternaryCondition = cleanChild(d.ternaryCondition); d.ternaryConsequent = cleanChild(d.ternaryConsequent); d.ternaryAlternate = cleanChild(d.ternaryAlternate); },
+		NodeKind.NewExpr => {
+			const d = node.data as NewExprData;
+			d.newCallee = cleanChild(d.newCallee);
+			for (let i = 0; i < d.newArguments.length; i += 1) { d.newArguments[i] = cleanChild(d.newArguments[i]); }
+		},
+		_ => {},
+	};
 }
 
 // ===== replaceTypeVars =====
@@ -301,6 +377,94 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 
 	ctx.genericInstDepth = ctx.genericInstDepth - 1;
 	return instSym;
+}
+
+// ===== On-Demand Constructor Instantiation =====
+// Reference parity: on-demand proc instantiation (same pattern as standard generateInstance).
+// For classes with constructors, we generate a standalone FunctionDecl named ClassName_new.
+
+export function instantiateClassConstructor(classSym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext): void {
+	// Refuse unresolved types
+	for (const ct of concreteTypes) {
+		if (ct === null || ct.kind === TypeKind.GenericParam || ct.kind === TypeKind.Unknown) return;
+	}
+
+	const dedup = deduplicateBindings(paramNames, concreteTypes);
+	const mangledClass = buildMangledName(classSym.name, dedup.types);
+	const ctorFnName = mangledClass + "_new";
+
+	// Cache check — already instantiated?
+	const existingSym = lookupSymbol(ctx.table, ctorFnName);
+	if (existingSym !== null) return;
+	for (const existing of _pendingInstances) {
+		if (existing.kind === NodeKind.FunctionDecl && (existing.data as FunctionDeclData).fnName === ctorFnName) return;
+		if (existing.kind === NodeKind.ClassDecl && (existing.data as ClassDeclData).className === mangledClass) return;
+	}
+
+	// Find ConstructorDecl in class body
+	if (classSym.declNode === null || classSym.declNode.kind !== NodeKind.ClassDecl) return;
+	const classData = classSym.declNode.data as ClassDeclData;
+	let ctorNode: Node = null as unknown as Node;
+	for (const member of classData.classBody) {
+		if (member.kind === NodeKind.ConstructorDecl) { ctorNode = member; }
+	}
+	if (ctorNode === null) return;
+	const ctorData = ctorNode.data as ConstructorDeclData;
+
+	// Clone the constructor body
+	const clonedBody = ctorData.ctorBody !== null ? monoCloneNode(ctorData.ctorBody) : null as unknown as Node;
+
+	// Build FunctionDecl params from constructor params with type substitution
+	const fnParams: string[] = [];
+	const fnParamTypes: string[] = [];
+	for (const p of ctorData.ctorParams) { fnParams.push(p); }
+	for (const pt of ctorData.ctorParamTypes) { fnParamTypes.push(pt); }
+	substituteTypeStrings(fnParamTypes, dedup.names, dedup.types);
+
+	// Substitute type vars in body
+	if (clonedBody !== null) {
+		replaceTypeVars(clonedBody, dedup.names, dedup.types);
+	}
+
+	// Create FunctionDecl: the codegen's genConstructor handles alloc + body + return this.
+	// We emit a ClassDecl with just the constructor so genClassDecl generates ClassName_new().
+	const loc = ctorNode.location !== null ? ctorNode.location : makeLoc(0, 0);
+	const clonedCtor: NodeData = { ctorParams: fnParams, ctorParamTypes: fnParamTypes, ctorBody: clonedBody };
+	const ctorDeclNode = createNodeAt(NodeKind.ConstructorDecl, clonedCtor, loc);
+
+	// Set constructor node type (param types for codegen)
+	const resolvedParamTypes: Type[] = [];
+	for (let pi = 0; pi < fnParamTypes.length; pi += 1) {
+		const pt = resolveAnnotation(fnParamTypes[pi], ctx, loc.line, loc.column);
+		resolvedParamTypes.push(pt);
+	}
+	ctorDeclNode.nodeType = createFunction(resolvedParamTypes, fnParams, null as unknown as Type);
+
+	// Re-check constructor body with concrete types.
+	// Strip HiddenDeref/HiddenAddr wrappers first — re-check regenerates them correctly.
+	if (clonedBody !== null) {
+		const savedModulePath = ctx.modulePath;
+		if (classSym.modulePath !== "") ctx.modulePath = classSym.modulePath;
+		clearCheckerState(clonedBody);
+		// Replicate checkPass.ms:264-284: prepend `this` with concrete class type
+		const ctorParams: string[] = ["this"];
+		for (const p of fnParams) { ctorParams.push(p); }
+		const concreteClassType = instantiateGeneric(classSym.symbolType, dedup.names, dedup.types);
+		const ctorChildren: Type[] = [concreteClassType];
+		for (const pt of resolvedParamTypes) { ctorChildren.push(pt); }
+		const ctorFnType = createFunction(ctorChildren, ctorParams, null as unknown as Type);
+		const ctorSym = makeSymbol("constructor", SymbolKind.Method, ctorFnType, false);
+		ctorSym.state = SymbolState.Checked;
+		callCheckFunctionBody(ctx, ctorSym, ctorParams, clonedBody, null as unknown as SourceLocation[]);
+		ctx.modulePath = savedModulePath;
+	}
+
+	// Emit ClassDecl with just the constructor (struct already emitted by monoEmitTypeInstNodes)
+	const classBody: Node[] = [];
+	classBody.push(ctorDeclNode);
+	const classNodeData: NodeData = { className: mangledClass, classExtends: "", classBody, nameLocation: loc };
+	const classNode = createNodeAt(NodeKind.ClassDecl, classNodeData, loc);
+	addPendingInstance(classNode);
 }
 
 // Register callback at module load time

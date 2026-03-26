@@ -1,95 +1,43 @@
-// C Header Module — ARO parsing + import-name synthesis for .h imports
+// C Header Module — Native backend (ARO FFI)
 //
-// Provides two strategies for generating MetaScript source from C headers:
-//   1. ARO (full): parses actual C header, extracts types/functions/enums
-//   2. Synthesis (fallback): generates `export extern function NAME(): int64;`
-//      from the import names found in the module graph
-//
-// `preprocessHeaders(graph)` runs strategy 1 with fallback to 2.
+// Parses C headers via ARO (Zig C parser) and generates MetaScript
+// extern declarations for functions, structs, enums, and typedefs.
 //
 // Build prerequisites:
-//   cd src/bindings/aro && zig build    (bridge.c auto-compiled by @include)
-
+//   cd src/bindings/aro && zig build
+//
 // ARO link directives are in bindings/aro/index.ms (resolved relative to that module's dir)
 
 import {
+	msAroAddIncludeDir,
 	msAroParse, msAroError, msAroFree,
 	msAroFuncCount, msAroFuncName, msAroFuncReturnType,
 	msAroFuncParamCount, msAroFuncParamName, msAroFuncParamType,
 	msAroFuncIsVariadic,
+	msAroStructCount, msAroStructName, msAroStructIsUnion,
+	msAroStructFieldCount, msAroStructFieldName, msAroStructFieldType,
 	msAroEnumCount, msAroEnumName, msAroEnumMemberCount, msAroEnumMemberName,
 	msAroTypedefCount, msAroTypedefName, msAroTypedefTarget,
 } from "../bindings/aro/index";
-import { ModuleGraph, findModule } from "./graph";
+import { mapCType, safeParamName } from "./util";
 // (utils/string imports removed — using native .slice/.trim)
 
-// ===== C Type → MetaScript Type Mapping =====
-
-// Strip trailing C qualifiers (restrict, volatile, _Nonnull, etc.)
-function stripQualifiers(t: string): string {
-	let s = t;
-	// Strip trailing qualifiers one at a time
-	if (s.endsWith(" restrict")) { s = s.slice(0, s.length - 9); }
-	if (s.endsWith(" volatile")) { s = s.slice(0, s.length - 9); }
-	if (s.endsWith(" _Nonnull")) { s = s.slice(0, s.length - 9); }
-	if (s.endsWith(" _Nullable")) { s = s.slice(0, s.length - 10); }
-	if (s.endsWith(" __restrict")) { s = s.slice(0, s.length - 11); }
-	return s.trim();
-}
-
-// Map a C type string to a MetaScript type annotation string.
-export function mapCType(ctype: string): string {
-	const t = stripQualifiers(ctype.trim());
-
-	// Pointer types — can't be in match (endsWith check)
-	if (t.endsWith("*")) {
-		const base = t.slice(0, t.length - 1).trim();
-		if (base === "char" || base === "const char") return "string";
-		return "int64";
-	}
-
-	return match (t) {
-		"void" => "void",
-		"_Bool" | "bool" | "msBool" => "boolean",
-		"msString" => "string",
-		"int8_t" | "char" | "signed char" => "int8",
-		"int16_t" | "short" | "short int" => "int16",
-		"int32_t" | "int" => "int32",
-		"int64_t" | "long" | "long int" | "long long" | "long long int" | "ssize_t" | "intptr_t" => "int64",
-		"uint8_t" | "unsigned char" => "uint8",
-		"uint16_t" | "unsigned short" | "unsigned short int" => "uint16",
-		"uint32_t" | "unsigned int" | "unsigned" => "uint32",
-		"uint64_t" | "unsigned long" | "unsigned long int" | "unsigned long long" | "unsigned long long int" | "size_t" | "uintptr_t" => "uint64",
-		"float" => "float32",
-		"double" => "float64",
-		_ => "int64",
-	};
-}
-
-// ===== Synthetic Source Generator =====
-
-// Generate a valid MetaScript parameter name (avoid reserved words)
-function safeParamName(name: string): string {
-	return match (name) {
-		"" => "p",
-		"type" => "argType",
-		"function" => "fn",
-		"class" => "cls",
-		"interface" => "iface",
-		"import" => "imp",
-		"export" => "exp",
-		"const" => "cnst",
-		"let" => "letVal",
-		"var" => "varVal",
-		"return" => "ret",
-		"enum" => "enumVal",
-		_ => name,
-	};
+// Register ARO builtin include dir (stdint.h, stddef.h, etc.)
+// Must be absolute — CWD may be any project dir, not the recompiler root.
+let _aroInitDone = false;
+function ensureAroInit(): void {
+	if (_aroInitDone) return;
+	_aroInitDone = true;
+	// Resolve absolute path: this module is src/module/aro.ms
+	// ARO headers are at src/bindings/aro/zig-out/include (sibling path)
+	// Use __dirname which resolves to the module's directory at compile time
+	msAroAddIncludeDir(__dirname + "/../bindings/aro/zig-out/include");
 }
 
 // Parse a C header file and return synthetic MetaScript source.
 // The source contains export extern function declarations for each C function.
 export function parseCHeader(headerPath: string): string {
+	ensureAroInit();
 	const rc = msAroParse(headerPath);
 	if (rc !== 0) {
 		const errMsg = msAroError();
@@ -130,6 +78,27 @@ export function parseCHeader(headerPath: string): string {
 		ti = ti + 1;
 	}
 
+	// === Structs ===
+	let si = 0;
+	const structCount = msAroStructCount();
+	while (si < structCount) {
+		const sname = msAroStructName(si as int32);
+		if (sname.length > 0) {
+			const keyword = msAroStructIsUnion(si as int32) !== 0 ? "union" : "struct";
+			source = source + `\nexport extern struct ${sname} {\n`;
+			let sfi = 0;
+			const fieldCount = msAroStructFieldCount(si as int32);
+			while (sfi < fieldCount) {
+				const fname = msAroStructFieldName(si as int32, sfi as int32);
+				const ftype = mapCType(msAroStructFieldType(si as int32, sfi as int32));
+				source = source + `\t${fname}: ${ftype};\n`;
+				sfi = sfi + 1;
+			}
+			source = source + "}\n";
+		}
+		si = si + 1;
+	}
+
 	// === Functions ===
 	let fi = 0;
 	const funcCount = msAroFuncCount();
@@ -156,62 +125,4 @@ export function parseCHeader(headerPath: string): string {
 	return source;
 }
 
-// ===== Import-Name Synthesis (fallback when ARO unavailable) =====
-
-// Generate synthetic MetaScript source for a C header module.
-// Scans the module graph for all names imported from headerPath
-// and generates `export extern function NAME(): int64;` for each.
-// Actual C prototypes come from @include — this just satisfies the checker.
-// preprocessHeaders and synthesizeHeaderSource removed —
-// .h imports are now inlined into consuming modules by loader.ms inlineHeaderImports().
-
-// ===== Tests =====
-test "void" { assert mapCType("void") === "void"; }
-
-test "int" { assert mapCType("int") === "int32"; }
-
-test "unsigned int" { assert mapCType("unsigned int") === "uint32"; }
-
-test "float" { assert mapCType("float") === "float32"; }
-
-test "double" { assert mapCType("double") === "float64"; }
-
-test "bool" { assert mapCType("bool") === "boolean"; }
-
-test "_Bool" { assert mapCType("_Bool") === "boolean"; }
-
-test "char" { assert mapCType("char") === "int8"; }
-
-test "unsigned char" { assert mapCType("unsigned char") === "uint8"; }
-
-test "int32_t" { assert mapCType("int32_t") === "int32"; }
-
-test "uint64_t" { assert mapCType("uint64_t") === "uint64"; }
-
-test "size_t" { assert mapCType("size_t") === "uint64"; }
-
-test "char *" { assert mapCType("char *") === "string"; }
-
-test "const char *" { assert mapCType("const char *") === "string"; }
-
-test "void *" { assert mapCType("void *") === "int64"; }
-
-test "int *" { assert mapCType("int *") === "int64"; }
-
-test "msString" { assert mapCType("msString") === "string"; }
-
-test "msBool" { assert mapCType("msBool") === "boolean"; }
-
-test "short" { assert mapCType("short") === "int16"; }
-
-test "long" { assert mapCType("long") === "int64"; }
-
-test "long long" { assert mapCType("long long") === "int64"; }
-
-test "whitespace trimmed" { assert mapCType("  int  ") === "int32"; }
-
-test "safe param name type" { assert safeParamName("type") === "argType"; }
-
-test "safe param name normal" { assert safeParamName("count") === "count"; }
-
-test "safe param name empty" { assert safeParamName("") === "p"; }
+// Tests for mapCType/safeParamName are in util.ms

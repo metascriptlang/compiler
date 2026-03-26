@@ -11,7 +11,7 @@ export struct MapEntry<K, V> {
 	value: V;
 }
 
-export interface Map<K, V> {
+export class Map<K, V> {
 	data: MapEntry<K, V>[];
 	counter: int32;
 }
@@ -164,9 +164,22 @@ export struct SetEntry<T> {
 	key: T;
 }
 
-export interface Set<T> {
+export class Set<T> {
 	data: SetEntry<T>[];
 	counter: int32;
+
+	constructor(items: T[] = []) {
+		if (items.length > 0) {
+			// Pre-allocate: nextPowerOfTwo(count * 1.5 + 4) to avoid rehash during bulk insert
+			let cap = 32;
+			const needed = items.length + (items.length >> 1) + 4;
+			while (cap < needed) { cap = cap * 2; }
+			this.data = new Array(cap);
+		}
+		for (const item of items) {
+			this.add(item);
+		}
+	}
 }
 
 function setRawGet<T>(s: Set<T>, key: T): int32 {
@@ -251,3 +264,7 @@ export function clear<T>(this s: Set<T>): void {
 	while (i < s.data.length) { s.data[i].hcode = 0; i = i + 1; }
 	s.counter = 0;
 }
+
+// Tests for Set/Map are in external test files (monomorphized constructors
+// can't be tested inline — they emit in the defining module, causing typeInfo conflicts).
+

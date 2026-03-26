@@ -68,7 +68,7 @@ import {
 } from "../../module/graph";
 import { getDirectImports } from "./moduleDeps";
 import { lspDirname, lspResolveImport } from "../lsp/protocol";
-import { translateCHeader } from "../../module/loader";
+import { parseCHeader } from "../../module/aro";
 
 // ===== Stdlib Detection =====
 
@@ -258,7 +258,7 @@ function dbEnsureFileLoaded(db: TransAmDb, filePath: string): void {
 	if (raw.byteLength === 0) return;
 	let source = raw;
 	if (filePath.length >= 2 && filePath.slice(filePath.length - 2, filePath.length) === ".h") {
-		source = translateCHeader(raw, []);
+		source = parseCHeader(filePath);
 	}
 	dbSetFileText(db, filePath, source);
 }

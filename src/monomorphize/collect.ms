@@ -6,12 +6,12 @@
 import { Node, NodeKind, NodeData, DeclKind, SourceLocation, makeLoc, ProgramData, BlockStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, FunctionDeclData, ArrowFunctionData, FunctionExprData, ClassDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, MacroDeclData, VariableDeclData, ReturnStmtData, ThrowStmtData, ExprStmtData, TryCatchStmtData, DeferStmtData, BinaryExprData, UnaryExprData, UpdateExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, SpreadExprData, NewExprData, TryExprData, MatchExprData, MatchStmtData, MatchCaseData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, TypeAssertionData, DestructuringDeclData, QuoteExprData, MacroInvocationData, IdentifierData, NumberLiteralData, StringLiteralData, BooleanLiteralData, ImportDeclData, TypeAliasDeclData, EnumDeclData, InterfaceDeclData, PropertyDeclData, ExternDeclData, TypeAnnotationData, BreakStmtData, ContinueStmtData, UnreachableStmtData, BigIntLiteralData, RegexLiteralData, HiddenStdConvData, createNodeAt, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { unknownType, numberType, stringType, booleanType, nullType, createFunction, createArray, unifyType, createUnifyBindings, isResult, getResultOkType, getResultErrType } from "../checker/types";
 import { CheckerContext, extractGenericNames, stripGenFlag } from "../checker/context";
-import { SymbolTable, ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope } from "../checker/symbol";
+import { SymbolTable, ScopeKind, SymbolFlag, lookupSymbol, defineSymbol, makeSymbol, hasFlag, openScope, closeScope } from "../checker/symbol";
 import { MonoRegistry, MonoEntry, monoRegister, monoFindEntry, buildTypeArgKeys, monoTypeKey, createMonoRegistry } from "./registry";
 import { splitTopLevel, findChar } from "../utils/string";
 import {
-	getExplicitTypeArg,
-	getGenericTypeInstCount, getGenericTypeInstMangledName,
+	getExplicitTypeArg, getGenericDecl,
+	getGenericTypeInstCount, getGenericTypeInstMangledName, getGenericTypeInstBaseName, getGenericTypeInstTypeArgKey,
 	getGenericTypeInstFieldCount, getGenericTypeInstFieldNameAt,
 	getGenericTypeInstFieldTypeAt, resetGenericTypeInsts,
 } from "../parser/context";
@@ -934,6 +934,7 @@ export function monomorphizeProgram(program: Node, checkerCtx: CheckerContext): 
 
 	// Phase 1: Create InterfaceDecl nodes for generic type instantiations
 	// (independent of function monomorphization — Box<number> may exist without generic functions)
+	// Class constructors are handled separately via on-demand instantiation in checkExprPass.
 	monoEmitTypeInstNodes(program);
 
 	const pd = program.data as ProgramData;

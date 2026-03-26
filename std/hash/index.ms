@@ -1,5 +1,5 @@
 // std/hash — Non-cryptographic hashing for hash tables, caches, and switch dispatch.
-// Design follows Nim's std/hashes: overloaded hash() + combinators.
+// Design follows standard hashes pattern: overloaded hash() + combinators.
 //
 // Usage:
 //   import { hash, hashCombine } from "std/hash";

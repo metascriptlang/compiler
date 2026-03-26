@@ -13,6 +13,7 @@ import {
 	isEmptyBlock, Type,
 } from "../../ast/node";
 import { emit, emitNode, emitIndent, emitNewline, emitLine, JSGenerator, emitBlockInline, emitBlockOrStmt } from "./emit";
+import { safeJsName } from "./expressions";
 
 // ===== Typed Array Mapping (reference: arrayTypeForElemType) =====
 
@@ -81,21 +82,27 @@ function emitDefaultInit(gen: JSGenerator, t: Type): void {
 
 // ===== Variable Declaration =====
 
-export function emitVariableDecl(gen: JSGenerator, node: Node): void {
+// Emit a variable declaration without trailing ;\n or indent.
+// Used by emitVariableDecl (full statement) and emitForStmt (inline init).
+function emitVariableDeclCore(gen: JSGenerator, node: Node): void {
 	const d = node.data as VariableDeclData;
-	emitIndent(gen);
 	match (d.declKind) {
 		DeclKind.Const => { emit(gen, "const "); },
 		DeclKind.Var => { emit(gen, "var "); },
 		_ => { emit(gen, "let "); },
 	};
-	emit(gen, d.declName);
+	emit(gen, safeJsName(d.declName));
 	if (d.initializer !== null) {
 		emit(gen, " = ");
 		emitNode(gen, d.initializer);
 	} else {
 		emitDefaultInit(gen, node.nodeType);
 	}
+}
+
+export function emitVariableDecl(gen: JSGenerator, node: Node): void {
+	emitIndent(gen);
+	emitVariableDeclCore(gen, node);
 	emit(gen, ";\n");
 }
 
@@ -280,7 +287,7 @@ export function emitTryCatchStmt(gen: JSGenerator, node: Node): void {
 	if (d.catchBody !== null) {
 		if (d.catchName !== "") {
 			emit(gen, " catch (");
-			emit(gen, d.catchName);
+			emit(gen, safeJsName(d.catchName));
 			emit(gen, ") ");
 		} else {
 			emit(gen, " catch ");
@@ -300,7 +307,11 @@ export function emitForStmt(gen: JSGenerator, node: Node): void {
 	const d = node.data as ForStmtData;
 	emitIndent(gen);
 	emit(gen, "for (");
-	if (d.forInit !== null) emitNode(gen, d.forInit);
+	if (d.forInit !== null && d.forInit.kind === NodeKind.VariableDecl) {
+		emitVariableDeclCore(gen, d.forInit);
+	} else if (d.forInit !== null) {
+		emitNode(gen, d.forInit);
+	}
 	emit(gen, "; ");
 	if (d.forCondition !== null) emitNode(gen, d.forCondition);
 	emit(gen, "; ");
@@ -320,7 +331,7 @@ export function emitForOfStmt(gen: JSGenerator, node: Node): void {
 	} else {
 		emit(gen, "for (let ");
 	}
-	emit(gen, d.forOfBinding);
+	emit(gen, safeJsName(d.forOfBinding));
 	emit(gen, " of ");
 	emitNode(gen, d.forOfIterable);
 	emit(gen, ") ");

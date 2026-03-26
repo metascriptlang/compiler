@@ -101,6 +101,7 @@ export class Symbol {
 	modulePath: string;
 	originalName: string;  // Original declared name, used for C mangling when imported with alias
 	headerPath: string;    // @include header for this extern symbol
+	jsModulePath: string;  // @import JS module for this extern symbol
 	overloadIdx: int32;    // Index within overload set (0=primary, 1+=overload)
 	mutatedParams: int32;  // Bitfield: bit i = param i is mutated in body (gates const-ptr promotion)
 	staticFields: Symbol[];  // Static properties (only for class symbols)
@@ -208,7 +209,7 @@ export function makeLoc(line: number, column: number): SourceLocation {
 
 export type NodeData =
 	// Literal variants
-	| { value: number }                                            // NumberLiteral
+	| { value: number, isFloat: boolean }                          // NumberLiteral
 	| { value: string }                                            // StringLiteral
 	| { boolValue: boolean }                                       // BooleanLiteral
 	| { nullPlaceholder: boolean }                                 // NullLiteral (always true)

@@ -1,0 +1,44 @@
+// MetaScript String Prelude — JavaScript Backend
+// All string methods are native JS — these declarations provide type info to the checker.
+// The JS codegen emits direct method calls (s.indexOf(...), s.slice(...), etc.)
+
+// Comparison
+export extern function equals(this s: string, other: string): boolean;
+export extern function equalsIgnoreCase(this s: string, other: string): boolean;
+export extern function startsWith(this s: string, prefix: string): boolean;
+export extern function endsWith(this s: string, suffix: string): boolean;
+export extern function contains(this s: string, sub: string): boolean;
+
+// Search
+export extern function indexOf(this s: string, sub: string, start: int64 = 0): int64;
+export extern function lastIndexOf(this s: string, sub: string): int64;
+export extern function count(this s: string, sub: string): int64;
+
+// Access
+export extern function charAt(this s: string, idx: int64): string;
+export extern function charCodeAt(this s: string, idx: int64): int32;
+export extern function byteLength(this s: string): int64;
+export extern function byteAt(this s: string, idx: int64): int32;
+export extern function byteSlice(this s: string, start: int64, end: int64): string;
+
+// Extraction
+export extern function slice(this s: string, start: int64, end: int64): string;
+export extern function substring(this s: string, start: int64, end: int64): string;
+
+// Transform
+export extern function toLower(this s: string): string;
+export extern function toUpper(this s: string): string;
+export extern function trim(this s: string): string;
+export extern function trimStart(this s: string): string;
+export extern function trimEnd(this s: string): string;
+export extern function repeat(this s: string, count: int32): string;
+export extern function replace(this s: string, search: string, replacement: string): string;
+export extern function replaceAll(this s: string, search: string, replacement: string): string;
+export extern function reverse(this s: string): string;
+export extern function padStart(this s: string, targetLen: int64, pad: string): string;
+export extern function padEnd(this s: string, targetLen: int64, pad: string): string;
+
+// Split / Parse
+export extern function split(this s: string, delimiter: string): string[];
+export extern function parseFloat(this s: string): number;
+export extern function parseInt(this s: string): int64;

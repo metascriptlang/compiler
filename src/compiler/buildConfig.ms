@@ -126,6 +126,26 @@ export function defaultResolveSection(): ResolveSection {
 	return { searchPaths: sp, extensions: ext, aliasKeys: ak, aliasValues: av };
 }
 
+// Extract ResolveSection from an ObjectLiteral node.
+// Parses: resolve: { alias: { "@key": "value", ... } }
+function extractResolve(resolveNode: Node): ResolveSection {
+	const rs = defaultResolveSection();
+	if (resolveNode === null || resolveNode.kind !== NodeKind.ObjectLiteral) return rs;
+	const aliasNode = findObjField(resolveNode, "alias");
+	if (aliasNode !== null && aliasNode.kind === NodeKind.ObjectLiteral) {
+		const od = aliasNode.data as ObjectLiteralData;
+		for (let i = 0; i < od.keys.length; i = i + 1) {
+			const key = od.keys[i];
+			const val = i < od.properties.length ? nodeString(od.properties[i]) : "";
+			if (key.length > 0 && val.length > 0) {
+				rs.aliasKeys.push(key);
+				rs.aliasValues.push(val);
+			}
+		}
+	}
+	return rs;
+}
+
 // --- AST-based config extraction ---
 
 // Find a named field in an ObjectLiteral by key name. Returns null if not found.
@@ -292,10 +312,11 @@ export function loadBuildConfig(filePath: string, showTime: boolean): BuildConfi
 
 	const entry = nodeString(findObjField(configObj, "entry"));
 	const bs = extractBuild(findObjField(configObj, "build"));
+	const rs = extractResolve(findObjField(configObj, "resolve"));
 	const fmt = extractFmt(findObjField(configObj, "fmt"));
 	const cc = extractCc(findObjField(configObj, "cc"));
 
-	return { entry, build: bs, resolve: defRs, fmt, cc, valid: true };
+	return { entry, build: bs, resolve: rs, fmt, cc, valid: true };
 }
 
 // Validate build.ms and return LSP-style warnings.

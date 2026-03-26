@@ -391,8 +391,8 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 		// Transform (JS backend — skip C-specific transforms, no monomorphize needed)
 		const transformed = transformProgram(comptimeResolved, ctx, true);
 
-		// Generate JS
-		const jsCode = generateJS(transformed);
+		// Generate JS (pass @import registry for extern JS module imports)
+		const jsCode = generateJS(transformed, ctx.jsImportRegistry);
 
 		// Write output to out/debug/ preserving relative structure
 		const relPath = stripBase(modPath, baseDir);
@@ -883,7 +883,7 @@ export function cmdRunJS(filePath: string, opts: CliOptions): void {
 
 		const comptimeResolved = evaluateComptimeBlocks(program);
 		const transformed = transformProgram(comptimeResolved, ctx, true);
-		const jsCode = generateJS(transformed);
+		const jsCode = generateJS(transformed, ctx.jsImportRegistry);
 
 		const relPath = stripBase(modPath, baseDir);
 		const outPath = outDir + "/" + replaceExt(relPath, ".js");

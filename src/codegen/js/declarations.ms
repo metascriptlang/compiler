@@ -8,6 +8,7 @@ import {
 	DecoratedDeclData,
 } from "../../ast/node";
 import { emit, emitNode, emitIndent, emitNewline, emitLine, JSGenerator, convertImportPath, emitJoinedStrings, emitBodyOrEmpty } from "./emit";
+import { safeJsName } from "./expressions";
 
 // ===== Function Declaration =====
 
@@ -19,7 +20,7 @@ function emitFunctionDeclInner(gen: JSGenerator, node: Node): void {
 		"async_generator" => { emit(gen, "async function* "); },
 		_ => { emit(gen, "function "); },
 	};
-	emit(gen, d.fnName);
+	emit(gen, safeJsName(d.fnName));
 	emit(gen, "(");
 	emitJoinedStrings(gen, d.params, ", ");
 	emit(gen, ") ");
@@ -138,11 +139,6 @@ export function emitConstructorDecl(gen: JSGenerator, node: Node): void {
 
 export function emitImportDecl(gen: JSGenerator, node: Node): void {
 	const d = node.data as ImportDeclData;
-	// Skip std/ imports (compiler-provided, not available in JS)
-	if (d.importSource.length >= 4) {
-		const prefix = d.importSource.slice(0, 4);
-		if (prefix === "std/") return;
-	}
 	emitIndent(gen);
 	if (d.importNames.length === 0) {
 		// Side-effect import
@@ -187,7 +183,7 @@ export function emitExportDecl(gen: JSGenerator, node: Node): void {
 				DeclKind.Var => { emit(gen, "var "); },
 				_ => { emit(gen, "let "); },
 			};
-			emit(gen, vd.declName);
+			emit(gen, safeJsName(vd.declName));
 			if (vd.initializer !== null) {
 				emit(gen, " = ");
 				emitNode(gen, vd.initializer);

@@ -1,7 +1,7 @@
 // Expression Checker — type inference for all expression kinds
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
-import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, DeclKind, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData } from "../ast/node";
+import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, DeclKind, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, ClassDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
 import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createSpan, createFunction, createTypeRef, createStruct, createRef, createResult, createPrimitive, substituteType, instantiateGeneric, anonStructName, isNumeric, isIntegerType, isStringType, isCallable, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, unwrapRef, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, isPromise, getPromiseInner, isResult, getResultOkType, createGenericParam, instantiateGenericBody } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag } from "./symbol";
@@ -90,6 +90,10 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 	const instType = instantiateGeneric(baseSym.symbolType, trimmedParamNames, concreteTypes);
 	const instInner = (instType.kind === TypeKind.Ref && instType.typeReturn !== null) ? instType.typeReturn : instType;
 	instInner.typeName = mangledName;
+	// On-demand constructor instantiation: if class has constructor, generate ClassName_new()
+	if (hasFlag(baseSym, SymbolFlag.HasConstructor)) {
+		instantiateClassConstructor(baseSym, trimmedParamNames, concreteTypes, ctx);
+	}
 	return instType;
 }
 
@@ -641,10 +645,13 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 			if (md.macroName === "emit") {
 				processEmitInterpolation(ctx, md, node);
 			}
-			let ai = 0;
-			while (ai < md.macroArgs.length) {
-				checkExpr(ctx, md.macroArgs[ai], null);
-				ai = ai + 1;
+			// @import args are pure syntax (not evaluated) — skip type-checking
+			if (md.macroName !== "import") {
+				let ai = 0;
+				while (ai < md.macroArgs.length) {
+					checkExpr(ctx, md.macroArgs[ai], null);
+					ai = ai + 1;
+				}
 			}
 			return voidType();
 		},
@@ -663,6 +670,12 @@ function widenIntegers(a: Type, b: Type): Type {
 	return integerRank(a) >= integerRank(b) ? a : b;
 }
 
+// Mixed numeric promotion: number stays number, otherwise float64.
+function promoteNumeric(a: Type, b: Type): Type {
+	if (a.kind === TypeKind.Number || b.kind === TypeKind.Number) return numberType();
+	return float64Type();
+}
+
 function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
 	return match (op) {
 		"===" | "!==" | "==" | "!=" | "<" | ">" | "<=" | ">=" => booleanType(),
@@ -671,33 +684,20 @@ function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
 			if (isStringType(leftType) || isStringType(rightType)) return stringType();
 			if (leftType !== null && leftType.kind === TypeKind.Ptr) return leftType;
 			if (rightType !== null && rightType.kind === TypeKind.Ptr) return rightType;
-			// Integer arithmetic: same width → preserve, mixed width → widen to larger
 			if (isIntegerType(leftType) && isIntegerType(rightType)) return widenIntegers(leftType, rightType);
-			// Mixed numeric: explicit number stays number, otherwise float64
-			if (isNumeric(leftType) && isNumeric(rightType)) {
-				if (leftType.kind === TypeKind.Number || rightType.kind === TypeKind.Number) return numberType();
-				return float64Type();
-			}
+			if (isNumeric(leftType) && isNumeric(rightType)) return promoteNumeric(leftType, rightType);
 			return unknownType();
 		},
 		"-" => {
 			if (leftType !== null && leftType.kind === TypeKind.Ptr && rightType !== null && rightType.kind === TypeKind.Ptr) return int32Type();
 			if (leftType !== null && leftType.kind === TypeKind.Ptr) return leftType;
-			// Integer arithmetic: same width → preserve, mixed width → widen
 			if (isIntegerType(leftType) && isIntegerType(rightType)) return widenIntegers(leftType, rightType);
-			if (isNumeric(leftType) && isNumeric(rightType)) {
-				if (leftType.kind === TypeKind.Number || rightType.kind === TypeKind.Number) return numberType();
-				return float64Type();
-			}
+			if (isNumeric(leftType) && isNumeric(rightType)) return promoteNumeric(leftType, rightType);
 			return unknownType();
 		},
 		"*" | "/" | "%" | "**" => {
-			// Integer arithmetic: same width → preserve, mixed width → widen
 			if (isIntegerType(leftType) && isIntegerType(rightType)) return widenIntegers(leftType, rightType);
-			if (isNumeric(leftType) && isNumeric(rightType)) {
-				if (leftType.kind === TypeKind.Number || rightType.kind === TypeKind.Number) return numberType();
-				return float64Type();
-			}
+			if (isNumeric(leftType) && isNumeric(rightType)) return promoteNumeric(leftType, rightType);
 			return float64Type();
 		},
 		"&" | "|" | "^" | "<<" | ">>" | ">>>" => {
@@ -1005,12 +1005,14 @@ function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type): Type {
 	// Resolve inner struct type for field type propagation
 	const innerType = (resolvedType !== null && resolvedType.kind === TypeKind.Ref && resolvedType.typeReturn !== null)
 		? resolvedType.typeReturn : resolvedType;
-	// Access typeChildren directly in loop — avoid local Type[] alias
-	// (local array cleanup would free the shared payload)
+	// Type-check constructor arguments.
+	// If class has constructor, let args self-infer (constructor function handles param types).
+	// Otherwise use struct field types as expected types (positional field initialization).
+	const hasCtor = d.newCallee.resolvedSym !== null && hasFlag(d.newCallee.resolvedSym, SymbolFlag.HasConstructor);
 	let ai = 0;
 	while (ai < d.newArguments.length) {
 		let argExpected: Type = null;
-		if (innerType !== null && innerType.typeChildren !== null && ai < innerType.typeChildren.length) {
+		if (!hasCtor && innerType !== null && innerType.typeChildren !== null && ai < innerType.typeChildren.length) {
 			argExpected = innerType.typeChildren[ai];
 		}
 		checkExpr(ctx, d.newArguments[ai], argExpected);
@@ -2550,7 +2552,7 @@ function checkSpawnCaptures(ctx: CheckerContext, closureNode: Node, spawnNode: N
 // ===== JSON Typed Specialization (reference-aligned: generate + check during sem) =====
 
 import { callCheckFunctionBody } from "./checkerCallbacks";
-import { addPendingInstance } from "./instantiate";
+import { addPendingInstance, instantiateClassConstructor } from "./instantiate";
 import { getIdentId } from "./idents";
 
 // Shared: register a generated JSON instance (symbol + checker + pending + callee rewrite)

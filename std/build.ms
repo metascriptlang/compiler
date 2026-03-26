@@ -22,8 +22,14 @@ export interface CcConfig {
 // CPU names (Go convention): amd64, arm64, 386, riscv64
 // OS names: linux, darwin, windows, freebsd
 
+export interface ResolveConfig {
+	alias?: { [key: string]: string };  // path aliases: { "@parser": "src/parser" }
+}
+
 export interface BuildConfig {
 	entry?: string;
+	root?: string;              // project root for non-relative imports (default: ".")
+	resolve?: ResolveConfig;    // module resolution config
 	fmt?: FmtConfig;
 	cc?: CcConfig;
 }

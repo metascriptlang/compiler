@@ -1,0 +1,63 @@
+// MetaScript System Prelude — JavaScript Backend
+// console.log, Result<T, E>, AbortSignal, AbortController.
+
+// msPrintln is the C-backend name for console.log.
+// The transform phase rewrites console.log → msPrintln(@builtin("Echo")).
+// This shim makes msPrintln available in JS.
+function msPrintln(s: string): void {
+	console.log(s);
+}
+
+export class console {
+	@builtin("Echo")
+	static extern log(value: string): void from "msPrintln";
+}
+
+export class Result<T, E> {
+	ok: boolean;
+	value: T;
+	error: E;
+
+	@builtin("ResultOk")
+	static extern ok(val: T): Result<T, E>;
+	@builtin("ResultErr")
+	static extern err(e: E): Result<T, E>;
+}
+
+export class AbortSignal {
+	aborted: boolean;
+	reason: string;
+
+	constructor() {
+		this.aborted = false;
+		this.reason = "";
+	}
+
+	throwIfAborted(): void {
+		if (this.aborted) {
+			unreachable;
+		}
+	}
+
+	static abort(reason: string): AbortSignal {
+		const s = new AbortSignal();
+		s.aborted = true;
+		s.reason = reason;
+		return s;
+	}
+}
+
+export class AbortController {
+	signal: AbortSignal;
+
+	constructor() {
+		this.signal = new AbortSignal();
+	}
+
+	abort(reason: string): void {
+		if (!this.signal.aborted) {
+			this.signal.aborted = true;
+			this.signal.reason = reason;
+		}
+	}
+}

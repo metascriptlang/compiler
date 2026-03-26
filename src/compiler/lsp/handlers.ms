@@ -11,7 +11,7 @@ import {
 } from "../transam/index";
 import { detectCycle } from "../transam/moduleDeps";
 import { readFile, clockMs, readDir } from "std/process";
-import { translateCHeader } from "../../module/loader";
+import { parseCHeader } from "../../module/aro";
 import { writeStderr } from "std/io";
 import {
 	lspJsonString, lspJsonNumber, lspJsonBool, lspJsonNull,
@@ -159,12 +159,13 @@ function dbGetSource(db: TransAmDb, path: string): string {
 function lspEnsureFileLoaded(db: TransAmDb, filePath: string): void {
 	if (getFileId(db.fileInput, filePath) < 0) {
 		const t0 = clockMs();
-		let source = readFile(filePath);
+		let source = "";
+		if (filePath.length >= 2 && filePath.slice(filePath.length - 2, filePath.length) === ".h") {
+			source = parseCHeader(filePath);
+		} else {
+			source = readFile(filePath);
+		}
 		if (source.byteLength > 0) {
-			// Translate .h files to MS extern declarations at input boundary
-			if (filePath.length >= 2 && filePath.slice(filePath.length - 2, filePath.length) === ".h") {
-				source = translateCHeader(source, []);
-			}
 			dbSetFileText(db, filePath, source);
 		}
 		const t1 = clockMs();

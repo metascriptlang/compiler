@@ -16,45 +16,50 @@
 // Link the ARO static library
 @link("zig-out/lib/libaro_ffi.a");
 
+// ===== Configuration =====
+
+// Add an include directory for header resolution (call before msAroParse).
+export extern function msAroAddIncludeDir(dir: string): void;
+
 // ===== Parse =====
 
 // Parse a C header file. Returns 0 on success, 1 on error.
-extern function msAroParse(path: string): int32;
+export extern function msAroParse(path: string): int32;
 
 // Get error message (empty string if no error).
-extern function msAroError(): string;
+export extern function msAroError(): string;
 
 // Free the current parse result.
-extern function msAroFree(): void;
+export extern function msAroFree(): void;
 
 // ===== Functions =====
 
-extern function msAroFuncCount(): int32;
-extern function msAroFuncName(i: int32): string;
-extern function msAroFuncReturnType(i: int32): string;
-extern function msAroFuncParamCount(i: int32): int32;
-extern function msAroFuncParamName(fi: int32, pi: int32): string;
-extern function msAroFuncParamType(fi: int32, pi: int32): string;
-extern function msAroFuncIsVariadic(i: int32): int32;
+export extern function msAroFuncCount(): int32;
+export extern function msAroFuncName(i: int32): string;
+export extern function msAroFuncReturnType(i: int32): string;
+export extern function msAroFuncParamCount(i: int32): int32;
+export extern function msAroFuncParamName(fi: int32, pi: int32): string;
+export extern function msAroFuncParamType(fi: int32, pi: int32): string;
+export extern function msAroFuncIsVariadic(i: int32): int32;
 
 // ===== Structs =====
 
-extern function msAroStructCount(): int32;
-extern function msAroStructName(i: int32): string;
-extern function msAroStructIsUnion(i: int32): int32;
-extern function msAroStructFieldCount(i: int32): int32;
-extern function msAroStructFieldName(si: int32, fi: int32): string;
-extern function msAroStructFieldType(si: int32, fi: int32): string;
+export extern function msAroStructCount(): int32;
+export extern function msAroStructName(i: int32): string;
+export extern function msAroStructIsUnion(i: int32): int32;
+export extern function msAroStructFieldCount(i: int32): int32;
+export extern function msAroStructFieldName(si: int32, fi: int32): string;
+export extern function msAroStructFieldType(si: int32, fi: int32): string;
 
 // ===== Enums =====
 
-extern function msAroEnumCount(): int32;
-extern function msAroEnumName(i: int32): string;
-extern function msAroEnumMemberCount(i: int32): int32;
-extern function msAroEnumMemberName(ei: int32, mi: int32): string;
+export extern function msAroEnumCount(): int32;
+export extern function msAroEnumName(i: int32): string;
+export extern function msAroEnumMemberCount(i: int32): int32;
+export extern function msAroEnumMemberName(ei: int32, mi: int32): string;
 
 // ===== Typedefs =====
 
-extern function msAroTypedefCount(): int32;
-extern function msAroTypedefName(i: int32): string;
-extern function msAroTypedefTarget(i: int32): string;
+export extern function msAroTypedefCount(): int32;
+export extern function msAroTypedefName(i: int32): string;
+export extern function msAroTypedefTarget(i: int32): string;

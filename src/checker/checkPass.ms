@@ -1,10 +1,10 @@
 // Statement Checker — Pass 3 statement validation and control flow
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
-import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, makeLoc, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, VariableDeclData, FunctionDeclData, ClassDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ProgramData, MacroInvocationData, StringLiteralData, CallExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, makeLoc, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, VariableDeclData, FunctionDeclData, ClassDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, StringLiteralData, CallExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { unknownType, nullType, stringType, charType, numberType, float64Type, voidType, createFunction, createUnion, isMaybeType, unwrapMaybeType, isNarrowingIntConv, typeNameOf, isPromise, getPromiseInner, isResult, getResultOkType, getResultErrType, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant } from "./types";
 import { ScopeKind, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, setFlag, hasFlag, SymbolFlag } from "./symbol";
-import { CheckerContext, CancelCtx, createContext, createContextWithCache, createModuleContext, createModuleContextWithCache, addError, addFatalError, addWarning, hasErrors, hasFatalErrors, errorCount, createExtensionRegistry, registerExtension, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, buildExportInfo, isCancelled, sgRecordSym, sgSortRecords, isInAsyncPromiseResult } from "./context";
+import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContext, createModuleContextWithCache, addError, addFatalError, addWarning, hasErrors, hasFatalErrors, errorCount, createExtensionRegistry, registerExtension, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, buildExportInfo, isCancelled, sgRecordSym, sgSortRecords, isInAsyncPromiseResult } from "./context";
 import { IdentCache, createIdentCache } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
 import { collectTopLevel, defineOrError } from "./collectPass";
@@ -1057,6 +1057,18 @@ function collectOneDirective(ctx: CheckerContext, mi: Node): void {
 	} else if (name === "passL") {
 		// No dedup (reference-aligned: addLinkOption is simple append).
 		ctx.linkFlags = concatFlag(ctx.linkFlags, sd.value);
+	} else if (name === "import") {
+		// @import("module", { name1, name2 }) — JS external module registry.
+		// First arg is module path (string), second is ObjectLiteral with keys = import names.
+		const names: string[] = [];
+		if (md.macroArgs.length >= 2 && md.macroArgs[1].kind === NodeKind.ObjectLiteral) {
+			const od = md.macroArgs[1].data as ObjectLiteralData;
+			for (const k of od.keys) {
+				names.push(k);
+			}
+		}
+		const entry: JsImportEntry = { modulePath: sd.value, names };
+		ctx.jsImportRegistry.push(entry);
 	}
 }
 
@@ -1088,6 +1100,28 @@ export function stampHeaderPaths(ctx: CheckerContext): void {
 	for (const sym of scope.symbols) {
 		if (hasFlag(sym, SymbolFlag.ImportC) && sym.headerPath === "") {
 			sym.headerPath = ctx.includeDirectives;
+		}
+	}
+}
+
+// Stamp @import JS module paths on ImportC symbols whose name matches a registry entry.
+// Called after collectDirectives so ctx.jsImportRegistry is populated.
+export function stampJsModulePaths(ctx: CheckerContext): void {
+	if (ctx.jsImportRegistry.length === 0) return;
+	const scope = ctx.table.current;
+	for (const sym of scope.symbols) {
+		if (hasFlag(sym, SymbolFlag.ImportC) && sym.jsModulePath === "") {
+			// Look up the extern's nativeName (or declared name) in the registry
+			const lookupName = sym.nativeName !== "" ? sym.nativeName : sym.name;
+			for (const entry of ctx.jsImportRegistry) {
+				for (const n of entry.names) {
+					if (n === lookupName) {
+						sym.jsModulePath = entry.modulePath;
+						break;
+					}
+				}
+				if (sym.jsModulePath !== "") break;
+			}
 		}
 	}
 }
@@ -1132,6 +1166,7 @@ function loadPreludeOne(ctx: CheckerContext, specifier: string, stdPath: string)
 			ctx.modulePath = savedPath;
 			collectDirectives(ctx, pr.value);
 			stampHeaderPaths(ctx);
+			stampJsModulePaths(ctx);
 			const scope = ctx.table.current;
 			for (const sym of scope.symbols) {
 				ensureShaped(sym, ctx);
@@ -1330,6 +1365,7 @@ function checkProgramCore(
 	runThreePasses(ctx, program);
 	collectDirectives(ctx, program);
 	stampHeaderPaths(ctx);
+	stampJsModulePaths(ctx);
 	inferOwnership(ctx, program);
 	analyzeParamMutations(ctx, program);
 	sgSortRecords(ctx.symRecords);

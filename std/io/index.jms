@@ -1,0 +1,29 @@
+// std/io — Standard Streams (Node.js Backend)
+// Mirrors the C backend API (std/io/index.cms) using Node.js built-ins.
+
+@import("node:process", { stdout, stderr });
+
+extern const stdout: { write: (s: string) => void };
+extern const stderr: { write: (s: string) => void };
+
+export function writeStdout(s: string): void {
+	stdout.write(s);
+}
+
+export function writeStderr(s: string): void {
+	stderr.write(s);
+}
+
+export function readLine(): string {
+	return "";
+}
+
+export function readBytes(n: number): string {
+	return "";
+}
+
+export function stdinDisableBuffering(): void {}
+
+export function stdinHasData(): boolean {
+	return false;
+}

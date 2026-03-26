@@ -644,6 +644,27 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 	// NewExpr — constructor call or inline allocation
 	if (kind === NodeKind.NewExpr) {
 		const d = node.data as NewExprData;
+		// Constructor check (reference parity: sfConstructor flag on symbol).
+		// If the class has HasConstructor flag, call ClassName_new(args).
+		// Works cross-module via ExportedSymInfo propagation.
+		if (d.newCallee.resolvedSym !== null && hasFlag(d.newCallee.resolvedSym, SymbolFlag.HasConstructor)) {
+			const newType = node.nodeType;
+			// Unwrap Ref → inner struct to get the monomorphized C type name
+			const inner = (newType !== null && newType.kind === TypeKind.Ref && newType.typeReturn !== null)
+				? newType.typeReturn : newType;
+			const cName = inner !== null ? getTypeDesc(g, inner) : genExpr(g, p, d.newCallee);
+			ensureTypeInfoDef(g, cName);
+			const ctorName = cName + "_new";
+			let argList = "";
+			let ai = 0;
+			while (ai < d.newArguments.length) {
+				if (ai > 0) argList = argList + ", ";
+				argList = argList + genExpr(g, p, d.newArguments[ai]);
+				ai += 1;
+			}
+			ctx.results.push(d.newArguments.length === 0 ? `${ctorName}()` : `${ctorName}(${argList})`);
+			return;
+		}
 		// Value-type new: struct/GenericInstance types → zero-initialized struct
 		if (node.nodeType !== null && (node.nodeType.kind === TypeKind.Struct || node.nodeType.kind === TypeKind.GenericInstance) && d.newArguments.length === 0) {
 			const cType = getTypeDesc(g, node.nodeType);
@@ -709,23 +730,7 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 		// Ensure cross-module typeInfo is declared
 		ensureTypeInfo(g, calleeName);
 		ensureForwardDecl(g, calleeName);
-		// If class has a constructor, call ClassName_new(args)
-		if (nameSetHas(g.classesWithCtors, calleeName)) {
-			const ctorName = calleeName + "_new";
-			if (d.newArguments.length === 0) {
-				ctx.results.push(`${ctorName}()`);
-			} else {
-				let argList = "";
-				let ai = 0;
-				while (ai < d.newArguments.length) {
-					if (ai > 0) argList = argList + ", ";
-					argList = argList + genExpr(g, p, d.newArguments[ai]);
-					ai += 1;
-				}
-				ctx.results.push(`${ctorName}(${argList})`);
-			}
-			return;
-		}
+		// Constructor check already handled at top of NewExpr handler
 		if (d.newArguments.length === 0) {
 			// No-arg new without constructor: allocate with zero-init
 			ctx.results.push(`(${calleeName}*)msAllocTyped(sizeof(${calleeName}), &${calleeName}_typeInfo)`);
@@ -1667,8 +1672,12 @@ function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Node[], sym
 	// Resolve callee function type for out-param ABI shim
 	// Extern functions define their own C signatures, so only apply shim for
 	// explicit out params (Var<T>), not general ccg-introduced types.
-	const fnType = sym !== null && sym.symbolType !== null && sym.symbolType.kind === TypeKind.Function ? sym.symbolType : null;
-	const paramTypes = fnType !== null ? fnType.typeChildren : null;
+	let fnType: Type = null as unknown as Type;
+	if (sym !== null && sym.symbolType !== null && sym.symbolType.kind === TypeKind.Function) {
+		fnType = sym.symbolType;
+	}
+	let paramTypes: Type[] = null as unknown as Type[];
+	if (fnType !== null) paramTypes = fnType.typeChildren;
 
 	// Build call with & on first arg if mutating
 	if (needsAddr && args.length > 0) {

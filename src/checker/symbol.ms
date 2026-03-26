@@ -32,6 +32,7 @@ export enum SymbolFlag {
 	NoReturn = 8192,    // function never returns (exit, abort, infinite loop)
 	Async = 16384,      // async function (return type is Promise<T>)
 	ParamMutated = 32768,  // parameter is mutated inside function body (blocks const-ptr promotion)
+	HasConstructor = 65536, // class has a ConstructorDecl → codegen calls ClassName_new()
 }
 
 // Flag helpers

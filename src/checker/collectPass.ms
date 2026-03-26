@@ -227,6 +227,12 @@ function collectClass(ctx: CheckerContext, node: Node): void {
 	classType.sym = sym;
 	innerType.sym = sym;
 	defineOrError(ctx, sym, node);
+	// Check for constructor → set HasConstructor flag for codegen
+	for (const member of d.classBody) {
+		if (member.kind === NodeKind.ConstructorDecl) {
+			setFlag(sym, SymbolFlag.HasConstructor);
+		}
+	}
 	// Collect static properties into sym.staticFields
 	for (const member of d.classBody) {
 		if (member.kind === NodeKind.PropertyDecl) {
@@ -465,6 +471,7 @@ function importSymFromRegistry(
 	if (origName !== alias) sym.originalName = origName;
 	if (exportInfo.nativeName !== "") sym.nativeName = exportInfo.nativeName;
 	if (exportInfo.headerPath !== "") sym.headerPath = exportInfo.headerPath;
+	if (exportInfo.hasConstructor) setFlag(sym, SymbolFlag.HasConstructor);
 	if (exportInfo.location !== null && exportInfo.location.line > 0) {
 		sym.location = exportInfo.location;
 	}

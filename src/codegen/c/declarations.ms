@@ -5,6 +5,7 @@
 
 import { Node, NodeKind, NodeFlag, DeclKind, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, ImportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, TypeAliasDeclData, ProgramData, BlockStmtData, PropertyDeclData, MethodDeclData, ConstructorDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../../ast/node";
 import { hasGenericParams } from "../../checker/types";
+import { getGenericDecl } from "../../parser/context";
 import {
 	CGen, CProc, CSection, Builder,
 	createProc, createBuilder, add, addLine, addNewline,
@@ -323,77 +324,75 @@ function genClassDecl(g: CGen, node: Node): void {
 
 	const name = mangle(d.className);
 
-	// Skip if already declared (check both declaration set and type cache)
+	// Check if struct type already declared (by genObjectType for generic instances)
 	const classKey = "object:" + d.className;
-	if (nameSetHas(g.declaredThings, name) || typeCacheHas(g.typeCache, classKey)) return;
-	nameSetAdd(g.declaredThings, name);
+	const typeAlreadyDeclared = nameSetHas(g.declaredThings, name) || typeCacheHas(g.typeCache, classKey);
+	if (!typeAlreadyDeclared) {
+		nameSetAdd(g.declaredThings, name);
+	}
 
-	// Register in type cache to prevent genObjectType from re-emitting
-	// Value type only — Ref<Struct> wrapper adds the * via TypeKind.Ref path
-	typeCacheSet(g.typeCache, classKey, name);
+	// Emit struct type definition (skip if already declared by genObjectType for generic instances)
+	if (!typeAlreadyDeclared) {
+		// Register in type cache to prevent genObjectType from re-emitting
+		typeCacheSet(g.typeCache, classKey, name);
 
-	// Forward declaration
-	addLine(sec(g, CSection.ForwardDecls), `typedef struct ${name} ${name};`);
+		// Forward declaration
+		addLine(sec(g, CSection.ForwardDecls), `typedef struct ${name} ${name};`);
 
-	// Reference parity (standard struct generation): pre-resolve ALL field types in a local buffer,
-	// then emit the complete struct atomically. This prevents recursive getTypeDesc
-	// calls from interleaving other type definitions inside this struct body.
-	const fieldTypes: string[] = [];
-	const fieldNames: string[] = [];
-	for (const member of d.classBody) {
-		if (member.kind === NodeKind.PropertyDecl) {
-			const pd = member.data as PropertyDeclData;
-			if (pd.propIsStatic) {
-				// Static property → module-level global, not a struct member
-				const cType = member.nodeType !== null ? getTypeDesc(g, member.nodeType) : "double";
-				const globalName = staticFieldCName(d.className + "." + pd.propName);
-				addLine(sec(g, CSection.GlobalVars), `${cType} ${globalName};`);
-				// Emit initializer in DatInit for literal values
-				if (pd.propInitializer !== null) {
-					match (pd.propInitializer.kind) {
-						NodeKind.NumberLiteral => {
-							const nv = (pd.propInitializer.data as NumberLiteralData).value;
-							addLine(sec(g, CSection.DatInit), `${globalName} = ${formatCNumber(nv)};`);
-						},
-						NodeKind.StringLiteral => {
-							const sv = (pd.propInitializer.data as StringLiteralData).value;
-							addLine(sec(g, CSection.DatInit), `${globalName} = msStringFromCStr(${cStringLiteral(sv)});`);
-						},
-						NodeKind.BooleanLiteral => {
-							const bv = (pd.propInitializer.data as BooleanLiteralData).boolValue;
-							addLine(sec(g, CSection.DatInit), `${globalName} = ${cBoolLiteral(bv)};`);
-						},
-						_ => {
-							const initSnippet = genExpr(g, g.initProc, pd.propInitializer);
-							emitStmtsLine(g.initProc, `${globalName} = ${initSnippet};`);
-						},
-					};
+		// Pre-resolve ALL field types, then emit struct atomically
+		const fieldTypes: string[] = [];
+		const fieldNames: string[] = [];
+		for (const member of d.classBody) {
+			if (member.kind === NodeKind.PropertyDecl) {
+				const pd = member.data as PropertyDeclData;
+				if (pd.propIsStatic) {
+					const cType = member.nodeType !== null ? getTypeDesc(g, member.nodeType) : "double";
+					const globalName = staticFieldCName(d.className + "." + pd.propName);
+					addLine(sec(g, CSection.GlobalVars), `${cType} ${globalName};`);
+					if (pd.propInitializer !== null) {
+						match (pd.propInitializer.kind) {
+							NodeKind.NumberLiteral => {
+								const nv = (pd.propInitializer.data as NumberLiteralData).value;
+								addLine(sec(g, CSection.DatInit), `${globalName} = ${formatCNumber(nv)};`);
+							},
+							NodeKind.StringLiteral => {
+								const sv = (pd.propInitializer.data as StringLiteralData).value;
+								addLine(sec(g, CSection.DatInit), `${globalName} = msStringFromCStr(${cStringLiteral(sv)});`);
+							},
+							NodeKind.BooleanLiteral => {
+								const bv = (pd.propInitializer.data as BooleanLiteralData).boolValue;
+								addLine(sec(g, CSection.DatInit), `${globalName} = ${cBoolLiteral(bv)};`);
+							},
+							_ => {
+								const initSnippet = genExpr(g, g.initProc, pd.propInitializer);
+								emitStmtsLine(g.initProc, `${globalName} = ${initSnippet};`);
+							},
+						};
+					}
+					continue;
 				}
-				continue;
+				fieldTypes.push(getTypeDesc(g, member.nodeType));
+				fieldNames.push(mangleFieldName(pd.propName));
 			}
-			fieldTypes.push(getTypeDesc(g, member.nodeType));
-			fieldNames.push(mangleFieldName(pd.propName));
 		}
+
+		let structDef = `struct ${name} {\n`;
+		for (let i = 0; i < fieldTypes.length; i += 1) {
+			structDef = structDef + `  ${fieldTypes[i]} ${fieldNames[i]};\n`;
+		}
+		structDef = structDef + "};\n";
+		const types = sec(g, CSection.Types);
+		add(types, structDef);
+		addNewline(types);
 	}
 
-	// Struct — no refcount field; msRefHeader (16 bytes) is prepended by msAllocTyped
-	let structDef = `struct ${name} {\n`;
-	for (let i = 0; i < fieldTypes.length; i += 1) {
-		structDef = structDef + `  ${fieldTypes[i]} ${fieldNames[i]};\n`;
-	}
-	structDef = structDef + "};\n";
-	const types = sec(g, CSection.Types);
-	add(types, structDef);
-	addNewline(types);
-
-	// msTypeInfo is generated by destructorLifting (transform phase) as a _typeInfo VariableDecl.
-	// genTypeInfoVar handles it via genGlobalVar → DatInit patching.
-
-	// Emit methods as free functions with first param being the class pointer
+	// Emit methods + constructor (always, even if struct was already declared).
+	// Skip constructors for generic classes — only monomorphized instances get constructors.
+	const isGenericClass = d.classExtends === "" && getGenericDecl(d.className) !== "";
 	for (const member of d.classBody) {
 		if (member.kind === NodeKind.MethodDecl) {
 			genMethodAsFunction(g, member, name);
-		} else if (member.kind === NodeKind.ConstructorDecl) {
+		} else if (member.kind === NodeKind.ConstructorDecl && !isGenericClass) {
 			nameSetAdd(g.classesWithCtors, name);
 			genConstructor(g, member, name);
 		}
@@ -455,6 +454,11 @@ function genConstructor(g: CGen, node: Node, className: string): void {
 
 	const proto = `${className}* ${ctorName}(${paramList})`;
 	addLine(sec(g, CSection.ProcHeaders), proto + ";");
+
+	// Multi-module dedup: each constructor emitted once (same as generic function instances).
+	// Second module gets forward declaration only.
+	if (isInstanceEmitted(ctorName)) return;
+	markInstanceEmitted(ctorName);
 
 	const procs = sec(g, CSection.Procs);
 	addLine(procs, proto + " {");

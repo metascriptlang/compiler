@@ -1,8 +1,5 @@
 // Raiser VM — Bytecode executor
-// Computed goto dispatch via dispatch.c, if/else fallback for Print.
-
-@include("vm_dispatch.h");
-import { raiser_dispatch_impl } from "./vm_dispatch.h";
+// If/else dispatch loop. C backend has optional computed-goto fast path (vm_dispatch.c).
 
 import { readFile as hostReadFile, writeFile as hostWriteFile } from "std/process";
 import {

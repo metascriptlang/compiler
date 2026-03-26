@@ -1,0 +1,43 @@
+// MetaScript Array Prelude — JavaScript Backend
+// All array methods are native JS — these declarations provide type info to the checker.
+
+export class Array<T> {
+	length: number;
+}
+
+// Number arrays
+export extern function push(this arr: number[], value: number): void;
+export extern function pop(this arr: number[]): number;
+export extern function shift(this arr: number[]): number;
+export extern function at(this arr: number[], idx: number): number;
+export extern function indexOf(this arr: number[], value: number): number;
+export extern function includes(this arr: number[], value: number): boolean;
+export extern function slice(this arr: number[], start: number, end: number): number[];
+export extern function concat(this arr: number[], other: number[]): number[];
+export extern function reverse(this arr: number[]): void;
+export extern function sort(this arr: number[]): void;
+export extern function fill(this arr: number[], value: number): void;
+export extern function join(this arr: number[], sep: string): string;
+export extern function splice(this arr: number[], start: number, deleteCount: number): void;
+
+// String arrays
+export extern function push(this arr: string[], value: string): void;
+export extern function pop(this arr: string[]): string;
+export extern function shift(this arr: string[]): string;
+export extern function at(this arr: string[], idx: number): string;
+export extern function indexOf(this arr: string[], value: string): number;
+export extern function includes(this arr: string[], value: string): boolean;
+export extern function slice(this arr: string[], start: number, end: number): string[];
+export extern function concat(this arr: string[], other: string[]): string[];
+export extern function reverse(this arr: string[]): void;
+export extern function sort(this arr: string[]): void;
+export extern function fill(this arr: string[], value: string): void;
+export extern function join(this arr: string[], sep: string): string;
+export extern function splice(this arr: string[], start: number, deleteCount: number): void;
+
+// Boolean arrays
+export extern function push(this arr: boolean[], value: boolean): void;
+export extern function pop(this arr: boolean[]): boolean;
+export extern function indexOf(this arr: boolean[], value: boolean): number;
+export extern function includes(this arr: boolean[], value: boolean): boolean;
+export extern function join(this arr: boolean[], sep: string): string;

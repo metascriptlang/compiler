@@ -17,6 +17,9 @@
 #include <stdint.h>
 #include "std/core/system/native.h"
 
+// Add an include directory for header resolution (call before msAroParse).
+void msAroAddIncludeDir(msString dir);
+
 // Parse a C header file. Returns 0 on success, 1 on error.
 // Stores results internally (global state, single-threaded).
 int32_t msAroParse(msString path);

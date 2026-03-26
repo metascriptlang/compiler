@@ -12,6 +12,14 @@ import { InitTracker, createInitTracker } from "./initTracker";
 // Lives only during checkModuleGraph execution — NOT on Module/ModuleGraph (DRC constraint).
 // Reference implementation equivalent: per-module public symbol table.
 
+// ===== JS Import Registry (for @import directive) =====
+// Parallels @include for C: tells JS codegen which npm/node modules to import from.
+
+export interface JsImportEntry {
+	modulePath: string;    // e.g. "node:fs", "@solana/web3.js"
+	names: string[];       // e.g. ["readFileSync", "existsSync"]
+}
+
 export interface ExportedSymInfo {
 	name: string;
 	kind: SymbolKind;
@@ -31,6 +39,8 @@ export interface ExportedSymInfo {
 	definingModule: string;  // Original defining module path (preserved through re-exports)
 	originalName: string;    // Original declared name (used for C mangling, not import alias)
 	headerPath: string;      // @include header path for this extern symbol
+	jsModulePath: string;    // @import JS module path for this extern symbol
+	hasConstructor: boolean; // class has ConstructorDecl → codegen calls ClassName_new()
 	location: SourceLocation; // Original declaration location (line/col in defining module)
 	memberLocations: SourceLocation[]; // Per-enum-member declaration locations (parallel to symType.typeNames)
 }
@@ -160,6 +170,8 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 		definingModule: sym.modulePath !== "" ? sym.modulePath : modulePath,
 		originalName: sym.originalName,
 		headerPath: sym.headerPath,
+		jsModulePath: sym.jsModulePath,
+		hasConstructor: hasFlag(sym, SymbolFlag.HasConstructor),
 		location: sym.location !== null ? sym.location : makeLoc(0, 0),
 		memberLocations: memberLocs,
 	};
@@ -588,6 +600,7 @@ export class CheckerContext {
 	extensionRegistry: ExtensionRegistry;
 	inferredReturn: Type;  // tracks inferred return type during function body checking
 	includeDirectives: string; // accumulated @include args, newline-separated
+	jsImportRegistry: JsImportEntry[]; // accumulated @import entries for JS backend
 	compileDirectives: string; // accumulated @compile args, newline-separated
 	compilerFlags: string;     // accumulated @passC/-iquote args, space-separated (compile-time)
 	linkFlags: string;         // accumulated @link/@passL args, space-separated (link-time only)
@@ -623,6 +636,7 @@ export function createContext(): CheckerContext {
 		extensionRegistry: createExtensionRegistry(),
 		inferredReturn: unknownType(),
 		includeDirectives: "",
+		jsImportRegistry: [],
 		compileDirectives: "",
 		compilerFlags: "",
 		linkFlags: "",

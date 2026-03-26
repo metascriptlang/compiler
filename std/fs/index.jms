@@ -1,0 +1,46 @@
+// std/fs — File System (Node.js Backend)
+// Mirrors the C backend API (std/fs/index.cms) using Node.js built-ins.
+
+@import("node:fs", { readFileSync, writeFileSync, existsSync, statSync, mkdirSync, rmdirSync, unlinkSync, renameSync });
+
+extern function readFileSync(path: string, encoding: string): string;
+extern function writeFileSync(path: string, data: string): void;
+extern function existsSync(path: string): boolean;
+extern function mkdirSync(path: string): void;
+extern function rmdirSync(path: string): void;
+extern function unlinkSync(path: string): void;
+extern function renameSync(oldPath: string, newPath: string): void;
+
+// Path utilities (pure MetaScript — shared across backends)
+export { dirname, basename, extname, join, resolve, isAbsolute, normalize } from "./path";
+
+export function readFile(path: string): string {
+	return readFileSync(path, "utf-8");
+}
+
+export function writeFile(path: string, content: string): boolean {
+	writeFileSync(path, content);
+	return true;
+}
+
+export function appendFile(path: string, content: string): boolean {
+	writeFileSync(path, content);
+	return true;
+}
+
+export function exists(path: string): boolean { return existsSync(path); }
+export function mkdir(path: string): boolean { mkdirSync(path); return true; }
+export function rmdir(path: string): boolean { rmdirSync(path); return true; }
+export function remove(path: string): boolean { unlinkSync(path); return true; }
+export function rename(oldPath: string, newPath: string): boolean { renameSync(oldPath, newPath); return true; }
+
+export function readLines(path: string): string[] {
+	const content = readFileSync(path, "utf-8");
+	if (content.length === 0) return [];
+	return content.split("\n");
+}
+
+export function writeLines(path: string, lines: string[]): boolean {
+	writeFileSync(path, lines.join("\n"));
+	return true;
+}
