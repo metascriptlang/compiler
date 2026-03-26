@@ -1329,18 +1329,33 @@ function importNodeFrom(stmt: Node): Node {
 function importContextFromAST(importNode: Node, col: number): string {
 	const d = importNode.data as ImportDeclData;
 	// Side-effect import: `import "module"` — only path, no names.
-	// But `import { } from "mod"` has importSource set — cursor is in names region.
 	if (d.importNames.length === 0 && d.importSource === "") return "path";
-	// Named import: `import { A, B } from "module"`
-	// nameLocations gives us where names are. The path string comes after `from "`.
-	// Strategy: if cursor is past the last name by a large margin (enough for `} from "`),
-	// it's likely in the path string. The minimum gap: `} from "` = 8 chars.
-	if (d.nameLocations.length > 0) {
-		const lastIdx = d.nameLocations.length - 1;
-		const lastNameEnd = d.nameLocations[lastIdx].column + d.importNames[lastIdx].length;
-		// If cursor is more than 8 chars past last name end → in path region
-		// (covers `} from "` = 8 chars minimum)
-		if (col > lastNameEnd + 8) return "path";
+	// Use the importSource string length + nameLocations to determine context.
+	// The AST gives us: importNames, importAliases, importSource, nameLocations.
+	// Strategy: if importSource exists, compute where it starts in the line.
+	// The source string position = nodeCol + everything before it.
+	// Simpler: use nameLocations for "names" region, importSource for "path" region.
+	if (d.importSource !== "") {
+		// The path string occupies the last part of the import statement.
+		// Its 1-based end column = importNode endColumn (approximately).
+		// The names region is between the first nameLocation and closing `}`.
+		if (d.nameLocations.length > 0) {
+			const firstNameCol = d.nameLocations[0].column;
+			const lastIdx = d.nameLocations.length - 1;
+			const lastNameEnd = d.nameLocations[lastIdx].column + d.importNames[lastIdx].length;
+			// Cursor is in names region if between first name and `} from "` boundary
+			if (col >= firstNameCol - 1 && col <= lastNameEnd + 3) return "names";
+			// Past the names + `} from "` → path
+			if (col > lastNameEnd + 8) return "path";
+			return "names";
+		}
+		// No nameLocations (empty braces): cursor is in `{ }` or in `"path"`.
+		// `{` starts at importNode.column + 7 (after "import ").
+		// For empty/space-only braces, content is at most a few chars.
+		// Wider braces with actual names would have nameLocations.
+		const braceOpen = importNode.location.column + 7;
+		if (col >= braceOpen && col <= braceOpen + 4) return "names";
+		return "path";
 	}
 	return "names";
 }

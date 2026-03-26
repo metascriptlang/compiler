@@ -8,6 +8,7 @@ import { isStructType, getTypeSize, skipModifier, isPromise, getPromiseInner, is
 import { getGenericDecl } from "../../parser/context";
 import { Node, NodeKind, CallExprData, Type, TypeKind, CallingConvention, SymbolKind } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
+import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import { CGen, CSection, Builder, TypeCache, add, addLine, addNewline, extract, sec, createBuilder, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas } from "./context";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import { mangle, mangleTypeName, mangleFieldName, safeName } from "./names";
@@ -81,24 +82,7 @@ function anonStructuralKey(t: Type): string {
 }
 
 // DJB2 hash → base-36 string for short C identifiers
-export function hashToBase36(s: string): string {
-	let h = 5381;
-	let i = 0;
-	while (i < s.byteLength) {
-		h = (h * 33 + s.byteAt(i)) % 2147483647;
-		i += 1;
-	}
-	// Convert to base-36 alphanumeric string
-	const digits = "0123456789abcdefghijklmnopqrstuvwxyz";
-	let result = "";
-	if (h === 0) return "0";
-	while (h > 0) {
-		const rem = h % 36;
-		result = digits.charAt(rem) + result;
-		h = (h - rem) / 36;
-	}
-	return result;
-}
+export function hashToBase36(s: string): string { return _stdHashToBase36(s); }
 
 // Detects if a typeName is "anonymous-like" — empty, or a raw structural signature
 // like "{ programStmts : Node[] }" from discriminated union variants.

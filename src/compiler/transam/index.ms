@@ -38,7 +38,7 @@ import {
 	getRegisteredAt, setRegisteredAt, resetRegisteredAt
 } from "./moduleDeps";
 import { tryMarkGreen, executeQueryWith, invalidateFile } from "./redGreen";
-import { taHashNode } from "./hash";
+import { transAmHashNode } from "./hash";
 import {
 	createCancelContext,
 	getCancelVersion, checkCancel, requestCancel, resetCancel
@@ -242,7 +242,7 @@ export function dbParse(db: TransAmDb, filePath: string): Node {
 		program = parseResult.value;
 	}
 	nodeCacheStore(parseNodeKey(fileId), program);
-	const parseHash = taHashNode(program);
+	const parseHash = transAmHashNode(program);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, parseHash, true);
 	return program;
 }
@@ -590,7 +590,7 @@ export function dbAnalyze(db: TransAmDb, filePath: string): Node {
 	const transformed = transformProgram(program, checkerCtx, false);
 	const analyzed = analyzeProgram(transformed, checkerCtx);
 	nodeCacheStore(analyzeNodeKey(fileId), analyzed);
-	const analyzeHash = taHashNode(analyzed);
+	const analyzeHash = transAmHashNode(analyzed);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, analyzeHash, true);
 	return analyzed;
 }
@@ -622,7 +622,7 @@ export function dbTransform(db: TransAmDb, filePath: string): Node {
 
 	const transformed = transformProgram(program, checkerCtx, false);
 	nodeCacheStore(transformNodeKey(fileId), transformed);
-	const transformHash = taHashNode(transformed);
+	const transformHash = transAmHashNode(transformed);
 	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, transformHash, true);
 	return transformed;
 }

@@ -2,6 +2,8 @@
 // Fixed hash table (4096 buckets) + chaining. DJB2 hash.
 // Intern string → unique int32 ID for O(1) symbol name comparison.
 
+import { hashStringSigned } from "std/hash";
+
 // ===== Types =====
 
 export class IdentEntry {
@@ -31,23 +33,10 @@ export function createIdentCache(): IdentCache {
 	return { buckets, counter: 0 };
 }
 
-// ===== DJB2 Hash =====
-
-function djb2(name: string): int32 {
-	let h: int32 = 5381;
-	let i = 0;
-	const len = name.byteLength;
-	while (i < len) {
-		h = h * 33 + name.byteAt(i);
-		i = i + 1;
-	}
-	return h;
-}
-
 // ===== Core: Intern String → ID =====
 
 export function getIdentId(cache: IdentCache, name: string): int32 {
-	const h = djb2(name);
+	const h = hashStringSigned(name);
 	const idx = h & BUCKET_MASK;
 	let entry = cache.buckets[idx];
 	let last: IdentEntry = null as unknown as IdentEntry;

@@ -17,61 +17,13 @@ import { fileExists, writeFile, exec } from "std/process";
 import { readFile } from "std/fs";
 import { ensureDir } from "./io";
 import { getCompilerName, modeFlags } from "./cc";
+import { djb2, fingerprint, hashToHex } from "std/hash";
 
 // ===== Hash Functions =====
 
-// Byte-level hashing — uses byteLength/byteAt for correct handling of both
-// text files (source code) and binary files (compiled output).
-// int32 type ensures 32-bit overflow wrapping (enforced by Bun transpiler via | 0).
-function djb2(s: string): int32 {
-	let h: int32 = 5381;
-	let i = 0;
-	while (i < s.byteLength) {
-		h = h * 33 + s.byteAt(i);
-		i = i + 1;
-	}
-	return h;
-}
-
-function fnv1a(s: string): int32 {
-	let h: int32 = -2128831035;  // 0x811C9DC5 as int32
-	let i = 0;
-	while (i < s.byteLength) {
-		h = (h ^ s.byteAt(i)) * 16777619;
-		i = i + 1;
-	}
-	return h;
-}
-
-// Hex encode int32 as unsigned (0x00000000..0xFFFFFFFF). Preserves full 32-bit range.
-function hexHash(n: number): string {
-	let v = n;
-	if (v < 0) v = v + 4294967296;
-	if (v === 0) return "0";
-	let result = "";
-	while (v > 0) {
-		const digit = v % 16;
-		if (digit < 10) { result = digit.toString() + result; }
-		else {
-			let ch = "";
-			match (digit) {
-				10 => { ch = "a"; },
-				11 => { ch = "b"; },
-				12 => { ch = "c"; },
-				13 => { ch = "d"; },
-				14 => { ch = "e"; },
-				_ => { ch = "f"; },
-			};
-			result = ch + result;
-		}
-		v = (v - digit) / 16;
-	}
-	return result;
-}
-
-// Dual hash of string content → "hexDjb2_hexFnv1a" (stable, 64-bit effective).
+// Dual hash of string content → "hexHash_hexFingerprint" (stable, 64-bit effective).
 export function hashContent(s: string): string {
-	return `${hexHash(djb2(s))}_${hexHash(fnv1a(s))}`;
+	return `${hashToHex(djb2(s))}_${hashToHex(fingerprint(s))}`;
 }
 
 // Hash a file's content. Returns "hash:byteLength" string.

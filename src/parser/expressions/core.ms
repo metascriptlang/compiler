@@ -237,7 +237,8 @@ function parsePrimary(state: ParserState): ExprResult {
 
 	if (token.kind === TokenKind.Number) {
 		advance(state);
-		return Result.ok(createNode(NodeKind.NumberLiteral, { value: parseNumberLiteral(token.value) }, token));
+		const isFloat = token.value.indexOf(".") >= 0 || token.value.indexOf("e") >= 0 || token.value.indexOf("E") >= 0;
+		return Result.ok(createNode(NodeKind.NumberLiteral, { value: parseNumberLiteral(token.value), isFloat }, token));
 	}
 
 	if (token.kind === TokenKind.String) {

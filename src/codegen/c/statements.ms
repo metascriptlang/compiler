@@ -240,9 +240,14 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 	}
 
 	// Type resolution priority: nodeType (checker) > initializer.nodeType (DRC) > annotation fallback
+	// Unwrap Var<T> (out param copies) — local variable stores value, not pointer
 	let cType = "";
-	if (node.nodeType !== null) {
-		cType = getTypeDesc(g, node.nodeType);
+	let varType = node.nodeType;
+	if (varType !== null && varType.kind === TypeKind.Var && varType.typeReturn !== null) {
+		varType = varType.typeReturn;
+	}
+	if (varType !== null) {
+		cType = getTypeDesc(g, varType);
 	} else if (d.initializer !== null && d.initializer.nodeType !== null) {
 		cType = getTypeDesc(g, d.initializer.nodeType);
 	}

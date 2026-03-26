@@ -169,3 +169,10 @@ test "startsWith no match" { assert !"./foo".startsWith("std/"); }
 test "startsWith too short" { assert !"st".startsWith("std/"); }
 
 test "startsWith exact" { assert "abc".startsWith("abc"); }
+
+// ===== Hash (re-exported from std/hash) =====
+
+import { djb2, hashStringSigned } from "std/hash";
+
+export function djb2Hash(s: string): int64 { return djb2(s); }
+export function djb2HashSigned(s: string): int32 { return hashStringSigned(s); }

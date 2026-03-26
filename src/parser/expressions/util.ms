@@ -72,7 +72,8 @@ export function mockExpr(state: ParserState, minPrec: number): ExprResult {
 	const tok = current(state);
 	if (tok.kind === TokenKind.Number) {
 		advance(state);
-		return Result.ok(createNode(NodeKind.NumberLiteral, { value: parseNumberLiteral(tok.value) }, tok));
+		const isFloat = tok.value.indexOf(".") >= 0 || tok.value.indexOf("e") >= 0 || tok.value.indexOf("E") >= 0;
+		return Result.ok(createNode(NodeKind.NumberLiteral, { value: parseNumberLiteral(tok.value), isFloat }, tok));
 	}
 	if (isIdentLike(tok)) {
 		advance(state);

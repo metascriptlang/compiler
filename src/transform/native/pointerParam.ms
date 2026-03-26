@@ -10,7 +10,7 @@
 // Reference: standard optimized C codegen patterns for struct parameters
 
 import { Node, NodeKind, FunctionDeclData, CallExprData, IdentifierData, BlockStmtData, IfStmtData, WhileStmtData, ReturnStmtData, ExprStmtData, BinaryExprData, VariableDeclData, ForOfStmtData, ForStmtData, DoWhileStmtData, TryCatchStmtData, MemberExprData, ArrayAccessData, UnaryExprData, ConditionalExprData, ObjectLiteralData, UpdateExprData, SpreadExprData, ArrayLiteralData, MoveExprData, HiddenDerefData, HiddenStdConvData, SourceLocation, makeLoc, Type, TypeKind } from "../../ast/node";
-import { createPtr, isStructType, getTypeSize, isResult } from "../../checker/types";
+import { createPtr, isStructType, getTypeSize, isResult, skipModifier, isPromise } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeHiddenAddr, makeHiddenDeref } from "../util";
@@ -36,14 +36,16 @@ const TF_CCG_INTRODUCED: number = 32;
 
 export function ccgIntroducedPtr(t: Type): boolean {
 	if (t === null) return false;
-	// Reference: object types
-	if (isStructType(t)) return getTypeSize(t) > PTR_THRESHOLD;
-	// Reference: tuple types — same size threshold
-	if (t.kind === TypeKind.Tuple) return getTypeSize(t) > PTR_THRESHOLD;
-	// Result/Union/Span — always by pointer (compound types, no reference equivalent for size check)
-	if (isResult(t)) return true;
-	if (t.kind === TypeKind.Union) return true;
-	if (t.kind === TypeKind.Span) return true;
+	if (t.kind === TypeKind.Var) return true;  // out params always by pointer
+	const inner = skipModifier(t);
+	if (inner === null) return false;
+	if (isStructType(inner)) return getTypeSize(inner) > PTR_THRESHOLD;
+	if (inner.kind === TypeKind.Tuple) return getTypeSize(inner) > PTR_THRESHOLD;
+	if (isResult(inner)) return true;
+	if (inner.kind === TypeKind.Array) return true;  // arrays always by pointer
+	if (inner.kind === TypeKind.Union) return true;
+	if (inner.kind === TypeKind.Span) return true;
+	if (inner.kind === TypeKind.GenericInstance) return !isPromise(inner);
 	return false;
 }
 
@@ -53,6 +55,7 @@ export function markPointerParams(program: Node, ctx: TransformContext): Node {
 	// Pass 1: Rewrite function declarations — modify param types + insert HiddenDeref in body
 	walkNode(program, (node: Node): Node => {
 		if (node.kind === NodeKind.FunctionDecl) transformFunction(node);
+		if (node.kind === NodeKind.ExternDecl) transformExternDecl(node);
 		return node;
 	});
 	// Pass 2: Rewrite call sites — insert HiddenAddr for pointer param args
@@ -69,9 +72,8 @@ function transformFunction(node: Node): void {
 	const d = node.data as FunctionDeclData;
 	const fnType = node.nodeType;
 	if (fnType === null || fnType.typeChildren === null) return;
-	if (d.fnBody === null) return;
 
-	// Collect pointer param names
+	// Collect pointer param names + wrap types
 	const ptrParams: string[] = [];
 	let i = 0;
 	while (i < d.params.length) {
@@ -105,8 +107,38 @@ function transformFunction(node: Node): void {
 			}
 		}
 	}
-	// NOTE: No body rewriting here — codegen handles pointer introduction params
-	// via indirect location (reference parity: automatic dereference of indirect locs)
+}
+
+// ===== ExternDecl: update symbol types for out/ccg params =====
+// ExternDecl has no body but its symbol's function type needs Ptr wrapping
+// so that Pass 2 can add HiddenAddr at call sites.
+function transformExternDecl(node: Node): void {
+	if (node.resolvedSym === null || node.resolvedSym.symbolType === null) return;
+	const symType = node.resolvedSym.symbolType;
+	if (symType.kind !== TypeKind.Function || symType.typeChildren === null) return;
+	let changed = false;
+	let i = 0;
+	while (i < symType.typeChildren.length) {
+		if (ccgIntroducedPtr(symType.typeChildren[i])) {
+			const introduced = createPtr(symType.typeChildren[i]);
+			introduced.typeFlags = introduced.typeFlags | TF_CCG_INTRODUCED;
+			symType.typeChildren[i] = introduced;
+			changed = true;
+		}
+		i += 1;
+	}
+	// Also update nodeType if present
+	if (changed && node.nodeType !== null && node.nodeType.kind === TypeKind.Function && node.nodeType.typeChildren !== null) {
+		i = 0;
+		while (i < node.nodeType.typeChildren.length) {
+			if (ccgIntroducedPtr(node.nodeType.typeChildren[i])) {
+				const introduced = createPtr(node.nodeType.typeChildren[i]);
+				introduced.typeFlags = introduced.typeFlags | TF_CCG_INTRODUCED;
+				node.nodeType.typeChildren[i] = introduced;
+			}
+			i += 1;
+		}
+	}
 }
 
 // Walk the function body and wrap Identifier nodes that match pointer params

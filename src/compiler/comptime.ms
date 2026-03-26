@@ -55,7 +55,7 @@ function synthToken(loc: SourceLocation): Token {
 }
 
 function mkNumber(val: number, loc: SourceLocation): Node {
-	return createNode(NodeKind.NumberLiteral, { value: val }, synthToken(loc));
+	return createNode(NodeKind.NumberLiteral, { value: val, isFloat: val % 1 !== 0 }, synthToken(loc));
 }
 
 function mkString(val: string, loc: SourceLocation): Node {
@@ -754,7 +754,7 @@ test "int value" {
 	const ctx = evalASTFull(createNode(NodeKind.Program, {
 		programStmts: [
 			createNode(NodeKind.ReturnStmt, {
-				argument: createNode(NodeKind.NumberLiteral, { value: 42 }, createToken(TokenKind.Number, "42", 1)),
+				argument: createNode(NodeKind.NumberLiteral, { value: 42, isFloat: false }, createToken(TokenKind.Number, "42", 1)),
 			}, createToken(TokenKind.Return, "return", 1)),
 		],
 	}, createToken(TokenKind.Ident, "", 1)));

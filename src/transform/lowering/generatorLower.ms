@@ -29,7 +29,7 @@ import {
 } from "../../ast/node";
 import { TransformContext, NameSet, createNameSet, nameSetContains } from "../context";
 import {
-	makeIdent, makeTypedIdent, makeNull, makeNumber, makeBool,
+	makeIdent, makeTypedIdent, makeNull, makeDefaultValue, makeNumber, makeBool,
 	makeBlock, makeVarDecl, makeExprStmt, makeReturn,
 	makeIf, makeWhile, makeBinary, makeAssign,
 	makeObjectLiteral, syntheticToken, extractBodyStmts,

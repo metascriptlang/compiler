@@ -323,7 +323,7 @@ export type Expression = Node;
 // Named aliases for as-casts. Single source of truth for each NodeKind's data shape.
 
 // Literals
-export type NumberLiteralData = { value: number };
+export type NumberLiteralData = { value: number, isFloat: boolean };
 export type StringLiteralData = { value: string };
 export type BooleanLiteralData = { boolValue: boolean };
 export type RegexLiteralData = { regexPattern: string };

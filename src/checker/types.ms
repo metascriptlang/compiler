@@ -2,6 +2,7 @@
 // Type class + enums are defined in ast/node.ms (reference parity: single-file AST).
 
 import { bareAfterDelim, splitTopLevel } from "../utils/string";
+import { hashToBase36 as _stdHashToBase36 } from "std/hash";
 import {
 	Type, TypeKind, TypeFlag, CallingConvention, AttachedOp,
 	Symbol,
@@ -621,14 +622,7 @@ export function tupleTypeName(t: Type): string {
 		}
 		i += 1;
 	}
-	// DJB2 hash → base36 (matches hashToBase36 in codegen)
-	let hash: int32 = 5381;
-	let j = 0;
-	while (j < key.byteLength) {
-		hash = ((hash * 33) + (key.byteAt(j) as int32)) & 0x7FFFFFFF;
-		j += 1;
-	}
-	return "msTuple_" + (hash as number).toString(36);
+	return "msTuple_" + _stdHashToBase36(key);
 }
 
 // typeKey for tuples — matches codegen/c/types.ms:typeKey

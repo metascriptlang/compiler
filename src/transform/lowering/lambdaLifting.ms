@@ -337,6 +337,40 @@ function computeLastUseCapturesForState(captures: NameSet, state: LiftState): vo
 // ===== Detection Pre-Pass (reference parity: DetectionPass) =====
 // Scans a function body to find ALL captures across ALL closures BEFORE lifting.
 // Reference parity: DetectionPass + ownerToType creates one shared env type per function.
+// Pre-register VarDecl types from a function body so setupSharedEnv can resolve env field types.
+// Without this, captured vars from async transforms lack nodeType → env fields become void*.
+function preRegisterVarTypes(body: Node, state: LiftState): void {
+	if (body === null) return;
+	if (body.kind === NodeKind.VariableDecl) {
+		const d = body.data as VariableDeclData;
+		if (d.declType !== "") {
+			registerVarType(state, d.declName, d.declType);
+		} else if (body.nodeType !== null) {
+			const derived = typeToEnvStr(body.nodeType);
+			if (derived !== "") {
+				registerVarTypeResolved(state, d.declName, derived, body.nodeType);
+			}
+		}
+		return;
+	}
+	if (body.kind === NodeKind.FunctionDecl || body.kind === NodeKind.ArrowFunction || body.kind === NodeKind.FunctionExpr) return;
+	if (body.kind === NodeKind.BlockStmt) {
+		const d = body.data as BlockStmtData;
+		for (const s of d.statements) preRegisterVarTypes(s, state);
+		return;
+	}
+	if (body.kind === NodeKind.IfStmt) {
+		const d = body.data as IfStmtData;
+		preRegisterVarTypes(d.consequent, state);
+		preRegisterVarTypes(d.alternate, state);
+		return;
+	}
+	if (body.kind === NodeKind.WhileStmt) {
+		preRegisterVarTypes((body.data as WhileStmtData).whileBody, state);
+		return;
+	}
+}
+
 // Module-level state (no closure captures — binary-safe).
 
 let _detectAllNames: NameSet = createNameSet();
@@ -1082,6 +1116,12 @@ function walkLift(node: Node, state: LiftState): void {
 			// Detection pre-pass: find ALL captures across ALL closures in this function
 			// Reference parity: DetectionPass runs before LiftingPass
 			const allCaptures = detectAllCaptures(d.fnBody, state.ss);
+
+			// Pre-register VarDecl types from the function body so setupSharedEnv
+			// can resolve env field types for vars not yet walked (async transforms, etc.)
+			if (allCaptures.items.length > 0) {
+				preRegisterVarTypes(d.fnBody, state);
+			}
 
 			// Inline walkLiftBody: save/clear hoisted FIRST, then setup shared env
 			// so the shared env hoisted decl lands in the function body, not outer scope

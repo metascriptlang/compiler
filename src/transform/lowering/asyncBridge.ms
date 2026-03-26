@@ -23,7 +23,7 @@ import { Node, NodeKind, NodeFlag, DeclKind, createNode, SourceLocation, Program
 import { TransformContext } from "../context";
 import {
 	makeIdent, makeTypedIdent, makeVarDecl, makeExprStmt, makeReturn,
-	makeCall, makeBlock, makeNull, makeIf, makeWhile, makeBool, makeNumber, makeString,
+	makeCall, makeBlock, makeNull, makeDefaultValue, makeIf, makeWhile, makeBool, makeNumber, makeString,
 	makeAssign, makeBinary, makeTryCatch, makeContinue,
 	syntheticToken, extractBodyStmts, collectDeclNames,
 } from "../util";
@@ -497,8 +497,9 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type): Node {
 	// Hoisted locals: let a; let b; let $yf0; let $yf1; ...
 	// Set nodeType from original declarations so lambda lifting creates typed env fields.
 	for (const localName of nc.items) {
-		const localDecl = makeVarDecl(localName, makeNull(loc), DeclKind.Let, loc);
 		const origType = findVarType(varTypes, localName);
+		const defaultInit = (origType !== null) ? makeDefaultValue(origType, loc) : makeNull(loc);
+		const localDecl = makeVarDecl(localName, defaultInit, DeclKind.Let, loc);
 		if (origType !== null) {
 			localDecl.nodeType = origType;
 		}

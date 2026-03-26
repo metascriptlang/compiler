@@ -197,5 +197,5 @@ import { createToken, TokenKind } from "../../lexer/token";
 
 function makeNumberLit(val: number, loc: SourceLocation): Node {
 	const tok = createToken(TokenKind.Number, val.toString(), loc.line);
-	return createNode(NodeKind.NumberLiteral, { value: val }, tok);
+	return createNode(NodeKind.NumberLiteral, { value: val, isFloat: val % 1 !== 0 }, tok);
 }

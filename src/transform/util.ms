@@ -47,9 +47,36 @@ export function makeNull(loc: SourceLocation): Node {
 }
 
 export function makeNumber(val: number, loc: SourceLocation): Node {
-	const n = createNode(NodeKind.NumberLiteral, { value: val }, syntheticToken(loc));
-	if (val % 1 === 0) { n.nodeType = int32Type(); } else { n.nodeType = float64Type(); }
+	const isFloat = val % 1 !== 0;
+	const n = createNode(NodeKind.NumberLiteral, { value: val, isFloat }, syntheticToken(loc));
+	if (!isFloat) { n.nodeType = int32Type(); } else { n.nodeType = float64Type(); }
 	return n;
+}
+
+// Reference parity (resetLoc): produce type-appropriate default/zero value.
+// Primitives → 0, booleans → false, refs/closures → null, strings → "".
+// Used by async/generator transforms to initialize state vars correctly.
+export function makeDefaultValue(t: Type, loc: SourceLocation): Node {
+	if (t === null) return makeNull(loc);
+	const k = t.kind;
+	// Numeric types → 0
+	if (k === TypeKind.Number || k === TypeKind.Float64 || k === TypeKind.Float32
+		|| k === TypeKind.Int8 || k === TypeKind.Int16 || k === TypeKind.Int32 || k === TypeKind.Int64
+		|| k === TypeKind.Uint8 || k === TypeKind.Uint16 || k === TypeKind.Uint32 || k === TypeKind.Uint64) {
+		const n = makeNumber(0, loc);
+		n.nodeType = t;
+		return n;
+	}
+	// Boolean → false
+	if (k === TypeKind.Boolean) {
+		return makeBool(false, loc);
+	}
+	// String → ""
+	if (k === TypeKind.String) {
+		return makeString("", loc);
+	}
+	// Everything else (refs, closures, interfaces) → null
+	return makeNull(loc);
 }
 
 export function makeString(val: string, loc: SourceLocation): Node {

@@ -1094,12 +1094,53 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 
 	const prefix = sgGetPrefix(source, pos.line, pos.col);
 
-	// Prebuilt cache hit: return pre-computed items instantly (beats nvim-cmp dedup reset).
-	// Skip for member access (char before cursor is '.') — those need receiver-based resolution.
+	const program = dbParse(db, path);
+	if (program === null) return lspResponse(id, "[]");
+
+	// AST-based context detection FIRST — import contexts bypass all caches
+	const kind = sgDetectCompletionContext(program, pos.line, pos.col + 1);
+
+	// ImportPath: scan filesystem for matching modules
+	if (kind === SgCompletionKind.ImportPath) {
+		const importItems = lspCompleteImportPath(source, pos, db, path);
+		return lspResponse(id, joinJsonItems(importItems));
+	}
+
+	// ImportName: suggest exported symbols from the resolved module
+	if (kind === SgCompletionKind.ImportName) {
+		const importNameItems = lspCompleteImportName(program, source, pos, db, path);
+		return lspResponse(id, joinJsonItems(importNameItems));
+	}
+
+	// ObjectField: suggest struct fields only (no global scope fallthrough)
+	if (kind === SgCompletionKind.ObjectField) {
+		const ctx = dbTypeCheck(db, path);
+		if (ctx !== null) {
+			const fieldPath = sgObjectFieldPathAST(program, pos.line, pos.col + 1);
+			const enclosingObj = findEnclosingObjectLiteral(program, pos.line, pos.col + 1);
+			let existingKeys: string[] = [];
+			if (enclosingObj !== null) {
+				existingKeys = (enclosingObj.data as ObjectLiteralData).keys;
+			}
+			const rootType = lspFindObjectLiteralTypeAST(program, pos.line, pos.col + 1, ctx);
+			if (rootType !== null) {
+				const objCandidates = sgCompleteObjectFields(ctx, prefix, rootType, fieldPath, existingKeys);
+				const objItems = formatCompletionItemsArray(objCandidates, db, path);
+				cache.uri = pos.uri;
+				cache.line = pos.line;
+				cache.prefix = prefix;
+				cache.items = objItems;
+				return lspResponse(id, joinJsonItems(objItems));
+			}
+		}
+		return lspResponse(id, "[]");
+	}
+
+	// Prebuilt cache hit: return pre-computed items instantly.
+	// Skip for member access (char before cursor is '.') and import triggers.
 	const lineOffset = sgGetLineOffset(source, pos.line);
 	const charBefore = pos.col > 0 ? source.byteAt(lineOffset + pos.col - 1) : 0;
 	if (prefix.length === 0 && charBefore !== ".".code && _prebuiltUri === pos.uri && _prebuiltItems.length > 0) {
-		// Limit to keep response small for reliable stdio delivery within nvim-cmp's dedup window
 		const limited = _prebuiltItems.length > 100 ? _prebuiltItems.slice(0, 100) : _prebuiltItems;
 		cache.uri = pos.uri;
 		cache.line = pos.line;
@@ -1114,24 +1155,6 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 		cache.prefix = prefix;
 		cache.items = filtered;
 		return lspResponse(id, joinJsonItems(filtered));
-	}
-
-	const program = dbParse(db, path);
-	if (program === null) return lspResponse(id, "[]");
-
-	// AST-based context detection (1-based line, 1-based col for AST)
-	const kind = sgDetectCompletionContext(program, pos.line, pos.col + 1);
-
-	// ImportPath: scan filesystem for matching modules
-	if (kind === SgCompletionKind.ImportPath) {
-		const importItems = lspCompleteImportPath(source, pos, db, path);
-		return lspResponse(id, joinJsonItems(importItems));
-	}
-
-	// ImportName: suggest exported symbols from the resolved module
-	if (kind === SgCompletionKind.ImportName) {
-		const importNameItems = lspCompleteImportName(program, source, pos, db, path);
-		return lspResponse(id, joinJsonItems(importNameItems));
 	}
 
 	const ctx = dbTypeCheck(db, path);
@@ -1187,29 +1210,7 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 		}
 	}
 
-	// For ObjectField, use AST to find nesting path and root type
-	if (kind === SgCompletionKind.ObjectField) {
-		const fieldPath = sgObjectFieldPathAST(program, pos.line, pos.col + 1);
-		// Get existing keys from the enclosing ObjectLiteral AST node
-		const enclosingObj = findEnclosingObjectLiteral(program, pos.line, pos.col + 1);
-		let existingKeys: string[] = [];
-		if (enclosingObj !== null) {
-			existingKeys = (enclosingObj.data as ObjectLiteralData).keys;
-		}
-		// Find root type via lspFindObjectLiteralTypeAST
-		const rootType = lspFindObjectLiteralTypeAST(program, pos.line, pos.col + 1, ctx);
-		if (rootType !== null) {
-			const objCandidates = sgCompleteObjectFields(ctx, prefix, rootType, fieldPath, existingKeys);
-			const objItems = formatCompletionItemsArray(objCandidates, db, path);
-			cache.uri = pos.uri;
-			cache.line = pos.line;
-			cache.prefix = prefix;
-			cache.items = objItems;
-			return lspResponse(id, joinJsonItems(objItems));
-		}
-		// Inside object literal but type unknown — return empty, not global scope
-		return lspResponse(id, "[]");
-	}
+	// ObjectField handled early (before caches) — see above
 
 	const candidates = sgGetCompletionCandidates(ctx, kind, prefix, receiverType);
 

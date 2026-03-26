@@ -3,7 +3,7 @@
 
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, DeclKind, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createSpan, createFunction, createTypeRef, createStruct, createRef, createResult, createPrimitive, substituteType, instantiateGeneric, anonStructName, isNumeric, isIntegerType, isStringType, isCallable, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, unwrapRef, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, skipModifier, createPromise, isPromise, getPromiseInner, isResult, getResultOkType, createGenericParam, instantiateGenericBody } from "./types";
+import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createSpan, createFunction, createTypeRef, createStruct, createRef, createResult, createPrimitive, substituteType, instantiateGeneric, anonStructName, isNumeric, isIntegerType, isStringType, isCallable, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, unwrapRef, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, isPromise, getPromiseInner, isResult, getResultOkType, createGenericParam, instantiateGenericBody } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag } from "./symbol";
 import { CheckerContext, addError, addErrorRange, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, isInAsyncPromiseResult } from "./context";
 import {
@@ -229,14 +229,15 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 				// Ref parity: invalidate narrowing facts about reassigned variable
 				invalidateFacts(ctx, lhsId.name);
 			}
-			// Post-hoc literal coercion: if one side is integer and other is fitting literal, coerce
+			// Post-hoc literal coercion: if one side is typed integer and other is integer literal that fits, coerce.
+			// Example: `h: int64; h * 33` — coerces literal 33 (default int32) to int64.
 			let effLeft = leftType;
 			let effRight = rightType;
-			if (isIntegerType(leftType) && rightType !== null && rightType.kind === TypeKind.Number
+			if (isIntegerType(leftType) && rightType !== null
 				&& isNodeIntLit(d.right) && literalFitsInType(d.right, leftType)) {
 				effRight = leftType;
 				d.right.nodeType = leftType;
-			} else if (isIntegerType(rightType) && leftType !== null && leftType.kind === TypeKind.Number
+			} else if (isIntegerType(rightType) && leftType !== null
 				&& isNodeIntLit(d.left) && literalFitsInType(d.left, rightType)) {
 				effLeft = rightType;
 				d.left.nodeType = rightType;
@@ -656,6 +657,12 @@ export function checkExpr(ctx: CheckerContext, node: Node, expectedType: Type): 
 
 // ===== Operator Inference =====
 
+// Integer widening: promote to the wider of two integer types (C-style integer promotion).
+function widenIntegers(a: Type, b: Type): Type {
+	if (a.kind === b.kind) return a;
+	return integerRank(a) >= integerRank(b) ? a : b;
+}
+
 function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
 	return match (op) {
 		"===" | "!==" | "==" | "!=" | "<" | ">" | "<=" | ">=" => booleanType(),
@@ -664,8 +671,8 @@ function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
 			if (isStringType(leftType) || isStringType(rightType)) return stringType();
 			if (leftType !== null && leftType.kind === TypeKind.Ptr) return leftType;
 			if (rightType !== null && rightType.kind === TypeKind.Ptr) return rightType;
-			// Reference parity: int32 + int32 → int32 (magic proc preserves type)
-			if (isIntegerType(leftType) && isIntegerType(rightType) && leftType.kind === rightType.kind) return leftType;
+			// Integer arithmetic: same width → preserve, mixed width → widen to larger
+			if (isIntegerType(leftType) && isIntegerType(rightType)) return widenIntegers(leftType, rightType);
 			// Mixed numeric: explicit number stays number, otherwise float64
 			if (isNumeric(leftType) && isNumeric(rightType)) {
 				if (leftType.kind === TypeKind.Number || rightType.kind === TypeKind.Number) return numberType();
@@ -676,8 +683,8 @@ function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
 		"-" => {
 			if (leftType !== null && leftType.kind === TypeKind.Ptr && rightType !== null && rightType.kind === TypeKind.Ptr) return int32Type();
 			if (leftType !== null && leftType.kind === TypeKind.Ptr) return leftType;
-			// Reference parity: int32 - int32 → int32
-			if (isIntegerType(leftType) && isIntegerType(rightType) && leftType.kind === rightType.kind) return leftType;
+			// Integer arithmetic: same width → preserve, mixed width → widen
+			if (isIntegerType(leftType) && isIntegerType(rightType)) return widenIntegers(leftType, rightType);
 			if (isNumeric(leftType) && isNumeric(rightType)) {
 				if (leftType.kind === TypeKind.Number || rightType.kind === TypeKind.Number) return numberType();
 				return float64Type();
@@ -685,8 +692,8 @@ function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
 			return unknownType();
 		},
 		"*" | "/" | "%" | "**" => {
-			// Reference parity: int32 * int32 → int32
-			if (isIntegerType(leftType) && isIntegerType(rightType) && leftType.kind === rightType.kind) return leftType;
+			// Integer arithmetic: same width → preserve, mixed width → widen
+			if (isIntegerType(leftType) && isIntegerType(rightType)) return widenIntegers(leftType, rightType);
 			if (isNumeric(leftType) && isNumeric(rightType)) {
 				if (leftType.kind === TypeKind.Number || rightType.kind === TypeKind.Number) return numberType();
 				return float64Type();
@@ -694,6 +701,8 @@ function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
 			return float64Type();
 		},
 		"&" | "|" | "^" | "<<" | ">>" | ">>>" => {
+			// Bitwise: promote to wider integer if both sides are integer
+			if (isIntegerType(leftType) && isIntegerType(rightType)) return widenIntegers(leftType, rightType);
 			if (isIntegerType(leftType)) return leftType;
 			return int32Type();
 		},
@@ -778,8 +787,8 @@ function checkBitwiseOperands(ctx: CheckerContext, op: string, leftType: Type, r
 function isNodeIntLit(node: Node): boolean {
 	if (node.kind !== NodeKind.NumberLiteral) return false;
 	const d = node.data as NumberLiteralData;
-	const v = d.value;
-	return v % 1 === 0;
+	if (d.isFloat) return false;  // 0.0, 1e5 etc. — developer wrote float syntax
+	return d.value % 1 === 0;
 }
 
 function literalFitsInType(node: Node, target: Type): boolean {

@@ -345,7 +345,7 @@ test "isDecomposable binary" {
 }
 
 test "isDecomposable literal" {
-	const lit = createNode(NodeKind.NumberLiteral, { value: 42 }, syntheticToken(makeLoc(1, 0)));
+	const lit = createNode(NodeKind.NumberLiteral, { value: 42, isFloat: false }, syntheticToken(makeLoc(1, 0)));
 	assert !isDecomposable(lit);
 }
 

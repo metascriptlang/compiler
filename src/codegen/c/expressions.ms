@@ -766,7 +766,7 @@ function discoverCallExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void
 	// User externs (with headerPath) get their @include propagated to this module.
 	if (sym !== null && sym.nativeName !== "") {
 		useHeader(g, sym);
-		ctx.results.push(emitNativeCall(g, p, sym.nativeName, cd.arguments));
+		ctx.results.push(emitNativeCall(g, p, sym.nativeName, cd.arguments, sym));
 		return;
 	}
 
@@ -835,6 +835,10 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			let leftType = d.left.nodeType;
 			if (d.left.resolvedSym !== null && d.left.resolvedSym.symbolType !== null) {
 				leftType = d.left.resolvedSym.symbolType;
+			}
+			// Unwrap Var<T> (out params) — assignment targets the inner value, not the pointer
+			if (leftType !== null && leftType.kind === TypeKind.Var && leftType.typeReturn !== null) {
+				leftType = leftType.typeReturn;
 			}
 			const leftCType = getTypeDesc(g, leftType);
 			const rightCType = getTypeDesc(g, d.right.nodeType);
@@ -1637,7 +1641,7 @@ function hasAddrPrefix(nativeName: string): boolean {
 	return nativeName.length > 0 && nativeName.charAt(0) === "&";
 }
 
-function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Node[]): string {
+function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Node[], sym: Symbol): string {
 	const needsAddr = hasAddrPrefix(nativeName);
 	let cName = stripAddrPrefix(nativeName);
 
@@ -1660,16 +1664,49 @@ function emitNativeCall(g: CGen, p: CProc, nativeName: string, args: Node[]): st
 		}
 	}
 
+	// Resolve callee function type for out-param ABI shim
+	// Extern functions define their own C signatures, so only apply shim for
+	// explicit out params (Var<T>), not general ccg-introduced types.
+	const fnType = sym !== null && sym.symbolType !== null && sym.symbolType.kind === TypeKind.Function ? sym.symbolType : null;
+	const paramTypes = fnType !== null ? fnType.typeChildren : null;
+
 	// Build call with & on first arg if mutating
 	if (needsAddr && args.length > 0) {
 		const firstArg = genExpr(g, p, args[0]);
 		let result = `${cName}(${safeAddrOf(g, p, firstArg, args[0], null)}`;
 		let i = 1;
 		while (i < args.length) {
-			result = result + `, ${genExpr(g, p, args[i])}`;
+			let arg = genExpr(g, p, args[i]);
+			if (paramTypes !== null && i < paramTypes.length && paramTypes[i] !== null && paramTypes[i].kind === TypeKind.Var) {
+				arg = safeAddrOf(g, p, arg, args[i], paramTypes[i]);
+			}
+			result = result + `, ${arg}`;
 			i = i + 1;
 		}
 		return result + ")";
+	}
+	// Apply out-param shim (Var<T> → &arg)
+	if (paramTypes !== null) {
+		let hasOutParam = false;
+		let i = 0;
+		while (i < paramTypes.length) {
+			if (paramTypes[i] !== null && paramTypes[i].kind === TypeKind.Var) { hasOutParam = true; }
+			i += 1;
+		}
+		if (hasOutParam) {
+			let result = cName + "(";
+			i = 0;
+			while (i < args.length) {
+				if (i > 0) result = result + ", ";
+				let arg = genExpr(g, p, args[i]);
+				if (i < paramTypes.length && paramTypes[i] !== null && paramTypes[i].kind === TypeKind.Var) {
+					arg = safeAddrOf(g, p, arg, args[i], paramTypes[i]);
+				}
+				result = result + arg;
+				i += 1;
+			}
+			return result + ")";
+		}
 	}
 	return `${cName}(${joinArgs(g, p, args)})`;
 }

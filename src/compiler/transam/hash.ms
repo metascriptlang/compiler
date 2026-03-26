@@ -1,9 +1,9 @@
 // Trans-Am Hash Utilities — djb2 string hashing, hash combinators, AST content hashing
 //
 // Phase 1: simple hash for query key identification and file change detection.
-// Phase 2: AST content-addressed hashing (taHashNode) for Salsa output-hash early cutoff.
+// Phase 2: AST content-addressed hashing (transAmHashNode) for Salsa output-hash early cutoff.
 //
-// taHashNode hashes kind + data fields recursively, skipping positions/comments/types/symbols.
+// transAmHashNode hashes kind + data fields recursively, skipping positions/comments/types/symbols.
 // This means comment-only or whitespace-only edits produce identical parse hashes,
 // so downstream queries (TypeCheck, Transform, Analyze) stay GREEN.
 
@@ -32,20 +32,19 @@ import {
 import { parseSource } from "../../parser/statements/validation";
 
 
-// ===== String Hash (djb2) =====
+// ===== Imports from std/hash =====
 
-export function taHashString(s: string): number {
-	let hash = 5381;
-	for (let i = 0; i < s.byteLength; i = i + 1) {
-		hash = (hash * 33 + s.byteAt(i)) % 2147483647;
-	}
-	return hash;
-}
+import { djb2 } from "std/hash";
+export function taHashString(s: string): int64 { return djb2(s); }
 
 // ===== Hash Combinators =====
+// Uses multiplication + modulo (not bitwise ops) for JS/Bun compatibility.
+// Bitwise <<, >>, ^ operate on signed int32 in JS, giving different results than C int64.
 
-export function taCombineHash(a: number, b: number): number {
-	return ((a * 31) + b) % 2147483647;
+const PRIME: number = 2147483647;
+
+function combine(a: number, b: number): number {
+	return ((a * 31) + b) % PRIME;
 }
 
 function enumToNum(kind: TaQueryKind): number {
@@ -62,59 +61,53 @@ function enumToNum(kind: TaQueryKind): number {
 }
 
 export function taHashKey(key: TaQueryKey): number {
-	return taCombineHash(enumToNum(key.queryKind) * 1000003, key.fileId);
+	return combine(enumToNum(key.queryKind) * 1000003, key.fileId);
 }
 
 // ===== AST Content Hash Helpers =====
 
 function hS(h: number, s: string): number {
-	if (s === null) return taCombineHash(h, 0);
-	return taCombineHash(h, taHashString(s));
+	if (s === null) return combine(h, 0);
+	return combine(h, taHashString(s));
 }
 
 function hI(h: number, n: number): number {
 	const v = (n < 0) ? (0 - n) : n;
-	return taCombineHash(h, v % 2147483647);
+	return combine(h, v % PRIME);
 }
 
 function hB(h: number, b: boolean): number {
-	return taCombineHash(h, b ? 1 : 0);
+	return combine(h, b ? 1 : 0);
 }
 
 function hN(h: number, node: Node): number {
-	if (node === null) return taCombineHash(h, 0);
-	return taCombineHash(h, taHashNode(node));
+	if (node === null) return combine(h, 0);
+	return combine(h, transAmHashNode(node));
 }
 
 function hNodes(h: number, nodes: Node[]): number {
-	if (nodes === null) return taCombineHash(h, 0);
+	if (nodes === null) return combine(h, 0);
 	h = hI(h, nodes.length);
-	let i = 0;
-	while (i < nodes.length) {
-		h = hN(h, nodes[i]);
-		i = i + 1;
+	for (const node of nodes) {
+		h = hN(h, node);
 	}
 	return h;
 }
 
 function hStrings(h: number, strs: string[]): number {
-	if (strs === null) return taCombineHash(h, 0);
+	if (strs === null) return combine(h, 0);
 	h = hI(h, strs.length);
-	let i = 0;
-	while (i < strs.length) {
-		h = hS(h, strs[i]);
-		i = i + 1;
+	for (const s of strs) {
+		h = hS(h, s);
 	}
 	return h;
 }
 
 function hNumbers(h: number, nums: number[]): number {
-	if (nums === null) return taCombineHash(h, 0);
+	if (nums === null) return combine(h, 0);
 	h = hI(h, nums.length);
-	let i = 0;
-	while (i < nums.length) {
-		h = hI(h, nums[i]);
-		i = i + 1;
+	for (const n of nums) {
+		h = hI(h, n);
 	}
 	return h;
 }
@@ -123,14 +116,16 @@ function hNumbers(h: number, nums: number[]): number {
 // Hashes node kind + data fields recursively. Skips: location, comments, nodeType, resolvedSym, flags.
 // Produces identical hash for structurally identical trees regardless of position.
 
-export function taHashNode(node: Node): number {
+export function transAmHashNode(node: Node): number {
 	if (node === null) return 0;
-	let h: number = (node.kind * 2654435761) % 2147483647;
+	let h: number = (node.kind * 2654435761) % PRIME;
 
 	match (node.kind) {
 		// === Literals ===
 		NodeKind.NumberLiteral => {
-			h = hI(h, (node.data as NumberLiteralData).value);
+			const nd = node.data as NumberLiteralData;
+			h = hI(h, nd.value);
+			if (nd.isFloat) h = hI(h, 1);
 		},
 		NodeKind.StringLiteral => {
 			h = hS(h, (node.data as StringLiteralData).value);
@@ -448,9 +443,13 @@ test "single char" {
 	assert h !== 0;
 }
 
-test "combine is deterministic" { assert taCombineHash(1, 2) === taCombineHash(1, 2); }
+test "combine is deterministic" { assert combine(1, 2) === combine(1, 2); }
 
-test "order matters" { assert taCombineHash(1, 2) !== taCombineHash(2, 1); }
+test "chained order matters" {
+	const a = combine(combine(0, 1), 2);
+	const b = combine(combine(0, 2), 1);
+	assert a !== b;
+}
 
 test "different kinds produce different hashes" {
 	const a: TaQueryKey = { queryKind: 0, fileId: 1 };
@@ -465,7 +464,7 @@ test "different fileIds produce different hashes" {
 }
 
 test "null node hashes to zero" {
-	assert taHashNode(null as unknown as Node) === 0;
+	assert transAmHashNode(null as unknown as Node) === 0;
 }
 
 test "same AST same hash" {
@@ -474,7 +473,7 @@ test "same AST same hash" {
 	const r2 = parseSource("const x = 1;");
 	assert r1.ok;
 	assert r2.ok;
-	assert taHashNode(r1.value) === taHashNode(r2.value);
+	assert transAmHashNode(r1.value) === transAmHashNode(r2.value);
 }
 
 test "comment-only change same hash" {
@@ -483,7 +482,7 @@ test "comment-only change same hash" {
 	const r2 = parseSource("const x = 1; // comment");
 	assert r1.ok;
 	assert r2.ok;
-	assert taHashNode(r1.value) === taHashNode(r2.value);
+	assert transAmHashNode(r1.value) === transAmHashNode(r2.value);
 }
 
 test "different code different hash" {
@@ -492,7 +491,7 @@ test "different code different hash" {
 	const r2 = parseSource("const x = 2;");
 	assert r1.ok;
 	assert r2.ok;
-	assert taHashNode(r1.value) !== taHashNode(r2.value);
+	assert transAmHashNode(r1.value) !== transAmHashNode(r2.value);
 }
 
 test "different identifier different hash" {
@@ -501,5 +500,5 @@ test "different identifier different hash" {
 	const r2 = parseSource("const y = 1;");
 	assert r1.ok;
 	assert r2.ok;
-	assert taHashNode(r1.value) !== taHashNode(r2.value);
+	assert transAmHashNode(r1.value) !== transAmHashNode(r2.value);
 }

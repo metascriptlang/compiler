@@ -17,6 +17,7 @@ import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNode, Program
 import { createStruct, createPtr } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import { TransformContext } from "../context";
+import { djb2 } from "std/hash";
 import { walkNode, mapChildren } from "../walker";
 import {
 	makeIdent, makeTypedIdent, makeMember, makeHiddenDeref, makeBinary,
@@ -260,13 +261,10 @@ function typeToCStr(t: Type): string {
 // ===== Structural Hash =====
 // djb2 hash over field "name:ctype;" pairs. Detects layout changes at reload time.
 
-function computeStructHash(globals: HcrGlobal[]): number {
-	let hash = 5381;
-	for (let i = 0; i < globals.length; i += 1) {
-		const s = globals[i].name + ":" + typeToCStr(globals[i].declType) + ";";
-		for (let j = 0; j < s.byteLength; j += 1) {
-			hash = (hash * 33 + s.byteAt(j)) % 4294967296;
-		}
+function computeStructHash(globals: HcrGlobal[]): int64 {
+	let key = "";
+	for (const g of globals) {
+		key = key + g.name + ":" + typeToCStr(g.declType) + ";";
 	}
-	return hash;
+	return djb2(key);
 }

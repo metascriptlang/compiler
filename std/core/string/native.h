@@ -95,12 +95,12 @@ static inline bool msStringIsEmpty(msString s) {
 /* DJB2 hash — used by match lowering for string switch optimization.
  * Must match the compile-time djb2Hash in matchLower.ms. */
 static inline int32_t msStringHash(msString s) {
-	int32_t h = 5381;
+	unsigned int h = 5381;
 	const char* data = (s.p != NULL) ? s.p->data : "";
 	for (int64_t i = 0; i < s.len; i++) {
 		h = (h * 33 + (unsigned char)data[i]);
 	}
-	return h;
+	return (int32_t)h;
 }
 
 /* Capacity growth — Standard reference resize pattern */

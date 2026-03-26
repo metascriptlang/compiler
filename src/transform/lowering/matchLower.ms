@@ -22,6 +22,7 @@ import {
 	makeCall, makeNumber, makeSwitch, makeSwitchCase,
 } from "../util";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
+import { hashStringSigned } from "std/hash";
 
 // ===== Nested MatchExpr Hoisting via shared walker =====
 // Uses replaceInExpr from walker.ms — same expression tree walker as resultDesugar.
@@ -554,17 +555,7 @@ function makePatternTest(pattern: Node, tempName: string, discType: Type, loc: S
 
 const STRING_HASH_THRESHOLD: number = 8;
 
-// DJB2 hash — must match C runtime's msStringHash for correctness.
-function djb2Hash(s: string): int32 {
-	let h: int32 = 5381;
-	let i = 0;
-	while (i < s.byteLength) {
-		const cc: int32 = s.byteAt(i) as int32;
-		h = ((h * 33) + cc) | 0;
-		i = i + 1;
-	}
-	return h;
-}
+// DJB2 hash — uses hashStringSigned from std/hash (matches C runtime msStringHash).
 
 // Check if all non-wildcard/non-binding patterns are string literals.
 function isAllStringCases(cases: Node[]): boolean {
@@ -612,7 +603,7 @@ function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: S
 		for (let j = 0; j < caseData.casePatterns.length; j += 1) {
 			const pat = caseData.casePatterns[j];
 			const strData = pat.data as StringLiteralData;
-			const hash = djb2Hash(strData.value);
+			const hash = hashStringSigned(strData.value);
 
 			const body = wrapArmBody(caseData.caseBody, mode, varName, loc);
 			let guardedBlock = body;
@@ -713,6 +704,6 @@ test "hash switch stmt mode produces $matched guard" {
 }
 
 test "djb2 hash deterministic" {
-	assert djb2Hash("hello") === djb2Hash("hello");
-	assert djb2Hash("a") !== djb2Hash("b");
+	assert hashStringSigned("hello") === hashStringSigned("hello");
+	assert hashStringSigned("a") !== hashStringSigned("b");
 }
