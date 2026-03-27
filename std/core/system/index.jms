@@ -1,6 +1,11 @@
 // MetaScript System Prelude — JavaScript Backend
-// JS has native console.log — no wrapper or class override needed.
-// The JS codegen maps msPrintln → console.log directly.
+
+// Native JS console
+export extern class console {
+	static extern log(value: string): void;
+	static extern error(value: string): void;
+	static extern warn(value: string): void;
+}
 
 export class Result<T, E> {
 	ok: boolean;

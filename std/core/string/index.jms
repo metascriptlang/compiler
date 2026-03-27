@@ -56,6 +56,192 @@ export function msStringEquals(a: string, b: string): boolean {
 	return true;
 }
 
+// ===== String Extension Methods (after lowering: s.method(args) → method(s, args)) =====
+// Pure MetaScript on byte arrays — shared logic with C backend.
+
+export function byteLength(this s: string): int32 {
+	return s.asBytes().length;
+}
+
+export function byteAt(this s: string, idx: int64): int32 {
+	const b = s.asBytes();
+	if (idx < 0 || idx >= b.length) return -1;
+	return b[idx] as int32;
+}
+
+export function byteSlice(this s: string, start: int64, end: int64): string {
+	const b = s.asBytes();
+	const result: uint8[] = [];
+	let i = start;
+	while (i < end && i < b.length) { result.push(b[i]); i = i + 1; }
+	return result.asString();
+}
+
+export function charAt(this s: string, idx: int64): string {
+	const js = toJSStr(s);
+	@emit(`if (${idx} < 0 || ${idx} >= ${js}.length) return [];`);
+	@emit(`return fromJSStr(${js}.charAt(${idx}));`);
+	unreachable;
+}
+
+export function charCodeAt(this s: string, idx: int64): int32 {
+	const js = toJSStr(s);
+	@emit(`if (${idx} < 0 || ${idx} >= ${js}.length) return -1;`);
+	@emit(`return ${js}.charCodeAt(${idx});`);
+	unreachable;
+}
+
+export function startsWith(this s: string, prefix: string): boolean {
+	const sb = s.asBytes();
+	const pb = prefix.asBytes();
+	if (pb.length === 0) return true;
+	if (sb.length < pb.length) return false;
+	let i = 0;
+	while (i < pb.length) {
+		if (sb[i] !== pb[i]) return false;
+		i = i + 1;
+	}
+	return true;
+}
+
+export function endsWith(this s: string, suffix: string): boolean {
+	const sb = s.asBytes();
+	const xb = suffix.asBytes();
+	if (xb.length === 0) return true;
+	if (sb.length < xb.length) return false;
+	const off = sb.length - xb.length;
+	let i = 0;
+	while (i < xb.length) {
+		if (sb[off + i] !== xb[i]) return false;
+		i = i + 1;
+	}
+	return true;
+}
+
+export function contains(this s: string, sub: string): boolean {
+	return s.indexOf(sub, 0) >= 0;
+}
+
+export function indexOf(this s: string, sub: string, start: int64 = 0): int64 {
+	const sb = s.asBytes();
+	const xb = sub.asBytes();
+	if (xb.length === 0) return start;
+	let i = start;
+	while (i <= sb.length - xb.length) {
+		let found = true;
+		let j = 0;
+		while (j < xb.length) {
+			if (sb[i + j] !== xb[j]) { found = false; break; }
+			j = j + 1;
+		}
+		if (found) return i;
+		i = i + 1;
+	}
+	return -1;
+}
+
+export function lastIndexOf(this s: string, sub: string): int32 {
+	const sb = s.asBytes();
+	const xb = sub.asBytes();
+	if (xb.length === 0) return sb.length;
+	let i = sb.length - xb.length;
+	while (i >= 0) {
+		let found = true;
+		let j = 0;
+		while (j < xb.length) {
+			if (sb[i + j] !== xb[j]) { found = false; break; }
+			j = j + 1;
+		}
+		if (found) return i;
+		i = i - 1;
+	}
+	return -1;
+}
+
+export function trim(this s: string): string {
+	const sb = s.asBytes();
+	if (sb.length === 0) return "";
+	let a = 0;
+	let b = sb.length - 1;
+	while (a <= b && (sb[a] === 32 || (sb[a] >= 9 && sb[a] <= 13))) { a = a + 1; }
+	while (b >= a && (sb[b] === 32 || (sb[b] >= 9 && sb[b] <= 13))) { b = b - 1; }
+	return s.byteSlice(a, b + 1);
+}
+
+export function slice(this s: string, start: int64, end: int64): string {
+	const js = toJSStr(s);
+	@emit(`return fromJSStr(${js}.slice(${start}, ${end}));`);
+	unreachable;
+}
+
+export function split(this s: string, delimiter: string): string[] {
+	const js = toJSStr(s);
+	const jd = toJSStr(delimiter);
+	@emit(`var parts = ${js}.split(${jd}); var r = []; for (var i = 0; i < parts.length; i++) r.push(fromJSStr(parts[i])); return r;`);
+	unreachable;
+}
+
+export function toLower(this s: string): string {
+	@emit(`return fromJSStr(toJSStr(${s}).toLowerCase());`);
+	unreachable;
+}
+
+export function toUpper(this s: string): string {
+	@emit(`return fromJSStr(toJSStr(${s}).toUpperCase());`);
+	unreachable;
+}
+
+export function replace(this s: string, search: string, replacement: string): string {
+	@emit(`return fromJSStr(toJSStr(${s}).replace(toJSStr(${search}), toJSStr(${replacement})));`);
+	unreachable;
+}
+
+export function equals(this s: string, other: string): boolean {
+	return msStringEquals(s, other);
+}
+
+// Number/bool to string (called by builtinLower .toString())
+export function msNumberToString(n: number): string {
+	@emit(`return fromJSStr(String(${n}));`);
+	unreachable;
+}
+
+export function msNumberToStringRadix(n: number, radix: number): string {
+	@emit(`return fromJSStr(${n}.toString(${radix}));`);
+	unreachable;
+}
+
+export function msBoolToString(b: boolean): string {
+	@emit(`return ${b} ? [116,114,117,101] : [102,97,108,115,101];`);
+	unreachable;
+}
+
+// String hash — DJB2 (matches C runtime msStringHash)
+export function msStringHash(s: string): int32 {
+	const sb = s.asBytes();
+	let h: int32 = 5381;
+	let i = 0;
+	while (i < sb.length) {
+		h = (h * 33 + sb[i]) as int32;
+		i = i + 1;
+	}
+	return h;
+}
+
+// String append (in-place, called by lowerStringOps for +=)
+export function msStringAppend(dest: string, src: string): void {
+	const db = dest.asBytes();
+	const sb = src.asBytes();
+	let i = 0;
+	while (i < sb.length) { db.push(sb[i]); i = i + 1; }
+}
+
+// For long string literals (>64 bytes)
+export function makeNimstrLit(s: string): string {
+	@emit(`var r = []; for (var i = 0; i < ${s}.length; i++) r.push(${s}.charCodeAt(i)); return r;`);
+	unreachable;
+}
+
 // UTF-8 byte array → native JS string (boundary conversion)
 export function toJSStr(s: string): string {
 	const bytes = asBytes(s);
