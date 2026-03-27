@@ -958,7 +958,9 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 		if (sym !== null && sym.symbolType.kind === TypeKind.Function && i < sym.symbolType.typeChildren.length) {
 			paramType = sym.symbolType.typeChildren[i];
 		}
-		const paramSym = makeSymbol(param, SymbolKind.Parameter, paramType, false);
+		// Strip "..." prefix from rest params (parser stores "...name", checker uses "name")
+		const paramName = param.length > 3 && param.startsWith("...") ? param.slice(3, param.length) : param;
+		const paramSym = makeSymbol(paramName, SymbolKind.Parameter, paramType, false);
 		// Set declaration location for go-to-definition
 		if (paramLocs !== null && i < paramLocs.length && paramLocs[i] !== null) {
 			paramSym.location = paramLocs[i];
@@ -1147,21 +1149,19 @@ function defineBuiltinConstants(ctx: CheckerContext): void {
 // ===== Unified Prelude Loading (reference parity: single pipeline) =====
 
 // Load a single prelude module into a context. Shared by all paths.
-// backendExt: ".cms" for C (default), ".jms" for JS — tried before .cms fallback.
+// backendExt: ".cms" for C (default), ".jms" for JS.
+// Resolution order: backend extension first, then .ms fallback. Same rule as module resolver.
 function loadPreludeOne(ctx: CheckerContext, specifier: string, stdPath: string, backendExt: string): void {
 	const base = stdPath.length > 0 ? stdPath + "/" + specifier.slice(4, specifier.length) : specifier;
+	// Try direct .ms first (e.g., std/core/struct.ms)
 	let src = readFile(base + ".ms");
 	let resolvedPath = base + ".ms";
-	// Backend-specific extension first (e.g., .jms for JS, .cms for C)
-	if (src.length === 0 && backendExt !== "") {
+	// Backend extension (e.g., index.jms for JS, index.cms for C)
+	if (src.length === 0) {
 		src = readFile(base + "/index" + backendExt);
 		resolvedPath = base + "/index" + backendExt;
 	}
-	// Fallback to .cms (C backend default)
-	if (src.length === 0 && backendExt !== ".cms") {
-		src = readFile(base + "/index.cms");
-		resolvedPath = base + "/index.cms";
-	}
+	// Fallback to .ms
 	if (src.length === 0) {
 		src = readFile(base + "/index.ms");
 		resolvedPath = base + "/index.ms";

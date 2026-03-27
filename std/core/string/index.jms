@@ -8,11 +8,11 @@ extern class String {
 }
 
 // Zero-copy bridge (string ↔ uint8[]) — identity in JS
-export function asBytes(s: string): uint8[] {
+export function asBytes(this s: string): uint8[] {
 	return s as unknown as uint8[];
 }
 
-export function asString(arr: uint8[]): string {
+export function asString(this arr: uint8[]): string {
 	return arr as unknown as string;
 }
 
@@ -34,12 +34,13 @@ export function msStringConcatMany(count: number, ...parts: string[]): string {
 	const result: uint8[] = [];
 	let i = 0;
 	while (i < parts.length) {
-		const p = parts[i] as unknown as uint8[];
+		const part = parts[i];
+		const p = part.asBytes();
 		let j = 0;
 		while (j < p.length) { result.push(p[j]); j = j + 1; }
 		i = i + 1;
 	}
-	return result as unknown as string;
+	return result.asString();
 }
 
 // String equality — byte-by-byte comparison (called by lowerOperators for == on strings)

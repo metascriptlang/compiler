@@ -168,8 +168,13 @@ export function emitUpdateExpr(gen: JSGenerator, node: Node): void {
 export function emitCallExpr(gen: JSGenerator, node: Node): void {
 	const d = node.data as CallExprData;
 
-	// msPrintln → console.log with toJSStr conversion (byte arrays → native JS strings)
-	if (d.callee.kind === NodeKind.Identifier && (d.callee.data as IdentifierData).name === "msPrintln") {
+	// msPrintln / console.log → toJSStr conversion (byte arrays → native JS strings)
+	const isMsPrintln = d.callee.kind === NodeKind.Identifier && (d.callee.data as IdentifierData).name === "msPrintln";
+	const isConsoleLog = d.callee.kind === NodeKind.MemberExpr
+		&& (d.callee.data as MemberExprData).property === "log"
+		&& (d.callee.data as MemberExprData).object.kind === NodeKind.Identifier
+		&& ((d.callee.data as MemberExprData).object.data as IdentifierData).name === "console";
+	if (isMsPrintln || isConsoleLog) {
 		if (gen.bundleMode) {
 			// Bundle mode: strings are byte arrays, need toJSStr for display
 			emit(gen, "console.log(");

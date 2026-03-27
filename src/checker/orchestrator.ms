@@ -41,12 +41,12 @@ export function getPreludeContext(): CheckerContext { return lastPreludeCtx; }
 
 // stdPath: when non-empty, resolves std/ imports against this path.
 // When empty, falls back to relative "std/" (resolved by reference compiler).
-export function checkModuleGraph(graph: ModuleGraph, stdPath: string): ExportRegistry {
+export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt: string = ".cms"): ExportRegistry {
 	const registry = createExportRegistry();
 
 	// Load prelude into a base context — provides console, string methods, etc.
 	// Creates the shared IdentCache (one cache per compilation).
-	const baseCtx = buildPreludeContext(stdPath);
+	const baseCtx = buildPreludeContext(stdPath, backendExt);
 	lastPreludeCtx = baseCtx;
 	const sharedCache = getSharedIdentCache(baseCtx);
 

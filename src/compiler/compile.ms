@@ -234,7 +234,8 @@ function loadAndCheckGraph(entryPath: string, verbose: boolean, config: Resolver
 	exitOnModuleErrors(graph, "error");
 
 	if (verbose) verboseLog("cross-module type check");
-	graphRegistry = checkModuleGraph(graph, config.stdPath);
+	const backendExt = config.extensions.length > 0 ? config.extensions[0] : ".cms";
+	graphRegistry = checkModuleGraph(graph, config.stdPath, backendExt);
 	graphPreludeCtx = getPreludeContext();
 	// Report type errors but continue — allows codegen to proceed past non-fatal checker issues
 	reportModuleErrors(graph, "type error");
