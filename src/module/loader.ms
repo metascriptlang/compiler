@@ -29,7 +29,7 @@ import { callStateProgramParser } from "../parser/statements/callbacks";
 import "../parser/statements/core";
 import { Node, NodeKind, ProgramData, ImportDeclData, ExportDeclData } from "../ast/node";
 import { readFile } from "std/process";
-import { parseCHeader } from "./aro";
+import { translateCHeader } from "./cparse";
 // (utils/string imports removed — using native .slice)
 
 // ===== Source Provider =====
@@ -123,12 +123,11 @@ function inlineHeaderImports(source: string, modulePath: string, provider: Sourc
 			}
 		}
 
-		// Generate extern declarations via ARO (real C parser)
-		let translated = parseCHeader(headerPath);
-		// Strip "export " prefix (inline declarations don't re-export from consuming module)
-		translated = translated.split("export extern ").join("extern ");
-		translated = translated.split("export enum ").join("enum ");
-		translated = translated.split("export type ").join("type ");
+		// Generate extern declarations from C header (pure MetaScript string parser)
+		let translated = translateCHeader(headerSource.value, importedNames);
+		// Strip "export " prefix (inline declarations don't need export)
+		const parts = translated.split("export extern ");
+		translated = parts.join("extern ");
 
 		// Auto-compile companion .c file if it exists (e.g., native.h → native.c)
 		const companionC = headerPath.slice(0, headerPath.length - 2) + ".c";

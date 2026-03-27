@@ -12,7 +12,7 @@ import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
 import { monomorphizeProgram, monoCloneNode } from "../monomorphize/collect";
 import { hasFlag, SymbolFlag } from "../checker/symbol";
-import { generateJS } from "../codegen/js/index";
+import { generateJS, generateJSBundleModule } from "../codegen/js/index";
 import { generateRaiserProject, RaiserModuleInput } from "../codegen/raiser/rgen";
 import { RaiserContext, createContext as createRaiserContext, load as raiserLoad, execute as raiserExecute } from "../raiser/context";
 import { generateCModule, genProjectDispatcher } from "../codegen/c/index";
@@ -363,48 +363,120 @@ export function cmdBuildJS(entryPath: string, outputDir: string, opts: CliOption
 	setTargetSizes(8, 8);
 	const config = buildResolverConfig(Target.JS, defaultResolveSection());
 	const graph = loadAndCheckGraph(entryPath, opts.verbose, config);
-	const outDir = outputDir !== "" ? outputDir : "out/debug";
+	const outDir = outputDir !== "" ? outputDir : "out";
 	ensureDir(outDir);
-	const baseDir = dirName(entryPath);
+	// Project root for deriving module IDs
+	const projectRoot = config.stdPath.length > 4 ? config.stdPath.slice(0, config.stdPath.length - 4) : dirName(entryPath);
 
-	// Compile each module to JS
+	// Build import source → module ID mapping for all modules
+	// This maps how modules reference each other (import specifier) to the __mod["id"] key
+	const modIdValues: string[] = [];
+	const modIdKeys: string[] = [];
+	for (const modPath of graph.loadOrder) {
+		const mod = findModule(graph, modPath);
+		if (mod === null) continue;
+		const moduleId = replaceExt(stripBase(modPath, projectRoot), "");
+		modIdKeys.push(modPath);
+		modIdValues.push(moduleId);
+		// Also register the import specifier form (e.g., "std/process" for "std/process/index")
+		for (const imp of mod.imports) {
+			modIdKeys.push(imp.sourceSpecifier);
+			modIdValues.push(moduleId);
+		}
+	}
+
+	// Collect all external @import entries (from .jms files), dedup by modulePath
+	const extImportKeys: string[] = [];
+	const extImportNames: string[][] = [];
+
+	// Single-file bundle: accumulate all module code
+	let bundle = "";
 	let compiled = 0;
+
 	for (const modPath of graph.loadOrder) {
 		const mod = findModule(graph, modPath);
 		if (mod === null) continue;
 
-		// Parse + Check (cross-module registry for proper import type resolution)
 		const program = parseOrExit(mod.source, modPath);
 		const ctx = checkProgramWithRegistry(program, graphRegistry, graph, mod, graphPreludeCtx);
 		ctx.strictDefs = opts.strictDefs;
 		ctx.strictNullChecks = opts.strictNullChecks;
 		exitOnFatalCheckerErrors(ctx, modPath, mod.source);
 		ctx.errors = [];
-
-		// Validate metadata before transform
 		validateTypedAST(ctx, program);
 		ctx.errors = [];
 
-		// Evaluate @comptime blocks before transforms
-		const comptimeResolved = evaluateComptimeBlocks(program);
+		// Collect external imports from @import registry
+		for (const entry of ctx.jsImportRegistry) {
+			let found = false;
+			for (let ei = 0; ei < extImportKeys.length; ei += 1) {
+				if (extImportKeys[ei] === entry.modulePath) {
+					// Merge names
+					for (const n of entry.names) {
+						let dup = false;
+						for (const existing of extImportNames[ei]) { if (existing === n) { dup = true; } }
+						if (!dup) extImportNames[ei].push(n);
+					}
+					found = true;
+				}
+			}
+			if (!found) {
+				extImportKeys.push(entry.modulePath);
+				const names: string[] = [];
+				for (const n of entry.names) { names.push(n); }
+				extImportNames.push(names);
+			}
+		}
 
-		// Transform (JS backend — skip C-specific transforms, no monomorphize needed)
+		const comptimeResolved = evaluateComptimeBlocks(program);
 		const transformed = transformProgram(comptimeResolved, ctx, true);
 
-		// Generate JS (pass @import registry for extern JS module imports)
-		const jsCode = generateJS(transformed, ctx.jsImportRegistry);
+		// Build per-module import specifier → module ID mapping
+		const localMapKeys: string[] = [];
+		const localMapValues: string[] = [];
+		for (let gi = 0; gi < modIdKeys.length; gi += 1) {
+			localMapKeys.push(modIdKeys[gi]);
+			localMapValues.push(modIdValues[gi]);
+		}
+		for (const imp of mod.imports) {
+			const resolvedId = replaceExt(stripBase(imp.sourcePath, projectRoot), "");
+			localMapKeys.push(imp.sourceSpecifier);
+			localMapValues.push(resolvedId);
+		}
 
-		// Write output to out/debug/ preserving relative structure
-		const relPath = stripBase(modPath, baseDir);
-		const outPath = `${outDir}/${replaceExt(relPath, ".js")}`;
-		ensureDir(dirName(outPath));
-		writeOutput(outPath, jsCode);
-		console.log(`${green("  Wrote")} ${bold(outPath)}`);
+		const moduleId = replaceExt(stripBase(modPath, projectRoot), "");
+		const isPrelude = moduleId.startsWith("std/core/");
+		const result = generateJSBundleModule(transformed, localMapValues, localMapKeys, isPrelude);
+
+		bundle = bundle + `\n// --- Module: ${moduleId} ---\n`;
+		bundle = bundle + result.code;
+		if (result.exportedNames.length > 0) {
+			bundle = bundle + `__mod["${moduleId}"] = { `;
+			for (let ei = 0; ei < result.exportedNames.length; ei += 1) {
+				if (ei > 0) bundle = bundle + ", ";
+				bundle = bundle + result.exportedNames[ei];
+			}
+			bundle = bundle + " };\n";
+		}
 		compiled = compiled + 1;
 	}
 
-	if (opts.genDeps) writeDepsFile(graph, entryPath, outDir);
-	console.log(success(`${compiled} module(s) compiled to JS`));
+	// Assemble final output: header + external imports + module registry + all modules
+	let output = "// Generated by MetaScript Compiler (single-file bundle)\n";
+	for (let ei = 0; ei < extImportKeys.length; ei += 1) {
+		output = output + "import { ";
+		for (let ni = 0; ni < extImportNames[ei].length; ni += 1) {
+			if (ni > 0) output = output + ", ";
+			output = output + extImportNames[ei][ni];
+		}
+		output = output + ` } from "${extImportKeys[ei]}";\n`;
+	}
+	output = output + "const __mod = {};\n";
+	output = output + bundle;
+
+	const outPath = `${outDir}/${replaceExt(baseName(entryPath), ".js")}`;
+	writeOutput(outPath, output);
+	console.log(success(`${compiled} module(s) bundled → ${bold(outPath)}`));
 }
 
 // ===== C Build =====

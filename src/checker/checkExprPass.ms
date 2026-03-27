@@ -1018,6 +1018,27 @@ function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type): Type {
 		checkExpr(ctx, d.newArguments[ai], argExpected);
 		ai = ai + 1;
 	}
+	// Fill default args for constructor calls (reference parity: Nim registers every
+	// proc in the symbol table so sigmatch + updateDefaultParams can fill defaults.
+	// instantiateClassConstructor registers Set__string_new with concrete types + defaults).
+	if (hasCtor) {
+		const mangledName = innerType !== null ? innerType.typeName : "";
+		const ctorFnName = mangledName + "_new";
+		const ctorEntry = mangledName !== "" ? lookupCtorDefaults(ctorFnName) : null;
+		if (ctorEntry !== null && ctorEntry.fnType !== null && ctorEntry.fnType.typeChildren !== null) {
+			const ctorType = ctorEntry.fnType;
+			let argIdx = d.newArguments.length;
+			while (argIdx < ctorType.typeChildren.length) {
+				let defNode: Node = null;
+				if (ctorEntry.defaults !== null && argIdx < ctorEntry.defaults.length) defNode = ctorEntry.defaults[argIdx];
+				if (defNode === null) break;
+				const cloned = cloneDefaultNode(defNode);
+				checkExpr(ctx, cloned, ctorType.typeChildren[argIdx]);
+				d.newArguments.push(cloned);
+				argIdx = argIdx + 1;
+			}
+		}
+	}
 	if (resolvedType !== null && (resolvedType.kind === TypeKind.Struct || resolvedType.kind === TypeKind.Ref || resolvedType.kind === TypeKind.GenericInstance)) {
 		return resolvedType;
 	}
@@ -1221,6 +1242,13 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 	// Multi-overload extension — needs argTypes for scoring
 	if (extMultiFiltered.length > 1) {
 		return resolveExtensionOverloadCall(ctx, extMultiFiltered, argTypes, extMultiObjType, extMultiMethodName, node);
+	}
+	// @builtin("JsonStringify"): generate specialized function for struct/anon args
+	// Reference parity: magicsAfterOverloadResolution runs for ALL magic calls,
+	// not just generic/extension ones. Must check here for direct non-generic calls.
+	if (node.resolvedSym !== null && node.resolvedSym.builtinKind === "JsonStringify") {
+		const result = generateJsonStringifyInstance(ctx, node, d, node.location);
+		if (result !== null) return result;
 	}
 	// @builtin("PromiseSpawn"): infer Promise<T> from closure's return type
 	if (node.resolvedSym !== null && node.resolvedSym.builtinKind === "PromiseSpawn"
@@ -2552,7 +2580,7 @@ function checkSpawnCaptures(ctx: CheckerContext, closureNode: Node, spawnNode: N
 // ===== JSON Typed Specialization (reference-aligned: generate + check during sem) =====
 
 import { callCheckFunctionBody } from "./checkerCallbacks";
-import { addPendingInstance, instantiateClassConstructor } from "./instantiate";
+import { addPendingInstance, instantiateClassConstructor, lookupCtorDefaults } from "./instantiate";
 import { getIdentId } from "./idents";
 
 // Shared: register a generated JSON instance (symbol + checker + pending + callee rewrite)

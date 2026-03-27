@@ -944,6 +944,7 @@ function parseClassConstructor(state: ParserState): NodeResult {
 	const raw = parseParamList(state, "constructor");
 	const ctorParamTypeExprs = getLastParamTypeExprs();
 	const ctorParamLocs = getLastParamLocations();
+	const ctorDefaults = getLastParsedDefaults();
 	const ctorParams = extractParamNames(raw);
 	const ctorParamTypes = extractParamTypes(raw);
 	const body = try callBlockParser(state);
@@ -951,6 +952,7 @@ function parseClassConstructor(state: ParserState): NodeResult {
 		ctorParams,
 		ctorParamTypes,
 		ctorBody: body,
+		ctorDefaults,
 	}, ctorToken);
 	ctorNode.typeExprs = ctorParamTypeExprs;
 	ctorNode.paramLocations = ctorParamLocs;

@@ -128,7 +128,8 @@ export function hashToHex(h: Hash): string {
 export function hashValueToBase36(h: Hash): string {
 	const digits = "0123456789abcdefghijklmnopqrstuvwxyz";
 	let v: int64 = h;
-	if (v === (0 as int64)) return "0";
+	if (v < (0 as int64)) v = -v;
+	if (v <= (0 as int64)) return "0";
 	let result = "";
 	while (v > (0 as int64)) {
 		const rem: int64 = v % (36 as int64);

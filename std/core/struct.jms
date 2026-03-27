@@ -1,0 +1,24 @@
+// MetaScript Structure Prelude — JavaScript Backend
+// Native JS Set and Map — same API as our C implementation.
+// No custom hash table needed; JS engines provide optimized built-in versions.
+
+export class Set<T> {
+	size: number;
+}
+
+export extern function add<T>(this s: Set<T>, value: T): void;
+export extern function has<T>(this s: Set<T>, value: T): boolean;
+export extern function delete<T>(this s: Set<T>, value: T): boolean;
+export extern function clear<T>(this s: Set<T>): void;
+
+export class Map<K, V> {
+	size: number;
+}
+
+export extern function set<K, V>(this m: Map<K, V>, key: K, value: V): void;
+export extern function get<K, V>(this m: Map<K, V>, key: K): V;
+export extern function has<K, V>(this m: Map<K, V>, key: K): boolean;
+export extern function delete<K, V>(this m: Map<K, V>, key: K): boolean;
+export extern function clear<K, V>(this m: Map<K, V>): void;
+export extern function keys<K, V>(this m: Map<K, V>): K[];
+export extern function values<K, V>(this m: Map<K, V>): V[];

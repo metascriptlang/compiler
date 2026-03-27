@@ -936,7 +936,13 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, loc: SourceLocat
 		if (isParam || isModLevel) {
 			const lhs = makeMember(makeIdent(state.sharedEnvVarName, loc), name, loc);
 			const orig = findCapturedIdent(name, state.sharedEnvCapturedIdents);
-			if (orig !== null && orig.nodeType !== null) lhs.nodeType = orig.nodeType;
+			const isCcgParam = isParam && orig !== null && orig.nodeType !== null && isCcgPtrType(orig.nodeType);
+			if (isCcgParam) {
+				// Ptr field: LHS type must be Ptr<T> so DRC skips RC hooks (noRcInfo for Ptr)
+				lhs.nodeType = createPtr(orig.nodeType);
+			} else if (orig !== null && orig.nodeType !== null) {
+				lhs.nodeType = orig.nodeType;
+			}
 			let rhs = makeIdent(name, loc);
 			if (orig !== null && orig.resolvedSym !== null) {
 				rhs.resolvedSym = orig.resolvedSym;
@@ -949,7 +955,7 @@ function setupSharedEnv(state: LiftState, allCaptures: NameSet, loc: SourceLocat
 				rhs = wrapFnAsClosure(rhs, loc);
 			}
 			// ccgIntroducedPtr params: store pointer via HiddenAddr (share, don't copy)
-			if (isParam && orig !== null && orig.nodeType !== null && isCcgPtrType(orig.nodeType)) {
+			if (isCcgParam) {
 				rhs = createNode(NodeKind.HiddenAddr, { expr: rhs }, syntheticToken(loc));
 				rhs.nodeType = createPtr(orig.nodeType);
 			}

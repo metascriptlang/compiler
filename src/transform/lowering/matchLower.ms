@@ -46,7 +46,7 @@ function hoistNestedMatch(expr: Node, hoisted: Node[], ctx: TransformContext): N
 		hoisted.push(letDecl);
 
 		// if-chain assigning to $matchres_N
-		hoisted.push(buildIfChain(matchData.matchCases, tempMatch, discType, loc, "assign", tempResult));
+		hoisted.push(buildIfChain(matchData.matchCases, tempMatch, discType, loc, "assign", tempResult, ctx));
 
 		// Replace MatchExpr with $matchres_N
 		const result = makeIdent(tempResult, loc);
@@ -125,7 +125,7 @@ function lowerMatchStmt(matchNode: Node, ctx: TransformContext): Node[] {
 	const discType = d.matchStmtDisc.nodeType;
 
 	// Build if-else chain from cases
-	const ifChain = buildIfChain(d.matchStmtCases, tempName, discType, loc, "stmt", "");
+	const ifChain = buildIfChain(d.matchStmtCases, tempName, discType, loc, "stmt", "", ctx);
 	result.push(ifChain);
 
 	return result;
@@ -140,7 +140,7 @@ function lowerMatchExprAsStmt(matchNode: Node, ctx: TransformContext): Node[] {
 	const result: Node[] = [];
 	result.push(makeVarDecl(tempName, d.matchDisc, DeclKind.Const, loc));
 	const discType = d.matchDisc.nodeType;
-	const ifChain = buildIfChain(d.matchCases, tempName, discType, loc, "stmt", "");
+	const ifChain = buildIfChain(d.matchCases, tempName, discType, loc, "stmt", "", ctx);
 	result.push(ifChain);
 	return result;
 }
@@ -165,7 +165,7 @@ function lowerMatchExprInVar(stmt: Node, ctx: TransformContext): Node[] {
 	}
 	result.push(letDecl);
 	// if-chain with assignment: x = armValue
-	const ifChain = buildIfChain(matchData.matchCases, tempName, discType, loc, "assign", varData.declName);
+	const ifChain = buildIfChain(matchData.matchCases, tempName, discType, loc, "assign", varData.declName, ctx);
 	result.push(ifChain);
 
 	return result;
@@ -184,7 +184,7 @@ function lowerMatchExprInReturn(stmt: Node, ctx: TransformContext): Node[] {
 	result.push(makeVarDecl(tempName, matchData.matchDisc, DeclKind.Const, loc));
 	const discType = matchData.matchDisc.nodeType;
 	// if-chain with return: return armValue
-	const ifChain = buildIfChain(matchData.matchCases, tempName, discType, loc, "return", "");
+	const ifChain = buildIfChain(matchData.matchCases, tempName, discType, loc, "return", "", ctx);
 	result.push(ifChain);
 
 	return result;
@@ -349,10 +349,10 @@ function buildSwitchDispatch(cases: Node[], tempName: string, discType: Type, lo
 	return makeBlock(stmts, loc);
 }
 
-function buildIfChain(cases: Node[], tempName: string, discType: Type, loc: SourceLocation, mode: string, varName: string): Node {
+function buildIfChain(cases: Node[], tempName: string, discType: Type, loc: SourceLocation, mode: string, varName: string, ctx: TransformContext): Node {
 	// String hash dispatch for >8 string cases
 	if (isAllStringCases(cases)) {
-		return buildHashSwitch(cases, tempName, discType, loc, mode, varName);
+		return buildHashSwitch(cases, tempName, discType, loc, mode, varName, ctx);
 	}
 
 	// Switch dispatch for enum/int discriminants (O(1) jump table in C)
@@ -583,7 +583,7 @@ interface HashBucket {
 // Collision-safe: patterns sharing a hash are chained in the same case arm.
 // Return mode: matched arms `return`, so default body placed unconditionally after switch.
 // Stmt/assign mode: matched arms don't exit, so $matched flag guards the default body.
-function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: SourceLocation, mode: string, varName: string): Node {
+function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: SourceLocation, mode: string, varName: string, ctx: TransformContext): Node {
 	let defaultBody = makeBlock([], loc);
 	// return mode: matched arms exit via return — no flag needed, unconditional default is safe.
 	// stmt/assign mode: matched arms don't exit — need $matched flag to skip default.
@@ -651,10 +651,11 @@ function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: S
 		switchCases.push(makeSwitchCase(tests, caseStmts, false, loc));
 	}
 
-	// switch (msStringHash(temp))
+	// switch (msStringHash(temp)) for C, switch (hashStringSigned(temp)) for JS
+	const hashFn = ctx.jsBackend ? "hashStringSigned" : "msStringHash";
 	const hashCallArgs: Node[] = [];
 	hashCallArgs.push(makeTypedIdent(tempName, discType, loc));
-	const hashCall = makeCall(makeIdent("msStringHash", loc), hashCallArgs, loc);
+	const hashCall = makeCall(makeIdent(hashFn, loc), hashCallArgs, loc);
 	const switchNode = makeSwitch(hashCall, switchCases, loc);
 
 	const stmts: Node[] = [];

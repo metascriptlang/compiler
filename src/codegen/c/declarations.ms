@@ -17,7 +17,7 @@ import {
 import { genExpr } from "./expressions";
 import { genStmt, genStmts, resolveEmitArgs } from "./statements";
 import { mangle, mangleTypeName, mangleFieldName, mangledFunctionName, safeName, staticFieldCName } from "./names";
-import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, annotationToC, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam } from "./types";
+import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, annotationToC, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfoDef } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumber, cBoolLiteral, cStringLiteral } from "./literals";
 import { isDrcLifecycleName } from "./forward";
@@ -462,6 +462,8 @@ function genConstructor(g: CGen, node: Node, className: string): void {
 
 	const procs = sec(g, CSection.Procs);
 	addLine(procs, proto + " {");
+	// Ensure typeInfo is declared in this translation unit
+	ensureTypeInfoDef(g, className);
 	// Allocate with RTTI: msAllocTyped(sizeof(Type), &Type_typeInfo)
 	addLine(procs, `  ${className}* this = (${className}*)msAllocTyped(sizeof(${className}), &${className}_typeInfo);`);
 

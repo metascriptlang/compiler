@@ -1461,7 +1461,7 @@ test "number type" {
 	const ctx = checkSource("const x = 42;");
 	const sym = lookupSymbol(ctx.table, "x");
 	assert sym !== null;
-	assert sym.symbolType.kind === TypeKind.Number;
+	assert sym.symbolType.kind === TypeKind.Int32;
 }
 
 test "string type" {
@@ -1489,7 +1489,7 @@ test "arithmetic returns number" {
 	const ctx = checkSource("const x = 1 + 2;");
 	const sym = lookupSymbol(ctx.table, "x");
 	assert sym !== null;
-	assert sym.symbolType.kind === TypeKind.Number;
+	assert sym.symbolType.kind === TypeKind.Int32;
 }
 
 test "string concat returns string" {
@@ -1524,7 +1524,7 @@ test "unary minus returns number" {
 	const ctx = checkSource("const x = -5;");
 	const sym = lookupSymbol(ctx.table, "x");
 	assert sym !== null;
-	assert sym.symbolType.kind === TypeKind.Number;
+	assert sym.symbolType.kind === TypeKind.Int32;
 }
 
 test "function has Function type after resolve" {
@@ -1540,8 +1540,8 @@ test "call returns function return type" {
 	const ctx = checkSource("function foo(a, b) { return 1; } const x = foo(1, 2);");
 	const sym = lookupSymbol(ctx.table, "x");
 	assert sym !== null;
-	// foo's return type inferred as number from body
-	assert sym.symbolType.kind === TypeKind.Number;
+	// foo's return type inferred as int32 from body (integer literal → int32)
+	assert sym.symbolType.kind === TypeKind.Int32;
 }
 
 test "forward reference to function is callable" {
@@ -1571,7 +1571,7 @@ test "array literal infers element type" {
 	const sym = lookupSymbol(ctx.table, "arr");
 	assert sym !== null;
 	assert sym.symbolType.kind === TypeKind.Array;
-	assert sym.symbolType.typeReturn.kind === TypeKind.Number;
+	assert sym.symbolType.typeReturn.kind === TypeKind.Int32;
 }
 
 test "arrow function has Function type" {
@@ -1585,7 +1585,7 @@ test "inferred return type from body" {
 	const ctx = checkSource("function foo() { return 42; }");
 	const sym = lookupSymbol(ctx.table, "foo");
 	assert sym !== null;
-	assert sym.symbolType.typeReturn.kind === TypeKind.Number;
+	assert sym.symbolType.typeReturn.kind === TypeKind.Int32;
 }
 
 test "annotated return type preserved" {
@@ -1599,7 +1599,7 @@ test "arrow infers return type" {
 	const ctx = checkSource("const f = (x) => 42;");
 	const sym = lookupSymbol(ctx.table, "f");
 	assert sym !== null;
-	assert sym.symbolType.typeReturn.kind === TypeKind.Number;
+	assert sym.symbolType.typeReturn.kind === TypeKind.Int32;
 }
 
 test "string return inferred" {
@@ -1727,7 +1727,7 @@ test "generic call infers return type" {
 	assert !hasErrors(ctx);
 	const sym = lookupSymbol(ctx.table, "n");
 	assert sym !== null;
-	assert sym.symbolType.kind === TypeKind.Number;
+	assert sym.symbolType.kind === TypeKind.Int32;
 }
 
 test "two generic params" {
@@ -1735,7 +1735,7 @@ test "two generic params" {
 	assert !hasErrors(ctx);
 	const sym = lookupSymbol(ctx.table, "x");
 	assert sym !== null;
-	assert sym.symbolType.kind === TypeKind.Number;
+	assert sym.symbolType.kind === TypeKind.Int32;
 }
 
 test "generic with annotated return" { assert checkOk("function identity<T>(x: T): T { return x; }"); }
@@ -1755,7 +1755,7 @@ test "match expr returns arm type" {
 	assert !hasErrors(ctx);
 	const sym = lookupSymbol(ctx.table, "x");
 	assert sym !== null;
-	assert sym.symbolType.kind === TypeKind.Number;
+	assert sym.symbolType.kind === TypeKind.Int32;
 }
 
 test "basic not-null check" { assert checkOk("const x = 1; if (x !== null) { const y = x; }"); }

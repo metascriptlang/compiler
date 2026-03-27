@@ -274,7 +274,6 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	}
 
 	// 2a. String equality — reference parity: genStrEquals → eqStrings() in codegen.
-	// msString is a C struct, so == doesn't work. Rewrite to msStringEquals(a, b).
 	if (leftType.kind === TypeKind.String && (opName === "==" || opName === "!=")) {
 		const eqCall = makeCall(makeIdent("msStringEquals", loc), [d.left, d.right], loc);
 		if (opName === "!=") return makeUnary("!", eqCall, loc);

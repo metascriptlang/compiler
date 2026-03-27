@@ -116,7 +116,7 @@ test "arithmetic inference" {
 	const ctx = checkSource("const x = 2 * 3;");
 	const sym = lookupSymbol(ctx.table, "x");
 	assert sym !== null;
-	assert sym.symbolType.kind === TypeKind.Number;
+	assert sym.symbolType.kind === TypeKind.Int32;
 }
 
 test "comparison inference" {

@@ -597,7 +597,7 @@ test "extern from identifier callee left for codegen" {
 test "anonymous object stringify basic" {
 	const prelude = "@builtin(\"JsonStringify\") extern function jsonStringify(value: number): string;";
 	const result = preludeLowerCallee(prelude, "jsonStringify({ x: 1, y: 2 });");
-	assert result === "__jsonStringify___anon2__xn__yn";
+	assert result === "__jsonStringify___anon2__xi__yi";
 }
 
 test "anonymous object stringify string field" {
@@ -609,5 +609,5 @@ test "anonymous object stringify string field" {
 test "anonymous object stringify mixed types" {
 	const prelude = "@builtin(\"JsonStringify\") extern function jsonStringify(value: number): string;";
 	const result = preludeLowerCallee(prelude, "jsonStringify({ a: 1, b: \"x\" });");
-	assert result === "__jsonStringify___anon2__an__bs";
+	assert result === "__jsonStringify___anon2__ai__bs";
 }

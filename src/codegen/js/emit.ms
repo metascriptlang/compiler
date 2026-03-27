@@ -13,10 +13,17 @@ export class JSGenerator {
 	buf: string[];
 	indentLevel: number;
 	jsImports: JsImportEntry[];
+	bundleMode: boolean;
+	bundleIsPrelude: boolean; // true if current module is std/core/* (global scope, skip imports)
+	exportedNames: string[];
+	importedNames: string[]; // track const-destructured names to avoid redeclaration in IIFEs
+	// Maps import source specifier → resolved module ID for __mod["id"] lookups
+	importSourceToModuleId: string[];
+	importSourceToModuleIdKeys: string[];
 }
 
 export function createJSGenerator(): JSGenerator {
-	return { buf: [], indentLevel: 0, jsImports: [] };
+	return { buf: [], indentLevel: 0, jsImports: [], bundleMode: false, bundleIsPrelude: false, exportedNames: [], importedNames: [], importSourceToModuleId: [], importSourceToModuleIdKeys: [] };
 }
 
 // ===== Callback Registration (breaks circular imports) =====
@@ -63,6 +70,17 @@ export function emitJoinedStrings(gen: JSGenerator, items: string[], sep: string
 	for (let i = 1; i < items.length; i += 1) {
 		emit(gen, sep);
 		emit(gen, items[i]);
+	}
+}
+
+// Like emitJoinedStrings but applies safeJsName to each item (for parameter names).
+export type SafeNameFn = (name: string) => string;
+export function emitJoinedSafeStrings(gen: JSGenerator, items: string[], sep: string, safeFn: SafeNameFn): void {
+	if (items.length === 0) return;
+	emit(gen, safeFn(items[0]));
+	for (let i = 1; i < items.length; i += 1) {
+		emit(gen, sep);
+		emit(gen, safeFn(items[i]));
 	}
 }
 

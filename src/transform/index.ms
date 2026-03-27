@@ -74,10 +74,10 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	let result = jsBackend ? lowerPowerAssert(program, ctx) : program;
 	result = lowerDefer(result, ctx);
 	result = lowerConstFold(result, ctx);
-	if (!jsBackend) { result = lowerStringConcatFlatten(result, ctx); }
+	result = lowerStringConcatFlatten(result, ctx);
 	result = lowerOptionalChain(result, ctx);
 	result = lowerNullishCoalesce(result, ctx);
-	if (!jsBackend) { result = lowerStringTruthiness(result, ctx); }
+	result = lowerStringTruthiness(result, ctx);
 	result = lowerDestructuring(result, ctx);
 	result = lowerSpread(result, ctx);
 	if (!jsBackend) { result = lowerArrayMethodInline(result, ctx); }
@@ -100,7 +100,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerJsonDynAccess(result, ctx); }
 	result = lowerExtensionMethod(result, ctx);
 	result = lowerOperators(result, ctx);
-	if (!jsBackend) { result = lowerStringOps(result, ctx); }
+	result = lowerStringOps(result, ctx);
 	result = lowerSubscript(result, ctx);
 	if (!jsBackend) { result = spanLower(result, ctx); }
 	if (!jsBackend) { result = spanParamExpand(result, ctx); }

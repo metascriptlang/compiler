@@ -1342,9 +1342,9 @@ test "tuple type desc emits struct" {
 	const g = createCGen(null as unknown as CheckerContext, "");
 	const t = createTuple([createPrimitive(TypeKind.Number), createPrimitive(TypeKind.String)]);
 	const name = getTypeDesc(g, t);
+	const types = extract(sec(g, CSection.Types));
 	assert name !== "void*";
 	assert name.length > 8; // "msTuple_" + hash
-	const types = extract(sec(g, CSection.Types));
 	assert types.length > 0;
 }
 

@@ -75,7 +75,11 @@ function emitDefaultInit(gen: JSGenerator, t: Type): void {
 		return;
 	}
 	if (t.kind === TypeKind.String) {
-		emit(gen, " = \"\"");
+		if (gen.bundleMode) {
+			emit(gen, " = []");  // byte array (reference parity)
+		} else {
+			emit(gen, " = \"\"");
+		}
 		return;
 	}
 }
@@ -309,6 +313,9 @@ export function emitForStmt(gen: JSGenerator, node: Node): void {
 	emit(gen, "for (");
 	if (d.forInit !== null && d.forInit.kind === NodeKind.VariableDecl) {
 		emitVariableDeclCore(gen, d.forInit);
+	} else if (d.forInit !== null && d.forInit.kind === NodeKind.ExprStmt) {
+		// Unwrap ExprStmt to avoid trailing ;\n
+		emitNode(gen, (d.forInit.data as ExprStmtData).expr);
 	} else if (d.forInit !== null) {
 		emitNode(gen, d.forInit);
 	}

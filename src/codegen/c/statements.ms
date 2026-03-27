@@ -211,7 +211,13 @@ function genExprStmt(g: CGen, p: CProc, node: Node): void {
 		return;
 	}
 	const snippet = genExpr(g, p, d.expr);
-	emitStmtsLine(p, snippet + ";");
+	// Bare identifiers as statements trigger -Wunused-value. Cast to (void) to suppress.
+	// Common case: DRC-generated temps used for discarded return values.
+	if (d.expr.kind === NodeKind.Identifier) {
+		emitStmtsLine(p, `(void)${snippet};`);
+	} else {
+		emitStmtsLine(p, snippet + ";");
+	}
 }
 
 // ===== Variable Declaration =====

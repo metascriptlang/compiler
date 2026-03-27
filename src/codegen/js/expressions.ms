@@ -29,6 +29,32 @@ export function emitNumberLiteral(gen: JSGenerator, node: Node): void {
 
 export function emitStringLiteral(gen: JSGenerator, node: Node): void {
 	const d = node.data as StringLiteralData;
+	if (gen.bundleMode) {
+		// Bundle mode: strings as UTF-8 byte arrays (reference parity: jssys.nim makeJsNimStrLit)
+		const s = d.value;
+		if (s.byteLength === 0) {
+			emit(gen, "[]");
+			return;
+		}
+		if (s.byteLength <= 64) {
+			// Short: inline byte array [104,101,108,108,111]
+			emit(gen, "[");
+			let i = 0;
+			while (i < s.byteLength) {
+				if (i > 0) emit(gen, ",");
+				emit(gen, "" + s.byteAt(i));
+				i = i + 1;
+			}
+			emit(gen, "]");
+		} else {
+			// Long: makeNimstrLit("hello") — converts at runtime
+			emit(gen, "makeNimstrLit(\"");
+			emit(gen, escapeJSString(d.value));
+			emit(gen, "\")");
+		}
+		return;
+	}
+	// Non-bundle: native JS string
 	emit(gen, "\"");
 	emit(gen, escapeJSString(d.value));
 	emit(gen, "\"");
@@ -138,6 +164,26 @@ export function emitUpdateExpr(gen: JSGenerator, node: Node): void {
 
 export function emitCallExpr(gen: JSGenerator, node: Node): void {
 	const d = node.data as CallExprData;
+
+	// msPrintln → console.log with toJSStr conversion (byte arrays → native JS strings)
+	if (d.callee.kind === NodeKind.Identifier && (d.callee.data as IdentifierData).name === "msPrintln") {
+		if (gen.bundleMode) {
+			// Bundle mode: strings are byte arrays, need toJSStr for display
+			emit(gen, "console.log(");
+			for (let ai = 0; ai < d.arguments.length; ai += 1) {
+				if (ai > 0) emit(gen, ", ");
+				emit(gen, "toJSStr(");
+				emitNode(gen, d.arguments[ai]);
+				emit(gen, ")");
+			}
+			emit(gen, ")");
+		} else {
+			emit(gen, "console.log(");
+			emitJoinedNodes(gen, d.arguments, ", ");
+			emit(gen, ")");
+		}
+		return;
+	}
 
 	// Regular function call
 	emitNode(gen, d.callee);

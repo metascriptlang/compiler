@@ -283,6 +283,11 @@ function typeRelationInner(formal: Type, actual: Type): TypeRelation {
 	if (formal.kind === TypeKind.Error || actual.kind === TypeKind.Error) {
 		return TypeRelation.Exact;
 	}
+	// FromLiteral: Number/Float64 → sized numeric formal (number and float64 are both IEEE 754 double)
+	// Must check before int-to-int widening since Number and Float64 share rank with sized types
+	if (isNumeric(formal) && (actual.kind === TypeKind.Number || actual.kind === TypeKind.Float64)) {
+		return TypeRelation.FromLiteral;
+	}
 	// Numeric widening: sized → Number
 	if (isNumeric(actual) && formal.kind === TypeKind.Number) {
 		return TypeRelation.IntConv;
@@ -293,10 +298,6 @@ function typeRelationInner(formal: Type, actual: Type): TypeRelation {
 	if (isNumeric(actual) && isNumeric(formal) && actual.kind !== formal.kind
 		&& integerRank(actual) <= integerRank(formal)) {
 		return TypeRelation.IntConv;
-	}
-	// FromLiteral: Number/Float64 → sized numeric formal (number and float64 are both IEEE 754 double)
-	if (isNumeric(formal) && (actual.kind === TypeKind.Number || actual.kind === TypeKind.Float64)) {
-		return TypeRelation.FromLiteral;
 	}
 	// Null to nullable
 	if (actual.kind === TypeKind.Null) {

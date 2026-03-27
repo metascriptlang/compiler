@@ -2249,9 +2249,16 @@ function sgCollectCallParamHints(
 		const arg = cd.arguments[j];
 		if (arg === null) { continue; }
 		// Skip hints for trivially obvious args (same name as param)
+		// Unwrap implicit conversion nodes (HiddenStdConv/HiddenSubConv) — they are
+		// transparent to the user and shouldn't affect name-based hint suppression
+		let argInner = arg;
+		if (argInner.kind === NodeKind.HiddenStdConv || argInner.kind === NodeKind.HiddenSubConv) {
+			const convData = argInner.data as HiddenStdConvData;
+			if (convData.convExpr !== null) argInner = convData.convExpr;
+		}
 		let argName = "";
-		if (arg.kind === NodeKind.Identifier) {
-			const aid = arg.data as IdentifierData;
+		if (argInner.kind === NodeKind.Identifier) {
+			const aid = argInner.data as IdentifierData;
 			argName = aid.name;
 		}
 		if (argName !== paramNames[j]) {
@@ -3052,7 +3059,7 @@ test "type hint for untyped variable" {
 	const ctx = checkProgram(pr.value);
 	const hints = sgCollectInlayHints(ctx, pr.value, 1, 10);
 	assert hints.length === 1;
-	assert hints[0].label === ": number";
+	assert hints[0].label === ": int32";
 	assert hints[0].hintKind === SgInlayHintKind.Type;
 }
 

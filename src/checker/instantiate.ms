@@ -18,6 +18,32 @@ import { getIdentId } from "./idents";
 // compile.ms drains this after each module's check.
 let _pendingInstances: Node[] = [];
 
+// ===== Constructor Default Registry =====
+// Cross-module registry for constructor function types + defaults.
+// Each module has its own symbol table, so constructor symbols can't be shared
+// via scope. This registry is module-level (shared across all checker invocations)
+// and provides the concrete param types needed for default-fill in checkNewExpr.
+interface CtorEntry {
+	name: string;
+	fnType: Type;
+	defaults: Node[];
+}
+let _ctorRegistry: CtorEntry[] = [];
+
+function registerCtorDefaults(name: string, fnType: Type, defaults: Node[]): void {
+	for (const e of _ctorRegistry) {
+		if (e.name === name) return; // already registered
+	}
+	_ctorRegistry.push({ name, fnType, defaults });
+}
+
+export function lookupCtorDefaults(ctorFnName: string): CtorEntry {
+	for (const e of _ctorRegistry) {
+		if (e.name === ctorFnName) return e;
+	}
+	return null as unknown as CtorEntry;
+}
+
 export function addPendingInstance(node: Node): void {
 	if (node.kind === NodeKind.FunctionDecl) {
 		const fd = node.data as FunctionDeclData;
@@ -426,10 +452,18 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 		replaceTypeVars(clonedBody, dedup.names, dedup.types);
 	}
 
+	// Clone constructor defaults (for default-fill at call sites)
+	const fnDefaults: Node[] = [];
+	if (ctorData.ctorDefaults !== null) {
+		for (const d of ctorData.ctorDefaults) {
+			fnDefaults.push(d !== null ? monoCloneNode(d) : null as unknown as Node);
+		}
+	}
+
 	// Create FunctionDecl: the codegen's genConstructor handles alloc + body + return this.
 	// We emit a ClassDecl with just the constructor so genClassDecl generates ClassName_new().
 	const loc = ctorNode.location !== null ? ctorNode.location : makeLoc(0, 0);
-	const clonedCtor: NodeData = { ctorParams: fnParams, ctorParamTypes: fnParamTypes, ctorBody: clonedBody };
+	const clonedCtor: NodeData = { ctorParams: fnParams, ctorParamTypes: fnParamTypes, ctorBody: clonedBody, ctorDefaults: fnDefaults };
 	const ctorDeclNode = createNodeAt(NodeKind.ConstructorDecl, clonedCtor, loc);
 
 	// Set constructor node type (param types for codegen)
@@ -458,6 +492,10 @@ export function instantiateClassConstructor(classSym: Symbol, paramNames: string
 		callCheckFunctionBody(ctx, ctorSym, ctorParams, clonedBody, null as unknown as SourceLocation[]);
 		ctx.modulePath = savedModulePath;
 	}
+
+	// Store constructor type + defaults for cross-module default-fill lookup.
+	// Can't use symbol table (each module has its own). Use shared _ctorRegistry instead.
+	registerCtorDefaults(ctorFnName, ctorDeclNode.nodeType, fnDefaults);
 
 	// Emit ClassDecl with just the constructor (struct already emitted by monoEmitTypeInstNodes)
 	const classBody: Node[] = [];

@@ -1,2 +1,2 @@
 // JavaScript Codegen — Hub
-export { generateJS } from "./jsgen";
+export { generateJS, generateJSBundleModule, BundleModuleResult } from "./jsgen";

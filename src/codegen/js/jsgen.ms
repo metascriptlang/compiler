@@ -3,7 +3,7 @@
 // Registers emitNodeDispatch callback, provides generateJS entry point.
 // Tests cover the full pipeline: parse → check → transform → generateJS.
 
-import { Node, NodeKind, ProgramData, HiddenDerefData, HiddenStdConvData } from "../../ast/node";
+import { Node, NodeKind, ProgramData, HiddenDerefData, HiddenStdConvData, TryExprData } from "../../ast/node";
 import {
 	JSGenerator, createJSGenerator, registerEmitNode,
 	finalize, emit, emitNode, emitLine,
@@ -68,6 +68,19 @@ function emitNodeDispatch(gen: JSGenerator, node: Node): void {
 		NodeKind.SpreadExpr => { emitSpreadExpr(gen, node); },
 		NodeKind.NewExpr => { emitNewExpr(gen, node); },
 		NodeKind.MoveExpr => { emitMoveExpr(gen, node); },
+		NodeKind.TryExpr => {
+			// try expr → (function(){ const $r = expr; if (!$r.ok) throw $r; return $r.value; })()
+			const td = node.data as TryExprData;
+			emit(gen, "(function(){ const $r = ");
+			emitNodeDispatch(gen, td.tryArg);
+			if (td.hasCatch && td.catchVal !== null) {
+				emit(gen, "; if (!$r.ok) return ");
+				emitNodeDispatch(gen, td.catchVal);
+				emit(gen, "; return $r.value; })()");
+			} else {
+				emit(gen, "; if (!$r.ok) throw $r; return $r.value; })()");
+			}
+		},
 		NodeKind.HiddenDeref | NodeKind.HiddenAddr => { const hd = node.data as HiddenDerefData; emitNodeDispatch(gen, hd.expr); },
 		NodeKind.HiddenStdConv | NodeKind.HiddenSubConv => { const hd = node.data as HiddenStdConvData; emitNodeDispatch(gen, hd.convExpr); },
 		NodeKind.AwaitExpr => { emitAwaitExpr(gen, node); },
@@ -139,6 +152,24 @@ export function generateJS(program: Node, jsImports: JsImportEntry[]): string {
 	}
 	emitNodeDispatch(gen, program);
 	return finalize(gen);
+}
+
+// Bundle mode: generate JS for a single module without header/imports.
+// Returns the code body + list of exported names for the IIFE return statement.
+export interface BundleModuleResult {
+	code: string;
+	exportedNames: string[];
+}
+
+export function generateJSBundleModule(program: Node, importSourceMap: string[], importSourceMapKeys: string[], isPrelude: boolean): BundleModuleResult {
+	const gen = createJSGenerator();
+	gen.bundleMode = true;
+	gen.bundleIsPrelude = isPrelude;
+	gen.jsImports = [];
+	gen.importSourceToModuleId = importSourceMap;
+	gen.importSourceToModuleIdKeys = importSourceMapKeys;
+	emitNodeDispatch(gen, program);
+	return { code: finalize(gen), exportedNames: gen.exportedNames };
 }
 
 // Generate JS without header (for internal/test use)

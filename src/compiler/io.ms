@@ -26,6 +26,9 @@ export function verboseLog(msg: string): void {
 // replaceExt("foo.ms", ".c") → "foo.c"
 // replaceExt("foo.ms", "") → "foo"
 export function replaceExt(inputFile: string, newExt: string): string {
+	if (inputFile.endsWith(".jms") || inputFile.endsWith(".cms")) {
+		return inputFile.slice(0, inputFile.length - 4) + newExt;
+	}
 	if (inputFile.endsWith(".ms")) {
 		return inputFile.slice(0, inputFile.length - 3) + newExt;
 	}
