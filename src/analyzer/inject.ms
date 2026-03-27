@@ -1555,8 +1555,8 @@ function processExprStmt(stmt: Node, idx: number, stmts: Node[], dctx: DrcContex
 function isDrcHookFunction(dctx: DrcContext): boolean {
 	const name = dctx.currentFuncName;
 	if (name === "") return false;
-	if (name.endsWith("_copy") || name.endsWith("_sink") || name.endsWith("_destroy") || name.endsWith("_wasMoved")) return true;
-	if (name.endsWith("_dup") || name.endsWith("_trace") || name.endsWith("_eq")) return true;
+	if (name.endsWith("Copy") || name.endsWith("Sink") || name.endsWith("Destroy") || name.endsWith("WasMoved")) return true;
+	if (name.endsWith("Dup") || name.endsWith("Trace") || name.endsWith("Eq")) return true;
 	return false;
 }
 

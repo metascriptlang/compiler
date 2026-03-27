@@ -303,9 +303,10 @@ function collectClassMethod(ctx: CheckerContext, className: string, classGeneric
 	if (builtinKind !== "") {
 		methodSym.builtinKind = builtinKind;
 	}
-	// Class method symbols live ONLY in the extension registry, NOT in the scope.
-	// This prevents mangled names (JSON_parse) from polluting identifier completions.
-	// The checker resolves them via extension registry lookup in checkMemberExpr.
+	// Add mangled symbol to scope — required for cross-module export.
+	// Without this, importing a class from another module loses its methods
+	// (the export pipeline only sees scope symbols, not extension-only symbols).
+	defineOrError(ctx, methodSym, member);
 	// Extern class methods → NativeMethod flag (don't set ExtCall, keep as native member call)
 	if (isExternClass) {
 		setFlag(methodSym, SymbolFlag.NativeMethod);

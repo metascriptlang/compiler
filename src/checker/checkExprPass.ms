@@ -1288,21 +1288,37 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 	// @builtin("Echo"): accept any number of args of any type (reference echo parity)
 	const isEchoBuiltin = node.resolvedSym !== null && node.resolvedSym.builtinKind === "Echo";
 	if (calleeType.kind === TypeKind.Function && !isEchoBuiltin) {
+		// Rest param detection: last typeNames entry starts with "..." (Nim parity: tyVarargs)
+		const lastPN = calleeType.typeNames.length > 0 ? calleeType.typeNames[calleeType.typeNames.length - 1] : "";
+		const hasRest = lastPN.length > 3 && lastPN.slice(0, 3) === "...";
 		// Fill default arguments if too few args provided
 		const minAr = getMinArity(calleeType);
-		if (argTypes.length < minAr) {
-			addError(ctx, "Too few arguments: expected at least " + String(minAr) + ", got " + String(argTypes.length), node.location.line, node.location.column);
-		} else if (argTypes.length > calleeType.typeChildren.length) {
-			addError(ctx, "Too many arguments: expected at most " + String(calleeType.typeChildren.length) + ", got " + String(argTypes.length), node.location.line, node.location.column);
+		// Rest param is optional (accepts 0+ args), so effective min excludes it
+		const effectiveMin = hasRest && minAr >= calleeType.typeChildren.length
+			? calleeType.typeChildren.length - 1 : minAr;
+		if (argTypes.length < effectiveMin) {
+			addError(ctx, `Too few arguments: expected at least ${effectiveMin}, got ${argTypes.length}`, node.location.line, node.location.column);
+		} else if (!hasRest && argTypes.length > calleeType.typeChildren.length) {
+			addError(ctx, `Too many arguments: expected at most ${calleeType.typeChildren.length}, got ${argTypes.length}`, node.location.line, node.location.column);
 		} else if (argTypes.length < calleeType.typeChildren.length) {
 			const calleeNameForDef = getCalleeNameForDefaults(node);
 			if (calleeNameForDef !== "") {
 				fillDefaultArgsForNode(ctx, node, calleeNameForDef, calleeType.typeChildren.length, 0);
 			}
 		}
-		// Type-check only provided args (defaults are trusted)
-		for (let pi = 0; pi < calleeType.typeChildren.length && pi < argTypes.length; pi += 1) {
-			const paramType = calleeType.typeChildren[pi];
+		// Type-check provided args (rest args check against element type of rest param)
+		const restParamIdx = hasRest ? calleeType.typeChildren.length - 1 : -1;
+		for (let pi = 0; pi < argTypes.length; pi += 1) {
+			let paramType: Type = null as unknown as Type;
+			if (hasRest && pi >= restParamIdx) {
+				// Args at or beyond rest param position: check against element type
+				const restType = calleeType.typeChildren[restParamIdx];
+				paramType = restType.typeReturn !== null ? restType.typeReturn : restType;
+			} else if (pi < calleeType.typeChildren.length) {
+				paramType = calleeType.typeChildren[pi];
+			} else {
+				continue;
+			}
 			if (argTypes[pi] === null || argTypes[pi] === null) continue;
 			if (paramType.kind !== TypeKind.Unknown && paramType.kind !== TypeKind.GenericParam
 				&& paramType.kind !== TypeKind.Function

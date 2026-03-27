@@ -29,7 +29,7 @@ function isWasMovedFn(name: string): boolean {
 		|| name === "msArrayRefWasMoved"
 		|| name === "msClosureWasMoved"
 		|| name === "msPtrWasMoved"
-		|| name.endsWith("_wasMoved");
+		|| name.endsWith("WasMoved");
 }
 
 function isDestroyFn(name: string): boolean {
@@ -39,7 +39,7 @@ function isDestroyFn(name: string): boolean {
 		|| name === "msArrayStringDestroy"
 		|| name === "msArrayRefDestroy"
 		|| name === "msClosureDestroy"
-		|| name.endsWith("_destroy");
+		|| name.endsWith("Destroy");
 }
 
 

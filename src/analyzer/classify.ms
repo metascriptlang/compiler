@@ -87,7 +87,7 @@ function classifyArray(t: Type, ctx: TransformContext): RcInfo {
 			// Use the ELEMENT's typeName (not the base struct) for the mangled hook name
 			const elemName = elem.typeName !== "" ? elem.typeName : structElem.typeName;
 			const n = elemName + "Array";
-			return makeRcInfo(RcKind.Named, n, n + "_destroy", n + "_copy", n + "_wasMoved", n + "_sink", true);
+			return makeRcInfo(RcKind.Named, n, n + "Destroy", n + "Copy", n + "WasMoved", n + "Sink", true);
 		}
 		return noRcInfo();
 	}
@@ -106,7 +106,7 @@ function classifyObject(t: Type, ctx: TransformContext): RcInfo {
 	if (t.typeName !== "") {
 		// Reference parity: hasAsgnFlag checks propagated flag (set at type creation)
 		if (hasAsgnFlag(t)) {
-			return makeRcInfo(RcKind.Named, t.typeName, t.typeName + "_destroy", t.typeName + "_copy", t.typeName + "_wasMoved", t.typeName + "_sink", false);
+			return makeRcInfo(RcKind.Named, t.typeName, t.typeName + "Destroy", t.typeName + "Copy", t.typeName + "WasMoved", t.typeName + "Sink", false);
 		}
 		return noRcInfo();
 	}
@@ -150,7 +150,7 @@ export function classifyType(t: Type, ctx: TransformContext): RcInfo {
 		TypeKind.Distinct => { if (t.typeReturn !== null) { return classifyType(t.typeReturn, ctx); } else { return noRcInfo(); } },
 		TypeKind.Union => {
 			if (t.typeName !== "" && hasAsgnFlag(t)) {
-				return makeRcInfo(RcKind.Named, t.typeName, t.typeName + "_destroy", t.typeName + "_copy", t.typeName + "_wasMoved", t.typeName + "_sink", false);
+				return makeRcInfo(RcKind.Named, t.typeName, t.typeName + "Destroy", t.typeName + "Copy", t.typeName + "WasMoved", t.typeName + "Sink", false);
 			} else { return noRcInfo(); }
 		},
 		TypeKind.Tuple => {
@@ -273,9 +273,9 @@ test "named object with managed field → Named" {
 	const info = classifyType(createStruct("Token", ["value"], [stringType()], false), ctx);
 	assert info.rcKind === RcKind.Named;
 	assert info.needsCleanup;
-	assert info.destroyFn === "Token_destroy";
-	assert info.copyFn === "Token_copy";
-	assert info.wasMovedFn === "Token_wasMoved";
+	assert info.destroyFn === "TokenDestroy";
+	assert info.copyFn === "TokenCopy";
+	assert info.wasMovedFn === "TokenWasMoved";
 }
 
 test "named object without managed field → noRcInfo" {

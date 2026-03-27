@@ -14,53 +14,50 @@ import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, s
 // ===== DRC forward prototypes =====
 
 // DRC lifecycle suffixes — single source of truth for hook detection.
-const DRC_SUFFIXES: string[] = ["_destroy", "_copy", "_sink", "_wasMoved", "_dup", "_eq", "_trace", "_typeInfo"];
+const DRC_SUFFIXES: string[] = ["Destroy", "Copy", "Sink", "WasMoved", "Dup", "Eq", "Trace", "TypeInfo"];
 
-function hasSuffix(name: string, suffixes: string[]): boolean {
+function findSuffix(name: string, suffixes: string[]): string {
 	for (const suffix of suffixes) {
-		if (name.endsWith(suffix)) return true;
+		if (name.endsWith(suffix)) return suffix;
 	}
-	return false;
+	return "";
 }
 
 export function isDrcLifecycleName(name: string): boolean {
-	return hasSuffix(name, DRC_SUFFIXES);
+	return findSuffix(name, DRC_SUFFIXES) !== "";
 }
 
 // Emit forward prototype for DRC lifecycle functions called cross-module.
 // Signatures are known by convention (suffix determines parameter pattern).
 export function ensureDrcProto(g: CGen, callee: string): void {
-	if (!isDrcLifecycleName(callee)) return;
+	const suffix = findSuffix(callee, DRC_SUFFIXES);
+	if (suffix === "") return;
 	if (nameSetHas(g.declaredProcs, callee)) return;
 	nameSetAdd(g.declaredProcs, callee);
 
-	// Extract type name prefix: "TypeName_destroy" → "TypeName"
-	const lastUnderscore = callee.lastIndexOf("_");
-	if (lastUnderscore < 0) return;
-	const typeName = callee.slice(0, lastUnderscore);
-	const suffix = callee.slice(lastUnderscore, callee.length);
-
+	// Extract type name prefix: "TypeNameDestroy" → "TypeName"
+	const typeName = callee.slice(0, callee.length - suffix.length);
 	const isSeqHook = typeName.endsWith("Array");
 
 	const proto = match (suffix) {
-		"_destroy" => {
+		"Destroy" => {
 			if (isSeqHook) {
 				return `void ${callee}(${typeName} self)`;
 			} else {
 				return `void ${callee}(${typeName}* self)`;
 			}
 		},
-		"_wasMoved" => `void ${callee}(${typeName}* self)`,
-		"_copy" | "_sink" => {
+		"WasMoved" => `void ${callee}(${typeName}* self)`,
+		"Copy" | "Sink" => {
 			if (isSeqHook) {
 				return `void ${callee}(${typeName}* dest, ${typeName} src)`;
 			} else {
 				return `void ${callee}(${typeName}* dest, ${typeName}* src)`;
 			}
 		},
-		"_dup" => `${typeName} ${callee}(${typeName}* src)`,
-		"_eq" => `MS_BOOL ${callee}(${typeName} a, ${typeName} b)`,
-		"_trace" => `void ${callee}(${typeName}* self, void* callback)`,
+		"Dup" => `${typeName} ${callee}(${typeName}* src)`,
+		"Eq" => `MS_BOOL ${callee}(${typeName} a, ${typeName} b)`,
+		"Trace" => `void ${callee}(${typeName}* self, void* callback)`,
 		_ => { return; },
 	};
 	addLine(sec(g, CSection.ProcHeaders), proto + ";");

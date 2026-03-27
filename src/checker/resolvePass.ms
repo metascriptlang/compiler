@@ -634,8 +634,13 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 			if (def !== null) defCount = defCount + 1;
 		}
 	}
-	if (defCount > 0) {
-		setMinArity(fnType, d.params.length - defCount);
+	// Rest param is optional (accepts 0+ args) — reduces min arity
+	const hasRestParam = d.params.length > 0
+		&& d.params[d.params.length - 1].length > 3
+		&& d.params[d.params.length - 1].slice(0, 3) === "...";
+	if (defCount > 0 || hasRestParam) {
+		const restReduction = hasRestParam ? 1 : 0;
+		setMinArity(fnType, d.params.length - defCount - restReduction);
 	}
 
 	if (genericNames.length > 0) {

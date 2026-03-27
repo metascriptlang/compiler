@@ -162,8 +162,8 @@ function extractGlobal(stmt: Node): HcrGlobal {
 
 function varDeclToGlobal(node: Node): HcrGlobal {
 	const d = node.data as VariableDeclData;
-	// Skip _typeInfo vars (ORC runtime, should stay as globals)
-	if (d.declName.length > 9 && d.declName.endsWith("_typeInfo")) {
+	// Skip TypeInfo vars (ORC runtime, should stay as globals)
+	if (d.declName.length > 8 && d.declName.endsWith("TypeInfo")) {
 		return null as unknown as HcrGlobal;
 	}
 	const t = node.nodeType !== null ? node.nodeType : null;

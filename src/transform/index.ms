@@ -67,6 +67,7 @@ import { lowerJsonDynAccess } from "./native/jsonDynAccessLower";
 import { lowerDCE } from "./analysis/dce";
 import { liftDestructors } from "./lowering/destructorLifting";
 import { lowerPowerAssert } from "./powerAssert";
+import { lowerRestParams } from "./lowering/restParamLower";
 
 export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
@@ -78,6 +79,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	result = lowerOptionalChain(result, ctx);
 	result = lowerNullishCoalesce(result, ctx);
 	result = lowerStringTruthiness(result, ctx);
+	result = lowerRestParams(result, ctx);
 	result = lowerDestructuring(result, ctx);
 	result = lowerSpread(result, ctx);
 	if (!jsBackend) { result = lowerArrayMethodInline(result, ctx); }

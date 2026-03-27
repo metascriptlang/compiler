@@ -567,7 +567,7 @@ function genGlobalVar(g: CGen, node: Node): void {
 
 	// Detect _typeInfo vars from destructorLifting (ORC runtime RTTI)
 	const nameLen = d.declName.length;
-	if (nameLen > 9 && d.declName.slice(nameLen - 9, nameLen) === "_typeInfo") {
+	if (nameLen > 8 && d.declName.slice(nameLen - 8, nameLen) === "TypeInfo") {
 		genTypeInfoVar(g, d, varName);
 		return;
 	}
@@ -601,8 +601,8 @@ function genGlobalVar(g: CGen, node: Node): void {
 // The ObjectLiteral initializer has fields { name, isCyclic, traceFn, destroyFn }.
 
 function genTypeInfoVar(g: CGen, d: VariableDeclData, varName: string): void {
-	// Extract base type name: strip "_typeInfo" suffix (9 chars)
-	const baseName = d.declName.slice(0, d.declName.length - 9);
+	// Extract base type name: strip "TypeInfo" suffix (8 chars)
+	const baseName = d.declName.slice(0, d.declName.length - 8);
 	// Mark as defined so ensureTypeInfoDef doesn't duplicate
 	typeCacheSet(g.forwTypeCache, "typeInfoDef:" + baseName, baseName);
 

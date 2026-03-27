@@ -46,51 +46,15 @@ function resolveType(ctx: TransformContext, node: Node): Type {
 
 // Built-in types that use native C operators — never rewrite these.
 function isBuiltinType(typeName: string): boolean {
-	return typeName === "" || typeName === "number" || typeName === "string"
+	// String is NOT builtin — it has operator overloads (==, <, <=) in prelude.
+	return typeName === "" || typeName === "number"
 		|| typeName === "boolean" || typeName === "void" || typeName === "null"
 		|| typeName === "int8" || typeName === "int16" || typeName === "int32" || typeName === "int64"
 		|| typeName === "uint8" || typeName === "uint16" || typeName === "uint32" || typeName === "uint64"
 		|| typeName === "float32" || typeName === "float64";
 }
 
-// Map MetaScript binary operators to their operator function names.
-// Only operators that can be overloaded are mapped.
-function binaryOpName(op: string): string {
-	return match (op) {
-		"===" => "==",
-		"!==" => "!=",
-		"<" => "<",
-		"<=" => "<=",
-		">" => ">",
-		">=" => ">=",
-		"+" => "+",
-		"-" => "-",
-		"*" => "*",
-		"/" => "/",
-		"%" => "%",
-		_ => "",
-	};
-}
 
-// ===== Derived Operators (reference parity: system/reference comparisons) =====
-//
-// Reference implementation defines derived operators as templates — pure syntactic rewrites:
-//   template `!=`*(x, y: untyped): untyped = not (x == y)
-//   template `>`*(x, y: untyped): untyped  = y < x
-//   template `>=`*(x, y: untyped): untyped = y <= x
-//
-// We do the same: derive != from ==, > from <, >= from <=.
-// This is generic — works for ANY type that has the base operator.
-
-// Get the base operator that a derived operator depends on.
-function derivedBaseOp(opName: string): string {
-	return match (opName) {
-		"!=" => "==",
-		">" => "<",
-		">=" => "<=",
-		_ => "",
-	};
-}
 
 // ===== Null Detection =====
 
@@ -113,20 +77,6 @@ function isValueObject(t: Type): boolean {
 	return t.typeName !== "";
 }
 
-// Check if a base operator has an implementation for a given type.
-// Checks: explicit extension → auto-generated (== for objects, ==/</<= for tuples).
-function hasOperator(ctx: TransformContext, typeName: string, opName: string, leftType: Type): boolean {
-	if (ctx.checkerCtx.extensionRegistry !== null) {
-		if (findExtension(ctx.checkerCtx.extensionRegistry, typeName, opName) !== null) return true;
-	}
-	// Auto-generated == exists for all value-type objects (reference: proc `==`*[T: tuple|object])
-	if (opName === "==" && isValueObject(leftType)) return true;
-	// Auto-generated ==, <, <= exist for all tuples (reference: reference core:1973-1996)
-	if (leftType.kind === TypeKind.Tuple) {
-		if (opName === "==" || opName === "<" || opName === "<=") return true;
-	}
-	return false;
-}
 
 // Register a pending tuple operation for later generation by destructorLifting.
 function registerTupleOp(ctx: TransformContext, t: Type, tName: string, op: string): void {
@@ -149,26 +99,39 @@ function registerTupleOp(ctx: TransformContext, t: Type, tName: string, op: stri
 	ctx.pendingTupleOps.push(entry);
 }
 
+// Build a call to an operator extension — resolves nativeName for extern operators.
+function makeExtOpCall(ext: ExtensionMethod, opName: string, left: Node, right: Node, loc: SourceLocation): Node {
+	let callName = opName;
+	if (ext.sym !== null) {
+		if (ext.sym.nativeName !== null && ext.sym.nativeName !== "") {
+			callName = ext.sym.nativeName;
+		} else if (ext.sym.name !== "") {
+			callName = ext.sym.name;
+		}
+	}
+	const callIdent = makeIdent(callName, loc);
+	callIdent.resolvedSym = ext.sym;
+	return makeCall(callIdent, [left, right], loc);
+}
+
 // Resolve a base operator to a CallExpr.
-// Returns the call node, or null if no implementation found.
 function resolveOpCall(ctx: TransformContext, typeName: string, opName: string, leftType: Type, left: Node, right: Node, loc: SourceLocation): Node {
 	// Explicit extension takes priority
 	if (ctx.checkerCtx.extensionRegistry !== null) {
 		const ext = findExtension(ctx.checkerCtx.extensionRegistry, typeName, opName);
 		if (ext !== null) {
-			return makeCall(makeIdent(opName, loc), [left, right], loc);
+			return makeExtOpCall(ext, opName, left, right, loc);
 		}
 	}
-	// Auto-generated == for interfaces — codegen handles & via reference pointer introduction (reference parity:
-	// reference core:1973 `==`*[T: object](x, y: T) takes value params, codegen adds pointer)
-	if (opName === "==" && isValueObject(leftType)) {
+	// Auto-generated == for interfaces (=== same as == for value types)
+	if ((opName === "==" || opName === "===") && isValueObject(leftType)) {
 		const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
-		const callee = makeIdent(typeName + "_eq", loc);
+		const callee = makeIdent(typeName + "Eq", loc);
 		callee.nodeType = fnType;
 		return makeCall(callee, [left, right], loc);
 	}
 	// Closure equality: a === b → a.fn === b.fn && a.env === b.env (reference parity)
-	if ((opName === "==" || opName === "!=") && leftType.kind === TypeKind.Function) {
+	if ((opName === "==" || opName === "===" || opName === "!=" || opName === "!==") && leftType.kind === TypeKind.Function) {
 		const fnA = makeMember(left, "fn", loc);
 		const fnB = makeMember(right, "fn", loc);
 		const envA = makeMember(left, "env", loc);
@@ -176,7 +139,7 @@ function resolveOpCall(ctx: TransformContext, typeName: string, opName: string, 
 		const fnEq = makeBinary(fnA, "===", fnB, loc);
 		const envEq = makeBinary(envA, "===", envB, loc);
 		const bothEq = makeBinary(fnEq, "&&", envEq, loc);
-		if (opName === "!=") return makeUnary("!", bothEq, loc);
+		if (opName === "!=" || opName === "!==") return makeUnary("!", bothEq, loc);
 		return bothEq;
 	}
 	// Auto-generated ==, <, <= for tuples (reference: reference core:1973-1996)
@@ -184,9 +147,9 @@ function resolveOpCall(ctx: TransformContext, typeName: string, opName: string, 
 		const tName = tupleTypeName(leftType);
 		if (tName === "") return null as unknown as Node;
 		const suffix = match (opName) {
-			"==" => "_eq",
-			"<" => "_lt",
-			"<=" => "_le",
+			"==" | "===" => "Eq",
+			"<" => "Lt",
+			"<=" => "Le",
 			_ => "",
 		};
 		if (suffix !== "") {
@@ -207,10 +170,8 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	if (ctx.checkerCtx === null) return node;
 
 	const d = node.data as BinaryExprData;
-
-	// Only rewrite overloadable operators
-	const opName = binaryOpName(d.operator);
-	if (opName === "") return node;
+	const opName = d.operator;
+	const isNotEqual = opName === "!=" || opName === "!==";
 
 	// Resolve left operand type
 	const leftType = resolveType(ctx, d.left);
@@ -223,13 +184,13 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	if (hasNullLeft || hasNullRight) {
 		const valueType = hasNullLeft ? resolveType(ctx, d.right) : leftType;
 		if (valueType !== null && isValueObject(valueType)) {
-			return makeBool(opName === "!=", loc);
+			return makeBool(isNotEqual, loc);
 		}
 		// Maybe<T>: x !== null → x.present, x === null → !x.present
 		if (valueType !== null && isMaybeType(valueType)) {
 			const nonNullSide = hasNullLeft ? d.right : d.left;
 			const member = makeMember(nonNullSide, "present", loc);
-			if (opName === "!=") return member;
+			if (isNotEqual) return member;
 			return makeUnary("!", member, loc);
 		}
 		// Array null check: arrays are value-type structs { len, p } — can never be null.
@@ -237,7 +198,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 		// Empty arrays have p=NULL but are valid — push handles lazy alloc.
 		// Fold to constant true/false, same as strings, results, tuples.
 		if (valueType !== null && valueType.kind === TypeKind.Array) {
-			return makeBool(opName === "!=", loc);
+			return makeBool(isNotEqual, loc);
 		}
 		// Closure null check: closure !== null → closure.fn !== null
 		// msClosure is a value struct { fn, env } — check the function pointer field.
@@ -254,7 +215,7 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 			const vk = valueType.kind;
 			if (vk === TypeKind.GenericInstance || vk === TypeKind.Tuple || vk === TypeKind.String
 				|| vk === TypeKind.Union) {
-				return makeBool(opName === "!=", loc);
+				return makeBool(isNotEqual, loc);
 			}
 		}
 	}
@@ -269,41 +230,51 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	if (ctx.checkerCtx.extensionRegistry !== null) {
 		const ext = findExtension(ctx.checkerCtx.extensionRegistry, typeName, opName);
 		if (ext !== null) {
-			return makeCall(makeIdent(opName, loc), [d.left, d.right], loc);
+			return makeExtOpCall(ext, opName, d.left, d.right, loc);
 		}
 	}
 
-	// 2a. String equality — reference parity: genStrEquals → eqStrings() in codegen.
-	if (leftType.kind === TypeKind.String && (opName === "==" || opName === "!=")) {
-		const eqCall = makeCall(makeIdent("msStringEquals", loc), [d.left, d.right], loc);
-		if (opName === "!=") return makeUnary("!", eqCall, loc);
-		return eqCall;
-	}
+	// 2a. String operators (==, !=, <, >, <=, >=) handled by operator overloads in prelude.
+	// No hardcoded lowering — the overloads are registered as extensions and found above.
 
 	// 2b. Built-in types use native C operators — no rewrite needed.
 	if (isBuiltinType(typeName)) return node;
 
-	// 4. Derived operators (reference: system/reference comparisons templates).
-	//    != → not(==), > → swap(<), >= → swap(<=)
-	//    Generic — works for any type that has the base operator.
-	const baseOp = derivedBaseOp(opName);
-	if (baseOp !== "" && hasOperator(ctx, typeName, baseOp, leftType)) {
-		if (opName === "!=") {
-			// template `!=`*(x, y): untyped = not (x == y)
-			const eqCall = resolveOpCall(ctx, typeName, baseOp, leftType, d.left, d.right, loc);
-			return makeUnary("!", eqCall, loc);
+	// 4. Derived operators — fallback for types without explicit prelude overloads.
+	// Strings have all operators in prelude (found in step 1 above).
+	// Interfaces/tuples still use compiler derivation until templates exist.
+	const baseOp = match (opName) {
+		"!=" => "==",
+		"!==" => "===",
+		">" => "<",
+		">=" => "<=",
+		_ => "",
+	};
+	if (baseOp !== "") {
+		// Check if base operator exists (explicit extension or auto-generated)
+		let hasBase = false;
+		if (ctx.checkerCtx.extensionRegistry !== null) {
+			if (findExtension(ctx.checkerCtx.extensionRegistry, typeName, baseOp) !== null) hasBase = true;
 		}
-		if (opName === ">" || opName === ">=") {
-			// template `>`*(x, y): untyped  = y < x   (swap operands)
-			// template `>=`*(x, y): untyped = y <= x   (swap operands)
-			return resolveOpCall(ctx, typeName, baseOp, leftType, d.right, d.left, loc);
+		if (!hasBase && (baseOp === "==" || baseOp === "===") && isValueObject(leftType)) hasBase = true;
+		if (!hasBase && leftType.kind === TypeKind.Tuple && (baseOp === "==" || baseOp === "===" || baseOp === "<" || baseOp === "<=")) hasBase = true;
+
+		if (hasBase) {
+			if (opName === "!=" || opName === "!==") {
+				const eqCall = resolveOpCall(ctx, typeName, baseOp, leftType, d.left, d.right, loc);
+				return makeUnary("!", eqCall, loc);
+			}
+			if (opName === ">" || opName === ">=") {
+				return resolveOpCall(ctx, typeName, baseOp, leftType, d.right, d.left, loc);
+			}
 		}
 	}
 
 	// 5. Direct base operators for value-type objects (auto-generated ==).
-	if (opName === "==" && isValueObject(leftType)) {
+	// === is the same as == for value types (no reference identity distinction).
+	if ((opName === "==" || opName === "===") && isValueObject(leftType)) {
 		const fnType = createFunction([leftType, leftType], ["x", "y"], booleanType());
-		const callee = makeIdent(typeName + "_eq", loc);
+		const callee = makeIdent(typeName + "Eq", loc);
 		callee.nodeType = fnType;
 		return makeCall(callee, [d.left, d.right], loc);
 	}
@@ -392,9 +363,9 @@ test "operator lower does not rewrite builtin types without override" {
 }
 
 test "operator lower rewrites builtin type with explicit override" {
-	// User-defined override for number — takes priority over native ==
+	// User-defined override for number == — takes priority over native ==
 	const ctx = setupCtx("number", "==");
-	const pr = parseInput("a === b;");
+	const pr = parseInput("a == b;");
 	if (!pr.ok) return;
 	const result = lowerOperators(pr.value, ctx);
 	// Explicit extension registered → rewritten to CallExpr
@@ -494,11 +465,11 @@ test "> not derived without < defined" {
 }
 
 test "explicit != overrides derivation from ==" {
-	// User defines both == and != — != uses explicit, not derived
+	// User defines both == and !== — !== uses explicit, not derived
 	const checkerCtx = createContext();
 	const registry = createExtensionRegistry();
 	registerExtension(registry, makeOpExt("Token", "=="));
-	registerExtension(registry, makeOpExt("Token", "!="));
+	registerExtension(registry, makeOpExt("Token", "!=="));
 	checkerCtx.extensionRegistry = registry;
 	const objType = createStruct("Token", [], [], true);
 	defineSymbol(checkerCtx.table, makeSymbol("a", SymbolKind.Variable, objType, false));
@@ -507,7 +478,7 @@ test "explicit != overrides derivation from ==" {
 	const pr = parseInput("a !== b;");
 	if (!pr.ok) return;
 	const result = lowerOperators(pr.value, ctx);
-	// Explicit != extension → direct CallExpr (not UnaryExpr wrapping)
+	// Explicit !== extension → direct CallExpr (not UnaryExpr wrapping)
 	assert firstExprKind(result) === NodeKind.CallExpr;
 }
 
@@ -531,7 +502,7 @@ test "tuple < rewrites to _lt call" {
 	assert firstExprKind(result) === NodeKind.CallExpr;
 }
 
-test "tuple <= rewrites to _le call" {
+test "tuple <= rewrites to Le call" {
 	const ctx = setupTupleCtx();
 	const pr = parseInput("a <= b;");
 	if (!pr.ok) return;

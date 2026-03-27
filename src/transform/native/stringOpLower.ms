@@ -58,53 +58,9 @@ function rewriteStringOp(node: Node): Node {
 
 	const loc = node.location;
 
-	// String equality: s === t → msStringEquals(s, t)
-	if (d.operator === "===" || d.operator === "==") {
-		// Optimization: compare against "" → .length === 0
-		if (isEmptyStringLiteral(d.right)) {
-			const lenAccess = makeMember(d.left, "byteLength", loc);
-			const result = makeBinary(lenAccess, "===", makeNumberLit(0, loc), loc);
-			result.nodeType = node.nodeType;
-			return result;
-		}
-		if (isEmptyStringLiteral(d.left)) {
-			const lenAccess = makeMember(d.right, "byteLength", loc);
-			const result = makeBinary(lenAccess, "===", makeNumberLit(0, loc), loc);
-			result.nodeType = node.nodeType;
-			return result;
-		}
-		const result = makeCall(makeIdent("msStringEquals", loc), [d.left, d.right], loc);
-		result.nodeType = node.nodeType;
-		return result;
-	}
-
-	// String inequality: s !== t → !msStringEquals(s, t)
-	if (d.operator === "!==" || d.operator === "!=") {
-		if (isEmptyStringLiteral(d.right)) {
-			const lenAccess = makeMember(d.left, "byteLength", loc);
-			const result = makeBinary(lenAccess, "!==", makeNumberLit(0, loc), loc);
-			result.nodeType = node.nodeType;
-			return result;
-		}
-		if (isEmptyStringLiteral(d.left)) {
-			const lenAccess = makeMember(d.right, "byteLength", loc);
-			const result = makeBinary(lenAccess, "!==", makeNumberLit(0, loc), loc);
-			result.nodeType = node.nodeType;
-			return result;
-		}
-		const eqCall = makeCall(makeIdent("msStringEquals", loc), [d.left, d.right], loc);
-		const result = makeUnary("!", eqCall, loc);
-		result.nodeType = node.nodeType;
-		return result;
-	}
-
-	// String comparison: s < t → msStringCompare(s, t) < 0
-	if (d.operator === "<" || d.operator === ">" || d.operator === "<=" || d.operator === ">=") {
-		const cmpCall = makeCall(makeIdent("msStringCompare", loc), [d.left, d.right], loc);
-		const result = makeBinary(cmpCall, d.operator, makeNumberLit(0, loc), loc);
-		result.nodeType = node.nodeType;
-		return result;
-	}
+	// String equality/inequality/comparison: handled by operator overloads in prelude
+	// (`==`, `<`, `<=` defined in .cms/.jms, found via lowerOperators extension registry)
+	// Derived operators (!=, >, >=) auto-derived by lowerOperators.
 
 	// String concatenation: s + t → msStringConcat(s, t)
 	// Note: 3+ chains already handled by stringConcatFlatten (runs earlier)

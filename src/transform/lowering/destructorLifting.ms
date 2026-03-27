@@ -154,11 +154,11 @@ function isCyclicType(t: Type, lctx: LiftCtx, visited: NameSet): boolean {
 
 function hookSuffix(hook: string): string {
 	return match (hook) {
-		"destroy" => "_destroy",
-		"copy" => "_copy",
-		"sink" => "_sink",
-		"trace" => "_trace",
-		_ => "_wasMoved",
+		"destroy" => "Destroy",
+		"copy" => "Copy",
+		"sink" => "Sink",
+		"trace" => "Trace",
+		_ => "WasMoved",
 	};
 }
 
@@ -396,7 +396,7 @@ function refOp(hook: string, xf: Node, yf: Node, fieldName: string, isCyclic: bo
 function namedObjOp(hook: string, typeName: string, xf: Node, yf: Node, buf: NodeBuf, loc: SourceLocation): void {
 	if (hook === "sink") {
 		// Inline sink: destroy(&xf) + assign(xf = yf)
-		buf.items.push(makeExprStmt(makeCall(makeIdent(typeName + "_destroy", loc), [makeHiddenAddr(xf, loc)], loc), loc));
+		buf.items.push(makeExprStmt(makeCall(makeIdent(typeName + "Destroy", loc), [makeHiddenAddr(xf, loc)], loc), loc));
 		buf.items.push(makeExprStmt(makeAssign(xf, yf, loc), loc));
 		return;
 	}
@@ -555,12 +555,12 @@ function getBaseClass(typeName: string, lctx: LiftCtx): string {
 
 function userHookName(typeName: string, hook: string): string {
 	const suffix = match (hook) {
-		"destroy" => "_onDestroy",
-		"copy" => "_onCopy",
-		"sink" => "_onMove",
-		"wasMoved" => "_onMoved",
-		"dup" => "_onClone",
-		"trace" => "_onTrace",
+		"destroy" => "onDestroy",
+		"copy" => "onCopy",
+		"sink" => "onMove",
+		"wasMoved" => "onMoved",
+		"dup" => "onClone",
+		"trace" => "onTrace",
 		_ => "",
 	};
 	if (suffix === "") return "";
@@ -741,7 +741,7 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 				fillBody(hook, x1, x2, objType.typeNames[i], objType.typeChildren[i], lctx, buf, visited, loc);
 			}
 			if (baseTypeName !== "" && namedTypeHasHooks(baseTypeName, lctx)) {
-				genCall(baseTypeName + "_destroy", hook, x1, x2, buf, loc);
+				genCall(baseTypeName + "Destroy", hook, x1, x2, buf, loc);
 			}
 		} else {
 			// Copy/sink/trace/wasMoved: base class first, then fields (standard pattern)
@@ -810,7 +810,7 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 				[makeString(typeName, loc), makeBool(false, loc), makeNull(loc), makeNull(loc)],
 				loc,
 			);
-			lctx.collector.push(makeVarDecl(typeName + "_typeInfo", typeInfoObj, DeclKind.Const, loc));
+			lctx.collector.push(makeVarDecl(typeName + "TypeInfo", typeInfoObj, DeclKind.Const, loc));
 			nameSetAdd(lctx.generated, typeName);
 			claimGlobal(typeName);
 		}
@@ -827,17 +827,17 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 	generateHook("wasMoved", typeName, objType, classType, lctx, loc);
 
 	// Register hooks on the type (Standard reference parity)
-	setAttachedOp(objType, AttachedOp.AttachedDestructor, typeName + "_destroy");
-	setAttachedOp(objType, AttachedOp.AttachedAsgn, typeName + "_copy");
-	setAttachedOp(objType, AttachedOp.AttachedSink, typeName + "_sink");
-	setAttachedOp(objType, AttachedOp.AttachedWasMoved, typeName + "_wasMoved");
+	setAttachedOp(objType, AttachedOp.AttachedDestructor, typeName + "Destroy");
+	setAttachedOp(objType, AttachedOp.AttachedAsgn, typeName + "Copy");
+	setAttachedOp(objType, AttachedOp.AttachedSink, typeName + "Sink");
+	setAttachedOp(objType, AttachedOp.AttachedWasMoved, typeName + "WasMoved");
 
 	// =trace: ORC cycle detection (only for cyclic types)
 	const visited: NameSet = createNameSet();
 	const hasCycles = isCyclicType(objType, lctx, visited);
 	if (hasCycles) {
 		generateHook("trace", typeName, objType, classType, lctx, loc);
-		setAttachedOp(objType, AttachedOp.AttachedTrace, typeName + "_trace");
+		setAttachedOp(objType, AttachedOp.AttachedTrace, typeName + "Trace");
 	}
 
 	// =dup: init + copy, return
@@ -852,26 +852,26 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 	} else {
 		// Value types: result = src; TypeName_copy(&result, &src); return result.
 		dupStmts.push(makeVarDecl("$result", makeIdent("src", loc), DeclKind.Let, loc));
-		dupStmts.push(makeExprStmt(makeCall(makeIdent(typeName + "_copy", loc), [makeHiddenAddr(makeIdent("$result", loc), loc), makeHiddenAddr(makeIdent("src", loc), loc)], loc), loc));
+		dupStmts.push(makeExprStmt(makeCall(makeIdent(typeName + "Copy", loc), [makeHiddenAddr(makeIdent("$result", loc), loc), makeHiddenAddr(makeIdent("src", loc), loc)], loc), loc));
 		dupStmts.push(makeReturn(makeIdent("$result", loc), loc));
 	}
-	const dupNode = makeFnDecl(typeName + "_dup", ["src"], [typeName], makeBlock(dupStmts, loc), "", typeName, loc);
+	const dupNode = makeFnDecl(typeName + "Dup", ["src"], [typeName], makeBlock(dupStmts, loc), "", typeName, loc);
 	// Fix up _dup param/return types — classType for classes, objType for value types
 	// _dup: param[0] = type, return = type (reference: symDupPrototype)
 	const dupType = classType !== null ? classType : objType;
 	setHookParamType(dupNode, 0, dupType);
 	setHookReturnType(dupNode, dupType);
 	lctx.collector.push(dupNode);
-	setAttachedOp(objType, AttachedOp.AttachedDup, typeName + "_dup");
+	setAttachedOp(objType, AttachedOp.AttachedDup, typeName + "Dup");
 
 	// msTypeInfo generation for ORC runtime
-	const traceFn = hasCycles ? makeIdent(typeName + "_trace", loc) : makeNull(loc);
+	const traceFn = hasCycles ? makeIdent(typeName + "Trace", loc) : makeNull(loc);
 	const typeInfoObj = makeObjectLiteral(
 		["name", "isCyclic", "traceFn", "destroyFn"],
-		[makeString(typeName, loc), makeBool(hasCycles, loc), traceFn, makeIdent(typeName + "_destroy", loc)],
+		[makeString(typeName, loc), makeBool(hasCycles, loc), traceFn, makeIdent(typeName + "Destroy", loc)],
 		loc,
 	);
-	lctx.collector.push(makeVarDecl(typeName + "_typeInfo", typeInfoObj, DeclKind.Const, loc));
+	lctx.collector.push(makeVarDecl(typeName + "TypeInfo", typeInfoObj, DeclKind.Const, loc));
 
 	nameSetAdd(lctx.generated, typeName);
 	claimGlobal(typeName);
@@ -896,21 +896,21 @@ function ensureTypeHooksForType(objType: Type, lctx: LiftCtx, loc: SourceLocatio
 	generateHook("sink", typeName, objType, null, lctx, loc);
 	generateHook("wasMoved", typeName, objType, null, lctx, loc);
 
-	setAttachedOp(objType, AttachedOp.AttachedDestructor, typeName + "_destroy");
-	setAttachedOp(objType, AttachedOp.AttachedAsgn, typeName + "_copy");
-	setAttachedOp(objType, AttachedOp.AttachedSink, typeName + "_sink");
-	setAttachedOp(objType, AttachedOp.AttachedWasMoved, typeName + "_wasMoved");
+	setAttachedOp(objType, AttachedOp.AttachedDestructor, typeName + "Destroy");
+	setAttachedOp(objType, AttachedOp.AttachedAsgn, typeName + "Copy");
+	setAttachedOp(objType, AttachedOp.AttachedSink, typeName + "Sink");
+	setAttachedOp(objType, AttachedOp.AttachedWasMoved, typeName + "WasMoved");
 
 	// Value type _dup: result = src; TypeName_copy(&result, &src); return result.
 	const dupStmts: Node[] = [];
 	dupStmts.push(makeVarDecl("$result", makeIdent("src", loc), DeclKind.Let, loc));
-	dupStmts.push(makeExprStmt(makeCall(makeIdent(typeName + "_copy", loc), [makeHiddenAddr(makeIdent("$result", loc), loc), makeHiddenAddr(makeIdent("src", loc), loc)], loc), loc));
+	dupStmts.push(makeExprStmt(makeCall(makeIdent(typeName + "Copy", loc), [makeHiddenAddr(makeIdent("$result", loc), loc), makeHiddenAddr(makeIdent("src", loc), loc)], loc), loc));
 	dupStmts.push(makeReturn(makeIdent("$result", loc), loc));
-	const dupNode = makeFnDecl(typeName + "_dup", ["src"], [typeName], makeBlock(dupStmts, loc), "", typeName, loc);
+	const dupNode = makeFnDecl(typeName + "Dup", ["src"], [typeName], makeBlock(dupStmts, loc), "", typeName, loc);
 	setHookParamType(dupNode, 0, objType);
 	setHookReturnType(dupNode, objType);
 	lctx.collector.push(dupNode);
-	setAttachedOp(objType, AttachedOp.AttachedDup, typeName + "_dup");
+	setAttachedOp(objType, AttachedOp.AttachedDup, typeName + "Dup");
 
 	// No ORC typeInfo needed for anonymous value types (can't be cyclic)
 	nameSetAdd(lctx.generated, typeName);
@@ -925,7 +925,7 @@ function ensureTypeHooksForType(objType: Type, lctx: LiftCtx, loc: SourceLocatio
 function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx, loc: SourceLocation): Node {
 	// For nested value-type objects, call their _eq function
 	if (fieldType.kind === TypeKind.Struct && fieldType.typeName !== "") {
-		return makeCall(makeIdent(fieldType.typeName + "_eq", loc), [aField, bField], loc);
+		return makeCall(makeIdent(fieldType.typeName + "Eq", loc), [aField, bField], loc);
 	}
 	// String fields — reference parity: genStrEquals → eqStrings().
 	// msString is a C struct, so === doesn't work. Call msStringEquals(a, b).
@@ -973,7 +973,7 @@ function generateEq(typeName: string, objType: Type, lctx: LiftCtx, loc: SourceL
 		buf.push(makeIf(notEq, makeBlock([makeReturn(makeBool(false, loc), loc)], loc), makeNull(loc), loc));
 	}
 	buf.push(makeReturn(makeBool(true, loc), loc));
-	const eqFn = makeFnDecl(typeName + "_eq", ["a", "b"], [typeName, typeName], makeBlock(buf, loc), "", "boolean", loc);
+	const eqFn = makeFnDecl(typeName + "Eq", ["a", "b"], [typeName, typeName], makeBlock(buf, loc), "", "boolean", loc);
 	setHookParamType(eqFn, 0, objType);
 	setHookParamType(eqFn, 1, objType);
 	lctx.collector.push(eqFn);
@@ -982,10 +982,10 @@ function generateEq(typeName: string, objType: Type, lctx: LiftCtx, loc: SourceL
 // ===== Ensure Eq (called for ALL interface types, even primitive-only) =====
 
 function ensureEq(typeName: string, lctx: LiftCtx, loc: SourceLocation): void {
-	if (nameSetContains(lctx.generated, typeName + "_eq")) return;
-	if (isGloballyOwned(typeName + "_eq")) return;
-	nameSetAdd(lctx.generated, typeName + "_eq");
-	claimGlobal(typeName + "_eq");
+	if (nameSetContains(lctx.generated, typeName + "Eq")) return;
+	if (isGloballyOwned(typeName + "Eq")) return;
+	nameSetAdd(lctx.generated, typeName + "Eq");
+	claimGlobal(typeName + "Eq");
 
 	const sym = lookupSymbol(lctx.checkerCtx.table, typeName);
 	if (sym === null) return;
@@ -1021,7 +1021,7 @@ function generateTupleEq(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 		i += 1;
 	}
 	buf.push(makeReturn(makeBool(true, loc), loc));
-	const teqFn = makeFnDecl(tupleName + "_eq", ["a", "b"], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc);
+	const teqFn = makeFnDecl(tupleName + "Eq", ["a", "b"], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc);
 	setHookParamType(teqFn, 0, t);
 	setHookParamType(teqFn, 1, t);
 	lctx.collector.push(teqFn);
@@ -1051,7 +1051,7 @@ function generateTupleLt(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 		i += 1;
 	}
 	buf.push(makeReturn(makeBool(false, loc), loc));
-	const tltFn = makeFnDecl(tupleName + "_lt", ["a", "b"], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc);
+	const tltFn = makeFnDecl(tupleName + "Lt", ["a", "b"], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc);
 	setHookParamType(tltFn, 0, t);
 	setHookParamType(tltFn, 1, t);
 	lctx.collector.push(tltFn);
@@ -1077,7 +1077,7 @@ function generateTupleLe(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 		i += 1;
 	}
 	buf.push(makeReturn(makeBool(true, loc), loc));  // <= returns true when equal
-	const tleFn = makeFnDecl(tupleName + "_le", ["a", "b"], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc);
+	const tleFn = makeFnDecl(tupleName + "Le", ["a", "b"], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc);
 	setHookParamType(tleFn, 0, t);
 	setHookParamType(tleFn, 1, t);
 	lctx.collector.push(tleFn);
@@ -1377,13 +1377,12 @@ export function liftDestructors(program: Node, ctx: TransformContext): Node {
 			if (isGloballyOwned(key)) continue;
 			nameSetAdd(lctx.generated, key);
 			claimGlobal(key);
-			if (op === "_eq") {
-				generateTupleEq(pending.tupleName, pending.tupleType, lctx, defaultLoc);
-			} else if (op === "_lt") {
-				generateTupleLt(pending.tupleName, pending.tupleType, lctx, defaultLoc);
-			} else if (op === "_le") {
-				generateTupleLe(pending.tupleName, pending.tupleType, lctx, defaultLoc);
-			}
+			match (op) {
+				"Eq" => { generateTupleEq(pending.tupleName, pending.tupleType, lctx, defaultLoc); },
+				"Lt" => { generateTupleLt(pending.tupleName, pending.tupleType, lctx, defaultLoc); },
+				"Le" => { generateTupleLe(pending.tupleName, pending.tupleType, lctx, defaultLoc); },
+				_ => {},
+			};
 		}
 	}
 
@@ -1415,12 +1414,12 @@ function generatedFnCount(input: string): number {
 	for (const stmt of pd.programStmts) {
 		if (stmt.kind === NodeKind.FunctionDecl) {
 			const d = stmt.data as FunctionDeclData;
-			if (d.fnName.endsWith("_destroy")
-				|| d.fnName.endsWith("_copy")
-				|| d.fnName.endsWith("_sink")
-				|| d.fnName.endsWith("_wasMoved")
-				|| d.fnName.endsWith("_dup")
-				|| d.fnName.endsWith("_trace")) {
+			if (d.fnName.endsWith("Destroy")
+				|| d.fnName.endsWith("Copy")
+				|| d.fnName.endsWith("Sink")
+				|| d.fnName.endsWith("WasMoved")
+				|| d.fnName.endsWith("Dup")
+				|| d.fnName.endsWith("Trace")) {
 				count += 1;
 			}
 		}
@@ -1448,7 +1447,7 @@ function hasTypeInfo(input: string, typeName: string): boolean {
 	for (const stmt of pd.programStmts) {
 		if (stmt.kind === NodeKind.VariableDecl) {
 			const d = stmt.data as VariableDeclData;
-			if (d.declName === typeName + "_typeInfo") return true;
+			if (d.declName === typeName + "TypeInfo") return true;
 		}
 	}
 	return false;
@@ -1470,7 +1469,7 @@ test "exported interface" { assert generatedFnCount("export interface Token { va
 
 test "no interfaces passthrough" { assert generatedFnCount("const x = 1;") === 0; }
 // =trace: Function fields are cyclic (closures capture refs)
-test "trace NOT generated for flat string" { assert !hasGeneratedFn("interface Token { value: string; }", "Token_trace"); }
+test "trace NOT generated for flat string" { assert !hasGeneratedFn("interface Token { value: string; }", "TokenTrace"); }
 // TypeInfo generated alongside hooks
 test "typeInfo generated" { assert hasTypeInfo("interface Token { value: string; }", "Token"); }
 
@@ -1481,31 +1480,31 @@ test "typeInfo NOT generated for primitive-only struct" { assert !hasTypeInfo("s
 // Inheritance: child with own hookable field + base both generate hooks
 test "inheritance generates parent hooks" {
 	const src = "interface Base { name: string; } class Child extends Base { extra: string; }";
-	assert hasGeneratedFn(src, "Base_destroy");
+	assert hasGeneratedFn(src, "BaseDestroy");
 }
 // All 5 core hooks present for a hookable type
 test "all core hooks generated" {
 	const src = "interface Wrap { data: string; }";
-	assert hasGeneratedFn(src, "_destroy");
-	assert hasGeneratedFn(src, "_copy");
-	assert hasGeneratedFn(src, "_sink");
-	assert hasGeneratedFn(src, "_wasMoved");
-	assert hasGeneratedFn(src, "_dup");
+	assert hasGeneratedFn(src, "Destroy");
+	assert hasGeneratedFn(src, "Copy");
+	assert hasGeneratedFn(src, "Sink");
+	assert hasGeneratedFn(src, "WasMoved");
+	assert hasGeneratedFn(src, "Dup");
 }
 
 // Auto-generated == (reference parity: generic proc `==`*[T: tuple|object])
 test "eq generated for primitive-only interface" {
-	assert hasGeneratedFn("interface Point { x: number; y: number; }", "Point_eq");
+	assert hasGeneratedFn("interface Point { x: number; y: number; }", "PointEq");
 }
 
 test "eq generated for string-field interface" {
-	assert hasGeneratedFn("interface Token { value: string; }", "Token_eq");
+	assert hasGeneratedFn("interface Token { value: string; }", "TokenEq");
 }
 
 test "eq generated for exported interface" {
-	assert hasGeneratedFn("export interface Loc { line: number; col: number; }", "Loc_eq");
+	assert hasGeneratedFn("export interface Loc { line: number; col: number; }", "LocEq");
 }
 
 test "eq NOT generated for class" {
-	assert !hasGeneratedFn("class Obj { x: number; }", "Obj_eq");
+	assert !hasGeneratedFn("class Obj { x: number; }", "ObjEq");
 }

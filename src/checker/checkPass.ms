@@ -971,12 +971,12 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 		}
 		defineSymbol(ctx.table, paramSym);
 		// Ref parity: params are implicitly initialized
-		markInitialized(ctx.initTracker, param);
+		markInitialized(ctx.initTracker, paramName);
 		// Record param DEF for LSP (standard parity: semIdentDef → suggestSym)
 		if (paramLocs !== null && i < paramLocs.length && paramLocs[i] !== null) {
 			sgRecordSym(ctx, paramLocs[i].line, paramLocs[i].column,
-				paramLocs[i].column + param.length,
-				paramSym, paramType, SymbolKind.Parameter, param, "", true);
+				paramLocs[i].column + paramName.length,
+				paramSym, paramType, SymbolKind.Parameter, paramName, "", true);
 		}
 		i += 1;
 	}

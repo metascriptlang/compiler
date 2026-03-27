@@ -100,6 +100,32 @@ const JS_RESERVED: Set<string> = new Set<string>([
 
 export function safeJsName(name: string): string {
 	if (JS_RESERVED.has(name)) return "$" + name;
+	// Operator names (==, <, !=, etc.) — mangle to valid JS identifier
+	if (name.length > 0 && name.byteAt(0) !== "_".code
+		&& name.byteAt(0) !== "$".code
+		&& !(name.byteAt(0) >= "a".code && name.byteAt(0) <= "z".code)
+		&& !(name.byteAt(0) >= "A".code && name.byteAt(0) <= "Z".code)) {
+		let mangled = "$op_";
+		let i = 0;
+		while (i < name.byteLength) {
+			mangled = mangled + match (name.byteAt(i)) {
+				"=".code => "eq",
+				"!".code => "bang",
+				"<".code => "lt",
+				">".code => "gt",
+				"+".code => "plus",
+				"-".code => "minus",
+				"*".code => "star",
+				"/".code => "slash",
+				"%".code => "pct",
+				"[".code => "lbr",
+				"]".code => "rbr",
+				_ => "",
+			};
+			i = i + 1;
+		}
+		return mangled;
+	}
 	return name;
 }
 

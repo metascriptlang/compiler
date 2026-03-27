@@ -1278,9 +1278,9 @@ export function parseExternDecl(state: ParserState): NodeResult {
 		advance(state);
 	}
 
-	// Parse name
+	// Parse name (includes backtick operator names like `==`, `<`, `[]`)
 	const nameToken = current(state);
-	if (!isIdentLike(nameToken) && !isPropertyName(nameToken)) {
+	if (!isIdentLike(nameToken) && !isPropertyName(nameToken) && nameToken.kind !== TokenKind.OperatorIdent) {
 		return Result.err(`Expected identifier in extern declaration at line ${nameToken.line}`);
 	}
 	advance(state);
@@ -1407,19 +1407,9 @@ export function parseExternDecl(state: ParserState): NodeResult {
 	// Class body supports fields (name: Type) and extern methods (name(...): Type).
 	// parseClassMember already handles 'extern' modifier on methods (line 868).
 	if (externKind === ExternKind.Class && !isAtEnd(state)) {
-		// Rewind to before the class name so parseClassDecl can handle generics + extends + body
-		state.position = state.position - 1; // back to name token
-		// Insert a synthetic 'class' token position (parseClassDecl expects to start at 'class')
-		// Instead, manually parse the class body here
-		let classGenericNames = "";
-		if (current(state).kind === TokenKind.Lt || (isIdentLike(current(state)) && !isAtEnd(state) && peek(state, 1).kind === TokenKind.Lt)) {
-			if (isIdentLike(current(state))) advance(state); // skip name again
-			classGenericNames = captureGenericParams(state);
-		} else {
-			advance(state); // skip name
-		}
-		if (classGenericNames !== "") {
-			addGenericDecl(nameToken.value, classGenericNames);
+		// genericNames already captured at line 1289 (before extern kind dispatch)
+		if (genericNames !== "") {
+			addGenericDecl(nameToken.value, genericNames);
 		}
 		let extendsName = "";
 		if (!isAtEnd(state) && current(state).kind === TokenKind.Extends) {

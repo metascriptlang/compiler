@@ -43,7 +43,35 @@ export function msStringConcatMany(count: number, ...parts: string[]): string {
 	return result.asString();
 }
 
-// String equality — byte-by-byte comparison (called by lowerOperators for == on strings)
+// ===== Operators =====
+// Base operators (implementation)
+export function `==`(this a: string, b: string): boolean {
+	return msStringEquals(a, b);
+}
+export function `<`(this a: string, b: string): boolean {
+	return msStringCompare(a, b) < 0;
+}
+// Derived operators (delegate to base)
+export function `===`(this a: string, b: string): boolean { return a == b; }
+export function `!=`(this a: string, b: string): boolean { return !(a == b); }
+export function `!==`(this a: string, b: string): boolean { return !(a == b); }
+export function `>`(this a: string, b: string): boolean { return b < a; }
+export function `<=`(this a: string, b: string): boolean { return !(b < a); }
+export function `>=`(this a: string, b: string): boolean { return !(a < b); }
+
+// Lexicographic compare — returns <0, 0, >0 (shared by <, <=, derived >, >=)
+export function msStringCompare(a: string, b: string): int32 {
+	const ab = a.asBytes();
+	const bb = b.asBytes();
+	let i = 0;
+	while (i < ab.length && i < bb.length) {
+		if (ab[i] !== bb[i]) return ab[i] - bb[i];
+		i = i + 1;
+	}
+	return ab.length - bb.length;
+}
+
+// String equality — byte-by-byte comparison (implementation)
 export function msStringEquals(a: string, b: string): boolean {
 	const ab = a.asBytes();
 	const bb = b.asBytes();
@@ -163,8 +191,8 @@ export function trim(this s: string): string {
 	if (sb.length === 0) return "";
 	let a = 0;
 	let b = sb.length - 1;
-	while (a <= b && (sb[a] === 32 || (sb[a] >= 9 && sb[a] <= 13))) { a = a + 1; }
-	while (b >= a && (sb[b] === 32 || (sb[b] >= 9 && sb[b] <= 13))) { b = b - 1; }
+	while (a <= b && (sb[a] === " ".code || (sb[a] >= "\t".code && sb[a] <= "\r".code))) { a = a + 1; }
+	while (b >= a && (sb[b] === " ".code || (sb[b] >= "\t".code && sb[b] <= "\r".code))) { b = b - 1; }
 	return s.byteSlice(a, b + 1);
 }
 
