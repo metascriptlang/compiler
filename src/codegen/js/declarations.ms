@@ -1,7 +1,7 @@
 // JavaScript Codegen — Declaration Emitters
 
 import {
-	Node, NodeKind, DeclKind,
+	Node, NodeKind, NodeFlag, DeclKind,
 	FunctionDeclData, EnumDeclData,
 	ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData,
 	ImportDeclData, ExportDeclData, VariableDeclData,
@@ -124,6 +124,8 @@ function emitClassDeclInner(gen: JSGenerator, node: Node): void {
 }
 
 export function emitClassDecl(gen: JSGenerator, node: Node): void {
+	// Extern class: native JS type — skip emission entirely
+	if ((node.flags & NodeFlag.ExternC) !== 0) return;
 	emitIndent(gen);
 	emitClassDeclInner(gen, node);
 }

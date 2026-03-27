@@ -8,7 +8,7 @@
 // This guarantees the + chain is string concatenation (JS/TS coercion rules).
 // Chains of length 2 are left as binary (no benefit from flattening).
 
-import { Node, NodeKind, SourceLocation, BinaryExprData, CallExprData, IdentifierData, TypeKind } from "../../ast/node";
+import { Node, NodeKind, SourceLocation, BinaryExprData, CallExprData, IdentifierData, TypeKind, collectConcatParts } from "../../ast/node";
 import { isNumeric, stringType } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
@@ -28,7 +28,7 @@ function flattenConcat(node: Node): Node {
 	if (d.operator !== "+") return node;
 
 	// Collect all parts of the + chain
-	const parts = collectParts(node);
+	const parts = collectConcatParts(node);
 
 	// Only flatten if at least one part is a string literal or has string type
 	let hasString = false;
@@ -99,26 +99,6 @@ function coerceToString(node: Node, loc: SourceLocation): Node {
 	return call;
 }
 
-// Iteratively collect parts from a left-associative + chain
-// Uses a stack instead of mutable array parameter (array-by-value in C)
-function collectParts(node: Node): Node[] {
-	const result: Node[] = [];
-	const stack: Node[] = [node];
-	while (stack.length > 0) {
-		const cur = stack.pop();
-		if (cur.kind === NodeKind.BinaryExpr) {
-			const d = cur.data as BinaryExprData;
-			if (d.operator === "+") {
-				// Push right first so left is processed first (stack = LIFO)
-				stack.push(d.right);
-				stack.push(d.left);
-				continue;
-			}
-		}
-		result.push(cur);
-	}
-	return result;
-}
 
 // ===== Tests =====
 test "variable addition unchanged" { assert firstExprKindAfter("x + y;", lowerStringConcatFlatten) === NodeKind.BinaryExpr; }

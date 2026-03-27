@@ -6,13 +6,12 @@ import { unknownType } from "./types";
 import { CheckerContext } from "./context";
 import { SourceLocation } from "../ast/node";
 
-type ExprCheckerFn = (ctx: CheckerContext, node: Node, expectedType: Type) => Type;
+type ExprCheckerFn = (ctx: CheckerContext, node: Node, expectedType: Type) => void;
 type StmtCheckerFn = (ctx: CheckerContext, node: Node) => void;
 type BodyCheckerFn = (ctx: CheckerContext, sym: Symbol, params: string[], body: Node, paramLocs: SourceLocation[]) => void;
 type InstantiateGenericFn = (sym: Symbol, paramNames: string[], concreteTypes: Type[], ctx: CheckerContext) => Symbol;
 
-let exprCheckerFn: ExprCheckerFn = (ctx: CheckerContext, node: Node, expectedType: Type): Type => {
-	return unknownType();
+let exprCheckerFn: ExprCheckerFn = (ctx: CheckerContext, node: Node, expectedType: Type): void => {
 };
 
 let stmtCheckerFn: StmtCheckerFn = (ctx: CheckerContext, node: Node): void => {
@@ -25,8 +24,8 @@ let instantiateGenericFn: InstantiateGenericFn = (sym: Symbol, paramNames: strin
 	return null as unknown as Symbol;
 };
 
-export function callCheckExpr(ctx: CheckerContext, node: Node, expectedType: Type): Type {
-	return exprCheckerFn(ctx, node, expectedType);
+export function callCheckExpr(ctx: CheckerContext, node: Node, expectedType: Type): void {
+	exprCheckerFn(ctx, node, expectedType);
 }
 
 export function callCheckStmt(ctx: CheckerContext, node: Node): void {

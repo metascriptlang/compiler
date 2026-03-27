@@ -486,3 +486,24 @@ export function isEmptyBlock(node: Node): boolean {
 	const d = node.data as BlockStmtData;
 	return d.statements.length === 0;
 }
+
+// Flatten a left-associative BinaryExpr(+) chain into its leaf nodes.
+// Used by @emit template interpolation (checker) and string concat flattening (transform).
+// Iterative stack approach (C-safe: avoids mutable array params).
+export function collectConcatParts(node: Node): Node[] {
+	const result: Node[] = [];
+	const stack: Node[] = [node];
+	while (stack.length > 0) {
+		const cur = stack.pop();
+		if (cur.kind === NodeKind.BinaryExpr) {
+			const d = cur.data as BinaryExprData;
+			if (d.operator === "+") {
+				stack.push(d.right);
+				stack.push(d.left);
+				continue;
+			}
+		}
+		result.push(cur);
+	}
+	return result;
+}

@@ -249,13 +249,14 @@ function collectClass(ctx: CheckerContext, node: Node): void {
 	// Static → static extension (typeof ClassName). Instance → instance extension.
 	if (ctx.extensionRegistry !== null) {
 		const classGenerics = getGenericDecl(d.className);
+		const isExternClass = (node.flags & NodeFlag.ExternC) !== 0;
 		for (let si = 0; si < d.classBody.length; si += 1) {
-			collectClassMethod(ctx, d.className, classGenerics, d.classBody[si]);
+			collectClassMethod(ctx, d.className, classGenerics, d.classBody[si], isExternClass);
 		}
 	}
 }
 
-function collectClassMethod(ctx: CheckerContext, className: string, classGenerics: string, member: Node): void {
+function collectClassMethod(ctx: CheckerContext, className: string, classGenerics: string, member: Node, isExternClass: boolean): void {
 	let builtinKind = "";
 	let methodNode: Node = null as unknown as Node;
 	if (member.kind === NodeKind.MethodDecl) {
@@ -305,6 +306,10 @@ function collectClassMethod(ctx: CheckerContext, className: string, classGeneric
 	// Class method symbols live ONLY in the extension registry, NOT in the scope.
 	// This prevents mangled names (JSON_parse) from polluting identifier completions.
 	// The checker resolves them via extension registry lookup in checkMemberExpr.
+	// Extern class methods → NativeMethod flag (don't set ExtCall, keep as native member call)
+	if (isExternClass) {
+		setFlag(methodSym, SymbolFlag.NativeMethod);
+	}
 	// Link node → symbol for resolvePass
 	member.resolvedSym = methodSym;
 	const classExt: ExtensionMethod = {

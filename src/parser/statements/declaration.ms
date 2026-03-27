@@ -1403,6 +1403,59 @@ export function parseExternDecl(state: ParserState): NodeResult {
 		}
 	}
 
+	// Extern class with body: parse as ClassDecl with ExternC flag.
+	// Class body supports fields (name: Type) and extern methods (name(...): Type).
+	// parseClassMember already handles 'extern' modifier on methods (line 868).
+	if (externKind === ExternKind.Class && !isAtEnd(state)) {
+		// Rewind to before the class name so parseClassDecl can handle generics + extends + body
+		state.position = state.position - 1; // back to name token
+		// Insert a synthetic 'class' token position (parseClassDecl expects to start at 'class')
+		// Instead, manually parse the class body here
+		let classGenericNames = "";
+		if (current(state).kind === TokenKind.Lt || (isIdentLike(current(state)) && !isAtEnd(state) && peek(state, 1).kind === TokenKind.Lt)) {
+			if (isIdentLike(current(state))) advance(state); // skip name again
+			classGenericNames = captureGenericParams(state);
+		} else {
+			advance(state); // skip name
+		}
+		if (classGenericNames !== "") {
+			addGenericDecl(nameToken.value, classGenericNames);
+		}
+		let extendsName = "";
+		if (!isAtEnd(state) && current(state).kind === TokenKind.Extends) {
+			advance(state);
+			if (isIdentLike(current(state))) { extendsName = current(state).value; advance(state); }
+			skipGenericParams(state);
+		}
+		if (!isAtEnd(state) && current(state).kind === TokenKind.LBrace) {
+			advance(state); // skip {
+			const members: Node[] = [];
+			while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
+				if (current(state).kind === TokenKind.Semicolon) { advance(state); continue; }
+				const member = try parseClassMember(state);
+				members.push(member);
+			}
+			if (!isAtEnd(state) && current(state).kind === TokenKind.RBrace) advance(state);
+			const classNode = createNode(NodeKind.ClassDecl, {
+				className: nameToken.value,
+				classExtends: extendsName,
+				classBody: members,
+				nameLocation: makeLocFromToken(nameToken),
+			}, externToken);
+			classNode.flags = classNode.flags | NodeFlag.ExternC;
+			return Result.ok(classNode);
+		} else {
+			// extern class FILE; (no body) — opaque type, keep as ExternDecl
+			consumeSemicolon(state);
+			return Result.ok(createNode(NodeKind.ExternDecl, {
+				externKind,
+				externName: nameToken.value,
+				nativeName: "",
+				externType: "",
+			}, externToken));
+		}
+	}
+
 	// Non-function externs: keep ExternDecl node
 	skipBalanced(state, TokenKind.LParen, TokenKind.RParen);
 	const externType = captureOptionalType(state);
@@ -1631,8 +1684,8 @@ test "extern name field" {
 }
 
 test "extern class kind" {
-	const d = stmtAt("extern class FILE {}", 0).data as ExternDeclData;
-	assert d.externKind === ExternKind.Class;
+	// extern class with body → ClassDecl with ExternC flag
+	assert stmtKind("extern class FILE {}") === NodeKind.ClassDecl;
 }
 
 test "extern var with type and from" {

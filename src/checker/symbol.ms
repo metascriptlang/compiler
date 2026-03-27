@@ -33,6 +33,7 @@ export enum SymbolFlag {
 	Async = 16384,      // async function (return type is Promise<T>)
 	ParamMutated = 32768,  // parameter is mutated inside function body (blocks const-ptr promotion)
 	HasConstructor = 65536, // class has a ConstructorDecl → codegen calls ClassName_new()
+	NativeMethod = 131072, // method from extern class — don't set ExtCall, keep as native member call
 }
 
 // Flag helpers

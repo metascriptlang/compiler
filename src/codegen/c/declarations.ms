@@ -322,6 +322,12 @@ function genInterfaceDecl(g: CGen, node: Node): void {
 function genClassDecl(g: CGen, node: Node): void {
 	const d = node.data as ClassDeclData;
 
+	// Extern class: type defined externally — emit typedef forward decl only.
+	if ((node.flags & NodeFlag.ExternC) !== 0) {
+		addLine(sec(g, CSection.ForwardDecls), `typedef struct ${d.className} ${d.className};`);
+		return;
+	}
+
 	const name = mangle(d.className);
 
 	// Check if struct type already declared (by genObjectType for generic instances)

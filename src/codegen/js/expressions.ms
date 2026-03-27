@@ -138,7 +138,10 @@ export function emitBinaryExpr(gen: JSGenerator, node: Node): void {
 
 export function emitUnaryExpr(gen: JSGenerator, node: Node): void {
 	const d = node.data as UnaryExprData;
-	if (d.unaryOp === "typeof") {
+	if (d.unaryOp === "&") {
+		// Address-of: no-op in JS (arrays/strings are already references)
+		emitNode(gen, d.operand);
+	} else if (d.unaryOp === "typeof") {
 		emit(gen, "typeof ");
 		emitNode(gen, d.operand);
 	} else {

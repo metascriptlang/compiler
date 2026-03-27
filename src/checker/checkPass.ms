@@ -123,7 +123,8 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 		declType = resolveAnnotation(d.declType, ctx, typeLoc.line, typeLoc.column);
 		resolveTypeExpr(node.typeExpr, ctx);
 	}
-	const initType = checkExpr(ctx, d.initializer, declType);
+	checkExpr(ctx, d.initializer, declType);
+	const initType = d.initializer !== null ? d.initializer.nodeType : null;
 	// Parity: standard reference node fitting — insert HiddenStdConv for narrowing integer conversions
 	if (declType !== null && d.initializer !== null) {
 		d.initializer = fitNode(ctx, d.initializer, declType, initType);
@@ -252,7 +253,10 @@ function checkClassMember(ctx: CheckerContext, node: Node, className: string, cl
 			const methodSym = node.resolvedSym;
 			const sym = methodSym !== null ? methodSym : makeSymbol(d.methodName, SymbolKind.Method, unknownType(), false);
 			sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.methodName.length, sym, sym.symbolType, SymbolKind.Method, d.methodName, className, true);
-			checkFunctionBody(ctx, sym, d.methodParams, d.methodBody, node.paramLocations);
+			// Skip body check for extern methods (no body to check)
+			if (d.methodFlags !== "extern") {
+				checkFunctionBody(ctx, sym, d.methodParams, d.methodBody, node.paramLocations);
+			}
 		},
 		NodeKind.ConstructorDecl => {
 			const d = node.data as ConstructorDeclData;
@@ -745,7 +749,8 @@ function checkReturnStmt(ctx: CheckerContext, node: Node): void {
 		&& ctx.currentFunction.symbolType.typeReturn.kind !== TypeKind.Unknown) {
 		returnExpected = ctx.currentFunction.symbolType.typeReturn;
 	}
-	const retType = checkExpr(ctx, d.argument, returnExpected);
+	checkExpr(ctx, d.argument, returnExpected);
+	const retType = d.argument !== null ? d.argument.nodeType : null;
 	// Parity: standard reference node fitting — insert HiddenStdConv for narrowing return
 	if (returnExpected !== null) {
 		d.argument = fitNode(ctx, d.argument, returnExpected, retType);
@@ -840,7 +845,8 @@ function checkSwitchStmt(ctx: CheckerContext, node: Node): void {
 
 function checkMatchStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as MatchStmtData;
-	const discType = checkExpr(ctx, d.matchStmtDisc, null);
+	checkExpr(ctx, d.matchStmtDisc, null);
+	const discType = d.matchStmtDisc.nodeType;
 	let hasWildcard = false;
 	const coveredMembers: string[] = [];
 
@@ -976,7 +982,8 @@ export function checkFunctionBody(ctx: CheckerContext, sym: Symbol, params: stri
 		checkStmt(ctx, body);
 	} else {
 		// Expression body (arrow functions) — infer return type
-		const exprType = checkExpr(ctx, body, null);
+		checkExpr(ctx, body, null);
+		const exprType = body.nodeType;
 		if (ctx.inferredReturn.kind === TypeKind.Unknown) {
 			ctx.inferredReturn = exprType;
 		}
@@ -1140,11 +1147,18 @@ function defineBuiltinConstants(ctx: CheckerContext): void {
 // ===== Unified Prelude Loading (reference parity: single pipeline) =====
 
 // Load a single prelude module into a context. Shared by all paths.
-function loadPreludeOne(ctx: CheckerContext, specifier: string, stdPath: string): void {
+// backendExt: ".cms" for C (default), ".jms" for JS — tried before .cms fallback.
+function loadPreludeOne(ctx: CheckerContext, specifier: string, stdPath: string, backendExt: string): void {
 	const base = stdPath.length > 0 ? stdPath + "/" + specifier.slice(4, specifier.length) : specifier;
 	let src = readFile(base + ".ms");
 	let resolvedPath = base + ".ms";
-	if (src.length === 0) {
+	// Backend-specific extension first (e.g., .jms for JS, .cms for C)
+	if (src.length === 0 && backendExt !== "") {
+		src = readFile(base + "/index" + backendExt);
+		resolvedPath = base + "/index" + backendExt;
+	}
+	// Fallback to .cms (C backend default)
+	if (src.length === 0 && backendExt !== ".cms") {
 		src = readFile(base + "/index.cms");
 		resolvedPath = base + "/index.cms";
 	}
@@ -1259,14 +1273,14 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 // Used by both standalone checkProgram and orchestrator.
 // Creates a shared IdentCache (one cache per compilation)
 // that must be passed to all module contexts in the same compilation.
-export function buildPreludeContext(stdPath: string): CheckerContext {
+export function buildPreludeContext(stdPath: string, backendExt: string = ".cms"): CheckerContext {
 	const cache = createIdentCache();
 	const ctx = createContextWithCache(cache);
 	ctx.extensionRegistry = createExtensionRegistry();
 	const imps = globalImports();
 	let idx = 0;
 	while (idx < imps.length) {
-		loadPreludeOne(ctx, imps[idx], stdPath);
+		loadPreludeOne(ctx, imps[idx], stdPath, backendExt);
 		idx = idx + 1;
 	}
 	return ctx;

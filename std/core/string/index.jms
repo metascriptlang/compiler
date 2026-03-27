@@ -1,44 +1,86 @@
 // MetaScript String Prelude — JavaScript Backend
-// All string methods are native JS — these declarations provide type info to the checker.
-// The JS codegen emits direct method calls (s.indexOf(...), s.slice(...), etc.)
+// Strings are UTF-8 byte arrays (number[]), same as C backend.
+// toJSStr/fromJSStr use @emit with template interpolation for native JS String interop.
 
-// Comparison
-export extern function equals(this s: string, other: string): boolean;
-export extern function equalsIgnoreCase(this s: string, other: string): boolean;
-export extern function startsWith(this s: string, prefix: string): boolean;
-export extern function endsWith(this s: string, suffix: string): boolean;
-export extern function contains(this s: string, sub: string): boolean;
+// Native JS API
+extern class String {
+	static fromCharCode(code: int32): string;
+}
 
-// Search
-export extern function indexOf(this s: string, sub: string, start: int64 = 0): int64;
-export extern function lastIndexOf(this s: string, sub: string): int64;
-export extern function count(this s: string, sub: string): int64;
+// Zero-copy bridge (string ↔ uint8[]) — identity in JS
+export function asBytes(s: string): uint8[] {
+	return s as unknown as uint8[];
+}
 
-// Access
-export extern function charAt(this s: string, idx: int64): string;
-export extern function charCodeAt(this s: string, idx: int64): int32;
-export extern function byteLength(this s: string): int64;
-export extern function byteAt(this s: string, idx: int64): int32;
-export extern function byteSlice(this s: string, start: int64, end: int64): string;
+export function asString(arr: uint8[]): string {
+	return arr as unknown as string;
+}
 
-// Extraction
-export extern function slice(this s: string, start: int64, end: int64): string;
-export extern function substring(this s: string, start: int64, end: int64): string;
+// String concat — creates new byte array (called by lowerStringConcatFlatten for 2-part +)
+export function msStringConcat(a: string, b: string): string {
+	const ab = a.asBytes();
+	const bb = b.asBytes();
+	const result: uint8[] = [];
+	let i = 0;
+	while (i < ab.length) { result.push(ab[i]); i = i + 1; }
+	i = 0;
+	while (i < bb.length) { result.push(bb[i]); i = i + 1; }
+	return result.asString();
+}
 
-// Transform
-export extern function toLower(this s: string): string;
-export extern function toUpper(this s: string): string;
-export extern function trim(this s: string): string;
-export extern function trimStart(this s: string): string;
-export extern function trimEnd(this s: string): string;
-export extern function repeat(this s: string, count: int32): string;
-export extern function replace(this s: string, search: string, replacement: string): string;
-export extern function replaceAll(this s: string, search: string, replacement: string): string;
-export extern function reverse(this s: string): string;
-export extern function padStart(this s: string, targetLen: int64, pad: string): string;
-export extern function padEnd(this s: string, targetLen: int64, pad: string): string;
+// String concat N parts — rest params (called by lowerStringConcatFlatten for 3+ part +)
+// count param is for C va_list compatibility — ignored in JS, we use ...parts directly
+export function msStringConcatMany(count: number, ...parts: string[]): string {
+	const result: uint8[] = [];
+	let i = 0;
+	while (i < parts.length) {
+		const p = parts[i] as unknown as uint8[];
+		let j = 0;
+		while (j < p.length) { result.push(p[j]); j = j + 1; }
+		i = i + 1;
+	}
+	return result as unknown as string;
+}
 
-// Split / Parse
-export extern function split(this s: string, delimiter: string): string[];
-export extern function parseFloat(this s: string): number;
-export extern function parseInt(this s: string): int64;
+// String equality — byte-by-byte comparison (called by lowerOperators for == on strings)
+export function msStringEquals(a: string, b: string): boolean {
+	const ab = a.asBytes();
+	const bb = b.asBytes();
+	if (ab.length !== bb.length) return false;
+	let i = 0;
+	while (i < ab.length) {
+		if (ab[i] !== bb[i]) return false;
+		i = i + 1;
+	}
+	return true;
+}
+
+// UTF-8 byte array → native JS string (boundary conversion)
+export function toJSStr(s: string): string {
+	const bytes = asBytes(s);
+	@emit(`var r = "", i = 0;
+	while (i < ${bytes}.length) {
+		var b = ${bytes}[i];
+		if (b < 128) { r += String.fromCharCode(b); i++; }
+		else if (b < 224) { r += String.fromCharCode(((b & 31) << 6) | (${bytes}[i+1] & 63)); i += 2; }
+		else if (b < 240) { r += String.fromCharCode(((b & 15) << 12) | ((${bytes}[i+1] & 63) << 6) | (${bytes}[i+2] & 63)); i += 3; }
+		else { var cp = ((b & 7) << 18) | ((${bytes}[i+1] & 63) << 12) | ((${bytes}[i+2] & 63) << 6) | (${bytes}[i+3] & 63); cp -= 65536; r += String.fromCharCode(55296 + (cp >> 10), 56320 + (cp & 1023)); i += 4; }
+	}
+	return r;`);
+	unreachable;
+}
+
+// Native JS string → UTF-8 byte array (boundary conversion)
+export function fromJSStr(s: string): string {
+	@emit(`var r = [], i = 0;
+	while (i < ${s}.length) {
+		var ch = ${s}.charCodeAt(i);
+		if (ch < 128) { r.push(ch); }
+		else if (ch < 2048) { r.push((ch >> 6) | 192, (ch & 63) | 128); }
+		else if (ch < 55296 || ch >= 57344) { r.push((ch >> 12) | 224, ((ch >> 6) & 63) | 128, (ch & 63) | 128); }
+		else { i++; var cp2 = 65536 + (((ch & 1023) << 10) | (${s}.charCodeAt(i) & 1023)); r.push((cp2 >> 18) | 240, ((cp2 >> 12) & 63) | 128, ((cp2 >> 6) & 63) | 128, (cp2 & 63) | 128); }
+		i++;
+	}
+	return r;`);
+	unreachable;
+}
