@@ -316,7 +316,9 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type): boolean {
 	if (hasGenericParams(receiverType)) {
 		const eb = createUnifyBindings();
 		unifyType(receiverType, objType, eb);
-		return eb.names.length > 0;
+		if (eb.names.length > 0) return true;
+		// Unification failed (e.g., Array<T> class vs uint8[] array — different type kinds).
+		// Fall through to name-based matching below.
 	}
 	// Concrete array extensions: match only when element types are directly compatible.
 	if (receiverType.kind === TypeKind.Array && objType.kind === TypeKind.Array) {

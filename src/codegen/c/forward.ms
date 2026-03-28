@@ -24,7 +24,10 @@ function findSuffix(name: string, suffixes: string[]): string {
 }
 
 export function isDrcLifecycleName(name: string): boolean {
-	return findSuffix(name, DRC_SUFFIXES) !== "";
+	if (findSuffix(name, DRC_SUFFIXES) === "") return false;
+	// Built-in runtime functions (ms* prefix) are not generated DRC hooks
+	if (name.length > 2 && name.byteAt(0) === "m".code && name.byteAt(1) === "s".code) return false;
+	return true;
 }
 
 // Emit forward prototype for DRC lifecycle functions called cross-module.
@@ -32,6 +35,9 @@ export function isDrcLifecycleName(name: string): boolean {
 export function ensureDrcProto(g: CGen, callee: string): void {
 	const suffix = findSuffix(callee, DRC_SUFFIXES);
 	if (suffix === "") return;
+	// Skip built-in runtime functions (ms* prefix) — they're defined in C headers, not generated.
+	// Only generate forward declarations for per-type hooks (e.g., TokenDestroy, PointCopy).
+	if (callee.length > 2 && callee.byteAt(0) === "m".code && callee.byteAt(1) === "s".code) return;
 	if (nameSetHas(g.declaredProcs, callee)) return;
 	nameSetAdd(g.declaredProcs, callee);
 
