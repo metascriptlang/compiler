@@ -2,7 +2,7 @@
 // Uses callback injection via util.ms to avoid circular imports
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, DeclKind, ExternKind, NodeData, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData } from "../../ast/node";
+import { Node, NodeKind, DeclKind, ExternKind, NodeData, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData, ImportDeclData, ExportDeclData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, peek, skipDestructurePattern, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, addGenericDecl, updateGenericDeclFields, collectTokenText } from "../context";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipDefaultValue, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, isIdentLike, isPropertyName } from "../util";
@@ -280,6 +280,33 @@ export function parseImportDecl(state: ParserState): NodeResult {
 		}, importToken));
 	}
 
+	// Namespace import: import * as ns from "module";
+	if (current(state).kind === TokenKind.Star) {
+		advance(state); // skip *
+		if (current(state).kind !== TokenKind.As) {
+			return Result.err(`Expected 'as' after 'import *' at line ${current(state).line}`);
+		}
+		advance(state); // skip 'as'
+		if (current(state).kind !== TokenKind.Ident) {
+			return Result.err(`Expected namespace name after 'import * as' at line ${current(state).line}`);
+		}
+		const nsName = current(state).value;
+		advance(state);
+		if (current(state).kind !== TokenKind.From) {
+			return Result.err(`Expected 'from' after 'import * as ${nsName}' at line ${current(state).line}`);
+		}
+		advance(state);
+		if (current(state).kind !== TokenKind.String) {
+			return Result.err(`Expected module path string at line ${current(state).line}`);
+		}
+		const source = current(state).value;
+		advance(state);
+		consumeSemicolon(state);
+		return Result.ok(createNode(NodeKind.ImportDecl, {
+			importNames: ["*"], importAliases: [nsName], importSource: source, nameLocations: [],
+		}, importToken));
+	}
+
 	if (current(state).kind !== TokenKind.LBrace) {
 		return Result.err(`Expected '{' or string after 'import' at line ${current(state).line}`);
 	}
@@ -324,6 +351,24 @@ export function parseExportDecl(state: ParserState): NodeResult {
 
 	// Each branch uses const + immediate return to avoid DRC try aliasing bug
 	const nextKind = current(state).kind;
+	// Star re-export: export * from "module";
+	if (nextKind === TokenKind.Star) {
+		advance(state); // skip *
+		if (current(state).kind !== TokenKind.From) {
+			return Result.err(`Expected 'from' after 'export *' at line ${current(state).line}`);
+		}
+		advance(state);
+		if (current(state).kind !== TokenKind.String) {
+			return Result.err(`Expected module path string at line ${current(state).line}`);
+		}
+		const source = current(state).value;
+		advance(state);
+		consumeSemicolon(state);
+		const importNode = createNode(NodeKind.ImportDecl, {
+			importNames: ["*"], importAliases: ["*"], importSource: source, nameLocations: [],
+		}, exportToken);
+		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: importNode }, exportToken));
+	}
 	// Re-export: export { X, Y } from "module";
 	if (nextKind === TokenKind.LBrace) {
 		advance(state); // skip '{'
@@ -1580,6 +1625,27 @@ test "export const" { assert programOk("export const x = 42;"); }
 test "re-export" { assert programOk("export { Node, NodeKind } from \"./node\";"); }
 
 test "re-export aliased" { assert programOk("export { Token as T } from \"./token\";"); }
+
+test "import star as" { assert programOk("import * as ns from \"./lib\";"); }
+
+test "import star as data" {
+	const d = stmtAt("import * as ns from \"./lib\";", 0).data as ImportDeclData;
+	assert d.importNames[0] === "*";
+	assert d.importAliases[0] === "ns";
+	assert d.importSource === "./lib";
+}
+
+test "export star" { assert programOk("export * from \"./lib\";"); }
+
+test "export star is ExportDecl" { assert stmtKind("export * from \"./lib\";") === NodeKind.ExportDecl; }
+
+test "export star data" {
+	const ex = stmtAt("export * from \"./lib\";", 0).data as ExportDeclData;
+	const imp = ex.exportedDecl.data as ImportDeclData;
+	assert imp.importNames[0] === "*";
+	assert imp.importAliases[0] === "*";
+	assert imp.importSource === "./lib";
+}
 // Type alias — distinct paths: simple, generic, union, function type
 test "type simple" { assert programOk("type ID = number;"); }
 

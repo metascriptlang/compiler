@@ -220,6 +220,15 @@ export function emitImportDecl(gen: JSGenerator, node: Node): void {
 		emit(gen, "\";\n");
 		return;
 	}
+	// Namespace import: import * as ns from "path"
+	if (d.importNames.length === 1 && d.importNames[0] === "*") {
+		emit(gen, "import * as ");
+		emit(gen, d.importAliases[0]);
+		emit(gen, " from \"");
+		emit(gen, convertImportPath(d.importSource));
+		emit(gen, "\";\n");
+		return;
+	}
 	emit(gen, "import { ");
 	for (let i = 0; i < d.importNames.length; i += 1) {
 		if (i > 0) emit(gen, ", ");
@@ -239,6 +248,19 @@ export function emitImportDecl(gen: JSGenerator, node: Node): void {
 export function emitExportDecl(gen: JSGenerator, node: Node): void {
 	const d = node.data as ExportDeclData;
 	const inner = d.exportedDecl;
+	// Star re-export: export * from "path"
+	if (inner.kind === NodeKind.ImportDecl) {
+		const imp = inner.data as ImportDeclData;
+		if (imp.importNames.length === 1 && imp.importNames[0] === "*") {
+			if (!gen.bundleMode) {
+				emitIndent(gen);
+				emit(gen, "export * from \"");
+				emit(gen, convertImportPath(imp.importSource));
+				emit(gen, "\";\n");
+			}
+			return;
+		}
+	}
 	// Skip type-only exports (no JS output)
 	if (inner.kind === NodeKind.InterfaceDecl) return;
 	if (inner.kind === NodeKind.StructDecl) return;

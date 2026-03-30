@@ -911,6 +911,29 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		truncResults(ctx, cc);
 		const d = node.data as MemberExprData;
 
+		// Module namespace access: ns.X → emit the resolved symbol's mangled name
+		if (d.object.resolvedSym !== null && d.object.resolvedSym.symbolKind === SymbolKind.Module) {
+			const nsSym = node.resolvedSym;
+			if (nsSym !== null && nsSym.symbolKind === SymbolKind.Function) {
+				const fnName = mangledFunctionName(nsSym, d.property, nsSym.overloadIdx);
+				ensureCrossModuleProto(g, fnName, nsSym.symbolType, nsSym);
+				ctx.results.push(fnName);
+			} else if (nsSym !== null) {
+				// Constants/variables: use safeName (matching how normal cross-module vars are emitted)
+				const varName = nsSym.originalName !== "" ? nsSym.originalName : d.property;
+				const sName = safeName(varName);
+				if (node.nodeType !== null && !nameSetHas(g.declaredGlobals, sName)) {
+					const cType = getTypeDesc(g, node.nodeType);
+					addLine(sec(g, CSection.GlobalVars), `extern ${cType} ${sName};`);
+					nameSetAdd(g.declaredGlobals, sName);
+				}
+				ctx.results.push(sName);
+			} else {
+				ctx.results.push(safeName(d.property));
+			}
+			return;
+		}
+
 		// Static property access: emit global variable name (ClassName.prop → ClassName__prop)
 		if (node.resolvedSym !== null && hasFlag(node.resolvedSym, SymbolFlag.Static)) {
 			ctx.results.push(staticFieldCName(node.resolvedSym.name));

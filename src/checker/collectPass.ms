@@ -462,7 +462,7 @@ function resolveOriginalName(info: ExportedSymInfo, importName: string): string 
 
 // Shared helper: create a symbol from export registry info, define it, and record for LSP.
 // Used by both collectImport and collectExport (re-export path) to avoid duplication.
-function importSymFromRegistry(
+export function importSymFromRegistry(
 	ctx: CheckerContext, alias: string, importName: string,
 	exportInfo: ExportedSymInfo, sourcePath: string,
 	nameLoc: SourceLocation, defNode: Node
@@ -502,6 +502,20 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 
 	// Resolve types from ExportRegistry
 	const sourcePath = resolveImportSourcePath(ctx, d.importSource);
+
+	// Namespace import: import * as ns from "path"
+	// Create a Module symbol only. Individual exports are resolved on demand
+	// in checkMemberExpr via ExportRegistry (qualified lookup).
+	// No symbols imported into scope — avoids name clashes entirely.
+	if (d.importNames.length === 1 && d.importNames[0] === "*") {
+		const nsAlias = d.importAliases[0];
+		if (lookupLocal(ctx.table, nsAlias) !== null) return;
+		const nsSym = makeSymbol(nsAlias, SymbolKind.Module, unknownType(), false);
+		nsSym.modulePath = sourcePath;
+		nsSym.location = node.location;
+		defineSymbol(ctx.table, nsSym);
+		return;
+	}
 
 	for (let i = 0; i < d.importNames.length; i += 1) {
 		const importName = d.importNames[i];
@@ -654,6 +668,34 @@ function collectExport(ctx: CheckerContext, node: Node): void {
 		const imp = d.exportedDecl.data as ImportDeclData;
 
 		if (!isGlobalImport(imp.importSource)) {
+			// Star re-export: export * from "path" — re-export all symbols from source
+			if (imp.importNames.length === 1 && imp.importNames[0] === "*") {
+				const sourcePath = resolveImportSourcePath(ctx, imp.importSource);
+				if (sourcePath !== "") {
+					const modExports = findModuleExports(ctx.exportRegistry, sourcePath);
+					if (modExports !== null) {
+						for (let si = 0; si < modExports.symbols.length; si += 1) {
+							const expInfo = modExports.symbols[si];
+							if (lookupLocal(ctx.table, expInfo.name) !== null) continue;
+							importSymFromRegistry(ctx, expInfo.name, expInfo.name, expInfo, sourcePath, node.location, node);
+							const sym = lookupLocal(ctx.table, expInfo.name);
+							if (sym !== null) {
+								setFlag(sym, SymbolFlag.Exported);
+							}
+						}
+					} else {
+						const isCirc = ctx.moduleGraph !== null
+							&& ctx.currentModule !== null
+							&& isCircularBackEdge(ctx.moduleGraph, ctx.currentModule.path, sourcePath);
+						if (isCirc) {
+							addError(ctx, `Circular 'export *' is not supported: '${imp.importSource}' and this module form a cycle`, node.location.line, node.location.column);
+						} else {
+							addError(ctx, `No exports found in '${imp.importSource}' for export *`, node.location.line, node.location.column);
+						}
+					}
+				}
+				return;
+			}
 			// Import only symbols not already in scope
 			for (let i = 0; i < imp.importAliases.length; i += 1) {
 				const alias = imp.importAliases[i];

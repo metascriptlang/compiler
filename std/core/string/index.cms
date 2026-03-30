@@ -58,7 +58,7 @@ export extern function indexOf(this s: string, sub: string, start: int64 = 0): i
  * Returns the last occurrence of a substring in the string.
  * @param sub The substring to search for.
  */
-export extern function lastIndexOf(this s: string, sub: string): int64 from "msStringLastIndexOf";
+export extern function lastIndexOf(this s: string, sub: string, startIdx: int64 = -1): int64 from "msStringLastIndexOf";
 
 /** Returns the number of non-overlapping occurrences of a substring. */
 export extern function count(this s: string, sub: string): int64 from "msStringCount";

@@ -175,8 +175,8 @@ bool msStringContains(msString s, msString sub);
 /* Find first occurrence, starting from `start`. Returns -1 if not found. */
 int64_t msStringIndexOf(msString s, msString sub, int64_t start);
 
-/* Find last occurrence. Returns -1 if not found. */
-int64_t msStringLastIndexOf(msString s, msString sub);
+/* Find last occurrence. startIdx=-1 means search from end (JS parity). */
+int64_t msStringLastIndexOf(msString s, msString sub, int64_t startIdx);
 
 /* Count non-overlapping occurrences */
 int64_t msStringCount(msString s, msString sub);

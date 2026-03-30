@@ -341,7 +341,7 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type): boolean {
 	// Concrete array extensions: element type compatibility is authoritative.
 	// Don't fall through to name-based matching (which matches all "Array" extensions
 	// regardless of element type — e.g., pop(number[]) would incorrectly match Bar[]).
-	// Nim parity: sigmatch scores exact element match over generic, so concrete
+	// Reference parity: sigmatch scores exact element match over generic, so concrete
 	// overloads with wrong element types are rejected, not accepted via name fallback.
 	if (receiverType.kind === TypeKind.Array && objType.kind === TypeKind.Array) {
 		const recvElem = receiverType.typeReturn;

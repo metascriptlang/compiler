@@ -1703,6 +1703,12 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 		for (const p of preStmts) { result.push(p); }
 		result.push(saveTmp);
 		result.push(stmt);
+		// Reference parity (=copy): incref new value before decref old.
+		// Identity case (f returns same object) → without incref, decref frees it → dangling.
+		if (!isBinaryCopy(rcInfo) && rcInfo.copyFn !== "") {
+			result.push(makeExprStmt(
+				makeCall(makeIdent(rcInfo.copyFn, loc), [makeIdent(leftD.name, loc)], loc), loc));
+		}
 		result.push(destroyTmp);
 		return makeBlock(result, loc);
 	}
@@ -1873,9 +1879,27 @@ function emitSaveAssignDestroy(stmt: Node, lhsExpr: Node, rhs: Node, rcInfo: RcI
 		return makeBlock([saveTmp, stmt, makeDestroyCall(tmpName, rcInfo, loc)], loc);
 	}
 
-	// CallExpr RHS: fresh value but may alias dest (e.g., x = f(x)).
-	// Must use save-assign-destroy to avoid use-after-free on aliased args.
+	// CallExpr RHS: value may alias dest (e.g., x = f(x) where f returns x).
+	// Reference parity (=copy): must incref/copy new value before decref old.
+	// Without this, identity case (f returns same object) → old decref frees it → dangling.
 	if (rhs.kind === NodeKind.CallExpr) {
+		// Named/String: =copy(&dest, src) handles old-value cleanup + incref internally.
+		// Self-copy safe (incref new before decref old). Falls through to use binary copy below.
+		if (isBinaryCopy(rcInfo) && rcInfo.copyFn !== "") {
+			const destArg = needsDestAddr(rcInfo) ? makeHiddenAddr(lhsExpr, loc) : lhsExpr;
+			const srcArg = isCopySrcByValue(rcInfo) ? rhs : makeHiddenAddr(rhs, loc);
+			return makeExprStmt(
+				makeCall(makeIdent(rcInfo.copyFn, loc), [destArg, srcArg], loc), loc);
+		}
+		// Ref/Closure: save old → assign → incref(new) → destroy(old)
+		if (rcInfo.copyFn !== "") {
+			const callResult: Node[] = [saveTmp, stmt];
+			callResult.push(makeExprStmt(
+				makeCall(makeIdent(rcInfo.copyFn, loc), [lhsExpr], loc), loc));
+			callResult.push(makeDestroyCall(tmpName, rcInfo, loc));
+			return makeBlock(callResult, loc);
+		}
+		// No copy function: save → assign → destroy old (original pattern)
 		return makeBlock([saveTmp, stmt, makeDestroyCall(tmpName, rcInfo, loc)], loc);
 	}
 

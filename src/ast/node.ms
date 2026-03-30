@@ -72,6 +72,7 @@ export enum SymbolKind {
 	Method,
 	EnumMember,
 	Struct,
+	Module,
 }
 
 // ===== Symbol State (Lifecycle) =====

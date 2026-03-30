@@ -341,6 +341,7 @@ function sgSymbolKindName(kind: SymbolKind): string {
 		SymbolKind.Property => "property",
 		SymbolKind.Method => "method",
 		SymbolKind.EnumMember => "enum member",
+		SymbolKind.Module => "module",
 	};
 }
 

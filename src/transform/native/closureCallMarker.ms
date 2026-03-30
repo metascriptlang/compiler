@@ -14,7 +14,7 @@
 //   Identifier, Variable    → closure
 //   Identifier, Parameter   → closure
 
-import { Node, NodeKind, SymbolKind, Symbol, CallExprData, SourceLocation, makeLoc, NodeFlag, createNodeAt, Type, TypeKind, CallingConvention } from "../../ast/node";
+import { Node, NodeKind, SymbolKind, Symbol, CallExprData, MemberExprData, SourceLocation, makeLoc, NodeFlag, createNodeAt, Type, TypeKind, CallingConvention } from "../../ast/node";
 import { createFunction, voidType } from "../../checker/types";
 import { Token } from "../../lexer/token";
 import { TransformContext } from "../context";
@@ -35,10 +35,15 @@ function markCall(node: Node): Node {
 	// Post-lambda-lifting MemberExpr callees: _envP.f with Function type is a closure call.
 	// These are created by lambda lifting (runs after checker), so the checker can't see them.
 	// Reference parity: lambda-lifted calls get closure calling convention from the lifted function's proc type.
+	// Exception: Module namespace access (ns.func) is always a direct call.
 	if (cd.callee.kind === NodeKind.MemberExpr && cd.callee.nodeType !== null
 		&& cd.callee.nodeType.kind === TypeKind.Function) {
-		cd.isDirectCall = false;
-		cd.callee.nodeType.callConv = CallingConvention.CcClosure;
+		const calleeObj = (cd.callee.data as MemberExprData).object;
+		const isModuleAccess = calleeObj.resolvedSym !== null && calleeObj.resolvedSym.symbolKind === SymbolKind.Module;
+		if (!isModuleAccess) {
+			cd.isDirectCall = false;
+			cd.callee.nodeType.callConv = CallingConvention.CcClosure;
+		}
 	}
 
 	// Reference parity: thunk generation — wrap named functions passed as

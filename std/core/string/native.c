@@ -325,15 +325,34 @@ int64_t msStringIndexOf(msString s, msString sub, int64_t start) {
 	return -1;
 }
 
-int64_t msStringLastIndexOf(msString s, msString sub) {
+int64_t msStringLastIndexOf(msString s, msString sub, int64_t startIdx) {
 	if (sub.len == 0) return msStringIsAscii(s) ? s.len : msStringLength(s);
 	if (sub.len > s.len || s.p == NULL) return -1;
+
+	/* Determine start byte position for backward search */
+	int64_t startByte = s.len - sub.len;
+	if (startIdx >= 0 && msStringIsAscii(s) && startIdx < startByte) {
+		startByte = startIdx;
+	} else if (startIdx >= 0 && !msStringIsAscii(s)) {
+		/* Convert char position to byte position for non-ASCII */
+		const unsigned char* p = (const unsigned char*)s.p->data;
+		int64_t bytePos = 0, charPos = 0;
+		while (bytePos < s.len && charPos < startIdx) {
+			unsigned char b = p[bytePos];
+			if (b < 0x80) bytePos++;
+			else if (b < 0xE0) bytePos += 2;
+			else if (b < 0xF0) bytePos += 3;
+			else bytePos += 4;
+			charPos++;
+		}
+		if (bytePos < startByte) startByte = bytePos;
+	}
 
 	/* ASCII fast path */
 	if (msStringIsAscii(s)) {
 		const char* haystack = s.p->data;
 		const char* needle = sub.p->data;
-		for (int64_t i = s.len - sub.len; i >= 0; i--) {
+		for (int64_t i = startByte; i >= 0; i--) {
 			if (memcmp(haystack + i, needle, sub.len) == 0) {
 				return i;
 			}
@@ -345,7 +364,7 @@ int64_t msStringLastIndexOf(msString s, msString sub) {
 	const char* haystack = s.p->data;
 	const char* needle = sub.p->data;
 	int64_t lastBytePos = -1;
-	for (int64_t i = s.len - sub.len; i >= 0; i--) {
+	for (int64_t i = startByte; i >= 0; i--) {
 		if (memcmp(haystack + i, needle, sub.len) == 0) {
 			lastBytePos = i;
 			break;

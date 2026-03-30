@@ -841,7 +841,7 @@ function substituteStruct(t: Type, paramName: string, concrete: Type): Type {
 	return result;
 }
 
-// Nim parity (instCopyType): shallow-copy source type with INDEPENDENT arrays.
+// Reference parity (instCopyType): shallow-copy source type with INDEPENDENT arrays.
 // Uses emptyType() for fresh arrays (no aliasing in JS), then pushes elements.
 // Elements are at rc=0 in the new array, but safe because Gap B is fixed
 // (flag-based cycle detection, no DRC-managed visited array push/pop/decref).
@@ -866,9 +866,10 @@ function substituteChildrenInPlace(copy: Type, paramName: string, concrete: Type
 	}
 }
 
-// Cycle detection: flag on the Type itself (no DRC-managed ref array).
-// Nim parity: Nim uses cl.localCache (hash table). We use a flag bit — same principle
+// Cycle detection: flag on the Type itself.
+// Reference parity: uses localCache (hash table). We use a flag bit — same principle
 // (identity-based, no incref/decref on tracked types). O(1) check vs O(n) linear scan.
+// Cannot use Type[] stack — DRC push/pop/decref frees rc=0 types (fatal in C binary).
 function substituteIsSeen(t: Type): boolean {
 	return (t.typeFlags & TypeFlag.Substituting) !== 0;
 }
@@ -883,51 +884,51 @@ function substituteClearFlag(t: Type): void {
 
 export function substituteType(t: Type, paramName: string, concrete: Type): Type {
 	if (t === null) return t;
-	// Guard before match: GenericParam with matching name
 	if (t.kind === TypeKind.GenericParam && t.typeName === paramName) return concrete;
-	// Cycle detection: flag on Type (no DRC-managed visited array)
 	if (substituteIsSeen(t)) return t;
 	substituteSetFlag(t);
-	const result = match (t.kind) {
-		TypeKind.Number | TypeKind.String | TypeKind.Boolean |
-		TypeKind.Void | TypeKind.Null | TypeKind.Unknown |
-		TypeKind.Never | TypeKind.Error | TypeKind.GenericParam |
-		TypeKind.CString => t,
-		TypeKind.Array => createArray(substituteType(t.typeReturn, paramName, concrete)),
-		TypeKind.SizedArray => createSizedArray(substituteType(t.typeReturn, paramName, concrete), t.typeFlags - TypeFlag.Substituting),
-		TypeKind.Span => createSpan(substituteType(t.typeReturn, paramName, concrete)),
-		TypeKind.Function => {
-			const fn = copyTypeForSubst(t);
-			substituteChildrenInPlace(fn, paramName, concrete);
-			fn.typeReturn = substituteType(t.typeReturn, paramName, concrete);
-			substituteClearFlag(t);
-			return fn;
-		},
-		TypeKind.Union | TypeKind.Tuple => {
-			const copy = copyTypeForSubst(t);
-			substituteChildrenInPlace(copy, paramName, concrete);
-			substituteClearFlag(t);
-			return copy;
-		},
-		TypeKind.Ref => createRef(substituteType(t.typeReturn, paramName, concrete)),
-		TypeKind.Ptr => createPtr(substituteType(t.typeReturn, paramName, concrete)),
-		TypeKind.Borrow => createBorrow(substituteType(t.typeReturn, paramName, concrete)),
-		TypeKind.Struct => substituteStruct(t, paramName, concrete),
-		TypeKind.GenericInstance => {
-			const gi = copyTypeForSubst(t);
-			gi.typeReturn = null as unknown as Type;
-			substituteChildrenInPlace(gi, paramName, concrete);
-			substituteClearFlag(t);
-			return gi;
-		},
-		_ => t,
-	};
-	substituteClearFlag(t);
-	return result;
+	// try/finally ensures the flag is ALWAYS cleared, even if an exception interrupts.
+	// Without this, shared prelude types get stale Substituting flags that break
+	// subsequent substituteType calls across the module graph.
+	try {
+		const result = match (t.kind) {
+			TypeKind.Number | TypeKind.String | TypeKind.Boolean |
+			TypeKind.Void | TypeKind.Null | TypeKind.Unknown |
+			TypeKind.Never | TypeKind.Error | TypeKind.GenericParam |
+			TypeKind.CString => t,
+			TypeKind.Array => createArray(substituteType(t.typeReturn, paramName, concrete)),
+			TypeKind.SizedArray => createSizedArray(substituteType(t.typeReturn, paramName, concrete), t.typeFlags - TypeFlag.Substituting),
+			TypeKind.Span => createSpan(substituteType(t.typeReturn, paramName, concrete)),
+			TypeKind.Function => {
+				const fn = copyTypeForSubst(t);
+				substituteChildrenInPlace(fn, paramName, concrete);
+				fn.typeReturn = substituteType(t.typeReturn, paramName, concrete);
+				return fn;
+			},
+			TypeKind.Union | TypeKind.Tuple => {
+				const copy = copyTypeForSubst(t);
+				substituteChildrenInPlace(copy, paramName, concrete);
+				return copy;
+			},
+			TypeKind.Ref => createRef(substituteType(t.typeReturn, paramName, concrete)),
+			TypeKind.Ptr => createPtr(substituteType(t.typeReturn, paramName, concrete)),
+			TypeKind.Borrow => createBorrow(substituteType(t.typeReturn, paramName, concrete)),
+			TypeKind.Struct => substituteStruct(t, paramName, concrete),
+			TypeKind.GenericInstance => {
+				const gi = copyTypeForSubst(t);
+				gi.typeReturn = null as unknown as Type;
+				substituteChildrenInPlace(gi, paramName, concrete);
+				return gi;
+			},
+			_ => t,
+		};
+		return result;
+	} finally {
+		substituteClearFlag(t);
+	}
 }
 
 // Instantiate a generic type with concrete type arguments.
-// genericParamNames: ["T", "E"], typeArgs: [numberType(), stringType()]
 export function instantiateGeneric(t: Type, genericParamNames: string[], typeArgs: Type[]): Type {
 	let result = t;
 	const limit = genericParamNames.length < typeArgs.length ? genericParamNames.length : typeArgs.length;

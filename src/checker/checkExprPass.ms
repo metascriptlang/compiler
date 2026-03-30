@@ -4,8 +4,8 @@
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, DeclKind, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, ClassDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
 import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createSpan, createFunction, createTypeRef, createStruct, createRef, createResult, createPrimitive, substituteType, instantiateGeneric, anonStructName, isNumeric, isIntegerType, isStringType, isCallable, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, unwrapRef, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, isPromise, getPromiseInner, isResult, getResultOkType, createGenericParam, instantiateGenericBody } from "./types";
-import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag } from "./symbol";
-import { CheckerContext, addError, addErrorRange, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, isInAsyncPromiseResult } from "./context";
+import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag } from "./symbol";
+import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, isInAsyncPromiseResult, findExportedSymbol } from "./context";
 import {
 	scoreCandidate, isAssignable, needsStdConv, resolveOverloadIdx,
 	findFirstMismatch, typeRelation, TypeRelation,
@@ -1086,7 +1086,6 @@ function checkTryExpr(ctx: CheckerContext, node: Node): Type {
 
 function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Type {
 	const d = node.data as CallExprData;
-	// Check callee FIRST to get param types for expectedType propagation (Implementation parity)
 	checkExpr(ctx, d.callee, null);
 	let calleeType = d.callee.nodeType;
 	// Detect overloaded paths early — these need argTypes for scoring
@@ -1118,25 +1117,12 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 			d.isDirectCall = false;
 		}
 	} else if (d.callee.kind === NodeKind.MemberExpr) {
-		// Method call: resolveMemberExpr already set resolvedSym on the callee node
+		// Method call: copy resolvedSym from callee (set by class method lookup in checkMemberExpr)
 		if (d.callee.resolvedSym !== null) {
 			node.resolvedSym = d.callee.resolvedSym;
-			// Class instance methods: detected by "this" as first param name.
-			// Set ExtCall so extensionMethodLower rewrites obj.method(args) → ClassName_method(obj, args)
-			const methSym = d.callee.resolvedSym;
-			if (methSym.symbolType !== null && methSym.symbolType.kind === TypeKind.Function
-				&& methSym.symbolType.typeNames !== null && methSym.symbolType.typeNames.length > 0
-				&& methSym.symbolType.typeNames[0] === "this"
-				&& !hasFlag(methSym, SymbolFlag.NativeMethod)) {
-				node.flags = node.flags | NodeFlag.ExtCall;
-			}
 		}
-		// Nim parity: resolve extension methods ONCE. checkMemberExpr already resolved
-		// the extension, instantiated generics, and set calleeType via d.callee.nodeType.
-		// Only re-resolve if the callee wasn't fully resolved (null, unknown, or still generic).
-		if (calleeType !== null && calleeType.kind === TypeKind.Function && !hasGenericParams(calleeType)) {
-			extPreResolved = true;
-		} else if (ctx.extensionRegistry !== null) {
+		// Extension resolution for method calls.
+		if (ctx.extensionRegistry !== null) {
 			const me = d.callee.data as MemberExprData;
 			const objType = me.object.nodeType;
 			if (objType !== null && objType.kind !== TypeKind.Unknown) {
@@ -1483,8 +1469,6 @@ export function inferGenericReturn(fnType: Type, argTypes: Type[], expectedType:
 	for (let j = 0; j < b.names.length; j += 1) {
 		returnType = substituteType(returnType, b.names[j], b.types[j]);
 	}
-	// Unresolved GenericParam → Unknown (prevents false "does not exist" on member access)
-	if (returnType.kind === TypeKind.GenericParam) return unknownType();
 	return returnType;
 }
 
@@ -1729,6 +1713,47 @@ function resolveOverloadIdxWithInheritance(ctx: CheckerContext, candidates: Type
 // ===== Member Expression + Extension Method Resolution =====
 
 // Check if a type maps to a pointer in C (Ref, Ptr, Borrow — NOT Object/interface)
+// Build a one-off Symbol from ExportedSymInfo for namespace member access.
+// Same metadata as importSymFromRegistry, but NOT defined in any scope.
+function createSymFromExport(expInfo: ExportedSymInfo, sourcePath: string): Symbol {
+	const sym = makeSymbolState(expInfo.name, expInfo.kind, expInfo.symType, false, SymbolState.Shaped);
+	sym.modulePath = expInfo.definingModule !== "" ? expInfo.definingModule : sourcePath;
+	if (expInfo.originalName !== "") sym.originalName = expInfo.originalName;
+	if (expInfo.nativeName !== "") sym.nativeName = expInfo.nativeName;
+	if (expInfo.builtinKind !== "") sym.builtinKind = expInfo.builtinKind;
+	if (expInfo.headerPath !== "") sym.headerPath = expInfo.headerPath;
+	if (expInfo.jsModulePath !== "") sym.jsModulePath = expInfo.jsModulePath;
+	sym.defaultParams = expInfo.defaultParams;
+	if (expInfo.overloadTypes.length > 0) {
+		sym.overloads = [];
+		let oi = 0;
+		while (oi < expInfo.overloadTypes.length) {
+			const overSym = makeSymbolState(expInfo.name, expInfo.kind, expInfo.overloadTypes[oi], false, SymbolState.Shaped);
+			overSym.modulePath = sym.modulePath;
+			if (oi < expInfo.overloadNativeNames.length && expInfo.overloadNativeNames[oi] !== "") {
+				overSym.nativeName = expInfo.overloadNativeNames[oi];
+			}
+			if (oi < expInfo.overloadBuiltinKinds.length && expInfo.overloadBuiltinKinds[oi] !== "") {
+				overSym.builtinKind = expInfo.overloadBuiltinKinds[oi];
+			}
+			if (oi < expInfo.overloadDefaultParamsCounts.length) {
+				const cnt = expInfo.overloadDefaultParamsCounts[oi];
+				if (cnt > 0) {
+					overSym.defaultParams = [];
+					let startIdx = 0;
+					let ci = 0;
+					while (ci < oi) { startIdx = startIdx + expInfo.overloadDefaultParamsCounts[ci]; ci = ci + 1; }
+					let di = 0;
+					while (di < cnt) { overSym.defaultParams.push(expInfo.overloadDefaultParamsFlat[startIdx + di]); di = di + 1; }
+				}
+			}
+			sym.overloads.push(overSym);
+			oi = oi + 1;
+		}
+	}
+	return sym;
+}
+
 function isPointerInC(t: Type, ctx: CheckerContext): boolean {
 	if (t === null) return false;
 	return t.kind === TypeKind.Ref || t.kind === TypeKind.Ptr || t.kind === TypeKind.Borrow;
@@ -1872,6 +1897,25 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 		node.resolvedSym = memberSym;
 		node.nodeType = objType;
 		return objType;
+	}
+	// Module namespace access: ns.X where ns is import * as ns
+	// Resolve directly from the module's export table — never from local scope.
+	// Keep MemberExpr (don't rewrite to Identifier):
+	//   C codegen: handles Module MemberExpr → emits mangled name
+	//   JS codegen: emits ns.X naturally (standard ES6 namespace access)
+	if (d.object.resolvedSym !== null && d.object.resolvedSym.symbolKind === SymbolKind.Module) {
+		const nsModPath = d.object.resolvedSym.modulePath;
+		if (nsModPath !== "") {
+			const expInfo = findExportedSymbol(ctx.exportRegistry, nsModPath, d.property);
+			if (expInfo !== null) {
+				const memSym = createSymFromExport(expInfo, nsModPath);
+				node.resolvedSym = memSym;
+				node.nodeType = expInfo.symType;
+				return expInfo.symType;
+			}
+			addError(ctx, `Module '${d.object.resolvedSym.name}' has no export '${d.property}'`, node.location.line, node.location.column);
+			return unknownType();
+		}
 	}
 	// reference parity: strip Ref/Ptr BEFORE field resolution, insert deref AFTER
 	// reference: skip pointer types → lookup field → make dereference
@@ -2171,8 +2215,6 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 		return toStrFnType;
 	}
 	// Unresolved member access — emit error with field suggestion if available
-	// Skip if property actually exists with type `unknown` (getProperty returns unknownType for both
-	// "not found" and "found with type unknown" — check typeNames to distinguish)
 	const propertyActuallyExists = resolvedObjType.typeNames !== null && resolvedObjType.typeNames.indexOf(d.property) >= 0;
 	if (propType.kind === TypeKind.Unknown && resolvedObjType.kind !== TypeKind.Unknown && !propertyActuallyExists) {
 		const typeName = typeNameOf(resolvedObjType) !== "" ? typeNameOf(resolvedObjType) : "object";
