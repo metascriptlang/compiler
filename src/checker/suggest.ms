@@ -2507,6 +2507,27 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 		return;
 	}
 
+	// ImportDecl: classify each imported name by its resolved symbol kind
+	if (node.kind === NodeKind.ImportDecl) {
+		const imp = node.data as ImportDeclData;
+		if (imp.nameLocations === null) return;
+		for (let ii = 0; ii < imp.importNames.length; ii += 1) {
+			const name = imp.importNames[ii];
+			if (ii >= imp.nameLocations.length) continue;
+			const nameLoc = imp.nameLocations[ii];
+			if (name.length === 0 || nameLoc === null) continue;
+			const alias = imp.importAliases[ii];
+			const lookupName = (alias !== "" && alias !== name) ? alias : name;
+			const sym = lookupSymbol(ctx.table, lookupName);
+			if (sym !== null) {
+				const tt = sgSymbolToTokenType(sym.symbolKind);
+				const tok: SgSemanticToken = { line: nameLoc.line, col: nameLoc.column, length: name.length, tokenType: tt, modifiers: 0 };
+				tokens.push(tok);
+			}
+		}
+		return;
+	}
+
 	// ExternDecl: skip — tree-sitter handles extern keyword highlighting.
 	if (node.kind === NodeKind.ExternDecl) return;
 

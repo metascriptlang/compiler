@@ -6,13 +6,11 @@
 @compile("std/core/string/native.c");
 
 // ===== Operators =====
-// Base operators (C runtime)
+// Primitive operators (C runtime)
 export extern function `==`(this a: string, b: string): boolean from "msStringEquals";
 export extern function `<`(this a: string, b: string): boolean from "msStringCompareLt";
-// Derived operators (pure MetaScript — delegate to base)
-export function `===`(this a: string, b: string): boolean { return a == b; }
+// Derived operators (call == and < internally)
 export function `!=`(this a: string, b: string): boolean { return !(a == b); }
-export function `!==`(this a: string, b: string): boolean { return !(a == b); }
 export function `>`(this a: string, b: string): boolean { return b < a; }
 export function `<=`(this a: string, b: string): boolean { return !(b < a); }
 export function `>=`(this a: string, b: string): boolean { return !(a < b); }

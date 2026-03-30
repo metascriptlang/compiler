@@ -9,7 +9,7 @@ test "E2E C: DRC copy call has address-of for large struct" {
 	const src = "interface Info { name: string; desc: string; tag: string }\nfunction take(x: Info): void { }\nconst a: Info = { name: \"a\", desc: \"b\", tag: \"c\" };\ntake(a);";
 	const c = compileToC(src);
 	assert c.ok;
-	if (c.value.contains("Info_copy")) {
+	if (c.value.contains("InfoCopy")) {
 		assert c.value.contains("&(");
 	}
 }

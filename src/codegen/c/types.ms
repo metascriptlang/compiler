@@ -457,13 +457,13 @@ export function ensureForwardDecl(g: CGen, typeName: string): void {
 }
 
 // Ensure msTypeInfo extern declaration exists for cross-module new expressions.
-// The owning module emits `msTypeInfo Foo_typeInfo;` via destructorLifting (non-static linkage).
-// Consuming modules need `extern msTypeInfo Foo_typeInfo;` to reference it.
+// The owning module emits `msTypeInfo FooTypeInfo;` via destructorLifting (non-static linkage).
+// Consuming modules need `extern msTypeInfo FooTypeInfo;` to reference it.
 export function ensureTypeInfo(g: CGen, className: string): void {
 	const key = "typeInfo:" + className;
 	if (typeCacheHas(g.forwTypeCache, key)) return;
 	typeCacheSet(g.forwTypeCache, key, className);
-	addLine(sec(g, CSection.ForwardDecls), `extern msTypeInfo ${className}_typeInfo;`);
+	addLine(sec(g, CSection.ForwardDecls), `extern msTypeInfo ${className}TypeInfo;`);
 }
 
 // Ensure msTypeInfo exists for object literal allocation (new Foo()).
@@ -490,11 +490,11 @@ export function ensureTypeInfoDef(g: CGen, className: string): void {
 	// Owning module: emit definition + DatInit assignment.
 	// Generics use weak linkage — multiple modules may emit, linker deduplicates.
 	if (isGeneric) {
-		addLine(sec(g, CSection.GlobalVars), `__attribute__((weak)) msTypeInfo ${className}_typeInfo;`);
+		addLine(sec(g, CSection.GlobalVars), `__attribute__((weak)) msTypeInfo ${className}TypeInfo;`);
 	} else {
-		addLine(sec(g, CSection.GlobalVars), `msTypeInfo ${className}_typeInfo;`);
+		addLine(sec(g, CSection.GlobalVars), `msTypeInfo ${className}TypeInfo;`);
 	}
-	addLine(sec(g, CSection.DatInit), `  ${className}_typeInfo.name = "${className}";`);
+	addLine(sec(g, CSection.DatInit), `  ${className}TypeInfo.name = "${className}";`);
 }
 
 // ===== Full Type Description =====

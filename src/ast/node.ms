@@ -27,9 +27,10 @@ export enum CallingConvention {
 
 // ===== Type Flags =====
 export enum TypeFlag {
-	IsStruct = 1,
-	IsMaybe = 16,
-	HasAsgn = 32,
+	IsStruct = 1,       // bit 0
+	IsMaybe = 16,       // bit 4
+	HasAsgn = 32,       // bit 5
+	Substituting = 1048576, // bit 20 (high to avoid SizedArray size collision)
 }
 
 // ===== Attached Lifecycle Ops =====

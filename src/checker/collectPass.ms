@@ -303,10 +303,6 @@ function collectClassMethod(ctx: CheckerContext, className: string, classGeneric
 	if (builtinKind !== "") {
 		methodSym.builtinKind = builtinKind;
 	}
-	// Add mangled symbol to scope — required for cross-module export.
-	// Without this, importing a class from another module loses its methods
-	// (the export pipeline only sees scope symbols, not extension-only symbols).
-	defineOrError(ctx, methodSym, member);
 	// Extern class methods → NativeMethod flag (don't set ExtCall, keep as native member call)
 	if (isExternClass) {
 		setFlag(methodSym, SymbolFlag.NativeMethod);
@@ -621,10 +617,17 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 		if (modExports !== null) {
 			for (const sym of modExports.symbols) {
 				if (sym.extReceiverType !== "") {
+					// Derive original method name: class methods have mangled names
+					// (GPUInstance_release) but extensions use original names (release).
+					let methName = sym.name;
+					const prefix = sym.extReceiverType + "_";
+					if (methName.length > prefix.length && methName.slice(0, prefix.length) === prefix) {
+						methName = methName.slice(prefix.length, methName.length);
+					}
 					// Only register if not already present
-					if (findExtension(ctx.extensionRegistry, sym.extReceiverType, sym.name) === null) {
+					if (findExtension(ctx.extensionRegistry, sym.extReceiverType, methName) === null) {
 						const opExt: ExtensionMethod = {
-							methodName: sym.name,
+							methodName: methName,
 							receiverTypeName: sym.extReceiverType,
 							sourcePath: sourcePath,
 							fnType: sym.symType,

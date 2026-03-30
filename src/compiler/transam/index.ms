@@ -89,7 +89,7 @@ export function dbSetStdPath(db: TransAmDb, stdPath: string): void {
 
 export function dbEnsurePrelude(db: TransAmDb): void {
 	if (db.preludeCtx === null && db.stdPath.length > 0) {
-		db.preludeCtx = buildPreludeContext(db.stdPath);
+		db.preludeCtx = buildPreludeContext(db.stdPath, ".cms");
 		// Pre-register exports from top-level std modules (e.g., std/build.ms)
 		// so auto-import suggestions work even without explicit imports.
 		preRegisterStdModule(db, db.stdPath + "/build.ms", "std/build");
@@ -532,7 +532,7 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	mod.imports = imports;
 	const graph = createModuleGraph();
 	addModule(graph, mod);
-	if (db.preludeCtx === null) db.preludeCtx = buildPreludeContext(db.stdPath);
+	if (db.preludeCtx === null) db.preludeCtx = buildPreludeContext(db.stdPath, ".cms");
 	const checkerCtx = checkProgramWithRegistryCancellable(
 		program, db.exportRegistry, graph, mod,
 		db.preludeCtx, db.cancelCtx, startVersion

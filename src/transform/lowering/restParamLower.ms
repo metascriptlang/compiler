@@ -1,4 +1,4 @@
-// Rest parameter lowering (Nim parity: varargs call-site array packing)
+// Rest parameter lowering (reference parity: varargs call-site array packing)
 //
 // 1. FunctionDecl: strip "..." prefix from rest param name ("...args" → "args")
 // 2. CallExpr: pack excess args into ArrayLiteral for rest param
@@ -11,7 +11,7 @@
 //   f("hello", ["a", "b", "c"]);
 
 import {
-	Node, NodeKind, NodeData, TypeKind,
+	Node, NodeKind, NodeData, Type, TypeKind,
 	FunctionDeclData, MethodDeclData, CallExprData,
 	createNode,
 } from "../../ast/node";
@@ -45,7 +45,7 @@ function stripRestFromParams(params: string[]): void {
 }
 
 // Build an ArrayLiteral node from a list of element nodes
-function makeArrayLit(elements: Node[], restType: import("../../ast/node").Type, line: number): Node {
+function makeArrayLit(elements: Node[], restType: Type, line: number): Node {
 	const arr = createNode(NodeKind.ArrayLiteral,
 		{ elements } as unknown as NodeData,
 		createToken(TokenKind.LBracket, "[", line));
@@ -82,7 +82,7 @@ function lowerRest(node: Node): Node {
 	const restIdx = typeNames.length - 1;
 	const restType = restIdx < sym.symbolType.typeChildren.length
 		? sym.symbolType.typeChildren[restIdx]
-		: null as unknown as import("../../ast/node").Type;
+		: null as unknown as Type;
 
 	// No excess args — insert empty array for the rest param
 	if (d.arguments.length <= restIdx) {

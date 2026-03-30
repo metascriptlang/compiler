@@ -682,17 +682,17 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 					g.labels += 1;
 					const tmp0 = `_new${g.labels}_`;
 					emitProcLocalsLine(p, `${cType}* ${tmp0};`);
-					emitStmtsLine(p, `${tmp0} = (${cType}*)msAllocTyped(sizeof(${cType}), &${cType}_typeInfo);`);
+					emitStmtsLine(p, `${tmp0} = (${cType}*)msAllocTyped(sizeof(${cType}), &${cType}TypeInfo);`);
 					emitInstanceFieldDefaults(g, p, tmp0, node.nodeType, 0);
 					ctx.results.push(tmp0);
 				} else {
-					ctx.results.push(`(${cType}*)msAllocTyped(sizeof(${cType}), &${cType}_typeInfo)`);
+					ctx.results.push(`(${cType}*)msAllocTyped(sizeof(${cType}), &${cType}TypeInfo)`);
 				}
 			} else {
 				g.labels += 1;
 				const tmp = `_new${g.labels}_`;
 				emitProcLocalsLine(p, `${cType}* ${tmp};`);
-				emitStmtsLine(p, `${tmp} = (${cType}*)msAllocTyped(sizeof(${cType}), &${cType}_typeInfo);`);
+				emitStmtsLine(p, `${tmp} = (${cType}*)msAllocTyped(sizeof(${cType}), &${cType}TypeInfo);`);
 				const fieldNames = (innerType.typeNames !== null) ? innerType.typeNames : null as unknown as string[];
 				let fi = 0;
 				while (fi < d.newArguments.length) {
@@ -733,13 +733,13 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 		// Constructor check already handled at top of NewExpr handler
 		if (d.newArguments.length === 0) {
 			// No-arg new without constructor: allocate with zero-init
-			ctx.results.push(`(${calleeName}*)msAllocTyped(sizeof(${calleeName}), &${calleeName}_typeInfo)`);
+			ctx.results.push(`(${calleeName}*)msAllocTyped(sizeof(${calleeName}), &${calleeName}TypeInfo)`);
 		} else {
 			// Positional args → field-by-field assignment using type info
 			g.labels += 1;
 			const tmp = `_new${g.labels}_`;
 			emitProcLocalsLine(p, `${calleeName}* ${tmp};`);
-			emitStmtsLine(p, `${tmp} = (${calleeName}*)msAllocTyped(sizeof(${calleeName}), &${calleeName}_typeInfo);`);
+			emitStmtsLine(p, `${tmp} = (${calleeName}*)msAllocTyped(sizeof(${calleeName}), &${calleeName}TypeInfo);`);
 			// Get field names from the class type (Ref → unwrap to Struct → typeNames)
 			const classType = node.nodeType;
 			const innerType = (classType !== null && (classType.kind === TypeKind.Ref || classType.kind === TypeKind.Ptr)) ? classType.typeReturn : classType;
@@ -1307,7 +1307,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 					// Class: heap-allocate (Reference parity: managed object construction)
 					emitProcLocalsLine(p, `${cType}* ${tmpName};`);
 					ensureTypeInfoDef(g, cType);
-					emitStmtsLine(p, `${tmpName} = (${cType}*)msAllocTyped(sizeof(${cType}), &${cType}_typeInfo);`);
+					emitStmtsLine(p, `${tmpName} = (${cType}*)msAllocTyped(sizeof(${cType}), &${cType}TypeInfo);`);
 					emitStmtsLine(p, `memset(${tmpName}, 0, sizeof(${cType}));`);
 				} else {
 					// Value type: stack-allocate
@@ -1859,7 +1859,7 @@ test "postfix decrement" { assert exprSnippet("x--;") === "(x--)"; }
 
 test "prefix decrement" { assert exprSnippet("--x;") === "(--x)"; }
 
-test "simple new" { assert exprSnippet("new Foo();") === "(Foo*)msAllocTyped(sizeof(Foo), &Foo_typeInfo)"; }
+test "simple new" { assert exprSnippet("new Foo();") === "(Foo*)msAllocTyped(sizeof(Foo), &FooTypeInfo)"; }
 
 test "new with args" { assert exprSnippet("new Bar(1, 2);") === "_new1_"; }
 

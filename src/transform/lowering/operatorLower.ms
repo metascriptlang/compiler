@@ -241,28 +241,30 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	if (isBuiltinType(typeName)) return node;
 
 	// 4. Derived operators — fallback for types without explicit prelude overloads.
-	// Strings have all operators in prelude (found in step 1 above).
-	// Interfaces/tuples still use compiler derivation until templates exist.
+	// 4. Derived operators — fallback for types without prelude overloads.
+	// Strings define ALL operators in prelude (found in step 1 above).
+	// Interfaces/tuples use compiler derivation until templates exist.
 	const baseOp = match (opName) {
-		"!=" => "==",
-		"!==" => "===",
+		"!=" | "!==" => "==",
+		"===" => "==",
 		">" => "<",
 		">=" => "<=",
 		_ => "",
 	};
 	if (baseOp !== "") {
-		// Check if base operator exists (explicit extension or auto-generated)
 		let hasBase = false;
 		if (ctx.checkerCtx.extensionRegistry !== null) {
 			if (findExtension(ctx.checkerCtx.extensionRegistry, typeName, baseOp) !== null) hasBase = true;
 		}
-		if (!hasBase && (baseOp === "==" || baseOp === "===") && isValueObject(leftType)) hasBase = true;
-		if (!hasBase && leftType.kind === TypeKind.Tuple && (baseOp === "==" || baseOp === "===" || baseOp === "<" || baseOp === "<=")) hasBase = true;
+		if (!hasBase && baseOp === "==" && isValueObject(leftType)) hasBase = true;
+		if (!hasBase && leftType.kind === TypeKind.Tuple && (baseOp === "==" || baseOp === "<" || baseOp === "<=")) hasBase = true;
 
 		if (hasBase) {
 			if (opName === "!=" || opName === "!==") {
-				const eqCall = resolveOpCall(ctx, typeName, baseOp, leftType, d.left, d.right, loc);
-				return makeUnary("!", eqCall, loc);
+				return makeUnary("!", resolveOpCall(ctx, typeName, baseOp, leftType, d.left, d.right, loc), loc);
+			}
+			if (opName === "===") {
+				return resolveOpCall(ctx, typeName, baseOp, leftType, d.left, d.right, loc);
 			}
 			if (opName === ">" || opName === ">=") {
 				return resolveOpCall(ctx, typeName, baseOp, leftType, d.right, d.left, loc);

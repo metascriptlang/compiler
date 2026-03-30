@@ -27,6 +27,9 @@ export function isDrcLifecycleName(name: string): boolean {
 	if (findSuffix(name, DRC_SUFFIXES) === "") return false;
 	// Built-in runtime functions (ms* prefix) are not generated DRC hooks
 	if (name.length > 2 && name.byteAt(0) === "m".code && name.byteAt(1) === "s".code) return false;
+	// DRC hooks always start with a type name (PascalCase — uppercase first letter).
+	// User functions like hasTypeInfo, countHooks start with lowercase — not DRC hooks.
+	if (name.length > 0 && name.byteAt(0) >= "a".code && name.byteAt(0) <= "z".code) return false;
 	return true;
 }
 

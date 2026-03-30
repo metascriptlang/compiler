@@ -1131,11 +1131,12 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 				node.flags = node.flags | NodeFlag.ExtCall;
 			}
 		}
-		// Reference parity: pre-resolve extension methods BEFORE arg checking.
-		// sigmatch types args WITH formal param type from the resolved candidate.
-		// Without this, ObjectLiteral args get anonymous struct types instead of
-		// the named parameter type (e.g. __anon2__ instead of NodeCacheEntry).
-		if (ctx.extensionRegistry !== null) {
+		// Nim parity: resolve extension methods ONCE. checkMemberExpr already resolved
+		// the extension, instantiated generics, and set calleeType via d.callee.nodeType.
+		// Only re-resolve if the callee wasn't fully resolved (null, unknown, or still generic).
+		if (calleeType !== null && calleeType.kind === TypeKind.Function && !hasGenericParams(calleeType)) {
+			extPreResolved = true;
+		} else if (ctx.extensionRegistry !== null) {
 			const me = d.callee.data as MemberExprData;
 			const objType = me.object.nodeType;
 			if (objType !== null && objType.kind !== TypeKind.Unknown) {
@@ -1157,7 +1158,6 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 					const winner = filtered[0];
 					if (winner.sym !== null) {
 						ensureShaped(winner.sym, ctx);
-						// Don't overwrite instSym (on-demand instantiated) with generic sym
 						if (node.resolvedSym === null || node.resolvedSym.name.indexOf("__", 0) < 0) {
 							node.resolvedSym = winner.sym;
 							d.callee.resolvedSym = winner.sym;
@@ -1168,7 +1168,6 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 						}
 						if (winner.isStatic) node.flags = node.flags | NodeFlag.ExtStatic;
 					}
-					// Get extension type, instantiate generics, strip receiver → calleeType
 					let extType = getExtFnType(winner);
 					if (!winner.isStatic && extType.typeChildren.length > 0) {
 						if (hasGenericParams(extType)) {
@@ -1288,7 +1287,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 	// @builtin("Echo"): accept any number of args of any type (reference echo parity)
 	const isEchoBuiltin = node.resolvedSym !== null && node.resolvedSym.builtinKind === "Echo";
 	if (calleeType.kind === TypeKind.Function && !isEchoBuiltin) {
-		// Rest param detection: last typeNames entry starts with "..." (Nim parity: tyVarargs)
+		// Rest param detection: last typeNames entry starts with "..." (reference parity: tyVarargs)
 		const lastPN = calleeType.typeNames.length > 0 ? calleeType.typeNames[calleeType.typeNames.length - 1] : "";
 		const hasRest = lastPN.length > 3 && lastPN.slice(0, 3) === "...";
 		// Fill default arguments if too few args provided
@@ -1484,6 +1483,8 @@ export function inferGenericReturn(fnType: Type, argTypes: Type[], expectedType:
 	for (let j = 0; j < b.names.length; j += 1) {
 		returnType = substituteType(returnType, b.names[j], b.types[j]);
 	}
+	// Unresolved GenericParam → Unknown (prevents false "does not exist" on member access)
+	if (returnType.kind === TypeKind.GenericParam) return unknownType();
 	return returnType;
 }
 

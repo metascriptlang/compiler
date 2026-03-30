@@ -19,17 +19,17 @@ test "DRC hooks use pointer params for small interface" {
 	}
 	const c = result.value;
 	// Find the destroy signature
-	const idx = c.indexOf("SmallThing_destroy(");
+	const idx = c.indexOf("SmallThingDestroy(");
 	if (idx >= 0) {
 		console.log("FOUND: " + c.slice(idx, idx + 60));
 	} else {
-		console.log("NOT FOUND: SmallThing_destroy");
+		console.log("NOT FOUND: SmallThingDestroy");
 		// Show last 500 chars to see what's there
 		const tail = c.length > 500 ? c.slice(c.length - 500, c.length) : c;
 		console.log("TAIL: " + tail);
 	}
 	// _destroy should take pointer: SmallThing* self, not SmallThing self
-	assert contains(c, "SmallThing_destroy(SmallThing* self)") || contains(c, "SmallThing_destroy(SmallThing *self)");
+	assert contains(c, "SmallThingDestroy(SmallThing* self)") || contains(c, "SmallThingDestroy(SmallThing *self)");
 }
 
 test "DRC hooks use pointer params for copy" {
@@ -38,7 +38,7 @@ test "DRC hooks use pointer params for copy" {
 	assert result.ok;
 	const c = result.value;
 	// _copy should take pointers: SmallThing* dest, SmallThing* src
-	assert contains(c, "SmallThing_copy(SmallThing* dest, SmallThing* src)") || contains(c, "SmallThing_copy(SmallThing *dest, SmallThing *src)");
+	assert contains(c, "SmallThingCopy(SmallThing* dest, SmallThing* src)") || contains(c, "SmallThingCopy(SmallThing *dest, SmallThing *src)");
 }
 
 test "DRC hooks use pointer params for wasMoved" {
@@ -47,5 +47,5 @@ test "DRC hooks use pointer params for wasMoved" {
 	assert result.ok;
 	const c = result.value;
 	// _wasMoved should take pointer
-	assert contains(c, "SmallThing_wasMoved(SmallThing* self)") || contains(c, "SmallThing_wasMoved(SmallThing *self)");
+	assert contains(c, "SmallThingWasMoved(SmallThing* self)") || contains(c, "SmallThingWasMoved(SmallThing *self)");
 }

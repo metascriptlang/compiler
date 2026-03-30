@@ -7,10 +7,10 @@ import {
 	ExternDeclData, DecoratedDeclData, TestDeclData, AssertStmtData,
 	PropertyDeclData, MethodDeclData,
 } from "../../../ast/node";
-import { FormatOptions } from "../options";
+import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import {
 	Doc, docText, docGroup, docIndent, docLineSuffix,
-	docLine, docSoftLine, docHardLine, docIfBreak, docNil, docJoin,
+	docLine, docSoftLine, docHardLine, docIfBreak, docNil, docJoin, docCommaSepList,
 } from "../doc";
 import { Token } from "../../../lexer/token";
 import { callPrintNode } from "./callbacks";
@@ -33,11 +33,28 @@ export function printImportDecl(node: Node, options: FormatOptions): Doc {
 			parts.push(names[0]);
 			parts.push(docText(" }"));
 		} else {
-			parts.push(docText("{"));
-			parts.push(docIndent([docLine(), docJoin(names, docGroup([docText(","), docLine()]))]));
-			parts.push(docIfBreak(docNil(), docText(",")));
-			parts.push(docLine());
-			parts.push(docText("}"));
+			// Inner group: breaks independently from the rest of the import.
+			// When broken: `{\n  name1,\n  name2,\n}` — when flat: `{ name1, name2 }`
+			const nameParts: Doc[] = [docLine()];
+			for (let i = 0; i < names.length; i += 1) {
+				if (i > 0) {
+					nameParts.push(docLine());
+				}
+				if (i < names.length - 1) {
+					nameParts.push(docGroup([names[i], docText(",")]));
+				} else {
+					nameParts.push(names[i]);
+					if (wantsTrailingComma(options, CommaContext.Collection)) {
+						nameParts.push(docIfBreak(docText(","), docNil()));
+					}
+				}
+			}
+			parts.push(docGroup([
+				docText("{"),
+				docIndent(nameParts),
+				docLine(),
+				docText("}"),
+			]));
 		}
 		parts.push(docText(" from "));
 	}
@@ -240,10 +257,13 @@ export function printMethodDecl(node: Node, options: FormatOptions): Doc {
 		parts.push(docText("static "));
 	}
 	parts.push(docText(d.methodName + "("));
-	parts.push(docGroup([
-		docIndent([docSoftLine(), docJoin(params, docGroup([docText(","), docLine()]))]),
-		docSoftLine(),
-	]));
+	if (params.length > 0) {
+		const paramParts = docCommaSepList(params, wantsTrailingComma(options, CommaContext.Params));
+		parts.push(docGroup([
+			docIndent(paramParts),
+			docSoftLine(),
+		]));
+	}
 	parts.push(docText(")"));
 	if (d.methodReturnType !== "") {
 		parts.push(docText(": " + d.methodReturnType));

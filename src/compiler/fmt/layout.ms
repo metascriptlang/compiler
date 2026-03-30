@@ -35,7 +35,7 @@ function propagateBreaks(doc: Doc): boolean {
 		return hasBreak;
 	}
 	if (doc.kind === DocKind.IfBreak) {
-		const d = doc.data as { flat: Doc, broken: Doc };
+		const d = doc.data as { broken: Doc, flat: Doc };
 		propagateBreaks(d.flat);
 		propagateBreaks(d.broken);
 	}
@@ -132,7 +132,7 @@ function fits(next: Cmd, restStack: Cmd[], restIdx: number, rem: number): boolea
 			return true; // Hard line always fits (forces break)
 		}
 		if (doc.kind === DocKind.IfBreak) {
-			const d = doc.data as { flat: Doc, broken: Doc };
+			const d = doc.data as { broken: Doc, flat: Doc };
 			if (cmd.mode === MODE_BREAK) {
 				stack.push({ indent: cmd.indent, mode: cmd.mode, doc: d.broken });
 			} else {
@@ -168,7 +168,7 @@ function fits(next: Cmd, restStack: Cmd[], restIdx: number, rem: number): boolea
 		// they will produce newlines, so content after them is irrelevant.
 		if (cmd.mode === MODE_BREAK) return true;
 		if (doc.kind === DocKind.IfBreak) {
-			remaining = remaining - getFlatWidth((doc.data as { flat: Doc, broken: Doc }).flat);
+			remaining = remaining - getFlatWidth((doc.data as { broken: Doc, flat: Doc }).flat);
 			continue;
 		}
 	}
@@ -190,7 +190,7 @@ function getFlatWidth(doc: Doc): number {
 		},
 		DocKind.Line => (doc.data as { isSoft: boolean }).isSoft ? 0 : 1,
 		DocKind.HardLine => 1000,
-		DocKind.IfBreak => getFlatWidth((doc.data as { flat: Doc, broken: Doc }).flat),
+		DocKind.IfBreak => getFlatWidth((doc.data as { broken: Doc, flat: Doc }).flat),
 		_ => 0,
 	};
 }
@@ -280,7 +280,7 @@ export function formatDoc(doc: Doc, options: FormatOptions): string {
 		}
 
 		if (d.kind === DocKind.IfBreak) {
-			const ifData = d.data as { flat: Doc, broken: Doc };
+			const ifData = d.data as { broken: Doc, flat: Doc };
 			// Check specific group's mode if groupId is set, otherwise use current mode
 			let isBroken = cmd.mode === MODE_BREAK;
 			if (d.groupId > 0 && d.groupId < groupModes.length) {

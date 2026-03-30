@@ -40,6 +40,19 @@ export function defaultFormatOptions(): FormatOptions {
 	};
 }
 
+// Context for trailing comma decisions.
+export enum CommaContext {
+	Params,      // function/method/arrow params and call/new args
+	Collection,  // objects, arrays, imports
+}
+
+// Should a trailing comma appear in this context?
+export function wantsTrailingComma(opts: FormatOptions, context: CommaContext): boolean {
+	if (opts.trailingComma === TrailingComma.All) return true;
+	if (opts.trailingComma === TrailingComma.Es5 && context === CommaContext.Collection) return true;
+	return false;
+}
+
 // Apply build.ms fmt overrides to default options.
 // FmtSection uses -1 as "unset" sentinel for numbers and booleans.
 export function applyFmtSection(opts: FormatOptions, fmt: FmtSection): FormatOptions {

@@ -319,8 +319,7 @@ function parsePrimary(state: ParserState): ExprResult {
 	// Match expression: match (expr) { pattern => body, ... }
 	// Only if followed by '(' — otherwise 'match' is used as identifier
 	if (token.kind === TokenKind.Match) {
-		if (state.position + 1 < state.tokens.length &&
-			state.tokens[state.position + 1].kind === TokenKind.LParen) {
+		if (peek(state, 1).kind === TokenKind.LParen) {
 			return parseMatchExpr(state, parseExprWithPrec, blockParser);
 		}
 		advance(state);

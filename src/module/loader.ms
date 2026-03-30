@@ -76,16 +76,31 @@ function inlineHeaderImports(source: string, modulePath: string, provider: Sourc
 	let result = source;
 	let searchPos = 0;
 	while (searchPos < result.length) {
-		// Find next import statement
-		const importIdx = result.indexOf("import ", searchPos);
-		if (importIdx < 0) break;
+		// Find next import or re-export statement referencing a .h file
+		let importIdx = result.indexOf("import ", searchPos);
+		let exportIdx = result.indexOf("export {", searchPos);
+		let isReexport = false;
 
-		// Find the full import statement (may span multiple lines) — terminated by ;
+		// Pick whichever comes first
+		if (importIdx < 0 && exportIdx < 0) break;
+		if (importIdx < 0) { importIdx = exportIdx; isReexport = true; }
+		else if (exportIdx >= 0 && exportIdx < importIdx) { importIdx = exportIdx; isReexport = true; }
+
+		// Skip matches inside // comments — find start of line, check for //
+		let lineStart = result.lastIndexOf("\n", importIdx);
+		if (lineStart < 0) lineStart = 0;
+		const linePrefix = result.slice(lineStart, importIdx);
+		if (linePrefix.indexOf("//") >= 0) {
+			searchPos = importIdx + 7;
+			continue;
+		}
+
+		// Find the full statement — terminated by ;
 		const stmtEnd = result.indexOf(";", importIdx);
 		if (stmtEnd < 0) { searchPos = importIdx + 7; continue; }
 		const stmt = result.slice(importIdx, stmtEnd + 1);
 
-		// Check if it imports from a .h file
+		// Must have "from" clause with a .h specifier
 		const fromIdx = stmt.indexOf(" from ");
 		if (fromIdx < 0) { searchPos = importIdx + 7; continue; }
 
@@ -100,6 +115,13 @@ function inlineHeaderImports(source: string, modulePath: string, provider: Sourc
 
 		if (!specifier.endsWith(".h")) { searchPos = importIdx + 7; continue; }
 
+		// Extract brace positions (shared by guard check and name extraction)
+		const braceOpen = stmt.indexOf("{");
+		const braceClose = stmt.indexOf("}");
+
+		// For re-exports, must have { ... } braces (export { X as Y } from "*.h")
+		if (isReexport && braceOpen < 0) { searchPos = importIdx + 7; continue; }
+
 		// Resolve the .h file path relative to the consuming module
 		let headerPath = specifier;
 		if (specifier.startsWith("./") || specifier.startsWith("../")) {
@@ -111,23 +133,17 @@ function inlineHeaderImports(source: string, modulePath: string, provider: Sourc
 		const headerSource = provideSource(provider, headerPath);
 		if (!headerSource.ok) { searchPos = importIdx + 7; continue; }
 
-		// Extract import list: import { A, B, C } → ["A", "B", "C"]
+		// Parse specifier list once — used for both name filtering and re-export generation
+		const specs = parseSpecItems(stmt, braceOpen, braceClose);
 		const importedNames: string[] = [];
-		const braceOpen = stmt.indexOf("{");
-		const braceClose = stmt.indexOf("}");
-		if (braceOpen >= 0 && braceClose > braceOpen) {
-			const importList = stmt.slice(braceOpen + 1, braceClose).split(",");
-			for (const n of importList) {
-				const trimmed = n.trim();
-				if (trimmed.length > 0) importedNames.push(trimmed);
-			}
+		for (const spec of specs) {
+			importedNames.push(spec.origName);
 		}
 
 		// Generate extern declarations from C header (pure MetaScript string parser)
 		let translated = translateCHeader(headerSource.value, importedNames);
 		// Strip "export " prefix (inline declarations don't need export)
-		const parts = translated.split("export extern ");
-		translated = parts.join("extern ");
+		translated = translated.split("export extern ").join("extern ");
 
 		// Auto-compile companion .c file if it exists (e.g., native.h → native.c)
 		const companionC = headerPath.slice(0, headerPath.length - 2) + ".c";
@@ -135,10 +151,14 @@ function inlineHeaderImports(source: string, modulePath: string, provider: Sourc
 		let compileDirective = "";
 		if (hasCompanionC) compileDirective = `@compile("${companionC}");\n`;
 
-		// Build replacement: @include + @compile (if .c exists) + extern declarations
-		const replacement = `@include("${headerPath}");\n${compileDirective}${translated}`;
+		let replacement = "";
+		if (isReexport) {
+			replacement = buildReexportReplacement(translated, specs, headerPath, compileDirective);
+		} else {
+			replacement = `@include("${headerPath}");\n${compileDirective}${translated}`;
+		}
 
-		// Replace the import statement (may span multiple lines) with the inlined declarations
+		// Replace the statement with the inlined declarations
 		const replaceStart = importIdx;
 		const replaceEnd = stmtEnd + 1;
 		// Skip trailing newline after semicolon if present
@@ -148,6 +168,65 @@ function inlineHeaderImports(source: string, modulePath: string, provider: Sourc
 		searchPos = replaceStart + replacement.length;
 	}
 	return result;
+}
+
+// Parse "{ A, B as C }" into original names and alias pairs.
+interface SpecItem { origName: string; aliasName: string; }
+function parseSpecItems(stmt: string, braceOpen: number, braceClose: number): SpecItem[] {
+	const items: SpecItem[] = [];
+	if (braceOpen < 0 || braceClose <= braceOpen) return items;
+	const parts = stmt.slice(braceOpen + 1, braceClose).split(",");
+	for (const part of parts) {
+		const trimmed = part.trim();
+		if (trimmed.length === 0) continue;
+		const asIdx = trimmed.indexOf(" as ");
+		if (asIdx > 0) {
+			items.push({ origName: trimmed.slice(0, asIdx).trim(), aliasName: trimmed.slice(asIdx + 4, trimmed.length).trim() });
+		} else {
+			items.push({ origName: trimmed, aliasName: "" });
+		}
+	}
+	return items;
+}
+
+// Build re-export replacement: inline externs + aliased export declarations.
+function buildReexportReplacement(translated: string, specs: SpecItem[], headerPath: string, compileDirective: string): string {
+	let reexportDecls = "";
+	let exportTranslated = translated;
+
+	for (const spec of specs) {
+		if (spec.aliasName !== "") {
+			// Aliased: find the translated extern and re-emit with alias + from clause
+			const declMarker = ` ${spec.origName}(`;
+			const structMarker = ` ${spec.origName} {`;
+			const typeMarker = ` ${spec.origName} =`;
+			if (translated.indexOf(declMarker) >= 0) {
+				const dIdx = translated.indexOf(declMarker);
+				const lineStart = translated.lastIndexOf("\n", dIdx);
+				const lineEnd = translated.indexOf("\n", dIdx);
+				const declLine = translated.slice(lineStart >= 0 ? lineStart + 1 : 0, lineEnd >= 0 ? lineEnd : translated.length);
+				let aliasDecl = declLine.split(`extern function ${spec.origName}`).join(`export extern function ${spec.aliasName}`);
+				if (aliasDecl.endsWith(";")) {
+					aliasDecl = aliasDecl.slice(0, aliasDecl.length - 1) + ` from "${spec.origName}";`;
+				}
+				reexportDecls = reexportDecls + aliasDecl + "\n";
+			} else if (translated.indexOf(structMarker) >= 0 || translated.indexOf(typeMarker) >= 0) {
+				reexportDecls = reexportDecls + `export type ${spec.aliasName} = ${spec.origName};\n`;
+			}
+		} else {
+			// Non-aliased: re-add export prefix to matching extern
+			const kinds = ["function", "interface", "struct", "enum", "type"];
+			for (const k of kinds) {
+				const marker = `extern ${k} ${spec.origName}`;
+				if (exportTranslated.indexOf(marker) >= 0) {
+					exportTranslated = exportTranslated.split(marker).join(`export extern ${k} ${spec.origName}`);
+					break;
+				}
+			}
+		}
+	}
+
+	return `@include("${headerPath}");\n${compileDirective}${exportTranslated}${reexportDecls}`;
 }
 
 function isCHeaderPath(path: string): boolean {

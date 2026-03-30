@@ -73,8 +73,8 @@ function isDeclAlive(g: CGen, node: Node): boolean {
 // They need static linkage to avoid duplicate symbols at link time.
 function isArraySeqHook(name: string): boolean {
 	if (name.slice(0, 13) === "msStringArray" || name.slice(0, 10) === "msRefArray") return true;
-	return name.endsWith("Array_destroy") || name.endsWith("Array_copy") ||
-		name.endsWith("Array_sink") || name.endsWith("Array_wasMoved");
+	return name.endsWith("ArrayDestroy") || name.endsWith("ArrayCopy") ||
+		name.endsWith("ArraySink") || name.endsWith("ArrayWasMoved");
 }
 
 
@@ -101,7 +101,11 @@ export function genDecl(g: CGen, node: Node, exported: boolean): void {
 		},
 		NodeKind.TypeAliasDecl => {},
 		NodeKind.ExternDecl => { genExternDecl(g, node); },
-		NodeKind.TestDecl => { genTestDeclNode(g, node); },
+		NodeKind.TestDecl => {
+			// Skip test blocks when DCE is active (build mode) — tests only compiled in test mode.
+			// Reference parity: compile-time code excluded from codegen when not in test/compileTime mode.
+			if (g.aliveSet.entries.length === 0) { genTestDeclNode(g, node); }
+		},
 		NodeKind.AssertStmt => { genTopLevelStmt(g, node); },
 		_ => { genTopLevelStmt(g, node); },
 	};
@@ -470,8 +474,8 @@ function genConstructor(g: CGen, node: Node, className: string): void {
 	addLine(procs, proto + " {");
 	// Ensure typeInfo is declared in this translation unit
 	ensureTypeInfoDef(g, className);
-	// Allocate with RTTI: msAllocTyped(sizeof(Type), &Type_typeInfo)
-	addLine(procs, `  ${className}* this = (${className}*)msAllocTyped(sizeof(${className}), &${className}_typeInfo);`);
+	// Allocate with RTTI: msAllocTyped(sizeof(Type), &TypeTypeInfo)
+	addLine(procs, `  ${className}* this = (${className}*)msAllocTyped(sizeof(${className}), &${className}TypeInfo);`);
 
 	if (d.ctorBody !== null) {
 		const p = createProc(ctorName, null);
@@ -565,7 +569,7 @@ function genGlobalVar(g: CGen, node: Node): void {
 	const d = node.data as VariableDeclData;
 	const varName = safeName(d.declName);
 
-	// Detect _typeInfo vars from destructorLifting (ORC runtime RTTI)
+	// Detect TypeInfo vars from destructorLifting (ORC runtime RTTI)
 	const nameLen = d.declName.length;
 	if (nameLen > 8 && d.declName.slice(nameLen - 8, nameLen) === "TypeInfo") {
 		genTypeInfoVar(g, d, varName);

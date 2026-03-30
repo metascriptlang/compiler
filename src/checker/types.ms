@@ -481,9 +481,13 @@ export function createGenericParam(name: string): Type {
 // typeChildren = type arguments, typeExtra = base type (struct/interface).
 // typeReturn = EAGERLY INSTANTIATED body (concrete body after substitution).
 // Enables structural unification: Map<K,V> vs Map<string,string> → K=string, V=string.
+// For Ref<Struct> (interface types), unwrap to inner struct for name and flags.
+export function unwrapRefBase(t: Type): Type {
+	return (t !== null && t.kind === TypeKind.Ref && t.typeReturn !== null) ? t.typeReturn : t;
+}
+
 export function createGenericInstance(baseType: Type, typeArgs: Type[]): Type {
-	// For Ref<Struct> (interface types), use inner struct's name and flags
-	const innerBase = (baseType !== null && baseType.kind === TypeKind.Ref && baseType.typeReturn !== null) ? baseType.typeReturn : baseType;
+	const innerBase = unwrapRefBase(baseType);
 	return {
 		kind: TypeKind.GenericInstance,
 		typeName: innerBase !== null ? innerBase.typeName : "",
@@ -837,69 +841,88 @@ function substituteStruct(t: Type, paramName: string, concrete: Type): Type {
 	return result;
 }
 
-// Identity-based cycle detection for self-referential types (Reference parity: recursion limit and identity check)
-// Type has typeReturn/typeExtra/typeChildren that can reference back to itself.
-// Depth limit alone causes exponential branching; identity check prevents revisiting.
-let substituteVisited: Type[] = [];
+// Nim parity (instCopyType): shallow-copy source type with INDEPENDENT arrays.
+// Uses emptyType() for fresh arrays (no aliasing in JS), then pushes elements.
+// Elements are at rc=0 in the new array, but safe because Gap B is fixed
+// (flag-based cycle detection, no DRC-managed visited array push/pop/decref).
+function copyTypeForSubst(t: Type): Type {
+	const result = emptyType();
+	result.kind = t.kind;
+	result.typeName = t.typeName;
+	result.typeReturn = t.typeReturn;
+	result.typeExtra = t.typeExtra;
+	result.typeFlags = t.typeFlags - TypeFlag.Substituting;
+	result.callConv = t.callConv;
+	for (const child of t.typeChildren) result.typeChildren.push(child);
+	for (const name of t.typeNames) result.typeNames.push(name);
+	for (const op of t.attachedOps) result.attachedOps.push(op);
+	return result;
+}
 
-function substituteIsSeen(t: Type): boolean {
-	for (let i = 0; i < substituteVisited.length; i += 1) {
-		if (substituteVisited[i] === t) return true;
+// In-place substitute all children of a copied type.
+function substituteChildrenInPlace(copy: Type, paramName: string, concrete: Type): void {
+	for (let ci = 0; ci < copy.typeChildren.length; ci += 1) {
+		copy.typeChildren[ci] = substituteType(copy.typeChildren[ci], paramName, concrete);
 	}
-	return false;
+}
+
+// Cycle detection: flag on the Type itself (no DRC-managed ref array).
+// Nim parity: Nim uses cl.localCache (hash table). We use a flag bit — same principle
+// (identity-based, no incref/decref on tracked types). O(1) check vs O(n) linear scan.
+function substituteIsSeen(t: Type): boolean {
+	return (t.typeFlags & TypeFlag.Substituting) !== 0;
+}
+
+function substituteSetFlag(t: Type): void {
+	t.typeFlags = t.typeFlags | TypeFlag.Substituting;
+}
+
+function substituteClearFlag(t: Type): void {
+	t.typeFlags = t.typeFlags - TypeFlag.Substituting;
 }
 
 export function substituteType(t: Type, paramName: string, concrete: Type): Type {
 	if (t === null) return t;
 	// Guard before match: GenericParam with matching name
 	if (t.kind === TypeKind.GenericParam && t.typeName === paramName) return concrete;
-	// Cycle detection: identity-based visited set
+	// Cycle detection: flag on Type (no DRC-managed visited array)
 	if (substituteIsSeen(t)) return t;
-	substituteVisited.push(t);
+	substituteSetFlag(t);
 	const result = match (t.kind) {
 		TypeKind.Number | TypeKind.String | TypeKind.Boolean |
 		TypeKind.Void | TypeKind.Null | TypeKind.Unknown |
 		TypeKind.Never | TypeKind.Error | TypeKind.GenericParam |
 		TypeKind.CString => t,
 		TypeKind.Array => createArray(substituteType(t.typeReturn, paramName, concrete)),
-		TypeKind.SizedArray => createSizedArray(substituteType(t.typeReturn, paramName, concrete), t.typeFlags),
+		TypeKind.SizedArray => createSizedArray(substituteType(t.typeReturn, paramName, concrete), t.typeFlags - TypeFlag.Substituting),
 		TypeKind.Span => createSpan(substituteType(t.typeReturn, paramName, concrete)),
 		TypeKind.Function => {
-			const newParams: Type[] = [];
-			for (const param of t.typeChildren) {
-				newParams.push(substituteType(param, paramName, concrete));
-			}
-			return createFunction(newParams, t.typeNames, substituteType(t.typeReturn, paramName, concrete));
+			const fn = copyTypeForSubst(t);
+			substituteChildrenInPlace(fn, paramName, concrete);
+			fn.typeReturn = substituteType(t.typeReturn, paramName, concrete);
+			substituteClearFlag(t);
+			return fn;
 		},
-		// Result and Promise are now GenericInstance — handled by the GenericInstance arm
-		TypeKind.Union => {
-			const newMembers: Type[] = [];
-			for (const member of t.typeChildren) {
-				newMembers.push(substituteType(member, paramName, concrete));
-			}
-			return createUnion(newMembers);
+		TypeKind.Union | TypeKind.Tuple => {
+			const copy = copyTypeForSubst(t);
+			substituteChildrenInPlace(copy, paramName, concrete);
+			substituteClearFlag(t);
+			return copy;
 		},
 		TypeKind.Ref => createRef(substituteType(t.typeReturn, paramName, concrete)),
 		TypeKind.Ptr => createPtr(substituteType(t.typeReturn, paramName, concrete)),
 		TypeKind.Borrow => createBorrow(substituteType(t.typeReturn, paramName, concrete)),
-		TypeKind.Tuple => {
-			const newChildren: Type[] = [];
-			for (const child of t.typeChildren) {
-				newChildren.push(substituteType(child, paramName, concrete));
-			}
-			return createTuple(newChildren);
-		},
 		TypeKind.Struct => substituteStruct(t, paramName, concrete),
 		TypeKind.GenericInstance => {
-			const newArgs: Type[] = [];
-			for (const arg of t.typeChildren) {
-				newArgs.push(substituteType(arg, paramName, concrete));
-			}
-			return createGenericInstance(t.typeExtra, newArgs);
+			const gi = copyTypeForSubst(t);
+			gi.typeReturn = null as unknown as Type;
+			substituteChildrenInPlace(gi, paramName, concrete);
+			substituteClearFlag(t);
+			return gi;
 		},
 		_ => t,
 	};
-	substituteVisited.pop();
+	substituteClearFlag(t);
 	return result;
 }
 

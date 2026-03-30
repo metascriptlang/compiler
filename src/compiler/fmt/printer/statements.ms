@@ -10,10 +10,10 @@ import {
 	FunctionDeclData,
 } from "../../../ast/node";
 import { Token } from "../../../lexer/token";
-import { FormatOptions } from "../options";
+import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import {
 	Doc, docText, docGroup, docIndent,
-	docLine, docSoftLine, docHardLine, docJoin,
+	docLine, docSoftLine, docHardLine, docJoin, docCommaSepList,
 } from "../doc";
 import { callPrintNode } from "./callbacks";
 
@@ -316,10 +316,13 @@ export function printFunctionDecl(node: Node, options: FormatOptions): Doc {
 	let prefix = "function ";
 	if (d.fnFlags === "async" || d.fnFlags === "async_generator") { prefix = "async function "; }
 	const parts: Doc[] = [docText(prefix + d.fnName + "(")];
-	parts.push(docGroup([
-		docIndent([docSoftLine(), docJoin(params, docGroup([docText(","), docLine()]))]),
-		docSoftLine(),
-	]));
+	if (params.length > 0) {
+		const paramParts = docCommaSepList(params, wantsTrailingComma(options, CommaContext.Params));
+		parts.push(docGroup([
+			docIndent(paramParts),
+			docSoftLine(),
+		]));
+	}
 	parts.push(docText(")"));
 
 	if (d.fnReturnType !== "") {

@@ -107,6 +107,14 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 			if (extFb !== null) {
 				extRecv = extFb.receiverTypeName;
 				extStatic = extFb.isStatic;
+			} else {
+				// Class methods: mangled name (GPUInstance_release) doesn't match
+				// extension entry (release). Fall back to symbol identity match.
+				const extSym = findExtensionBySym(extensionRegistry, sym);
+				if (extSym !== null) {
+					extRecv = extSym.receiverTypeName;
+					extStatic = extSym.isStatic;
+				}
 			}
 		}
 	}
@@ -245,6 +253,16 @@ export function findExtensionByType(registry: ExtensionRegistry, methodName: str
 	return null as unknown as ExtensionMethod;
 }
 
+// findExtensionBySym — match by symbol identity (not name).
+// Class method symbols have mangled names (GPUInstance_release) but their extension
+// registry entries use original names (release). Symbol identity bridges the mismatch.
+export function findExtensionBySym(registry: ExtensionRegistry, sym: Symbol): ExtensionMethod {
+	for (const m of registry.methods) {
+		if (m.sym !== null && m.sym === sym) return m;
+	}
+	return null as unknown as ExtensionMethod;
+}
+
 // findAllExtensionsByName — find ALL extensions with a given method name (any receiver).
 // Standard reference pattern: candidates are collected by name, then filtered by type compatibility
 // at the call site using isAssignable (not string comparison on receiverTypeName).
@@ -320,14 +338,17 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type): boolean {
 		// Unification failed (e.g., Array<T> class vs uint8[] array — different type kinds).
 		// Fall through to name-based matching below.
 	}
-	// Concrete array extensions: match only when element types are directly compatible.
+	// Concrete array extensions: element type compatibility is authoritative.
+	// Don't fall through to name-based matching (which matches all "Array" extensions
+	// regardless of element type — e.g., pop(number[]) would incorrectly match Bar[]).
+	// Nim parity: sigmatch scores exact element match over generic, so concrete
+	// overloads with wrong element types are rejected, not accepted via name fallback.
 	if (receiverType.kind === TypeKind.Array && objType.kind === TypeKind.Array) {
 		const recvElem = receiverType.typeReturn;
 		const objElem = objType.typeReturn;
 		if (recvElem === null || objElem === null) return false;
-		if (recvElem.kind !== TypeKind.Unknown && objElem.kind !== TypeKind.Unknown) {
-			return isAssignable(objElem, recvElem);
-		}
+		if (recvElem.kind === TypeKind.Unknown || objElem.kind === TypeKind.Unknown) return false;
+		return isAssignable(objElem, recvElem);
 	}
 	// Name-based matching for well-known types and monomorphized generics.
 	// Monomorphized types have names like "Map__string,string" — match base name "Map".
@@ -340,6 +361,9 @@ export function isReceiverMatch(ext: ExtensionMethod, objType: Type): boolean {
 			const baseName = objName.slice(0, sepPos);
 			if (ext.receiverTypeName === baseName) return true;
 		}
+		// Nominal mismatch: both have names but they differ → not a match.
+		// Prevents structural false positives (reference: sameObjectTypes uses a.id == b.id).
+		if (objName !== "") return false;
 	}
 	return isAssignable(objType, receiverType);
 }

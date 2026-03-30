@@ -30,7 +30,7 @@ export function emitNumberLiteral(gen: JSGenerator, node: Node): void {
 export function emitStringLiteral(gen: JSGenerator, node: Node): void {
 	const d = node.data as StringLiteralData;
 	if (gen.bundleMode) {
-		// Bundle mode: strings as UTF-8 byte arrays (reference parity: jssys.nim makeJsNimStrLit)
+		// Bundle mode: strings as UTF-8 byte arrays (reference parity: makeStrLit)
 		const s = d.value;
 		if (s.byteLength === 0) {
 			emit(gen, "[]");

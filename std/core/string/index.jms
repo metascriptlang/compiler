@@ -44,17 +44,15 @@ export function msStringConcatMany(count: number, ...parts: string[]): string {
 }
 
 // ===== Operators =====
-// Base operators (implementation)
+// Primitive operators (implementation)
 export function `==`(this a: string, b: string): boolean {
 	return msStringEquals(a, b);
 }
 export function `<`(this a: string, b: string): boolean {
 	return msStringCompare(a, b) < 0;
 }
-// Derived operators (delegate to base)
-export function `===`(this a: string, b: string): boolean { return a == b; }
+// Derived operators (call == and < internally)
 export function `!=`(this a: string, b: string): boolean { return !(a == b); }
-export function `!==`(this a: string, b: string): boolean { return !(a == b); }
 export function `>`(this a: string, b: string): boolean { return b < a; }
 export function `<=`(this a: string, b: string): boolean { return !(b < a); }
 export function `>=`(this a: string, b: string): boolean { return !(a < b); }

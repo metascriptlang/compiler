@@ -10,6 +10,7 @@ import { Module, ModuleGraph } from "../module/graph";
 import { collectTopLevel, defineOrError } from "./collectPass";
 import { getIdentId } from "./idents";
 import { readFile } from "std/process";
+import { translateCHeader } from "../module/cparse";
 import { globalImports } from "./prelude";
 import { isAssignable } from "./compat";
 import { resolveDeclarations, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped } from "./resolvePass";
@@ -1224,6 +1225,14 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 			subSrc = readFile(subPath + ".cms");
 			subResolved = subPath + ".cms";
 		}
+		// .h fallback: translate C header to MetaScript extern declarations
+		if (subSrc.length === 0 && subPath.endsWith(".h")) {
+			subSrc = readFile(subPath);
+			if (subSrc.length > 0) {
+				subSrc = translateCHeader(subSrc, []);
+				subResolved = subPath;
+			}
+		}
 		if (subSrc.length === 0) continue;
 		const subPr = parseSource(subSrc);
 		if (!subPr.ok) continue;
@@ -1246,9 +1255,18 @@ function loadPreludeSubModules(ctx: CheckerContext, program: Node, indexPath: st
 		subCtx.modulePath = subResolved;
 		runThreePasses(subCtx, subPr.value);
 
+		// Stamp headerPath on .h-translated symbols so C codegen emits #include
+		const subScope = subCtx.table.current;
+		if (subResolved.endsWith(".h")) {
+			for (const sym of subScope.symbols) {
+				if (hasFlag(sym, SymbolFlag.ImportC) && sym.headerPath === "") {
+					sym.headerPath = subResolved;
+				}
+			}
+		}
+
 		// Register sub-module's exported symbols in ExportRegistry
 		const subExports: ExportedSymInfo[] = [];
-		const subScope = subCtx.table.current;
 		for (const sym of subScope.symbols) {
 			if (hasFlag(sym, SymbolFlag.Exported)) {
 				subExports.push(buildExportInfo(sym, subCtx.extensionRegistry, subResolved));

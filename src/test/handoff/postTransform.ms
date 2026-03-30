@@ -10,7 +10,7 @@ test "post-transform: lifecycle hook has resolved param type" {
 	const src = "interface Info { name: string; desc: string; tag: string }\nconst a: Info = { name: \"a\", desc: \"b\", tag: \"c\" };\nconst b: Info = a;";
 	const transformed = fullPipeline(src);
 	if (transformed !== null) {
-		const copyFn = findFnDecl(transformed, "Info_copy");
+		const copyFn = findFnDecl(transformed, "InfoCopy");
 		if (copyFn !== null) {
 			const fnType = copyFn.nodeType;
 			assert fnType !== null;

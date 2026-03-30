@@ -18,7 +18,7 @@ export type DocData =
 	| { text: string }                              // Text
 	| { children: Doc[] }                           // Group, Indent, LineSuffix
 	| { isSoft: boolean }                           // Line (softLine vs line)
-	| { flat: Doc, broken: Doc };                   // IfBreak
+	| { broken: Doc, flat: Doc };                    // IfBreak
 
 export class Doc {
 	kind: DocKind;
@@ -82,13 +82,14 @@ export function docHardLine(): Doc {
 	return createDoc(DocKind.HardLine, {} as DocData);
 }
 
-export function docIfBreak(flat: Doc, broken: Doc): Doc {
-	return createDoc(DocKind.IfBreak, { flat, broken } as DocData);
+// Prettier convention: first arg is what to show when broken, second when flat.
+export function docIfBreak(broken: Doc, flat: Doc): Doc {
+	return createDoc(DocKind.IfBreak, { broken, flat } as DocData);
 }
 
 // IfBreak that checks a specific group's break status (not just nearest parent).
-export function docIfBreakGroup(flat: Doc, broken: Doc, gId: number): Doc {
-	const d = createDoc(DocKind.IfBreak, { flat, broken } as DocData);
+export function docIfBreakGroup(broken: Doc, flat: Doc, gId: number): Doc {
+	const d = createDoc(DocKind.IfBreak, { broken, flat } as DocData);
 	d.groupId = gId;
 	return d;
 }
@@ -135,4 +136,27 @@ export function docJoinFlat(docs: Doc[], sep: Doc): Doc[] {
 		result.push(docs[i]);
 	}
 	return result;
+}
+
+// Build a comma-separated list for params/args/elements.
+// Each item gets a comma attached; last item gets trailing comma via ifBreak
+// when `trailing` is true. Items separated by Line (inherits parent break mode).
+// Returns Doc[] suitable for wrapping in docIndent.
+export function docCommaSepList(items: Doc[], trailing: boolean): Doc[] {
+	if (items.length === 0) return [];
+	const parts: Doc[] = [docSoftLine()];
+	for (let i = 0; i < items.length; i += 1) {
+		if (i > 0) {
+			parts.push(docLine());
+		}
+		if (i < items.length - 1) {
+			parts.push(docGroup([items[i], docText(",")]));
+		} else {
+			parts.push(items[i]);
+			if (trailing) {
+				parts.push(docIfBreak(docText(","), docNil()));
+			}
+		}
+	}
+	return parts;
 }

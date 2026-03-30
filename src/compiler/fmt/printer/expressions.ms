@@ -8,10 +8,11 @@ import {
 	MatchExprData, MatchCaseData, TryExprData, MoveExprData,
 } from "../../../ast/node";
 import { Token } from "../../../lexer/token";
-import { FormatOptions } from "../options";
+import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
 import {
 	Doc, docText, docGroup, docGroupBreak, docIndent,
-	docLine, docSoftLine, docHardLine, docIfBreak, docNil, docBreakParent, docJoin, docJoinFlat,
+	docLine, docSoftLine, docHardLine, docIfBreak, docNil, docJoin,
+	docCommaSepList,
 } from "../doc";
 import { callPrintNode } from "./callbacks";
 
@@ -36,16 +37,14 @@ export function printCallExpr(node: Node, options: FormatOptions): Doc {
 		args.push(callPrintNode(arg, options));
 	}
 
-	return docGroup([
-		callPrintNode(d.callee, options),
-		docText("("),
-		docIndent([
-			docSoftLine(),
-			docJoin(args, docGroup([docText(","), docLine()])),
-		]),
-		docSoftLine(),
-		docText(")"),
-	]);
+	const callParts: Doc[] = [callPrintNode(d.callee, options), docText("(")];
+	if (args.length > 0) {
+		const argParts = docCommaSepList(args, wantsTrailingComma(options, CommaContext.Params));
+		callParts.push(docIndent(argParts));
+		callParts.push(docSoftLine());
+	}
+	callParts.push(docText(")"));
+	return docGroup(callParts);
 }
 
 export function printMemberExpr(node: Node, options: FormatOptions): Doc {
@@ -160,7 +159,9 @@ export function printObjectLiteral(node: Node, options: FormatOptions): Doc {
 		}
 		indentChildren.push(entries[i]);
 	}
-	indentChildren.push(docIfBreak(docNil(), docText(",")));
+	if (wantsTrailingComma(options, CommaContext.Collection)) {
+		indentChildren.push(docIfBreak(docText(","), docNil()));
+	}
 	// Append trailing comments after entries (on their own lines)
 	for (const tc of trailingComments) {
 		indentChildren.push(docLine());
@@ -186,12 +187,10 @@ export function printArrayLiteral(node: Node, options: FormatOptions): Doc {
 	for (const el of d.elements) {
 		elems.push(callPrintNode(el, options));
 	}
+	const elemParts = docCommaSepList(elems, wantsTrailingComma(options, CommaContext.Collection));
 	return docGroup([
 		docText("["),
-		docIndent([
-			docSoftLine(),
-			docJoin(elems, docGroup([docText(","), docLine()])),
-		]),
+		docIndent(elemParts),
 		docSoftLine(),
 		docText("]"),
 	]);
@@ -208,7 +207,10 @@ export function printArrowFunction(node: Node, options: FormatOptions): Doc {
 		params.push(docText(p));
 	}
 	const parts: Doc[] = [docText("(")];
-	parts.push(docJoin(params, docGroup([docText(","), docLine()])));
+	if (params.length > 0) {
+		const paramParts = docCommaSepList(params, wantsTrailingComma(options, CommaContext.Params));
+		parts.push(docGroup([docIndent(paramParts), docSoftLine()]));
+	}
 	parts.push(docText(")"));
 	if (d.arrowReturnType !== "") {
 		parts.push(docText(": " + d.arrowReturnType));
@@ -244,17 +246,14 @@ export function printNewExpr(node: Node, options: FormatOptions): Doc {
 	for (const arg of d.newArguments) {
 		args.push(callPrintNode(arg, options));
 	}
-	return docGroup([
-		docText("new "),
-		callPrintNode(d.newCallee, options),
-		docText("("),
-		docIndent([
-			docSoftLine(),
-			docJoin(args, docGroup([docText(","), docLine()])),
-		]),
-		docSoftLine(),
-		docText(")"),
-	]);
+	const newParts: Doc[] = [docText("new "), callPrintNode(d.newCallee, options), docText("(")];
+	if (args.length > 0) {
+		const argParts = docCommaSepList(args, wantsTrailingComma(options, CommaContext.Params));
+		newParts.push(docIndent(argParts));
+		newParts.push(docSoftLine());
+	}
+	newParts.push(docText(")"));
+	return docGroup(newParts);
 }
 
 export function printTypeAssertion(node: Node, options: FormatOptions): Doc {

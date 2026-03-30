@@ -180,6 +180,22 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 				exports.push(buildExportInfo(sym, ctx.extensionRegistry, path));
 			}
 		}
+		// Also export class method extensions (not in scope, but have Exported flag on sym).
+		// These flow through the auto-import pipeline as extension methods.
+		if (ctx.extensionRegistry !== null) {
+			for (const ext of ctx.extensionRegistry.methods) {
+				if (ext.sym !== null && hasFlag(ext.sym, SymbolFlag.Exported)) {
+					// Skip if already exported (standalone extensions are in scope AND registry)
+					let alreadyExported = false;
+					for (const e of exports) {
+						if (e.name === ext.sym.name) { alreadyExported = true; break; }
+					}
+					if (!alreadyExported) {
+						exports.push(buildExportInfo(ext.sym, ctx.extensionRegistry, path));
+					}
+				}
+			}
+		}
 		updateModuleExports(registry, path, exports);
 	}
 	return registry;
