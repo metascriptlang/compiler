@@ -27,7 +27,7 @@ import {
 	TestDeclData, AssertStmtData,
 	// Declarations
 	ImportDeclData, ExportDeclData, TypeAliasDeclData, EnumDeclData,
-	InterfaceDeclData, ClassDeclData, PropertyDeclData,
+	InterfaceDeclData, ClassDeclData, ActorDeclData, PropertyDeclData,
 	MethodDeclData, ConstructorDeclData,
 	ExternDeclData, MacroDeclData, DecoratedDeclData,
 	MacroInvocationData, TypeAnnotationData,
@@ -514,6 +514,11 @@ function nodeToValue(node: Node, objHeap: RaiserObjectHeap, arrHeap: RaiserArray
 			setStr(objHeap, handle, "className", d.className);
 			setStr(objHeap, handle, "classExtends", d.classExtends);
 			setNodes(objHeap, arrHeap, handle, "classBody", d.classBody);
+		},
+		NodeKind.ActorDecl => {
+			const d = node.data as ActorDeclData;
+			setStr(objHeap, handle, "actorName", d.actorName);
+			setNodes(objHeap, arrHeap, handle, "actorBody", d.actorBody);
 		},
 		NodeKind.PropertyDecl => {
 			const d = node.data as PropertyDeclData;

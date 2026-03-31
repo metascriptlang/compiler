@@ -74,6 +74,7 @@ export enum SymbolKind {
 	EnumMember,
 	Struct,
 	Module,
+	Actor,
 }
 
 // ===== Symbol State (Lifecycle) =====
@@ -172,6 +173,8 @@ export enum NodeKind {
 	TypeGeneric, TypeArray, TypeUnion, TypeFunction, TypeObject,
 	// Program root
 	Program,
+	// Actor (appended at end to preserve enum discriminant ordering)
+	ActorDecl,
 }
 
 // ===== Declaration Kind Enum =====
@@ -304,6 +307,8 @@ export type NodeData =
 	| { typExprFieldNames: string[], typExprFieldTypes: Node[] }   // TypeObject
 	// Program root
 	| { programStmts: Node[] }                                     // Program
+	// Actor (appended after Program to preserve union discriminant ordering)
+	| { actorName: string, actorBody: Node[], nameLocation: SourceLocation } // ActorDecl
 
 // ===== Node Interface =====
 
@@ -393,6 +398,7 @@ export type EnumDeclData = { enumName: string, enumMembers: string[], enumValues
 export type InterfaceDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], nameLocation: SourceLocation };
 export type StructDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], nameLocation: SourceLocation };
 export type ClassDeclData = { className: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation };
+export type ActorDeclData = { actorName: string, actorBody: Node[], nameLocation: SourceLocation };
 export type PropertyDeclData = { propName: string, propType: string, propIsStatic: boolean, propInitializer: Node };
 export type MethodDeclData = { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodReturnType: string, nativeName: string, nameLocation: SourceLocation };
 export type ConstructorDeclData = { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node, ctorDefaults: Node[] };

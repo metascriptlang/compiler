@@ -17,7 +17,7 @@ import {
 	lspJsonString, lspJsonNumber, lspJsonBool, lspJsonNull,
 	lspGetField, lspGetNumberField, lspGetObjectField,
 	lspResponse, lspNotification, lspErrorResponse,
-	lspUriToPath, lspPathToUri, lspResolveImport, lspFormatMessage,
+	lspUriToPath, lspPathToUri, lspResolveImport, lspResolveImportCandidates, lspFormatMessage,
 	lspDirname
 } from "./protocol";
 import {
@@ -175,9 +175,15 @@ function lspEnsureFileLoaded(db: TransAmDb, filePath: string): void {
 // For std/ imports, tries candidates in order: .ms, .cms, /index.ms, /index.cms.
 // Loads from disk if not already in the db.
 function resolveImportForLsp(db: TransAmDb, basePath: string, importSpec: string): string {
-	// Relative imports — handled by existing resolver
-	const rel = lspResolveImport(basePath, importSpec);
-	if (rel !== "") return rel;
+	// Relative imports — try candidates (.ms, /index.ms, .cms, /index.cms)
+	const relCandidates = lspResolveImportCandidates(basePath, importSpec);
+	for (const c of relCandidates) {
+		if (getFileId(db.fileInput, c) >= 0) return c;
+	}
+	for (const c of relCandidates) {
+		lspEnsureFileLoaded(db, c);
+		if (getFileId(db.fileInput, c) >= 0) return c;
+	}
 
 	// std/ imports — resolve against db.stdPath
 	if (db.stdPath.length > 0 && importSpec.length > 4 && importSpec.slice(0, 4) === "std/") {
@@ -968,6 +974,7 @@ function lspCompletionItemKind(kind: SymbolKind, isMutable: boolean): number {
 		SymbolKind.Method => 2,
 		SymbolKind.Parameter => 6,
 		SymbolKind.Class => 7,
+		SymbolKind.Actor => 7,
 		SymbolKind.Interface => 8,
 		SymbolKind.Enum => 13,
 		SymbolKind.TypeAlias => 7,   // Class — TS-Go maps type names to Class
@@ -1029,7 +1036,7 @@ function lspCrossModuleCandidates(
 			// Type context: only suggest type-like symbols
 			if (isTypeCtx) {
 				if (sym.kind !== SymbolKind.Interface && sym.kind !== SymbolKind.Class
-					&& sym.kind !== SymbolKind.Enum && sym.kind !== SymbolKind.TypeAlias) continue;
+					&& sym.kind !== SymbolKind.Actor && sym.kind !== SymbolKind.Enum && sym.kind !== SymbolKind.TypeAlias) continue;
 			}
 			// Compute import edit — included in initial response AND cached for resolve
 			const edit = sgComputeImportEdit(program, source, sym.name, importSpec);
@@ -1065,7 +1072,7 @@ function lspCrossModuleCandidates(
 			if (inScopeSet.has(sym.name)) continue;
 			if (isTypeCtx) {
 				if (sym.symbolKind !== SymbolKind.Interface && sym.symbolKind !== SymbolKind.Class
-					&& sym.symbolKind !== SymbolKind.Enum && sym.symbolKind !== SymbolKind.TypeAlias) continue;
+					&& sym.symbolKind !== SymbolKind.Actor && sym.symbolKind !== SymbolKind.Enum && sym.symbolKind !== SymbolKind.TypeAlias) continue;
 			}
 			// Determine import spec from symbol's modulePath
 			const modPath = sym.modulePath !== null ? sym.modulePath : "";
@@ -1188,7 +1195,7 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 				// Static access on type name (e.g., Buffer.alloc, Result.ok):
 				// use "typeof TypeName" so extension registry matches static extensions.
 				if (sg.kind === SymbolKind.TypeAlias || sg.kind === SymbolKind.Class
-					|| sg.kind === SymbolKind.Interface || sg.kind === SymbolKind.Struct) {
+					|| sg.kind === SymbolKind.Actor || sg.kind === SymbolKind.Interface || sg.kind === SymbolKind.Struct) {
 					receiverType = createTypeRef(sg.name);
 				}
 			}
@@ -1608,6 +1615,7 @@ function lspDocumentSymbolKind(kind: SymbolKind, isMutable: boolean): number {
 	return match (kind) {
 		SymbolKind.Function => 12,
 		SymbolKind.Class => 5,
+		SymbolKind.Actor => 5,
 		SymbolKind.Interface => 11,
 		SymbolKind.Enum => 10,
 		SymbolKind.TypeAlias => 26,  // TypeParameter (was 25=Operator, wrong)

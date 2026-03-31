@@ -5,7 +5,7 @@
 // Cross-module references traced via ImportDecl source paths.
 
 import { Node, NodeKind, ProgramData, FunctionDeclData, ImportDeclData,
-	ExportDeclData, IdentifierData, VariableDeclData, ClassDeclData,
+	ExportDeclData, IdentifierData, VariableDeclData, ClassDeclData, ActorDeclData,
 	CallExprData, MemberExprData,
 	TestDeclData, DecoratedDeclData, ExternDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
@@ -231,6 +231,11 @@ function matchDeclName(node: Node, name: string): Node {
 	if (k === NodeKind.ClassDecl) {
 		const d = node.data as ClassDeclData;
 		if (d.className === name) return node;
+		return null as unknown as Node;
+	}
+	if (k === NodeKind.ActorDecl) {
+		const d = node.data as ActorDeclData;
+		if (d.actorName === name) return node;
 		return null as unknown as Node;
 	}
 	if (k === NodeKind.InterfaceDecl || k === NodeKind.StructDecl) {

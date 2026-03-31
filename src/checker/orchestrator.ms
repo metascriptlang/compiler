@@ -5,7 +5,7 @@ import { Node, NodeKind, EnumDeclData, makeLoc, SourceLocation, Type, SymbolKind
 import {
 	CheckerContext, createModuleContext, createModuleContextWithCache, Severity,
 	ExportRegistry, ExportedSymInfo, createExportRegistry, registerModuleExports, updateModuleExports,
-	buildExportInfo, registerExtension,
+	buildExportInfo, collectExports, registerExtension,
 } from "./context";
 import { ScopeKind, openScope, hasFlag, SymbolFlag } from "./symbol";
 import { getIdentId } from "./idents";
@@ -173,29 +173,8 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 		}
 
 		// Extract resolved exports and UPDATE registry (replaces Phase 1 placeholders)
-		const exports: ExportedSymInfo[] = [];
-		for (const sym of ctx.table.current.symbols) {
-			if (hasFlag(sym, SymbolFlag.Exported)) {
-				mod.exportNames.push(sym.name);
-				exports.push(buildExportInfo(sym, ctx.extensionRegistry, path));
-			}
-		}
-		// Also export class method extensions (not in scope, but have Exported flag on sym).
-		// These flow through the auto-import pipeline as extension methods.
-		if (ctx.extensionRegistry !== null) {
-			for (const ext of ctx.extensionRegistry.methods) {
-				if (ext.sym !== null && hasFlag(ext.sym, SymbolFlag.Exported)) {
-					// Skip if already exported (standalone extensions are in scope AND registry)
-					let alreadyExported = false;
-					for (const e of exports) {
-						if (e.name === ext.sym.name) { alreadyExported = true; break; }
-					}
-					if (!alreadyExported) {
-						exports.push(buildExportInfo(ext.sym, ctx.extensionRegistry, path));
-					}
-				}
-			}
-		}
+		const exports = collectExports(ctx, path);
+		for (const e of exports) { mod.exportNames.push(e.name); }
 		updateModuleExports(registry, path, exports);
 	}
 	return registry;

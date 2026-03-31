@@ -55,10 +55,11 @@ import { analyzeProgram } from "../../analyzer/index";
 import {
 	ExportRegistry, createExportRegistry, ExportedSymInfo,
 	findModuleExports, registerModuleExports, findExportedSymbol,
+	collectExports,
 } from "../../checker/context";
 import { collectTopLevelLocal, collectTopLevel } from "../../checker/collectPass";
 import { resolveDeclarations } from "../../checker/resolvePass";
-import { SymbolFlag, hasFlag, openScope, ScopeKind } from "../../checker/symbol";
+import { openScope, ScopeKind } from "../../checker/symbol";
 import {
 	ImportDeclData, ExportDeclData, ProgramData, EnumDeclData, makeLoc, Symbol,
 } from "../../ast/node";
@@ -67,7 +68,7 @@ import {
 	ImportEntry, createImportEntry,
 } from "../../module/graph";
 import { getDirectImports } from "./moduleDeps";
-import { lspDirname, lspResolveImport } from "../lsp/protocol";
+import { lspDirname, lspResolveImport, lspResolveImportCandidates } from "../lsp/protocol";
 import { translateCHeader } from "../../module/cparse";
 
 // ===== Stdlib Detection =====
@@ -106,12 +107,7 @@ function preRegisterStdModule(db: TransAmDb, filePath: string, specifier: string
 	tmpCtx.modulePath = filePath;
 	collectTopLevelLocal(tmpCtx, pr.value);
 	resolveDeclarations(tmpCtx, pr.value);
-	const exports: ExportedSymInfo[] = [];
-	for (const sym of tmpCtx.table.current.symbols) {
-		if (hasFlag(sym, SymbolFlag.Exported)) {
-			exports.push(buildExportInfo(sym, filePath));
-		}
-	}
+	const exports = collectExports(tmpCtx, filePath);
 	if (exports.length > 0) {
 		registerModuleExports(db.exportRegistry, filePath, exports);
 	}
@@ -263,28 +259,17 @@ function dbEnsureFileLoaded(db: TransAmDb, filePath: string): void {
 	dbSetFileText(db, filePath, source);
 }
 
-// Build ExportedSymInfo from a collected symbol. Shared by preRegisterStdModule and dbEnsureExportsRegistered.
-function buildExportInfo(sym: Symbol, modulePath: string): ExportedSymInfo {
-	return {
-		name: sym.name, kind: sym.symbolKind, symType: sym.symbolType,
-		overloadTypes: [], extReceiverType: "", extIsStatic: false,
-		overloadExtReceiverTypes: [], overloadExtIsStatic: [],
-		nativeName: sym.nativeName, builtinKind: sym.builtinKind,
-		overloadNativeNames: [], overloadBuiltinKinds: [],
-		defaultParams: [], overloadDefaultParamsFlat: [], overloadDefaultParamsCounts: [],
-		definingModule: sym.modulePath !== "" ? sym.modulePath : modulePath,
-		originalName: sym.originalName,
-		headerPath: sym.headerPath,
-		location: sym.location !== null ? sym.location : makeLoc(0, 0),
-		memberLocations: sym.declNode !== null && sym.declNode.kind === NodeKind.EnumDecl ? (sym.declNode.data as EnumDeclData).memberLocations : [],
-	};
-}
-
 // Resolve import specifier to absolute path (relative + std/ imports).
 function dbResolveImport(db: TransAmDb, basePath: string, importSpec: string): string {
-	// Relative imports
-	const rel = lspResolveImport(basePath, importSpec);
-	if (rel !== "") return rel;
+	// Relative imports — try candidates (.ms, /index.ms, .cms, /index.cms)
+	const relCandidates = lspResolveImportCandidates(basePath, importSpec);
+	for (const c of relCandidates) {
+		if (getFileId(db.fileInput, c) >= 0) return c;
+	}
+	for (const c of relCandidates) {
+		dbEnsureFileLoaded(db, c);
+		if (getFileId(db.fileInput, c) >= 0) return c;
+	}
 	// std/ imports
 	if (db.stdPath.length > 0 && importSpec.length > 4 && importSpec.slice(0, 4) === "std/") {
 		const rest = importSpec.slice(4, importSpec.length);
@@ -376,12 +361,7 @@ function dbEnsureExportsRegistered(db: TransAmDb, filePath: string, visited: Set
 		collectTopLevel(tmpCtx, depProgram);
 		resolveDeclarations(tmpCtx, depProgram);
 
-		const earlyExports: ExportedSymInfo[] = [];
-		for (const sym of tmpCtx.table.current.symbols) {
-			if (hasFlag(sym, SymbolFlag.Exported)) {
-				earlyExports.push(buildExportInfo(sym, depPath));
-			}
-		}
+		const earlyExports = collectExports(tmpCtx, depPath);
 		registerModuleExports(db.exportRegistry, depPath, earlyExports);
 		setRegisteredAt(db.moduleDeps, depId, db.revision.value);
 	}
@@ -407,12 +387,7 @@ export function dbEnsureModuleExports(db: TransAmDb, filePath: string): void {
 	tmpCtx.currentModule = depMod;
 	collectTopLevel(tmpCtx, program);
 	resolveDeclarations(tmpCtx, program);
-	const exports: ExportedSymInfo[] = [];
-	for (const sym of tmpCtx.table.current.symbols) {
-		if (hasFlag(sym, SymbolFlag.Exported)) {
-			exports.push(buildExportInfo(sym, filePath));
-		}
-	}
+	const exports = collectExports(tmpCtx, filePath);
 	if (exports.length > 0) {
 		registerModuleExports(db.exportRegistry, filePath, exports);
 	}

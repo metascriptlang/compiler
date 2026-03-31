@@ -33,6 +33,9 @@ export enum TokenKind {
 	Comment,
 	// EOF
 	Eof,
+	// Actor (appended after Eof to preserve enum ordering — isIdentOrKeyword range check still works
+	// because Actor > Break and Actor !== Comment and Actor !== Eof)
+	Actor,
 }
 
 export interface Token {
@@ -141,6 +144,7 @@ export function identToKeyword(ident: string): TokenKind {
 		"ref" => TokenKind.Ref,
 		"sizeof" => TokenKind.Sizeof,
 		"struct" => TokenKind.Struct,
+		"actor" => TokenKind.Actor,
 		"int8" => TokenKind.Int8,
 		"int16" => TokenKind.Int16,
 		"int32" => TokenKind.Int32,
@@ -302,6 +306,7 @@ export function tokenKindToString(kind: TokenKind): string {
 		TokenKind.Ref => "REF",
 		TokenKind.Sizeof => "SIZEOF",
 		TokenKind.Struct => "STRUCT",
+		TokenKind.Actor => "ACTOR",
 		TokenKind.Int8 => "INT8",
 		TokenKind.Int16 => "INT16",
 		TokenKind.Int32 => "INT32",

@@ -6,7 +6,7 @@ import {
 	ProgramData, BlockStmtData, IfStmtData, WhileStmtData, ForStmtData,
 	ForOfStmtData, ForInStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData,
 	FunctionDeclData, ArrowFunctionData, FunctionExprData,
-	ClassDeclData, MethodDeclData, ConstructorDeclData,
+	ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData,
 	ExportDeclData, DecoratedDeclData, MacroDeclData,
 	VariableDeclData, ReturnStmtData, ThrowStmtData, ExprStmtData,
 	TryCatchStmtData, DeferStmtData,
@@ -165,6 +165,14 @@ export function mapChildren(node: Node, f: Visitor): void {
 			let i = 0;
 			while (i < d.classBody.length) {
 				d.classBody[i] = f(d.classBody[i]);
+				i += 1;
+			}
+		},
+		NodeKind.ActorDecl => {
+			const d = node.data as ActorDeclData;
+			let i = 0;
+			while (i < d.actorBody.length) {
+				d.actorBody[i] = f(d.actorBody[i]);
 				i += 1;
 			}
 		},
@@ -502,6 +510,14 @@ export function walkExpandBlocksHooked(node: Node, expander: StmtExpander, ctx: 
 			let i = 0;
 			while (i < d.classBody.length) {
 				walkExpandBlocksHooked(d.classBody[i], expander, ctx, onFnEntry, onFnExit);
+				i = i + 1;
+			}
+		},
+		NodeKind.ActorDecl => {
+			const d = node.data as ActorDeclData;
+			let i = 0;
+			while (i < d.actorBody.length) {
+				walkExpandBlocksHooked(d.actorBody[i], expander, ctx, onFnEntry, onFnExit);
 				i = i + 1;
 			}
 		},

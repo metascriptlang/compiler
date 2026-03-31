@@ -23,7 +23,7 @@ import {
 	FunctionDeclData, DoWhileStmtData, SwitchStmtData, SwitchCaseData,
 	UnreachableStmtData, MatchStmtData,
 	ImportDeclData, ExportDeclData, TypeAliasDeclData, EnumDeclData, InterfaceDeclData,
-	ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData,
+	ClassDeclData, ActorDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData,
 	ExternDeclData, MacroDeclData, DecoratedDeclData, ProgramData,
 	DeferStmtData, ThrowStmtData, TryCatchStmtData,
 	MacroInvocationData, TestDeclData, AssertStmtData,
@@ -353,6 +353,10 @@ export function transAmHashNode(node: Node): number {
 		NodeKind.ClassDecl => {
 			const d = node.data as ClassDeclData;
 			h = hS(h, d.className); h = hS(h, d.classExtends); h = hNodes(h, d.classBody);
+		},
+		NodeKind.ActorDecl => {
+			const d = node.data as ActorDeclData;
+			h = hS(h, d.actorName); h = hNodes(h, d.actorBody);
 		},
 		NodeKind.PropertyDecl => {
 			const d = node.data as PropertyDeclData;

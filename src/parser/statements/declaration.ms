@@ -2,7 +2,7 @@
 // Uses callback injection via util.ms to avoid circular imports
 
 import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, DeclKind, ExternKind, NodeData, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData, ImportDeclData, ExportDeclData } from "../../ast/node";
+import { Node, NodeKind, DeclKind, ExternKind, NodeData, NodeFlag, SourceLocation, createNode, makeLoc, VariableDeclData, ExternDeclData, TypeAliasDeclData, MacroDeclData, FunctionDeclData, PropertyDeclData, ImportDeclData, ExportDeclData, ActorDeclData } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, peek, skipDestructurePattern, consumeSemicolon, skipGenericParams, captureGenericParams, skipBalanced, addGenericDecl, updateGenericDeclFields, collectTokenText } from "../context";
 import { skipTypeAnnotation, parseTypeExpr } from "../typeAnnotation";
 import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, skipDefaultValue, skipOptionalType, getLastParsedDefaults, getLastParamTypeExprs, getLastParamLocations, isIdentLike, isPropertyName } from "../util";
@@ -424,6 +424,11 @@ export function parseExportDecl(state: ParserState): NodeResult {
 
 	if (nextKind === TokenKind.Class || nextKind === TokenKind.Abstract) {
 		const decl = try parseClassDecl(state);
+		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
+	}
+
+	if (nextKind === TokenKind.Actor) {
+		const decl = try parseActorDecl(state);
 		return Result.ok(createNode(NodeKind.ExportDecl, { exportedDecl: decl }, exportToken));
 	}
 
@@ -867,6 +872,56 @@ export function parseClassDecl(state: ParserState): NodeResult {
 		classBody: members,
 		nameLocation: makeLocFromToken(nameToken),
 	}, classToken));
+}
+
+// ===== Actor Declaration =====
+// syntax: 'actor' ID ('<' params '>')? '{' members '}'
+
+export function parseActorDecl(state: ParserState): NodeResult {
+	const actorToken = current(state);
+	if (current(state).kind !== TokenKind.Actor) {
+		return Result.err(`Expected 'actor' at line ${current(state).line}`);
+	}
+	advance(state);
+
+	const nameToken = current(state);
+	if (!isIdentLike(nameToken)) {
+		return Result.err(`Expected actor name at line ${nameToken.line}`);
+	}
+	advance(state);
+
+	// Optional generic type parameters: actor Foo<T>
+	if (!isAtEnd(state) && current(state).kind === TokenKind.Lt) {
+		const genericNames = captureGenericParams(state);
+		if (genericNames !== "") {
+			addGenericDecl(nameToken.value, genericNames);
+		}
+	}
+
+	if (current(state).kind !== TokenKind.LBrace) {
+		return Result.err(`Expected '{' after actor declaration at line ${current(state).line}`);
+	}
+	advance(state);
+
+	const members: Node[] = [];
+	while (!isAtEnd(state) && current(state).kind !== TokenKind.RBrace) {
+		if (current(state).kind === TokenKind.Semicolon) {
+			advance(state);
+			continue;
+		}
+		const member = try parseClassMember(state);
+		members.push(member);
+	}
+
+	if (current(state).kind === TokenKind.RBrace) {
+		advance(state);
+	}
+
+	return Result.ok(createNode(NodeKind.ActorDecl, {
+		actorName: nameToken.value,
+		actorBody: members,
+		nameLocation: makeLocFromToken(nameToken),
+	}, actorToken));
 }
 
 function parseClassMember(state: ParserState): NodeResult {

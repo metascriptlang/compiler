@@ -1,8 +1,8 @@
-import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { extractDecoratorInfo } from "./decoratorHelpers";
 import { unknownType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
 import { SymbolTable, ScopeKind, defineSymbol, makeSymbol, makeSymbolState, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
-import { CheckerContext, ExportedSymInfo, addError, findExportedSymbol, findModuleExports, ExtensionMethod, registerExtension, isStaticExtensionFlag, getExtTypeName, findExtension, sgRecordSym } from "./context";
+import { CheckerContext, ExportedSymInfo, addError, findExportedSymbol, findModuleExports, ExtensionMethod, registerExtension, createExtMethod, isStaticExtensionFlag, getExtTypeName, findExtension, sgRecordSym } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
 import { findChar, getModuleDir, appendFlag } from "../utils/string";
@@ -21,6 +21,7 @@ function collectDecl(ctx: CheckerContext, node: Node): void {
 	match (node.kind) {
 		NodeKind.FunctionDecl => collectFunction(ctx, node),
 		NodeKind.ClassDecl => collectClass(ctx, node),
+		NodeKind.ActorDecl => collectActor(ctx, node),
 		NodeKind.InterfaceDecl => collectInterface(ctx, node),
 		NodeKind.StructDecl => collectStruct(ctx, node),
 		NodeKind.EnumDecl => collectEnumDecl(ctx, node),
@@ -57,6 +58,7 @@ function collectDeclLocal(ctx: CheckerContext, node: Node): void {
 	match (node.kind) {
 		NodeKind.FunctionDecl => collectFunction(ctx, node),
 		NodeKind.ClassDecl => collectClass(ctx, node),
+		NodeKind.ActorDecl => collectActor(ctx, node),
 		NodeKind.InterfaceDecl => collectInterface(ctx, node),
 		NodeKind.StructDecl => collectStruct(ctx, node),
 		NodeKind.EnumDecl => collectEnumDecl(ctx, node),
@@ -121,6 +123,15 @@ function collectExportLocal(ctx: CheckerContext, node: Node): void {
 	}
 	if (d.exportedDecl.kind === NodeKind.ClassDecl) {
 		markClassMethodsExported(ctx, d.exportedDecl);
+	}
+	if (d.exportedDecl.kind === NodeKind.ActorDecl) {
+		const ad = d.exportedDecl.data as ActorDeclData;
+		for (let ai = 0; ai < ad.actorBody.length; ai += 1) {
+			const methodSym = ad.actorBody[ai].resolvedSym;
+			if (methodSym !== null) {
+				setFlag(methodSym, SymbolFlag.Exported);
+			}
+		}
 	}
 }
 
@@ -192,16 +203,7 @@ function collectFunction(ctx: CheckerContext, node: Node): void {
 	// Register extension (instance or static) with direct sym link
 	const extTypeName = getExtTypeName(d.fnFlags);
 	if (extTypeName !== "" && ctx.extensionRegistry !== null) {
-		const extMethod: ExtensionMethod = {
-			methodName: d.fnName,
-			receiverTypeName: extTypeName,
-			sourcePath: "",
-			fnType: unknownType(),
-			isStatic: isStaticExtensionFlag(d.fnFlags),
-			sym: sym,
-			scopeDepth: 1,  // current module; injectPrelude resets to 0 for imported
-		};
-		registerExtension(ctx.extensionRegistry, extMethod);
+		registerExtension(ctx.extensionRegistry, createExtMethod(d.fnName, extTypeName, "", unknownType(), isStaticExtensionFlag(d.fnFlags), sym, 1));
 	}
 }
 
@@ -259,6 +261,41 @@ function collectClass(ctx: CheckerContext, node: Node): void {
 	}
 }
 
+function collectActor(ctx: CheckerContext, node: Node): void {
+	const d = node.data as ActorDeclData;
+	const memberNames: string[] = [];
+	const memberTypes: Type[] = [];
+	for (let i = 0; i < d.actorBody.length; i += 1) {
+		const member = d.actorBody[i];
+		if (member.kind === NodeKind.PropertyDecl) {
+			const pd = member.data as PropertyDeclData;
+			if (!pd.propIsStatic) {
+				memberNames.push(pd.propName);
+				memberTypes.push(unknownType());
+			}
+		}
+	}
+	const innerType = createStruct(d.actorName, memberNames, memberTypes, true);
+	const actorType = createRef(innerType);
+	const sym = makeSymbol(d.actorName, SymbolKind.Actor, actorType, false);
+	actorType.sym = sym;
+	innerType.sym = sym;
+	defineOrError(ctx, sym, node);
+	// Check for constructor
+	for (const member of d.actorBody) {
+		if (member.kind === NodeKind.ConstructorDecl) {
+			setFlag(sym, SymbolFlag.HasConstructor);
+		}
+	}
+	// Register methods as extensions (reuse collectClassMethod)
+	if (ctx.extensionRegistry !== null) {
+		const actorGenerics = getGenericDecl(d.actorName);
+		for (let si = 0; si < d.actorBody.length; si += 1) {
+			collectClassMethod(ctx, d.actorName, actorGenerics, d.actorBody[si], false);
+		}
+	}
+}
+
 function collectClassMethod(ctx: CheckerContext, className: string, classGenerics: string, member: Node, isExternClass: boolean): void {
 	let builtinKind = "";
 	let methodNode: Node = null as unknown as Node;
@@ -310,18 +347,12 @@ function collectClassMethod(ctx: CheckerContext, className: string, classGeneric
 	if (isExternClass) {
 		setFlag(methodSym, SymbolFlag.NativeMethod);
 	}
-	// Link node → symbol for resolvePass
+	// Link node → symbol for resolvePass + LSP go-to-definition
+	methodSym.location = member.location;
+	methodSym.modulePath = ctx.modulePath;
+	methodSym.declNode = member;
 	member.resolvedSym = methodSym;
-	const classExt: ExtensionMethod = {
-		methodName: md.methodName,
-		receiverTypeName: className,
-		sourcePath: "",
-		fnType: fnType,
-		isStatic: md.methodIsStatic,
-		sym: methodSym,
-		scopeDepth: 1,
-	};
-	registerExtension(ctx.extensionRegistry, classExt);
+	registerExtension(ctx.extensionRegistry, createExtMethod(md.methodName, className, "", fnType, md.methodIsStatic, methodSym, 1));
 }
 
 function collectStructLike(ctx: CheckerContext, node: Node, kind: SymbolKind, isRef: boolean): void {
@@ -582,32 +613,16 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 						primarySym.overloads.push(ovSym);
 						// Register per-overload extension if it has one
 						if (ctx.extensionRegistry !== null && exportInfo.overloadExtReceiverTypes !== null && ovIdx < exportInfo.overloadExtReceiverTypes.length && exportInfo.overloadExtReceiverTypes[ovIdx] !== "") {
-							const ovExt: ExtensionMethod = {
-								methodName: localAlias,
-								receiverTypeName: exportInfo.overloadExtReceiverTypes[ovIdx],
-								sourcePath: sourcePath,
-								fnType: exportInfo.overloadTypes[ovIdx],
-								isStatic: exportInfo.overloadExtIsStatic[ovIdx],
-								sym: ovSym,
-								scopeDepth: 1,  // explicit import into module scope
-							};
-							registerExtension(ctx.extensionRegistry, ovExt);
+							registerExtension(ctx.extensionRegistry, createExtMethod(localAlias, exportInfo.overloadExtReceiverTypes[ovIdx], sourcePath, exportInfo.overloadTypes[ovIdx], exportInfo.overloadExtIsStatic[ovIdx], ovSym, 1));
 						}
 						ovIdx = ovIdx + 1;
 					}
 				}
-				// If imported symbol is an extension method, register primary locally
+				// If imported symbol is an extension method, register primary locally.
+				// Reference parity: sym is the single source of truth for the type (Nim: PSym.typ).
+				// When sym is available, fnType = unknownType() to avoid double-decref.
 				if (exportInfo.extReceiverType !== "" && ctx.extensionRegistry !== null) {
-					const extMethod: ExtensionMethod = {
-						methodName: localAlias,
-						receiverTypeName: exportInfo.extReceiverType,
-						sourcePath: sourcePath,
-						fnType: exportInfo.symType,
-						isStatic: exportInfo.extIsStatic,
-						sym: primarySym !== null ? primarySym : null as unknown as Symbol,
-						scopeDepth: 1,  // explicit import into module scope
-					};
-					registerExtension(ctx.extensionRegistry, extMethod);
+					registerExtension(ctx.extensionRegistry, createExtMethod(localAlias, exportInfo.extReceiverType, sourcePath, exportInfo.symType, exportInfo.extIsStatic, primarySym !== null ? primarySym : null as unknown as Symbol, 1));
 				}
 			} else {
 				// Name not found in source module's exports
@@ -648,17 +663,9 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 						const methSym = makeSymbol(sym.name, SymbolKind.Function, sym.symType, false);
 						methSym.modulePath = sym.definingModule !== "" ? sym.definingModule : sourcePath;
 						if (sym.nativeName !== "") methSym.nativeName = sym.nativeName;
+						if (sym.location !== null) methSym.location = sym.location;
 						methSym.state = SymbolState.Shaped;
-						const opExt: ExtensionMethod = {
-							methodName: methName,
-							receiverTypeName: sym.extReceiverType,
-							sourcePath: sourcePath,
-							fnType: sym.symType,
-							isStatic: sym.extIsStatic,
-							sym: methSym,
-							scopeDepth: 0,  // imported
-						};
-						registerExtension(ctx.extensionRegistry, opExt);
+						registerExtension(ctx.extensionRegistry, createExtMethod(methName, sym.extReceiverType, sourcePath, sym.symType, sym.extIsStatic, methSym, 0));
 					}
 				}
 			}
@@ -760,6 +767,15 @@ function collectExport(ctx: CheckerContext, node: Node): void {
 	if (d.exportedDecl.kind === NodeKind.ClassDecl) {
 		markClassMethodsExported(ctx, d.exportedDecl);
 	}
+	if (d.exportedDecl.kind === NodeKind.ActorDecl) {
+		const ad2 = d.exportedDecl.data as ActorDeclData;
+		for (let ai2 = 0; ai2 < ad2.actorBody.length; ai2 += 1) {
+			const mSym = ad2.actorBody[ai2].resolvedSym;
+			if (mSym !== null) {
+				setFlag(mSym, SymbolFlag.Exported);
+			}
+		}
+	}
 }
 
 // Extract the name from any declaration node
@@ -776,6 +792,7 @@ export function getDeclName(node: Node): string {
 	return match (node.kind) {
 		NodeKind.FunctionDecl => { const d = node.data as FunctionDeclData; return d.fnName; },
 		NodeKind.ClassDecl => { const d = node.data as ClassDeclData; return d.className; },
+		NodeKind.ActorDecl => { const d = node.data as ActorDeclData; return d.actorName; },
 		NodeKind.InterfaceDecl => { const d = node.data as InterfaceDeclData; return d.interfaceName; },
 		NodeKind.StructDecl => { const d = node.data as InterfaceDeclData; return d.interfaceName; },
 		NodeKind.EnumDecl => { const d = node.data as EnumDeclData; return d.enumName; },

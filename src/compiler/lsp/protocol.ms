@@ -314,12 +314,27 @@ export function lspResolveImport(basePath: string, importSpec: string): string {
 		spec = spec.slice(2, spec.byteLength);
 	}
 
-	let result = dir + "/" + spec;
-	// Auto-append .ms if no recognized extension present
-	if (!result.endsWith(".ms") && !result.endsWith(".h") && !result.endsWith(".cms")) {
-		result = result + ".ms";
+	const result = dir + "/" + spec;
+	// Already has extension — single candidate
+	if (result.endsWith(".ms") || result.endsWith(".h") || result.endsWith(".cms")) {
+		return result;
 	}
-	return result;
+	// Default: append .ms (callers use lspResolveImportCandidates for full fallback)
+	return result + ".ms";
+}
+
+// Resolve relative import to candidate paths: spec.ms, spec/index.ms, spec.cms, spec/index.cms.
+// Used by LSP and TransAm for directory-style imports (e.g., "./platform/sdl" → "sdl/index.ms").
+export function lspResolveImportCandidates(basePath: string, importSpec: string): string[] {
+	const first = lspResolveImport(basePath, importSpec);
+	if (first === "") return [];
+	// Already has extension — single candidate
+	if (importSpec.endsWith(".ms") || importSpec.endsWith(".h") || importSpec.endsWith(".cms")) {
+		return [first];
+	}
+	// Bare specifier: try .ms, /index.ms, .cms, /index.cms
+	const base = first.endsWith(".ms") ? first.slice(0, first.length - 3) : first;
+	return [base + ".ms", base + "/index.ms", base + ".cms", base + "/index.cms"];
 }
 
 // ===== Tests =====

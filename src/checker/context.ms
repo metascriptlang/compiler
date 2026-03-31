@@ -185,6 +185,31 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 	};
 }
 
+// Collect all exported symbols: scope symbols + class method extensions.
+// Single source of truth — used by orchestrator (multi-module) and TransAm (LSP).
+export function collectExports(ctx: CheckerContext, modulePath: string): ExportedSymInfo[] {
+	const exports: ExportedSymInfo[] = [];
+	for (const sym of ctx.table.current.symbols) {
+		if (hasFlag(sym, SymbolFlag.Exported)) {
+			exports.push(buildExportInfo(sym, ctx.extensionRegistry, modulePath));
+		}
+	}
+	if (ctx.extensionRegistry !== null) {
+		for (const ext of ctx.extensionRegistry.methods) {
+			if (ext.sym !== null && hasFlag(ext.sym, SymbolFlag.Exported)) {
+				let alreadyExported = false;
+				for (const e of exports) {
+					if (e.name === ext.sym.name) { alreadyExported = true; break; }
+				}
+				if (!alreadyExported) {
+					exports.push(buildExportInfo(ext.sym, ctx.extensionRegistry, modulePath));
+				}
+			}
+		}
+	}
+	return exports;
+}
+
 // ===== Extension Registry (extension method tracking) =====
 // Tracks "function f(this self: Type)" declarations for method resolution.
 
@@ -192,14 +217,20 @@ export function buildExportInfo(sym: Symbol, extensionRegistry: ExtensionRegistr
 // sym: AUTHORITATIVE source of type info (sym.symbolType = standard reference symbol type equivalent).
 // class (not interface) — reference parity: symbol is a ref type. Lookup results must be
 // nullable (null = not found), which requires pointer semantics.
+//
+// INVARIANT (reference parity: Nim PSym.typ is the single type source):
+//   sym is the authoritative type source. Use getExtFnType(ext) to read the type.
+//   fnType is a FALLBACK for when sym is null (early collectPass, before symbol is available).
+//   When sym is non-null, fnType MUST be unknownType() — never the same Type as sym.symbolType.
+//   Storing the same Type in both causes double-decref on destruction (DRC double ownership).
 export class ExtensionMethod {
 	methodName: string;
 	receiverTypeName: string;
 	sourcePath: string;
-	fnType: Type;
+	fnType: Type;           // fallback only — use getExtFnType(ext), never read directly
 	isStatic: boolean;
-	sym: Symbol;
-	scopeDepth: number;  // 0 = imported/prelude, 1 = current module (for overload resolution)
+	sym: Symbol;            // authoritative type source (sym.symbolType)
+	scopeDepth: number;     // 0 = imported/prelude, 1 = current module (for overload resolution)
 }
 
 export class ExtensionRegistry {
@@ -208,6 +239,17 @@ export class ExtensionRegistry {
 
 export function createExtensionRegistry(): ExtensionRegistry {
 	return { methods: [] };
+}
+
+// Create an ExtensionMethod with proper ownership invariant enforced.
+// When sym is provided, fnType is set to unknownType() — sym.symbolType is authoritative.
+// This prevents double-decref when both fnType and sym.symbolType reference the same Type.
+export function createExtMethod(methodName: string, receiverTypeName: string, sourcePath: string, fnType: Type, isStatic: boolean, sym: Symbol, scopeDepth: number): ExtensionMethod {
+	return {
+		methodName, receiverTypeName, sourcePath,
+		fnType: sym !== null ? unknownType() : fnType,
+		isStatic, sym, scopeDepth,
+	};
 }
 
 export function registerExtension(registry: ExtensionRegistry, method: ExtensionMethod): void {

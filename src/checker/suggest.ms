@@ -4,7 +4,7 @@
 // formatHover, collectDiagnostics. No I/O, no protocol knowledge.
 // Called by src/lsp/handlers.ms.
 
-import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, ProgramData, DeclKind, IdentifierData, MemberExprData, CallExprData, BinaryExprData, UnaryExprData, VariableDeclData, FunctionDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, ArrayLiteralData, ObjectLiteralData, ConditionalExprData, ArrowFunctionData, ArrayAccessData, MatchExprData, MatchCaseData, TryCatchStmtData, TryExprData, ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExportDeclData, ImportDeclData, HiddenDerefData, HiddenStdConvData, MethodDeclData, PropertyDeclData, ConstructorDeclData, NewExprData, NumberLiteralData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
+import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, ProgramData, DeclKind, IdentifierData, MemberExprData, CallExprData, BinaryExprData, UnaryExprData, VariableDeclData, FunctionDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, ArrayLiteralData, ObjectLiteralData, ConditionalExprData, ArrowFunctionData, ArrayAccessData, MatchExprData, MatchCaseData, TryCatchStmtData, TryExprData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExportDeclData, ImportDeclData, HiddenDerefData, HiddenStdConvData, MethodDeclData, PropertyDeclData, ConstructorDeclData, NewExprData, NumberLiteralData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { typeNameOf, getProperty, unwrapRef, numberType, stringType, booleanType, voidType, nullType, unknownType, neverType, errorType, isResult, getResultOkType, getResultErrType } from "./types";
 import { SymbolTable, Scope, ScopeKind, lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
@@ -341,6 +341,7 @@ function sgSymbolKindName(kind: SymbolKind): string {
 		SymbolKind.Property => "property",
 		SymbolKind.Method => "method",
 		SymbolKind.EnumMember => "enum member",
+		SymbolKind.Actor => "actor",
 		SymbolKind.Module => "module",
 	};
 }
@@ -365,24 +366,6 @@ function sgFormatParamList(t: Type): string {
 // Format function type as declaration: function name(params): returnType
 function sgFormatFuncDecl(name: string, t: Type): string {
 	return "function " + name + sgFormatParamList(t) + ": " + sgTypeToString(t.typeReturn);
-}
-
-// Format interface fields as "field1: T1; field2: T2; ..." (up to 5)
-function sgFormatFieldList(t: Type): string {
-	if (t === null || t.typeNames.length === 0) return "";
-	let result = "";
-	const limit = 5;
-	let maxLen = t.typeNames.length;
-	if (maxLen > limit) maxLen = limit;
-	for (let i = 0; i < maxLen; i = i + 1) {
-		if (i > 0) result = result + "; ";
-		result = result + t.typeNames[i];
-		if (i < t.typeChildren.length) {
-			result = result + ": " + sgTypeToString(t.typeChildren[i]);
-		}
-	}
-	if (t.typeNames.length > limit) result = result + "; ...";
-	return result;
 }
 
 // Format struct/interface/class fields as multiline "  field: type;\n" for hover display.
@@ -434,6 +417,11 @@ export function sgFormatHover(suggest: SgSuggest): string {
 			kw = "(parameter)";
 		} else {
 			if (suggest.isMutable) { kw = "let"; } else { kw = "const"; }
+		}
+		// Struct-typed variables: show fields in multiline format (like interface/class hover)
+		const varStructFields = sgFormatStructFields(suggest.symType);
+		if (varStructFields !== "") {
+			return "```metascript\n" + aliasPrefix + kw + " " + suggest.name + ": {\n" + varStructFields + "}\n```";
 		}
 		return "```metascript\n" + aliasPrefix + kw + " " + suggest.name + ": " + typeStr + "\n```";
 	}
@@ -837,6 +825,10 @@ function sgGetDeclName(node: Node): string {
 	if (node.kind === NodeKind.ClassDecl) {
 		const d = node.data as ClassDeclData;
 		return d.className;
+	}
+	if (node.kind === NodeKind.ActorDecl) {
+		const d = node.data as ActorDeclData;
+		return d.actorName;
 	}
 	return "";
 }
@@ -1824,6 +1816,12 @@ function sgCollectOneSymbol(node: Node, ctx: CheckerContext, result: SgDocumentS
 		result.push(item);
 		return;
 	}
+	if (node.kind === NodeKind.ActorDecl) {
+		const ad = node.data as ActorDeclData;
+		const item: SgDocumentSymbol = { name: ad.actorName, kind: SymbolKind.Actor, location: node.location, detail: "", isMutable: false, children: [] };
+		result.push(item);
+		return;
+	}
 	if (node.kind === NodeKind.TypeAliasDecl) {
 		const td = node.data as TypeAliasDeclData;
 		const dt = sgGetSymbolDetail(ctx, td.aliasName);
@@ -2460,6 +2458,18 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 		}
 		for (let ci = 0; ci < cd.classBody.length; ci = ci + 1) {
 			sgCollectTokensInNode(ctx, cd.classBody[ci], tokens);
+		}
+		return;
+	}
+
+	if (node.kind === NodeKind.ActorDecl) {
+		const ad = node.data as ActorDeclData;
+		if (ad.actorName.length > 0 && ad.nameLocation !== null) {
+			const tok: SgSemanticToken = { line: ad.nameLocation.line, col: ad.nameLocation.column, length: ad.actorName.length, tokenType: 2, modifiers: 1 };
+			tokens.push(tok);
+		}
+		for (let ai = 0; ai < ad.actorBody.length; ai = ai + 1) {
+			sgCollectTokensInNode(ctx, ad.actorBody[ai], tokens);
 		}
 		return;
 	}

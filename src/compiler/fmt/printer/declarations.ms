@@ -3,7 +3,7 @@
 import {
 	Node, NodeFlag,
 	ImportDeclData, ExportDeclData,
-	ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData,
+	ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData,
 	ExternDeclData, DecoratedDeclData, TestDeclData, AssertStmtData,
 	PropertyDeclData, MethodDeclData,
 } from "../../../ast/node";
@@ -170,6 +170,22 @@ export function printClassDecl(node: Node, options: FormatOptions): Doc {
 	if (d.classBody.length > 0) {
 		const members: Doc[] = [];
 		for (const m of d.classBody) {
+			members.push(callPrintNode(m, options));
+		}
+		parts.push(docIndent([docHardLine(), docJoin(members, docHardLine())]));
+		parts.push(docHardLine());
+	}
+	parts.push(docText("}"));
+	return docGroup(parts);
+}
+
+export function printActorDecl(node: Node, options: FormatOptions): Doc {
+	const d = node.data as ActorDeclData;
+	const parts: Doc[] = [docText("actor " + d.actorName)];
+	parts.push(docText(" {"));
+	if (d.actorBody.length > 0) {
+		const members: Doc[] = [];
+		for (const m of d.actorBody) {
 			members.push(callPrintNode(m, options));
 		}
 		parts.push(docIndent([docHardLine(), docJoin(members, docHardLine())]));

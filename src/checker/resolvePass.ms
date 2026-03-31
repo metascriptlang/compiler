@@ -6,7 +6,7 @@
 //   A. Parsing type annotation strings into Type objects
 //   B. Building proper Function/Object types for collected declarations
 
-import { Node, NodeKind, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ExternKind, IdentifierData, TypeGenericData, TypeArrayData, TypeUnionData, TypeFunctionData, TypeObjectData, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ExternKind, IdentifierData, TypeGenericData, TypeArrayData, TypeUnionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { unknownType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createUnion, createGenericParam, createDistinct, substituteType, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, setMinArity, typeNameOf, assignType, isStructType, unwrapRef, propagateHasAsgn } from "./types";
 import { SymbolTable, ScopeKind, lookupSymbol, lookupLocal, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, setFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addErrorRange, addWarning, addFatalError, addFatalErrorRange, sgRecordSym } from "./context";
@@ -395,6 +395,7 @@ export function ensureShaped(sym: Symbol, ctx: CheckerContext): void {
 			NodeKind.InterfaceDecl => resolveInterface(ctx, node),
 			NodeKind.StructDecl => resolveInterface(ctx, node),
 			NodeKind.ClassDecl => resolveClass(ctx, node),
+			NodeKind.ActorDecl => resolveActor(ctx, node),
 			NodeKind.TypeAliasDecl => resolveTypeAlias(ctx, node),
 			NodeKind.VariableDecl => resolveVariable(ctx, node),
 			NodeKind.ExternDecl => resolveExtern(ctx, node),
@@ -665,8 +666,12 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 				if (extTypeName2 !== "" && ctx.extensionRegistry !== null) {
 					const ext2 = findExtension(ctx.extensionRegistry, extTypeName2, d.fnName);
 					if (ext2 !== null) {
-						ext2.fnType = fnType;
-						if (ext2.sym === null) ext2.sym = overload;
+						// Reference parity: sym is the single source of truth for the type.
+						// Only set fnType as fallback when sym is not available.
+						if (ext2.sym === null) {
+							ext2.fnType = fnType;
+							ext2.sym = overload;
+						}
 					}
 				}
 				return;
@@ -680,13 +685,17 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 	if (d.fnDefaults !== null && d.fnDefaults.length > 0) {
 		sym.defaultParams = d.fnDefaults;
 	}
-	// Update extension fnType cache (secondary — getExtFnType reads sym.symbolType first)
+	// Reference parity: sym is the single source of truth for the type (Nim: PSym.typ).
+	// Only set fnType as fallback when sym is not available. Never store the same Type
+	// in both fnType and sym.symbolType — that causes double-decref on ExtensionMethod destruction.
 	const extTypeName = getExtTypeName(d.fnFlags);
 	if (extTypeName !== "" && ctx.extensionRegistry !== null) {
 		const ext = findExtension(ctx.extensionRegistry, extTypeName, d.fnName);
 		if (ext !== null) {
-			ext.fnType = fnType;
-			if (ext.sym === null) ext.sym = sym;
+			if (ext.sym === null) {
+				ext.fnType = fnType;
+				ext.sym = sym;
+			}
 		}
 	}
 }
@@ -846,10 +855,31 @@ function resolveDiscriminatedUnion(ctx: CheckerContext, d: TypeAliasDeclData): T
 
 function resolveVariable(ctx: CheckerContext, node: Node): void {
 	const d = node.data as VariableDeclData;
-	if (d.declType === "") return;
-	// Variable annotations are used as hints in Pass 3 (checkVariableDecl)
-	// We don't resolve them here because the symbol isn't defined yet in Pass 2
-	// (variables are defined during Pass 3). Instead, we store the info for later use.
+	if (d.declType !== "") return;
+	// No annotation: for const object literals, infer struct type from field names.
+	// This gives cross-module exports a meaningful type (not unknown) for LSP hover/completion.
+	// Full inference happens in Pass 3; this is a lightweight early approximation.
+	if (d.declKind === DeclKind.Const && d.initializer !== null && d.initializer.kind === NodeKind.ObjectLiteral) {
+		const sym = lookupSymbol(ctx.table, d.declName);
+		if (sym !== null && sym.symbolType.kind === TypeKind.Unknown) {
+			const objData = d.initializer.data as ObjectLiteralData;
+			const fieldNames: string[] = [];
+			const fieldTypes: Type[] = [];
+			for (let fi = 0; fi < objData.keys.length; fi += 1) {
+				fieldNames.push(objData.keys[fi]);
+				// Values are literals — resolve their types if annotated (e.g., 0x0001 as uint32)
+				const valNode = objData.properties[fi];
+				if (valNode !== null && valNode.kind === NodeKind.TypeAssertion) {
+					const ta = valNode.data as TypeAssertionData;
+					const resolved = resolveAnnotation(ta.asType, ctx, node.location.line, node.location.column);
+					fieldTypes.push(resolved);
+				} else {
+					fieldTypes.push(unknownType());
+				}
+			}
+			sym.symbolType = createStruct("", fieldNames, fieldTypes, true);
+		}
+	}
 }
 
 // Resolve extern const/let/var type annotation → set symbol type.
@@ -1001,6 +1031,98 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 		}
 	}
 	// Propagate HasAsgn from any managed field
+	for (const pt of memberTypes) { propagateHasAsgn(inner, pt); }
+	node.nodeType = sym.symbolType;
+}
+
+function resolveActor(ctx: CheckerContext, node: Node): void {
+	const d = node.data as ActorDeclData;
+	const sym = lookupSymbol(ctx.table, d.actorName);
+	if (sym === null) return;
+	node.resolvedSym = sym;
+	sym.state = SymbolState.Shaped;
+
+	// Check for generic params
+	const genericStr = getGenericDecl(d.actorName);
+	const hasGenerics = genericStr !== "";
+	if (hasGenerics) {
+		openScope(ctx.table, ScopeKind.Block);
+		const genericNames = splitTopLevel(genericStr, ",");
+		for (const gp of genericNames) {
+			const trimGp = gp.trim();
+			if (trimGp !== "") {
+				defineGenericParam(ctx, trimGp);
+			}
+		}
+	}
+
+	// Build struct type — collect instance properties and resolve methods
+	const memberNames: string[] = [];
+	const memberTypes: Type[] = [];
+	for (let mi = 0; mi < d.actorBody.length; mi += 1) {
+		let member = d.actorBody[mi];
+		if (member.kind === NodeKind.DecoratedDecl) {
+			const dd = member.data as DecoratedDeclData;
+			if (dd.decoratedNode === null) continue;
+			member = dd.decoratedNode;
+		}
+		if (member.kind === NodeKind.MethodDecl) {
+			const md = member.data as MethodDeclData;
+			const methodGenericNames = extractGenericNames(md.methodFlags);
+			const hasMethodGenerics = methodGenericNames.length > 0;
+			if (hasMethodGenerics) {
+				openScope(ctx.table, ScopeKind.Block);
+				for (const mgp of methodGenericNames) {
+					defineGenericParam(ctx, mgp);
+				}
+			}
+			const paramTypes = resolveTypeStrings(md.methodParamTypes, md.methodParams.length, ctx, member.location.line, member.location.column);
+			resolveTypeExprs(member.typeExprs, ctx);
+			const returnType = (md.methodReturnType !== "") ? resolveAnnotation(md.methodReturnType, ctx, member.location.line, member.location.column) : unknownType();
+			resolveTypeExpr(member.typeExpr, ctx);
+			if (hasMethodGenerics) {
+				closeScope(ctx.table);
+			}
+			const fnType = createFunction(paramTypes, md.methodParams, returnType);
+			const methodSym = member.resolvedSym !== null ? member.resolvedSym : d.actorBody[mi].resolvedSym;
+			if (methodSym !== null && methodSym.symbolType !== null && methodSym.symbolType.typeName !== "") {
+				fnType.typeName = methodSym.symbolType.typeName;
+			}
+			member.nodeType = fnType;
+			if (methodSym !== null && methodSym.symbolType !== null) {
+				assignType(methodSym.symbolType, fnType);
+			}
+		} else if (member.kind === NodeKind.PropertyDecl) {
+			const pd = member.data as PropertyDeclData;
+			memberNames.push(pd.propName);
+			if (pd.propType !== "") {
+				const propType = resolveAnnotation(pd.propType, ctx, member.location.line, member.location.column);
+				resolveTypeExpr(member.typeExpr, ctx);
+				member.nodeType = propType;
+				memberTypes.push(propType);
+			} else {
+				memberTypes.push(unknownType());
+			}
+		} else if (member.kind === NodeKind.ConstructorDecl) {
+			const cd = member.data as ConstructorDeclData;
+			const paramTypes = resolveTypeStrings(cd.ctorParamTypes, cd.ctorParams.length, ctx, member.location.line, member.location.column);
+			resolveTypeExprs(member.typeExprs, ctx);
+			const ctorType = createFunction(paramTypes, cd.ctorParams, voidType());
+			member.nodeType = ctorType;
+		}
+	}
+
+	if (hasGenerics) {
+		closeScope(ctx.table);
+	}
+
+	// Update inner struct in-place
+	const inner = unwrapRef(sym.symbolType);
+	inner.kind = TypeKind.Struct;
+	inner.typeName = d.actorName;
+	inner.typeNames = memberNames;
+	inner.typeChildren = memberTypes;
+	inner.typeFlags = TypeFlag.IsStruct as int32;
 	for (const pt of memberTypes) { propagateHasAsgn(inner, pt); }
 	node.nodeType = sym.symbolType;
 }

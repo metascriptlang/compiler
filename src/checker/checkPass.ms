@@ -1,10 +1,10 @@
 // Statement Checker — Pass 3 statement validation and control flow
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
-import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, makeLoc, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, VariableDeclData, FunctionDeclData, ClassDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, StringLiteralData, CallExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, makeLoc, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, VariableDeclData, FunctionDeclData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, StringLiteralData, CallExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { unknownType, nullType, stringType, charType, numberType, float64Type, voidType, createFunction, createUnion, isMaybeType, unwrapMaybeType, isNarrowingIntConv, typeNameOf, isPromise, getPromiseInner, isResult, getResultOkType, getResultErrType, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant } from "./types";
 import { ScopeKind, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, setFlag, hasFlag, SymbolFlag } from "./symbol";
-import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContext, createModuleContextWithCache, addError, addFatalError, addWarning, hasErrors, hasFatalErrors, errorCount, createExtensionRegistry, registerExtension, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, buildExportInfo, isCancelled, sgRecordSym, sgSortRecords, isInAsyncPromiseResult } from "./context";
+import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContext, createModuleContextWithCache, addError, addFatalError, addWarning, hasErrors, hasFatalErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, buildExportInfo, isCancelled, sgRecordSym, sgSortRecords, isInAsyncPromiseResult } from "./context";
 import { IdentCache, createIdentCache } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
 import { collectTopLevel, defineOrError } from "./collectPass";
@@ -48,6 +48,7 @@ export function checkStmt(ctx: CheckerContext, node: Node): void {
 		NodeKind.VariableDecl => checkVariableDecl(ctx, node),
 		NodeKind.FunctionDecl => checkFunctionDecl(ctx, node),
 		NodeKind.ClassDecl => checkClassDecl(ctx, node),
+		NodeKind.ActorDecl => checkActorDecl(ctx, node),
 		NodeKind.InterfaceDecl | NodeKind.StructDecl | NodeKind.EnumDecl | NodeKind.TypeAliasDecl |
 		NodeKind.ExternDecl | NodeKind.MacroDecl | NodeKind.ImportDecl => {},
 		NodeKind.ExportDecl => checkExportDecl(ctx, node),
@@ -233,6 +234,27 @@ function checkClassDecl(ctx: CheckerContext, node: Node): void {
 	openScope(ctx.table, ScopeKind.Class);
 	for (const member of d.classBody) {
 		checkClassMember(ctx, member, d.className, sym.symbolType);
+	}
+	closeScope(ctx.table);
+
+	sym.state = SymbolState.Checked;
+}
+
+function checkActorDecl(ctx: CheckerContext, node: Node): void {
+	const d = node.data as ActorDeclData;
+	const sym = lookupSymbol(ctx.table, d.actorName);
+	if (sym === null) return;
+	node.resolvedSym = sym;
+
+	ensureShaped(sym, ctx);
+	sgRecordSym(ctx, d.nameLocation.line, d.nameLocation.column, d.nameLocation.column + d.actorName.length, sym, sym.symbolType, SymbolKind.Actor, d.actorName, "", true);
+
+	if (sym.state === SymbolState.Checked) return;
+	sym.state = SymbolState.Checking;
+
+	openScope(ctx.table, ScopeKind.Class);
+	for (const member of d.actorBody) {
+		checkClassMember(ctx, member, d.actorName, sym.symbolType);
 	}
 	closeScope(ctx.table);
 
@@ -1333,16 +1355,7 @@ export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): 
 			if (ext.sym !== null && hasFlag(ext.sym, SymbolFlag.Exported)) {
 				// Imported extensions get scope depth 0 (other module).
 				// Don't mutate ext — preludeCtx may be cached across modules (LSP TransAmDb).
-				const imported: ExtensionMethod = {
-					methodName: ext.methodName,
-					receiverTypeName: ext.receiverTypeName,
-					sourcePath: ext.sourcePath,
-					fnType: ext.fnType,
-					isStatic: ext.isStatic,
-					sym: ext.sym,
-					scopeDepth: 0,
-				};
-				registerExtension(ctx.extensionRegistry, imported);
+				registerExtension(ctx.extensionRegistry, createExtMethod(ext.methodName, ext.receiverTypeName, ext.sourcePath, ext.fnType, ext.isStatic, ext.sym, 0));
 			}
 			ei = ei + 1;
 		}

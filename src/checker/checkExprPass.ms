@@ -1132,6 +1132,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 				const isStaticAccess = me.object.resolvedSym !== null
 					&& (me.object.resolvedSym.symbolKind === SymbolKind.TypeAlias
 						|| me.object.resolvedSym.symbolKind === SymbolKind.Class
+						|| me.object.resolvedSym.symbolKind === SymbolKind.Actor
 						|| me.object.resolvedSym.symbolKind === SymbolKind.Interface);
 				if (isStaticAccess && filtered.length > 1) {
 					const staticOnly: ExtensionMethod[] = [];
@@ -1390,6 +1391,7 @@ function inferGenericReturnWithExplicit(fnType: Type, argTypes: Type[], expected
 		if (typeArgCol > 0) {
 			const symKind = resolvedSym.symbolKind === SymbolKind.Interface ? SymbolKind.Interface
 				: resolvedSym.symbolKind === SymbolKind.Class ? SymbolKind.Class
+				: resolvedSym.symbolKind === SymbolKind.Actor ? SymbolKind.Actor
 				: resolvedSym.symbolKind === SymbolKind.TypeAlias ? SymbolKind.TypeAlias
 				: SymbolKind.Interface;
 			sgRecordSym(ctx, node.location.line, typeArgCol, typeArgCol + explicitArg.length, resolvedSym, concreteType, symKind, explicitArg, "", false);
@@ -1935,6 +1937,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 	// TypeAlias included for patterns like Buffer.alloc() where Buffer is `type Buffer = string`.
 	const isStaticClassAccess = d.object.resolvedSym !== null
 		&& (d.object.resolvedSym.symbolKind === SymbolKind.Class
+			|| d.object.resolvedSym.symbolKind === SymbolKind.Actor
 			|| d.object.resolvedSym.symbolKind === SymbolKind.TypeAlias
 			|| d.object.resolvedSym.symbolKind === SymbolKind.Interface
 			|| d.object.resolvedSym.symbolKind === SymbolKind.Struct);
@@ -2057,6 +2060,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 		const isTypeAccess = d.object.resolvedSym !== null
 			&& (d.object.resolvedSym.symbolKind === SymbolKind.TypeAlias
 				|| d.object.resolvedSym.symbolKind === SymbolKind.Class
+				|| d.object.resolvedSym.symbolKind === SymbolKind.Actor
 				|| d.object.resolvedSym.symbolKind === SymbolKind.Interface);
 		if (!isTypeAccess) {
 			const propSym = makeSymbol(d.property, SymbolKind.Property, int32Type(), false);

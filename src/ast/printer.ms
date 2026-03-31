@@ -13,7 +13,7 @@ import { Node, NodeKind, DeclKind,
 	DoWhileStmtData, BlockStmtData, FunctionDeclData, SwitchStmtData, SwitchCaseData,
 	MatchStmtData, TryCatchStmtData, UnreachableStmtData, TypeAnnotationData,
 	MacroInvocationData, ImportDeclData, ExportDeclData, TypeAliasDeclData, EnumDeclData,
-	InterfaceDeclData, ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData,
+	InterfaceDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData,
 	ExternDeclData, ExternKind, MacroDeclData, DecoratedDeclData, ProgramData,
 	TestDeclData, AssertStmtData,
 	HiddenStdConvData,
@@ -367,6 +367,13 @@ export function printNode(node: Node, level: number): void {
 				console.log(`${pad}ClassDecl: ${data.className} (${data.classBody.length.toString()} members)`);
 			}
 			for (const member of data.classBody) {
+				printNode(member, level + 1);
+			}
+		},
+		NodeKind.ActorDecl => {
+			const data = node.data as ActorDeclData;
+			console.log(`${pad}ActorDecl: ${data.actorName} (${data.actorBody.length.toString()} members)`);
+			for (const member of data.actorBody) {
 				printNode(member, level + 1);
 			}
 		},
