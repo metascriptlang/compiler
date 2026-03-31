@@ -1,7 +1,7 @@
-import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
+import { Node, NodeKind, NodeFlag, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, ClassDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExternDeclData, ExternKind, MacroDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, PropertyDeclData, MethodDeclData, ExprStmtData, MacroInvocationData, StringLiteralData, DeclKind, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { extractDecoratorInfo } from "./decoratorHelpers";
 import { unknownType, emptyType, createStruct, createEnum, createTypeRef, createFunction, createRef } from "./types";
-import { SymbolTable, ScopeKind, defineSymbol, makeSymbol, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
+import { SymbolTable, ScopeKind, defineSymbol, makeSymbol, makeSymbolState, lookupSymbol, lookupLocal, setFlag, hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, ExportedSymInfo, addError, findExportedSymbol, findModuleExports, ExtensionMethod, registerExtension, isStaticExtensionFlag, getExtTypeName, findExtension, sgRecordSym } from "./context";
 import { isGlobalImport } from "./prelude";
 import { ModuleGraph } from "../module/graph";
@@ -186,6 +186,9 @@ function collectFunction(ctx: CheckerContext, node: Node): void {
 		}
 	}
 	defineOrError(ctx, sym, node);
+	// Reference parity: attach symbol to declaration node.
+	// DRC uses this to get param types and check sfGeneratedOp without lookupSymbol.
+	node.resolvedSym = sym;
 	// Register extension (instance or static) with direct sym link
 	const extTypeName = getExtTypeName(d.fnFlags);
 	if (extTypeName !== "" && ctx.extensionRegistry !== null) {
@@ -640,13 +643,19 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 					}
 					// Only register if not already present
 					if (findExtension(ctx.extensionRegistry, sym.extReceiverType, methName) === null) {
+						// Create a proper symbol for the imported extension (Nim: all procs have symbols).
+						// Uses the mangled name (GPUInstance_release) so codegen emits correct C function calls.
+						const methSym = makeSymbol(sym.name, SymbolKind.Function, sym.symType, false);
+						methSym.modulePath = sym.definingModule !== "" ? sym.definingModule : sourcePath;
+						if (sym.nativeName !== "") methSym.nativeName = sym.nativeName;
+						methSym.state = SymbolState.Shaped;
 						const opExt: ExtensionMethod = {
 							methodName: methName,
 							receiverTypeName: sym.extReceiverType,
 							sourcePath: sourcePath,
 							fnType: sym.symType,
 							isStatic: sym.extIsStatic,
-							sym: null as unknown as Symbol,
+							sym: methSym,
 							scopeDepth: 0,  // imported
 						};
 						registerExtension(ctx.extensionRegistry, opExt);

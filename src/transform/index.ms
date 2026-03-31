@@ -97,10 +97,10 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerGenerator(result, ctx); }
 	if (!jsBackend) { result = lowerSpawn(result, ctx); }
 	if (!jsBackend) { result = lowerVarHoist(result, ctx); }
+	result = lowerExtensionMethod(result, ctx);
 	if (!jsBackend) { result = lowerLambda(result, ctx); }
 	result = lowerBuiltins(result, ctx);
 	if (!jsBackend) { result = lowerJsonDynAccess(result, ctx); }
-	result = lowerExtensionMethod(result, ctx);
 	result = lowerOperators(result, ctx);
 	result = lowerStringOps(result, ctx);
 	result = lowerSubscript(result, ctx);

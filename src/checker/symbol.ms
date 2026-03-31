@@ -34,6 +34,7 @@ export enum SymbolFlag {
 	ParamMutated = 32768,  // parameter is mutated inside function body (blocks const-ptr promotion)
 	HasConstructor = 65536, // class has a ConstructorDecl → codegen calls ClassName_new()
 	NativeMethod = 131072, // method from extern class — don't set ExtCall, keep as native member call
+	GeneratedOp = 262144, // generated lifecycle hook (=destroy/=copy/=sink/=wasMoved) — skip DRC injection (reference parity: sfGeneratedOp)
 }
 
 // Flag helpers

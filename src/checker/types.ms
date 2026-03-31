@@ -841,10 +841,9 @@ function substituteStruct(t: Type, paramName: string, concrete: Type): Type {
 	return result;
 }
 
-// Reference parity (instCopyType): shallow-copy source type with INDEPENDENT arrays.
-// Uses emptyType() for fresh arrays (no aliasing in JS), then pushes elements.
-// Elements are at rc=0 in the new array, but safe because Gap B is fixed
-// (flag-based cycle detection, no DRC-managed visited array push/pop/decref).
+// Reference parity (instCopyType → newSons + dest[i] = src[i]):
+// Copy type with independent arrays. Children copied via push(null) + indexed
+// assignment so DRC generates =copy (incref) in C. JS gets independence from push.
 function copyTypeForSubst(t: Type): Type {
 	const result = emptyType();
 	result.kind = t.kind;
@@ -853,9 +852,18 @@ function copyTypeForSubst(t: Type): Type {
 	result.typeExtra = t.typeExtra;
 	result.typeFlags = t.typeFlags - TypeFlag.Substituting;
 	result.callConv = t.callConv;
-	for (const child of t.typeChildren) result.typeChildren.push(child);
-	for (const name of t.typeNames) result.typeNames.push(name);
-	for (const op of t.attachedOps) result.attachedOps.push(op);
+	for (let ci = 0; ci < t.typeChildren.length; ci += 1) {
+		result.typeChildren.push(null as unknown as Type);
+		result.typeChildren[ci] = t.typeChildren[ci];
+	}
+	for (let ni = 0; ni < t.typeNames.length; ni += 1) {
+		result.typeNames.push("");
+		result.typeNames[ni] = t.typeNames[ni];
+	}
+	for (let oi = 0; oi < t.attachedOps.length; oi += 1) {
+		result.attachedOps.push("");
+		result.attachedOps[oi] = t.attachedOps[oi];
+	}
 	return result;
 }
 
@@ -879,7 +887,9 @@ function substituteSetFlag(t: Type): void {
 }
 
 function substituteClearFlag(t: Type): void {
-	t.typeFlags = t.typeFlags - TypeFlag.Substituting;
+	if ((t.typeFlags & TypeFlag.Substituting) !== 0) {
+		t.typeFlags = t.typeFlags - TypeFlag.Substituting;
+	}
 }
 
 export function substituteType(t: Type, paramName: string, concrete: Type): Type {
@@ -887,11 +897,7 @@ export function substituteType(t: Type, paramName: string, concrete: Type): Type
 	if (t.kind === TypeKind.GenericParam && t.typeName === paramName) return concrete;
 	if (substituteIsSeen(t)) return t;
 	substituteSetFlag(t);
-	// try/finally ensures the flag is ALWAYS cleared, even if an exception interrupts.
-	// Without this, shared prelude types get stale Substituting flags that break
-	// subsequent substituteType calls across the module graph.
-	try {
-		const result = match (t.kind) {
+	const result = match (t.kind) {
 			TypeKind.Number | TypeKind.String | TypeKind.Boolean |
 			TypeKind.Void | TypeKind.Null | TypeKind.Unknown |
 			TypeKind.Never | TypeKind.Error | TypeKind.GenericParam |
@@ -903,11 +909,13 @@ export function substituteType(t: Type, paramName: string, concrete: Type): Type
 				const fn = copyTypeForSubst(t);
 				substituteChildrenInPlace(fn, paramName, concrete);
 				fn.typeReturn = substituteType(t.typeReturn, paramName, concrete);
+				substituteClearFlag(t);
 				return fn;
 			},
 			TypeKind.Union | TypeKind.Tuple => {
 				const copy = copyTypeForSubst(t);
 				substituteChildrenInPlace(copy, paramName, concrete);
+				substituteClearFlag(t);
 				return copy;
 			},
 			TypeKind.Ref => createRef(substituteType(t.typeReturn, paramName, concrete)),
@@ -918,14 +926,13 @@ export function substituteType(t: Type, paramName: string, concrete: Type): Type
 				const gi = copyTypeForSubst(t);
 				gi.typeReturn = null as unknown as Type;
 				substituteChildrenInPlace(gi, paramName, concrete);
+				substituteClearFlag(t);
 				return gi;
 			},
 			_ => t,
 		};
-		return result;
-	} finally {
-		substituteClearFlag(t);
-	}
+	substituteClearFlag(t);
+	return result;
 }
 
 // Instantiate a generic type with concrete type arguments.

@@ -26,7 +26,7 @@ import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, 
 import { makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
 import { isPrimitiveKind, setAttachedOp, unwrapRef, createArray, createPtr, createRef, createVar, createPrimitive, stringType, getTypeSize } from "../../checker/types";
 import { walkNode } from "../walker";
-import { lookupSymbol } from "../../checker/symbol";
+import { lookupSymbol, makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
 import { CheckerContext } from "../../checker/context";
 import { checkProgram } from "../../checker/checkPass";
 import { parseInput } from "../testUtil";
@@ -160,6 +160,14 @@ function hookSuffix(hook: string): string {
 		"trace" => "Trace",
 		_ => "WasMoved",
 	};
+}
+
+// Reference parity (sfGeneratedOp): mark a generated function node so DRC skips injection.
+// Reference sets sfGeneratedOp on the symbol in produceSym/symPrototype.
+function markGeneratedOp(fnNode: Node, name: string): void {
+	const sym = makeSymbol(name, SymbolKind.Function, fnNode.nodeType, false);
+	setFlag(sym, SymbolFlag.GeneratedOp);
+	fnNode.resolvedSym = sym;
 }
 
 // Set hook function param/return types to concrete Types.
@@ -775,6 +783,7 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 		setHookParamType(fnNode, 1, paramType);
 	}
 	// trace: param[1] stays void* (callback/env) — reference: getSysType(pointer)
+	markGeneratedOp(fnNode, typeName + suffix);
 	lctx.collector.push(fnNode);
 }
 
@@ -861,6 +870,7 @@ function ensureTypeHooks(typeName: string, lctx: LiftCtx, loc: SourceLocation): 
 	const dupType = classType !== null ? classType : objType;
 	setHookParamType(dupNode, 0, dupType);
 	setHookReturnType(dupNode, dupType);
+	markGeneratedOp(dupNode, typeName + "Dup");
 	lctx.collector.push(dupNode);
 	setAttachedOp(objType, AttachedOp.AttachedDup, typeName + "Dup");
 
@@ -909,6 +919,7 @@ function ensureTypeHooksForType(objType: Type, lctx: LiftCtx, loc: SourceLocatio
 	const dupNode = makeFnDecl(typeName + "Dup", ["src"], [typeName], makeBlock(dupStmts, loc), "", typeName, loc);
 	setHookParamType(dupNode, 0, objType);
 	setHookReturnType(dupNode, objType);
+	markGeneratedOp(dupNode, typeName + "Dup");
 	lctx.collector.push(dupNode);
 	setAttachedOp(objType, AttachedOp.AttachedDup, typeName + "Dup");
 
@@ -976,6 +987,7 @@ function generateEq(typeName: string, objType: Type, lctx: LiftCtx, loc: SourceL
 	const eqFn = makeFnDecl(typeName + "Eq", ["a", "b"], [typeName, typeName], makeBlock(buf, loc), "", "boolean", loc);
 	setHookParamType(eqFn, 0, objType);
 	setHookParamType(eqFn, 1, objType);
+	markGeneratedOp(eqFn, typeName + "Eq");
 	lctx.collector.push(eqFn);
 }
 
@@ -1024,6 +1036,7 @@ function generateTupleEq(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 	const teqFn = makeFnDecl(tupleName + "Eq", ["a", "b"], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc);
 	setHookParamType(teqFn, 0, t);
 	setHookParamType(teqFn, 1, t);
+	markGeneratedOp(teqFn, tupleName + "Eq");
 	lctx.collector.push(teqFn);
 }
 
@@ -1054,6 +1067,7 @@ function generateTupleLt(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 	const tltFn = makeFnDecl(tupleName + "Lt", ["a", "b"], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc);
 	setHookParamType(tltFn, 0, t);
 	setHookParamType(tltFn, 1, t);
+	markGeneratedOp(tltFn, tupleName + "Lt");
 	lctx.collector.push(tltFn);
 }
 
@@ -1080,6 +1094,7 @@ function generateTupleLe(tupleName: string, t: Type, lctx: LiftCtx, loc: SourceL
 	const tleFn = makeFnDecl(tupleName + "Le", ["a", "b"], [tupleName, tupleName], makeBlock(buf, loc), "", "boolean", loc);
 	setHookParamType(tleFn, 0, t);
 	setHookParamType(tleFn, 1, t);
+	markGeneratedOp(tleFn, tupleName + "Le");
 	lctx.collector.push(tleFn);
 }
 
@@ -1156,6 +1171,7 @@ function generateArrayHook(hook: string, seqName: string, elemType: Type, arrayT
 			}
 		}
 	}
+	markGeneratedOp(fnNode, seqName + suffix);
 	if (fnNode.resolvedSym !== null && fnNode.resolvedSym.symbolType !== null) {
 		const symType = fnNode.resolvedSym.symbolType;
 		if (symType.typeChildren !== null) {
