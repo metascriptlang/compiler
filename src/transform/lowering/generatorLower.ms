@@ -25,8 +25,9 @@ import {
 	ExprStmtData, ReturnStmtData,
 	BinaryExprData, UnaryExprData, CallExprData,
 	ConditionalExprData, TryCatchStmtData, YieldExprData,
-	ExportDeclData, ClassDeclData, MethodDeclData, DecoratedDeclData, Type,
+	ExportDeclData, ClassDeclData, MethodDeclData, DecoratedDeclData, Type, TypeKind,
 } from "../../ast/node";
+import { createStruct, isIterator, getIteratorYieldType, getIteratorNextFnType, createPrimitive, hasGenericParams } from "../../checker/types";
 import { TransformContext, NameSet, createNameSet, nameSetContains } from "../context";
 import {
 	makeIdent, makeTypedIdent, makeNull, makeDefaultValue, makeNumber, makeBool,
@@ -56,16 +57,24 @@ export interface StateCollector {
 
 // ===== Helpers =====
 
-function makeIterResult(value: Node, done: boolean, loc: SourceLocation): Node {
-	return makeObjectLiteral(
+function buildIterResultType(returnNodeType: Type): Type {
+	if (returnNodeType === null || !isIterator(returnNodeType)) return null;
+	const yieldType = getIteratorYieldType(returnNodeType);
+	return createStruct("IteratorResult", ["value", "done"], [yieldType, createPrimitive(TypeKind.Boolean)], false);
+}
+
+function makeIterResult(value: Node, done: boolean, loc: SourceLocation, resultType: Type): Node {
+	const obj = makeObjectLiteral(
 		["value", "done"],
 		[value, makeBool(done, loc)],
 		loc,
 	);
+	if (resultType !== null) obj.nodeType = resultType;
+	return obj;
 }
 
-function makeDoneResult(loc: SourceLocation): Node {
-	return makeIterResult(makeNull(loc), true, loc);
+function makeDoneResult(loc: SourceLocation, resultType: Type): Node {
+	return makeIterResult(makeNull(loc), true, loc, resultType);
 }
 
 export function makeStateAssign(stateNum: number, loc: SourceLocation): Node {
@@ -83,10 +92,8 @@ export function allocState(sc: StateCollector): number {
 }
 
 function isGeneratorFlag(flags: string): boolean {
-	return match (flags) {
-		"generator" | "async_generator" => true,
-		_ => false,
-	};
+	if (flags === "generator" || flags === "async_generator") return true;
+	return flags.indexOf("generator") >= 0;
 }
 
 // ===== Yield Detection =====
@@ -136,10 +143,18 @@ export function containsYield(node: Node): boolean {
 	};
 }
 
+// Emit yield: transition to next state + return IteratorResult.
+function emitYield(sc: StateCollector, currentState: number, nextSt: number, yieldArg: Node, loc: SourceLocation, resultType: Type): void {
+	sc.items[currentState].stmts.push(makeStateAssign(nextSt, loc));
+	sc.items[currentState].stmts.push(makeReturn(makeIterResult(yieldArg, false, loc, resultType), loc));
+	sc.items[currentState].isYield = true;
+	sc.items[currentState].nextState = nextSt;
+}
+
 // ===== State Splitting =====
 // Split a linear sequence of statements at yield points.
 
-export function splitStmts(stmts: Node[], sc: StateCollector, startState: number, exitState: number, loc: SourceLocation): void {
+export function splitStmts(stmts: Node[], sc: StateCollector, startState: number, exitState: number, loc: SourceLocation, resultType: Type): void {
 	let currentState = startState;
 	let i = 0;
 	while (i < stmts.length) {
@@ -153,12 +168,7 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 				// yield expr; → emit return { value: expr, done: false }, transition
 				const yd = ed.expr.data as YieldExprData;
 				const nextSt = (i + 1 < stmts.length) ? allocState(sc) : exitState;
-				sc.items[currentState].stmts.push(makeStateAssign(nextSt, loc));
-				sc.items[currentState].stmts.push(
-					makeReturn(makeIterResult(yd.yieldArg, false, loc), loc),
-				);
-				sc.items[currentState].isYield = true;
-				sc.items[currentState].nextState = nextSt;
+				emitYield(sc, currentState, nextSt, yd.yieldArg, loc, resultType);
 				if (i + 1 < stmts.length) {
 					currentState = nextSt;
 				}
@@ -174,12 +184,7 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 				// const x = yield expr; → yield, then assign on resume
 				const yd = vd.initializer.data as YieldExprData;
 				const nextSt = (i + 1 < stmts.length) ? allocState(sc) : exitState;
-				sc.items[currentState].stmts.push(makeStateAssign(nextSt, loc));
-				sc.items[currentState].stmts.push(
-					makeReturn(makeIterResult(yd.yieldArg, false, loc), loc),
-				);
-				sc.items[currentState].isYield = true;
-				sc.items[currentState].nextState = nextSt;
+				emitYield(sc, currentState, nextSt, yd.yieldArg, loc, resultType);
 				sc.items[currentState].yieldVarName = vd.declName;
 				sc.items[currentState].yieldVarType = stmt.nodeType;
 				// On resume: convert decl to assignment (var is lifted)
@@ -206,12 +211,12 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 			const condState = allocState(sc);
 			sc.items[currentState].stmts.push(makeStateAssign(condState, loc));
 			const afterSt = (i + 1 < stmts.length) ? allocState(sc) : exitState;
-			splitWhile(stmt, sc, condState, afterSt, loc);
+			splitWhile(stmt, sc, condState, afterSt, loc, resultType);
 			currentState = afterSt;
 			i += 1;
 		} else if (stmt.kind === NodeKind.IfStmt) {
 			const afterSt = (i + 1 < stmts.length) ? allocState(sc) : exitState;
-			splitIf(stmt, sc, currentState, afterSt, loc);
+			splitIf(stmt, sc, currentState, afterSt, loc, resultType);
 			currentState = afterSt;
 			i += 1;
 		} else {
@@ -229,7 +234,7 @@ export function splitStmts(stmts: Node[], sc: StateCollector, startState: number
 // Split while loop containing yield into states:
 // condState: if (cond) { $state = bodyStart } else { $state = exitState }
 // bodyStates: ... (recursive split, last transitions back to condState)
-function splitWhile(node: Node, sc: StateCollector, currentState: number, exitState: number, loc: SourceLocation): void {
+function splitWhile(node: Node, sc: StateCollector, currentState: number, exitState: number, loc: SourceLocation, resultType: Type): void {
 	const wd = node.data as WhileStmtData;
 
 	// Condition state = currentState (reuse, already allocated)
@@ -250,14 +255,14 @@ function splitWhile(node: Node, sc: StateCollector, currentState: number, exitSt
 
 	// Split body statements, looping back to condState
 	const bodyStmts = extractBodyStmts(wd.whileBody);
-	splitStmts(bodyStmts, sc, bodyStart, condState, loc);
+	splitStmts(bodyStmts, sc, bodyStart, condState, loc, resultType);
 }
 
 // Split if-else containing yield:
 // currentState: if (cond) { $state = thenStart } else { $state = elseStart }
 // thenStates: ... → joinState
 // elseStates: ... → joinState
-function splitIf(node: Node, sc: StateCollector, currentState: number, joinState: number, loc: SourceLocation): void {
+function splitIf(node: Node, sc: StateCollector, currentState: number, joinState: number, loc: SourceLocation, resultType: Type): void {
 	const id = node.data as IfStmtData;
 
 	const thenStart = allocState(sc);
@@ -274,9 +279,9 @@ function splitIf(node: Node, sc: StateCollector, currentState: number, joinState
 			),
 		);
 		const thenStmts = extractBodyStmts(id.consequent);
-		splitStmts(thenStmts, sc, thenStart, joinState, loc);
+		splitStmts(thenStmts, sc, thenStart, joinState, loc, resultType);
 		const elseStmts = extractBodyStmts(id.alternate);
-		splitStmts(elseStmts, sc, elseStart, joinState, loc);
+		splitStmts(elseStmts, sc, elseStart, joinState, loc, resultType);
 	} else {
 		// Only then branch has yield (or no else)
 		sc.items[currentState].stmts.push(
@@ -288,7 +293,7 @@ function splitIf(node: Node, sc: StateCollector, currentState: number, joinState
 			),
 		);
 		const thenStmts = extractBodyStmts(id.consequent);
-		splitStmts(thenStmts, sc, thenStart, joinState, loc);
+		splitStmts(thenStmts, sc, thenStart, joinState, loc, resultType);
 		// Else branch (no yield) goes directly into joinState
 		if (hasElse) {
 			const elseStmts = extractBodyStmts(id.alternate);
@@ -302,7 +307,7 @@ function splitIf(node: Node, sc: StateCollector, currentState: number, joinState
 // ===== Return Rewriting =====
 // Rewrite return stmts in generator body: return val → $state = -1; return { value: val, done: true }
 
-function rewriteReturns(stmts: Node[], loc: SourceLocation): void {
+function rewriteReturns(stmts: Node[], loc: SourceLocation, resultType: Type): void {
 	for (let i = 0; i < stmts.length; i += 1) {
 		const stmt = stmts[i];
 		if (stmt.kind === NodeKind.ReturnStmt) {
@@ -310,7 +315,7 @@ function rewriteReturns(stmts: Node[], loc: SourceLocation): void {
 			// Replace with block: { $state = -1; return { value: val, done: true }; }
 			const block = makeBlock([
 				makeStateAssign(-1, loc),
-				makeReturn(makeIterResult(rd.argument, true, loc), loc),
+				makeReturn(makeIterResult(rd.argument, true, loc, resultType), loc),
 			], loc);
 			stmts[i] = block;
 		}
@@ -339,9 +344,9 @@ export function convertDeclsToAssigns(stmts: Node[], liftedNames: NameSet, loc: 
 
 // ===== State Machine Builder =====
 
-function buildStateDispatch(sc: StateCollector, loc: SourceLocation): Node {
+function buildStateDispatch(sc: StateCollector, loc: SourceLocation, resultType: Type): Node {
 	// Default (terminal) state: return { value: null, done: true }
-	let current: Node = makeBlock([makeReturn(makeDoneResult(loc), loc)], loc);
+	let current: Node = makeBlock([makeReturn(makeDoneResult(loc, resultType), loc)], loc);
 
 	// Build if-else chain from last state to first
 	for (let i = sc.items.length - 1; i >= 0; i -= 1) {
@@ -358,7 +363,7 @@ function buildStateDispatch(sc: StateCollector, loc: SourceLocation): Node {
 
 // ===== Generator Function Transform =====
 
-function transformGeneratorFn(params: string[], paramTypes: string[], body: Node, flags: string, returnType: string, loc: SourceLocation): Node {
+function transformGeneratorFn(params: string[], paramTypes: string[], body: Node, flags: string, returnType: string, returnNodeType: Type, loc: SourceLocation): Node {
 	// 1. Collect all local variable names
 	const nc: NameSet = createNameSet();
 	collectDeclNames(body, nc, false);
@@ -366,23 +371,26 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	// 2. Extract body statements
 	const bodyStmts = extractBodyStmts(body);
 
+	// Build IteratorResult<T> type for stamping yield/return literals
+	const iterResultType = buildIterResultType(returnNodeType);
+
 	// 3. Rewrite return statements
-	rewriteReturns(bodyStmts, loc);
+	rewriteReturns(bodyStmts, loc, iterResultType);
 
 	// 4. Split at yield points
 	const sc: StateCollector = { items: [] };
 	const initState = allocState(sc);
 	const doneState = -1;  // terminal
 
-	splitStmts(bodyStmts, sc, initState, doneState, loc);
+	splitStmts(bodyStmts, sc, initState, doneState, loc, iterResultType);
 
 	// 5. Convert variable declarations to assignments in all state bodies
-	for (let si = 0; si < sc.items.length; si += 1) {
-		convertDeclsToAssigns(sc.items[si].stmts, nc, loc);
+	for (const st of sc.items) {
+		convertDeclsToAssigns(st.stmts, nc, loc);
 	}
 
 	// 6. Build the state dispatch (if-else chain)
-	const dispatch = buildStateDispatch(sc, loc);
+	const dispatch = buildStateDispatch(sc, loc, iterResultType);
 
 	// 7. Wrap in while(true) { dispatch }
 	const loop = makeWhile(makeBool(true, loc), dispatch, loc);
@@ -390,7 +398,9 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 	// 8. Build next() function body
 	const nextBody = makeBlock([loop], loc);
 
-	// 9. Create next FunctionExpr
+	// 9. Create next FunctionExpr with proper return type (IteratorResult<T>)
+	// Lambda lifting uses nodeType to determine the lifted function's return type.
+	const nextFnType = getIteratorNextFnType(returnNodeType);
 	const nextFn = createNode(NodeKind.FunctionExpr, {
 		funcExprParams: [],
 		funcExprParamTypes: [],
@@ -398,9 +408,14 @@ function transformGeneratorFn(params: string[], paramTypes: string[], body: Node
 		funcExprFlags: "",
 		funcExprReturnType: "",
 	}, syntheticToken(loc));
+	if (nextFnType !== null) nextFn.nodeType = nextFnType;
 
 	// 10. Build iterator object: { next: function() { ... } }
+	// Set nodeType to Iterator so C codegen emits the named struct, not anonymous.
 	const iterObj = makeObjectLiteral(["next"], [nextFn], loc);
+	if (returnNodeType !== null && isIterator(returnNodeType)) {
+		iterObj.nodeType = returnNodeType;
+	}
 
 	// 11. Build new function body:
 	//   let $state = 0;
@@ -432,11 +447,19 @@ function walkGenerators(node: Node): void {
 			const d = node.data as FunctionDeclData;
 			walkGenerators(d.fnBody);
 			if (isGeneratorFlag(d.fnFlags)) {
-				d.fnBody = transformGeneratorFn(
-					d.params, d.fnParamTypes, d.fnBody,
-					d.fnFlags, d.fnReturnType, node.location,
-				);
-				d.fnFlags = "";
+				// Skip generic templates — only monomorphized instances should be lowered.
+				// Generic templates have unresolved type params that produce void in C.
+				const fnType = node.resolvedSym !== null ? node.resolvedSym.symbolType : null;
+				if (fnType !== null && hasGenericParams(fnType)) {
+					// Keep generator flag so monomorphized instances still get lowered
+				} else {
+					const retType = fnType !== null ? fnType.typeReturn : null;
+					d.fnBody = transformGeneratorFn(
+						d.params, d.fnParamTypes, d.fnBody,
+						d.fnFlags, d.fnReturnType, retType, node.location,
+					);
+					d.fnFlags = "";
+				}
 			}
 		},
 		NodeKind.ExportDecl => {
@@ -471,7 +494,7 @@ function walkCheckFuncExpr(node: Node): void {
 		if (isGeneratorFlag(d.funcExprFlags)) {
 			d.funcExprBody = transformGeneratorFn(
 				d.funcExprParams, d.funcExprParamTypes, d.funcExprBody,
-				d.funcExprFlags, d.funcExprReturnType, node.location,
+				d.funcExprFlags, d.funcExprReturnType, node.nodeType !== null ? node.nodeType.typeReturn : null, node.location,
 			);
 			d.funcExprFlags = "";
 		}

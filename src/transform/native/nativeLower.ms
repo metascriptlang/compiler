@@ -72,7 +72,7 @@ function rewriteCStringConv(node: Node): Node {
 	// Only rewrite string → cstring (not cstring → cstring identity)
 	if (d.convExpr.nodeType !== null && d.convExpr.nodeType.kind === TypeKind.CString) return node;
 	const loc = node.location;
-	const result = makeCall(makeIdent("msCStr", loc), [d.convExpr], loc);
+	const result = makeCall(makeIdent("msStringToCString", loc), [d.convExpr], loc);
 	result.nodeType = d.convType;
 	return result;
 }

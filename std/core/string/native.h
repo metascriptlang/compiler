@@ -81,8 +81,8 @@ static inline bool msStringIsAscii(msString s) {
 
 /* ===== Inline Helpers ===== */
 
-/* Get C string from msString (always null-terminated or "") */
-static inline const char* msCStr(msString s) {
+/* string → cstring conversion (always null-terminated or "") */
+static inline const char* msStringToCString(msString s) {
 	if (s.p == NULL) return "";
 	return s.p->data;
 }

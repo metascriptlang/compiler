@@ -28,11 +28,11 @@ export function parseStatement(state: ParserState): NodeResult {
 	// Async function declaration — before match to avoid try-in-match-arm limitation
 	if (token.kind === TokenKind.Async) {
 		if (peek(state, 1).kind === TokenKind.Function) {
-			const res = try parseFunctionDecl(state);
-			return Result.ok(attachComments(state, res));
+			const asyncFn = try parseFunctionDecl(state);
+			return Result.ok(attachComments(state, asyncFn));
 		}
-		const res = try parseExprStmt(state);
-		return Result.ok(attachComments(state, res));
+		const asyncExpr = try parseExprStmt(state);
+		return Result.ok(attachComments(state, asyncExpr));
 	}
 
 	// @comptime { ... } — intercept before decorator loop

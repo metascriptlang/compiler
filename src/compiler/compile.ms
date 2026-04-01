@@ -276,9 +276,38 @@ interface ProcessedModule {
 	modPath: string;
 }
 
+// Build state for C compilation: flags + include path registry.
+interface CBuildState {
+	allFlags: string;
+	allLinkFlags: string;
+	includePaths: Set<string>;
+}
+
+function initCBuildState(opts: CliOptions): CBuildState {
+	let allFlags = cliCompileFlags(opts);
+	const includePaths: Set<string> = new Set<string>();
+	// Always register compiler root (std lib @compile paths resolve here).
+	const compilerRoot = resolveRuntimeDir();
+	if (compilerRoot !== "") {
+		includePaths.add(compilerRoot);
+		allFlags = appendFlag(allFlags, `-I${compilerRoot}`);
+	}
+	return { allFlags, allLinkFlags: "", includePaths };
+}
+
+// Register -I/-iquote paths from a module's compiler flags into the include path set.
+function registerIncludePaths(flags: string, paths: Set<string>): void {
+	if (flags === "") return;
+	const parts = flags.split(" ");
+	for (const p of parts) {
+		if (p.length > 2 && p.slice(0, 2) === "-I") paths.add(p.slice(2, p.length));
+		else if (p.length > 7 && p.slice(0, 7) === "-iquote") paths.add(p.slice(7, p.length));
+	}
+}
+
 // Process @compile("foo.c") directives: compile each .c file to .o relative to module dir.
 // Returns space-separated .o file paths to add to the link list.
-function processCompileDirectives(directives: string, moduleDir: string, allFlags: string, mode: number, ccOption: number, ccBinary: string, verbose: boolean): string {
+function processCompileDirectives(directives: string, moduleDir: string, includePaths: Set<string>, allFlags: string, mode: number, ccOption: number, ccBinary: string, verbose: boolean): string {
 	if (directives === "") return "";
 	let oFiles = "";
 	let start = 0;
@@ -300,13 +329,17 @@ function processCompileDirectives(directives: string, moduleDir: string, allFlag
 					cPath = entry.slice(0, tabPos);
 					customFlags = entry.slice(tabPos + 1, entry.length);
 				}
-				// ./ prefix: resolve relative to the declaring module's directory.
-				// Otherwise: resolve as project-root-relative (matches @include behavior).
+				// ./ or ../ prefix: resolve relative to the declaring module's directory.
+				// Bare paths: try CWD, then search registered include paths.
 				let fullPath = cPath;
-				if (cPath.slice(0, 2) === "./") {
+				if (cPath.slice(0, 2) === "./" || cPath.slice(0, 3) === "../") {
 					fullPath = `${moduleDir}/${cPath}`;
+				} else if (!fileExists(fullPath)) {
+					for (const dir of includePaths) {
+						const candidate = `${dir}/${cPath}`;
+						if (fileExists(candidate)) { fullPath = candidate; break; }
+					}
 				}
-				// Early file existence check (reference-aligned: checks in processCompile)
 				if (!fileExists(fullPath)) {
 					console.log(`${error("error")}: @compile cannot find: ${fullPath}`);
 					exit(1);
@@ -543,8 +576,10 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	const transformedPaths: string[] = [];
 	let hasUserMain = false;
 	let mainRetType = "void";
-	let allFlags = cliCompileFlags(opts);
-	let allLinkFlags = "";  // @link/@passL — only passed at link step, not per-module compile
+	const bs = initCBuildState(opts);
+	let allFlags = bs.allFlags;
+	const includePaths = bs.includePaths;
+	let allLinkFlags = bs.allLinkFlags;
 	let oFiles = "";
 	let totalCheckerErrors = 0;
 
@@ -622,6 +657,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		// Accumulate compiler flags (@passC) and link flags (@link/@passL) separately
 		allFlags = appendFlag(allFlags, ctx.compilerFlags);
 		allLinkFlags = appendFlag(allLinkFlags, ctx.linkFlags);
+		registerIncludePaths(ctx.compilerFlags, includePaths);
 
 		// Check for user main() in entry module
 		if (modPath === entryPath && ctx !== null && ctx.table !== null) {
@@ -659,7 +695,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 
 	// Compile prelude @compile directives — unconditional (reference-aligned: all @compile are always built)
 	if (graphPreludeCtx !== null && graphPreludeCtx.compileDirectives !== "") {
-		const preludeObjs = processCompileDirectives(graphPreludeCtx.compileDirectives, ".", allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose);
+		const preludeObjs = processCompileDirectives(graphPreludeCtx.compileDirectives, ".", includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose);
 		oFiles = appendFlag(oFiles, preludeObjs);
 	}
 
@@ -679,7 +715,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		codegenTime = codegenTime + (clockMs() - tCg);
 
 		// Process @compile("foo.c") directives
-		const compileObjs = processCompileDirectives(p.ctx.compileDirectives, dirName(p.modPath), allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose);
+		const compileObjs = processCompileDirectives(p.ctx.compileDirectives, dirName(p.modPath), includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose);
 		oFiles = appendFlag(oFiles, compileObjs);
 
 		if (opts.emitC) {
@@ -801,8 +837,10 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	const processed: ProcessedModule[] = [];
 	const transformedPrograms: Node[] = [];
 	const transformedPaths: string[] = [];
-	let allFlags = cliCompileFlags(opts);
-	let allLinkFlags = "";  // @link/@passL — only passed at link step
+	const bs = initCBuildState(opts);
+	let allFlags = bs.allFlags;
+	const includePaths = bs.includePaths;
+	let allLinkFlags = bs.allLinkFlags;
 	let oFiles = "";
 
 	// Reference parity: global hook ownership registry shared across all modules.
@@ -855,6 +893,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 
 		allFlags = appendFlag(allFlags, ctx.compilerFlags);
 		allLinkFlags = appendFlag(allLinkFlags, ctx.linkFlags);
+		registerIncludePaths(ctx.compilerFlags, includePaths);
 	}
 
 	// Phase B: Compute DCE alive set on post-transform ASTs (reference-aligned)
@@ -863,7 +902,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 
 	// Compile prelude @compile directives — unconditional (reference-aligned: all @compile are always built)
 	if (graphPreludeCtx !== null && graphPreludeCtx.compileDirectives !== "") {
-		const preludeObjs = processCompileDirectives(graphPreludeCtx.compileDirectives, ".", allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose);
+		const preludeObjs = processCompileDirectives(graphPreludeCtx.compileDirectives, ".", includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose);
 		oFiles = appendFlag(oFiles, preludeObjs);
 	}
 
@@ -875,7 +914,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 
 		const cCode = generateCModule(p.program, p.ctx, p.modPath, aliveSet, true, opts.isHcr);
 
-		const compileObjs = processCompileDirectives(p.ctx.compileDirectives, dirName(p.modPath), allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose);
+		const compileObjs = processCompileDirectives(p.ctx.compileDirectives, dirName(p.modPath), includePaths, allFlags, opts.mode, opts.ccCompiler, opts.ccBinary, opts.verbose);
 		oFiles = appendFlag(oFiles, compileObjs);
 
 		let testModFlags = appendFlag(allFlags, `-iquote${dirName(p.modPath)}`);

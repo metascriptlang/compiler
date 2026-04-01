@@ -146,7 +146,7 @@ static inline msString msProcessCwd(void) {
  * Read entire file as string. Returns empty string on failure.
  */
 static inline msString msProcessReadFile(msString path) {
-	const char* cpath = msCStr(path);
+	const char* cpath = msStringToCString(path);
 	FILE* f = fopen(cpath, "rb");
 	if (!f) return MS_EMPTY_STRING;
 	fseek(f, 0, SEEK_END);
@@ -167,7 +167,7 @@ static inline msString msProcessReadFile(msString path) {
  * Check if file exists (can be opened for reading).
  */
 static inline double msProcessFileExists(msString path) {
-	const char* cpath = msCStr(path);
+	const char* cpath = msStringToCString(path);
 	FILE* f = fopen(cpath, "r");
 	if (!f) return 0.0;
 	fclose(f);
@@ -178,7 +178,7 @@ static inline double msProcessFileExists(msString path) {
  * Execute a shell command. Returns the exit code.
  */
 static inline double msProcessExec(msString command) {
-	const char* cmd = msCStr(command);
+	const char* cmd = msStringToCString(command);
 	int status = system(cmd);
 #if defined(__APPLE__) || defined(__linux__)
 	if (WIFEXITED(status)) return (double)WEXITSTATUS(status);
@@ -192,10 +192,10 @@ static inline double msProcessExec(msString command) {
  * Write string to file. Returns 1.0 on success, 0.0 on failure.
  */
 static inline double msProcessWriteFile(msString path, msString content) {
-	const char* cpath = msCStr(path);
+	const char* cpath = msStringToCString(path);
 	FILE* f = fopen(cpath, "wb");
 	if (!f) return 0.0;
-	const char* data = msCStr(content);
+	const char* data = msStringToCString(content);
 	size_t len = content.len;
 	size_t written = fwrite(data, 1, len, f);
 	fclose(f);
@@ -210,7 +210,7 @@ static inline double msProcessWriteFile(msString path, msString content) {
  * Get environment variable value. Returns empty string if not set.
  */
 static inline msString msProcessGetEnv(msString name) {
-	const char* cname = msCStr(name);
+	const char* cname = msStringToCString(name);
 	const char* val = getenv(cname);
 	if (!val) return MS_EMPTY_STRING;
 	return msStringFromCStr(val);

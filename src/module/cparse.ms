@@ -9,18 +9,40 @@
 function cTypeToMs(cType: string): string {
 	const t = cType.trim();
 	return match (t) {
-		"msString" | "const char*" | "char*" => "string",
+		// String types
+		"msString" => "string",
+		"const char*" | "char*" | "const char *" | "char *" => "cstring",
+		// Fixed-width integers (from stdint.h)
+		"int8_t" | "signed char" => "int8",
+		"int16_t" | "short" | "short int" => "int16",
 		"int32_t" | "int" => "int32",
-		"int64_t" | "long long" => "int64",
+		"int64_t" | "long long" | "long long int" => "int64",
 		"uint8_t" | "unsigned char" => "uint8",
-		"uint16_t" => "uint16",
-		"uint32_t" | "unsigned int" => "uint32",
-		"uint64_t" => "uint64",
-		"double" | "size_t" => "number",
+		"uint16_t" | "unsigned short" | "unsigned short int" => "uint16",
+		"uint32_t" | "unsigned int" | "unsigned" => "uint32",
+		"uint64_t" | "unsigned long long" | "unsigned long long int" => "uint64",
+		// Platform-dependent integers — resolved at parse time (macOS/Linux = 64-bit)
+		"long" | "long int" => "int64",
+		"unsigned long" | "unsigned long int" => "uint64",
+		"size_t" => "uint64",
+		"ssize_t" => "int64",
+		// Floats
 		"float" => "float32",
+		"double" => "number",
+		// Other primitives
 		"void" => "void",
-		"bool" | "_Bool" => "boolean",
-		_ when (t.endsWith("*")) => "int64",
+		"bool" | "_Bool" | "msBool" | "MS_BOOL" => "boolean",
+		"char" => "uint8",
+		// Pointers
+		_ when (t.endsWith("*")) => {
+			// Extract base type: "FILE*" → "FILE", "const void *" → "const void"
+			let base = t.slice(0, t.length - 1).trim();
+			if (base.startsWith("const ")) base = base.slice(6, base.length).trim();
+			// void* / const void* → unknown (opaque handle, Nim: pointer)
+			if (base === "void") return "unknown";
+			// Typed pointers: FILE* → Ptr<FILE>, WGPUDevice* → Ptr<WGPUDevice>
+			return `Ptr<${base}>`;
+		},
 		_ => t,
 	};
 }

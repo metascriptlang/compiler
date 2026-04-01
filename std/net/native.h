@@ -117,7 +117,7 @@ static inline int32_t msNetBind(int32_t fd, msString addr, int32_t port) {
 	sa.sin_family = AF_INET;
 	sa.sin_port = htons((uint16_t)port);
 
-	const char* addr_str = msCStr(addr);
+	const char* addr_str = msStringToCString(addr);
 	if (strcmp(addr_str, "0.0.0.0") == 0) {
 		sa.sin_addr.s_addr = INADDR_ANY;
 	} else {
@@ -144,7 +144,7 @@ static inline int32_t msNetBindShared(int32_t fd, msString addr, int32_t port) {
 	sa.sin_family = AF_INET;
 	sa.sin_port = htons((uint16_t)port);
 
-	const char* addr_str = msCStr(addr);
+	const char* addr_str = msStringToCString(addr);
 	if (strcmp(addr_str, "0.0.0.0") == 0) {
 		sa.sin_addr.s_addr = INADDR_ANY;
 	} else {
@@ -184,7 +184,7 @@ static inline int32_t msNetAccept(int32_t fd) {
  * Returns 0 on success, -1 on error.
  */
 static inline int32_t msNetConnect(int32_t fd, msString host, int32_t port) {
-	const char* host_str = msCStr(host);
+	const char* host_str = msStringToCString(host);
 	char port_str[8];
 	snprintf(port_str, sizeof(port_str), "%d", port);
 
@@ -214,7 +214,7 @@ static inline int32_t msNetConnect(int32_t fd, msString host, int32_t port) {
  * Returns total bytes sent on success, -1 on error.
  */
 static inline int32_t msNetSend(int32_t fd, msString data) {
-	const char* buf = msCStr(data);
+	const char* buf = msStringToCString(data);
 	int32_t total = 0;
 	int32_t len = (int32_t)data.len;
 	while (total < len) {

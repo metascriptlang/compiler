@@ -7,17 +7,21 @@
 //
 // Arrays passed by pointer — bare T[] types (wrappers removed).
 
-import { Node, NodeKind, SourceLocation, makeLoc, ExprStmtData, CallExprData, IdentifierData } from "../ast/node";
+import { Node, NodeKind, SourceLocation, makeLoc, ExprStmtData, CallExprData, IdentifierData, Symbol } from "../ast/node";
 import { RcInfo, RcKind, noRcInfo } from "./classify";
 import { CursorSet, createCursorSet } from "./cursors";
 import { CfgCache, createCfgCache } from "./cfg";
 import { TransformContext, NameSet, freshTemp, createTransformContext, createNameSet } from "../transform/context";
 import { makeExprStmt, makeNull } from "../transform/util";
 
+// Null symbol constant — used when DRC-generated temps have no checker symbol.
+export const noSym: Symbol = null as unknown as Symbol;
+
 // ===== Variable Info =====
 
 export interface VarInfo {
 	varName: string;
+	sym: Symbol;          // resolved symbol — used by codegen for unique naming
 	rcInfo: RcInfo;
 	isCursor: boolean;    // borrowed ref — never destroyed
 	isInitialized: boolean; // first-write optimization: skip destroy on first assignment
@@ -113,18 +117,18 @@ export function scopeDepth(dctx: DrcContext): number {
 
 // ===== Variable Registration =====
 
-export function registerVar(dctx: DrcContext, varName: string, rcInfo: RcInfo, isCursor: boolean): void {
+export function registerVar(dctx: DrcContext, varName: string, rcInfo: RcInfo, isCursor: boolean, sym: Symbol): void {
 	if (isCursor) {
 		// Cursors are borrowed — never cleaned up, but MUST be registered so
 		// field accesses (d.field) are recognized as borrows by isLastReadFieldSafe.
 		const scope = currentScope(dctx);
-		const info: VarInfo = { varName, rcInfo, isCursor: true, isInitialized: true };
+		const info: VarInfo = { varName, sym, rcInfo, isCursor: true, isInitialized: true };
 		scope.varsToCleanup.push(info);
 		return;
 	}
 	if (!rcInfo.needsCleanup) return;
 	const scope = currentScope(dctx);
-	const info: VarInfo = { varName, rcInfo, isCursor: false, isInitialized: true };
+	const info: VarInfo = { varName, sym, rcInfo, isCursor: false, isInitialized: true };
 	scope.varsToCleanup.push(info);
 }
 
@@ -363,7 +367,7 @@ test "register RC var" {
 	const dctx = testDrcCtx();
 	pushScope(dctx, false, true);
 	const rcInfo = testStringRc();
-	registerVar(dctx, "s", rcInfo, false);
+	registerVar(dctx, "s", rcInfo, false, noSym);
 	assert currentScope(dctx).varsToCleanup.length === 1;
 	assert currentScope(dctx).varsToCleanup[0].varName === "s";
 	popScope(dctx);
@@ -373,7 +377,7 @@ test "skip non-cleanup type" {
 	const dctx = testDrcCtx();
 	pushScope(dctx, false, true);
 	const info = noRcInfo();
-	registerVar(dctx, "x", info, false);
+	registerVar(dctx, "x", info, false, noSym);
 	assert currentScope(dctx).varsToCleanup.length === 0;
 	popScope(dctx);
 }
@@ -382,7 +386,7 @@ test "skip cursor" {
 	const dctx = testDrcCtx();
 	pushScope(dctx, false, true);
 	const rcInfo = testStringRc();
-	registerVar(dctx, "s", rcInfo, true);
+	registerVar(dctx, "s", rcInfo, true, noSym);
 	// Cursor IS registered (for findVarInfoInContext visibility) but marked isCursor=true.
 	// generateCleanup skips cursor vars, so no destroy/wasMoved is emitted.
 	assert currentScope(dctx).varsToCleanup.length === 1;
@@ -433,7 +437,7 @@ test "findVarInfo found" {
 	const dctx = testDrcCtx();
 	pushScope(dctx, false, true);
 	const rcInfo = testMinimalRc();
-	registerVar(dctx, "s", rcInfo, false);
+	registerVar(dctx, "s", rcInfo, false, noSym);
 	const vi = findVarInfo(currentScope(dctx), "s");
 	assert vi !== null;
 	assert vi.varName === "s";
@@ -452,7 +456,7 @@ test "findVarInfoInContext searches outer scopes" {
 	const dctx = testDrcCtx();
 	pushScope(dctx, false, true);
 	const rcInfo = testMinimalRc();
-	registerVar(dctx, "outer", rcInfo, false);
+	registerVar(dctx, "outer", rcInfo, false, noSym);
 	pushScope(dctx, false, false);
 	const vi = findVarInfoInContext(dctx, "outer");
 	assert vi !== null;

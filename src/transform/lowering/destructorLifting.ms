@@ -590,13 +590,13 @@ function getUserDefinedHookSym(typeName: string, hook: string, lctx: LiftCtx): S
 
 // ===== Union variant arm generation (if/else chain on _tag) =====
 
-function generateUnionArms(hook: string, objType: Type, p1: string, p2: string, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
+function generateUnionArms(hook: string, typeName: string, objType: Type, p1: string, p2: string, lctx: LiftCtx, buf: NodeBuf, loc: SourceLocation): void {
 	const isUnary = hook === "destroy" || hook === "wasMoved" || hook === "trace";
 
 	// reference parity: sink must destroy old variant BEFORE reassigning _tag
 	if (hook === "sink") {
 		// 1. Destroy old fields (dispatch on dest._tag)
-		const destroyChain = buildVariantChain("destroy", objType, p1, p1, true, lctx, loc);
+		const destroyChain = buildVariantDispatch("destroy", typeName, objType, p1, p1, true, lctx, loc);
 		if (destroyChain !== null) buf.items.push(destroyChain);
 		// 2. Assign _tag
 		buf.items.push(makeExprStmt(makeAssign(makeMember(makeIdent(p1, loc), "_tag", loc), makeMember(makeIdent(p2, loc), "_tag", loc), loc), loc));
@@ -611,13 +611,93 @@ function generateUnionArms(hook: string, objType: Type, p1: string, p2: string, 
 		buf.items.push(makeExprStmt(makeAssign(makeMember(makeIdent(p1, loc), "_tag", loc), makeMember(makeIdent(p2, loc), "_tag", loc), loc), loc));
 	}
 
-	// Build if/else chain dispatching on _tag
-	const chain = buildVariantChain(hook, objType, p1, p2, isUnary, lctx, loc);
+	// Build if/else chain dispatching on _tag via per-variant helpers
+	const chain = buildVariantDispatch(hook, typeName, objType, p1, p2, isUnary, lctx, loc);
 	if (chain !== null) buf.items.push(chain);
 
 	// For wasMoved: set _tag = -1 after dispatch
 	if (hook === "wasMoved") {
 		buf.items.push(makeExprStmt(makeAssign(makeMember(makeIdent(p1, loc), "_tag", loc), makeNumber(-1, loc), loc), loc));
+	}
+}
+
+// Build if/else chain that dispatches to per-variant helper functions.
+// Each variant's arm logic is extracted into its own function to keep stack frames small.
+// (Without this, the monolithic function hoists ALL variants' locals → stack overflow at -O0)
+function buildVariantDispatch(hook: string, typeName: string, objType: Type, p1: string, p2: string, isUnary: boolean, lctx: LiftCtx, loc: SourceLocation): Node {
+	let chain = null as unknown as Node;
+	let vi = objType.typeChildren.length - 1;
+	while (vi >= 0) {
+		const variant = objType.typeChildren[vi];
+		if (variant !== null && variant.typeNames !== null) {
+			// Generate per-variant arm body
+			const armBuf = newBuf();
+			const vName = "v" + vi.toString();
+			buildVariantArmBody(hook, objType, p1, p2, vi, vName, variant, isUnary, lctx, armBuf, loc);
+
+			if (armBuf.items.length > 0) {
+				// Generate helper function: TypeName_vN_Suffix(self) or TypeName_vN_Suffix(dest, src)
+				const suffix = hookSuffix(hook);
+				const helperName = `${typeName}_${vName}${suffix}`;
+				let helperFn: Node = null as unknown as Node;
+				if (isUnary) {
+					helperFn = makeFnDecl(helperName, [p1], [typeName], makeBlock(armBuf.items, loc), "", "void", loc);
+				} else {
+					helperFn = makeFnDecl(helperName, [p1, p2], [typeName, typeName], makeBlock(armBuf.items, loc), "", "void", loc);
+				}
+				const paramType = createVar(objType);
+				setHookParamType(helperFn, 0, paramType);
+				if (!isUnary) setHookParamType(helperFn, 1, paramType);
+				markGeneratedOp(helperFn, helperName);
+				lctx.collector.push(helperFn);
+
+				// Dispatch: call the helper from the main if/else chain
+				const tagAccess = makeMember(makeIdent(p1, loc), "_tag", loc);
+				const cond = makeBinary(tagAccess, "===", makeNumber(vi, loc), loc);
+				const callArgs: Node[] = isUnary
+					? [makeIdent(p1, loc)]
+					: [makeIdent(p1, loc), makeIdent(p2, loc)];
+				const callStmt = makeExprStmt(makeCall(makeIdent(helperName, loc), callArgs, loc), loc);
+				chain = makeIf(cond, makeBlock([callStmt], loc), chain !== null ? chain : makeNull(loc), loc);
+			}
+		}
+		vi -= 1;
+	}
+	return chain;
+}
+
+// Generate the body of a single variant's arm (used by both inline and helper patterns)
+function buildVariantArmBody(hook: string, objType: Type, p1: string, p2: string, vi: number, vName: string, variant: Type, isUnary: boolean, lctx: LiftCtx, armBuf: NodeBuf, loc: SourceLocation): void {
+	if (hook === "destroy") {
+		let fi = variant.typeNames.length - 1;
+		while (fi >= 0) {
+			const xBase = makeMember(makeIdent(p1, loc), vName, loc);
+			const yBase = makeMember(makeIdent(p1, loc), vName, loc);
+			const visited: NameSet = createNameSet();
+			fillBody(hook, xBase, yBase, variant.typeNames[fi], variant.typeChildren[fi], lctx, armBuf, visited, loc);
+			fi -= 1;
+		}
+	} else if (hook === "sinkAssign") {
+		let fi = 0;
+		while (fi < variant.typeNames.length) {
+			const xBase = makeMember(makeIdent(p1, loc), vName, loc);
+			const yBase = makeMember(makeIdent(p2, loc), vName, loc);
+			armBuf.items.push(makeExprStmt(makeAssign(
+				makeMember(xBase, variant.typeNames[fi], loc),
+				makeMember(yBase, variant.typeNames[fi], loc), loc), loc));
+			fi += 1;
+		}
+	} else {
+		let fi = 0;
+		while (fi < variant.typeNames.length) {
+			const xBase = makeMember(makeIdent(p1, loc), vName, loc);
+			const yBase = (hook === "trace") ? makeIdent(p2, loc)
+				: isUnary ? makeMember(makeIdent(p1, loc), vName, loc)
+				: makeMember(makeIdent(p2, loc), vName, loc);
+			const visited: NameSet = createNameSet();
+			fillBody(hook, xBase, yBase, variant.typeNames[fi], variant.typeChildren[fi], lctx, armBuf, visited, loc);
+			fi += 1;
+		}
 	}
 }
 
@@ -741,7 +821,7 @@ function generateHook(hook: string, typeName: string, objType: Type, classType: 
 		const x2 = (isRef && !isTrace) ? makeHiddenDeref(makeIdent(p2, loc), loc) : makeIdent(p2, loc);
 
 		if (objType.kind === TypeKind.Union) {
-			generateUnionArms(hook, objType, p1, p2, lctx, buf, loc);
+			generateUnionArms(hook, typeName, objType, p1, p2, lctx, buf, loc);
 		} else if (hook === "destroy") {
 			// Destroy: fields first (reverse), then base class (LIFO — standard pattern)
 			for (let i = objType.typeNames.length - 1; i >= 0; i -= 1) {
@@ -1312,11 +1392,14 @@ function scanBlockForArrayTypes(block: Node, lctx: LiftCtx): void {
 // These have no InterfaceDecl so processDecl doesn't see them.
 // Ensures lifecycle hooks are generated so DRC destroy calls link correctly.
 function scanForAnonStructTypes(program: Node, lctx: LiftCtx, loc: SourceLocation): void {
-	// Walk entire AST; check every node's type for anonymous structs
+	// Walk entire AST; ensure lifecycle hooks for ANY named struct that needs them.
+	// Covers anonymous structs (__anon*), programmatically-created structs
+	// (e.g. IteratorResult from createIterator), and any other struct without
+	// a StructDecl AST node. ensureTypeHooksForType guards against duplicates,
+	// non-structs, and types that don't need hooks.
 	walkNode(program, (node: Node): Node => {
 		if (node.nodeType !== null && node.nodeType.kind === TypeKind.Struct
-			&& node.nodeType.typeName !== "" && node.nodeType.typeName.length > 6
-			&& node.nodeType.typeName.slice(0, 6) === "__anon") {
+			&& node.nodeType.typeName !== "") {
 			ensureTypeHooksForType(node.nodeType, lctx, node.location);
 		}
 		return node;

@@ -141,6 +141,10 @@ function collectVariable(ctx: CheckerContext, node: Node): void {
 	const sym = makeSymbol(d.declName, SymbolKind.Variable, unknownType(), mutable);
 	sym.symbolType.sym = sym;
 	defineOrError(ctx, sym, node);
+	// Reference parity: attach symbol to VarDecl node (like FunctionDecl).
+	// DRC uses this for unique naming (s.loc.snippet equivalent).
+	// Note: checkPass overwrites this with the type-inferred symbol for checker-visited VarDecls.
+	node.resolvedSym = sym;
 }
 
 // ===== Decorator Handling =====
@@ -619,7 +623,7 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 					}
 				}
 				// If imported symbol is an extension method, register primary locally.
-				// Reference parity: sym is the single source of truth for the type (Nim: PSym.typ).
+				// Reference parity: sym is the single source of truth for the type.
 				// When sym is available, fnType = unknownType() to avoid double-decref.
 				if (exportInfo.extReceiverType !== "" && ctx.extensionRegistry !== null) {
 					registerExtension(ctx.extensionRegistry, createExtMethod(localAlias, exportInfo.extReceiverType, sourcePath, exportInfo.symType, exportInfo.extIsStatic, primarySym !== null ? primarySym : null as unknown as Symbol, 1));
@@ -647,25 +651,23 @@ function collectImport(ctx: CheckerContext, node: Node): void {
 	if (ctx.extensionRegistry !== null && sourcePath !== "") {
 		const modExports = findModuleExports(ctx.exportRegistry, sourcePath);
 		if (modExports !== null) {
-			for (const sym of modExports.symbols) {
-				if (sym.extReceiverType !== "") {
+			for (const expInfo of modExports.symbols) {
+				if (expInfo.extReceiverType !== "") {
 					// Derive original method name: class methods have mangled names
 					// (GPUInstance_release) but extensions use original names (release).
-					let methName = sym.name;
-					const prefix = sym.extReceiverType + "_";
+					let methName = expInfo.name;
+					const prefix = expInfo.extReceiverType + "_";
 					if (methName.length > prefix.length && methName.slice(0, prefix.length) === prefix) {
 						methName = methName.slice(prefix.length, methName.length);
 					}
 					// Only register if not already present
-					if (findExtension(ctx.extensionRegistry, sym.extReceiverType, methName) === null) {
-						// Create a proper symbol for the imported extension (Nim: all procs have symbols).
-						// Uses the mangled name (GPUInstance_release) so codegen emits correct C function calls.
-						const methSym = makeSymbol(sym.name, SymbolKind.Function, sym.symType, false);
-						methSym.modulePath = sym.definingModule !== "" ? sym.definingModule : sourcePath;
-						if (sym.nativeName !== "") methSym.nativeName = sym.nativeName;
-						if (sym.location !== null) methSym.location = sym.location;
+					if (findExtension(ctx.extensionRegistry, expInfo.extReceiverType, methName) === null) {
+						const methSym = makeSymbol(expInfo.name, SymbolKind.Function, expInfo.symType, false);
+						methSym.modulePath = expInfo.definingModule !== "" ? expInfo.definingModule : sourcePath;
+						if (expInfo.nativeName !== "") methSym.nativeName = expInfo.nativeName;
+						if (expInfo.location !== null) methSym.location = expInfo.location;
 						methSym.state = SymbolState.Shaped;
-						registerExtension(ctx.extensionRegistry, createExtMethod(methName, sym.extReceiverType, sourcePath, sym.symType, sym.extIsStatic, methSym, 0));
+						registerExtension(ctx.extensionRegistry, createExtMethod(methName, expInfo.extReceiverType, sourcePath, expInfo.symType, expInfo.extIsStatic, methSym, 0));
 					}
 				}
 			}

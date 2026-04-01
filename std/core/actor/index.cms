@@ -1,0 +1,21 @@
+// MetaScript Actor Runtime Prelude
+// Declares runtime functions for actor creation, messaging, and lifecycle.
+// Included automatically when a module uses `actor` declarations.
+
+@include("std/runtime/actor.h");
+
+// Actor creation — allocates actor struct + mailbox, registers with scheduler
+extern function msActorCreate(state: void, dispatch: void): void from "msActorCreate";
+
+// Actor messaging
+extern function msActorSend(actor: void, msg: void): void from "msActorSend";
+
+// Message allocation
+extern function msMsgAlloc(kind: int32, replyFut: void): void from "msMsgAlloc";
+extern function msMsgFree(msg: void): void from "msMsgFree";
+
+// Actor registration (scheduler polling)
+extern function msActorRegister(actor: void): void from "msActorRegister";
+
+// Actor polling (drain all actor mailboxes)
+extern function msActorPollAll(): boolean from "msActorPollAll";

@@ -164,6 +164,13 @@ export class CProc {
 	indirectParams: string[];  // reference pointer introduction params — auto-deref as (*name) (Reference: indirect location parity)
 	indirectLocals: string[];  // locals pointing into union variant data — auto-deref as (*name)
 	nestedFinally: Node[];     // stack of finally body nodes (reference: p.nestedTryStmts[].fin)
+	// Reference parity (sigConflicts + fillLocalName): per-name conflict counter.
+	// Each local gets name_N_ suffix. Unique name stored on resolvedSym.nativeName.
+	sigConflicts: string[];   // parallel arrays: [mangledName, count, ...]
+	// Fallback name map for DRC-generated identifiers without resolvedSym.
+	// When fillLocalName renames a VarDecl, the mapping originalName→uniqueName is stored
+	// here so identifiers created by DRC (which lack resolvedSym) can resolve the unique name.
+	localNameMap: string[];   // parallel arrays: [originalName, uniqueName, ...]
 }
 
 // reference parity: check if an identifier is a pointer introduction param (indirect location)
@@ -201,7 +208,77 @@ export function createProc(name: string, returnType: Type): CProc {
 		indirectParams: [],
 		indirectLocals: [],
 		nestedFinally: [],
+		sigConflicts: [],
+		localNameMap: [],
 	};
+}
+
+// Reference parity (fillLocalName): assign a unique C name for a local.
+// Uses per-name conflict counter: first `result` → `result_1_`, second → `result_2_`.
+// Temps ($ prefix) keep original name (already unique from freshTemp).
+export function fillLocalName(p: CProc, mangledName: string, isTemp: boolean): string {
+	if (p === null) return mangledName;
+	// Find or create counter for this name
+	let counter = 0;
+	let found = false;
+	let i = 0;
+	while (i < p.sigConflicts.length) {
+		if (p.sigConflicts[i] === mangledName) {
+			counter = parseInt(p.sigConflicts[i + 1]);
+			counter = counter + 1;
+			p.sigConflicts[i + 1] = counter.toString();
+			found = true;
+			i = p.sigConflicts.length;
+		}
+		i = i + 2;
+	}
+	if (!found) {
+		counter = 1;
+		p.sigConflicts.push(mangledName);
+		p.sigConflicts.push("1");
+	}
+	// Temps: suffix only on conflict (readability). User vars: always suffix.
+	let result = "";
+	if (isTemp) {
+		result = counter > 1 ? `${mangledName}_${counter}` : mangledName;
+	} else {
+		result = `${mangledName}_${counter}_`;
+	}
+	// Record mapping so DRC-generated identifiers (without resolvedSym) can resolve the name
+	if (result !== mangledName) {
+		p.localNameMap.push(mangledName);
+		p.localNameMap.push(result);
+	}
+	return result;
+}
+
+// Look up unique local name for DRC-generated identifiers without resolvedSym.
+export function lookupLocalName(p: CProc, mangledName: string): string {
+	if (p === null) return "";
+	let i = p.localNameMap.length;
+	// Search backwards — last mapping wins (handles re-declarations in nested scopes)
+	while (i > 0) {
+		i = i - 2;
+		if (p.localNameMap[i] === mangledName) return p.localNameMap[i + 1];
+	}
+	return "";
+}
+
+// Reference parity (scopeMangledParam): register parameter names so VarDecls
+// with the same name get unique suffixes.
+export function scopeMangledParam(p: CProc, mangledName: string): void {
+	if (p === null) return;
+	let i = 0;
+	while (i < p.sigConflicts.length) {
+		if (p.sigConflicts[i] === mangledName) {
+			const c = parseInt(p.sigConflicts[i + 1]);
+			p.sigConflicts[i + 1] = (c + 1).toString();
+			return;
+		}
+		i = i + 2;
+	}
+	p.sigConflicts.push(mangledName);
+	p.sigConflicts.push("1");
 }
 
 // Current block — top of the block stack (Implementation parity)

@@ -14,7 +14,7 @@
 //     const f = { fn: $lifted_outer_1, env: { x: x } };
 //   }
 
-import { Node, NodeKind, DeclKind, SourceLocation, NodeFlag, SymbolKind, createNode, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ExprStmtData, ReturnStmtData, BinaryExprData, CallExprData, UnaryExprData, IdentifierData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, NodeFlag, SymbolKind, createNode, ProgramData, BlockStmtData, FunctionDeclData, ArrowFunctionData, FunctionExprData, MethodDeclData, ConstructorDeclData, ExportDeclData, ClassDeclData, DecoratedDeclData, VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ExprStmtData, ReturnStmtData, BinaryExprData, CallExprData, UnaryExprData, IdentifierData, ObjectLiteralData, Type, TypeKind } from "../../ast/node";
 import { TransformContext, NameSet, createNameSet, nameSetAdd, nameSetContains } from "../context";
 import { mapChildren, isFuncBoundary } from "../walker";
 import {
@@ -1267,6 +1267,12 @@ function walkLift(node: Node, state: LiftState): void {
 		NodeKind.UnaryExpr => {
 			const d = node.data as UnaryExprData;
 			d.operand = walkOrLift(d.operand, state);
+		},
+		NodeKind.ObjectLiteral => {
+			const d = node.data as ObjectLiteralData;
+			for (let oi = 0; oi < d.properties.length; oi += 1) {
+				d.properties[oi] = walkOrLift(d.properties[oi], state);
+			}
 		},
 		_ => {},
 	};

@@ -1,7 +1,31 @@
-// MetaScript Structure Prelude — Map<K,V> and Set<T>
+// MetaScript Structure Prelude — Iterator<T>, Map<K,V> and Set<T>
 // Pure MetaScript implementation — monomorphized by the compiler.
 // No C runtime, no type erasure, no boxing.
 // All code in one file (prelude system loads a single file per module).
+
+// ===== Iterator<T> =====
+// Return type for function* generators. Matches generatorLower's output shape.
+// Users write: function* range(): Iterator<int32> { yield 1; }
+
+export struct IteratorResult<T> {
+	value: T;
+	done: boolean;
+}
+
+export struct Iterator<T> {
+	next: () => IteratorResult<T>;
+}
+
+// Drain iterator to array. Uses while+next() (not for...of — would be circular).
+export function toItems<T>(this iter: Iterator<T>): T[] {
+	const result: T[] = [];
+	let r = iter.next();
+	while (!r.done) {
+		result.push(r.value);
+		r = iter.next();
+	}
+	return result;
+}
 
 // ===== Map<K, V> =====
 
@@ -157,6 +181,14 @@ export function values<K, V>(this m: Map<K, V>): V[] {
 	return result;
 }
 
+// Iterator protocol: toItems() makes Map iterable with for...of.
+// Yields keys by default (consistent with Object.keys). Use .values() or .keys() for explicit choice.
+export function* toItems<K, V>(this m: Map<K, V>): Iterator<K> {
+	for (const entry of m.data) {
+		if (entry.hcode !== 0) yield entry.key;
+	}
+}
+
 // ===== Set<T> =====
 
 export struct SetEntry<T> {
@@ -263,6 +295,14 @@ export function clear<T>(this s: Set<T>): void {
 	let i: int32 = 0;
 	while (i < s.data.length) { s.data[i].hcode = 0; i = i + 1; }
 	s.counter = 0;
+}
+
+// Iterator protocol: toItems() makes Set iterable with for...of.
+// function* yields lazily — O(1) allocation (state machine only, no array).
+export function* toItems<T>(this s: Set<T>): Iterator<T> {
+	for (const entry of s.data) {
+		if (entry.hcode !== 0) yield entry.key;
+	}
 }
 
 // Tests for Set/Map are in external test files (monomorphized constructors

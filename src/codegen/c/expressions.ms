@@ -14,7 +14,7 @@ import {
 	initLoc, noLoc, rdLoc, addrLoc,
 	add, addLine, sec,
 	pStmts, getTemp, nameSetHas, nameSetAdd, emitStmtsLine, internString,
-	emitProcLocalsLine,
+	emitProcLocalsLine, lookupLocalName,
 } from "./context";
 import { mangle, mangleFieldName, mangledFunctionName, safeName, staticFieldCName } from "./names";
 import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, ccgIntroducedPtr, shouldIndirectParam, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, getArrayContentType } from "./types";
@@ -477,14 +477,32 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 		}
 		// Module-qualified name for function references (Standard reference parity)
 		if (idSym !== null && idSym.symbolKind === SymbolKind.Function) {
+			// Ensure cross-module function has a forward declaration (needed for function
+			// pointers in closure literals — direct calls go through ensureCrossModuleProto)
+			if (idSym.symbolType !== null && idSym.modulePath !== null && idSym.modulePath !== "" && idSym.modulePath !== g.modulePath) {
+				ensureCrossModuleProto(g, mangledFunctionName(idSym, d.name, idSym.overloadIdx), idSym.symbolType, idSym);
+			}
 			ctx.results.push(mangledFunctionName(idSym, d.name, idSym.overloadIdx));
 		} else {
-			// Reference parity: build CLoc for identifier, auto-dereference if indirect location
+			// Reference parity (s.loc.snippet): read unique C name from symbol if available.
+			// Fallback chain: localNameMap (scope-accurate) → resolvedSym.nativeName → safeName
+			// localNameMap takes priority because shared symbols can have stale nativeName
+			// (e.g. sibling-scope vars with same name but different types).
 			const isIndirect = isIndirectParam(p, d.name) || isIndirectLocal(p, d.name);
+			const safe = safeName(d.name);
+			const mapped = lookupLocalName(p, safe);
+			let cName = "";
+			if (mapped !== "") {
+				cName = mapped;
+			} else if (idSym !== null && idSym.nativeName !== "") {
+				cName = idSym.nativeName;
+			} else {
+				cName = safe;
+			}
 			const loc: CLoc = {
 				kind: CLocKind.LocalVar,
 				storage: isIndirect ? CStorageLoc.Unknown : CStorageLoc.Stack,
-				snippet: safeName(d.name),
+				snippet: cName,
 				isIndirect,
 				locType: node.nodeType,
 			};

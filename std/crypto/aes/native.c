@@ -191,10 +191,10 @@ msString msCryptoAesSeal(msString key, msString plainText, msString aad) {
 	int keyBits = (int)key.len * 8;
 	if (keyBits != 128 && keyBits != 256) return MS_EMPTY_STRING;
 
-	const uint8_t* keyData = (const uint8_t*)msCStr(key);
-	const uint8_t* ptData = (const uint8_t*)msCStr(plainText);
+	const uint8_t* keyData = (const uint8_t*)msStringToCString(key);
+	const uint8_t* ptData = (const uint8_t*)msStringToCString(plainText);
 	size_t ptLen = (size_t)plainText.len;
-	const uint8_t* aadData = aad.len > 0 ? (const uint8_t*)msCStr(aad) : NULL;
+	const uint8_t* aadData = aad.len > 0 ? (const uint8_t*)msStringToCString(aad) : NULL;
 	size_t aadLen = (size_t)aad.len;
 
 	/* Generate 12-byte random nonce */
@@ -226,10 +226,10 @@ msString msCryptoAesOpen(msString key, msString sealed, msString aad) {
 	if (keyBits != 128 && keyBits != 256) return MS_EMPTY_STRING;
 	if (sealed.len < 28) return MS_EMPTY_STRING; /* minimum: 12 nonce + 0 ct + 16 tag */
 
-	const uint8_t* keyData = (const uint8_t*)msCStr(key);
-	const uint8_t* sealedData = (const uint8_t*)msCStr(sealed);
+	const uint8_t* keyData = (const uint8_t*)msStringToCString(key);
+	const uint8_t* sealedData = (const uint8_t*)msStringToCString(sealed);
 	size_t sealedLen = (size_t)sealed.len;
-	const uint8_t* aadData = aad.len > 0 ? (const uint8_t*)msCStr(aad) : NULL;
+	const uint8_t* aadData = aad.len > 0 ? (const uint8_t*)msStringToCString(aad) : NULL;
 	size_t aadLen = (size_t)aad.len;
 
 	const uint8_t* nonce = sealedData;
@@ -264,12 +264,12 @@ msString msCryptoAesGcmEncrypt(msString key, msString plainText, msString iv, ms
 	int keyBits = (int)key.len * 8;
 	if (keyBits != 128 && keyBits != 256) return MS_EMPTY_STRING;
 
-	const uint8_t* keyData = (const uint8_t*)msCStr(key);
-	const uint8_t* ptData = (const uint8_t*)msCStr(plainText);
+	const uint8_t* keyData = (const uint8_t*)msStringToCString(key);
+	const uint8_t* ptData = (const uint8_t*)msStringToCString(plainText);
 	size_t ptLen = (size_t)plainText.len;
-	const uint8_t* ivData = (const uint8_t*)msCStr(iv);
+	const uint8_t* ivData = (const uint8_t*)msStringToCString(iv);
 	size_t ivLen = (size_t)iv.len;
-	const uint8_t* aadData = aad.len > 0 ? (const uint8_t*)msCStr(aad) : NULL;
+	const uint8_t* aadData = aad.len > 0 ? (const uint8_t*)msStringToCString(aad) : NULL;
 	size_t aadLen = (size_t)aad.len;
 
 	uint8_t* ct = (uint8_t*)malloc(ptLen);
@@ -293,12 +293,12 @@ msString msCryptoAesGcmDecrypt(msString key, msString cipherText, msString iv, m
 	if (keyBits != 128 && keyBits != 256) return MS_EMPTY_STRING;
 	if (authTag.len != 16) return MS_EMPTY_STRING;
 
-	const uint8_t* keyData = (const uint8_t*)msCStr(key);
-	const uint8_t* ctData = (const uint8_t*)msCStr(cipherText);
+	const uint8_t* keyData = (const uint8_t*)msStringToCString(key);
+	const uint8_t* ctData = (const uint8_t*)msStringToCString(cipherText);
 	size_t ctLen = (size_t)cipherText.len;
-	const uint8_t* ivData = (const uint8_t*)msCStr(iv);
+	const uint8_t* ivData = (const uint8_t*)msStringToCString(iv);
 	size_t ivLen = (size_t)iv.len;
-	const uint8_t* aadData = aad.len > 0 ? (const uint8_t*)msCStr(aad) : NULL;
+	const uint8_t* aadData = aad.len > 0 ? (const uint8_t*)msStringToCString(aad) : NULL;
 	size_t aadLen = (size_t)aad.len;
 
 	uint8_t* pt = (uint8_t*)malloc(ctLen);
@@ -312,7 +312,7 @@ msString msCryptoAesGcmDecrypt(msString key, msString cipherText, msString iv, m
 	}
 
 	volatile uint8_t diff = 0;
-	const uint8_t* expectedTag = (const uint8_t*)msCStr(authTag);
+	const uint8_t* expectedTag = (const uint8_t*)msStringToCString(authTag);
 	for (int i = 0; i < 16; i++) diff |= computedTag[i] ^ expectedTag[i];
 	if (diff != 0) {
 		free(pt);
@@ -333,15 +333,15 @@ msString msCryptoAesCbcEncrypt(msString key, msString plainText, msString iv) {
 	size_t paddedLen = ptLen + (16 - (ptLen % 16));
 	uint8_t* padded = (uint8_t*)calloc(1, paddedLen);
 	if (!padded) return MS_EMPTY_STRING;
-	memcpy(padded, msCStr(plainText), ptLen);
+	memcpy(padded, msStringToCString(plainText), ptLen);
 	paddedLen = addPkcs7Padding(padded, ptLen, 16);
 
 	uint8_t ivCopy[16];
-	memcpy(ivCopy, msCStr(iv), 16);
+	memcpy(ivCopy, msStringToCString(iv), 16);
 
 	mbedtls_aes_context aes;
 	mbedtls_aes_init(&aes);
-	if (mbedtls_aes_setkey_enc(&aes, (const uint8_t*)msCStr(key), keyBits) != 0) {
+	if (mbedtls_aes_setkey_enc(&aes, (const uint8_t*)msStringToCString(key), keyBits) != 0) {
 		mbedtls_aes_free(&aes);
 		free(padded);
 		return MS_EMPTY_STRING;
@@ -367,11 +367,11 @@ msString msCryptoAesCbcDecrypt(msString key, msString cipherText, msString iv) {
 
 	size_t ctLen = (size_t)cipherText.len;
 	uint8_t ivCopy[16];
-	memcpy(ivCopy, msCStr(iv), 16);
+	memcpy(ivCopy, msStringToCString(iv), 16);
 
 	mbedtls_aes_context aes;
 	mbedtls_aes_init(&aes);
-	if (mbedtls_aes_setkey_dec(&aes, (const uint8_t*)msCStr(key), keyBits) != 0) {
+	if (mbedtls_aes_setkey_dec(&aes, (const uint8_t*)msStringToCString(key), keyBits) != 0) {
 		mbedtls_aes_free(&aes);
 		return MS_EMPTY_STRING;
 	}
@@ -380,7 +380,7 @@ msString msCryptoAesCbcDecrypt(msString key, msString cipherText, msString iv) {
 	if (!out) { mbedtls_aes_free(&aes); return MS_EMPTY_STRING; }
 
 	mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_DECRYPT, ctLen, ivCopy,
-	                       (const uint8_t*)msCStr(cipherText), out);
+	                       (const uint8_t*)msStringToCString(cipherText), out);
 	mbedtls_aes_free(&aes);
 
 	size_t plainLen = removePkcs7Padding(out, ctLen);

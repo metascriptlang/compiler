@@ -6,13 +6,13 @@
 //   → { const $iter = arr; let $idx = 0; const $len = $iter.length;
 //       while ($idx < $len) { const item = $iter[$idx]; body; $idx++; } }
 
-import { Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, NodeFlag, Type } from "../../ast/node";
+import { Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, NodeFlag, Type, Symbol } from "../../ast/node";
 import { TransformContext, freshTemp } from "../context";
-import { int32Type } from "../../checker/types";
+import { int32Type, isIterator, getIteratorNextFnType } from "../../checker/types";
 import { walkNode } from "../walker";
 import {
 	makeIdent, makeTypedIdent, makeNumber, makeBlock, makeVarDecl, makeWhile,
-	makeBinary, makeAssign, makeExprStmt, makeMember, makeArrayAccess,
+	makeBinary, makeUnary, makeAssign, makeExprStmt, makeMember, makeArrayAccess, makeCall,
 	extractBodyStmts, boolToDeclKind,
 } from "../util";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
@@ -29,15 +29,60 @@ function forOfVisitor(ctx: TransformContext): (node: Node) => Node {
 		if (node.kind !== NodeKind.ForOfStmt) return node;
 		const d = node.data as ForOfStmtData;
 		const loc = node.location;
+		const bindingSym = node.resolvedSym;
+		// Detach symbol from ForOfStmt before it's orphaned — prevents DRC double-free
+		// (the lowered VarDecl takes ownership of the symbol reference)
+		node.resolvedSym = null as unknown as Symbol;
+
+		// Iterator<T>: while + next() pattern (for function* generators)
+		const iterType = d.forOfIterable.nodeType;
+		if (iterType !== null && isIterator(iterType)) {
+			return lowerIteratorForOf(d, ctx, loc, bindingSym);
+		}
 
 		// Array/String: index-based pattern
-		return lowerArrayForOf(d, ctx, loc);
+		return lowerArrayForOf(d, ctx, loc, bindingSym);
 	};
+}
+
+// ===== Iterator For-Of (function* generators) =====
+// for (const x of iter) { body }
+// → { const $iter = iter; let $r = $iter.next();
+//     while (!$r.done) { const x = $r.value; body; $r = $iter.next(); } }
+
+function makeNextCall(iterName: string, resultType: Type, loc: SourceLocation): Node {
+	const call = makeCall(makeMember(makeIdent(iterName, loc), "next", loc), [], loc);
+	if (resultType !== null) call.nodeType = resultType;
+	return call;
+}
+
+function lowerIteratorForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLocation, bindingSym: Symbol): Node {
+	const iterName = freshTemp(ctx, "iter");
+	const rName = freshTemp(ctx, "r");
+	const nextFnType = getIteratorNextFnType(d.forOfIterable.nodeType);
+	const resultType = nextFnType !== null ? nextFnType.typeReturn : null;
+
+	const stmts: Node[] = [];
+	stmts.push(makeVarDecl(iterName, d.forOfIterable, DeclKind.Const, loc));
+	const rDecl = makeVarDecl(rName, makeNextCall(iterName, resultType, loc), DeclKind.Let, loc);
+	if (resultType !== null) rDecl.nodeType = resultType;
+	stmts.push(rDecl);
+
+	const cond = makeUnary("!", makeMember(makeIdent(rName, loc), "done", loc), loc);
+	const bodyStmts: Node[] = [];
+	const itemDecl = makeVarDecl(d.forOfBinding, makeMember(makeIdent(rName, loc), "value", loc), boolToDeclKind(d.forOfIsConst), loc);
+	if (bindingSym !== null) itemDecl.resolvedSym = bindingSym;
+	bodyStmts.push(itemDecl);
+	for (const s of extractBodyStmts(d.forOfBody)) { bodyStmts.push(s); }
+	bodyStmts.push(makeExprStmt(makeAssign(makeIdent(rName, loc), makeNextCall(iterName, resultType, loc), loc), loc));
+
+	stmts.push(makeWhile(cond, makeBlock(bodyStmts, loc), loc));
+	return makeBlock(stmts, loc);
 }
 
 // ===== Array/String For-Of =====
 
-function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLocation): Node {
+function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLocation, bindingSym: Symbol): Node {
 	const idxName = freshTemp(ctx, "idx");
 	const lenName = freshTemp(ctx, "len");
 	const iterType = d.forOfIterable.nodeType;
@@ -104,6 +149,7 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		const itemAccess = makeArrayAccess(cloneExpr(iterExpr, loc), makeTypedIdent(idxName, int32Type(), loc), loc);
 		const itemDecl = makeVarDecl(d.forOfBinding, itemAccess, itemDk, loc);
 		itemDecl.flags = itemDecl.flags | NodeFlag.Cursor;
+		if (bindingSym !== null) itemDecl.resolvedSym = bindingSym;
 		whileStmts.push(itemDecl);
 	}
 

@@ -1,7 +1,9 @@
 // Transform Context — shared state across all transforms
 
 import { CheckerContext } from "../checker/context";
-import { Node, Type } from "../ast/node";
+import { Node, Type, Symbol, SymbolKind } from "../ast/node";
+import { makeSymbol } from "../checker/symbol";
+import { unknownType } from "../checker/types";
 
 // Pending tuple type entry — collected by operatorLower, consumed by destructorLifting.
 export interface PendingTupleOp {
@@ -73,4 +75,11 @@ export function freshTemp(ctx: TransformContext, prefix: string): string {
 	const n = ctx.tempCounter;
 	ctx.tempCounter += 1;
 	return "$" + prefix + "_" + n.toString();
+}
+
+// Reference parity (getTemp): create a Symbol for a DRC temp variable.
+// Returns a Symbol with declNode=null — safe to store on VarInfo (no destroy cascade).
+export function freshTempSym(ctx: TransformContext, prefix: string, t: Type): Symbol {
+	const name = freshTemp(ctx, prefix);
+	return makeSymbol(name, SymbolKind.Variable, t !== null ? t : unknownType(), false);
 }

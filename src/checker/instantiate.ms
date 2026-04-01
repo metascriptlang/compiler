@@ -8,7 +8,7 @@ import { Node, NodeKind, NodeData, SourceLocation, makeLoc, createNodeAt, Functi
 import { typeNameOf, instantiateGeneric, substituteType, createFunction } from "./types";
 import { resolveAnnotation } from "./resolvePass";
 import { lookupSymbol, defineSymbol, makeSymbol, setFlag, SymbolFlag, hasFlag } from "./symbol";
-import { CheckerContext } from "./context";
+import { CheckerContext, stripGenFlag } from "./context";
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/collect";
 import { callCheckFunctionBody, registerInstantiateGeneric } from "./checkerCallbacks";
 import { getIdentId } from "./idents";
@@ -363,7 +363,9 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 
 	// Rename + strip flags
 	cd.fnName = mangledName;
-	cd.fnFlags = "";
+	// Preserve generator flag — generatorLower needs it after instantiation.
+	// Strip gen: (type params) and ext: (extension metadata) but keep generator/async.
+	cd.fnFlags = stripGenFlag(cd.fnFlags);
 
 	// Build instantiated function type
 	const instType = sym.symbolType !== null ? instantiateGeneric(sym.symbolType, dedup.names, dedup.types) : sym.symbolType;

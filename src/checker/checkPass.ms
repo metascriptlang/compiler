@@ -2,7 +2,7 @@
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, makeLoc, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, VariableDeclData, FunctionDeclData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, StringLiteralData, CallExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { unknownType, nullType, stringType, charType, numberType, float64Type, voidType, createFunction, createUnion, isMaybeType, unwrapMaybeType, isNarrowingIntConv, typeNameOf, isPromise, getPromiseInner, isResult, getResultOkType, getResultErrType, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant } from "./types";
+import { unknownType, nullType, stringType, charType, numberType, float64Type, voidType, createFunction, createUnion, isMaybeType, unwrapMaybeType, isNarrowingIntConv, typeNameOf, isPromise, getPromiseInner, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant } from "./types";
 import { ScopeKind, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, setFlag, hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContext, createModuleContextWithCache, addError, addFatalError, addWarning, hasErrors, hasFatalErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, buildExportInfo, isCancelled, sgRecordSym, sgSortRecords, isInAsyncPromiseResult } from "./context";
 import { IdentCache, createIdentCache } from "./idents";
@@ -624,17 +624,34 @@ function checkForStmt(ctx: CheckerContext, node: Node): void {
 	ctx.initTracker.currentBlock = ctx.initTracker.currentBlock - 1;
 }
 
+function iterableElemType(t: Type): Type {
+	if (t === null) return unknownType();
+	if ((t.kind === TypeKind.Array || t.kind === TypeKind.SizedArray || t.kind === TypeKind.Span) && t.typeReturn !== null) return t.typeReturn;
+	if (t.kind === TypeKind.String) return charType();
+	if (isIterator(t)) return getIteratorYieldType(t);
+	return unknownType();
+}
+
 function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ForOfStmtData;
 	checkExpr(ctx, d.forOfIterable, null);
-	// Infer binding type from iterable
-	let elemType = unknownType();
-	const iterType = d.forOfIterable.nodeType;
-	if (iterType !== null) {
-		if ((iterType.kind === TypeKind.Array || iterType.kind === TypeKind.SizedArray || iterType.kind === TypeKind.Span) && iterType.typeReturn !== null) {
-			elemType = iterType.typeReturn;
-		} else if (iterType.kind === TypeKind.String) {
-			elemType = charType();
+	let elemType = iterableElemType(d.forOfIterable.nodeType);
+	// Nim-style implicit iterator: for non-array/string types, resolve .toItems() during checking.
+	// The checker creates and type-checks the call — generic instantiation happens naturally.
+	// (Nim: semFor → implicitIterator("items", collection) → semExpr)
+	if (elemType.kind === TypeKind.Unknown && d.forOfIterable.nodeType !== null && d.forOfIterable.nodeType.kind !== TypeKind.Unknown) {
+		const loc = d.forOfIterable.location;
+		const toItemsCall = createNodeAt(NodeKind.CallExpr, {
+			callee: createNodeAt(NodeKind.MemberExpr, {
+				object: d.forOfIterable, property: "toItems", isOptional: false,
+			} as MemberExprData, loc),
+			arguments: [], isDirectCall: true, resolvedOverloadIdx: -1,
+		} as CallExprData, loc);
+		checkExpr(ctx, toItemsCall, null);
+		const resolved = iterableElemType(toItemsCall.nodeType);
+		if (resolved.kind !== TypeKind.Unknown) {
+			elemType = resolved;
+			d.forOfIterable = toItemsCall;
 		}
 	}
 	// Ref parity: for loops — conservative, loop may not execute
@@ -642,10 +659,11 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 	const saved = enterLoopScope(ctx);
 	if (d.forOfPattern !== null) {
 		// Destructured for-of: define symbols for each pattern element
-		defineForOfPatternBindings(ctx, d.forOfPattern, iterType, d.forOfIsConst);
+		defineForOfPatternBindings(ctx, d.forOfPattern, elemType, d.forOfIsConst);
 	} else {
 		const forSym = makeSymbol(d.forOfBinding, SymbolKind.Variable, elemType, !d.forOfIsConst);
 		defineSymbol(ctx.table, forSym);
+		node.resolvedSym = forSym;
 		// Loop binding is always initialized (iterator provides the value)
 		markInitialized(ctx.initTracker, d.forOfBinding);
 		sgRecordSym(ctx, d.bindingLocation.line, d.bindingLocation.column, d.bindingLocation.column + d.forOfBinding.length, forSym, elemType, SymbolKind.Variable, d.forOfBinding, "", true);

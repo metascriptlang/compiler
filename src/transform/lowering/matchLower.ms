@@ -231,9 +231,9 @@ function canUseSwitchDispatch(cases: Node[], discType: Type): boolean {
 
 // Build switch dispatch for enum/int patterns with guard support.
 // Groups same-pattern arms with different guards into one switch case.
-function buildSwitchDispatch(cases: Node[], tempName: string, discType: Type, loc: SourceLocation, mode: string, varName: string): Node {
+function buildSwitchDispatch(cases: Node[], tempName: string, discType: Type, loc: SourceLocation, mode: string, varName: string, ctx: TransformContext): Node {
 	const needsFlag = mode !== "return";
-	const matchedName = "$matched";
+	const matchedName = freshTemp(ctx, "matched");
 
 	// Build default body from wildcards: process unguarded first (base), then guarded (wrap).
 	// This ensures: _ when g1 => b1, _ when g2 => b2, _ => b3
@@ -357,7 +357,7 @@ function buildIfChain(cases: Node[], tempName: string, discType: Type, loc: Sour
 
 	// Switch dispatch for enum/int discriminants (O(1) jump table in C)
 	if (canUseSwitchDispatch(cases, discType)) {
-		return buildSwitchDispatch(cases, tempName, discType, loc, mode, varName);
+		return buildSwitchDispatch(cases, tempName, discType, loc, mode, varName, ctx);
 	}
 
 	// Check if any case is a wildcard/binding — if not, last arm becomes the else
@@ -588,7 +588,7 @@ function buildHashSwitch(cases: Node[], tempName: string, discType: Type, loc: S
 	// return mode: matched arms exit via return — no flag needed, unconditional default is safe.
 	// stmt/assign mode: matched arms don't exit — need $matched flag to skip default.
 	const needsFlag = mode !== "return";
-	const matchedName = "$matched";
+	const matchedName = freshTemp(ctx, "matched");
 
 	// Collect patterns into hash buckets — patterns with the same hash share a bucket.
 	const buckets: HashBucket[] = [];

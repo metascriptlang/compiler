@@ -11,6 +11,7 @@ import {
 	getStmtsIndent, setStmtsIndent,
 	pushBlock, popBlock, readProcStmts,
 	sec, addLine, emitLineDir, getTemp,
+	fillLocalName, scopeMangledParam,
 } from "./context";
 import { genExpr, shimCallArg } from "./expressions";
 import { ensureCrossModuleProto } from "./forward";
@@ -233,12 +234,31 @@ function isUnionNarrowing(node: Node): boolean {
 
 function genVarDecl(g: CGen, p: CProc, node: Node): void {
 	const d = node.data as VariableDeclData;
-	const varName = safeName(d.declName);
-	// Reference parity (cpsLocals): DRC-generated temps ($ prefix) hoist declaration to function
-	// scope to survive C block scoping in if-else branches. User variables stay at block position.
-	let hoistDecl = d.declName.length > 0 && d.declName.byteAt(0) === "$".code;
+	// Reference parity (fillLocalName + cpsLocals): all locals get unique C names and
+	// hoist to function top. Prevents name collisions from same-named VarDecls in sibling scopes.
+	const isTemp = d.declName.length > 0 && d.declName.byteAt(0) === "$".code;
+	let varName = safeName(d.declName);
+	let hoistDecl = p !== null;
+	// Nim parity: skip if same DRC temp VarDecl node visited twice (nativeName already set).
+	// Only for temps — user vars with the same symbol in sibling scopes (e.g., `const lv` in
+	// different match arms) must get separate unique names via fillLocalName.
+	if (hoistDecl && isTemp && node.resolvedSym !== null && node.resolvedSym.nativeName !== "") {
+		varName = node.resolvedSym.nativeName;
+		hoistDecl = false;
+	} else if (hoistDecl && (node.resolvedSym !== null || isTemp)) {
+		// Reference parity (fillLocalName + s.loc.snippet): unique name, stored on symbol.
+		varName = fillLocalName(p, varName, isTemp);
+		if (node.resolvedSym !== null) {
+			// Always store — shared symbols get overwritten, but localNameMap (recorded by
+			// fillLocalName) preserves all mappings for scope-accurate identifier resolution.
+			node.resolvedSym.nativeName = varName;
+		}
+	} else if (hoistDecl) {
+		// No resolvedSym (e.g., .cms prelude files): keep original name, don't hoist
+		hoistDecl = false;
+	}
 	// Dedup: skip hoisting if already declared by expression-level auto-declare (seenSinks)
-	if (hoistDecl && p !== null) {
+	if (hoistDecl && isTemp && p !== null) {
 		for (const s of p.seenSinks) {
 			if (s === d.declName) { hoistDecl = false; }
 		}

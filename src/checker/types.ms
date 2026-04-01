@@ -210,6 +210,44 @@ export function getPromiseInner(t: Type): Type {
 	return t.typeReturn;
 }
 
+// Iterator<T> — return type of function* generators. Wraps yield type T.
+// At runtime: { next: () => { value: T, done: boolean } }
+export function createIterator(yieldType: Type): Type {
+	// Build IteratorResult<T> struct: { value: T, done: boolean }
+	const resultType = createStruct("IteratorResult", ["value", "done"], [yieldType, createPrimitive(TypeKind.Boolean)], false);
+	// Build Iterator<T> struct: { next: () => IteratorResult<T> }
+	const nextFnType = createFunction([], [], resultType);
+	const iter = createStruct("Iterator", ["next"], [nextFnType], false);
+	return iter;
+}
+
+export function isIterator(t: Type): boolean {
+	if (t === null) return false;
+	return t.typeName === "Iterator";
+}
+
+export function getIteratorNextFnType(t: Type): Type {
+	if (t === null || !isIterator(t)) return null;
+	if (t.typeChildren !== null && t.typeChildren.length > 0) return t.typeChildren[0];
+	return null;
+}
+
+export function getIteratorYieldType(t: Type): Type {
+	if (t === null) return null;
+	// Iterator struct has field "next: () => IteratorResult<T>"
+	// IteratorResult has field "value: T" — extract T from there
+	if (t.typeChildren !== null && t.typeChildren.length > 0) {
+		const nextFnType = t.typeChildren[0]; // the next() function type
+		if (nextFnType !== null && nextFnType.typeReturn !== null) {
+			const resultType = nextFnType.typeReturn; // IteratorResult<T>
+			if (resultType.typeChildren !== null && resultType.typeChildren.length > 0) {
+				return resultType.typeChildren[0]; // T (the value field)
+			}
+		}
+	}
+	return unknownType();
+}
+
 export function isResult(t: Type): boolean {
 	if (t === null) return false;
 	if (t.kind === TypeKind.Result) return true;

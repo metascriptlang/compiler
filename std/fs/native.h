@@ -7,7 +7,7 @@
  *
  * Design:
  *   - All paths are msString (UTF-8, not null-terminated internally)
- *   - msCStr() used at boundaries for POSIX calls
+ *   - msStringToCString() used at boundaries for POSIX calls
  *   - Errors return empty string / 0.0 / -1.0 (no exceptions at C level)
  *   - Binary mode ("rb"/"wb") always — no line-ending translation
  */
@@ -36,7 +36,7 @@ extern "C" {
  * Cap: 64 MiB (guard against accidental huge reads).
  */
 static inline msString msFsReadFile(msString path) {
-	FILE* f = fopen(msCStr(path), "rb");
+	FILE* f = fopen(msStringToCString(path), "rb");
 	if (!f) return MS_EMPTY_STRING;
 	fseek(f, 0, SEEK_END);
 	long sz = ftell(f);
@@ -59,9 +59,9 @@ static inline msString msFsReadFile(msString path) {
  * Returns 1.0 on success, 0.0 on failure.
  */
 static inline double msFsWriteFileMode(msString path, msString content, msString mode) {
-	FILE* f = fopen(msCStr(path), msCStr(mode));
+	FILE* f = fopen(msStringToCString(path), msStringToCString(mode));
 	if (!f) return 0.0;
-	size_t written = fwrite(msCStr(content), 1, content.len, f);
+	size_t written = fwrite(msStringToCString(content), 1, content.len, f);
 	fclose(f);
 	return (written == (size_t)content.len) ? 1.0 : 0.0;
 }
@@ -70,18 +70,18 @@ static inline double msFsWriteFileMode(msString path, msString content, msString
 
 static inline double msFsExists(msString path) {
 	struct stat st;
-	return (stat(msCStr(path), &st) == 0) ? 1.0 : 0.0;
+	return (stat(msStringToCString(path), &st) == 0) ? 1.0 : 0.0;
 }
 
 static inline double msFsIsFile(msString path) {
 	struct stat st;
-	if (stat(msCStr(path), &st) != 0) return 0.0;
+	if (stat(msStringToCString(path), &st) != 0) return 0.0;
 	return S_ISREG(st.st_mode) ? 1.0 : 0.0;
 }
 
 static inline double msFsIsDir(msString path) {
 	struct stat st;
-	if (stat(msCStr(path), &st) != 0) return 0.0;
+	if (stat(msStringToCString(path), &st) != 0) return 0.0;
 	return S_ISDIR(st.st_mode) ? 1.0 : 0.0;
 }
 
@@ -90,7 +90,7 @@ static inline double msFsIsDir(msString path) {
  */
 static inline double msFsFileSize(msString path) {
 	struct stat st;
-	if (stat(msCStr(path), &st) != 0) return -1.0;
+	if (stat(msStringToCString(path), &st) != 0) return -1.0;
 	return (double)st.st_size;
 }
 
@@ -100,7 +100,7 @@ static inline double msFsFileSize(msString path) {
  * Create directory (0755). Returns 1.0 on success or EEXIST, 0.0 on failure.
  */
 static inline double msFsMkdir(msString path) {
-	int r = mkdir(msCStr(path), 0755);
+	int r = mkdir(msStringToCString(path), 0755);
 	if (r == 0 || errno == EEXIST) return 1.0;
 	return 0.0;
 }
@@ -109,7 +109,7 @@ static inline double msFsMkdir(msString path) {
  * Remove empty directory. Returns 1.0 on success, 0.0 on failure.
  */
 static inline double msFsRmdir(msString path) {
-	return (rmdir(msCStr(path)) == 0) ? 1.0 : 0.0;
+	return (rmdir(msStringToCString(path)) == 0) ? 1.0 : 0.0;
 }
 
 /* ===== Remove / Rename ===== */
@@ -118,14 +118,14 @@ static inline double msFsRmdir(msString path) {
  * Remove a file. Returns 1.0 on success, 0.0 on failure.
  */
 static inline double msFsRemove(msString path) {
-	return (unlink(msCStr(path)) == 0) ? 1.0 : 0.0;
+	return (unlink(msStringToCString(path)) == 0) ? 1.0 : 0.0;
 }
 
 /**
  * Rename/move a file or directory. Returns 1.0 on success, 0.0 on failure.
  */
 static inline double msFsRename(msString oldPath, msString newPath) {
-	return (rename(msCStr(oldPath), msCStr(newPath)) == 0) ? 1.0 : 0.0;
+	return (rename(msStringToCString(oldPath), msStringToCString(newPath)) == 0) ? 1.0 : 0.0;
 }
 
 #ifdef __cplusplus

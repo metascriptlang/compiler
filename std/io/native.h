@@ -108,7 +108,7 @@ static inline double msStdinHasData(void) {
  */
 static inline void msWriteStdout(msString s) {
 	if (s.len > 0) {
-		fwrite(msCStr(s), 1, s.len, stdout);
+		fwrite(msStringToCString(s), 1, s.len, stdout);
 		fflush(stdout);
 	}
 }
@@ -118,7 +118,7 @@ static inline void msWriteStdout(msString s) {
  */
 static inline void msWriteStderr(msString s) {
 	if (s.len > 0) {
-		fwrite(msCStr(s), 1, s.len, stderr);
+		fwrite(msStringToCString(s), 1, s.len, stderr);
 		fflush(stderr);
 	}
 }

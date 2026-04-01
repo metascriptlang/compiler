@@ -57,9 +57,9 @@ function foldBinary(node: Node): Node {
 			return foldNumberBinary(d.operator, lv, rv, loc, node);
 		},
 		NodeKind.StringLiteral => {
-			const lv = (d.left.data as StringLiteralData).value;
-			const rv = (d.right.data as StringLiteralData).value;
-			return foldStringBinary(d.operator, lv, rv, loc, node);
+			const ls = (d.left.data as StringLiteralData).value;
+			const rs = (d.right.data as StringLiteralData).value;
+			return foldStringBinary(d.operator, ls, rs, loc, node);
 		},
 		NodeKind.BooleanLiteral => {
 			const lb = (d.left.data as BooleanLiteralData).boolValue;

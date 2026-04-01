@@ -423,7 +423,7 @@ function rewriteAwaitAsyncBody(body: Node, fnReturnInner: Type): Node {
 	const sc: StateCollector = { items: [] };
 	const initState = allocState(sc);
 	const doneState = -1;
-	splitStmts(bodyStmts, sc, initState, doneState, loc);
+	splitStmts(bodyStmts, sc, initState, doneState, loc, null as unknown as Type);
 
 	// 5. Patch yieldVarType from collected varTypes (nodeType may be cleared by transforms)
 	for (let si = 0; si < sc.items.length; si += 1) {

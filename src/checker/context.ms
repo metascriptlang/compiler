@@ -218,7 +218,7 @@ export function collectExports(ctx: CheckerContext, modulePath: string): Exporte
 // class (not interface) — reference parity: symbol is a ref type. Lookup results must be
 // nullable (null = not found), which requires pointer semantics.
 //
-// INVARIANT (reference parity: Nim PSym.typ is the single type source):
+// INVARIANT (reference parity: sym.type is the single type source):
 //   sym is the authoritative type source. Use getExtFnType(ext) to read the type.
 //   fnType is a FALLBACK for when sym is null (early collectPass, before symbol is available).
 //   When sym is non-null, fnType MUST be unknownType() — never the same Type as sym.symbolType.

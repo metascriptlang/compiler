@@ -346,18 +346,34 @@ function sgSymbolKindName(kind: SymbolKind): string {
 	};
 }
 
-// Format parameter list: (a: number, b: string)
+// Format parameter list: (a: number, b: string) or multiline if too wide.
 function sgFormatParamList(t: Type): string {
-	let result = "(";
+	// Build inline first
+	let inline = "(";
 	for (let i = 0; i < t.typeChildren.length; i = i + 1) {
-		if (i > 0) result = result + ", ";
-		// Show `out` prefix for Var<T> params (out parameters)
+		if (i > 0) inline = inline + ", ";
+		const isOut = t.typeChildren[i] !== null && t.typeChildren[i].kind === TypeKind.Var;
+		if (isOut) inline = inline + "out ";
+		if (i < t.typeNames.length && t.typeNames[i].length > 0) {
+			inline = inline + t.typeNames[i] + ": ";
+		}
+		inline = inline + sgTypeToString(t.typeChildren[i]);
+	}
+	inline = inline + ")";
+	// If short enough, use inline
+	if (inline.length <= 80 || t.typeChildren.length <= 1) return inline;
+	// Multiline: one param per line
+	let result = "(\n";
+	for (let i = 0; i < t.typeChildren.length; i = i + 1) {
+		result = result + "  ";
 		const isOut = t.typeChildren[i] !== null && t.typeChildren[i].kind === TypeKind.Var;
 		if (isOut) result = result + "out ";
 		if (i < t.typeNames.length && t.typeNames[i].length > 0) {
 			result = result + t.typeNames[i] + ": ";
 		}
 		result = result + sgTypeToString(t.typeChildren[i]);
+		if (i < t.typeChildren.length - 1) result = result + ",";
+		result = result + "\n";
 	}
 	result = result + ")";
 	return result;

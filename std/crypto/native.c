@@ -101,7 +101,7 @@ static msString encode_to_base64(const uint8_t* data, size_t len) {
 }
 
 static msString encode_hash(const uint8_t* data, size_t len, msString encoding) {
-	const char* enc = msCStr(encoding);
+	const char* enc = msStringToCString(encoding);
 	if (encoding.len == 3 && memcmp(enc, "hex", 3) == 0) {
 		return encode_to_hex(data, len);
 	}
@@ -168,7 +168,7 @@ void msCryptoCleanup(void) {
 /* ===== Hashing ===== */
 
 msString msCryptoHashString(msString algorithm, msString data, msString encoding) {
-	const mbedtls_md_info_t* md_info = get_md_info(msCStr(algorithm), algorithm.len);
+	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(algorithm), algorithm.len);
 	if (!md_info) return MS_EMPTY_STRING;
 
 	size_t hashLen = mbedtls_md_get_size(md_info);
@@ -182,7 +182,7 @@ msString msCryptoHashString(msString algorithm, msString data, msString encoding
 }
 
 msString msCryptoHashBuffer(msString algorithm, msString data) {
-	const mbedtls_md_info_t* md_info = get_md_info(msCStr(algorithm), algorithm.len);
+	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(algorithm), algorithm.len);
 	if (!md_info) return MS_EMPTY_STRING;
 
 	size_t hashLen = mbedtls_md_get_size(md_info);
@@ -198,7 +198,7 @@ msString msCryptoHashBuffer(msString algorithm, msString data) {
 /* ===== HMAC ===== */
 
 msString msCryptoHmacString(msString algorithm, msString key, msString data, msString encoding) {
-	const mbedtls_md_info_t* md_info = get_md_info(msCStr(algorithm), algorithm.len);
+	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(algorithm), algorithm.len);
 	if (!md_info) return MS_EMPTY_STRING;
 
 	size_t hashLen = mbedtls_md_get_size(md_info);
@@ -214,7 +214,7 @@ msString msCryptoHmacString(msString algorithm, msString key, msString data, msS
 }
 
 msString msCryptoHmacBuffer(msString algorithm, msString key, msString data) {
-	const mbedtls_md_info_t* md_info = get_md_info(msCStr(algorithm), algorithm.len);
+	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(algorithm), algorithm.len);
 	if (!md_info) return MS_EMPTY_STRING;
 
 	size_t hashLen = mbedtls_md_get_size(md_info);
@@ -336,7 +336,7 @@ struct msCryptoHashCtx {
 };
 
 msCryptoHashCtx* msCryptoHashInit(msString algorithm) {
-	const mbedtls_md_info_t* md_info = get_md_info(msCStr(algorithm), algorithm.len);
+	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(algorithm), algorithm.len);
 	if (!md_info) return NULL;
 
 	msCryptoHashCtx* ctx = (msCryptoHashCtx*)calloc(1, sizeof(msCryptoHashCtx));
@@ -414,7 +414,7 @@ struct msCryptoHmacCtx {
 };
 
 msCryptoHmacCtx* msCryptoHmacInit(msString algorithm, msString key) {
-	const mbedtls_md_info_t* md_info = get_md_info(msCStr(algorithm), algorithm.len);
+	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(algorithm), algorithm.len);
 	if (!md_info) return NULL;
 
 	msCryptoHmacCtx* ctx = (msCryptoHmacCtx*)calloc(1, sizeof(msCryptoHmacCtx));
@@ -488,7 +488,7 @@ void msCryptoHmacFree(msCryptoHmacCtx* ctx) {
 /* ===== Utility ===== */
 
 double msCryptoIsHashSupported(msString algorithm) {
-	const mbedtls_md_info_t* info = get_md_info(msCStr(algorithm), algorithm.len);
+	const mbedtls_md_info_t* info = get_md_info(msStringToCString(algorithm), algorithm.len);
 	return info ? 1.0 : 0.0;
 }
 
@@ -553,19 +553,19 @@ static msString decode_from_base64(const char* b64, int64_t len) {
 /* ===== Encoding Public API ===== */
 
 msString msCryptoToHex(msString data) {
-	return encode_to_hex((const uint8_t*)msCStr(data), (size_t)data.len);
+	return encode_to_hex((const uint8_t*)msStringToCString(data), (size_t)data.len);
 }
 
 msString msCryptoFromHex(msString hex) {
-	return decode_from_hex(msCStr(hex), hex.len);
+	return decode_from_hex(msStringToCString(hex), hex.len);
 }
 
 msString msCryptoToBase64(msString data) {
-	return encode_to_base64((const uint8_t*)msCStr(data), (size_t)data.len);
+	return encode_to_base64((const uint8_t*)msStringToCString(data), (size_t)data.len);
 }
 
 msString msCryptoFromBase64(msString b64) {
-	return decode_from_base64(msCStr(b64), b64.len);
+	return decode_from_base64(msStringToCString(b64), b64.len);
 }
 
 /* ===== PBKDF2 (RFC 8018 — manual implementation using MD HMAC) ===== */
@@ -607,13 +607,13 @@ static void pbkdf2_hmac(
 
 msString msCryptoPbkdf2(msString password, msString salt,
                         int32_t iterations, int32_t keyLength, msString digest) {
-	const mbedtls_md_info_t* md_info = get_md_info(msCStr(digest), digest.len);
+	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(digest), digest.len);
 	if (md_info == NULL || keyLength <= 0) return MS_EMPTY_STRING;
 	uint8_t* output = (uint8_t*)malloc((size_t)keyLength);
 	if (!output) return MS_EMPTY_STRING;
 	pbkdf2_hmac(md_info,
-		(const uint8_t*)msCStr(password), (size_t)password.len,
-		(const uint8_t*)msCStr(salt), (size_t)salt.len,
+		(const uint8_t*)msStringToCString(password), (size_t)password.len,
+		(const uint8_t*)msStringToCString(salt), (size_t)salt.len,
 		(uint32_t)iterations, output, (size_t)keyLength);
 	msString result = msStringNew((const char*)output, (int64_t)keyLength);
 	free(output);
@@ -669,15 +669,15 @@ static msString hkdf_expand(const mbedtls_md_info_t* md_info,
 
 msString msCryptoHkdf(msString algorithm, msString ikm, msString salt,
                       msString info, int32_t length) {
-	const mbedtls_md_info_t* md_info = get_md_info(msCStr(algorithm), algorithm.len);
+	const mbedtls_md_info_t* md_info = get_md_info(msStringToCString(algorithm), algorithm.len);
 	if (md_info == NULL || length <= 0) return MS_EMPTY_STRING;
 	msString prk = hkdf_extract(md_info,
-		(const uint8_t*)msCStr(salt), (size_t)salt.len,
-		(const uint8_t*)msCStr(ikm), (size_t)ikm.len);
+		(const uint8_t*)msStringToCString(salt), (size_t)salt.len,
+		(const uint8_t*)msStringToCString(ikm), (size_t)ikm.len);
 	if (prk.len == 0) return MS_EMPTY_STRING;
 	msString result = hkdf_expand(md_info,
-		(const uint8_t*)msCStr(prk), (size_t)prk.len,
-		(const uint8_t*)msCStr(info), (size_t)info.len, (size_t)length);
+		(const uint8_t*)msStringToCString(prk), (size_t)prk.len,
+		(const uint8_t*)msStringToCString(info), (size_t)info.len, (size_t)length);
 	msStringDestroy(prk);
 	return result;
 }

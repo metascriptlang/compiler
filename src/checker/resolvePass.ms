@@ -7,7 +7,7 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { Node, NodeKind, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ExternKind, IdentifierData, TypeGenericData, TypeArrayData, TypeUnionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { unknownType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createUnion, createGenericParam, createDistinct, substituteType, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, setMinArity, typeNameOf, assignType, isStructType, unwrapRef, propagateHasAsgn } from "./types";
+import { unknownType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, substituteType, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, setMinArity, typeNameOf, assignType, isStructType, unwrapRef, propagateHasAsgn } from "./types";
 import { SymbolTable, ScopeKind, lookupSymbol, lookupLocal, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, setFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addErrorRange, addWarning, addFatalError, addFatalErrorRange, sgRecordSym } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim } from "../utils/string";
@@ -171,6 +171,9 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 		}
 		if (baseName === "Promise" && args.length === 1) {
 			return createPromise(resolveAnnotation(args[0], ctx, line, col));
+		}
+		if (baseName === "Iterator" && args.length === 1) {
+			return createIterator(resolveAnnotation(args[0], ctx, line, col));
 		}
 		if (baseName === "Array" && args.length === 1) {
 			return createArray(resolveAnnotation(args[0], ctx, line, col));
@@ -685,7 +688,7 @@ function resolveFunction(ctx: CheckerContext, node: Node): void {
 	if (d.fnDefaults !== null && d.fnDefaults.length > 0) {
 		sym.defaultParams = d.fnDefaults;
 	}
-	// Reference parity: sym is the single source of truth for the type (Nim: PSym.typ).
+	// Reference parity: sym is the single source of truth for the type.
 	// Only set fnType as fallback when sym is not available. Never store the same Type
 	// in both fnType and sym.symbolType — that causes double-decref on ExtensionMethod destruction.
 	const extTypeName = getExtTypeName(d.fnFlags);

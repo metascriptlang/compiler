@@ -68,6 +68,7 @@ import { lowerDCE } from "./analysis/dce";
 import { liftDestructors } from "./lowering/destructorLifting";
 import { lowerPowerAssert } from "./powerAssert";
 import { lowerRestParams } from "./lowering/restParamLower";
+import { lowerActor } from "./lowering/actorLower";
 
 export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBackend: boolean): Node {
 	const ctx = createTransformContextWithChecker(checkerCtx);
@@ -96,6 +97,7 @@ export function transformProgram(program: Node, checkerCtx: CheckerContext, jsBa
 	if (!jsBackend) { result = lowerAsyncBridge(result, ctx); }
 	if (!jsBackend) { result = lowerGenerator(result, ctx); }
 	if (!jsBackend) { result = lowerSpawn(result, ctx); }
+	if (!jsBackend) { result = lowerActor(result, ctx); }
 	if (!jsBackend) { result = lowerVarHoist(result, ctx); }
 	result = lowerExtensionMethod(result, ctx);
 	if (!jsBackend) { result = lowerLambda(result, ctx); }
