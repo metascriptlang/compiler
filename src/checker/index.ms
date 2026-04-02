@@ -13,7 +13,7 @@ export {
 	createEnum, createResult, createTypeRef, createGenericParam,
 } from "./types";
 export {
-	isNumeric, isStringType, isBoolType, isCallable,
+	isNumeric, isStringLike, isBoolType, isCallable,
 	getReturnType, getElementType, getProperty,
 	substituteType, instantiateGeneric,
 	isPrimitiveKind, typeNameOf,

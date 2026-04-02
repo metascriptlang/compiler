@@ -2,9 +2,11 @@
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
 import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, makeLoc, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, VariableDeclData, FunctionDeclData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, StringLiteralData, CallExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { linkFlags, linkObjects } from "../utils/linkState";
+
 import { unknownType, nullType, stringType, charType, numberType, float64Type, voidType, createFunction, createUnion, isMaybeType, unwrapMaybeType, isNarrowingIntConv, typeNameOf, isPromise, getPromiseInner, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant } from "./types";
-import { ScopeKind, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, setFlag, hasFlag, SymbolFlag } from "./symbol";
-import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContext, createModuleContextWithCache, addError, addFatalError, addWarning, hasErrors, hasFatalErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, buildExportInfo, isCancelled, sgRecordSym, sgSortRecords, isInAsyncPromiseResult } from "./context";
+import { ScopeKind, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, setFlag, hasFlag, markUsed, SymbolFlag } from "./symbol";
+import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContext, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, hasFatalErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, buildExportInfo, isCancelled, sgRecordSym, sgSortRecords, isInAsyncPromiseResult } from "./context";
 import { IdentCache, createIdentCache } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
 import { collectTopLevel, defineOrError } from "./collectPass";
@@ -636,9 +638,9 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ForOfStmtData;
 	checkExpr(ctx, d.forOfIterable, null);
 	let elemType = iterableElemType(d.forOfIterable.nodeType);
-	// Nim-style implicit iterator: for non-array/string types, resolve .toItems() during checking.
+	// Implicit iterator: for non-array/string types, resolve .toItems() during checking.
 	// The checker creates and type-checks the call — generic instantiation happens naturally.
-	// (Nim: semFor → implicitIterator("items", collection) → semExpr)
+	// (Reference: semFor → implicitIterator("items", collection) → semExpr)
 	if (elemType.kind === TypeKind.Unknown && d.forOfIterable.nodeType !== null && d.forOfIterable.nodeType.kind !== TypeKind.Unknown) {
 		const loc = d.forOfIterable.location;
 		const toItemsCall = createNodeAt(NodeKind.CallExpr, {
@@ -1073,6 +1075,73 @@ export function runThreePasses(ctx: CheckerContext, program: Node): void {
 	collectTopLevel(ctx, program);
 	resolveDeclarations(ctx, program);
 	checkProgramBody(ctx, program);
+	// Only report unused in real modules (not inline test snippets)
+	if (ctx.modulePath !== "") reportUnusedSymbols(ctx, program);
+}
+
+// Two-phase unused detection (reference parity).
+// Phase A: local symbols → Hint severity ("declared but not used") — uses sym.location
+// Phase B: unused imports → Warning severity ("imported but not used") — uses ImportDecl.nameLocations
+function reportUnusedSymbols(ctx: CheckerContext, program: Node): void {
+	// Phase B: walk ImportDecl nodes for correct source positions
+	reportUnusedImports(ctx, program);
+
+	// Phase A: local symbols (non-imported)
+	const scope = ctx.table.current;
+	for (const sym of scope.symbols) {
+		if (hasFlag(sym, SymbolFlag.Used)) continue;
+		if (hasFlag(sym, SymbolFlag.Exported)) continue;
+		if (sym.name.length === 0) continue;
+		if (sym.name.charAt(0) === "_") continue;
+		if (sym.builtinKind !== "") continue;
+		// Reference parity skip list: for-vars, params, methods, enum fields, generic params
+		if (sym.symbolKind === SymbolKind.Parameter) continue;
+		if (sym.symbolKind === SymbolKind.Method) continue;
+		if (sym.symbolKind === SymbolKind.Function) continue;
+		// Skip enum members
+		if (sym.symbolType !== null && sym.symbolType.kind === TypeKind.Enum
+			&& sym.symbolKind === SymbolKind.Variable) continue;
+		// Skip imported symbols — handled by Phase B with correct positions
+		if (sym.modulePath !== "" && sym.modulePath !== ctx.modulePath) continue;
+		if (hasFlag(sym, SymbolFlag.ImportC)) continue;
+		if (hasFlag(sym, SymbolFlag.Global)) continue;
+		if (sym.location === null || sym.location.line <= 0) continue;
+		const endCol = sym.location.column + sym.name.length;
+		addHintRange(ctx, `'${sym.name}' is declared but never used`, sym.location.line, sym.location.column, endCol, 1);
+	}
+}
+
+// Phase B: report unused imports using ImportDecl.nameLocations for correct positions.
+// sym.location points to the original declaration in the source module — wrong for diagnostics.
+function reportUnusedImports(ctx: CheckerContext, program: Node): void {
+	if (program === null || program.kind !== NodeKind.Program) return;
+	const pd = program.data as ProgramData;
+	for (const stmt of pd.programStmts) {
+		let importNode = stmt;
+		// Unwrap ExportDecl (re-exports)
+		if (importNode.kind === NodeKind.ExportDecl) {
+			const ed = importNode.data as ExportDeclData;
+			importNode = ed.exportedDecl;
+		}
+		if (importNode.kind !== NodeKind.ImportDecl) continue;
+		const imp = importNode.data as ImportDeclData;
+		if (imp.nameLocations === null) continue;
+		for (let ii = 0; ii < imp.importAliases.length; ii += 1) {
+			const alias = imp.importAliases[ii];
+			if (alias.length === 0) continue;
+			if (alias.charAt(0) === "_") continue;
+			const sym = lookupSymbol(ctx.table, alias);
+			if (sym === null) continue;
+			if (hasFlag(sym, SymbolFlag.Used)) continue;
+			if (hasFlag(sym, SymbolFlag.Exported)) continue;
+			if (ii >= imp.nameLocations.length) continue;
+			const nameLoc = imp.nameLocations[ii];
+			if (nameLoc === null || nameLoc.line <= 0) continue;
+			const name = imp.importNames[ii];
+			const endCol = nameLoc.column + name.length;
+			addWarningRange(ctx, `'${alias}' is imported but never used`, nameLoc.line, nameLoc.column, endCol, 1);
+		}
+	}
 }
 
 // Process a single MacroInvocation node as a directive (@include/@link/@passC/@passL).
@@ -1103,10 +1172,9 @@ function collectOneDirective(ctx: CheckerContext, mi: Node): void {
 		// Prepend to link list (reference-aligned: linked first, like addExternalFileToLink).
 		const modDir = getModuleDir(ctx.modulePath);
 		const resolved = modDir !== "" ? modDir + "/" + sd.value : sd.value;
-		ctx.linkFlags = prependFlag(ctx.linkFlags, resolved);
+		linkObjects().add(resolved);
 	} else if (name === "passL") {
-		// No dedup (reference-aligned: addLinkOption is simple append).
-		ctx.linkFlags = concatFlag(ctx.linkFlags, sd.value);
+		linkFlags().add(sd.value);
 	} else if (name === "import") {
 		// @import("module", { name1, name2 }) — JS external module registry.
 		// First arg is module path (string), second is ObjectLiteral with keys = import names.
@@ -1388,9 +1456,7 @@ export function injectPrelude(ctx: CheckerContext, preludeCtx: CheckerContext): 
 	if (preludeCtx.compilerFlags !== "") {
 		ctx.compilerFlags = appendFlag(ctx.compilerFlags, preludeCtx.compilerFlags);
 	}
-	if (preludeCtx.linkFlags !== "") {
-		ctx.linkFlags = concatFlag(ctx.linkFlags, preludeCtx.linkFlags);
-	}
+	// @passL/@link go directly to global linkState — no per-module merge needed
 }
 
 // Single internal entry point for all checkProgram variants.

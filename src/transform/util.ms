@@ -4,7 +4,7 @@
 import { Token, TokenKind, createToken } from "../lexer/token";
 import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, BlockStmtData, VariableDeclData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, CallExprData, MemberExprData, IdentifierData, Type, TypeKind } from "../ast/node";
 import { createFunction, createStruct, createArray, numberType, int32Type, float64Type, stringType, booleanType, voidType, nullType, unknownType, getSysType, isResult, getResultOkType, getResultErrType } from "../checker/types";
-import { TransformContext, freshTemp, NameSet, nameSetAdd } from "./context";
+import { TransformContext, freshTemp, freshTempSym, NameSet, nameSetAdd } from "./context";
 
 // Create a synthetic token from a source location (for transform-generated nodes)
 export function syntheticToken(loc: SourceLocation): Token {
@@ -438,12 +438,11 @@ export function boolToDeclKind(isConst: boolean): DeclKind {
 // Returns { decl: const $tmp_N = expr, ref: $tmp_N identifier }.
 // Follows the reference evalOnce pattern.
 export function evalOnce(expr: Node, ctx: TransformContext, loc: SourceLocation): { decl: Node, ref: Node } {
-	const name = freshTemp(ctx, "tmp");
-	const decl = makeVarDecl(name, expr, DeclKind.Const, loc);
-	const ref = makeIdent(name, loc);
-	if (expr !== null && expr.nodeType !== null) {
-		ref.nodeType = expr.nodeType;
-	}
+	const exprType = expr !== null && expr.nodeType !== null ? expr.nodeType : unknownType();
+	const sym = freshTempSym(ctx, "tmp", exprType);
+	const decl = makeVarDecl(sym.name, expr, DeclKind.Const, loc);
+	decl.resolvedSym = sym;
+	const ref = makeIdentResolved(sym, loc);
 	return { decl, ref };
 }
 

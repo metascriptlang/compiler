@@ -442,20 +442,20 @@ function checkFormatViolations(db: TransAmDb, path: string): string[] {
 			const afterIndent = line.byteAt(info.indentEnd);
 			if (afterIndent === "*".code) continue;
 			if (info.isMixed) {
-				result.push(lspFmtDiagnostic(i, 0, info.indentEnd, 4, "Mixed tabs and spaces", "metascript-fmt", 0));
+				result.push(lspFmtDiagnostic(i, 0, info.indentEnd, 4, "Mixed tabs and spaces", "metascript-fmt", 0, 0));
 				continue;
 			}
 			if (useTabs && info.hasSpace && !info.hasTab) {
-				result.push(lspFmtDiagnostic(i, 0, info.indentEnd, 4, "Use tabs for indentation", "metascript-fmt", 0));
+				result.push(lspFmtDiagnostic(i, 0, info.indentEnd, 4, "Use tabs for indentation", "metascript-fmt", 0, 0));
 				continue;
 			}
 			if (!useTabs && info.hasTab && !info.hasSpace) {
-				result.push(lspFmtDiagnostic(i, 0, info.indentEnd, 4, "Use spaces for indentation", "metascript-fmt", 0));
+				result.push(lspFmtDiagnostic(i, 0, info.indentEnd, 4, "Use spaces for indentation", "metascript-fmt", 0, 0));
 				continue;
 			}
 		}
 		if (info.trailStart < line.length && info.trailStart > 0) {
-			result.push(lspFmtDiagnostic(i, info.trailStart, line.length, 4, "Remove trailing whitespace", "metascript-fmt", 0));
+			result.push(lspFmtDiagnostic(i, info.trailStart, line.length, 4, "Remove trailing whitespace", "metascript-fmt", 0, 0));
 		}
 	}
 
@@ -697,7 +697,7 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 			const col = d.column > 0 ? d.column - 1 : 0;
 			const endCol = d.endColumn > d.column ? d.endColumn - 1 : col + 1;
 			diagArray = diagArray + lspFmtDiagnostic(
-				line, col, endCol, d.severity, d.message, "metascript", 0
+				line, col, endCol, d.severity, d.message, "metascript", 0, d.tags
 			);
 			diagCount = diagCount + 1;
 		}
@@ -733,7 +733,7 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 							const circLine = circStmt.location !== null ? circStmt.location.line - 1 : 0;
 							if (diagCount > 0) diagArray = diagArray + ",";
 							diagArray = diagArray + lspFmtDiagnostic(
-								circLine, 0, 1, 2, "Circular import: " + cyclePath, "metascript", 0
+								circLine, 0, 1, 2, "Circular import: " + cyclePath, "metascript", 0, 0
 							);
 							diagCount = diagCount + 1;
 						}
@@ -760,7 +760,7 @@ export function buildDiagnosticsJson(uri: string, db: TransAmDb, path: string): 
 			if (diagCount > 0) diagArray = diagArray + ",";
 			const w = buildWarnings[bw];
 			const wLine = w.line > 0 ? w.line - 1 : 0;
-			diagArray = diagArray + lspFmtDiagnostic(wLine, 0, 999, 2, w.message, "msc", 0);
+			diagArray = diagArray + lspFmtDiagnostic(wLine, 0, 999, 2, w.message, "msc", 0, 0);
 			diagCount = diagCount + 1;
 		}
 	}
@@ -859,7 +859,7 @@ export function handleInitialize(id: string): string {
 		+ "\"enumMember\",\"event\",\"function\",\"method\",\"macro\","
 		+ "\"keyword\",\"modifier\",\"comment\",\"string\",\"number\","
 		+ "\"regexp\",\"operator\",\"decorator\"],"
-		+ "\"tokenModifiers\":[\"declaration\",\"definition\",\"readonly\",\"static\",\"defaultLibrary\"]}"
+		+ "\"tokenModifiers\":[\"declaration\",\"definition\",\"readonly\",\"static\",\"defaultLibrary\",\"unnecessary\"]}"
 		+ ",\"full\":true}"
 		+ "}}";
 	return lspResponse(id, caps);

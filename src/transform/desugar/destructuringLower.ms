@@ -5,10 +5,11 @@ import {
 	DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
 	IdentifierData,
 } from "../../ast/node";
-import { TransformContext, freshTemp } from "../context";
+import { TransformContext, freshTempSym } from "../context";
+import { unknownType } from "../../checker/types";
 import { walkExpandBlocks } from "../walker";
 import {
-	makeIdent, makeVarDecl, makeNumber, makeArrayAccess, makeMember, makeCall,
+	makeIdent, makeIdentResolved, makeVarDecl, makeNumber, makeArrayAccess, makeMember, makeCall,
 	boolToDeclKind,
 } from "../util";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
@@ -85,14 +86,15 @@ function expandDestructuring(stmt: Node, ctx: TransformContext): Node[] {
 	if (initKind === NodeKind.Identifier || initKind === NodeKind.MemberExpr || initKind === NodeKind.ArrayAccess) {
 		baseExpr = d.destrInit;
 	} else {
-		const tempName = freshTemp(ctx, "destr");
-		const tempDecl = makeVarDecl(tempName, d.destrInit, DeclKind.Const, loc);
+		const sym = freshTempSym(ctx, "destr", d.destrInit.nodeType !== null ? d.destrInit.nodeType : unknownType());
+		const tempDecl = makeVarDecl(sym.name, d.destrInit, DeclKind.Const, loc);
+		tempDecl.resolvedSym = sym;
 		// Propagate type so nativeLower can rewrite tuple access (t[0] → t._0)
 		if (d.destrInit.nodeType !== null) {
 			tempDecl.nodeType = d.destrInit.nodeType;
 		}
 		result.push(tempDecl);
-		baseExpr = makeIdent(tempName, loc);
+		baseExpr = makeIdentResolved(sym, loc);
 	}
 
 	const dk = boolToDeclKind(d.destrIsConst);

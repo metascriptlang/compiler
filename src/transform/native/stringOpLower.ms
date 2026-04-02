@@ -12,7 +12,7 @@
 // Only runs for C backend (JS handles string ops natively).
 
 import { Node, NodeKind, SourceLocation, BinaryExprData, ArrayAccessData, StringLiteralData, IdentifierData, MemberExprData, TypeKind } from "../../ast/node";
-import { isNumeric } from "../../checker/types";
+import { isNumeric, isStringLike } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent, makeBinary, makeMember, makeUnary } from "../util";
@@ -124,7 +124,7 @@ function coercePartToString(node: Node, loc: SourceLocation): Node {
 function isStringTyped(node: Node): boolean {
 	if (node === null) return false;
 	if (node.nodeType === null) return false;
-	return node.nodeType.kind === TypeKind.String;
+	return isStringLike(node.nodeType);
 }
 
 // Check if two nodes refer to the same identifier (by name) or same member access chain.

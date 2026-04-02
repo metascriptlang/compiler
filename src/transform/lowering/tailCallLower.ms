@@ -17,15 +17,16 @@
 // }
 
 import {
-	Node, NodeKind, DeclKind, SourceLocation,
+	Node, NodeKind, DeclKind, SourceLocation, Symbol,
 	FunctionDeclData, ReturnStmtData, CallExprData,
 	IdentifierData, BlockStmtData, IfStmtData,
 } from "../../ast/node";
-import { TransformContext, freshTemp } from "../context";
+import { TransformContext, freshTempSym } from "../context";
+import { unknownType } from "../../checker/types";
 import { walkNode } from "../walker";
 import {
 	makeBool, makeBlock, makeWhile, makeVarDecl,
-	makeIdent, makeAssign, makeExprStmt, makeContinue,
+	makeIdent, makeIdentResolved, makeAssign, makeExprStmt, makeContinue,
 	extractBodyStmts,
 } from "../util";
 import { firstStmtKindAfter, stmtCountAfter } from "../testUtil";
@@ -143,16 +144,19 @@ function buildTailCallReplacement(callExpr: Node, params: string[], loc: SourceL
 	const stmts: Node[] = [];
 
 	// 1. Evaluate all arguments into temps (avoid order-of-evaluation issues)
-	const tempNames: string[] = [];
+	const tempSyms: Symbol[] = [];
 	for (let i = 0; i < cd.arguments.length && i < params.length; i += 1) {
-		const tempName = freshTemp(ctx, "tc");
-		tempNames.push(tempName);
-		stmts.push(makeVarDecl(tempName, cd.arguments[i], DeclKind.Const, loc));
+		const argType = cd.arguments[i].nodeType !== null ? cd.arguments[i].nodeType : unknownType();
+		const sym = freshTempSym(ctx, "tc", argType);
+		tempSyms.push(sym);
+		const tcDecl = makeVarDecl(sym.name, cd.arguments[i], DeclKind.Const, loc);
+		tcDecl.resolvedSym = sym;
+		stmts.push(tcDecl);
 	}
 
 	// 2. Reassign params from temps
-	for (let j = 0; j < tempNames.length; j += 1) {
-		const assignExpr = makeAssign(makeIdent(params[j], loc), makeIdent(tempNames[j], loc), loc);
+	for (let j = 0; j < tempSyms.length; j += 1) {
+		const assignExpr = makeAssign(makeIdent(params[j], loc), makeIdentResolved(tempSyms[j], loc), loc);
 		stmts.push(makeExprStmt(assignExpr, loc));
 	}
 

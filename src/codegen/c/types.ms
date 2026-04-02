@@ -194,6 +194,7 @@ export function typeKey(t: Type): string {
 		TypeKind.Boolean => "boolean",
 		TypeKind.Char => "char",
 		TypeKind.CString => "cstring",
+		TypeKind.StringLiteral => "strlit:" + t.typeName,
 		TypeKind.Void => "void",
 		TypeKind.Null => "null",
 		TypeKind.Enum => { return "enum:" + t.typeName; },
@@ -285,7 +286,7 @@ export function getSimpleTypeDesc(t: Type): string {
 		TypeKind.Uint64 => "uint64_t",
 		TypeKind.Boolean => "MS_BOOL",
 		TypeKind.Char => "char",
-		TypeKind.String => "msString",
+		TypeKind.String | TypeKind.StringLiteral => "msString",
 		TypeKind.CString => "const char*",
 		TypeKind.Void | TypeKind.Null => "void",
 		_ => "",
@@ -700,6 +701,16 @@ function genObjectType(g: CGen, t: Type): string {
 
 function genUnionType(g: CGen, t: Type): string {
 	const key = typeKey(t);
+
+	// Pure string literal union → msString (TypeScript: string at runtime)
+	let allStrLit = true;
+	for (const child of t.typeChildren) {
+		if (child === null || child.kind !== TypeKind.StringLiteral) allStrLit = false;
+	}
+	if (allStrLit && t.typeChildren.length > 0) {
+		typeCacheSet(g.typeCache, typeKey(t), "msString");
+		return "msString";
+	}
 
 	// Early return if already cached
 	const cached = typeCacheGet(g.typeCache, key);

@@ -14,9 +14,10 @@
 // or codegen-level temp insertion).
 
 import { Node, NodeKind, DeclKind, ExprStmtData, CallExprData, MemberExprData } from "../../ast/node";
-import { TransformContext, freshTemp } from "../context";
+import { TransformContext, freshTempSym } from "../context";
+import { unknownType } from "../../checker/types";
 import { walkNode } from "../walker";
-import { makeVarDecl, makeIdent, makeCall, makeMember, makeExprStmt, makeBlock } from "../util";
+import { makeVarDecl, makeIdent, makeIdentResolved, makeCall, makeMember, makeExprStmt, makeBlock } from "../util";
 import { firstStmtKindAfter, stmtCountAfter } from "../testUtil";
 
 // ===== Helpers =====
@@ -60,9 +61,11 @@ function lowerRvalueNode(node: Node, ctx: TransformContext): Node {
 	// Transform: f().method(args);
 	//   → { const $rval_N = f(); $rval_N.method(args); }
 	const loc = node.location;
-	const tmpName = freshTemp(ctx, "rval");
-	const tmpDecl = makeVarDecl(tmpName, member.object, DeclKind.Const, loc);
-	const newCallee = makeMember(makeIdent(tmpName, loc), member.property, loc);
+	const rvalType = member.object.nodeType !== null ? member.object.nodeType : unknownType();
+	const sym = freshTempSym(ctx, "rval", rvalType);
+	const tmpDecl = makeVarDecl(sym.name, member.object, DeclKind.Const, loc);
+	tmpDecl.resolvedSym = sym;
+	const newCallee = makeMember(makeIdentResolved(sym, loc), member.property, loc);
 	const newCall = makeCall(newCallee, call.arguments, loc);
 	const newExprStmt = makeExprStmt(newCall, loc);
 	const stmts: Node[] = [];

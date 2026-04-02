@@ -24,7 +24,7 @@
 import { Node, NodeKind, NodeFlag, DeclKind, ProgramData, FunctionDeclData, SourceLocation, makeLoc, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, TypeAliasDeclData, IdentifierData, MemberExprData, ArrayAccessData, HiddenDerefData, BlockStmtData, Type, TypeKind, AttachedOp, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, NameSet, nameSetContains, nameSetAdd, createNameSet, createTransformContextWithChecker } from "../context";
 import { makeIdent, makeIdentResolved, makeBlock, makeExprStmt, makeCall, makeMember, makeAssign, makeFnDecl, makeVarDecl, makeReturn, makeIf, makeBinary, makeUnary, makeNull, makeString, makeBool, makeNumber, makeObjectLiteral, makeHiddenAddr, makeHiddenDeref, makeWhile, makeArrayAccess } from "../util";
-import { isPrimitiveKind, setAttachedOp, unwrapRef, createArray, createPtr, createRef, createVar, createPrimitive, stringType, getTypeSize } from "../../checker/types";
+import { isPrimitiveKind, setAttachedOp, unwrapRef, createArray, createPtr, createRef, createVar, createPrimitive, stringType, getTypeSize, isStringLike } from "../../checker/types";
 import { walkNode } from "../walker";
 import { lookupSymbol, makeSymbol, setFlag, SymbolFlag } from "../../checker/symbol";
 import { CheckerContext } from "../../checker/context";
@@ -637,24 +637,33 @@ function buildVariantDispatch(hook: string, typeName: string, objType: Type, p1:
 
 			if (armBuf.items.length > 0) {
 				// Generate helper function: TypeName_vN_Suffix(self) or TypeName_vN_Suffix(dest, src)
+				// Dedup: sink hook internally dispatches destroy — reuse already-generated destroy helpers
 				const suffix = hookSuffix(hook);
 				const helperName = `${typeName}_${vName}${suffix}`;
-				let helperFn: Node = null as unknown as Node;
-				if (isUnary) {
-					helperFn = makeFnDecl(helperName, [p1], [typeName], makeBlock(armBuf.items, loc), "", "void", loc);
-				} else {
-					helperFn = makeFnDecl(helperName, [p1, p2], [typeName, typeName], makeBlock(armBuf.items, loc), "", "void", loc);
+				if (!nameSetContains(lctx.generated, helperName)) {
+					nameSetAdd(lctx.generated, helperName);
+					const isTrace = hook === "trace";
+					let helperFn: Node = null as unknown as Node;
+					if (isTrace) {
+						// Trace: (self, callback) — self is union type, callback is void*
+						helperFn = makeFnDecl(helperName, [p1, p2], [typeName, "void*"], makeBlock(armBuf.items, loc), "", "void", loc);
+					} else if (isUnary) {
+						helperFn = makeFnDecl(helperName, [p1], [typeName], makeBlock(armBuf.items, loc), "", "void", loc);
+					} else {
+						helperFn = makeFnDecl(helperName, [p1, p2], [typeName, typeName], makeBlock(armBuf.items, loc), "", "void", loc);
+					}
+					const paramType = createVar(objType);
+					setHookParamType(helperFn, 0, paramType);
+					if (!isUnary) setHookParamType(helperFn, 1, paramType);
+					// Trace param[1] stays void* (callback/env) — no type override
+					markGeneratedOp(helperFn, helperName);
+					lctx.collector.push(helperFn);
 				}
-				const paramType = createVar(objType);
-				setHookParamType(helperFn, 0, paramType);
-				if (!isUnary) setHookParamType(helperFn, 1, paramType);
-				markGeneratedOp(helperFn, helperName);
-				lctx.collector.push(helperFn);
 
 				// Dispatch: call the helper from the main if/else chain
 				const tagAccess = makeMember(makeIdent(p1, loc), "_tag", loc);
 				const cond = makeBinary(tagAccess, "===", makeNumber(vi, loc), loc);
-				const callArgs: Node[] = isUnary
+				const callArgs: Node[] = (isUnary && hook !== "trace")
 					? [makeIdent(p1, loc)]
 					: [makeIdent(p1, loc), makeIdent(p2, loc)];
 				const callStmt = makeExprStmt(makeCall(makeIdent(helperName, loc), callArgs, loc), loc);
@@ -1020,7 +1029,7 @@ function fieldEqExpr(aField: Node, bField: Node, fieldType: Type, lctx: LiftCtx,
 	}
 	// String fields — reference parity: genStrEquals → eqStrings().
 	// msString is a C struct, so === doesn't work. Call msStringEquals(a, b).
-	if (fieldType.kind === TypeKind.String) {
+	if (isStringLike(fieldType)) {
 		return makeCall(makeIdent("msStringEquals", loc), [aField, bField], loc);
 	}
 	// Array fields — arrays are C structs, can't use ==.

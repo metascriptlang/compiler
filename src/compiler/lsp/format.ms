@@ -108,11 +108,12 @@ export function lspFmtHoverResult(
 
 export function lspFmtDiagnostic(
 	line: number, col: number, endCol: number,
-	severity: number, message: string, source: string, code: number
+	severity: number, message: string, source: string, code: number, tags: number
 ): string {
 	const b = jsonObj();
 	jRaw(b, "range", lspFmtRange(line, col, line, endCol));
 	jNum(b, "severity", severity);
+	if (tags > 0) jRaw(b, "tags", `[${tags}]`);
 	jStr(b, "source", source);
 	jStr(b, "message", message);
 	if (code > 0) jNum(b, "code", code);
@@ -252,13 +253,19 @@ test "hover with docs" {
 }
 
 test "diagnostic no code" {
-	const d = lspFmtDiagnostic(0, 5, 8, 1, "type error", "metascript", 0);
+	const d = lspFmtDiagnostic(0, 5, 8, 1, "type error", "metascript", 0, 0);
 	assert d.length > 30;
 }
 
 test "diagnostic with code" {
-	const d = lspFmtDiagnostic(0, 5, 8, 1, "type error", "metascript", 2304);
+	const d = lspFmtDiagnostic(0, 5, 8, 1, "type error", "metascript", 2304, 0);
 	assert d.length > 40;
+}
+
+test "diagnostic with unnecessary tag" {
+	const d = lspFmtDiagnostic(0, 5, 8, 4, "unused import", "metascript", 0, 1);
+	assert d.indexOf("tags") >= 0;
+	assert d.indexOf("[1]") >= 0;
 }
 
 test "document symbol no detail" {

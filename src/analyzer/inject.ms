@@ -1201,6 +1201,9 @@ function isVarFromOuterLoopScope(varName: string, dctx: DrcContext): boolean {
 
 function isLastReadSafe(sym: Symbol, node: Node, idx: number, stmts: Node[], dctx: DrcContext): boolean {
 	if (sym === null) return false;
+	// Reference parity (sfGlobal): module-level variables live for the entire program.
+	// wasMoved would zero them for all callers. Never move globals.
+	if (hasFlag(sym, SymbolFlag.Global)) return false;
 	// Borrowed params (non-sink) must never be moved — caller owns the value.
 	// Moving a by-value param only zeroes the local copy while the caller still
 	// holds (and will decref) its own copy, causing use-after-free.
@@ -1744,6 +1747,14 @@ function processAssignment(stmt: Node, bd: BinaryExprData, idx: number, stmts: N
 	// Process RHS recursively with Consumed mode
 	bd.right = processNode(bd.right, dctx, DrcMode.Consumed);
 
+	// Reference parity: when dest appears in the RHS (e.g., result = f(result)),
+	// processNode emits wasMoved(dest) as pending because isLastRead is true
+	// for the old value. But reassignment's save-assign-destroy handles the
+	// old value. The pending wasMoved would zero the NEW value. Clear it.
+	if (!isFirstWrite) {
+		clearPendingForVar(dctx, leftD.name);
+	}
+
 	// Unified RC decision (Reference parity: moveOrCopy)
 	// First-write maps to IsDecl (no old value to destroy)
 	const mocFlags: int32 = isFirstWrite ? MOC_IS_DECL : MOC_NONE;
@@ -2057,7 +2068,15 @@ function processMethodMember(member: Node, dctx: DrcContext, loc: SourceLocation
 function processCtorMember(member: Node, dctx: DrcContext, loc: SourceLocation): void {
 	const cd = member.data as ConstructorDeclData;
 	if (cd.ctorBody !== null) {
-		cd.ctorBody = processFuncBodyWithParams(cd.ctorBody, noSym, "", cd.ctorParams, dctx, loc);
+		// Same pattern as processMethodMember: use function type for param RC classification.
+		// Constructor's function type is on member.nodeType (set in resolvePass).
+		const ctorType = member.nodeType;
+		if (ctorType !== null && ctorType.kind === TypeKind.Function) {
+			const ctorSym = makeSymbol("constructor", SymbolKind.Method, ctorType, false);
+			cd.ctorBody = processFuncBodyWithParams(cd.ctorBody, ctorSym, "constructor", cd.ctorParams, dctx, loc);
+		} else {
+			cd.ctorBody = processFuncBodyWithParams(cd.ctorBody, noSym, "", cd.ctorParams, dctx, loc);
+		}
 	}
 }
 

@@ -11,11 +11,11 @@
 
 import { Node, NodeKind, DeclKind, HiddenStdConvData, ArrayAccessData, BinaryExprData, ArrayLiteralData, BlockStmtData, Type, TypeKind } from "../../ast/node";
 import { createSizedArray, createPtr } from "../../checker/types";
-import { TransformContext, freshTemp } from "../context";
+import { TransformContext, freshTempSym } from "../context";
 import { walkNode } from "../walker";
 import {
 	makeMember, makeTypedObjectLiteral, makeNumber, makeBinary,
-	makeVarDecl, makeTypedIdent, makeHiddenAddr, makeObjectLiteral,
+	makeVarDecl, makeIdentResolved, makeTypedIdent, makeHiddenAddr, makeObjectLiteral,
 } from "../util";
 
 export function spanLower(program: Node, ctx: TransformContext): Node {
@@ -158,12 +158,13 @@ function lowerLiteralToSpan(literal: Node, spanType: Type, ctx: TransformContext
 	literal.nodeType = sizedType;
 
 	// Create a temp variable: const $span_lit_N: T[elemCount] = [elements...]
-	const tempName = freshTemp(ctx, "span_lit");
-	const tempDecl = makeVarDecl(tempName, literal, DeclKind.Const, loc);
+	const sym = freshTempSym(ctx, "span_lit", sizedType);
+	const tempDecl = makeVarDecl(sym.name, literal, DeclKind.Const, loc);
+	tempDecl.resolvedSym = sym;
 	tempDecl.nodeType = sizedType;
 
 	// Create Span view of the temp: { data: temp.data, len: N }
-	const tempRef = makeTypedIdent(tempName, sizedType, loc);
+	const tempRef = makeIdentResolved(sym, loc);
 	const dataExpr = makeMember(tempRef, "data", loc);
 	const lenExpr = makeNumber(elemCount, loc);
 	const spanInit = makeTypedObjectLiteral(["data", "len"], [dataExpr, lenExpr], spanType, loc);

@@ -239,7 +239,7 @@ function genVarDecl(g: CGen, p: CProc, node: Node): void {
 	const isTemp = d.declName.length > 0 && d.declName.byteAt(0) === "$".code;
 	let varName = safeName(d.declName);
 	let hoistDecl = p !== null;
-	// Nim parity: skip if same DRC temp VarDecl node visited twice (nativeName already set).
+	// Reference parity: skip if same DRC temp VarDecl node visited twice (nativeName already set).
 	// Only for temps — user vars with the same symbol in sibling scopes (e.g., `const lv` in
 	// different match arms) must get separate unique names via fillLocalName.
 	if (hoistDecl && isTemp && node.resolvedSym !== null && node.resolvedSym.nativeName !== "") {

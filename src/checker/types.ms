@@ -609,6 +609,36 @@ export function cstringType(): Type { return getSysType(TypeKind.CString); }
 export function int32Type(): Type { return getSysType(TypeKind.Int32); }
 export function float64Type(): Type { return getSysType(TypeKind.Float64); }
 
+// StringLiteral: a specific string value as a type (TypeScript parity).
+// Not a singleton — each unique value creates a new instance.
+export function createStringLiteral(value: string): Type {
+	const t = emptyType();
+	t.kind = TypeKind.StringLiteral;
+	t.typeName = value;
+	return t;
+}
+
+export function isStringLiteral(t: Type): boolean {
+	return t !== null && t.kind === TypeKind.StringLiteral;
+}
+
+export function isAllStringLiteralUnion(t: Type): boolean {
+	if (t === null || t.kind !== TypeKind.Union) return false;
+	if (t.typeChildren.length === 0) return false;
+	for (const child of t.typeChildren) {
+		if (child === null || child.kind !== TypeKind.StringLiteral) return false;
+	}
+	return true;
+}
+
+// isStringLike — true for String, StringLiteral, and Union<StringLiteral...>.
+// Single source of truth: these are all msString at runtime.
+export function isStringLike(t: Type): boolean {
+	if (t === null) return false;
+	if (t.kind === TypeKind.String || t.kind === TypeKind.StringLiteral) return true;
+	return isAllStringLiteralUnion(t);
+}
+
 export function isFloatType(t: Type): boolean {
 	if (t === null) return false;
 	return t.kind === TypeKind.Float32 || t.kind === TypeKind.Float64;
@@ -815,7 +845,7 @@ function getTypeSizeInner(t: Type): number {
 		TypeKind.Int32 | TypeKind.Uint32 | TypeKind.Char => 4,
 		TypeKind.Int64 | TypeKind.Uint64 => 8,
 		TypeKind.Boolean => 1,
-		TypeKind.String => targetPtrSize + targetPtrSize, // msString: data ptr + length
+		TypeKind.String | TypeKind.StringLiteral => targetPtrSize + targetPtrSize, // msString: data ptr + length
 		TypeKind.CString => targetPtrSize,
 		TypeKind.Enum => 4, // C int
 		TypeKind.Ref | TypeKind.Ptr | TypeKind.Borrow => targetPtrSize,
@@ -1152,9 +1182,6 @@ export function isNarrowingIntConv(source: Type, target: Type): boolean {
 	return integerRank(source) > integerRank(target);
 }
 
-export function isStringType(t: Type): boolean {
-	return t.kind === TypeKind.String;
-}
 
 export function isBoolType(t: Type): boolean {
 	return t.kind === TypeKind.Boolean;
@@ -1297,6 +1324,7 @@ export function isPrimitiveKind(kind: TypeKind): boolean {
 		|| kind === TypeKind.Unknown
 		|| kind === TypeKind.Char
 		|| kind === TypeKind.CString
+		|| kind === TypeKind.StringLiteral
 		|| kind === TypeKind.Error;
 }
 
@@ -1338,10 +1366,23 @@ export function typeNameOf(t: Type): string {
 		TypeKind.Borrow => "Borrow",
 		TypeKind.Tuple => "Tuple",
 		TypeKind.CString => "cstring",
+		TypeKind.StringLiteral => "\"" + t.typeName + "\"",
 		// Result and Promise are now GenericInstance — handled above via t.typeName
 		TypeKind.Enum => t.typeName,
 		TypeKind.TypeReference => t.typeName,
 		TypeKind.Distinct => t.typeName,
+		TypeKind.Union => {
+			// Display string literal unions as "north" | "south"
+			if (t.typeChildren.length > 0) {
+				let display = "";
+				for (const child of t.typeChildren) {
+					if (display !== "") display = display + " | ";
+					display = display + typeNameOf(child);
+				}
+				return display;
+			}
+			return t.typeName;
+		},
 		_ => "",
 	};
 }
@@ -1514,9 +1555,10 @@ test "isNumeric" {
 	assert !isNumeric(booleanType());
 }
 
-test "isStringType" {
-	assert isStringType(stringType());
-	assert !isStringType(numberType());
+test "isStringLike" {
+	assert isStringLike(stringType());
+	assert isStringLike(createStringLiteral("north"));
+	assert !isStringLike(numberType());
 }
 
 test "isBoolType" {

@@ -11,9 +11,9 @@ import { Node, NodeKind, SourceLocation, DeclKind,
 	ActorDeclData, MethodDeclData, ConstructorDeclData,
 	DecoratedDeclData, ExportDeclData, ProgramData, NewExprData,
 	IdentifierData, VariableDeclData } from "../../ast/node";
-import { TransformContext, freshTemp } from "../context";
+import { TransformContext, freshTempSym } from "../context";
 import { walkNode } from "../walker";
-import { syntheticToken, makeIdent, makeCall, makeExprStmt, makeReturn,
+import { syntheticToken, makeIdent, makeIdentResolved, makeCall, makeExprStmt, makeReturn,
 	makeVarDecl, makeMember, makeNumber, makeNull, makeBlock,
 	makeBinary } from "../util";
 import { createNode } from "../../ast/node";
@@ -22,17 +22,18 @@ import { voidType } from "../../checker/types";
 // ===== Build proxy body for a void method (send semantics) =====
 
 function buildSendProxy(kind: number, ctx: TransformContext, loc: SourceLocation): Node {
-	const msgName = freshTemp(ctx, "amsg");
+	const msgSym = freshTempSym(ctx, "amsg", voidType());
 	const msgAlloc = makeCall(makeIdent("msMsgAlloc", loc), [
 		makeNumber(kind, loc),
 		makeNull(loc),
 	], loc);
 	msgAlloc.nodeType = voidType();
-	const msgDecl = makeVarDecl(msgName, msgAlloc, DeclKind.Const, loc);
+	const msgDecl = makeVarDecl(msgSym.name, msgAlloc, DeclKind.Const, loc);
+	msgDecl.resolvedSym = msgSym;
 	msgDecl.nodeType = voidType();
 	const sendCall = makeCall(makeIdent("msActorSend", loc), [
 		makeMember(makeIdent("this", loc), "_actor", loc),
-		makeIdent(msgName, loc),
+		makeIdentResolved(msgSym, loc),
 	], loc);
 	return makeBlock([msgDecl, makeExprStmt(sendCall, loc)], loc);
 }
@@ -40,24 +41,26 @@ function buildSendProxy(kind: number, ctx: TransformContext, loc: SourceLocation
 // ===== Build proxy body for a T-returning method (call semantics) =====
 
 function buildCallProxy(kind: number, ctx: TransformContext, loc: SourceLocation): Node {
-	const futName = freshTemp(ctx, "afut");
-	const msgName = freshTemp(ctx, "amsg");
+	const futSym = freshTempSym(ctx, "afut", voidType());
+	const msgSym = freshTempSym(ctx, "amsg", voidType());
 	const futCreate = makeCall(makeIdent("msFutureCreate", loc), [], loc);
 	futCreate.nodeType = voidType();
-	const futDecl = makeVarDecl(futName, futCreate, DeclKind.Const, loc);
+	const futDecl = makeVarDecl(futSym.name, futCreate, DeclKind.Const, loc);
+	futDecl.resolvedSym = futSym;
 	futDecl.nodeType = voidType();
 	const msgAlloc = makeCall(makeIdent("msMsgAlloc", loc), [
 		makeNumber(kind, loc),
-		makeIdent(futName, loc),
+		makeIdentResolved(futSym, loc),
 	], loc);
 	msgAlloc.nodeType = voidType();
-	const msgDecl = makeVarDecl(msgName, msgAlloc, DeclKind.Const, loc);
+	const msgDecl = makeVarDecl(msgSym.name, msgAlloc, DeclKind.Const, loc);
+	msgDecl.resolvedSym = msgSym;
 	msgDecl.nodeType = voidType();
 	const sendCall = makeCall(makeIdent("msActorSend", loc), [
 		makeMember(makeIdent("this", loc), "_actor", loc),
-		makeIdent(msgName, loc),
+		makeIdentResolved(msgSym, loc),
 	], loc);
-	const retFut = makeReturn(makeIdent(futName, loc), loc);
+	const retFut = makeReturn(makeIdentResolved(futSym, loc), loc);
 	return makeBlock([futDecl, msgDecl, makeExprStmt(sendCall, loc), retFut], loc);
 }
 

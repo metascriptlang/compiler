@@ -3,8 +3,8 @@
 
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, DeclKind, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, ClassDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createSpan, createFunction, createTypeRef, createStruct, createRef, createResult, createPrimitive, substituteType, instantiateGeneric, anonStructName, isNumeric, isIntegerType, isStringType, isCallable, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, unwrapRef, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, isPromise, getPromiseInner, isResult, getResultOkType, createGenericParam, instantiateGenericBody } from "./types";
-import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag } from "./symbol";
+import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createSpan, createFunction, createTypeRef, createStruct, createRef, createResult, createPrimitive, substituteType, instantiateGeneric, anonStructName, isNumeric, isIntegerType, isCallable, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, unwrapRef, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, isPromise, getPromiseInner, isResult, getResultOkType, createGenericParam, instantiateGenericBody, isStringLike } from "./types";
+import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, setFlag, markUsed } from "./symbol";
 import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, isInAsyncPromiseResult, findExportedSymbol } from "./context";
 import {
 	scoreCandidate, isAssignable, needsStdConv, resolveOverloadIdx,
@@ -167,7 +167,32 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 			}
 		},
 		NodeKind.BigIntLiteral => createPrimitive(TypeKind.Int64),
-		NodeKind.StringLiteral => stringType(),
+		NodeKind.StringLiteral => {
+			// TypeScript parity: string literals get StringLiteral type when expectedType demands it
+			if (expectedType !== null) {
+				const sd = node.data as StringLiteralData;
+				if (expectedType.kind === TypeKind.StringLiteral && expectedType.typeName === sd.value) {
+					return expectedType;
+				}
+				if (expectedType.kind === TypeKind.Union) {
+					for (const child of expectedType.typeChildren) {
+						if (child !== null && child.kind === TypeKind.StringLiteral && child.typeName === sd.value) {
+							return child;
+						}
+					}
+					// All members are StringLiteral but value not found → type error
+					let allStrLit = true;
+					for (const child of expectedType.typeChildren) {
+						if (child === null || child.kind !== TypeKind.StringLiteral) allStrLit = false;
+					}
+					if (allStrLit && expectedType.typeChildren.length > 0) {
+						addError(ctx, `Type '"${sd.value}"' is not assignable to type '${typeNameOf(expectedType)}'`, node.location.line, node.location.column);
+						return stringType();
+					}
+				}
+			}
+			return stringType();
+		},
 		NodeKind.BooleanLiteral => booleanType(),
 		NodeKind.NullLiteral => nullType(),
 		NodeKind.RegexLiteral | NodeKind.QuoteExpr | NodeKind.ComptimeBlock => unknownType(),
@@ -181,6 +206,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 			// Demand-driven: ensure the symbol's signature is resolved before using its type
 			ensureShaped(sym, ctx);
 			node.resolvedSym = sym;
+			markUsed(sym);
 			// Ref parity: useVar — only check vars declared in current scope (getDeclBlock >= 0).
 			// Imports/globals never varDecl'd → naturally skipped. Matches reference's owner-based scoping.
 			if (sym.symbolKind === SymbolKind.Variable && getDeclBlock(ctx.initTracker, d.name) >= 0 &&
@@ -212,7 +238,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 			if (isAsgn && d.left.kind === NodeKind.MemberExpr) {
 				const md = d.left.data as MemberExprData;
 				if (md.property === "length" && md.object.nodeType !== null) {
-					if (md.object.nodeType.kind === TypeKind.String || md.object.nodeType.kind === TypeKind.CString) {
+					if (isStringLike(md.object.nodeType) || md.object.nodeType.kind === TypeKind.CString) {
 						addError(ctx, "cannot assign to 'length' on string (strings are immutable)", d.left.location.line, d.left.location.column);
 					} else if (md.object.nodeType.kind === TypeKind.SizedArray) {
 						addError(ctx, "cannot modify 'length' on fixed-size array", d.left.location.line, d.left.location.column);
@@ -294,7 +320,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 			if (d.updateArg.kind === NodeKind.MemberExpr) {
 				const umd = d.updateArg.data as MemberExprData;
 				if (umd.property === "length" && umd.object.nodeType !== null &&
-					(umd.object.nodeType.kind === TypeKind.Array || umd.object.nodeType.kind === TypeKind.SizedArray || umd.object.nodeType.kind === TypeKind.Span || umd.object.nodeType.kind === TypeKind.String || umd.object.nodeType.kind === TypeKind.CString)) {
+					(umd.object.nodeType.kind === TypeKind.Array || umd.object.nodeType.kind === TypeKind.SizedArray || umd.object.nodeType.kind === TypeKind.Span || isStringLike(umd.object.nodeType) || umd.object.nodeType.kind === TypeKind.CString)) {
 					if (umd.object.nodeType.kind === TypeKind.SizedArray) {
 						addError(ctx, "cannot modify 'length' on fixed-size array", d.updateArg.location.line, d.updateArg.location.column);
 					} else {
@@ -696,7 +722,7 @@ function inferBinaryOp(op: string, leftType: Type, rightType: Type): Type {
 		"===" | "!==" | "==" | "!=" | "<" | ">" | "<=" | ">=" => booleanType(),
 		"&&" | "||" => leftType,
 		"+" => {
-			if (isStringType(leftType) || isStringType(rightType)) return stringType();
+			if (isStringLike(leftType) || isStringLike(rightType)) return stringType();
 			if (leftType !== null && leftType.kind === TypeKind.Ptr) return leftType;
 			if (rightType !== null && rightType.kind === TypeKind.Ptr) return rightType;
 			if (isIntegerType(leftType) && isIntegerType(rightType)) return widenIntegers(leftType, rightType);
@@ -934,6 +960,28 @@ function cloneDefaultNode(node: Node): Node {
 	return clone;
 }
 
+// Shared default-filling logic: clone defaults into args array.
+// Used by both function calls (fillDefaultArgsForNode) and constructor calls (checkNewExpr).
+function fillDefaults(ctx: CheckerContext, args: Node[], defaults: Node[],
+	totalParams: number, defaultOffset: number, paramTypes: Type[]): void {
+	if (defaults === null) return;
+	let argIdx = args.length;
+	while (argIdx < totalParams) {
+		const defIdx = argIdx + defaultOffset;
+		let defNode: Node = null;
+		if (defIdx < defaults.length) {
+			defNode = defaults[defIdx];
+		}
+		if (defNode === null) break;
+		const cloned = cloneDefaultNode(defNode);
+		// Type-check with expected param type so empty containers get correct type
+		const expectedType = paramTypes !== null && argIdx < paramTypes.length ? paramTypes[argIdx] : null;
+		checkExpr(ctx, cloned, expectedType);
+		args.push(cloned);
+		argIdx = argIdx + 1;
+	}
+}
+
 // Reference parity: fill missing call arguments from parameter defaults.
 // defaultOffset accounts for receiver param in extension methods:
 // fnDefaults[0] = receiver (no default), so call arg index N maps to fnDefaults[N + offset].
@@ -952,22 +1000,23 @@ function fillDefaultArgsForNode(ctx: CheckerContext, callNode: Node, fnName: str
 			if (declData.fnDefaults !== null) fnDefaults = declData.fnDefaults;
 		}
 	}
-	let argIdx = cd.arguments.length;
-	while (argIdx < totalParams) {
-		const defIdx = argIdx + defaultOffset;
-		let defNode: Node = null;
-		if (fnDefaults !== null && defIdx < fnDefaults.length) {
-			defNode = fnDefaults[defIdx];
-		}
-		// No default for this param — stop filling (defaults must be trailing)
-		if (defNode === null) break;
-		// Reference parity: fresh copy of default node per call site (copyTree)
-		cd.arguments.push(cloneDefaultNode(defNode));
-		argIdx = argIdx + 1;
-	}
+	fillDefaults(ctx, cd.arguments, fnDefaults, totalParams, defaultOffset, null as unknown as Type[]);
 }
 
 // ===== NewExpr =====
+
+function getCtorParamTypes(classSym: Symbol): Type[] {
+	if (classSym.declNode !== null && classSym.declNode.kind === NodeKind.ClassDecl) {
+		const classData = classSym.declNode.data as ClassDeclData;
+		for (const member of classData.classBody) {
+			if (member.kind === NodeKind.ConstructorDecl && member.nodeType !== null
+					&& member.nodeType.kind === TypeKind.Function) {
+				return member.nodeType.typeChildren;
+			}
+		}
+	}
+	return null as unknown as Type[];
+}
 
 function checkNewArgs(ctx: CheckerContext, args: Node[]): void {
 	for (const arg of args) { checkExpr(ctx, arg, null); }
@@ -1034,25 +1083,21 @@ function checkNewExpr(ctx: CheckerContext, node: Node, expected: Type): Type {
 		checkExpr(ctx, d.newArguments[ai], argExpected);
 		ai = ai + 1;
 	}
-	// Fill default args for constructor calls (reference parity: standard compiler registers every
-	// function in the symbol table so overload resolution + default params can fill defaults.
-	// instantiateClassConstructor registers Set__string_new with concrete types + defaults).
+	// Fill default args for constructor calls — unified with fillDefaults (same as functions).
 	if (hasCtor) {
+		// Path 1: monomorphized generic constructors (Set__string_new) via _ctorRegistry
 		const mangledName = innerType !== null ? innerType.typeName : "";
 		const ctorFnName = mangledName + "_new";
 		const ctorEntry = mangledName !== "" ? lookupCtorDefaults(ctorFnName) : null;
 		if (ctorEntry !== null && ctorEntry.fnType !== null && ctorEntry.fnType.typeChildren !== null) {
-			const ctorType = ctorEntry.fnType;
-			let argIdx = d.newArguments.length;
-			while (argIdx < ctorType.typeChildren.length) {
-				let defNode: Node = null;
-				if (ctorEntry.defaults !== null && argIdx < ctorEntry.defaults.length) defNode = ctorEntry.defaults[argIdx];
-				if (defNode === null) break;
-				const cloned = cloneDefaultNode(defNode);
-				checkExpr(ctx, cloned, ctorType.typeChildren[argIdx]);
-				d.newArguments.push(cloned);
-				argIdx = argIdx + 1;
-			}
+			fillDefaults(ctx, d.newArguments, ctorEntry.defaults,
+				ctorEntry.fnType.typeChildren.length, 0, ctorEntry.fnType.typeChildren);
+		} else if (d.newCallee.resolvedSym !== null && d.newCallee.resolvedSym.defaultParams !== null
+				&& d.newCallee.resolvedSym.defaultParams.length > 0) {
+			// Path 2: non-generic constructors — defaults on class sym
+			const defaults = d.newCallee.resolvedSym.defaultParams;
+			const ctorParamTypes = getCtorParamTypes(d.newCallee.resolvedSym);
+			fillDefaults(ctx, d.newArguments, defaults, defaults.length, 0, ctorParamTypes);
 		}
 	}
 	if (resolvedType !== null && (resolvedType.kind === TypeKind.Struct || resolvedType.kind === TypeKind.Ref || resolvedType.kind === TypeKind.GenericInstance)) {
@@ -1104,6 +1149,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 			// Demand-driven: ensure callee signature is ready
 			ensureShaped(sym, ctx);
 			node.resolvedSym = sym;
+			markUsed(sym);
 			sgRecordSym(ctx, d.callee.location.line, d.callee.location.column, d.callee.location.column + calleeName.length, sym, sym.symbolType, sym.symbolKind, calleeName, "", false);
 			if (hasOverloads(sym)) {
 				needsOverloadScoring = true;
@@ -1883,7 +1929,10 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 	if (objType.kind === TypeKind.Enum && d.property !== "toString") {
 		const enumName = objType.typeName;
 		const propName = d.property;
-		const mangledName = enumName + "_" + propName;
+		// Extern C enums: member names are already full C identifiers (e.g. WGPUCullMode_Back)
+		const enumSym0 = lookupSymbol(ctx.table, enumName);
+		const isExternEnum = enumSym0 !== null && hasFlag(enumSym0, SymbolFlag.ImportC);
+		const mangledName = isExternEnum ? propName : enumName + "_" + propName;
 		// Create synthetic symbol for the enum member (no scope lookup needed).
 		// Enum member mangled names are NOT in scope — resolved here at use site.
 		const enumSym = lookupSymbol(ctx.table, enumName);
@@ -2039,7 +2088,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 	}
 
 	// Builtin properties: .length on array/string
-	if (d.property === "length" && (resolvedObjType.kind === TypeKind.Array || resolvedObjType.kind === TypeKind.SizedArray || resolvedObjType.kind === TypeKind.Span || resolvedObjType.kind === TypeKind.String || resolvedObjType.kind === TypeKind.CString)) {
+	if (d.property === "length" && (resolvedObjType.kind === TypeKind.Array || resolvedObjType.kind === TypeKind.SizedArray || resolvedObjType.kind === TypeKind.Span || isStringLike(resolvedObjType) || resolvedObjType.kind === TypeKind.CString)) {
 		// Create a synthetic symbol for 'length' to satisfy the validator
 		const lengthSym = makeSymbol("length", SymbolKind.Property, int32Type(), false);
 		lengthSym.state = SymbolState.Shaped;
@@ -2161,6 +2210,10 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 			if (ext.sym !== null) {
 				ensureShaped(ext.sym, ctx);
 				node.resolvedSym = ext.sym;
+				markUsed(ext.sym);
+				// Also mark the imported symbol (may be a different object than ext.sym)
+				const importedSym = lookupSymbol(ctx.table, ext.sym.name);
+				if (importedSym !== null) markUsed(importedSym);
 				sgRecordSym(ctx, node.location.line, node.location.column + 1, node.location.column + 1 + d.property.length, ext.sym, getExtFnType(ext), SymbolKind.Method, d.property, ext.receiverTypeName, false);
 			}
 			// Instance extension: strip receiver param (index 0) so checkCallExpr

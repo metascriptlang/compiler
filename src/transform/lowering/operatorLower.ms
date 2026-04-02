@@ -22,7 +22,7 @@ import { Node, NodeKind, BinaryExprData, IdentifierData, TypeAssertionData, Sour
 import { TransformContext, PendingTupleOp } from "../context";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary } from "../util";
-import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType } from "../../checker/types";
+import { typeNameOf, tupleTypeName, createFunction, booleanType, isMaybeType, isStringLike } from "../../checker/types";
 import { lookupSymbol } from "../../checker/symbol";
 import { findExtension, ExtensionMethod } from "../../checker/context";
 
@@ -221,7 +221,8 @@ function lowerOperatorNode(node: Node, ctx: TransformContext): Node {
 	}
 
 	if (leftType === null) return node;
-	const typeName = typeNameOf(leftType);
+	// StringLiteral and Union<StringLiteral...> are string at runtime — use string operators
+	let typeName = isStringLike(leftType) ? "string" : typeNameOf(leftType);
 	if (typeName === "") return node;
 
 	// 1. Explicit user-defined operator overload takes priority (reference parity:

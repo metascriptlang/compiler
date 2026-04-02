@@ -9,7 +9,7 @@
 // Chains of length 2 are left as binary (no benefit from flattening).
 
 import { Node, NodeKind, SourceLocation, BinaryExprData, CallExprData, IdentifierData, TypeKind, collectConcatParts } from "../../ast/node";
-import { isNumeric, stringType } from "../../checker/types";
+import { isNumeric, stringType, isStringLike } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent, makeNumber, makeMember } from "../util";
@@ -36,7 +36,7 @@ function flattenConcat(node: Node): Node {
 	for (const p of parts) {
 		if (p.kind === NodeKind.StringLiteral) {
 			hasString = true;
-		} else if (p.nodeType !== null && p.nodeType.kind === TypeKind.String) {
+		} else if (p.nodeType !== null && isStringLike(p.nodeType)) {
 			hasString = true;
 		} else if (p.kind === NodeKind.CallExpr) {
 			// Already-flattened msStringConcatMany call is a string
@@ -73,7 +73,7 @@ function needsCoercion(node: Node): boolean {
 	if (node.kind === NodeKind.StringLiteral) return false;
 	if (node.kind === NodeKind.NumberLiteral) return true;
 	if (node.nodeType !== null) {
-		if (node.nodeType.kind === TypeKind.String) return false;
+		if (isStringLike(node.nodeType)) return false;
 		// Any non-string typed value needs coercion
 		return true;
 	}
@@ -83,7 +83,7 @@ function needsCoercion(node: Node): boolean {
 // Wrap non-string parts in .toString() calls — builtinLower/extensionMethodLower resolve later
 function coerceToString(node: Node, loc: SourceLocation): Node {
 	if (node.kind === NodeKind.StringLiteral) return node;
-	if (node.nodeType !== null && node.nodeType.kind === TypeKind.String) return node;
+	if (node.nodeType !== null && isStringLike(node.nodeType)) return node;
 	// Already-coerced string concat calls — no double-wrapping
 	if (node.kind === NodeKind.CallExpr) {
 		const cd = node.data as CallExprData;

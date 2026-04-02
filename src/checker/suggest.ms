@@ -38,7 +38,8 @@ export interface SgDiagnostic {
 	line: number;
 	column: number;
 	endColumn: number; // 0 = use column+1
-	severity: number;  // 1=Error, 2=Warning
+	severity: number;  // 1=Error, 2=Warning, 3=Info, 4=Hint
+	tags: number;      // LSP DiagnosticTag (1=Unnecessary, 2=Deprecated)
 }
 
 export enum SgCompletionKind {
@@ -193,6 +194,8 @@ function sgTypeToStringDepth(t: Type, depth: number): string {
 		TypeKind.Uint8 => "uint8", TypeKind.Uint16 => "uint16",
 		TypeKind.Uint32 => "uint32", TypeKind.Uint64 => "uint64",
 		TypeKind.Float32 => "float32", TypeKind.Float64 => "float64",
+		TypeKind.CString => "cstring",
+		TypeKind.StringLiteral => "\"" + t.typeName + "\"",
 		_ => "",
 	};
 	if (prim.length > 0) return prim;
@@ -888,6 +891,7 @@ export function sgCollectDiagnostics(ctx: CheckerContext): SgDiagnostic[] {
 			column: err.column,
 			endColumn: err.endColumn,
 			severity: lspSeverity,
+			tags: err.tags,
 		};
 		result.push(diag);
 	}
@@ -2417,6 +2421,7 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 			let mods: int32 = 0;
 			if (!hasFlag(sym, SymbolFlag.Mutable) && sym.symbolKind === SymbolKind.Variable) mods = 4; // readonly bit 2
 			if (sym.builtinKind.length > 0) mods = mods | 16; // defaultLibrary bit 4
+			if (!hasFlag(sym, SymbolFlag.Used) && !hasFlag(sym, SymbolFlag.Exported)) mods = mods | 32; // unnecessary bit 5
 			const tok: SgSemanticToken = { line: loc.line, col: loc.column, length: id.name.length, tokenType: tt, modifiers: mods };
 			tokens.push(tok);
 		}

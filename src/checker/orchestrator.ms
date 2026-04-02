@@ -165,6 +165,8 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 
 		// Copy structured errors to module (preserves line/col/severity)
 		for (const err of ctx.errors) {
+			// Skip hints (unused warnings) — they're LSP-only, not build errors
+			if (err.severity === Severity.Hint) continue;
 			const sev = match (err.severity) {
 				Severity.Warning => ErrorSeverity.Warning,
 				_ => ErrorSeverity.Error,

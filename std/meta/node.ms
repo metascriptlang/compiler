@@ -16,6 +16,7 @@ export enum TypeKind {
 	TypeReference, Union, Enum, Result, Promise,
 	Distinct,
 	Error,
+	StringLiteral,
 }
 
 // ===== Calling Convention =====

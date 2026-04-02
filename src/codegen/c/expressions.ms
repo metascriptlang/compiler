@@ -7,7 +7,7 @@
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
 import { Node, NodeKind, NodeFlag, NumberLiteralData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, NewExprData, MoveExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, HiddenDerefData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { isIntegerType, getProperty, getMinArity, isStructType, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, getDiscriminantName, voidType } from "../../checker/types";
+import { isIntegerType, getProperty, getMinArity, isStructType, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, getDiscriminantName, voidType, isStringLike } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	CGen, CProc, CLoc, CLocKind, CStorageLoc, Builder, CSection,
@@ -484,20 +484,16 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 			}
 			ctx.results.push(mangledFunctionName(idSym, d.name, idSym.overloadIdx));
 		} else {
-			// Reference parity (s.loc.snippet): read unique C name from symbol if available.
-			// Fallback chain: localNameMap (scope-accurate) → resolvedSym.nativeName → safeName
-			// localNameMap takes priority because shared symbols can have stale nativeName
-			// (e.g. sibling-scope vars with same name but different types).
+			// Reference parity (sym.loc.snippet): symbol-based resolution first.
+			// localNameMap fallback for DRC cleanup identifiers with noSym (avoids cascade).
 			const isIndirect = isIndirectParam(p, d.name) || isIndirectLocal(p, d.name);
 			const safe = safeName(d.name);
-			const mapped = lookupLocalName(p, safe);
 			let cName = "";
-			if (mapped !== "") {
-				cName = mapped;
-			} else if (idSym !== null && idSym.nativeName !== "") {
+			if (idSym !== null && idSym.nativeName !== "") {
 				cName = idSym.nativeName;
 			} else {
-				cName = safe;
+				const mapped = lookupLocalName(p, safe);
+				cName = mapped !== "" ? mapped : safe;
 			}
 			const loc: CLoc = {
 				kind: CLocKind.LocalVar,
@@ -991,7 +987,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 			}
 			const isRuntimeType = objType !== null && (objType.kind === TypeKind.Array
 				|| objType.kind === TypeKind.Span
-				|| objType.kind === TypeKind.String);
+				|| isStringLike(objType));
 			if (isRuntimeType) {
 				ctx.results.push(obj + ".len");
 				return;

@@ -14,10 +14,12 @@ import {
 	Node, NodeKind, DeclKind, SourceLocation, createNode,
 	ReturnStmtData, VariableDeclData, CallExprData, MemberExprData,
 } from "../../ast/node";
-import { TransformContext, freshTemp } from "../context";
+import { TransformContext, freshTempSym } from "../context";
+import { unknownType, int32Type } from "../../checker/types";
+import { Symbol } from "../../ast/node";
 import { walkExpandBlocks } from "../walker";
 import {
-	makeVarDecl, makeIdent, makeCall, makeMember, makeExprStmt, makeBlock,
+	makeVarDecl, makeIdent, makeIdentResolved, makeCall, makeMember, makeExprStmt, makeBlock,
 	makeReturn, makeWhile, makeBinary, makeNumber, makeAssign, makeArrayAccess,
 	makeIf, syntheticToken,
 } from "../util";
@@ -43,80 +45,98 @@ function makeEmptyArray(loc: SourceLocation): Node {
 	return createNode(NodeKind.ArrayLiteral, { elements: [] }, syntheticToken(loc));
 }
 
-function makeIncrement(iName: string, loc: SourceLocation): Node {
+function makeIncrement(iSym: Symbol, loc: SourceLocation): Node {
 	return makeExprStmt(makeAssign(
-		makeIdent(iName, loc),
-		makeBinary(makeIdent(iName, loc), "+", makeNumber(1, loc), loc),
+		makeIdentResolved(iSym, loc),
+		makeBinary(makeIdentResolved(iSym, loc), "+", makeNumber(1, loc), loc),
 	loc), loc);
 }
 
-function makeLengthCond(iName: string, arrName: string, loc: SourceLocation): Node {
-	return makeBinary(makeIdent(iName, loc), "<", makeMember(makeIdent(arrName, loc), "length", loc), loc);
+function makeLengthCond(iSym: Symbol, arrSym: Symbol, loc: SourceLocation): Node {
+	return makeBinary(makeIdentResolved(iSym, loc), "<", makeMember(makeIdentResolved(arrSym, loc), "length", loc), loc);
 }
 
 // ===== Loop Builders =====
 // Each returns Node[] of the loop setup + while. Caller appends final return/varDecl.
 
-function buildMap(arrExpr: Node, callbackExpr: Node, arrName: string, resName: string, iName: string, loc: SourceLocation): Node[] {
+function buildMap(arrExpr: Node, callbackExpr: Node, arrSym: Symbol, resSym: Symbol, iSym: Symbol, loc: SourceLocation): Node[] {
 	const stmts: Node[] = [];
-	stmts.push(makeVarDecl(arrName, arrExpr, DeclKind.Const, loc));
-	stmts.push(makeVarDecl(resName, makeEmptyArray(loc), DeclKind.Const, loc));
-	stmts.push(makeVarDecl(iName, makeNumber(0, loc), DeclKind.Let, loc));
+	const arrDecl = makeVarDecl(arrSym.name, arrExpr, DeclKind.Const, loc);
+	arrDecl.resolvedSym = arrSym;
+	stmts.push(arrDecl);
+	const resDecl = makeVarDecl(resSym.name, makeEmptyArray(loc), DeclKind.Const, loc);
+	resDecl.resolvedSym = resSym;
+	stmts.push(resDecl);
+	const iDecl = makeVarDecl(iSym.name, makeNumber(0, loc), DeclKind.Let, loc);
+	iDecl.resolvedSym = iSym;
+	stmts.push(iDecl);
 
 	const bodyStmts: Node[] = [];
-	const elem = makeArrayAccess(makeIdent(arrName, loc), makeIdent(iName, loc), loc);
+	const elem = makeArrayAccess(makeIdentResolved(arrSym, loc), makeIdentResolved(iSym, loc), loc);
 	const callArgs: Node[] = [];
 	callArgs.push(elem);
-	callArgs.push(makeIdent(iName, loc));
+	callArgs.push(makeIdentResolved(iSym, loc));
 	const pushArgs: Node[] = [];
 	pushArgs.push(makeCall(callbackExpr, callArgs, loc));
-	bodyStmts.push(makeExprStmt(makeCall(makeMember(makeIdent(resName, loc), "push", loc), pushArgs, loc), loc));
-	bodyStmts.push(makeIncrement(iName, loc));
+	bodyStmts.push(makeExprStmt(makeCall(makeMember(makeIdentResolved(resSym, loc), "push", loc), pushArgs, loc), loc));
+	bodyStmts.push(makeIncrement(iSym, loc));
 
-	stmts.push(makeWhile(makeLengthCond(iName, arrName, loc), makeBlock(bodyStmts, loc), loc));
+	stmts.push(makeWhile(makeLengthCond(iSym, arrSym, loc), makeBlock(bodyStmts, loc), loc));
 	return stmts;
 }
 
-function buildFilter(arrExpr: Node, callbackExpr: Node, arrName: string, resName: string, iName: string, loc: SourceLocation): Node[] {
+function buildFilter(arrExpr: Node, callbackExpr: Node, arrSym: Symbol, resSym: Symbol, iSym: Symbol, loc: SourceLocation): Node[] {
 	const stmts: Node[] = [];
-	stmts.push(makeVarDecl(arrName, arrExpr, DeclKind.Const, loc));
-	stmts.push(makeVarDecl(resName, makeEmptyArray(loc), DeclKind.Const, loc));
-	stmts.push(makeVarDecl(iName, makeNumber(0, loc), DeclKind.Let, loc));
+	const arrDecl = makeVarDecl(arrSym.name, arrExpr, DeclKind.Const, loc);
+	arrDecl.resolvedSym = arrSym;
+	stmts.push(arrDecl);
+	const resDecl = makeVarDecl(resSym.name, makeEmptyArray(loc), DeclKind.Const, loc);
+	resDecl.resolvedSym = resSym;
+	stmts.push(resDecl);
+	const iDecl = makeVarDecl(iSym.name, makeNumber(0, loc), DeclKind.Let, loc);
+	iDecl.resolvedSym = iSym;
+	stmts.push(iDecl);
 
 	const bodyStmts: Node[] = [];
-	const elem = makeArrayAccess(makeIdent(arrName, loc), makeIdent(iName, loc), loc);
+	const elem = makeArrayAccess(makeIdentResolved(arrSym, loc), makeIdentResolved(iSym, loc), loc);
 	const filterArgs: Node[] = [];
 	filterArgs.push(elem);
-	filterArgs.push(makeIdent(iName, loc));
+	filterArgs.push(makeIdentResolved(iSym, loc));
 
 	const pushArgs: Node[] = [];
-	pushArgs.push(makeArrayAccess(makeIdent(arrName, loc), makeIdent(iName, loc), loc));
+	pushArgs.push(makeArrayAccess(makeIdentResolved(arrSym, loc), makeIdentResolved(iSym, loc), loc));
 	const pushStmts: Node[] = [];
-	pushStmts.push(makeExprStmt(makeCall(makeMember(makeIdent(resName, loc), "push", loc), pushArgs, loc), loc));
+	pushStmts.push(makeExprStmt(makeCall(makeMember(makeIdentResolved(resSym, loc), "push", loc), pushArgs, loc), loc));
 	const emptyStmts: Node[] = [];
 	bodyStmts.push(makeIf(makeCall(callbackExpr, filterArgs, loc), makeBlock(pushStmts, loc), makeBlock(emptyStmts, loc), loc));
-	bodyStmts.push(makeIncrement(iName, loc));
+	bodyStmts.push(makeIncrement(iSym, loc));
 
-	stmts.push(makeWhile(makeLengthCond(iName, arrName, loc), makeBlock(bodyStmts, loc), loc));
+	stmts.push(makeWhile(makeLengthCond(iSym, arrSym, loc), makeBlock(bodyStmts, loc), loc));
 	return stmts;
 }
 
-function buildReduce(arrExpr: Node, callbackExpr: Node, initExpr: Node, arrName: string, accName: string, iName: string, loc: SourceLocation): Node[] {
+function buildReduce(arrExpr: Node, callbackExpr: Node, initExpr: Node, arrSym: Symbol, accSym: Symbol, iSym: Symbol, loc: SourceLocation): Node[] {
 	const stmts: Node[] = [];
-	stmts.push(makeVarDecl(arrName, arrExpr, DeclKind.Const, loc));
-	stmts.push(makeVarDecl(accName, initExpr, DeclKind.Let, loc));
-	stmts.push(makeVarDecl(iName, makeNumber(0, loc), DeclKind.Let, loc));
+	const arrDecl = makeVarDecl(arrSym.name, arrExpr, DeclKind.Const, loc);
+	arrDecl.resolvedSym = arrSym;
+	stmts.push(arrDecl);
+	const accDecl = makeVarDecl(accSym.name, initExpr, DeclKind.Let, loc);
+	accDecl.resolvedSym = accSym;
+	stmts.push(accDecl);
+	const iDecl = makeVarDecl(iSym.name, makeNumber(0, loc), DeclKind.Let, loc);
+	iDecl.resolvedSym = iSym;
+	stmts.push(iDecl);
 
 	const bodyStmts: Node[] = [];
-	const elem = makeArrayAccess(makeIdent(arrName, loc), makeIdent(iName, loc), loc);
+	const elem = makeArrayAccess(makeIdentResolved(arrSym, loc), makeIdentResolved(iSym, loc), loc);
 	const reduceArgs: Node[] = [];
-	reduceArgs.push(makeIdent(accName, loc));
+	reduceArgs.push(makeIdentResolved(accSym, loc));
 	reduceArgs.push(elem);
-	reduceArgs.push(makeIdent(iName, loc));
-	bodyStmts.push(makeExprStmt(makeAssign(makeIdent(accName, loc), makeCall(callbackExpr, reduceArgs, loc), loc), loc));
-	bodyStmts.push(makeIncrement(iName, loc));
+	reduceArgs.push(makeIdentResolved(iSym, loc));
+	bodyStmts.push(makeExprStmt(makeAssign(makeIdentResolved(accSym, loc), makeCall(callbackExpr, reduceArgs, loc), loc), loc));
+	bodyStmts.push(makeIncrement(iSym, loc));
 
-	stmts.push(makeWhile(makeLengthCond(iName, arrName, loc), makeBlock(bodyStmts, loc), loc));
+	stmts.push(makeWhile(makeLengthCond(iSym, arrSym, loc), makeBlock(bodyStmts, loc), loc));
 	return stmts;
 }
 
@@ -133,28 +153,28 @@ function expandArrayMethodStmt(stmt: Node, ctx: TransformContext): Node[] {
 			const callback = cd.arguments[0];
 			const loc = stmt.location;
 			if (method === "map") {
-				const arrName = freshTemp(ctx, "mArr");
-				const resName = freshTemp(ctx, "mRes");
-				const iName = freshTemp(ctx, "mI");
-				const loopStmts = buildMap(arrExpr, callback, arrName, resName, iName, loc);
-				loopStmts.push(makeReturn(makeIdent(resName, loc), loc));
+				const arrSym = freshTempSym(ctx, "mArr", arrExpr.nodeType !== null ? arrExpr.nodeType : unknownType());
+				const resSym = freshTempSym(ctx, "mRes", unknownType());
+				const iSym = freshTempSym(ctx, "mI", int32Type());
+				const loopStmts = buildMap(arrExpr, callback, arrSym, resSym, iSym, loc);
+				loopStmts.push(makeReturn(makeIdentResolved(resSym, loc), loc));
 				return loopStmts;
 			}
 			if (method === "filter") {
-				const arrName = freshTemp(ctx, "fArr");
-				const resName = freshTemp(ctx, "fRes");
-				const iName = freshTemp(ctx, "fI");
-				const loopStmts = buildFilter(arrExpr, callback, arrName, resName, iName, loc);
-				loopStmts.push(makeReturn(makeIdent(resName, loc), loc));
+				const arrSym = freshTempSym(ctx, "fArr", arrExpr.nodeType !== null ? arrExpr.nodeType : unknownType());
+				const resSym = freshTempSym(ctx, "fRes", unknownType());
+				const iSym = freshTempSym(ctx, "fI", int32Type());
+				const loopStmts = buildFilter(arrExpr, callback, arrSym, resSym, iSym, loc);
+				loopStmts.push(makeReturn(makeIdentResolved(resSym, loc), loc));
 				return loopStmts;
 			}
 			// reduce
 			const initExpr = cd.arguments[1];
-			const arrName = freshTemp(ctx, "rArr");
-			const accName = freshTemp(ctx, "rAcc");
-			const iName = freshTemp(ctx, "rI");
-			const loopStmts = buildReduce(arrExpr, callback, initExpr, arrName, accName, iName, loc);
-			loopStmts.push(makeReturn(makeIdent(accName, loc), loc));
+			const arrSym = freshTempSym(ctx, "rArr", arrExpr.nodeType !== null ? arrExpr.nodeType : unknownType());
+			const accSym = freshTempSym(ctx, "rAcc", initExpr.nodeType !== null ? initExpr.nodeType : unknownType());
+			const iSym = freshTempSym(ctx, "rI", int32Type());
+			const loopStmts = buildReduce(arrExpr, callback, initExpr, arrSym, accSym, iSym, loc);
+			loopStmts.push(makeReturn(makeIdentResolved(accSym, loc), loc));
 			return loopStmts;
 		}
 	}
@@ -168,28 +188,28 @@ function expandArrayMethodStmt(stmt: Node, ctx: TransformContext): Node[] {
 			const callback = cd.arguments[0];
 			const loc = stmt.location;
 			if (method === "map") {
-				const arrName = freshTemp(ctx, "mArr");
-				const resName = freshTemp(ctx, "mRes");
-				const iName = freshTemp(ctx, "mI");
-				const loopStmts = buildMap(arrExpr, callback, arrName, resName, iName, loc);
-				loopStmts.push(makeVarDecl(d.declName, makeIdent(resName, loc), d.declKind, loc));
+				const arrSym = freshTempSym(ctx, "mArr", arrExpr.nodeType !== null ? arrExpr.nodeType : unknownType());
+				const resSym = freshTempSym(ctx, "mRes", unknownType());
+				const iSym = freshTempSym(ctx, "mI", int32Type());
+				const loopStmts = buildMap(arrExpr, callback, arrSym, resSym, iSym, loc);
+				loopStmts.push(makeVarDecl(d.declName, makeIdentResolved(resSym, loc), d.declKind, loc));
 				return loopStmts;
 			}
 			if (method === "filter") {
-				const arrName = freshTemp(ctx, "fArr");
-				const resName = freshTemp(ctx, "fRes");
-				const iName = freshTemp(ctx, "fI");
-				const loopStmts = buildFilter(arrExpr, callback, arrName, resName, iName, loc);
-				loopStmts.push(makeVarDecl(d.declName, makeIdent(resName, loc), d.declKind, loc));
+				const arrSym = freshTempSym(ctx, "fArr", arrExpr.nodeType !== null ? arrExpr.nodeType : unknownType());
+				const resSym = freshTempSym(ctx, "fRes", unknownType());
+				const iSym = freshTempSym(ctx, "fI", int32Type());
+				const loopStmts = buildFilter(arrExpr, callback, arrSym, resSym, iSym, loc);
+				loopStmts.push(makeVarDecl(d.declName, makeIdentResolved(resSym, loc), d.declKind, loc));
 				return loopStmts;
 			}
 			// reduce
 			const initExpr = cd.arguments[1];
-			const arrName = freshTemp(ctx, "rArr");
-			const accName = freshTemp(ctx, "rAcc");
-			const iName = freshTemp(ctx, "rI");
-			const loopStmts = buildReduce(arrExpr, callback, initExpr, arrName, accName, iName, loc);
-			loopStmts.push(makeVarDecl(d.declName, makeIdent(accName, loc), d.declKind, loc));
+			const arrSym = freshTempSym(ctx, "rArr", arrExpr.nodeType !== null ? arrExpr.nodeType : unknownType());
+			const accSym = freshTempSym(ctx, "rAcc", initExpr.nodeType !== null ? initExpr.nodeType : unknownType());
+			const iSym = freshTempSym(ctx, "rI", int32Type());
+			const loopStmts = buildReduce(arrExpr, callback, initExpr, arrSym, accSym, iSym, loc);
+			loopStmts.push(makeVarDecl(d.declName, makeIdentResolved(accSym, loc), d.declKind, loc));
 			return loopStmts;
 		}
 	}

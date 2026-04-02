@@ -141,9 +141,7 @@ function inlineHeaderImports(source: string, modulePath: string, provider: Sourc
 		}
 
 		// Generate extern declarations from C header (pure MetaScript string parser)
-		let translated = translateCHeader(headerSource.value, importedNames);
-		// Strip "export " prefix (inline declarations don't need export)
-		translated = translated.split("export extern ").join("extern ");
+		let translated = translateCHeader(headerSource.value, importedNames, false);
 
 		// Auto-compile companion .c file if it exists (e.g., native.h → native.c)
 		const companionC = headerPath.slice(0, headerPath.length - 2) + ".c";

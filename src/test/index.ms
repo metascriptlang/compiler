@@ -38,6 +38,7 @@ import "./c/expressions";
 import "./c/closures";
 import "./c/result";
 import "./c/buffer";
+import "./c/drcLifecycle";
 import "./js/basic";
 import "./js/result";
 

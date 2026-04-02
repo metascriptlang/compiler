@@ -46,6 +46,15 @@ export function setFlag(sym: Symbol, flag: SymbolFlag): void {
 	sym.symFlags = sym.symFlags | flag;
 }
 
+// Mark a symbol as used (referenced).
+// Also marks the enum type owner when an enum field is used.
+export function markUsed(sym: Symbol): void {
+	sym.symFlags = sym.symFlags | SymbolFlag.Used;
+	if (sym.symbolType !== null && sym.symbolType.kind === TypeKind.Enum && sym.symbolType.sym !== null) {
+		sym.symbolType.sym.symFlags = sym.symbolType.sym.symFlags | SymbolFlag.Used;
+	}
+}
+
 // ===== Scope =====
 
 export class Scope {

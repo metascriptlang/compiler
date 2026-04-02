@@ -108,6 +108,21 @@ function isAssignableInner(source: Type, target: Type): boolean {
 		return true;
 	}
 
+	// StringLiteral → String (subtype: "north" assignable to string)
+	if (source.kind === TypeKind.StringLiteral && target.kind === TypeKind.String) {
+		return true;
+	}
+
+	// StringLiteral → StringLiteral (same value only)
+	if (source.kind === TypeKind.StringLiteral && target.kind === TypeKind.StringLiteral) {
+		return source.typeName === target.typeName;
+	}
+
+	// StringLiteral → CString (string literal can be passed as cstring)
+	if (source.kind === TypeKind.StringLiteral && target.kind === TypeKind.CString) {
+		return true;
+	}
+
 	// Source is union: all members must be assignable to target
 	if (source.kind === TypeKind.Union) {
 		for (const member of source.typeChildren) {
@@ -142,10 +157,10 @@ export function needsStdConv(source: Type, target: Type): boolean {
 	// Array/SizedArray/String to Span coercion requires struct initializer
 	if (target.kind === TypeKind.Span) {
 		if (source.kind === TypeKind.Array || source.kind === TypeKind.SizedArray) return true;
-		if (source.kind === TypeKind.String && target.typeReturn !== null && target.typeReturn.kind === TypeKind.Char) return true;
+		if ((source.kind === TypeKind.String || source.kind === TypeKind.StringLiteral) && target.typeReturn !== null && target.typeReturn.kind === TypeKind.Char) return true;
 	}
-	// String → CString requires msCStr extraction
-	if (source.kind === TypeKind.String && target.kind === TypeKind.CString) return true;
+	// String/StringLiteral → CString requires msStringToCString extraction
+	if ((source.kind === TypeKind.String || source.kind === TypeKind.StringLiteral) && target.kind === TypeKind.CString) return true;
 	// Borrow promotion: T → Borrow<T> (take address)
 	if (target.kind === TypeKind.Borrow && target.typeReturn !== null) {
 		if (source.kind !== TypeKind.Borrow) return true;

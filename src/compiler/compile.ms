@@ -40,6 +40,8 @@ import { evaluateComptimeBlocks } from "./comptime";
 import { CliOptions, Target, MODE_DEBUG, MODE_RELEASE } from "./options";
 import { readSource, writeOutput, printErrorsAndExit, printTiming, verboseLog, replaceExt, dirName, baseName, stripBase, ensureDir, getJSRuntime, exeSuffix, soSuffix, outDirForMode } from "./io";
 import { compileC, compileCFile, linkObjects, appendFlag, cliCompileFlags, cliLinkFlags, getCrossCompilerName } from "./cc";
+import { prependFlag } from "../utils/string";
+import { linkFlags as globalLinkFlags, linkObjects as globalLinkObjects, resetLinkState } from "../utils/linkState";
 import { initCache, stableOFile, fullCompileCmd, isCompileCached, writeCompileCache, projectCacheChanged, writeProjectCache, stableCFile, isCCodeCached, writeCCodeCache, isLinkCached, writeLinkCache, cacheDir } from "./cache";
 import { error, success, bold, dim, green, red, yellow, cyan, blue } from "../utils/color";
 import { resolveRuntimeDir } from "../utils/path";
@@ -279,7 +281,6 @@ interface ProcessedModule {
 // Build state for C compilation: flags + include path registry.
 interface CBuildState {
 	allFlags: string;
-	allLinkFlags: string;
 	includePaths: Set<string>;
 }
 
@@ -292,7 +293,7 @@ function initCBuildState(opts: CliOptions): CBuildState {
 		includePaths.add(compilerRoot);
 		allFlags = appendFlag(allFlags, `-I${compilerRoot}`);
 	}
-	return { allFlags, allLinkFlags: "", includePaths };
+	return { allFlags, includePaths };
 }
 
 // Register -I/-iquote paths from a module's compiler flags into the include path set.
@@ -579,7 +580,6 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	const bs = initCBuildState(opts);
 	let allFlags = bs.allFlags;
 	const includePaths = bs.includePaths;
-	let allLinkFlags = bs.allLinkFlags;
 	let oFiles = "";
 	let totalCheckerErrors = 0;
 
@@ -604,7 +604,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		// Skip warnings — already rendered in graph checker phase
 		if (hasErrors(ctx)) {
 			for (const e of ctx.errors) {
-				if (e.severity === Severity.Warning) continue;
+				if (e.severity === Severity.Warning || e.severity === Severity.Hint) continue;
 				renderModuleError(modPath, mod.source, {
 					message: e.message, line: e.line, column: e.column,
 					severity: ErrorSeverity.Error,
@@ -656,7 +656,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 
 		// Accumulate compiler flags (@passC) and link flags (@link/@passL) separately
 		allFlags = appendFlag(allFlags, ctx.compilerFlags);
-		allLinkFlags = appendFlag(allLinkFlags, ctx.linkFlags);
+		// @passL/@link go directly to global linkState — no per-module merge
 		registerIncludePaths(ctx.compilerFlags, includePaths);
 
 		// Check for user main() in entry module
@@ -777,7 +777,11 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	}
 
 	// Link all .o files into final binary (or shared library for HCR)
-	const linkFlags = appendFlag(cliLinkFlags(allFlags, opts), allLinkFlags);
+	// Build link flags from global linkState (Set = deduplicated)
+	let allLink = cliLinkFlags(allFlags, opts);
+	for (const obj of globalLinkObjects()) { allLink = appendFlag(allLink, obj); }
+	for (const flag of globalLinkFlags()) { allLink = appendFlag(allLink, flag); }
+	const linkFlags = allLink;
 
 	// Link cache: skip re-link if all modules hit .c cache and link flags unchanged
 	if (modulesRecompiled === 0 && isLinkCached(oFiles, linkFlags, outBinary)) {
@@ -840,7 +844,6 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	const bs = initCBuildState(opts);
 	let allFlags = bs.allFlags;
 	const includePaths = bs.includePaths;
-	let allLinkFlags = bs.allLinkFlags;
 	let oFiles = "";
 
 	// Reference parity: global hook ownership registry shared across all modules.
@@ -892,7 +895,7 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		transformedPaths.push(modPath);
 
 		allFlags = appendFlag(allFlags, ctx.compilerFlags);
-		allLinkFlags = appendFlag(allLinkFlags, ctx.linkFlags);
+		// @passL/@link go directly to global linkState — no per-module merge
 		registerIncludePaths(ctx.compilerFlags, includePaths);
 	}
 
@@ -956,7 +959,10 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 	// Link and execute
 	ensureDir("out/debug");
 	const testBin = "out/debug/_test_" + replaceExt(baseName(filePath), "");
-	const linkCode = linkObjects(oFiles, testBin, appendFlag(allFlags, allLinkFlags), opts.mode, opts.ccCompiler, opts.ccBinary);
+	let testLink = allFlags;
+	for (const obj of globalLinkObjects()) { testLink = appendFlag(testLink, obj); }
+	for (const flag of globalLinkFlags()) { testLink = appendFlag(testLink, flag); }
+	const linkCode = linkObjects(oFiles, testBin, testLink, opts.mode, opts.ccCompiler, opts.ccBinary);
 	if (linkCode !== 0) {
 		console.log(`${error("error")}: link failed ${dim(`(exit ${linkCode})`)}`);
 

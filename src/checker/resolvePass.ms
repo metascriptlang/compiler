@@ -7,8 +7,8 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { Node, NodeKind, SourceLocation, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, ExternKind, IdentifierData, TypeGenericData, TypeArrayData, TypeUnionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { unknownType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, substituteType, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, setMinArity, typeNameOf, assignType, isStructType, unwrapRef, propagateHasAsgn } from "./types";
-import { SymbolTable, ScopeKind, lookupSymbol, lookupLocal, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, setFlag, SymbolFlag } from "./symbol";
+import { unknownType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, substituteType, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, setMinArity, typeNameOf, assignType, isStructType, unwrapRef, propagateHasAsgn } from "./types";
+import { SymbolTable, ScopeKind, lookupSymbol, lookupLocal, defineSymbol, makeSymbol, openScope, closeScope, hasFlag, setFlag, markUsed, SymbolFlag } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addErrorRange, addWarning, addFatalError, addFatalErrorRange, sgRecordSym } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim } from "../utils/string";
 import { getProperty } from "./types";
@@ -113,6 +113,11 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 		if (members.length > 0) return createUnion(members);
 	}
 
+	// String literal type: "north" → StringLiteral("north") (TypeScript parity)
+	if (trimmed.length >= 2 && trimmed.charAt(0) === "\"" && trimmed.charAt(trimmed.length - 1) === "\"") {
+		return createStringLiteral(trimmed.slice(1, trimmed.length - 1));
+	}
+
 	// Object literal type: { field: Type; ... } or { field: Type, ... }
 	if (trimmed.charAt(0) === "{" && trimmed.endsWith("}")) {
 		const inner = trimmed.slice(1, trimmed.length - 1).trim();
@@ -211,6 +216,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 				// This preserves hasGenericParams for unification + enables structural matching.
 				const baseSym = lookupSymbol(ctx.table, baseName);
 				if (baseSym !== null) {
+					markUsed(baseSym);
 					ensureShaped(baseSym, ctx);
 					const isRefBase = baseSym.symbolType.kind === TypeKind.Ref;
 					let baseType = baseSym.symbolType;
@@ -226,6 +232,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 			// Build GenericInstance with structural type args
 			const baseSym2 = lookupSymbol(ctx.table, baseName);
 			if (baseSym2 !== null) {
+				markUsed(baseSym2);
 				ensureShaped(baseSym2, ctx);
 				const isRefBase2 = baseSym2.symbolType.kind === TypeKind.Ref;
 				let baseType2 = baseSym2.symbolType;
@@ -246,6 +253,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 		// Non-generic: look up base type
 		const baseSym = lookupSymbol(ctx.table, baseName);
 		if (baseSym !== null) {
+			markUsed(baseSym);
 			// Demand-driven resolution: ensure the base symbol is shaped before using its type
 			ensureShaped(baseSym, ctx);
 			return baseSym.symbolType;
@@ -277,6 +285,7 @@ export function resolveAnnotation(text: string, ctx: CheckerContext, line: numbe
 		_ => {
 			const sym = lookupSymbol(ctx.table, trimmed);
 			if (sym !== null) {
+				markUsed(sym);
 				// Demand-driven: ensure shaped before using
 				ensureShaped(sym, ctx);
 				// Circular type reference: sym still Unknown → return the SAME object
@@ -904,6 +913,16 @@ function resolveExtern(ctx: CheckerContext, node: Node): void {
 	}
 }
 
+function resolveConstructorType(member: Node, sym: Symbol, ctx: CheckerContext): void {
+	const cd = member.data as ConstructorDeclData;
+	const paramTypes = resolveTypeStrings(cd.ctorParamTypes, cd.ctorParams.length, ctx, member.location.line, member.location.column);
+	resolveTypeExprs(member.typeExprs, ctx);
+	member.nodeType = createFunction(paramTypes, cd.ctorParams, voidType());
+	if (cd.ctorDefaults !== null && cd.ctorDefaults.length > 0) {
+		sym.defaultParams = cd.ctorDefaults;
+	}
+}
+
 function resolveClass(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ClassDeclData;
 	const sym = lookupSymbol(ctx.table, d.className);
@@ -1005,12 +1024,7 @@ function resolveClass(ctx: CheckerContext, node: Node): void {
 				}
 			}
 		} else if (member.kind === NodeKind.ConstructorDecl) {
-			// Resolve constructor type but don't add to struct (data-only, like methods)
-			const cd = member.data as ConstructorDeclData;
-			const paramTypes = resolveTypeStrings(cd.ctorParamTypes, cd.ctorParams.length, ctx, member.location.line, member.location.column);
-			resolveTypeExprs(member.typeExprs, ctx);
-			const ctorType = createFunction(paramTypes, cd.ctorParams, voidType());
-			member.nodeType = ctorType;
+			resolveConstructorType(member, sym, ctx);
 		}
 	}
 
@@ -1107,11 +1121,7 @@ function resolveActor(ctx: CheckerContext, node: Node): void {
 				memberTypes.push(unknownType());
 			}
 		} else if (member.kind === NodeKind.ConstructorDecl) {
-			const cd = member.data as ConstructorDeclData;
-			const paramTypes = resolveTypeStrings(cd.ctorParamTypes, cd.ctorParams.length, ctx, member.location.line, member.location.column);
-			resolveTypeExprs(member.typeExprs, ctx);
-			const ctorType = createFunction(paramTypes, cd.ctorParams, voidType());
-			member.nodeType = ctorType;
+			resolveConstructorType(member, sym, ctx);
 		}
 	}
 

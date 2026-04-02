@@ -38,7 +38,7 @@ function cTypeToMs(cType: string): string {
 			// Extract base type: "FILE*" → "FILE", "const void *" → "const void"
 			let base = t.slice(0, t.length - 1).trim();
 			if (base.startsWith("const ")) base = base.slice(6, base.length).trim();
-			// void* / const void* → unknown (opaque handle, Nim: pointer)
+			// void* / const void* → unknown (opaque handle)
 			if (base === "void") return "unknown";
 			// Typed pointers: FILE* → Ptr<FILE>, WGPUDevice* → Ptr<WGPUDevice>
 			return `Ptr<${base}>`;
@@ -49,7 +49,8 @@ function cTypeToMs(cType: string): string {
 
 // ===== Main Parser =====
 
-export function translateCHeader(source: string, importedNames: string[]): string {
+export function translateCHeader(source: string, importedNames: string[], withExport: boolean = false): string {
+	const exportPrefix = withExport ? "export " : "";
 	let result = "";
 	let resultLines = 1;
 	let pos = 0;
@@ -99,7 +100,7 @@ export function translateCHeader(source: string, importedNames: string[]): strin
 				while (lastLinePos < pos) { if (source.charCodeAt(lastLinePos) === "\n".code) lastLineNum = lastLineNum + 1; lastLinePos = lastLinePos + 1; }
 				while (resultLines < lastLineNum) { result = result + "\n"; resultLines = resultLines + 1; }
 				const fieldsStr = source.slice(braceStart + 1, braceEnd - 1).trim();
-				result = result + `export extern struct ${structName} {\n`; resultLines = resultLines + 1;
+				result = result + `${exportPrefix}extern struct ${structName} {\n`; resultLines = resultLines + 1;
 				let fPos = 0;
 				while (fPos < fieldsStr.length) {
 					while (fPos < fieldsStr.length && fieldsStr.charCodeAt(fPos) <= 32) fPos = fPos + 1;
@@ -121,6 +122,76 @@ export function translateCHeader(source: string, importedNames: string[]): strin
 			}
 			pos = source.indexOf(";", braceEnd);
 			if (pos < 0) pos = source.length; else pos = pos + 1;
+			continue;
+		}
+
+		// typedef enum { ... } Name;
+		if (source.slice(pos, pos + 13) === "typedef enum ") {
+			const braceStart = source.indexOf("{", pos);
+			if (braceStart < 0) { pos = pos + 13; continue; }
+			let depth = 1;
+			let braceEnd = braceStart + 1;
+			while (braceEnd < source.length && depth > 0) {
+				if (source.charCodeAt(braceEnd) === "{".code) depth = depth + 1;
+				if (source.charCodeAt(braceEnd) === "}".code) depth = depth - 1;
+				braceEnd = braceEnd + 1;
+			}
+			let nameStart = braceEnd;
+			while (nameStart < source.length && source.charCodeAt(nameStart) <= 32) nameStart = nameStart + 1;
+			let nameEnd = nameStart;
+			while (nameEnd < source.length && source.charCodeAt(nameEnd) > 32 && source.charCodeAt(nameEnd) !== ";".code) nameEnd = nameEnd + 1;
+			const enumName = source.slice(nameStart, nameEnd);
+
+			if (enumName.length > 0 && (importedNames.length === 0 || importedNames.indexOf(enumName) >= 0)) {
+				while (lastLinePos < pos) { if (source.charCodeAt(lastLinePos) === "\n".code) lastLineNum = lastLineNum + 1; lastLinePos = lastLinePos + 1; }
+				while (resultLines < lastLineNum) { result = result + "\n"; resultLines = resultLines + 1; }
+				const membersStr = source.slice(braceStart + 1, braceEnd - 1).trim();
+				result = result + `${exportPrefix}extern enum ${enumName} {\n`; resultLines = resultLines + 1;
+				let mPos = 0;
+				while (mPos < membersStr.length) {
+					while (mPos < membersStr.length && membersStr.charCodeAt(mPos) <= 32) mPos = mPos + 1;
+					if (mPos >= membersStr.length) break;
+					let mEnd = membersStr.indexOf(",", mPos);
+					if (mEnd < 0) mEnd = membersStr.length;
+					const member = membersStr.slice(mPos, mEnd).trim();
+					if (member.length > 0) {
+						const eqPos = member.indexOf("=");
+						if (eqPos > 0) {
+							const mName = member.slice(0, eqPos).trim();
+							const mValue = member.slice(eqPos + 1, member.length).trim();
+							result = result + `\t${mName} = ${mValue},\n`; resultLines = resultLines + 1;
+						}
+					}
+					mPos = mEnd + 1;
+				}
+				result = result + "}\n\n"; resultLines = resultLines + 2;
+			}
+			pos = source.indexOf(";", braceEnd);
+			if (pos < 0) pos = source.length; else pos = pos + 1;
+			continue;
+		}
+
+		// static const Type Name = value;
+		if (source.slice(pos, pos + 13) === "static const ") {
+			let scEnd = source.indexOf(";", pos);
+			if (scEnd < 0) scEnd = source.length;
+			const scLine = source.slice(pos + 13, scEnd).trim();
+			const eqPos = scLine.indexOf("=");
+			if (eqPos > 0) {
+				const beforeEq = scLine.slice(0, eqPos).trim();
+				const value = scLine.slice(eqPos + 1, scLine.length).trim();
+				const lastSp = beforeEq.lastIndexOf(" ");
+				if (lastSp > 0) {
+					const scType = beforeEq.slice(0, lastSp).trim();
+					const scName = beforeEq.slice(lastSp + 1, beforeEq.length).trim();
+					if (scName.length > 0 && (importedNames.length === 0 || importedNames.indexOf(scName) >= 0)) {
+						while (lastLinePos < pos) { if (source.charCodeAt(lastLinePos) === "\n".code) lastLineNum = lastLineNum + 1; lastLinePos = lastLinePos + 1; }
+						while (resultLines < lastLineNum) { result = result + "\n"; resultLines = resultLines + 1; }
+						result = result + `${exportPrefix}extern const ${scName}: ${cTypeToMs(scType)};\n`; resultLines = resultLines + 1;
+					}
+				}
+			}
+			pos = scEnd + 1;
 			continue;
 		}
 
@@ -186,7 +257,7 @@ export function translateCHeader(source: string, importedNames: string[]): strin
 								}
 							}
 						}
-						result = result + `export extern function ${funcName}(${msParams}): ${cTypeToMs(retType)};\n`; resultLines = resultLines + 1;
+						result = result + `${exportPrefix}extern function ${funcName}(${msParams}): ${cTypeToMs(retType)};\n`; resultLines = resultLines + 1;
 					}
 				}
 			}

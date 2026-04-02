@@ -163,7 +163,13 @@ export function collectTokenText(state: ParserState, start: number, end: number)
 				|| lastCh === ".".code || lastCh === "?".code;
 			if (!noSpaceBefore && !noSpaceAfter) text = text + " ";
 		}
-		text = text + tok.value;
+		// Preserve quotes on string literal tokens so resolveAnnotation can
+		// distinguish string literal union members ("r8unorm") from type names.
+		if (tok.kind === TokenKind.String) {
+			text = text + "\"" + tok.value + "\"";
+		} else {
+			text = text + tok.value;
+		}
 	}
 	return text;
 }

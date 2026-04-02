@@ -641,6 +641,7 @@ export interface CheckerError {
 	endColumn: number; // 1-based, 0 = use column+1 (single char)
 	fatal: boolean;  // true = globalError (abort), false = localError (continue)
 	severity: Severity;
+	tags: number;    // LSP DiagnosticTag bitmask (1 = Unnecessary, 2 = Deprecated)
 }
 
 // ===== GC Mode =====
@@ -671,7 +672,6 @@ export class CheckerContext {
 	jsImportRegistry: JsImportEntry[]; // accumulated @import entries for JS backend
 	compileDirectives: string; // accumulated @compile args, newline-separated
 	compilerFlags: string;     // accumulated @passC/-iquote args, space-separated (compile-time)
-	linkFlags: string;         // accumulated @link/@passL args, space-separated (link-time only)
 	cancelCtx: CancelCtx;       // null in batch mode, set for LSP
 	cancelVersion: number;       // version at check start
 	modulePath: string;          // Implementation parity: source path for name mangling
@@ -707,7 +707,6 @@ export function createContext(): CheckerContext {
 		jsImportRegistry: [],
 		compileDirectives: "",
 		compilerFlags: "",
-		linkFlags: "",
 		cancelCtx: null as unknown as CancelCtx,
 		cancelVersion: 0,
 		modulePath: "",
@@ -760,34 +759,46 @@ export function isInAsyncPromiseResult(ctx: CheckerContext): boolean {
 
 // localError — non-fatal, compilation continues
 export function addError(ctx: CheckerContext, msg: string, line: number, col: number): void {
-	ctx.errors.push({ message: msg, line, column: col, endColumn: 0, fatal: false, severity: Severity.Error });
+	ctx.errors.push({ message: msg, line, column: col, endColumn: 0, fatal: false, severity: Severity.Error, tags: 0 });
 }
 
 // error with explicit end column — underlines a range (e.g., full identifier)
 export function addErrorRange(ctx: CheckerContext, msg: string, line: number, col: number, endCol: number): void {
-	ctx.errors.push({ message: msg, line, column: col, endColumn: endCol, fatal: false, severity: Severity.Error });
+	ctx.errors.push({ message: msg, line, column: col, endColumn: endCol, fatal: false, severity: Severity.Error, tags: 0 });
 }
 
 // warning — non-fatal, compilation continues, shown as warning in LSP
 export function addWarning(ctx: CheckerContext, msg: string, line: number, col: number): void {
-	ctx.errors.push({ message: msg, line, column: col, endColumn: 0, fatal: false, severity: Severity.Warning });
+	ctx.errors.push({ message: msg, line, column: col, endColumn: 0, fatal: false, severity: Severity.Warning, tags: 0 });
 }
 
-export function addWarningRange(ctx: CheckerContext, msg: string, line: number, col: number, endCol: number): void {
-	ctx.errors.push({ message: msg, line, column: col, endColumn: endCol, fatal: false, severity: Severity.Warning });
+export function addWarningRange(ctx: CheckerContext, msg: string, line: number, col: number, endCol: number, tags: number): void {
+	ctx.errors.push({ message: msg, line, column: col, endColumn: endCol, fatal: false, severity: Severity.Warning, tags });
 }
 
 // globalError — fatal, compilation should abort
 export function addFatalError(ctx: CheckerContext, msg: string, line: number, col: number): void {
-	ctx.errors.push({ message: msg, line, column: col, endColumn: 0, fatal: true, severity: Severity.Error });
+	ctx.errors.push({ message: msg, line, column: col, endColumn: 0, fatal: true, severity: Severity.Error, tags: 0 });
 }
 
 export function addFatalErrorRange(ctx: CheckerContext, msg: string, line: number, col: number, endCol: number): void {
-	ctx.errors.push({ message: msg, line, column: col, endColumn: endCol, fatal: true, severity: Severity.Error });
+	ctx.errors.push({ message: msg, line, column: col, endColumn: endCol, fatal: true, severity: Severity.Error, tags: 0 });
+}
+
+// hint — non-fatal, shown as subtle hint in LSP (curly underline + faded when tag=1)
+export function addHint(ctx: CheckerContext, msg: string, line: number, col: number, tags: number): void {
+	ctx.errors.push({ message: msg, line, column: col, endColumn: 0, fatal: false, severity: Severity.Hint, tags });
+}
+
+export function addHintRange(ctx: CheckerContext, msg: string, line: number, col: number, endCol: number, tags: number): void {
+	ctx.errors.push({ message: msg, line, column: col, endColumn: endCol, fatal: false, severity: Severity.Hint, tags });
 }
 
 export function hasErrors(ctx: CheckerContext): boolean {
-	return ctx.errors.length > 0;
+	for (const err of ctx.errors) {
+		if (err.severity === Severity.Error) return true;
+	}
+	return false;
 }
 
 export function hasFatalErrors(ctx: CheckerContext): boolean {
@@ -800,7 +811,7 @@ export function hasFatalErrors(ctx: CheckerContext): boolean {
 export function errorCount(ctx: CheckerContext): number {
 	let count = 0;
 	for (let i = 0; i < ctx.errors.length; i += 1) {
-		if (ctx.errors[i].severity !== Severity.Warning) count = count + 1;
+		if (ctx.errors[i].severity === Severity.Error) count = count + 1;
 	}
 	return count;
 }

@@ -7,11 +7,11 @@
 //       while ($idx < $len) { const item = $iter[$idx]; body; $idx++; } }
 
 import { Node, NodeKind, DeclKind, ForOfStmtData, SourceLocation, ArrayPatternData, IdentifierData, MemberExprData, NodeFlag, Type, Symbol } from "../../ast/node";
-import { TransformContext, freshTemp } from "../context";
-import { int32Type, isIterator, getIteratorNextFnType } from "../../checker/types";
+import { TransformContext, freshTempSym } from "../context";
+import { int32Type, unknownType, isIterator, getIteratorNextFnType } from "../../checker/types";
 import { walkNode } from "../walker";
 import {
-	makeIdent, makeTypedIdent, makeNumber, makeBlock, makeVarDecl, makeWhile,
+	makeIdent, makeIdentResolved, makeTypedIdent, makeNumber, makeBlock, makeVarDecl, makeWhile,
 	makeBinary, makeUnary, makeAssign, makeExprStmt, makeMember, makeArrayAccess, makeCall,
 	extractBodyStmts, boolToDeclKind,
 } from "../util";
@@ -50,31 +50,35 @@ function forOfVisitor(ctx: TransformContext): (node: Node) => Node {
 // → { const $iter = iter; let $r = $iter.next();
 //     while (!$r.done) { const x = $r.value; body; $r = $iter.next(); } }
 
-function makeNextCall(iterName: string, resultType: Type, loc: SourceLocation): Node {
-	const call = makeCall(makeMember(makeIdent(iterName, loc), "next", loc), [], loc);
+function makeNextCallSym(iterSym: Symbol, resultType: Type, loc: SourceLocation): Node {
+	const call = makeCall(makeMember(makeIdentResolved(iterSym, loc), "next", loc), [], loc);
 	if (resultType !== null) call.nodeType = resultType;
 	return call;
 }
 
 function lowerIteratorForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLocation, bindingSym: Symbol): Node {
-	const iterName = freshTemp(ctx, "iter");
-	const rName = freshTemp(ctx, "r");
+	const iterType = d.forOfIterable.nodeType;
+	const iterSym = freshTempSym(ctx, "iter", iterType !== null ? iterType : unknownType());
 	const nextFnType = getIteratorNextFnType(d.forOfIterable.nodeType);
 	const resultType = nextFnType !== null ? nextFnType.typeReturn : null;
+	const rSym = freshTempSym(ctx, "r", resultType !== null ? resultType : unknownType());
 
 	const stmts: Node[] = [];
-	stmts.push(makeVarDecl(iterName, d.forOfIterable, DeclKind.Const, loc));
-	const rDecl = makeVarDecl(rName, makeNextCall(iterName, resultType, loc), DeclKind.Let, loc);
+	const iterDecl = makeVarDecl(iterSym.name, d.forOfIterable, DeclKind.Const, loc);
+	iterDecl.resolvedSym = iterSym;
+	stmts.push(iterDecl);
+	const rDecl = makeVarDecl(rSym.name, makeNextCallSym(iterSym, resultType, loc), DeclKind.Let, loc);
+	rDecl.resolvedSym = rSym;
 	if (resultType !== null) rDecl.nodeType = resultType;
 	stmts.push(rDecl);
 
-	const cond = makeUnary("!", makeMember(makeIdent(rName, loc), "done", loc), loc);
+	const cond = makeUnary("!", makeMember(makeIdentResolved(rSym, loc), "done", loc), loc);
 	const bodyStmts: Node[] = [];
-	const itemDecl = makeVarDecl(d.forOfBinding, makeMember(makeIdent(rName, loc), "value", loc), boolToDeclKind(d.forOfIsConst), loc);
+	const itemDecl = makeVarDecl(d.forOfBinding, makeMember(makeIdentResolved(rSym, loc), "value", loc), boolToDeclKind(d.forOfIsConst), loc);
 	if (bindingSym !== null) itemDecl.resolvedSym = bindingSym;
 	bodyStmts.push(itemDecl);
 	for (const s of extractBodyStmts(d.forOfBody)) { bodyStmts.push(s); }
-	bodyStmts.push(makeExprStmt(makeAssign(makeIdent(rName, loc), makeNextCall(iterName, resultType, loc), loc), loc));
+	bodyStmts.push(makeExprStmt(makeAssign(makeIdentResolved(rSym, loc), makeNextCallSym(iterSym, resultType, loc), loc), loc));
 
 	stmts.push(makeWhile(cond, makeBlock(bodyStmts, loc), loc));
 	return makeBlock(stmts, loc);
@@ -83,8 +87,8 @@ function lowerIteratorForOf(d: ForOfStmtData, ctx: TransformContext, loc: Source
 // ===== Array/String For-Of =====
 
 function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLocation, bindingSym: Symbol): Node {
-	const idxName = freshTemp(ctx, "idx");
-	const lenName = freshTemp(ctx, "len");
+	const idxSym = freshTempSym(ctx, "idx", int32Type());
+	const lenSym = freshTempSym(ctx, "len", int32Type());
 	const iterType = d.forOfIterable.nodeType;
 
 	// Stable lvalue check: Identifier/MemberExpr can be accessed directly without copy.
@@ -99,26 +103,29 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	// For non-stable expressions, copy to a temp (evaluated once)
 	let iterExpr: Node = d.forOfIterable;
 	if (!isStableLvalue) {
-		const iterName = freshTemp(ctx, "iter");
-		const iterDecl = makeVarDecl(iterName, d.forOfIterable, DeclKind.Const, loc);
+		const iterSym = freshTempSym(ctx, "iter", iterType !== null ? iterType : unknownType());
+		const iterDecl = makeVarDecl(iterSym.name, d.forOfIterable, DeclKind.Const, loc);
+		iterDecl.resolvedSym = iterSym;
 		iterDecl.flags = iterDecl.flags | NodeFlag.Cursor;
 		preamble.push(iterDecl);
-		iterExpr = makeTypedIdent(iterName, iterType, loc);
+		iterExpr = makeIdentResolved(iterSym, loc);
 	}
 
 	// let $idx = 0;
-	const idxDecl = makeVarDecl(idxName, makeNumber(0, loc), DeclKind.Let, loc);
+	const idxDecl = makeVarDecl(idxSym.name, makeNumber(0, loc), DeclKind.Let, loc);
+	idxDecl.resolvedSym = idxSym;
 	preamble.push(idxDecl);
 
 	// const $len = <iter>.length;  — captured once (new elements from push won't be visited)
 	const lenExpr = makeMember(cloneExpr(iterExpr, loc), "length", loc);
-	const lenDecl = makeVarDecl(lenName, lenExpr, DeclKind.Const, loc);
+	const lenDecl = makeVarDecl(lenSym.name, lenExpr, DeclKind.Const, loc);
+	lenDecl.resolvedSym = lenSym;
 	preamble.push(lenDecl);
 
 	// $idx = $idx + 1;
 	const increment = makeAssign(
-		makeTypedIdent(idxName, int32Type(), loc),
-		makeBinary(makeTypedIdent(idxName, int32Type(), loc), "+", makeNumber(1, loc), loc),
+		makeIdentResolved(idxSym, loc),
+		makeBinary(makeIdentResolved(idxSym, loc), "+", makeNumber(1, loc), loc),
 		loc
 	);
 	const incStmt = makeExprStmt(increment, loc);
@@ -129,15 +136,17 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 
 	if (d.forOfPattern !== null && d.forOfPattern.kind === NodeKind.ArrayPattern) {
 		// Destructured: const $elem = <iter>[$idx]; const a = $elem[0]; const b = $elem[1]; ...
-		const elemName = freshTemp(ctx, "elem");
-		const elemAccess = makeArrayAccess(cloneExpr(iterExpr, loc), makeTypedIdent(idxName, int32Type(), loc), loc);
-		const elemDecl = makeVarDecl(elemName, elemAccess, DeclKind.Const, loc);
+		const elemType = iterType !== null && iterType.typeReturn !== null ? iterType.typeReturn : unknownType();
+		const elemSym = freshTempSym(ctx, "elem", elemType);
+		const elemAccess = makeArrayAccess(cloneExpr(iterExpr, loc), makeIdentResolved(idxSym, loc), loc);
+		const elemDecl = makeVarDecl(elemSym.name, elemAccess, DeclKind.Const, loc);
+		elemDecl.resolvedSym = elemSym;
 		// Propagate element type for nativeLower (tuple → member access)
 		if (iterType !== null && iterType.typeReturn !== null) {
 			elemDecl.nodeType = iterType.typeReturn;
 		}
 		whileStmts.push(elemDecl);
-		const bindings = expandArrayPattern(d.forOfPattern, makeIdent(elemName, loc), itemDk, loc);
+		const bindings = expandArrayPattern(d.forOfPattern, makeIdentResolved(elemSym, loc), itemDk, loc);
 		let pi = 0;
 		while (pi < bindings.length) {
 			whileStmts.push(bindings[pi]);
@@ -146,7 +155,7 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 	} else {
 		// Simple binding: const item = <iter>[$idx];
 		// NodeFlag.Cursor: for-of binding is a borrow from the array — DRC must skip destroy (reference: cursor flag)
-		const itemAccess = makeArrayAccess(cloneExpr(iterExpr, loc), makeTypedIdent(idxName, int32Type(), loc), loc);
+		const itemAccess = makeArrayAccess(cloneExpr(iterExpr, loc), makeIdentResolved(idxSym, loc), loc);
 		const itemDecl = makeVarDecl(d.forOfBinding, itemAccess, itemDk, loc);
 		itemDecl.flags = itemDecl.flags | NodeFlag.Cursor;
 		if (bindingSym !== null) itemDecl.resolvedSym = bindingSym;
@@ -164,7 +173,7 @@ function lowerArrayForOf(d: ForOfStmtData, ctx: TransformContext, loc: SourceLoc
 		bi += 1;
 	}
 
-	const whileCond = makeBinary(makeTypedIdent(idxName, int32Type(), loc), "<", makeTypedIdent(lenName, int32Type(), loc), loc);
+	const whileCond = makeBinary(makeIdentResolved(idxSym, loc), "<", makeIdentResolved(lenSym, loc), loc);
 	const whileBody = makeBlock(whileStmts, loc);
 	const whileNode = makeWhile(whileCond, whileBody, loc);
 

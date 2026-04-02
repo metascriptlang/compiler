@@ -128,11 +128,12 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 	const b = createBuilder();
 	const retType = (mainRetType.length > 0) ? mainRetType : "void";
 
-	// Include system header when async main needs typed future types
+	// Include stdint.h for int32_t and system header for async futures
+	addLine(b, "#include <stdint.h>");
 	if (retType.startsWith("msFuture_")) {
 		addLine(b, "#include \"std/core/system/native.h\"");
-		addNewline(b);
 	}
+	addNewline(b);
 
 	// Forward declarations for all module init functions
 	for (const mp of modulePaths) {
