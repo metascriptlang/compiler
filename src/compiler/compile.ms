@@ -212,12 +212,12 @@ function resetCompiledOFiles(): void {
 	_compiledOFiles = new Set<string>();
 }
 
-// Apply --gc=none: set GcMode.None on the shared prelude context so all modules inherit it.
-// analyzeProgram checks ctx.gcMode and skips DRC injection when None.
+// Apply --gc flag: set GcMode on the shared prelude context so all modules inherit it.
+// analyzeProgram checks ctx.gcMode and skips DRC injection for None/Manual.
 export function applyGcMode(opts: CliOptions): void {
-	if (opts.gcNone && graphPreludeCtx !== null) {
-		graphPreludeCtx.gcMode = GcMode.None;
-	}
+	if (graphPreludeCtx === null) return;
+	if (opts.gcMode === "none") graphPreludeCtx.gcMode = GcMode.None;
+	else if (opts.gcMode === "manual") graphPreludeCtx.gcMode = GcMode.Manual;
 }
 
 function loadAndCheckGraph(entryPath: string, verbose: boolean, config: ResolverConfig): ModuleGraph {
@@ -646,7 +646,8 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 		const hcrResult = opts.isHcr ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
-		if (opts.gcNone) ctx.gcMode = GcMode.None;
+		if (opts.gcMode === "none") ctx.gcMode = GcMode.None;
+			else if (opts.gcMode === "manual") ctx.gcMode = GcMode.Manual;
 		const analyzed = analyzeProgram(hcrResult, ctx);
 		const nativeLowered = lowerNativeAccess(analyzed, nativeCtx);
 
@@ -874,7 +875,8 @@ export function cmdTest(filePath: string, opts: CliOptions): void {
 		const typeRefined = refineTypes(transformed, nativeCtx, graphRegistry);
 		const nativeTransformed = transformForNative(typeRefined, nativeCtx);
 		const hcrResult = opts.isHcr ? liftHcrState(nativeTransformed, nativeCtx) : nativeTransformed;
-		if (opts.gcNone) ctx.gcMode = GcMode.None;
+		if (opts.gcMode === "none") ctx.gcMode = GcMode.None;
+			else if (opts.gcMode === "manual") ctx.gcMode = GcMode.Manual;
 		// Drain pending instances (same as cmdBuildC)
 		const pendingInsts2 = drainPendingInstances();
 		if (pendingInsts2.length > 0) {

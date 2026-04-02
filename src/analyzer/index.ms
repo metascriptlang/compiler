@@ -7,7 +7,6 @@
 
 import { Node, NodeKind, ProgramData, Symbol } from "../ast/node";
 import { CheckerContext, GcMode } from "../checker/context";
-import { needsRC } from "../checker/types";
 import { TransformContext, createTransformContextWithChecker } from "../transform/context";
 import { createDrcContext, pushScope, popScope, scopeDepth } from "./scope";
 import { injectProgram } from "./inject";
@@ -20,30 +19,11 @@ import { parseSource } from "../parser/statements/validation";
 import { checkProgram } from "../checker/index";
 import { transformProgram } from "../transform/index";
 
-// ===== Auto-detect RC requirement =====
-// Scan all symbols — if no type needs RC, skip the entire DRC pass.
-// Monotonic: flips true on first RC type, never checks again.
-
-function programNeedsRC(checkerCtx: CheckerContext): boolean {
-	for (const scope of checkerCtx.table.allScopes) {
-		for (const sym of scope.symbols) {
-			if (needsRC(sym.symbolType)) return true;
-		}
-	}
-	return false;
-}
-
 // ===== Public Entry Point =====
 
 export function analyzeProgram(program: Node, checkerCtx: CheckerContext): Node {
 	if (checkerCtx === null) return program;  // test mode — skip analysis
-	const skipDrc = match (checkerCtx.gcMode) {
-		GcMode.None => true,
-		GcMode.Orc => false,
-		_ => !programNeedsRC(checkerCtx),
-	};
-
-	if (skipDrc) return program;
+	if (checkerCtx.gcMode === GcMode.None || checkerCtx.gcMode === GcMode.Manual) return program;
 	const ctx = createTransformContextWithChecker(checkerCtx);
 	const dctx = createDrcContext(ctx);
 	const injected = injectProgram(program, dctx);

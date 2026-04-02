@@ -41,7 +41,7 @@ export interface CliOptions {
 	isHcr: boolean;
 	strictDefs: boolean;       // --strict-defs: warn on all uninit var use
 	strictNullChecks: boolean; // --strict-nil: warn on unguarded class deref
-	gcNone: boolean;           // --gc=none: skip DRC analyzer (leak memory, no RC)
+	gcMode: string;            // --gc=drc|none|manual: memory management mode
 }
 
 // -- Argument parsing --
@@ -77,7 +77,7 @@ export function parseArgs(): CliOptions {
 		isHcr: false,
 		strictDefs: false,
 		strictNullChecks: false,
-		gcNone: false,
+		gcMode: "drc",
 	};
 
 	if (argv.length < 2) return opts;
@@ -157,7 +157,11 @@ export function parseArgs(): CliOptions {
 		} else if (arg === "--strict-nil") {
 			opts.strictNullChecks = true;
 		} else if (arg === "--gc=none") {
-			opts.gcNone = true;
+			opts.gcMode = "none";
+		} else if (arg === "--gc=manual") {
+			opts.gcMode = "manual";
+		} else if (arg === "--gc=drc") {
+			opts.gcMode = "drc";
 		} else if (arg === "--emit=c") {
 			opts.emitC = true;
 		} else if (arg === "--colors=on") {
