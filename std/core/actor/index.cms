@@ -2,7 +2,7 @@
 // Declares runtime functions for actor creation, messaging, and lifecycle.
 // Included automatically when a module uses `actor` declarations.
 
-@include("std/runtime/actor.h");
+@include("runtime/actor/actor.h");
 
 // Actor creation — allocates actor struct + mailbox, registers with scheduler
 extern function msActorCreate(state: void, dispatch: void): void from "msActorCreate";

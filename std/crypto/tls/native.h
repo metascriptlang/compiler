@@ -9,7 +9,7 @@
 #ifndef MS_TLS_H
 #define MS_TLS_H
 
-#include "std/core/string/native.h"
+#include "runtime/system/string.h"
 #include <stdint.h>
 
 /* Opaque TLS connection handle */

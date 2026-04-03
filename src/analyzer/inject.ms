@@ -337,12 +337,22 @@ function isPtrField(objType: Type, fieldIdx: number): boolean {
 }
 
 function processObjectLiteral(node: Node, dctx: DrcContext, mode: DrcMode): Node {
-	// Reference parity (object constructor): mode==Normal → fields in Normal; else → SinkArg.
-	// In variable init (Consumed mode), fieldDefault = SinkArg — same as before.
-	// In Normal context (e.g., non-sink function arg), fieldDefault = Normal.
-	// Exception: Ptr<T> fields are always Normal (unmanaged, no RC).
+	// Nim parity (injectdestructors.nim:870-889):
+	//   let isRefConstr = t.kind == tyRef
+	//   let m = if isRefConstr: sinkArg elif mode == normal: normal else: sinkArg
+	// Ref/struct constructors always sink fields — field values transfer ownership.
+	// Without this, locals used as field values get destroyed at scope exit while
+	// the object still holds the (now-dangling) backing store pointer.
+	// Per-field: cursor/Ptr fields stay Normal (unmanaged, no RC).
 	const od = node.data as ObjectLiteralData;
-	const fieldDefault = (mode === DrcMode.Normal) ? DrcMode.Normal : DrcMode.SinkArg;
+	const t = node.nodeType;
+	// tyRef (interface/class), named struct, union (NodeData), or untyped → always sink fields.
+	// Only stack-allocated anonymous value types in Normal context use Normal.
+	const isRefConstr = t === null || t.kind === TypeKind.Ref
+		|| (t.kind === TypeKind.Struct && t.typeName !== "")
+		|| t.kind === TypeKind.Union;
+	const fieldDefault = isRefConstr ? DrcMode.SinkArg
+		: (mode === DrcMode.Normal) ? DrcMode.Normal : DrcMode.SinkArg;
 	for (let i = 0; i < od.properties.length; i += 1) {
 		const fieldMode = isPtrField(node.nodeType, i) ? DrcMode.Normal : fieldDefault;
 		od.properties[i] = processNode(od.properties[i], dctx, fieldMode);

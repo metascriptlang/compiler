@@ -1,5 +1,5 @@
-@include("std/core/buffer/native.h");
-@compile("std/core/buffer/native.c");
+@include("runtime/system/buffer.h");
+@compile("runtime/system/buffer.c");
 
 // Buffer = string. Same raw bytes, different semantics.
 // String methods interpret UTF-8/UTF-16. Buffer methods treat raw bytes.

@@ -7,7 +7,7 @@
 #ifndef MS_CRYPTO_RSA_H
 #define MS_CRYPTO_RSA_H
 
-#include "std/core/string/native.h"
+#include "runtime/system/string.h"
 #include <stdint.h>
 
 /* Opaque key pair handles */

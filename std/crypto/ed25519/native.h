@@ -9,7 +9,7 @@
 #ifndef MS_CRYPTO_ED25519_H
 #define MS_CRYPTO_ED25519_H
 
-#include "std/core/string/native.h"
+#include "runtime/system/string.h"
 #include <stdint.h>
 
 /* Generate Ed25519 key pair from random seed.

@@ -89,7 +89,7 @@ export function liftHcrState(program: Node, ctx: TransformContext): Node {
 	const emitNodes: Node[] = [];
 
 	// Include hcr.h
-	emitNodes.push(makeEmitStmt("/*INCLUDESECTION*/#include \"hcr.h\"", loc));
+	emitNodes.push(makeEmitStmt("/*INCLUDESECTION*/#include \"runtime/hcr.h\"", loc));
 
 	// GlobalState struct typedef (with _struct_hash for reload safety)
 	let structDef = "/*TYPESECTION*/typedef struct { uint64_t _struct_hash;";

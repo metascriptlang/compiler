@@ -346,7 +346,12 @@ function arrayOp(hook: string, elem: Type, xf: Node, yf: Node, lctx: LiftCtx, bu
 			genCall("msArrayDestroy", hook, xf, yf, buf, loc);
 		},
 		"copy" => {
-			if (needsElemLoop) {
+			if (needsElemLoop && elem !== null && elem.kind === TypeKind.String) {
+				// String arrays: use bulk msArrayStringCopy (allocates new payload, copies + increfs each element).
+				// The per-element loop generates msStringCopy(&arr[i], src[i]) which writes to a
+				// C temporary instead of the array slot (msArrayAccess returns by value).
+				genCall("msArrayStringCopy", hook, xf, yf, buf, loc);
+			} else if (needsElemLoop) {
 				genCall("msArraySetLen", hook, xf, yf, buf, loc);
 				genArrayLoop("copy", elem, xf, yf, lctx, buf, loc);
 			} else {

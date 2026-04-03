@@ -3,7 +3,7 @@
  */
 
 #include "std/crypto/argon2/native.h"
-#include "std/core/system/native.h"
+#include "runtime/system/core.h"
 #include "argon2.h"
 #include <stdlib.h>
 #include <string.h>

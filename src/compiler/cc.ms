@@ -25,7 +25,7 @@ function getCcachePrefix(): string {
 
 function resolveRuntime(): string {
 	const root = resolveRuntimeDir();
-	if (root.length > 0) return join(root, "std/runtime");
+	if (root.length > 0) return join(root, "runtime");
 	return "";
 }
 

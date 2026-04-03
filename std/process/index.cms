@@ -5,7 +5,7 @@
  * file I/O, shell execution, environment variables, and monotonic clock.
  */
 
-@include("std/process/native.h");
+@include("runtime/process.h");
 
 extern function msProcessArgc(): number;
 extern function msProcessArgvAt(idx: number): string;

@@ -1,7 +1,7 @@
 // HTTP Client — connect, send request, read response.
 // Supports both HTTP (plain TCP) and HTTPS (TLS auto-enabled via std/crypto/tls import).
 
-@include("std/net/native.h");
+@include("runtime/net/socket.h");
 
 extern function msNetSocket(): int32;
 extern function msNetConnect(fd: int32, host: string, port: int32): int32;

@@ -15,7 +15,7 @@
 #define ARO_BRIDGE_H
 
 #include <stdint.h>
-#include "std/core/system/native.h"
+#include "runtime/system/core.h"
 
 // Add an include directory for header resolution (call before msAroParse).
 void msAroAddIncludeDir(msString dir);

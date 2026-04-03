@@ -7,7 +7,7 @@
  */
 
 #include "std/crypto/aes/native.h"
-#include "std/core/system/native.h"
+#include "runtime/system/core.h"
 #include <stdlib.h>
 #include <string.h>
 

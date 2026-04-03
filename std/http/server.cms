@@ -3,9 +3,9 @@
 // Parallel across cores (spawn + SO_REUSEPORT), concurrent within each (selector).
 
 @emit("#define MS_SELECTOR_BRIDGE");
-@include("std/net/native.h");
-@include("std/runtime/selector.h");
-@include("std/net/eventLoopUring.h");
+@include("runtime/net/socket.h");
+@include("runtime/actor/selector.h");
+@include("runtime/net/eventLoopUring.h");
 
 extern function msNetSocket(): int32;
 extern function msNetBind(fd: int32, addr: string, port: int32): int32;

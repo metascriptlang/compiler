@@ -1,4 +1,4 @@
-@include("std/core/crypto/native.h");
+@include("runtime/crypto/hash.h");
 
 // mbedTLS include paths + minimal config
 @passC("-Istd/core/crypto/config");
@@ -9,8 +9,8 @@
 @passC("-DMBEDTLS_CONFIG_FILE='<mbedtls/mbedtls_config.h>'");
 
 // Our crypto implementation
-@compile("std/core/crypto/native.c");
-@compile("std/core/crypto/psa_stubs.c");
+@compile("runtime/crypto/hash.c");
+@compile("runtime/crypto/psaStubs.c");
 
 // mbedTLS vendor sources (hash algorithms)
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/md.c");

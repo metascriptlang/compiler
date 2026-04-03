@@ -3,7 +3,7 @@
 // Used for event-loop-per-core HTTP server architecture.
 
 @emit("#define MS_SELECTOR_BRIDGE");
-@include("std/runtime/selector.h");
+@include("runtime/actor/selector.h");
 
 // Event flags (bitmask)
 export const EVENT_READ: int32 = 1;

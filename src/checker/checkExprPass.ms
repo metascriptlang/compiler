@@ -1212,6 +1212,20 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 						calleeType = extType;
 					}
 					extPreResolved = true;
+					// Actor call-semantics: T-returning actor methods return Promise<T>
+					// so callers must await. void methods stay void (fire-and-forget).
+					if (me.object.resolvedSym !== null
+						&& me.object.resolvedSym.symbolKind === SymbolKind.Actor
+						&& !isStaticAccess
+						&& calleeType !== null
+						&& calleeType.typeReturn !== null
+						&& calleeType.typeReturn.kind !== TypeKind.Void) {
+						calleeType = createFunction(
+							calleeType.typeChildren,
+							calleeType.typeNames,
+							createPromise(calleeType.typeReturn)
+						);
+					}
 				} else if (filtered.length > 1) {
 					// Multi-overload: defer to post-arg scoring (needs argTypes)
 					extMultiFiltered = filtered;

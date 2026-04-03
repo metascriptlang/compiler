@@ -8,7 +8,7 @@
 #ifndef MS_CRYPTO_BLAKE2B_H
 #define MS_CRYPTO_BLAKE2B_H
 
-#include "std/core/string/native.h"
+#include "runtime/system/string.h"
 #include <stdint.h>
 
 /* Hash data with BLAKE2b. hashSize: output bytes (1-64, default 32). */

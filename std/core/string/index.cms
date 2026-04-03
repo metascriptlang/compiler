@@ -2,8 +2,8 @@
 // Extension methods backed by runtime/core/string.h
 // Loaded automatically via globalImports() -> "std/core/string"
 
-@include("std/core/string/native.h");
-@compile("std/core/string/native.c");
+@include("runtime/system/string.h");
+@compile("runtime/system/string.c");
 
 // ===== Operators =====
 // Primitive operators (C runtime)

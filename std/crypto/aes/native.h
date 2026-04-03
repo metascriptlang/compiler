@@ -10,7 +10,7 @@
 #ifndef MS_CRYPTO_AES_H
 #define MS_CRYPTO_AES_H
 
-#include "std/core/string/native.h"
+#include "runtime/system/string.h"
 #include <stdint.h>
 
 /* ===== High-Level AEAD (seal/open) ===== */

@@ -5,19 +5,22 @@
 // - FunctionDecl _impl handlers (original method bodies, called by dispatch)
 // - FunctionDecl proxies (enqueue message via msActorSend — what callers invoke)
 // - FunctionDecl dispatch (switches on msg kind, calls _impl handlers)
-// - @include("std/runtime/actor.h") injected for C compilation
+// - @include("runtime/actor/actor.h") injected for C compilation
 
 import { Node, NodeKind, SourceLocation, DeclKind,
 	ActorDeclData, MethodDeclData, ConstructorDeclData,
 	DecoratedDeclData, ExportDeclData, ProgramData, NewExprData,
-	IdentifierData, VariableDeclData, Symbol, SymbolKind, SymbolState } from "../../ast/node";
+	IdentifierData, VariableDeclData, FunctionDeclData, IfStmtData,
+	WhileStmtData, ForOfStmtData, ForStmtData, BlockStmtData,
+	DoWhileStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData,
+	Symbol, SymbolKind, SymbolState } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
 import { makeSymbol } from "../../checker/symbol";
 import { syntheticToken, makeIdent, makeIdentResolved, makeCall, makeExprStmt, makeReturn,
 	makeVarDecl, makeMember, makeNumber, makeNull, makeBlock,
 	makeBinary } from "../util";
 import { createNode } from "../../ast/node";
-import { voidType, unknownType, int32Type, createFunction, createRef, createStruct } from "../../checker/types";
+import { voidType, unknownType, createFunction, createRef, createStruct } from "../../checker/types";
 
 // ===== Build proxy body for a void method (send semantics) =====
 
@@ -86,16 +89,23 @@ function buildDispatchBody(methods: Node[], actorName: string, loc: SourceLocati
 	for (const m of methods) {
 		if (m.kind !== NodeKind.MethodDecl) continue;
 		const md = m.data as MethodDeclData;
-		const cond = makeBinary(
-			makeIdent("_dmsg", loc),
-			"===",
-			makeNumber(msgKind, loc),
-			loc
-		);
+		const isVoid = md.methodReturnType === "" || md.methodReturnType === "void";
+		// Condition: msMsgKind(_dmsg) === N
+		const kindCall = makeCall(makeIdent("msMsgKind", loc), [makeIdent("_dmsg", loc)], loc);
+		const cond = makeBinary(kindCall, "===", makeNumber(msgKind, loc), loc);
 		const selfRef = makeIdent("_self", loc);
 		selfRef.nodeType = actorRefType;
 		const handlerCall = makeCall(makeIdent(actorName + "_" + md.methodName + "_impl", loc), [selfRef], loc);
-		const body = makeBlock([makeExprStmt(handlerCall, loc)], loc);
+		let body: Node;
+		if (isVoid) {
+			body = makeBlock([makeExprStmt(handlerCall, loc)], loc);
+		} else {
+			// Call-semantics: result = handler(); msMsgCompleteDouble(msMsgReplyFuture(_dmsg), result)
+			const resultDecl = makeVarDecl("_result", handlerCall, DeclKind.Const, loc);
+			const futAccessCall = makeCall(makeIdent("msMsgReplyFuture", loc), [makeIdent("_dmsg", loc)], loc);
+			const completeCall = makeCall(makeIdent("msMsgCompleteDouble", loc), [futAccessCall, makeIdent("_result", loc)], loc);
+			body = makeBlock([resultDecl, makeExprStmt(completeCall, loc)], loc);
+		}
 		const emptyBlock = makeBlock([], loc);
 		const ifNode = createNode(NodeKind.IfStmt, {
 			condition: cond,
@@ -238,7 +248,7 @@ function emitActorDispatch(d: ActorDeclData, name: string, methods: Node[], loc:
 	const fnNode = createNode(NodeKind.FunctionDecl, {
 		fnName: dispatchNativeName,
 		params: ["this", "_dmsg"],
-		fnParamTypes: [name, "int32"],
+		fnParamTypes: [name, "void"],
 		fnBody: dispatchBody,
 		fnFlags: "",
 		fnReturnType: "void",
@@ -247,7 +257,7 @@ function emitActorDispatch(d: ActorDeclData, name: string, methods: Node[], loc:
 		nameLocation: d.nameLocation,
 	}, syntheticToken(loc));
 	// Build Function type so codegen emits prototype (nodeType=null → skipped)
-	const dispatchType = createFunction([unknownType(), int32Type()], ["this", "_dmsg"], voidType());
+	const dispatchType = createFunction([unknownType(), unknownType()], ["this", "_dmsg"], voidType());
 	fnNode.nodeType = dispatchType;
 	const dispatchSym = makeSymbol(dispatchNativeName, SymbolKind.Function, dispatchType, false);
 	dispatchSym.nativeName = dispatchNativeName;
@@ -288,6 +298,7 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, 
 		result.push(dispatchNode);
 		dispatchSyms.push(dispatchNode.resolvedSym);
 		dispatchNames.push(name);
+
 	}
 
 	return result;
@@ -332,23 +343,21 @@ function expandActorDecls(program: Node, names: string[], dispatchSyms: Symbol[]
 		if (ctx.checkerCtx.includeDirectives !== "") {
 			ctx.checkerCtx.includeDirectives = ctx.checkerCtx.includeDirectives + "\n";
 		}
-		ctx.checkerCtx.includeDirectives = ctx.checkerCtx.includeDirectives + "std/runtime/actor.h";
+		ctx.checkerCtx.includeDirectives = ctx.checkerCtx.includeDirectives + "runtime/actor/actor.h";
 	}
 
 	return program;
 }
 
-// ===== Post-construction wiring for new Counter() =====
+// ===== Wire actor creation after `new ActorType()` in any statement list =====
 
-function rewriteNewAndVarDecls(program: Node, names: string[], dispatchSyms: Symbol[], dispatchNames: string[], ctx: TransformContext): Node {
-	if (program.kind !== NodeKind.Program) return program;
-	if (names.length === 0) return program;
-	const pd = program.data as ProgramData;
-	const newStmts: Node[] = [];
-
-	for (const stmt of pd.programStmts) {
-		newStmts.push(stmt);
-		// After: const c = new Counter(); insert: c._actor = msActorCreate(c, Counter_dispatch); msActorRegister(c._actor);
+function wireActorInStmts(stmts: Node[], names: string[], dispatchSyms: Symbol[], dispatchNames: string[]): Node[] {
+	const out: Node[] = [];
+	for (const stmt of stmts) {
+		// Recurse into nested blocks first
+		wireActorInNode(stmt, names, dispatchSyms, dispatchNames);
+		out.push(stmt);
+		// After VarDecl with `new ActorType()`, inject _actor wiring
 		if (stmt.kind === NodeKind.VariableDecl) {
 			const vd = stmt.data as VariableDeclData;
 			if (vd.initializer !== null && vd.initializer.kind === NodeKind.NewExpr) {
@@ -361,12 +370,10 @@ function rewriteNewAndVarDecls(program: Node, names: string[], dispatchSyms: Sym
 					}
 					if (actorName !== "") {
 						const loc = stmt.location;
-						// Find dispatch symbol for this actor
 						let dSym: Symbol = null as unknown as Symbol;
 						for (let di = 0; di < dispatchNames.length; di = di + 1) {
 							if (dispatchNames[di] === actorName) { dSym = dispatchSyms[di]; }
 						}
-						// c._actor = msActorCreate(c, Counter_dispatch)
 						const dispatchRef = dSym !== null
 							? makeIdentResolved(dSym, loc)
 							: makeIdent(actorName + "_dispatch", loc);
@@ -376,30 +383,78 @@ function rewriteNewAndVarDecls(program: Node, names: string[], dispatchSyms: Sym
 						], loc);
 						const assignActor = makeBinary(
 							makeMember(makeIdent(vd.declName, loc), "_actor", loc),
-							"=",
-							createCall,
-							loc
+							"=", createCall, loc
 						);
-						newStmts.push(makeExprStmt(assignActor, loc));
-						// msActorRegister(c._actor)
+						out.push(makeExprStmt(assignActor, loc));
 						const registerCall = makeCall(makeIdent("msActorRegister", loc), [
 							makeMember(makeIdent(vd.declName, loc), "_actor", loc),
 						], loc);
-						newStmts.push(makeExprStmt(registerCall, loc));
+						out.push(makeExprStmt(registerCall, loc));
+						// Keep actor state alive past DRC scope — registry holds a ref
+						const increfCall = makeCall(makeIdent("msIncRef", loc), [
+							makeIdent(vd.declName, loc),
+						], loc);
+						out.push(makeExprStmt(increfCall, loc));
 					}
 				}
 			}
 		}
 	}
+	return out;
+}
 
-	// Append msActorPollAll() at program exit to drain all pending messages.
-	// Single-threaded: messages are enqueued synchronously, poll drains them all.
-	// Multi-scheduler replaces this with a proper event loop.
+// ===== Recursively walk into nodes that contain statement lists =====
+
+function wireActorInNode(node: Node, names: string[], dispatchSyms: Symbol[], dispatchNames: string[]): void {
+	if (node.kind === NodeKind.FunctionDecl) {
+		const fd = node.data as FunctionDeclData;
+		if (fd.fnBody !== null) wireActorInNode(fd.fnBody, names, dispatchSyms, dispatchNames);
+	} else if (node.kind === NodeKind.BlockStmt) {
+		const bd = node.data as BlockStmtData;
+		bd.statements = wireActorInStmts(bd.statements, names, dispatchSyms, dispatchNames);
+	} else if (node.kind === NodeKind.IfStmt) {
+		const id = node.data as IfStmtData;
+		wireActorInNode(id.consequent, names, dispatchSyms, dispatchNames);
+		if (id.alternate !== null) wireActorInNode(id.alternate, names, dispatchSyms, dispatchNames);
+	} else if (node.kind === NodeKind.WhileStmt) {
+		const wd = node.data as WhileStmtData;
+		wireActorInNode(wd.whileBody, names, dispatchSyms, dispatchNames);
+	} else if (node.kind === NodeKind.DoWhileStmt) {
+		const dd = node.data as DoWhileStmtData;
+		wireActorInNode(dd.doBody, names, dispatchSyms, dispatchNames);
+	} else if (node.kind === NodeKind.ForOfStmt) {
+		const fd = node.data as ForOfStmtData;
+		wireActorInNode(fd.forOfBody, names, dispatchSyms, dispatchNames);
+	} else if (node.kind === NodeKind.ForStmt) {
+		const fd = node.data as ForStmtData;
+		wireActorInNode(fd.forBody, names, dispatchSyms, dispatchNames);
+	} else if (node.kind === NodeKind.TryCatchStmt) {
+		const td = node.data as TryCatchStmtData;
+		wireActorInNode(td.tryBody, names, dispatchSyms, dispatchNames);
+		if (td.catchBody !== null) wireActorInNode(td.catchBody, names, dispatchSyms, dispatchNames);
+		if (td.finallyBody !== null) wireActorInNode(td.finallyBody, names, dispatchSyms, dispatchNames);
+	} else if (node.kind === NodeKind.SwitchStmt) {
+		const sd = node.data as SwitchStmtData;
+		for (const c of sd.switchCases) wireActorInNode(c, names, dispatchSyms, dispatchNames);
+	} else if (node.kind === NodeKind.SwitchCase) {
+		const sc = node.data as SwitchCaseData;
+		sc.caseStmts = wireActorInStmts(sc.caseStmts, names, dispatchSyms, dispatchNames);
+	}
+}
+
+// ===== Top-level: wire actors at all scopes + inject poll at exit =====
+
+function rewriteAndInjectPoll(program: Node, names: string[], dispatchSyms: Symbol[], dispatchNames: string[]): Node {
+	if (program.kind !== NodeKind.Program) return program;
+	const pd = program.data as ProgramData;
+
+	// Recursively wire actor creation at all scope levels
+	pd.programStmts = wireActorInStmts(pd.programStmts, names, dispatchSyms, dispatchNames);
+
+	// Drain all actor mailboxes at exit
 	const exitLoc = program.location;
-	const pollCall = makeCall(makeIdent("msActorPollAll", exitLoc), [], exitLoc);
-	newStmts.push(makeExprStmt(pollCall, exitLoc));
+	pd.programStmts.push(makeExprStmt(makeCall(makeIdent("msActorPollAll", exitLoc), [], exitLoc), exitLoc));
 
-	pd.programStmts = newStmts;
 	return program;
 }
 
@@ -411,5 +466,6 @@ export function lowerActor(program: Node, ctx: TransformContext): Node {
 	const dispatchNames: string[] = [];
 	const expanded = expandActorDecls(program, names, dispatchSyms, dispatchNames, ctx);
 	if (names.length === 0) return expanded;
-	return rewriteNewAndVarDecls(expanded, names, dispatchSyms, dispatchNames, ctx);
+	// Wire msActorCreate after every `new ActorType()` at any scope + inject poll at exit
+	return rewriteAndInjectPoll(expanded, names, dispatchSyms, dispatchNames);
 }

@@ -8,7 +8,7 @@
 #ifndef MS_CRYPTO_CHACHA20_H
 #define MS_CRYPTO_CHACHA20_H
 
-#include "std/core/string/native.h"
+#include "runtime/system/string.h"
 #include <stdint.h>
 
 /* Encrypt with XChaCha20-Poly1305.

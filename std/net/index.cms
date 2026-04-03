@@ -5,8 +5,8 @@
  * Used by std/http for server and client operations.
  */
 
-@include("std/net/native.h");
-@compile("std/io/engineSelect.c");
+@include("runtime/net/socket.h");
+@compile("runtime/io/engineSelect.c");
 
 // ===== C primitives (blocking) =====
 
@@ -86,7 +86,7 @@ export function sendNonBlock(fd: int32, data: string, offset: int32): int32 {
 // io_uring: native — submit SQE → kernel does I/O → CQE completes.
 // User code is identical regardless of backend.
 
-@include("std/io/engine.h");
+@include("runtime/io/engine.h");
 
 extern function msIoAccept_ms(listenFd: int32): Promise<int32>;
 export extern function msIoRunOnce(timeoutMs: int32): int32;

@@ -1,10 +1,10 @@
 @passC("-I.");
-@compile("std/core/promise/dispatch.c");
-@compile("std/core/promise/combinator.c");
-@compile("std/core/promise/pool.c");
-@compile("std/runtime/selectorKqueue.c");
-@compile("std/runtime/selectorEpoll.c");
-@compile("std/runtime/selectorPoll.c");
+@compile("runtime/promise/dispatch.c");
+@compile("runtime/promise/combinator.c");
+@compile("runtime/promise/pool.c");
+@compile("runtime/promise/selectorKqueue.c");
+@compile("runtime/promise/selectorEpoll.c");
+@compile("runtime/promise/selectorPoll.c");
 // Engine compiled via std/net/index.cms (only when network I/O is used)
 
 export class Promise<T> {
@@ -62,7 +62,7 @@ export function asyncCheck(fut: Promise<void>): void {
 // ===== Locker<T> — Thread-safe shared mutable state (Malebolgia pattern) =====
 // Wraps a value + ticket lock. Access via lock/unlock or withLock callback.
 
-@include("std/core/promise/locker.h");
+@include("runtime/promise/locker.h");
 
 extern function msLockerCreate(dataSize: int32): Locker from "msLockerCreate";
 extern function msLockerLock(loc: Locker): void from "msLockerLock";
