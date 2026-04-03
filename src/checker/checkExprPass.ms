@@ -3,7 +3,7 @@
 
 import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, DeclKind, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, ClassDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
-import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createSpan, createFunction, createTypeRef, createStruct, createResult, createPrimitive, substituteType, instantiateGeneric, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, unwrapRef, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, isPromise, getPromiseInner, isResult, getResultOkType, createGenericParam, instantiateGenericBody, isStringLike } from "./types";
+import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createSpan, createFunction, createTypeRef, createStruct, createResult, createPrimitive, substituteType, instantiateGeneric, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, unwrapRef, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, isPromise, getPromiseInner, isResult, getResultOkType, createGenericParam, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, markUsed } from "./symbol";
 import { CheckerContext, ExportedSymInfo, addError, addErrorRange, addWarning, findAllExtensionsByName, ExtensionMethod, isCancelled, filterExtsByReceiverType, findFirstMatchingExt, getExtFnType, stripReceiverParam, sgRecordSym, isInAsyncPromiseResult, findExportedSymbol } from "./context";
 import {
@@ -1140,6 +1140,7 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 	let extMultiFiltered: ExtensionMethod[] = [];
 	let extMultiObjType: Type = null;
 	let extMultiMethodName = "";
+	let isActorMethodCall = false;
 	// Check for overloads + set resolvedSym for direct calls
 	if (d.callee.kind === NodeKind.Identifier) {
 		const calleeName = (d.callee.data as IdentifierData).name;
@@ -1212,19 +1213,25 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 						calleeType = extType;
 					}
 					extPreResolved = true;
-					// Actor call-semantics: T-returning actor methods return Promise<T>
-					// so callers must await. void methods stay void (fire-and-forget).
-					if (me.object.resolvedSym !== null
-						&& me.object.resolvedSym.symbolKind === SymbolKind.Actor
-						&& !isStaticAccess
-						&& calleeType !== null
-						&& calleeType.typeReturn !== null
-						&& calleeType.typeReturn.kind !== TypeKind.Void) {
-						calleeType = createFunction(
-							calleeType.typeChildren,
-							calleeType.typeNames,
-							createPromise(calleeType.typeReturn)
-						);
+					// Actor: flag for Sendable checking + Promise<T> wrapping for non-void returns
+					// Check both direct Actor symbols (e.g. Worker.staticMethod) and
+					// variables holding actor instances (e.g. w.method where w: Ref<Worker>)
+					const isActorReceiver = !isStaticAccess && (
+						(me.object.resolvedSym !== null && me.object.resolvedSym.symbolKind === SymbolKind.Actor)
+						|| (objType !== null && objType.kind === TypeKind.Ref && objType.sym !== null && objType.sym.symbolKind === SymbolKind.Actor)
+						|| (objType !== null && objType.sym !== null && objType.sym.symbolKind === SymbolKind.Actor)
+					);
+					if (isActorReceiver) {
+						isActorMethodCall = true;
+						if (calleeType !== null
+							&& calleeType.typeReturn !== null
+							&& calleeType.typeReturn.kind !== TypeKind.Void) {
+							calleeType = createFunction(
+								calleeType.typeChildren,
+								calleeType.typeNames,
+								createPromise(calleeType.typeReturn)
+							);
+						}
 					}
 				} else if (filtered.length > 1) {
 					// Multi-overload: defer to post-arg scoring (needs argTypes)
@@ -1302,6 +1309,12 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 			if (node.resolvedSym !== null && node.resolvedSym.builtinKind === "JsonStringify") {
 				const result = generateJsonStringifyInstance(ctx, node, d, node.location);
 				if (result !== null) return result;
+			}
+		}
+		// Sendable check for extension-resolved actor method calls
+		if (isActorMethodCall) {
+			for (let pi = 0; pi < d.arguments.length; pi += 1) {
+				checkActorArgSendable(ctx, d.arguments[pi], pi);
 			}
 		}
 		return inferGenericReturn(calleeType, argTypes, expectedType);
@@ -1396,6 +1409,10 @@ function checkCallExpr(ctx: CheckerContext, node: Node, expectedType: Type): Typ
 					convNode.nodeType = paramType;
 					convNode.flags = convNode.flags | NodeFlag.Sem;
 					d.arguments[pi] = convNode;
+				}
+				// Sendable check: actor method args must be safe to cross boundary
+				if (isActorMethodCall && pi < d.arguments.length) {
+					checkActorArgSendable(ctx, d.arguments[pi], pi);
 				}
 			}
 		}
@@ -2686,6 +2703,51 @@ function processEmitInterpolation(ctx: CheckerContext, md: MacroInvocationData, 
 	}
 	// Replace macroArgs with the interpolated args
 	md.macroArgs = newArgs;
+}
+
+// ===== Actor Sendable Checker =====
+// Enforces safe data transfer at actor method boundaries.
+// Reuses: isPrimitiveKind, isStructType, SymbolFlag.Mutable, NodeKind.MoveExpr.
+
+function isSendable(t: Type, argNode: Node): boolean {
+	if (t === null) return true;
+	if (isPrimitiveKind(t.kind)) return true;
+	if (t.kind === TypeKind.String) return true;
+	if (argNode !== null && argNode.kind === NodeKind.MoveExpr) return true;
+	if (isStructType(t)) {
+		for (const ft of t.typeChildren) {
+			if (!isSendable(ft, argNode)) return false;
+		}
+		return true;
+	}
+	if (t.kind === TypeKind.Ref) {
+		if (argNode !== null && argNode.resolvedSym !== null
+			&& !hasFlag(argNode.resolvedSym, SymbolFlag.Mutable)) return true;
+		return false;
+	}
+	if (t.kind === TypeKind.Function) return false;
+	return false;
+}
+
+function checkActorArgSendable(ctx: CheckerContext, argNode: Node, pi: number): void {
+	const t = argNode.nodeType;
+	if (t === null) return;
+	if (isSendable(t, argNode)) return;
+	let argLabel = "arg " + pi.toString();
+	if (argNode.kind === NodeKind.Identifier) {
+		argLabel = "'" + (argNode.data as IdentifierData).name + "'";
+	}
+	const typedesc = typeNameOf(t);
+	let hint = "";
+	if (t.kind === TypeKind.Ref) {
+		let varName = "";
+		if (argNode.kind === NodeKind.Identifier) { varName = " " + (argNode.data as IdentifierData).name; }
+		hint = " — use `move" + varName + "` to transfer ownership";
+	} else if (t.kind === TypeKind.Function) {
+		hint = " — closures may capture mutable state";
+	}
+	addError(ctx, "actor methods only accept value types, `move`, or `const` references\n" + typedesc + " " + argLabel + " is a mutable reference" + hint,
+		argNode.location.line, argNode.location.column);
 }
 
 // ===== Spawn Borrow Checker =====
