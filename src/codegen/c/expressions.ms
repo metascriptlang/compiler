@@ -580,6 +580,21 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 	// TypeAssertion — 1 child
 	if (kind === NodeKind.TypeAssertion) {
 		const d = node.data as TypeAssertionData;
+		// Elide `x as unknown as T` chain when typeof(x) === T (no-op cast in monomorphized generics).
+		// Must detect at push time to avoid inner cast producing invalid C for value types.
+		if (d.asExpr !== null && d.asExpr.kind === NodeKind.TypeAssertion && node.nodeType !== null) {
+			const inner = d.asExpr.data as TypeAssertionData;
+			if (inner.asExpr !== null && inner.asExpr.nodeType !== null) {
+				const srcDesc = getTypeDesc(g, inner.asExpr.nodeType);
+				const tgtDesc = getTypeDesc(g, node.nodeType);
+				if (srcDesc === tgtDesc) {
+					// Skip both casts — push the innermost expression directly
+					ctx.workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
+					ctx.workStack.push({ node: inner.asExpr, phase: 0, childCount: 0, tag: 0 });
+					return;
+				}
+			}
+		}
 		ctx.workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
 		ctx.workStack.push({ node: d.asExpr, phase: 0, childCount: 0, tag: 0 });
 		return;
@@ -1133,10 +1148,22 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		} else {
 			targetType = mangle(d.asType);
 		}
-		// Reference parity: value types (structs) can't be
-		// directly cast in C. Use pointer reinterpret: (*(DestType*)&(srcVal))
+		// Skip cast when source and target C types are the same (no-op cast).
+		if (d.asExpr !== null && d.asExpr.nodeType !== null && node.nodeType !== null) {
+			const srcDesc = getTypeDesc(g, d.asExpr.nodeType);
+			if (srcDesc === targetType) {
+				ctx.results.push(expr);
+				return;
+			}
+		}
+		// Value types (structs like msString) can't be directly C-cast.
+		// Use pointer reinterpret: (*(DestType*)&(srcVal))
+		// Covers: value-to-value casts AND void*-to-value (from `as unknown as T` chains).
 		if (node.nodeType !== null && isNilableValueType(node.nodeType)
-			&& d.asExpr !== null && d.asExpr.nodeType !== null && isNilableValueType(d.asExpr.nodeType)) {
+			&& d.asExpr !== null && d.asExpr.nodeType !== null
+			&& (isNilableValueType(d.asExpr.nodeType)
+				|| d.asExpr.nodeType.kind === TypeKind.Unknown
+				|| d.asExpr.nodeType.kind === TypeKind.GenericParam)) {
 			ctx.results.push(`(*(${targetType}*)&(${expr}))`);
 			return;
 		}

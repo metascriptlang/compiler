@@ -337,7 +337,7 @@ function isPtrField(objType: Type, fieldIdx: number): boolean {
 }
 
 function processObjectLiteral(node: Node, dctx: DrcContext, mode: DrcMode): Node {
-	// Nim parity (injectdestructors.nim:870-889):
+	// Reference parity (injectdestructors:870-889):
 	//   let isRefConstr = t.kind == tyRef
 	//   let m = if isRefConstr: sinkArg elif mode == normal: normal else: sinkArg
 	// Ref/struct constructors always sink fields — field values transfer ownership.
@@ -427,7 +427,7 @@ function processConditional(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	tmpDecl.nodeType = resultType;
 	tmpDecl.resolvedSym = tmpSym;
 	addPre(dctx, tmpDecl);
-	// Nim parity (processScopeExpr): register VarInfo for the temp so that
+	// Reference parity (processScopeExpr): register VarInfo for the temp so that
 	// processAssignment inside each branch can find it and emit proper RC ops
 	// (copy/move). Without this, the branch assignment `$cond = src.field`
 	// falls through processAssignment (no resolvedSym, no VarInfo → no copy).
@@ -442,7 +442,7 @@ function processConditional(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const elseProcessed = processBranchAssign(tmpName, tmpSym, resultType, cd.ternaryAlternate, dctx, loc);
 	popScope(dctx);
 	addPre(dctx, makeIf(cd.ternaryCondition, makeBlock(thenProcessed, loc), makeBlock(elseProcessed, loc), loc));
-	// Nim parity: $cond temp is consumed by enclosing expression (object literal field,
+	// Reference parity: $cond temp is consumed by enclosing expression (object literal field,
 	// call arg, etc.) in SinkArg/Consumed mode. Mark moved so scope cleanup won't double-free.
 	// Safe: $cond is single-use — created here, consumed once by caller.
 	if (mode === DrcMode.SinkArg || mode === DrcMode.Consumed) {
@@ -465,7 +465,7 @@ function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	// Lambda lifting creates env idents without resolvedSym.
 	// Fall back to VarInfo so DRC can emit copy for env fields in closure literals.
 	// Without this, closure env structs are destroyed at scope exit (double-free).
-	// Nim parity: nkClosure fields processed with sinkArg (injectdestructors.nim:862).
+	// Reference parity: closure fields processed with sinkArg (injectdestructors:862).
 	// Use passCopyToSink (not move) because shared envs are read after closure use.
 	if (sym === null) {
 		if (mode === DrcMode.SinkArg || mode === DrcMode.Consumed) {

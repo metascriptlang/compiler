@@ -83,6 +83,60 @@ function deduplicateBindings(names: string[], types: Type[]): { names: string[],
 	return { names: outNames, types: outTypes };
 }
 
+// Add a type symbol to scope if not already present. Returns true if injected.
+// Prefers caller's authoritative symbol type; falls back to provided type.
+function tryInjectTypeSym(name: string, fallbackType: Type, ctx: CheckerContext, callerCtx: CheckerContext, injected: Symbol[]): void {
+	if (lookupSymbol(ctx.table, name) !== null) return;
+	const callerSym = lookupSymbol(callerCtx.table, name);
+	const symType = callerSym !== null ? callerSym.symbolType : fallbackType;
+	const sym = makeSymbol(name, SymbolKind.TypeAlias, symType, false);
+	sym.nameId = getIdentId(ctx.table.identCache, name);
+	ctx.table.current.symbols.push(sym);
+	injected.push(sym);
+}
+
+// Inject concrete type symbols into scope so resolveAnnotation finds them during re-check.
+// For Array<Ref<Item>>, extracts "Item" and adds Ref<Struct("Item")> to scope.
+// Reference parity (seminst.nim:428 instantiateGenericParamList): concrete types added to scope.
+function injectConcreteTypeSyms(t: Type, ctx: CheckerContext, callerCtx: CheckerContext, injected: Symbol[]): void {
+	if (t === null) return;
+	if (t.kind === TypeKind.Ref && t.typeReturn !== null) {
+		if (t.typeReturn.kind === TypeKind.Struct && t.typeReturn.typeName !== "") {
+			tryInjectTypeSym(t.typeReturn.typeName, t, ctx, callerCtx, injected);
+		}
+		injectConcreteTypeSyms(t.typeReturn, ctx, callerCtx, injected);
+		return;
+	}
+	if (t.kind === TypeKind.Array && t.typeReturn !== null) {
+		injectConcreteTypeSyms(t.typeReturn, ctx, callerCtx, injected);
+		return;
+	}
+	if (t.kind === TypeKind.Struct && t.typeName !== "") {
+		tryInjectTypeSym(t.typeName, t, ctx, callerCtx, injected);
+		return;
+	}
+	if (t.kind === TypeKind.GenericInstance && t.typeChildren !== null) {
+		for (const child of t.typeChildren) {
+			injectConcreteTypeSyms(child, ctx, callerCtx, injected);
+		}
+		return;
+	}
+}
+
+function removeInjectedSyms(ctx: CheckerContext, injected: Symbol[]): void {
+	for (const sym of injected) {
+		let i = 0;
+		while (i < ctx.table.current.symbols.length) {
+			if (ctx.table.current.symbols[i] === sym) {
+				ctx.table.current.symbols[i] = ctx.table.current.symbols[ctx.table.current.symbols.length - 1];
+				ctx.table.current.symbols.pop();
+				break;
+			}
+			i = i + 1;
+		}
+	}
+}
+
 // Build mangled name: "set" + ["string","string"] → "set__string_string"
 function buildMangledName(baseName: string, types: Type[]): string {
 	let result = baseName;
@@ -387,8 +441,9 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	rootScope.symbols.push(instSym);
 	cloned.resolvedSym = instSym;
 
-	// Reference parity (generateInstance): check body in the DEFINING module's scope,
-	// not the calling module's. This gives access to private helpers (mapRawGet, etc.)
+	// Nim parity (seminst.nim:150 semProcBody): check body in the DEFINING module's scope
+	// (for private helpers like mapRawGet), but with concrete type symbols injected so
+	// user types (Item, Foo, etc.) are visible during type annotation resolution.
 	if (cd.fnBody !== null) {
 		const bodyCtx = ctx.preludeCtx !== null ? ctx.preludeCtx : ctx;
 		// Register instance in body-check scope so recursive lookups find it
@@ -396,8 +451,17 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 		bodyCtx.table.current.symbols.push(instSym);
 		const savedModulePath = bodyCtx.modulePath;
 		bodyCtx.modulePath = ctx.modulePath;
+		// Nim parity (seminst.nim:428 instantiateGenericParamList): inject concrete type
+		// symbols into scope so resolveAnnotation("Item") finds the user type during re-check.
+		// Without this, Map<string, Item[]> methods resolve "Item" to Unknown.
+		const injectedSyms: Symbol[] = [];
+		for (const ct of dedup.types) {
+			injectConcreteTypeSyms(ct, bodyCtx, ctx, injectedSyms);
+		}
 		callCheckFunctionBody(bodyCtx, instSym, cd.params, cd.fnBody, null as unknown as SourceLocation[]);
 		bodyCtx.modulePath = savedModulePath;
+		// Clean up injected symbols to avoid polluting prelude scope
+		removeInjectedSyms(bodyCtx, injectedSyms);
 	}
 
 	// Push to global pending list — reliable regardless of context save/restore.

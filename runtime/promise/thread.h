@@ -20,6 +20,7 @@ typedef struct msSpawnCtx {
 	void* fut;          /* msFuture_ptr* to complete when task finishes */
 } msSpawnCtx;
 
+
 /* Forward declaration — implemented in dispatch.c */
 extern void msPostCompletion(void* fut, void* value, bool isFail, void* error);
 
@@ -42,7 +43,7 @@ static inline void msSpawnWorkerRun(msSpawnCtx* ctx) {
 	if (ctx->env != NULL) {
 		msDecref(ctx->env);
 	}
-	free(ctx);
+	/* No free — ctx is a local copy from the queue slot (Malebolgia: zero alloc) */
 }
 
 /* Forward declaration — pool submit defined in pool.c */
@@ -53,14 +54,11 @@ void msPoolSubmit(msSpawnCtx* ctx);
  * Takes ownership of the closure env by incrementing its refcount. */
 static inline void* msSpawn(msClosure fn) {
 	msFuture_ptr* fut = msFutureCreateT(msFuture_ptr);
-	msSpawnCtx* ctx = (msSpawnCtx*)malloc(sizeof(msSpawnCtx));
-	ctx->fn = (void*)fn.fn;
-	ctx->env = fn.env;
-	ctx->fut = fut;
+	msSpawnCtx ctx = { .fn = (void*)fn.fn, .env = fn.env, .fut = fut };
 	if (fn.env != NULL) {
 		msIncRef(fn.env);
 	}
-	msPoolSubmit(ctx);
+	msPoolSubmit(&ctx);  /* copied into queue slot — ctx can go out of scope */
 	return fut;
 }
 

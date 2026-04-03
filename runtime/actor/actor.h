@@ -139,7 +139,7 @@ static inline msActor* msActorCreate(void* state, msActorDispatchFn dispatch) {
 
 typedef struct msSchedActors {
     msActor* actors[MS_MAX_ACTORS_PER_SCHED];  /* registry: all actors assigned here */
-    int count;
+    _Atomic(int) count;  /* atomic: CD reads while main thread may register */
     int pollCount;  /* for periodic cycle detection (scheduler 0 only) */
     _Atomic(msActor*) runHead;  /* lock-free run queue: actors with pending messages */
 } msSchedActors;
@@ -172,7 +172,11 @@ static inline msActor* msSchedRunPop(msSchedActors* sched) {
 
 /* Forward declarations for wake routing */
 extern void msActorWakeEventLoop(void);  /* dispatch.c */
-extern void msPoolWakeWorkers(void);     /* pool.c */
+extern void msPoolWakeWorker(int schedulerID);  /* pool.c — targeted, no spurious wakeups */
+
+/* Forward declarations for cycle detector (defined at end of file) */
+static inline void msCDInit(void);
+static inline void msCDTick(void);
 
 /*
  * Send a message to an actor (any thread, wait-free).
@@ -197,7 +201,7 @@ static inline void msActorSend(msActor* a, msMessage* msg) {
         if (a->schedulerID == 0) {
             msActorWakeEventLoop();
         } else {
-            msPoolWakeWorkers();
+            msPoolWakeWorker(a->schedulerID);
         }
     }
 }
@@ -353,13 +357,17 @@ static inline void msActorRegister(msActor* a) {
         msSetActorPollHook(msActorPollLocal);
         /* Register hooks so pool workers can poll actors + set scheduler ID */
         msPoolSetActorHooks(msActorPollLocal, msSetSchedulerID);
+        /* Create async cycle detector actor on scheduler 0 */
+        msCDInit();
     }
     /* Round-robin assign to schedulers */
     int id = atomic_fetch_add(&msNextActorRR, 1) % msSchedulerCount;
     a->schedulerID = id;
     msSchedActors* sched = &msSchedulers[id];
-    if (sched->count < MS_MAX_ACTORS_PER_SCHED) {
-        sched->actors[sched->count++] = a;
+    int cnt = atomic_load_explicit(&sched->count, memory_order_acquire);
+    if (cnt < MS_MAX_ACTORS_PER_SCHED) {
+        sched->actors[cnt] = a;
+        atomic_store_explicit(&sched->count, cnt + 1, memory_order_release);
     }
 }
 
@@ -399,14 +407,12 @@ static inline bool msActorPollLocal(void) {
         }
     }
 
-    /* Cycle detection: scheduler 0 only, iterates ALL schedulers */
+    /* Cycle detection: scheduler 0 sends periodic TICK to CD actor (async) */
     if (id == 0) {
         sched->pollCount++;
         if (sched->pollCount >= MS_CYCLE_INTERVAL) {
             sched->pollCount = 0;
-#ifdef MS_ACTOR_CYCLE_H
-            msCycleDetectorRun();
-#endif
+            msCDTick();
         }
     }
     return didWork;
@@ -456,134 +462,83 @@ static inline bool msActorSystemQuiescent(void) {
 
 /* ===== Async Cycle Detector Actor (Pony ORCA parity) =====
  *
- * The cycle detector is a system actor that receives BLOCK/UNBLOCK messages
- * from other actors. It runs on scheduler 0 as a normal actor — non-blocking.
+ * The CD is a system actor on scheduler 0. It receives periodic TICK messages
+ * from msActorPollLocal, scans BLOCKED flags across all schedulers, and
+ * detects dead reference cycles. Non-blocking — runs as a normal actor batch.
  *
- * Protocol (Pony's ACTORMSG_BLOCK/UNBLOCK):
- *   1. Actor becomes idle (empty mailbox + RC > 0) → sends BLOCK to CD
- *   2. Actor gets new work (message arrives) → sends UNBLOCK to CD
- *   3. CD maintains set of blocked actors + reference graph
- *   4. Periodically: scan blocked set, find cycles (all refs also blocked)
- *   5. Dead cycles → destroy actors (Phase 6: trigger link propagation)
+ * Protocol:
+ *   1. msActorProcess sets BLOCKED flag when actor becomes idle (RC > 0)
+ *   2. msActorProcess clears BLOCKED flag when actor gets new work
+ *   3. msActorPollLocal (scheduler 0) sends TICK to CD every MS_CYCLE_INTERVAL polls
+ *   4. CD dispatch scans all schedulers for blocked actors with all-blocked refs
+ *   5. Dead cycles → destroy (Phase 6: trigger link/monitor propagation)
  */
 
-#define MS_CD_MSG_BLOCK   0
-#define MS_CD_MSG_UNBLOCK 1
-#define MS_CD_DETECT_INTERVAL 50  /* run detection every N messages */
+#define MS_CD_MSG_TICK 0
 
-#define MS_CD_MAX_BLOCKED 1024
-
-typedef struct msCycleDetectorState {
-    msActor* blocked[MS_CD_MAX_BLOCKED];
-    int blockedCount;
-    int msgCount;
-} msCycleDetectorState;
-
-static msCycleDetectorState msCDState = { .blockedCount = 0, .msgCount = 0 };
-
-static inline void msCDAddBlocked(msActor* a) {
-    for (int i = 0; i < msCDState.blockedCount; i++) {
-        if (msCDState.blocked[i] == a) return;  /* already tracked */
-    }
-    if (msCDState.blockedCount < MS_CD_MAX_BLOCKED) {
-        msCDState.blocked[msCDState.blockedCount++] = a;
-    }
-}
-
-static inline void msCDRemoveBlocked(msActor* a) {
-    for (int i = 0; i < msCDState.blockedCount; i++) {
-        if (msCDState.blocked[i] == a) {
-            msCDState.blocked[i] = msCDState.blocked[msCDState.blockedCount - 1];
-            msCDState.blockedCount--;
-            return;
-        }
-    }
-}
-
-static inline bool msCDIsBlocked(msActor* a) {
-    for (int i = 0; i < msCDState.blockedCount; i++) {
-        if (msCDState.blocked[i] == a) return true;
-    }
-    return false;
-}
-
-/* Detect dead cycles: an actor is in a dead cycle if it's blocked AND
- * all actors it references are also blocked (no external live ref). */
+/* Scan all schedulers for dead cycles.
+ * An actor is in a dead cycle if: BLOCKED + all refs also BLOCKED. */
 static inline void msCDRunDetection(void) {
-    for (int i = msCDState.blockedCount - 1; i >= 0; i--) {
-        msActor* a = msCDState.blocked[i];
-        if (!msActorHasFlag(a, MS_ACTOR_BLOCKED)) {
-            /* Actor was unblocked between BLOCK msg and now — remove */
-            msCDRemoveBlocked(a);
-            continue;
-        }
-        /* Check: are ALL referenced actors also blocked? */
-        bool allRefsBlocked = true;
-        for (int r = 0; r < a->refsCount; r++) {
-            if (!msCDIsBlocked(a->refs[r])) {
-                allRefsBlocked = false;
-                break;
+    /* Pass 1: find cycle candidates (blocked + all refs blocked) */
+    for (int s = 0; s < msSchedulerCount; s++) {
+        msSchedActors* sched = &msSchedulers[s];
+        for (int i = 0; i < sched->count; i++) {
+            msActor* a = sched->actors[i];
+            if (!msActorHasFlag(a, MS_ACTOR_BLOCKED)) continue;
+            if (a->refsCount == 0) continue;
+            bool allRefsBlocked = true;
+            for (int r = 0; r < a->refsCount; r++) {
+                if (!msActorHasFlag(a->refs[r], MS_ACTOR_BLOCKED)) {
+                    allRefsBlocked = false;
+                    break;
+                }
+            }
+            if (allRefsBlocked) {
+                msActorSetFlag(a, MS_ACTOR_CYCLE_MARKED);
             }
         }
-        if (allRefsBlocked && a->refsCount > 0) {
-            /* Dead cycle member — mark for collection.
-             * Phase 6 will add CONF/ACK protocol + link propagation here. */
-            msActorSetFlag(a, MS_ACTOR_CYCLE_MARKED);
-        }
     }
-    /* Collect marked actors */
-    for (int i = msCDState.blockedCount - 1; i >= 0; i--) {
-        msActor* a = msCDState.blocked[i];
-        if (msActorHasFlag(a, MS_ACTOR_CYCLE_MARKED)) {
-            msActorClearFlag(a, MS_ACTOR_CYCLE_MARKED);
-            msCDRemoveBlocked(a);
-            msActorDestroy(a);
+    /* Pass 2: collect marked actors */
+    for (int s = 0; s < msSchedulerCount; s++) {
+        msSchedActors* sched = &msSchedulers[s];
+        for (int i = sched->count - 1; i >= 0; i--) {
+            msActor* a = sched->actors[i];
+            if (msActorHasFlag(a, MS_ACTOR_CYCLE_MARKED)) {
+                msActorClearFlag(a, MS_ACTOR_CYCLE_MARKED);
+                /* Remove from registry */
+                sched->actors[i] = sched->actors[sched->count - 1];
+                sched->count--;
+                msActorDestroy(a);
+            }
         }
     }
 }
 
-/* CD actor dispatch function — processes BLOCK/UNBLOCK messages */
+/* CD actor dispatch — receives TICK messages, runs detection */
 static inline void msCDDispatch(void* state, void* msg) {
-    (void)state;
-    msMessage* m = (msMessage*)msg;
-    msActor* target = (msActor*)msMsgGetPtr(m, 0);  /* actor that sent the notification */
-    if (m->kind == MS_CD_MSG_BLOCK) {
-        msCDAddBlocked(target);
-    } else if (m->kind == MS_CD_MSG_UNBLOCK) {
-        msCDRemoveBlocked(target);
-    }
-    msCDState.msgCount++;
-    if (msCDState.msgCount >= MS_CD_DETECT_INTERVAL) {
-        msCDState.msgCount = 0;
-        msCDRunDetection();
-    }
+    (void)state; (void)msg;
+    msCDRunDetection();
 }
 
-/* The global CD actor — created once during scheduler init */
+/* The global CD actor — created during scheduler init */
 static msActor* msCycleDetectorActor = NULL;
 
 static inline void msCDInit(void) {
     if (msCycleDetectorActor != NULL) return;
     msCycleDetectorActor = msActorCreate(NULL, msCDDispatch);
-    msCycleDetectorActor->schedulerID = 0;  /* pinned to main thread */
+    msCycleDetectorActor->schedulerID = 0;
     msSchedActors* sched = &msSchedulers[0];
-    if (sched->count < MS_MAX_ACTORS_PER_SCHED) {
-        sched->actors[sched->count++] = msCycleDetectorActor;
+    int cnt = atomic_load_explicit(&sched->count, memory_order_acquire);
+    if (cnt < MS_MAX_ACTORS_PER_SCHED) {
+        sched->actors[cnt] = msCycleDetectorActor;
+        atomic_store_explicit(&sched->count, cnt + 1, memory_order_release);
     }
 }
 
-/* Send BLOCK/UNBLOCK notification to the CD actor (non-blocking, O(1)) */
-static inline void msCDNotifyBlock(msActor* a) {
+/* Send TICK to CD actor (called from msActorPollLocal on scheduler 0) */
+static inline void msCDTick(void) {
     if (msCycleDetectorActor == NULL) return;
-    msMessage* msg = msMsgAllocSized(MS_CD_MSG_BLOCK, NULL, 1);
-    msMsgSetPtr(msg, 0, a);
-    msActorSend(msCycleDetectorActor, msg);
-}
-
-static inline void msCDNotifyUnblock(msActor* a) {
-    if (msCycleDetectorActor == NULL) return;
-    msMessage* msg = msMsgAllocSized(MS_CD_MSG_UNBLOCK, NULL, 1);
-    msMsgSetPtr(msg, 0, a);
+    msMessage* msg = msMsgAlloc(MS_CD_MSG_TICK, NULL);
     msActorSend(msCycleDetectorActor, msg);
 }
 

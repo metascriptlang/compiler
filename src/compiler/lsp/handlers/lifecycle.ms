@@ -10,7 +10,7 @@ import {
 } from "../protocol";
 import { lspFmtPublishDiagnostics } from "../format";
 import { CompletionCache, createCompletionCache, markFileChanged, drainChangedFiles } from "./shared";
-import { buildDiagnosticsJson, buildTransitiveDiagnosticsWire, recordImportsForFile } from "./diagnostics";
+import { buildDiagnosticsJson, buildTransitiveDiagnosticsWire, recordImportsForFile, resetFormatOptions } from "./diagnostics";
 import { prebuildCompletionCache, handleCompletion, handleCompletionResolve } from "./completion";
 import { handleDefinition } from "./definition";
 import {
@@ -114,7 +114,9 @@ export function handleDidOpen(params: string, db: TransAmDb): string {
 export function handleDidChange(params: string, db: TransAmDb): string {
 	const textDoc = lspGetObjectField(params, "textDocument");
 	const uri = lspGetField(textDoc, "uri");
-	const changes = lspGetField(params, "text");
+	// Two-step extraction: scope search to contentChanges array (avoids matching "text" elsewhere)
+	const contentChanges = lspGetObjectField(params, "contentChanges");
+	const changes = lspGetField(contentChanges, "text");
 	const path = lspUriToPath(uri);
 	// Lightweight: update text + parse only. No type check on keystrokes.
 	// Diagnostics publish post-drain via publishPendingDiagnostics().
@@ -134,6 +136,19 @@ export function handleDidClose(params: string, db: TransAmDb): string {
 	return lspNotification("textDocument/publishDiagnostics", diagParams);
 }
 
+// ===== Did Save =====
+
+export function handleDidSave(params: string, db: TransAmDb): string {
+	const textDoc = lspGetObjectField(params, "textDocument");
+	const uri = lspGetField(textDoc, "uri");
+	const path = lspUriToPath(uri);
+	// Reload format config when build.ms or msc.json is saved
+	if (path.endsWith("/build.ms") || path.endsWith("/msc.json")) {
+		resetFormatOptions();
+	}
+	return "";
+}
+
 // ===== Dispatch =====
 
 export function lspDispatch(method: string, id: string, params: string, db: TransAmDb, cache: CompletionCache): string {
@@ -143,6 +158,7 @@ export function lspDispatch(method: string, id: string, params: string, db: Tran
 		"textDocument/didOpen" => handleDidOpen(params, db),
 		"textDocument/didChange" => handleDidChange(params, db),
 		"textDocument/didClose" => handleDidClose(params, db),
+		"textDocument/didSave" => handleDidSave(params, db),
 		"textDocument/hover" => handleHover(id, params, db),
 		"textDocument/completion" => handleCompletion(id, params, db, cache),
 		"completionItem/resolve" => handleCompletionResolve(id, params),

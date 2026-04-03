@@ -809,16 +809,43 @@ export function monoSubstAnnotation(annotation: string, paramName: string, concr
 
 export function monoConcreteTypeName(t: Type): string {
 	if (t === null) return "unknown";
-	if (t.kind === TypeKind.Number) return "number";
-	if (t.kind === TypeKind.String) return "string";
-	if (t.kind === TypeKind.Boolean) return "boolean";
-	if (t.kind === TypeKind.Void) return "void";
-	if (t.kind === TypeKind.Null) return "null";
-	if (t.kind === TypeKind.Array) return `Array<${monoConcreteTypeName(t.typeReturn)}>`;
+	// Reference parity (ccgtypes.nim:143-148): skipTypes resolves through Ref/GenericInst before naming.
 	if (isResult(t)) return `Result<${monoConcreteTypeName(getResultOkType(t))}, ${monoConcreteTypeName(getResultErrType(t))}>`;
-	if (t.kind === TypeKind.Struct) return t.typeName;
-	if (t.kind === TypeKind.Enum) return t.typeName;
-	return "unknown";
+	return match (t.kind) {
+		TypeKind.Number => "number",
+		TypeKind.String => "string",
+		TypeKind.Boolean => "boolean",
+		TypeKind.Void => "void",
+		TypeKind.Null => "null",
+		TypeKind.Ref => monoConcreteTypeName(t.typeReturn),
+		TypeKind.Ptr => `Ptr<${monoConcreteTypeName(t.typeReturn)}>`,
+		TypeKind.Array => `Array<${monoConcreteTypeName(t.typeReturn)}>`,
+		TypeKind.Struct | TypeKind.Enum => t.typeName,
+		TypeKind.GenericInstance => {
+			let name = t.typeName;
+			let i = 0;
+			while (i < t.typeChildren.length) {
+				name = name + (i === 0 ? "<" : ", ") + monoConcreteTypeName(t.typeChildren[i]);
+				i = i + 1;
+			}
+			return name + ">";
+		},
+		TypeKind.Union => t.typeName !== "" ? t.typeName : "Union",
+		TypeKind.Function => "Function",
+		TypeKind.Int8 => "int8",
+		TypeKind.Int16 => "int16",
+		TypeKind.Int32 => "int32",
+		TypeKind.Int64 => "int64",
+		TypeKind.Uint8 => "uint8",
+		TypeKind.Uint16 => "uint16",
+		TypeKind.Uint32 => "uint32",
+		TypeKind.Uint64 => "uint64",
+		TypeKind.Float32 => "float32",
+		TypeKind.Float64 => "float64",
+		TypeKind.Char => "char",
+		TypeKind.CString => "cstring",
+		_ => "unknown",
+	};
 }
 
 function monoFindFnDeclByName(program: Node, fnName: string): Node {

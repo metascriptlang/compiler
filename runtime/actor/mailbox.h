@@ -40,6 +40,9 @@ typedef struct msMessage {
  * Data capacity per class: 32-24=8B (1 slot), 64-24=40B (5 slots), 128-24=104B (13 slots)
  */
 
+/* Verify header layout assumption — data capacities depend on this */
+_Static_assert(offsetof(msMessage, data) == 24, "msMessage header must be 24 bytes");
+
 #define MS_MSG_POOL_CLASSES 3
 #define MS_MSG_POOL_SLAB 64
 
@@ -66,12 +69,8 @@ typedef struct msMsgPool {
 #endif
 #endif
 
-/* Thread-local: one pool per size class per thread */
-static MS_THREAD_LOCAL msMsgPool msMsgPools[MS_MSG_POOL_CLASSES] = {
-    { .free_list = NULL, .count = 0 },
-    { .free_list = NULL, .count = 0 },
-    { .free_list = NULL, .count = 0 },
-};
+/* Thread-local: one pool per size class per thread (zero-init = all NULL/0) */
+static MS_THREAD_LOCAL msMsgPool msMsgPools[MS_MSG_POOL_CLASSES];
 
 static inline void msMsgPoolGrow(msMsgPool* pool, int msgSize) {
     /* Allocate slab as raw bytes — messages are msgSize apart */

@@ -68,7 +68,7 @@ export function prebuildCompletionCache(db: TransAmDb, path: string, uri: string
 		}
 	}
 	// Evict oldest if at capacity (simple: clear all — LRU is overkill for 10 entries)
-	if (_prebuiltCache.size >= PREBUILT_CAPACITY) {
+	if (_prebuiltCache.counter >= PREBUILT_CAPACITY) {
 		_prebuiltCache = new Map<string, string[]>();
 	}
 	_prebuiltCache.set(uri, items);
@@ -331,7 +331,7 @@ export function handleCompletion(id: string, params: string, db: TransAmDb, cach
 			const fieldPath = sgObjectFieldPathAST(program, pos.line, pos.col + 1);
 			const enclosingObj = findEnclosingObjectLiteral(program, pos.line, pos.col + 1);
 			let existingKeys: string[] = [];
-			if (enclosingObj !== null) {
+			if (enclosingObj !== null && enclosingObj.kind === NodeKind.ObjectLiteral) {
 				existingKeys = (enclosingObj.data as ObjectLiteralData).keys;
 			}
 			const rootType = lspFindObjectLiteralTypeAST(program, pos.line, pos.col + 1, ctx);

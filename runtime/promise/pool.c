@@ -17,6 +17,14 @@
 
 /* ===== Platform Abstraction Macros ===== */
 
+/* Count trailing zeros (find first set bit in idle bitmask) */
+#ifdef _WIN32
+#include <intrin.h>
+static inline int msCtz64(uint64_t x) { unsigned long idx; _BitScanForward64(&idx, x); return (int)idx; }
+#else
+#define msCtz64(x) __builtin_ctzll(x)
+#endif
+
 #ifdef _WIN32
 
 #define MS_LOCK(pool)       EnterCriticalSection(&(pool)->cs)
@@ -88,34 +96,38 @@ static void* msPoolWorkerLoop(void* arg) {
 	msThreadPool* pool = (msThreadPool*)arg;
 	/* Assign scheduler ID: workers are 1..N-1 (main thread is 0) */
 	int mySchedID = atomic_fetch_add(&msWorkerSchedIdx, 1) + 1;
+	int myWorkerIdx = mySchedID - 1;  /* 0-based index into workerConds[] */
 	if (msPoolSchedIdSetterFn != NULL) msPoolSchedIdSetterFn(mySchedID);
 
 	while (1) {
 		MS_LOCK(pool);
-		/* Wait for spawn task, actor message, or shutdown.
-		 * msPoolWakeWorkers() broadcasts this condvar when actor messages arrive.
-		 * MS_SIGNAL fires when spawn tasks are submitted. No polling needed. */
+		/* Wait on OWN condvar — targeted wake, no spurious wakeups.
+		 * Set idle bit so submit can find us. Clear on wake. */
 		if (pool->head == pool->tail && !pool->shutdown) {
-			MS_WAIT(pool->available, pool);
+			atomic_fetch_or_explicit(&pool->idleMask, (uint64_t)1 << myWorkerIdx, memory_order_release);
+			MS_WAIT(pool->workerConds[myWorkerIdx], pool);
+			atomic_fetch_and_explicit(&pool->idleMask, ~((uint64_t)1 << myWorkerIdx), memory_order_acquire);
 		}
 		/* Check shutdown with empty queue — exit cleanly */
 		if (pool->shutdown && pool->head == pool->tail) {
 			MS_UNLOCK(pool);
 			break;
 		}
-		/* Dequeue spawn task if available */
-		struct msSpawnCtx* ctx = NULL;
+		/* Dequeue spawn task if available — copy struct out (Malebolgia: zero alloc) */
+		struct msSpawnCtx item = {0};
+		bool hasTask = false;
 		if (pool->head != pool->tail) {
-			ctx = pool->queue[pool->head];
+			item = pool->queue[pool->head];
 			pool->head = (pool->head + 1) % pool->cap;
 			pool->busyCount++;
+			hasTask = true;
 			MS_SIGNAL(pool->space);
 		}
 		MS_UNLOCK(pool);
 
-		/* Execute spawn task */
-		if (ctx != NULL) {
-			msSpawnWorkerRun(ctx);
+		/* Execute spawn task from local copy (queue slot is now free) */
+		if (hasTask) {
+			msSpawnWorkerRun(&item);
 			MS_LOCK(pool);
 			pool->busyCount--;
 			MS_UNLOCK(pool);
@@ -131,12 +143,25 @@ static void* msPoolWorkerLoop(void* arg) {
 #endif
 }
 
-/* Wake all pool workers (called by msActorSend for non-zero schedulers) */
+/* Wake a specific worker by scheduler ID (targeted: actors signal only their owner) */
+void msPoolWakeWorker(int schedulerID) {
+	msThreadPool* pool = msPoolGet();
+	if (pool == NULL) return;
+	int idx = schedulerID - 1;  /* scheduler 1 → workerConds[0] */
+	if (idx < 0 || idx >= pool->workerCount) return;
+	MS_LOCK(pool);
+	MS_SIGNAL(pool->workerConds[idx]);
+	MS_UNLOCK(pool);
+}
+
+/* Wake all pool workers (shutdown, fallback) */
 void msPoolWakeWorkers(void) {
 	msThreadPool* pool = msPoolGet();
 	if (pool == NULL) return;
 	MS_LOCK(pool);
-	MS_BROADCAST(pool->available);
+	for (int i = 0; i < pool->workerCount; i++) {
+		MS_SIGNAL(pool->workerConds[i]);
+	}
 	MS_UNLOCK(pool);
 }
 
@@ -154,11 +179,13 @@ static void msPoolInit(void) {
 	gPool = (msThreadPool*)calloc(1, sizeof(msThreadPool));
 	gPool->workerCount = msDetectCPUs();
 	gPool->cap = MS_POOL_MAX_QUEUE;
-	gPool->queue = (msSpawnCtx**)calloc(gPool->cap, sizeof(msSpawnCtx*));
+	gPool->queue = (msSpawnCtx*)calloc(gPool->cap, sizeof(msSpawnCtx));
 
 #ifdef _WIN32
 	InitializeCriticalSection(&gPool->cs);
-	InitializeConditionVariable(&gPool->available);
+	for (int i = 0; i < gPool->workerCount && i < MS_POOL_MAX_WORKERS; i++) {
+		InitializeConditionVariable(&gPool->workerConds[i]);
+	}
 	InitializeConditionVariable(&gPool->space);
 	gPool->workers = (HANDLE*)calloc(gPool->workerCount, sizeof(HANDLE));
 	int created = 0;
@@ -168,7 +195,9 @@ static void msPoolInit(void) {
 	}
 #else
 	pthread_mutex_init(&gPool->mutex, NULL);
-	pthread_cond_init(&gPool->available, NULL);
+	for (int i = 0; i < gPool->workerCount && i < MS_POOL_MAX_WORKERS; i++) {
+		pthread_cond_init(&gPool->workerConds[i], NULL);
+	}
 	pthread_cond_init(&gPool->space, NULL);
 	gPool->workers = (pthread_t*)calloc(gPool->workerCount, sizeof(pthread_t));
 	int created = 0;
@@ -203,7 +232,7 @@ msThreadPool* msPoolGet(void) {
 
 /* ===== Submit Task ===== */
 
-void msPoolSubmit(msSpawnCtx* ctx) {
+void msPoolSubmit(struct msSpawnCtx* ctx) {
 	msThreadPool* pool = msPoolGet();
 	MS_LOCK(pool);
 
@@ -226,10 +255,16 @@ void msPoolSubmit(msSpawnCtx* ctx) {
 		return;
 	}
 
-	/* Enqueue */
-	pool->queue[pool->tail] = ctx;
+	/* Enqueue — copy struct into slot (Malebolgia: zero alloc, no pointer) */
+	pool->queue[pool->tail] = *ctx;
 	pool->tail = (pool->tail + 1) % pool->cap;
-	MS_SIGNAL(pool->available);
+	/* Signal one IDLE worker (find via bitmask — guaranteed to be sleeping) */
+	uint64_t idle = atomic_load_explicit(&pool->idleMask, memory_order_acquire);
+	if (idle != 0) {
+		int wake = msCtz64(idle);  /* first set bit = first idle worker */
+		MS_SIGNAL(pool->workerConds[wake]);
+	}
+	/* If no idle workers, task waits in queue — next worker finishing a task will dequeue it */
 	MS_UNLOCK(pool);
 }
 
@@ -239,7 +274,9 @@ void msPoolShutdown(void) {
 	if (gPool == NULL) return;
 	MS_LOCK(gPool);
 	gPool->shutdown = true;
-	MS_BROADCAST(gPool->available);
+	for (int i = 0; i < gPool->workerCount; i++) {
+		MS_SIGNAL(gPool->workerConds[i]);
+	}
 	MS_BROADCAST(gPool->space);
 	MS_UNLOCK(gPool);
 
@@ -258,7 +295,9 @@ void msPoolShutdown(void) {
 	free(gPool->workers);
 	free(gPool->queue);
 	pthread_mutex_destroy(&gPool->mutex);
-	pthread_cond_destroy(&gPool->available);
+	for (int i = 0; i < gPool->workerCount && i < MS_POOL_MAX_WORKERS; i++) {
+		pthread_cond_destroy(&gPool->workerConds[i]);
+	}
 	pthread_cond_destroy(&gPool->space);
 #endif
 

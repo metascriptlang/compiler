@@ -2746,7 +2746,7 @@ function hasNonisolatedField(actorSym: Symbol, fieldName: string): boolean {
 // Reuses: isPrimitiveKind, isStructType, SymbolFlag.Mutable, NodeKind.MoveExpr.
 
 // Type-level check: is the type safe to send (no mutable refs anywhere)?
-// Follows Nim isolation_check.nim:containsDangerousRefAux — recurse into structure.
+// Follows reference isolation check: containsDangerousRefAux — recurse into structure.
 function isTypeSendable(t: Type): boolean {
 	if (t === null) return true;
 	if (isPrimitiveKind(t.kind)) return true;

@@ -579,9 +579,12 @@ export function getTypeDesc(g: CGen, t: Type): string {
 		if (cached !== "") return cached;
 		typeCacheSet(g.typeCache, cacheKey, instName);
 		// Instantiate the base struct with concrete type args, then emit as a named struct
-		// Unwrap Ref for interface types (interface = Ref<Struct>)
-		if (t.typeExtra !== null && t.typeExtra.kind === TypeKind.Struct) {
-			const baseType = t.typeExtra;
+		// Unwrap Ref for class/interface types (class = Ref<Struct> in C backend)
+		let baseType = t.typeExtra;
+		if (baseType !== null && baseType.kind === TypeKind.Ref && baseType.typeReturn !== null) {
+			baseType = baseType.typeReturn;
+		}
+		if (baseType !== null && baseType.kind === TypeKind.Struct) {
 			// Substitute generic params in fields with concrete type args
 			const genericDecl = getGenericDecl(t.typeName);
 			if (genericDecl !== "") {
