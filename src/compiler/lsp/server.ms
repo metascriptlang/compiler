@@ -12,7 +12,7 @@ import {
 } from "./protocol";
 import { TransAmDb, createTransAmDb, dbEnsurePrelude } from "../transam/index";
 import { resetCancel } from "../transam/cancel";
-import { lspDispatch, buildTransitiveDiagnosticsWire, CompletionCache, createCompletionCache } from "./handlers";
+import { lspDispatch, buildTransitiveDiagnosticsWire, publishPendingDiagnostics, CompletionCache, createCompletionCache } from "./handlers";
 import { readLine, readBytes, writeStdout, writeStderr, stdinHasData, stdinDisableBuffering } from "std/io";
 import { clockMs } from "std/process";
 import { resolveRuntimeDir } from "../../utils/path";
@@ -204,6 +204,12 @@ export function lspRunServer(): void {
 			qi = qi + 1;
 		}
 
+		// 5. Post-drain: publish diagnostics for the last changed file.
+		// Only the FINAL content state gets type-checked — intermediate keystrokes skipped.
+		const pendingDiag = publishPendingDiagnostics(state.db);
+		if (pendingDiag.length > 0) {
+			writeStdout(pendingDiag);
+		}
 	}
 
 	lspLog("MetaScript LSP server exiting");
@@ -275,8 +281,8 @@ export function processMessage(msg: string, state: LspServerState): string {
 	}
 	let result = lspFormatMessage(json);
 
-	// Append transitive diagnostics on didOpen and didChange.
-	if (method === "textDocument/didChange" || method === "textDocument/didOpen") {
+	// Append transitive diagnostics on didOpen (didChange handled in post-drain).
+	if (method === "textDocument/didOpen") {
 		const textDoc = lspGetObjectField(params, "textDocument");
 		const uri = lspGetField(textDoc, "uri");
 		const path = lspUriToPath(uri);

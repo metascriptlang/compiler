@@ -1,0 +1,704 @@
+// LSP Handlers — Completion, completion resolve, import path/name completion.
+
+import { TransAmDb, dbParse, dbTypeCheck, dbEnsureModuleExports } from "../../transam/index";
+import { readDir, clockMs } from "std/process";
+import {
+	lspJsonString,
+	lspGetField,
+	lspUriToPath, lspDirname,
+	lspResponse
+} from "../protocol";
+import {
+	lspFmtCompletionItem, lspFmtMultiLineTextEdit,
+} from "../format";
+import {
+	sgTypeToString, sgDetectCompletionContext, sgGetPrefix, sgGetCompletionCandidates,
+	sgExtractDocComment, sgBuiltinDoc,
+	sgFindImportBySource, sgExtractImportPath, sgExtractImportSource, sgExtractExistingImportNames,
+	sgComputeImportEdit, sgQueryAtPosition, sgObjectFieldPathAST, sgCompleteObjectFields,
+	findEnclosingObjectLiteral, findNodeAtPosition,
+	sgGetLineOffset,
+	SgSuggest, SgCompletionKind
+} from "../../../checker/suggest";
+import { CheckerContext, findModuleExports } from "../../../checker/context";
+import { SymbolFlag, hasFlag } from "../../../checker/symbol";
+import { createTypeRef } from "../../../checker/types";
+import { Node, MemberExprData, ObjectLiteralData, VariableDeclData, NodeKind, Type, SymbolKind } from "../../../ast/node";
+import { forEachChild } from "../../../ast/visitor";
+import { isMsModuleExtension, stripMsModuleExtension } from "../../../module/resolver";
+import {
+	dbGetSource, lspExtractPosition, resolveImportForLsp, lspEnsureFileLoaded,
+	cacheResolveEdit, lookupResolveEdit,
+	CompletionCache, LspCursorParams
+} from "./shared";
+
+
+// Pre-built completion items: per-file cache (Map with capacity 10).
+// Prevents cache thrashing when jumping between open files.
+let _prebuiltCache: Map<string, string[]> = new Map<string, string[]>();
+const PREBUILT_CAPACITY = 10;
+
+export function prebuildCompletionCache(db: TransAmDb, path: string, uri: string): void {
+	const ctx = dbTypeCheck(db, path);
+	if (ctx === null) return;
+	const program = dbParse(db, path);
+	if (program === null) return;
+	const source = dbGetSource(db, path);
+	// Build minimal items (label + kind + sortText only) for fast stdio transfer.
+	// rust-analyzer pattern: defer detail/docs/textEdit to completionItem/resolve.
+	const candidates = sgGetCompletionCandidates(ctx, SgCompletionKind.Identifier, "", null);
+	const items: string[] = [];
+	for (const c of candidates) {
+		const kindNum = lspCompletionItemKind(c.kind, c.isMutable);
+		const sortText = lspCompletionSortText(c);
+		items.push("{\"label\":" + lspJsonString(c.name) + ",\"kind\":" + kindNum + ",\"sortText\":" + lspJsonString(sortText) + "}");
+	}
+	// Cross-module candidates (also minimal — just label + kind)
+	if (db.exportRegistry !== null) {
+		const inScopeSet: Set<string> = new Set<string>();
+		for (const c of candidates) { inScopeSet.add(c.name); }
+		for (const entry of db.exportRegistry.entries) {
+			if (entry.modulePath === path) continue;
+			for (const sym of entry.symbols) {
+				if (sym.name.length === 0 || inScopeSet.has(sym.name)) continue;
+				if (sym.extReceiverType.length > 0) continue;
+				const kindNum = lspCompletionItemKind(sym.kind, false);
+				items.push("{\"label\":" + lspJsonString(sym.name) + ",\"kind\":" + kindNum + ",\"sortText\":\"25\"}");
+			}
+		}
+	}
+	// Evict oldest if at capacity (simple: clear all — LRU is overkill for 10 entries)
+	if (_prebuiltCache.size >= PREBUILT_CAPACITY) {
+		_prebuiltCache = new Map<string, string[]>();
+	}
+	_prebuiltCache.set(uri, items);
+}
+
+// ===== Object Literal Type Resolution (AST-Based) =====
+
+// Find the root struct type for an object literal by walking the AST.
+// Finds the outermost ObjectLiteral ancestor, then looks for the VariableDecl
+// that contains it to get the declared type via sgRecords.
+function lspFindObjectLiteralTypeAST(program: Node, line: number, col: number, ctx: CheckerContext): Type {
+	// Find the outermost ObjectLiteral ancestor at cursor position
+	const rootObj = lspFindRootObjectLiteral(program, line, col);
+	if (rootObj === null) return null;
+	// Find the VariableDecl that contains this ObjectLiteral
+	const varDecl = lspFindParentVarDecl(program, rootObj);
+	if (varDecl === null) return null;
+	// Query sgRecords for the variable's type — use nameLocation (identifier position), not node location (keyword position)
+	const vd = varDecl.data as VariableDeclData;
+	const sg = sgQueryAtPosition(ctx, vd.nameLocation.line, vd.nameLocation.column);
+	if (sg !== null) return sg.symType;
+	return null;
+}
+
+// Find the outermost ObjectLiteral containing the cursor.
+// If nested `{ fmt: { | } }`, returns the outer `{ }`.
+// Uses findEnclosingObjectLiteral (from suggest.ms) which has subtree-touch validation,
+// then walks up to find the outermost ancestor ObjectLiteral.
+function lspFindRootObjectLiteral(root: Node, line: number, col: number): Node {
+	// Find the innermost ObjectLiteral first (validated by subtree check)
+	const innermost = findEnclosingObjectLiteral(root, line, col);
+	if (innermost === null) return null as unknown as Node;
+	// Walk from root to find the outermost ObjectLiteral that is an ancestor of innermost
+	const outermost = lspFindOutermostObjLitAncestor(root, innermost);
+	return outermost !== null ? outermost : innermost;
+}
+
+// Find the outermost ObjectLiteral node that is an ancestor of target.
+function lspFindOutermostObjLitAncestor(root: Node, target: Node): Node {
+	if (root === null) return null as unknown as Node;
+	if (root === target) return null as unknown as Node;
+	let isAncestor = false;
+	let childResult = null as unknown as Node;
+	forEachChild(root, (child: Node): void => {
+		if (!isAncestor) {
+			if (child === target) {
+				isAncestor = true;
+			} else {
+				const r = lspFindOutermostObjLitAncestor(child, target);
+				if (r !== null) {
+					childResult = r;
+					isAncestor = true;
+				} else if (sgNodeContains(child, target)) {
+					isAncestor = true;
+				}
+			}
+		}
+	});
+	if (isAncestor && root.kind === NodeKind.ObjectLiteral) {
+		return root;
+	}
+	return childResult;
+}
+
+// Check if node contains target anywhere in its subtree.
+function sgNodeContains(node: Node, target: Node): boolean {
+	if (node === null) return false;
+	if (node === target) return true;
+	let found = false;
+	forEachChild(node, (child: Node): void => {
+		if (!found && sgNodeContains(child, target)) {
+			found = true;
+		}
+	});
+	return found;
+}
+
+// Find the VariableDecl AST node that contains a given ObjectLiteral node.
+function lspFindParentVarDecl(root: Node, target: Node): Node {
+	if (root === null) return null as unknown as Node;
+	if (root.kind === NodeKind.VariableDecl) {
+		const vd = root.data as VariableDeclData;
+		if (vd.initializer === target) {
+			return root;
+		}
+	}
+	let found = null as unknown as Node;
+	forEachChild(root, (child: Node): void => {
+		if (found === null) {
+			const r = lspFindParentVarDecl(child, target);
+			if (r !== null) {
+				found = r;
+			}
+		}
+	});
+	return found;
+}
+
+// ===== Completion =====
+
+function lspCompletionItemKind(kind: SymbolKind, isMutable: boolean): number {
+	// Const variables -> Constant (21), let/var -> Variable (6)
+	if (kind === SymbolKind.Variable) {
+		if (isMutable) return 6;
+		return 21;
+	}
+	return match (kind) {
+		SymbolKind.Function => 3,
+		SymbolKind.Method => 2,
+		SymbolKind.Parameter => 6,
+		SymbolKind.Class => 7,
+		SymbolKind.Actor => 7,
+		SymbolKind.Interface => 8,
+		SymbolKind.Enum => 13,
+		SymbolKind.TypeAlias => 7,   // Class — TS-Go maps type names to Class
+		SymbolKind.Property => 10,
+		_ => 6,
+	};
+}
+
+// Reverse-resolve a module path to an import specifier.
+// e.g., "/Users/le/project/std/build.ms" -> "std/build"
+//       "/Users/le/project/src/foo.ms" -> "./foo" (relative to currentPath)
+function lspModulePathToImportSpec(db: TransAmDb, currentPath: string, targetPath: string): string {
+	// std/ modules: strip stdPath prefix, extension, and /index suffix
+	if (db.stdPath.length > 0 && targetPath.length > db.stdPath.length && targetPath.slice(0, db.stdPath.length) === db.stdPath) {
+		let spec = targetPath.slice(db.stdPath.length - 3, targetPath.length); // keep "std/..."
+		// Strip .ms/.cms extension
+		if (spec.length > 3 && spec.slice(spec.length - 3, spec.length) === ".ms") spec = spec.slice(0, spec.length - 3);
+		if (spec.length > 4 && spec.slice(spec.length - 4, spec.length) === ".cms") spec = spec.slice(0, spec.length - 4);
+		// Strip /index suffix
+		if (spec.length > 6 && spec.slice(spec.length - 6, spec.length) === "/index") spec = spec.slice(0, spec.length - 6);
+		return spec;
+	}
+	// Relative path: compute from currentPath's directory
+	const currentDir = lspDirname(currentPath);
+	if (targetPath.length > currentDir.length && targetPath.slice(0, currentDir.length) === currentDir) {
+		let rel = "./" + targetPath.slice(currentDir.length + 1, targetPath.length);
+		if (rel.length > 3 && rel.slice(rel.length - 3, rel.length) === ".ms") rel = rel.slice(0, rel.length - 3);
+		if (rel.length > 4 && rel.slice(rel.length - 4, rel.length) === ".cms") rel = rel.slice(0, rel.length - 4);
+		if (rel.length > 6 && rel.slice(rel.length - 6, rel.length) === "/index") rel = rel.slice(0, rel.length - 6);
+		return rel;
+	}
+	return targetPath;
+}
+
+// Search ExportRegistry for cross-module auto-import candidates.
+function lspCrossModuleCandidates(
+	db: TransAmDb, prefix: string, currentPath: string,
+	program: Node, source: string, kind: SgCompletionKind, inScopeSet: Set<string>
+): string[] {
+	const items: string[] = [];
+	if (db.exportRegistry === null) return items;
+	const isTypeCtx = kind === SgCompletionKind.TypeAnnotation;
+
+	for (let ei = 0; ei < db.exportRegistry.entries.length; ei = ei + 1) {
+		const entry = db.exportRegistry.entries[ei];
+		if (entry.modulePath === currentPath) continue; // skip self
+		const importSpec = lspModulePathToImportSpec(db, currentPath, entry.modulePath);
+
+		for (let si = 0; si < entry.symbols.length; si = si + 1) {
+			const sym = entry.symbols[si];
+			if (sym.name.length === 0) continue;
+			// Skip extension methods — they only appear via member access
+			if (sym.extReceiverType.length > 0) continue;
+			// Prefix filter
+			if (prefix.length > 0 && prefix.length > sym.name.length) continue;
+			if (prefix.length > 0 && sym.name.slice(0, prefix.length) !== prefix) continue;
+			// Skip if already in scope — O(1) Set lookup
+			if (inScopeSet.has(sym.name)) continue;
+			// Type context: only suggest type-like symbols
+			if (isTypeCtx) {
+				if (sym.kind !== SymbolKind.Interface && sym.kind !== SymbolKind.Class
+					&& sym.kind !== SymbolKind.Actor && sym.kind !== SymbolKind.Enum && sym.kind !== SymbolKind.TypeAlias) continue;
+			}
+			// Compute import edit — included in initial response AND cached for resolve
+			const edit = sgComputeImportEdit(program, source, sym.name, importSpec);
+			const editJson = "[" + lspFmtMultiLineTextEdit(edit.line, edit.col, edit.line, edit.endCol, edit.newText) + "]";
+			const detail = sgTypeToString(sym.symType) + " (from " + importSpec + ")";
+			cacheResolveEdit(sym.name, detail, editJson);
+			const kindNum = lspCompletionItemKind(sym.kind, false);
+			const hasExistingImport = sgFindImportBySource(program, importSpec) !== null;
+			const sortText = hasExistingImport ? "20" : "25";
+			items.push(lspFmtCompletionItem(sym.name, kindNum, detail, sortText, false, "", "", editJson));
+		}
+	}
+
+	// Also search prelude symbols (available even without explicit imports).
+	// These are always in scope via globalImports — suggest with auto-import if not already imported.
+	if (db.preludeCtx !== null && db.preludeCtx.table !== null && db.preludeCtx.table.current !== null) {
+		// Build extension name set to filter prelude extensions from standalone suggestions
+		const preludeExtNames: Set<string> = new Set<string>();
+		if (db.preludeCtx.extensionRegistry !== null) {
+			for (const m of db.preludeCtx.extensionRegistry.methods) {
+				preludeExtNames.add(m.methodName);
+			}
+		}
+		const preludeSyms = db.preludeCtx.table.current.symbols;
+		for (let pi = 0; pi < preludeSyms.length; pi = pi + 1) {
+			const sym = preludeSyms[pi];
+			if (sym.name.length === 0) continue;
+			if (!hasFlag(sym, SymbolFlag.Exported)) continue;
+			// Skip extension methods — they only appear via member access
+			if (preludeExtNames.has(sym.name)) continue;
+			if (prefix.length > 0 && prefix.length > sym.name.length) continue;
+			if (prefix.length > 0 && sym.name.slice(0, prefix.length) !== prefix) continue;
+			if (inScopeSet.has(sym.name)) continue;
+			if (isTypeCtx) {
+				if (sym.symbolKind !== SymbolKind.Interface && sym.symbolKind !== SymbolKind.Class
+					&& sym.symbolKind !== SymbolKind.Actor && sym.symbolKind !== SymbolKind.Enum && sym.symbolKind !== SymbolKind.TypeAlias) continue;
+			}
+			// Determine import spec from symbol's modulePath
+			const modPath = sym.modulePath !== null ? sym.modulePath : "";
+			if (modPath === "" || modPath === currentPath) continue;
+			const importSpec = lspModulePathToImportSpec(db, currentPath, modPath);
+			const edit = sgComputeImportEdit(program, source, sym.name, importSpec);
+			const editJson = "[" + lspFmtMultiLineTextEdit(edit.line, edit.col, edit.line, edit.endCol, edit.newText) + "]";
+			const detail = sgTypeToString(sym.symbolType) + " (from " + importSpec + ")";
+			cacheResolveEdit(sym.name, detail, editJson);
+			const kindNum = lspCompletionItemKind(sym.symbolKind, false);
+			const sortText = "22";
+			items.push(lspFmtCompletionItem(sym.name, kindNum, detail, sortText, false, "", "", editJson));
+		}
+	}
+
+	return items;
+}
+
+export function handleCompletion(id: string, params: string, db: TransAmDb, cache: CompletionCache): string {
+	const t0 = clockMs();
+	const pos = lspExtractPosition(params);
+	const path = lspUriToPath(pos.uri);
+	const source = dbGetSource(db, path);
+	if (source === "") return lspResponse(id, "[]");
+
+	const prefix = sgGetPrefix(source, pos.line, pos.col);
+
+	const program = dbParse(db, path);
+	if (program === null) return lspResponse(id, "[]");
+
+	// AST-based context detection FIRST — import contexts bypass all caches
+	const kind = sgDetectCompletionContext(program, pos.line, pos.col + 1);
+
+	// ImportPath: scan filesystem for matching modules
+	if (kind === SgCompletionKind.ImportPath) {
+		const importItems = lspCompleteImportPath(source, pos, db, path);
+		return lspResponse(id, joinJsonItems(importItems));
+	}
+
+	// ImportName: suggest exported symbols from the resolved module
+	if (kind === SgCompletionKind.ImportName) {
+		const importNameItems = lspCompleteImportName(program, source, pos, db, path);
+		return lspResponse(id, joinJsonItems(importNameItems));
+	}
+
+	// ObjectField: suggest struct fields only (no global scope fallthrough)
+	if (kind === SgCompletionKind.ObjectField) {
+		const ctx = dbTypeCheck(db, path);
+		if (ctx !== null) {
+			const fieldPath = sgObjectFieldPathAST(program, pos.line, pos.col + 1);
+			const enclosingObj = findEnclosingObjectLiteral(program, pos.line, pos.col + 1);
+			let existingKeys: string[] = [];
+			if (enclosingObj !== null) {
+				existingKeys = (enclosingObj.data as ObjectLiteralData).keys;
+			}
+			const rootType = lspFindObjectLiteralTypeAST(program, pos.line, pos.col + 1, ctx);
+			if (rootType !== null) {
+				const objCandidates = sgCompleteObjectFields(ctx, prefix, rootType, fieldPath, existingKeys);
+				const objItems = formatCompletionItemsArray(objCandidates, db, path);
+				cache.uri = pos.uri;
+				cache.line = pos.line;
+				cache.prefix = prefix;
+				cache.items = objItems;
+				return lspResponse(id, joinJsonItems(objItems));
+			}
+		}
+		return lspResponse(id, "[]");
+	}
+
+	// Prebuilt cache hit: return pre-computed items instantly.
+	// Skip for member access (char before cursor is '.') and import triggers.
+	const lineOffset = sgGetLineOffset(source, pos.line);
+	const charBefore = pos.col > 0 ? source.byteAt(lineOffset + pos.col - 1) : 0;
+	const prebuiltItems = _prebuiltCache.has(pos.uri) ? _prebuiltCache.get(pos.uri) : null as unknown as string[];
+	if (prefix.length === 0 && charBefore !== ".".code && prebuiltItems !== null && prebuiltItems.length > 0) {
+		const limited = prebuiltItems.length > 100 ? prebuiltItems.slice(0, 100) : prebuiltItems;
+		cache.uri = pos.uri;
+		cache.line = pos.line;
+		cache.prefix = "";
+		cache.items = limited;
+		return lspResponse(id, joinJsonItems(limited));
+	}
+
+	// Cache hit: same file, same line, prefix extends previous — filter instantly
+	if (cache.uri === pos.uri && cache.line === pos.line && prefix.length >= cache.prefix.length && prefix.startsWith(cache.prefix)) {
+		const filtered = filterCompletionItems(cache.items, prefix);
+		cache.prefix = prefix;
+		cache.items = filtered;
+		return lspResponse(id, joinJsonItems(filtered));
+	}
+
+	const ctx = dbTypeCheck(db, path);
+	if (ctx === null) {
+		// Type check failed (incomplete code) — still try cross-module/prelude suggestions
+		if (kind === SgCompletionKind.Identifier || kind === SgCompletionKind.TypeAnnotation) {
+			const emptyScope: Set<string> = new Set<string>();
+			const fallbackItems = lspCrossModuleCandidates(db, prefix, path, program, source, kind, emptyScope);
+			if (fallbackItems.length > 0) return lspResponse(id, joinJsonItems(fallbackItems));
+		}
+		return lspResponse(id, "[]");
+	}
+
+	// For MemberAccess, resolve receiver type via symRecords.
+	// Works for both simple (config.) and nested (config.fmt.) chains:
+	// scan backward from cursor to find the last `.`, then query the token before it.
+	let receiverType: Type = null;
+	if (kind === SgCompletionKind.MemberAccess) {
+		// Find the dot position by scanning source backward from cursor
+		const lineOffset = sgGetLineOffset(source, pos.line);
+		let dotCol = pos.col; // 0-based col of cursor
+		while (dotCol > 0 && source.byteAt(lineOffset + dotCol - 1) !== ".".code) {
+			dotCol = dotCol - 1;
+		}
+		// dotCol: scan stopped here. byteAt(lineOffset + dotCol - 1) === "."
+		// So dot is at 0-based col (dotCol - 1), char before dot at 0-based col (dotCol - 2)
+		// sgQueryAtPosition uses 1-based col -> (dotCol - 2) + 1 = dotCol - 1
+		if (dotCol > 1) {
+			const sg = sgQueryAtPosition(ctx, pos.line, dotCol - 1);
+			if (sg !== null) {
+				receiverType = sg.symType;
+				// Static access on type name (e.g., Buffer.alloc, Result.ok):
+				// use "typeof TypeName" so extension registry matches static extensions.
+				if (sg.kind === SymbolKind.TypeAlias || sg.kind === SymbolKind.Class
+					|| sg.kind === SymbolKind.Actor || sg.kind === SymbolKind.Interface || sg.kind === SymbolKind.Struct) {
+					receiverType = createTypeRef(sg.name);
+				}
+			}
+		}
+		// Fallback: try AST-based lookup
+		if (receiverType === null) {
+			const node = findNodeAtPosition(program, pos.line, pos.col + 1);
+			if (node !== null && node.kind === NodeKind.MemberExpr) {
+				const md = node.data as MemberExprData;
+				if (md.object !== null) {
+					const objLoc = md.object.location;
+					const sg = sgQueryAtPosition(ctx, objLoc.line, objLoc.column);
+					if (sg !== null) {
+						receiverType = sg.symType;
+					}
+				}
+			}
+		}
+	}
+
+	// ObjectField handled early (before caches) — see above
+
+	const candidates = sgGetCompletionCandidates(ctx, kind, prefix, receiverType);
+
+	// Cache the individual formatted items for future prefix filtering
+	const cachedItems = formatCompletionItemsArray(candidates, db, path);
+
+	// Cross-module auto-import candidates
+	if (kind === SgCompletionKind.Identifier || kind === SgCompletionKind.TypeAnnotation || kind === SgCompletionKind.ImportName) {
+		const inScopeSet: Set<string> = new Set<string>();
+		for (let ci = 0; ci < candidates.length; ci = ci + 1) {
+			inScopeSet.add(candidates[ci].name);
+		}
+		const source = dbGetSource(db, path);
+		const autoImportItems = lspCrossModuleCandidates(db, prefix, path, program, source, kind, inScopeSet);
+		for (let ai = 0; ai < autoImportItems.length; ai = ai + 1) {
+			cachedItems.push(autoImportItems[ai]);
+		}
+	}
+
+	cache.uri = pos.uri;
+	cache.line = pos.line;
+	cache.prefix = prefix;
+	cache.items = cachedItems;
+
+	return lspResponse(id, joinJsonItems(cachedItems));
+}
+
+// completionItem/resolve — attach additionalTextEdits for auto-import items.
+// nvim-cmp strips additionalTextEdits from initial response and requests them here.
+export function handleCompletionResolve(id: string, params: string): string {
+	const label = lspGetField(params, "label");
+	const detail = lspGetField(params, "detail");
+	const edits = lookupResolveEdit(label, detail);
+	if (edits.length > 0) {
+		let result = params;
+		const closeIdx = result.length - 1;
+		result = result.slice(0, closeIdx) + ",\"additionalTextEdits\":" + edits + "}";
+		return lspResponse(id, result);
+	}
+	return lspResponse(id, params);
+}
+
+// TypeScript-style sortText: lower number = higher priority
+function lspCompletionSortText(item: SgSuggest): string {
+	if (item.contextFit) return "10";
+	if (item.scopeDepth === 0) return "11";
+	if (item.scopeDepth <= 2) return "12";
+	return "15";
+}
+
+// Commit characters by symbol kind (TypeScript pattern)
+function lspCommitCharsForKind(kind: SymbolKind): string {
+	return match (kind) {
+		SymbolKind.Function | SymbolKind.Method => "(.",
+		SymbolKind.Property => ".,",
+		SymbolKind.Variable | SymbolKind.Parameter => ".,;",
+		_ => "",
+	};
+}
+
+// Format each candidate as an individual JSON item string for caching.
+function formatCompletionItemsArray(candidates: SgSuggest[], db: TransAmDb, path: string): string[] {
+	const result: string[] = [];
+	// Pre-fetch current file source for doc comment extraction
+	const currentSource = dbGetSource(db, path);
+	for (let i = 0; i < candidates.length; i = i + 1) {
+		const item = candidates[i];
+		const typeStr = sgTypeToString(item.symType);
+		const kindNum = lspCompletionItemKind(item.kind, item.isMutable);
+		const sortText = lspCompletionSortText(item);
+		const commitChars = lspCommitCharsForKind(item.kind);
+		// Extract doc comment from declaration site
+		let doc = "";
+		const modPath = item.modulePath;
+		if (modPath !== null && modPath !== "" && modPath !== path) {
+			lspEnsureFileLoaded(db, modPath);
+			const modSource = dbGetSource(db, modPath);
+			doc = sgExtractDocComment(modSource, item.location.line);
+		} else {
+			doc = sgExtractDocComment(currentSource, item.location.line);
+		}
+		if (doc === "") {
+			doc = sgBuiltinDoc(item.name, item.containerName);
+		}
+		result.push(lspFmtCompletionItem(item.name, kindNum, typeStr, sortText, false, commitChars, doc, ""));
+	}
+	return result;
+}
+
+// ===== Import Path Completion =====
+// Scans filesystem for matching modules.
+
+function lspCompleteImportPath(source: string, pos: LspCursorParams, db: TransAmDb, filePath: string): string[] {
+	const partial = sgExtractImportPath(source, pos.line, pos.col + 1);
+	// Split partial into directory prefix and filename prefix
+	// "std/co" -> dir="std", filePrefix="co"
+	// "std/core/" -> dir="std/core", filePrefix=""
+	// "./pa" -> dir=".", filePrefix="pa"
+	// "" -> dir="", filePrefix=""
+	let dirPart = "";
+	let filePrefix = partial;
+	let lastSlash = -1;
+	let si = 0;
+	while (si < partial.length) {
+		if (partial.charAt(si) === "/") {
+			lastSlash = si;
+		}
+		si = si + 1;
+	}
+	if (lastSlash >= 0) {
+		dirPart = partial.slice(0, lastSlash);
+		filePrefix = partial.slice(lastSlash + 1, partial.length);
+	}
+
+	// Resolve the scan directory based on import category
+	let scanDir = "";
+	let insertPrefix = "";
+	if (dirPart === "." || dirPart === ".." || partial.startsWith("./") || partial.startsWith("../")) {
+		// Relative import — resolve against current file's directory
+		const fileDir = lspDirname(filePath);
+		if (dirPart === "") {
+			scanDir = fileDir;
+		} else {
+			scanDir = fileDir + "/" + dirPart;
+		}
+		insertPrefix = "";
+	} else if (dirPart.startsWith("std") || partial.startsWith("std")) {
+		// std/ import — resolve against db.stdPath
+		if (db.stdPath.length === 0) return [];
+		if (dirPart === "") {
+			scanDir = db.stdPath;
+		} else {
+			// "std/core" -> stdPath + "/core"
+			const stdSuffix = dirPart.slice(3, dirPart.length); // strip "std"
+			scanDir = db.stdPath + stdSuffix;
+		}
+		insertPrefix = "";
+	} else if (dirPart === "" && filePrefix === "") {
+		// Empty — only suggest std/ (user types ./ or ../ explicitly for relative)
+		const items: string[] = [];
+		items.push(lspFmtCompletionItem("std/", 19, "Standard library", "00", false, "/", "", ""));
+		return items;
+	} else {
+		// Bare import with partial dir — try relative first
+		const fileDir = lspDirname(filePath);
+		if (dirPart === "") {
+			scanDir = fileDir;
+		} else {
+			scanDir = fileDir + "/" + dirPart;
+		}
+		insertPrefix = "";
+	}
+
+	if (scanDir === "") return [];
+
+	// Scan directory — only show MetaScript files and directories containing MS modules
+	const entries = readDir(scanDir);
+	const items: string[] = [];
+	let idx = 0;
+	for (let i = 0; i < entries.length; i = i + 1) {
+		const entry = entries[i];
+		const isDir = entry.charAt(entry.length - 1) === "/";
+		const name = isDir ? entry.slice(0, entry.length - 1) : entry;
+
+		// Skip hidden files/dirs
+		if (name.charAt(0) === ".") continue;
+		if (name === "node_modules" || name === "out" || name === "build") continue;
+
+		// Prefix filter
+		if (filePrefix.length > 0 && !lspStartsWith(name, filePrefix)) continue;
+
+		if (isDir) {
+			// Only show directories that contain MetaScript modules
+			if (!lspDirHasMsEntries(scanDir + "/" + name)) continue;
+			const sortIdx = idx < 10 ? "0" + idx.toString() : idx.toString();
+			items.push(lspFmtCompletionItem(insertPrefix + name, 19, "module", sortIdx, false, "/", "", ""));
+			idx = idx + 1;
+		} else {
+			// Only show .ms/.cms/.jms files (strip extension)
+			const moduleName = stripMsModuleExtension(name);
+			if (moduleName === "") continue;
+			if (moduleName === "index") continue; // accessed via directory name
+			const sortIdx = idx < 10 ? "0" + idx.toString() : idx.toString();
+			items.push(lspFmtCompletionItem(insertPrefix + moduleName, 17, "module", sortIdx, false, "", "", ""));
+			idx = idx + 1;
+		}
+	}
+	return items;
+}
+
+// ImportName: suggest exported symbols from the resolved module.
+// AST-based: reads ImportDeclData.importSource and importNames directly.
+function lspCompleteImportName(program: Node, source: string, pos: LspCursorParams, db: TransAmDb, filePath: string): string[] {
+	// AST-based: get import source from ImportDecl node
+	const importSpec = sgExtractImportSource(program, pos.line);
+	if (importSpec === "") return [];
+
+	// Resolve the module path
+	const targetPath = resolveImportForLsp(db, filePath, importSpec);
+	if (targetPath === "") return [];
+
+	// Ensure the target module is loaded and its exports are registered
+	lspEnsureFileLoaded(db, targetPath);
+	if (findModuleExports(db.exportRegistry, targetPath) === null) {
+		// Target not yet in registry — register its exports directly
+		dbEnsureModuleExports(db, targetPath);
+	}
+
+	// Get exports from registry
+	const modExports = findModuleExports(db.exportRegistry, targetPath);
+	if (modExports === null) return [];
+
+	// Prefix: reuse sgGetPrefix (same as any identifier completion)
+	const namePrefix = sgGetPrefix(source, pos.line, pos.col);
+	// AST-based: get already-imported names from ImportDeclData.importNames
+	const existingNames = sgExtractExistingImportNames(program, pos.line, pos.col + 1);
+
+	const items: string[] = [];
+	let idx = 0;
+	for (let i = 0; i < modExports.symbols.length; i = i + 1) {
+		const sym = modExports.symbols[i];
+		// Skip extension methods (they're auto-imported, not named imports)
+		if (sym.extReceiverType.length > 0) continue;
+		// Skip already-imported names
+		let alreadyImported = false;
+		for (let j = 0; j < existingNames.length; j = j + 1) {
+			if (existingNames[j] === sym.name) { alreadyImported = true; j = existingNames.length; }
+		}
+		if (alreadyImported) continue;
+		// Prefix filter
+		if (namePrefix.length > 0 && !lspStartsWith(sym.name, namePrefix)) continue;
+		const kindNum = lspCompletionItemKind(sym.kind, false);
+		const detail = sgTypeToString(sym.symType);
+		const sortIdx = idx < 10 ? "0" + idx.toString() : idx.toString();
+		items.push(lspFmtCompletionItem(sym.name, kindNum, detail, sortIdx, false, "", "", ""));
+		idx = idx + 1;
+	}
+	return items;
+}
+
+// Check if a directory contains at least one MetaScript file.
+function lspDirHasMsEntries(dirPath: string): boolean {
+	const entries = readDir(dirPath);
+	for (let i = 0; i < entries.length; i = i + 1) {
+		const entry = entries[i];
+		if (entry.charAt(entry.length - 1) === "/") continue; // skip subdirs
+		if (isMsModuleExtension(entry)) return true;
+	}
+	return false;
+}
+
+function lspStartsWith(text: string, prefix: string): boolean {
+	if (prefix.length > text.length) return false;
+	let i = 0;
+	while (i < prefix.length) {
+		if (text.charAt(i) !== prefix.charAt(i)) return false;
+		i = i + 1;
+	}
+	return true;
+}
+
+// Join pre-formatted JSON items into a response array.
+function joinJsonItems(items: string[]): string {
+	if (items.length === 0) return "[]";
+	return "[" + items.join(",") + "]";
+}
+
+// Filter cached completion items by prefix match on label.
+function filterCompletionItems(items: string[], prefix: string): string[] {
+	const result: string[] = [];
+	for (let i = 0; i < items.length; i = i + 1) {
+		const label = lspGetField(items[i], "label");
+		if (label.startsWith(prefix)) {
+			result.push(items[i]);
+		}
+	}
+	return result;
+}
