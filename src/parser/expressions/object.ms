@@ -1,12 +1,12 @@
 // Object Literal Parser
 // Extracted from expression.ms with callback injection
 
-import { Token, TokenKind } from "../../lexer/token";
-import { Node, NodeKind, NodeData, Expression, createNode, ObjectLiteralData, SourceLocation, makeLoc } from "../../ast/node";
+import { TokenKind } from "../../lexer/token";
+import { NodeKind, Expression, createNode, ObjectLiteralData, SourceLocation, makeLoc } from "../../ast/node";
 import { ParserState, createState, current, advance, isAtEnd } from "../context";
 import { lex } from "../../lexer/lexer";
 import { parseOk, mockExpr } from "./util";
-import { isIdentLike, isPropertyName, attachComments } from "../util";
+import { isPropertyName, attachComments } from "../util";
 
 
 type ExprResult = Result<Expression, string>;

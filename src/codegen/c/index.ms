@@ -7,22 +7,16 @@
 //   DatInit000 (data/type init, runs first) + Init000 (user code, runs second)
 //   main(argc, argv) → MsMain → MsPreMainInner (DatInit) → MsMainInner (Init)
 
+import { Node, NodeKind, ProgramData } from "../../ast/node";
+import { CheckerContext, GcMode } from "../../checker/context";
 import {
-	Node, NodeKind, SymbolKind, Symbol,
-	ProgramData,
-} from "../../ast/node";
-import { CheckerContext, ExportRegistry } from "../../checker/context";
-import {
-	CGen, CSection, AliveSet, TestEntry,
-	createCGen, createAliveSet, createBuilder, sec, add, addLine, addNewline,
-	assembleOutput, extract, nameSetAdd, nameSetHas,
+	CGen, CSection, AliveSet,
+	createCGen, createAliveSet, createBuilder, sec, add, addLine, addNewline, assembleOutput, extract, nameSetAdd,
 } from "./context";
 import { genDecl } from "./declarations";
-import { mangleModuleName, mangledFunctionName, safeName } from "./names";
-import { isNrvoReturnType, getTypeDesc, ccgIntroducedPtr } from "./types";
-import { mangle } from "./names";
+import { mangleModuleName } from "./names";
 import { emitStringPoolDecls } from "./literals";
-import { emitTestHeader, emitTestTable, genTestDispatcher } from "./test";
+import { emitTestHeader, emitTestTable } from "./test";
 import { emitIncludeDirectives } from "./context";
 
 // ===== generateCModule — one module's C code (no dispatcher) =====
@@ -42,8 +36,16 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 	addLine(sec(g, CSection.Headers), "#include <stdbool.h>");
 	addLine(sec(g, CSection.Headers), "#include <string.h>");
 	addLine(sec(g, CSection.Headers), "#include <math.h>");
-	addLine(sec(g, CSection.Headers), "#include \"std/core/system/native.h\"");
-	nameSetAdd(g.declaredThings, "inc:std/core/system/native.h"); // prevent duplicate from @include
+	if (ctx !== null && ctx.gcMode === GcMode.Manual) {
+		// manual.h uses the same SYSTEM_H include guard as native.h,
+		// so any subsequent @include("native.h") from prelude modules is a C-level no-op.
+		addLine(sec(g, CSection.Headers), "#include \"std/core/system/manual.h\"");
+		nameSetAdd(g.declaredThings, "inc:std/core/system/manual.h");
+		nameSetAdd(g.declaredThings, "inc:std/core/system/native.h");
+	} else {
+		addLine(sec(g, CSection.Headers), "#include \"std/core/system/native.h\"");
+		nameSetAdd(g.declaredThings, "inc:std/core/system/native.h");
+	}
 	emitTestHeader(g);
 
 

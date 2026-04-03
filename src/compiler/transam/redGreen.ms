@@ -13,10 +13,10 @@ import {
 	createQueryKey, queryKeysEqual
 } from "./revision";
 import {
-	TaCacheEntry, createCacheEntry,
+	createCacheEntry,
 	TaDependencyEntry, TaDependencyStack,
 	pushFrame, popFrame,
-	recordDependency, recordDurability, hasActiveFrame,
+	recordDependency, hasActiveFrame,
 	createDependencyStack
 } from "./query";
 import {

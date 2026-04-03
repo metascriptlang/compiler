@@ -1,12 +1,12 @@
 // MetaScript Compiler CLI — Entry point (dispatch only)
 
 import { exit, exec } from "std/process";
-import { CliOptions, Target, parseArgs, MODE_DEBUG, MODE_RELEASE, MODE_DANGER } from "./compiler/options";
+import { CliOptions, Target, parseArgs, MODE_DEBUG, MODE_RELEASE } from "./compiler/options";
 import { VERSION, printUsage } from "./compiler/usage";
 import { cmdBuildJS, cmdBuildC, cmdRunJS, cmdRunRaiser, cmdTest } from "./compiler/compile";
 import { cmdCheck, cmdDumpTokens, cmdDumpAst, cmdPipeline, cmdRun, cmdFmt, cmdInit, cmdClean } from "./compiler/commands";
 import { lspRunServer } from "./compiler/lsp/server";
-import { loadBuildConfig, loadFmtSection, BuildConfig, resolveCcForTarget } from "./compiler/buildConfig";
+import { loadBuildConfig, loadFmtSection, resolveCcForTarget } from "./compiler/buildConfig";
 import { verboseLog } from "./compiler/io";
 import { error, bold, green, cyan } from "./utils/color";
 

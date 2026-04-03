@@ -2,7 +2,7 @@
 // Lives at parser/ level to avoid circular imports between expressions/ and statements/
 
 import { Token, TokenKind } from "../lexer/token";
-import { Node, NodeKind, SourceLocation, makeLoc, NumberLiteralData, IdentifierData } from "../ast/node";
+import { Node, NodeKind, SourceLocation, makeLoc, NumberLiteralData } from "../ast/node";
 import { ParserState, createState, current, advance, isAtEnd, skipDestructurePattern, takePendingComments, collectTokenText } from "./context";
 import { skipTypeAnnotation, parseTypeExpr } from "./typeAnnotation";
 import { lex } from "../lexer/lexer";

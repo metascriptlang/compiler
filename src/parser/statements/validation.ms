@@ -1,9 +1,8 @@
 // Statement Test Helpers - Convenience functions for parser tests
 // Uses registered callbacks via callProgramParser/callStateProgramParser.
 
-import { Token, TokenKind } from "../../lexer/token";
 import { Node, NodeKind, ProgramData, createNodeAt, makeLoc } from "../../ast/node";
-import { ParserState, createState } from "../context";
+import { createState } from "../context";
 import { lex } from "../../lexer/lexer";
 import { callStateProgramParser } from "./callbacks";
 

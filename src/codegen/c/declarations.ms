@@ -3,21 +3,18 @@
 // Handles function, enum, interface (struct), class, export, and import declarations.
 // Emits to appropriate CGen sections (Types, ProcHeaders, Procs, ForwardDecls).
 
-import { Node, NodeKind, NodeFlag, DeclKind, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, ImportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, TypeAliasDeclData, ProgramData, BlockStmtData, PropertyDeclData, MethodDeclData, ConstructorDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, ExternKind, FunctionDeclData, EnumDeclData, InterfaceDeclData, ClassDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData,  ProgramData, PropertyDeclData, MethodDeclData, ConstructorDeclData, ObjectLiteralData, ExprStmtData, MacroInvocationData, NumberLiteralData, StringLiteralData, BooleanLiteralData, TypeKind } from "../../ast/node";
 import { hasGenericParams } from "../../checker/types";
 import { getGenericDecl } from "../../parser/context";
 import {
-	CGen, CProc, CSection, Builder,
-	createProc, createBuilder, add, addLine, addNewline,
-	sec, extract, nameSetHas, nameSetAdd,
-	emitStmts, emitStmtsLine, readProcStmts, readProcLocals,
-	clearProcBuffers, typeCacheSet, typeCacheHas,
-	aliveSetHas,
+	CGen, CProc, CSection,
+	createProc, add, addLine, addNewline, sec, nameSetHas, nameSetAdd, emitStmtsLine, readProcStmts, readProcLocals,
+	clearProcBuffers, typeCacheSet, typeCacheHas, aliveSetHas,
 } from "./context";
 import { genExpr } from "./expressions";
-import { genStmt, genStmts, resolveEmitArgs } from "./statements";
-import { mangle, mangleTypeName, mangleFieldName, mangledFunctionName, safeName, staticFieldCName } from "./names";
-import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, annotationToC, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfoDef } from "./types";
+import { genStmt, resolveEmitArgs } from "./statements";
+import { mangle, mangleFieldName, mangledFunctionName, safeName, staticFieldCName } from "./names";
+import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam, ensureTypeInfoDef } from "./types";
 import { genTestDeclNode } from "./test";
 import { formatCNumber, cBoolLiteral, cStringLiteral } from "./literals";
 import { isDrcLifecycleName } from "./forward";

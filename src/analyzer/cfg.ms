@@ -6,7 +6,7 @@
 // Used by DRC injection to determine if a variable use is the last read,
 // enabling MOVE instead of COPY. Handles branches, loops, returns.
 
-import { Node, NodeKind, SourceLocation, ProgramData, Symbol, IdentifierData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, SpreadExprData, NewExprData, UpdateExprData, TypeAssertionData, MoveExprData, HiddenDerefData, HiddenStdConvData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, BlockStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ThrowStmtData, DoWhileStmtData, FunctionDeclData, ExportDeclData, ForStmtData, ForOfStmtData, SymbolKind } from "../ast/node";
+import { Node, NodeKind, ProgramData, Symbol, IdentifierData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, SpreadExprData, NewExprData, UpdateExprData, TypeAssertionData, MoveExprData, HiddenDerefData, HiddenStdConvData, VariableDeclData, ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData, BlockStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ThrowStmtData, DoWhileStmtData, ExportDeclData, ForStmtData, ForOfStmtData, SymbolKind } from "../ast/node";
 import { AliasKind, aliases, getRootSym } from "./alias";
 import { makeSymbol } from "../checker/symbol";
 import { unknownType } from "../checker/types";

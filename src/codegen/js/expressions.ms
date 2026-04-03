@@ -12,7 +12,7 @@ import {
 	SpreadExprData, NewExprData, MoveExprData,
 	AwaitExprData, YieldExprData,
 } from "../../ast/node";
-import { emit, emitNode, emitIndent, emitNewline, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes } from "./emit";
+import { emit, emitNode, JSGenerator, escapeJSString, emitJoinedStrings, emitJoinedNodes } from "./emit";
 
 // ===== Literal Emitters =====
 

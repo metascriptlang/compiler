@@ -14,7 +14,7 @@
 //   Identifier, Variable    → closure
 //   Identifier, Parameter   → closure
 
-import { Node, NodeKind, SymbolKind, Symbol, CallExprData, MemberExprData, SourceLocation, makeLoc, NodeFlag, createNodeAt, Type, TypeKind, CallingConvention } from "../../ast/node";
+import { Node, NodeKind, SymbolKind, Symbol, CallExprData, MemberExprData, makeLoc, NodeFlag, Type, TypeKind, CallingConvention } from "../../ast/node";
 import { createFunction, voidType } from "../../checker/types";
 import { Token } from "../../lexer/token";
 import { TransformContext } from "../context";
@@ -98,8 +98,8 @@ function getCalleeType(cd: CallExprData): Type {
 // ===== Tests =====
 import { createFunction, numberType, voidType } from "../../checker/types";
 import { makeSymbol } from "../../checker/symbol";
-import { SourceLocation, createNode } from "../../ast/node";
-import { makeIdent, makeCall, makeMember, makeBlock } from "../util";
+import { createNode } from "../../ast/node";
+import { makeIdent, makeCall, makeMember } from "../util";
 import { makeCtx } from "../testUtil";
 
 // Helper: wrap statements in a Program node for markClosureCalls

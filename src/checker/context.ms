@@ -1,6 +1,6 @@
 import { unknownType, hasGenericParams, unifyType, createUnifyBindings, typeNameOf, createFunction, getMinArity, setMinArity, isPromiseResult } from "./types";
 import { isAssignable } from "./compat";
-import { SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, createSymbolTableWithCache, hasFlag } from "./symbol";
+import { SymbolTable, ScopeKind, SymbolFlag, createSymbolTable, hasFlag } from "./symbol";
 import { IdentCache } from "./idents";
 import { Module, ModuleGraph, createModuleGraph, createModule } from "../module/graph";
 import { Node, NodeKind, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind, EnumDeclData } from "../ast/node";

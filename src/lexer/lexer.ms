@@ -3,7 +3,7 @@
 // Pattern: ~/projects/metascript/src/lexer/lexer.zig
 
 import { Token, TokenKind } from "./token";
-import { LexerState, createLexerState, peek, advanceChar, addToken } from "./state";
+import { createLexerState, peek, advanceChar, addToken } from "./state";
 import { isWhitespace, isNewline, isDigit, isLetter } from "./chars";
 import { scanNumber, scanString, scanTemplateString, scanIdentifier, scanOperator, scanPunctuation } from "./scanner";
 

@@ -14,9 +14,9 @@
 //
 // Pipeline position: after evaluateComptimeBlocks, before transformForNative.
 
-import { Node, NodeKind, IdentifierData, VariableDeclData, FunctionDeclData, MemberExprData, ArrayAccessData, BlockStmtData, CallExprData, BinaryExprData, UnaryExprData, NumberLiteralData, ConditionalExprData, TypeAssertionData, ForOfStmtData, ArrowFunctionData, ReturnStmtData, Type, TypeKind } from "../ast/node";
-import { isNumeric, numberType, int32Type, booleanType, stringType, charType, createArray, isResult, getResultOkType, getResultErrType } from "../checker/types";
-import { ExportRegistry, ModuleExports, ExportedSymInfo } from "../checker/context";
+import { Node, NodeKind, IdentifierData, VariableDeclData, FunctionDeclData, MemberExprData, ArrayAccessData, CallExprData, BinaryExprData, UnaryExprData, NumberLiteralData, ConditionalExprData, TypeAssertionData, ForOfStmtData, ArrowFunctionData, ReturnStmtData, Type, TypeKind } from "../ast/node";
+import { isNumeric, numberType, int32Type, booleanType, stringType, charType, isResult, getResultOkType, getResultErrType } from "../checker/types";
+import { ExportRegistry, ModuleExports } from "../checker/context";
 import { TransformContext } from "./context";
 import { mapChildren } from "./walker";
 

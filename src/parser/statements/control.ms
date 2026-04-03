@@ -1,9 +1,9 @@
 // Control Flow Statements - if, while, for, break, continue, return
 // Uses callback injection via util.ms to avoid circular imports
 
-import { Token, TokenKind } from "../../lexer/token";
-import { Node, NodeKind, DeclKind, NodeData, createNode, makeLoc } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd, skipDestructurePattern, consumeSemicolon } from "../context";
+import { TokenKind } from "../../lexer/token";
+import { Node, NodeKind, DeclKind, createNode, makeLoc } from "../../ast/node";
+import { ParserState, current, advance, isAtEnd, consumeSemicolon } from "../context";
 import { skipOptionalType, isIdentLike } from "../util";
 import { callBlockParser, callExprParser, callStmtParser } from "./callbacks";
 import { parseArrayPattern, parseObjectPattern } from "./declaration";

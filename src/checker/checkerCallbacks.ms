@@ -2,7 +2,6 @@
 // Same pattern as parser/statements/callbacks.ms.
 
 import { Node, Type, Symbol } from "../ast/node";
-import { unknownType } from "./types";
 import { CheckerContext } from "./context";
 import { SourceLocation } from "../ast/node";
 

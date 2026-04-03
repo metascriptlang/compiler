@@ -19,7 +19,7 @@ import { unknownType, int32Type } from "../../checker/types";
 import { Symbol } from "../../ast/node";
 import { walkExpandBlocks } from "../walker";
 import {
-	makeVarDecl, makeIdent, makeIdentResolved, makeCall, makeMember, makeExprStmt, makeBlock,
+	makeVarDecl, makeIdentResolved, makeCall, makeMember, makeExprStmt, makeBlock,
 	makeReturn, makeWhile, makeBinary, makeNumber, makeAssign, makeArrayAccess,
 	makeIf, syntheticToken,
 } from "../util";

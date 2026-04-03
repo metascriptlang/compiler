@@ -27,12 +27,10 @@ import {
 	makeAssign, makeBinary, makeTryCatch, makeContinue,
 	syntheticToken, extractBodyStmts, collectDeclNames,
 } from "../util";
-import { NameSet, createNameSet, nameSetContains, nameSetAdd } from "../context";
-import { createPromise, createFunction, voidType, unknownType, booleanType, numberType, int32Type, isPromise, getPromiseInner } from "../../checker/types";
-import {
-	GenState, StateCollector, allocState, containsYield, splitStmts, convertDeclsToAssigns, makeStateAssign,
-} from "./generatorLower";
-import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
+import { NameSet, createNameSet, nameSetAdd } from "../context";
+import { createPromise, createFunction, voidType, unknownType, booleanType, numberType, isPromise, getPromiseInner } from "../../checker/types";
+import { StateCollector, allocState, splitStmts, convertDeclsToAssigns, makeStateAssign } from "./generatorLower";
+import { stmtCountAfter } from "../testUtil";
 
 // ===== Variable Type Collection =====
 // Walk body to collect variable name → Type BEFORE rewriting. Used to set nodeType

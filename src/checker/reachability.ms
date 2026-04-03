@@ -6,11 +6,10 @@
 
 import { Node, NodeKind, ProgramData, FunctionDeclData, ImportDeclData,
 	ExportDeclData, IdentifierData, VariableDeclData, ClassDeclData, ActorDeclData,
-	CallExprData, MemberExprData,
-	TestDeclData, DecoratedDeclData, ExternDeclData } from "../ast/node";
+	CallExprData, MemberExprData, DecoratedDeclData, ExternDeclData } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
 import { getDeclName } from "./collectPass";
-import { AliveSet, createAliveSet, aliveSetAdd, aliveSetHas } from "../codegen/c/context";
+import { AliveSet, createAliveSet, aliveSetAdd } from "../codegen/c/context";
 
 // ===== Module Index =====
 // Maps module path to its program AST for cross-module tracing.
@@ -393,8 +392,6 @@ function isExportedDecl(node: Node): boolean {
 // getDeclName imported from collectPass (single canonical copy)
 
 // ===== Tests =====
-
-import { createNode } from "../ast/node";
 
 test "endsWith helper" {
 	assert "foo/bar.ms".endsWith("bar.ms");

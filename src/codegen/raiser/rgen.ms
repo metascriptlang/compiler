@@ -10,7 +10,7 @@ import {
 import { parseSource } from "../../parser/index";
 import { RaiserOpcode, RaiserInstruction, raiserABC } from "../../raiser/bytecode";
 import {
-	RaiserValue, RaiserValueKind, raiserNil, raiserInt, raiserString,
+	RaiserValue, RaiserValueKind, raiserNil, raiserString,
 	heapObjectGetField, heapObjectGetString, heapObjectGetObjectHandle,
 	heapArrayGet, heapArrayLen
 } from "../../raiser/value";
@@ -20,11 +20,9 @@ import {
 } from "../../raiser/module";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import {
-	RaiserCompState, RaiserFuncMap, RaiserFuncEntry,
-	RaiserBuiltinMap, RaiserBuiltinEntry,
-	createCompState, emitInst, emitLoadConst, emitHalt, emitRet, allocReg,
-	addConst, declareLocal, registerFunc, declareEnum, registerBuiltin, resetTemps,
-	resolveFunc, emitClosurePair
+	RaiserFuncMap, RaiserFuncEntry, RaiserBuiltinMap, RaiserBuiltinEntry,
+	createCompState, emitInst, emitLoadConst, emitRet, allocReg,
+	addConst, declareLocal, resetTemps, resolveFunc, emitClosurePair,
 } from "./context";
 import { compileStmt } from "./statements";
 import { compileExpr } from "./expressions";

@@ -12,7 +12,7 @@ import {
 import { RaiserOpcode, raiserABC, raiserAx } from "../../raiser/bytecode";
 import { raiserNil, raiserInt } from "../../raiser/value";
 import {
-	RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, emitRet,
+	RaiserCompState, emitInst, allocReg, emitLoadConst, emitRet,
 	declareLocal, declareLocalStr,
 	emitBranchIfFalsy, emitJumpPlaceholder, patchJumpTo, codeLen,
 	pushLoop, currentLoop, hasLoop, patchLoopBreaks,

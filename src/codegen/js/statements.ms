@@ -3,13 +3,9 @@
 import {
 	Node, NodeKind, DeclKind, TypeKind,
 	VariableDeclData, IfStmtData, WhileStmtData, DoWhileStmtData,
-	BlockStmtData, ExprStmtData, ReturnStmtData,
-	BreakStmtData, ContinueStmtData,
-	SwitchStmtData, SwitchCaseData,
-	ThrowStmtData, TryCatchStmtData,
-	ForStmtData, ForOfStmtData,
-	UnreachableStmtData,
-	MacroInvocationData, StringLiteralData,
+	ExprStmtData, ReturnStmtData, BreakStmtData, ContinueStmtData,
+	SwitchStmtData, SwitchCaseData, ThrowStmtData, TryCatchStmtData,
+	ForStmtData, ForOfStmtData, MacroInvocationData, StringLiteralData,
 	isEmptyBlock, Type,
 } from "../../ast/node";
 import { emit, emitNode, emitIndent, emitNewline, emitLine, JSGenerator, emitBlockInline, emitBlockOrStmt } from "./emit";

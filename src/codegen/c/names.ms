@@ -4,7 +4,7 @@
 // Character classification, core mangling, C keyword avoidance,
 // module-qualified proc names, field/local manglers.
 
-import { Symbol, SymbolKind } from "../../ast/node";
+import { Symbol } from "../../ast/node";
 import { hasFlag, SymbolFlag } from "../../checker/symbol";
 
 

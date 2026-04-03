@@ -20,8 +20,7 @@ import { lookupSymbol } from "../../checker/symbol";
 import { walkNode } from "../walker";
 import {
 	makeIdent, makeCall, makeString, makeNumber, makeMember, makeUnary,
-	makeObjectLiteral, makeBool, makeNull, makeHiddenStdConv,
-	makeExprStmt, enumToStringName,
+	makeObjectLiteral, makeBool, makeNull, makeHiddenStdConv, enumToStringName,
 } from "../util";
 import { findCallTypeArg } from "../../parser/context";
 import { rewriteEcho } from "./debugLower";

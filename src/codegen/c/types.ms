@@ -6,12 +6,12 @@
 
 import { isStructType, getTypeSize, skipModifier, isPromise, getPromiseInner, isResult, getResultOkType, getResultErrType, substituteType, createStruct, needsRC } from "../../checker/types";
 import { getGenericDecl } from "../../parser/context";
-import { Node, NodeKind, CallExprData, Type, TypeKind, CallingConvention, SymbolKind } from "../../ast/node";
+import { Node, CallExprData, Type, TypeKind, SymbolKind } from "../../ast/node";
 import { findChar, splitTopLevel } from "../../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
-import { CGen, CSection, Builder, TypeCache, add, addLine, addNewline, extract, sec, createBuilder, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas } from "./context";
+import { CGen, CSection, add, addLine, addNewline, extract, sec, typeCacheGet, typeCacheSet, typeCacheHas, nameSetHas } from "./context";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
-import { mangle, mangleTypeName, mangleFieldName, safeName } from "./names";
+import { mangle, mangleFieldName, safeName } from "./names";
 import { useHeader } from "./context";
 
 // ===== Type Resolution =====
@@ -1166,7 +1166,7 @@ function genTupleType(g: CGen, t: Type): string {
 
 // ===== Tests =====
 
-import { createPrimitive, createStruct, createArray, createFunction, createEnum, createResult, createRef, createTuple } from "../../checker/types";
+import { createPrimitive, createStruct, createArray, createEnum, createRef, createTuple } from "../../checker/types";
 import { createCGen } from "./context";
 import { CheckerContext } from "../../checker/context";
 test "primitive keys" {

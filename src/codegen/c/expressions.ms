@@ -6,19 +6,17 @@
 // Follows standard reference implementation pattern for destination carriers.
 // MetaScript value-type interfaces (CLoc passed by value → use return).
 
-import { Node, NodeKind, NodeFlag, NumberLiteralData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, NewExprData, MoveExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, HiddenDerefData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
-import { isIntegerType, getProperty, getMinArity, isStructType, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, getDiscriminantName, voidType, isStringLike } from "../../checker/types";
+import { Node, NodeKind, NodeFlag, NumberLiteralData, StringLiteralData, BooleanLiteralData, IdentifierData, BinaryExprData, UnaryExprData, MemberExprData, ArrayAccessData, ConditionalExprData, TypeAssertionData, CallExprData, ObjectLiteralData, ArrayLiteralData, UpdateExprData, NewExprData, MoveExprData, SpreadExprData, ExprStmtData, HiddenStdConvData, ClassDeclData, PropertyDeclData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { isIntegerType, getProperty, findUnionVariant, isDiscriminatedUnion, findVariantByFieldName, findVariantByDiscriminant, getDiscriminantName, voidType, isStringLike } from "../../checker/types";
 import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
-	CGen, CProc, CLoc, CLocKind, CStorageLoc, Builder, CSection,
-	initLoc, noLoc, rdLoc, addrLoc,
-	add, addLine, sec,
+	CGen, CProc, CLoc, CLocKind, CStorageLoc, CSection, rdLoc, addLine, sec,
 	pStmts, getTemp, nameSetHas, nameSetAdd, emitStmtsLine, internString,
 	emitProcLocalsLine, lookupLocalName,
 } from "./context";
 import { mangle, mangleFieldName, mangledFunctionName, safeName, staticFieldCName } from "./names";
-import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, ccgIntroducedPtr, shouldIndirectParam, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, getArrayContentType } from "./types";
-import { formatCNumber, cBoolLiteral, cNullLiteral, cStringLiteral, msStringPoolRef, cStringByteLen } from "./literals";
+import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, isPointerType, isNilableValueType, annotationToC, genClHalfCast, genClFullCast, genClHalfCastNrvo, genClFullCastNrvo, shouldIndirectParam, ensureTypeInfo, ensureTypeInfoDef, ensureForwardDecl, getArrayContentType } from "./types";
+import { formatCNumber, cBoolLiteral, cNullLiteral, msStringPoolRef, cStringByteLen } from "./literals";
 import { findChar } from "../../utils/string";
 import { ensureDrcProto, ensureCrossModuleProto } from "./forward";
 import { useHeader } from "./context";
@@ -476,7 +474,10 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 			nameSetAdd(g.declaredGlobals, d.name);
 		}
 		// Module-qualified name for function references (Standard reference parity)
-		if (idSym !== null && idSym.symbolKind === SymbolKind.Function) {
+		// nativeName takes priority — used by extern functions and actor dispatch
+		if (idSym !== null && idSym.symbolKind === SymbolKind.Function && idSym.nativeName !== "") {
+			ctx.results.push(idSym.nativeName);
+		} else if (idSym !== null && idSym.symbolKind === SymbolKind.Function) {
 			// Ensure cross-module function has a forward declaration (needed for function
 			// pointers in closure literals — direct calls go through ensureCrossModuleProto)
 			if (idSym.symbolType !== null && idSym.modulePath !== null && idSym.modulePath !== "" && idSym.modulePath !== g.modulePath) {
@@ -1811,7 +1812,7 @@ function genArrayLiteral(g: CGen, p: CProc, node: Node): string {
 
 // ===== Tests =====
 
-import { createCGen, createProc, extract, sec, CSection, typeCacheGet, isIndirectParam, isIndirectLocal } from "./context";
+import { createCGen, createProc, sec, CSection, isIndirectParam, isIndirectLocal } from "./context";
 import { CheckerContext } from "../../checker/context";
 import { parseSource } from "../../parser/statements/validation";
 import "../../parser/statements/core";

@@ -11,7 +11,7 @@ import { TransformContext, freshTempSym } from "../context";
 import { int32Type, unknownType, isIterator, getIteratorNextFnType } from "../../checker/types";
 import { walkNode } from "../walker";
 import {
-	makeIdent, makeIdentResolved, makeTypedIdent, makeNumber, makeBlock, makeVarDecl, makeWhile,
+	makeIdentResolved, makeTypedIdent, makeNumber, makeBlock, makeVarDecl, makeWhile,
 	makeBinary, makeUnary, makeAssign, makeExprStmt, makeMember, makeArrayAccess, makeCall,
 	extractBodyStmts, boolToDeclKind,
 } from "../util";

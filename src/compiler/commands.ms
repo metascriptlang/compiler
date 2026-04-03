@@ -5,22 +5,22 @@ import { lex } from "../lexer/index";
 import { formatToken } from "../lexer/token";
 import { parseSource } from "../parser/statements/validation";
 import { registerCoreParsers } from "../parser/statements/core"; // Moved to top
-import { Node, NodeKind, ProgramData } from "../ast/node";
+import { ProgramData } from "../ast/node";
 import { printNode as printAstNode } from "../ast/index";
-import { CheckerContext, hasErrors, errorCount } from "../checker/context";
+import { hasErrors, errorCount } from "../checker/context";
 import { checkProgram } from "../checker/checkPass";
 import { transformProgram } from "../transform/index";
 import { analyzeProgram } from "../analyzer/index";
-import { CliOptions, Target } from "./options";
-import { readSource, writeOutput, printErrorsAndExit, printTiming, verboseLog, replaceExt, baseName, ensureDir } from "./io";
+import { CliOptions } from "./options";
+import { readSource, writeOutput, printErrorsAndExit, printTiming, replaceExt, baseName, ensureDir } from "./io";
 import { cmdBuildC } from "./compile";
-import { error, success, bold, cyan, dim, green, red, yellow, path } from "../utils/color";
+import { error, success, bold, cyan, dim, green, red, path } from "../utils/color";
 
 // Formatter imports
 import { defaultFormatOptions, applyFmtSection } from "./fmt/options";
 import { formatDoc } from "./fmt/layout";
 import { printNode as printFormattedNode } from "./fmt/printer/index";
-import { FmtSection, defaultFmtSection } from "./buildConfig";
+import { FmtSection } from "./buildConfig";
 
 // -- dump-tokens --
 

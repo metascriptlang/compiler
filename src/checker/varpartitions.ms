@@ -8,7 +8,7 @@
 // After both passes, check if any graph is both mutated AND connected to a readonly param.
 // If mutation happened after connection (or is direct), report an error.
 
-import { Node, NodeKind, DeclKind, IdentifierData, BinaryExprData, UpdateExprData, CallExprData, MemberExprData, ArrayAccessData, OutExprData, HiddenDerefData, HiddenAddrData, TypeAssertionData, ConditionalExprData, SpreadExprData, ObjectLiteralData, ArrayLiteralData, NewExprData, ArrowFunctionData, FunctionExprData, AwaitExprData, YieldExprData, MoveExprData, MatchExprData, MatchCaseData, TryExprData, VariableDeclData, BlockStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, ExprStmtData, ReturnStmtData, ThrowStmtData, DeferStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, DecoratedDeclData, FunctionDeclData, TestDeclData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
+import { Node, NodeKind, IdentifierData, BinaryExprData, UpdateExprData, CallExprData, MemberExprData, ArrayAccessData, OutExprData, HiddenDerefData, HiddenAddrData, TypeAssertionData, ConditionalExprData, SpreadExprData, ObjectLiteralData, ArrayLiteralData, NewExprData, AwaitExprData, YieldExprData, MoveExprData, MatchExprData, MatchCaseData, TryExprData, VariableDeclData, BlockStmtData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, ExprStmtData, ReturnStmtData, ThrowStmtData, DeferStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, DecoratedDeclData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { isReadonly } from "./types";
 import { CheckerContext, addError } from "./context";
 

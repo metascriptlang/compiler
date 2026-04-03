@@ -1,8 +1,8 @@
 // Error Handling Statements - throw, try/catch/finally
 // Uses callback injection via util.ms to avoid circular imports
 
-import { Token, TokenKind } from "../../lexer/token";
-import { Node, NodeKind, NodeData, createNode, makeLoc } from "../../ast/node";
+import { TokenKind } from "../../lexer/token";
+import { Node, NodeKind, createNode, makeLoc } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd, consumeSemicolon } from "../context";
 import { skipOptionalType, isIdentLike } from "../util";
 import { callBlockParser, callExprParser } from "./callbacks";

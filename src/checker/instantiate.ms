@@ -4,10 +4,10 @@
 // immediately clone the function body, substitute types, and register
 // the specialized version. No separate monomorphize pass needed.
 
-import { Node, NodeKind, NodeData, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, BlockStmtData, IfStmtData, WhileStmtData, ForOfStmtData, ReturnStmtData, ExprStmtData, VariableDeclData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, NewExprData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ArrowFunctionData, FunctionExprData, SpreadExprData, UpdateExprData, MatchExprData, MatchStmtData, MatchCaseData, DestructuringDeclData, DeferStmtData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { typeNameOf, instantiateGeneric, substituteType, createFunction } from "./types";
+import { Node, NodeKind, NodeData, SourceLocation, makeLoc, createNodeAt, FunctionDeclData, ClassDeclData, ConstructorDeclData, ExportDeclData, DecoratedDeclData, BlockStmtData, IfStmtData, WhileStmtData, ForOfStmtData, ReturnStmtData, ExprStmtData, VariableDeclData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, NewExprData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, ArrowFunctionData, FunctionExprData, SpreadExprData, UpdateExprData, MatchExprData, MatchStmtData, MatchCaseData, DeferStmtData, HiddenDerefData, HiddenStdConvData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { instantiateGeneric, substituteType, createFunction } from "./types";
 import { resolveAnnotation } from "./resolvePass";
-import { lookupSymbol, defineSymbol, makeSymbol, setFlag, SymbolFlag, hasFlag } from "./symbol";
+import { lookupSymbol, makeSymbol, SymbolFlag, hasFlag } from "./symbol";
 import { CheckerContext, stripGenFlag } from "./context";
 import { monoCloneNode, monoSubstAnnotation, monoConcreteTypeName } from "../monomorphize/collect";
 import { callCheckFunctionBody, registerInstantiateGeneric } from "./checkerCallbacks";

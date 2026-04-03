@@ -9,7 +9,7 @@
 
 import { TaQueryKey, TaQueryKind } from "./revision";
 import {
-	Node, NodeKind, DeclKind, ExternKind,
+	Node, NodeKind,
 	NumberLiteralData, StringLiteralData, BooleanLiteralData, RegexLiteralData, BigIntLiteralData,
 	IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, CallExprData,
 	MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData,

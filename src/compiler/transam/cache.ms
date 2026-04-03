@@ -5,9 +5,8 @@
 //
 // Arrays passed by pointer — bare T[] types.
 
-import { TaQueryKey, TaQueryKind, TaQueryState, TaDurability, createQueryKey, queryKeysEqual } from "./revision";
+import { TaQueryKey, TaQueryKind, TaQueryState, createQueryKey, queryKeysEqual } from "./revision";
 import { TaCacheEntry, createCacheEntry } from "./query";
-import { taHashKey } from "./hash";
 
 
 // ===== Cache Store =====

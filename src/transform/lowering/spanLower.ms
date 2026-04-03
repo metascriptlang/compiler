@@ -9,13 +9,13 @@
 // - Zero-copy slicing: arr[start..end] with Span result → { data: arr.data + start, len: end - start }
 // - Stack-promoted literals: HiddenStdConv(ArrayLiteral, Span<T>) → SizedArray temp on stack
 
-import { Node, NodeKind, DeclKind, HiddenStdConvData, ArrayAccessData, BinaryExprData, ArrayLiteralData, BlockStmtData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, DeclKind, HiddenStdConvData, ArrayAccessData, BinaryExprData, ArrayLiteralData, Type, TypeKind } from "../../ast/node";
 import { createSizedArray, createPtr } from "../../checker/types";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode } from "../walker";
 import {
 	makeMember, makeTypedObjectLiteral, makeNumber, makeBinary,
-	makeVarDecl, makeIdentResolved, makeTypedIdent, makeHiddenAddr, makeObjectLiteral,
+	makeVarDecl, makeIdentResolved, makeHiddenAddr, makeObjectLiteral,
 } from "../util";
 
 export function spanLower(program: Node, ctx: TransformContext): Node {

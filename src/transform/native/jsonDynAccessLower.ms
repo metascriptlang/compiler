@@ -11,7 +11,7 @@ import { unwrapRef } from "../../checker/types";
 import { TransformContext } from "../context";
 import { findExtension } from "../../checker/context";
 import { walkNode } from "../walker";
-import { makeIdent, makeCall, makeString, makeMember } from "../util";
+import { makeIdent, makeCall, makeString } from "../util";
 
 // Map target TypeKind → pure MetaScript extension method name (from std/core/json/accessors.ms)
 function jsonAccessorName(kind: TypeKind): string {

@@ -3,7 +3,7 @@
 // String pool management, C string escaping,
 // number formatting for C output.
 
-import { Builder, add, addLine, addNewline, createBuilder, extract, StringPool, createStringPool, internString } from "./context";
+import { Builder, addLine, createBuilder, extract, StringPool, createStringPool, internString } from "./context";
 
 
 // ===== C String Escaping =====

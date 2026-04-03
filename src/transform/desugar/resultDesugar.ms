@@ -25,9 +25,8 @@ import { makeSymbol, lookupSymbol } from "../../checker/symbol";
 import { TransformContext, freshTempSym } from "../context";
 import { walkNode, walkExpandBlocksHooked, containsExprKind, replaceInExpr } from "../walker";
 import {
-	makeIdent, makeIdentResolved, makeVarDecl, makeBlock, makeExprStmt,
-	makeReturn, makeIf, makeMember, makeCall, makeCallResolved, makeConditional,
-	makeUnary, makeObjectLiteral, makeBool,
+	makeIdentResolved, makeVarDecl, makeBlock,
+	makeReturn, makeIf, makeMember, makeConditional, makeUnary, makeObjectLiteral, makeBool,
 } from "../util";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
@@ -256,11 +255,8 @@ function makeErrorCheck(sym: Symbol, resType: Type, loc: SourceLocation, ctx: Tr
 }
 
 // ===== Tests =====
-import {
-	ReturnStmtData as RetData, BlockStmtData,
-	CallExprData as CData, MemberExprData as MData,
-} from "../../ast/node";
-import { parseInput, makeCtx, getStmts } from "../testUtil";
+import { ReturnStmtData as RetData, BlockStmtData } from "../../ast/node";
+import { makeCtx } from "../testUtil";
 import { TypeKind as TK } from "../../ast/node";
 import { createResult, numberType, stringType } from "../../checker/types";
 

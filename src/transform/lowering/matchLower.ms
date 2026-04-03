@@ -14,7 +14,7 @@
 // Binding patterns (identifier) → const name = $m; prepended to body
 
 import { Node, NodeKind, DeclKind, TypeKind, SourceLocation, BlockStmtData, MatchStmtData, MatchExprData, MatchCaseData, VariableDeclData, ReturnStmtData, ExprStmtData, IfStmtData, IdentifierData, NumberLiteralData, StringLiteralData, Type } from "../../ast/node";
-import { TransformContext, freshTemp, freshTempSym } from "../context";
+import { TransformContext, freshTempSym } from "../context";
 import { walkExpandBlocks, containsExprKind, replaceInExpr } from "../walker";
 import {
 	makeIdent, makeIdentResolved, makeTypedIdent, makeBlock, makeVarDecl, makeExprStmt, makeNull,

@@ -3,7 +3,7 @@
 // Follows standard reference patterns for section-based output and block stacking.
 // CGen = BModule, CProc = BProc, CBlock = TBlock, CLoc = TLoc.
 
-import { Node, NodeKind, Type, TypeKind, Symbol } from "../../ast/node";
+import { Node, Type, Symbol } from "../../ast/node";
 import { CheckerContext } from "../../checker/context";
 
 

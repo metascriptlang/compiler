@@ -10,14 +10,14 @@
 import { Node, NodeKind, SourceLocation, DeclKind,
 	ActorDeclData, MethodDeclData, ConstructorDeclData,
 	DecoratedDeclData, ExportDeclData, ProgramData, NewExprData,
-	IdentifierData, VariableDeclData } from "../../ast/node";
+	IdentifierData, VariableDeclData, Symbol, SymbolKind, SymbolState } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
-import { walkNode } from "../walker";
+import { makeSymbol } from "../../checker/symbol";
 import { syntheticToken, makeIdent, makeIdentResolved, makeCall, makeExprStmt, makeReturn,
 	makeVarDecl, makeMember, makeNumber, makeNull, makeBlock,
 	makeBinary } from "../util";
 import { createNode } from "../../ast/node";
-import { voidType } from "../../checker/types";
+import { voidType, unknownType, int32Type, createFunction, createRef, createStruct } from "../../checker/types";
 
 // ===== Build proxy body for a void method (send semantics) =====
 
@@ -68,29 +68,34 @@ function buildCallProxy(kind: number, ctx: TransformContext, loc: SourceLocation
 
 function buildDispatchBody(methods: Node[], actorName: string, loc: SourceLocation): Node {
 	const stmts: Node[] = [];
+	// Cast void* this to actor's Ref type via HiddenStdConv (no C cast emitted — just type annotation).
+	// This tells codegen the argument is already a pointer, preventing &() struct promotion.
+	const actorRefType = createRef(createStruct(actorName, [], [], true));
+	const thisIdent = makeIdent("this", loc);
+	thisIdent.nodeType = unknownType();
+	const castThis = createNode(NodeKind.HiddenStdConv, {
+		convExpr: thisIdent,
+		convType: actorRefType,
+	}, syntheticToken(loc));
+	castThis.nodeType = actorRefType;
+	const selfDecl = makeVarDecl("_self", castThis, DeclKind.Const, loc);
+	selfDecl.nodeType = actorRefType;
+	stmts.push(selfDecl);
+
 	let msgKind = 0;
 	for (const m of methods) {
 		if (m.kind !== NodeKind.MethodDecl) continue;
 		const md = m.data as MethodDeclData;
-		const isVoid = md.methodReturnType === "" || md.methodReturnType === "void";
 		const cond = makeBinary(
-			makeMember(makeIdent("_dmsg", loc), "kind", loc),
+			makeIdent("_dmsg", loc),
 			"===",
 			makeNumber(msgKind, loc),
 			loc
 		);
-		let body: Node;
-		if (isVoid) {
-			const handlerCall = makeCall(makeIdent(actorName + "_" + md.methodName + "_impl", loc), [makeIdent("this", loc)], loc);
-			body = makeBlock([makeExprStmt(handlerCall, loc)], loc);
-		} else {
-			const handlerCall = makeCall(makeIdent(actorName + "_" + md.methodName + "_impl", loc), [makeIdent("this", loc)], loc);
-			const completeCall = makeCall(makeIdent("msFutureComplete", loc), [
-				makeMember(makeIdent("_dmsg", loc), "replyFuture", loc),
-				handlerCall,
-			], loc);
-			body = makeBlock([makeExprStmt(completeCall, loc)], loc);
-		}
+		const selfRef = makeIdent("_self", loc);
+		selfRef.nodeType = actorRefType;
+		const handlerCall = makeCall(makeIdent(actorName + "_" + md.methodName + "_impl", loc), [selfRef], loc);
+		const body = makeBlock([makeExprStmt(handlerCall, loc)], loc);
 		const emptyBlock = makeBlock([], loc);
 		const ifNode = createNode(NodeKind.IfStmt, {
 			condition: cond,
@@ -153,7 +158,7 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 			const md = m.data as MethodDeclData;
 			const isVoid = md.methodReturnType === "" || md.methodReturnType === "void";
 
-			// _impl handler: original body, called by dispatch
+			// _impl handler: original body, nativeName for predictable C name
 			const implNativeName = name + "_" + md.methodName + "_impl";
 			const implNode = createNode(NodeKind.FunctionDecl, {
 				fnName: implNativeName,
@@ -171,23 +176,26 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 			implNode.paramLocations = m.paramLocations;
 			result.push(implNode);
 
-			// Proxy: enqueues message (this is what extensionMethodLower resolves to)
+			// Proxy: enqueues message (what extensionMethodLower resolves to)
 			const proxyBody = isVoid
 				? buildSendProxy(msgKind, ctx, loc)
 				: buildCallProxy(msgKind, ctx, loc);
+			const proxyParamTypes = m.nodeType !== null ? m.nodeType.typeChildren : [];
+			const proxyRetType = isVoid ? voidType() : unknownType();
+			const proxyFnType = createFunction(proxyParamTypes, md.methodParams, proxyRetType);
 			const proxyNode = createNode(NodeKind.FunctionDecl, {
 				fnName: name + "_" + md.methodName,
 				params: md.methodParams,
 				fnParamTypes: md.methodParamTypes,
 				fnBody: proxyBody,
 				fnFlags: md.methodFlags,
-				fnReturnType: "void",
+				fnReturnType: isVoid ? "void" : "unknown",
 				fnDefaults: [],
 				nativeName: "",
 				nameLocation: md.nameLocation,
 			}, syntheticToken(loc));
 			proxyNode.resolvedSym = m.resolvedSym;
-			proxyNode.nodeType = m.nodeType;
+			proxyNode.nodeType = proxyFnType;
 			proxyNode.typeExprs = m.typeExprs;
 			proxyNode.paramLocations = m.paramLocations;
 			if (decorators.length > 0) {
@@ -227,10 +235,10 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 function emitActorDispatch(d: ActorDeclData, name: string, methods: Node[], loc: SourceLocation): Node {
 	const dispatchNativeName = name + "_dispatch";
 	const dispatchBody = buildDispatchBody(methods, name, loc);
-	return createNode(NodeKind.FunctionDecl, {
+	const fnNode = createNode(NodeKind.FunctionDecl, {
 		fnName: dispatchNativeName,
 		params: ["this", "_dmsg"],
-		fnParamTypes: [name, "void"],
+		fnParamTypes: [name, "int32"],
 		fnBody: dispatchBody,
 		fnFlags: "",
 		fnReturnType: "void",
@@ -238,6 +246,14 @@ function emitActorDispatch(d: ActorDeclData, name: string, methods: Node[], loc:
 		nativeName: dispatchNativeName,
 		nameLocation: d.nameLocation,
 	}, syntheticToken(loc));
+	// Build Function type so codegen emits prototype (nodeType=null → skipped)
+	const dispatchType = createFunction([unknownType(), int32Type()], ["this", "_dmsg"], voidType());
+	fnNode.nodeType = dispatchType;
+	const dispatchSym = makeSymbol(dispatchNativeName, SymbolKind.Function, dispatchType, false);
+	dispatchSym.nativeName = dispatchNativeName;
+	dispatchSym.state = SymbolState.Checked;
+	fnNode.resolvedSym = dispatchSym;
+	return fnNode;
 }
 
 // ===== Collect methods from actor body (unwrapping decorators) =====
@@ -257,7 +273,7 @@ function collectActorMethods(d: ActorDeclData): Node[] {
 
 // ===== ActorDecl → struct + handlers + proxies + dispatch =====
 
-function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext): Node[] {
+function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, dispatchSyms: Symbol[], dispatchNames: string[]): Node[] {
 	const d = node.data as ActorDeclData;
 	const name = d.actorName;
 	const result: Node[] = [];
@@ -268,7 +284,10 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext):
 	emitActorMethods(d, name, ctx, loc, result);
 
 	if (methods.length > 0) {
-		result.push(emitActorDispatch(d, name, methods, loc));
+		const dispatchNode = emitActorDispatch(d, name, methods, loc);
+		result.push(dispatchNode);
+		dispatchSyms.push(dispatchNode.resolvedSym);
+		dispatchNames.push(name);
 	}
 
 	return result;
@@ -276,7 +295,7 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext):
 
 // ===== Program-level: expand ActorDecl + inject include + rewrite new =====
 
-function expandActorDecls(program: Node, names: string[], ctx: TransformContext): Node {
+function expandActorDecls(program: Node, names: string[], dispatchSyms: Symbol[], dispatchNames: string[], ctx: TransformContext): Node {
 	if (program.kind !== NodeKind.Program) return program;
 	const pd = program.data as ProgramData;
 	const newStmts: Node[] = [];
@@ -285,7 +304,7 @@ function expandActorDecls(program: Node, names: string[], ctx: TransformContext)
 		if (stmt.kind === NodeKind.ActorDecl) {
 			const ad = stmt.data as ActorDeclData;
 			names.push(ad.actorName);
-			const expanded = lowerActorDecl(stmt, stmt.location, ctx);
+			const expanded = lowerActorDecl(stmt, stmt.location, ctx, dispatchSyms, dispatchNames);
 			for (const n of expanded) newStmts.push(n);
 			continue;
 		}
@@ -294,7 +313,7 @@ function expandActorDecls(program: Node, names: string[], ctx: TransformContext)
 			if (ed.exportedDecl !== null && ed.exportedDecl.kind === NodeKind.ActorDecl) {
 				const ad = ed.exportedDecl.data as ActorDeclData;
 				names.push(ad.actorName);
-				const expanded = lowerActorDecl(ed.exportedDecl, ed.exportedDecl.location, ctx);
+				const expanded = lowerActorDecl(ed.exportedDecl, ed.exportedDecl.location, ctx, [], []);
 				for (const n of expanded) {
 					newStmts.push(createNode(NodeKind.ExportDecl, {
 						exportedDecl: n,
@@ -321,7 +340,7 @@ function expandActorDecls(program: Node, names: string[], ctx: TransformContext)
 
 // ===== Post-construction wiring for new Counter() =====
 
-function rewriteNewAndVarDecls(program: Node, names: string[], ctx: TransformContext): Node {
+function rewriteNewAndVarDecls(program: Node, names: string[], dispatchSyms: Symbol[], dispatchNames: string[], ctx: TransformContext): Node {
 	if (program.kind !== NodeKind.Program) return program;
 	if (names.length === 0) return program;
 	const pd = program.data as ProgramData;
@@ -342,10 +361,18 @@ function rewriteNewAndVarDecls(program: Node, names: string[], ctx: TransformCon
 					}
 					if (actorName !== "") {
 						const loc = stmt.location;
+						// Find dispatch symbol for this actor
+						let dSym: Symbol = null as unknown as Symbol;
+						for (let di = 0; di < dispatchNames.length; di = di + 1) {
+							if (dispatchNames[di] === actorName) { dSym = dispatchSyms[di]; }
+						}
 						// c._actor = msActorCreate(c, Counter_dispatch)
+						const dispatchRef = dSym !== null
+							? makeIdentResolved(dSym, loc)
+							: makeIdent(actorName + "_dispatch", loc);
 						const createCall = makeCall(makeIdent("msActorCreate", loc), [
 							makeIdent(vd.declName, loc),
-							makeIdent(actorName + "_dispatch", loc),
+							dispatchRef,
 						], loc);
 						const assignActor = makeBinary(
 							makeMember(makeIdent(vd.declName, loc), "_actor", loc),
@@ -365,6 +392,13 @@ function rewriteNewAndVarDecls(program: Node, names: string[], ctx: TransformCon
 		}
 	}
 
+	// Append msActorPollAll() at program exit to drain all pending messages.
+	// Single-threaded: messages are enqueued synchronously, poll drains them all.
+	// Multi-scheduler replaces this with a proper event loop.
+	const exitLoc = program.location;
+	const pollCall = makeCall(makeIdent("msActorPollAll", exitLoc), [], exitLoc);
+	newStmts.push(makeExprStmt(pollCall, exitLoc));
+
 	pd.programStmts = newStmts;
 	return program;
 }
@@ -373,7 +407,9 @@ function rewriteNewAndVarDecls(program: Node, names: string[], ctx: TransformCon
 
 export function lowerActor(program: Node, ctx: TransformContext): Node {
 	const names: string[] = [];
-	const expanded = expandActorDecls(program, names, ctx);
+	const dispatchSyms: Symbol[] = [];
+	const dispatchNames: string[] = [];
+	const expanded = expandActorDecls(program, names, dispatchSyms, dispatchNames, ctx);
 	if (names.length === 0) return expanded;
-	return rewriteNewAndVarDecls(expanded, names, ctx);
+	return rewriteNewAndVarDecls(expanded, names, dispatchSyms, dispatchNames, ctx);
 }

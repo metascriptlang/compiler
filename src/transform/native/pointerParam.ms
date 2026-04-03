@@ -14,7 +14,7 @@ import { createPtr, isStructType, getTypeSize, isResult, skipModifier, isPromise
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeHiddenAddr, makeHiddenDeref } from "../util";
-import { firstStmtKindAfter, stmtCountAfter, parseInput } from "../testUtil";
+import { firstStmtKindAfter, stmtCountAfter } from "../testUtil";
 
 const defaultLoc = makeLoc(0, 0);
 

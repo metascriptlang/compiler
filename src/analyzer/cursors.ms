@@ -14,14 +14,14 @@
 // false positives would be unsound (dangling pointer).
 
 import {
-	Node, NodeKind, DeclKind,
+	Node, NodeKind,
 	VariableDeclData, IdentifierData, MemberExprData, ArrayAccessData,
 	BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData,
 	WhileStmtData, ForStmtData, DoWhileStmtData,
 	TryCatchStmtData, CallExprData, BinaryExprData,
 	ObjectLiteralData, ArrayLiteralData, ConditionalExprData,
 	ThrowStmtData, SwitchStmtData, SwitchCaseData,
-	FunctionDeclData, ArrowFunctionData, FunctionExprData,
+	FunctionDeclData,
 	MoveExprData, SpreadExprData, NewExprData,
 	ExportDeclData, ProgramData,
 	TypeAssertionData, HiddenStdConvData,

@@ -1,7 +1,7 @@
 // Raiser VM — Module and Function structures
 
 import { RaiserInstruction, RaiserOpcode, raiserABC, raiserABx } from "./bytecode";
-import { RaiserValue, RaiserValueKind, raiserInt, raiserNil } from "./value";
+import { RaiserValue, raiserInt } from "./value";
 
 // --- Function ---
 

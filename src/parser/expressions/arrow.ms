@@ -1,10 +1,10 @@
 // Arrow Function Parser
 // Extracted from expression.ms with callback injection
 
-import { Token, TokenKind } from "../../lexer/token";
-import { Node, NodeKind, NodeData, Expression, createNode, ArrowFunctionData } from "../../ast/node";
+import { TokenKind } from "../../lexer/token";
+import { NodeKind, Expression, createNode, ArrowFunctionData } from "../../ast/node";
 import { ParserState, createState, current, advance, isAtEnd, peek } from "../context";
-import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, skipOptionalType, isIdentLike } from "../util";
+import { parseParamList, extractParamNames, extractParamTypes, captureOptionalType, getLastTypeExpr, getLastParamTypeExprs, getLastParamLocations, isIdentLike } from "../util";
 import { lex } from "../../lexer/lexer";
 import { parseOk, mockExpr } from "./util";
 

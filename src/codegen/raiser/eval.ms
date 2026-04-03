@@ -2,15 +2,11 @@
 // Separate file to avoid import graph contamination in rgen.ms tests.
 
 
-import { Node, NodeKind } from "../../ast/node";
+import { Node } from "../../ast/node";
 import { parseSource } from "../../parser/index";
 import { checkProgram } from "../../checker/index";
 import { CheckerContext } from "../../checker/context";
-import {
-	RaiserValueKind, RaiserValue,
-	heapObjectGetField, heapObjectGetString, heapObjectGetObjectHandle,
-	heapArrayGet, heapArrayLen
-} from "../../raiser/value";
+import { RaiserValueKind, heapObjectGetField, heapObjectGetString } from "../../raiser/value";
 import { RaiserContext, createContext, load, execute } from "../../raiser/context";
 import { generateRaiser, generateRaiserProject, RaiserModuleInput } from "./rgen";
 

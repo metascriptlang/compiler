@@ -4,10 +4,7 @@
 // Tests cover the full pipeline: parse → check → transform → generateJS.
 
 import { Node, NodeKind, ProgramData, HiddenDerefData, HiddenStdConvData, TryExprData } from "../../ast/node";
-import {
-	JSGenerator, createJSGenerator, registerEmitNode,
-	finalize, emit, emitNode, emitLine,
-} from "./emit";
+import { JSGenerator, createJSGenerator, registerEmitNode, finalize, emit } from "./emit";
 import {
 	emitNumberLiteral, emitStringLiteral, emitBooleanLiteral, emitNullLiteral,
 	emitBigIntLiteral, emitRegexLiteral,

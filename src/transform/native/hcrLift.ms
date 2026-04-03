@@ -13,16 +13,14 @@
 //
 // Codegen sees normal AST: MemberExpr, HiddenDeref, @emit. Zero HCR awareness needed.
 
-import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNode, ProgramData, VariableDeclData, IdentifierData, FunctionDeclData, ExportDeclData, DecoratedDeclData, MacroInvocationData, ExprStmtData, StringLiteralData, Type, TypeKind, Symbol } from "../../ast/node";
+import {
+	Node, NodeKind, SourceLocation, createNode,
+	ProgramData, VariableDeclData, IdentifierData, ExportDeclData, DecoratedDeclData, Type, TypeKind } from "../../ast/node";
 import { createStruct, createPtr } from "../../checker/types";
-import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import { TransformContext } from "../context";
 import { djb2 } from "std/hash";
-import { walkNode, mapChildren } from "../walker";
-import {
-	makeIdent, makeTypedIdent, makeMember, makeHiddenDeref, makeBinary,
-	makeExprStmt, syntheticToken,
-} from "../util";
+import { walkNode } from "../walker";
+import { makeIdent, makeTypedIdent, makeMember, makeHiddenDeref, makeBinary, makeExprStmt, syntheticToken } from "../util";
 
 // ===== Collected Global Info =====
 

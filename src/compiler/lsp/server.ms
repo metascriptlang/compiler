@@ -11,7 +11,7 @@ import {
 	lspErrorResponse
 } from "./protocol";
 import { TransAmDb, createTransAmDb, dbEnsurePrelude } from "../transam/index";
-import { requestCancel, resetCancel } from "../transam/cancel";
+import { resetCancel } from "../transam/cancel";
 import { lspDispatch, buildTransitiveDiagnosticsWire, CompletionCache, createCompletionCache } from "./handlers";
 import { readLine, readBytes, writeStdout, writeStderr, stdinHasData, stdinDisableBuffering } from "std/io";
 import { clockMs } from "std/process";
@@ -203,6 +203,7 @@ export function lspRunServer(): void {
 			}
 			qi = qi + 1;
 		}
+
 	}
 
 	lspLog("MetaScript LSP server exiting");

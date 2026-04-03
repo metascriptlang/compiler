@@ -14,14 +14,14 @@ import { readFile, clockMs, readDir } from "std/process";
 import { translateCHeader } from "../../module/cparse";
 import { writeStderr } from "std/io";
 import {
-	lspJsonString, lspJsonNumber, lspJsonBool, lspJsonNull,
+	lspJsonString, lspJsonNumber,
 	lspGetField, lspGetNumberField, lspGetObjectField,
-	lspResponse, lspNotification, lspErrorResponse,
-	lspUriToPath, lspPathToUri, lspResolveImport, lspResolveImportCandidates, lspFormatMessage,
+	lspResponse, lspNotification,
+	lspUriToPath, lspPathToUri, lspResolveImportCandidates, lspFormatMessage,
 	lspDirname
 } from "./protocol";
 import {
-	lspFmtPosition, lspFmtRange, lspFmtLineRange,
+	lspFmtRange,
 	lspFmtLocation, lspFmtTextEdit,
 	lspFmtCompletionItem, lspFmtHoverResult,
 	lspFmtDiagnostic, lspFmtPublishDiagnostics,
@@ -30,36 +30,30 @@ import {
 	lspFmtMultiLineTextEdit
 } from "./format";
 import {
-	sgTypeToString,
-	sgFormatHover, sgCollectDiagnostics,
-	sgDetectCompletionContext, sgGetPrefix, sgGetCompletionCandidates,
-	sgCollectSymbolsInFile, sgFormatSignature, sgFormatExtensionSignatures, sgGetSignatureContext, SgSignatureContext,
-	sgCollectInlayHints,
+	sgTypeToString, sgFormatHover, sgCollectDiagnostics, sgDetectCompletionContext, sgGetPrefix, sgGetCompletionCandidates,
+	sgCollectSymbolsInFile, sgFormatSignature, sgFormatExtensionSignatures, sgGetSignatureContext, sgCollectInlayHints,
 	sgFormatHoverDoc, sgExtractDocComment, sgBuiltinDoc,
 	sgFindImportSource, sgFindImportBySource, sgFindExportedDecl, sgExtractImportPath, sgExtractImportSource, sgExtractExistingImportNames,
-	sgComputeImportEdit,
-	sgQueryAtPosition, sgQueryBySym, sgQueryByName, sgQueryByDefiningModule,
+	sgComputeImportEdit, sgQueryAtPosition, sgQueryBySym, sgQueryByName, sgQueryByDefiningModule,
 	SgSuggest, SgCompletionKind, sgObjectFieldPathAST, sgCompleteObjectFields,
 	findEnclosingObjectLiteral, findNodeAtPosition,
-	sgGetLineOffset, sgIsIdentChar,
-	SgSymbolRef,
+	sgGetLineOffset,
 	SgDocumentSymbol,
 	SgSignatureInfo,
-	SgInlayHint, SgInlayHintKind,
-	SgDiagnostic,
+	SgInlayHintKind,
 	SgSemanticToken, sgCollectSemanticTokens, sgSortTokens
 } from "../../checker/suggest";
-import { CheckerContext, createContext, findModuleExports, ExportedSymInfo } from "../../checker/context";
+import { CheckerContext, findModuleExports } from "../../checker/context";
 import { SymbolFlag, hasFlag, lookupSymbol } from "../../checker/symbol";
-import { unknownType, getProperty, typeNameOf, createTypeRef } from "../../checker/types";
-import { Node, IdentifierData, MemberExprData, ObjectLiteralData, VariableDeclData, NodeKind, ProgramData, ImportDeclData, ExportDeclData, SourceLocation, makeLoc, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { createTypeRef } from "../../checker/types";
+import { Node, MemberExprData, ObjectLiteralData, VariableDeclData, NodeKind, ProgramData, ImportDeclData, ExportDeclData, SourceLocation, makeLoc, Type, Symbol, SymbolKind } from "../../ast/node";
 import { forEachChild } from "../../ast/visitor";
 import { FormatOptions, defaultFormatOptions, applyFmtSection } from "../fmt/options";
 import { printNode as printFormattedNode } from "../fmt/printer";
 import { formatDoc } from "../fmt/layout";
 import { registerCoreParsers } from "../../parser/statements/core";
 import { parseSource } from "../../parser/statements/validation";
-import { FmtSection, defaultFmtSection, loadFmtSection, validateBuildConfig } from "../buildConfig";
+import { loadFmtSection, validateBuildConfig } from "../buildConfig";
 import { isMsModuleExtension, stripMsModuleExtension } from "../../module/resolver";
 
 
@@ -841,7 +835,7 @@ export function buildTransitiveDiagnosticsWire(db: TransAmDb, path: string): str
 
 export function handleInitialize(id: string): string {
 	const caps = "{\"capabilities\":{"
-		+ "\"textDocumentSync\":{\"openClose\":true,\"change\":1}"
+		+ "\"textDocumentSync\":1"
 		+ ",\"hoverProvider\":true"
 		+ ",\"completionProvider\":{\"triggerCharacters\":[\".\",\"/\"],\"resolveProvider\":true}"
 		+ ",\"definitionProvider\":true"
@@ -859,7 +853,7 @@ export function handleInitialize(id: string): string {
 		+ "\"enumMember\",\"event\",\"function\",\"method\",\"macro\","
 		+ "\"keyword\",\"modifier\",\"comment\",\"string\",\"number\","
 		+ "\"regexp\",\"operator\",\"decorator\"],"
-		+ "\"tokenModifiers\":[\"declaration\",\"definition\",\"readonly\",\"static\",\"defaultLibrary\",\"unnecessary\"]}"
+		+ "\"tokenModifiers\":[\"declaration\",\"definition\",\"readonly\",\"static\",\"defaultLibrary\"]}"
 		+ ",\"full\":true}"
 		+ "}}";
 	return lspResponse(id, caps);

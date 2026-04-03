@@ -1,19 +1,11 @@
 // Raiser VM — Disassembler
 // Human-readable bytecode formatting for debugging and test output.
 
-import {
-	RaiserOpcode, RaiserInstruction,
-	raiserABC, raiserABx, raiserAx,
-	getBx, getSignedAx
-} from "./bytecode";
-import {
-	RaiserValue, raiserInt, raiserToString
-} from "./value";
+import { RaiserOpcode, RaiserInstruction, raiserABC, raiserABx, raiserAx, getBx, getSignedAx } from "./bytecode";
+import { raiserInt, raiserToString } from "./value";
 import {
 	RaiserModule, RaiserFunction,
-	getModuleEntry, getFuncName, getFuncCodeLen,
-	getFuncInst, getFuncConst, getFuncConstLen,
-	makeTestModule
+	getModuleEntry, getFuncName, getFuncCodeLen, getFuncInst, getFuncConst, getFuncConstLen, makeTestModule
 } from "./module";
 
 // --- Opcode names ---

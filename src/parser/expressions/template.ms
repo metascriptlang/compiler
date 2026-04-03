@@ -2,8 +2,8 @@
 // `hello ${name}, age ${age}!` → "hello " + name + ", age " + age + "!"
 // Pattern: ~/projects/metascript/src/parser/parser.zig parseTemplateExpression()
 
-import { Token, TokenKind } from "../../lexer/token";
-import { Node, NodeKind, NodeData, Expression, createNode } from "../../ast/node";
+import { TokenKind } from "../../lexer/token";
+import { Node, NodeKind, Expression, createNode } from "../../ast/node";
 import { ParserState, current, advance, isAtEnd } from "../context";
 import { parseOk } from "./util";
 

@@ -19,13 +19,9 @@ import { taHashString } from "./hash";
 import {
 	TaCacheEntry, createCacheEntry,
 	TaDependencyStack,
-	createDependencyStack, pushFrame, popFrame,
-	recordDependency, recordDurability, hasActiveFrame
+	createDependencyStack, pushFrame, popFrame, recordDependency, recordDurability,
 } from "./query";
-import {
-	TaCacheStore, createCacheStore, cacheGet, cachePut,
-	cacheContains, markQueriesRedForFile
-} from "./cache";
+import { TaCacheStore, createCacheStore, cacheGet, cachePut, cacheContains } from "./cache";
 import {
 	TaFileInputStore, createFileInputStore,
 	setFileText, getFileText, getFileHash, getFileId, getFilePath, hasFile,
@@ -49,26 +45,17 @@ import {
 } from "./intern";
 
 import { parseSource, parseSourceLenient } from "../../parser/statements/validation";
-import { checkProgram, checkProgramWithRegistryCancellable, buildPreludeContext } from "../../checker/index";
+import { checkProgramWithRegistryCancellable, buildPreludeContext } from "../../checker/index";
 import { transformProgram } from "../../transform/index";
 import { analyzeProgram } from "../../analyzer/index";
-import {
-	ExportRegistry, createExportRegistry, ExportedSymInfo,
-	findModuleExports, registerModuleExports, findExportedSymbol,
-	collectExports,
-} from "../../checker/context";
+import { ExportRegistry, createExportRegistry, findModuleExports, registerModuleExports, findExportedSymbol, collectExports } from "../../checker/context";
 import { collectTopLevelLocal, collectTopLevel } from "../../checker/collectPass";
 import { resolveDeclarations } from "../../checker/resolvePass";
 import { openScope, ScopeKind } from "../../checker/symbol";
-import {
-	ImportDeclData, ExportDeclData, ProgramData, EnumDeclData, makeLoc, Symbol,
-} from "../../ast/node";
-import {
-	Module, ModuleGraph, createModule, createModuleGraph, addModule,
-	ImportEntry, createImportEntry,
-} from "../../module/graph";
+import { ImportDeclData, ExportDeclData, ProgramData } from "../../ast/node";
+import { createModule, createModuleGraph, addModule, ImportEntry, createImportEntry } from "../../module/graph";
 import { getDirectImports } from "./moduleDeps";
-import { lspDirname, lspResolveImport, lspResolveImportCandidates } from "../lsp/protocol";
+import { lspResolveImportCandidates } from "../lsp/protocol";
 import { translateCHeader } from "../../module/cparse";
 
 // ===== Stdlib Detection =====

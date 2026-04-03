@@ -2,16 +2,12 @@
 
 import {
 	Node, NodeKind, DeclKind, SourceLocation,
-	DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData,
-	IdentifierData,
+	DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, IdentifierData,
 } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
 import { unknownType } from "../../checker/types";
 import { walkExpandBlocks } from "../walker";
-import {
-	makeIdent, makeIdentResolved, makeVarDecl, makeNumber, makeArrayAccess, makeMember, makeCall,
-	boolToDeclKind,
-} from "../util";
+import { makeIdentResolved, makeVarDecl, makeNumber, makeArrayAccess, makeMember, makeCall, boolToDeclKind } from "../util";
 import { stmtCountAfter, firstStmtKindAfter } from "../testUtil";
 
 // ===== Main Entry Point =====

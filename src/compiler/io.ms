@@ -1,7 +1,7 @@
 // MetaScript Compiler CLI — File I/O and shared error helpers
 
 import { exit, exec, readFile, writeFile, clockMs } from "std/process";
-import { CheckerContext, hasErrors, errorCount } from "../checker/context";
+import { CheckerContext } from "../checker/context";
 import { error, red, green, bold, dim, path } from "../utils/color";
 
 

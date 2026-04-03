@@ -1,34 +1,28 @@
 // Statement Checker — Pass 3 statement validation and control flow
 // Expression checking extracted to checkExprPass.ms. Uses checkerCallbacks for mutual recursion.
 
-import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, makeLoc, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, VariableDeclData, FunctionDeclData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, StringLiteralData, CallExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
+import { Node, NodeKind, NodeFlag, DeclKind, SourceLocation, createNodeAt, ExprStmtData, ThrowStmtData, DeferStmtData, DecoratedDeclData, IdentifierData, BinaryExprData, MemberExprData, VariableDeclData, FunctionDeclData, ClassDeclData, ActorDeclData, MethodDeclData, ConstructorDeclData, ExportDeclData, ImportDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, ForInStmtData, DoWhileStmtData, BlockStmtData, ReturnStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData, MatchStmtData, MatchCaseData, DestructuringDeclData, ArrayPatternData, ObjectPatternData, ObjectPatternPropData, ObjectLiteralData, ProgramData, MacroInvocationData, StringLiteralData, CallExprData, TestDeclData, AssertStmtData, Type, TypeKind, Symbol, SymbolKind, SymbolState } from "../ast/node";
 import { linkFlags, linkObjects } from "../utils/linkState";
 
-import { unknownType, nullType, stringType, charType, numberType, float64Type, voidType, createFunction, createUnion, isMaybeType, unwrapMaybeType, isNarrowingIntConv, typeNameOf, isPromise, getPromiseInner, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant } from "./types";
-import { ScopeKind, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, setFlag, hasFlag, markUsed, SymbolFlag } from "./symbol";
-import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContext, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, hasFatalErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExtensionMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, buildExportInfo, isCancelled, sgRecordSym, sgSortRecords, isInAsyncPromiseResult } from "./context";
+import { unknownType, nullType, stringType, charType, float64Type, voidType, createFunction, createUnion, isMaybeType, unwrapMaybeType, typeNameOf, isPromise, getPromiseInner, isIterator, getIteratorYieldType, isResult, getResultOkType, getResultErrType, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant } from "./types";
+import { ScopeKind, defineSymbol, lookupSymbol, lookupLocal, makeSymbol, openScope, closeScope, setFlag, hasFlag, SymbolFlag } from "./symbol";
+import { CheckerContext, CancelCtx, JsImportEntry, createContext, createContextWithCache, createModuleContextWithCache, addError, addFatalError, addWarning, addWarningRange, addHintRange, hasErrors, errorCount, createExtensionRegistry, registerExtension, createExtMethod, ExportRegistry, ExportedSymInfo, registerModuleExports, buildExportInfo, isCancelled, sgRecordSym, sgSortRecords, isInAsyncPromiseResult } from "./context";
 import { IdentCache, createIdentCache } from "./idents";
 import { Module, ModuleGraph } from "../module/graph";
 import { collectTopLevel, defineOrError } from "./collectPass";
-import { getIdentId } from "./idents";
 import { readFile } from "std/process";
 import { translateCHeader } from "../module/cparse";
 import { globalImports } from "./prelude";
 import { isAssignable } from "./compat";
-import { resolveDeclarations, resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped } from "./resolvePass";
+import { resolveDeclarations, resolveAnnotation, resolveTypeExpr, ensureShaped } from "./resolvePass";
 import { inferOwnership } from "./ownershipInference";
 import { analyzeParamMutations } from "./paramMutationAnalysis";
-import { validateTypedAST } from "./validate";
-import { getModuleDir, appendFlag, prependFlag, concatFlag } from "../utils/string";
+import { getModuleDir, appendFlag } from "../utils/string";
 import { checkExpr, checkEnumExhaustiveness, checkDuplicatePatterns, fitNode, estimateExprEndCol } from "./checkExprPass";
 import { registerCheckStmt, registerCheckFunctionBody } from "./checkerCallbacks";
 import "./instantiate"; // side-effect: registers instantiateGenericFunction callback
 import { parseSource } from "../parser/statements/validation";
-import {
-	InitTracker, BreakState, createInitTracker,
-	markInitialized, isInitialized, saveInitState, restoreInitState,
-	breaksBlock, mergeInitBranches, collectNewInits, isAlwaysTrue, impliesNotNull, varDecl,
-} from "./initTracker";
+import { BreakState, markInitialized, saveInitState, restoreInitState, breaksBlock, mergeInitBranches, collectNewInits, isAlwaysTrue, impliesNotNull, varDecl } from "./initTracker";
 
 // Extract directory from module path (e.g. "src/foo/bar.ms" → "src/foo")
 // Brief type description for error messages
@@ -628,10 +622,12 @@ function checkForStmt(ctx: CheckerContext, node: Node): void {
 
 function iterableElemType(t: Type): Type {
 	if (t === null) return unknownType();
-	if ((t.kind === TypeKind.Array || t.kind === TypeKind.SizedArray || t.kind === TypeKind.Span) && t.typeReturn !== null) return t.typeReturn;
-	if (t.kind === TypeKind.String) return charType();
-	if (isIterator(t)) return getIteratorYieldType(t);
-	return unknownType();
+	return match (t.kind) {
+		TypeKind.Array | TypeKind.SizedArray | TypeKind.Span =>
+			t.typeReturn !== null ? t.typeReturn : unknownType(),
+		TypeKind.String => charType(),
+		_ => isIterator(t) ? getIteratorYieldType(t) : unknownType(),
+	};
 }
 
 function checkForOfStmt(ctx: CheckerContext, node: Node): void {
@@ -641,7 +637,9 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 	// Implicit iterator: for non-array/string types, resolve .toItems() during checking.
 	// The checker creates and type-checks the call — generic instantiation happens naturally.
 	// (Reference: semFor → implicitIterator("items", collection) → semExpr)
-	if (elemType.kind === TypeKind.Unknown && d.forOfIterable.nodeType !== null && d.forOfIterable.nodeType.kind !== TypeKind.Unknown) {
+	if (elemType.kind === TypeKind.Unknown && d.forOfIterable.nodeType !== null
+			&& d.forOfIterable.nodeType.kind !== TypeKind.Unknown
+			&& d.forOfIterable.nodeType.kind !== TypeKind.Error) {
 		const loc = d.forOfIterable.location;
 		const toItemsCall = createNodeAt(NodeKind.CallExpr, {
 			callee: createNodeAt(NodeKind.MemberExpr, {
@@ -650,10 +648,12 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 			arguments: [], isDirectCall: true, resolvedOverloadIdx: -1,
 		} as CallExprData, loc);
 		checkExpr(ctx, toItemsCall, null);
-		const resolved = iterableElemType(toItemsCall.nodeType);
-		if (resolved.kind !== TypeKind.Unknown) {
-			elemType = resolved;
-			d.forOfIterable = toItemsCall;
+		if (toItemsCall.nodeType !== null && toItemsCall.nodeType.kind !== TypeKind.Error) {
+			const resolved = iterableElemType(toItemsCall.nodeType);
+			if (resolved.kind !== TypeKind.Unknown) {
+				elemType = resolved;
+				d.forOfIterable = toItemsCall;
+			}
 		}
 	}
 	// Ref parity: for loops — conservative, loop may not execute
@@ -1075,7 +1075,6 @@ export function runThreePasses(ctx: CheckerContext, program: Node): void {
 	collectTopLevel(ctx, program);
 	resolveDeclarations(ctx, program);
 	checkProgramBody(ctx, program);
-	// Only report unused in real modules (not inline test snippets)
 	if (ctx.modulePath !== "") reportUnusedSymbols(ctx, program);
 }
 

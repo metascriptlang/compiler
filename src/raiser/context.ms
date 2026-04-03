@@ -11,13 +11,13 @@
 //   execute(ctx);                // macro sees build.ms results
 
 import {
-	RaiserValue, RaiserValueKind, raiserNil, raiserInt, raiserToString, raiserIsNil,
+	RaiserValue, raiserNil, raiserInt,
 	RaiserArrayHeap, createArrayHeap,
 	RaiserObjectHeap, createStructHeap
 } from "./value";
 import { RaiserModule, makeTestModule } from "./module";
 import { RaiserOpcode, RaiserInstruction, raiserABC, raiserABx } from "./bytecode";
-import { RaiserVM, execModule, vmDumpStack } from "./vm";
+import { execModule, vmDumpStack } from "./vm";
 
 // --- Context ---
 

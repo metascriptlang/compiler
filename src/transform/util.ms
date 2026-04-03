@@ -2,9 +2,9 @@
 // Each helper wraps createNode with the correct NodeKind and data shape.
 
 import { Token, TokenKind, createToken } from "../lexer/token";
-import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, BlockStmtData, VariableDeclData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, CallExprData, MemberExprData, IdentifierData, Type, TypeKind } from "../ast/node";
+import { Node, NodeKind, DeclKind, SourceLocation, createNode, makeLoc, Symbol, BlockStmtData, VariableDeclData, IfStmtData, WhileStmtData, TryCatchStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData, Type, TypeKind } from "../ast/node";
 import { createFunction, createStruct, createArray, numberType, int32Type, float64Type, stringType, booleanType, voidType, nullType, unknownType, getSysType, isResult, getResultOkType, getResultErrType } from "../checker/types";
-import { TransformContext, freshTemp, freshTempSym, NameSet, nameSetAdd } from "./context";
+import { TransformContext, freshTempSym, NameSet, nameSetAdd } from "./context";
 
 // Create a synthetic token from a source location (for transform-generated nodes)
 export function syntheticToken(loc: SourceLocation): Token {

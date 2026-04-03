@@ -30,7 +30,7 @@ import {
 import { createStruct, isIterator, getIteratorYieldType, getIteratorNextFnType, createPrimitive, hasGenericParams } from "../../checker/types";
 import { TransformContext, NameSet, createNameSet, nameSetContains } from "../context";
 import {
-	makeIdent, makeTypedIdent, makeNull, makeDefaultValue, makeNumber, makeBool,
+	makeIdent, makeTypedIdent, makeNull, makeNumber, makeBool,
 	makeBlock, makeVarDecl, makeExprStmt, makeReturn,
 	makeIf, makeWhile, makeBinary, makeAssign,
 	makeObjectLiteral, syntheticToken, extractBodyStmts,

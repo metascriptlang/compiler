@@ -18,7 +18,7 @@
 //
 // Reference compiler: parser.zig:7162 isOperatorName, lexer.zig:422 scanBacktick
 
-import { Node, NodeKind, BinaryExprData, IdentifierData, TypeAssertionData, SourceLocation, ProgramData, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, BinaryExprData, IdentifierData, TypeAssertionData, SourceLocation, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { TransformContext, PendingTupleOp } from "../context";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall, makeUnary, makeBool, makeMember, makeBinary } from "../util";
@@ -304,9 +304,9 @@ export function lowerOperators(program: Node, ctx: TransformContext): Node {
 
 import { createContext, createExtensionRegistry, registerExtension } from "../../checker/context";
 import { createStruct, createFunction, createTuple, createRef, createPtr, createMaybeType, unknownType, numberType, stringType, booleanType } from "../../checker/types";
-import { defineSymbol, makeSymbol, createSymbolTable } from "../../checker/symbol";
-import { createTransformContext, createTransformContextWithChecker } from "../context";
-import { parseInput, getStmts, firstExprKind, firstCallArgCount } from "../testUtil";
+import { defineSymbol, makeSymbol } from "../../checker/symbol";
+import { createTransformContextWithChecker } from "../context";
+import { parseInput, getStmts, firstExprKind } from "../testUtil";
 
 function makeOpExt(receiverType: string, opName: string): ExtensionMethod {
 	return {

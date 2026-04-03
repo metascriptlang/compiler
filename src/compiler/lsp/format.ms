@@ -3,8 +3,7 @@
 // All functions use JsonBuilder (string concatenation). No JSON.stringify.
 // Safe from circular references. Fast (no object graph walking).
 
-import { lspJsonString } from "./protocol";
-import { jsonObj, jsonArr, jStr, jNum, jBool, jRaw, jStrIf, jRawIf, jItem, jStrItem, jEnd } from "./responseBuilder";
+import { jsonObj, jsonArr, jStr, jNum, jBool, jRaw, jStrIf, jRawIf, jStrItem, jEnd } from "./responseBuilder";
 
 // ===== Position + Range =====
 

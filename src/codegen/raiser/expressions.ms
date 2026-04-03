@@ -10,9 +10,7 @@ import {
 	ArrayLiteralData, ArrayAccessData, ObjectLiteralData,
 	MoveExprData
 } from "../../ast/node";
-import {
-	RaiserOpcode, raiserABC, raiserABx
-} from "../../raiser/bytecode";
+import { RaiserOpcode, raiserABC } from "../../raiser/bytecode";
 import { raiserInt, raiserFloat, raiserNil, raiserBool, raiserString } from "../../raiser/value";
 import {
 	RaiserCompState, emitInst, allocReg, addConst, emitLoadConst, resolveLocal,

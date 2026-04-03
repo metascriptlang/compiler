@@ -11,7 +11,7 @@ import { Node, NodeKind, ProgramData, EnumDeclData, ExportDeclData, TypeKind, Sy
 import { TransformContext } from "../context";
 import {
 	makeSwitch, makeSwitchCase, makeReturn, makeString, makeNumber,
-	makeIdent, makeBlock, makeFnDecl, syntheticToken, enumToStringName,
+	makeIdent, makeBlock, makeFnDecl, enumToStringName,
 } from "../util";
 import { createEnum, stringType, createFunction } from "../../checker/types";
 import { SourceLocation, makeLoc } from "../../ast/node";

@@ -4,16 +4,14 @@
 // formatHover, collectDiagnostics. No I/O, no protocol knowledge.
 // Called by src/lsp/handlers.ms.
 
-import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, ProgramData, DeclKind, IdentifierData, MemberExprData, CallExprData, BinaryExprData, UnaryExprData, VariableDeclData, FunctionDeclData, IfStmtData, WhileStmtData, ForStmtData, ForOfStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, ArrayLiteralData, ObjectLiteralData, ConditionalExprData, ArrowFunctionData, ArrayAccessData, MatchExprData, MatchCaseData, TryCatchStmtData, TryExprData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExportDeclData, ImportDeclData, HiddenDerefData, HiddenStdConvData, MethodDeclData, PropertyDeclData, ConstructorDeclData, NewExprData, NumberLiteralData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
+import { Node, NodeKind, SourceLocation, makeLoc, createNodeAt, ProgramData, DeclKind, IdentifierData, MemberExprData, CallExprData, VariableDeclData, FunctionDeclData, ObjectLiteralData, TryExprData, ClassDeclData, ActorDeclData, InterfaceDeclData, EnumDeclData, TypeAliasDeclData, ExportDeclData, ImportDeclData, HiddenStdConvData, MethodDeclData, PropertyDeclData, ConstructorDeclData, NewExprData, NumberLiteralData, Type, TypeKind, Symbol, SymbolKind } from "../ast/node";
 import { forEachChild } from "../ast/visitor";
-import { typeNameOf, getProperty, unwrapRef, numberType, stringType, booleanType, voidType, nullType, unknownType, neverType, errorType, isResult, getResultOkType, getResultErrType } from "./types";
-import { SymbolTable, Scope, ScopeKind, lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
+import { typeNameOf, unwrapRef, numberType, stringType, booleanType, voidType, nullType, unknownType, neverType, errorType, isResult, getResultOkType, getResultErrType } from "./types";
+import { ScopeKind, lookupSymbol, makeSymbol, hasFlag, SymbolFlag } from "./symbol";
 import { CheckerContext, findAllExtensionsByName, filterExtsByReceiverType, getExtFnType, stripReceiverParam, SgSymRecord } from "./context";
 // (utils/string imports removed — using native .slice/.charAt)
 import { checkProgram } from "./checkPass";
 import { parseSource, parseSourceLenient } from "../parser/statements/validation";
-// Import parseProgram to trigger callback registration (side-effect import)
-import { parseProgram } from "../parser/statements/core";
 
 // ===== Data Types =====
 
@@ -2421,7 +2419,6 @@ function sgCollectTokensInNode(ctx: CheckerContext, node: Node, tokens: SgSemant
 			let mods: int32 = 0;
 			if (!hasFlag(sym, SymbolFlag.Mutable) && sym.symbolKind === SymbolKind.Variable) mods = 4; // readonly bit 2
 			if (sym.builtinKind.length > 0) mods = mods | 16; // defaultLibrary bit 4
-			if (!hasFlag(sym, SymbolFlag.Used) && !hasFlag(sym, SymbolFlag.Exported)) mods = mods | 32; // unnecessary bit 5
 			const tok: SgSemanticToken = { line: loc.line, col: loc.column, length: id.name.length, tokenType: tt, modifiers: mods };
 			tokens.push(tok);
 		}

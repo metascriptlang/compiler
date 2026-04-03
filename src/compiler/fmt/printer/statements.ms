@@ -1,20 +1,14 @@
 // Statement Printers — blocks, declarations, loops, etc.
 
 import {
-	Node, NodeKind, DeclKind,
-	ProgramData, BlockStmtData, VariableDeclData,
+	Node, NodeKind, DeclKind, ProgramData, BlockStmtData, VariableDeclData,
 	ExprStmtData, ReturnStmtData, IfStmtData, WhileStmtData,
-	ForStmtData, ForOfStmtData, DoWhileStmtData,
-	SwitchStmtData, SwitchCaseData,
-	MatchStmtData, ThrowStmtData, TryCatchStmtData, DeferStmtData,
-	FunctionDeclData,
+	ForStmtData, ForOfStmtData, DoWhileStmtData, SwitchStmtData, SwitchCaseData,
+	MatchStmtData, ThrowStmtData, TryCatchStmtData, DeferStmtData, FunctionDeclData,
 } from "../../../ast/node";
 import { Token } from "../../../lexer/token";
 import { FormatOptions, CommaContext, wantsTrailingComma } from "../options";
-import {
-	Doc, docText, docGroup, docIndent,
-	docLine, docSoftLine, docHardLine, docJoin, docCommaSepList,
-} from "../doc";
+import { Doc, docText, docGroup, docIndent, docSoftLine, docHardLine, docJoin, docCommaSepList } from "../doc";
 import { callPrintNode } from "./callbacks";
 
 export function printProgram(node: Node, options: FormatOptions): Doc {

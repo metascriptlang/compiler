@@ -7,12 +7,12 @@
 //
 // Reference compiler: normalize.zig Pass 7.
 
-import { Node, NodeKind, NodeFlag, CallExprData, MemberExprData, ExprStmtData, TypeKind, SymbolKind, Symbol } from "../../ast/node";
+import { Node, NodeKind, NodeFlag, CallExprData, MemberExprData, ExprStmtData, SymbolKind, Symbol } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeIdent, makeCall } from "../util";
 import { defineSymbol, makeSymbol } from "../../checker/symbol";
-import { unknownType, createStruct, createFunction } from "../../checker/types";
+import { unknownType, createFunction } from "../../checker/types";
 import { createContext, registerExtension, ExtensionMethod } from "../../checker/context";
 import { parseInput, getStmts, firstCalleeKind, firstCallArgCount } from "../testUtil";
 import { createTransformContext, createTransformContextWithChecker } from "../context";

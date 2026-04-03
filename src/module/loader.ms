@@ -16,11 +16,8 @@
 // The checker re-parses Module.source for each pass.
 
 import {
-	Module, ModuleGraph, ModuleState, ImportEntry,
-	createModuleGraph, createModule, createImportEntry,
-	findModule, hasModule, addModule,
-	isInImportStack, pushImportStack, popImportStack,
-	createModuleError, ErrorSeverity,
+	Module, ModuleGraph, ModuleState, createModuleGraph, createModule, createImportEntry,
+	findModule, hasModule, addModule, pushImportStack, popImportStack, createModuleError, ErrorSeverity,
 } from "./graph";
 import { resolveImport, resolveImportWithConfig, isStdImport, ResolverConfig } from "./resolver";
 import { lex } from "../lexer/lexer";

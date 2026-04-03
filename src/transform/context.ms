@@ -1,7 +1,7 @@
 // Transform Context — shared state across all transforms
 
 import { CheckerContext } from "../checker/context";
-import { Node, Type, Symbol, SymbolKind } from "../ast/node";
+import { Type, Symbol, SymbolKind } from "../ast/node";
 import { makeSymbol } from "../checker/symbol";
 import { unknownType } from "../checker/types";
 

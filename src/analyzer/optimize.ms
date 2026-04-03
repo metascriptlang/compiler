@@ -7,17 +7,15 @@
 // Walks all blocks recursively, scanning consecutive statements.
 
 import {
-	Node, NodeKind, SourceLocation, ProgramData,
+	Node, NodeKind, ProgramData,
 	BlockStmtData, ExprStmtData, CallExprData, IdentifierData,
 	FunctionDeclData, IfStmtData, WhileStmtData, ForStmtData,
 	TryCatchStmtData, SwitchStmtData, SwitchCaseData,
 	ExportDeclData, ClassDeclData, MethodDeclData, ConstructorDeclData,
-	ForOfStmtData, DoWhileStmtData, ReturnStmtData,
+	ForOfStmtData, DoWhileStmtData,
 } from "../ast/node";
-import { TransformContext, NameSet, createNameSet, nameSetContains, nameSetAdd, nameSetIntersect } from "../transform/context";
-import {
-	makeIdent, makeBlock, makeExprStmt, makeCall,
-} from "../transform/util";
+import { NameSet, createNameSet, nameSetContains, nameSetAdd, nameSetIntersect } from "../transform/context";
+import { makeIdent, makeBlock, makeExprStmt, makeCall } from "../transform/util";
 import { testLoc } from "./inject";
 
 // ===== Known wasMoved / destroy function names =====

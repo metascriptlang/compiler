@@ -8,8 +8,8 @@
 // This guarantees the + chain is string concatenation (JS/TS coercion rules).
 // Chains of length 2 are left as binary (no benefit from flattening).
 
-import { Node, NodeKind, SourceLocation, BinaryExprData, CallExprData, IdentifierData, TypeKind, collectConcatParts } from "../../ast/node";
-import { isNumeric, stringType, isStringLike } from "../../checker/types";
+import { Node, NodeKind, SourceLocation, BinaryExprData, CallExprData, IdentifierData, collectConcatParts } from "../../ast/node";
+import { stringType, isStringLike } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeCall, makeIdent, makeNumber, makeMember } from "../util";

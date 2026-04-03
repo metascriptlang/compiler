@@ -1,4 +1,4 @@
-import { SourceLocation, Node, Symbol, SymbolKind, SymbolState, makeLoc, Type, TypeKind } from "../ast/node";
+import { Node, Symbol, SymbolKind, SymbolState, makeLoc, Type, TypeKind } from "../ast/node";
 import { unknownType } from "./types";
 import { IdentCache, createIdentCache, getIdentId } from "./idents";
 

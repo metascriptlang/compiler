@@ -2,7 +2,7 @@
 
 
 import {
-	Node, NodeKind, DeclKind, SourceLocation, makeLoc, createNode,
+	Node, NodeKind, SourceLocation, makeLoc, createNode,
 	// Literals
 	NumberLiteralData, StringLiteralData, BooleanLiteralData,
 	BigIntLiteralData, RegexLiteralData,
@@ -39,12 +39,9 @@ import { evalASTFull } from "../codegen/raiser/eval";
 import {
 	RaiserValueKind, RaiserValue,
 	RaiserObjectHeap, RaiserArrayHeap,
-	heapArrayGet, heapArrayLen,
-	raiserInt, raiserFloat, raiserBool, raiserString, raiserNil, raiserObject, raiserArray,
-	heapAllocObject, heapObjectSetField, heapObjectGetField,
-	heapAllocArray, heapArrayPush,
-	createStructHeap, createArrayHeap,
-	clearObjectHeap, clearArrayHeap,
+	heapArrayGet, heapArrayLen, raiserInt, raiserFloat, raiserBool, raiserString, raiserObject, raiserArray,
+	heapAllocObject, heapObjectSetField, heapObjectGetField, heapAllocArray, heapArrayPush, createStructHeap,
+	createArrayHeap, clearObjectHeap, clearArrayHeap,
 } from "../raiser/value";
 import { RaiserContext } from "../raiser/context";
 

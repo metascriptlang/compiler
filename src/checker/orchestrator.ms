@@ -1,21 +1,19 @@
 // Module orchestrator — coordinates checking across module graph
 // Reference parallel implementation
 
-import { Node, NodeKind, EnumDeclData, makeLoc, SourceLocation, Type, SymbolKind } from "../ast/node";
+import { NodeKind, EnumDeclData, makeLoc, SourceLocation } from "../ast/node";
 import {
-	CheckerContext, createModuleContext, createModuleContextWithCache, Severity,
+	CheckerContext, createModuleContextWithCache, Severity,
 	ExportRegistry, ExportedSymInfo, createExportRegistry, registerModuleExports, updateModuleExports,
-	buildExportInfo, collectExports, registerExtension,
+	collectExports, registerExtension,
 } from "./context";
 import { ScopeKind, openScope, hasFlag, SymbolFlag } from "./symbol";
-import { getIdentId } from "./idents";
-import { Module, ModuleGraph, findModule, createModuleError, ErrorSeverity } from "../module/graph";
+import { ModuleGraph, findModule, createModuleError, ErrorSeverity } from "../module/graph";
 import { runThreePasses, buildPreludeContext, getSharedIdentCache, collectDirectives, stampHeaderPaths, injectPrelude } from "./checkPass";
 import { collectTopLevelLocal } from "./collectPass";
 import { inferOwnership } from "./ownershipInference";
-import { parseSource } from "../parser/statements/validation";
 import { lex } from "../lexer/lexer";
-import { ParserState, createState } from "../parser/context";
+import { createState } from "../parser/context";
 import { callStateProgramParser } from "../parser/statements/callbacks";
 import "../parser/statements/core";
 
@@ -185,12 +183,8 @@ export function checkModuleGraph(graph: ModuleGraph, stdPath: string, backendExt
 
 // ===== Tests =====
 
-import {
-	createModuleGraph, createModule, hasExportName,
-} from "../module/graph";
-import {
-	MapEntry, SourceProvider, createMapProvider, loadModuleGraph,
-} from "../module/loader";
+import { hasExportName } from "../module/graph";
+import { MapEntry, createMapProvider, loadModuleGraph } from "../module/loader";
 test "single file checked" {
 	const entries: MapEntry[] = [];
 	entries.push({ entryPath: "/src/a.ms", entrySource: "const x = 1;" });

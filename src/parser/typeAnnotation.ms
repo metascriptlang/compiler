@@ -9,7 +9,7 @@
 // Every node carries .location from the token it was parsed from, enabling LSP symbol recording.
 
 import { Token, TokenKind } from "../lexer/token";
-import { Node, NodeKind, createNode, createNodeAt, TypeAnnotationData, IdentifierData, TypeGenericData, Symbol } from "../ast/node";
+import { Node, NodeKind, createNode, createNodeAt, TypeAnnotationData, IdentifierData, TypeGenericData } from "../ast/node";
 import { ParserState, createState, current, advance, isAtEnd, skipBalanced, skipGenericParams, collectTokenText } from "./context";
 import { lex } from "../lexer/lexer";
 

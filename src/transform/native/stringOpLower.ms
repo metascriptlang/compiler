@@ -15,7 +15,7 @@ import { Node, NodeKind, SourceLocation, BinaryExprData, ArrayAccessData, String
 import { isNumeric, isStringLike } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
-import { makeCall, makeIdent, makeBinary, makeMember, makeUnary } from "../util";
+import { makeCall, makeIdent, makeUnary } from "../util";
 
 // ===== Main Entry Point =====
 

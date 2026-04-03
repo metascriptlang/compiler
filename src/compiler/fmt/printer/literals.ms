@@ -1,9 +1,6 @@
 // Literal Printers — number, string, boolean, identifier
 
-import {
-	Node,
-	NumberLiteralData, StringLiteralData, BooleanLiteralData, IdentifierData,
-} from "../../../ast/node";
+import { Node, NumberLiteralData, StringLiteralData, BooleanLiteralData, IdentifierData } from "../../../ast/node";
 import { FormatOptions } from "../options";
 import { Doc, docText } from "../doc";
 

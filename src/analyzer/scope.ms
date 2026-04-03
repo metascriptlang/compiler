@@ -7,11 +7,11 @@
 //
 // Arrays passed by pointer — bare T[] types (wrappers removed).
 
-import { Node, NodeKind, SourceLocation, makeLoc, ExprStmtData, CallExprData, IdentifierData, Symbol } from "../ast/node";
+import { Node, NodeKind, makeLoc, ExprStmtData, CallExprData, IdentifierData, Symbol } from "../ast/node";
 import { RcInfo, RcKind, noRcInfo } from "./classify";
 import { CursorSet, createCursorSet } from "./cursors";
 import { CfgCache, createCfgCache } from "./cfg";
-import { TransformContext, NameSet, freshTemp, createTransformContext, createNameSet } from "../transform/context";
+import { TransformContext, NameSet, createTransformContext, createNameSet } from "../transform/context";
 import { makeExprStmt, makeNull } from "../transform/util";
 
 // Null symbol constant — used when DRC-generated temps have no checker symbol.

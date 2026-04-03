@@ -3,10 +3,7 @@
 
 import { bareAfterDelim, splitTopLevel } from "../utils/string";
 import { hashToBase36 as _stdHashToBase36 } from "std/hash";
-import {
-	Type, TypeKind, TypeFlag, CallingConvention, AttachedOp,
-	Symbol,
-} from "../ast/node";
+import { Type, TypeKind, TypeFlag, CallingConvention, AttachedOp } from "../ast/node";
 
 // ===== Target Configuration (Implementation parity) =====
 // Module-level state set once at startup. Defaults to 64-bit.

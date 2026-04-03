@@ -5,20 +5,17 @@ import { readFile as hostReadFile, writeFile as hostWriteFile } from "std/proces
 import {
 	RaiserOpcode, RaiserInstruction,
 	raiserABC, raiserABx, raiserAx,
-	getBx, getSignedBx, getSignedAx
+	getBx, getSignedAx
 } from "./bytecode";
 import {
 	RaiserValue, RaiserValueKind,
-	raiserNil, raiserInt, raiserFloat, raiserString, raiserArray, raiserToInt, raiserToBool, raiserToString, raiserIsNil, copyValueInto,
+	raiserNil, raiserInt, raiserString, raiserArray, raiserToString, copyValueInto,
 	RaiserArrayHeap, createArrayHeap, heapAllocArray, heapArrayGet, heapArraySet, heapArrayPush, heapArrayLen,
-	RaiserObjectHeap, RaiserObjectField, createStructHeap, heapAllocObject, heapObjectGetField, heapObjectSetField,
-	raiserObject
+	RaiserObjectHeap, RaiserObjectField, createStructHeap, heapAllocObject, raiserObject
 } from "./value";
 import {
 	RaiserModule, RaiserFunction,
-	makeTestModule, getModuleEntry, getModuleFunc,
-	getFuncCodeLen, getFuncInst, getFuncConst,
-	createRaiserFunction, createRaiserModule
+	makeTestModule, getFuncConst, getFuncInst, getModuleFunc, createRaiserFunction, createRaiserModule,
 } from "./module";
 
 // --- VM State ---

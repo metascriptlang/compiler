@@ -9,12 +9,10 @@
 // Only active when isTestBuild=true. Production builds strip TestDecl entirely.
 // Runtime: runtime/test.h (header-only, not linked into production binaries).
 
-import { Node, NodeKind, TestDeclData, BlockStmtData, Type } from "../../ast/node";
+import { Node, NodeKind, TestDeclData, BlockStmtData } from "../../ast/node";
 import {
-	CGen, CProc, CSection, TestEntry,
-	createProc, createBuilder, add, addLine, addNewline,
-	sec, extract,
-	readProcStmts, readProcLocals,
+	CGen, CProc, CSection,
+	createProc, createBuilder, add, addLine, addNewline, sec, extract, readProcStmts, readProcLocals,
 } from "./context";
 import { genStmt } from "./statements";
 import { mangleModuleName } from "./names";

@@ -5,10 +5,10 @@
 // Re-exports the public API from all sub-modules.
 // analyzeProgram is the main entry point called from src/index.ms.
 
-import { Node, NodeKind, ProgramData, Symbol } from "../ast/node";
+import { Node, NodeKind, ProgramData } from "../ast/node";
 import { CheckerContext, GcMode } from "../checker/context";
-import { TransformContext, createTransformContextWithChecker } from "../transform/context";
-import { createDrcContext, pushScope, popScope, scopeDepth } from "./scope";
+import { createTransformContextWithChecker } from "../transform/context";
+import { createDrcContext, pushScope, popScope } from "./scope";
 import { injectProgram } from "./inject";
 import { optimizeDrc } from "./optimize";
 import { classifyType, RcKind, noRcInfo } from "./classify";

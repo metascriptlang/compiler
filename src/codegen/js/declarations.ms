@@ -1,13 +1,10 @@
 // JavaScript Codegen — Declaration Emitters
 
 import {
-	Node, NodeKind, NodeFlag, DeclKind,
-	FunctionDeclData, EnumDeclData,
-	ClassDeclData, PropertyDeclData, MethodDeclData, ConstructorDeclData,
-	ImportDeclData, ExportDeclData, VariableDeclData,
-	DecoratedDeclData,
+	Node, NodeKind, NodeFlag, DeclKind, FunctionDeclData, EnumDeclData, ClassDeclData, MethodDeclData,
+	ConstructorDeclData, ImportDeclData, ExportDeclData, VariableDeclData, DecoratedDeclData,
 } from "../../ast/node";
-import { emit, emitNode, emitIndent, emitNewline, emitLine, JSGenerator, convertImportPath, emitJoinedStrings, emitJoinedSafeStrings, emitBodyOrEmpty } from "./emit";
+import { emit, emitNode, emitIndent, emitNewline, JSGenerator, convertImportPath, emitJoinedSafeStrings, emitBodyOrEmpty } from "./emit";
 import { safeJsName } from "./expressions";
 
 // ===== Function Declaration =====

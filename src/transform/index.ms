@@ -30,7 +30,7 @@
 
 import { Node } from "../ast/node";
 import { CheckerContext } from "../checker/context";
-import { TransformContext, createTransformContextWithChecker } from "./context";
+import { createTransformContextWithChecker } from "./context";
 import { lowerDefer } from "./lowering/deferLower";
 import { lowerConstFold } from "./coercion/constantFolding";
 import { lowerStringConcatFlatten } from "./coercion/stringConcatFlatten";
@@ -52,7 +52,6 @@ import { lowerAsyncBridge } from "./lowering/asyncBridge";
 import { lowerSpawn } from "./lowering/spawnLower";
 import { lowerVarHoist } from "./lowering/varHoist";
 import { lowerLambda } from "./lowering/lambdaLifting";
-import { lowerRvalue } from "./lowering/rvalueLower";
 import { lowerExtensionMethod } from "./lowering/extensionMethodLower";
 import { lowerBuiltins } from "./native/builtinLower";
 import { lowerSubscript } from "./lowering/subscriptLower";

@@ -22,7 +22,7 @@ import {
 	makeFnDecl, makeInterfaceDeclFromTypes, makeObjectLiteral, makeHiddenDeref,
 	makeNull, makeAssign, makeExprStmt, syntheticToken, resolveSimpleTypeStr,
 } from "../util";
-import { createPtr, createRef, unknownType } from "../../checker/types";
+import { createPtr, createRef } from "../../checker/types";
 import { stmtCountAfter, firstStmtKindAfter, parseInput, getStmts } from "../testUtil";
 
 // ===== Scope Stack =====

@@ -3,20 +3,17 @@
 // Follows standard reference implementation patterns for statement emission.
 // Uses emitStmts/emitStmtsLine for direct write (avoids value-type Builder copy).
 
-import { Node, NodeKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, BreakStmtData, ContinueStmtData, DeclKind, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, AssertStmtData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, isEmptyBlock, Type, TypeKind, Symbol, SymbolKind } from "../../ast/node";
+import { Node, NodeKind, VariableDeclData, ArrayLiteralData, IfStmtData, WhileStmtData, DoWhileStmtData, BlockStmtData, ExprStmtData, ReturnStmtData, TryCatchStmtData, ThrowStmtData, SwitchStmtData, SwitchCaseData, CallExprData, IdentifierData, AssertStmtData, UnreachableStmtData, MacroInvocationData, StringLiteralData, IdentifierData, BooleanLiteralData, TypeAssertionData, isEmptyBlock, TypeKind, Symbol, SymbolKind } from "../../ast/node";
 import { isStructType } from "../../checker/types";
 import {
-	CGen, CProc, CSection,
-	emitStmts, emitStmtsLine, emitStmtsNl, emitProcLocalsLine,
-	getStmtsIndent, setStmtsIndent,
-	pushBlock, popBlock, readProcStmts,
-	sec, addLine, emitLineDir, getTemp,
-	fillLocalName, scopeMangledParam,
+	CGen, CProc,
+	emitStmts, emitStmtsLine, emitStmtsNl, emitProcLocalsLine, getStmtsIndent, setStmtsIndent,
+	readProcStmts, emitLineDir, getTemp, fillLocalName,
 } from "./context";
 import { genExpr, shimCallArg } from "./expressions";
 import { ensureCrossModuleProto } from "./forward";
 import { safeName } from "./names";
-import { getSimpleTypeDesc, getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, genClFullCastNrvo, genClHalfCastNrvo } from "./types";
+import { getTypeDesc, isNrvoReturnType, getCalleeReturnType, getCalleeFuncType, genClFullCastNrvo, genClHalfCastNrvo } from "./types";
 
 // ===== blockLeaveActions — emit finally cleanup on break/continue/return =====
 // Reference parity: when control flow exits through

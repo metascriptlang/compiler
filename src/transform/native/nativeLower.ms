@@ -12,7 +12,7 @@
 //
 // Runtime macros are GCC statement expressions returning lvalues (read + write).
 
-import { Node, NodeKind, SourceLocation, ArrayAccessData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, HiddenStdConvData, Type, TypeKind } from "../../ast/node";
+import { Node, NodeKind, ArrayAccessData, MemberExprData, ArrayLiteralData, VariableDeclData, BinaryExprData, NumberLiteralData, HiddenStdConvData, Type, TypeKind } from "../../ast/node";
 import { isNumeric } from "../../checker/types";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";

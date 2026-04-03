@@ -2,9 +2,9 @@
 // Pattern: ~/projects/metascript/src/parser/parser.zig parseMatchStatement()
 // Uses callback injection to avoid circular imports with expression.ms
 
-import { Token, TokenKind, isIdentOrKeyword } from "../../lexer/token";
-import { Node, NodeKind, NodeData, Expression, createNode } from "../../ast/node";
-import { ParserState, current, advance, isAtEnd, peek } from "../context";
+import { TokenKind, isIdentOrKeyword } from "../../lexer/token";
+import { Node, NodeKind, Expression, createNode } from "../../ast/node";
+import { ParserState, current, advance, isAtEnd } from "../context";
 import { parseOk, parseMemberChain } from "./util";
 import { isIdentLike } from "../util";
 import { parseNumberLiteral } from "../../utils/string";

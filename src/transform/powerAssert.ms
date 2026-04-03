@@ -18,10 +18,7 @@
 import { Node, NodeKind, DeclKind, ProgramData, TestDeclData, BlockStmtData, AssertStmtData, BinaryExprData, UnaryExprData, CallExprData, MemberExprData, IdentifierData, NumberLiteralData, StringLiteralData, BooleanLiteralData, SourceLocation, makeLoc, Type, TypeKind } from "../ast/node";
 import { isIntegerType } from "../checker/types";
 import { TransformContext } from "./context";
-import {
-	makeIdent, makeString, makeNumber, makeBlock, makeVarDecl, makeExprStmt,
-	makeIf, makeCall, makeUnary, makeNull, syntheticToken,
-} from "./util";
+import { makeIdent, makeString, makeNumber, makeBlock, makeVarDecl, makeExprStmt, makeIf, makeUnary, makeNull, syntheticToken } from "./util";
 import { createNode } from "../ast/node";
 
 // ===== Type-based __paValue dispatch =====
@@ -310,9 +307,6 @@ function makeCallStmt(fnName: string, args: Node[], loc: SourceLocation): Node {
 }
 
 // ===== Tests =====
-
-import { parseSource } from "../parser/statements/validation";
-import { AssertStmtData as ASD } from "../ast/node";
 
 test "exprLabel identifier" {
 	assert exprLabel(makeIdent("foo", makeLoc(1, 0))) === "foo";

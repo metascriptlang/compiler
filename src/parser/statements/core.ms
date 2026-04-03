@@ -1,15 +1,14 @@
 // Statement Parser Core - Dispatch, block/expr/program parsing
 // Pattern: ~/projects/metascript/src/parser/parser.zig parseStatement()
 
-import { Token, TokenKind } from "../../lexer/token";
-import { Node, NodeKind, NodeData, createNode, MatchExprData } from "../../ast/node";
-import { ParserState, createState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize } from "../context";
+import { TokenKind } from "../../lexer/token";
+import { Node, NodeKind, createNode } from "../../ast/node";
+import { ParserState, current, advance, peek, isAtEnd, consumeSemicolon, addError, synchronize } from "../context";
 import { parseExpressionFromState, registerBlockParser } from "../expressions/core";
 import { parseIfStmt, parseWhileStmt, parseForStmt, parseBreakStmt, parseContinueStmt, parseReturnStmt, parseDoWhileStmt, parseSwitchStmt, parseDeferStmt, parseUnreachableStmt, parseTestDecl, parseAssertStmt } from "./control";
 import { parseVariableDecl, parseFunctionDecl, parseImportDecl, parseExportDecl, parseTypeAliasDecl, parseEnumDecl, parseInterfaceDecl, parseStructDecl, parseClassDecl, parseActorDecl, parseMacroInvocation, parseExternDecl, parseDistinctTypeDecl, parseMacroDecl } from "./declaration";
 import { parseThrowStmt, parseTryCatchStmt } from "./errorHandling";
 import { registerStmtBlockParser, registerStmtExprParser, registerStmtParser, registerStateProgramParser } from "./callbacks";
-import { programOk, stmtKind, stmtCount, parseErrorCount } from "./validation";
 import { attachComments } from "../util";
 
 

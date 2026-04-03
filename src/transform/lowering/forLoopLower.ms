@@ -7,10 +7,7 @@
 //
 // Handles continue by inserting update before each continue statement.
 
-import {
-	Node, NodeKind,
-	ForStmtData, BlockStmtData, IfStmtData, TryCatchStmtData,
-} from "../../ast/node";
+import { Node, NodeKind, ForStmtData, BlockStmtData, IfStmtData, TryCatchStmtData } from "../../ast/node";
 import { TransformContext } from "../context";
 import { walkNode } from "../walker";
 import { makeBool, makeBlock, makeWhile, makeExprStmt, extractBodyStmts } from "../util";

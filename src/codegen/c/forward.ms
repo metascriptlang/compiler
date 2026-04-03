@@ -5,11 +5,8 @@
 // Extracted to break cycles: expressions↔declarations, statements↔declarations, expressions↔index.
 
 import { Type, TypeKind, Symbol } from "../../ast/node";
-import {
-	CGen, CSection,
-	addLine, sec, nameSetHas, nameSetAdd,
-} from "./context";
-import { getTypeDesc, isNrvoReturnType, ccgIntroducedPtr, shouldIndirectParam, shouldConstParam } from "./types";
+import { CGen, CSection, addLine, sec, nameSetHas, nameSetAdd, } from "./context";
+import { getTypeDesc, isNrvoReturnType, shouldIndirectParam, shouldConstParam } from "./types";
 
 // ===== DRC forward prototypes =====
 
