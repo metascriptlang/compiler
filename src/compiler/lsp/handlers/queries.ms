@@ -1,12 +1,13 @@
-// LSP Handlers — Hover, Document Symbol, Signature Help, Inlay Hints,
-//                 References, Document Highlight, Rename, Semantic Tokens.
+// LSP Query Handlers — Hover, Document Symbol, Signature Help, Inlay Hints,
+//                      References, Document Highlight, Rename.
+// All query symbol state without modifying it. Semantic tokens in semanticTokens.ms.
 
 import {
 	TransAmDb, dbParse, dbTypeCheck, dbGetCheckedProgram,
 	getFileId, getFilePath, getTransitiveDependents, dbGetFileCount, dbGetFilePathByIndex
 } from "../../transam/index";
 import {
-	lspJsonString, lspJsonNumber, lspGetField, lspGetNumberField, lspGetObjectField,
+	lspJsonString, lspGetField, lspGetNumberField, lspGetObjectField,
 	lspUriToPath, lspPathToUri, lspResponse
 } from "../protocol";
 import {
@@ -22,7 +23,6 @@ import {
 	SgDocumentSymbol,
 	SgSignatureInfo,
 	SgInlayHintKind,
-	SgSemanticToken, sgCollectSemanticTokens, sgSortTokens
 } from "../../../checker/suggest";
 import { CheckerContext } from "../../../checker/context";
 import { lookupSymbol } from "../../../checker/symbol";
@@ -378,47 +378,3 @@ export function handleRename(id: string, params: string, db: TransAmDb): string 
 	return lspResponse(id, result);
 }
 
-// ===== Semantic Tokens =====
-
-// Encode absolute SgSemanticToken[] as LSP relative delta format: [deltaLine, deltaStart, length, type, modifiers, ...]
-function encodeSemanticTokenDeltas(tokens: SgSemanticToken[]): string {
-	sgSortTokens(tokens);
-	let prevLine = 0;
-	let prevCol = 0;
-	let arr = "[";
-	let i = 0;
-	while (i < tokens.length) {
-		const t = tokens[i];
-		const line = t.line - 1; // to 0-indexed
-		const col = t.col - 1;   // to 0-indexed
-		const deltaLine = line - prevLine;
-		let deltaStart = col;
-		if (deltaLine === 0) deltaStart = col - prevCol;
-		if (i > 0) arr = arr + ",";
-		arr = arr + lspJsonNumber(deltaLine) + "," + lspJsonNumber(deltaStart)
-			+ "," + lspJsonNumber(t.length)
-			+ "," + lspJsonNumber(t.tokenType)
-			+ "," + lspJsonNumber(t.modifiers);
-		prevLine = line;
-		prevCol = col;
-		i = i + 1;
-	}
-	arr = arr + "]";
-	return arr;
-}
-
-export function handleSemanticTokensFull(id: string, params: string, db: TransAmDb): string {
-	const textDoc = lspGetObjectField(params, "textDocument");
-	const uri = lspGetField(textDoc, "uri");
-	const path = lspUriToPath(uri);
-
-	const program = dbParse(db, path);
-	if (program === null) return lspResponse(id, "{\"data\":[]}");
-
-	const ctx = dbTypeCheck(db, path);
-	if (ctx === null) return lspResponse(id, "{\"data\":[]}");
-
-	const tokens = sgCollectSemanticTokens(ctx, program);
-	const data = encodeSemanticTokenDeltas(tokens);
-	return lspResponse(id, "{\"data\":" + data + "}");
-}

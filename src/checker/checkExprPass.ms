@@ -11,7 +11,8 @@ import {
 	scoreCandidatePriority, isNoMatch, emptyCandidateScore, cmpCandidates,
 } from "./compat";
 import { callCheckStmt, registerCheckExpr } from "./checkerCallbacks";
-import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation, buildTypeArgKey } from "./resolvePass";
+import { resolveAnnotation, resolveTypeExpr, resolveTypeExprs, ensureShaped, recordGenericTypeInstantiation } from "./resolvePass";
+import { monoTypeKey } from "../monomorphize/collect";
 import { findChar, splitTopLevel } from "../utils/string";
 import { findCallTypeArg, getExplicitTypeArg, getGenericDecl } from "../parser/context";
 import {
@@ -63,8 +64,6 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 	if (genericParams === "") return calleeType;
 	const args = splitTopLevel(typeArgStr, ",");
 	recordGenericTypeInstantiation(calleeName, genericParams, args, ctx);
-	const typeArgKey = buildTypeArgKey(args, ctx);
-	const mangledName = calleeName + "__" + typeArgKey;
 	const baseSym = lookupSymbol(ctx.table, calleeName);
 	if (baseSym === null) return calleeType;
 	ensureShaped(baseSym, ctx);
@@ -86,6 +85,14 @@ function resolveGenericNewExpr(ctx: CheckerContext, callee: Node, calleeType: Ty
 			typeArgCol = typeArgCol + argName.length + 2;  // skip "T, " for next arg
 		}
 	}
+	// Build mangled name from RESOLVED types (not raw strings) for codegen consistency.
+	// Reference parity (SigHash): all naming paths must produce the same name for the same type.
+	let typeArgKey = "";
+	for (let tai = 0; tai < concreteTypes.length; tai += 1) {
+		if (tai > 0) typeArgKey = typeArgKey + "_";
+		typeArgKey = typeArgKey + monoTypeKey(concreteTypes[tai]);
+	}
+	const mangledName = calleeName + "__" + typeArgKey;
 	const instType = instantiateGeneric(baseSym.symbolType, trimmedParamNames, concreteTypes);
 	const instInner = (instType.kind === TypeKind.Ref && instType.typeReturn !== null) ? instType.typeReturn : instType;
 	instInner.typeName = mangledName;
@@ -233,9 +240,48 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 			if (isAsgn) {
 				ctx.initTracker.leftPartOfAsgn = ctx.initTracker.leftPartOfAsgn - 1;
 			}
-			// Block assignment to read-only properties (e.g., str.length = n)
+			// Block assignment to read-only properties
 			if (isAsgn && d.left.kind === NodeKind.MemberExpr) {
 				const md = d.left.data as MemberExprData;
+				// Check readonly fields: user-declared `readonly` properties + actor `pid`
+				if (md.object.nodeType !== null) {
+					let ownerType = md.object.nodeType;
+					if (ownerType.kind === TypeKind.Ref && ownerType.typeReturn !== null) ownerType = ownerType.typeReturn;
+					if (ownerType.sym !== null) {
+						// Actor pid is always readonly (synthetic, not in source body)
+						if (ownerType.sym.symbolKind === SymbolKind.Actor && md.property === "pid") {
+							addError(ctx, `cannot assign to 'pid' because it is a read-only property`,
+								d.left.location.line, d.left.location.column);
+						}
+						// User-declared readonly fields
+						if (ownerType.sym.declNode !== null) {
+							let bodyMembers: Node[] = null as unknown as Node[];
+							if (ownerType.sym.declNode.kind === NodeKind.ClassDecl) {
+								bodyMembers = (ownerType.sym.declNode.data as ClassDeclData).classBody;
+							} else if (ownerType.sym.declNode.kind === NodeKind.ActorDecl) {
+								bodyMembers = (ownerType.sym.declNode.data as ActorDeclData).actorBody;
+							}
+							if (bodyMembers !== null) {
+								for (const m of bodyMembers) {
+									let prop = m;
+									if (prop.kind === NodeKind.DecoratedDecl) {
+										const dd = prop.data as DecoratedDeclData;
+										if (dd.decoratedNode !== null) prop = dd.decoratedNode;
+									}
+									if (prop.kind === NodeKind.PropertyDecl) {
+										const pd = prop.data as PropertyDeclData;
+										const pdAny = pd as unknown as { propIsReadonly: boolean };
+										if (pd.propName === md.property && pdAny.propIsReadonly === true) {
+											addError(ctx, `cannot assign to '${md.property}' because it is a read-only property`,
+												d.left.location.line, d.left.location.column);
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+				// Built-in readonly: str.length, sized-array.length
 				if (md.property === "length" && md.object.nodeType !== null) {
 					if (isStringLike(md.object.nodeType) || md.object.nodeType.kind === TypeKind.CString) {
 						addError(ctx, "cannot assign to 'length' on string (strings are immutable)", d.left.location.line, d.left.location.column);
@@ -2034,6 +2080,7 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 		const fieldOwnerSym = lookupSymbol(ctx.table, resolvedObjType.typeName);
 		if (fieldOwnerSym !== null && fieldOwnerSym.symbolKind === SymbolKind.Actor
 			&& ctx.currentActorName !== resolvedObjType.typeName
+			&& d.property !== "pid"
 			&& !hasNonisolatedField(fieldOwnerSym, d.property)) {
 			addError(ctx, `cannot access actor field '${d.property}' directly — use actor methods`,
 				node.location.line, node.location.column);

@@ -7,7 +7,7 @@
 //   B. Building proper Function/Object types for collected declarations
 
 import { Node, NodeKind, createNodeAt, makeLoc, ProgramData, FunctionDeclData, InterfaceDeclData, ExportDeclData, ClassDeclData, ActorDeclData, MethodDeclData, PropertyDeclData, ConstructorDeclData, TypeAliasDeclData, VariableDeclData, DecoratedDeclData, ExternDeclData, IdentifierData, TypeGenericData, TypeArrayData, TypeUnionData, TypeFunctionData, TypeObjectData, ObjectLiteralData, TypeAssertionData, DeclKind, Type, TypeKind, TypeFlag, Symbol, SymbolKind, SymbolState } from "../ast/node";
-import { unknownType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, setMinArity, assignType, isStructType, unwrapRef, propagateHasAsgn } from "./types";
+import { unknownType, getSysType, numberType, stringType, booleanType, voidType, nullType, neverType, charType, cstringType, createPrimitive, createStringLiteral, createArray, createFunction, createClosureType, createStruct, createResult, createPromise, createIterator, createUnion, createGenericParam, createDistinct, createGenericInstance, instantiateGenericBody, isResult, getResultOkType, getResultErrType, createSizedArray, createSpan, createBorrow, createPtr, createRef, createVar, createMaybeType, setMinArity, assignType, isStructType, unwrapRef, propagateHasAsgn } from "./types";
 import { ScopeKind, lookupSymbol, defineSymbol, makeSymbol, openScope, closeScope, markUsed } from "./symbol";
 import { CheckerContext, findExtension, getExtTypeName, extractGenericNames, addError, addWarning, sgRecordSym } from "./context";
 import { findChar, splitTopLevel, parseIntStr, bareAfterDelim } from "../utils/string";
@@ -593,9 +593,13 @@ export function resolveDeclarations(ctx: CheckerContext, program: Node): void {
 
 function resolveFunction(ctx: CheckerContext, node: Node): void {
 	const d = node.data as FunctionDeclData;
-	const sym = lookupSymbol(ctx.table, d.fnName);
-	if (sym === null) return;
-	node.resolvedSym = sym;
+	// Use resolvedSym set by collectPass (preserves overloadIdx for overloaded functions).
+	let sym = node.resolvedSym;
+	if (sym === null) {
+		sym = lookupSymbol(ctx.table, d.fnName);
+		if (sym === null) return;
+		node.resolvedSym = sym;
+	}
 
 	// Set state to Shaped early to allow recursive references in signature
 	sym.state = SymbolState.Shaped;
@@ -1127,6 +1131,10 @@ function resolveActor(ctx: CheckerContext, node: Node): void {
 	if (hasGenerics) {
 		closeScope(ctx.table);
 	}
+
+	// pid field: the actor's runtime identity (int64 — pointer cast to integer)
+	memberNames.push("pid");
+	memberTypes.push(getSysType(TypeKind.Int64));
 
 	// Update inner struct in-place
 	const inner = unwrapRef(sym.symbolType);

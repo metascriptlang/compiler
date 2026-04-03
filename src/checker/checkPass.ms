@@ -161,9 +161,14 @@ function checkVariableDecl(ctx: CheckerContext, node: Node): void {
 
 function checkFunctionDecl(ctx: CheckerContext, node: Node): void {
 	const d = node.data as FunctionDeclData;
-	const sym = lookupSymbol(ctx.table, d.fnName);
-	if (sym === null) return;
-	node.resolvedSym = sym;
+	// Use resolvedSym set by collectPass (preserves overloadIdx for overloaded functions).
+	// Only fall back to lookupSymbol if collector didn't set it (e.g., monomorphized clones).
+	let sym = node.resolvedSym;
+	if (sym === null) {
+		sym = lookupSymbol(ctx.table, d.fnName);
+		if (sym === null) return;
+		node.resolvedSym = sym;
+	}
 
 	// Demand-driven: ensure signature is shaped before checking body
 	ensureShaped(sym, ctx);
@@ -664,12 +669,10 @@ function checkForOfStmt(ctx: CheckerContext, node: Node): void {
 			&& d.forOfIterable.nodeType.kind !== TypeKind.Unknown
 			&& d.forOfIterable.nodeType.kind !== TypeKind.Error) {
 		const loc = d.forOfIterable.location;
-		const toItemsCall = createNodeAt(NodeKind.CallExpr, {
-			callee: createNodeAt(NodeKind.MemberExpr, {
-				object: d.forOfIterable, property: "toItems", isOptional: false,
-			} as MemberExprData, loc),
-			arguments: [], isDirectCall: true, resolvedOverloadIdx: -1,
-		} as CallExprData, loc);
+		const memberNode = createNodeAt(NodeKind.MemberExpr,
+			{ object: d.forOfIterable, property: "toItems", isOptional: false }, loc);
+		const toItemsCall = createNodeAt(NodeKind.CallExpr,
+			{ callee: memberNode, arguments: [], isDirectCall: true, resolvedOverloadIdx: -1 }, loc);
 		checkExpr(ctx, toItemsCall, null);
 		if (toItemsCall.nodeType !== null && toItemsCall.nodeType.kind !== TypeKind.Error) {
 			const resolved = iterableElemType(toItemsCall.nodeType);

@@ -97,7 +97,7 @@ function tryInjectTypeSym(name: string, fallbackType: Type, ctx: CheckerContext,
 
 // Inject concrete type symbols into scope so resolveAnnotation finds them during re-check.
 // For Array<Ref<Item>>, extracts "Item" and adds Ref<Struct("Item")> to scope.
-// Reference parity (seminst.nim:428 instantiateGenericParamList): concrete types added to scope.
+// Reference parity (instantiateGenericParamList): concrete types added to scope.
 function injectConcreteTypeSyms(t: Type, ctx: CheckerContext, callerCtx: CheckerContext, injected: Symbol[]): void {
 	if (t === null) return;
 	if (t.kind === TypeKind.Ref && t.typeReturn !== null) {
@@ -441,7 +441,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 	rootScope.symbols.push(instSym);
 	cloned.resolvedSym = instSym;
 
-	// Nim parity (seminst.nim:150 semProcBody): check body in the DEFINING module's scope
+	// Reference parity (semProcBody): check body in the DEFINING module's scope
 	// (for private helpers like mapRawGet), but with concrete type symbols injected so
 	// user types (Item, Foo, etc.) are visible during type annotation resolution.
 	if (cd.fnBody !== null) {
@@ -451,7 +451,7 @@ export function instantiateGenericFunction(sym: Symbol, paramNames: string[], co
 		bodyCtx.table.current.symbols.push(instSym);
 		const savedModulePath = bodyCtx.modulePath;
 		bodyCtx.modulePath = ctx.modulePath;
-		// Nim parity (seminst.nim:428 instantiateGenericParamList): inject concrete type
+		// Reference parity (instantiateGenericParamList): inject concrete type
 		// symbols into scope so resolveAnnotation("Item") finds the user type during re-check.
 		// Without this, Map<string, Item[]> methods resolve "Item" to Unknown.
 		const injectedSyms: Symbol[] = [];

@@ -70,13 +70,29 @@ export function hashString(s: string): int64 {
 	return h;
 }
 
+// Hash for number keys — Knuth multiplicative hash.
+export function hashNumber(n: number): int64 {
+	let bits = (n as int64) & (0xFFFFFFFF as int64);
+	if (bits === (0 as int64)) bits = 314159265 as int64;
+	let h = bits * (2654435761 as int64);
+	h = h & (0xFFFFFFFF as int64);
+	if (h === (0 as int64)) return 314159265 as int64;
+	return h;
+}
+
+
+// Overloaded hash — Nim parity (hashes.nim: hash(x: int), hash(x: string)).
+// Extension methods: monomorphization resolves via UFCS based on K's concrete type.
+export function hash(this s: string): int64 { return hashString(s); }
+export function hash(this n: number): int64 { return hashNumber(n); }
+
 function mapRawGet<K, V>(m: Map<K, V>, key: K): int32 {
 	if (m.data.length === 0) return -1;
-	const hc = hashString(key as unknown as string);
+	const hc = key.hash();
 	const mask: int32 = m.data.length - 1;
 	let h: int32 = (hc & (mask as int64)) as int32;
 	while (m.data[h].hcode !== 0) {
-		if (m.data[h].hcode === hc && m.data[h].key as unknown as string === key as unknown as string) {
+		if (m.data[h].hcode === hc && m.data[h].key === key) {
 			return h;
 		}
 		h = (h + 1) & mask;
@@ -108,7 +124,7 @@ export function set<K, V>(this m: Map<K, V>, key: K, value: V): void {
 		const init: MapEntry<K, V>[] = new Array(32);
 		m.data = init;
 	}
-	const hc = hashString(key as unknown as string);
+	const hc = key.hash();
 	const idx = mapRawGet(m, key);
 	if (idx >= 0) {
 		m.data[idx].value = value;
@@ -228,11 +244,11 @@ export class Set<T> {
 
 function setRawGet<T>(s: Set<T>, key: T): int32 {
 	if (s.data.length === 0) return -1;
-	const hc = hashString(key as unknown as string);
+	const hc = key.hash();
 	const mask: int32 = s.data.length - 1;
 	let h: int32 = (hc & (mask as int64)) as int32;
 	while (s.data[h].hcode !== 0) {
-		if (s.data[h].hcode === hc && s.data[h].key as unknown as string === key as unknown as string) {
+		if (s.data[h].hcode === hc && s.data[h].key === key) {
 			return h;
 		}
 		h = (h + 1) & mask;
@@ -262,7 +278,7 @@ export function add<T>(this s: Set<T>, value: T): void {
 	if (s.data.length === 0) { s.data = new Array(32); }
 	const idx = setRawGet(s, value);
 	if (idx >= 0) return;
-	const hc = hashString(value as unknown as string);
+	const hc = value.hash();
 	if (s.data.length < (s.counter + s.counter / 2) || (s.data.length - s.counter) < 4) {
 		setEnlarge(s);
 	}

@@ -955,8 +955,10 @@ function parseClassMember(state: ParserState): NodeResult {
 		advance(state);
 	}
 
-	// Check for readonly (skip as modifier)
+	// Check for readonly
+	let memberIsReadonly = false;
 	if (current(state).kind === TokenKind.Readonly) {
+		memberIsReadonly = true;
 		advance(state);
 	}
 
@@ -1029,6 +1031,7 @@ function parseClassMember(state: ParserState): NodeResult {
 		propName: nameToken.value,
 		propType,
 		propIsStatic: memberIsStatic,
+		propIsReadonly: memberIsReadonly,
 		propInitializer: propInit,
 	}, nameToken);
 	propNode.typeExpr = propTypeExpr;

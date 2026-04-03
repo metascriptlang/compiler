@@ -233,7 +233,8 @@ export function safeAddrOf(g: CGen, p: CProc, snippet: string, exprNode: Node, p
 	}
 	// Union variant wrapping: when passing a variant-typed temp where a union* is expected,
 	// wrap in a full union with tag. This handles _litN_ temps from ObjectLiteral emission.
-	if (paramType !== null && paramType.kind === TypeKind.Union && exprNode !== null && exprNode.nodeType !== null && exprNode.kind === NodeKind.ObjectLiteral) {
+	// Use paramType for union detection when nodeType is null (parser-created nodes).
+	if (paramType !== null && paramType.kind === TypeKind.Union && exprNode !== null && exprNode.kind === NodeKind.ObjectLiteral) {
 		const od = exprNode.data as ObjectLiteralData;
 		if (od.keys !== null && od.keys.length > 0) {
 			const unionName = getTypeDesc(g, paramType);
@@ -580,15 +581,18 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 	// TypeAssertion — 1 child
 	if (kind === NodeKind.TypeAssertion) {
 		const d = node.data as TypeAssertionData;
-		// Elide `x as unknown as T` chain when typeof(x) === T (no-op cast in monomorphized generics).
-		// Must detect at push time to avoid inner cast producing invalid C for value types.
+		// Elide `x as unknown as T` chain when typeof(x) === T (no-op in monomorphized generics).
 		if (d.asExpr !== null && d.asExpr.kind === NodeKind.TypeAssertion && node.nodeType !== null) {
 			const inner = d.asExpr.data as TypeAssertionData;
-			if (inner.asExpr !== null && inner.asExpr.nodeType !== null) {
-				const srcDesc = getTypeDesc(g, inner.asExpr.nodeType);
+			if (inner.asExpr !== null) {
+				// Use resolvedSym's type if nodeType not stamped (common for parameters)
+				let innerType = inner.asExpr.nodeType;
+				if (innerType === null && inner.asExpr.resolvedSym !== null) {
+					innerType = inner.asExpr.resolvedSym.symbolType;
+				}
+				const srcDesc = innerType !== null ? getTypeDesc(g, innerType) : "";
 				const tgtDesc = getTypeDesc(g, node.nodeType);
-				if (srcDesc === tgtDesc) {
-					// Skip both casts — push the innermost expression directly
+				if (srcDesc !== "" && srcDesc === tgtDesc) {
 					ctx.workStack.push({ node, phase: 1, childCount: 1, tag: TAG_DEFAULT });
 					ctx.workStack.push({ node: inner.asExpr, phase: 0, childCount: 0, tag: 0 });
 					return;
@@ -680,9 +684,14 @@ function discoverExpr(g: CGen, p: CProc, node: Node, ctx: ExprEvalCtx): void {
 		if (d.newCallee.resolvedSym !== null && hasFlag(d.newCallee.resolvedSym, SymbolFlag.HasConstructor)) {
 			const newType = node.nodeType;
 			// Unwrap Ref → inner struct to get the monomorphized C type name
-			const inner = (newType !== null && newType.kind === TypeKind.Ref && newType.typeReturn !== null)
-				? newType.typeReturn : newType;
-			const cName = inner !== null ? getTypeDesc(g, inner) : genExpr(g, p, d.newCallee);
+			let cName = "";
+			if (newType !== null && newType.kind === TypeKind.Ref && newType.typeReturn !== null) {
+				cName = getTypeDesc(g, newType.typeReturn);
+			} else if (newType !== null) {
+				cName = getTypeDesc(g, newType);
+			} else {
+				cName = genExpr(g, p, d.newCallee);
+			}
 			ensureTypeInfoDef(g, cName);
 			const ctorName = cName + "_new";
 			let argList = "";
@@ -1148,7 +1157,7 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 		} else {
 			targetType = mangle(d.asType);
 		}
-		// Skip cast when source and target C types are the same (no-op cast).
+		// Skip identity cast — source and target are the same C type (common after monomorphization).
 		if (d.asExpr !== null && d.asExpr.nodeType !== null && node.nodeType !== null) {
 			const srcDesc = getTypeDesc(g, d.asExpr.nodeType);
 			if (srcDesc === targetType) {
@@ -1156,14 +1165,9 @@ function emitExpr(g: CGen, p: CProc, item: ExprStackItem, ctx: ExprEvalCtx): voi
 				return;
 			}
 		}
-		// Value types (structs like msString) can't be directly C-cast.
-		// Use pointer reinterpret: (*(DestType*)&(srcVal))
-		// Covers: value-to-value casts AND void*-to-value (from `as unknown as T` chains).
+		// Value types (structs) can't be directly C-cast. Use pointer reinterpret.
 		if (node.nodeType !== null && isNilableValueType(node.nodeType)
-			&& d.asExpr !== null && d.asExpr.nodeType !== null
-			&& (isNilableValueType(d.asExpr.nodeType)
-				|| d.asExpr.nodeType.kind === TypeKind.Unknown
-				|| d.asExpr.nodeType.kind === TypeKind.GenericParam)) {
+			&& d.asExpr !== null && d.asExpr.nodeType !== null && isNilableValueType(d.asExpr.nodeType)) {
 			ctx.results.push(`(*(${targetType}*)&(${expr}))`);
 			return;
 		}

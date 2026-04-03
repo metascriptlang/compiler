@@ -807,9 +807,10 @@ export function monoSubstAnnotation(annotation: string, paramName: string, concr
 	return result;
 }
 
+// Type-to-string for annotation substitution (human-readable MetaScript type names).
+// Used by substituteAnnotations to replace generic params in type annotations.
 export function monoConcreteTypeName(t: Type): string {
 	if (t === null) return "unknown";
-	// Reference parity (ccgtypes.nim:143-148): skipTypes resolves through Ref/GenericInst before naming.
 	if (isResult(t)) return `Result<${monoConcreteTypeName(getResultOkType(t))}, ${monoConcreteTypeName(getResultErrType(t))}>`;
 	return match (t.kind) {
 		TypeKind.Number => "number",
@@ -832,6 +833,48 @@ export function monoConcreteTypeName(t: Type): string {
 		},
 		TypeKind.Union => t.typeName !== "" ? t.typeName : "Union",
 		TypeKind.Function => "Function",
+		TypeKind.Int8 => "int8",
+		TypeKind.Int16 => "int16",
+		TypeKind.Int32 => "int32",
+		TypeKind.Int64 => "int64",
+		TypeKind.Uint8 => "uint8",
+		TypeKind.Uint16 => "uint16",
+		TypeKind.Uint32 => "uint32",
+		TypeKind.Uint64 => "uint64",
+		TypeKind.Float32 => "float32",
+		TypeKind.Float64 => "float64",
+		TypeKind.Char => "char",
+		TypeKind.CString => "cstring",
+		_ => "unknown",
+	};
+}
+
+// Type-to-string for C naming. MUST match codegen typeKey format (types.ms:179-268)
+// so constructor type names and codegen type names are identical.
+export function monoTypeKey(t: Type): string {
+	if (t === null) return "unknown";
+	return match (t.kind) {
+		TypeKind.Number => "number",
+		TypeKind.String => "string",
+		TypeKind.Boolean => "boolean",
+		TypeKind.Void => "void",
+		TypeKind.Null => "null",
+		TypeKind.Ref => "ref:" + monoTypeKey(t.typeReturn),
+		TypeKind.Ptr => "ptr:" + monoTypeKey(t.typeReturn),
+		TypeKind.Array => "array:" + monoTypeKey(t.typeReturn),
+		TypeKind.Struct => "object:" + t.typeName,
+		TypeKind.Enum => "enum:" + t.typeName,
+		TypeKind.GenericInstance => {
+			let name = "ginst:" + t.typeName;
+			let i = 0;
+			while (i < t.typeChildren.length) {
+				name = name + ":" + monoTypeKey(t.typeChildren[i]);
+				i = i + 1;
+			}
+			return name;
+		},
+		TypeKind.Union => t.typeName !== "" ? "union:" + t.typeName : "union",
+		TypeKind.Function => "function",
 		TypeKind.Int8 => "int8",
 		TypeKind.Int16 => "int16",
 		TypeKind.Int32 => "int32",

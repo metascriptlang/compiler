@@ -281,7 +281,7 @@ export type NodeData =
 	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], nameLocation: SourceLocation } // InterfaceDecl
 	| { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], nameLocation: SourceLocation } // StructDecl
 	| { className: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation } // ClassDecl
-	| { propName: string, propType: string, propIsStatic: boolean, propInitializer: Node }  // PropertyDecl
+	| { propName: string, propType: string, propIsStatic: boolean, propIsReadonly: boolean, propInitializer: Node }  // PropertyDecl
 	| { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodReturnType: string, nativeName: string, nameLocation: SourceLocation } // MethodDecl
 	| { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node, ctorDefaults: Node[] } // ConstructorDecl
 	// Error handling variants
@@ -400,7 +400,7 @@ export type InterfaceDeclData = { interfaceName: string, interfaceFields: string
 export type StructDeclData = { interfaceName: string, interfaceFields: string[], interfaceFieldTypes: string[], nameLocation: SourceLocation };
 export type ClassDeclData = { className: string, classExtends: string, classBody: Node[], nameLocation: SourceLocation };
 export type ActorDeclData = { actorName: string, actorBody: Node[], nameLocation: SourceLocation };
-export type PropertyDeclData = { propName: string, propType: string, propIsStatic: boolean, propInitializer: Node };
+export type PropertyDeclData = { propName: string, propType: string, propIsStatic: boolean, propIsReadonly: boolean, propInitializer: Node };
 export type MethodDeclData = { methodName: string, methodParams: string[], methodParamTypes: string[], methodBody: Node, methodIsStatic: boolean, methodFlags: string, methodReturnType: string, nativeName: string, nameLocation: SourceLocation };
 export type ConstructorDeclData = { ctorParams: string[], ctorParamTypes: string[], ctorBody: Node, ctorDefaults: Node[] };
 export type ExternDeclData = { externKind: ExternKind, externName: string, nativeName: string, externType: string };

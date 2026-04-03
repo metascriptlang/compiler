@@ -132,6 +132,16 @@ static inline msActor* msActorCreate(void* state, msActorDispatchFn dispatch) {
     return a;
 }
 
+/* Create actor and return pid as int64 (for typed pid field in actor struct) */
+static inline int64_t msActorCreatePid(void* state, msActorDispatchFn dispatch) {
+    return (int64_t)(intptr_t)msActorCreate(state, dispatch);
+}
+
+/* Cast pid (int64) back to msActor* for runtime calls */
+static inline msActor* msActorFromPid(int64_t pid) {
+    return (msActor*)(intptr_t)pid;
+}
+
 /* ===== Multi-Scheduler (forward declarations needed by msActorSend) ===== */
 
 #define MS_MAX_ACTORS_PER_SCHED 256

@@ -1531,7 +1531,7 @@ function isGeneratorBody(body: Node): boolean {
 
 // Process a function body with sink param registration.
 // Looks up the function's type to get resolved param types.
-function processFuncBodyWithParams(body: Node, ownerSym: Symbol, fnName: string, paramNames: string[], dctx: DrcContext, loc: SourceLocation): Node {
+function processFuncBodyWithParams(body: Node, ownerSym: Symbol, fnName: string, paramNames: string[], dctx: DrcContext, loc: SourceLocation, funcNodeType: Type): Node {
 	if (body === null) return body;
 	if (body.kind !== NodeKind.BlockStmt) return body;
 	const bd = body.data as BlockStmtData;
@@ -1556,21 +1556,16 @@ function processFuncBodyWithParams(body: Node, ownerSym: Symbol, fnName: string,
 	clearCfgCache(dctx.cfgCache);
 
 	// Register RC-typed params for cleanup.
-	// Reference parity: uses owner.typ directly. We use ownerSym.symbolType (no lookupSymbol).
+	// Reference parity: ALWAYS use the function's type (owner.typ), never scope lookupSymbol.
+	// lookupSymbol(paramName) can find wrong-scope variables with the same name.
 	if (ownerSym !== null && ownerSym.symbolType !== null && ownerSym.symbolType.kind === TypeKind.Function) {
 		registerFuncParams(ownerSym.symbolType.typeNames, ownerSym.symbolType.typeChildren, dctx, loc, body);
-	} else if (dctx.ctx.checkerCtx !== null && paramNames.length > 0) {
-		// Anonymous functions (arrows, func exprs): no ownerSym — resolve param types individually.
-		for (let pi = 0; pi < paramNames.length; pi += 1) {
-			const pSym = lookupSymbol(dctx.ctx.checkerCtx.table, paramNames[pi]);
-			if (pSym !== null) {
-				const pRcInfo = classifyType(pSym.symbolType, dctx.ctx);
-				if (pRcInfo.needsCleanup && !isEnvParam(paramNames[pi])) {
-					const isSink = isParamSinkCandidate(paramNames[pi], body);
-					registerVar(dctx, paramNames[pi], pRcInfo, isSink, noSym);
-				}
-			}
-		}
+	} else if (funcNodeType !== null && funcNodeType.kind === TypeKind.Function) {
+		registerFuncParams(funcNodeType.typeNames, funcNodeType.typeChildren, dctx, loc, body);
+	} else if (paramNames.length > 0) {
+		// No type info for params — transform bug. Log so we catch it early.
+		// NEVER fall back to lookupSymbol(paramName) — it finds wrong-scope variables.
+		console.log("DRC warning: function '" + fnName + "' has params but no type info — skipping param RC registration");
 	}
 
 	const processed = processStmtList(bd.statements, dctx, loc);
@@ -2000,21 +1995,21 @@ function processFuncDecl(stmt: Node, dctx: DrcContext, loc: SourceLocation): Nod
 	const d = stmt.data as FunctionDeclData;
 	if (d.fnBody === null) return stmt;
 	// Reference parity: pass ownerSym directly (Reference: owner: PSym). No lookupSymbol.
-	d.fnBody = processFuncBodyWithParams(d.fnBody, stmt.resolvedSym, d.fnName, d.params, dctx, loc);
+	d.fnBody = processFuncBodyWithParams(d.fnBody, stmt.resolvedSym, d.fnName, d.params, dctx, loc, stmt.nodeType);
 	return stmt;
 }
 
 function processArrow(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
 	const d = stmt.data as ArrowFunctionData;
 	if (d.arrowBody === null) return stmt;
-	d.arrowBody = processFuncBodyWithParams(d.arrowBody, noSym, "", d.arrowParams, dctx, loc);
+	d.arrowBody = processFuncBodyWithParams(d.arrowBody, noSym, "", d.arrowParams, dctx, loc, stmt.nodeType);
 	return stmt;
 }
 
 function processFuncExpr(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node {
 	const d = stmt.data as FunctionExprData;
 	if (d.funcExprBody === null) return stmt;
-	d.funcExprBody = processFuncBodyWithParams(d.funcExprBody, noSym, "", d.funcExprParams, dctx, loc);
+	d.funcExprBody = processFuncBodyWithParams(d.funcExprBody, noSym, "", d.funcExprParams, dctx, loc, stmt.nodeType);
 	return stmt;
 }
 
@@ -2096,7 +2091,7 @@ function processExport(stmt: Node, dctx: DrcContext, loc: SourceLocation): Node 
 function processMethodMember(member: Node, dctx: DrcContext, loc: SourceLocation): void {
 	const md = member.data as MethodDeclData;
 	if (md.methodBody !== null) {
-		md.methodBody = processFuncBodyWithParams(md.methodBody, member.resolvedSym, md.methodName, md.methodParams, dctx, loc);
+		md.methodBody = processFuncBodyWithParams(md.methodBody, member.resolvedSym, md.methodName, md.methodParams, dctx, loc, member.nodeType);
 	}
 }
 
@@ -2108,9 +2103,9 @@ function processCtorMember(member: Node, dctx: DrcContext, loc: SourceLocation):
 		const ctorType = member.nodeType;
 		if (ctorType !== null && ctorType.kind === TypeKind.Function) {
 			const ctorSym = makeSymbol("constructor", SymbolKind.Method, ctorType, false);
-			cd.ctorBody = processFuncBodyWithParams(cd.ctorBody, ctorSym, "constructor", cd.ctorParams, dctx, loc);
+			cd.ctorBody = processFuncBodyWithParams(cd.ctorBody, ctorSym, "constructor", cd.ctorParams, dctx, loc, member.nodeType);
 		} else {
-			cd.ctorBody = processFuncBodyWithParams(cd.ctorBody, noSym, "", cd.ctorParams, dctx, loc);
+			cd.ctorBody = processFuncBodyWithParams(cd.ctorBody, noSym, "", cd.ctorParams, dctx, loc, member.nodeType);
 		}
 	}
 }

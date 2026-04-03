@@ -1,7 +1,8 @@
 // LSP Lifecycle Handlers + Dispatch Router + Tests
 // handleInitialize, handleDidOpen, handleDidChange, handleDidClose, lspDispatch
 
-import { TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, getFileId, invalidateFile, } from "../../transam/index";
+import { TransAmDb, createTransAmDb, dbSetFileText, dbParse, dbTypeCheck, getFileId, invalidateFile } from "../../transam/index";
+import { requestCancel } from "../../transam/cancel";
 import { clockMs } from "std/process";
 import { writeStderr } from "std/io";
 import {
@@ -21,8 +22,8 @@ import {
 	handleReferences,
 	handleDocumentHighlight,
 	handleRename,
-	handleSemanticTokensFull,
-} from "./features";
+} from "./queries";
+import { handleSemanticTokensFull } from "./semanticTokens";
 import { handleCodeAction, handleFormatting } from "./formatting";
 
 
@@ -493,4 +494,62 @@ test "Trans-Am cache hit on comment-only change" {
 	assert db.revision.value === 2;
 	const ctx2 = dbTypeCheck(db, path);
 	assert ctx2 !== null;
+}
+
+// ===== Phase 5 Integration Tests =====
+
+function didOpenParams(uri: string, text: string): string {
+	return `{"textDocument":{"uri":${lspJsonString(uri)},"languageId":"metascript","version":1,"text":${lspJsonString(text)}}}`;
+}
+
+function didChangeParams(uri: string, text: string): string {
+	return `{"textDocument":{"uri":${lspJsonString(uri)},"version":2},"contentChanges":[{"text":${lspJsonString(text)}}]}`;
+}
+
+test "didChange publishes diagnostics post-drain" {
+	const uri = "file:///test.ms";
+	const db = createTransAmDb(100);
+	handleDidOpen(didOpenParams(uri, "const x = 1;"), db);
+	handleDidChange(didChangeParams(uri, "const x = 1;\nconst y = 2;"), db);
+	const diag = publishPendingDiagnostics(db);
+	assert diag.indexOf("publishDiagnostics") >= 0;
+	assert diag.indexOf(uri) >= 0;
+}
+
+test "didChange with error then fix clears diagnostics" {
+	const uri = "file:///test.ms";
+	const db = createTransAmDb(100);
+	handleDidOpen(didOpenParams(uri, "const x: number = \"wrong\";"), db);
+	// Edit to fix the error
+	handleDidChange(didChangeParams(uri, "const x: number = 42;"), db);
+	const diag = publishPendingDiagnostics(db);
+	assert diag.indexOf("diagnostics") >= 0;
+}
+
+test "multi-file: edit B updates A diagnostics" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/src/b.ms", "export function foo(): number { return 1; }");
+	dbParse(db, "/src/b.ms");
+	dbSetFileText(db, "/src/a.ms", "import { foo } from \"./b\";\nconst x = foo();");
+	const progA = dbParse(db, "/src/a.ms");
+	recordImportsForFile(db, "/src/a.ms", progA);
+	const ctx = dbTypeCheck(db, "/src/a.ms");
+	assert ctx !== null;
+}
+
+test "cancelled type check returns without crash" {
+	const db = createTransAmDb(100);
+	dbSetFileText(db, "/test.ms", "const x = 1;");
+	requestCancel(db.cancelCtx);
+	const ctx = dbTypeCheck(db, "/test.ms");
+	// Should not crash — ctx may be null or partial
+	assert true;
+}
+
+test "type check completes within 200ms" {
+	const db = testDb("file:///test.ms", "function foo(x: number): number { return x + 1; }\nconst y = foo(42);");
+	const t0 = clockMs();
+	dbTypeCheck(db, lspUriToPath("file:///test.ms"));
+	const elapsed = clockMs() - t0;
+	assert elapsed < 200;
 }

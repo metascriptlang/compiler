@@ -137,6 +137,17 @@ static inline double msMsgGetDouble(msMessage* m, int idx) {
     return ((double*)m->data)[idx];
 }
 
+/* msString packing: msString = {int64_t len, msStrPayload* p} = 16 bytes = 2 slots.
+ * Pack as two void* slots. Cast m to msMessage* for void* compatibility. */
+#define msMsgSetString(m, idx, s) do { \
+    ((void**)((msMessage*)(m))->data)[(idx)]     = (void*)(intptr_t)(s).len; \
+    ((void**)((msMessage*)(m))->data)[(idx) + 1] = (void*)(s).p; \
+} while(0)
+
+#define msMsgGetString(m, idx) \
+    ((msString){ .len = (int64_t)(intptr_t)((void**)((msMessage*)(m))->data)[(idx)], \
+                 .p = (msStrPayload*)((void**)((msMessage*)(m))->data)[(idx) + 1] })
+
 /* ===== MPSC Queue ===== */
 
 typedef struct msMpscQueue {

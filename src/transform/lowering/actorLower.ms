@@ -1,7 +1,7 @@
 // Actor Lowering — transform ActorDecl into async actor infrastructure
 //
 // After this pass, zero ActorDecl nodes remain. DRC and codegen see:
-// - ClassDecl (state struct with _actor field)
+// - ClassDecl (state struct with pid field)
 // - FunctionDecl _impl handlers (original method bodies, called by dispatch)
 // - FunctionDecl proxies (enqueue message via msActorSend — what callers invoke)
 // - FunctionDecl dispatch (switches on msg kind, calls _impl handlers)
@@ -20,33 +20,51 @@ import {
 	syntheticToken, makeIdent, makeIdentResolved, makeCall, makeExprStmt, makeReturn,
 	makeVarDecl, makeMember, makeNumber, makeNull, makeBlock, makeBinary,
 } from "../util";
-import { voidType, unknownType, createFunction, createRef, createStruct } from "../../checker/types";
+import { voidType, unknownType, createFunction, createRef, createStruct, getSysType } from "../../checker/types";
 
 // msMessage.data[56] holds 7 pointer-sized slots (56 / 8 on 64-bit).
 const MS_MSG_MAX_ARGS = 7;
 
-// Choose msMsgSet/GetDouble for numeric types, msMsgSet/GetPtr for everything else.
-function isNumericParam(paramTypes: Type[], idx: number): boolean {
-	if (paramTypes === null || idx >= paramTypes.length) return false;
+// Classify param type for message packing:
+//   "double" → msMsgSetDouble/GetDouble (1 slot)
+//   "string" → msMsgSetString/GetString (2 slots — msString is 16 bytes)
+//   "ptr"    → msMsgSetPtr/GetPtr (1 slot — pointers, Ref<T>)
+function paramMsgKind(paramTypes: Type[], idx: number): string {
+	if (paramTypes === null || idx >= paramTypes.length) return "ptr";
 	const t = paramTypes[idx];
-	if (t === null) return false;
-	return t.kind === TypeKind.Number || t.kind === TypeKind.Float64 || t.kind === TypeKind.Float32
+	if (t === null) return "ptr";
+	if (t.kind === TypeKind.String) return "string";
+	if (t.kind === TypeKind.Number || t.kind === TypeKind.Float64 || t.kind === TypeKind.Float32
 		|| t.kind === TypeKind.Int32 || t.kind === TypeKind.Int64
 		|| t.kind === TypeKind.Int16 || t.kind === TypeKind.Int8
 		|| t.kind === TypeKind.Uint32 || t.kind === TypeKind.Uint64
 		|| t.kind === TypeKind.Uint16 || t.kind === TypeKind.Uint8
-		|| t.kind === TypeKind.Boolean || t.kind === TypeKind.Enum;
+		|| t.kind === TypeKind.Boolean || t.kind === TypeKind.Enum) return "double";
+	return "ptr";
+}
+
+// Slot width: strings use 2 slots (16 bytes), everything else 1 slot (8 bytes).
+function paramSlotWidth(paramTypes: Type[], idx: number): number {
+	return paramMsgKind(paramTypes, idx) === "string" ? 2 : 1;
 }
 
 // ===== Build proxy body for a void method (send semantics) =====
 
+function totalSlotCount(params: string[], paramTypes: Type[]): number {
+	let total = 0;
+	for (let ai = 1; ai < params.length; ai = ai + 1) {
+		total = total + paramSlotWidth(paramTypes, ai);
+	}
+	return total;
+}
+
 function buildSendProxy(kind: number, params: string[], paramTypes: Type[], ctx: TransformContext, loc: SourceLocation): Node {
 	const msgSym = freshTempSym(ctx, "amsg", voidType());
-	const argCount = params.length - 1;
+	const slotCount = totalSlotCount(params, paramTypes);
 	const msgAlloc = makeCall(makeIdent("msMsgAllocSized", loc), [
 		makeNumber(kind, loc),
 		makeNull(loc),
-		makeNumber(argCount, loc),
+		makeNumber(slotCount, loc),
 	], loc);
 	msgAlloc.nodeType = voidType();
 	const msgDecl = makeVarDecl(msgSym.name, msgAlloc, DeclKind.Const, loc);
@@ -54,19 +72,20 @@ function buildSendProxy(kind: number, params: string[], paramTypes: Type[], ctx:
 	msgDecl.nodeType = voidType();
 	const stmts: Node[] = [msgDecl];
 	// Pack args into msg->data slots (skip params[0] = "this")
+	// Strings use 2 slots (16B), everything else 1 slot (8B). Track slot offset.
+	let slot = 0;
 	for (let ai = 1; ai < params.length; ai = ai + 1) {
-		const setter = isNumericParam(paramTypes, ai) ? "msMsgSetDouble" : "msMsgSetPtr";
-		const setCall = makeCall(makeIdent(setter, loc), [
+		const mk = paramMsgKind(paramTypes, ai);
+		const setter = mk === "double" ? "msMsgSetDouble" : mk === "string" ? "msMsgSetString" : "msMsgSetPtr";
+		stmts.push(makeExprStmt(makeCall(makeIdent(setter, loc), [
 			makeIdentResolved(msgSym, loc),
-			makeNumber(ai - 1, loc),
+			makeNumber(slot, loc),
 			makeIdent(params[ai], loc),
-		], loc);
-		stmts.push(makeExprStmt(setCall, loc));
+		], loc), loc));
+		slot = slot + paramSlotWidth(paramTypes, ai);
 	}
-	const sendCall = makeCall(makeIdent("msActorSend", loc), [
-		makeMember(makeIdent("this", loc), "_actor", loc),
-		makeIdentResolved(msgSym, loc),
-	], loc);
+	const actorPtr = makeCall(makeIdent("msActorFromPid", loc), [makeMember(makeIdent("this", loc), "pid", loc)], loc);
+	const sendCall = makeCall(makeIdent("msActorSend", loc), [actorPtr, makeIdentResolved(msgSym, loc)], loc);
 	stmts.push(makeExprStmt(sendCall, loc));
 	return makeBlock(stmts, loc);
 }
@@ -81,31 +100,31 @@ function buildCallProxy(kind: number, params: string[], paramTypes: Type[], ctx:
 	const futDecl = makeVarDecl(futSym.name, futCreate, DeclKind.Const, loc);
 	futDecl.resolvedSym = futSym;
 	futDecl.nodeType = voidType();
-	const argCount = params.length - 1;
+	const slotCount = totalSlotCount(params, paramTypes);
 	const msgAlloc = makeCall(makeIdent("msMsgAllocSized", loc), [
 		makeNumber(kind, loc),
 		makeIdentResolved(futSym, loc),
-		makeNumber(argCount, loc),
+		makeNumber(slotCount, loc),
 	], loc);
 	msgAlloc.nodeType = voidType();
 	const msgDecl = makeVarDecl(msgSym.name, msgAlloc, DeclKind.Const, loc);
 	msgDecl.resolvedSym = msgSym;
 	msgDecl.nodeType = voidType();
 	const stmts: Node[] = [futDecl, msgDecl];
-	// Pack args into msg->data slots (skip params[0] = "this")
+	// Pack args (same slot tracking as sendProxy)
+	let slot = 0;
 	for (let ai = 1; ai < params.length; ai = ai + 1) {
-		const setter = isNumericParam(paramTypes, ai) ? "msMsgSetDouble" : "msMsgSetPtr";
-		const setCall = makeCall(makeIdent(setter, loc), [
+		const mk = paramMsgKind(paramTypes, ai);
+		const setter = mk === "double" ? "msMsgSetDouble" : mk === "string" ? "msMsgSetString" : "msMsgSetPtr";
+		stmts.push(makeExprStmt(makeCall(makeIdent(setter, loc), [
 			makeIdentResolved(msgSym, loc),
-			makeNumber(ai - 1, loc),
+			makeNumber(slot, loc),
 			makeIdent(params[ai], loc),
-		], loc);
-		stmts.push(makeExprStmt(setCall, loc));
+		], loc), loc));
+		slot = slot + paramSlotWidth(paramTypes, ai);
 	}
-	const sendCall = makeCall(makeIdent("msActorSend", loc), [
-		makeMember(makeIdent("this", loc), "_actor", loc),
-		makeIdentResolved(msgSym, loc),
-	], loc);
+	const actorPtr2 = makeCall(makeIdent("msActorFromPid", loc), [makeMember(makeIdent("this", loc), "pid", loc)], loc);
+	const sendCall = makeCall(makeIdent("msActorSend", loc), [actorPtr2, makeIdentResolved(msgSym, loc)], loc);
 	stmts.push(makeExprStmt(sendCall, loc));
 	const retFut = makeReturn(makeIdentResolved(futSym, loc), loc);
 	stmts.push(retFut);
@@ -140,16 +159,19 @@ function buildDispatchBody(methods: Node[], actorName: string, loc: SourceLocati
 		const cond = makeBinary(kindCall, "===", makeNumber(msgKind, loc), loc);
 		const selfRef = makeIdent("_self", loc);
 		selfRef.nodeType = actorRefType;
-		// Build handler call args: _self + unpacked args from msg
+		// Build handler call args: _self + unpacked args from msg (slot-aware)
 		const mParamTypes = m.nodeType !== null ? m.nodeType.typeChildren : [];
 		const handlerArgs: Node[] = [selfRef];
+		let dSlot = 0;
 		for (let ai = 1; ai < md.methodParams.length; ai = ai + 1) {
-			const getter = isNumericParam(mParamTypes, ai) ? "msMsgGetDouble" : "msMsgGetPtr";
+			const mk = paramMsgKind(mParamTypes, ai);
+			const getter = mk === "double" ? "msMsgGetDouble" : mk === "string" ? "msMsgGetString" : "msMsgGetPtr";
 			const getCall = makeCall(makeIdent(getter, loc), [
 				makeIdent("_dmsg", loc),
-				makeNumber(ai - 1, loc),
+				makeNumber(dSlot, loc),
 			], loc);
 			handlerArgs.push(getCall);
+			dSlot = dSlot + paramSlotWidth(mParamTypes, ai);
 		}
 		const handlerCall = makeCall(makeIdent(actorName + "_" + md.methodName + "_impl", loc), handlerArgs, loc);
 		let body: Node;
@@ -174,16 +196,19 @@ function buildDispatchBody(methods: Node[], actorName: string, loc: SourceLocati
 	return makeBlock(stmts, loc);
 }
 
-// ===== Emit state struct (ClassDecl with _actor field) =====
+// ===== Emit state struct (ClassDecl with pid field) =====
 
 function emitActorStruct(node: Node, d: ActorDeclData, loc: SourceLocation): Node {
 	const structMembers: Node[] = [];
-	structMembers.push(createNode(NodeKind.PropertyDecl, {
-		propName: "_actor",
-		propType: "void",
+	const pidProp = createNode(NodeKind.PropertyDecl, {
+		propName: "pid",
+		propType: "int64",
 		propIsStatic: false,
+		propIsReadonly: true,
 		propInitializer: null as unknown as Node,
-	}, syntheticToken(loc)));
+	}, syntheticToken(loc));
+	pidProp.nodeType = getSysType(TypeKind.Int64);
+	structMembers.push(pidProp);
 	for (const member of d.actorBody) {
 		let m = member;
 		if (m.kind === NodeKind.DecoratedDecl) {
@@ -245,6 +270,12 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 			implNode.nodeType = m.nodeType;
 			implNode.typeExprs = m.typeExprs;
 			implNode.paramLocations = m.paramLocations;
+			// resolvedSym with Function type — DRC uses this for param type classification.
+			// Without it, DRC falls back to lookupSymbol(paramName) which can find wrong-scope variables.
+			const implSym = makeSymbol(implNativeName, SymbolKind.Function, m.nodeType !== null ? m.nodeType : unknownType(), false);
+			implSym.nativeName = implNativeName;
+			implSym.state = SymbolState.Checked;
+			implNode.resolvedSym = implSym;
 			result.push(implNode);
 
 			// Proxy: enqueues message (what extensionMethodLower resolves to)
@@ -419,7 +450,7 @@ function wireActorInStmts(stmts: Node[], names: string[], dispatchSyms: Symbol[]
 		// Recurse into nested blocks first
 		wireActorInNode(stmt, names, dispatchSyms, dispatchNames);
 		out.push(stmt);
-		// After VarDecl with `new ActorType()`, inject _actor wiring
+		// After VarDecl with `new ActorType()`, inject pid wiring
 		if (stmt.kind === NodeKind.VariableDecl) {
 			const vd = stmt.data as VariableDeclData;
 			if (vd.initializer !== null && vd.initializer.kind === NodeKind.NewExpr) {
@@ -439,17 +470,20 @@ function wireActorInStmts(stmts: Node[], names: string[], dispatchSyms: Symbol[]
 						const dispatchRef = dSym !== null
 							? makeIdentResolved(dSym, loc)
 							: makeIdent(actorName + "_dispatch", loc);
-						const createCall = makeCall(makeIdent("msActorCreate", loc), [
+						// msActorCreatePid returns int64 (pointer cast) — matches pid field type
+						const createCall = makeCall(makeIdent("msActorCreatePid", loc), [
 							makeIdent(vd.declName, loc),
 							dispatchRef,
 						], loc);
 						const assignActor = makeBinary(
-							makeMember(makeIdent(vd.declName, loc), "_actor", loc),
+							makeMember(makeIdent(vd.declName, loc), "pid", loc),
 							"=", createCall, loc
 						);
 						out.push(makeExprStmt(assignActor, loc));
+						// msActorFromPid converts int64 back to msActor* for runtime calls
+						const pidRef = makeMember(makeIdent(vd.declName, loc), "pid", loc);
 						const registerCall = makeCall(makeIdent("msActorRegister", loc), [
-							makeMember(makeIdent(vd.declName, loc), "_actor", loc),
+							makeCall(makeIdent("msActorFromPid", loc), [pidRef], loc),
 						], loc);
 						out.push(makeExprStmt(registerCall, loc));
 						// Keep actor state alive past DRC scope — registry holds a ref
