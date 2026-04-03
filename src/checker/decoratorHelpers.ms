@@ -5,12 +5,14 @@ import { Node, NodeKind, DecoratedDeclData, MacroInvocationData, StringLiteralDa
 export interface DecoratorInfo {
 	builtinKind: string;
 	nativeName: string;
+	nonisolated: boolean;
 }
 
 // Extract all decorator metadata from a DecoratedDecl node as primitives.
 export function extractDecoratorInfo(node: Node): DecoratorInfo {
 	const dd = node.data as DecoratedDeclData;
 	let btKind = "";
+	let hasNonisolated = false;
 	for (let i = 0; i < dd.decorators.length; i += 1) {
 		const dec = dd.decorators[i];
 		if (dec.kind === NodeKind.MacroInvocation) {
@@ -22,19 +24,19 @@ export function extractDecoratorInfo(node: Node): DecoratorInfo {
 				}
 			} else if (md.macroName === "pure") {
 				btKind = "pure";
+			} else if (md.macroName === "nonisolated") {
+				hasNonisolated = true;
 			}
 		}
 	}
 	// Extract nativeName from inner decorated node (from "c_name" clause)
-	let natName = "";
 	const inner = dd.decoratedNode;
-	if (inner.kind === NodeKind.FunctionDecl) {
-		natName = (inner.data as FunctionDeclData).nativeName;
-	} else if (inner.kind === NodeKind.ExternDecl) {
-		natName = (inner.data as ExternDeclData).nativeName;
-	} else if (inner.kind === NodeKind.MethodDecl) {
-		natName = (inner.data as MethodDeclData).nativeName;
-	}
+	let natName = match (inner.kind) {
+		NodeKind.FunctionDecl => (inner.data as FunctionDeclData).nativeName,
+		NodeKind.ExternDecl => (inner.data as ExternDeclData).nativeName,
+		NodeKind.MethodDecl => (inner.data as MethodDeclData).nativeName,
+		_ => "",
+	};
 	if (natName === null) natName = "";
-	return { builtinKind: btKind, nativeName: natName };
+	return { builtinKind: btKind, nativeName: natName, nonisolated: hasNonisolated };
 }

@@ -248,10 +248,33 @@ function checkActorDecl(ctx: CheckerContext, node: Node): void {
 	if (sym.state === SymbolState.Checked) return;
 	sym.state = SymbolState.Checking;
 
+	// Validate actor method constraints: no async, no generator (actor methods are inherently async via mailbox)
+	for (const member of d.actorBody) {
+		let m = member;
+		if (m.kind === NodeKind.DecoratedDecl) {
+			const dd = m.data as DecoratedDeclData;
+			if (dd.decoratedNode !== null) m = dd.decoratedNode;
+		}
+		if (m.kind === NodeKind.MethodDecl) {
+			const md = m.data as MethodDeclData;
+			if (md.methodFlags === "async") {
+				addError(ctx, `actor methods are inherently async — remove 'async' from '${md.methodName}'`,
+					m.location.line, m.location.column);
+			}
+			if (md.methodFlags === "generator") {
+				addError(ctx, `actor methods cannot be generators — '${md.methodName}' uses yield which is incompatible with message passing`,
+					m.location.line, m.location.column);
+			}
+		}
+	}
+
 	openScope(ctx.table, ScopeKind.Class);
+	const prevActorName = ctx.currentActorName;
+	ctx.currentActorName = d.actorName;
 	for (const member of d.actorBody) {
 		checkClassMember(ctx, member, d.actorName, sym.symbolType);
 	}
+	ctx.currentActorName = prevActorName;
 	closeScope(ctx.table);
 
 	sym.state = SymbolState.Checked;

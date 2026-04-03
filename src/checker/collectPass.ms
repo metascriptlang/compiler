@@ -269,8 +269,12 @@ function collectActor(ctx: CheckerContext, node: Node): void {
 	const d = node.data as ActorDeclData;
 	const memberNames: string[] = [];
 	const memberTypes: Type[] = [];
-	for (let i = 0; i < d.actorBody.length; i += 1) {
-		const member = d.actorBody[i];
+	for (const raw of d.actorBody) {
+		let member = raw;
+		if (member.kind === NodeKind.DecoratedDecl) {
+			const dd = member.data as DecoratedDeclData;
+			if (dd.decoratedNode !== null) member = dd.decoratedNode;
+		}
 		if (member.kind === NodeKind.PropertyDecl) {
 			const pd = member.data as PropertyDeclData;
 			if (!pd.propIsStatic) {
@@ -294,8 +298,8 @@ function collectActor(ctx: CheckerContext, node: Node): void {
 	// Register methods as extensions (reuse collectClassMethod)
 	if (ctx.extensionRegistry !== null) {
 		const actorGenerics = getGenericDecl(d.actorName);
-		for (let si = 0; si < d.actorBody.length; si += 1) {
-			collectClassMethod(ctx, d.actorName, actorGenerics, d.actorBody[si], false);
+		for (const member of d.actorBody) {
+			collectClassMethod(ctx, d.actorName, actorGenerics, member, false);
 		}
 	}
 }
@@ -330,6 +334,14 @@ function collectClassMethod(ctx: CheckerContext, className: string, classGeneric
 		}
 		md.methodParams = newParams;
 		md.methodParamTypes = newTypes;
+		// Shift paramLocations to match — prepend null for synthetic "this" receiver.
+		// Without this, checkFunctionBody's param→location indexing is off-by-one
+		// and LSP reports "Undefined variable" for method parameters.
+		if (methodNode.paramLocations !== null) {
+			const newLocs: SourceLocation[] = [null as unknown as SourceLocation];
+			for (const loc of methodNode.paramLocations) { newLocs.push(loc); }
+			methodNode.paramLocations = newLocs;
+		}
 	}
 	const fnType = createFunction([], [], unknownType());
 	if (md.nativeName !== null && md.nativeName !== "") {

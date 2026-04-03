@@ -427,19 +427,32 @@ function processConditional(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	tmpDecl.nodeType = resultType;
 	tmpDecl.resolvedSym = tmpSym;
 	addPre(dctx, tmpDecl);
+	// Nim parity (processScopeExpr): register VarInfo for the temp so that
+	// processAssignment inside each branch can find it and emit proper RC ops
+	// (copy/move). Without this, the branch assignment `$cond = src.field`
+	// falls through processAssignment (no resolvedSym, no VarInfo → no copy).
+	const rcInfo = classifyType(resultType, dctx.ctx);
+	registerVar(dctx, tmpName, rcInfo, false, tmpSym);
+	markUninitialized(dctx, tmpName);
 	// Reference parity: push/pop scope for each branch isolates preStmts/pendingStmts
 	pushScope(dctx, false, false);
-	const thenProcessed = processBranchAssign(tmpName, resultType, cd.ternaryConsequent, dctx, loc);
+	const thenProcessed = processBranchAssign(tmpName, tmpSym, resultType, cd.ternaryConsequent, dctx, loc);
 	popScope(dctx);
 	pushScope(dctx, false, false);
-	const elseProcessed = processBranchAssign(tmpName, resultType, cd.ternaryAlternate, dctx, loc);
+	const elseProcessed = processBranchAssign(tmpName, tmpSym, resultType, cd.ternaryAlternate, dctx, loc);
 	popScope(dctx);
 	addPre(dctx, makeIf(cd.ternaryCondition, makeBlock(thenProcessed, loc), makeBlock(elseProcessed, loc), loc));
+	// Nim parity: $cond temp is consumed by enclosing expression (object literal field,
+	// call arg, etc.) in SinkArg/Consumed mode. Mark moved so scope cleanup won't double-free.
+	// Safe: $cond is single-use — created here, consumed once by caller.
+	if (mode === DrcMode.SinkArg || mode === DrcMode.Consumed) {
+		recordMove(dctx, tmpName);
+	}
 	return makeIdentResolved(tmpSym, loc);
 }
 
-function processBranchAssign(tmpName: string, resultType: Type, branchExpr: Node, dctx: DrcContext, loc: SourceLocation): Node[] {
-	const lhs = makeIdent(tmpName, loc);
+function processBranchAssign(tmpName: string, tmpSym: Symbol, resultType: Type, branchExpr: Node, dctx: DrcContext, loc: SourceLocation): Node[] {
+	const lhs = makeIdentResolved(tmpSym, loc);
 	lhs.nodeType = resultType;
 	const assign = makeExprStmt(makeAssign(lhs, branchExpr, loc), loc);
 	return processStmtList([assign], dctx, loc);
@@ -448,7 +461,21 @@ function processBranchAssign(tmpName: string, resultType: Type, branchExpr: Node
 function processIdentifier(node: Node, dctx: DrcContext, mode: DrcMode): Node {
 	const d = node.data as IdentifierData;
 	const sym = node.resolvedSym;
-	if (sym === null) return node;
+
+	// Lambda lifting creates env idents without resolvedSym.
+	// Fall back to VarInfo so DRC can emit copy for env fields in closure literals.
+	// Without this, closure env structs are destroyed at scope exit (double-free).
+	// Nim parity: nkClosure fields processed with sinkArg (injectdestructors.nim:862).
+	// Use passCopyToSink (not move) because shared envs are read after closure use.
+	if (sym === null) {
+		if (mode === DrcMode.SinkArg || mode === DrcMode.Consumed) {
+			const vi = findVarInfoInContext(dctx, d.name);
+			if (vi !== null && vi.rcInfo.needsCleanup) {
+				return passCopyToSink(node, dctx);
+			}
+		}
+		return node;
+	}
 
 	// Implementation parity: function/method declarations are static — no RC needed.
 	// Bare function names inside closure thunks (e.g. { fn: isEven, env: null })

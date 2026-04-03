@@ -35,6 +35,7 @@ export enum SymbolFlag {
 	HasConstructor = 65536, // class has a ConstructorDecl → codegen calls ClassName_new()
 	NativeMethod = 131072, // method from extern class — don't set ExtCall, keep as native member call
 	GeneratedOp = 262144, // generated lifecycle hook (=destroy/=copy/=sink/=wasMoved) — skip DRC injection (reference parity: sfGeneratedOp)
+	Nonisolated = 524288, // @nonisolated — actor field/method readable from outside (Swift parity)
 }
 
 // Flag helpers
@@ -182,6 +183,7 @@ export function makeSymbolState(name: string, kind: SymbolKind, symType: Type, m
 	sym.modulePath = "";
 	sym.originalName = "";
 	sym.headerPath = "";
+	sym.jsModulePath = "";
 	sym.overloadIdx = 0;
 	sym.staticFields = [];
 	return sym;

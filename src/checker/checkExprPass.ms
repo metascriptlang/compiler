@@ -1,7 +1,7 @@
 // Expression Checker — type inference for all expression kinds
 // Extracted from checkPass.ms. Uses checkerCallbacks for mutual recursion with checkStmt.
 
-import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, DeclKind, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, ClassDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts } from "../ast/node";
+import { Node, NodeKind, NodeData, createNode, createNodeAt, NodeFlag, DeclKind, SourceLocation, IdentifierData, BinaryExprData, UnaryExprData, UpdateExprData, NumberLiteralData, CallExprData, MemberExprData, ArrayAccessData, ObjectLiteralData, ArrayLiteralData, ConditionalExprData, TypeAssertionData, SpreadExprData, NewExprData, TryExprData, AwaitExprData, YieldExprData, MoveExprData, OutExprData, SizeofExprData, HiddenDerefData, HiddenStdConvData, MacroInvocationData, StringLiteralData, ArrowFunctionData, FunctionExprData, MatchCaseData, MatchExprData, FunctionDeclData, ClassDeclData, ActorDeclData, PropertyDeclData, DecoratedDeclData, BlockStmtData, ExprStmtData, ReturnStmtData, IfStmtData, Type, TypeKind, CallingConvention, Symbol, SymbolKind, SymbolState, BooleanLiteralData, collectConcatParts } from "../ast/node";
 import { TokenKind, Token, createToken } from "../lexer/token";
 import { unknownType, numberType, int32Type, float64Type, isFloatType, stringType, booleanType, charType, voidType, nullType, errorType, createArray, createSpan, createFunction, createTypeRef, createStruct, createResult, createPrimitive, substituteType, instantiateGeneric, anonStructName, isNumeric, isIntegerType, getReturnType, getElementType, getProperty, sizeOfType, typeNameOf, unwrapRef, isDiscriminatedUnion, getDiscriminantName, findVariantByDiscriminant, findFieldInVariant, findUnionVariant, isAmbiguousVariant, unifyType, createUnifyBindings, hasGenericParams, getMinArity, setMinArity, isNarrowingIntConv, integerRank, skipModifier, createPromise, isPromise, getPromiseInner, isResult, getResultOkType, createGenericParam, instantiateGenericBody, isStringLike, isPrimitiveKind, isStructType } from "./types";
 import { ScopeKind, SymbolFlag, defineSymbol, lookupSymbol, makeSymbol, makeSymbolState, openScope, closeScope, hasOverloads, hasFlag, markUsed } from "./symbol";
@@ -1005,9 +1005,15 @@ function fillDefaultArgsForNode(ctx: CheckerContext, callNode: Node, fnName: str
 // ===== NewExpr =====
 
 function getCtorParamTypes(classSym: Symbol): Type[] {
-	if (classSym.declNode !== null && classSym.declNode.kind === NodeKind.ClassDecl) {
-		const classData = classSym.declNode.data as ClassDeclData;
-		for (const member of classData.classBody) {
+	if (classSym.declNode === null) return null as unknown as Type[];
+	let body: Node[] = null as unknown as Node[];
+	if (classSym.declNode.kind === NodeKind.ClassDecl) {
+		body = (classSym.declNode.data as ClassDeclData).classBody;
+	} else if (classSym.declNode.kind === NodeKind.ActorDecl) {
+		body = (classSym.declNode.data as ActorDeclData).actorBody;
+	}
+	if (body !== null) {
+		for (const member of body) {
 			if (member.kind === NodeKind.ConstructorDecl && member.nodeType !== null
 					&& member.nodeType.kind === TypeKind.Function) {
 				return member.nodeType.typeChildren;
@@ -2021,6 +2027,18 @@ function checkMemberExpr(ctx: CheckerContext, node: Node): Type {
 			|| d.object.resolvedSym.symbolKind === SymbolKind.Interface
 			|| d.object.resolvedSym.symbolKind === SymbolKind.Struct);
 	let propType = isStaticClassAccess ? unknownType() : getProperty(resolvedObjType, d.property);
+	// Actor isolation: block external field access (only message-passing allowed).
+	// Allow access from inside the actor's own methods (ctx.currentActorName matches).
+	// Allow @nonisolated fields for read access (Swift parity).
+	if (!isStaticClassAccess && propType.kind !== TypeKind.Unknown && resolvedObjType.typeName !== "") {
+		const fieldOwnerSym = lookupSymbol(ctx.table, resolvedObjType.typeName);
+		if (fieldOwnerSym !== null && fieldOwnerSym.symbolKind === SymbolKind.Actor
+			&& ctx.currentActorName !== resolvedObjType.typeName
+			&& !hasNonisolatedField(fieldOwnerSym, d.property)) {
+			addError(ctx, `cannot access actor field '${d.property}' directly — use actor methods`,
+				node.location.line, node.location.column);
+		}
+	}
 	// Static property lookup: check class symbol's staticFields
 	if (isStaticClassAccess && propType.kind === TypeKind.Unknown && d.object.resolvedSym !== null) {
 		const staticField = findStaticField(d.object.resolvedSym, d.property);
@@ -2705,27 +2723,75 @@ function processEmitInterpolation(ctx: CheckerContext, md: MacroInvocationData, 
 	md.macroArgs = newArgs;
 }
 
+// ===== Actor Isolation Helpers =====
+
+function hasNonisolatedField(actorSym: Symbol, fieldName: string): boolean {
+	if (actorSym.declNode === null || actorSym.declNode.kind !== NodeKind.ActorDecl) return false;
+	const actorBody = (actorSym.declNode.data as ActorDeclData).actorBody;
+	for (const m of actorBody) {
+		if (m.kind !== NodeKind.DecoratedDecl) continue;
+		const dd = m.data as DecoratedDeclData;
+		if (dd.decoratedNode === null || dd.decoratedNode.kind !== NodeKind.PropertyDecl) continue;
+		if ((dd.decoratedNode.data as PropertyDeclData).propName !== fieldName) continue;
+		for (const dec of dd.decorators) {
+			if (dec.kind === NodeKind.MacroInvocation
+				&& (dec.data as MacroInvocationData).macroName === "nonisolated") return true;
+		}
+	}
+	return false;
+}
+
 // ===== Actor Sendable Checker =====
 // Enforces safe data transfer at actor method boundaries.
 // Reuses: isPrimitiveKind, isStructType, SymbolFlag.Mutable, NodeKind.MoveExpr.
 
-function isSendable(t: Type, argNode: Node): boolean {
+// Type-level check: is the type safe to send (no mutable refs anywhere)?
+// Follows Nim isolation_check.nim:containsDangerousRefAux — recurse into structure.
+function isTypeSendable(t: Type): boolean {
 	if (t === null) return true;
 	if (isPrimitiveKind(t.kind)) return true;
-	if (t.kind === TypeKind.String) return true;
+	return match (t.kind) {
+		TypeKind.String => true,
+		TypeKind.Struct when (isStructType(t)) => {
+			for (const ft of t.typeChildren) {
+				if (!isTypeSendable(ft)) return false;
+			}
+			return true;
+		},
+		TypeKind.Tuple => {
+			for (const et of t.typeChildren) {
+				if (!isTypeSendable(et)) return false;
+			}
+			return true;
+		},
+		TypeKind.GenericInstance => {
+			if (t.typeReturn !== null && !isTypeSendable(t.typeReturn)) return false;
+			for (const ta of t.typeChildren) {
+				if (!isTypeSendable(ta)) return false;
+			}
+			return true;
+		},
+		TypeKind.Array => {
+			return t.typeReturn !== null ? isTypeSendable(t.typeReturn) : true;
+		},
+		TypeKind.Ref | TypeKind.Function => false,
+		_ => false,
+	};
+}
+
+// Call-site check: combines type analysis with expression-level rules (move, const binding).
+function isSendable(t: Type, argNode: Node): boolean {
+	if (t === null) return true;
+	// move always transfers ownership safely
 	if (argNode !== null && argNode.kind === NodeKind.MoveExpr) return true;
-	if (isStructType(t)) {
-		for (const ft of t.typeChildren) {
-			if (!isSendable(ft, argNode)) return false;
-		}
-		return true;
-	}
+	// If the type itself contains no refs, it's always sendable (value copy)
+	if (isTypeSendable(t)) return true;
+	// Ref<T> with const binding → SHARE rule (immutable, safe to share)
 	if (t.kind === TypeKind.Ref) {
 		if (argNode !== null && argNode.resolvedSym !== null
 			&& !hasFlag(argNode.resolvedSym, SymbolFlag.Mutable)) return true;
 		return false;
 	}
-	if (t.kind === TypeKind.Function) return false;
 	return false;
 }
 
@@ -2733,20 +2799,19 @@ function checkActorArgSendable(ctx: CheckerContext, argNode: Node, pi: number): 
 	const t = argNode.nodeType;
 	if (t === null) return;
 	if (isSendable(t, argNode)) return;
-	let argLabel = "arg " + pi.toString();
-	if (argNode.kind === NodeKind.Identifier) {
-		argLabel = "'" + (argNode.data as IdentifierData).name + "'";
-	}
+	const argLabel = argNode.kind === NodeKind.Identifier
+		? "'" + (argNode.data as IdentifierData).name + "'"
+		: `arg ${pi}`;
 	const typedesc = typeNameOf(t);
-	let hint = "";
-	if (t.kind === TypeKind.Ref) {
-		let varName = "";
-		if (argNode.kind === NodeKind.Identifier) { varName = " " + (argNode.data as IdentifierData).name; }
-		hint = " — use `move" + varName + "` to transfer ownership";
-	} else if (t.kind === TypeKind.Function) {
-		hint = " — closures may capture mutable state";
-	}
-	addError(ctx, "actor methods only accept value types, `move`, or `const` references\n" + typedesc + " " + argLabel + " is a mutable reference" + hint,
+	const hint = match (t.kind) {
+		TypeKind.Ref => {
+			const varName = argNode.kind === NodeKind.Identifier ? " " + (argNode.data as IdentifierData).name : "";
+			return ` — use \`move${varName}\` to transfer ownership`;
+		},
+		TypeKind.Function => " — closures may capture mutable state",
+		_ => "",
+	};
+	addError(ctx, `actor methods only accept value types, \`move\`, or \`const\` references\n${typedesc} ${argLabel} is a mutable reference${hint}`,
 		argNode.location.line, argNode.location.column);
 }
 

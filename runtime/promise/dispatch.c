@@ -19,6 +19,11 @@
 #include <fcntl.h>
 #endif
 
+/* ===== Actor poll hook (set by actor runtime, NULL if no actors) ===== */
+static bool (*msActorPollHook)(void) = NULL;
+void msSetActorPollHook(bool (*hook)(void)) { msActorPollHook = hook; }
+
+
 /* ===== Platform-specific time + sleep ===== */
 
 #ifdef _WIN32
@@ -117,6 +122,14 @@ msDispatcher* msGetDispatcher(void) {
 /* POSIX: self-pipe pattern — pool threads write to pipe[1], event loop reads pipe[0]. */
 
 static int gCompletionPipe[2] = {-1, -1};
+
+/* Wake event loop from another thread (Pony-style: unpark scheduler) */
+void msActorWakeEventLoop(void) {
+    if (gCompletionPipe[1] >= 0) {
+        char c = 'A';
+        (void)write(gCompletionPipe[1], &c, 1);
+    }
+}
 
 msDispatcher* msGetDispatcher(void) {
 	if (gDispatcher == NULL) {
@@ -302,6 +315,12 @@ bool msRunOnce(int timeoutMs) {
 
 	/* Step 5: I/O engine poll is driven by std/net event loops, not here.
 	 * Programs that don't use networking don't compile the engine. */
+
+	/* Step 6: Drain actor mailboxes (if actors are linked in).
+	 * msActorPollHook is set by actor runtime init — NULL if no actors. */
+	if (msActorPollHook != NULL) {
+		didWork = msActorPollHook() || didWork;
+	}
 
 	return didWork;
 }

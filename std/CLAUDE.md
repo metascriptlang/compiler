@@ -120,11 +120,22 @@ export function dirname(p: string): string {
 | `std/core/array` | Array extension methods | I/O, file operations |
 | `std/testing` | Test intrinsics | Everything else |
 
-## C Runtime Headers
+## C Runtime
 
-Runtime `.h` files live alongside their `.cms`:
-- `std/fs/native.h` — POSIX file ops
-- `std/io/native.h` — stdio streams
-- `std/process/native.h` — process/env/clock
+All C runtime code lives in `runtime/` (project root), NOT under `std/`. The `std/` directory contains only MetaScript files (.ms/.cms).
 
-Shared low-level types (`msString`, `msAllocTyped`, etc.) live in `runtime/system.h`. Module-specific runtime code (json, map, array, string) lives in `runtime/core/`.
+```
+runtime/
+├── drc.h / .c         -- DRC allocator (malloc + RC + ORC)
+├── manual.h           -- Manual allocator (arena + no-op RC, --gc=manual)
+├── types.h            -- msRefHeader, msTypeInfo
+├── core/              -- core types: system.h/c, string.h/c, array.h/c, buffer.h/c, test.h, abort.h
+├── promise/           -- async: future.h, dispatch.h/c, thread.h, locker.h, selector*.c
+├── crypto/            -- hashing + ciphers/ + curves/ + kdf/ + tls/ + rsa/
+├── io/                -- I/O engines: streams.h, engine.h, engine*.c
+├── net/               -- networking: socket.h, async.h
+├── actor/             -- actor model: actor.h, cycle.h, mailbox.h, selector.h
+├── fs.h, process.h, os.h, hcr.h
+```
+
+Prelude `.cms` files reference runtime via `@include("runtime/...")` and `@compile("runtime/...")`.

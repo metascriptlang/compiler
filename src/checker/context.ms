@@ -52,26 +52,55 @@ export interface ModuleExports {
 
 export interface ExportRegistry {
 	entries: ModuleExports[];
+	nameIndex: Map<string, ExportedSymInfo[]>;  // name → all exports with that name (cross-module)
 }
 
 export function createExportRegistry(): ExportRegistry {
-	return { entries: [] };
+	return { entries: [], nameIndex: new Map<string, ExportedSymInfo[]>() };
+}
+
+function addToNameIndex(registry: ExportRegistry, exports: ExportedSymInfo[]): void {
+	for (const sym of exports) {
+		if (sym.name.length === 0) continue;
+		if (registry.nameIndex.has(sym.name)) {
+			registry.nameIndex.get(sym.name).push(sym);
+		} else {
+			const arr: ExportedSymInfo[] = [sym];
+			registry.nameIndex.set(sym.name, arr);
+		}
+	}
+}
+
+export function removeFromNameIndex(registry: ExportRegistry, exports: ExportedSymInfo[]): void {
+	for (const sym of exports) {
+		if (sym.name.length === 0) continue;
+		if (!registry.nameIndex.has(sym.name)) continue;
+		const arr = registry.nameIndex.get(sym.name);
+		let wi = 0;
+		for (let ri = 0; ri < arr.length; ri += 1) {
+			if (arr[ri] !== sym) { arr[wi] = arr[ri]; wi = wi + 1; }
+		}
+		arr.length = wi;
+		if (wi === 0) registry.nameIndex.delete(sym.name);
+	}
 }
 
 export function registerModuleExports(registry: ExportRegistry, modulePath: string, exports: ExportedSymInfo[]): void {
 	const entry: ModuleExports = { modulePath, symbols: exports };
 	registry.entries.push(entry);
+	addToNameIndex(registry, exports);
 }
 
 // Replace existing module's exports (Phase 2 updates Phase 1 placeholders)
 export function updateModuleExports(registry: ExportRegistry, modulePath: string, exports: ExportedSymInfo[]): void {
 	for (let i = 0; i < registry.entries.length; i += 1) {
 		if (registry.entries[i].modulePath === modulePath) {
+			removeFromNameIndex(registry, registry.entries[i].symbols);
 			registry.entries[i].symbols = exports;
+			addToNameIndex(registry, exports);
 			return;
 		}
 	}
-	// Not found — register fresh (defensive)
 	registerModuleExports(registry, modulePath, exports);
 }
 
@@ -80,6 +109,12 @@ export function findModuleExports(registry: ExportRegistry, modulePath: string):
 		if (entry.modulePath === modulePath) return entry;
 	}
 	return null as unknown as ModuleExports;
+}
+
+// O(1) cross-module lookup by name — returns all exports with that name across all modules.
+export function findExportsByName(registry: ExportRegistry, name: string): ExportedSymInfo[] {
+	if (registry.nameIndex.has(name)) return registry.nameIndex.get(name);
+	return [];
 }
 
 export function findExportedSymbol(registry: ExportRegistry, modulePath: string, name: string): ExportedSymInfo {
@@ -661,6 +696,7 @@ export class CheckerContext {
 	errors: CheckerError[];
 	gcMode: GcMode;                // Drc (default: RC + ORC), None (malloc, no free), Manual (freestanding, arena)
 	currentFunction: Symbol;   // innermost function (for return type validation)
+	currentActorName: string;  // non-empty when inside an actor body (isolation checking)
 	inLoop: boolean;           // break/continue validation
 	inTestBlock: boolean;      // assert validation — only allowed inside test blocks
 	moduleGraph: ModuleGraph;
@@ -696,6 +732,7 @@ export function createContext(): CheckerContext {
 		errors: [],
 		gcMode: GcMode.Drc,
 		currentFunction: null as unknown as Symbol,
+		currentActorName: "",
 		inLoop: false,
 		inTestBlock: false,
 		moduleGraph: null as unknown as ModuleGraph,

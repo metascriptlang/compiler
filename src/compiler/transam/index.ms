@@ -9,7 +9,8 @@
 
 import { Node, NodeKind, nodeCacheStore, nodeCacheGet } from "../../ast/node";
 import { readFile as readStdFile } from "std/fs";
-import { CheckerContext, CancelCtx, ctxCacheStore, ctxCacheGet, createContext } from "../../checker/context";
+import { CheckerContext, Severity, CancelCtx, ctxCacheStore, ctxCacheGet, createContext } from "../../checker/context";
+import { SymbolFlag, hasFlag } from "../../checker/symbol";
 import {
 	TaQueryKey, TaQueryKind, TaQueryState, TaDurability,
 	TaRevision, createRevision, incrementRevision,
@@ -48,7 +49,7 @@ import { parseSource, parseSourceLenient } from "../../parser/statements/validat
 import { checkProgramWithRegistryCancellable, buildPreludeContext } from "../../checker/index";
 import { transformProgram } from "../../transform/index";
 import { analyzeProgram } from "../../analyzer/index";
-import { ExportRegistry, createExportRegistry, findModuleExports, registerModuleExports, findExportedSymbol, collectExports } from "../../checker/context";
+import { ExportRegistry, createExportRegistry, findModuleExports, registerModuleExports, removeFromNameIndex, findExportedSymbol, collectExports } from "../../checker/context";
 import { collectTopLevelLocal, collectTopLevel } from "../../checker/collectPass";
 import { resolveDeclarations } from "../../checker/resolvePass";
 import { openScope, ScopeKind } from "../../checker/symbol";
@@ -176,7 +177,7 @@ function dbInvalidateExports(db: TransAmDb, fileId: number): void {
 function removeExportEntry(registry: ExportRegistry, path: string): void {
 	for (let i = 0; i < registry.entries.length; i = i + 1) {
 		if (registry.entries[i].modulePath === path) {
-			// Shift left and pop
+			removeFromNameIndex(registry, registry.entries[i].symbols);
 			for (let j = i; j < registry.entries.length - 1; j = j + 1) {
 				registry.entries[j] = registry.entries[j + 1];
 			}
@@ -441,6 +442,29 @@ function matchesImportSpec(absPath: string, spec: string): boolean {
 	return false;
 }
 
+// Hash checker result for Salsa early cutoff. If error count + exported symbol
+// signatures are unchanged, dependents stay GREEN (comment-only edits, etc.).
+function hashCheckerResult(ctx: CheckerContext): number {
+	if (ctx === null) return 0;
+	// Only hash Error-severity errors (hints/warnings don't affect dependents)
+	let errorCount = 0;
+	for (const err of ctx.errors) {
+		if (err.severity === Severity.Error) errorCount = errorCount + 1;
+	}
+	let h: number = errorCount;
+	if (ctx.table !== null && ctx.table.current !== null) {
+		const scope = ctx.table.current;
+		for (const sym of scope.symbols) {
+			if (hasFlag(sym, SymbolFlag.Exported)) {
+				// Hash name + type kind so type changes invalidate dependents
+				const typeKind = sym.symbolType !== null ? sym.symbolType.kind : 0;
+				h = (h * 31 + taHashString(sym.name) + typeKind) % 2147483647;
+			}
+		}
+	}
+	return h;
+}
+
 // Execute type check query. Returns CheckerContext.
 export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const fileId = getFileId(db.fileInput, filePath);
@@ -477,15 +501,19 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 	const parseHash = parseEntry !== null ? parseEntry.outputHash : 0;
 	recordDependency(db.depStack, pKey, parseHash);
 
-	// Record cross-module deps: TypeCheck(A) depends on Parse(B) for each import B.
-	// Without this, tryMarkGreen would verify TypeCheck(A) as GREEN even when B changed,
-	// because Parse(A) is unchanged. Reference: module depends on imports' interface tables.
+	// Record cross-module deps: TypeCheck(A) depends on Parse(B) AND TypeCheck(B) for each import B.
+	// Parse dep: structural changes (new/removed declarations).
+	// TypeCheck dep: semantic changes (export type signatures, error state).
+	// Without TypeCheck dep, changing an export's type in B wouldn't invalidate A if AST shape is same.
 	const importDepIds = getDirectImports(db.moduleDeps, fileId);
 	for (let di = 0; di < importDepIds.length; di = di + 1) {
-		const depParseKey = createQueryKey(TaQueryKind.Parse, importDepIds[di]);
+		const depId = importDepIds[di];
+		const depParseKey = createQueryKey(TaQueryKind.Parse, depId);
 		const depParseEntry = cacheGet(db.cache, depParseKey);
-		const depParseHash = depParseEntry !== null ? depParseEntry.outputHash : 0;
-		recordDependency(db.depStack, depParseKey, depParseHash);
+		recordDependency(db.depStack, depParseKey, depParseEntry !== null ? depParseEntry.outputHash : 0);
+		const depCheckKey = createQueryKey(TaQueryKind.TypeCheck, depId);
+		const depCheckEntry = cacheGet(db.cache, depCheckKey);
+		recordDependency(db.depStack, depCheckKey, depCheckEntry !== null ? depCheckEntry.outputHash : 0);
 	}
 
 	// Cross-module: build synthetic Module + ModuleGraph, use ExportRegistry
@@ -508,7 +536,8 @@ export function dbTypeCheck(db: TransAmDb, filePath: string): CheckerContext {
 
 	ctxCacheStore(checkCtxKey(fileId), checkerCtx);
 	nodeCacheStore(checkNodeKey(fileId), program);  // cache checked program (has resolvedSym/nodeType)
-	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, 0, true);
+	const checkHash = hashCheckerResult(checkerCtx);
+	executeQueryWith(db.cache, db.fileInput, db.depStack, key, db.revision.value, checkHash, true);
 	return checkerCtx;
 }
 

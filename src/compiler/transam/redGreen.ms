@@ -83,11 +83,11 @@ export function tryMarkGreen(
 
 		const depEntry = cacheGet(cache, dep.depKey);
 
-		// HIGH durability: skip recursive verification (stdlib assumed stable)
-		// but still check if it was recomputed since we cached
+		// HIGH durability: skip recursive verification (stdlib assumed stable).
+		// Salsa early cutoff: only invalidate if recomputed AND output actually changed.
 		if (depEntry !== null) {
 			if (depEntry.durability === TaDurability.High) {
-				if (depEntry.computedAt > entry.computedAt) {
+				if (depEntry.computedAt > entry.computedAt && depEntry.outputHash !== dep.expectedHash) {
 					entry.state = TaQueryState.Red;
 					return false;
 				}
@@ -416,30 +416,59 @@ test "high durability dep skips recursive verification" {
 	assert tryMarkGreen(cache, fileInput, userKey, 2);
 }
 
-test "high durability dep recomputed after us marks red" {
+test "high durability dep recomputed with same output stays green" {
 	const cache = createCacheStore(100);
 	const fileInput = createFileInputStore();
 
-	// Stdlib query recomputed at rev 3
+	// Stdlib query recomputed at rev 3, output hash unchanged (42)
 	const stdKey = createQueryKey(TaQueryKind.Parse, 99);
 	const stdEntry = createCacheEntry(stdKey);
 	stdEntry.state = TaQueryState.Green;
 	stdEntry.computedAt = 3;
 	stdEntry.verifiedAt = 3;
+	stdEntry.outputHash = 42;
 	stdEntry.durability = TaDurability.High;
 	cachePut(cache, stdEntry);
 
-	// User query was computed at rev 1 — before stdlib recomputed
+	// User query was computed at rev 1, expects hash 42
 	const userKey = createQueryKey(TaQueryKind.TypeCheck, 0);
 	const userEntry = createCacheEntry(userKey);
 	userEntry.state = TaQueryState.Red;
 	userEntry.computedAt = 1;
 	userEntry.verifiedAt = 0;
-	const dep: TaDependencyEntry = { depKey: stdKey, expectedHash: 0 };
+	const dep: TaDependencyEntry = { depKey: stdKey, expectedHash: 42 };
 	userEntry.dependencies = [dep];
 	cachePut(cache, userEntry);
 
-	// HIGH durability dep recomputed AFTER us → RED
+	// HIGH durability dep recomputed AFTER us but output unchanged → GREEN (Salsa early cutoff)
+	assert tryMarkGreen(cache, fileInput, userKey, 4);
+}
+
+test "high durability dep recomputed with changed output marks red" {
+	const cache = createCacheStore(100);
+	const fileInput = createFileInputStore();
+
+	// Stdlib query recomputed at rev 3, output hash changed (99 vs expected 42)
+	const stdKey = createQueryKey(TaQueryKind.Parse, 99);
+	const stdEntry = createCacheEntry(stdKey);
+	stdEntry.state = TaQueryState.Green;
+	stdEntry.computedAt = 3;
+	stdEntry.verifiedAt = 3;
+	stdEntry.outputHash = 99;
+	stdEntry.durability = TaDurability.High;
+	cachePut(cache, stdEntry);
+
+	// User query was computed at rev 1, expects hash 42
+	const userKey = createQueryKey(TaQueryKind.TypeCheck, 0);
+	const userEntry = createCacheEntry(userKey);
+	userEntry.state = TaQueryState.Red;
+	userEntry.computedAt = 1;
+	userEntry.verifiedAt = 0;
+	const dep: TaDependencyEntry = { depKey: stdKey, expectedHash: 42 };
+	userEntry.dependencies = [dep];
+	cachePut(cache, userEntry);
+
+	// HIGH durability dep recomputed AFTER us AND output changed → RED
 	assert !tryMarkGreen(cache, fileInput, userKey, 4);
 }
 

@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 
 #include "runtime/types.h"
 
@@ -64,6 +65,14 @@ static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
 static inline void msIncRef(void* p) {
 	if (p != NULL) {
 		msHeader(p)->rc++;
+	}
+}
+
+/* Atomic incref for cross-thread sharing (SHARE rule: const Ref crossing actor boundary).
+ * Uses relaxed ordering — sufficient for refcount increment (no data dependency). */
+static inline void msAtomicIncRef(void* p) {
+	if (p != NULL) {
+		atomic_fetch_add_explicit((_Atomic(int32_t)*)&msHeader(p)->rc, 1, memory_order_relaxed);
 	}
 }
 

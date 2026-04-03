@@ -7,43 +7,73 @@
 // - FunctionDecl dispatch (switches on msg kind, calls _impl handlers)
 // - @include("runtime/actor/actor.h") injected for C compilation
 
-import { Node, NodeKind, SourceLocation, DeclKind,
+import { Node, NodeKind, SourceLocation, DeclKind, Type, TypeKind,
 	ActorDeclData, MethodDeclData, ConstructorDeclData,
 	DecoratedDeclData, ExportDeclData, ProgramData, NewExprData,
 	IdentifierData, VariableDeclData, FunctionDeclData, IfStmtData,
 	WhileStmtData, ForOfStmtData, ForStmtData, BlockStmtData,
 	DoWhileStmtData, TryCatchStmtData, SwitchStmtData, SwitchCaseData,
-	Symbol, SymbolKind, SymbolState } from "../../ast/node";
+	Symbol, SymbolKind, SymbolState, createNode } from "../../ast/node";
 import { TransformContext, freshTempSym } from "../context";
 import { makeSymbol } from "../../checker/symbol";
-import { syntheticToken, makeIdent, makeIdentResolved, makeCall, makeExprStmt, makeReturn,
-	makeVarDecl, makeMember, makeNumber, makeNull, makeBlock,
-	makeBinary } from "../util";
-import { createNode } from "../../ast/node";
+import {
+	syntheticToken, makeIdent, makeIdentResolved, makeCall, makeExprStmt, makeReturn,
+	makeVarDecl, makeMember, makeNumber, makeNull, makeBlock, makeBinary,
+} from "../util";
 import { voidType, unknownType, createFunction, createRef, createStruct } from "../../checker/types";
+
+// msMessage.data[56] holds 7 pointer-sized slots (56 / 8 on 64-bit).
+const MS_MSG_MAX_ARGS = 7;
+
+// Choose msMsgSet/GetDouble for numeric types, msMsgSet/GetPtr for everything else.
+function isNumericParam(paramTypes: Type[], idx: number): boolean {
+	if (paramTypes === null || idx >= paramTypes.length) return false;
+	const t = paramTypes[idx];
+	if (t === null) return false;
+	return t.kind === TypeKind.Number || t.kind === TypeKind.Float64 || t.kind === TypeKind.Float32
+		|| t.kind === TypeKind.Int32 || t.kind === TypeKind.Int64
+		|| t.kind === TypeKind.Int16 || t.kind === TypeKind.Int8
+		|| t.kind === TypeKind.Uint32 || t.kind === TypeKind.Uint64
+		|| t.kind === TypeKind.Uint16 || t.kind === TypeKind.Uint8
+		|| t.kind === TypeKind.Boolean || t.kind === TypeKind.Enum;
+}
 
 // ===== Build proxy body for a void method (send semantics) =====
 
-function buildSendProxy(kind: number, ctx: TransformContext, loc: SourceLocation): Node {
+function buildSendProxy(kind: number, params: string[], paramTypes: Type[], ctx: TransformContext, loc: SourceLocation): Node {
 	const msgSym = freshTempSym(ctx, "amsg", voidType());
-	const msgAlloc = makeCall(makeIdent("msMsgAlloc", loc), [
+	const argCount = params.length - 1;
+	const msgAlloc = makeCall(makeIdent("msMsgAllocSized", loc), [
 		makeNumber(kind, loc),
 		makeNull(loc),
+		makeNumber(argCount, loc),
 	], loc);
 	msgAlloc.nodeType = voidType();
 	const msgDecl = makeVarDecl(msgSym.name, msgAlloc, DeclKind.Const, loc);
 	msgDecl.resolvedSym = msgSym;
 	msgDecl.nodeType = voidType();
+	const stmts: Node[] = [msgDecl];
+	// Pack args into msg->data slots (skip params[0] = "this")
+	for (let ai = 1; ai < params.length; ai = ai + 1) {
+		const setter = isNumericParam(paramTypes, ai) ? "msMsgSetDouble" : "msMsgSetPtr";
+		const setCall = makeCall(makeIdent(setter, loc), [
+			makeIdentResolved(msgSym, loc),
+			makeNumber(ai - 1, loc),
+			makeIdent(params[ai], loc),
+		], loc);
+		stmts.push(makeExprStmt(setCall, loc));
+	}
 	const sendCall = makeCall(makeIdent("msActorSend", loc), [
 		makeMember(makeIdent("this", loc), "_actor", loc),
 		makeIdentResolved(msgSym, loc),
 	], loc);
-	return makeBlock([msgDecl, makeExprStmt(sendCall, loc)], loc);
+	stmts.push(makeExprStmt(sendCall, loc));
+	return makeBlock(stmts, loc);
 }
 
 // ===== Build proxy body for a T-returning method (call semantics) =====
 
-function buildCallProxy(kind: number, ctx: TransformContext, loc: SourceLocation): Node {
+function buildCallProxy(kind: number, params: string[], paramTypes: Type[], ctx: TransformContext, loc: SourceLocation): Node {
 	const futSym = freshTempSym(ctx, "afut", voidType());
 	const msgSym = freshTempSym(ctx, "amsg", voidType());
 	const futCreate = makeCall(makeIdent("msFutureCreate", loc), [], loc);
@@ -51,20 +81,35 @@ function buildCallProxy(kind: number, ctx: TransformContext, loc: SourceLocation
 	const futDecl = makeVarDecl(futSym.name, futCreate, DeclKind.Const, loc);
 	futDecl.resolvedSym = futSym;
 	futDecl.nodeType = voidType();
-	const msgAlloc = makeCall(makeIdent("msMsgAlloc", loc), [
+	const argCount = params.length - 1;
+	const msgAlloc = makeCall(makeIdent("msMsgAllocSized", loc), [
 		makeNumber(kind, loc),
 		makeIdentResolved(futSym, loc),
+		makeNumber(argCount, loc),
 	], loc);
 	msgAlloc.nodeType = voidType();
 	const msgDecl = makeVarDecl(msgSym.name, msgAlloc, DeclKind.Const, loc);
 	msgDecl.resolvedSym = msgSym;
 	msgDecl.nodeType = voidType();
+	const stmts: Node[] = [futDecl, msgDecl];
+	// Pack args into msg->data slots (skip params[0] = "this")
+	for (let ai = 1; ai < params.length; ai = ai + 1) {
+		const setter = isNumericParam(paramTypes, ai) ? "msMsgSetDouble" : "msMsgSetPtr";
+		const setCall = makeCall(makeIdent(setter, loc), [
+			makeIdentResolved(msgSym, loc),
+			makeNumber(ai - 1, loc),
+			makeIdent(params[ai], loc),
+		], loc);
+		stmts.push(makeExprStmt(setCall, loc));
+	}
 	const sendCall = makeCall(makeIdent("msActorSend", loc), [
 		makeMember(makeIdent("this", loc), "_actor", loc),
 		makeIdentResolved(msgSym, loc),
 	], loc);
+	stmts.push(makeExprStmt(sendCall, loc));
 	const retFut = makeReturn(makeIdentResolved(futSym, loc), loc);
-	return makeBlock([futDecl, msgDecl, makeExprStmt(sendCall, loc), retFut], loc);
+	stmts.push(retFut);
+	return makeBlock(stmts, loc);
 }
 
 // ===== Build dispatch function body =====
@@ -95,7 +140,18 @@ function buildDispatchBody(methods: Node[], actorName: string, loc: SourceLocati
 		const cond = makeBinary(kindCall, "===", makeNumber(msgKind, loc), loc);
 		const selfRef = makeIdent("_self", loc);
 		selfRef.nodeType = actorRefType;
-		const handlerCall = makeCall(makeIdent(actorName + "_" + md.methodName + "_impl", loc), [selfRef], loc);
+		// Build handler call args: _self + unpacked args from msg
+		const mParamTypes = m.nodeType !== null ? m.nodeType.typeChildren : [];
+		const handlerArgs: Node[] = [selfRef];
+		for (let ai = 1; ai < md.methodParams.length; ai = ai + 1) {
+			const getter = isNumericParam(mParamTypes, ai) ? "msMsgGetDouble" : "msMsgGetPtr";
+			const getCall = makeCall(makeIdent(getter, loc), [
+				makeIdent("_dmsg", loc),
+				makeNumber(ai - 1, loc),
+			], loc);
+			handlerArgs.push(getCall);
+		}
+		const handlerCall = makeCall(makeIdent(actorName + "_" + md.methodName + "_impl", loc), handlerArgs, loc);
 		let body: Node;
 		if (isVoid) {
 			body = makeBlock([makeExprStmt(handlerCall, loc)], loc);
@@ -167,6 +223,11 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 		if (m.kind === NodeKind.MethodDecl) {
 			const md = m.data as MethodDeclData;
 			const isVoid = md.methodReturnType === "" || md.methodReturnType === "void";
+			// Guard: data[56] inline buffer fits 7 args max (Pony uses per-behavior structs; we use fixed buffer)
+			const argCount = md.methodParams.length - 1;
+			if (argCount > MS_MSG_MAX_ARGS) {
+				console.log(`warning: actor method '${name}.${md.methodName}' has ${argCount} args (max ${MS_MSG_MAX_ARGS} for inline message buffer)`);
+			}
 
 			// _impl handler: original body, nativeName for predictable C name
 			const implNativeName = name + "_" + md.methodName + "_impl";
@@ -187,9 +248,10 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 			result.push(implNode);
 
 			// Proxy: enqueues message (what extensionMethodLower resolves to)
+			const methodParamTypes = m.nodeType !== null ? m.nodeType.typeChildren : [];
 			const proxyBody = isVoid
-				? buildSendProxy(msgKind, ctx, loc)
-				: buildCallProxy(msgKind, ctx, loc);
+				? buildSendProxy(msgKind, md.methodParams, methodParamTypes, ctx, loc)
+				: buildCallProxy(msgKind, md.methodParams, methodParamTypes, ctx, loc);
 			const proxyParamTypes = m.nodeType !== null ? m.nodeType.typeChildren : [];
 			const proxyRetType = isVoid ? voidType() : unknownType();
 			const proxyFnType = createFunction(proxyParamTypes, md.methodParams, proxyRetType);

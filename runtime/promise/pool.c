@@ -13,6 +13,7 @@
 #include "runtime/core/system.h"  /* pulls in thread.h + msDecref + msCurrException */
 #include "runtime/promise/pool.h"
 #include <stdlib.h>
+#include <stdatomic.h>
 
 /* ===== Platform Abstraction Macros ===== */
 
@@ -58,6 +59,25 @@ static inline int msPoolQueueLen(msThreadPool* pool) {
 	return (pool->tail - pool->head + pool->cap) % pool->cap;
 }
 
+/* ===== Actor polling from worker threads (Phase 5: Parallel Actors) =====
+ * Pool doesn't include actor.h to avoid static-in-header duplication.
+ * Instead, actor.h registers a poll function + scheduler ID setter via hooks. */
+
+/* Actor poll hook: called by workers to drain their local actor queues */
+static bool (*msPoolActorPollFn)(void) = NULL;
+
+/* Scheduler ID setter: called once per worker to assign scheduler ID */
+static void (*msPoolSchedIdSetterFn)(int id) = NULL;
+
+/* Scheduler ID assignment counter (workers get 1..N-1, main thread gets 0) */
+static _Atomic(int) msWorkerSchedIdx = 0;
+
+/* Called by actor.h to register the poll + ID setter functions */
+void msPoolSetActorHooks(bool (*pollFn)(void), void (*idSetterFn)(int)) {
+    msPoolActorPollFn = pollFn;
+    msPoolSchedIdSetterFn = idSetterFn;
+}
+
 /* ===== Worker Loop ===== */
 
 #ifdef _WIN32
@@ -66,10 +86,16 @@ static DWORD WINAPI msPoolWorkerLoop(LPVOID arg) {
 static void* msPoolWorkerLoop(void* arg) {
 #endif
 	msThreadPool* pool = (msThreadPool*)arg;
+	/* Assign scheduler ID: workers are 1..N-1 (main thread is 0) */
+	int mySchedID = atomic_fetch_add(&msWorkerSchedIdx, 1) + 1;
+	if (msPoolSchedIdSetterFn != NULL) msPoolSchedIdSetterFn(mySchedID);
+
 	while (1) {
 		MS_LOCK(pool);
-		/* Wait for task or shutdown */
-		while (pool->head == pool->tail && !pool->shutdown) {
+		/* Wait for spawn task, actor message, or shutdown.
+		 * msPoolWakeWorkers() broadcasts this condvar when actor messages arrive.
+		 * MS_SIGNAL fires when spawn tasks are submitted. No polling needed. */
+		if (pool->head == pool->tail && !pool->shutdown) {
 			MS_WAIT(pool->available, pool);
 		}
 		/* Check shutdown with empty queue — exit cleanly */
@@ -77,27 +103,41 @@ static void* msPoolWorkerLoop(void* arg) {
 			MS_UNLOCK(pool);
 			break;
 		}
-		/* Dequeue task */
-		msSpawnCtx* ctx = pool->queue[pool->head];
-		pool->head = (pool->head + 1) % pool->cap;
-		pool->busyCount++;
-		/* Signal submitters waiting for space (backpressure release) */
-		MS_SIGNAL(pool->space);
+		/* Dequeue spawn task if available */
+		struct msSpawnCtx* ctx = NULL;
+		if (pool->head != pool->tail) {
+			ctx = pool->queue[pool->head];
+			pool->head = (pool->head + 1) % pool->cap;
+			pool->busyCount++;
+			MS_SIGNAL(pool->space);
+		}
 		MS_UNLOCK(pool);
 
-		/* Execute task */
-		msSpawnWorkerRun(ctx);
+		/* Execute spawn task */
+		if (ctx != NULL) {
+			msSpawnWorkerRun(ctx);
+			MS_LOCK(pool);
+			pool->busyCount--;
+			MS_UNLOCK(pool);
+		}
 
-		/* Mark worker idle */
-		MS_LOCK(pool);
-		pool->busyCount--;
-		MS_UNLOCK(pool);
+		/* Poll local actors (opportunistic between spawn tasks) */
+		if (msPoolActorPollFn != NULL) msPoolActorPollFn();
 	}
 #ifdef _WIN32
 	return 0;
 #else
 	return NULL;
 #endif
+}
+
+/* Wake all pool workers (called by msActorSend for non-zero schedulers) */
+void msPoolWakeWorkers(void) {
+	msThreadPool* pool = msPoolGet();
+	if (pool == NULL) return;
+	MS_LOCK(pool);
+	MS_BROADCAST(pool->available);
+	MS_UNLOCK(pool);
 }
 
 /* ===== Singleton Init ===== */

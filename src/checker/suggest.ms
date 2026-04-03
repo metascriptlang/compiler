@@ -1836,7 +1836,8 @@ function sgCollectOneSymbol(node: Node, ctx: CheckerContext, result: SgDocumentS
 	}
 	if (node.kind === NodeKind.ActorDecl) {
 		const ad = node.data as ActorDeclData;
-		const item: SgDocumentSymbol = { name: ad.actorName, kind: SymbolKind.Actor, location: node.location, detail: "", isMutable: false, children: [] };
+		const children = sgCollectClassChildren(ad as unknown as ClassDeclData);
+		const item: SgDocumentSymbol = { name: ad.actorName, kind: SymbolKind.Actor, location: node.location, detail: "", isMutable: false, children };
 		result.push(item);
 		return;
 	}

@@ -122,29 +122,16 @@ export function getDirectImporters(deps: TaModuleDepGraph, fileId: number): numb
 export function getTransitiveDependents(deps: TaModuleDepGraph, fileId: number): number[] {
 	const result: number[] = [];
 	const queue: number[] = [];
-	// O(1) visited check via boolean[] indexed by fileId
-	const visited: boolean[] = [];
-	let maxId = deps.reverseAdj.length;
-	while (visited.length < maxId) {
-		visited.push(false);
-	}
-	// Ensure fileId itself fits
-	while (visited.length <= fileId) {
-		visited.push(false);
-	}
-	visited[fileId] = true;  // don't include seed in results
+	const visited: Set<number> = new Set<number>();
+	visited.add(fileId);  // don't include seed in results
 	queue.push(fileId);
 
 	while (queue.length > 0) {
 		const current = queue.shift();
 		const importers = getDirectImporters(deps, current);
 		for (const imp of importers) {
-			// Grow visited if needed (importerFileId may exceed reverseAdj.length)
-			while (visited.length <= imp) {
-				visited.push(false);
-			}
-			if (!visited[imp]) {
-				visited[imp] = true;
+			if (!visited.has(imp)) {
+				visited.add(imp);
 				result.push(imp);
 				queue.push(imp);
 			}

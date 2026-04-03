@@ -54,4 +54,10 @@ void msPoolSubmit(struct msSpawnCtx* ctx);
 /* Shutdown pool — drain queue, join all workers. Called at process exit. */
 void msPoolShutdown(void);
 
+/* Wake all pool workers (for actor message delivery to non-zero schedulers) */
+void msPoolWakeWorkers(void);
+
+/* Register actor polling hooks (called by actor.h during init) */
+void msPoolSetActorHooks(bool (*pollFn)(void), void (*idSetterFn)(int));
+
 #endif /* MS_POOL_H */
