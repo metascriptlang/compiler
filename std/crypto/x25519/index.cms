@@ -5,8 +5,8 @@
 // 32-byte keys, 32-byte shared secret.
 // Uses Monocypher (audited by Cure53).
 
-@include("std/crypto/x25519/native.h");
-@compile("std/crypto/x25519/native.c");
+@include("runtime/crypto/curves/x25519.h");
+@compile("runtime/crypto/curves/x25519.c");
 @compile("vendor/monocypher/src/monocypher.c");
 @passC("-Ivendor/monocypher/src");
 

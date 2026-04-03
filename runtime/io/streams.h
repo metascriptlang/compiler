@@ -14,7 +14,7 @@
 
 #include <stdio.h>
 #include <string.h>
-#include "runtime/system/core.h"
+#include "runtime/core/system.h"
 
 #ifdef _WIN32
 #include <windows.h>

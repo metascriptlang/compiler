@@ -8,7 +8,7 @@
 #ifndef MS_CRYPTO_ARGON2_H
 #define MS_CRYPTO_ARGON2_H
 
-#include "runtime/system/string.h"
+#include "runtime/core/string.h"
 #include <stdint.h>
 
 /* Hash a password with Argon2id (recommended).

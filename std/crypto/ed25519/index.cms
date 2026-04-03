@@ -4,8 +4,8 @@
 // Deterministic signatures (no random nonce), 64-byte signatures, 32-byte keys.
 // Uses Monocypher (audited by Cure53, RFC 8032 compatible).
 
-@include("std/crypto/ed25519/native.h");
-@compile("std/crypto/ed25519/native.c");
+@include("runtime/crypto/curves/ed25519.h");
+@compile("runtime/crypto/curves/ed25519.c");
 
 // Monocypher sources (core + Ed25519 optional)
 @compile("vendor/monocypher/src/monocypher.c");

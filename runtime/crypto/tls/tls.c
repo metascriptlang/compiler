@@ -7,7 +7,7 @@
  * mbedTLS 4.x: RNG handled internally via PSA crypto (no manual entropy/ctr_drbg).
  */
 
-#include "std/crypto/tls/native.h"
+#include "runtime/crypto/tls/tls.h"
 
 /* mbedTLS headers — resolved via @passC include paths in index.cms */
 #include "mbedtls/ssl.h"

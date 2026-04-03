@@ -2,8 +2,8 @@
  * MetaScript Array Runtime — Implementation
  */
 
-#include "runtime/system/core.h"
-#include "runtime/system/string.h"
+#include "runtime/core/system.h"
+#include "runtime/core/string.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>

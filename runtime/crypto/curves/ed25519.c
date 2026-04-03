@@ -5,13 +5,13 @@
  * RNG via arc4random_buf (macOS/BSD) or getrandom (Linux).
  */
 
-#include "std/crypto/ed25519/native.h"
+#include "runtime/crypto/curves/ed25519.h"
 #include "vendor/monocypher/src/optional/monocypher-ed25519.h"
 
 #include <stdlib.h>
 #include <string.h>
 
-#include "std/crypto/random_fill.h"
+#include "runtime/crypto/randomFill.h"
 
 /* ===== Public API ===== */
 

@@ -26,7 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include "runtime/system/core.h"
+#include "runtime/core/system.h"
 
 /* ===== Platform Abstraction ===== */
 #ifdef _WIN32

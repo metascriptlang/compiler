@@ -11,7 +11,7 @@
 #ifndef MS_CRYPTO_H
 #define MS_CRYPTO_H
 
-#include "runtime/system/string.h"
+#include "runtime/core/string.h"
 #include <stdint.h>
 
 /* ===== Initialization ===== */

@@ -17,7 +17,7 @@
 #ifndef _WIN32
 #include "runtime/actor/selector.h"
 #endif
-#include "runtime/system/core.h"
+#include "runtime/core/system.h"
 #include <stdint.h>
 
 /* ===== Operation Types ===== */

@@ -2,7 +2,7 @@
  * MetaScript BLAKE2b Runtime — Monocypher wrapper
  */
 
-#include "std/crypto/blake2b/native.h"
+#include "runtime/crypto/kdf/blake2b.h"
 #include "vendor/monocypher/src/monocypher.h"
 
 #include <stdlib.h>

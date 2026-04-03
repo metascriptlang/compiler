@@ -14,7 +14,7 @@
 #include <stdarg.h>
 
 /* string.h must be included before array.h */
-#include "runtime/system/string.h"
+#include "runtime/core/string.h"
 
 /* ===== Payload Types ===== */
 

@@ -7,7 +7,7 @@
  *   - Lifecycle macro stubs
  *   - Locker/future/async stubs
  *
- * Uses same SYSTEM_H guard as core.h so prelude @include("runtime/system/core.h")
+ * Uses same SYSTEM_H guard as core.h so prelude @include("runtime/core/system.h")
  * is a no-op when this header is included first.
  *
  * Arena size: define MS_ARENA_SIZE before including, or get 256KB default.
@@ -112,13 +112,13 @@ static inline void  msDestroyAndDispose(void* p)  { (void)p; }
 #include <math.h>
 
 /* ===== String runtime ===== */
-#include "runtime/system/string.h"
+#include "runtime/core/string.h"
 
 /* ===== Array runtime ===== */
-#include "runtime/system/array.h"
+#include "runtime/core/array.h"
 
 /* ===== Buffer runtime ===== */
-#include "runtime/system/buffer.h"
+#include "runtime/core/buffer.h"
 
 /* ===== Type Aliases ===== */
 typedef bool MS_BOOL;

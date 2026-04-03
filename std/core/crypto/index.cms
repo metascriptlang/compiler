@@ -1,12 +1,12 @@
 @include("runtime/crypto/hash.h");
 
 // mbedTLS include paths + minimal config
-@passC("-Istd/core/crypto/config");
+@passC("-Iruntime/crypto");
 @passC("-Ivendor/mbedtls/tf-psa-crypto/include");
 @passC("-Ivendor/mbedtls/tf-psa-crypto/core");
 @passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/include");
 @passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/src");
-@passC("-DMBEDTLS_CONFIG_FILE='<mbedtls/mbedtls_config.h>'");
+@passC("-DMBEDTLS_CONFIG_FILE='<mbedtls/mbedtlsHashOnly.h>'");
 
 // Our crypto implementation
 @compile("runtime/crypto/hash.c");

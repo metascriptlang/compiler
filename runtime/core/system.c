@@ -1,4 +1,4 @@
-#include "runtime/system/core.h"
+#include "runtime/core/system.h"
 #include <stdio.h>
 #include <stdlib.h>
 

@@ -3,7 +3,7 @@
  *
  * Event loop implementation: timer heap, ring buffer callback deque, runOnce/poll/waitFor.
  */
-#include "runtime/system/core.h"  /* msIncRef/msDecref for async stepper lifecycle */
+#include "runtime/core/system.h"  /* msIncRef/msDecref for async stepper lifecycle */
 /* selector.h is included via dispatch.h → future.h chain, but MS_EVENT_READ may not be defined.
  * Define it here for the completion pipe registration. */
 #ifndef MS_EVENT_READ

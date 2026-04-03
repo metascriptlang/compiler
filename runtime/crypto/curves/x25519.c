@@ -2,13 +2,13 @@
  * MetaScript X25519 Runtime — Monocypher wrapper
  */
 
-#include "std/crypto/x25519/native.h"
+#include "runtime/crypto/curves/x25519.h"
 #include "vendor/monocypher/src/monocypher.h"
 
 #include <stdlib.h>
 #include <string.h>
 
-#include "std/crypto/random_fill.h"
+#include "runtime/crypto/randomFill.h"
 
 msString msX25519Generate(void) {
 	uint8_t sk[32];

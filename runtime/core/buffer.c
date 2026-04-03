@@ -8,7 +8,7 @@
  * Key: msBufferLength returns buf.len (true byte count).
  */
 
-#include "runtime/system/core.h"
+#include "runtime/core/system.h"
 #include <stdlib.h>
 #include <string.h>
 

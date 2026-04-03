@@ -2,8 +2,8 @@
 // Opaque handle pattern: connect → read/write → close
 // Only compiled when imported — no cost if not used.
 
-@include("std/crypto/tls/native.h");
-@compile("std/crypto/tls/native.c");
+@include("runtime/crypto/tls/tls.h");
+@compile("runtime/crypto/tls/tls.c");
 
 // Include paths
 @passC("-Ivendor/mbedtls/include");
@@ -12,7 +12,7 @@
 @passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/include");
 @passC("-Ivendor/mbedtls/tf-psa-crypto/drivers/builtin/src");
 @passC("-Ivendor/mbedtls/tf-psa-crypto/core");
-@passC("-Istd/crypto/config");
+@passC("-Iruntime/crypto");
 @passC("-DMBEDTLS_CONFIG_FILE='<mbedtls/mbedtlsConfig.h>'");
 @passC("-DMBEDTLS_PLATFORM_MEMORY");
 
@@ -108,7 +108,7 @@
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/ecjpake.c");
 
 // PSA ITS stubs (persistent key storage not used)
-@compile("std/crypto/tls/psaTlsStubs.c");
+@compile("runtime/crypto/tls/psaTlsStubs.c");
 
 import { CryptoError, CryptoErrorKind, cryptoError } from "../errors";
 

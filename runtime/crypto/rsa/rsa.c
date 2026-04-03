@@ -5,8 +5,8 @@
  * Adapted: ms_crypto_* → msCrypto*, msBool → double, msOptionalString → msString
  */
 
-#include "std/crypto/rsa/native.h"
-#include "runtime/system/core.h"
+#include "runtime/crypto/rsa/rsa.h"
+#include "runtime/core/system.h"
 #include <stdlib.h>
 #include <string.h>
 

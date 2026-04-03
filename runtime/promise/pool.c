@@ -10,7 +10,7 @@
  * POSIX: pthreads (macOS/Linux — zero-cost, part of libc).
  * Windows: native Win32 threading (CreateThread, CRITICAL_SECTION, CONDITION_VARIABLE).
  */
-#include "runtime/system/core.h"  /* pulls in thread.h + msDecref + msCurrException */
+#include "runtime/core/system.h"  /* pulls in thread.h + msDecref + msCurrException */
 #include "runtime/promise/pool.h"
 #include <stdlib.h>
 

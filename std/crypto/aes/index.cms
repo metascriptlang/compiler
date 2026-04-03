@@ -5,8 +5,8 @@
 // Structured API (encrypt/decrypt) for interop with specific wire formats.
 // CBC mode available for legacy interop (expert use).
 
-@include("std/crypto/aes/native.h");
-@compile("std/crypto/aes/native.c");
+@include("runtime/crypto/ciphers/aes.h");
+@compile("runtime/crypto/ciphers/aes.c");
 
 // mbedTLS AES source + platform_util (needed if aes imported without base crypto)
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/aes.c");

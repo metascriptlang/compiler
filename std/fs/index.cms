@@ -3,7 +3,7 @@
 import {
 	msFsReadFile, msFsWriteFileMode, msFsExists, msFsIsFile, msFsIsDir,
 	msFsFileSize, msFsMkdir, msFsRmdir, msFsRemove, msFsRename,
-} from "./native.h";
+} from "runtime/fs.h";
 
 // Path utilities (pure MetaScript)
 export { dirname, basename, extname, join, resolve, isAbsolute, normalize } from "./path";

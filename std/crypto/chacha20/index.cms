@@ -5,8 +5,8 @@
 // Extended 24-byte nonce (safe for random nonce generation).
 // Uses Monocypher (audited by Cure53).
 
-@include("std/crypto/chacha20/native.h");
-@compile("std/crypto/chacha20/native.c");
+@include("runtime/crypto/ciphers/chacha20.h");
+@compile("runtime/crypto/ciphers/chacha20.c");
 @compile("vendor/monocypher/src/monocypher.c");
 @passC("-Ivendor/monocypher/src");
 

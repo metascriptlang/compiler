@@ -4,8 +4,8 @@
 //
 // Heavy: compiles ~18 mbedTLS files. Only import when asymmetric crypto is needed.
 
-@include("std/crypto/rsa/native.h");
-@compile("std/crypto/rsa/native.c");
+@include("runtime/crypto/rsa/rsa.h");
+@compile("runtime/crypto/rsa/rsa.c");
 
 // mbedTLS PK + PSA sources (4.0: crypto sources live under tf-psa-crypto/)
 @compile("vendor/mbedtls/tf-psa-crypto/drivers/builtin/src/pk.c");

@@ -3,8 +3,8 @@
  * Following the standard reference string patterns.
  */
 
-#include "runtime/system/core.h"
-#include "runtime/system/array.h"
+#include "runtime/core/system.h"
+#include "runtime/core/array.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>

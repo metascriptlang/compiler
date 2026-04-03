@@ -4,8 +4,8 @@
 // Only compiled when imported — no cost if not used.
 // Uses vendor/argon2 (PHC reference implementation).
 
-@include("std/crypto/argon2/native.h");
-@compile("std/crypto/argon2/native.c");
+@include("runtime/crypto/kdf/argon2.h");
+@compile("runtime/crypto/kdf/argon2.c");
 
 // Argon2 reference implementation sources
 @compile("vendor/argon2/src/argon2.c");

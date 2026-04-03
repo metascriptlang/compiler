@@ -12,7 +12,7 @@
 #ifndef MS_EVENT_LOOP_URING_H
 #define MS_EVENT_LOOP_URING_H
 
-#include "runtime/system/core.h"
+#include "runtime/core/system.h"
 #include <stdint.h>
 
 static inline int32_t msHasUringEventLoop(void) {

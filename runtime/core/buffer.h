@@ -10,7 +10,7 @@
 #ifndef MS_BUFFER_H
 #define MS_BUFFER_H
 
-#include "runtime/system/string.h"
+#include "runtime/core/string.h"
 
 /* ===== Core Type ===== */
 

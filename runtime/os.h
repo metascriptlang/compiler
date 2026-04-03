@@ -8,7 +8,7 @@
 #ifndef MS_STD_OS_H
 #define MS_STD_OS_H
 
-#include "runtime/system/core.h"
+#include "runtime/core/system.h"
 #include <string.h>
 #include <time.h>
 

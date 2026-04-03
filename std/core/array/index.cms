@@ -2,8 +2,8 @@
 // Extension methods backed by runtime/core/array.h
 // Loaded automatically via globalImports() -> "std/core/array"
 
-@include("runtime/system/array.h");
-@compile("runtime/system/array.c");
+@include("runtime/core/array.h");
+@compile("runtime/core/array.c");
 
 // ===== Array<T> — Generic array type =====
 // Backed by per-element-type C arrays (monomorphized by the compiler).

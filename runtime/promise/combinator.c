@@ -1,7 +1,7 @@
 /*
  * MetaScript Promise Combinators — Promise.all / Promise.race
  */
-#include "runtime/system/core.h"
+#include "runtime/core/system.h"
 #include "runtime/promise/combinator.h"
 #include <stdlib.h>
 

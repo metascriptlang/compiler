@@ -6,8 +6,8 @@
  * Random IV: uses arc4random_buf (macOS) / getrandom (Linux).
  */
 
-#include "std/crypto/aes/native.h"
-#include "runtime/system/core.h"
+#include "runtime/crypto/ciphers/aes.h"
+#include "runtime/core/system.h"
 #include <stdlib.h>
 #include <string.h>
 

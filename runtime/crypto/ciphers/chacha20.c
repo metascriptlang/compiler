@@ -2,13 +2,13 @@
  * MetaScript ChaCha20-Poly1305 Runtime — Monocypher wrapper
  */
 
-#include "std/crypto/chacha20/native.h"
+#include "runtime/crypto/ciphers/chacha20.h"
 #include "vendor/monocypher/src/monocypher.h"
 
 #include <stdlib.h>
 #include <string.h>
 
-#include "std/crypto/random_fill.h"
+#include "runtime/crypto/randomFill.h"
 
 #define NONCE_SIZE 24
 #define MAC_SIZE   16

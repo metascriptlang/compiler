@@ -14,13 +14,13 @@
 #include "runtime/drc.h"
 
 /* String runtime (msString, all string ops) */
-#include "runtime/system/string.h"
+#include "runtime/core/string.h"
 
 /* Array runtime (msNumberArray, msStringArray, msRefArray) */
-#include "runtime/system/array.h"
+#include "runtime/core/array.h"
 
 /* Buffer runtime (msBuffer — binary data, byte-oriented) */
-#include "runtime/system/buffer.h"
+#include "runtime/core/buffer.h"
 
 /* ===== Type Aliases (C89 portability + codegen convenience) ===== */
 typedef bool MS_BOOL;
@@ -247,7 +247,7 @@ static inline void msStringCopy(msString* dest, msString src) {
 #include "runtime/promise/thread.h"
 
 /* AbortController / AbortSignal (needs msString + msThrow above) */
-#include "runtime/system/abort.h"
+#include "runtime/core/abort.h"
 
 /* Promise combinators (Promise.all, Promise.race) */
 #include "runtime/promise/combinator.h"

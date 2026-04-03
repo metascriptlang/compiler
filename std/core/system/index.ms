@@ -1,5 +1,5 @@
-@include("runtime/system/core.h");
-@compile("runtime/system/core.c");
+@include("runtime/core/system.h");
+@compile("runtime/core/system.c");
 
 export class console {
 	/**

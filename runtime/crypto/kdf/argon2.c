@@ -2,8 +2,8 @@
  * MetaScript Argon2 Runtime — wraps PHC winner reference implementation.
  */
 
-#include "std/crypto/argon2/native.h"
-#include "runtime/system/core.h"
+#include "runtime/crypto/kdf/argon2.h"
+#include "runtime/core/system.h"
 #include "argon2.h"
 #include <stdlib.h>
 #include <string.h>

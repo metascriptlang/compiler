@@ -38,13 +38,13 @@ export function generateCModule(program: Node, ctx: CheckerContext, modulePath: 
 	addLine(sec(g, CSection.Headers), "#include <math.h>");
 	if (ctx !== null && ctx.gcMode === GcMode.Manual) {
 		// manual.h uses the same SYSTEM_H include guard as core.h,
-		// so any subsequent @include("runtime/system/core.h") from prelude is a C-level no-op.
+		// so any subsequent @include("runtime/core/system.h") from prelude is a C-level no-op.
 		addLine(sec(g, CSection.Headers), "#include \"runtime/manual.h\"");
 		nameSetAdd(g.declaredThings, "inc:runtime/manual.h");
-		nameSetAdd(g.declaredThings, "inc:runtime/system/core.h");
+		nameSetAdd(g.declaredThings, "inc:runtime/core/system.h");
 	} else {
-		addLine(sec(g, CSection.Headers), "#include \"runtime/system/core.h\"");
-		nameSetAdd(g.declaredThings, "inc:runtime/system/core.h");
+		addLine(sec(g, CSection.Headers), "#include \"runtime/core/system.h\"");
+		nameSetAdd(g.declaredThings, "inc:runtime/core/system.h");
 	}
 	emitTestHeader(g);
 
@@ -133,7 +133,7 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 	// Include stdint.h for int32_t and system header for async futures
 	addLine(b, "#include <stdint.h>");
 	if (retType.startsWith("msFuture_")) {
-		addLine(b, "#include \"runtime/system/core.h\"");
+		addLine(b, "#include \"runtime/core/system.h\"");
 	}
 	addNewline(b);
 

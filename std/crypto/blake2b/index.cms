@@ -4,8 +4,8 @@
 // Faster than SHA-256, variable output length (1-64 bytes).
 // Uses Monocypher (audited by Cure53).
 
-@include("std/crypto/blake2b/native.h");
-@compile("std/crypto/blake2b/native.c");
+@include("runtime/crypto/kdf/blake2b.h");
+@compile("runtime/crypto/kdf/blake2b.c");
 @compile("vendor/monocypher/src/monocypher.c");
 @passC("-Ivendor/monocypher/src");
 
