@@ -4,7 +4,9 @@
 
 /* Platform */
 #define MBEDTLS_PLATFORM_C
+#ifndef MBEDTLS_PLATFORM_MEMORY
 #define MBEDTLS_PLATFORM_MEMORY
+#endif
 #define MBEDTLS_PLATFORM_STD_CALLOC calloc
 #define MBEDTLS_PLATFORM_STD_FREE   free
 #define MBEDTLS_HAVE_TIME

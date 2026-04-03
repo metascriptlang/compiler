@@ -52,7 +52,7 @@ import {
 	HttpMethod, HttpRequest, HttpHeaders, ServerResponse, RequestHandler,
 	statusText,
 } from "./types";
-import { HttpError, socketError, bodyTooLarge } from "./errors";
+import { HttpError, socketError } from "./errors";
 import { cpus } from "std/os";
 
 // ===== Server =====

@@ -13,7 +13,7 @@ extern function msNetSetTimeout(fd: int32, ms: int32): int32;
 import { tlsConnect, tlsRead, tlsWrite, tlsClose } from "std/crypto/tls";
 
 import {
-	HttpMethod, HttpResponse, HttpHeaders, RequestOptions, ParsedUrl,
+	HttpMethod, HttpResponse, RequestOptions,
 	methodToString,
 } from "./types";
 import {
@@ -21,7 +21,7 @@ import {
 	connectionFailed, socketError, invalidResponse, tooManyRedirects,
 } from "./errors";
 import {
-	createHeaders, setHeader, getHeader, hasHeader, serializeHeaders,
+	createHeaders, setHeader, getHeader, serializeHeaders,
 	getContentLength, isChunked,
 } from "./headers";
 import { parseResponse, parseUrl, decodeChunked } from "./parser";
