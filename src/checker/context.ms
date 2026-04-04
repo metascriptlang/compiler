@@ -63,10 +63,11 @@ function addToNameIndex(registry: ExportRegistry, exports: ExportedSymInfo[]): v
 	for (const sym of exports) {
 		if (sym.name.length === 0) continue;
 		if (registry.nameIndex.has(sym.name)) {
-			registry.nameIndex.get(sym.name).push(sym);
-		} else {
-			const arr: ExportedSymInfo[] = [sym];
+			const arr = registry.nameIndex.get(sym.name);
+			arr.push(sym);
 			registry.nameIndex.set(sym.name, arr);
+		} else {
+			registry.nameIndex.set(sym.name, [sym]);
 		}
 	}
 }

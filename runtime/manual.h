@@ -1,22 +1,23 @@
 /*
- * MetaScript Manual Runtime — Arena Allocator, No RC
+ * MetaScript Manual Runtime — No RC, Optional Freestanding
  *
- * Freestanding mode (--gc=manual). Single file providing:
- *   - Arena bump allocator (no malloc)
- *   - No-op reference counting
- *   - Lifecycle macro stubs
- *   - Locker/future/async stubs
+ * --gc=manual mode. No reference counting, no DRC injection.
+ *
+ * Two sub-modes controlled by MS_BARE (set via --os=bare):
+ *   Without MS_BARE: malloc-backed allocation (like drc.h minus RC). Desktop use.
+ *   With MS_BARE:    static arena, no malloc, no libc dependency. Freestanding.
  *
  * Uses same SYSTEM_H guard as core.h so prelude @include("runtime/core/system.h")
  * is a no-op when this header is included first.
- *
- * Arena size: define MS_ARENA_SIZE before including, or get 256KB default.
  */
 
 #ifndef SYSTEM_H
 #define SYSTEM_H
 
-/* Also block all DRC/async headers via their guards */
+/* Mark manual mode so .c files can skip DRC-specific implementations */
+#define MS_MANUAL_MODE
+
+/* Block all DRC/async headers via their guards */
 #define MS_DRC_H
 #define MS_ARC_H
 #define MS_ORC_H
@@ -34,7 +35,23 @@
 
 #include "runtime/types.h"
 
-/* ===== Arena Configuration ===== */
+/* ===== RefHeader (same layout as drc.h) ===== */
+
+typedef struct {
+    int32_t rc;
+    int32_t rootIdx;
+    const msTypeInfo* type;
+} msRefHeader;
+
+static inline msRefHeader* msHeader(void* p) {
+    return (msRefHeader*)((char*)p - sizeof(msRefHeader));
+}
+
+/* ===== Allocation ===== */
+
+#ifdef MS_BARE
+
+/* --- Freestanding: static arena, no malloc --- */
 
 #ifndef MS_ARENA_SIZE
 #define MS_ARENA_SIZE (256 * 1024)  /* 256KB default */
@@ -43,13 +60,9 @@
 static char   _ms_arena[MS_ARENA_SIZE];
 static size_t _ms_arena_pos = 0;
 
-/* ===== Arena Allocator ===== */
-
 static inline void* msArenaAlloc(size_t size) {
     size = (size + 7) & ~(size_t)7;
-    if (_ms_arena_pos + size > MS_ARENA_SIZE) {
-        return (void*)0;
-    }
+    if (_ms_arena_pos + size > MS_ARENA_SIZE) return (void*)0;
     void* p = &_ms_arena[_ms_arena_pos];
     _ms_arena_pos += size;
     __builtin_memset(p, 0, size);
@@ -65,23 +78,7 @@ static inline void* msArenaRealloc(void* old, size_t old_size, size_t new_size) 
     return p;
 }
 
-static inline void msArenaReset(void) {
-    _ms_arena_pos = 0;
-}
-
-/* ===== RefHeader (same layout as drc.h) ===== */
-
-typedef struct {
-    int32_t rc;
-    int32_t rootIdx;
-    const msTypeInfo* type;
-} msRefHeader;
-
-static inline msRefHeader* msHeader(void* p) {
-    return (msRefHeader*)((char*)p - sizeof(msRefHeader));
-}
-
-/* ===== Allocation (same API as drc.h) ===== */
+static inline void msArenaReset(void) { _ms_arena_pos = 0; }
 
 static inline void* msAlloc(size_t size) {
     void* block = msArenaAlloc(sizeof(msRefHeader) + size);
@@ -97,19 +94,66 @@ static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
     return (void*)(h + 1);
 }
 
-/* ===== RC Operations (all no-ops) ===== */
+#else /* !MS_BARE */
+
+/* --- Desktop: malloc-backed, same as drc.h minus RC --- */
+
+#include <stdlib.h>
+
+static inline void* msAlloc(size_t size) {
+    msRefHeader* h = (msRefHeader*)calloc(1, sizeof(msRefHeader) + size);
+    h->rc = 0;
+    h->rootIdx = -1;
+    h->type = NULL;
+    return (void*)(h + 1);
+}
+
+static inline void* msAllocTyped(size_t size, const msTypeInfo* type) {
+    msRefHeader* h = (msRefHeader*)calloc(1, sizeof(msRefHeader) + size);
+    h->rc = 0;
+    h->rootIdx = -1;
+    h->type = type;
+    return (void*)(h + 1);
+}
+
+#endif /* MS_BARE */
+
+/* ===== RC Operations (all no-ops in both modes) ===== */
 
 static inline void  msIncRef(void* p)            { (void)p; }
 static inline bool  msDecRefIsLast(void* p)       { (void)p; return false; }
 static inline void  msDestroyAndDispose(void* p)  { (void)p; }
 #define msWasMoved(p) ((p) = (void*)0)
 
-/* ===== libc headers for string/array/buffer implementations ===== */
+/* ===== libc headers for string/array/buffer ===== */
+#ifndef MS_BARE
+#include <string.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <math.h>
+#else
+/* Freestanding: system headers needed but malloc/free redirected to arena */
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <math.h>
+
+/* Redirect libc allocator to arena — only in freestanding mode.
+   System headers already parsed above, so macros only affect
+   function bodies in .h inlines and .c files compiled with -include. */
+static inline void* _ms_manual_realloc(void* old, size_t new_size) {
+    if (!old) return msArenaAlloc(new_size);
+    return msArenaRealloc(old, new_size, new_size);
+}
+static inline void* _ms_manual_calloc(size_t n, size_t size) {
+    return msArenaAlloc(n * size);
+}
+#define malloc(s)     msArenaAlloc(s)
+#define calloc(n, s)  _ms_manual_calloc((n), (s))
+#define realloc(p, s) _ms_manual_realloc((p), (s))
+#define free(p)       ((void)(p))
+#endif /* MS_BARE */
 
 /* ===== String runtime ===== */
 #include "runtime/core/string.h"
@@ -262,25 +306,37 @@ static inline uint16_t msCheckRangeU16(double v, int64_t lo, int64_t hi) { int64
 static inline int32_t  msCheckRangeI32(double v, int64_t lo, int64_t hi) { int64_t iv=(int64_t)v; if(iv<lo||iv>hi) msRaiseRangeError(iv,lo,hi); return (int32_t)iv; }
 static inline uint32_t msCheckRangeU32(double v, int64_t lo, int64_t hi) { int64_t iv=(int64_t)v; if(iv<lo||iv>hi) msRaiseRangeError(iv,lo,hi); return (uint32_t)iv; }
 
-/* ===== Boxing (arena-based) ===== */
+/* ===== Boxing ===== */
 static inline void* msBoxString(msString v) {
+#ifdef MS_BARE
     msString* p = (msString*)msArenaAlloc(sizeof(msString));
+#else
+    msString* p = (msString*)malloc(sizeof(msString));
+#endif
     if (p) *p = v;
     return p;
 }
 static inline msString msUnboxString(void* p) {
     msString v = *(msString*)p;
+#ifndef MS_BARE
+    free(p);
+#endif
     return v;
 }
 static inline void* msBoxStruct(const void* val, size_t size) {
+#ifdef MS_BARE
     void* p = msArenaAlloc(size);
     if (p) __builtin_memcpy(p, val, size);
+#else
+    void* p = malloc(size);
+    if (p) memcpy(p, val, size);
+#endif
     return p;
 }
 
 /* ===== Locker stubs (no threading) ===== */
-static inline void* msLockerCreate(int dataSize)             { return msArenaAlloc((size_t)dataSize + 32); }
-static inline void* msLockerCreateFrom(const void* s, int n) { (void)s; return msArenaAlloc((size_t)n + 32); }
+static inline void* msLockerCreate(int dataSize)             { return msAlloc((size_t)dataSize); }
+static inline void* msLockerCreateFrom(const void* s, int n) { (void)s; return msAlloc((size_t)n); }
 static inline void  msLockerLock(void* p)                    { (void)p; }
 static inline void  msLockerUnlock(void* p)                  { (void)p; }
 static inline double msLockerGetDouble(void* p)              { return *(double*)((char*)p + 16); }

@@ -15,7 +15,7 @@ import {
 } from "./value";
 import {
 	RaiserModule, RaiserFunction,
-	makeTestModule, getFuncConst, getFuncInst, getModuleFunc, createRaiserFunction, createRaiserModule,
+	makeTestModule, getFuncConst, getFuncConstLen, getFuncInst, getModuleFunc, createRaiserFunction, createRaiserModule,
 } from "./module";
 
 // --- VM State ---
@@ -79,6 +79,15 @@ function setReg(vm: RaiserVM, idx: number, val: RaiserValue): void {
 	vm.regs.slots[idx] = val;
 }
 
+// --- Error helper ---
+
+function vmError(vm: RaiserVM, msg: string): void {
+	vm.error = msg;
+	vm.halted = true;
+}
+
+const MAX_CALL_DEPTH = 1024;
+
 // --- Execute ---
 
 export function execModule(mod: RaiserModule): RaiserVM {
@@ -88,8 +97,7 @@ export function execModule(mod: RaiserModule): RaiserVM {
 		// Budget check
 		vm.opCount = vm.opCount + 1;
 		if (vm.opCount > vm.opLimit) {
-			vm.halted = true;
-			vm.error = `Instruction budget exceeded (${vm.opLimit} ops)`;
+			vmError(vm, `Instruction budget exceeded (${vm.opLimit} ops)`);
 			break;
 		}
 
@@ -102,11 +110,15 @@ export function execModule(mod: RaiserModule): RaiserVM {
 		// --- Core ops ---
 		if (op === RaiserOpcode.LoadConst) {
 			const bx = getBx(inst);
-			const val = getFuncConst(func, bx);
-			// Copy to avoid aliasing — constant pool objects are shared
-			const copy = raiserNil();
-			copyValueInto(copy, val);
-			setReg(vm, base + inst.a, copy);
+			if (bx >= getFuncConstLen(func)) {
+				vmError(vm, `constant index out of bounds: ${bx}`);
+			} else {
+				const val = getFuncConst(func, bx);
+				// Copy to avoid aliasing — constant pool objects are shared
+				const copy = raiserNil();
+				copyValueInto(copy, val);
+				setReg(vm, base + inst.a, copy);
+			}
 		} else if (op === RaiserOpcode.Move) {
 			// Copy to avoid aliasing between registers
 			const src = getReg(vm, base + inst.b);
@@ -137,12 +149,18 @@ export function execModule(mod: RaiserModule): RaiserVM {
 		} else if (op === RaiserOpcode.DivI64) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
-			const quot: int32 = (lhs.intVal as int32 / rhs.intVal as int32) | 0;
-			setReg(vm, base + inst.a, raiserInt(quot as number));
+			if (rhs.intVal === 0) { vmError(vm, "integer division by zero");
+			} else {
+				const quot: int32 = (lhs.intVal as int32 / rhs.intVal as int32) | 0;
+				setReg(vm, base + inst.a, raiserInt(quot as number));
+			}
 		} else if (op === RaiserOpcode.ModI64) {
 			const lhs = getReg(vm, base + inst.b);
 			const rhs = getReg(vm, base + inst.c);
-			setReg(vm, base + inst.a, raiserInt(lhs.intVal % rhs.intVal));
+			if (rhs.intVal === 0) { vmError(vm, "integer modulo by zero");
+			} else {
+				setReg(vm, base + inst.a, raiserInt(lhs.intVal % rhs.intVal));
+			}
 		} else if (op === RaiserOpcode.NegI64) {
 			const val = getReg(vm, base + inst.b);
 			setReg(vm, base + inst.a, raiserInt(-val.intVal));
@@ -256,22 +274,21 @@ export function execModule(mod: RaiserModule): RaiserVM {
 		} else if (op === RaiserOpcode.NegF64) {
 			vmHandleNegF64(vm, inst);
 		} else if (op === RaiserOpcode.BeqF64) {
-			vmHandleBeqF64(vm, inst);
+			vmCmpBranchF64(vm, inst, 0);
 		} else if (op === RaiserOpcode.BneF64) {
-			vmHandleBneF64(vm, inst);
+			vmCmpBranchF64(vm, inst, 1);
 		} else if (op === RaiserOpcode.BltF64) {
-			vmHandleBltF64(vm, inst);
+			vmCmpBranchF64(vm, inst, 2);
 		} else if (op === RaiserOpcode.BleF64) {
-			vmHandleBleF64(vm, inst);
+			vmCmpBranchF64(vm, inst, 3);
 		} else if (op === RaiserOpcode.BgtF64) {
-			vmHandleBgtF64(vm, inst);
+			vmCmpBranchF64(vm, inst, 4);
 		} else if (op === RaiserOpcode.BgeF64) {
-			vmHandleBgeF64(vm, inst);
+			vmCmpBranchF64(vm, inst, 5);
 		} else if (op === RaiserOpcode.Builtin) {
 			vmHandleBuiltin(vm, inst);
 		} else {
-			vm.halted = true;
-			vm.error = `Unknown opcode: ${op}`;
+			vmError(vm, `Unknown opcode: ${op}`);
 		}
 	}
 
@@ -281,9 +298,23 @@ export function execModule(mod: RaiserModule): RaiserVM {
 // --- Call/Ret handlers ---
 
 function vmHandleCall(vm: RaiserVM, inst: RaiserInstruction): void {
+	if (vm.callStack.items.length >= MAX_CALL_DEPTH) {
+		vmError(vm, `call stack overflow (depth ${MAX_CALL_DEPTH})`); return;
+	}
 	const destReg = inst.a;
 	const calleeFuncIdx = inst.b;
 	const argCount = inst.c;
+
+	// Validate callee function index
+	if (calleeFuncIdx < 0 || calleeFuncIdx >= vm.mod.functions.length) {
+		vmError(vm, `function index out of bounds: ${calleeFuncIdx}`); return;
+	}
+
+	// Check register overflow BEFORE pushing frame (avoid corrupted state on error)
+	const newBase = vm.baseReg + destReg + 1;
+	if (newBase >= vm.regs.slots.length) {
+		vmError(vm, `register file overflow: base ${newBase} exceeds ${vm.regs.slots.length} slots`); return;
+	}
 
 	// Push caller's frame (save current function name for stack traces)
 	const callerFunc = getModuleFunc(vm.mod, vm.funcIdx);
@@ -297,7 +328,7 @@ function vmHandleCall(vm: RaiserVM, inst: RaiserInstruction): void {
 	vm.callStack.items.push(frame);
 
 	// Callee's base = right at args (R[dest+1..dest+N] become callee's R[0..N-1])
-	vm.baseReg = vm.baseReg + destReg + 1;
+	vm.baseReg = newBase;
 	vm.funcIdx = calleeFuncIdx;
 	vm.ip = 0;
 }
@@ -327,10 +358,24 @@ function vmHandleRet(vm: RaiserVM, inst: RaiserInstruction): void {
 }
 
 function vmHandleCallIndirect(vm: RaiserVM, inst: RaiserInstruction): void {
+	if (vm.callStack.items.length >= MAX_CALL_DEPTH) {
+		vmError(vm, `call stack overflow (depth ${MAX_CALL_DEPTH})`); return;
+	}
 	const destReg = inst.a;
 	const funcIdxReg = getReg(vm, vm.baseReg + inst.b);
 	const calleeFuncIdx = funcIdxReg.intVal;
 	const argCount = inst.c;
+
+	// Validate callee function index
+	if (calleeFuncIdx < 0 || calleeFuncIdx >= vm.mod.functions.length) {
+		vmError(vm, `function index out of bounds: ${calleeFuncIdx}`); return;
+	}
+
+	// Check register overflow BEFORE pushing frame
+	const newBase = vm.baseReg + destReg + 1;
+	if (newBase >= vm.regs.slots.length) {
+		vmError(vm, `register file overflow: base ${newBase} exceeds ${vm.regs.slots.length} slots`); return;
+	}
 
 	// Push caller's frame
 	const callerFunc = getModuleFunc(vm.mod, vm.funcIdx);
@@ -344,7 +389,7 @@ function vmHandleCallIndirect(vm: RaiserVM, inst: RaiserInstruction): void {
 	vm.callStack.items.push(frame);
 
 	// Callee's base = right at args (R[dest+1..dest+N] become callee's R[0..N-1])
-	vm.baseReg = vm.baseReg + destReg + 1;
+	vm.baseReg = newBase;
 	vm.funcIdx = calleeFuncIdx;
 	vm.ip = 0;
 }
@@ -367,6 +412,13 @@ function vmHandleLoadIndex(vm: RaiserVM, inst: RaiserInstruction): void {
 	const idxVal = getReg(vm, vm.baseReg + inst.c);
 	const handle = arrVal.intVal;
 	const idx = idxVal.intVal;
+	if (handle < 0 || handle >= vm.arrayHeap.arrays.length) {
+		vmError(vm, `array handle out of bounds: ${handle}`); return;
+	}
+	const arrLen = heapArrayLen(vm.arrayHeap, handle);
+	if (idx < 0 || idx >= arrLen) {
+		vmError(vm, `array index out of bounds: ${idx} (length ${arrLen})`); return;
+	}
 	const elem = heapArrayGet(vm.arrayHeap, handle, idx);
 	// Deep copy to avoid aliasing
 	copyValueInto(getReg(vm, vm.baseReg + inst.a), elem);
@@ -376,12 +428,25 @@ function vmHandleStoreIndex(vm: RaiserVM, inst: RaiserInstruction): void {
 	const arrVal = getReg(vm, vm.baseReg + inst.a);
 	const idxVal = getReg(vm, vm.baseReg + inst.b);
 	const val = getReg(vm, vm.baseReg + inst.c);
-	heapArraySet(vm.arrayHeap, arrVal.intVal, idxVal.intVal, val);
+	const handle = arrVal.intVal;
+	const idx = idxVal.intVal;
+	if (handle < 0 || handle >= vm.arrayHeap.arrays.length) {
+		vmError(vm, `array handle out of bounds: ${handle}`); return;
+	}
+	const arrLen = heapArrayLen(vm.arrayHeap, handle);
+	if (idx < 0 || idx >= arrLen) {
+		vmError(vm, `array index out of bounds: ${idx} (length ${arrLen})`); return;
+	}
+	heapArraySet(vm.arrayHeap, handle, idx, val);
 }
 
 function vmHandleArrayLen(vm: RaiserVM, inst: RaiserInstruction): void {
 	const arrVal = getReg(vm, vm.baseReg + inst.b);
-	const len = heapArrayLen(vm.arrayHeap, arrVal.intVal);
+	const handle = arrVal.intVal;
+	if (handle < 0 || handle >= vm.arrayHeap.arrays.length) {
+		vmError(vm, `array handle out of bounds: ${handle}`); return;
+	}
+	const len = heapArrayLen(vm.arrayHeap, handle);
 	const result = raiserInt(len);
 	setReg(vm, vm.baseReg + inst.a, result);
 }
@@ -389,7 +454,11 @@ function vmHandleArrayLen(vm: RaiserVM, inst: RaiserInstruction): void {
 function vmHandleArrayPush(vm: RaiserVM, inst: RaiserInstruction): void {
 	const arrVal = getReg(vm, vm.baseReg + inst.a);
 	const val = getReg(vm, vm.baseReg + inst.b);
-	heapArrayPush(vm.arrayHeap, arrVal.intVal, val);
+	const handle = arrVal.intVal;
+	if (handle < 0 || handle >= vm.arrayHeap.arrays.length) {
+		vmError(vm, `array handle out of bounds: ${handle}`); return;
+	}
+	heapArrayPush(vm.arrayHeap, handle, val);
 }
 
 // --- Object opcode handlers ---
@@ -403,6 +472,9 @@ function vmHandleNewObject(vm: RaiserVM, inst: RaiserInstruction): void {
 function vmHandleLoadField(vm: RaiserVM, mod: RaiserModule, inst: RaiserInstruction): void {
 	const objVal = getReg(vm, vm.baseReg + inst.b);
 	const handle = objVal.intVal;
+	if (handle < 0 || handle >= vm.objectHeap.objects.length) {
+		vmError(vm, `object handle out of bounds: ${handle}`); return;
+	}
 	const obj = vm.objectHeap.objects[handle];
 	const fields = obj.fields;
 
@@ -442,6 +514,9 @@ function vmHandleLoadField(vm: RaiserVM, mod: RaiserModule, inst: RaiserInstruct
 function vmHandleStoreField(vm: RaiserVM, mod: RaiserModule, inst: RaiserInstruction): void {
 	const objVal = getReg(vm, vm.baseReg + inst.a);
 	const handle = objVal.intVal;
+	if (handle < 0 || handle >= vm.objectHeap.objects.length) {
+		vmError(vm, `object handle out of bounds: ${handle}`); return;
+	}
 	const obj = vm.objectHeap.objects[handle];
 	const fields = obj.fields;
 	const val = getReg(vm, vm.baseReg + inst.c);
@@ -609,40 +684,17 @@ function vmHandleNegF64(vm: RaiserVM, inst: RaiserInstruction): void {
 
 // --- Float compare-branch handlers ---
 
-function vmHandleBeqF64(vm: RaiserVM, inst: RaiserInstruction): void {
-	const lhs = getReg(vm, vm.baseReg + inst.a);
-	const rhs = getReg(vm, vm.baseReg + inst.b);
-	if (asNum(lhs) === asNum(rhs)) { vm.ip = vm.ip + inst.c; }
-}
-
-function vmHandleBneF64(vm: RaiserVM, inst: RaiserInstruction): void {
-	const lhs = getReg(vm, vm.baseReg + inst.a);
-	const rhs = getReg(vm, vm.baseReg + inst.b);
-	if (asNum(lhs) !== asNum(rhs)) { vm.ip = vm.ip + inst.c; }
-}
-
-function vmHandleBltF64(vm: RaiserVM, inst: RaiserInstruction): void {
-	const lhs = getReg(vm, vm.baseReg + inst.a);
-	const rhs = getReg(vm, vm.baseReg + inst.b);
-	if (asNum(lhs) < asNum(rhs)) { vm.ip = vm.ip + inst.c; }
-}
-
-function vmHandleBleF64(vm: RaiserVM, inst: RaiserInstruction): void {
-	const lhs = getReg(vm, vm.baseReg + inst.a);
-	const rhs = getReg(vm, vm.baseReg + inst.b);
-	if (asNum(lhs) <= asNum(rhs)) { vm.ip = vm.ip + inst.c; }
-}
-
-function vmHandleBgtF64(vm: RaiserVM, inst: RaiserInstruction): void {
-	const lhs = getReg(vm, vm.baseReg + inst.a);
-	const rhs = getReg(vm, vm.baseReg + inst.b);
-	if (asNum(lhs) > asNum(rhs)) { vm.ip = vm.ip + inst.c; }
-}
-
-function vmHandleBgeF64(vm: RaiserVM, inst: RaiserInstruction): void {
-	const lhs = getReg(vm, vm.baseReg + inst.a);
-	const rhs = getReg(vm, vm.baseReg + inst.b);
-	if (asNum(lhs) >= asNum(rhs)) { vm.ip = vm.ip + inst.c; }
+function vmCmpBranchF64(vm: RaiserVM, inst: RaiserInstruction, cmpOp: number): void {
+	const l = asNum(getReg(vm, vm.baseReg + inst.a));
+	const r = asNum(getReg(vm, vm.baseReg + inst.b));
+	let cond = false;
+	if (cmpOp === 0) { cond = l === r; }
+	else if (cmpOp === 1) { cond = l !== r; }
+	else if (cmpOp === 2) { cond = l < r; }
+	else if (cmpOp === 3) { cond = l <= r; }
+	else if (cmpOp === 4) { cond = l > r; }
+	else if (cmpOp === 5) { cond = l >= r; }
+	if (cond) { vm.ip = vm.ip + inst.c; }
 }
 
 // --- Bitwise handlers ---
@@ -657,31 +709,32 @@ function vmHandleBuiltin(vm: RaiserVM, inst: RaiserInstruction): void {
 	const builtinId = inst.b;
 	const base = vm.baseReg;
 
-	if (builtinId === 0) {
-		// readFile(path: string): string
-		const pathVal = getReg(vm, base + inst.a + 1);
-		const content = hostReadFile(pathVal.strVal);
-		const dst = getReg(vm, base + inst.a);
-		dst.kind = RaiserValueKind.String;
-		dst.intVal = 0;
-		dst.floatVal = 0.0;
-		dst.strVal = content;
-	} else if (builtinId === 1) {
-		// writeFile(path: string, content: string): boolean
-		const pathVal = getReg(vm, base + inst.a + 1);
-		const contentVal = getReg(vm, base + inst.a + 2);
-		const ok = hostWriteFile(pathVal.strVal, contentVal.strVal);
-		const dst = getReg(vm, base + inst.a);
-		dst.kind = RaiserValueKind.Bool;
-		let rv = 0;
-		if (ok) { rv = 1; }
-		dst.intVal = rv;
-		dst.floatVal = 0.0;
-		dst.strVal = "";
-	} else {
-		vm.error = `Unknown builtin ID: ${builtinId}`;
-		vm.halted = true;
-	}
+	match (builtinId) {
+		0 => {
+			// readFile(path: string): string
+			const pathVal = getReg(vm, base + inst.a + 1);
+			const content = hostReadFile(pathVal.strVal);
+			const dst = getReg(vm, base + inst.a);
+			dst.kind = RaiserValueKind.String;
+			dst.intVal = 0;
+			dst.floatVal = 0.0;
+			dst.strVal = content;
+		},
+		1 => {
+			// writeFile(path: string, content: string): boolean
+			const pathVal = getReg(vm, base + inst.a + 1);
+			const contentVal = getReg(vm, base + inst.a + 2);
+			const ok = hostWriteFile(pathVal.strVal, contentVal.strVal);
+			const dst = getReg(vm, base + inst.a);
+			dst.kind = RaiserValueKind.Bool;
+			let rv = 0;
+			if (ok) { rv = 1; }
+			dst.intVal = rv;
+			dst.floatVal = 0.0;
+			dst.strVal = "";
+		},
+		_ => { vmError(vm, `Unknown builtin ID: ${builtinId}`); },
+	};
 }
 
 // --- Stack trace ---
@@ -1310,4 +1363,102 @@ test "instruction line field preserved" {
 	assert inst.line === 0;
 	inst.line = 42;
 	assert inst.line === 42;
+}
+
+// --- Phase 1 Safety Tests ---
+
+test "div by zero sets error" {
+	const vm = execBinOp(RaiserOpcode.DivI64, 10, 0);
+	assert vm.error === "integer division by zero";
+	assert vm.halted;
+}
+
+test "mod by zero sets error" {
+	const vm = execBinOp(RaiserOpcode.ModI64, 10, 0);
+	assert vm.error === "integer modulo by zero";
+	assert vm.halted;
+}
+
+test "array index out of bounds" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),     // R1 = 10
+			raiserABC(RaiserOpcode.NewArray, 0, 1, 0),   // R0 = [10]
+			raiserABx(RaiserOpcode.LoadConst, 2, 1),     // R2 = 5 (bad index)
+			raiserABC(RaiserOpcode.LoadIndex, 3, 0, 2),  // R3 = R0[5] — OOB
+			raiserABC(RaiserOpcode.Halt, 3, 0, 0),
+		],
+		[raiserInt(10), raiserInt(5)]
+	));
+	assert vm.error.length > 0;
+	assert vm.halted;
+}
+
+test "array negative index" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 1, 0),     // R1 = 10
+			raiserABC(RaiserOpcode.NewArray, 0, 1, 0),   // R0 = [10]
+			raiserABx(RaiserOpcode.LoadConst, 2, 1),     // R2 = -1
+			raiserABC(RaiserOpcode.LoadIndex, 3, 0, 2),  // R3 = R0[-1] — OOB
+			raiserABC(RaiserOpcode.Halt, 3, 0, 0),
+		],
+		[raiserInt(10), raiserInt(-1)]
+	));
+	assert vm.error.length > 0;
+	assert vm.halted;
+}
+
+test "store to invalid array handle" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),     // R0 = 999 (bad handle)
+			raiserABx(RaiserOpcode.LoadConst, 1, 1),     // R1 = 0 (index)
+			raiserABx(RaiserOpcode.LoadConst, 2, 1),     // R2 = 0 (value)
+			raiserABC(RaiserOpcode.StoreIndex, 0, 1, 2), // R0[0] = 0 — bad handle
+			raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+		],
+		[raiserInt(999), raiserInt(0)]
+	));
+	assert vm.error.length > 0;
+	assert vm.halted;
+}
+
+test "object handle out of bounds" {
+	const vm = execModule(makeTestModule(
+		[
+			raiserABx(RaiserOpcode.LoadConst, 0, 0),     // R0 = -1 (bad handle)
+			raiserABC(RaiserOpcode.LoadField, 1, 0, 1),  // R1 = R0.field — bad handle
+			raiserABC(RaiserOpcode.Halt, 1, 0, 0),
+		],
+		[raiserInt(-1), raiserString("x")]
+	));
+	assert vm.error.length > 0;
+	assert vm.halted;
+}
+
+test "constant index out of bounds" {
+	const code: RaiserInstruction[] = [
+		raiserABx(RaiserOpcode.LoadConst, 0, 9999),  // K9999 doesn't exist
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	];
+	const consts: RaiserValue[] = [raiserInt(1)];
+	const vm = execModule(makeTestModule(code, consts));
+	assert vm.error.length > 0;
+	assert vm.halted;
+}
+
+test "call depth overflow" {
+	// func0 calls itself recursively: Call R0 0 0 (call func[0] with 0 args)
+	const func0Code: RaiserInstruction[] = [
+		raiserABC(RaiserOpcode.Call, 0, 0, 0),  // recurse forever
+		raiserABC(RaiserOpcode.Halt, 0, 0, 0),
+	];
+	const func0Consts: RaiserValue[] = [];
+	const f0 = createRaiserFunction("recurse", func0Code, func0Consts, 0, 0, 2);
+	const funcs: RaiserFunction[] = [f0];
+	const mod = createRaiserModule("test", funcs, 0);
+	const vm = execModule(mod);
+	assert vm.error.length > 0;
+	assert vm.halted;
 }

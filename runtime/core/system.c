@@ -1,4 +1,9 @@
 #include "runtime/core/system.h"
+
+/* Under --os=bare, manual.h provides all functions inline via -include.
+   Skip this entire file to avoid redefinitions. */
+#ifndef MS_BARE
+
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -44,3 +49,5 @@ _Noreturn void msRaiseRangeError(int64_t val, int64_t lo, int64_t hi) {
 		(long long)val, (long long)lo, (long long)hi);
 	exit(1);
 }
+
+#endif /* MS_BARE */

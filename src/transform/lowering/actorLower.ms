@@ -33,14 +33,31 @@ function paramMsgKind(paramTypes: Type[], idx: number): string {
 	if (paramTypes === null || idx >= paramTypes.length) return "ptr";
 	const t = paramTypes[idx];
 	if (t === null) return "ptr";
-	if (t.kind === TypeKind.String) return "string";
-	if (t.kind === TypeKind.Number || t.kind === TypeKind.Float64 || t.kind === TypeKind.Float32
-		|| t.kind === TypeKind.Int32 || t.kind === TypeKind.Int64
-		|| t.kind === TypeKind.Int16 || t.kind === TypeKind.Int8
-		|| t.kind === TypeKind.Uint32 || t.kind === TypeKind.Uint64
-		|| t.kind === TypeKind.Uint16 || t.kind === TypeKind.Uint8
-		|| t.kind === TypeKind.Boolean || t.kind === TypeKind.Enum) return "double";
-	return "ptr";
+	return match (t.kind) {
+		TypeKind.String => "string",
+		TypeKind.Number | TypeKind.Float64 | TypeKind.Float32
+			| TypeKind.Int32 | TypeKind.Int64 | TypeKind.Int16 | TypeKind.Int8
+			| TypeKind.Uint32 | TypeKind.Uint64 | TypeKind.Uint16 | TypeKind.Uint8
+			| TypeKind.Boolean | TypeKind.Enum => "double",
+		_ => "ptr",
+	};
+}
+
+// Map message kind to C setter/getter function names
+function msgSetterName(mk: string): string {
+	return match (mk) {
+		"double" => "msMsgSetDouble",
+		"string" => "msMsgSetString",
+		_ => "msMsgSetPtr",
+	};
+}
+
+function msgGetterName(mk: string): string {
+	return match (mk) {
+		"double" => "msMsgGetDouble",
+		"string" => "msMsgGetString",
+		_ => "msMsgGetPtr",
+	};
 }
 
 // Slot width: strings use 2 slots (16 bytes), everything else 1 slot (8 bytes).
@@ -58,6 +75,20 @@ function totalSlotCount(params: string[], paramTypes: Type[]): number {
 	return total;
 }
 
+// Pack method args into message data slots (shared by send and call proxies)
+function packArgsIntoMsg(stmts: Node[], msgSym: Symbol, params: string[], paramTypes: Type[], loc: SourceLocation): void {
+	let slot = 0;
+	for (let ai = 1; ai < params.length; ai = ai + 1) {
+		const setter = msgSetterName(paramMsgKind(paramTypes, ai));
+		stmts.push(makeExprStmt(makeCall(makeIdent(setter, loc), [
+			makeIdentResolved(msgSym, loc),
+			makeNumber(slot, loc),
+			makeIdent(params[ai], loc),
+		], loc), loc));
+		slot = slot + paramSlotWidth(paramTypes, ai);
+	}
+}
+
 function buildSendProxy(kind: number, params: string[], paramTypes: Type[], ctx: TransformContext, loc: SourceLocation): Node {
 	const msgSym = freshTempSym(ctx, "amsg", voidType());
 	const slotCount = totalSlotCount(params, paramTypes);
@@ -71,19 +102,7 @@ function buildSendProxy(kind: number, params: string[], paramTypes: Type[], ctx:
 	msgDecl.resolvedSym = msgSym;
 	msgDecl.nodeType = voidType();
 	const stmts: Node[] = [msgDecl];
-	// Pack args into msg->data slots (skip params[0] = "this")
-	// Strings use 2 slots (16B), everything else 1 slot (8B). Track slot offset.
-	let slot = 0;
-	for (let ai = 1; ai < params.length; ai = ai + 1) {
-		const mk = paramMsgKind(paramTypes, ai);
-		const setter = mk === "double" ? "msMsgSetDouble" : mk === "string" ? "msMsgSetString" : "msMsgSetPtr";
-		stmts.push(makeExprStmt(makeCall(makeIdent(setter, loc), [
-			makeIdentResolved(msgSym, loc),
-			makeNumber(slot, loc),
-			makeIdent(params[ai], loc),
-		], loc), loc));
-		slot = slot + paramSlotWidth(paramTypes, ai);
-	}
+	packArgsIntoMsg(stmts, msgSym, params, paramTypes, loc);
 	const actorPtr = makeCall(makeIdent("msActorFromPid", loc), [makeMember(makeIdent("this", loc), "pid", loc)], loc);
 	const sendCall = makeCall(makeIdent("msActorSend", loc), [actorPtr, makeIdentResolved(msgSym, loc)], loc);
 	stmts.push(makeExprStmt(sendCall, loc));
@@ -111,18 +130,7 @@ function buildCallProxy(kind: number, params: string[], paramTypes: Type[], ctx:
 	msgDecl.resolvedSym = msgSym;
 	msgDecl.nodeType = voidType();
 	const stmts: Node[] = [futDecl, msgDecl];
-	// Pack args (same slot tracking as sendProxy)
-	let slot = 0;
-	for (let ai = 1; ai < params.length; ai = ai + 1) {
-		const mk = paramMsgKind(paramTypes, ai);
-		const setter = mk === "double" ? "msMsgSetDouble" : mk === "string" ? "msMsgSetString" : "msMsgSetPtr";
-		stmts.push(makeExprStmt(makeCall(makeIdent(setter, loc), [
-			makeIdentResolved(msgSym, loc),
-			makeNumber(slot, loc),
-			makeIdent(params[ai], loc),
-		], loc), loc));
-		slot = slot + paramSlotWidth(paramTypes, ai);
-	}
+	packArgsIntoMsg(stmts, msgSym, params, paramTypes, loc);
 	const actorPtr2 = makeCall(makeIdent("msActorFromPid", loc), [makeMember(makeIdent("this", loc), "pid", loc)], loc);
 	const sendCall = makeCall(makeIdent("msActorSend", loc), [actorPtr2, makeIdentResolved(msgSym, loc)], loc);
 	stmts.push(makeExprStmt(sendCall, loc));
@@ -165,7 +173,7 @@ function buildDispatchBody(methods: Node[], actorName: string, loc: SourceLocati
 		let dSlot = 0;
 		for (let ai = 1; ai < md.methodParams.length; ai = ai + 1) {
 			const mk = paramMsgKind(mParamTypes, ai);
-			const getter = mk === "double" ? "msMsgGetDouble" : mk === "string" ? "msMsgGetString" : "msMsgGetPtr";
+			const getter = msgGetterName(mk);
 			const getCall = makeCall(makeIdent(getter, loc), [
 				makeIdent("_dmsg", loc),
 				makeNumber(dSlot, loc),
@@ -218,6 +226,20 @@ function emitActorStruct(node: Node, d: ActorDeclData, loc: SourceLocation): Nod
 		if (m.kind === NodeKind.PropertyDecl) {
 			structMembers.push(member);
 		}
+		// Include constructor in class but with empty body (allocation only).
+		// The real constructor body runs after pid wiring as a standalone function.
+		if (m.kind === NodeKind.ConstructorDecl) {
+			const cd = m.data as ConstructorDeclData;
+			const emptyCtor = createNode(NodeKind.ConstructorDecl, {
+				ctorParams: cd.ctorParams,
+				ctorParamTypes: cd.ctorParamTypes,
+				ctorBody: makeBlock([], loc),
+				ctorDefaults: cd.ctorDefaults,
+			}, syntheticToken(loc));
+			emptyCtor.resolvedSym = m.resolvedSym;
+			emptyCtor.nodeType = m.nodeType;
+			structMembers.push(emptyCtor);
+		}
 	}
 	const classNode = createNode(NodeKind.ClassDecl, {
 		className: d.actorName,
@@ -247,8 +269,32 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 		}
 		if (m.kind === NodeKind.MethodDecl) {
 			const md = m.data as MethodDeclData;
+			// Lifecycle hooks — NOT message-dispatched. Emit as standalone _impl.
+			if (md.methodName === "onTerminate" || md.methodName === "onExit" || md.methodName === "onDown" || md.methodName === "onIdle") {
+				const implNativeName = name + "_" + md.methodName + "_impl";
+				const implNode = createNode(NodeKind.FunctionDecl, {
+					fnName: implNativeName,
+					params: md.methodParams,
+					fnParamTypes: md.methodParamTypes,
+					fnBody: md.methodBody,
+					fnFlags: "",
+					fnReturnType: "void",
+					fnDefaults: [],
+					nativeName: implNativeName,
+					nameLocation: md.nameLocation,
+				}, syntheticToken(loc));
+				implNode.nodeType = m.nodeType;
+				implNode.typeExprs = m.typeExprs;
+				implNode.paramLocations = m.paramLocations;
+				const implSym = makeSymbol(implNativeName, SymbolKind.Function, m.nodeType !== null ? m.nodeType : unknownType(), false);
+				implSym.nativeName = implNativeName;
+				implSym.state = SymbolState.Checked;
+				implNode.resolvedSym = implSym;
+				result.push(implNode);
+				continue;
+			}
 			const isVoid = md.methodReturnType === "" || md.methodReturnType === "void";
-			// Guard: data[56] inline buffer fits 7 args max (Pony uses per-behavior structs; we use fixed buffer)
+			// Guard: data[56] inline buffer fits 7 args max
 			const argCount = md.methodParams.length - 1;
 			if (argCount > MS_MSG_MAX_ARGS) {
 				console.log(`warning: actor method '${name}.${md.methodName}' has ${argCount} args (max ${MS_MSG_MAX_ARGS} for inline message buffer)`);
@@ -313,19 +359,33 @@ function emitActorMethods(d: ActorDeclData, name: string, ctx: TransformContext,
 		}
 		if (m.kind === NodeKind.ConstructorDecl) {
 			const cd = m.data as ConstructorDeclData;
+			// Prepend 'this' param (constructors don't have it, but the standalone function needs it)
+			const ctorParams = ["this"];
+			for (const p of cd.ctorParams) ctorParams.push(p);
+			const ctorParamTypes = [name];
+			for (const t of cd.ctorParamTypes) ctorParamTypes.push(t);
 			const fnNode = createNode(NodeKind.FunctionDecl, {
 				fnName: name + "_constructor",
-				params: cd.ctorParams,
-				fnParamTypes: cd.ctorParamTypes,
+				params: ctorParams,
+				fnParamTypes: ctorParamTypes,
 				fnBody: cd.ctorBody,
 				fnFlags: "",
-				fnReturnType: "",
+				fnReturnType: "void",
 				fnDefaults: cd.ctorDefaults,
-				nativeName: "",
+				nativeName: name + "_constructor",
 				nameLocation: loc,
 			}, syntheticToken(loc));
-			fnNode.resolvedSym = m.resolvedSym;
-			fnNode.nodeType = m.nodeType;
+			// Build proper Function type with actor Ref as first param (codegen needs it for Watchdog* this)
+			const actorRefType = createRef(createStruct(name, [], [], true));
+			const ctorTypeChildren: Type[] = [actorRefType];
+			if (m.nodeType !== null && m.nodeType.typeChildren !== null) {
+				for (const tc of m.nodeType.typeChildren) ctorTypeChildren.push(tc);
+			}
+			fnNode.nodeType = createFunction(ctorTypeChildren, ctorParams, voidType());
+			const ctorSym = makeSymbol(name + "_constructor", SymbolKind.Function, fnNode.nodeType, false);
+			ctorSym.nativeName = name + "_constructor";
+			ctorSym.state = SymbolState.Checked;
+			fnNode.resolvedSym = ctorSym;
 			fnNode.typeExprs = m.typeExprs;
 			fnNode.paramLocations = m.paramLocations;
 			result.push(fnNode);
@@ -376,7 +436,7 @@ function collectActorMethods(d: ActorDeclData): Node[] {
 
 // ===== ActorDecl → struct + handlers + proxies + dispatch =====
 
-function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, dispatchSyms: Symbol[], dispatchNames: string[]): Node[] {
+function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, dispatchSyms: Symbol[], dispatchNames: string[], wireInfos: ActorWireInfo[]): Node[] {
 	const d = node.data as ActorDeclData;
 	const name = d.actorName;
 	const result: Node[] = [];
@@ -386,12 +446,115 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, 
 	const methods = collectActorMethods(d);
 	emitActorMethods(d, name, ctx, loc, result);
 
+	// Track lifecycle hooks for wiring
+	let hasOnTerminate = false;
+	let hasOnExit = false;
+	let hasOnDown = false;
+	let hasOnIdle = false;
+	let hasConstructor = false;
+	for (const m of methods) {
+		const md = m.data as MethodDeclData;
+		if (md.methodName === "onTerminate") hasOnTerminate = true;
+		if (md.methodName === "onExit") hasOnExit = true;
+		if (md.methodName === "onDown") hasOnDown = true;
+		if (md.methodName === "onIdle") hasOnIdle = true;
+	}
+	for (const member of d.actorBody) {
+		let m = member;
+		if (m.kind === NodeKind.DecoratedDecl) {
+			const dd = m.data as DecoratedDeclData;
+			if (dd.decoratedNode !== null) m = dd.decoratedNode;
+		}
+		if (m.kind === NodeKind.ConstructorDecl) hasConstructor = true;
+	}
+	wireInfos.push({
+		name,
+		hasOnTerminate,
+		hasSysMsg: hasOnExit || hasOnDown || hasOnIdle,
+		hasTrapExits: hasOnExit,
+		hasCtor: hasConstructor,
+	});
+
+	// Emit system message handler if actor has onExit or onDown
+	if (hasOnExit || hasOnDown || hasOnIdle) {
+		const sysHandlerName = name + "_systemMsg_impl";
+		const actorRefType = createRef(createStruct(name, [], [], true));
+		const selfIdent = makeIdent("this", loc);
+		selfIdent.nodeType = actorRefType;
+		const stmts: Node[] = [];
+		// Cast void* this to actor Ref type
+		const castThis = createNode(NodeKind.HiddenStdConv, { convExpr: selfIdent, convType: actorRefType }, syntheticToken(loc));
+		castThis.nodeType = actorRefType;
+		const selfDecl = makeVarDecl("_self", castThis, DeclKind.Const, loc);
+		selfDecl.nodeType = actorRefType;
+		stmts.push(selfDecl);
+		const selfRef = makeIdent("_self", loc);
+		selfRef.nodeType = actorRefType;
+
+		// if (msMsgKind(_smsg) === -1 && hasOnExit) → call onExit_impl(_self, pid, reason)
+		if (hasOnExit) {
+			const kindCheck = makeBinary(
+				makeCall(makeIdent("msMsgKind", loc), [makeIdent("_smsg", loc)], loc),
+				"===", makeNumber(-1, loc), loc);
+			const exitCall = makeCall(makeIdent(name + "_onExit_impl", loc), [
+				selfRef,
+				makeCall(makeIdent("msMsgGetDouble", loc), [makeIdent("_smsg", loc), makeNumber(0, loc)], loc),
+				makeCall(makeIdent("msMsgGetDouble", loc), [makeIdent("_smsg", loc), makeNumber(1, loc)], loc),
+			], loc);
+			stmts.push(createNode(NodeKind.IfStmt, {
+				condition: kindCheck, consequent: makeBlock([makeExprStmt(exitCall, loc)], loc),
+				alternate: makeBlock([], loc),
+			}, syntheticToken(loc)));
+		}
+		// if (msMsgKind(_smsg) === -2 && hasOnDown) → call onDown_impl(_self, ref, pid, reason)
+		if (hasOnDown) {
+			const kindCheck2 = makeBinary(
+				makeCall(makeIdent("msMsgKind", loc), [makeIdent("_smsg", loc)], loc),
+				"===", makeNumber(-2, loc), loc);
+			const downCall = makeCall(makeIdent(name + "_onDown_impl", loc), [
+				selfRef,
+				makeCall(makeIdent("msMsgGetDouble", loc), [makeIdent("_smsg", loc), makeNumber(0, loc)], loc),
+				makeCall(makeIdent("msMsgGetDouble", loc), [makeIdent("_smsg", loc), makeNumber(1, loc)], loc),
+				makeCall(makeIdent("msMsgGetDouble", loc), [makeIdent("_smsg", loc), makeNumber(2, loc)], loc),
+			], loc);
+			stmts.push(createNode(NodeKind.IfStmt, {
+				condition: kindCheck2, consequent: makeBlock([makeExprStmt(downCall, loc)], loc),
+				alternate: makeBlock([], loc),
+			}, syntheticToken(loc)));
+		}
+		// if (msMsgKind(_smsg) === -3 && hasOnIdle) → call onIdle_impl(_self)
+		if (hasOnIdle) {
+			const kindCheck3 = makeBinary(
+				makeCall(makeIdent("msMsgKind", loc), [makeIdent("_smsg", loc)], loc),
+				"===", makeNumber(-3, loc), loc);
+			const idleCall = makeCall(makeIdent(name + "_onIdle_impl", loc), [selfRef], loc);
+			stmts.push(createNode(NodeKind.IfStmt, {
+				condition: kindCheck3, consequent: makeBlock([makeExprStmt(idleCall, loc)], loc),
+				alternate: makeBlock([], loc),
+			}, syntheticToken(loc)));
+		}
+
+		const sysHandlerBody = makeBlock(stmts, loc);
+		const sysHandlerNode = createNode(NodeKind.FunctionDecl, {
+			fnName: sysHandlerName, params: ["this", "_smsg"],
+			fnParamTypes: [name, "void"], fnBody: sysHandlerBody,
+			fnFlags: "", fnReturnType: "void", fnDefaults: [],
+			nativeName: sysHandlerName, nameLocation: d.nameLocation,
+		}, syntheticToken(loc));
+		const sysType = createFunction([unknownType(), unknownType()], ["this", "_smsg"], voidType());
+		sysHandlerNode.nodeType = sysType;
+		const sysSym = makeSymbol(sysHandlerName, SymbolKind.Function, sysType, false);
+		sysSym.nativeName = sysHandlerName;
+		sysSym.state = SymbolState.Checked;
+		sysHandlerNode.resolvedSym = sysSym;
+		result.push(sysHandlerNode);
+	}
+
 	if (methods.length > 0) {
 		const dispatchNode = emitActorDispatch(d, name, methods, loc);
 		result.push(dispatchNode);
 		dispatchSyms.push(dispatchNode.resolvedSym);
 		dispatchNames.push(name);
-
 	}
 
 	return result;
@@ -399,7 +562,7 @@ function lowerActorDecl(node: Node, loc: SourceLocation, ctx: TransformContext, 
 
 // ===== Program-level: expand ActorDecl + inject include + rewrite new =====
 
-function expandActorDecls(program: Node, names: string[], dispatchSyms: Symbol[], dispatchNames: string[], ctx: TransformContext): Node {
+function expandActorDecls(program: Node, names: string[], dispatchSyms: Symbol[], dispatchNames: string[], wireInfos: ActorWireInfo[], ctx: TransformContext): Node {
 	if (program.kind !== NodeKind.Program) return program;
 	const pd = program.data as ProgramData;
 	const newStmts: Node[] = [];
@@ -408,7 +571,7 @@ function expandActorDecls(program: Node, names: string[], dispatchSyms: Symbol[]
 		if (stmt.kind === NodeKind.ActorDecl) {
 			const ad = stmt.data as ActorDeclData;
 			names.push(ad.actorName);
-			const expanded = lowerActorDecl(stmt, stmt.location, ctx, dispatchSyms, dispatchNames);
+			const expanded = lowerActorDecl(stmt, stmt.location, ctx, dispatchSyms, dispatchNames, wireInfos);
 			for (const n of expanded) newStmts.push(n);
 			continue;
 		}
@@ -417,7 +580,7 @@ function expandActorDecls(program: Node, names: string[], dispatchSyms: Symbol[]
 			if (ed.exportedDecl !== null && ed.exportedDecl.kind === NodeKind.ActorDecl) {
 				const ad = ed.exportedDecl.data as ActorDeclData;
 				names.push(ad.actorName);
-				const expanded = lowerActorDecl(ed.exportedDecl, ed.exportedDecl.location, ctx, [], []);
+				const expanded = lowerActorDecl(ed.exportedDecl, ed.exportedDecl.location, ctx, dispatchSyms, dispatchNames, wireInfos);
 				for (const n of expanded) {
 					newStmts.push(createNode(NodeKind.ExportDecl, {
 						exportedDecl: n,
@@ -442,13 +605,29 @@ function expandActorDecls(program: Node, names: string[], dispatchSyms: Symbol[]
 	return program;
 }
 
+// Per-actor wiring flags — tracks which lifecycle hooks need runtime wiring
+interface ActorWireInfo {
+	name: string;
+	hasOnTerminate: boolean;
+	hasSysMsg: boolean;
+	hasTrapExits: boolean;
+	hasCtor: boolean;
+}
+
+function findWireInfo(infos: ActorWireInfo[], actorName: string): ActorWireInfo {
+	for (const info of infos) {
+		if (info.name === actorName) return info;
+	}
+	return null as unknown as ActorWireInfo;
+}
+
 // ===== Wire actor creation after `new ActorType()` in any statement list =====
 
-function wireActorInStmts(stmts: Node[], names: string[], dispatchSyms: Symbol[], dispatchNames: string[]): Node[] {
+function wireActorInStmts(stmts: Node[], names: string[], dispatchSyms: Symbol[], dispatchNames: string[], wireInfos: ActorWireInfo[]): Node[] {
 	const out: Node[] = [];
 	for (const stmt of stmts) {
 		// Recurse into nested blocks first
-		wireActorInNode(stmt, names, dispatchSyms, dispatchNames);
+		wireActorInNode(stmt, names, dispatchSyms, dispatchNames, wireInfos);
 		out.push(stmt);
 		// After VarDecl with `new ActorType()`, inject pid wiring
 		if (stmt.kind === NodeKind.VariableDecl) {
@@ -491,6 +670,39 @@ function wireActorInStmts(stmts: Node[], names: string[], dispatchSyms: Symbol[]
 							makeIdent(vd.declName, loc),
 						], loc);
 						out.push(makeExprStmt(increfCall, loc));
+						const wi = findWireInfo(wireInfos, actorName);
+						if (wi !== null && wi.hasOnTerminate) {
+							const pidRef2 = makeMember(makeIdent(vd.declName, loc), "pid", loc);
+							const setTermCall = makeCall(makeIdent("msActorSetOnTerminate", loc), [
+								makeCall(makeIdent("msActorFromPid", loc), [pidRef2], loc),
+								makeIdent(actorName + "_onTerminate_impl", loc),
+							], loc);
+							out.push(makeExprStmt(setTermCall, loc));
+						}
+						if (wi !== null && wi.hasSysMsg) {
+							const pidRef3 = makeMember(makeIdent(vd.declName, loc), "pid", loc);
+							const setSysCall = makeCall(makeIdent("msActorSetSystemMsgHandler", loc), [
+								makeCall(makeIdent("msActorFromPid", loc), [pidRef3], loc),
+								makeIdent(actorName + "_systemMsg_impl", loc),
+							], loc);
+							out.push(makeExprStmt(setSysCall, loc));
+						}
+						if (wi !== null && wi.hasTrapExits) {
+							const trapCall = makeCall(makeIdent("msActorTrapExits", loc), [
+								makeMember(makeIdent(vd.declName, loc), "pid", loc),
+								makeNumber(1, loc),
+							], loc);
+							out.push(makeExprStmt(trapCall, loc));
+						}
+						if (wi !== null && wi.hasCtor) {
+							// Forward constructor args from `new Actor(args...)` to deferred constructor
+							const ctorArgs: Node[] = [makeIdent(vd.declName, loc)];
+							if (ne.newArguments !== null) {
+								for (const arg of ne.newArguments) ctorArgs.push(arg);
+							}
+							const ctorCall = makeCall(makeIdent(actorName + "_constructor", loc), ctorArgs, loc);
+							out.push(makeExprStmt(ctorCall, loc));
+						}
 					}
 				}
 			}
@@ -501,51 +713,51 @@ function wireActorInStmts(stmts: Node[], names: string[], dispatchSyms: Symbol[]
 
 // ===== Recursively walk into nodes that contain statement lists =====
 
-function wireActorInNode(node: Node, names: string[], dispatchSyms: Symbol[], dispatchNames: string[]): void {
+function wireActorInNode(node: Node, names: string[], dispatchSyms: Symbol[], dispatchNames: string[], wireInfos: ActorWireInfo[]): void {
 	if (node.kind === NodeKind.FunctionDecl) {
 		const fd = node.data as FunctionDeclData;
-		if (fd.fnBody !== null) wireActorInNode(fd.fnBody, names, dispatchSyms, dispatchNames);
+		if (fd.fnBody !== null) wireActorInNode(fd.fnBody, names, dispatchSyms, dispatchNames, wireInfos);
 	} else if (node.kind === NodeKind.BlockStmt) {
 		const bd = node.data as BlockStmtData;
-		bd.statements = wireActorInStmts(bd.statements, names, dispatchSyms, dispatchNames);
+		bd.statements = wireActorInStmts(bd.statements, names, dispatchSyms, dispatchNames, wireInfos);
 	} else if (node.kind === NodeKind.IfStmt) {
 		const id = node.data as IfStmtData;
-		wireActorInNode(id.consequent, names, dispatchSyms, dispatchNames);
-		if (id.alternate !== null) wireActorInNode(id.alternate, names, dispatchSyms, dispatchNames);
+		wireActorInNode(id.consequent, names, dispatchSyms, dispatchNames, wireInfos);
+		if (id.alternate !== null) wireActorInNode(id.alternate, names, dispatchSyms, dispatchNames, wireInfos);
 	} else if (node.kind === NodeKind.WhileStmt) {
 		const wd = node.data as WhileStmtData;
-		wireActorInNode(wd.whileBody, names, dispatchSyms, dispatchNames);
+		wireActorInNode(wd.whileBody, names, dispatchSyms, dispatchNames, wireInfos);
 	} else if (node.kind === NodeKind.DoWhileStmt) {
 		const dd = node.data as DoWhileStmtData;
-		wireActorInNode(dd.doBody, names, dispatchSyms, dispatchNames);
+		wireActorInNode(dd.doBody, names, dispatchSyms, dispatchNames, wireInfos);
 	} else if (node.kind === NodeKind.ForOfStmt) {
 		const fd = node.data as ForOfStmtData;
-		wireActorInNode(fd.forOfBody, names, dispatchSyms, dispatchNames);
+		wireActorInNode(fd.forOfBody, names, dispatchSyms, dispatchNames, wireInfos);
 	} else if (node.kind === NodeKind.ForStmt) {
 		const fd = node.data as ForStmtData;
-		wireActorInNode(fd.forBody, names, dispatchSyms, dispatchNames);
+		wireActorInNode(fd.forBody, names, dispatchSyms, dispatchNames, wireInfos);
 	} else if (node.kind === NodeKind.TryCatchStmt) {
 		const td = node.data as TryCatchStmtData;
-		wireActorInNode(td.tryBody, names, dispatchSyms, dispatchNames);
-		if (td.catchBody !== null) wireActorInNode(td.catchBody, names, dispatchSyms, dispatchNames);
-		if (td.finallyBody !== null) wireActorInNode(td.finallyBody, names, dispatchSyms, dispatchNames);
+		wireActorInNode(td.tryBody, names, dispatchSyms, dispatchNames, wireInfos);
+		if (td.catchBody !== null) wireActorInNode(td.catchBody, names, dispatchSyms, dispatchNames, wireInfos);
+		if (td.finallyBody !== null) wireActorInNode(td.finallyBody, names, dispatchSyms, dispatchNames, wireInfos);
 	} else if (node.kind === NodeKind.SwitchStmt) {
 		const sd = node.data as SwitchStmtData;
-		for (const c of sd.switchCases) wireActorInNode(c, names, dispatchSyms, dispatchNames);
+		for (const c of sd.switchCases) wireActorInNode(c, names, dispatchSyms, dispatchNames, wireInfos);
 	} else if (node.kind === NodeKind.SwitchCase) {
 		const sc = node.data as SwitchCaseData;
-		sc.caseStmts = wireActorInStmts(sc.caseStmts, names, dispatchSyms, dispatchNames);
+		sc.caseStmts = wireActorInStmts(sc.caseStmts, names, dispatchSyms, dispatchNames, wireInfos);
 	}
 }
 
 // ===== Top-level: wire actors at all scopes + inject poll at exit =====
 
-function rewriteAndInjectPoll(program: Node, names: string[], dispatchSyms: Symbol[], dispatchNames: string[]): Node {
+function rewriteAndInjectPoll(program: Node, names: string[], dispatchSyms: Symbol[], dispatchNames: string[], wireInfos: ActorWireInfo[]): Node {
 	if (program.kind !== NodeKind.Program) return program;
 	const pd = program.data as ProgramData;
 
 	// Recursively wire actor creation at all scope levels
-	pd.programStmts = wireActorInStmts(pd.programStmts, names, dispatchSyms, dispatchNames);
+	pd.programStmts = wireActorInStmts(pd.programStmts, names, dispatchSyms, dispatchNames, wireInfos);
 
 	// Drain all actor mailboxes at exit
 	const exitLoc = program.location;
@@ -560,8 +772,8 @@ export function lowerActor(program: Node, ctx: TransformContext): Node {
 	const names: string[] = [];
 	const dispatchSyms: Symbol[] = [];
 	const dispatchNames: string[] = [];
-	const expanded = expandActorDecls(program, names, dispatchSyms, dispatchNames, ctx);
+	const wireInfos: ActorWireInfo[] = [];
+	const expanded = expandActorDecls(program, names, dispatchSyms, dispatchNames, wireInfos, ctx);
 	if (names.length === 0) return expanded;
-	// Wire msActorCreate after every `new ActorType()` at any scope + inject poll at exit
-	return rewriteAndInjectPoll(expanded, names, dispatchSyms, dispatchNames);
+	return rewriteAndInjectPoll(expanded, names, dispatchSyms, dispatchNames, wireInfos);
 }

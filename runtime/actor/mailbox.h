@@ -116,7 +116,7 @@ static inline void msMsgFree(msMessage* m) {
     msMsgPool* pool = &msMsgPools[cls];
     atomic_store_explicit(&m->next, pool->free_list, memory_order_relaxed);
     pool->free_list = m;
-    pool->count++;
+    if (pool->count < INT32_MAX) pool->count++;
 }
 
 /* ===== Arg packing/unpacking (type-erased via void* slots in data[]) ===== */

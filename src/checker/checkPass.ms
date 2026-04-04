@@ -270,6 +270,43 @@ function checkActorDecl(ctx: CheckerContext, node: Node): void {
 				addError(ctx, `actor methods cannot be generators — '${md.methodName}' uses yield which is incompatible with message passing`,
 					m.location.line, m.location.column);
 			}
+			// Lifecycle hooks: validate signatures
+			if (md.methodName === "onTerminate") {
+				if (md.methodParams.length !== 2) {
+					addError(ctx, `onTerminate must have exactly one parameter (reason: ExitReason)`,
+						m.location.line, m.location.column);
+				}
+				if (md.methodReturnType !== "" && md.methodReturnType !== "void") {
+					addError(ctx, `onTerminate must return void`, m.location.line, m.location.column);
+				}
+			}
+			if (md.methodName === "onExit") {
+				if (md.methodParams.length !== 3) {
+					addError(ctx, `onExit must have two parameters (childPid: int64, reason: ExitReason)`,
+						m.location.line, m.location.column);
+				}
+				if (md.methodReturnType !== "" && md.methodReturnType !== "void") {
+					addError(ctx, `onExit must return void`, m.location.line, m.location.column);
+				}
+			}
+			if (md.methodName === "onDown") {
+				if (md.methodParams.length !== 4) {
+					addError(ctx, `onDown must have three parameters (ref: number, pid: int64, reason: ExitReason)`,
+						m.location.line, m.location.column);
+				}
+				if (md.methodReturnType !== "" && md.methodReturnType !== "void") {
+					addError(ctx, `onDown must return void`, m.location.line, m.location.column);
+				}
+			}
+			if (md.methodName === "onIdle") {
+				if (md.methodParams.length !== 1) {
+					addError(ctx, `onIdle must have no parameters (only implicit this)`,
+						m.location.line, m.location.column);
+				}
+				if (md.methodReturnType !== "" && md.methodReturnType !== "void") {
+					addError(ctx, `onIdle must return void`, m.location.line, m.location.column);
+				}
+			}
 		}
 	}
 

@@ -1,3 +1,4 @@
+#ifndef MS_BARE
 /*
  * MetaScript Thread Pool — Malebolgia-style fixed worker pool
  *
@@ -304,3 +305,5 @@ void msPoolShutdown(void) {
 	free(gPool);
 	gPool = NULL;
 }
+
+#endif /* MS_BARE */

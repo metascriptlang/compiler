@@ -152,7 +152,7 @@ export function cliCompileFlags(opts: CliOptions): string {
 	// Cross-compilation target triple
 	// zig cc: -target cpu-os-abi (bundled sysroot, no --target= prefix)
 	// clang/gcc: --target=cpu-vendor-os-abi
-	if (opts.osTarget !== "" || opts.cpuTarget !== "") {
+	if ((opts.osTarget !== "" && opts.osTarget !== "bare") || opts.cpuTarget !== "") {
 		const useZig = opts.ccBinary === "zig cc";
 		const ct = crossTargetFlag(opts.osTarget, opts.cpuTarget, useZig);
 		if (ct !== "") flags = appendFlag(flags, ct);

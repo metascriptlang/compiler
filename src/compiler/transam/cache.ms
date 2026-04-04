@@ -116,10 +116,11 @@ export function cachePut(cache: TaCacheStore, entry: TaCacheEntry): void {
 	// Update file index
 	const fid = entry.key.fileId;
 	if (cache.fileIndex.has(fid)) {
-		cache.fileIndex.get(fid).push(entry);
-	} else {
-		const arr: TaCacheEntry[] = [entry];
+		const arr = cache.fileIndex.get(fid);
+		arr.push(entry);
 		cache.fileIndex.set(fid, arr);
+	} else {
+		cache.fileIndex.set(fid, [entry]);
 	}
 }
 

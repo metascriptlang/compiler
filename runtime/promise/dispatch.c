@@ -1,3 +1,4 @@
+#ifndef MS_BARE
 /*
  * MetaScript Async Dispatcher — Standard reference implementation parity
  *
@@ -22,6 +23,19 @@
 /* ===== Actor poll hook (set by actor runtime, NULL if no actors) ===== */
 static bool (*msActorPollHook)(void) = NULL;
 void msSetActorPollHook(bool (*hook)(void)) { msActorPollHook = hook; }
+
+/* Actor idle timeout cap: shortest actor idle timeout in ms (0 = no cap).
+ * When > 0, msRunOnce caps its sleep to this value so idle timeouts fire on time. */
+static int msActorIdleCapMs = 0;
+void msSetActorIdleCap(int ms) { msActorIdleCapMs = ms; }
+
+/* Actor destroy hook: auto-unregister from name registry.
+ * Set by the TU that owns the registry. Called from any TU's msActorDestroyWithReason. */
+static void (*msActorDestroyHook)(void* actor) = NULL;
+void msSetActorDestroyHook(void (*hook)(void*)) { msActorDestroyHook = hook; }
+void msCallActorDestroyHook(void* actor) {
+	if (msActorDestroyHook != NULL) msActorDestroyHook(actor);
+}
 
 
 /* ===== Platform-specific time + sleep ===== */
@@ -244,6 +258,10 @@ void msProcessCallbacks(msDispatcher* d, bool* didWork) {
 int msAdjustTimeout(msDispatcher* d, int pollTimeout, int nextTimerMs) {
 	/* If callbacks pending, no wait */
 	if (msDequeLen(&d->callbacks) > 0) return 0;
+	/* Cap to actor idle timeout if set (ensures idle scan fires on time) */
+	if (msActorIdleCapMs > 0 && (pollTimeout < 0 || msActorIdleCapMs < pollTimeout)) {
+		pollTimeout = msActorIdleCapMs;
+	}
 	/* No timers → use poll timeout as-is */
 	if (nextTimerMs < 0) return pollTimeout;
 	/* Use the smaller of poll timeout and next timer */
@@ -462,3 +480,5 @@ void msDestroyDispatcher(void) {
 	free(d);
 	gDispatcher = NULL;
 }
+
+#endif /* MS_BARE */

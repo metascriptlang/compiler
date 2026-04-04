@@ -118,15 +118,30 @@ export function genArgCcgPtr(g: CGen, arg: string, argNode: Node, p: CProc, para
 	return safeAddrOf(g, p, arg, argNode, paramType);
 }
 
+// Check if a CallExpr calls an msArrayAccess-family macro (produces C lvalue).
+// nativeLower rewrites arr[i] to CallExpr("msArrayAccess", [arr, i]).
+// These macros expand to *(&data[idx]) which IS an lvalue in C.
+function isArrayAccessCall(node: Node): boolean {
+	if (node === null || node.kind !== NodeKind.CallExpr) return false;
+	const callee = (node.data as CallExprData).callee;
+	if (callee.kind !== NodeKind.Identifier) return false;
+	const name = (callee.data as IdentifierData).name;
+	return name === "msArrayAccess" || name === "msStringArrayAccess"
+		|| name === "msNumberArrayAccess" || name === "msRefArrayAccess"
+		|| name === "msUint8ArrayAccess" || name === "msSizedArrayAccess";
+}
+
 // Check if an AST node produces a C lvalue (can have & applied directly).
 // Identifiers, member access, array subscripts, and pointer derefs are lvalues.
+// CallExpr to msArrayAccess macros also produce lvalues (nativeLower rewrites arr[i] to these).
 // Everything else (calls, literals, conditionals, casts) needs hoisting to a temp.
 function isLvalueNode(node: Node): boolean {
 	if (node === null) return false;
 	return node.kind === NodeKind.Identifier
 		|| node.kind === NodeKind.MemberExpr
 		|| node.kind === NodeKind.ArrayAccess
-		|| node.kind === NodeKind.HiddenDeref;
+		|| node.kind === NodeKind.HiddenDeref
+		|| isArrayAccessCall(node);
 }
 
 // Reference parity: standard address generation always operates on a named variable,

@@ -1,3 +1,4 @@
+#ifndef MS_BARE
 /*
  * MetaScript Promise Combinators — Promise.all / Promise.race
  */
@@ -391,3 +392,5 @@ msFuture* msFutureFinally(msFuture* input, msClosure onSettled) {
 	msFutureAddCallback(input, (msClosure){.fn = (msClosureFn)msFutureFinallyCb, .env = env});
 	return output;
 }
+
+#endif /* MS_BARE */

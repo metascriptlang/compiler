@@ -1,0 +1,68 @@
+// MetaScript Actor Library — user-facing API for actor supervision
+// Import: import { ExitReason, link, stop, monitor } from "std/actor";
+
+@include("runtime/actor/actor.h");
+
+// ===== ExitReason — why an actor terminated (Erlang OTP parity) =====
+
+export enum ExitReason {
+	Normal,     // clean shutdown
+	Killed,     // forced kill (supervisor restart, system shutdown)
+	Abnormal,   // crash (unhandled panic/error)
+}
+
+// ===== Actor Lifecycle =====
+
+// Stop an actor — triggers onTerminate(reason), then destroys
+export extern function stop(pid: int64, reason: ExitReason): void from "msActorStop";
+
+// ===== Links — bidirectional exit propagation (Erlang: link/1) =====
+
+export extern function link(a: int64, b: int64): void from "msActorLinkPid";
+export extern function unlink(a: int64, b: int64): void from "msActorUnlinkPid";
+
+// Trap exits — receive EXIT signals as messages instead of dying
+export extern function trapExits(actorPid: int64, shouldTrap: boolean): void from "msActorTrapExits";
+
+// ===== Monitors — unidirectional DOWN notification (Erlang: monitor/2) =====
+
+// Returns a monitor reference. Target death sends DOWN message to watcher.
+export extern function monitor(watcherPid: int64, targetPid: int64): int64 from "msActorMonitorPid";
+export extern function demonitor(targetPid: int64, monitorRef: int64): void from "msActorDemonitorPid";
+
+// ===== Idle Timeout (Erlang: gen_server timeout) =====
+
+// Set idle timeout — onIdle() fires after ms of no messages. 0 = disable.
+export extern function setIdleTimeout(pid: int64, ms: number): void from "msActorSetIdleTimeout";
+
+// ===== Name Registry (Erlang: register/2, whereis/1, unregister/1) =====
+
+// Hook: wire auto-unregister into actor destroy (ensures same TU owns registry data)
+extern function msActorNameRegistryInit(): void from "msActorNameRegistryInit";
+
+// Register a name for a pid. Returns true on success, false if name taken or pid already named.
+extern function msActorRegisterName(pid: int64, name: string): number from "msActorRegisterName";
+let registryInitialized: boolean = false;
+export function registerName(pid: int64, name: string): boolean {
+	if (!registryInitialized) {
+		msActorNameRegistryInit();
+		registryInitialized = true;
+	}
+	return msActorRegisterName(pid, name) === 1;
+}
+
+// Look up pid by registered name. Returns 0 if not found.
+extern function msActorWhereis(name: string): int64 from "msActorWhereis";
+export function whereis(name: string): int64 {
+	return msActorWhereis(name);
+}
+
+// Remove a registered name. No-op if not registered.
+extern function msActorUnregisterName(name: string): void from "msActorUnregisterName";
+export function unregister(name: string): void {
+	msActorUnregisterName(name);
+}
+
+// ===== Monotonic Clock (for restart tolerance) =====
+
+export extern function clockMs(): number from "msMonoTimeMs";

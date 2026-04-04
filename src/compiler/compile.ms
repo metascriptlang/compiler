@@ -290,6 +290,10 @@ function initCBuildState(opts: CliOptions): CBuildState {
 		includePaths.add(compilerRoot);
 		allFlags = appendFlag(allFlags, `-I${compilerRoot}`);
 	}
+	// --os=bare: force-include manual.h before all .c files so malloc→arena (freestanding)
+	if (opts.osTarget === "bare" && compilerRoot !== "") {
+		allFlags = appendFlag(allFlags, `-DMS_BARE -include ${compilerRoot}/runtime/manual.h`);
+	}
 	return { allFlags, includePaths };
 }
 
@@ -531,7 +535,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	// Default: "zig cc" (modern cross-compiler, bundled sysroots, no external deps).
 	// Fallback: platform-specific cross-gcc (e.g. x86_64-w64-mingw32-gcc).
 	// Override: --cc=<binary>
-	if (opts.osTarget !== "" && opts.ccBinary === "") {
+	if (opts.osTarget !== "" && opts.osTarget !== "bare" && opts.ccBinary === "") {
 		if (exec("which zig > /dev/null 2>&1") === 0) {
 			opts.ccBinary = "zig cc";
 		} else {
@@ -761,7 +765,7 @@ export function cmdBuildC(entryPath: string, opts: CliOptions): void {
 	// Generate global init dispatcher and compile to .o (skip for HCR — .so has no main)
 	if (!opts.isHcr) {
 		if (opts.verbose) verboseLog("generating dispatcher");
-		const dispatcher = genProjectDispatcher(graph.loadOrder, entryPath, hasUserMain, mainRetType);
+		const dispatcher = genProjectDispatcher(graph.loadOrder, entryPath, hasUserMain, mainRetType, opts.osTarget);
 		const dispFile = `${cd}/_dispatch.c`;
 		const dispObj = `${cd}/_dispatch.o`;
 		writeOutput(dispFile, dispatcher);

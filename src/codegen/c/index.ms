@@ -126,7 +126,7 @@ function genModuleInitFns(g: CGen): void {
 // Generates the global init dispatcher: forward decls, MsPreMainInner, MsMainInner,
 // MsMain, global vars, and POSIX main.
 
-export function genProjectDispatcher(modulePaths: string[], entryPath: string, hasUserMain: boolean, mainRetType: string): string {
+export function genProjectDispatcher(modulePaths: string[], entryPath: string, hasUserMain: boolean, mainRetType: string, osTarget: string): string {
 	const b = createBuilder();
 	const retType = (mainRetType.length > 0) ? mainRetType : "void";
 
@@ -189,19 +189,32 @@ export function genProjectDispatcher(modulePaths: string[], entryPath: string, h
 	addLine(b, "}");
 	addNewline(b);
 
-	// MsMain + POSIX main
+	// MsMain — exposed for targets where user provides own entry point
 	addLine(b, "void MsMain(void) {");
 	addLine(b, "  MsPreMainInner();");
 	addLine(b, "  MsMainInner();");
 	addLine(b, "}");
 	addNewline(b);
-	addLine(b, "int main(int argc, char** argv, char** env) {");
-	addLine(b, "  cmdLine = argv;");
-	addLine(b, "  cmdCount = argc;");
-	addLine(b, "  gEnv = env;");
-	addLine(b, "  MsMain();");
-	addLine(b, "  return msProgramResult;");
-	addLine(b, "}");
+
+	if (osTarget === "bare") {
+		// Bare: minimal main, no argc/argv/env (doesn't exist on bare metal).
+		// Works for desktop testing. For cross-compile, user does --emit=c + own entry.
+		addLine(b, "int main(void) {");
+		addLine(b, "  MsMain();");
+		addLine(b, "  return msProgramResult;");
+		addLine(b, "}");
+	} else if (osTarget === "solana") {
+		// Solana: no main at all — user provides entrypoint()
+	} else {
+		// POSIX: standard entry point with argc/argv/env
+		addLine(b, "int main(int argc, char** argv, char** env) {");
+		addLine(b, "  cmdLine = argv;");
+		addLine(b, "  cmdCount = argc;");
+		addLine(b, "  gEnv = env;");
+		addLine(b, "  MsMain();");
+		addLine(b, "  return msProgramResult;");
+		addLine(b, "}");
+	}
 
 	return extract(b);
 }
@@ -222,7 +235,7 @@ function cOutput(input: string): string {
 	if (!pr.ok) return "PARSE_ERROR: " + pr.error;
 	const moduleCode = generateCModule(pr.value, null as unknown as CheckerContext, "test/input", createAliveSet(), false, false);
 	const paths: string[] = ["test/input"];
-	const dispatcher = genProjectDispatcher(paths, "test/input", false, "void");
+	const dispatcher = genProjectDispatcher(paths, "test/input", false, "void", "");
 	return moduleCode + "\n" + dispatcher;
 }
 

@@ -15,12 +15,25 @@
 #include "runtime/drc.h"
 #include <stdint.h>
 #include <stdbool.h>
+#include <pthread.h>
 
 /* ===== Actor Dispatch Function ===== */
 
 /* Dispatch receives state + full message (void* → msMessage*).
  * Dispatch accesses msg->kind for routing and msg->replyFuture for call-semantics. */
 typedef void (*msActorDispatchFn)(void* state, void* msg);
+
+/* ===== ExitReason (Erlang OTP parity) ===== */
+
+#define MS_EXIT_NORMAL   0  /* clean shutdown */
+#define MS_EXIT_KILLED   1  /* forced kill (supervisor restart, system shutdown) */
+#define MS_EXIT_ABNORMAL 2  /* crash (unhandled panic/error) */
+
+/* onTerminate callback: called before actor is destroyed. Can send messages, flush. */
+typedef void (*msActorOnTerminateFn)(void* state, int32_t reason);
+
+/* System message callback: routes EXIT (kind=-1) and DOWN (kind=-2) to user handlers. */
+typedef void (*msActorSystemMsgFn)(void* state, void* msg);
 
 /* ===== Sync Flags (Pony-derived) ===== */
 
@@ -49,12 +62,30 @@ typedef struct msActor {
     struct msActor** refs;
     int refsCount;
     int refsCap;
+    /* Supervision: lifecycle callback (Erlang OTP onTerminate) */
+    msActorOnTerminateFn onTerminateFn;
+    /* Links: bidirectional exit propagation (Erlang-style) */
+    struct msActor** links;
+    int linkCount;
+    int linkCap;
+    bool trapExits;  /* true = receive EXIT as message instead of dying */
+    /* System message handler: routes EXIT/DOWN to onExit/onDown methods */
+    msActorSystemMsgFn onSystemMsg;
+    /* Monitors: unidirectional DOWN messages (Erlang-style) */
+    struct msActor** monitorWatchers;   /* who is watching this actor */
+    int64_t* monitorRefs;               /* monitor reference per watcher (for matching) */
+    int monitorCount;
+    int monitorCap;
+    /* Idle timeout: fires onIdle system message (kind=-3) after N ms of no messages */
+    int64_t idleTimeoutMs;     /* 0 = disabled (default via calloc) */
+    int64_t lastActivityMs;    /* monotonic timestamp of last message receipt */
+    /* Alive guard: prevents double-stop / use-after-free on dangling pid */
+    _Atomic(bool) alive;
 } msActor;
 
 /* ===== Batch Size ===== */
 
 #define MS_ACTOR_BATCH 64
-#define MS_CYCLE_INTERVAL 100  /* run cycle detector every N polls */
 
 /* ===== Thread-local: currently executing actor (NULL if non-actor code) ===== */
 
@@ -129,6 +160,17 @@ static inline msActor* msActorCreate(void* state, msActorDispatchFn dispatch) {
     a->refs = NULL;
     a->refsCount = 0;
     a->refsCap = 0;
+    a->onTerminateFn = NULL;
+    a->onSystemMsg = NULL;
+    a->links = NULL;
+    a->linkCount = 0;
+    a->linkCap = 0;
+    a->trapExits = false;
+    a->monitorWatchers = NULL;
+    a->monitorRefs = NULL;
+    a->monitorCount = 0;
+    a->monitorCap = 0;
+    atomic_store_explicit(&a->alive, true, memory_order_relaxed);
     return a;
 }
 
@@ -144,14 +186,15 @@ static inline msActor* msActorFromPid(int64_t pid) {
 
 /* ===== Multi-Scheduler (forward declarations needed by msActorSend) ===== */
 
-#define MS_MAX_ACTORS_PER_SCHED 256
+#define MS_SCHED_INIT_CAP 256   /* initial actor slots per scheduler (grows on demand) */
 #define MS_MAX_SCHEDULERS 64
 
 typedef struct msSchedActors {
-    msActor* actors[MS_MAX_ACTORS_PER_SCHED];  /* registry: all actors assigned here */
-    _Atomic(int) count;  /* atomic: CD reads while main thread may register */
-    int pollCount;  /* for periodic cycle detection (scheduler 0 only) */
-    _Atomic(msActor*) runHead;  /* lock-free run queue: actors with pending messages */
+    msActor** actors;             /* heap-allocated, grows on demand (NULL until first actor) */
+    int cap;                      /* current capacity (0 = uninitialized) */
+    _Atomic(int) count;           /* atomic: CD reads while main thread may register */
+    int pollCount;                /* for periodic cycle detection (scheduler 0 only) */
+    _Atomic(msActor*) runHead;    /* lock-free run queue: actors with pending messages */
 } msSchedActors;
 
 static msSchedActors msSchedulers[MS_MAX_SCHEDULERS];
@@ -180,19 +223,73 @@ static inline msActor* msSchedRunPop(msSchedActors* sched) {
     return NULL;
 }
 
+/* Global counter: number of actors with idle timeouts. Scan skipped when 0. */
+static _Atomic(int) msActorsWithTimeout = 0;
+
 /* Forward declarations for wake routing */
 extern void msActorWakeEventLoop(void);  /* dispatch.c */
 extern void msPoolWakeWorker(int schedulerID);  /* pool.c — targeted, no spurious wakeups */
+extern void msSetActorIdleCap(int ms);  /* dispatch.c — caps event loop sleep for idle timeouts */
 
-/* Forward declarations for cycle detector (defined at end of file) */
+/* Forward declarations */
 static inline void msCDInit(void);
 static inline void msCDTick(void);
+static inline void msActorRemoveLink(msActor* a, msActor* target);
+static inline void msActorStop(int64_t pid, int32_t reason);
+static inline void msActorUnregisterByPtr(msActor* a);
+
+/* Name registry data (forward declaration — functions defined after monitors section) */
+#define MS_NAME_REGISTRY_INIT_CAP 256
+typedef struct { msString name; msActor* actor; } msNameEntry;
+static msNameEntry* msNameRegistry = NULL;
+static int msNameRegistryCap = 0;
+static int msNameRegistryCount = 0;
+static pthread_mutex_t msNameRegistryLock = PTHREAD_MUTEX_INITIALIZER;
+
+/* Lazy init: allocate on first use, zero-cost if name registry is never used */
+static inline void msNameRegistryEnsure(void) {
+    if (msNameRegistry != NULL) return;
+    msNameRegistryCap = MS_NAME_REGISTRY_INIT_CAP;
+    msNameRegistry = (msNameEntry*)calloc(msNameRegistryCap, sizeof(msNameEntry));
+}
+
+/* Grow and rehash when load factor exceeds 75%. Must hold lock. */
+static inline void msNameRegistryGrow(void) {
+    int oldCap = msNameRegistryCap;
+    msNameEntry* oldTable = msNameRegistry;
+    msNameRegistryCap = oldCap * 2;
+    msNameRegistry = (msNameEntry*)calloc(msNameRegistryCap, sizeof(msNameEntry));
+    msNameRegistryCount = 0;
+    /* Rehash all entries into new table */
+    for (int i = 0; i < oldCap; i++) {
+        if (oldTable[i].actor == NULL) continue;
+        uint32_t h = (uint32_t)msStringHash(oldTable[i].name) & (msNameRegistryCap - 1);
+        for (int k = 0; k < msNameRegistryCap; k++) {
+            uint32_t s = (h + k) & (msNameRegistryCap - 1);
+            if (msNameRegistry[s].actor == NULL) {
+                msNameRegistry[s] = oldTable[i];
+                msNameRegistryCount++;
+                break;
+            }
+        }
+    }
+    free(oldTable);
+}
+
+/* Hook: auto-unregister on destroy (stored in dispatch.c — shared across TUs) */
+extern void msSetActorDestroyHook(void (*hook)(void*));
+extern void msCallActorDestroyHook(void* actor);
 
 /*
  * Send a message to an actor (any thread, wait-free).
  * If receiver is overloaded, mutes the current actor (sender).
  */
 static inline void msActorSend(msActor* a, msMessage* msg) {
+    /* Guard: don't send to dead actor (prevents use-after-free on freed mailbox) */
+    if (!atomic_load_explicit(&a->alive, memory_order_acquire)) {
+        msMsgFree(msg);
+        return;
+    }
     bool wasEmpty = msMpscPush(&a->mailbox, msg);
     atomic_store_explicit(&a->hasWork, true, memory_order_release);
 
@@ -221,6 +318,8 @@ static inline void msActorSend(msActor* a, msMessage* msg) {
  * Sets/clears OVERLOADED flag. Triggers unmute when caught up.
  */
 static inline int msActorProcess(msActor* a, int maxBatch) {
+    /* Dead actor guard — may be in run queue from before destruction */
+    if (!atomic_load_explicit(&a->alive, memory_order_acquire)) return 0;
     /* CAS guard: only one thread may process this actor at a time.
      * Enables work stealing — any idle thread can safely call this. */
     bool expected = false;
@@ -235,11 +334,21 @@ static inline int msActorProcess(msActor* a, int maxBatch) {
     /* Clear BLOCKED — we're actively processing */
     msActorClearFlag(a, MS_ACTOR_BLOCKED);
 
+    /* Reset idle timer on message receipt (Erlang: gen_server timeout resets on any message) */
+    if (a->idleTimeoutMs > 0) {
+        a->lastActivityMs = msMonoTimeMs();
+    }
+
     int processed = 0;
     while (processed < maxBatch) {
         msMessage* msg = msMpscPop(&a->mailbox);
         if (msg == NULL) break;
-        a->dispatch(a->state, (void*)msg);
+        /* System messages (kind < 0): route to onSystemMsg handler if set */
+        if (msg->kind < 0 && a->onSystemMsg != NULL) {
+            a->onSystemMsg(a->state, (void*)msg);
+        } else {
+            a->dispatch(a->state, (void*)msg);
+        }
         /* Don't free msg here — MPSC pop made it the new tail stub.
          * It gets freed on the NEXT pop when a newer message takes its place. */
         processed++;
@@ -300,18 +409,95 @@ static inline void msMsgCompleteVoid(void* fut) {
     f->finished = true;
 }
 
-static inline void msActorDestroy(msActor* a) {
-    /* Unmute anyone we caused to be muted */
+/* Set onTerminate callback (called by actorLower wiring).
+ * Takes void* for fn to avoid function pointer type mismatch — _impl takes ActorType* not void*. */
+static inline void msActorSetOnTerminate(void* actor, void* fn) {
+    ((msActor*)(intptr_t)actor)->onTerminateFn = (msActorOnTerminateFn)fn;
+}
+
+/* Set system message handler (routes EXIT/DOWN to onExit/onDown methods). */
+static inline void msActorSetSystemMsgHandler(void* actor, void* fn) {
+    ((msActor*)(intptr_t)actor)->onSystemMsg = (msActorSystemMsgFn)fn;
+}
+
+static inline void msActorDestroyWithReason(msActor* a, int32_t reason) {
+    /* Guard: prevent double-destroy (re-entrancy from link cascade or supervisor) */
+    bool wasAlive = atomic_exchange_explicit(&a->alive, false, memory_order_acq_rel);
+    if (!wasAlive) return;
+    /* Decrement idle timeout counter if this actor had a timeout */
+    if (a->idleTimeoutMs > 0) {
+        int remaining = atomic_fetch_sub(&msActorsWithTimeout, 1) - 1;
+        if (remaining <= 0) msSetActorIdleCap(0);
+    }
+    /* Step 1: call onTerminate — actor is still alive, can send messages.
+     * Skipped for MS_EXIT_KILLED (Erlang parity: brutal_kill skips terminate/2).
+     * This prevents supervisor restart from hanging on a blocked onTerminate. */
+    if (a->onTerminateFn != NULL && reason != MS_EXIT_KILLED) {
+        a->onTerminateFn(a->state, reason);
+    }
+    /* Step 1.5: auto-unregister from name registry (Erlang: name freed after terminate/2) */
+    msCallActorDestroyHook((void*)a);
+    /* Step 2: propagate EXIT to linked actors (Erlang link semantics) */
+    for (int i = 0; i < a->linkCount; i++) {
+        msActor* linked = a->links[i];
+        msActorRemoveLink(linked, a);  /* remove reverse link */
+        if (linked->trapExits) {
+            /* Trapping: deliver EXIT as a system message (kind = -1) */
+            msMessage* exitMsg = msMsgAllocSized(-1, NULL, 2);
+            msMsgSetDouble(exitMsg, 0, (double)(int64_t)(intptr_t)a);  /* dying actor pid as double */
+            msMsgSetDouble(exitMsg, 1, (double)reason);  /* exit reason as double */
+            msActorSend(linked, exitMsg);
+        } else {
+            /* Not trapping: cascade death (Erlang: linked process dies too) */
+            msActorStop((int64_t)(intptr_t)linked, reason);
+        }
+    }
+    /* Step 3: send DOWN to monitors (Erlang: {'DOWN', Ref, process, Pid, Reason}) */
+    for (int i = 0; i < a->monitorCount; i++) {
+        msActor* watcher = a->monitorWatchers[i];
+        msMessage* downMsg = msMsgAllocSized(-2, NULL, 3);  /* kind=-2: DOWN */
+        msMsgSetDouble(downMsg, 0, (double)a->monitorRefs[i]);   /* monitor ref */
+        msMsgSetDouble(downMsg, 1, (double)(int64_t)(intptr_t)a);  /* target pid */
+        msMsgSetDouble(downMsg, 2, (double)reason);  /* exit reason */
+        msActorSend(watcher, downMsg);
+    }
+    /* Step 4: unmute senders */
     msActorUnmuteAll(a);
-    /* Drain remaining messages */
+    /* Step 5: drain remaining messages */
     msMessage* msg;
     while ((msg = msMpscPop(&a->mailbox)) != NULL) {
         msMsgFree(msg);
     }
     msMpscDestroy(&a->mailbox);
     if (a->mutedBy != NULL) free(a->mutedBy);
+    if (a->links != NULL) free(a->links);
+    if (a->monitorWatchers != NULL) free(a->monitorWatchers);
+    if (a->monitorRefs != NULL) free(a->monitorRefs);
     if (a->refs != NULL) free(a->refs);
     free(a);
+}
+
+static inline void msActorDestroy(msActor* a) {
+    msActorDestroyWithReason(a, MS_EXIT_NORMAL);
+}
+
+/* Stop an actor by pid — removes from scheduler, triggers onTerminate, then destroys */
+static inline void msActorStop(int64_t pid, int32_t reason) {
+    msActor* a = msActorFromPid(pid);
+    if (a == NULL || !atomic_load_explicit(&a->alive, memory_order_acquire)) return;
+    /* Remove from scheduler registry to prevent use-after-free in poll */
+    if (a->schedulerID >= 0 && a->schedulerID < msSchedulerCount) {
+        msSchedActors* sched = &msSchedulers[a->schedulerID];
+        int cnt = atomic_load_explicit(&sched->count, memory_order_acquire);
+        for (int i = 0; i < cnt; i++) {
+            if (sched->actors[i] == a) {
+                sched->actors[i] = sched->actors[cnt - 1];
+                atomic_store_explicit(&sched->count, cnt - 1, memory_order_release);
+                break;
+            }
+        }
+    }
+    msActorDestroyWithReason(a, reason);
 }
 
 /* ===== Actor References (for cycle detection) ===== */
@@ -329,6 +515,246 @@ static inline void msActorAddRef(msActor* from, msActor* to) {
         from->refsCap = newCap;
     }
     from->refs[from->refsCount++] = to;
+}
+
+/* ===== Links (bidirectional exit propagation, Erlang parity) ===== */
+
+/* Add a to b's link list (one direction). */
+static inline void msActorAddLink(msActor* a, msActor* target) {
+    if (a == NULL || target == NULL || a == target) return;
+    for (int i = 0; i < a->linkCount; i++) {
+        if (a->links[i] == target) return;  /* already linked */
+    }
+    if (a->linkCount >= a->linkCap) {
+        int newCap = a->linkCap == 0 ? 4 : a->linkCap * 2;
+        a->links = (msActor**)realloc(a->links, newCap * sizeof(msActor*));
+        a->linkCap = newCap;
+    }
+    a->links[a->linkCount++] = target;
+}
+
+/* Remove target from a's link list (one direction). */
+static inline void msActorRemoveLink(msActor* a, msActor* target) {
+    for (int i = 0; i < a->linkCount; i++) {
+        if (a->links[i] == target) {
+            a->links[i] = a->links[a->linkCount - 1];
+            a->linkCount--;
+            return;
+        }
+    }
+}
+
+/* Bidirectional link (Erlang: link/1). */
+static inline void msActorLinkPid(int64_t pidA, int64_t pidB) {
+    msActor* a = msActorFromPid(pidA);
+    msActor* b = msActorFromPid(pidB);
+    msActorAddLink(a, b);
+    msActorAddLink(b, a);
+}
+
+/* Bidirectional unlink. */
+static inline void msActorUnlinkPid(int64_t pidA, int64_t pidB) {
+    msActor* a = msActorFromPid(pidA);
+    msActor* b = msActorFromPid(pidB);
+    msActorRemoveLink(a, b);
+    msActorRemoveLink(b, a);
+}
+
+/* Set trap_exits flag (Erlang: process_flag(trap_exit, true)). */
+static inline void msActorTrapExits(int64_t pid, bool trap) {
+    msActor* a = msActorFromPid(pid);
+    if (a != NULL) a->trapExits = trap;
+}
+
+/* ===== Idle Timeout (Erlang: gen_server timeout) ===== */
+
+/* Set idle timeout: onIdle fires after ms of no messages. 0 = disable. */
+static inline void msActorSetIdleTimeout(int64_t pid, double ms) {
+    msActor* a = msActorFromPid(pid);
+    if (a == NULL) return;
+    int64_t prev = a->idleTimeoutMs;
+    a->idleTimeoutMs = (int64_t)ms;
+    if (ms > 0) {
+        a->lastActivityMs = msMonoTimeMs();
+        if (prev == 0) atomic_fetch_add(&msActorsWithTimeout, 1);
+        /* Cap event loop sleep so idle scan fires on time (use smallest timeout) */
+        msSetActorIdleCap((int)ms);
+    } else {
+        if (prev > 0) {
+            int remaining = atomic_fetch_sub(&msActorsWithTimeout, 1) - 1;
+            if (remaining <= 0) msSetActorIdleCap(0);  /* no more timeouts — remove cap */
+        }
+    }
+}
+
+/* ===== Monitors (unidirectional DOWN messages, Erlang parity) ===== */
+
+/* Global monotonic monitor reference counter (Erlang: make_ref()) */
+static _Atomic(int64_t) msNextMonitorRef = 1;
+
+/* Monitor a target actor. Returns a unique monitor reference (Erlang: erlang:monitor/2).
+ * When target dies, watcher receives DOWN message with this ref + target pid + reason. */
+static inline int64_t msActorMonitorPid(int64_t watcherPid, int64_t targetPid) {
+    msActor* target = msActorFromPid(targetPid);
+    msActor* watcher = msActorFromPid(watcherPid);
+    if (target == NULL || watcher == NULL) return 0;
+    int64_t ref = atomic_fetch_add(&msNextMonitorRef, 1);
+    /* Add watcher to target's monitor list */
+    if (target->monitorCount >= target->monitorCap) {
+        int newCap = target->monitorCap == 0 ? 4 : target->monitorCap * 2;
+        target->monitorWatchers = (msActor**)realloc(target->monitorWatchers, newCap * sizeof(msActor*));
+        target->monitorRefs = (int64_t*)realloc(target->monitorRefs, newCap * sizeof(int64_t));
+        target->monitorCap = newCap;
+    }
+    target->monitorWatchers[target->monitorCount] = watcher;
+    target->monitorRefs[target->monitorCount] = ref;
+    target->monitorCount++;
+    return ref;
+}
+
+/* Remove a monitor by reference. */
+static inline void msActorDemonitorPid(int64_t targetPid, int64_t ref) {
+    msActor* target = msActorFromPid(targetPid);
+    if (target == NULL) return;
+    for (int i = 0; i < target->monitorCount; i++) {
+        if (target->monitorRefs[i] == ref) {
+            target->monitorWatchers[i] = target->monitorWatchers[target->monitorCount - 1];
+            target->monitorRefs[i] = target->monitorRefs[target->monitorCount - 1];
+            target->monitorCount--;
+            return;
+        }
+    }
+}
+
+/* ===== Name Registry (Erlang: register/2, whereis/1, unregister/1) =====
+ *
+ * Global string→actor hash table. Open addressing, linear probing, DJB2 hash.
+ * Mutex-protected (registry ops are rare — startup/shutdown only).
+ * 1:1 constraint: one name per pid, one pid per name (Erlang parity).
+ * Auto-unregister on actor death (msActorDestroyWithReason).
+ */
+
+/* Remove entry at slot and rehash subsequent probe chain entries. Must hold lock. */
+static inline void msNameRegistryRemoveSlot(uint32_t slot) {
+    msStringDestroy(msNameRegistry[slot].name);
+    msNameRegistry[slot].name = MS_EMPTY_STRING;
+    msNameRegistry[slot].actor = NULL;
+    msNameRegistryCount--;
+    uint32_t j = (slot + 1) & (msNameRegistryCap - 1);
+    for (uint32_t guard = 0; guard < (uint32_t)msNameRegistryCap && msNameRegistry[j].actor != NULL; guard++) {
+        msNameEntry displaced = msNameRegistry[j];
+        msNameRegistry[j].actor = NULL;
+        msNameRegistry[j].name = MS_EMPTY_STRING;
+        msNameRegistryCount--;
+        uint32_t h = (uint32_t)msStringHash(displaced.name) & (msNameRegistryCap - 1);
+        for (uint32_t k = 0; k < (uint32_t)msNameRegistryCap; k++) {
+            uint32_t s = (h + k) & (msNameRegistryCap - 1);
+            if (msNameRegistry[s].actor == NULL) {
+                msNameRegistry[s] = displaced;
+                msNameRegistryCount++;
+                break;
+            }
+        }
+        j = (j + 1) & (msNameRegistryCap - 1);
+    }
+}
+
+/* Register name → pid. Returns 1.0 (true) on success, 0.0 if name taken or pid already named. */
+static inline double msActorRegisterName(int64_t pid, msString name) {
+    msActor* a = msActorFromPid(pid);
+    if (a == NULL || name.len == 0) return 0.0;
+    pthread_mutex_lock(&msNameRegistryLock);
+    msNameRegistryEnsure();
+    /* 1:1 constraint: scan all occupied slots */
+    for (int i = 0; i < msNameRegistryCap; i++) {
+        if (msNameRegistry[i].actor == NULL) continue;
+        if (msStringEquals(msNameRegistry[i].name, name)) {
+            pthread_mutex_unlock(&msNameRegistryLock);
+            return 0.0;  /* name already taken */
+        }
+        if (msNameRegistry[i].actor == a) {
+            pthread_mutex_unlock(&msNameRegistryLock);
+            return 0.0;  /* pid already has a name */
+        }
+    }
+    /* Grow if load factor exceeds 75% */
+    if (msNameRegistryCount >= msNameRegistryCap * 3 / 4) {
+        msNameRegistryGrow();
+    }
+    /* Insert at probed slot */
+    uint32_t h = (uint32_t)msStringHash(name) & (msNameRegistryCap - 1);
+    for (int i = 0; i < msNameRegistryCap; i++) {
+        uint32_t s = (h + i) & (msNameRegistryCap - 1);
+        if (msNameRegistry[s].actor == NULL) {
+            msNameRegistry[s].name = msStringNew(name.p->data, name.len);
+            msNameRegistry[s].actor = a;
+            msNameRegistryCount++;
+            pthread_mutex_unlock(&msNameRegistryLock);
+            return 1.0;
+        }
+    }
+    pthread_mutex_unlock(&msNameRegistryLock);
+    return 0.0;
+}
+
+/* Look up pid by name. Returns pid (int64) or 0 if not found. */
+static inline int64_t msActorWhereis(msString name) {
+    if (name.len == 0 || msNameRegistry == NULL) return 0;
+    pthread_mutex_lock(&msNameRegistryLock);
+    uint32_t h = (uint32_t)msStringHash(name) & (msNameRegistryCap - 1);
+    for (int i = 0; i < msNameRegistryCap; i++) {
+        uint32_t s = (h + i) & (msNameRegistryCap - 1);
+        if (msNameRegistry[s].actor == NULL) break;
+        if (msStringEquals(msNameRegistry[s].name, name)) {
+            int64_t pid = (int64_t)(intptr_t)msNameRegistry[s].actor;
+            pthread_mutex_unlock(&msNameRegistryLock);
+            return pid;
+        }
+    }
+    pthread_mutex_unlock(&msNameRegistryLock);
+    return 0;
+}
+
+/* Unregister a name. No-op if not registered. */
+static inline void msActorUnregisterName(msString name) {
+    if (name.len == 0 || msNameRegistry == NULL) return;
+    pthread_mutex_lock(&msNameRegistryLock);
+    uint32_t h = (uint32_t)msStringHash(name) & (msNameRegistryCap - 1);
+    for (int i = 0; i < msNameRegistryCap; i++) {
+        uint32_t s = (h + i) & (msNameRegistryCap - 1);
+        if (msNameRegistry[s].actor == NULL) break;
+        if (msStringEquals(msNameRegistry[s].name, name)) {
+            msNameRegistryRemoveSlot(s);
+            pthread_mutex_unlock(&msNameRegistryLock);
+            return;
+        }
+    }
+    pthread_mutex_unlock(&msNameRegistryLock);
+}
+
+/* Initialize name registry — sets the destroy hook so auto-unregister works cross-TU.
+ * The hook is stored in dispatch.c (shared across all TUs). When any TU's
+ * msActorDestroyWithReason calls msCallActorDestroyHook, it calls back into THIS TU's
+ * msActorUnregisterByPtr (which accesses this TU's msNameRegistry). */
+static inline void msActorNameRegistryInitHook(msActor* a) {
+    if (msNameRegistryCount > 0) msActorUnregisterByPtr(a);
+}
+static inline void msActorNameRegistryInit(void) {
+    msSetActorDestroyHook((void (*)(void*))msActorNameRegistryInitHook);
+}
+
+/* Unregister by actor pointer (auto-cleanup on actor death). */
+static inline void msActorUnregisterByPtr(msActor* a) {
+    if (msNameRegistry == NULL) return;
+    pthread_mutex_lock(&msNameRegistryLock);
+    for (int i = 0; i < msNameRegistryCap; i++) {
+        if (msNameRegistry[i].actor == a) {
+            msNameRegistryRemoveSlot(i);
+            pthread_mutex_unlock(&msNameRegistryLock);
+            return;
+        }
+    }
+    pthread_mutex_unlock(&msNameRegistryLock);
 }
 
 /* ===== Multi-Scheduler Actor Registry (Phase 5: Parallel Actors) =====
@@ -351,6 +777,22 @@ extern void msPoolSetActorHooks(bool (*pollFn)(void), void (*idSetterFn)(int)); 
 static inline bool msActorPollLocal(void);            /* defined below */
 
 #include "runtime/promise/pool.h"
+
+/* Grow a scheduler's actor registry. Old array is retained (not freed) because
+ * concurrent CD readers on other threads may still be traversing it.
+ * Bounded cost: total retained memory ≈ current array size. */
+static inline void msSchedActorsGrow(msSchedActors* sched, int needed) {
+    int newCap = sched->cap == 0 ? MS_SCHED_INIT_CAP : sched->cap * 2;
+    while (newCap < needed) newCap *= 2;
+    msActor** newArr = (msActor**)calloc(newCap, sizeof(msActor*));
+    if (sched->actors != NULL) {
+        memcpy(newArr, sched->actors, sched->cap * sizeof(msActor*));
+        /* Old array intentionally NOT freed — CD may be reading it concurrently.
+         * The count acquire/release pair ensures CD sees consistent entries. */
+    }
+    sched->actors = newArr;
+    sched->cap = newCap;
+}
 
 /* Scheduler ID setter — called by pool workers via hook to set their TLS scheduler ID */
 static inline void msSetSchedulerID(int id) {
@@ -375,10 +817,11 @@ static inline void msActorRegister(msActor* a) {
     a->schedulerID = id;
     msSchedActors* sched = &msSchedulers[id];
     int cnt = atomic_load_explicit(&sched->count, memory_order_acquire);
-    if (cnt < MS_MAX_ACTORS_PER_SCHED) {
-        sched->actors[cnt] = a;
-        atomic_store_explicit(&sched->count, cnt + 1, memory_order_release);
+    if (cnt >= sched->cap) {
+        msSchedActorsGrow(sched, cnt + 1);
     }
+    sched->actors[cnt] = a;
+    atomic_store_explicit(&sched->count, cnt + 1, memory_order_release);
 }
 
 /*
@@ -417,14 +860,37 @@ static inline bool msActorPollLocal(void) {
         }
     }
 
-    /* Cycle detection: scheduler 0 sends periodic TICK to CD actor (async) */
+    /* Cycle detection: scheduler 0 sends periodic TICK to CD actor (async).
+     * Interval scales with actor count: 100 base + 1 per 10 actors.
+     * 10 actors→101, 1K→200, 10K→1100, 1M→100100 polls between ticks. */
     if (id == 0) {
         sched->pollCount++;
-        if (sched->pollCount >= MS_CYCLE_INTERVAL) {
+        int actorEstimate = atomic_load_explicit(&sched->count, memory_order_relaxed) * msSchedulerCount;
+        int cdInterval = 100 + actorEstimate / 10;
+        if (sched->pollCount >= cdInterval) {
             sched->pollCount = 0;
             msCDTick();
         }
     }
+
+    /* Phase 3: Idle timeout — scan actors with timeouts on this scheduler.
+     * Skipped entirely when no actors have timeouts (zero overhead). */
+    if (atomic_load_explicit(&msActorsWithTimeout, memory_order_relaxed) > 0) {
+        int64_t now = msMonoTimeMs();
+        int cnt = atomic_load_explicit(&sched->count, memory_order_acquire);
+        for (int i = 0; i < cnt; i++) {
+            msActor* ta = sched->actors[i];
+            if (ta->idleTimeoutMs > 0 && ta->lastActivityMs > 0 &&
+                atomic_load_explicit(&ta->alive, memory_order_relaxed) &&
+                !atomic_load_explicit(&ta->hasWork, memory_order_relaxed) &&
+                (now - ta->lastActivityMs) >= ta->idleTimeoutMs) {
+                msMessage* idleMsg = msMsgAllocSized(-3, NULL, 0);
+                msActorSend(ta, idleMsg);
+                ta->lastActivityMs = now;  /* re-arm for repeated firing */
+            }
+        }
+    }
+
     return didWork;
 }
 
@@ -445,7 +911,8 @@ static inline bool msActorPollAll(void) {
     /* Scan registry for stragglers not in run queue */
     for (int s = 0; s < msSchedulerCount; s++) {
         msSchedActors* sched = &msSchedulers[s];
-        for (int i = 0; i < sched->count; i++) {
+        int cnt2 = atomic_load_explicit(&sched->count, memory_order_acquire);
+        for (int i = 0; i < cnt2; i++) {
             msActor* a = sched->actors[i];
             if (msActorHasFlag(a, MS_ACTOR_MUTED)) continue;
             if (atomic_load_explicit(&a->hasWork, memory_order_acquire)) {
@@ -461,7 +928,8 @@ static inline bool msActorPollAll(void) {
 static inline bool msActorSystemQuiescent(void) {
     for (int s = 0; s < msSchedulerCount; s++) {
         msSchedActors* sched = &msSchedulers[s];
-        for (int i = 0; i < sched->count; i++) {
+        int cnt = atomic_load_explicit(&sched->count, memory_order_acquire);
+        for (int i = 0; i < cnt; i++) {
             msActor* a = sched->actors[i];
             if (atomic_load_explicit(&a->hasWork, memory_order_acquire)) return false;
             if (atomic_load_explicit(&a->processing, memory_order_acquire)) return false;
@@ -479,46 +947,66 @@ static inline bool msActorSystemQuiescent(void) {
  * Protocol:
  *   1. msActorProcess sets BLOCKED flag when actor becomes idle (RC > 0)
  *   2. msActorProcess clears BLOCKED flag when actor gets new work
- *   3. msActorPollLocal (scheduler 0) sends TICK to CD every MS_CYCLE_INTERVAL polls
- *   4. CD dispatch scans all schedulers for blocked actors with all-blocked refs
- *   5. Dead cycles → destroy (Phase 6: trigger link/monitor propagation)
+ *   3. msActorPollLocal (scheduler 0) sends TICK to CD at dynamic intervals (scales with actor count)
+ *   4. CD dispatch: reverse-reachability scan (mark blocked, unmark live-reachable)
+ *   5. Unreachable blocked actors = dead cycles → destroy with link/monitor propagation
  */
 
 #define MS_CD_MSG_TICK 0
 
-/* Scan all schedulers for dead cycles.
- * An actor is in a dead cycle if: BLOCKED + all refs also BLOCKED. */
+/* Scan all schedulers for dead cycles using reverse reachability.
+ *
+ * Algorithm (3 passes):
+ *   Pass 1: Mark all BLOCKED actors as CYCLE_MARKED (candidates).
+ *   Pass 2: For each LIVE (non-BLOCKED) actor, trace refs and UNMARK
+ *           any BLOCKED actors reachable from it (they're kept alive).
+ *   Pass 3: Remaining CYCLE_MARKED actors are unreachable from any live
+ *           actor → dead cycle → collect.
+ *
+ * This catches cycles where a member has refs outside the cycle (e.g.,
+ * A→B→A where A also refs live D — old algorithm missed this). */
+static inline void msCDUnmarkReachable(msActor* a) {
+    for (int r = 0; r < a->refsCount; r++) {
+        msActor* ref = a->refs[r];
+        if (msActorHasFlag(ref, MS_ACTOR_CYCLE_MARKED)) {
+            msActorClearFlag(ref, MS_ACTOR_CYCLE_MARKED);
+            msCDUnmarkReachable(ref);  /* transitively unmark */
+        }
+    }
+}
+
 static inline void msCDRunDetection(void) {
-    /* Pass 1: find cycle candidates (blocked + all refs blocked) */
+    /* Pass 1: mark all BLOCKED actors with refs as candidates */
     for (int s = 0; s < msSchedulerCount; s++) {
         msSchedActors* sched = &msSchedulers[s];
-        for (int i = 0; i < sched->count; i++) {
+        int cnt = atomic_load_explicit(&sched->count, memory_order_acquire);
+        for (int i = 0; i < cnt; i++) {
             msActor* a = sched->actors[i];
-            if (!msActorHasFlag(a, MS_ACTOR_BLOCKED)) continue;
-            if (a->refsCount == 0) continue;
-            bool allRefsBlocked = true;
-            for (int r = 0; r < a->refsCount; r++) {
-                if (!msActorHasFlag(a->refs[r], MS_ACTOR_BLOCKED)) {
-                    allRefsBlocked = false;
-                    break;
-                }
-            }
-            if (allRefsBlocked) {
+            if (msActorHasFlag(a, MS_ACTOR_BLOCKED) && a->refsCount > 0) {
                 msActorSetFlag(a, MS_ACTOR_CYCLE_MARKED);
             }
         }
     }
-    /* Pass 2: collect marked actors */
+    /* Pass 2: unmark actors reachable from any LIVE actor */
     for (int s = 0; s < msSchedulerCount; s++) {
         msSchedActors* sched = &msSchedulers[s];
-        for (int i = sched->count - 1; i >= 0; i--) {
+        int cnt = atomic_load_explicit(&sched->count, memory_order_acquire);
+        for (int i = 0; i < cnt; i++) {
+            msActor* a = sched->actors[i];
+            if (!msActorHasFlag(a, MS_ACTOR_BLOCKED)) {
+                msCDUnmarkReachable(a);
+            }
+        }
+    }
+    /* Pass 3: collect remaining marked actors — dead cycles */
+    for (int s = 0; s < msSchedulerCount; s++) {
+        msSchedActors* sched = &msSchedulers[s];
+        int cnt = atomic_load_explicit(&sched->count, memory_order_acquire);
+        for (int i = cnt - 1; i >= 0; i--) {
             msActor* a = sched->actors[i];
             if (msActorHasFlag(a, MS_ACTOR_CYCLE_MARKED)) {
                 msActorClearFlag(a, MS_ACTOR_CYCLE_MARKED);
-                /* Remove from registry */
-                sched->actors[i] = sched->actors[sched->count - 1];
-                sched->count--;
-                msActorDestroy(a);
+                msActorStop((int64_t)(intptr_t)a, MS_EXIT_NORMAL);
             }
         }
     }
@@ -539,10 +1027,11 @@ static inline void msCDInit(void) {
     msCycleDetectorActor->schedulerID = 0;
     msSchedActors* sched = &msSchedulers[0];
     int cnt = atomic_load_explicit(&sched->count, memory_order_acquire);
-    if (cnt < MS_MAX_ACTORS_PER_SCHED) {
-        sched->actors[cnt] = msCycleDetectorActor;
-        atomic_store_explicit(&sched->count, cnt + 1, memory_order_release);
+    if (cnt >= sched->cap) {
+        msSchedActorsGrow(sched, cnt + 1);
     }
+    sched->actors[cnt] = msCycleDetectorActor;
+    atomic_store_explicit(&sched->count, cnt + 1, memory_order_release);
 }
 
 /* Send TICK to CD actor (called from msActorPollLocal on scheduler 0) */

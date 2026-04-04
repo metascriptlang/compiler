@@ -161,7 +161,7 @@ export function compileProjectToC(entries: MapEntry[], entryPath: string): strin
 		combined = combined + generateCModule(analyzed, ctx, modPath, aliveSet, false, false);
 	}
 
-	const dispatcher = genProjectDispatcher(graph.loadOrder, entryPath, false, "void");
+	const dispatcher = genProjectDispatcher(graph.loadOrder, entryPath, false, "void", "");
 	return `${combined}\n${dispatcher}`;
 }
 

@@ -81,7 +81,7 @@ export function hashNumber(n: number): int64 {
 }
 
 
-// Overloaded hash — Nim parity (hashes.nim: hash(x: int), hash(x: string)).
+// Overloaded hash — type-dispatched hash(x: int) and hash(x: string).
 // Extension methods: monomorphization resolves via UFCS based on K's concrete type.
 export function hash(this s: string): int64 { return hashString(s); }
 export function hash(this n: number): int64 { return hashNumber(n); }

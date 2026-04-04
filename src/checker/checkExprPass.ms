@@ -270,8 +270,7 @@ function checkExprInner(ctx: CheckerContext, node: Node, expectedType: Type): Ty
 									}
 									if (prop.kind === NodeKind.PropertyDecl) {
 										const pd = prop.data as PropertyDeclData;
-										const pdAny = pd as unknown as { propIsReadonly: boolean };
-										if (pd.propName === md.property && pdAny.propIsReadonly === true) {
+										if (pd.propName === md.property && pd.propIsReadonly === true) {
 											addError(ctx, `cannot assign to '${md.property}' because it is a read-only property`,
 												d.left.location.line, d.left.location.column);
 										}
